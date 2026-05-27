@@ -192,6 +192,14 @@ KERNELS = [
         "workgroup_size": (256, 1, 1),
     },
     {
+        "name": "hrx_tanh_f32",
+        "source": "unary_f32.hip.cpp",
+        "format": None,
+        "binding_count": 2,
+        "constants_size": 8,
+        "workgroup_size": (256, 1, 1),
+    },
+    {
         "name": "hrx_sigmoid_f32",
         "source": "unary_f32.hip.cpp",
         "format": None,
@@ -225,6 +233,14 @@ KERNELS = [
     },
     {
         "name": "hrx_swiglu_f32",
+        "source": "unary_f32.hip.cpp",
+        "format": None,
+        "binding_count": 3,
+        "constants_size": 8,
+        "workgroup_size": (256, 1, 1),
+    },
+    {
+        "name": "hrx_geglu_f32",
         "source": "unary_f32.hip.cpp",
         "format": None,
         "binding_count": 3,

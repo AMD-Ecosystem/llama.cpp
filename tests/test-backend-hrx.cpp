@@ -120,6 +120,12 @@ static std::vector<float> reference_mul_mat(
     return output;
 }
 
+static float reference_gelu(float x) {
+    constexpr float gelu_coef_a = 0.044715f;
+    constexpr float sqrt_2_over_pi = 0.7978845608028654f;
+    return 0.5f * x * (1.0f + std::tanh(sqrt_2_over_pi * x * (1.0f + gelu_coef_a * x * x)));
+}
+
 static std::vector<float> reference_gated_delta_net(
         const std::vector<float> & q,
         const std::vector<float> & k,
@@ -775,6 +781,63 @@ static void run_add_activation_boundary_case(ggml_backend_dev_t dev) {
         GGML_ASSERT(!ggml_is_contiguous(lhs));
         GGML_ASSERT(ggml_backend_dev_supports_op(dev, sum));
     }
+}
+
+static void run_tanh_case(ggml_backend_t backend, ggml_backend_dev_t dev, int64_t n0, int64_t n1, const char * label) {
+    ggml_context_ptr ctx = make_context();
+    ggml_tensor * src = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, n0, n1);
+    ggml_tensor * out = ggml_tanh(ctx.get(), src);
+    GGML_ASSERT(ggml_backend_dev_supports_op(dev, out));
+
+    ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), 8, false);
+    ggml_build_forward_expand(graph, out);
+
+    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(), backend));
+    GGML_ASSERT(buffer != nullptr);
+
+    std::vector<float> input(static_cast<size_t>(n0 * n1));
+    std::vector<float> expected(input.size());
+    for (size_t i = 0; i < input.size(); ++i) {
+        input[i] = static_cast<float>(static_cast<int>((i * 17 + 3) % 61) - 30) / 7.0f;
+        expected[i] = std::tanh(input[i]);
+    }
+
+    ggml_backend_tensor_set(src, input.data(), 0, input.size() * sizeof(float));
+    GGML_ASSERT(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+    expect_near(tensor_to_float(out), expected, 1.0e-6f, label);
+}
+
+static void run_geglu_split_case(
+        ggml_backend_t backend,
+        ggml_backend_dev_t dev,
+        int64_t n0,
+        int64_t n1,
+        const char * label) {
+    ggml_context_ptr ctx = make_context();
+    ggml_tensor * gate = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, n0, n1);
+    ggml_tensor * up = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, n0, n1);
+    ggml_tensor * out = ggml_geglu_split(ctx.get(), gate, up);
+    GGML_ASSERT(ggml_backend_dev_supports_op(dev, out));
+
+    ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), 8, false);
+    ggml_build_forward_expand(graph, out);
+
+    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(), backend));
+    GGML_ASSERT(buffer != nullptr);
+
+    std::vector<float> gate_data(static_cast<size_t>(n0 * n1));
+    std::vector<float> up_data(gate_data.size());
+    std::vector<float> expected(gate_data.size());
+    for (size_t i = 0; i < gate_data.size(); ++i) {
+        gate_data[i] = static_cast<float>(static_cast<int>((i * 19 + 5) % 73) - 36) / 11.0f;
+        up_data[i] = static_cast<float>(static_cast<int>((i * 23 + 7) % 67) - 33) / 13.0f;
+        expected[i] = reference_gelu(gate_data[i]) * up_data[i];
+    }
+
+    ggml_backend_tensor_set(gate, gate_data.data(), 0, gate_data.size() * sizeof(float));
+    ggml_backend_tensor_set(up, up_data.data(), 0, up_data.size() * sizeof(float));
+    GGML_ASSERT(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+    expect_near(tensor_to_float(out), expected, 1.0e-5f, label);
 }
 
 static void run_mul_case(ggml_backend_t backend, int64_t n) {
@@ -4242,6 +4305,10 @@ int main() {
     run_add_case(backend.get(), 257);
     run_add_case(backend.get(), 1025);
     run_add_activation_boundary_case(dev);
+    run_tanh_case(backend.get(), dev, 1, 1, "tanh_scalar");
+    run_tanh_case(backend.get(), dev, 257, 3, "tanh_tail");
+    run_geglu_split_case(backend.get(), dev, 1, 1, "geglu_scalar");
+    run_geglu_split_case(backend.get(), dev, 257, 3, "geglu_tail");
     run_mul_case(backend.get(), 1);
     run_mul_case(backend.get(), 255);
     run_mul_case(backend.get(), 256);
