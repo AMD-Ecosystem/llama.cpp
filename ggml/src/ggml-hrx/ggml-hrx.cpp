@@ -2484,16 +2484,32 @@ static std::string ggml_backend_hrx_device_description(hrx_device_t device) {
 }
 
 static const char * ggml_backend_hrx_kernel_gfx_target(const ggml_backend_hrx_device_context * device_context) {
-    GGML_UNUSED(device_context);
-    return "gfx1100";
+    return device_context && !device_context->architecture.empty() ? device_context->architecture.c_str() : nullptr;
+}
+
+static const ggml_hrx_kernel_entry * ggml_backend_hrx_find_catalog_entry(
+    const ggml_backend_hrx_device_context * device_context,
+    const char *                            name) {
+    const char * preferred_target = ggml_backend_hrx_kernel_gfx_target(device_context);
+    if (const ggml_hrx_kernel_entry * entry = ggml_hrx_kernel_catalog_find(name, preferred_target)) {
+        return entry;
+    }
+
+    size_t                        count   = 0;
+    const ggml_hrx_kernel_entry * entries = ggml_hrx_kernel_catalog_entries(&count);
+    for (size_t i = 0; i < count; ++i) {
+        if (std::strcmp(entries[i].name, name) == 0) {
+            return &entries[i];
+        }
+    }
+    return nullptr;
 }
 
 static bool ggml_backend_hrx_load_catalog_provider(
         ggml_backend_hrx_device_context * device_context,
         const char * name,
         ggml_backend_hrx_op_provider * provider) {
-    const ggml_hrx_kernel_entry * entry =
-        ggml_hrx_kernel_catalog_find(name, ggml_backend_hrx_kernel_gfx_target(device_context));
+    const ggml_hrx_kernel_entry * entry = ggml_backend_hrx_find_catalog_entry(device_context, name);
     if (!entry || !entry->data || entry->data_size == 0) {
         return false;
     }
