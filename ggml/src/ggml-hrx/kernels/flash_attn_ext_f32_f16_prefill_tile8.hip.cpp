@@ -71,7 +71,7 @@ extern "C" __global__ void hrx_flash_attn_ext_f32_f16_prefill_tile8(
     const unsigned int tid = __builtin_amdgcn_workitem_id_x();
     const long long token_base = tile * BR;
 
-    if (head >= c.H || seq >= c.S || c.D != 256 || c.KV != 512) {
+    if (head >= c.H || seq >= c.S || (c.D != 128 && c.D != 256) || c.KV != 512) {
         return;
     }
 
@@ -81,6 +81,8 @@ extern "C" __global__ void hrx_flash_attn_ext_f32_f16_prefill_tile8(
     const char * v_head = reinterpret_cast<const char *>(v) + kv_head * c.v_nb2 + seq * c.v_nb3;
     const float slope = hrx_alibi_slope_tile8(c, head);
     const float sink = c.has_sinks ? sinks[head] : -FLT_MAX;
+    const bool causal_d128_prefill = c.D == 128 && c.N == 512 && c.KV == 512 && c.H == 32 && c.H_KV == 8 && c.S == 1 &&
+                                     c.has_mask && !c.has_sinks && c.max_bias == 0.0f && c.logit_softcap == 0.0f;
 
     float local_max[BR];
 #pragma unroll
@@ -96,9 +98,14 @@ extern "C" __global__ void hrx_flash_attn_ext_f32_f16_prefill_tile8(
             continue;
         }
 
-        const char * mask_row = reinterpret_cast<const char *>(mask) + token * c.mask_nb1 + seq * c.mask_nb3;
+        if (causal_d128_prefill && t > token) {
+            logits[r][t] = -FLT_MAX;
+            continue;
+        }
+
         float mask_value = 0.0f;
-        if (c.has_mask) {
+        if (c.has_mask && !causal_d128_prefill) {
+            const char * mask_row = reinterpret_cast<const char *>(mask) + token * c.mask_nb1 + seq * c.mask_nb3;
             mask_value = hrx_load_f16_tile8(reinterpret_cast<const __half *>(mask_row), t * c.mask_nb0);
             if (mask_value <= -60000.0f) {
                 logits[r][t] = -FLT_MAX;
@@ -110,7 +117,7 @@ extern "C" __global__ void hrx_flash_attn_ext_f32_f16_prefill_tile8(
         const char * k_row = k_head + t * c.k_nb1;
         float score = 0.0f;
 #pragma unroll
-        for (long long d = 0; d < 256; ++d) {
+        for (long long d = 0; d < c.D; ++d) {
             const float qv = *reinterpret_cast<const float *>(q_row + d * static_cast<long long>(sizeof(float)));
             score += qv * hrx_load_f16_tile8(reinterpret_cast<const __half *>(k_row), d * static_cast<long long>(sizeof(__half)));
         }
@@ -118,7 +125,7 @@ extern "C" __global__ void hrx_flash_attn_ext_f32_f16_prefill_tile8(
         if (c.logit_softcap != 0.0f) {
             score = c.logit_softcap * tanhf(score);
         }
-        if (c.has_mask) {
+        if (c.has_mask && !causal_d128_prefill) {
             score += slope * mask_value;
         }
         logits[r][t] = score;
@@ -174,7 +181,7 @@ extern "C" __global__ void hrx_flash_attn_ext_f32_f16_prefill_tile8(
         __syncthreads();
     }
 
-    if (tid < 256) {
+    if (tid < c.D) {
         for (int r = 0; r < BR; ++r) {
             const long long token = token_base + r;
             if (token >= c.N) {

@@ -85,7 +85,7 @@ extern "C" __global__ __launch_bounds__(256) void hrx_flash_attn_ext_f32_f16_pre
     const unsigned int col_half = wave >> 2;
     const long long token_base = tile * BR;
 
-    if (head >= c.H || seq >= c.S || c.D != 256 || c.KV != 512) {
+    if (head >= c.H || seq >= c.S || (c.D != 128 && c.D != 256) || c.KV != 512) {
         return;
     }
 
@@ -94,9 +94,9 @@ extern "C" __global__ __launch_bounds__(256) void hrx_flash_attn_ext_f32_f16_pre
     const char * k_head = reinterpret_cast<const char *>(k) + kv_head * c.k_nb2 + seq * c.k_nb3;
     const char * v_head = reinterpret_cast<const char *>(v) + kv_head * c.v_nb2 + seq * c.v_nb3;
 
-    for (int idx = tid; idx < BR * 256; idx += WG) {
-        const int r = idx >> 8;
-        const int d = idx & 255;
+    for (long long idx = tid; idx < BR * c.D; idx += WG) {
+        const int       r     = static_cast<int>(idx / c.D);
+        const int       d     = static_cast<int>(idx - static_cast<long long>(r) * c.D);
         const long long token = token_base + r;
         const char * q_row = reinterpret_cast<const char *>(q) + token * c.q_nb1 + head * c.q_nb2 + seq * c.q_nb3;
         const float qv = token < c.N ?
@@ -124,7 +124,7 @@ extern "C" __global__ __launch_bounds__(256) void hrx_flash_attn_ext_f32_f16_pre
             rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float> acc;
             rocwmma::fill_fragment(acc, 0.0f);
 
-            for (int db = 0; db < 256; db += BK) {
+            for (int db = 0; db < c.D; db += BK) {
                 rocwmma::fragment<rocwmma::matrix_a, 16, 16, 16, _Float16, rocwmma::row_major> a_frag;
                 rocwmma::fragment<rocwmma::matrix_b, 16, 16, 16, _Float16, rocwmma::col_major> b_frag;
                 const _Float16 * k_block = reinterpret_cast<const _Float16 *>(
@@ -197,7 +197,7 @@ extern "C" __global__ __launch_bounds__(256) void hrx_flash_attn_ext_f32_f16_pre
         }
         __syncthreads();
 
-        for (int d_base = 0; d_base < 256; d_base += 2 * BC) {
+        for (int d_base = 0; d_base < c.D; d_base += 2 * BC) {
             const int d_block = d_base + static_cast<int>(wave) * BK;
             rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float> acc_pv;
             rocwmma::fill_fragment(acc_pv, 0.0f);
@@ -269,10 +269,14 @@ extern "C" __global__ __launch_bounds__(256) void hrx_flash_attn_ext_f32_f16_pre
 #pragma unroll
         for (int pair = 0; pair < 2; ++pair) {
             const __half2 out_v = out_frag[r_local][pair];
-            *reinterpret_cast<float *>(dst_row + (d + pair * 2) * static_cast<long long>(sizeof(float))) =
-                __low2float(out_v) / l_sum;
-            *reinterpret_cast<float *>(dst_row + (d + pair * 2 + 1) * static_cast<long long>(sizeof(float))) =
-                __high2float(out_v) / l_sum;
+            if (d + pair * 2 < c.D) {
+                *reinterpret_cast<float *>(dst_row + (d + pair * 2) * static_cast<long long>(sizeof(float))) =
+                    __low2float(out_v) / l_sum;
+            }
+            if (d + pair * 2 + 1 < c.D) {
+                *reinterpret_cast<float *>(dst_row + (d + pair * 2 + 1) * static_cast<long long>(sizeof(float))) =
+                    __high2float(out_v) / l_sum;
+            }
         }
     }
 }

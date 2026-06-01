@@ -40,6 +40,18 @@ static __device__ __forceinline__ float hrx_load_f16(const __half * base, long l
     return __half2float(*reinterpret_cast<const __half *>(reinterpret_cast<const char *>(base) + byte_offset));
 }
 
+static __device__ __forceinline__ float4 hrx_load_f16x4(const char * ptr) {
+    const __half2 h01 = *reinterpret_cast<const __half2 *>(ptr);
+    const __half2 h23 = *reinterpret_cast<const __half2 *>(ptr + 2 * static_cast<int>(sizeof(__half)));
+    const float2  f01 = __half22float2(h01);
+    const float2  f23 = __half22float2(h23);
+    return make_float4(f01.x, f01.y, f23.x, f23.y);
+}
+
+static __device__ __forceinline__ float hrx_dot4(float4 a, float4 b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
+}
+
 static __device__ __forceinline__ float hrx_alibi_slope(
         const hrx_flash_attn_ext_f32_f16_decode_constants c,
         long long head) {
@@ -57,6 +69,7 @@ extern "C" __global__ void hrx_flash_attn_ext_f32_f16_decode(
         hrx_flash_attn_ext_f32_f16_decode_constants c) {
     __shared__ float logits[1024];
     __shared__ float partial[256];
+    __shared__ float q_tile[256];
 
     const long long head = __builtin_amdgcn_workgroup_id_x();
     const long long token = __builtin_amdgcn_workgroup_id_y();
@@ -75,6 +88,11 @@ extern "C" __global__ void hrx_flash_attn_ext_f32_f16_decode(
     const float slope = hrx_alibi_slope(c, head);
     const float sink = c.has_sinks ? sinks[head] : -FLT_MAX;
 
+    for (long long d = tid; d < c.D; d += 256) {
+        q_tile[d] = *reinterpret_cast<const float *>(q_head + d * static_cast<long long>(sizeof(float)));
+    }
+    __syncthreads();
+
     float local_max = sink;
     for (long long t = tid; t < c.KV; t += 256) {
         float mask_value = 0.0f;
@@ -89,9 +107,18 @@ extern "C" __global__ void hrx_flash_attn_ext_f32_f16_decode(
         }
         float score = 0.0f;
         const char * k_row = k_head + t * c.k_nb1;
-        for (long long d = 0; d < c.D; ++d) {
-            const float qv = *reinterpret_cast<const float *>(q_head + d * static_cast<long long>(sizeof(float)));
-            score += qv * hrx_load_f16(reinterpret_cast<const __half *>(k_row), d * static_cast<long long>(sizeof(__half)));
+        if (c.D == 128) {
+#pragma unroll
+            for (int d = 0; d < 128; d += 4) {
+                const float4 qv = *reinterpret_cast<const float4 *>(q_tile + d);
+                const float4 kv = hrx_load_f16x4(k_row + d * static_cast<int>(sizeof(__half)));
+                score += hrx_dot4(qv, kv);
+            }
+        } else {
+            for (long long d = 0; d < c.D; ++d) {
+                score += q_tile[d] * hrx_load_f16(reinterpret_cast<const __half *>(k_row),
+                                                  d * static_cast<long long>(sizeof(__half)));
+            }
         }
         score *= c.scale;
         if (c.logit_softcap != 0.0f) {
@@ -114,9 +141,9 @@ extern "C" __global__ void hrx_flash_attn_ext_f32_f16_decode(
     }
     const float max_val = partial[0];
 
-    float local_sum = c.has_sinks && tid == 0 ? expf(sink - max_val) : 0.0f;
+    float local_sum = c.has_sinks && tid == 0 ? __expf(sink - max_val) : 0.0f;
     for (long long t = tid; t < c.KV; t += 256) {
-        const float prob = expf(logits[t] - max_val);
+        const float prob = __expf(logits[t] - max_val);
         logits[t] = prob;
         local_sum += prob;
     }
@@ -132,7 +159,8 @@ extern "C" __global__ void hrx_flash_attn_ext_f32_f16_decode(
     const float inv_sum = 1.0f / partial[0];
 
     char * dst_head = reinterpret_cast<char *>(dst) + head * c.dst_nb1 + token * c.dst_nb2 + seq * c.dst_nb3;
-    if (tid < static_cast<unsigned int>(c.D)) {
+    const unsigned int d_limit  = c.D == 128 ? 128u : static_cast<unsigned int>(c.D);
+    if (tid < d_limit) {
         float local = 0.0f;
         for (long long t = 0; t < c.KV; ++t) {
             const char * v_row = v_head + t * c.v_nb1;

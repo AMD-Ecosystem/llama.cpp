@@ -1146,6 +1146,9 @@ struct ggml_backend_hrx_device_context {
     ggml_backend_hrx_op_provider mul_mat_vec_q8_0_add_rows4_cols4_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_q8_0_add_q8_1_x4_mmq128x32_wg256_provider;
     ggml_backend_hrx_op_provider flash_attn_ext_f16_provider;
+    ggml_backend_hrx_op_provider                flash_attn_ext_f16_decode_gqa4_provider;
+    ggml_backend_hrx_op_provider                flash_attn_ext_f16_decode_gqa4_tiled_split_provider;
+    ggml_backend_hrx_op_provider                flash_attn_ext_f16_decode_gqa4_tiled_reduce_provider;
     ggml_backend_hrx_op_provider flash_attn_ext_f16_decode_gqa8_split_provider;
     ggml_backend_hrx_op_provider flash_attn_ext_f16_decode_gqa8_reduce_provider;
     ggml_backend_hrx_op_provider flash_attn_ext_f16_prefill_tile_provider;
@@ -1359,6 +1362,9 @@ static void ggml_backend_hrx_reset_providers(ggml_backend_hrx_device_context * d
     device_context->mul_mat_vec_q8_0_add_rows4_cols4_provider.reset();
     device_context->mul_mat_vec_q8_0_add_q8_1_x4_mmq128x32_wg256_provider.reset();
     device_context->flash_attn_ext_f16_provider.reset();
+    device_context->flash_attn_ext_f16_decode_gqa4_provider.reset();
+    device_context->flash_attn_ext_f16_decode_gqa4_tiled_split_provider.reset();
+    device_context->flash_attn_ext_f16_decode_gqa4_tiled_reduce_provider.reset();
     device_context->flash_attn_ext_f16_decode_gqa8_split_provider.reset();
     device_context->flash_attn_ext_f16_decode_gqa8_reduce_provider.reset();
     device_context->flash_attn_ext_f16_prefill_tile_provider.reset();
@@ -3081,6 +3087,16 @@ static bool ggml_backend_hrx_load_mul_mat_id_providers(ggml_backend_hrx_device_c
 static bool ggml_backend_hrx_load_flash_attn_ext_providers(ggml_backend_hrx_device_context * device_context) {
     bool ok = ggml_backend_hrx_load_catalog_provider(
         device_context, "hrx_flash_attn_ext_f32_f16_decode", &device_context->flash_attn_ext_f16_provider);
+    ok = ggml_backend_hrx_load_catalog_provider(device_context, "hrx_flash_attn_ext_f32_f16_decode_gqa4",
+                                                &device_context->flash_attn_ext_f16_decode_gqa4_provider) ||
+         ok;
+    ok = ggml_backend_hrx_load_catalog_provider(device_context, "hrx_flash_attn_ext_f32_f16_decode_gqa4_tiled_split",
+                                                &device_context->flash_attn_ext_f16_decode_gqa4_tiled_split_provider) ||
+         ok;
+    ok =
+        ggml_backend_hrx_load_catalog_provider(device_context, "hrx_flash_attn_ext_f32_f16_decode_gqa4_tiled_reduce",
+                                               &device_context->flash_attn_ext_f16_decode_gqa4_tiled_reduce_provider) ||
+        ok;
     ok = ggml_backend_hrx_load_catalog_provider(
         device_context, "hrx_flash_attn_ext_f32_f16_decode_gqa8_split",
         &device_context->flash_attn_ext_f16_decode_gqa8_split_provider) || ok;
@@ -5898,34 +5914,14 @@ static bool ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_common(
              mask->ne[0] == 512 &&
              mask->ne[1] >= 512);
 
-    return
-           !sinks &&
-           q->type == GGML_TYPE_F32 &&
-           k->type == GGML_TYPE_F16 &&
-           v->type == GGML_TYPE_F16 &&
-           mask->type == GGML_TYPE_F16 &&
-           op->type == GGML_TYPE_F32 &&
-           q->ne[0] == 256 &&
-           k->ne[0] == 256 &&
-           v->ne[0] == 256 &&
-           op->ne[0] == 256 &&
-           sequence_shape &&
-           q->ne[2] == 16 &&
-           k->ne[2] == 2 &&
-           v->ne[2] == 2 &&
-           q->ne[3] == k->ne[3] &&
-           q->ne[3] == v->ne[3] &&
-           q->ne[2] == op->ne[1] &&
-           q->ne[1] == op->ne[2] &&
-           q->ne[3] == op->ne[3] &&
-           mask->ne[2] == 1 &&
-           mask->ne[3] == q->ne[3] &&
-           q->nb[0] == sizeof(float) &&
-           k->nb[0] == ggml_type_size(k->type) &&
-           v->nb[0] == ggml_type_size(v->type) &&
-           mask->nb[0] == ggml_type_size(mask->type) &&
-           op->nb[0] == sizeof(float) &&
-           ggml_is_contiguous(mask) &&
+    return !sinks && q->type == GGML_TYPE_F32 && k->type == GGML_TYPE_F16 && v->type == GGML_TYPE_F16 &&
+           mask->type == GGML_TYPE_F16 && op->type == GGML_TYPE_F32 && (q->ne[0] == 128 || q->ne[0] == 256) &&
+           k->ne[0] == q->ne[0] && v->ne[0] == q->ne[0] && op->ne[0] == q->ne[0] && sequence_shape && q->ne[2] > 0 &&
+           k->ne[2] > 0 && q->ne[2] % k->ne[2] == 0 && k->ne[2] == v->ne[2] && q->ne[3] == k->ne[3] &&
+           q->ne[3] == v->ne[3] && q->ne[2] == op->ne[1] && q->ne[1] == op->ne[2] && q->ne[3] == op->ne[3] &&
+           mask->ne[2] == 1 && mask->ne[3] == q->ne[3] && q->nb[0] == sizeof(float) &&
+           k->nb[0] == ggml_type_size(k->type) && v->nb[0] == ggml_type_size(v->type) &&
+           mask->nb[0] == ggml_type_size(mask->type) && op->nb[0] == sizeof(float) && ggml_is_contiguous(mask) &&
            ggml_is_contiguous(op);
 }
 
@@ -5940,17 +5936,98 @@ static bool ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_tile(
 static bool ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_wmma(
         const ggml_backend_hrx_device_context * device_context,
         const ggml_tensor * op) {
-    return ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_common(
-        op, device_context->flash_attn_ext_f16_prefill_wmma_provider,
-        "GGML_HRX_DISABLE_F16_PREFILL_FA_WMMA", true, false);
+    const ggml_tensor * q = op->src[0];
+    return q && (q->ne[0] == 128 || q->ne[0] == 256) &&
+           ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_common(
+               op, device_context->flash_attn_ext_f16_prefill_wmma_provider, "GGML_HRX_DISABLE_F16_PREFILL_FA_WMMA",
+               true, false);
 }
 
 static bool ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_direct(
         const ggml_backend_hrx_device_context * device_context,
         const ggml_tensor * op) {
-    return ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_common(
-        op, device_context->flash_attn_ext_f16_prefill_direct_provider,
-        "GGML_HRX_DISABLE_F16_PREFILL_FA_DIRECT", true, true);
+    const ggml_tensor * q = op->src[0];
+    return q && q->ne[0] == 256 &&
+           ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_common(
+               op, device_context->flash_attn_ext_f16_prefill_direct_provider, "GGML_HRX_DISABLE_F16_PREFILL_FA_DIRECT",
+               true, true);
+}
+
+static bool ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_gqa4_tiled(
+    const ggml_backend_hrx_device_context * device_context,
+    const ggml_tensor *                     op) {
+    if (ggml_backend_hrx_approximate_kernels_disabled() ||
+        !ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_EXPERIMENTAL_F16_DECODE_FA_GQA4_TILED") ||
+        ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_F16_DECODE_FA_GQA4_TILED") ||
+        device_context->flash_attn_ext_f16_decode_gqa4_tiled_split_provider.kind !=
+            ggml_backend_hrx_provider_kind::hsaco ||
+        device_context->flash_attn_ext_f16_decode_gqa4_tiled_reduce_provider.kind !=
+            ggml_backend_hrx_provider_kind::hsaco) {
+        return false;
+    }
+
+    const ggml_tensor * q     = op->src[0];
+    const ggml_tensor * k     = op->src[1];
+    const ggml_tensor * v     = op->src[2];
+    const ggml_tensor * mask  = op->src[3];
+    const ggml_tensor * sinks = op->src[4];
+    if (!q || !k || !v) {
+        return false;
+    }
+
+    float max_bias      = 0.0f;
+    float logit_softcap = 0.0f;
+    std::memcpy(&max_bias, reinterpret_cast<const int32_t *>(op->op_params) + 1, sizeof(float));
+    std::memcpy(&logit_softcap, reinterpret_cast<const int32_t *>(op->op_params) + 2, sizeof(float));
+
+    return q->type == GGML_TYPE_F32 && k->type == GGML_TYPE_F16 && v->type == GGML_TYPE_F16 &&
+           op->type == GGML_TYPE_F32 && !sinks && mask && max_bias == 0.0f && logit_softcap == 0.0f &&
+           mask->type == GGML_TYPE_F16 && q->ne[0] == 128 && k->ne[0] == 128 && v->ne[0] == 128 && op->ne[0] == 128 &&
+           q->ne[1] == 1 && k->ne[1] == 512 && k->ne[1] == v->ne[1] && k->ne[2] == 8 && k->ne[2] == v->ne[2] &&
+           q->ne[2] == 32 && q->ne[2] == 4 * k->ne[2] && q->ne[2] == op->ne[1] && q->ne[1] == op->ne[2] &&
+           q->ne[3] == 1 && q->ne[3] == op->ne[3] && q->ne[3] == k->ne[3] && q->ne[3] == v->ne[3] &&
+           q->nb[0] == sizeof(float) && k->nb[0] == ggml_type_size(k->type) && v->nb[0] == ggml_type_size(v->type) &&
+           op->nb[0] == sizeof(float) && mask->ne[0] == k->ne[1] && mask->ne[1] >= q->ne[1] && mask->ne[2] == 1 &&
+           mask->ne[3] == q->ne[3] && mask->nb[0] == ggml_type_size(mask->type) && ggml_is_contiguous(mask) &&
+           ggml_is_contiguous(op);
+}
+
+static bool ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_gqa4(
+    const ggml_backend_hrx_device_context * device_context,
+    const ggml_tensor *                     op) {
+    if (ggml_backend_hrx_approximate_kernels_disabled() ||
+        !ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_EXPERIMENTAL_F16_DECODE_FA_GQA4") ||
+        ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_F16_DECODE_FA_GQA4") ||
+        device_context->flash_attn_ext_f16_decode_gqa4_provider.kind != ggml_backend_hrx_provider_kind::hsaco) {
+        return false;
+    }
+
+    const ggml_tensor * q     = op->src[0];
+    const ggml_tensor * k     = op->src[1];
+    const ggml_tensor * v     = op->src[2];
+    const ggml_tensor * mask  = op->src[3];
+    const ggml_tensor * sinks = op->src[4];
+    if (!q || !k || !v) {
+        return false;
+    }
+
+    float max_bias      = 0.0f;
+    float logit_softcap = 0.0f;
+    std::memcpy(&max_bias, reinterpret_cast<const int32_t *>(op->op_params) + 1, sizeof(float));
+    std::memcpy(&logit_softcap, reinterpret_cast<const int32_t *>(op->op_params) + 2, sizeof(float));
+
+    return q->type == GGML_TYPE_F32 && k->type == GGML_TYPE_F16 && v->type == GGML_TYPE_F16 &&
+           op->type == GGML_TYPE_F32 && !sinks && max_bias == 0.0f && logit_softcap == 0.0f &&
+           (!mask || mask->type == GGML_TYPE_F16) && q->ne[0] == 128 && k->ne[0] == 128 && v->ne[0] == 128 &&
+           op->ne[0] == 128 && q->ne[1] == 1 && k->ne[1] > 0 && k->ne[1] <= 512 && k->ne[1] == v->ne[1] &&
+           k->ne[2] == v->ne[2] && k->ne[2] > 0 && q->ne[2] == 4 * k->ne[2] && q->ne[2] == op->ne[1] &&
+           q->ne[1] == op->ne[2] && q->ne[3] == op->ne[3] && q->ne[3] == k->ne[3] && q->ne[3] == v->ne[3] &&
+           q->nb[0] == sizeof(float) && k->nb[0] == ggml_type_size(k->type) && v->nb[0] == ggml_type_size(v->type) &&
+           op->nb[0] == sizeof(float) &&
+           (!mask ||
+            (mask->ne[0] == k->ne[1] && mask->ne[1] >= q->ne[1] && mask->ne[2] == 1 && mask->ne[3] == q->ne[3] &&
+             mask->nb[0] == ggml_type_size(mask->type) && ggml_is_contiguous(mask))) &&
+           ggml_is_contiguous(op);
 }
 
 static bool ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_gqa8(
@@ -6021,7 +6098,9 @@ static bool ggml_backend_hrx_supports_flash_attn_ext_f32_decode(
         return false;
     }
 
-    if (ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_gqa8(device_context, op) ||
+    if (ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_gqa4_tiled(device_context, op) ||
+        ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_gqa4(device_context, op) ||
+        ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_gqa8(device_context, op) ||
         ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_direct(device_context, op) ||
         ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_wmma(device_context, op) ||
         ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_tile(device_context, op)) {
@@ -9580,23 +9659,85 @@ static ggml_status ggml_backend_hrx_dispatch_flash_attn_ext_f32_decode(
         /* .has_sinks = */ sinks ? 1 : 0,
     };
 
+    const bool use_decode_gqa4_tiled =
+        ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_gqa4_tiled(context->device_context, op);
+    const bool use_decode_gqa4 = !use_decode_gqa4_tiled && ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_gqa4(
+                                                               context->device_context, op);
     const bool use_decode_gqa8 =
+        !use_decode_gqa4_tiled && !use_decode_gqa4 &&
         ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_gqa8(context->device_context, op);
-    const bool use_prefill_direct = !use_decode_gqa8 &&
+    const bool use_prefill_direct =
+        !use_decode_gqa4_tiled && !use_decode_gqa4 && !use_decode_gqa8 &&
         ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_direct(context->device_context, op);
-    const bool use_prefill_wmma = !use_decode_gqa8 && !use_prefill_direct &&
+    const bool use_prefill_wmma =
+        !use_decode_gqa4_tiled && !use_decode_gqa4 && !use_decode_gqa8 && !use_prefill_direct &&
         ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_wmma(context->device_context, op);
-    const bool use_prefill_tile = !use_decode_gqa8 && !use_prefill_direct && !use_prefill_wmma &&
+    const bool use_prefill_tile =
+        !use_decode_gqa4_tiled && !use_decode_gqa4 && !use_decode_gqa8 && !use_prefill_direct && !use_prefill_wmma &&
         ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_tile(context->device_context, op);
     const ggml_backend_hrx_op_provider * provider =
-        use_decode_gqa8 ? &context->device_context->flash_attn_ext_f16_decode_gqa8_split_provider :
-        use_prefill_direct ? &context->device_context->flash_attn_ext_f16_prefill_direct_provider :
-        use_prefill_wmma ? &context->device_context->flash_attn_ext_f16_prefill_wmma_provider :
-        use_prefill_tile ? &context->device_context->flash_attn_ext_f16_prefill_tile_provider :
-        ggml_backend_hrx_flash_attn_ext_f32_decode_provider(context->device_context, k, v);
+        use_decode_gqa4_tiled ? &context->device_context->flash_attn_ext_f16_decode_gqa4_tiled_split_provider :
+        use_decode_gqa4       ? &context->device_context->flash_attn_ext_f16_decode_gqa4_provider :
+        use_decode_gqa8       ? &context->device_context->flash_attn_ext_f16_decode_gqa8_split_provider :
+        use_prefill_direct    ? &context->device_context->flash_attn_ext_f16_prefill_direct_provider :
+        use_prefill_wmma      ? &context->device_context->flash_attn_ext_f16_prefill_wmma_provider :
+        use_prefill_tile      ? &context->device_context->flash_attn_ext_f16_prefill_tile_provider :
+                                ggml_backend_hrx_flash_attn_ext_f32_decode_provider(context->device_context, k, v);
     if (!provider || provider->kind != ggml_backend_hrx_provider_kind::hsaco) {
         GGML_LOG_ERROR("%s: FLASH_ATTN_EXT K/V type is unsupported\n", __func__);
         return GGML_STATUS_FAILED;
+    }
+
+    if (use_decode_gqa4_tiled) {
+        static constexpr uint32_t gqa4_tiled_split_count = 8;
+        const size_t              partial_count = static_cast<size_t>(constants.S) * static_cast<size_t>(constants.N) *
+                                     static_cast<size_t>(constants.H) * gqa4_tiled_split_count;
+        const size_t scratch_size = partial_count * (static_cast<size_t>(constants.D) + 2) * sizeof(float);
+        if (!ggml_backend_hrx_request_scratch_buffer(context, scratch_size, &bindings[6])) {
+            GGML_LOG_ERROR("%s: failed to allocate FLASH_ATTN_EXT GQA4 tiled scratch\n", __func__);
+            return GGML_STATUS_FAILED;
+        }
+
+        const auto &   split_provider = context->device_context->flash_attn_ext_f16_decode_gqa4_tiled_split_provider;
+        const uint32_t split_workgroup_size = 64;
+        hrx_dispatch_config_t split_config  = {
+            /* .workgroup_count = */ {
+                                      static_cast<uint32_t>(constants.H_KV * gqa4_tiled_split_count),
+                                      static_cast<uint32_t>(constants.N),
+                                      static_cast<uint32_t>(constants.S),
+                                      },
+            /* .workgroup_size = */
+            { split_workgroup_size, 1, 1 },
+            /* .subgroup_size = */
+            0,
+        };
+        if (!GGML_HRX_CHECK(hrx_stream_dispatch(context->stream, split_provider.executable,
+                                                split_provider.export_ordinal, &split_config, &constants,
+                                                sizeof(constants), bindings, 7, HRX_DISPATCH_FLAG_NONE))) {
+            return GGML_STATUS_FAILED;
+        }
+
+        hrx_buffer_ref_t reduce_bindings[3] = { bindings[6], bindings[4], bindings[5] };
+        const auto &   reduce_provider = context->device_context->flash_attn_ext_f16_decode_gqa4_tiled_reduce_provider;
+        const uint32_t reduce_workgroup_size =
+            reduce_provider.export_info.workgroup_size[0] ? reduce_provider.export_info.workgroup_size[0] : 128;
+        hrx_dispatch_config_t reduce_config = {
+            /* .workgroup_count = */ {
+                                      static_cast<uint32_t>(constants.H),
+                                      static_cast<uint32_t>(constants.N),
+                                      static_cast<uint32_t>(constants.S),
+                                      },
+            /* .workgroup_size = */
+            { reduce_workgroup_size, 1, 1 },
+            /* .subgroup_size = */
+            0,
+        };
+        if (!GGML_HRX_CHECK(hrx_stream_dispatch(context->stream, reduce_provider.executable,
+                                                reduce_provider.export_ordinal, &reduce_config, &constants,
+                                                sizeof(constants), reduce_bindings, 3, HRX_DISPATCH_FLAG_NONE))) {
+            return GGML_STATUS_FAILED;
+        }
+        return GGML_STATUS_SUCCESS;
     }
 
     if (use_decode_gqa8) {
@@ -9653,19 +9794,22 @@ static ggml_status ggml_backend_hrx_dispatch_flash_attn_ext_f32_decode(
 
     const uint32_t workgroup_size = provider->export_info.workgroup_size[0] ?
         provider->export_info.workgroup_size[0] : 256;
-    hrx_dispatch_config_t config = {
+    hrx_dispatch_config_t config         = {
         /* .workgroup_count = */ {
-            static_cast<uint32_t>(
-                use_decode_gqa8 ? constants.H_KV :
-                (use_prefill_direct || use_prefill_wmma) ? ((constants.N + 15) / 16) :
-                use_prefill_tile ? ((constants.N + 7) / 8) : constants.H),
-            static_cast<uint32_t>(use_decode_gqa8 ? constants.N :
-                (use_prefill_direct || use_prefill_wmma || use_prefill_tile) ?
-                constants.H : constants.N),
-            static_cast<uint32_t>(constants.S),
-        },
-        /* .workgroup_size = */ { workgroup_size, 1, 1 },
-        /* .subgroup_size = */ 0,
+                                  static_cast<uint32_t>(use_decode_gqa4                          ? constants.H_KV :
+                                          use_decode_gqa8                          ? constants.H_KV :
+                                          (use_prefill_direct || use_prefill_wmma) ? ((constants.N + 15) / 16) :
+                                          use_prefill_tile                         ? ((constants.N + 7) / 8) :
+                                                                                     constants.H),
+                                  static_cast<uint32_t>((use_decode_gqa4 || use_decode_gqa8)                         ? constants.N :
+                                          (use_prefill_direct || use_prefill_wmma || use_prefill_tile) ? constants.H :
+                                                                                                         constants.N),
+                                  static_cast<uint32_t>(constants.S),
+                                  },
+        /* .workgroup_size = */
+        { workgroup_size, 1, 1 },
+        /* .subgroup_size = */
+        0,
     };
 
     if (!GGML_HRX_CHECK(hrx_stream_dispatch(

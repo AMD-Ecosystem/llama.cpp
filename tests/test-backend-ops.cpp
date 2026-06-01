@@ -151,6 +151,27 @@ static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float m
 }
 
 // generate an F16 mask where certain blocks are randomly masked with -INF value
+
+static void init_tensor_causal_kq_mask(ggml_tensor * tensor) {
+    GGML_ASSERT(tensor->type == GGML_TYPE_F16);
+
+    GGML_TENSOR_LOCALS(int32_t, ne, tensor, ne);
+    std::vector<ggml_fp16_t> data_f16(ne0 * ne1 * ne2 * ne3);
+
+    for (int64_t i3 = 0; i3 < ne3; i3++) {
+        for (int64_t i2 = 0; i2 < ne2; i2++) {
+            for (int64_t i1 = 0; i1 < ne1; i1++) {
+                for (int64_t i0 = 0; i0 < ne0; i0++) {
+                    const float v                                                   = i0 <= i1 ? 0.0f : -INFINITY;
+                    data_f16[i3 * ne2 * ne1 * ne0 + i2 * ne1 * ne0 + i1 * ne0 + i0] = ggml_fp32_to_fp16(v);
+                }
+            }
+        }
+    }
+
+    ggml_backend_tensor_set(tensor, data_f16.data(), 0, data_f16.size() * sizeof(ggml_fp16_t));
+}
+
 static void init_tensor_kq_mask(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f) {
     GGML_ASSERT(tensor->type == GGML_TYPE_F16);
 
@@ -1415,11 +1436,33 @@ struct test_case {
             double err = ud->tc->err(f1.data(), f2.data(), f1.size());
             if (err > ud->tc->max_err(ud->backend1)) {
                 printf("[%s] ERR = %.9f > %.9f ", ggml_op_desc(t1), err, ud->tc->max_err(ud->backend1));
-                //for (int i = 0; i < (int) f1.size(); i++) {
-                //    printf("%5d %9.6f %9.6f, diff = %9.6f\n", i, f1[i], f2[i], f1[i] - f2[i]);
-                //}
-                //printf("\n");
-                //exit(1);
+                if (std::getenv("GGML_TEST_PRINT_TOP_ERRORS")) {
+                    struct diff_item {
+                        size_t i;
+                        float  a;
+                        float  b;
+                        float  abs_diff;
+                    };
+                    std::vector<diff_item> diffs;
+                    diffs.reserve(f1.size());
+                    for (size_t i = 0; i < f1.size(); i++) {
+                        diffs.push_back({ i, f1[i], f2[i], fabsf(f1[i] - f2[i]) });
+                    }
+                    const size_t n_top = std::min<size_t>(10, diffs.size());
+                    std::partial_sort(diffs.begin(), diffs.begin() + n_top, diffs.end(),
+                                      [](const diff_item & a, const diff_item & b) { return a.abs_diff > b.abs_diff; });
+                    printf("\nTop absolute differences for %s vs %s:\n", bn1, bn2);
+                    for (size_t j = 0; j < n_top; j++) {
+                        const size_t  i  = diffs[j].i;
+                        const int64_t i0 = i % t1->ne[0];
+                        const int64_t i1 = (i / t1->ne[0]) % t1->ne[1];
+                        const int64_t i2 = (i / (t1->ne[0] * t1->ne[1])) % t1->ne[2];
+                        const int64_t i3 = i / (t1->ne[0] * t1->ne[1] * t1->ne[2]);
+                        printf("  idx=%zu [i0=%lld,i1=%lld,i2=%lld,i3=%lld] %s=% .9f %s=% .9f abs=% .9f\n", i,
+                               (long long) i0, (long long) i1, (long long) i2, (long long) i3, bn1, diffs[j].a, bn2,
+                               diffs[j].b, diffs[j].abs_diff);
+                    }
+                }
                 ud->ok = false;
             }
             return true;
@@ -6277,7 +6320,11 @@ struct test_flash_attn_ext : public test_case {
                 // make the sink values more noticeable in order to trigger a test failure when the implementation is wrong
                 init_tensor_uniform(t, -10.0f, 10.0f);
             } else if (strcmp(t->name, "m") == 0) {
-                init_tensor_kq_mask(t);
+                if (std::getenv("GGML_TEST_FLASH_ATTN_CAUSAL_MASK")) {
+                    init_tensor_causal_kq_mask(t);
+                } else {
+                    init_tensor_kq_mask(t);
+                }
             } else {
                 init_tensor_uniform(t);
             }
@@ -6831,7 +6878,11 @@ struct test_generic_op : public test_case {
 
             // FLASH_ATTN_EXT: src[3] is the KQ mask
             if (op == GGML_OP_FLASH_ATTN_EXT && i == 3) {
-                init_tensor_kq_mask(t);
+                if (std::getenv("GGML_TEST_FLASH_ATTN_CAUSAL_MASK")) {
+                    init_tensor_causal_kq_mask(t);
+                } else {
+                    init_tensor_kq_mask(t);
+                }
                 continue;
             }
 
