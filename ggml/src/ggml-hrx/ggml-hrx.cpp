@@ -2484,16 +2484,22 @@ static std::string ggml_backend_hrx_device_description(hrx_device_t device) {
 }
 
 static const char * ggml_backend_hrx_kernel_gfx_target(const ggml_backend_hrx_device_context * device_context) {
-    GGML_UNUSED(device_context);
-    return "gfx1100";
+    const char * architecture = device_context->architecture.c_str();
+    if (std::strncmp(architecture, "gfx", 3) == 0) {
+        return architecture;
+    }
+
+    size_t                        count   = 0;
+    const ggml_hrx_kernel_entry * entries = ggml_hrx_kernel_catalog_entries(&count);
+    return count > 0 ? entries[0].gfx_target : architecture;
 }
 
 static bool ggml_backend_hrx_load_catalog_provider(
         ggml_backend_hrx_device_context * device_context,
         const char * name,
         ggml_backend_hrx_op_provider * provider) {
-    const ggml_hrx_kernel_entry * entry =
-        ggml_hrx_kernel_catalog_find(name, ggml_backend_hrx_kernel_gfx_target(device_context));
+    const char *                  gfx_target = ggml_backend_hrx_kernel_gfx_target(device_context);
+    const ggml_hrx_kernel_entry * entry      = ggml_hrx_kernel_catalog_find(name, gfx_target);
     if (!entry || !entry->data || entry->data_size == 0) {
         return false;
     }
@@ -2501,8 +2507,7 @@ static bool ggml_backend_hrx_load_catalog_provider(
     hrx_executable_t executable = nullptr;
     if (!GGML_HRX_CHECK(hrx_executable_load_data(
             device_context->device, entry->data, entry->data_size, entry->format, &executable))) {
-        GGML_LOG_WARN("%s: failed to load HRX catalog kernel %s for %s\n",
-            __func__, entry->name, ggml_backend_hrx_kernel_gfx_target(device_context));
+        GGML_LOG_WARN("%s: failed to load HRX catalog kernel %s for %s\n", __func__, entry->name, gfx_target);
         return false;
     }
 
