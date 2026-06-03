@@ -598,102 +598,6 @@ static std::vector<float> reference_flash_attn_ext_decode(
     return output;
 }
 
-static void run_flash_attn_ext_decode_case(
-        ggml_backend_t backend,
-        ggml_backend_dev_t dev,
-        ggml_type k_type,
-        ggml_type v_type,
-        bool mask_enabled,
-        bool sinks_enabled,
-        const char * label) {
-    const int64_t d = 32;
-    const int64_t n = 3;
-    const int64_t h = 4;
-    const int64_t h_kv = 2;
-    const int64_t kv = 5;
-    const int64_t s = 2;
-    GGML_ASSERT(d % ggml_blck_size(k_type) == 0);
-    GGML_ASSERT(d % ggml_blck_size(v_type) == 0);
-
-    ggml_context_ptr ctx = make_context();
-    ggml_tensor * q = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F32, d, n, h, s);
-    ggml_tensor * k = ggml_new_tensor_4d(ctx.get(), k_type, d, kv, h_kv, s);
-    ggml_tensor * v = ggml_new_tensor_4d(ctx.get(), v_type, d, kv, h_kv, s);
-    ggml_tensor * mask = mask_enabled ? ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F16, kv, n, 1, s) : nullptr;
-    ggml_tensor * sinks = sinks_enabled ? ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, h) : nullptr;
-    ggml_tensor * out = ggml_flash_attn_ext(ctx.get(), q, k, v, mask, 1.0f / std::sqrt(static_cast<float>(d)), 0.0f, 0.0f);
-    ggml_flash_attn_ext_add_sinks(out, sinks);
-    GGML_ASSERT(ggml_backend_dev_supports_op(dev, out));
-
-    ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), 16, false);
-    ggml_build_forward_expand(graph, out);
-
-    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(), backend));
-    GGML_ASSERT(buffer != nullptr);
-
-    std::vector<float> q_data(static_cast<size_t>(d * n * h * s));
-    std::vector<float> k_data(static_cast<size_t>(d * kv * h_kv * s));
-    std::vector<float> v_data(static_cast<size_t>(d * kv * h_kv * s));
-    for (size_t i = 0; i < q_data.size(); ++i) {
-        q_data[i] = static_cast<float>(static_cast<int>((i * 7 + 3) % 41) - 20) / 29.0f;
-    }
-    for (size_t i = 0; i < k_data.size(); ++i) {
-        k_data[i] = static_cast<float>(static_cast<int>((i * 11 + 5) % 37) - 18) / 31.0f;
-    }
-    for (size_t i = 0; i < v_data.size(); ++i) {
-        v_data[i] = static_cast<float>(static_cast<int>((i * 13 + 9) % 43) - 21) / 23.0f;
-    }
-
-    std::vector<float> k_reference;
-    std::vector<float> v_reference;
-    std::vector<uint8_t> k_storage;
-    std::vector<uint8_t> v_storage;
-    prepare_rows(k_type, d, kv * h_kv * s, k_data, k_reference, k_storage);
-    prepare_rows(v_type, d, kv * h_kv * s, v_data, v_reference, v_storage);
-
-    ggml_backend_tensor_set(q, q_data.data(), 0, q_data.size() * sizeof(float));
-    ggml_backend_tensor_set(k, k_storage.data(), 0, k_storage.size());
-    ggml_backend_tensor_set(v, v_storage.data(), 0, v_storage.size());
-
-    std::vector<float> mask_reference;
-    std::vector<ggml_fp16_t> mask_storage;
-    if (mask_enabled) {
-        mask_reference.resize(static_cast<size_t>(kv * n * s));
-        mask_storage.resize(mask_reference.size());
-        for (int64_t seq = 0; seq < s; ++seq) {
-            for (int64_t token = 0; token < n; ++token) {
-                for (int64_t t = 0; t < kv; ++t) {
-                    const float value = t > token + 1 ? -1000.0f : 0.125f * static_cast<float>(token - t);
-                    mask_reference[index_4d(t, token, 0, seq, kv, n, 1)] = value;
-                    mask_storage[index_4d(t, token, 0, seq, kv, n, 1)] = ggml_fp32_to_fp16(value);
-                }
-            }
-        }
-        ggml_backend_tensor_set(mask, mask_storage.data(), 0, mask_storage.size() * sizeof(ggml_fp16_t));
-    }
-
-    std::vector<float> sink_data;
-    if (sinks_enabled) {
-        sink_data.resize(static_cast<size_t>(h));
-        for (int64_t head = 0; head < h; ++head) {
-            sink_data[static_cast<size_t>(head)] = -0.5f + 0.25f * static_cast<float>(head);
-        }
-        ggml_backend_tensor_set(sinks, sink_data.data(), 0, sink_data.size() * sizeof(float));
-    }
-
-    GGML_ASSERT(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
-    expect_near(
-        tensor_to_float(out),
-        reference_flash_attn_ext_decode(
-            q_data, k_reference, v_reference, mask_reference, sink_data,
-            d, n, h, h_kv, kv, s,
-            1.0f / std::sqrt(static_cast<float>(d)),
-            mask_enabled,
-            sinks_enabled),
-        5.0e-3f,
-        label);
-}
-
 static void run_add_case(ggml_backend_t backend, int64_t n) {
     ggml_context_ptr ctx = make_context();
     ggml_tensor * lhs = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, n);
@@ -3380,30 +3284,30 @@ static void expect_flash_attn_ext_prefill_samples(
         const std::vector<float> & k,
         const std::vector<float> & v,
         const std::vector<float> & mask,
+        int64_t d,
         int64_t n,
+        int64_t h,
+        int64_t h_kv,
         int64_t kv,
         float scale,
         float logit_softcap,
         const char * label) {
-    static constexpr int64_t D = 256;
-    static constexpr int64_t H = 16;
-    static constexpr int64_t H_KV = 2;
     const std::array<int64_t, 5> sample_tokens = { 0, std::min<int64_t>(1, n - 1), n / 3, n / 2, n - 1 };
-    const std::array<int64_t, 3> sample_heads = { 0, 7, 15 };
-    const std::array<int64_t, 4> sample_cols = { 0, 31, 128, 255 };
+    const std::array<int64_t, 3> sample_heads = { 0, h / 2, h - 1 };
+    const std::array<int64_t, 4> sample_cols = { 0, std::min<int64_t>(31, d - 1), d / 2, d - 1 };
     std::vector<float> logits(static_cast<size_t>(kv));
-    std::vector<float> expected(static_cast<size_t>(D));
+    std::vector<float> expected(static_cast<size_t>(d));
 
     for (const int64_t token : sample_tokens) {
         for (const int64_t head : sample_heads) {
-            const int64_t kv_head = head / (H / H_KV);
+            const int64_t kv_head = head / (h / h_kv);
             float max_score = -INFINITY;
             for (int64_t t = 0; t < kv; ++t) {
                 float score = 0.0f;
-                for (int64_t col = 0; col < D; ++col) {
+                for (int64_t col = 0; col < d; ++col) {
                     score +=
-                        q[index_4d(col, token, head, 0, D, n, H)] *
-                        k[index_4d(col, t, kv_head, 0, D, kv, H_KV)];
+                        q[index_4d(col, token, head, 0, d, n, h)] *
+                        k[index_4d(col, t, kv_head, 0, d, kv, h_kv)];
                 }
                 score *= scale;
                 if (logit_softcap != 0.0f) {
@@ -3420,17 +3324,17 @@ static void expect_flash_attn_ext_prefill_samples(
                 denom += logit;
             }
 
-            for (int64_t col = 0; col < D; ++col) {
+            for (int64_t col = 0; col < d; ++col) {
                 float value = 0.0f;
                 for (int64_t t = 0; t < kv; ++t) {
                     value += logits[static_cast<size_t>(t)] *
-                        v[index_4d(col, t, kv_head, 0, D, kv, H_KV)];
+                        v[index_4d(col, t, kv_head, 0, d, kv, h_kv)];
                 }
                 expected[static_cast<size_t>(col)] = value / denom;
             }
 
             for (const int64_t col : sample_cols) {
-                const size_t out_idx = index_4d(col, head, token, 0, D, H, n);
+                const size_t out_idx = index_4d(col, head, token, 0, d, h, n);
                 const float got = actual[out_idx];
                 const float want = expected[static_cast<size_t>(col)];
                 const float tolerance = logit_softcap != 0.0f ? 6.0e-2f : 2.0e-2f;
@@ -3520,7 +3424,272 @@ static void run_flash_attn_ext_prefill_f16_case(
 
     GGML_ASSERT(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
     expect_flash_attn_ext_prefill_samples(
-        tensor_to_float(out), q_data, k_reference, v_reference, mask_reference, N, KV, scale, logit_softcap, label);
+        tensor_to_float(out), q_data, k_reference, v_reference, mask_reference,
+        D, N, H, H_KV, KV, scale, logit_softcap, label);
+}
+
+struct flash_attn_ext_shape {
+    int64_t d;
+    int64_t n;
+    int64_t h;
+    int64_t h_kv;
+    int64_t kv;
+    int64_t s;
+};
+
+enum class flash_attn_ext_phase {
+    decode,
+    prefill,
+};
+
+struct flash_attn_ext_config {
+    flash_attn_ext_phase phase;
+    flash_attn_ext_shape shape;
+    ggml_type k_type;
+    ggml_type v_type;
+    bool expected_supported;
+    bool compute;
+    bool mask;
+    bool sinks;
+    const char * name;
+};
+
+static const char * flash_attn_ext_phase_name(flash_attn_ext_phase phase) {
+    switch (phase) {
+        case flash_attn_ext_phase::decode:
+            return "decode";
+        case flash_attn_ext_phase::prefill:
+            return "prefill";
+    }
+    return "unknown";
+}
+
+static std::string flash_attn_ext_case_label(const flash_attn_ext_config & cfg) {
+    const flash_attn_ext_shape & s = cfg.shape;
+    std::string label = "flash_attn_ext_";
+    label += flash_attn_ext_phase_name(cfg.phase);
+    label += "_";
+    label += ggml_type_name(cfg.k_type);
+    if (cfg.k_type != cfg.v_type) {
+        label += "_";
+        label += ggml_type_name(cfg.v_type);
+    }
+    label += "_d" + std::to_string(s.d);
+    label += "_n" + std::to_string(s.n);
+    label += "_h" + std::to_string(s.h);
+    label += "_hkv" + std::to_string(s.h_kv);
+    label += "_kv" + std::to_string(s.kv);
+    if (!cfg.compute) {
+        label += "_support";
+    }
+    if (!cfg.expected_supported) {
+        label += "_unsupported";
+    }
+    if (cfg.sinks) {
+        label += "_sinks";
+    }
+    if (!cfg.mask) {
+        label += "_nomask";
+    }
+    return label;
+}
+
+static void run_flash_attn_ext_config(
+        ggml_backend_t backend,
+        ggml_backend_dev_t dev,
+        const flash_attn_ext_config & cfg) {
+    const flash_attn_ext_shape & shape = cfg.shape;
+    const int64_t D = shape.d;
+    const int64_t N = shape.n;
+    const int64_t H = shape.h;
+    const int64_t H_KV = shape.h_kv;
+    const int64_t KV = shape.kv;
+    const int64_t S = shape.s;
+    const float scale = 1.0f / std::sqrt(static_cast<float>(D));
+    const std::string generated_label = cfg.name ? "" : flash_attn_ext_case_label(cfg);
+    const char * label = cfg.name ? cfg.name : generated_label.c_str();
+
+    ggml_context_ptr ctx = make_context();
+    ggml_tensor * q = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F32, D, N, H, S);
+    ggml_tensor * k = ggml_new_tensor_4d(ctx.get(), cfg.k_type, D, KV, H_KV, S);
+    ggml_tensor * v = ggml_new_tensor_4d(ctx.get(), cfg.v_type, D, KV, H_KV, S);
+    ggml_tensor * mask = cfg.mask ? ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F16, KV, N, 1, S) : nullptr;
+    ggml_tensor * sinks = cfg.sinks ? ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, H) : nullptr;
+    ggml_tensor * out = ggml_flash_attn_ext(ctx.get(), q, k, v, mask, scale, 0.0f, 0.0f);
+    ggml_flash_attn_ext_add_sinks(out, sinks);
+
+    const bool supported = ggml_backend_dev_supports_op(dev, out);
+    if (!cfg.expected_supported) {
+        if (supported) {
+            std::fprintf(stderr,
+                "%s: expected unsupported attention shape d=%" PRId64 " n=%" PRId64
+                " h=%" PRId64 " h_kv=%" PRId64 " kv=%" PRId64 "\n",
+                label, D, N, H, H_KV, KV);
+            std::abort();
+        }
+        return;
+    }
+    if (!supported) {
+        std::fprintf(stderr,
+            "%s: expected supported attention shape d=%" PRId64 " n=%" PRId64
+            " h=%" PRId64 " h_kv=%" PRId64 " kv=%" PRId64 "\n",
+            label, D, N, H, H_KV, KV);
+        std::abort();
+    }
+    if (!cfg.compute) {
+        return;
+    }
+
+    ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), 16, false);
+    ggml_build_forward_expand(graph, out);
+
+    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(), backend));
+    GGML_ASSERT(buffer != nullptr);
+
+    std::vector<float> q_data(static_cast<size_t>(D * N * H * S));
+    std::vector<float> k_data(static_cast<size_t>(D * KV * H_KV * S));
+    std::vector<float> v_data(static_cast<size_t>(D * KV * H_KV * S));
+    for (size_t i = 0; i < q_data.size(); ++i) {
+        q_data[i] = static_cast<float>(static_cast<int>((i * 7 + 3) % 41) - 20) / 61.0f;
+    }
+    for (size_t i = 0; i < k_data.size(); ++i) {
+        k_data[i] = static_cast<float>(static_cast<int>((i * 11 + 5) % 37) - 18) / 67.0f;
+    }
+    for (size_t i = 0; i < v_data.size(); ++i) {
+        v_data[i] = static_cast<float>(static_cast<int>((i * 13 + 9) % 43) - 21) / 59.0f;
+    }
+
+    std::vector<float> k_reference;
+    std::vector<float> v_reference;
+    std::vector<uint8_t> k_storage;
+    std::vector<uint8_t> v_storage;
+    prepare_rows(cfg.k_type, D, KV * H_KV * S, k_data, k_reference, k_storage);
+    prepare_rows(cfg.v_type, D, KV * H_KV * S, v_data, v_reference, v_storage);
+
+    std::vector<float> mask_reference;
+    std::vector<ggml_fp16_t> mask_storage;
+    if (cfg.mask) {
+        mask_reference.resize(static_cast<size_t>(KV * N * S));
+        mask_storage.resize(mask_reference.size());
+        for (int64_t seq = 0; seq < S; ++seq) {
+            for (int64_t token = 0; token < N; ++token) {
+                for (int64_t t = 0; t < KV; ++t) {
+                    const float value = t > token ? -1000.0f : 0.03125f * static_cast<float>(token - t);
+                    const size_t idx = index_4d(t, token, 0, seq, KV, N, 1);
+                    mask_reference[idx] = ggml_fp16_to_fp32(ggml_fp32_to_fp16(value));
+                    mask_storage[idx] = ggml_fp32_to_fp16(value);
+                }
+            }
+        }
+    }
+
+    std::vector<float> sink_data;
+    if (cfg.sinks) {
+        sink_data.resize(static_cast<size_t>(H));
+        for (int64_t head = 0; head < H; ++head) {
+            sink_data[static_cast<size_t>(head)] = -0.5f + 0.25f * static_cast<float>(head);
+        }
+    }
+
+    ggml_backend_tensor_set(q, q_data.data(), 0, q_data.size() * sizeof(float));
+    ggml_backend_tensor_set(k, k_storage.data(), 0, k_storage.size());
+    ggml_backend_tensor_set(v, v_storage.data(), 0, v_storage.size());
+    if (cfg.mask) {
+        ggml_backend_tensor_set(mask, mask_storage.data(), 0, mask_storage.size() * sizeof(ggml_fp16_t));
+    }
+    if (cfg.sinks) {
+        ggml_backend_tensor_set(sinks, sink_data.data(), 0, sink_data.size() * sizeof(float));
+    }
+
+    GGML_ASSERT(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+    if (cfg.phase == flash_attn_ext_phase::decode) {
+        expect_near(
+            tensor_to_float(out),
+            reference_flash_attn_ext_decode(
+                q_data, k_reference, v_reference, mask_reference, sink_data,
+                D, N, H, H_KV, KV, S, scale, cfg.mask, cfg.sinks),
+            5.0e-3f,
+            label);
+    } else if (cfg.phase == flash_attn_ext_phase::prefill) {
+        expect_flash_attn_ext_prefill_samples(
+            tensor_to_float(out), q_data, k_reference, v_reference, mask_reference,
+            D, N, H, H_KV, KV, scale, 0.0f, label);
+    }
+}
+
+static void run_flash_attn_ext_cases(
+        ggml_backend_t backend,
+        ggml_backend_dev_t dev,
+        const flash_attn_ext_config * cases,
+        size_t ncases) {
+    for (size_t i = 0; i < ncases; ++i) {
+        run_flash_attn_ext_config(backend, dev, cases[i]);
+    }
+}
+
+template <size_t N>
+static void run_flash_attn_ext_cases(
+        ggml_backend_t backend,
+        ggml_backend_dev_t dev,
+        const std::array<flash_attn_ext_config, N> & cases) {
+    run_flash_attn_ext_cases(backend, dev, cases.data(), cases.size());
+}
+
+struct flash_attn_ext_decode_kv_limit_case {
+    ggml_type k_type;
+    ggml_type v_type;
+    bool kv8192_supported;
+};
+
+static void run_flash_attn_ext_decode_kv_limit_matrix(
+        ggml_backend_t backend,
+        ggml_backend_dev_t dev,
+        const flash_attn_ext_decode_kv_limit_case * cases,
+        size_t ncases) {
+    for (size_t i = 0; i < ncases; ++i) {
+        const flash_attn_ext_decode_kv_limit_case & c = cases[i];
+        run_flash_attn_ext_config(backend, dev, {
+            flash_attn_ext_phase::decode,
+            { 128, 1, 32, 8, 1024, 1 },
+            c.k_type,
+            c.v_type,
+            true,
+            false,
+            true,
+            false,
+            nullptr,
+        });
+        run_flash_attn_ext_config(backend, dev, {
+            flash_attn_ext_phase::decode,
+            { 128, 1, 32, 8, 8192, 1 },
+            c.k_type,
+            c.v_type,
+            c.kv8192_supported,
+            false,
+            true,
+            false,
+            nullptr,
+        });
+    }
+
+    if (!env_enabled("GGML_HRX_TEST_FUTURE_FLASH_ATTN_LONG_KV")) {
+        return;
+    }
+
+    for (size_t i = 0; i < ncases; ++i) {
+        const flash_attn_ext_decode_kv_limit_case & c = cases[i];
+        run_flash_attn_ext_config(backend, dev, {
+            flash_attn_ext_phase::decode,
+            { 128, 1, 32, 8, 8192, 1 },
+            c.k_type,
+            c.v_type,
+            true,
+            false,
+            true,
+            false,
+            nullptr,
+        });
+    }
 }
 
 static float ssm_conv_update_value(
@@ -4633,18 +4802,46 @@ int main() {
         run_mul_mat_id_q4_k_swiglu_fusion_case(
             backend.get(), "mul_mat_id_q4_k_swiglu_packed_fusion",
             2048, 512, 8, 1, 4, 8.0e-3f, true);
-        run_flash_attn_ext_decode_case(
-            backend.get(), dev, GGML_TYPE_F16, GGML_TYPE_F16, true, true, "flash_attn_ext_f16");
-        run_flash_attn_ext_decode_case(
-            backend.get(), dev, GGML_TYPE_BF16, GGML_TYPE_BF16, false, false, "flash_attn_ext_bf16");
-        run_flash_attn_ext_decode_case(
-            backend.get(), dev, GGML_TYPE_F32, GGML_TYPE_F32, false, false, "flash_attn_ext_f32");
-        run_flash_attn_ext_decode_case(
-            backend.get(), dev, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0, false, false, "flash_attn_ext_q4_0");
-        run_flash_attn_ext_decode_case(
-            backend.get(), dev, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, false, false, "flash_attn_ext_q8_0");
-        run_flash_attn_ext_decode_case(
-            backend.get(), dev, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, false, false, "flash_attn_ext_q8_0_q4_0");
+        const std::array<flash_attn_ext_config, 7> decode_feature_cases = {{
+            { flash_attn_ext_phase::decode, { 32, 3, 4, 2,    5, 2 }, GGML_TYPE_F16,  GGML_TYPE_F16,  true, true, true,  true,  "flash_attn_ext_f16" },
+            { flash_attn_ext_phase::decode, { 32, 1, 4, 2, 2048, 1 }, GGML_TYPE_F16,  GGML_TYPE_F16,  true, true, true,  false, "flash_attn_ext_f16_streaming_kv2048" },
+            { flash_attn_ext_phase::decode, { 32, 3, 4, 2,    5, 2 }, GGML_TYPE_BF16, GGML_TYPE_BF16, true, true, false, false, "flash_attn_ext_bf16" },
+            { flash_attn_ext_phase::decode, { 32, 3, 4, 2,    5, 2 }, GGML_TYPE_F32,  GGML_TYPE_F32,  true, true, false, false, "flash_attn_ext_f32" },
+            { flash_attn_ext_phase::decode, { 32, 3, 4, 2,    5, 2 }, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0, true, true, false, false, "flash_attn_ext_q4_0" },
+            { flash_attn_ext_phase::decode, { 32, 3, 4, 2,    5, 2 }, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, true, true, false, false, "flash_attn_ext_q8_0" },
+            { flash_attn_ext_phase::decode, { 32, 3, 4, 2,    5, 2 }, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, true, true, false, false, "flash_attn_ext_q8_0_q4_0" },
+        }};
+        run_flash_attn_ext_cases(backend.get(), dev, decode_feature_cases);
+        const std::array<flash_attn_ext_config, 7> decode_shape_cases = {{
+            { flash_attn_ext_phase::decode, { 128, 1, 32, 8,   512, 1 }, GGML_TYPE_F16, GGML_TYPE_F16, true,  true,  true, false, nullptr },
+            { flash_attn_ext_phase::decode, { 128, 1, 32, 8,  1024, 1 }, GGML_TYPE_F16, GGML_TYPE_F16, true,  true,  true, false, nullptr },
+            { flash_attn_ext_phase::decode, { 128, 1, 32, 8,  2048, 1 }, GGML_TYPE_F16, GGML_TYPE_F16, true,  false, true, false, nullptr },
+            { flash_attn_ext_phase::decode, { 128, 1, 32, 8,  4096, 1 }, GGML_TYPE_F16, GGML_TYPE_F16, true,  false, true, false, nullptr },
+            { flash_attn_ext_phase::decode, { 128, 1, 32, 8,  8192, 1 }, GGML_TYPE_F16, GGML_TYPE_F16, true,  false, true, false, nullptr },
+            { flash_attn_ext_phase::decode, { 128, 4, 32, 8,  8192, 1 }, GGML_TYPE_F16, GGML_TYPE_F16, true,  false, true, false, nullptr },
+            { flash_attn_ext_phase::decode, { 128, 1, 32, 8, 16384, 1 }, GGML_TYPE_F16, GGML_TYPE_F16, false, false, true, false, nullptr },
+        }};
+        run_flash_attn_ext_cases(backend.get(), dev, decode_shape_cases);
+
+        const std::array<flash_attn_ext_decode_kv_limit_case, 6> decode_kv_limit_cases = {{
+            { GGML_TYPE_F16,  GGML_TYPE_F16,  true  },
+            { GGML_TYPE_BF16, GGML_TYPE_BF16, false },
+            { GGML_TYPE_F32,  GGML_TYPE_F32,  false },
+            { GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, false },
+            { GGML_TYPE_Q4_0, GGML_TYPE_Q4_0, false },
+            { GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, false },
+        }};
+        run_flash_attn_ext_decode_kv_limit_matrix(backend.get(), dev, decode_kv_limit_cases.data(),
+                                                  decode_kv_limit_cases.size());
+
+        const std::array<flash_attn_ext_config, 5> prefill_shape_cases = {{
+            { flash_attn_ext_phase::prefill, { 128, 512, 32, 8,  512, 1 }, GGML_TYPE_F16, GGML_TYPE_F16, true, true,  true, false, nullptr },
+            { flash_attn_ext_phase::prefill, { 128, 512, 32, 8, 1024, 1 }, GGML_TYPE_F16, GGML_TYPE_F16, true, true,  true, false, nullptr },
+            { flash_attn_ext_phase::prefill, { 128, 512, 32, 8, 1536, 1 }, GGML_TYPE_F16, GGML_TYPE_F16, true, false, true, false, nullptr },
+            { flash_attn_ext_phase::prefill, { 128, 512, 32, 8, 2048, 1 }, GGML_TYPE_F16, GGML_TYPE_F16, true, false, true, false, nullptr },
+            { flash_attn_ext_phase::prefill, { 128, 512, 32, 8, 8192, 1 }, GGML_TYPE_F16, GGML_TYPE_F16, true, false, true, false, nullptr },
+        }};
+        run_flash_attn_ext_cases(backend.get(), dev, prefill_shape_cases);
         run_flash_attn_ext_prefill_f16_case(
             backend.get(), dev, false, false, "flash_attn_ext_f16_prefill_direct");
         run_flash_attn_ext_prefill_f16_case(

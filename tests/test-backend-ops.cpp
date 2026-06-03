@@ -8614,6 +8614,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         { 64,  64,  4,  {4, 1},  512, 3,  true,  true,  0.0f,  0.0f, GGML_PREC_F32,     GGML_TYPE_Q4_0, {0, 2, 1, 3} },
         { 128, 128, 4,  {1, 1},  113, 3,  true,  true,  0.0f, 10.0f, GGML_PREC_F32,     GGML_TYPE_F16,  {0, 1, 2, 3} },
         { 128, 128, 4,  {12, 1}, 512, 1,  true,  false, 0.0f,  0.0f, GGML_PREC_DEFAULT, GGML_TYPE_F16,  {0, 1, 2, 3} },
+        { 128, 128, 8,  {4, 1},  512, 1,  true,  false, 0.0f,  0.0f, GGML_PREC_F32,     GGML_TYPE_F16,  {0, 1, 2, 3} },
+        { 128, 128, 8,  {4, 1}, 1024, 1,  true,  false, 0.0f,  0.0f, GGML_PREC_F32,     GGML_TYPE_F16,  {0, 1, 2, 3} },
         { 256, 256, 2,  {8, 1},  257, 1,  true,  true,  0.0f,  0.0f, GGML_PREC_F32,     GGML_TYPE_F16,  {0, 1, 2, 3} },
         { 256, 256, 2,  {8, 1},  512, 1,  true,  false, 0.0f,  0.0f, GGML_PREC_F32,     GGML_TYPE_F16,  {0, 1, 2, 3} },
         { 192, 128, 4,  {1, 1},  113, 1,  true,  false, 0.0f,  0.0f, GGML_PREC_F32,     GGML_TYPE_F16,  {0, 1, 2, 3} },

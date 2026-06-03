@@ -5958,6 +5958,12 @@ static bool ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_gqa8(
            ggml_is_contiguous(op);
 }
 
+static int64_t ggml_backend_hrx_flash_attn_ext_f32_decode_max_kv(
+        const ggml_tensor * k,
+        const ggml_tensor * v) {
+    return k->type == GGML_TYPE_F16 && v->type == GGML_TYPE_F16 ? 8192 : 1024;
+}
+
 static bool ggml_backend_hrx_supports_flash_attn_ext_f32_decode(
         const ggml_backend_hrx_device_context * device_context,
         const ggml_tensor * op) {
@@ -5986,42 +5992,45 @@ static bool ggml_backend_hrx_supports_flash_attn_ext_f32_decode(
     float max_bias = 0.0f;
     std::memcpy(&max_bias, reinterpret_cast<const int32_t *>(op->op_params) + 1, sizeof(float));
     const bool permuted_q = q->nb[1] > q->nb[2];
-    return provider &&
-           provider->kind == ggml_backend_hrx_provider_kind::hsaco &&
-           q->type == GGML_TYPE_F32 &&
-           op->type == GGML_TYPE_F32 &&
-           (!mask || mask->type == GGML_TYPE_F16) &&
-           (!sinks || (sinks->type == GGML_TYPE_F32 &&
-                       sinks->ne[0] == q->ne[2] &&
-                       ggml_is_contiguous(sinks))) &&
-           (max_bias == 0.0f || mask) &&
-           q->ne[0] == k->ne[0] &&
-           q->ne[0] == v->ne[0] &&
-           q->ne[0] == op->ne[0] &&
-           q->ne[0] <= 256 &&
-           q->ne[1] <= 1024 &&
-           k->ne[1] == v->ne[1] &&
-           k->ne[1] <= 1024 &&
-           k->ne[2] == v->ne[2] &&
-           q->ne[3] == k->ne[3] &&
-           q->ne[3] == v->ne[3] &&
-           q->ne[2] == op->ne[1] &&
-           q->ne[2] % k->ne[2] == 0 &&
-           q->ne[1] == op->ne[2] &&
-           q->ne[3] == op->ne[3] &&
-           (k->type != GGML_TYPE_F32 || !permuted_q || q->ne[3] == 1 || q->ne[2] == k->ne[2]) &&
-           q->nb[0] == sizeof(float) &&
-           k->nb[0] == ggml_type_size(k->type) &&
-           v->nb[0] == ggml_type_size(v->type) &&
-           op->nb[0] == sizeof(float) &&
-           (!mask ||
-            (mask->ne[0] == k->ne[1] &&
-             mask->ne[1] >= q->ne[1] &&
-             mask->ne[2] == 1 &&
-             mask->ne[3] == q->ne[3] &&
-             mask->nb[0] == ggml_type_size(mask->type) &&
-             ggml_is_contiguous(mask))) &&
-           ggml_is_contiguous(op);
+    const int64_t max_kv_supported = ggml_backend_hrx_flash_attn_ext_f32_decode_max_kv(k, v);
+    const bool supported =
+        provider &&
+        provider->kind == ggml_backend_hrx_provider_kind::hsaco &&
+        q->type == GGML_TYPE_F32 &&
+        op->type == GGML_TYPE_F32 &&
+        (!mask || mask->type == GGML_TYPE_F16) &&
+        (!sinks || (sinks->type == GGML_TYPE_F32 &&
+                    sinks->ne[0] == q->ne[2] &&
+                    ggml_is_contiguous(sinks))) &&
+        (max_bias == 0.0f || mask) &&
+        q->ne[0] == k->ne[0] &&
+        q->ne[0] == v->ne[0] &&
+        q->ne[0] == op->ne[0] &&
+        q->ne[0] <= 256 &&
+        q->ne[1] <= 1024 &&
+        k->ne[1] == v->ne[1] &&
+        k->ne[1] <= max_kv_supported &&
+        k->ne[2] == v->ne[2] &&
+        q->ne[3] == k->ne[3] &&
+        q->ne[3] == v->ne[3] &&
+        q->ne[2] == op->ne[1] &&
+        q->ne[2] % k->ne[2] == 0 &&
+        q->ne[1] == op->ne[2] &&
+        q->ne[3] == op->ne[3] &&
+        (k->type != GGML_TYPE_F32 || !permuted_q || q->ne[3] == 1 || q->ne[2] == k->ne[2]) &&
+        q->nb[0] == sizeof(float) &&
+        k->nb[0] == ggml_type_size(k->type) &&
+        v->nb[0] == ggml_type_size(v->type) &&
+        op->nb[0] == sizeof(float) &&
+        (!mask ||
+         (mask->ne[0] == k->ne[1] &&
+          mask->ne[1] >= q->ne[1] &&
+          mask->ne[2] == 1 &&
+          mask->ne[3] == q->ne[3] &&
+          mask->nb[0] == ggml_type_size(mask->type) &&
+          ggml_is_contiguous(mask))) &&
+        ggml_is_contiguous(op);
+    return supported;
 }
 
 static bool ggml_backend_hrx_supports_concat_f32(
