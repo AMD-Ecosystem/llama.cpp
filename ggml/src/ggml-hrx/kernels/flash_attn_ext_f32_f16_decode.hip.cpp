@@ -52,6 +52,39 @@ static __device__ __forceinline__ float hrx_alibi_slope(
     return powf(base, exp_h);
 }
 
+static __device__ __forceinline__ float hrx_flash_attn_score_f32_f16(
+        const char * q_head,
+        const char * k_head,
+        const char * mask_row,
+        const hrx_flash_attn_ext_f32_f16_decode_constants c,
+        float slope,
+        long long t) {
+    float mask_value = 0.0f;
+    if (c.has_mask) {
+        mask_value = hrx_load_f16(reinterpret_cast<const __half *>(mask_row), t * c.mask_nb0);
+        // Causal prefill masks future columns with F16 -inf. Avoid the
+        // expensive QK dot for columns that will be zero after softmax.
+        if (mask_value <= -60000.0f) {
+            return -FLT_MAX;
+        }
+    }
+
+    float score = 0.0f;
+    const char * k_row = k_head + t * c.k_nb1;
+    for (long long d = 0; d < c.D; ++d) {
+        const float qv = *reinterpret_cast<const float *>(q_head + d * static_cast<long long>(sizeof(float)));
+        score += qv * hrx_load_f16(reinterpret_cast<const __half *>(k_row), d * static_cast<long long>(sizeof(__half)));
+    }
+    score *= c.scale;
+    if (c.logit_softcap != 0.0f) {
+        score = c.logit_softcap * tanhf(score);
+    }
+    if (c.has_mask) {
+        score += slope * mask_value;
+    }
+    return score;
+}
+
 extern "C" __global__ void hrx_flash_attn_ext_f32_f16_decode(
         const float * q, const __half * k, const __half * v, const __half * mask, const float * sinks, float * dst,
         hrx_flash_attn_ext_f32_f16_decode_constants c) {
@@ -62,7 +95,7 @@ extern "C" __global__ void hrx_flash_attn_ext_f32_f16_decode(
     const long long token = __builtin_amdgcn_workgroup_id_y();
     const long long seq = __builtin_amdgcn_workgroup_id_z();
     const unsigned int tid = __builtin_amdgcn_workitem_id_x();
-    if (head >= c.H || token >= c.N || seq >= c.S || c.KV > 1024) {
+    if (head >= c.H || token >= c.N || seq >= c.S) {
         return;
     }
 
@@ -74,33 +107,14 @@ extern "C" __global__ void hrx_flash_attn_ext_f32_f16_decode(
     const char * mask_row = reinterpret_cast<const char *>(mask) + token * c.mask_nb1 + seq * c.mask_nb3;
     const float slope = hrx_alibi_slope(c, head);
     const float sink = c.has_sinks ? sinks[head] : -FLT_MAX;
+    const bool cache_logits = c.KV <= 1024;
 
     float local_max = sink;
     for (long long t = tid; t < c.KV; t += 256) {
-        float mask_value = 0.0f;
-        if (c.has_mask) {
-            mask_value = hrx_load_f16(reinterpret_cast<const __half *>(mask_row), t * c.mask_nb0);
-            // Causal prefill masks future columns with F16 -inf. Avoid the
-            // expensive QK dot for columns that will be zero after softmax.
-            if (mask_value <= -60000.0f) {
-                logits[t] = -FLT_MAX;
-                continue;
-            }
+        const float score = hrx_flash_attn_score_f32_f16(q_head, k_head, mask_row, c, slope, t);
+        if (cache_logits) {
+            logits[t] = score;
         }
-        float score = 0.0f;
-        const char * k_row = k_head + t * c.k_nb1;
-        for (long long d = 0; d < c.D; ++d) {
-            const float qv = *reinterpret_cast<const float *>(q_head + d * static_cast<long long>(sizeof(float)));
-            score += qv * hrx_load_f16(reinterpret_cast<const __half *>(k_row), d * static_cast<long long>(sizeof(__half)));
-        }
-        score *= c.scale;
-        if (c.logit_softcap != 0.0f) {
-            score = c.logit_softcap * tanhf(score);
-        }
-        if (c.has_mask) {
-            score += slope * mask_value;
-        }
-        logits[t] = static_cast<float>(score);
         local_max = fmaxf(local_max, score);
     }
 
@@ -116,8 +130,13 @@ extern "C" __global__ void hrx_flash_attn_ext_f32_f16_decode(
 
     float local_sum = c.has_sinks && tid == 0 ? expf(sink - max_val) : 0.0f;
     for (long long t = tid; t < c.KV; t += 256) {
-        const float prob = expf(logits[t] - max_val);
-        logits[t] = prob;
+        const float score = cache_logits ?
+            logits[t] :
+            hrx_flash_attn_score_f32_f16(q_head, k_head, mask_row, c, slope, t);
+        const float prob = expf(score - max_val);
+        if (cache_logits) {
+            logits[t] = prob;
+        }
         local_sum += prob;
     }
 
@@ -136,7 +155,10 @@ extern "C" __global__ void hrx_flash_attn_ext_f32_f16_decode(
         float local = 0.0f;
         for (long long t = 0; t < c.KV; ++t) {
             const char * v_row = v_head + t * c.v_nb1;
-            local += logits[t] * inv_sum *
+            const float prob = cache_logits ?
+                logits[t] :
+                expf(hrx_flash_attn_score_f32_f16(q_head, k_head, mask_row, c, slope, t) - max_val);
+            local += prob * inv_sum *
                 hrx_load_f16(reinterpret_cast<const __half *>(v_row), tid * static_cast<long long>(sizeof(__half)));
         }
         *reinterpret_cast<float *>(dst_head + tid * static_cast<long long>(sizeof(float))) = local;
