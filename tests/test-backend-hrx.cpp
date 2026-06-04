@@ -3389,6 +3389,8 @@ static void run_flash_attn_ext_prefill_f16_case(
     std::vector<float> q_data(static_cast<size_t>(D * N * H * S));
     std::vector<float> k_data(static_cast<size_t>(D * KV * H_KV * S));
     std::vector<float> v_data(static_cast<size_t>(D * KV * H_KV * S));
+    // Small centered Q/K activations keep scaled attention logits near ordinary
+    // model magnitudes, while bounded V values keep reference outputs stable.
     for (size_t i = 0; i < q_data.size(); ++i) {
         q_data[i] = static_cast<float>(static_cast<int>((i * 7 + 3) % 41) - 20) / 61.0f;
     }
@@ -3549,6 +3551,8 @@ static void run_flash_attn_ext_config(
     std::vector<float> q_data(static_cast<size_t>(D * N * H * S));
     std::vector<float> k_data(static_cast<size_t>(D * KV * H_KV * S));
     std::vector<float> v_data(static_cast<size_t>(D * KV * H_KV * S));
+    // Small centered Q/K activations keep scaled attention logits near ordinary
+    // model magnitudes, while bounded V values keep reference outputs stable.
     for (size_t i = 0; i < q_data.size(); ++i) {
         q_data[i] = static_cast<float>(static_cast<int>((i * 7 + 3) % 41) - 20) / 61.0f;
     }
