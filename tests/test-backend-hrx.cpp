@@ -1713,50 +1713,36 @@ static ggml_tensor * build_rope_f32_op(
         10000.0f, freq_scale, ext_factor, attn_factor, 1.0f, 1.0f);
 }
 
-static int32_t rope_pos_idx(rope_test_mode mode, int32_t i0, const int sections[GGML_MROPE_SECTIONS]) {
-    if (mode != rope_test_mode::imrope) {
-        return 0;
-    }
-
-    const int32_t sect_dims = sections[0] + sections[1] + sections[2] + sections[3];
-    const int32_t sector = (i0 / 2) % sect_dims;
-    return
-        (sector % 3 == 1 && sector < 3 * sections[1]) ? 1 :
-        (sector % 3 == 2 && sector < 3 * sections[2]) ? 2 :
-        (sector % 3 == 0 && sector < 3 * sections[0]) ? 0 : 3;
-}
-
-static void apply_rope_f32_reference(
-        std::vector<float> & data,
-        const std::vector<int32_t> & pos,
+static std::vector<float> run_rope_f32_cpu_reference(
+        const std::vector<float> & src_data,
+        const std::vector<int32_t> & pos_data,
         rope_test_mode mode,
-        const int sections[GGML_MROPE_SECTIONS],
-        int64_t ncols,
+        int64_t ne0,
         int64_t ne1,
         int64_t ne2,
-        float freq_base,
         float freq_scale,
         float attn_factor) {
-    const float theta_scale = std::pow(freq_base, -2.0f / static_cast<float>(ncols));
-    for (int64_t i2 = 0; i2 < ne2; ++i2) {
-        for (int64_t i1 = 0; i1 < ne1; ++i1) {
-            const int64_t row_base = (i2 * ne1 + i1) * ncols;
-            for (int64_t pair = 0; pair < ncols / 2; ++pair) {
-                const int32_t i0 = static_cast<int32_t>(2 * pair);
-                const int32_t pos_idx = rope_pos_idx(mode, i0, sections);
-                const float theta = static_cast<float>(pos[static_cast<size_t>(i2 + ne2 * pos_idx)]) *
-                    std::pow(theta_scale, static_cast<float>(i0) / 2.0f) * freq_scale;
-                const float cos_theta = std::cos(theta) * attn_factor;
-                const float sin_theta = std::sin(theta) * attn_factor;
-                const int64_t off0 = mode == rope_test_mode::normal ? i0 : i0 / 2;
-                const int64_t off1 = mode == rope_test_mode::normal ? i0 + 1 : off0 + ncols / 2;
-                const float x0 = data[static_cast<size_t>(row_base + off0)];
-                const float x1 = data[static_cast<size_t>(row_base + off1)];
-                data[static_cast<size_t>(row_base + off0)] = x0 * cos_theta - x1 * sin_theta;
-                data[static_cast<size_t>(row_base + off1)] = x0 * sin_theta + x1 * cos_theta;
-            }
-        }
-    }
+    ggml_context_ptr ctx = make_context();
+    ggml_tensor * src = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, ne0, ne1, ne2);
+    ggml_tensor * pos = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, rope_pos_count(mode, ne2));
+    int sections[GGML_MROPE_SECTIONS];
+    rope_sections_for_width(sections, ne0);
+    ggml_tensor * out = build_rope_f32_op(
+        ctx.get(), src, pos, nullptr, mode, sections, ne0, 0.0f, freq_scale, attn_factor);
+
+    ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), 16, false);
+    ggml_build_forward_expand(graph, out);
+
+    ggml_backend_ptr backend(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr));
+    GGML_ASSERT(backend != nullptr);
+    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(), backend.get()));
+    GGML_ASSERT(buffer != nullptr);
+
+    ggml_backend_tensor_set(src, src_data.data(), 0, src_data.size() * sizeof(float));
+    ggml_backend_tensor_set(pos, pos_data.data(), 0, pos_data.size() * sizeof(int32_t));
+    GGML_ASSERT(ggml_backend_graph_compute(backend.get(), graph) == GGML_STATUS_SUCCESS);
+
+    return tensor_to_float(out);
 }
 
 struct rope_support_case {
@@ -1819,7 +1805,6 @@ static void run_rope_f32_case(
     ggml_tensor * pos = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, rope_pos_count(mode, ne2));
     int sections[GGML_MROPE_SECTIONS];
     rope_sections_for_width(sections, ne0);
-    constexpr float freq_base = 10000.0f;
     ggml_tensor * out = build_rope_f32_op(
         ctx.get(), src, pos, nullptr, mode, sections, ne0, 0.0f, freq_scale, attn_factor);
 
@@ -1842,8 +1827,8 @@ static void run_rope_f32_case(
     ggml_backend_tensor_set(pos, pos_data.data(), 0, pos_data.size() * sizeof(int32_t));
     GGML_ASSERT(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
 
-    std::vector<float> expected = src_data;
-    apply_rope_f32_reference(expected, pos_data, mode, sections, ne0, ne1, ne2, freq_base, freq_scale, attn_factor);
+    const std::vector<float> expected =
+        run_rope_f32_cpu_reference(src_data, pos_data, mode, ne0, ne1, ne2, freq_scale, attn_factor);
     expect_near(tensor_to_float(out), expected, 2.0e-5f, rope_mode_name(mode));
 }
 
@@ -2634,15 +2619,12 @@ static std::vector<float> reference_rms_norm_mul(
 static void apply_imrope_reference(
         std::vector<float> & data,
         const std::vector<int32_t> & pos,
-        const int sections[GGML_MROPE_SECTIONS],
         int64_t ncols,
         int64_t ne1,
         int64_t ne2,
-        float freq_base,
         float freq_scale,
         float attn_factor) {
-    apply_rope_f32_reference(data, pos, rope_test_mode::imrope, sections, ncols, ne1, ne2,
-        freq_base, freq_scale, attn_factor);
+    data = run_rope_f32_cpu_reference(data, pos, rope_test_mode::imrope, ncols, ne1, ne2, freq_scale, attn_factor);
 }
 
 static void fill_rms_rope_inputs(
@@ -2919,7 +2901,7 @@ static void run_rms_norm_mul_rope_fusion_case(ggml_backend_t backend, const char
     scoped_env_var disable_rope("GGML_HRX_DISABLE_ROPE", "1");
     GGML_ASSERT(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
     std::vector<float> expected = reference_rms_norm_mul(src_data, weight_data, NCOLS, NE1, NE2, 1, 1, EPS);
-    apply_imrope_reference(expected, pos_data, sections, NCOLS, NE1, NE2, FREQ_BASE, FREQ_SCALE, ATTN_FACTOR);
+    apply_imrope_reference(expected, pos_data, NCOLS, NE1, NE2, FREQ_SCALE, ATTN_FACTOR);
     expect_near(tensor_to_float(out), expected, 5.0e-5f, label);
 }
 
@@ -2999,7 +2981,7 @@ static void run_rope_set_rows_fusion_case(ggml_backend_t backend, bool with_rms_
     std::vector<float> rope_expected = with_rms_mul ?
         reference_rms_norm_mul(src_data, weight_data, NCOLS, NE1, NE2, 1, 1, EPS) :
         src_data;
-    apply_imrope_reference(rope_expected, pos_data, sections, NCOLS, NE1, NE2, FREQ_BASE, FREQ_SCALE, ATTN_FACTOR);
+    apply_imrope_reference(rope_expected, pos_data, NCOLS, NE1, NE2, FREQ_SCALE, ATTN_FACTOR);
     std::vector<float> expected(static_cast<size_t>(NCOLS * NE1 * DST_ROWS), 0.0f);
     for (int64_t token = 0; token < NE2; ++token) {
         const int64_t dst_row = row_data[token];
