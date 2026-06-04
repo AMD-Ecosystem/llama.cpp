@@ -1634,22 +1634,194 @@ static void run_topk_moe_case(
     expect_near(tensor_to_float(weights), expected_weights, 2.0e-5f, label);
 }
 
-static void run_rope_imrope_case(ggml_backend_t backend, int64_t ne0, int64_t ne1, int64_t ne2) {
+enum class rope_test_mode {
+    normal,
+    neox,
+    imrope,
+    mrope,
+    vision,
+};
+
+static int rope_mode_value(rope_test_mode mode) {
+    switch (mode) {
+        case rope_test_mode::normal:
+            return GGML_ROPE_TYPE_NORMAL;
+        case rope_test_mode::neox:
+            return GGML_ROPE_TYPE_NEOX;
+        case rope_test_mode::imrope:
+            return GGML_ROPE_TYPE_IMROPE;
+        case rope_test_mode::mrope:
+            return GGML_ROPE_TYPE_MROPE;
+        case rope_test_mode::vision:
+            return GGML_ROPE_TYPE_VISION;
+    }
+    GGML_ABORT("unknown rope test mode");
+}
+
+static const char * rope_mode_name(rope_test_mode mode) {
+    switch (mode) {
+        case rope_test_mode::normal:
+            return "normal";
+        case rope_test_mode::neox:
+            return "neox";
+        case rope_test_mode::imrope:
+            return "imrope";
+        case rope_test_mode::mrope:
+            return "mrope";
+        case rope_test_mode::vision:
+            return "vision";
+    }
+    return "unknown";
+}
+
+static bool rope_mode_uses_multi_pos(rope_test_mode mode) {
+    return mode == rope_test_mode::imrope ||
+        mode == rope_test_mode::mrope ||
+        mode == rope_test_mode::vision;
+}
+
+static int64_t rope_pos_count(rope_test_mode mode, int64_t ne2) {
+    return rope_mode_uses_multi_pos(mode) ? ne2 * 4 : ne2;
+}
+
+static void rope_sections_for_width(int sections[GGML_MROPE_SECTIONS], int64_t ne0) {
+    sections[0] = static_cast<int32_t>(ne0 / 4);
+    sections[1] = static_cast<int32_t>(ne0 / 4);
+    sections[2] = static_cast<int32_t>(ne0 / 4);
+    sections[3] = static_cast<int32_t>(ne0 - 3 * (ne0 / 4));
+}
+
+static ggml_tensor * build_rope_f32_op(
+        ggml_context * ctx,
+        ggml_tensor * src,
+        ggml_tensor * pos,
+        ggml_tensor * freq,
+        rope_test_mode mode,
+        int sections[GGML_MROPE_SECTIONS],
+        int64_t ne0,
+        float ext_factor,
+        float freq_scale,
+        float attn_factor) {
+    if (rope_mode_uses_multi_pos(mode)) {
+        return ggml_rope_multi(
+            ctx, src, pos, freq, static_cast<int>(ne0), sections, rope_mode_value(mode), 0,
+            10000.0f, freq_scale, ext_factor, attn_factor, 1.0f, 1.0f);
+    }
+
+    return ggml_rope_ext(
+        ctx, src, pos, freq, static_cast<int>(ne0), rope_mode_value(mode), 0,
+        10000.0f, freq_scale, ext_factor, attn_factor, 1.0f, 1.0f);
+}
+
+static int32_t rope_pos_idx(rope_test_mode mode, int32_t i0, const int sections[GGML_MROPE_SECTIONS]) {
+    if (mode != rope_test_mode::imrope) {
+        return 0;
+    }
+
+    const int32_t sect_dims = sections[0] + sections[1] + sections[2] + sections[3];
+    const int32_t sector = (i0 / 2) % sect_dims;
+    return
+        (sector % 3 == 1 && sector < 3 * sections[1]) ? 1 :
+        (sector % 3 == 2 && sector < 3 * sections[2]) ? 2 :
+        (sector % 3 == 0 && sector < 3 * sections[0]) ? 0 : 3;
+}
+
+static void apply_rope_f32_reference(
+        std::vector<float> & data,
+        const std::vector<int32_t> & pos,
+        rope_test_mode mode,
+        const int sections[GGML_MROPE_SECTIONS],
+        int64_t ncols,
+        int64_t ne1,
+        int64_t ne2,
+        float freq_base,
+        float freq_scale,
+        float attn_factor) {
+    const float theta_scale = std::pow(freq_base, -2.0f / static_cast<float>(ncols));
+    for (int64_t i2 = 0; i2 < ne2; ++i2) {
+        for (int64_t i1 = 0; i1 < ne1; ++i1) {
+            const int64_t row_base = (i2 * ne1 + i1) * ncols;
+            for (int64_t pair = 0; pair < ncols / 2; ++pair) {
+                const int32_t i0 = static_cast<int32_t>(2 * pair);
+                const int32_t pos_idx = rope_pos_idx(mode, i0, sections);
+                const float theta = static_cast<float>(pos[static_cast<size_t>(i2 + ne2 * pos_idx)]) *
+                    std::pow(theta_scale, static_cast<float>(i0) / 2.0f) * freq_scale;
+                const float cos_theta = std::cos(theta) * attn_factor;
+                const float sin_theta = std::sin(theta) * attn_factor;
+                const int64_t off0 = mode == rope_test_mode::normal ? i0 : i0 / 2;
+                const int64_t off1 = mode == rope_test_mode::normal ? i0 + 1 : off0 + ncols / 2;
+                const float x0 = data[static_cast<size_t>(row_base + off0)];
+                const float x1 = data[static_cast<size_t>(row_base + off1)];
+                data[static_cast<size_t>(row_base + off0)] = x0 * cos_theta - x1 * sin_theta;
+                data[static_cast<size_t>(row_base + off1)] = x0 * sin_theta + x1 * cos_theta;
+            }
+        }
+    }
+}
+
+struct rope_support_case {
+    rope_test_mode mode;
+    ggml_type type;
+    bool freq_factors;
+    float ext_factor;
+    bool expected_supported;
+    const char * label;
+};
+
+static void run_rope_support_case(ggml_backend_dev_t dev, const rope_support_case & cfg) {
+    ggml_context_ptr ctx = make_context();
+    constexpr int64_t ne0 = 128;
+    constexpr int64_t ne1 = 4;
+    constexpr int64_t ne2 = 2;
+    ggml_tensor * src = ggml_new_tensor_3d(ctx.get(), cfg.type, ne0, ne1, ne2);
+    ggml_tensor * pos = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, rope_pos_count(cfg.mode, ne2));
+    ggml_tensor * freq = cfg.freq_factors ? ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, ne0 / 2) : nullptr;
+    int sections[GGML_MROPE_SECTIONS];
+    rope_sections_for_width(sections, ne0);
+    ggml_tensor * out = build_rope_f32_op(
+        ctx.get(), src, pos, freq, cfg.mode, sections, ne0, cfg.ext_factor, 1.0f, 1.0f);
+
+    const bool supported = ggml_backend_dev_supports_op(dev, out);
+    if (supported != cfg.expected_supported) {
+        std::fprintf(stderr, "%s: ROPE %s support got %s expected %s\n",
+            cfg.label, rope_mode_name(cfg.mode), supported ? "supported" : "unsupported",
+            cfg.expected_supported ? "supported" : "unsupported");
+        std::abort();
+    }
+}
+
+static void run_rope_support_matrix(ggml_backend_dev_t dev) {
+    const std::array<rope_support_case, 8> cases = {{
+        { rope_test_mode::normal, GGML_TYPE_F32, false, 0.0f, true,  "rope_normal_f32" },
+        { rope_test_mode::neox,   GGML_TYPE_F32, false, 0.0f, true,  "rope_neox_f32" },
+        { rope_test_mode::imrope, GGML_TYPE_F32, false, 0.0f, true,  "rope_imrope_f32" },
+        { rope_test_mode::normal, GGML_TYPE_F16, false, 0.0f, false, "rope_normal_f16" },
+        { rope_test_mode::normal, GGML_TYPE_F32, true,  0.0f, false, "rope_normal_freq_factors" },
+        { rope_test_mode::normal, GGML_TYPE_F32, false, 0.5f, false, "rope_normal_yarn" },
+        { rope_test_mode::mrope,  GGML_TYPE_F32, false, 0.0f, false, "rope_mrope_f32" },
+        { rope_test_mode::vision, GGML_TYPE_F32, false, 0.0f, false, "rope_vision_f32" },
+    }};
+    for (const rope_support_case & cfg : cases) {
+        run_rope_support_case(dev, cfg);
+    }
+}
+
+static void run_rope_f32_case(
+        ggml_backend_t backend,
+        rope_test_mode mode,
+        int64_t ne0,
+        int64_t ne1,
+        int64_t ne2,
+        float freq_scale = 1.0f,
+        float attn_factor = 1.0f) {
     ggml_context_ptr ctx = make_context();
     ggml_tensor * src = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, ne0, ne1, ne2);
-    ggml_tensor * pos = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, ne2 * 4);
-    int sections[GGML_MROPE_SECTIONS] = {
-        static_cast<int32_t>(ne0 / 4),
-        static_cast<int32_t>(ne0 / 4),
-        static_cast<int32_t>(ne0 / 4),
-        static_cast<int32_t>(ne0 - 3 * (ne0 / 4)),
-    };
+    ggml_tensor * pos = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, rope_pos_count(mode, ne2));
+    int sections[GGML_MROPE_SECTIONS];
+    rope_sections_for_width(sections, ne0);
     constexpr float freq_base = 10000.0f;
-    constexpr float freq_scale = 1.0f;
-    constexpr float attn_factor = 1.0f;
-    ggml_tensor * out = ggml_rope_multi(
-        ctx.get(), src, pos, nullptr, static_cast<int>(ne0), sections, GGML_ROPE_TYPE_IMROPE, 0,
-        freq_base, freq_scale, 0.0f, attn_factor, 1.0f, 1.0f);
+    ggml_tensor * out = build_rope_f32_op(
+        ctx.get(), src, pos, nullptr, mode, sections, ne0, 0.0f, freq_scale, attn_factor);
 
     ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), 16, false);
     ggml_build_forward_expand(graph, out);
@@ -1662,8 +1834,8 @@ static void run_rope_imrope_case(ggml_backend_t backend, int64_t ne0, int64_t ne
     for (size_t i = 0; i < src_data.size(); ++i) {
         src_data[i] = static_cast<float>((i * 13) % 29) * 0.05f - 0.7f;
     }
-    std::vector<int32_t> pos_data(static_cast<size_t>(ne2 * 4));
-    for (int64_t i = 0; i < ne2 * 4; ++i) {
+    std::vector<int32_t> pos_data(static_cast<size_t>(rope_pos_count(mode, ne2)));
+    for (size_t i = 0; i < pos_data.size(); ++i) {
         pos_data[i] = static_cast<int32_t>((i * 3) % 17);
     }
     ggml_backend_tensor_set(src, src_data.data(), 0, src_data.size() * sizeof(float));
@@ -1671,35 +1843,8 @@ static void run_rope_imrope_case(ggml_backend_t backend, int64_t ne0, int64_t ne
     GGML_ASSERT(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
 
     std::vector<float> expected = src_data;
-    const int32_t sect_dims = sections[0] + sections[1] + sections[2] + sections[3];
-    const float theta_scale = std::pow(freq_base, -2.0f / static_cast<float>(ne0));
-    for (int64_t i2 = 0; i2 < ne2; ++i2) {
-        for (int64_t i1 = 0; i1 < ne1; ++i1) {
-            const int64_t row_base = (i2 * ne1 + i1) * ne0;
-            for (int64_t pair = 0; pair < ne0 / 2; ++pair) {
-                const int32_t i0 = static_cast<int32_t>(2 * pair);
-                if (i0 >= ne0) {
-                    continue;
-                }
-                const int32_t sector = (i0 / 2) % sect_dims;
-                const int32_t pos_idx =
-                    (sector % 3 == 1 && sector < 3 * sections[1]) ? 1 :
-                    (sector % 3 == 2 && sector < 3 * sections[2]) ? 2 :
-                    (sector % 3 == 0 && sector < 3 * sections[0]) ? 0 : 3;
-                const float theta = static_cast<float>(pos_data[i2 + ne2 * pos_idx]) *
-                    std::pow(theta_scale, static_cast<float>(i0) / 2.0f) * freq_scale;
-                const float cos_theta = std::cos(theta) * attn_factor;
-                const float sin_theta = std::sin(theta) * attn_factor;
-                const int64_t off0 = i0 / 2;
-                const int64_t off1 = off0 + ne0 / 2;
-                const float x0 = src_data[row_base + off0];
-                const float x1 = src_data[row_base + off1];
-                expected[row_base + off0] = x0 * cos_theta - x1 * sin_theta;
-                expected[row_base + off1] = x0 * sin_theta + x1 * cos_theta;
-            }
-        }
-    }
-    expect_near(tensor_to_float(out), expected, 2.0e-5f, "rope_imrope");
+    apply_rope_f32_reference(expected, pos_data, mode, sections, ne0, ne1, ne2, freq_base, freq_scale, attn_factor);
+    expect_near(tensor_to_float(out), expected, 2.0e-5f, rope_mode_name(mode));
 }
 
 static void run_ssm_conv_case(ggml_backend_t backend, int64_t d_conv, int64_t d_inner, int64_t n_tokens, int64_t n_seqs) {
@@ -2496,31 +2641,8 @@ static void apply_imrope_reference(
         float freq_base,
         float freq_scale,
         float attn_factor) {
-    const int32_t sect_dims = sections[0] + sections[1] + sections[2] + sections[3];
-    const float theta_scale = std::pow(freq_base, -2.0f / static_cast<float>(ncols));
-    for (int64_t i2 = 0; i2 < ne2; ++i2) {
-        for (int64_t i1 = 0; i1 < ne1; ++i1) {
-            const int64_t row_base = (i2 * ne1 + i1) * ncols;
-            for (int64_t pair = 0; pair < ncols / 2; ++pair) {
-                const int32_t i0 = static_cast<int32_t>(2 * pair);
-                const int32_t sector = (i0 / 2) % sect_dims;
-                const int32_t pos_idx =
-                    (sector % 3 == 1 && sector < 3 * sections[1]) ? 1 :
-                    (sector % 3 == 2 && sector < 3 * sections[2]) ? 2 :
-                    (sector % 3 == 0 && sector < 3 * sections[0]) ? 0 : 3;
-                const float theta = static_cast<float>(pos[static_cast<size_t>(i2 + ne2 * pos_idx)]) *
-                    std::pow(theta_scale, static_cast<float>(i0) / 2.0f) * freq_scale;
-                const float cos_theta = std::cos(theta) * attn_factor;
-                const float sin_theta = std::sin(theta) * attn_factor;
-                const int64_t off0 = i0 / 2;
-                const int64_t off1 = off0 + ncols / 2;
-                const float x0 = data[static_cast<size_t>(row_base + off0)];
-                const float x1 = data[static_cast<size_t>(row_base + off1)];
-                data[static_cast<size_t>(row_base + off0)] = x0 * cos_theta - x1 * sin_theta;
-                data[static_cast<size_t>(row_base + off1)] = x0 * sin_theta + x1 * cos_theta;
-            }
-        }
-    }
+    apply_rope_f32_reference(data, pos, rope_test_mode::imrope, sections, ncols, ne1, ne2,
+        freq_base, freq_scale, attn_factor);
 }
 
 static void fill_rms_rope_inputs(
@@ -2801,6 +2923,32 @@ static void run_rms_norm_mul_rope_fusion_case(ggml_backend_t backend, const char
     expect_near(tensor_to_float(out), expected, 5.0e-5f, label);
 }
 
+static void run_rms_norm_mul_rope_mode_not_fused_case(ggml_backend_t backend, rope_test_mode mode) {
+    static constexpr int64_t NCOLS = 128;
+    static constexpr int64_t NE1 = 3;
+    static constexpr int64_t NE2 = 2;
+    static constexpr float EPS = 1.0e-6f;
+
+    ggml_context_ptr ctx = make_context();
+    ggml_tensor * src = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, NCOLS, NE1, NE2);
+    ggml_tensor * weight = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, NCOLS);
+    ggml_tensor * pos = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, NE2);
+    ggml_tensor * rms = ggml_rms_norm(ctx.get(), src, EPS);
+    ggml_tensor * mul = ggml_mul(ctx.get(), rms, weight);
+    ggml_tensor * out = ggml_rope_ext(
+        ctx.get(), mul, pos, nullptr, static_cast<int>(NCOLS), rope_mode_value(mode), 0,
+        10000.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f);
+
+    ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), 16, false);
+    ggml_build_forward_expand(graph, out);
+    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(), backend));
+    GGML_ASSERT(buffer != nullptr);
+
+    scoped_env_var disable_mul("GGML_HRX_DISABLE_MUL", "1");
+    scoped_env_var disable_rope("GGML_HRX_DISABLE_ROPE", "1");
+    GGML_ASSERT(ggml_backend_graph_compute(backend, graph) != GGML_STATUS_SUCCESS);
+}
+
 static void run_rope_set_rows_fusion_case(ggml_backend_t backend, bool with_rms_mul, const char * label) {
     static constexpr int64_t NCOLS = 64;
     static constexpr int64_t NE1 = 2;
@@ -2865,6 +3013,33 @@ static void run_rope_set_rows_fusion_case(ggml_backend_t backend, bool with_rms_
         }
     }
     expect_near(tensor_to_float(out), expected, 1.0e-3f, label);
+}
+
+static void run_rope_set_rows_mode_not_fused_case(ggml_backend_t backend, rope_test_mode mode) {
+    static constexpr int64_t NCOLS = 64;
+    static constexpr int64_t NE1 = 2;
+    static constexpr int64_t NE2 = 3;
+    static constexpr int64_t DST_ROWS = 4;
+
+    ggml_context_ptr ctx = make_context();
+    ggml_tensor * src = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, NCOLS, NE1, NE2);
+    ggml_tensor * pos = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, NE2);
+    ggml_tensor * rope = ggml_rope_ext(
+        ctx.get(), src, pos, nullptr, static_cast<int>(NCOLS), rope_mode_value(mode), 0,
+        10000.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f);
+    ggml_tensor * view = ggml_view_2d(ctx.get(), rope, NCOLS * NE1, NE2, rope->nb[2], 0);
+    ggml_tensor * rows = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I64, NE2);
+    ggml_tensor * dst = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F16, NCOLS * NE1, DST_ROWS);
+    ggml_tensor * out = ggml_set_rows(ctx.get(), dst, view, rows);
+
+    ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), 32, false);
+    ggml_build_forward_expand(graph, out);
+    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(), backend));
+    GGML_ASSERT(buffer != nullptr);
+
+    scoped_env_var disable_rope("GGML_HRX_DISABLE_ROPE", "1");
+    scoped_env_var disable_set_rows("GGML_HRX_DISABLE_SET_ROWS", "1");
+    GGML_ASSERT(ggml_backend_graph_compute(backend, graph) != GGML_STATUS_SUCCESS);
 }
 
 static void run_rope_set_rows_negative_partial_view_case(ggml_backend_t backend) {
@@ -4286,8 +4461,12 @@ int main() {
         run_rms_norm_mul_fusion_case(backend.get(), 257, 2, 2, 2, 1, "rms_norm_mul_fusion_rows");
         run_add_rms_norm_mul_fusion_case(backend.get(), dev, "add_rms_norm_mul_fusion");
         run_rms_norm_mul_rope_fusion_case(backend.get(), "rms_norm_mul_rope_fusion");
+        run_rms_norm_mul_rope_mode_not_fused_case(backend.get(), rope_test_mode::normal);
+        run_rms_norm_mul_rope_mode_not_fused_case(backend.get(), rope_test_mode::neox);
         run_rope_set_rows_fusion_case(backend.get(), false, "rope_set_rows_fusion");
         run_rope_set_rows_fusion_case(backend.get(), true, "rms_norm_mul_rope_set_rows_fusion");
+        run_rope_set_rows_mode_not_fused_case(backend.get(), rope_test_mode::normal);
+        run_rope_set_rows_mode_not_fused_case(backend.get(), rope_test_mode::neox);
         run_rope_set_rows_negative_partial_view_case(backend.get());
         run_sum_rows_case(backend.get(), 1, 3, 2);
         run_sum_rows_case(backend.get(), 255, 3, 2);
@@ -4689,8 +4868,16 @@ int main() {
             run_topk_moe_case(backend.get(), 128, 1, 8, true, "topk_moe_n128_top8_norm");
             run_topk_moe_case(backend.get(), 256, 1, 8, true, "topk_moe_n256_top8_norm");
         }
-        run_rope_imrope_case(backend.get(), 12, 2, 3);
-        run_rope_imrope_case(backend.get(), 128, 4, 2);
+        run_rope_support_matrix(dev);
+        run_rope_f32_case(backend.get(), rope_test_mode::normal, 12, 2, 3);
+        run_rope_f32_case(backend.get(), rope_test_mode::normal, 128, 4, 2);
+        run_rope_f32_case(backend.get(), rope_test_mode::normal, 80, 3, 2, 1.4245f, 1.4245f);
+        run_rope_f32_case(backend.get(), rope_test_mode::neox, 12, 2, 3);
+        run_rope_f32_case(backend.get(), rope_test_mode::neox, 128, 4, 2);
+        run_rope_f32_case(backend.get(), rope_test_mode::neox, 80, 3, 2, 1.4245f, 1.4245f);
+        run_rope_f32_case(backend.get(), rope_test_mode::imrope, 12, 2, 3);
+        run_rope_f32_case(backend.get(), rope_test_mode::imrope, 128, 4, 2);
+        run_rope_f32_case(backend.get(), rope_test_mode::imrope, 128, 3, 2, 1.4245f, 1.4245f);
         run_gated_delta_net_case(backend.get(), false);
         run_gated_delta_net_case(backend.get(), true);
         run_gated_delta_net_s128_beta_sigmoid_state_update_fusion_case(backend.get(), dev);

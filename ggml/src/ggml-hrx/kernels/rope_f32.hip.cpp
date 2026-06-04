@@ -2,6 +2,9 @@
 #include <math.h>
 #include <stdint.h>
 
+#define HRX_ROPE_TYPE_NORMAL 0
+#define HRX_ROPE_TYPE_IMROPE 40
+
 struct hrx_rope_f32_constants {
     long long ne00;
     long long ne01;
@@ -24,6 +27,19 @@ struct hrx_rope_f32_constants {
     float attn_factor;
     float _pad;
 };
+
+static __device__ int hrx_rope_pos_idx(int mode, int i0, const hrx_rope_f32_constants & c) {
+    if (mode != HRX_ROPE_TYPE_IMROPE) {
+        return 0;
+    }
+
+    const int sect_dims = c.section0 + c.section1 + c.section2 + c.section3;
+    const int sector = (i0 / 2) % sect_dims;
+    return
+        (sector % 3 == 1 && sector < 3 * c.section1) ? 1 :
+        (sector % 3 == 2 && sector < 3 * c.section2) ? 2 :
+        (sector % 3 == 0 && sector < 3 * c.section0) ? 0 : 3;
+}
 
 extern "C" __global__ void hrx_rope_f32(
         const float * src, const int * pos, float * dst,
@@ -51,21 +67,16 @@ extern "C" __global__ void hrx_rope_f32(
         return;
     }
 
-    const int sect_dims = c.section0 + c.section1 + c.section2 + c.section3;
-    const int sector = (i0 / 2) % sect_dims;
-    const int pos_idx =
-        (sector % 3 == 1 && sector < 3 * c.section1) ? 1 :
-        (sector % 3 == 2 && sector < 3 * c.section2) ? 2 :
-        (sector % 3 == 0 && sector < 3 * c.section0) ? 0 : 3;
-
+    const int pos_idx = hrx_rope_pos_idx(c.mode, i0, c);
     const float theta_scale = powf(c.freq_base, -2.0f / static_cast<float>(c.n_dims));
     const float theta = static_cast<float>(pos[i2 + c.ne02 * pos_idx]) *
         powf(theta_scale, static_cast<float>(i0) / 2.0f) * c.freq_scale;
     const float cos_theta = cosf(theta) * c.attn_factor;
     const float sin_theta = sinf(theta) * c.attn_factor;
 
-    const long long off0 = i0 / 2;
-    const long long off1 = off0 + c.n_dims / 2;
+    const bool normal = c.mode == HRX_ROPE_TYPE_NORMAL;
+    const long long off0 = normal ? i0 : i0 / 2;
+    const long long off1 = normal ? i0 + 1 : off0 + c.n_dims / 2;
     const float x0 = src[src_base + off0];
     const float x1 = src[src_base + off1];
     dst[dst_base + off0] = x0 * cos_theta - x1 * sin_theta;

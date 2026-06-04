@@ -6255,6 +6255,16 @@ static const ggml_backend_hrx_op_provider & ggml_backend_hrx_select_topk_moe_f32
     return baseline;
 }
 
+static bool ggml_backend_hrx_rope_mode_supported(int32_t mode) {
+    return mode == GGML_ROPE_TYPE_NORMAL ||
+           mode == GGML_ROPE_TYPE_NEOX ||
+           mode == GGML_ROPE_TYPE_IMROPE;
+}
+
+static bool ggml_backend_hrx_rope_mode_imrope(const ggml_tensor * op) {
+    return ggml_get_op_params_i32(op, 2) == GGML_ROPE_TYPE_IMROPE;
+}
+
 static bool ggml_backend_hrx_supports_rope_f32(
         const ggml_backend_hrx_device_context * device_context,
         const ggml_tensor * op) {
@@ -6269,6 +6279,9 @@ static bool ggml_backend_hrx_supports_rope_f32(
     const int32_t section1 = ggml_get_op_params_i32(op, 12);
     const int32_t section2 = ggml_get_op_params_i32(op, 13);
     const int32_t section3 = ggml_get_op_params_i32(op, 14);
+    const bool is_imrope = mode == GGML_ROPE_TYPE_IMROPE;
+    const int64_t expected_pos_ne0 = src0 ? (is_imrope ? src0->ne[2] * 4 : src0->ne[2]) : 0;
+    const bool valid_sections = !is_imrope || section0 + section1 + section2 + section3 > 0;
     return !ggml_backend_hrx_approximate_kernels_disabled() &&
            device_context->rope_f32_provider.kind == ggml_backend_hrx_provider_kind::hsaco &&
            src0 &&
@@ -6277,14 +6290,14 @@ static bool ggml_backend_hrx_supports_rope_f32(
            src0->type == GGML_TYPE_F32 &&
            src1->type == GGML_TYPE_I32 &&
            op->type == GGML_TYPE_F32 &&
-           mode == GGML_ROPE_TYPE_IMROPE &&
+           ggml_backend_hrx_rope_mode_supported(mode) &&
            ext_factor == 0.0f &&
            n_dims > 0 &&
            n_dims <= src0->ne[0] &&
            (n_dims % 2) == 0 &&
            (src0->ne[0] % 2) == 0 &&
-           section0 + section1 + section2 + section3 > 0 &&
-           src1->ne[0] == src0->ne[2] * 4 &&
+           valid_sections &&
+           src1->ne[0] == expected_pos_ne0 &&
            ggml_is_contiguous(src0) &&
            ggml_is_contiguous(src1) &&
            ggml_is_contiguous(op) &&
@@ -6299,6 +6312,7 @@ static bool ggml_backend_hrx_supports_rope_set_rows_f32_f16(
     return !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_ROPE_SET_ROWS_FUSION") &&
            device_context->rope_set_rows_f32_f16_provider.kind == ggml_backend_hrx_provider_kind::hsaco &&
            ggml_backend_hrx_supports_rope_f32(device_context, rope) &&
+           ggml_backend_hrx_rope_mode_imrope(rope) &&
            view &&
            set_rows &&
            view->op == GGML_OP_VIEW &&
@@ -6331,6 +6345,7 @@ static bool ggml_backend_hrx_supports_rms_norm_mul_rope_f32(
            rope->op == GGML_OP_ROPE &&
            rope->src[0] == mul &&
            ggml_backend_hrx_supports_rope_f32(device_context, rope) &&
+           ggml_backend_hrx_rope_mode_imrope(rope) &&
            rope->src[0]->ne[0] <= 1024;
 }
 
