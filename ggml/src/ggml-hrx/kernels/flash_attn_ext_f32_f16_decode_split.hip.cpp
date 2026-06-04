@@ -4,7 +4,7 @@
 #include <math.h>
 #include <stdint.h>
 
-struct hrx_flash_attn_ext_f32_f16_decode_gqa8_split_constants {
+struct hrx_flash_attn_ext_f32_f16_decode_constants {
     long long D;
     long long KV;
     long long N;
@@ -65,6 +65,7 @@ static __device__ __forceinline__ float4 hrx_fa_split_f4_madd(float4 acc, float 
     return acc;
 }
 
+// Reduce across the d_tid dimension (D_SPLIT=8 lanes -> masks 4,2,1).
 static __device__ __forceinline__ float hrx_fa_split_sum_dsplit(float v) {
 #pragma unroll
     for (int mask = 4; mask > 0; mask >>= 1) {
@@ -73,6 +74,7 @@ static __device__ __forceinline__ float hrx_fa_split_sum_dsplit(float v) {
     return v;
 }
 
+// Reduce across the col_tid dimension (col_tid in [0,4) -> masks 8,16).
 static __device__ __forceinline__ float hrx_fa_split_sum_cols(float v) {
     v += __shfl_xor(v, 8, 32);
     v += __shfl_xor(v, 16, 32);
@@ -98,7 +100,7 @@ static __device__ __forceinline__ float4 hrx_fa_split_scale4(float4 v, float s) 
 }
 
 static __device__ __forceinline__ float hrx_fa_split_alibi_slope(
-        const hrx_flash_attn_ext_f32_f16_decode_gqa8_split_constants c,
+        const hrx_flash_attn_ext_f32_f16_decode_constants c,
         long long head) {
     if (c.max_bias <= 0.0f) {
         return 1.0f;
@@ -109,7 +111,8 @@ static __device__ __forceinline__ float hrx_fa_split_alibi_slope(
     return powf(base, exp_h);
 }
 
-extern "C" __global__ __launch_bounds__(128) void hrx_flash_attn_ext_f32_f16_decode_gqa8_split(
+template <int D, int GQA>
+static __device__ __forceinline__ void hrx_flash_attn_ext_f32_f16_decode_split_impl(
         const float * q,
         const __half * k,
         const __half * v,
@@ -117,16 +120,16 @@ extern "C" __global__ __launch_bounds__(128) void hrx_flash_attn_ext_f32_f16_dec
         const float * sinks,
         float * dst,
         float * scratch,
-        hrx_flash_attn_ext_f32_f16_decode_gqa8_split_constants c) {
-    (void) sinks;
-    (void) dst;
-    constexpr int GQA = 8;
+        hrx_flash_attn_ext_f32_f16_decode_constants c) {
+    (void) sinks;   // sinks + normalization are the reduce kernel's job
+    (void) dst;     // present only to keep the binding order identical to the single-kernel ABI
     constexpr int SPLITS = 8;
-    constexpr int D = 256;
     constexpr int D_SPLIT = 8;
     constexpr int BC = 32;
     constexpr int COLS_PER_THREAD = 8;
     constexpr int VEC_PER_THREAD = D / (4 * D_SPLIT);
+    constexpr int N_ROW_GROUPS = 4;                  // 128 threads / 32 (wavefront)
+    constexpr int HEADS_PER_RG = GQA / N_ROW_GROUPS; // GQA-8 -> 2 heads/row_group, GQA-4 -> 1
 
     const long long x = __builtin_amdgcn_workgroup_id_x();
     const long long split = x % SPLITS;
@@ -147,36 +150,39 @@ extern "C" __global__ __launch_bounds__(128) void hrx_flash_attn_ext_f32_f16_dec
     const long long split_begin = split * split_chunk;
     const long long split_end = split_begin + split_chunk < c.KV ? split_begin + split_chunk : c.KV;
 
-    const int row0 = static_cast<int>(row_group * 2);
-    const int row1 = row0 + 1;
-    const long long head0 = kv_head * GQA + row0;
-    const long long head1 = kv_head * GQA + row1;
-    const bool valid0 = row0 < GQA && head0 < c.H;
-    const bool valid1 = row1 < GQA && head1 < c.H;
+    int row[HEADS_PER_RG];
+    long long head[HEADS_PER_RG];
+    bool valid[HEADS_PER_RG];
+    const char * q_head[HEADS_PER_RG];
+    float slope[HEADS_PER_RG];
+#pragma unroll
+    for (int h = 0; h < HEADS_PER_RG; ++h) {
+        row[h] = static_cast<int>(row_group) * HEADS_PER_RG + h;
+        head[h] = kv_head * GQA + row[h];
+        valid[h] = row[h] < GQA && head[h] < c.H;
+        q_head[h] = reinterpret_cast<const char *>(q) + token * c.q_nb1 + head[h] * c.q_nb2 + seq * c.q_nb3;
+        slope[h] = valid[h] ? hrx_fa_split_alibi_slope(c, head[h]) : 1.0f;
+    }
 
     const char * k_head = reinterpret_cast<const char *>(k) + kv_head * c.k_nb2 + seq * c.k_nb3;
     const char * v_head = reinterpret_cast<const char *>(v) + kv_head * c.v_nb2 + seq * c.v_nb3;
-    const char * q_head0 = reinterpret_cast<const char *>(q) + token * c.q_nb1 + head0 * c.q_nb2 + seq * c.q_nb3;
-    const char * q_head1 = reinterpret_cast<const char *>(q) + token * c.q_nb1 + head1 * c.q_nb2 + seq * c.q_nb3;
     const char * mask_row = reinterpret_cast<const char *>(mask) + token * c.mask_nb1 + seq * c.mask_nb3;
-    const float slope0 = valid0 ? hrx_fa_split_alibi_slope(c, head0) : 1.0f;
-    const float slope1 = valid1 ? hrx_fa_split_alibi_slope(c, head1) : 1.0f;
 
-    float l0 = 0.0f;
-    float l1 = 0.0f;
-    float m0 = -FLT_MAX * 0.5f;
-    float m1 = -FLT_MAX * 0.5f;
-    float4 out0[VEC_PER_THREAD];
-    float4 out1[VEC_PER_THREAD];
+    float l[HEADS_PER_RG];
+    float m[HEADS_PER_RG];
+    float4 out[HEADS_PER_RG][VEC_PER_THREAD];
 #pragma unroll
-    for (int d = 0; d < VEC_PER_THREAD; ++d) {
-        out0[d] = hrx_fa_split_f4_zero();
-        out1[d] = hrx_fa_split_f4_zero();
+    for (int h = 0; h < HEADS_PER_RG; ++h) {
+        l[h] = 0.0f;
+        m[h] = -FLT_MAX * 0.5f;
+#pragma unroll
+        for (int d = 0; d < VEC_PER_THREAD; ++d) {
+            out[h][d] = hrx_fa_split_f4_zero();
+        }
     }
 
     for (long long jb = split_begin; jb < split_end; jb += BC) {
-        float scores0[COLS_PER_THREAD];
-        float scores1[COLS_PER_THREAD];
+        float scores[HEADS_PER_RG][COLS_PER_THREAD];
 #pragma unroll
         for (int ci = 0; ci < COLS_PER_THREAD; ++ci) {
             const long long kv_col = jb + ci * 4 + col_tid;
@@ -186,8 +192,11 @@ extern "C" __global__ __launch_bounds__(128) void hrx_flash_attn_ext_f32_f16_dec
                 mask_value = hrx_fa_split_load_f16(reinterpret_cast<const __half *>(mask_row), kv_col * c.mask_nb0);
             }
 
-            float s0 = 0.0f;
-            float s1 = 0.0f;
+            float s[HEADS_PER_RG];
+#pragma unroll
+            for (int h = 0; h < HEADS_PER_RG; ++h) {
+                s[h] = 0.0f;
+            }
             if (valid_col && (!c.has_mask || mask_value > -60000.0f)) {
                 const char * k_row = k_head + kv_col * c.k_nb1;
 #pragma unroll
@@ -196,57 +205,60 @@ extern "C" __global__ __launch_bounds__(128) void hrx_flash_attn_ext_f32_f16_dec
                     const int byte_offset_f32 = vec_index * 4 * static_cast<int>(sizeof(float));
                     const int byte_offset_f16 = vec_index * 4 * static_cast<int>(sizeof(__half));
                     const float4 kv = hrx_fa_split_load_f16x4(k_row + byte_offset_f16);
-                    if (valid0) {
-                        const float4 qv0 = hrx_fa_split_scale4(
-                            hrx_fa_split_load_f32x4(q_head0 + byte_offset_f32), c.scale);
-                        s0 += hrx_fa_split_dot4(qv0, kv);
-                    }
-                    if (valid1) {
-                        const float4 qv1 = hrx_fa_split_scale4(
-                            hrx_fa_split_load_f32x4(q_head1 + byte_offset_f32), c.scale);
-                        s1 += hrx_fa_split_dot4(qv1, kv);
+#pragma unroll
+                    for (int h = 0; h < HEADS_PER_RG; ++h) {
+                        if (valid[h]) {
+                            const float4 qv = hrx_fa_split_scale4(
+                                hrx_fa_split_load_f32x4(q_head[h] + byte_offset_f32), c.scale);
+                            s[h] += hrx_fa_split_dot4(qv, kv);
+                        }
                     }
                 }
-                s0 = hrx_fa_split_sum_dsplit(s0);
-                s1 = hrx_fa_split_sum_dsplit(s1);
-                if (c.logit_softcap != 0.0f) {
-                    s0 = c.logit_softcap * tanhf(s0);
-                    s1 = c.logit_softcap * tanhf(s1);
-                }
-                if (c.has_mask) {
-                    s0 += slope0 * mask_value;
-                    s1 += slope1 * mask_value;
+#pragma unroll
+                for (int h = 0; h < HEADS_PER_RG; ++h) {
+                    s[h] = hrx_fa_split_sum_dsplit(s[h]);
+                    if (c.logit_softcap != 0.0f) {
+                        s[h] = c.logit_softcap * tanhf(s[h]);
+                    }
+                    if (c.has_mask) {
+                        s[h] += slope[h] * mask_value;
+                    }
                 }
             } else {
-                s0 = -FLT_MAX * 0.5f;
-                s1 = -FLT_MAX * 0.5f;
+#pragma unroll
+                for (int h = 0; h < HEADS_PER_RG; ++h) {
+                    s[h] = -FLT_MAX * 0.5f;
+                }
             }
-            scores0[ci] = valid0 ? s0 : -FLT_MAX * 0.5f;
-            scores1[ci] = valid1 ? s1 : -FLT_MAX * 0.5f;
+#pragma unroll
+            for (int h = 0; h < HEADS_PER_RG; ++h) {
+                scores[h][ci] = valid[h] ? s[h] : -FLT_MAX * 0.5f;
+            }
         }
 
-        float row_max0 = -FLT_MAX * 0.5f;
-        float row_max1 = -FLT_MAX * 0.5f;
+        float row_max[HEADS_PER_RG];
+#pragma unroll
+        for (int h = 0; h < HEADS_PER_RG; ++h) {
+            row_max[h] = -FLT_MAX * 0.5f;
+        }
 #pragma unroll
         for (int ci = 0; ci < COLS_PER_THREAD; ++ci) {
-            row_max0 = fmaxf(row_max0, scores0[ci]);
-            row_max1 = fmaxf(row_max1, scores1[ci]);
-        }
-        row_max0 = hrx_fa_split_max_cols(row_max0);
-        row_max1 = hrx_fa_split_max_cols(row_max1);
-
-        const float old_m0 = m0;
-        const float old_m1 = m1;
-        m0 = fmaxf(m0, row_max0);
-        m1 = fmaxf(m1, row_max1);
-        const float old_scale0 = expf(old_m0 - m0);
-        const float old_scale1 = expf(old_m1 - m1);
-        l0 *= old_scale0;
-        l1 *= old_scale1;
 #pragma unroll
-        for (int d = 0; d < VEC_PER_THREAD; ++d) {
-            out0[d] = hrx_fa_split_scale4(out0[d], old_scale0);
-            out1[d] = hrx_fa_split_scale4(out1[d], old_scale1);
+            for (int h = 0; h < HEADS_PER_RG; ++h) {
+                row_max[h] = fmaxf(row_max[h], scores[h][ci]);
+            }
+        }
+#pragma unroll
+        for (int h = 0; h < HEADS_PER_RG; ++h) {
+            row_max[h] = hrx_fa_split_max_cols(row_max[h]);
+            const float old_m = m[h];
+            m[h] = fmaxf(m[h], row_max[h]);
+            const float old_scale = expf(old_m - m[h]);
+            l[h] *= old_scale;
+#pragma unroll
+            for (int d = 0; d < VEC_PER_THREAD; ++d) {
+                out[h][d] = hrx_fa_split_scale4(out[h][d], old_scale);
+            }
         }
 
 #pragma unroll
@@ -255,28 +267,33 @@ extern "C" __global__ __launch_bounds__(128) void hrx_flash_attn_ext_f32_f16_dec
             if (kv_col >= split_end) {
                 continue;
             }
-            const float p0 = expf(scores0[ci] - m0);
-            const float p1 = expf(scores1[ci] - m1);
-            l0 += p0;
-            l1 += p1;
+            float p[HEADS_PER_RG];
+#pragma unroll
+            for (int h = 0; h < HEADS_PER_RG; ++h) {
+                p[h] = expf(scores[h][ci] - m[h]);
+                l[h] += p[h];
+            }
             const char * v_row = v_head + kv_col * c.v_nb1;
 #pragma unroll
             for (int d = 0; d < VEC_PER_THREAD; ++d) {
                 const int vec_index = d * D_SPLIT + static_cast<int>(d_tid);
                 const int byte_offset_f16 = vec_index * 4 * static_cast<int>(sizeof(__half));
                 const float4 vv = hrx_fa_split_load_f16x4(v_row + byte_offset_f16);
-                out0[d] = hrx_fa_split_f4_madd(out0[d], p0, vv);
-                out1[d] = hrx_fa_split_f4_madd(out1[d], p1, vv);
+#pragma unroll
+                for (int h = 0; h < HEADS_PER_RG; ++h) {
+                    out[h][d] = hrx_fa_split_f4_madd(out[h][d], p[h], vv);
+                }
             }
         }
     }
 
-    l0 = hrx_fa_split_sum_cols(l0);
-    l1 = hrx_fa_split_sum_cols(l1);
 #pragma unroll
-    for (int d = 0; d < VEC_PER_THREAD; ++d) {
-        out0[d] = hrx_fa_split_sum_cols4(out0[d]);
-        out1[d] = hrx_fa_split_sum_cols4(out1[d]);
+    for (int h = 0; h < HEADS_PER_RG; ++h) {
+        l[h] = hrx_fa_split_sum_cols(l[h]);
+#pragma unroll
+        for (int d = 0; d < VEC_PER_THREAD; ++d) {
+            out[h][d] = hrx_fa_split_sum_cols4(out[h][d]);
+        }
     }
 
     if (col_tid == 0) {
@@ -285,29 +302,48 @@ extern "C" __global__ __launch_bounds__(128) void hrx_flash_attn_ext_f32_f16_dec
         float * scratch_o = scratch;
         float * scratch_l = scratch_o + partial_count * D;
         float * scratch_m = scratch_l + partial_count;
-        const size_t base0 = (((static_cast<size_t>(seq) * c.N + static_cast<size_t>(token)) *
-            c.H + static_cast<size_t>(head0)) * SPLITS + static_cast<size_t>(split));
-        const size_t base1 = (((static_cast<size_t>(seq) * c.N + static_cast<size_t>(token)) *
-            c.H + static_cast<size_t>(head1)) * SPLITS + static_cast<size_t>(split));
-        if (d_tid == 0) {
-            if (valid0) {
-                scratch_l[base0] = l0;
-                scratch_m[base0] = m0;
-            }
-            if (valid1) {
-                scratch_l[base1] = l1;
-                scratch_m[base1] = m1;
-            }
-        }
 #pragma unroll
-        for (int d = 0; d < VEC_PER_THREAD; ++d) {
-            const int vec_index = d * D_SPLIT + static_cast<int>(d_tid);
-            if (valid0) {
-                *reinterpret_cast<float4 *>(scratch_o + base0 * D + vec_index * 4) = out0[d];
+        for (int h = 0; h < HEADS_PER_RG; ++h) {
+            if (!valid[h]) {
+                continue;
             }
-            if (valid1) {
-                *reinterpret_cast<float4 *>(scratch_o + base1 * D + vec_index * 4) = out1[d];
+            const size_t base = (((static_cast<size_t>(seq) * c.N + static_cast<size_t>(token)) *
+                c.H + static_cast<size_t>(head[h])) * SPLITS + static_cast<size_t>(split));
+            if (d_tid == 0) {
+                scratch_l[base] = l[h];
+                scratch_m[base] = m[h];
+            }
+#pragma unroll
+            for (int d = 0; d < VEC_PER_THREAD; ++d) {
+                const int vec_index = d * D_SPLIT + static_cast<int>(d_tid);
+                *reinterpret_cast<float4 *>(scratch_o + base * D + vec_index * 4) = out[h][d];
             }
         }
     }
+}
+
+// D=256 / GQA-8 (2 query heads per row_group). Used by the head-dim-256 decode path.
+extern "C" __global__ __launch_bounds__(128) void hrx_flash_attn_ext_f32_f16_decode_gqa8_split(
+        const float * q,
+        const __half * k,
+        const __half * v,
+        const __half * mask,
+        const float * sinks,
+        float * dst,
+        float * scratch,
+        hrx_flash_attn_ext_f32_f16_decode_constants c) {
+    hrx_flash_attn_ext_f32_f16_decode_split_impl<256, 8>(q, k, v, mask, sinks, dst, scratch, c);
+}
+
+// D=128 / GQA-4 (1 query head per row_group). Used by the head-dim-128 decode path (Llama-3.x).
+extern "C" __global__ __launch_bounds__(128) void hrx_flash_attn_ext_f32_f16_decode_gqa4_split(
+        const float * q,
+        const __half * k,
+        const __half * v,
+        const __half * mask,
+        const float * sinks,
+        float * dst,
+        float * scratch,
+        hrx_flash_attn_ext_f32_f16_decode_constants c) {
+    hrx_flash_attn_ext_f32_f16_decode_split_impl<128, 4>(q, k, v, mask, sinks, dst, scratch, c);
 }
