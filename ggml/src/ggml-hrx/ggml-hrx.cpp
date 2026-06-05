@@ -1145,7 +1145,8 @@ struct ggml_backend_hrx_device_context {
     ggml_backend_hrx_op_provider mul_mat_vec_q8_0_add_q8_1_x4_mmq128x32_wg256_provider;
     ggml_backend_hrx_op_provider flash_attn_ext_f16_provider;
     ggml_backend_hrx_op_provider flash_attn_ext_f16_decode_gqa8_split_provider;
-    ggml_backend_hrx_op_provider flash_attn_ext_f16_decode_gqa8_reduce_provider;
+    ggml_backend_hrx_op_provider flash_attn_ext_f16_decode_gqa4_split_provider;
+    ggml_backend_hrx_op_provider flash_attn_ext_f16_decode_reduce_provider;
     ggml_backend_hrx_op_provider flash_attn_ext_f16_prefill_tile_provider;
     ggml_backend_hrx_op_provider flash_attn_ext_f16_prefill_wmma_provider;
     ggml_backend_hrx_op_provider flash_attn_ext_f16_prefill_direct_provider;
@@ -1356,7 +1357,8 @@ static void ggml_backend_hrx_reset_providers(ggml_backend_hrx_device_context * d
     device_context->mul_mat_vec_q8_0_add_q8_1_x4_mmq128x32_wg256_provider.reset();
     device_context->flash_attn_ext_f16_provider.reset();
     device_context->flash_attn_ext_f16_decode_gqa8_split_provider.reset();
-    device_context->flash_attn_ext_f16_decode_gqa8_reduce_provider.reset();
+    device_context->flash_attn_ext_f16_decode_gqa4_split_provider.reset();
+    device_context->flash_attn_ext_f16_decode_reduce_provider.reset();
     device_context->flash_attn_ext_f16_prefill_tile_provider.reset();
     device_context->flash_attn_ext_f16_prefill_wmma_provider.reset();
     device_context->flash_attn_ext_f16_prefill_direct_provider.reset();
@@ -3062,8 +3064,11 @@ static bool ggml_backend_hrx_load_flash_attn_ext_providers(ggml_backend_hrx_devi
         device_context, "hrx_flash_attn_ext_f32_f16_decode_gqa8_split",
         &device_context->flash_attn_ext_f16_decode_gqa8_split_provider) || ok;
     ok = ggml_backend_hrx_load_catalog_provider(
-        device_context, "hrx_flash_attn_ext_f32_f16_decode_gqa8_reduce",
-        &device_context->flash_attn_ext_f16_decode_gqa8_reduce_provider) || ok;
+        device_context, "hrx_flash_attn_ext_f32_f16_decode_gqa4_split",
+        &device_context->flash_attn_ext_f16_decode_gqa4_split_provider) || ok;
+    ok = ggml_backend_hrx_load_catalog_provider(
+        device_context, "hrx_flash_attn_ext_f32_f16_decode_reduce",
+        &device_context->flash_attn_ext_f16_decode_reduce_provider) || ok;
     ok = ggml_backend_hrx_load_catalog_provider(
         device_context, "hrx_flash_attn_ext_f32_f16_prefill_tile8",
         &device_context->flash_attn_ext_f16_prefill_tile_provider) || ok;
@@ -5906,13 +5911,24 @@ static bool ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_direct(
         "GGML_HRX_DISABLE_F16_PREFILL_FA_DIRECT", true, true);
 }
 
-static bool ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_gqa8(
+// Shared support check for the two split-K decode paths, parameterized on the GQA ratio. The two kernels are
+// fixed-shape -- GQA-8/head-dim-256 (decode_gqa8_split) and GQA-4/head-dim-128 (decode_gqa4_split) -- so the
+// head dim is D = 32*GQA; both pair with decode_reduce. Instantiated for GQA 8 and 4 at the call sites.
+template <int GQA>
+static bool ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_gqa(
         const ggml_backend_hrx_device_context * device_context,
         const ggml_tensor * op) {
+    static_assert(GQA == 4 || GQA == 8, "only the GQA-8/D-256 and GQA-4/D-128 split-K decode kernels exist");
+    constexpr int64_t D = 32 * GQA;   // GQA-8 -> 256, GQA-4 -> 128
+    const ggml_backend_hrx_op_provider & split_provider =
+        GQA == 8 ? device_context->flash_attn_ext_f16_decode_gqa8_split_provider
+                 : device_context->flash_attn_ext_f16_decode_gqa4_split_provider;
+    const char * const disable_env =
+        GQA == 8 ? "GGML_HRX_DISABLE_F16_DECODE_FA_GQA8" : "GGML_HRX_DISABLE_F16_DECODE_FA_SPLIT";
     if (ggml_backend_hrx_approximate_kernels_disabled() ||
-        ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_F16_DECODE_FA_GQA8") ||
-        device_context->flash_attn_ext_f16_decode_gqa8_split_provider.kind != ggml_backend_hrx_provider_kind::hsaco ||
-        device_context->flash_attn_ext_f16_decode_gqa8_reduce_provider.kind != ggml_backend_hrx_provider_kind::hsaco) {
+        ggml_backend_hrx_env_enabled(disable_env) ||
+        split_provider.kind != ggml_backend_hrx_provider_kind::hsaco ||
+        device_context->flash_attn_ext_f16_decode_reduce_provider.kind != ggml_backend_hrx_provider_kind::hsaco) {
         return false;
     }
 
@@ -5932,10 +5948,10 @@ static bool ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_gqa8(
            op->type == GGML_TYPE_F32 &&
            (!mask || mask->type == GGML_TYPE_F16) &&
            (!sinks || (sinks->type == GGML_TYPE_F32 && sinks->ne[0] == q->ne[2])) &&
-           q->ne[0] == 256 &&
-           k->ne[0] == 256 &&
-           v->ne[0] == 256 &&
-           op->ne[0] == 256 &&
+           q->ne[0] == D &&
+           k->ne[0] == D &&
+           v->ne[0] == D &&
+           op->ne[0] == D &&
            q->ne[1] == 1 &&
            k->ne[1] > 0 &&
            k->ne[1] == v->ne[1] &&
@@ -5947,7 +5963,7 @@ static bool ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_gqa8(
            k->ne[2] == v->ne[2] &&
            q->ne[3] == k->ne[3] &&
            q->ne[3] == v->ne[3] &&
-           q->ne[2] == 8 * k->ne[2] &&
+           q->ne[2] == GQA * k->ne[2] &&
            (!mask || (mask->ne[0] >= k->ne[1] && mask->ne[1] >= q->ne[1] &&
                       mask->ne[2] <= 1 && mask->ne[3] == q->ne[3])) &&
            q->nb[0] == sizeof(float) &&
@@ -5980,7 +5996,8 @@ static bool ggml_backend_hrx_supports_flash_attn_ext_f32_decode(
         return false;
     }
 
-    if (ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_gqa8(device_context, op) ||
+    if (ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_gqa<8>(device_context, op) ||
+        ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_gqa<4>(device_context, op) ||
         ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_direct(device_context, op) ||
         ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_wmma(device_context, op) ||
         ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_tile(device_context, op)) {
@@ -9482,6 +9499,65 @@ static ggml_status ggml_backend_hrx_dispatch_mul_mat_id_q4_k_swiglu(
         GGML_STATUS_SUCCESS : GGML_STATUS_FAILED;
 }
 
+// Split-K decode dispatch: SPLITS partials over the KV length (grid x = H_KV*SPLITS, one kv-head's GQA
+// query heads per workgroup) written to scratch, then decode_reduce combines them (grid x = H). Shared by
+// both decode paths -- only the split kernel (split_provider) differs; SPLITS must match its constexpr.
+static ggml_status ggml_backend_hrx_dispatch_flash_attn_ext_f32_decode_split_reduce(
+        ggml_backend_hrx_context * context,
+        const ggml_backend_hrx_op_provider & split_provider,
+        const ggml_backend_hrx_flash_attn_ext_f32_decode_constants & constants,
+        hrx_buffer_ref_t * bindings) {
+    static constexpr uint32_t SPLITS = 8;
+    const size_t partial_count = static_cast<size_t>(constants.S) *
+        static_cast<size_t>(constants.N) *
+        static_cast<size_t>(constants.H) *
+        SPLITS;
+    const size_t scratch_size = partial_count *
+        (static_cast<size_t>(constants.D) + 2) *
+        sizeof(float);
+    if (!ggml_backend_hrx_request_scratch_buffer(context, scratch_size, &bindings[6])) {
+        GGML_LOG_ERROR("%s: failed to allocate FLASH_ATTN_EXT split scratch\n", __func__);
+        return GGML_STATUS_FAILED;
+    }
+
+    const uint32_t split_workgroup_size = split_provider.export_info.workgroup_size[0] ?
+        split_provider.export_info.workgroup_size[0] : 128;
+    hrx_dispatch_config_t split_config = {
+        /* .workgroup_count = */ {
+            static_cast<uint32_t>(constants.H_KV * SPLITS),
+            static_cast<uint32_t>(constants.N),
+            static_cast<uint32_t>(constants.S),
+        },
+        /* .workgroup_size = */ { split_workgroup_size, 1, 1 },
+        /* .subgroup_size = */ 0,
+    };
+    if (!GGML_HRX_CHECK(hrx_stream_dispatch(
+            context->stream, split_provider.executable, split_provider.export_ordinal, &split_config,
+            &constants, sizeof(constants), bindings, 7, HRX_DISPATCH_FLAG_NONE))) {
+        return GGML_STATUS_FAILED;
+    }
+
+    hrx_buffer_ref_t reduce_bindings[3] = { bindings[6], bindings[4], bindings[5] };
+    const auto & reduce_provider = context->device_context->flash_attn_ext_f16_decode_reduce_provider;
+    const uint32_t reduce_workgroup_size = reduce_provider.export_info.workgroup_size[0] ?
+        reduce_provider.export_info.workgroup_size[0] : 256;
+    hrx_dispatch_config_t reduce_config = {
+        /* .workgroup_count = */ {
+            static_cast<uint32_t>(constants.H),
+            static_cast<uint32_t>(constants.N),
+            static_cast<uint32_t>(constants.S),
+        },
+        /* .workgroup_size = */ { reduce_workgroup_size, 1, 1 },
+        /* .subgroup_size = */ 0,
+    };
+    if (!GGML_HRX_CHECK(hrx_stream_dispatch(
+            context->stream, reduce_provider.executable, reduce_provider.export_ordinal, &reduce_config,
+            &constants, sizeof(constants), reduce_bindings, 3, HRX_DISPATCH_FLAG_NONE))) {
+        return GGML_STATUS_FAILED;
+    }
+    return GGML_STATUS_SUCCESS;
+}
+
 static ggml_status ggml_backend_hrx_dispatch_flash_attn_ext_f32_decode(
         ggml_backend_hrx_context * context,
         const ggml_tensor * op) {
@@ -9554,12 +9630,14 @@ static ggml_status ggml_backend_hrx_dispatch_flash_attn_ext_f32_decode(
     };
 
     const bool use_decode_gqa8 =
-        ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_gqa8(context->device_context, op);
-    const bool use_prefill_direct = !use_decode_gqa8 &&
+        ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_gqa<8>(context->device_context, op);
+    const bool use_decode_gqa4 = !use_decode_gqa8 &&
+        ggml_backend_hrx_supports_flash_attn_ext_f32_f16_decode_gqa<4>(context->device_context, op);
+    const bool use_prefill_direct = !use_decode_gqa8 && !use_decode_gqa4 &&
         ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_direct(context->device_context, op);
-    const bool use_prefill_wmma = !use_decode_gqa8 && !use_prefill_direct &&
+    const bool use_prefill_wmma = !use_decode_gqa8 && !use_decode_gqa4 && !use_prefill_direct &&
         ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_wmma(context->device_context, op);
-    const bool use_prefill_tile = !use_decode_gqa8 && !use_prefill_direct && !use_prefill_wmma &&
+    const bool use_prefill_tile = !use_decode_gqa8 && !use_decode_gqa4 && !use_prefill_direct && !use_prefill_wmma &&
         ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_tile(context->device_context, op);
     const ggml_backend_hrx_op_provider * provider =
         use_decode_gqa8 ? &context->device_context->flash_attn_ext_f16_decode_gqa8_split_provider :
@@ -9573,55 +9651,13 @@ static ggml_status ggml_backend_hrx_dispatch_flash_attn_ext_f32_decode(
     }
 
     if (use_decode_gqa8) {
-        static constexpr uint32_t gqa8_split_count = 8;
-        const size_t partial_count = static_cast<size_t>(constants.S) *
-            static_cast<size_t>(constants.N) *
-            static_cast<size_t>(constants.H) *
-            gqa8_split_count;
-        const size_t scratch_size = partial_count *
-            (static_cast<size_t>(constants.D) + 2) *
-            sizeof(float);
-        if (!ggml_backend_hrx_request_scratch_buffer(context, scratch_size, &bindings[6])) {
-            GGML_LOG_ERROR("%s: failed to allocate FLASH_ATTN_EXT split scratch\n", __func__);
-            return GGML_STATUS_FAILED;
-        }
+        return ggml_backend_hrx_dispatch_flash_attn_ext_f32_decode_split_reduce(
+            context, *provider, constants, bindings);
+    }
 
-        const uint32_t split_workgroup_size = provider->export_info.workgroup_size[0] ?
-            provider->export_info.workgroup_size[0] : 128;
-        hrx_dispatch_config_t split_config = {
-            /* .workgroup_count = */ {
-                static_cast<uint32_t>(constants.H_KV * gqa8_split_count),
-                static_cast<uint32_t>(constants.N),
-                static_cast<uint32_t>(constants.S),
-            },
-            /* .workgroup_size = */ { split_workgroup_size, 1, 1 },
-            /* .subgroup_size = */ 0,
-        };
-        if (!GGML_HRX_CHECK(hrx_stream_dispatch(
-                context->stream, provider->executable, provider->export_ordinal, &split_config,
-                &constants, sizeof(constants), bindings, 7, HRX_DISPATCH_FLAG_NONE))) {
-            return GGML_STATUS_FAILED;
-        }
-
-        hrx_buffer_ref_t reduce_bindings[3] = { bindings[6], bindings[4], bindings[5] };
-        const auto & reduce_provider = context->device_context->flash_attn_ext_f16_decode_gqa8_reduce_provider;
-        const uint32_t reduce_workgroup_size = reduce_provider.export_info.workgroup_size[0] ?
-            reduce_provider.export_info.workgroup_size[0] : 256;
-        hrx_dispatch_config_t reduce_config = {
-            /* .workgroup_count = */ {
-                static_cast<uint32_t>(constants.H),
-                static_cast<uint32_t>(constants.N),
-                static_cast<uint32_t>(constants.S),
-            },
-            /* .workgroup_size = */ { reduce_workgroup_size, 1, 1 },
-            /* .subgroup_size = */ 0,
-        };
-        if (!GGML_HRX_CHECK(hrx_stream_dispatch(
-                context->stream, reduce_provider.executable, reduce_provider.export_ordinal, &reduce_config,
-                &constants, sizeof(constants), reduce_bindings, 3, HRX_DISPATCH_FLAG_NONE))) {
-            return GGML_STATUS_FAILED;
-        }
-        return GGML_STATUS_SUCCESS;
+    if (use_decode_gqa4) {
+        return ggml_backend_hrx_dispatch_flash_attn_ext_f32_decode_split_reduce(
+            context, context->device_context->flash_attn_ext_f16_decode_gqa4_split_provider, constants, bindings);
     }
 
     const uint32_t workgroup_size = provider->export_info.workgroup_size[0] ?
