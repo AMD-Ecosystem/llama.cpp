@@ -1,0 +1,145 @@
+name: HRX bench
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - hrx-integration
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  THEROCK_VERSION: 7.13.0a20260430
+
+jobs:
+  build-and-test:
+    name: build+op-test ${{ matrix.name }} (${{ matrix.gpu_target }})
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: gfx1151_strix-halo
+            gpu_target: gfx1151
+            therock_target: gfx1151
+            runs_on: linux-gfx1151-gpu-rocm
+          - name: gfx1201_9070
+            gpu_target: gfx1201
+            therock_target: gfx120X-all
+            runs_on: linux-gfx120X-gpu-rocm
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout llama.cpp
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Checkout HRX bench
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ROCm/llamacpp-hrx-bench
+          ref: main
+          path: llamacpp-hrx-bench
+          persist-credentials: false
+
+      - name: Checkout HRX
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ROCm/hrx-system
+          ref: main
+          path: hrx
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Preflight build tools
+        run: |
+          cmake --version
+          ninja --version
+          ccache --version
+          curl --version
+          git --version
+
+      - name: Install TheRock ROCm release
+        run: |
+          rocm_root="$GITHUB_WORKSPACE/therock-rocm"
+          archive="$RUNNER_TEMP/therock-dist-linux-${{ matrix.therock_target }}-$THEROCK_VERSION.tar.gz"
+          url="https://rocm.nightlies.amd.com/tarball-multi-arch/therock-dist-linux-${{ matrix.therock_target }}-$THEROCK_VERSION.tar.gz"
+
+          mkdir -p "$rocm_root"
+          curl --fail --location --show-error --retry 3 --output "$archive" "$url"
+          tar -xf "$archive" -C "$rocm_root"
+
+          test -x "$rocm_root/lib/llvm/bin/clang"
+          test -x "$rocm_root/lib/llvm/bin/clang++"
+
+      - name: Build HRX
+        run: |
+          python hrx/build_tools/ci_core_linux.py build \
+            --rocm-root "$GITHUB_WORKSPACE/therock-rocm" \
+            --install-prefix "$GITHUB_WORKSPACE/hrx-install" \
+            --build-dir "$GITHUB_WORKSPACE/hrx-build" \
+            --ctest-regex "" \
+            --no-package \
+            -D IREE_BUILD_BENCHMARKS=OFF
+
+      - name: Add HRX to TheRock ROCm root
+        run: |
+          rocm_root="$GITHUB_WORKSPACE/therock-rocm"
+          hrx_install="$GITHUB_WORKSPACE/hrx-install"
+
+          cp -a "$hrx_install/include/hrx" "$rocm_root/include/"
+          mkdir -p "$rocm_root/lib/cmake"
+          cp -a "$hrx_install/lib/libhrx.so"* "$rocm_root/lib/"
+          cp -a "$hrx_install/lib/cmake/hrx" "$rocm_root/lib/cmake/"
+
+          test -f "$rocm_root/include/hrx/hrx_runtime.h"
+          test -e "$rocm_root/lib/libhrx.so"
+          test -f "$rocm_root/lib/cmake/hrx/hrx-config.cmake"
+
+      - name: Build llama.cpp HRX op test
+        run: |
+          rocm_root="$GITHUB_WORKSPACE/therock-rocm"
+          cmake -S "$GITHUB_WORKSPACE" -B "$GITHUB_WORKSPACE/build" -GNinja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER="$rocm_root/lib/llvm/bin/clang" \
+            -DCMAKE_CXX_COMPILER="$rocm_root/lib/llvm/bin/clang++" \
+            -DCMAKE_AR="$rocm_root/lib/llvm/bin/llvm-ar" \
+            -DCMAKE_RANLIB="$rocm_root/lib/llvm/bin/llvm-ranlib" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fuse-ld=lld" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-fuse-ld=lld" \
+            -DCMAKE_MODULE_LINKER_FLAGS="-fuse-ld=lld" \
+            -DCMAKE_PREFIX_PATH="$rocm_root" \
+            -DGGML_HRX=ON \
+            -DGGML_HRX_ROCM_PATH="$rocm_root" \
+            -DGGML_HRX_AMDGPU_TARGETS="${{ matrix.gpu_target }}" \
+            -DGGML_HRX_BUILD_HIP_BENCHES=OFF \
+            -DLLAMA_BUILD_TESTS=ON
+          cmake --build "$GITHUB_WORKSPACE/build"
+
+      - name: Run benchmarks
+        run: |
+          llama_cpp_hash="$(git -C "$GITHUB_WORKSPACE" rev-parse --short=12 HEAD)"
+          python llamacpp-hrx-bench/bench.py \
+            --llama-cpp-build "$GITHUB_WORKSPACE/build" \
+            --rocm-root "$GITHUB_WORKSPACE/therock-rocm" \
+            --gfx "${{ matrix.gpu_target }}" \
+            --llama-cpp-hash "$llama_cpp_hash" \
+            --out "bench-${{ matrix.name }}-$llama_cpp_hash.log"
+
+      - name: Upload logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hrx-op-${{ matrix.name }}
+          path: |
+            bench-${{ matrix.name }}-*.log
+            therock-rocm/share/therock/therock_manifest.json
+          if-no-files-found: warn
