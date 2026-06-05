@@ -59,14 +59,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Preflight build tools
-        run: |
-          cmake --version
-          ninja --version
-          ccache --version
-          curl --version
-          git --version
-
       - name: Install TheRock ROCm release
         run: |
           rocm_root="$GITHUB_WORKSPACE/therock-rocm"
@@ -88,25 +80,12 @@ jobs:
             --build-dir "$GITHUB_WORKSPACE/hrx-build" \
             --ctest-regex "" \
             --no-package \
-            -D IREE_BUILD_BENCHMARKS=OFF
-
-      - name: Add HRX to TheRock ROCm root
-        run: |
-          rocm_root="$GITHUB_WORKSPACE/therock-rocm"
-          hrx_install="$GITHUB_WORKSPACE/hrx-install"
-
-          cp -a "$hrx_install/include/hrx" "$rocm_root/include/"
-          mkdir -p "$rocm_root/lib/cmake"
-          cp -a "$hrx_install/lib/libhrx.so"* "$rocm_root/lib/"
-          cp -a "$hrx_install/lib/cmake/hrx" "$rocm_root/lib/cmake/"
-
-          test -f "$rocm_root/include/hrx/hrx_runtime.h"
-          test -e "$rocm_root/lib/libhrx.so"
-          test -f "$rocm_root/lib/cmake/hrx/hrx-config.cmake"
+            --no-passthrough
 
       - name: Build llama.cpp HRX op test
         run: |
           rocm_root="$GITHUB_WORKSPACE/therock-rocm"
+          hrx_install="$GITHUB_WORKSPACE/hrx-install"
           cmake -S "$GITHUB_WORKSPACE" -B "$GITHUB_WORKSPACE/build" -GNinja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER="$rocm_root/lib/llvm/bin/clang" \
@@ -118,6 +97,7 @@ jobs:
             -DCMAKE_MODULE_LINKER_FLAGS="-fuse-ld=lld" \
             -DCMAKE_PREFIX_PATH="$rocm_root" \
             -DGGML_HRX=ON \
+            -Dhrx_DIR="$hrx_install/lib/cmake/hrx" \
             -DGGML_HRX_ROCM_PATH="$rocm_root" \
             -DGGML_HRX_AMDGPU_TARGETS="${{ matrix.gpu_target }}" \
             -DGGML_HRX_BUILD_HIP_BENCHES=OFF \
