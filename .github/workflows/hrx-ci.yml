@@ -1,0 +1,13 @@
+name: HRX CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - hrx-integration
+
+jobs:
+  hrx-bench:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "HRX CI workflow triggered on PR to hrx-integration"
