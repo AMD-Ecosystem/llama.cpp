@@ -1,0 +1,95 @@
+name: HRX CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - hrx-integration
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  hrx-build:
+    name: ubuntu-latest
+    runs-on: ubuntu-latest
+    env:
+      HRX_WORK_DIR: ${{ github.workspace }}
+      # Public location for bench tooling (rsuderman/llamacpp_ci and fork
+      # AaronStGeorge/llamacpp_ci)
+      #TODO: switch to ROCm/llamacpp-hrx-bench once it is open sourced.
+      BENCH_REPOSITORY: AaronStGeorge/llamacpp_ci
+      BENCH_REF: 'main'
+      BENCH_DIR: ${{ github.workspace }}/bench
+      LLAMA_SRC_DIR: ${{ github.workspace }}/llama-src
+      HRX_ARTIFACT_SET: 'core-with-upstream-hip'
+      CCACHE_COMPILERCHECK: content
+
+    steps:
+      - name: Checkout llama.cpp (under test)
+        uses: actions/checkout@v6
+        with:
+          path: llama-src
+
+      - name: Checkout bench tooling
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.BENCH_REPOSITORY }}
+          ref: ${{ env.BENCH_REF }}
+          path: bench
+
+      - name: Install ROCm build dependencies
+        run: "${BENCH_DIR}/scripts/hrx/install-rocm-deps.sh"
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: ubuntu-latest-${{ env.HRX_ARTIFACT_SET }}
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'pull_request' }}
+
+      - name: Checkout HRX
+        run: "${BENCH_DIR}/scripts/hrx/checkout-hrx.sh"
+
+      - name: Fetch ROCm assets
+        run: "${BENCH_DIR}/scripts/hrx/fetch-rocm-assets.sh"
+
+      - name: Build HRX
+        run: "${BENCH_DIR}/scripts/hrx/build-hrx.sh"
+
+      - name: Validate HRX
+        run: "${BENCH_DIR}/scripts/hrx/validate-hrx.sh"
+
+      - name: Build llama.cpp with HRX
+        run: "${BENCH_DIR}/scripts/hrx/build-llama-hrx.sh"
+
+      - name: Run sample MUL_MAT correctness config on CPU
+        run: |
+          . "${BENCH_DIR}/scripts/hrx/env.sh"
+          "${BENCH_DIR}/tools/run-op-test.py" \
+            --test-backend-ops "${LLAMA_BUILD_DIR}/bin/test-backend-ops" \
+            --test-file "${BENCH_DIR}/benchmark-configs/test/mul_mat_f16.txt" \
+            --op MUL_MAT \
+            --backend CPU \
+            --output benchmark-results/sample-mul-mat-f16-cpu-test.jsonl
+
+      - name: Run sample MUL_MAT benchmark config on CPU
+        run: |
+          . "${BENCH_DIR}/scripts/hrx/env.sh"
+          "${BENCH_DIR}/tools/run-op-perf.py" \
+            --test-backend-ops "${LLAMA_BUILD_DIR}/bin/test-backend-ops" \
+            --test-file "${BENCH_DIR}/benchmark-configs/test/mul_mat_f16.txt" \
+            --op MUL_MAT \
+            --backend CPU \
+            --output benchmark-results/sample-mul-mat-f16-cpu-perf.jsonl
+
+      - name: Upload CPU benchmark results
+        uses: actions/upload-artifact@v5
+        with:
+          name: cpu-benchmark-results
+          path: benchmark-results/
