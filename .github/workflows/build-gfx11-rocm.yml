@@ -8,16 +8,22 @@ on:
   workflow_dispatch:
     inputs:
       rocm_version:
-        description: 'ROCm version to use (e.g., 7.13.0a20260318) or "latest" to auto-detect'
+        description: 'ROCm version to use (e.g., 7.14.0a20260608) or "latest" to auto-detect'
         required: false
-        default: 'latest'
+        default: '7.14.0a20260608'
 
+# Pinned to ROCm 7.14.0a20260608: last known-good nightly (libhsa-runtime64 build
+# d34cbb6409). The 7.14.0a20260609 and newer nightlies regressed libhsa-runtime64
+# (build 1b2a555677), which segfaults in GpuAgent::InitDma on the gfx115x runners.
+# See https://github.com/ROCm/TheRock/issues/5763. Pass rocm_version=latest manually
+# to track the newest nightly.
+#
 # Nightly is driven externally (GitHub cron only fires from the default branch).
 # On a host you control, with `gh` authenticated (token scope: repo + workflow):
-#   0 13 * * *  gh workflow run build-gfx11-rocm.yml --repo ROCm/llama.cpp --ref gfx11 -f rocm_version=latest
+#   0 13 * * *  gh workflow run build-gfx11-rocm.yml --repo ROCm/llama.cpp --ref gfx11 -f rocm_version=7.14.0a20260608
 
 env:
-  ROCM_VERSION: ${{ github.event.inputs.rocm_version || 'latest' }}
+  ROCM_VERSION: ${{ github.event.inputs.rocm_version || '7.14.0a20260608' }}
 
 jobs:
   build-ubuntu:
