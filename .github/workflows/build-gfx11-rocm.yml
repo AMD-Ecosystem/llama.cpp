@@ -296,7 +296,7 @@ jobs:
           - gfx_target: gfx1151
             runner: linux-gfx1151-gpu-rocm
           - gfx_target: gfx1150
-            runner: linux-gfx1150-gpu-rocm
+            runner: linux-strix-gpu-rocm-2
       fail-fast: false
 
     steps:
