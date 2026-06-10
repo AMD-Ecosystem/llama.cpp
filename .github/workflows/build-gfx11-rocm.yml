@@ -1,0 +1,386 @@
+name: Build gfx11 + ROCm
+
+on:
+  push:
+    branches: [gfx11]
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      rocm_version:
+        description: 'ROCm version to use (e.g., 7.13.0a20260318) or "latest" to auto-detect'
+        required: false
+        default: 'latest'
+
+# Nightly is driven externally (GitHub cron only fires from the default branch).
+# On a host you control, with `gh` authenticated (token scope: repo + workflow):
+#   0 13 * * *  gh workflow run build-gfx11-rocm.yml --repo ROCm/llama.cpp --ref gfx11 -f rocm_version=latest
+
+env:
+  ROCM_VERSION: ${{ github.event.inputs.rocm_version || 'latest' }}
+
+jobs:
+  build-ubuntu:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        gfx_target: [gfx1151, gfx1150]
+      fail-fast: false
+    outputs:
+      rocm_version: ${{ steps.set-outputs.outputs.rocm_version }}
+      llamacpp_commit_hash: ${{ steps.set-outputs.outputs.llamacpp_commit_hash }}
+
+    steps:
+    - name: Free disk space
+      # Remove unused runner files to free up disk space
+      run: curl -fsSL https://raw.githubusercontent.com/kou/arrow/e49d8ae15583ceff03237571569099a6ad62be32/ci/scripts/util_free_space.sh | bash
+
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Clean up existing ROCm directory (safety precaution)
+      run: |
+        if [ -d "/opt/rocm" ]; then
+          echo "Removing existing /opt/rocm directory..."
+          sudo rm -rf /opt/rocm
+        fi
+        if [ -f "rocm.tar.gz" ]; then
+          rm -f rocm.tar.gz
+        fi
+        echo "Cleanup completed successfully"
+
+    - name: Install build dependencies
+      run: |
+        echo "Installing build dependencies..."
+        sudo apt update
+        sudo apt install -y cmake ninja-build unzip curl
+        echo "Verifying installations..."
+        cmake --version
+        ninja --version
+        echo "Build dependencies installation completed"
+
+    - name: Download and extract ROCm directly to /opt/rocm
+      run: |
+        rocm_version="${{ env.ROCM_VERSION }}"
+        s3_target="${{ matrix.gfx_target }}"
+
+        if [ "$rocm_version" = "latest" ]; then
+          echo "Auto-detecting latest ROCm version for target: $s3_target"
+          s3_response=$(curl -s "https://therock-nightly-tarball.s3.amazonaws.com/?prefix=therock-dist-linux-${s3_target}-7")
+
+          files=$(echo "$s3_response" | grep -oP '(?<=<Key>)[^<]*' | grep "therock-dist-linux-${s3_target}-")
+
+          latest_file=""
+          latest_major=0
+          latest_minor=0
+          latest_patch=0
+          latest_rc=0
+          latest_is_alpha=false
+
+          while IFS= read -r file; do
+            if [[ "$file" =~ therock-dist-linux-${s3_target}-.*?([0-9]+\.[0-9]+\.[0-9]+(a|rc)[0-9]+)\.tar\.gz ]]; then
+              version="${BASH_REMATCH[1]}"
+              major=$(echo "$version" | cut -d. -f1)
+              minor=$(echo "$version" | cut -d. -f2)
+              patch=$(echo "$version" | cut -d. -f3 | sed 's/\(a\|rc\).*//')
+              rc=$(echo "$version" | sed 's/.*\(a\|rc\)//')
+              is_alpha=false
+              if [[ "$version" =~ a ]]; then
+                is_alpha=true
+              fi
+
+              is_newer=false
+              if [ "$major" -gt "$latest_major" ]; then
+                is_newer=true
+              elif [ "$major" -eq "$latest_major" ] && [ "$minor" -gt "$latest_minor" ]; then
+                is_newer=true
+              elif [ "$major" -eq "$latest_major" ] && [ "$minor" -eq "$latest_minor" ] && [ "$patch" -gt "$latest_patch" ]; then
+                is_newer=true
+              elif [ "$major" -eq "$latest_major" ] && [ "$minor" -eq "$latest_minor" ] && [ "$patch" -eq "$latest_patch" ]; then
+                if [ "$is_alpha" = true ] && [ "$latest_is_alpha" = false ]; then
+                  is_newer=true
+                elif [ "$is_alpha" = "$latest_is_alpha" ] && [ "$rc" -gt "$latest_rc" ]; then
+                  is_newer=true
+                fi
+              fi
+
+              if [ "$is_newer" = true ]; then
+                latest_file="$file"
+                latest_major="$major"
+                latest_minor="$minor"
+                latest_patch="$patch"
+                latest_rc="$rc"
+                latest_is_alpha="$is_alpha"
+              fi
+            fi
+          done <<< "$files"
+
+          echo "Found latest file: $latest_file"
+
+          if [[ "$latest_file" =~ therock-dist-linux-${s3_target}-.*?([0-9]+\.[0-9]+\.[0-9]+(a|rc)[0-9]+)\.tar\.gz ]]; then
+            rocm_version="${BASH_REMATCH[1]}"
+            echo "Detected latest ROCm version: $rocm_version"
+          else
+            echo "Failed to extract ROCm version from latest file: $latest_file"
+            echo "Expected pattern: therock-dist-linux-${s3_target}-*<version>.tar.gz"
+            exit 1
+          fi
+
+          rocm_url="https://therock-nightly-tarball.s3.amazonaws.com/$latest_file"
+        else
+          rocm_url="https://therock-nightly-tarball.s3.amazonaws.com/therock-dist-linux-${s3_target}-${rocm_version}.tar.gz"
+        fi
+
+        echo "DETECTED_ROCM_VERSION=$rocm_version" >> $GITHUB_ENV
+
+        echo "Streaming ROCm from: $rocm_url directly to extraction"
+        sudo mkdir -p /opt/rocm
+        curl -sL "$rocm_url" | sudo tar --use-compress-program=gzip -xf - -C /opt/rocm --strip-components=1
+
+    - name: Set ROCm environment variables
+      run: |
+        echo "Setting ROCm environment variables..."
+        echo "HIP_PATH=/opt/rocm" >> $GITHUB_ENV
+        echo "ROCM_PATH=/opt/rocm" >> $GITHUB_ENV
+        echo "HIP_PLATFORM=amd" >> $GITHUB_ENV
+        echo "HIP_CLANG_PATH=/opt/rocm/llvm/bin" >> $GITHUB_ENV
+        echo "HIP_INCLUDE_PATH=/opt/rocm/include" >> $GITHUB_ENV
+        echo "HIP_LIB_PATH=/opt/rocm/lib" >> $GITHUB_ENV
+        echo "HIP_DEVICE_LIB_PATH=/opt/rocm/lib/llvm/amdgcn/bitcode" >> $GITHUB_ENV
+        echo "/opt/rocm/bin:/opt/rocm/llvm/bin:$PATH" >> $GITHUB_PATH
+        echo "LD_LIBRARY_PATH=/opt/rocm/lib:/opt/rocm/lib64:/opt/rocm/llvm/lib:${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
+        echo "LIBRARY_PATH=/opt/rocm/lib:/opt/rocm/lib64:${LIBRARY_PATH:-}" >> $GITHUB_ENV
+        echo "CPATH=/opt/rocm/include:${CPATH:-}" >> $GITHUB_ENV
+        echo "PKG_CONFIG_PATH=/opt/rocm/lib/pkgconfig:${PKG_CONFIG_PATH:-}" >> $GITHUB_ENV
+        echo "ROCm environment variables set successfully"
+
+    - name: Record llama.cpp commit hash
+      run: |
+        commit_hash=$(git rev-parse --short=5 HEAD)
+        echo "LLAMACPP_COMMIT_HASH=$commit_hash" >> $GITHUB_ENV
+        echo "llama.cpp commit hash (5 digits): $commit_hash"
+        echo "Current llama.cpp commit:"
+        git log --oneline -1
+
+    - name: Build Llama.cpp + ROCm
+      run: |
+        current_target="${{ matrix.gfx_target }}"
+        echo "Building for target: $current_target"
+
+        mkdir build
+        cd build
+
+        cmake .. -G Ninja \
+          -DCMAKE_C_COMPILER=/opt/rocm/llvm/bin/clang \
+          -DCMAKE_CXX_COMPILER=/opt/rocm/llvm/bin/clang++ \
+          -DCMAKE_CXX_FLAGS="-I/opt/rocm/include" \
+          -DCMAKE_CROSSCOMPILING=ON \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DGPU_TARGETS="$current_target" \
+          -DBUILD_SHARED_LIBS=ON \
+          -DLLAMA_BUILD_TESTS=OFF \
+          -DGGML_HIP=ON \
+          -DGGML_OPENMP=OFF \
+          -DGGML_CUDA_FORCE_CUBLAS=OFF \
+          -DGGML_RPC=ON \
+          -DGGML_HIP_ROCWMMA_FATTN=OFF \
+          -DLLAMA_BUILD_BORINGSSL=ON \
+          -DGGML_NATIVE=OFF \
+          -DGGML_STATIC=OFF \
+          -DCMAKE_SYSTEM_NAME=Linux
+
+        cmake --build . -j $(nproc)
+
+    - name: Copy ROCm core libs to build directory
+      run: |
+        build_bin_path="build/bin"
+
+        # Copy the rocblas/library folder and all its contents
+        rocblas_lib_path="/opt/rocm/lib/rocblas/library"
+        if [ -d "$rocblas_lib_path" ]; then
+          echo "Copying rocblas/library folder and all contents..."
+          dest_rocblas_path="$build_bin_path/rocblas/library"
+          mkdir -p "$(dirname "$dest_rocblas_path")"
+          cp -r "$rocblas_lib_path" "$(dirname "$dest_rocblas_path")/"
+          echo "Copied: rocblas/library folder with all contents"
+        else
+          echo "Warning: rocblas/library folder not found at: $rocblas_lib_path"
+        fi
+
+        # Copy the hipblaslt/library folder and all its contents
+        hipblaslt_lib_path="/opt/rocm/lib/hipblaslt/library"
+        if [ -d "$hipblaslt_lib_path" ]; then
+          echo "Copying hipblaslt/library folder and all contents..."
+          dest_hipblaslt_path="$build_bin_path/hipblaslt/library"
+          mkdir -p "$(dirname "$dest_hipblaslt_path")"
+          cp -r "$hipblaslt_lib_path" "$(dirname "$dest_hipblaslt_path")/"
+          echo "Copied: hipblaslt/library folder with all contents"
+        else
+          echo "Warning: hipblaslt/library folder not found at: $hipblaslt_lib_path"
+        fi
+
+        # Copy required ROCm libraries to build directory
+        # If artifacts from ROCm or Llama.cpp change, you may need to update this list.
+        # To regenerate the list, run:
+        #   utils/gather_required_libs.py --rocm-dir /opt/rocm --dest-dir build/bin
+        echo "Copying required ROCm libraries to build directory..."
+        cp -v /opt/rocm/lib/libhipblas.so* "$build_bin_path/" 2>/dev/null || echo "libhipblas.so* not found"
+        cp -v /opt/rocm/lib/librocblas.so* "$build_bin_path/" 2>/dev/null || echo "librocblas.so* not found"
+        cp -v /opt/rocm/lib/libamdhip64.so* "$build_bin_path/" 2>/dev/null || echo "libamdhip64.so* not found"
+        cp -v /opt/rocm/lib/librocsolver.so* "$build_bin_path/" 2>/dev/null || echo "librocsolver.so* not found"
+        cp -v /opt/rocm/lib/libroctx64.so* "$build_bin_path/" 2>/dev/null || echo "libroctx64.so* not found"
+        cp -v /opt/rocm/lib/libhipblaslt.so* "$build_bin_path/" 2>/dev/null || echo "libhipblaslt.so* not found"
+        cp -v /opt/rocm/lib/rocm_sysdeps/lib/librocm_sysdeps_liblzma.so* "$build_bin_path/" 2>/dev/null || echo "librocm_sysdeps_liblzma.so* not found"
+        cp -v /opt/rocm/lib/librocprofiler-register.so* "$build_bin_path/" 2>/dev/null || echo "librocprofiler-register.so* not found"
+        cp -v /opt/rocm/lib/libamd_comgr.so* "$build_bin_path/" 2>/dev/null || echo "libamd_comgr.so* not found"
+        cp -v /opt/rocm/lib/libamd_comgr_loader.so* "$build_bin_path/" 2>/dev/null || echo "libamd_comgr_loader.so* not found"
+        cp -v /opt/rocm/lib/libhsa-runtime64.so* "$build_bin_path/" 2>/dev/null || echo "libhsa-runtime64.so* not found"
+        cp -v /opt/rocm/lib/rocm_sysdeps/lib/librocm_sysdeps_numa.so* "$build_bin_path/" 2>/dev/null || echo "librocm_sysdeps_numa.so* not found"
+        cp -v /opt/rocm/lib/librocroller.so* "$build_bin_path/" 2>/dev/null || echo "librocroller.so* not found"
+        cp -v /opt/rocm/lib/librocm_kpack.so* "$build_bin_path/" 2>/dev/null || echo "librocm_kpack.so* not found"
+        cp -v /opt/rocm/lib/rocm_sysdeps/lib/librocm_sysdeps_z.so* "$build_bin_path/" 2>/dev/null || echo "librocm_sysdeps_z.so* not found"
+        cp -v /opt/rocm/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so* "$build_bin_path/" 2>/dev/null || echo "librocm_sysdeps_zstd.so* not found"
+        cp -v /opt/rocm/lib/llvm/lib/libLLVM.so* "$build_bin_path/" 2>/dev/null || echo "libLLVM.so* not found"
+        cp -v /opt/rocm/lib/llvm/lib/libclang-cpp.so* "$build_bin_path/" 2>/dev/null || echo "libclang-cpp.so* not found"
+        cp -v /opt/rocm/lib/rocm_sysdeps/lib/librocm_sysdeps_elf.so* "$build_bin_path/" 2>/dev/null || echo "librocm_sysdeps_elf.so* not found"
+        cp -v /opt/rocm/lib/rocm_sysdeps/lib/librocm_sysdeps_drm.so* "$build_bin_path/" 2>/dev/null || echo "librocm_sysdeps_drm.so* not found"
+        cp -v /opt/rocm/lib/rocm_sysdeps/lib/librocm_sysdeps_drm_amdgpu.so* "$build_bin_path/" 2>/dev/null || echo "librocm_sysdeps_drm_amdgpu.so* not found"
+        cp -v /opt/rocm/lib/rocm_sysdeps/lib/librocm_sysdeps_bz2.so* "$build_bin_path/" 2>/dev/null || echo "librocm_sysdeps_bz2.so* not found"
+
+        echo "Finished copying required ROCm libraries"
+
+    - name: Set RPATH for portable distribution
+      run: |
+        sudo apt-get install -y patchelf
+        cd build/bin
+        # Set RPATH to $ORIGIN so all libraries (including the comgr stub loader) find deps locally
+        for file in *.so* llama-*; do
+          [ -f "$file" ] && [ ! -L "$file" ] && patchelf --set-rpath '$ORIGIN' "$file" 2>/dev/null || true
+        done
+
+    - name: List build artifacts (including ROCm files)
+      run: |
+        cd build/bin
+        echo "Final build artifacts (including ROCm library files):"
+        ls -la
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: llama-ubuntu-rocm-${{ matrix.gfx_target }}-x64
+        path: build/bin/
+        retention-days: 30
+
+    - name: Set job outputs
+      id: set-outputs
+      run: |
+        rocm_version="${DETECTED_ROCM_VERSION:-${{ env.ROCM_VERSION }}}"
+        echo "rocm_version=$rocm_version" >> $GITHUB_OUTPUT
+        echo "llamacpp_commit_hash=${LLAMACPP_COMMIT_HASH}" >> $GITHUB_OUTPUT
+        echo "Final rocm_version: $rocm_version"
+        echo "Final llamacpp_commit_hash: ${LLAMACPP_COMMIT_HASH}"
+
+  test-gfx:
+    needs: build-ubuntu
+    if: needs.build-ubuntu.result == 'success'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - gfx_target: gfx1151
+            runner: linux-gfx1151-gpu-rocm
+          - gfx_target: gfx1150
+            runner: linux-gfx1150-gpu-rocm
+      fail-fast: false
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: llama-ubuntu-rocm-${{ matrix.gfx_target }}-x64
+        path: llama-binaries
+
+    - name: Download test model
+      run: |
+        model_url="https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q4_0.gguf?download=true"
+        model_path="Qwen3-0.6B-Q4_0.gguf"
+        echo "Downloading test model from: $model_url"
+        curl -L -o "$model_path" "$model_url"
+        if [ -f "$model_path" ]; then
+          file_size=$(stat -c%s "$model_path")
+          echo "Model downloaded successfully. Size: $file_size bytes"
+        else
+          echo "Failed to download model"
+          exit 1
+        fi
+
+    - name: Set up library path
+      run: |
+        echo "LD_LIBRARY_PATH=$(pwd)/llama-binaries:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+
+    - name: Run llama-cli test
+      run: |
+        llama_cli_path="./llama-binaries/llama-cli"
+        model_path="Qwen3-0.6B-Q4_0.gguf"
+        output_file="llama_output.txt"
+
+        chmod +x "$llama_cli_path"
+
+        if [ ! -f "$llama_cli_path" ]; then
+          echo "llama-cli not found at: $llama_cli_path"
+          echo "Available files in llama-binaries:"
+          find llama-binaries -type f
+          exit 1
+        fi
+
+        echo "Running llama-cli test for ${{ matrix.gfx_target }}..."
+        echo "Command: $llama_cli_path -m \"$model_path\" -ngl 99 -p \"I believe the meaning of life is\" -st -v"
+
+        set +e
+        "$llama_cli_path" -m "$model_path" -ngl 99 -p "I believe the meaning of life is" -st -v > "$output_file" 2>&1
+        exit_code=$?
+        set -e
+
+        echo "=== LLAMA-CLI OUTPUT ==="
+        if [ -f "$output_file" ] && [ -s "$output_file" ]; then
+          cat "$output_file"
+        else
+          echo "(empty)"
+        fi
+        echo "=== END OUTPUT ==="
+        echo "Process exit code: $exit_code"
+
+        if [ $exit_code -ne 0 ]; then
+          echo "❌ llama-cli exited with error code: $exit_code"
+          echo "Checking for missing library dependencies..."
+          ldd "$llama_cli_path" || echo "ldd command failed"
+          rm -f "$output_file"
+          exit 1
+        fi
+
+        found_gpu_offload=false
+        found_think_tag=false
+
+        if grep -F "offloaded 29/29 layers to GPU" "$output_file" > /dev/null 2>&1; then
+          found_gpu_offload=true
+        fi
+
+        if grep -F "</think>" "$output_file" > /dev/null 2>&1; then
+          found_think_tag=true
+        fi
+
+        echo "=== TEST RESULTS ==="
+        echo "Expected 'offloaded 29/29 layers to GPU': $(if [ "$found_gpu_offload" = true ]; then echo 'FOUND'; else echo 'NOT FOUND'; fi)"
+        echo "Expected '</think>' tag: $(if [ "$found_think_tag" = true ]; then echo 'FOUND'; else echo 'NOT FOUND'; fi)"
+
+        rm -f "$output_file"
+
+        if [ "$found_gpu_offload" = true ] && [ "$found_think_tag" = true ]; then
+          echo "✅ Test PASSED - Both expected outputs found"
+        else
+          echo "❌ Test FAILED - Missing expected outputs"
+          exit 1
+        fi
