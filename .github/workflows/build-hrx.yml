@@ -16,18 +16,56 @@ concurrency:
 
 jobs:
   hrx-build:
-    name: ubuntu-latest
-    runs-on: ubuntu-latest
+    name: ${{ matrix.name }} (${{ matrix.gpu_target }})
+    strategy:
+      # Per-arch failures are independent; keep both signals.
+      fail-fast: false
+      matrix:
+        include:
+          - name: gfx1151_strix-halo
+            gpu_target: gfx1151
+            runs_on: linux-gfx1151-gpu-rocm
+            extra_rocm_artifacts: rocwmma_dev_gfx1151
+          - name: gfx1201_9070
+            gpu_target: gfx1201
+            runs_on: linux-gfx120X-gpu-rocm
+            extra_rocm_artifacts: rocwmma_dev_gfx120X-all
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        # The container default is sh; the bench scripts require bash.
+        shell: bash
+    # The self-hosted ROCm runners require jobs to run in a container; plain
+    # run steps fail in the runner-controller's direct-execution hook.
+    # Image and options mirror TheRock CI
+    # (build_tools/github_actions/fetch_test_configurations.py).
+    container:
+      image: ghcr.io/rocm/no_rocm_image_ubuntu24_04@sha256:405945a40deaff9db90b9839c0f41d4cba4a383c1a7459b28627047bf6302a26
+      options: >-
+        --ipc host
+        --user 0:0
+        --ulimit memlock=-1:-1
+        --security-opt seccomp=unconfined
+        --group-add video
+        --device /dev/kfd
+        --device /dev/dri
+        --group-add 993
+        --group-add 992
+        --group-add 110
+        --env-file /etc/podinfo/gha-gpu-isolation-settings
     env:
       HRX_WORK_DIR: ${{ github.workspace }}
       # Public location for bench tooling (rsuderman/llamacpp_ci and fork
       # AaronStGeorge/llamacpp_ci)
       #TODO: switch to ROCm/llamacpp-hrx-bench once it is open sourced.
       BENCH_REPOSITORY: AaronStGeorge/llamacpp_ci
-      BENCH_REF: 'main'
+      #TODO: restore to main once p066-multi-arch-ci merges in the bench repo.
+      BENCH_REF: 'p066-multi-arch-ci'
       BENCH_DIR: ${{ github.workspace }}/bench
       LLAMA_SRC_DIR: ${{ github.workspace }}/llama-src
-      HRX_ARTIFACT_SET: 'core-with-upstream-hip'
+      HRX_EXTRA_ROCM_ARTIFACTS: ${{ matrix.extra_rocm_artifacts }}
+      GGML_HRX_AMDGPU_TARGETS: ${{ matrix.gpu_target }}
       CCACHE_COMPILERCHECK: content
 
     steps:
@@ -49,7 +87,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ubuntu-latest-${{ env.HRX_ARTIFACT_SET }}
+          key: ${{ matrix.gpu_target }}
           evict-old-files: 1d
           save: ${{ github.event_name == 'pull_request' }}
 
@@ -63,33 +101,37 @@ jobs:
         run: "${BENCH_DIR}/scripts/hrx/build-hrx.sh"
 
       - name: Validate HRX
+        # hrx-info has been observed hanging on some runners; fail fast.
+        timeout-minutes: 5
         run: "${BENCH_DIR}/scripts/hrx/validate-hrx.sh"
 
       - name: Build llama.cpp with HRX
         run: "${BENCH_DIR}/scripts/hrx/build-llama-hrx.sh"
 
-      - name: Run sample MUL_MAT correctness config on CPU
+      - name: Run sample MUL_MAT correctness config on HRX
+        timeout-minutes: 15
         run: |
           . "${BENCH_DIR}/scripts/hrx/env.sh"
           "${BENCH_DIR}/tools/run-op-test.py" \
             --test-backend-ops "${LLAMA_BUILD_DIR}/bin/test-backend-ops" \
             --test-file "${BENCH_DIR}/benchmark-configs/test/mul_mat_f16.txt" \
             --op MUL_MAT \
-            --backend CPU \
-            --output benchmark-results/sample-mul-mat-f16-cpu-test.jsonl
+            --backend HRX0 \
+            --output benchmark-results/sample-mul-mat-f16-hrx-test.jsonl
 
-      - name: Run sample MUL_MAT benchmark config on CPU
+      - name: Run sample MUL_MAT benchmark config on HRX
+        timeout-minutes: 15
         run: |
           . "${BENCH_DIR}/scripts/hrx/env.sh"
           "${BENCH_DIR}/tools/run-op-perf.py" \
             --test-backend-ops "${LLAMA_BUILD_DIR}/bin/test-backend-ops" \
             --test-file "${BENCH_DIR}/benchmark-configs/test/mul_mat_f16.txt" \
             --op MUL_MAT \
-            --backend CPU \
-            --output benchmark-results/sample-mul-mat-f16-cpu-perf.jsonl
+            --backend HRX0 \
+            --output benchmark-results/sample-mul-mat-f16-hrx-perf.jsonl
 
-      - name: Upload CPU benchmark results
+      - name: Upload benchmark results
         uses: actions/upload-artifact@v5
         with:
-          name: cpu-benchmark-results
+          name: benchmark-results-${{ matrix.name }}
           path: benchmark-results/
