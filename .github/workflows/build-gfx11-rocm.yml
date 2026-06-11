@@ -34,7 +34,19 @@ jobs:
     runs-on: ubuntu-24.04
     strategy:
       matrix:
-        gfx_target: [gfx1151, gfx1150]
+        include:
+          - gfx_target: gfx1151
+            s3_target: gfx1151
+            gpu_targets: gfx1151
+          - gfx_target: gfx1150
+            s3_target: gfx1150
+            gpu_targets: gfx1150
+          # Hawk Point / Phoenix family (Radeon 760M/780M = gfx1103) ships only
+          # in the gfx110X-all bundle, which also covers desktop RDNA3
+          # (RX 7900/7800/7600). Build+release only — no on-hardware test runner.
+          - gfx_target: gfx110X
+            s3_target: gfx110X-all
+            gpu_targets: gfx1100;gfx1101;gfx1102;gfx1103
       fail-fast: false
     outputs:
       rocm_version: ${{ steps.set-outputs.outputs.rocm_version }}
@@ -72,7 +84,7 @@ jobs:
     - name: Download and extract ROCm directly to /opt/rocm
       run: |
         rocm_version="${{ env.ROCM_VERSION }}"
-        s3_target="${{ matrix.gfx_target }}"
+        s3_target="${{ matrix.s3_target }}"
 
         if [ "$rocm_version" = "latest" ]; then
           echo "Auto-detecting latest ROCm version for target: $s3_target"
@@ -175,7 +187,8 @@ jobs:
     - name: Build Llama.cpp + ROCm
       run: |
         current_target="${{ matrix.gfx_target }}"
-        echo "Building for target: $current_target"
+        gpu_targets="${{ matrix.gpu_targets }}"
+        echo "Building for target: $current_target (GPU_TARGETS=$gpu_targets)"
 
         mkdir build
         cd build
@@ -186,7 +199,7 @@ jobs:
           -DCMAKE_CXX_FLAGS="-I/opt/rocm/include" \
           -DCMAKE_CROSSCOMPILING=ON \
           -DCMAKE_BUILD_TYPE=Release \
-          -DGPU_TARGETS="$current_target" \
+          -DGPU_TARGETS="$gpu_targets" \
           -DBUILD_SHARED_LIBS=ON \
           -DLLAMA_BUILD_TESTS=OFF \
           -DGGML_HIP=ON \
@@ -494,7 +507,7 @@ jobs:
       run: |
         TAG="${{ steps.generate-tag.outputs.tag }}"
         root="$PWD"
-        for target in gfx1151 gfx1150; do
+        for target in gfx1151 gfx1150 gfx110X; do
           artifact_dir="./all-artifacts/llama-ubuntu-rocm-${target}-x64"
           archive="llama-${TAG}-ubuntu-rocm-${target}-x64"
           if [ -d "$artifact_dir" ]; then
@@ -519,10 +532,10 @@ jobs:
           --title "$TAG" \
           --notes "**Build**: $TAG
         **OS**: ubuntu
-        **GPU Target(s)**: gfx1151, gfx1150
+        **GPU Target(s)**: gfx1151, gfx1150, gfx110X (gfx1100/1101/1102/1103)
         **ROCm Version**: $ROCM_VERSION
         **Llama.cpp Commit**: $LLAMACPP_COMMIT_HASH
         **Build Date**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
 
-        Prebuilt llama.cpp ROCm binaries for Strix Halo (gfx1151/gfx1150), with ROCm runtime libraries bundled." \
+        Prebuilt llama.cpp ROCm binaries for Strix Halo (gfx1151/gfx1150) and the RDNA3 gfx110X family incl. Hawk Point/Phoenix (Radeon 760M/780M), with ROCm runtime libraries bundled." \
           *.tar.gz
