@@ -381,10 +381,13 @@ jobs:
         # Functional checks against current llama.cpp output:
         #  (1) the ROCm GPU was selected,
         #  (2) the model layers were offloaded to it (incl. the output layer),
-        #  (3) the model actually generated tokens on the GPU.
+        #  (3) the model produced a substantive response (non-empty answer +
+        #      reasoning content) of a meaningful length on the GPU.
         found_device=false
         found_offload=false
-        found_generation=false
+        found_content=false
+        found_reasoning=false
+        found_tokens=false
 
         if grep -q "using device ROCm0" "$output_file"; then
           found_device=true
@@ -397,20 +400,38 @@ jobs:
           found_offload=true
         fi
 
-        # Generation succeeded if at least one token was produced (eval timing).
-        if grep -qE "eval time =.*[1-9][0-9]* tokens" "$output_file"; then
-          found_generation=true
+        # Non-empty assistant answer (chat template + sampling produced real text).
+        if grep -qE '"content":"[^"]' "$output_file"; then
+          found_content=true
+        fi
+
+        # Non-empty reasoning trace (Qwen3 reasoning path executed end to end;
+        # this is the modern replacement for the old "</think>" check).
+        if grep -qE '"reasoning_content":"[^"]' "$output_file"; then
+          found_reasoning=true
+        fi
+
+        # Require a meaningful number of generated tokens (guards against a
+        # one-token fluke passing the content checks).
+        max_decoded=$(grep -oE 'n_decoded = [0-9]+' "$output_file" | grep -oE '[0-9]+$' | sort -n | tail -1)
+        max_decoded=${max_decoded:-0}
+        if [ "$max_decoded" -ge 20 ]; then
+          found_tokens=true
         fi
 
         echo "=== TEST RESULTS ==="
         echo "ROCm GPU selected ('using device ROCm0'): $(if [ "$found_device" = true ]; then echo 'FOUND'; else echo 'NOT FOUND'; fi)"
         echo "Layers offloaded to GPU ('assigned to device ROCm0' x$layers_on_gpu + output layer): $(if [ "$found_offload" = true ]; then echo 'FOUND'; else echo 'NOT FOUND'; fi)"
-        echo "Tokens generated (eval timing): $(if [ "$found_generation" = true ]; then echo 'FOUND'; else echo 'NOT FOUND'; fi)"
+        echo "Non-empty assistant answer: $(if [ "$found_content" = true ]; then echo 'FOUND'; else echo 'NOT FOUND'; fi)"
+        echo "Non-empty reasoning trace: $(if [ "$found_reasoning" = true ]; then echo 'FOUND'; else echo 'NOT FOUND'; fi)"
+        echo "Generated >= 20 tokens (max n_decoded=$max_decoded): $(if [ "$found_tokens" = true ]; then echo 'FOUND'; else echo 'NOT FOUND'; fi)"
 
         rm -f "$output_file"
 
-        if [ "$found_device" = true ] && [ "$found_offload" = true ] && [ "$found_generation" = true ]; then
-          echo "✅ Test PASSED - GPU offload and generation verified"
+        if [ "$found_device" = true ] && [ "$found_offload" = true ] \
+           && [ "$found_content" = true ] && [ "$found_reasoning" = true ] \
+           && [ "$found_tokens" = true ]; then
+          echo "✅ Test PASSED - GPU offload + substantive generation verified"
         else
           echo "❌ Test FAILED - Missing expected outputs"
           exit 1
