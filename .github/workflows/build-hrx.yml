@@ -34,9 +34,16 @@ jobs:
     timeout-minutes: 60
     defaults:
       run:
-        shell: bash
+        # --noprofile skips loading ~/.bash_profile
+        # --norc      skips loading ~/.bashrc
+        # -exo pipefail:
+        #   -e exit immediately if any command fails
+        #   -x print each command before executing
+        #   -o pipefail ensure pipeline fails if any command in it fails
+        # {0} github actions placeholder for the command to run
+        shell: bash --noprofile --norc -exo pipefail {0}
     container:
-      image: ghcr.io/rocm/no_rocm_image_ubuntu24_04@sha256:405945a40deaff9db90b9839c0f41d4cba4a383c1a7459b28627047bf6302a26
+      image: ghcr.io/rocm/no_rocm_image_ubuntu24_04@sha256:fba5f55a122dbb15925e98c51fe65bffe88c36e11ebb25b73daf2bea04202dc3
     env:
       HRX_WORK_DIR: ${{ github.workspace }}
       # Public location for bench tooling (rsuderman/llamacpp_ci and fork
@@ -52,6 +59,12 @@ jobs:
       CCACHE_COMPILERCHECK: content
 
     steps:
+      - name: Debug
+        run: |
+          id
+          ls -ln /__w/_temp | head
+          ls -ln /__w | head
+
       - name: Checkout llama.cpp (under test)
         uses: actions/checkout@v6
         with:
