@@ -44,23 +44,25 @@ jobs:
         shell: bash --noprofile --norc -exo pipefail {0}
     container:
       image: ghcr.io/rocm/no_rocm_image_ubuntu24_04@sha256:fba5f55a122dbb15925e98c51fe65bffe88c36e11ebb25b73daf2bea04202dc3
-      # --user 0:0: Actions needs to access some files set up as part of the
-      #             Actions runner. In June 2026 some runners are set up with a
-      #             "tester" user with UID/GID 1001 which matches the user in
-      #             the container, and some are set up as root. Running as root
-      #             is the common denominator, accessing a file owned by root
-      #             with user "tester" gives an EACCES.
+      # --user 0:0: actions running inside the container need to write to some
+      #             files set up by the runner agent before the container runs.
+      #             In June 2026 some runner agents set those files up with
+      #             permissions for a "tester" user with UID/GID 1001 which
+      #             matches the user in no_rocm_image_ubuntu24_04, and some are
+      #             set up as root; accessing a file owned by root with user
+      #             "tester" gives an EACCES. Running as root is the common
+      #             denominator.
       # --device kfd/dri: GPU access; the plain runner adds no devices for us.
       options: >-
         --user 0:0
         --device /dev/kfd
         --device /dev/dri
     env:
-      # Write to a non bind-mounted directory. In June 2026 a debug tests showed
-      # some runners hat assets dated from 6 months ago in the bind-mounted
-      # github workspace, it seems like nothing cleans it up currently. Writing
-      # to an non-bind mounted directory ensures that rocm-artifacts/builds are
-      # cleaned up when docker conteriner is removed.
+      # Write out of tree build/install to a non-bind-mounted directory. In June
+      # 2026 a debug test showed some runners had assets dated from 6 months ago
+      # in the bind-mounted github workspace, it seems like nothing cleans it up
+      # currently. Writing to an non-bind-mounted directory ensures that
+      # rocm-artifacts/builds are cleaned up when docker container is removed.
       HRX_WORK_DIR: /work
       # Public location for bench tooling (rsuderman/llamacpp_ci and fork
       # AaronStGeorge/llamacpp_ci)
@@ -68,6 +70,8 @@ jobs:
       BENCH_REPOSITORY: AaronStGeorge/llamacpp_ci
       #TODO: restore to main once p066-multi-arch-ci merges in the bench repo.
       BENCH_REF: 'p066-multi-arch-ci'
+      # actions/checkout@v6 does auto-cleanup, an in-tree build would be
+      # auto-cleaned as well.
       BENCH_DIR: ${{ github.workspace }}/bench
       LLAMA_SRC_DIR: ${{ github.workspace }}/llama-src
       # Build tree off the bind mount too (source stays under the workspace).
