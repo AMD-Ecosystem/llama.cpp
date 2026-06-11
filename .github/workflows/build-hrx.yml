@@ -68,8 +68,7 @@ jobs:
       # AaronStGeorge/llamacpp_ci)
       #TODO: switch to ROCm/llamacpp-hrx-bench once it is open sourced.
       BENCH_REPOSITORY: AaronStGeorge/llamacpp_ci
-      #TODO: restore to main once p066-multi-arch-ci merges in the bench repo.
-      BENCH_REF: 'p066-multi-arch-ci'
+      BENCH_REF: 'main'
       # actions/checkout@v6 does auto-cleanup, an in-tree build would be
       # auto-cleaned as well.
       BENCH_DIR: ${{ github.workspace }}/bench
@@ -130,6 +129,7 @@ jobs:
         timeout-minutes: 15
         run: |
           . "${BENCH_DIR}/scripts/hrx/env.sh"
+          . "${BENCH_DIR}/scripts/hrx/runtime-env.sh"
           "${BENCH_DIR}/tools/run-op-test.py" \
             --test-backend-ops "${LLAMA_BUILD_DIR}/bin/test-backend-ops" \
             --test-file "${BENCH_DIR}/benchmark-configs/test/mul_mat_f16.txt" \
@@ -141,6 +141,7 @@ jobs:
         timeout-minutes: 15
         run: |
           . "${BENCH_DIR}/scripts/hrx/env.sh"
+          . "${BENCH_DIR}/scripts/hrx/runtime-env.sh"
           "${BENCH_DIR}/tools/run-op-perf.py" \
             --test-backend-ops "${LLAMA_BUILD_DIR}/bin/test-backend-ops" \
             --test-file "${BENCH_DIR}/benchmark-configs/test/mul_mat_f16.txt" \
