@@ -353,11 +353,14 @@ jobs:
           exit 1
         fi
 
+        # Use a prompt with a single correct answer and greedy decoding
+        # (--temp 0) so the result is deterministic and verifiable.
+        prompt="What is 2 + 2? Reply with only the number."
         echo "Running llama-cli test for ${{ matrix.gfx_target }}..."
-        echo "Command: $llama_cli_path -m \"$model_path\" -ngl 99 -p \"I believe the meaning of life is\" -st -v"
+        echo "Command: $llama_cli_path -m \"$model_path\" -ngl 99 --temp 0 -p \"$prompt\" -st -v"
 
         set +e
-        "$llama_cli_path" -m "$model_path" -ngl 99 -p "I believe the meaning of life is" -st -v > "$output_file" 2>&1
+        "$llama_cli_path" -m "$model_path" -ngl 99 --temp 0 -p "$prompt" -st -v > "$output_file" 2>&1
         exit_code=$?
         set -e
 
@@ -381,13 +384,12 @@ jobs:
         # Functional checks against current llama.cpp output:
         #  (1) the ROCm GPU was selected,
         #  (2) the model layers were offloaded to it (incl. the output layer),
-        #  (3) the model produced a substantive response (non-empty answer +
-        #      reasoning content) of a meaningful length on the GPU.
+        #  (3) the model computed the correct answer to "What is 2 + 2?".
+        # With greedy decoding (--temp 0) the answer is deterministic, so this
+        # verifies the GPU math path end to end, not just that text was emitted.
         found_device=false
         found_offload=false
-        found_content=false
-        found_reasoning=false
-        found_tokens=false
+        found_answer=false
 
         if grep -q "using device ROCm0" "$output_file"; then
           found_device=true
@@ -400,38 +402,24 @@ jobs:
           found_offload=true
         fi
 
-        # Non-empty assistant answer (chat template + sampling produced real text).
-        if grep -qE '"content":"[^"]' "$output_file"; then
-          found_content=true
-        fi
-
-        # Non-empty reasoning trace (Qwen3 reasoning path executed end to end;
-        # this is the modern replacement for the old "</think>" check).
-        if grep -qE '"reasoning_content":"[^"]' "$output_file"; then
-          found_reasoning=true
-        fi
-
-        # Require a meaningful number of generated tokens (guards against a
-        # one-token fluke passing the content checks).
-        max_decoded=$(grep -oE 'n_decoded = [0-9]+' "$output_file" | grep -oE '[0-9]+$' | sort -n | tail -1)
-        max_decoded=${max_decoded:-0}
-        if [ "$max_decoded" -ge 20 ]; then
-          found_tokens=true
+        # The parsed assistant answer ("content" field, printed with -v) must
+        # contain 4 and no other digit, so "4" / "The answer is 4." pass while
+        # "5", "14", "22" fail. This is the deterministic correctness check.
+        answer_content=$(grep -oE '"content":"[^"]*"' "$output_file" | tail -1)
+        if echo "$answer_content" | grep -qE '4' && ! echo "$answer_content" | grep -qE '[0-35-9]'; then
+          found_answer=true
         fi
 
         echo "=== TEST RESULTS ==="
         echo "ROCm GPU selected ('using device ROCm0'): $(if [ "$found_device" = true ]; then echo 'FOUND'; else echo 'NOT FOUND'; fi)"
         echo "Layers offloaded to GPU ('assigned to device ROCm0' x$layers_on_gpu + output layer): $(if [ "$found_offload" = true ]; then echo 'FOUND'; else echo 'NOT FOUND'; fi)"
-        echo "Non-empty assistant answer: $(if [ "$found_content" = true ]; then echo 'FOUND'; else echo 'NOT FOUND'; fi)"
-        echo "Non-empty reasoning trace: $(if [ "$found_reasoning" = true ]; then echo 'FOUND'; else echo 'NOT FOUND'; fi)"
-        echo "Generated >= 20 tokens (max n_decoded=$max_decoded): $(if [ "$found_tokens" = true ]; then echo 'FOUND'; else echo 'NOT FOUND'; fi)"
+        echo "Correct answer to '2 + 2' (parsed content: ${answer_content:-<none>}): $(if [ "$found_answer" = true ]; then echo 'FOUND'; else echo 'NOT FOUND'; fi)"
 
         rm -f "$output_file"
 
         if [ "$found_device" = true ] && [ "$found_offload" = true ] \
-           && [ "$found_content" = true ] && [ "$found_reasoning" = true ] \
-           && [ "$found_tokens" = true ]; then
-          echo "✅ Test PASSED - GPU offload + substantive generation verified"
+           && [ "$found_answer" = true ]; then
+          echo "✅ Test PASSED - GPU offload + correct deterministic answer verified"
         else
           echo "❌ Test FAILED - Missing expected outputs"
           exit 1
