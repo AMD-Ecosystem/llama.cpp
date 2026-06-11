@@ -34,26 +34,9 @@ jobs:
     timeout-minutes: 60
     defaults:
       run:
-        # The container default is sh; the bench scripts require bash.
         shell: bash
-    # The self-hosted ROCm runners require jobs to run in a container; plain
-    # run steps fail in the runner-controller's direct-execution hook.
-    # Image and options mirror TheRock CI
-    # (build_tools/github_actions/fetch_test_configurations.py).
     container:
       image: ghcr.io/rocm/no_rocm_image_ubuntu24_04@sha256:405945a40deaff9db90b9839c0f41d4cba4a383c1a7459b28627047bf6302a26
-      options: >-
-        --ipc host
-        --user 0:0
-        --ulimit memlock=-1:-1
-        --security-opt seccomp=unconfined
-        --group-add video
-        --device /dev/kfd
-        --device /dev/dri
-        --group-add 993
-        --group-add 992
-        --group-add 110
-        --env-file /etc/podinfo/gha-gpu-isolation-settings
     env:
       HRX_WORK_DIR: ${{ github.workspace }}
       # Public location for bench tooling (rsuderman/llamacpp_ci and fork
