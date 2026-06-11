@@ -215,6 +215,7 @@ option(GGML_HIP_ROCWMMA_FATTN               "ggml: enable rocWMMA for FlashAtten
 option(GGML_HIP_MMQ_MFMA                    "ggml: enable MFMA MMA for CDNA in MMQ"           ON)
 option(GGML_HIP_EXPORT_METRICS              "ggml: enable kernel perf metrics output"         OFF)
 option(GGML_HRX                             "ggml: use HRX"                                   OFF)
+option(GGML_HRX2                            "ggml: use HRX2 Loom JIT backend"                 OFF)
 option(GGML_MUSA_GRAPHS                     "ggml: use MUSA graph, experimental, unstable"    OFF)
 option(GGML_MUSA_MUDNN_COPY                 "ggml: enable muDNN for accelerated copy"         OFF)
 option(GGML_VULKAN                          "ggml: use Vulkan"                                OFF)

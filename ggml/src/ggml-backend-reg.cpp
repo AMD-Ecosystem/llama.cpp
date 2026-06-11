@@ -50,6 +50,10 @@
 #include "ggml-hrx.h"
 #endif
 
+#ifdef GGML_USE_HRX2
+#include "ggml-hrx2.h"
+#endif
+
 #ifdef GGML_USE_WEBGPU
 #include "ggml-webgpu.h"
 #endif
@@ -136,6 +140,9 @@ struct ggml_backend_registry {
 #endif
 #ifdef GGML_USE_HRX
         register_backend(ggml_backend_hrx_reg());
+#endif
+#ifdef GGML_USE_HRX2
+        register_backend(ggml_backend_hrx2_reg());
 #endif
 #ifdef GGML_USE_WEBGPU
         register_backend(ggml_backend_webgpu_reg());
