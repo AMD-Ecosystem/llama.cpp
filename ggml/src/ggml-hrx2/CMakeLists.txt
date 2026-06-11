@@ -10,6 +10,7 @@ set(GGML_HRX2_EMBEDDED_H "${GGML_HRX2_GENERATED_DIR}/hrx2_embedded_catalog.h")
 set(GGML_HRX2_ARTIFACTS
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/rms_norm_f32_contiguous.loombc"
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/mul_mat_q8_0_f32_contiguous.loombc"
+    "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/mul_mat_q8_0_f32_static.loombc"
 )
 file(GLOB_RECURSE GGML_HRX2_LOOM_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/*.loom"

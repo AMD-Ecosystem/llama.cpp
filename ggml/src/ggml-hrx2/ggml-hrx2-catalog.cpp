@@ -99,6 +99,7 @@ static bool ggml_backend_hrx2_route_from_json(
     route->root_symbol = route_json.value("root_symbol", std::string());
     route->export_name = route_json.value("export_name", std::string());
     route->loader_format = route_json.value("loader_format", std::string("amdgpu-hsaco"));
+    route->priority = route_json.value("priority", 0);
 
     const auto & abi = route_json.at("abi");
     route->binding_count = ggml_backend_hrx2_json_u32(abi, "binding_count");
@@ -124,6 +125,28 @@ static bool ggml_backend_hrx2_route_from_json(
     route->rows_max = ggml_backend_hrx2_json_u32(shape_domain, "rows_max");
     route->cols_min = ggml_backend_hrx2_json_u32(shape_domain, "cols_min");
     route->cols_max = ggml_backend_hrx2_json_u32(shape_domain, "cols_max");
+    const auto & shape_guards = route_json.value("shape_guards", nlohmann::json::object());
+    if (shape_guards.contains("k_pow2")) {
+        route->k_pow2_guard = shape_guards.at("k_pow2").get<bool>() ? 1 : -1;
+    }
+    if (shape_guards.contains("all_pot")) {
+        route->all_pot_guard = shape_guards.at("all_pot").get<bool>() ? 1 : -1;
+    }
+
+    const auto & specialization = route_json.value("specialization", nlohmann::json::object());
+    route->specialization_mode = specialization.value("mode", std::string());
+    route->config_bindings.clear();
+    for (const auto & binding_json : specialization.value("bindings", nlohmann::json::array())) {
+        ggml_backend_hrx2_config_binding_spec binding;
+        binding.key = binding_json.value("key", std::string());
+        binding.value = binding_json.value("value", std::string());
+        binding.value_source = binding_json.value("source", std::string());
+        if (binding.key.empty() || (binding.value.empty() && binding.value_source.empty())) {
+            GGML_LOG_ERROR("HRX2: route %s has invalid specialization binding\n", route->id.c_str());
+            return false;
+        }
+        route->config_bindings.push_back(std::move(binding));
+    }
 
     return !route->id.empty() &&
            !route->source_id.empty() &&
@@ -218,6 +241,8 @@ static bool ggml_backend_hrx2_load_catalog_json(
 static bool ggml_backend_hrx2_compile_route(
         const ggml_backend_hrx2_device_info & device,
         const ggml_backend_hrx2_kernel_route & route,
+        const std::vector<ggml_backend_hrx2_config_binding> & config_bindings,
+        const std::string & cache_key,
         const void * source_data,
         size_t source_size,
         hrx_loom_jit_source_format_t source_format,
@@ -242,15 +267,25 @@ static bool ggml_backend_hrx2_compile_route(
     }
 
     hrx_loom_jit_compile_result_t result = {};
+    std::vector<hrx_loom_jit_config_binding_t> jit_config_bindings;
+    jit_config_bindings.reserve(config_bindings.size());
+    for (const auto & binding : config_bindings) {
+        jit_config_bindings.push_back({
+            /* .key   = */ binding.key.c_str(),
+            /* .value = */ binding.value.c_str(),
+        });
+    }
     hrx_loom_jit_compile_options_t compile_options = {
-        /* .structure_size      = */ sizeof(hrx_loom_jit_compile_options_t),
-        /* .source_data         = */ source_data,
-        /* .source_size         = */ source_size,
-        /* .source_format       = */ source_format,
-        /* .source_identifier   = */ source_identifier,
-        /* .root_symbol         = */ route.root_symbol.c_str(),
-        /* .module_name         = */ "ggml_hrx2",
-        /* .artifact_identifier = */ route.export_name.c_str(),
+        /* .structure_size        = */ sizeof(hrx_loom_jit_compile_options_t),
+        /* .source_data           = */ source_data,
+        /* .source_size           = */ source_size,
+        /* .source_format         = */ source_format,
+        /* .source_identifier     = */ source_identifier,
+        /* .root_symbol           = */ route.root_symbol.c_str(),
+        /* .module_name           = */ "ggml_hrx2",
+        /* .artifact_identifier   = */ route.export_name.c_str(),
+        /* .config_bindings       = */ jit_config_bindings.empty() ? nullptr : jit_config_bindings.data(),
+        /* .config_binding_count  = */ jit_config_bindings.size(),
     };
     const bool compiled = GGML_HRX2_CATALOG_CHECK(hrx_loom_jit_amdgpu_compile(jit, &compile_options, &result));
     hrx_loom_jit_amdgpu_release(jit);
@@ -304,11 +339,15 @@ static bool ggml_backend_hrx2_compile_route(
     provider->export_ordinal = export_ordinal;
     provider->export_info = export_info;
     provider->route = route;
+    provider->cache_key = cache_key;
     GGML_LOG_INFO(
-        "HRX2: JIT compiled %s for %s from %s (%zu bytes HSACO)\n",
+        "HRX2: JIT compiled route=%s cache_key=%s export=%s target=%s source=%s configs=%zu hsaco=%zu bytes\n",
+        route.id.c_str(),
+        cache_key.c_str(),
         route.export_name.c_str(),
         architecture,
         source_format == HRX_LOOM_JIT_SOURCE_FORMAT_BYTECODE ? "Loom bytecode" : "Loom text",
+        config_bindings.size(),
         hsaco_size);
     return true;
 }
@@ -366,10 +405,30 @@ const ggml_backend_hrx2_kernel_route * ggml_backend_hrx2_catalog_find_route(
     return nullptr;
 }
 
+void ggml_backend_hrx2_catalog_find_routes(
+        const ggml_backend_hrx2_catalog & catalog,
+        const char * family,
+        const char * op,
+        std::vector<const ggml_backend_hrx2_kernel_route *> * out_routes) {
+    if (!out_routes) {
+        return;
+    }
+    out_routes->clear();
+    for (const auto & route : catalog.routes) {
+        const bool family_matches = !family || route.family == family;
+        const bool op_matches = !op || route.op == op;
+        if (family_matches && op_matches) {
+            out_routes->push_back(&route);
+        }
+    }
+}
+
 std::unique_ptr<ggml_backend_hrx2_provider> ggml_backend_hrx2_load_provider(
         const ggml_backend_hrx2_device_info & device,
         const ggml_backend_hrx2_catalog & catalog,
-        const ggml_backend_hrx2_kernel_route & route) {
+        const ggml_backend_hrx2_kernel_route & route,
+        const std::vector<ggml_backend_hrx2_config_binding> & config_bindings,
+        const std::string & cache_key) {
     auto provider = std::make_unique<ggml_backend_hrx2_provider>();
 
     if (!route.artifact_id.empty()) {
@@ -380,6 +439,8 @@ std::unique_ptr<ggml_backend_hrx2_provider> ggml_backend_hrx2_load_provider(
             if (ggml_backend_hrx2_compile_route(
                     device,
                     route,
+                    config_bindings,
+                    cache_key,
                     artifact_it->second.data.data(),
                     artifact_it->second.data.size(),
                     HRX_LOOM_JIT_SOURCE_FORMAT_BYTECODE,
@@ -400,6 +461,8 @@ std::unique_ptr<ggml_backend_hrx2_provider> ggml_backend_hrx2_load_provider(
     if (!ggml_backend_hrx2_compile_route(
             device,
             route,
+            config_bindings,
+            cache_key,
             source_it->second.text.data(),
             source_it->second.text.size(),
             HRX_LOOM_JIT_SOURCE_FORMAT_TEXT,
