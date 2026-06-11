@@ -296,7 +296,7 @@ jobs:
           - gfx_target: gfx1151
             runner: linux-gfx1151-gpu-rocm
           - gfx_target: gfx1150
-            runner: linux-strix-gpu-rocm-2
+            runner: linux-gfx1150-gpu-rocm
       fail-fast: false
 
     steps:
@@ -311,10 +311,14 @@ jobs:
 
     - name: Download test model
       run: |
-        model_url="https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q4_0.gguf?download=true"
+        # Pinned to a fixed GitHub release asset instead of huggingface.co: some
+        # self-hosted runners cannot reach huggingface.co (curl 35, connection
+        # reset), but they can reach GitHub. Source:
+        # https://github.com/jimw567/llamacpp-test-assets/releases/tag/test-assets
+        model_url="https://github.com/jimw567/llamacpp-test-assets/releases/download/test-assets/Qwen3-0.6B-Q4_0.gguf"
         model_path="Qwen3-0.6B-Q4_0.gguf"
         echo "Downloading test model from: $model_url"
-        curl -L -o "$model_path" "$model_url"
+        curl -fL --retry 5 --retry-all-errors --retry-delay 5 -o "$model_path" "$model_url"
         if [ -f "$model_path" ]; then
           file_size=$(stat -c%s "$model_path")
           echo "Model downloaded successfully. Size: $file_size bytes"
