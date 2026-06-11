@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "catalog_id": "hrx2-phase0",
+  "sources": {
+    "rms_norm_f32": {
+      "path": "kernels/rms_norm_f32.loom"
+    }
+  },
+  "kernels": [
+    {
+      "id": "rms_norm_f32_contiguous",
+      "op": "RMS_NORM",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32",
+      "export_name": "hrx2_rms_norm_f32",
+      "artifact_format": "amdgpu-hsaco",
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 13,
+        "constant_byte_length": 44
+      },
+      "dispatch": {
+        "workgroup_size": [512, 1, 1]
+      },
+      "supports": {
+        "src_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      }
+    }
+  ]
+}
