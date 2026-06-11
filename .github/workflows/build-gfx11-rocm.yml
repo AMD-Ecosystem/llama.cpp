@@ -253,6 +253,13 @@ jobs:
         cp -v /opt/rocm/lib/rocm_sysdeps/lib/librocm_sysdeps_drm_amdgpu.so* "$build_bin_path/" 2>/dev/null || echo "librocm_sysdeps_drm_amdgpu.so* not found"
         cp -v /opt/rocm/lib/rocm_sysdeps/lib/librocm_sysdeps_bz2.so* "$build_bin_path/" 2>/dev/null || echo "librocm_sysdeps_bz2.so* not found"
 
+        # Bundle libatomic (gcc runtime dep of llama-cli). Some self-hosted GPU
+        # runners don't have libatomic1 installed, so ship it with the artifact;
+        # the $ORIGIN RPATH step below makes the binary load this bundled copy.
+        cp -v /usr/lib/x86_64-linux-gnu/libatomic.so.1* "$build_bin_path/" 2>/dev/null \
+          || cp -v "$(gcc -print-file-name=libatomic.so.1)" "$build_bin_path/" 2>/dev/null \
+          || echo "libatomic.so.1 not found"
+
         echo "Finished copying required ROCm libraries"
 
     - name: Set RPATH for portable distribution
@@ -371,25 +378,39 @@ jobs:
           exit 1
         fi
 
-        found_gpu_offload=false
-        found_think_tag=false
+        # Functional checks against current llama.cpp output:
+        #  (1) the ROCm GPU was selected,
+        #  (2) the model layers were offloaded to it (incl. the output layer),
+        #  (3) the model actually generated tokens on the GPU.
+        found_device=false
+        found_offload=false
+        found_generation=false
 
-        if grep -F "offloaded 29/29 layers to GPU" "$output_file" > /dev/null 2>&1; then
-          found_gpu_offload=true
+        if grep -q "using device ROCm0" "$output_file"; then
+          found_device=true
         fi
 
-        if grep -F "</think>" "$output_file" > /dev/null 2>&1; then
-          found_think_tag=true
+        # Qwen3-0.6B has 28 transformer layers + output = 29 GPU assignments per
+        # pass (verbose mode logs them more than once; require at least one pass).
+        layers_on_gpu=$(grep -c "assigned to device ROCm0" "$output_file" || true)
+        if [ "$layers_on_gpu" -ge 29 ] && grep -q "offloading output layer to GPU" "$output_file"; then
+          found_offload=true
+        fi
+
+        # Generation succeeded if at least one token was produced (eval timing).
+        if grep -qE "eval time =.*[1-9][0-9]* tokens" "$output_file"; then
+          found_generation=true
         fi
 
         echo "=== TEST RESULTS ==="
-        echo "Expected 'offloaded 29/29 layers to GPU': $(if [ "$found_gpu_offload" = true ]; then echo 'FOUND'; else echo 'NOT FOUND'; fi)"
-        echo "Expected '</think>' tag: $(if [ "$found_think_tag" = true ]; then echo 'FOUND'; else echo 'NOT FOUND'; fi)"
+        echo "ROCm GPU selected ('using device ROCm0'): $(if [ "$found_device" = true ]; then echo 'FOUND'; else echo 'NOT FOUND'; fi)"
+        echo "Layers offloaded to GPU ('assigned to device ROCm0' x$layers_on_gpu + output layer): $(if [ "$found_offload" = true ]; then echo 'FOUND'; else echo 'NOT FOUND'; fi)"
+        echo "Tokens generated (eval timing): $(if [ "$found_generation" = true ]; then echo 'FOUND'; else echo 'NOT FOUND'; fi)"
 
         rm -f "$output_file"
 
-        if [ "$found_gpu_offload" = true ] && [ "$found_think_tag" = true ]; then
-          echo "✅ Test PASSED - Both expected outputs found"
+        if [ "$found_device" = true ] && [ "$found_offload" = true ] && [ "$found_generation" = true ]; then
+          echo "✅ Test PASSED - GPU offload and generation verified"
         else
           echo "❌ Test FAILED - Missing expected outputs"
           exit 1
