@@ -11,6 +11,27 @@
 #include <iterator>
 #include <string>
 #include <unordered_map>
+#include <vector>
+
+struct ggml_backend_hrx2_catalog {
+    struct source {
+        std::string id;
+        std::string path;
+        std::string text;
+    };
+
+    struct artifact {
+        std::string id;
+        std::string path;
+        std::string format;
+        std::vector<unsigned char> data;
+    };
+
+    std::string catalog_id;
+    std::unordered_map<std::string, source> sources;
+    std::unordered_map<std::string, artifact> artifacts;
+    std::vector<ggml_backend_hrx2_kernel_route> routes;
+};
 
 namespace {
 
@@ -40,6 +61,14 @@ static std::string ggml_backend_hrx2_read_text_file(const std::string & path) {
     return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
 }
 
+static std::vector<unsigned char> ggml_backend_hrx2_read_binary_file(const std::string & path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) {
+        return {};
+    }
+    return std::vector<unsigned char>(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+}
+
 static std::string ggml_backend_hrx2_join_path(const std::string & base, const std::string & relative) {
     if (base.empty()) {
         return relative;
@@ -50,93 +79,158 @@ static std::string ggml_backend_hrx2_join_path(const std::string & base, const s
     return base + "/" + relative;
 }
 
-static bool ggml_backend_hrx2_load_catalog(
-        nlohmann::json * out_catalog,
-        std::unordered_map<std::string, std::string> * out_sources) {
-    std::string catalog_text = ggml_hrx2_embedded_catalog_json();
-    std::string catalog_dir;
-    if (const char * env = std::getenv("GGML_HRX2_CATALOG_DIR")) {
-        catalog_dir = env;
-        const std::string catalog_path = ggml_backend_hrx2_join_path(catalog_dir, "catalog.json");
-        const std::string disk_catalog = ggml_backend_hrx2_read_text_file(catalog_path);
-        if (disk_catalog.empty()) {
-            GGML_LOG_ERROR("HRX2: GGML_HRX2_CATALOG_DIR is set but %s could not be read\n", catalog_path.c_str());
-            return false;
-        }
-        catalog_text = disk_catalog;
+static uint32_t ggml_backend_hrx2_json_u32(const nlohmann::json & object, const char * key, uint32_t default_value = 0) {
+    const auto it = object.find(key);
+    if (it == object.end() || it->is_null()) {
+        return default_value;
     }
+    return it->get<uint32_t>();
+}
 
-    try {
-        *out_catalog = nlohmann::json::parse(catalog_text);
-    } catch (const std::exception & e) {
-        GGML_LOG_ERROR("HRX2: failed to parse catalog JSON: %s\n", e.what());
+static bool ggml_backend_hrx2_route_from_json(
+        const nlohmann::json & route_json,
+        ggml_backend_hrx2_kernel_route * route) {
+    route->id = route_json.value("id", std::string());
+    route->family = route_json.value("family", std::string());
+    route->op = route_json.value("op", std::string());
+    route->target_key = route_json.value("target_key", std::string());
+    route->source_id = route_json.value("source_id", std::string());
+    route->artifact_id = route_json.value("artifact_id", std::string());
+    route->root_symbol = route_json.value("root_symbol", std::string());
+    route->export_name = route_json.value("export_name", std::string());
+    route->loader_format = route_json.value("loader_format", std::string("amdgpu-hsaco"));
+
+    const auto & abi = route_json.at("abi");
+    route->binding_count = ggml_backend_hrx2_json_u32(abi, "binding_count");
+    route->parameter_count = ggml_backend_hrx2_json_u32(abi, "parameter_count");
+    route->constant_byte_length = ggml_backend_hrx2_json_u32(abi, "constant_byte_length");
+
+    const auto & dispatch = route_json.at("dispatch");
+    const auto & workgroup = dispatch.at("workgroup_size");
+    for (int i = 0; i < 3; ++i) {
+        route->workgroup_size[i] = workgroup.at(i).get<uint32_t>();
+    }
+    route->rows_per_workgroup = ggml_backend_hrx2_json_u32(dispatch, "rows_per_workgroup", 1);
+    route->cols_per_workgroup = ggml_backend_hrx2_json_u32(dispatch, "cols_per_workgroup", 1);
+
+    const auto & shape_domain = route_json.value("shape_domain", nlohmann::json::object());
+    route->ncols_min = ggml_backend_hrx2_json_u32(shape_domain, "ncols_min");
+    route->ncols_max = ggml_backend_hrx2_json_u32(shape_domain, "ncols_max");
+    route->nrows_min = ggml_backend_hrx2_json_u32(shape_domain, "nrows_min");
+    route->nrows_max = ggml_backend_hrx2_json_u32(shape_domain, "nrows_max");
+    route->k_min = ggml_backend_hrx2_json_u32(shape_domain, "k_min");
+    route->k_max = ggml_backend_hrx2_json_u32(shape_domain, "k_max");
+    route->rows_min = ggml_backend_hrx2_json_u32(shape_domain, "rows_min");
+    route->rows_max = ggml_backend_hrx2_json_u32(shape_domain, "rows_max");
+    route->cols_min = ggml_backend_hrx2_json_u32(shape_domain, "cols_min");
+    route->cols_max = ggml_backend_hrx2_json_u32(shape_domain, "cols_max");
+
+    return !route->id.empty() &&
+           !route->source_id.empty() &&
+           !route->root_symbol.empty() &&
+           !route->export_name.empty() &&
+           route->binding_count > 0 &&
+           route->parameter_count > 0;
+}
+
+static bool ggml_backend_hrx2_load_catalog_json(
+        const nlohmann::json & catalog_json,
+        const std::string & catalog_dir,
+        ggml_backend_hrx2_catalog * catalog) {
+    if (catalog_json.value("schema", std::string()) != "ggml-hrx2-catalog-v1") {
+        GGML_LOG_ERROR("HRX2: unsupported catalog schema\n");
         return false;
     }
 
-    out_sources->clear();
+    catalog->catalog_id = catalog_json.value("catalog_id", std::string());
+    catalog->sources.clear();
+    catalog->artifacts.clear();
+    catalog->routes.clear();
+
     const ggml_hrx2_embedded_source * embedded_sources = ggml_hrx2_embedded_sources();
     for (size_t i = 0; i < ggml_hrx2_embedded_source_count(); ++i) {
-        (*out_sources)[embedded_sources[i].id] = std::string(embedded_sources[i].text, embedded_sources[i].text_size);
+        catalog->sources[embedded_sources[i].id] = {
+            /* .id   = */ embedded_sources[i].id,
+            /* .path = */ embedded_sources[i].path,
+            /* .text = */ std::string(embedded_sources[i].text, embedded_sources[i].text_size),
+        };
     }
 
-    if (!catalog_dir.empty() && out_catalog->contains("sources")) {
-        for (const auto & item : (*out_catalog)["sources"].items()) {
-            const std::string source_id = item.key();
-            const auto & source = item.value();
-            if (source.contains("text")) {
-                (*out_sources)[source_id] = source["text"].get<std::string>();
-            } else if (source.contains("path")) {
-                const std::string source_path = ggml_backend_hrx2_join_path(catalog_dir, source["path"].get<std::string>());
-                const std::string source_text = ggml_backend_hrx2_read_text_file(source_path);
-                if (source_text.empty()) {
-                    GGML_LOG_ERROR("HRX2: source %s could not be read from %s\n", source_id.c_str(), source_path.c_str());
-                    return false;
-                }
-                (*out_sources)[source_id] = source_text;
+    const ggml_hrx2_embedded_artifact * embedded_artifacts = ggml_hrx2_embedded_artifacts();
+    for (size_t i = 0; i < ggml_hrx2_embedded_artifact_count(); ++i) {
+        auto & artifact = catalog->artifacts[embedded_artifacts[i].id];
+        artifact.id = embedded_artifacts[i].id;
+        artifact.path = embedded_artifacts[i].path;
+        artifact.data.assign(embedded_artifacts[i].data, embedded_artifacts[i].data + embedded_artifacts[i].data_size);
+    }
+
+    for (const auto & item : catalog_json.at("sources").items()) {
+        const std::string source_id = item.key();
+        const auto & source_json = item.value();
+        auto & source = catalog->sources[source_id];
+        source.id = source_id;
+        source.path = source_json.value("path", std::string());
+        if (!catalog_dir.empty()) {
+            const std::string source_text = ggml_backend_hrx2_read_text_file(ggml_backend_hrx2_join_path(catalog_dir, source.path));
+            if (source_text.empty()) {
+                GGML_LOG_ERROR("HRX2: source %s could not be read from catalog dir\n", source_id.c_str());
+                return false;
+            }
+            source.text = source_text;
+        }
+    }
+
+    for (const auto & item : catalog_json.at("artifacts").items()) {
+        const std::string artifact_id = item.key();
+        const auto & artifact_json = item.value();
+        auto & artifact = catalog->artifacts[artifact_id];
+        artifact.id = artifact_id;
+        artifact.path = artifact_json.value("path", std::string());
+        artifact.format = artifact_json.value("format", std::string());
+        if (!catalog_dir.empty()) {
+            const std::vector<unsigned char> artifact_data =
+                ggml_backend_hrx2_read_binary_file(ggml_backend_hrx2_join_path(catalog_dir, artifact.path));
+            if (!artifact_data.empty()) {
+                artifact.data = artifact_data;
             }
         }
     }
 
+    for (const auto & route_json : catalog_json.at("routes")) {
+        ggml_backend_hrx2_kernel_route route;
+        if (!ggml_backend_hrx2_route_from_json(route_json, &route)) {
+            GGML_LOG_ERROR("HRX2: invalid route entry in catalog\n");
+            return false;
+        }
+        if (catalog->sources.find(route.source_id) == catalog->sources.end()) {
+            GGML_LOG_ERROR("HRX2: route %s references unknown source %s\n", route.id.c_str(), route.source_id.c_str());
+            return false;
+        }
+        if (!route.artifact_id.empty() && catalog->artifacts.find(route.artifact_id) == catalog->artifacts.end()) {
+            GGML_LOG_ERROR("HRX2: route %s references unknown artifact %s\n", route.id.c_str(), route.artifact_id.c_str());
+            return false;
+        }
+        catalog->routes.push_back(std::move(route));
+    }
     return true;
-}
-
-static bool ggml_backend_hrx2_route_from_catalog(
-        const nlohmann::json & catalog,
-        const char * route_id,
-        ggml_backend_hrx2_kernel_route * route) {
-    if (!catalog.contains("kernels") || !catalog["kernels"].is_array()) {
-        GGML_LOG_ERROR("HRX2: catalog has no kernels array\n");
-        return false;
-    }
-    for (const auto & kernel : catalog["kernels"]) {
-        if (kernel.value("id", std::string()) != route_id) {
-            continue;
-        }
-        route->id = kernel.value("id", std::string());
-        route->source_id = kernel.value("source_id", std::string());
-        route->root_symbol = kernel.value("root_symbol", std::string());
-        route->export_name = kernel.value("export_name", std::string());
-        route->artifact_format = kernel.value("artifact_format", std::string("amdgpu-hsaco"));
-        const auto & abi = kernel["abi"];
-        route->binding_count = abi.value("binding_count", 0);
-        route->parameter_count = abi.value("parameter_count", 0);
-        route->constant_byte_length = abi.value("constant_byte_length", 0);
-        const auto & workgroup = kernel["dispatch"]["workgroup_size"];
-        for (int i = 0; i < 3; ++i) {
-            route->workgroup_size[i] = workgroup.at(i).get<uint32_t>();
-        }
-        return !route->source_id.empty() && !route->root_symbol.empty() && !route->export_name.empty();
-    }
-    GGML_LOG_ERROR("HRX2: route %s not found in catalog\n", route_id);
-    return false;
 }
 
 static bool ggml_backend_hrx2_compile_route(
         const ggml_backend_hrx2_device_info & device,
         const ggml_backend_hrx2_kernel_route & route,
-        const std::string & source,
+        const void * source_data,
+        size_t source_size,
+        hrx_loom_jit_source_format_t source_format,
+        const char * source_identifier,
         ggml_backend_hrx2_provider * provider) {
     const char * architecture = device.architecture ? device.architecture : "";
+    if (!route.target_key.empty() && route.target_key != architecture) {
+        GGML_LOG_ERROR(
+            "HRX2: route %s targets %s but device architecture is %s\n",
+            route.id.c_str(), route.target_key.c_str(), architecture);
+        return false;
+    }
+
     hrx_loom_jit_amdgpu_t jit = nullptr;
     hrx_loom_jit_amdgpu_options_t jit_options = {
         /* .structure_size = */ sizeof(hrx_loom_jit_amdgpu_options_t),
@@ -150,10 +244,10 @@ static bool ggml_backend_hrx2_compile_route(
     hrx_loom_jit_compile_result_t result = {};
     hrx_loom_jit_compile_options_t compile_options = {
         /* .structure_size      = */ sizeof(hrx_loom_jit_compile_options_t),
-        /* .source_data         = */ source.data(),
-        /* .source_size         = */ source.size(),
-        /* .source_format       = */ HRX_LOOM_JIT_SOURCE_FORMAT_TEXT,
-        /* .source_identifier   = */ route.id.c_str(),
+        /* .source_data         = */ source_data,
+        /* .source_size         = */ source_size,
+        /* .source_format       = */ source_format,
+        /* .source_identifier   = */ source_identifier,
         /* .root_symbol         = */ route.root_symbol.c_str(),
         /* .module_name         = */ "ggml_hrx2",
         /* .artifact_identifier = */ route.export_name.c_str(),
@@ -166,15 +260,21 @@ static bool ggml_backend_hrx2_compile_route(
 
     hrx_executable_t executable = nullptr;
     const size_t hsaco_size = result.hsaco_size;
-    const char * loader_format = route.artifact_format.empty() || route.artifact_format == "amdgpu-hsaco" ?
+    const char * loader_format = route.loader_format.empty() || route.loader_format == "amdgpu-hsaco" ?
         nullptr :
-        route.artifact_format.c_str();
+        route.loader_format.c_str();
     const bool loaded = GGML_HRX2_CATALOG_CHECK(hrx_executable_load_data(
         device.device,
         result.hsaco_data,
         hsaco_size,
         loader_format,
         &executable));
+    provider->manifest_json = result.manifest_json ?
+        std::string(result.manifest_json, result.manifest_json_size) :
+        std::string();
+    provider->compile_report_json = result.compile_report_json ?
+        std::string(result.compile_report_json, result.compile_report_json_size) :
+        std::string();
     hrx_loom_jit_compile_result_deinitialize(&result);
     if (!loaded) {
         return false;
@@ -205,8 +305,11 @@ static bool ggml_backend_hrx2_compile_route(
     provider->export_info = export_info;
     provider->route = route;
     GGML_LOG_INFO(
-        "HRX2: JIT compiled %s for %s (%zu bytes HSACO)\n",
-        route.export_name.c_str(), architecture, hsaco_size);
+        "HRX2: JIT compiled %s for %s from %s (%zu bytes HSACO)\n",
+        route.export_name.c_str(),
+        architecture,
+        source_format == HRX_LOOM_JIT_SOURCE_FORMAT_BYTECODE ? "Loom bytecode" : "Loom text",
+        hsaco_size);
     return true;
 }
 
@@ -218,28 +321,90 @@ ggml_backend_hrx2_provider::~ggml_backend_hrx2_provider() {
     }
 }
 
+void ggml_backend_hrx2_catalog_deleter::operator()(ggml_backend_hrx2_catalog * catalog) const {
+    delete catalog;
+}
+
+ggml_backend_hrx2_catalog_ptr ggml_backend_hrx2_load_catalog() {
+    std::string catalog_text = ggml_hrx2_embedded_catalog_json();
+    std::string catalog_dir;
+    if (const char * env = std::getenv("GGML_HRX2_CATALOG_DIR")) {
+        catalog_dir = env;
+        const std::string catalog_path = ggml_backend_hrx2_join_path(catalog_dir, "catalog.json");
+        const std::string disk_catalog = ggml_backend_hrx2_read_text_file(catalog_path);
+        if (disk_catalog.empty()) {
+            GGML_LOG_ERROR("HRX2: GGML_HRX2_CATALOG_DIR is set but %s could not be read\n", catalog_path.c_str());
+            return nullptr;
+        }
+        catalog_text = disk_catalog;
+    }
+
+    nlohmann::json catalog_json;
+    try {
+        catalog_json = nlohmann::json::parse(catalog_text);
+    } catch (const std::exception & e) {
+        GGML_LOG_ERROR("HRX2: failed to parse catalog JSON: %s\n", e.what());
+        return nullptr;
+    }
+
+    ggml_backend_hrx2_catalog_ptr catalog(new ggml_backend_hrx2_catalog());
+    if (!ggml_backend_hrx2_load_catalog_json(catalog_json, catalog_dir, catalog.get())) {
+        return nullptr;
+    }
+    return catalog;
+}
+
+const ggml_backend_hrx2_kernel_route * ggml_backend_hrx2_catalog_find_route(
+        const ggml_backend_hrx2_catalog & catalog,
+        const char * route_id) {
+    for (const auto & route : catalog.routes) {
+        if (route.id == route_id) {
+            return &route;
+        }
+    }
+    GGML_LOG_ERROR("HRX2: route %s not found in catalog\n", route_id);
+    return nullptr;
+}
+
 std::unique_ptr<ggml_backend_hrx2_provider> ggml_backend_hrx2_load_provider(
         const ggml_backend_hrx2_device_info & device,
-        const char * route_id) {
-    nlohmann::json catalog;
-    std::unordered_map<std::string, std::string> sources;
-    if (!ggml_backend_hrx2_load_catalog(&catalog, &sources)) {
-        return nullptr;
+        const ggml_backend_hrx2_catalog & catalog,
+        const ggml_backend_hrx2_kernel_route & route) {
+    auto provider = std::make_unique<ggml_backend_hrx2_provider>();
+
+    if (!route.artifact_id.empty()) {
+        const auto artifact_it = catalog.artifacts.find(route.artifact_id);
+        if (artifact_it != catalog.artifacts.end() &&
+            artifact_it->second.format == "loom-bytecode" &&
+            !artifact_it->second.data.empty()) {
+            if (ggml_backend_hrx2_compile_route(
+                    device,
+                    route,
+                    artifact_it->second.data.data(),
+                    artifact_it->second.data.size(),
+                    HRX_LOOM_JIT_SOURCE_FORMAT_BYTECODE,
+                    route.artifact_id.c_str(),
+                    provider.get())) {
+                return provider;
+            }
+            return nullptr;
+        }
     }
 
-    ggml_backend_hrx2_kernel_route route;
-    if (!ggml_backend_hrx2_route_from_catalog(catalog, route_id, &route)) {
-        return nullptr;
-    }
-
-    auto source = sources.find(route.source_id);
-    if (source == sources.end() || source->second.empty()) {
+    const auto source_it = catalog.sources.find(route.source_id);
+    if (source_it == catalog.sources.end() || source_it->second.text.empty()) {
         GGML_LOG_ERROR("HRX2: source %s not available\n", route.source_id.c_str());
         return nullptr;
     }
 
-    auto provider = std::make_unique<ggml_backend_hrx2_provider>();
-    if (!ggml_backend_hrx2_compile_route(device, route, source->second, provider.get())) {
+    if (!ggml_backend_hrx2_compile_route(
+            device,
+            route,
+            source_it->second.text.data(),
+            source_it->second.text.size(),
+            HRX_LOOM_JIT_SOURCE_FORMAT_TEXT,
+            route.source_id.c_str(),
+            provider.get())) {
         return nullptr;
     }
     return provider;

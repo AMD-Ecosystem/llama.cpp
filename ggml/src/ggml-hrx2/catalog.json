@@ -1,32 +1,121 @@
 {
-  "schema_version": 1,
-  "catalog_id": "hrx2-phase0",
+  "schema": "ggml-hrx2-catalog-v1",
+  "catalog_id": "hrx2-phase0.1",
+  "generated_at": "source",
+  "targets": [
+    {
+      "target_key": "gfx1100",
+      "target_variant": null
+    }
+  ],
   "sources": {
     "rms_norm_f32": {
       "path": "kernels/rms_norm_f32.loom"
+    },
+    "mul_mat_q8_0_f32": {
+      "path": "kernels/mul_mat_q8_0_f32.loom"
     }
   },
-  "kernels": [
+  "artifacts": {
+    "rms_norm_f32_contiguous_bc": {
+      "path": "artifacts/rms_norm_f32_contiguous.loombc",
+      "format": "loom-bytecode",
+      "storage": "embedded"
+    },
+    "mul_mat_q8_0_f32_contiguous_bc": {
+      "path": "artifacts/mul_mat_q8_0_f32_contiguous.loombc",
+      "format": "loom-bytecode",
+      "storage": "embedded"
+    }
+  },
+  "families": [
+    {
+      "family": "rms_norm_f32",
+      "op": "RMS_NORM"
+    },
+    {
+      "family": "mul_mat_q8_0_f32",
+      "op": "MUL_MAT"
+    }
+  ],
+  "routes": [
     {
       "id": "rms_norm_f32_contiguous",
+      "family": "rms_norm_f32",
       "op": "RMS_NORM",
+      "target_key": "gfx1100",
       "source_id": "rms_norm_f32",
+      "artifact_id": "rms_norm_f32_contiguous_bc",
       "root_symbol": "@hrx2_rms_norm_f32",
       "export_name": "hrx2_rms_norm_f32",
-      "artifact_format": "amdgpu-hsaco",
+      "loader_format": "amdgpu-hsaco",
       "abi": {
         "binding_count": 2,
         "parameter_count": 13,
         "constant_byte_length": 44
       },
       "dispatch": {
-        "workgroup_size": [512, 1, 1]
+        "workgroup_size": [512, 1, 1],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "contiguous_f32",
+        "ncols_min": 1,
+        "ncols_max": 65536,
+        "nrows_min": 1,
+        "nrows_max": 1048576
       },
       "supports": {
-        "src_type": "F32",
+        "src0_type": "F32",
         "dst_type": "F32",
         "layout": "contiguous"
+      },
+      "evidence_summary": {
+        "phase": "phase0",
+        "ggml_cpu_reference": "pass"
+      }
+    },
+    {
+      "id": "mul_mat_q8_0_f32_contiguous",
+      "family": "mul_mat_q8_0_f32",
+      "op": "MUL_MAT",
+      "target_key": "gfx1100",
+      "source_id": "mul_mat_q8_0_f32",
+      "artifact_id": "mul_mat_q8_0_f32_contiguous_bc",
+      "root_symbol": "@hrx2_mul_mat_q8_0_f32",
+      "export_name": "hrx2_mul_mat_q8_0_f32",
+      "loader_format": "amdgpu-hsaco",
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 6,
+        "constant_byte_length": 12
+      },
+      "dispatch": {
+        "workgroup_size": [256, 1, 1],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "contiguous_q8_0_f32_2d",
+        "k_min": 32,
+        "k_max": 8192,
+        "rows_min": 1,
+        "rows_max": 8192,
+        "cols_min": 1,
+        "cols_max": 512
+      },
+      "supports": {
+        "src0_type": "Q8_0",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "evidence_summary": {
+        "phase": "phase0.1",
+        "ggml_cpu_reference": "required"
       }
     }
-  ]
+  ],
+  "fusions": []
 }

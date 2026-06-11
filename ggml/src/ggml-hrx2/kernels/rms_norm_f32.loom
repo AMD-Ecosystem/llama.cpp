@@ -56,7 +56,7 @@ kernel.def @hrx2_rms_norm_f32(%ncols: index, %nrows: index) {
   kernel.return
 }
 
-check.case public @hrx2_rms_norm_f32_case {
+check.case @hrx2_rms_norm_f32_case {
   %ncols = check.param.choice values([64, 512, 4096]) name("ncols") : index
   %nrows = check.param.choice values([1, 7, 32]) name("nrows") : index
   %ne1 = check.literal value(1) : index

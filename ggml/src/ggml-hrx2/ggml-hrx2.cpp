@@ -17,6 +17,7 @@
 #include <memory>
 #include <new>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -43,7 +44,10 @@ struct ggml_backend_hrx2_device_context {
     std::string description;
     std::string architecture;
     size_t memory_total = 0;
-    std::unique_ptr<ggml_backend_hrx2_provider> rms_norm;
+    ggml_backend_hrx2_catalog_ptr catalog;
+    const ggml_backend_hrx2_kernel_route * rms_norm_route = nullptr;
+    const ggml_backend_hrx2_kernel_route * mul_mat_q8_0_route = nullptr;
+    std::unordered_map<std::string, std::unique_ptr<ggml_backend_hrx2_provider>> providers;
     ggml_backend_buffer_type buffer_type = {};
     ggml_backend_hrx2_buffer_type_context buffer_type_context = {};
 };
@@ -61,6 +65,7 @@ struct ggml_backend_hrx2_reg_context {
 
     ~ggml_backend_hrx2_reg_context() {
         for (auto & device_context : device_contexts) {
+            device_context->providers.clear();
             if (device_context->device) {
                 hrx_device_release(device_context->device);
             }
@@ -87,6 +92,14 @@ struct ggml_backend_hrx2_rms_norm_constants {
 
 static_assert(sizeof(ggml_backend_hrx2_rms_norm_constants) == 44);
 
+struct ggml_backend_hrx2_mul_mat_constants {
+    uint32_t k;
+    uint32_t rows;
+    uint32_t cols;
+};
+
+static_assert(sizeof(ggml_backend_hrx2_mul_mat_constants) == 12);
+
 static bool ggml_hrx2_check(hrx_status_t status, const char * expression, const char * file, int line) {
     if (hrx_status_is_ok(status)) {
         return true;
@@ -111,6 +124,37 @@ static ggml_backend_hrx2_device_context * ggml_backend_hrx2_get_device_context(g
 
 static ggml_backend_hrx2_context * ggml_backend_hrx2_get_context(ggml_backend_t backend) {
     return static_cast<ggml_backend_hrx2_context *>(backend->context);
+}
+
+static bool ggml_backend_hrx2_route_available(
+        const ggml_backend_hrx2_device_context * device_context,
+        const ggml_backend_hrx2_kernel_route * route) {
+    return route && (route->target_key.empty() || route->target_key == device_context->architecture);
+}
+
+static ggml_backend_hrx2_provider * ggml_backend_hrx2_get_provider(
+        ggml_backend_hrx2_device_context * device_context,
+        const ggml_backend_hrx2_kernel_route * route) {
+    if (!ggml_backend_hrx2_route_available(device_context, route) || !device_context->catalog) {
+        return nullptr;
+    }
+
+    auto existing = device_context->providers.find(route->id);
+    if (existing != device_context->providers.end()) {
+        return existing->second.get();
+    }
+
+    const ggml_backend_hrx2_device_info jit_device = {
+        /* .device       = */ device_context->device,
+        /* .architecture = */ device_context->architecture.c_str(),
+    };
+    auto provider = ggml_backend_hrx2_load_provider(jit_device, *device_context->catalog, *route);
+    if (!provider) {
+        return nullptr;
+    }
+    ggml_backend_hrx2_provider * provider_ptr = provider.get();
+    device_context->providers.emplace(route->id, std::move(provider));
+    return provider_ptr;
 }
 
 static ggml_backend_hrx2_buffer_context * ggml_backend_hrx2_get_buffer_context(ggml_backend_buffer_t buffer) {
@@ -155,6 +199,18 @@ static void * ggml_backend_hrx2_buffer_get_base(ggml_backend_buffer_t buffer);
 
 static size_t ggml_backend_hrx2_tensor_offset(const ggml_backend_hrx2_buffer_context * context, const ggml_tensor * tensor) {
     return static_cast<size_t>(static_cast<const uint8_t *>(tensor->data) - context->base);
+}
+
+static bool ggml_backend_hrx2_tensors_known_non_overlapping(const ggml_tensor * a, const ggml_tensor * b) {
+    if (!a || !b || !a->data || !b->data) {
+        return true;
+    }
+
+    const auto * a_begin = static_cast<const uint8_t *>(a->data);
+    const auto * b_begin = static_cast<const uint8_t *>(b->data);
+    const auto * a_end = a_begin + ggml_nbytes(a);
+    const auto * b_end = b_begin + ggml_nbytes(b);
+    return a_end <= b_begin || b_end <= a_begin;
 }
 
 static bool ggml_backend_hrx2_tensor_buffer_ref(const ggml_tensor * tensor, hrx_buffer_ref_t * out_ref) {
@@ -306,23 +362,60 @@ static bool ggml_backend_hrx2_supports_rms_norm(
         ggml_backend_hrx2_device_context * device_context,
         const ggml_tensor * op) {
     const ggml_tensor * src0 = op->src[0];
-    const bool known_non_overlapping =
-        !src0 || !src0->data || !op->data ||
-        static_cast<const uint8_t *>(src0->data) + ggml_nbytes(src0) <= static_cast<const uint8_t *>(op->data) ||
-        static_cast<const uint8_t *>(op->data) + ggml_nbytes(op) <= static_cast<const uint8_t *>(src0->data);
-    return device_context->rms_norm &&
+    const auto * route = device_context->rms_norm_route;
+    return ggml_backend_hrx2_route_available(device_context, route) &&
            op->op == GGML_OP_RMS_NORM &&
            src0 &&
            op->view_src == nullptr &&
            op->type == GGML_TYPE_F32 &&
            src0->type == GGML_TYPE_F32 &&
-           src0->ne[0] > 0 &&
-           src0->ne[0] <= 65536 &&
-           ggml_nrows(src0) > 0 &&
-           ggml_nrows(src0) <= 1048576 &&
+           src0->ne[0] >= route->ncols_min &&
+           src0->ne[0] <= route->ncols_max &&
+           ggml_nrows(src0) >= route->nrows_min &&
+           ggml_nrows(src0) <= route->nrows_max &&
            ggml_are_same_shape(src0, op) &&
-           known_non_overlapping &&
+           ggml_backend_hrx2_tensors_known_non_overlapping(src0, op) &&
            ggml_is_contiguous(src0) &&
+           ggml_is_contiguous(op);
+}
+
+static bool ggml_backend_hrx2_supports_mul_mat_q8_0(
+        ggml_backend_hrx2_device_context * device_context,
+        const ggml_tensor * op) {
+    const ggml_tensor * src0 = op->src[0];
+    const ggml_tensor * src1 = op->src[1];
+    const auto * route = device_context->mul_mat_q8_0_route;
+    if (!ggml_backend_hrx2_route_available(device_context, route) ||
+        op->op != GGML_OP_MUL_MAT ||
+        !src0 ||
+        !src1 ||
+        op->view_src != nullptr ||
+        src0->type != GGML_TYPE_Q8_0 ||
+        src1->type != GGML_TYPE_F32 ||
+        op->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    const int64_t k = src0->ne[0];
+    const int64_t rows = src0->ne[1];
+    const int64_t cols = src1->ne[1];
+    const int64_t block_size = ggml_blck_size(src0->type);
+    return src0->ne[0] == src1->ne[0] &&
+           op->ne[0] == src0->ne[1] &&
+           op->ne[1] == src1->ne[1] &&
+           src0->ne[2] == 1 && src0->ne[3] == 1 &&
+           src1->ne[2] == 1 && src1->ne[3] == 1 &&
+           op->ne[2] == 1 && op->ne[3] == 1 &&
+           k >= route->k_min && k <= route->k_max &&
+           rows >= route->rows_min && rows <= route->rows_max &&
+           cols >= route->cols_min && cols <= route->cols_max &&
+           block_size > 0 &&
+           (k % block_size) == 0 &&
+           ggml_backend_hrx2_tensors_known_non_overlapping(src0, src1) &&
+           ggml_backend_hrx2_tensors_known_non_overlapping(src0, op) &&
+           ggml_backend_hrx2_tensors_known_non_overlapping(src1, op) &&
+           ggml_is_contiguous(src0) &&
+           ggml_is_contiguous(src1) &&
            ggml_is_contiguous(op);
 }
 
@@ -353,11 +446,15 @@ static ggml_status ggml_backend_hrx2_dispatch_rms_norm(
         /* .eps     = */ eps,
     };
 
-    const auto & provider = *context->device_context->rms_norm;
+    const auto * provider = ggml_backend_hrx2_get_provider(context->device_context, context->device_context->rms_norm_route);
+    if (!provider) {
+        GGML_LOG_ERROR("HRX2: RMS_NORM provider is not available\n");
+        return GGML_STATUS_FAILED;
+    }
     hrx_dispatch_config_t config = {
-        /* .workgroup_count = */ { constants.nrows, 1, 1 },
+        /* .workgroup_count = */ { (constants.nrows + provider->route.rows_per_workgroup - 1) / provider->route.rows_per_workgroup, 1, 1 },
         /* .workgroup_size  = */ {
-            provider.export_info.workgroup_size[0] ? provider.export_info.workgroup_size[0] : provider.route.workgroup_size[0],
+            provider->export_info.workgroup_size[0] ? provider->export_info.workgroup_size[0] : provider->route.workgroup_size[0],
             1,
             1,
         },
@@ -366,13 +463,66 @@ static ggml_status ggml_backend_hrx2_dispatch_rms_norm(
 
     if (!GGML_HRX2_CHECK(hrx_stream_dispatch(
             context->stream,
-            provider.executable,
-            provider.export_ordinal,
+            provider->executable,
+            provider->export_ordinal,
             &config,
             &constants,
             sizeof(constants),
             bindings,
             2,
+            HRX_DISPATCH_FLAG_NONE))) {
+        return GGML_STATUS_FAILED;
+    }
+    return GGML_STATUS_SUCCESS;
+}
+
+static ggml_status ggml_backend_hrx2_dispatch_mul_mat_q8_0(
+        ggml_backend_hrx2_context * context,
+        const ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+    hrx_buffer_ref_t bindings[3] = {};
+    if (!ggml_backend_hrx2_tensor_buffer_ref(src0, &bindings[0]) ||
+        !ggml_backend_hrx2_tensor_buffer_ref(src1, &bindings[1]) ||
+        !ggml_backend_hrx2_tensor_buffer_ref(dst, &bindings[2])) {
+        GGML_LOG_ERROR("HRX2: MUL_MAT tensor is not backed by HRX2 buffers\n");
+        return GGML_STATUS_FAILED;
+    }
+
+    ggml_backend_hrx2_mul_mat_constants constants = {
+        /* .k    = */ static_cast<uint32_t>(src0->ne[0]),
+        /* .rows = */ static_cast<uint32_t>(src0->ne[1]),
+        /* .cols = */ static_cast<uint32_t>(src1->ne[1]),
+    };
+
+    const auto * provider = ggml_backend_hrx2_get_provider(context->device_context, context->device_context->mul_mat_q8_0_route);
+    if (!provider) {
+        GGML_LOG_ERROR("HRX2: MUL_MAT Q8_0 provider is not available\n");
+        return GGML_STATUS_FAILED;
+    }
+    hrx_dispatch_config_t config = {
+        /* .workgroup_count = */ {
+            (constants.rows + provider->route.rows_per_workgroup - 1) / provider->route.rows_per_workgroup,
+            (constants.cols + provider->route.cols_per_workgroup - 1) / provider->route.cols_per_workgroup,
+            1,
+        },
+        /* .workgroup_size  = */ {
+            provider->export_info.workgroup_size[0] ? provider->export_info.workgroup_size[0] : provider->route.workgroup_size[0],
+            1,
+            1,
+        },
+        /* .subgroup_size   = */ 0,
+    };
+
+    if (!GGML_HRX2_CHECK(hrx_stream_dispatch(
+            context->stream,
+            provider->executable,
+            provider->export_ordinal,
+            &config,
+            &constants,
+            sizeof(constants),
+            bindings,
+            3,
             HRX_DISPATCH_FLAG_NONE))) {
         return GGML_STATUS_FAILED;
     }
@@ -416,6 +566,15 @@ static enum ggml_status ggml_backend_hrx2_graph_compute(ggml_backend_t backend, 
                     return GGML_STATUS_FAILED;
                 }
                 if (ggml_backend_hrx2_dispatch_rms_norm(context, node) != GGML_STATUS_SUCCESS) {
+                    return GGML_STATUS_FAILED;
+                }
+                break;
+            case GGML_OP_MUL_MAT:
+                if (!ggml_backend_hrx2_supports_mul_mat_q8_0(context->device_context, node)) {
+                    GGML_LOG_ERROR("HRX2: unsupported MUL_MAT shape/type/layout\n");
+                    return GGML_STATUS_FAILED;
+                }
+                if (ggml_backend_hrx2_dispatch_mul_mat_q8_0(context, node) != GGML_STATUS_SUCCESS) {
                     return GGML_STATUS_FAILED;
                 }
                 break;
@@ -528,6 +687,8 @@ static bool ggml_backend_hrx2_device_supports_op(ggml_backend_dev_t dev, const g
             return true;
         case GGML_OP_RMS_NORM:
             return ggml_backend_hrx2_supports_rms_norm(ggml_backend_hrx2_get_device_context(dev), op);
+        case GGML_OP_MUL_MAT:
+            return ggml_backend_hrx2_supports_mul_mat_q8_0(ggml_backend_hrx2_get_device_context(dev), op);
         default:
             return false;
     }
@@ -623,11 +784,13 @@ static std::unique_ptr<ggml_backend_hrx2_reg_context> ggml_backend_hrx2_create_r
         device_context->description = ggml_backend_hrx2_device_description(device);
         device_context->architecture = ggml_backend_hrx2_device_string_property(device, HRX_DEVICE_PROPERTY_ARCHITECTURE);
         device_context->memory_total = ggml_backend_hrx2_total_memory(device);
-        const ggml_backend_hrx2_device_info jit_device = {
-            /* .device       = */ device_context->device,
-            /* .architecture = */ device_context->architecture.c_str(),
-        };
-        device_context->rms_norm = ggml_backend_hrx2_load_provider(jit_device, "rms_norm_f32_contiguous");
+        device_context->catalog = ggml_backend_hrx2_load_catalog();
+        if (device_context->catalog) {
+            device_context->rms_norm_route =
+                ggml_backend_hrx2_catalog_find_route(*device_context->catalog, "rms_norm_f32_contiguous");
+            device_context->mul_mat_q8_0_route =
+                ggml_backend_hrx2_catalog_find_route(*device_context->catalog, "mul_mat_q8_0_f32_contiguous");
+        }
         device_context->buffer_type_context = {
             /* .device_context = */ device_context.get(),
             /* .name           = */ device_context->name,

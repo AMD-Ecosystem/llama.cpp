@@ -11,16 +11,40 @@ struct ggml_backend_hrx2_device_info {
     const char * architecture = nullptr;
 };
 
+struct ggml_backend_hrx2_catalog;
+
+struct ggml_backend_hrx2_catalog_deleter {
+    void operator()(ggml_backend_hrx2_catalog * catalog) const;
+};
+
+using ggml_backend_hrx2_catalog_ptr = std::unique_ptr<ggml_backend_hrx2_catalog, ggml_backend_hrx2_catalog_deleter>;
+
 struct ggml_backend_hrx2_kernel_route {
     std::string id;
+    std::string family;
+    std::string op;
+    std::string target_key;
     std::string source_id;
+    std::string artifact_id;
     std::string root_symbol;
     std::string export_name;
-    std::string artifact_format;
+    std::string loader_format;
     uint32_t    binding_count = 0;
     uint32_t    parameter_count = 0;
     uint32_t    constant_byte_length = 0;
     uint32_t    workgroup_size[3] = { 1, 1, 1 };
+    uint32_t    rows_per_workgroup = 1;
+    uint32_t    cols_per_workgroup = 1;
+    uint32_t    ncols_min = 0;
+    uint32_t    ncols_max = 0;
+    uint32_t    nrows_min = 0;
+    uint32_t    nrows_max = 0;
+    uint32_t    k_min = 0;
+    uint32_t    k_max = 0;
+    uint32_t    rows_min = 0;
+    uint32_t    rows_max = 0;
+    uint32_t    cols_min = 0;
+    uint32_t    cols_max = 0;
 };
 
 struct ggml_backend_hrx2_provider {
@@ -28,6 +52,8 @@ struct ggml_backend_hrx2_provider {
     uint32_t export_ordinal = 0;
     hrx_executable_export_info_t export_info = {};
     ggml_backend_hrx2_kernel_route route;
+    std::string manifest_json;
+    std::string compile_report_json;
 
     ggml_backend_hrx2_provider() = default;
     ggml_backend_hrx2_provider(const ggml_backend_hrx2_provider &) = delete;
@@ -35,6 +61,13 @@ struct ggml_backend_hrx2_provider {
     ~ggml_backend_hrx2_provider();
 };
 
+ggml_backend_hrx2_catalog_ptr ggml_backend_hrx2_load_catalog();
+
+const ggml_backend_hrx2_kernel_route * ggml_backend_hrx2_catalog_find_route(
+        const ggml_backend_hrx2_catalog & catalog,
+        const char * route_id);
+
 std::unique_ptr<ggml_backend_hrx2_provider> ggml_backend_hrx2_load_provider(
         const ggml_backend_hrx2_device_info & device,
-        const char * route_id);
+        const ggml_backend_hrx2_catalog & catalog,
+        const ggml_backend_hrx2_kernel_route & route);
