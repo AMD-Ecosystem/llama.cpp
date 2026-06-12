@@ -208,6 +208,9 @@ static bool ggml_backend_hrx2_route_from_json(
     if (shape_guards.contains("all_pot")) {
         route->all_pot_guard = shape_guards.at("all_pot").get<bool>() ? 1 : -1;
     }
+    if (shape_guards.contains("k_multiple_of")) {
+        route->k_multiple_of_guard = shape_guards.at("k_multiple_of").get<uint32_t>();
+    }
     if (shape_guards.contains("ncols_multiple_of")) {
         route->ncols_multiple_of_guard = shape_guards.at("ncols_multiple_of").get<uint32_t>();
     }

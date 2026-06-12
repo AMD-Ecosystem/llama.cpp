@@ -53,6 +53,10 @@ using LoomWorkspace = LoomHandle<loomc_workspace_t, loomc_workspace_release>;
 using LoomSource = LoomHandle<loomc_source_t, loomc_source_release>;
 using LoomModule = LoomHandle<loomc_module_t, loomc_module_release>;
 using LoomResult = LoomHandle<loomc_result_t, loomc_result_release>;
+using LoomLinkIndexBuilder =
+    LoomHandle<loomc_link_index_builder_t, loomc_link_index_builder_release>;
+using LoomLinkIndex = LoomHandle<loomc_link_index_t, loomc_link_index_release>;
+using LoomLinker = LoomHandle<loomc_linker_t, loomc_linker_release>;
 
 struct HrxLoomJitDeleter {
   void operator()(ggml_hrx2_loom_jit_amdgpu_s* jit) const {
@@ -354,24 +358,69 @@ hrx_status_t ggml_hrx2_loom_jit_amdgpu_compile(
     return ggml_hrx2_loom_jit_status_from_loom(status, "create Loom source");
   }
 
-  status = loomc_module_deserialize_from_source(
-      jit->context, workspace.get(), source.get(), nullptr,
-      loomc_allocator_system(), module.out(), result.out());
+  LoomLinkIndexBuilder link_index_builder;
+  status = loomc_link_index_builder_create(
+      jit->context, nullptr, loomc_allocator_system(), link_index_builder.out());
   if (!loomc_status_is_ok(status)) {
-    return ggml_hrx2_loom_jit_status_from_loom(status, "deserialize Loom source");
+    return ggml_hrx2_loom_jit_status_from_loom(status,
+                                               "create Loom link index builder");
+  }
+  loomc_link_index_source_options_t link_source_options = {};
+  link_source_options.provider_name =
+      loomc_make_cstring_view(options->source_identifier);
+  link_source_options.role = LOOMC_LINK_PROVIDER_ROLE_INPUT;
+  status = loomc_link_index_builder_add_source(
+      link_index_builder.get(), source.get(), &link_source_options, nullptr);
+  if (!loomc_status_is_ok(status)) {
+    return ggml_hrx2_loom_jit_status_from_loom(status,
+                                               "index Loom source");
+  }
+  LoomLinkIndex link_index;
+  status = loomc_link_index_builder_finish(
+      link_index_builder.get(), link_index.out(), result.out());
+  if (!loomc_status_is_ok(status)) {
+    return ggml_hrx2_loom_jit_status_from_loom(status,
+                                               "finish Loom link index");
   }
   if (!loomc_result_succeeded(result.get())) {
     return ggml_hrx2_loom_jit_status_from_result(
-        result.get(), "Loom source deserialization failed");
+        result.get(), "Loom source indexing failed");
   }
   result.reset();
 
-  loomc_amdgpu_target_assignment_t assignment = {};
-  status = loomc_amdgpu_module_assign_targetless_kernel_targets(
-      module.get(), jit->target_profile, &assignment);
+  LoomLinker linker;
+  status = loomc_linker_create(jit->context, nullptr, loomc_allocator_system(),
+                               linker.out());
   if (!loomc_status_is_ok(status)) {
-    return ggml_hrx2_loom_jit_status_from_loom(status, "assign AMDGPU target");
+    return ggml_hrx2_loom_jit_status_from_loom(status, "create Loom linker");
   }
+
+  loomc_target_selection_options_t link_target_options = {};
+  link_target_options.type = LOOMC_STRUCTURE_TYPE_TARGET_SELECTION_OPTIONS;
+  link_target_options.structure_size = sizeof(link_target_options);
+  link_target_options.target_selection = jit->target_selection;
+  const loomc_string_view_t root_symbols[] = {
+      loomc_make_cstring_view(options->root_symbol),
+  };
+  loomc_link_options_t link_options = {};
+  link_options.type = LOOMC_STRUCTURE_TYPE_LINK_OPTIONS;
+  link_options.structure_size = sizeof(link_options);
+  link_options.next = &link_target_options;
+  link_options.link_index = link_index.get();
+  link_options.module_name = loomc_make_cstring_view(options->module_name);
+  link_options.root_symbols = root_symbols;
+  link_options.root_symbol_count = 1;
+  link_options.flags = LOOMC_LINK_FLAG_STRIP_CHECK_SYMBOLS;
+  status = loomc_link_module(linker.get(), workspace.get(), &link_options,
+                             module.out(), result.out());
+  if (!loomc_status_is_ok(status)) {
+    return ggml_hrx2_loom_jit_status_from_loom(status, "link Loom root");
+  }
+  if (!loomc_result_succeeded(result.get())) {
+    return ggml_hrx2_loom_jit_status_from_result(result.get(),
+                                                 "Loom root linking failed");
+  }
+  result.reset();
 
   loomc_target_selection_options_t compile_target_options = {};
   compile_target_options.type = LOOMC_STRUCTURE_TYPE_TARGET_SELECTION_OPTIONS;
@@ -382,10 +431,6 @@ hrx_status_t ggml_hrx2_loom_jit_amdgpu_compile(
   compile_options.structure_size = sizeof(compile_options);
   compile_options.next = &compile_target_options;
   compile_options.module_name = loomc_make_cstring_view(options->module_name);
-  compile_options.compile_root_symbol =
-      loomc_make_cstring_view(options->root_symbol);
-  compile_options.artifact_flags = LOOMC_COMPILE_ARTIFACT_FLAG_REPORT_JSON |
-                                   LOOMC_COMPILE_ARTIFACT_FLAG_MANIFEST_JSON;
   compile_options.config.bindings = config_bindings.get();
   compile_options.config.binding_count = options->config_binding_count;
   compile_options.config.flags = LOOMC_CONFIG_POLICY_FLAG_REJECT_UNKNOWN |
@@ -433,16 +478,25 @@ hrx_status_t ggml_hrx2_loom_jit_amdgpu_compile(
   option_dict.next = &amdgpu_options;
   option_dict.entries = emit_entries;
   option_dict.entry_count = options->artifact_identifier ? 1 : 0;
+  loomc_artifact_manifest_options_t manifest_options = {};
+  manifest_options.type = LOOMC_STRUCTURE_TYPE_ARTIFACT_MANIFEST_OPTIONS;
+  manifest_options.structure_size = sizeof(manifest_options);
+  manifest_options.next = &option_dict;
+  manifest_options.mode = LOOMC_ARTIFACT_MANIFEST_MODE_DETAILS;
+  loomc_compile_report_options_t report_options = {};
+  report_options.type = LOOMC_STRUCTURE_TYPE_COMPILE_REPORT_OPTIONS;
+  report_options.structure_size = sizeof(report_options);
+  report_options.next = &manifest_options;
+  report_options.mode = LOOMC_COMPILE_REPORT_MODE_DETAILS;
   loomc_emit_options_t emit_options = {};
   emit_options.type = LOOMC_STRUCTURE_TYPE_EMIT_OPTIONS;
   emit_options.structure_size = sizeof(emit_options);
-  emit_options.next = &option_dict;
+  emit_options.next = &report_options;
   emit_options.artifact_format =
       loomc_make_cstring_view(LOOMC_ARTIFACT_FORMAT_AMDGPU_HSACO);
   emit_options.identifier =
       loomc_make_cstring_view(options->artifact_identifier);
-  emit_options.artifact_flags = LOOMC_EMIT_ARTIFACT_FLAG_PRIMARY |
-                                LOOMC_EMIT_ARTIFACT_FLAG_MANIFEST_JSON;
+  emit_options.artifact_flags = LOOMC_EMIT_ARTIFACT_FLAG_PRIMARY;
   status = loomc_emit_module(jit->target_environment, workspace.get(),
                              module.get(), &emit_options,
                              loomc_allocator_system(), result.out());
@@ -470,9 +524,17 @@ hrx_status_t ggml_hrx2_loom_jit_amdgpu_compile(
   hrx_status = ggml_hrx2_loom_jit_copy_artifact_bytes(
       hsaco, &out_result->hsaco_data, &out_result->hsaco_size, false);
   if (hrx_status_is_ok(hrx_status)) {
+    const loomc_artifact_t* report = ggml_hrx2_loom_jit_find_artifact(
+        result.get(), LOOMC_ARTIFACT_KIND_REPORT,
+        loomc_make_cstring_view(LOOMC_ARTIFACT_FORMAT_COMPILE_REPORT_JSON));
+    hrx_status = ggml_hrx2_loom_jit_copy_artifact_bytes(
+        report, reinterpret_cast<void**>(&out_result->compile_report_json),
+        &out_result->compile_report_json_size, true);
+  }
+  if (hrx_status_is_ok(hrx_status)) {
     const loomc_artifact_t* manifest = ggml_hrx2_loom_jit_find_artifact(
-        result.get(), LOOMC_ARTIFACT_KIND_MANIFEST,
-        loomc_make_cstring_view(LOOMC_ARTIFACT_FORMAT_JSON));
+        result.get(), LOOMC_ARTIFACT_KIND_REPORT,
+        loomc_make_cstring_view(LOOMC_ARTIFACT_FORMAT_ARTIFACT_MANIFEST_JSON));
     hrx_status = ggml_hrx2_loom_jit_copy_artifact_bytes(
         manifest, reinterpret_cast<void**>(&out_result->manifest_json),
         &out_result->manifest_json_size, true);

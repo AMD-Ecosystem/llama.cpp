@@ -2,6 +2,7 @@ config.decl @hrx2.shape.k : %value: index where [range(%value, 32, 8192), mul(%v
 config.decl @hrx2.shape.rows : %value: index where [range(%value, 1, 8192)]
 config.decl @hrx2.shape.cols : %value: index where [range(%value, 1, 4096)]
 config.decl @hrx2.tuning.workgroup_size : %value: index where [range(%value, 32, 256), mul(%value, 32)]
+config.decl @hrx2.tuning.q8_0_f32.unroll_factor : %value: index where [range(%value, 0, 1024)]
 
 func.template<hrx2.q8_0_f32.product> priority(1) @q8_0_f32_product_fallback(%q: i8, %d_f16: f16, %rhs: f32) -> (f32) {
   %q_f32 = scalar.sitofp %q : i8 to f32
@@ -11,7 +12,7 @@ func.template<hrx2.q8_0_f32.product> priority(1) @q8_0_f32_product_fallback(%q: 
   func.return %product : f32
 }
 
-kernel.def @hrx2_mul_mat_q8_0_f32(%k: index, %rows: index, %cols: index) {
+kernel.def export("hrx2_mul_mat_q8_0_f32") @hrx2_mul_mat_q8_0_f32(%k: index, %rows: index, %cols: index) {
   %unit = index.constant 1 : index
   %workgroup_size = index.constant 256 : index
   kernel.launch.config workgroups(%rows, %cols, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
@@ -81,7 +82,7 @@ kernel.def @hrx2_mul_mat_q8_0_f32(%k: index, %rows: index, %cols: index) {
   kernel.return
 }
 
-kernel.def @hrx2_mul_mat_q8_0_f32_static() {
+kernel.def export("hrx2_mul_mat_q8_0_f32_static") @hrx2_mul_mat_q8_0_f32_static() {
   %unit = index.constant 1 : index
   %k = config.get @hrx2.shape.k : index
   %rows = config.get @hrx2.shape.rows : index
@@ -156,26 +157,187 @@ kernel.def @hrx2_mul_mat_q8_0_f32_static() {
   kernel.return
 }
 
-check.case @hrx2_mul_mat_q8_0_f32_zero_case {
-  %k = check.param.choice values([256, 512]) name("k") : index
-  %rows = check.param.choice values([16, 64]) name("rows") : index
-  %cols = check.param.choice values([1, 8]) name("cols") : index
+kernel.def export("hrx2_mul_mat_q8_0_f32_static_packed") @hrx2_mul_mat_q8_0_f32_static_packed() {
+  %unit = index.constant 1 : index
+  %k = config.get @hrx2.shape.k : index
+  %rows = config.get @hrx2.shape.rows : index
+  %cols = config.get @hrx2.shape.cols : index
+  %workgroup_size = config.get @hrx2.tuning.workgroup_size : index
+  kernel.launch.config workgroups(%rows, %cols, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%src0: buffer, %src1: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero_index = index.constant 0 : index
   %qk = index.constant 32 : index
   %block_bytes = index.constant 34 : index
-  %blocks_per_row = index.div %k, %qk : index
-  %total_blocks = index.mul %rows, %blocks_per_row : index
-  %src0_bytes = index.mul %total_blocks, %block_bytes : index
-  %src1_count = index.mul %cols, %k : index
-  %dst_count = index.mul %cols, %rows : index
-  %src0 = check.generate.fill value(0) : tensor<[%src0_bytes]xi8>
-  %src1 = check.generate.iota offset(-1.0) step(0.00390625) : tensor<[%src1_count]xf32>
-  %dst = check.generate.fill value(1.0) : tensor<[%dst_count]xf32>
-  %expected = check.generate.fill value(0.0) : tensor<[%dst_count]xf32>
-  func.call @hrx2_mul_mat_q8_0_f32(%k, %rows, %cols, %src0, %src1, %dst) : (index, index, index, tensor<[%src0_bytes]xi8>, tensor<[%src1_count]xf32>, tensor<[%dst_count]xf32>)
-  check.expect.close actual(%dst) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%dst_count]xf32>
-  check.return
+  %block_f16s = index.constant 17 : index
+  %qs_offset = index.constant 2 : index
+  %k = config.get @hrx2.shape.k : index
+  %rows = config.get @hrx2.shape.rows : index
+  %cols = config.get @hrx2.shape.cols : index
+  %workgroup_size = config.get @hrx2.tuning.workgroup_size : index
+  %k_bounded = index.assume %k [range(%k, 32, 8192)] : index
+  %rows_bounded = index.assume %rows [range(%rows, 1, 8192)] : index
+  %cols_bounded = index.assume %cols [range(%cols, 1, 4096)] : index
+  %one = index.constant 1 : index
+  %four = index.constant 4 : index
+  %eight = index.constant 8 : index
+  %row0 = kernel.workgroup.id<x> : index
+  %row = index.assume %row0 [range(%row0, 0, 8191)] : index
+  %col0 = kernel.workgroup.id<y> : index
+  %col = index.assume %col0 [range(%col0, 0, 4095)] : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
+  %zero_f32 = scalar.constant 0.0 : f32
+
+  %blocks_per_row = index.div %k_bounded, %qk : index
+  %total_blocks = index.mul %rows_bounded, %blocks_per_row : index
+  %src0_i8_count = index.mul %total_blocks, %block_bytes : index
+  %src0_f16_count = index.mul %total_blocks, %block_f16s : index
+  %src1_count = index.mul %cols_bounded, %k_bounded : index
+  %dst_count = index.mul %cols_bounded, %rows_bounded : index
+
+  %block_lane = index.rem %lane, %eight : index
+  %block_slot = index.div %lane, %eight : index
+  %in_block_base = index.mul %block_lane, %four : index
+  %block_step = index.div %workgroup_size, %eight : index
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %src1_global = buffer.assume.memory_space<global> %src1 : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_noalias, %src1_noalias, %dst_noalias = buffer.assume.noalias %src0_global, %src1_global, %dst_global : buffer, buffer, buffer
+  %src0_i8_view = buffer.view %src0_noalias[%base] : buffer -> view<[%src0_i8_count]xi8, #dense>
+  %src0_f16_view = buffer.view %src0_noalias[%base] : buffer -> view<[%src0_f16_count]xf16, #dense>
+  %src1_view = buffer.view %src1_noalias[%base] : buffer -> view<[%src1_count]xf32, #dense>
+  %dst_view = buffer.view %dst_noalias[%base] : buffer -> view<[%dst_count]xf32, #dense>
+
+  %row_block_base = index.mul %row, %blocks_per_row : index
+  %src1_col_base = index.mul %col, %k_bounded : index
+  %sum = scf.for %block_idx = [%block_slot to %blocks_per_row step %block_step](%acc = %zero_f32 : f32) -> (f32) {
+    %src_base_block = index.mul %block_idx, %qk : index
+    %src_base = index.add %src_base_block, %in_block_base : index
+    %linear_block = index.add %row_block_base, %block_idx : index
+    %block_byte_base = index.mul %linear_block, %block_bytes : index
+    %q_byte_payload = index.add %block_byte_base, %qs_offset : index
+    %q_byte = index.add %q_byte_payload, %in_block_base : index
+    %q_byte_offset = index.cast %q_byte : index to offset
+    %q_word_view = buffer.view %src0_noalias[%q_byte_offset] : buffer -> view<1xi32, #dense>
+    %q_packed = vector.load %q_word_view[%zero_index] : view<1xi32, #dense> -> vector<1xi32>
+    %q_i32 = vector.bitunpacks<8> %q_packed : vector<1xi32> -> vector<4xi32>
+    %q_f32 = vector.sitofp %q_i32 : vector<4xi32> to vector<4xf32>
+    %src1_index = index.add %src1_col_base, %src_base : index
+    %rhs = vector.load %src1_view[%src1_index] : view<[%src1_count]xf32, #dense> -> vector<4xf32>
+    %block_f16_base = index.mul %linear_block, %block_f16s : index
+    %d_f16 = view.load %src0_f16_view[%block_f16_base] : view<[%src0_f16_count]xf16, #dense> -> f16
+    %d = scalar.extf %d_f16 : f16 to f32
+    %d_vec = vector.splat %d : vector<4xf32>
+    %q_scaled = vector.mulf<reassoc|nnan|ninf|nsz|contract> %q_f32, %d_vec : vector<4xf32>
+    %next = vector.dotf %q_scaled, %rhs, %acc : vector<4xf32>, vector<4xf32>, f32
+    scf.yield %next : f32
+  }
+
+  %dot = kernel.workgroup.reduce<addf> %sum : f32
+  %dst_col_base = index.mul %col, %rows_bounded : index
+  %dst_index = index.add %dst_col_base, %row : index
+  %lane_i32 = index.cast %lane : index to i32
+  %zero_i32 = scalar.constant 0 : i32
+  %is_lane0 = scalar.cmpi eq, %lane_i32, %zero_i32 : i32
+  scf.if %is_lane0 {
+    view.store %dot, %dst_view[%dst_index] : f32, view<[%dst_count]xf32, #dense>
+  }
+  kernel.return
 }
 
-check.benchmark<@hrx2_mul_mat_q8_0_f32_zero_case>
-check.benchmark<@hrx2_mul_mat_q8_0_f32_zero_case> @hrx2_mul_mat_q8_0_f32_decode {k = 512, rows = 64, cols = 1}
-check.benchmark<@hrx2_mul_mat_q8_0_f32_zero_case> @hrx2_mul_mat_q8_0_f32_small_prefill {k = 512, rows = 64, cols = 8}
+kernel.def export("hrx2_mul_mat_q8_0_f32_static_packed_scf_unroll") @hrx2_mul_mat_q8_0_f32_static_packed_scf_unroll() {
+  %unit = index.constant 1 : index
+  %k = config.get @hrx2.shape.k : index
+  %rows = config.get @hrx2.shape.rows : index
+  %cols = config.get @hrx2.shape.cols : index
+  %workgroup_size = config.get @hrx2.tuning.workgroup_size : index
+  kernel.launch.config workgroups(%rows, %cols, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%src0: buffer, %src1: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero_index = index.constant 0 : index
+  %qk = index.constant 32 : index
+  %block_bytes = index.constant 34 : index
+  %block_f16s = index.constant 17 : index
+  %qs_offset = index.constant 2 : index
+  %k = config.get @hrx2.shape.k : index
+  %rows = config.get @hrx2.shape.rows : index
+  %cols = config.get @hrx2.shape.cols : index
+  %workgroup_size = config.get @hrx2.tuning.workgroup_size : index
+  %q8_unroll_factor = config.get @hrx2.tuning.q8_0_f32.unroll_factor : index
+  %k_bounded = index.assume %k [range(%k, 32, 8192)] : index
+  %rows_bounded = index.assume %rows [range(%rows, 1, 8192)] : index
+  %cols_bounded = index.assume %cols [range(%cols, 1, 4096)] : index
+  %one = index.constant 1 : index
+  %four = index.constant 4 : index
+  %eight = index.constant 8 : index
+  %row0 = kernel.workgroup.id<x> : index
+  %row = index.assume %row0 [range(%row0, 0, 8191)] : index
+  %col0 = kernel.workgroup.id<y> : index
+  %col = index.assume %col0 [range(%col0, 0, 4095)] : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
+  %zero_f32 = scalar.constant 0.0 : f32
+
+  %blocks_per_row = index.div %k_bounded, %qk : index
+  %total_blocks = index.mul %rows_bounded, %blocks_per_row : index
+  %src0_i8_count = index.mul %total_blocks, %block_bytes : index
+  %src0_f16_count = index.mul %total_blocks, %block_f16s : index
+  %src1_count = index.mul %cols_bounded, %k_bounded : index
+  %dst_count = index.mul %cols_bounded, %rows_bounded : index
+
+  %block_lane = index.rem %lane, %eight : index
+  %block_slot = index.div %lane, %eight : index
+  %in_block_base = index.mul %block_lane, %four : index
+  %block_step = index.div %workgroup_size, %eight : index
+  %trip_count = index.div %blocks_per_row, %block_step : index
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %src1_global = buffer.assume.memory_space<global> %src1 : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_noalias, %src1_noalias, %dst_noalias = buffer.assume.noalias %src0_global, %src1_global, %dst_global : buffer, buffer, buffer
+  %src0_i8_view = buffer.view %src0_noalias[%base] : buffer -> view<[%src0_i8_count]xi8, #dense>
+  %src0_f16_view = buffer.view %src0_noalias[%base] : buffer -> view<[%src0_f16_count]xf16, #dense>
+  %src1_view = buffer.view %src1_noalias[%base] : buffer -> view<[%src1_count]xf32, #dense>
+  %dst_view = buffer.view %dst_noalias[%base] : buffer -> view<[%dst_count]xf32, #dense>
+
+  %row_block_base = index.mul %row, %blocks_per_row : index
+  %src1_col_base = index.mul %col, %k_bounded : index
+  %sum = scf.for %unroll_iter = [%zero_index to %trip_count step %one](%acc = %zero_f32 : f32) -> (f32) unroll(%q8_unroll_factor) {
+    %block_iter_step = index.mul %unroll_iter, %block_step : index
+    %block_idx_raw = index.add %block_slot, %block_iter_step : index
+    %block_idx = index.assume %block_idx_raw [range(%block_idx_raw, 0, 255)] : index
+    %src_base_block = index.mul %block_idx, %qk : index
+    %src_base = index.add %src_base_block, %in_block_base : index
+    %linear_block = index.add %row_block_base, %block_idx : index
+    %block_byte_base = index.mul %linear_block, %block_bytes : index
+    %q_byte_payload = index.add %block_byte_base, %qs_offset : index
+    %q_byte = index.add %q_byte_payload, %in_block_base : index
+    %q_byte_offset = index.cast %q_byte : index to offset
+    %q_word_view = buffer.view %src0_noalias[%q_byte_offset] : buffer -> view<1xi32, #dense>
+    %q_packed = vector.load %q_word_view[%zero_index] : view<1xi32, #dense> -> vector<1xi32>
+    %q_i32 = vector.bitunpacks<8> %q_packed : vector<1xi32> -> vector<4xi32>
+    %q_f32 = vector.sitofp %q_i32 : vector<4xi32> to vector<4xf32>
+    %src1_index = index.add %src1_col_base, %src_base : index
+    %rhs = vector.load %src1_view[%src1_index] : view<[%src1_count]xf32, #dense> -> vector<4xf32>
+    %block_f16_base = index.mul %linear_block, %block_f16s : index
+    %d_f16 = view.load %src0_f16_view[%block_f16_base] : view<[%src0_f16_count]xf16, #dense> -> f16
+    %d = scalar.extf %d_f16 : f16 to f32
+    %d_vec = vector.splat %d : vector<4xf32>
+    %q_scaled = vector.mulf<reassoc|nnan|ninf|nsz|contract> %q_f32, %d_vec : vector<4xf32>
+    %next = vector.dotf %q_scaled, %rhs, %acc : vector<4xf32>, vector<4xf32>, f32
+    scf.yield %next : f32
+  }
+
+  %dot = kernel.workgroup.reduce<addf> %sum : f32
+  %dst_col_base = index.mul %col, %rows_bounded : index
+  %dst_index = index.add %dst_col_base, %row : index
+  %lane_i32 = index.cast %lane : index to i32
+  %zero_i32 = scalar.constant 0 : i32
+  %is_lane0 = scalar.cmpi eq, %lane_i32, %zero_i32 : i32
+  scf.if %is_lane0 {
+    view.store %dot, %dst_view[%dst_index] : f32, view<[%dst_count]xf32, #dense>
+  }
+  kernel.return
+}

@@ -621,6 +621,9 @@ static bool ggml_backend_hrx2_route_shape_matches(
             return false;
         }
     }
+    if (route->k_multiple_of_guard != 0 && (shape.k % route->k_multiple_of_guard) != 0) {
+        return false;
+    }
     return true;
 }
 
@@ -712,6 +715,12 @@ static bool ggml_backend_hrx2_make_mul_mat_q8_0_plan(
             binding.value = std::to_string(shape.rows);
         } else if (spec.value_source == "shape.cols") {
             binding.value = std::to_string(shape.cols);
+        } else if (spec.value_source == "shape.q8_full_unroll_factor") {
+            const uint32_t block_step = route->workgroup_size[0] / 8;
+            if (block_step == 0 || (shape.k / 32) % block_step != 0) {
+                return false;
+            }
+            binding.value = std::to_string((shape.k / 32) / block_step);
         } else if (spec.value_source.empty()) {
             binding.value = spec.value;
         } else {
