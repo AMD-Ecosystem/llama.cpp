@@ -545,10 +545,148 @@
       }
     },
     {
-      "id": "mul_mat_q8_0_f32_contiguous",
+      "id": "mul_mat_q8_0_f32_k512_r64_c8_wg64",
       "family": "mul_mat_q8_0_f32",
       "op": "MUL_MAT",
       "target_key": "gfx1100",
+      "source_id": "mul_mat_q8_0_f32",
+      "artifact_id": "mul_mat_q8_0_f32_static_bc",
+      "root_symbol": "@hrx2_mul_mat_q8_0_f32_static",
+      "export_name": "hrx2_mul_mat_q8_0_f32_static",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 110,
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 3,
+        "constant_byte_length": 0
+      },
+      "dispatch": {
+        "workgroup_size": [
+          64,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "exact_q8_0_f32_k512_r64_c8",
+        "k_min": 512,
+        "k_max": 512,
+        "rows_min": 64,
+        "rows_max": 64,
+        "cols_min": 8,
+        "cols_max": 8
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.k",
+            "source": "shape.k"
+          },
+          {
+            "key": "@hrx2.shape.rows",
+            "source": "shape.rows"
+          },
+          {
+            "key": "@hrx2.shape.cols",
+            "source": "shape.cols"
+          },
+          {
+            "key": "@hrx2.tuning.workgroup_size",
+            "value": "64"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "Q8_0",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "evidence_summary": {
+        "phase": "gfx1100-q8-0-f32-preflight-20260612",
+        "benchmark_p50_ns": 21711,
+        "benchmark_p90_ns": 22741,
+        "compile_spills": 0,
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "mul_mat_q8_0_f32_k256_r16_c8_wg256",
+      "family": "mul_mat_q8_0_f32",
+      "op": "MUL_MAT",
+      "target_key": "gfx1100",
+      "source_id": "mul_mat_q8_0_f32",
+      "artifact_id": "mul_mat_q8_0_f32_static_bc",
+      "root_symbol": "@hrx2_mul_mat_q8_0_f32_static",
+      "export_name": "hrx2_mul_mat_q8_0_f32_static",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 120,
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 3,
+        "constant_byte_length": 0
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "exact_q8_0_f32_k256_r16_c8",
+        "k_min": 256,
+        "k_max": 256,
+        "rows_min": 16,
+        "rows_max": 16,
+        "cols_min": 8,
+        "cols_max": 8
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.k",
+            "source": "shape.k"
+          },
+          {
+            "key": "@hrx2.shape.rows",
+            "source": "shape.rows"
+          },
+          {
+            "key": "@hrx2.shape.cols",
+            "source": "shape.cols"
+          },
+          {
+            "key": "@hrx2.tuning.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "Q8_0",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "evidence_summary": {
+        "phase": "gfx1100-q8-0-f32-test-shape-20260612",
+        "benchmark_p50_ns": 20401,
+        "benchmark_p90_ns": 21560,
+        "compile_spills": 0,
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "mul_mat_q8_0_f32_contiguous",
+      "family": "mul_mat_q8_0_f32",
+      "op": "MUL_MAT",
+      "target_key": "",
       "source_id": "mul_mat_q8_0_f32",
       "artifact_id": "mul_mat_q8_0_f32_contiguous_bc",
       "root_symbol": "@hrx2_mul_mat_q8_0_f32",
@@ -587,6 +725,27 @@
       "evidence_summary": {
         "phase": "phase0.1",
         "ggml_cpu_reference": "required"
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.k",
+            "source": "shape.k"
+          },
+          {
+            "key": "@hrx2.shape.rows",
+            "source": "shape.rows"
+          },
+          {
+            "key": "@hrx2.shape.cols",
+            "source": "shape.cols"
+          },
+          {
+            "key": "@hrx2.tuning.workgroup_size",
+            "value": "256"
+          }
+        ]
       }
     },
     {

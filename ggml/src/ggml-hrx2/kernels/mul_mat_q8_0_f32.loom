@@ -1,17 +1,7 @@
-amdgpu.target<gfx1100> @gfx1100
-
 config.decl @hrx2.shape.k : %value: index where [range(%value, 32, 8192), mul(%value, 32)]
 config.decl @hrx2.shape.rows : %value: index where [range(%value, 1, 8192)]
 config.decl @hrx2.shape.cols : %value: index where [range(%value, 1, 4096)]
 config.decl @hrx2.tuning.workgroup_size : %value: index where [range(%value, 32, 256), mul(%value, 32)]
-
-func.template<hrx2.q8_0_f32.product> target(@gfx1100) priority(20) @q8_0_f32_product_gfx1100(%q: i8, %d_f16: f16, %rhs: f32) -> (f32) {
-  %q_f32 = scalar.sitofp %q : i8 to f32
-  %d = scalar.extf %d_f16 : f16 to f32
-  %scaled = scalar.mulf<reassoc|nnan|ninf|nsz> %q_f32, %d : f32
-  %product = scalar.mulf<reassoc|nnan|ninf|nsz> %scaled, %rhs : f32
-  func.return %product : f32
-}
 
 func.template<hrx2.q8_0_f32.product> priority(1) @q8_0_f32_product_fallback(%q: i8, %d_f16: f16, %rhs: f32) -> (f32) {
   %q_f32 = scalar.sitofp %q : i8 to f32
@@ -21,7 +11,7 @@ func.template<hrx2.q8_0_f32.product> priority(1) @q8_0_f32_product_fallback(%q: 
   func.return %product : f32
 }
 
-kernel.def target(@gfx1100) @hrx2_mul_mat_q8_0_f32(%k: index, %rows: index, %cols: index) {
+kernel.def @hrx2_mul_mat_q8_0_f32(%k: index, %rows: index, %cols: index) {
   %unit = index.constant 1 : index
   %workgroup_size = index.constant 256 : index
   kernel.launch.config workgroups(%rows, %cols, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
@@ -91,7 +81,7 @@ kernel.def target(@gfx1100) @hrx2_mul_mat_q8_0_f32(%k: index, %rows: index, %col
   kernel.return
 }
 
-kernel.def target(@gfx1100) @hrx2_mul_mat_q8_0_f32_static() {
+kernel.def @hrx2_mul_mat_q8_0_f32_static() {
   %unit = index.constant 1 : index
   %k = config.get @hrx2.shape.k : index
   %rows = config.get @hrx2.shape.rows : index

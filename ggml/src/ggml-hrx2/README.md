@@ -35,12 +35,13 @@ the generated `artifacts/*.loombc` files from the build tree.
 Keep reusable Loom sources target-neutral unless an algorithm genuinely depends
 on target-specific provider code. Use catalog `target_key` values for measured
 routes: tuned winners are target-qualified, while portable fallback routes leave
-`target_key` empty and compile for the current HRX device architecture. If a
-kernel source is truly target-specific, keep it as a separate source/artifact
-entry, for example `foo_gfx1100.loom`, and let route metadata select that
-source only for matching targets. A new target such as `gfx1151` should get its
-own tuned route rows, and optionally its own target-specific Loom source, after
-evidence is collected.
+`target_key` empty and compile for the current HRX device architecture. Keep
+scalar/vector baselines target-neutral. If a kernel source is truly
+target-specific, such as a chip-specific WMMA layout, keep it as a separate
+source/artifact entry and let route metadata select that source only for
+matching targets. A new target such as `gfx1151` should get its own tuned route
+rows, and only needs its own Loom source when the algorithm really depends on
+target-specific primitives.
 
 Phase0.2 adds exact-shape Q8_0/F32 `MUL_MAT` JIT routes. These routes use
 `specialization.mode = "jit_config"` and bind Loom `config.decl` values from
