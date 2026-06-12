@@ -83,6 +83,31 @@ jobs:
       CCACHE_COMPILERCHECK: content
 
     steps:
+      # Logged first (if: always(), before any checkout) so the specific
+      # self-hosted runner behind a failure is greppable from the job log via
+      # RUNNER_NAME, without querying the GitHub API. NOTE: a gfx1201
+      # "Initialize containers" failure happens before any step runs, so this
+      # block cannot capture that mode -- only the API runner_name identifies it.
+      - name: Debug (runner identity)
+        if: always()
+        run: |
+          set +e
+          echo "===== RUNNER IDENTITY ====="
+          echo "RUNNER_NAME=${RUNNER_NAME}"
+          echo "RUNNER_OS=${RUNNER_OS}  RUNNER_ENVIRONMENT=${RUNNER_ENVIRONMENT}"
+          echo "GITHUB_RUN_ID=${GITHUB_RUN_ID} attempt=${GITHUB_RUN_ATTEMPT} job=${GITHUB_JOB}"
+          echo "matrix.name=${{ matrix.name }} gpu_target=${{ matrix.gpu_target }} runs_on=${{ matrix.runs_on }}"
+          echo "hostname=$(hostname)"
+          uname -a || true
+          cat /etc/os-release || true
+          id || true
+          ls -l /dev/kfd || echo "MISSING /dev/kfd"
+          ls -l /dev/dri || echo "MISSING /dev/dri"
+          lspci | grep -iE 'vga|display|amd/ati' || echo "lspci unavailable / no GPU match"
+          env | grep -E '^(RUNNER_|GITHUB_)' | sort || true
+          echo "===== END RUNNER IDENTITY ====="
+          true
+
       - name: Checkout llama.cpp (under test)
         uses: actions/checkout@v6
         with:
@@ -110,6 +135,15 @@ jobs:
 
       - name: Fetch ROCm assets
         run: "${BENCH_DIR}/scripts/hrx/fetch-rocm-assets.sh"
+
+      # Dump GPU/board identity (serial/VBIOS/fw via rocminfo/amd-smi/rocm-smi)
+      # and fail fast on gross breakage (no /dev/kfd, dead rocminfo, expected
+      # gfx arch not enumerated) before the costly HRX/llama build. Runs here
+      # because the diag binaries only exist in the composed prefix after the
+      # fetch step. Does NOT detect the gfx1151 coherence NaN flake.
+      - name: GPU health check
+        timeout-minutes: 3
+        run: "${BENCH_DIR}/scripts/hrx/runner-health.sh"
 
       - name: Build HRX
         run: "${BENCH_DIR}/scripts/hrx/build-hrx.sh"
