@@ -22,35 +22,37 @@ def main():
     artifacts = catalog["artifacts"]
     args.artifact_root.mkdir(parents=True, exist_ok=True)
 
-    linked_artifacts = {}
+    artifact_groups = {}
     for route in catalog["routes"]:
         source = sources[route["source_id"]]
         artifact = artifacts[route["artifact_id"]]
         if artifact.get("format") != "loom-bytecode":
             continue
         artifact_key = route["artifact_id"]
-        link_key = (route["source_id"], route["root_symbol"])
-        existing_link_key = linked_artifacts.get(artifact_key)
-        if existing_link_key is not None:
-            if existing_link_key != link_key:
-                raise SystemExit(
-                    f"artifact {artifact_key} is referenced with multiple source/root pairs: "
-                    f"{existing_link_key} and {link_key}"
-                )
-            continue
-        linked_artifacts[artifact_key] = link_key
+        group = artifact_groups.setdefault(artifact_key, {
+            "source_id": route["source_id"],
+            "source_path": args.source_root / source["path"],
+            "artifact_path": args.artifact_root / artifact["path"],
+            "roots": [],
+        })
+        if group["source_id"] != route["source_id"]:
+            raise SystemExit(f"artifact {artifact_key} is referenced by multiple sources")
+        if route["root_symbol"] not in group["roots"]:
+            group["roots"].append(route["root_symbol"])
 
-        source_path = args.source_root / source["path"]
-        artifact_path = args.artifact_root / artifact["path"]
+    for group in artifact_groups.values():
+        source_path = group["source_path"]
+        artifact_path = group["artifact_path"]
         artifact_path.parent.mkdir(parents=True, exist_ok=True)
         cmd = [
             str(args.loom_link),
             str(source_path),
             "--mode=selective",
-            f"--root={route['root_symbol']}",
             "--to=bytecode",
             f"--output={artifact_path}",
         ]
+        for root_symbol in group["roots"]:
+            cmd.insert(-2, f"--root={root_symbol}")
         if args.strip_check:
             cmd.insert(-2, "--strip-check")
         subprocess.run(cmd, check=True)

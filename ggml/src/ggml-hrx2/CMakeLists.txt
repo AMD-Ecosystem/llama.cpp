@@ -8,7 +8,7 @@ set(GGML_HRX2_ARTIFACT_ROOT "${GGML_HRX2_GENERATED_DIR}/catalog")
 set(GGML_HRX2_EMBEDDED_CPP "${GGML_HRX2_GENERATED_DIR}/hrx2_embedded_catalog.cpp")
 set(GGML_HRX2_EMBEDDED_H "${GGML_HRX2_GENERATED_DIR}/hrx2_embedded_catalog.h")
 set(GGML_HRX2_ARTIFACTS
-    "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/rms_norm_f32_contiguous.loombc"
+    "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/rms_norm_f32.loombc"
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/mul_mat_q8_0_f32_contiguous.loombc"
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/mul_mat_q8_0_f32_static.loombc"
 )

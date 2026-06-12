@@ -1,6 +1,6 @@
 {
   "schema": "ggml-hrx2-catalog-v1",
-  "catalog_id": "hrx2-phase0.2",
+  "catalog_id": "hrx2-phase0.5",
   "generated_at": "source",
   "targets": [
     {
@@ -17,8 +17,8 @@
     }
   },
   "artifacts": {
-    "rms_norm_f32_contiguous_bc": {
-      "path": "artifacts/rms_norm_f32_contiguous.loombc",
+    "rms_norm_f32_bc": {
+      "path": "artifacts/rms_norm_f32.loombc",
       "format": "loom-bytecode",
       "storage": "embedded"
     },
@@ -45,12 +45,449 @@
   ],
   "routes": [
     {
-      "id": "rms_norm_f32_contiguous",
+      "id": "rms_norm_f32_n64_r60_vector_vw4_wg1024",
       "family": "rms_norm_f32",
       "op": "RMS_NORM",
       "target_key": "gfx1100",
       "source_id": "rms_norm_f32",
-      "artifact_id": "rms_norm_f32_contiguous_bc",
+      "artifact_id": "rms_norm_f32_bc",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "export_name": "hrx2_rms_norm_f32_static_vector_tail",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 170,
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 3,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          1024,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "rms_norm_f32_n64_r60_vector_vw4_wg1024",
+        "ncols_min": 64,
+        "ncols_max": 64,
+        "nrows_min": 60,
+        "nrows_max": 60
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.ncols",
+            "source": "shape.ncols"
+          },
+          {
+            "key": "@hrx2.shape.nrows",
+            "source": "shape.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.workgroup_size",
+            "value": "1024"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.vector_width",
+            "value": "4"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "evidence_summary": {
+        "phase": "rms-norm-standalone-done-gfx1100",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "rms_norm_f32_n1025_r60_vector_tail_vw2_wg64",
+      "family": "rms_norm_f32",
+      "op": "RMS_NORM",
+      "target_key": "gfx1100",
+      "source_id": "rms_norm_f32",
+      "artifact_id": "rms_norm_f32_bc",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "export_name": "hrx2_rms_norm_f32_static_vector_tail",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 160,
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 3,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          64,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "rms_norm_f32_n1025_r60_vector_tail_vw2_wg64",
+        "ncols_min": 1025,
+        "ncols_max": 1025,
+        "nrows_min": 60,
+        "nrows_max": 60
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.ncols",
+            "source": "shape.ncols"
+          },
+          {
+            "key": "@hrx2.shape.nrows",
+            "source": "shape.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.workgroup_size",
+            "value": "64"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.vector_width",
+            "value": "2"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "evidence_summary": {
+        "phase": "rms-norm-standalone-done-gfx1100",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "rms_norm_f32_n4096_r1_vector_vw4_wg512",
+      "family": "rms_norm_f32",
+      "op": "RMS_NORM",
+      "target_key": "gfx1100",
+      "source_id": "rms_norm_f32",
+      "artifact_id": "rms_norm_f32_bc",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "export_name": "hrx2_rms_norm_f32_static_vector_tail",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 150,
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 3,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          512,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "rms_norm_f32_n4096_r1_vector_vw4_wg512",
+        "ncols_min": 4096,
+        "ncols_max": 4096,
+        "nrows_min": 1,
+        "nrows_max": 1
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.ncols",
+            "source": "shape.ncols"
+          },
+          {
+            "key": "@hrx2.shape.nrows",
+            "source": "shape.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.workgroup_size",
+            "value": "512"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.vector_width",
+            "value": "4"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "evidence_summary": {
+        "phase": "rms-norm-standalone-done-gfx1100",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "rms_norm_f32_n4096_r32_scalar_wg1024",
+      "family": "rms_norm_f32",
+      "op": "RMS_NORM",
+      "target_key": "gfx1100",
+      "source_id": "rms_norm_f32",
+      "artifact_id": "rms_norm_f32_bc",
+      "root_symbol": "@hrx2_rms_norm_f32_static_scalar",
+      "export_name": "hrx2_rms_norm_f32_static_scalar",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 140,
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 3,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          1024,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "rms_norm_f32_n4096_r32_scalar_wg1024",
+        "ncols_min": 4096,
+        "ncols_max": 4096,
+        "nrows_min": 32,
+        "nrows_max": 32
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.ncols",
+            "source": "shape.ncols"
+          },
+          {
+            "key": "@hrx2.shape.nrows",
+            "source": "shape.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.workgroup_size",
+            "value": "1024"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "evidence_summary": {
+        "phase": "rms-norm-standalone-done-gfx1100",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "rms_norm_f32_n512_r32_vector_vw2_wg512",
+      "family": "rms_norm_f32",
+      "op": "RMS_NORM",
+      "target_key": "gfx1100",
+      "source_id": "rms_norm_f32",
+      "artifact_id": "rms_norm_f32_bc",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "export_name": "hrx2_rms_norm_f32_static_vector_tail",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 130,
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 3,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          512,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "rms_norm_f32_n512_r32_vector_vw2_wg512",
+        "ncols_min": 512,
+        "ncols_max": 512,
+        "nrows_min": 32,
+        "nrows_max": 32
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.ncols",
+            "source": "shape.ncols"
+          },
+          {
+            "key": "@hrx2.shape.nrows",
+            "source": "shape.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.workgroup_size",
+            "value": "512"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.vector_width",
+            "value": "2"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "evidence_summary": {
+        "phase": "rms-norm-standalone-done-gfx1100",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "rms_norm_f32_n8192_r1_vector_vw4_wg1024",
+      "family": "rms_norm_f32",
+      "op": "RMS_NORM",
+      "target_key": "gfx1100",
+      "source_id": "rms_norm_f32",
+      "artifact_id": "rms_norm_f32_bc",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "export_name": "hrx2_rms_norm_f32_static_vector_tail",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 120,
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 3,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          1024,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "rms_norm_f32_n8192_r1_vector_vw4_wg1024",
+        "ncols_min": 8192,
+        "ncols_max": 8192,
+        "nrows_min": 1,
+        "nrows_max": 1
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.ncols",
+            "source": "shape.ncols"
+          },
+          {
+            "key": "@hrx2.shape.nrows",
+            "source": "shape.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.workgroup_size",
+            "value": "1024"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.vector_width",
+            "value": "4"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "evidence_summary": {
+        "phase": "rms-norm-standalone-done-gfx1100",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "rms_norm_f32_n8192_r32_vector_vw4_wg512",
+      "family": "rms_norm_f32",
+      "op": "RMS_NORM",
+      "target_key": "gfx1100",
+      "source_id": "rms_norm_f32",
+      "artifact_id": "rms_norm_f32_bc",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "export_name": "hrx2_rms_norm_f32_static_vector_tail",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 110,
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 3,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          512,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "rms_norm_f32_n8192_r32_vector_vw4_wg512",
+        "ncols_min": 8192,
+        "ncols_max": 8192,
+        "nrows_min": 32,
+        "nrows_max": 32
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.ncols",
+            "source": "shape.ncols"
+          },
+          {
+            "key": "@hrx2.shape.nrows",
+            "source": "shape.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.workgroup_size",
+            "value": "512"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.vector_width",
+            "value": "4"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "evidence_summary": {
+        "phase": "rms-norm-standalone-done-gfx1100",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "rms_norm_f32_contiguous",
+      "family": "rms_norm_f32",
+      "op": "RMS_NORM",
+      "target_key": "",
+      "source_id": "rms_norm_f32",
+      "artifact_id": "rms_norm_f32_bc",
       "root_symbol": "@hrx2_rms_norm_f32",
       "export_name": "hrx2_rms_norm_f32",
       "loader_format": "amdgpu-hsaco",
@@ -61,7 +498,11 @@
         "constant_byte_length": 44
       },
       "dispatch": {
-        "workgroup_size": [512, 1, 1],
+        "workgroup_size": [
+          512,
+          1,
+          1
+        ],
         "rows_per_workgroup": 1,
         "cols_per_workgroup": 1
       },
@@ -71,6 +512,27 @@
         "ncols_max": 65536,
         "nrows_min": 1,
         "nrows_max": 1048576
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.ncols",
+            "source": "shape.ncols"
+          },
+          {
+            "key": "@hrx2.shape.nrows",
+            "source": "shape.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.workgroup_size",
+            "value": "512"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.vector_width",
+            "value": "2"
+          }
+        ]
       },
       "supports": {
         "src0_type": "F32",
@@ -99,7 +561,11 @@
         "constant_byte_length": 12
       },
       "dispatch": {
-        "workgroup_size": [256, 1, 1],
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
         "rows_per_workgroup": 1,
         "cols_per_workgroup": 1
       },
@@ -140,7 +606,11 @@
         "constant_byte_length": 0
       },
       "dispatch": {
-        "workgroup_size": [256, 1, 1],
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
         "rows_per_workgroup": 1,
         "cols_per_workgroup": 1
       },
@@ -159,10 +629,22 @@
       "specialization": {
         "mode": "jit_config",
         "bindings": [
-          {"key": "@hrx2.shape.k", "source": "shape.k"},
-          {"key": "@hrx2.shape.rows", "source": "shape.rows"},
-          {"key": "@hrx2.shape.cols", "source": "shape.cols"},
-          {"key": "@hrx2.tuning.workgroup_size", "value": "256"}
+          {
+            "key": "@hrx2.shape.k",
+            "source": "shape.k"
+          },
+          {
+            "key": "@hrx2.shape.rows",
+            "source": "shape.rows"
+          },
+          {
+            "key": "@hrx2.shape.cols",
+            "source": "shape.cols"
+          },
+          {
+            "key": "@hrx2.tuning.workgroup_size",
+            "value": "256"
+          }
         ]
       },
       "supports": {
@@ -193,7 +675,11 @@
         "constant_byte_length": 0
       },
       "dispatch": {
-        "workgroup_size": [128, 1, 1],
+        "workgroup_size": [
+          128,
+          1,
+          1
+        ],
         "rows_per_workgroup": 1,
         "cols_per_workgroup": 1
       },
@@ -212,10 +698,22 @@
       "specialization": {
         "mode": "jit_config",
         "bindings": [
-          {"key": "@hrx2.shape.k", "source": "shape.k"},
-          {"key": "@hrx2.shape.rows", "source": "shape.rows"},
-          {"key": "@hrx2.shape.cols", "source": "shape.cols"},
-          {"key": "@hrx2.tuning.workgroup_size", "value": "128"}
+          {
+            "key": "@hrx2.shape.k",
+            "source": "shape.k"
+          },
+          {
+            "key": "@hrx2.shape.rows",
+            "source": "shape.rows"
+          },
+          {
+            "key": "@hrx2.shape.cols",
+            "source": "shape.cols"
+          },
+          {
+            "key": "@hrx2.tuning.workgroup_size",
+            "value": "128"
+          }
         ]
       },
       "supports": {
@@ -246,7 +744,11 @@
         "constant_byte_length": 0
       },
       "dispatch": {
-        "workgroup_size": [128, 1, 1],
+        "workgroup_size": [
+          128,
+          1,
+          1
+        ],
         "rows_per_workgroup": 1,
         "cols_per_workgroup": 1
       },
@@ -265,10 +767,22 @@
       "specialization": {
         "mode": "jit_config",
         "bindings": [
-          {"key": "@hrx2.shape.k", "source": "shape.k"},
-          {"key": "@hrx2.shape.rows", "source": "shape.rows"},
-          {"key": "@hrx2.shape.cols", "source": "shape.cols"},
-          {"key": "@hrx2.tuning.workgroup_size", "value": "128"}
+          {
+            "key": "@hrx2.shape.k",
+            "source": "shape.k"
+          },
+          {
+            "key": "@hrx2.shape.rows",
+            "source": "shape.rows"
+          },
+          {
+            "key": "@hrx2.shape.cols",
+            "source": "shape.cols"
+          },
+          {
+            "key": "@hrx2.tuning.workgroup_size",
+            "value": "128"
+          }
         ]
       },
       "supports": {
@@ -299,7 +813,11 @@
         "constant_byte_length": 0
       },
       "dispatch": {
-        "workgroup_size": [128, 1, 1],
+        "workgroup_size": [
+          128,
+          1,
+          1
+        ],
         "rows_per_workgroup": 1,
         "cols_per_workgroup": 1
       },
@@ -318,10 +836,22 @@
       "specialization": {
         "mode": "jit_config",
         "bindings": [
-          {"key": "@hrx2.shape.k", "source": "shape.k"},
-          {"key": "@hrx2.shape.rows", "source": "shape.rows"},
-          {"key": "@hrx2.shape.cols", "source": "shape.cols"},
-          {"key": "@hrx2.tuning.workgroup_size", "value": "128"}
+          {
+            "key": "@hrx2.shape.k",
+            "source": "shape.k"
+          },
+          {
+            "key": "@hrx2.shape.rows",
+            "source": "shape.rows"
+          },
+          {
+            "key": "@hrx2.shape.cols",
+            "source": "shape.cols"
+          },
+          {
+            "key": "@hrx2.tuning.workgroup_size",
+            "value": "128"
+          }
         ]
       },
       "supports": {

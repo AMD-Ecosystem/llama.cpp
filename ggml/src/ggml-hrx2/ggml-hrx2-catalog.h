@@ -60,6 +60,7 @@ struct ggml_backend_hrx2_kernel_route {
     uint32_t    cols_max = 0;
     int8_t      k_pow2_guard = 0;
     int8_t      all_pot_guard = 0;
+    uint32_t    ncols_multiple_of_guard = 0;
     std::string specialization_mode;
     std::vector<ggml_backend_hrx2_config_binding_spec> config_bindings;
 };

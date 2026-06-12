@@ -57,7 +57,7 @@ def main():
     source_ids = set(sources.keys())
     artifact_ids = set(artifacts.keys())
     route_ids = set()
-    artifact_links = {}
+    artifact_sources = {}
     for route in routes:
         require(isinstance(route, dict), "route entries must be objects")
         route_id = route.get("id")
@@ -65,11 +65,11 @@ def main():
         route_ids.add(route_id)
         require(route.get("source_id") in source_ids, f"route {route_id} references unknown source")
         require(route.get("artifact_id") in artifact_ids, f"route {route_id} references unknown artifact")
-        artifact_link_key = (route.get("source_id"), route.get("root_symbol"))
-        previous_artifact_link_key = artifact_links.setdefault(route.get("artifact_id"), artifact_link_key)
+        artifact_source_id = route.get("source_id")
+        previous_artifact_source_id = artifact_sources.setdefault(route.get("artifact_id"), artifact_source_id)
         require(
-            previous_artifact_link_key == artifact_link_key,
-            f"artifact {route.get('artifact_id')} is referenced by incompatible source/root pairs",
+            previous_artifact_source_id == artifact_source_id,
+            f"artifact {route.get('artifact_id')} is referenced by multiple sources",
         )
         require(route.get("root_symbol", "").startswith("@"), f"route {route_id} root_symbol must be a symbol")
         require(route.get("export_name"), f"route {route_id} missing export_name")
@@ -84,8 +84,14 @@ def main():
         require(len(dispatch.get("workgroup_size", [])) == 3, f"route {route_id} dispatch.workgroup_size must have 3 values")
         require(isinstance(shape_guards, dict), f"route {route_id} shape_guards must be an object")
         for guard_key, guard_value in shape_guards.items():
-            require(guard_key in ("k_pow2", "all_pot"), f"route {route_id} has unknown shape guard {guard_key}")
-            require(isinstance(guard_value, bool), f"route {route_id} shape guard {guard_key} must be boolean")
+            require(
+                guard_key in ("k_pow2", "all_pot", "ncols_multiple_of"),
+                f"route {route_id} has unknown shape guard {guard_key}",
+            )
+            if guard_key == "ncols_multiple_of":
+                require(isinstance(guard_value, int) and guard_value > 0, f"route {route_id} shape guard {guard_key} must be a positive integer")
+            else:
+                require(isinstance(guard_value, bool), f"route {route_id} shape guard {guard_key} must be boolean")
         require(isinstance(specialization, dict), f"route {route_id} specialization must be an object")
         if specialization:
             require(specialization.get("mode") in ("jit_config",), f"route {route_id} has unsupported specialization mode")
@@ -99,7 +105,7 @@ def main():
                 require(has_value != has_source, f"route {route_id} binding must have exactly one of value or source")
                 if has_source:
                     require(
-                        binding.get("source") in ("shape.k", "shape.rows", "shape.cols"),
+                        binding.get("source") in ("shape.k", "shape.rows", "shape.cols", "shape.ncols", "shape.nrows"),
                         f"route {route_id} binding has unsupported source {binding.get('source')}",
                     )
 
