@@ -16,10 +16,8 @@ exploded catalog with `GGML_HRX2_CATALOG_DIR`.
 - `tools/generate_hrx2_embedded.py` emits embedded catalog, source, and bytecode
   data for the backend build.
 - `loom-jit/` contains the llama.cpp-side Loom JIT shim used by this backend.
-  When raw Loom C API CMake targets are visible, HRX2 compiles this local shim
-  directly. In the current standalone HRX install, those targets are not
-  exported, so CMake uses the transitional `hrx::loom_jit` target as an
-  explicit fallback.
+  HRX2 compiles this local shim directly against the Loom C API CMake targets
+  exported by the HRX package.
 
 During development, copy or edit this directory shape on disk and run with:
 
@@ -40,6 +38,40 @@ the concrete ggml shape at provider creation time. The resolved config values
 are part of the provider cache key, so a static-shape kernel is compiled once
 per route/target/shape/config tuple and reused inside the process. Generic
 routes remain fallback candidates.
+
+Phase0.3 adds the first scaled-catalog backplane tools around the pilot
+families. The runtime can emit JSONL route/provider evidence and dump per-JIT
+compile artifacts:
+
+```sh
+GGML_HRX2_TRACE_JSONL=/path/to/events.jsonl
+GGML_HRX2_TRACE_ROUTES=1
+GGML_HRX2_EVIDENCE_DIR=/path/to/evidence
+```
+
+`GGML_HRX2_TRACE_JSONL` records provider cache misses/hits, compile success or
+failure, selected route IDs, provider cache keys, concrete shapes, and dispatch
+geometry. `GGML_HRX2_EVIDENCE_DIR` writes per-provider `provider.json`,
+`compile_report.json`, and `manifest.json`.
+
+The workspace-level phase0.3 flow is:
+
+```sh
+python3 tools/hrx2_collect_shapes.py --fixtures-only \
+  --out cache/hrx2/shapes/phase0.3.jsonl
+python3 tools/hrx2_generate_candidates.py \
+  --shapes cache/hrx2/shapes/phase0.3.jsonl \
+  --out cache/hrx2/candidates/phase0.3.jsonl
+python3 tools/hrx2_run_loom_sweep.py \
+  --candidates cache/hrx2/candidates/phase0.3.jsonl \
+  --run-id phase0.3-smoke
+python3 tools/hrx2_reduce_tuning.py \
+  --run cache/hrx2/runs/phase0.3-smoke \
+  --out cache/hrx2/reduced/gfx1100/phase0.3.json
+python3 tools/hrx2_emit_catalog.py \
+  --reduced cache/hrx2/reduced/gfx1100/phase0.3.json \
+  --out cache/hrx2/catalog/phase0.3
+```
 
 Focused smoke:
 

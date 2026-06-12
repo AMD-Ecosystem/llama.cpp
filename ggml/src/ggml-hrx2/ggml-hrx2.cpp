@@ -12,8 +12,10 @@
 #include <cinttypes>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <limits>
 #include <memory>
 #include <new>
@@ -133,6 +135,81 @@ static bool ggml_hrx2_check(hrx_status_t status, const char * expression, const 
 
 #define GGML_HRX2_CHECK(expr) ggml_hrx2_check((expr), #expr, __FILE__, __LINE__)
 
+static bool ggml_backend_hrx2_env_enabled(const char * name) {
+    const char * value = std::getenv(name);
+    return value && value[0] != '\0' && std::strcmp(value, "0") != 0;
+}
+
+static std::string ggml_backend_hrx2_json_escape(const std::string & value) {
+    std::string escaped;
+    escaped.reserve(value.size() + 8);
+    for (const unsigned char c : value) {
+        switch (c) {
+            case '\\': escaped += "\\\\"; break;
+            case '"':  escaped += "\\\""; break;
+            case '\b': escaped += "\\b"; break;
+            case '\f': escaped += "\\f"; break;
+            case '\n': escaped += "\\n"; break;
+            case '\r': escaped += "\\r"; break;
+            case '\t': escaped += "\\t"; break;
+            default:
+                if (c < 0x20) {
+                    char buffer[7] = {};
+                    std::snprintf(buffer, sizeof(buffer), "\\u%04x", c);
+                    escaped += buffer;
+                } else {
+                    escaped += static_cast<char>(c);
+                }
+                break;
+        }
+    }
+    return escaped;
+}
+
+static std::string ggml_backend_hrx2_json_kv(const char * key, const std::string & value) {
+    std::string result = "\"";
+    result += key;
+    result += "\":\"";
+    result += ggml_backend_hrx2_json_escape(value);
+    result += "\"";
+    return result;
+}
+
+static std::string ggml_backend_hrx2_json_kv(const char * key, uint64_t value) {
+    std::string result = "\"";
+    result += key;
+    result += "\":";
+    result += std::to_string(value);
+    return result;
+}
+
+static void ggml_backend_hrx2_trace_event(const char * event, const std::string & fields_json) {
+    const char * trace_path = std::getenv("GGML_HRX2_TRACE_JSONL");
+    const bool trace_log = ggml_backend_hrx2_env_enabled("GGML_HRX2_TRACE_ROUTES");
+    if ((!trace_path || trace_path[0] == '\0') && !trace_log) {
+        return;
+    }
+
+    std::string line = "{\"event\":\"";
+    line += event ? event : "";
+    line += "\"";
+    if (!fields_json.empty()) {
+        line += ",";
+        line += fields_json;
+    }
+    line += "}";
+
+    if (trace_path && trace_path[0] != '\0') {
+        std::ofstream output(trace_path, std::ios::out | std::ios::app);
+        if (output) {
+            output << line << "\n";
+        }
+    }
+    if (trace_log) {
+        GGML_LOG_INFO("HRX2_TRACE: %s\n", line.c_str());
+    }
+}
+
 static ggml_backend_hrx2_device_context * ggml_backend_hrx2_get_device_context(ggml_backend_dev_t dev) {
     return static_cast<ggml_backend_hrx2_device_context *>(dev->context);
 }
@@ -167,11 +244,30 @@ static ggml_backend_hrx2_provider * ggml_backend_hrx2_get_provider(
 
     auto existing = device_context->providers.find(cache_key);
     if (existing != device_context->providers.end()) {
+        ggml_backend_hrx2_trace_event(
+            "provider_cache",
+            ggml_backend_hrx2_json_kv("status", "hit") + "," +
+            ggml_backend_hrx2_json_kv("route_id", route->id) + "," +
+            ggml_backend_hrx2_json_kv("target_key", device_context->architecture) + "," +
+            ggml_backend_hrx2_json_kv("cache_key", cache_key));
         return existing->second.get();
     }
     if (device_context->provider_failures.find(cache_key) != device_context->provider_failures.end()) {
+        ggml_backend_hrx2_trace_event(
+            "provider_cache",
+            ggml_backend_hrx2_json_kv("status", "failed_memo") + "," +
+            ggml_backend_hrx2_json_kv("route_id", route->id) + "," +
+            ggml_backend_hrx2_json_kv("target_key", device_context->architecture) + "," +
+            ggml_backend_hrx2_json_kv("cache_key", cache_key));
         return nullptr;
     }
+
+    ggml_backend_hrx2_trace_event(
+        "provider_cache",
+        ggml_backend_hrx2_json_kv("status", "miss") + "," +
+        ggml_backend_hrx2_json_kv("route_id", route->id) + "," +
+        ggml_backend_hrx2_json_kv("target_key", device_context->architecture) + "," +
+        ggml_backend_hrx2_json_kv("cache_key", cache_key));
 
     const ggml_backend_hrx2_device_info jit_device = {
         /* .device       = */ device_context->device,
@@ -179,10 +275,24 @@ static ggml_backend_hrx2_provider * ggml_backend_hrx2_get_provider(
     };
     auto provider = ggml_backend_hrx2_load_provider(jit_device, *device_context->catalog, *route, config_bindings, cache_key);
     if (!provider) {
+        ggml_backend_hrx2_trace_event(
+            "provider_compile",
+            ggml_backend_hrx2_json_kv("status", "failed") + "," +
+            ggml_backend_hrx2_json_kv("route_id", route->id) + "," +
+            ggml_backend_hrx2_json_kv("target_key", device_context->architecture) + "," +
+            ggml_backend_hrx2_json_kv("cache_key", cache_key));
         device_context->provider_failures.insert(cache_key);
         return nullptr;
     }
     ggml_backend_hrx2_provider * provider_ptr = provider.get();
+    ggml_backend_hrx2_trace_event(
+        "provider_compile",
+        ggml_backend_hrx2_json_kv("status", "success") + "," +
+        ggml_backend_hrx2_json_kv("route_id", route->id) + "," +
+        ggml_backend_hrx2_json_kv("target_key", device_context->architecture) + "," +
+        ggml_backend_hrx2_json_kv("cache_key", cache_key) + "," +
+        ggml_backend_hrx2_json_kv("compile_report_bytes", static_cast<uint64_t>(provider_ptr->compile_report_json.size())) + "," +
+        ggml_backend_hrx2_json_kv("manifest_bytes", static_cast<uint64_t>(provider_ptr->manifest_json.size())));
     device_context->providers.emplace(cache_key, std::move(provider));
     return provider_ptr;
 }
@@ -609,6 +719,17 @@ static ggml_status ggml_backend_hrx2_dispatch_rms_norm(
         /* .subgroup_size   = */ 0,
     };
 
+    ggml_backend_hrx2_trace_event(
+        "dispatch",
+        ggml_backend_hrx2_json_kv("op", "RMS_NORM") + "," +
+        ggml_backend_hrx2_json_kv("route_id", provider->route.id) + "," +
+        ggml_backend_hrx2_json_kv("target_key", context->device_context->architecture) + "," +
+        ggml_backend_hrx2_json_kv("cache_key", provider->cache_key) + "," +
+        ggml_backend_hrx2_json_kv("ncols", constants.ncols) + "," +
+        ggml_backend_hrx2_json_kv("nrows", constants.nrows) + "," +
+        ggml_backend_hrx2_json_kv("workgroups_x", config.workgroup_count[0]) + "," +
+        ggml_backend_hrx2_json_kv("workgroup_size_x", config.workgroup_size[0]));
+
     if (!GGML_HRX2_CHECK(hrx_stream_dispatch(
             context->stream,
             provider->executable,
@@ -661,6 +782,15 @@ static ggml_status ggml_backend_hrx2_dispatch_mul_mat_q8_0(
             plan.config_bindings,
             plan.cache_key);
         if (!provider) {
+            ggml_backend_hrx2_trace_event(
+                "provider_unavailable",
+                ggml_backend_hrx2_json_kv("op", "MUL_MAT") + "," +
+                ggml_backend_hrx2_json_kv("route_id", plan.route->id) + "," +
+                ggml_backend_hrx2_json_kv("target_key", context->device_context->architecture) + "," +
+                ggml_backend_hrx2_json_kv("cache_key", plan.cache_key) + "," +
+                ggml_backend_hrx2_json_kv("k", shape.k) + "," +
+                ggml_backend_hrx2_json_kv("rows", shape.rows) + "," +
+                ggml_backend_hrx2_json_kv("cols", shape.cols));
             continue;
         }
 
@@ -690,6 +820,19 @@ static ggml_status ggml_backend_hrx2_dispatch_mul_mat_q8_0(
             },
             /* .subgroup_size   = */ 0,
         };
+
+        ggml_backend_hrx2_trace_event(
+            "dispatch",
+            ggml_backend_hrx2_json_kv("op", "MUL_MAT") + "," +
+            ggml_backend_hrx2_json_kv("route_id", provider->route.id) + "," +
+            ggml_backend_hrx2_json_kv("target_key", context->device_context->architecture) + "," +
+            ggml_backend_hrx2_json_kv("cache_key", provider->cache_key) + "," +
+            ggml_backend_hrx2_json_kv("k", shape.k) + "," +
+            ggml_backend_hrx2_json_kv("rows", shape.rows) + "," +
+            ggml_backend_hrx2_json_kv("cols", shape.cols) + "," +
+            ggml_backend_hrx2_json_kv("workgroups_x", config.workgroup_count[0]) + "," +
+            ggml_backend_hrx2_json_kv("workgroups_y", config.workgroup_count[1]) + "," +
+            ggml_backend_hrx2_json_kv("workgroup_size_x", config.workgroup_size[0]));
 
         if (!GGML_HRX2_CHECK(hrx_stream_dispatch(
                 context->stream,

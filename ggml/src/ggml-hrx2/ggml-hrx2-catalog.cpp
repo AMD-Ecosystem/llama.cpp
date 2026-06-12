@@ -7,6 +7,8 @@
 #include <nlohmann/json.hpp>
 
 #include <cstdlib>
+#include <cctype>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -77,6 +79,80 @@ static std::string ggml_backend_hrx2_join_path(const std::string & base, const s
         return base + relative;
     }
     return base + "/" + relative;
+}
+
+static std::string ggml_backend_hrx2_safe_filename(const std::string & value) {
+    std::string result;
+    result.reserve(value.size());
+    for (const unsigned char c : value) {
+        if (std::isalnum(c) || c == '.' || c == '_' || c == '-') {
+            result += static_cast<char>(c);
+        } else {
+            result += '_';
+        }
+    }
+    return result.empty() ? std::string("provider") : result;
+}
+
+static void ggml_backend_hrx2_write_text_file(const std::filesystem::path & path, const std::string & text) {
+    std::ofstream output(path, std::ios::binary);
+    if (output) {
+        output.write(text.data(), static_cast<std::streamsize>(text.size()));
+    }
+}
+
+static void ggml_backend_hrx2_dump_provider_evidence(
+        const ggml_backend_hrx2_kernel_route & route,
+        const std::vector<ggml_backend_hrx2_config_binding> & config_bindings,
+        const std::string & cache_key,
+        const char * architecture,
+        const char * source_identifier,
+        ggml_hrx2_loom_jit_source_format_t source_format,
+        size_t hsaco_size,
+        const ggml_backend_hrx2_provider & provider) {
+    const char * evidence_dir_env = std::getenv("GGML_HRX2_EVIDENCE_DIR");
+    if (!evidence_dir_env || evidence_dir_env[0] == '\0') {
+        return;
+    }
+
+    const std::filesystem::path provider_dir =
+        std::filesystem::path(evidence_dir_env) / ggml_backend_hrx2_safe_filename(cache_key);
+    std::error_code ec;
+    std::filesystem::create_directories(provider_dir, ec);
+    if (ec) {
+        GGML_LOG_ERROR("HRX2: failed to create evidence dir %s: %s\n", provider_dir.string().c_str(), ec.message().c_str());
+        return;
+    }
+
+    if (!provider.compile_report_json.empty()) {
+        ggml_backend_hrx2_write_text_file(provider_dir / "compile_report.json", provider.compile_report_json);
+    }
+    if (!provider.manifest_json.empty()) {
+        ggml_backend_hrx2_write_text_file(provider_dir / "manifest.json", provider.manifest_json);
+    }
+
+    nlohmann::json metadata = {
+        { "route_id", route.id },
+        { "family", route.family },
+        { "op", route.op },
+        { "target_key", architecture ? architecture : "" },
+        { "cache_key", cache_key },
+        { "root_symbol", route.root_symbol },
+        { "export_name", route.export_name },
+        { "source_identifier", source_identifier ? source_identifier : "" },
+        { "source_format", source_format == GGML_HRX2_LOOM_JIT_SOURCE_FORMAT_BYTECODE ? "loom-bytecode" : "loom-text" },
+        { "hsaco_size", hsaco_size },
+        { "compile_report_bytes", provider.compile_report_json.size() },
+        { "manifest_bytes", provider.manifest_json.size() },
+    };
+    metadata["config_bindings"] = nlohmann::json::array();
+    for (const auto & binding : config_bindings) {
+        metadata["config_bindings"].push_back({
+            { "key", binding.key },
+            { "value", binding.value },
+        });
+    }
+    ggml_backend_hrx2_write_text_file(provider_dir / "provider.json", metadata.dump(2) + "\n");
 }
 
 static uint32_t ggml_backend_hrx2_json_u32(const nlohmann::json & object, const char * key, uint32_t default_value = 0) {
@@ -340,6 +416,15 @@ static bool ggml_backend_hrx2_compile_route(
     provider->export_info = export_info;
     provider->route = route;
     provider->cache_key = cache_key;
+    ggml_backend_hrx2_dump_provider_evidence(
+        route,
+        config_bindings,
+        cache_key,
+        architecture,
+        source_identifier,
+        source_format,
+        hsaco_size,
+        *provider);
     GGML_LOG_INFO(
         "HRX2: JIT compiled route=%s cache_key=%s export=%s target=%s source=%s configs=%zu hsaco=%zu bytes\n",
         route.id.c_str(),

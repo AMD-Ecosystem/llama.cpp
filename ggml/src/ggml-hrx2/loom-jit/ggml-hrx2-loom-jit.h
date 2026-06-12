@@ -4,25 +4,6 @@
 #ifndef GGML_HRX2_LOOM_JIT_H_
 #define GGML_HRX2_LOOM_JIT_H_
 
-#ifdef GGML_HRX2_USE_HRX_LOOM_JIT
-
-#include "hrx_loom_jit.h"
-
-#define ggml_hrx2_loom_jit_amdgpu_t hrx_loom_jit_amdgpu_t
-#define ggml_hrx2_loom_jit_source_format_t hrx_loom_jit_source_format_t
-#define GGML_HRX2_LOOM_JIT_SOURCE_FORMAT_TEXT HRX_LOOM_JIT_SOURCE_FORMAT_TEXT
-#define GGML_HRX2_LOOM_JIT_SOURCE_FORMAT_BYTECODE HRX_LOOM_JIT_SOURCE_FORMAT_BYTECODE
-#define ggml_hrx2_loom_jit_amdgpu_options_t hrx_loom_jit_amdgpu_options_t
-#define ggml_hrx2_loom_jit_config_binding_t hrx_loom_jit_config_binding_t
-#define ggml_hrx2_loom_jit_compile_options_t hrx_loom_jit_compile_options_t
-#define ggml_hrx2_loom_jit_compile_result_t hrx_loom_jit_compile_result_t
-#define ggml_hrx2_loom_jit_amdgpu_create hrx_loom_jit_amdgpu_create
-#define ggml_hrx2_loom_jit_amdgpu_release hrx_loom_jit_amdgpu_release
-#define ggml_hrx2_loom_jit_amdgpu_compile hrx_loom_jit_amdgpu_compile
-#define ggml_hrx2_loom_jit_compile_result_deinitialize hrx_loom_jit_compile_result_deinitialize
-
-#else
-
 #include "hrx_runtime.h"
 
 #ifdef __cplusplus
@@ -86,7 +67,5 @@ void ggml_hrx2_loom_jit_compile_result_deinitialize(
 #ifdef __cplusplus
 }  // extern "C"
 #endif
-
-#endif  // GGML_HRX2_USE_HRX_LOOM_JIT
 
 #endif  // GGML_HRX2_LOOM_JIT_H_

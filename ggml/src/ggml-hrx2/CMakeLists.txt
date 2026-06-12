@@ -29,26 +29,10 @@ find_program(GGML_HRX2_LOOM_LINK_EXECUTABLE
     REQUIRED
 )
 
-set(GGML_HRX2_LOOM_JIT_SOURCES)
-set(GGML_HRX2_LOOM_JIT_LIBS)
-set(GGML_HRX2_LOOM_JIT_DEFINES)
-if(TARGET loom::binding::c::loomc AND TARGET loom::binding::c::target::amdgpu)
-    list(APPEND GGML_HRX2_LOOM_JIT_SOURCES
-        loom-jit/ggml-hrx2-loom-jit.cpp
-    )
-    list(APPEND GGML_HRX2_LOOM_JIT_LIBS
-        loom::binding::c::loomc
-        loom::binding::c::target::amdgpu
-    )
-else()
-    if(NOT TARGET hrx::loom_jit)
-        message(FATAL_ERROR
-            "HRX2 requires either raw Loom C API CMake targets "
-            "(loom::binding::c::loomc and loom::binding::c::target::amdgpu) "
-            "or the transitional hrx::loom_jit wrapper target")
-    endif()
-    list(APPEND GGML_HRX2_LOOM_JIT_LIBS hrx::loom_jit)
-    list(APPEND GGML_HRX2_LOOM_JIT_DEFINES GGML_HRX2_USE_HRX_LOOM_JIT)
+if(NOT TARGET loom::binding::c::loomc OR NOT TARGET loom::binding::c::target::amdgpu)
+    message(FATAL_ERROR
+        "HRX2 requires HRX to export Loom C API CMake targets "
+        "loom::binding::c::loomc and loom::binding::c::target::amdgpu")
 endif()
 
 add_custom_command(
@@ -105,11 +89,14 @@ ggml_add_backend_library(ggml-hrx2
     ggml-hrx2.cpp
     ggml-hrx2-catalog.cpp
     ${GGML_HRX2_EMBEDDED_CPP}
-    ${GGML_HRX2_LOOM_JIT_SOURCES}
+    loom-jit/ggml-hrx2-loom-jit.cpp
 )
 
-target_link_libraries(ggml-hrx2 PRIVATE hrx::hrx ${GGML_HRX2_LOOM_JIT_LIBS})
-target_compile_definitions(ggml-hrx2 PRIVATE ${GGML_HRX2_LOOM_JIT_DEFINES})
+target_link_libraries(ggml-hrx2 PRIVATE
+    hrx::hrx
+    loom::binding::c::loomc
+    loom::binding::c::target::amdgpu
+)
 target_include_directories(ggml-hrx2 PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../vendor
     ${GGML_HRX2_GENERATED_DIR}
