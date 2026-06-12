@@ -15,6 +15,11 @@ exploded catalog with `GGML_HRX2_CATALOG_DIR`.
   artifact availability after linking.
 - `tools/generate_hrx2_embedded.py` emits embedded catalog, source, and bytecode
   data for the backend build.
+- `loom-jit/` contains the llama.cpp-side Loom JIT shim used by this backend.
+  When raw Loom C API CMake targets are visible, HRX2 compiles this local shim
+  directly. In the current standalone HRX install, those targets are not
+  exported, so CMake uses the transitional `hrx::loom_jit` target as an
+  explicit fallback.
 
 During development, copy or edit this directory shape on disk and run with:
 

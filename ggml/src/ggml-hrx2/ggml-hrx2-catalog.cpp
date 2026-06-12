@@ -2,7 +2,7 @@
 
 #include "ggml-impl.h"
 #include "hrx2_embedded_catalog.h"
-#include "hrx_loom_jit.h"
+#include "loom-jit/ggml-hrx2-loom-jit.h"
 
 #include <nlohmann/json.hpp>
 
@@ -245,7 +245,7 @@ static bool ggml_backend_hrx2_compile_route(
         const std::string & cache_key,
         const void * source_data,
         size_t source_size,
-        hrx_loom_jit_source_format_t source_format,
+        ggml_hrx2_loom_jit_source_format_t source_format,
         const char * source_identifier,
         ggml_backend_hrx2_provider * provider) {
     const char * architecture = device.architecture ? device.architecture : "";
@@ -256,18 +256,18 @@ static bool ggml_backend_hrx2_compile_route(
         return false;
     }
 
-    hrx_loom_jit_amdgpu_t jit = nullptr;
-    hrx_loom_jit_amdgpu_options_t jit_options = {
-        /* .structure_size = */ sizeof(hrx_loom_jit_amdgpu_options_t),
+    ggml_hrx2_loom_jit_amdgpu_t jit = nullptr;
+    ggml_hrx2_loom_jit_amdgpu_options_t jit_options = {
+        /* .structure_size = */ sizeof(ggml_hrx2_loom_jit_amdgpu_options_t),
         /* .processor      = */ architecture,
         /* .identifier     = */ "ggml-hrx2",
     };
-    if (!GGML_HRX2_CATALOG_CHECK(hrx_loom_jit_amdgpu_create(&jit_options, &jit))) {
+    if (!GGML_HRX2_CATALOG_CHECK(ggml_hrx2_loom_jit_amdgpu_create(&jit_options, &jit))) {
         return false;
     }
 
-    hrx_loom_jit_compile_result_t result = {};
-    std::vector<hrx_loom_jit_config_binding_t> jit_config_bindings;
+    ggml_hrx2_loom_jit_compile_result_t result = {};
+    std::vector<ggml_hrx2_loom_jit_config_binding_t> jit_config_bindings;
     jit_config_bindings.reserve(config_bindings.size());
     for (const auto & binding : config_bindings) {
         jit_config_bindings.push_back({
@@ -275,8 +275,8 @@ static bool ggml_backend_hrx2_compile_route(
             /* .value = */ binding.value.c_str(),
         });
     }
-    hrx_loom_jit_compile_options_t compile_options = {
-        /* .structure_size        = */ sizeof(hrx_loom_jit_compile_options_t),
+    ggml_hrx2_loom_jit_compile_options_t compile_options = {
+        /* .structure_size        = */ sizeof(ggml_hrx2_loom_jit_compile_options_t),
         /* .source_data           = */ source_data,
         /* .source_size           = */ source_size,
         /* .source_format         = */ source_format,
@@ -287,8 +287,8 @@ static bool ggml_backend_hrx2_compile_route(
         /* .config_bindings       = */ jit_config_bindings.empty() ? nullptr : jit_config_bindings.data(),
         /* .config_binding_count  = */ jit_config_bindings.size(),
     };
-    const bool compiled = GGML_HRX2_CATALOG_CHECK(hrx_loom_jit_amdgpu_compile(jit, &compile_options, &result));
-    hrx_loom_jit_amdgpu_release(jit);
+    const bool compiled = GGML_HRX2_CATALOG_CHECK(ggml_hrx2_loom_jit_amdgpu_compile(jit, &compile_options, &result));
+    ggml_hrx2_loom_jit_amdgpu_release(jit);
     if (!compiled) {
         return false;
     }
@@ -310,7 +310,7 @@ static bool ggml_backend_hrx2_compile_route(
     provider->compile_report_json = result.compile_report_json ?
         std::string(result.compile_report_json, result.compile_report_json_size) :
         std::string();
-    hrx_loom_jit_compile_result_deinitialize(&result);
+    ggml_hrx2_loom_jit_compile_result_deinitialize(&result);
     if (!loaded) {
         return false;
     }
@@ -346,7 +346,7 @@ static bool ggml_backend_hrx2_compile_route(
         cache_key.c_str(),
         route.export_name.c_str(),
         architecture,
-        source_format == HRX_LOOM_JIT_SOURCE_FORMAT_BYTECODE ? "Loom bytecode" : "Loom text",
+        source_format == GGML_HRX2_LOOM_JIT_SOURCE_FORMAT_BYTECODE ? "Loom bytecode" : "Loom text",
         config_bindings.size(),
         hsaco_size);
     return true;
@@ -443,7 +443,7 @@ std::unique_ptr<ggml_backend_hrx2_provider> ggml_backend_hrx2_load_provider(
                     cache_key,
                     artifact_it->second.data.data(),
                     artifact_it->second.data.size(),
-                    HRX_LOOM_JIT_SOURCE_FORMAT_BYTECODE,
+                    GGML_HRX2_LOOM_JIT_SOURCE_FORMAT_BYTECODE,
                     route.artifact_id.c_str(),
                     provider.get())) {
                 return provider;
@@ -465,7 +465,7 @@ std::unique_ptr<ggml_backend_hrx2_provider> ggml_backend_hrx2_load_provider(
             cache_key,
             source_it->second.text.data(),
             source_it->second.text.size(),
-            HRX_LOOM_JIT_SOURCE_FORMAT_TEXT,
+            GGML_HRX2_LOOM_JIT_SOURCE_FORMAT_TEXT,
             route.source_id.c_str(),
             provider.get())) {
         return nullptr;
