@@ -31,7 +31,7 @@ jobs:
             runs_on: linux-gfx120X-gpu-rocm
             extra_rocm_artifacts: rocwmma_dev_gfx120X-all
     runs-on: ${{ matrix.runs_on }}
-    timeout-minutes: 60
+    timeout-minutes: 15
     defaults:
       run:
         # --noprofile skips loading ~/.bash_profile
@@ -45,14 +45,14 @@ jobs:
     container:
       image: ghcr.io/rocm/no_rocm_image_ubuntu24_04@sha256:fba5f55a122dbb15925e98c51fe65bffe88c36e11ebb25b73daf2bea04202dc3
       # --user 0:0: actions running inside the container need to write to some
-      #             files set up by the runner agent before the container runs.
-      #             In June 2026 some runner agents set those files up with
-      #             permissions for a "tester" user with UID/GID 1001 which
+      #             files set up outside the container by the runner agent.  In
+      #             June 2026 some runner agents set those files up with
+      #             permissions for a "tester" user with UID/GID 1001, which
       #             matches the user in no_rocm_image_ubuntu24_04, and some are
       #             set up as root; accessing a file owned by root with user
       #             "tester" gives an EACCES. Running as root is the common
       #             denominator.
-      # --device kfd/dri: GPU access; the plain runner adds no devices for us.
+      # --device kfd/dri: GPU access.
       options: >-
         --user 0:0
         --device /dev/kfd
@@ -80,12 +80,6 @@ jobs:
       CCACHE_COMPILERCHECK: content
 
     steps:
-      - name: Debug
-        run: |
-          id
-          ls -ln /__w/_temp | head
-          ls -ln /__w | head
-
       - name: Checkout llama.cpp (under test)
         uses: actions/checkout@v6
         with:
