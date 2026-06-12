@@ -71,7 +71,7 @@ jobs:
       # AaronStGeorge/llamacpp_ci)
       #TODO: switch to ROCm/llamacpp-hrx-bench once it is open sourced.
       BENCH_REPOSITORY: AaronStGeorge/llamacpp_ci
-      BENCH_REF: 'main'
+      BENCH_REF: 'runner-health'
       # actions/checkout@v6 does auto-cleanup, an in-tree build would be
       # auto-cleaned as well.
       BENCH_DIR: ${{ github.workspace }}/bench
@@ -155,6 +155,37 @@ jobs:
 
       - name: Build llama.cpp with HRX
         run: "${BENCH_DIR}/scripts/hrx/build-llama-hrx.sh"
+
+      # Diagnostic: run the failing MUL_MAT config N times in THIS job to measure
+      # the per-RUNNER failure rate -- does a bad machine fail every iteration or
+      # only some? Advisory (continue-on-error, runs BEFORE the gating step so it
+      # still executes on a failing machine). Correlate the printed count with
+      # RUNNER_NAME (see the Debug step). Tune N via the MULMAT_LOOP_N var.
+      - name: MUL_MAT failure-rate loop (diagnostic)
+        continue-on-error: true
+        timeout-minutes: 20
+        run: |
+          . "${BENCH_DIR}/scripts/hrx/env.sh"
+          . "${BENCH_DIR}/scripts/hrx/runtime-env.sh"
+          set +e   # count pass/fail from the output, don't let a NaN exit abort
+          TB="${LLAMA_BUILD_DIR}/bin/test-backend-ops"
+          TF="${BENCH_DIR}/benchmark-configs/test/mul_mat_f16.txt"
+          N="${MULMAT_LOOP_N:-50}"
+          pass=0; fail=0; other=0
+          for i in $(seq 1 "$N"); do
+            out="$("$TB" test -o MUL_MAT -b HRX0 --test-file "$TF" 2>&1 | sed 's/\x1b\[[0-9;]*m//g')"
+            if echo "$out" | grep -q 'NaN at index'; then
+              fail=$((fail+1))
+              [ "$fail" -le 3 ] && echo "iter $i FAIL: $(echo "$out" | grep -m1 'NaN at index')"
+            elif echo "$out" | grep -q '1/1 tests passed'; then
+              pass=$((pass+1))
+            else
+              other=$((other+1))
+              [ "$other" -le 2 ] && echo "iter $i OTHER: $(echo "$out" | tail -2 | tr '\n' ' ')"
+            fi
+          done
+          echo "MULMAT_RATE runner=${RUNNER_NAME} fail=${fail} pass=${pass} other=${other} total=${N}"
+          echo "::notice::MUL_MAT rate on ${RUNNER_NAME}: ${fail}/${N} FAIL (pass=${pass}, other=${other})"
 
       - name: Run sample MUL_MAT correctness config on HRX
         timeout-minutes: 15
