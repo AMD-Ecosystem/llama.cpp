@@ -28,6 +28,7 @@ on:
       'tools/server/**.*'
     ]
   pull_request:
+    branches-ignore: ['hrx-integration']  # fork: hrx-integration runs only build-hrx.yml
     types: [opened, synchronize, reopened]
     paths: [
       '.github/workflows/server.yml',

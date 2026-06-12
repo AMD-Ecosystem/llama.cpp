@@ -2,11 +2,13 @@ name: Update Operations Documentation
 
 on:
     push:
+        branches-ignore: ['hrx-integration']
         paths:
             - 'docs/ops.md'
             - 'docs/ops/**'
             - 'scripts/create_ops_docs.py'
     pull_request:
+        branches-ignore: ['hrx-integration']  # fork: hrx-integration runs only build-hrx.yml
         paths:
             - 'docs/ops.md'
             - 'docs/ops/**'

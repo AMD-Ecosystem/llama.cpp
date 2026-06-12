@@ -1,6 +1,9 @@
 name: HRX CI
 
 on:
+  push:
+    branches:
+      - hrx-integration
   pull_request:
     types: [opened, synchronize, reopened]
     branches:

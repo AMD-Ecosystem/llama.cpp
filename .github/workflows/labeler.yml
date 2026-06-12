@@ -1,6 +1,7 @@
 name: "Pull Request Labeler"
 on:
-- pull_request_target
+  pull_request_target:
+    branches-ignore: ['hrx-integration']  # fork: hrx-integration runs only build-hrx.yml
 
 jobs:
   labeler:
