@@ -41,6 +41,9 @@ jobs:
           - gfx_target: gfx1150
             s3_target: gfx1150
             gpu_targets: gfx1150
+          - gfx_target: gfx1153
+            s3_target: gfx1153
+            gpu_targets: gfx1153
           # Hawk Point / Phoenix family (Radeon 760M/780M = gfx1103) ships only
           # in the gfx110X-all bundle, which also covers desktop RDNA3
           # (RX 7900/7800/7600). Build+release only — no on-hardware test runner.
@@ -507,7 +510,7 @@ jobs:
       run: |
         TAG="${{ steps.generate-tag.outputs.tag }}"
         root="$PWD"
-        for target in gfx1151 gfx1150 gfx110X; do
+        for target in gfx1151 gfx1150 gfx1153 gfx110X; do
           artifact_dir="./all-artifacts/llama-ubuntu-rocm-${target}-x64"
           archive="llama-${TAG}-ubuntu-rocm-${target}-x64"
           if [ -d "$artifact_dir" ]; then
@@ -532,10 +535,10 @@ jobs:
           --title "$TAG" \
           --notes "**Build**: $TAG
         **OS**: ubuntu
-        **GPU Target(s)**: gfx1151, gfx1150, gfx110X (gfx1100/1101/1102/1103)
+        **GPU Target(s)**: gfx1151, gfx1150, gfx1153, gfx110X (gfx1100/1101/1102/1103)
         **ROCm Version**: $ROCM_VERSION
         **Llama.cpp Commit**: $LLAMACPP_COMMIT_HASH
         **Build Date**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
 
-        Prebuilt llama.cpp ROCm binaries for Strix Halo (gfx1151/gfx1150) and the RDNA3 gfx110X family incl. Hawk Point/Phoenix (Radeon 760M/780M), with ROCm runtime libraries bundled." \
+        Prebuilt llama.cpp ROCm binaries for the RDNA3.5 gfx115x APUs (gfx1151/gfx1150/gfx1153) and the RDNA3 gfx110X family incl. Hawk Point/Phoenix (Radeon 760M/780M), with ROCm runtime libraries bundled." \
           *.tar.gz
