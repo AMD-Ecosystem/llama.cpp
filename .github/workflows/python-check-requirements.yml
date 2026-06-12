@@ -9,7 +9,7 @@ on:
       - 'convert*.py'
       - '**/requirements*.txt'
   pull_request:
-    branches-ignore: ['hrx-integration']  # fork: hrx-integration runs only build-hrx.yml
+    branches-ignore: ['hrx-integration']
     paths:
       - '.github/workflows/python-check-requirements.yml'
       - 'scripts/check-requirements.sh'

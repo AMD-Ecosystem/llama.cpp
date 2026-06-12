@@ -13,7 +13,7 @@ on:
     ]
 
   pull_request:
-    branches-ignore: ['hrx-integration']  # fork: hrx-integration runs only build-hrx.yml
+    branches-ignore: ['hrx-integration']
     types: [opened, synchronize, reopened]
     paths: [
       '.github/workflows/hip-quality-check.yml',

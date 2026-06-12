@@ -9,7 +9,7 @@ on:
     paths:
       - .github/workflows/copilot-setup-steps.yml
   pull_request:
-    branches-ignore: ['hrx-integration']  # fork: hrx-integration runs only build-hrx.yml
+    branches-ignore: ['hrx-integration']
     paths:
       - .github/workflows/copilot-setup-steps.yml
 
