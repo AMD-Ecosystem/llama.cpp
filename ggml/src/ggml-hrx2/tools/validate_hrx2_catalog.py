@@ -79,7 +79,7 @@ def main():
         shape_guards = route.get("shape_guards", {})
         specialization = route.get("specialization", {})
         require(abi.get("binding_count", 0) > 0, f"route {route_id} missing binding_count")
-        require(abi.get("parameter_count", 0) > 0, f"route {route_id} missing parameter_count")
+        require(abi.get("parameter_count", -1) >= 0, f"route {route_id} missing parameter_count")
         require(abi.get("constant_byte_length", -1) >= 0, f"route {route_id} missing constant_byte_length")
         require(len(dispatch.get("workgroup_size", [])) == 3, f"route {route_id} dispatch.workgroup_size must have 3 values")
         require(isinstance(shape_guards, dict), f"route {route_id} shape_guards must be an object")
@@ -111,7 +111,9 @@ def main():
                             "shape.cols",
                             "shape.ncols",
                             "shape.nrows",
+                            "shape.pointwise.src0_row_stride",
                             "shape.pointwise.src1_row_stride",
+                            "shape.pointwise.src1_ncols",
                             "shape.q8_full_unroll_factor",
                             "shape.cont.ncols",
                             "shape.cont.nrows",

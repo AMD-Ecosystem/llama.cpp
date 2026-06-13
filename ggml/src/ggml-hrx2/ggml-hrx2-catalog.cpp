@@ -243,8 +243,7 @@ static bool ggml_backend_hrx2_route_from_json(
            !route->source_id.empty() &&
            !route->root_symbol.empty() &&
            !route->export_name.empty() &&
-           route->binding_count > 0 &&
-           route->parameter_count > 0;
+           route->binding_count > 0;
 }
 
 static bool ggml_backend_hrx2_load_catalog_json(

@@ -1,6 +1,8 @@
 config.decl @hrx2.shape.pointwise.ncols : %value: index where [range(%value, 1, 65536)]
 config.decl @hrx2.shape.pointwise.nrows : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2.shape.pointwise.src0_row_stride : %value: index where [range(%value, 1, 65536)]
 config.decl @hrx2.shape.pointwise.src1_row_stride : %value: index where [range(%value, 0, 65536)]
+config.decl @hrx2.shape.pointwise.src1_ncols : %value: index where [range(%value, 1, 65536)]
 config.decl @hrx2.tuning.pointwise.workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
 
 kernel.def export("hrx2_add_f32") @hrx2_add_f32() {
@@ -18,10 +20,13 @@ kernel.def export("hrx2_add_f32") @hrx2_add_f32() {
   %base = index.constant 0 : offset
   %ncols = config.get @hrx2.shape.pointwise.ncols : index
   %nrows = config.get @hrx2.shape.pointwise.nrows : index
+  %src0_row_stride = config.get @hrx2.shape.pointwise.src0_row_stride : index
   %src1_row_stride = config.get @hrx2.shape.pointwise.src1_row_stride : index
+  %src1_ncols = config.get @hrx2.shape.pointwise.src1_ncols : index
   %workgroup_size = config.get @hrx2.tuning.pointwise.workgroup_size : index
   %ncols_bounded = index.assume %ncols [range(%ncols, 1, 65536)] : index
   %nrows_bounded = index.assume %nrows [range(%nrows, 1, 1048576)] : index
+  %src1_ncols_bounded = index.assume %src1_ncols [range(%src1_ncols, 1, 65536)] : index
   %workgroup0 = kernel.workgroup.id<x> : index
   %lane0 = kernel.workitem.id<x> : index
   %workgroup = index.assume %workgroup0 [range(%workgroup0, 0, 4194303)] : index
@@ -44,11 +49,16 @@ kernel.def export("hrx2_add_f32") @hrx2_add_f32() {
   scf.if %in_bounds {
     %col = index.rem %linear, %ncols_bounded : index
     %row = index.div %linear, %ncols_bounded : index
+    %src0_row0 = index.mul %row, %src0_row_stride : index
+    %src0_row = index.assume %src0_row0 [range(%src0_row0, 0, 1073741823)] : index
+    %src0_idx0 = index.add %src0_row, %col : index
+    %src0_idx = index.assume %src0_idx0 [range(%src0_idx0, 0, 1073741823)] : index
     %src1_row0 = index.mul %row, %src1_row_stride : index
     %src1_row = index.assume %src1_row0 [range(%src1_row0, 0, 1073741823)] : index
-    %src1_idx0 = index.add %src1_row, %col : index
+    %src1_col = index.rem %col, %src1_ncols_bounded : index
+    %src1_idx0 = index.add %src1_row, %src1_col : index
     %src1_idx = index.assume %src1_idx0 [range(%src1_idx0, 0, 1073741823)] : index
-    %a = view.load %src0_view[%linear] : view<1073741824xf32, #dense> -> f32
+    %a = view.load %src0_view[%src0_idx] : view<1073741824xf32, #dense> -> f32
     %b = view.load %src1_view[%src1_idx] : view<1073741824xf32, #dense> -> f32
     %result = scalar.addf<nnan|ninf|nsz> %a, %b : f32
     view.store %result, %dst_view[%linear] : f32, view<1073741824xf32, #dense>
@@ -71,10 +81,13 @@ kernel.def export("hrx2_mul_f32") @hrx2_mul_f32() {
   %base = index.constant 0 : offset
   %ncols = config.get @hrx2.shape.pointwise.ncols : index
   %nrows = config.get @hrx2.shape.pointwise.nrows : index
+  %src0_row_stride = config.get @hrx2.shape.pointwise.src0_row_stride : index
   %src1_row_stride = config.get @hrx2.shape.pointwise.src1_row_stride : index
+  %src1_ncols = config.get @hrx2.shape.pointwise.src1_ncols : index
   %workgroup_size = config.get @hrx2.tuning.pointwise.workgroup_size : index
   %ncols_bounded = index.assume %ncols [range(%ncols, 1, 65536)] : index
   %nrows_bounded = index.assume %nrows [range(%nrows, 1, 1048576)] : index
+  %src1_ncols_bounded = index.assume %src1_ncols [range(%src1_ncols, 1, 65536)] : index
   %workgroup0 = kernel.workgroup.id<x> : index
   %lane0 = kernel.workitem.id<x> : index
   %workgroup = index.assume %workgroup0 [range(%workgroup0, 0, 4194303)] : index
@@ -97,11 +110,16 @@ kernel.def export("hrx2_mul_f32") @hrx2_mul_f32() {
   scf.if %in_bounds {
     %col = index.rem %linear, %ncols_bounded : index
     %row = index.div %linear, %ncols_bounded : index
+    %src0_row0 = index.mul %row, %src0_row_stride : index
+    %src0_row = index.assume %src0_row0 [range(%src0_row0, 0, 1073741823)] : index
+    %src0_idx0 = index.add %src0_row, %col : index
+    %src0_idx = index.assume %src0_idx0 [range(%src0_idx0, 0, 1073741823)] : index
     %src1_row0 = index.mul %row, %src1_row_stride : index
     %src1_row = index.assume %src1_row0 [range(%src1_row0, 0, 1073741823)] : index
-    %src1_idx0 = index.add %src1_row, %col : index
+    %src1_col = index.rem %col, %src1_ncols_bounded : index
+    %src1_idx0 = index.add %src1_row, %src1_col : index
     %src1_idx = index.assume %src1_idx0 [range(%src1_idx0, 0, 1073741823)] : index
-    %a = view.load %src0_view[%linear] : view<1073741824xf32, #dense> -> f32
+    %a = view.load %src0_view[%src0_idx] : view<1073741824xf32, #dense> -> f32
     %b = view.load %src1_view[%src1_idx] : view<1073741824xf32, #dense> -> f32
     %result = scalar.mulf<nnan|ninf|nsz> %a, %b : f32
     view.store %result, %dst_view[%linear] : f32, view<1073741824xf32, #dense>

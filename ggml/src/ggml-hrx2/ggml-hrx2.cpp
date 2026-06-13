@@ -144,7 +144,9 @@ struct ggml_backend_hrx2_set_rows_shape {
 struct ggml_backend_hrx2_pointwise_shape {
     uint32_t ncols = 0;
     uint32_t nrows = 0;
+    uint32_t src0_row_stride = 0;
     uint32_t src1_row_stride = 0;
+    uint32_t src1_ncols = 0;
 };
 
 struct ggml_backend_hrx2_cont_shape {
@@ -610,6 +612,36 @@ static bool ggml_backend_hrx2_u32_size(size_t value, uint32_t * out_value) {
     return true;
 }
 
+static bool ggml_backend_hrx2_flat_row_stride_f32(
+        const ggml_tensor * tensor,
+        uint32_t * out_row_stride) {
+    if (!tensor ||
+        tensor->type != GGML_TYPE_F32 ||
+        tensor->nb[0] != sizeof(float) ||
+        tensor->ne[0] <= 0 ||
+        tensor->nb[1] % sizeof(float) != 0) {
+        return false;
+    }
+    const size_t row_stride = tensor->nb[1] / sizeof(float);
+    if (row_stride < static_cast<size_t>(tensor->ne[0]) ||
+        !ggml_backend_hrx2_u32_size(row_stride, out_row_stride)) {
+        return false;
+    }
+    if (tensor->ne[2] > 1) {
+        if (tensor->nb[2] % sizeof(float) != 0 ||
+            tensor->nb[2] / sizeof(float) != row_stride * static_cast<size_t>(tensor->ne[1])) {
+            return false;
+        }
+    }
+    if (tensor->ne[3] > 1) {
+        if (tensor->nb[3] % sizeof(float) != 0 ||
+            tensor->nb[3] / sizeof(float) != row_stride * static_cast<size_t>(tensor->ne[1]) * static_cast<size_t>(tensor->ne[2])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool ggml_backend_hrx2_supports_set_rows(
         ggml_backend_hrx2_device_context * device_context,
         const ggml_tensor * op) {
@@ -650,7 +682,6 @@ static bool ggml_backend_hrx2_supports_pointwise_binary(
         src1->type != GGML_TYPE_F32 ||
         op->type != GGML_TYPE_F32 ||
         !ggml_are_same_shape(src0, op) ||
-        !ggml_is_contiguous(src0) ||
         !ggml_is_contiguous(op) ||
         src0->ne[0] <= 0 ||
         ggml_nrows(src0) <= 0 ||
@@ -660,22 +691,29 @@ static bool ggml_backend_hrx2_supports_pointwise_binary(
         return false;
     }
 
-    const bool same_shape = ggml_are_same_shape(src1, src0) && ggml_is_contiguous(src1);
-    const size_t src1_min_row_bytes = static_cast<size_t>(src1->ne[0]) * sizeof(float);
+    uint32_t src0_row_stride = 0;
+    uint32_t src1_row_stride = 0;
+    if (!ggml_backend_hrx2_flat_row_stride_f32(src0, &src0_row_stride)) {
+        return false;
+    }
+
+    const int64_t nrows = ggml_nrows(src0);
     const bool same_shape_row_strided =
         ggml_are_same_shape(src1, src0) &&
-        src1->nb[0] == sizeof(float) &&
-        src1->nb[1] >= src1_min_row_bytes &&
-        src1->nb[1] % sizeof(float) == 0 &&
-        src1->ne[2] == 1 &&
-        src1->ne[3] == 1;
+        ggml_backend_hrx2_flat_row_stride_f32(src1, &src1_row_stride);
     const bool row_broadcast =
         src1->ne[0] == src0->ne[0] &&
-        src1->ne[1] == 1 &&
-        src1->ne[2] == 1 &&
-        src1->ne[3] == 1 &&
+        ggml_nrows(src1) == 1 &&
         src1->nb[0] == sizeof(float);
-    return same_shape || same_shape_row_strided || row_broadcast;
+    const bool col_broadcast =
+        src1->ne[0] == 1 &&
+        ggml_nrows(src1) == nrows &&
+        ggml_backend_hrx2_flat_row_stride_f32(src1, &src1_row_stride);
+    const bool scalar_broadcast =
+        src1->ne[0] == 1 &&
+        ggml_nrows(src1) == 1 &&
+        src1->nb[0] == sizeof(float);
+    return same_shape_row_strided || row_broadcast || col_broadcast || scalar_broadcast;
 }
 
 static bool ggml_backend_hrx2_supports_scale(
@@ -846,19 +884,34 @@ static bool ggml_backend_hrx2_extract_pointwise_shape(
         if (!ggml_backend_hrx2_supports_pointwise_binary(nullptr, op)) {
             return false;
         }
+        if (!ggml_backend_hrx2_flat_row_stride_f32(src0, &shape.src0_row_stride)) {
+            return false;
+        }
         if (ggml_are_same_shape(src1, src0)) {
-            if (src1->nb[1] % sizeof(float) != 0 ||
-                !ggml_backend_hrx2_u32_size(src1->nb[1] / sizeof(float), &shape.src1_row_stride)) {
+            if (!ggml_backend_hrx2_flat_row_stride_f32(src1, &shape.src1_row_stride) ||
+                !ggml_backend_hrx2_u32(src1->ne[0], &shape.src1_ncols)) {
+                return false;
+            }
+        } else if (src1->ne[0] == 1 && ggml_nrows(src1) == ggml_nrows(src0)) {
+            if (!ggml_backend_hrx2_flat_row_stride_f32(src1, &shape.src1_row_stride) ||
+                !ggml_backend_hrx2_u32(src1->ne[0], &shape.src1_ncols)) {
+                return false;
+            }
+        } else if ((src1->ne[0] == src0->ne[0] || src1->ne[0] == 1) && ggml_nrows(src1) == 1) {
+            shape.src1_row_stride = 0;
+            if (!ggml_backend_hrx2_u32(src1->ne[0], &shape.src1_ncols)) {
                 return false;
             }
         } else {
-            shape.src1_row_stride = 0;
+            return false;
         }
     } else if (op->op == GGML_OP_SCALE) {
         if (!ggml_backend_hrx2_supports_scale(nullptr, op)) {
             return false;
         }
+        shape.src0_row_stride = shape.ncols;
         shape.src1_row_stride = 0;
+        shape.src1_ncols = 1;
     } else {
         return false;
     }
@@ -1078,8 +1131,12 @@ static bool ggml_backend_hrx2_make_pointwise_plan(
             binding.value = std::to_string(shape.ncols);
         } else if (spec.value_source == "shape.nrows") {
             binding.value = std::to_string(shape.nrows);
+        } else if (spec.value_source == "shape.pointwise.src0_row_stride") {
+            binding.value = std::to_string(shape.src0_row_stride);
         } else if (spec.value_source == "shape.pointwise.src1_row_stride") {
             binding.value = std::to_string(shape.src1_row_stride);
+        } else if (spec.value_source == "shape.pointwise.src1_ncols") {
+            binding.value = std::to_string(shape.src1_ncols);
         } else if (spec.value_source.empty()) {
             binding.value = spec.value;
         } else {
@@ -1090,7 +1147,9 @@ static bool ggml_backend_hrx2_make_pointwise_plan(
     if (route->specialization_mode == "jit_config") {
         plan.cache_key += "|ncols=" + std::to_string(shape.ncols);
         plan.cache_key += "|nrows=" + std::to_string(shape.nrows);
+        plan.cache_key += "|src0_row_stride=" + std::to_string(shape.src0_row_stride);
         plan.cache_key += "|src1_row_stride=" + std::to_string(shape.src1_row_stride);
+        plan.cache_key += "|src1_ncols=" + std::to_string(shape.src1_ncols);
         for (const auto & binding : plan.config_bindings) {
             plan.cache_key += "|";
             plan.cache_key += binding.key;
