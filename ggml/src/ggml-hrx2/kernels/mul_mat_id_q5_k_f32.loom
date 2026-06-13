@@ -1,15 +1,22 @@
-config.decl @hrx2.shape.k : %value: index where [range(%value, 256, 32768), mul(%value, 256)]
-config.decl @hrx2.shape.rows : %value: index where [range(%value, 1, 262144)]
-config.decl @hrx2.shape.cols : %value: index where [range(%value, 1, 512)]
-config.decl @hrx2.tuning.workgroup_size : %value: index where [range(%value, 64, 256), mul(%value, 64)]
+config.decl @hrx2.shape.mul_mat_id.k : %value: index where [range(%value, 256, 32768), mul(%value, 256)]
+config.decl @hrx2.shape.mul_mat_id.rows : %value: index where [range(%value, 1, 262144)]
+config.decl @hrx2.shape.mul_mat_id.nexperts : %value: index where [range(%value, 1, 1024)]
+config.decl @hrx2.shape.mul_mat_id.nselected : %value: index where [range(%value, 1, 128)]
+config.decl @hrx2.shape.mul_mat_id.ntokens : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2.shape.mul_mat_id.src1_selected_stride : %value: index where [range(%value, 0, 1048576)]
+config.decl @hrx2.shape.mul_mat_id.src1_token_stride : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2.shape.mul_mat_id.idx_token_stride : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2.shape.mul_mat_id.dst_token_stride : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2.tuning.mul_mat_id.workgroup_size : %value: index where [range(%value, 64, 256), mul(%value, 64)]
 
-kernel.def export("hrx2_mul_mat_q5_k_f32_static") @hrx2_mul_mat_q5_k_f32_static() {
+kernel.def export("hrx2_mul_mat_id_q5_k_f32_static") @hrx2_mul_mat_id_q5_k_f32_static() {
   %unit = index.constant 1 : index
-  %rows = config.get @hrx2.shape.rows : index
-  %cols = config.get @hrx2.shape.cols : index
-  %workgroup_size = config.get @hrx2.tuning.workgroup_size : index
-  kernel.launch.config workgroups(%rows, %cols, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
-} launch(%src0: buffer, %src1: buffer, %dst: buffer) {
+  %rows = config.get @hrx2.shape.mul_mat_id.rows : index
+  %nselected = config.get @hrx2.shape.mul_mat_id.nselected : index
+  %ntokens = config.get @hrx2.shape.mul_mat_id.ntokens : index
+  %workgroup_size = config.get @hrx2.tuning.mul_mat_id.workgroup_size : index
+  kernel.launch.config workgroups(%rows, %nselected, %ntokens) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%src0: buffer, %src1: buffer, %idx: buffer, %dst: buffer) {
   %base = index.constant 0 : offset
   %zero_index = index.constant 0 : index
   %one = index.constant 1 : index
@@ -29,27 +36,39 @@ kernel.def export("hrx2_mul_mat_q5_k_f32_static") @hrx2_mul_mat_q5_k_f32_static(
   %scale_offset = index.constant 4 : index
   %qh_offset = index.constant 16 : index
   %qs_offset = index.constant 48 : index
-  %k = config.get @hrx2.shape.k : index
-  %rows = config.get @hrx2.shape.rows : index
-  %cols = config.get @hrx2.shape.cols : index
-  %workgroup_size = config.get @hrx2.tuning.workgroup_size : index
+  %k = config.get @hrx2.shape.mul_mat_id.k : index
+  %rows = config.get @hrx2.shape.mul_mat_id.rows : index
+  %nexperts = config.get @hrx2.shape.mul_mat_id.nexperts : index
+  %nselected = config.get @hrx2.shape.mul_mat_id.nselected : index
+  %ntokens = config.get @hrx2.shape.mul_mat_id.ntokens : index
+  %src1_selected_stride = config.get @hrx2.shape.mul_mat_id.src1_selected_stride : index
+  %src1_token_stride = config.get @hrx2.shape.mul_mat_id.src1_token_stride : index
+  %idx_token_stride = config.get @hrx2.shape.mul_mat_id.idx_token_stride : index
+  %dst_token_stride = config.get @hrx2.shape.mul_mat_id.dst_token_stride : index
+  %workgroup_size = config.get @hrx2.tuning.mul_mat_id.workgroup_size : index
   %k_bounded = index.assume %k [range(%k, 256, 32768)] : index
   %rows_bounded = index.assume %rows [range(%rows, 1, 262144)] : index
-  %cols_bounded = index.assume %cols [range(%cols, 1, 512)] : index
+  %nexperts_bounded = index.assume %nexperts [range(%nexperts, 1, 1024)] : index
+  %nselected_bounded = index.assume %nselected [range(%nselected, 1, 128)] : index
+  %ntokens_bounded = index.assume %ntokens [range(%ntokens, 1, 1048576)] : index
   %row0 = kernel.workgroup.id<x> : index
   %row = index.assume %row0 [range(%row0, 0, 262143)] : index
-  %col0 = kernel.workgroup.id<y> : index
-  %col = index.assume %col0 [range(%col0, 0, 63)] : index
+  %selected0 = kernel.workgroup.id<y> : index
+  %selected = index.assume %selected0 [range(%selected0, 0, 127)] : index
+  %token0 = kernel.workgroup.id<z> : index
+  %token = index.assume %token0 [range(%token0, 0, 1048575)] : index
   %lane0 = kernel.workitem.id<x> : index
   %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
   %zero_f32 = scalar.constant 0.0 : f32
 
   %blocks_per_row = index.div %k_bounded, %qk : index
-  %total_blocks = index.mul %rows_bounded, %blocks_per_row : index
+  %expert_blocks0 = index.mul %rows_bounded, %blocks_per_row : index
+  %total_blocks = index.mul %nexperts_bounded, %expert_blocks0 : index
   %src0_i8_count = index.mul %total_blocks, %block_bytes : index
   %src0_f16_count = index.mul %total_blocks, %block_f16s : index
-  %src1_count = index.mul %cols_bounded, %k_bounded : index
-  %dst_count = index.mul %cols_bounded, %rows_bounded : index
+  %src1_count = index.mul %ntokens_bounded, %src1_token_stride : index
+  %idx_count = index.mul %ntokens_bounded, %idx_token_stride : index
+  %dst_count = index.mul %ntokens_bounded, %dst_token_stride : index
 
   %block_lane = index.rem %lane, %sixtyfour : index
   %block_slot = index.div %lane, %sixtyfour : index
@@ -67,15 +86,27 @@ kernel.def export("hrx2_mul_mat_q5_k_f32_static") @hrx2_mul_mat_q5_k_f32_static(
 
   %src0_global = buffer.assume.memory_space<global> %src0 : buffer
   %src1_global = buffer.assume.memory_space<global> %src1 : buffer
+  %idx_global = buffer.assume.memory_space<global> %idx : buffer
   %dst_global = buffer.assume.memory_space<global> %dst : buffer
-  %src0_noalias, %src1_noalias, %dst_noalias = buffer.assume.noalias %src0_global, %src1_global, %dst_global : buffer, buffer, buffer
+  %src0_noalias, %src1_noalias, %idx_noalias, %dst_noalias = buffer.assume.noalias %src0_global, %src1_global, %idx_global, %dst_global : buffer, buffer, buffer, buffer
   %src0_i8_view = buffer.view %src0_noalias[%base] : buffer -> view<[%src0_i8_count]xi8, #dense>
   %src0_f16_view = buffer.view %src0_noalias[%base] : buffer -> view<[%src0_f16_count]xf16, #dense>
   %src1_view = buffer.view %src1_noalias[%base] : buffer -> view<[%src1_count]xf32, #dense>
+  %idx_view = buffer.view %idx_noalias[%base] : buffer -> view<[%idx_count]xi32, #dense>
   %dst_view = buffer.view %dst_noalias[%base] : buffer -> view<[%dst_count]xf32, #dense>
 
-  %row_block_base = index.mul %row, %blocks_per_row : index
-  %src1_col_base = index.mul %col, %k_bounded : index
+  %idx_token_base = index.mul %token, %idx_token_stride : index
+  %idx_offset = index.add %idx_token_base, %selected : index
+  %expert_i32 = view.load %idx_view[%idx_offset] : view<[%idx_count]xi32, #dense> -> i32
+  %expert0 = index.cast %expert_i32 : i32 to index
+  %expert = index.assume %expert0 [range(%expert0, 0, 1023)] : index
+  %expert_valid = index.cmp ult, %expert, %nexperts_bounded : index
+  %expert_row_block0 = index.mul %expert, %expert_blocks0 : index
+  %row_block_base0 = index.mul %row, %blocks_per_row : index
+  %row_block_base = index.add %expert_row_block0, %row_block_base0 : index
+  %src1_token_base = index.mul %token, %src1_token_stride : index
+  %src1_selected_base0 = index.mul %selected, %src1_selected_stride : index
+  %src1_col_base = index.add %src1_token_base, %src1_selected_base0 : index
   %sum = scf.for %block_idx = [%block_slot to %blocks_per_row step %block_step](%acc = %zero_f32 : f32) -> (f32) {
     %src_base_block = index.mul %block_idx, %qk : index
     %src_base_group = index.mul %group, %thirtytwo : index
@@ -180,13 +211,17 @@ kernel.def export("hrx2_mul_mat_q5_k_f32_static") @hrx2_mul_mat_q5_k_f32_static(
   }
 
   %dot = kernel.workgroup.reduce<addf> %sum : f32
-  %dst_col_base = index.mul %col, %rows_bounded : index
-  %dst_index = index.add %dst_col_base, %row : index
+  %dst_token_base = index.mul %token, %dst_token_stride : index
+  %dst_selected_base0 = index.mul %selected, %rows_bounded : index
+  %dst_selected_base = index.add %dst_token_base, %dst_selected_base0 : index
+  %dst_index = index.add %dst_selected_base, %row : index
   %lane_i32 = index.cast %lane : index to i32
   %zero_i32 = scalar.constant 0 : i32
   %is_lane0 = scalar.cmpi eq, %lane_i32, %zero_i32 : i32
-  scf.if %is_lane0 {
-    view.store %dot, %dst_view[%dst_index] : f32, view<[%dst_count]xf32, #dense>
+  scf.if %expert_valid {
+    scf.if %is_lane0 {
+      view.store %dot, %dst_view[%dst_index] : f32, view<[%dst_count]xf32, #dense>
+    }
   }
   kernel.return
 }

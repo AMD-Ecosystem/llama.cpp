@@ -1,6 +1,6 @@
 config.decl @hrx2.shape.k : %value: index where [range(%value, 256, 32768), mul(%value, 256)]
 config.decl @hrx2.shape.rows : %value: index where [range(%value, 1, 32768)]
-config.decl @hrx2.shape.cols : %value: index where [range(%value, 1, 64)]
+config.decl @hrx2.shape.cols : %value: index where [range(%value, 1, 512)]
 config.decl @hrx2.tuning.workgroup_size : %value: index where [range(%value, 64, 256), mul(%value, 64)]
 
 kernel.def export("hrx2_mul_mat_q4_k_f32_static") @hrx2_mul_mat_q4_k_f32_static() {
@@ -34,7 +34,7 @@ kernel.def export("hrx2_mul_mat_q4_k_f32_static") @hrx2_mul_mat_q4_k_f32_static(
   %workgroup_size = config.get @hrx2.tuning.workgroup_size : index
   %k_bounded = index.assume %k [range(%k, 256, 32768)] : index
   %rows_bounded = index.assume %rows [range(%rows, 1, 32768)] : index
-  %cols_bounded = index.assume %cols [range(%cols, 1, 64)] : index
+  %cols_bounded = index.assume %cols [range(%cols, 1, 512)] : index
   %row0 = kernel.workgroup.id<x> : index
   %row = index.assume %row0 [range(%row0, 0, 32767)] : index
   %col0 = kernel.workgroup.id<y> : index

@@ -54,7 +54,9 @@ struct ggml_backend_hrx2_device_context {
     std::vector<const ggml_backend_hrx2_kernel_route *> mul_mat_q4_k_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> mul_mat_id_q4_k_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> mul_mat_q5_k_routes;
+    std::vector<const ggml_backend_hrx2_kernel_route *> mul_mat_id_q5_k_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> mul_mat_q6_k_routes;
+    std::vector<const ggml_backend_hrx2_kernel_route *> mul_mat_id_q6_k_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> mul_mat_f16_f32_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> cont_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> swiglu_routes;
@@ -738,9 +740,10 @@ static bool ggml_backend_hrx2_supports_mul_mat_q4_k(
            cols <= std::numeric_limits<uint32_t>::max();
 }
 
-static bool ggml_backend_hrx2_supports_mul_mat_id_q4_k(
+static bool ggml_backend_hrx2_supports_mul_mat_id_k(
         ggml_backend_hrx2_device_context * device_context,
-        const ggml_tensor * op) {
+        const ggml_tensor * op,
+        ggml_type src0_type) {
     GGML_UNUSED(device_context);
     const ggml_tensor * src0 = op->src[0];
     const ggml_tensor * src1 = op->src[1];
@@ -750,7 +753,7 @@ static bool ggml_backend_hrx2_supports_mul_mat_id_q4_k(
         !src1 ||
         !src2 ||
         op->view_src != nullptr ||
-        src0->type != GGML_TYPE_Q4_K ||
+        src0->type != src0_type ||
         src1->type != GGML_TYPE_F32 ||
         src2->type != GGML_TYPE_I32 ||
         op->type != GGML_TYPE_F32) {
@@ -799,6 +802,24 @@ static bool ggml_backend_hrx2_supports_mul_mat_id_q4_k(
            src1->nb[2] / sizeof(float) <= std::numeric_limits<uint32_t>::max() &&
            src2->nb[1] / sizeof(int32_t) <= std::numeric_limits<uint32_t>::max() &&
            op->nb[2] / sizeof(float) <= std::numeric_limits<uint32_t>::max();
+}
+
+static bool ggml_backend_hrx2_supports_mul_mat_id_q4_k(
+        ggml_backend_hrx2_device_context * device_context,
+        const ggml_tensor * op) {
+    return ggml_backend_hrx2_supports_mul_mat_id_k(device_context, op, GGML_TYPE_Q4_K);
+}
+
+static bool ggml_backend_hrx2_supports_mul_mat_id_q5_k(
+        ggml_backend_hrx2_device_context * device_context,
+        const ggml_tensor * op) {
+    return ggml_backend_hrx2_supports_mul_mat_id_k(device_context, op, GGML_TYPE_Q5_K);
+}
+
+static bool ggml_backend_hrx2_supports_mul_mat_id_q6_k(
+        ggml_backend_hrx2_device_context * device_context,
+        const ggml_tensor * op) {
+    return ggml_backend_hrx2_supports_mul_mat_id_k(device_context, op, GGML_TYPE_Q6_K);
 }
 
 static bool ggml_backend_hrx2_supports_mul_mat_q6_k(
@@ -1373,10 +1394,11 @@ static bool ggml_backend_hrx2_mul_mat_q4_k_shape(
     return true;
 }
 
-static bool ggml_backend_hrx2_mul_mat_id_q4_k_shape(
+static bool ggml_backend_hrx2_mul_mat_id_k_shape(
         const ggml_tensor * op,
+        ggml_type src0_type,
         ggml_backend_hrx2_mul_mat_id_shape * out_shape) {
-    if (!ggml_backend_hrx2_supports_mul_mat_id_q4_k(nullptr, op)) {
+    if (!ggml_backend_hrx2_supports_mul_mat_id_k(nullptr, op, src0_type)) {
         return false;
     }
     const ggml_tensor * src0 = op->src[0];
@@ -1392,6 +1414,24 @@ static bool ggml_backend_hrx2_mul_mat_id_q4_k_shape(
     out_shape->idx_token_stride = static_cast<uint32_t>(src2->nb[1] / sizeof(int32_t));
     out_shape->dst_token_stride = static_cast<uint32_t>(op->nb[2] / sizeof(float));
     return true;
+}
+
+static bool ggml_backend_hrx2_mul_mat_id_q4_k_shape(
+        const ggml_tensor * op,
+        ggml_backend_hrx2_mul_mat_id_shape * out_shape) {
+    return ggml_backend_hrx2_mul_mat_id_k_shape(op, GGML_TYPE_Q4_K, out_shape);
+}
+
+static bool ggml_backend_hrx2_mul_mat_id_q5_k_shape(
+        const ggml_tensor * op,
+        ggml_backend_hrx2_mul_mat_id_shape * out_shape) {
+    return ggml_backend_hrx2_mul_mat_id_k_shape(op, GGML_TYPE_Q5_K, out_shape);
+}
+
+static bool ggml_backend_hrx2_mul_mat_id_q6_k_shape(
+        const ggml_tensor * op,
+        ggml_backend_hrx2_mul_mat_id_shape * out_shape) {
+    return ggml_backend_hrx2_mul_mat_id_k_shape(op, GGML_TYPE_Q6_K, out_shape);
 }
 
 static bool ggml_backend_hrx2_mul_mat_q6_k_shape(
@@ -2932,20 +2972,43 @@ static bool ggml_backend_hrx2_supports_mul_mat_q4_k_route(
     return false;
 }
 
-static bool ggml_backend_hrx2_supports_mul_mat_id_q4_k_route(
+static bool ggml_backend_hrx2_supports_mul_mat_id_k_route(
         ggml_backend_hrx2_device_context * device_context,
-        const ggml_tensor * op) {
+        const ggml_tensor * op,
+        ggml_type src0_type,
+        const std::vector<const ggml_backend_hrx2_kernel_route *> & routes) {
     ggml_backend_hrx2_mul_mat_id_shape shape;
-    if (!ggml_backend_hrx2_mul_mat_id_q4_k_shape(op, &shape)) {
+    if (!ggml_backend_hrx2_mul_mat_id_k_shape(op, src0_type, &shape)) {
         return false;
     }
-    for (const auto * route : device_context->mul_mat_id_q4_k_routes) {
+    for (const auto * route : routes) {
         ggml_backend_hrx2_provider_plan plan;
         if (ggml_backend_hrx2_make_mul_mat_id_q4_k_plan(device_context, route, shape, &plan)) {
             return true;
         }
     }
     return false;
+}
+
+static bool ggml_backend_hrx2_supports_mul_mat_id_q4_k_route(
+        ggml_backend_hrx2_device_context * device_context,
+        const ggml_tensor * op) {
+    return ggml_backend_hrx2_supports_mul_mat_id_k_route(
+        device_context, op, GGML_TYPE_Q4_K, device_context->mul_mat_id_q4_k_routes);
+}
+
+static bool ggml_backend_hrx2_supports_mul_mat_id_q5_k_route(
+        ggml_backend_hrx2_device_context * device_context,
+        const ggml_tensor * op) {
+    return ggml_backend_hrx2_supports_mul_mat_id_k_route(
+        device_context, op, GGML_TYPE_Q5_K, device_context->mul_mat_id_q5_k_routes);
+}
+
+static bool ggml_backend_hrx2_supports_mul_mat_id_q6_k_route(
+        ggml_backend_hrx2_device_context * device_context,
+        const ggml_tensor * op) {
+    return ggml_backend_hrx2_supports_mul_mat_id_k_route(
+        device_context, op, GGML_TYPE_Q6_K, device_context->mul_mat_id_q6_k_routes);
 }
 
 static bool ggml_backend_hrx2_supports_mul_mat_q6_k_route(
@@ -4408,9 +4471,13 @@ static ggml_status ggml_backend_hrx2_dispatch_mul_mat_q4_k(
     return GGML_STATUS_FAILED;
 }
 
-static ggml_status ggml_backend_hrx2_dispatch_mul_mat_id_q4_k(
+static ggml_status ggml_backend_hrx2_dispatch_mul_mat_id_k(
         ggml_backend_hrx2_context * context,
-        const ggml_tensor * dst) {
+        const ggml_tensor * dst,
+        ggml_type src0_type,
+        const char * family,
+        const char * type_label,
+        const std::vector<const ggml_backend_hrx2_kernel_route *> & routes) {
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
     const ggml_tensor * src2 = dst->src[2];
@@ -4422,32 +4489,32 @@ static ggml_status ggml_backend_hrx2_dispatch_mul_mat_id_q4_k(
         ggml_backend_hrx2_trace_event(
             "dispatch_failed",
             ggml_backend_hrx2_json_kv("op", "MUL_MAT_ID") + "," +
-            ggml_backend_hrx2_json_kv("family", "mul_mat_id_q4_k_f32") + "," +
+            ggml_backend_hrx2_json_kv("family", family) + "," +
             ggml_backend_hrx2_json_kv("reason", "buffer_ref") + "," +
             ggml_backend_hrx2_json_kv("dst", ggml_backend_hrx2_tensor_summary(dst)) + "," +
             ggml_backend_hrx2_json_kv("src0", ggml_backend_hrx2_tensor_summary(src0)) + "," +
             ggml_backend_hrx2_json_kv("src1", ggml_backend_hrx2_tensor_summary(src1)) + "," +
             ggml_backend_hrx2_json_kv("src2", ggml_backend_hrx2_tensor_summary(src2)));
-        GGML_LOG_ERROR("HRX2: MUL_MAT_ID Q4_K tensor is not backed by HRX2 buffers\n");
+        GGML_LOG_ERROR("HRX2: MUL_MAT_ID %s tensor is not backed by HRX2 buffers\n", type_label);
         return GGML_STATUS_FAILED;
     }
 
     ggml_backend_hrx2_mul_mat_id_shape shape;
-    if (!ggml_backend_hrx2_mul_mat_id_q4_k_shape(dst, &shape)) {
+    if (!ggml_backend_hrx2_mul_mat_id_k_shape(dst, src0_type, &shape)) {
         ggml_backend_hrx2_trace_event(
             "dispatch_failed",
             ggml_backend_hrx2_json_kv("op", "MUL_MAT_ID") + "," +
-            ggml_backend_hrx2_json_kv("family", "mul_mat_id_q4_k_f32") + "," +
+            ggml_backend_hrx2_json_kv("family", family) + "," +
             ggml_backend_hrx2_json_kv("reason", "shape") + "," +
             ggml_backend_hrx2_json_kv("dst", ggml_backend_hrx2_tensor_summary(dst)) + "," +
             ggml_backend_hrx2_json_kv("src0", ggml_backend_hrx2_tensor_summary(src0)) + "," +
             ggml_backend_hrx2_json_kv("src1", ggml_backend_hrx2_tensor_summary(src1)) + "," +
             ggml_backend_hrx2_json_kv("src2", ggml_backend_hrx2_tensor_summary(src2)));
-        GGML_LOG_ERROR("HRX2: invalid MUL_MAT_ID Q4_K shape during dispatch\n");
+        GGML_LOG_ERROR("HRX2: invalid MUL_MAT_ID %s shape during dispatch\n", type_label);
         return GGML_STATUS_FAILED;
     }
 
-    for (const auto * route : context->device_context->mul_mat_id_q4_k_routes) {
+    for (const auto * route : routes) {
         ggml_backend_hrx2_provider_plan plan;
         if (!ggml_backend_hrx2_make_mul_mat_id_q4_k_plan(context->device_context, route, shape, &plan)) {
             continue;
@@ -4462,7 +4529,7 @@ static ggml_status ggml_backend_hrx2_dispatch_mul_mat_id_q4_k(
             ggml_backend_hrx2_trace_event(
                 "provider_unavailable",
                 ggml_backend_hrx2_json_kv("op", "MUL_MAT_ID") + "," +
-                ggml_backend_hrx2_json_kv("family", "mul_mat_id_q4_k_f32") + "," +
+                ggml_backend_hrx2_json_kv("family", family) + "," +
                 ggml_backend_hrx2_json_kv("route_id", plan.route->id) + "," +
                 ggml_backend_hrx2_json_kv("target_key", context->device_context->architecture) + "," +
                 ggml_backend_hrx2_json_kv("cache_key", plan.cache_key) + "," +
@@ -4476,7 +4543,8 @@ static ggml_status ggml_backend_hrx2_dispatch_mul_mat_id_q4_k(
 
         if (provider->route.constant_byte_length != 0) {
             GGML_LOG_ERROR(
-                "HRX2: MUL_MAT_ID Q4_K route %s has unsupported constant byte length %u\n",
+                "HRX2: MUL_MAT_ID %s route %s has unsupported constant byte length %u\n",
+                type_label,
                 provider->route.id.c_str(),
                 provider->route.constant_byte_length);
             continue;
@@ -4499,7 +4567,7 @@ static ggml_status ggml_backend_hrx2_dispatch_mul_mat_id_q4_k(
         ggml_backend_hrx2_trace_event(
             "dispatch",
             ggml_backend_hrx2_json_kv("op", "MUL_MAT_ID") + "," +
-            ggml_backend_hrx2_json_kv("family", "mul_mat_id_q4_k_f32") + "," +
+            ggml_backend_hrx2_json_kv("family", family) + "," +
             ggml_backend_hrx2_json_kv("route_id", provider->route.id) + "," +
             ggml_backend_hrx2_json_kv("target_key", context->device_context->architecture) + "," +
             ggml_backend_hrx2_json_kv("cache_key", provider->cache_key) + "," +
@@ -4526,7 +4594,7 @@ static ggml_status ggml_backend_hrx2_dispatch_mul_mat_id_q4_k(
             ggml_backend_hrx2_trace_event(
                 "dispatch_failed",
                 ggml_backend_hrx2_json_kv("op", "MUL_MAT_ID") + "," +
-                ggml_backend_hrx2_json_kv("family", "mul_mat_id_q4_k_f32") + "," +
+                ggml_backend_hrx2_json_kv("family", family) + "," +
                 ggml_backend_hrx2_json_kv("reason", "hrx_stream_dispatch") + "," +
                 ggml_backend_hrx2_json_kv("route_id", provider->route.id));
             return GGML_STATUS_FAILED;
@@ -4535,13 +4603,35 @@ static ggml_status ggml_backend_hrx2_dispatch_mul_mat_id_q4_k(
     }
 
     GGML_LOG_ERROR(
-        "HRX2: MUL_MAT_ID Q4_K provider is not available for k=%u rows=%u nexperts=%u nselected=%u ntokens=%u\n",
+        "HRX2: MUL_MAT_ID %s provider is not available for k=%u rows=%u nexperts=%u nselected=%u ntokens=%u\n",
+        type_label,
         shape.k,
         shape.rows,
         shape.nexperts,
         shape.nselected,
         shape.ntokens);
     return GGML_STATUS_FAILED;
+}
+
+static ggml_status ggml_backend_hrx2_dispatch_mul_mat_id_q4_k(
+        ggml_backend_hrx2_context * context,
+        const ggml_tensor * dst) {
+    return ggml_backend_hrx2_dispatch_mul_mat_id_k(
+        context, dst, GGML_TYPE_Q4_K, "mul_mat_id_q4_k_f32", "Q4_K", context->device_context->mul_mat_id_q4_k_routes);
+}
+
+static ggml_status ggml_backend_hrx2_dispatch_mul_mat_id_q5_k(
+        ggml_backend_hrx2_context * context,
+        const ggml_tensor * dst) {
+    return ggml_backend_hrx2_dispatch_mul_mat_id_k(
+        context, dst, GGML_TYPE_Q5_K, "mul_mat_id_q5_k_f32", "Q5_K", context->device_context->mul_mat_id_q5_k_routes);
+}
+
+static ggml_status ggml_backend_hrx2_dispatch_mul_mat_id_q6_k(
+        ggml_backend_hrx2_context * context,
+        const ggml_tensor * dst) {
+    return ggml_backend_hrx2_dispatch_mul_mat_id_k(
+        context, dst, GGML_TYPE_Q6_K, "mul_mat_id_q6_k_f32", "Q6_K", context->device_context->mul_mat_id_q6_k_routes);
 }
 
 static ggml_status ggml_backend_hrx2_dispatch_mul_mat_q6_k(
@@ -5356,6 +5446,18 @@ static enum ggml_status ggml_backend_hrx2_graph_compute(ggml_backend_t backend, 
                     }
                     break;
                 }
+                if (ggml_backend_hrx2_supports_mul_mat_id_q5_k_route(context->device_context, node)) {
+                    if (ggml_backend_hrx2_dispatch_mul_mat_id_q5_k(context, node) != GGML_STATUS_SUCCESS) {
+                        return GGML_STATUS_FAILED;
+                    }
+                    break;
+                }
+                if (ggml_backend_hrx2_supports_mul_mat_id_q6_k_route(context->device_context, node)) {
+                    if (ggml_backend_hrx2_dispatch_mul_mat_id_q6_k(context, node) != GGML_STATUS_SUCCESS) {
+                        return GGML_STATUS_FAILED;
+                    }
+                    break;
+                }
                 {
                     GGML_LOG_ERROR("HRX2: unsupported MUL_MAT_ID shape/type/layout\n");
                     return GGML_STATUS_FAILED;
@@ -5510,7 +5612,9 @@ static bool ggml_backend_hrx2_device_supports_op(ggml_backend_dev_t dev, const g
                    ggml_backend_hrx2_supports_mul_mat_q6_k_route(ggml_backend_hrx2_get_device_context(dev), op) ||
                    ggml_backend_hrx2_supports_mul_mat_f16_f32_route(ggml_backend_hrx2_get_device_context(dev), op);
         case GGML_OP_MUL_MAT_ID:
-            return ggml_backend_hrx2_supports_mul_mat_id_q4_k_route(ggml_backend_hrx2_get_device_context(dev), op);
+            return ggml_backend_hrx2_supports_mul_mat_id_q4_k_route(ggml_backend_hrx2_get_device_context(dev), op) ||
+                   ggml_backend_hrx2_supports_mul_mat_id_q5_k_route(ggml_backend_hrx2_get_device_context(dev), op) ||
+                   ggml_backend_hrx2_supports_mul_mat_id_q6_k_route(ggml_backend_hrx2_get_device_context(dev), op);
         case GGML_OP_SET_ROWS:
             return ggml_backend_hrx2_supports_set_rows_route(ggml_backend_hrx2_get_device_context(dev), op);
         default:
@@ -5637,9 +5741,19 @@ static std::unique_ptr<ggml_backend_hrx2_reg_context> ggml_backend_hrx2_create_r
                 &device_context->mul_mat_q5_k_routes);
             ggml_backend_hrx2_catalog_find_routes(
                 *device_context->catalog,
+                "mul_mat_id_q5_k_f32",
+                "MUL_MAT_ID",
+                &device_context->mul_mat_id_q5_k_routes);
+            ggml_backend_hrx2_catalog_find_routes(
+                *device_context->catalog,
                 "mul_mat_q6_k_f32",
                 "MUL_MAT",
                 &device_context->mul_mat_q6_k_routes);
+            ggml_backend_hrx2_catalog_find_routes(
+                *device_context->catalog,
+                "mul_mat_id_q6_k_f32",
+                "MUL_MAT_ID",
+                &device_context->mul_mat_id_q6_k_routes);
             ggml_backend_hrx2_catalog_find_routes(
                 *device_context->catalog,
                 "mul_mat_f16_f32_batched",
@@ -5737,8 +5851,16 @@ static std::unique_ptr<ggml_backend_hrx2_reg_context> ggml_backend_hrx2_create_r
                 device_context->mul_mat_q5_k_routes.end(),
                 route_less);
             std::sort(
+                device_context->mul_mat_id_q5_k_routes.begin(),
+                device_context->mul_mat_id_q5_k_routes.end(),
+                route_less);
+            std::sort(
                 device_context->mul_mat_q6_k_routes.begin(),
                 device_context->mul_mat_q6_k_routes.end(),
+                route_less);
+            std::sort(
+                device_context->mul_mat_id_q6_k_routes.begin(),
+                device_context->mul_mat_id_q6_k_routes.end(),
                 route_less);
             std::sort(
                 device_context->cont_routes.begin(),
