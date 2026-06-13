@@ -966,6 +966,55 @@ static void ggml_backend_sched_trace_assignments(ggml_backend_sched_t sched, str
     fclose(file);
 }
 
+static void ggml_backend_sched_trace_compute_event(
+        ggml_backend_sched_t sched,
+        const char * event,
+        int split_id,
+        int input_id,
+        ggml_backend_t backend,
+        const struct ggml_tensor * tensor,
+        enum ggml_status status) {
+    const char * trace_path = getenv("GGML_SCHED_TRACE_JSONL");
+    if (trace_path == NULL || trace_path[0] == '\0') {
+        return;
+    }
+
+    FILE * file = fopen(trace_path, "a");
+    if (file == NULL) {
+        GGML_LOG_WARN("%s: failed to open GGML_SCHED_TRACE_JSONL=%s\n", __func__, trace_path);
+        return;
+    }
+
+    fputs("{\"event\":", file);
+    ggml_backend_sched_fprint_json_escaped(file, event);
+    fprintf(file, ",\"split_id\":%d", split_id);
+    if (input_id >= 0) {
+        fprintf(file, ",\"input_id\":%d", input_id);
+    }
+    if (backend != NULL) {
+        fputs(",\"backend\":", file);
+        ggml_backend_sched_fprint_json_escaped(file, ggml_backend_name(backend));
+        fprintf(file, ",\"backend_index\":%d", ggml_backend_sched_backend_id(sched, backend));
+    }
+    if (tensor != NULL) {
+        fputs(",\"tensor\":", file);
+        ggml_backend_sched_fprint_json_escaped(file, tensor->name);
+        fputs(",\"op\":", file);
+        ggml_backend_sched_fprint_json_escaped(file, ggml_op_name(tensor->op));
+        fputs(",\"type\":", file);
+        ggml_backend_sched_fprint_json_escaped(file, ggml_type_name(tensor->type));
+        fprintf(file, ",\"ne\":[%lld,%lld,%lld,%lld]",
+                (long long) tensor->ne[0], (long long) tensor->ne[1],
+                (long long) tensor->ne[2], (long long) tensor->ne[3]);
+        fprintf(file, ",\"nbytes\":%zu", ggml_nbytes(tensor));
+    }
+    if (status != GGML_STATUS_SUCCESS) {
+        fprintf(file, ",\"status\":%d", (int) status);
+    }
+    fputs("}\n", file);
+    fclose(file);
+}
+
 static void ggml_backend_sched_print_assignments(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
     int cur_split = 0;
     for (int i = 0; i < graph->n_nodes; i++) {
@@ -1569,12 +1618,19 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         struct ggml_backend_sched_split * split = &splits[split_id];
         int split_backend_id = split->backend_id;
         ggml_backend_t split_backend = sched->backends[split_backend_id];
+        ggml_backend_sched_trace_compute_event(
+            sched, "sched_split_begin", split_id, -1, split_backend,
+            split->graph.n_nodes > 0 ? split->graph.nodes[0] : nullptr,
+            GGML_STATUS_SUCCESS);
 
         // copy the input tensors to the split backend
         for (int input_id = 0; input_id < split->n_inputs; input_id++) {
             ggml_backend_t input_backend = ggml_backend_sched_get_tensor_backend(sched, split->inputs[input_id]);
             struct ggml_tensor * input = split->inputs[input_id];
             struct ggml_tensor * input_cpy = tensor_copy(input, split_backend_id, sched->cur_copy);
+            ggml_backend_sched_trace_compute_event(
+                sched, "sched_split_input_begin", split_id, input_id, input_backend,
+                input, GGML_STATUS_SUCCESS);
 
             if (input->flags & GGML_TENSOR_FLAG_INPUT) {
                 // inputs from the user must be copied immediately to prevent the user overwriting the data before the copy is done
@@ -1691,10 +1747,17 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     }
                 }
             }
+            ggml_backend_sched_trace_compute_event(
+                sched, "sched_split_input_end", split_id, input_id, split_backend,
+                input_cpy, GGML_STATUS_SUCCESS);
         }
 
         if (!sched->callback_eval) {
             enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &split->graph);
+            ggml_backend_sched_trace_compute_event(
+                sched, "sched_split_compute_end", split_id, -1, split_backend,
+                split->graph.n_nodes > 0 ? split->graph.nodes[split->graph.n_nodes - 1] : nullptr,
+                ec);
             if (ec != GGML_STATUS_SUCCESS) {
                 return ec;
             }
@@ -1731,6 +1794,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 j0 = j1;
             }
         }
+        ggml_backend_sched_trace_compute_event(
+            sched, "sched_split_end", split_id, -1, split_backend,
+            split->graph.n_nodes > 0 ? split->graph.nodes[split->graph.n_nodes - 1] : nullptr,
+            GGML_STATUS_SUCCESS);
 
         // record the event of this copy
         if (split->n_inputs > 0) {

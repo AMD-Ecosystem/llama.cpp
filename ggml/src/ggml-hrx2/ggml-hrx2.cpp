@@ -392,18 +392,6 @@ static size_t ggml_backend_hrx2_tensor_offset(const ggml_backend_hrx2_buffer_con
     return static_cast<size_t>(static_cast<const uint8_t *>(tensor->data) - context->base);
 }
 
-static bool ggml_backend_hrx2_tensors_known_non_overlapping(const ggml_tensor * a, const ggml_tensor * b) {
-    if (!a || !b || !a->data || !b->data) {
-        return true;
-    }
-
-    const auto * a_begin = static_cast<const uint8_t *>(a->data);
-    const auto * b_begin = static_cast<const uint8_t *>(b->data);
-    const auto * a_end = a_begin + ggml_nbytes(a);
-    const auto * b_end = b_begin + ggml_nbytes(b);
-    return a_end <= b_begin || b_end <= a_begin;
-}
-
 static bool ggml_backend_hrx2_tensor_buffer_ref(const ggml_tensor * tensor, hrx_buffer_ref_t * out_ref) {
     ggml_backend_buffer_t buffer = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
     if (!buffer || buffer->iface.get_base != ggml_backend_hrx2_buffer_get_base) {
@@ -596,9 +584,6 @@ static bool ggml_backend_hrx2_supports_mul_mat_q8_0(
            op->ne[2] == 1 && op->ne[3] == 1 &&
            block_size > 0 &&
            (k % block_size) == 0 &&
-           ggml_backend_hrx2_tensors_known_non_overlapping(src0, src1) &&
-           ggml_backend_hrx2_tensors_known_non_overlapping(src0, op) &&
-           ggml_backend_hrx2_tensors_known_non_overlapping(src1, op) &&
            ggml_is_contiguous(src0) &&
            ggml_is_contiguous(src1) &&
            ggml_is_contiguous(op) &&
@@ -1922,12 +1907,26 @@ static ggml_status ggml_backend_hrx2_dispatch_mul_mat_q8_0(
     if (!ggml_backend_hrx2_tensor_buffer_ref(src0, &bindings[0]) ||
         !ggml_backend_hrx2_tensor_buffer_ref(src1, &bindings[1]) ||
         !ggml_backend_hrx2_tensor_buffer_ref(dst, &bindings[2])) {
+        ggml_backend_hrx2_trace_event(
+            "dispatch_failed",
+            ggml_backend_hrx2_json_kv("op", "MUL_MAT") + "," +
+            ggml_backend_hrx2_json_kv("reason", "buffer_ref") + "," +
+            ggml_backend_hrx2_json_kv("dst", ggml_backend_hrx2_tensor_summary(dst)) + "," +
+            ggml_backend_hrx2_json_kv("src0", ggml_backend_hrx2_tensor_summary(src0)) + "," +
+            ggml_backend_hrx2_json_kv("src1", ggml_backend_hrx2_tensor_summary(src1)));
         GGML_LOG_ERROR("HRX2: MUL_MAT tensor is not backed by HRX2 buffers\n");
         return GGML_STATUS_FAILED;
     }
 
     ggml_backend_hrx2_mul_mat_shape shape;
     if (!ggml_backend_hrx2_mul_mat_q8_0_shape(dst, &shape)) {
+        ggml_backend_hrx2_trace_event(
+            "dispatch_failed",
+            ggml_backend_hrx2_json_kv("op", "MUL_MAT") + "," +
+            ggml_backend_hrx2_json_kv("reason", "shape") + "," +
+            ggml_backend_hrx2_json_kv("dst", ggml_backend_hrx2_tensor_summary(dst)) + "," +
+            ggml_backend_hrx2_json_kv("src0", ggml_backend_hrx2_tensor_summary(src0)) + "," +
+            ggml_backend_hrx2_json_kv("src1", ggml_backend_hrx2_tensor_summary(src1)));
         GGML_LOG_ERROR("HRX2: invalid MUL_MAT Q8_0 shape during dispatch\n");
         return GGML_STATUS_FAILED;
     }
@@ -2012,6 +2011,11 @@ static ggml_status ggml_backend_hrx2_dispatch_mul_mat_q8_0(
                 bindings,
                 3,
                 HRX_DISPATCH_FLAG_NONE))) {
+            ggml_backend_hrx2_trace_event(
+                "dispatch_failed",
+                ggml_backend_hrx2_json_kv("op", "MUL_MAT") + "," +
+                ggml_backend_hrx2_json_kv("reason", "hrx_stream_dispatch") + "," +
+                ggml_backend_hrx2_json_kv("route_id", provider->route.id));
             return GGML_STATUS_FAILED;
         }
         return GGML_STATUS_SUCCESS;
