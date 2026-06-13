@@ -52,6 +52,7 @@ struct ggml_backend_hrx2_device_context {
     std::vector<const ggml_backend_hrx2_kernel_route *> rms_norm_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> mul_mat_q8_0_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> cont_routes;
+    std::vector<const ggml_backend_hrx2_kernel_route *> swiglu_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> set_rows_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> add_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> mul_routes;
@@ -154,6 +155,11 @@ struct ggml_backend_hrx2_cont_shape {
     uint32_t src_nb1 = 0;
     uint32_t src_nb2 = 0;
     uint32_t src_nb3 = 0;
+};
+
+struct ggml_backend_hrx2_swiglu_shape {
+    uint32_t ncols = 0;
+    uint32_t nrows = 0;
 };
 
 struct ggml_backend_hrx2_provider_plan {
@@ -718,6 +724,35 @@ static bool ggml_backend_hrx2_supports_cont(
            static_cast<uint64_t>(src0->ne[0]) * static_cast<uint64_t>(ggml_nrows(src0)) <= 1073741824ULL;
 }
 
+static bool ggml_backend_hrx2_supports_swiglu(
+        ggml_backend_hrx2_device_context * device_context,
+        const ggml_tensor * op) {
+    GGML_UNUSED(device_context);
+    const ggml_tensor * src0 = op->src[0];
+    const ggml_tensor * src1 = op->src[1];
+    if (op->op != GGML_OP_GLU ||
+        !src0 ||
+        src1 != nullptr ||
+        op->view_src != nullptr ||
+        ggml_get_glu_op(op) != GGML_GLU_OP_SWIGLU ||
+        ggml_get_op_params_i32(op, 1) != 0 ||
+        src0->type != GGML_TYPE_F32 ||
+        op->type != GGML_TYPE_F32 ||
+        src0->nb[0] != sizeof(float) ||
+        !ggml_is_contiguous(src0) ||
+        !ggml_is_contiguous(op) ||
+        src0->ne[0] != op->ne[0] * 2 ||
+        ggml_nrows(src0) != ggml_nrows(op) ||
+        op->ne[0] <= 0 ||
+        ggml_nrows(op) <= 0 ||
+        op->ne[0] > std::numeric_limits<uint32_t>::max() ||
+        ggml_nrows(op) > std::numeric_limits<uint32_t>::max()) {
+        return false;
+    }
+    const uint64_t total = static_cast<uint64_t>(op->ne[0]) * static_cast<uint64_t>(ggml_nrows(op));
+    return total <= 536870912ULL;
+}
+
 static bool ggml_backend_hrx2_is_pow2_i64(int64_t value) {
     return value > 0 && (value & (value - 1)) == 0;
 }
@@ -850,6 +885,21 @@ static bool ggml_backend_hrx2_extract_cont_shape(
     return true;
 }
 
+static bool ggml_backend_hrx2_extract_swiglu_shape(
+        const ggml_tensor * op,
+        ggml_backend_hrx2_swiglu_shape * out_shape) {
+    if (!out_shape || !ggml_backend_hrx2_supports_swiglu(nullptr, op)) {
+        return false;
+    }
+    ggml_backend_hrx2_swiglu_shape shape;
+    if (!ggml_backend_hrx2_u32(op->ne[0], &shape.ncols) ||
+        !ggml_backend_hrx2_u32(ggml_nrows(op), &shape.nrows)) {
+        return false;
+    }
+    *out_shape = shape;
+    return true;
+}
+
 static bool ggml_backend_hrx2_route_shape_matches(
         const ggml_backend_hrx2_kernel_route * route,
         const ggml_backend_hrx2_mul_mat_shape & shape) {
@@ -925,6 +975,20 @@ static bool ggml_backend_hrx2_route_shape_matches(
 static bool ggml_backend_hrx2_route_shape_matches(
         const ggml_backend_hrx2_kernel_route * route,
         const ggml_backend_hrx2_cont_shape & shape) {
+    if (!route ||
+        shape.ncols < route->ncols_min || shape.ncols > route->ncols_max ||
+        shape.nrows < route->nrows_min || shape.nrows > route->nrows_max) {
+        return false;
+    }
+    if (route->ncols_multiple_of_guard != 0 && (shape.ncols % route->ncols_multiple_of_guard) != 0) {
+        return false;
+    }
+    return true;
+}
+
+static bool ggml_backend_hrx2_route_shape_matches(
+        const ggml_backend_hrx2_kernel_route * route,
+        const ggml_backend_hrx2_swiglu_shape & shape) {
     if (!route ||
         shape.ncols < route->ncols_min || shape.ncols > route->ncols_max ||
         shape.nrows < route->nrows_min || shape.nrows > route->nrows_max) {
@@ -1083,6 +1147,53 @@ static bool ggml_backend_hrx2_make_cont_plan(
         plan.cache_key += "|src_nb1=" + std::to_string(shape.src_nb1);
         plan.cache_key += "|src_nb2=" + std::to_string(shape.src_nb2);
         plan.cache_key += "|src_nb3=" + std::to_string(shape.src_nb3);
+        for (const auto & binding : plan.config_bindings) {
+            plan.cache_key += "|";
+            plan.cache_key += binding.key;
+            plan.cache_key += "=";
+            plan.cache_key += binding.value;
+        }
+    }
+
+    *out_plan = std::move(plan);
+    return true;
+}
+
+static bool ggml_backend_hrx2_make_swiglu_plan(
+        const ggml_backend_hrx2_device_context * device_context,
+        const ggml_backend_hrx2_kernel_route * route,
+        const ggml_backend_hrx2_swiglu_shape & shape,
+        ggml_backend_hrx2_provider_plan * out_plan) {
+    if (!out_plan ||
+        !ggml_backend_hrx2_route_available(device_context, route) ||
+        !ggml_backend_hrx2_route_shape_matches(route, shape)) {
+        return false;
+    }
+
+    ggml_backend_hrx2_provider_plan plan;
+    plan.route = route;
+    plan.cache_key = ggml_backend_hrx2_base_cache_key(device_context, route);
+
+    if (!route->specialization_mode.empty() && route->specialization_mode != "jit_config") {
+        return false;
+    }
+    for (const auto & spec : route->config_bindings) {
+        ggml_backend_hrx2_config_binding binding;
+        binding.key = spec.key;
+        if (spec.value_source == "shape.swiglu.ncols") {
+            binding.value = std::to_string(shape.ncols);
+        } else if (spec.value_source == "shape.swiglu.nrows") {
+            binding.value = std::to_string(shape.nrows);
+        } else if (spec.value_source.empty()) {
+            binding.value = spec.value;
+        } else {
+            return false;
+        }
+        plan.config_bindings.push_back(std::move(binding));
+    }
+    if (route->specialization_mode == "jit_config") {
+        plan.cache_key += "|ncols=" + std::to_string(shape.ncols);
+        plan.cache_key += "|nrows=" + std::to_string(shape.nrows);
         for (const auto & binding : plan.config_bindings) {
             plan.cache_key += "|";
             plan.cache_key += binding.key;
@@ -1343,6 +1454,22 @@ static bool ggml_backend_hrx2_supports_cont_route(
     return false;
 }
 
+static bool ggml_backend_hrx2_supports_swiglu_route(
+        ggml_backend_hrx2_device_context * device_context,
+        const ggml_tensor * op) {
+    ggml_backend_hrx2_swiglu_shape shape;
+    if (!ggml_backend_hrx2_extract_swiglu_shape(op, &shape)) {
+        return false;
+    }
+    for (const auto * route : device_context->swiglu_routes) {
+        ggml_backend_hrx2_provider_plan plan;
+        if (ggml_backend_hrx2_make_swiglu_plan(device_context, route, shape, &plan)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static std::string ggml_backend_hrx2_tensor_summary(const ggml_tensor * tensor) {
     if (!tensor) {
         return "null";
@@ -1572,6 +1699,93 @@ static ggml_status ggml_backend_hrx2_dispatch_cont(
     }
 
     GGML_LOG_ERROR("HRX2: CONT provider is not available for ncols=%u nrows=%u\n", shape.ncols, shape.nrows);
+    return GGML_STATUS_FAILED;
+}
+
+static ggml_status ggml_backend_hrx2_dispatch_swiglu(
+        ggml_backend_hrx2_context * context,
+        const ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+    ggml_backend_hrx2_swiglu_shape shape;
+    if (!ggml_backend_hrx2_extract_swiglu_shape(dst, &shape)) {
+        GGML_LOG_ERROR("HRX2: invalid SWIGLU shape during dispatch: dst=%s src0=%s src1=%s\n",
+                ggml_backend_hrx2_tensor_summary(dst).c_str(),
+                ggml_backend_hrx2_tensor_summary(src0).c_str(),
+                ggml_backend_hrx2_tensor_summary(dst->src[1]).c_str());
+        return GGML_STATUS_FAILED;
+    }
+
+    hrx_buffer_ref_t bindings[2] = {};
+    if (!ggml_backend_hrx2_tensor_buffer_ref(src0, &bindings[0]) ||
+        !ggml_backend_hrx2_tensor_buffer_ref(dst, &bindings[1])) {
+        GGML_LOG_ERROR("HRX2: SWIGLU tensor is not backed by HRX2 buffers\n");
+        return GGML_STATUS_FAILED;
+    }
+
+    for (const auto * route : context->device_context->swiglu_routes) {
+        ggml_backend_hrx2_provider_plan plan;
+        if (!ggml_backend_hrx2_make_swiglu_plan(context->device_context, route, shape, &plan)) {
+            continue;
+        }
+
+        const auto * provider = ggml_backend_hrx2_get_provider(
+            context->device_context,
+            plan.route,
+            plan.config_bindings,
+            plan.cache_key);
+        if (!provider) {
+            ggml_backend_hrx2_trace_event(
+                "provider_unavailable",
+                ggml_backend_hrx2_json_kv("op", "GLU") + "," +
+                ggml_backend_hrx2_json_kv("route_id", plan.route->id) + "," +
+                ggml_backend_hrx2_json_kv("target_key", context->device_context->architecture) + "," +
+                ggml_backend_hrx2_json_kv("cache_key", plan.cache_key) + "," +
+                ggml_backend_hrx2_json_kv("ncols", shape.ncols) + "," +
+                ggml_backend_hrx2_json_kv("nrows", shape.nrows));
+            continue;
+        }
+        if (provider->route.constant_byte_length != 0) {
+            GGML_LOG_ERROR("HRX2: SWIGLU route %s has unsupported constant byte length %u\n",
+                    provider->route.id.c_str(), provider->route.constant_byte_length);
+            continue;
+        }
+
+        const uint64_t total = static_cast<uint64_t>(shape.ncols) * static_cast<uint64_t>(shape.nrows);
+        const uint32_t workgroup_size =
+            provider->export_info.workgroup_size[0] ? provider->export_info.workgroup_size[0] : provider->route.workgroup_size[0];
+        hrx_dispatch_config_t config = {
+            /* .workgroup_count = */ { static_cast<uint32_t>((total + workgroup_size - 1) / workgroup_size), 1, 1 },
+            /* .workgroup_size  = */ { workgroup_size, 1, 1 },
+            /* .subgroup_size   = */ 0,
+        };
+
+        ggml_backend_hrx2_trace_event(
+            "dispatch",
+            ggml_backend_hrx2_json_kv("op", "GLU") + "," +
+            ggml_backend_hrx2_json_kv("route_id", provider->route.id) + "," +
+            ggml_backend_hrx2_json_kv("target_key", context->device_context->architecture) + "," +
+            ggml_backend_hrx2_json_kv("cache_key", provider->cache_key) + "," +
+            ggml_backend_hrx2_json_kv("ncols", shape.ncols) + "," +
+            ggml_backend_hrx2_json_kv("nrows", shape.nrows) + "," +
+            ggml_backend_hrx2_json_kv("workgroups_x", config.workgroup_count[0]) + "," +
+            ggml_backend_hrx2_json_kv("workgroup_size_x", config.workgroup_size[0]));
+
+        if (!GGML_HRX2_CHECK(hrx_stream_dispatch(
+                context->stream,
+                provider->executable,
+                provider->export_ordinal,
+                &config,
+                nullptr,
+                0,
+                bindings,
+                2,
+                HRX_DISPATCH_FLAG_NONE))) {
+            return GGML_STATUS_FAILED;
+        }
+        return GGML_STATUS_SUCCESS;
+    }
+
+    GGML_LOG_ERROR("HRX2: SWIGLU provider is not available for ncols=%u nrows=%u\n", shape.ncols, shape.nrows);
     return GGML_STATUS_FAILED;
 }
 
@@ -2101,6 +2315,18 @@ static enum ggml_status ggml_backend_hrx2_graph_compute(ggml_backend_t backend, 
                     return GGML_STATUS_FAILED;
                 }
                 break;
+            case GGML_OP_GLU:
+                if (!ggml_backend_hrx2_supports_swiglu_route(context->device_context, node)) {
+                    GGML_LOG_ERROR("HRX2: unsupported GLU shape/type/layout: dst=%s src0=%s src1=%s\n",
+                            ggml_backend_hrx2_tensor_summary(node).c_str(),
+                            ggml_backend_hrx2_tensor_summary(node->src[0]).c_str(),
+                            ggml_backend_hrx2_tensor_summary(node->src[1]).c_str());
+                    return GGML_STATUS_FAILED;
+                }
+                if (ggml_backend_hrx2_dispatch_swiglu(context, node) != GGML_STATUS_SUCCESS) {
+                    return GGML_STATUS_FAILED;
+                }
+                break;
             case GGML_OP_RMS_NORM:
                 if (!ggml_backend_hrx2_supports_rms_norm_route(context->device_context, node)) {
                     GGML_LOG_ERROR("HRX2: unsupported RMS_NORM shape/type/layout: dst=%s src0=%s\n",
@@ -2249,6 +2475,8 @@ static bool ggml_backend_hrx2_device_supports_op(ggml_backend_dev_t dev, const g
             return ggml_backend_hrx2_supports_pointwise_route(ggml_backend_hrx2_get_device_context(dev), op);
         case GGML_OP_CONT:
             return ggml_backend_hrx2_supports_cont_route(ggml_backend_hrx2_get_device_context(dev), op);
+        case GGML_OP_GLU:
+            return ggml_backend_hrx2_supports_swiglu_route(ggml_backend_hrx2_get_device_context(dev), op);
         case GGML_OP_MUL_MAT:
             return ggml_backend_hrx2_supports_mul_mat_q8_0_route(ggml_backend_hrx2_get_device_context(dev), op);
         case GGML_OP_SET_ROWS:
@@ -2367,6 +2595,11 @@ static std::unique_ptr<ggml_backend_hrx2_reg_context> ggml_backend_hrx2_create_r
                 &device_context->cont_routes);
             ggml_backend_hrx2_catalog_find_routes(
                 *device_context->catalog,
+                "swiglu_f32",
+                "GLU",
+                &device_context->swiglu_routes);
+            ggml_backend_hrx2_catalog_find_routes(
+                *device_context->catalog,
                 "set_rows_f32",
                 "SET_ROWS",
                 &device_context->set_rows_routes);
@@ -2402,6 +2635,10 @@ static std::unique_ptr<ggml_backend_hrx2_reg_context> ggml_backend_hrx2_create_r
             std::sort(
                 device_context->cont_routes.begin(),
                 device_context->cont_routes.end(),
+                route_less);
+            std::sort(
+                device_context->swiglu_routes.begin(),
+                device_context->swiglu_routes.end(),
                 route_less);
             std::sort(
                 device_context->set_rows_routes.begin(),

@@ -120,6 +120,8 @@ def main():
                             "shape.cont.src_nb1",
                             "shape.cont.src_nb2",
                             "shape.cont.src_nb3",
+                            "shape.swiglu.ncols",
+                            "shape.swiglu.nrows",
                             "shape.set_rows.nc",
                             "shape.set_rows.nr",
                             "shape.set_rows.ne02",
