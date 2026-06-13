@@ -105,7 +105,31 @@ def main():
                 require(has_value != has_source, f"route {route_id} binding must have exactly one of value or source")
                 if has_source:
                     require(
-                        binding.get("source") in ("shape.k", "shape.rows", "shape.cols", "shape.ncols", "shape.nrows", "shape.q8_full_unroll_factor"),
+                        binding.get("source") in (
+                            "shape.k",
+                            "shape.rows",
+                            "shape.cols",
+                            "shape.ncols",
+                            "shape.nrows",
+                            "shape.pointwise.src1_row_stride",
+                            "shape.q8_full_unroll_factor",
+                            "shape.set_rows.nc",
+                            "shape.set_rows.nr",
+                            "shape.set_rows.ne02",
+                            "shape.set_rows.ne03",
+                            "shape.set_rows.ne1",
+                            "shape.set_rows.ne11",
+                            "shape.set_rows.ne12",
+                            "shape.set_rows.src0_nb1",
+                            "shape.set_rows.src0_nb2",
+                            "shape.set_rows.src0_nb3",
+                            "shape.set_rows.idx_nb0",
+                            "shape.set_rows.idx_nb1",
+                            "shape.set_rows.idx_nb2",
+                            "shape.set_rows.dst_nb1",
+                            "shape.set_rows.dst_nb2",
+                            "shape.set_rows.dst_nb3",
+                        ),
                         f"route {route_id} binding has unsupported source {binding.get('source')}",
                     )
 

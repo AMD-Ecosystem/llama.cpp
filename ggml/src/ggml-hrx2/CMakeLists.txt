@@ -13,6 +13,8 @@ set(GGML_HRX2_ARTIFACTS
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/mul_mat_q8_0_f32_static.loombc"
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/mul_mat_q8_0_f32_static_packed.loombc"
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/mul_mat_q8_0_f32_static_packed_scf_unroll.loombc"
+    "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/pointwise_f32.loombc"
+    "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/set_rows_f32.loombc"
 )
 file(GLOB_RECURSE GGML_HRX2_LOOM_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/*.loom"

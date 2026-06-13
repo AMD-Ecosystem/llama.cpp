@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cctype>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -91,7 +92,15 @@ static std::string ggml_backend_hrx2_safe_filename(const std::string & value) {
             result += '_';
         }
     }
-    return result.empty() ? std::string("provider") : result;
+    if (result.empty()) {
+        return "provider";
+    }
+    if (result.size() <= 180) {
+        return result;
+    }
+    char suffix[32] = {};
+    std::snprintf(suffix, sizeof(suffix), "_%016zx", std::hash<std::string>{}(value));
+    return result.substr(0, 180 - std::strlen(suffix)) + suffix;
 }
 
 static void ggml_backend_hrx2_write_text_file(const std::filesystem::path & path, const std::string & text) {

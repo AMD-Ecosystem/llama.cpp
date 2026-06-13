@@ -14,6 +14,12 @@
     },
     "mul_mat_q8_0_f32": {
       "path": "kernels/mul_mat_q8_0_f32.loom"
+    },
+    "set_rows_f32": {
+      "path": "kernels/set_rows_f32.loom"
+    },
+    "pointwise_f32": {
+      "path": "kernels/pointwise_f32.loom"
     }
   },
   "artifacts": {
@@ -41,6 +47,16 @@
       "path": "artifacts/mul_mat_q8_0_f32_static_packed_scf_unroll.loombc",
       "format": "loom-bytecode",
       "storage": "embedded"
+    },
+    "set_rows_f32_bc": {
+      "path": "artifacts/set_rows_f32.loombc",
+      "format": "loom-bytecode",
+      "storage": "embedded"
+    },
+    "pointwise_f32_bc": {
+      "path": "artifacts/pointwise_f32.loombc",
+      "format": "loom-bytecode",
+      "storage": "embedded"
     }
   },
   "families": [
@@ -51,6 +67,22 @@
     {
       "family": "mul_mat_q8_0_f32",
       "op": "MUL_MAT"
+    },
+    {
+      "family": "set_rows_f32",
+      "op": "SET_ROWS"
+    },
+    {
+      "family": "add_f32",
+      "op": "ADD"
+    },
+    {
+      "family": "mul_f32",
+      "op": "MUL"
+    },
+    {
+      "family": "scale_f32",
+      "op": "SCALE"
     }
   ],
   "routes": [
@@ -177,6 +209,132 @@
       },
       "evidence_summary": {
         "phase": "rms-norm-standalone-done-gfx1100",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "rms_norm_f32_n3072_r1_vector_vw4_wg512",
+      "family": "rms_norm_f32",
+      "op": "RMS_NORM",
+      "target_key": "",
+      "source_id": "rms_norm_f32",
+      "artifact_id": "rms_norm_f32_bc",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "export_name": "hrx2_rms_norm_f32_static_vector_tail",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 155,
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 3,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          512,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "rms_norm_f32_n3072_r1_vector_vw4_wg512",
+        "ncols_min": 3072,
+        "ncols_max": 3072,
+        "nrows_min": 1,
+        "nrows_max": 1
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.ncols",
+            "source": "shape.ncols"
+          },
+          {
+            "key": "@hrx2.shape.nrows",
+            "source": "shape.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.workgroup_size",
+            "value": "512"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.vector_width",
+            "value": "4"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "evidence_summary": {
+        "phase": "phase1_0_phi4_smoke",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "rms_norm_f32_n3072_r16_vector_vw4_wg512",
+      "family": "rms_norm_f32",
+      "op": "RMS_NORM",
+      "target_key": "",
+      "source_id": "rms_norm_f32",
+      "artifact_id": "rms_norm_f32_bc",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "export_name": "hrx2_rms_norm_f32_static_vector_tail",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 154,
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 3,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          512,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "rms_norm_f32_n3072_r16_vector_vw4_wg512",
+        "ncols_min": 3072,
+        "ncols_max": 3072,
+        "nrows_min": 16,
+        "nrows_max": 16
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.ncols",
+            "source": "shape.ncols"
+          },
+          {
+            "key": "@hrx2.shape.nrows",
+            "source": "shape.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.workgroup_size",
+            "value": "512"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.vector_width",
+            "value": "4"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "evidence_summary": {
+        "phase": "phase1_0_phi4_smoke",
         "ggml_cpu_reference": "required"
       }
     },
@@ -1229,6 +1387,367 @@
       "evidence_summary": {
         "phase": "phase0",
         "ggml_cpu_reference": "pass"
+      }
+    },
+    {
+      "id": "add_f32_generic_wg256",
+      "family": "add_f32",
+      "op": "ADD",
+      "target_key": "",
+      "source_id": "pointwise_f32",
+      "artifact_id": "pointwise_f32_bc",
+      "root_symbol": "@hrx2_add_f32",
+      "export_name": "hrx2_add_f32",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 10,
+      "abi": { "binding_count": 3, "parameter_count": 3, "constant_byte_length": 0 },
+      "dispatch": { "workgroup_size": [256, 1, 1], "rows_per_workgroup": 1, "cols_per_workgroup": 1 },
+      "shape_domain": { "name": "add_f32_generic", "ncols_min": 1, "ncols_max": 65536, "nrows_min": 1, "nrows_max": 1048576 },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          { "key": "@hrx2.shape.pointwise.ncols", "source": "shape.ncols" },
+          { "key": "@hrx2.shape.pointwise.nrows", "source": "shape.nrows" },
+          { "key": "@hrx2.shape.pointwise.src1_row_stride", "source": "shape.pointwise.src1_row_stride" },
+          { "key": "@hrx2.tuning.pointwise.workgroup_size", "value": "256" }
+        ]
+      },
+      "supports": { "src0_type": "F32", "src1_type": "F32", "dst_type": "F32", "layout": "contiguous_or_rhs_row_broadcast" },
+      "evidence_summary": { "phase": "phase1_0_unit_coverage", "ggml_cpu_reference": "required" }
+    },
+    {
+      "id": "mul_f32_generic_wg256",
+      "family": "mul_f32",
+      "op": "MUL",
+      "target_key": "",
+      "source_id": "pointwise_f32",
+      "artifact_id": "pointwise_f32_bc",
+      "root_symbol": "@hrx2_mul_f32",
+      "export_name": "hrx2_mul_f32",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 10,
+      "abi": { "binding_count": 3, "parameter_count": 3, "constant_byte_length": 0 },
+      "dispatch": { "workgroup_size": [256, 1, 1], "rows_per_workgroup": 1, "cols_per_workgroup": 1 },
+      "shape_domain": { "name": "mul_f32_generic", "ncols_min": 1, "ncols_max": 65536, "nrows_min": 1, "nrows_max": 1048576 },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          { "key": "@hrx2.shape.pointwise.ncols", "source": "shape.ncols" },
+          { "key": "@hrx2.shape.pointwise.nrows", "source": "shape.nrows" },
+          { "key": "@hrx2.shape.pointwise.src1_row_stride", "source": "shape.pointwise.src1_row_stride" },
+          { "key": "@hrx2.tuning.pointwise.workgroup_size", "value": "256" }
+        ]
+      },
+      "supports": { "src0_type": "F32", "src1_type": "F32", "dst_type": "F32", "layout": "contiguous_or_rhs_row_broadcast" },
+      "evidence_summary": { "phase": "phase1_0_unit_coverage", "ggml_cpu_reference": "required" }
+    },
+    {
+      "id": "scale_f32_generic_wg256",
+      "family": "scale_f32",
+      "op": "SCALE",
+      "target_key": "",
+      "source_id": "pointwise_f32",
+      "artifact_id": "pointwise_f32_bc",
+      "root_symbol": "@hrx2_scale_f32",
+      "export_name": "hrx2_scale_f32",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 10,
+      "abi": { "binding_count": 2, "parameter_count": 4, "constant_byte_length": 8 },
+      "dispatch": { "workgroup_size": [256, 1, 1], "rows_per_workgroup": 1, "cols_per_workgroup": 1 },
+      "shape_domain": { "name": "scale_f32_generic", "ncols_min": 1, "ncols_max": 65536, "nrows_min": 1, "nrows_max": 1048576 },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          { "key": "@hrx2.shape.pointwise.ncols", "source": "shape.ncols" },
+          { "key": "@hrx2.shape.pointwise.nrows", "source": "shape.nrows" },
+          { "key": "@hrx2.tuning.pointwise.workgroup_size", "value": "256" }
+        ]
+      },
+      "supports": { "src0_type": "F32", "dst_type": "F32", "layout": "contiguous" },
+      "evidence_summary": { "phase": "phase1_0_unit_coverage", "ggml_cpu_reference": "required" }
+    },
+    {
+      "id": "add_f32_n3072_r1_wg256",
+      "family": "add_f32",
+      "op": "ADD",
+      "target_key": "",
+      "source_id": "pointwise_f32",
+      "artifact_id": "pointwise_f32_bc",
+      "root_symbol": "@hrx2_add_f32",
+      "export_name": "hrx2_add_f32",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 100,
+      "abi": { "binding_count": 3, "parameter_count": 3, "constant_byte_length": 0 },
+      "dispatch": { "workgroup_size": [256, 1, 1], "rows_per_workgroup": 1, "cols_per_workgroup": 1 },
+      "shape_domain": { "name": "add_f32_n3072_r1", "ncols_min": 3072, "ncols_max": 3072, "nrows_min": 1, "nrows_max": 1 },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          { "key": "@hrx2.shape.pointwise.ncols", "source": "shape.ncols" },
+          { "key": "@hrx2.shape.pointwise.nrows", "source": "shape.nrows" },
+          { "key": "@hrx2.shape.pointwise.src1_row_stride", "source": "shape.pointwise.src1_row_stride" },
+          { "key": "@hrx2.tuning.pointwise.workgroup_size", "value": "256" }
+        ]
+      },
+      "supports": { "src0_type": "F32", "src1_type": "F32", "dst_type": "F32", "layout": "contiguous" },
+      "evidence_summary": { "phase": "phase1_0_phi4_smoke", "ggml_cpu_reference": "required" }
+    },
+    {
+      "id": "add_f32_n3072_r16_wg256",
+      "family": "add_f32",
+      "op": "ADD",
+      "target_key": "",
+      "source_id": "pointwise_f32",
+      "artifact_id": "pointwise_f32_bc",
+      "root_symbol": "@hrx2_add_f32",
+      "export_name": "hrx2_add_f32",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 100,
+      "abi": { "binding_count": 3, "parameter_count": 3, "constant_byte_length": 0 },
+      "dispatch": { "workgroup_size": [256, 1, 1], "rows_per_workgroup": 1, "cols_per_workgroup": 1 },
+      "shape_domain": { "name": "add_f32_n3072_r16", "ncols_min": 3072, "ncols_max": 3072, "nrows_min": 16, "nrows_max": 16 },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          { "key": "@hrx2.shape.pointwise.ncols", "source": "shape.ncols" },
+          { "key": "@hrx2.shape.pointwise.nrows", "source": "shape.nrows" },
+          { "key": "@hrx2.shape.pointwise.src1_row_stride", "source": "shape.pointwise.src1_row_stride" },
+          { "key": "@hrx2.tuning.pointwise.workgroup_size", "value": "256" }
+        ]
+      },
+      "supports": { "src0_type": "F32", "src1_type": "F32", "dst_type": "F32", "layout": "contiguous" },
+      "evidence_summary": { "phase": "phase1_0_phi4_smoke", "ggml_cpu_reference": "required" }
+    },
+    {
+      "id": "mul_f32_n3072_r1_wg256",
+      "family": "mul_f32",
+      "op": "MUL",
+      "target_key": "",
+      "source_id": "pointwise_f32",
+      "artifact_id": "pointwise_f32_bc",
+      "root_symbol": "@hrx2_mul_f32",
+      "export_name": "hrx2_mul_f32",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 100,
+      "abi": { "binding_count": 3, "parameter_count": 3, "constant_byte_length": 0 },
+      "dispatch": { "workgroup_size": [256, 1, 1], "rows_per_workgroup": 1, "cols_per_workgroup": 1 },
+      "shape_domain": { "name": "mul_f32_n3072_r1", "ncols_min": 3072, "ncols_max": 3072, "nrows_min": 1, "nrows_max": 1 },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          { "key": "@hrx2.shape.pointwise.ncols", "source": "shape.ncols" },
+          { "key": "@hrx2.shape.pointwise.nrows", "source": "shape.nrows" },
+          { "key": "@hrx2.shape.pointwise.src1_row_stride", "source": "shape.pointwise.src1_row_stride" },
+          { "key": "@hrx2.tuning.pointwise.workgroup_size", "value": "256" }
+        ]
+      },
+      "supports": { "src0_type": "F32", "src1_type": "F32", "dst_type": "F32", "layout": "contiguous_or_rhs_row_broadcast" },
+      "evidence_summary": { "phase": "phase1_0_phi4_smoke", "ggml_cpu_reference": "required" }
+    },
+    {
+      "id": "mul_f32_n3072_r16_wg256",
+      "family": "mul_f32",
+      "op": "MUL",
+      "target_key": "",
+      "source_id": "pointwise_f32",
+      "artifact_id": "pointwise_f32_bc",
+      "root_symbol": "@hrx2_mul_f32",
+      "export_name": "hrx2_mul_f32",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 100,
+      "abi": { "binding_count": 3, "parameter_count": 3, "constant_byte_length": 0 },
+      "dispatch": { "workgroup_size": [256, 1, 1], "rows_per_workgroup": 1, "cols_per_workgroup": 1 },
+      "shape_domain": { "name": "mul_f32_n3072_r16", "ncols_min": 3072, "ncols_max": 3072, "nrows_min": 16, "nrows_max": 16 },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          { "key": "@hrx2.shape.pointwise.ncols", "source": "shape.ncols" },
+          { "key": "@hrx2.shape.pointwise.nrows", "source": "shape.nrows" },
+          { "key": "@hrx2.shape.pointwise.src1_row_stride", "source": "shape.pointwise.src1_row_stride" },
+          { "key": "@hrx2.tuning.pointwise.workgroup_size", "value": "256" }
+        ]
+      },
+      "supports": { "src0_type": "F32", "src1_type": "F32", "dst_type": "F32", "layout": "contiguous_or_rhs_row_broadcast" },
+      "evidence_summary": { "phase": "phase1_0_phi4_smoke", "ggml_cpu_reference": "required" }
+    },
+    {
+      "id": "scale_f32_n128_r24_wg256",
+      "family": "scale_f32",
+      "op": "SCALE",
+      "target_key": "",
+      "source_id": "pointwise_f32",
+      "artifact_id": "pointwise_f32_bc",
+      "root_symbol": "@hrx2_scale_f32",
+      "export_name": "hrx2_scale_f32",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 100,
+      "abi": { "binding_count": 2, "parameter_count": 4, "constant_byte_length": 8 },
+      "dispatch": { "workgroup_size": [256, 1, 1], "rows_per_workgroup": 1, "cols_per_workgroup": 1 },
+      "shape_domain": { "name": "scale_f32_n128_r24", "ncols_min": 128, "ncols_max": 128, "nrows_min": 24, "nrows_max": 24 },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          { "key": "@hrx2.shape.pointwise.ncols", "source": "shape.ncols" },
+          { "key": "@hrx2.shape.pointwise.nrows", "source": "shape.nrows" },
+          { "key": "@hrx2.tuning.pointwise.workgroup_size", "value": "256" }
+        ]
+      },
+      "supports": { "src0_type": "F32", "dst_type": "F32", "layout": "contiguous" },
+      "evidence_summary": { "phase": "phase1_0_phi4_smoke", "ggml_cpu_reference": "required" }
+    },
+    {
+      "id": "scale_f32_n128_r384_wg256",
+      "family": "scale_f32",
+      "op": "SCALE",
+      "target_key": "",
+      "source_id": "pointwise_f32",
+      "artifact_id": "pointwise_f32_bc",
+      "root_symbol": "@hrx2_scale_f32",
+      "export_name": "hrx2_scale_f32",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 100,
+      "abi": { "binding_count": 2, "parameter_count": 4, "constant_byte_length": 8 },
+      "dispatch": { "workgroup_size": [256, 1, 1], "rows_per_workgroup": 1, "cols_per_workgroup": 1 },
+      "shape_domain": { "name": "scale_f32_n128_r384", "ncols_min": 128, "ncols_max": 128, "nrows_min": 384, "nrows_max": 384 },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          { "key": "@hrx2.shape.pointwise.ncols", "source": "shape.ncols" },
+          { "key": "@hrx2.shape.pointwise.nrows", "source": "shape.nrows" },
+          { "key": "@hrx2.tuning.pointwise.workgroup_size", "value": "256" }
+        ]
+      },
+      "supports": { "src0_type": "F32", "dst_type": "F32", "layout": "contiguous" },
+      "evidence_summary": { "phase": "phase1_0_phi4_smoke", "ggml_cpu_reference": "required" }
+    },
+    {
+      "id": "set_rows_f32_f16_generic",
+      "family": "set_rows_f32",
+      "op": "SET_ROWS",
+      "target_key": "",
+      "source_id": "set_rows_f32",
+      "artifact_id": "set_rows_f32_bc",
+      "root_symbol": "@hrx2_set_rows_f32_f16",
+      "export_name": "hrx2_set_rows_f32_f16",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 10,
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 3,
+        "constant_byte_length": 0
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "set_rows_f32_f16_generic",
+        "ncols_min": 1,
+        "ncols_max": 65536,
+        "nrows_min": 1,
+        "nrows_max": 1048576
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          { "key": "@hrx2.shape.set_rows.nc", "source": "shape.set_rows.nc" },
+          { "key": "@hrx2.shape.set_rows.nr", "source": "shape.set_rows.nr" },
+          { "key": "@hrx2.shape.set_rows.ne02", "source": "shape.set_rows.ne02" },
+          { "key": "@hrx2.shape.set_rows.ne03", "source": "shape.set_rows.ne03" },
+          { "key": "@hrx2.shape.set_rows.ne1", "source": "shape.set_rows.ne1" },
+          { "key": "@hrx2.shape.set_rows.ne11", "source": "shape.set_rows.ne11" },
+          { "key": "@hrx2.shape.set_rows.ne12", "source": "shape.set_rows.ne12" },
+          { "key": "@hrx2.stride.set_rows.src0_nb1", "source": "shape.set_rows.src0_nb1" },
+          { "key": "@hrx2.stride.set_rows.src0_nb2", "source": "shape.set_rows.src0_nb2" },
+          { "key": "@hrx2.stride.set_rows.src0_nb3", "source": "shape.set_rows.src0_nb3" },
+          { "key": "@hrx2.stride.set_rows.idx_nb0", "source": "shape.set_rows.idx_nb0" },
+          { "key": "@hrx2.stride.set_rows.idx_nb1", "source": "shape.set_rows.idx_nb1" },
+          { "key": "@hrx2.stride.set_rows.idx_nb2", "source": "shape.set_rows.idx_nb2" },
+          { "key": "@hrx2.stride.set_rows.dst_nb1", "source": "shape.set_rows.dst_nb1" },
+          { "key": "@hrx2.stride.set_rows.dst_nb2", "source": "shape.set_rows.dst_nb2" },
+          { "key": "@hrx2.stride.set_rows.dst_nb3", "source": "shape.set_rows.dst_nb3" },
+          { "key": "@hrx2.tuning.set_rows.workgroup_size", "value": "256" }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "I64",
+        "dst_type": "F16",
+        "layout": "contiguous_rows"
+      },
+      "evidence_summary": {
+        "phase": "phase1.0-infra",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "set_rows_f32_f32_generic",
+      "family": "set_rows_f32",
+      "op": "SET_ROWS",
+      "target_key": "",
+      "source_id": "set_rows_f32",
+      "artifact_id": "set_rows_f32_bc",
+      "root_symbol": "@hrx2_set_rows_f32_f32",
+      "export_name": "hrx2_set_rows_f32_f32",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 10,
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 3,
+        "constant_byte_length": 0
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "set_rows_f32_f32_generic",
+        "ncols_min": 1,
+        "ncols_max": 65536,
+        "nrows_min": 1,
+        "nrows_max": 1048576
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          { "key": "@hrx2.shape.set_rows.nc", "source": "shape.set_rows.nc" },
+          { "key": "@hrx2.shape.set_rows.nr", "source": "shape.set_rows.nr" },
+          { "key": "@hrx2.shape.set_rows.ne02", "source": "shape.set_rows.ne02" },
+          { "key": "@hrx2.shape.set_rows.ne03", "source": "shape.set_rows.ne03" },
+          { "key": "@hrx2.shape.set_rows.ne1", "source": "shape.set_rows.ne1" },
+          { "key": "@hrx2.shape.set_rows.ne11", "source": "shape.set_rows.ne11" },
+          { "key": "@hrx2.shape.set_rows.ne12", "source": "shape.set_rows.ne12" },
+          { "key": "@hrx2.stride.set_rows.src0_nb1", "source": "shape.set_rows.src0_nb1" },
+          { "key": "@hrx2.stride.set_rows.src0_nb2", "source": "shape.set_rows.src0_nb2" },
+          { "key": "@hrx2.stride.set_rows.src0_nb3", "source": "shape.set_rows.src0_nb3" },
+          { "key": "@hrx2.stride.set_rows.idx_nb0", "source": "shape.set_rows.idx_nb0" },
+          { "key": "@hrx2.stride.set_rows.idx_nb1", "source": "shape.set_rows.idx_nb1" },
+          { "key": "@hrx2.stride.set_rows.idx_nb2", "source": "shape.set_rows.idx_nb2" },
+          { "key": "@hrx2.stride.set_rows.dst_nb1", "source": "shape.set_rows.dst_nb1" },
+          { "key": "@hrx2.stride.set_rows.dst_nb2", "source": "shape.set_rows.dst_nb2" },
+          { "key": "@hrx2.stride.set_rows.dst_nb3", "source": "shape.set_rows.dst_nb3" },
+          { "key": "@hrx2.tuning.set_rows.workgroup_size", "value": "256" }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "I64",
+        "dst_type": "F32",
+        "layout": "contiguous_rows"
+      },
+      "evidence_summary": {
+        "phase": "phase1.0-infra",
+        "ggml_cpu_reference": "required"
       }
     }
   ],

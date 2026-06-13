@@ -853,6 +853,119 @@ static char * fmt_size(size_t size) {
     return buffer;
 }
 
+static void ggml_backend_sched_fprint_json_escaped(FILE * file, const char * value) {
+    fputc('"', file);
+    if (value) {
+        for (const unsigned char * p = (const unsigned char *) value; *p; ++p) {
+            switch (*p) {
+                case '\\': fputs("\\\\", file); break;
+                case '"':  fputs("\\\"", file); break;
+                case '\b': fputs("\\b", file); break;
+                case '\f': fputs("\\f", file); break;
+                case '\n': fputs("\\n", file); break;
+                case '\r': fputs("\\r", file); break;
+                case '\t': fputs("\\t", file); break;
+                default:
+                    if (*p < 0x20) {
+                        fprintf(file, "\\u%04x", *p);
+                    } else {
+                        fputc(*p, file);
+                    }
+                    break;
+            }
+        }
+    }
+    fputc('"', file);
+}
+
+static void ggml_backend_sched_trace_assignments(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
+    const char * trace_path = getenv("GGML_SCHED_TRACE_JSONL");
+    if (trace_path == NULL || trace_path[0] == '\0') {
+        return;
+    }
+
+    FILE * file = fopen(trace_path, "a");
+    if (file == NULL) {
+        GGML_LOG_WARN("%s: failed to open GGML_SCHED_TRACE_JSONL=%s\n", __func__, trace_path);
+        return;
+    }
+
+    for (int i = 0; i < graph->n_nodes; i++) {
+        struct ggml_tensor * node = graph->nodes[i];
+        if (ggml_is_view_op(node->op)) {
+            continue;
+        }
+
+        const int backend_id = tensor_backend_id(node);
+        const char * backend_name = backend_id >= 0 ? ggml_backend_name(sched->backends[backend_id]) : "";
+
+        fputs("{\"event\":\"sched_node\"", file);
+        fprintf(file, ",\"node_index\":%d", i);
+        fputs(",\"op\":", file);
+        ggml_backend_sched_fprint_json_escaped(file, ggml_op_name(node->op));
+        fputs(",\"name\":", file);
+        ggml_backend_sched_fprint_json_escaped(file, node->name);
+        fputs(",\"backend\":", file);
+        ggml_backend_sched_fprint_json_escaped(file, backend_name);
+        fprintf(file, ",\"backend_index\":%d", backend_id);
+        fprintf(file, ",\"is_cpu\":%s", backend_id == sched->n_backends - 1 ? "true" : "false");
+        fprintf(file, ",\"compute\":%s", (node->flags & GGML_TENSOR_FLAG_COMPUTE) ? "true" : "false");
+        fputs(",\"type\":", file);
+        ggml_backend_sched_fprint_json_escaped(file, ggml_type_name(node->type));
+        fprintf(file, ",\"ne\":[%lld,%lld,%lld,%lld]",
+                (long long) node->ne[0], (long long) node->ne[1],
+                (long long) node->ne[2], (long long) node->ne[3]);
+        fprintf(file, ",\"nb\":[%lld,%lld,%lld,%lld]",
+                (long long) node->nb[0], (long long) node->nb[1],
+                (long long) node->nb[2], (long long) node->nb[3]);
+        fprintf(file, ",\"nbytes\":%zu", ggml_nbytes(node));
+
+        fputs(",\"supported_by\":[", file);
+        bool first_backend = true;
+        for (int b = 0; b < sched->n_backends; b++) {
+            if (!ggml_backend_supports_op(sched->backends[b], node)) {
+                continue;
+            }
+            if (!first_backend) {
+                fputc(',', file);
+            }
+            ggml_backend_sched_fprint_json_escaped(file, ggml_backend_name(sched->backends[b]));
+            first_backend = false;
+        }
+        fputc(']', file);
+
+        fputs(",\"src\":[", file);
+        bool first_src = true;
+        for (int j = 0; j < GGML_MAX_SRC; j++) {
+            struct ggml_tensor * src = node->src[j];
+            if (src == NULL) {
+                continue;
+            }
+            if (!first_src) {
+                fputc(',', file);
+            }
+            fputc('{', file);
+            fprintf(file, "\"index\":%d", j);
+            fputs(",\"name\":", file);
+            ggml_backend_sched_fprint_json_escaped(file, src->name);
+            fputs(",\"type\":", file);
+            ggml_backend_sched_fprint_json_escaped(file, ggml_type_name(src->type));
+            fprintf(file, ",\"ne\":[%lld,%lld,%lld,%lld]",
+                    (long long) src->ne[0], (long long) src->ne[1],
+                    (long long) src->ne[2], (long long) src->ne[3]);
+            fprintf(file, ",\"nb\":[%lld,%lld,%lld,%lld]",
+                    (long long) src->nb[0], (long long) src->nb[1],
+                    (long long) src->nb[2], (long long) src->nb[3]);
+            fputc('}', file);
+            first_src = false;
+        }
+        fputc(']', file);
+        fputs("}\n", file);
+    }
+
+    fclose(file);
+}
+
 static void ggml_backend_sched_print_assignments(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
     int cur_split = 0;
     for (int i = 0; i < graph->n_nodes; i++) {
@@ -1287,6 +1400,8 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
     if (sched->debug) {
         ggml_backend_sched_print_assignments(sched, graph);
     }
+
+    ggml_backend_sched_trace_assignments(sched, graph);
 
     // swap node_backend_ids and leaf _backend_ids with prevs
     {

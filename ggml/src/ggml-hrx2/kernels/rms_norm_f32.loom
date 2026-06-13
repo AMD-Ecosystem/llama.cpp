@@ -3,7 +3,7 @@ config.decl @hrx2.shape.nrows : %value: index where [range(%value, 1, 1048576)]
 config.decl @hrx2.tuning.rms_norm.workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
 config.decl @hrx2.tuning.rms_norm.vector_width : %value: index where [range(%value, 1, 4)]
 
-kernel.def @hrx2_rms_norm_f32(%ncols: index, %nrows: index) {
+kernel.def export("hrx2_rms_norm_f32") @hrx2_rms_norm_f32(%ncols: index, %nrows: index) {
   %unit = index.constant 1 : index
   %workgroup_size = index.constant 512 : index
   kernel.launch.config workgroups(%nrows, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
@@ -60,7 +60,7 @@ kernel.def @hrx2_rms_norm_f32(%ncols: index, %nrows: index) {
   kernel.return
 }
 
-kernel.def @hrx2_rms_norm_f32_static_scalar() {
+kernel.def export("hrx2_rms_norm_f32_static_scalar") @hrx2_rms_norm_f32_static_scalar() {
   %unit = index.constant 1 : index
   %nrows = config.get @hrx2.shape.nrows : index
   %workgroup_size = config.get @hrx2.tuning.rms_norm.workgroup_size : index
@@ -106,7 +106,7 @@ kernel.def @hrx2_rms_norm_f32_static_scalar() {
   kernel.return
 }
 
-kernel.def @hrx2_rms_norm_f32_static_vector_tail() {
+kernel.def export("hrx2_rms_norm_f32_static_vector_tail") @hrx2_rms_norm_f32_static_vector_tail() {
   %unit = index.constant 1 : index
   %nrows = config.get @hrx2.shape.nrows : index
   %workgroup_size = config.get @hrx2.tuning.rms_norm.workgroup_size : index
