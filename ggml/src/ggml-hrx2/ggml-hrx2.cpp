@@ -160,6 +160,7 @@ struct ggml_backend_hrx2_cont_shape {
 struct ggml_backend_hrx2_swiglu_shape {
     uint32_t ncols = 0;
     uint32_t nrows = 0;
+    bool split_sources = false;
 };
 
 struct ggml_backend_hrx2_provider_plan {
@@ -660,13 +661,21 @@ static bool ggml_backend_hrx2_supports_pointwise_binary(
     }
 
     const bool same_shape = ggml_are_same_shape(src1, src0) && ggml_is_contiguous(src1);
+    const size_t src1_min_row_bytes = static_cast<size_t>(src1->ne[0]) * sizeof(float);
+    const bool same_shape_row_strided =
+        ggml_are_same_shape(src1, src0) &&
+        src1->nb[0] == sizeof(float) &&
+        src1->nb[1] >= src1_min_row_bytes &&
+        src1->nb[1] % sizeof(float) == 0 &&
+        src1->ne[2] == 1 &&
+        src1->ne[3] == 1;
     const bool row_broadcast =
         src1->ne[0] == src0->ne[0] &&
         src1->ne[1] == 1 &&
         src1->ne[2] == 1 &&
         src1->ne[3] == 1 &&
         src1->nb[0] == sizeof(float);
-    return same_shape || row_broadcast;
+    return same_shape || same_shape_row_strided || row_broadcast;
 }
 
 static bool ggml_backend_hrx2_supports_scale(
@@ -717,7 +726,6 @@ static bool ggml_backend_hrx2_supports_swiglu(
     const ggml_tensor * src1 = op->src[1];
     if (op->op != GGML_OP_GLU ||
         !src0 ||
-        src1 != nullptr ||
         op->view_src != nullptr ||
         ggml_get_glu_op(op) != GGML_GLU_OP_SWIGLU ||
         ggml_get_op_params_i32(op, 1) != 0 ||
@@ -726,12 +734,21 @@ static bool ggml_backend_hrx2_supports_swiglu(
         src0->nb[0] != sizeof(float) ||
         !ggml_is_contiguous(src0) ||
         !ggml_is_contiguous(op) ||
-        src0->ne[0] != op->ne[0] * 2 ||
-        ggml_nrows(src0) != ggml_nrows(op) ||
         op->ne[0] <= 0 ||
         ggml_nrows(op) <= 0 ||
         op->ne[0] > std::numeric_limits<uint32_t>::max() ||
         ggml_nrows(op) > std::numeric_limits<uint32_t>::max()) {
+        return false;
+    }
+    if (src1) {
+        if (src1->type != GGML_TYPE_F32 ||
+            !ggml_is_contiguous(src1) ||
+            !ggml_are_same_shape(src0, op) ||
+            !ggml_are_same_shape(src1, op)) {
+            return false;
+        }
+    } else if (src0->ne[0] != op->ne[0] * 2 ||
+               ggml_nrows(src0) != ggml_nrows(op)) {
         return false;
     }
     const uint64_t total = static_cast<uint64_t>(op->ne[0]) * static_cast<uint64_t>(ggml_nrows(op));
@@ -830,7 +847,10 @@ static bool ggml_backend_hrx2_extract_pointwise_shape(
             return false;
         }
         if (ggml_are_same_shape(src1, src0)) {
-            shape.src1_row_stride = shape.ncols;
+            if (src1->nb[1] % sizeof(float) != 0 ||
+                !ggml_backend_hrx2_u32_size(src1->nb[1] / sizeof(float), &shape.src1_row_stride)) {
+                return false;
+            }
         } else {
             shape.src1_row_stride = 0;
         }
@@ -881,6 +901,7 @@ static bool ggml_backend_hrx2_extract_swiglu_shape(
         !ggml_backend_hrx2_u32(ggml_nrows(op), &shape.nrows)) {
         return false;
     }
+    shape.split_sources = op->src[1] != nullptr;
     *out_shape = shape;
     return true;
 }
@@ -1152,6 +1173,10 @@ static bool ggml_backend_hrx2_make_swiglu_plan(
     if (!out_plan ||
         !ggml_backend_hrx2_route_available(device_context, route) ||
         !ggml_backend_hrx2_route_shape_matches(route, shape)) {
+        return false;
+    }
+    if ((shape.split_sources && route->binding_count != 3) ||
+        (!shape.split_sources && route->binding_count != 2)) {
         return false;
     }
 
@@ -1691,6 +1716,7 @@ static ggml_status ggml_backend_hrx2_dispatch_swiglu(
         ggml_backend_hrx2_context * context,
         const ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
     ggml_backend_hrx2_swiglu_shape shape;
     if (!ggml_backend_hrx2_extract_swiglu_shape(dst, &shape)) {
         GGML_LOG_ERROR("HRX2: invalid SWIGLU shape during dispatch: dst=%s src0=%s src1=%s\n",
@@ -1700,11 +1726,25 @@ static ggml_status ggml_backend_hrx2_dispatch_swiglu(
         return GGML_STATUS_FAILED;
     }
 
-    hrx_buffer_ref_t bindings[2] = {};
-    if (!ggml_backend_hrx2_tensor_buffer_ref(src0, &bindings[0]) ||
-        !ggml_backend_hrx2_tensor_buffer_ref(dst, &bindings[1])) {
+    hrx_buffer_ref_t bindings[3] = {};
+    uint32_t binding_count = 0;
+    if (!ggml_backend_hrx2_tensor_buffer_ref(src0, &bindings[0])) {
         GGML_LOG_ERROR("HRX2: SWIGLU tensor is not backed by HRX2 buffers\n");
         return GGML_STATUS_FAILED;
+    }
+    if (shape.split_sources) {
+        if (!ggml_backend_hrx2_tensor_buffer_ref(src1, &bindings[1]) ||
+            !ggml_backend_hrx2_tensor_buffer_ref(dst, &bindings[2])) {
+            GGML_LOG_ERROR("HRX2: SWIGLU tensor is not backed by HRX2 buffers\n");
+            return GGML_STATUS_FAILED;
+        }
+        binding_count = 3;
+    } else {
+        if (!ggml_backend_hrx2_tensor_buffer_ref(dst, &bindings[1])) {
+            GGML_LOG_ERROR("HRX2: SWIGLU tensor is not backed by HRX2 buffers\n");
+            return GGML_STATUS_FAILED;
+        }
+        binding_count = 2;
     }
 
     for (const auto * route : context->device_context->swiglu_routes) {
@@ -1763,7 +1803,7 @@ static ggml_status ggml_backend_hrx2_dispatch_swiglu(
                 nullptr,
                 0,
                 bindings,
-                2,
+                binding_count,
                 HRX_DISPATCH_FLAG_NONE))) {
             return GGML_STATUS_FAILED;
         }
