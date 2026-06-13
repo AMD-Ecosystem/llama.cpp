@@ -1,0 +1,80 @@
+config.decl @hrx2.shape.get_rows_moe.nexperts : %value: index where [range(%value, 1, 1024)]
+config.decl @hrx2.shape.get_rows_moe.nselected : %value: index where [range(%value, 1, 128)]
+config.decl @hrx2.shape.get_rows_moe.ntokens : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2.shape.get_rows_moe.src0_token_stride : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2.shape.get_rows_moe.idx_token_stride : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2.shape.get_rows_moe.dst_token_stride : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2.tuning.get_rows_moe.workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+
+kernel.def export("hrx2_get_rows_moe_weights_f32") @hrx2_get_rows_moe_weights_f32() {
+  %unit = index.constant 1 : index
+  %minus_one = index.constant -1 : index
+  %nselected = config.get @hrx2.shape.get_rows_moe.nselected : index
+  %ntokens = config.get @hrx2.shape.get_rows_moe.ntokens : index
+  %workgroup_size = config.get @hrx2.tuning.get_rows_moe.workgroup_size : index
+  %total = index.mul %nselected, %ntokens : index
+  %rounding = index.add %workgroup_size, %minus_one : index
+  %rounded = index.add %total, %rounding : index
+  %workgroups = index.div %rounded, %workgroup_size : index
+  kernel.launch.config workgroups(%workgroups, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%src0: buffer, %idx: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero_i32 = scalar.constant 0 : i32
+  %nexperts = config.get @hrx2.shape.get_rows_moe.nexperts : index
+  %nselected = config.get @hrx2.shape.get_rows_moe.nselected : index
+  %ntokens = config.get @hrx2.shape.get_rows_moe.ntokens : index
+  %src0_token_stride = config.get @hrx2.shape.get_rows_moe.src0_token_stride : index
+  %idx_token_stride = config.get @hrx2.shape.get_rows_moe.idx_token_stride : index
+  %dst_token_stride = config.get @hrx2.shape.get_rows_moe.dst_token_stride : index
+  %workgroup_size = config.get @hrx2.tuning.get_rows_moe.workgroup_size : index
+  %nexperts_bounded = index.assume %nexperts [range(%nexperts, 1, 1024)] : index
+  %nselected_bounded = index.assume %nselected [range(%nselected, 1, 128)] : index
+  %ntokens_bounded = index.assume %ntokens [range(%ntokens, 1, 1048576)] : index
+  %workgroup0 = kernel.workgroup.id<x> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %workgroup = index.assume %workgroup0 [range(%workgroup0, 0, 4194303)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+  %linear_mul0 = index.mul %workgroup, %workgroup_size : index
+  %linear_mul = index.assume %linear_mul0 [range(%linear_mul0, 0, 1073741823)] : index
+  %linear_add0 = index.add %linear_mul, %lane : index
+  %linear = index.assume %linear_add0 [range(%linear_add0, 0, 1073741823)] : index
+  %total0 = index.mul %nselected_bounded, %ntokens_bounded : index
+  %total = index.assume %total0 [range(%total0, 1, 1073741824)] : index
+  %in_bounds = index.cmp ult, %linear, %total : index
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %idx_global = buffer.assume.memory_space<global> %idx : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_view = buffer.view %src0_global[%base] : buffer -> view<1073741824xf32, #dense>
+  %idx_view = buffer.view %idx_global[%base] : buffer -> view<1073741824xi32, #dense>
+  %dst_view = buffer.view %dst_global[%base] : buffer -> view<1073741824xf32, #dense>
+
+  scf.if %in_bounds {
+    %expert_slot = index.rem %linear, %nselected_bounded : index
+    %token = index.div %linear, %nselected_bounded : index
+    %idx_token_raw = index.mul %token, %idx_token_stride : index
+    %idx_token = index.assume %idx_token_raw [range(%idx_token_raw, 0, 1073741823)] : index
+    %idx_offset_raw = index.add %idx_token, %expert_slot : index
+    %idx_offset = index.assume %idx_offset_raw [range(%idx_offset_raw, 0, 1073741823)] : index
+    %expert_i32 = view.load %idx_view[%idx_offset] : view<1073741824xi32, #dense> -> i32
+    %expert_nonnegative = scalar.cmpi sge, %expert_i32, %zero_i32 : i32
+    scf.if %expert_nonnegative {
+      %expert0 = index.cast %expert_i32 : i32 to index
+      %expert = index.assume %expert0 [range(%expert0, 0, 1023)] : index
+      %expert_valid = index.cmp ult, %expert, %nexperts_bounded : index
+      scf.if %expert_valid {
+        %src_token_raw = index.mul %token, %src0_token_stride : index
+        %src_token = index.assume %src_token_raw [range(%src_token_raw, 0, 1073741823)] : index
+        %src_offset_raw = index.add %src_token, %expert : index
+        %src_offset = index.assume %src_offset_raw [range(%src_offset_raw, 0, 1073741823)] : index
+        %dst_token_raw = index.mul %token, %dst_token_stride : index
+        %dst_token = index.assume %dst_token_raw [range(%dst_token_raw, 0, 1073741823)] : index
+        %dst_offset_raw = index.add %dst_token, %expert_slot : index
+        %dst_offset = index.assume %dst_offset_raw [range(%dst_offset_raw, 0, 1073741823)] : index
+        %value = view.load %src0_view[%src_offset] : view<1073741824xf32, #dense> -> f32
+        view.store %value, %dst_view[%dst_offset] : f32, view<1073741824xf32, #dense>
+      }
+    }
+  }
+  kernel.return
+}
