@@ -5350,12 +5350,7 @@ static std::unique_ptr<ggml_backend_hrx2_reg_context> ggml_backend_hrx2_create_r
                 &device_context->argsort_routes);
             ggml_backend_hrx2_catalog_find_routes(
                 *device_context->catalog,
-                "rope_neox_f32",
-                "ROPE",
-                &device_context->rope_routes);
-            ggml_backend_hrx2_catalog_find_routes(
-                *device_context->catalog,
-                "rope_f32",
+                nullptr,
                 "ROPE",
                 &device_context->rope_routes);
             ggml_backend_hrx2_catalog_find_routes(
