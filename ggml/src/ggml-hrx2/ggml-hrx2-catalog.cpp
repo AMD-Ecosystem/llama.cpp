@@ -202,6 +202,8 @@ static bool ggml_backend_hrx2_route_from_json(
     const auto & shape_domain = route_json.value("shape_domain", nlohmann::json::object());
     route->ncols_min = ggml_backend_hrx2_json_u32(shape_domain, "ncols_min");
     route->ncols_max = ggml_backend_hrx2_json_u32(shape_domain, "ncols_max");
+    route->n_dims_min = ggml_backend_hrx2_json_u32(shape_domain, "n_dims_min");
+    route->n_dims_max = ggml_backend_hrx2_json_u32(shape_domain, "n_dims_max");
     route->nrows_min = ggml_backend_hrx2_json_u32(shape_domain, "nrows_min");
     route->nrows_max = ggml_backend_hrx2_json_u32(shape_domain, "nrows_max");
     route->k_min = ggml_backend_hrx2_json_u32(shape_domain, "k_min");
@@ -223,6 +225,9 @@ static bool ggml_backend_hrx2_route_from_json(
     if (shape_guards.contains("ncols_multiple_of")) {
         route->ncols_multiple_of_guard = shape_guards.at("ncols_multiple_of").get<uint32_t>();
     }
+
+    const auto & supports = route_json.value("supports", nlohmann::json::object());
+    route->supports_mode = supports.value("mode", std::string());
 
     const auto & specialization = route_json.value("specialization", nlohmann::json::object());
     route->specialization_mode = specialization.value("mode", std::string());

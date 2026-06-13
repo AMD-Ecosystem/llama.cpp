@@ -50,6 +50,8 @@ struct ggml_backend_hrx2_kernel_route {
     uint32_t    cols_per_workgroup = 1;
     uint32_t    ncols_min = 0;
     uint32_t    ncols_max = 0;
+    uint32_t    n_dims_min = 0;
+    uint32_t    n_dims_max = 0;
     uint32_t    nrows_min = 0;
     uint32_t    nrows_max = 0;
     uint32_t    k_min = 0;
@@ -62,6 +64,7 @@ struct ggml_backend_hrx2_kernel_route {
     int8_t      all_pot_guard = 0;
     uint32_t    k_multiple_of_guard = 0;
     uint32_t    ncols_multiple_of_guard = 0;
+    std::string supports_mode;
     std::string specialization_mode;
     std::vector<ggml_backend_hrx2_config_binding_spec> config_bindings;
 };

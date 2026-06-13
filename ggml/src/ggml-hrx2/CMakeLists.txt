@@ -13,6 +13,7 @@ set(GGML_HRX2_ARTIFACTS
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/mul_mat_q8_0_f32_static.loombc"
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/mul_mat_q8_0_f32_static_packed.loombc"
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/mul_mat_q8_0_f32_static_packed_scf_unroll.loombc"
+    "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/mul_mat_q4_k_f32_static.loombc"
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/mul_mat_f16_f32_batched.loombc"
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/cont_f32.loombc"
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/swiglu_f32.loombc"
@@ -22,6 +23,8 @@ set(GGML_HRX2_ARTIFACTS
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/get_rows_moe_weights_f32.loombc"
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/argsort_f32_i32.loombc"
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/rope_neox_f32.loombc"
+    "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/rope_neox_f32_freq.loombc"
+    "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/rope_normal_f32_freq.loombc"
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/soft_max_f32.loombc"
 )
 file(GLOB_RECURSE GGML_HRX2_LOOM_SOURCES CONFIGURE_DEPENDS

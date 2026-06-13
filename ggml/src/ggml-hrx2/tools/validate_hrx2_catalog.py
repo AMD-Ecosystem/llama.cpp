@@ -152,6 +152,7 @@ def main():
                             "shape.argsort.ncols",
                             "shape.argsort.nrows",
                             "shape.rope.ncols",
+                            "shape.rope.n_dims",
                             "shape.rope.nheads",
                             "shape.rope.ntokens",
                             "shape.rope.src0_head_stride",
