@@ -1351,69 +1351,6 @@
       }
     },
     {
-      "id": "rms_norm_f32_contiguous",
-      "family": "rms_norm_f32",
-      "op": "RMS_NORM",
-      "target_key": "",
-      "source_id": "rms_norm_f32",
-      "artifact_id": "rms_norm_f32_bc",
-      "root_symbol": "@hrx2_rms_norm_f32",
-      "export_name": "hrx2_rms_norm_f32",
-      "loader_format": "amdgpu-hsaco",
-      "priority": 0,
-      "abi": {
-        "binding_count": 2,
-        "parameter_count": 13,
-        "constant_byte_length": 44
-      },
-      "dispatch": {
-        "workgroup_size": [
-          512,
-          1,
-          1
-        ],
-        "rows_per_workgroup": 1,
-        "cols_per_workgroup": 1
-      },
-      "shape_domain": {
-        "name": "contiguous_f32",
-        "ncols_min": 1,
-        "ncols_max": 65536,
-        "nrows_min": 1,
-        "nrows_max": 1048576
-      },
-      "specialization": {
-        "mode": "jit_config",
-        "bindings": [
-          {
-            "key": "@hrx2.shape.ncols",
-            "source": "shape.ncols"
-          },
-          {
-            "key": "@hrx2.shape.nrows",
-            "source": "shape.nrows"
-          },
-          {
-            "key": "@hrx2.tuning.rms_norm.workgroup_size",
-            "value": "512"
-          },
-          {
-            "key": "@hrx2.tuning.rms_norm.vector_width",
-            "value": "2"
-          }
-        ]
-      },
-      "supports": {
-        "src0_type": "F32",
-        "dst_type": "F32",
-        "layout": "contiguous"
-      },
-      "evidence_summary": {
-        "phase": "phase0",
-        "ggml_cpu_reference": "pass"
-      }
-    },
-    {
       "id": "add_f32_generic_wg256",
       "family": "add_f32",
       "op": "ADD",
