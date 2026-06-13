@@ -65,6 +65,7 @@ struct ggml_backend_hrx2_kernel_route {
     uint32_t    k_multiple_of_guard = 0;
     uint32_t    ncols_multiple_of_guard = 0;
     std::string supports_mode;
+    std::string supports_glu_op;
     std::string specialization_mode;
     std::vector<ggml_backend_hrx2_config_binding_spec> config_bindings;
 };

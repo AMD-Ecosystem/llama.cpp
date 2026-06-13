@@ -270,6 +270,7 @@ struct ggml_backend_hrx2_cont_shape {
 struct ggml_backend_hrx2_swiglu_shape {
     uint32_t ncols = 0;
     uint32_t nrows = 0;
+    enum ggml_glu_op glu_op = GGML_GLU_OP_SWIGLU;
     bool split_sources = false;
 };
 
@@ -300,6 +301,19 @@ static bool ggml_hrx2_check(hrx_status_t status, const char * expression, const 
 static bool ggml_backend_hrx2_env_enabled(const char * name) {
     const char * value = std::getenv(name);
     return value && value[0] != '\0' && std::strcmp(value, "0") != 0;
+}
+
+static const char * ggml_backend_hrx2_glu_op_key(enum ggml_glu_op glu_op) {
+    switch (glu_op) {
+        case GGML_GLU_OP_REGLU: return "REGLU";
+        case GGML_GLU_OP_GEGLU: return "GEGLU";
+        case GGML_GLU_OP_SWIGLU: return "SWIGLU";
+        case GGML_GLU_OP_SWIGLU_OAI: return "SWIGLU_OAI";
+        case GGML_GLU_OP_GEGLU_ERF: return "GEGLU_ERF";
+        case GGML_GLU_OP_GEGLU_QUICK: return "GEGLU_QUICK";
+        case GGML_GLU_OP_COUNT: break;
+    }
+    return "UNKNOWN";
 }
 
 static std::string ggml_backend_hrx2_json_escape(const std::string & value) {
@@ -1342,10 +1356,11 @@ static bool ggml_backend_hrx2_supports_swiglu(
     GGML_UNUSED(device_context);
     const ggml_tensor * src0 = op->src[0];
     const ggml_tensor * src1 = op->src[1];
+    const enum ggml_glu_op glu_op = ggml_get_glu_op(op);
     if (op->op != GGML_OP_GLU ||
         !src0 ||
         op->view_src != nullptr ||
-        ggml_get_glu_op(op) != GGML_GLU_OP_SWIGLU ||
+        (glu_op != GGML_GLU_OP_SWIGLU && glu_op != GGML_GLU_OP_GEGLU) ||
         ggml_get_op_params_i32(op, 1) != 0 ||
         src0->type != GGML_TYPE_F32 ||
         op->type != GGML_TYPE_F32 ||
@@ -1806,6 +1821,7 @@ static bool ggml_backend_hrx2_extract_swiglu_shape(
         !ggml_backend_hrx2_u32(ggml_nrows(op), &shape.nrows)) {
         return false;
     }
+    shape.glu_op = ggml_get_glu_op(op);
     shape.split_sources = op->src[1] != nullptr;
     *out_shape = shape;
     return true;
@@ -2030,6 +2046,9 @@ static bool ggml_backend_hrx2_route_shape_matches(
         return false;
     }
     if (route->ncols_multiple_of_guard != 0 && (shape.ncols % route->ncols_multiple_of_guard) != 0) {
+        return false;
+    }
+    if (!route->supports_glu_op.empty() && route->supports_glu_op != ggml_backend_hrx2_glu_op_key(shape.glu_op)) {
         return false;
     }
     return true;
@@ -2538,6 +2557,8 @@ static bool ggml_backend_hrx2_make_swiglu_plan(
     if (route->specialization_mode == "jit_config") {
         plan.cache_key += "|ncols=" + std::to_string(shape.ncols);
         plan.cache_key += "|nrows=" + std::to_string(shape.nrows);
+        plan.cache_key += "|glu_op=";
+        plan.cache_key += ggml_backend_hrx2_glu_op_key(shape.glu_op);
         for (const auto & binding : plan.config_bindings) {
             plan.cache_key += "|";
             plan.cache_key += binding.key;
@@ -3557,7 +3578,7 @@ static ggml_status ggml_backend_hrx2_dispatch_swiglu(
     const ggml_tensor * src1 = dst->src[1];
     ggml_backend_hrx2_swiglu_shape shape;
     if (!ggml_backend_hrx2_extract_swiglu_shape(dst, &shape)) {
-        GGML_LOG_ERROR("HRX2: invalid SWIGLU shape during dispatch: dst=%s src0=%s src1=%s\n",
+        GGML_LOG_ERROR("HRX2: invalid GLU shape during dispatch: dst=%s src0=%s src1=%s\n",
                 ggml_backend_hrx2_tensor_summary(dst).c_str(),
                 ggml_backend_hrx2_tensor_summary(src0).c_str(),
                 ggml_backend_hrx2_tensor_summary(dst->src[1]).c_str());
@@ -3567,19 +3588,19 @@ static ggml_status ggml_backend_hrx2_dispatch_swiglu(
     hrx_buffer_ref_t bindings[3] = {};
     uint32_t binding_count = 0;
     if (!ggml_backend_hrx2_tensor_buffer_ref(src0, &bindings[0])) {
-        GGML_LOG_ERROR("HRX2: SWIGLU tensor is not backed by HRX2 buffers\n");
+        GGML_LOG_ERROR("HRX2: GLU tensor is not backed by HRX2 buffers\n");
         return GGML_STATUS_FAILED;
     }
     if (shape.split_sources) {
         if (!ggml_backend_hrx2_tensor_buffer_ref(src1, &bindings[1]) ||
             !ggml_backend_hrx2_tensor_buffer_ref(dst, &bindings[2])) {
-            GGML_LOG_ERROR("HRX2: SWIGLU tensor is not backed by HRX2 buffers\n");
+            GGML_LOG_ERROR("HRX2: GLU tensor is not backed by HRX2 buffers\n");
             return GGML_STATUS_FAILED;
         }
         binding_count = 3;
     } else {
         if (!ggml_backend_hrx2_tensor_buffer_ref(dst, &bindings[1])) {
-            GGML_LOG_ERROR("HRX2: SWIGLU tensor is not backed by HRX2 buffers\n");
+            GGML_LOG_ERROR("HRX2: GLU tensor is not backed by HRX2 buffers\n");
             return GGML_STATUS_FAILED;
         }
         binding_count = 2;
@@ -3603,12 +3624,13 @@ static ggml_status ggml_backend_hrx2_dispatch_swiglu(
                 ggml_backend_hrx2_json_kv("route_id", plan.route->id) + "," +
                 ggml_backend_hrx2_json_kv("target_key", context->device_context->architecture) + "," +
                 ggml_backend_hrx2_json_kv("cache_key", plan.cache_key) + "," +
+                ggml_backend_hrx2_json_kv("glu_op", ggml_backend_hrx2_glu_op_key(shape.glu_op)) + "," +
                 ggml_backend_hrx2_json_kv("ncols", shape.ncols) + "," +
                 ggml_backend_hrx2_json_kv("nrows", shape.nrows));
             continue;
         }
         if (provider->route.constant_byte_length != 0) {
-            GGML_LOG_ERROR("HRX2: SWIGLU route %s has unsupported constant byte length %u\n",
+            GGML_LOG_ERROR("HRX2: GLU route %s has unsupported constant byte length %u\n",
                     provider->route.id.c_str(), provider->route.constant_byte_length);
             continue;
         }
@@ -3628,6 +3650,7 @@ static ggml_status ggml_backend_hrx2_dispatch_swiglu(
             ggml_backend_hrx2_json_kv("route_id", provider->route.id) + "," +
             ggml_backend_hrx2_json_kv("target_key", context->device_context->architecture) + "," +
             ggml_backend_hrx2_json_kv("cache_key", provider->cache_key) + "," +
+            ggml_backend_hrx2_json_kv("glu_op", ggml_backend_hrx2_glu_op_key(shape.glu_op)) + "," +
             ggml_backend_hrx2_json_kv("ncols", shape.ncols) + "," +
             ggml_backend_hrx2_json_kv("nrows", shape.nrows) + "," +
             ggml_backend_hrx2_json_kv("workgroups_x", config.workgroup_count[0]) + "," +
@@ -3648,7 +3671,8 @@ static ggml_status ggml_backend_hrx2_dispatch_swiglu(
         return GGML_STATUS_SUCCESS;
     }
 
-    GGML_LOG_ERROR("HRX2: SWIGLU provider is not available for ncols=%u nrows=%u\n", shape.ncols, shape.nrows);
+    GGML_LOG_ERROR("HRX2: GLU provider is not available for glu_op=%s ncols=%u nrows=%u\n",
+            ggml_backend_hrx2_glu_op_key(shape.glu_op), shape.ncols, shape.nrows);
     return GGML_STATUS_FAILED;
 }
 

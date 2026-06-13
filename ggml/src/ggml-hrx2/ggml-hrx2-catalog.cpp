@@ -228,6 +228,7 @@ static bool ggml_backend_hrx2_route_from_json(
 
     const auto & supports = route_json.value("supports", nlohmann::json::object());
     route->supports_mode = supports.value("mode", std::string());
+    route->supports_glu_op = supports.value("glu_op", std::string());
 
     const auto & specialization = route_json.value("specialization", nlohmann::json::object());
     route->specialization_mode = specialization.value("mode", std::string());
