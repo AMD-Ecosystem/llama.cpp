@@ -69,6 +69,10 @@ struct ggml_backend_hrx2_device_context {
     std::vector<const ggml_backend_hrx2_kernel_route *> clamp_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> sum_rows_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> get_rows_routes;
+    std::vector<const ggml_backend_hrx2_kernel_route *> get_rows_q8_0_routes;
+    std::vector<const ggml_backend_hrx2_kernel_route *> get_rows_q4_k_routes;
+    std::vector<const ggml_backend_hrx2_kernel_route *> get_rows_q5_k_routes;
+    std::vector<const ggml_backend_hrx2_kernel_route *> get_rows_q6_k_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> get_rows_moe_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> argsort_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> rope_routes;
@@ -1234,6 +1238,49 @@ static bool ggml_backend_hrx2_supports_get_rows_f32(
            static_cast<uint64_t>(src0->ne[0]) * static_cast<uint64_t>(src1->ne[0]) <= max_dense_elements;
 }
 
+static bool ggml_backend_hrx2_supports_get_rows_quantized(
+        ggml_backend_hrx2_device_context * device_context,
+        const ggml_tensor * op,
+        ggml_type src0_type) {
+    GGML_UNUSED(device_context);
+    const ggml_tensor * src0 = op->src[0];
+    const ggml_tensor * src1 = op->src[1];
+    const uint64_t max_dense_elements = 1073741824ULL;
+    const int64_t block_size = ggml_blck_size(src0_type);
+    return op->op == GGML_OP_GET_ROWS &&
+           src0 &&
+           src1 &&
+           op->view_src == nullptr &&
+           src0->type == src0_type &&
+           src1->type == GGML_TYPE_I32 &&
+           op->type == GGML_TYPE_F32 &&
+           block_size > 0 &&
+           src0->ne[0] == op->ne[0] &&
+           (src0->ne[0] % block_size) == 0 &&
+           src0->ne[1] > 0 &&
+           src0->ne[2] == 1 &&
+           src0->ne[3] == 1 &&
+           src1->ne[0] == op->ne[1] &&
+           src1->ne[1] == 1 &&
+           src1->ne[2] == 1 &&
+           src1->ne[3] == 1 &&
+           op->ne[2] == 1 &&
+           op->ne[3] == 1 &&
+           src0->ne[0] > 0 &&
+           src1->ne[0] > 0 &&
+           src1->nb[0] == sizeof(int32_t) &&
+           op->nb[0] == sizeof(float) &&
+           src0->nb[1] == ggml_row_size(src0_type, src0->ne[0]) &&
+           op->nb[1] % sizeof(float) == 0 &&
+           op->nb[1] / sizeof(float) == static_cast<size_t>(op->ne[0]) &&
+           op->nb[1] / sizeof(float) <= 65536 &&
+           ggml_is_contiguous(src0) &&
+           ggml_is_contiguous(op) &&
+           static_cast<uint64_t>(src0->ne[0]) <= std::numeric_limits<uint32_t>::max() &&
+           static_cast<uint64_t>(src1->ne[0]) <= std::numeric_limits<uint32_t>::max() &&
+           static_cast<uint64_t>(src0->ne[0]) * static_cast<uint64_t>(src1->ne[0]) <= max_dense_elements;
+}
+
 static bool ggml_backend_hrx2_supports_get_rows_moe_weights(
         ggml_backend_hrx2_device_context * device_context,
         const ggml_tensor * op) {
@@ -1757,6 +1804,28 @@ static bool ggml_backend_hrx2_extract_get_rows_shape(
         !ggml_backend_hrx2_u32(src1->ne[0], &shape.nrows) ||
         !ggml_backend_hrx2_u32(src0->ne[1], &shape.src0_nrows) ||
         !ggml_backend_hrx2_u32_size(src0->nb[1] / sizeof(float), &shape.src0_row_stride) ||
+        !ggml_backend_hrx2_u32_size(src1->nb[0] / sizeof(int32_t), &shape.idx_row_stride) ||
+        !ggml_backend_hrx2_u32_size(op->nb[1] / sizeof(float), &shape.dst_row_stride)) {
+        return false;
+    }
+    *out_shape = shape;
+    return true;
+}
+
+static bool ggml_backend_hrx2_extract_get_rows_quantized_shape(
+        const ggml_tensor * op,
+        ggml_type src0_type,
+        ggml_backend_hrx2_get_rows_shape * out_shape) {
+    if (!out_shape || !ggml_backend_hrx2_supports_get_rows_quantized(nullptr, op, src0_type)) {
+        return false;
+    }
+    const ggml_tensor * src0 = op->src[0];
+    const ggml_tensor * src1 = op->src[1];
+    ggml_backend_hrx2_get_rows_shape shape;
+    if (!ggml_backend_hrx2_u32(src0->ne[0], &shape.ncols) ||
+        !ggml_backend_hrx2_u32(src1->ne[0], &shape.nrows) ||
+        !ggml_backend_hrx2_u32(src0->ne[1], &shape.src0_nrows) ||
+        !ggml_backend_hrx2_u32_size(src0->nb[1], &shape.src0_row_stride) ||
         !ggml_backend_hrx2_u32_size(src1->nb[0] / sizeof(int32_t), &shape.idx_row_stride) ||
         !ggml_backend_hrx2_u32_size(op->nb[1] / sizeof(float), &shape.dst_row_stride)) {
         return false;
@@ -3399,6 +3468,24 @@ static bool ggml_backend_hrx2_supports_get_rows_route(
     return false;
 }
 
+static bool ggml_backend_hrx2_supports_get_rows_quantized_route(
+        ggml_backend_hrx2_device_context * device_context,
+        const ggml_tensor * op,
+        ggml_type src0_type,
+        const std::vector<const ggml_backend_hrx2_kernel_route *> & routes) {
+    ggml_backend_hrx2_get_rows_shape shape;
+    if (!ggml_backend_hrx2_extract_get_rows_quantized_shape(op, src0_type, &shape)) {
+        return false;
+    }
+    for (const auto * route : routes) {
+        ggml_backend_hrx2_provider_plan plan;
+        if (ggml_backend_hrx2_make_get_rows_plan(device_context, route, shape, &plan)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool ggml_backend_hrx2_supports_get_rows_moe_route(
         ggml_backend_hrx2_device_context * device_context,
         const ggml_tensor * op) {
@@ -4144,6 +4231,109 @@ static ggml_status ggml_backend_hrx2_dispatch_get_rows(
     }
 
     GGML_LOG_ERROR("HRX2: GET_ROWS F32 provider is not available for ncols=%u nrows=%u\n", shape.ncols, shape.nrows);
+    return GGML_STATUS_FAILED;
+}
+
+static ggml_status ggml_backend_hrx2_dispatch_get_rows_quantized(
+        ggml_backend_hrx2_context * context,
+        const ggml_tensor * dst,
+        ggml_type src0_type,
+        const char * family,
+        const char * type_label,
+        const std::vector<const ggml_backend_hrx2_kernel_route *> & routes) {
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+    ggml_backend_hrx2_get_rows_shape shape;
+    if (!ggml_backend_hrx2_extract_get_rows_quantized_shape(dst, src0_type, &shape)) {
+        GGML_LOG_ERROR("HRX2: invalid GET_ROWS %s shape during dispatch: dst=%s src0=%s src1=%s\n",
+                type_label,
+                ggml_backend_hrx2_tensor_summary(dst).c_str(),
+                ggml_backend_hrx2_tensor_summary(src0).c_str(),
+                ggml_backend_hrx2_tensor_summary(src1).c_str());
+        return GGML_STATUS_FAILED;
+    }
+
+    hrx_buffer_ref_t bindings[3] = {};
+    if (!ggml_backend_hrx2_tensor_buffer_ref(src0, &bindings[0]) ||
+        !ggml_backend_hrx2_tensor_buffer_ref(src1, &bindings[1]) ||
+        !ggml_backend_hrx2_tensor_buffer_ref(dst, &bindings[2])) {
+        GGML_LOG_ERROR("HRX2: GET_ROWS %s tensor is not backed by HRX2 buffers\n", type_label);
+        return GGML_STATUS_FAILED;
+    }
+
+    for (const auto * route : routes) {
+        ggml_backend_hrx2_provider_plan plan;
+        if (!ggml_backend_hrx2_make_get_rows_plan(context->device_context, route, shape, &plan)) {
+            continue;
+        }
+
+        const auto * provider = ggml_backend_hrx2_get_provider(
+            context->device_context,
+            plan.route,
+            plan.config_bindings,
+            plan.cache_key);
+        if (!provider) {
+            ggml_backend_hrx2_trace_event(
+                "provider_unavailable",
+                ggml_backend_hrx2_json_kv("op", "GET_ROWS") + "," +
+                ggml_backend_hrx2_json_kv("family", family) + "," +
+                ggml_backend_hrx2_json_kv("route_id", plan.route->id) + "," +
+                ggml_backend_hrx2_json_kv("target_key", context->device_context->architecture) + "," +
+                ggml_backend_hrx2_json_kv("cache_key", plan.cache_key) + "," +
+                ggml_backend_hrx2_json_kv("ncols", shape.ncols) + "," +
+                ggml_backend_hrx2_json_kv("nrows", shape.nrows));
+            continue;
+        }
+
+        if (provider->export_info.constant_byte_length != 0) {
+            GGML_LOG_ERROR(
+                "HRX2: GET_ROWS %s route %s has constant byte length %u but dispatch has none\n",
+                type_label,
+                plan.route->id.c_str(),
+                provider->export_info.constant_byte_length);
+            return GGML_STATUS_FAILED;
+        }
+
+        const uint32_t workgroup_size = provider->export_info.workgroup_size[0] != 0 ?
+            provider->export_info.workgroup_size[0] : provider->route.workgroup_size[0];
+        const uint64_t total = static_cast<uint64_t>(shape.ncols) * static_cast<uint64_t>(shape.nrows);
+        hrx_dispatch_config_t config = {
+            /* .workgroup_count = */ { static_cast<uint32_t>((total + workgroup_size - 1) / workgroup_size), 1, 1 },
+            /* .workgroup_size  = */ { workgroup_size, 1, 1 },
+            /* .subgroup_size   = */ 0,
+        };
+
+        if (!GGML_HRX2_CHECK(hrx_stream_dispatch(
+            context->stream,
+            provider->executable,
+            provider->export_ordinal,
+            &config,
+            nullptr,
+            0,
+            bindings,
+            3,
+            HRX_DISPATCH_FLAG_NONE))) {
+            return GGML_STATUS_FAILED;
+        }
+        ggml_backend_hrx2_trace_event(
+            "dispatch",
+            ggml_backend_hrx2_json_kv("op", "GET_ROWS") + "," +
+            ggml_backend_hrx2_json_kv("family", family) + "," +
+            ggml_backend_hrx2_json_kv("route_id", plan.route->id) + "," +
+            ggml_backend_hrx2_json_kv("target_key", context->device_context->architecture) + "," +
+            ggml_backend_hrx2_json_kv("cache_key", plan.cache_key) + "," +
+            ggml_backend_hrx2_json_kv("ncols", shape.ncols) + "," +
+            ggml_backend_hrx2_json_kv("nrows", shape.nrows) + "," +
+            ggml_backend_hrx2_json_kv("src0_nrows", shape.src0_nrows) + "," +
+            ggml_backend_hrx2_json_kv("src0_row_stride", shape.src0_row_stride) + "," +
+            ggml_backend_hrx2_json_kv("idx_row_stride", shape.idx_row_stride) + "," +
+            ggml_backend_hrx2_json_kv("dst_row_stride", shape.dst_row_stride) + "," +
+            ggml_backend_hrx2_json_kv("workgroups_x", config.workgroup_count[0]) + "," +
+            ggml_backend_hrx2_json_kv("workgroup_size_x", config.workgroup_size[0]));
+        return GGML_STATUS_SUCCESS;
+    }
+
+    GGML_LOG_ERROR("HRX2: GET_ROWS %s provider is not available for ncols=%u nrows=%u\n", type_label, shape.ncols, shape.nrows);
     return GGML_STATUS_FAILED;
 }
 
@@ -5798,6 +5988,58 @@ static enum ggml_status ggml_backend_hrx2_graph_compute(ggml_backend_t backend, 
                     }
                     break;
                 }
+                if (ggml_backend_hrx2_supports_get_rows_quantized_route(
+                        context->device_context, node, GGML_TYPE_Q8_0, context->device_context->get_rows_q8_0_routes)) {
+                    if (ggml_backend_hrx2_dispatch_get_rows_quantized(
+                            context,
+                            node,
+                            GGML_TYPE_Q8_0,
+                            "get_rows_q8_0_f32",
+                            "Q8_0",
+                            context->device_context->get_rows_q8_0_routes) != GGML_STATUS_SUCCESS) {
+                        return GGML_STATUS_FAILED;
+                    }
+                    break;
+                }
+                if (ggml_backend_hrx2_supports_get_rows_quantized_route(
+                        context->device_context, node, GGML_TYPE_Q4_K, context->device_context->get_rows_q4_k_routes)) {
+                    if (ggml_backend_hrx2_dispatch_get_rows_quantized(
+                            context,
+                            node,
+                            GGML_TYPE_Q4_K,
+                            "get_rows_q4_k_f32",
+                            "Q4_K",
+                            context->device_context->get_rows_q4_k_routes) != GGML_STATUS_SUCCESS) {
+                        return GGML_STATUS_FAILED;
+                    }
+                    break;
+                }
+                if (ggml_backend_hrx2_supports_get_rows_quantized_route(
+                        context->device_context, node, GGML_TYPE_Q5_K, context->device_context->get_rows_q5_k_routes)) {
+                    if (ggml_backend_hrx2_dispatch_get_rows_quantized(
+                            context,
+                            node,
+                            GGML_TYPE_Q5_K,
+                            "get_rows_q5_k_f32",
+                            "Q5_K",
+                            context->device_context->get_rows_q5_k_routes) != GGML_STATUS_SUCCESS) {
+                        return GGML_STATUS_FAILED;
+                    }
+                    break;
+                }
+                if (ggml_backend_hrx2_supports_get_rows_quantized_route(
+                        context->device_context, node, GGML_TYPE_Q6_K, context->device_context->get_rows_q6_k_routes)) {
+                    if (ggml_backend_hrx2_dispatch_get_rows_quantized(
+                            context,
+                            node,
+                            GGML_TYPE_Q6_K,
+                            "get_rows_q6_k_f32",
+                            "Q6_K",
+                            context->device_context->get_rows_q6_k_routes) != GGML_STATUS_SUCCESS) {
+                        return GGML_STATUS_FAILED;
+                    }
+                    break;
+                }
                 if (!ggml_backend_hrx2_supports_get_rows_moe_route(context->device_context, node)) {
                     GGML_LOG_ERROR("HRX2: unsupported GET_ROWS shape/type/layout: dst=%s src0=%s src1=%s\n",
                             ggml_backend_hrx2_tensor_summary(node).c_str(),
@@ -6078,6 +6320,26 @@ static bool ggml_backend_hrx2_device_supports_op(ggml_backend_dev_t dev, const g
             return ggml_backend_hrx2_supports_sum_rows_route(ggml_backend_hrx2_get_device_context(dev), op);
         case GGML_OP_GET_ROWS:
             return ggml_backend_hrx2_supports_get_rows_route(ggml_backend_hrx2_get_device_context(dev), op) ||
+                   ggml_backend_hrx2_supports_get_rows_quantized_route(
+                       ggml_backend_hrx2_get_device_context(dev),
+                       op,
+                       GGML_TYPE_Q8_0,
+                       ggml_backend_hrx2_get_device_context(dev)->get_rows_q8_0_routes) ||
+                   ggml_backend_hrx2_supports_get_rows_quantized_route(
+                       ggml_backend_hrx2_get_device_context(dev),
+                       op,
+                       GGML_TYPE_Q4_K,
+                       ggml_backend_hrx2_get_device_context(dev)->get_rows_q4_k_routes) ||
+                   ggml_backend_hrx2_supports_get_rows_quantized_route(
+                       ggml_backend_hrx2_get_device_context(dev),
+                       op,
+                       GGML_TYPE_Q5_K,
+                       ggml_backend_hrx2_get_device_context(dev)->get_rows_q5_k_routes) ||
+                   ggml_backend_hrx2_supports_get_rows_quantized_route(
+                       ggml_backend_hrx2_get_device_context(dev),
+                       op,
+                       GGML_TYPE_Q6_K,
+                       ggml_backend_hrx2_get_device_context(dev)->get_rows_q6_k_routes) ||
                    ggml_backend_hrx2_supports_get_rows_moe_route(ggml_backend_hrx2_get_device_context(dev), op);
         case GGML_OP_ARGSORT:
             return ggml_backend_hrx2_supports_argsort_route(ggml_backend_hrx2_get_device_context(dev), op);
@@ -6114,6 +6376,13 @@ static bool ggml_backend_hrx2_device_supports_buft(ggml_backend_dev_t dev, ggml_
     return ggml_backend_hrx2_get_buft_context(buft)->device_context == ggml_backend_hrx2_get_device_context(dev);
 }
 
+static bool ggml_backend_hrx2_device_offload_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
+    if (op->op != GGML_OP_GET_ROWS) {
+        return false;
+    }
+    return ggml_backend_hrx2_device_supports_op(dev, op);
+}
+
 static const ggml_backend_device_i ggml_backend_hrx2_device_i = {
     /* .get_name             = */ ggml_backend_hrx2_device_get_name,
     /* .get_description      = */ ggml_backend_hrx2_device_get_description,
@@ -6126,7 +6395,7 @@ static const ggml_backend_device_i ggml_backend_hrx2_device_i = {
     /* .buffer_from_host_ptr = */ nullptr,
     /* .supports_op          = */ ggml_backend_hrx2_device_supports_op,
     /* .supports_buft        = */ ggml_backend_hrx2_device_supports_buft,
-    /* .offload_op           = */ nullptr,
+    /* .offload_op           = */ ggml_backend_hrx2_device_offload_op,
     /* .event_new            = */ nullptr,
     /* .event_free           = */ nullptr,
     /* .event_synchronize    = */ nullptr,
@@ -6301,6 +6570,26 @@ static std::unique_ptr<ggml_backend_hrx2_reg_context> ggml_backend_hrx2_create_r
                 &device_context->get_rows_routes);
             ggml_backend_hrx2_catalog_find_routes(
                 *device_context->catalog,
+                "get_rows_q8_0_f32",
+                "GET_ROWS",
+                &device_context->get_rows_q8_0_routes);
+            ggml_backend_hrx2_catalog_find_routes(
+                *device_context->catalog,
+                "get_rows_q4_k_f32",
+                "GET_ROWS",
+                &device_context->get_rows_q4_k_routes);
+            ggml_backend_hrx2_catalog_find_routes(
+                *device_context->catalog,
+                "get_rows_q5_k_f32",
+                "GET_ROWS",
+                &device_context->get_rows_q5_k_routes);
+            ggml_backend_hrx2_catalog_find_routes(
+                *device_context->catalog,
+                "get_rows_q6_k_f32",
+                "GET_ROWS",
+                &device_context->get_rows_q6_k_routes);
+            ggml_backend_hrx2_catalog_find_routes(
+                *device_context->catalog,
                 "get_rows_moe_weights_f32",
                 "GET_ROWS",
                 &device_context->get_rows_moe_routes);
@@ -6396,6 +6685,22 @@ static std::unique_ptr<ggml_backend_hrx2_reg_context> ggml_backend_hrx2_create_r
             std::sort(
                 device_context->get_rows_routes.begin(),
                 device_context->get_rows_routes.end(),
+                route_less);
+            std::sort(
+                device_context->get_rows_q8_0_routes.begin(),
+                device_context->get_rows_q8_0_routes.end(),
+                route_less);
+            std::sort(
+                device_context->get_rows_q4_k_routes.begin(),
+                device_context->get_rows_q4_k_routes.end(),
+                route_less);
+            std::sort(
+                device_context->get_rows_q5_k_routes.begin(),
+                device_context->get_rows_q5_k_routes.end(),
+                route_less);
+            std::sort(
+                device_context->get_rows_q6_k_routes.begin(),
+                device_context->get_rows_q6_k_routes.end(),
                 route_less);
             std::sort(
                 device_context->get_rows_moe_routes.begin(),
