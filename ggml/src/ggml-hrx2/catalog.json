@@ -9161,7 +9161,7 @@
       }
     },
     {
-      "id": "rope_normal_f32_freq_n128_d128_h32_t1_16_wg256",
+      "id": "rope_normal_f32_freq_n128_d128_h32_t1_64_wg256",
       "family": "rope_f32",
       "op": "ROPE",
       "target_key": "gfx1100",
@@ -9186,17 +9186,17 @@
         "cols_per_workgroup": 1
       },
       "shape_domain": {
-        "name": "rope_normal_f32_freq_n128_d128_h32_t1_16_wg256",
+        "name": "rope_normal_f32_freq_n128_d128_h32_t1_64_wg256",
         "ncols_min": 128,
         "ncols_max": 128,
         "n_dims_min": 128,
         "n_dims_max": 128,
         "nrows_min": 32,
-        "nrows_max": 512,
+        "nrows_max": 2048,
         "rows_min": 32,
         "rows_max": 32,
         "cols_min": 1,
-        "cols_max": 16
+        "cols_max": 64
       },
       "shape_guards": {
         "ncols_multiple_of": 2

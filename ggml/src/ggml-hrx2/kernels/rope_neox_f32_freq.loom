@@ -168,7 +168,8 @@ kernel.def export("hrx2_rope_normal_f32_freq") @hrx2_rope_normal_f32_freq() {
   %base = index.constant 0 : offset
   %one = index.constant 1 : index
   %two = index.constant 2 : index
-  %minus_one_f32 = scalar.constant -1.0 : f32
+  %zero = index.constant 0 : index
+  %minus_two_f32 = scalar.constant -2.0 : f32
   %ncols = config.get @hrx2.shape.rope.ncols : index
   %n_dims = config.get @hrx2.shape.rope.n_dims : index
   %nheads = config.get @hrx2.shape.rope.nheads : index
@@ -245,15 +246,15 @@ kernel.def export("hrx2_rope_normal_f32_freq") @hrx2_rope_normal_f32_freq() {
       %pos_f32 = scalar.sitofp %pos_i32 : i32 to f32
       %n_dims_i32 = index.cast %n_dims_bounded : index to i32
       %n_dims_f32 = scalar.sitofp %n_dims_i32 : i32 to f32
-      %inv_n_dims = scalar.divf<nnan|ninf|nsz|arcp> %minus_one_f32, %n_dims_f32 : f32
-      %i0_i32 = index.cast %pair2 : index to i32
-      %i0_f32 = scalar.sitofp %i0_i32 : i32 to f32
-      %exponent = scalar.mulf<nnan|ninf|nsz> %inv_n_dims, %i0_f32 : f32
+      %theta_scale_exponent = scalar.divf<nnan|ninf|nsz|arcp> %minus_two_f32, %n_dims_f32 : f32
       %log_freq_base = scalar.logf<afn> %freq_base : f32
-      %log_theta_pow = scalar.mulf<nnan|ninf|nsz> %log_freq_base, %exponent : f32
-      %theta_pow = scalar.expf<afn> %log_theta_pow : f32
-      %theta_pos = scalar.mulf<nnan|ninf|nsz> %pos_f32, %theta_pow : f32
+      %log_theta_scale = scalar.mulf<nnan|ninf|nsz> %log_freq_base, %theta_scale_exponent : f32
+      %theta_scale = scalar.expf<afn> %log_theta_scale : f32
       %freq_factor = view.load %freq_view[%pair] : view<[%half_dims]xf32, #dense> -> f32
+      %theta_pos = scf.for %k = [%zero to %pair step %one](%theta_acc = %pos_f32 : f32) -> (f32) {
+        %theta_next = scalar.mulf<nnan|ninf|nsz> %theta_acc, %theta_scale : f32
+        scf.yield %theta_next : f32
+      }
       %theta_div = scalar.divf<nnan|ninf|nsz|arcp> %theta_pos, %freq_factor : f32
       %theta = scalar.mulf<nnan|ninf|nsz> %theta_div, %freq_scale : f32
       %cos0 = scalar.cosf<afn> %theta : f32
