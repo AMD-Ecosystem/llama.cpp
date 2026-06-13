@@ -26,6 +26,7 @@ set(GGML_HRX2_ARTIFACTS
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/pointwise_f32.loombc"
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/set_rows_f32.loombc"
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/sum_rows_f32.loombc"
+    "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/get_rows_f32.loombc"
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/get_rows_moe_weights_f32.loombc"
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/argsort_f32_i32.loombc"
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/rope_neox_f32.loombc"

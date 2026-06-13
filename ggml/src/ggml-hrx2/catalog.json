@@ -33,6 +33,9 @@
     "sum_rows_f32": {
       "path": "kernels/sum_rows_f32.loom"
     },
+    "get_rows_f32": {
+      "path": "kernels/get_rows_f32.loom"
+    },
     "get_rows_moe_weights_f32": {
       "path": "kernels/get_rows_moe_weights_f32.loom"
     },
@@ -121,6 +124,11 @@
     },
     "sum_rows_f32_bc": {
       "path": "artifacts/sum_rows_f32.loombc",
+      "format": "loom-bytecode",
+      "storage": "embedded"
+    },
+    "get_rows_f32_bc": {
+      "path": "artifacts/get_rows_f32.loombc",
       "format": "loom-bytecode",
       "storage": "embedded"
     },
@@ -274,6 +282,10 @@
     {
       "family": "sum_rows_f32",
       "op": "SUM_ROWS"
+    },
+    {
+      "family": "get_rows_f32",
+      "op": "GET_ROWS"
     },
     {
       "family": "get_rows_moe_weights_f32",
@@ -696,7 +708,11 @@
         "constant_byte_length": 0
       },
       "dispatch": {
-        "workgroup_size": [256, 1, 1],
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
         "rows_per_workgroup": 1,
         "cols_per_workgroup": 1
       },
@@ -6281,6 +6297,414 @@
       },
       "evidence_summary": {
         "phase": "phase1-route-slice-27",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "get_rows_f32_n2048_r1_64_wg256",
+      "family": "get_rows_f32",
+      "op": "GET_ROWS",
+      "target_key": "gfx1100",
+      "source_id": "get_rows_f32",
+      "artifact_id": "get_rows_f32_bc",
+      "root_symbol": "@hrx2_get_rows_f32",
+      "export_name": "hrx2_get_rows_f32",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 156,
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 3,
+        "constant_byte_length": 0
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "get_rows_f32_n2048_r1_64_wg256",
+        "ncols_min": 2048,
+        "ncols_max": 2048,
+        "nrows_min": 1,
+        "nrows_max": 64
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.get_rows.ncols",
+            "source": "shape.get_rows.ncols"
+          },
+          {
+            "key": "@hrx2.shape.get_rows.nrows",
+            "source": "shape.get_rows.nrows"
+          },
+          {
+            "key": "@hrx2.shape.get_rows.src0_nrows",
+            "source": "shape.get_rows.src0_nrows"
+          },
+          {
+            "key": "@hrx2.shape.get_rows.idx_row_stride",
+            "source": "shape.get_rows.idx_row_stride"
+          },
+          {
+            "key": "@hrx2.tuning.get_rows.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "I32",
+        "dst_type": "F32",
+        "layout": "embedding_rows_1d"
+      },
+      "evidence_summary": {
+        "phase": "route-slice-46-get-rows-f32",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "get_rows_f32_n3072_r1_64_wg256",
+      "family": "get_rows_f32",
+      "op": "GET_ROWS",
+      "target_key": "gfx1100",
+      "source_id": "get_rows_f32",
+      "artifact_id": "get_rows_f32_bc",
+      "root_symbol": "@hrx2_get_rows_f32",
+      "export_name": "hrx2_get_rows_f32",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 156,
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 3,
+        "constant_byte_length": 0
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "get_rows_f32_n3072_r1_64_wg256",
+        "ncols_min": 3072,
+        "ncols_max": 3072,
+        "nrows_min": 1,
+        "nrows_max": 64
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.get_rows.ncols",
+            "source": "shape.get_rows.ncols"
+          },
+          {
+            "key": "@hrx2.shape.get_rows.nrows",
+            "source": "shape.get_rows.nrows"
+          },
+          {
+            "key": "@hrx2.shape.get_rows.src0_nrows",
+            "source": "shape.get_rows.src0_nrows"
+          },
+          {
+            "key": "@hrx2.shape.get_rows.idx_row_stride",
+            "source": "shape.get_rows.idx_row_stride"
+          },
+          {
+            "key": "@hrx2.tuning.get_rows.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "I32",
+        "dst_type": "F32",
+        "layout": "embedding_rows_1d"
+      },
+      "evidence_summary": {
+        "phase": "route-slice-46-get-rows-f32",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "get_rows_f32_n3584_r1_64_wg256",
+      "family": "get_rows_f32",
+      "op": "GET_ROWS",
+      "target_key": "gfx1100",
+      "source_id": "get_rows_f32",
+      "artifact_id": "get_rows_f32_bc",
+      "root_symbol": "@hrx2_get_rows_f32",
+      "export_name": "hrx2_get_rows_f32",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 156,
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 3,
+        "constant_byte_length": 0
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "get_rows_f32_n3584_r1_64_wg256",
+        "ncols_min": 3584,
+        "ncols_max": 3584,
+        "nrows_min": 1,
+        "nrows_max": 64
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.get_rows.ncols",
+            "source": "shape.get_rows.ncols"
+          },
+          {
+            "key": "@hrx2.shape.get_rows.nrows",
+            "source": "shape.get_rows.nrows"
+          },
+          {
+            "key": "@hrx2.shape.get_rows.src0_nrows",
+            "source": "shape.get_rows.src0_nrows"
+          },
+          {
+            "key": "@hrx2.shape.get_rows.idx_row_stride",
+            "source": "shape.get_rows.idx_row_stride"
+          },
+          {
+            "key": "@hrx2.tuning.get_rows.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "I32",
+        "dst_type": "F32",
+        "layout": "embedding_rows_1d"
+      },
+      "evidence_summary": {
+        "phase": "route-slice-46-get-rows-f32",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "get_rows_f32_n4096_r1_64_wg256",
+      "family": "get_rows_f32",
+      "op": "GET_ROWS",
+      "target_key": "gfx1100",
+      "source_id": "get_rows_f32",
+      "artifact_id": "get_rows_f32_bc",
+      "root_symbol": "@hrx2_get_rows_f32",
+      "export_name": "hrx2_get_rows_f32",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 156,
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 3,
+        "constant_byte_length": 0
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "get_rows_f32_n4096_r1_64_wg256",
+        "ncols_min": 4096,
+        "ncols_max": 4096,
+        "nrows_min": 1,
+        "nrows_max": 64
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.get_rows.ncols",
+            "source": "shape.get_rows.ncols"
+          },
+          {
+            "key": "@hrx2.shape.get_rows.nrows",
+            "source": "shape.get_rows.nrows"
+          },
+          {
+            "key": "@hrx2.shape.get_rows.src0_nrows",
+            "source": "shape.get_rows.src0_nrows"
+          },
+          {
+            "key": "@hrx2.shape.get_rows.idx_row_stride",
+            "source": "shape.get_rows.idx_row_stride"
+          },
+          {
+            "key": "@hrx2.tuning.get_rows.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "I32",
+        "dst_type": "F32",
+        "layout": "embedding_rows_1d"
+      },
+      "evidence_summary": {
+        "phase": "route-slice-46-get-rows-f32",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "get_rows_f32_n5120_r1_64_wg256",
+      "family": "get_rows_f32",
+      "op": "GET_ROWS",
+      "target_key": "gfx1100",
+      "source_id": "get_rows_f32",
+      "artifact_id": "get_rows_f32_bc",
+      "root_symbol": "@hrx2_get_rows_f32",
+      "export_name": "hrx2_get_rows_f32",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 156,
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 3,
+        "constant_byte_length": 0
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "get_rows_f32_n5120_r1_64_wg256",
+        "ncols_min": 5120,
+        "ncols_max": 5120,
+        "nrows_min": 1,
+        "nrows_max": 64
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.get_rows.ncols",
+            "source": "shape.get_rows.ncols"
+          },
+          {
+            "key": "@hrx2.shape.get_rows.nrows",
+            "source": "shape.get_rows.nrows"
+          },
+          {
+            "key": "@hrx2.shape.get_rows.src0_nrows",
+            "source": "shape.get_rows.src0_nrows"
+          },
+          {
+            "key": "@hrx2.shape.get_rows.idx_row_stride",
+            "source": "shape.get_rows.idx_row_stride"
+          },
+          {
+            "key": "@hrx2.tuning.get_rows.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "I32",
+        "dst_type": "F32",
+        "layout": "embedding_rows_1d"
+      },
+      "evidence_summary": {
+        "phase": "route-slice-46-get-rows-f32",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "get_rows_f32_n5376_r1_64_wg256",
+      "family": "get_rows_f32",
+      "op": "GET_ROWS",
+      "target_key": "gfx1100",
+      "source_id": "get_rows_f32",
+      "artifact_id": "get_rows_f32_bc",
+      "root_symbol": "@hrx2_get_rows_f32",
+      "export_name": "hrx2_get_rows_f32",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 156,
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 3,
+        "constant_byte_length": 0
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "get_rows_f32_n5376_r1_64_wg256",
+        "ncols_min": 5376,
+        "ncols_max": 5376,
+        "nrows_min": 1,
+        "nrows_max": 64
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.get_rows.ncols",
+            "source": "shape.get_rows.ncols"
+          },
+          {
+            "key": "@hrx2.shape.get_rows.nrows",
+            "source": "shape.get_rows.nrows"
+          },
+          {
+            "key": "@hrx2.shape.get_rows.src0_nrows",
+            "source": "shape.get_rows.src0_nrows"
+          },
+          {
+            "key": "@hrx2.shape.get_rows.idx_row_stride",
+            "source": "shape.get_rows.idx_row_stride"
+          },
+          {
+            "key": "@hrx2.tuning.get_rows.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "I32",
+        "dst_type": "F32",
+        "layout": "embedding_rows_1d"
+      },
+      "evidence_summary": {
+        "phase": "route-slice-46-get-rows-f32",
         "ggml_cpu_reference": "required"
       }
     },
