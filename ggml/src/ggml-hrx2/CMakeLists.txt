@@ -21,6 +21,7 @@ set(GGML_HRX2_ARTIFACTS
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/get_rows_moe_weights_f32.loombc"
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/argsort_f32_i32.loombc"
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/rope_neox_f32.loombc"
+    "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/soft_max_f32.loombc"
 )
 file(GLOB_RECURSE GGML_HRX2_LOOM_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/*.loom"
