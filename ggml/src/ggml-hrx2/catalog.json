@@ -26,6 +26,9 @@
     },
     "pointwise_f32": {
       "path": "kernels/pointwise_f32.loom"
+    },
+    "sum_rows_f32": {
+      "path": "kernels/sum_rows_f32.loom"
     }
   },
   "artifacts": {
@@ -73,6 +76,11 @@
       "path": "artifacts/pointwise_f32.loombc",
       "format": "loom-bytecode",
       "storage": "embedded"
+    },
+    "sum_rows_f32_bc": {
+      "path": "artifacts/sum_rows_f32.loombc",
+      "format": "loom-bytecode",
+      "storage": "embedded"
     }
   },
   "families": [
@@ -107,6 +115,18 @@
     {
       "family": "scale_f32",
       "op": "SCALE"
+    },
+    {
+      "family": "div_f32",
+      "op": "DIV"
+    },
+    {
+      "family": "clamp_f32",
+      "op": "CLAMP"
+    },
+    {
+      "family": "sum_rows_f32",
+      "op": "SUM_ROWS"
     }
   ],
   "routes": [
@@ -4437,6 +4457,966 @@
       },
       "evidence_summary": {
         "phase": "phase1-route-slice-26",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "div_f32_n8_r1_rhscolbroadcast_wg256",
+      "family": "div_f32",
+      "op": "DIV",
+      "target_key": "",
+      "source_id": "pointwise_f32",
+      "artifact_id": "pointwise_f32_bc",
+      "root_symbol": "@hrx2_div_f32",
+      "export_name": "hrx2_div_f32",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 157,
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 3,
+        "constant_byte_length": 0
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "div_f32_n8_r1_rhscolbroadcast_wg256",
+        "ncols_min": 8,
+        "ncols_max": 8,
+        "nrows_min": 1,
+        "nrows_max": 1
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.pointwise.ncols",
+            "source": "shape.ncols"
+          },
+          {
+            "key": "@hrx2.shape.pointwise.nrows",
+            "source": "shape.nrows"
+          },
+          {
+            "key": "@hrx2.shape.pointwise.src0_row_stride",
+            "source": "shape.pointwise.src0_row_stride"
+          },
+          {
+            "key": "@hrx2.shape.pointwise.src1_row_stride",
+            "source": "shape.pointwise.src1_row_stride"
+          },
+          {
+            "key": "@hrx2.shape.pointwise.src1_ncols",
+            "source": "shape.pointwise.src1_ncols"
+          },
+          {
+            "key": "@hrx2.tuning.pointwise.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous_src0_rhs_column_broadcast"
+      },
+      "evidence_summary": {
+        "phase": "phase1-route-slice-27",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "div_f32_n8_r16_rhscolbroadcast_wg256",
+      "family": "div_f32",
+      "op": "DIV",
+      "target_key": "",
+      "source_id": "pointwise_f32",
+      "artifact_id": "pointwise_f32_bc",
+      "root_symbol": "@hrx2_div_f32",
+      "export_name": "hrx2_div_f32",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 157,
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 3,
+        "constant_byte_length": 0
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "div_f32_n8_r16_rhscolbroadcast_wg256",
+        "ncols_min": 8,
+        "ncols_max": 8,
+        "nrows_min": 16,
+        "nrows_max": 16
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.pointwise.ncols",
+            "source": "shape.ncols"
+          },
+          {
+            "key": "@hrx2.shape.pointwise.nrows",
+            "source": "shape.nrows"
+          },
+          {
+            "key": "@hrx2.shape.pointwise.src0_row_stride",
+            "source": "shape.pointwise.src0_row_stride"
+          },
+          {
+            "key": "@hrx2.shape.pointwise.src1_row_stride",
+            "source": "shape.pointwise.src1_row_stride"
+          },
+          {
+            "key": "@hrx2.shape.pointwise.src1_ncols",
+            "source": "shape.pointwise.src1_ncols"
+          },
+          {
+            "key": "@hrx2.tuning.pointwise.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous_src0_rhs_column_broadcast"
+      },
+      "evidence_summary": {
+        "phase": "phase1-route-slice-27",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "div_f32_n8_r64_rhscolbroadcast_wg256",
+      "family": "div_f32",
+      "op": "DIV",
+      "target_key": "",
+      "source_id": "pointwise_f32",
+      "artifact_id": "pointwise_f32_bc",
+      "root_symbol": "@hrx2_div_f32",
+      "export_name": "hrx2_div_f32",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 157,
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 3,
+        "constant_byte_length": 0
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "div_f32_n8_r64_rhscolbroadcast_wg256",
+        "ncols_min": 8,
+        "ncols_max": 8,
+        "nrows_min": 64,
+        "nrows_max": 64
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.pointwise.ncols",
+            "source": "shape.ncols"
+          },
+          {
+            "key": "@hrx2.shape.pointwise.nrows",
+            "source": "shape.nrows"
+          },
+          {
+            "key": "@hrx2.shape.pointwise.src0_row_stride",
+            "source": "shape.pointwise.src0_row_stride"
+          },
+          {
+            "key": "@hrx2.shape.pointwise.src1_row_stride",
+            "source": "shape.pointwise.src1_row_stride"
+          },
+          {
+            "key": "@hrx2.shape.pointwise.src1_ncols",
+            "source": "shape.pointwise.src1_ncols"
+          },
+          {
+            "key": "@hrx2.tuning.pointwise.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous_src0_rhs_column_broadcast"
+      },
+      "evidence_summary": {
+        "phase": "phase1-route-slice-27",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "clamp_f32_n1_r1_contiguous_wg256",
+      "family": "clamp_f32",
+      "op": "CLAMP",
+      "target_key": "",
+      "source_id": "pointwise_f32",
+      "artifact_id": "pointwise_f32_bc",
+      "root_symbol": "@hrx2_clamp_f32",
+      "export_name": "hrx2_clamp_f32",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 157,
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 4,
+        "constant_byte_length": 8
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "clamp_f32_n1_r1_contiguous_wg256",
+        "ncols_min": 1,
+        "ncols_max": 1,
+        "nrows_min": 1,
+        "nrows_max": 1
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.pointwise.ncols",
+            "source": "shape.ncols"
+          },
+          {
+            "key": "@hrx2.shape.pointwise.nrows",
+            "source": "shape.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.pointwise.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "evidence_summary": {
+        "phase": "phase1-route-slice-27",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "clamp_f32_n1_r16_contiguous_wg256",
+      "family": "clamp_f32",
+      "op": "CLAMP",
+      "target_key": "",
+      "source_id": "pointwise_f32",
+      "artifact_id": "pointwise_f32_bc",
+      "root_symbol": "@hrx2_clamp_f32",
+      "export_name": "hrx2_clamp_f32",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 157,
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 4,
+        "constant_byte_length": 8
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "clamp_f32_n1_r16_contiguous_wg256",
+        "ncols_min": 1,
+        "ncols_max": 1,
+        "nrows_min": 16,
+        "nrows_max": 16
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.pointwise.ncols",
+            "source": "shape.ncols"
+          },
+          {
+            "key": "@hrx2.shape.pointwise.nrows",
+            "source": "shape.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.pointwise.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "evidence_summary": {
+        "phase": "phase1-route-slice-27",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "clamp_f32_n1_r64_contiguous_wg256",
+      "family": "clamp_f32",
+      "op": "CLAMP",
+      "target_key": "",
+      "source_id": "pointwise_f32",
+      "artifact_id": "pointwise_f32_bc",
+      "root_symbol": "@hrx2_clamp_f32",
+      "export_name": "hrx2_clamp_f32",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 157,
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 4,
+        "constant_byte_length": 8
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "clamp_f32_n1_r64_contiguous_wg256",
+        "ncols_min": 1,
+        "ncols_max": 1,
+        "nrows_min": 64,
+        "nrows_max": 64
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.pointwise.ncols",
+            "source": "shape.ncols"
+          },
+          {
+            "key": "@hrx2.shape.pointwise.nrows",
+            "source": "shape.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.pointwise.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "evidence_summary": {
+        "phase": "phase1-route-slice-27",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "sum_rows_f32_n8_r1_wg32",
+      "family": "sum_rows_f32",
+      "op": "SUM_ROWS",
+      "target_key": "",
+      "source_id": "sum_rows_f32",
+      "artifact_id": "sum_rows_f32_bc",
+      "root_symbol": "@hrx2_sum_rows_f32",
+      "export_name": "hrx2_sum_rows_f32",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 157,
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 2,
+        "constant_byte_length": 0
+      },
+      "dispatch": {
+        "workgroup_size": [
+          32,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "sum_rows_f32_n8_r1_wg32",
+        "ncols_min": 8,
+        "ncols_max": 8,
+        "nrows_min": 1,
+        "nrows_max": 1
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.sum_rows.ncols",
+            "source": "shape.sum_rows.ncols"
+          },
+          {
+            "key": "@hrx2.shape.sum_rows.nrows",
+            "source": "shape.sum_rows.nrows"
+          },
+          {
+            "key": "@hrx2.shape.sum_rows.src0_row_stride",
+            "source": "shape.sum_rows.src0_row_stride"
+          },
+          {
+            "key": "@hrx2.tuning.sum_rows.workgroup_size",
+            "value": "32"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous_row_reduction"
+      },
+      "evidence_summary": {
+        "phase": "phase1-route-slice-27",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "sum_rows_f32_n8_r16_wg32",
+      "family": "sum_rows_f32",
+      "op": "SUM_ROWS",
+      "target_key": "",
+      "source_id": "sum_rows_f32",
+      "artifact_id": "sum_rows_f32_bc",
+      "root_symbol": "@hrx2_sum_rows_f32",
+      "export_name": "hrx2_sum_rows_f32",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 157,
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 2,
+        "constant_byte_length": 0
+      },
+      "dispatch": {
+        "workgroup_size": [
+          32,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "sum_rows_f32_n8_r16_wg32",
+        "ncols_min": 8,
+        "ncols_max": 8,
+        "nrows_min": 16,
+        "nrows_max": 16
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.sum_rows.ncols",
+            "source": "shape.sum_rows.ncols"
+          },
+          {
+            "key": "@hrx2.shape.sum_rows.nrows",
+            "source": "shape.sum_rows.nrows"
+          },
+          {
+            "key": "@hrx2.shape.sum_rows.src0_row_stride",
+            "source": "shape.sum_rows.src0_row_stride"
+          },
+          {
+            "key": "@hrx2.tuning.sum_rows.workgroup_size",
+            "value": "32"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous_row_reduction"
+      },
+      "evidence_summary": {
+        "phase": "phase1-route-slice-27",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "sum_rows_f32_n8_r64_wg32",
+      "family": "sum_rows_f32",
+      "op": "SUM_ROWS",
+      "target_key": "",
+      "source_id": "sum_rows_f32",
+      "artifact_id": "sum_rows_f32_bc",
+      "root_symbol": "@hrx2_sum_rows_f32",
+      "export_name": "hrx2_sum_rows_f32",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 157,
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 2,
+        "constant_byte_length": 0
+      },
+      "dispatch": {
+        "workgroup_size": [
+          32,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "sum_rows_f32_n8_r64_wg32",
+        "ncols_min": 8,
+        "ncols_max": 8,
+        "nrows_min": 64,
+        "nrows_max": 64
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.sum_rows.ncols",
+            "source": "shape.sum_rows.ncols"
+          },
+          {
+            "key": "@hrx2.shape.sum_rows.nrows",
+            "source": "shape.sum_rows.nrows"
+          },
+          {
+            "key": "@hrx2.shape.sum_rows.src0_row_stride",
+            "source": "shape.sum_rows.src0_row_stride"
+          },
+          {
+            "key": "@hrx2.tuning.sum_rows.workgroup_size",
+            "value": "32"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous_row_reduction"
+      },
+      "evidence_summary": {
+        "phase": "phase1-route-slice-27",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "rms_norm_f32_n3072_r64_vector_vw4_wg512",
+      "family": "rms_norm_f32",
+      "op": "RMS_NORM",
+      "target_key": "",
+      "source_id": "rms_norm_f32",
+      "artifact_id": "rms_norm_f32_bc",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "export_name": "hrx2_rms_norm_f32_static_vector_tail",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 155,
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 3,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          512,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "rms_norm_f32_n3072_r64_vector_vw4_wg512",
+        "ncols_min": 3072,
+        "ncols_max": 3072,
+        "nrows_min": 64,
+        "nrows_max": 64
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.ncols",
+            "source": "shape.ncols"
+          },
+          {
+            "key": "@hrx2.shape.nrows",
+            "source": "shape.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.workgroup_size",
+            "value": "512"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.vector_width",
+            "value": "4"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "evidence_summary": {
+        "phase": "phase1-route-slice-27",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "rms_norm_f32_n3584_r1_vector_vw4_wg512",
+      "family": "rms_norm_f32",
+      "op": "RMS_NORM",
+      "target_key": "",
+      "source_id": "rms_norm_f32",
+      "artifact_id": "rms_norm_f32_bc",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "export_name": "hrx2_rms_norm_f32_static_vector_tail",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 155,
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 3,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          512,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "rms_norm_f32_n3584_r1_vector_vw4_wg512",
+        "ncols_min": 3584,
+        "ncols_max": 3584,
+        "nrows_min": 1,
+        "nrows_max": 1
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.ncols",
+            "source": "shape.ncols"
+          },
+          {
+            "key": "@hrx2.shape.nrows",
+            "source": "shape.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.workgroup_size",
+            "value": "512"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.vector_width",
+            "value": "4"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "evidence_summary": {
+        "phase": "phase1-route-slice-27",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "rms_norm_f32_n3584_r16_vector_vw4_wg512",
+      "family": "rms_norm_f32",
+      "op": "RMS_NORM",
+      "target_key": "",
+      "source_id": "rms_norm_f32",
+      "artifact_id": "rms_norm_f32_bc",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "export_name": "hrx2_rms_norm_f32_static_vector_tail",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 155,
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 3,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          512,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "rms_norm_f32_n3584_r16_vector_vw4_wg512",
+        "ncols_min": 3584,
+        "ncols_max": 3584,
+        "nrows_min": 16,
+        "nrows_max": 16
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.ncols",
+            "source": "shape.ncols"
+          },
+          {
+            "key": "@hrx2.shape.nrows",
+            "source": "shape.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.workgroup_size",
+            "value": "512"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.vector_width",
+            "value": "4"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "evidence_summary": {
+        "phase": "phase1-route-slice-27",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "rms_norm_f32_n3584_r64_vector_vw4_wg512",
+      "family": "rms_norm_f32",
+      "op": "RMS_NORM",
+      "target_key": "",
+      "source_id": "rms_norm_f32",
+      "artifact_id": "rms_norm_f32_bc",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "export_name": "hrx2_rms_norm_f32_static_vector_tail",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 155,
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 3,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          512,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "rms_norm_f32_n3584_r64_vector_vw4_wg512",
+        "ncols_min": 3584,
+        "ncols_max": 3584,
+        "nrows_min": 64,
+        "nrows_max": 64
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.ncols",
+            "source": "shape.ncols"
+          },
+          {
+            "key": "@hrx2.shape.nrows",
+            "source": "shape.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.workgroup_size",
+            "value": "512"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.vector_width",
+            "value": "4"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "evidence_summary": {
+        "phase": "phase1-route-slice-27",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "rms_norm_f32_n4096_r16_vector_vw4_wg512",
+      "family": "rms_norm_f32",
+      "op": "RMS_NORM",
+      "target_key": "",
+      "source_id": "rms_norm_f32",
+      "artifact_id": "rms_norm_f32_bc",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "export_name": "hrx2_rms_norm_f32_static_vector_tail",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 155,
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 3,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          512,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "rms_norm_f32_n4096_r16_vector_vw4_wg512",
+        "ncols_min": 4096,
+        "ncols_max": 4096,
+        "nrows_min": 16,
+        "nrows_max": 16
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.ncols",
+            "source": "shape.ncols"
+          },
+          {
+            "key": "@hrx2.shape.nrows",
+            "source": "shape.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.workgroup_size",
+            "value": "512"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.vector_width",
+            "value": "4"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "evidence_summary": {
+        "phase": "phase1-route-slice-27",
+        "ggml_cpu_reference": "required"
+      }
+    },
+    {
+      "id": "rms_norm_f32_n4096_r64_vector_vw4_wg512",
+      "family": "rms_norm_f32",
+      "op": "RMS_NORM",
+      "target_key": "",
+      "source_id": "rms_norm_f32",
+      "artifact_id": "rms_norm_f32_bc",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "export_name": "hrx2_rms_norm_f32_static_vector_tail",
+      "loader_format": "amdgpu-hsaco",
+      "priority": 155,
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 3,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          512,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "rms_norm_f32_n4096_r64_vector_vw4_wg512",
+        "ncols_min": 4096,
+        "ncols_max": 4096,
+        "nrows_min": 64,
+        "nrows_max": 64
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.ncols",
+            "source": "shape.ncols"
+          },
+          {
+            "key": "@hrx2.shape.nrows",
+            "source": "shape.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.workgroup_size",
+            "value": "512"
+          },
+          {
+            "key": "@hrx2.tuning.rms_norm.vector_width",
+            "value": "4"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "evidence_summary": {
+        "phase": "phase1-route-slice-27",
         "ggml_cpu_reference": "required"
       }
     }

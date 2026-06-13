@@ -1,0 +1,46 @@
+config.decl @hrx2.shape.sum_rows.ncols : %value: index where [range(%value, 1, 65536)]
+config.decl @hrx2.shape.sum_rows.nrows : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2.shape.sum_rows.src0_row_stride : %value: index where [range(%value, 1, 65536)]
+config.decl @hrx2.tuning.sum_rows.workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+
+kernel.def export("hrx2_sum_rows_f32") @hrx2_sum_rows_f32() {
+  %unit = index.constant 1 : index
+  %nrows = config.get @hrx2.shape.sum_rows.nrows : index
+  %workgroup_size = config.get @hrx2.tuning.sum_rows.workgroup_size : index
+  kernel.launch.config workgroups(%nrows, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%src0: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero_index = index.constant 0 : index
+  %ncols = config.get @hrx2.shape.sum_rows.ncols : index
+  %nrows = config.get @hrx2.shape.sum_rows.nrows : index
+  %src0_row_stride = config.get @hrx2.shape.sum_rows.src0_row_stride : index
+  %workgroup_size = config.get @hrx2.tuning.sum_rows.workgroup_size : index
+  %ncols_bounded = index.assume %ncols [range(%ncols, 1, 65536)] : index
+  %nrows_bounded = index.assume %nrows [range(%nrows, 1, 1048576)] : index
+  %row0 = kernel.workgroup.id<x> : index
+  %row = index.assume %row0 [range(%row0, 0, 1048575)] : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+  %zero_f32 = scalar.constant 0.0 : f32
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_view = buffer.view %src0_global[%base] : buffer -> view<1073741824xf32, #dense>
+  %dst_view = buffer.view %dst_global[%base] : buffer -> view<1048576xf32, #dense>
+
+  %src0_row0 = index.mul %row, %src0_row_stride : index
+  %src0_row = index.assume %src0_row0 [range(%src0_row0, 0, 1073741823)] : index
+  %sum = scf.for %col = [%lane to %ncols_bounded step %workgroup_size](%acc = %zero_f32 : f32) -> (f32) {
+    %src0_idx0 = index.add %src0_row, %col : index
+    %src0_idx = index.assume %src0_idx0 [range(%src0_idx0, 0, 1073741823)] : index
+    %value = view.load %src0_view[%src0_idx] : view<1073741824xf32, #dense> -> f32
+    %next = scalar.addf<reassoc|nnan|ninf|nsz> %acc, %value : f32
+    scf.yield %next : f32
+  }
+  %row_sum = kernel.workgroup.reduce<addf> %sum : f32
+  %is_lane0 = index.cmp eq, %lane, %zero_index : index
+  scf.if %is_lane0 {
+    view.store %row_sum, %dst_view[%row] : f32, view<1048576xf32, #dense>
+  }
+  kernel.return
+}

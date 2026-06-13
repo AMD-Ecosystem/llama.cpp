@@ -56,7 +56,10 @@ struct ggml_backend_hrx2_device_context {
     std::vector<const ggml_backend_hrx2_kernel_route *> set_rows_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> add_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> mul_routes;
+    std::vector<const ggml_backend_hrx2_kernel_route *> div_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> scale_routes;
+    std::vector<const ggml_backend_hrx2_kernel_route *> clamp_routes;
+    std::vector<const ggml_backend_hrx2_kernel_route *> sum_rows_routes;
     std::unordered_map<std::string, std::unique_ptr<ggml_backend_hrx2_provider>> providers;
     std::unordered_set<std::string> provider_failures;
     ggml_backend_buffer_type buffer_type = {};
@@ -147,6 +150,12 @@ struct ggml_backend_hrx2_pointwise_shape {
     uint32_t src0_row_stride = 0;
     uint32_t src1_row_stride = 0;
     uint32_t src1_ncols = 0;
+};
+
+struct ggml_backend_hrx2_sum_rows_shape {
+    uint32_t ncols = 0;
+    uint32_t nrows = 0;
+    uint32_t src0_row_stride = 0;
 };
 
 struct ggml_backend_hrx2_cont_shape {
@@ -675,7 +684,7 @@ static bool ggml_backend_hrx2_supports_pointwise_binary(
     GGML_UNUSED(device_context);
     const ggml_tensor * src0 = op->src[0];
     const ggml_tensor * src1 = op->src[1];
-    if ((op->op != GGML_OP_ADD && op->op != GGML_OP_MUL) ||
+    if ((op->op != GGML_OP_ADD && op->op != GGML_OP_MUL && op->op != GGML_OP_DIV) ||
         !src0 || !src1 ||
         op->view_src != nullptr ||
         src0->type != GGML_TYPE_F32 ||
@@ -734,6 +743,48 @@ static bool ggml_backend_hrx2_supports_scale(
            src0->ne[0] <= std::numeric_limits<uint32_t>::max() &&
            ggml_nrows(src0) <= std::numeric_limits<uint32_t>::max() &&
            static_cast<uint64_t>(src0->ne[0]) * static_cast<uint64_t>(ggml_nrows(src0)) <= 1073741824ULL;
+}
+
+static bool ggml_backend_hrx2_supports_clamp(
+        ggml_backend_hrx2_device_context * device_context,
+        const ggml_tensor * op) {
+    GGML_UNUSED(device_context);
+    const ggml_tensor * src0 = op->src[0];
+    return op->op == GGML_OP_CLAMP &&
+           src0 &&
+           src0->type == GGML_TYPE_F32 &&
+           op->type == GGML_TYPE_F32 &&
+           ggml_are_same_shape(src0, op) &&
+           ggml_is_contiguous(src0) &&
+           ggml_is_contiguous(op) &&
+           src0->ne[0] > 0 &&
+           ggml_nrows(src0) > 0 &&
+           src0->ne[0] <= std::numeric_limits<uint32_t>::max() &&
+           ggml_nrows(src0) <= std::numeric_limits<uint32_t>::max() &&
+           static_cast<uint64_t>(src0->ne[0]) * static_cast<uint64_t>(ggml_nrows(src0)) <= 1073741824ULL;
+}
+
+static bool ggml_backend_hrx2_supports_sum_rows(
+        ggml_backend_hrx2_device_context * device_context,
+        const ggml_tensor * op) {
+    GGML_UNUSED(device_context);
+    const ggml_tensor * src0 = op->src[0];
+    uint32_t src0_row_stride = 0;
+    return op->op == GGML_OP_SUM_ROWS &&
+           src0 &&
+           op->view_src == nullptr &&
+           src0->type == GGML_TYPE_F32 &&
+           op->type == GGML_TYPE_F32 &&
+           op->ne[0] == 1 &&
+           op->ne[1] == src0->ne[1] &&
+           op->ne[2] == src0->ne[2] &&
+           op->ne[3] == src0->ne[3] &&
+           ggml_backend_hrx2_flat_row_stride_f32(src0, &src0_row_stride) &&
+           ggml_is_contiguous(op) &&
+           src0->ne[0] > 0 &&
+           ggml_nrows(src0) > 0 &&
+           src0->ne[0] <= std::numeric_limits<uint32_t>::max() &&
+           ggml_nrows(src0) <= std::numeric_limits<uint32_t>::max();
 }
 
 static bool ggml_backend_hrx2_supports_cont(
@@ -880,7 +931,7 @@ static bool ggml_backend_hrx2_extract_pointwise_shape(
         !ggml_backend_hrx2_u32(ggml_nrows(src0), &shape.nrows)) {
         return false;
     }
-    if (op->op == GGML_OP_ADD || op->op == GGML_OP_MUL) {
+    if (op->op == GGML_OP_ADD || op->op == GGML_OP_MUL || op->op == GGML_OP_DIV) {
         if (!ggml_backend_hrx2_supports_pointwise_binary(nullptr, op)) {
             return false;
         }
@@ -912,7 +963,31 @@ static bool ggml_backend_hrx2_extract_pointwise_shape(
         shape.src0_row_stride = shape.ncols;
         shape.src1_row_stride = 0;
         shape.src1_ncols = 1;
+    } else if (op->op == GGML_OP_CLAMP) {
+        if (!ggml_backend_hrx2_supports_clamp(nullptr, op)) {
+            return false;
+        }
+        shape.src0_row_stride = shape.ncols;
+        shape.src1_row_stride = 0;
+        shape.src1_ncols = 1;
     } else {
+        return false;
+    }
+    *out_shape = shape;
+    return true;
+}
+
+static bool ggml_backend_hrx2_extract_sum_rows_shape(
+        const ggml_tensor * op,
+        ggml_backend_hrx2_sum_rows_shape * out_shape) {
+    if (!out_shape || !ggml_backend_hrx2_supports_sum_rows(nullptr, op)) {
+        return false;
+    }
+    const ggml_tensor * src0 = op->src[0];
+    ggml_backend_hrx2_sum_rows_shape shape;
+    if (!ggml_backend_hrx2_u32(src0->ne[0], &shape.ncols) ||
+        !ggml_backend_hrx2_u32(ggml_nrows(src0), &shape.nrows) ||
+        !ggml_backend_hrx2_flat_row_stride_f32(src0, &shape.src0_row_stride)) {
         return false;
     }
     *out_shape = shape;
@@ -1020,6 +1095,20 @@ static bool ggml_backend_hrx2_route_shape_matches(
 static bool ggml_backend_hrx2_route_shape_matches(
         const ggml_backend_hrx2_kernel_route * route,
         const ggml_backend_hrx2_pointwise_shape & shape) {
+    if (!route ||
+        shape.ncols < route->ncols_min || shape.ncols > route->ncols_max ||
+        shape.nrows < route->nrows_min || shape.nrows > route->nrows_max) {
+        return false;
+    }
+    if (route->ncols_multiple_of_guard != 0 && (shape.ncols % route->ncols_multiple_of_guard) != 0) {
+        return false;
+    }
+    return true;
+}
+
+static bool ggml_backend_hrx2_route_shape_matches(
+        const ggml_backend_hrx2_kernel_route * route,
+        const ggml_backend_hrx2_sum_rows_shape & shape) {
     if (!route ||
         shape.ncols < route->ncols_min || shape.ncols > route->ncols_max ||
         shape.nrows < route->nrows_min || shape.nrows > route->nrows_max) {
@@ -1150,6 +1239,56 @@ static bool ggml_backend_hrx2_make_pointwise_plan(
         plan.cache_key += "|src0_row_stride=" + std::to_string(shape.src0_row_stride);
         plan.cache_key += "|src1_row_stride=" + std::to_string(shape.src1_row_stride);
         plan.cache_key += "|src1_ncols=" + std::to_string(shape.src1_ncols);
+        for (const auto & binding : plan.config_bindings) {
+            plan.cache_key += "|";
+            plan.cache_key += binding.key;
+            plan.cache_key += "=";
+            plan.cache_key += binding.value;
+        }
+    }
+
+    *out_plan = std::move(plan);
+    return true;
+}
+
+static bool ggml_backend_hrx2_make_sum_rows_plan(
+        const ggml_backend_hrx2_device_context * device_context,
+        const ggml_backend_hrx2_kernel_route * route,
+        const ggml_backend_hrx2_sum_rows_shape & shape,
+        ggml_backend_hrx2_provider_plan * out_plan) {
+    if (!out_plan ||
+        !ggml_backend_hrx2_route_available(device_context, route) ||
+        !ggml_backend_hrx2_route_shape_matches(route, shape)) {
+        return false;
+    }
+
+    ggml_backend_hrx2_provider_plan plan;
+    plan.route = route;
+    plan.cache_key = ggml_backend_hrx2_base_cache_key(device_context, route);
+
+    if (!route->specialization_mode.empty() && route->specialization_mode != "jit_config") {
+        return false;
+    }
+    for (const auto & spec : route->config_bindings) {
+        ggml_backend_hrx2_config_binding binding;
+        binding.key = spec.key;
+        if (spec.value_source == "shape.sum_rows.ncols") {
+            binding.value = std::to_string(shape.ncols);
+        } else if (spec.value_source == "shape.sum_rows.nrows") {
+            binding.value = std::to_string(shape.nrows);
+        } else if (spec.value_source == "shape.sum_rows.src0_row_stride") {
+            binding.value = std::to_string(shape.src0_row_stride);
+        } else if (spec.value_source.empty()) {
+            binding.value = spec.value;
+        } else {
+            return false;
+        }
+        plan.config_bindings.push_back(std::move(binding));
+    }
+    if (route->specialization_mode == "jit_config") {
+        plan.cache_key += "|ncols=" + std::to_string(shape.ncols);
+        plan.cache_key += "|nrows=" + std::to_string(shape.nrows);
+        plan.cache_key += "|src0_row_stride=" + std::to_string(shape.src0_row_stride);
         for (const auto & binding : plan.config_bindings) {
             plan.cache_key += "|";
             plan.cache_key += binding.key;
@@ -1480,8 +1619,12 @@ static const std::vector<const ggml_backend_hrx2_kernel_route *> * ggml_backend_
             return &device_context->add_routes;
         case GGML_OP_MUL:
             return &device_context->mul_routes;
+        case GGML_OP_DIV:
+            return &device_context->div_routes;
         case GGML_OP_SCALE:
             return &device_context->scale_routes;
+        case GGML_OP_CLAMP:
+            return &device_context->clamp_routes;
         default:
             return nullptr;
     }
@@ -1501,6 +1644,22 @@ static bool ggml_backend_hrx2_supports_pointwise_route(
     for (const auto * route : *routes) {
         ggml_backend_hrx2_provider_plan plan;
         if (ggml_backend_hrx2_make_pointwise_plan(device_context, route, shape, &plan)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool ggml_backend_hrx2_supports_sum_rows_route(
+        ggml_backend_hrx2_device_context * device_context,
+        const ggml_tensor * op) {
+    ggml_backend_hrx2_sum_rows_shape shape;
+    if (!ggml_backend_hrx2_extract_sum_rows_shape(op, &shape)) {
+        return false;
+    }
+    for (const auto * route : device_context->sum_rows_routes) {
+        ggml_backend_hrx2_provider_plan plan;
+        if (ggml_backend_hrx2_make_sum_rows_plan(device_context, route, shape, &plan)) {
             return true;
         }
     }
@@ -1901,10 +2060,10 @@ static ggml_status ggml_backend_hrx2_dispatch_pointwise(
     const void * constant_data = nullptr;
     size_t constant_size = 0;
 
-    if (dst->op == GGML_OP_SCALE) {
+    if (dst->op == GGML_OP_SCALE || dst->op == GGML_OP_CLAMP) {
         if (!ggml_backend_hrx2_tensor_buffer_ref(src0, &bindings[0]) ||
             !ggml_backend_hrx2_tensor_buffer_ref(dst, &bindings[1])) {
-            GGML_LOG_ERROR("HRX2: SCALE tensor is not backed by HRX2 buffers\n");
+            GGML_LOG_ERROR("HRX2: unary pointwise tensor is not backed by HRX2 buffers\n");
             return GGML_STATUS_FAILED;
         }
         binding_count = 2;
@@ -1994,6 +2153,94 @@ static ggml_status ggml_backend_hrx2_dispatch_pointwise(
 
     GGML_LOG_ERROR("HRX2: pointwise provider is not available for op=%s ncols=%u nrows=%u\n",
             ggml_op_name(dst->op), shape.ncols, shape.nrows);
+    return GGML_STATUS_FAILED;
+}
+
+static ggml_status ggml_backend_hrx2_dispatch_sum_rows(
+        ggml_backend_hrx2_context * context,
+        const ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+    ggml_backend_hrx2_sum_rows_shape shape;
+    if (!ggml_backend_hrx2_extract_sum_rows_shape(dst, &shape)) {
+        GGML_LOG_ERROR("HRX2: invalid SUM_ROWS shape during dispatch: dst=%s src0=%s\n",
+                ggml_backend_hrx2_tensor_summary(dst).c_str(),
+                ggml_backend_hrx2_tensor_summary(src0).c_str());
+        return GGML_STATUS_FAILED;
+    }
+
+    hrx_buffer_ref_t bindings[2] = {};
+    if (!ggml_backend_hrx2_tensor_buffer_ref(src0, &bindings[0]) ||
+        !ggml_backend_hrx2_tensor_buffer_ref(dst, &bindings[1])) {
+        GGML_LOG_ERROR("HRX2: SUM_ROWS tensor is not backed by HRX2 buffers\n");
+        return GGML_STATUS_FAILED;
+    }
+
+    for (const auto * route : context->device_context->sum_rows_routes) {
+        ggml_backend_hrx2_provider_plan plan;
+        if (!ggml_backend_hrx2_make_sum_rows_plan(context->device_context, route, shape, &plan)) {
+            continue;
+        }
+
+        const auto * provider = ggml_backend_hrx2_get_provider(
+            context->device_context,
+            plan.route,
+            plan.config_bindings,
+            plan.cache_key);
+        if (!provider) {
+            ggml_backend_hrx2_trace_event(
+                "provider_unavailable",
+                ggml_backend_hrx2_json_kv("op", "SUM_ROWS") + "," +
+                ggml_backend_hrx2_json_kv("route_id", plan.route->id) + "," +
+                ggml_backend_hrx2_json_kv("target_key", context->device_context->architecture) + "," +
+                ggml_backend_hrx2_json_kv("cache_key", plan.cache_key) + "," +
+                ggml_backend_hrx2_json_kv("ncols", shape.ncols) + "," +
+                ggml_backend_hrx2_json_kv("nrows", shape.nrows));
+            continue;
+        }
+
+        if (provider->route.constant_byte_length != 0) {
+            GGML_LOG_ERROR(
+                "HRX2: SUM_ROWS route %s has constant byte length %u but dispatch has none\n",
+                provider->route.id.c_str(),
+                provider->route.constant_byte_length);
+            continue;
+        }
+
+        const uint32_t workgroup_size =
+            provider->export_info.workgroup_size[0] ? provider->export_info.workgroup_size[0] : provider->route.workgroup_size[0];
+        hrx_dispatch_config_t config = {
+            /* .workgroup_count = */ { shape.nrows, 1, 1 },
+            /* .workgroup_size  = */ { workgroup_size, 1, 1 },
+            /* .subgroup_size   = */ 0,
+        };
+
+        ggml_backend_hrx2_trace_event(
+            "dispatch",
+            ggml_backend_hrx2_json_kv("op", "SUM_ROWS") + "," +
+            ggml_backend_hrx2_json_kv("route_id", provider->route.id) + "," +
+            ggml_backend_hrx2_json_kv("target_key", context->device_context->architecture) + "," +
+            ggml_backend_hrx2_json_kv("cache_key", provider->cache_key) + "," +
+            ggml_backend_hrx2_json_kv("ncols", shape.ncols) + "," +
+            ggml_backend_hrx2_json_kv("nrows", shape.nrows) + "," +
+            ggml_backend_hrx2_json_kv("workgroups_x", config.workgroup_count[0]) + "," +
+            ggml_backend_hrx2_json_kv("workgroup_size_x", config.workgroup_size[0]));
+
+        if (!GGML_HRX2_CHECK(hrx_stream_dispatch(
+                context->stream,
+                provider->executable,
+                provider->export_ordinal,
+                &config,
+                nullptr,
+                0,
+                bindings,
+                2,
+                HRX_DISPATCH_FLAG_NONE))) {
+            return GGML_STATUS_FAILED;
+        }
+        return GGML_STATUS_SUCCESS;
+    }
+
+    GGML_LOG_ERROR("HRX2: SUM_ROWS provider is not available for ncols=%u nrows=%u\n", shape.ncols, shape.nrows);
     return GGML_STATUS_FAILED;
 }
 
@@ -2395,7 +2642,9 @@ static enum ggml_status ggml_backend_hrx2_graph_compute(ggml_backend_t backend, 
                 break;
             case GGML_OP_ADD:
             case GGML_OP_MUL:
+            case GGML_OP_DIV:
             case GGML_OP_SCALE:
+            case GGML_OP_CLAMP:
                 if (!ggml_backend_hrx2_supports_pointwise_route(context->device_context, node)) {
                     GGML_LOG_ERROR("HRX2: unsupported pointwise shape/type/layout: dst=%s src0=%s src1=%s\n",
                             ggml_backend_hrx2_tensor_summary(node).c_str(),
@@ -2404,6 +2653,17 @@ static enum ggml_status ggml_backend_hrx2_graph_compute(ggml_backend_t backend, 
                     return GGML_STATUS_FAILED;
                 }
                 if (ggml_backend_hrx2_dispatch_pointwise(context, node) != GGML_STATUS_SUCCESS) {
+                    return GGML_STATUS_FAILED;
+                }
+                break;
+            case GGML_OP_SUM_ROWS:
+                if (!ggml_backend_hrx2_supports_sum_rows_route(context->device_context, node)) {
+                    GGML_LOG_ERROR("HRX2: unsupported SUM_ROWS shape/type/layout: dst=%s src0=%s\n",
+                            ggml_backend_hrx2_tensor_summary(node).c_str(),
+                            ggml_backend_hrx2_tensor_summary(node->src[0]).c_str());
+                    return GGML_STATUS_FAILED;
+                }
+                if (ggml_backend_hrx2_dispatch_sum_rows(context, node) != GGML_STATUS_SUCCESS) {
                     return GGML_STATUS_FAILED;
                 }
                 break;
@@ -2574,8 +2834,12 @@ static bool ggml_backend_hrx2_device_supports_op(ggml_backend_dev_t dev, const g
             return ggml_backend_hrx2_supports_rms_norm_route(ggml_backend_hrx2_get_device_context(dev), op);
         case GGML_OP_ADD:
         case GGML_OP_MUL:
+        case GGML_OP_DIV:
         case GGML_OP_SCALE:
+        case GGML_OP_CLAMP:
             return ggml_backend_hrx2_supports_pointwise_route(ggml_backend_hrx2_get_device_context(dev), op);
+        case GGML_OP_SUM_ROWS:
+            return ggml_backend_hrx2_supports_sum_rows_route(ggml_backend_hrx2_get_device_context(dev), op);
         case GGML_OP_CONT:
             return ggml_backend_hrx2_supports_cont_route(ggml_backend_hrx2_get_device_context(dev), op);
         case GGML_OP_GLU:
@@ -2718,9 +2982,24 @@ static std::unique_ptr<ggml_backend_hrx2_reg_context> ggml_backend_hrx2_create_r
                 &device_context->mul_routes);
             ggml_backend_hrx2_catalog_find_routes(
                 *device_context->catalog,
+                "div_f32",
+                "DIV",
+                &device_context->div_routes);
+            ggml_backend_hrx2_catalog_find_routes(
+                *device_context->catalog,
                 "scale_f32",
                 "SCALE",
                 &device_context->scale_routes);
+            ggml_backend_hrx2_catalog_find_routes(
+                *device_context->catalog,
+                "clamp_f32",
+                "CLAMP",
+                &device_context->clamp_routes);
+            ggml_backend_hrx2_catalog_find_routes(
+                *device_context->catalog,
+                "sum_rows_f32",
+                "SUM_ROWS",
+                &device_context->sum_rows_routes);
             const auto route_less = [](const ggml_backend_hrx2_kernel_route * lhs, const ggml_backend_hrx2_kernel_route * rhs) {
                 if (lhs->priority != rhs->priority) {
                     return lhs->priority > rhs->priority;
@@ -2756,8 +3035,20 @@ static std::unique_ptr<ggml_backend_hrx2_reg_context> ggml_backend_hrx2_create_r
                 device_context->mul_routes.end(),
                 route_less);
             std::sort(
+                device_context->div_routes.begin(),
+                device_context->div_routes.end(),
+                route_less);
+            std::sort(
                 device_context->scale_routes.begin(),
                 device_context->scale_routes.end(),
+                route_less);
+            std::sort(
+                device_context->clamp_routes.begin(),
+                device_context->clamp_routes.end(),
+                route_less);
+            std::sort(
+                device_context->sum_rows_routes.begin(),
+                device_context->sum_rows_routes.end(),
                 route_less);
         }
         device_context->buffer_type_context = {
