@@ -1,0 +1,134 @@
+config.decl @hrx2.shape.mul_mat_f16.k : %value: index where [range(%value, 1, 8192)]
+config.decl @hrx2.shape.mul_mat_f16.rows : %value: index where [range(%value, 1, 8192)]
+config.decl @hrx2.shape.mul_mat_f16.cols : %value: index where [range(%value, 1, 4096)]
+config.decl @hrx2.shape.mul_mat_f16.dst_ne2 : %value: index where [range(%value, 1, 4096)]
+config.decl @hrx2.shape.mul_mat_f16.dst_ne3 : %value: index where [range(%value, 1, 4096)]
+config.decl @hrx2.shape.mul_mat_f16.src0_ne2 : %value: index where [range(%value, 1, 4096)]
+config.decl @hrx2.shape.mul_mat_f16.src0_ne3 : %value: index where [range(%value, 1, 4096)]
+config.decl @hrx2.shape.mul_mat_f16.src0_stride_row : %value: index where [range(%value, 1, 104857600)]
+config.decl @hrx2.shape.mul_mat_f16.src0_stride_ne2 : %value: index where [range(%value, 1, 104857600)]
+config.decl @hrx2.shape.mul_mat_f16.src0_stride_ne3 : %value: index where [range(%value, 1, 104857600)]
+config.decl @hrx2.shape.mul_mat_f16.src1_stride_col : %value: index where [range(%value, 1, 104857600)]
+config.decl @hrx2.shape.mul_mat_f16.src1_stride_ne2 : %value: index where [range(%value, 1, 104857600)]
+config.decl @hrx2.shape.mul_mat_f16.src1_stride_ne3 : %value: index where [range(%value, 1, 104857600)]
+config.decl @hrx2.shape.mul_mat_f16.dst_stride_col : %value: index where [range(%value, 1, 104857600)]
+config.decl @hrx2.shape.mul_mat_f16.dst_stride_ne2 : %value: index where [range(%value, 1, 104857600)]
+config.decl @hrx2.shape.mul_mat_f16.dst_stride_ne3 : %value: index where [range(%value, 1, 104857600)]
+config.decl @hrx2.tuning.mul_mat_f16.workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+
+kernel.def export("hrx2_mul_mat_f16_f32_batched") @hrx2_mul_mat_f16_f32_batched() {
+  %unit = index.constant 1 : index
+  %rows = config.get @hrx2.shape.mul_mat_f16.rows : index
+  %cols = config.get @hrx2.shape.mul_mat_f16.cols : index
+  %dst_ne2 = config.get @hrx2.shape.mul_mat_f16.dst_ne2 : index
+  %dst_ne3 = config.get @hrx2.shape.mul_mat_f16.dst_ne3 : index
+  %workgroup_size = config.get @hrx2.tuning.mul_mat_f16.workgroup_size : index
+  %outer0 = index.mul %cols, %dst_ne2 : index
+  %outer = index.mul %outer0, %dst_ne3 : index
+  kernel.launch.config workgroups(%rows, %outer, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%src0: buffer, %src1: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero_f32 = scalar.constant 0.0 : f32
+  %zero_i32 = scalar.constant 0 : i32
+  %unit = index.constant 1 : index
+  %two = index.constant 2 : index
+  %four = index.constant 4 : index
+
+  %k = config.get @hrx2.shape.mul_mat_f16.k : index
+  %rows = config.get @hrx2.shape.mul_mat_f16.rows : index
+  %cols = config.get @hrx2.shape.mul_mat_f16.cols : index
+  %dst_ne2 = config.get @hrx2.shape.mul_mat_f16.dst_ne2 : index
+  %dst_ne3 = config.get @hrx2.shape.mul_mat_f16.dst_ne3 : index
+  %src0_ne2 = config.get @hrx2.shape.mul_mat_f16.src0_ne2 : index
+  %src0_ne3 = config.get @hrx2.shape.mul_mat_f16.src0_ne3 : index
+  %src0_stride_row = config.get @hrx2.shape.mul_mat_f16.src0_stride_row : index
+  %src0_stride_ne2 = config.get @hrx2.shape.mul_mat_f16.src0_stride_ne2 : index
+  %src0_stride_ne3 = config.get @hrx2.shape.mul_mat_f16.src0_stride_ne3 : index
+  %src1_stride_col = config.get @hrx2.shape.mul_mat_f16.src1_stride_col : index
+  %src1_stride_ne2 = config.get @hrx2.shape.mul_mat_f16.src1_stride_ne2 : index
+  %src1_stride_ne3 = config.get @hrx2.shape.mul_mat_f16.src1_stride_ne3 : index
+  %dst_stride_col = config.get @hrx2.shape.mul_mat_f16.dst_stride_col : index
+  %dst_stride_ne2 = config.get @hrx2.shape.mul_mat_f16.dst_stride_ne2 : index
+  %dst_stride_ne3 = config.get @hrx2.shape.mul_mat_f16.dst_stride_ne3 : index
+  %workgroup_size = config.get @hrx2.tuning.mul_mat_f16.workgroup_size : index
+
+  %row0 = kernel.workgroup.id<x> : index
+  %row = index.assume %row0 [range(%row0, 0, 8191)] : index
+  %outer0 = kernel.workgroup.id<y> : index
+  %outer = index.assume %outer0 [range(%outer0, 0, 1048575)] : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+
+  %i11 = index.rem %outer, %cols : index
+  %outer1 = index.div %outer, %cols : index
+  %i12 = index.rem %outer1, %dst_ne2 : index
+  %i13 = index.div %outer1, %dst_ne2 : index
+
+  %src0_group_scale2 = index.div %dst_ne2, %src0_ne2 : index
+  %src0_i02 = index.div %i12, %src0_group_scale2 : index
+  %src0_group_scale3 = index.div %dst_ne3, %src0_ne3 : index
+  %src0_i03 = index.div %i13, %src0_group_scale3 : index
+
+  %src0_last_row_off = index.mul %rows, %src0_stride_row : index
+  %src0_last_ne3 = index.sub %src0_ne3, %unit : index
+  %src0_last_ne3_off = index.mul %src0_last_ne3, %src0_stride_ne3 : index
+  %src0_count_base = index.add %src0_last_row_off, %src0_last_ne3_off : index
+  %src0_count = index.div %src0_count_base, %two : index
+  %src1_ne2_total = index.mul %dst_ne2, %src1_stride_ne2 : index
+  %src1_ne3_total = index.mul %dst_ne3, %src1_stride_ne3 : index
+  %src1_count_base0 = index.add %src1_ne2_total, %src1_ne3_total : index
+  %src1_count_base = index.add %src1_count_base0, %k : index
+  %src1_count = index.div %src1_count_base, %four : index
+  %dst_count_base0 = index.mul %dst_ne2, %dst_stride_ne2 : index
+  %dst_count_base1 = index.mul %dst_ne3, %dst_stride_ne3 : index
+  %dst_count_base2 = index.add %dst_count_base0, %dst_count_base1 : index
+  %dst_count = index.div %dst_count_base2, %four : index
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %src1_global = buffer.assume.memory_space<global> %src1 : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_noalias, %src1_noalias, %dst_noalias = buffer.assume.noalias %src0_global, %src1_global, %dst_global : buffer, buffer, buffer
+  %src0_view = buffer.view %src0_noalias[%base] : buffer -> view<[%src0_count]xf16, #dense>
+  %src1_view = buffer.view %src1_noalias[%base] : buffer -> view<[%src1_count]xf32, #dense>
+  %dst_view = buffer.view %dst_noalias[%base] : buffer -> view<[%dst_count]xf32, #dense>
+
+  %src0_row_byte0 = index.mul %row, %src0_stride_row : index
+  %src0_i02_byte = index.mul %src0_i02, %src0_stride_ne2 : index
+  %src0_i03_byte = index.mul %src0_i03, %src0_stride_ne3 : index
+  %src0_row_byte1 = index.add %src0_row_byte0, %src0_i02_byte : index
+  %src0_row_byte = index.add %src0_row_byte1, %src0_i03_byte : index
+  %src0_row_elem = index.div %src0_row_byte, %two : index
+  %src1_col_byte0 = index.mul %i11, %src1_stride_col : index
+  %src1_i12_byte = index.mul %i12, %src1_stride_ne2 : index
+  %src1_i13_byte = index.mul %i13, %src1_stride_ne3 : index
+  %src1_col_byte1 = index.add %src1_col_byte0, %src1_i12_byte : index
+  %src1_col_byte = index.add %src1_col_byte1, %src1_i13_byte : index
+  %src1_col_elem = index.div %src1_col_byte, %four : index
+
+  %sum = scf.for %i = [%lane to %k step %workgroup_size](%acc = %zero_f32 : f32) -> (f32) {
+    %src0_index = index.add %src0_row_elem, %i : index
+    %src1_index = index.add %src1_col_elem, %i : index
+    %a_f16 = view.load %src0_view[%src0_index] : view<[%src0_count]xf16, #dense> -> f16
+    %a = scalar.extf %a_f16 : f16 to f32
+    %b = view.load %src1_view[%src1_index] : view<[%src1_count]xf32, #dense> -> f32
+    %product = scalar.mulf<reassoc|nnan|ninf|nsz> %a, %b : f32
+    %next = scalar.addf<reassoc|nnan|ninf|nsz> %acc, %product : f32
+    scf.yield %next : f32
+  }
+  %dot = kernel.workgroup.reduce<addf> %sum : f32
+
+  %dst_row_byte = index.mul %row, %four : index
+  %dst_col_byte = index.mul %i11, %dst_stride_col : index
+  %dst_i12_byte = index.mul %i12, %dst_stride_ne2 : index
+  %dst_i13_byte = index.mul %i13, %dst_stride_ne3 : index
+  %dst_byte0 = index.add %dst_row_byte, %dst_col_byte : index
+  %dst_byte1 = index.add %dst_byte0, %dst_i12_byte : index
+  %dst_byte = index.add %dst_byte1, %dst_i13_byte : index
+  %dst_index = index.div %dst_byte, %four : index
+  %lane_i32 = index.cast %lane : index to i32
+  %is_lane0 = scalar.cmpi eq, %lane_i32, %zero_i32 : i32
+  scf.if %is_lane0 {
+    view.store %dot, %dst_view[%dst_index] : f32, view<[%dst_count]xf32, #dense>
+  }
+  kernel.return
+}
