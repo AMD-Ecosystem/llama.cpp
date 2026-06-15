@@ -87,10 +87,10 @@ def main():
         require(isinstance(shape_guards, dict), f"route {route_id} shape_guards must be an object")
         for guard_key, guard_value in shape_guards.items():
             require(
-                guard_key in ("k_pow2", "all_pot", "k_multiple_of", "ncols_multiple_of"),
+                guard_key in ("k_pow2", "all_pot", "k_multiple_of", "cols_multiple_of", "ncols_multiple_of"),
                 f"route {route_id} has unknown shape guard {guard_key}",
             )
-            if guard_key in ("k_multiple_of", "ncols_multiple_of"):
+            if guard_key in ("k_multiple_of", "cols_multiple_of", "ncols_multiple_of"):
                 require(isinstance(guard_value, int) and guard_value > 0, f"route {route_id} shape guard {guard_key} must be a positive integer")
             else:
                 require(isinstance(guard_value, bool), f"route {route_id} shape guard {guard_key} must be boolean")
