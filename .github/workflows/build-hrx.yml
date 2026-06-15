@@ -34,7 +34,7 @@ jobs:
             runs_on: linux-gfx120X-gpu-rocm
             extra_rocm_artifacts: rocwmma_dev_gfx120X-all
     runs-on: ${{ matrix.runs_on }}
-    timeout-minutes: 15
+    timeout-minutes: 10
     defaults:
       run:
         # --noprofile skips loading ~/.bash_profile
@@ -71,23 +71,17 @@ jobs:
       # AaronStGeorge/llamacpp_ci)
       #TODO: switch to ROCm/llamacpp-hrx-bench once it is open sourced.
       BENCH_REPOSITORY: AaronStGeorge/llamacpp_ci
-      BENCH_REF: 'runner-health'
+      BENCH_REF: 'main'
       # actions/checkout@v6 does auto-cleanup, an in-tree build would be
       # auto-cleaned as well.
       BENCH_DIR: ${{ github.workspace }}/bench
       LLAMA_SRC_DIR: ${{ github.workspace }}/llama-src
-      # Build tree off the bind mount too (source stays under the workspace).
       LLAMA_BUILD_DIR: /work/llama-build
       HRX_EXTRA_ROCM_ARTIFACTS: ${{ matrix.extra_rocm_artifacts }}
       GGML_HRX_AMDGPU_TARGETS: ${{ matrix.gpu_target }}
       CCACHE_COMPILERCHECK: content
 
     steps:
-      - name: Checkout llama.cpp (under test)
-        uses: actions/checkout@v6
-        with:
-          path: llama-src
-
       - name: Checkout bench tooling
         uses: actions/checkout@v6
         with:
@@ -95,18 +89,17 @@ jobs:
           ref: ${{ env.BENCH_REF }}
           path: bench
 
-      # Runner identity dump -- logs RUNNER_NAME so the specific self-hosted
-      # runner behind a failure is greppable from the job log. Runs right after
-      # the bench checkout (earliest a bench script is available); if: always()
-      # so it still logs when a later step fails. NOTE: a gfx1201 "Initialize
-      # containers" failure happens before any step runs and isn't captured here.
-      - name: Debug (runner identity)
-        if: always()
+      - name: Runner info
         env:
           MATRIX_NAME: ${{ matrix.name }}
           MATRIX_GPU_TARGET: ${{ matrix.gpu_target }}
           MATRIX_RUNS_ON: ${{ matrix.runs_on }}
-        run: "${BENCH_DIR}/scripts/hrx/runner-identity.sh"
+        run: "${BENCH_DIR}/scripts/hrx/runner-info.sh"
+
+      - name: Checkout llama.cpp (under test)
+        uses: actions/checkout@v6
+        with:
+          path: llama-src
 
       - name: Install ROCm build dependencies
         run: "${BENCH_DIR}/scripts/hrx/install-rocm-deps.sh"
@@ -124,59 +117,16 @@ jobs:
       - name: Fetch ROCm assets
         run: "${BENCH_DIR}/scripts/hrx/fetch-rocm-assets.sh"
 
-      # Dump GPU/board identity (serial/VBIOS/fw via rocminfo/amd-smi/rocm-smi)
-      # and fail fast on gross breakage (no /dev/kfd, dead rocminfo, expected
-      # gfx arch not enumerated) before the costly HRX/llama build. Runs here
-      # because the diag binaries only exist in the composed prefix after the
-      # fetch step. Does NOT detect the gfx1151 coherence NaN flake.
-      - name: GPU health check
-        timeout-minutes: 3
-        run: "${BENCH_DIR}/scripts/hrx/runner-health.sh"
-
       - name: Build HRX
         run: "${BENCH_DIR}/scripts/hrx/build-hrx.sh"
 
       - name: Validate HRX
-        # hrx-info has been observed hanging on some runners; fail fast.
-        timeout-minutes: 5
         run: "${BENCH_DIR}/scripts/hrx/validate-hrx.sh"
 
       - name: Build llama.cpp with HRX
         run: "${BENCH_DIR}/scripts/hrx/build-llama-hrx.sh"
 
-      # Diagnostic: run the failing MUL_MAT config N times in THIS job to measure
-      # the per-RUNNER failure rate -- does a bad machine fail every iteration or
-      # only some? Advisory (continue-on-error, runs BEFORE the gating step so it
-      # still executes on a failing machine). Correlate the printed count with
-      # RUNNER_NAME (see the Debug step). Tune N via the MULMAT_LOOP_N var.
-      - name: MUL_MAT failure-rate loop (diagnostic)
-        continue-on-error: true
-        timeout-minutes: 20
-        run: |
-          . "${BENCH_DIR}/scripts/hrx/env.sh"
-          . "${BENCH_DIR}/scripts/hrx/runtime-env.sh"
-          set +e   # count pass/fail from the output, don't let a NaN exit abort
-          TB="${LLAMA_BUILD_DIR}/bin/test-backend-ops"
-          TF="${BENCH_DIR}/benchmark-configs/test/mul_mat_f16.txt"
-          N="${MULMAT_LOOP_N:-50}"
-          pass=0; fail=0; other=0
-          for i in $(seq 1 "$N"); do
-            out="$("$TB" test -o MUL_MAT -b HRX0 --test-file "$TF" 2>&1 | sed 's/\x1b\[[0-9;]*m//g')"
-            if echo "$out" | grep -q 'NaN at index'; then
-              fail=$((fail+1))
-              [ "$fail" -le 3 ] && echo "iter $i FAIL: $(echo "$out" | grep -m1 'NaN at index')"
-            elif echo "$out" | grep -q '1/1 tests passed'; then
-              pass=$((pass+1))
-            else
-              other=$((other+1))
-              [ "$other" -le 2 ] && echo "iter $i OTHER: $(echo "$out" | tail -2 | tr '\n' ' ')"
-            fi
-          done
-          echo "MULMAT_RATE runner=${RUNNER_NAME} fail=${fail} pass=${pass} other=${other} total=${N}"
-          echo "::notice::MUL_MAT rate on ${RUNNER_NAME}: ${fail}/${N} FAIL (pass=${pass}, other=${other})"
-
       - name: Run sample MUL_MAT correctness config on HRX
-        timeout-minutes: 15
         run: |
           . "${BENCH_DIR}/scripts/hrx/env.sh"
           . "${BENCH_DIR}/scripts/hrx/runtime-env.sh"
@@ -188,7 +138,6 @@ jobs:
             --output benchmark-results/sample-mul-mat-f16-hrx-test.jsonl
 
       - name: Run sample MUL_MAT benchmark config on HRX
-        timeout-minutes: 15
         run: |
           . "${BENCH_DIR}/scripts/hrx/env.sh"
           . "${BENCH_DIR}/scripts/hrx/runtime-env.sh"
