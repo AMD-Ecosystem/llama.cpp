@@ -19,6 +19,7 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <string>
 #include <unordered_map>
@@ -29,10 +30,20 @@ namespace {
 
 static constexpr size_t    GGML_HRX2_ALIGNMENT     = 256;
 static constexpr uintptr_t GGML_HRX2_FAKE_PTR_BASE = 0x200000000ull;
+static constexpr size_t    GGML_HRX2_STAGING_ARENA_DEFAULT_SIZE = 8 * 1024 * 1024;
 static constexpr uint64_t  GGML_HRX2_DEFAULT_DISPATCHES_PER_SUBMIT = 12;
 static constexpr uint64_t  GGML_HRX2_DEFAULT_MAX_MUL_MAT_BYTES_PER_SUBMIT = 100ull * 1000ull * 1000ull;
 
 struct ggml_backend_hrx2_device_context;
+
+struct ggml_backend_hrx2_staging_arena {
+    hrx_stream_t stream = nullptr;
+    hrx_buffer_t buffer = nullptr;
+    uint8_t * mapped = nullptr;
+    size_t capacity = 0;
+    size_t offset = 0;
+    std::vector<hrx_buffer_t> retired_buffers;
+};
 
 struct ggml_backend_hrx2_buffer_type_context {
     ggml_backend_hrx2_device_context * device_context = nullptr;
@@ -47,6 +58,11 @@ struct ggml_backend_hrx2_buffer_context {
 
 struct ggml_backend_hrx2_device_context {
     hrx_device_t device = nullptr;
+    hrx_stream_t active_stream = nullptr;
+    hrx_stream_t transfer_stream = nullptr;
+    std::mutex streams_mutex;
+    std::vector<hrx_stream_t> live_streams;
+    std::vector<ggml_backend_hrx2_staging_arena> staging_arenas;
     std::string name;
     std::string description;
     std::string architecture;
@@ -105,6 +121,8 @@ struct ggml_backend_hrx2_context {
 static thread_local ggml_backend_hrx2_context * g_hrx2_active_graph_context = nullptr;
 static thread_local const ggml_tensor * g_hrx2_active_graph_node = nullptr;
 
+static void ggml_backend_hrx2_unregister_stream(ggml_backend_hrx2_device_context * device_context, hrx_stream_t stream);
+
 struct ggml_backend_hrx2_reg_context {
     bool gpu_initialized = false;
     std::vector<std::unique_ptr<ggml_backend_hrx2_device_context>> device_contexts;
@@ -113,6 +131,15 @@ struct ggml_backend_hrx2_reg_context {
     ~ggml_backend_hrx2_reg_context() {
         for (auto & device_context : device_contexts) {
             device_context->providers.clear();
+            if (device_context->transfer_stream) {
+                hrx_status_t status = hrx_stream_synchronize(device_context->transfer_stream);
+                if (!hrx_status_is_ok(status)) {
+                    hrx_status_ignore(status);
+                }
+                ggml_backend_hrx2_unregister_stream(device_context.get(), device_context->transfer_stream);
+                hrx_stream_release(device_context->transfer_stream);
+                device_context->transfer_stream = nullptr;
+            }
             if (device_context->device) {
                 hrx_device_release(device_context->device);
             }
@@ -475,6 +502,192 @@ static uint64_t ggml_backend_hrx2_max_mul_mat_bytes_per_submit() {
         GGML_HRX2_DEFAULT_MAX_MUL_MAT_BYTES_PER_SUBMIT);
 }
 
+static size_t ggml_backend_hrx2_align_up(size_t value, size_t alignment) {
+    GGML_ASSERT(alignment > 0);
+    const size_t remainder = value % alignment;
+    return remainder == 0 ? value : value + (alignment - remainder);
+}
+
+static size_t ggml_backend_hrx2_staging_arena_capacity() {
+    const uint64_t requested = ggml_backend_hrx2_u64_from_env(
+        "GGML_HRX2_STAGING_ARENA_SIZE", GGML_HRX2_STAGING_ARENA_DEFAULT_SIZE);
+    const size_t capacity = static_cast<size_t>(std::max<uint64_t>(requested, GGML_HRX2_ALIGNMENT));
+    return ggml_backend_hrx2_align_up(capacity, GGML_HRX2_ALIGNMENT);
+}
+
+static void ggml_backend_hrx2_reset_staging_arena_locked(ggml_backend_hrx2_staging_arena & arena) {
+    for (hrx_buffer_t buffer : arena.retired_buffers) {
+        hrx_buffer_release(buffer);
+    }
+    arena.retired_buffers.clear();
+    arena.offset = 0;
+}
+
+static void ggml_backend_hrx2_release_staging_arena_locked(ggml_backend_hrx2_staging_arena & arena) {
+    if (arena.buffer) {
+        hrx_buffer_release(arena.buffer);
+    }
+    for (hrx_buffer_t buffer : arena.retired_buffers) {
+        hrx_buffer_release(buffer);
+    }
+    arena = {};
+}
+
+static ggml_backend_hrx2_staging_arena * ggml_backend_hrx2_find_staging_arena_locked(
+        ggml_backend_hrx2_device_context * device_context,
+        hrx_stream_t stream) {
+    for (auto & arena : device_context->staging_arenas) {
+        if (arena.stream == stream) {
+            return &arena;
+        }
+    }
+    return nullptr;
+}
+
+static ggml_backend_hrx2_staging_arena * ggml_backend_hrx2_get_staging_arena_locked(
+        ggml_backend_hrx2_device_context * device_context,
+        hrx_stream_t stream) {
+    if (auto * arena = ggml_backend_hrx2_find_staging_arena_locked(device_context, stream)) {
+        return arena;
+    }
+    device_context->staging_arenas.push_back({});
+    auto & arena = device_context->staging_arenas.back();
+    arena.stream = stream;
+    return &arena;
+}
+
+static void ggml_backend_hrx2_register_stream(ggml_backend_hrx2_device_context * device_context, hrx_stream_t stream) {
+    if (!device_context || !stream) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(device_context->streams_mutex);
+    if (std::find(device_context->live_streams.begin(), device_context->live_streams.end(), stream) ==
+            device_context->live_streams.end()) {
+        device_context->live_streams.push_back(stream);
+    }
+    device_context->active_stream = stream;
+}
+
+static void ggml_backend_hrx2_unregister_stream(ggml_backend_hrx2_device_context * device_context, hrx_stream_t stream) {
+    if (!device_context || !stream) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(device_context->streams_mutex);
+    auto & streams = device_context->live_streams;
+    streams.erase(std::remove(streams.begin(), streams.end(), stream), streams.end());
+    auto & arenas = device_context->staging_arenas;
+    auto arena_it = std::find_if(
+        arenas.begin(), arenas.end(),
+        [stream](const ggml_backend_hrx2_staging_arena & arena) { return arena.stream == stream; });
+    if (arena_it != arenas.end()) {
+        ggml_backend_hrx2_release_staging_arena_locked(*arena_it);
+        arenas.erase(arena_it);
+    }
+    if (device_context->active_stream == stream) {
+        device_context->active_stream = streams.empty() ? nullptr : streams.back();
+    }
+}
+
+static hrx_stream_t ggml_backend_hrx2_retain_active_stream(ggml_backend_hrx2_device_context * device_context) {
+    if (!device_context) {
+        return nullptr;
+    }
+    std::lock_guard<std::mutex> lock(device_context->streams_mutex);
+    hrx_stream_t stream = device_context->active_stream;
+    if (!stream) {
+        stream = device_context->transfer_stream;
+    }
+    if (stream) {
+        hrx_stream_retain(stream);
+    }
+    return stream;
+}
+
+static bool ggml_backend_hrx2_sync_streams(ggml_backend_hrx2_device_context * device_context) {
+    if (!device_context) {
+        return true;
+    }
+    std::lock_guard<std::mutex> lock(device_context->streams_mutex);
+    bool ok = true;
+    for (hrx_stream_t stream : device_context->live_streams) {
+        ok = GGML_HRX2_CHECK(hrx_stream_synchronize(stream)) && ok;
+        if (auto * arena = ggml_backend_hrx2_find_staging_arena_locked(device_context, stream)) {
+            ggml_backend_hrx2_reset_staging_arena_locked(*arena);
+        }
+    }
+    return ok;
+}
+
+static bool ggml_backend_hrx2_sync_graph_entry_streams(
+        ggml_backend_hrx2_device_context * device_context,
+        hrx_stream_t graph_stream) {
+    if (!device_context) {
+        return true;
+    }
+
+    std::lock_guard<std::mutex> lock(device_context->streams_mutex);
+    hrx_stream_t streams[] = {
+        device_context->active_stream,
+        device_context->transfer_stream,
+    };
+
+    bool ok = true;
+    for (hrx_stream_t stream : streams) {
+        if (!stream || stream == graph_stream) {
+            continue;
+        }
+        ok = GGML_HRX2_CHECK(hrx_stream_synchronize(stream)) && ok;
+        if (auto * arena = ggml_backend_hrx2_find_staging_arena_locked(device_context, stream)) {
+            ggml_backend_hrx2_reset_staging_arena_locked(*arena);
+        }
+    }
+    return ok;
+}
+
+static bool ggml_backend_hrx2_ensure_staging_buffer_locked(
+        ggml_backend_hrx2_device_context * device_context,
+        ggml_backend_hrx2_staging_arena * arena,
+        size_t required_capacity) {
+    if (arena->buffer && arena->capacity >= required_capacity && arena->mapped) {
+        return true;
+    }
+
+    if (arena->buffer) {
+        arena->retired_buffers.push_back(arena->buffer);
+        arena->buffer = nullptr;
+        arena->mapped = nullptr;
+        arena->capacity = 0;
+        arena->offset = 0;
+    }
+
+    const size_t capacity = ggml_backend_hrx2_align_up(
+        std::max(required_capacity, ggml_backend_hrx2_staging_arena_capacity()),
+        GGML_HRX2_ALIGNMENT);
+    hrx_buffer_params_t params = {
+        /* .type           = */ HRX_MEMORY_TYPE_HOST_LOCAL | HRX_MEMORY_TYPE_DEVICE_VISIBLE,
+        /* .access         = */ HRX_MEMORY_ACCESS_ALL,
+        /* .usage          = */ HRX_BUFFER_USAGE_DEFAULT |
+                               HRX_BUFFER_USAGE_MAPPING_SCOPED |
+                               HRX_BUFFER_USAGE_MAPPING_PERSISTENT,
+        /* .queue_affinity = */ 0,
+    };
+    if (!GGML_HRX2_CHECK(hrx_allocator_allocate_buffer(
+            hrx_device_allocator(device_context->device), params, capacity, &arena->buffer))) {
+        return false;
+    }
+
+    void * mapped = nullptr;
+    if (!GGML_HRX2_CHECK(hrx_buffer_map(arena->buffer, HRX_MAP_READ | HRX_MAP_WRITE, 0, capacity, &mapped))) {
+        hrx_buffer_release(arena->buffer);
+        arena->buffer = nullptr;
+        return false;
+    }
+    arena->mapped = static_cast<uint8_t *>(mapped);
+    arena->capacity = capacity;
+    arena->offset = 0;
+    return true;
+}
+
 static uint64_t ggml_backend_hrx2_node_mul_mat_bytes(const ggml_tensor * node) {
     if (!node || !node->src[0]) {
         return 0;
@@ -783,6 +996,163 @@ static bool ggml_backend_hrx2_tensor_buffer_ref(const ggml_tensor * tensor, hrx_
     return true;
 }
 
+static bool ggml_backend_hrx2_stage_and_copy_tensor(
+        ggml_backend_hrx2_buffer_context * context,
+        const ggml_tensor * tensor,
+        const void * data,
+        size_t buffer_offset,
+        size_t buffer_size,
+        size_t size) {
+    if (!context || !context->buffer || !data) {
+        return false;
+    }
+    if (buffer_offset > buffer_size || size > buffer_size - buffer_offset) {
+        GGML_LOG_ERROR(
+            "%s: upload for tensor %s exceeds HRX2 buffer bounds: offset=%zu size=%zu buffer_size=%zu\n",
+            __func__, tensor ? tensor->name : "<unknown>", buffer_offset, size, buffer_size);
+        return false;
+    }
+
+    hrx_stream_t stream = ggml_backend_hrx2_retain_active_stream(context->device_context);
+    if (!stream) {
+        GGML_LOG_ERROR("%s: no HRX2 stream available for tensor upload\n", __func__);
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(context->device_context->streams_mutex);
+    auto * arena = ggml_backend_hrx2_get_staging_arena_locked(context->device_context, stream);
+    if (!arena ||
+        !ggml_backend_hrx2_ensure_staging_buffer_locked(
+            context->device_context,
+            arena,
+            ggml_backend_hrx2_staging_arena_capacity())) {
+        hrx_stream_release(stream);
+        return false;
+    }
+
+    const uint8_t * bytes = static_cast<const uint8_t *>(data);
+    size_t uploaded = 0;
+    bool ok = true;
+    while (uploaded < size) {
+        size_t staging_offset = ggml_backend_hrx2_align_up(arena->offset, GGML_HRX2_ALIGNMENT);
+        if (staging_offset >= arena->capacity) {
+            ok = GGML_HRX2_CHECK(hrx_stream_flush(stream)) && GGML_HRX2_CHECK(hrx_stream_wait(stream));
+            if (!ok) {
+                break;
+            }
+            ggml_backend_hrx2_reset_staging_arena_locked(*arena);
+            staging_offset = 0;
+        }
+
+        const size_t available = arena->capacity - staging_offset;
+        const size_t chunk_size = std::min(size - uploaded, available);
+        if (chunk_size == 0) {
+            GGML_LOG_ERROR("%s: HRX2 staging arena has no available space\n", __func__);
+            ok = false;
+            break;
+        }
+
+        std::memcpy(arena->mapped + staging_offset, bytes + uploaded, chunk_size);
+        ok = GGML_HRX2_CHECK(hrx_stream_copy_buffer(
+            stream,
+            arena->buffer,
+            staging_offset,
+            context->buffer,
+            buffer_offset + uploaded,
+            chunk_size));
+        if (!ok) {
+            break;
+        }
+
+        arena->offset = ggml_backend_hrx2_align_up(staging_offset + chunk_size, GGML_HRX2_ALIGNMENT);
+        uploaded += chunk_size;
+    }
+
+    hrx_stream_release(stream);
+    return ok;
+}
+
+static bool ggml_backend_hrx2_copy_tensor_to_staging(
+        ggml_backend_hrx2_buffer_context * context,
+        const ggml_tensor * tensor,
+        size_t buffer_offset,
+        size_t buffer_size,
+        void * data,
+        size_t size) {
+    if (!context || !context->buffer || !data) {
+        return false;
+    }
+    if (buffer_offset > buffer_size || size > buffer_size - buffer_offset) {
+        GGML_LOG_ERROR(
+            "%s: readback for tensor %s exceeds HRX2 buffer bounds: offset=%zu size=%zu buffer_size=%zu\n",
+            __func__, tensor ? tensor->name : "<unknown>", buffer_offset, size, buffer_size);
+        return false;
+    }
+
+    hrx_stream_t stream = ggml_backend_hrx2_retain_active_stream(context->device_context);
+    if (!stream) {
+        GGML_LOG_ERROR("%s: no HRX2 stream available for tensor readback\n", __func__);
+        return false;
+    }
+
+    auto * out_bytes = static_cast<uint8_t *>(data);
+    size_t copied = 0;
+    bool ok = true;
+    {
+        std::lock_guard<std::mutex> lock(context->device_context->streams_mutex);
+        auto * arena = ggml_backend_hrx2_get_staging_arena_locked(context->device_context, stream);
+        if (!arena ||
+            !ggml_backend_hrx2_ensure_staging_buffer_locked(
+                context->device_context,
+                arena,
+                ggml_backend_hrx2_staging_arena_capacity())) {
+            hrx_stream_release(stream);
+            return false;
+        }
+
+        while (copied < size) {
+            size_t staging_offset = ggml_backend_hrx2_align_up(arena->offset, GGML_HRX2_ALIGNMENT);
+            if (staging_offset >= arena->capacity) {
+                ok = GGML_HRX2_CHECK(hrx_stream_synchronize(stream));
+                if (!ok) {
+                    break;
+                }
+                ggml_backend_hrx2_reset_staging_arena_locked(*arena);
+                staging_offset = 0;
+            }
+
+            const size_t chunk_size = std::min(size - copied, arena->capacity - staging_offset);
+            if (chunk_size == 0) {
+                GGML_LOG_ERROR("%s: HRX2 staging arena has no available space\n", __func__);
+                ok = false;
+                break;
+            }
+
+            ok = GGML_HRX2_CHECK(hrx_stream_copy_buffer(
+                stream,
+                context->buffer,
+                buffer_offset + copied,
+                arena->buffer,
+                staging_offset,
+                chunk_size));
+            if (!ok) {
+                break;
+            }
+
+            ok = GGML_HRX2_CHECK(hrx_stream_synchronize(stream));
+            if (!ok) {
+                break;
+            }
+            std::memcpy(out_bytes + copied, arena->mapped + staging_offset, chunk_size);
+            copied += chunk_size;
+            ggml_backend_hrx2_reset_staging_arena_locked(*arena);
+        }
+    }
+
+    hrx_stream_release(stream);
+    return ok;
+}
+
 static const char * ggml_backend_hrx2_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
     return ggml_backend_hrx2_get_buft_context(buft)->name.c_str();
 }
@@ -802,37 +1172,120 @@ static void * ggml_backend_hrx2_buffer_get_base(ggml_backend_buffer_t buffer) {
 static void ggml_backend_hrx2_buffer_memset_tensor(
         ggml_backend_buffer_t buffer, ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
     auto * context = ggml_backend_hrx2_get_buffer_context(buffer);
-    const size_t buffer_offset = ggml_backend_hrx2_tensor_offset(context, tensor) + offset;
-    if (size != 0) {
-        (void) GGML_HRX2_CHECK(hrx_queue_fill(
-            context->device_context->device, 0, nullptr, nullptr, context->buffer, buffer_offset, size, &value, sizeof(value)));
+    if (size == 0 || !context->buffer) {
+        return;
     }
+    if (!ggml_backend_hrx2_sync_streams(context->device_context)) {
+        return;
+    }
+    const size_t buffer_offset = ggml_backend_hrx2_tensor_offset(context, tensor) + offset;
+    hrx_stream_t stream = ggml_backend_hrx2_retain_active_stream(context->device_context);
+    if (!stream) {
+        GGML_LOG_ERROR("%s: no HRX2 stream available for memset\n", __func__);
+        return;
+    }
+    const bool ok =
+        GGML_HRX2_CHECK(hrx_stream_fill_buffer(stream, context->buffer, buffer_offset, size, &value, sizeof(value))) &&
+        GGML_HRX2_CHECK(hrx_stream_synchronize(stream));
+    GGML_UNUSED(ok);
+    hrx_stream_release(stream);
 }
 
 static void ggml_backend_hrx2_buffer_set_tensor(
         ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     auto * context = ggml_backend_hrx2_get_buffer_context(buffer);
+    if (size == 0 || !context->buffer) {
+        return;
+    }
     const size_t buffer_offset = ggml_backend_hrx2_tensor_offset(context, tensor) + offset;
-    if (size != 0) {
-        (void) GGML_HRX2_CHECK(hrx_synchronous_h2d(context->device_context->device, data, context->buffer, buffer_offset, size));
+    if (!ggml_backend_hrx2_stage_and_copy_tensor(context, tensor, data, buffer_offset, buffer->size, size)) {
+        GGML_LOG_ERROR("%s: failed to upload tensor %s through HRX2 staging\n", __func__, tensor->name);
     }
 }
 
 static void ggml_backend_hrx2_buffer_get_tensor(
         ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     auto * context = ggml_backend_hrx2_get_buffer_context(buffer);
-    const size_t buffer_offset = ggml_backend_hrx2_tensor_offset(context, tensor) + offset;
-    if (size != 0) {
-        (void) GGML_HRX2_CHECK(hrx_synchronous_d2h(context->device_context->device, context->buffer, buffer_offset, data, size));
+    if (size == 0 || !context->buffer) {
+        return;
     }
+    const size_t buffer_offset = ggml_backend_hrx2_tensor_offset(context, tensor) + offset;
+    if (!ggml_backend_hrx2_copy_tensor_to_staging(context, tensor, buffer_offset, buffer->size, data, size)) {
+        GGML_LOG_ERROR("%s: failed to read tensor %s through HRX2 staging\n", __func__, tensor->name);
+    }
+}
+
+static bool ggml_backend_hrx2_buffer_cpy_tensor(
+        ggml_backend_buffer_t buffer, const ggml_tensor * src, ggml_tensor * dst) {
+    ggml_backend_buffer_t src_buffer = src->view_src ? src->view_src->buffer : src->buffer;
+    if (!src_buffer || src_buffer->iface.get_base != ggml_backend_hrx2_buffer_get_base) {
+        return false;
+    }
+
+    auto * dst_context = ggml_backend_hrx2_get_buffer_context(buffer);
+    auto * src_context = ggml_backend_hrx2_get_buffer_context(src_buffer);
+    if (dst_context->device_context != src_context->device_context ||
+        !dst_context->buffer || !src_context->buffer) {
+        return false;
+    }
+
+    if (!ggml_backend_hrx2_sync_streams(dst_context->device_context)) {
+        return false;
+    }
+
+    const size_t src_offset = ggml_backend_hrx2_tensor_offset(src_context, src);
+    const size_t dst_offset = ggml_backend_hrx2_tensor_offset(dst_context, dst);
+    const size_t size = ggml_nbytes(src);
+    if (dst_offset > buffer->size || size > buffer->size - dst_offset) {
+        GGML_LOG_ERROR(
+            "%s: destination tensor %s exceeds HRX2 buffer bounds: offset=%zu size=%zu buffer_size=%zu\n",
+            __func__, dst ? dst->name : "<unknown>", dst_offset, size, buffer->size);
+        return false;
+    }
+    if (src_offset > src_buffer->size || size > src_buffer->size - src_offset) {
+        GGML_LOG_ERROR(
+            "%s: source tensor %s exceeds HRX2 buffer bounds: offset=%zu size=%zu buffer_size=%zu\n",
+            __func__, src ? src->name : "<unknown>", src_offset, size, src_buffer->size);
+        return false;
+    }
+
+    hrx_stream_t stream = ggml_backend_hrx2_retain_active_stream(dst_context->device_context);
+    if (!stream) {
+        GGML_LOG_ERROR("%s: no HRX2 stream available for device copy\n", __func__);
+        return false;
+    }
+
+    const bool ok =
+        GGML_HRX2_CHECK(hrx_stream_copy_buffer(
+            stream,
+            src_context->buffer,
+            src_offset,
+            dst_context->buffer,
+            dst_offset,
+            size)) &&
+        GGML_HRX2_CHECK(hrx_stream_synchronize(stream));
+    hrx_stream_release(stream);
+    return ok;
 }
 
 static void ggml_backend_hrx2_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
     auto * context = ggml_backend_hrx2_get_buffer_context(buffer);
-    if (buffer->size != 0) {
-        (void) GGML_HRX2_CHECK(hrx_queue_fill(
-            context->device_context->device, 0, nullptr, nullptr, context->buffer, 0, buffer->size, &value, sizeof(value)));
+    if (buffer->size == 0 || !context->buffer) {
+        return;
     }
+    if (!ggml_backend_hrx2_sync_streams(context->device_context)) {
+        return;
+    }
+    hrx_stream_t stream = ggml_backend_hrx2_retain_active_stream(context->device_context);
+    if (!stream) {
+        GGML_LOG_ERROR("%s: no HRX2 stream available for clear\n", __func__);
+        return;
+    }
+    const bool ok =
+        GGML_HRX2_CHECK(hrx_stream_fill_buffer(stream, context->buffer, 0, buffer->size, &value, sizeof(value))) &&
+        GGML_HRX2_CHECK(hrx_stream_synchronize(stream));
+    GGML_UNUSED(ok);
+    hrx_stream_release(stream);
 }
 
 static const ggml_backend_buffer_i ggml_backend_hrx2_buffer_i = {
@@ -842,7 +1295,7 @@ static const ggml_backend_buffer_i ggml_backend_hrx2_buffer_i = {
     /* .memset_tensor = */ ggml_backend_hrx2_buffer_memset_tensor,
     /* .set_tensor    = */ ggml_backend_hrx2_buffer_set_tensor,
     /* .get_tensor    = */ ggml_backend_hrx2_buffer_get_tensor,
-    /* .cpy_tensor    = */ nullptr,
+    /* .cpy_tensor    = */ ggml_backend_hrx2_buffer_cpy_tensor,
     /* .clear         = */ ggml_backend_hrx2_buffer_clear,
     /* .reset         = */ nullptr,
 };
@@ -6722,6 +7175,8 @@ static const char * ggml_backend_hrx2_get_name(ggml_backend_t backend) {
 static void ggml_backend_hrx2_free(ggml_backend_t backend) {
     auto * context = ggml_backend_hrx2_get_context(backend);
     if (context->stream) {
+        (void) GGML_HRX2_CHECK(hrx_stream_synchronize(context->stream));
+        ggml_backend_hrx2_unregister_stream(context->device_context, context->stream);
         hrx_stream_release(context->stream);
     }
     delete context;
@@ -6732,6 +7187,10 @@ static void ggml_backend_hrx2_synchronize(ggml_backend_t backend) {
     auto * context = ggml_backend_hrx2_get_context(backend);
     if (context->stream) {
         (void) GGML_HRX2_CHECK(hrx_stream_synchronize(context->stream));
+        std::lock_guard<std::mutex> lock(context->device_context->streams_mutex);
+        if (auto * arena = ggml_backend_hrx2_find_staging_arena_locked(context->device_context, context->stream)) {
+            ggml_backend_hrx2_reset_staging_arena_locked(*arena);
+        }
     }
 }
 
@@ -6764,6 +7223,13 @@ struct ggml_backend_hrx2_active_graph_guard {
 
 static enum ggml_status ggml_backend_hrx2_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     auto * context = ggml_backend_hrx2_get_context(backend);
+    if (!ggml_backend_hrx2_sync_graph_entry_streams(context->device_context, context->stream)) {
+        return GGML_STATUS_FAILED;
+    }
+    {
+        std::lock_guard<std::mutex> lock(context->device_context->streams_mutex);
+        context->device_context->active_stream = context->stream;
+    }
     ggml_backend_hrx2_active_graph_guard active_graph_guard(context);
     for (int i = 0; i < cgraph->n_nodes; ++i) {
         const ggml_tensor * node = cgraph->nodes[i];
@@ -7171,6 +7637,7 @@ static ggml_backend_t ggml_backend_hrx2_device_init_backend(ggml_backend_dev_t d
         delete context;
         return nullptr;
     }
+    ggml_backend_hrx2_register_stream(device_context, stream);
     return backend;
 }
 
@@ -7333,6 +7800,11 @@ static std::unique_ptr<ggml_backend_hrx2_reg_context> ggml_backend_hrx2_create_r
         device_context->description = ggml_backend_hrx2_device_description(device);
         device_context->architecture = ggml_backend_hrx2_device_string_property(device, HRX_DEVICE_PROPERTY_ARCHITECTURE);
         device_context->memory_total = ggml_backend_hrx2_total_memory(device);
+        if (!GGML_HRX2_CHECK(hrx_stream_create(device_context->device, 0, &device_context->transfer_stream))) {
+            hrx_device_release(device);
+            continue;
+        }
+        ggml_backend_hrx2_register_stream(device_context.get(), device_context->transfer_stream);
         device_context->catalog = ggml_backend_hrx2_load_catalog();
         if (device_context->catalog) {
             ggml_backend_hrx2_catalog_find_routes(
