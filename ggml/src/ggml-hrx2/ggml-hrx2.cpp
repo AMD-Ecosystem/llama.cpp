@@ -48,6 +48,7 @@ struct ggml_backend_hrx2_staging_arena {
 struct ggml_backend_hrx2_device_scratch {
     hrx_buffer_t buffer = nullptr;
     size_t capacity = 0;
+    std::vector<hrx_buffer_t> retired_buffers;
 };
 
 struct ggml_backend_hrx2_buffer_type_context {
@@ -853,7 +854,17 @@ static void ggml_backend_hrx2_release_device_scratch(ggml_backend_hrx2_device_sc
     if (scratch.buffer) {
         hrx_buffer_release(scratch.buffer);
     }
+    for (hrx_buffer_t buffer : scratch.retired_buffers) {
+        hrx_buffer_release(buffer);
+    }
     scratch = {};
+}
+
+static void ggml_backend_hrx2_release_retired_device_scratch(ggml_backend_hrx2_device_scratch & scratch) {
+    for (hrx_buffer_t buffer : scratch.retired_buffers) {
+        hrx_buffer_release(buffer);
+    }
+    scratch.retired_buffers.clear();
 }
 
 static bool ggml_backend_hrx2_ensure_device_scratch(
@@ -866,13 +877,8 @@ static bool ggml_backend_hrx2_ensure_device_scratch(
     }
     const size_t capacity = ggml_backend_hrx2_align_up(required_capacity, GGML_HRX2_ALIGNMENT);
     if (!scratch->buffer || scratch->capacity < capacity) {
-        if (context->stream && scratch->buffer) {
-            if (!GGML_HRX2_CHECK(hrx_stream_synchronize(context->stream))) {
-                return false;
-            }
-        }
         if (scratch->buffer) {
-            hrx_buffer_release(scratch->buffer);
+            scratch->retired_buffers.push_back(scratch->buffer);
             scratch->buffer = nullptr;
             scratch->capacity = 0;
         }
@@ -8024,6 +8030,7 @@ static void ggml_backend_hrx2_synchronize(ggml_backend_t backend) {
     auto * context = ggml_backend_hrx2_get_context(backend);
     if (context->stream) {
         (void) GGML_HRX2_CHECK(hrx_stream_synchronize(context->stream));
+        ggml_backend_hrx2_release_retired_device_scratch(context->q8_1_scratch);
         std::lock_guard<std::mutex> lock(context->device_context->streams_mutex);
         if (auto * arena = ggml_backend_hrx2_find_staging_arena_locked(context->device_context, context->stream)) {
             ggml_backend_hrx2_reset_staging_arena_locked(*arena);
