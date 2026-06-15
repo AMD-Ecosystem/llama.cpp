@@ -150,6 +150,7 @@
   "soft_max_f32_mask_n256_r40_wg256",
   "soft_max_f32_mask_n256_r640_wg256",
   "soft_max_f32_mask_n256_r2560_wg256",
+  "soft_max_f32_mask_n512_r24_16384_wg512",
   "soft_max_f32_n128_r1_wg128",
   "soft_max_f32_n128_r16_wg128",
   "soft_max_f32_n128_r64_wg128",

@@ -25,13 +25,13 @@
       "cols_per_workgroup": 1
     },
     "shape_domain": {
-      "name": "attention_batched_f16_f32_k128_256_rows128_256_cols1_64",
+      "name": "attention_batched_f16_f32_k128_512_rows128_512_cols1_512",
       "k_min": 128,
-      "k_max": 256,
+      "k_max": 512,
       "rows_min": 128,
-      "rows_max": 256,
+      "rows_max": 512,
       "cols_min": 1,
-      "cols_max": 64
+      "cols_max": 512
     },
     "shape_guards": {
       "k_pow2": true
@@ -116,9 +116,9 @@
       "layout": "batched_attention_broadcast"
     },
     "evidence_summary": {
-      "phase": "phase1-route-slice-31-f16-attention-bringup",
+      "phase": "phase2a-p512-attention-route-coverage",
       "algorithm": "one_output_per_workgroup_scalar_f16_to_f32_dot_batched_broadcast",
-      "selection": "basket_shape_schedule",
+      "selection": "basket_shape_schedule_decode_p64_p512",
       "ggml_cpu_reference": "required"
     }
   }
