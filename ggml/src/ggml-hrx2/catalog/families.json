@@ -12,6 +12,10 @@
     "op": "MUL_MAT"
   },
   {
+    "family": "quantize_q8_1_f32",
+    "op": "QUANTIZE"
+  },
+  {
     "family": "mul_mat_f16_f32_batched",
     "op": "MUL_MAT"
   },

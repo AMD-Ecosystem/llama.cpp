@@ -8,6 +8,9 @@
   "mul_mat_q8_0_f32": {
     "path": "kernels/mul_mat_q8_0_f32.loom"
   },
+  "quantize_q8_1_f32": {
+    "path": "kernels/quantize_q8_1.loom"
+  },
   "mul_mat_f32_f32": {
     "path": "kernels/mul_mat_f32_f32.loom"
   },

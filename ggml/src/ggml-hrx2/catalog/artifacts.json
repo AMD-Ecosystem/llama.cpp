@@ -29,6 +29,12 @@
     "format": "loom-bytecode",
     "storage": "embedded"
   },
+  "quantize_q8_1_f32_bc": {
+    "path": "artifacts/quantize_q8_1_f32.loombc",
+    "format": "loom-bytecode",
+    "source_id": "quantize_q8_1_f32",
+    "storage": "embedded"
+  },
   "cont_f32_bc": {
     "path": "artifacts/cont_f32.loombc",
     "format": "loom-bytecode",
