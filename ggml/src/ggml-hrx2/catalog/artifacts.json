@@ -90,6 +90,12 @@
     "source_id": "mul_mat_q4_k_f32",
     "storage": "embedded"
   },
+  "mul_mat_q4_k_swiglu_f32_static_bc": {
+    "path": "artifacts/mul_mat_q4_k_swiglu_f32_static.loombc",
+    "format": "loom-bytecode",
+    "source_id": "mul_mat_q4_k_swiglu_f32",
+    "storage": "embedded"
+  },
   "mul_mat_q5_k_f32_static_bc": {
     "path": "artifacts/mul_mat_q5_k_f32_static.loombc",
     "format": "loom-bytecode",

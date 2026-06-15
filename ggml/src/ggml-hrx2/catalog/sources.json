@@ -47,6 +47,9 @@
   "mul_mat_q4_k_f32": {
     "path": "kernels/mul_mat_q4_k_f32.loom"
   },
+  "mul_mat_q4_k_swiglu_f32": {
+    "path": "kernels/mul_mat_q4_k_swiglu_f32.loom"
+  },
   "mul_mat_q5_k_f32": {
     "path": "kernels/mul_mat_q5_k_f32.loom"
   },

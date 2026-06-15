@@ -20,6 +20,10 @@
     "op": "MUL_MAT"
   },
   {
+    "family": "mul_mat_q4_k_swiglu_f32",
+    "op": "GLU"
+  },
+  {
     "family": "mul_mat_id_q4_k_f32",
     "op": "MUL_MAT_ID"
   },

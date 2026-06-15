@@ -16,6 +16,7 @@ set(GGML_HRX2_ARTIFACTS
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/mul_mat_q8_0_f32_static_packed.loombc"
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/mul_mat_q8_0_f32_static_packed_scf_unroll.loombc"
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/mul_mat_q4_k_f32_static.loombc"
+    "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/mul_mat_q4_k_swiglu_f32_static.loombc"
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/mul_mat_id_q4_k_f32_static.loombc"
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/mul_mat_q5_k_f32_static.loombc"
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/mul_mat_id_q5_k_f32_static.loombc"

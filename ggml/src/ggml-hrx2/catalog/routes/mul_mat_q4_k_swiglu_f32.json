@@ -1,0 +1,147 @@
+[
+  {
+    "id": "mul_mat_q4_k_swiglu_f32_direct_k256_32768_c1_512_wg256",
+    "family": "mul_mat_q4_k_swiglu_f32",
+    "op": "GLU",
+    "target_key": "",
+    "source_id": "mul_mat_q4_k_swiglu_f32",
+    "artifact_id": "mul_mat_q4_k_swiglu_f32_static_bc",
+    "root_symbol": "@hrx2_mul_mat_q4_k_swiglu_f32_static",
+    "export_name": "hrx2_mul_mat_q4_k_swiglu_f32_static",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 100,
+    "abi": {
+      "binding_count": 4,
+      "parameter_count": 4,
+      "constant_byte_length": 0
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ],
+      "rows_per_workgroup": 1,
+      "cols_per_workgroup": 1
+    },
+    "shape_domain": {
+      "name": "direct_k256_32768_rows1_32768_cols1_512_wg256",
+      "k_min": 256,
+      "k_max": 32768,
+      "rows_min": 1,
+      "rows_max": 32768,
+      "cols_min": 1,
+      "cols_max": 512
+    },
+    "shape_guards": {
+      "k_multiple_of": 256
+    },
+    "specialization": {
+      "mode": "jit_config",
+      "bindings": [
+        {
+          "key": "@hrx2.shape.k",
+          "source": "shape.k"
+        },
+        {
+          "key": "@hrx2.shape.rows",
+          "source": "shape.rows"
+        },
+        {
+          "key": "@hrx2.shape.cols",
+          "source": "shape.cols"
+        },
+        {
+          "key": "@hrx2.tuning.workgroup_size",
+          "value": "256"
+        }
+      ]
+    },
+    "supports": {
+      "src0_type": "Q4_K",
+      "src1_type": "Q4_K",
+      "rhs_type": "F32",
+      "dst_type": "F32",
+      "layout": "contiguous",
+      "fusion": "MUL_MAT_Q4_K + MUL_MAT_Q4_K + SWIGLU"
+    },
+    "evidence_summary": {
+      "phase": "phase2a-boulder-fusion-preflight",
+      "algorithm": "direct_dual_q4k_f32_accumulate_swiglu_epilogue",
+      "selection": "split_ffn_hero_motif_from_phase2a_basket_traces",
+      "ggml_cpu_reference": "required"
+    }
+  },
+  {
+    "id": "mul_mat_q4_k_packed_swiglu_f32_direct_k256_32768_c1_512_wg256",
+    "family": "mul_mat_q4_k_swiglu_f32",
+    "op": "GLU",
+    "target_key": "",
+    "source_id": "mul_mat_q4_k_swiglu_f32",
+    "artifact_id": "mul_mat_q4_k_swiglu_f32_static_bc",
+    "root_symbol": "@hrx2_mul_mat_q4_k_packed_swiglu_f32_static",
+    "export_name": "hrx2_mul_mat_q4_k_packed_swiglu_f32_static",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 95,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 3,
+      "constant_byte_length": 0
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ],
+      "rows_per_workgroup": 1,
+      "cols_per_workgroup": 1
+    },
+    "shape_domain": {
+      "name": "packed_direct_k256_32768_rows1_32768_cols1_512_wg256",
+      "k_min": 256,
+      "k_max": 32768,
+      "rows_min": 1,
+      "rows_max": 32768,
+      "cols_min": 1,
+      "cols_max": 512
+    },
+    "shape_guards": {
+      "k_multiple_of": 256
+    },
+    "specialization": {
+      "mode": "jit_config",
+      "bindings": [
+        {
+          "key": "@hrx2.shape.k",
+          "source": "shape.k"
+        },
+        {
+          "key": "@hrx2.shape.rows",
+          "source": "shape.rows"
+        },
+        {
+          "key": "@hrx2.shape.cols",
+          "source": "shape.cols"
+        },
+        {
+          "key": "@hrx2.tuning.workgroup_size",
+          "value": "256"
+        }
+      ]
+    },
+    "supports": {
+      "src0_type": "Q4_K",
+      "rhs_type": "F32",
+      "dst_type": "F32",
+      "layout": "contiguous",
+      "fusion": "MUL_MAT_Q4_K_PACKED + SWIGLU"
+    },
+    "evidence_summary": {
+      "phase": "phase2a-boulder-fusion-preflight",
+      "algorithm": "direct_packed_q4k_f32_accumulate_swiglu_epilogue",
+      "selection": "packed_ffn_hero_motif_from_phase2a_basket_traces",
+      "ggml_cpu_reference": "required"
+    }
+  }
+]

@@ -50,7 +50,7 @@
   },
   {
     "id": "candidate_ffn_matvec_glu_epilogue",
-    "status": "candidate",
+    "status": "accepted",
     "ops": [
       "MUL_MAT",
       "GLU"
@@ -62,7 +62,16 @@
     ],
     "source": "dataflow_and_prior_art",
     "expected_benefit": "Fuse quantized FFN matvec outputs with GLU-style activation/gating epilogues where graph layout keeps the produced vector single-consumer.",
-    "acceptance": "Accept per quant/layout/shape bucket only when fused time beats the best unfused matvec plus activation/epilogue chain and CPU-reference backend op tests cover activation edge cases."
+    "acceptance": "Accept per quant/layout/shape bucket only when fused time beats the best unfused matvec plus activation/epilogue chain and CPU-reference backend op tests cover activation edge cases.",
+    "accepted_scope": "Q4_K/F32 FFN SWIGLU epilogues for split gate/up projections and packed 2x-width projections.",
+    "accepted_routes": [
+      "mul_mat_q4_k_swiglu_f32_direct_k256_32768_c1_512_wg256",
+      "mul_mat_q4_k_packed_swiglu_f32_direct_k256_32768_c1_512_wg256"
+    ],
+    "evidence": {
+      "artifact": "cache/hrx2/phase2a/q4k-swiglu-fusions-20260615",
+      "summary": "Three-model slice improved 1.1%..6.3% over setrows-default-full-20260615 and removed the expected FFN GLU dispatches. This is useful dispatch/intermediate elimination, but not a bulk-lift substitute for faster quantized matmul or attention fusions."
+    }
   },
   {
     "id": "candidate_moe_matvec_glu_epilogue",
