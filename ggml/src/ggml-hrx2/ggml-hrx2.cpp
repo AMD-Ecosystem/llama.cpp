@@ -5913,7 +5913,7 @@ static ggml_status ggml_backend_hrx2_dispatch_set_rows(
         return GGML_STATUS_FAILED;
     }
 
-    if (!ggml_backend_hrx2_env_enabled("GGML_HRX2_ENABLE_SET_ROWS_LOOM")) {
+    if (ggml_backend_hrx2_env_enabled("GGML_HRX2_DISABLE_SET_ROWS_LOOM")) {
         return ggml_backend_hrx2_dispatch_set_rows_host_fallback(context, dst, shape);
     }
 
