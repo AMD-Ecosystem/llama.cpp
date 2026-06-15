@@ -17,6 +17,7 @@ on:
       'tools/server/public/**'
     ]
   pull_request:
+    branches-ignore: ['hrx-integration']
     types: [opened, synchronize, reopened]
     paths: [
       '.github/workflows/server-webui.yml',

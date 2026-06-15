@@ -25,6 +25,7 @@ on:
     ]
 
   pull_request:
+    branches-ignore: ['hrx-integration']
     types: [opened, synchronize, reopened]
     paths: [
       '.github/workflows/build.yml',
