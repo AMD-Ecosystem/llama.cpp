@@ -954,13 +954,14 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
             } break;
         case GGML_OP_ROPE:
             {
-                const int n_embd_head = hparams.n_embd_head_v();
+                const int n_dims = std::max<int>(2, w->ne[0]*2);
+                const int n_embd_head = std::max<int>(hparams.n_embd_head_k(), n_dims);
                 const int n_head = hparams.n_head();
-                ggml_tensor * a = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd_head, n_head, 512);
-                ggml_tensor * b = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 512);
+                ggml_tensor * a = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd_head, n_head, 1);
+                ggml_tensor * b = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1);
                 op_tensor = ggml_rope_ext(
                     ctx, a, b, w,
-                    0, 0, 0, 0, 0,
+                    n_dims, 0, 0, 0, 0,
                     0, 0, 0, 0
                 );
 
