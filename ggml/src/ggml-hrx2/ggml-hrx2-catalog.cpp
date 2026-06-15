@@ -110,6 +110,13 @@ static void ggml_backend_hrx2_write_text_file(const std::filesystem::path & path
     }
 }
 
+static void ggml_backend_hrx2_write_binary_file(const std::filesystem::path & path, const void * data, size_t size) {
+    std::ofstream output(path, std::ios::binary);
+    if (output && data && size != 0) {
+        output.write(static_cast<const char *>(data), static_cast<std::streamsize>(size));
+    }
+}
+
 static void ggml_backend_hrx2_dump_provider_evidence(
         const ggml_backend_hrx2_kernel_route & route,
         const std::vector<ggml_backend_hrx2_config_binding> & config_bindings,
@@ -117,6 +124,7 @@ static void ggml_backend_hrx2_dump_provider_evidence(
         const char * architecture,
         const char * source_identifier,
         ggml_hrx2_loom_jit_source_format_t source_format,
+        const void * hsaco_data,
         size_t hsaco_size,
         const ggml_backend_hrx2_provider & provider) {
     const char * evidence_dir_env = std::getenv("GGML_HRX2_EVIDENCE_DIR");
@@ -139,6 +147,7 @@ static void ggml_backend_hrx2_dump_provider_evidence(
     if (!provider.manifest_json.empty()) {
         ggml_backend_hrx2_write_text_file(provider_dir / "manifest.json", provider.manifest_json);
     }
+    ggml_backend_hrx2_write_binary_file(provider_dir / "kernel.hsaco", hsaco_data, hsaco_size);
 
     nlohmann::json metadata = {
         { "route_id", route.id },
@@ -406,8 +415,8 @@ static bool ggml_backend_hrx2_compile_route(
     provider->compile_report_json = result.compile_report_json ?
         std::string(result.compile_report_json, result.compile_report_json_size) :
         std::string();
-    ggml_hrx2_loom_jit_compile_result_deinitialize(&result);
     if (!loaded) {
+        ggml_hrx2_loom_jit_compile_result_deinitialize(&result);
         return false;
     }
 
@@ -428,6 +437,7 @@ static bool ggml_backend_hrx2_compile_route(
             export_info.constant_byte_length, route.constant_byte_length,
             export_info.workgroup_size[0], export_info.workgroup_size[1], export_info.workgroup_size[2]);
         hrx_executable_release(executable);
+        ggml_hrx2_loom_jit_compile_result_deinitialize(&result);
         return false;
     }
 
@@ -443,8 +453,10 @@ static bool ggml_backend_hrx2_compile_route(
         architecture,
         source_identifier,
         source_format,
+        result.hsaco_data,
         hsaco_size,
         *provider);
+    ggml_hrx2_loom_jit_compile_result_deinitialize(&result);
     GGML_LOG_INFO(
         "HRX2: JIT compiled route=%s cache_key=%s export=%s target=%s source=%s configs=%zu hsaco=%zu bytes\n",
         route.id.c_str(),

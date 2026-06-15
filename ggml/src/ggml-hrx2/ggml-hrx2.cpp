@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cinttypes>
 #include <cstddef>
 #include <cstdint>
@@ -399,6 +400,89 @@ static void ggml_backend_hrx2_trace_event(const char * event, const std::string 
         GGML_LOG_INFO("HRX2_TRACE: %s\n", line.c_str());
     }
 }
+
+static uint64_t ggml_backend_hrx2_now_us() {
+    const auto now = std::chrono::steady_clock::now().time_since_epoch();
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(now).count());
+}
+
+static hrx_status_t ggml_backend_hrx2_traced_stream_dispatch(
+        hrx_stream_t stream,
+        hrx_executable_t executable,
+        uint32_t export_ordinal,
+        const hrx_dispatch_config_t * config,
+        const void * constants,
+        size_t constants_size,
+        const hrx_buffer_ref_t * bindings,
+        size_t binding_count,
+        uint32_t flags) {
+    GGML_UNUSED(constants);
+    GGML_UNUSED(bindings);
+    const uint64_t start_us = ggml_backend_hrx2_now_us();
+    ggml_backend_hrx2_trace_event(
+        "hrx_stream_dispatch_begin",
+        ggml_backend_hrx2_json_kv("export_ordinal", export_ordinal) + "," +
+        ggml_backend_hrx2_json_kv("workgroups_x", config ? config->workgroup_count[0] : 0) + "," +
+        ggml_backend_hrx2_json_kv("workgroups_y", config ? config->workgroup_count[1] : 0) + "," +
+        ggml_backend_hrx2_json_kv("workgroups_z", config ? config->workgroup_count[2] : 0) + "," +
+        ggml_backend_hrx2_json_kv("workgroup_size_x", config ? config->workgroup_size[0] : 0) + "," +
+        ggml_backend_hrx2_json_kv("constants_size", static_cast<uint64_t>(constants_size)) + "," +
+        ggml_backend_hrx2_json_kv("binding_count", static_cast<uint64_t>(binding_count)) + "," +
+        ggml_backend_hrx2_json_kv("flags", static_cast<uint64_t>(flags)));
+
+    hrx_status_t status = ::hrx_stream_dispatch(
+        stream,
+        executable,
+        export_ordinal,
+        config,
+        constants,
+        constants_size,
+        bindings,
+        binding_count,
+        flags);
+
+    ggml_backend_hrx2_trace_event(
+        "hrx_stream_dispatch_end",
+        ggml_backend_hrx2_json_kv("status_ok", static_cast<uint64_t>(hrx_status_is_ok(status) ? 1 : 0)) + "," +
+        ggml_backend_hrx2_json_kv("elapsed_us", ggml_backend_hrx2_now_us() - start_us));
+    if (hrx_status_is_ok(status) && ggml_backend_hrx2_env_enabled("GGML_HRX2_SYNC_AFTER_DISPATCH")) {
+        const uint64_t sync_start_us = ggml_backend_hrx2_now_us();
+        ggml_backend_hrx2_trace_event("hrx_stream_synchronize_begin", ggml_backend_hrx2_json_kv("reason", "after_dispatch"));
+        status = ::hrx_stream_synchronize(stream);
+        ggml_backend_hrx2_trace_event(
+            "hrx_stream_synchronize_end",
+            ggml_backend_hrx2_json_kv("reason", "after_dispatch") + "," +
+            ggml_backend_hrx2_json_kv("status_ok", static_cast<uint64_t>(hrx_status_is_ok(status) ? 1 : 0)) + "," +
+            ggml_backend_hrx2_json_kv("elapsed_us", ggml_backend_hrx2_now_us() - sync_start_us));
+    }
+    return status;
+}
+
+static hrx_status_t ggml_backend_hrx2_traced_stream_synchronize(hrx_stream_t stream) {
+    const uint64_t start_us = ggml_backend_hrx2_now_us();
+    ggml_backend_hrx2_trace_event("hrx_stream_synchronize_begin", "");
+    const hrx_status_t status = ::hrx_stream_synchronize(stream);
+    ggml_backend_hrx2_trace_event(
+        "hrx_stream_synchronize_end",
+        ggml_backend_hrx2_json_kv("status_ok", static_cast<uint64_t>(hrx_status_is_ok(status) ? 1 : 0)) + "," +
+        ggml_backend_hrx2_json_kv("elapsed_us", ggml_backend_hrx2_now_us() - start_us));
+    return status;
+}
+
+static hrx_status_t ggml_backend_hrx2_traced_stream_flush(hrx_stream_t stream) {
+    const uint64_t start_us = ggml_backend_hrx2_now_us();
+    ggml_backend_hrx2_trace_event("hrx_stream_flush_begin", "");
+    const hrx_status_t status = ::hrx_stream_flush(stream);
+    ggml_backend_hrx2_trace_event(
+        "hrx_stream_flush_end",
+        ggml_backend_hrx2_json_kv("status_ok", static_cast<uint64_t>(hrx_status_is_ok(status) ? 1 : 0)) + "," +
+        ggml_backend_hrx2_json_kv("elapsed_us", ggml_backend_hrx2_now_us() - start_us));
+    return status;
+}
+
+#define hrx_stream_dispatch ggml_backend_hrx2_traced_stream_dispatch
+#define hrx_stream_synchronize ggml_backend_hrx2_traced_stream_synchronize
+#define hrx_stream_flush ggml_backend_hrx2_traced_stream_flush
 
 static ggml_backend_hrx2_device_context * ggml_backend_hrx2_get_device_context(ggml_backend_dev_t dev) {
     return static_cast<ggml_backend_hrx2_device_context *>(dev->context);
