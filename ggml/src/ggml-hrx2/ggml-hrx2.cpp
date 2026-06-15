@@ -29,6 +29,8 @@ namespace {
 
 static constexpr size_t    GGML_HRX2_ALIGNMENT     = 256;
 static constexpr uintptr_t GGML_HRX2_FAKE_PTR_BASE = 0x200000000ull;
+static constexpr uint64_t  GGML_HRX2_DEFAULT_DISPATCHES_PER_SUBMIT = 12;
+static constexpr uint64_t  GGML_HRX2_DEFAULT_MAX_MUL_MAT_BYTES_PER_SUBMIT = 100ull * 1000ull * 1000ull;
 
 struct ggml_backend_hrx2_device_context;
 
@@ -89,7 +91,18 @@ struct ggml_backend_hrx2_context {
     ggml_backend_hrx2_device_context * device_context = nullptr;
     hrx_stream_t stream = nullptr;
     std::string name;
+    uint64_t last_total_mul_mat_bytes = 0;
+    uint64_t submitted_dispatches = 0;
+    uint64_t mul_mat_bytes = 0;
+    uint64_t total_mul_mat_bytes = 0;
+    uint64_t mul_mat_bytes_per_submit = 0;
+    uint64_t submit_count = 0;
+    uint64_t submit_flush_count = 0;
+    const ggml_tensor * submit_last_node = nullptr;
 };
+
+static thread_local ggml_backend_hrx2_context * g_hrx2_active_graph_context = nullptr;
+static thread_local const ggml_tensor * g_hrx2_active_graph_node = nullptr;
 
 struct ggml_backend_hrx2_reg_context {
     bool gpu_initialized = false;
@@ -330,6 +343,19 @@ static bool ggml_backend_hrx2_env_enabled(const char * name) {
     return value && value[0] != '\0' && std::strcmp(value, "0") != 0;
 }
 
+static uint64_t ggml_backend_hrx2_u64_from_env(const char * name, uint64_t fallback) {
+    const char * value = std::getenv(name);
+    if (!value || value[0] == '\0') {
+        return fallback;
+    }
+    char * end = nullptr;
+    const unsigned long long parsed = std::strtoull(value, &end, 10);
+    if (end == value) {
+        return fallback;
+    }
+    return static_cast<uint64_t>(parsed);
+}
+
 static const char * ggml_backend_hrx2_glu_op_key(enum ggml_glu_op glu_op) {
     switch (glu_op) {
         case GGML_GLU_OP_REGLU: return "REGLU";
@@ -418,6 +444,93 @@ static uint64_t ggml_backend_hrx2_now_us() {
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(now).count());
 }
 
+static uint64_t ggml_backend_hrx2_dispatches_per_submit() {
+    return ggml_backend_hrx2_u64_from_env(
+        "GGML_HRX2_DISPATCHES_PER_SUBMIT",
+        GGML_HRX2_DEFAULT_DISPATCHES_PER_SUBMIT);
+}
+
+static uint64_t ggml_backend_hrx2_max_mul_mat_bytes_per_submit() {
+    return ggml_backend_hrx2_u64_from_env(
+        "GGML_HRX2_MAX_MUL_MAT_BYTES_PER_SUBMIT",
+        GGML_HRX2_DEFAULT_MAX_MUL_MAT_BYTES_PER_SUBMIT);
+}
+
+static uint64_t ggml_backend_hrx2_node_mul_mat_bytes(const ggml_tensor * node) {
+    if (!node || !node->src[0]) {
+        return 0;
+    }
+    if (node->op != GGML_OP_MUL_MAT && node->op != GGML_OP_MUL_MAT_ID) {
+        return 0;
+    }
+    return static_cast<uint64_t>(ggml_nbytes(node->src[0]));
+}
+
+static void ggml_backend_hrx2_begin_submit_batch(ggml_backend_hrx2_context * context) {
+    if (!context) {
+        return;
+    }
+    const uint64_t max_bytes = ggml_backend_hrx2_max_mul_mat_bytes_per_submit();
+    const uint64_t last_scaled = context->last_total_mul_mat_bytes / 40u;
+    context->submitted_dispatches = 0;
+    context->mul_mat_bytes = 0;
+    context->total_mul_mat_bytes = 0;
+    context->mul_mat_bytes_per_submit = std::min(max_bytes, last_scaled);
+    context->submit_count = 0;
+    context->submit_flush_count = 0;
+    context->submit_last_node = nullptr;
+}
+
+static hrx_status_t ggml_backend_hrx2_maybe_submit_batch_after_dispatch(hrx_stream_t stream) {
+    ggml_backend_hrx2_context * context = g_hrx2_active_graph_context;
+    if (!context || stream != context->stream || ggml_backend_hrx2_env_enabled("GGML_HRX2_DISABLE_SUBMIT_BATCHING")) {
+        return hrx_ok_status();
+    }
+
+    context->submitted_dispatches++;
+    const ggml_tensor * node = g_hrx2_active_graph_node;
+    if (node && node != context->submit_last_node) {
+        const uint64_t matmul_bytes = ggml_backend_hrx2_node_mul_mat_bytes(node);
+        context->submit_last_node = node;
+        context->mul_mat_bytes += matmul_bytes;
+        context->total_mul_mat_bytes += matmul_bytes;
+    }
+
+    const uint64_t dispatches_per_submit = ggml_backend_hrx2_dispatches_per_submit();
+    const bool dispatch_threshold =
+        dispatches_per_submit != 0 && context->submitted_dispatches >= dispatches_per_submit;
+    const bool byte_threshold =
+        context->mul_mat_bytes_per_submit != 0 && context->mul_mat_bytes >= context->mul_mat_bytes_per_submit;
+    if (!dispatch_threshold && !byte_threshold) {
+        return hrx_ok_status();
+    }
+
+    const uint64_t start_us = ggml_backend_hrx2_now_us();
+    ggml_backend_hrx2_trace_event(
+        "submit_batch_flush_begin",
+        ggml_backend_hrx2_json_kv("dispatches", context->submitted_dispatches) + "," +
+        ggml_backend_hrx2_json_kv("mul_mat_bytes", context->mul_mat_bytes) + "," +
+        ggml_backend_hrx2_json_kv("mul_mat_bytes_per_submit", context->mul_mat_bytes_per_submit) + "," +
+        ggml_backend_hrx2_json_kv("submit_count", context->submit_count));
+    hrx_status_t status = ::hrx_stream_flush(stream);
+    ggml_backend_hrx2_trace_event(
+        "submit_batch_flush_end",
+        ggml_backend_hrx2_json_kv("status_ok", static_cast<uint64_t>(hrx_status_is_ok(status) ? 1 : 0)) + "," +
+        ggml_backend_hrx2_json_kv("elapsed_us", ggml_backend_hrx2_now_us() - start_us));
+    if (!hrx_status_is_ok(status)) {
+        return status;
+    }
+
+    context->submitted_dispatches = 0;
+    context->mul_mat_bytes = 0;
+    if (context->submit_count < 3) {
+        context->mul_mat_bytes_per_submit *= 2;
+    }
+    context->submit_count++;
+    context->submit_flush_count++;
+    return hrx_ok_status();
+}
+
 static hrx_status_t ggml_backend_hrx2_traced_stream_dispatch(
         hrx_stream_t stream,
         hrx_executable_t executable,
@@ -457,6 +570,9 @@ static hrx_status_t ggml_backend_hrx2_traced_stream_dispatch(
         "hrx_stream_dispatch_end",
         ggml_backend_hrx2_json_kv("status_ok", static_cast<uint64_t>(hrx_status_is_ok(status) ? 1 : 0)) + "," +
         ggml_backend_hrx2_json_kv("elapsed_us", ggml_backend_hrx2_now_us() - start_us));
+    if (hrx_status_is_ok(status)) {
+        status = ggml_backend_hrx2_maybe_submit_batch_after_dispatch(stream);
+    }
     if (hrx_status_is_ok(status) && ggml_backend_hrx2_env_enabled("GGML_HRX2_SYNC_AFTER_DISPATCH")) {
         const uint64_t sync_start_us = ggml_backend_hrx2_now_us();
         ggml_backend_hrx2_trace_event("hrx_stream_synchronize_begin", ggml_backend_hrx2_json_kv("reason", "after_dispatch"));
@@ -6425,10 +6541,39 @@ static void ggml_backend_hrx2_synchronize(ggml_backend_t backend) {
     }
 }
 
+struct ggml_backend_hrx2_active_graph_guard {
+    ggml_backend_hrx2_context * context = nullptr;
+    ggml_backend_hrx2_context * previous_context = nullptr;
+    const ggml_tensor * previous_node = nullptr;
+
+    explicit ggml_backend_hrx2_active_graph_guard(ggml_backend_hrx2_context * context)
+        : context(context),
+          previous_context(g_hrx2_active_graph_context),
+          previous_node(g_hrx2_active_graph_node) {
+        ggml_backend_hrx2_begin_submit_batch(context);
+        g_hrx2_active_graph_context = context;
+        g_hrx2_active_graph_node = nullptr;
+    }
+
+    ~ggml_backend_hrx2_active_graph_guard() {
+        if (context) {
+            context->last_total_mul_mat_bytes = context->total_mul_mat_bytes;
+            ggml_backend_hrx2_trace_event(
+                "submit_batch_graph_end",
+                ggml_backend_hrx2_json_kv("total_mul_mat_bytes", context->last_total_mul_mat_bytes) + "," +
+                ggml_backend_hrx2_json_kv("submit_flushes", context->submit_flush_count));
+        }
+        g_hrx2_active_graph_context = previous_context;
+        g_hrx2_active_graph_node = previous_node;
+    }
+};
+
 static enum ggml_status ggml_backend_hrx2_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     auto * context = ggml_backend_hrx2_get_context(backend);
+    ggml_backend_hrx2_active_graph_guard active_graph_guard(context);
     for (int i = 0; i < cgraph->n_nodes; ++i) {
         const ggml_tensor * node = cgraph->nodes[i];
+        g_hrx2_active_graph_node = node;
         if (!ggml_backend_hrx2_env_enabled("GGML_HRX2_DISABLE_Q4K_SWIGLU_FUSION") &&
             i + 1 < cgraph->n_nodes &&
             node->op == GGML_OP_MUL_MAT &&
