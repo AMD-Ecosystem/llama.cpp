@@ -287,6 +287,12 @@ static buft_list_t make_gpu_buft_list(ggml_backend_dev_t dev, llama_split_mode s
     return buft_list;
 }
 
+static bool llama_model_dev_is_hrx2(ggml_backend_dev_t dev) {
+    ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+    const char * name = reg ? ggml_backend_reg_name(reg) : nullptr;
+    return name != nullptr && strcmp(name, "HRX2") == 0;
+}
+
 struct llama_model::impl {
     impl() = default;
     ~impl() = default;
@@ -2684,8 +2690,16 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     };
 
     // assign the input layer
-    // there is very little benefit to offloading the input layer, so always keep it on the CPU
-    pimpl->dev_input = { cpu_dev, &pimpl->cpu_buft_list };
+    // There is usually little benefit to offloading the input embedding, so
+    // upstream keeps it on CPU. HRX2 full-offload runs have a device
+    // GET_ROWS route for quantized embeddings, and leaving the weight on CPU
+    // creates avoidable CPU compute and split traffic in every prompt/decode
+    // graph.
+    if (n_gpu_layers > n_layer && !devices.empty() && llama_model_dev_is_hrx2(devices.front())) {
+        pimpl->dev_input = get_layer_buft_list(0);
+    } else {
+        pimpl->dev_input = { cpu_dev, &pimpl->cpu_buft_list };
+    }
 
     // assign the repeating layers to the devices according to the splits
     pimpl->dev_layer.resize(n_layer);
