@@ -17,7 +17,7 @@
   },
   {
     "id": "candidate_rms_norm_mul",
-    "status": "candidate",
+    "status": "candidate_deferred",
     "ops": [
       "RMS_NORM",
       "MUL"
@@ -29,7 +29,13 @@
     ],
     "source": "prior_art_and_dataflow",
     "expected_benefit": "Eliminate one F32 normalized-vector materialization and one dispatch for common norm-weight application.",
-    "acceptance": "Accept only with same-target, same-shape fused time below best measured unfused RMS_NORM plus MUL time."
+    "acceptance": "Accept only with same-target, same-shape fused time below best measured unfused RMS_NORM plus MUL time.",
+    "evidence": [
+      {
+        "artifact": "cache/hrx2/phase2a/rms-norm-mul-fusion-ab-20260615-124513",
+        "summary": "Opt-in route fired for Llama 3.2 3B Q4_K_M and reduced decode dispatches 36725 -> 33020, but t/s was flat/slightly worse: decode 40.251 -> 39.892, p512 60.997 -> 60.025. Keep disabled by default until a fused route wins directly."
+      }
+    ]
   },
   {
     "id": "candidate_attention_matmul_softmax_matmul",

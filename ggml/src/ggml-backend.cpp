@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <algorithm>
+#include <string>
 #include <vector>
 
 #ifdef __APPLE__
@@ -878,15 +879,41 @@ static void ggml_backend_sched_fprint_json_escaped(FILE * file, const char * val
     fputc('"', file);
 }
 
+static FILE * ggml_backend_sched_trace_file(const char * caller, const char * trace_path) {
+    static std::string open_path;
+    static FILE * file = NULL;
+
+    if (trace_path == NULL || trace_path[0] == '\0') {
+        return NULL;
+    }
+    if (file != NULL && open_path == trace_path) {
+        return file;
+    }
+
+    if (file != NULL) {
+        fclose(file);
+        file = NULL;
+    }
+
+    file = fopen(trace_path, "a");
+    if (file == NULL) {
+        open_path.clear();
+        GGML_LOG_WARN("%s: failed to open GGML_SCHED_TRACE_JSONL=%s\n", caller, trace_path);
+        return NULL;
+    }
+
+    open_path = trace_path;
+    return file;
+}
+
 static void ggml_backend_sched_trace_assignments(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
     const char * trace_path = getenv("GGML_SCHED_TRACE_JSONL");
     if (trace_path == NULL || trace_path[0] == '\0') {
         return;
     }
 
-    FILE * file = fopen(trace_path, "a");
+    FILE * file = ggml_backend_sched_trace_file(__func__, trace_path);
     if (file == NULL) {
-        GGML_LOG_WARN("%s: failed to open GGML_SCHED_TRACE_JSONL=%s\n", __func__, trace_path);
         return;
     }
 
@@ -963,7 +990,6 @@ static void ggml_backend_sched_trace_assignments(ggml_backend_sched_t sched, str
         fputs("}\n", file);
     }
 
-    fclose(file);
 }
 
 static void ggml_backend_sched_trace_compute_event(
@@ -979,9 +1005,8 @@ static void ggml_backend_sched_trace_compute_event(
         return;
     }
 
-    FILE * file = fopen(trace_path, "a");
+    FILE * file = ggml_backend_sched_trace_file(__func__, trace_path);
     if (file == NULL) {
-        GGML_LOG_WARN("%s: failed to open GGML_SCHED_TRACE_JSONL=%s\n", __func__, trace_path);
         return;
     }
 
@@ -1012,7 +1037,6 @@ static void ggml_backend_sched_trace_compute_event(
         fprintf(file, ",\"status\":%d", (int) status);
     }
     fputs("}\n", file);
-    fclose(file);
 }
 
 static void ggml_backend_sched_print_assignments(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {

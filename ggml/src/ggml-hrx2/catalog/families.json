@@ -4,6 +4,10 @@
     "op": "RMS_NORM"
   },
   {
+    "family": "rms_norm_mul_f32",
+    "op": "MUL"
+  },
+  {
     "family": "mul_mat_q8_0_f32",
     "op": "MUL_MAT"
   },

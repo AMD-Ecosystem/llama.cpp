@@ -71,8 +71,21 @@ GGML_HRX2_EVIDENCE_DIR=/path/to/evidence
 
 `GGML_HRX2_TRACE_JSONL` records provider cache misses/hits, compile success or
 failure, selected route IDs, provider cache keys, concrete shapes, and dispatch
-geometry. `GGML_HRX2_EVIDENCE_DIR` writes per-provider `provider.json`,
+geometry. The trace writer keeps the JSONL file open for the process lifetime;
+traced decode measurements should still be treated as diagnostic runs, but they
+should no longer be dominated by per-event file-open overhead.
+`GGML_HRX2_EVIDENCE_DIR` writes per-provider `provider.json`,
 `compile_report.json`, and `manifest.json`.
+
+Experimental fusions:
+
+```sh
+GGML_HRX2_ENABLE_RMS_NORM_MUL_FUSION=1
+```
+
+The RMS_NORM+MUL route is opt-in because the first basket measurement reduced
+dispatch count but did not improve t/s. Keep it disabled by default until a
+same-shape fused route beats the unfused pair.
 
 The workspace-level phase0.3 flow is:
 
