@@ -9,6 +9,11 @@
     "format": "loom-bytecode",
     "storage": "embedded"
   },
+  "add_rms_norm_mul_f32_bc": {
+    "path": "artifacts/add_rms_norm_mul_f32.loombc",
+    "format": "loom-bytecode",
+    "storage": "embedded"
+  },
   "mul_mat_q8_0_f32_contiguous_bc": {
     "path": "artifacts/mul_mat_q8_0_f32_contiguous.loombc",
     "format": "loom-bytecode",

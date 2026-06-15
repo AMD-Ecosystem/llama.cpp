@@ -8,6 +8,8 @@
   "rms_norm_mul_f32_n4096_r1_vector_vw4_wg512",
   "rms_norm_mul_f32_n4096_r64_vector_vw4_wg512",
   "rms_norm_mul_f32_n4096_r512_vector_vw4_wg512",
+  "add_rms_norm_mul_f32_n3072_r1_vector_vw4_wg512",
+  "add_rms_norm_mul_f32_n4096_r1_vector_vw4_wg512",
   "rms_norm_f32_n3072_r16_vector_vw4_wg512",
   "rms_norm_f32_n4096_r1_vector_vw4_wg512",
   "rms_norm_f32_n4096_r32_scalar_wg1024",

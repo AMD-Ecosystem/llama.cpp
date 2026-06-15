@@ -5,6 +5,9 @@
   "rms_norm_mul_f32": {
     "path": "kernels/rms_norm_mul_f32.loom"
   },
+  "add_rms_norm_mul_f32": {
+    "path": "kernels/add_rms_norm_mul_f32.loom"
+  },
   "mul_mat_q8_0_f32": {
     "path": "kernels/mul_mat_q8_0_f32.loom"
   },
