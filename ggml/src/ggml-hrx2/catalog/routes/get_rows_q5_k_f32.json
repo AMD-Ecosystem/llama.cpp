@@ -1,0 +1,73 @@
+[
+  {
+    "id": "get_rows_q5_k_f32_n3584_r1_512_wg256",
+    "family": "get_rows_q5_k_f32",
+    "op": "GET_ROWS",
+    "target_key": "gfx1100",
+    "source_id": "get_rows_q5_k_f32",
+    "artifact_id": "get_rows_q5_k_f32_bc",
+    "root_symbol": "@hrx2_get_rows_q5_k_f32",
+    "export_name": "hrx2_get_rows_q5_k_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 157,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 3,
+      "constant_byte_length": 0
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ],
+      "rows_per_workgroup": 1,
+      "cols_per_workgroup": 1
+    },
+    "shape_domain": {
+      "name": "get_rows_q5_k_f32_n3584_r1_512_wg256",
+      "ncols_min": 3584,
+      "ncols_max": 3584,
+      "nrows_min": 1,
+      "nrows_max": 512
+    },
+    "shape_guards": {
+      "ncols_multiple_of": 256
+    },
+    "specialization": {
+      "mode": "jit_config",
+      "bindings": [
+        {
+          "key": "@hrx2.shape.get_rows.ncols",
+          "source": "shape.get_rows.ncols"
+        },
+        {
+          "key": "@hrx2.shape.get_rows.nrows",
+          "source": "shape.get_rows.nrows"
+        },
+        {
+          "key": "@hrx2.shape.get_rows.src0_nrows",
+          "source": "shape.get_rows.src0_nrows"
+        },
+        {
+          "key": "@hrx2.shape.get_rows.idx_row_stride",
+          "source": "shape.get_rows.idx_row_stride"
+        },
+        {
+          "key": "@hrx2.tuning.get_rows.workgroup_size",
+          "value": "256"
+        }
+      ]
+    },
+    "supports": {
+      "src0_type": "Q5_K",
+      "src1_type": "I32",
+      "dst_type": "F32",
+      "layout": "quantized_embedding_rows_1d"
+    },
+    "evidence_summary": {
+      "phase": "route-slice-47-get-rows-quant-loader-domain",
+      "ggml_cpu_reference": "required"
+    }
+  }
+]

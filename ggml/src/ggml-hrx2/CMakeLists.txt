@@ -5,6 +5,8 @@ find_package(hrx CONFIG REQUIRED)
 
 set(GGML_HRX2_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set(GGML_HRX2_ARTIFACT_ROOT "${GGML_HRX2_GENERATED_DIR}/catalog")
+set(GGML_HRX2_CATALOG_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/catalog")
+set(GGML_HRX2_ASSEMBLED_CATALOG "${GGML_HRX2_GENERATED_DIR}/catalog.json")
 set(GGML_HRX2_EMBEDDED_CPP "${GGML_HRX2_GENERATED_DIR}/hrx2_embedded_catalog.cpp")
 set(GGML_HRX2_EMBEDDED_H "${GGML_HRX2_GENERATED_DIR}/hrx2_embedded_catalog.h")
 set(GGML_HRX2_ARTIFACTS
@@ -42,6 +44,9 @@ set(GGML_HRX2_ARTIFACTS
 file(GLOB_RECURSE GGML_HRX2_LOOM_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/*.loom"
 )
+file(GLOB_RECURSE GGML_HRX2_CATALOG_PARTS CONFIGURE_DEPENDS
+    "${GGML_HRX2_CATALOG_SOURCE_DIR}/*.json"
+)
 
 get_target_property(_GGML_HRX2_HRX_LOCATION hrx::hrx IMPORTED_LOCATION_RELWITHDEBINFO)
 if(NOT _GGML_HRX2_HRX_LOCATION)
@@ -63,29 +68,42 @@ if(NOT TARGET loom::binding::c::loomc OR NOT TARGET loom::binding::c::target::am
 endif()
 
 add_custom_command(
+    OUTPUT ${GGML_HRX2_ASSEMBLED_CATALOG}
+    COMMAND
+        ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tools/assemble_hrx2_catalog.py
+        --catalog-dir ${GGML_HRX2_CATALOG_SOURCE_DIR}
+        --out ${GGML_HRX2_ASSEMBLED_CATALOG}
+    DEPENDS
+        ${GGML_HRX2_CATALOG_PARTS}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tools/assemble_hrx2_catalog.py
+    VERBATIM
+)
+
+add_custom_command(
     OUTPUT ${GGML_HRX2_ARTIFACTS}
     COMMAND
         ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/tools/validate_hrx2_catalog.py
-        --catalog ${CMAKE_CURRENT_SOURCE_DIR}/catalog.json
+        --catalog ${GGML_HRX2_ASSEMBLED_CATALOG}
         --source-root ${CMAKE_CURRENT_SOURCE_DIR}
         --artifact-root ${GGML_HRX2_ARTIFACT_ROOT}
     COMMAND
         ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/tools/link_hrx2_artifacts.py
-        --catalog ${CMAKE_CURRENT_SOURCE_DIR}/catalog.json
+        --catalog ${GGML_HRX2_ASSEMBLED_CATALOG}
         --source-root ${CMAKE_CURRENT_SOURCE_DIR}
         --artifact-root ${GGML_HRX2_ARTIFACT_ROOT}
         --loom-link ${GGML_HRX2_LOOM_LINK_EXECUTABLE}
     COMMAND
         ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/tools/validate_hrx2_catalog.py
-        --catalog ${CMAKE_CURRENT_SOURCE_DIR}/catalog.json
+        --catalog ${GGML_HRX2_ASSEMBLED_CATALOG}
         --source-root ${CMAKE_CURRENT_SOURCE_DIR}
         --artifact-root ${GGML_HRX2_ARTIFACT_ROOT}
         --require-artifacts
     DEPENDS
-        ${CMAKE_CURRENT_SOURCE_DIR}/catalog.json
+        ${GGML_HRX2_ASSEMBLED_CATALOG}
         ${GGML_HRX2_LOOM_SOURCES}
         ${CMAKE_CURRENT_SOURCE_DIR}/tools/link_hrx2_artifacts.py
         ${CMAKE_CURRENT_SOURCE_DIR}/tools/validate_hrx2_catalog.py
@@ -99,13 +117,13 @@ add_custom_command(
     COMMAND
         ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_hrx2_embedded.py
-        --catalog ${CMAKE_CURRENT_SOURCE_DIR}/catalog.json
+        --catalog ${GGML_HRX2_ASSEMBLED_CATALOG}
         --source-root ${CMAKE_CURRENT_SOURCE_DIR}
         --artifact-root ${GGML_HRX2_ARTIFACT_ROOT}
         --out-cpp ${GGML_HRX2_EMBEDDED_CPP}
         --out-h ${GGML_HRX2_EMBEDDED_H}
     DEPENDS
-        ${CMAKE_CURRENT_SOURCE_DIR}/catalog.json
+        ${GGML_HRX2_ASSEMBLED_CATALOG}
         ${GGML_HRX2_LOOM_SOURCES}
         ${GGML_HRX2_ARTIFACTS}
         ${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_hrx2_embedded.py

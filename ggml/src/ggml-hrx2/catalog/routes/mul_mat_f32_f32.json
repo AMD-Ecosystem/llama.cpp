@@ -1,0 +1,71 @@
+[
+  {
+    "id": "mul_mat_f32_f32_moe_logits_k2048_r128_c1_512_wg256",
+    "family": "mul_mat_f32_f32",
+    "op": "MUL_MAT",
+    "target_key": "",
+    "source_id": "mul_mat_f32_f32",
+    "artifact_id": "mul_mat_f32_f32_static_bc",
+    "root_symbol": "@hrx2_mul_mat_f32_f32_static",
+    "export_name": "hrx2_mul_mat_f32_f32_static",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 100,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 3,
+      "constant_byte_length": 0
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ],
+      "rows_per_workgroup": 1,
+      "cols_per_workgroup": 1
+    },
+    "shape_domain": {
+      "name": "moe_logits_k2048_r128_c1_512_wg256",
+      "k_min": 2048,
+      "k_max": 2048,
+      "rows_min": 128,
+      "rows_max": 128,
+      "cols_min": 1,
+      "cols_max": 512
+    },
+    "shape_guards": {},
+    "specialization": {
+      "mode": "jit_config",
+      "bindings": [
+        {
+          "key": "@hrx2.shape.k",
+          "source": "shape.k"
+        },
+        {
+          "key": "@hrx2.shape.rows",
+          "source": "shape.rows"
+        },
+        {
+          "key": "@hrx2.shape.cols",
+          "source": "shape.cols"
+        },
+        {
+          "key": "@hrx2.tuning.workgroup_size",
+          "value": "256"
+        }
+      ]
+    },
+    "supports": {
+      "src0_type": "F32",
+      "src1_type": "F32",
+      "dst_type": "F32",
+      "layout": "contiguous"
+    },
+    "evidence_summary": {
+      "phase": "phase1-route-slice-42-f32-f32-moe-logits",
+      "algorithm": "direct_f32_f32_one_workgroup_per_output",
+      "selection": "coverage_bucket_from_11_model_trace",
+      "ggml_cpu_reference": "required"
+    }
+  }
+]

@@ -1,0 +1,100 @@
+[
+  {
+    "id": "mul_mat_id_q4_k_f32_k768_2048_r768_2048_s8_t1_512_wg256",
+    "family": "mul_mat_id_q4_k_f32",
+    "op": "MUL_MAT_ID",
+    "target_key": "",
+    "source_id": "mul_mat_id_q4_k_f32",
+    "artifact_id": "mul_mat_id_q4_k_f32_static_bc",
+    "root_symbol": "@hrx2_mul_mat_id_q4_k_f32_static",
+    "export_name": "hrx2_mul_mat_id_q4_k_f32_static",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 110,
+    "abi": {
+      "binding_count": 4,
+      "parameter_count": 4,
+      "constant_byte_length": 0
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ],
+      "rows_per_workgroup": 1,
+      "cols_per_workgroup": 1
+    },
+    "shape_domain": {
+      "name": "mul_mat_id_q4_k_f32_k768_2048_r768_2048_s8_t1_512_wg256",
+      "k_min": 768,
+      "k_max": 2048,
+      "rows_min": 768,
+      "rows_max": 2048,
+      "cols_min": 8,
+      "cols_max": 8,
+      "nrows_min": 1,
+      "nrows_max": 512
+    },
+    "shape_guards": {
+      "k_multiple_of": 256
+    },
+    "specialization": {
+      "mode": "jit_config",
+      "bindings": [
+        {
+          "key": "@hrx2.shape.mul_mat_id.k",
+          "source": "shape.mul_mat_id.k"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_id.rows",
+          "source": "shape.mul_mat_id.rows"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_id.nexperts",
+          "source": "shape.mul_mat_id.nexperts"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_id.nselected",
+          "source": "shape.mul_mat_id.nselected"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_id.ntokens",
+          "source": "shape.mul_mat_id.ntokens"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_id.src1_selected_stride",
+          "source": "shape.mul_mat_id.src1_selected_stride"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_id.src1_token_stride",
+          "source": "shape.mul_mat_id.src1_token_stride"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_id.idx_token_stride",
+          "source": "shape.mul_mat_id.idx_token_stride"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_id.dst_token_stride",
+          "source": "shape.mul_mat_id.dst_token_stride"
+        },
+        {
+          "key": "@hrx2.tuning.mul_mat_id.workgroup_size",
+          "value": "256"
+        }
+      ]
+    },
+    "supports": {
+      "src0_type": "Q4_K",
+      "src1_type": "F32",
+      "src2_type": "I32",
+      "dst_type": "F32",
+      "layout": "q4_k_expert_planes_rhs_token_or_selected_rows"
+    },
+    "evidence_summary": {
+      "phase": "phase1-route-slice-38-mul-mat-id-q4",
+      "algorithm": "direct_q4k_f32_four_values_per_lane_with_id_selected_expert_plane",
+      "selection": "coverage_bucket_from_11_model_trace",
+      "ggml_cpu_reference": "required"
+    }
+  }
+]

@@ -1,13 +1,16 @@
 # HRX2 backend catalog
 
-HRX2 kernel authoring uses checked-in Loom source and JSON route metadata as the
-source of truth. The build generates embedded C++ data from these files so
-production binaries are hermetic, while development can point the backend at an
-exploded catalog with `GGML_HRX2_CATALOG_DIR`.
+HRX2 kernel authoring uses checked-in Loom source and split JSON catalog
+metadata as the source of truth. The build assembles those small files into the
+single catalog JSON consumed by validation, artifact linking, embedding, and
+runtime loading. Production binaries remain hermetic, while development can
+point the backend at an exploded assembled catalog with `GGML_HRX2_CATALOG_DIR`.
 
-- `catalog.json` describes targets, route IDs, priorities, source IDs, bytecode
-  artifact IDs, exported symbols, ABI expectations, shape domains, optional
-  shape guards, optional JIT config bindings, and dispatch defaults.
+- `catalog/` contains metadata, targets, sources, artifacts, families, route
+  files by family, and fusion candidate files.
+- `tools/assemble_hrx2_catalog.py` deterministically assembles `catalog/` into
+  the monolithic `ggml-hrx2-catalog-v1` JSON shape used by existing tooling and
+  the runtime.
 - `kernels/*.loom` contains standalone Loom kernels with checks and benchmarks.
 - `tools/link_hrx2_artifacts.py` uses `loom-link --mode=selective` to produce
   per-route Loom bytecode artifacts in the build tree.
@@ -19,14 +22,20 @@ exploded catalog with `GGML_HRX2_CATALOG_DIR`.
   HRX2 compiles this local shim directly against the Loom C API CMake targets
   exported by the HRX package.
 
-During development, copy or edit this directory shape on disk and run with:
+During development, assemble a catalog directory containing `catalog.json` and
+run with:
 
 ```sh
+python3 ggml/src/ggml-hrx2/tools/assemble_hrx2_catalog.py \
+  --catalog-dir ggml/src/ggml-hrx2/catalog \
+  --out /path/to/catalog/catalog.json
 GGML_HRX2_CATALOG_DIR=/path/to/catalog ...
 ```
 
-The disk catalog is intentionally isomorphic to the embedded catalog so the same
-metadata can drive Loom validation, offline tuning, and llama.cpp execution.
+The assembled disk catalog is intentionally isomorphic to the embedded catalog
+so the same metadata can drive Loom validation, offline tuning, and llama.cpp
+execution. Source editing should happen in split files under `catalog/`, not in
+a generated monolithic JSON file.
 
 The runtime prefers `loom-bytecode` artifacts when present and falls back to
 Loom text otherwise. For an exploded dev catalog, copy this directory shape plus

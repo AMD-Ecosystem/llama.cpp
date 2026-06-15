@@ -1,0 +1,179 @@
+[
+  {
+    "id": "scale_f32_generic_wg256",
+    "family": "scale_f32",
+    "op": "SCALE",
+    "target_key": "",
+    "source_id": "pointwise_f32",
+    "artifact_id": "pointwise_f32_bc",
+    "root_symbol": "@hrx2_scale_f32",
+    "export_name": "hrx2_scale_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 2,
+      "parameter_count": 4,
+      "constant_byte_length": 8
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ],
+      "rows_per_workgroup": 1,
+      "cols_per_workgroup": 1
+    },
+    "shape_domain": {
+      "name": "scale_f32_generic",
+      "ncols_min": 1,
+      "ncols_max": 65536,
+      "nrows_min": 1,
+      "nrows_max": 1048576
+    },
+    "specialization": {
+      "mode": "jit_config",
+      "bindings": [
+        {
+          "key": "@hrx2.shape.pointwise.ncols",
+          "source": "shape.ncols"
+        },
+        {
+          "key": "@hrx2.shape.pointwise.nrows",
+          "source": "shape.nrows"
+        },
+        {
+          "key": "@hrx2.tuning.pointwise.workgroup_size",
+          "value": "256"
+        }
+      ]
+    },
+    "supports": {
+      "src0_type": "F32",
+      "dst_type": "F32",
+      "layout": "contiguous"
+    },
+    "evidence_summary": {
+      "phase": "phase1_0_unit_coverage",
+      "ggml_cpu_reference": "required"
+    }
+  },
+  {
+    "id": "scale_f32_n128_r24_wg256",
+    "family": "scale_f32",
+    "op": "SCALE",
+    "target_key": "",
+    "source_id": "pointwise_f32",
+    "artifact_id": "pointwise_f32_bc",
+    "root_symbol": "@hrx2_scale_f32",
+    "export_name": "hrx2_scale_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 100,
+    "abi": {
+      "binding_count": 2,
+      "parameter_count": 4,
+      "constant_byte_length": 8
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ],
+      "rows_per_workgroup": 1,
+      "cols_per_workgroup": 1
+    },
+    "shape_domain": {
+      "name": "scale_f32_n128_r24",
+      "ncols_min": 128,
+      "ncols_max": 128,
+      "nrows_min": 24,
+      "nrows_max": 24
+    },
+    "specialization": {
+      "mode": "jit_config",
+      "bindings": [
+        {
+          "key": "@hrx2.shape.pointwise.ncols",
+          "source": "shape.ncols"
+        },
+        {
+          "key": "@hrx2.shape.pointwise.nrows",
+          "source": "shape.nrows"
+        },
+        {
+          "key": "@hrx2.tuning.pointwise.workgroup_size",
+          "value": "256"
+        }
+      ]
+    },
+    "supports": {
+      "src0_type": "F32",
+      "dst_type": "F32",
+      "layout": "contiguous"
+    },
+    "evidence_summary": {
+      "phase": "phase1_0_phi4_smoke",
+      "ggml_cpu_reference": "required"
+    }
+  },
+  {
+    "id": "scale_f32_n128_r384_wg256",
+    "family": "scale_f32",
+    "op": "SCALE",
+    "target_key": "",
+    "source_id": "pointwise_f32",
+    "artifact_id": "pointwise_f32_bc",
+    "root_symbol": "@hrx2_scale_f32",
+    "export_name": "hrx2_scale_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 100,
+    "abi": {
+      "binding_count": 2,
+      "parameter_count": 4,
+      "constant_byte_length": 8
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ],
+      "rows_per_workgroup": 1,
+      "cols_per_workgroup": 1
+    },
+    "shape_domain": {
+      "name": "scale_f32_n128_r384",
+      "ncols_min": 128,
+      "ncols_max": 128,
+      "nrows_min": 384,
+      "nrows_max": 384
+    },
+    "specialization": {
+      "mode": "jit_config",
+      "bindings": [
+        {
+          "key": "@hrx2.shape.pointwise.ncols",
+          "source": "shape.ncols"
+        },
+        {
+          "key": "@hrx2.shape.pointwise.nrows",
+          "source": "shape.nrows"
+        },
+        {
+          "key": "@hrx2.tuning.pointwise.workgroup_size",
+          "value": "256"
+        }
+      ]
+    },
+    "supports": {
+      "src0_type": "F32",
+      "dst_type": "F32",
+      "layout": "contiguous"
+    },
+    "evidence_summary": {
+      "phase": "phase1_0_phi4_smoke",
+      "ggml_cpu_reference": "required"
+    }
+  }
+]

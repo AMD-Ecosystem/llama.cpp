@@ -1,0 +1,118 @@
+[
+  {
+    "family": "rms_norm_f32",
+    "op": "RMS_NORM"
+  },
+  {
+    "family": "mul_mat_q8_0_f32",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_f16_f32_batched",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_f32_f32",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_q4_k_f32",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_id_q4_k_f32",
+    "op": "MUL_MAT_ID"
+  },
+  {
+    "family": "mul_mat_q5_k_f32",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_q6_k_f32",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "cont_f32",
+    "op": "CONT"
+  },
+  {
+    "family": "swiglu_f32",
+    "op": "GLU"
+  },
+  {
+    "family": "set_rows_f32",
+    "op": "SET_ROWS"
+  },
+  {
+    "family": "add_f32",
+    "op": "ADD"
+  },
+  {
+    "family": "mul_f32",
+    "op": "MUL"
+  },
+  {
+    "family": "scale_f32",
+    "op": "SCALE"
+  },
+  {
+    "family": "div_f32",
+    "op": "DIV"
+  },
+  {
+    "family": "clamp_f32",
+    "op": "CLAMP"
+  },
+  {
+    "family": "sum_rows_f32",
+    "op": "SUM_ROWS"
+  },
+  {
+    "family": "get_rows_f32",
+    "op": "GET_ROWS"
+  },
+  {
+    "family": "get_rows_moe_weights_f32",
+    "op": "GET_ROWS"
+  },
+  {
+    "family": "argsort_f32_i32",
+    "op": "ARGSORT"
+  },
+  {
+    "family": "rope_f32",
+    "op": "ROPE"
+  },
+  {
+    "family": "rope_neox_f32",
+    "op": "ROPE"
+  },
+  {
+    "family": "soft_max_f32",
+    "op": "SOFT_MAX"
+  },
+  {
+    "family": "mul_mat_id_q5_k_f32",
+    "op": "MUL_MAT_ID"
+  },
+  {
+    "family": "mul_mat_id_q6_k_f32",
+    "op": "MUL_MAT_ID"
+  },
+  {
+    "family": "get_rows_q8_0_f32",
+    "op": "GET_ROWS"
+  },
+  {
+    "family": "get_rows_q6_k_f32",
+    "op": "GET_ROWS"
+  },
+  {
+    "family": "get_rows_q4_k_f32",
+    "op": "GET_ROWS"
+  },
+  {
+    "family": "get_rows_q5_k_f32",
+    "op": "GET_ROWS"
+  }
+]

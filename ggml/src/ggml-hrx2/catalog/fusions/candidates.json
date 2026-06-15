@@ -1,0 +1,168 @@
+[
+  {
+    "id": "candidate_multi_add",
+    "status": "candidate",
+    "ops": [
+      "ADD",
+      "ADD"
+    ],
+    "regimes": [
+      "decode",
+      "narrow_prompt",
+      "prefill"
+    ],
+    "source": "dataflow_and_prior_art",
+    "expected_benefit": "Collapse repeated residual/bias accumulation chains when source fanout is single-consumer, avoiding intermediate F32 writes and repeated launches.",
+    "acceptance": "Accept variable-length variants only when the measured fused chain beats the best same-shape unfused ADD chain, with route selection preserving the unfused fallback for high-fanout or aliasing cases."
+  },
+  {
+    "id": "candidate_rms_norm_mul",
+    "status": "candidate",
+    "ops": [
+      "RMS_NORM",
+      "MUL"
+    ],
+    "regimes": [
+      "decode",
+      "narrow_prompt",
+      "prefill"
+    ],
+    "source": "prior_art_and_dataflow",
+    "expected_benefit": "Eliminate one F32 normalized-vector materialization and one dispatch for common norm-weight application.",
+    "acceptance": "Accept only with same-target, same-shape fused time below best measured unfused RMS_NORM plus MUL time."
+  },
+  {
+    "id": "candidate_attention_matmul_softmax_matmul",
+    "status": "candidate",
+    "ops": [
+      "MUL_MAT",
+      "SOFT_MAX",
+      "MUL_MAT"
+    ],
+    "regimes": [
+      "decode",
+      "narrow_prompt",
+      "prefill"
+    ],
+    "source": "dataflow",
+    "expected_benefit": "Reduce attention intermediate traffic and dispatch count for the common QK-softmax-V motif; likely has distinct decode and prompt implementations.",
+    "acceptance": "Accept only after direct-dispatch/compiler stability is verified for attention-adjacent routes and same-run evidence shows the fused route beats the best unfused chain for each prompt/decode bucket."
+  },
+  {
+    "id": "candidate_ffn_matvec_glu_epilogue",
+    "status": "candidate",
+    "ops": [
+      "MUL_MAT",
+      "GLU"
+    ],
+    "regimes": [
+      "decode",
+      "narrow_prompt",
+      "prefill"
+    ],
+    "source": "dataflow_and_prior_art",
+    "expected_benefit": "Fuse quantized FFN matvec outputs with GLU-style activation/gating epilogues where graph layout keeps the produced vector single-consumer.",
+    "acceptance": "Accept per quant/layout/shape bucket only when fused time beats the best unfused matvec plus activation/epilogue chain and CPU-reference backend op tests cover activation edge cases."
+  },
+  {
+    "id": "candidate_moe_matvec_glu_epilogue",
+    "status": "candidate",
+    "ops": [
+      "MUL_MAT_ID",
+      "GLU",
+      "MUL_MAT_ID"
+    ],
+    "regimes": [
+      "decode",
+      "narrow_prompt",
+      "prefill"
+    ],
+    "source": "dataflow_and_prior_art",
+    "expected_benefit": "Fuse MoE routed matvec chains with gate/activation epilogues for models where selected expert rows keep the chain local.",
+    "acceptance": "Accept only for route-density and expert-count buckets proven in basket traces, with unfused fallback retained for sparse or high-fanout cases."
+  },
+  {
+    "id": "candidate_mul_mat_add",
+    "status": "candidate",
+    "ops": [
+      "MUL_MAT",
+      "ADD"
+    ],
+    "regimes": [
+      "decode",
+      "narrow_prompt",
+      "prefill"
+    ],
+    "source": "prior_art_and_dataflow",
+    "expected_benefit": "Fold bias/add epilogue into hot matmul routes and avoid materializing the unfused matmul output.",
+    "acceptance": "Accept per quant/layout/shape bucket only when measured fused time beats best measured unfused MUL_MAT plus ADD."
+  },
+  {
+    "id": "candidate_mul_mat_id_add_id_mul",
+    "status": "candidate",
+    "ops": [
+      "MUL_MAT_ID",
+      "ADD_ID",
+      "MUL"
+    ],
+    "regimes": [
+      "decode",
+      "narrow_prompt",
+      "prefill"
+    ],
+    "source": "prior_art_and_dataflow",
+    "expected_benefit": "Fold MoE expert bias and scale/gate epilogues into routed matvec work where graph layout permits.",
+    "acceptance": "Accept only for measured MoE route-density buckets where fused time beats best unfused route chain."
+  },
+  {
+    "id": "candidate_rms_norm_mul_rope",
+    "status": "candidate_deferred",
+    "ops": [
+      "RMS_NORM",
+      "MUL",
+      "ROPE"
+    ],
+    "regimes": [
+      "decode",
+      "narrow_prompt",
+      "prefill"
+    ],
+    "source": "prior_art_and_dataflow",
+    "expected_benefit": "Avoid normalized/scaled Q/K vector materialization before position encoding.",
+    "acceptance": "Defer route enablement until the Loom direct-dispatch binding fix is finalized and attention-adjacent backend op tests are stable."
+  },
+  {
+    "id": "candidate_rope_view_set_rows",
+    "status": "candidate_deferred",
+    "ops": [
+      "ROPE",
+      "VIEW",
+      "SET_ROWS"
+    ],
+    "regimes": [
+      "decode",
+      "narrow_prompt",
+      "prefill"
+    ],
+    "source": "prior_art_and_dataflow",
+    "expected_benefit": "Reduce KV-cache update traffic and host-orchestration SET_ROWS overhead.",
+    "acceptance": "Treat as infrastructure/fusion work, not Phase 2 tranche-1 route acceptance."
+  },
+  {
+    "id": "candidate_topk_moe",
+    "status": "candidate",
+    "ops": [
+      "SOFT_MAX",
+      "ARGSORT",
+      "GET_ROWS"
+    ],
+    "regimes": [
+      "decode",
+      "narrow_prompt",
+      "prefill"
+    ],
+    "source": "prior_art",
+    "expected_benefit": "Collapse MoE selection pipeline variants when model graph shape and masks match.",
+    "acceptance": "Accept only after basket dataflow proves a matching motif and focused correctness covers selected MoE rows."
+  }
+]

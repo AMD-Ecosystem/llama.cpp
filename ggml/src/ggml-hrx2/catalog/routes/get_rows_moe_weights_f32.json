@@ -1,0 +1,230 @@
+[
+  {
+    "id": "get_rows_moe_weights_f32_ne128_k8_t1_wg256",
+    "family": "get_rows_moe_weights_f32",
+    "op": "GET_ROWS",
+    "target_key": "",
+    "source_id": "get_rows_moe_weights_f32",
+    "artifact_id": "get_rows_moe_weights_f32_bc",
+    "root_symbol": "@hrx2_get_rows_moe_weights_f32",
+    "export_name": "hrx2_get_rows_moe_weights_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 157,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 3,
+      "constant_byte_length": 0
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ],
+      "rows_per_workgroup": 1,
+      "cols_per_workgroup": 1
+    },
+    "shape_domain": {
+      "name": "get_rows_moe_weights_f32_ne128_k8_t1_wg256",
+      "ncols_min": 8,
+      "ncols_max": 8,
+      "nrows_min": 1,
+      "nrows_max": 1
+    },
+    "specialization": {
+      "mode": "jit_config",
+      "bindings": [
+        {
+          "key": "@hrx2.shape.get_rows_moe.nexperts",
+          "source": "shape.get_rows_moe.nexperts"
+        },
+        {
+          "key": "@hrx2.shape.get_rows_moe.nselected",
+          "source": "shape.get_rows_moe.nselected"
+        },
+        {
+          "key": "@hrx2.shape.get_rows_moe.ntokens",
+          "source": "shape.get_rows_moe.ntokens"
+        },
+        {
+          "key": "@hrx2.shape.get_rows_moe.src0_token_stride",
+          "source": "shape.get_rows_moe.src0_token_stride"
+        },
+        {
+          "key": "@hrx2.shape.get_rows_moe.idx_token_stride",
+          "source": "shape.get_rows_moe.idx_token_stride"
+        },
+        {
+          "key": "@hrx2.shape.get_rows_moe.dst_token_stride",
+          "source": "shape.get_rows_moe.dst_token_stride"
+        },
+        {
+          "key": "@hrx2.tuning.get_rows_moe.workgroup_size",
+          "value": "256"
+        }
+      ]
+    },
+    "supports": {
+      "src0_type": "F32",
+      "src1_type": "I32",
+      "dst_type": "F32",
+      "layout": "moe_weights_topk_view"
+    },
+    "evidence_summary": {
+      "phase": "phase1-route-slice-28",
+      "ggml_cpu_reference": "required"
+    }
+  },
+  {
+    "id": "get_rows_moe_weights_f32_ne128_k8_t16_wg256",
+    "family": "get_rows_moe_weights_f32",
+    "op": "GET_ROWS",
+    "target_key": "",
+    "source_id": "get_rows_moe_weights_f32",
+    "artifact_id": "get_rows_moe_weights_f32_bc",
+    "root_symbol": "@hrx2_get_rows_moe_weights_f32",
+    "export_name": "hrx2_get_rows_moe_weights_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 157,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 3,
+      "constant_byte_length": 0
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ],
+      "rows_per_workgroup": 1,
+      "cols_per_workgroup": 1
+    },
+    "shape_domain": {
+      "name": "get_rows_moe_weights_f32_ne128_k8_t16_wg256",
+      "ncols_min": 8,
+      "ncols_max": 8,
+      "nrows_min": 16,
+      "nrows_max": 16
+    },
+    "specialization": {
+      "mode": "jit_config",
+      "bindings": [
+        {
+          "key": "@hrx2.shape.get_rows_moe.nexperts",
+          "source": "shape.get_rows_moe.nexperts"
+        },
+        {
+          "key": "@hrx2.shape.get_rows_moe.nselected",
+          "source": "shape.get_rows_moe.nselected"
+        },
+        {
+          "key": "@hrx2.shape.get_rows_moe.ntokens",
+          "source": "shape.get_rows_moe.ntokens"
+        },
+        {
+          "key": "@hrx2.shape.get_rows_moe.src0_token_stride",
+          "source": "shape.get_rows_moe.src0_token_stride"
+        },
+        {
+          "key": "@hrx2.shape.get_rows_moe.idx_token_stride",
+          "source": "shape.get_rows_moe.idx_token_stride"
+        },
+        {
+          "key": "@hrx2.shape.get_rows_moe.dst_token_stride",
+          "source": "shape.get_rows_moe.dst_token_stride"
+        },
+        {
+          "key": "@hrx2.tuning.get_rows_moe.workgroup_size",
+          "value": "256"
+        }
+      ]
+    },
+    "supports": {
+      "src0_type": "F32",
+      "src1_type": "I32",
+      "dst_type": "F32",
+      "layout": "moe_weights_topk_view"
+    },
+    "evidence_summary": {
+      "phase": "phase1-route-slice-28",
+      "ggml_cpu_reference": "required"
+    }
+  },
+  {
+    "id": "get_rows_moe_weights_f32_ne128_k8_t64_wg256",
+    "family": "get_rows_moe_weights_f32",
+    "op": "GET_ROWS",
+    "target_key": "",
+    "source_id": "get_rows_moe_weights_f32",
+    "artifact_id": "get_rows_moe_weights_f32_bc",
+    "root_symbol": "@hrx2_get_rows_moe_weights_f32",
+    "export_name": "hrx2_get_rows_moe_weights_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 157,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 3,
+      "constant_byte_length": 0
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ],
+      "rows_per_workgroup": 1,
+      "cols_per_workgroup": 1
+    },
+    "shape_domain": {
+      "name": "get_rows_moe_weights_f32_ne128_k8_t64_wg256",
+      "ncols_min": 8,
+      "ncols_max": 8,
+      "nrows_min": 64,
+      "nrows_max": 64
+    },
+    "specialization": {
+      "mode": "jit_config",
+      "bindings": [
+        {
+          "key": "@hrx2.shape.get_rows_moe.nexperts",
+          "source": "shape.get_rows_moe.nexperts"
+        },
+        {
+          "key": "@hrx2.shape.get_rows_moe.nselected",
+          "source": "shape.get_rows_moe.nselected"
+        },
+        {
+          "key": "@hrx2.shape.get_rows_moe.ntokens",
+          "source": "shape.get_rows_moe.ntokens"
+        },
+        {
+          "key": "@hrx2.shape.get_rows_moe.src0_token_stride",
+          "source": "shape.get_rows_moe.src0_token_stride"
+        },
+        {
+          "key": "@hrx2.shape.get_rows_moe.idx_token_stride",
+          "source": "shape.get_rows_moe.idx_token_stride"
+        },
+        {
+          "key": "@hrx2.shape.get_rows_moe.dst_token_stride",
+          "source": "shape.get_rows_moe.dst_token_stride"
+        },
+        {
+          "key": "@hrx2.tuning.get_rows_moe.workgroup_size",
+          "value": "256"
+        }
+      ]
+    },
+    "supports": {
+      "src0_type": "F32",
+      "src1_type": "I32",
+      "dst_type": "F32",
+      "layout": "moe_weights_topk_view"
+    },
+    "evidence_summary": {
+      "phase": "phase1-route-slice-28",
+      "ggml_cpu_reference": "required"
+    }
+  }
+]

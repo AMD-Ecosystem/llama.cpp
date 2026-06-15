@@ -1,0 +1,11 @@
+{
+  "schema": "ggml-hrx2-catalog-v1",
+  "catalog_id": "hrx2-phase0.5",
+  "generated_at": "source",
+  "targets": [
+    {
+      "target_key": "gfx1100",
+      "target_variant": null
+    }
+  ]
+}

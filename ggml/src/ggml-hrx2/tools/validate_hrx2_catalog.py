@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Validate the HRX2 phase0.1 catalog.")
+    parser = argparse.ArgumentParser(description="Validate the HRX2 catalog.")
     parser.add_argument("--catalog", required=True, type=Path)
     parser.add_argument("--source-root", required=True, type=Path)
     parser.add_argument("--artifact-root", type=Path)
@@ -32,9 +32,11 @@ def main():
     sources = catalog.get("sources")
     artifacts = catalog.get("artifacts")
     routes = catalog.get("routes")
+    fusions = catalog.get("fusions", [])
     require(isinstance(sources, dict), "sources must be an object")
     require(isinstance(artifacts, dict), "artifacts must be an object")
     require(isinstance(routes, list), "routes must be an array")
+    require(isinstance(fusions, list), "fusions must be an array")
 
     for source_id, source in sources.items():
         require(isinstance(source, dict), f"source {source_id} must be an object")
@@ -204,6 +206,26 @@ def main():
                         ),
                         f"route {route_id} binding has unsupported source {binding.get('source')}",
                     )
+
+    fusion_ids = set()
+    for fusion in fusions:
+        require(isinstance(fusion, dict), "fusion entries must be objects")
+        fusion_id = fusion.get("id")
+        require(fusion_id and fusion_id not in fusion_ids, "fusion id must be present and unique")
+        fusion_ids.add(fusion_id)
+        require(
+            fusion.get("status") in ("candidate", "candidate_deferred", "rejected", "accepted"),
+            f"fusion {fusion_id} has unsupported status",
+        )
+        ops = fusion.get("ops")
+        require(isinstance(ops, list) and len(ops) >= 2, f"fusion {fusion_id} ops must contain at least two ops")
+        require(all(isinstance(op, str) and op for op in ops), f"fusion {fusion_id} ops must be non-empty strings")
+        regimes = fusion.get("regimes", [])
+        require(isinstance(regimes, list), f"fusion {fusion_id} regimes must be an array")
+        require(
+            fusion.get("status") != "accepted" or fusion.get("evidence"),
+            f"accepted fusion {fusion_id} must include evidence",
+        )
 
 
 if __name__ == "__main__":

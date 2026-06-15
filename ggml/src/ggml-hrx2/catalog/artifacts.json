@@ -1,0 +1,158 @@
+{
+  "rms_norm_f32_bc": {
+    "path": "artifacts/rms_norm_f32.loombc",
+    "format": "loom-bytecode",
+    "storage": "embedded"
+  },
+  "mul_mat_q8_0_f32_contiguous_bc": {
+    "path": "artifacts/mul_mat_q8_0_f32_contiguous.loombc",
+    "format": "loom-bytecode",
+    "storage": "embedded"
+  },
+  "mul_mat_q8_0_f32_static_bc": {
+    "path": "artifacts/mul_mat_q8_0_f32_static.loombc",
+    "format": "loom-bytecode",
+    "storage": "embedded"
+  },
+  "mul_mat_q8_0_f32_static_packed_bc": {
+    "path": "artifacts/mul_mat_q8_0_f32_static_packed.loombc",
+    "format": "loom-bytecode",
+    "storage": "embedded"
+  },
+  "mul_mat_q8_0_f32_static_packed_scf_unroll_bc": {
+    "path": "artifacts/mul_mat_q8_0_f32_static_packed_scf_unroll.loombc",
+    "format": "loom-bytecode",
+    "storage": "embedded"
+  },
+  "cont_f32_bc": {
+    "path": "artifacts/cont_f32.loombc",
+    "format": "loom-bytecode",
+    "storage": "embedded"
+  },
+  "swiglu_f32_bc": {
+    "path": "artifacts/swiglu_f32.loombc",
+    "format": "loom-bytecode",
+    "storage": "embedded"
+  },
+  "set_rows_f32_bc": {
+    "path": "artifacts/set_rows_f32.loombc",
+    "format": "loom-bytecode",
+    "storage": "embedded"
+  },
+  "pointwise_f32_bc": {
+    "path": "artifacts/pointwise_f32.loombc",
+    "format": "loom-bytecode",
+    "storage": "embedded"
+  },
+  "sum_rows_f32_bc": {
+    "path": "artifacts/sum_rows_f32.loombc",
+    "format": "loom-bytecode",
+    "storage": "embedded"
+  },
+  "get_rows_f32_bc": {
+    "path": "artifacts/get_rows_f32.loombc",
+    "format": "loom-bytecode",
+    "storage": "embedded"
+  },
+  "get_rows_moe_weights_f32_bc": {
+    "path": "artifacts/get_rows_moe_weights_f32.loombc",
+    "format": "loom-bytecode",
+    "storage": "embedded"
+  },
+  "argsort_f32_i32_bc": {
+    "path": "artifacts/argsort_f32_i32.loombc",
+    "format": "loom-bytecode",
+    "storage": "embedded"
+  },
+  "rope_neox_f32_bc": {
+    "path": "artifacts/rope_neox_f32.loombc",
+    "format": "loom-bytecode",
+    "storage": "embedded"
+  },
+  "rope_normal_f32_bc": {
+    "path": "artifacts/rope_normal_f32.loombc",
+    "format": "loom-bytecode",
+    "storage": "embedded"
+  },
+  "soft_max_f32_bc": {
+    "path": "artifacts/soft_max_f32.loombc",
+    "format": "loom-bytecode",
+    "storage": "embedded"
+  },
+  "mul_mat_f16_f32_batched_bc": {
+    "path": "artifacts/mul_mat_f16_f32_batched.loombc",
+    "format": "loom-bytecode",
+    "storage": "embedded"
+  },
+  "mul_mat_q4_k_f32_static_bc": {
+    "path": "artifacts/mul_mat_q4_k_f32_static.loombc",
+    "format": "loom-bytecode",
+    "source_id": "mul_mat_q4_k_f32",
+    "storage": "embedded"
+  },
+  "mul_mat_q5_k_f32_static_bc": {
+    "path": "artifacts/mul_mat_q5_k_f32_static.loombc",
+    "format": "loom-bytecode",
+    "source_id": "mul_mat_q5_k_f32",
+    "storage": "embedded"
+  },
+  "mul_mat_q6_k_f32_static_bc": {
+    "path": "artifacts/mul_mat_q6_k_f32_static.loombc",
+    "format": "loom-bytecode",
+    "source_id": "mul_mat_q6_k_f32",
+    "storage": "embedded"
+  },
+  "rope_neox_f32_freq_bc": {
+    "path": "artifacts/rope_neox_f32_freq.loombc",
+    "format": "loom-bytecode",
+    "storage": "embedded",
+    "source_id": "rope_neox_f32_freq"
+  },
+  "rope_normal_f32_freq_bc": {
+    "path": "artifacts/rope_normal_f32_freq.loombc",
+    "format": "loom-bytecode",
+    "storage": "embedded",
+    "source_id": "rope_neox_f32_freq"
+  },
+  "mul_mat_id_q4_k_f32_static_bc": {
+    "path": "artifacts/mul_mat_id_q4_k_f32_static.loombc",
+    "format": "loom-bytecode",
+    "storage": "embedded"
+  },
+  "mul_mat_id_q5_k_f32_static_bc": {
+    "path": "artifacts/mul_mat_id_q5_k_f32_static.loombc",
+    "format": "loom-bytecode",
+    "storage": "embedded"
+  },
+  "mul_mat_id_q6_k_f32_static_bc": {
+    "path": "artifacts/mul_mat_id_q6_k_f32_static.loombc",
+    "format": "loom-bytecode",
+    "storage": "embedded"
+  },
+  "mul_mat_f32_f32_static_bc": {
+    "path": "artifacts/mul_mat_f32_f32_static.loombc",
+    "format": "loom-bytecode",
+    "source_id": "mul_mat_f32_f32",
+    "storage": "embedded"
+  },
+  "get_rows_q8_0_f32_bc": {
+    "path": "artifacts/get_rows_q8_0_f32.loombc",
+    "format": "loom-bytecode",
+    "storage": "embedded"
+  },
+  "get_rows_q6_k_f32_bc": {
+    "path": "artifacts/get_rows_q6_k_f32.loombc",
+    "format": "loom-bytecode",
+    "storage": "embedded"
+  },
+  "get_rows_q4_k_f32_bc": {
+    "path": "artifacts/get_rows_q4_k_f32.loombc",
+    "format": "loom-bytecode",
+    "storage": "embedded"
+  },
+  "get_rows_q5_k_f32_bc": {
+    "path": "artifacts/get_rows_q5_k_f32.loombc",
+    "format": "loom-bytecode",
+    "storage": "embedded"
+  }
+}
