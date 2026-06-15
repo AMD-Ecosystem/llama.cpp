@@ -45,6 +45,12 @@
     "format": "loom-bytecode",
     "storage": "embedded"
   },
+  "copy_f32_f16_bc": {
+    "path": "artifacts/copy_f32_f16.loombc",
+    "format": "loom-bytecode",
+    "source_id": "copy_f32_f16",
+    "storage": "embedded"
+  },
   "swiglu_f32_bc": {
     "path": "artifacts/swiglu_f32.loombc",
     "format": "loom-bytecode",

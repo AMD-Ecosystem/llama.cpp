@@ -28,6 +28,10 @@
     "op": "MUL_MAT"
   },
   {
+    "family": "copy_f32_f16",
+    "op": "CPY"
+  },
+  {
     "family": "mul_mat_q4_k_f32",
     "op": "MUL_MAT"
   },

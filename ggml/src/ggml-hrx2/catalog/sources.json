@@ -17,6 +17,9 @@
   "mul_mat_f32_f32": {
     "path": "kernels/mul_mat_f32_f32.loom"
   },
+  "copy_f32_f16": {
+    "path": "kernels/copy_f32_f16.loom"
+  },
   "cont_f32": {
     "path": "kernels/cont_f32.loom"
   },

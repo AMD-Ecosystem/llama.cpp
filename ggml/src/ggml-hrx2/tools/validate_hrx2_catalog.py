@@ -113,6 +113,7 @@ def main():
                             "shape.cols",
                             "shape.ncols",
                             "shape.nrows",
+                            "shape.copy.n",
                             "shape.pointwise.src0_row_stride",
                             "shape.pointwise.src1_row_stride",
                             "shape.pointwise.src1_ncols",

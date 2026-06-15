@@ -1,0 +1,57 @@
+[
+  {
+    "id": "copy_f32_f16_generic_wg256",
+    "family": "copy_f32_f16",
+    "op": "CPY",
+    "target_key": "",
+    "source_id": "copy_f32_f16",
+    "artifact_id": "copy_f32_f16_bc",
+    "root_symbol": "@hrx2_copy_f32_f16",
+    "export_name": "hrx2_copy_f32_f16",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 2,
+      "parameter_count": 2,
+      "constant_byte_length": 0
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ],
+      "rows_per_workgroup": 1,
+      "cols_per_workgroup": 1
+    },
+    "shape_domain": {
+      "name": "copy_f32_f16_generic",
+      "ncols_min": 1,
+      "ncols_max": 1073741824,
+      "nrows_min": 1,
+      "nrows_max": 1
+    },
+    "specialization": {
+      "mode": "jit_config",
+      "bindings": [
+        {
+          "key": "@hrx2.shape.copy.n",
+          "source": "shape.copy.n"
+        },
+        {
+          "key": "@hrx2.tuning.copy.workgroup_size",
+          "value": "256"
+        }
+      ]
+    },
+    "supports": {
+      "src0_type": "F32",
+      "dst_type": "F16",
+      "layout": "contiguous_src_to_contiguous_dst"
+    },
+    "evidence_summary": {
+      "phase": "phase2a_runtime_parity",
+      "hrx1_reference": "ggml-hrx/kernels/copy_f32_f16.hip.cpp"
+    }
+  }
+]
