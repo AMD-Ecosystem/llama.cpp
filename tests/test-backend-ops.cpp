@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cfloat>
 #include <cinttypes>
 #include <cstdarg>
@@ -148,6 +149,21 @@ static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float m
     } else {
         GGML_ABORT("fatal error");
     }
+}
+
+static int64_t getenv_i64_or_default(const char * name, int64_t default_value) {
+    const char * value = std::getenv(name);
+    if (value == nullptr || value[0] == '\0') {
+        return default_value;
+    }
+
+    char * end = nullptr;
+    errno = 0;
+    long long parsed = std::strtoll(value, &end, 10);
+    if (errno != 0 || end == value || *end != '\0' || parsed <= 0) {
+        return default_value;
+    }
+    return static_cast<int64_t>(parsed);
 }
 
 // generate an F16 mask where certain blocks are randomly masked with -INF value
@@ -1091,6 +1107,11 @@ struct csv_printer : public printer {
             "supported",
             "error_message",
             "test_mode",
+            "time_us",
+            "flops",
+            "bandwidth_gb_s",
+            "memory_kb",
+            "n_runs",
             "backend_reg_name",
             "backend_name",
         };
@@ -1522,6 +1543,8 @@ struct test_case {
             size_t target_size = is_cpu ? target_size_cpu : target_size_gpu;
             n_runs = (int)std::min<int64_t>(ggml_graph_size(gf) - ggml_graph_n_nodes(gf), target_size / op_size(out)) + 1;
         }
+        const int64_t max_perf_runs = getenv_i64_or_default("GGML_TEST_BACKEND_OPS_PERF_MAX_RUNS", n_runs);
+        n_runs = static_cast<int>(std::max<int64_t>(1, std::min<int64_t>(n_runs, max_perf_runs)));
 
         // duplicate the op
         for (int i = 1; i < n_runs; i++) {
@@ -1551,6 +1574,7 @@ struct test_case {
         int64_t total_time_us = 0;
         int64_t total_mem = 0;
         int total_runs = 0;
+        const int64_t min_perf_time_us = getenv_i64_or_default("GGML_TEST_BACKEND_OPS_PERF_MIN_US", 1000 * 1000);
         do {
             int64_t start_time = ggml_time_us();
             ggml_status status = ggml_backend_graph_compute(backend, gf);
@@ -1563,7 +1587,7 @@ struct test_case {
             total_time_us += end_time - start_time;
             total_mem += mem;
             total_runs += n_runs;
-        } while (total_time_us < 1000*1000); // run for at least 1 second
+        } while (total_time_us < min_perf_time_us);
 
         // Create test result
         double avg_time_us      = (double) total_time_us / total_runs;
