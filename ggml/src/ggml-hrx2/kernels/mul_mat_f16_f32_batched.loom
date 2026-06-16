@@ -334,6 +334,268 @@ kernel.def export("hrx2_mul_mat_f16_f32_batched_cols8") @hrx2_mul_mat_f16_f32_ba
   kernel.return
 }
 
+kernel.def export("hrx2_mul_mat_f16_f32_batched_rows2_cols8") @hrx2_mul_mat_f16_f32_batched_rows2_cols8() {
+  %unit = index.constant 1 : index
+  %two = index.constant 2 : index
+  %seven = index.constant 7 : index
+  %eight = index.constant 8 : index
+  %rows = config.get @hrx2.shape.mul_mat_f16.rows : index
+  %cols = config.get @hrx2.shape.mul_mat_f16.cols : index
+  %dst_ne2 = config.get @hrx2.shape.mul_mat_f16.dst_ne2 : index
+  %dst_ne3 = config.get @hrx2.shape.mul_mat_f16.dst_ne3 : index
+  %workgroup_size = config.get @hrx2.tuning.mul_mat_f16.workgroup_size : index
+  %row_groups_round = index.add %rows, %unit : index
+  %row_groups = index.div %row_groups_round, %two : index
+  %col_groups_round = index.add %cols, %seven : index
+  %col_groups = index.div %col_groups_round, %eight : index
+  %outer0 = index.mul %col_groups, %dst_ne2 : index
+  %outer = index.mul %outer0, %dst_ne3 : index
+  kernel.launch.config workgroups(%row_groups, %outer, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%src0: buffer, %src1: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero_f32 = scalar.constant 0.0 : f32
+  %zero_i32 = scalar.constant 0 : i32
+  %unit = index.constant 1 : index
+  %two = index.constant 2 : index
+  %four = index.constant 4 : index
+  %seven = index.constant 7 : index
+  %eight = index.constant 8 : index
+
+  %k = config.get @hrx2.shape.mul_mat_f16.k : index
+  %rows = config.get @hrx2.shape.mul_mat_f16.rows : index
+  %cols = config.get @hrx2.shape.mul_mat_f16.cols : index
+  %dst_ne2 = config.get @hrx2.shape.mul_mat_f16.dst_ne2 : index
+  %dst_ne3 = config.get @hrx2.shape.mul_mat_f16.dst_ne3 : index
+  %src0_ne2 = config.get @hrx2.shape.mul_mat_f16.src0_ne2 : index
+  %src0_ne3 = config.get @hrx2.shape.mul_mat_f16.src0_ne3 : index
+  %src0_stride_row = config.get @hrx2.shape.mul_mat_f16.src0_stride_row : index
+  %src0_stride_ne2 = config.get @hrx2.shape.mul_mat_f16.src0_stride_ne2 : index
+  %src0_stride_ne3 = config.get @hrx2.shape.mul_mat_f16.src0_stride_ne3 : index
+  %src1_stride_col = config.get @hrx2.shape.mul_mat_f16.src1_stride_col : index
+  %src1_stride_ne2 = config.get @hrx2.shape.mul_mat_f16.src1_stride_ne2 : index
+  %src1_stride_ne3 = config.get @hrx2.shape.mul_mat_f16.src1_stride_ne3 : index
+  %dst_stride_col = config.get @hrx2.shape.mul_mat_f16.dst_stride_col : index
+  %dst_stride_ne2 = config.get @hrx2.shape.mul_mat_f16.dst_stride_ne2 : index
+  %dst_stride_ne3 = config.get @hrx2.shape.mul_mat_f16.dst_stride_ne3 : index
+  %workgroup_size = config.get @hrx2.tuning.mul_mat_f16.workgroup_size : index
+
+  %row_group0 = kernel.workgroup.id<x> : index
+  %row_group = index.assume %row_group0 [range(%row_group0, 0, 4095)] : index
+  %outer0 = kernel.workgroup.id<y> : index
+  %outer = index.assume %outer0 [range(%outer0, 0, 1048575)] : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+
+  %row_base0 = index.mul %row_group, %two : index
+  %row_base = index.assume %row_base0 [range(%row_base0, 0, 8190)] : index
+  %row1 = index.add %row_base, %unit : index
+  %col_groups_round = index.add %cols, %seven : index
+  %col_groups = index.div %col_groups_round, %eight : index
+  %col_group = index.rem %outer, %col_groups : index
+  %i11 = index.mul %col_group, %eight : index
+  %outer1 = index.div %outer, %col_groups : index
+  %i12 = index.rem %outer1, %dst_ne2 : index
+  %i13 = index.div %outer1, %dst_ne2 : index
+
+  %src0_group_scale2 = index.div %dst_ne2, %src0_ne2 : index
+  %src0_i02 = index.div %i12, %src0_group_scale2 : index
+  %src0_group_scale3 = index.div %dst_ne3, %src0_ne3 : index
+  %src0_i03 = index.div %i13, %src0_group_scale3 : index
+
+  %src0_last_row_off = index.mul %rows, %src0_stride_row : index
+  %src0_last_ne3 = index.sub %src0_ne3, %unit : index
+  %src0_last_ne3_off = index.mul %src0_last_ne3, %src0_stride_ne3 : index
+  %src0_count_base = index.add %src0_last_row_off, %src0_last_ne3_off : index
+  %src0_count = index.div %src0_count_base, %two : index
+  %src1_ne2_total = index.mul %dst_ne2, %src1_stride_ne2 : index
+  %src1_ne3_total = index.mul %dst_ne3, %src1_stride_ne3 : index
+  %src1_count_base0 = index.add %src1_ne2_total, %src1_ne3_total : index
+  %src1_count_base = index.add %src1_count_base0, %k : index
+  %src1_count = index.div %src1_count_base, %four : index
+  %dst_count_base0 = index.mul %dst_ne2, %dst_stride_ne2 : index
+  %dst_count_base1 = index.mul %dst_ne3, %dst_stride_ne3 : index
+  %dst_count_base2 = index.add %dst_count_base0, %dst_count_base1 : index
+  %dst_count = index.div %dst_count_base2, %four : index
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %src1_global = buffer.assume.memory_space<global> %src1 : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_noalias, %src1_noalias, %dst_noalias = buffer.assume.noalias %src0_global, %src1_global, %dst_global : buffer, buffer, buffer
+  %src0_view = buffer.view %src0_noalias[%base] : buffer -> view<[%src0_count]xf16, #dense>
+  %src1_view = buffer.view %src1_noalias[%base] : buffer -> view<[%src1_count]xf32, #dense>
+  %dst_view = buffer.view %dst_noalias[%base] : buffer -> view<[%dst_count]xf32, #dense>
+
+  %src0_row_byte0 = index.mul %row_base, %src0_stride_row : index
+  %src0_i02_byte = index.mul %src0_i02, %src0_stride_ne2 : index
+  %src0_i03_byte = index.mul %src0_i03, %src0_stride_ne3 : index
+  %src0_row_byte1 = index.add %src0_row_byte0, %src0_i02_byte : index
+  %src0_row_byte = index.add %src0_row_byte1, %src0_i03_byte : index
+  %src0_row0_elem = index.div %src0_row_byte, %two : index
+  %src0_stride_row_elem = index.div %src0_stride_row, %two : index
+  %src0_row1_elem = index.add %src0_row0_elem, %src0_stride_row_elem : index
+  %src1_col_byte0 = index.mul %i11, %src1_stride_col : index
+  %src1_i12_byte = index.mul %i12, %src1_stride_ne2 : index
+  %src1_i13_byte = index.mul %i13, %src1_stride_ne3 : index
+  %src1_col_byte1 = index.add %src1_col_byte0, %src1_i12_byte : index
+  %src1_col_byte = index.add %src1_col_byte1, %src1_i13_byte : index
+  %src1_col_elem = index.div %src1_col_byte, %four : index
+  %src1_stride_col_elem = index.div %src1_stride_col, %four : index
+
+  %sum00, %sum01, %sum02, %sum03, %sum04, %sum05, %sum06, %sum07,
+  %sum10, %sum11, %sum12, %sum13, %sum14, %sum15, %sum16, %sum17 =
+    scf.for %i = [%lane to %k step %workgroup_size](
+        %acc00 = %zero_f32, %acc01 = %zero_f32, %acc02 = %zero_f32, %acc03 = %zero_f32,
+        %acc04 = %zero_f32, %acc05 = %zero_f32, %acc06 = %zero_f32, %acc07 = %zero_f32,
+        %acc10 = %zero_f32, %acc11 = %zero_f32, %acc12 = %zero_f32, %acc13 = %zero_f32,
+        %acc14 = %zero_f32, %acc15 = %zero_f32, %acc16 = %zero_f32, %acc17 = %zero_f32 :
+        f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32) ->
+        (f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32) {
+    %src0_index0 = index.add %src0_row0_elem, %i : index
+    %src0_index1 = index.add %src0_row1_elem, %i : index
+    %a0_f16 = view.load %src0_view[%src0_index0] : view<[%src0_count]xf16, #dense> -> f16
+    %a1_f16 = view.load %src0_view[%src0_index1] : view<[%src0_count]xf16, #dense> -> f16
+    %a0 = scalar.extf %a0_f16 : f16 to f32
+    %a1 = scalar.extf %a1_f16 : f16 to f32
+    %rhs0 = index.add %src1_col_elem, %i : index
+    %rhs1_col = index.add %src1_col_elem, %src1_stride_col_elem : index
+    %rhs1 = index.add %rhs1_col, %i : index
+    %src1_stride_col2 = index.mul %src1_stride_col_elem, %two : index
+    %rhs2_col = index.add %src1_col_elem, %src1_stride_col2 : index
+    %rhs2 = index.add %rhs2_col, %i : index
+    %src1_stride_col3 = index.add %src1_stride_col2, %src1_stride_col_elem : index
+    %rhs3_col = index.add %src1_col_elem, %src1_stride_col3 : index
+    %rhs3 = index.add %rhs3_col, %i : index
+    %src1_stride_col4 = index.mul %src1_stride_col_elem, %four : index
+    %rhs4_col = index.add %src1_col_elem, %src1_stride_col4 : index
+    %rhs4 = index.add %rhs4_col, %i : index
+    %src1_stride_col5 = index.add %src1_stride_col4, %src1_stride_col_elem : index
+    %rhs5_col = index.add %src1_col_elem, %src1_stride_col5 : index
+    %rhs5 = index.add %rhs5_col, %i : index
+    %src1_stride_col6 = index.add %src1_stride_col4, %src1_stride_col2 : index
+    %rhs6_col = index.add %src1_col_elem, %src1_stride_col6 : index
+    %rhs6 = index.add %rhs6_col, %i : index
+    %src1_stride_col7 = index.add %src1_stride_col6, %src1_stride_col_elem : index
+    %rhs7_col = index.add %src1_col_elem, %src1_stride_col7 : index
+    %rhs7 = index.add %rhs7_col, %i : index
+
+    %b0 = view.load %src1_view[%rhs0] : view<[%src1_count]xf32, #dense> -> f32
+    %b1 = view.load %src1_view[%rhs1] : view<[%src1_count]xf32, #dense> -> f32
+    %b2 = view.load %src1_view[%rhs2] : view<[%src1_count]xf32, #dense> -> f32
+    %b3 = view.load %src1_view[%rhs3] : view<[%src1_count]xf32, #dense> -> f32
+    %b4 = view.load %src1_view[%rhs4] : view<[%src1_count]xf32, #dense> -> f32
+    %b5 = view.load %src1_view[%rhs5] : view<[%src1_count]xf32, #dense> -> f32
+    %b6 = view.load %src1_view[%rhs6] : view<[%src1_count]xf32, #dense> -> f32
+    %b7 = view.load %src1_view[%rhs7] : view<[%src1_count]xf32, #dense> -> f32
+    %p00 = scalar.mulf<reassoc|nnan|ninf|nsz> %a0, %b0 : f32
+    %p01 = scalar.mulf<reassoc|nnan|ninf|nsz> %a0, %b1 : f32
+    %p02 = scalar.mulf<reassoc|nnan|ninf|nsz> %a0, %b2 : f32
+    %p03 = scalar.mulf<reassoc|nnan|ninf|nsz> %a0, %b3 : f32
+    %p04 = scalar.mulf<reassoc|nnan|ninf|nsz> %a0, %b4 : f32
+    %p05 = scalar.mulf<reassoc|nnan|ninf|nsz> %a0, %b5 : f32
+    %p06 = scalar.mulf<reassoc|nnan|ninf|nsz> %a0, %b6 : f32
+    %p07 = scalar.mulf<reassoc|nnan|ninf|nsz> %a0, %b7 : f32
+    %p10 = scalar.mulf<reassoc|nnan|ninf|nsz> %a1, %b0 : f32
+    %p11 = scalar.mulf<reassoc|nnan|ninf|nsz> %a1, %b1 : f32
+    %p12 = scalar.mulf<reassoc|nnan|ninf|nsz> %a1, %b2 : f32
+    %p13 = scalar.mulf<reassoc|nnan|ninf|nsz> %a1, %b3 : f32
+    %p14 = scalar.mulf<reassoc|nnan|ninf|nsz> %a1, %b4 : f32
+    %p15 = scalar.mulf<reassoc|nnan|ninf|nsz> %a1, %b5 : f32
+    %p16 = scalar.mulf<reassoc|nnan|ninf|nsz> %a1, %b6 : f32
+    %p17 = scalar.mulf<reassoc|nnan|ninf|nsz> %a1, %b7 : f32
+    %next00 = scalar.addf<reassoc|nnan|ninf|nsz> %acc00, %p00 : f32
+    %next01 = scalar.addf<reassoc|nnan|ninf|nsz> %acc01, %p01 : f32
+    %next02 = scalar.addf<reassoc|nnan|ninf|nsz> %acc02, %p02 : f32
+    %next03 = scalar.addf<reassoc|nnan|ninf|nsz> %acc03, %p03 : f32
+    %next04 = scalar.addf<reassoc|nnan|ninf|nsz> %acc04, %p04 : f32
+    %next05 = scalar.addf<reassoc|nnan|ninf|nsz> %acc05, %p05 : f32
+    %next06 = scalar.addf<reassoc|nnan|ninf|nsz> %acc06, %p06 : f32
+    %next07 = scalar.addf<reassoc|nnan|ninf|nsz> %acc07, %p07 : f32
+    %next10 = scalar.addf<reassoc|nnan|ninf|nsz> %acc10, %p10 : f32
+    %next11 = scalar.addf<reassoc|nnan|ninf|nsz> %acc11, %p11 : f32
+    %next12 = scalar.addf<reassoc|nnan|ninf|nsz> %acc12, %p12 : f32
+    %next13 = scalar.addf<reassoc|nnan|ninf|nsz> %acc13, %p13 : f32
+    %next14 = scalar.addf<reassoc|nnan|ninf|nsz> %acc14, %p14 : f32
+    %next15 = scalar.addf<reassoc|nnan|ninf|nsz> %acc15, %p15 : f32
+    %next16 = scalar.addf<reassoc|nnan|ninf|nsz> %acc16, %p16 : f32
+    %next17 = scalar.addf<reassoc|nnan|ninf|nsz> %acc17, %p17 : f32
+    scf.yield %next00, %next01, %next02, %next03, %next04, %next05, %next06, %next07,
+              %next10, %next11, %next12, %next13, %next14, %next15, %next16, %next17 :
+        f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32
+  }
+  %dot00 = kernel.workgroup.reduce<addf> %sum00 : f32
+  %dot01 = kernel.workgroup.reduce<addf> %sum01 : f32
+  %dot02 = kernel.workgroup.reduce<addf> %sum02 : f32
+  %dot03 = kernel.workgroup.reduce<addf> %sum03 : f32
+  %dot04 = kernel.workgroup.reduce<addf> %sum04 : f32
+  %dot05 = kernel.workgroup.reduce<addf> %sum05 : f32
+  %dot06 = kernel.workgroup.reduce<addf> %sum06 : f32
+  %dot07 = kernel.workgroup.reduce<addf> %sum07 : f32
+  %dot10 = kernel.workgroup.reduce<addf> %sum10 : f32
+  %dot11 = kernel.workgroup.reduce<addf> %sum11 : f32
+  %dot12 = kernel.workgroup.reduce<addf> %sum12 : f32
+  %dot13 = kernel.workgroup.reduce<addf> %sum13 : f32
+  %dot14 = kernel.workgroup.reduce<addf> %sum14 : f32
+  %dot15 = kernel.workgroup.reduce<addf> %sum15 : f32
+  %dot16 = kernel.workgroup.reduce<addf> %sum16 : f32
+  %dot17 = kernel.workgroup.reduce<addf> %sum17 : f32
+
+  %dst_row_byte0 = index.mul %row_base, %four : index
+  %dst_row_byte1 = index.mul %row1, %four : index
+  %dst_col_byte = index.mul %i11, %dst_stride_col : index
+  %dst_i12_byte = index.mul %i12, %dst_stride_ne2 : index
+  %dst_i13_byte = index.mul %i13, %dst_stride_ne3 : index
+  %dst_byte00 = index.add %dst_row_byte0, %dst_col_byte : index
+  %dst_byte01 = index.add %dst_byte00, %dst_i12_byte : index
+  %dst_byte0 = index.add %dst_byte01, %dst_i13_byte : index
+  %dst_byte10 = index.add %dst_row_byte1, %dst_col_byte : index
+  %dst_byte11 = index.add %dst_byte10, %dst_i12_byte : index
+  %dst_byte1 = index.add %dst_byte11, %dst_i13_byte : index
+  %dst_index0 = index.div %dst_byte0, %four : index
+  %dst_index1 = index.div %dst_byte1, %four : index
+  %dst_stride_col_elem = index.div %dst_stride_col, %four : index
+  %dst0_1 = index.add %dst_index0, %dst_stride_col_elem : index
+  %dst1_1 = index.add %dst_index1, %dst_stride_col_elem : index
+  %dst_stride_col2 = index.mul %dst_stride_col_elem, %two : index
+  %dst0_2 = index.add %dst_index0, %dst_stride_col2 : index
+  %dst1_2 = index.add %dst_index1, %dst_stride_col2 : index
+  %dst_stride_col3 = index.add %dst_stride_col2, %dst_stride_col_elem : index
+  %dst0_3 = index.add %dst_index0, %dst_stride_col3 : index
+  %dst1_3 = index.add %dst_index1, %dst_stride_col3 : index
+  %dst_stride_col4 = index.mul %dst_stride_col_elem, %four : index
+  %dst0_4 = index.add %dst_index0, %dst_stride_col4 : index
+  %dst1_4 = index.add %dst_index1, %dst_stride_col4 : index
+  %dst_stride_col5 = index.add %dst_stride_col4, %dst_stride_col_elem : index
+  %dst0_5 = index.add %dst_index0, %dst_stride_col5 : index
+  %dst1_5 = index.add %dst_index1, %dst_stride_col5 : index
+  %dst_stride_col6 = index.add %dst_stride_col4, %dst_stride_col2 : index
+  %dst0_6 = index.add %dst_index0, %dst_stride_col6 : index
+  %dst1_6 = index.add %dst_index1, %dst_stride_col6 : index
+  %dst_stride_col7 = index.add %dst_stride_col6, %dst_stride_col_elem : index
+  %dst0_7 = index.add %dst_index0, %dst_stride_col7 : index
+  %dst1_7 = index.add %dst_index1, %dst_stride_col7 : index
+  %lane_i32 = index.cast %lane : index to i32
+  %is_lane0 = scalar.cmpi eq, %lane_i32, %zero_i32 : i32
+  scf.if %is_lane0 {
+    view.store %dot00, %dst_view[%dst_index0] : f32, view<[%dst_count]xf32, #dense>
+    view.store %dot01, %dst_view[%dst0_1] : f32, view<[%dst_count]xf32, #dense>
+    view.store %dot02, %dst_view[%dst0_2] : f32, view<[%dst_count]xf32, #dense>
+    view.store %dot03, %dst_view[%dst0_3] : f32, view<[%dst_count]xf32, #dense>
+    view.store %dot04, %dst_view[%dst0_4] : f32, view<[%dst_count]xf32, #dense>
+    view.store %dot05, %dst_view[%dst0_5] : f32, view<[%dst_count]xf32, #dense>
+    view.store %dot06, %dst_view[%dst0_6] : f32, view<[%dst_count]xf32, #dense>
+    view.store %dot07, %dst_view[%dst0_7] : f32, view<[%dst_count]xf32, #dense>
+    view.store %dot10, %dst_view[%dst_index1] : f32, view<[%dst_count]xf32, #dense>
+    view.store %dot11, %dst_view[%dst1_1] : f32, view<[%dst_count]xf32, #dense>
+    view.store %dot12, %dst_view[%dst1_2] : f32, view<[%dst_count]xf32, #dense>
+    view.store %dot13, %dst_view[%dst1_3] : f32, view<[%dst_count]xf32, #dense>
+    view.store %dot14, %dst_view[%dst1_4] : f32, view<[%dst_count]xf32, #dense>
+    view.store %dot15, %dst_view[%dst1_5] : f32, view<[%dst_count]xf32, #dense>
+    view.store %dot16, %dst_view[%dst1_6] : f32, view<[%dst_count]xf32, #dense>
+    view.store %dot17, %dst_view[%dst1_7] : f32, view<[%dst_count]xf32, #dense>
+  }
+  kernel.return
+}
+
 kernel.def export("hrx2_mul_mat_f16_f32_batched_cols8_contiguous") @hrx2_mul_mat_f16_f32_batched_cols8_contiguous() {
   %unit = index.constant 1 : index
   %seven = index.constant 7 : index

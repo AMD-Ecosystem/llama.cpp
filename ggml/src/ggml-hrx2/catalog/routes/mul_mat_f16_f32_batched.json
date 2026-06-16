@@ -112,6 +112,130 @@
     }
   },
   {
+    "id": "mul_mat_f16_f32_batched_attention_rows2_cols8_wg128",
+    "family": "mul_mat_f16_f32_batched",
+    "op": "MUL_MAT",
+    "target_key": "",
+    "source_id": "mul_mat_f16_f32_batched",
+    "artifact_id": "mul_mat_f16_f32_batched_bc",
+    "root_symbol": "@hrx2_mul_mat_f16_f32_batched_rows2_cols8",
+    "export_name": "hrx2_mul_mat_f16_f32_batched_rows2_cols8",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 150,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 3,
+      "constant_byte_length": 0
+    },
+    "dispatch": {
+      "workgroup_size": [
+        128,
+        1,
+        1
+      ],
+      "rows_per_workgroup": 2,
+      "cols_per_workgroup": 8
+    },
+    "shape_domain": {
+      "name": "attention_batched_f16_f32_rows2_cols8_k128_rows512_cols512",
+      "k_min": 128,
+      "k_max": 128,
+      "rows_min": 512,
+      "rows_max": 512,
+      "cols_min": 512,
+      "cols_max": 512
+    },
+    "shape_guards": {
+      "k_pow2": true,
+      "cols_multiple_of": 8
+    },
+    "specialization": {
+      "mode": "jit_config",
+      "bindings": [
+        {
+          "key": "@hrx2.shape.mul_mat_f16.k",
+          "source": "shape.mul_mat_f16.k"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_f16.rows",
+          "source": "shape.mul_mat_f16.rows"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_f16.cols",
+          "source": "shape.mul_mat_f16.cols"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_f16.dst_ne2",
+          "source": "shape.mul_mat_f16.dst_ne2"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_f16.dst_ne3",
+          "source": "shape.mul_mat_f16.dst_ne3"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_f16.src0_ne2",
+          "source": "shape.mul_mat_f16.src0_ne2"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_f16.src0_ne3",
+          "source": "shape.mul_mat_f16.src0_ne3"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_f16.src0_stride_row",
+          "source": "shape.mul_mat_f16.src0_stride_row"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_f16.src0_stride_ne2",
+          "source": "shape.mul_mat_f16.src0_stride_ne2"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_f16.src0_stride_ne3",
+          "source": "shape.mul_mat_f16.src0_stride_ne3"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_f16.src1_stride_col",
+          "source": "shape.mul_mat_f16.src1_stride_col"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_f16.src1_stride_ne2",
+          "source": "shape.mul_mat_f16.src1_stride_ne2"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_f16.src1_stride_ne3",
+          "source": "shape.mul_mat_f16.src1_stride_ne3"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_f16.dst_stride_col",
+          "source": "shape.mul_mat_f16.dst_stride_col"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_f16.dst_stride_ne2",
+          "source": "shape.mul_mat_f16.dst_stride_ne2"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_f16.dst_stride_ne3",
+          "source": "shape.mul_mat_f16.dst_stride_ne3"
+        },
+        {
+          "key": "@hrx2.tuning.mul_mat_f16.workgroup_size",
+          "value": "128"
+        }
+      ]
+    },
+    "supports": {
+      "src0_type": "F16",
+      "src1_type": "F32",
+      "dst_type": "F32",
+      "layout": "batched_attention_broadcast"
+    },
+    "evidence_summary": {
+      "phase": "phase2a-f16-attention-row-tiling-probe",
+      "algorithm": "two_output_rows_and_eight_columns_per_workgroup_reuse_rhs_loads_for_kq_prompt_shapes; wg128 matches k128",
+      "selection": "basket_prefill_attention_cols512_rows512_only; intermediate before full tiled matmul",
+      "ggml_cpu_reference": "required"
+    }
+  },
+  {
     "id": "mul_mat_f16_f32_batched_attention_cols8_wg256",
     "family": "mul_mat_f16_f32_batched",
     "op": "MUL_MAT",
