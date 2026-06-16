@@ -487,6 +487,7 @@ struct ggml_backend_hrx2_provider_plan {
 
 static bool ggml_backend_hrx2_q4_k_q8_1_prompt_enabled(const ggml_backend_hrx2_mul_mat_shape & shape);
 static bool ggml_backend_hrx2_q4_k_q8_1_x4_mmq_enabled();
+static bool ggml_backend_hrx2_q8_0_q8_1_prompt_enabled(const ggml_backend_hrx2_mul_mat_shape & shape);
 static bool ggml_backend_hrx2_q5_k_q8_1_prompt_enabled(const ggml_backend_hrx2_mul_mat_shape & shape);
 static bool ggml_backend_hrx2_q5_k_q8_1_x4_prompt_enabled();
 static bool ggml_backend_hrx2_q6_k_q8_1_prompt_enabled(const ggml_backend_hrx2_mul_mat_shape & shape);
@@ -494,6 +495,11 @@ static bool ggml_backend_hrx2_q6_k_q8_1_x4_prompt_enabled();
 static bool ggml_backend_hrx2_route_uses_q8_1_rhs(const ggml_backend_hrx2_kernel_route * route);
 static bool ggml_backend_hrx2_route_uses_q8_1_x4_rhs(const ggml_backend_hrx2_kernel_route * route);
 static uint32_t ggml_backend_hrx2_provider_workgroup_size_x(const ggml_backend_hrx2_provider * provider);
+static bool ggml_backend_hrx2_dispatch_quantize_q8_1(
+        ggml_backend_hrx2_context * context,
+        const ggml_tensor * src,
+        bool use_x4,
+        hrx_buffer_ref_t * out_q8_1_ref);
 static bool ggml_backend_hrx2_cont_route_copies_vec4(const ggml_backend_hrx2_kernel_route * route);
 static bool ggml_backend_hrx2_extract_cont_shape(
         const ggml_tensor * op,
@@ -7850,6 +7856,10 @@ static ggml_status ggml_backend_hrx2_dispatch_mul_mat_q8_0(
         /* .cols = */ static_cast<uint32_t>(src1->ne[1]),
     };
     for (const auto * route : context->device_context->mul_mat_q8_0_routes) {
+        const bool use_q8_1_rhs = ggml_backend_hrx2_route_uses_q8_1_rhs(route);
+        if (use_q8_1_rhs && !ggml_backend_hrx2_q8_0_q8_1_prompt_enabled(shape)) {
+            continue;
+        }
         ggml_backend_hrx2_provider_plan plan;
         if (!ggml_backend_hrx2_make_mul_mat_q8_0_plan(context->device_context, route, shape, &plan)) {
             continue;
@@ -7886,6 +7896,25 @@ static ggml_status ggml_backend_hrx2_dispatch_mul_mat_q8_0(
             continue;
         }
 
+        hrx_buffer_ref_t route_bindings[3] = { bindings[0], bindings[1], bindings[2] };
+        if (use_q8_1_rhs) {
+            hrx_buffer_ref_t q8_1_ref = {};
+            if (!ggml_backend_hrx2_dispatch_quantize_q8_1(
+                    context,
+                    src1,
+                    ggml_backend_hrx2_route_uses_q8_1_x4_rhs(route),
+                    &q8_1_ref)) {
+                ggml_backend_hrx2_trace_event(
+                    "dispatch_failed",
+                    ggml_backend_hrx2_json_kv("op", "QUANTIZE") + "," +
+                    ggml_backend_hrx2_json_kv("family", "quantize_q8_1_f32") + "," +
+                    ggml_backend_hrx2_json_kv("reason", "q8_1_quantize") + "," +
+                    ggml_backend_hrx2_json_kv("route_id", provider->route.id));
+                continue;
+            }
+            route_bindings[1] = q8_1_ref;
+        }
+
         hrx_dispatch_config_t config = {
             /* .workgroup_count = */ {
                 (constants.rows + provider->route.rows_per_workgroup - 1) / provider->route.rows_per_workgroup,
@@ -7920,7 +7949,7 @@ static ggml_status ggml_backend_hrx2_dispatch_mul_mat_q8_0(
                 &config,
                 constant_data,
                 constant_size,
-                bindings,
+                route_bindings,
                 3,
                 HRX_DISPATCH_FLAG_NONE))) {
             ggml_backend_hrx2_trace_event(
@@ -8060,6 +8089,10 @@ static ggml_status ggml_backend_hrx2_dispatch_mul_mat_f32_f32(
 
 static bool ggml_backend_hrx2_q4_k_q8_1_prompt_enabled(const ggml_backend_hrx2_mul_mat_shape & shape) {
     return shape.cols > 1 && !ggml_backend_hrx2_env_enabled("GGML_HRX2_DISABLE_Q4_K_Q8_1_PROMPT");
+}
+
+static bool ggml_backend_hrx2_q8_0_q8_1_prompt_enabled(const ggml_backend_hrx2_mul_mat_shape & shape) {
+    return shape.cols > 1 && !ggml_backend_hrx2_env_enabled("GGML_HRX2_DISABLE_Q8_0_Q8_1_PROMPT");
 }
 
 static bool ggml_backend_hrx2_q5_k_q8_1_prompt_enabled(const ggml_backend_hrx2_mul_mat_shape & shape) {

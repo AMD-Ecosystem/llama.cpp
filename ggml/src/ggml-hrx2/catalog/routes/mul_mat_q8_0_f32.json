@@ -1,5 +1,74 @@
 [
   {
+    "id": "mul_mat_q8_0_q8_1_x4_mmq64x32_k256_32768_r1_262144_c32_4096_wg256",
+    "family": "mul_mat_q8_0_f32",
+    "op": "MUL_MAT",
+    "target_key": "gfx1100",
+    "source_id": "mul_mat_q8_0_f32",
+    "artifact_id": "mul_mat_q8_0_f32_static_packed_bc",
+    "root_symbol": "@hrx2_mul_mat_q8_0_q8_1_x4_mmq64x32_static",
+    "export_name": "hrx2_mul_mat_q8_0_q8_1_x4_mmq64x32_static",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 140,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 3,
+      "constant_byte_length": 0
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ],
+      "rows_per_workgroup": 64,
+      "cols_per_workgroup": 32
+    },
+    "shape_domain": {
+      "name": "q8_1_x4_mmq64x32_k256_32768_rows1_262144_cols32_4096_wg256",
+      "k_min": 256,
+      "k_max": 32768,
+      "rows_min": 1,
+      "rows_max": 262144,
+      "cols_min": 32,
+      "cols_max": 4096
+    },
+    "shape_guards": {
+      "k_multiple_of": 256,
+      "cols_multiple_of": 32
+    },
+    "specialization": {
+      "mode": "jit_config",
+      "bindings": [
+        {
+          "key": "@hrx2.shape.k",
+          "source": "shape.k"
+        },
+        {
+          "key": "@hrx2.shape.rows",
+          "source": "shape.rows"
+        },
+        {
+          "key": "@hrx2.shape.cols",
+          "source": "shape.cols"
+        }
+      ]
+    },
+    "supports": {
+      "src0_type": "Q8_0",
+      "src1_type": "Q8_1",
+      "dst_type": "F32",
+      "layout": "contiguous"
+    },
+    "evidence_summary": {
+      "phase": "phase2b-q8-0-q8_1-x4-prompt-mmq",
+      "algorithm": "q8_0_q8_1_x4_mmq64x32_wg256_rhs_lds_one_row_eight_cols_per_lane",
+      "prior": "HRX1 q8_0 q8_1 x4 mmq128x32 and existing HRX2 q5/q6 x4 MMQ routes",
+      "selection": "prompt cols multiple of 32; scalar packed routes remain fallback",
+      "ggml_cpu_reference": "required"
+    }
+  },
+  {
     "id": "mul_mat_q8_0_f32_packed_scfunroll_k256_8192_c1_16_wg64",
     "family": "mul_mat_q8_0_f32",
     "op": "MUL_MAT",
