@@ -1,13 +1,13 @@
 [
   {
-    "id": "mul_mat_q4_k_q8_1_x4_mmq32x32_k256_32768_r1_32768_c32_512_wg128",
+    "id": "mul_mat_q4_k_q8_1_x4_mmq64x32_k256_32768_r1_32768_c32_512_wg256",
     "family": "mul_mat_q4_k_f32",
     "op": "MUL_MAT",
     "target_key": "",
     "source_id": "mul_mat_q4_k_f32",
     "artifact_id": "mul_mat_q4_k_f32_static_bc",
-    "root_symbol": "@hrx2_mul_mat_q4_k_q8_1_x4_mmq32x32_static",
-    "export_name": "hrx2_mul_mat_q4_k_q8_1_x4_mmq32x32_static",
+    "root_symbol": "@hrx2_mul_mat_q4_k_q8_1_x4_mmq64x32_static",
+    "export_name": "hrx2_mul_mat_q4_k_q8_1_x4_mmq64x32_static",
     "loader_format": "amdgpu-hsaco",
     "priority": 210,
     "abi": {
@@ -17,15 +17,15 @@
     },
     "dispatch": {
       "workgroup_size": [
-        128,
+        256,
         1,
         1
       ],
-      "rows_per_workgroup": 32,
+      "rows_per_workgroup": 64,
       "cols_per_workgroup": 32
     },
     "shape_domain": {
-      "name": "q8_1_x4_mmq32x32_k256_32768_rows32_32768_cols32_512_wg128",
+      "name": "q8_1_x4_mmq64x32_k256_32768_rows32_32768_cols32_512_wg256",
       "k_min": 256,
       "k_max": 32768,
       "rows_min": 32,
@@ -54,7 +54,7 @@
         },
         {
           "key": "@hrx2.tuning.workgroup_size",
-          "value": "128"
+          "value": "256"
         }
       ]
     },
@@ -62,12 +62,12 @@
       "src0_type": "Q4_K",
       "src1_type": "Q8_1",
       "dst_type": "F32",
-      "layout": "packed_x4_mmq32x32"
+      "layout": "packed_x4_mmq64x32"
     },
     "evidence_summary": {
-      "phase": "phase2a-q8_1-x4-mmq-probe",
-      "algorithm": "packed_q8_1_x4_rhs_mmq32x32_reuses_rhs_tile_across_32_rows_and_32_columns",
-      "selection": "opt_in_prompt_probe; intended to test the real MMQ bulk-lift path",
+      "phase": "phase2a-q8_1-x4-mmq64x32",
+      "algorithm": "packed_q8_1_x4_rhs_mmq64x32_reuses_rhs_tile_across_64_rows_and_32_columns",
+      "selection": "accepted_after_focused_backend_gate_and_reduced_p64_p512_model_basket",
       "ggml_cpu_reference": "approximate_prompt_path_only"
     }
   },
