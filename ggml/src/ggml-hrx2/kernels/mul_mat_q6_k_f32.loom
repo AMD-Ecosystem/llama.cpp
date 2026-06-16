@@ -367,16 +367,18 @@ kernel.def export("hrx2_mul_mat_q6_k_q8_1_wg32_static") @hrx2_mul_mat_q6_k_q8_1_
   kernel.return
 }
 
-kernel.def export("hrx2_mul_mat_q6_k_q8_1_x4_mmq32x32_static") @hrx2_mul_mat_q6_k_q8_1_x4_mmq32x32_static() {
+kernel.def export("hrx2_mul_mat_q6_k_q8_1_x4_mmq64x32_static") @hrx2_mul_mat_q6_k_q8_1_x4_mmq64x32_static() {
   %unit = index.constant 1 : index
   %thirtyone = index.constant 31 : index
   %thirtytwo = index.constant 32 : index
+  %sixtythree = index.constant 63 : index
+  %sixtyfour = index.constant 64 : index
   %rows = config.get @hrx2.shape.rows : index
   %cols = config.get @hrx2.shape.cols : index
-  %rows_round = index.add %rows, %thirtyone : index
-  %row_tiles = index.div %rows_round, %thirtytwo : index
+  %rows_round = index.add %rows, %sixtythree : index
+  %row_tiles = index.div %rows_round, %sixtyfour : index
   %col_tiles = index.div %cols, %thirtytwo : index
-  %wg = index.constant 128 : index
+  %wg = index.constant 256 : index
   kernel.launch.config workgroups(%row_tiles, %col_tiles, %unit) workgroup_size(%wg, %unit, %unit) : index
 } launch(%src0: buffer, %src1_q8_x4: buffer, %dst: buffer) {
   %base = index.constant 0 : offset
@@ -390,6 +392,7 @@ kernel.def export("hrx2_mul_mat_q6_k_q8_1_x4_mmq32x32_static") @hrx2_mul_mat_q6_
   %thirtytwo = index.constant 32 : index
   %sixtyfour = index.constant 64 : index
   %onetwentyeight = index.constant 128 : index
+  %twofiftysix = index.constant 256 : index
   %qk = index.constant 256 : index
   %q8_block_bytes = index.constant 144 : index
   %q8_block_f16s = index.constant 72 : index
@@ -422,11 +425,11 @@ kernel.def export("hrx2_mul_mat_q6_k_q8_1_x4_mmq32x32_static") @hrx2_mul_mat_q6_
   %col_tile0 = kernel.workgroup.id<y> : index
   %col_tile = index.assume %col_tile0 [range(%col_tile0, 0, 15)] : index
   %tid0 = kernel.workitem.id<x> : index
-  %tid = index.assume %tid0 [range(%tid0, 0, 127)] : index
+  %tid = index.assume %tid0 [range(%tid0, 0, 255)] : index
 
-  %lane_row = index.rem %tid, %thirtytwo : index
-  %col_lane = index.div %tid, %thirtytwo : index
-  %row_base = index.mul %row_tile, %thirtytwo : index
+  %lane_row = index.rem %tid, %sixtyfour : index
+  %col_lane = index.div %tid, %sixtyfour : index
+  %row_base = index.mul %row_tile, %sixtyfour : index
   %row_raw = index.add %row_base, %lane_row : index
   %row = index.assume %row_raw [range(%row_raw, 0, 262143)] : index
   %row_in_bounds = index.cmp ult, %row, %rows_bounded : index
@@ -472,7 +475,7 @@ kernel.def export("hrx2_mul_mat_q6_k_q8_1_x4_mmq32x32_static") @hrx2_mul_mat_q6_
         %acc5 = %zero_f32 : f32,
         %acc6 = %zero_f32 : f32,
         %acc7 = %zero_f32 : f32) -> (f32, f32, f32, f32, f32, f32, f32, f32) {
-      scf.for %load_idx = [%tid to %qk step %onetwentyeight] {
+      scf.for %load_idx = [%tid to %qk step %twofiftysix] {
         %load_col = index.div %load_idx, %eight : index
         %load_iqs = index.rem %load_idx, %eight : index
         %linear_col = index.add %col_block_base, %load_col : index
