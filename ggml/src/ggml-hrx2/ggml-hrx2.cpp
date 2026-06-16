@@ -7701,7 +7701,7 @@ static bool ggml_backend_hrx2_cont_route_copies_vec4(const ggml_backend_hrx2_ker
 }
 
 static bool ggml_backend_hrx2_q4_k_q8_1_x4_mmq_enabled() {
-    return ggml_backend_hrx2_env_enabled("GGML_HRX2_ENABLE_Q4_K_Q8_1_X4_MMQ");
+    return !ggml_backend_hrx2_env_enabled("GGML_HRX2_DISABLE_Q4_K_Q8_1_X4_MMQ");
 }
 
 static bool ggml_backend_hrx2_q5_k_q8_1_x4_prompt_enabled() {
