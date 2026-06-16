@@ -720,15 +720,15 @@ kernel.def export("hrx2_mul_mat_q4_k_q8_1_f32_cols4_static") @hrx2_mul_mat_q4_k_
   kernel.return
 }
 
-kernel.def export("hrx2_mul_mat_q4_k_f32_cols4_static") @hrx2_mul_mat_q4_k_f32_cols4_static() {
+kernel.def export("hrx2_mul_mat_q4_k_f32_cols8_static") @hrx2_mul_mat_q4_k_f32_cols8_static() {
   %unit = index.constant 1 : index
-  %three = index.constant 3 : index
-  %four = index.constant 4 : index
+  %seven = index.constant 7 : index
+  %eight = index.constant 8 : index
   %rows = config.get @hrx2.shape.rows : index
   %cols = config.get @hrx2.shape.cols : index
   %workgroup_size = config.get @hrx2.tuning.workgroup_size : index
-  %cols_plus3 = index.add %cols, %three : index
-  %col_groups = index.div %cols_plus3, %four : index
+  %cols_plus7 = index.add %cols, %seven : index
+  %col_groups = index.div %cols_plus7, %eight : index
   kernel.launch.config workgroups(%rows, %col_groups, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
 } launch(%src0: buffer, %src1: buffer, %dst: buffer) {
   %base = index.constant 0 : offset
@@ -737,6 +737,9 @@ kernel.def export("hrx2_mul_mat_q4_k_f32_cols4_static") @hrx2_mul_mat_q4_k_f32_c
   %two = index.constant 2 : index
   %three = index.constant 3 : index
   %four = index.constant 4 : index
+  %five = index.constant 5 : index
+  %six = index.constant 6 : index
+  %seven = index.constant 7 : index
   %eight = index.constant 8 : index
   %sixteen = index.constant 16 : index
   %thirtytwo = index.constant 32 : index
@@ -765,15 +768,23 @@ kernel.def export("hrx2_mul_mat_q4_k_f32_cols4_static") @hrx2_mul_mat_q4_k_f32_c
   %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
   %zero_f32 = scalar.constant 0.0 : f32
 
-  %col_base = index.mul %col_group, %four : index
+  %col_base = index.mul %col_group, %eight : index
   %col0 = index.add %col_base, %zero_index : index
   %col1 = index.add %col_base, %one : index
   %col2 = index.add %col_base, %two : index
   %col3 = index.add %col_base, %three : index
+  %col4 = index.add %col_base, %four : index
+  %col5 = index.add %col_base, %five : index
+  %col6 = index.add %col_base, %six : index
+  %col7 = index.add %col_base, %seven : index
   %col0_in_bounds = index.cmp ult, %col0, %cols_bounded : index
   %col1_in_bounds = index.cmp ult, %col1, %cols_bounded : index
   %col2_in_bounds = index.cmp ult, %col2, %cols_bounded : index
   %col3_in_bounds = index.cmp ult, %col3, %cols_bounded : index
+  %col4_in_bounds = index.cmp ult, %col4, %cols_bounded : index
+  %col5_in_bounds = index.cmp ult, %col5, %cols_bounded : index
+  %col6_in_bounds = index.cmp ult, %col6, %cols_bounded : index
+  %col7_in_bounds = index.cmp ult, %col7, %cols_bounded : index
 
   %blocks_per_row = index.div %k_bounded, %qk : index
   %total_blocks = index.mul %rows_bounded, %blocks_per_row : index
@@ -807,7 +818,11 @@ kernel.def export("hrx2_mul_mat_q4_k_f32_cols4_static") @hrx2_mul_mat_q4_k_f32_c
   %src1_col_base1 = index.mul %col1, %k_bounded : index
   %src1_col_base2 = index.mul %col2, %k_bounded : index
   %src1_col_base3 = index.mul %col3, %k_bounded : index
-  %sum0, %sum1, %sum2, %sum3 = scf.for %block_idx = [%block_slot to %blocks_per_row step %block_step](%acc0 = %zero_f32 : f32, %acc1 = %zero_f32 : f32, %acc2 = %zero_f32 : f32, %acc3 = %zero_f32 : f32) -> (f32, f32, f32, f32) {
+  %src1_col_base4 = index.mul %col4, %k_bounded : index
+  %src1_col_base5 = index.mul %col5, %k_bounded : index
+  %src1_col_base6 = index.mul %col6, %k_bounded : index
+  %src1_col_base7 = index.mul %col7, %k_bounded : index
+  %sum0, %sum1, %sum2, %sum3, %sum4, %sum5, %sum6, %sum7 = scf.for %block_idx = [%block_slot to %blocks_per_row step %block_step](%acc0 = %zero_f32 : f32, %acc1 = %zero_f32 : f32, %acc2 = %zero_f32 : f32, %acc3 = %zero_f32 : f32, %acc4 = %zero_f32 : f32, %acc5 = %zero_f32 : f32, %acc6 = %zero_f32 : f32, %acc7 = %zero_f32 : f32) -> (f32, f32, f32, f32, f32, f32, f32, f32) {
     %src_base_block = index.mul %block_idx, %qk : index
     %src_base_group = index.mul %group, %thirtytwo : index
     %src_base0 = index.add %src_base_block, %src_base_group : index
@@ -876,13 +891,17 @@ kernel.def export("hrx2_mul_mat_q4_k_f32_cols4_static") @hrx2_mul_mat_q4_k_f32_c
     %min_f32 = scalar.uitofp %min_i32 : i32 to f32
     %d = scalar.mulf<reassoc|nnan|ninf|nsz> %d0, %scale_f32 : f32
     %min = scalar.mulf<reassoc|nnan|ninf|nsz> %dmin0, %min_f32 : f32
-    %next0, %next1, %next2, %next3 = scf.for %j = [%zero_index to %four step %one](%inner0 = %acc0 : f32, %inner1 = %acc1 : f32, %inner2 = %acc2 : f32, %inner3 = %acc3 : f32) -> (f32, f32, f32, f32) {
+    %next0, %next1, %next2, %next3, %next4, %next5, %next6, %next7 = scf.for %j = [%zero_index to %four step %one](%inner0 = %acc0 : f32, %inner1 = %acc1 : f32, %inner2 = %acc2 : f32, %inner3 = %acc3 : f32, %inner4 = %acc4 : f32, %inner5 = %acc5 : f32, %inner6 = %acc6 : f32, %inner7 = %acc7 : f32) -> (f32, f32, f32, f32, f32, f32, f32, f32) {
       %q_index = index.add %qs_base, %j : index
       %src_offset = index.add %src_base, %j : index
       %src1_index0 = index.add %src1_col_base0, %src_offset : index
       %src1_index1 = index.add %src1_col_base1, %src_offset : index
       %src1_index2 = index.add %src1_col_base2, %src_offset : index
       %src1_index3 = index.add %src1_col_base3, %src_offset : index
+      %src1_index4 = index.add %src1_col_base4, %src_offset : index
+      %src1_index5 = index.add %src1_col_base5, %src_offset : index
+      %src1_index6 = index.add %src1_col_base6, %src_offset : index
+      %src1_index7 = index.add %src1_col_base7, %src_offset : index
       %q_offset = index.cast %q_index : index to offset
       %q_word_view = buffer.view %src0_noalias[%q_offset] : buffer -> view<1xi32, #dense>
       %q_word = vector.load %q_word_view[%zero_index] : view<1xi32, #dense> -> vector<1xi32>
@@ -915,33 +934,77 @@ kernel.def export("hrx2_mul_mat_q4_k_f32_cols4_static") @hrx2_mul_mat_q4_k_f32_c
       } else {
         scf.yield %zero_f32 : f32
       }
+      %rhs4 = scf.if %col4_in_bounds -> (f32) {
+        %value = view.load %src1_view[%src1_index4] : view<[%src1_count]xf32, #dense> -> f32
+        scf.yield %value : f32
+      } else {
+        scf.yield %zero_f32 : f32
+      }
+      %rhs5 = scf.if %col5_in_bounds -> (f32) {
+        %value = view.load %src1_view[%src1_index5] : view<[%src1_count]xf32, #dense> -> f32
+        scf.yield %value : f32
+      } else {
+        scf.yield %zero_f32 : f32
+      }
+      %rhs6 = scf.if %col6_in_bounds -> (f32) {
+        %value = view.load %src1_view[%src1_index6] : view<[%src1_count]xf32, #dense> -> f32
+        scf.yield %value : f32
+      } else {
+        scf.yield %zero_f32 : f32
+      }
+      %rhs7 = scf.if %col7_in_bounds -> (f32) {
+        %value = view.load %src1_view[%src1_index7] : view<[%src1_count]xf32, #dense> -> f32
+        scf.yield %value : f32
+      } else {
+        scf.yield %zero_f32 : f32
+      }
       %scaled = scalar.mulf<reassoc|nnan|ninf|nsz> %d, %q_f32 : f32
       %dequant = scalar.subf<reassoc|nnan|ninf|nsz> %scaled, %min : f32
       %product0 = scalar.mulf<reassoc|nnan|ninf|nsz> %dequant, %rhs0 : f32
       %product1 = scalar.mulf<reassoc|nnan|ninf|nsz> %dequant, %rhs1 : f32
       %product2 = scalar.mulf<reassoc|nnan|ninf|nsz> %dequant, %rhs2 : f32
       %product3 = scalar.mulf<reassoc|nnan|ninf|nsz> %dequant, %rhs3 : f32
+      %product4 = scalar.mulf<reassoc|nnan|ninf|nsz> %dequant, %rhs4 : f32
+      %product5 = scalar.mulf<reassoc|nnan|ninf|nsz> %dequant, %rhs5 : f32
+      %product6 = scalar.mulf<reassoc|nnan|ninf|nsz> %dequant, %rhs6 : f32
+      %product7 = scalar.mulf<reassoc|nnan|ninf|nsz> %dequant, %rhs7 : f32
       %acc_next0 = scalar.addf<reassoc|nnan|ninf|nsz> %inner0, %product0 : f32
       %acc_next1 = scalar.addf<reassoc|nnan|ninf|nsz> %inner1, %product1 : f32
       %acc_next2 = scalar.addf<reassoc|nnan|ninf|nsz> %inner2, %product2 : f32
       %acc_next3 = scalar.addf<reassoc|nnan|ninf|nsz> %inner3, %product3 : f32
-      scf.yield %acc_next0, %acc_next1, %acc_next2, %acc_next3 : f32, f32, f32, f32
+      %acc_next4 = scalar.addf<reassoc|nnan|ninf|nsz> %inner4, %product4 : f32
+      %acc_next5 = scalar.addf<reassoc|nnan|ninf|nsz> %inner5, %product5 : f32
+      %acc_next6 = scalar.addf<reassoc|nnan|ninf|nsz> %inner6, %product6 : f32
+      %acc_next7 = scalar.addf<reassoc|nnan|ninf|nsz> %inner7, %product7 : f32
+      scf.yield %acc_next0, %acc_next1, %acc_next2, %acc_next3, %acc_next4, %acc_next5, %acc_next6, %acc_next7 : f32, f32, f32, f32, f32, f32, f32, f32
     }
-    scf.yield %next0, %next1, %next2, %next3 : f32, f32, f32, f32
+    scf.yield %next0, %next1, %next2, %next3, %next4, %next5, %next6, %next7 : f32, f32, f32, f32, f32, f32, f32, f32
   }
 
   %dot0 = kernel.workgroup.reduce<addf> %sum0 : f32
   %dot1 = kernel.workgroup.reduce<addf> %sum1 : f32
   %dot2 = kernel.workgroup.reduce<addf> %sum2 : f32
   %dot3 = kernel.workgroup.reduce<addf> %sum3 : f32
+  %dot4 = kernel.workgroup.reduce<addf> %sum4 : f32
+  %dot5 = kernel.workgroup.reduce<addf> %sum5 : f32
+  %dot6 = kernel.workgroup.reduce<addf> %sum6 : f32
+  %dot7 = kernel.workgroup.reduce<addf> %sum7 : f32
   %dst_col_base0 = index.mul %col0, %rows_bounded : index
   %dst_col_base1 = index.mul %col1, %rows_bounded : index
   %dst_col_base2 = index.mul %col2, %rows_bounded : index
   %dst_col_base3 = index.mul %col3, %rows_bounded : index
+  %dst_col_base4 = index.mul %col4, %rows_bounded : index
+  %dst_col_base5 = index.mul %col5, %rows_bounded : index
+  %dst_col_base6 = index.mul %col6, %rows_bounded : index
+  %dst_col_base7 = index.mul %col7, %rows_bounded : index
   %dst_index0 = index.add %dst_col_base0, %row : index
   %dst_index1 = index.add %dst_col_base1, %row : index
   %dst_index2 = index.add %dst_col_base2, %row : index
   %dst_index3 = index.add %dst_col_base3, %row : index
+  %dst_index4 = index.add %dst_col_base4, %row : index
+  %dst_index5 = index.add %dst_col_base5, %row : index
+  %dst_index6 = index.add %dst_col_base6, %row : index
+  %dst_index7 = index.add %dst_col_base7, %row : index
   %lane_i32 = index.cast %lane : index to i32
   %zero_i32 = scalar.constant 0 : i32
   %is_lane0 = scalar.cmpi eq, %lane_i32, %zero_i32 : i32
@@ -955,6 +1018,18 @@ kernel.def export("hrx2_mul_mat_q4_k_f32_cols4_static") @hrx2_mul_mat_q4_k_f32_c
     }
     scf.if %col3_in_bounds {
       view.store %dot3, %dst_view[%dst_index3] : f32, view<[%dst_count]xf32, #dense>
+    }
+    scf.if %col4_in_bounds {
+      view.store %dot4, %dst_view[%dst_index4] : f32, view<[%dst_count]xf32, #dense>
+    }
+    scf.if %col5_in_bounds {
+      view.store %dot5, %dst_view[%dst_index5] : f32, view<[%dst_count]xf32, #dense>
+    }
+    scf.if %col6_in_bounds {
+      view.store %dot6, %dst_view[%dst_index6] : f32, view<[%dst_count]xf32, #dense>
+    }
+    scf.if %col7_in_bounds {
+      view.store %dot7, %dst_view[%dst_index7] : f32, view<[%dst_count]xf32, #dense>
     }
   }
   kernel.return
