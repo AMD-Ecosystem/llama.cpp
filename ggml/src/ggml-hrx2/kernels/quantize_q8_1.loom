@@ -267,21 +267,7 @@ kernel.def export("hrx2_quantize_q8_1_x4_f32") @hrx2_quantize_q8_1_x4_f32() {
   %q_f32 = scalar.sitofp %q_unclamped : i32 to f32
   %sum_q = kernel.subgroup.reduce<addf> %q_f32 : f32
 
-  %lane_pack = index.div %lane, %four : index
-  %lane_pack_base = index.mul %lane_pack, %four : index
-  %lane_pack_base_i32 = index.cast %lane_pack_base : index to i32
-  %q1_lane = scalar.addi %lane_pack_base_i32, %one_i32 : i32
-  %q2_lane = scalar.addi %lane_pack_base_i32, %two_i32 : i32
-  %q3_lane = scalar.addi %lane_pack_base_i32, %three_i32 : i32
-  %q0, %q0_valid = kernel.subgroup.shuffle<index> %q_unclamped, %lane_pack_base_i32, %thirtytwo_i32 : i32, i32, i32
-  %q1, %q1_valid = kernel.subgroup.shuffle<index> %q_unclamped, %q1_lane, %thirtytwo_i32 : i32, i32, i32
-  %q2, %q2_valid = kernel.subgroup.shuffle<index> %q_unclamped, %q2_lane, %thirtytwo_i32 : i32, i32, i32
-  %q3, %q3_valid = kernel.subgroup.shuffle<index> %q_unclamped, %q3_lane, %thirtytwo_i32 : i32, i32, i32
-  %q0_i8 = scalar.trunci %q0 : i32 to i8
-  %q1_i8 = scalar.trunci %q1 : i32 to i8
-  %q2_i8 = scalar.trunci %q2 : i32 to i8
-  %q3_i8 = scalar.trunci %q3 : i32 to i8
-  %q_vec = vector.from_elements %q0_i8, %q1_i8, %q2_i8, %q3_i8 : vector<4xi8>
+  %q_i8 = scalar.trunci %q_unclamped : i32 to i8
 
   %z_ne1_raw = index.mul %z, %ne1_bounded : index
   %z_ne1 = index.assume %z_ne1_raw [range(%z_ne1_raw, 0, 7680)] : index
@@ -297,16 +283,9 @@ kernel.def export("hrx2_quantize_q8_1_x4_f32") @hrx2_quantize_q8_1_x4_f32() {
   %inner_qs_offset0 = index.mul %inner, %thirtytwo : index
   %inner_qs_offset = index.assume %inner_qs_offset0 [range(%inner_qs_offset0, 0, 96)] : index
   %qs_payload1 = index.add %qs_payload0, %inner_qs_offset : index
-  %lane_q_offset = index.mul %lane_pack, %four : index
-  %qs_index_raw = index.add %qs_payload1, %lane_q_offset : index
+  %qs_index_raw = index.add %qs_payload1, %lane : index
   %qs_index = index.assume %qs_index_raw [range(%qs_index_raw, 16, 301989887)] : index
-
-  %lane_pack_rem = index.rem %lane, %four : index
-  %lane_pack_rem_i32 = index.cast %lane_pack_rem : index to i32
-  %is_lane_pack0 = scalar.cmpi eq, %lane_pack_rem_i32, %zero_i32 : i32
-  scf.if %is_lane_pack0 {
-    vector.store %q_vec, %dst_i8_view[%qs_index] : vector<4xi8>, view<1073741824xi8, #dense>
-  }
+  view.store %q_i8, %dst_i8_view[%qs_index] : i8, view<1073741824xi8, #dense>
 
   %lane_i32 = index.cast %lane : index to i32
   %is_lane0 = scalar.cmpi eq, %lane_i32, %zero_i32 : i32

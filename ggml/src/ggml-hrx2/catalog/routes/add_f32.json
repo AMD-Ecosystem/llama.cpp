@@ -1,5 +1,135 @@
 [
   {
+    "id": "add_f32_contiguous_2d_r64_1048576_wg256",
+    "family": "add_f32",
+    "op": "ADD",
+    "target_key": "",
+    "source_id": "pointwise_f32",
+    "artifact_id": "pointwise_f32_bc",
+    "root_symbol": "@hrx2_add_f32_contiguous_2d",
+    "export_name": "hrx2_add_f32_contiguous_2d",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 220,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 3,
+      "constant_byte_length": 0
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ],
+      "rows_per_workgroup": 1,
+      "cols_per_workgroup": 256
+    },
+    "shape_domain": {
+      "name": "add_f32_contiguous_2d_r64_1048576",
+      "ncols_min": 1,
+      "ncols_max": 65536,
+      "nrows_min": 64,
+      "nrows_max": 1048576
+    },
+    "shape_guards": {
+      "pointwise_src0_row_stride_eq_ncols": true,
+      "pointwise_src1_row_stride_eq_ncols": true,
+      "pointwise_src1_ncols_eq_ncols": true
+    },
+    "specialization": {
+      "mode": "jit_config",
+      "bindings": [
+        {
+          "key": "@hrx2.shape.pointwise.ncols",
+          "source": "shape.ncols"
+        },
+        {
+          "key": "@hrx2.shape.pointwise.nrows",
+          "source": "shape.nrows"
+        },
+        {
+          "key": "@hrx2.tuning.pointwise.workgroup_size",
+          "value": "256"
+        }
+      ]
+    },
+    "supports": {
+      "src0_type": "F32",
+      "src1_type": "F32",
+      "dst_type": "F32",
+      "layout": "contiguous"
+    },
+    "evidence_summary": {
+      "phase": "phase2a-wide-pointwise",
+      "ggml_cpu_reference": "required"
+    }
+  },
+  {
+    "id": "add_f32_rhs_row_broadcast_2d_r64_1048576_wg256",
+    "family": "add_f32",
+    "op": "ADD",
+    "target_key": "",
+    "source_id": "pointwise_f32",
+    "artifact_id": "pointwise_f32_bc",
+    "root_symbol": "@hrx2_add_f32_rhs_row_broadcast_2d",
+    "export_name": "hrx2_add_f32_rhs_row_broadcast_2d",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 220,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 3,
+      "constant_byte_length": 0
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ],
+      "rows_per_workgroup": 1,
+      "cols_per_workgroup": 256
+    },
+    "shape_domain": {
+      "name": "add_f32_rhs_row_broadcast_2d_r64_1048576",
+      "ncols_min": 1,
+      "ncols_max": 65536,
+      "nrows_min": 64,
+      "nrows_max": 1048576
+    },
+    "shape_guards": {
+      "pointwise_src0_row_stride_eq_ncols": true,
+      "pointwise_src1_row_stride_eq_zero": true,
+      "pointwise_src1_ncols_eq_ncols": true
+    },
+    "specialization": {
+      "mode": "jit_config",
+      "bindings": [
+        {
+          "key": "@hrx2.shape.pointwise.ncols",
+          "source": "shape.ncols"
+        },
+        {
+          "key": "@hrx2.shape.pointwise.nrows",
+          "source": "shape.nrows"
+        },
+        {
+          "key": "@hrx2.tuning.pointwise.workgroup_size",
+          "value": "256"
+        }
+      ]
+    },
+    "supports": {
+      "src0_type": "F32",
+      "src1_type": "F32",
+      "dst_type": "F32",
+      "layout": "contiguous_src0_rhs_row_broadcast"
+    },
+    "evidence_summary": {
+      "phase": "phase2a-wide-pointwise",
+      "ggml_cpu_reference": "required"
+    }
+  },
+  {
     "id": "add_f32_generic_wg256",
     "family": "add_f32",
     "op": "ADD",

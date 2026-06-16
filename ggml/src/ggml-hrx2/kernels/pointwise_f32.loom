@@ -127,6 +127,202 @@ kernel.def export("hrx2_mul_f32") @hrx2_mul_f32() {
   kernel.return
 }
 
+kernel.def export("hrx2_add_f32_contiguous_2d") @hrx2_add_f32_contiguous_2d() {
+  %unit = index.constant 1 : index
+  %minus_one = index.constant -1 : index
+  %ncols = config.get @hrx2.shape.pointwise.ncols : index
+  %nrows = config.get @hrx2.shape.pointwise.nrows : index
+  %workgroup_size = config.get @hrx2.tuning.pointwise.workgroup_size : index
+  %rounding = index.add %workgroup_size, %minus_one : index
+  %rounded = index.add %ncols, %rounding : index
+  %workgroups_x = index.div %rounded, %workgroup_size : index
+  kernel.launch.config workgroups(%workgroups_x, %nrows, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%src0: buffer, %src1: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %ncols = config.get @hrx2.shape.pointwise.ncols : index
+  %nrows = config.get @hrx2.shape.pointwise.nrows : index
+  %workgroup_size = config.get @hrx2.tuning.pointwise.workgroup_size : index
+  %ncols_bounded = index.assume %ncols [range(%ncols, 1, 65536)] : index
+  %nrows_bounded = index.assume %nrows [range(%nrows, 1, 1048576)] : index
+  %workgroup0 = kernel.workgroup.id<x> : index
+  %row0 = kernel.workgroup.id<y> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %workgroup = index.assume %workgroup0 [range(%workgroup0, 0, 4095)] : index
+  %row = index.assume %row0 [range(%row0, 0, 1048575)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+  %col_base0 = index.mul %workgroup, %workgroup_size : index
+  %col_base = index.assume %col_base0 [range(%col_base0, 0, 1073741823)] : index
+  %col0 = index.add %col_base, %lane : index
+  %col = index.assume %col0 [range(%col0, 0, 1073741823)] : index
+  %in_bounds = index.cmp ult, %col, %ncols_bounded : index
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %src1_global = buffer.assume.memory_space<global> %src1 : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_view = buffer.view %src0_global[%base] : buffer -> view<1073741824xf32, #dense>
+  %src1_view = buffer.view %src1_global[%base] : buffer -> view<1073741824xf32, #dense>
+  %dst_view = buffer.view %dst_global[%base] : buffer -> view<1073741824xf32, #dense>
+
+  scf.if %in_bounds {
+    %row_base0 = index.mul %row, %ncols_bounded : index
+    %row_base = index.assume %row_base0 [range(%row_base0, 0, 1073741823)] : index
+    %idx0 = index.add %row_base, %col : index
+    %idx = index.assume %idx0 [range(%idx0, 0, 1073741823)] : index
+    %a = view.load %src0_view[%idx] : view<1073741824xf32, #dense> -> f32
+    %b = view.load %src1_view[%idx] : view<1073741824xf32, #dense> -> f32
+    %result = scalar.addf<nnan|ninf|nsz> %a, %b : f32
+    view.store %result, %dst_view[%idx] : f32, view<1073741824xf32, #dense>
+  }
+  kernel.return
+}
+
+kernel.def export("hrx2_mul_f32_contiguous_2d") @hrx2_mul_f32_contiguous_2d() {
+  %unit = index.constant 1 : index
+  %minus_one = index.constant -1 : index
+  %ncols = config.get @hrx2.shape.pointwise.ncols : index
+  %nrows = config.get @hrx2.shape.pointwise.nrows : index
+  %workgroup_size = config.get @hrx2.tuning.pointwise.workgroup_size : index
+  %rounding = index.add %workgroup_size, %minus_one : index
+  %rounded = index.add %ncols, %rounding : index
+  %workgroups_x = index.div %rounded, %workgroup_size : index
+  kernel.launch.config workgroups(%workgroups_x, %nrows, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%src0: buffer, %src1: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %ncols = config.get @hrx2.shape.pointwise.ncols : index
+  %nrows = config.get @hrx2.shape.pointwise.nrows : index
+  %workgroup_size = config.get @hrx2.tuning.pointwise.workgroup_size : index
+  %ncols_bounded = index.assume %ncols [range(%ncols, 1, 65536)] : index
+  %nrows_bounded = index.assume %nrows [range(%nrows, 1, 1048576)] : index
+  %workgroup0 = kernel.workgroup.id<x> : index
+  %row0 = kernel.workgroup.id<y> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %workgroup = index.assume %workgroup0 [range(%workgroup0, 0, 4095)] : index
+  %row = index.assume %row0 [range(%row0, 0, 1048575)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+  %col_base0 = index.mul %workgroup, %workgroup_size : index
+  %col_base = index.assume %col_base0 [range(%col_base0, 0, 1073741823)] : index
+  %col0 = index.add %col_base, %lane : index
+  %col = index.assume %col0 [range(%col0, 0, 1073741823)] : index
+  %in_bounds = index.cmp ult, %col, %ncols_bounded : index
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %src1_global = buffer.assume.memory_space<global> %src1 : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_view = buffer.view %src0_global[%base] : buffer -> view<1073741824xf32, #dense>
+  %src1_view = buffer.view %src1_global[%base] : buffer -> view<1073741824xf32, #dense>
+  %dst_view = buffer.view %dst_global[%base] : buffer -> view<1073741824xf32, #dense>
+
+  scf.if %in_bounds {
+    %row_base0 = index.mul %row, %ncols_bounded : index
+    %row_base = index.assume %row_base0 [range(%row_base0, 0, 1073741823)] : index
+    %idx0 = index.add %row_base, %col : index
+    %idx = index.assume %idx0 [range(%idx0, 0, 1073741823)] : index
+    %a = view.load %src0_view[%idx] : view<1073741824xf32, #dense> -> f32
+    %b = view.load %src1_view[%idx] : view<1073741824xf32, #dense> -> f32
+    %result = scalar.mulf<nnan|ninf|nsz> %a, %b : f32
+    view.store %result, %dst_view[%idx] : f32, view<1073741824xf32, #dense>
+  }
+  kernel.return
+}
+
+kernel.def export("hrx2_add_f32_rhs_row_broadcast_2d") @hrx2_add_f32_rhs_row_broadcast_2d() {
+  %unit = index.constant 1 : index
+  %minus_one = index.constant -1 : index
+  %ncols = config.get @hrx2.shape.pointwise.ncols : index
+  %nrows = config.get @hrx2.shape.pointwise.nrows : index
+  %workgroup_size = config.get @hrx2.tuning.pointwise.workgroup_size : index
+  %rounding = index.add %workgroup_size, %minus_one : index
+  %rounded = index.add %ncols, %rounding : index
+  %workgroups_x = index.div %rounded, %workgroup_size : index
+  kernel.launch.config workgroups(%workgroups_x, %nrows, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%src0: buffer, %src1: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %ncols = config.get @hrx2.shape.pointwise.ncols : index
+  %nrows = config.get @hrx2.shape.pointwise.nrows : index
+  %workgroup_size = config.get @hrx2.tuning.pointwise.workgroup_size : index
+  %ncols_bounded = index.assume %ncols [range(%ncols, 1, 65536)] : index
+  %nrows_bounded = index.assume %nrows [range(%nrows, 1, 1048576)] : index
+  %workgroup0 = kernel.workgroup.id<x> : index
+  %row0 = kernel.workgroup.id<y> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %workgroup = index.assume %workgroup0 [range(%workgroup0, 0, 4095)] : index
+  %row = index.assume %row0 [range(%row0, 0, 1048575)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+  %col_base0 = index.mul %workgroup, %workgroup_size : index
+  %col_base = index.assume %col_base0 [range(%col_base0, 0, 1073741823)] : index
+  %col0 = index.add %col_base, %lane : index
+  %col = index.assume %col0 [range(%col0, 0, 1073741823)] : index
+  %in_bounds = index.cmp ult, %col, %ncols_bounded : index
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %src1_global = buffer.assume.memory_space<global> %src1 : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_view = buffer.view %src0_global[%base] : buffer -> view<1073741824xf32, #dense>
+  %src1_view = buffer.view %src1_global[%base] : buffer -> view<1073741824xf32, #dense>
+  %dst_view = buffer.view %dst_global[%base] : buffer -> view<1073741824xf32, #dense>
+
+  scf.if %in_bounds {
+    %row_base0 = index.mul %row, %ncols_bounded : index
+    %row_base = index.assume %row_base0 [range(%row_base0, 0, 1073741823)] : index
+    %idx0 = index.add %row_base, %col : index
+    %idx = index.assume %idx0 [range(%idx0, 0, 1073741823)] : index
+    %a = view.load %src0_view[%idx] : view<1073741824xf32, #dense> -> f32
+    %b = view.load %src1_view[%col] : view<1073741824xf32, #dense> -> f32
+    %result = scalar.addf<nnan|ninf|nsz> %a, %b : f32
+    view.store %result, %dst_view[%idx] : f32, view<1073741824xf32, #dense>
+  }
+  kernel.return
+}
+
+kernel.def export("hrx2_mul_f32_rhs_row_broadcast_2d") @hrx2_mul_f32_rhs_row_broadcast_2d() {
+  %unit = index.constant 1 : index
+  %minus_one = index.constant -1 : index
+  %ncols = config.get @hrx2.shape.pointwise.ncols : index
+  %nrows = config.get @hrx2.shape.pointwise.nrows : index
+  %workgroup_size = config.get @hrx2.tuning.pointwise.workgroup_size : index
+  %rounding = index.add %workgroup_size, %minus_one : index
+  %rounded = index.add %ncols, %rounding : index
+  %workgroups_x = index.div %rounded, %workgroup_size : index
+  kernel.launch.config workgroups(%workgroups_x, %nrows, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%src0: buffer, %src1: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %ncols = config.get @hrx2.shape.pointwise.ncols : index
+  %nrows = config.get @hrx2.shape.pointwise.nrows : index
+  %workgroup_size = config.get @hrx2.tuning.pointwise.workgroup_size : index
+  %ncols_bounded = index.assume %ncols [range(%ncols, 1, 65536)] : index
+  %nrows_bounded = index.assume %nrows [range(%nrows, 1, 1048576)] : index
+  %workgroup0 = kernel.workgroup.id<x> : index
+  %row0 = kernel.workgroup.id<y> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %workgroup = index.assume %workgroup0 [range(%workgroup0, 0, 4095)] : index
+  %row = index.assume %row0 [range(%row0, 0, 1048575)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+  %col_base0 = index.mul %workgroup, %workgroup_size : index
+  %col_base = index.assume %col_base0 [range(%col_base0, 0, 1073741823)] : index
+  %col0 = index.add %col_base, %lane : index
+  %col = index.assume %col0 [range(%col0, 0, 1073741823)] : index
+  %in_bounds = index.cmp ult, %col, %ncols_bounded : index
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %src1_global = buffer.assume.memory_space<global> %src1 : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_view = buffer.view %src0_global[%base] : buffer -> view<1073741824xf32, #dense>
+  %src1_view = buffer.view %src1_global[%base] : buffer -> view<1073741824xf32, #dense>
+  %dst_view = buffer.view %dst_global[%base] : buffer -> view<1073741824xf32, #dense>
+
+  scf.if %in_bounds {
+    %row_base0 = index.mul %row, %ncols_bounded : index
+    %row_base = index.assume %row_base0 [range(%row_base0, 0, 1073741823)] : index
+    %idx0 = index.add %row_base, %col : index
+    %idx = index.assume %idx0 [range(%idx0, 0, 1073741823)] : index
+    %a = view.load %src0_view[%idx] : view<1073741824xf32, #dense> -> f32
+    %b = view.load %src1_view[%col] : view<1073741824xf32, #dense> -> f32
+    %result = scalar.mulf<nnan|ninf|nsz> %a, %b : f32
+    view.store %result, %dst_view[%idx] : f32, view<1073741824xf32, #dense>
+  }
+  kernel.return
+}
+
 kernel.def export("hrx2_div_f32") @hrx2_div_f32() {
   %unit = index.constant 1 : index
   %minus_one = index.constant -1 : index

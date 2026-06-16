@@ -237,6 +237,14 @@ static bool ggml_backend_hrx2_route_from_json(
     if (shape_guards.contains("ncols_multiple_of")) {
         route->ncols_multiple_of_guard = shape_guards.at("ncols_multiple_of").get<uint32_t>();
     }
+    route->pointwise_src0_row_stride_eq_ncols =
+        shape_guards.value("pointwise_src0_row_stride_eq_ncols", false);
+    route->pointwise_src1_row_stride_eq_ncols =
+        shape_guards.value("pointwise_src1_row_stride_eq_ncols", false);
+    route->pointwise_src1_row_stride_eq_zero =
+        shape_guards.value("pointwise_src1_row_stride_eq_zero", false);
+    route->pointwise_src1_ncols_eq_ncols =
+        shape_guards.value("pointwise_src1_ncols_eq_ncols", false);
 
     const auto & supports = route_json.value("supports", nlohmann::json::object());
     route->supports_mode = supports.value("mode", std::string());

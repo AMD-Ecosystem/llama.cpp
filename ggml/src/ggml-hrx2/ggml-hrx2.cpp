@@ -141,6 +141,19 @@ struct ggml_backend_hrx2_context {
     std::vector<ggml_backend_hrx2_scratch_buffer> scratch_buffers;
     ggml_backend_hrx2_device_scratch q8_1_scratch;
     ggml_backend_hrx2_device_scratch route_scratch;
+    const ggml_tensor * q8_1_cached_src = nullptr;
+    bool q8_1_cached_use_x4 = false;
+    size_t q8_1_cached_size = 0;
+    uint32_t q8_1_cached_ne00 = 0;
+    uint32_t q8_1_cached_s01 = 0;
+    uint32_t q8_1_cached_s02 = 0;
+    uint32_t q8_1_cached_s03 = 0;
+    uint32_t q8_1_cached_ne0 = 0;
+    uint32_t q8_1_cached_ne1 = 0;
+    uint32_t q8_1_cached_ne2 = 0;
+    uint32_t q8_1_cached_blocks = 0;
+    uint32_t q8_1_cached_z_count = 0;
+    hrx_buffer_ref_t q8_1_cached_ref = {};
 };
 
 static thread_local ggml_backend_hrx2_context * g_hrx2_active_graph_context = nullptr;
@@ -419,6 +432,7 @@ struct ggml_backend_hrx2_provider_plan {
 };
 
 static bool ggml_backend_hrx2_q4_k_q8_1_prompt_enabled(const ggml_backend_hrx2_mul_mat_shape & shape);
+static bool ggml_backend_hrx2_q4_k_q8_1_x4_mmq_enabled();
 static bool ggml_backend_hrx2_route_uses_q8_1_rhs(const ggml_backend_hrx2_kernel_route * route);
 static bool ggml_backend_hrx2_route_uses_q8_1_x4_rhs(const ggml_backend_hrx2_kernel_route * route);
 
@@ -3387,6 +3401,18 @@ static bool ggml_backend_hrx2_route_shape_matches(
     if (route->ncols_multiple_of_guard != 0 && (shape.ncols % route->ncols_multiple_of_guard) != 0) {
         return false;
     }
+    if (route->pointwise_src0_row_stride_eq_ncols && shape.src0_row_stride != shape.ncols) {
+        return false;
+    }
+    if (route->pointwise_src1_row_stride_eq_ncols && shape.src1_row_stride != shape.ncols) {
+        return false;
+    }
+    if (route->pointwise_src1_row_stride_eq_zero && shape.src1_row_stride != 0) {
+        return false;
+    }
+    if (route->pointwise_src1_ncols_eq_ncols && shape.src1_ncols != shape.ncols) {
+        return false;
+    }
     return true;
 }
 
@@ -3612,6 +3638,10 @@ static bool ggml_backend_hrx2_make_pointwise_plan(
     if (!out_plan ||
         !ggml_backend_hrx2_route_available(device_context, route) ||
         !ggml_backend_hrx2_route_shape_matches(route, shape)) {
+        return false;
+    }
+    if (!ggml_backend_hrx2_env_enabled("GGML_HRX2_ENABLE_POINTWISE_2D") &&
+        route->id.find("_2d_") != std::string::npos) {
         return false;
     }
 
@@ -4755,6 +4785,10 @@ static bool ggml_backend_hrx2_supports_mul_mat_q4_k_route(
     for (const auto * route : device_context->mul_mat_q4_k_routes) {
         if (ggml_backend_hrx2_route_uses_q8_1_rhs(route) &&
             !ggml_backend_hrx2_q4_k_q8_1_prompt_enabled(shape)) {
+            continue;
+        }
+        if (ggml_backend_hrx2_route_uses_q8_1_x4_rhs(route) &&
+            !ggml_backend_hrx2_q4_k_q8_1_x4_mmq_enabled()) {
             continue;
         }
         ggml_backend_hrx2_provider_plan plan;
@@ -6063,10 +6097,15 @@ static ggml_status ggml_backend_hrx2_dispatch_pointwise(
         const uint64_t total = static_cast<uint64_t>(shape.ncols) * static_cast<uint64_t>(shape.nrows);
         const uint32_t workgroup_size =
             provider->export_info.workgroup_size[0] ? provider->export_info.workgroup_size[0] : provider->route.workgroup_size[0];
+        const bool use_2d_dispatch = provider->route.cols_per_workgroup > 1;
         hrx_dispatch_config_t config = {
             /* .workgroup_count = */ {
-                static_cast<uint32_t>((total + workgroup_size - 1) / workgroup_size),
-                1,
+                use_2d_dispatch ?
+                    static_cast<uint32_t>((shape.ncols + provider->route.cols_per_workgroup - 1) / provider->route.cols_per_workgroup) :
+                    static_cast<uint32_t>((total + workgroup_size - 1) / workgroup_size),
+                use_2d_dispatch ?
+                    static_cast<uint32_t>((shape.nrows + provider->route.rows_per_workgroup - 1) / provider->route.rows_per_workgroup) :
+                    1,
                 1,
             },
             /* .workgroup_size  = */ { workgroup_size, 1, 1 },
@@ -6082,6 +6121,7 @@ static ggml_status ggml_backend_hrx2_dispatch_pointwise(
             ggml_backend_hrx2_json_kv("ncols", shape.ncols) + "," +
             ggml_backend_hrx2_json_kv("nrows", shape.nrows) + "," +
             ggml_backend_hrx2_json_kv("workgroups_x", config.workgroup_count[0]) + "," +
+            ggml_backend_hrx2_json_kv("workgroups_y", config.workgroup_count[1]) + "," +
             ggml_backend_hrx2_json_kv("workgroup_size_x", config.workgroup_size[0]));
 
         if (!GGML_HRX2_CHECK(hrx_stream_dispatch(
@@ -7191,6 +7231,10 @@ static bool ggml_backend_hrx2_route_uses_q8_1_x4_rhs(const ggml_backend_hrx2_ker
     return route && route->id.find("q8_1_x4") != std::string::npos;
 }
 
+static bool ggml_backend_hrx2_q4_k_q8_1_x4_mmq_enabled() {
+    return ggml_backend_hrx2_env_enabled("GGML_HRX2_ENABLE_Q4_K_Q8_1_X4_MMQ");
+}
+
 static bool ggml_backend_hrx2_dispatch_quantize_q8_1(
         ggml_backend_hrx2_context * context,
         const ggml_tensor * src,
@@ -7234,6 +7278,29 @@ static bool ggml_backend_hrx2_dispatch_quantize_q8_1(
     const size_t q8_1_size = use_x4 ?
         static_cast<size_t>(ne1) * z_count * (blocks / 4) * 144u :
         static_cast<size_t>(ne1) * z_count * blocks * 36u;
+    if (context->q8_1_cached_src == src &&
+            context->q8_1_cached_use_x4 == use_x4 &&
+            context->q8_1_cached_size == q8_1_size &&
+            context->q8_1_cached_ne00 == ne00 &&
+            context->q8_1_cached_s01 == s01 &&
+            context->q8_1_cached_s02 == s02 &&
+            context->q8_1_cached_s03 == s03 &&
+            context->q8_1_cached_ne0 == ne0 &&
+            context->q8_1_cached_ne1 == ne1 &&
+            context->q8_1_cached_ne2 == ne2 &&
+            context->q8_1_cached_blocks == blocks &&
+            context->q8_1_cached_z_count == z_count) {
+        *out_q8_1_ref = context->q8_1_cached_ref;
+        ggml_backend_hrx2_trace_event(
+            "quantize_cache_hit",
+            ggml_backend_hrx2_json_kv("family", "quantize_q8_1_f32") + "," +
+            ggml_backend_hrx2_json_kv("blocks", blocks) + "," +
+            ggml_backend_hrx2_json_kv("packed_x4", use_x4 ? 1 : 0) + "," +
+            ggml_backend_hrx2_json_kv("ne1", ne1) + "," +
+            ggml_backend_hrx2_json_kv("z_count", z_count));
+        return true;
+    }
+
     hrx_buffer_ref_t src_ref = {};
     if (!ggml_backend_hrx2_tensor_buffer_ref(src, &src_ref) ||
         !ggml_backend_hrx2_ensure_device_scratch(context, &context->q8_1_scratch, q8_1_size, out_q8_1_ref)) {
@@ -7293,7 +7360,7 @@ static bool ggml_backend_hrx2_dispatch_quantize_q8_1(
             ggml_backend_hrx2_json_kv("ne1", ne1) + "," +
             ggml_backend_hrx2_json_kv("z_count", z_count));
 
-        return GGML_HRX2_CHECK(hrx_stream_dispatch(
+        const bool ok = GGML_HRX2_CHECK(hrx_stream_dispatch(
             context->stream,
             provider->executable,
             provider->export_ordinal,
@@ -7303,6 +7370,22 @@ static bool ggml_backend_hrx2_dispatch_quantize_q8_1(
             bindings,
             2,
             HRX_DISPATCH_FLAG_NONE));
+        if (ok) {
+            context->q8_1_cached_src = src;
+            context->q8_1_cached_use_x4 = use_x4;
+            context->q8_1_cached_size = q8_1_size;
+            context->q8_1_cached_ne00 = ne00;
+            context->q8_1_cached_s01 = s01;
+            context->q8_1_cached_s02 = s02;
+            context->q8_1_cached_s03 = s03;
+            context->q8_1_cached_ne0 = ne0;
+            context->q8_1_cached_ne1 = ne1;
+            context->q8_1_cached_ne2 = ne2;
+            context->q8_1_cached_blocks = blocks;
+            context->q8_1_cached_z_count = z_count;
+            context->q8_1_cached_ref = *out_q8_1_ref;
+        }
+        return ok;
     }
 
     return false;
@@ -7352,6 +7435,10 @@ static ggml_status ggml_backend_hrx2_dispatch_mul_mat_q4_k(
     for (const auto * route : context->device_context->mul_mat_q4_k_routes) {
         const bool use_q8_1_rhs = ggml_backend_hrx2_route_uses_q8_1_rhs(route);
         if (use_q8_1_rhs && !ggml_backend_hrx2_q4_k_q8_1_prompt_enabled(shape)) {
+            continue;
+        }
+        if (ggml_backend_hrx2_route_uses_q8_1_x4_rhs(route) &&
+            !ggml_backend_hrx2_q4_k_q8_1_x4_mmq_enabled()) {
             continue;
         }
         ggml_backend_hrx2_provider_plan plan;
@@ -8570,6 +8657,8 @@ static enum ggml_status ggml_backend_hrx2_graph_compute(ggml_backend_t backend, 
         std::lock_guard<std::mutex> lock(context->device_context->streams_mutex);
         context->device_context->active_stream = context->stream;
     }
+    context->q8_1_cached_src = nullptr;
+    context->q8_1_cached_ref = {};
     ggml_backend_hrx2_active_graph_guard active_graph_guard(context);
     for (int i = 0; i < cgraph->n_nodes; ++i) {
         const ggml_tensor * node = cgraph->nodes[i];

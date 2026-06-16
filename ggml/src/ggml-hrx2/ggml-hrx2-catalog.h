@@ -65,6 +65,10 @@ struct ggml_backend_hrx2_kernel_route {
     uint32_t    k_multiple_of_guard = 0;
     uint32_t    cols_multiple_of_guard = 0;
     uint32_t    ncols_multiple_of_guard = 0;
+    bool        pointwise_src0_row_stride_eq_ncols = false;
+    bool        pointwise_src1_row_stride_eq_ncols = false;
+    bool        pointwise_src1_row_stride_eq_zero = false;
+    bool        pointwise_src1_ncols_eq_ncols = false;
     std::string supports_mode;
     std::string supports_glu_op;
     std::string specialization_mode;

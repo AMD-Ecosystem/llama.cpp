@@ -87,7 +87,17 @@ def main():
         require(isinstance(shape_guards, dict), f"route {route_id} shape_guards must be an object")
         for guard_key, guard_value in shape_guards.items():
             require(
-                guard_key in ("k_pow2", "all_pot", "k_multiple_of", "cols_multiple_of", "ncols_multiple_of"),
+                guard_key in (
+                    "k_pow2",
+                    "all_pot",
+                    "k_multiple_of",
+                    "cols_multiple_of",
+                    "ncols_multiple_of",
+                    "pointwise_src0_row_stride_eq_ncols",
+                    "pointwise_src1_row_stride_eq_ncols",
+                    "pointwise_src1_row_stride_eq_zero",
+                    "pointwise_src1_ncols_eq_ncols",
+                ),
                 f"route {route_id} has unknown shape guard {guard_key}",
             )
             if guard_key in ("k_multiple_of", "cols_multiple_of", "ncols_multiple_of"):
