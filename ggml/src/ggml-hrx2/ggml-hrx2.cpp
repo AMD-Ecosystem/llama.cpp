@@ -51,6 +51,18 @@ struct ggml_backend_hrx2_device_scratch {
     std::vector<hrx_buffer_t> retired_buffers;
 };
 
+enum class ggml_backend_hrx2_scratch_state {
+    available,
+    in_use,
+    retired,
+};
+
+struct ggml_backend_hrx2_scratch_buffer {
+    hrx_buffer_t buffer = nullptr;
+    size_t size = 0;
+    ggml_backend_hrx2_scratch_state state = ggml_backend_hrx2_scratch_state::available;
+};
+
 struct ggml_backend_hrx2_buffer_type_context {
     ggml_backend_hrx2_device_context * device_context = nullptr;
     std::string name;
@@ -125,7 +137,9 @@ struct ggml_backend_hrx2_context {
     uint64_t submit_count = 0;
     uint64_t submit_flush_count = 0;
     const ggml_tensor * submit_last_node = nullptr;
+    std::vector<ggml_backend_hrx2_scratch_buffer> scratch_buffers;
     ggml_backend_hrx2_device_scratch q8_1_scratch;
+    ggml_backend_hrx2_device_scratch route_scratch;
 };
 
 static thread_local ggml_backend_hrx2_context * g_hrx2_active_graph_context = nullptr;
@@ -421,6 +435,14 @@ static bool ggml_backend_hrx2_env_enabled(const char * name) {
     return value && value[0] != '\0' && std::strcmp(value, "0") != 0;
 }
 
+static bool ggml_backend_hrx2_fusion_enabled() {
+    return !ggml_backend_hrx2_env_enabled("GGML_HRX2_DISABLE_FUSION");
+}
+
+static bool ggml_backend_hrx2_trace_graph_enabled() {
+    return ggml_backend_hrx2_env_enabled("GGML_HRX2_TRACE_GRAPH");
+}
+
 static uint64_t ggml_backend_hrx2_u64_from_env(const char * name, uint64_t fallback) {
     const char * value = std::getenv(name);
     if (!value || value[0] == '\0') {
@@ -608,7 +630,6 @@ static void ggml_backend_hrx2_register_stream(ggml_backend_hrx2_device_context *
             device_context->live_streams.end()) {
         device_context->live_streams.push_back(stream);
     }
-    device_context->active_stream = stream;
 }
 
 static void ggml_backend_hrx2_unregister_stream(ggml_backend_hrx2_device_context * device_context, hrx_stream_t stream) {
@@ -900,6 +921,90 @@ static bool ggml_backend_hrx2_ensure_device_scratch(
         /* .length = */ required_capacity,
     };
     return true;
+}
+
+static void ggml_backend_hrx2_retire_in_use_scratch_buffers(ggml_backend_hrx2_context * context) {
+    for (ggml_backend_hrx2_scratch_buffer & scratch : context->scratch_buffers) {
+        if (scratch.state == ggml_backend_hrx2_scratch_state::in_use) {
+            scratch.state = ggml_backend_hrx2_scratch_state::retired;
+        }
+    }
+}
+
+static void ggml_backend_hrx2_recycle_scratch_buffers(ggml_backend_hrx2_context * context) {
+    for (ggml_backend_hrx2_scratch_buffer & scratch : context->scratch_buffers) {
+        if (scratch.state != ggml_backend_hrx2_scratch_state::available) {
+            scratch.state = ggml_backend_hrx2_scratch_state::available;
+        }
+    }
+}
+
+static void ggml_backend_hrx2_release_scratch_buffers(ggml_backend_hrx2_context * context) {
+    for (ggml_backend_hrx2_scratch_buffer & scratch : context->scratch_buffers) {
+        if (scratch.buffer) {
+            hrx_buffer_release(scratch.buffer);
+            scratch.buffer = nullptr;
+        }
+        scratch.size = 0;
+        scratch.state = ggml_backend_hrx2_scratch_state::available;
+    }
+    context->scratch_buffers.clear();
+}
+
+static bool ggml_backend_hrx2_request_scratch_buffer(
+        ggml_backend_hrx2_context * context,
+        size_t size,
+        hrx_buffer_ref_t * out_ref) {
+    if (!context || !out_ref || size == 0) {
+        return false;
+    }
+
+    ggml_backend_hrx2_retire_in_use_scratch_buffers(context);
+
+    ggml_backend_hrx2_scratch_buffer * selected = nullptr;
+    for (ggml_backend_hrx2_scratch_buffer & scratch : context->scratch_buffers) {
+        if (scratch.state != ggml_backend_hrx2_scratch_state::available || scratch.size < size) {
+            continue;
+        }
+        if (!selected || scratch.size < selected->size) {
+            selected = &scratch;
+        }
+    }
+
+    if (!selected) {
+        hrx_buffer_params_t params = {
+            /* .type           = */ HRX_MEMORY_TYPE_DEVICE_LOCAL,
+            /* .access         = */ HRX_MEMORY_ACCESS_ALL,
+            /* .usage          = */ HRX_BUFFER_USAGE_DEFAULT,
+            /* .queue_affinity = */ 0,
+        };
+        hrx_buffer_t buffer = nullptr;
+        if (!GGML_HRX2_CHECK(hrx_allocator_allocate_buffer(
+                hrx_device_allocator(context->device_context->device), params, size, &buffer))) {
+            return false;
+        }
+        context->scratch_buffers.push_back({
+            /* .buffer = */ buffer,
+            /* .size   = */ size,
+            /* .state  = */ ggml_backend_hrx2_scratch_state::available,
+        });
+        selected = &context->scratch_buffers.back();
+    }
+
+    selected->state = ggml_backend_hrx2_scratch_state::in_use;
+    *out_ref = {
+        /* .buffer = */ selected->buffer,
+        /* .offset = */ 0,
+        /* .length = */ size,
+    };
+    return true;
+}
+
+static bool ggml_backend_hrx2_ensure_route_scratch(
+        ggml_backend_hrx2_context * context,
+        size_t size,
+        hrx_buffer_ref_t * out_ref) {
+    return ggml_backend_hrx2_ensure_device_scratch(context, &context->route_scratch, size, out_ref);
 }
 
 static uint64_t ggml_backend_hrx2_node_mul_mat_bytes(const ggml_tensor * node) {
@@ -8021,7 +8126,9 @@ static void ggml_backend_hrx2_free(ggml_backend_t backend) {
         ggml_backend_hrx2_unregister_stream(context->device_context, context->stream);
         hrx_stream_release(context->stream);
     }
+    ggml_backend_hrx2_release_scratch_buffers(context);
     ggml_backend_hrx2_release_device_scratch(context->q8_1_scratch);
+    ggml_backend_hrx2_release_device_scratch(context->route_scratch);
     delete context;
     delete backend;
 }
@@ -8030,7 +8137,9 @@ static void ggml_backend_hrx2_synchronize(ggml_backend_t backend) {
     auto * context = ggml_backend_hrx2_get_context(backend);
     if (context->stream) {
         (void) GGML_HRX2_CHECK(hrx_stream_synchronize(context->stream));
+        ggml_backend_hrx2_recycle_scratch_buffers(context);
         ggml_backend_hrx2_release_retired_device_scratch(context->q8_1_scratch);
+        ggml_backend_hrx2_release_retired_device_scratch(context->route_scratch);
         std::lock_guard<std::mutex> lock(context->device_context->streams_mutex);
         if (auto * arena = ggml_backend_hrx2_find_staging_arena_locked(context->device_context, context->stream)) {
             ggml_backend_hrx2_reset_staging_arena_locked(*arena);
@@ -8078,7 +8187,29 @@ static enum ggml_status ggml_backend_hrx2_graph_compute(ggml_backend_t backend, 
     for (int i = 0; i < cgraph->n_nodes; ++i) {
         const ggml_tensor * node = cgraph->nodes[i];
         g_hrx2_active_graph_node = node;
-        if (!ggml_backend_hrx2_env_enabled("GGML_HRX2_DISABLE_ADD_RMS_NORM_MUL_FUSION") &&
+        if (ggml_backend_hrx2_trace_graph_enabled()) {
+            std::fprintf(
+                stderr,
+                "HRX2 graph node=%d op=%s type=%s name=%s ne=[%" PRId64 ",%" PRId64 ",%" PRId64 ",%" PRId64
+                "] src0=%s src1=%s src2=%s src3=%s src4=%s src5=%s flags=0x%x\n",
+                i,
+                ggml_op_desc(node),
+                ggml_type_name(node->type),
+                node->name,
+                node->ne[0],
+                node->ne[1],
+                node->ne[2],
+                node->ne[3],
+                node->src[0] ? node->src[0]->name : "",
+                node->src[1] ? node->src[1]->name : "",
+                node->src[2] ? node->src[2]->name : "",
+                node->src[3] ? node->src[3]->name : "",
+                node->src[4] ? node->src[4]->name : "",
+                node->src[5] ? node->src[5]->name : "",
+                static_cast<unsigned>(node->flags));
+        }
+        if (ggml_backend_hrx2_fusion_enabled() &&
+            !ggml_backend_hrx2_env_enabled("GGML_HRX2_DISABLE_ADD_RMS_NORM_MUL_FUSION") &&
             i + 2 < cgraph->n_nodes &&
             node->op == GGML_OP_ADD &&
             cgraph->nodes[i + 1]->op == GGML_OP_RMS_NORM &&
@@ -8099,7 +8230,8 @@ static enum ggml_status ggml_backend_hrx2_graph_compute(ggml_backend_t backend, 
             i += 2;
             continue;
         }
-        if (ggml_backend_hrx2_env_enabled("GGML_HRX2_ENABLE_RMS_NORM_MUL_FUSION") &&
+        if (ggml_backend_hrx2_fusion_enabled() &&
+            ggml_backend_hrx2_env_enabled("GGML_HRX2_ENABLE_RMS_NORM_MUL_FUSION") &&
             i + 1 < cgraph->n_nodes &&
             node->op == GGML_OP_RMS_NORM &&
             ggml_backend_hrx2_supports_rms_norm_mul_route(
@@ -8116,7 +8248,8 @@ static enum ggml_status ggml_backend_hrx2_graph_compute(ggml_backend_t backend, 
             i += 1;
             continue;
         }
-        if (!ggml_backend_hrx2_env_enabled("GGML_HRX2_DISABLE_Q4K_SWIGLU_FUSION") &&
+        if (ggml_backend_hrx2_fusion_enabled() &&
+            !ggml_backend_hrx2_env_enabled("GGML_HRX2_DISABLE_Q4K_SWIGLU_FUSION") &&
             i + 1 < cgraph->n_nodes &&
             node->op == GGML_OP_MUL_MAT &&
             ggml_backend_hrx2_supports_mul_mat_q4_k_packed_swiglu_route(
@@ -8133,7 +8266,8 @@ static enum ggml_status ggml_backend_hrx2_graph_compute(ggml_backend_t backend, 
             i += 1;
             continue;
         }
-        if (!ggml_backend_hrx2_env_enabled("GGML_HRX2_DISABLE_Q4K_SWIGLU_FUSION") &&
+        if (ggml_backend_hrx2_fusion_enabled() &&
+            !ggml_backend_hrx2_env_enabled("GGML_HRX2_DISABLE_Q4K_SWIGLU_FUSION") &&
             i + 2 < cgraph->n_nodes &&
             node->op == GGML_OP_MUL_MAT &&
             ggml_backend_hrx2_supports_mul_mat_q4_k_swiglu_route(
@@ -8422,8 +8556,12 @@ static enum ggml_status ggml_backend_hrx2_graph_compute(ggml_backend_t backend, 
                 return GGML_STATUS_FAILED;
         }
     }
-    if (!GGML_HRX2_CHECK(hrx_stream_flush(context->stream))) {
-        return GGML_STATUS_FAILED;
+    if (ggml_backend_hrx2_env_enabled("GGML_HRX2_ASYNC_GRAPH_COMPUTE")) {
+        if (!GGML_HRX2_CHECK(hrx_stream_flush(context->stream))) {
+            return GGML_STATUS_FAILED;
+        }
+    } else {
+        ggml_backend_hrx2_synchronize(backend);
     }
     return GGML_STATUS_SUCCESS;
 }
@@ -8504,7 +8642,9 @@ static ggml_backend_t ggml_backend_hrx2_device_init_backend(ggml_backend_dev_t d
         /* .submit_count             = */ 0,
         /* .submit_flush_count       = */ 0,
         /* .submit_last_node         = */ nullptr,
+        /* .scratch_buffers          = */ {},
         /* .q8_1_scratch             = */ {},
+        /* .route_scratch            = */ {},
     };
     if (!context) {
         hrx_stream_release(stream);
