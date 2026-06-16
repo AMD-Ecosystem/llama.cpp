@@ -74,6 +74,12 @@
   "mul_mat_q6_k_f32": {
     "path": "kernels/mul_mat_q6_k_f32.loom"
   },
+  "mul_mat_q6_k_q8_1_hip_wave64": {
+    "path": "kernels/hip/mul_mat_vec_q6_k_q8_1_wave64.hip.cpp"
+  },
+  "mul_mat_q5_k_q8_1_hip_wave64": {
+    "path": "kernels/hip/mul_mat_vec_q5_k_q8_1_wave64.hip.cpp"
+  },
   "rope_neox_f32_freq": {
     "path": "kernels/rope_neox_f32_freq.loom"
   },

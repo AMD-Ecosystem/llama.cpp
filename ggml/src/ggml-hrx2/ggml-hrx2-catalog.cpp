@@ -123,7 +123,7 @@ static void ggml_backend_hrx2_dump_provider_evidence(
         const std::string & cache_key,
         const char * architecture,
         const char * source_identifier,
-        ggml_hrx2_loom_jit_source_format_t source_format,
+        const char * source_format,
         const void * hsaco_data,
         size_t hsaco_size,
         const ggml_backend_hrx2_provider & provider) {
@@ -158,7 +158,7 @@ static void ggml_backend_hrx2_dump_provider_evidence(
         { "root_symbol", route.root_symbol },
         { "export_name", route.export_name },
         { "source_identifier", source_identifier ? source_identifier : "" },
-        { "source_format", source_format == GGML_HRX2_LOOM_JIT_SOURCE_FORMAT_BYTECODE ? "loom-bytecode" : "loom-text" },
+        { "source_format", source_format ? source_format : "" },
         { "hsaco_size", hsaco_size },
         { "compile_report_bytes", provider.compile_report_json.size() },
         { "manifest_bytes", provider.manifest_json.size() },
@@ -467,7 +467,7 @@ static bool ggml_backend_hrx2_compile_route(
         cache_key,
         architecture,
         source_identifier,
-        source_format,
+        source_format == GGML_HRX2_LOOM_JIT_SOURCE_FORMAT_BYTECODE ? "loom-bytecode" : "loom-text",
         result.hsaco_data,
         hsaco_size,
         *provider);
@@ -480,6 +480,86 @@ static bool ggml_backend_hrx2_compile_route(
         architecture,
         source_format == GGML_HRX2_LOOM_JIT_SOURCE_FORMAT_BYTECODE ? "Loom bytecode" : "Loom text",
         config_bindings.size(),
+        hsaco_size);
+    return true;
+}
+
+static bool ggml_backend_hrx2_load_hsaco_route(
+        const ggml_backend_hrx2_device_info & device,
+        const ggml_backend_hrx2_kernel_route & route,
+        const std::vector<ggml_backend_hrx2_config_binding> & config_bindings,
+        const std::string & cache_key,
+        const void * hsaco_data,
+        size_t hsaco_size,
+        const char * source_identifier,
+        ggml_backend_hrx2_provider * provider) {
+    const char * architecture = device.architecture ? device.architecture : "";
+    if (!route.target_key.empty() && route.target_key != architecture) {
+        GGML_LOG_ERROR(
+            "HRX2: route %s targets %s but device architecture is %s\n",
+            route.id.c_str(), route.target_key.c_str(), architecture);
+        return false;
+    }
+    if (!hsaco_data || hsaco_size == 0) {
+        GGML_LOG_ERROR("HRX2: route %s has empty HSACO artifact\n", route.id.c_str());
+        return false;
+    }
+
+    hrx_executable_t executable = nullptr;
+    const char * loader_format = route.loader_format.empty() || route.loader_format == "amdgpu-hsaco" ?
+        nullptr :
+        route.loader_format.c_str();
+    if (!GGML_HRX2_CATALOG_CHECK(hrx_executable_load_data(
+            device.device,
+            hsaco_data,
+            hsaco_size,
+            loader_format,
+            &executable))) {
+        return false;
+    }
+
+    uint32_t export_ordinal = 0;
+    hrx_executable_export_info_t export_info = {};
+    const bool abi_ok =
+        GGML_HRX2_CATALOG_CHECK(hrx_executable_lookup_export_by_name(executable, route.export_name.c_str(), &export_ordinal)) &&
+        GGML_HRX2_CATALOG_CHECK(hrx_executable_export_info(executable, export_ordinal, &export_info)) &&
+        export_info.binding_count == route.binding_count &&
+        export_info.parameter_count == route.parameter_count &&
+        export_info.constant_byte_length == route.constant_byte_length;
+    if (!abi_ok) {
+        GGML_LOG_ERROR(
+            "HRX2: route %s ABI mismatch: bindings=%u/%u parameters=%u/%u constants=%u/%u workgroup=%ux%ux%u\n",
+            route.id.c_str(),
+            export_info.binding_count, route.binding_count,
+            export_info.parameter_count, route.parameter_count,
+            export_info.constant_byte_length, route.constant_byte_length,
+            export_info.workgroup_size[0], export_info.workgroup_size[1], export_info.workgroup_size[2]);
+        hrx_executable_release(executable);
+        return false;
+    }
+
+    provider->executable = executable;
+    provider->export_ordinal = export_ordinal;
+    provider->export_info = export_info;
+    provider->route = route;
+    provider->cache_key = cache_key;
+    ggml_backend_hrx2_dump_provider_evidence(
+        route,
+        config_bindings,
+        cache_key,
+        architecture,
+        source_identifier,
+        "amdgpu-hsaco",
+        hsaco_data,
+        hsaco_size,
+        *provider);
+    GGML_LOG_INFO(
+        "HRX2: loaded HSACO route=%s cache_key=%s export=%s target=%s source=%s hsaco=%zu bytes\n",
+        route.id.c_str(),
+        cache_key.c_str(),
+        route.export_name.c_str(),
+        architecture,
+        source_identifier ? source_identifier : "",
         hsaco_size);
     return true;
 }
@@ -576,6 +656,21 @@ std::unique_ptr<ggml_backend_hrx2_provider> ggml_backend_hrx2_load_provider(
                     artifact_it->second.data.data(),
                     artifact_it->second.data.size(),
                     GGML_HRX2_LOOM_JIT_SOURCE_FORMAT_BYTECODE,
+                    route.artifact_id.c_str(),
+                    provider.get())) {
+                return provider;
+            }
+            return nullptr;
+        } else if (artifact_it != catalog.artifacts.end() &&
+            artifact_it->second.format == "amdgpu-hsaco" &&
+            !artifact_it->second.data.empty()) {
+            if (ggml_backend_hrx2_load_hsaco_route(
+                    device,
+                    route,
+                    config_bindings,
+                    cache_key,
+                    artifact_it->second.data.data(),
+                    artifact_it->second.data.size(),
                     route.artifact_id.c_str(),
                     provider.get())) {
                 return provider;

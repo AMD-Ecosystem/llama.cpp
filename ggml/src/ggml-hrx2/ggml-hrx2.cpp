@@ -7472,7 +7472,6 @@ static ggml_status ggml_backend_hrx2_dispatch_mul_mat_q8_0(
         /* .rows = */ static_cast<uint32_t>(src0->ne[1]),
         /* .cols = */ static_cast<uint32_t>(src1->ne[1]),
     };
-
     for (const auto * route : context->device_context->mul_mat_q8_0_routes) {
         ggml_backend_hrx2_provider_plan plan;
         if (!ggml_backend_hrx2_make_mul_mat_q8_0_plan(context->device_context, route, shape, &plan)) {
@@ -8484,7 +8483,6 @@ static ggml_status ggml_backend_hrx2_dispatch_mul_mat_q6_k(
         /* .rows = */ static_cast<uint32_t>(src0->ne[1]),
         /* .cols = */ static_cast<uint32_t>(src1->ne[1]),
     };
-
     for (const auto * route : context->device_context->mul_mat_q6_k_routes) {
         const bool use_q8_1_rhs = ggml_backend_hrx2_route_uses_q8_1_rhs(route);
         if (use_q8_1_rhs && !ggml_backend_hrx2_q6_k_q8_1_prompt_enabled(shape)) {

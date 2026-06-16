@@ -68,6 +68,49 @@ find_program(GGML_HRX2_LOOM_LINK_EXECUTABLE
     REQUIRED
 )
 
+if(NOT GGML_HRX_ROCM_PATH)
+    if(DEFINED ENV{GGML_HRX_ROCM_PATH})
+        set(GGML_HRX_ROCM_PATH "$ENV{GGML_HRX_ROCM_PATH}")
+    elseif(DEFINED ENV{ROCM_PATH})
+        set(GGML_HRX_ROCM_PATH "$ENV{ROCM_PATH}")
+    endif()
+endif()
+if(NOT GGML_HRX2_CLANGXX)
+    find_program(GGML_HRX2_CLANGXX
+        NAMES clang++
+        HINTS
+            "${GGML_HRX_ROCM_PATH}/lib/llvm/bin"
+            "${GGML_HRX_ROCM_PATH}/llvm/bin"
+            "${GGML_HRX_ROCM_PATH}/bin"
+    )
+endif()
+if(NOT GGML_HRX2_CLANGXX)
+    message(FATAL_ERROR "clang++ is required to build HRX2 HIP bridge kernels")
+endif()
+
+set(GGML_HRX2_HIP_BRIDGE_AMDGPU_TARGET "gfx1100" CACHE STRING
+    "AMDGPU gfx target for target-specific HRX2 HIP bridge HSACO kernels")
+set(GGML_HRX2_Q6_HIP_BRIDGE_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/kernels/hip/mul_mat_vec_q6_k_q8_1_wave64.hip.cpp")
+set(GGML_HRX2_Q6_HIP_BRIDGE_DEPS
+    "${GGML_HRX2_Q6_HIP_BRIDGE_SOURCE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../ggml-hrx/kernels/mul_mat_vec_q6_k_q8_1_wave64.hip.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../ggml-hrx/kernels/mul_mat_vec_q6_k_q8_1_common.hip.inc"
+)
+set(GGML_HRX2_Q6_HIP_BRIDGE_HSACO
+    "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/${GGML_HRX2_HIP_BRIDGE_AMDGPU_TARGET}/mul_mat_vec_q6_k_q8_1_wave64.hsaco")
+set(GGML_HRX2_Q5_HIP_BRIDGE_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/kernels/hip/mul_mat_vec_q5_k_q8_1_wave64.hip.cpp")
+set(GGML_HRX2_Q5_HIP_BRIDGE_DEPS
+    "${GGML_HRX2_Q5_HIP_BRIDGE_SOURCE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../ggml-hrx/kernels/mul_mat_vec_q5_k_q8_1_common.hip.inc"
+)
+set(GGML_HRX2_Q5_HIP_BRIDGE_HSACO
+    "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/${GGML_HRX2_HIP_BRIDGE_AMDGPU_TARGET}/mul_mat_vec_q5_k_q8_1_wave64.hsaco")
+list(APPEND GGML_HRX2_ARTIFACTS
+    "${GGML_HRX2_Q6_HIP_BRIDGE_HSACO}"
+    "${GGML_HRX2_Q5_HIP_BRIDGE_HSACO}")
+
 if(NOT TARGET loom::binding::c::loomc OR NOT TARGET loom::binding::c::target::amdgpu)
     message(FATAL_ERROR
         "HRX2 requires HRX to export Loom C API CMake targets "
@@ -103,6 +146,29 @@ add_custom_command(
         --artifact-root ${GGML_HRX2_ARTIFACT_ROOT}
         --loom-link ${GGML_HRX2_LOOM_LINK_EXECUTABLE}
     COMMAND
+        ${CMAKE_COMMAND} -E make_directory
+        "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/${GGML_HRX2_HIP_BRIDGE_AMDGPU_TARGET}"
+    COMMAND
+        "${GGML_HRX2_CLANGXX}"
+        -x hip
+        --offload-device-only
+        --no-gpu-bundle-output
+        "--offload-arch=${GGML_HRX2_HIP_BRIDGE_AMDGPU_TARGET}"
+        -O3
+        -mwavefrontsize64
+        -c "${GGML_HRX2_Q6_HIP_BRIDGE_SOURCE}"
+        -o "${GGML_HRX2_Q6_HIP_BRIDGE_HSACO}"
+    COMMAND
+        "${GGML_HRX2_CLANGXX}"
+        -x hip
+        --offload-device-only
+        --no-gpu-bundle-output
+        "--offload-arch=${GGML_HRX2_HIP_BRIDGE_AMDGPU_TARGET}"
+        -O3
+        -mwavefrontsize64
+        -c "${GGML_HRX2_Q5_HIP_BRIDGE_SOURCE}"
+        -o "${GGML_HRX2_Q5_HIP_BRIDGE_HSACO}"
+    COMMAND
         ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/tools/validate_hrx2_catalog.py
         --catalog ${GGML_HRX2_ASSEMBLED_CATALOG}
@@ -112,6 +178,8 @@ add_custom_command(
     DEPENDS
         ${GGML_HRX2_ASSEMBLED_CATALOG}
         ${GGML_HRX2_LOOM_SOURCES}
+        ${GGML_HRX2_Q6_HIP_BRIDGE_DEPS}
+        ${GGML_HRX2_Q5_HIP_BRIDGE_DEPS}
         ${CMAKE_CURRENT_SOURCE_DIR}/tools/link_hrx2_artifacts.py
         ${CMAKE_CURRENT_SOURCE_DIR}/tools/validate_hrx2_catalog.py
     VERBATIM
