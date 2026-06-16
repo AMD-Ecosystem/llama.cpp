@@ -9573,6 +9573,10 @@ static std::unique_ptr<ggml_backend_hrx2_reg_context> ggml_backend_hrx2_create_r
                 device_context->mul_mat_id_q6_k_routes.end(),
                 route_less);
             std::sort(
+                device_context->mul_mat_f16_f32_routes.begin(),
+                device_context->mul_mat_f16_f32_routes.end(),
+                route_less);
+            std::sort(
                 device_context->copy_f32_f16_routes.begin(),
                 device_context->copy_f32_f16_routes.end(),
                 route_less);
