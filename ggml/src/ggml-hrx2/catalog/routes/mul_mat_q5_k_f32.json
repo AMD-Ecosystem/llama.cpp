@@ -1,5 +1,58 @@
 [
   {
+    "id": "mul_mat_q5_k_q8_1_x4_hip_vkm64x64_w32_gfx1100_k3072_r5120_c64_wg128",
+    "family": "mul_mat_q5_k_f32",
+    "op": "MUL_MAT",
+    "target_key": "gfx1100",
+    "source_id": "mul_mat_q5_k_q8_1_hip_wave64",
+    "artifact_id": "mul_mat_q5_k_q8_1_wave32_gfx1100_hsaco",
+    "root_symbol": "@hrx2_mul_mat_vec_q5_k_q8_1_x4_vkm64x64_wg128_w32_u32",
+    "export_name": "hrx2_mul_mat_vec_q5_k_q8_1_x4_vkm64x64_wg128_w32_u32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 220,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 12
+    },
+    "dispatch": {
+      "workgroup_size": [
+        128,
+        1,
+        1
+      ],
+      "rows_per_workgroup": 64,
+      "cols_per_workgroup": 64
+    },
+    "shape_domain": {
+      "name": "q8_1_x4_hip_vkm64x64_w32_gfx1100_k3072_rows5120_cols64_wg128",
+      "k_min": 3072,
+      "k_max": 3072,
+      "rows_min": 5120,
+      "rows_max": 5120,
+      "cols_min": 64,
+      "cols_max": 64
+    },
+    "shape_guards": {
+      "k_multiple_of": 256,
+      "rows_multiple_of": 64,
+      "cols_multiple_of": 64
+    },
+    "supports": {
+      "src0_type": "Q5_K",
+      "src1_type": "Q8_1",
+      "dst_type": "F32",
+      "layout": "packed_x4_vkm64x64_w32"
+    },
+    "evidence_summary": {
+      "phase": "phase2a-q5-k-cols64-wave32-bridge",
+      "algorithm": "q5_k_q8_1_x4_vulkan_medium_wave32_bm64_bn64_wg128_tm2_tn2_bkstep1_pack4_a_b_lds_sudot4",
+      "selection": "candidate_prior_led_p64_phi_wqkv_route",
+      "disable_env": "GGML_HRX2_DISABLE_Q5_Q6_HIP_BRIDGE_PROMPT",
+      "ggml_cpu_reference": "required"
+    }
+  },
+  {
     "id": "mul_mat_q5_k_q8_1_x4_hip_mmql128x128_gfx1100_k256_32768_r128_262144_c128_512_wg256",
     "family": "mul_mat_q5_k_f32",
     "op": "MUL_MAT",

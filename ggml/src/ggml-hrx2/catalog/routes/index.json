@@ -34,6 +34,7 @@
   "mul_mat_q6_k_q8_1_x4_mmq64x32_k256_32768_r1_262144_c32_512_wg256",
   "mul_mat_q6_k_q8_1_x4_direct_cols4_k256_32768_r1_262144_c4_512_wg256",
   "mul_mat_q6_k_f32_direct_k256_32768_r1_262144_c1_512_wg256",
+  "mul_mat_q5_k_q8_1_x4_hip_vkm64x64_w32_gfx1100_k3072_r5120_c64_wg128",
   "mul_mat_q5_k_q8_1_x4_hip_mmql128x128_gfx1100_k256_32768_r128_262144_c128_512_wg256",
   "mul_mat_q5_k_q8_1_x4_mmq32x32_k256_32768_r1_262144_c32_512_wg128",
   "mul_mat_q5_k_q8_1_x4_direct_cols4_k256_32768_r1_262144_c4_512_wg256",
