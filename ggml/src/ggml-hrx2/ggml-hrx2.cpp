@@ -9812,7 +9812,7 @@ static enum ggml_status ggml_backend_hrx2_graph_compute(ggml_backend_t backend, 
             continue;
         }
         if (ggml_backend_hrx2_fusion_enabled() &&
-            ggml_backend_hrx2_env_enabled("GGML_HRX2_ENABLE_RMS_NORM_MUL_FUSION") &&
+            !ggml_backend_hrx2_env_enabled("GGML_HRX2_DISABLE_RMS_NORM_MUL_FUSION") &&
             i + 1 < cgraph->n_nodes &&
             node->op == GGML_OP_RMS_NORM &&
             ggml_backend_hrx2_supports_rms_norm_mul_route(
