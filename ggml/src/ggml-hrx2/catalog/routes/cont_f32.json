@@ -1,5 +1,84 @@
 [
   {
+    "id": "cont_f32_n128_vec4_wg256",
+    "family": "cont_f32",
+    "op": "CONT",
+    "target_key": "",
+    "source_id": "cont_f32",
+    "artifact_id": "cont_f32_bc",
+    "root_symbol": "@hrx2_cont_f32_n128_vec4",
+    "export_name": "hrx2_cont_f32_n128_vec4",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 140,
+    "abi": {
+      "binding_count": 2,
+      "parameter_count": 2,
+      "constant_byte_length": 0
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ],
+      "rows_per_workgroup": 1,
+      "cols_per_workgroup": 4
+    },
+    "shape_domain": {
+      "name": "cont_f32_n128_vec4",
+      "ncols_min": 128,
+      "ncols_max": 128,
+      "nrows_min": 1,
+      "nrows_max": 1048576
+    },
+    "shape_guards": {
+      "ncols_multiple_of": 4
+    },
+    "specialization": {
+      "mode": "jit_config",
+      "bindings": [
+        {
+          "key": "@hrx2.shape.cont.nrows",
+          "source": "shape.cont.nrows"
+        },
+        {
+          "key": "@hrx2.shape.cont.ne1",
+          "source": "shape.cont.ne1"
+        },
+        {
+          "key": "@hrx2.shape.cont.ne2",
+          "source": "shape.cont.ne2"
+        },
+        {
+          "key": "@hrx2.stride.cont.src_nb1",
+          "source": "shape.cont.src_nb1"
+        },
+        {
+          "key": "@hrx2.stride.cont.src_nb2",
+          "source": "shape.cont.src_nb2"
+        },
+        {
+          "key": "@hrx2.stride.cont.src_nb3",
+          "source": "shape.cont.src_nb3"
+        },
+        {
+          "key": "@hrx2.tuning.cont.workgroup_size",
+          "value": "256"
+        }
+      ]
+    },
+    "supports": {
+      "src0_type": "F32",
+      "dst_type": "F32",
+      "layout": "row_contiguous_src_to_contiguous_dst_vec4"
+    },
+    "evidence_summary": {
+      "phase": "phase2a-phi-cont-prefill",
+      "algorithm": "vectorized_ncols128_copy_four_f32_per_lane",
+      "ggml_cpu_reference": "required"
+    }
+  },
+  {
     "id": "cont_f32_generic_wg256",
     "family": "cont_f32",
     "op": "CONT",

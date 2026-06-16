@@ -71,6 +71,7 @@ struct ggml_backend_hrx2_kernel_route {
     bool        pointwise_src1_ncols_eq_ncols = false;
     std::string supports_mode;
     std::string supports_glu_op;
+    std::string supports_layout;
     std::string specialization_mode;
     std::vector<ggml_backend_hrx2_config_binding_spec> config_bindings;
 };

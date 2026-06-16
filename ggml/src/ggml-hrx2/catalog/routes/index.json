@@ -56,6 +56,7 @@
   "mul_f32_n3072_r16_wg256",
   "scale_f32_n128_r24_wg256",
   "scale_f32_n128_r384_wg256",
+  "cont_f32_n128_vec4_wg256",
   "cont_f32_generic_wg256",
   "cont_f32_n128_r8_wg256",
   "cont_f32_n128_r24_wg256",

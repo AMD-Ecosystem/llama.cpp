@@ -435,6 +435,7 @@ static bool ggml_backend_hrx2_q4_k_q8_1_prompt_enabled(const ggml_backend_hrx2_m
 static bool ggml_backend_hrx2_q4_k_q8_1_x4_mmq_enabled();
 static bool ggml_backend_hrx2_route_uses_q8_1_rhs(const ggml_backend_hrx2_kernel_route * route);
 static bool ggml_backend_hrx2_route_uses_q8_1_x4_rhs(const ggml_backend_hrx2_kernel_route * route);
+static bool ggml_backend_hrx2_cont_route_copies_vec4(const ggml_backend_hrx2_kernel_route * route);
 
 static bool ggml_hrx2_check(hrx_status_t status, const char * expression, const char * file, int line) {
     if (hrx_status_is_ok(status)) {
@@ -5645,6 +5646,10 @@ static ggml_status ggml_backend_hrx2_dispatch_cont(
     }
 
     for (const auto * route : context->device_context->cont_routes) {
+        if (ggml_backend_hrx2_cont_route_copies_vec4(route) &&
+            ggml_backend_hrx2_env_enabled("GGML_HRX2_DISABLE_CONT_VEC4")) {
+            continue;
+        }
         ggml_backend_hrx2_provider_plan plan;
         if (!ggml_backend_hrx2_make_cont_plan(context->device_context, route, shape, &plan)) {
             continue;
@@ -5672,11 +5677,13 @@ static ggml_status ggml_backend_hrx2_dispatch_cont(
             continue;
         }
 
+        const bool copies_vec4 = ggml_backend_hrx2_cont_route_copies_vec4(&provider->route);
         const uint64_t total = static_cast<uint64_t>(shape.ncols) * static_cast<uint64_t>(shape.nrows);
+        const uint64_t dispatch_items = copies_vec4 ? (total + 3) / 4 : total;
         const uint32_t workgroup_size =
             provider->export_info.workgroup_size[0] ? provider->export_info.workgroup_size[0] : provider->route.workgroup_size[0];
         hrx_dispatch_config_t config = {
-            /* .workgroup_count = */ { static_cast<uint32_t>((total + workgroup_size - 1) / workgroup_size), 1, 1 },
+            /* .workgroup_count = */ { static_cast<uint32_t>((dispatch_items + workgroup_size - 1) / workgroup_size), 1, 1 },
             /* .workgroup_size  = */ { workgroup_size, 1, 1 },
             /* .subgroup_size   = */ 0,
         };
@@ -5689,6 +5696,7 @@ static ggml_status ggml_backend_hrx2_dispatch_cont(
             ggml_backend_hrx2_json_kv("cache_key", provider->cache_key) + "," +
             ggml_backend_hrx2_json_kv("ncols", shape.ncols) + "," +
             ggml_backend_hrx2_json_kv("nrows", shape.nrows) + "," +
+            ggml_backend_hrx2_json_kv("copies_vec4", copies_vec4 ? 1 : 0) + "," +
             ggml_backend_hrx2_json_kv("workgroups_x", config.workgroup_count[0]) + "," +
             ggml_backend_hrx2_json_kv("workgroup_size_x", config.workgroup_size[0]));
 
@@ -7229,6 +7237,10 @@ static bool ggml_backend_hrx2_route_uses_q8_1_rhs(const ggml_backend_hrx2_kernel
 
 static bool ggml_backend_hrx2_route_uses_q8_1_x4_rhs(const ggml_backend_hrx2_kernel_route * route) {
     return route && route->id.find("q8_1_x4") != std::string::npos;
+}
+
+static bool ggml_backend_hrx2_cont_route_copies_vec4(const ggml_backend_hrx2_kernel_route * route) {
+    return route && route->supports_layout == "row_contiguous_src_to_contiguous_dst_vec4";
 }
 
 static bool ggml_backend_hrx2_q4_k_q8_1_x4_mmq_enabled() {
