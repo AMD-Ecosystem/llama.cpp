@@ -65,9 +65,9 @@
       "layout": "packed_x4_mmq64x32"
     },
     "evidence_summary": {
-      "phase": "phase2a-q8_1-x4-mmq64x32",
-      "algorithm": "packed_q8_1_x4_rhs_mmq64x32_reuses_rhs_tile_across_64_rows_and_32_columns",
-      "selection": "accepted_after_focused_backend_gate_and_reduced_p64_p512_model_basket",
+      "phase": "phase2a-q8_1-x4-mmq64x32-a-staged",
+      "algorithm": "packed_q8_1_x4_rhs_mmq64x32_stages_rhs_tile_and_q4_a_payload_scale_min_in_workgroup_memory",
+      "selection": "accepted_after_focused_correctness_perf_and_reduced_p64_p512_model_basket",
       "ggml_cpu_reference": "approximate_prompt_path_only"
     }
   },
