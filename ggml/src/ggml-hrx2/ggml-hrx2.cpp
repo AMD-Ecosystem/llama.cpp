@@ -3434,6 +3434,9 @@ static bool ggml_backend_hrx2_route_shape_matches(
     if (route->k_multiple_of_guard != 0 && (shape.k % route->k_multiple_of_guard) != 0) {
         return false;
     }
+    if (route->rows_multiple_of_guard != 0 && (shape.rows % route->rows_multiple_of_guard) != 0) {
+        return false;
+    }
     if (route->cols_multiple_of_guard != 0 && (shape.cols % route->cols_multiple_of_guard) != 0) {
         return false;
     }
@@ -3484,6 +3487,9 @@ static bool ggml_backend_hrx2_route_shape_matches(
         }
     }
     if (route->k_multiple_of_guard != 0 && (shape.k % route->k_multiple_of_guard) != 0) {
+        return false;
+    }
+    if (route->rows_multiple_of_guard != 0 && (shape.rows % route->rows_multiple_of_guard) != 0) {
         return false;
     }
     if (route->cols_multiple_of_guard != 0 && (shape.cols % route->cols_multiple_of_guard) != 0) {

@@ -63,6 +63,7 @@ struct ggml_backend_hrx2_kernel_route {
     int8_t      k_pow2_guard = 0;
     int8_t      all_pot_guard = 0;
     uint32_t    k_multiple_of_guard = 0;
+    uint32_t    rows_multiple_of_guard = 0;
     uint32_t    cols_multiple_of_guard = 0;
     uint32_t    ncols_multiple_of_guard = 0;
     bool        pointwise_src0_row_stride_eq_ncols = false;

@@ -35,6 +35,7 @@
     },
     "shape_guards": {
       "k_multiple_of": 256,
+      "rows_multiple_of": 64,
       "cols_multiple_of": 32
     },
     "specialization": {
