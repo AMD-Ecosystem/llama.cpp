@@ -1,5 +1,73 @@
 [
   {
+    "id": "mul_mat_q6_k_q8_1_x4_mmq32x32_k256_32768_r1_262144_c32_512_wg128",
+    "family": "mul_mat_q6_k_f32",
+    "op": "MUL_MAT",
+    "target_key": "",
+    "source_id": "mul_mat_q6_k_f32",
+    "artifact_id": "mul_mat_q6_k_f32_static_bc",
+    "root_symbol": "@hrx2_mul_mat_q6_k_q8_1_x4_mmq32x32_static",
+    "export_name": "hrx2_mul_mat_q6_k_q8_1_x4_mmq32x32_static",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 190,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 3,
+      "constant_byte_length": 0
+    },
+    "dispatch": {
+      "workgroup_size": [
+        128,
+        1,
+        1
+      ],
+      "rows_per_workgroup": 32,
+      "cols_per_workgroup": 32
+    },
+    "shape_domain": {
+      "name": "q8_1_x4_mmq32x32_k256_32768_rows1_262144_cols32_512_wg128",
+      "k_min": 256,
+      "k_max": 32768,
+      "rows_min": 1,
+      "rows_max": 262144,
+      "cols_min": 32,
+      "cols_max": 512
+    },
+    "shape_guards": {
+      "k_multiple_of": 256,
+      "cols_multiple_of": 32
+    },
+    "specialization": {
+      "mode": "jit_config",
+      "bindings": [
+        {
+          "key": "@hrx2.shape.k",
+          "source": "shape.k"
+        },
+        {
+          "key": "@hrx2.shape.rows",
+          "source": "shape.rows"
+        },
+        {
+          "key": "@hrx2.shape.cols",
+          "source": "shape.cols"
+        }
+      ]
+    },
+    "supports": {
+      "src0_type": "Q6_K",
+      "src1_type": "Q8_1",
+      "dst_type": "F32",
+      "layout": "packed_x4_direct_cols4"
+    },
+    "evidence_summary": {
+      "phase": "phase2a-q6-k-q8_1-x4-mmq32x32-prefill",
+      "algorithm": "hrx1_q6_k_q8_1_x4_mmq32x32_wg128_rhs_lds_tile_one_row_eight_cols_per_lane",
+      "selection": "accepted_default_after_focused_correctness_and_backend_op_perf",
+      "ggml_cpu_reference": "required"
+    }
+  },
+  {
     "id": "mul_mat_q6_k_q8_1_x4_direct_cols4_k256_32768_r1_262144_c4_512_wg256",
     "family": "mul_mat_q6_k_f32",
     "op": "MUL_MAT",
