@@ -122,6 +122,7 @@ struct ggml_backend_hrx2_device_context {
     std::vector<const ggml_backend_hrx2_kernel_route *> argsort_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> rope_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> soft_max_routes;
+    std::vector<const ggml_backend_hrx2_kernel_route *> flash_attn_fa0_routes;
     std::unordered_map<std::string, std::unique_ptr<ggml_backend_hrx2_provider>> providers;
     std::unordered_set<std::string> provider_failures;
     ggml_backend_buffer_type buffer_type = {};
@@ -245,6 +246,41 @@ struct ggml_backend_hrx2_soft_max_constants {
 };
 
 static_assert(sizeof(ggml_backend_hrx2_soft_max_constants) == 4);
+
+struct ggml_backend_hrx2_flash_attn_fa0_constants {
+    int64_t D;
+    int64_t KV;
+    int64_t N;
+    int64_t H;
+    int64_t H_KV;
+    int64_t S;
+    int64_t q_nb1;
+    int64_t q_nb2;
+    int64_t q_nb3;
+    int64_t k_nb1;
+    int64_t k_nb2;
+    int64_t k_nb3;
+    int64_t v_nb0;
+    int64_t v_nb1;
+    int64_t v_nb2;
+    int64_t v_nb3;
+    int64_t dst_nb1;
+    int64_t dst_nb2;
+    int64_t dst_nb3;
+    int64_t mask_nb0;
+    int64_t mask_nb1;
+    int64_t mask_nb3;
+    float scale;
+    int32_t has_mask;
+    float max_bias;
+    float m0;
+    float m1;
+    float logit_softcap;
+    int32_t n_head_log2;
+    int32_t has_sinks;
+};
+
+static_assert(sizeof(ggml_backend_hrx2_flash_attn_fa0_constants) == 208);
 
 struct ggml_backend_hrx2_copy_shape {
     uint32_t n = 0;
@@ -408,6 +444,15 @@ struct ggml_backend_hrx2_soft_max_shape {
     uint32_t mask_ne2 = 1;
     uint32_t mask_ne3 = 1;
     bool has_mask = false;
+};
+
+struct ggml_backend_hrx2_flash_attn_fa0_shape {
+    uint32_t D = 0;
+    uint32_t KV = 0;
+    uint32_t N = 0;
+    uint32_t H = 0;
+    uint32_t H_KV = 0;
+    uint32_t S = 0;
 };
 
 struct ggml_backend_hrx2_cont_shape {
@@ -2871,8 +2916,115 @@ static bool ggml_backend_hrx2_extract_mul_mat_f16_f32_cont_fusion(
            cont->ne[2] == shape.dst_ne3 &&
            cont->ne[3] == 1 &&
            cont->nb[0] == static_cast<int64_t>(sizeof(float)) &&
-           cont->nb[1] == cont->ne[0] * static_cast<int64_t>(sizeof(float)) &&
+           cont->nb[1] == static_cast<size_t>(cont->ne[0]) * sizeof(float) &&
            (*out_shape = shape, true);
+}
+
+static bool ggml_backend_hrx2_extract_flash_attn_fa0_fusion(
+        const ggml_tensor * kq,
+        const ggml_tensor * soft_max,
+        const ggml_tensor * kqv,
+        const ggml_tensor * permute,
+        const ggml_tensor * cont,
+        ggml_backend_hrx2_flash_attn_fa0_shape * out_shape) {
+    if (!out_shape ||
+        !kq ||
+        !soft_max ||
+        !kqv ||
+        !permute ||
+        !cont ||
+        kq->op != GGML_OP_MUL_MAT ||
+        soft_max->op != GGML_OP_SOFT_MAX ||
+        kqv->op != GGML_OP_MUL_MAT ||
+        permute->op != GGML_OP_PERMUTE ||
+        cont->op != GGML_OP_CONT ||
+        soft_max->src[0] != kq ||
+        kqv->src[1] != soft_max ||
+        permute->src[0] != kqv ||
+        cont->src[0] != permute ||
+        !kq->src[0] ||
+        !kq->src[1] ||
+        !soft_max->src[1] ||
+        !kqv->src[0] ||
+        kq->src[0]->type != GGML_TYPE_F16 ||
+        kq->src[1]->type != GGML_TYPE_F32 ||
+        kq->type != GGML_TYPE_F32 ||
+        soft_max->type != GGML_TYPE_F32 ||
+        soft_max->src[1]->type != GGML_TYPE_F32 ||
+        kqv->src[0]->type != GGML_TYPE_F16 ||
+        kqv->type != GGML_TYPE_F32 ||
+        cont->type != GGML_TYPE_F32 ||
+        cont->view_src != nullptr ||
+        !ggml_is_contiguous(cont) ||
+        soft_max->src[2] != nullptr ||
+        ggml_get_op_params_f32(soft_max, 1) != 0.0f) {
+        return false;
+    }
+
+    const ggml_tensor * k = kq->src[0];
+    const ggml_tensor * q = kq->src[1];
+    const ggml_tensor * mask = soft_max->src[1];
+    const ggml_tensor * v = kqv->src[0];
+
+    if (k->ne[0] != 128 ||
+        q->ne[0] != 128 ||
+        v->ne[1] != 128 ||
+        kqv->ne[0] != 128 ||
+        permute->ne[0] != 128 ||
+        kq->ne[0] != k->ne[1] ||
+        kq->ne[1] != q->ne[1] ||
+        kq->ne[2] != q->ne[2] ||
+        kq->ne[3] != q->ne[3] ||
+        soft_max->ne[0] != kq->ne[0] ||
+        soft_max->ne[1] != kq->ne[1] ||
+        soft_max->ne[2] != kq->ne[2] ||
+        soft_max->ne[3] != kq->ne[3] ||
+        v->ne[0] != kq->ne[0] ||
+        v->ne[2] != k->ne[2] ||
+        kqv->ne[1] != q->ne[1] ||
+        kqv->ne[2] != q->ne[2] ||
+        kqv->ne[3] != q->ne[3] ||
+        permute->ne[1] != q->ne[2] ||
+        permute->ne[2] != q->ne[1] ||
+        permute->ne[3] != q->ne[3] ||
+        cont->ne[0] != q->ne[0] * q->ne[2] ||
+        cont->ne[1] != q->ne[1] ||
+        cont->ne[2] != q->ne[3] ||
+        cont->ne[3] != 1 ||
+        mask->ne[0] < kq->ne[0] ||
+        mask->ne[1] < kq->ne[1] ||
+        mask->ne[2] <= 0 ||
+        mask->ne[3] <= 0 ||
+        (q->ne[2] % k->ne[2]) != 0 ||
+        q->ne[3] != 1 ||
+        k->ne[3] != 1 ||
+        v->ne[3] != 1 ||
+        q->nb[0] != static_cast<int64_t>(sizeof(float)) ||
+        k->nb[0] != static_cast<int64_t>(sizeof(ggml_fp16_t)) ||
+        v->nb[0] != static_cast<int64_t>(sizeof(ggml_fp16_t)) ||
+        mask->nb[0] != static_cast<int64_t>(sizeof(float)) ||
+        cont->nb[0] != static_cast<int64_t>(sizeof(float)) ||
+        cont->nb[1] != static_cast<size_t>(cont->ne[0]) * sizeof(float) ||
+        q->ne[1] <= 0 ||
+        q->ne[2] <= 0 ||
+        k->ne[1] <= 0 ||
+        k->ne[2] <= 0 ||
+        k->ne[2] > 16) {
+        return false;
+    }
+
+    ggml_backend_hrx2_flash_attn_fa0_shape shape = {};
+    if (!ggml_backend_hrx2_u32(k->ne[0], &shape.D) ||
+        !ggml_backend_hrx2_u32(k->ne[1], &shape.KV) ||
+        !ggml_backend_hrx2_u32(q->ne[1], &shape.N) ||
+        !ggml_backend_hrx2_u32(q->ne[2], &shape.H) ||
+        !ggml_backend_hrx2_u32(k->ne[2], &shape.H_KV) ||
+        !ggml_backend_hrx2_u32(q->ne[3], &shape.S)) {
+        return false;
+    }
+
+    *out_shape = shape;
+    return true;
 }
 
 static bool ggml_backend_hrx2_extract_rms_norm_shape(
@@ -3650,6 +3802,27 @@ static bool ggml_backend_hrx2_route_shape_matches(
 
 static bool ggml_backend_hrx2_route_shape_matches(
         const ggml_backend_hrx2_kernel_route * route,
+        const ggml_backend_hrx2_flash_attn_fa0_shape & shape) {
+    if (!route ||
+        shape.KV < route->k_min || shape.KV > route->k_max ||
+        shape.N < route->rows_min || shape.N > route->rows_max ||
+        shape.H < route->cols_min || shape.H > route->cols_max) {
+        return false;
+    }
+    if (route->k_multiple_of_guard != 0 && (shape.KV % route->k_multiple_of_guard) != 0) {
+        return false;
+    }
+    if (route->rows_multiple_of_guard != 0 && (shape.N % route->rows_multiple_of_guard) != 0) {
+        return false;
+    }
+    if (route->cols_multiple_of_guard != 0 && (shape.H % route->cols_multiple_of_guard) != 0) {
+        return false;
+    }
+    return true;
+}
+
+static bool ggml_backend_hrx2_route_shape_matches(
+        const ggml_backend_hrx2_kernel_route * route,
         const ggml_backend_hrx2_cont_shape & shape) {
     if (!route ||
         shape.ncols < route->ncols_min || shape.ncols > route->ncols_max ||
@@ -4231,6 +4404,31 @@ static bool ggml_backend_hrx2_make_soft_max_plan(
             plan.cache_key += binding.value;
         }
     }
+
+    *out_plan = std::move(plan);
+    return true;
+}
+
+static bool ggml_backend_hrx2_make_flash_attn_fa0_plan(
+        const ggml_backend_hrx2_device_context * device_context,
+        const ggml_backend_hrx2_kernel_route * route,
+        const ggml_backend_hrx2_flash_attn_fa0_shape & shape,
+        ggml_backend_hrx2_provider_plan * out_plan) {
+    if (!out_plan ||
+        !ggml_backend_hrx2_route_available(device_context, route) ||
+        !ggml_backend_hrx2_route_shape_matches(route, shape)) {
+        return false;
+    }
+
+    ggml_backend_hrx2_provider_plan plan;
+    plan.route = route;
+    plan.cache_key = ggml_backend_hrx2_base_cache_key(device_context, route);
+    plan.cache_key += "|D=" + std::to_string(shape.D);
+    plan.cache_key += "|KV=" + std::to_string(shape.KV);
+    plan.cache_key += "|N=" + std::to_string(shape.N);
+    plan.cache_key += "|H=" + std::to_string(shape.H);
+    plan.cache_key += "|H_KV=" + std::to_string(shape.H_KV);
+    plan.cache_key += "|S=" + std::to_string(shape.S);
 
     *out_plan = std::move(plan);
     return true;
@@ -5594,6 +5792,29 @@ static bool ggml_backend_hrx2_supports_soft_max_route(
     for (const auto * route : device_context->soft_max_routes) {
         ggml_backend_hrx2_provider_plan plan;
         if (ggml_backend_hrx2_make_soft_max_plan(device_context, route, shape, &plan)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool ggml_backend_hrx2_supports_flash_attn_fa0_route(
+        ggml_backend_hrx2_device_context * device_context,
+        const ggml_tensor * kq,
+        const ggml_tensor * soft_max,
+        const ggml_tensor * kqv,
+        const ggml_tensor * permute,
+        const ggml_tensor * cont) {
+    if (ggml_backend_hrx2_env_enabled("GGML_HRX2_DISABLE_F16_FA0_ATTENTION_FUSION")) {
+        return false;
+    }
+    ggml_backend_hrx2_flash_attn_fa0_shape shape;
+    if (!ggml_backend_hrx2_extract_flash_attn_fa0_fusion(kq, soft_max, kqv, permute, cont, &shape)) {
+        return false;
+    }
+    for (const auto * route : device_context->flash_attn_fa0_routes) {
+        ggml_backend_hrx2_provider_plan plan;
+        if (ggml_backend_hrx2_make_flash_attn_fa0_plan(device_context, route, shape, &plan)) {
             return true;
         }
     }
@@ -7447,6 +7668,161 @@ static ggml_status ggml_backend_hrx2_dispatch_soft_max(
         shape.ncols,
         shape.nrows,
         shape.has_mask ? 1 : 0);
+    return GGML_STATUS_FAILED;
+}
+
+static ggml_status ggml_backend_hrx2_dispatch_flash_attn_fa0(
+        ggml_backend_hrx2_context * context,
+        const ggml_tensor * kq,
+        const ggml_tensor * soft_max,
+        const ggml_tensor * kqv,
+        const ggml_tensor * permute,
+        const ggml_tensor * cont) {
+    ggml_backend_hrx2_flash_attn_fa0_shape shape;
+    if (!ggml_backend_hrx2_extract_flash_attn_fa0_fusion(kq, soft_max, kqv, permute, cont, &shape)) {
+        ggml_backend_hrx2_trace_event(
+            "fusion_reject",
+            ggml_backend_hrx2_json_kv("fusion", "FLASH_ATTN_FA0") + "," +
+            ggml_backend_hrx2_json_kv("reason", "shape"));
+        GGML_LOG_ERROR("HRX2: invalid FLASH_ATTN_FA0 fusion shape\n");
+        return GGML_STATUS_FAILED;
+    }
+
+    const ggml_tensor * k = kq->src[0];
+    const ggml_tensor * q = kq->src[1];
+    const ggml_tensor * mask = soft_max->src[1];
+    const ggml_tensor * v = kqv->src[0];
+    hrx_buffer_ref_t bindings[6] = {};
+    if (!ggml_backend_hrx2_tensor_buffer_ref(q, &bindings[0]) ||
+        !ggml_backend_hrx2_tensor_buffer_ref(k, &bindings[1]) ||
+        !ggml_backend_hrx2_tensor_buffer_ref(v, &bindings[2]) ||
+        !ggml_backend_hrx2_tensor_buffer_ref(mask, &bindings[3]) ||
+        !ggml_backend_hrx2_tensor_buffer_ref(q, &bindings[4]) ||
+        !ggml_backend_hrx2_tensor_buffer_ref(cont, &bindings[5])) {
+        ggml_backend_hrx2_trace_event(
+            "fusion_reject",
+            ggml_backend_hrx2_json_kv("fusion", "FLASH_ATTN_FA0") + "," +
+            ggml_backend_hrx2_json_kv("reason", "buffer_ref"));
+        GGML_LOG_ERROR("HRX2: FLASH_ATTN_FA0 tensors are not backed by HRX2 buffers\n");
+        return GGML_STATUS_FAILED;
+    }
+
+    float scale = 1.0f;
+    std::memcpy(&scale, soft_max->op_params, sizeof(scale));
+    ggml_backend_hrx2_flash_attn_fa0_constants constants = {
+        /* .D               = */ static_cast<int64_t>(shape.D),
+        /* .KV              = */ static_cast<int64_t>(shape.KV),
+        /* .N               = */ static_cast<int64_t>(shape.N),
+        /* .H               = */ static_cast<int64_t>(shape.H),
+        /* .H_KV            = */ static_cast<int64_t>(shape.H_KV),
+        /* .S               = */ static_cast<int64_t>(shape.S),
+        /* .q_nb1           = */ static_cast<int64_t>(q->nb[1]),
+        /* .q_nb2           = */ static_cast<int64_t>(q->nb[2]),
+        /* .q_nb3           = */ static_cast<int64_t>(q->nb[3]),
+        /* .k_nb1           = */ static_cast<int64_t>(k->nb[1]),
+        /* .k_nb2           = */ static_cast<int64_t>(k->nb[2]),
+        /* .k_nb3           = */ static_cast<int64_t>(k->nb[3]),
+        /* .v_nb0           = */ static_cast<int64_t>(v->nb[0]),
+        /* .v_nb1           = */ static_cast<int64_t>(v->nb[1]),
+        /* .v_nb2           = */ static_cast<int64_t>(v->nb[2]),
+        /* .v_nb3           = */ static_cast<int64_t>(v->nb[3]),
+        /* .dst_nb1         = */ static_cast<int64_t>(shape.D) * static_cast<int64_t>(sizeof(float)),
+        /* .dst_nb2         = */ static_cast<int64_t>(cont->nb[1]),
+        /* .dst_nb3         = */ static_cast<int64_t>(cont->nb[3]),
+        /* .mask_nb0        = */ static_cast<int64_t>(mask->nb[0]),
+        /* .mask_nb1        = */ static_cast<int64_t>(mask->nb[1]),
+        /* .mask_nb3        = */ static_cast<int64_t>(mask->nb[3]),
+        /* .scale           = */ scale,
+        /* .has_mask        = */ 1,
+        /* .max_bias        = */ 0.0f,
+        /* .m0              = */ 1.0f,
+        /* .m1              = */ 1.0f,
+        /* .logit_softcap   = */ 0.0f,
+        /* .n_head_log2     = */ 0,
+        /* .has_sinks       = */ 0,
+    };
+
+    for (const auto * route : context->device_context->flash_attn_fa0_routes) {
+        ggml_backend_hrx2_provider_plan plan;
+        if (!ggml_backend_hrx2_make_flash_attn_fa0_plan(context->device_context, route, shape, &plan)) {
+            continue;
+        }
+
+        const auto * provider = ggml_backend_hrx2_get_provider(
+            context->device_context,
+            plan.route,
+            plan.config_bindings,
+            plan.cache_key);
+        if (!provider) {
+            ggml_backend_hrx2_trace_event(
+                "provider_unavailable",
+                ggml_backend_hrx2_json_kv("op", "FLASH_ATTN_FA0") + "," +
+                ggml_backend_hrx2_json_kv("route_id", plan.route->id) + "," +
+                ggml_backend_hrx2_json_kv("target_key", context->device_context->architecture) + "," +
+                ggml_backend_hrx2_json_kv("cache_key", plan.cache_key) + "," +
+                ggml_backend_hrx2_json_kv("KV", shape.KV) + "," +
+                ggml_backend_hrx2_json_kv("N", shape.N) + "," +
+                ggml_backend_hrx2_json_kv("H", shape.H));
+            continue;
+        }
+        if (provider->route.constant_byte_length != sizeof(constants)) {
+            GGML_LOG_ERROR(
+                "HRX2: FLASH_ATTN_FA0 route %s has constant byte length %u but dispatch has %zu\n",
+                provider->route.id.c_str(),
+                provider->route.constant_byte_length,
+                sizeof(constants));
+            continue;
+        }
+
+        const uint32_t workgroup_size = provider->route.workgroup_size[0];
+        hrx_dispatch_config_t config = {
+            /* .workgroup_count = */ {
+                (shape.N + provider->route.rows_per_workgroup - 1) / provider->route.rows_per_workgroup,
+                shape.H,
+                shape.S,
+            },
+            /* .workgroup_size  = */ { workgroup_size, 1, 1 },
+            /* .subgroup_size   = */ 0,
+        };
+
+        ggml_backend_hrx2_trace_event(
+            "dispatch",
+            ggml_backend_hrx2_json_kv("op", "FLASH_ATTN_FA0") + "," +
+            ggml_backend_hrx2_json_kv("fusion", "KQ_SOFTMAX_KQV_CONT") + "," +
+            ggml_backend_hrx2_json_kv("route_id", provider->route.id) + "," +
+            ggml_backend_hrx2_json_kv("target_key", context->device_context->architecture) + "," +
+            ggml_backend_hrx2_json_kv("cache_key", provider->cache_key) + "," +
+            ggml_backend_hrx2_json_kv("D", shape.D) + "," +
+            ggml_backend_hrx2_json_kv("KV", shape.KV) + "," +
+            ggml_backend_hrx2_json_kv("N", shape.N) + "," +
+            ggml_backend_hrx2_json_kv("H", shape.H) + "," +
+            ggml_backend_hrx2_json_kv("H_KV", shape.H_KV) + "," +
+            ggml_backend_hrx2_json_kv("workgroups_x", config.workgroup_count[0]) + "," +
+            ggml_backend_hrx2_json_kv("workgroups_y", config.workgroup_count[1]) + "," +
+            ggml_backend_hrx2_json_kv("workgroup_size_x", config.workgroup_size[0]));
+
+        if (!GGML_HRX2_CHECK(hrx_stream_dispatch(
+                context->stream,
+                provider->executable,
+                provider->export_ordinal,
+                &config,
+                &constants,
+                sizeof(constants),
+                bindings,
+                6,
+                HRX_DISPATCH_FLAG_NONE))) {
+            return GGML_STATUS_FAILED;
+        }
+        return GGML_STATUS_SUCCESS;
+    }
+
+    GGML_LOG_ERROR(
+        "HRX2: FLASH_ATTN_FA0 provider is not available for D=%u KV=%u N=%u H=%u H_KV=%u\n",
+        shape.D,
+        shape.KV,
+        shape.N,
+        shape.H,
+        shape.H_KV);
     return GGML_STATUS_FAILED;
 }
 
@@ -9557,6 +9933,38 @@ static enum ggml_status ggml_backend_hrx2_graph_compute(ggml_backend_t backend, 
             continue;
         }
         if (ggml_backend_hrx2_fusion_enabled() &&
+            !ggml_backend_hrx2_env_enabled("GGML_HRX2_DISABLE_F16_FA0_ATTENTION_FUSION") &&
+            i + 4 < cgraph->n_nodes &&
+            node->op == GGML_OP_MUL_MAT &&
+            cgraph->nodes[i + 1]->op == GGML_OP_SOFT_MAX &&
+            cgraph->nodes[i + 2]->op == GGML_OP_MUL_MAT &&
+            cgraph->nodes[i + 3]->op == GGML_OP_PERMUTE &&
+            cgraph->nodes[i + 4]->op == GGML_OP_CONT &&
+            ggml_backend_hrx2_supports_flash_attn_fa0_route(
+                context->device_context,
+                node,
+                cgraph->nodes[i + 1],
+                cgraph->nodes[i + 2],
+                cgraph->nodes[i + 3],
+                cgraph->nodes[i + 4]) &&
+            ggml_can_fuse_subgraph(
+                cgraph,
+                i,
+                { GGML_OP_MUL_MAT, GGML_OP_SOFT_MAX, GGML_OP_MUL_MAT, GGML_OP_PERMUTE, GGML_OP_CONT },
+                { i + 4 })) {
+            if (ggml_backend_hrx2_dispatch_flash_attn_fa0(
+                    context,
+                    node,
+                    cgraph->nodes[i + 1],
+                    cgraph->nodes[i + 2],
+                    cgraph->nodes[i + 3],
+                    cgraph->nodes[i + 4]) != GGML_STATUS_SUCCESS) {
+                return GGML_STATUS_FAILED;
+            }
+            i += 4;
+            continue;
+        }
+        if (ggml_backend_hrx2_fusion_enabled() &&
             !ggml_backend_hrx2_env_enabled("GGML_HRX2_DISABLE_F16_KQV_CONT_FUSION") &&
             i + 2 < cgraph->n_nodes &&
             node->op == GGML_OP_MUL_MAT &&
@@ -10203,6 +10611,11 @@ static std::unique_ptr<ggml_backend_hrx2_reg_context> ggml_backend_hrx2_create_r
                 &device_context->mul_mat_f16_f32_cont_routes);
             ggml_backend_hrx2_catalog_find_routes(
                 *device_context->catalog,
+                "flash_attn_fa0_f32_f16",
+                "CONT",
+                &device_context->flash_attn_fa0_routes);
+            ggml_backend_hrx2_catalog_find_routes(
+                *device_context->catalog,
                 "copy_f32_f16",
                 "CPY",
                 &device_context->copy_f32_f16_routes);
@@ -10363,6 +10776,10 @@ static std::unique_ptr<ggml_backend_hrx2_reg_context> ggml_backend_hrx2_create_r
             std::sort(
                 device_context->mul_mat_f16_f32_routes.begin(),
                 device_context->mul_mat_f16_f32_routes.end(),
+                route_less);
+            std::sort(
+                device_context->flash_attn_fa0_routes.begin(),
+                device_context->flash_attn_fa0_routes.end(),
                 route_less);
             std::sort(
                 device_context->copy_f32_f16_routes.begin(),

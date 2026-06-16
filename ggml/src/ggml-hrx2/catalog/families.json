@@ -124,6 +124,10 @@
     "op": "SOFT_MAX"
   },
   {
+    "family": "flash_attn_fa0_f32_f16",
+    "op": "CONT"
+  },
+  {
     "family": "mul_mat_id_q5_k_f32",
     "op": "MUL_MAT_ID"
   },

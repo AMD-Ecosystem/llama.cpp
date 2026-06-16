@@ -159,6 +159,12 @@
     "source_id": "mul_mat_q4_k_q8_1_hip_wave64",
     "storage": "embedded"
   },
+  "flash_attn_fa0_f32_f16_prefill_direct_d128_gfx1100_hsaco": {
+    "path": "artifacts/gfx1100/flash_attn_fa0_f32_f16_prefill_direct_d128_gfx11.hsaco",
+    "format": "amdgpu-hsaco",
+    "source_id": "flash_attn_fa0_f32_f16_prefill_direct_d128_gfx11",
+    "storage": "embedded"
+  },
   "rope_neox_f32_freq_bc": {
     "path": "artifacts/rope_neox_f32_freq.loombc",
     "format": "loom-bytecode",

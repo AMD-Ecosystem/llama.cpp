@@ -37,6 +37,7 @@
   "mul_mat_f16_f32_batched_attention_rows2_cols8_wg128",
   "mul_mat_f16_f32_batched_attention_cols8_wg256",
   "mul_mat_f16_f32_batched_attention_wg256",
+  "flash_attn_fa0_f32_f16_direct_d128_gfx1100_n1_512_kv1_512_h1_64_hkv1_16_wg256",
   "rms_norm_f32_n512_r32_vector_vw2_wg512",
   "mul_mat_q8_0_f32_packed_loop_k32_8192_c1_16_wg64",
   "mul_mat_q8_0_f32_k256_r16_c8_wg256",
