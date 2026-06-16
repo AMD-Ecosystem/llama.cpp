@@ -2076,6 +2076,70 @@
     }
   },
   {
+    "id": "rms_norm_f32_n3584_r512_vector_vw4_wg512",
+    "family": "rms_norm_f32",
+    "op": "RMS_NORM",
+    "target_key": "",
+    "source_id": "rms_norm_f32",
+    "artifact_id": "rms_norm_f32_bc",
+    "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+    "export_name": "hrx2_rms_norm_f32_static_vector_tail",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 154,
+    "abi": {
+      "binding_count": 2,
+      "parameter_count": 3,
+      "constant_byte_length": 4
+    },
+    "dispatch": {
+      "workgroup_size": [
+        512,
+        1,
+        1
+      ],
+      "rows_per_workgroup": 1,
+      "cols_per_workgroup": 1
+    },
+    "shape_domain": {
+      "name": "rms_norm_f32_n3584_r512_vector_vw4_wg512",
+      "ncols_min": 3584,
+      "ncols_max": 3584,
+      "nrows_min": 512,
+      "nrows_max": 512
+    },
+    "specialization": {
+      "mode": "jit_config",
+      "bindings": [
+        {
+          "key": "@hrx2.shape.ncols",
+          "source": "shape.ncols"
+        },
+        {
+          "key": "@hrx2.shape.nrows",
+          "source": "shape.nrows"
+        },
+        {
+          "key": "@hrx2.tuning.rms_norm.workgroup_size",
+          "value": "512"
+        },
+        {
+          "key": "@hrx2.tuning.rms_norm.vector_width",
+          "value": "4"
+        }
+      ]
+    },
+    "supports": {
+      "src0_type": "F32",
+      "dst_type": "F32",
+      "layout": "contiguous"
+    },
+    "evidence_summary": {
+      "phase": "phase2b-qwen-p512-route-coverage",
+      "selection": "basket_p512_cpu_fallback_elimination",
+      "ggml_cpu_reference": "required"
+    }
+  },
+  {
     "id": "rms_norm_f32_n4096_r512_vector_vw4_wg512",
     "family": "rms_norm_f32",
     "op": "RMS_NORM",

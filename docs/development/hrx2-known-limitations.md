@@ -35,3 +35,29 @@ The largest p64/p512 blocker is quantized prompt matmul route quality, especiall
 `mul_mat_q4_k_q8_1_x4_mmq64x32`. Future work should start from prior schedules,
 Loom compile reports, emitted assembly, and focused kernel sweeps before
 promoting integration routes.
+
+## Qwen 7B p512 Route Coverage
+
+On 2026-06-16, Qwen2.5-Coder 7B Q5_K_M/Q6_K p512 still had CPU fallback for
+hidden-size 3584 `RMS_NORM` and NEOX `ROPE` at `[128, 28, 512]` and
+`[128, 4, 512]`. The catalog now has generic target-neutral routes for:
+
+- `rms_norm_f32_n3584_r512_vector_vw4_wg512`
+- `rope_neox_f32_n128_h28_t512_wg256`
+- `rope_neox_f32_n128_h4_t512_wg256`
+
+Focused model-derived `test-backend-ops` rows passed against CPU and real
+`llama-bench` p512 traces now show zero provider misses and zero CPU fallback
+for both Q5_K_M and Q6_K. Artifact:
+`cache/hrx2/phase2b/qwen-p512-coverage-20260616/`.
+
+This was a structural coverage fix, not a major throughput fix. Same-run p512
+throughput after the route coverage change:
+
+| Model | HRX2 tok/s | Vulkan tok/s | HRX2/Vulkan |
+| --- | ---: | ---: | ---: |
+| Qwen2.5-Coder 7B Q5_K_M | 456.6 | 2577.0 | 0.177 |
+| Qwen2.5-Coder 7B Q6_K | 439.4 | 2416.8 | 0.182 |
+
+The remaining Qwen p512 gap is therefore in the quantized prompt matmul and
+nearby hero fusion schedule, not missing RMS_NORM/ROPE route coverage.
