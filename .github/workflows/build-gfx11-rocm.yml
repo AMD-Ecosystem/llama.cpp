@@ -32,25 +32,12 @@ env:
 jobs:
   build-ubuntu:
     runs-on: ubuntu-24.04
-    strategy:
-      matrix:
-        include:
-          - gfx_target: gfx1151
-            s3_target: gfx1151
-            gpu_targets: gfx1151
-          - gfx_target: gfx1150
-            s3_target: gfx1150
-            gpu_targets: gfx1150
-          - gfx_target: gfx1153
-            s3_target: gfx1153
-            gpu_targets: gfx1153
-          # Hawk Point / Phoenix family (Radeon 760M/780M = gfx1103) ships only
-          # in the gfx110X-all bundle, which also covers desktop RDNA3
-          # (RX 7900/7800/7600). Build+release only — no on-hardware test runner.
-          - gfx_target: gfx110X
-            s3_target: gfx110X-all
-            gpu_targets: gfx1100;gfx1101;gfx1102;gfx1103
-      fail-fast: false
+    # Single universal build: one fat binary covering all current CI arches,
+    # sourced from TheRock's multi-arch tarball (arch-neutral host + per-arch
+    # Tensile DBs). gfx1100-1103 (RDNA3 desktop + Hawk Point/Phoenix 760M/780M),
+    # gfx1150/1151/1153 (RDNA3.5 Strix APUs).
+    env:
+      GPU_TARGETS: gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1153
     outputs:
       rocm_version: ${{ steps.set-outputs.outputs.rocm_version }}
       llamacpp_commit_hash: ${{ steps.set-outputs.outputs.llamacpp_commit_hash }}
@@ -84,16 +71,18 @@ jobs:
         ninja --version
         echo "Build dependencies installation completed"
 
-    - name: Download and extract ROCm directly to /opt/rocm
+    - name: Download and extract multi-arch ROCm directly to /opt/rocm
       run: |
         rocm_version="${{ env.ROCM_VERSION }}"
-        s3_target="${{ matrix.s3_target }}"
+        base_url="https://rocm.nightlies.amd.com/tarball-multi-arch"
 
         if [ "$rocm_version" = "latest" ]; then
-          echo "Auto-detecting latest ROCm version for target: $s3_target"
-          s3_response=$(curl -s "https://therock-nightly-tarball.s3.amazonaws.com/?prefix=therock-dist-linux-${s3_target}-7")
-
-          files=$(echo "$s3_response" | grep -oP '(?<=<Key>)[^<]*' | grep "therock-dist-linux-${s3_target}-")
+          echo "Auto-detecting latest multi-arch ROCm version"
+          # The multi-arch host serves an HTML index (not S3 XML); scrape the
+          # multiarch tarball names from it.
+          files=$(curl -s "$base_url/" \
+            | grep -oE 'therock-dist-linux-multiarch-[0-9]+\.[0-9]+\.[0-9]+(a|rc)[0-9]+\.tar\.gz' \
+            | sort -u)
 
           latest_file=""
           latest_major=0
@@ -103,7 +92,7 @@ jobs:
           latest_is_alpha=false
 
           while IFS= read -r file; do
-            if [[ "$file" =~ therock-dist-linux-${s3_target}-.*?([0-9]+\.[0-9]+\.[0-9]+(a|rc)[0-9]+)\.tar\.gz ]]; then
+            if [[ "$file" =~ therock-dist-linux-multiarch-([0-9]+\.[0-9]+\.[0-9]+(a|rc)[0-9]+)\.tar\.gz ]]; then
               version="${BASH_REMATCH[1]}"
               major=$(echo "$version" | cut -d. -f1)
               minor=$(echo "$version" | cut -d. -f2)
@@ -142,25 +131,47 @@ jobs:
 
           echo "Found latest file: $latest_file"
 
-          if [[ "$latest_file" =~ therock-dist-linux-${s3_target}-.*?([0-9]+\.[0-9]+\.[0-9]+(a|rc)[0-9]+)\.tar\.gz ]]; then
+          if [[ "$latest_file" =~ therock-dist-linux-multiarch-([0-9]+\.[0-9]+\.[0-9]+(a|rc)[0-9]+)\.tar\.gz ]]; then
             rocm_version="${BASH_REMATCH[1]}"
             echo "Detected latest ROCm version: $rocm_version"
           else
             echo "Failed to extract ROCm version from latest file: $latest_file"
-            echo "Expected pattern: therock-dist-linux-${s3_target}-*<version>.tar.gz"
+            echo "Expected pattern: therock-dist-linux-multiarch-<version>.tar.gz"
             exit 1
           fi
-
-          rocm_url="https://therock-nightly-tarball.s3.amazonaws.com/$latest_file"
-        else
-          rocm_url="https://therock-nightly-tarball.s3.amazonaws.com/therock-dist-linux-${s3_target}-${rocm_version}.tar.gz"
         fi
 
+        rocm_url="$base_url/therock-dist-linux-multiarch-${rocm_version}.tar.gz"
         echo "DETECTED_ROCM_VERSION=$rocm_version" >> $GITHUB_ENV
 
-        echo "Streaming ROCm from: $rocm_url directly to extraction"
+        # The multi-arch tarball (~11.5 GB) ships device code for ALL 26 GPU
+        # arches: every arch's .kpack plus per-arch rocBLAS/hipBLASLt Tensile DBs.
+        # This consumer build only needs the 7 RDNA3/3.5 arches in GPU_TARGETS and
+        # uses the GEMM (Tensile) path, which works without .kpack files. So we
+        # stream-extract and prune at the tar level: drop ALL .kpack, and drop the
+        # Tensile DBs of every arch not in our target set. This keeps the runner
+        # disk footprint small (the 11.5 GB is streamed, never stored) and yields
+        # a lean universal package. tar matches --exclude on pre-strip member
+        # names, hence the leading "./".
+        drop_arches="gfx900 gfx906 gfx908 gfx90a gfx942 gfx950 \
+          gfx1010 gfx1011 gfx1012 gfx1030 gfx1031 gfx1032 gfx1033 gfx1034 gfx1035 gfx1036 \
+          gfx1152 gfx1200 gfx1201"
+        excludes=(--exclude='./.kpack' --exclude='./.kpack/*')
+        for a in $drop_arches; do
+          excludes+=("--exclude=./lib/*/library/${a}")
+          excludes+=("--exclude=./lib/*/library/${a}/*")
+          excludes+=("--exclude=./lib/*/library/*${a}*")
+        done
+
+        echo "Streaming multi-arch ROCm from: $rocm_url (pruning .kpack + non-target arches)"
         sudo mkdir -p /opt/rocm
-        curl -sL "$rocm_url" | sudo tar --use-compress-program=gzip -xf - -C /opt/rocm --strip-components=1
+        curl -sL "$rocm_url" | sudo tar --use-compress-program=gzip -xf - \
+          -C /opt/rocm --strip-components=1 "${excludes[@]}"
+
+        echo "Retained rocBLAS Tensile arch dirs:"
+        ls /opt/rocm/lib/rocblas/library/ 2>/dev/null || echo "(none)"
+        echo "Retained hipBLASLt Tensile arch dirs:"
+        ls /opt/rocm/lib/hipblaslt/library/ 2>/dev/null || echo "(none)"
 
     - name: Set ROCm environment variables
       run: |
@@ -189,9 +200,8 @@ jobs:
 
     - name: Build Llama.cpp + ROCm
       run: |
-        current_target="${{ matrix.gfx_target }}"
-        gpu_targets="${{ matrix.gpu_targets }}"
-        echo "Building for target: $current_target (GPU_TARGETS=$gpu_targets)"
+        gpu_targets="${{ env.GPU_TARGETS }}"
+        echo "Building universal binary (GPU_TARGETS=$gpu_targets)"
 
         mkdir build
         cd build
@@ -300,7 +310,7 @@ jobs:
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: llama-ubuntu-rocm-${{ matrix.gfx_target }}-x64
+        name: llama-ubuntu-rocm-universal-x64
         path: build/bin/
         retention-days: 30
 
@@ -316,19 +326,10 @@ jobs:
   test-gfx:
     needs: build-ubuntu
     if: needs.build-ubuntu.result == 'success'
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      matrix:
-        include:
-          - gfx_target: gfx1151
-            runner: linux-gfx1151-gpu-rocm
-          # gfx1150 test temporarily disabled: the linux-gfx1150-gpu-rocm
-          # runner (Bangalore box) hangs in llama-cli GPU inference while the
-          # identical artifact/command passes on gfx1151 in seconds. Re-enable
-          # once the runner's GPU/driver issue is resolved.
-          # - gfx_target: gfx1150
-          #   runner: linux-gfx1150-gpu-rocm
-      fail-fast: false
+    # Single hardware test of the universal artifact on gfx1151. This is the
+    # end-to-end safety net for the Tensile-only multi-arch package: a real
+    # llama-cli inference exercising the rocBLAS/hipBLASLt GEMM path on-device.
+    runs-on: linux-gfx1151-gpu-rocm
 
     steps:
     - name: Checkout repository
@@ -337,7 +338,7 @@ jobs:
     - name: Download build artifacts
       uses: actions/download-artifact@v4
       with:
-        name: llama-ubuntu-rocm-${{ matrix.gfx_target }}-x64
+        name: llama-ubuntu-rocm-universal-x64
         path: llama-binaries
 
     - name: Download test model
@@ -380,7 +381,7 @@ jobs:
         # Use a prompt with a single correct answer and greedy decoding
         # (--temp 0) so the result is deterministic and verifiable.
         prompt="What is 2 + 2? Reply with only the number."
-        echo "Running llama-cli test for ${{ matrix.gfx_target }}..."
+        echo "Running llama-cli test for gfx1151 (universal artifact)..."
         echo "Command: $llama_cli_path -m \"$model_path\" -ngl 99 --temp 0 -p \"$prompt\" -st -v"
 
         # Bound the run: a healthy 0.6B inference finishes in seconds. If the
@@ -469,12 +470,11 @@ jobs:
       contents: write
     # Publish only on the nightly dispatch (external cron passes
     # -f create_release=true). Push/PR and manual runs never release.
-    # Require the build to succeed and tests to pass-or-skip (gfx1150 test is
-    # currently skipped; its build artifact is still published).
+    # Require the build to succeed and the gfx1151 hardware test to pass.
     if: |
       always() &&
       needs.build-ubuntu.result == 'success' &&
-      (needs.test-gfx.result == 'success' || needs.test-gfx.result == 'skipped') &&
+      needs.test-gfx.result == 'success' &&
       github.event_name == 'workflow_dispatch' &&
       github.event.inputs.create_release == 'true'
     steps:
@@ -505,21 +505,20 @@ jobs:
         fi
         echo "Release tag: $TAG"
 
-    - name: Create per-target archives
+    - name: Create universal archive
       if: steps.generate-tag.outputs.tag_exists == 'false'
       run: |
         TAG="${{ steps.generate-tag.outputs.tag }}"
         root="$PWD"
-        for target in gfx1151 gfx1150 gfx1153 gfx110X; do
-          artifact_dir="./all-artifacts/llama-ubuntu-rocm-${target}-x64"
-          archive="llama-${TAG}-ubuntu-rocm-${target}-x64"
-          if [ -d "$artifact_dir" ]; then
-            echo "Creating ${archive}.tar.gz"
-            tar -czf "$root/${archive}.tar.gz" -C "$artifact_dir" .
-          else
-            echo "Warning: artifact dir not found: $artifact_dir"
-          fi
-        done
+        artifact_dir="./all-artifacts/llama-ubuntu-rocm-universal-x64"
+        archive="llama-${TAG}-ubuntu-rocm-universal-x64"
+        if [ -d "$artifact_dir" ]; then
+          echo "Creating ${archive}.tar.gz"
+          tar -czf "$root/${archive}.tar.gz" -C "$artifact_dir" .
+        else
+          echo "ERROR: artifact dir not found: $artifact_dir"
+          exit 1
+        fi
         ls -la *.tar.gz
 
     - name: Create GitHub Release
@@ -535,10 +534,10 @@ jobs:
           --title "$TAG" \
           --notes "**Build**: $TAG
         **OS**: ubuntu
-        **GPU Target(s)**: gfx1151, gfx1150, gfx1153, gfx110X (gfx1100/1101/1102/1103)
-        **ROCm Version**: $ROCM_VERSION
+        **GPU Target(s)**: gfx1100, gfx1101, gfx1102, gfx1103, gfx1150, gfx1151, gfx1153 (single universal binary)
+        **ROCm Version**: $ROCM_VERSION (multi-arch)
         **Llama.cpp Commit**: $LLAMACPP_COMMIT_HASH
         **Build Date**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
 
-        Prebuilt llama.cpp ROCm binaries for the RDNA3.5 gfx115x APUs (gfx1151/gfx1150/gfx1153) and the RDNA3 gfx110X family incl. Hawk Point/Phoenix (Radeon 760M/780M), with ROCm runtime libraries bundled." \
+        Prebuilt llama.cpp ROCm binaries — one universal package covering the RDNA3 gfx110X family incl. Hawk Point/Phoenix (Radeon 760M/780M) and the RDNA3.5 gfx115x APUs (gfx1150/gfx1151/gfx1153). Built from TheRock's multi-arch ROCm runtime (per-arch Tensile databases bundled)." \
           *.tar.gz
