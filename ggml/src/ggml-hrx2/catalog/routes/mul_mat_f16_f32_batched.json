@@ -1,5 +1,117 @@
 [
   {
+    "id": "mul_mat_f16_f32_batched_attention_cols8_contiguous_wg256",
+    "family": "mul_mat_f16_f32_batched_cont",
+    "op": "CONT",
+    "target_key": "",
+    "source_id": "mul_mat_f16_f32_batched",
+    "artifact_id": "mul_mat_f16_f32_batched_bc",
+    "root_symbol": "@hrx2_mul_mat_f16_f32_batched_cols8_contiguous",
+    "export_name": "hrx2_mul_mat_f16_f32_batched_cols8_contiguous",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 160,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 3,
+      "constant_byte_length": 0
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ],
+      "rows_per_workgroup": 1,
+      "cols_per_workgroup": 8
+    },
+    "shape_domain": {
+      "name": "attention_batched_f16_f32_cols8_contiguous_k128_512_rows128_cols512",
+      "k_min": 128,
+      "k_max": 512,
+      "rows_min": 128,
+      "rows_max": 128,
+      "cols_min": 512,
+      "cols_max": 512
+    },
+    "shape_guards": {
+      "k_pow2": true,
+      "cols_multiple_of": 8
+    },
+    "specialization": {
+      "mode": "jit_config",
+      "bindings": [
+        {
+          "key": "@hrx2.shape.mul_mat_f16.k",
+          "source": "shape.mul_mat_f16.k"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_f16.rows",
+          "source": "shape.mul_mat_f16.rows"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_f16.cols",
+          "source": "shape.mul_mat_f16.cols"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_f16.dst_ne2",
+          "source": "shape.mul_mat_f16.dst_ne2"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_f16.dst_ne3",
+          "source": "shape.mul_mat_f16.dst_ne3"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_f16.src0_ne2",
+          "source": "shape.mul_mat_f16.src0_ne2"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_f16.src0_ne3",
+          "source": "shape.mul_mat_f16.src0_ne3"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_f16.src0_stride_row",
+          "source": "shape.mul_mat_f16.src0_stride_row"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_f16.src0_stride_ne2",
+          "source": "shape.mul_mat_f16.src0_stride_ne2"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_f16.src0_stride_ne3",
+          "source": "shape.mul_mat_f16.src0_stride_ne3"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_f16.src1_stride_col",
+          "source": "shape.mul_mat_f16.src1_stride_col"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_f16.src1_stride_ne2",
+          "source": "shape.mul_mat_f16.src1_stride_ne2"
+        },
+        {
+          "key": "@hrx2.shape.mul_mat_f16.src1_stride_ne3",
+          "source": "shape.mul_mat_f16.src1_stride_ne3"
+        },
+        {
+          "key": "@hrx2.tuning.mul_mat_f16.workgroup_size",
+          "value": "256"
+        }
+      ]
+    },
+    "supports": {
+      "src0_type": "F16",
+      "src1_type": "F32",
+      "dst_type": "F32",
+      "layout": "batched_attention_broadcast_to_contiguous"
+    },
+    "evidence_summary": {
+      "phase": "phase2a-f16-attention-kqv-cont-fusion",
+      "algorithm": "same_cols8_kqv_dot_schedule_writes_post_permute_contiguous_attention_layout",
+      "selection": "basket_prefill_attention_cols512_only; guarded by GGML_HRX2_DISABLE_F16_KQV_CONT_FUSION",
+      "ggml_cpu_reference": "required"
+    }
+  },
+  {
     "id": "mul_mat_f16_f32_batched_attention_cols8_wg256",
     "family": "mul_mat_f16_f32_batched",
     "op": "MUL_MAT",

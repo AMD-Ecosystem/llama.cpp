@@ -24,6 +24,10 @@
     "op": "MUL_MAT"
   },
   {
+    "family": "mul_mat_f16_f32_batched_cont",
+    "op": "CONT"
+  },
+  {
     "family": "mul_mat_f32_f32",
     "op": "MUL_MAT"
   },
