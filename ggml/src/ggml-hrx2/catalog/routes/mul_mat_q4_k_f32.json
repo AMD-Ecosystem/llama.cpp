@@ -1,5 +1,58 @@
 [
   {
+    "id": "mul_mat_q4_k_q8_1_x4_hip_mmql64x32_pack2_gfx1100_k256_32768_r64_32768_c32_512_wg64",
+    "family": "mul_mat_q4_k_f32",
+    "op": "MUL_MAT",
+    "target_key": "gfx1100",
+    "source_id": "mul_mat_q4_k_q8_1_hip_wave64",
+    "artifact_id": "mul_mat_q4_k_q8_1_wave64_gfx1100_hsaco",
+    "root_symbol": "@hrx2_mul_mat_vec_q4_k_q8_1_x4_mmql64x32_pack2_wg64_u32",
+    "export_name": "hrx2_mul_mat_vec_q4_k_q8_1_x4_mmql64x32_pack2_wg64_u32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 216,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 12
+    },
+    "dispatch": {
+      "workgroup_size": [
+        64,
+        1,
+        1
+      ],
+      "rows_per_workgroup": 64,
+      "cols_per_workgroup": 32
+    },
+    "shape_domain": {
+      "name": "q8_1_x4_hip_mmql64x32_pack2_gfx1100_k256_32768_rows64_32768_cols32_512_wg64",
+      "k_min": 256,
+      "k_max": 32768,
+      "rows_min": 64,
+      "rows_max": 32768,
+      "cols_min": 32,
+      "cols_max": 512
+    },
+    "shape_guards": {
+      "k_multiple_of": 256,
+      "rows_multiple_of": 64,
+      "cols_multiple_of": 32
+    },
+    "supports": {
+      "src0_type": "Q4_K",
+      "src1_type": "Q8_1",
+      "dst_type": "F32",
+      "layout": "packed_x4_hip_mmql64x32_pack2"
+    },
+    "evidence_summary": {
+      "phase": "phase2a-q4-k-pack2-hip-pivot",
+      "algorithm": "same_hrx1_q4_k_q8_1_x4_mmql64x32_wg64_wave64_tile_but_vulkan_style_q4_a_pack2_cache_four_words_per_row_group",
+      "selection": "bounded_probe_must_pass_focused_correctness_perf_before_acceptance",
+      "disable_env": "GGML_HRX2_DISABLE_Q4_HIP_PACK2_PROMPT",
+      "ggml_cpu_reference": "required"
+    }
+  },
+  {
     "id": "mul_mat_q4_k_q8_1_x4_hip_mmql64x32_gfx1100_k256_32768_r64_32768_c32_512_wg64",
     "family": "mul_mat_q4_k_f32",
     "op": "MUL_MAT",
