@@ -737,7 +737,7 @@ kernel.def export("hrx2_mul_mat_q4_k_q8_1_x4_mmq64x32_static") @hrx2_mul_mat_q4_
   %bq_bytes = index.constant 1024 : offset
   %bd_bytes = index.constant 64 : offset
   %bs_bytes = index.constant 64 : offset
-  %a_q_bytes = index.constant 2048 : offset
+  %a_q_bytes = index.constant 1024 : offset
   %a_f32_bytes = index.constant 256 : offset
   %zero_index = index.constant 0 : index
   %one = index.constant 1 : index
@@ -759,6 +759,7 @@ kernel.def export("hrx2_mul_mat_q4_k_q8_1_x4_mmq64x32_static") @hrx2_mul_mat_q4_
   %twentyfour_i32 = scalar.constant 24 : i32
   %zero_i32 = scalar.constant 0 : i32
   %mask_0f = scalar.constant 15 : i32
+  %mask_0f0f0f0f = scalar.constant 252645135 : i32
   %mask_3f = scalar.constant 63 : i32
   %zero_i32v = vector.constant 0 : vector<1xi32>
   %zero_f32 = scalar.constant 0.0 : f32
@@ -830,7 +831,7 @@ kernel.def export("hrx2_mul_mat_q4_k_q8_1_x4_mmq64x32_static") @hrx2_mul_mat_q4_
   %b_qs_view = buffer.view %bq_scratch[%base] : buffer -> view<256xi32, #dense>
   %b_d_view = buffer.view %bd_scratch[%base] : buffer -> view<32xf16, #dense>
   %b_s_view = buffer.view %bs_scratch[%base] : buffer -> view<32xf16, #dense>
-  %a_qs_view = buffer.view %aq_scratch[%base] : buffer -> view<512xi32, #dense>
+  %a_qs_view = buffer.view %aq_scratch[%base] : buffer -> view<256xi32, #dense>
   %a_d_view = buffer.view %ad_scratch[%base] : buffer -> view<64xf32, #dense>
   %a_m_view = buffer.view %am_scratch[%base] : buffer -> view<64xf32, #dense>
 
@@ -943,8 +944,8 @@ kernel.def export("hrx2_mul_mat_q4_k_q8_1_x4_mmq64x32_static") @hrx2_mul_mat_q4_
       }
       view.store %sd_stage, %a_d_view[%row_lane] : f32, view<64xf32, #dense>
       view.store %smin_stage, %a_m_view[%row_lane] : f32, view<64xf32, #dense>
-      scf.for %iqs_stage = [%zero_index to %eight step %one] {
-        %lane_q_stage = index.mul %iqs_stage, %four : index
+      scf.for %iqs_pair_stage = [%zero_index to %four step %one] {
+        %lane_q_stage = index.mul %iqs_pair_stage, %eight : index
         %group_half_stage = index.div %group_stage, %two : index
         %qs_group_base_stage = index.mul %group_half_stage, %thirtytwo : index
         %qs_lane_base_stage = index.add %qs_group_base_stage, %lane_q_stage : index
@@ -957,44 +958,84 @@ kernel.def export("hrx2_mul_mat_q4_k_q8_1_x4_mmq64x32_static") @hrx2_mul_mat_q4_
         %q1_index_stage = index.add %qs_base_stage, %one : index
         %q2_index_stage = index.add %qs_base_stage, %two : index
         %q3_index_stage = index.add %qs_base_stage, %three : index
+        %q4_index_stage = index.add %qs_base_stage, %four : index
+        %q5_index_stage = index.add %q4_index_stage, %one : index
+        %q6_index_stage = index.add %q4_index_stage, %two : index
+        %q7_index_stage = index.add %q4_index_stage, %three : index
         %q0_offset_stage = index.cast %q0_index_stage : index to offset
         %q1_offset_stage = index.cast %q1_index_stage : index to offset
         %q2_offset_stage = index.cast %q2_index_stage : index to offset
         %q3_offset_stage = index.cast %q3_index_stage : index to offset
+        %q4_offset_stage = index.cast %q4_index_stage : index to offset
+        %q5_offset_stage = index.cast %q5_index_stage : index to offset
+        %q6_offset_stage = index.cast %q6_index_stage : index to offset
+        %q7_offset_stage = index.cast %q7_index_stage : index to offset
         %q0_word_view_stage = buffer.view %src0_noalias[%q0_offset_stage] : buffer -> view<1xi32, #dense>
         %q1_word_view_stage = buffer.view %src0_noalias[%q1_offset_stage] : buffer -> view<1xi32, #dense>
         %q2_word_view_stage = buffer.view %src0_noalias[%q2_offset_stage] : buffer -> view<1xi32, #dense>
         %q3_word_view_stage = buffer.view %src0_noalias[%q3_offset_stage] : buffer -> view<1xi32, #dense>
+        %q4_word_view_stage = buffer.view %src0_noalias[%q4_offset_stage] : buffer -> view<1xi32, #dense>
+        %q5_word_view_stage = buffer.view %src0_noalias[%q5_offset_stage] : buffer -> view<1xi32, #dense>
+        %q6_word_view_stage = buffer.view %src0_noalias[%q6_offset_stage] : buffer -> view<1xi32, #dense>
+        %q7_word_view_stage = buffer.view %src0_noalias[%q7_offset_stage] : buffer -> view<1xi32, #dense>
         %q0_word_stage = vector.load %q0_word_view_stage[%zero_index] : view<1xi32, #dense> -> vector<1xi32>
         %q1_word_stage = vector.load %q1_word_view_stage[%zero_index] : view<1xi32, #dense> -> vector<1xi32>
         %q2_word_stage = vector.load %q2_word_view_stage[%zero_index] : view<1xi32, #dense> -> vector<1xi32>
         %q3_word_stage = vector.load %q3_word_view_stage[%zero_index] : view<1xi32, #dense> -> vector<1xi32>
+        %q4_word_stage = vector.load %q4_word_view_stage[%zero_index] : view<1xi32, #dense> -> vector<1xi32>
+        %q5_word_stage = vector.load %q5_word_view_stage[%zero_index] : view<1xi32, #dense> -> vector<1xi32>
+        %q6_word_stage = vector.load %q6_word_view_stage[%zero_index] : view<1xi32, #dense> -> vector<1xi32>
+        %q7_word_stage = vector.load %q7_word_view_stage[%zero_index] : view<1xi32, #dense> -> vector<1xi32>
         %q0_byte_vec_stage = vector.bitfield.extractu %q0_word_stage {offset = 0, width = 8} : vector<1xi32> -> vector<1xi32>
         %q1_byte_vec_stage = vector.bitfield.extractu %q1_word_stage {offset = 0, width = 8} : vector<1xi32> -> vector<1xi32>
         %q2_byte_vec_stage = vector.bitfield.extractu %q2_word_stage {offset = 0, width = 8} : vector<1xi32> -> vector<1xi32>
         %q3_byte_vec_stage = vector.bitfield.extractu %q3_word_stage {offset = 0, width = 8} : vector<1xi32> -> vector<1xi32>
+        %q4_byte_vec_stage = vector.bitfield.extractu %q4_word_stage {offset = 0, width = 8} : vector<1xi32> -> vector<1xi32>
+        %q5_byte_vec_stage = vector.bitfield.extractu %q5_word_stage {offset = 0, width = 8} : vector<1xi32> -> vector<1xi32>
+        %q6_byte_vec_stage = vector.bitfield.extractu %q6_word_stage {offset = 0, width = 8} : vector<1xi32> -> vector<1xi32>
+        %q7_byte_vec_stage = vector.bitfield.extractu %q7_word_stage {offset = 0, width = 8} : vector<1xi32> -> vector<1xi32>
         %q0_byte_stage = vector.extract %q0_byte_vec_stage[0] : vector<1xi32> -> i32
         %q1_byte_stage = vector.extract %q1_byte_vec_stage[0] : vector<1xi32> -> i32
         %q2_byte_stage = vector.extract %q2_byte_vec_stage[0] : vector<1xi32> -> i32
         %q3_byte_stage = vector.extract %q3_byte_vec_stage[0] : vector<1xi32> -> i32
+        %q4_byte_stage = vector.extract %q4_byte_vec_stage[0] : vector<1xi32> -> i32
+        %q5_byte_stage = vector.extract %q5_byte_vec_stage[0] : vector<1xi32> -> i32
+        %q6_byte_stage = vector.extract %q6_byte_vec_stage[0] : vector<1xi32> -> i32
+        %q7_byte_stage = vector.extract %q7_byte_vec_stage[0] : vector<1xi32> -> i32
         %q0_shifted_stage = scalar.shrui %q0_byte_stage, %q_shift_stage : i32
         %q1_shifted_stage = scalar.shrui %q1_byte_stage, %q_shift_stage : i32
         %q2_shifted_stage = scalar.shrui %q2_byte_stage, %q_shift_stage : i32
         %q3_shifted_stage = scalar.shrui %q3_byte_stage, %q_shift_stage : i32
+        %q4_shifted_stage = scalar.shrui %q4_byte_stage, %q_shift_stage : i32
+        %q5_shifted_stage = scalar.shrui %q5_byte_stage, %q_shift_stage : i32
+        %q6_shifted_stage = scalar.shrui %q6_byte_stage, %q_shift_stage : i32
+        %q7_shifted_stage = scalar.shrui %q7_byte_stage, %q_shift_stage : i32
         %q0_i32_stage = scalar.andi %q0_shifted_stage, %mask_0f : i32
         %q1_i32_stage = scalar.andi %q1_shifted_stage, %mask_0f : i32
         %q2_i32_stage = scalar.andi %q2_shifted_stage, %mask_0f : i32
         %q3_i32_stage = scalar.andi %q3_shifted_stage, %mask_0f : i32
+        %q4_i32_stage = scalar.andi %q4_shifted_stage, %mask_0f : i32
+        %q5_i32_stage = scalar.andi %q5_shifted_stage, %mask_0f : i32
+        %q6_i32_stage = scalar.andi %q6_shifted_stage, %mask_0f : i32
+        %q7_i32_stage = scalar.andi %q7_shifted_stage, %mask_0f : i32
         %q1_shl_stage = scalar.shli %q1_i32_stage, %eight_i32 : i32
         %q2_shl_stage = scalar.shli %q2_i32_stage, %sixteen_i32 : i32
         %q3_shl_stage = scalar.shli %q3_i32_stage, %twentyfour_i32 : i32
         %q01_stage = scalar.ori %q0_i32_stage, %q1_shl_stage : i32
         %q23_stage = scalar.ori %q2_shl_stage, %q3_shl_stage : i32
-        %qpack_stage = scalar.ori %q01_stage, %q23_stage : i32
+        %q_low_stage = scalar.ori %q01_stage, %q23_stage : i32
+        %q5_shl_stage = scalar.shli %q5_i32_stage, %eight_i32 : i32
+        %q6_shl_stage = scalar.shli %q6_i32_stage, %sixteen_i32 : i32
+        %q7_shl_stage = scalar.shli %q7_i32_stage, %twentyfour_i32 : i32
+        %q45_stage = scalar.ori %q4_i32_stage, %q5_shl_stage : i32
+        %q67_stage = scalar.ori %q6_shl_stage, %q7_shl_stage : i32
+        %q_high0_stage = scalar.ori %q45_stage, %q67_stage : i32
+        %q_high_stage = scalar.shli %q_high0_stage, %four_i32 : i32
+        %qpack_stage = scalar.ori %q_low_stage, %q_high_stage : i32
         %qpack_vec_stage = vector.from_elements %qpack_stage : vector<1xi32>
-        %a_row_base_stage = index.mul %row_lane, %eight : index
-        %a_q_index_stage = index.add %a_row_base_stage, %iqs_stage : index
-        vector.store %qpack_vec_stage, %a_qs_view[%a_q_index_stage] : vector<1xi32>, view<512xi32, #dense>
+        %a_row_base_stage = index.mul %row_lane, %four : index
+        %a_q_index_stage = index.add %a_row_base_stage, %iqs_pair_stage : index
+        vector.store %qpack_vec_stage, %a_qs_view[%a_q_index_stage] : vector<1xi32>, view<256xi32, #dense>
       }
     }
     kernel.barrier<workgroup> {ordering = acq_rel, scope = workgroup}
@@ -1010,10 +1051,18 @@ kernel.def export("hrx2_mul_mat_q4_k_q8_1_x4_mmq64x32_static") @hrx2_mul_mat_q4_
           %qa5 = %zero_acc_i32 : i32,
           %qa6 = %zero_acc_i32 : i32,
           %qa7 = %zero_acc_i32 : i32) -> (i32, i32, i32, i32, i32, i32, i32, i32) unroll(%eight) {
-        %a_row_base = index.mul %row_lane, %eight : index
-        %a_q_index = index.add %a_row_base, %iqs : index
-        %a_q_vec_word = vector.load %a_qs_view[%a_q_index] : view<512xi32, #dense> -> vector<1xi32>
-        %q4_vec = vector.bitcast %a_q_vec_word : vector<1xi32> to vector<4xi8>
+        %a_row_base = index.mul %row_lane, %four : index
+        %a_q_pair = index.div %iqs, %two : index
+        %a_q_index = index.add %a_row_base, %a_q_pair : index
+        %a_q_vec_word = vector.load %a_qs_view[%a_q_index] : view<256xi32, #dense> -> vector<1xi32>
+        %iqs_mod2 = index.rem %iqs, %two : index
+        %iqs_mod2_i32 = index.cast %iqs_mod2 : index to i32
+        %a_q_shift = scalar.muli %iqs_mod2_i32, %four_i32 : i32
+        %a_q_word0 = vector.extract %a_q_vec_word[0] : vector<1xi32> -> i32
+        %a_q_word_shifted = scalar.shrui %a_q_word0, %a_q_shift : i32
+        %a_q_word = scalar.andi %a_q_word_shifted, %mask_0f0f0f0f : i32
+        %a_q_word_vec = vector.from_elements %a_q_word : vector<1xi32>
+        %q4_vec = vector.bitcast %a_q_word_vec : vector<1xi32> to vector<4xi8>
         %b_col_base = index.mul %col_lane_base0, %eight : index
         %b_idx0 = index.add %b_col_base, %iqs : index
         %b_idx1_col = index.add %col_lane_base0, %one : index

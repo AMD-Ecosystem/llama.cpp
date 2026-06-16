@@ -446,8 +446,10 @@ static bool ggml_backend_hrx2_q5_k_q8_1_prompt_enabled(const ggml_backend_hrx2_m
 static bool ggml_backend_hrx2_q5_k_q8_1_x4_prompt_enabled();
 static bool ggml_backend_hrx2_q6_k_q8_1_prompt_enabled(const ggml_backend_hrx2_mul_mat_shape & shape);
 static bool ggml_backend_hrx2_q6_k_q8_1_x4_prompt_enabled();
+static bool ggml_backend_hrx2_q5_q6_hip_bridge_prompt_enabled();
 static bool ggml_backend_hrx2_route_uses_q8_1_rhs(const ggml_backend_hrx2_kernel_route * route);
 static bool ggml_backend_hrx2_route_uses_q8_1_x4_rhs(const ggml_backend_hrx2_kernel_route * route);
+static bool ggml_backend_hrx2_route_is_hip_bridge(const ggml_backend_hrx2_kernel_route * route);
 static bool ggml_backend_hrx2_cont_route_copies_vec4(const ggml_backend_hrx2_kernel_route * route);
 static bool ggml_backend_hrx2_extract_cont_shape(
         const ggml_tensor * op,
@@ -5135,6 +5137,10 @@ static bool ggml_backend_hrx2_supports_mul_mat_q6_k_route(
         return false;
     }
     for (const auto * route : device_context->mul_mat_q6_k_routes) {
+        if (ggml_backend_hrx2_route_is_hip_bridge(route) &&
+            !ggml_backend_hrx2_q5_q6_hip_bridge_prompt_enabled()) {
+            continue;
+        }
         if (ggml_backend_hrx2_route_uses_q8_1_rhs(route) &&
             !ggml_backend_hrx2_q6_k_q8_1_prompt_enabled(shape)) {
             continue;
@@ -5159,6 +5165,10 @@ static bool ggml_backend_hrx2_supports_mul_mat_q5_k_route(
         return false;
     }
     for (const auto * route : device_context->mul_mat_q5_k_routes) {
+        if (ggml_backend_hrx2_route_is_hip_bridge(route) &&
+            !ggml_backend_hrx2_q5_q6_hip_bridge_prompt_enabled()) {
+            continue;
+        }
         if (ggml_backend_hrx2_route_uses_q8_1_rhs(route) &&
             !ggml_backend_hrx2_q5_k_q8_1_prompt_enabled(shape)) {
             continue;
@@ -7717,6 +7727,14 @@ static bool ggml_backend_hrx2_q6_k_q8_1_x4_prompt_enabled() {
     return !ggml_backend_hrx2_env_enabled("GGML_HRX2_DISABLE_Q6_K_Q8_1_X4_PROMPT");
 }
 
+static bool ggml_backend_hrx2_q5_q6_hip_bridge_prompt_enabled() {
+    return ggml_backend_hrx2_env_enabled("GGML_HRX2_ENABLE_Q5_Q6_HIP_BRIDGE_PROMPT");
+}
+
+static bool ggml_backend_hrx2_route_is_hip_bridge(const ggml_backend_hrx2_kernel_route * route) {
+    return route && route->id.find("_hip_") != std::string::npos;
+}
+
 static bool ggml_backend_hrx2_dispatch_quantize_q8_1(
         ggml_backend_hrx2_context * context,
         const ggml_tensor * src,
@@ -8484,6 +8502,10 @@ static ggml_status ggml_backend_hrx2_dispatch_mul_mat_q6_k(
         /* .cols = */ static_cast<uint32_t>(src1->ne[1]),
     };
     for (const auto * route : context->device_context->mul_mat_q6_k_routes) {
+        if (ggml_backend_hrx2_route_is_hip_bridge(route) &&
+            !ggml_backend_hrx2_q5_q6_hip_bridge_prompt_enabled()) {
+            continue;
+        }
         const bool use_q8_1_rhs = ggml_backend_hrx2_route_uses_q8_1_rhs(route);
         if (use_q8_1_rhs && !ggml_backend_hrx2_q6_k_q8_1_prompt_enabled(shape)) {
             continue;
@@ -8643,6 +8665,10 @@ static ggml_status ggml_backend_hrx2_dispatch_mul_mat_q5_k(
     };
 
     for (const auto * route : context->device_context->mul_mat_q5_k_routes) {
+        if (ggml_backend_hrx2_route_is_hip_bridge(route) &&
+            !ggml_backend_hrx2_q5_q6_hip_bridge_prompt_enabled()) {
+            continue;
+        }
         const bool use_q8_1_rhs = ggml_backend_hrx2_route_uses_q8_1_rhs(route);
         if (use_q8_1_rhs && !ggml_backend_hrx2_q5_k_q8_1_prompt_enabled(shape)) {
             continue;
