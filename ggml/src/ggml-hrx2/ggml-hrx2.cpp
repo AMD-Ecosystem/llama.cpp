@@ -7617,7 +7617,7 @@ static ggml_status ggml_backend_hrx2_dispatch_mul_mat_f32_f32(
 }
 
 static bool ggml_backend_hrx2_q4_k_q8_1_prompt_enabled(const ggml_backend_hrx2_mul_mat_shape & shape) {
-    return shape.cols > 1 && ggml_backend_hrx2_env_enabled("GGML_HRX2_ENABLE_Q4_K_Q8_1_PROMPT");
+    return shape.cols > 1 && !ggml_backend_hrx2_env_enabled("GGML_HRX2_DISABLE_Q4_K_Q8_1_PROMPT");
 }
 
 static bool ggml_backend_hrx2_q5_k_q8_1_prompt_enabled(const ggml_backend_hrx2_mul_mat_shape & shape) {
