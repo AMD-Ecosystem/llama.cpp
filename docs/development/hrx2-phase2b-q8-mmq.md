@@ -28,6 +28,10 @@ existing HRX2 Q5/Q6 MMQ schedule:
 - RHS Q8_1 x4 tile staged in LDS.
 - One lane row and eight output columns per lane group.
 - Explicit `vector.dot4i<s8s8>` over Q8_0 LHS and Q8_1 RHS payload words.
+- Dot results are accumulated as per-column i32 `qsum` values across the eight
+  Q8 payload words in a K block, then converted/scaled once per K block. This
+  matches the HRX1 schedule more closely than the initial Loom spelling, which
+  converted and applied A/B scales inside the `iqs` loop.
 
 The route is guarded to `cols_multiple_of=32`; scalar packed routes remain the
 fallback for narrow and irregular prompt shapes.
@@ -88,6 +92,25 @@ no warmup:
 | p64 | ~399 | ~2014 | ~0.20 |
 | p512 | ~536 | ~2778 | ~0.19 |
 
+After the i32-qsum refinement on the same route, short HRX2-only checks showed:
+
+| Case | Cold tok/s | Steady samples tok/s | Steady mean tok/s |
+| --- | ---: | ---: | ---: |
+| p64 | 193.8 | 457.5, 468.5 | 463.0 |
+| p512 | 520.8 | 636.2, 642.1 | 639.1 |
+
+The qsum route compiled cleanly for `k=4096, rows=4096, cols=64`: zero spills,
+zero hazard gaps, peak live units 83, 64 dot ops, and instruction count 447
+versus 585 for the earlier per-`iqs` scaling form.
+
+Rejected probe: a compact vector-loop `mmq128x32` Loom spelling based on the
+HRX1 tile shape did not promote. Rooted direct compile reached the intended
+export but emitted hundreds of SGPR spill-storage warnings before termination.
+The rejected patch is preserved in the workspace cache at
+`cache/hrx2/phase2b/q8-mmq128x32-20260616/rejected/vector-loop-128x32-rejected.patch`.
+The next 128x32 attempt should use explicit scalar lane ownership or a lower
+level spelling rather than dynamic vector insert/extract loops.
+
 Route trace for both p64 and p512:
 
 - CPU compute fallback: 0
@@ -98,9 +121,10 @@ Route trace for both p64 and p512:
 ## Bottom Line
 
 This is an accepted boulder fix, not a done-done Q8_0 prompt matmul. It removes
-the scalar one-output-per-workgroup cliff and improves Q8_0 prefill about 4-5x
-at model level, but HRX2 remains about 5x behind Vulkan on the same Q8 prefill
-bucket.
+the scalar one-output-per-workgroup cliff and improves Q8_0 prefill about 4-6x
+at model level. The i32-qsum refinement gives another ~16-19% steady prefill
+lift on the Llama 3.1 8B Q8_0 p64/p512 checks, but HRX2 remains well behind
+Vulkan on the same Q8 prefill bucket.
 
 Next work should compare against Vulkan/CUDA/HRX1 schedules with a stricter
 tile search. The likely missing class is a stronger prompt matmul schedule that

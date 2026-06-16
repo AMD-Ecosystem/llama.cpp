@@ -62,7 +62,7 @@
     },
     "evidence_summary": {
       "phase": "phase2b-q8-0-q8_1-x4-prompt-mmq",
-      "algorithm": "q8_0_q8_1_x4_mmq64x32_wg256_rhs_lds_one_row_eight_cols_per_lane",
+      "algorithm": "q8_0_q8_1_x4_mmq64x32_wg256_rhs_lds_one_row_eight_cols_per_lane_i32_qsum_per_kblock",
       "prior": "HRX1 q8_0 q8_1 x4 mmq128x32 and existing HRX2 q5/q6 x4 MMQ routes",
       "selection": "prompt cols multiple of 32; scalar packed routes remain fallback",
       "ggml_cpu_reference": "required"

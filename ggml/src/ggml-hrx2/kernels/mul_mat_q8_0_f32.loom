@@ -374,6 +374,7 @@ kernel.def export("hrx2_mul_mat_q8_0_q8_1_x4_mmq64x32_static") @hrx2_mul_mat_q8_
   %block_f16s = index.constant 17 : index
   %qs_offset = index.constant 2 : index
   %zero_i32v = vector.constant 0 : vector<1xi32>
+  %zero_i32 = scalar.constant 0 : i32
   %zero_f32 = scalar.constant 0.0 : f32
   %k = config.get @hrx2.shape.k : index
   %rows = config.get @hrx2.shape.rows : index
@@ -468,15 +469,15 @@ kernel.def export("hrx2_mul_mat_q8_0_q8_1_x4_mmq64x32_static") @hrx2_mul_mat_q8_
       %a_d_f16 = view.load %src0_f16_view[%a_f16_base] : view<[%src0_f16_count]xf16, #dense> -> f16
       %a_d = scalar.extf %a_d_f16 : f16 to f32
 
-      %next0, %next1, %next2, %next3, %next4, %next5, %next6, %next7 = scf.for %iqs = [%zero_index to %eight step %one](
-          %a0 = %acc0 : f32,
-          %a1 = %acc1 : f32,
-          %a2 = %acc2 : f32,
-          %a3 = %acc3 : f32,
-          %a4 = %acc4 : f32,
-          %a5 = %acc5 : f32,
-          %a6 = %acc6 : f32,
-          %a7 = %acc7 : f32) -> (f32, f32, f32, f32, f32, f32, f32, f32) unroll(%eight) {
+      %qsum0, %qsum1, %qsum2, %qsum3, %qsum4, %qsum5, %qsum6, %qsum7 = scf.for %iqs = [%zero_index to %eight step %one](
+          %qacc0 = %zero_i32 : i32,
+          %qacc1 = %zero_i32 : i32,
+          %qacc2 = %zero_i32 : i32,
+          %qacc3 = %zero_i32 : i32,
+          %qacc4 = %zero_i32 : i32,
+          %qacc5 = %zero_i32 : i32,
+          %qacc6 = %zero_i32 : i32,
+          %qacc7 = %zero_i32 : i32) -> (i32, i32, i32, i32, i32, i32, i32, i32) unroll(%eight) {
         %iqs4 = index.mul %iqs, %four : index
         %a_word_index = index.add %a_byte_payload, %iqs4 : index
         %a_word_offset = index.cast %a_word_index : index to offset
@@ -548,38 +549,57 @@ kernel.def export("hrx2_mul_mat_q8_0_q8_1_x4_mmq64x32_static") @hrx2_mul_mat_q8_
         %di5 = vector.extract %dotv5[0] : vector<1xi32> -> i32
         %di6 = vector.extract %dotv6[0] : vector<1xi32> -> i32
         %di7 = vector.extract %dotv7[0] : vector<1xi32> -> i32
-        %df0 = scalar.sitofp %di0 : i32 to f32
-        %df1 = scalar.sitofp %di1 : i32 to f32
-        %df2 = scalar.sitofp %di2 : i32 to f32
-        %df3 = scalar.sitofp %di3 : i32 to f32
-        %df4 = scalar.sitofp %di4 : i32 to f32
-        %df5 = scalar.sitofp %di5 : i32 to f32
-        %df6 = scalar.sitofp %di6 : i32 to f32
-        %df7 = scalar.sitofp %di7 : i32 to f32
-        %bd0 = view.load %bd_view[%b_col0] : view<32xf16, #dense> -> f16
-        %bd1 = view.load %bd_view[%b_col1] : view<32xf16, #dense> -> f16
-        %bd2 = view.load %bd_view[%b_col2] : view<32xf16, #dense> -> f16
-        %bd3 = view.load %bd_view[%b_col3] : view<32xf16, #dense> -> f16
-        %bd4 = view.load %bd_view[%b_col4] : view<32xf16, #dense> -> f16
-        %bd5 = view.load %bd_view[%b_col5] : view<32xf16, #dense> -> f16
-        %bd6 = view.load %bd_view[%b_col6] : view<32xf16, #dense> -> f16
-        %bd7 = view.load %bd_view[%b_col7] : view<32xf16, #dense> -> f16
-        %bd0f = scalar.extf %bd0 : f16 to f32
-        %bd1f = scalar.extf %bd1 : f16 to f32
-        %bd2f = scalar.extf %bd2 : f16 to f32
-        %bd3f = scalar.extf %bd3 : f16 to f32
-        %bd4f = scalar.extf %bd4 : f16 to f32
-        %bd5f = scalar.extf %bd5 : f16 to f32
-        %bd6f = scalar.extf %bd6 : f16 to f32
-        %bd7f = scalar.extf %bd7 : f16 to f32
-        %a0_scale = scalar.mulf<reassoc|nnan|ninf|nsz> %df0, %a_d : f32
-        %a1_scale = scalar.mulf<reassoc|nnan|ninf|nsz> %df1, %a_d : f32
-        %a2_scale = scalar.mulf<reassoc|nnan|ninf|nsz> %df2, %a_d : f32
-        %a3_scale = scalar.mulf<reassoc|nnan|ninf|nsz> %df3, %a_d : f32
-        %a4_scale = scalar.mulf<reassoc|nnan|ninf|nsz> %df4, %a_d : f32
-        %a5_scale = scalar.mulf<reassoc|nnan|ninf|nsz> %df5, %a_d : f32
-        %a6_scale = scalar.mulf<reassoc|nnan|ninf|nsz> %df6, %a_d : f32
-        %a7_scale = scalar.mulf<reassoc|nnan|ninf|nsz> %df7, %a_d : f32
+        %qnext0 = scalar.addi %qacc0, %di0 : i32
+        %qnext1 = scalar.addi %qacc1, %di1 : i32
+        %qnext2 = scalar.addi %qacc2, %di2 : i32
+        %qnext3 = scalar.addi %qacc3, %di3 : i32
+        %qnext4 = scalar.addi %qacc4, %di4 : i32
+        %qnext5 = scalar.addi %qacc5, %di5 : i32
+        %qnext6 = scalar.addi %qacc6, %di6 : i32
+        %qnext7 = scalar.addi %qacc7, %di7 : i32
+        scf.yield %qnext0, %qnext1, %qnext2, %qnext3, %qnext4, %qnext5, %qnext6, %qnext7 : i32, i32, i32, i32, i32, i32, i32, i32
+      }
+
+      %b_col0 = index.add %col_lane_base0, %zero_index : index
+      %b_col1 = index.add %col_lane_base0, %one : index
+      %b_col2 = index.add %col_lane_base0, %two : index
+      %b_col3 = index.add %b_col2, %one : index
+      %b_col4 = index.add %b_col3, %one : index
+      %b_col5 = index.add %b_col4, %one : index
+      %b_col6 = index.add %b_col5, %one : index
+      %b_col7 = index.add %b_col6, %one : index
+      %df0 = scalar.sitofp %qsum0 : i32 to f32
+      %df1 = scalar.sitofp %qsum1 : i32 to f32
+      %df2 = scalar.sitofp %qsum2 : i32 to f32
+      %df3 = scalar.sitofp %qsum3 : i32 to f32
+      %df4 = scalar.sitofp %qsum4 : i32 to f32
+      %df5 = scalar.sitofp %qsum5 : i32 to f32
+      %df6 = scalar.sitofp %qsum6 : i32 to f32
+      %df7 = scalar.sitofp %qsum7 : i32 to f32
+      %bd0 = view.load %bd_view[%b_col0] : view<32xf16, #dense> -> f16
+      %bd1 = view.load %bd_view[%b_col1] : view<32xf16, #dense> -> f16
+      %bd2 = view.load %bd_view[%b_col2] : view<32xf16, #dense> -> f16
+      %bd3 = view.load %bd_view[%b_col3] : view<32xf16, #dense> -> f16
+      %bd4 = view.load %bd_view[%b_col4] : view<32xf16, #dense> -> f16
+      %bd5 = view.load %bd_view[%b_col5] : view<32xf16, #dense> -> f16
+      %bd6 = view.load %bd_view[%b_col6] : view<32xf16, #dense> -> f16
+      %bd7 = view.load %bd_view[%b_col7] : view<32xf16, #dense> -> f16
+      %bd0f = scalar.extf %bd0 : f16 to f32
+      %bd1f = scalar.extf %bd1 : f16 to f32
+      %bd2f = scalar.extf %bd2 : f16 to f32
+      %bd3f = scalar.extf %bd3 : f16 to f32
+      %bd4f = scalar.extf %bd4 : f16 to f32
+      %bd5f = scalar.extf %bd5 : f16 to f32
+      %bd6f = scalar.extf %bd6 : f16 to f32
+      %bd7f = scalar.extf %bd7 : f16 to f32
+      %a0_scale = scalar.mulf<reassoc|nnan|ninf|nsz> %df0, %a_d : f32
+      %a1_scale = scalar.mulf<reassoc|nnan|ninf|nsz> %df1, %a_d : f32
+      %a2_scale = scalar.mulf<reassoc|nnan|ninf|nsz> %df2, %a_d : f32
+      %a3_scale = scalar.mulf<reassoc|nnan|ninf|nsz> %df3, %a_d : f32
+      %a4_scale = scalar.mulf<reassoc|nnan|ninf|nsz> %df4, %a_d : f32
+      %a5_scale = scalar.mulf<reassoc|nnan|ninf|nsz> %df5, %a_d : f32
+      %a6_scale = scalar.mulf<reassoc|nnan|ninf|nsz> %df6, %a_d : f32
+      %a7_scale = scalar.mulf<reassoc|nnan|ninf|nsz> %df7, %a_d : f32
         %s0 = scalar.mulf<reassoc|nnan|ninf|nsz> %a0_scale, %bd0f : f32
         %s1 = scalar.mulf<reassoc|nnan|ninf|nsz> %a1_scale, %bd1f : f32
         %s2 = scalar.mulf<reassoc|nnan|ninf|nsz> %a2_scale, %bd2f : f32
@@ -588,16 +608,14 @@ kernel.def export("hrx2_mul_mat_q8_0_q8_1_x4_mmq64x32_static") @hrx2_mul_mat_q8_
         %s5 = scalar.mulf<reassoc|nnan|ninf|nsz> %a5_scale, %bd5f : f32
         %s6 = scalar.mulf<reassoc|nnan|ninf|nsz> %a6_scale, %bd6f : f32
         %s7 = scalar.mulf<reassoc|nnan|ninf|nsz> %a7_scale, %bd7f : f32
-        %o0 = scalar.addf<reassoc|nnan|ninf|nsz> %a0, %s0 : f32
-        %o1 = scalar.addf<reassoc|nnan|ninf|nsz> %a1, %s1 : f32
-        %o2 = scalar.addf<reassoc|nnan|ninf|nsz> %a2, %s2 : f32
-        %o3 = scalar.addf<reassoc|nnan|ninf|nsz> %a3, %s3 : f32
-        %o4 = scalar.addf<reassoc|nnan|ninf|nsz> %a4, %s4 : f32
-        %o5 = scalar.addf<reassoc|nnan|ninf|nsz> %a5, %s5 : f32
-        %o6 = scalar.addf<reassoc|nnan|ninf|nsz> %a6, %s6 : f32
-        %o7 = scalar.addf<reassoc|nnan|ninf|nsz> %a7, %s7 : f32
-        scf.yield %o0, %o1, %o2, %o3, %o4, %o5, %o6, %o7 : f32, f32, f32, f32, f32, f32, f32, f32
-      }
+      %next0 = scalar.addf<reassoc|nnan|ninf|nsz> %acc0, %s0 : f32
+      %next1 = scalar.addf<reassoc|nnan|ninf|nsz> %acc1, %s1 : f32
+      %next2 = scalar.addf<reassoc|nnan|ninf|nsz> %acc2, %s2 : f32
+      %next3 = scalar.addf<reassoc|nnan|ninf|nsz> %acc3, %s3 : f32
+      %next4 = scalar.addf<reassoc|nnan|ninf|nsz> %acc4, %s4 : f32
+      %next5 = scalar.addf<reassoc|nnan|ninf|nsz> %acc5, %s5 : f32
+      %next6 = scalar.addf<reassoc|nnan|ninf|nsz> %acc6, %s6 : f32
+      %next7 = scalar.addf<reassoc|nnan|ninf|nsz> %acc7, %s7 : f32
       kernel.barrier<workgroup> {ordering = acq_rel, scope = workgroup}
       scf.yield %next0, %next1, %next2, %next3, %next4, %next5, %next6, %next7 : f32, f32, f32, f32, f32, f32, f32, f32
     }
