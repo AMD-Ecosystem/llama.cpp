@@ -657,7 +657,7 @@ static void ggml_backend_hrx2_unregister_stream(ggml_backend_hrx2_device_context
         arenas.erase(arena_it);
     }
     if (device_context->active_stream == stream) {
-        device_context->active_stream = streams.empty() ? nullptr : streams.back();
+        device_context->active_stream = nullptr;
     }
 }
 
