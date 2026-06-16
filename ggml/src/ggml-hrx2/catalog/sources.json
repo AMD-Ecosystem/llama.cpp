@@ -29,6 +29,9 @@
   "set_rows_f32": {
     "path": "kernels/set_rows_f32.loom"
   },
+  "rope_set_rows_f32": {
+    "path": "kernels/rope_set_rows_f32.loom"
+  },
   "pointwise_f32": {
     "path": "kernels/pointwise_f32.loom"
   },

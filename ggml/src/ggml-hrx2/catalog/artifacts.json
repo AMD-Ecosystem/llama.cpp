@@ -61,6 +61,12 @@
     "format": "loom-bytecode",
     "storage": "embedded"
   },
+  "rope_set_rows_f32_bc": {
+    "path": "artifacts/rope_set_rows_f32.loombc",
+    "format": "loom-bytecode",
+    "source_id": "rope_set_rows_f32",
+    "storage": "embedded"
+  },
   "pointwise_f32_bc": {
     "path": "artifacts/pointwise_f32.loombc",
     "format": "loom-bytecode",

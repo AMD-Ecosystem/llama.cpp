@@ -64,6 +64,10 @@
     "op": "SET_ROWS"
   },
   {
+    "family": "rope_set_rows_f32",
+    "op": "SET_ROWS"
+  },
+  {
     "family": "add_f32",
     "op": "ADD"
   },
