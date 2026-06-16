@@ -107,9 +107,17 @@ set(GGML_HRX2_Q5_HIP_BRIDGE_DEPS
 )
 set(GGML_HRX2_Q5_HIP_BRIDGE_HSACO
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/${GGML_HRX2_HIP_BRIDGE_AMDGPU_TARGET}/mul_mat_vec_q5_k_q8_1_wave64.hsaco")
+set(GGML_HRX2_Q4_HIP_BRIDGE_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/kernels/hip/mul_mat_vec_q4_k_q8_1_wave64.hip.cpp")
+set(GGML_HRX2_Q4_HIP_BRIDGE_DEPS
+    "${GGML_HRX2_Q4_HIP_BRIDGE_SOURCE}"
+)
+set(GGML_HRX2_Q4_HIP_BRIDGE_HSACO
+    "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/${GGML_HRX2_HIP_BRIDGE_AMDGPU_TARGET}/mul_mat_vec_q4_k_q8_1_wave64.hsaco")
 list(APPEND GGML_HRX2_ARTIFACTS
     "${GGML_HRX2_Q6_HIP_BRIDGE_HSACO}"
-    "${GGML_HRX2_Q5_HIP_BRIDGE_HSACO}")
+    "${GGML_HRX2_Q5_HIP_BRIDGE_HSACO}"
+    "${GGML_HRX2_Q4_HIP_BRIDGE_HSACO}")
 
 if(NOT TARGET loom::binding::c::loomc OR NOT TARGET loom::binding::c::target::amdgpu)
     message(FATAL_ERROR
@@ -169,6 +177,16 @@ add_custom_command(
         -c "${GGML_HRX2_Q5_HIP_BRIDGE_SOURCE}"
         -o "${GGML_HRX2_Q5_HIP_BRIDGE_HSACO}"
     COMMAND
+        "${GGML_HRX2_CLANGXX}"
+        -x hip
+        --offload-device-only
+        --no-gpu-bundle-output
+        "--offload-arch=${GGML_HRX2_HIP_BRIDGE_AMDGPU_TARGET}"
+        -O3
+        -mwavefrontsize64
+        -c "${GGML_HRX2_Q4_HIP_BRIDGE_SOURCE}"
+        -o "${GGML_HRX2_Q4_HIP_BRIDGE_HSACO}"
+    COMMAND
         ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/tools/validate_hrx2_catalog.py
         --catalog ${GGML_HRX2_ASSEMBLED_CATALOG}
@@ -180,6 +198,7 @@ add_custom_command(
         ${GGML_HRX2_LOOM_SOURCES}
         ${GGML_HRX2_Q6_HIP_BRIDGE_DEPS}
         ${GGML_HRX2_Q5_HIP_BRIDGE_DEPS}
+        ${GGML_HRX2_Q4_HIP_BRIDGE_DEPS}
         ${CMAKE_CURRENT_SOURCE_DIR}/tools/link_hrx2_artifacts.py
         ${CMAKE_CURRENT_SOURCE_DIR}/tools/validate_hrx2_catalog.py
     VERBATIM

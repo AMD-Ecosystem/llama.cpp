@@ -17,6 +17,7 @@
   "quantize_q8_1_x4_f32_generic_wg128",
   "quantize_q8_1_f32_generic_wg32",
   "mul_mat_q4_k_q8_1_x4_mmq64x32_k256_32768_r1_32768_c32_512_wg256",
+  "mul_mat_q4_k_q8_1_x4_hip_mmql64x32_gfx1100_k256_32768_r64_32768_c32_512_wg64",
   "mul_mat_q4_k_q8_1_f32_cols4_k256_32768_c4_512_wg256",
   "mul_mat_q4_k_q8_1_f32_direct_k256_32768_c1_512_wg256",
   "mul_mat_q8_0_f32_packed_scfunroll_k256_8192_c1_16_wg64",
