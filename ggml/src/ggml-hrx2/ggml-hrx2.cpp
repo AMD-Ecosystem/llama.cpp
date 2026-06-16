@@ -7621,11 +7621,11 @@ static bool ggml_backend_hrx2_q4_k_q8_1_prompt_enabled(const ggml_backend_hrx2_m
 }
 
 static bool ggml_backend_hrx2_q5_k_q8_1_prompt_enabled(const ggml_backend_hrx2_mul_mat_shape & shape) {
-    return shape.cols > 1 && ggml_backend_hrx2_env_enabled("GGML_HRX2_ENABLE_Q5_K_Q8_1_PROMPT");
+    return shape.cols > 1 && !ggml_backend_hrx2_env_enabled("GGML_HRX2_DISABLE_Q5_K_Q8_1_PROMPT");
 }
 
 static bool ggml_backend_hrx2_q6_k_q8_1_prompt_enabled(const ggml_backend_hrx2_mul_mat_shape & shape) {
-    return shape.cols > 1 && ggml_backend_hrx2_env_enabled("GGML_HRX2_ENABLE_Q6_K_Q8_1_PROMPT");
+    return shape.cols > 1 && !ggml_backend_hrx2_env_enabled("GGML_HRX2_DISABLE_Q6_K_Q8_1_PROMPT");
 }
 
 static bool ggml_backend_hrx2_route_uses_q8_1_rhs(const ggml_backend_hrx2_kernel_route * route) {
@@ -7645,11 +7645,11 @@ static bool ggml_backend_hrx2_q4_k_q8_1_x4_mmq_enabled() {
 }
 
 static bool ggml_backend_hrx2_q5_k_q8_1_x4_prompt_enabled() {
-    return ggml_backend_hrx2_env_enabled("GGML_HRX2_ENABLE_Q5_K_Q8_1_X4_PROMPT");
+    return !ggml_backend_hrx2_env_enabled("GGML_HRX2_DISABLE_Q5_K_Q8_1_X4_PROMPT");
 }
 
 static bool ggml_backend_hrx2_q6_k_q8_1_x4_prompt_enabled() {
-    return ggml_backend_hrx2_env_enabled("GGML_HRX2_ENABLE_Q6_K_Q8_1_X4_PROMPT");
+    return !ggml_backend_hrx2_env_enabled("GGML_HRX2_DISABLE_Q6_K_Q8_1_X4_PROMPT");
 }
 
 static bool ggml_backend_hrx2_dispatch_quantize_q8_1(
