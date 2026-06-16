@@ -47,9 +47,9 @@
     "evidence_summary": {
       "phase": "phase2a-q5-k-hrx1-hip-bridge",
       "algorithm": "hrx1_q5_k_q8_1_x4_mmql128x128_wg256_wave64_bkstep1_a_b_lds_four_rows_by_sixteen_cols_per_lane",
-      "selection": "opt_in_diagnostic_bridge_disabled_by_default_after_repeated_focused_nan_inf_failures",
-      "enable_env": "GGML_HRX2_ENABLE_Q5_Q6_HIP_BRIDGE_PROMPT",
-      "ggml_cpu_reference": "failed_default_candidate; required before promotion"
+      "selection": "default_after_hrx2_dispatch_used_catalog_workgroup_size_for_hip_bridge_routes",
+      "disable_env": "GGML_HRX2_DISABLE_Q5_Q6_HIP_BRIDGE_PROMPT",
+      "ggml_cpu_reference": "passed_model_derived_focused_rows_after_workgroup_size_fix"
     }
   },
   {

@@ -450,6 +450,7 @@ static bool ggml_backend_hrx2_q5_q6_hip_bridge_prompt_enabled();
 static bool ggml_backend_hrx2_route_uses_q8_1_rhs(const ggml_backend_hrx2_kernel_route * route);
 static bool ggml_backend_hrx2_route_uses_q8_1_x4_rhs(const ggml_backend_hrx2_kernel_route * route);
 static bool ggml_backend_hrx2_route_is_hip_bridge(const ggml_backend_hrx2_kernel_route * route);
+static uint32_t ggml_backend_hrx2_provider_workgroup_size_x(const ggml_backend_hrx2_provider * provider);
 static bool ggml_backend_hrx2_cont_route_copies_vec4(const ggml_backend_hrx2_kernel_route * route);
 static bool ggml_backend_hrx2_extract_cont_shape(
         const ggml_tensor * op,
@@ -7728,11 +7729,21 @@ static bool ggml_backend_hrx2_q6_k_q8_1_x4_prompt_enabled() {
 }
 
 static bool ggml_backend_hrx2_q5_q6_hip_bridge_prompt_enabled() {
-    return ggml_backend_hrx2_env_enabled("GGML_HRX2_ENABLE_Q5_Q6_HIP_BRIDGE_PROMPT");
+    return !ggml_backend_hrx2_env_enabled("GGML_HRX2_DISABLE_Q5_Q6_HIP_BRIDGE_PROMPT");
 }
 
 static bool ggml_backend_hrx2_route_is_hip_bridge(const ggml_backend_hrx2_kernel_route * route) {
     return route && route->id.find("_hip_") != std::string::npos;
+}
+
+static uint32_t ggml_backend_hrx2_provider_workgroup_size_x(const ggml_backend_hrx2_provider * provider) {
+    if (!provider) {
+        return 1;
+    }
+    if (ggml_backend_hrx2_route_is_hip_bridge(&provider->route)) {
+        return provider->route.workgroup_size[0];
+    }
+    return provider->export_info.workgroup_size[0] ? provider->export_info.workgroup_size[0] : provider->route.workgroup_size[0];
 }
 
 static bool ggml_backend_hrx2_dispatch_quantize_q8_1(
@@ -8570,6 +8581,7 @@ static ggml_status ggml_backend_hrx2_dispatch_mul_mat_q6_k(
             continue;
         }
 
+        const uint32_t workgroup_size_x = ggml_backend_hrx2_provider_workgroup_size_x(provider);
         hrx_dispatch_config_t config = {
             /* .workgroup_count = */ {
                 (constants.rows + provider->route.rows_per_workgroup - 1) / provider->route.rows_per_workgroup,
@@ -8577,7 +8589,7 @@ static ggml_status ggml_backend_hrx2_dispatch_mul_mat_q6_k(
                 1,
             },
             /* .workgroup_size  = */ {
-                provider->export_info.workgroup_size[0] ? provider->export_info.workgroup_size[0] : provider->route.workgroup_size[0],
+                workgroup_size_x,
                 1,
                 1,
             },
@@ -8733,6 +8745,7 @@ static ggml_status ggml_backend_hrx2_dispatch_mul_mat_q5_k(
             continue;
         }
 
+        const uint32_t workgroup_size_x = ggml_backend_hrx2_provider_workgroup_size_x(provider);
         hrx_dispatch_config_t config = {
             /* .workgroup_count = */ {
                 (constants.rows + provider->route.rows_per_workgroup - 1) / provider->route.rows_per_workgroup,
@@ -8740,7 +8753,7 @@ static ggml_status ggml_backend_hrx2_dispatch_mul_mat_q5_k(
                 1,
             },
             /* .workgroup_size  = */ {
-                provider->export_info.workgroup_size[0] ? provider->export_info.workgroup_size[0] : provider->route.workgroup_size[0],
+                workgroup_size_x,
                 1,
                 1,
             },
