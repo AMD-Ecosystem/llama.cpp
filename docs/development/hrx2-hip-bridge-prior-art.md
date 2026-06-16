@@ -1,0 +1,99 @@
+# HRX2 HIP Bridge Prior Art
+
+HRX2 no longer compiles or routes temporary HIP C++ bridge kernels in the
+production backend. The removed bridge sources remain useful as schedule prior
+art through git history and the HRX1 catalog, but new HRX2 production kernels
+should be authored in Loom and validated with Loom compile reports, target
+listings, backend op tests, and route traces.
+
+Removed HRX2 bridge commits:
+
+- `e909aef98` added the first Q4_K prompt bridge.
+- `10a42bc10` and `37828eb12` added Q4_K Vulkan-medium and wave32 variants.
+- `da3e2059` added Q5_K/Q6_K prompt bridges.
+- `c08919e60` and `b884fff06` added Q6_K/Q5_K wave32 prompt variants.
+- `b56c1085c` added the FA0 attention prefill HIP bridge.
+
+Schedule facts worth preserving for Loom candidates:
+
+- Q4_K prompt bridge: Vulkan medium K-quant integer MMQ family, `BM64`,
+  `BN64`, workgroup 128 for wave32 and 128 or 64 for earlier wave64 pivots,
+  packed Q8_1 x4 RHS, Q4 A-side pack/cache, `u8s8` dot contract, cols64 prompt
+  shapes as the strongest production signal.
+- Q5_K prompt bridge: packed Q8_1 x4 RHS, HRX1/Vulkan-style tiled MMQ,
+  `BM64/BN64` wave32 for the narrow production row and `BM128/BN128` wave64 as
+  an older HRX1 prior. The Loom catalog keeps Q5_K MMQ/direct routes for
+  correctness and tuning.
+- Q6_K prompt bridge: packed Q8_1 x4 RHS, Vulkan-medium `BM64/BN64` wave32
+  cols64 rows for important basket shapes and HRX1 `BM64/BN128` wave64 as an
+  older broader prompt prior. The Loom catalog keeps Q6_K MMQ/direct routes for
+  correctness and tuning.
+- FA0 attention bridge: direct FA0 graph fusion of `KQ -> SOFT_MAX -> KQV ->
+  PERMUTE -> CONT` for D128, adapted from HRX1 direct flash-attention. It used
+  BR16/BC64/BK16 style ownership with WMMA QK/PV and online softmax. There is
+  no accepted Loom replacement in this cleanup; the unfused Loom/HRX2 routes
+  are the production fallback until a Loom FA0 fusion is authored and proved.
+
+When reusing any of these schedules, create a Loom candidate row before coding:
+
+- prior source or commit;
+- target model shape bucket;
+- tile/workgroup/subgroup;
+- lane ownership and per-lane outputs;
+- vector and packed load width;
+- dot/WMMA primitive and signedness;
+- LDS staging, barriers, unroll, reduction, and writeback policy;
+- compile-report checks for registers, spills, instruction mix, LDS/bank
+  conflicts, hazards, and emitted target listing;
+- focused backend-op correctness gate and promotion rule.
+
+## Cleanup Evidence
+
+The production cleanup removed every HRX2 CMake path that compiled `-x hip`
+bridge sources and removed bridge route/source/artifact records from the split
+catalog. A rebuilt generated catalog has no checked-in `amdgpu-hsaco` artifacts;
+runtime HSACO still appears only as Loom JIT output.
+
+Focused backend-op gates were run first for the affected Q4_K, Q5_K, and Q6_K
+families using traced route evidence:
+
+- Q4_K: 8 focused `MUL_MAT` rows passed, selecting Loom direct, cols4, and
+  `x4_mmq64x32` routes plus Q8_1 quantization routes.
+- Q5_K: 3 focused rows passed, selecting Loom dot16, direct-cols4, and
+  `x4_mmq32x32` routes.
+- Q6_K: 10 focused rows passed, selecting Loom rows2, direct-cols4, and
+  `x4_mmq64x32` routes.
+
+The sampled Loom compile reports for those routes had status `OK`, zero hazard
+gaps, and zero allocation spills. Peak live units in the samples were:
+
+| Route export | Peak live units | LDS bytes | Dot instructions |
+| --- | ---: | ---: | ---: |
+| `hrx2_mul_mat_q4_k_f32_static` | 30 | 32 | 0 |
+| `hrx2_mul_mat_q4_k_q8_1_f32_cols4_static` | 51 | 128 | 4 |
+| `hrx2_mul_mat_q4_k_q8_1_x4_mmq64x32_static` | 110 | 2688 | 64 |
+| `hrx2_mul_mat_q5_k_f32_dot16_static` | 54 | 0 | 0 |
+| `hrx2_mul_mat_q5_k_q8_1_x4_direct_cols4_static` | 53 | 128 | 4 |
+| `hrx2_mul_mat_q5_k_q8_1_x4_mmq32x32_static` | 85 | 1280 | 64 |
+| `hrx2_mul_mat_q6_k_f32_rows2_wg32_static` | 51 | 0 | 0 |
+| `hrx2_mul_mat_q6_k_q8_1_x4_direct_cols4_static` | 30 | 128 | 4 |
+| `hrx2_mul_mat_q6_k_q8_1_x4_mmq64x32_static` | 98 | 1088 | 64 |
+
+Reduced integration smoke after removing the HIP bridges:
+
+```sh
+python3 tools/hrx2_phase2a_benchmark.py \
+  --tag no-hip-loom-smoke-20260616 \
+  --models llama32-3b-q4 \
+  --cases decode-p1n64,prefill-p64n0,prefill-p512n0 \
+  --backends hrx2,vulkan --repetitions 1 --timeout 900
+```
+
+| Case | HRX2 tok/s | Vulkan tok/s | HRX2/Vulkan | CPU compute |
+| --- | ---: | ---: | ---: | ---: |
+| `decode-p1n64` | 47.460 | 126.371 | 0.376 | 0 |
+| `prefill-p64n0` | 226.852 | 1517.097 | 0.150 | 0 |
+| `prefill-p512n0` | 811.506 | 4770.209 | 0.170 | 0 |
+
+The top remaining p64/p512 blocker in that smoke is the Loom
+`mul_mat_q4_k_q8_1_x4_mmq64x32` route, not missing bridge compilation.
