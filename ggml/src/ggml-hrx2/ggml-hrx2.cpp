@@ -102,6 +102,7 @@ struct ggml_backend_hrx2_device_context {
     std::vector<const ggml_backend_hrx2_kernel_route *> mul_mat_f16_f32_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> copy_f32_f16_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> cont_routes;
+    std::vector<const ggml_backend_hrx2_kernel_route *> cont_set_rows_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> swiglu_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> set_rows_routes;
     std::vector<const ggml_backend_hrx2_kernel_route *> rope_set_rows_routes;
@@ -418,6 +419,13 @@ struct ggml_backend_hrx2_cont_shape {
     uint32_t src_nb3 = 0;
 };
 
+struct ggml_backend_hrx2_cont_set_rows_fusion {
+    const ggml_tensor * cont = nullptr;
+    const ggml_tensor * set_rows = nullptr;
+    ggml_backend_hrx2_cont_shape cont_shape = {};
+    ggml_backend_hrx2_set_rows_shape set_rows_shape = {};
+};
+
 struct ggml_backend_hrx2_swiglu_shape {
     uint32_t ncols = 0;
     uint32_t nrows = 0;
@@ -436,6 +444,9 @@ static bool ggml_backend_hrx2_q4_k_q8_1_x4_mmq_enabled();
 static bool ggml_backend_hrx2_route_uses_q8_1_rhs(const ggml_backend_hrx2_kernel_route * route);
 static bool ggml_backend_hrx2_route_uses_q8_1_x4_rhs(const ggml_backend_hrx2_kernel_route * route);
 static bool ggml_backend_hrx2_cont_route_copies_vec4(const ggml_backend_hrx2_kernel_route * route);
+static bool ggml_backend_hrx2_extract_cont_shape(
+        const ggml_tensor * op,
+        ggml_backend_hrx2_cont_shape * out_shape);
 
 static bool ggml_hrx2_check(hrx_status_t status, const char * expression, const char * file, int line) {
     if (hrx_status_is_ok(status)) {
@@ -3199,6 +3210,78 @@ static bool ggml_backend_hrx2_extract_rope_set_rows_fusion(
     return true;
 }
 
+static bool ggml_backend_hrx2_tensor_is_or_zero_offset_view_source(
+        const ggml_tensor * tensor,
+        const ggml_tensor * base) {
+    for (const ggml_tensor * cur = tensor; cur != nullptr;) {
+        if (cur == base) {
+            return true;
+        }
+        if (cur->view_offs != 0) {
+            return false;
+        }
+        if (cur->view_src) {
+            cur = cur->view_src;
+            continue;
+        }
+        if ((cur->op == GGML_OP_VIEW ||
+             cur->op == GGML_OP_RESHAPE ||
+             cur->op == GGML_OP_PERMUTE ||
+             cur->op == GGML_OP_TRANSPOSE) &&
+            cur->src[0]) {
+            cur = cur->src[0];
+            continue;
+        }
+        return false;
+    }
+    return false;
+}
+
+static bool ggml_backend_hrx2_extract_cont_set_rows_fusion(
+        const ggml_tensor * cont,
+        const ggml_tensor * set_rows,
+        ggml_backend_hrx2_cont_set_rows_fusion * out_fusion) {
+    if (!out_fusion ||
+        !cont ||
+        !set_rows ||
+        cont->op != GGML_OP_CONT ||
+        set_rows->op != GGML_OP_SET_ROWS ||
+        set_rows->src[0] == nullptr ||
+        set_rows->src[1] == nullptr ||
+        cont->type != GGML_TYPE_F32 ||
+        set_rows->type != GGML_TYPE_F16 ||
+        set_rows->src[1]->type != GGML_TYPE_I64 ||
+        cont->view_src != nullptr ||
+        (cont->flags & GGML_TENSOR_FLAG_OUTPUT) != 0 ||
+        !ggml_backend_hrx2_tensor_is_or_zero_offset_view_source(set_rows->src[0], cont)) {
+        return false;
+    }
+
+    ggml_backend_hrx2_cont_shape cont_shape;
+    ggml_backend_hrx2_set_rows_shape set_rows_shape;
+    if (!ggml_backend_hrx2_extract_cont_shape(cont, &cont_shape) ||
+        !ggml_backend_hrx2_extract_set_rows_shape(set_rows, &set_rows_shape)) {
+        return false;
+    }
+
+    if (cont_shape.ncols != 128 ||
+        set_rows_shape.nc != 1 ||
+        set_rows_shape.ne02 != 1 ||
+        set_rows_shape.ne03 != 1 ||
+        set_rows_shape.ne1 > 1048576 ||
+        ggml_nelements(set_rows->src[0]) != ggml_nelements(cont)) {
+        return false;
+    }
+
+    *out_fusion = {
+        /* .cont           = */ cont,
+        /* .set_rows       = */ set_rows,
+        /* .cont_shape     = */ cont_shape,
+        /* .set_rows_shape = */ set_rows_shape,
+    };
+    return true;
+}
+
 static bool ggml_backend_hrx2_extract_soft_max_shape(
         const ggml_tensor * op,
         ggml_backend_hrx2_soft_max_shape * out_shape) {
@@ -4623,6 +4706,102 @@ static bool ggml_backend_hrx2_make_set_rows_plan(
     return true;
 }
 
+static bool ggml_backend_hrx2_make_cont_set_rows_plan(
+        const ggml_backend_hrx2_device_context * device_context,
+        const ggml_backend_hrx2_kernel_route * route,
+        const ggml_backend_hrx2_cont_set_rows_fusion & fusion,
+        ggml_backend_hrx2_provider_plan * out_plan) {
+    if (!out_plan ||
+        !ggml_backend_hrx2_route_available(device_context, route) ||
+        !ggml_backend_hrx2_route_shape_matches(route, fusion.set_rows_shape) ||
+        route->binding_count != 3) {
+        return false;
+    }
+
+    ggml_backend_hrx2_provider_plan plan;
+    plan.route = route;
+    plan.cache_key = ggml_backend_hrx2_base_cache_key(device_context, route);
+
+    if (!route->specialization_mode.empty() && route->specialization_mode != "jit_config") {
+        return false;
+    }
+    for (const auto & spec : route->config_bindings) {
+        ggml_backend_hrx2_config_binding binding;
+        binding.key = spec.key;
+        if (spec.value_source == "shape.cont.ncols") {
+            binding.value = std::to_string(fusion.cont_shape.ncols);
+        } else if (spec.value_source == "shape.cont.ne1") {
+            binding.value = std::to_string(fusion.cont_shape.ne1);
+        } else if (spec.value_source == "shape.cont.ne2") {
+            binding.value = std::to_string(fusion.cont_shape.ne2);
+        } else if (spec.value_source == "shape.cont.src_nb1") {
+            binding.value = std::to_string(fusion.cont_shape.src_nb1);
+        } else if (spec.value_source == "shape.cont.src_nb2") {
+            binding.value = std::to_string(fusion.cont_shape.src_nb2);
+        } else if (spec.value_source == "shape.cont.src_nb3") {
+            binding.value = std::to_string(fusion.cont_shape.src_nb3);
+        } else if (spec.value_source == "shape.set_rows.nc") {
+            binding.value = std::to_string(fusion.set_rows_shape.nc);
+        } else if (spec.value_source == "shape.set_rows.nr") {
+            binding.value = std::to_string(fusion.set_rows_shape.nr);
+        } else if (spec.value_source == "shape.set_rows.ne02") {
+            binding.value = std::to_string(fusion.set_rows_shape.ne02);
+        } else if (spec.value_source == "shape.set_rows.ne03") {
+            binding.value = std::to_string(fusion.set_rows_shape.ne03);
+        } else if (spec.value_source == "shape.set_rows.ne1") {
+            binding.value = std::to_string(fusion.set_rows_shape.ne1);
+        } else if (spec.value_source == "shape.set_rows.ne11") {
+            binding.value = std::to_string(fusion.set_rows_shape.ne11);
+        } else if (spec.value_source == "shape.set_rows.ne12") {
+            binding.value = std::to_string(fusion.set_rows_shape.ne12);
+        } else if (spec.value_source == "shape.set_rows.src0_nb1") {
+            binding.value = std::to_string(fusion.set_rows_shape.src0_nb1);
+        } else if (spec.value_source == "shape.set_rows.src0_nb2") {
+            binding.value = std::to_string(fusion.set_rows_shape.src0_nb2);
+        } else if (spec.value_source == "shape.set_rows.src0_nb3") {
+            binding.value = std::to_string(fusion.set_rows_shape.src0_nb3);
+        } else if (spec.value_source == "shape.set_rows.idx_nb0") {
+            binding.value = std::to_string(fusion.set_rows_shape.idx_nb0);
+        } else if (spec.value_source == "shape.set_rows.idx_nb1") {
+            binding.value = std::to_string(fusion.set_rows_shape.idx_nb1);
+        } else if (spec.value_source == "shape.set_rows.idx_nb2") {
+            binding.value = std::to_string(fusion.set_rows_shape.idx_nb2);
+        } else if (spec.value_source == "shape.set_rows.dst_nb1") {
+            binding.value = std::to_string(fusion.set_rows_shape.dst_nb1);
+        } else if (spec.value_source == "shape.set_rows.dst_nb2") {
+            binding.value = std::to_string(fusion.set_rows_shape.dst_nb2);
+        } else if (spec.value_source == "shape.set_rows.dst_nb3") {
+            binding.value = std::to_string(fusion.set_rows_shape.dst_nb3);
+        } else if (spec.value_source.empty()) {
+            binding.value = spec.value;
+        } else {
+            return false;
+        }
+        plan.config_bindings.push_back(std::move(binding));
+    }
+    if (route->specialization_mode == "jit_config") {
+        plan.cache_key += "|cont_ncols=" + std::to_string(fusion.cont_shape.ncols);
+        plan.cache_key += "|cont_nrows=" + std::to_string(fusion.cont_shape.nrows);
+        plan.cache_key += "|cont_ne1=" + std::to_string(fusion.cont_shape.ne1);
+        plan.cache_key += "|cont_ne2=" + std::to_string(fusion.cont_shape.ne2);
+        plan.cache_key += "|cont_src_nb1=" + std::to_string(fusion.cont_shape.src_nb1);
+        plan.cache_key += "|cont_src_nb2=" + std::to_string(fusion.cont_shape.src_nb2);
+        plan.cache_key += "|cont_src_nb3=" + std::to_string(fusion.cont_shape.src_nb3);
+        plan.cache_key += "|set_nc=" + std::to_string(fusion.set_rows_shape.nc);
+        plan.cache_key += "|set_nr=" + std::to_string(fusion.set_rows_shape.nr);
+        plan.cache_key += "|set_ne1=" + std::to_string(fusion.set_rows_shape.ne1);
+        for (const auto & binding : plan.config_bindings) {
+            plan.cache_key += "|";
+            plan.cache_key += binding.key;
+            plan.cache_key += "=";
+            plan.cache_key += binding.value;
+        }
+    }
+
+    *out_plan = std::move(plan);
+    return true;
+}
+
 static bool ggml_backend_hrx2_make_get_rows_plan(
         const ggml_backend_hrx2_device_context * device_context,
         const ggml_backend_hrx2_kernel_route * route,
@@ -4948,6 +5127,26 @@ static bool ggml_backend_hrx2_supports_set_rows_route(
     return false;
 }
 
+static bool ggml_backend_hrx2_supports_cont_set_rows_route(
+        ggml_backend_hrx2_device_context * device_context,
+        const ggml_tensor * cont,
+        const ggml_tensor * set_rows) {
+    ggml_backend_hrx2_cont_set_rows_fusion fusion;
+    if (!ggml_backend_hrx2_extract_cont_set_rows_fusion(cont, set_rows, &fusion)) {
+        return false;
+    }
+    for (const auto * route : device_context->cont_set_rows_routes) {
+        if (route->export_name != "hrx2_cont_set_rows_f32_f16") {
+            continue;
+        }
+        ggml_backend_hrx2_provider_plan plan;
+        if (ggml_backend_hrx2_make_cont_set_rows_plan(device_context, route, fusion, &plan)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool ggml_backend_hrx2_supports_mul_mat_f16_f32_route(
         ggml_backend_hrx2_device_context * device_context,
         const ggml_tensor * op) {
@@ -5228,6 +5427,59 @@ static bool ggml_backend_hrx2_can_fuse_rope_set_rows(
         }
     }
     return uses == 1;
+}
+
+static bool ggml_backend_hrx2_can_fuse_cont_set_rows(
+        const ggml_cgraph * cgraph,
+        int cont_index,
+        int set_rows_index) {
+    if (!cgraph ||
+        cont_index < 0 ||
+        set_rows_index <= cont_index ||
+        set_rows_index >= cgraph->n_nodes) {
+        return false;
+    }
+
+    const ggml_tensor * cont = cgraph->nodes[cont_index];
+    const ggml_tensor * set_rows = cgraph->nodes[set_rows_index];
+    if (!cont ||
+        !set_rows ||
+        cont->op != GGML_OP_CONT ||
+        set_rows->op != GGML_OP_SET_ROWS ||
+        (cont->flags & GGML_TENSOR_FLAG_COMPUTE) == 0 ||
+        (set_rows->flags & GGML_TENSOR_FLAG_COMPUTE) == 0 ||
+        (cont->flags & GGML_TENSOR_FLAG_OUTPUT) != 0 ||
+        !ggml_backend_hrx2_tensor_is_or_zero_offset_view_source(set_rows->src[0], cont)) {
+        return false;
+    }
+
+    int set_rows_uses = 0;
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        const ggml_tensor * node = cgraph->nodes[i];
+        if (!node) {
+            continue;
+        }
+        for (int src_idx = 0; src_idx < GGML_MAX_SRC; ++src_idx) {
+            const ggml_tensor * src = node->src[src_idx];
+            if (!ggml_backend_hrx2_tensor_is_or_zero_offset_view_source(src, cont)) {
+                continue;
+            }
+            if (i == set_rows_index && src == set_rows->src[0]) {
+                ++set_rows_uses;
+                continue;
+            }
+            if (i > cont_index &&
+                i < set_rows_index &&
+                (node->op == GGML_OP_VIEW || node->op == GGML_OP_RESHAPE) &&
+                ggml_backend_hrx2_tensor_is_or_zero_offset_view_source(node, cont)) {
+                continue;
+            }
+            {
+                return false;
+            }
+        }
+    }
+    return set_rows_uses == 1;
 }
 
 static bool ggml_backend_hrx2_supports_soft_max_route(
@@ -6871,6 +7123,123 @@ static ggml_status ggml_backend_hrx2_dispatch_rope_set_rows(
         fusion.rope_shape.nheads,
         fusion.rope_shape.ntokens,
         ggml_backend_hrx2_tensor_summary(set_rows).c_str());
+    return GGML_STATUS_FAILED;
+}
+
+static ggml_status ggml_backend_hrx2_dispatch_cont_set_rows(
+        ggml_backend_hrx2_context * context,
+        const ggml_tensor * cont,
+        const ggml_tensor * set_rows) {
+    ggml_backend_hrx2_cont_set_rows_fusion fusion;
+    if (!ggml_backend_hrx2_extract_cont_set_rows_fusion(cont, set_rows, &fusion)) {
+        ggml_backend_hrx2_trace_event(
+            "fusion_reject",
+            ggml_backend_hrx2_json_kv("fusion", "CONT_SET_ROWS") + "," +
+            ggml_backend_hrx2_json_kv("reason", "fusion_shape"));
+        return GGML_STATUS_FAILED;
+    }
+
+    hrx_buffer_ref_t bindings[3] = {};
+    if (!ggml_backend_hrx2_tensor_buffer_ref(cont->src[0], &bindings[0]) ||
+        !ggml_backend_hrx2_tensor_buffer_ref(set_rows->src[1], &bindings[1]) ||
+        !ggml_backend_hrx2_tensor_buffer_ref(set_rows, &bindings[2])) {
+        ggml_backend_hrx2_trace_event(
+            "fusion_reject",
+            ggml_backend_hrx2_json_kv("fusion", "CONT_SET_ROWS") + "," +
+            ggml_backend_hrx2_json_kv("reason", "buffer_ref"));
+        GGML_LOG_ERROR("HRX2: CONT_SET_ROWS tensor is not backed by HRX2 buffers\n");
+        return GGML_STATUS_FAILED;
+    }
+
+    for (const auto * route : context->device_context->cont_set_rows_routes) {
+        if (route->export_name != "hrx2_cont_set_rows_f32_f16") {
+            continue;
+        }
+
+        ggml_backend_hrx2_provider_plan plan;
+        if (!ggml_backend_hrx2_make_cont_set_rows_plan(context->device_context, route, fusion, &plan)) {
+            continue;
+        }
+
+        const auto * provider = ggml_backend_hrx2_get_provider(
+            context->device_context,
+            plan.route,
+            plan.config_bindings,
+            plan.cache_key);
+        if (!provider) {
+            ggml_backend_hrx2_trace_event(
+                "provider_unavailable",
+                ggml_backend_hrx2_json_kv("op", "CONT_SET_ROWS") + "," +
+                ggml_backend_hrx2_json_kv("route_id", plan.route->id) + "," +
+                ggml_backend_hrx2_json_kv("target_key", context->device_context->architecture) + "," +
+                ggml_backend_hrx2_json_kv("cache_key", plan.cache_key) + "," +
+                ggml_backend_hrx2_json_kv("cont_ncols", fusion.cont_shape.ncols) + "," +
+                ggml_backend_hrx2_json_kv("set_rows_nr", fusion.set_rows_shape.nr));
+            continue;
+        }
+
+        if (provider->route.constant_byte_length != 0) {
+            GGML_LOG_ERROR(
+                "HRX2: CONT_SET_ROWS route %s has unsupported constant byte length %u\n",
+                provider->route.id.c_str(),
+                provider->route.constant_byte_length);
+            continue;
+        }
+
+        const uint64_t total =
+            static_cast<uint64_t>(fusion.set_rows_shape.nc) *
+            static_cast<uint64_t>(fusion.set_rows_shape.nr) *
+            static_cast<uint64_t>(fusion.set_rows_shape.ne02) *
+            static_cast<uint64_t>(fusion.set_rows_shape.ne03);
+        const uint32_t workgroup_size =
+            provider->export_info.workgroup_size[0] ? provider->export_info.workgroup_size[0] : provider->route.workgroup_size[0];
+        hrx_dispatch_config_t config = {
+            /* .workgroup_count = */ {
+                static_cast<uint32_t>((total + workgroup_size - 1) / workgroup_size),
+                1,
+                1,
+            },
+            /* .workgroup_size  = */ {
+                workgroup_size,
+                1,
+                1,
+            },
+            /* .subgroup_size   = */ 0,
+        };
+
+        ggml_backend_hrx2_trace_event(
+            "dispatch",
+            ggml_backend_hrx2_json_kv("op", "CONT_SET_ROWS") + "," +
+            ggml_backend_hrx2_json_kv("route_id", provider->route.id) + "," +
+            ggml_backend_hrx2_json_kv("target_key", context->device_context->architecture) + "," +
+            ggml_backend_hrx2_json_kv("cache_key", provider->cache_key) + "," +
+            ggml_backend_hrx2_json_kv("cont_ncols", fusion.cont_shape.ncols) + "," +
+            ggml_backend_hrx2_json_kv("cont_nrows", fusion.cont_shape.nrows) + "," +
+            ggml_backend_hrx2_json_kv("set_rows_nc", fusion.set_rows_shape.nc) + "," +
+            ggml_backend_hrx2_json_kv("set_rows_nr", fusion.set_rows_shape.nr) + "," +
+            ggml_backend_hrx2_json_kv("workgroups_x", config.workgroup_count[0]) + "," +
+            ggml_backend_hrx2_json_kv("workgroup_size_x", config.workgroup_size[0]));
+
+        if (!GGML_HRX2_CHECK(hrx_stream_dispatch(
+                context->stream,
+                provider->executable,
+                provider->export_ordinal,
+                &config,
+                nullptr,
+                0,
+                bindings,
+                3,
+                HRX_DISPATCH_FLAG_NONE))) {
+            return GGML_STATUS_FAILED;
+        }
+        return GGML_STATUS_SUCCESS;
+    }
+
+    GGML_LOG_ERROR(
+        "HRX2: CONT_SET_ROWS provider is not available for cont_ncols=%u set_rows_nc=%u set_rows_nr=%u\n",
+        fusion.cont_shape.ncols,
+        fusion.set_rows_shape.nc,
+        fusion.set_rows_shape.nr);
     return GGML_STATUS_FAILED;
 }
 
@@ -8812,6 +9181,46 @@ static enum ggml_status ggml_backend_hrx2_graph_compute(ggml_backend_t backend, 
             i += 1;
             continue;
         }
+        if (ggml_backend_hrx2_fusion_enabled() &&
+            !ggml_backend_hrx2_env_enabled("GGML_HRX2_DISABLE_CONT_SET_ROWS_FUSION") &&
+            i + 3 < cgraph->n_nodes &&
+            node->op == GGML_OP_CONT &&
+            cgraph->nodes[i + 1]->op == GGML_OP_RESHAPE &&
+            cgraph->nodes[i + 2]->op == GGML_OP_RESHAPE &&
+            cgraph->nodes[i + 3]->op == GGML_OP_SET_ROWS &&
+            ggml_backend_hrx2_supports_cont_set_rows_route(
+                context->device_context,
+                node,
+                cgraph->nodes[i + 3]) &&
+            ggml_backend_hrx2_can_fuse_cont_set_rows(cgraph, i, i + 3)) {
+            if (ggml_backend_hrx2_dispatch_cont_set_rows(
+                    context,
+                    node,
+                    cgraph->nodes[i + 3]) != GGML_STATUS_SUCCESS) {
+                return GGML_STATUS_FAILED;
+            }
+            i += 3;
+            continue;
+        }
+        if (ggml_backend_hrx2_fusion_enabled() &&
+            !ggml_backend_hrx2_env_enabled("GGML_HRX2_DISABLE_CONT_SET_ROWS_FUSION") &&
+            i + 1 < cgraph->n_nodes &&
+            node->op == GGML_OP_CONT &&
+            cgraph->nodes[i + 1]->op == GGML_OP_SET_ROWS &&
+            ggml_backend_hrx2_supports_cont_set_rows_route(
+                context->device_context,
+                node,
+                cgraph->nodes[i + 1]) &&
+            ggml_backend_hrx2_can_fuse_cont_set_rows(cgraph, i, i + 1)) {
+            if (ggml_backend_hrx2_dispatch_cont_set_rows(
+                    context,
+                    node,
+                    cgraph->nodes[i + 1]) != GGML_STATUS_SUCCESS) {
+                return GGML_STATUS_FAILED;
+            }
+            i += 1;
+            continue;
+        }
         switch (node->op) {
             case GGML_OP_NONE:
             case GGML_OP_RESHAPE:
@@ -9442,6 +9851,11 @@ static std::unique_ptr<ggml_backend_hrx2_reg_context> ggml_backend_hrx2_create_r
                 &device_context->cont_routes);
             ggml_backend_hrx2_catalog_find_routes(
                 *device_context->catalog,
+                "cont_set_rows_f32",
+                "SET_ROWS",
+                &device_context->cont_set_rows_routes);
+            ggml_backend_hrx2_catalog_find_routes(
+                *device_context->catalog,
                 "swiglu_f32",
                 "GLU",
                 &device_context->swiglu_routes);
@@ -9595,6 +10009,10 @@ static std::unique_ptr<ggml_backend_hrx2_reg_context> ggml_backend_hrx2_create_r
             std::sort(
                 device_context->cont_routes.begin(),
                 device_context->cont_routes.end(),
+                route_less);
+            std::sort(
+                device_context->cont_set_rows_routes.begin(),
+                device_context->cont_set_rows_routes.end(),
                 route_less);
             std::sort(
                 device_context->swiglu_routes.begin(),

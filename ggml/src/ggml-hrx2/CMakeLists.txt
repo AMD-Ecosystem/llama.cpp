@@ -29,6 +29,7 @@ set(GGML_HRX2_ARTIFACTS
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/mul_mat_f16_f32_batched.loombc"
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/copy_f32_f16.loombc"
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/cont_f32.loombc"
+    "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/cont_set_rows_f32.loombc"
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/swiglu_f32.loombc"
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/pointwise_f32.loombc"
     "${GGML_HRX2_ARTIFACT_ROOT}/artifacts/set_rows_f32.loombc"

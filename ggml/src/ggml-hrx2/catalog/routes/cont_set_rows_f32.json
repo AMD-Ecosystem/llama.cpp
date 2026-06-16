@@ -1,0 +1,144 @@
+[
+  {
+    "id": "cont_set_rows_f32_f16_n128_wg256",
+    "family": "cont_set_rows_f32",
+    "op": "SET_ROWS",
+    "target_key": "",
+    "source_id": "cont_set_rows_f32",
+    "artifact_id": "cont_set_rows_f32_bc",
+    "root_symbol": "@hrx2_cont_set_rows_f32_f16",
+    "export_name": "hrx2_cont_set_rows_f32_f16",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 120,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 3,
+      "constant_byte_length": 0
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ],
+      "rows_per_workgroup": 1,
+      "cols_per_workgroup": 1
+    },
+    "shape_domain": {
+      "name": "cont_set_rows_f32_f16_n128",
+      "ncols_min": 1,
+      "ncols_max": 1,
+      "nrows_min": 1,
+      "nrows_max": 1048576
+    },
+    "specialization": {
+      "mode": "jit_config",
+      "bindings": [
+        {
+          "key": "@hrx2.shape.cont.ncols",
+          "source": "shape.cont.ncols"
+        },
+        {
+          "key": "@hrx2.shape.cont.ne1",
+          "source": "shape.cont.ne1"
+        },
+        {
+          "key": "@hrx2.shape.cont.ne2",
+          "source": "shape.cont.ne2"
+        },
+        {
+          "key": "@hrx2.stride.cont.src_nb1",
+          "source": "shape.cont.src_nb1"
+        },
+        {
+          "key": "@hrx2.stride.cont.src_nb2",
+          "source": "shape.cont.src_nb2"
+        },
+        {
+          "key": "@hrx2.stride.cont.src_nb3",
+          "source": "shape.cont.src_nb3"
+        },
+        {
+          "key": "@hrx2.shape.set_rows.nc",
+          "source": "shape.set_rows.nc"
+        },
+        {
+          "key": "@hrx2.shape.set_rows.nr",
+          "source": "shape.set_rows.nr"
+        },
+        {
+          "key": "@hrx2.shape.set_rows.ne02",
+          "source": "shape.set_rows.ne02"
+        },
+        {
+          "key": "@hrx2.shape.set_rows.ne03",
+          "source": "shape.set_rows.ne03"
+        },
+        {
+          "key": "@hrx2.shape.set_rows.ne1",
+          "source": "shape.set_rows.ne1"
+        },
+        {
+          "key": "@hrx2.shape.set_rows.ne11",
+          "source": "shape.set_rows.ne11"
+        },
+        {
+          "key": "@hrx2.shape.set_rows.ne12",
+          "source": "shape.set_rows.ne12"
+        },
+        {
+          "key": "@hrx2.stride.set_rows.src0_nb1",
+          "source": "shape.set_rows.src0_nb1"
+        },
+        {
+          "key": "@hrx2.stride.set_rows.src0_nb2",
+          "source": "shape.set_rows.src0_nb2"
+        },
+        {
+          "key": "@hrx2.stride.set_rows.src0_nb3",
+          "source": "shape.set_rows.src0_nb3"
+        },
+        {
+          "key": "@hrx2.stride.set_rows.idx_nb0",
+          "source": "shape.set_rows.idx_nb0"
+        },
+        {
+          "key": "@hrx2.stride.set_rows.idx_nb1",
+          "source": "shape.set_rows.idx_nb1"
+        },
+        {
+          "key": "@hrx2.stride.set_rows.idx_nb2",
+          "source": "shape.set_rows.idx_nb2"
+        },
+        {
+          "key": "@hrx2.stride.set_rows.dst_nb1",
+          "source": "shape.set_rows.dst_nb1"
+        },
+        {
+          "key": "@hrx2.stride.set_rows.dst_nb2",
+          "source": "shape.set_rows.dst_nb2"
+        },
+        {
+          "key": "@hrx2.stride.set_rows.dst_nb3",
+          "source": "shape.set_rows.dst_nb3"
+        },
+        {
+          "key": "@hrx2.tuning.cont_set_rows.workgroup_size",
+          "value": "256"
+        }
+      ]
+    },
+    "supports": {
+      "src0_type": "F32",
+      "src1_type": "I64",
+      "dst_type": "F16",
+      "layout": "cont_src0_to_reshape_set_rows",
+      "cont_ncols": 128
+    },
+    "evidence_summary": {
+      "phase": "phase2a-phi-cont-set-rows",
+      "algorithm": "fuse Vcur CONT linearization into SET_ROWS cache write",
+      "ggml_cpu_reference": "required"
+    }
+  }
+]

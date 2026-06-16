@@ -23,6 +23,9 @@
   "cont_f32": {
     "path": "kernels/cont_f32.loom"
   },
+  "cont_set_rows_f32": {
+    "path": "kernels/cont_set_rows_f32.loom"
+  },
   "swiglu_f32": {
     "path": "kernels/swiglu_f32.loom"
   },

@@ -1,0 +1,164 @@
+config.decl @hrx2.shape.cont.ncols : %value: index where [range(%value, 1, 65536)]
+config.decl @hrx2.shape.cont.ne1 : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2.shape.cont.ne2 : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2.stride.cont.src_nb1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @hrx2.stride.cont.src_nb2 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @hrx2.stride.cont.src_nb3 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @hrx2.shape.set_rows.nc : %value: index where [range(%value, 1, 65536)]
+config.decl @hrx2.shape.set_rows.nr : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2.shape.set_rows.ne02 : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2.shape.set_rows.ne03 : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2.shape.set_rows.ne1 : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2.shape.set_rows.ne11 : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2.shape.set_rows.ne12 : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2.stride.set_rows.src0_nb1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @hrx2.stride.set_rows.src0_nb2 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @hrx2.stride.set_rows.src0_nb3 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @hrx2.stride.set_rows.idx_nb0 : %value: index where [range(%value, 1, 64)]
+config.decl @hrx2.stride.set_rows.idx_nb1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @hrx2.stride.set_rows.idx_nb2 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @hrx2.stride.set_rows.dst_nb1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @hrx2.stride.set_rows.dst_nb2 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @hrx2.stride.set_rows.dst_nb3 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @hrx2.tuning.cont_set_rows.workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+
+kernel.def export("hrx2_cont_set_rows_f32_f16") @hrx2_cont_set_rows_f32_f16() {
+  %unit = index.constant 1 : index
+  %minus_one = index.constant -1 : index
+  %nc = config.get @hrx2.shape.set_rows.nc : index
+  %nr = config.get @hrx2.shape.set_rows.nr : index
+  %ne02 = config.get @hrx2.shape.set_rows.ne02 : index
+  %ne03 = config.get @hrx2.shape.set_rows.ne03 : index
+  %workgroup_size = config.get @hrx2.tuning.cont_set_rows.workgroup_size : index
+  %total0 = index.mul %nc, %nr : index
+  %total1 = index.mul %total0, %ne02 : index
+  %total = index.mul %total1, %ne03 : index
+  %rounding = index.add %workgroup_size, %minus_one : index
+  %rounded = index.add %total, %rounding : index
+  %workgroups = index.div %rounded, %workgroup_size : index
+  kernel.launch.config workgroups(%workgroups, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%cont_src0: buffer, %idx: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %two = index.constant 2 : index
+  %cont_ncols = config.get @hrx2.shape.cont.ncols : index
+  %cont_ne1 = config.get @hrx2.shape.cont.ne1 : index
+  %cont_ne2 = config.get @hrx2.shape.cont.ne2 : index
+  %cont_src_nb1 = config.get @hrx2.stride.cont.src_nb1 : index
+  %cont_src_nb2 = config.get @hrx2.stride.cont.src_nb2 : index
+  %cont_src_nb3 = config.get @hrx2.stride.cont.src_nb3 : index
+  %nc = config.get @hrx2.shape.set_rows.nc : index
+  %nr = config.get @hrx2.shape.set_rows.nr : index
+  %ne02 = config.get @hrx2.shape.set_rows.ne02 : index
+  %ne03 = config.get @hrx2.shape.set_rows.ne03 : index
+  %ne1 = config.get @hrx2.shape.set_rows.ne1 : index
+  %ne11 = config.get @hrx2.shape.set_rows.ne11 : index
+  %ne12 = config.get @hrx2.shape.set_rows.ne12 : index
+  %set_src0_nb1 = config.get @hrx2.stride.set_rows.src0_nb1 : index
+  %set_src0_nb2 = config.get @hrx2.stride.set_rows.src0_nb2 : index
+  %set_src0_nb3 = config.get @hrx2.stride.set_rows.src0_nb3 : index
+  %idx_nb0 = config.get @hrx2.stride.set_rows.idx_nb0 : index
+  %idx_nb1 = config.get @hrx2.stride.set_rows.idx_nb1 : index
+  %idx_nb2 = config.get @hrx2.stride.set_rows.idx_nb2 : index
+  %dst_nb1 = config.get @hrx2.stride.set_rows.dst_nb1 : index
+  %dst_nb2 = config.get @hrx2.stride.set_rows.dst_nb2 : index
+  %dst_nb3 = config.get @hrx2.stride.set_rows.dst_nb3 : index
+  %workgroup_size = config.get @hrx2.tuning.cont_set_rows.workgroup_size : index
+  %workgroup0 = kernel.workgroup.id<x> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %workgroup = index.assume %workgroup0 [range(%workgroup0, 0, 4194303)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+  %linear_mul0 = index.mul %workgroup, %workgroup_size : index
+  %linear_mul = index.assume %linear_mul0 [range(%linear_mul0, 0, 1073741823)] : index
+  %linear_add0 = index.add %linear_mul, %lane : index
+  %linear = index.assume %linear_add0 [range(%linear_add0, 0, 1073741823)] : index
+  %total0 = index.mul %nc, %nr : index
+  %total1 = index.mul %total0, %ne02 : index
+  %total = index.mul %total1, %ne03 : index
+  %in_bounds = index.cmp ult, %linear, %total : index
+
+  %src_global = buffer.assume.memory_space<global> %cont_src0 : buffer
+  %idx_global = buffer.assume.memory_space<global> %idx : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src_noalias, %idx_noalias, %dst_noalias = buffer.assume.noalias %src_global, %idx_global, %dst_global : buffer, buffer, buffer
+  %src_view = buffer.view %src_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+  %idx_view = buffer.view %idx_noalias[%base] : buffer -> view<268435456xi32, #dense>
+  %dst_view = buffer.view %dst_noalias[%base] : buffer -> view<1073741824xi16, #dense>
+
+  scf.if %in_bounds {
+    %i0 = index.rem %linear, %nc : index
+    %t1 = index.div %linear, %nc : index
+    %i = index.rem %t1, %nr : index
+    %t2 = index.div %t1, %nr : index
+    %i2 = index.rem %t2, %ne02 : index
+    %i3 = index.div %t2, %ne02 : index
+    %i11 = index.rem %i2, %ne11 : index
+    %i12 = index.rem %i3, %ne12 : index
+    %idx_e0_raw = index.mul %i, %idx_nb0 : index
+    %idx_e0 = index.assume %idx_e0_raw [range(%idx_e0_raw, 0, 134217727)] : index
+    %idx_m1_raw = index.mul %i11, %idx_nb1 : index
+    %idx_m1 = index.assume %idx_m1_raw [range(%idx_m1_raw, 0, 134217727)] : index
+    %idx_e1_raw = index.add %idx_m1, %idx_e0 : index
+    %idx_e1 = index.assume %idx_e1_raw [range(%idx_e1_raw, 0, 134217727)] : index
+    %idx_m2_raw = index.mul %i12, %idx_nb2 : index
+    %idx_m2 = index.assume %idx_m2_raw [range(%idx_m2_raw, 0, 134217727)] : index
+    %idx_e2_raw = index.add %idx_m2, %idx_e1 : index
+    %idx_e2 = index.assume %idx_e2_raw [range(%idx_e2_raw, 0, 134217727)] : index
+    %idx_element = index.assume %idx_e2 [range(%idx_e2, 0, 134217727)] : index
+    %idx_element_i32_raw = index.mul %idx_element, %two : index
+    %idx_element_i32 = index.assume %idx_element_i32_raw [range(%idx_element_i32_raw, 0, 268435455)] : index
+    %row_i32 = view.load %idx_view[%idx_element_i32] : view<268435456xi32, #dense> -> i32
+    %row = index.cast %row_i32 : i32 to index
+    %row_in_bounds = index.cmp ult, %row, %ne1 : index
+    scf.if %row_in_bounds {
+      %set_src_m1_raw = index.mul %i, %set_src0_nb1 : index
+      %set_src_m1 = index.assume %set_src_m1_raw [range(%set_src_m1_raw, 0, 1073741823)] : index
+      %set_src_e1_raw = index.add %set_src_m1, %i0 : index
+      %set_src_e1 = index.assume %set_src_e1_raw [range(%set_src_e1_raw, 0, 1073741823)] : index
+      %set_src_m2_raw = index.mul %i2, %set_src0_nb2 : index
+      %set_src_m2 = index.assume %set_src_m2_raw [range(%set_src_m2_raw, 0, 1073741823)] : index
+      %set_src_e2_raw = index.add %set_src_m2, %set_src_e1 : index
+      %set_src_e2 = index.assume %set_src_e2_raw [range(%set_src_e2_raw, 0, 1073741823)] : index
+      %set_src_m3_raw = index.mul %i3, %set_src0_nb3 : index
+      %set_src_m3 = index.assume %set_src_m3_raw [range(%set_src_m3_raw, 0, 1073741823)] : index
+      %set_src_idx_raw = index.add %set_src_m3, %set_src_e2 : index
+      %set_src_idx = index.assume %set_src_idx_raw [range(%set_src_idx_raw, 0, 1073741823)] : index
+
+      %cont_i0 = index.rem %set_src_idx, %cont_ncols : index
+      %cont_row = index.div %set_src_idx, %cont_ncols : index
+      %cont_i1 = index.rem %cont_row, %cont_ne1 : index
+      %cont_row2 = index.div %cont_row, %cont_ne1 : index
+      %cont_i2 = index.rem %cont_row2, %cont_ne2 : index
+      %cont_i3 = index.div %cont_row2, %cont_ne2 : index
+      %src_m1_raw = index.mul %cont_i1, %cont_src_nb1 : index
+      %src_m1 = index.assume %src_m1_raw [range(%src_m1_raw, 0, 1073741823)] : index
+      %src_e1_raw = index.add %src_m1, %cont_i0 : index
+      %src_e1 = index.assume %src_e1_raw [range(%src_e1_raw, 0, 1073741823)] : index
+      %src_m2_raw = index.mul %cont_i2, %cont_src_nb2 : index
+      %src_m2 = index.assume %src_m2_raw [range(%src_m2_raw, 0, 1073741823)] : index
+      %src_e2_raw = index.add %src_m2, %src_e1 : index
+      %src_e2 = index.assume %src_e2_raw [range(%src_e2_raw, 0, 1073741823)] : index
+      %src_m3_raw = index.mul %cont_i3, %cont_src_nb3 : index
+      %src_m3 = index.assume %src_m3_raw [range(%src_m3_raw, 0, 1073741823)] : index
+      %src_idx_raw = index.add %src_m3, %src_e2 : index
+      %src_idx = index.assume %src_idx_raw [range(%src_idx_raw, 0, 1073741823)] : index
+      %value = view.load %src_view[%src_idx] : view<1073741824xf32, #dense> -> f32
+
+      %dst_m1_raw = index.mul %row, %dst_nb1 : index
+      %dst_m1 = index.assume %dst_m1_raw [range(%dst_m1_raw, 0, 1073741823)] : index
+      %dst_e1_raw = index.add %dst_m1, %i0 : index
+      %dst_e1 = index.assume %dst_e1_raw [range(%dst_e1_raw, 0, 1073741823)] : index
+      %dst_m2_raw = index.mul %i2, %dst_nb2 : index
+      %dst_m2 = index.assume %dst_m2_raw [range(%dst_m2_raw, 0, 1073741823)] : index
+      %dst_e2_raw = index.add %dst_m2, %dst_e1 : index
+      %dst_e2 = index.assume %dst_e2_raw [range(%dst_e2_raw, 0, 1073741823)] : index
+      %dst_m3_raw = index.mul %i3, %dst_nb3 : index
+      %dst_m3 = index.assume %dst_m3_raw [range(%dst_m3_raw, 0, 1073741823)] : index
+      %dst_e3_raw = index.add %dst_m3, %dst_e2 : index
+      %dst_idx = index.assume %dst_e3_raw [range(%dst_e3_raw, 0, 1073741823)] : index
+      %half = scalar.fptrunc %value : f32 to f16
+      %half_bits = scalar.bitcast %half : f16 to i16
+      view.store %half_bits, %dst_view[%dst_idx] : i16, view<1073741824xi16, #dense>
+    }
+  }
+  kernel.return
+}

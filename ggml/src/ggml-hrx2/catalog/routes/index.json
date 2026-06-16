@@ -63,6 +63,7 @@
   "cont_f32_n128_r24_wg256",
   "cont_f32_n128_r128_wg256",
   "cont_f32_n128_r384_wg256",
+  "cont_set_rows_f32_f16_n128_wg256",
   "swiglu_f32_generic_wg256",
   "swiglu_f32_n8192_r1_wg256",
   "swiglu_f32_n8192_r16_wg256",

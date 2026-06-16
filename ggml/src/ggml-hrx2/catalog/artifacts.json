@@ -45,6 +45,11 @@
     "format": "loom-bytecode",
     "storage": "embedded"
   },
+  "cont_set_rows_f32_bc": {
+    "path": "artifacts/cont_set_rows_f32.loombc",
+    "format": "loom-bytecode",
+    "storage": "embedded"
+  },
   "copy_f32_f16_bc": {
     "path": "artifacts/copy_f32_f16.loombc",
     "format": "loom-bytecode",
