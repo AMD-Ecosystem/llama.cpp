@@ -443,6 +443,8 @@ static bool ggml_backend_hrx2_q4_k_q8_1_prompt_enabled(const ggml_backend_hrx2_m
 static bool ggml_backend_hrx2_q4_k_q8_1_x4_mmq_enabled();
 static bool ggml_backend_hrx2_q5_k_q8_1_prompt_enabled(const ggml_backend_hrx2_mul_mat_shape & shape);
 static bool ggml_backend_hrx2_q5_k_q8_1_x4_prompt_enabled();
+static bool ggml_backend_hrx2_q6_k_q8_1_prompt_enabled(const ggml_backend_hrx2_mul_mat_shape & shape);
+static bool ggml_backend_hrx2_q6_k_q8_1_x4_prompt_enabled();
 static bool ggml_backend_hrx2_route_uses_q8_1_rhs(const ggml_backend_hrx2_kernel_route * route);
 static bool ggml_backend_hrx2_route_uses_q8_1_x4_rhs(const ggml_backend_hrx2_kernel_route * route);
 static bool ggml_backend_hrx2_cont_route_copies_vec4(const ggml_backend_hrx2_kernel_route * route);
@@ -5085,6 +5087,14 @@ static bool ggml_backend_hrx2_supports_mul_mat_q6_k_route(
         return false;
     }
     for (const auto * route : device_context->mul_mat_q6_k_routes) {
+        if (ggml_backend_hrx2_route_uses_q8_1_rhs(route) &&
+            !ggml_backend_hrx2_q6_k_q8_1_prompt_enabled(shape)) {
+            continue;
+        }
+        if (ggml_backend_hrx2_route_uses_q8_1_x4_rhs(route) &&
+            !ggml_backend_hrx2_q6_k_q8_1_x4_prompt_enabled()) {
+            continue;
+        }
         ggml_backend_hrx2_provider_plan plan;
         if (ggml_backend_hrx2_make_mul_mat_q6_k_plan(device_context, route, shape, &plan)) {
             return true;
@@ -7614,6 +7624,10 @@ static bool ggml_backend_hrx2_q5_k_q8_1_prompt_enabled(const ggml_backend_hrx2_m
     return shape.cols > 1 && ggml_backend_hrx2_env_enabled("GGML_HRX2_ENABLE_Q5_K_Q8_1_PROMPT");
 }
 
+static bool ggml_backend_hrx2_q6_k_q8_1_prompt_enabled(const ggml_backend_hrx2_mul_mat_shape & shape) {
+    return shape.cols > 1 && ggml_backend_hrx2_env_enabled("GGML_HRX2_ENABLE_Q6_K_Q8_1_PROMPT");
+}
+
 static bool ggml_backend_hrx2_route_uses_q8_1_rhs(const ggml_backend_hrx2_kernel_route * route) {
     return route && route->id.find("q8_1") != std::string::npos;
 }
@@ -7632,6 +7646,10 @@ static bool ggml_backend_hrx2_q4_k_q8_1_x4_mmq_enabled() {
 
 static bool ggml_backend_hrx2_q5_k_q8_1_x4_prompt_enabled() {
     return ggml_backend_hrx2_env_enabled("GGML_HRX2_ENABLE_Q5_K_Q8_1_X4_PROMPT");
+}
+
+static bool ggml_backend_hrx2_q6_k_q8_1_x4_prompt_enabled() {
+    return ggml_backend_hrx2_env_enabled("GGML_HRX2_ENABLE_Q6_K_Q8_1_X4_PROMPT");
 }
 
 static bool ggml_backend_hrx2_dispatch_quantize_q8_1(
@@ -8402,6 +8420,14 @@ static ggml_status ggml_backend_hrx2_dispatch_mul_mat_q6_k(
     };
 
     for (const auto * route : context->device_context->mul_mat_q6_k_routes) {
+        const bool use_q8_1_rhs = ggml_backend_hrx2_route_uses_q8_1_rhs(route);
+        if (use_q8_1_rhs && !ggml_backend_hrx2_q6_k_q8_1_prompt_enabled(shape)) {
+            continue;
+        }
+        if (ggml_backend_hrx2_route_uses_q8_1_x4_rhs(route) &&
+            !ggml_backend_hrx2_q6_k_q8_1_x4_prompt_enabled()) {
+            continue;
+        }
         ggml_backend_hrx2_provider_plan plan;
         if (!ggml_backend_hrx2_make_mul_mat_q6_k_plan(context->device_context, route, shape, &plan)) {
             continue;
@@ -8424,6 +8450,25 @@ static ggml_status ggml_backend_hrx2_dispatch_mul_mat_q6_k(
                 ggml_backend_hrx2_json_kv("rows", shape.rows) + "," +
                 ggml_backend_hrx2_json_kv("cols", shape.cols));
             continue;
+        }
+
+        hrx_buffer_ref_t route_bindings[3] = { bindings[0], bindings[1], bindings[2] };
+        if (use_q8_1_rhs) {
+            hrx_buffer_ref_t q8_1_ref = {};
+            if (!ggml_backend_hrx2_dispatch_quantize_q8_1(
+                    context,
+                    src1,
+                    ggml_backend_hrx2_route_uses_q8_1_x4_rhs(route),
+                    &q8_1_ref)) {
+                ggml_backend_hrx2_trace_event(
+                    "dispatch_failed",
+                    ggml_backend_hrx2_json_kv("op", "QUANTIZE") + "," +
+                    ggml_backend_hrx2_json_kv("family", "quantize_q8_1_f32") + "," +
+                    ggml_backend_hrx2_json_kv("reason", "q8_1_quantize") + "," +
+                    ggml_backend_hrx2_json_kv("route_id", provider->route.id));
+                continue;
+            }
+            route_bindings[1] = q8_1_ref;
         }
 
         const void * constant_data = nullptr;
@@ -8474,7 +8519,7 @@ static ggml_status ggml_backend_hrx2_dispatch_mul_mat_q6_k(
                 &config,
                 constant_data,
                 constant_size,
-                bindings,
+                route_bindings,
                 3,
                 HRX_DISPATCH_FLAG_NONE))) {
             ggml_backend_hrx2_trace_event(
