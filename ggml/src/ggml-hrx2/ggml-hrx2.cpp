@@ -420,6 +420,7 @@ struct ggml_backend_hrx2_provider_plan {
 
 static bool ggml_backend_hrx2_q4_k_q8_1_prompt_enabled(const ggml_backend_hrx2_mul_mat_shape & shape);
 static bool ggml_backend_hrx2_route_uses_q8_1_rhs(const ggml_backend_hrx2_kernel_route * route);
+static bool ggml_backend_hrx2_route_uses_q8_1_x4_rhs(const ggml_backend_hrx2_kernel_route * route);
 
 static bool ggml_hrx2_check(hrx_status_t status, const char * expression, const char * file, int line) {
     if (hrx_status_is_ok(status)) {
@@ -7186,9 +7187,14 @@ static bool ggml_backend_hrx2_route_uses_q8_1_rhs(const ggml_backend_hrx2_kernel
     return route && route->id.find("q8_1") != std::string::npos;
 }
 
+static bool ggml_backend_hrx2_route_uses_q8_1_x4_rhs(const ggml_backend_hrx2_kernel_route * route) {
+    return route && route->id.find("q8_1_x4") != std::string::npos;
+}
+
 static bool ggml_backend_hrx2_dispatch_quantize_q8_1(
         ggml_backend_hrx2_context * context,
         const ggml_tensor * src,
+        bool use_x4,
         hrx_buffer_ref_t * out_q8_1_ref) {
     if (!context || !src || !out_q8_1_ref || context->device_context->quantize_q8_1_routes.empty()) {
         return false;
@@ -7221,7 +7227,13 @@ static bool ggml_backend_hrx2_dispatch_quantize_q8_1(
     if (blocks == 0 || blocks > 1024 || ne1 == 0 || ne1 > 512 || z_count == 0 || z_count > 16) {
         return false;
     }
-    const size_t q8_1_size = static_cast<size_t>(ne1) * z_count * blocks * 36u;
+    if (use_x4 && (blocks % 4) != 0) {
+        return false;
+    }
+    const uint32_t dispatch_blocks = use_x4 ? blocks / 4 : blocks;
+    const size_t q8_1_size = use_x4 ?
+        static_cast<size_t>(ne1) * z_count * (blocks / 4) * 144u :
+        static_cast<size_t>(ne1) * z_count * blocks * 36u;
     hrx_buffer_ref_t src_ref = {};
     if (!ggml_backend_hrx2_tensor_buffer_ref(src, &src_ref) ||
         !ggml_backend_hrx2_ensure_device_scratch(context, &context->q8_1_scratch, q8_1_size, out_q8_1_ref)) {
@@ -7244,6 +7256,9 @@ static bool ggml_backend_hrx2_dispatch_quantize_q8_1(
     };
 
     for (const auto * route : context->device_context->quantize_q8_1_routes) {
+        if (ggml_backend_hrx2_route_uses_q8_1_x4_rhs(route) != use_x4) {
+            continue;
+        }
         ggml_backend_hrx2_provider_plan plan;
         if (!ggml_backend_hrx2_make_quantize_q8_1_plan(context->device_context, route, shape, &plan)) {
             continue;
@@ -7258,7 +7273,7 @@ static bool ggml_backend_hrx2_dispatch_quantize_q8_1(
         }
 
         hrx_dispatch_config_t config = {
-            /* .workgroup_count = */ { blocks, ne1, z_count },
+            /* .workgroup_count = */ { dispatch_blocks, ne1, z_count },
             /* .workgroup_size  = */ {
                 provider->export_info.workgroup_size[0] ? provider->export_info.workgroup_size[0] : provider->route.workgroup_size[0],
                 1,
@@ -7274,6 +7289,7 @@ static bool ggml_backend_hrx2_dispatch_quantize_q8_1(
             ggml_backend_hrx2_json_kv("route_id", provider->route.id) + "," +
             ggml_backend_hrx2_json_kv("cache_key", provider->cache_key) + "," +
             ggml_backend_hrx2_json_kv("blocks", blocks) + "," +
+            ggml_backend_hrx2_json_kv("packed_x4", use_x4 ? 1 : 0) + "," +
             ggml_backend_hrx2_json_kv("ne1", ne1) + "," +
             ggml_backend_hrx2_json_kv("z_count", z_count));
 
@@ -7365,7 +7381,11 @@ static ggml_status ggml_backend_hrx2_dispatch_mul_mat_q4_k(
         hrx_buffer_ref_t route_bindings[3] = { bindings[0], bindings[1], bindings[2] };
         if (use_q8_1_rhs) {
             hrx_buffer_ref_t q8_1_ref = {};
-            if (!ggml_backend_hrx2_dispatch_quantize_q8_1(context, src1, &q8_1_ref)) {
+            if (!ggml_backend_hrx2_dispatch_quantize_q8_1(
+                    context,
+                    src1,
+                    ggml_backend_hrx2_route_uses_q8_1_x4_rhs(route),
+                    &q8_1_ref)) {
                 ggml_backend_hrx2_trace_event(
                     "dispatch_failed",
                     ggml_backend_hrx2_json_kv("op", "QUANTIZE") + "," +

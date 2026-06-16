@@ -14,6 +14,7 @@
   "rms_norm_f32_n4096_r1_vector_vw4_wg512",
   "rms_norm_f32_n4096_r32_scalar_wg1024",
   "mul_mat_f32_f32_moe_logits_k2048_r128_c1_512_wg256",
+  "quantize_q8_1_x4_f32_generic_wg128",
   "quantize_q8_1_f32_generic_wg32",
   "mul_mat_q4_k_q8_1_f32_cols4_k256_32768_c4_512_wg256",
   "mul_mat_q4_k_q8_1_f32_direct_k256_32768_c1_512_wg256",

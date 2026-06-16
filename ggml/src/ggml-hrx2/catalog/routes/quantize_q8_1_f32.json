@@ -1,5 +1,62 @@
 [
   {
+    "id": "quantize_q8_1_x4_f32_generic_wg128",
+    "family": "quantize_q8_1_f32",
+    "op": "QUANTIZE",
+    "target_key": "",
+    "source_id": "quantize_q8_1_f32",
+    "artifact_id": "quantize_q8_1_f32_bc",
+    "root_symbol": "@hrx2_quantize_q8_1_x4_f32",
+    "export_name": "hrx2_quantize_q8_1_x4_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 120,
+    "abi": {
+      "binding_count": 2,
+      "parameter_count": 9,
+      "constant_byte_length": 28
+    },
+    "dispatch": {
+      "workgroup_size": [
+        128,
+        1,
+        1
+      ],
+      "rows_per_workgroup": 4,
+      "cols_per_workgroup": 1
+    },
+    "shape_domain": {
+      "name": "generic_q8_1_x4_quantize"
+    },
+    "specialization": {
+      "mode": "jit_config",
+      "bindings": [
+        {
+          "key": "@hrx2.quantize_q8_1.blocks",
+          "source": "shape.q8_1.blocks"
+        },
+        {
+          "key": "@hrx2.quantize_q8_1.ne1",
+          "source": "shape.q8_1.ne1"
+        },
+        {
+          "key": "@hrx2.quantize_q8_1.z_count",
+          "source": "shape.q8_1.z_count"
+        }
+      ]
+    },
+    "supports": {
+      "src0_type": "F32",
+      "dst_type": "Q8_1",
+      "layout": "packed_x4"
+    },
+    "evidence_summary": {
+      "phase": "phase2a-q8_1-x4-substrate",
+      "algorithm": "four_q8_1_blocks_per_workgroup_with_packed_dword_payload",
+      "selection": "route_requested_for_prompt_mmq_rhs_layout",
+      "ggml_cpu_reference": "approximate_prompt_path_only"
+    }
+  },
+  {
     "id": "quantize_q8_1_f32_generic_wg32",
     "family": "quantize_q8_1_f32",
     "op": "QUANTIZE",
