@@ -1,5 +1,77 @@
 [
   {
+    "id": "mul_mat_q5_k_q8_1_x4_direct_cols4_k256_32768_r1_262144_c4_512_wg256",
+    "family": "mul_mat_q5_k_f32",
+    "op": "MUL_MAT",
+    "target_key": "",
+    "source_id": "mul_mat_q5_k_f32",
+    "artifact_id": "mul_mat_q5_k_f32_static_bc",
+    "root_symbol": "@hrx2_mul_mat_q5_k_q8_1_x4_direct_cols4_static",
+    "export_name": "hrx2_mul_mat_q5_k_q8_1_x4_direct_cols4_static",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 190,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 3,
+      "constant_byte_length": 0
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ],
+      "rows_per_workgroup": 1,
+      "cols_per_workgroup": 4
+    },
+    "shape_domain": {
+      "name": "q8_1_x4_direct_cols4_k256_32768_rows1_262144_cols4_512_wg256",
+      "k_min": 256,
+      "k_max": 32768,
+      "rows_min": 1,
+      "rows_max": 262144,
+      "cols_min": 4,
+      "cols_max": 512
+    },
+    "shape_guards": {
+      "k_multiple_of": 256,
+      "cols_multiple_of": 4
+    },
+    "specialization": {
+      "mode": "jit_config",
+      "bindings": [
+        {
+          "key": "@hrx2.shape.k",
+          "source": "shape.k"
+        },
+        {
+          "key": "@hrx2.shape.rows",
+          "source": "shape.rows"
+        },
+        {
+          "key": "@hrx2.shape.cols",
+          "source": "shape.cols"
+        },
+        {
+          "key": "@hrx2.tuning.workgroup_size",
+          "value": "256"
+        }
+      ]
+    },
+    "supports": {
+      "src0_type": "Q5_K",
+      "src1_type": "Q8_1",
+      "dst_type": "F32",
+      "layout": "packed_x4_direct_cols4"
+    },
+    "evidence_summary": {
+      "phase": "phase2a-q5-k-q8_1-x4-layout-diagnostic",
+      "algorithm": "direct_q5k_q8_1_dot4_four_prompt_columns_per_workgroup_consuming_packed_x4_rhs",
+      "selection": "opt_in_layout_probe; validates Q5 high-bit packing and x4 quantizer/layout before MMQ repair",
+      "ggml_cpu_reference": "required"
+    }
+  },
+  {
     "id": "mul_mat_q5_k_f32_dot16_k256_32768_r1_262144_c1_wg32",
     "family": "mul_mat_q5_k_f32",
     "op": "MUL_MAT",
