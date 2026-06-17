@@ -34,6 +34,23 @@ Schedule facts worth preserving for Loom candidates:
   no accepted Loom replacement in this cleanup; the unfused Loom/HRX2 routes
   are the production fallback until a Loom FA0 fusion is authored and proved.
 
+Rejected Loom probe:
+
+- Q5_K `x4_mmq64x64` high-level Loom port from the HRX1 WG256, RHS-LDS,
+  one-row/16-cols-per-lane schedule was rejected. Direct Loom compile for
+  `k=3584, rows=18944, cols=512` reported status OK, zero spills, zero hazard
+  gaps, peak live units 133, LDS 2560 bytes, and 128 dot ops, but the route
+  failed Qwen p512 backend-op correctness when admitted for `cols=512`
+  (`ERR ~= 0.78`). Narrowing the route to `cols=64` passed the focused p64
+  CPU-reference gate, but same-runner `test-backend-ops perf` regressed the
+  Phi-4 Q5 `wqkv k3072 r5120 c64` row from 304.06 us on the existing
+  `x4_mmq32x32` Loom route to 550.59 us. The rejected patch is preserved at
+  `cache/hrx2/phase2b/q5-mmq64x64-cols64-rejected-20260616/rejected-candidate.patch`.
+  Do not retry this 64x64 high-level spelling as a production default without
+  a new schedule/codegen hypothesis. The old HRX1/Pyre ledger also rejected a
+  Q5 64x64 default and instead points at the larger Q5 128x128/BK_STEP=1
+  family as the stronger prompt prior.
+
 When reusing any of these schedules, create a Loom candidate row before coding:
 
 - prior source or commit;
