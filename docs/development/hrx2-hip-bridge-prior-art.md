@@ -179,6 +179,26 @@ Rejected Loom probe:
   `cache/hrx2/phase2b/q8-mmq128x16-scalar-diag-20260616-182522/`. This is the
   concrete reason not to keep sweeping row ownership alone for Q8: the next
   candidate should match the Vulkan A+B-staged integer-MMQ family.
+- Q8_0 `x4_vkm64x64_tm2tn2` high-level Loom port was rejected as the first
+  direct A+B-staged c64 probe. It matched the successful Q4 TM2/TN2 route
+  shape and the Vulkan medium prior at the visible schedule level: `BM64`,
+  `BN64`, workgroup 128, four wave32-style subtiles, two rows by two columns
+  per lane, eight column sub-iterations, both Q8_0 A and packed Q8_1 B staged
+  in LDS, and `vector.dot4i<s8s8>`. It passed focused CPU-reference testing on
+  all five Llama 3.1 8B Q8_0 p64 prompt rows and traces confirmed
+  `hrx2_mul_mat_q8_0_q8_1_x4_vkm64x64_tm2tn2_static` was selected. Same-runner
+  `test-backend-ops perf` rejected it against the current `mmq64x32` route:
+  Vcur c64 346.05 us versus 101.68 us, Qcur c64 392.04 us versus 179.74 us,
+  ffn_out c64 1364.98 us versus 641.67 us, ffn_gate c64 640.37 us versus
+  525.17 us, and result_output c64 5512.27 us versus 5264.35 us. The candidate
+  HSACO was also much larger, 17440 bytes versus 9232 bytes. The rejected patch
+  and traces are preserved at
+  `cache/hrx2/phase2b/q8-vkm64x64-tm2tn2-c64-probe-20260616-183621/`. Do not
+  retry this generic high-level TM2/TN2 spelling as a Q8 c64 production route.
+  The next Q8 A+B-staged attempt must match a proven Vulkan/HIP loop structure
+  more exactly, including `BK_STEP`, register-cache lifetime, unroll depth, and
+  lane ownership, or first prove the emitted instruction schedule against a
+  known-good target listing.
 
 When reusing any of these schedules, create a Loom candidate row before coding:
 

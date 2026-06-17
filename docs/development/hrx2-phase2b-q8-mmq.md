@@ -144,11 +144,40 @@ Rejected follow-up probes after the compiler-report refresh:
   `cache/hrx2/phase2b/q8-mmq128x16-scalar-diag-20260616-182522/`.
 
 These probes establish that 128-row ownership alone is not the missing Q8
-boulder. The next useful Q8 prompt candidate should not be another RHS-only
-row-count pivot. It should port the Vulkan integer-MMQ dataflow more directly:
-stage both A and B tiles in LDS, use a `BM/BN/BK_STEP` family similar to
-Vulkan's `matmul_q8_0_q8_1` pipeline, cache multiple A rows and B columns in
-registers, and let route metadata/tuning select shape buckets.
+boulder. A follow-up `vkm64x64_tm2tn2` probe then tested the obvious high-level
+Loom translation of the Vulkan/Q4 A+B-staged schedule:
+
+- `mul_mat_q8_0_q8_1_x4_vkm64x64_tm2tn2_k256_32768_r64_262144_c64_wg128`
+- Loom export: `hrx2_mul_mat_q8_0_q8_1_x4_vkm64x64_tm2tn2_static`
+- Target-neutral route, cols exactly 64, rows multiple 64, workgroup 128.
+- 64x64 workgroup tile, four wave32-style subtiles, two rows by two columns
+  per lane, eight column sub-iterations, both Q8_0 A and Q8_1 B staged in LDS,
+  and explicit `vector.dot4i<s8s8>`.
+
+The route passed the focused CPU-reference backend-op gate for all five
+Llama 3.1 8B Q8_0 p64 prompt rows and route traces confirmed selection.
+However, same-runner `test-backend-ops perf` rejected it against the current
+`mmq64x32` route:
+
+| Shape | `vkm64x64_tm2tn2` us | `mmq64x32` us | Result |
+| --- | ---: | ---: | --- |
+| Vcur `k4096 r1024 c64` | 346.05 | 101.68 | slower |
+| Qcur `k4096 r4096 c64` | 392.04 | 179.74 | slower |
+| ffn_out `k14336 r4096 c64` | 1364.98 | 641.67 | slower |
+| ffn_gate `k4096 r14336 c64` | 640.37 | 525.17 | slower |
+| result_output `k4096 r128256 c64` | 5512.27 | 5264.35 | slower |
+
+The candidate JIT HSACO was 17440 bytes versus 9232 bytes for the current
+route. The rejection patch and traces are preserved at
+`cache/hrx2/phase2b/q8-vkm64x64-tm2tn2-c64-probe-20260616-183621/`.
+
+The next useful Q8 prompt candidate should still be evidence-led, but it must
+be more precise than "stage A and B in LDS." This high-level TM2/TN2 port
+increased work and code size without improving the c64 prompt bucket. The next
+Q8 attempt should either match a proven Vulkan/HIP loop structure more exactly
+(`BK_STEP`, register-cache lifetime, unroll depth, and lane ownership included)
+or use lower-level Loom/ASM tooling to prove the emitted instruction schedule
+against a known-good reference before admission into the route catalog.
 
 Route trace for both p64 and p512:
 
