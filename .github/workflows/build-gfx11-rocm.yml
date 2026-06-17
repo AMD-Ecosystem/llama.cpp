@@ -32,7 +32,7 @@ env:
 jobs:
   build-ubuntu:
     runs-on: ubuntu-24.04
-    # Single universal build: one fat binary covering all current CI arches,
+    # Single multiarch build: one fat binary covering all current CI arches,
     # sourced from TheRock's multi-arch tarball (arch-neutral host + per-arch
     # Tensile DBs). gfx1100-1103 (RDNA3 desktop + Hawk Point/Phoenix 760M/780M),
     # gfx1150/1151/1153 (RDNA3.5 Strix APUs).
@@ -151,7 +151,7 @@ jobs:
         # stream-extract and prune at the tar level: drop ALL .kpack, and drop the
         # Tensile DBs of every arch not in our target set. This keeps the runner
         # disk footprint small (the 11.5 GB is streamed, never stored) and yields
-        # a lean universal package. tar matches --exclude on pre-strip member
+        # a lean multiarch package. tar matches --exclude on pre-strip member
         # names, hence the leading "./".
         drop_arches="gfx900 gfx906 gfx908 gfx90a gfx942 gfx950 \
           gfx1010 gfx1011 gfx1012 gfx1030 gfx1031 gfx1032 gfx1033 gfx1034 gfx1035 gfx1036 \
@@ -201,7 +201,7 @@ jobs:
     - name: Build Llama.cpp + ROCm
       run: |
         gpu_targets="${{ env.GPU_TARGETS }}"
-        echo "Building universal binary (GPU_TARGETS=$gpu_targets)"
+        echo "Building multiarch binary (GPU_TARGETS=$gpu_targets)"
 
         mkdir build
         cd build
@@ -310,7 +310,7 @@ jobs:
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: llama-ubuntu-rocm-universal-x64
+        name: llama-ubuntu-rocm-multiarch-x64
         path: build/bin/
         retention-days: 30
 
@@ -326,7 +326,7 @@ jobs:
   test-gfx:
     needs: build-ubuntu
     if: needs.build-ubuntu.result == 'success'
-    # Single hardware test of the universal artifact on gfx1151. This is the
+    # Single hardware test of the multiarch artifact on gfx1151. This is the
     # end-to-end safety net for the Tensile-only multi-arch package: a real
     # llama-cli inference exercising the rocBLAS/hipBLASLt GEMM path on-device.
     runs-on: linux-gfx1151-gpu-rocm
@@ -338,7 +338,7 @@ jobs:
     - name: Download build artifacts
       uses: actions/download-artifact@v4
       with:
-        name: llama-ubuntu-rocm-universal-x64
+        name: llama-ubuntu-rocm-multiarch-x64
         path: llama-binaries
 
     - name: Download test model
@@ -381,7 +381,7 @@ jobs:
         # Use a prompt with a single correct answer and greedy decoding
         # (--temp 0) so the result is deterministic and verifiable.
         prompt="What is 2 + 2? Reply with only the number."
-        echo "Running llama-cli test for gfx1151 (universal artifact)..."
+        echo "Running llama-cli test for gfx1151 (multiarch artifact)..."
         echo "Command: $llama_cli_path -m \"$model_path\" -ngl 99 --temp 0 -p \"$prompt\" -st -v"
 
         # Bound the run: a healthy 0.6B inference finishes in seconds. If the
@@ -505,13 +505,13 @@ jobs:
         fi
         echo "Release tag: $TAG"
 
-    - name: Create universal archive
+    - name: Create multiarch archive
       if: steps.generate-tag.outputs.tag_exists == 'false'
       run: |
         TAG="${{ steps.generate-tag.outputs.tag }}"
         root="$PWD"
-        artifact_dir="./all-artifacts/llama-ubuntu-rocm-universal-x64"
-        archive="llama-${TAG}-ubuntu-rocm-universal-x64"
+        artifact_dir="./all-artifacts/llama-ubuntu-rocm-multiarch-x64"
+        archive="llama-${TAG}-ubuntu-rocm-multiarch-x64"
         if [ -d "$artifact_dir" ]; then
           echo "Creating ${archive}.tar.gz"
           tar -czf "$root/${archive}.tar.gz" -C "$artifact_dir" .
@@ -534,10 +534,10 @@ jobs:
           --title "$TAG" \
           --notes "**Build**: $TAG
         **OS**: ubuntu
-        **GPU Target(s)**: gfx1100, gfx1101, gfx1102, gfx1103, gfx1150, gfx1151, gfx1153 (single universal binary)
+        **GPU Target(s)**: gfx1100, gfx1101, gfx1102, gfx1103, gfx1150, gfx1151, gfx1153 (single multiarch binary)
         **ROCm Version**: $ROCM_VERSION (multi-arch)
         **Llama.cpp Commit**: $LLAMACPP_COMMIT_HASH
         **Build Date**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
 
-        Prebuilt llama.cpp ROCm binaries — one universal package covering the RDNA3 gfx110X family incl. Hawk Point/Phoenix (Radeon 760M/780M) and the RDNA3.5 gfx115x APUs (gfx1150/gfx1151/gfx1153). Built from TheRock's multi-arch ROCm runtime (per-arch Tensile databases bundled)." \
+        Prebuilt llama.cpp ROCm binaries — one multiarch package covering the RDNA3 gfx110X family incl. Hawk Point/Phoenix (Radeon 760M/780M) and the RDNA3.5 gfx115x APUs (gfx1150/gfx1151/gfx1153). Built from TheRock's multi-arch ROCm runtime, pruned to the CI target arches (per-arch Tensile databases bundled)." \
           *.tar.gz
