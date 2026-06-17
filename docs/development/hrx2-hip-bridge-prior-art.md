@@ -80,6 +80,23 @@ Rejected Loom probe:
   Do not retry this half-width WG128 spelling; the next Q6 attempt must match
   the HIP bridge's actual `BM64/BN64/BK_STEP=4/WG128/wave32` ownership or use a
   newly documented prior.
+- Q4_K `x4_mmq64x8_wg64` Loom probe was rejected as a bounded ownership test.
+  It attempted to import the removed HIP bridge's row-reuse idea by using a
+  WG64 schedule where each lane owns four rows across an eight-column tile, but
+  it intentionally kept `BN=8` instead of implementing the full prior's
+  `BN=32/64` column reuse. It passed the focused CPU-reference gate and route
+  traces confirmed `hrx2_mul_mat_q4_k_q8_1_x4_mmq64x8_static` was selected, but
+  same-runner `test-backend-ops perf` regressed Kcur `k3072 r1024 c64` from the
+  clean current 183.18 us to 282.31 us, Qcur `k3072 r3072 c64` from 178.89 us
+  to 299.32 us, ffn_out `k8192 r3072 c64` from 469.98 us to 735.31 us, and
+  ffn_gate `k3072 r8192 c64` from 415.33 us to 501.63 us. The JIT HSACO was
+  also much larger than the current route. The rejected patch and traces are
+  preserved at
+  `cache/hrx2/phase2b/q4-mmq64x8-wg64-probe-20260616-173427/`. Do not retry
+  this narrow-tile spelling. The remaining Q4 prior is still the full Vulkan
+  medium / HIP bridge MMQ family with packed Q8_1 x4 RHS, A-side pack/cache,
+  `u8s8` dot contract, and production prompt shapes around `BM64` with
+  `BN32/BN64` column reuse.
 
 When reusing any of these schedules, create a Loom candidate row before coding:
 
