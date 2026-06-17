@@ -83,21 +83,31 @@ contain and select a rejected provider. Confirm route stderr or
 
 ## Qwen 7B p512 Route Coverage
 
-On 2026-06-16, Qwen2.5-Coder 7B Q5_K_M/Q6_K p512 still had CPU fallback for
-hidden-size 3584 `RMS_NORM` and NEOX `ROPE` at `[128, 28, 512]` and
-`[128, 4, 512]`. The catalog now has generic target-neutral routes for:
+On 2026-06-16, Qwen2.5-Coder 7B Q5_K_M/Q6_K p512 exposed several hidden-size
+3584 route coverage misses. The catalog now has generic or existing Loom
+providers for:
 
 - `rms_norm_f32_n3584_r512_vector_vw4_wg512`
 - `rope_neox_f32_n128_h28_t512_wg256`
 - `rope_neox_f32_n128_h4_t512_wg256`
+- `get_rows_f32_n3584_r512_wg256`
+- `get_rows_q6_k_f32_n3584_r1_512_wg256`
 
-Focused model-derived `test-backend-ops` rows passed against CPU and real
-`llama-bench` p512 traces now show zero provider misses and zero CPU fallback
-for both Q5_K_M and Q6_K. Artifact:
-`cache/hrx2/phase2b/qwen-p512-coverage-20260616/`.
+Focused model-derived `test-backend-ops` rows passed against CPU for the F32
+and Q6_K 3584-wide `GET_ROWS` shapes, including the Q6_K embedding gather
+and the F32 p512 output-side gather. Clean one-repetition `llama-bench` traces
+with fresh JSONL files now show zero CPU compute fallback for:
+
+- Qwen2.5-Coder 7B Q5_K_M p512
+- Qwen2.5-Coder 7B Q6_K p64
+- Qwen2.5-Coder 7B Q6_K p512
+
+Artifact:
+`cache/hrx2/phase2b/qwen-getrows-3584-f32-q6-20260616-185151/`.
 
 This was a structural coverage fix, not a major throughput fix. Same-run p512
-throughput after the route coverage change:
+throughput from the earlier p512 route-coverage change was still far below
+Vulkan:
 
 | Model | HRX2 tok/s | Vulkan tok/s | HRX2/Vulkan |
 | --- | ---: | ---: | ---: |
@@ -106,3 +116,8 @@ throughput after the route coverage change:
 
 The remaining Qwen p512 gap is therefore in the quantized prompt matmul and
 nearby hero fusion schedule, not missing RMS_NORM/ROPE route coverage.
+
+Trace hygiene note: `GGML_HRX2_TRACE_JSONL` and `GGML_SCHED_TRACE_JSONL` append
+to existing files. Always use a fresh run directory or delete old JSONL files
+before counting CPU fallback. Stale appended scheduler rows previously made the
+Qwen p512 GET_ROWS coverage state look contradictory.
