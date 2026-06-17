@@ -93,6 +93,27 @@ Rejected Loom probe:
   Do not retry this half-width WG128 spelling; the next Q6 attempt must match
   the HIP bridge's actual `BM64/BN64/BK_STEP=4/WG128/wave32` ownership or use a
   newly documented prior.
+- Q6_K `x4_vkm64x64_tm2tn2` Loom probes matched the removed HIP bridge's
+  visible p64 schedule more closely but were still rejected. The first spelling
+  used `BM64/BN64/BK_STEP=4/WG128/wave32`, four wave32 tiles, two rows by two
+  columns per lane, eight `WNITER` column sub-iterations, and A+B LDS staging,
+  but scaled each dot inside the `iqs` loop. It passed the focused CPU-reference
+  gate and selected correctly, but regressed `Vcur k3072 r1024 c64` to
+  556.81 us and `ffn_out k8192 r3072 c64` to 1381.83 us. Its compile report
+  showed zero spills, 256 static dot ops, 260 conversions, 175 peak live units,
+  and 15388 code bytes. The corrected qsum spelling then accumulated integer
+  `qsum0/qsum1` halves and applied scales once per half, matching the HIP
+  arithmetic structure more closely. It improved the static report to zero
+  spills, 256 static dot ops, 68 conversions, 140 peak live units, and
+  10488 code bytes, but still regressed the same rows to 386.59 us and
+  944.03 us versus the clean current `mmq64x32` baseline of 178.79 us and
+  540.78 us. Rejected artifacts:
+  `cache/hrx2/phase2b/q6-vkm64x64-tm2tn2-c64-opgate-20260616-190345/` and
+  `cache/hrx2/phase2b/q6-vkm64x64-tm2tn2-qsum-c64-opgate-20260616-190717/`.
+  Do not retry this high-level A+B-staged TM2/TN2 Loom spelling without a new
+  low-level/codegen hypothesis. The next Q6 attempt should compare against the
+  HIP target listing and focus on why the compact current RHS-staged
+  `mmq64x32` route wins despite less column reuse.
 - Q4_K `x4_mmq64x8_wg64` Loom probe was rejected as a bounded ownership test.
   It attempted to import the removed HIP bridge's row-reuse idea by using a
   WG64 schedule where each lane owns four rows across an eight-column tile, but
