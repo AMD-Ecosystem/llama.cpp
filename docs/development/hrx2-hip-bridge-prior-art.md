@@ -131,6 +131,12 @@ Rejected Loom probe:
   `cache/hrx2/phase2b/q4-vkm64x64-tm2tn2-p512-probe-20260616-175737/`;
   integration artifact:
   `cache/hrx2/phase2a/phase2b-q4-tm2tn2-p512-20260616-180125/`.
+  A direct c64 route probe using the same TM2/TN2 source passed CPU-reference
+  testing and selected correctly, but was rejected for the p64 regime: Kcur c64
+  measured 315.06 us, Qcur c64 280.66 us, ffn_out c64 731.68 us, and ffn_gate
+  c64 341.84 us, all worse than the current production c64 routes. Preserve
+  TM2/TN2 as a p512 schedule only. Rejected patch and traces:
+  `cache/hrx2/phase2b/q4-vkm64x64-tm2tn2-c64-true-probe-20260616-180713/`.
 
 When reusing any of these schedules, create a Loom candidate row before coding:
 
