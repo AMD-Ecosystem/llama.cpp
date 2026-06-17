@@ -3202,6 +3202,2015 @@ kernel.def export("hrx2_mul_mat_q4_k_q8_1_x4_vkm64x64_tm4tn1_static") @hrx2_mul_
   }
   kernel.return
 }
+kernel.def export("hrx2_mul_mat_q4_k_q8_1_x4_vkm64x64_tm2tn2_static") @hrx2_mul_mat_q4_k_q8_1_x4_vkm64x64_tm2tn2_static() {
+  %unit = index.constant 1 : index
+  %sixtythree = index.constant 63 : index
+  %sixtyfour = index.constant 64 : index
+  %rows = config.get @hrx2.shape.rows : index
+  %cols = config.get @hrx2.shape.cols : index
+  %workgroup_size = config.get @hrx2.tuning.workgroup_size : index
+  %rows_plus63 = index.add %rows, %sixtythree : index
+  %row_groups = index.div %rows_plus63, %sixtyfour : index
+  %col_groups = index.div %cols, %sixtyfour : index
+  kernel.launch.config workgroups(%row_groups, %col_groups, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%src0: buffer, %src1_q8_x4: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %a_ds_offset = index.constant 1024 : offset
+  %b_qs_offset = index.constant 1536 : offset
+  %b_ds_offset = index.constant 3584 : offset
+  %scratch_bytes = index.constant 4096 : offset
+  %zero_index = index.constant 0 : index
+  %one = index.constant 1 : index
+  %two = index.constant 2 : index
+  %three = index.constant 3 : index
+  %four = index.constant 4 : index
+  %five = index.constant 5 : index
+  %six = index.constant 6 : index
+  %seven = index.constant 7 : index
+  %eight = index.constant 8 : index
+  %sixteen = index.constant 16 : index
+  %thirtytwo = index.constant 32 : index
+  %thirtysix = index.constant 36 : index
+  %sixtyfour = index.constant 64 : index
+  %seventytwo = index.constant 72 : index
+  %onetwentyeight = index.constant 128 : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c5 = index.constant 5 : index
+  %c6 = index.constant 6 : index
+  %c7 = index.constant 7 : index
+  %c0x4 = index.constant 0 : index
+  %c1x4 = index.constant 4 : index
+  %c2x4 = index.constant 8 : index
+  %c3x4 = index.constant 12 : index
+  %c4x4 = index.constant 16 : index
+  %c5x4 = index.constant 20 : index
+  %c6x4 = index.constant 24 : index
+  %c7x4 = index.constant 28 : index
+  %six_i32 = scalar.constant 6 : i32
+  %four_i32 = scalar.constant 4 : i32
+  %zero_i32 = scalar.constant 0 : i32
+  %mask_0f = scalar.constant 15 : i32
+  %mask_3f = scalar.constant 63 : i32
+  %mask_0f0f0f0f = scalar.constant 252645135 : i32
+  %zero_i32v = vector.constant 0 : vector<1xi32>
+  %nibble_mask_v = vector.constant 252645135 : vector<1xi32>
+  %zero_f32 = scalar.constant 0.0 : f32
+  %qk = index.constant 256 : index
+  %block_bytes = index.constant 144 : index
+  %block_f16s = index.constant 72 : index
+  %scale_offset = index.constant 4 : index
+  %qs_offset = index.constant 16 : index
+  %k = config.get @hrx2.shape.k : index
+  %rows = config.get @hrx2.shape.rows : index
+  %cols = config.get @hrx2.shape.cols : index
+  %k_bounded = index.assume %k [range(%k, 256, 32768)] : index
+  %rows_bounded = index.assume %rows [range(%rows, 1, 32768)] : index
+  %cols_bounded = index.assume %cols [range(%cols, 1, 512)] : index
+  %row_group0 = kernel.workgroup.id<x> : index
+  %col_group0 = kernel.workgroup.id<y> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %row_group = index.assume %row_group0 [range(%row_group0, 0, 511)] : index
+  %col_group = index.assume %col_group0 [range(%col_group0, 0, 7)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 127)] : index
+  %row_base = index.mul %row_group, %sixtyfour : index
+  %col_block_base = index.mul %col_group, %sixtyfour : index
+  %warp_i = index.div %lane, %thirtytwo : index
+  %tiw = index.rem %lane, %thirtytwo : index
+  %warp_r = index.rem %warp_i, %two : index
+  %warp_c = index.div %warp_i, %two : index
+  %tiwr = index.rem %tiw, %sixteen : index
+  %tiwc = index.div %tiw, %sixteen : index
+  %warp_row_base = index.mul %warp_r, %thirtytwo : index
+  %warp_col_base = index.mul %warp_c, %thirtytwo : index
+  %tiwr2 = index.mul %tiwr, %two : index
+  %tiwc2 = index.mul %tiwc, %two : index
+  %blocks_per_row = index.div %k_bounded, %qk : index
+  %q8_blocks_per_col = index.div %k_bounded, %thirtytwo : index
+  %q8_x4_blocks_per_col = index.div %q8_blocks_per_col, %four : index
+  %total_blocks = index.mul %rows_bounded, %blocks_per_row : index
+  %src0_i8_count = index.mul %total_blocks, %block_bytes : index
+  %src0_f16_count = index.mul %total_blocks, %block_f16s : index
+  %q8_total_x4_blocks = index.mul %cols_bounded, %q8_x4_blocks_per_col : index
+  %src1_i32_count = index.mul %q8_total_x4_blocks, %thirtysix : index
+  %src1_f16_count = index.mul %q8_total_x4_blocks, %seventytwo : index
+  %dst_count = index.mul %cols_bounded, %rows_bounded : index
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %src1_global = buffer.assume.memory_space<global> %src1_q8_x4 : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_noalias, %src1_noalias, %dst_noalias = buffer.assume.noalias %src0_global, %src1_global, %dst_global : buffer, buffer, buffer
+  %src0_i8_view = buffer.view %src0_noalias[%base] : buffer -> view<[%src0_i8_count]xi8, #dense>
+  %src0_f16_view = buffer.view %src0_noalias[%base] : buffer -> view<[%src0_f16_count]xf16, #dense>
+  %src1_i32_view = buffer.view %src1_noalias[%base] : buffer -> view<[%src1_i32_count]xi32, #dense>
+  %src1_f16_view = buffer.view %src1_noalias[%base] : buffer -> view<[%src1_f16_count]xf16, #dense>
+  %dst_view = buffer.view %dst_noalias[%base] : buffer -> view<[%dst_count]xf32, #dense>
+  %scratch = buffer.alloca %scratch_bytes {base_alignment = 64, memory_space = workgroup} : buffer
+  %a_qs_view = buffer.view %scratch[%base] : buffer -> view<256xi32, #dense>
+  %a_ds_view = buffer.view %scratch[%a_ds_offset] : buffer -> view<128xf32, #dense>
+  %b_qs_view = buffer.view %scratch[%b_qs_offset] : buffer -> view<512xi32, #dense>
+  %b_ds_view = buffer.view %scratch[%b_ds_offset] : buffer -> view<128xf32, #dense>
+  %sum_0_0_0, %sum_0_0_1, %sum_0_1_0, %sum_0_1_1, %sum_1_0_0, %sum_1_0_1, %sum_1_1_0, %sum_1_1_1, %sum_2_0_0, %sum_2_0_1, %sum_2_1_0, %sum_2_1_1, %sum_3_0_0, %sum_3_0_1, %sum_3_1_0, %sum_3_1_1, %sum_4_0_0, %sum_4_0_1, %sum_4_1_0, %sum_4_1_1, %sum_5_0_0, %sum_5_0_1, %sum_5_1_0, %sum_5_1_1, %sum_6_0_0, %sum_6_0_1, %sum_6_1_0, %sum_6_1_1, %sum_7_0_0, %sum_7_0_1, %sum_7_1_0, %sum_7_1_1 = scf.for %q4_block_iter = [%zero_index to %blocks_per_row step %one](
+      %outer_acc_0_0_0 = %zero_f32 : f32,
+      %outer_acc_0_0_1 = %zero_f32 : f32,
+      %outer_acc_0_1_0 = %zero_f32 : f32,
+      %outer_acc_0_1_1 = %zero_f32 : f32,
+      %outer_acc_1_0_0 = %zero_f32 : f32,
+      %outer_acc_1_0_1 = %zero_f32 : f32,
+      %outer_acc_1_1_0 = %zero_f32 : f32,
+      %outer_acc_1_1_1 = %zero_f32 : f32,
+      %outer_acc_2_0_0 = %zero_f32 : f32,
+      %outer_acc_2_0_1 = %zero_f32 : f32,
+      %outer_acc_2_1_0 = %zero_f32 : f32,
+      %outer_acc_2_1_1 = %zero_f32 : f32,
+      %outer_acc_3_0_0 = %zero_f32 : f32,
+      %outer_acc_3_0_1 = %zero_f32 : f32,
+      %outer_acc_3_1_0 = %zero_f32 : f32,
+      %outer_acc_3_1_1 = %zero_f32 : f32,
+      %outer_acc_4_0_0 = %zero_f32 : f32,
+      %outer_acc_4_0_1 = %zero_f32 : f32,
+      %outer_acc_4_1_0 = %zero_f32 : f32,
+      %outer_acc_4_1_1 = %zero_f32 : f32,
+      %outer_acc_5_0_0 = %zero_f32 : f32,
+      %outer_acc_5_0_1 = %zero_f32 : f32,
+      %outer_acc_5_1_0 = %zero_f32 : f32,
+      %outer_acc_5_1_1 = %zero_f32 : f32,
+      %outer_acc_6_0_0 = %zero_f32 : f32,
+      %outer_acc_6_0_1 = %zero_f32 : f32,
+      %outer_acc_6_1_0 = %zero_f32 : f32,
+      %outer_acc_6_1_1 = %zero_f32 : f32,
+      %outer_acc_7_0_0 = %zero_f32 : f32,
+      %outer_acc_7_0_1 = %zero_f32 : f32,
+      %outer_acc_7_1_0 = %zero_f32 : f32,
+      %outer_acc_7_1_1 = %zero_f32 : f32) -> (f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32) {
+    %q4_block = index.add %q4_block_iter, %zero_index : index
+    %group_next_0_0_0, %group_next_0_0_1, %group_next_0_1_0, %group_next_0_1_1, %group_next_1_0_0, %group_next_1_0_1, %group_next_1_1_0, %group_next_1_1_1, %group_next_2_0_0, %group_next_2_0_1, %group_next_2_1_0, %group_next_2_1_1, %group_next_3_0_0, %group_next_3_0_1, %group_next_3_1_0, %group_next_3_1_1, %group_next_4_0_0, %group_next_4_0_1, %group_next_4_1_0, %group_next_4_1_1, %group_next_5_0_0, %group_next_5_0_1, %group_next_5_1_0, %group_next_5_1_1, %group_next_6_0_0, %group_next_6_0_1, %group_next_6_1_0, %group_next_6_1_1, %group_next_7_0_0, %group_next_7_0_1, %group_next_7_1_0, %group_next_7_1_1 = scf.for %group = [%zero_index to %eight step %one](
+      %acc_0_0_0 = %outer_acc_0_0_0 : f32,
+      %acc_0_0_1 = %outer_acc_0_0_1 : f32,
+      %acc_0_1_0 = %outer_acc_0_1_0 : f32,
+      %acc_0_1_1 = %outer_acc_0_1_1 : f32,
+      %acc_1_0_0 = %outer_acc_1_0_0 : f32,
+      %acc_1_0_1 = %outer_acc_1_0_1 : f32,
+      %acc_1_1_0 = %outer_acc_1_1_0 : f32,
+      %acc_1_1_1 = %outer_acc_1_1_1 : f32,
+      %acc_2_0_0 = %outer_acc_2_0_0 : f32,
+      %acc_2_0_1 = %outer_acc_2_0_1 : f32,
+      %acc_2_1_0 = %outer_acc_2_1_0 : f32,
+      %acc_2_1_1 = %outer_acc_2_1_1 : f32,
+      %acc_3_0_0 = %outer_acc_3_0_0 : f32,
+      %acc_3_0_1 = %outer_acc_3_0_1 : f32,
+      %acc_3_1_0 = %outer_acc_3_1_0 : f32,
+      %acc_3_1_1 = %outer_acc_3_1_1 : f32,
+      %acc_4_0_0 = %outer_acc_4_0_0 : f32,
+      %acc_4_0_1 = %outer_acc_4_0_1 : f32,
+      %acc_4_1_0 = %outer_acc_4_1_0 : f32,
+      %acc_4_1_1 = %outer_acc_4_1_1 : f32,
+      %acc_5_0_0 = %outer_acc_5_0_0 : f32,
+      %acc_5_0_1 = %outer_acc_5_0_1 : f32,
+      %acc_5_1_0 = %outer_acc_5_1_0 : f32,
+      %acc_5_1_1 = %outer_acc_5_1_1 : f32,
+      %acc_6_0_0 = %outer_acc_6_0_0 : f32,
+      %acc_6_0_1 = %outer_acc_6_0_1 : f32,
+      %acc_6_1_0 = %outer_acc_6_1_0 : f32,
+      %acc_6_1_1 = %outer_acc_6_1_1 : f32,
+      %acc_7_0_0 = %outer_acc_7_0_0 : f32,
+      %acc_7_0_1 = %outer_acc_7_0_1 : f32,
+      %acc_7_1_0 = %outer_acc_7_1_0 : f32,
+      %acc_7_1_1 = %outer_acc_7_1_1 : f32) -> (f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32) unroll(%eight) {
+    %kb = index.madd %q4_block_iter, %eight, %group : index
+    %group_half = index.div %group, %two : index
+    %group_parity = index.rem %group, %two : index
+    %group_parity_i32 = index.cast %group_parity : index to i32
+    %q_shift_i32 = scalar.muli %group_parity_i32, %four_i32 : i32
+    %q_shift = vector.splat %q_shift_i32 : vector<1xi32>
+    %group_half32 = index.mul %group_half, %thirtytwo : index
+    %lane_lt64 = index.cmp ult, %lane, %sixtyfour : index
+    scf.if %lane_lt64 {
+      %stage_row = index.add %lane, %zero_index : index
+      %global_row0 = index.add %row_base, %stage_row : index
+      %safe_row_stage = index.rem %global_row0, %rows_bounded : index
+      %row_block_base_stage = index.mul %safe_row_stage, %blocks_per_row : index
+      %linear_block_stage = index.add %row_block_base_stage, %q4_block : index
+      %block_byte_base_stage = index.mul %linear_block_stage, %block_bytes : index
+      %block_f16_base_stage = index.mul %linear_block_stage, %block_f16s : index
+      %dmin_index_stage = index.add %block_f16_base_stage, %one : index
+      %scale_base_stage = index.add %block_byte_base_stage, %scale_offset : index
+      %qs_payload_stage = index.add %block_byte_base_stage, %qs_offset : index
+      %d_f16_stage = view.load %src0_f16_view[%block_f16_base_stage] : view<[%src0_f16_count]xf16, #dense> -> f16
+      %dmin_f16_stage = view.load %src0_f16_view[%dmin_index_stage] : view<[%src0_f16_count]xf16, #dense> -> f16
+      %d0_stage = scalar.extf %d_f16_stage : f16 to f32
+      %dmin0_stage = scalar.extf %dmin_f16_stage : f16 to f32
+      %group_lt4_stage = index.cmp slt, %group, %four : index
+      %sd_i32_stage, %sm_i32_stage = scf.if %group_lt4_stage -> (i32, i32) {
+        %d_index_stage = index.add %scale_base_stage, %group : index
+        %m_group_stage = index.add %group, %four : index
+        %m_index_stage = index.add %scale_base_stage, %m_group_stage : index
+        %d_i8_stage = view.load %src0_i8_view[%d_index_stage] : view<[%src0_i8_count]xi8, #dense> -> i8
+        %m_i8_stage = view.load %src0_i8_view[%m_index_stage] : view<[%src0_i8_count]xi8, #dense> -> i8
+        %d_u32_stage = scalar.extui %d_i8_stage : i8 to i32
+        %m_u32_stage = scalar.extui %m_i8_stage : i8 to i32
+        %sd_stage = scalar.andi %d_u32_stage, %mask_3f : i32
+        %sm_stage = scalar.andi %m_u32_stage, %mask_3f : i32
+        scf.yield %sd_stage, %sm_stage : i32, i32
+      } else {
+        %group_minus4_stage = index.sub %group, %four : index
+        %group_plus4_stage = index.add %group, %four : index
+        %low_index_stage = index.add %scale_base_stage, %group_minus4_stage : index
+        %mid_index_stage = index.add %scale_base_stage, %group : index
+        %high_index_stage = index.add %scale_base_stage, %group_plus4_stage : index
+        %low_i8_stage = view.load %src0_i8_view[%low_index_stage] : view<[%src0_i8_count]xi8, #dense> -> i8
+        %mid_i8_stage = view.load %src0_i8_view[%mid_index_stage] : view<[%src0_i8_count]xi8, #dense> -> i8
+        %high_i8_stage = view.load %src0_i8_view[%high_index_stage] : view<[%src0_i8_count]xi8, #dense> -> i8
+        %low_stage = scalar.extui %low_i8_stage : i8 to i32
+        %mid_stage = scalar.extui %mid_i8_stage : i8 to i32
+        %high_stage = scalar.extui %high_i8_stage : i8 to i32
+        %scale_low_stage = scalar.andi %high_stage, %mask_0f : i32
+        %scale_hi0_stage = scalar.shrui %low_stage, %six_i32 : i32
+        %scale_hi_stage = scalar.shli %scale_hi0_stage, %four_i32 : i32
+        %sd_else_stage = scalar.ori %scale_low_stage, %scale_hi_stage : i32
+        %min_low_stage = scalar.shrui %high_stage, %four_i32 : i32
+        %min_hi0_stage = scalar.shrui %mid_stage, %six_i32 : i32
+        %min_hi_stage = scalar.shli %min_hi0_stage, %four_i32 : i32
+        %sm_else_stage = scalar.ori %min_low_stage, %min_hi_stage : i32
+        scf.yield %sd_else_stage, %sm_else_stage : i32, i32
+      }
+      %sd_f_stage = scalar.uitofp %sd_i32_stage : i32 to f32
+      %sm_f_stage = scalar.uitofp %sm_i32_stage : i32 to f32
+      %sd_scaled_stage = scalar.mulf<reassoc|nnan|ninf|nsz> %d0_stage, %sd_f_stage : f32
+      %sm_scaled_stage = scalar.mulf<reassoc|nnan|ninf|nsz> %dmin0_stage, %sm_f_stage : f32
+      %a_ds_idx = index.mul %stage_row, %two : index
+      %a_min_idx = index.add %a_ds_idx, %one : index
+      view.store %sd_scaled_stage, %a_ds_view[%a_ds_idx] : f32, view<128xf32, #dense>
+      view.store %sm_scaled_stage, %a_ds_view[%a_min_idx] : f32, view<128xf32, #dense>
+      scf.for %iqs_pair = [%zero_index to %four step %one] unroll(%four) {
+        %iqs0 = index.mul %iqs_pair, %two : index
+        %iqs1 = index.add %iqs0, %one : index
+        %iqs0_4 = index.mul %iqs0, %four : index
+        %iqs1_4 = index.mul %iqs1, %four : index
+        %q0_byte0 = index.add %group_half32, %iqs0_4 : index
+        %q1_byte0 = index.add %group_half32, %iqs1_4 : index
+        %q0_index = index.add %qs_payload_stage, %q0_byte0 : index
+        %q1_index = index.add %qs_payload_stage, %q1_byte0 : index
+        %q0_offset = index.cast %q0_index : index to offset
+        %q1_offset = index.cast %q1_index : index to offset
+        %q0_view = buffer.view %src0_noalias[%q0_offset] : buffer -> view<1xi32, #dense>
+        %q1_view = buffer.view %src0_noalias[%q1_offset] : buffer -> view<1xi32, #dense>
+        %q0_raw = vector.load %q0_view[%zero_index] : view<1xi32, #dense> -> vector<1xi32>
+        %q1_raw = vector.load %q1_view[%zero_index] : view<1xi32, #dense> -> vector<1xi32>
+        %q0_shifted = vector.shrui %q0_raw, %q_shift : vector<1xi32>
+        %q1_shifted = vector.shrui %q1_raw, %q_shift : vector<1xi32>
+        %q0_masked = vector.andi %q0_shifted, %nibble_mask_v : vector<1xi32>
+        %q1_masked = vector.andi %q1_shifted, %nibble_mask_v : vector<1xi32>
+        %q0_i32 = vector.extract %q0_masked[0] : vector<1xi32> -> i32
+        %q1_i32 = vector.extract %q1_masked[0] : vector<1xi32> -> i32
+        %q1_hi = scalar.shli %q1_i32, %four_i32 : i32
+        %qpack = scalar.ori %q0_i32, %q1_hi : i32
+        %a_q_row = index.mul %stage_row, %four : index
+        %a_q_idx = index.add %a_q_row, %iqs_pair : index
+        view.store %qpack, %a_qs_view[%a_q_idx] : i32, view<256xi32, #dense>
+      }
+    }
+    %loadr_b2 = index.rem %lane, %two : index
+    %loadc_b = index.div %lane, %two : index
+    %rhs_col = index.add %col_block_base, %loadc_b : index
+    %linear_block_b0 = index.mul %rhs_col, %q8_blocks_per_col : index
+    %linear_block_b = index.add %linear_block_b0, %kb : index
+    %x4_block_b = index.div %linear_block_b, %four : index
+    %inner_b = index.rem %linear_block_b, %four : index
+    %src1_i32_base0 = index.mul %x4_block_b, %thirtysix : index
+    %src1_i32_base1 = index.add %src1_i32_base0, %four : index
+    %inner_i32_offset = index.mul %inner_b, %eight : index
+    %src1_i32_base = index.add %src1_i32_base1, %inner_i32_offset : index
+    %loadr_b4 = index.mul %loadr_b2, %four : index
+    scf.for %bj = [%zero_index to %four step %one] unroll(%four) {
+      %b_src_lane = index.add %loadr_b4, %bj : index
+      %src1_i32_index = index.add %src1_i32_base, %b_src_lane : index
+      %rhs_word = vector.load %src1_i32_view[%src1_i32_index] : view<[%src1_i32_count]xi32, #dense> -> vector<1xi32>
+      %b_qs_col_base = index.mul %loadc_b, %eight : index
+      %b_qs_idx0 = index.add %b_qs_col_base, %b_src_lane : index
+      vector.store %rhs_word, %b_qs_view[%b_qs_idx0] : vector<1xi32>, view<512xi32, #dense>
+    }
+    %loadr_b_is_zero = index.cmp eq, %loadr_b2, %zero_index : index
+    scf.if %loadr_b_is_zero {
+      %src1_f16_base0 = index.mul %x4_block_b, %seventytwo : index
+      %inner_f16_offset = index.mul %inner_b, %two : index
+      %src1_f16_base = index.add %src1_f16_base0, %inner_f16_offset : index
+      %src1_s_index = index.add %src1_f16_base, %one : index
+      %rhs_d_h = view.load %src1_f16_view[%src1_f16_base] : view<[%src1_f16_count]xf16, #dense> -> f16
+      %rhs_s_h = view.load %src1_f16_view[%src1_s_index] : view<[%src1_f16_count]xf16, #dense> -> f16
+      %rhs_d = scalar.extf %rhs_d_h : f16 to f32
+      %rhs_s = scalar.extf %rhs_s_h : f16 to f32
+      %b_ds_col = index.mul %loadc_b, %two : index
+      %b_s_idx = index.add %b_ds_col, %one : index
+      view.store %rhs_d, %b_ds_view[%b_ds_col] : f32, view<128xf32, #dense>
+      view.store %rhs_s, %b_ds_view[%b_s_idx] : f32, view<128xf32, #dense>
+    }
+    kernel.barrier<workgroup> {ordering = acq_rel, scope = workgroup}
+    %row_local_0_0_00 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_0_0_0 = index.add %row_local_0_0_00, %c0 : index
+    %b_col_local_0_0_00 = index.add %warp_col_base, %c0x4 : index
+    %b_col_local_0_0_01 = index.add %b_col_local_0_0_00, %tiwc2 : index
+    %b_col_local_0_0_0 = index.add %b_col_local_0_0_01, %c0 : index
+    %qsum_0_0_0 = scf.for %iqs_0_0_0 = [%zero_index to %eight step %one](%qacc_0_0_0 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_0_0_0 = index.div %iqs_0_0_0, %two : index
+      %a_q_row_0_0_0 = index.mul %row_local_0_0_0, %four : index
+      %a_q_idx_0_0_0 = index.add %a_q_row_0_0_0, %a_q_pair_0_0_0 : index
+      %a_word_i32_0_0_0 = view.load %a_qs_view[%a_q_idx_0_0_0] : view<256xi32, #dense> -> i32
+      %iqs_mod2_0_0_0 = index.rem %iqs_0_0_0, %two : index
+      %iqs_mod2_i32_0_0_0 = index.cast %iqs_mod2_0_0_0 : index to i32
+      %a_shift_0_0_0 = scalar.muli %iqs_mod2_i32_0_0_0, %four_i32 : i32
+      %a_shifted_0_0_0 = scalar.shrui %a_word_i32_0_0_0, %a_shift_0_0_0 : i32
+      %a_masked_0_0_0 = scalar.andi %a_shifted_0_0_0, %mask_0f0f0f0f : i32
+      %a_vec_word_0_0_0 = vector.from_elements %a_masked_0_0_0 : vector<1xi32>
+      %a_vec_0_0_0 = vector.bitcast %a_vec_word_0_0_0 : vector<1xi32> to vector<4xi8>
+      %b_q_row_0_0_0 = index.mul %b_col_local_0_0_0, %eight : index
+      %b_q_idx_0_0_0 = index.add %b_q_row_0_0_0, %iqs_0_0_0 : index
+      %b_word_0_0_0 = vector.load %b_qs_view[%b_q_idx_0_0_0] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_0_0_0 = vector.bitcast %b_word_0_0_0 : vector<1xi32> to vector<4xi8>
+      %dot_vec_0_0_0 = vector.dot4i<u8s8> %a_vec_0_0_0, %b_vec_0_0_0, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_0_0_0 = vector.extract %dot_vec_0_0_0[0] : vector<1xi32> -> i32
+      %qnext_0_0_0 = scalar.addi %qacc_0_0_0, %dot_0_0_0 : i32
+      scf.yield %qnext_0_0_0 : i32
+    }
+    %a_ds_idx_0_0_00 = index.mul %row_local_0_0_0, %two : index
+    %a_min_idx_0_0_0 = index.add %a_ds_idx_0_0_00, %one : index
+    %b_ds_idx_0_0_00 = index.mul %b_col_local_0_0_0, %two : index
+    %b_s_idx_0_0_0 = index.add %b_ds_idx_0_0_00, %one : index
+    %ad_0_0_0 = view.load %a_ds_view[%a_ds_idx_0_0_00] : view<128xf32, #dense> -> f32
+    %amin_0_0_0 = view.load %a_ds_view[%a_min_idx_0_0_0] : view<128xf32, #dense> -> f32
+    %bd_0_0_0 = view.load %b_ds_view[%b_ds_idx_0_0_00] : view<128xf32, #dense> -> f32
+    %bs_0_0_0 = view.load %b_ds_view[%b_s_idx_0_0_0] : view<128xf32, #dense> -> f32
+    %qf_0_0_0 = scalar.sitofp %qsum_0_0_0 : i32 to f32
+    %v_0_0_00 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_0_0_0, %ad_0_0_0 : f32
+    %v_0_0_01 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_0_0_00, %bd_0_0_0 : f32
+    %m_0_0_0 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_0_0_0, %bs_0_0_0 : f32
+    %contrib_0_0_0 = scalar.subf<reassoc|nnan|ninf|nsz> %v_0_0_01, %m_0_0_0 : f32
+    %next_0_0_0 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_0_0_0, %contrib_0_0_0 : f32
+    %row_local_0_0_10 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_0_0_1 = index.add %row_local_0_0_10, %c0 : index
+    %b_col_local_0_0_10 = index.add %warp_col_base, %c0x4 : index
+    %b_col_local_0_0_11 = index.add %b_col_local_0_0_10, %tiwc2 : index
+    %b_col_local_0_0_1 = index.add %b_col_local_0_0_11, %c1 : index
+    %qsum_0_0_1 = scf.for %iqs_0_0_1 = [%zero_index to %eight step %one](%qacc_0_0_1 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_0_0_1 = index.div %iqs_0_0_1, %two : index
+      %a_q_row_0_0_1 = index.mul %row_local_0_0_1, %four : index
+      %a_q_idx_0_0_1 = index.add %a_q_row_0_0_1, %a_q_pair_0_0_1 : index
+      %a_word_i32_0_0_1 = view.load %a_qs_view[%a_q_idx_0_0_1] : view<256xi32, #dense> -> i32
+      %iqs_mod2_0_0_1 = index.rem %iqs_0_0_1, %two : index
+      %iqs_mod2_i32_0_0_1 = index.cast %iqs_mod2_0_0_1 : index to i32
+      %a_shift_0_0_1 = scalar.muli %iqs_mod2_i32_0_0_1, %four_i32 : i32
+      %a_shifted_0_0_1 = scalar.shrui %a_word_i32_0_0_1, %a_shift_0_0_1 : i32
+      %a_masked_0_0_1 = scalar.andi %a_shifted_0_0_1, %mask_0f0f0f0f : i32
+      %a_vec_word_0_0_1 = vector.from_elements %a_masked_0_0_1 : vector<1xi32>
+      %a_vec_0_0_1 = vector.bitcast %a_vec_word_0_0_1 : vector<1xi32> to vector<4xi8>
+      %b_q_row_0_0_1 = index.mul %b_col_local_0_0_1, %eight : index
+      %b_q_idx_0_0_1 = index.add %b_q_row_0_0_1, %iqs_0_0_1 : index
+      %b_word_0_0_1 = vector.load %b_qs_view[%b_q_idx_0_0_1] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_0_0_1 = vector.bitcast %b_word_0_0_1 : vector<1xi32> to vector<4xi8>
+      %dot_vec_0_0_1 = vector.dot4i<u8s8> %a_vec_0_0_1, %b_vec_0_0_1, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_0_0_1 = vector.extract %dot_vec_0_0_1[0] : vector<1xi32> -> i32
+      %qnext_0_0_1 = scalar.addi %qacc_0_0_1, %dot_0_0_1 : i32
+      scf.yield %qnext_0_0_1 : i32
+    }
+    %a_ds_idx_0_0_10 = index.mul %row_local_0_0_1, %two : index
+    %a_min_idx_0_0_1 = index.add %a_ds_idx_0_0_10, %one : index
+    %b_ds_idx_0_0_10 = index.mul %b_col_local_0_0_1, %two : index
+    %b_s_idx_0_0_1 = index.add %b_ds_idx_0_0_10, %one : index
+    %ad_0_0_1 = view.load %a_ds_view[%a_ds_idx_0_0_10] : view<128xf32, #dense> -> f32
+    %amin_0_0_1 = view.load %a_ds_view[%a_min_idx_0_0_1] : view<128xf32, #dense> -> f32
+    %bd_0_0_1 = view.load %b_ds_view[%b_ds_idx_0_0_10] : view<128xf32, #dense> -> f32
+    %bs_0_0_1 = view.load %b_ds_view[%b_s_idx_0_0_1] : view<128xf32, #dense> -> f32
+    %qf_0_0_1 = scalar.sitofp %qsum_0_0_1 : i32 to f32
+    %v_0_0_10 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_0_0_1, %ad_0_0_1 : f32
+    %v_0_0_11 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_0_0_10, %bd_0_0_1 : f32
+    %m_0_0_1 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_0_0_1, %bs_0_0_1 : f32
+    %contrib_0_0_1 = scalar.subf<reassoc|nnan|ninf|nsz> %v_0_0_11, %m_0_0_1 : f32
+    %next_0_0_1 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_0_0_1, %contrib_0_0_1 : f32
+    %row_local_0_1_00 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_0_1_0 = index.add %row_local_0_1_00, %c1 : index
+    %b_col_local_0_1_00 = index.add %warp_col_base, %c0x4 : index
+    %b_col_local_0_1_01 = index.add %b_col_local_0_1_00, %tiwc2 : index
+    %b_col_local_0_1_0 = index.add %b_col_local_0_1_01, %c0 : index
+    %qsum_0_1_0 = scf.for %iqs_0_1_0 = [%zero_index to %eight step %one](%qacc_0_1_0 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_0_1_0 = index.div %iqs_0_1_0, %two : index
+      %a_q_row_0_1_0 = index.mul %row_local_0_1_0, %four : index
+      %a_q_idx_0_1_0 = index.add %a_q_row_0_1_0, %a_q_pair_0_1_0 : index
+      %a_word_i32_0_1_0 = view.load %a_qs_view[%a_q_idx_0_1_0] : view<256xi32, #dense> -> i32
+      %iqs_mod2_0_1_0 = index.rem %iqs_0_1_0, %two : index
+      %iqs_mod2_i32_0_1_0 = index.cast %iqs_mod2_0_1_0 : index to i32
+      %a_shift_0_1_0 = scalar.muli %iqs_mod2_i32_0_1_0, %four_i32 : i32
+      %a_shifted_0_1_0 = scalar.shrui %a_word_i32_0_1_0, %a_shift_0_1_0 : i32
+      %a_masked_0_1_0 = scalar.andi %a_shifted_0_1_0, %mask_0f0f0f0f : i32
+      %a_vec_word_0_1_0 = vector.from_elements %a_masked_0_1_0 : vector<1xi32>
+      %a_vec_0_1_0 = vector.bitcast %a_vec_word_0_1_0 : vector<1xi32> to vector<4xi8>
+      %b_q_row_0_1_0 = index.mul %b_col_local_0_1_0, %eight : index
+      %b_q_idx_0_1_0 = index.add %b_q_row_0_1_0, %iqs_0_1_0 : index
+      %b_word_0_1_0 = vector.load %b_qs_view[%b_q_idx_0_1_0] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_0_1_0 = vector.bitcast %b_word_0_1_0 : vector<1xi32> to vector<4xi8>
+      %dot_vec_0_1_0 = vector.dot4i<u8s8> %a_vec_0_1_0, %b_vec_0_1_0, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_0_1_0 = vector.extract %dot_vec_0_1_0[0] : vector<1xi32> -> i32
+      %qnext_0_1_0 = scalar.addi %qacc_0_1_0, %dot_0_1_0 : i32
+      scf.yield %qnext_0_1_0 : i32
+    }
+    %a_ds_idx_0_1_00 = index.mul %row_local_0_1_0, %two : index
+    %a_min_idx_0_1_0 = index.add %a_ds_idx_0_1_00, %one : index
+    %b_ds_idx_0_1_00 = index.mul %b_col_local_0_1_0, %two : index
+    %b_s_idx_0_1_0 = index.add %b_ds_idx_0_1_00, %one : index
+    %ad_0_1_0 = view.load %a_ds_view[%a_ds_idx_0_1_00] : view<128xf32, #dense> -> f32
+    %amin_0_1_0 = view.load %a_ds_view[%a_min_idx_0_1_0] : view<128xf32, #dense> -> f32
+    %bd_0_1_0 = view.load %b_ds_view[%b_ds_idx_0_1_00] : view<128xf32, #dense> -> f32
+    %bs_0_1_0 = view.load %b_ds_view[%b_s_idx_0_1_0] : view<128xf32, #dense> -> f32
+    %qf_0_1_0 = scalar.sitofp %qsum_0_1_0 : i32 to f32
+    %v_0_1_00 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_0_1_0, %ad_0_1_0 : f32
+    %v_0_1_01 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_0_1_00, %bd_0_1_0 : f32
+    %m_0_1_0 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_0_1_0, %bs_0_1_0 : f32
+    %contrib_0_1_0 = scalar.subf<reassoc|nnan|ninf|nsz> %v_0_1_01, %m_0_1_0 : f32
+    %next_0_1_0 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_0_1_0, %contrib_0_1_0 : f32
+    %row_local_0_1_10 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_0_1_1 = index.add %row_local_0_1_10, %c1 : index
+    %b_col_local_0_1_10 = index.add %warp_col_base, %c0x4 : index
+    %b_col_local_0_1_11 = index.add %b_col_local_0_1_10, %tiwc2 : index
+    %b_col_local_0_1_1 = index.add %b_col_local_0_1_11, %c1 : index
+    %qsum_0_1_1 = scf.for %iqs_0_1_1 = [%zero_index to %eight step %one](%qacc_0_1_1 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_0_1_1 = index.div %iqs_0_1_1, %two : index
+      %a_q_row_0_1_1 = index.mul %row_local_0_1_1, %four : index
+      %a_q_idx_0_1_1 = index.add %a_q_row_0_1_1, %a_q_pair_0_1_1 : index
+      %a_word_i32_0_1_1 = view.load %a_qs_view[%a_q_idx_0_1_1] : view<256xi32, #dense> -> i32
+      %iqs_mod2_0_1_1 = index.rem %iqs_0_1_1, %two : index
+      %iqs_mod2_i32_0_1_1 = index.cast %iqs_mod2_0_1_1 : index to i32
+      %a_shift_0_1_1 = scalar.muli %iqs_mod2_i32_0_1_1, %four_i32 : i32
+      %a_shifted_0_1_1 = scalar.shrui %a_word_i32_0_1_1, %a_shift_0_1_1 : i32
+      %a_masked_0_1_1 = scalar.andi %a_shifted_0_1_1, %mask_0f0f0f0f : i32
+      %a_vec_word_0_1_1 = vector.from_elements %a_masked_0_1_1 : vector<1xi32>
+      %a_vec_0_1_1 = vector.bitcast %a_vec_word_0_1_1 : vector<1xi32> to vector<4xi8>
+      %b_q_row_0_1_1 = index.mul %b_col_local_0_1_1, %eight : index
+      %b_q_idx_0_1_1 = index.add %b_q_row_0_1_1, %iqs_0_1_1 : index
+      %b_word_0_1_1 = vector.load %b_qs_view[%b_q_idx_0_1_1] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_0_1_1 = vector.bitcast %b_word_0_1_1 : vector<1xi32> to vector<4xi8>
+      %dot_vec_0_1_1 = vector.dot4i<u8s8> %a_vec_0_1_1, %b_vec_0_1_1, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_0_1_1 = vector.extract %dot_vec_0_1_1[0] : vector<1xi32> -> i32
+      %qnext_0_1_1 = scalar.addi %qacc_0_1_1, %dot_0_1_1 : i32
+      scf.yield %qnext_0_1_1 : i32
+    }
+    %a_ds_idx_0_1_10 = index.mul %row_local_0_1_1, %two : index
+    %a_min_idx_0_1_1 = index.add %a_ds_idx_0_1_10, %one : index
+    %b_ds_idx_0_1_10 = index.mul %b_col_local_0_1_1, %two : index
+    %b_s_idx_0_1_1 = index.add %b_ds_idx_0_1_10, %one : index
+    %ad_0_1_1 = view.load %a_ds_view[%a_ds_idx_0_1_10] : view<128xf32, #dense> -> f32
+    %amin_0_1_1 = view.load %a_ds_view[%a_min_idx_0_1_1] : view<128xf32, #dense> -> f32
+    %bd_0_1_1 = view.load %b_ds_view[%b_ds_idx_0_1_10] : view<128xf32, #dense> -> f32
+    %bs_0_1_1 = view.load %b_ds_view[%b_s_idx_0_1_1] : view<128xf32, #dense> -> f32
+    %qf_0_1_1 = scalar.sitofp %qsum_0_1_1 : i32 to f32
+    %v_0_1_10 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_0_1_1, %ad_0_1_1 : f32
+    %v_0_1_11 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_0_1_10, %bd_0_1_1 : f32
+    %m_0_1_1 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_0_1_1, %bs_0_1_1 : f32
+    %contrib_0_1_1 = scalar.subf<reassoc|nnan|ninf|nsz> %v_0_1_11, %m_0_1_1 : f32
+    %next_0_1_1 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_0_1_1, %contrib_0_1_1 : f32
+    %row_local_1_0_00 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_1_0_0 = index.add %row_local_1_0_00, %c0 : index
+    %b_col_local_1_0_00 = index.add %warp_col_base, %c1x4 : index
+    %b_col_local_1_0_01 = index.add %b_col_local_1_0_00, %tiwc2 : index
+    %b_col_local_1_0_0 = index.add %b_col_local_1_0_01, %c0 : index
+    %qsum_1_0_0 = scf.for %iqs_1_0_0 = [%zero_index to %eight step %one](%qacc_1_0_0 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_1_0_0 = index.div %iqs_1_0_0, %two : index
+      %a_q_row_1_0_0 = index.mul %row_local_1_0_0, %four : index
+      %a_q_idx_1_0_0 = index.add %a_q_row_1_0_0, %a_q_pair_1_0_0 : index
+      %a_word_i32_1_0_0 = view.load %a_qs_view[%a_q_idx_1_0_0] : view<256xi32, #dense> -> i32
+      %iqs_mod2_1_0_0 = index.rem %iqs_1_0_0, %two : index
+      %iqs_mod2_i32_1_0_0 = index.cast %iqs_mod2_1_0_0 : index to i32
+      %a_shift_1_0_0 = scalar.muli %iqs_mod2_i32_1_0_0, %four_i32 : i32
+      %a_shifted_1_0_0 = scalar.shrui %a_word_i32_1_0_0, %a_shift_1_0_0 : i32
+      %a_masked_1_0_0 = scalar.andi %a_shifted_1_0_0, %mask_0f0f0f0f : i32
+      %a_vec_word_1_0_0 = vector.from_elements %a_masked_1_0_0 : vector<1xi32>
+      %a_vec_1_0_0 = vector.bitcast %a_vec_word_1_0_0 : vector<1xi32> to vector<4xi8>
+      %b_q_row_1_0_0 = index.mul %b_col_local_1_0_0, %eight : index
+      %b_q_idx_1_0_0 = index.add %b_q_row_1_0_0, %iqs_1_0_0 : index
+      %b_word_1_0_0 = vector.load %b_qs_view[%b_q_idx_1_0_0] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_1_0_0 = vector.bitcast %b_word_1_0_0 : vector<1xi32> to vector<4xi8>
+      %dot_vec_1_0_0 = vector.dot4i<u8s8> %a_vec_1_0_0, %b_vec_1_0_0, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_1_0_0 = vector.extract %dot_vec_1_0_0[0] : vector<1xi32> -> i32
+      %qnext_1_0_0 = scalar.addi %qacc_1_0_0, %dot_1_0_0 : i32
+      scf.yield %qnext_1_0_0 : i32
+    }
+    %a_ds_idx_1_0_00 = index.mul %row_local_1_0_0, %two : index
+    %a_min_idx_1_0_0 = index.add %a_ds_idx_1_0_00, %one : index
+    %b_ds_idx_1_0_00 = index.mul %b_col_local_1_0_0, %two : index
+    %b_s_idx_1_0_0 = index.add %b_ds_idx_1_0_00, %one : index
+    %ad_1_0_0 = view.load %a_ds_view[%a_ds_idx_1_0_00] : view<128xf32, #dense> -> f32
+    %amin_1_0_0 = view.load %a_ds_view[%a_min_idx_1_0_0] : view<128xf32, #dense> -> f32
+    %bd_1_0_0 = view.load %b_ds_view[%b_ds_idx_1_0_00] : view<128xf32, #dense> -> f32
+    %bs_1_0_0 = view.load %b_ds_view[%b_s_idx_1_0_0] : view<128xf32, #dense> -> f32
+    %qf_1_0_0 = scalar.sitofp %qsum_1_0_0 : i32 to f32
+    %v_1_0_00 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_1_0_0, %ad_1_0_0 : f32
+    %v_1_0_01 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_1_0_00, %bd_1_0_0 : f32
+    %m_1_0_0 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_1_0_0, %bs_1_0_0 : f32
+    %contrib_1_0_0 = scalar.subf<reassoc|nnan|ninf|nsz> %v_1_0_01, %m_1_0_0 : f32
+    %next_1_0_0 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_1_0_0, %contrib_1_0_0 : f32
+    %row_local_1_0_10 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_1_0_1 = index.add %row_local_1_0_10, %c0 : index
+    %b_col_local_1_0_10 = index.add %warp_col_base, %c1x4 : index
+    %b_col_local_1_0_11 = index.add %b_col_local_1_0_10, %tiwc2 : index
+    %b_col_local_1_0_1 = index.add %b_col_local_1_0_11, %c1 : index
+    %qsum_1_0_1 = scf.for %iqs_1_0_1 = [%zero_index to %eight step %one](%qacc_1_0_1 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_1_0_1 = index.div %iqs_1_0_1, %two : index
+      %a_q_row_1_0_1 = index.mul %row_local_1_0_1, %four : index
+      %a_q_idx_1_0_1 = index.add %a_q_row_1_0_1, %a_q_pair_1_0_1 : index
+      %a_word_i32_1_0_1 = view.load %a_qs_view[%a_q_idx_1_0_1] : view<256xi32, #dense> -> i32
+      %iqs_mod2_1_0_1 = index.rem %iqs_1_0_1, %two : index
+      %iqs_mod2_i32_1_0_1 = index.cast %iqs_mod2_1_0_1 : index to i32
+      %a_shift_1_0_1 = scalar.muli %iqs_mod2_i32_1_0_1, %four_i32 : i32
+      %a_shifted_1_0_1 = scalar.shrui %a_word_i32_1_0_1, %a_shift_1_0_1 : i32
+      %a_masked_1_0_1 = scalar.andi %a_shifted_1_0_1, %mask_0f0f0f0f : i32
+      %a_vec_word_1_0_1 = vector.from_elements %a_masked_1_0_1 : vector<1xi32>
+      %a_vec_1_0_1 = vector.bitcast %a_vec_word_1_0_1 : vector<1xi32> to vector<4xi8>
+      %b_q_row_1_0_1 = index.mul %b_col_local_1_0_1, %eight : index
+      %b_q_idx_1_0_1 = index.add %b_q_row_1_0_1, %iqs_1_0_1 : index
+      %b_word_1_0_1 = vector.load %b_qs_view[%b_q_idx_1_0_1] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_1_0_1 = vector.bitcast %b_word_1_0_1 : vector<1xi32> to vector<4xi8>
+      %dot_vec_1_0_1 = vector.dot4i<u8s8> %a_vec_1_0_1, %b_vec_1_0_1, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_1_0_1 = vector.extract %dot_vec_1_0_1[0] : vector<1xi32> -> i32
+      %qnext_1_0_1 = scalar.addi %qacc_1_0_1, %dot_1_0_1 : i32
+      scf.yield %qnext_1_0_1 : i32
+    }
+    %a_ds_idx_1_0_10 = index.mul %row_local_1_0_1, %two : index
+    %a_min_idx_1_0_1 = index.add %a_ds_idx_1_0_10, %one : index
+    %b_ds_idx_1_0_10 = index.mul %b_col_local_1_0_1, %two : index
+    %b_s_idx_1_0_1 = index.add %b_ds_idx_1_0_10, %one : index
+    %ad_1_0_1 = view.load %a_ds_view[%a_ds_idx_1_0_10] : view<128xf32, #dense> -> f32
+    %amin_1_0_1 = view.load %a_ds_view[%a_min_idx_1_0_1] : view<128xf32, #dense> -> f32
+    %bd_1_0_1 = view.load %b_ds_view[%b_ds_idx_1_0_10] : view<128xf32, #dense> -> f32
+    %bs_1_0_1 = view.load %b_ds_view[%b_s_idx_1_0_1] : view<128xf32, #dense> -> f32
+    %qf_1_0_1 = scalar.sitofp %qsum_1_0_1 : i32 to f32
+    %v_1_0_10 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_1_0_1, %ad_1_0_1 : f32
+    %v_1_0_11 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_1_0_10, %bd_1_0_1 : f32
+    %m_1_0_1 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_1_0_1, %bs_1_0_1 : f32
+    %contrib_1_0_1 = scalar.subf<reassoc|nnan|ninf|nsz> %v_1_0_11, %m_1_0_1 : f32
+    %next_1_0_1 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_1_0_1, %contrib_1_0_1 : f32
+    %row_local_1_1_00 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_1_1_0 = index.add %row_local_1_1_00, %c1 : index
+    %b_col_local_1_1_00 = index.add %warp_col_base, %c1x4 : index
+    %b_col_local_1_1_01 = index.add %b_col_local_1_1_00, %tiwc2 : index
+    %b_col_local_1_1_0 = index.add %b_col_local_1_1_01, %c0 : index
+    %qsum_1_1_0 = scf.for %iqs_1_1_0 = [%zero_index to %eight step %one](%qacc_1_1_0 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_1_1_0 = index.div %iqs_1_1_0, %two : index
+      %a_q_row_1_1_0 = index.mul %row_local_1_1_0, %four : index
+      %a_q_idx_1_1_0 = index.add %a_q_row_1_1_0, %a_q_pair_1_1_0 : index
+      %a_word_i32_1_1_0 = view.load %a_qs_view[%a_q_idx_1_1_0] : view<256xi32, #dense> -> i32
+      %iqs_mod2_1_1_0 = index.rem %iqs_1_1_0, %two : index
+      %iqs_mod2_i32_1_1_0 = index.cast %iqs_mod2_1_1_0 : index to i32
+      %a_shift_1_1_0 = scalar.muli %iqs_mod2_i32_1_1_0, %four_i32 : i32
+      %a_shifted_1_1_0 = scalar.shrui %a_word_i32_1_1_0, %a_shift_1_1_0 : i32
+      %a_masked_1_1_0 = scalar.andi %a_shifted_1_1_0, %mask_0f0f0f0f : i32
+      %a_vec_word_1_1_0 = vector.from_elements %a_masked_1_1_0 : vector<1xi32>
+      %a_vec_1_1_0 = vector.bitcast %a_vec_word_1_1_0 : vector<1xi32> to vector<4xi8>
+      %b_q_row_1_1_0 = index.mul %b_col_local_1_1_0, %eight : index
+      %b_q_idx_1_1_0 = index.add %b_q_row_1_1_0, %iqs_1_1_0 : index
+      %b_word_1_1_0 = vector.load %b_qs_view[%b_q_idx_1_1_0] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_1_1_0 = vector.bitcast %b_word_1_1_0 : vector<1xi32> to vector<4xi8>
+      %dot_vec_1_1_0 = vector.dot4i<u8s8> %a_vec_1_1_0, %b_vec_1_1_0, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_1_1_0 = vector.extract %dot_vec_1_1_0[0] : vector<1xi32> -> i32
+      %qnext_1_1_0 = scalar.addi %qacc_1_1_0, %dot_1_1_0 : i32
+      scf.yield %qnext_1_1_0 : i32
+    }
+    %a_ds_idx_1_1_00 = index.mul %row_local_1_1_0, %two : index
+    %a_min_idx_1_1_0 = index.add %a_ds_idx_1_1_00, %one : index
+    %b_ds_idx_1_1_00 = index.mul %b_col_local_1_1_0, %two : index
+    %b_s_idx_1_1_0 = index.add %b_ds_idx_1_1_00, %one : index
+    %ad_1_1_0 = view.load %a_ds_view[%a_ds_idx_1_1_00] : view<128xf32, #dense> -> f32
+    %amin_1_1_0 = view.load %a_ds_view[%a_min_idx_1_1_0] : view<128xf32, #dense> -> f32
+    %bd_1_1_0 = view.load %b_ds_view[%b_ds_idx_1_1_00] : view<128xf32, #dense> -> f32
+    %bs_1_1_0 = view.load %b_ds_view[%b_s_idx_1_1_0] : view<128xf32, #dense> -> f32
+    %qf_1_1_0 = scalar.sitofp %qsum_1_1_0 : i32 to f32
+    %v_1_1_00 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_1_1_0, %ad_1_1_0 : f32
+    %v_1_1_01 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_1_1_00, %bd_1_1_0 : f32
+    %m_1_1_0 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_1_1_0, %bs_1_1_0 : f32
+    %contrib_1_1_0 = scalar.subf<reassoc|nnan|ninf|nsz> %v_1_1_01, %m_1_1_0 : f32
+    %next_1_1_0 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_1_1_0, %contrib_1_1_0 : f32
+    %row_local_1_1_10 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_1_1_1 = index.add %row_local_1_1_10, %c1 : index
+    %b_col_local_1_1_10 = index.add %warp_col_base, %c1x4 : index
+    %b_col_local_1_1_11 = index.add %b_col_local_1_1_10, %tiwc2 : index
+    %b_col_local_1_1_1 = index.add %b_col_local_1_1_11, %c1 : index
+    %qsum_1_1_1 = scf.for %iqs_1_1_1 = [%zero_index to %eight step %one](%qacc_1_1_1 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_1_1_1 = index.div %iqs_1_1_1, %two : index
+      %a_q_row_1_1_1 = index.mul %row_local_1_1_1, %four : index
+      %a_q_idx_1_1_1 = index.add %a_q_row_1_1_1, %a_q_pair_1_1_1 : index
+      %a_word_i32_1_1_1 = view.load %a_qs_view[%a_q_idx_1_1_1] : view<256xi32, #dense> -> i32
+      %iqs_mod2_1_1_1 = index.rem %iqs_1_1_1, %two : index
+      %iqs_mod2_i32_1_1_1 = index.cast %iqs_mod2_1_1_1 : index to i32
+      %a_shift_1_1_1 = scalar.muli %iqs_mod2_i32_1_1_1, %four_i32 : i32
+      %a_shifted_1_1_1 = scalar.shrui %a_word_i32_1_1_1, %a_shift_1_1_1 : i32
+      %a_masked_1_1_1 = scalar.andi %a_shifted_1_1_1, %mask_0f0f0f0f : i32
+      %a_vec_word_1_1_1 = vector.from_elements %a_masked_1_1_1 : vector<1xi32>
+      %a_vec_1_1_1 = vector.bitcast %a_vec_word_1_1_1 : vector<1xi32> to vector<4xi8>
+      %b_q_row_1_1_1 = index.mul %b_col_local_1_1_1, %eight : index
+      %b_q_idx_1_1_1 = index.add %b_q_row_1_1_1, %iqs_1_1_1 : index
+      %b_word_1_1_1 = vector.load %b_qs_view[%b_q_idx_1_1_1] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_1_1_1 = vector.bitcast %b_word_1_1_1 : vector<1xi32> to vector<4xi8>
+      %dot_vec_1_1_1 = vector.dot4i<u8s8> %a_vec_1_1_1, %b_vec_1_1_1, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_1_1_1 = vector.extract %dot_vec_1_1_1[0] : vector<1xi32> -> i32
+      %qnext_1_1_1 = scalar.addi %qacc_1_1_1, %dot_1_1_1 : i32
+      scf.yield %qnext_1_1_1 : i32
+    }
+    %a_ds_idx_1_1_10 = index.mul %row_local_1_1_1, %two : index
+    %a_min_idx_1_1_1 = index.add %a_ds_idx_1_1_10, %one : index
+    %b_ds_idx_1_1_10 = index.mul %b_col_local_1_1_1, %two : index
+    %b_s_idx_1_1_1 = index.add %b_ds_idx_1_1_10, %one : index
+    %ad_1_1_1 = view.load %a_ds_view[%a_ds_idx_1_1_10] : view<128xf32, #dense> -> f32
+    %amin_1_1_1 = view.load %a_ds_view[%a_min_idx_1_1_1] : view<128xf32, #dense> -> f32
+    %bd_1_1_1 = view.load %b_ds_view[%b_ds_idx_1_1_10] : view<128xf32, #dense> -> f32
+    %bs_1_1_1 = view.load %b_ds_view[%b_s_idx_1_1_1] : view<128xf32, #dense> -> f32
+    %qf_1_1_1 = scalar.sitofp %qsum_1_1_1 : i32 to f32
+    %v_1_1_10 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_1_1_1, %ad_1_1_1 : f32
+    %v_1_1_11 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_1_1_10, %bd_1_1_1 : f32
+    %m_1_1_1 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_1_1_1, %bs_1_1_1 : f32
+    %contrib_1_1_1 = scalar.subf<reassoc|nnan|ninf|nsz> %v_1_1_11, %m_1_1_1 : f32
+    %next_1_1_1 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_1_1_1, %contrib_1_1_1 : f32
+    %row_local_2_0_00 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_2_0_0 = index.add %row_local_2_0_00, %c0 : index
+    %b_col_local_2_0_00 = index.add %warp_col_base, %c2x4 : index
+    %b_col_local_2_0_01 = index.add %b_col_local_2_0_00, %tiwc2 : index
+    %b_col_local_2_0_0 = index.add %b_col_local_2_0_01, %c0 : index
+    %qsum_2_0_0 = scf.for %iqs_2_0_0 = [%zero_index to %eight step %one](%qacc_2_0_0 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_2_0_0 = index.div %iqs_2_0_0, %two : index
+      %a_q_row_2_0_0 = index.mul %row_local_2_0_0, %four : index
+      %a_q_idx_2_0_0 = index.add %a_q_row_2_0_0, %a_q_pair_2_0_0 : index
+      %a_word_i32_2_0_0 = view.load %a_qs_view[%a_q_idx_2_0_0] : view<256xi32, #dense> -> i32
+      %iqs_mod2_2_0_0 = index.rem %iqs_2_0_0, %two : index
+      %iqs_mod2_i32_2_0_0 = index.cast %iqs_mod2_2_0_0 : index to i32
+      %a_shift_2_0_0 = scalar.muli %iqs_mod2_i32_2_0_0, %four_i32 : i32
+      %a_shifted_2_0_0 = scalar.shrui %a_word_i32_2_0_0, %a_shift_2_0_0 : i32
+      %a_masked_2_0_0 = scalar.andi %a_shifted_2_0_0, %mask_0f0f0f0f : i32
+      %a_vec_word_2_0_0 = vector.from_elements %a_masked_2_0_0 : vector<1xi32>
+      %a_vec_2_0_0 = vector.bitcast %a_vec_word_2_0_0 : vector<1xi32> to vector<4xi8>
+      %b_q_row_2_0_0 = index.mul %b_col_local_2_0_0, %eight : index
+      %b_q_idx_2_0_0 = index.add %b_q_row_2_0_0, %iqs_2_0_0 : index
+      %b_word_2_0_0 = vector.load %b_qs_view[%b_q_idx_2_0_0] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_2_0_0 = vector.bitcast %b_word_2_0_0 : vector<1xi32> to vector<4xi8>
+      %dot_vec_2_0_0 = vector.dot4i<u8s8> %a_vec_2_0_0, %b_vec_2_0_0, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_2_0_0 = vector.extract %dot_vec_2_0_0[0] : vector<1xi32> -> i32
+      %qnext_2_0_0 = scalar.addi %qacc_2_0_0, %dot_2_0_0 : i32
+      scf.yield %qnext_2_0_0 : i32
+    }
+    %a_ds_idx_2_0_00 = index.mul %row_local_2_0_0, %two : index
+    %a_min_idx_2_0_0 = index.add %a_ds_idx_2_0_00, %one : index
+    %b_ds_idx_2_0_00 = index.mul %b_col_local_2_0_0, %two : index
+    %b_s_idx_2_0_0 = index.add %b_ds_idx_2_0_00, %one : index
+    %ad_2_0_0 = view.load %a_ds_view[%a_ds_idx_2_0_00] : view<128xf32, #dense> -> f32
+    %amin_2_0_0 = view.load %a_ds_view[%a_min_idx_2_0_0] : view<128xf32, #dense> -> f32
+    %bd_2_0_0 = view.load %b_ds_view[%b_ds_idx_2_0_00] : view<128xf32, #dense> -> f32
+    %bs_2_0_0 = view.load %b_ds_view[%b_s_idx_2_0_0] : view<128xf32, #dense> -> f32
+    %qf_2_0_0 = scalar.sitofp %qsum_2_0_0 : i32 to f32
+    %v_2_0_00 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_2_0_0, %ad_2_0_0 : f32
+    %v_2_0_01 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_2_0_00, %bd_2_0_0 : f32
+    %m_2_0_0 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_2_0_0, %bs_2_0_0 : f32
+    %contrib_2_0_0 = scalar.subf<reassoc|nnan|ninf|nsz> %v_2_0_01, %m_2_0_0 : f32
+    %next_2_0_0 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_2_0_0, %contrib_2_0_0 : f32
+    %row_local_2_0_10 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_2_0_1 = index.add %row_local_2_0_10, %c0 : index
+    %b_col_local_2_0_10 = index.add %warp_col_base, %c2x4 : index
+    %b_col_local_2_0_11 = index.add %b_col_local_2_0_10, %tiwc2 : index
+    %b_col_local_2_0_1 = index.add %b_col_local_2_0_11, %c1 : index
+    %qsum_2_0_1 = scf.for %iqs_2_0_1 = [%zero_index to %eight step %one](%qacc_2_0_1 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_2_0_1 = index.div %iqs_2_0_1, %two : index
+      %a_q_row_2_0_1 = index.mul %row_local_2_0_1, %four : index
+      %a_q_idx_2_0_1 = index.add %a_q_row_2_0_1, %a_q_pair_2_0_1 : index
+      %a_word_i32_2_0_1 = view.load %a_qs_view[%a_q_idx_2_0_1] : view<256xi32, #dense> -> i32
+      %iqs_mod2_2_0_1 = index.rem %iqs_2_0_1, %two : index
+      %iqs_mod2_i32_2_0_1 = index.cast %iqs_mod2_2_0_1 : index to i32
+      %a_shift_2_0_1 = scalar.muli %iqs_mod2_i32_2_0_1, %four_i32 : i32
+      %a_shifted_2_0_1 = scalar.shrui %a_word_i32_2_0_1, %a_shift_2_0_1 : i32
+      %a_masked_2_0_1 = scalar.andi %a_shifted_2_0_1, %mask_0f0f0f0f : i32
+      %a_vec_word_2_0_1 = vector.from_elements %a_masked_2_0_1 : vector<1xi32>
+      %a_vec_2_0_1 = vector.bitcast %a_vec_word_2_0_1 : vector<1xi32> to vector<4xi8>
+      %b_q_row_2_0_1 = index.mul %b_col_local_2_0_1, %eight : index
+      %b_q_idx_2_0_1 = index.add %b_q_row_2_0_1, %iqs_2_0_1 : index
+      %b_word_2_0_1 = vector.load %b_qs_view[%b_q_idx_2_0_1] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_2_0_1 = vector.bitcast %b_word_2_0_1 : vector<1xi32> to vector<4xi8>
+      %dot_vec_2_0_1 = vector.dot4i<u8s8> %a_vec_2_0_1, %b_vec_2_0_1, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_2_0_1 = vector.extract %dot_vec_2_0_1[0] : vector<1xi32> -> i32
+      %qnext_2_0_1 = scalar.addi %qacc_2_0_1, %dot_2_0_1 : i32
+      scf.yield %qnext_2_0_1 : i32
+    }
+    %a_ds_idx_2_0_10 = index.mul %row_local_2_0_1, %two : index
+    %a_min_idx_2_0_1 = index.add %a_ds_idx_2_0_10, %one : index
+    %b_ds_idx_2_0_10 = index.mul %b_col_local_2_0_1, %two : index
+    %b_s_idx_2_0_1 = index.add %b_ds_idx_2_0_10, %one : index
+    %ad_2_0_1 = view.load %a_ds_view[%a_ds_idx_2_0_10] : view<128xf32, #dense> -> f32
+    %amin_2_0_1 = view.load %a_ds_view[%a_min_idx_2_0_1] : view<128xf32, #dense> -> f32
+    %bd_2_0_1 = view.load %b_ds_view[%b_ds_idx_2_0_10] : view<128xf32, #dense> -> f32
+    %bs_2_0_1 = view.load %b_ds_view[%b_s_idx_2_0_1] : view<128xf32, #dense> -> f32
+    %qf_2_0_1 = scalar.sitofp %qsum_2_0_1 : i32 to f32
+    %v_2_0_10 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_2_0_1, %ad_2_0_1 : f32
+    %v_2_0_11 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_2_0_10, %bd_2_0_1 : f32
+    %m_2_0_1 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_2_0_1, %bs_2_0_1 : f32
+    %contrib_2_0_1 = scalar.subf<reassoc|nnan|ninf|nsz> %v_2_0_11, %m_2_0_1 : f32
+    %next_2_0_1 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_2_0_1, %contrib_2_0_1 : f32
+    %row_local_2_1_00 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_2_1_0 = index.add %row_local_2_1_00, %c1 : index
+    %b_col_local_2_1_00 = index.add %warp_col_base, %c2x4 : index
+    %b_col_local_2_1_01 = index.add %b_col_local_2_1_00, %tiwc2 : index
+    %b_col_local_2_1_0 = index.add %b_col_local_2_1_01, %c0 : index
+    %qsum_2_1_0 = scf.for %iqs_2_1_0 = [%zero_index to %eight step %one](%qacc_2_1_0 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_2_1_0 = index.div %iqs_2_1_0, %two : index
+      %a_q_row_2_1_0 = index.mul %row_local_2_1_0, %four : index
+      %a_q_idx_2_1_0 = index.add %a_q_row_2_1_0, %a_q_pair_2_1_0 : index
+      %a_word_i32_2_1_0 = view.load %a_qs_view[%a_q_idx_2_1_0] : view<256xi32, #dense> -> i32
+      %iqs_mod2_2_1_0 = index.rem %iqs_2_1_0, %two : index
+      %iqs_mod2_i32_2_1_0 = index.cast %iqs_mod2_2_1_0 : index to i32
+      %a_shift_2_1_0 = scalar.muli %iqs_mod2_i32_2_1_0, %four_i32 : i32
+      %a_shifted_2_1_0 = scalar.shrui %a_word_i32_2_1_0, %a_shift_2_1_0 : i32
+      %a_masked_2_1_0 = scalar.andi %a_shifted_2_1_0, %mask_0f0f0f0f : i32
+      %a_vec_word_2_1_0 = vector.from_elements %a_masked_2_1_0 : vector<1xi32>
+      %a_vec_2_1_0 = vector.bitcast %a_vec_word_2_1_0 : vector<1xi32> to vector<4xi8>
+      %b_q_row_2_1_0 = index.mul %b_col_local_2_1_0, %eight : index
+      %b_q_idx_2_1_0 = index.add %b_q_row_2_1_0, %iqs_2_1_0 : index
+      %b_word_2_1_0 = vector.load %b_qs_view[%b_q_idx_2_1_0] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_2_1_0 = vector.bitcast %b_word_2_1_0 : vector<1xi32> to vector<4xi8>
+      %dot_vec_2_1_0 = vector.dot4i<u8s8> %a_vec_2_1_0, %b_vec_2_1_0, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_2_1_0 = vector.extract %dot_vec_2_1_0[0] : vector<1xi32> -> i32
+      %qnext_2_1_0 = scalar.addi %qacc_2_1_0, %dot_2_1_0 : i32
+      scf.yield %qnext_2_1_0 : i32
+    }
+    %a_ds_idx_2_1_00 = index.mul %row_local_2_1_0, %two : index
+    %a_min_idx_2_1_0 = index.add %a_ds_idx_2_1_00, %one : index
+    %b_ds_idx_2_1_00 = index.mul %b_col_local_2_1_0, %two : index
+    %b_s_idx_2_1_0 = index.add %b_ds_idx_2_1_00, %one : index
+    %ad_2_1_0 = view.load %a_ds_view[%a_ds_idx_2_1_00] : view<128xf32, #dense> -> f32
+    %amin_2_1_0 = view.load %a_ds_view[%a_min_idx_2_1_0] : view<128xf32, #dense> -> f32
+    %bd_2_1_0 = view.load %b_ds_view[%b_ds_idx_2_1_00] : view<128xf32, #dense> -> f32
+    %bs_2_1_0 = view.load %b_ds_view[%b_s_idx_2_1_0] : view<128xf32, #dense> -> f32
+    %qf_2_1_0 = scalar.sitofp %qsum_2_1_0 : i32 to f32
+    %v_2_1_00 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_2_1_0, %ad_2_1_0 : f32
+    %v_2_1_01 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_2_1_00, %bd_2_1_0 : f32
+    %m_2_1_0 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_2_1_0, %bs_2_1_0 : f32
+    %contrib_2_1_0 = scalar.subf<reassoc|nnan|ninf|nsz> %v_2_1_01, %m_2_1_0 : f32
+    %next_2_1_0 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_2_1_0, %contrib_2_1_0 : f32
+    %row_local_2_1_10 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_2_1_1 = index.add %row_local_2_1_10, %c1 : index
+    %b_col_local_2_1_10 = index.add %warp_col_base, %c2x4 : index
+    %b_col_local_2_1_11 = index.add %b_col_local_2_1_10, %tiwc2 : index
+    %b_col_local_2_1_1 = index.add %b_col_local_2_1_11, %c1 : index
+    %qsum_2_1_1 = scf.for %iqs_2_1_1 = [%zero_index to %eight step %one](%qacc_2_1_1 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_2_1_1 = index.div %iqs_2_1_1, %two : index
+      %a_q_row_2_1_1 = index.mul %row_local_2_1_1, %four : index
+      %a_q_idx_2_1_1 = index.add %a_q_row_2_1_1, %a_q_pair_2_1_1 : index
+      %a_word_i32_2_1_1 = view.load %a_qs_view[%a_q_idx_2_1_1] : view<256xi32, #dense> -> i32
+      %iqs_mod2_2_1_1 = index.rem %iqs_2_1_1, %two : index
+      %iqs_mod2_i32_2_1_1 = index.cast %iqs_mod2_2_1_1 : index to i32
+      %a_shift_2_1_1 = scalar.muli %iqs_mod2_i32_2_1_1, %four_i32 : i32
+      %a_shifted_2_1_1 = scalar.shrui %a_word_i32_2_1_1, %a_shift_2_1_1 : i32
+      %a_masked_2_1_1 = scalar.andi %a_shifted_2_1_1, %mask_0f0f0f0f : i32
+      %a_vec_word_2_1_1 = vector.from_elements %a_masked_2_1_1 : vector<1xi32>
+      %a_vec_2_1_1 = vector.bitcast %a_vec_word_2_1_1 : vector<1xi32> to vector<4xi8>
+      %b_q_row_2_1_1 = index.mul %b_col_local_2_1_1, %eight : index
+      %b_q_idx_2_1_1 = index.add %b_q_row_2_1_1, %iqs_2_1_1 : index
+      %b_word_2_1_1 = vector.load %b_qs_view[%b_q_idx_2_1_1] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_2_1_1 = vector.bitcast %b_word_2_1_1 : vector<1xi32> to vector<4xi8>
+      %dot_vec_2_1_1 = vector.dot4i<u8s8> %a_vec_2_1_1, %b_vec_2_1_1, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_2_1_1 = vector.extract %dot_vec_2_1_1[0] : vector<1xi32> -> i32
+      %qnext_2_1_1 = scalar.addi %qacc_2_1_1, %dot_2_1_1 : i32
+      scf.yield %qnext_2_1_1 : i32
+    }
+    %a_ds_idx_2_1_10 = index.mul %row_local_2_1_1, %two : index
+    %a_min_idx_2_1_1 = index.add %a_ds_idx_2_1_10, %one : index
+    %b_ds_idx_2_1_10 = index.mul %b_col_local_2_1_1, %two : index
+    %b_s_idx_2_1_1 = index.add %b_ds_idx_2_1_10, %one : index
+    %ad_2_1_1 = view.load %a_ds_view[%a_ds_idx_2_1_10] : view<128xf32, #dense> -> f32
+    %amin_2_1_1 = view.load %a_ds_view[%a_min_idx_2_1_1] : view<128xf32, #dense> -> f32
+    %bd_2_1_1 = view.load %b_ds_view[%b_ds_idx_2_1_10] : view<128xf32, #dense> -> f32
+    %bs_2_1_1 = view.load %b_ds_view[%b_s_idx_2_1_1] : view<128xf32, #dense> -> f32
+    %qf_2_1_1 = scalar.sitofp %qsum_2_1_1 : i32 to f32
+    %v_2_1_10 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_2_1_1, %ad_2_1_1 : f32
+    %v_2_1_11 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_2_1_10, %bd_2_1_1 : f32
+    %m_2_1_1 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_2_1_1, %bs_2_1_1 : f32
+    %contrib_2_1_1 = scalar.subf<reassoc|nnan|ninf|nsz> %v_2_1_11, %m_2_1_1 : f32
+    %next_2_1_1 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_2_1_1, %contrib_2_1_1 : f32
+    %row_local_3_0_00 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_3_0_0 = index.add %row_local_3_0_00, %c0 : index
+    %b_col_local_3_0_00 = index.add %warp_col_base, %c3x4 : index
+    %b_col_local_3_0_01 = index.add %b_col_local_3_0_00, %tiwc2 : index
+    %b_col_local_3_0_0 = index.add %b_col_local_3_0_01, %c0 : index
+    %qsum_3_0_0 = scf.for %iqs_3_0_0 = [%zero_index to %eight step %one](%qacc_3_0_0 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_3_0_0 = index.div %iqs_3_0_0, %two : index
+      %a_q_row_3_0_0 = index.mul %row_local_3_0_0, %four : index
+      %a_q_idx_3_0_0 = index.add %a_q_row_3_0_0, %a_q_pair_3_0_0 : index
+      %a_word_i32_3_0_0 = view.load %a_qs_view[%a_q_idx_3_0_0] : view<256xi32, #dense> -> i32
+      %iqs_mod2_3_0_0 = index.rem %iqs_3_0_0, %two : index
+      %iqs_mod2_i32_3_0_0 = index.cast %iqs_mod2_3_0_0 : index to i32
+      %a_shift_3_0_0 = scalar.muli %iqs_mod2_i32_3_0_0, %four_i32 : i32
+      %a_shifted_3_0_0 = scalar.shrui %a_word_i32_3_0_0, %a_shift_3_0_0 : i32
+      %a_masked_3_0_0 = scalar.andi %a_shifted_3_0_0, %mask_0f0f0f0f : i32
+      %a_vec_word_3_0_0 = vector.from_elements %a_masked_3_0_0 : vector<1xi32>
+      %a_vec_3_0_0 = vector.bitcast %a_vec_word_3_0_0 : vector<1xi32> to vector<4xi8>
+      %b_q_row_3_0_0 = index.mul %b_col_local_3_0_0, %eight : index
+      %b_q_idx_3_0_0 = index.add %b_q_row_3_0_0, %iqs_3_0_0 : index
+      %b_word_3_0_0 = vector.load %b_qs_view[%b_q_idx_3_0_0] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_3_0_0 = vector.bitcast %b_word_3_0_0 : vector<1xi32> to vector<4xi8>
+      %dot_vec_3_0_0 = vector.dot4i<u8s8> %a_vec_3_0_0, %b_vec_3_0_0, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_3_0_0 = vector.extract %dot_vec_3_0_0[0] : vector<1xi32> -> i32
+      %qnext_3_0_0 = scalar.addi %qacc_3_0_0, %dot_3_0_0 : i32
+      scf.yield %qnext_3_0_0 : i32
+    }
+    %a_ds_idx_3_0_00 = index.mul %row_local_3_0_0, %two : index
+    %a_min_idx_3_0_0 = index.add %a_ds_idx_3_0_00, %one : index
+    %b_ds_idx_3_0_00 = index.mul %b_col_local_3_0_0, %two : index
+    %b_s_idx_3_0_0 = index.add %b_ds_idx_3_0_00, %one : index
+    %ad_3_0_0 = view.load %a_ds_view[%a_ds_idx_3_0_00] : view<128xf32, #dense> -> f32
+    %amin_3_0_0 = view.load %a_ds_view[%a_min_idx_3_0_0] : view<128xf32, #dense> -> f32
+    %bd_3_0_0 = view.load %b_ds_view[%b_ds_idx_3_0_00] : view<128xf32, #dense> -> f32
+    %bs_3_0_0 = view.load %b_ds_view[%b_s_idx_3_0_0] : view<128xf32, #dense> -> f32
+    %qf_3_0_0 = scalar.sitofp %qsum_3_0_0 : i32 to f32
+    %v_3_0_00 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_3_0_0, %ad_3_0_0 : f32
+    %v_3_0_01 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_3_0_00, %bd_3_0_0 : f32
+    %m_3_0_0 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_3_0_0, %bs_3_0_0 : f32
+    %contrib_3_0_0 = scalar.subf<reassoc|nnan|ninf|nsz> %v_3_0_01, %m_3_0_0 : f32
+    %next_3_0_0 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_3_0_0, %contrib_3_0_0 : f32
+    %row_local_3_0_10 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_3_0_1 = index.add %row_local_3_0_10, %c0 : index
+    %b_col_local_3_0_10 = index.add %warp_col_base, %c3x4 : index
+    %b_col_local_3_0_11 = index.add %b_col_local_3_0_10, %tiwc2 : index
+    %b_col_local_3_0_1 = index.add %b_col_local_3_0_11, %c1 : index
+    %qsum_3_0_1 = scf.for %iqs_3_0_1 = [%zero_index to %eight step %one](%qacc_3_0_1 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_3_0_1 = index.div %iqs_3_0_1, %two : index
+      %a_q_row_3_0_1 = index.mul %row_local_3_0_1, %four : index
+      %a_q_idx_3_0_1 = index.add %a_q_row_3_0_1, %a_q_pair_3_0_1 : index
+      %a_word_i32_3_0_1 = view.load %a_qs_view[%a_q_idx_3_0_1] : view<256xi32, #dense> -> i32
+      %iqs_mod2_3_0_1 = index.rem %iqs_3_0_1, %two : index
+      %iqs_mod2_i32_3_0_1 = index.cast %iqs_mod2_3_0_1 : index to i32
+      %a_shift_3_0_1 = scalar.muli %iqs_mod2_i32_3_0_1, %four_i32 : i32
+      %a_shifted_3_0_1 = scalar.shrui %a_word_i32_3_0_1, %a_shift_3_0_1 : i32
+      %a_masked_3_0_1 = scalar.andi %a_shifted_3_0_1, %mask_0f0f0f0f : i32
+      %a_vec_word_3_0_1 = vector.from_elements %a_masked_3_0_1 : vector<1xi32>
+      %a_vec_3_0_1 = vector.bitcast %a_vec_word_3_0_1 : vector<1xi32> to vector<4xi8>
+      %b_q_row_3_0_1 = index.mul %b_col_local_3_0_1, %eight : index
+      %b_q_idx_3_0_1 = index.add %b_q_row_3_0_1, %iqs_3_0_1 : index
+      %b_word_3_0_1 = vector.load %b_qs_view[%b_q_idx_3_0_1] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_3_0_1 = vector.bitcast %b_word_3_0_1 : vector<1xi32> to vector<4xi8>
+      %dot_vec_3_0_1 = vector.dot4i<u8s8> %a_vec_3_0_1, %b_vec_3_0_1, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_3_0_1 = vector.extract %dot_vec_3_0_1[0] : vector<1xi32> -> i32
+      %qnext_3_0_1 = scalar.addi %qacc_3_0_1, %dot_3_0_1 : i32
+      scf.yield %qnext_3_0_1 : i32
+    }
+    %a_ds_idx_3_0_10 = index.mul %row_local_3_0_1, %two : index
+    %a_min_idx_3_0_1 = index.add %a_ds_idx_3_0_10, %one : index
+    %b_ds_idx_3_0_10 = index.mul %b_col_local_3_0_1, %two : index
+    %b_s_idx_3_0_1 = index.add %b_ds_idx_3_0_10, %one : index
+    %ad_3_0_1 = view.load %a_ds_view[%a_ds_idx_3_0_10] : view<128xf32, #dense> -> f32
+    %amin_3_0_1 = view.load %a_ds_view[%a_min_idx_3_0_1] : view<128xf32, #dense> -> f32
+    %bd_3_0_1 = view.load %b_ds_view[%b_ds_idx_3_0_10] : view<128xf32, #dense> -> f32
+    %bs_3_0_1 = view.load %b_ds_view[%b_s_idx_3_0_1] : view<128xf32, #dense> -> f32
+    %qf_3_0_1 = scalar.sitofp %qsum_3_0_1 : i32 to f32
+    %v_3_0_10 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_3_0_1, %ad_3_0_1 : f32
+    %v_3_0_11 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_3_0_10, %bd_3_0_1 : f32
+    %m_3_0_1 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_3_0_1, %bs_3_0_1 : f32
+    %contrib_3_0_1 = scalar.subf<reassoc|nnan|ninf|nsz> %v_3_0_11, %m_3_0_1 : f32
+    %next_3_0_1 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_3_0_1, %contrib_3_0_1 : f32
+    %row_local_3_1_00 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_3_1_0 = index.add %row_local_3_1_00, %c1 : index
+    %b_col_local_3_1_00 = index.add %warp_col_base, %c3x4 : index
+    %b_col_local_3_1_01 = index.add %b_col_local_3_1_00, %tiwc2 : index
+    %b_col_local_3_1_0 = index.add %b_col_local_3_1_01, %c0 : index
+    %qsum_3_1_0 = scf.for %iqs_3_1_0 = [%zero_index to %eight step %one](%qacc_3_1_0 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_3_1_0 = index.div %iqs_3_1_0, %two : index
+      %a_q_row_3_1_0 = index.mul %row_local_3_1_0, %four : index
+      %a_q_idx_3_1_0 = index.add %a_q_row_3_1_0, %a_q_pair_3_1_0 : index
+      %a_word_i32_3_1_0 = view.load %a_qs_view[%a_q_idx_3_1_0] : view<256xi32, #dense> -> i32
+      %iqs_mod2_3_1_0 = index.rem %iqs_3_1_0, %two : index
+      %iqs_mod2_i32_3_1_0 = index.cast %iqs_mod2_3_1_0 : index to i32
+      %a_shift_3_1_0 = scalar.muli %iqs_mod2_i32_3_1_0, %four_i32 : i32
+      %a_shifted_3_1_0 = scalar.shrui %a_word_i32_3_1_0, %a_shift_3_1_0 : i32
+      %a_masked_3_1_0 = scalar.andi %a_shifted_3_1_0, %mask_0f0f0f0f : i32
+      %a_vec_word_3_1_0 = vector.from_elements %a_masked_3_1_0 : vector<1xi32>
+      %a_vec_3_1_0 = vector.bitcast %a_vec_word_3_1_0 : vector<1xi32> to vector<4xi8>
+      %b_q_row_3_1_0 = index.mul %b_col_local_3_1_0, %eight : index
+      %b_q_idx_3_1_0 = index.add %b_q_row_3_1_0, %iqs_3_1_0 : index
+      %b_word_3_1_0 = vector.load %b_qs_view[%b_q_idx_3_1_0] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_3_1_0 = vector.bitcast %b_word_3_1_0 : vector<1xi32> to vector<4xi8>
+      %dot_vec_3_1_0 = vector.dot4i<u8s8> %a_vec_3_1_0, %b_vec_3_1_0, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_3_1_0 = vector.extract %dot_vec_3_1_0[0] : vector<1xi32> -> i32
+      %qnext_3_1_0 = scalar.addi %qacc_3_1_0, %dot_3_1_0 : i32
+      scf.yield %qnext_3_1_0 : i32
+    }
+    %a_ds_idx_3_1_00 = index.mul %row_local_3_1_0, %two : index
+    %a_min_idx_3_1_0 = index.add %a_ds_idx_3_1_00, %one : index
+    %b_ds_idx_3_1_00 = index.mul %b_col_local_3_1_0, %two : index
+    %b_s_idx_3_1_0 = index.add %b_ds_idx_3_1_00, %one : index
+    %ad_3_1_0 = view.load %a_ds_view[%a_ds_idx_3_1_00] : view<128xf32, #dense> -> f32
+    %amin_3_1_0 = view.load %a_ds_view[%a_min_idx_3_1_0] : view<128xf32, #dense> -> f32
+    %bd_3_1_0 = view.load %b_ds_view[%b_ds_idx_3_1_00] : view<128xf32, #dense> -> f32
+    %bs_3_1_0 = view.load %b_ds_view[%b_s_idx_3_1_0] : view<128xf32, #dense> -> f32
+    %qf_3_1_0 = scalar.sitofp %qsum_3_1_0 : i32 to f32
+    %v_3_1_00 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_3_1_0, %ad_3_1_0 : f32
+    %v_3_1_01 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_3_1_00, %bd_3_1_0 : f32
+    %m_3_1_0 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_3_1_0, %bs_3_1_0 : f32
+    %contrib_3_1_0 = scalar.subf<reassoc|nnan|ninf|nsz> %v_3_1_01, %m_3_1_0 : f32
+    %next_3_1_0 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_3_1_0, %contrib_3_1_0 : f32
+    %row_local_3_1_10 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_3_1_1 = index.add %row_local_3_1_10, %c1 : index
+    %b_col_local_3_1_10 = index.add %warp_col_base, %c3x4 : index
+    %b_col_local_3_1_11 = index.add %b_col_local_3_1_10, %tiwc2 : index
+    %b_col_local_3_1_1 = index.add %b_col_local_3_1_11, %c1 : index
+    %qsum_3_1_1 = scf.for %iqs_3_1_1 = [%zero_index to %eight step %one](%qacc_3_1_1 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_3_1_1 = index.div %iqs_3_1_1, %two : index
+      %a_q_row_3_1_1 = index.mul %row_local_3_1_1, %four : index
+      %a_q_idx_3_1_1 = index.add %a_q_row_3_1_1, %a_q_pair_3_1_1 : index
+      %a_word_i32_3_1_1 = view.load %a_qs_view[%a_q_idx_3_1_1] : view<256xi32, #dense> -> i32
+      %iqs_mod2_3_1_1 = index.rem %iqs_3_1_1, %two : index
+      %iqs_mod2_i32_3_1_1 = index.cast %iqs_mod2_3_1_1 : index to i32
+      %a_shift_3_1_1 = scalar.muli %iqs_mod2_i32_3_1_1, %four_i32 : i32
+      %a_shifted_3_1_1 = scalar.shrui %a_word_i32_3_1_1, %a_shift_3_1_1 : i32
+      %a_masked_3_1_1 = scalar.andi %a_shifted_3_1_1, %mask_0f0f0f0f : i32
+      %a_vec_word_3_1_1 = vector.from_elements %a_masked_3_1_1 : vector<1xi32>
+      %a_vec_3_1_1 = vector.bitcast %a_vec_word_3_1_1 : vector<1xi32> to vector<4xi8>
+      %b_q_row_3_1_1 = index.mul %b_col_local_3_1_1, %eight : index
+      %b_q_idx_3_1_1 = index.add %b_q_row_3_1_1, %iqs_3_1_1 : index
+      %b_word_3_1_1 = vector.load %b_qs_view[%b_q_idx_3_1_1] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_3_1_1 = vector.bitcast %b_word_3_1_1 : vector<1xi32> to vector<4xi8>
+      %dot_vec_3_1_1 = vector.dot4i<u8s8> %a_vec_3_1_1, %b_vec_3_1_1, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_3_1_1 = vector.extract %dot_vec_3_1_1[0] : vector<1xi32> -> i32
+      %qnext_3_1_1 = scalar.addi %qacc_3_1_1, %dot_3_1_1 : i32
+      scf.yield %qnext_3_1_1 : i32
+    }
+    %a_ds_idx_3_1_10 = index.mul %row_local_3_1_1, %two : index
+    %a_min_idx_3_1_1 = index.add %a_ds_idx_3_1_10, %one : index
+    %b_ds_idx_3_1_10 = index.mul %b_col_local_3_1_1, %two : index
+    %b_s_idx_3_1_1 = index.add %b_ds_idx_3_1_10, %one : index
+    %ad_3_1_1 = view.load %a_ds_view[%a_ds_idx_3_1_10] : view<128xf32, #dense> -> f32
+    %amin_3_1_1 = view.load %a_ds_view[%a_min_idx_3_1_1] : view<128xf32, #dense> -> f32
+    %bd_3_1_1 = view.load %b_ds_view[%b_ds_idx_3_1_10] : view<128xf32, #dense> -> f32
+    %bs_3_1_1 = view.load %b_ds_view[%b_s_idx_3_1_1] : view<128xf32, #dense> -> f32
+    %qf_3_1_1 = scalar.sitofp %qsum_3_1_1 : i32 to f32
+    %v_3_1_10 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_3_1_1, %ad_3_1_1 : f32
+    %v_3_1_11 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_3_1_10, %bd_3_1_1 : f32
+    %m_3_1_1 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_3_1_1, %bs_3_1_1 : f32
+    %contrib_3_1_1 = scalar.subf<reassoc|nnan|ninf|nsz> %v_3_1_11, %m_3_1_1 : f32
+    %next_3_1_1 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_3_1_1, %contrib_3_1_1 : f32
+    %row_local_4_0_00 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_4_0_0 = index.add %row_local_4_0_00, %c0 : index
+    %b_col_local_4_0_00 = index.add %warp_col_base, %c4x4 : index
+    %b_col_local_4_0_01 = index.add %b_col_local_4_0_00, %tiwc2 : index
+    %b_col_local_4_0_0 = index.add %b_col_local_4_0_01, %c0 : index
+    %qsum_4_0_0 = scf.for %iqs_4_0_0 = [%zero_index to %eight step %one](%qacc_4_0_0 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_4_0_0 = index.div %iqs_4_0_0, %two : index
+      %a_q_row_4_0_0 = index.mul %row_local_4_0_0, %four : index
+      %a_q_idx_4_0_0 = index.add %a_q_row_4_0_0, %a_q_pair_4_0_0 : index
+      %a_word_i32_4_0_0 = view.load %a_qs_view[%a_q_idx_4_0_0] : view<256xi32, #dense> -> i32
+      %iqs_mod2_4_0_0 = index.rem %iqs_4_0_0, %two : index
+      %iqs_mod2_i32_4_0_0 = index.cast %iqs_mod2_4_0_0 : index to i32
+      %a_shift_4_0_0 = scalar.muli %iqs_mod2_i32_4_0_0, %four_i32 : i32
+      %a_shifted_4_0_0 = scalar.shrui %a_word_i32_4_0_0, %a_shift_4_0_0 : i32
+      %a_masked_4_0_0 = scalar.andi %a_shifted_4_0_0, %mask_0f0f0f0f : i32
+      %a_vec_word_4_0_0 = vector.from_elements %a_masked_4_0_0 : vector<1xi32>
+      %a_vec_4_0_0 = vector.bitcast %a_vec_word_4_0_0 : vector<1xi32> to vector<4xi8>
+      %b_q_row_4_0_0 = index.mul %b_col_local_4_0_0, %eight : index
+      %b_q_idx_4_0_0 = index.add %b_q_row_4_0_0, %iqs_4_0_0 : index
+      %b_word_4_0_0 = vector.load %b_qs_view[%b_q_idx_4_0_0] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_4_0_0 = vector.bitcast %b_word_4_0_0 : vector<1xi32> to vector<4xi8>
+      %dot_vec_4_0_0 = vector.dot4i<u8s8> %a_vec_4_0_0, %b_vec_4_0_0, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_4_0_0 = vector.extract %dot_vec_4_0_0[0] : vector<1xi32> -> i32
+      %qnext_4_0_0 = scalar.addi %qacc_4_0_0, %dot_4_0_0 : i32
+      scf.yield %qnext_4_0_0 : i32
+    }
+    %a_ds_idx_4_0_00 = index.mul %row_local_4_0_0, %two : index
+    %a_min_idx_4_0_0 = index.add %a_ds_idx_4_0_00, %one : index
+    %b_ds_idx_4_0_00 = index.mul %b_col_local_4_0_0, %two : index
+    %b_s_idx_4_0_0 = index.add %b_ds_idx_4_0_00, %one : index
+    %ad_4_0_0 = view.load %a_ds_view[%a_ds_idx_4_0_00] : view<128xf32, #dense> -> f32
+    %amin_4_0_0 = view.load %a_ds_view[%a_min_idx_4_0_0] : view<128xf32, #dense> -> f32
+    %bd_4_0_0 = view.load %b_ds_view[%b_ds_idx_4_0_00] : view<128xf32, #dense> -> f32
+    %bs_4_0_0 = view.load %b_ds_view[%b_s_idx_4_0_0] : view<128xf32, #dense> -> f32
+    %qf_4_0_0 = scalar.sitofp %qsum_4_0_0 : i32 to f32
+    %v_4_0_00 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_4_0_0, %ad_4_0_0 : f32
+    %v_4_0_01 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_4_0_00, %bd_4_0_0 : f32
+    %m_4_0_0 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_4_0_0, %bs_4_0_0 : f32
+    %contrib_4_0_0 = scalar.subf<reassoc|nnan|ninf|nsz> %v_4_0_01, %m_4_0_0 : f32
+    %next_4_0_0 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_4_0_0, %contrib_4_0_0 : f32
+    %row_local_4_0_10 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_4_0_1 = index.add %row_local_4_0_10, %c0 : index
+    %b_col_local_4_0_10 = index.add %warp_col_base, %c4x4 : index
+    %b_col_local_4_0_11 = index.add %b_col_local_4_0_10, %tiwc2 : index
+    %b_col_local_4_0_1 = index.add %b_col_local_4_0_11, %c1 : index
+    %qsum_4_0_1 = scf.for %iqs_4_0_1 = [%zero_index to %eight step %one](%qacc_4_0_1 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_4_0_1 = index.div %iqs_4_0_1, %two : index
+      %a_q_row_4_0_1 = index.mul %row_local_4_0_1, %four : index
+      %a_q_idx_4_0_1 = index.add %a_q_row_4_0_1, %a_q_pair_4_0_1 : index
+      %a_word_i32_4_0_1 = view.load %a_qs_view[%a_q_idx_4_0_1] : view<256xi32, #dense> -> i32
+      %iqs_mod2_4_0_1 = index.rem %iqs_4_0_1, %two : index
+      %iqs_mod2_i32_4_0_1 = index.cast %iqs_mod2_4_0_1 : index to i32
+      %a_shift_4_0_1 = scalar.muli %iqs_mod2_i32_4_0_1, %four_i32 : i32
+      %a_shifted_4_0_1 = scalar.shrui %a_word_i32_4_0_1, %a_shift_4_0_1 : i32
+      %a_masked_4_0_1 = scalar.andi %a_shifted_4_0_1, %mask_0f0f0f0f : i32
+      %a_vec_word_4_0_1 = vector.from_elements %a_masked_4_0_1 : vector<1xi32>
+      %a_vec_4_0_1 = vector.bitcast %a_vec_word_4_0_1 : vector<1xi32> to vector<4xi8>
+      %b_q_row_4_0_1 = index.mul %b_col_local_4_0_1, %eight : index
+      %b_q_idx_4_0_1 = index.add %b_q_row_4_0_1, %iqs_4_0_1 : index
+      %b_word_4_0_1 = vector.load %b_qs_view[%b_q_idx_4_0_1] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_4_0_1 = vector.bitcast %b_word_4_0_1 : vector<1xi32> to vector<4xi8>
+      %dot_vec_4_0_1 = vector.dot4i<u8s8> %a_vec_4_0_1, %b_vec_4_0_1, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_4_0_1 = vector.extract %dot_vec_4_0_1[0] : vector<1xi32> -> i32
+      %qnext_4_0_1 = scalar.addi %qacc_4_0_1, %dot_4_0_1 : i32
+      scf.yield %qnext_4_0_1 : i32
+    }
+    %a_ds_idx_4_0_10 = index.mul %row_local_4_0_1, %two : index
+    %a_min_idx_4_0_1 = index.add %a_ds_idx_4_0_10, %one : index
+    %b_ds_idx_4_0_10 = index.mul %b_col_local_4_0_1, %two : index
+    %b_s_idx_4_0_1 = index.add %b_ds_idx_4_0_10, %one : index
+    %ad_4_0_1 = view.load %a_ds_view[%a_ds_idx_4_0_10] : view<128xf32, #dense> -> f32
+    %amin_4_0_1 = view.load %a_ds_view[%a_min_idx_4_0_1] : view<128xf32, #dense> -> f32
+    %bd_4_0_1 = view.load %b_ds_view[%b_ds_idx_4_0_10] : view<128xf32, #dense> -> f32
+    %bs_4_0_1 = view.load %b_ds_view[%b_s_idx_4_0_1] : view<128xf32, #dense> -> f32
+    %qf_4_0_1 = scalar.sitofp %qsum_4_0_1 : i32 to f32
+    %v_4_0_10 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_4_0_1, %ad_4_0_1 : f32
+    %v_4_0_11 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_4_0_10, %bd_4_0_1 : f32
+    %m_4_0_1 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_4_0_1, %bs_4_0_1 : f32
+    %contrib_4_0_1 = scalar.subf<reassoc|nnan|ninf|nsz> %v_4_0_11, %m_4_0_1 : f32
+    %next_4_0_1 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_4_0_1, %contrib_4_0_1 : f32
+    %row_local_4_1_00 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_4_1_0 = index.add %row_local_4_1_00, %c1 : index
+    %b_col_local_4_1_00 = index.add %warp_col_base, %c4x4 : index
+    %b_col_local_4_1_01 = index.add %b_col_local_4_1_00, %tiwc2 : index
+    %b_col_local_4_1_0 = index.add %b_col_local_4_1_01, %c0 : index
+    %qsum_4_1_0 = scf.for %iqs_4_1_0 = [%zero_index to %eight step %one](%qacc_4_1_0 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_4_1_0 = index.div %iqs_4_1_0, %two : index
+      %a_q_row_4_1_0 = index.mul %row_local_4_1_0, %four : index
+      %a_q_idx_4_1_0 = index.add %a_q_row_4_1_0, %a_q_pair_4_1_0 : index
+      %a_word_i32_4_1_0 = view.load %a_qs_view[%a_q_idx_4_1_0] : view<256xi32, #dense> -> i32
+      %iqs_mod2_4_1_0 = index.rem %iqs_4_1_0, %two : index
+      %iqs_mod2_i32_4_1_0 = index.cast %iqs_mod2_4_1_0 : index to i32
+      %a_shift_4_1_0 = scalar.muli %iqs_mod2_i32_4_1_0, %four_i32 : i32
+      %a_shifted_4_1_0 = scalar.shrui %a_word_i32_4_1_0, %a_shift_4_1_0 : i32
+      %a_masked_4_1_0 = scalar.andi %a_shifted_4_1_0, %mask_0f0f0f0f : i32
+      %a_vec_word_4_1_0 = vector.from_elements %a_masked_4_1_0 : vector<1xi32>
+      %a_vec_4_1_0 = vector.bitcast %a_vec_word_4_1_0 : vector<1xi32> to vector<4xi8>
+      %b_q_row_4_1_0 = index.mul %b_col_local_4_1_0, %eight : index
+      %b_q_idx_4_1_0 = index.add %b_q_row_4_1_0, %iqs_4_1_0 : index
+      %b_word_4_1_0 = vector.load %b_qs_view[%b_q_idx_4_1_0] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_4_1_0 = vector.bitcast %b_word_4_1_0 : vector<1xi32> to vector<4xi8>
+      %dot_vec_4_1_0 = vector.dot4i<u8s8> %a_vec_4_1_0, %b_vec_4_1_0, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_4_1_0 = vector.extract %dot_vec_4_1_0[0] : vector<1xi32> -> i32
+      %qnext_4_1_0 = scalar.addi %qacc_4_1_0, %dot_4_1_0 : i32
+      scf.yield %qnext_4_1_0 : i32
+    }
+    %a_ds_idx_4_1_00 = index.mul %row_local_4_1_0, %two : index
+    %a_min_idx_4_1_0 = index.add %a_ds_idx_4_1_00, %one : index
+    %b_ds_idx_4_1_00 = index.mul %b_col_local_4_1_0, %two : index
+    %b_s_idx_4_1_0 = index.add %b_ds_idx_4_1_00, %one : index
+    %ad_4_1_0 = view.load %a_ds_view[%a_ds_idx_4_1_00] : view<128xf32, #dense> -> f32
+    %amin_4_1_0 = view.load %a_ds_view[%a_min_idx_4_1_0] : view<128xf32, #dense> -> f32
+    %bd_4_1_0 = view.load %b_ds_view[%b_ds_idx_4_1_00] : view<128xf32, #dense> -> f32
+    %bs_4_1_0 = view.load %b_ds_view[%b_s_idx_4_1_0] : view<128xf32, #dense> -> f32
+    %qf_4_1_0 = scalar.sitofp %qsum_4_1_0 : i32 to f32
+    %v_4_1_00 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_4_1_0, %ad_4_1_0 : f32
+    %v_4_1_01 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_4_1_00, %bd_4_1_0 : f32
+    %m_4_1_0 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_4_1_0, %bs_4_1_0 : f32
+    %contrib_4_1_0 = scalar.subf<reassoc|nnan|ninf|nsz> %v_4_1_01, %m_4_1_0 : f32
+    %next_4_1_0 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_4_1_0, %contrib_4_1_0 : f32
+    %row_local_4_1_10 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_4_1_1 = index.add %row_local_4_1_10, %c1 : index
+    %b_col_local_4_1_10 = index.add %warp_col_base, %c4x4 : index
+    %b_col_local_4_1_11 = index.add %b_col_local_4_1_10, %tiwc2 : index
+    %b_col_local_4_1_1 = index.add %b_col_local_4_1_11, %c1 : index
+    %qsum_4_1_1 = scf.for %iqs_4_1_1 = [%zero_index to %eight step %one](%qacc_4_1_1 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_4_1_1 = index.div %iqs_4_1_1, %two : index
+      %a_q_row_4_1_1 = index.mul %row_local_4_1_1, %four : index
+      %a_q_idx_4_1_1 = index.add %a_q_row_4_1_1, %a_q_pair_4_1_1 : index
+      %a_word_i32_4_1_1 = view.load %a_qs_view[%a_q_idx_4_1_1] : view<256xi32, #dense> -> i32
+      %iqs_mod2_4_1_1 = index.rem %iqs_4_1_1, %two : index
+      %iqs_mod2_i32_4_1_1 = index.cast %iqs_mod2_4_1_1 : index to i32
+      %a_shift_4_1_1 = scalar.muli %iqs_mod2_i32_4_1_1, %four_i32 : i32
+      %a_shifted_4_1_1 = scalar.shrui %a_word_i32_4_1_1, %a_shift_4_1_1 : i32
+      %a_masked_4_1_1 = scalar.andi %a_shifted_4_1_1, %mask_0f0f0f0f : i32
+      %a_vec_word_4_1_1 = vector.from_elements %a_masked_4_1_1 : vector<1xi32>
+      %a_vec_4_1_1 = vector.bitcast %a_vec_word_4_1_1 : vector<1xi32> to vector<4xi8>
+      %b_q_row_4_1_1 = index.mul %b_col_local_4_1_1, %eight : index
+      %b_q_idx_4_1_1 = index.add %b_q_row_4_1_1, %iqs_4_1_1 : index
+      %b_word_4_1_1 = vector.load %b_qs_view[%b_q_idx_4_1_1] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_4_1_1 = vector.bitcast %b_word_4_1_1 : vector<1xi32> to vector<4xi8>
+      %dot_vec_4_1_1 = vector.dot4i<u8s8> %a_vec_4_1_1, %b_vec_4_1_1, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_4_1_1 = vector.extract %dot_vec_4_1_1[0] : vector<1xi32> -> i32
+      %qnext_4_1_1 = scalar.addi %qacc_4_1_1, %dot_4_1_1 : i32
+      scf.yield %qnext_4_1_1 : i32
+    }
+    %a_ds_idx_4_1_10 = index.mul %row_local_4_1_1, %two : index
+    %a_min_idx_4_1_1 = index.add %a_ds_idx_4_1_10, %one : index
+    %b_ds_idx_4_1_10 = index.mul %b_col_local_4_1_1, %two : index
+    %b_s_idx_4_1_1 = index.add %b_ds_idx_4_1_10, %one : index
+    %ad_4_1_1 = view.load %a_ds_view[%a_ds_idx_4_1_10] : view<128xf32, #dense> -> f32
+    %amin_4_1_1 = view.load %a_ds_view[%a_min_idx_4_1_1] : view<128xf32, #dense> -> f32
+    %bd_4_1_1 = view.load %b_ds_view[%b_ds_idx_4_1_10] : view<128xf32, #dense> -> f32
+    %bs_4_1_1 = view.load %b_ds_view[%b_s_idx_4_1_1] : view<128xf32, #dense> -> f32
+    %qf_4_1_1 = scalar.sitofp %qsum_4_1_1 : i32 to f32
+    %v_4_1_10 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_4_1_1, %ad_4_1_1 : f32
+    %v_4_1_11 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_4_1_10, %bd_4_1_1 : f32
+    %m_4_1_1 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_4_1_1, %bs_4_1_1 : f32
+    %contrib_4_1_1 = scalar.subf<reassoc|nnan|ninf|nsz> %v_4_1_11, %m_4_1_1 : f32
+    %next_4_1_1 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_4_1_1, %contrib_4_1_1 : f32
+    %row_local_5_0_00 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_5_0_0 = index.add %row_local_5_0_00, %c0 : index
+    %b_col_local_5_0_00 = index.add %warp_col_base, %c5x4 : index
+    %b_col_local_5_0_01 = index.add %b_col_local_5_0_00, %tiwc2 : index
+    %b_col_local_5_0_0 = index.add %b_col_local_5_0_01, %c0 : index
+    %qsum_5_0_0 = scf.for %iqs_5_0_0 = [%zero_index to %eight step %one](%qacc_5_0_0 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_5_0_0 = index.div %iqs_5_0_0, %two : index
+      %a_q_row_5_0_0 = index.mul %row_local_5_0_0, %four : index
+      %a_q_idx_5_0_0 = index.add %a_q_row_5_0_0, %a_q_pair_5_0_0 : index
+      %a_word_i32_5_0_0 = view.load %a_qs_view[%a_q_idx_5_0_0] : view<256xi32, #dense> -> i32
+      %iqs_mod2_5_0_0 = index.rem %iqs_5_0_0, %two : index
+      %iqs_mod2_i32_5_0_0 = index.cast %iqs_mod2_5_0_0 : index to i32
+      %a_shift_5_0_0 = scalar.muli %iqs_mod2_i32_5_0_0, %four_i32 : i32
+      %a_shifted_5_0_0 = scalar.shrui %a_word_i32_5_0_0, %a_shift_5_0_0 : i32
+      %a_masked_5_0_0 = scalar.andi %a_shifted_5_0_0, %mask_0f0f0f0f : i32
+      %a_vec_word_5_0_0 = vector.from_elements %a_masked_5_0_0 : vector<1xi32>
+      %a_vec_5_0_0 = vector.bitcast %a_vec_word_5_0_0 : vector<1xi32> to vector<4xi8>
+      %b_q_row_5_0_0 = index.mul %b_col_local_5_0_0, %eight : index
+      %b_q_idx_5_0_0 = index.add %b_q_row_5_0_0, %iqs_5_0_0 : index
+      %b_word_5_0_0 = vector.load %b_qs_view[%b_q_idx_5_0_0] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_5_0_0 = vector.bitcast %b_word_5_0_0 : vector<1xi32> to vector<4xi8>
+      %dot_vec_5_0_0 = vector.dot4i<u8s8> %a_vec_5_0_0, %b_vec_5_0_0, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_5_0_0 = vector.extract %dot_vec_5_0_0[0] : vector<1xi32> -> i32
+      %qnext_5_0_0 = scalar.addi %qacc_5_0_0, %dot_5_0_0 : i32
+      scf.yield %qnext_5_0_0 : i32
+    }
+    %a_ds_idx_5_0_00 = index.mul %row_local_5_0_0, %two : index
+    %a_min_idx_5_0_0 = index.add %a_ds_idx_5_0_00, %one : index
+    %b_ds_idx_5_0_00 = index.mul %b_col_local_5_0_0, %two : index
+    %b_s_idx_5_0_0 = index.add %b_ds_idx_5_0_00, %one : index
+    %ad_5_0_0 = view.load %a_ds_view[%a_ds_idx_5_0_00] : view<128xf32, #dense> -> f32
+    %amin_5_0_0 = view.load %a_ds_view[%a_min_idx_5_0_0] : view<128xf32, #dense> -> f32
+    %bd_5_0_0 = view.load %b_ds_view[%b_ds_idx_5_0_00] : view<128xf32, #dense> -> f32
+    %bs_5_0_0 = view.load %b_ds_view[%b_s_idx_5_0_0] : view<128xf32, #dense> -> f32
+    %qf_5_0_0 = scalar.sitofp %qsum_5_0_0 : i32 to f32
+    %v_5_0_00 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_5_0_0, %ad_5_0_0 : f32
+    %v_5_0_01 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_5_0_00, %bd_5_0_0 : f32
+    %m_5_0_0 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_5_0_0, %bs_5_0_0 : f32
+    %contrib_5_0_0 = scalar.subf<reassoc|nnan|ninf|nsz> %v_5_0_01, %m_5_0_0 : f32
+    %next_5_0_0 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_5_0_0, %contrib_5_0_0 : f32
+    %row_local_5_0_10 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_5_0_1 = index.add %row_local_5_0_10, %c0 : index
+    %b_col_local_5_0_10 = index.add %warp_col_base, %c5x4 : index
+    %b_col_local_5_0_11 = index.add %b_col_local_5_0_10, %tiwc2 : index
+    %b_col_local_5_0_1 = index.add %b_col_local_5_0_11, %c1 : index
+    %qsum_5_0_1 = scf.for %iqs_5_0_1 = [%zero_index to %eight step %one](%qacc_5_0_1 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_5_0_1 = index.div %iqs_5_0_1, %two : index
+      %a_q_row_5_0_1 = index.mul %row_local_5_0_1, %four : index
+      %a_q_idx_5_0_1 = index.add %a_q_row_5_0_1, %a_q_pair_5_0_1 : index
+      %a_word_i32_5_0_1 = view.load %a_qs_view[%a_q_idx_5_0_1] : view<256xi32, #dense> -> i32
+      %iqs_mod2_5_0_1 = index.rem %iqs_5_0_1, %two : index
+      %iqs_mod2_i32_5_0_1 = index.cast %iqs_mod2_5_0_1 : index to i32
+      %a_shift_5_0_1 = scalar.muli %iqs_mod2_i32_5_0_1, %four_i32 : i32
+      %a_shifted_5_0_1 = scalar.shrui %a_word_i32_5_0_1, %a_shift_5_0_1 : i32
+      %a_masked_5_0_1 = scalar.andi %a_shifted_5_0_1, %mask_0f0f0f0f : i32
+      %a_vec_word_5_0_1 = vector.from_elements %a_masked_5_0_1 : vector<1xi32>
+      %a_vec_5_0_1 = vector.bitcast %a_vec_word_5_0_1 : vector<1xi32> to vector<4xi8>
+      %b_q_row_5_0_1 = index.mul %b_col_local_5_0_1, %eight : index
+      %b_q_idx_5_0_1 = index.add %b_q_row_5_0_1, %iqs_5_0_1 : index
+      %b_word_5_0_1 = vector.load %b_qs_view[%b_q_idx_5_0_1] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_5_0_1 = vector.bitcast %b_word_5_0_1 : vector<1xi32> to vector<4xi8>
+      %dot_vec_5_0_1 = vector.dot4i<u8s8> %a_vec_5_0_1, %b_vec_5_0_1, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_5_0_1 = vector.extract %dot_vec_5_0_1[0] : vector<1xi32> -> i32
+      %qnext_5_0_1 = scalar.addi %qacc_5_0_1, %dot_5_0_1 : i32
+      scf.yield %qnext_5_0_1 : i32
+    }
+    %a_ds_idx_5_0_10 = index.mul %row_local_5_0_1, %two : index
+    %a_min_idx_5_0_1 = index.add %a_ds_idx_5_0_10, %one : index
+    %b_ds_idx_5_0_10 = index.mul %b_col_local_5_0_1, %two : index
+    %b_s_idx_5_0_1 = index.add %b_ds_idx_5_0_10, %one : index
+    %ad_5_0_1 = view.load %a_ds_view[%a_ds_idx_5_0_10] : view<128xf32, #dense> -> f32
+    %amin_5_0_1 = view.load %a_ds_view[%a_min_idx_5_0_1] : view<128xf32, #dense> -> f32
+    %bd_5_0_1 = view.load %b_ds_view[%b_ds_idx_5_0_10] : view<128xf32, #dense> -> f32
+    %bs_5_0_1 = view.load %b_ds_view[%b_s_idx_5_0_1] : view<128xf32, #dense> -> f32
+    %qf_5_0_1 = scalar.sitofp %qsum_5_0_1 : i32 to f32
+    %v_5_0_10 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_5_0_1, %ad_5_0_1 : f32
+    %v_5_0_11 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_5_0_10, %bd_5_0_1 : f32
+    %m_5_0_1 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_5_0_1, %bs_5_0_1 : f32
+    %contrib_5_0_1 = scalar.subf<reassoc|nnan|ninf|nsz> %v_5_0_11, %m_5_0_1 : f32
+    %next_5_0_1 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_5_0_1, %contrib_5_0_1 : f32
+    %row_local_5_1_00 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_5_1_0 = index.add %row_local_5_1_00, %c1 : index
+    %b_col_local_5_1_00 = index.add %warp_col_base, %c5x4 : index
+    %b_col_local_5_1_01 = index.add %b_col_local_5_1_00, %tiwc2 : index
+    %b_col_local_5_1_0 = index.add %b_col_local_5_1_01, %c0 : index
+    %qsum_5_1_0 = scf.for %iqs_5_1_0 = [%zero_index to %eight step %one](%qacc_5_1_0 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_5_1_0 = index.div %iqs_5_1_0, %two : index
+      %a_q_row_5_1_0 = index.mul %row_local_5_1_0, %four : index
+      %a_q_idx_5_1_0 = index.add %a_q_row_5_1_0, %a_q_pair_5_1_0 : index
+      %a_word_i32_5_1_0 = view.load %a_qs_view[%a_q_idx_5_1_0] : view<256xi32, #dense> -> i32
+      %iqs_mod2_5_1_0 = index.rem %iqs_5_1_0, %two : index
+      %iqs_mod2_i32_5_1_0 = index.cast %iqs_mod2_5_1_0 : index to i32
+      %a_shift_5_1_0 = scalar.muli %iqs_mod2_i32_5_1_0, %four_i32 : i32
+      %a_shifted_5_1_0 = scalar.shrui %a_word_i32_5_1_0, %a_shift_5_1_0 : i32
+      %a_masked_5_1_0 = scalar.andi %a_shifted_5_1_0, %mask_0f0f0f0f : i32
+      %a_vec_word_5_1_0 = vector.from_elements %a_masked_5_1_0 : vector<1xi32>
+      %a_vec_5_1_0 = vector.bitcast %a_vec_word_5_1_0 : vector<1xi32> to vector<4xi8>
+      %b_q_row_5_1_0 = index.mul %b_col_local_5_1_0, %eight : index
+      %b_q_idx_5_1_0 = index.add %b_q_row_5_1_0, %iqs_5_1_0 : index
+      %b_word_5_1_0 = vector.load %b_qs_view[%b_q_idx_5_1_0] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_5_1_0 = vector.bitcast %b_word_5_1_0 : vector<1xi32> to vector<4xi8>
+      %dot_vec_5_1_0 = vector.dot4i<u8s8> %a_vec_5_1_0, %b_vec_5_1_0, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_5_1_0 = vector.extract %dot_vec_5_1_0[0] : vector<1xi32> -> i32
+      %qnext_5_1_0 = scalar.addi %qacc_5_1_0, %dot_5_1_0 : i32
+      scf.yield %qnext_5_1_0 : i32
+    }
+    %a_ds_idx_5_1_00 = index.mul %row_local_5_1_0, %two : index
+    %a_min_idx_5_1_0 = index.add %a_ds_idx_5_1_00, %one : index
+    %b_ds_idx_5_1_00 = index.mul %b_col_local_5_1_0, %two : index
+    %b_s_idx_5_1_0 = index.add %b_ds_idx_5_1_00, %one : index
+    %ad_5_1_0 = view.load %a_ds_view[%a_ds_idx_5_1_00] : view<128xf32, #dense> -> f32
+    %amin_5_1_0 = view.load %a_ds_view[%a_min_idx_5_1_0] : view<128xf32, #dense> -> f32
+    %bd_5_1_0 = view.load %b_ds_view[%b_ds_idx_5_1_00] : view<128xf32, #dense> -> f32
+    %bs_5_1_0 = view.load %b_ds_view[%b_s_idx_5_1_0] : view<128xf32, #dense> -> f32
+    %qf_5_1_0 = scalar.sitofp %qsum_5_1_0 : i32 to f32
+    %v_5_1_00 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_5_1_0, %ad_5_1_0 : f32
+    %v_5_1_01 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_5_1_00, %bd_5_1_0 : f32
+    %m_5_1_0 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_5_1_0, %bs_5_1_0 : f32
+    %contrib_5_1_0 = scalar.subf<reassoc|nnan|ninf|nsz> %v_5_1_01, %m_5_1_0 : f32
+    %next_5_1_0 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_5_1_0, %contrib_5_1_0 : f32
+    %row_local_5_1_10 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_5_1_1 = index.add %row_local_5_1_10, %c1 : index
+    %b_col_local_5_1_10 = index.add %warp_col_base, %c5x4 : index
+    %b_col_local_5_1_11 = index.add %b_col_local_5_1_10, %tiwc2 : index
+    %b_col_local_5_1_1 = index.add %b_col_local_5_1_11, %c1 : index
+    %qsum_5_1_1 = scf.for %iqs_5_1_1 = [%zero_index to %eight step %one](%qacc_5_1_1 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_5_1_1 = index.div %iqs_5_1_1, %two : index
+      %a_q_row_5_1_1 = index.mul %row_local_5_1_1, %four : index
+      %a_q_idx_5_1_1 = index.add %a_q_row_5_1_1, %a_q_pair_5_1_1 : index
+      %a_word_i32_5_1_1 = view.load %a_qs_view[%a_q_idx_5_1_1] : view<256xi32, #dense> -> i32
+      %iqs_mod2_5_1_1 = index.rem %iqs_5_1_1, %two : index
+      %iqs_mod2_i32_5_1_1 = index.cast %iqs_mod2_5_1_1 : index to i32
+      %a_shift_5_1_1 = scalar.muli %iqs_mod2_i32_5_1_1, %four_i32 : i32
+      %a_shifted_5_1_1 = scalar.shrui %a_word_i32_5_1_1, %a_shift_5_1_1 : i32
+      %a_masked_5_1_1 = scalar.andi %a_shifted_5_1_1, %mask_0f0f0f0f : i32
+      %a_vec_word_5_1_1 = vector.from_elements %a_masked_5_1_1 : vector<1xi32>
+      %a_vec_5_1_1 = vector.bitcast %a_vec_word_5_1_1 : vector<1xi32> to vector<4xi8>
+      %b_q_row_5_1_1 = index.mul %b_col_local_5_1_1, %eight : index
+      %b_q_idx_5_1_1 = index.add %b_q_row_5_1_1, %iqs_5_1_1 : index
+      %b_word_5_1_1 = vector.load %b_qs_view[%b_q_idx_5_1_1] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_5_1_1 = vector.bitcast %b_word_5_1_1 : vector<1xi32> to vector<4xi8>
+      %dot_vec_5_1_1 = vector.dot4i<u8s8> %a_vec_5_1_1, %b_vec_5_1_1, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_5_1_1 = vector.extract %dot_vec_5_1_1[0] : vector<1xi32> -> i32
+      %qnext_5_1_1 = scalar.addi %qacc_5_1_1, %dot_5_1_1 : i32
+      scf.yield %qnext_5_1_1 : i32
+    }
+    %a_ds_idx_5_1_10 = index.mul %row_local_5_1_1, %two : index
+    %a_min_idx_5_1_1 = index.add %a_ds_idx_5_1_10, %one : index
+    %b_ds_idx_5_1_10 = index.mul %b_col_local_5_1_1, %two : index
+    %b_s_idx_5_1_1 = index.add %b_ds_idx_5_1_10, %one : index
+    %ad_5_1_1 = view.load %a_ds_view[%a_ds_idx_5_1_10] : view<128xf32, #dense> -> f32
+    %amin_5_1_1 = view.load %a_ds_view[%a_min_idx_5_1_1] : view<128xf32, #dense> -> f32
+    %bd_5_1_1 = view.load %b_ds_view[%b_ds_idx_5_1_10] : view<128xf32, #dense> -> f32
+    %bs_5_1_1 = view.load %b_ds_view[%b_s_idx_5_1_1] : view<128xf32, #dense> -> f32
+    %qf_5_1_1 = scalar.sitofp %qsum_5_1_1 : i32 to f32
+    %v_5_1_10 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_5_1_1, %ad_5_1_1 : f32
+    %v_5_1_11 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_5_1_10, %bd_5_1_1 : f32
+    %m_5_1_1 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_5_1_1, %bs_5_1_1 : f32
+    %contrib_5_1_1 = scalar.subf<reassoc|nnan|ninf|nsz> %v_5_1_11, %m_5_1_1 : f32
+    %next_5_1_1 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_5_1_1, %contrib_5_1_1 : f32
+    %row_local_6_0_00 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_6_0_0 = index.add %row_local_6_0_00, %c0 : index
+    %b_col_local_6_0_00 = index.add %warp_col_base, %c6x4 : index
+    %b_col_local_6_0_01 = index.add %b_col_local_6_0_00, %tiwc2 : index
+    %b_col_local_6_0_0 = index.add %b_col_local_6_0_01, %c0 : index
+    %qsum_6_0_0 = scf.for %iqs_6_0_0 = [%zero_index to %eight step %one](%qacc_6_0_0 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_6_0_0 = index.div %iqs_6_0_0, %two : index
+      %a_q_row_6_0_0 = index.mul %row_local_6_0_0, %four : index
+      %a_q_idx_6_0_0 = index.add %a_q_row_6_0_0, %a_q_pair_6_0_0 : index
+      %a_word_i32_6_0_0 = view.load %a_qs_view[%a_q_idx_6_0_0] : view<256xi32, #dense> -> i32
+      %iqs_mod2_6_0_0 = index.rem %iqs_6_0_0, %two : index
+      %iqs_mod2_i32_6_0_0 = index.cast %iqs_mod2_6_0_0 : index to i32
+      %a_shift_6_0_0 = scalar.muli %iqs_mod2_i32_6_0_0, %four_i32 : i32
+      %a_shifted_6_0_0 = scalar.shrui %a_word_i32_6_0_0, %a_shift_6_0_0 : i32
+      %a_masked_6_0_0 = scalar.andi %a_shifted_6_0_0, %mask_0f0f0f0f : i32
+      %a_vec_word_6_0_0 = vector.from_elements %a_masked_6_0_0 : vector<1xi32>
+      %a_vec_6_0_0 = vector.bitcast %a_vec_word_6_0_0 : vector<1xi32> to vector<4xi8>
+      %b_q_row_6_0_0 = index.mul %b_col_local_6_0_0, %eight : index
+      %b_q_idx_6_0_0 = index.add %b_q_row_6_0_0, %iqs_6_0_0 : index
+      %b_word_6_0_0 = vector.load %b_qs_view[%b_q_idx_6_0_0] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_6_0_0 = vector.bitcast %b_word_6_0_0 : vector<1xi32> to vector<4xi8>
+      %dot_vec_6_0_0 = vector.dot4i<u8s8> %a_vec_6_0_0, %b_vec_6_0_0, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_6_0_0 = vector.extract %dot_vec_6_0_0[0] : vector<1xi32> -> i32
+      %qnext_6_0_0 = scalar.addi %qacc_6_0_0, %dot_6_0_0 : i32
+      scf.yield %qnext_6_0_0 : i32
+    }
+    %a_ds_idx_6_0_00 = index.mul %row_local_6_0_0, %two : index
+    %a_min_idx_6_0_0 = index.add %a_ds_idx_6_0_00, %one : index
+    %b_ds_idx_6_0_00 = index.mul %b_col_local_6_0_0, %two : index
+    %b_s_idx_6_0_0 = index.add %b_ds_idx_6_0_00, %one : index
+    %ad_6_0_0 = view.load %a_ds_view[%a_ds_idx_6_0_00] : view<128xf32, #dense> -> f32
+    %amin_6_0_0 = view.load %a_ds_view[%a_min_idx_6_0_0] : view<128xf32, #dense> -> f32
+    %bd_6_0_0 = view.load %b_ds_view[%b_ds_idx_6_0_00] : view<128xf32, #dense> -> f32
+    %bs_6_0_0 = view.load %b_ds_view[%b_s_idx_6_0_0] : view<128xf32, #dense> -> f32
+    %qf_6_0_0 = scalar.sitofp %qsum_6_0_0 : i32 to f32
+    %v_6_0_00 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_6_0_0, %ad_6_0_0 : f32
+    %v_6_0_01 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_6_0_00, %bd_6_0_0 : f32
+    %m_6_0_0 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_6_0_0, %bs_6_0_0 : f32
+    %contrib_6_0_0 = scalar.subf<reassoc|nnan|ninf|nsz> %v_6_0_01, %m_6_0_0 : f32
+    %next_6_0_0 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_6_0_0, %contrib_6_0_0 : f32
+    %row_local_6_0_10 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_6_0_1 = index.add %row_local_6_0_10, %c0 : index
+    %b_col_local_6_0_10 = index.add %warp_col_base, %c6x4 : index
+    %b_col_local_6_0_11 = index.add %b_col_local_6_0_10, %tiwc2 : index
+    %b_col_local_6_0_1 = index.add %b_col_local_6_0_11, %c1 : index
+    %qsum_6_0_1 = scf.for %iqs_6_0_1 = [%zero_index to %eight step %one](%qacc_6_0_1 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_6_0_1 = index.div %iqs_6_0_1, %two : index
+      %a_q_row_6_0_1 = index.mul %row_local_6_0_1, %four : index
+      %a_q_idx_6_0_1 = index.add %a_q_row_6_0_1, %a_q_pair_6_0_1 : index
+      %a_word_i32_6_0_1 = view.load %a_qs_view[%a_q_idx_6_0_1] : view<256xi32, #dense> -> i32
+      %iqs_mod2_6_0_1 = index.rem %iqs_6_0_1, %two : index
+      %iqs_mod2_i32_6_0_1 = index.cast %iqs_mod2_6_0_1 : index to i32
+      %a_shift_6_0_1 = scalar.muli %iqs_mod2_i32_6_0_1, %four_i32 : i32
+      %a_shifted_6_0_1 = scalar.shrui %a_word_i32_6_0_1, %a_shift_6_0_1 : i32
+      %a_masked_6_0_1 = scalar.andi %a_shifted_6_0_1, %mask_0f0f0f0f : i32
+      %a_vec_word_6_0_1 = vector.from_elements %a_masked_6_0_1 : vector<1xi32>
+      %a_vec_6_0_1 = vector.bitcast %a_vec_word_6_0_1 : vector<1xi32> to vector<4xi8>
+      %b_q_row_6_0_1 = index.mul %b_col_local_6_0_1, %eight : index
+      %b_q_idx_6_0_1 = index.add %b_q_row_6_0_1, %iqs_6_0_1 : index
+      %b_word_6_0_1 = vector.load %b_qs_view[%b_q_idx_6_0_1] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_6_0_1 = vector.bitcast %b_word_6_0_1 : vector<1xi32> to vector<4xi8>
+      %dot_vec_6_0_1 = vector.dot4i<u8s8> %a_vec_6_0_1, %b_vec_6_0_1, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_6_0_1 = vector.extract %dot_vec_6_0_1[0] : vector<1xi32> -> i32
+      %qnext_6_0_1 = scalar.addi %qacc_6_0_1, %dot_6_0_1 : i32
+      scf.yield %qnext_6_0_1 : i32
+    }
+    %a_ds_idx_6_0_10 = index.mul %row_local_6_0_1, %two : index
+    %a_min_idx_6_0_1 = index.add %a_ds_idx_6_0_10, %one : index
+    %b_ds_idx_6_0_10 = index.mul %b_col_local_6_0_1, %two : index
+    %b_s_idx_6_0_1 = index.add %b_ds_idx_6_0_10, %one : index
+    %ad_6_0_1 = view.load %a_ds_view[%a_ds_idx_6_0_10] : view<128xf32, #dense> -> f32
+    %amin_6_0_1 = view.load %a_ds_view[%a_min_idx_6_0_1] : view<128xf32, #dense> -> f32
+    %bd_6_0_1 = view.load %b_ds_view[%b_ds_idx_6_0_10] : view<128xf32, #dense> -> f32
+    %bs_6_0_1 = view.load %b_ds_view[%b_s_idx_6_0_1] : view<128xf32, #dense> -> f32
+    %qf_6_0_1 = scalar.sitofp %qsum_6_0_1 : i32 to f32
+    %v_6_0_10 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_6_0_1, %ad_6_0_1 : f32
+    %v_6_0_11 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_6_0_10, %bd_6_0_1 : f32
+    %m_6_0_1 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_6_0_1, %bs_6_0_1 : f32
+    %contrib_6_0_1 = scalar.subf<reassoc|nnan|ninf|nsz> %v_6_0_11, %m_6_0_1 : f32
+    %next_6_0_1 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_6_0_1, %contrib_6_0_1 : f32
+    %row_local_6_1_00 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_6_1_0 = index.add %row_local_6_1_00, %c1 : index
+    %b_col_local_6_1_00 = index.add %warp_col_base, %c6x4 : index
+    %b_col_local_6_1_01 = index.add %b_col_local_6_1_00, %tiwc2 : index
+    %b_col_local_6_1_0 = index.add %b_col_local_6_1_01, %c0 : index
+    %qsum_6_1_0 = scf.for %iqs_6_1_0 = [%zero_index to %eight step %one](%qacc_6_1_0 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_6_1_0 = index.div %iqs_6_1_0, %two : index
+      %a_q_row_6_1_0 = index.mul %row_local_6_1_0, %four : index
+      %a_q_idx_6_1_0 = index.add %a_q_row_6_1_0, %a_q_pair_6_1_0 : index
+      %a_word_i32_6_1_0 = view.load %a_qs_view[%a_q_idx_6_1_0] : view<256xi32, #dense> -> i32
+      %iqs_mod2_6_1_0 = index.rem %iqs_6_1_0, %two : index
+      %iqs_mod2_i32_6_1_0 = index.cast %iqs_mod2_6_1_0 : index to i32
+      %a_shift_6_1_0 = scalar.muli %iqs_mod2_i32_6_1_0, %four_i32 : i32
+      %a_shifted_6_1_0 = scalar.shrui %a_word_i32_6_1_0, %a_shift_6_1_0 : i32
+      %a_masked_6_1_0 = scalar.andi %a_shifted_6_1_0, %mask_0f0f0f0f : i32
+      %a_vec_word_6_1_0 = vector.from_elements %a_masked_6_1_0 : vector<1xi32>
+      %a_vec_6_1_0 = vector.bitcast %a_vec_word_6_1_0 : vector<1xi32> to vector<4xi8>
+      %b_q_row_6_1_0 = index.mul %b_col_local_6_1_0, %eight : index
+      %b_q_idx_6_1_0 = index.add %b_q_row_6_1_0, %iqs_6_1_0 : index
+      %b_word_6_1_0 = vector.load %b_qs_view[%b_q_idx_6_1_0] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_6_1_0 = vector.bitcast %b_word_6_1_0 : vector<1xi32> to vector<4xi8>
+      %dot_vec_6_1_0 = vector.dot4i<u8s8> %a_vec_6_1_0, %b_vec_6_1_0, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_6_1_0 = vector.extract %dot_vec_6_1_0[0] : vector<1xi32> -> i32
+      %qnext_6_1_0 = scalar.addi %qacc_6_1_0, %dot_6_1_0 : i32
+      scf.yield %qnext_6_1_0 : i32
+    }
+    %a_ds_idx_6_1_00 = index.mul %row_local_6_1_0, %two : index
+    %a_min_idx_6_1_0 = index.add %a_ds_idx_6_1_00, %one : index
+    %b_ds_idx_6_1_00 = index.mul %b_col_local_6_1_0, %two : index
+    %b_s_idx_6_1_0 = index.add %b_ds_idx_6_1_00, %one : index
+    %ad_6_1_0 = view.load %a_ds_view[%a_ds_idx_6_1_00] : view<128xf32, #dense> -> f32
+    %amin_6_1_0 = view.load %a_ds_view[%a_min_idx_6_1_0] : view<128xf32, #dense> -> f32
+    %bd_6_1_0 = view.load %b_ds_view[%b_ds_idx_6_1_00] : view<128xf32, #dense> -> f32
+    %bs_6_1_0 = view.load %b_ds_view[%b_s_idx_6_1_0] : view<128xf32, #dense> -> f32
+    %qf_6_1_0 = scalar.sitofp %qsum_6_1_0 : i32 to f32
+    %v_6_1_00 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_6_1_0, %ad_6_1_0 : f32
+    %v_6_1_01 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_6_1_00, %bd_6_1_0 : f32
+    %m_6_1_0 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_6_1_0, %bs_6_1_0 : f32
+    %contrib_6_1_0 = scalar.subf<reassoc|nnan|ninf|nsz> %v_6_1_01, %m_6_1_0 : f32
+    %next_6_1_0 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_6_1_0, %contrib_6_1_0 : f32
+    %row_local_6_1_10 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_6_1_1 = index.add %row_local_6_1_10, %c1 : index
+    %b_col_local_6_1_10 = index.add %warp_col_base, %c6x4 : index
+    %b_col_local_6_1_11 = index.add %b_col_local_6_1_10, %tiwc2 : index
+    %b_col_local_6_1_1 = index.add %b_col_local_6_1_11, %c1 : index
+    %qsum_6_1_1 = scf.for %iqs_6_1_1 = [%zero_index to %eight step %one](%qacc_6_1_1 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_6_1_1 = index.div %iqs_6_1_1, %two : index
+      %a_q_row_6_1_1 = index.mul %row_local_6_1_1, %four : index
+      %a_q_idx_6_1_1 = index.add %a_q_row_6_1_1, %a_q_pair_6_1_1 : index
+      %a_word_i32_6_1_1 = view.load %a_qs_view[%a_q_idx_6_1_1] : view<256xi32, #dense> -> i32
+      %iqs_mod2_6_1_1 = index.rem %iqs_6_1_1, %two : index
+      %iqs_mod2_i32_6_1_1 = index.cast %iqs_mod2_6_1_1 : index to i32
+      %a_shift_6_1_1 = scalar.muli %iqs_mod2_i32_6_1_1, %four_i32 : i32
+      %a_shifted_6_1_1 = scalar.shrui %a_word_i32_6_1_1, %a_shift_6_1_1 : i32
+      %a_masked_6_1_1 = scalar.andi %a_shifted_6_1_1, %mask_0f0f0f0f : i32
+      %a_vec_word_6_1_1 = vector.from_elements %a_masked_6_1_1 : vector<1xi32>
+      %a_vec_6_1_1 = vector.bitcast %a_vec_word_6_1_1 : vector<1xi32> to vector<4xi8>
+      %b_q_row_6_1_1 = index.mul %b_col_local_6_1_1, %eight : index
+      %b_q_idx_6_1_1 = index.add %b_q_row_6_1_1, %iqs_6_1_1 : index
+      %b_word_6_1_1 = vector.load %b_qs_view[%b_q_idx_6_1_1] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_6_1_1 = vector.bitcast %b_word_6_1_1 : vector<1xi32> to vector<4xi8>
+      %dot_vec_6_1_1 = vector.dot4i<u8s8> %a_vec_6_1_1, %b_vec_6_1_1, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_6_1_1 = vector.extract %dot_vec_6_1_1[0] : vector<1xi32> -> i32
+      %qnext_6_1_1 = scalar.addi %qacc_6_1_1, %dot_6_1_1 : i32
+      scf.yield %qnext_6_1_1 : i32
+    }
+    %a_ds_idx_6_1_10 = index.mul %row_local_6_1_1, %two : index
+    %a_min_idx_6_1_1 = index.add %a_ds_idx_6_1_10, %one : index
+    %b_ds_idx_6_1_10 = index.mul %b_col_local_6_1_1, %two : index
+    %b_s_idx_6_1_1 = index.add %b_ds_idx_6_1_10, %one : index
+    %ad_6_1_1 = view.load %a_ds_view[%a_ds_idx_6_1_10] : view<128xf32, #dense> -> f32
+    %amin_6_1_1 = view.load %a_ds_view[%a_min_idx_6_1_1] : view<128xf32, #dense> -> f32
+    %bd_6_1_1 = view.load %b_ds_view[%b_ds_idx_6_1_10] : view<128xf32, #dense> -> f32
+    %bs_6_1_1 = view.load %b_ds_view[%b_s_idx_6_1_1] : view<128xf32, #dense> -> f32
+    %qf_6_1_1 = scalar.sitofp %qsum_6_1_1 : i32 to f32
+    %v_6_1_10 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_6_1_1, %ad_6_1_1 : f32
+    %v_6_1_11 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_6_1_10, %bd_6_1_1 : f32
+    %m_6_1_1 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_6_1_1, %bs_6_1_1 : f32
+    %contrib_6_1_1 = scalar.subf<reassoc|nnan|ninf|nsz> %v_6_1_11, %m_6_1_1 : f32
+    %next_6_1_1 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_6_1_1, %contrib_6_1_1 : f32
+    %row_local_7_0_00 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_7_0_0 = index.add %row_local_7_0_00, %c0 : index
+    %b_col_local_7_0_00 = index.add %warp_col_base, %c7x4 : index
+    %b_col_local_7_0_01 = index.add %b_col_local_7_0_00, %tiwc2 : index
+    %b_col_local_7_0_0 = index.add %b_col_local_7_0_01, %c0 : index
+    %qsum_7_0_0 = scf.for %iqs_7_0_0 = [%zero_index to %eight step %one](%qacc_7_0_0 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_7_0_0 = index.div %iqs_7_0_0, %two : index
+      %a_q_row_7_0_0 = index.mul %row_local_7_0_0, %four : index
+      %a_q_idx_7_0_0 = index.add %a_q_row_7_0_0, %a_q_pair_7_0_0 : index
+      %a_word_i32_7_0_0 = view.load %a_qs_view[%a_q_idx_7_0_0] : view<256xi32, #dense> -> i32
+      %iqs_mod2_7_0_0 = index.rem %iqs_7_0_0, %two : index
+      %iqs_mod2_i32_7_0_0 = index.cast %iqs_mod2_7_0_0 : index to i32
+      %a_shift_7_0_0 = scalar.muli %iqs_mod2_i32_7_0_0, %four_i32 : i32
+      %a_shifted_7_0_0 = scalar.shrui %a_word_i32_7_0_0, %a_shift_7_0_0 : i32
+      %a_masked_7_0_0 = scalar.andi %a_shifted_7_0_0, %mask_0f0f0f0f : i32
+      %a_vec_word_7_0_0 = vector.from_elements %a_masked_7_0_0 : vector<1xi32>
+      %a_vec_7_0_0 = vector.bitcast %a_vec_word_7_0_0 : vector<1xi32> to vector<4xi8>
+      %b_q_row_7_0_0 = index.mul %b_col_local_7_0_0, %eight : index
+      %b_q_idx_7_0_0 = index.add %b_q_row_7_0_0, %iqs_7_0_0 : index
+      %b_word_7_0_0 = vector.load %b_qs_view[%b_q_idx_7_0_0] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_7_0_0 = vector.bitcast %b_word_7_0_0 : vector<1xi32> to vector<4xi8>
+      %dot_vec_7_0_0 = vector.dot4i<u8s8> %a_vec_7_0_0, %b_vec_7_0_0, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_7_0_0 = vector.extract %dot_vec_7_0_0[0] : vector<1xi32> -> i32
+      %qnext_7_0_0 = scalar.addi %qacc_7_0_0, %dot_7_0_0 : i32
+      scf.yield %qnext_7_0_0 : i32
+    }
+    %a_ds_idx_7_0_00 = index.mul %row_local_7_0_0, %two : index
+    %a_min_idx_7_0_0 = index.add %a_ds_idx_7_0_00, %one : index
+    %b_ds_idx_7_0_00 = index.mul %b_col_local_7_0_0, %two : index
+    %b_s_idx_7_0_0 = index.add %b_ds_idx_7_0_00, %one : index
+    %ad_7_0_0 = view.load %a_ds_view[%a_ds_idx_7_0_00] : view<128xf32, #dense> -> f32
+    %amin_7_0_0 = view.load %a_ds_view[%a_min_idx_7_0_0] : view<128xf32, #dense> -> f32
+    %bd_7_0_0 = view.load %b_ds_view[%b_ds_idx_7_0_00] : view<128xf32, #dense> -> f32
+    %bs_7_0_0 = view.load %b_ds_view[%b_s_idx_7_0_0] : view<128xf32, #dense> -> f32
+    %qf_7_0_0 = scalar.sitofp %qsum_7_0_0 : i32 to f32
+    %v_7_0_00 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_7_0_0, %ad_7_0_0 : f32
+    %v_7_0_01 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_7_0_00, %bd_7_0_0 : f32
+    %m_7_0_0 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_7_0_0, %bs_7_0_0 : f32
+    %contrib_7_0_0 = scalar.subf<reassoc|nnan|ninf|nsz> %v_7_0_01, %m_7_0_0 : f32
+    %next_7_0_0 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_7_0_0, %contrib_7_0_0 : f32
+    %row_local_7_0_10 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_7_0_1 = index.add %row_local_7_0_10, %c0 : index
+    %b_col_local_7_0_10 = index.add %warp_col_base, %c7x4 : index
+    %b_col_local_7_0_11 = index.add %b_col_local_7_0_10, %tiwc2 : index
+    %b_col_local_7_0_1 = index.add %b_col_local_7_0_11, %c1 : index
+    %qsum_7_0_1 = scf.for %iqs_7_0_1 = [%zero_index to %eight step %one](%qacc_7_0_1 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_7_0_1 = index.div %iqs_7_0_1, %two : index
+      %a_q_row_7_0_1 = index.mul %row_local_7_0_1, %four : index
+      %a_q_idx_7_0_1 = index.add %a_q_row_7_0_1, %a_q_pair_7_0_1 : index
+      %a_word_i32_7_0_1 = view.load %a_qs_view[%a_q_idx_7_0_1] : view<256xi32, #dense> -> i32
+      %iqs_mod2_7_0_1 = index.rem %iqs_7_0_1, %two : index
+      %iqs_mod2_i32_7_0_1 = index.cast %iqs_mod2_7_0_1 : index to i32
+      %a_shift_7_0_1 = scalar.muli %iqs_mod2_i32_7_0_1, %four_i32 : i32
+      %a_shifted_7_0_1 = scalar.shrui %a_word_i32_7_0_1, %a_shift_7_0_1 : i32
+      %a_masked_7_0_1 = scalar.andi %a_shifted_7_0_1, %mask_0f0f0f0f : i32
+      %a_vec_word_7_0_1 = vector.from_elements %a_masked_7_0_1 : vector<1xi32>
+      %a_vec_7_0_1 = vector.bitcast %a_vec_word_7_0_1 : vector<1xi32> to vector<4xi8>
+      %b_q_row_7_0_1 = index.mul %b_col_local_7_0_1, %eight : index
+      %b_q_idx_7_0_1 = index.add %b_q_row_7_0_1, %iqs_7_0_1 : index
+      %b_word_7_0_1 = vector.load %b_qs_view[%b_q_idx_7_0_1] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_7_0_1 = vector.bitcast %b_word_7_0_1 : vector<1xi32> to vector<4xi8>
+      %dot_vec_7_0_1 = vector.dot4i<u8s8> %a_vec_7_0_1, %b_vec_7_0_1, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_7_0_1 = vector.extract %dot_vec_7_0_1[0] : vector<1xi32> -> i32
+      %qnext_7_0_1 = scalar.addi %qacc_7_0_1, %dot_7_0_1 : i32
+      scf.yield %qnext_7_0_1 : i32
+    }
+    %a_ds_idx_7_0_10 = index.mul %row_local_7_0_1, %two : index
+    %a_min_idx_7_0_1 = index.add %a_ds_idx_7_0_10, %one : index
+    %b_ds_idx_7_0_10 = index.mul %b_col_local_7_0_1, %two : index
+    %b_s_idx_7_0_1 = index.add %b_ds_idx_7_0_10, %one : index
+    %ad_7_0_1 = view.load %a_ds_view[%a_ds_idx_7_0_10] : view<128xf32, #dense> -> f32
+    %amin_7_0_1 = view.load %a_ds_view[%a_min_idx_7_0_1] : view<128xf32, #dense> -> f32
+    %bd_7_0_1 = view.load %b_ds_view[%b_ds_idx_7_0_10] : view<128xf32, #dense> -> f32
+    %bs_7_0_1 = view.load %b_ds_view[%b_s_idx_7_0_1] : view<128xf32, #dense> -> f32
+    %qf_7_0_1 = scalar.sitofp %qsum_7_0_1 : i32 to f32
+    %v_7_0_10 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_7_0_1, %ad_7_0_1 : f32
+    %v_7_0_11 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_7_0_10, %bd_7_0_1 : f32
+    %m_7_0_1 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_7_0_1, %bs_7_0_1 : f32
+    %contrib_7_0_1 = scalar.subf<reassoc|nnan|ninf|nsz> %v_7_0_11, %m_7_0_1 : f32
+    %next_7_0_1 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_7_0_1, %contrib_7_0_1 : f32
+    %row_local_7_1_00 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_7_1_0 = index.add %row_local_7_1_00, %c1 : index
+    %b_col_local_7_1_00 = index.add %warp_col_base, %c7x4 : index
+    %b_col_local_7_1_01 = index.add %b_col_local_7_1_00, %tiwc2 : index
+    %b_col_local_7_1_0 = index.add %b_col_local_7_1_01, %c0 : index
+    %qsum_7_1_0 = scf.for %iqs_7_1_0 = [%zero_index to %eight step %one](%qacc_7_1_0 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_7_1_0 = index.div %iqs_7_1_0, %two : index
+      %a_q_row_7_1_0 = index.mul %row_local_7_1_0, %four : index
+      %a_q_idx_7_1_0 = index.add %a_q_row_7_1_0, %a_q_pair_7_1_0 : index
+      %a_word_i32_7_1_0 = view.load %a_qs_view[%a_q_idx_7_1_0] : view<256xi32, #dense> -> i32
+      %iqs_mod2_7_1_0 = index.rem %iqs_7_1_0, %two : index
+      %iqs_mod2_i32_7_1_0 = index.cast %iqs_mod2_7_1_0 : index to i32
+      %a_shift_7_1_0 = scalar.muli %iqs_mod2_i32_7_1_0, %four_i32 : i32
+      %a_shifted_7_1_0 = scalar.shrui %a_word_i32_7_1_0, %a_shift_7_1_0 : i32
+      %a_masked_7_1_0 = scalar.andi %a_shifted_7_1_0, %mask_0f0f0f0f : i32
+      %a_vec_word_7_1_0 = vector.from_elements %a_masked_7_1_0 : vector<1xi32>
+      %a_vec_7_1_0 = vector.bitcast %a_vec_word_7_1_0 : vector<1xi32> to vector<4xi8>
+      %b_q_row_7_1_0 = index.mul %b_col_local_7_1_0, %eight : index
+      %b_q_idx_7_1_0 = index.add %b_q_row_7_1_0, %iqs_7_1_0 : index
+      %b_word_7_1_0 = vector.load %b_qs_view[%b_q_idx_7_1_0] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_7_1_0 = vector.bitcast %b_word_7_1_0 : vector<1xi32> to vector<4xi8>
+      %dot_vec_7_1_0 = vector.dot4i<u8s8> %a_vec_7_1_0, %b_vec_7_1_0, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_7_1_0 = vector.extract %dot_vec_7_1_0[0] : vector<1xi32> -> i32
+      %qnext_7_1_0 = scalar.addi %qacc_7_1_0, %dot_7_1_0 : i32
+      scf.yield %qnext_7_1_0 : i32
+    }
+    %a_ds_idx_7_1_00 = index.mul %row_local_7_1_0, %two : index
+    %a_min_idx_7_1_0 = index.add %a_ds_idx_7_1_00, %one : index
+    %b_ds_idx_7_1_00 = index.mul %b_col_local_7_1_0, %two : index
+    %b_s_idx_7_1_0 = index.add %b_ds_idx_7_1_00, %one : index
+    %ad_7_1_0 = view.load %a_ds_view[%a_ds_idx_7_1_00] : view<128xf32, #dense> -> f32
+    %amin_7_1_0 = view.load %a_ds_view[%a_min_idx_7_1_0] : view<128xf32, #dense> -> f32
+    %bd_7_1_0 = view.load %b_ds_view[%b_ds_idx_7_1_00] : view<128xf32, #dense> -> f32
+    %bs_7_1_0 = view.load %b_ds_view[%b_s_idx_7_1_0] : view<128xf32, #dense> -> f32
+    %qf_7_1_0 = scalar.sitofp %qsum_7_1_0 : i32 to f32
+    %v_7_1_00 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_7_1_0, %ad_7_1_0 : f32
+    %v_7_1_01 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_7_1_00, %bd_7_1_0 : f32
+    %m_7_1_0 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_7_1_0, %bs_7_1_0 : f32
+    %contrib_7_1_0 = scalar.subf<reassoc|nnan|ninf|nsz> %v_7_1_01, %m_7_1_0 : f32
+    %next_7_1_0 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_7_1_0, %contrib_7_1_0 : f32
+    %row_local_7_1_10 = index.add %warp_row_base, %tiwr2 : index
+    %row_local_7_1_1 = index.add %row_local_7_1_10, %c1 : index
+    %b_col_local_7_1_10 = index.add %warp_col_base, %c7x4 : index
+    %b_col_local_7_1_11 = index.add %b_col_local_7_1_10, %tiwc2 : index
+    %b_col_local_7_1_1 = index.add %b_col_local_7_1_11, %c1 : index
+    %qsum_7_1_1 = scf.for %iqs_7_1_1 = [%zero_index to %eight step %one](%qacc_7_1_1 = %zero_i32 : i32) -> (i32) unroll(%eight) {
+      %a_q_pair_7_1_1 = index.div %iqs_7_1_1, %two : index
+      %a_q_row_7_1_1 = index.mul %row_local_7_1_1, %four : index
+      %a_q_idx_7_1_1 = index.add %a_q_row_7_1_1, %a_q_pair_7_1_1 : index
+      %a_word_i32_7_1_1 = view.load %a_qs_view[%a_q_idx_7_1_1] : view<256xi32, #dense> -> i32
+      %iqs_mod2_7_1_1 = index.rem %iqs_7_1_1, %two : index
+      %iqs_mod2_i32_7_1_1 = index.cast %iqs_mod2_7_1_1 : index to i32
+      %a_shift_7_1_1 = scalar.muli %iqs_mod2_i32_7_1_1, %four_i32 : i32
+      %a_shifted_7_1_1 = scalar.shrui %a_word_i32_7_1_1, %a_shift_7_1_1 : i32
+      %a_masked_7_1_1 = scalar.andi %a_shifted_7_1_1, %mask_0f0f0f0f : i32
+      %a_vec_word_7_1_1 = vector.from_elements %a_masked_7_1_1 : vector<1xi32>
+      %a_vec_7_1_1 = vector.bitcast %a_vec_word_7_1_1 : vector<1xi32> to vector<4xi8>
+      %b_q_row_7_1_1 = index.mul %b_col_local_7_1_1, %eight : index
+      %b_q_idx_7_1_1 = index.add %b_q_row_7_1_1, %iqs_7_1_1 : index
+      %b_word_7_1_1 = vector.load %b_qs_view[%b_q_idx_7_1_1] : view<512xi32, #dense> -> vector<1xi32>
+      %b_vec_7_1_1 = vector.bitcast %b_word_7_1_1 : vector<1xi32> to vector<4xi8>
+      %dot_vec_7_1_1 = vector.dot4i<u8s8> %a_vec_7_1_1, %b_vec_7_1_1, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_7_1_1 = vector.extract %dot_vec_7_1_1[0] : vector<1xi32> -> i32
+      %qnext_7_1_1 = scalar.addi %qacc_7_1_1, %dot_7_1_1 : i32
+      scf.yield %qnext_7_1_1 : i32
+    }
+    %a_ds_idx_7_1_10 = index.mul %row_local_7_1_1, %two : index
+    %a_min_idx_7_1_1 = index.add %a_ds_idx_7_1_10, %one : index
+    %b_ds_idx_7_1_10 = index.mul %b_col_local_7_1_1, %two : index
+    %b_s_idx_7_1_1 = index.add %b_ds_idx_7_1_10, %one : index
+    %ad_7_1_1 = view.load %a_ds_view[%a_ds_idx_7_1_10] : view<128xf32, #dense> -> f32
+    %amin_7_1_1 = view.load %a_ds_view[%a_min_idx_7_1_1] : view<128xf32, #dense> -> f32
+    %bd_7_1_1 = view.load %b_ds_view[%b_ds_idx_7_1_10] : view<128xf32, #dense> -> f32
+    %bs_7_1_1 = view.load %b_ds_view[%b_s_idx_7_1_1] : view<128xf32, #dense> -> f32
+    %qf_7_1_1 = scalar.sitofp %qsum_7_1_1 : i32 to f32
+    %v_7_1_10 = scalar.mulf<reassoc|nnan|ninf|nsz> %qf_7_1_1, %ad_7_1_1 : f32
+    %v_7_1_11 = scalar.mulf<reassoc|nnan|ninf|nsz> %v_7_1_10, %bd_7_1_1 : f32
+    %m_7_1_1 = scalar.mulf<reassoc|nnan|ninf|nsz> %amin_7_1_1, %bs_7_1_1 : f32
+    %contrib_7_1_1 = scalar.subf<reassoc|nnan|ninf|nsz> %v_7_1_11, %m_7_1_1 : f32
+    %next_7_1_1 = scalar.addf<reassoc|nnan|ninf|nsz> %acc_7_1_1, %contrib_7_1_1 : f32
+    kernel.barrier<workgroup> {ordering = acq_rel, scope = workgroup}
+    scf.yield %next_0_0_0, %next_0_0_1, %next_0_1_0, %next_0_1_1, %next_1_0_0, %next_1_0_1, %next_1_1_0, %next_1_1_1, %next_2_0_0, %next_2_0_1, %next_2_1_0, %next_2_1_1, %next_3_0_0, %next_3_0_1, %next_3_1_0, %next_3_1_1, %next_4_0_0, %next_4_0_1, %next_4_1_0, %next_4_1_1, %next_5_0_0, %next_5_0_1, %next_5_1_0, %next_5_1_1, %next_6_0_0, %next_6_0_1, %next_6_1_0, %next_6_1_1, %next_7_0_0, %next_7_0_1, %next_7_1_0, %next_7_1_1 : f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32
+    }
+    scf.yield %group_next_0_0_0, %group_next_0_0_1, %group_next_0_1_0, %group_next_0_1_1, %group_next_1_0_0, %group_next_1_0_1, %group_next_1_1_0, %group_next_1_1_1, %group_next_2_0_0, %group_next_2_0_1, %group_next_2_1_0, %group_next_2_1_1, %group_next_3_0_0, %group_next_3_0_1, %group_next_3_1_0, %group_next_3_1_1, %group_next_4_0_0, %group_next_4_0_1, %group_next_4_1_0, %group_next_4_1_1, %group_next_5_0_0, %group_next_5_0_1, %group_next_5_1_0, %group_next_5_1_1, %group_next_6_0_0, %group_next_6_0_1, %group_next_6_1_0, %group_next_6_1_1, %group_next_7_0_0, %group_next_7_0_1, %group_next_7_1_0, %group_next_7_1_1 : f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32
+  }
+  %store_row_local_0_0_00 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_0_0_0 = index.add %store_row_local_0_0_00, %c0 : index
+  %store_row_0_0_0 = index.add %row_base, %store_row_local_0_0_0 : index
+  %store_col_local_0_0_00 = index.add %warp_col_base, %c0x4 : index
+  %store_col_local_0_0_01 = index.add %store_col_local_0_0_00, %tiwc2 : index
+  %store_col_local_0_0_0 = index.add %store_col_local_0_0_01, %c0 : index
+  %store_col_0_0_0 = index.add %col_block_base, %store_col_local_0_0_0 : index
+  %row_valid_0_0_0 = index.cmp ult, %store_row_0_0_0, %rows_bounded : index
+  scf.if %row_valid_0_0_0 {
+    %dst_col_base_0_0_0 = index.mul %store_col_0_0_0, %rows_bounded : index
+    %dst_index_0_0_0 = index.add %dst_col_base_0_0_0, %store_row_0_0_0 : index
+    view.store %sum_0_0_0, %dst_view[%dst_index_0_0_0] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_0_0_10 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_0_0_1 = index.add %store_row_local_0_0_10, %c0 : index
+  %store_row_0_0_1 = index.add %row_base, %store_row_local_0_0_1 : index
+  %store_col_local_0_0_10 = index.add %warp_col_base, %c0x4 : index
+  %store_col_local_0_0_11 = index.add %store_col_local_0_0_10, %tiwc2 : index
+  %store_col_local_0_0_1 = index.add %store_col_local_0_0_11, %c1 : index
+  %store_col_0_0_1 = index.add %col_block_base, %store_col_local_0_0_1 : index
+  %row_valid_0_0_1 = index.cmp ult, %store_row_0_0_1, %rows_bounded : index
+  scf.if %row_valid_0_0_1 {
+    %dst_col_base_0_0_1 = index.mul %store_col_0_0_1, %rows_bounded : index
+    %dst_index_0_0_1 = index.add %dst_col_base_0_0_1, %store_row_0_0_1 : index
+    view.store %sum_0_0_1, %dst_view[%dst_index_0_0_1] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_0_1_00 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_0_1_0 = index.add %store_row_local_0_1_00, %c1 : index
+  %store_row_0_1_0 = index.add %row_base, %store_row_local_0_1_0 : index
+  %store_col_local_0_1_00 = index.add %warp_col_base, %c0x4 : index
+  %store_col_local_0_1_01 = index.add %store_col_local_0_1_00, %tiwc2 : index
+  %store_col_local_0_1_0 = index.add %store_col_local_0_1_01, %c0 : index
+  %store_col_0_1_0 = index.add %col_block_base, %store_col_local_0_1_0 : index
+  %row_valid_0_1_0 = index.cmp ult, %store_row_0_1_0, %rows_bounded : index
+  scf.if %row_valid_0_1_0 {
+    %dst_col_base_0_1_0 = index.mul %store_col_0_1_0, %rows_bounded : index
+    %dst_index_0_1_0 = index.add %dst_col_base_0_1_0, %store_row_0_1_0 : index
+    view.store %sum_0_1_0, %dst_view[%dst_index_0_1_0] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_0_1_10 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_0_1_1 = index.add %store_row_local_0_1_10, %c1 : index
+  %store_row_0_1_1 = index.add %row_base, %store_row_local_0_1_1 : index
+  %store_col_local_0_1_10 = index.add %warp_col_base, %c0x4 : index
+  %store_col_local_0_1_11 = index.add %store_col_local_0_1_10, %tiwc2 : index
+  %store_col_local_0_1_1 = index.add %store_col_local_0_1_11, %c1 : index
+  %store_col_0_1_1 = index.add %col_block_base, %store_col_local_0_1_1 : index
+  %row_valid_0_1_1 = index.cmp ult, %store_row_0_1_1, %rows_bounded : index
+  scf.if %row_valid_0_1_1 {
+    %dst_col_base_0_1_1 = index.mul %store_col_0_1_1, %rows_bounded : index
+    %dst_index_0_1_1 = index.add %dst_col_base_0_1_1, %store_row_0_1_1 : index
+    view.store %sum_0_1_1, %dst_view[%dst_index_0_1_1] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_1_0_00 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_1_0_0 = index.add %store_row_local_1_0_00, %c0 : index
+  %store_row_1_0_0 = index.add %row_base, %store_row_local_1_0_0 : index
+  %store_col_local_1_0_00 = index.add %warp_col_base, %c1x4 : index
+  %store_col_local_1_0_01 = index.add %store_col_local_1_0_00, %tiwc2 : index
+  %store_col_local_1_0_0 = index.add %store_col_local_1_0_01, %c0 : index
+  %store_col_1_0_0 = index.add %col_block_base, %store_col_local_1_0_0 : index
+  %row_valid_1_0_0 = index.cmp ult, %store_row_1_0_0, %rows_bounded : index
+  scf.if %row_valid_1_0_0 {
+    %dst_col_base_1_0_0 = index.mul %store_col_1_0_0, %rows_bounded : index
+    %dst_index_1_0_0 = index.add %dst_col_base_1_0_0, %store_row_1_0_0 : index
+    view.store %sum_1_0_0, %dst_view[%dst_index_1_0_0] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_1_0_10 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_1_0_1 = index.add %store_row_local_1_0_10, %c0 : index
+  %store_row_1_0_1 = index.add %row_base, %store_row_local_1_0_1 : index
+  %store_col_local_1_0_10 = index.add %warp_col_base, %c1x4 : index
+  %store_col_local_1_0_11 = index.add %store_col_local_1_0_10, %tiwc2 : index
+  %store_col_local_1_0_1 = index.add %store_col_local_1_0_11, %c1 : index
+  %store_col_1_0_1 = index.add %col_block_base, %store_col_local_1_0_1 : index
+  %row_valid_1_0_1 = index.cmp ult, %store_row_1_0_1, %rows_bounded : index
+  scf.if %row_valid_1_0_1 {
+    %dst_col_base_1_0_1 = index.mul %store_col_1_0_1, %rows_bounded : index
+    %dst_index_1_0_1 = index.add %dst_col_base_1_0_1, %store_row_1_0_1 : index
+    view.store %sum_1_0_1, %dst_view[%dst_index_1_0_1] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_1_1_00 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_1_1_0 = index.add %store_row_local_1_1_00, %c1 : index
+  %store_row_1_1_0 = index.add %row_base, %store_row_local_1_1_0 : index
+  %store_col_local_1_1_00 = index.add %warp_col_base, %c1x4 : index
+  %store_col_local_1_1_01 = index.add %store_col_local_1_1_00, %tiwc2 : index
+  %store_col_local_1_1_0 = index.add %store_col_local_1_1_01, %c0 : index
+  %store_col_1_1_0 = index.add %col_block_base, %store_col_local_1_1_0 : index
+  %row_valid_1_1_0 = index.cmp ult, %store_row_1_1_0, %rows_bounded : index
+  scf.if %row_valid_1_1_0 {
+    %dst_col_base_1_1_0 = index.mul %store_col_1_1_0, %rows_bounded : index
+    %dst_index_1_1_0 = index.add %dst_col_base_1_1_0, %store_row_1_1_0 : index
+    view.store %sum_1_1_0, %dst_view[%dst_index_1_1_0] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_1_1_10 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_1_1_1 = index.add %store_row_local_1_1_10, %c1 : index
+  %store_row_1_1_1 = index.add %row_base, %store_row_local_1_1_1 : index
+  %store_col_local_1_1_10 = index.add %warp_col_base, %c1x4 : index
+  %store_col_local_1_1_11 = index.add %store_col_local_1_1_10, %tiwc2 : index
+  %store_col_local_1_1_1 = index.add %store_col_local_1_1_11, %c1 : index
+  %store_col_1_1_1 = index.add %col_block_base, %store_col_local_1_1_1 : index
+  %row_valid_1_1_1 = index.cmp ult, %store_row_1_1_1, %rows_bounded : index
+  scf.if %row_valid_1_1_1 {
+    %dst_col_base_1_1_1 = index.mul %store_col_1_1_1, %rows_bounded : index
+    %dst_index_1_1_1 = index.add %dst_col_base_1_1_1, %store_row_1_1_1 : index
+    view.store %sum_1_1_1, %dst_view[%dst_index_1_1_1] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_2_0_00 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_2_0_0 = index.add %store_row_local_2_0_00, %c0 : index
+  %store_row_2_0_0 = index.add %row_base, %store_row_local_2_0_0 : index
+  %store_col_local_2_0_00 = index.add %warp_col_base, %c2x4 : index
+  %store_col_local_2_0_01 = index.add %store_col_local_2_0_00, %tiwc2 : index
+  %store_col_local_2_0_0 = index.add %store_col_local_2_0_01, %c0 : index
+  %store_col_2_0_0 = index.add %col_block_base, %store_col_local_2_0_0 : index
+  %row_valid_2_0_0 = index.cmp ult, %store_row_2_0_0, %rows_bounded : index
+  scf.if %row_valid_2_0_0 {
+    %dst_col_base_2_0_0 = index.mul %store_col_2_0_0, %rows_bounded : index
+    %dst_index_2_0_0 = index.add %dst_col_base_2_0_0, %store_row_2_0_0 : index
+    view.store %sum_2_0_0, %dst_view[%dst_index_2_0_0] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_2_0_10 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_2_0_1 = index.add %store_row_local_2_0_10, %c0 : index
+  %store_row_2_0_1 = index.add %row_base, %store_row_local_2_0_1 : index
+  %store_col_local_2_0_10 = index.add %warp_col_base, %c2x4 : index
+  %store_col_local_2_0_11 = index.add %store_col_local_2_0_10, %tiwc2 : index
+  %store_col_local_2_0_1 = index.add %store_col_local_2_0_11, %c1 : index
+  %store_col_2_0_1 = index.add %col_block_base, %store_col_local_2_0_1 : index
+  %row_valid_2_0_1 = index.cmp ult, %store_row_2_0_1, %rows_bounded : index
+  scf.if %row_valid_2_0_1 {
+    %dst_col_base_2_0_1 = index.mul %store_col_2_0_1, %rows_bounded : index
+    %dst_index_2_0_1 = index.add %dst_col_base_2_0_1, %store_row_2_0_1 : index
+    view.store %sum_2_0_1, %dst_view[%dst_index_2_0_1] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_2_1_00 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_2_1_0 = index.add %store_row_local_2_1_00, %c1 : index
+  %store_row_2_1_0 = index.add %row_base, %store_row_local_2_1_0 : index
+  %store_col_local_2_1_00 = index.add %warp_col_base, %c2x4 : index
+  %store_col_local_2_1_01 = index.add %store_col_local_2_1_00, %tiwc2 : index
+  %store_col_local_2_1_0 = index.add %store_col_local_2_1_01, %c0 : index
+  %store_col_2_1_0 = index.add %col_block_base, %store_col_local_2_1_0 : index
+  %row_valid_2_1_0 = index.cmp ult, %store_row_2_1_0, %rows_bounded : index
+  scf.if %row_valid_2_1_0 {
+    %dst_col_base_2_1_0 = index.mul %store_col_2_1_0, %rows_bounded : index
+    %dst_index_2_1_0 = index.add %dst_col_base_2_1_0, %store_row_2_1_0 : index
+    view.store %sum_2_1_0, %dst_view[%dst_index_2_1_0] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_2_1_10 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_2_1_1 = index.add %store_row_local_2_1_10, %c1 : index
+  %store_row_2_1_1 = index.add %row_base, %store_row_local_2_1_1 : index
+  %store_col_local_2_1_10 = index.add %warp_col_base, %c2x4 : index
+  %store_col_local_2_1_11 = index.add %store_col_local_2_1_10, %tiwc2 : index
+  %store_col_local_2_1_1 = index.add %store_col_local_2_1_11, %c1 : index
+  %store_col_2_1_1 = index.add %col_block_base, %store_col_local_2_1_1 : index
+  %row_valid_2_1_1 = index.cmp ult, %store_row_2_1_1, %rows_bounded : index
+  scf.if %row_valid_2_1_1 {
+    %dst_col_base_2_1_1 = index.mul %store_col_2_1_1, %rows_bounded : index
+    %dst_index_2_1_1 = index.add %dst_col_base_2_1_1, %store_row_2_1_1 : index
+    view.store %sum_2_1_1, %dst_view[%dst_index_2_1_1] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_3_0_00 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_3_0_0 = index.add %store_row_local_3_0_00, %c0 : index
+  %store_row_3_0_0 = index.add %row_base, %store_row_local_3_0_0 : index
+  %store_col_local_3_0_00 = index.add %warp_col_base, %c3x4 : index
+  %store_col_local_3_0_01 = index.add %store_col_local_3_0_00, %tiwc2 : index
+  %store_col_local_3_0_0 = index.add %store_col_local_3_0_01, %c0 : index
+  %store_col_3_0_0 = index.add %col_block_base, %store_col_local_3_0_0 : index
+  %row_valid_3_0_0 = index.cmp ult, %store_row_3_0_0, %rows_bounded : index
+  scf.if %row_valid_3_0_0 {
+    %dst_col_base_3_0_0 = index.mul %store_col_3_0_0, %rows_bounded : index
+    %dst_index_3_0_0 = index.add %dst_col_base_3_0_0, %store_row_3_0_0 : index
+    view.store %sum_3_0_0, %dst_view[%dst_index_3_0_0] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_3_0_10 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_3_0_1 = index.add %store_row_local_3_0_10, %c0 : index
+  %store_row_3_0_1 = index.add %row_base, %store_row_local_3_0_1 : index
+  %store_col_local_3_0_10 = index.add %warp_col_base, %c3x4 : index
+  %store_col_local_3_0_11 = index.add %store_col_local_3_0_10, %tiwc2 : index
+  %store_col_local_3_0_1 = index.add %store_col_local_3_0_11, %c1 : index
+  %store_col_3_0_1 = index.add %col_block_base, %store_col_local_3_0_1 : index
+  %row_valid_3_0_1 = index.cmp ult, %store_row_3_0_1, %rows_bounded : index
+  scf.if %row_valid_3_0_1 {
+    %dst_col_base_3_0_1 = index.mul %store_col_3_0_1, %rows_bounded : index
+    %dst_index_3_0_1 = index.add %dst_col_base_3_0_1, %store_row_3_0_1 : index
+    view.store %sum_3_0_1, %dst_view[%dst_index_3_0_1] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_3_1_00 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_3_1_0 = index.add %store_row_local_3_1_00, %c1 : index
+  %store_row_3_1_0 = index.add %row_base, %store_row_local_3_1_0 : index
+  %store_col_local_3_1_00 = index.add %warp_col_base, %c3x4 : index
+  %store_col_local_3_1_01 = index.add %store_col_local_3_1_00, %tiwc2 : index
+  %store_col_local_3_1_0 = index.add %store_col_local_3_1_01, %c0 : index
+  %store_col_3_1_0 = index.add %col_block_base, %store_col_local_3_1_0 : index
+  %row_valid_3_1_0 = index.cmp ult, %store_row_3_1_0, %rows_bounded : index
+  scf.if %row_valid_3_1_0 {
+    %dst_col_base_3_1_0 = index.mul %store_col_3_1_0, %rows_bounded : index
+    %dst_index_3_1_0 = index.add %dst_col_base_3_1_0, %store_row_3_1_0 : index
+    view.store %sum_3_1_0, %dst_view[%dst_index_3_1_0] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_3_1_10 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_3_1_1 = index.add %store_row_local_3_1_10, %c1 : index
+  %store_row_3_1_1 = index.add %row_base, %store_row_local_3_1_1 : index
+  %store_col_local_3_1_10 = index.add %warp_col_base, %c3x4 : index
+  %store_col_local_3_1_11 = index.add %store_col_local_3_1_10, %tiwc2 : index
+  %store_col_local_3_1_1 = index.add %store_col_local_3_1_11, %c1 : index
+  %store_col_3_1_1 = index.add %col_block_base, %store_col_local_3_1_1 : index
+  %row_valid_3_1_1 = index.cmp ult, %store_row_3_1_1, %rows_bounded : index
+  scf.if %row_valid_3_1_1 {
+    %dst_col_base_3_1_1 = index.mul %store_col_3_1_1, %rows_bounded : index
+    %dst_index_3_1_1 = index.add %dst_col_base_3_1_1, %store_row_3_1_1 : index
+    view.store %sum_3_1_1, %dst_view[%dst_index_3_1_1] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_4_0_00 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_4_0_0 = index.add %store_row_local_4_0_00, %c0 : index
+  %store_row_4_0_0 = index.add %row_base, %store_row_local_4_0_0 : index
+  %store_col_local_4_0_00 = index.add %warp_col_base, %c4x4 : index
+  %store_col_local_4_0_01 = index.add %store_col_local_4_0_00, %tiwc2 : index
+  %store_col_local_4_0_0 = index.add %store_col_local_4_0_01, %c0 : index
+  %store_col_4_0_0 = index.add %col_block_base, %store_col_local_4_0_0 : index
+  %row_valid_4_0_0 = index.cmp ult, %store_row_4_0_0, %rows_bounded : index
+  scf.if %row_valid_4_0_0 {
+    %dst_col_base_4_0_0 = index.mul %store_col_4_0_0, %rows_bounded : index
+    %dst_index_4_0_0 = index.add %dst_col_base_4_0_0, %store_row_4_0_0 : index
+    view.store %sum_4_0_0, %dst_view[%dst_index_4_0_0] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_4_0_10 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_4_0_1 = index.add %store_row_local_4_0_10, %c0 : index
+  %store_row_4_0_1 = index.add %row_base, %store_row_local_4_0_1 : index
+  %store_col_local_4_0_10 = index.add %warp_col_base, %c4x4 : index
+  %store_col_local_4_0_11 = index.add %store_col_local_4_0_10, %tiwc2 : index
+  %store_col_local_4_0_1 = index.add %store_col_local_4_0_11, %c1 : index
+  %store_col_4_0_1 = index.add %col_block_base, %store_col_local_4_0_1 : index
+  %row_valid_4_0_1 = index.cmp ult, %store_row_4_0_1, %rows_bounded : index
+  scf.if %row_valid_4_0_1 {
+    %dst_col_base_4_0_1 = index.mul %store_col_4_0_1, %rows_bounded : index
+    %dst_index_4_0_1 = index.add %dst_col_base_4_0_1, %store_row_4_0_1 : index
+    view.store %sum_4_0_1, %dst_view[%dst_index_4_0_1] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_4_1_00 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_4_1_0 = index.add %store_row_local_4_1_00, %c1 : index
+  %store_row_4_1_0 = index.add %row_base, %store_row_local_4_1_0 : index
+  %store_col_local_4_1_00 = index.add %warp_col_base, %c4x4 : index
+  %store_col_local_4_1_01 = index.add %store_col_local_4_1_00, %tiwc2 : index
+  %store_col_local_4_1_0 = index.add %store_col_local_4_1_01, %c0 : index
+  %store_col_4_1_0 = index.add %col_block_base, %store_col_local_4_1_0 : index
+  %row_valid_4_1_0 = index.cmp ult, %store_row_4_1_0, %rows_bounded : index
+  scf.if %row_valid_4_1_0 {
+    %dst_col_base_4_1_0 = index.mul %store_col_4_1_0, %rows_bounded : index
+    %dst_index_4_1_0 = index.add %dst_col_base_4_1_0, %store_row_4_1_0 : index
+    view.store %sum_4_1_0, %dst_view[%dst_index_4_1_0] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_4_1_10 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_4_1_1 = index.add %store_row_local_4_1_10, %c1 : index
+  %store_row_4_1_1 = index.add %row_base, %store_row_local_4_1_1 : index
+  %store_col_local_4_1_10 = index.add %warp_col_base, %c4x4 : index
+  %store_col_local_4_1_11 = index.add %store_col_local_4_1_10, %tiwc2 : index
+  %store_col_local_4_1_1 = index.add %store_col_local_4_1_11, %c1 : index
+  %store_col_4_1_1 = index.add %col_block_base, %store_col_local_4_1_1 : index
+  %row_valid_4_1_1 = index.cmp ult, %store_row_4_1_1, %rows_bounded : index
+  scf.if %row_valid_4_1_1 {
+    %dst_col_base_4_1_1 = index.mul %store_col_4_1_1, %rows_bounded : index
+    %dst_index_4_1_1 = index.add %dst_col_base_4_1_1, %store_row_4_1_1 : index
+    view.store %sum_4_1_1, %dst_view[%dst_index_4_1_1] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_5_0_00 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_5_0_0 = index.add %store_row_local_5_0_00, %c0 : index
+  %store_row_5_0_0 = index.add %row_base, %store_row_local_5_0_0 : index
+  %store_col_local_5_0_00 = index.add %warp_col_base, %c5x4 : index
+  %store_col_local_5_0_01 = index.add %store_col_local_5_0_00, %tiwc2 : index
+  %store_col_local_5_0_0 = index.add %store_col_local_5_0_01, %c0 : index
+  %store_col_5_0_0 = index.add %col_block_base, %store_col_local_5_0_0 : index
+  %row_valid_5_0_0 = index.cmp ult, %store_row_5_0_0, %rows_bounded : index
+  scf.if %row_valid_5_0_0 {
+    %dst_col_base_5_0_0 = index.mul %store_col_5_0_0, %rows_bounded : index
+    %dst_index_5_0_0 = index.add %dst_col_base_5_0_0, %store_row_5_0_0 : index
+    view.store %sum_5_0_0, %dst_view[%dst_index_5_0_0] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_5_0_10 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_5_0_1 = index.add %store_row_local_5_0_10, %c0 : index
+  %store_row_5_0_1 = index.add %row_base, %store_row_local_5_0_1 : index
+  %store_col_local_5_0_10 = index.add %warp_col_base, %c5x4 : index
+  %store_col_local_5_0_11 = index.add %store_col_local_5_0_10, %tiwc2 : index
+  %store_col_local_5_0_1 = index.add %store_col_local_5_0_11, %c1 : index
+  %store_col_5_0_1 = index.add %col_block_base, %store_col_local_5_0_1 : index
+  %row_valid_5_0_1 = index.cmp ult, %store_row_5_0_1, %rows_bounded : index
+  scf.if %row_valid_5_0_1 {
+    %dst_col_base_5_0_1 = index.mul %store_col_5_0_1, %rows_bounded : index
+    %dst_index_5_0_1 = index.add %dst_col_base_5_0_1, %store_row_5_0_1 : index
+    view.store %sum_5_0_1, %dst_view[%dst_index_5_0_1] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_5_1_00 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_5_1_0 = index.add %store_row_local_5_1_00, %c1 : index
+  %store_row_5_1_0 = index.add %row_base, %store_row_local_5_1_0 : index
+  %store_col_local_5_1_00 = index.add %warp_col_base, %c5x4 : index
+  %store_col_local_5_1_01 = index.add %store_col_local_5_1_00, %tiwc2 : index
+  %store_col_local_5_1_0 = index.add %store_col_local_5_1_01, %c0 : index
+  %store_col_5_1_0 = index.add %col_block_base, %store_col_local_5_1_0 : index
+  %row_valid_5_1_0 = index.cmp ult, %store_row_5_1_0, %rows_bounded : index
+  scf.if %row_valid_5_1_0 {
+    %dst_col_base_5_1_0 = index.mul %store_col_5_1_0, %rows_bounded : index
+    %dst_index_5_1_0 = index.add %dst_col_base_5_1_0, %store_row_5_1_0 : index
+    view.store %sum_5_1_0, %dst_view[%dst_index_5_1_0] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_5_1_10 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_5_1_1 = index.add %store_row_local_5_1_10, %c1 : index
+  %store_row_5_1_1 = index.add %row_base, %store_row_local_5_1_1 : index
+  %store_col_local_5_1_10 = index.add %warp_col_base, %c5x4 : index
+  %store_col_local_5_1_11 = index.add %store_col_local_5_1_10, %tiwc2 : index
+  %store_col_local_5_1_1 = index.add %store_col_local_5_1_11, %c1 : index
+  %store_col_5_1_1 = index.add %col_block_base, %store_col_local_5_1_1 : index
+  %row_valid_5_1_1 = index.cmp ult, %store_row_5_1_1, %rows_bounded : index
+  scf.if %row_valid_5_1_1 {
+    %dst_col_base_5_1_1 = index.mul %store_col_5_1_1, %rows_bounded : index
+    %dst_index_5_1_1 = index.add %dst_col_base_5_1_1, %store_row_5_1_1 : index
+    view.store %sum_5_1_1, %dst_view[%dst_index_5_1_1] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_6_0_00 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_6_0_0 = index.add %store_row_local_6_0_00, %c0 : index
+  %store_row_6_0_0 = index.add %row_base, %store_row_local_6_0_0 : index
+  %store_col_local_6_0_00 = index.add %warp_col_base, %c6x4 : index
+  %store_col_local_6_0_01 = index.add %store_col_local_6_0_00, %tiwc2 : index
+  %store_col_local_6_0_0 = index.add %store_col_local_6_0_01, %c0 : index
+  %store_col_6_0_0 = index.add %col_block_base, %store_col_local_6_0_0 : index
+  %row_valid_6_0_0 = index.cmp ult, %store_row_6_0_0, %rows_bounded : index
+  scf.if %row_valid_6_0_0 {
+    %dst_col_base_6_0_0 = index.mul %store_col_6_0_0, %rows_bounded : index
+    %dst_index_6_0_0 = index.add %dst_col_base_6_0_0, %store_row_6_0_0 : index
+    view.store %sum_6_0_0, %dst_view[%dst_index_6_0_0] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_6_0_10 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_6_0_1 = index.add %store_row_local_6_0_10, %c0 : index
+  %store_row_6_0_1 = index.add %row_base, %store_row_local_6_0_1 : index
+  %store_col_local_6_0_10 = index.add %warp_col_base, %c6x4 : index
+  %store_col_local_6_0_11 = index.add %store_col_local_6_0_10, %tiwc2 : index
+  %store_col_local_6_0_1 = index.add %store_col_local_6_0_11, %c1 : index
+  %store_col_6_0_1 = index.add %col_block_base, %store_col_local_6_0_1 : index
+  %row_valid_6_0_1 = index.cmp ult, %store_row_6_0_1, %rows_bounded : index
+  scf.if %row_valid_6_0_1 {
+    %dst_col_base_6_0_1 = index.mul %store_col_6_0_1, %rows_bounded : index
+    %dst_index_6_0_1 = index.add %dst_col_base_6_0_1, %store_row_6_0_1 : index
+    view.store %sum_6_0_1, %dst_view[%dst_index_6_0_1] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_6_1_00 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_6_1_0 = index.add %store_row_local_6_1_00, %c1 : index
+  %store_row_6_1_0 = index.add %row_base, %store_row_local_6_1_0 : index
+  %store_col_local_6_1_00 = index.add %warp_col_base, %c6x4 : index
+  %store_col_local_6_1_01 = index.add %store_col_local_6_1_00, %tiwc2 : index
+  %store_col_local_6_1_0 = index.add %store_col_local_6_1_01, %c0 : index
+  %store_col_6_1_0 = index.add %col_block_base, %store_col_local_6_1_0 : index
+  %row_valid_6_1_0 = index.cmp ult, %store_row_6_1_0, %rows_bounded : index
+  scf.if %row_valid_6_1_0 {
+    %dst_col_base_6_1_0 = index.mul %store_col_6_1_0, %rows_bounded : index
+    %dst_index_6_1_0 = index.add %dst_col_base_6_1_0, %store_row_6_1_0 : index
+    view.store %sum_6_1_0, %dst_view[%dst_index_6_1_0] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_6_1_10 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_6_1_1 = index.add %store_row_local_6_1_10, %c1 : index
+  %store_row_6_1_1 = index.add %row_base, %store_row_local_6_1_1 : index
+  %store_col_local_6_1_10 = index.add %warp_col_base, %c6x4 : index
+  %store_col_local_6_1_11 = index.add %store_col_local_6_1_10, %tiwc2 : index
+  %store_col_local_6_1_1 = index.add %store_col_local_6_1_11, %c1 : index
+  %store_col_6_1_1 = index.add %col_block_base, %store_col_local_6_1_1 : index
+  %row_valid_6_1_1 = index.cmp ult, %store_row_6_1_1, %rows_bounded : index
+  scf.if %row_valid_6_1_1 {
+    %dst_col_base_6_1_1 = index.mul %store_col_6_1_1, %rows_bounded : index
+    %dst_index_6_1_1 = index.add %dst_col_base_6_1_1, %store_row_6_1_1 : index
+    view.store %sum_6_1_1, %dst_view[%dst_index_6_1_1] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_7_0_00 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_7_0_0 = index.add %store_row_local_7_0_00, %c0 : index
+  %store_row_7_0_0 = index.add %row_base, %store_row_local_7_0_0 : index
+  %store_col_local_7_0_00 = index.add %warp_col_base, %c7x4 : index
+  %store_col_local_7_0_01 = index.add %store_col_local_7_0_00, %tiwc2 : index
+  %store_col_local_7_0_0 = index.add %store_col_local_7_0_01, %c0 : index
+  %store_col_7_0_0 = index.add %col_block_base, %store_col_local_7_0_0 : index
+  %row_valid_7_0_0 = index.cmp ult, %store_row_7_0_0, %rows_bounded : index
+  scf.if %row_valid_7_0_0 {
+    %dst_col_base_7_0_0 = index.mul %store_col_7_0_0, %rows_bounded : index
+    %dst_index_7_0_0 = index.add %dst_col_base_7_0_0, %store_row_7_0_0 : index
+    view.store %sum_7_0_0, %dst_view[%dst_index_7_0_0] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_7_0_10 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_7_0_1 = index.add %store_row_local_7_0_10, %c0 : index
+  %store_row_7_0_1 = index.add %row_base, %store_row_local_7_0_1 : index
+  %store_col_local_7_0_10 = index.add %warp_col_base, %c7x4 : index
+  %store_col_local_7_0_11 = index.add %store_col_local_7_0_10, %tiwc2 : index
+  %store_col_local_7_0_1 = index.add %store_col_local_7_0_11, %c1 : index
+  %store_col_7_0_1 = index.add %col_block_base, %store_col_local_7_0_1 : index
+  %row_valid_7_0_1 = index.cmp ult, %store_row_7_0_1, %rows_bounded : index
+  scf.if %row_valid_7_0_1 {
+    %dst_col_base_7_0_1 = index.mul %store_col_7_0_1, %rows_bounded : index
+    %dst_index_7_0_1 = index.add %dst_col_base_7_0_1, %store_row_7_0_1 : index
+    view.store %sum_7_0_1, %dst_view[%dst_index_7_0_1] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_7_1_00 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_7_1_0 = index.add %store_row_local_7_1_00, %c1 : index
+  %store_row_7_1_0 = index.add %row_base, %store_row_local_7_1_0 : index
+  %store_col_local_7_1_00 = index.add %warp_col_base, %c7x4 : index
+  %store_col_local_7_1_01 = index.add %store_col_local_7_1_00, %tiwc2 : index
+  %store_col_local_7_1_0 = index.add %store_col_local_7_1_01, %c0 : index
+  %store_col_7_1_0 = index.add %col_block_base, %store_col_local_7_1_0 : index
+  %row_valid_7_1_0 = index.cmp ult, %store_row_7_1_0, %rows_bounded : index
+  scf.if %row_valid_7_1_0 {
+    %dst_col_base_7_1_0 = index.mul %store_col_7_1_0, %rows_bounded : index
+    %dst_index_7_1_0 = index.add %dst_col_base_7_1_0, %store_row_7_1_0 : index
+    view.store %sum_7_1_0, %dst_view[%dst_index_7_1_0] : f32, view<[%dst_count]xf32, #dense>
+  }
+  %store_row_local_7_1_10 = index.add %warp_row_base, %tiwr2 : index
+  %store_row_local_7_1_1 = index.add %store_row_local_7_1_10, %c1 : index
+  %store_row_7_1_1 = index.add %row_base, %store_row_local_7_1_1 : index
+  %store_col_local_7_1_10 = index.add %warp_col_base, %c7x4 : index
+  %store_col_local_7_1_11 = index.add %store_col_local_7_1_10, %tiwc2 : index
+  %store_col_local_7_1_1 = index.add %store_col_local_7_1_11, %c1 : index
+  %store_col_7_1_1 = index.add %col_block_base, %store_col_local_7_1_1 : index
+  %row_valid_7_1_1 = index.cmp ult, %store_row_7_1_1, %rows_bounded : index
+  scf.if %row_valid_7_1_1 {
+    %dst_col_base_7_1_1 = index.mul %store_col_7_1_1, %rows_bounded : index
+    %dst_index_7_1_1 = index.add %dst_col_base_7_1_1, %store_row_7_1_1 : index
+    view.store %sum_7_1_1, %dst_view[%dst_index_7_1_1] : f32, view<[%dst_count]xf32, #dense>
+  }
+  kernel.return
+}
 kernel.def export("hrx2_mul_mat_q4_k_f32_cols8_static") @hrx2_mul_mat_q4_k_f32_cols8_static() {
   %unit = index.constant 1 : index
   %seven = index.constant 7 : index

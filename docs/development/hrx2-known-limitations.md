@@ -44,6 +44,17 @@ ffn_gate. The compile report has zero spills/hazard gaps but high peak live
 units, so the next broad Q4 attempt should reduce live state or use a different
 spelling rather than simply widening this provider.
 
+A broader Loom Q4_K VKM64x64 TM2/TN2 route is accepted for p512 prompt rows
+with `cols=512`. It roughly halves Llama 3.2 3B Q4_K_M p512 HRX2 integration
+time versus the post-HIP-removal Loom baseline, improving steady prefill to
+about 1445 tok/s, and focused backend-op timings improve all p512 Q4 rows.
+This is still only about 0.24x same-run Vulkan steady throughput and remains
+well behind the removed HIP bridge prior for equivalent rows. Treat it as a
+real production improvement, not as proof that the Q4 prompt matmul family is
+done. The next Q4 work should compare emitted ISA/load/staging facts against
+the removed HIP bridge and Vulkan shader and close the remaining schedule or
+codegen delta before spending time on smaller route knobs.
+
 Generated catalog state is part of the benchmark environment. If a route is
 reverted or removed in source, rebuild `ggml-hrx2` before taking a new
 baseline; otherwise the embedded generated catalog in the build tree can still

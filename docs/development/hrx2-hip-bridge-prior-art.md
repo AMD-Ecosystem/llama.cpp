@@ -111,6 +111,26 @@ Rejected Loom probe:
   units 342, which is a warning that the high-level spelling is register-heavy
   even when it wins a launch/column-reuse-sensitive shape. Artifact:
   `cache/hrx2/phase2b/q4-vkm64x64-tm4tn1-c64-final-20260616-174817/`.
+- Q4_K `x4_vkm64x64_tm2tn2` Loom port is accepted for broad p512 prompt rows
+  with `k=3072..8192`, `rows=1024..8192`, and `cols=512`. This is the Loom
+  spelling closest to the removed HIP/Vulkan-medium `BM64/BN64/WG128/wave32`
+  prior: four wave32-style tiles per workgroup, two rows by two columns per
+  lane, eight column sub-iterations, packed Q8_1 x4 RHS, Q4 A-side staging,
+  and `vector.dot4i<u8s8>`. Focused CPU-reference testing passed and route
+  traces confirmed selection with no provider-unavailable events. Same-runner
+  `test-backend-ops perf` on the Llama 3.2 3B p512-derived rows improved Kcur
+  c512 from 422.33 us to 326.49 us, Qcur c512 from 1071.12 us to 737.68 us,
+  ffn_out c512 from 2977.02 us to 1939.53 us, and ffn_gate c512 from
+  2917.77 us to 1868.03 us. The compile report for
+  `k=3072, rows=3072, cols=512` reported zero spills, zero hazard gaps, 2048
+  static dot ops, 333 peak live units, and 68008 code bytes. Integration A/B on
+  Llama 3.2 3B Q4_K_M p512 improved HRX2 steady prefill to about 1444.7 tok/s
+  from the prior roughly 770-810 tok/s range, with zero CPU compute fallback.
+  Vulkan remained about 5972.3 tok/s steady on the same run, so this is an
+  accepted boulder improvement but not the final parity schedule. Artifact:
+  `cache/hrx2/phase2b/q4-vkm64x64-tm2tn2-p512-probe-20260616-175737/`;
+  integration artifact:
+  `cache/hrx2/phase2a/phase2b-q4-tm2tn2-p512-20260616-180125/`.
 
 When reusing any of these schedules, create a Loom candidate row before coding:
 

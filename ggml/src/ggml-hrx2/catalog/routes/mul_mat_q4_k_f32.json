@@ -1,5 +1,78 @@
 [
   {
+    "id": "mul_mat_q4_k_q8_1_x4_vkm64x64_tm2tn2_k3072_8192_r1024_8192_c512_wg128",
+    "family": "mul_mat_q4_k_f32",
+    "op": "MUL_MAT",
+    "target_key": "",
+    "source_id": "mul_mat_q4_k_f32",
+    "artifact_id": "mul_mat_q4_k_f32_static_bc",
+    "root_symbol": "@hrx2_mul_mat_q4_k_q8_1_x4_vkm64x64_tm2tn2_static",
+    "export_name": "hrx2_mul_mat_q4_k_q8_1_x4_vkm64x64_tm2tn2_static",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 218,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 3,
+      "constant_byte_length": 0
+    },
+    "dispatch": {
+      "workgroup_size": [
+        128,
+        1,
+        1
+      ],
+      "rows_per_workgroup": 64,
+      "cols_per_workgroup": 64
+    },
+    "shape_domain": {
+      "name": "q8_1_x4_vkm64x64_tm2tn2_k3072_8192_rows1024_8192_cols512_wg128",
+      "k_min": 3072,
+      "k_max": 8192,
+      "rows_min": 1024,
+      "rows_max": 8192,
+      "cols_min": 512,
+      "cols_max": 512
+    },
+    "shape_guards": {
+      "k_multiple_of": 256,
+      "rows_multiple_of": 64,
+      "cols_multiple_of": 64
+    },
+    "specialization": {
+      "mode": "jit_config",
+      "bindings": [
+        {
+          "key": "@hrx2.shape.k",
+          "source": "shape.k"
+        },
+        {
+          "key": "@hrx2.shape.rows",
+          "source": "shape.rows"
+        },
+        {
+          "key": "@hrx2.shape.cols",
+          "source": "shape.cols"
+        },
+        {
+          "key": "@hrx2.tuning.workgroup_size",
+          "value": "128"
+        }
+      ]
+    },
+    "supports": {
+      "src0_type": "Q4_K",
+      "src1_type": "Q8_1",
+      "dst_type": "F32",
+      "layout": "packed_x4_vkm64x64_tm2tn2"
+    },
+    "evidence_summary": {
+      "phase": "phase2b-q4-vkm64x64-tm2tn2-p512-accepted",
+      "algorithm": "loom_pack2_q4_vkm64x64_wg128_wave32_tm2_tn2_with_cooperative_a_b_staging",
+      "selection": "accepted_for_k3072_8192_rows1024_8192_c512_prompt_shape_after_focused_cpu_reference_and_perf_gate",
+      "ggml_cpu_reference": "passed"
+    }
+  },
+  {
     "id": "mul_mat_q4_k_q8_1_x4_vkm64x64_tm4tn1_k3072_r8192_c64_wg128",
     "family": "mul_mat_q4_k_f32",
     "op": "MUL_MAT",
