@@ -111,6 +111,45 @@ The rejected patch is preserved in the workspace cache at
 The next 128x32 attempt should use explicit scalar lane ownership or a lower
 level spelling rather than dynamic vector insert/extract loops.
 
+Rejected follow-up probes after the compiler-report refresh:
+
+- `mmq128x32_scalar`: explicit scalar lane ownership matching the HRX1
+  `BM128/BN32/WG256/16-cols-per-lane` schedule compiled cleanly for
+  `k=4096, rows=4096, cols=64`: zero spills, zero hazard gaps, 72 peak live
+  units, 128 dot instructions, 27 global-memory instructions, 146 LDS
+  instructions, 2 barriers, 1054 instructions, and 5936 code bytes. Focused
+  backend-op CPU-reference testing failed every Q8 row with NaN at output index
+  0 while route traces confirmed the candidate was JIT compiled and selected.
+  The generated source/catalog patch is preserved at
+  `cache/hrx2/phase2b/q8-mmq128x32-scalar-debug-20260616-182150/candidate-current.patch`.
+  Disassembly showed the intended `v_dot4_i32_iu8` form and no `ds_*_addtid`
+  LDS addressing, so this is not the old LDS addtid bug. The current hypothesis
+  is a Loom/codegen issue or a high-level spelling hazard triggered by the
+  16-output-column scalar state, not the Q8_1 x4 layout or route metadata.
+- `mmq128x16_scalar`: diagnostic bracket using the same 128-row lane ownership
+  but the accepted eight-output-column accumulator shape passed focused
+  backend-op correctness for the Llama 3.1 8B Q8_0 p64 prompt rows and route
+  traces confirmed selection. Same-runner `test-backend-ops perf` rejected it
+  against the accepted `mmq64x32` baseline:
+
+  | Shape | `128x16` us | `64x32` us | Result |
+  | --- | ---: | ---: | --- |
+  | Vcur `k4096 r1024 c64` | 111.91 | 101.84 | slower |
+  | Qcur `k4096 r4096 c64` | 176.49 | 180.11 | marginally faster |
+  | ffn_out `k14336 r4096 c64` | 657.72 | 642.25 | slower |
+  | ffn_gate `k4096 r14336 c64` | 600.33 | 526.06 | slower |
+  | result_output `k4096 r128256 c64` | 6590.06 | 5262.39 | slower |
+
+  The rejected patch and traces are preserved at
+  `cache/hrx2/phase2b/q8-mmq128x16-scalar-diag-20260616-182522/`.
+
+These probes establish that 128-row ownership alone is not the missing Q8
+boulder. The next useful Q8 prompt candidate should not be another RHS-only
+row-count pivot. It should port the Vulkan integer-MMQ dataflow more directly:
+stage both A and B tiles in LDS, use a `BM/BN/BK_STEP` family similar to
+Vulkan's `matmul_q8_0_q8_1` pipeline, cache multiple A rows and B columns in
+registers, and let route metadata/tuning select shape buckets.
+
 Route trace for both p64 and p512:
 
 - CPU compute fallback: 0
@@ -126,7 +165,8 @@ at model level. The i32-qsum refinement gives another ~16-19% steady prefill
 lift on the Llama 3.1 8B Q8_0 p64/p512 checks, but HRX2 remains well behind
 Vulkan on the same Q8 prefill bucket.
 
-Next work should compare against Vulkan/CUDA/HRX1 schedules with a stricter
-tile search. The likely missing class is a stronger prompt matmul schedule that
-raises arithmetic intensity beyond RHS-only staging: larger output tiles, A-side
-reuse/staging, or target-specific dot/MMA forms if Loom can spell them cleanly.
+Next work should implement the Vulkan-style integer-MMQ schedule rather than
+continuing local RHS-only MMQ pivots. The relevant Vulkan prior stages both A
+and B, uses `BK_STEP=4` for non-`MUL_MAT_ID` integer MMQ, has `BM/BN` route
+families around `64/64` and `128/128`, and computes multiple rows and columns
+per lane from register-cached `block_a_cache` and `block_b_cache` values.

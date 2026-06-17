@@ -33,6 +33,19 @@ Schedule facts worth preserving for Loom candidates:
   BR16/BC64/BK16 style ownership with WMMA QK/PV and online softmax. There is
   no accepted Loom replacement in this cleanup; the unfused Loom/HRX2 routes
   are the production fallback until a Loom FA0 fusion is authored and proved.
+- Vulkan Q8_0 integer-MMQ prompt path: `matmul_q8_0_q8_1` is the strongest
+  current prior for closing the Q8 prompt gap. It is not a RHS-only staging
+  schedule. The shader stages both A and B into shared memory (`buf_a` and
+  `buf_b`), uses `block_a_cache` with eight packed Q8_0 payload words plus one
+  scale and `block_b_cache` with eight Q8_1 payload words plus scales, then
+  moves those shared tiles into register caches before dotting. The key control
+  parameters are `BM`, `BN`, fixed `BK=32`, `BK_STEP=4` for normal prompt
+  matmul, `BLOCK_SIZE`, `WM`, `WN`, `WMITER`, `TM`, `TN`, and `WARP`. The
+  discrete Vulkan families include medium `BM64/BN64` and larger
+  `BM128/BN128` tiles, with integer-dot variants using two-row/two-column or
+  four-row/four-column ownership depending on device capability. Future Loom
+  Q8/Q5/Q6 prompt work should port this A+B-staged register-cache dataflow
+  before trying more one-row-per-lane RHS-only pivots.
 
 Rejected Loom probe:
 
@@ -153,6 +166,19 @@ Rejected Loom probe:
   Artifacts:
   `cache/hrx2/phase2b/q4-tm2tn2-isa-compare-20260616/` and
   `cache/hrx2/phase2b/q4-vkm64x64-tm2tn2-no-group-unroll-*`.
+- Q8_0 RHS-only 128-row Loom probes were rejected as production routes. The
+  scalar `BM128/BN32/WG256/16-cols-per-lane` HRX1-shaped spelling compiled
+  cleanly but failed focused backend-op correctness with NaN at output index 0
+  on all Llama 3.1 8B Q8_0 p64 prompt rows; disassembly showed the intended
+  `v_dot4_i32_iu8` form and no `ds_*_addtid` addressing. A narrower diagnostic
+  `BM128/BN16/WG256/8-cols-per-lane` spelling passed the same CPU-reference
+  gate but regressed most focused rows against the accepted `BM64/BN32`
+  RHS-only route, including result_output `k4096 r128256 c64` at 6590.06 us
+  versus 5262.39 us. Artifacts:
+  `cache/hrx2/phase2b/q8-mmq128x32-scalar-debug-20260616-182150/` and
+  `cache/hrx2/phase2b/q8-mmq128x16-scalar-diag-20260616-182522/`. This is the
+  concrete reason not to keep sweeping row ownership alone for Q8: the next
+  candidate should match the Vulkan A+B-staged integer-MMQ family.
 
 When reusing any of these schedules, create a Loom candidate row before coding:
 

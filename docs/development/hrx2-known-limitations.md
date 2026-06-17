@@ -65,6 +65,16 @@ while materializing branch arguments. Until that lowering path is fixed or the
 kernel is respelled with equivalent loop-carried state, Q4 p512 is expected to
 remain behind Vulkan/HIP despite using the right high-level tile.
 
+Q8_0 prompt matmul remains an A+B-staging problem, not a simple row-ownership
+problem. A scalar Loom port of the HRX1 `BM128/BN32/WG256` RHS-only schedule
+compiled cleanly but failed focused backend-op correctness with NaNs. A
+diagnostic `BM128/BN16` route proved the 128-row lane ownership can be correct,
+but same-runner backend-op perf mostly regressed versus the accepted
+`BM64/BN32` route. The next Q8 prompt attempt should port Vulkan's
+`matmul_q8_0_q8_1` integer-MMQ dataflow with both A and B staged in LDS and
+register-cached multi-row/multi-column dotting, rather than continuing
+RHS-only tile-size pivots.
+
 Generated catalog state is part of the benchmark environment. If a route is
 reverted or removed in source, rebuild `ggml-hrx2` before taking a new
 baseline; otherwise the embedded generated catalog in the build tree can still
