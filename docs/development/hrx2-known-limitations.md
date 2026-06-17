@@ -55,6 +55,16 @@ done. The next Q4 work should compare emitted ISA/load/staging facts against
 the removed HIP bridge and Vulkan shader and close the remaining schedule or
 codegen delta before spending time on smaller route knobs.
 
+The current Q4 p512 delta has a concrete ISA lead. The accepted Loom route
+matches the HIP wave32 `BM64/BN64/WG128/TM2/TN2` prior at the source-schedule
+level, but emits a much larger fully-unrolled body: 2048 static dot ops,
+1472 LDS instructions, 16 barriers, and 333 peak live units versus the HIP
+prior's 256 static dot ops, 55 LDS instructions, 2 barriers, and 95 VGPRs. A
+probe removing only the Loom `%group` loop unroll failed in `source-to-low`
+while materializing branch arguments. Until that lowering path is fixed or the
+kernel is respelled with equivalent loop-carried state, Q4 p512 is expected to
+remain behind Vulkan/HIP despite using the right high-level tile.
+
 Generated catalog state is part of the benchmark environment. If a route is
 reverted or removed in source, rebuild `ggml-hrx2` before taking a new
 baseline; otherwise the embedded generated catalog in the build tree can still

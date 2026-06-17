@@ -137,6 +137,22 @@ Rejected Loom probe:
   c64 341.84 us, all worse than the current production c64 routes. Preserve
   TM2/TN2 as a p512 schedule only. Rejected patch and traces:
   `cache/hrx2/phase2b/q4-vkm64x64-tm2tn2-c64-true-probe-20260616-180713/`.
+  ISA comparison against the extracted HIP wave32 prior confirms the high-level
+  schedule is not the main mismatch. The HIP
+  `vkm64x64_pack2_wg128_w32_u32` function compiles to 256 static
+  `v_dot4_i32_iu8` instructions, about 54 global-memory instructions, 55 LDS
+  instructions, 2 barriers, 95 VGPRs, and no scratch. The accepted Loom p512
+  route compiles to 2048 static dot instructions, 180 global-memory
+  instructions, 1472 LDS instructions, 16 barriers, 333 peak live units, and
+  68008 code bytes. A probe that removed the Loom `%group` loop unroll was the
+  obvious attempt to move the spelling toward the HIP loop body, but it failed
+  in `source-to-low` with `AMDGPU branch argument materializer selected for an
+  unsupported type`. This is the current concrete Q4 p512 root-cause lead:
+  close the gap by expressing the HIP-like loop without fully unrolling the
+  group/K dimension, or get the Loom lowering fixed for that loop-carried state.
+  Artifacts:
+  `cache/hrx2/phase2b/q4-tm2tn2-isa-compare-20260616/` and
+  `cache/hrx2/phase2b/q4-vkm64x64-tm2tn2-no-group-unroll-*`.
 
 When reusing any of these schedules, create a Loom candidate row before coding:
 
