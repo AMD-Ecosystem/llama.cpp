@@ -33,7 +33,7 @@ jobs:
   build-ubuntu:
     runs-on: ubuntu-24.04
     # Single multiarch build: one fat binary covering all current CI arches,
-    # sourced from TheRock's multi-arch tarball (arch-neutral host + per-arch
+    # sourced from TheRock's multiarch tarball (arch-neutral host + per-arch
     # Tensile DBs). gfx1100-1103 (RDNA3 desktop + Hawk Point/Phoenix 760M/780M),
     # gfx1150/1151/1153 (RDNA3.5 Strix APUs).
     env:
@@ -71,14 +71,14 @@ jobs:
         ninja --version
         echo "Build dependencies installation completed"
 
-    - name: Download and extract multi-arch ROCm directly to /opt/rocm
+    - name: Download and extract multiarch ROCm directly to /opt/rocm
       run: |
         rocm_version="${{ env.ROCM_VERSION }}"
         base_url="https://rocm.nightlies.amd.com/tarball-multi-arch"
 
         if [ "$rocm_version" = "latest" ]; then
-          echo "Auto-detecting latest multi-arch ROCm version"
-          # The multi-arch host serves an HTML index (not S3 XML); scrape the
+          echo "Auto-detecting latest multiarch ROCm version"
+          # The multiarch host serves an HTML index (not S3 XML); scrape the
           # multiarch tarball names from it.
           files=$(curl -s "$base_url/" \
             | grep -oE 'therock-dist-linux-multiarch-[0-9]+\.[0-9]+\.[0-9]+(a|rc)[0-9]+\.tar\.gz' \
@@ -144,7 +144,7 @@ jobs:
         rocm_url="$base_url/therock-dist-linux-multiarch-${rocm_version}.tar.gz"
         echo "DETECTED_ROCM_VERSION=$rocm_version" >> $GITHUB_ENV
 
-        # The multi-arch tarball (~11.5 GB) ships device code for ALL 26 GPU
+        # The multiarch tarball (~11.5 GB) ships device code for ALL 26 GPU
         # arches: every arch's .kpack plus per-arch rocBLAS/hipBLASLt Tensile DBs.
         # This consumer build only needs the 7 RDNA3/3.5 arches in GPU_TARGETS and
         # uses the GEMM (Tensile) path, which works without .kpack files. So we
@@ -163,7 +163,7 @@ jobs:
           excludes+=("--exclude=./lib/*/library/*${a}*")
         done
 
-        echo "Streaming multi-arch ROCm from: $rocm_url (pruning .kpack + non-target arches)"
+        echo "Streaming multiarch ROCm from: $rocm_url (pruning .kpack + non-target arches)"
         sudo mkdir -p /opt/rocm
         curl -sL "$rocm_url" | sudo tar --use-compress-program=gzip -xf - \
           -C /opt/rocm --strip-components=1 "${excludes[@]}"
@@ -327,7 +327,7 @@ jobs:
     needs: build-ubuntu
     if: needs.build-ubuntu.result == 'success'
     # Single hardware test of the multiarch artifact on gfx1151. This is the
-    # end-to-end safety net for the Tensile-only multi-arch package: a real
+    # end-to-end safety net for the Tensile-only multiarch package: a real
     # llama-cli inference exercising the rocBLAS/hipBLASLt GEMM path on-device.
     runs-on: linux-gfx1151-gpu-rocm
 
@@ -535,9 +535,9 @@ jobs:
           --notes "**Build**: $TAG
         **OS**: ubuntu
         **GPU Target(s)**: gfx1100, gfx1101, gfx1102, gfx1103, gfx1150, gfx1151, gfx1153 (single multiarch binary)
-        **ROCm Version**: $ROCM_VERSION (multi-arch)
+        **ROCm Version**: $ROCM_VERSION (multiarch)
         **Llama.cpp Commit**: $LLAMACPP_COMMIT_HASH
         **Build Date**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
 
-        Prebuilt llama.cpp ROCm binaries — one multiarch package covering the RDNA3 gfx110X family incl. Hawk Point/Phoenix (Radeon 760M/780M) and the RDNA3.5 gfx115x APUs (gfx1150/gfx1151/gfx1153). Built from TheRock's multi-arch ROCm runtime, pruned to the CI target arches (per-arch Tensile databases bundled)." \
+        Prebuilt llama.cpp ROCm binaries — one multiarch package covering the RDNA3 gfx110X family incl. Hawk Point/Phoenix (Radeon 760M/780M) and the RDNA3.5 gfx115x APUs (gfx1150/gfx1151/gfx1153). Built from TheRock's multiarch ROCm runtime, pruned to the CI target arches (per-arch Tensile databases bundled)." \
           *.tar.gz
