@@ -36,6 +36,12 @@ The largest p64/p512 blocker is quantized prompt matmul route quality, especiall
 Loom compile reports, emitted assembly, and focused kernel sweeps before
 promoting integration routes.
 
+Generated catalog state is part of the benchmark environment. If a route is
+reverted or removed in source, rebuild `ggml-hrx2` before taking a new
+baseline; otherwise the embedded generated catalog in the build tree can still
+contain and select a rejected provider. Confirm route stderr or
+`GGML_HRX2_TRACE_JSONL` for every focused `test-backend-ops perf` run.
+
 ## Qwen 7B p512 Route Coverage
 
 On 2026-06-16, Qwen2.5-Coder 7B Q5_K_M/Q6_K p512 still had CPU fallback for

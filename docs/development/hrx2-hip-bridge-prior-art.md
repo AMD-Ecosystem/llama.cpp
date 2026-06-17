@@ -65,6 +65,21 @@ Rejected Loom probe:
   workgroup-128 wave32 schedule with four wave32 tiles per workgroup,
   two rows by two columns per lane, eight column sub-iterations, and both
   A and B staged in LDS.
+- Q6_K `x4_vkm64x32_wg128_w32` Loom probe was rejected as another p64
+  production route. It attempted to move toward the removed HIP wave32 bridge
+  by using workgroup 128, A+B LDS staging, and `BK_STEP=4`, but it still used a
+  64x32 workgroup tile and a four-row/four-column-per-lane ownership shape
+  instead of the HIP prior's real 64x64 tile, two-row/two-column ownership, and
+  eight column sub-iterations. It passed the focused CPU-reference gate and
+  route stderr confirmed `hrx2_mul_mat_q6_k_q8_1_x4_vkm64x32_wg128_w32_static`
+  was JIT compiled and selected, but same-runner `test-backend-ops perf`
+  regressed `Vcur k3072 r1024 c64` from the clean current 178.79 us to
+  337.28 us and regressed `ffn_out k8192 r3072 c64` from 540.78 us to
+  903.33 us. The rejected patch and trace evidence are preserved at
+  `cache/hrx2/phase2b/q6-vkm64x32-wg128-probe-20260616-172640/`.
+  Do not retry this half-width WG128 spelling; the next Q6 attempt must match
+  the HIP bridge's actual `BM64/BN64/BK_STEP=4/WG128/wave32` ownership or use a
+  newly documented prior.
 
 When reusing any of these schedules, create a Loom candidate row before coding:
 
@@ -85,6 +100,15 @@ The production cleanup removed every HRX2 CMake path that compiled `-x hip`
 bridge sources and removed bridge route/source/artifact records from the split
 catalog. A rebuilt generated catalog has no checked-in `amdgpu-hsaco` artifacts;
 runtime HSACO still appears only as Loom JIT output.
+
+After reverting or removing a route, rebuild `ggml-hrx2` before measuring. The
+generated embedded catalog in the build tree can otherwise retain a rejected
+provider and make a "current baseline" run select stale code. On 2026-06-16,
+the stale artifact
+`cache/hrx2/phase2b/q6-current-p64-baseline-20260616-172137/` still selected a
+removed Q6 `mmql64x64` provider. The clean rebuilt baseline is
+`cache/hrx2/phase2b/q6-current-cleanbuild-p64-baseline-20260616-172230/`.
+Always inspect route stderr or `GGML_HRX2_TRACE_JSONL` before using perf CSVs.
 
 Focused backend-op gates were run first for the affected Q4_K, Q5_K, and Q6_K
 families using traced route evidence:
