@@ -50,6 +50,21 @@ Rejected Loom probe:
   a new schedule/codegen hypothesis. The old HRX1/Pyre ledger also rejected a
   Q5 64x64 default and instead points at the larger Q5 128x128/BK_STEP=1
   family as the stronger prompt prior.
+- Q6_K `x4_mmql64x64` WG256 A+B-staged Loom probe was rejected as a p64
+  production route. It passed the focused CPU-reference gate after being
+  narrowed to `cols=64`, and route stderr confirmed
+  `hrx2_mul_mat_q6_k_q8_1_x4_mmql64x64_static` was JIT compiled and selected
+  for the prompt rows. Same-runner `test-backend-ops perf`, however, regressed
+  `Vcur k3072 r1024 c64` from 178.83 us on the current Loom `mmq64x32` route
+  to 394.42 us, and regressed `ffn_out k8192 r3072 c64` from 561.46 us to
+  955.32 us. The removed HIP wave32 bridge was 161.92 us and 336.06 us on the
+  same rows. The rejected patch is preserved at
+  `cache/hrx2/phase2b/q6-mmql64x64-c64-probe-20260616-171538/rejected-q6-mmql64x64-c64-probe.patch`.
+  Do not retry this WG256/wave64-like 64x64 spelling as a production default.
+  The useful Q6 prior is the HIP bridge's actual BM64/BN64/BK_STEP=4,
+  workgroup-128 wave32 schedule with four wave32 tiles per workgroup,
+  two rows by two columns per lane, eight column sub-iterations, and both
+  A and B staged in LDS.
 
 When reusing any of these schedules, create a Loom candidate row before coding:
 
