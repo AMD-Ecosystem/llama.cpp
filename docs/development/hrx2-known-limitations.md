@@ -36,6 +36,14 @@ The largest p64/p512 blocker is quantized prompt matmul route quality, especiall
 Loom compile reports, emitted assembly, and focused kernel sweeps before
 promoting integration routes.
 
+A narrow Loom port of the Q4_K VKM64x64 TM4/TN1 HIP prior is accepted only for
+`k=3072, rows=8192, cols=64`, where it improves the Llama 3.2 3B ffn_gate prompt
+row from about 415 us to 310-320 us. It is intentionally not a general Q4_K
+prompt replacement: the same spelling regressed Kcur/Qcur/ffn_out c64 and p512
+ffn_gate. The compile report has zero spills/hazard gaps but high peak live
+units, so the next broad Q4 attempt should reduce live state or use a different
+spelling rather than simply widening this provider.
+
 Generated catalog state is part of the benchmark environment. If a route is
 reverted or removed in source, rebuild `ggml-hrx2` before taking a new
 baseline; otherwise the embedded generated catalog in the build tree can still

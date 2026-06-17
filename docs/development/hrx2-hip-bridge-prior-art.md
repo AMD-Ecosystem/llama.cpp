@@ -97,6 +97,20 @@ Rejected Loom probe:
   medium / HIP bridge MMQ family with packed Q8_1 x4 RHS, A-side pack/cache,
   `u8s8` dot contract, and production prompt shapes around `BM64` with
   `BN32/BN64` column reuse.
+- Q4_K `x4_vkm64x64_tm4tn1` Loom port from the successful HIP wave32/TM4/TN1
+  prior was only accepted for the narrow Llama 3.2 3B ffn_gate prompt row
+  `k=3072, rows=8192, cols=64`. As a broad route it passed CPU-reference tests
+  but regressed Kcur c64 from 183.18 us to 302.87 us, Qcur c64 from 178.89 us
+  to 265.70 us, and ffn_out c64 from 469.98 us to 689.68 us. Narrowed to
+  `k3072/r8192/c64`, it leaves those rows on the existing `mmq64x32` route and
+  improves ffn_gate c64 from the clean current 415.33 us to roughly
+  310-320 us in same-runner `test-backend-ops perf`. The same route was also
+  rejected for the p512 ffn_gate row after measuring 1558.95 us, so production
+  metadata caps it at `cols=64`. Compile report for the accepted shape showed
+  status OK, zero hazard gaps, zero spills, 2048 static dot ops, and peak live
+  units 342, which is a warning that the high-level spelling is register-heavy
+  even when it wins a launch/column-reuse-sensitive shape. Artifact:
+  `cache/hrx2/phase2b/q4-vkm64x64-tm4tn1-c64-final-20260616-174817/`.
 
 When reusing any of these schedules, create a Loom candidate row before coding:
 

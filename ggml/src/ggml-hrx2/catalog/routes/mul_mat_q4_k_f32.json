@@ -1,5 +1,78 @@
 [
   {
+    "id": "mul_mat_q4_k_q8_1_x4_vkm64x64_tm4tn1_k3072_r8192_c64_wg128",
+    "family": "mul_mat_q4_k_f32",
+    "op": "MUL_MAT",
+    "target_key": "",
+    "source_id": "mul_mat_q4_k_f32",
+    "artifact_id": "mul_mat_q4_k_f32_static_bc",
+    "root_symbol": "@hrx2_mul_mat_q4_k_q8_1_x4_vkm64x64_tm4tn1_static",
+    "export_name": "hrx2_mul_mat_q4_k_q8_1_x4_vkm64x64_tm4tn1_static",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 218,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 3,
+      "constant_byte_length": 0
+    },
+    "dispatch": {
+      "workgroup_size": [
+        128,
+        1,
+        1
+      ],
+      "rows_per_workgroup": 64,
+      "cols_per_workgroup": 64
+    },
+    "shape_domain": {
+      "name": "q8_1_x4_vkm64x64_tm4tn1_k3072_rows8192_cols64_wg128",
+      "k_min": 3072,
+      "k_max": 3072,
+      "rows_min": 8192,
+      "rows_max": 8192,
+      "cols_min": 64,
+      "cols_max": 64
+    },
+    "shape_guards": {
+      "k_multiple_of": 256,
+      "rows_multiple_of": 64,
+      "cols_multiple_of": 64
+    },
+    "specialization": {
+      "mode": "jit_config",
+      "bindings": [
+        {
+          "key": "@hrx2.shape.k",
+          "source": "shape.k"
+        },
+        {
+          "key": "@hrx2.shape.rows",
+          "source": "shape.rows"
+        },
+        {
+          "key": "@hrx2.shape.cols",
+          "source": "shape.cols"
+        },
+        {
+          "key": "@hrx2.tuning.workgroup_size",
+          "value": "128"
+        }
+      ]
+    },
+    "supports": {
+      "src0_type": "Q4_K",
+      "src1_type": "Q8_1",
+      "dst_type": "F32",
+      "layout": "packed_x4_vkm64x64_tm4tn1"
+    },
+    "evidence_summary": {
+      "phase": "phase2b-q4-vkm64x64-tm4tn1-loom-probe",
+      "algorithm": "loom_pack2_q4_vkm64x64_wg128_wave32_tm4_tn1_with_cooperative_a_b_staging",
+      "selection": "accepted_only_for_k3072_r8192_c64_prompt_shape_after_focused_perf_win; broader_shape_class_and_p512_rejected",
+      "ggml_cpu_reference": "required"
+    }
+  },
+  {
     "id": "mul_mat_q4_k_q8_1_x4_mmq64x32_k256_32768_r1_32768_c32_512_wg256",
     "family": "mul_mat_q4_k_f32",
     "op": "MUL_MAT",
