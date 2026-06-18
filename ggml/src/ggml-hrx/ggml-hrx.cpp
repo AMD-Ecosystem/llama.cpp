@@ -456,6 +456,13 @@ struct ggml_backend_hrx_mul_mat_vec_constants {
 
 static_assert(sizeof(ggml_backend_hrx_mul_mat_vec_constants) == 24);
 
+struct ggml_backend_hrx_split_k_reduce_constants {
+    int64_t n;
+    int64_t split;
+};
+
+static_assert(sizeof(ggml_backend_hrx_split_k_reduce_constants) == 16);
+
 struct ggml_backend_hrx_mul_mat_vec_bf16_set_rows_constants {
     int64_t k;
     int64_t rows;
@@ -1245,6 +1252,7 @@ struct ggml_backend_hrx_device_context {
     ggml_backend_hrx_op_provider copy_f32_f16_provider;
     ggml_backend_hrx_op_provider soft_max_f32_provider;
     ggml_backend_hrx_op_provider soft_max_f32_mask_provider;
+    ggml_backend_hrx_op_provider split_k_reduce_f32_provider;
     ggml_backend_hrx_op_provider argsort_f32_provider;
     ggml_backend_hrx_op_provider topk_moe_f32_provider;
     ggml_backend_hrx_op_provider topk_moe_f32_shared4_provider;
@@ -1542,6 +1550,7 @@ static void ggml_backend_hrx_reset_providers(ggml_backend_hrx_device_context * d
     device_context->copy_f32_f16_provider.reset();
     device_context->soft_max_f32_provider.reset();
     device_context->soft_max_f32_mask_provider.reset();
+    device_context->split_k_reduce_f32_provider.reset();
     device_context->argsort_f32_provider.reset();
     device_context->topk_moe_f32_provider.reset();
     device_context->topk_moe_f32_shared4_provider.reset();
@@ -3537,6 +3546,11 @@ static bool ggml_backend_hrx_load_soft_max_f32_provider(ggml_backend_hrx_device_
 static bool ggml_backend_hrx_load_soft_max_f32_mask_provider(ggml_backend_hrx_device_context * device_context) {
     return ggml_backend_hrx_load_catalog_provider(
         device_context, "hrx_soft_max_f32_mask", &device_context->soft_max_f32_mask_provider);
+}
+
+static bool ggml_backend_hrx_load_split_k_reduce_f32_provider(ggml_backend_hrx_device_context * device_context) {
+    return ggml_backend_hrx_load_catalog_provider(
+        device_context, "hrx_split_k_reduce_f32", &device_context->split_k_reduce_f32_provider);
 }
 
 static bool ggml_backend_hrx_load_argsort_f32_provider(ggml_backend_hrx_device_context * device_context) {
@@ -15100,6 +15114,7 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> ggml_backend_hrx_create_reg
         (void) ggml_backend_hrx_load_copy_f32_f16_provider(device_context.get());
         (void) ggml_backend_hrx_load_soft_max_f32_provider(device_context.get());
         (void) ggml_backend_hrx_load_soft_max_f32_mask_provider(device_context.get());
+        (void) ggml_backend_hrx_load_split_k_reduce_f32_provider(device_context.get());
         (void) ggml_backend_hrx_load_argsort_f32_provider(device_context.get());
         (void) ggml_backend_hrx_load_topk_moe_f32_providers(device_context.get());
         (void) ggml_backend_hrx_load_rope_f32_provider(device_context.get());

@@ -28,6 +28,7 @@
   "hrx_softplus_f32",
   "hrx_swiglu_f32",
   "hrx_sum_rows_f32",
+  "hrx_split_k_reduce_f32",
   "hrx_l2_norm_f32",
   "hrx_l2_norm_wg128_f32",
   "hrx_l2_norm_pair_wg128_f32",

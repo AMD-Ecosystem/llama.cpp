@@ -965,6 +965,12 @@
     "format": "amdgpu-hsaco",
     "storage": "embedded"
   },
+  "split_k_reduce_f32_hsaco": {
+    "source_id": "split_k_reduce_f32",
+    "path": "split_k_reduce_f32.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
   "ssm_conv_f32_hsaco": {
     "source_id": "ssm_conv_f32",
     "path": "ssm_conv_f32.hsaco",

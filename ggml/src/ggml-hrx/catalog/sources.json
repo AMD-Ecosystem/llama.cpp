@@ -482,6 +482,9 @@
   "soft_max_f32": {
     "path": "soft_max_f32.hip.cpp"
   },
+  "split_k_reduce_f32": {
+    "path": "split_k_reduce_f32.hip.cpp"
+  },
   "ssm_conv_f32": {
     "path": "ssm_conv_f32.hip.cpp"
   },

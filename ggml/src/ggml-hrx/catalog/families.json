@@ -1212,6 +1212,10 @@
     "op": "SOFT_MAX"
   },
   {
+    "family": "split_k_reduce_f32",
+    "op": "CUSTOM"
+  },
+  {
     "family": "softplus",
     "op": "CUSTOM"
   },

@@ -989,6 +989,40 @@
     }
   },
   {
+    "id": "hrx_split_k_reduce_f32",
+    "family": "split_k_reduce_f32",
+    "op": "CUSTOM",
+    "target_key": "gfx1100",
+    "source_id": "split_k_reduce_f32",
+    "artifact_id": "split_k_reduce_f32_hsaco",
+    "export_name": "hrx_split_k_reduce_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 100,
+    "abi": {
+      "binding_count": 2,
+      "parameter_count": 3,
+      "constant_byte_length": 16
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "vulkan_split_k_reduce_flat_f32"
+    },
+    "shape_guards": {},
+    "supports": {
+      "legacy_export": "hrx_split_k_reduce_f32"
+    },
+    "evidence_summary": {
+      "status": "candidate_gfx1151_vulkan_oracle",
+      "selection": "build-only reduce half of Vulkan p513 split_k_reduce contract; not selected until a partial-producer matmul route exists"
+    }
+  },
+  {
     "id": "hrx_l2_norm_f32",
     "family": "l2_norm",
     "op": "CUSTOM",
