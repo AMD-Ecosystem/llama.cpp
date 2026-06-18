@@ -1119,6 +1119,7 @@ struct ggml_backend_hrx_device_context {
     ggml_backend_hrx_op_provider mul_mat_vec_q4_k_q8_1_x4_mmq64x64_wg256_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_q4_k_q8_1_x4_mmql128x128_wg256_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bk2_wg256_provider;
+    ggml_backend_hrx_op_provider mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bsplit4_wg256_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_q4_k_q8_1_x4_mmql128x64_wg256_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_q4_k_q8_1_x4_mmql128x128_padcache_wg256_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_q4_k_wmma16x16_f16acc_wg256_provider;
@@ -1355,6 +1356,7 @@ static void ggml_backend_hrx_reset_providers(ggml_backend_hrx_device_context * d
     device_context->mul_mat_vec_q4_k_q8_1_x4_mmq64x64_wg256_provider.reset();
     device_context->mul_mat_vec_q4_k_q8_1_x4_mmql128x128_wg256_provider.reset();
     device_context->mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bk2_wg256_provider.reset();
+    device_context->mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bsplit4_wg256_provider.reset();
     device_context->mul_mat_vec_q4_k_q8_1_x4_mmql128x64_wg256_provider.reset();
     device_context->mul_mat_vec_q4_k_q8_1_x4_mmql128x128_padcache_wg256_provider.reset();
     device_context->mul_mat_vec_q4_k_wmma16x16_f16acc_wg256_provider.reset();
@@ -2960,6 +2962,9 @@ static bool ggml_backend_hrx_load_mul_mat_vec_providers(ggml_backend_hrx_device_
     ok = ggml_backend_hrx_load_catalog_provider(
         device_context, "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bk2_wg256_f32",
         &device_context->mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bk2_wg256_provider) || ok;
+    ok = ggml_backend_hrx_load_catalog_provider(
+        device_context, "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bsplit4_wg256_f32",
+        &device_context->mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bsplit4_wg256_provider) || ok;
     ok = ggml_backend_hrx_load_catalog_provider(
         device_context, "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x64_wg256_f32",
         &device_context->mul_mat_vec_q4_k_q8_1_x4_mmql128x64_wg256_provider) || ok;
@@ -5450,6 +5455,32 @@ static ggml_backend_hrx_q8_1_mmvq_variant ggml_backend_hrx_mul_mat_vec_k_q8_1_va
                 ggml_backend_hrx_provider_available(
                     device_context->mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bk2_wg256_provider)) {
                 variant.provider = &device_context->mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bk2_wg256_provider;
+                variant.x4_quant = true;
+                variant.rows_per_workgroup = 128;
+                variant.cols_per_workgroup = 128;
+                return variant;
+            }
+            if (has_q8_1_x4 &&
+                ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q4_K_Q8_1_X4_MMQL128_BSPLIT4_PROMPT") &&
+                device_context->mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bsplit4_wg256_provider.kind ==
+                    ggml_backend_hrx_provider_kind::hsaco &&
+                src1->type == GGML_TYPE_F32 &&
+                op->type == GGML_TYPE_F32 &&
+                src0->ne[0] == src1->ne[0] &&
+                op->ne[0] == src0->ne[1] &&
+                op->ne[1] == src1->ne[1] &&
+                src0->ne[2] == 1 && src0->ne[3] == 1 &&
+                src1->ne[2] == 1 && src1->ne[3] == 1 &&
+                op->ne[2] == 1 && op->ne[3] == 1 &&
+                src0->ne[0] > 0 &&
+                rows % 128 == 0 && cols >= 128 &&
+                (src0->ne[0] % 256) == 0 &&
+                ggml_is_contiguous(src0) &&
+                ggml_is_contiguous(src1) &&
+                ggml_is_contiguous(op) &&
+                ggml_backend_hrx_provider_available(
+                    device_context->mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bsplit4_wg256_provider)) {
+                variant.provider = &device_context->mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bsplit4_wg256_provider;
                 variant.x4_quant = true;
                 variant.rows_per_workgroup = 128;
                 variant.cols_per_workgroup = 128;

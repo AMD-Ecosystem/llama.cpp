@@ -285,6 +285,12 @@
       "status": "rejected_focused_perf_regression"
     },
     {
+      "id": "q4_dense_prompt_mmql128_bsplit4_deepseek_p33_p512_p513",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q4-mmql128-bsplit4-focused-20260618-004510/",
+      "status": "rejected_focused_perf_regression"
+    },
+    {
       "id": "q8_0_prompt_wmma16_vk128_hybrid_large_rows_llama3_1_q8",
       "date": "2026-06-18",
       "artifact": "cache/hrxv1/gfx1151/q8_0-vk128-vs-bn96-focused-20260618-003553/",

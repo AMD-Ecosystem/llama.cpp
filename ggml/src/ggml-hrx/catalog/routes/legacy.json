@@ -5155,6 +5155,48 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bsplit4_wg256_f32",
+    "family": "mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bsplit4_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q4_k_q8_1_x4_mmql128_bsplit4",
+    "artifact_id": "mul_mat_vec_q4_k_q8_1_x4_mmql128_bsplit4_hsaco",
+    "export_name": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bsplit4_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "dense_q4_k_prompt_x_q8_1_x4_mmql128x128_bsplit4_probe"
+    },
+    "shape_guards": {
+      "rows_multiple": 128,
+      "cols_min": 128,
+      "k_multiple": 256,
+      "requires_env": "GGML_HRX_ENABLE_Q4_K_Q8_1_X4_MMQL128_BSPLIT4_PROMPT"
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bsplit4_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_probe",
+      "selection": "Packed-Q8_1/x4 B-cache ownership probe after direct-F32 WMMA clones, narrower output ownership, and row padding failed. It preserves the accepted Q4_K MMQL128 production dataflow, BM128, BN128, wave64, BK_STEP1, and output ownership, but changes staged B payload ownership from two lanes per row loading four packed words each to four lanes per row loading two packed words each. It compiled through CMake/Ninja with wave64, SGPR=48, VGPR=140, LDS=8192, no spills, 512 static v_dot sites, 46 ds_loads, 12 ds_stores, 18 global loads, 64 global stores, 188 s_waitcnts, and 2 barriers. The route selected correctly for p512 and p513, passed focused CPU-reference rows for p512 and p513, and kept exact p33 on the existing MMQ64 route. It is rejected for production promotion because same-runner p513 focused perf regressed on every row, and p512 only produced small FFN gains while regressing K/Q rows. Keep it opt-in only as a bounded load-ownership diagnostic."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x64_wg256_f32",
     "family": "mul_mat_vec_q4_k_q8_1_x4_mmql128x64_wg256",
     "op": "MUL_MAT",

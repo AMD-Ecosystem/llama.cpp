@@ -30,6 +30,10 @@
 #define HRX_Q4_K_Q8_1_X4_MMQL128_B_PAD_WORDS 0
 #endif
 
+#ifndef HRX_Q4_K_Q8_1_X4_MMQL128_LOAD_VEC_B
+#define HRX_Q4_K_Q8_1_X4_MMQL128_LOAD_VEC_B 16
+#endif
+
 struct hrx_block_q4_K_q8_1_mmql_lhs {
     unsigned short d;
     unsigned short dmin;
@@ -119,10 +123,17 @@ static __device__ __forceinline__ void hrx_q4_k_mmql_load_b(
     const long long linear_block = col * q8_blocks_per_col + kb;
     const hrx_block_q8_1_x4_rhs_q4_mmql * rhs = src1 + (linear_block >> 2);
     const int inner = static_cast<int>(linear_block & 3);
+#if HRX_Q4_K_Q8_1_X4_MMQL128_LOAD_VEC_B == 8
+    #pragma unroll
+    for (int j = 0; j < 2; ++j) {
+        buf_b[buf_idx].qs[iqs_vec4 * 2 + j] = rhs->qs[inner * 8 + iqs_vec4 * 2 + j];
+    }
+#else
     #pragma unroll
     for (int j = 0; j < 4; ++j) {
         buf_b[buf_idx].qs[iqs_vec4 * 4 + j] = rhs->qs[inner * 8 + iqs_vec4 * 4 + j];
     }
+#endif
     if (iqs_vec4 == 0) {
         buf_b[buf_idx].d = __half2float(__ushort_as_half(rhs->ds[inner * 2 + 0]));
         buf_b[buf_idx].s = __half2float(__ushort_as_half(rhs->ds[inner * 2 + 1]));
@@ -148,9 +159,10 @@ extern "C" __global__ void HRX_Q4_K_Q8_1_X4_MMQL128_EXPORT(
     constexpr int WSUBM = WM / WMITER;
     constexpr int WSUBN = WN / WNITER;
     constexpr int LOAD_VEC_A = 8;
-    constexpr int LOAD_VEC_B = 16;
+    constexpr int LOAD_VEC_B = HRX_Q4_K_Q8_1_X4_MMQL128_LOAD_VEC_B;
 
     static_assert(BM == 128 && (BN == 128 || BN == 64), "unexpected Q4 MMQ tile shape");
+    static_assert(LOAD_VEC_B == 16 || LOAD_VEC_B == 8, "unexpected Q4 MMQ B-cache load split");
     static_assert(WNITER == 8 || WNITER == 4, "unexpected Q4 MMQ column iteration count");
     static_assert(WSUBM == 64 && WSUBN == 8, "unexpected Vulkan large Q4 MMQ subtile shape");
 
@@ -245,10 +257,17 @@ extern "C" __global__ void HRX_Q4_K_Q8_1_X4_MMQL128_EXPORT(
                             loadr_b,
                             q8_blocks_per_col);
                     } else {
+#if HRX_Q4_K_Q8_1_X4_MMQL128_LOAD_VEC_B == 8
+                        #pragma unroll
+                        for (int j = 0; j < 2; ++j) {
+                            buf_b[buf_idx].qs[loadr_b * 2 + j] = 0;
+                        }
+#else
                         #pragma unroll
                         for (int j = 0; j < 4; ++j) {
                             buf_b[buf_idx].qs[loadr_b * 4 + j] = 0;
                         }
+#endif
                         if (loadr_b == 0) {
                             buf_b[buf_idx].d = 0.0f;
                             buf_b[buf_idx].s = 0.0f;
