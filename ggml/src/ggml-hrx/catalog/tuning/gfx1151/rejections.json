@@ -453,6 +453,15 @@
       "artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x128-splitqsum8-focused-20260618/",
       "compile_artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x128-splitqsum8-compile-20260618/",
       "reason": "The BN128 split-qsum8 packed-Q8_1 probe preserved the accepted BN128 full-column policy and changed only the qsum chunk size from 16 columns to 8 columns. This was a bounded live-range/occupancy probe after accepted BN128 split-qsum removed the old simple-BN128 spill wall. It compiled through CMake/Ninja and achieved the intended resource effect: wave32, SGPR=27, VGPR=120, LDS=4352, no spills, versus accepted BN128 split-qsum VGPR=152. Focused p33/p512/p513 CPU-reference gates passed; route traces proved p33 stayed on BN64 while p512 and p513 selected split-qsum8 under the opt-in env. Same-runner focused timing rejects it for production: p512 improved Vcur 541.25 -> 538.38 us, Qcur 1874.22 -> 1778.22 us, and ffn_out 7048.63 -> 6558.90 us, but regressed ffn_gate 6303.30 -> 6843.30 us and the dominant result_output 56355.07 -> 61269.62 us. p513 regressed every row: Vcur 537.46 -> 557.28 us, Qcur 2040.09 -> 2183.83 us, ffn_out 7958.16 -> 8170.67 us, ffn_gate 7449.29 -> 7793.47 us, and result_output 64570.31 -> 71864.74 us. Lower VGPR alone is not enough; the extra chunk-loop overhead and changed scheduling lose the rows that dominate model throughput."
+    },
+    {
+      "id": "q8_0_prompt_mmq32x128_p33_p512_p513",
+      "date": "2026-06-18",
+      "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq32x128_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ32X128_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmq32x128-focused-20260618/",
+      "compile_artifact": "cache/hrxv1/gfx1151/q8_0-mmq32x128-compile-20260618/",
+      "reason": "The BM32/BN128 packed-Q8_1 probe preserved BN128 full-column coverage but changed output ownership from the accepted BM64/COLS32 split-qsum route to BM32/COLS16 with a simple qsum tile. This was a bounded register-tile/output-ownership test after Q8_0 remained the worst post-BN128 basket row. It compiled through CMake/Ninja with wave32, SGPR=27, VGPR=135, LDS=4352, no spills, improving compile pressure versus accepted BN128 split-qsum's VGPR=152. Focused CPU-reference gates passed for p33, p512, and p513; route traces proved p33 stayed on the narrow/default path while p512 and p513 selected the candidate under the opt-in env. Same-runner focused timing rejects it for production because every p512 and p513 row regressed versus the current default: p512 Vcur 550.04 -> 625.05 us, Qcur 1882.69 -> 2087.72 us, ffn_out 7043.92 -> 8482.13 us, ffn_gate 6416.43 -> 7242.67 us, result_output 55913.71 -> 64160.60 us; p513 Vcur 531.02 -> 717.80 us, Qcur 2018.92 -> 2432.01 us, ffn_out 7762.03 -> 9816.67 us, ffn_gate 7209.13 -> 8530.12 us, result_output 63218.36 -> 76252.10 us. Reducing per-thread columns while keeping BN128 loses row-tile amortization and does not recover the missing Vulkan schedule."
     }
   ]
 }

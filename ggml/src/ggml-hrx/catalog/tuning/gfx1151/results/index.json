@@ -561,6 +561,19 @@
       "artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x128-splitqsum8-focused-20260618/",
       "compile_artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x128-splitqsum8-compile-20260618/",
       "status": "rejected_focused_perf_regression"
+    },
+    {
+      "id": "q8_0_prompt_mmq32x128_compile",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmq32x128-compile-20260618/",
+      "status": "accepted_compile_resource_no_spills"
+    },
+    {
+      "id": "q8_0_prompt_mmq32x128_p33_p512_p513",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmq32x128-focused-20260618/",
+      "compile_artifact": "cache/hrxv1/gfx1151/q8_0-mmq32x128-compile-20260618/",
+      "status": "rejected_focused_perf_regression"
     }
   ]
 }
