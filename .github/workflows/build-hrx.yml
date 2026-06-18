@@ -26,9 +26,11 @@ jobs:
       matrix:
         include:
           - name: gfx1151_strix-halo
+            gpu_target: gfx1151
             runner: linux-gfx1151-gpu-rocm
             rocm_tarball: therock-dist-linux-gfx1151-7.14.0a20260617.tar.gz
           - name: gfx1201_9070
+            gpu_target: gfx1201
             runner: linux-gfx120X-gpu-rocm
             rocm_tarball: therock-dist-linux-gfx120X-all-7.14.0a20260617.tar.gz
     runs-on: ${{ matrix.runner }}
@@ -44,7 +46,7 @@ jobs:
         --device /dev/dri
     env:
       DEVWS_REPOSITORY: AaronStGeorge/llamacpp-devws
-      DEVWS_REF: build-hrx-v2
+      DEVWS_REF: ci-scripts
       DEVWS_DIR: /work/llamacpp-devws
       ROCM_DIR: /work/rocm
       ROCM_TARBALL_BASE_URL: https://rocm.nightlies.amd.com/tarball-multi-arch
@@ -74,14 +76,11 @@ jobs:
 
       - name: Runner identity
         if: always()
-        run: |
-          printf 'RUNNER_NAME=%s\n' "${RUNNER_NAME:-}"
-          printf 'RUNNER_OS=%s\n' "${RUNNER_OS:-}"
-          printf 'GITHUB_EVENT_NAME=%s\n' "${GITHUB_EVENT_NAME:-}"
-          hostname
-          uname -a
-          ls -l /dev/kfd /dev/dri || true
-          printenv | sort | grep -E '^(GITHUB_|RUNNER_|ROCM_|HSA_|HIP_)' || true
+        env:
+          MATRIX_NAME: ${{ matrix.name }}
+          MATRIX_GPU_TARGET: ${{ matrix.gpu_target }}
+          MATRIX_RUNS_ON: ${{ matrix.runner }}
+        run: "${GITHUB_WORKSPACE}/devws-src/ci/runner-info.sh"
 
       - name: Install host build dependencies
         run: |
@@ -104,12 +103,10 @@ jobs:
       - name: Stage dev workspace under /work
         run: |
           rm -rf "${DEVWS_DIR}"
-          mkdir -p "${DEVWS_DIR}/sources"
+          mkdir -p "${DEVWS_DIR}"
           cp -a "${GITHUB_WORKSPACE}/devws-src/." "${DEVWS_DIR}/"
-          cp -a "${GITHUB_WORKSPACE}/llama-src" "${DEVWS_DIR}/sources/llama.cpp"
-          cp -a "${GITHUB_WORKSPACE}/hrx-system-src" "${DEVWS_DIR}/sources/hrx-system"
-          git -C "${DEVWS_DIR}/sources/llama.cpp" checkout -B hrx-v2
-          git -C "${DEVWS_DIR}/sources/hrx-system" checkout -B main
+          git -C "${GITHUB_WORKSPACE}/llama-src" checkout -B hrx-v2
+          git -C "${GITHUB_WORKSPACE}/hrx-system-src" checkout -B main
 
       - name: Fetch ROCm nightly tarball
         run: |
@@ -138,9 +135,50 @@ jobs:
             --action loom \
             --action rocm-health \
             --action llama-hrx2 \
+            --hrx-source "${GITHUB_WORKSPACE}/hrx-system-src" \
+            --llama-source "${GITHUB_WORKSPACE}/llama-src" \
             --gfx-targets auto \
             --jobs "$(nproc)"
 
       - name: Verify HRX2 build configuration
         run: |
           grep -F 'GGML_HRX2:BOOL=ON' "${DEVWS_DIR}/build/llama-hrx2/CMakeCache.txt"
+
+      - name: Run sample MUL_MAT correctness config on HRX2
+        run: |
+          export ROCM_PATH="${DEVWS_DIR}/rocm"
+          export GGML_HRX_ROCM_PATH="${DEVWS_DIR}/rocm"
+          export PATH="${DEVWS_DIR}/rocm/bin:${DEVWS_DIR}/rocm/lib/llvm/bin:${PATH}"
+          export LD_LIBRARY_PATH="${DEVWS_DIR}/build/llama-hrx2/bin:${DEVWS_DIR}/build/hrx-install/lib:${DEVWS_DIR}/build/hrx-install/lib64:${DEVWS_DIR}/rocm/lib:${DEVWS_DIR}/rocm/lib64:${DEVWS_DIR}/rocm/lib/rocm_sysdeps/lib:${LD_LIBRARY_PATH:-}"
+          export IREE_HAL_AMDGPU_LIBHSA_PATH="${DEVWS_DIR}/rocm/lib/libhsa-runtime64.so"
+          mkdir -p "${GITHUB_WORKSPACE}/benchmark-results"
+          "${DEVWS_DIR}/ci/tools/run-op-test.py" \
+            --test-backend-ops "${DEVWS_DIR}/build/llama-hrx2/bin/test-backend-ops" \
+            --test-file "${DEVWS_DIR}/ci/benchmark-configs/test/mul_mat_f16.txt" \
+            --op MUL_MAT \
+            --backend HRX20 \
+            --output "${GITHUB_WORKSPACE}/benchmark-results/sample-mul-mat-f16-hrx2-test.jsonl" \
+            --raw-output "${GITHUB_WORKSPACE}/benchmark-results/sample-mul-mat-f16-hrx2-test.txt"
+
+      - name: Run sample MUL_MAT benchmark config on HRX2
+        run: |
+          export ROCM_PATH="${DEVWS_DIR}/rocm"
+          export GGML_HRX_ROCM_PATH="${DEVWS_DIR}/rocm"
+          export PATH="${DEVWS_DIR}/rocm/bin:${DEVWS_DIR}/rocm/lib/llvm/bin:${PATH}"
+          export LD_LIBRARY_PATH="${DEVWS_DIR}/build/llama-hrx2/bin:${DEVWS_DIR}/build/hrx-install/lib:${DEVWS_DIR}/build/hrx-install/lib64:${DEVWS_DIR}/rocm/lib:${DEVWS_DIR}/rocm/lib64:${DEVWS_DIR}/rocm/lib/rocm_sysdeps/lib:${LD_LIBRARY_PATH:-}"
+          export IREE_HAL_AMDGPU_LIBHSA_PATH="${DEVWS_DIR}/rocm/lib/libhsa-runtime64.so"
+          mkdir -p "${GITHUB_WORKSPACE}/benchmark-results"
+          "${DEVWS_DIR}/ci/tools/run-op-perf.py" \
+            --test-backend-ops "${DEVWS_DIR}/build/llama-hrx2/bin/test-backend-ops" \
+            --test-file "${DEVWS_DIR}/ci/benchmark-configs/test/mul_mat_f16.txt" \
+            --op MUL_MAT \
+            --backend HRX20 \
+            --output "${GITHUB_WORKSPACE}/benchmark-results/sample-mul-mat-f16-hrx2-perf.jsonl" \
+            --raw-output "${GITHUB_WORKSPACE}/benchmark-results/sample-mul-mat-f16-hrx2-perf.txt"
+
+      - name: Upload HRX2 benchmark results
+        uses: actions/upload-artifact@v5
+        with:
+          name: hrx2-benchmark-results-${{ matrix.name }}
+          path: benchmark-results/
+          if-no-files-found: error
