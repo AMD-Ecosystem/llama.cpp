@@ -2,6 +2,14 @@
 #include <hip/hip_runtime.h>
 #include <stdint.h>
 
+#ifndef HRX_Q4_K_Q8_1_X4_MMQL128_EXPORT
+#define HRX_Q4_K_Q8_1_X4_MMQL128_EXPORT hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x128_wg256_f32
+#endif
+
+#ifndef HRX_Q4_K_Q8_1_X4_MMQL128_BK_STEP
+#define HRX_Q4_K_Q8_1_X4_MMQL128_BK_STEP 1
+#endif
+
 struct hrx_block_q4_K_q8_1_mmql_lhs {
     unsigned short d;
     unsigned short dmin;
@@ -95,14 +103,14 @@ static __device__ __forceinline__ void hrx_q4_k_mmql_load_b(
     }
 }
 
-extern "C" __global__ void hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x128_wg256_f32(
+extern "C" __global__ void HRX_Q4_K_Q8_1_X4_MMQL128_EXPORT(
         const hrx_block_q4_K_q8_1_mmql_lhs * src0,
         const hrx_block_q8_1_x4_rhs_q4_mmql * src1,
         float * dst,
         long long k, long long rows, long long cols) {
     constexpr int BM = 128;
     constexpr int BN = 128;
-    constexpr int BK_STEP = 1;
+    constexpr int BK_STEP = HRX_Q4_K_Q8_1_X4_MMQL128_BK_STEP;
     constexpr int BLOCK_SIZE = 256;
     constexpr int WARP = 64;
     constexpr int WM = 64;

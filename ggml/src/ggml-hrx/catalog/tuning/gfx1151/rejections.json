@@ -112,6 +112,14 @@
       "env": "GGML_HRX_ENABLE_Q8_0_WMMA16_F16ACC_WG256_PROMPT=1",
       "artifact": "cache/hrxv1/gfx1151/q8_0-wmma16-f16acc-wg256-focused-20260617-204624/",
       "reason": "The 256-thread workgroup aggregation of eight direct Q8_0 f16acc WMMA16 subtiles compiled through CMake/Ninja, emitted v_wmma_f16_16x16x16_f16 with no spills (SGPR=18, VGPR=37, LDS=0), and passed CPU-reference focused p512 plus p33/p513 tail rows. It is rejected for production promotion because same-row p512 perf regressed versus the current packed Q8_1 route and the single-wave WMMA diagnostic: 825.08 us for WG256 f16acc versus 520.35 us for hrx_mul_mat_vec_q8_0_q8_1_x4_mmq128x32_wg256_f32. This shows WG256 grouping without Vulkan-style packed/staged data reuse is not the missing schedule axis."
+    },
+    {
+      "id": "q4_dense_prompt_mmql128_bk2_p512_p513",
+      "date": "2026-06-17",
+      "route": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bk2_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q4_K_Q8_1_X4_MMQL128_BK2_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q4k-mmql128-bk2-focused-20260617-211000/",
+      "reason": "The Vulkan-oracle staging-depth probe preserved the accepted Q4 BM128/BN128/WG256/WAVE64/TM4/TN2 route and increased BK_STEP from 1 to 2. It compiled through CMake/Ninja with no spills (SGPR=55, VGPR=145, LDS=16384 bytes) and passed p512 plus odd/tail p513 and p33 focused CPU-reference gates. It is rejected for production promotion because the p513 tail A/B was mixed-to-regressive versus BK1: Vcur 207.89 -> 216.53 us, node 886.36 -> 851.36 us, Qcur narrow 42.36 -> 54.21 us, Qcur p513 877.63 -> 1003.39 us. p512 had useful wins on Vcur and node but was flat on Qcur p512, so this axis is not a robust gfx1151 default."
     }
   ]
 }
