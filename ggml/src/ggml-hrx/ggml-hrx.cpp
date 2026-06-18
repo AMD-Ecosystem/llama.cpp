@@ -456,6 +456,17 @@ struct ggml_backend_hrx_mul_mat_vec_constants {
 
 static_assert(sizeof(ggml_backend_hrx_mul_mat_vec_constants) == 24);
 
+struct ggml_backend_hrx_mul_mat_vec_split_k_partial_constants {
+    int64_t k;
+    int64_t rows;
+    int64_t cols;
+    int64_t kb_start;
+    int64_t kb_count;
+    int64_t partial_base;
+};
+
+static_assert(sizeof(ggml_backend_hrx_mul_mat_vec_split_k_partial_constants) == 48);
+
 struct ggml_backend_hrx_split_k_reduce_constants {
     int64_t n;
     int64_t split;
@@ -6034,6 +6045,7 @@ static bool ggml_backend_hrx_supports_mul_mat_vec_k_quant_q8_1_shape(
 struct ggml_backend_hrx_q8_1_mmvq_variant {
     const ggml_backend_hrx_op_provider * provider = nullptr;
     bool x4_quant = false;
+    bool split_k_reduce = false;
     uint32_t rows_per_workgroup = 1;
     uint32_t cols_per_workgroup = 1;
 };
@@ -6455,6 +6467,21 @@ static ggml_backend_hrx_q8_1_mmvq_variant ggml_backend_hrx_mul_mat_vec_k_q8_1_va
                     device_context->mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bpair_wg256_provider)) {
                 variant.provider = &device_context->mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bpair_wg256_provider;
                 variant.x4_quant = true;
+                variant.rows_per_workgroup = 128;
+                variant.cols_per_workgroup = 128;
+                return variant;
+            }
+            if (has_q8_1_x4 &&
+                ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q5_K_Q8_1_X4_MMQL128_BQUAD_SPLITK_PROMPT") &&
+                rows % 128 == 0 && cols >= 512 && (cols % 128) != 0 &&
+                (src0->ne[0] % 256) == 0 &&
+                ggml_backend_hrx_provider_available(
+                    device_context->mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bquad_splitk_part_wg256_provider) &&
+                ggml_backend_hrx_provider_available(device_context->split_k_reduce_f32_provider)) {
+                variant.provider =
+                    &device_context->mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bquad_splitk_part_wg256_provider;
+                variant.x4_quant = true;
+                variant.split_k_reduce = true;
                 variant.rows_per_workgroup = 128;
                 variant.cols_per_workgroup = 128;
                 return variant;
@@ -10246,6 +10273,127 @@ static ggml_status ggml_backend_hrx_dispatch_mul_mat_vec_k_q8_1(
         /* .workgroup_size = */ { workgroup_size, 1, 1 },
         /* .subgroup_size = */ 0,
     };
+
+    if (variant.split_k_reduce) {
+        constexpr int64_t split_count = 2;
+        const int64_t q8_blocks_per_col = constants.k / 32;
+        if ((constants.k % 256) != 0 || q8_blocks_per_col < split_count) {
+            GGML_LOG_ERROR(
+                "%s: unsupported split-K Q5 shape k=%" PRId64 " q8_blocks=%" PRId64 "\n",
+                __func__, constants.k, q8_blocks_per_col);
+            return GGML_STATUS_FAILED;
+        }
+
+        const int64_t output_elements = constants.rows * constants.cols;
+        if (output_elements <= 0) {
+            return GGML_STATUS_FAILED;
+        }
+
+        hrx_buffer_ref_t partial_ref = {};
+        const size_t partial_size =
+            static_cast<size_t>(split_count) * static_cast<size_t>(output_elements) * sizeof(float);
+        if (!ggml_backend_hrx_request_scratch_buffer(context, partial_size, &partial_ref)) {
+            return GGML_STATUS_FAILED;
+        }
+
+        hrx_buffer_ref_t partial_bindings[3] = { bindings[0], bindings[1], partial_ref };
+        const int64_t first_kb_count = q8_blocks_per_col / split_count;
+        for (int64_t split = 0; split < split_count; ++split) {
+            const int64_t kb_start = split * first_kb_count;
+            const int64_t kb_count =
+                split + 1 == split_count ? q8_blocks_per_col - kb_start : first_kb_count;
+            ggml_backend_hrx_mul_mat_vec_split_k_partial_constants partial_constants = {
+                /* .k            = */ constants.k,
+                /* .rows         = */ constants.rows,
+                /* .cols         = */ constants.cols,
+                /* .kb_start     = */ kb_start,
+                /* .kb_count     = */ kb_count,
+                /* .partial_base = */ split * output_elements,
+            };
+
+            if (ggml_backend_hrx_trace_routes_enabled()) {
+                std::fprintf(
+                    stderr,
+                    "HRX route MUL_MAT q8_1_splitk_part provider=%s type=%s k=%" PRId64
+                    " rows=%" PRId64 " cols=%" PRId64 " split=%" PRId64 "/%" PRId64
+                    " kb_start=%" PRId64 " kb_count=%" PRId64 " x4=%d wg_count=[%u,%u,%u] dst=%s\n",
+                    provider.name.c_str(),
+                    ggml_type_name(src0->type),
+                    constants.k,
+                    constants.rows,
+                    constants.cols,
+                    split,
+                    split_count,
+                    kb_start,
+                    kb_count,
+                    variant.x4_quant ? 1 : 0,
+                    config.workgroup_count[0],
+                    config.workgroup_count[1],
+                    config.workgroup_count[2],
+                    dst->name);
+            }
+
+            if (!GGML_HRX_CHECK(hrx_stream_dispatch(
+                    context->stream,
+                    provider.executable,
+                    provider.export_ordinal,
+                    &config,
+                    &partial_constants,
+                    sizeof(partial_constants),
+                    partial_bindings,
+                    3,
+                    HRX_DISPATCH_FLAG_NONE))) {
+                return GGML_STATUS_FAILED;
+            }
+        }
+
+        const auto & reduce_provider = context->device_context->split_k_reduce_f32_provider;
+        const uint32_t reduce_workgroup_size = reduce_provider.export_info.workgroup_size[0] ?
+            reduce_provider.export_info.workgroup_size[0] : 256;
+        hrx_dispatch_config_t reduce_config = {
+            /* .workgroup_count = */ {
+                static_cast<uint32_t>((output_elements + reduce_workgroup_size - 1) / reduce_workgroup_size),
+                1,
+                1,
+            },
+            /* .workgroup_size = */ { reduce_workgroup_size, 1, 1 },
+            /* .subgroup_size = */ 0,
+        };
+        ggml_backend_hrx_split_k_reduce_constants reduce_constants = {
+            /* .n     = */ output_elements,
+            /* .split = */ split_count,
+        };
+        hrx_buffer_ref_t reduce_bindings[2] = { partial_ref, bindings[2] };
+
+        if (ggml_backend_hrx_trace_routes_enabled()) {
+            std::fprintf(
+                stderr,
+                "HRX route SPLIT_K_REDUCE provider=%s n=%" PRId64 " split=%" PRId64
+                " wg_count=[%u,%u,%u] dst=%s\n",
+                reduce_provider.name.c_str(),
+                reduce_constants.n,
+                reduce_constants.split,
+                reduce_config.workgroup_count[0],
+                reduce_config.workgroup_count[1],
+                reduce_config.workgroup_count[2],
+                dst->name);
+        }
+
+        if (!GGML_HRX_CHECK(hrx_stream_dispatch(
+                context->stream,
+                reduce_provider.executable,
+                reduce_provider.export_ordinal,
+                &reduce_config,
+                &reduce_constants,
+                sizeof(reduce_constants),
+                reduce_bindings,
+                2,
+                HRX_DISPATCH_FLAG_NONE))) {
+            return GGML_STATUS_FAILED;
+        }
+
+        return GGML_STATUS_SUCCESS;
+    }
 
     if (ggml_backend_hrx_trace_routes_enabled()) {
         std::fprintf(
