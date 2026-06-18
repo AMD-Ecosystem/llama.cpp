@@ -544,6 +544,15 @@
       "reason": "The Q8_0 VK128 buffer-store probe replaced both full-tile and guarded edge writeback with __builtin_amdgcn_raw_buffer_store_b32 while preserving the direct-F32 VK128 W64 math path and the stage-allocation LDS footprint. The original gfx1151 descriptor word 0x27000 was wrong: a CMake/Ninja-built raw-buffer-store fixture showed it effectively no-ops, while the Tensile gfx11 resource word 0x31004000 passes both make_buffer_rsrc and manual descriptors on production-sized 4096x512, 14336x512, and 128256x512 output shapes. With the route patched to use 0x31004000, focused CPU-reference gates passed for p512 and p513 selected large rows, while p33 correctly stayed on the narrow packed route. The route is still rejected for production because same-runner focused timing regressed versus current default routing on every selected large row: p512 ffn_out 7048.33 -> 10357.40 us, ffn_gate 6358.83 -> 10973.75 us, result_output 56008.26 -> 98015.71 us; p513 ffn_out 7611.67 -> 10779.03 us, ffn_gate 6875.18 -> 13367.04 us, result_output 62863.76 -> 111411.43 us. Correct raw buffer stores are therefore a necessary primitive, not the Vulkan-winning schedule. The next exact-schedule attempt must reproduce RADV's cooperative-matrix load/store lane ownership and halfword LDS topology, not just the buffer-store opcode."
     },
     {
+      "id": "q5_dense_prompt_mmql128_cr_p33_p512_p513",
+      "date": "2026-06-18",
+      "route": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_cr_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q5_K_Q8_1_X4_MMQL128_CR_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q5-mmql128-cr-focused-20260618/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q5_k_q8_1_x4_mmql128_cr.hsaco",
+      "reason": "The Q5_K packed-Q8_1/x4 CR issue-order probe preserved BM128/BN128/WG256/wave64/BK_STEP1 and changed only the inner dot issue order to consume one Q5 row cache across columns before advancing cr. It compiled through CMake/Ninja but spilled badly (wave64, SGPR=50, VGPR=192, LDS=10240, private_segment_fixed_size=452, vgpr_spill_count=135) while preserving 512 v_dot4_i32_iu8, 64 global_store_b32, and 2 barriers. Focused p33/p512/p513 CPU-reference gates passed; p512 selected CR for Qcur/ffn_out/ffn_gate, p33 stayed on rows2/MMQ64, and p513 fell back to current MMQL128 for tails. It is rejected because same-runner p512 focused timing regressed Qcur 1225.57 -> 3832.51 us, ffn_out 7453.69 -> 21017.01 us, and ffn_gate 7161.45 -> 19333.78 us. The issue-order axis increases live ranges/spills and should not be continued without a different B ownership/prefetch strategy."
+    },
+    {
       "id": "q8_q6_direct_wmma_rocwmma_header_probe_wave32_default_store",
       "date": "2026-06-18",
       "route": "not implemented",
