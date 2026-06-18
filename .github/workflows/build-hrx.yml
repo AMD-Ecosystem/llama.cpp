@@ -47,7 +47,8 @@ jobs:
     env:
       DEVWS_REPOSITORY: AaronStGeorge/llamacpp-devws
       DEVWS_REF: ci-scripts
-      DEVWS_DIR: /work/llamacpp-devws
+      DEVWS_DIR: ${{ github.workspace }}/devws-src
+      DEVWS_BUILD_DIR: /work/llamacpp-devws-build
       ROCM_DIR: /work/rocm
       ROCM_TARBALL_BASE_URL: https://rocm.nightlies.amd.com/tarball-multi-arch
       ROCM_TARBALL_NAME: ${{ matrix.rocm_tarball }}
@@ -100,24 +101,17 @@ jobs:
             tar \
             xz-utils
 
-      - name: Stage dev workspace under /work
-        run: |
-          rm -rf "${DEVWS_DIR}"
-          mkdir -p "${DEVWS_DIR}"
-          cp -a "${GITHUB_WORKSPACE}/devws-src/." "${DEVWS_DIR}/"
-          git -C "${GITHUB_WORKSPACE}/llama-src" checkout -B hrx-v2
-          git -C "${GITHUB_WORKSPACE}/hrx-system-src" checkout -B main
-
       - name: Fetch ROCm nightly tarball
         run: |
-          rm -rf "${ROCM_DIR}" /work/rocm-tarball
+          rm -rf "${DEVWS_BUILD_DIR}" "${ROCM_DIR}" /work/rocm-tarball
+          mkdir -p "${DEVWS_BUILD_DIR}"
           mkdir -p "${ROCM_DIR}" /work/rocm-tarball
           curl -fsSL "${ROCM_TARBALL_BASE_URL}/${ROCM_TARBALL_NAME}" \
             -o "/work/rocm-tarball/${ROCM_TARBALL_NAME}"
           tar -xzf "/work/rocm-tarball/${ROCM_TARBALL_NAME}" -C "${ROCM_DIR}"
-          ln -sfn "${ROCM_DIR}" "${DEVWS_DIR}/rocm"
-          test -x "${DEVWS_DIR}/rocm/bin/rocminfo"
-          test -x "${DEVWS_DIR}/rocm/bin/amdclang++"
+          ln -sfn "${ROCM_DIR}" "${DEVWS_BUILD_DIR}/rocm"
+          test -x "${DEVWS_BUILD_DIR}/rocm/bin/rocminfo"
+          test -x "${DEVWS_BUILD_DIR}/rocm/bin/amdclang++"
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
@@ -130,6 +124,7 @@ jobs:
         run: |
           cd "${DEVWS_DIR}"
           python3 skills/bootstrap-hrx-llama-builds/scripts/bootstrap_builds.py \
+            --workspace "${DEVWS_BUILD_DIR}" \
             --action check \
             --action hrx \
             --action loom \
@@ -137,23 +132,24 @@ jobs:
             --action llama-hrx2 \
             --hrx-source "${GITHUB_WORKSPACE}/hrx-system-src" \
             --llama-source "${GITHUB_WORKSPACE}/llama-src" \
+            --skip-source-branch-check \
             --gfx-targets auto \
             --jobs "$(nproc)"
 
       - name: Verify HRX2 build configuration
         run: |
-          grep -F 'GGML_HRX2:BOOL=ON' "${DEVWS_DIR}/build/llama-hrx2/CMakeCache.txt"
+          grep -F 'GGML_HRX2:BOOL=ON' "${DEVWS_BUILD_DIR}/build/llama-hrx2/CMakeCache.txt"
 
       - name: Run sample MUL_MAT correctness config on HRX2
         run: |
-          export ROCM_PATH="${DEVWS_DIR}/rocm"
-          export GGML_HRX_ROCM_PATH="${DEVWS_DIR}/rocm"
-          export PATH="${DEVWS_DIR}/rocm/bin:${DEVWS_DIR}/rocm/lib/llvm/bin:${PATH}"
-          export LD_LIBRARY_PATH="${DEVWS_DIR}/build/llama-hrx2/bin:${DEVWS_DIR}/build/hrx-install/lib:${DEVWS_DIR}/build/hrx-install/lib64:${DEVWS_DIR}/rocm/lib:${DEVWS_DIR}/rocm/lib64:${DEVWS_DIR}/rocm/lib/rocm_sysdeps/lib:${LD_LIBRARY_PATH:-}"
-          export IREE_HAL_AMDGPU_LIBHSA_PATH="${DEVWS_DIR}/rocm/lib/libhsa-runtime64.so"
+          export ROCM_PATH="${DEVWS_BUILD_DIR}/rocm"
+          export GGML_HRX_ROCM_PATH="${DEVWS_BUILD_DIR}/rocm"
+          export PATH="${DEVWS_BUILD_DIR}/rocm/bin:${DEVWS_BUILD_DIR}/rocm/lib/llvm/bin:${PATH}"
+          export LD_LIBRARY_PATH="${DEVWS_BUILD_DIR}/build/llama-hrx2/bin:${DEVWS_BUILD_DIR}/build/hrx-install/lib:${DEVWS_BUILD_DIR}/build/hrx-install/lib64:${DEVWS_BUILD_DIR}/rocm/lib:${DEVWS_BUILD_DIR}/rocm/lib64:${DEVWS_BUILD_DIR}/rocm/lib/rocm_sysdeps/lib:${LD_LIBRARY_PATH:-}"
+          export IREE_HAL_AMDGPU_LIBHSA_PATH="${DEVWS_BUILD_DIR}/rocm/lib/libhsa-runtime64.so"
           mkdir -p "${GITHUB_WORKSPACE}/benchmark-results"
           "${DEVWS_DIR}/ci/tools/run-op-test.py" \
-            --test-backend-ops "${DEVWS_DIR}/build/llama-hrx2/bin/test-backend-ops" \
+            --test-backend-ops "${DEVWS_BUILD_DIR}/build/llama-hrx2/bin/test-backend-ops" \
             --test-file "${DEVWS_DIR}/ci/benchmark-configs/test/mul_mat_f16.txt" \
             --op MUL_MAT \
             --backend HRX20 \
@@ -162,14 +158,14 @@ jobs:
 
       - name: Run sample MUL_MAT benchmark config on HRX2
         run: |
-          export ROCM_PATH="${DEVWS_DIR}/rocm"
-          export GGML_HRX_ROCM_PATH="${DEVWS_DIR}/rocm"
-          export PATH="${DEVWS_DIR}/rocm/bin:${DEVWS_DIR}/rocm/lib/llvm/bin:${PATH}"
-          export LD_LIBRARY_PATH="${DEVWS_DIR}/build/llama-hrx2/bin:${DEVWS_DIR}/build/hrx-install/lib:${DEVWS_DIR}/build/hrx-install/lib64:${DEVWS_DIR}/rocm/lib:${DEVWS_DIR}/rocm/lib64:${DEVWS_DIR}/rocm/lib/rocm_sysdeps/lib:${LD_LIBRARY_PATH:-}"
-          export IREE_HAL_AMDGPU_LIBHSA_PATH="${DEVWS_DIR}/rocm/lib/libhsa-runtime64.so"
+          export ROCM_PATH="${DEVWS_BUILD_DIR}/rocm"
+          export GGML_HRX_ROCM_PATH="${DEVWS_BUILD_DIR}/rocm"
+          export PATH="${DEVWS_BUILD_DIR}/rocm/bin:${DEVWS_BUILD_DIR}/rocm/lib/llvm/bin:${PATH}"
+          export LD_LIBRARY_PATH="${DEVWS_BUILD_DIR}/build/llama-hrx2/bin:${DEVWS_BUILD_DIR}/build/hrx-install/lib:${DEVWS_BUILD_DIR}/build/hrx-install/lib64:${DEVWS_BUILD_DIR}/rocm/lib:${DEVWS_BUILD_DIR}/rocm/lib64:${DEVWS_BUILD_DIR}/rocm/lib/rocm_sysdeps/lib:${LD_LIBRARY_PATH:-}"
+          export IREE_HAL_AMDGPU_LIBHSA_PATH="${DEVWS_BUILD_DIR}/rocm/lib/libhsa-runtime64.so"
           mkdir -p "${GITHUB_WORKSPACE}/benchmark-results"
           "${DEVWS_DIR}/ci/tools/run-op-perf.py" \
-            --test-backend-ops "${DEVWS_DIR}/build/llama-hrx2/bin/test-backend-ops" \
+            --test-backend-ops "${DEVWS_BUILD_DIR}/build/llama-hrx2/bin/test-backend-ops" \
             --test-file "${DEVWS_DIR}/ci/benchmark-configs/test/mul_mat_f16.txt" \
             --op MUL_MAT \
             --backend HRX20 \
