@@ -40,6 +40,15 @@ jobs:
         shell: bash --noprofile --norc -exo pipefail {0}
     container:
       image: ghcr.io/rocm/no_rocm_image_ubuntu24_04@sha256:fba5f55a122dbb15925e98c51fe65bffe88c36e11ebb25b73daf2bea04202dc3
+      # --user 0:0: actions running inside the container need to write to some
+      #             files set up outside the container by the runner agent.  In
+      #             June 2026 some runner agents set those files up with
+      #             permissions for a "tester" user with UID/GID 1001, which
+      #             matches the user in no_rocm_image_ubuntu24_04, and some are
+      #             set up as root; accessing a file owned by root with user
+      #             "tester" gives an EACCES. Running as root is the common
+      #             denominator.
+      # --device kfd/dri: GPU access.
       options: >-
         --user 0:0
         --device /dev/kfd
