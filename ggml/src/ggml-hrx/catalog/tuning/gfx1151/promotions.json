@@ -96,12 +96,13 @@
     {
       "id": "q4_dense_prompt_mmql128_bquad_full_tile_deepseek_llama31_p512",
       "date": "2026-06-18",
-      "status": "accepted_opt_in_candidate",
+      "status": "accepted_gfx1151_default",
       "route": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bquad_wg256_f32",
-      "env": "GGML_HRX_ENABLE_Q4_K_Q8_1_X4_MMQL128_BQUAD_PROMPT=1",
+      "env": "default on gfx1151; rollback with GGML_HRX_DISABLE_Q4_K_Q8_1_X4_MMQL128_BQUAD_PROMPT=1; opt-in elsewhere with GGML_HRX_ENABLE_Q4_K_Q8_1_X4_MMQL128_BQUAD_PROMPT=1",
       "shape_guard": "q4_K MUL_MAT prompt, k % 256 == 0, rows % 128 == 0, cols >= 128, cols % 128 == 0, contiguous tensors, packed Q8_1 x4 RHS",
       "focused_artifacts": [
-        "cache/hrxv1/gfx1151/q4-mmql128-bquad-focused-20260618-020428/"
+        "cache/hrxv1/gfx1151/q4-mmql128-bquad-focused-20260618-020428/",
+        "cache/hrxv1/gfx1151/q4-mmql128-bquad-default-regate-20260618-051326/"
       ],
       "model_artifacts": [
         "cache/hrxv1/gfx1151/q4-mmql128-bquad-deepseek-model-ab-20260618-020603/",
@@ -119,7 +120,7 @@
         "exact p513 tails must fall back to current MMQL128 until a tail-specific schedule wins",
         "p33 stays on the existing narrow route",
         "broader p512 basket coverage and same-machine Vulkan ratio update are still pending",
-        "default selector policy must remain target-specific and avoid perturbing gfx1100"
+        "next Q4_K work should mechanically mine the remaining p513-tail and direct-Vulkan schedule deltas instead of widening this full-tile route"
       ]
     },
     {

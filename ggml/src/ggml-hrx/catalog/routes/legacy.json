@@ -5269,14 +5269,14 @@
       "cols_min": 128,
       "cols_multiple": 128,
       "k_multiple": 256,
-      "requires_env": "GGML_HRX_ENABLE_Q4_K_Q8_1_X4_MMQL128_BQUAD_PROMPT"
+      "gfx1151_policy": "default unless GGML_HRX_DISABLE_Q4_K_Q8_1_X4_MMQL128_BQUAD_PROMPT=1; opt-in elsewhere with GGML_HRX_ENABLE_Q4_K_Q8_1_X4_MMQL128_BQUAD_PROMPT=1"
     },
     "supports": {
       "legacy_export": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bquad_wg256_f32"
     },
     "evidence_summary": {
-      "status": "accepted_gfx1151_opt_in_candidate",
-      "selection": "Packed-Q8_1/x4 LDS-read issue-order probe following the positive full-tile B-pair result. It preserves the current Q4_K MMQL128 production dataflow, BM128, BN128, wave64, BK_STEP1, and output ownership, but preloads four B-cache rows across two adjacent WNITER positions before issuing dots. This moves one step closer to RADV's broad post-barrier LDS-read window. It compiles through CMake/Ninja with wave64, SGPR=53, VGPR=169, LDS=8192, no spills. Focused p512/p33/p513 correctness passed; p512 selected bquad, p513 fell back to current MMQL128, and p33 stayed narrow. Same-binary model A/B improved DeepSeek Q4_K_M p512/fa1 249.47 -> 261.03 tok/s and Llama 3.1 8B Q4_K_M p512/fa1 499.38 -> 527.82 tok/s. Opt-in only and guarded to full column tiles; exact p513 tails must fall back unless separately proven."
+      "status": "accepted_gfx1151_default",
+      "selection": "Packed-Q8_1/x4 LDS-read issue-order probe following the positive full-tile B-pair result. It preserves the current Q4_K MMQL128 production dataflow, BM128, BN128, wave64, BK_STEP1, and output ownership, but preloads four B-cache rows across two adjacent WNITER positions before issuing dots. This moves one step closer to RADV's broad post-barrier LDS-read window. It compiles through CMake/Ninja with wave64, SGPR=53, VGPR=169, LDS=8192, no spills. Focused p512/p33/p513 correctness passed; p512 selected bquad, p513 fell back to current MMQL128, and p33 stayed narrow. Same-binary model A/B improved DeepSeek Q4_K_M p512/fa1 249.47 -> 261.03 tok/s and Llama 3.1 8B Q4_K_M p512/fa1 499.38 -> 527.82 tok/s. It is default on gfx1151 only, with rollback GGML_HRX_DISABLE_Q4_K_Q8_1_X4_MMQL128_BQUAD_PROMPT=1; exact p513 tails must fall back unless separately proven."
     },
     "target_prefixes": [
       "gfx11"

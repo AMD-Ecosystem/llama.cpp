@@ -3705,6 +3705,16 @@ static bool ggml_backend_hrx_q6_k_wmma16_vk128_padded_w64_enabled(
            !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_Q6_K_WMMA16_VK128_PADDED_W64_F16ACC_WG256_PROMPT");
 }
 
+static bool ggml_backend_hrx_q4_k_mmql128_bquad_enabled(
+        const ggml_backend_hrx_device_context * device_context) {
+    if (ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q4_K_Q8_1_X4_MMQL128_BQUAD_PROMPT")) {
+        return true;
+    }
+    return device_context &&
+           device_context->architecture == "gfx1151" &&
+           !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_Q4_K_Q8_1_X4_MMQL128_BQUAD_PROMPT");
+}
+
 static bool ggml_backend_hrx_flash_attn_ext_decode_disabled() {
     return ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_FLASH_ATTN_EXT_DECODE");
 }
@@ -5742,7 +5752,7 @@ static ggml_backend_hrx_q8_1_mmvq_variant ggml_backend_hrx_mul_mat_vec_k_q8_1_va
                 return variant;
             }
             if (has_q8_1_x4 &&
-                ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q4_K_Q8_1_X4_MMQL128_BQUAD_PROMPT") &&
+                ggml_backend_hrx_q4_k_mmql128_bquad_enabled(device_context) &&
                 device_context->mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bquad_wg256_provider.kind ==
                     ggml_backend_hrx_provider_kind::hsaco &&
                 src1->type == GGML_TYPE_F32 &&

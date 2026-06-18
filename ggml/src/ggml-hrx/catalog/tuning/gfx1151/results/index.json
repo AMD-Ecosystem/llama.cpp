@@ -306,7 +306,7 @@
       "id": "q4_dense_prompt_mmql128_bquad_full_tile_deepseek_p33_p512_p513",
       "date": "2026-06-18",
       "artifact": "cache/hrxv1/gfx1151/q4-mmql128-bquad-focused-20260618-020428/",
-      "status": "accepted_guarded_full_tile_candidate"
+      "status": "accepted_gfx1151_default"
     },
     {
       "id": "q4_dense_prompt_mmql128_bquad_deepseek_p512_model_ab",
@@ -319,6 +319,12 @@
       "date": "2026-06-18",
       "artifact": "cache/hrxv1/gfx1151/q4-mmql128-bquad-llama31-model-ab-20260618-020644/",
       "status": "accepted_model_ab_positive"
+    },
+    {
+      "id": "q4_dense_prompt_mmql128_bquad_default_regate_p33_p512_p513",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q4-mmql128-bquad-default-regate-20260618-051326/",
+      "status": "accepted_gfx1151_default"
     },
     {
       "id": "q8_0_prompt_wmma16_vk128_hybrid_large_rows_llama3_1_q8",
