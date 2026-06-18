@@ -411,6 +411,12 @@
       "status": "rejected_compile_resource_spills"
     },
     {
+      "id": "q8_0_prompt_mmq64x104_compile",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x104-compile-20260618/",
+      "status": "rejected_compile_resource_spills"
+    },
+    {
       "id": "q5_dense_prompt_wmma16_vk128_padded_w64_p33_p512_p513",
       "date": "2026-06-18",
       "artifact": "cache/hrxv1/gfx1151/q5-wmma-vk128-focused-20260618-025116/",

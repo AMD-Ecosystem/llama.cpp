@@ -361,6 +361,14 @@
       "reason": "The BN112 packed-Q8_1 probe preserved the accepted BN96 direct-A/staged-B dataflow and changed only the production-width column tile to BN=112/COLS_PER_THREAD=28, bracketing the simple column-widening axis between accepted BN96 and the known spilling BN128 route. It compiled through CMake/Ninja, but failed the compile-resource gate: wavefront_size=32, group_segment_fixed_size=3808, SGPR=28, VGPR=192, VGPR spills=24, and private_segment_fixed_size=100. For comparison, accepted BN96 is VGPR=181 with no spills, while BN128 is VGPR=192 with 55 spills and private_segment_fixed_size=224. This rejects simple BN112 column widening before runtime tests; the next packed-Q8_1 production candidate needs a different register tile or output ownership rather than more columns per thread in this spelling."
     },
     {
+      "id": "q8_0_prompt_mmq64x104_compile",
+      "date": "2026-06-18",
+      "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x104_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X104_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x104-compile-20260618/",
+      "reason": "The BN104 packed-Q8_1 probe preserved the accepted BN96 direct-A/staged-B dataflow and changed only the production-width column tile to BN=104/COLS_PER_THREAD=26. This was a bounded pressure bracket after BN112 spilled, not a production promotion attempt. It compiled through CMake/Ninja but still failed the compile-resource gate: wavefront_size=32, group_segment_fixed_size=3536, SGPR=28, VGPR=192, VGPR spills=9, and private_segment_fixed_size=40. For comparison, accepted BN96 is VGPR=181 with no spills, BN112 is VGPR=192 with 24 spills, and BN128 is VGPR=192 with 55 spills. Reject before runtime tests; simple column widening past BN96 reaches the 192-VGPR cliff even at BN104, so the next packed-Q8_1 candidate needs a different register tile, split accumulation, or output ownership."
+    },
+    {
       "id": "q5_dense_prompt_mmql128_bquad_p33_p512_p513",
       "date": "2026-06-18",
       "route": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bquad_wg256_f32",

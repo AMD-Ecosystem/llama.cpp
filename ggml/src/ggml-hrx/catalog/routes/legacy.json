@@ -7881,6 +7881,50 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x104_wg256_f32",
+    "family": "mul_mat_vec_q8_0_q8_1_x4_mmq64x104_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q8_0_mmq64x104",
+    "artifact_id": "mul_mat_vec_q8_0_mmq64x104_hsaco",
+    "export_name": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x104_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 110,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q8_0_prompt_mmq64x104_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q8_0 x F32 -> F32 MUL_MAT",
+      "k_multiple": 128,
+      "rows_multiple": 128,
+      "cols_min": 128,
+      "selector_gate": "GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X104_PROMPT=1"
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x104_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_compile_resource_spills",
+      "selection": "BM64/BN104 Q8_0 packed-Q8_1 prompt probe. It preserved the accepted BN96 direct-A/staged-B dataflow and tested the smaller column-widening pressure bracket below the rejected BN112 route.",
+      "rejection": "compile-resource rejection: the CMake-built gfx1151 HSACO reached VGPR=192 with 9 VGPR spills and private_segment_fixed_size=40. This is better than BN112, but still fails the no-spill compile gate before runtime testing."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq32x64_wg256_f32",
     "family": "mul_mat_vec_q8_0_q8_1_x4_mmq32x64_wg256",
     "op": "MUL_MAT",

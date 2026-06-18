@@ -545,6 +545,12 @@
     "format": "amdgpu-hsaco",
     "storage": "embedded"
   },
+  "mul_mat_vec_q8_0_mmq64x104_hsaco": {
+    "source_id": "mul_mat_vec_q8_0_mmq64x104",
+    "path": "mul_mat_vec_q8_0_mmq64x104.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
   "mul_mat_vec_q8_0_mmq64x112_hsaco": {
     "source_id": "mul_mat_vec_q8_0_mmq64x112",
     "path": "mul_mat_vec_q8_0_mmq64x112.hsaco",
