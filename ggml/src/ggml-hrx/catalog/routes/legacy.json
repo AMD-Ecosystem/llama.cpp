@@ -6406,6 +6406,50 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bpair_wg256_f32",
+    "family": "mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bpair_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q5_k_q8_1_x4_mmql128_bpair",
+    "artifact_id": "mul_mat_vec_q5_k_q8_1_x4_mmql128_bpair_hsaco",
+    "export_name": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bpair_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 100,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "dense_q5_k_prompt_x_q8_1_x4_mmql128_bpair_probe"
+    },
+    "shape_guards": {
+      "k_multiple": 256,
+      "rows_multiple": 128,
+      "cols_min": 128,
+      "cols_multiple": 128,
+      "contiguous": true
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bpair_wg256_f32",
+      "selector_gate": "GGML_HRX_ENABLE_Q5_K_Q8_1_X4_MMQL128_BPAIR_PROMPT=1"
+    },
+    "evidence_summary": {
+      "status": "candidate_gfx1151_schedule_probe",
+      "selection": "Q5_K packed-Q8_1/x4 follow-up to the positive Q4_K B-pair schedule axis and rejected Q5 B-quad transfer. It preserves the current Q5 MMQL128 packed dataflow, BM128, BN128, wave64, and BK_STEP1 while preloading only the two B-cache rows for each TN=2 micro-iteration before dot consumption. Keep opt-in until p33, p512, and p513 focused gates prove correctness, route selection, ISA pressure, and timing."
+    },
+    "target_prefixes": [
+      "gfx1151"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bquad_wg256_f32",
     "family": "mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bquad_wg256",
     "op": "MUL_MAT",

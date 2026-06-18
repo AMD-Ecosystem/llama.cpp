@@ -469,6 +469,13 @@
       "status": "rejected_focused_perf_regression"
     },
     {
+      "id": "q5_dense_prompt_mmql128_bpair_p33_p512_p513",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q5-mmql128-bpair-focused-20260618/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q5_k_q8_1_x4_mmql128_bpair.hsaco",
+      "status": "rejected_focused_perf_regression"
+    },
+    {
       "id": "q5_dense_prompt_wmma16_vk128_b64group_p33_p512_p513",
       "date": "2026-06-18",
       "artifact": "cache/hrxv1/gfx1151/q5-wmma-vk128-b64group-focused-20260618-054536/",

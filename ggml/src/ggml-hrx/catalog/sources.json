@@ -212,6 +212,9 @@
   "mul_mat_vec_q5_k_q8_1_x4_mmql128_bquad": {
     "path": "mul_mat_vec_q5_k_q8_1_x4_mmql128_bquad.hip.cpp"
   },
+  "mul_mat_vec_q5_k_q8_1_x4_mmql128_bpair": {
+    "path": "mul_mat_vec_q5_k_q8_1_x4_mmql128_bpair.hip.cpp"
+  },
   "mul_mat_vec_q5_k_wmma16_vk128_wg256": {
     "path": "mul_mat_vec_q5_k_wmma16_vk128_wg256.hip.cpp"
   },

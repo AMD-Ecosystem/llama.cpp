@@ -1,6 +1,18 @@
 #include "mul_mat_vec_q5_k_q8_1_common.hip.inc"
 
-extern "C" __global__ void hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bquad_wg256_f32(
+#ifndef HRX_Q5_K_Q8_1_X4_MMQL128_EXPORT
+#define HRX_Q5_K_Q8_1_X4_MMQL128_EXPORT hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bquad_wg256_f32
+#endif
+
+#ifndef HRX_Q5_K_Q8_1_X4_MMQL128_PREFETCH_B_PAIR
+#define HRX_Q5_K_Q8_1_X4_MMQL128_PREFETCH_B_PAIR 0
+#endif
+
+#ifndef HRX_Q5_K_Q8_1_X4_MMQL128_PREFETCH_B_QUAD
+#define HRX_Q5_K_Q8_1_X4_MMQL128_PREFETCH_B_QUAD 1
+#endif
+
+extern "C" __global__ void HRX_Q5_K_Q8_1_X4_MMQL128_EXPORT(
         const hrx_block_q5_K_q8_1_lhs * src0,
         const hrx_block_q8_1_x4_rhs_q5 * src1,
         float * dst,
@@ -22,7 +34,9 @@ extern "C" __global__ void hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bquad_wg256_
     constexpr int LOAD_VEC_B = 16;
 
     static_assert(WNITER == 8, "unexpected Vulkan large Q5 MMQ tile shape");
+#if HRX_Q5_K_Q8_1_X4_MMQL128_PREFETCH_B_QUAD
     static_assert((WNITER % 2) == 0, "Q5 B-quad prefetch expects an even column iteration count");
+#endif
     static_assert(WSUBM == 64 && WSUBN == 8, "unexpected Vulkan large Q5 MMQ subtile shape");
 
     const unsigned int tid = __builtin_amdgcn_workitem_id_x();
@@ -138,6 +152,33 @@ extern "C" __global__ void hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bquad_wg256_
                 cache_a[cr] = buf_a[k_step * BM + warp_r * WM + tiwr * TM + cr];
             }
 
+#if HRX_Q5_K_Q8_1_X4_MMQL128_PREFETCH_B_PAIR
+            #pragma unroll
+            for (int wsic = 0; wsic < WNITER; ++wsic) {
+                hrx_q8_1_mmqv_b_cache cache_b_pair[TN];
+                #pragma unroll
+                for (int cc = 0; cc < TN; ++cc) {
+                    cache_b_pair[cc] =
+                        buf_b[k_step * BN + warp_c * WN + wsic * WSUBN + tiwc * TN + cc];
+                }
+                #pragma unroll
+                for (int cc = 0; cc < TN; ++cc) {
+                    const hrx_q8_1_mmqv_b_cache cache_b = cache_b_pair[cc];
+                    #pragma unroll
+                    for (int cr = 0; cr < TM; ++cr) {
+                        int qsum = 0;
+                        #pragma unroll
+                        for (int iqs = 0; iqs < 8; ++iqs) {
+                            qsum += hrx_sudot4_q5_q8_1(
+                                static_cast<uint32_t>(cache_a[cr].qs[iqs]), cache_b.qs[iqs]);
+                        }
+                        sum[(wsic * TN + cc) * TM + cr] +=
+                            cache_a[cr].d * cache_b.d * static_cast<float>(qsum) -
+                            cache_a[cr].min * cache_b.s;
+                    }
+                }
+            }
+#elif HRX_Q5_K_Q8_1_X4_MMQL128_PREFETCH_B_QUAD
             #pragma unroll
             for (int wsic = 0; wsic < WNITER; wsic += 2) {
                 hrx_q8_1_mmqv_b_cache cache_b_quad[2][TN];
@@ -169,6 +210,7 @@ extern "C" __global__ void hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bquad_wg256_
                     }
                 }
             }
+#endif
         }
         __syncthreads();
     }
@@ -188,3 +230,7 @@ extern "C" __global__ void hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bquad_wg256_
         }
     }
 }
+
+#undef HRX_Q5_K_Q8_1_X4_MMQL128_EXPORT
+#undef HRX_Q5_K_Q8_1_X4_MMQL128_PREFETCH_B_PAIR
+#undef HRX_Q5_K_Q8_1_X4_MMQL128_PREFETCH_B_QUAD
