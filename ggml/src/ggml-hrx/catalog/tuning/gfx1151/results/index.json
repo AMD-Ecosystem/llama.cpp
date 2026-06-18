@@ -417,6 +417,25 @@
       "status": "rejected_compile_resource_spills"
     },
     {
+      "id": "q8_0_prompt_mmq64x112_splitqsum_p33_p512_p513",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x112-splitqsum-focused-20260618/",
+      "compile_artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x112-splitqsum-compile-20260618/",
+      "status": "accepted_gfx1151_default"
+    },
+    {
+      "id": "q8_0_prompt_mmq64x112_splitqsum_model_p512_p513",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x112-splitqsum-model-ab-20260618/",
+      "status": "accepted_model_ab"
+    },
+    {
+      "id": "q8_0_prompt_mmq64x112_splitqsum_default_regate",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x112-splitqsum-default-regate-20260618/",
+      "status": "accepted_default_and_rollback_gate"
+    },
+    {
       "id": "q5_dense_prompt_wmma16_vk128_padded_w64_p33_p512_p513",
       "date": "2026-06-18",
       "artifact": "cache/hrxv1/gfx1151/q5-wmma-vk128-focused-20260618-025116/",

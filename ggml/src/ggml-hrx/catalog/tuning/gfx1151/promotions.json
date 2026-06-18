@@ -241,6 +241,55 @@
       ]
     },
     {
+      "id": "q8_0_prompt_mmq64x112_splitqsum_with_mmq64x64_fallback_llama3_1_q8",
+      "date": "2026-06-18",
+      "status": "accepted_gfx1151_default",
+      "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x112_splitqsum_wg256_f32",
+      "env": "default on gfx1151 for Q8_0 prompt cols >= 128 with BN64 as narrow/odd fallback; rollback with GGML_HRX_DISABLE_Q8_0_Q8_1_X4_MMQ64X112_SPLITQSUM_PROMPT=1; opt-in elsewhere with GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X112_SPLITQSUM_PROMPT=1",
+      "shape_guard": "Q8_0 MUL_MAT prompt, k >= 2048, rows >= 1024, cols >= 128 for BN112 split-qsum, k % 128 == 0, rows % 128 == 0, contiguous tensors, Q8_1 x4 quantize provider available; keep BN64 enabled for p33/narrow prompt",
+      "focused_artifacts": [
+        "cache/hrxv1/gfx1151/q8_0-mmq64x112-splitqsum-focused-20260618/",
+        "cache/hrxv1/gfx1151/q8_0-mmq64x112-splitqsum-default-regate-20260618/"
+      ],
+      "model_artifacts": [
+        "cache/hrxv1/gfx1151/q8_0-mmq64x112-splitqsum-model-ab-20260618/"
+      ],
+      "compile_evidence": {
+        "hsaco": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_mmq64x112_splitqsum.hsaco",
+        "wavefront_size": 32,
+        "vgpr_count": 134,
+        "sgpr_count": 28,
+        "lds_bytes": 3808,
+        "spill_count": 0,
+        "isa": "Packed-Q8_1 scalar-dot path; split qsum removes the BN112 spill wall but remains a packed-path route, not the RADV cooperative-matrix store schedule."
+      },
+      "focused_timing_us": {
+        "p512_default_to_splitqsum": {
+          "Vcur-0": "664.28 -> 525.19",
+          "Qcur-0": "2038.53 -> 1990.77",
+          "ffn_out-0": "8273.41 -> 7583.48",
+          "ffn_gate-0": "7640.07 -> 7040.21",
+          "result_output": "65759.52 -> 64159.07"
+        },
+        "p513_default_to_splitqsum": {
+          "Vcur-0": "655.01 -> 543.96",
+          "Qcur-0": "2069.32 -> 2014.67",
+          "ffn_out-0": "8311.01 -> 7669.28",
+          "ffn_gate-0": "7610.64 -> 7259.28",
+          "result_output": "66845.24 -> 64617.43"
+        }
+      },
+      "model_timing_tok_s": {
+        "p512_default_to_splitqsum": "430.303 -> 435.902",
+        "p513_default_to_splitqsum": "409.652 -> 424.678"
+      },
+      "promotion_blockers": [
+        "This improves the current packed-Q8_1 production path but remains well short of same-machine Vulkan parity",
+        "The exact Vulkan cooperative-matrix store/lane-ownership path is still not expressed in current HIP C++",
+        "Broader basket recheck should confirm the small Q8_0 lift is not hidden by unrelated model noise"
+      ]
+    },
+    {
       "id": "q6_dense_prompt_wmma16x16_f16acc_wg256_qwen3q6_p512",
       "date": "2026-06-17",
       "status": "accepted_opt_in_candidate",
