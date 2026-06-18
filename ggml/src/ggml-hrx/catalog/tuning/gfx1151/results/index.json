@@ -229,6 +229,12 @@
       "date": "2026-06-17",
       "artifact": "cache/hrxv1/gfx1151/q6-wmma16-wg256-qwen3q6-model-ab-20260617-221937/",
       "status": "accepted_opt_in_candidate_model"
+    },
+    {
+      "id": "current_best_with_q6_wmma_downloaded_basket_p512",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/current-best-q6wmma-basket-p512-fa1-r1-20260617-222645/",
+      "status": "partial_basket_boulder_ranking"
     }
   ]
 }
