@@ -8055,6 +8055,50 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_wg256_f32",
+    "family": "mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q8_0_mmq64x128_splitqsum",
+    "artifact_id": "mul_mat_vec_q8_0_mmq64x128_splitqsum_hsaco",
+    "export_name": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 110,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q8_0_prompt_mmq64x128_splitqsum_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q8_0 x F32 -> F32 MUL_MAT",
+      "k_multiple": 128,
+      "rows_multiple": 128,
+      "cols_min": 128,
+      "selector_gate": "default on gfx1151 for cols % 128 == 0; rollback with GGML_HRX_DISABLE_Q8_0_Q8_1_X4_MMQ64X128_SPLITQSUM_PROMPT=1; opt-in broad probe with GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X128_SPLITQSUM_PROMPT=1",
+      "prior_delta": "The accepted BN112 split-qsum route showed that splitting qsum live ranges removed the BN112 spill wall. This probe applies the same split-qsum idea to BN128 to move the packed-Q8_1 fallback path to Vulkan's 128-column large-route denominator while keeping BM64 row ownership."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "accepted_gfx1151_full_column_default",
+      "selection": "Q8_0 packed-Q8_1 BN128 split-qsum route. It is default on gfx1151 only for exact full-column prompt rows with cols % 128 == 0, reducing p512 column workgroups from five BN112 groups to four BN128 groups while keeping p513/tail rows on BN112 and p33 on BN64. Focused p33/p512/p513 correctness passed, route traces proved the intended policy split, rollback returned p512 to BN112, and Llama 3.1 8B Q8_0 p512 model A/B improved versus rollback. It is still a packed-path improvement, not an exact RADV cooperative-matrix store clone."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x104_wg256_f32",
     "family": "mul_mat_vec_q8_0_q8_1_x4_mmq64x104_wg256",
     "op": "MUL_MAT",

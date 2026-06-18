@@ -411,6 +411,60 @@
         "The route is deliberately limited to cols <= 64; p512 and p513 remain on the large-route policy",
         "Additional Q6_K odd/narrow rows should be feathered in as more models finish downloading"
       ]
+    },
+    {
+      "id": "q8_0_prompt_mmq64x128_splitqsum_full_column_llama3_1_q8",
+      "date": "2026-06-18",
+      "status": "accepted_gfx1151_full_column_default",
+      "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_wg256_f32",
+      "env": "default on gfx1151 for Q8_0 prompt rows with cols % 128 == 0; rollback with GGML_HRX_DISABLE_Q8_0_Q8_1_X4_MMQ64X128_SPLITQSUM_PROMPT=1; broad opt-in probe with GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X128_SPLITQSUM_PROMPT=1",
+      "shape_guard": "Q8_0 MUL_MAT prompt, k >= 2048, rows >= 1024, cols >= 128, cols % 128 == 0 for default, k % 128 == 0, rows % 128 == 0, contiguous tensors, Q8_1 x4 quantize provider available; p513/tails stay on BN112 split-qsum and p33 stays on BN64",
+      "focused_artifacts": [
+        "cache/hrxv1/gfx1151/q8_0-mmq64x128-splitqsum-focused-20260618/",
+        "cache/hrxv1/gfx1151/q8_0-mmq64x128-splitqsum-default-regate-20260618/"
+      ],
+      "model_artifacts": [
+        "cache/hrxv1/gfx1151/q8_0-mmq64x128-splitqsum-default-model-ab-20260618/"
+      ],
+      "oracle_artifacts": [
+        "cache/hrxv1/gfx1151/vulkan-oracle-llama31-8b-q8_0-p512-fa1-20260617-200453/",
+        "cache/hrxv1/gfx1151/vulkan-oracle-llama31-8b-q8_0-p33-fa1-20260618-continued/",
+        "cache/hrxv1/gfx1151/vulkan-oracle-llama31-8b-q8_0-p513-fa1-20260618-continued/"
+      ],
+      "focused_timing_us": {
+        "p512_default_bn112_to_bn128_splitqsum": {
+          "Vcur-0": "511.424783 -> 555.202174",
+          "Qcur-0": "1952.620342 -> 1903.903323",
+          "ffn_out-0": "7294.671512 -> 7162.991279",
+          "ffn_gate-0": "6844.915698 -> 6394.197674",
+          "result_output": "62651.738095 -> 56614.309524"
+        },
+        "p513_default_bn112_to_broad_bn128_splitqsum": {
+          "Vcur-0": "535.053983 -> 583.750109",
+          "Qcur-0": "2005.795569 -> 2145.117825",
+          "ffn_out-0": "7555.994169 -> 8102.521866",
+          "ffn_gate-0": "6989.244898 -> 7713.723032",
+          "result_output": "63810.166667 -> 68314.071429"
+        }
+      },
+      "model_timing_tok_s": {
+        "llama3_1_8b_q8_0_p512_fa1_r3_default_bn128": 456.488968,
+        "llama3_1_8b_q8_0_p512_fa1_r3_rollback_bn112": 440.297327
+      },
+      "compile_evidence": {
+        "hsaco": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_mmq64x128_splitqsum.hsaco",
+        "wavefront_size": 32,
+        "vgpr_count": 152,
+        "sgpr_count": 27,
+        "lds_bytes": 4352,
+        "spill_count": 0,
+        "isa": "Packed-Q8_1 scalar-dot path; split qsum removes the simple BN128 spill wall but remains a packed fallback schedule, not RADV cooperative-matrix load/store lowering."
+      },
+      "promotion_blockers": [
+        "Broad BN128 is rejected for p513/tails: focused p513 regressed every row because the fifth column group still runs and the wider tile does more tail work",
+        "The route still uses BM64, wave32, packed Q8_1 RHS, and scalar integer dot; it does not reproduce Vulkan's direct-F32 cooperative-matrix large route",
+        "Next Q8_0 parity work should keep targeting the remaining RADV/HIP cooperative-matrix load/store/lane-ownership delta or a lower-level equivalent"
+      ]
     }
   ]
 }

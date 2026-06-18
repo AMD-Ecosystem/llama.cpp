@@ -529,6 +529,31 @@
       "date": "2026-06-18",
       "artifact": "cache/hrxv1/gfx1151/q6-wmma-vk64-padded44-medium-focused-20260618-062606/",
       "status": "accepted_gfx1151_narrow_prompt_default"
+    },
+    {
+      "id": "q8_0_prompt_mmq64x128_splitqsum_compile",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x128-splitqsum-compile-20260618/",
+      "status": "accepted_compile_resource_no_spills"
+    },
+    {
+      "id": "q8_0_prompt_mmq64x128_splitqsum_p33_p512_p513",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x128-splitqsum-focused-20260618/",
+      "compile_artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x128-splitqsum-compile-20260618/",
+      "status": "accepted_full_column_policy"
+    },
+    {
+      "id": "q8_0_prompt_mmq64x128_splitqsum_default_regate",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x128-splitqsum-default-regate-20260618/",
+      "status": "accepted_default_and_rollback_gate"
+    },
+    {
+      "id": "q8_0_prompt_mmq64x128_splitqsum_model_p512",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x128-splitqsum-default-model-ab-20260618/",
+      "status": "accepted_model_ab"
     }
   ]
 }

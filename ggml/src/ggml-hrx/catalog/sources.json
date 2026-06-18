@@ -290,6 +290,9 @@
   "mul_mat_vec_q8_0_mmq64x112_splitqsum": {
     "path": "mul_mat_vec_q8_0_mmq64x112_splitqsum.hip.cpp"
   },
+  "mul_mat_vec_q8_0_mmq64x128_splitqsum": {
+    "path": "mul_mat_vec_q8_0_mmq64x128_splitqsum.hip.cpp"
+  },
   "mul_mat_vec_q8_0_mmq64x128": {
     "path": "mul_mat_vec_q8_0_mmq64x128.hip.cpp"
   },
