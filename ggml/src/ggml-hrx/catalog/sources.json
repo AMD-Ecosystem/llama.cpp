@@ -155,6 +155,9 @@
   "mul_mat_vec_q4_k_q8_1_x4_mmql128_bpair": {
     "path": "mul_mat_vec_q4_k_q8_1_x4_mmql128_bpair.hip.cpp"
   },
+  "mul_mat_vec_q4_k_q8_1_x4_mmql128_bquad": {
+    "path": "mul_mat_vec_q4_k_q8_1_x4_mmql128_bquad.hip.cpp"
+  },
   "mul_mat_vec_q4_k_q8_1_x4_mmql128x64": {
     "path": "mul_mat_vec_q4_k_q8_1_x4_mmql128x64.hip.cpp"
   },
