@@ -44,6 +44,14 @@
       "reason": "The combined Q5_K B64GROUP+store-stage probe mechanically targeted the remaining RADV direct-WMMA deltas together: it preserves BM128/BN128/BK32/WG256 wave64 and grouped LDS fragment reads, adds a half accumulator LDS store-stage, and compiled through CMake/Ninja with SGPR=32, VGPR=198, no spills, 22528 bytes LDS, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 64 ds_load_u16_d16, 66 ds_store_b16, and 34 barriers. Focused p33/p512/p513 CPU-reference gates passed; p33 stayed on rows2 while p512 and p513 selected this route. It is rejected for production promotion because same-runner focused timing regressed versus current packed-Q8_1 routing: p512 Kcur 865.46 -> 1060.91 us, Qcur 1224.57 -> 4819.52 us, ffn_out 7227.94 -> 19946.42 us, ffn_gate 6906.12 -> 30089.16 us; p513 Kcur 887.97 -> 1018.55 us, Qcur 1577.88 -> 5254.41 us, ffn_out 9533.36 -> 23344.87 us, ffn_gate 9214.98 -> 33125.13 us. This proves the required next step is not more manual HIP C++ half staging; it is a lower-level cooperative-matrix store/lane-ownership spelling that avoids the extra barriers and reaches RADV's 192 buffer-store writeback."
     },
     {
+      "id": "q5_dense_prompt_wmma16_vk128_b64group_fullstore_p33_p512_p513",
+      "date": "2026-06-18",
+      "route": "hrx_mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_fullstore_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q5_K_WMMA16_VK128_PADDED_W64_B64GROUP_FULLSTORE_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q5-wmma-vk128-b64group-fullstore-focused-20260618-111743/",
+      "reason": "The Q5_K B64GROUP+fullstore probe mechanically combined the two low-barrier direct-WMMA axes that had only been tested separately: grouped LDS fragment reads matching RADV's 64 ds_load_b64 count and full in-bounds scalar stores to avoid per-element edge checks. It compiled through CMake/Ninja with wave64, SGPR=32, VGPR=198, LDS=20480, no spills, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 128 global_store_b32, and 2 barriers. Focused p33/p512/p513 CPU-reference gates passed; p33 stayed on rows2 while p512 and p513 selected this route. It is rejected for production promotion because same-runner focused timing regressed versus current packed-Q8_1 routing: p512 Kcur 867.19 -> 1058.19 us, Qcur 1230.26 -> 4903.45 us, ffn_out 7238.35 -> 19727.06 us, ffn_gate 6733.11 -> 29961.79 us; p513 Kcur 898.34 -> 1013.67 us, Qcur 1587.39 -> 5277.83 us, ffn_out 9597.82 -> 23037.40 us, ffn_gate 9032.34 -> 32848.22 us. This rules out the cheap scalar fullstore approximation; the remaining schedule delta is RADV's cooperative-matrix store/lane ownership and 192 buffer-store writeback, not simply b64 grouped fragment reads plus scalar direct stores."
+    },
+    {
       "id": "q5_dense_prompt_wmma16_vk64_padded44_w64_p33",
       "date": "2026-06-18",
       "route": "hrx_mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_f16acc_wg256_f32",
