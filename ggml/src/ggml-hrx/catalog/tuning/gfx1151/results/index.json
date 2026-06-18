@@ -211,6 +211,12 @@
       "date": "2026-06-17",
       "artifact": "cache/hrxv1/gfx1151/llama31-q4km-q6-output-rerank-20260617-214220/",
       "status": "focused_rejection_existing_variants"
+    },
+    {
+      "id": "q6_dense_prompt_wmma16x16_f16acc_focused_p33_p512_p513",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/q6-wmma16-f16acc-focused-20260617-215803/",
+      "status": "rejected_focused_perf_timeout"
     }
   ]
 }

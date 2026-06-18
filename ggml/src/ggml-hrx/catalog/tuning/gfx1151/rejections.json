@@ -136,6 +136,14 @@
       "env": "GGML_HRX_ENABLE_Q6_K_Q8_1_X4_MMQ64X128_PROMPT=1 or GGML_HRX_ENABLE_Q6_K_Q8_1_X4_MMQL128_PROMPT=1",
       "artifact": "cache/hrxv1/gfx1151/llama31-q4km-q6-output-rerank-20260617-214220/",
       "reason": "Exact Llama 3.1 8B Q4_K_M p512/fa1 Q6 output rows passed focused CPU-reference testing on the current MMQ64 path. The existing wider/staged variants selected correctly but regressed badly: on result_output, current MMQ64 took 375999.17 us, MMQ64x128 took 724312.69 us, and MMQL128 took 1039822.69 us. The legacy-auto perf pass was stopped after several minutes with no CSV output. Treat this as evidence that the Q6 dense-output blocker needs a new schedule/dataflow, not one of the existing opt-in variants."
+    },
+    {
+      "id": "q6_dense_prompt_wmma16x16_f16acc_p512",
+      "date": "2026-06-17",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_f16acc_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_F16ACC_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-wmma16-f16acc-focused-20260617-215803/",
+      "reason": "The direct Q6_K dequant-to-f16 plus F32 RHS cast-to-f16 WMMA route compiled through CMake/Ninja, emitted v_wmma_f16_16x16x16_f16, and has no spills (wave32, SGPR=24, VGPR=35, LDS=0). It passed CPU-reference focused gates for exact Llama 3.1 8B Q4_K_M p512 Q6 rows and synthesized p33/p513 odd-tail rows while selecting the intended provider. It is rejected for production promotion because the focused perf pass failed to finish a useful CSV after several minutes and 1688 selected dispatches, while the current MMQ64 route completed the same exact rows at 2254.51 us, 56728.72 us, and 379448.50 us. This proves the lane mapping and WMMA opcode path but not the Vulkan-style staged 128x128/256-thread dataflow needed for throughput."
     }
   ]
 }

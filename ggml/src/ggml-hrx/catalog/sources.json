@@ -173,6 +173,9 @@
   "mul_mat_vec_q6_k_q8_1_wave64": {
     "path": "mul_mat_vec_q6_k_q8_1_wave64.hip.cpp"
   },
+  "mul_mat_vec_q6_k_wmma16": {
+    "path": "mul_mat_vec_q6_k_wmma16.hip.cpp"
+  },
   "mul_mat_vec_q8_0": {
     "path": "mul_mat_vec_q8_0.hip.cpp"
   },
