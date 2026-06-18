@@ -247,6 +247,7 @@
   "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_store_stage_f16acc_wg256_f32",
   "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_fullstore_f16acc_wg256_f32",
   "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_stagealloc_fullstore_f16acc_wg256_f32",
+  "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_bufferstore_f16acc_wg256_f32",
   "hrx_mul_mat_vec_q8_0_add_f32",
   "hrx_mul_mat_vec_q8_0_add_cols8_f32",
   "hrx_mul_mat_vec_q8_0_add_rows4_cols4_f32",

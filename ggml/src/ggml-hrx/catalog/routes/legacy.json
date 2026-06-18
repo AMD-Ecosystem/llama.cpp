@@ -9110,6 +9110,50 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_bufferstore_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_bufferstore_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_bufferstore_wg256",
+    "artifact_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_bufferstore_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_bufferstore_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 110,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q8_0_prompt_wmma16x16_vk128_padded_w64_bufferstore_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q8_0 x F32 -> F32 MUL_MAT",
+      "k_multiple": 32,
+      "win_domain": "rows >= 8192 || k >= 8192",
+      "cols_min": 128,
+      "selector_gate": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "prior_delta": "The Vulkan oracle large Q8_0 prompt route uses BM128/BN128/BK32/WG256 wave64, 32 f16 WMMA ops, 22528 bytes LDS, 128 halfword LDS stores, 128 halfword LDS loads, 192 buffer_store_b32 sites, 2 barriers, and no spills. A scratch HIP builtin probe showed __builtin_amdgcn_raw_buffer_store_b32 with an opaque __amdgpu_buffer_rsrc_t descriptor emits buffer_store_b32 on gfx1151. This candidate preserves the VK128 padded W64 math path, includes the previously isolated stage-allocation LDS footprint, and changes both full-tile and guarded edge/tail writeback from HIP global stores to raw buffer stores."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_bufferstore_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_compile_contract",
+      "selection": "Opt-in Q8_0 direct-F32 WMMA VK128 buffer-store writeback probe. It proved raw buffer_store_b32 is reachable from CMake-built HIP C++ and matched RADV on 32 WMMA, 22528-byte LDS, 2 barriers, and zero spills, but failed the large-coopmat contract before runtime: 128/192 buffer_store_b32, 0/128 ds_load_u16_d16, and 2/128 ds_store_b16. Keep as diagnostic evidence only; the next attempt must reproduce the cooperative halfword LDS load/store topology and 192-store writeback, not only replace global stores."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q8_0_add_f32",
     "family": "mul_mat_vec_q8_0_add",
     "op": "MUL_MAT",

@@ -356,6 +356,9 @@
   "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_stagealloc_fullstore_wg256": {
     "path": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_stagealloc_fullstore_wg256.hip.cpp"
   },
+  "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_bufferstore_wg256": {
+    "path": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_bufferstore_wg256.hip.cpp"
+  },
   "mul_sum8_f32": {
     "path": "mul_sum8_f32.hip.cpp"
   },
