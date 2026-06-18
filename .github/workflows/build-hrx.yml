@@ -48,10 +48,10 @@ jobs:
       DEVWS_REPOSITORY: AaronStGeorge/llamacpp-devws
       DEVWS_REF: ci-scripts
       DEVWS_DIR: ${{ github.workspace }}/devws-src
-      DEVWS_BUILD_DIR: /work/llamacpp-devws-build
       ROCM_DIR: /work/rocm
       ROCM_TARBALL_BASE_URL: https://rocm.nightlies.amd.com/tarball-multi-arch
       ROCM_TARBALL_NAME: ${{ matrix.rocm_tarball }}
+      LLAMACPP_DEVWS_SKIP_VENV: "1"
       CCACHE_COMPILERCHECK: content
       HSA_FORCE_FINE_GRAIN_PCIE: "1"
 
@@ -66,14 +66,14 @@ jobs:
       - name: Checkout llama.cpp under test
         uses: actions/checkout@v6
         with:
-          path: llama-src
+          path: devws-src/sources/llama.cpp
 
       - name: Checkout HRX System
         uses: actions/checkout@v6
         with:
           repository: ROCm/hrx-system
           ref: main
-          path: hrx-system-src
+          path: devws-src/sources/hrx-system
 
       - name: Runner identity
         if: always()
@@ -114,33 +114,29 @@ jobs:
       - name: Build HRX2
         run: |
           cd "${DEVWS_DIR}"
+          source .envrc
           python3 skills/bootstrap-hrx-llama-builds/scripts/bootstrap_builds.py \
-            --workspace "${DEVWS_BUILD_DIR}" \
+            --workspace "${DEVWS_DIR}" \
             --action check \
             --action hrx \
             --action loom \
             --action rocm-health \
             --action llama-hrx2 \
-            --hrx-source "${GITHUB_WORKSPACE}/hrx-system-src" \
-            --llama-source "${GITHUB_WORKSPACE}/llama-src" \
             --skip-source-branch-check \
             --gfx-targets auto \
             --jobs "$(nproc)"
 
       - name: Verify HRX2 build configuration
         run: |
-          grep -F 'GGML_HRX2:BOOL=ON' "${DEVWS_BUILD_DIR}/build/llama-hrx2/CMakeCache.txt"
+          grep -F 'GGML_HRX2:BOOL=ON' "${DEVWS_DIR}/build/llama-hrx2/CMakeCache.txt"
 
       - name: Run sample MUL_MAT correctness config on HRX2
         run: |
-          export ROCM_PATH="${DEVWS_BUILD_DIR}/rocm"
-          export GGML_HRX_ROCM_PATH="${DEVWS_BUILD_DIR}/rocm"
-          export PATH="${DEVWS_BUILD_DIR}/rocm/bin:${DEVWS_BUILD_DIR}/rocm/lib/llvm/bin:${PATH}"
-          export LD_LIBRARY_PATH="${DEVWS_BUILD_DIR}/build/llama-hrx2/bin:${DEVWS_BUILD_DIR}/build/hrx-install/lib:${DEVWS_BUILD_DIR}/build/hrx-install/lib64:${DEVWS_BUILD_DIR}/rocm/lib:${DEVWS_BUILD_DIR}/rocm/lib64:${DEVWS_BUILD_DIR}/rocm/lib/rocm_sysdeps/lib:${LD_LIBRARY_PATH:-}"
-          export IREE_HAL_AMDGPU_LIBHSA_PATH="${DEVWS_BUILD_DIR}/rocm/lib/libhsa-runtime64.so"
+          cd "${DEVWS_DIR}"
+          source .envrc
           mkdir -p "${GITHUB_WORKSPACE}/benchmark-results"
           "${DEVWS_DIR}/ci/tools/run-op-test.py" \
-            --test-backend-ops "${DEVWS_BUILD_DIR}/build/llama-hrx2/bin/test-backend-ops" \
+            --test-backend-ops "${DEVWS_DIR}/build/llama-hrx2/bin/test-backend-ops" \
             --test-file "${DEVWS_DIR}/ci/benchmark-configs/test/mul_mat_f16.txt" \
             --op MUL_MAT \
             --backend HRX20 \
@@ -149,14 +145,11 @@ jobs:
 
       - name: Run sample MUL_MAT benchmark config on HRX2
         run: |
-          export ROCM_PATH="${DEVWS_BUILD_DIR}/rocm"
-          export GGML_HRX_ROCM_PATH="${DEVWS_BUILD_DIR}/rocm"
-          export PATH="${DEVWS_BUILD_DIR}/rocm/bin:${DEVWS_BUILD_DIR}/rocm/lib/llvm/bin:${PATH}"
-          export LD_LIBRARY_PATH="${DEVWS_BUILD_DIR}/build/llama-hrx2/bin:${DEVWS_BUILD_DIR}/build/hrx-install/lib:${DEVWS_BUILD_DIR}/build/hrx-install/lib64:${DEVWS_BUILD_DIR}/rocm/lib:${DEVWS_BUILD_DIR}/rocm/lib64:${DEVWS_BUILD_DIR}/rocm/lib/rocm_sysdeps/lib:${LD_LIBRARY_PATH:-}"
-          export IREE_HAL_AMDGPU_LIBHSA_PATH="${DEVWS_BUILD_DIR}/rocm/lib/libhsa-runtime64.so"
+          cd "${DEVWS_DIR}"
+          source .envrc
           mkdir -p "${GITHUB_WORKSPACE}/benchmark-results"
           "${DEVWS_DIR}/ci/tools/run-op-perf.py" \
-            --test-backend-ops "${DEVWS_BUILD_DIR}/build/llama-hrx2/bin/test-backend-ops" \
+            --test-backend-ops "${DEVWS_DIR}/build/llama-hrx2/bin/test-backend-ops" \
             --test-file "${DEVWS_DIR}/ci/benchmark-configs/test/mul_mat_f16.txt" \
             --op MUL_MAT \
             --backend HRX20 \
