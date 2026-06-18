@@ -208,6 +208,14 @@
       "env": "GGML_HRX_ENABLE_Q4_K_Q8_1_X4_MMQL128_PADCACHE_PROMPT=1",
       "artifact": "cache/hrxv1/gfx1151/q4-mmql128-padcache-focused-20260618-001039/",
       "reason": "The packed-Q8_1/x4 LDS-resource probe preserved the current Q4_K MMQL128 production dataflow, BM128, BN128, wave64, BK_STEP1, and output ownership, but padded shared A-cache rows from 24 to 32 bytes and packed-B cache rows from 40 to 64 bytes. This explicitly tested the Vulkan oracle's larger padded LDS/resource axis without changing column reuse. It compiled through CMake/Ninja with wave64, SGPR=52, VGPR=145, LDS=12288, no spills, and almost unchanged static schedule shape versus current MMQL128: 512 v_dot sites, 46 ds_loads, 12 ds_stores, 18 global loads, 64 global stores, 184 s_waitcnts, and 2 barriers. The route selected correctly for p512 and p513, passed focused CPU-reference rows for p512 and p513, and kept exact p33 on the existing MMQ64 route. It is rejected for production promotion because same-runner p512 focused perf regressed versus current MMQL128 on every row: Kcur 979.58 -> 1326.86 us, Qcur 4108.71 -> 5317.20 us, ffn_out 13816.55 -> 17334.05 us, ffn_gate 12309.63 -> 15366.25 us. Padding the packed-cache rows raises LDS/VGPR pressure but does not materially improve the LDS wait schedule; future packed-path work should target actual LDS-read issue order, B-cache ownership, or instruction scheduling instead of row padding alone."
+    },
+    {
+      "id": "q8_0_prompt_wmma16_vk128_hybrid_current_best_p512",
+      "date": "2026-06-18",
+      "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-vk128-vs-bn96-focused-20260618-003553/",
+      "reason": "The direct-F32 VK128 wave64 WMMA route improved over the old default Q8_0 path, but it is not a production candidate against the current-best BN96/BN64 packed-Q8_1 policy. Focused p512 rows all regressed versus BN96/BN64: Vcur 651.63 -> 682.40 us, Qcur 2026.25 -> 2069.85 us, ffn_out 8269.05 -> 9696.54 us, ffn_gate 7371.01 -> 10308.36 us, result_output 66339.24 -> 92056.48 us. The eight-row p512/fa1 basket also regressed geomean from 0.5354x to 0.5212x Vulkan and Q8_0 from 422.15 to 356.70 tok/s. Keep the route as an opt-in diagnostic for RADV schedule comparison only; do not include it in the current-best stack."
     }
   ]
 }
