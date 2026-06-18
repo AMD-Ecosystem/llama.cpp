@@ -6525,16 +6525,18 @@
       "k_multiple": 256,
       "rows_multiple": 128,
       "cols_min": 128,
-      "cols_multiple": 128,
+      "cols_multiple_default": 128,
+      "cols_tail_min": 512,
+      "gfx1151_policy": "default for large non-128-multiple cols >= 512 tails unless GGML_HRX_DISABLE_Q5_K_Q8_1_X4_MMQL128_BQUAD_TAIL_PROMPT=1; full tiles remain opt-in with GGML_HRX_ENABLE_Q5_K_Q8_1_X4_MMQL128_BQUAD_PROMPT=1 after focused p512 regression",
       "contiguous": true
     },
     "supports": {
       "legacy_export": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bquad_wg256_f32",
-      "selector_gate": "GGML_HRX_ENABLE_Q5_K_Q8_1_X4_MMQL128_BQUAD_PROMPT=1"
+      "selector_gate": "tail default on gfx1151; GGML_HRX_ENABLE_Q5_K_Q8_1_X4_MMQL128_BQUAD_PROMPT=1 for full-tile opt-in; GGML_HRX_ENABLE_Q5_K_Q8_1_X4_MMQL128_BQUAD_TAIL_PROMPT=1 to force tails; GGML_HRX_DISABLE_Q5_K_Q8_1_X4_MMQL128_BQUAD_TAIL_PROMPT=1 to rollback tail default"
     },
     "evidence_summary": {
-      "status": "rejected_gfx1151_focused_perf_regression",
-      "selection": "Q5_K packed-Q8_1/x4 follow-up to the positive Q4_K B-quad schedule axis. It preserves the current Q5 MMQL128 packed dataflow, BM128, BN128, wave64, and BK_STEP1 while preloading four B-cache rows across two adjacent WNITER positions before dot consumption. It compiled without spills and passed focused p512, p33, and p513 CPU-reference gates with the intended full-tile selector policy, but regressed same-runner p512 focused timing on all four Q5 rows. Keep opt-in only as negative transfer evidence; do not promote."
+      "status": "accepted_gfx1151_tail_default_rejected_full_tile",
+      "selection": "Q5_K packed-Q8_1/x4 follow-up to the positive Q4_K B-quad schedule axis. It preserves the current Q5 MMQL128 packed dataflow, BM128, BN128, wave64, and BK_STEP1 while preloading four B-cache rows across two adjacent WNITER positions before dot consumption. Full-tile p512 selection remains rejected and opt-in only because same-runner p512 focused timing regressed all four Q5 rows. Large non-128-multiple p513 tails are accepted by default on gfx1151: focused p33/p512/p513 correctness passed, default route traces selected B-quad only on p513 while p33 stayed rows2_cols8 and p512 stayed current MMQL128, focused p513 default beat rollback by 5.63% summed row time, and same-binary Qwen2.5 Coder 7B Q5_K_M p513/fa1 improved 393.579 -> 405.465 tok/s versus tail rollback with no fallback."
     },
     "target_prefixes": [
       "gfx1151"

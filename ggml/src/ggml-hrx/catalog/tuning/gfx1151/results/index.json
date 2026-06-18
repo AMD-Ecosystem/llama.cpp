@@ -619,6 +619,30 @@
       "status": "rejected_focused_perf_regression"
     },
     {
+      "id": "q5_dense_prompt_mmql128_bquad_tail_probe_p33_p512_p513",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q5-mmql128-bquad-tail-probe-20260618-150846/",
+      "status": "accepted_large_tail_candidate"
+    },
+    {
+      "id": "q5_dense_prompt_mmql128_bquad_tail_qwen25coder_p513_model_ab",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q5-mmql128-bquad-tail-model-ab-20260618-150954/",
+      "status": "accepted_model_ab_positive"
+    },
+    {
+      "id": "q5_dense_prompt_mmql128_bquad_tail_default_regate_p33_p512_p513",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q5-mmql128-bquad-tail-default-regate-20260618-151118/",
+      "status": "accepted_gfx1151_default"
+    },
+    {
+      "id": "q5_dense_prompt_mmql128_bquad_tail_default_qwen25coder_p513_model_ab",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q5-mmql128-bquad-tail-default-model-ab-20260618-151218/",
+      "status": "accepted_model_ab_positive"
+    },
+    {
       "id": "q8_0_prompt_wmma16_vk128_b64group_dualstage_bufferstore_compile",
       "date": "2026-06-18",
       "artifact": "cache/hrxv1/gfx1151/q8_0-dualstage-bufferstore-compile-20260618/",
