@@ -42,6 +42,10 @@
 #define HRX_Q8_0_WMMA_VK128_STORE_STAGE_DUAL_HALF 0
 #endif
 
+#ifndef HRX_Q8_0_WMMA_VK128_STORE_STAGE_FAST_HALF
+#define HRX_Q8_0_WMMA_VK128_STORE_STAGE_FAST_HALF 0
+#endif
+
 #ifndef HRX_Q8_0_WMMA_VK128_STAGE_ALLOC
 #define HRX_Q8_0_WMMA_VK128_STAGE_ALLOC 0
 #endif
@@ -510,7 +514,7 @@ static __device__ __forceinline__ void hrx_q8_0_wmma_vk128_store_acc_f16_row_maj
     __syncthreads();
 }
 
-#if HRX_Q8_0_WMMA_VK128_STORE_STAGE_DUAL_HALF
+#if HRX_Q8_0_WMMA_VK128_STORE_STAGE_DUAL_HALF || HRX_Q8_0_WMMA_VK128_STORE_STAGE_FAST_HALF
 static __device__ __forceinline__ void hrx_q8_0_wmma_vk128_ds_store_u16(
         hrx_q8_0_wmma_vk128_lds_u16_ptr ptr,
         uint16_t value) {
@@ -529,7 +533,9 @@ static __device__ __forceinline__ uint32_t hrx_q8_0_wmma_vk128_ds_load_u16_d16(
                  : "memory");
     return value;
 }
+#endif
 
+#if HRX_Q8_0_WMMA_VK128_STORE_STAGE_DUAL_HALF
 static __device__ __forceinline__ void hrx_q8_0_wmma_vk128_store_acc_f16_row_major_w64_dual_half_stage(
 #if HRX_Q8_0_WMMA_VK128_BUFFER_STORE
         __amdgpu_buffer_rsrc_t dst_rsrc,
@@ -592,6 +598,60 @@ static __device__ __forceinline__ void hrx_q8_0_wmma_vk128_store_acc_f16_row_maj
         }
     }
     __syncthreads();
+}
+#endif
+
+#if HRX_Q8_0_WMMA_VK128_STORE_STAGE_FAST_HALF && HRX_Q8_0_WMMA_VK128_BUFFER_STORE
+static __device__ __forceinline__ void hrx_q8_0_wmma_vk128_store_acc_f16_row_major_w64_fast_half_buffer_full_pair(
+        __amdgpu_buffer_rsrc_t dst_rsrc,
+        long long rows_stride,
+        long long row0,
+        long long col0,
+        hrx_q8_0_wmma_vk128_half8_vec acc,
+        unsigned int lane,
+        unsigned int wave,
+        hrx_q8_0_wmma_vk128_lds_volatile_half_ptr sh_store) {
+    constexpr int TILE_STRIDE = 16 * 16;
+    const int row_lane = static_cast<int>(lane >> 4);
+    const int col_lane = static_cast<int>(lane & 15u);
+    const int tile_base = static_cast<int>(wave) * TILE_STRIDE;
+    const int col_major_base = tile_base + col_lane * 16 + row_lane;
+    hrx_q8_0_wmma_vk128_lds_u16_ptr sh_u16 =
+        (hrx_q8_0_wmma_vk128_lds_u16_ptr) sh_store;
+    const long long col = col0 + static_cast<long long>(col_lane);
+#pragma unroll
+    for (int reg = 0; reg < 4; ++reg) {
+        const int lo_offset = col_major_base + reg * 4;
+        const int hi_offset = col_major_base + ((reg * 4 + 2) & 15);
+        hrx_q8_0_wmma_vk128_ds_store_u16(
+            sh_u16 + lo_offset,
+            hrx_q8_0_wmma_vk128_f16_to_u16(acc[reg * 2 + 0]));
+        hrx_q8_0_wmma_vk128_ds_store_u16(
+            sh_u16 + hi_offset,
+            hrx_q8_0_wmma_vk128_f16_to_u16(acc[reg * 2 + 1]));
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+
+#pragma unroll
+    for (int reg = 0; reg < 4; ++reg) {
+        const int lo_offset = col_major_base + reg * 4;
+        const int hi_offset = col_major_base + ((reg * 4 + 2) & 15);
+        const _Float16 lo = hrx_q8_0_wmma_vk128_u16_to_f16(
+            hrx_q8_0_wmma_vk128_ds_load_u16_d16(sh_u16 + lo_offset));
+        const _Float16 hi = hrx_q8_0_wmma_vk128_u16_to_f16(
+            hrx_q8_0_wmma_vk128_ds_load_u16_d16(sh_u16 + hi_offset));
+        asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+        const long long row_lo = row0 + static_cast<long long>(row_lane + reg * 4);
+        const long long row_hi = row_lo + 16;
+        hrx_q8_0_wmma_vk128_buffer_store_f32(
+            dst_rsrc,
+            col * rows_stride + row_lo,
+            static_cast<float>(lo));
+        hrx_q8_0_wmma_vk128_buffer_store_f32(
+            dst_rsrc,
+            col * rows_stride + row_hi,
+            static_cast<float>(hi));
+    }
 }
 #endif
 
@@ -663,6 +723,8 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
 #if HRX_Q8_0_WMMA_VK128_STORE_STAGE
     __shared__ _Float16 sh_store[WAVE_COUNT * 16 * 16];
 #elif HRX_Q8_0_WMMA_VK128_STORE_STAGE_DUAL_HALF
+    __shared__ _Float16 sh_store[WAVE_COUNT * 16 * 16];
+#elif HRX_Q8_0_WMMA_VK128_STORE_STAGE_FAST_HALF
     __shared__ _Float16 sh_store[WAVE_COUNT * 16 * 16];
 #elif HRX_Q8_0_WMMA_VK128_STAGE_ALLOC
     __shared__ volatile _Float16 sh_stage_alloc[WAVE_COUNT * 16 * 16];
@@ -828,7 +890,17 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
         const long long tile_col0 = col_base + static_cast<long long>(col_tile * 16);
         if (tile_row0 + 16 <= rows && tile_col0 + 16 <= cols) {
 #if HRX_Q8_0_WMMA_VK128_BUFFER_STORE
-#if HRX_Q8_0_WMMA_VK128_FULL_TILE_STORE_PAIR
+#if HRX_Q8_0_WMMA_VK128_STORE_STAGE_FAST_HALF
+            hrx_q8_0_wmma_vk128_store_acc_f16_row_major_w64_fast_half_buffer_full_pair(
+                dst_rsrc,
+                rows,
+                tile_row0,
+                tile_col0,
+                acc[tile_iter],
+                lane,
+                wave,
+                (hrx_q8_0_wmma_vk128_lds_volatile_half_ptr) sh_store);
+#elif HRX_Q8_0_WMMA_VK128_FULL_TILE_STORE_PAIR
             hrx_q8_0_wmma_vk128_store_acc_f16_row_major_w64_buffer_full_pair(
                 dst_rsrc,
                 rows,
