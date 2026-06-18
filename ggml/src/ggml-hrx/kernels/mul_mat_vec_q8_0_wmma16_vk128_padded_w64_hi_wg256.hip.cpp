@@ -1,0 +1,5 @@
+#define HRX_Q8_0_WMMA_VK128_EXPORT hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_hi_f16acc_wg256_f32
+#define HRX_Q8_0_WMMA_VK128_SHARED_STRIDE 40
+#define HRX_Q8_0_WMMA_VK128_W64 1
+#define HRX_Q8_0_WMMA_VK128_W64_OPSEL 1
+#include "mul_mat_vec_q8_0_wmma16_vk128_wg256.hip.cpp"
