@@ -5198,6 +5198,49 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q4_k_wmma16x16_vk128_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q4_k_wmma16x16_vk128_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q4_k_wmma16_vk128_wg256",
+    "artifact_id": "mul_mat_vec_q4_k_wmma16_vk128_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q4_k_wmma16x16_vk128_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "dense_q4_k_prompt_wmma16x16_vk128_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q4_K x F32 -> F32 MUL_MAT",
+      "k_multiple": 256,
+      "rows_min": 128,
+      "cols_min": 128,
+      "requires_env": "GGML_HRX_ENABLE_Q4_K_WMMA16_VK128_F16ACC_WG256_PROMPT"
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q4_k_wmma16x16_vk128_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "candidate_gfx1151_probe",
+      "selection": "Vulkan-large direct-F32 Q4_K WMMA probe anchored to matmul_q4_k_f32_f16acc_aligned_l. The oracle uses BM128/BN128/BK32/WG256, LOAD_VEC_A=4, LOAD_VEC_B=8, Q4_K dequant to f16 LDS, F32 RHS conversion to f16 LDS, and v_wmma_f16_16x16x16_f16 with 22528 bytes LDS. This HIP probe keeps the same 128x128/BK32/direct-RHS class and multiple 16x16 WMMA accumulator tiles per workgroup. It is opt-in only until focused p512/p513 correctness and timing beat the current MMQL128 route; p33 must remain on the existing narrow route unless separately proven."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q5_k_f32",
     "family": "mul_mat_vec_q5_k",
     "op": "MUL_MAT",

@@ -152,6 +152,14 @@
       "env": "GGML_HRX_ENABLE_Q4_K_WMMA16_F16ACC_WG256_PROMPT=1",
       "artifact": "cache/hrxv1/gfx1151/q4-wmma16-wg256-focused-20260617-223548/",
       "reason": "The direct Q4_K dequant-to-f16 plus F32 RHS cast-to-f16 staged-WG256 WMMA route was added as a Vulkan-oracle diagnostic after RADV evidence showed matmul_q4_k_f32_f16acc_aligned_l emits v_wmma_f16_16x16x16_f16 while the current HRX Q4 MMQL128 route emits integer v_dot4_i32_iu8. It compiled through CMake/Ninja, emitted v_wmma_f16_16x16x16_f16, and has no spills (wave32, SGPR=27, VGPR=53, LDS=3072). It passed CPU-reference focused DeepSeek R1 Qwen 14B Q4_K_M rows for p512 and exact odd/tail p33/p513 while selecting the intended provider. It is rejected for production promotion because same-runner p512 focused perf regressed badly versus the accepted packed Q8_1 MMQL128 route: Kcur 986.46 -> 2402.45 us, Qcur 4123.76 -> 14151.28 us, ffn_out 13126.86 -> 55425.92 us, ffn_gate 13244.67 -> 58826.01 us. This proves that matching the WMMA opcode without Vulkan-like packed/staged reuse is insufficient on gfx1151."
+    },
+    {
+      "id": "q4_dense_prompt_wmma16x16_vk128_f16acc_wg256_deepseek_p33_p512_p513",
+      "date": "2026-06-17",
+      "route": "hrx_mul_mat_vec_q4_k_wmma16x16_vk128_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q4_K_WMMA16_VK128_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q4-wmma16-vk128-focused-20260617-225628/",
+      "reason": "The Vulkan-large Q4_K direct-F32 RHS WMMA probe cloned the resolved oracle class more closely than the earlier 64x32 direct WMMA diagnostic: BM128/BN128/BK32/WG256, Q4_K dequant to f16 LDS, F32 RHS cast to f16 LDS, and multiple 16x16 f16acc WMMA accumulator tiles per workgroup. It compiled through CMake/Ninja with no spills (wave32, SGPR=38, VGPR=115, LDS=16384) and emitted 16 static v_wmma_f16_16x16x16_f16 sites. It passed CPU-reference focused DeepSeek Q4_K p512 rows, exact p513 tail rows, and kept p33 on the existing narrow route. It is rejected for production promotion because same-runner p512 focused perf regressed versus current MMQL128 on every row: Kcur 979.20 -> 1565.46 us, Qcur 3948.47 -> 6674.58 us, ffn_out 14573.74 -> 19495.02 us, ffn_gate 13196.74 -> 23377.37 us. This rules out the simple direct-f32-RHS HIP WMMA clone; the remaining gap is likely in RADV's cooperative-matrix lowering, LDS padding/stage layout, vectorized global/LDS scheduling, or explicit Q8_1 packing reuse rather than the high-level tile alone."
     }
   ]
 }
