@@ -10,6 +10,18 @@
 #define HRX_Q4_K_Q8_1_X4_MMQL128_BK_STEP 1
 #endif
 
+#ifndef HRX_Q4_K_Q8_1_X4_MMQL128_BM
+#define HRX_Q4_K_Q8_1_X4_MMQL128_BM 128
+#endif
+
+#ifndef HRX_Q4_K_Q8_1_X4_MMQL128_BN
+#define HRX_Q4_K_Q8_1_X4_MMQL128_BN 128
+#endif
+
+#ifndef HRX_Q4_K_Q8_1_X4_MMQL128_WN
+#define HRX_Q4_K_Q8_1_X4_MMQL128_WN 64
+#endif
+
 struct hrx_block_q4_K_q8_1_mmql_lhs {
     unsigned short d;
     unsigned short dmin;
@@ -108,13 +120,13 @@ extern "C" __global__ void HRX_Q4_K_Q8_1_X4_MMQL128_EXPORT(
         const hrx_block_q8_1_x4_rhs_q4_mmql * src1,
         float * dst,
         long long k, long long rows, long long cols) {
-    constexpr int BM = 128;
-    constexpr int BN = 128;
+    constexpr int BM = HRX_Q4_K_Q8_1_X4_MMQL128_BM;
+    constexpr int BN = HRX_Q4_K_Q8_1_X4_MMQL128_BN;
     constexpr int BK_STEP = HRX_Q4_K_Q8_1_X4_MMQL128_BK_STEP;
     constexpr int BLOCK_SIZE = 256;
     constexpr int WARP = 64;
     constexpr int WM = 64;
-    constexpr int WN = 64;
+    constexpr int WN = HRX_Q4_K_Q8_1_X4_MMQL128_WN;
     constexpr int WMITER = 1;
     constexpr int TM = 4;
     constexpr int TN = 2;
@@ -124,7 +136,8 @@ extern "C" __global__ void HRX_Q4_K_Q8_1_X4_MMQL128_EXPORT(
     constexpr int LOAD_VEC_A = 8;
     constexpr int LOAD_VEC_B = 16;
 
-    static_assert(WNITER == 8, "unexpected Vulkan large Q4 MMQ tile shape");
+    static_assert(BM == 128 && (BN == 128 || BN == 64), "unexpected Q4 MMQ tile shape");
+    static_assert(WNITER == 8 || WNITER == 4, "unexpected Q4 MMQ column iteration count");
     static_assert(WSUBM == 64 && WSUBN == 8, "unexpected Vulkan large Q4 MMQ subtile shape");
 
     const unsigned int tid = __builtin_amdgcn_workitem_id_x();
