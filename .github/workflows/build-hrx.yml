@@ -76,7 +76,6 @@ jobs:
           path: devws-src/sources/hrx-system
 
       - name: Runner identity
-        if: always()
         env:
           MATRIX_NAME: ${{ matrix.name }}
           MATRIX_GPU_TARGET: ${{ matrix.gpu_target }}
