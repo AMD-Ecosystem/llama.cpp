@@ -78,6 +78,10 @@
 #define HRX_Q8_0_WMMA_VK128_FAST_HALF_DUMMY_LOAD 0
 #endif
 
+#ifndef HRX_Q8_0_WMMA_VK128_ASSUME_FULL_TILES
+#define HRX_Q8_0_WMMA_VK128_ASSUME_FULL_TILES 0
+#endif
+
 #ifndef HRX_Q8_0_WMMA_VK128_LAUNCH_MIN_BLOCKS
 #define HRX_Q8_0_WMMA_VK128_LAUNCH_MIN_BLOCKS 1
 #endif
@@ -806,10 +810,15 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
             const int kk_pair = idx - r * PACKS_PER_K;
             const int kk = kk_pair * 2;
             const long long row = row_base + static_cast<long long>(r);
+#if HRX_Q8_0_WMMA_VK128_ASSUME_FULL_TILES
+            const _Float16 a0 = hrx_q8_0_wmma_vk128_load_a_value(src0, row, k0 + kk + 0, blocks_per_row);
+            const _Float16 a1 = hrx_q8_0_wmma_vk128_load_a_value(src0, row, k0 + kk + 1, blocks_per_row);
+#else
             const _Float16 a0 = row < rows ?
                 hrx_q8_0_wmma_vk128_load_a_value(src0, row, k0 + kk + 0, blocks_per_row) : zero;
             const _Float16 a1 = row < rows ?
                 hrx_q8_0_wmma_vk128_load_a_value(src0, row, k0 + kk + 1, blocks_per_row) : zero;
+#endif
             hrx_q8_0_wmma_vk128_ds_store_u32(
                 sh_a_u32 + r * SHARED_STRIDE_PACKS + kk_pair,
                 hrx_q8_0_wmma_vk128_f16_pair_to_u32(a0, a1));
@@ -819,8 +828,13 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
             const int kk_pair = idx - c * PACKS_PER_K;
             const int kk = kk_pair * 2;
             const long long col = col_base + static_cast<long long>(c);
+#if HRX_Q8_0_WMMA_VK128_ASSUME_FULL_TILES
+            const _Float16 b0 = static_cast<_Float16>(src1[col * k + k0 + kk + 0]);
+            const _Float16 b1 = static_cast<_Float16>(src1[col * k + k0 + kk + 1]);
+#else
             const _Float16 b0 = col < cols ? static_cast<_Float16>(src1[col * k + k0 + kk + 0]) : zero;
             const _Float16 b1 = col < cols ? static_cast<_Float16>(src1[col * k + k0 + kk + 1]) : zero;
+#endif
             hrx_q8_0_wmma_vk128_ds_store_u32(
                 sh_b_u32 + c * SHARED_STRIDE_PACKS + kk_pair,
                 hrx_q8_0_wmma_vk128_f16_pair_to_u32(b0, b1));
@@ -1020,6 +1034,45 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
 #if HRX_Q8_0_WMMA_VK128_FULL_TILE_STORE
         const long long tile_row0 = row_base + static_cast<long long>(row_tile * 16);
         const long long tile_col0 = col_base + static_cast<long long>(col_tile * 16);
+#if HRX_Q8_0_WMMA_VK128_ASSUME_FULL_TILES
+#if HRX_Q8_0_WMMA_VK128_BUFFER_STORE
+#if HRX_Q8_0_WMMA_VK128_STORE_STAGE_FAST_HALF
+        hrx_q8_0_wmma_vk128_store_acc_f16_row_major_w64_fast_half_buffer_full_pair(
+            dst_rsrc,
+            rows,
+            tile_row0,
+            tile_col0,
+            acc[tile_iter],
+            lane,
+            wave,
+            (hrx_q8_0_wmma_vk128_lds_volatile_half_ptr) sh_store);
+#elif HRX_Q8_0_WMMA_VK128_FULL_TILE_STORE_PAIR
+        hrx_q8_0_wmma_vk128_store_acc_f16_row_major_w64_buffer_full_pair(
+            dst_rsrc,
+            rows,
+            tile_row0,
+            tile_col0,
+            acc[tile_iter],
+            lane);
+#else
+        hrx_q8_0_wmma_vk128_store_acc_f16_row_major_w64_buffer_full(
+            dst_rsrc,
+            rows,
+            tile_row0,
+            tile_col0,
+            acc[tile_iter],
+            lane);
+#endif
+#else
+        hrx_q8_0_wmma_vk128_store_acc_f16_row_major_w64_full(
+            dst,
+            rows,
+            tile_row0,
+            tile_col0,
+            acc[tile_iter],
+            lane);
+#endif
+#else
         if (tile_row0 + 16 <= rows && tile_col0 + 16 <= cols) {
 #if HRX_Q8_0_WMMA_VK128_BUFFER_STORE
 #if HRX_Q8_0_WMMA_VK128_STORE_STAGE_FAST_HALF
@@ -1081,6 +1134,7 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
                 lane);
 #endif
         }
+#endif
 #else
         hrx_q8_0_wmma_vk128_store_acc_f16_row_major_w64(
             dst,
