@@ -562,6 +562,15 @@
       "reason": "The Q5_K B64GROUP store-batch8 direct-WMMA probe preserved the closest rejected direct-F32 B64GROUP store-stage math/load schedule and changed the writeback staging granularity from one LDS stage plus two barriers per tile to one stage plus two barriers per eight tiles. This mechanically targeted the RADV low-barrier cooperative-store axis. It compiled through CMake/Ninja with wave64, SGPR=32, VGPR=214, LDS=36864, no spills, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 64 ds_load_u16_d16, 66 ds_store_b16, 64 global_store_b32, and 6 s_barrier. Focused p33/p512/p513 CPU-reference gates passed; p33 stayed on rows2, while p512 and p513 selected batch8 for all rows. It is rejected because same-runner focused timing regressed p512 Kcur 864.14 -> 1043.49 us, Qcur 1223.22 -> 2499.40 us, ffn_out 7229.01 -> 17649.52 us, ffn_gate 6903.14 -> 16915.11 us, and p513 Kcur 886.35 -> 960.72 us, Qcur 1585.01 -> 3389.07 us, ffn_out 9601.19 -> 23409.53 us, ffn_gate 8720.37 -> 20101.28 us. Lowering barriers from 34 to 6 is still not the Vulkan schedule without RADV's cooperative-matrix store/lane ownership and 192 buffer_store_b32 writeback shape."
     },
     {
+      "id": "q5_dense_prompt_wmma16_vk128_b64group_bufferstore_p33_p512_p513",
+      "date": "2026-06-18",
+      "route": "hrx_mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_bufferstore_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q5_K_WMMA16_VK128_PADDED_W64_B64GROUP_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q5-wmma-vk128-b64group-bufferstore-20260618/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q5_k_wmma16_vk128_padded_w64_b64group_bufferstore_wg256.hsaco",
+      "reason": "The Q5_K B64GROUP bufferstore direct-WMMA probe ported the known-good gfx11 raw-buffer-store primitive from Q8_0 to Q5_K and combined it with grouped LDS fragment reads. It directly tested the RADV buffer_store_b32 opcode class without adding manual LDS store-stage barriers. It compiled through CMake/Ninja with wave64, SGPR=32, VGPR=198, LDS=20480, no spills, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 0 ds_load_u16_d16, 2 ds_store_b16, 128 buffer_store_b32, 0 global_store_b32, and 2 barriers. Focused p33/p512/p513 CPU-reference gates passed; p33 stayed on rows2, while p512 and p513 selected the bufferstore route for all rows. It is rejected because same-runner focused timing regressed p512 Kcur 871.11 -> 1038.82 us, Qcur 1232.52 -> 2388.60 us, ffn_out 7322.86 -> 17957.57 us, ffn_gate 7126.12 -> 16776.44 us, and p513 Kcur 897.54 -> 959.48 us, Qcur 1590.42 -> 3315.05 us, ffn_out 9404.53 -> 23052.67 us, ffn_gate 8409.39 -> 20001.36 us. Matching buffer_store_b32 plus B64GROUP loads is not enough without RADV's cooperative-matrix store/lane ownership and halfword LDS topology."
+    },
+    {
       "id": "q8_q6_direct_wmma_rocwmma_header_probe_wave32_default_store",
       "date": "2026-06-18",
       "route": "not implemented",

@@ -610,6 +610,13 @@
       "artifact": "cache/hrxv1/gfx1151/q5-wmma-vk128-b64group-store-batch8-20260618/",
       "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q5_k_wmma16_vk128_padded_w64_b64group_store_batch8_wg256.hsaco",
       "status": "rejected_focused_perf_regression"
+    },
+    {
+      "id": "q5_dense_prompt_wmma16_vk128_b64group_bufferstore_p33_p512_p513",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q5-wmma-vk128-b64group-bufferstore-20260618/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q5_k_wmma16_vk128_padded_w64_b64group_bufferstore_wg256.hsaco",
+      "status": "rejected_focused_perf_regression"
     }
   ]
 }

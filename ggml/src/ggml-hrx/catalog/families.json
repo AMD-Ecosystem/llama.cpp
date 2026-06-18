@@ -664,6 +664,10 @@
     "op": "MUL_MAT"
   },
   {
+    "family": "mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_bufferstore_f16acc_wg256",
+    "op": "MUL_MAT"
+  },
+  {
     "family": "mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_store_stage_f16acc_wg256",
     "op": "MUL_MAT"
   },
