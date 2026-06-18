@@ -50,6 +50,10 @@
 #define HRX_Q6_K_WMMA_VK128_FULL_TILE_STORE 0
 #endif
 
+#ifndef HRX_Q6_K_WMMA_VK128_STORE_STAGE
+#define HRX_Q6_K_WMMA_VK128_STORE_STAGE 0
+#endif
+
 struct hrx_block_q6_K_wmma_vk128_lhs {
     uint8_t ql[128];
     uint8_t qh[64];
@@ -433,6 +437,41 @@ static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_store_acc_f16_row_maj
     }
 }
 
+static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_stage(
+        float * dst,
+        long long rows_stride,
+        long long row0,
+        long long col0,
+        long long rows,
+        long long cols,
+        hrx_q6_k_wmma_vk128_half8_vec acc,
+        unsigned int lane,
+        unsigned int wave,
+        _Float16 * sh_store) {
+    constexpr int TILE_STRIDE = 16 * 16;
+    const int row_lane = static_cast<int>(lane >> 4);
+    const int col_lane = static_cast<int>(lane & 15u);
+    const int tile_base = static_cast<int>(wave) * TILE_STRIDE;
+    const int col_major_base = tile_base + col_lane * 16 + row_lane;
+#pragma unroll
+    for (int reg = 0; reg < 4; ++reg) {
+        sh_store[col_major_base + reg * 4] = acc[reg * 2 + HRX_Q6_K_WMMA_VK128_W64_OPSEL];
+    }
+    __syncthreads();
+
+    const long long col = col0 + static_cast<long long>(col_lane);
+    if (col < cols) {
+#pragma unroll
+        for (int reg = 0; reg < 4; ++reg) {
+            const long long row = row0 + static_cast<long long>(row_lane + reg * 4);
+            if (row < rows) {
+                dst[col * rows_stride + row] = static_cast<float>(sh_store[col_major_base + reg * 4]);
+            }
+        }
+    }
+    __syncthreads();
+}
+
 static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_tile_map(
         int wave,
         int tile_iter,
@@ -504,6 +543,9 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
 
     __shared__ _Float16 sh_a[BM * SHARED_STRIDE];
     __shared__ _Float16 sh_b[BN * SHARED_STRIDE];
+#if HRX_Q6_K_WMMA_VK128_STORE_STAGE
+    __shared__ _Float16 sh_store[WAVE_COUNT * 16 * 16];
+#endif
 
     const long long blocks_per_row = k / 256;
     const _Float16 zero = static_cast<_Float16>(0.0f);
@@ -635,6 +677,19 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
         int col_tile = 0;
         hrx_q6_k_wmma_vk128_tile_map(static_cast<int>(wave), tile_iter, &row_tile, &col_tile);
 #if HRX_Q6_K_WMMA_VK128_W64
+#if HRX_Q6_K_WMMA_VK128_STORE_STAGE
+        hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_stage(
+            dst,
+            rows,
+            row_base + static_cast<long long>(row_tile * 16),
+            col_base + static_cast<long long>(col_tile * 16),
+            rows,
+            cols,
+            acc[tile_iter],
+            lane,
+            wave,
+            sh_store);
+#else
 #if HRX_Q6_K_WMMA_VK128_FULL_TILE_STORE
         const long long tile_row0 = row_base + static_cast<long long>(row_tile * 16);
         const long long tile_col0 = col_base + static_cast<long long>(col_tile * 16);
@@ -667,6 +722,7 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
             cols,
             acc[tile_iter],
             lane);
+#endif
 #endif
 #else
         hrx_q6_k_wmma_vk128_store_acc_f16_row_major(

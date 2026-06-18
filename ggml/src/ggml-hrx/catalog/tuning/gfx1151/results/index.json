@@ -472,6 +472,13 @@
       "status": "rejected_focused_perf_regression"
     },
     {
+      "id": "q6_dense_prompt_wmma16_vk128_store_stage_p33_p512_p513",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q6-wmma-vk128-store-stage-focused-20260618/",
+      "compile_artifact": "cache/hrxv1/gfx1151/q6-wmma-vk128-store-stage-compile-20260618/",
+      "status": "rejected_focused_mixed_tail_signal"
+    },
+    {
       "id": "q6_dense_prompt_wmma16_vk64_padded44_w64_qwen3q6_p33",
       "date": "2026-06-18",
       "artifact": "cache/hrxv1/gfx1151/q6-wmma-vk64-padded44-medium-focused-20260618-062606/",
