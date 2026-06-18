@@ -9022,6 +9022,50 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bufferstore_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bufferstore_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bufferstore_wg256",
+    "artifact_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bufferstore_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bufferstore_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 110,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q8_0_prompt_wmma16x16_vk128_padded_w64_b64group_bufferstore_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q8_0 x F32 -> F32 MUL_MAT",
+      "k_multiple": 32,
+      "win_domain": "rows >= 8192 || k >= 8192",
+      "cols_min": 128,
+      "selector_gate": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "prior_delta": "This probe combines the remaining source-visible Q8_0 Vulkan-oracle axes after the gfx11 raw-buffer descriptor fix: grouped ds_read_b64 fragment loads, 22528-byte stage allocation, full-tile direct writeback, and raw buffer_store_b32 output. It should move the HIP direct-WMMA route toward RADV's 64 ds_load_b64, 22528-byte LDS, two-barrier, and buffer-store schedule while preserving CPU-reference correctness on p512/p513 large rows and keeping p33 on the narrow route."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bufferstore_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_focused_perf_regression",
+      "selection": "Opt-in Q8_0 direct-F32 WMMA VK128 b64group plus buffer-store probe. It compiled through CMake/Ninja, matched RADV on 32 f16 WMMA, 64 ds_load_b64, 22528-byte LDS, two barriers, wave64, and zero spills, and passed p33/p512/p513 CPU-reference gates with p512/p513 large rows selecting the candidate. It is rejected for production because focused timing regressed every selected p512/p513 large row versus the current packed-Q8_1 default, while still missing RADV's ds_load_u16_d16, ds_store_b16, and 192-store cooperative writeback shape."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_fullstore_f16acc_wg256_f32",
     "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_fullstore_f16acc_wg256",
     "op": "MUL_MAT",
