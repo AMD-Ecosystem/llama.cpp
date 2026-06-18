@@ -299,6 +299,12 @@
     "format": "amdgpu-hsaco",
     "storage": "embedded"
   },
+  "mul_mat_vec_q4_k_wmma16_wg256_hsaco": {
+    "source_id": "mul_mat_vec_q4_k_wmma16_wg256",
+    "path": "mul_mat_vec_q4_k_wmma16_wg256.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
   "mul_mat_vec_q5_k_hsaco": {
     "source_id": "mul_mat_vec_q5_k",
     "path": "mul_mat_vec_q5_k.hsaco",

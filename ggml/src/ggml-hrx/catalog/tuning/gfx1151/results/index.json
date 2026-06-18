@@ -235,6 +235,12 @@
       "date": "2026-06-17",
       "artifact": "cache/hrxv1/gfx1151/current-best-q6wmma-basket-p512-fa1-r1-20260617-222645/",
       "status": "partial_basket_boulder_ranking"
+    },
+    {
+      "id": "q4_dense_prompt_wmma16x16_f16acc_wg256_deepseek_p33_p512_p513",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/q4-wmma16-wg256-focused-20260617-223548/",
+      "status": "rejected_focused_perf_regression"
     }
   ]
 }

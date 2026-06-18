@@ -286,6 +286,12 @@ ggml_hrx_add_kernel_source(
     FLAGS -O3
 )
 ggml_hrx_add_kernel_source(
+    SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q4_k_wmma16_wg256.hip.cpp"
+    WAVEFRONT_SIZE 32
+    ARCH_PREFIXES gfx11
+    FLAGS -O3
+)
+ggml_hrx_add_kernel_source(
     SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q5_k_q8_1_wave64.hip.cpp"
     WAVEFRONT_SIZE 64
     ARCH_PREFIXES gfx11

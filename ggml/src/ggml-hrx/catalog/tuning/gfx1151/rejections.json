@@ -144,6 +144,14 @@
       "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_F16ACC_PROMPT=1",
       "artifact": "cache/hrxv1/gfx1151/q6-wmma16-f16acc-focused-20260617-215803/",
       "reason": "The direct Q6_K dequant-to-f16 plus F32 RHS cast-to-f16 WMMA route compiled through CMake/Ninja, emitted v_wmma_f16_16x16x16_f16, and has no spills (wave32, SGPR=24, VGPR=35, LDS=0). It passed CPU-reference focused gates for exact Llama 3.1 8B Q4_K_M p512 Q6 rows and synthesized p33/p513 odd-tail rows while selecting the intended provider. It is rejected for production promotion because the focused perf pass failed to finish a useful CSV after several minutes and 1688 selected dispatches, while the current MMQ64 route completed the same exact rows at 2254.51 us, 56728.72 us, and 379448.50 us. This proves the lane mapping and WMMA opcode path but not the Vulkan-style staged 128x128/256-thread dataflow needed for throughput."
+    },
+    {
+      "id": "q4_dense_prompt_wmma16x16_f16acc_wg256_deepseek_p33_p512_p513",
+      "date": "2026-06-17",
+      "route": "hrx_mul_mat_vec_q4_k_wmma16x16_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q4_K_WMMA16_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q4-wmma16-wg256-focused-20260617-223548/",
+      "reason": "The direct Q4_K dequant-to-f16 plus F32 RHS cast-to-f16 staged-WG256 WMMA route was added as a Vulkan-oracle diagnostic after RADV evidence showed matmul_q4_k_f32_f16acc_aligned_l emits v_wmma_f16_16x16x16_f16 while the current HRX Q4 MMQL128 route emits integer v_dot4_i32_iu8. It compiled through CMake/Ninja, emitted v_wmma_f16_16x16x16_f16, and has no spills (wave32, SGPR=27, VGPR=53, LDS=3072). It passed CPU-reference focused DeepSeek R1 Qwen 14B Q4_K_M rows for p512 and exact odd/tail p33/p513 while selecting the intended provider. It is rejected for production promotion because same-runner p512 focused perf regressed badly versus the accepted packed Q8_1 MMQL128 route: Kcur 986.46 -> 2402.45 us, Qcur 4123.76 -> 14151.28 us, ffn_out 13126.86 -> 55425.92 us, ffn_gate 13244.67 -> 58826.01 us. This proves that matching the WMMA opcode without Vulkan-like packed/staged reuse is insufficient on gfx1151."
     }
   ]
 }
