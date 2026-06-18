@@ -3792,6 +3792,17 @@ static bool ggml_backend_hrx_q4_k_mmql128_bquad_tail_enabled(
            !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_Q4_K_Q8_1_X4_MMQL128_BQUAD_TAIL_PROMPT");
 }
 
+static bool ggml_backend_hrx_q4_k_mmql128_bquad_cr_qk_enabled(
+        int64_t k,
+        int64_t rows,
+        int64_t cols) {
+    return ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q4_K_Q8_1_X4_MMQL128_BQUAD_CR_QK_PROMPT") &&
+           k <= 5120 &&
+           rows <= 5120 &&
+           cols >= 128 &&
+           (cols % 128) == 0;
+}
+
 static bool ggml_backend_hrx_q8_0_mmq64x96_enabled(
         const ggml_backend_hrx_device_context * device_context) {
     if (ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X96_PROMPT")) {
@@ -5916,6 +5927,32 @@ static ggml_backend_hrx_q8_1_mmvq_variant ggml_backend_hrx_mul_mat_vec_k_q8_1_va
                 ggml_backend_hrx_provider_available(
                     device_context->mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bpair_wg256_provider)) {
                 variant.provider = &device_context->mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bpair_wg256_provider;
+                variant.x4_quant = true;
+                variant.rows_per_workgroup = 128;
+                variant.cols_per_workgroup = 128;
+                return variant;
+            }
+            if (has_q8_1_x4 &&
+                ggml_backend_hrx_q4_k_mmql128_bquad_cr_qk_enabled(k, rows, cols) &&
+                device_context->mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bquad_cr_wg256_provider.kind ==
+                    ggml_backend_hrx_provider_kind::hsaco &&
+                src1->type == GGML_TYPE_F32 &&
+                op->type == GGML_TYPE_F32 &&
+                src0->ne[0] == src1->ne[0] &&
+                op->ne[0] == src0->ne[1] &&
+                op->ne[1] == src1->ne[1] &&
+                src0->ne[2] == 1 && src0->ne[3] == 1 &&
+                src1->ne[2] == 1 && src1->ne[3] == 1 &&
+                op->ne[2] == 1 && op->ne[3] == 1 &&
+                src0->ne[0] > 0 &&
+                rows % 128 == 0 &&
+                (src0->ne[0] % 256) == 0 &&
+                ggml_is_contiguous(src0) &&
+                ggml_is_contiguous(src1) &&
+                ggml_is_contiguous(op) &&
+                ggml_backend_hrx_provider_available(
+                    device_context->mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bquad_cr_wg256_provider)) {
+                variant.provider = &device_context->mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bquad_cr_wg256_provider;
                 variant.x4_quant = true;
                 variant.rows_per_workgroup = 128;
                 variant.cols_per_workgroup = 128;

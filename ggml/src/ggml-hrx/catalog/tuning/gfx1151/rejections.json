@@ -285,6 +285,15 @@
       "reason": "The B-quad-CR packed-Q8_1/x4 probe preserves the accepted B-quad B-cache cluster size and MMQL128 dataflow, but changes consume order so each A micro-row drains the loaded B cluster before moving to the next A row. This tests wait/issue order with B-quad-level live state after B-oct proved the full B window spills. It built through CMake/Ninja with wave64, SGPR=53, VGPR=167, LDS=8192, no spills, which is slightly lower register pressure than accepted B-quad. Focused p33/p512/p513 CPU-reference gates passed. Route traces proved p512 selected B-quad-CR, p33 stayed on the narrow route, and p513 stayed on accepted B-quad tail. Same-runner p512 timing rejects it for production: Kcur 982.78 -> 962.51 us and Qcur 3904.55 -> 3893.61 us improved slightly, but hot FFN rows regressed, ffn_out 13024.67 -> 14032.85 us and ffn_gate 11422.31 -> 12004.63 us. Keep accepted B-quad; CR consume order drains waits differently but loses the rows that dominate model throughput."
     },
     {
+      "id": "q4_dense_prompt_mmql128_bquad_cr_qk_policy_model_ab",
+      "date": "2026-06-18",
+      "route": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bquad_cr_wg256_f32 for k <= 5120 and rows <= 5120 full tiles; accepted B-quad elsewhere",
+      "env": "GGML_HRX_ENABLE_Q4_K_Q8_1_X4_MMQL128_BQUAD_CR_QK_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q4-mmql128-bquad-cr-qk-policy-20260618/",
+      "model_artifact": "cache/hrxv1/gfx1151/q4-mmql128-bquad-cr-qk-policy-model-ab-20260618/",
+      "reason": "The QK-only B-quad-CR policy tested the row-family split implied by focused evidence: select B-quad-CR only for full-tile Q4 rows with k <= 5120 and rows <= 5120, while keeping accepted B-quad for FFN rows, p513 tails, and p33 narrow rows. Focused p33/p512/p513 CPU-reference gates passed. Route traces proved p512 selected B-quad-CR for the two small K/Q-style rows and B-quad for the two FFN rows; p513 selected B-quad for all Q4 rows, and p33 stayed narrow. Focused p512 timing was mixed, and same-binary model A/B was not production-grade: DeepSeek R1 Qwen 14B Q4_K_M p512 improved only 246.404409 -> 247.043538 tok/s (+0.26%), while Llama 3.1 8B Q4_K_M p512 regressed 444.387307 -> 443.123607 tok/s (-0.28%). Reject default promotion; keep the opt-in policy as evidence that this consume order may be useful only for future finer-grained row scheduling."
+    },
+    {
       "id": "q8_0_prompt_wmma16_vk128_hybrid_current_best_p512",
       "date": "2026-06-18",
       "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_f16acc_wg256_f32",

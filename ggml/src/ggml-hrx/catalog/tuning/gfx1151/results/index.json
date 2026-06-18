@@ -358,6 +358,13 @@
       "status": "rejected_focused_ffn_regression"
     },
     {
+      "id": "q4_dense_prompt_mmql128_bquad_cr_qk_policy_model_ab",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q4-mmql128-bquad-cr-qk-policy-20260618/",
+      "model_artifact": "cache/hrxv1/gfx1151/q4-mmql128-bquad-cr-qk-policy-model-ab-20260618/",
+      "status": "rejected_model_ab_mixed"
+    },
+    {
       "id": "q8_0_prompt_wmma16_vk128_hybrid_large_rows_llama3_1_q8",
       "date": "2026-06-18",
       "artifact": "cache/hrxv1/gfx1151/q8_0-vk128-vs-bn96-focused-20260618-003553/",
