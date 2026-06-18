@@ -9372,6 +9372,7 @@ int main(int argc, char ** argv) {
     output_printer->print_testing_start(testing_start_info(ggml_backend_dev_count()));
 
     size_t n_ok = 0;
+    bool matched_backend_filter = false;
 
     for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
         ggml_backend_dev_t dev = ggml_backend_dev_get(i);
@@ -9382,6 +9383,7 @@ int main(int argc, char ** argv) {
             n_ok++;
             continue;
         }
+        matched_backend_filter = true;
 
         if (backend_filter == NULL && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU && mode != MODE_GRAD) {
             output_printer->print_backend_init(backend_init_info(
@@ -9423,10 +9425,17 @@ int main(int argc, char ** argv) {
         output_printer->print_footer();
     }
 
-    output_printer->print_overall_summary(
-        overall_summary_info(n_ok, ggml_backend_dev_count(), n_ok == ggml_backend_dev_count()));
+    const bool backend_filter_found = backend_filter == NULL || matched_backend_filter;
+    const bool overall_ok = n_ok == ggml_backend_dev_count() && backend_filter_found;
+    const size_t n_ok_summary = backend_filter_found ? n_ok : 0;
+    if (backend_filter != NULL && !matched_backend_filter) {
+        fprintf(stderr, "error: backend filter '%s' did not match any backend device\n", backend_filter);
+    }
 
-    if (n_ok != ggml_backend_dev_count()) {
+    output_printer->print_overall_summary(
+        overall_summary_info(n_ok_summary, ggml_backend_dev_count(), overall_ok));
+
+    if (!overall_ok) {
         return 1;
     }
 
