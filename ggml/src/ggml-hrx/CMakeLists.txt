@@ -920,6 +920,10 @@ if (GGML_HRX_BUILD_HIP_BENCHES)
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/hip-bench/lds_halfword_stage_bench.hip.cpp"
         64)
     ggml_hrx_add_hip_bench(
+        hrx-hip-bench-coopmat-store-contract
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/hip-bench/coopmat_store_contract_bench.hip.cpp"
+        64)
+    ggml_hrx_add_hip_bench(
         hrx-hip-bench-topk-w32
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/hip-bench/topk_moe_bench.hip.cpp"
         32)
@@ -938,6 +942,7 @@ if (GGML_HRX_BUILD_HIP_BENCHES)
             hrx-hip-bench-norm
             hrx-hip-bench-raw-buffer-store
             hrx-hip-bench-lds-halfword-stage
+            hrx-hip-bench-coopmat-store-contract
             hrx-hip-bench-topk-w32
             hrx-hip-bench-topk-w64)
 endif()
