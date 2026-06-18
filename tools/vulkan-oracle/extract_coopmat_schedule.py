@@ -9,6 +9,9 @@ import re
 INSTRUCTION_RE = re.compile(r"^\s+([A-Za-z0-9_.]+)\b")
 STAT_RE = re.compile(r"^([^:]+):\s+(.+)$")
 SPV_ID_RE = re.compile(r"^\s*(%[A-Za-z0-9_]+)\s+=\s+(Op\S+)\s+(.+)$")
+ISA_INSTRUCTION_RE = re.compile(r"^\s+([A-Za-z0-9_.]+)\s*(.*)$")
+BB_RE = re.compile(r"^(BB[0-9]+):")
+OFFSET_RE = re.compile(r"\boffset(?P<which>[0-9]*)[: ](?P<value>-?(?:0x[0-9a-fA-F]+|[0-9]+))")
 
 
 INTERESTING_PREFIXES = (
@@ -52,6 +55,88 @@ def extract_instructions(lines):
         if match:
             opcodes.append(match.group(1))
     return opcodes
+
+
+def parse_int(value):
+    return int(value, 0)
+
+
+def extract_offset(rest):
+    offsets = {}
+    for match in OFFSET_RE.finditer(rest):
+        key = "offset" if not match.group("which") else f"offset{match.group('which')}"
+        offsets[key] = parse_int(match.group("value"))
+    return offsets
+
+
+def parse_isa_events(lines):
+    events = []
+    bb = None
+    for index, line in enumerate(lines, 1):
+        bb_match = BB_RE.match(line.strip())
+        if bb_match:
+            bb = bb_match.group(1)
+            continue
+        stripped = strip_comment(line)
+        match = ISA_INSTRUCTION_RE.match(stripped)
+        if not match:
+            continue
+        opcode, rest = match.groups()
+        if not opcode.startswith(INTERESTING_PREFIXES):
+            continue
+        operands = [part.strip() for part in rest.split(",") if part.strip()]
+        events.append({
+            "line": index,
+            "bb": bb,
+            "opcode": opcode,
+            "operands": operands,
+            "offsets": extract_offset(rest),
+            "text": line.strip(),
+        })
+    return events
+
+
+def summarize_isa_events(events):
+    store_blocks = []
+    by_bb = collections.defaultdict(collections.Counter)
+    for event in events:
+        if event["bb"]:
+            by_bb[event["bb"]][event["opcode"]] += 1
+    for bb, counts in sorted(by_bb.items(), key=lambda item: int(item[0][2:])):
+        if any(op.startswith(("buffer_store", "global_store", "flat_store", "ds_store", "ds_write")) for op in counts):
+            store_blocks.append({
+                "bb": bb,
+                "opcodes": dict(sorted(counts.items())),
+                "store_ops": sum(
+                    count for op, count in counts.items()
+                    if op.startswith(("buffer_store", "global_store", "flat_store", "ds_store", "ds_write"))
+                ),
+            })
+
+    first_wmma_index = next(
+        (index for index, event in enumerate(events) if event["opcode"].startswith(("v_wmma", "v_mfma"))),
+        None)
+    if first_wmma_index is None:
+        pre_wmma = []
+        wmma_window = []
+    else:
+        pre_wmma = events[max(0, first_wmma_index - 80):first_wmma_index]
+        wmma_window = events[max(0, first_wmma_index - 16):min(len(events), first_wmma_index + 40)]
+
+    lds_load_offsets = collections.defaultdict(list)
+    for event in pre_wmma:
+        if event["opcode"] != "ds_load_b64" or len(event["operands"]) < 2:
+            continue
+        base = event["operands"][1].split()[0]
+        lds_load_offsets[base].append(event["offsets"].get("offset", 0))
+
+    return {
+        "store_blocks": store_blocks,
+        "pre_wmma_ds_load_b64_offsets": {
+            base: values for base, values in sorted(lds_load_offsets.items())
+        },
+        "wmma_window": wmma_window,
+    }
 
 
 def parse_stats(path):
@@ -162,6 +247,7 @@ def summarize_isa(path, stats_path=None):
     lines = read_lines(path)
     opcodes = extract_instructions(lines)
     counts = collections.Counter(opcodes)
+    events = parse_isa_events(lines)
     interesting = {
         key: counts[key]
         for key in sorted(counts)
@@ -174,6 +260,7 @@ def summarize_isa(path, stats_path=None):
         "instruction_count": len(opcodes),
         "interesting_opcodes": interesting,
         "top_opcodes": dict(counts.most_common(40)),
+        "event_summary": summarize_isa_events(events),
     }
 
 
@@ -256,6 +343,32 @@ def write_markdown(path, payload):
     for opcode, count in radv["interesting_opcodes"].items():
         lines.append(f"| `{opcode}` | {count} |")
     lines.append("")
+
+    event_summary = radv.get("event_summary", {})
+    if event_summary:
+        lines += ["## RADV ISA Event Windows", ""]
+        pre_offsets = event_summary.get("pre_wmma_ds_load_b64_offsets", {})
+        if pre_offsets:
+            lines += ["### Pre-WMMA `ds_load_b64` Offsets", ""]
+            for base, offsets in pre_offsets.items():
+                rendered = ", ".join(str(value) for value in offsets)
+                lines.append(f"- `{base}`: `{rendered}`")
+            lines.append("")
+
+        store_blocks = event_summary.get("store_blocks", [])
+        if store_blocks:
+            lines += ["### Store Basic Blocks", "", "| BB | Store Ops | Interesting Ops |", "| --- | ---: | --- |"]
+            for block in store_blocks:
+                ops = ", ".join(f"{op}={count}" for op, count in block["opcodes"].items())
+                lines.append(f"| `{block['bb']}` | {block['store_ops']} | `{ops}` |")
+            lines.append("")
+
+        window = event_summary.get("wmma_window", [])
+        if window:
+            lines += ["### First WMMA Window", ""]
+            for event in window:
+                lines.append(f"- line {event['line']}: `{event['text']}`")
+            lines.append("")
 
     if compare:
         lines += ["## Current HIP Delta", ""]
