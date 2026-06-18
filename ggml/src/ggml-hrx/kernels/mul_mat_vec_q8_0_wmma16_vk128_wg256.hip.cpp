@@ -61,12 +61,14 @@ typedef _Float16 hrx_q8_0_wmma_vk128_half4_vec __attribute__((ext_vector_type(4)
 typedef const __attribute__((address_space(3))) _Float16 * hrx_q8_0_wmma_vk128_lds_half_ptr;
 
 #if HRX_Q8_0_WMMA_VK128_BUFFER_STORE
+static constexpr int HRX_Q8_0_WMMA_VK128_RAW_BUFFER_FLAGS_GFX11 = 0x31004000;
+
 static __device__ __forceinline__ __amdgpu_buffer_rsrc_t hrx_q8_0_wmma_vk128_make_dst_rsrc(float * dst) {
     return __builtin_amdgcn_make_buffer_rsrc(
         dst,
         static_cast<unsigned short>(0),
         0xffffffffull,
-        0x27000);
+        HRX_Q8_0_WMMA_VK128_RAW_BUFFER_FLAGS_GFX11);
 }
 
 static __device__ __forceinline__ void hrx_q8_0_wmma_vk128_buffer_store_f32(

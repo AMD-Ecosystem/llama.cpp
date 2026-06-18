@@ -861,6 +861,10 @@ if (GGML_HRX_BUILD_HIP_BENCHES)
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/hip-bench/norm_bench.hip.cpp"
         32)
     ggml_hrx_add_hip_bench(
+        hrx-hip-bench-raw-buffer-store
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/hip-bench/raw_buffer_store_bench.hip.cpp"
+        64)
+    ggml_hrx_add_hip_bench(
         hrx-hip-bench-topk-w32
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/hip-bench/topk_moe_bench.hip.cpp"
         32)
@@ -877,6 +881,7 @@ if (GGML_HRX_BUILD_HIP_BENCHES)
             hrx-hip-bench-quant-q8
             hrx-hip-bench-q8-add
             hrx-hip-bench-norm
+            hrx-hip-bench-raw-buffer-store
             hrx-hip-bench-topk-w32
             hrx-hip-bench-topk-w64)
 endif()
