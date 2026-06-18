@@ -6430,6 +6430,50 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q6_k_wmma16x16_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q6_k_wmma16x16_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q6_k_wmma16_wg256",
+    "artifact_id": "mul_mat_vec_q6_k_wmma16_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q6_k_wmma16x16_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q6_k_prompt_wmma16x16_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q6_K x F32 -> F32 MUL_MAT",
+      "k_multiple": 256,
+      "rows_min": 16,
+      "rows_max": 4096,
+      "cols_min": 16,
+      "selector_gate": "GGML_HRX_ENABLE_Q6_K_WMMA16_F16ACC_WG256_PROMPT=1"
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q6_k_wmma16x16_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "candidate_gfx1151_probe",
+      "selection": "256-thread Q6_K WMMA staging probe anchored to the Vulkan oracle matmul_q6_k_f32_f16acc_aligned_l schedule. It stages a 64x32 by 16 f16 A/B panel in LDS so eight wave32 WMMA subtiles reuse dequantized Q6_K A and cast F32 RHS values. Focused evidence is row-bounded: rows <= 4096 improved exact Vcur and ffn_out rows, while the large result_output row regressed and must stay on the current packed-Q8_1 MMQ64 route."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q8_0_f32",
     "family": "mul_mat_vec_q8_0",
     "op": "MUL_MAT",

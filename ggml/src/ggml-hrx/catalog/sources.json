@@ -176,6 +176,9 @@
   "mul_mat_vec_q6_k_wmma16": {
     "path": "mul_mat_vec_q6_k_wmma16.hip.cpp"
   },
+  "mul_mat_vec_q6_k_wmma16_wg256": {
+    "path": "mul_mat_vec_q6_k_wmma16_wg256.hip.cpp"
+  },
   "mul_mat_vec_q8_0": {
     "path": "mul_mat_vec_q8_0.hip.cpp"
   },

@@ -217,6 +217,18 @@
       "date": "2026-06-17",
       "artifact": "cache/hrxv1/gfx1151/q6-wmma16-f16acc-focused-20260617-215803/",
       "status": "rejected_focused_perf_timeout"
+    },
+    {
+      "id": "q6_dense_prompt_wmma16x16_f16acc_wg256_focused_p33_p512_p513",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/q6-wmma16-f16acc-wg256-focused-20260617-221229/",
+      "status": "accepted_opt_in_candidate_focused_row_bound"
+    },
+    {
+      "id": "q6_dense_prompt_wmma16x16_f16acc_wg256_qwen3q6_model_p512",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/q6-wmma16-wg256-qwen3q6-model-ab-20260617-221937/",
+      "status": "accepted_opt_in_candidate_model"
     }
   ]
 }

@@ -205,6 +205,35 @@
         "BN96 must not be enabled without the BN64 fallback because p33 then falls back to the older 128x32 route and regresses",
         "p512 and p513 improve over BN64 but remain around half of same-run Vulkan, so the next Q8_0 move still needs a more Vulkan-like cooperative/packed dataflow"
       ]
+    },
+    {
+      "id": "q6_dense_prompt_wmma16x16_f16acc_wg256_qwen3q6_p512",
+      "date": "2026-06-17",
+      "status": "accepted_opt_in_candidate",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_F16ACC_WG256_PROMPT=1, composed with GGML_HRX_ENABLE_Q6_K_Q8_1_X4_MMQ64_PROMPT=1 for wide-row fallback",
+      "shape_guard": "Q6_K MUL_MAT prompt, direct F32 RHS, k % 256 == 0, rows between 16 and 4096 inclusive, cols >= 16, contiguous tensors; larger rows must fall back to the packed-Q8_1 MMQ64 route",
+      "focused_artifacts": [
+        "cache/hrxv1/gfx1151/q6-wmma16-f16acc-wg256-focused-20260617-221229/"
+      ],
+      "model_artifacts": [
+        "cache/hrxv1/gfx1151/q6-wmma16-wg256-qwen3q6-model-ab-20260617-221937/"
+      ],
+      "compile_evidence": {
+        "hsaco": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_wg256.hsaco",
+        "wavefront_size": 32,
+        "vgpr_count": 45,
+        "sgpr_count": 36,
+        "lds_bytes": 3072,
+        "spill_count": 0,
+        "isa": "emits v_wmma_f16_16x16x16_f16"
+      },
+      "promotion_blockers": [
+        "Focused exact Llama 3.1 8B Q4_K_M p512 result_output regressed when forced onto this route, so the rows <= 4096 guard is required",
+        "The route is still a 64x32 staged WMMA probe, not the full Vulkan 128x128/22528-byte LDS dataflow",
+        "Broader downloaded basket coverage is still pending before considering a default target policy",
+        "Default selector policy must remain target-specific and avoid perturbing gfx1100"
+      ]
     }
   ]
 }
