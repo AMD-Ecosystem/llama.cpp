@@ -42,6 +42,10 @@
 #define HRX_Q4_K_Q8_1_X4_MMQL128_PREFETCH_B_QUAD 0
 #endif
 
+#ifndef HRX_Q4_K_Q8_1_X4_MMQL128_PREFETCH_B_QUAD_CR
+#define HRX_Q4_K_Q8_1_X4_MMQL128_PREFETCH_B_QUAD_CR 0
+#endif
+
 #ifndef HRX_Q4_K_Q8_1_X4_MMQL128_PREFETCH_B_OCT
 #define HRX_Q4_K_Q8_1_X4_MMQL128_PREFETCH_B_OCT 0
 #endif
@@ -330,7 +334,7 @@ extern "C" __global__ void HRX_Q4_K_Q8_1_X4_MMQL128_EXPORT(
                     }
                 }
             }
-#elif HRX_Q4_K_Q8_1_X4_MMQL128_PREFETCH_B_QUAD
+#elif HRX_Q4_K_Q8_1_X4_MMQL128_PREFETCH_B_QUAD || HRX_Q4_K_Q8_1_X4_MMQL128_PREFETCH_B_QUAD_CR
             static_assert((WNITER % 2) == 0, "B-quad prefetch expects an even column iteration count");
             #pragma unroll
             for (int wsic = 0; wsic < WNITER; wsic += 2) {
@@ -340,9 +344,32 @@ extern "C" __global__ void HRX_Q4_K_Q8_1_X4_MMQL128_EXPORT(
                     #pragma unroll
                     for (int cc = 0; cc < TN; ++cc) {
                         cache_b_quad[wi][cc] =
-                            buf_b[k_step * BN + warp_c * WN + (wsic + wi) * WSUBN + tiwc * TN + cc];
+                        buf_b[k_step * BN + warp_c * WN + (wsic + wi) * WSUBN + tiwc * TN + cc];
                     }
                 }
+#if HRX_Q4_K_Q8_1_X4_MMQL128_PREFETCH_B_QUAD_CR
+                #pragma unroll
+                for (int cr = 0; cr < TM; ++cr) {
+                    #pragma unroll
+                    for (int wi = 0; wi < 2; ++wi) {
+                        #pragma unroll
+                        for (int cc = 0; cc < TN; ++cc) {
+                            const hrx_q8_1_mmql_b_cache_q4 cache_b = cache_b_quad[wi][cc];
+                            int qsum = 0;
+                            #pragma unroll
+                            for (int iqs = 0; iqs < 8; ++iqs) {
+                                const uint32_t qpack =
+                                    (static_cast<uint32_t>(cache_a[cr].qs[iqs >> 1]) >> ((iqs & 1) * 4)) &
+                                    0x0F0F0F0Fu;
+                                qsum += hrx_udot4_q4_q8_1_mmql(qpack, cache_b.qs[iqs]);
+                            }
+                            sum[((wsic + wi) * TN + cc) * TM + cr] +=
+                                cache_a[cr].d * cache_b.d * static_cast<float>(qsum) -
+                                cache_a[cr].min * cache_b.s;
+                        }
+                    }
+                }
+#else
                 #pragma unroll
                 for (int wi = 0; wi < 2; ++wi) {
                     #pragma unroll
@@ -364,6 +391,7 @@ extern "C" __global__ void HRX_Q4_K_Q8_1_X4_MMQL128_EXPORT(
                         }
                     }
                 }
+#endif
             }
 #else
             #pragma unroll

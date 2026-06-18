@@ -5284,6 +5284,49 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bquad_cr_wg256_f32",
+    "family": "mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bquad_cr_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q4_k_q8_1_x4_mmql128_bquad_cr",
+    "artifact_id": "mul_mat_vec_q4_k_q8_1_x4_mmql128_bquad_cr_hsaco",
+    "export_name": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bquad_cr_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "dense_q4_k_prompt_x_q8_1_x4_mmql128x128_bquad_cr_probe"
+    },
+    "shape_guards": {
+      "rows_multiple": 128,
+      "cols_min": 128,
+      "cols_multiple": 128,
+      "k_multiple": 256,
+      "requires_env": "GGML_HRX_ENABLE_Q4_K_Q8_1_X4_MMQL128_BQUAD_CR_PROMPT"
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bquad_cr_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "candidate_gfx1151_probe",
+      "selection": "Packed-Q8_1/x4 issue-order probe adjacent to accepted B-quad. It preserves the B-quad B-cache cluster size and current MMQL128 production dataflow, but drains the loaded B cluster by A micro-row first. This tests wait/issue order with B-quad-level live state after B-oct proved the full B window spills. It is opt-in and full-column-tile only pending compile, correctness, and timing evidence."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x128_boct_wg256_f32",
     "family": "mul_mat_vec_q4_k_q8_1_x4_mmql128x128_boct_wg256",
     "op": "MUL_MAT",
