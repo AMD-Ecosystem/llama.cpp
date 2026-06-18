@@ -10,6 +10,14 @@
 #define HRX_Q5_K_WMMA_VK128_SHARED_STRIDE 32
 #endif
 
+#ifndef HRX_Q5_K_WMMA_VK128_BM
+#define HRX_Q5_K_WMMA_VK128_BM 128
+#endif
+
+#ifndef HRX_Q5_K_WMMA_VK128_BN
+#define HRX_Q5_K_WMMA_VK128_BN 128
+#endif
+
 #ifndef HRX_Q5_K_WMMA_VK128_PREFETCH_FRAGS
 #define HRX_Q5_K_WMMA_VK128_PREFETCH_FRAGS 0
 #endif
@@ -403,8 +411,14 @@ static __device__ __forceinline__ void hrx_q5_k_wmma_vk128_tile_map(
         int tile_iter,
         int * row_tile,
         int * col_tile) {
-    constexpr int ROW_TILES = 8;
+    constexpr int ROW_TILES = HRX_Q5_K_WMMA_VK128_BM / 16;
+#if HRX_Q5_K_WMMA_VK128_W64
+    constexpr int WAVE_COUNT = 4;
+#else
     constexpr int WAVE_COUNT = 8;
+#endif
+    constexpr int TILE_COUNT = (HRX_Q5_K_WMMA_VK128_BM / 16) * (HRX_Q5_K_WMMA_VK128_BN / 16);
+    constexpr int TILES_PER_WAVE = TILE_COUNT / WAVE_COUNT;
 #if HRX_Q5_K_WMMA_VK128_PAIR64_TILE_MAP
     const int pair = wave >> 1;
     const int lane_wave = wave & 1;
@@ -413,15 +427,19 @@ static __device__ __forceinline__ void hrx_q5_k_wmma_vk128_tile_map(
     const int pair_col = pair >> 1;
     *row_tile = pair_row * 4 + (tile & 3);
     *col_tile = pair_col * 4 + (tile >> 2);
-#elif HRX_Q5_K_WMMA_VK128_W64
+#elif HRX_Q5_K_WMMA_VK128_W64 && HRX_Q5_K_WMMA_VK128_BM == 128 && HRX_Q5_K_WMMA_VK128_BN == 128
     const int wave_row = wave & 1;
     const int wave_col = wave >> 1;
     *row_tile = wave_row * 4 + (tile_iter & 3);
     *col_tile = wave_col * 4 + (tile_iter >> 2);
+#elif HRX_Q5_K_WMMA_VK128_W64 && HRX_Q5_K_WMMA_VK128_BM == 64 && HRX_Q5_K_WMMA_VK128_BN == 64
+    const int tile = wave * TILES_PER_WAVE + tile_iter;
+    *row_tile = tile % ROW_TILES;
+    *col_tile = tile / ROW_TILES;
 #else
     const int tile = wave + tile_iter * WAVE_COUNT;
-    *row_tile = tile & (ROW_TILES - 1);
-    *col_tile = tile >> 3;
+    *row_tile = tile % ROW_TILES;
+    *col_tile = tile / ROW_TILES;
 #endif
 }
 
@@ -433,8 +451,8 @@ void HRX_Q5_K_WMMA_VK128_EXPORT(
         long long k,
         long long rows,
         long long cols) {
-    constexpr int BM = 128;
-    constexpr int BN = 128;
+    constexpr int BM = HRX_Q5_K_WMMA_VK128_BM;
+    constexpr int BN = HRX_Q5_K_WMMA_VK128_BN;
     constexpr int BK = 32;
     constexpr int SHARED_STRIDE = HRX_Q5_K_WMMA_VK128_SHARED_STRIDE;
 #if HRX_Q5_K_WMMA_VK128_W64
