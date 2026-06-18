@@ -11,6 +11,15 @@
       "reason": "Focused Vcur row improved, but same-runner p512 model A/B regressed slightly."
     },
     {
+      "id": "q5_dense_prompt_wmma16_vk128_padded_w64_p33_p512_p513",
+      "date": "2026-06-18",
+      "route": "hrx_mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q5_K_WMMA16_VK128_PADDED_W64_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q5-wmma-vk128-focused-20260618-025116/",
+      "isa_artifact": "cache/hrxv1/gfx1151/q5-radv-vs-hrx-wmma-vk128-padded-w64-isa-20260618/",
+      "reason": "The Q5_K Vulkan-oracle direct-F32 WMMA probe cloned the Q4/Q8 VK128 padded wave64 f16acc skeleton for the dominant RADV pipeline matmul_q5_k_f32_f16acc_aligned_l. It compiled through CMake/Ninja, selected through the direct MUL_MAT path after a Q8_1-selector ABI bug was fixed, emitted 32 static v_wmma_f16_16x16x16_f16 sites, and passed focused CPU-reference p512 plus p513 tail rows; p33 correctly stayed on the existing narrow rows2 route. It is rejected for production promotion because same-runner focused p512 timing regressed versus the current packed Q8_1 MMQL128 route on all Q5 rows: Kcur 866.67 -> 971.27 us, Qcur 1215.98 -> 2476.18 us, ffn_out 7191.96 -> 17643.78 us, and ffn_gate 6332.38 -> 14489.87 us. The ISA comparison also shows it is still not the RADV schedule: 20480 versus 22528 LDS bytes, 32 ds_load_b128 versus RADV's 64 ds_load_b64 plus 128 ds_load_u16_d16, and 64 versus 192 stores."
+    },
+    {
       "id": "existing_q4_mul_mat_id_p512",
       "date": "2026-06-17",
       "route": "hrx_mul_mat_id_q4_k_wg64_f32",

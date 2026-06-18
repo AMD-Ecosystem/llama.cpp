@@ -203,6 +203,12 @@
   "mul_mat_vec_q5_k_q8_1_wave64": {
     "path": "mul_mat_vec_q5_k_q8_1_wave64.hip.cpp"
   },
+  "mul_mat_vec_q5_k_wmma16_vk128_wg256": {
+    "path": "mul_mat_vec_q5_k_wmma16_vk128_wg256.hip.cpp"
+  },
+  "mul_mat_vec_q5_k_wmma16_vk128_padded_w64_wg256": {
+    "path": "mul_mat_vec_q5_k_wmma16_vk128_padded_w64_wg256.hip.cpp"
+  },
   "mul_mat_vec_q6_k": {
     "path": "mul_mat_vec_q6_k.hip.cpp"
   },
