@@ -42,6 +42,10 @@
 #define HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STREAM_ROW 0
 #endif
 
+#ifndef HRX_Q8_0_WMMA_VK128_W64_B64GROUP_NAMED_FRAGS
+#define HRX_Q8_0_WMMA_VK128_W64_B64GROUP_NAMED_FRAGS 0
+#endif
+
 #ifndef HRX_Q8_0_WMMA_VK128_STORE_STAGE
 #define HRX_Q8_0_WMMA_VK128_STORE_STAGE 0
 #endif
@@ -914,6 +918,40 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
                             HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
                     }
                 }
+#elif HRX_Q8_0_WMMA_VK128_W64_B64GROUP_NAMED_FRAGS
+                const hrx_q8_0_wmma_vk128_half16_vec a0 =
+                    hrx_q8_0_wmma_vk128_load_a_frag_w64_b64asm(sh_a_lds, wave_row * 4 + 0, k_tile, lane);
+                const hrx_q8_0_wmma_vk128_half16_vec a1 =
+                    hrx_q8_0_wmma_vk128_load_a_frag_w64_b64asm(sh_a_lds, wave_row * 4 + 1, k_tile, lane);
+                const hrx_q8_0_wmma_vk128_half16_vec a2 =
+                    hrx_q8_0_wmma_vk128_load_a_frag_w64_b64asm(sh_a_lds, wave_row * 4 + 2, k_tile, lane);
+                const hrx_q8_0_wmma_vk128_half16_vec a3 =
+                    hrx_q8_0_wmma_vk128_load_a_frag_w64_b64asm(sh_a_lds, wave_row * 4 + 3, k_tile, lane);
+                const hrx_q8_0_wmma_vk128_half16_vec b0 =
+                    hrx_q8_0_wmma_vk128_load_b_frag_w64_b64asm(sh_b_lds, wave_col * 4 + 0, k_tile, lane);
+                const hrx_q8_0_wmma_vk128_half16_vec b1 =
+                    hrx_q8_0_wmma_vk128_load_b_frag_w64_b64asm(sh_b_lds, wave_col * 4 + 1, k_tile, lane);
+                const hrx_q8_0_wmma_vk128_half16_vec b2 =
+                    hrx_q8_0_wmma_vk128_load_b_frag_w64_b64asm(sh_b_lds, wave_col * 4 + 2, k_tile, lane);
+                const hrx_q8_0_wmma_vk128_half16_vec b3 =
+                    hrx_q8_0_wmma_vk128_load_b_frag_w64_b64asm(sh_b_lds, wave_col * 4 + 3, k_tile, lane);
+                asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+                acc[0] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a0, b0, acc[0], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                acc[1] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a1, b0, acc[1], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                acc[2] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a2, b0, acc[2], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                acc[3] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a3, b0, acc[3], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                acc[4] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a0, b1, acc[4], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                acc[5] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a1, b1, acc[5], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                acc[6] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a2, b1, acc[6], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                acc[7] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a3, b1, acc[7], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                acc[8] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a0, b2, acc[8], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                acc[9] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a1, b2, acc[9], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                acc[10] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a2, b2, acc[10], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                acc[11] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a3, b2, acc[11], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                acc[12] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a0, b3, acc[12], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                acc[13] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a1, b3, acc[13], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                acc[14] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a2, b3, acc[14], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                acc[15] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a3, b3, acc[15], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
 #else
                 hrx_q8_0_wmma_vk128_half16_vec b_frag[4];
 #pragma unroll
