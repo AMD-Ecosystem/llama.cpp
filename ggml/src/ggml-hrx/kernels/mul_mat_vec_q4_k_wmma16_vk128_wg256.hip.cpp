@@ -214,22 +214,14 @@ static __device__ __forceinline__ void hrx_q4_k_wmma_vk128_append_half4(
     }
 }
 
-static __device__ __forceinline__ hrx_q4_k_wmma_vk128_half4_vec hrx_q4_k_wmma_vk128_unpack_b64(uint64_t bits) {
-    union {
-        uint64_t u;
-        hrx_q4_k_wmma_vk128_half4_vec h4;
-    } pack;
-    pack.u = bits;
-    return pack.h4;
-}
-
-static __device__ __forceinline__ uint64_t hrx_q4_k_wmma_vk128_ds_read_b64(const _Float16 * ptr) {
+static __device__ __forceinline__ hrx_q4_k_wmma_vk128_half4_vec hrx_q4_k_wmma_vk128_ds_read_b64_h4(const _Float16 * ptr) {
     const __attribute__((address_space(3))) uint64_t * lds_ptr =
         (const __attribute__((address_space(3))) uint64_t *) ptr;
-    uint64_t value = 0;
+    hrx_q4_k_wmma_vk128_half4_vec value;
     asm volatile("ds_read_b64 %0, %1 offset:0\n"
                  : "=v"(value)
-                 : "v"(lds_ptr));
+                 : "v"(lds_ptr)
+                 : "memory");
     asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
     return value;
 }
@@ -244,10 +236,10 @@ static __device__ __forceinline__ hrx_q4_k_wmma_vk128_half16_vec hrx_q4_k_wmma_v
     const int k_base = k_tile * 16;
     const _Float16 * row_ptr = sh_a + row * SHARED_STRIDE + k_base;
     hrx_q4_k_wmma_vk128_half16_vec result;
-    hrx_q4_k_wmma_vk128_append_half4(&result, 0, hrx_q4_k_wmma_vk128_unpack_b64(hrx_q4_k_wmma_vk128_ds_read_b64(row_ptr + 0)));
-    hrx_q4_k_wmma_vk128_append_half4(&result, 4, hrx_q4_k_wmma_vk128_unpack_b64(hrx_q4_k_wmma_vk128_ds_read_b64(row_ptr + 4)));
-    hrx_q4_k_wmma_vk128_append_half4(&result, 8, hrx_q4_k_wmma_vk128_unpack_b64(hrx_q4_k_wmma_vk128_ds_read_b64(row_ptr + 8)));
-    hrx_q4_k_wmma_vk128_append_half4(&result, 12, hrx_q4_k_wmma_vk128_unpack_b64(hrx_q4_k_wmma_vk128_ds_read_b64(row_ptr + 12)));
+    hrx_q4_k_wmma_vk128_append_half4(&result, 0, hrx_q4_k_wmma_vk128_ds_read_b64_h4(row_ptr + 0));
+    hrx_q4_k_wmma_vk128_append_half4(&result, 4, hrx_q4_k_wmma_vk128_ds_read_b64_h4(row_ptr + 4));
+    hrx_q4_k_wmma_vk128_append_half4(&result, 8, hrx_q4_k_wmma_vk128_ds_read_b64_h4(row_ptr + 8));
+    hrx_q4_k_wmma_vk128_append_half4(&result, 12, hrx_q4_k_wmma_vk128_ds_read_b64_h4(row_ptr + 12));
     return result;
 }
 
@@ -261,10 +253,10 @@ static __device__ __forceinline__ hrx_q4_k_wmma_vk128_half16_vec hrx_q4_k_wmma_v
     const int k_base = k_tile * 16;
     const _Float16 * col_ptr = sh_b + col * SHARED_STRIDE + k_base;
     hrx_q4_k_wmma_vk128_half16_vec result;
-    hrx_q4_k_wmma_vk128_append_half4(&result, 0, hrx_q4_k_wmma_vk128_unpack_b64(hrx_q4_k_wmma_vk128_ds_read_b64(col_ptr + 0)));
-    hrx_q4_k_wmma_vk128_append_half4(&result, 4, hrx_q4_k_wmma_vk128_unpack_b64(hrx_q4_k_wmma_vk128_ds_read_b64(col_ptr + 4)));
-    hrx_q4_k_wmma_vk128_append_half4(&result, 8, hrx_q4_k_wmma_vk128_unpack_b64(hrx_q4_k_wmma_vk128_ds_read_b64(col_ptr + 8)));
-    hrx_q4_k_wmma_vk128_append_half4(&result, 12, hrx_q4_k_wmma_vk128_unpack_b64(hrx_q4_k_wmma_vk128_ds_read_b64(col_ptr + 12)));
+    hrx_q4_k_wmma_vk128_append_half4(&result, 0, hrx_q4_k_wmma_vk128_ds_read_b64_h4(col_ptr + 0));
+    hrx_q4_k_wmma_vk128_append_half4(&result, 4, hrx_q4_k_wmma_vk128_ds_read_b64_h4(col_ptr + 4));
+    hrx_q4_k_wmma_vk128_append_half4(&result, 8, hrx_q4_k_wmma_vk128_ds_read_b64_h4(col_ptr + 8));
+    hrx_q4_k_wmma_vk128_append_half4(&result, 12, hrx_q4_k_wmma_vk128_ds_read_b64_h4(col_ptr + 12));
     return result;
 }
 
