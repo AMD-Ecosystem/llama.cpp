@@ -1153,6 +1153,7 @@ struct ggml_backend_hrx_device_context {
     ggml_backend_hrx_op_provider mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_fullstore_f16acc_wg256_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_f16acc_wg256_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_f16acc_wg256_provider;
+    ggml_backend_hrx_op_provider mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_store_stage_f16acc_wg256_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_q6_k_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_q6_k_wg128_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_q6_k_wg64_provider;
@@ -1432,6 +1433,7 @@ static void ggml_backend_hrx_reset_providers(ggml_backend_hrx_device_context * d
     device_context->mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_fullstore_f16acc_wg256_provider.reset();
     device_context->mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_f16acc_wg256_provider.reset();
     device_context->mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_f16acc_wg256_provider.reset();
+    device_context->mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_store_stage_f16acc_wg256_provider.reset();
     device_context->mul_mat_vec_q6_k_provider.reset();
     device_context->mul_mat_vec_q6_k_wg128_provider.reset();
     device_context->mul_mat_vec_q6_k_wg64_provider.reset();
@@ -3134,6 +3136,9 @@ static bool ggml_backend_hrx_load_mul_mat_vec_providers(ggml_backend_hrx_device_
     ok = ggml_backend_hrx_load_catalog_provider(
         device_context, "hrx_mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_f16acc_wg256_f32",
         &device_context->mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_f16acc_wg256_provider) || ok;
+    ok = ggml_backend_hrx_load_catalog_provider(
+        device_context, "hrx_mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_store_stage_f16acc_wg256_f32",
+        &device_context->mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_store_stage_f16acc_wg256_provider) || ok;
     ok = ggml_backend_hrx_load_catalog_provider(
         device_context, "hrx_mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_fullstore_f16acc_wg256_f32",
         &device_context->mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_fullstore_f16acc_wg256_provider) || ok;
@@ -5562,6 +5567,15 @@ static const ggml_backend_hrx_op_provider * ggml_backend_hrx_select_mul_mat_vec_
                     device_context->mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_f16acc_wg256_provider)) {
                 return &device_context->mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_f16acc_wg256_provider;
             }
+            if (ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q5_K_WMMA16_VK128_PADDED_W64_B64GROUP_STORE_STAGE_F16ACC_WG256_PROMPT") &&
+                !ggml_backend_hrx_approximate_kernels_disabled() &&
+                k > 0 && (k % 256) == 0 &&
+                rows >= 128 &&
+                cols >= 128 &&
+                ggml_backend_hrx_provider_available(
+                    device_context->mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_store_stage_f16acc_wg256_provider)) {
+                return &device_context->mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_store_stage_f16acc_wg256_provider;
+            }
             if (ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q5_K_WMMA16_VK128_PADDED_W64_FULLSTORE_F16ACC_WG256_PROMPT") &&
                 !ggml_backend_hrx_approximate_kernels_disabled() &&
                 k > 0 && (k % 256) == 0 &&
@@ -6232,6 +6246,7 @@ static ggml_backend_hrx_q8_1_mmvq_variant ggml_backend_hrx_mul_mat_vec_k_q8_1_va
                 return variant;
             }
             if (ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q5_K_WMMA16_VK128_PADDED_W64_B64GROUP_F16ACC_WG256_PROMPT") ||
+                ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q5_K_WMMA16_VK128_PADDED_W64_B64GROUP_STORE_STAGE_F16ACC_WG256_PROMPT") ||
                 ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q5_K_WMMA16_VK128_PADDED_W64_FULLSTORE_F16ACC_WG256_PROMPT") ||
                 ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q5_K_WMMA16_VK128_PADDED_W64_F16ACC_WG256_PROMPT")) {
                 return variant;

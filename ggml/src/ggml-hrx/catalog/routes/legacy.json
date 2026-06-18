@@ -6658,6 +6658,50 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_store_stage_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_store_stage_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q5_k_wmma16_vk128_padded_w64_b64group_store_stage_wg256",
+    "artifact_id": "mul_mat_vec_q5_k_wmma16_vk128_padded_w64_b64group_store_stage_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_store_stage_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 112,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q5_dense_prompt_wmma16x16_vk128_padded_w64_b64group_store_stage_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q5_K x F32 -> F32 MUL_MAT",
+      "k_multiple": 256,
+      "rows_min": 128,
+      "cols_min": 128,
+      "selector_gate": "GGML_HRX_ENABLE_Q5_K_WMMA16_VK128_PADDED_W64_B64GROUP_STORE_STAGE_F16ACC_WG256_PROMPT=1",
+      "prior_delta": "Vulkan oracle matmul_q5_k_f32_f16acc_aligned_l uses BM128/BN128/BK32/WG256 wave64, 32 f16 WMMA ops, 64 ds_load_b64, 128 ds_load_u16_d16, 128 LDS b16 stores, 192 buffer stores, and 22528 bytes LDS. This probe combines the prior Q5 B64GROUP fragment-read spelling with a half accumulator LDS store-stage to mechanically target the remaining cooperative-matrix store/lane-ownership delta."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_store_stage_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_focused_perf_regression",
+      "selection": "Opt-in Q5_K direct-F32 WMMA VK128 probe combining RADV-like grouped LDS fragment reads with halfword accumulator staging. It matches RADV's 22528-byte LDS footprint, 32 WMMA sites, and 64 ds_load_b64 count, and passes p33/p512/p513 CPU-reference gates, but regresses same-runner p512/p513 focused timing because the HIP C++ staging spelling introduces many barriers and still misses RADV's cooperative-matrix store/lane ownership."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_f16acc_wg256_f32",
     "family": "mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_f16acc_wg256",
     "op": "MUL_MAT",
