@@ -179,10 +179,14 @@ def summarize(name, opcodes, resources=None, metadata=None):
 
 def write_markdown(path, payload):
     lines = ["# AMDGCN ISA Comparison", ""]
-    for key in ("radv", "hsaco"):
+    lhs_key = payload.get("lhs_key", "radv")
+    rhs_key = payload.get("rhs_key", "hsaco")
+    lhs_label = payload.get("lhs_label", lhs_key.upper())
+    rhs_label = payload.get("rhs_label", rhs_key.upper())
+    for key, label in ((lhs_key, lhs_label), (rhs_key, rhs_label)):
         summary = payload[key]
         lines += [
-            f"## {key.upper()}",
+            f"## {label}",
             "",
             f"- name: `{summary['name']}`",
             f"- instruction count: `{summary['instruction_count']}`",
@@ -202,19 +206,23 @@ def write_markdown(path, payload):
             lines.append(f"| `{opcode}` | {count} |")
         lines.append("")
 
-    lines += ["## Delta", "", "| Field | RADV | HSACO |", "| --- | ---: | ---: |"]
-    all_classes = sorted(set(payload["radv"]["classes"]) | set(payload["hsaco"]["classes"]))
+    lines += ["## Delta", "", f"| Field | {lhs_label} | {rhs_label} |", "| --- | ---: | ---: |"]
+    all_classes = sorted(set(payload[lhs_key]["classes"]) | set(payload[rhs_key]["classes"]))
     for cls in all_classes:
-        lines.append(f"| class `{cls}` | {payload['radv']['classes'].get(cls, 0)} | {payload['hsaco']['classes'].get(cls, 0)} |")
+        lines.append(f"| class `{cls}` | {payload[lhs_key]['classes'].get(cls, 0)} | {payload[rhs_key]['classes'].get(cls, 0)} |")
     pathlib.Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Compare RADV AMDGCN text with a CMake-built HSACO disassembly.")
+    parser = argparse.ArgumentParser(description="Compare RADV AMDGCN text with either a CMake-built HSACO or another AMDGCN text file.")
     parser.add_argument("--radv-isa", required=True, type=pathlib.Path)
     parser.add_argument("--radv-stats", type=pathlib.Path)
-    parser.add_argument("--hsaco", required=True, type=pathlib.Path)
-    parser.add_argument("--hsaco-symbol", required=True, help="Substring of the HSACO kernel symbol to compare.")
+    rhs = parser.add_mutually_exclusive_group(required=True)
+    rhs.add_argument("--hsaco", type=pathlib.Path)
+    rhs.add_argument("--other-isa", type=pathlib.Path, help="Compare against another AMDGCN text file instead of a HSACO.")
+    parser.add_argument("--hsaco-symbol", help="Substring of the HSACO kernel symbol to compare.")
+    parser.add_argument("--other-name", help="Display name for --other-isa in reports.")
+    parser.add_argument("--other-stats", type=pathlib.Path, help="RADV-style stats file for --other-isa.")
     parser.add_argument("--llvm-objdump", default="llvm-objdump", type=pathlib.Path)
     parser.add_argument("--llvm-readelf", default="llvm-readelf", type=pathlib.Path)
     parser.add_argument("--out-json", type=pathlib.Path)
@@ -224,22 +232,37 @@ def parse_args():
 
 def main():
     args = parse_args()
+    if args.hsaco and not args.hsaco_symbol:
+        raise SystemExit("--hsaco-symbol is required with --hsaco")
+    if args.hsaco_symbol and not args.hsaco:
+        raise SystemExit("--hsaco-symbol is only valid with --hsaco")
 
     radv_lines = read_lines(args.radv_isa)
     radv_opcodes = extract_instructions(radv_lines)
     radv_metadata = parse_radv_metadata(radv_lines)
     radv_resources = parse_radv_stats(args.radv_stats)
 
-    objdump_lines = run_text([str(args.llvm_objdump), "--no-show-raw-insn", "-d", str(args.hsaco)]).splitlines()
-    hsaco_lines = extract_objdump_symbol(objdump_lines, args.hsaco_symbol)
-    hsaco_opcodes = extract_instructions(hsaco_lines)
-
-    readelf_lines = run_text([str(args.llvm_readelf), "--notes", str(args.hsaco)]).splitlines()
-    hsaco_resources = parse_hsaco_metadata(readelf_lines, args.hsaco_symbol)
+    if args.hsaco:
+        objdump_lines = run_text([str(args.llvm_objdump), "--no-show-raw-insn", "-d", str(args.hsaco)]).splitlines()
+        rhs_lines = extract_objdump_symbol(objdump_lines, args.hsaco_symbol)
+        rhs_name = args.hsaco_symbol
+        readelf_lines = run_text([str(args.llvm_readelf), "--notes", str(args.hsaco)]).splitlines()
+        rhs_resources = parse_hsaco_metadata(readelf_lines, args.hsaco_symbol)
+        rhs_label = "HSACO"
+    else:
+        rhs_lines = read_lines(args.other_isa)
+        rhs_name = args.other_name or args.other_isa.name
+        rhs_resources = parse_radv_stats(args.other_stats)
+        rhs_label = "OTHER"
+    rhs_opcodes = extract_instructions(rhs_lines)
 
     payload = {
+        "lhs_key": "radv",
+        "rhs_key": "rhs",
+        "lhs_label": "RADV",
+        "rhs_label": rhs_label,
         "radv": summarize(args.radv_isa.name, radv_opcodes, radv_resources, radv_metadata),
-        "hsaco": summarize(args.hsaco_symbol, hsaco_opcodes, hsaco_resources),
+        "rhs": summarize(rhs_name, rhs_opcodes, rhs_resources),
     }
 
     text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
