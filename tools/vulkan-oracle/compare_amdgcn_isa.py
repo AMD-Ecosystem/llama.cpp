@@ -13,6 +13,7 @@ RADV_STAT_RE = re.compile(r"^([^:]+):\s+(.+)$")
 ISA_INSTRUCTION_RE = re.compile(r"^\s+([A-Za-z0-9_.]+)\s*(.*)$")
 BB_RE = re.compile(r"^\s*(BB[0-9]+|\.L[A-Za-z0-9_.$]+):")
 OFFSET_RE = re.compile(r"\boffset(?P<which>[0-9]*)[: ](?P<value>-?(?:0x[0-9a-fA-F]+|[0-9]+))")
+LGKMCNT_RE = re.compile(r"\blgkmcnt\((?P<value>[0-9]+)\)")
 INTERESTING_PREFIXES = (
     "v_wmma",
     "v_mfma",
@@ -130,6 +131,8 @@ def summarize_isa_events(events):
         base = event["operands"][1].split()[0]
         lds_load_offsets[base].append(event["offsets"].get("offset", 0))
 
+    wmma_score = score_wmma_window(pre_wmma, wmma_window)
+
     store_windows = []
     seen_store_lines = set()
     for index, event in enumerate(events):
@@ -153,7 +156,59 @@ def summarize_isa_events(events):
         "pre_wmma_ds_load_b64_offsets": {
             base: values for base, values in sorted(lds_load_offsets.items())
         },
+        "wmma_score": wmma_score,
         "wmma_window": wmma_window,
+    }
+
+
+def parse_lgkmcnt(event):
+    match = LGKMCNT_RE.search(event.get("text", ""))
+    return int(match.group("value")) if match else None
+
+
+def score_wmma_window(pre_wmma, wmma_window):
+    pre_b64 = [event for event in pre_wmma if event["opcode"] == "ds_load_b64"]
+    pre_waits = [event for event in pre_wmma if event["opcode"] == "s_waitcnt"]
+    bases = sorted({
+        event["operands"][1].split()[0]
+        for event in pre_b64
+        if len(event["operands"]) >= 2
+    })
+
+    last_wait_index = None
+    for index in range(len(pre_wmma) - 1, -1, -1):
+        if pre_wmma[index]["opcode"] == "s_waitcnt":
+            last_wait_index = index
+            break
+
+    if last_wait_index is None:
+        final_wait_lgkmcnt = None
+        load_b64_before_final_wait = len(pre_b64)
+    else:
+        final_wait_lgkmcnt = parse_lgkmcnt(pre_wmma[last_wait_index])
+        load_b64_before_final_wait = 0
+        for event in reversed(pre_wmma[:last_wait_index]):
+            if event["opcode"] == "ds_load_b64":
+                load_b64_before_final_wait += 1
+            elif event["opcode"] != "s_waitcnt_depctr":
+                break
+
+    wmma_seen = 0
+    waits_between_wmma = []
+    for event in wmma_window:
+        if event["opcode"].startswith(("v_wmma", "v_mfma")):
+            wmma_seen += 1
+        elif wmma_seen and event["opcode"] == "s_waitcnt":
+            waits_between_wmma.append(parse_lgkmcnt(event))
+
+    return {
+        "pre_wmma_ds_load_b64": len(pre_b64),
+        "pre_wmma_ds_load_b64_bases": bases,
+        "pre_wmma_waitcnt": len(pre_waits),
+        "load_b64_immediately_before_final_wait": load_b64_before_final_wait,
+        "final_pre_wmma_lgkmcnt": final_wait_lgkmcnt,
+        "wmma_in_window": wmma_seen,
+        "waitcnt_after_first_wmma": [value for value in waits_between_wmma if value is not None],
     }
 
 
@@ -385,6 +440,13 @@ def write_markdown(path, payload):
                 for base, offsets in pre_offsets.items():
                     rendered = ", ".join(str(value) for value in offsets)
                     lines.append(f"- `{base}`: `{rendered}`")
+                lines.append("")
+            wmma_score = event_summary.get("wmma_score", {})
+            if wmma_score:
+                lines += ["First-WMMA schedule score:", "", "| Metric | Value |", "| --- | ---: |"]
+                for score_key, score_value in wmma_score.items():
+                    rendered = json.dumps(score_value) if isinstance(score_value, (list, dict)) else str(score_value)
+                    lines.append(f"| `{score_key}` | `{rendered}` |")
                 lines.append("")
             store_blocks = event_summary.get("store_blocks", [])
             if store_blocks:
