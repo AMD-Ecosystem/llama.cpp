@@ -215,9 +215,9 @@
     {
       "id": "q8_0_prompt_mmq64x96_with_mmq64x64_fallback_llama3_1_q8",
       "date": "2026-06-17",
-      "status": "accepted_opt_in_candidate",
+      "status": "accepted_gfx1151_default",
       "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x96_wg256_f32",
-      "env": "GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X96_PROMPT=1 with GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X64_PROMPT=1 as the narrow fallback",
+      "env": "default on gfx1151: BN96 for cols >= 64 with BN64 as narrow/odd fallback; rollback with GGML_HRX_DISABLE_Q8_0_Q8_1_X4_MMQ64X96_PROMPT=1 and GGML_HRX_DISABLE_Q8_0_Q8_1_X4_MMQ64X64_PROMPT=1; opt-in elsewhere with GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X96_PROMPT=1 plus GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X64_PROMPT=1",
       "shape_guard": "Q8_0 MUL_MAT prompt, k >= 2048, rows >= 1024, cols >= 64 for BN96, k % 128 == 0, rows % 128 == 0, contiguous tensors, Q8_1 x4 quantize provider available; keep BN64 enabled for p33/narrow prompt",
       "focused_artifacts": [
         "cache/hrxv1/gfx1151/q8_0-mmq64x96-focused-20260617-214000/"
@@ -236,7 +236,8 @@
       "promotion_blockers": [
         "Only the Llama 3.1 8B Q8_0 downloaded basket row has Q8_0 coverage so far",
         "BN96 must not be enabled without the BN64 fallback because p33 then falls back to the older 128x32 route and regresses",
-        "p512 and p513 improve over BN64 but remain around half of same-run Vulkan, so the next Q8_0 move still needs a more Vulkan-like cooperative/packed dataflow"
+        "p512 and p513 improve over BN64 but remain around half of same-run Vulkan, so the next Q8_0 move still needs a more Vulkan-like cooperative/packed dataflow",
+        "This is a current-best production policy, not a parity endpoint: the Vulkan oracle large route still uses cooperative-matrix load/mul/store lowering that the rejected HIP C++ VK128 probes have not reproduced"
       ]
     },
     {

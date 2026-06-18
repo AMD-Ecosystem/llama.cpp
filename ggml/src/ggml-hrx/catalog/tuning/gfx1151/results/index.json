@@ -399,6 +399,12 @@
       "status": "rejected_focused_perf_regression"
     },
     {
+      "id": "q8_0_prompt_wmma16_vk128_rocwmma_coopstore_unavailable",
+      "date": "2026-06-18",
+      "artifact": "local environment inspection",
+      "status": "blocked_missing_matrix_store_primitive"
+    },
+    {
       "id": "q8_0_prompt_mmq64x112_compile",
       "date": "2026-06-18",
       "artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x112-compile-20260618/",
