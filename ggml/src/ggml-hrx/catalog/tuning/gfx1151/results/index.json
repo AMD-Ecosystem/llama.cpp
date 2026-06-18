@@ -261,6 +261,12 @@
       "status": "rejected_focused_perf_regression"
     },
     {
+      "id": "q4_dense_prompt_wmma16x16_vk128_padded_pair64_f16acc_wg256_deepseek_p33_p512_p513",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/q4-wmma16-vk128-padded-pair64-focused-20260617-234150/",
+      "status": "rejected_focused_perf_regression"
+    },
+    {
       "id": "q4_dense_prompt_mmql128x64_deepseek_p33_p512_p513",
       "date": "2026-06-17",
       "artifact": "cache/hrxv1/gfx1151/q4-mmql128x64-focused-20260617-231147/",

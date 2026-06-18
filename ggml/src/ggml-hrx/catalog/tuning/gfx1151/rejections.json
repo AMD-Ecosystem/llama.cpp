@@ -178,6 +178,14 @@
       "reason": "The RADV-schedule prefetch probe preserved the rejected VK128 padded direct-F32 WMMA shape and explicitly loaded both k-half A/B fragments before issuing WMMA to move toward the Vulkan large coopmat LDS-load-before-WMMA cadence. It compiled through CMake/Ninja with no spills (wave32, SGPR=25, VGPR=133, LDS=20480) and emitted 16 static v_wmma_f16_16x16x16_f16 sites, 18 ds_loads, 2 ds_stores, 8 global loads, 64 global stores, and 38 s_waitcnts. A direct wave64 variant could not compile because the ROCm WMMA builtin requires wavefrontsize32. The prefetch route passed p512 and exact p513 CPU-reference rows while selecting the intended provider, and exact p33 stayed on the existing narrow route. It is rejected for production promotion because same-runner p512 focused perf regressed versus current MMQL128 on every row: Kcur 990.28 -> 1508.75 us, Qcur 4038.39 -> 7253.08 us, ffn_out 15180.79 -> 25845.81 us, ffn_gate 13737.11 -> 25565.23 us. Source-level prefetching changed wait placement and pressure but still did not reproduce RADV's 32-static-WMMA / 192-ds-load cooperative-matrix lowering."
     },
     {
+      "id": "q4_dense_prompt_wmma16x16_vk128_padded_pair64_f16acc_wg256_deepseek_p33_p512_p513",
+      "date": "2026-06-17",
+      "route": "hrx_mul_mat_vec_q4_k_wmma16x16_vk128_padded_pair64_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q4_K_WMMA16_VK128_PADDED_PAIR64_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q4-wmma16-vk128-padded-pair64-focused-20260617-234150/",
+      "reason": "The pair64 ownership probe preserved the rejected VK128 padded direct-F32 WMMA shape but remapped two wave32 waves to one Vulkan-style 64x64 output owner, matching the specialized Vulkan coopmat ownership more closely than the previous 16x128 wave striping. It compiled through CMake/Ninja with no spills (wave32, SGPR=25, VGPR=134, LDS=20480) and emitted 16 static v_wmma_f16_16x16x16_f16 sites, 12 ds_loads, 2 ds_stores, 8 global loads, 64 global stores, and 28 s_waitcnts. The route passed p512 and exact p513 CPU-reference rows while selecting the intended provider, and exact p33 stayed on the existing narrow route. It is rejected for production promotion because same-runner p512 focused perf regressed versus current MMQL128 on every row: Kcur 979.99 -> 1449.28 us, Qcur 3955.07 -> 7255.33 us, ffn_out 15772.01 -> 24397.54 us, ffn_gate 12102.39 -> 25685.38 us. Wave-pair output ownership alone does not recover RADV's subgroup-64 cooperative-matrix lowering; the HIP builtin still lowers as independent wave32 WMMA owners with far shallower LDS traffic."
+    },
+    {
       "id": "q4_dense_prompt_mmql128x64_deepseek_p33_p512_p513",
       "date": "2026-06-17",
       "route": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x64_wg256_f32",

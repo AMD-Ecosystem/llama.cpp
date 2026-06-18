@@ -14,6 +14,10 @@
 #define HRX_Q4_K_WMMA_VK128_PREFETCH_FRAGS 0
 #endif
 
+#ifndef HRX_Q4_K_WMMA_VK128_PAIR64_TILE_MAP
+#define HRX_Q4_K_WMMA_VK128_PAIR64_TILE_MAP 0
+#endif
+
 struct hrx_block_q4_K_wmma_vk128_lhs {
     unsigned short d;
     unsigned short dmin;
@@ -173,6 +177,28 @@ static __device__ __forceinline__ void hrx_q4_k_wmma_vk128_store_acc_f16_row_maj
     }
 }
 
+static __device__ __forceinline__ void hrx_q4_k_wmma_vk128_tile_map(
+        int wave,
+        int tile_iter,
+        int * row_tile,
+        int * col_tile) {
+    constexpr int ROW_TILES = 8;
+    constexpr int WAVE_COUNT = 8;
+#if HRX_Q4_K_WMMA_VK128_PAIR64_TILE_MAP
+    const int pair = wave >> 1;
+    const int lane_wave = wave & 1;
+    const int tile = lane_wave + tile_iter * 2;
+    const int pair_row = pair & 1;
+    const int pair_col = pair >> 1;
+    *row_tile = pair_row * 4 + (tile & 3);
+    *col_tile = pair_col * 4 + (tile >> 2);
+#else
+    const int tile = wave + tile_iter * WAVE_COUNT;
+    *row_tile = tile & (ROW_TILES - 1);
+    *col_tile = tile >> 3;
+#endif
+}
+
 extern "C" __global__ __launch_bounds__(256, 1)
 void HRX_Q4_K_WMMA_VK128_EXPORT(
         const hrx_block_q4_K_wmma_vk128_lhs * src0,
@@ -226,9 +252,9 @@ void HRX_Q4_K_WMMA_VK128_EXPORT(
 
 #pragma unroll
         for (int tile_iter = 0; tile_iter < TILES_PER_WAVE; ++tile_iter) {
-            const int tile = static_cast<int>(wave) + tile_iter * WAVE_COUNT;
-            const int row_tile = tile & (ROW_TILES - 1);
-            const int col_tile = tile >> 3;
+            int row_tile = 0;
+            int col_tile = 0;
+            hrx_q4_k_wmma_vk128_tile_map(static_cast<int>(wave), tile_iter, &row_tile, &col_tile);
 #if HRX_Q4_K_WMMA_VK128_PREFETCH_FRAGS
             hrx_q4_k_wmma_vk128_half16_vec a_frag[2];
             hrx_q4_k_wmma_vk128_half16_vec b_frag[2];
@@ -259,9 +285,9 @@ void HRX_Q4_K_WMMA_VK128_EXPORT(
 
 #pragma unroll
     for (int tile_iter = 0; tile_iter < TILES_PER_WAVE; ++tile_iter) {
-        const int tile = static_cast<int>(wave) + tile_iter * WAVE_COUNT;
-        const int row_tile = tile & (ROW_TILES - 1);
-        const int col_tile = tile >> 3;
+        int row_tile = 0;
+        int col_tile = 0;
+        hrx_q4_k_wmma_vk128_tile_map(static_cast<int>(wave), tile_iter, &row_tile, &col_tile);
         hrx_q4_k_wmma_vk128_store_acc_f16_row_major(
             dst,
             rows,
