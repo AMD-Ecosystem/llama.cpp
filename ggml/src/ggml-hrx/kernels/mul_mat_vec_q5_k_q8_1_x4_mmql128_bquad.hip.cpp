@@ -16,11 +16,19 @@
 #define HRX_Q5_K_Q8_1_X4_MMQL128_ISSUE_CR_MAJOR 0
 #endif
 
+#ifndef HRX_Q5_K_Q8_1_X4_MMQL128_SPLIT_K_PARTIAL
+#define HRX_Q5_K_Q8_1_X4_MMQL128_SPLIT_K_PARTIAL 0
+#endif
+
 extern "C" __global__ void HRX_Q5_K_Q8_1_X4_MMQL128_EXPORT(
         const hrx_block_q5_K_q8_1_lhs * src0,
         const hrx_block_q8_1_x4_rhs_q5 * src1,
         float * dst,
-        long long k, long long rows, long long cols) {
+        long long k, long long rows, long long cols
+#if HRX_Q5_K_Q8_1_X4_MMQL128_SPLIT_K_PARTIAL
+        , long long kb_start, long long kb_count, long long partial_base
+#endif
+        ) {
     constexpr int BM = 128;
     constexpr int BN = 128;
     constexpr int BK_STEP = 1;
@@ -59,10 +67,22 @@ extern "C" __global__ void HRX_Q5_K_Q8_1_X4_MMQL128_EXPORT(
     const long long row_base = static_cast<long long>(__builtin_amdgcn_workgroup_id_x()) * BM;
     const long long col_base = static_cast<long long>(__builtin_amdgcn_workgroup_id_y()) * BN;
     const bool full_tile = row_base + BM <= rows && col_base + BN <= cols;
+    const long long kb_begin =
+#if HRX_Q5_K_Q8_1_X4_MMQL128_SPLIT_K_PARTIAL
+        kb_start;
+#else
+        0;
+#endif
+    const long long kb_end =
+#if HRX_Q5_K_Q8_1_X4_MMQL128_SPLIT_K_PARTIAL
+        kb_start + kb_count < q8_blocks_per_col ? kb_start + kb_count : q8_blocks_per_col;
+#else
+        q8_blocks_per_col;
+#endif
 
     float sum[WNITER * TM * TN] = {};
 
-    for (long long kb_base = 0; kb_base < q8_blocks_per_col; kb_base += BK_STEP) {
+    for (long long kb_base = kb_begin; kb_base < kb_end; kb_base += BK_STEP) {
         const int loadr_a = static_cast<int>(tid % (32 / LOAD_VEC_A));
         const int loadc_a = static_cast<int>(tid / (32 / LOAD_VEC_A));
         const int loadstride_a = BLOCK_SIZE * LOAD_VEC_A / 32;
@@ -271,7 +291,11 @@ extern "C" __global__ void HRX_Q5_K_Q8_1_X4_MMQL128_EXPORT(
             for (int cc = 0; cc < TN; ++cc) {
                 const long long col = col_base + warp_c * WN + wsic * WSUBN + tiwc * TN + cc;
                 if (full_tile || (row < rows && col < cols)) {
-                    dst[col * rows + row] = sum[(wsic * TN + cc) * TM + cr];
+                    dst[
+#if HRX_Q5_K_Q8_1_X4_MMQL128_SPLIT_K_PARTIAL
+                        partial_base +
+#endif
+                        col * rows + row] = sum[(wsic * TN + cc) * TM + cr];
                 }
             }
         }
@@ -282,3 +306,4 @@ extern "C" __global__ void HRX_Q5_K_Q8_1_X4_MMQL128_EXPORT(
 #undef HRX_Q5_K_Q8_1_X4_MMQL128_ISSUE_CR_MAJOR
 #undef HRX_Q5_K_Q8_1_X4_MMQL128_PREFETCH_B_PAIR
 #undef HRX_Q5_K_Q8_1_X4_MMQL128_PREFETCH_B_QUAD
+#undef HRX_Q5_K_Q8_1_X4_MMQL128_SPLIT_K_PARTIAL

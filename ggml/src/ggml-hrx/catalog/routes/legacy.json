@@ -6577,6 +6577,51 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bquad_splitk_part_wg256_f32",
+    "family": "mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bquad_splitk_part_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q5_k_q8_1_x4_mmql128_bquad_splitk_part",
+    "artifact_id": "mul_mat_vec_q5_k_q8_1_x4_mmql128_bquad_splitk_part_hsaco",
+    "export_name": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bquad_splitk_part_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 100,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 9,
+      "constant_byte_length": 48
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "dense_q5_k_prompt_x_q8_1_x4_mmql128_bquad_splitk_partial"
+    },
+    "shape_guards": {
+      "k_multiple": 256,
+      "rows_multiple": 128,
+      "cols_min": 512,
+      "partial_layout": "scratch[split][cols*rows] with partial_base in elements",
+      "kb_start_count": "absolute Q8_1 block range within full K, where full K is still used for source strides",
+      "contiguous": true
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bquad_splitk_part_wg256_f32",
+      "selector_gate": "build-only; no production selector until split-K dispatcher gate exists"
+    },
+    "evidence_summary": {
+      "status": "candidate_gfx1151_vulkan_oracle_build_only",
+      "selection": "Q5_K split-K partial producer for the Vulkan p513 contract. It preserves the accepted B-quad MMQL128 dataflow while adding absolute kb_start/kb_count and partial_base element offset so a future dispatcher can write scratch partials for hrx_split_k_reduce_f32. Not selected until focused p513 CPU-reference and route traces prove matmul partial producer plus reduce correctness."
+    },
+    "target_prefixes": [
+      "gfx1151"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_cr_wg256_f32",
     "family": "mul_mat_vec_q5_k_q8_1_x4_mmql128x128_cr_wg256",
     "op": "MUL_MAT",
