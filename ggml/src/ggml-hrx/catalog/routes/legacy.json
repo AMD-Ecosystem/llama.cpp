@@ -5326,6 +5326,49 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q4_k_wmma16x16_vk128_padded_prefetch_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q4_k_wmma16x16_vk128_padded_prefetch_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q4_k_wmma16_vk128_padded_prefetch_wg256",
+    "artifact_id": "mul_mat_vec_q4_k_wmma16_vk128_padded_prefetch_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q4_k_wmma16x16_vk128_padded_prefetch_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "dense_q4_k_prompt_wmma16x16_vk128_padded_prefetch_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q4_K x F32 -> F32 MUL_MAT",
+      "k_multiple": 256,
+      "rows_min": 128,
+      "cols_min": 128,
+      "requires_env": "GGML_HRX_ENABLE_Q4_K_WMMA16_VK128_PADDED_PREFETCH_F16ACC_WG256_PROMPT"
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q4_k_wmma16x16_vk128_padded_prefetch_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "candidate_gfx1151_probe",
+      "selection": "Single-axis follow-up to the rejected VK128 padded direct-F32 Q4_K WMMA probe. It preserves BM128/BN128/BK32/WG256, direct F32 RHS, and Vulkan's 40-half padded LDS stride, but explicitly prefetches both k-half A/B LDS fragments for each output tile before issuing WMMA. This moves the HIP lowering toward RADV's deeper LDS-load-before-WMMA cadence while staying wave32 because the ROCm WMMA builtin rejects wave64 compilation."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q5_k_f32",
     "family": "mul_mat_vec_q5_k",
     "op": "MUL_MAT",

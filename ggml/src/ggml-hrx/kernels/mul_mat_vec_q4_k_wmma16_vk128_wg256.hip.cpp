@@ -10,6 +10,10 @@
 #define HRX_Q4_K_WMMA_VK128_SHARED_STRIDE 32
 #endif
 
+#ifndef HRX_Q4_K_WMMA_VK128_PREFETCH_FRAGS
+#define HRX_Q4_K_WMMA_VK128_PREFETCH_FRAGS 0
+#endif
+
 struct hrx_block_q4_K_wmma_vk128_lhs {
     unsigned short d;
     unsigned short dmin;
@@ -225,6 +229,20 @@ void HRX_Q4_K_WMMA_VK128_EXPORT(
             const int tile = static_cast<int>(wave) + tile_iter * WAVE_COUNT;
             const int row_tile = tile & (ROW_TILES - 1);
             const int col_tile = tile >> 3;
+#if HRX_Q4_K_WMMA_VK128_PREFETCH_FRAGS
+            hrx_q4_k_wmma_vk128_half16_vec a_frag[2];
+            hrx_q4_k_wmma_vk128_half16_vec b_frag[2];
+#pragma unroll
+            for (int k_tile = 0; k_tile < 2; ++k_tile) {
+                a_frag[k_tile] = hrx_q4_k_wmma_vk128_load_a_frag(sh_a, row_tile, k_tile, lane);
+                b_frag[k_tile] = hrx_q4_k_wmma_vk128_load_b_frag(sh_b, col_tile, k_tile, lane);
+            }
+#pragma unroll
+            for (int k_tile = 0; k_tile < 2; ++k_tile) {
+                acc[tile_iter] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w32(
+                    a_frag[k_tile], b_frag[k_tile], acc[tile_iter], false);
+            }
+#else
 #pragma unroll
             for (int k_tile = 0; k_tile < 2; ++k_tile) {
                 const hrx_q4_k_wmma_vk128_half16_vec a =
@@ -233,6 +251,7 @@ void HRX_Q4_K_WMMA_VK128_EXPORT(
                     hrx_q4_k_wmma_vk128_load_b_frag(sh_b, col_tile, k_tile, lane);
                 acc[tile_iter] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w32(a, b, acc[tile_iter], false);
             }
+#endif
         }
 
         __syncthreads();

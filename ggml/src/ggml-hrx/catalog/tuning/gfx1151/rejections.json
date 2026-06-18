@@ -170,6 +170,14 @@
       "reason": "The VK128 padded probe isolated the Vulkan LDS padding axis by keeping the rejected direct-F32 Q4_K WMMA shape (BM128/BN128/BK32/WG256, f16acc WMMA) but changing the A/B shared-memory row stride from 32 halfs to Vulkan's 40-half f16vec2-equivalent stride. It compiled through CMake/Ninja with no spills (wave32, SGPR=25, VGPR=121, LDS=20480) and emitted 16 static v_wmma_f16_16x16x16_f16 sites. It passed focused p512 and exact p513 CPU-reference rows while selecting the padded provider, and p33 stayed on the existing narrow route. It is rejected for production promotion because same-runner p512 focused perf regressed versus current MMQL128 on every row: Kcur 987.01 -> 1543.83 us, Qcur 4107.51 -> 7244.42 us, ffn_out 15515.40 -> 24740.20 us, ffn_gate 12186.69 -> 25907.86 us. Padding alone does not recover the RADV coopmat schedule; the next Q4 work should stop cloning direct-F32 HIP WMMA at this level and either reproduce RADV's lower-level cooperative-matrix scheduling much more exactly or return to packed Q8_1/x4 reuse."
     },
     {
+      "id": "q4_dense_prompt_wmma16x16_vk128_padded_prefetch_f16acc_wg256_deepseek_p33_p512_p513",
+      "date": "2026-06-17",
+      "route": "hrx_mul_mat_vec_q4_k_wmma16x16_vk128_padded_prefetch_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q4_K_WMMA16_VK128_PADDED_PREFETCH_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q4-wmma16-vk128-padded-prefetch-focused-20260617-232901/",
+      "reason": "The RADV-schedule prefetch probe preserved the rejected VK128 padded direct-F32 WMMA shape and explicitly loaded both k-half A/B fragments before issuing WMMA to move toward the Vulkan large coopmat LDS-load-before-WMMA cadence. It compiled through CMake/Ninja with no spills (wave32, SGPR=25, VGPR=133, LDS=20480) and emitted 16 static v_wmma_f16_16x16x16_f16 sites, 18 ds_loads, 2 ds_stores, 8 global loads, 64 global stores, and 38 s_waitcnts. A direct wave64 variant could not compile because the ROCm WMMA builtin requires wavefrontsize32. The prefetch route passed p512 and exact p513 CPU-reference rows while selecting the intended provider, and exact p33 stayed on the existing narrow route. It is rejected for production promotion because same-runner p512 focused perf regressed versus current MMQL128 on every row: Kcur 990.28 -> 1508.75 us, Qcur 4038.39 -> 7253.08 us, ffn_out 15180.79 -> 25845.81 us, ffn_gate 13737.11 -> 25565.23 us. Source-level prefetching changed wait placement and pressure but still did not reproduce RADV's 32-static-WMMA / 192-ds-load cooperative-matrix lowering."
+    },
+    {
       "id": "q4_dense_prompt_mmql128x64_deepseek_p33_p512_p513",
       "date": "2026-06-17",
       "route": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x64_wg256_f32",

@@ -1,0 +1,4 @@
+#define HRX_Q4_K_WMMA_VK128_EXPORT hrx_mul_mat_vec_q4_k_wmma16x16_vk128_padded_prefetch_f16acc_wg256_f32
+#define HRX_Q4_K_WMMA_VK128_SHARED_STRIDE 40
+#define HRX_Q4_K_WMMA_VK128_PREFETCH_FRAGS 1
+#include "mul_mat_vec_q4_k_wmma16_vk128_wg256.hip.cpp"
