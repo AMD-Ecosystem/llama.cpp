@@ -9140,14 +9140,14 @@
       "win_domain": "rows >= 8192 || k >= 8192",
       "cols_min": 128,
       "selector_gate": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
-      "prior_delta": "The Vulkan oracle large Q8_0 prompt route uses BM128/BN128/BK32/WG256 wave64, 32 f16 WMMA ops, 22528 bytes LDS, 128 halfword LDS stores, 128 halfword LDS loads, 192 buffer_store_b32 sites, 2 barriers, and no spills. A scratch HIP builtin probe showed __builtin_amdgcn_raw_buffer_store_b32 with an opaque __amdgpu_buffer_rsrc_t descriptor emits buffer_store_b32 on gfx1151. This candidate preserves the VK128 padded W64 math path, includes the previously isolated stage-allocation LDS footprint, and changes both full-tile and guarded edge/tail writeback from HIP global stores to raw buffer stores."
+      "prior_delta": "The Vulkan oracle large Q8_0 prompt route uses BM128/BN128/BK32/WG256 wave64, 32 f16 WMMA ops, 22528 bytes LDS, 128 halfword LDS stores, 128 halfword LDS loads, 192 static buffer_store_b32 sites across full-aligned and fallback writeback paths, 2 barriers, and no spills. A scratch HIP builtin probe showed __builtin_amdgcn_raw_buffer_store_b32 emits buffer_store_b32 on gfx1151, and the CMake-built route now creates the descriptor with __builtin_amdgcn_make_buffer_rsrc. This candidate preserves the VK128 padded W64 math path, includes the previously isolated stage-allocation LDS footprint, and changes both full-tile and guarded edge/tail writeback from HIP global stores to raw buffer stores."
     },
     "supports": {
       "legacy_export": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_bufferstore_f16acc_wg256_f32"
     },
     "evidence_summary": {
-      "status": "rejected_gfx1151_compile_contract",
-      "selection": "Opt-in Q8_0 direct-F32 WMMA VK128 buffer-store writeback probe. It proved raw buffer_store_b32 is reachable from CMake-built HIP C++ and matched RADV on 32 WMMA, 22528-byte LDS, 2 barriers, and zero spills, but failed the large-coopmat contract before runtime: 128/192 buffer_store_b32, 0/128 ds_load_u16_d16, and 2/128 ds_store_b16. Keep as diagnostic evidence only; the next attempt must reproduce the cooperative halfword LDS load/store topology and 192-store writeback, not only replace global stores."
+      "status": "rejected_gfx1151_runtime_correctness",
+      "selection": "Opt-in Q8_0 direct-F32 WMMA VK128 buffer-store writeback probe. It proved raw buffer_store_b32 is reachable from CMake-built HIP C++ and matched RADV on 32 WMMA, 22528-byte LDS, 2 barriers, and zero spills. The static 192-store RADV count includes fallback paths, so direct full-aligned writeback remains an exact-schedule axis worth isolating. This route still failed focused p512 CPU-reference gates with ERR=inf on the large selected rows after switching to __builtin_amdgcn_make_buffer_rsrc. Keep as diagnostic evidence only; do not model-benchmark or promote until raw buffer-store correctness is proven or a lower-level source reproduces RADV's cooperative halfword LDS load/store topology."
     },
     "target_prefixes": [
       "gfx11"

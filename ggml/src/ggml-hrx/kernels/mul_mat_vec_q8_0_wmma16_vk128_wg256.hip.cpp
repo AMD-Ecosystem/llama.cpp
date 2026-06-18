@@ -62,14 +62,11 @@ typedef const __attribute__((address_space(3))) _Float16 * hrx_q8_0_wmma_vk128_l
 
 #if HRX_Q8_0_WMMA_VK128_BUFFER_STORE
 static __device__ __forceinline__ __amdgpu_buffer_rsrc_t hrx_q8_0_wmma_vk128_make_dst_rsrc(float * dst) {
-    const uintptr_t ptr = reinterpret_cast<uintptr_t>(dst);
-    unsigned int words[4] = {
-        static_cast<unsigned int>(ptr),
-        static_cast<unsigned int>(ptr >> 32),
-        0xffffffffu,
-        0x27000u,
-    };
-    return *reinterpret_cast<__amdgpu_buffer_rsrc_t *>(words);
+    return __builtin_amdgcn_make_buffer_rsrc(
+        dst,
+        static_cast<unsigned short>(0),
+        0xffffffffull,
+        0x27000);
 }
 
 static __device__ __forceinline__ void hrx_q8_0_wmma_vk128_buffer_store_f32(
