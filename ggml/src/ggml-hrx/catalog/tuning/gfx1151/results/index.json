@@ -345,6 +345,12 @@
       "status": "rejected_compile_equivalent_isa"
     },
     {
+      "id": "q8_0_prompt_wmma16_vk128_b64group_p33_p512_p513",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-wmma-vk128-b64group-focused-20260618-032500/",
+      "status": "rejected_focused_perf_regression"
+    },
+    {
       "id": "q5_dense_prompt_wmma16_vk128_padded_w64_p33_p512_p513",
       "date": "2026-06-18",
       "artifact": "cache/hrxv1/gfx1151/q5-wmma-vk128-focused-20260618-025116/",
