@@ -726,6 +726,15 @@
       "artifact": "cache/hrxv1/gfx1151/q8_0-packstage-fast-half-selected-bufferstore-compile-20260618-155052/",
       "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_fast_half_selected_bufferstore_wg256.hsaco",
       "reason": "The pack-stage fast-half selected-output compile probe combined the correctness-proven gfx1151 wave64 D-coordinate map with the low-barrier fast-half LDS output-stage primitive, while still writing and reloading the unselected half as a dummy payload to preserve the halfword LDS opcode surface. It built through CMake/Ninja and compared against the Llama 3.1 8B Q8_0 p512 RADV large oracle with wave64, SGPR=28, VGPR=196, LDS=22528, no spills, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 128 ds_load_u16_d16, 128 ds_store_b16, 2 ds_store_b32, 128 buffer_store_b32, and 2 s_barrier. It is rejected at compile-contract gate: it does not recover RADV's VGPR=192 pressure, emits only 128 buffer_store_b32 versus RADV's 192, and serializes the first WMMA LDS load window with final pre-WMMA lgkmcnt=0 and only one ds_load_b64 immediately before the final wait, while RADV keeps 59 ds_load_b64 operations outstanding with final lgkmcnt=51. The selected-half ownership rule is valid, but this HIP C++ spelling does not reproduce the Vulkan cooperative-matrix load/store schedule."
+    },
+    {
+      "id": "q8_0_direct_wmma_vk128_nowait_namedfrag_stagedwait_issue_window",
+      "date": "2026-06-18",
+      "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_nowait_namedfrag_stagedwait_packstage_bufferstore_f16acc_wg256_f32",
+      "env": "not runtime-selected",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-nowait-namedfrag-stagedwait-packstage-score-20260618-continued/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_nowait_namedfrag_stagedwait_packstage_bufferstore_wg256.hsaco",
+      "reason": "The nowait named-fragment staged-wait probe tested a precise first-WMMA issue-window hypothesis: replace the rejected nowait named-frag route's single zero wait with staged waits at lgkmcnt(12), lgkmcnt(8), lgkmcnt(4), and lgkmcnt(0) before the B-column WMMA groups. It built through CMake/Ninja with wave64, SGPR=28, VGPR=196, LDS=20480, no spills, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 2 ds_store_b32, 128 buffer_store_b32, 2 s_barrier, 14 s_waitcnt, and 44 s_waitcnt_depctr. It is rejected at compile-contract gate because LLVM scheduled the partial waits after the first WMMA group rather than preserving a RADV-like pre-WMMA high-lgkmcnt gate: RADV scores 59 pre-WMMA ds_load_b64, 59 loads immediately before final wait, final lgkmcnt=51, and 22 WMMA in window; this route scores 24, 0, lgkmcnt=0, and 16 WMMA in the first-WMMA window, while still lacking the RADV halfword LDS store/load and 192 buffer-store topology."
     }
   ]
 }
