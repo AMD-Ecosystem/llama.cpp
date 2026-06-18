@@ -134,7 +134,7 @@ jobs:
             --gfx-targets auto \
             --jobs "$(nproc)"
 
-      - name: Run sample MUL_MAT correctness config on HRX
+      - name: Run sample MUL_MAT correctness config on CPU
         run: |
           cd "${DEVWS_DIR}"
           source .envrc
@@ -143,11 +143,11 @@ jobs:
             --test-backend-ops "${DEVWS_DIR}/build/llama-hrx/bin/test-backend-ops" \
             --test-file "${DEVWS_DIR}/ci/benchmark-configs/test/mul_mat_f16.txt" \
             --op MUL_MAT \
-            --backend HRX0 \
-            --output "${GITHUB_WORKSPACE}/benchmark-results/sample-mul-mat-f16-hrx-test.jsonl" \
-            --raw-output "${GITHUB_WORKSPACE}/benchmark-results/sample-mul-mat-f16-hrx-test.txt"
+            --backend CPU \
+            --output "${GITHUB_WORKSPACE}/benchmark-results/sample-mul-mat-f16-cpu-test.jsonl" \
+            --raw-output "${GITHUB_WORKSPACE}/benchmark-results/sample-mul-mat-f16-cpu-test.txt"
 
-      - name: Run sample MUL_MAT benchmark config on HRX
+      - name: Run sample MUL_MAT benchmark config on CPU
         run: |
           cd "${DEVWS_DIR}"
           source .envrc
@@ -156,9 +156,9 @@ jobs:
             --test-backend-ops "${DEVWS_DIR}/build/llama-hrx/bin/test-backend-ops" \
             --test-file "${DEVWS_DIR}/ci/benchmark-configs/test/mul_mat_f16.txt" \
             --op MUL_MAT \
-            --backend HRX0 \
-            --output "${GITHUB_WORKSPACE}/benchmark-results/sample-mul-mat-f16-hrx-perf.jsonl" \
-            --raw-output "${GITHUB_WORKSPACE}/benchmark-results/sample-mul-mat-f16-hrx-perf.txt"
+            --backend CPU \
+            --output "${GITHUB_WORKSPACE}/benchmark-results/sample-mul-mat-f16-cpu-perf.jsonl" \
+            --raw-output "${GITHUB_WORKSPACE}/benchmark-results/sample-mul-mat-f16-cpu-perf.txt"
 
       - name: Upload HRX benchmark results
         uses: actions/upload-artifact@v5
