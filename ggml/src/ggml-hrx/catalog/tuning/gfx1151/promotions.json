@@ -207,6 +207,40 @@
       ]
     },
     {
+      "id": "q8_0_prompt_wmma16_vk128_hybrid_large_rows_llama3_1_q8",
+      "date": "2026-06-18",
+      "status": "accepted_opt_in_candidate",
+      "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_F16ACC_WG256_PROMPT=1",
+      "shape_guard": "Q8_0 MUL_MAT prompt, direct F32 RHS, k % 32 == 0, cols >= 128, and (rows >= 8192 || k >= 8192). Smaller rows keep the packed Q8_1 x4 route.",
+      "focused_artifacts": [
+        "cache/hrxv1/gfx1151/q8_0-wmma16-vk128-padded-w64-focused-20260618-002300/"
+      ],
+      "model_artifacts": [
+        "cache/hrxv1/gfx1151/q8_0-wmma16-vk128-hybrid-model-ab-20260618-002821/"
+      ],
+      "compile_evidence": {
+        "hsaco": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_wg256.hsaco",
+        "wavefront_size": 64,
+        "vgpr_count": 129,
+        "sgpr_count": 22,
+        "lds_bytes": 20480,
+        "spill_count": 0,
+        "isa": "emits 32 static v_wmma_f16_16x16x16_f16 instructions"
+      },
+      "result_summary": {
+        "focused_p512_total_us": "267564.84 default -> 119227.42 hybrid",
+        "model_p512_hrx_tok_s": "182.704 default -> 280.436 hybrid",
+        "model_p512_vulkan_tok_s": "903.038",
+        "hybrid_vs_vulkan": "0.31x"
+      },
+      "promotion_blockers": [
+        "The direct-F32 VK128 route regresses Vcur/Qcur, so the selector must keep the rows >= 8192 || k >= 8192 win-domain guard",
+        "Only the Llama 3.1 8B Q8_0 downloaded basket row has model-level coverage so far",
+        "The route improves HRX materially but is still only about 0.31x same-machine Vulkan on p512, so further Vulkan-schedule mining remains required before parity"
+      ]
+    },
+    {
       "id": "q6_dense_prompt_wmma16x16_f16acc_wg256_qwen3q6_p512",
       "date": "2026-06-17",
       "status": "accepted_opt_in_candidate",
