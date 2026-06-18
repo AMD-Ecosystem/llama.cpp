@@ -38,6 +38,10 @@
 #define HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STREAM_COL 0
 #endif
 
+#ifndef HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STREAM_ROW
+#define HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STREAM_ROW 0
+#endif
+
 #ifndef HRX_Q8_0_WMMA_VK128_STORE_STAGE
 #define HRX_Q8_0_WMMA_VK128_STORE_STAGE 0
 #endif
@@ -868,6 +872,30 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
                         acc[tile_iter] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
                             a_frag[row_sub],
                             b_frag,
+                            acc[tile_iter],
+                            HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                    }
+                }
+#elif HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STREAM_ROW
+                hrx_q8_0_wmma_vk128_half16_vec b_frag[4];
+#pragma unroll
+                for (int col_sub = 0; col_sub < 4; ++col_sub) {
+                    b_frag[col_sub] = hrx_q8_0_wmma_vk128_load_b_frag_w64_b64asm(
+                        sh_b_lds, wave_col * 4 + col_sub, k_tile, lane);
+                }
+                asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+#pragma unroll
+                for (int row_sub = 0; row_sub < 4; ++row_sub) {
+                    const hrx_q8_0_wmma_vk128_half16_vec a_frag_row =
+                        hrx_q8_0_wmma_vk128_load_a_frag_w64_b64asm(
+                            sh_a_lds, wave_row * 4 + row_sub, k_tile, lane);
+                    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+#pragma unroll
+                    for (int col_sub = 0; col_sub < 4; ++col_sub) {
+                        const int tile_iter = col_sub * 4 + row_sub;
+                        acc[tile_iter] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
+                            a_frag_row,
+                            b_frag[col_sub],
                             acc[tile_iter],
                             HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
                     }

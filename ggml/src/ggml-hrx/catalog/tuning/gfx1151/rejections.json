@@ -641,6 +641,15 @@
       "static_artifact": "cache/hrxv1/gfx1151/q8_0-streamcol-packstage-fast-half-fullpair-bufferstore-compile-20260618-125457/",
       "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_streamcol_packstage_fast_half_fullpair_bufferstore_wg256.hsaco",
       "reason": "The stream-column pack-stage fast-half probe preserved the exact pack-stage opcode surface but streamed one B column fragment at a time instead of keeping four B fragments live. It compiled through CMake/Ninja with wave64, SGPR=28, VGPR=188, LDS=22528, no spills, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 128 ds_load_u16_d16, 128 ds_store_b16, 2 ds_store_b32, 192 buffer_store_b32, and 2 s_barrier. This passes the strict RADV large Q8_0 static contract on the selected opcode/resource axes. After adding the missing catalog route and opt-in selector, focused p512/p513 CPU-reference gates selected this provider for the intended large rows (ffn_out, ffn_gate, result_output, plus p513 tails) and failed with HRX0=inf versus finite CPU values and p512 sentinel mismatches. It is rejected for promotion because the exact static schedule still has incorrect full-pair accumulator lane/output ownership. The next candidate should preserve this stream-column pack-stage schedule while replacing the full-pair writeback mapping with a correctness-proven coordinate map."
+    },
+    {
+      "id": "q8_0_direct_wmma_vk128_streamrow_packstage_static_contract",
+      "date": "2026-06-18",
+      "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_streamrow_packstage_fast_half_fullpair_bufferstore_f16acc_wg256_f32",
+      "env": "not wired into runtime selection",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-streamrow-packstage-fast-half-fullpair-bufferstore-compile-20260618-133139/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_streamrow_packstage_fast_half_fullpair_bufferstore_wg256.hsaco",
+      "reason": "The stream-row pack-stage fast-half probe preserved the exact pack-stage opcode surface but kept four B fragments resident and streamed one A row fragment at a time. It compiled through CMake/Ninja with wave64, SGPR=28, VGPR=189, LDS=22528, no spills, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 128 ds_load_u16_d16, exactly 128 ds_store_b16, 2 ds_store_b32, 192 buffer_store_b32, and 2 s_barrier. This matches the tracked RADV large Q8_0 static contract while avoiding the stream-column accumulation-order change that caused finite CPU-reference errors. It is still rejected for runtime promotion because it inherits the diagnostic full-pair writeback, and the current row+16 mapping is invalid for gfx11 wave64 WMMA: only the OPSEL-selected accumulator half owns the 16x16 tile output. The next candidate should combine this row-stream issue order with a selected-half correctness gate or a proven full-output lane map before any model-level A/B."
     }
   ]
 }
