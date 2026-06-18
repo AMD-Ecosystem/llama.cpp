@@ -563,6 +563,14 @@
       "status": "accepted_model_ab"
     },
     {
+      "id": "q8_0_prompt_mmq64x104_splitqsum_p33_p512_p513",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x104-splitqsum-focused-20260618/",
+      "model_artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x104-splitqsum-p513-model-ab-20260618/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_mmq64x104_splitqsum.hsaco",
+      "status": "rejected_tail_model_ab_too_small"
+    },
+    {
       "id": "q8_0_prompt_mmq64x128_splitqsum8_p33_p512_p513",
       "date": "2026-06-18",
       "artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x128-splitqsum8-focused-20260618/",

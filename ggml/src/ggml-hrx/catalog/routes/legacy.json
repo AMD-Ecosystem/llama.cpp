@@ -8099,6 +8099,51 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x104_splitqsum_wg256_f32",
+    "family": "mul_mat_vec_q8_0_q8_1_x4_mmq64x104_splitqsum_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q8_0_mmq64x104_splitqsum",
+    "artifact_id": "mul_mat_vec_q8_0_mmq64x104_splitqsum_hsaco",
+    "export_name": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x104_splitqsum_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 100,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q8_0_prompt_mmq64x104_splitqsum_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q8_0 x F32 -> F32 MUL_MAT",
+      "k_multiple": 128,
+      "rows_multiple": 128,
+      "cols_min": 128,
+      "selector_gate": "GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X104_SPLITQSUM_PROMPT=1",
+      "prior_delta": "Simple BN104 preserved accepted BM64 direct-A/staged-B dataflow but spilled at VGPR=192. BN112/BN128 split-qsum proved that splitting qsum live ranges removes the column-widening spill wall. This BN104 split-qsum probe retests the smaller tail bracket: p513 uses five workgroups at BN104 with only 520 covered columns, versus BN112 covering 560 and broad BN128 covering 640."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x104_splitqsum_wg256_f32",
+      "selector_gate": "GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X104_SPLITQSUM_PROMPT=1"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_tail_model_ab_too_small",
+      "selection": "Q8_0 packed-Q8_1 BN104 split-qsum tail probe. It compiled through CMake/Ninja without spills and passed p33/p512/p513 focused CPU-reference gates with route traces proving p512/p513 selected the candidate and p33 stayed on BN64. Focused p513 timing was mildly positive, but p512 regressed and p513 model A/B improved only 0.25%, so keep opt-in only as evidence."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x112_splitqsum_wg256_f32",
     "family": "mul_mat_vec_q8_0_q8_1_x4_mmq64x112_splitqsum_wg256",
     "op": "MUL_MAT",

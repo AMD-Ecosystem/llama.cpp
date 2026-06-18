@@ -404,6 +404,16 @@
       "reason": "The BN104 packed-Q8_1 probe preserved the accepted BN96 direct-A/staged-B dataflow and changed only the production-width column tile to BN=104/COLS_PER_THREAD=26. This was a bounded pressure bracket after BN112 spilled, not a production promotion attempt. It compiled through CMake/Ninja but still failed the compile-resource gate: wavefront_size=32, group_segment_fixed_size=3536, SGPR=28, VGPR=192, VGPR spills=9, and private_segment_fixed_size=40. For comparison, accepted BN96 is VGPR=181 with no spills, BN112 is VGPR=192 with 24 spills, and BN128 is VGPR=192 with 55 spills. Reject before runtime tests; simple column widening past BN96 reaches the 192-VGPR cliff even at BN104, so the next packed-Q8_1 candidate needs a different register tile, split accumulation, or output ownership."
     },
     {
+      "id": "q8_0_prompt_mmq64x104_splitqsum_p33_p512_p513",
+      "date": "2026-06-18",
+      "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x104_splitqsum_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X104_SPLITQSUM_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x104-splitqsum-focused-20260618/",
+      "model_artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x104-splitqsum-p513-model-ab-20260618/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_mmq64x104_splitqsum.hsaco",
+      "reason": "The BN104 split-qsum probe retested the previously spilling BN104 column bracket after BN112/BN128 split-qsum proved the qsum live range was the spill wall. It compiled through CMake/Ninja without spills (public route wave32, SGPR=28, VGPR=127, private_segment_fixed_size=0) and passed p33, p512, and p513 CPU-reference gates. Route traces proved p33 stayed on BN64 while p512/p513 selected BN104 split-qsum. It is rejected for production promotion because broad p512 timing regressed badly versus current routing (result_output 55810.40 -> 61559.98 us), and the p513 tail model A/B was too small to justify a tail default despite mixed focused wins: p513 result_output improved 63491.00 -> 62140.38 us, but Llama 3.1 8B Q8_0 p513/fa1/r3 improved only 427.339702 -> 428.405933 tok/s (+0.25%). Keep current p512 BN128 full-column and p513 BN112 policies."
+    },
+    {
       "id": "q5_dense_prompt_mmql128_bquad_p33_p512_p513",
       "date": "2026-06-18",
       "route": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bquad_wg256_f32",
