@@ -54,6 +54,10 @@
 #define HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STAGED_WAIT 0
 #endif
 
+#ifndef HRX_Q8_0_WMMA_VK128_W64_B64GROUP_PREUSE_FRAGS
+#define HRX_Q8_0_WMMA_VK128_W64_B64GROUP_PREUSE_FRAGS 0
+#endif
+
 #ifndef HRX_Q8_0_WMMA_VK128_STORE_STAGE
 #define HRX_Q8_0_WMMA_VK128_STORE_STAGE 0
 #endif
@@ -115,6 +119,22 @@ typedef volatile __attribute__((address_space(3))) _Float16 * hrx_q8_0_wmma_vk12
 typedef __attribute__((address_space(3))) uint16_t * hrx_q8_0_wmma_vk128_lds_u16_ptr;
 typedef const __attribute__((address_space(3))) uint16_t * hrx_q8_0_wmma_vk128_lds_const_u16_ptr;
 typedef __attribute__((address_space(3))) uint32_t * hrx_q8_0_wmma_vk128_lds_u32_ptr;
+
+#if HRX_Q8_0_WMMA_VK128_W64_B64GROUP_PREUSE_FRAGS
+static __device__ __forceinline__ void hrx_q8_0_wmma_vk128_preuse_fragments(
+        hrx_q8_0_wmma_vk128_half16_vec a0,
+        hrx_q8_0_wmma_vk128_half16_vec a1,
+        hrx_q8_0_wmma_vk128_half16_vec a2,
+        hrx_q8_0_wmma_vk128_half16_vec a3,
+        hrx_q8_0_wmma_vk128_half16_vec b0,
+        hrx_q8_0_wmma_vk128_half16_vec b1,
+        hrx_q8_0_wmma_vk128_half16_vec b2,
+        hrx_q8_0_wmma_vk128_half16_vec b3) {
+    asm volatile("" ::
+        "v"(a0), "v"(a1), "v"(a2), "v"(a3),
+        "v"(b0), "v"(b1), "v"(b2), "v"(b3) : "memory");
+}
+#endif
 
 #if HRX_Q8_0_WMMA_VK128_BUFFER_STORE
 static constexpr int HRX_Q8_0_WMMA_VK128_RAW_BUFFER_FLAGS_GFX11 = 0x31004000;
@@ -1068,6 +1088,9 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
                     hrx_q8_0_wmma_vk128_load_b_frag_w64_b64asm(sh_b_lds, wave_col * 4 + 2, k_tile, lane);
                 const hrx_q8_0_wmma_vk128_half16_vec b3 =
                     hrx_q8_0_wmma_vk128_load_b_frag_w64_b64asm(sh_b_lds, wave_col * 4 + 3, k_tile, lane);
+#endif
+#if HRX_Q8_0_WMMA_VK128_W64_B64GROUP_PREUSE_FRAGS
+                hrx_q8_0_wmma_vk128_preuse_fragments(a0, a1, a2, a3, b0, b1, b2, b3);
 #endif
 #if HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STAGED_WAIT
                 asm volatile("s_waitcnt lgkmcnt(12)\n" ::: "memory");

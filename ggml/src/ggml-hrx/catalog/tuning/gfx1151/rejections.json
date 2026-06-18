@@ -735,6 +735,15 @@
       "artifact": "cache/hrxv1/gfx1151/q8_0-nowait-namedfrag-stagedwait-packstage-score-20260618-continued/",
       "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_nowait_namedfrag_stagedwait_packstage_bufferstore_wg256.hsaco",
       "reason": "The nowait named-fragment staged-wait probe tested a precise first-WMMA issue-window hypothesis: replace the rejected nowait named-frag route's single zero wait with staged waits at lgkmcnt(12), lgkmcnt(8), lgkmcnt(4), and lgkmcnt(0) before the B-column WMMA groups. It built through CMake/Ninja with wave64, SGPR=28, VGPR=196, LDS=20480, no spills, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 2 ds_store_b32, 128 buffer_store_b32, 2 s_barrier, 14 s_waitcnt, and 44 s_waitcnt_depctr. It is rejected at compile-contract gate because LLVM scheduled the partial waits after the first WMMA group rather than preserving a RADV-like pre-WMMA high-lgkmcnt gate: RADV scores 59 pre-WMMA ds_load_b64, 59 loads immediately before final wait, final lgkmcnt=51, and 22 WMMA in window; this route scores 24, 0, lgkmcnt=0, and 16 WMMA in the first-WMMA window, while still lacking the RADV halfword LDS store/load and 192 buffer-store topology."
+    },
+    {
+      "id": "q8_0_direct_wmma_vk128_nowait_namedfrag_preuse_issue_window",
+      "date": "2026-06-18",
+      "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_nowait_namedfrag_preuse_packstage_bufferstore_f16acc_wg256_f32",
+      "env": "not runtime-selected",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-nowait-namedfrag-preuse-packstage-score-20260618-continued/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_nowait_namedfrag_preuse_packstage_bufferstore_wg256.hsaco",
+      "reason": "The nowait named-fragment preuse probe added an empty inline-asm use of all eight A/B fragment vectors before the first wait, testing whether an artificial data dependency can force the fragment LDS loads to materialize before the first WMMA. It built through CMake/Ninja with wave64, SGPR=28, VGPR=212, LDS=20480, no spills, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 2 ds_store_b32, 128 buffer_store_b32, 2 s_barrier, 8 s_waitcnt, and 44 s_waitcnt_depctr. It moved the first-WMMA score in the intended direction versus the prior nowait named-frag route, from 24 pre-WMMA ds_load_b64 / 0 loads immediately before final wait / lgkmcnt=0 to 32 / 32 / lgkmcnt=0. It is rejected because RADV is still 59 / 59 / lgkmcnt=51 with VGPR=192, while this source spelling raises pressure to VGPR=212 and still lacks the RADV halfword LDS store/load and 192 buffer-store topology."
     }
   ]
 }
