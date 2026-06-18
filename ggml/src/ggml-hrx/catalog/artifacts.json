@@ -365,6 +365,12 @@
     "format": "amdgpu-hsaco",
     "storage": "embedded"
   },
+  "mul_mat_vec_q4_k_wmma16_vk128_padded_w64_b64group_wg256_hsaco": {
+    "source_id": "mul_mat_vec_q4_k_wmma16_vk128_padded_w64_b64group_wg256",
+    "path": "mul_mat_vec_q4_k_wmma16_vk128_padded_w64_b64group_wg256.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
   "mul_mat_vec_q4_k_wmma16_vk128_padded_w64_hi_wg256_hsaco": {
     "source_id": "mul_mat_vec_q4_k_wmma16_vk128_padded_w64_hi_wg256",
     "path": "mul_mat_vec_q4_k_wmma16_vk128_padded_w64_hi_wg256.hsaco",
