@@ -440,6 +440,12 @@
       "date": "2026-06-18",
       "artifact": "cache/hrxv1/gfx1151/q6-wmma-vk128-b64group-focused-20260618-050234/",
       "status": "rejected_focused_perf_regression"
+    },
+    {
+      "id": "q6_dense_prompt_wmma16_vk128_fullstore_p33_p512_p513",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q6-wmma-vk128-fullstore-focused-20260618-055935/",
+      "status": "rejected_focused_mixed_small_signal"
     }
   ]
 }

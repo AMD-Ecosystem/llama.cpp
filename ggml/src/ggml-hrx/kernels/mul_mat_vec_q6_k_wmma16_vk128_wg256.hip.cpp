@@ -38,6 +38,10 @@
 #define HRX_Q6_K_WMMA_VK128_W64_B64GROUP 0
 #endif
 
+#ifndef HRX_Q6_K_WMMA_VK128_FULL_TILE_STORE
+#define HRX_Q6_K_WMMA_VK128_FULL_TILE_STORE 0
+#endif
+
 struct hrx_block_q6_K_wmma_vk128_lhs {
     uint8_t ql[128];
     uint8_t qh[64];
@@ -404,6 +408,23 @@ static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_store_acc_f16_row_maj
     }
 }
 
+static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_full(
+        float * dst,
+        long long rows_stride,
+        long long row0,
+        long long col0,
+        hrx_q6_k_wmma_vk128_half8_vec acc,
+        unsigned int lane) {
+    const long long row_lane = static_cast<long long>(lane >> 4);
+    const long long col = col0 + static_cast<long long>(lane & 15u);
+#pragma unroll
+    for (int reg = 0; reg < 4; ++reg) {
+        const long long row = row0 + row_lane + static_cast<long long>(reg * 4);
+        dst[col * rows_stride + row] =
+            static_cast<float>(acc[reg * 2 + HRX_Q6_K_WMMA_VK128_W64_OPSEL]);
+    }
+}
+
 static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_tile_map(
         int wave,
         int tile_iter,
@@ -596,6 +617,29 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
         int col_tile = 0;
         hrx_q6_k_wmma_vk128_tile_map(static_cast<int>(wave), tile_iter, &row_tile, &col_tile);
 #if HRX_Q6_K_WMMA_VK128_W64
+#if HRX_Q6_K_WMMA_VK128_FULL_TILE_STORE
+        const long long tile_row0 = row_base + static_cast<long long>(row_tile * 16);
+        const long long tile_col0 = col_base + static_cast<long long>(col_tile * 16);
+        if (tile_row0 + 16 <= rows && tile_col0 + 16 <= cols) {
+            hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_full(
+                dst,
+                rows,
+                tile_row0,
+                tile_col0,
+                acc[tile_iter],
+                lane);
+        } else {
+            hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64(
+                dst,
+                rows,
+                tile_row0,
+                tile_col0,
+                rows,
+                cols,
+                acc[tile_iter],
+                lane);
+        }
+#else
         hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64(
             dst,
             rows,
@@ -605,6 +649,7 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
             cols,
             acc[tile_iter],
             lane);
+#endif
 #else
         hrx_q6_k_wmma_vk128_store_acc_f16_row_major(
             dst,
