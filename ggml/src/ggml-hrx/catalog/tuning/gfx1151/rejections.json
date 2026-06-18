@@ -186,6 +186,14 @@
       "reason": "The pair64 ownership probe preserved the rejected VK128 padded direct-F32 WMMA shape but remapped two wave32 waves to one Vulkan-style 64x64 output owner, matching the specialized Vulkan coopmat ownership more closely than the previous 16x128 wave striping. It compiled through CMake/Ninja with no spills (wave32, SGPR=25, VGPR=134, LDS=20480) and emitted 16 static v_wmma_f16_16x16x16_f16 sites, 12 ds_loads, 2 ds_stores, 8 global loads, 64 global stores, and 28 s_waitcnts. The route passed p512 and exact p513 CPU-reference rows while selecting the intended provider, and exact p33 stayed on the existing narrow route. It is rejected for production promotion because same-runner p512 focused perf regressed versus current MMQL128 on every row: Kcur 979.99 -> 1449.28 us, Qcur 3955.07 -> 7255.33 us, ffn_out 15772.01 -> 24397.54 us, ffn_gate 12102.39 -> 25685.38 us. Wave-pair output ownership alone does not recover RADV's subgroup-64 cooperative-matrix lowering; the HIP builtin still lowers as independent wave32 WMMA owners with far shallower LDS traffic."
     },
     {
+      "id": "q4_dense_prompt_wmma16x16_vk128_padded_w64_f16acc_wg256_deepseek_p512",
+      "date": "2026-06-17",
+      "route": "hrx_mul_mat_vec_q4_k_wmma16x16_vk128_padded_w64_f16acc_wg256_f32 and hrx_mul_mat_vec_q4_k_wmma16x16_vk128_padded_w64_hi_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q4_K_WMMA16_VK128_PADDED_W64_F16ACC_WG256_PROMPT=1 or GGML_HRX_ENABLE_Q4_K_WMMA16_VK128_PADDED_W64_HI_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q4-wmma16-vk128-padded-w64-hi-focused-20260617-235516/",
+      "reason": "The true wave64 WMMA probe used the ROCm __builtin_amdgcn_wmma_f16_16x16x16_f16_w64 builtin rather than compiling the wave32 builtin in wave64 mode. It follows the AMD matrix-instruction-calculator RDNA3 mapping for A/B fragments and D stores, preserves the VK128 padded direct-F32 shape, and compiles through CMake/Ninja with no spills (wave64, SGPR=29, VGPR=165, LDS=20480). The generated ISA is the closest direct-WMMA match so far: 32 static v_wmma_f16_16x16x16_f16 sites, 32 ds_loads, 2 ds_stores, 8 global loads, 64 global stores, 155 s_waitcnts. Both low-half and high-half OPSEL routes selected correctly, but both failed all four p512 CPU-reference rows with finite ERR around 3.0. This rejects the current wave64 fragment/load/store mapping before perf or odd/tail testing; the remaining direct-WMMA issue is correctness of the exact coopmat fragment layout, not the headline wave64/WMMA count."
+    },
+    {
       "id": "q4_dense_prompt_mmql128x64_deepseek_p33_p512_p513",
       "date": "2026-06-17",
       "route": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x64_wg256_f32",
