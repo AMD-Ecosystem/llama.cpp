@@ -50,6 +50,10 @@
 #define HRX_Q8_0_WMMA_VK128_FULL_TILE_STORE 0
 #endif
 
+#ifndef HRX_Q8_0_WMMA_VK128_FULL_TILE_STORE_PAIR
+#define HRX_Q8_0_WMMA_VK128_FULL_TILE_STORE_PAIR 0
+#endif
+
 #ifndef HRX_Q8_0_WMMA_VK128_BUFFER_STORE
 #define HRX_Q8_0_WMMA_VK128_BUFFER_STORE 0
 #endif
@@ -417,6 +421,32 @@ static __device__ __forceinline__ void hrx_q8_0_wmma_vk128_store_acc_f16_row_maj
             static_cast<float>(acc[reg * 2 + HRX_Q8_0_WMMA_VK128_W64_OPSEL]));
     }
 }
+
+#if HRX_Q8_0_WMMA_VK128_FULL_TILE_STORE_PAIR
+static __device__ __forceinline__ void hrx_q8_0_wmma_vk128_store_acc_f16_row_major_w64_buffer_full_pair(
+        __amdgpu_buffer_rsrc_t dst_rsrc,
+        long long rows_stride,
+        long long row0,
+        long long col0,
+        hrx_q8_0_wmma_vk128_half8_vec acc,
+        unsigned int lane) {
+    const long long row_lane = static_cast<long long>(lane >> 4);
+    const long long col = col0 + static_cast<long long>(lane & 15u);
+#pragma unroll
+    for (int reg = 0; reg < 4; ++reg) {
+        const long long row_lo = row0 + row_lane + static_cast<long long>(reg * 4);
+        const long long row_hi = row_lo + 16;
+        hrx_q8_0_wmma_vk128_buffer_store_f32(
+            dst_rsrc,
+            col * rows_stride + row_lo,
+            static_cast<float>(acc[reg * 2 + 0]));
+        hrx_q8_0_wmma_vk128_buffer_store_f32(
+            dst_rsrc,
+            col * rows_stride + row_hi,
+            static_cast<float>(acc[reg * 2 + 1]));
+    }
+}
+#endif
 
 static __device__ __forceinline__ void hrx_q8_0_wmma_vk128_store_acc_f16_row_major_w64_buffer(
         __amdgpu_buffer_rsrc_t dst_rsrc,
@@ -798,6 +828,15 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
         const long long tile_col0 = col_base + static_cast<long long>(col_tile * 16);
         if (tile_row0 + 16 <= rows && tile_col0 + 16 <= cols) {
 #if HRX_Q8_0_WMMA_VK128_BUFFER_STORE
+#if HRX_Q8_0_WMMA_VK128_FULL_TILE_STORE_PAIR
+            hrx_q8_0_wmma_vk128_store_acc_f16_row_major_w64_buffer_full_pair(
+                dst_rsrc,
+                rows,
+                tile_row0,
+                tile_col0,
+                acc[tile_iter],
+                lane);
+#else
             hrx_q8_0_wmma_vk128_store_acc_f16_row_major_w64_buffer_full(
                 dst_rsrc,
                 rows,
@@ -805,6 +844,7 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
                 tile_col0,
                 acc[tile_iter],
                 lane);
+#endif
 #else
             hrx_q8_0_wmma_vk128_store_acc_f16_row_major_w64_full(
                 dst,
