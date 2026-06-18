@@ -717,6 +717,15 @@
       "artifact": "cache/hrxv1/gfx1151/q8_0-mmq128x64-splitqsum-focused-20260618-152805/",
       "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_mmq128x64_splitqsum.hsaco",
       "reason": "The BM128/BN64 split-qsum probe retested row ownership after the accepted BN112/BN128 split-qsum routes proved that qsum live-range splitting can remove the Q8_0 register cliff. The new CMake/Ninja-built route fixed the old BM128/BN64 compile blocker, compiling with wave32, SGPR=22, VGPR=144, LDS=2176, no spills, and private segment 0. Focused p33/p512/p513 CPU-reference gates all passed and route traces selected the opt-in provider. Timing rejects it versus current defaults: p512 total 72.631 ms -> 132.665 ms and p513 total 80.896 ms -> 139.952 ms, with large regressions on ffn_gate and result_output. This closes BM128/BN64 row ownership as a Q8_0 packed-path parity axis despite the fixed compile resource shape."
+    },
+    {
+      "id": "q8_0_direct_wmma_vk128_packstage_fast_half_selected_bufferstore_compile_contract",
+      "date": "2026-06-18",
+      "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_fast_half_selected_bufferstore_f16acc_wg256_f32",
+      "env": "not runtime-selected",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-packstage-fast-half-selected-bufferstore-compile-20260618-155052/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_fast_half_selected_bufferstore_wg256.hsaco",
+      "reason": "The pack-stage fast-half selected-output compile probe combined the correctness-proven gfx1151 wave64 D-coordinate map with the low-barrier fast-half LDS output-stage primitive, while still writing and reloading the unselected half as a dummy payload to preserve the halfword LDS opcode surface. It built through CMake/Ninja and compared against the Llama 3.1 8B Q8_0 p512 RADV large oracle with wave64, SGPR=28, VGPR=196, LDS=22528, no spills, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 128 ds_load_u16_d16, 128 ds_store_b16, 2 ds_store_b32, 128 buffer_store_b32, and 2 s_barrier. It is rejected at compile-contract gate: it does not recover RADV's VGPR=192 pressure, emits only 128 buffer_store_b32 versus RADV's 192, and serializes the first WMMA LDS load window with final pre-WMMA lgkmcnt=0 and only one ds_load_b64 immediately before the final wait, while RADV keeps 59 ds_load_b64 operations outstanding with final lgkmcnt=51. The selected-half ownership rule is valid, but this HIP C++ spelling does not reproduce the Vulkan cooperative-matrix load/store schedule."
     }
   ]
 }
