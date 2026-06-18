@@ -2,6 +2,7 @@ message(STATUS "Using HRX2 backend")
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 find_package(hrx CONFIG REQUIRED)
+find_package(loomc CONFIG REQUIRED)
 
 set(GGML_HRX2_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set(GGML_HRX2_ARTIFACT_ROOT "${GGML_HRX2_GENERATED_DIR}/catalog")
@@ -68,10 +69,9 @@ find_program(GGML_HRX2_LOOM_LINK_EXECUTABLE
     REQUIRED
 )
 
-if(NOT TARGET loom::binding::c::loomc OR NOT TARGET loom::binding::c::target::amdgpu)
+if(NOT TARGET loomc::loomc)
     message(FATAL_ERROR
-        "HRX2 requires HRX to export Loom C API CMake targets "
-        "loom::binding::c::loomc and loom::binding::c::target::amdgpu")
+        "HRX2 requires HRX to export the Loom C API CMake target loomc::loomc")
 endif()
 
 add_custom_command(
@@ -146,8 +146,7 @@ ggml_add_backend_library(ggml-hrx2
 
 target_link_libraries(ggml-hrx2 PRIVATE
     hrx::hrx
-    loom::binding::c::loomc
-    loom::binding::c::target::amdgpu
+    loomc::loomc
 )
 target_include_directories(ggml-hrx2 PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../vendor
