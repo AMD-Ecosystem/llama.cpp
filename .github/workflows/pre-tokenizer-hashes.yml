@@ -2,10 +2,12 @@ name: Check Pre-Tokenizer Hashes
 
 on:
     push:
+        branches-ignore: ['hrx-v2']
         paths:
             - 'convert_hf_to_gguf.py'
             - 'convert_hf_to_gguf_update.py'
     pull_request:
+        branches-ignore: ['hrx-v2']
         paths:
             - 'convert_hf_to_gguf.py'
             - 'convert_hf_to_gguf_update.py'

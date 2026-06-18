@@ -1,10 +1,14 @@
-name: HRX CI
+name: HRX v2 CI
 
 on:
+  push:
+    branches:
+      - hrx-v2
   pull_request:
     types: [opened, synchronize, reopened]
     branches:
-      - hrx-integration
+      - hrx-v2
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -15,81 +19,128 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  hrx-build:
-    name: ubuntu-latest
-    runs-on: ubuntu-latest
+  hrx2-build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: gfx1151_strix-halo
+            runner: linux-gfx1151-gpu-rocm
+            rocm_tarball: therock-dist-linux-gfx1151-7.14.0a20260617.tar.gz
+          - name: gfx1201_9070
+            runner: linux-gfx120X-gpu-rocm
+            rocm_tarball: therock-dist-linux-gfx120X-all-7.14.0a20260617.tar.gz
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash --noprofile --norc -exo pipefail {0}
+    container:
+      image: ghcr.io/rocm/no_rocm_image_ubuntu24_04@sha256:fba5f55a122dbb15925e98c51fe65bffe88c36e11ebb25b73daf2bea04202dc3
+      options: >-
+        --user 0:0
+        --device /dev/kfd
+        --device /dev/dri
     env:
-      HRX_WORK_DIR: ${{ github.workspace }}
-      # Public location for bench tooling (rsuderman/llamacpp_ci and fork
-      # AaronStGeorge/llamacpp_ci)
-      #TODO: switch to ROCm/llamacpp-hrx-bench once it is open sourced.
-      BENCH_REPOSITORY: AaronStGeorge/llamacpp_ci
-      BENCH_REF: 'main'
-      BENCH_DIR: ${{ github.workspace }}/bench
-      LLAMA_SRC_DIR: ${{ github.workspace }}/llama-src
-      HRX_ARTIFACT_SET: 'core-with-upstream-hip'
+      DEVWS_REPOSITORY: AaronStGeorge/llamacpp-devws
+      DEVWS_REF: build-hrx-v2
+      DEVWS_DIR: /work/llamacpp-devws
+      ROCM_DIR: /work/rocm
+      ROCM_TARBALL_BASE_URL: https://rocm.nightlies.amd.com/tarball-multi-arch
+      ROCM_TARBALL_NAME: ${{ matrix.rocm_tarball }}
       CCACHE_COMPILERCHECK: content
+      HSA_FORCE_FINE_GRAIN_PCIE: "1"
 
     steps:
-      - name: Checkout llama.cpp (under test)
+      - name: Checkout dev workspace tooling
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.DEVWS_REPOSITORY }}
+          ref: ${{ env.DEVWS_REF }}
+          path: devws-src
+
+      - name: Checkout llama.cpp under test
         uses: actions/checkout@v6
         with:
           path: llama-src
 
-      - name: Checkout bench tooling
+      - name: Checkout HRX System
         uses: actions/checkout@v6
         with:
-          repository: ${{ env.BENCH_REPOSITORY }}
-          ref: ${{ env.BENCH_REF }}
-          path: bench
+          repository: ROCm/hrx-system
+          ref: main
+          path: hrx-system-src
 
-      - name: Install ROCm build dependencies
-        run: "${BENCH_DIR}/scripts/hrx/install-rocm-deps.sh"
+      - name: Runner identity
+        if: always()
+        run: |
+          printf 'RUNNER_NAME=%s\n' "${RUNNER_NAME:-}"
+          printf 'RUNNER_OS=%s\n' "${RUNNER_OS:-}"
+          printf 'GITHUB_EVENT_NAME=%s\n' "${GITHUB_EVENT_NAME:-}"
+          hostname
+          uname -a
+          ls -l /dev/kfd /dev/dri || true
+          printenv | sort | grep -E '^(GITHUB_|RUNNER_|ROCM_|HSA_|HIP_)' || true
+
+      - name: Install host build dependencies
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential \
+            ca-certificates \
+            ccache \
+            cmake \
+            curl \
+            git \
+            glslc \
+            libvulkan-dev \
+            ninja-build \
+            pkg-config \
+            python3 \
+            tar \
+            xz-utils
+
+      - name: Stage dev workspace under /work
+        run: |
+          rm -rf "${DEVWS_DIR}"
+          mkdir -p "${DEVWS_DIR}/sources"
+          cp -a "${GITHUB_WORKSPACE}/devws-src/." "${DEVWS_DIR}/"
+          cp -a "${GITHUB_WORKSPACE}/llama-src" "${DEVWS_DIR}/sources/llama.cpp"
+          cp -a "${GITHUB_WORKSPACE}/hrx-system-src" "${DEVWS_DIR}/sources/hrx-system"
+          git -C "${DEVWS_DIR}/sources/llama.cpp" checkout -B hrx-v2
+          git -C "${DEVWS_DIR}/sources/hrx-system" checkout -B main
+
+      - name: Fetch ROCm nightly tarball
+        run: |
+          rm -rf "${ROCM_DIR}" /work/rocm-tarball
+          mkdir -p "${ROCM_DIR}" /work/rocm-tarball
+          curl -fsSL "${ROCM_TARBALL_BASE_URL}/${ROCM_TARBALL_NAME}" \
+            -o "/work/rocm-tarball/${ROCM_TARBALL_NAME}"
+          tar -xzf "/work/rocm-tarball/${ROCM_TARBALL_NAME}" -C "${ROCM_DIR}"
+          ln -sfn "${ROCM_DIR}" "${DEVWS_DIR}/rocm"
+          test -x "${DEVWS_DIR}/rocm/bin/rocminfo"
+          test -x "${DEVWS_DIR}/rocm/bin/amdclang++"
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ubuntu-latest-${{ env.HRX_ARTIFACT_SET }}
+          key: hrx-v2-${{ matrix.name }}
           evict-old-files: 1d
           save: ${{ github.event_name == 'pull_request' }}
 
-      - name: Checkout HRX
-        run: "${BENCH_DIR}/scripts/hrx/checkout-hrx.sh"
-
-      - name: Fetch ROCm assets
-        run: "${BENCH_DIR}/scripts/hrx/fetch-rocm-assets.sh"
-
-      - name: Build HRX
-        run: "${BENCH_DIR}/scripts/hrx/build-hrx.sh"
-
-      - name: Validate HRX
-        run: "${BENCH_DIR}/scripts/hrx/validate-hrx.sh"
-
-      - name: Build llama.cpp with HRX
-        run: "${BENCH_DIR}/scripts/hrx/build-llama-hrx.sh"
-
-      - name: Run sample MUL_MAT correctness config on CPU
+      - name: Build HRX2
         run: |
-          . "${BENCH_DIR}/scripts/hrx/env.sh"
-          "${BENCH_DIR}/tools/run-op-test.py" \
-            --test-backend-ops "${LLAMA_BUILD_DIR}/bin/test-backend-ops" \
-            --test-file "${BENCH_DIR}/benchmark-configs/test/mul_mat_f16.txt" \
-            --op MUL_MAT \
-            --backend CPU \
-            --output benchmark-results/sample-mul-mat-f16-cpu-test.jsonl
+          cd "${DEVWS_DIR}"
+          python3 skills/bootstrap-hrx-llama-builds/scripts/bootstrap_builds.py \
+            --action check \
+            --action hrx \
+            --action loom \
+            --action rocm-health \
+            --action llama-hrx2 \
+            --gfx-targets auto \
+            --jobs "$(nproc)"
 
-      - name: Run sample MUL_MAT benchmark config on CPU
+      - name: Verify HRX2 build configuration
         run: |
-          . "${BENCH_DIR}/scripts/hrx/env.sh"
-          "${BENCH_DIR}/tools/run-op-perf.py" \
-            --test-backend-ops "${LLAMA_BUILD_DIR}/bin/test-backend-ops" \
-            --test-file "${BENCH_DIR}/benchmark-configs/test/mul_mat_f16.txt" \
-            --op MUL_MAT \
-            --backend CPU \
-            --output benchmark-results/sample-mul-mat-f16-cpu-perf.jsonl
-
-      - name: Upload CPU benchmark results
-        uses: actions/upload-artifact@v5
-        with:
-          name: cpu-benchmark-results
-          path: benchmark-results/
+          grep -F 'GGML_HRX2:BOOL=ON' "${DEVWS_DIR}/build/llama-hrx2/CMakeCache.txt"
