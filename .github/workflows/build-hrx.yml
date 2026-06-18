@@ -102,16 +102,7 @@ jobs:
             xz-utils
 
       - name: Fetch ROCm nightly tarball
-        run: |
-          rm -rf "${DEVWS_BUILD_DIR}" "${ROCM_DIR}" /work/rocm-tarball
-          mkdir -p "${DEVWS_BUILD_DIR}"
-          mkdir -p "${ROCM_DIR}" /work/rocm-tarball
-          curl -fsSL "${ROCM_TARBALL_BASE_URL}/${ROCM_TARBALL_NAME}" \
-            -o "/work/rocm-tarball/${ROCM_TARBALL_NAME}"
-          tar -xzf "/work/rocm-tarball/${ROCM_TARBALL_NAME}" -C "${ROCM_DIR}"
-          ln -sfn "${ROCM_DIR}" "${DEVWS_BUILD_DIR}/rocm"
-          test -x "${DEVWS_BUILD_DIR}/rocm/bin/rocminfo"
-          test -x "${DEVWS_BUILD_DIR}/rocm/bin/amdclang++"
+        run: "${DEVWS_DIR}/ci/fetch-rocm-nightly.sh"
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
