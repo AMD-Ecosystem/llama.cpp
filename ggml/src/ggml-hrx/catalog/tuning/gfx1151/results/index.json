@@ -554,6 +554,13 @@
       "date": "2026-06-18",
       "artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x128-splitqsum-default-model-ab-20260618/",
       "status": "accepted_model_ab"
+    },
+    {
+      "id": "q8_0_prompt_mmq64x128_splitqsum8_p33_p512_p513",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x128-splitqsum8-focused-20260618/",
+      "compile_artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x128-splitqsum8-compile-20260618/",
+      "status": "rejected_focused_perf_regression"
     }
   ]
 }
