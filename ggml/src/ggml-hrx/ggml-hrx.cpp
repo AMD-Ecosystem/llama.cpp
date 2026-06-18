@@ -3715,6 +3715,18 @@ static bool ggml_backend_hrx_q4_k_mmql128_bquad_enabled(
            !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_Q4_K_Q8_1_X4_MMQL128_BQUAD_PROMPT");
 }
 
+static bool ggml_backend_hrx_q4_k_mmql128_bquad_tail_enabled(
+        const ggml_backend_hrx_device_context * device_context,
+        int64_t cols) {
+    if (ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q4_K_Q8_1_X4_MMQL128_BQUAD_TAIL_PROMPT")) {
+        return true;
+    }
+    return device_context &&
+           device_context->architecture == "gfx1151" &&
+           cols >= 512 &&
+           !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_Q4_K_Q8_1_X4_MMQL128_BQUAD_TAIL_PROMPT");
+}
+
 static bool ggml_backend_hrx_flash_attn_ext_decode_disabled() {
     return ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_FLASH_ATTN_EXT_DECODE");
 }
@@ -5764,7 +5776,8 @@ static ggml_backend_hrx_q8_1_mmvq_variant ggml_backend_hrx_mul_mat_vec_k_q8_1_va
                 src1->ne[2] == 1 && src1->ne[3] == 1 &&
                 op->ne[2] == 1 && op->ne[3] == 1 &&
                 src0->ne[0] > 0 &&
-                rows % 128 == 0 && cols >= 128 && (cols % 128) == 0 &&
+                rows % 128 == 0 && cols >= 128 &&
+                ((cols % 128) == 0 || ggml_backend_hrx_q4_k_mmql128_bquad_tail_enabled(device_context, cols)) &&
                 (src0->ne[0] % 256) == 0 &&
                 ggml_is_contiguous(src0) &&
                 ggml_is_contiguous(src1) &&

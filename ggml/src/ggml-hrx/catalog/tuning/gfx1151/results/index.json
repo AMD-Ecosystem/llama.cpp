@@ -327,6 +327,24 @@
       "status": "accepted_gfx1151_default"
     },
     {
+      "id": "q4_dense_prompt_mmql128_bquad_tail_probe_p33_p512_p513",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q4-mmql128-bquad-tail-probe-20260618-052036/",
+      "status": "accepted_large_tail_candidate"
+    },
+    {
+      "id": "q4_dense_prompt_mmql128_bquad_tail_llama31_p513_model_ab",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q4-mmql128-bquad-tail-llama31-model-ab-20260618-052222/",
+      "status": "accepted_model_ab_positive"
+    },
+    {
+      "id": "q4_dense_prompt_mmql128_bquad_tail_default_regate_p33_p512_p513",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q4-mmql128-bquad-tail-default-regate-20260618-052352/",
+      "status": "accepted_gfx1151_default"
+    },
+    {
       "id": "q8_0_prompt_wmma16_vk128_hybrid_large_rows_llama3_1_q8",
       "date": "2026-06-18",
       "artifact": "cache/hrxv1/gfx1151/q8_0-vk128-vs-bn96-focused-20260618-003553/",

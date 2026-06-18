@@ -98,15 +98,18 @@
       "date": "2026-06-18",
       "status": "accepted_gfx1151_default",
       "route": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bquad_wg256_f32",
-      "env": "default on gfx1151; rollback with GGML_HRX_DISABLE_Q4_K_Q8_1_X4_MMQL128_BQUAD_PROMPT=1; opt-in elsewhere with GGML_HRX_ENABLE_Q4_K_Q8_1_X4_MMQL128_BQUAD_PROMPT=1",
-      "shape_guard": "q4_K MUL_MAT prompt, k % 256 == 0, rows % 128 == 0, cols >= 128, cols % 128 == 0, contiguous tensors, packed Q8_1 x4 RHS",
+      "env": "default on gfx1151 for full tiles and large cols >= 512 tails; rollback all B-quad with GGML_HRX_DISABLE_Q4_K_Q8_1_X4_MMQL128_BQUAD_PROMPT=1; rollback only large tails with GGML_HRX_DISABLE_Q4_K_Q8_1_X4_MMQL128_BQUAD_TAIL_PROMPT=1; opt-in elsewhere with GGML_HRX_ENABLE_Q4_K_Q8_1_X4_MMQL128_BQUAD_PROMPT=1 or force tails with GGML_HRX_ENABLE_Q4_K_Q8_1_X4_MMQL128_BQUAD_TAIL_PROMPT=1",
+      "shape_guard": "q4_K MUL_MAT prompt, k % 256 == 0, rows % 128 == 0, cols >= 128, contiguous tensors, packed Q8_1 x4 RHS; full tiles select when cols % 128 == 0, large gfx1151 tails select when cols >= 512",
       "focused_artifacts": [
         "cache/hrxv1/gfx1151/q4-mmql128-bquad-focused-20260618-020428/",
-        "cache/hrxv1/gfx1151/q4-mmql128-bquad-default-regate-20260618-051326/"
+        "cache/hrxv1/gfx1151/q4-mmql128-bquad-default-regate-20260618-051326/",
+        "cache/hrxv1/gfx1151/q4-mmql128-bquad-tail-probe-20260618-052036/",
+        "cache/hrxv1/gfx1151/q4-mmql128-bquad-tail-default-regate-20260618-052352/"
       ],
       "model_artifacts": [
         "cache/hrxv1/gfx1151/q4-mmql128-bquad-deepseek-model-ab-20260618-020603/",
-        "cache/hrxv1/gfx1151/q4-mmql128-bquad-llama31-model-ab-20260618-020644/"
+        "cache/hrxv1/gfx1151/q4-mmql128-bquad-llama31-model-ab-20260618-020644/",
+        "cache/hrxv1/gfx1151/q4-mmql128-bquad-tail-llama31-model-ab-20260618-052222/"
       ],
       "compile_evidence": {
         "hsaco": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q4_k_q8_1_x4_mmql128_bquad.hsaco",
@@ -117,10 +120,10 @@
         "spills": 0
       },
       "promotion_blockers": [
-        "exact p513 tails must fall back to current MMQL128 until a tail-specific schedule wins",
         "p33 stays on the existing narrow route",
-        "broader p512 basket coverage and same-machine Vulkan ratio update are still pending",
-        "next Q4_K work should mechanically mine the remaining p513-tail and direct-Vulkan schedule deltas instead of widening this full-tile route"
+        "large-tail default is proven on Llama 3.1 8B Q4_K_M p513 and should be rechecked on other Q4_K_M large-tail rows as they enter the basket",
+        "broader p512/p513 basket coverage and same-machine Vulkan ratio update are still pending",
+        "next Q4_K work should mechanically mine the remaining direct-Vulkan schedule deltas rather than widen this route below the production-width tail regime"
       ]
     },
     {
