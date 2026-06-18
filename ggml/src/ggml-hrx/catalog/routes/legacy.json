@@ -5241,6 +5241,49 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q4_k_wmma16x16_vk128_padded_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q4_k_wmma16x16_vk128_padded_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q4_k_wmma16_vk128_padded_wg256",
+    "artifact_id": "mul_mat_vec_q4_k_wmma16_vk128_padded_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q4_k_wmma16x16_vk128_padded_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "dense_q4_k_prompt_wmma16x16_vk128_padded_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q4_K x F32 -> F32 MUL_MAT",
+      "k_multiple": 256,
+      "rows_min": 128,
+      "cols_min": 128,
+      "requires_env": "GGML_HRX_ENABLE_Q4_K_WMMA16_VK128_PADDED_F16ACC_WG256_PROMPT"
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q4_k_wmma16x16_vk128_padded_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "candidate_gfx1151_probe",
+      "selection": "Single-axis follow-up to the rejected VK128 direct-F32 Q4_K WMMA probe. It keeps BM128/BN128/BK32/WG256 and direct F32 RHS, but changes the A/B shared row stride from 32 halfs to Vulkan's padded 40-half f16vec2-equivalent stride from mul_mm.comp (SHMEM_STRIDE=20 f16vec2). This isolates LDS padding/bank behavior while preserving route policy: opt-in only, p33 remains on the narrow route, and p512/p513 must beat current MMQL128 before promotion."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q5_k_f32",
     "family": "mul_mat_vec_q5_k",
     "op": "MUL_MAT",

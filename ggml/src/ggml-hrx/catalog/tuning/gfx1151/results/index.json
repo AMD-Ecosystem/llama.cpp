@@ -247,6 +247,12 @@
       "date": "2026-06-17",
       "artifact": "cache/hrxv1/gfx1151/q4-wmma16-vk128-focused-20260617-225628/",
       "status": "rejected_focused_perf_regression"
+    },
+    {
+      "id": "q4_dense_prompt_wmma16x16_vk128_padded_f16acc_wg256_deepseek_p33_p512_p513",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/q4-wmma16-vk128-padded-focused-20260617-230429/",
+      "status": "rejected_focused_perf_regression"
     }
   ]
 }

@@ -2,6 +2,14 @@
 #include <hip/hip_runtime.h>
 #include <stdint.h>
 
+#ifndef HRX_Q4_K_WMMA_VK128_EXPORT
+#define HRX_Q4_K_WMMA_VK128_EXPORT hrx_mul_mat_vec_q4_k_wmma16x16_vk128_f16acc_wg256_f32
+#endif
+
+#ifndef HRX_Q4_K_WMMA_VK128_SHARED_STRIDE
+#define HRX_Q4_K_WMMA_VK128_SHARED_STRIDE 32
+#endif
+
 struct hrx_block_q4_K_wmma_vk128_lhs {
     unsigned short d;
     unsigned short dmin;
@@ -105,18 +113,18 @@ static __device__ __forceinline__ hrx_q4_k_wmma_vk128_half16_vec hrx_q4_k_wmma_v
         int row_tile,
         int k_tile,
         unsigned int lane) {
-    constexpr int BK = 32;
+    constexpr int SHARED_STRIDE = HRX_Q4_K_WMMA_VK128_SHARED_STRIDE;
     const int row = row_tile * 16 + static_cast<int>(lane & 15u);
     const int k_base = k_tile * 16 + static_cast<int>(lane >> 4) * 8;
     return hrx_q4_k_wmma_vk128_duplicate_input(
-        sh_a[row * BK + k_base + 0],
-        sh_a[row * BK + k_base + 1],
-        sh_a[row * BK + k_base + 2],
-        sh_a[row * BK + k_base + 3],
-        sh_a[row * BK + k_base + 4],
-        sh_a[row * BK + k_base + 5],
-        sh_a[row * BK + k_base + 6],
-        sh_a[row * BK + k_base + 7]);
+        sh_a[row * SHARED_STRIDE + k_base + 0],
+        sh_a[row * SHARED_STRIDE + k_base + 1],
+        sh_a[row * SHARED_STRIDE + k_base + 2],
+        sh_a[row * SHARED_STRIDE + k_base + 3],
+        sh_a[row * SHARED_STRIDE + k_base + 4],
+        sh_a[row * SHARED_STRIDE + k_base + 5],
+        sh_a[row * SHARED_STRIDE + k_base + 6],
+        sh_a[row * SHARED_STRIDE + k_base + 7]);
 }
 
 static __device__ __forceinline__ hrx_q4_k_wmma_vk128_half16_vec hrx_q4_k_wmma_vk128_load_b_frag(
@@ -124,18 +132,18 @@ static __device__ __forceinline__ hrx_q4_k_wmma_vk128_half16_vec hrx_q4_k_wmma_v
         int col_tile,
         int k_tile,
         unsigned int lane) {
-    constexpr int BK = 32;
+    constexpr int SHARED_STRIDE = HRX_Q4_K_WMMA_VK128_SHARED_STRIDE;
     const int col = col_tile * 16 + static_cast<int>(lane & 15u);
     const int k_base = k_tile * 16 + static_cast<int>(lane >> 4) * 8;
     return hrx_q4_k_wmma_vk128_duplicate_input(
-        sh_b[col * BK + k_base + 0],
-        sh_b[col * BK + k_base + 1],
-        sh_b[col * BK + k_base + 2],
-        sh_b[col * BK + k_base + 3],
-        sh_b[col * BK + k_base + 4],
-        sh_b[col * BK + k_base + 5],
-        sh_b[col * BK + k_base + 6],
-        sh_b[col * BK + k_base + 7]);
+        sh_b[col * SHARED_STRIDE + k_base + 0],
+        sh_b[col * SHARED_STRIDE + k_base + 1],
+        sh_b[col * SHARED_STRIDE + k_base + 2],
+        sh_b[col * SHARED_STRIDE + k_base + 3],
+        sh_b[col * SHARED_STRIDE + k_base + 4],
+        sh_b[col * SHARED_STRIDE + k_base + 5],
+        sh_b[col * SHARED_STRIDE + k_base + 6],
+        sh_b[col * SHARED_STRIDE + k_base + 7]);
 }
 
 static __device__ __forceinline__ void hrx_q4_k_wmma_vk128_store_acc_f16_row_major(
@@ -162,7 +170,7 @@ static __device__ __forceinline__ void hrx_q4_k_wmma_vk128_store_acc_f16_row_maj
 }
 
 extern "C" __global__ __launch_bounds__(256, 1)
-void hrx_mul_mat_vec_q4_k_wmma16x16_vk128_f16acc_wg256_f32(
+void HRX_Q4_K_WMMA_VK128_EXPORT(
         const hrx_block_q4_K_wmma_vk128_lhs * src0,
         const float * src1,
         float * dst,
@@ -172,6 +180,7 @@ void hrx_mul_mat_vec_q4_k_wmma16x16_vk128_f16acc_wg256_f32(
     constexpr int BM = 128;
     constexpr int BN = 128;
     constexpr int BK = 32;
+    constexpr int SHARED_STRIDE = HRX_Q4_K_WMMA_VK128_SHARED_STRIDE;
     constexpr int WAVE = 32;
     constexpr int ROW_TILES = BM / 16;
     constexpr int COL_TILES = BN / 16;
@@ -188,8 +197,8 @@ void hrx_mul_mat_vec_q4_k_wmma16x16_vk128_f16acc_wg256_f32(
         return;
     }
 
-    __shared__ _Float16 sh_a[BM * BK];
-    __shared__ _Float16 sh_b[BN * BK];
+    __shared__ _Float16 sh_a[BM * SHARED_STRIDE];
+    __shared__ _Float16 sh_b[BN * SHARED_STRIDE];
 
     const long long blocks_per_row = k / 256;
     const _Float16 zero = static_cast<_Float16>(0.0f);
@@ -200,14 +209,14 @@ void hrx_mul_mat_vec_q4_k_wmma16x16_vk128_f16acc_wg256_f32(
             const int r = idx / BK;
             const int kk = idx - r * BK;
             const long long row = row_base + static_cast<long long>(r);
-            sh_a[idx] = row < rows ?
+            sh_a[r * SHARED_STRIDE + kk] = row < rows ?
                 hrx_q4_k_wmma_vk128_load_a_value(src0, row, k0 + kk, blocks_per_row) : zero;
         }
         for (int idx = static_cast<int>(tid); idx < BN * BK; idx += 256) {
             const int c = idx / BK;
             const int kk = idx - c * BK;
             const long long col = col_base + static_cast<long long>(c);
-            sh_b[idx] = col < cols ? static_cast<_Float16>(src1[col * k + k0 + kk]) : zero;
+            sh_b[c * SHARED_STRIDE + kk] = col < cols ? static_cast<_Float16>(src1[col * k + k0 + kk]) : zero;
         }
         __syncthreads();
 
