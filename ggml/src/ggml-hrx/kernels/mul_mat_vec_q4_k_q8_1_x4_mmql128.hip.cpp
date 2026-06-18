@@ -34,6 +34,10 @@
 #define HRX_Q4_K_Q8_1_X4_MMQL128_LOAD_VEC_B 16
 #endif
 
+#ifndef HRX_Q4_K_Q8_1_X4_MMQL128_PREFETCH_B_PAIR
+#define HRX_Q4_K_Q8_1_X4_MMQL128_PREFETCH_B_PAIR 0
+#endif
+
 struct hrx_block_q4_K_q8_1_mmql_lhs {
     unsigned short d;
     unsigned short dmin;
@@ -288,6 +292,32 @@ extern "C" __global__ void HRX_Q4_K_Q8_1_X4_MMQL128_EXPORT(
 
             #pragma unroll
             for (int wsic = 0; wsic < WNITER; ++wsic) {
+#if HRX_Q4_K_Q8_1_X4_MMQL128_PREFETCH_B_PAIR
+                hrx_q8_1_mmql_b_cache_q4 cache_b_pair[TN];
+                #pragma unroll
+                for (int cc = 0; cc < TN; ++cc) {
+                    cache_b_pair[cc] =
+                        buf_b[k_step * BN + warp_c * WN + wsic * WSUBN + tiwc * TN + cc];
+                }
+                #pragma unroll
+                for (int cc = 0; cc < TN; ++cc) {
+                    const hrx_q8_1_mmql_b_cache_q4 cache_b = cache_b_pair[cc];
+                    #pragma unroll
+                    for (int cr = 0; cr < TM; ++cr) {
+                        int qsum = 0;
+                        #pragma unroll
+                        for (int iqs = 0; iqs < 8; ++iqs) {
+                            const uint32_t qpack =
+                                (static_cast<uint32_t>(cache_a[cr].qs[iqs >> 1]) >> ((iqs & 1) * 4)) &
+                                0x0F0F0F0Fu;
+                            qsum += hrx_udot4_q4_q8_1_mmql(qpack, cache_b.qs[iqs]);
+                        }
+                        sum[(wsic * TN + cc) * TM + cr] +=
+                            cache_a[cr].d * cache_b.d * static_cast<float>(qsum) -
+                            cache_a[cr].min * cache_b.s;
+                    }
+                }
+#else
                 #pragma unroll
                 for (int cc = 0; cc < TN; ++cc) {
                     hrx_q8_1_mmql_b_cache_q4 cache_b =
@@ -307,6 +337,7 @@ extern "C" __global__ void HRX_Q4_K_Q8_1_X4_MMQL128_EXPORT(
                             cache_a[cr].min * cache_b.s;
                     }
                 }
+#endif
             }
         }
         __syncthreads();
