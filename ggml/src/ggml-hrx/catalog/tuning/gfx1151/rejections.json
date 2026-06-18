@@ -104,6 +104,14 @@
       "env": "GGML_HRX_ENABLE_Q8_0_WMMA16_F16ACC_PROMPT=1",
       "artifact": "cache/hrxv1/gfx1151/q8_0-wmma16-f16acc-focused-20260617-204054/",
       "reason": "The direct Q8_0 dequant-to-f16 plus F32 RHS cast-to-f16 WMMA route using f16 accumulators compiled through CMake/Ninja, emitted v_wmma_f16_16x16x16_f16 with no spills (SGPR=20, VGPR=34, LDS=0), and passed CPU-reference focused p512 plus p33/p513 tail rows. It is rejected for production promotion because same-row p512 perf regressed versus the current packed Q8_1 route: 729.02 us for WMMA16 f16acc versus 521.94 us for hrx_mul_mat_vec_q8_0_q8_1_x4_mmq128x32_wg256_f32."
+    },
+    {
+      "id": "q8_0_prompt_wmma16x16_f16acc_wg256_p512",
+      "date": "2026-06-17",
+      "route": "hrx_mul_mat_vec_q8_0_wmma16x16_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_WMMA16_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-wmma16-f16acc-wg256-focused-20260617-204624/",
+      "reason": "The 256-thread workgroup aggregation of eight direct Q8_0 f16acc WMMA16 subtiles compiled through CMake/Ninja, emitted v_wmma_f16_16x16x16_f16 with no spills (SGPR=18, VGPR=37, LDS=0), and passed CPU-reference focused p512 plus p33/p513 tail rows. It is rejected for production promotion because same-row p512 perf regressed versus the current packed Q8_1 route and the single-wave WMMA diagnostic: 825.08 us for WG256 f16acc versus 520.35 us for hrx_mul_mat_vec_q8_0_q8_1_x4_mmq128x32_wg256_f32. This shows WG256 grouping without Vulkan-style packed/staged data reuse is not the missing schedule axis."
     }
   ]
 }

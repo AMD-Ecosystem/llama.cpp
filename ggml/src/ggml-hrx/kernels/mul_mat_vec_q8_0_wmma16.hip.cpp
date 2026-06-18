@@ -224,3 +224,38 @@ void hrx_mul_mat_vec_q8_0_wmma16x16_f16acc_f32(
 
     hrx_q8_0_wmma16_store_acc_f16_row_major(dst, rows, row0, col0, rows, cols, acc, lane);
 }
+
+extern "C" __global__ __launch_bounds__(256, 1)
+void hrx_mul_mat_vec_q8_0_wmma16x16_f16acc_wg256_f32(
+        const hrx_block_q8_0_wmma16 * src0,
+        const float * src1,
+        float * dst,
+        long long k,
+        long long rows,
+        long long cols) {
+    const unsigned int tid = __builtin_amdgcn_workitem_id_x();
+    const unsigned int wave = tid >> 5;
+    const unsigned int lane = tid & 31u;
+    const long long row0 =
+        static_cast<long long>(__builtin_amdgcn_workgroup_id_x()) * 64 +
+        static_cast<long long>(wave & 3u) * 16;
+    const long long col0 =
+        static_cast<long long>(__builtin_amdgcn_workgroup_id_y()) * 32 +
+        static_cast<long long>(wave >> 2) * 16;
+    if (row0 >= rows || col0 >= cols) {
+        return;
+    }
+
+    const long long blocks_per_row = k / 32;
+    hrx_q8_0_wmma16_half16_vec acc = {};
+
+    for (long long k0 = 0; k0 < k; k0 += 16) {
+        const hrx_q8_0_wmma16_half16_vec a =
+            hrx_q8_0_wmma16_load_a_row_major(src0, row0, k0, rows, blocks_per_row, lane);
+        const hrx_q8_0_wmma16_half16_vec b =
+            hrx_q8_0_wmma16_load_b_col_major(src1, col0, k0, k, cols, lane);
+        acc = __builtin_amdgcn_wmma_f16_16x16x16_f16_w32(a, b, acc, false);
+    }
+
+    hrx_q8_0_wmma16_store_acc_f16_row_major(dst, rows, row0, col0, rows, cols, acc, lane);
+}

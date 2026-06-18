@@ -181,6 +181,12 @@
       "date": "2026-06-17",
       "artifact": "cache/hrxv1/gfx1151/q8_0-wmma16-f16acc-focused-20260617-204054/",
       "status": "rejected_focused_perf_regression"
+    },
+    {
+      "id": "q8_0_prompt_wmma16x16_f16acc_wg256_focused_p33_p512_p513",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-wmma16-f16acc-wg256-focused-20260617-204624/",
+      "status": "rejected_focused_perf_regression"
     }
   ]
 }
