@@ -120,8 +120,8 @@ extern "C" __global__ void hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_wg256_f32(
                             buf_b[buf_idx].qs[loadr_b * 4 + j] = 0;
                         }
                         if (loadr_b == 0) {
-                            buf_b[buf_idx].d = 0.0f;
-                            buf_b[buf_idx].s = 0.0f;
+                            buf_b[buf_idx].d = 0;
+                            buf_b[buf_idx].s = 0;
                         }
                     }
                 }
@@ -152,8 +152,8 @@ extern "C" __global__ void hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_wg256_f32(
                                 static_cast<uint32_t>(cache_a[cr].qs[iqs]), cache_b.qs[iqs]);
                         }
                         sum[(wsic * TN + cc) * TM + cr] +=
-                            cache_a[cr].d * cache_b.d * static_cast<float>(qsum) -
-                            cache_a[cr].min * cache_b.s;
+                            cache_a[cr].d * hrx_q5_k_mmqv_b_cache_d(cache_b) * static_cast<float>(qsum) -
+                            cache_a[cr].min * hrx_q5_k_mmqv_b_cache_s(cache_b);
                     }
                 }
             }

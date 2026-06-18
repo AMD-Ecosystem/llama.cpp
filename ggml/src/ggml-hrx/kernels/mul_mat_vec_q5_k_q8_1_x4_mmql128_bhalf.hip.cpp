@@ -1,0 +1,5 @@
+#define HRX_Q5_K_Q8_1_X4_MMQL128_EXPORT hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bhalf_wg256_f32
+#define HRX_Q5_K_Q8_1_B_CACHE_HALF_SCALE 1
+#define HRX_Q5_K_Q8_1_X4_MMQL128_PREFETCH_B_PAIR 0
+#define HRX_Q5_K_Q8_1_X4_MMQL128_PREFETCH_B_QUAD 0
+#include "mul_mat_vec_q5_k_q8_1_x4_mmql128_bquad.hip.cpp"

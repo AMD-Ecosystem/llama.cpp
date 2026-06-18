@@ -2,6 +2,10 @@
 #include <hip/hip_runtime.h>
 #include <stdint.h>
 
+#ifndef HRX_Q5_K_Q8_1_B_CACHE_HALF_SCALE
+#define HRX_Q5_K_Q8_1_B_CACHE_HALF_SCALE 0
+#endif
+
 struct hrx_block_q5_K_q8_1_lhs {
     unsigned short d;
     unsigned short dmin;
@@ -76,11 +80,37 @@ struct hrx_q5_k_mmqv_a_cache {
     float min;
 };
 
+#if HRX_Q5_K_Q8_1_B_CACHE_HALF_SCALE
+struct hrx_q8_1_mmqv_b_cache {
+    int qs[8];
+    unsigned short d;
+    unsigned short s;
+};
+#else
 struct hrx_q8_1_mmqv_b_cache {
     int qs[8];
     float d;
     float s;
 };
+#endif
+
+static __device__ __forceinline__ float hrx_q5_k_mmqv_b_cache_d(
+        const hrx_q8_1_mmqv_b_cache & cache_b) {
+#if HRX_Q5_K_Q8_1_B_CACHE_HALF_SCALE
+    return __half2float(__ushort_as_half(cache_b.d));
+#else
+    return cache_b.d;
+#endif
+}
+
+static __device__ __forceinline__ float hrx_q5_k_mmqv_b_cache_s(
+        const hrx_q8_1_mmqv_b_cache & cache_b) {
+#if HRX_Q5_K_Q8_1_B_CACHE_HALF_SCALE
+    return __half2float(__ushort_as_half(cache_b.s));
+#else
+    return cache_b.s;
+#endif
+}
 
 static __device__ __forceinline__ void hrx_q5_k_mmqv_load_a(
         hrx_q5_k_mmqv_a_cache * buf_a,
@@ -118,7 +148,12 @@ static __device__ __forceinline__ void hrx_q5_k_mmqv_load_b(
         buf_b[buf_idx].qs[iqs_vec4 * 4 + j] = rhs->qs[inner * 8 + iqs_vec4 * 4 + j];
     }
     if (iqs_vec4 == 0) {
+#if HRX_Q5_K_Q8_1_B_CACHE_HALF_SCALE
+        buf_b[buf_idx].d = rhs->ds[inner * 2 + 0];
+        buf_b[buf_idx].s = rhs->ds[inner * 2 + 1];
+#else
         buf_b[buf_idx].d = __half2float(__ushort_as_half(rhs->ds[inner * 2 + 0]));
         buf_b[buf_idx].s = __half2float(__ushort_as_half(rhs->ds[inner * 2 + 1]));
+#endif
     }
 }

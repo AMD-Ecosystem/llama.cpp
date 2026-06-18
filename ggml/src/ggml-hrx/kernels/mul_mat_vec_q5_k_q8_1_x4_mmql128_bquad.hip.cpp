@@ -139,8 +139,8 @@ extern "C" __global__ void HRX_Q5_K_Q8_1_X4_MMQL128_EXPORT(
                             buf_b[buf_idx].qs[loadr_b * 4 + j] = 0;
                         }
                         if (loadr_b == 0) {
-                            buf_b[buf_idx].d = 0.0f;
-                            buf_b[buf_idx].s = 0.0f;
+                            buf_b[buf_idx].d = 0;
+                            buf_b[buf_idx].s = 0;
                         }
                     }
                 }
@@ -173,8 +173,8 @@ extern "C" __global__ void HRX_Q5_K_Q8_1_X4_MMQL128_EXPORT(
                                 static_cast<uint32_t>(cache_a_row.qs[iqs]), cache_b.qs[iqs]);
                         }
                         sum[(wsic * TN + cc) * TM + cr] +=
-                            cache_a_row.d * cache_b.d * static_cast<float>(qsum) -
-                            cache_a_row.min * cache_b.s;
+                            cache_a_row.d * hrx_q5_k_mmqv_b_cache_d(cache_b) * static_cast<float>(qsum) -
+                            cache_a_row.min * hrx_q5_k_mmqv_b_cache_s(cache_b);
                     }
                 }
             }
@@ -199,8 +199,8 @@ extern "C" __global__ void HRX_Q5_K_Q8_1_X4_MMQL128_EXPORT(
                                 static_cast<uint32_t>(cache_a[cr].qs[iqs]), cache_b.qs[iqs]);
                         }
                         sum[(wsic * TN + cc) * TM + cr] +=
-                            cache_a[cr].d * cache_b.d * static_cast<float>(qsum) -
-                            cache_a[cr].min * cache_b.s;
+                            cache_a[cr].d * hrx_q5_k_mmqv_b_cache_d(cache_b) * static_cast<float>(qsum) -
+                            cache_a[cr].min * hrx_q5_k_mmqv_b_cache_s(cache_b);
                     }
                 }
             }
@@ -230,9 +230,30 @@ extern "C" __global__ void HRX_Q5_K_Q8_1_X4_MMQL128_EXPORT(
                                     static_cast<uint32_t>(cache_a[cr].qs[iqs]), cache_b.qs[iqs]);
                             }
                             sum[((wsic + wi) * TN + cc) * TM + cr] +=
-                                cache_a[cr].d * cache_b.d * static_cast<float>(qsum) -
-                                cache_a[cr].min * cache_b.s;
+                                cache_a[cr].d * hrx_q5_k_mmqv_b_cache_d(cache_b) * static_cast<float>(qsum) -
+                                cache_a[cr].min * hrx_q5_k_mmqv_b_cache_s(cache_b);
                         }
+                    }
+                }
+            }
+#else
+            #pragma unroll
+            for (int wsic = 0; wsic < WNITER; ++wsic) {
+                #pragma unroll
+                for (int cc = 0; cc < TN; ++cc) {
+                    const hrx_q8_1_mmqv_b_cache cache_b =
+                        buf_b[k_step * BN + warp_c * WN + wsic * WSUBN + tiwc * TN + cc];
+                    #pragma unroll
+                    for (int cr = 0; cr < TM; ++cr) {
+                        int qsum = 0;
+                        #pragma unroll
+                        for (int iqs = 0; iqs < 8; ++iqs) {
+                            qsum += hrx_sudot4_q5_q8_1(
+                                static_cast<uint32_t>(cache_a[cr].qs[iqs]), cache_b.qs[iqs]);
+                        }
+                        sum[(wsic * TN + cc) * TM + cr] +=
+                            cache_a[cr].d * hrx_q5_k_mmqv_b_cache_d(cache_b) * static_cast<float>(qsum) -
+                            cache_a[cr].min * hrx_q5_k_mmqv_b_cache_s(cache_b);
                     }
                 }
             }

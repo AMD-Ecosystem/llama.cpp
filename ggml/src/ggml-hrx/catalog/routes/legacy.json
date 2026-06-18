@@ -6406,6 +6406,53 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bhalf_wg256_f32",
+    "family": "mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bhalf_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q5_k_q8_1_x4_mmql128_bhalf",
+    "artifact_id": "mul_mat_vec_q5_k_q8_1_x4_mmql128_bhalf_hsaco",
+    "export_name": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bhalf_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 100,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "dense_q5_k_prompt_x_q8_1_x4_mmql128_bhalf_probe"
+    },
+    "shape_guards": {
+      "k_multiple": 256,
+      "rows_multiple": 128,
+      "cols_min": 128,
+      "cols_multiple": 128,
+      "contiguous": true
+    },
+    "shape_notes": {
+      "prior_delta": "Q5_K packed-path RHS/cache-layout probe after B-pair, B-quad, and CR-major widened the pre-dot LDS window but regressed timing. It preserves the current MMQL128 BM128/BN128 packed-Q8_1 dataflow and dot issue order, but stores Q8_1 RHS d/s in LDS as original half payloads and converts after shared load, reducing packed RHS cache footprint and testing whether Q5-specific scale/sum layout is part of the remaining gap."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bhalf_wg256_f32",
+      "selector_gate": "GGML_HRX_ENABLE_Q5_K_Q8_1_X4_MMQL128_BHALF_PROMPT=1"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_model_ab",
+      "selection": "Opt-in Q5_K packed-Q8_1/x4 RHS half-scale cache-layout probe. It compiled through CMake/Ninja after adding the missing no-prefetch accumulation branch, emitted wave64 SGPR=49 VGPR=140 LDS=9728 with no spills and 512 v_dot4_i32_iu8 ops, and passed focused p33/p512/p513 CPU-reference gates. Route traces selected BHALF only on p512 full-tile rows, leaving p33 on rows2_cols8 and p513 on the existing MMQL tail path. Focused p512 sum improved only 1.10%, while same-binary Qwen2.5 Coder 7B Q5_K_M p512/fa1 model A/B regressed 455.164 -> 454.457 tok/s, so this is rejected for gfx1151 promotion."
+    },
+    "target_prefixes": [
+      "gfx1151"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bpair_wg256_f32",
     "family": "mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bpair_wg256",
     "op": "MUL_MAT",
