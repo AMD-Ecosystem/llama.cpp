@@ -553,6 +553,15 @@
       "reason": "The Q5_K packed-Q8_1/x4 CR issue-order probe preserved BM128/BN128/WG256/wave64/BK_STEP1 and changed only the inner dot issue order to consume one Q5 row cache across columns before advancing cr. It compiled through CMake/Ninja but spilled badly (wave64, SGPR=50, VGPR=192, LDS=10240, private_segment_fixed_size=452, vgpr_spill_count=135) while preserving 512 v_dot4_i32_iu8, 64 global_store_b32, and 2 barriers. Focused p33/p512/p513 CPU-reference gates passed; p512 selected CR for Qcur/ffn_out/ffn_gate, p33 stayed on rows2/MMQ64, and p513 fell back to current MMQL128 for tails. It is rejected because same-runner p512 focused timing regressed Qcur 1225.57 -> 3832.51 us, ffn_out 7453.69 -> 21017.01 us, and ffn_gate 7161.45 -> 19333.78 us. The issue-order axis increases live ranges/spills and should not be continued without a different B ownership/prefetch strategy."
     },
     {
+      "id": "q5_dense_prompt_wmma16_vk128_b64group_store_batch8_p33_p512_p513",
+      "date": "2026-06-18",
+      "route": "hrx_mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_store_batch8_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q5_K_WMMA16_VK128_PADDED_W64_B64GROUP_STORE_BATCH8_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q5-wmma-vk128-b64group-store-batch8-20260618/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q5_k_wmma16_vk128_padded_w64_b64group_store_batch8_wg256.hsaco",
+      "reason": "The Q5_K B64GROUP store-batch8 direct-WMMA probe preserved the closest rejected direct-F32 B64GROUP store-stage math/load schedule and changed the writeback staging granularity from one LDS stage plus two barriers per tile to one stage plus two barriers per eight tiles. This mechanically targeted the RADV low-barrier cooperative-store axis. It compiled through CMake/Ninja with wave64, SGPR=32, VGPR=214, LDS=36864, no spills, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 64 ds_load_u16_d16, 66 ds_store_b16, 64 global_store_b32, and 6 s_barrier. Focused p33/p512/p513 CPU-reference gates passed; p33 stayed on rows2, while p512 and p513 selected batch8 for all rows. It is rejected because same-runner focused timing regressed p512 Kcur 864.14 -> 1043.49 us, Qcur 1223.22 -> 2499.40 us, ffn_out 7229.01 -> 17649.52 us, ffn_gate 6903.14 -> 16915.11 us, and p513 Kcur 886.35 -> 960.72 us, Qcur 1585.01 -> 3389.07 us, ffn_out 9601.19 -> 23409.53 us, ffn_gate 8720.37 -> 20101.28 us. Lowering barriers from 34 to 6 is still not the Vulkan schedule without RADV's cooperative-matrix store/lane ownership and 192 buffer_store_b32 writeback shape."
+    },
+    {
       "id": "q8_q6_direct_wmma_rocwmma_header_probe_wave32_default_store",
       "date": "2026-06-18",
       "route": "not implemented",

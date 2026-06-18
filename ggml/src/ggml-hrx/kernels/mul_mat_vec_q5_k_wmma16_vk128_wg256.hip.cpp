@@ -54,6 +54,10 @@
 #define HRX_Q5_K_WMMA_VK128_STORE_STAGE 0
 #endif
 
+#ifndef HRX_Q5_K_WMMA_VK128_STORE_STAGE_BATCH_TILES
+#define HRX_Q5_K_WMMA_VK128_STORE_STAGE_BATCH_TILES 0
+#endif
+
 struct hrx_block_q5_K_wmma_vk128_lhs {
     unsigned short d;
     unsigned short dmin;
@@ -466,6 +470,53 @@ static __device__ __forceinline__ void hrx_q5_k_wmma_vk128_store_acc_f16_row_maj
     __syncthreads();
 }
 
+static __device__ __forceinline__ void hrx_q5_k_wmma_vk128_stage_acc_f16_row_major_w64(
+        hrx_q5_k_wmma_vk128_half8_vec acc,
+        unsigned int lane,
+        unsigned int wave,
+        int batch_slot,
+        _Float16 * sh_store) {
+    constexpr int TILE_STRIDE = 16 * 16;
+    constexpr int BATCH_TILES = HRX_Q5_K_WMMA_VK128_STORE_STAGE_BATCH_TILES;
+    const int row_lane = static_cast<int>(lane >> 4);
+    const int col_lane = static_cast<int>(lane & 15u);
+    const int tile_base = (static_cast<int>(wave) * BATCH_TILES + batch_slot) * TILE_STRIDE;
+    const int col_major_base = tile_base + col_lane * 16 + row_lane;
+#pragma unroll
+    for (int reg = 0; reg < 4; ++reg) {
+        sh_store[col_major_base + reg * 4] = acc[reg * 2 + HRX_Q5_K_WMMA_VK128_W64_OPSEL];
+    }
+}
+
+static __device__ __forceinline__ void hrx_q5_k_wmma_vk128_store_staged_acc_f16_row_major_w64(
+        float * dst,
+        long long rows_stride,
+        long long row0,
+        long long col0,
+        long long rows,
+        long long cols,
+        unsigned int lane,
+        unsigned int wave,
+        int batch_slot,
+        _Float16 * sh_store) {
+    constexpr int TILE_STRIDE = 16 * 16;
+    constexpr int BATCH_TILES = HRX_Q5_K_WMMA_VK128_STORE_STAGE_BATCH_TILES;
+    const int row_lane = static_cast<int>(lane >> 4);
+    const int col_lane = static_cast<int>(lane & 15u);
+    const int tile_base = (static_cast<int>(wave) * BATCH_TILES + batch_slot) * TILE_STRIDE;
+    const int col_major_base = tile_base + col_lane * 16 + row_lane;
+    const long long col = col0 + static_cast<long long>(col_lane);
+    if (col < cols) {
+#pragma unroll
+        for (int reg = 0; reg < 4; ++reg) {
+            const long long row = row0 + static_cast<long long>(row_lane + reg * 4);
+            if (row < rows) {
+                dst[col * rows_stride + row] = static_cast<float>(sh_store[col_major_base + reg * 4]);
+            }
+        }
+    }
+}
+
 static __device__ __forceinline__ void hrx_q5_k_wmma_vk128_tile_map(
         int wave,
         int tile_iter,
@@ -538,7 +589,11 @@ void HRX_Q5_K_WMMA_VK128_EXPORT(
     __shared__ _Float16 sh_a[BM * SHARED_STRIDE];
     __shared__ _Float16 sh_b[BN * SHARED_STRIDE];
 #if HRX_Q5_K_WMMA_VK128_STORE_STAGE
+#if HRX_Q5_K_WMMA_VK128_STORE_STAGE_BATCH_TILES > 0
+    __shared__ _Float16 sh_store[WAVE_COUNT * HRX_Q5_K_WMMA_VK128_STORE_STAGE_BATCH_TILES * 16 * 16];
+#else
     __shared__ _Float16 sh_store[WAVE_COUNT * 16 * 16];
+#endif
 #endif
 
     const long long blocks_per_row = k / 256;
@@ -665,6 +720,46 @@ void HRX_Q5_K_WMMA_VK128_EXPORT(
         __syncthreads();
     }
 
+#if HRX_Q5_K_WMMA_VK128_W64 && HRX_Q5_K_WMMA_VK128_STORE_STAGE && HRX_Q5_K_WMMA_VK128_STORE_STAGE_BATCH_TILES > 0
+    constexpr int STORE_BATCH_TILES = HRX_Q5_K_WMMA_VK128_STORE_STAGE_BATCH_TILES;
+#pragma unroll
+    for (int batch_start = 0; batch_start < TILES_PER_WAVE; batch_start += STORE_BATCH_TILES) {
+#pragma unroll
+        for (int batch_slot = 0; batch_slot < STORE_BATCH_TILES; ++batch_slot) {
+            const int tile_iter = batch_start + batch_slot;
+            if (tile_iter < TILES_PER_WAVE) {
+                hrx_q5_k_wmma_vk128_stage_acc_f16_row_major_w64(
+                    acc[tile_iter],
+                    lane,
+                    wave,
+                    batch_slot,
+                    sh_store);
+            }
+        }
+        __syncthreads();
+#pragma unroll
+        for (int batch_slot = 0; batch_slot < STORE_BATCH_TILES; ++batch_slot) {
+            const int tile_iter = batch_start + batch_slot;
+            if (tile_iter < TILES_PER_WAVE) {
+                int row_tile = 0;
+                int col_tile = 0;
+                hrx_q5_k_wmma_vk128_tile_map(static_cast<int>(wave), tile_iter, &row_tile, &col_tile);
+                hrx_q5_k_wmma_vk128_store_staged_acc_f16_row_major_w64(
+                    dst,
+                    rows,
+                    row_base + static_cast<long long>(row_tile * 16),
+                    col_base + static_cast<long long>(col_tile * 16),
+                    rows,
+                    cols,
+                    lane,
+                    wave,
+                    batch_slot,
+                    sh_store);
+            }
+        }
+        __syncthreads();
+    }
+#else
 #pragma unroll
     for (int tile_iter = 0; tile_iter < TILES_PER_WAVE; ++tile_iter) {
         int row_tile = 0;
@@ -730,4 +825,5 @@ void HRX_Q5_K_WMMA_VK128_EXPORT(
             lane);
 #endif
     }
+#endif
 }
