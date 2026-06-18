@@ -140,9 +140,9 @@ def classify(opcode):
         return "vmem_other"
     if opcode.startswith(("s_load", "s_buffer_load")):
         return "smem_load"
-    if opcode.startswith("ds_read"):
+    if opcode.startswith(("ds_read", "ds_load")):
         return "lds_read"
-    if opcode.startswith("ds_write"):
+    if opcode.startswith(("ds_write", "ds_store")):
         return "lds_write"
     if opcode.startswith("s_barrier"):
         return "barrier"
@@ -174,6 +174,58 @@ def summarize(name, opcodes, resources=None, metadata=None):
             if key.startswith(("v_wmma", "v_mfma", "v_dot", "global_", "buffer_", "flat_", "ds_", "s_barrier", "s_waitcnt"))
         },
         "top_opcodes": dict(opcode_counts.most_common(30)),
+    }
+
+
+def normalize_resources(summary):
+    resources = summary.get("resources", {})
+    return {
+        "sgpr": resources.get("SGPRs", resources.get("sgpr_count")),
+        "vgpr": resources.get("VGPRs", resources.get("vgpr_count")),
+        "lds_bytes": resources.get("LDS size", resources.get("group_segment_fixed_size")),
+        "scratch_bytes": resources.get("Scratch size", resources.get("private_segment_fixed_size")),
+        "sgpr_spills": resources.get("Spilled SGPRs", resources.get("sgpr_spill_count")),
+        "vgpr_spills": resources.get("Spilled VGPRs", resources.get("vgpr_spill_count")),
+        "wavefront_size": resources.get("wavefront_size"),
+        "instructions": resources.get("Instructions", summary.get("instruction_count")),
+    }
+
+
+def compute_deltas(lhs_summary, rhs_summary):
+    lhs_opcodes = lhs_summary.get("interesting_opcodes", {})
+    rhs_opcodes = rhs_summary.get("interesting_opcodes", {})
+    opcode_deltas = []
+    for opcode in sorted(set(lhs_opcodes) | set(rhs_opcodes)):
+        lhs_count = lhs_opcodes.get(opcode, 0)
+        rhs_count = rhs_opcodes.get(opcode, 0)
+        if lhs_count != rhs_count:
+            opcode_deltas.append({
+                "opcode": opcode,
+                "lhs": lhs_count,
+                "rhs": rhs_count,
+                "rhs_minus_lhs": rhs_count - lhs_count,
+            })
+
+    lhs_resources = normalize_resources(lhs_summary)
+    rhs_resources = normalize_resources(rhs_summary)
+    resource_deltas = []
+    for key in sorted(set(lhs_resources) | set(rhs_resources)):
+        lhs_value = lhs_resources.get(key)
+        rhs_value = rhs_resources.get(key)
+        if lhs_value != rhs_value:
+            delta = None
+            if isinstance(lhs_value, int) and isinstance(rhs_value, int):
+                delta = rhs_value - lhs_value
+            resource_deltas.append({
+                "resource": key,
+                "lhs": lhs_value,
+                "rhs": rhs_value,
+                "rhs_minus_lhs": delta,
+            })
+
+    return {
+        "resources": resource_deltas,
+        "interesting_opcodes": opcode_deltas,
     }
 
 
@@ -210,6 +262,12 @@ def write_markdown(path, payload):
     all_classes = sorted(set(payload[lhs_key]["classes"]) | set(payload[rhs_key]["classes"]))
     for cls in all_classes:
         lines.append(f"| class `{cls}` | {payload[lhs_key]['classes'].get(cls, 0)} | {payload[rhs_key]['classes'].get(cls, 0)} |")
+    lines += ["", "### Normalized Resources", "", f"| Resource | {lhs_label} | {rhs_label} | Delta |", "| --- | ---: | ---: | ---: |"]
+    for item in payload.get("delta", {}).get("resources", []):
+        lines.append(f"| `{item['resource']}` | `{item['lhs']}` | `{item['rhs']}` | `{item['rhs_minus_lhs']}` |")
+    lines += ["", "### Interesting Opcodes", "", f"| Opcode | {lhs_label} | {rhs_label} | Delta |", "| --- | ---: | ---: | ---: |"]
+    for item in payload.get("delta", {}).get("interesting_opcodes", []):
+        lines.append(f"| `{item['opcode']}` | {item['lhs']} | {item['rhs']} | {item['rhs_minus_lhs']} |")
     pathlib.Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -256,13 +314,17 @@ def main():
         rhs_label = "OTHER"
     rhs_opcodes = extract_instructions(rhs_lines)
 
+    lhs_summary = summarize(args.radv_isa.name, radv_opcodes, radv_resources, radv_metadata)
+    rhs_summary = summarize(rhs_name, rhs_opcodes, rhs_resources)
+
     payload = {
         "lhs_key": "radv",
         "rhs_key": "rhs",
         "lhs_label": "RADV",
         "rhs_label": rhs_label,
-        "radv": summarize(args.radv_isa.name, radv_opcodes, radv_resources, radv_metadata),
-        "rhs": summarize(rhs_name, rhs_opcodes, rhs_resources),
+        "radv": lhs_summary,
+        "rhs": rhs_summary,
+        "delta": compute_deltas(lhs_summary, rhs_summary),
     }
 
     text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
