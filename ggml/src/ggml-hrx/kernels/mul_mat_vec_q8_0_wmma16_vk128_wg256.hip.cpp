@@ -534,6 +534,8 @@ static __device__ __forceinline__ void hrx_q8_0_wmma_vk128_store_acc_f16_row_maj
         long long col0,
         hrx_q8_0_wmma_vk128_half8_vec acc,
         unsigned int lane) {
+    // Diagnostic only. gfx11 wave64 OPSEL high/low halves map to the same D
+    // coordinates; row_hi is not a valid second row band for correctness.
     const long long row_lane = static_cast<long long>(lane >> 4);
     const long long col = col0 + static_cast<long long>(lane & 15u);
 #pragma unroll
@@ -711,6 +713,8 @@ static __device__ __forceinline__ void hrx_q8_0_wmma_vk128_store_acc_f16_row_maj
         unsigned int lane,
         unsigned int wave,
         hrx_q8_0_wmma_vk128_lds_volatile_half_ptr sh_store) {
+    // Diagnostic only. The high-half write is useful for static RADV store
+    // surface experiments, but does not represent another 16x16 output band.
     constexpr int TILE_STRIDE = 16 * 16;
     const int row_lane = static_cast<int>(lane >> 4);
     const int col_lane = static_cast<int>(lane & 15u);
