@@ -20,6 +20,14 @@
       "reason": "The Q5_K Vulkan-oracle direct-F32 WMMA probe cloned the Q4/Q8 VK128 padded wave64 f16acc skeleton for the dominant RADV pipeline matmul_q5_k_f32_f16acc_aligned_l. It compiled through CMake/Ninja, selected through the direct MUL_MAT path after a Q8_1-selector ABI bug was fixed, emitted 32 static v_wmma_f16_16x16x16_f16 sites, and passed focused CPU-reference p512 plus p513 tail rows; p33 correctly stayed on the existing narrow rows2 route. It is rejected for production promotion because same-runner focused p512 timing regressed versus the current packed Q8_1 MMQL128 route on all Q5 rows: Kcur 866.67 -> 971.27 us, Qcur 1215.98 -> 2476.18 us, ffn_out 7191.96 -> 17643.78 us, and ffn_gate 6332.38 -> 14489.87 us. The ISA comparison also shows it is still not the RADV schedule: 20480 versus 22528 LDS bytes, 32 ds_load_b128 versus RADV's 64 ds_load_b64 plus 128 ds_load_u16_d16, and 64 versus 192 stores."
     },
     {
+      "id": "q5_dense_prompt_wmma16_vk128_b64group_p33_p512_p513",
+      "date": "2026-06-18",
+      "route": "hrx_mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q5_K_WMMA16_VK128_PADDED_W64_B64GROUP_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q5-wmma-vk128-b64group-focused-20260618-054536/",
+      "reason": "The grouped ds_read_b64 Q5_K direct-F32 WMMA probe preserves the rejected VK128 padded wave64 route shape and changes only the fragment-read window to load four A fragments and four B fragments for each k-half before issuing each 4x4 WMMA block. It compiled through CMake/Ninja with wave64, SGPR=32, VGPR=199, LDS=20480, no spills, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 0 ds_load_b128, 2 barriers, and 64 global_store_b32. This mechanically matches the RADV Q5_K oracle on the 64 ds_load_b64 and 32 WMMA axes, but still misses RADV's 22528-byte LDS footprint, 128 ds_load_u16_d16, 128 LDS b16 stores, and 192 buffer stores. Focused CPU-reference gates passed for p33, p512, and p513; p33 correctly stayed on the existing narrow rows2 route while p512 and p513 selected the candidate. It is rejected for production promotion because same-runner focused timing regressed every p512 and p513 row versus current routing: p512 Kcur 887.78 -> 1046.75 us, Qcur 1232.95 -> 2471.40 us, ffn_out 7308.67 -> 17817.09 us, ffn_gate 6662.22 -> 16905.31 us; p513 Kcur 891.04 -> 964.61 us, Qcur 1594.35 -> 3375.88 us, ffn_out 9362.91 -> 23583.29 us, ffn_gate 8558.62 -> 20055.20 us. Matching RADV's ds_load_b64 count alone is insufficient; the next Q5 direct-WMMA attempt must address the remaining LDS-store/writeback/lane-ownership deltas together or return to the packed-Q8_1 path."
+    },
+    {
       "id": "existing_q4_mul_mat_id_p512",
       "date": "2026-06-17",
       "route": "hrx_mul_mat_id_q4_k_wg64_f32",

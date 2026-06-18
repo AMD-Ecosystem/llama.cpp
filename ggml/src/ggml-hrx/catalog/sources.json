@@ -212,6 +212,9 @@
   "mul_mat_vec_q5_k_wmma16_vk128_padded_w64_wg256": {
     "path": "mul_mat_vec_q5_k_wmma16_vk128_padded_w64_wg256.hip.cpp"
   },
+  "mul_mat_vec_q5_k_wmma16_vk128_padded_w64_b64group_wg256": {
+    "path": "mul_mat_vec_q5_k_wmma16_vk128_padded_w64_b64group_wg256.hip.cpp"
+  },
   "mul_mat_vec_q6_k": {
     "path": "mul_mat_vec_q6_k.hip.cpp"
   },
