@@ -415,6 +415,15 @@
       "reason": "The Q8_0 B64GROUP nowait pack-stage compile-contract probe targeted the first-WMMA issue-window delta directly. It preserves the selected-half pack-stage buffer-store control route but removes the per-ds_read_b64 helper wait and relies on the existing explicit wait before WMMA. It compiled through CMake/Ninja with wave64, SGPR=28, VGPR=196, LDS=20480, no spills, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 128 buffer_store_b32, 2 barriers, only 8 s_waitcnt, and 44 s_waitcnt_depctr. The codegen changed, but the first-WMMA score still rejects it as a RADV clone: RADV has 59 scored pre-WMMA ds_load_b64 events and final lgkmcnt(51), while this route has 24 scored pre-WMMA ds_load_b64 events, final lgkmcnt(0), and only 16 WMMA in the scored window. It also still misses RADV's 22528-byte LDS footprint, 128 ds_load_u16_d16, 128 ds_store_b16, and 192 buffer_store_b32. Reject before runtime; removing helper waits alone is not enough to recover RADV's outstanding LDS-load schedule."
     },
     {
+      "id": "q8_0_prompt_wmma16_vk128_b64group_nowait_namedfrag_packstage_bufferstore_compile",
+      "date": "2026-06-18",
+      "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_nowait_namedfrag_packstage_bufferstore_f16acc_wg256_f32",
+      "env": "not wired into runtime selection",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-nowait-namedfrag-packstage-score-20260618-144436/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_nowait_namedfrag_packstage_bufferstore_wg256.hsaco",
+      "reason": "The Q8_0 B64GROUP nowait named-fragment pack-stage compile-contract probe combined the no-wait ds_read_b64 helpers with named A/B fragment variables, testing whether a different source lifetime spelling would keep more LDS loads outstanding before the first WMMA issue window. It compiled through CMake/Ninja with wave64, SGPR=28, VGPR=196, LDS=20480, no spills, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 128 buffer_store_b32, 2 barriers, 8 s_waitcnt, and 44 s_waitcnt_depctr. The first-WMMA score is effectively unchanged from the nowait indexed route and still far from RADV: RADV has 59 scored pre-WMMA ds_load_b64 events, 59 loads immediately before the final pre-WMMA wait, final lgkmcnt(51), and 22 WMMA in-window; this route has 24, 0, lgkmcnt(0), and 16. It also still misses RADV's 22528-byte LDS footprint, 128 ds_load_u16_d16, 128 ds_store_b16, and 192 buffer_store_b32. Reject before runtime; named fragment spelling does not recover the RADV outstanding-load schedule."
+    },
+    {
       "id": "q8_0_prompt_wmma16_vk128_b64group_fullpair_bufferstore_compile",
       "date": "2026-06-18",
       "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_fullpair_bufferstore_f16acc_wg256_f32",
