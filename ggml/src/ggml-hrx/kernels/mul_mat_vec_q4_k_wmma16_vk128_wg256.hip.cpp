@@ -294,7 +294,7 @@ void HRX_Q4_K_WMMA_VK128_EXPORT(
 
     const unsigned int tid = __builtin_amdgcn_workitem_id_x();
     const unsigned int wave = tid / WAVE;
-    const unsigned int lane = tid & 31u;
+    const unsigned int lane = tid & static_cast<unsigned int>(WAVE - 1);
     const long long row_base = static_cast<long long>(__builtin_amdgcn_workgroup_id_x()) * BM;
     const long long col_base = static_cast<long long>(__builtin_amdgcn_workgroup_id_y()) * BN;
     if (row_base >= rows || col_base >= cols) {
