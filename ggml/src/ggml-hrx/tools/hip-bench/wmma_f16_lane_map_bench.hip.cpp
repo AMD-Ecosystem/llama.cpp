@@ -20,6 +20,8 @@ typedef _Float16 wmma_lane_map_half8_vec __attribute__((ext_vector_type(8)));
 static constexpr unsigned int HRX_WMMA_LANE_MAP_LANES = 64;
 static constexpr unsigned int HRX_WMMA_LANE_MAP_ACC_SLOTS = 8;
 static constexpr unsigned int HRX_WMMA_LANE_MAP_OPSELS = 2;
+static constexpr unsigned int HRX_WMMA_LANE_MAP_D_ROWS = 16;
+static constexpr unsigned int HRX_WMMA_LANE_MAP_D_COLS = 16;
 static constexpr float HRX_WMMA_LANE_MAP_DOT = 16.0f;
 
 static __host__ __device__ __forceinline__ unsigned int wmma_lane_map_index(
@@ -33,6 +35,18 @@ static __host__ __device__ __forceinline__ float wmma_lane_map_sentinel(
         unsigned int lane,
         unsigned int slot) {
     return -static_cast<float>((lane + 1u) * 16u + slot);
+}
+
+static __host__ __device__ __forceinline__ unsigned int wmma_lane_map_d_row(
+        unsigned int lane,
+        unsigned int slot) {
+    // AMD Matrix Instruction Calculator, gfx1151/RDNA3, wave64:
+    // D[i][j] GPR=floor(i/4), lane=((16*i)%64)+j.
+    return ((slot >> 1u) * 4u) + (lane >> 4u);
+}
+
+static __host__ __device__ __forceinline__ unsigned int wmma_lane_map_d_col(unsigned int lane) {
+    return lane & 15u;
 }
 
 template <bool op_sel>
@@ -91,6 +105,8 @@ static void compare_outputs(const std::vector<float> & actual) {
     size_t bad_count = 0;
     size_t first_bad = 0;
     float first_expected = 0.0f;
+    unsigned int coord_counts[HRX_WMMA_LANE_MAP_OPSELS][HRX_WMMA_LANE_MAP_D_ROWS][HRX_WMMA_LANE_MAP_D_COLS] = {};
+    unsigned int coord_bad = 0;
 
     for (unsigned int opsel = 0; opsel < HRX_WMMA_LANE_MAP_OPSELS; ++opsel) {
         for (unsigned int lane = 0; lane < HRX_WMMA_LANE_MAP_LANES; ++lane) {
@@ -99,12 +115,31 @@ static void compare_outputs(const std::vector<float> & actual) {
                 const bool selected = (slot & 1u) == opsel;
                 const float expected = selected ? sentinel + HRX_WMMA_LANE_MAP_DOT : sentinel;
                 const size_t idx = wmma_lane_map_index(opsel, lane, slot);
+                if (selected) {
+                    const unsigned int row = wmma_lane_map_d_row(lane, slot);
+                    const unsigned int col = wmma_lane_map_d_col(lane);
+                    if (row < HRX_WMMA_LANE_MAP_D_ROWS && col < HRX_WMMA_LANE_MAP_D_COLS) {
+                        ++coord_counts[opsel][row][col];
+                    } else {
+                        ++coord_bad;
+                    }
+                }
                 if (!close_enough(actual[idx], expected)) {
                     if (bad_count == 0) {
                         first_bad = idx;
                         first_expected = expected;
                     }
                     ++bad_count;
+                }
+            }
+        }
+    }
+
+    for (unsigned int opsel = 0; opsel < HRX_WMMA_LANE_MAP_OPSELS; ++opsel) {
+        for (unsigned int row = 0; row < HRX_WMMA_LANE_MAP_D_ROWS; ++row) {
+            for (unsigned int col = 0; col < HRX_WMMA_LANE_MAP_D_COLS; ++col) {
+                if (coord_counts[opsel][row][col] != 1u) {
+                    ++coord_bad;
                 }
             }
         }
@@ -117,9 +152,10 @@ static void compare_outputs(const std::vector<float> & actual) {
             static_cast<double>(actual[first_bad]),
             static_cast<double>(first_expected));
     }
+    std::printf(" coord_bad=%u", coord_bad);
     std::printf("\n");
 
-    if (bad_count != 0) {
+    if (bad_count != 0 || coord_bad != 0) {
         std::exit(1);
     }
 }
@@ -145,6 +181,36 @@ static void print_summary(const std::vector<float> & actual) {
     }
 }
 
+static void print_coord_map(const std::vector<float> & actual) {
+    std::printf("coord_map_source=amd-matrix-instruction-calculator arch=gfx1151 instruction=v_wmma_f16_16x16x16_f16 wavefront=64 D-matrix matrix-layout\n");
+    std::printf("coord_map_note=opsel0_updates_low_half_even_slots opsel4_updates_high_half_odd_slots same_D_coordinates\n");
+    std::printf("coord_map_csv_begin\n");
+    std::printf("opsel_bit,opsel_field,lane,slot,vgpr,half,row,col,actual,expected\n");
+    for (unsigned int opsel = 0; opsel < HRX_WMMA_LANE_MAP_OPSELS; ++opsel) {
+        for (unsigned int lane = 0; lane < HRX_WMMA_LANE_MAP_LANES; ++lane) {
+            for (unsigned int slot = 0; slot < HRX_WMMA_LANE_MAP_ACC_SLOTS; ++slot) {
+                if ((slot & 1u) != opsel) {
+                    continue;
+                }
+                const size_t idx = wmma_lane_map_index(opsel, lane, slot);
+                const float expected = wmma_lane_map_sentinel(lane, slot) + HRX_WMMA_LANE_MAP_DOT;
+                std::printf("%u,%u,%u,%u,%u,%s,%u,%u,%.6f,%.6f\n",
+                    opsel,
+                    opsel == 0u ? 0u : 4u,
+                    lane,
+                    slot,
+                    slot >> 1u,
+                    (slot & 1u) == 0u ? "lo" : "hi",
+                    wmma_lane_map_d_row(lane, slot),
+                    wmma_lane_map_d_col(lane),
+                    static_cast<double>(actual[idx]),
+                    static_cast<double>(expected));
+            }
+        }
+    }
+    std::printf("coord_map_csv_end\n");
+}
+
 int main() {
     const size_t count =
         HRX_WMMA_LANE_MAP_OPSELS * HRX_WMMA_LANE_MAP_LANES * HRX_WMMA_LANE_MAP_ACC_SLOTS;
@@ -163,6 +229,7 @@ int main() {
         HRX_WMMA_LANE_MAP_LANES,
         HRX_WMMA_LANE_MAP_ACC_SLOTS);
     print_summary(h_out);
+    print_coord_map(h_out);
     compare_outputs(h_out);
     return 0;
 }
