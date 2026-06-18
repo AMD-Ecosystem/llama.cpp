@@ -6576,8 +6576,8 @@
       "legacy_export": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x96_wg256_f32"
     },
     "evidence_summary": {
-      "status": "rejected_gfx1151_diagnostic",
-      "selection": "BM64/BN96 Q8_0 prompt probe that keeps the accepted BM64 row ownership and brackets column widening between the accepted BN64 route and the spilling BN128 route. It compiled without spills and passed p512/p33/p513 focused correctness, but p512 timing was mixed versus accepted BN64 and the p513 perf trace did not actually select BN96, so this is not production evidence."
+      "status": "accepted_gfx1151_opt_in_candidate",
+      "selection": "BM64/BN96 Q8_0 prompt probe that keeps the accepted BM64 row ownership and brackets column widening between the accepted BN64 route and the spilling BN128 route. It compiled without spills and passed p512/p33/p513 focused correctness. Production use is accepted only as an opt-in paired policy with BN64 fallback enabled: BN96 handles production-width p512/p513 prompt rows while BN64 keeps the p33 narrow route."
     },
     "target_prefixes": [
       "gfx11"

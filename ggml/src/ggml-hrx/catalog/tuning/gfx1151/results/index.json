@@ -187,6 +187,18 @@
       "date": "2026-06-17",
       "artifact": "cache/hrxv1/gfx1151/q8_0-wmma16-f16acc-wg256-focused-20260617-204624/",
       "status": "rejected_focused_perf_regression"
+    },
+    {
+      "id": "q8_0_prompt_mmq64x96_focused_p33_p512_p513",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x96-focused-20260617-214000/",
+      "status": "accepted_opt_in_candidate_focused"
+    },
+    {
+      "id": "q8_0_prompt_mmq64x96_model_p33_p512_p513",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x96-model-ab-20260617-213256/",
+      "status": "accepted_opt_in_candidate_model_with_mmq64x64_fallback"
     }
   ]
 }

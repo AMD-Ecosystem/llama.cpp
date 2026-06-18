@@ -178,6 +178,33 @@
         "This should remain opt-in until target-specific policy plumbing can prefer BM64/BN64 for the winning prompt domain without perturbing gfx1100",
         "p512 and p513 still reach only about 0.45x same-run Vulkan, so further Q8_0 schedule work must mine the remaining Vulkan dense prompt gap"
       ]
+    },
+    {
+      "id": "q8_0_prompt_mmq64x96_with_mmq64x64_fallback_llama3_1_q8",
+      "date": "2026-06-17",
+      "status": "accepted_opt_in_candidate",
+      "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x96_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X96_PROMPT=1 with GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X64_PROMPT=1 as the narrow fallback",
+      "shape_guard": "Q8_0 MUL_MAT prompt, k >= 2048, rows >= 1024, cols >= 64 for BN96, k % 128 == 0, rows % 128 == 0, contiguous tensors, Q8_1 x4 quantize provider available; keep BN64 enabled for p33/narrow prompt",
+      "focused_artifacts": [
+        "cache/hrxv1/gfx1151/q8_0-mmq64x96-focused-20260617-214000/"
+      ],
+      "model_artifacts": [
+        "cache/hrxv1/gfx1151/q8_0-mmq64x96-model-ab-20260617-213256/"
+      ],
+      "compile_evidence": {
+        "hsaco": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_mmq64x96.hsaco",
+        "wavefront_size": 32,
+        "vgpr_count": 181,
+        "sgpr_count": 26,
+        "lds_bytes": 3264,
+        "spill_count": 0
+      },
+      "promotion_blockers": [
+        "Only the Llama 3.1 8B Q8_0 downloaded basket row has Q8_0 coverage so far",
+        "BN96 must not be enabled without the BN64 fallback because p33 then falls back to the older 128x32 route and regresses",
+        "p512 and p513 improve over BN64 but remain around half of same-run Vulkan, so the next Q8_0 move still needs a more Vulkan-like cooperative/packed dataflow"
+      ]
     }
   ]
 }
