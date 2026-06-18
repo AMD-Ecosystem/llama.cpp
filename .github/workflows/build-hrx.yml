@@ -111,7 +111,7 @@ jobs:
           evict-old-files: 1d
           save: ${{ github.event_name == 'pull_request' }}
 
-      - name: Build HRX2
+      - name: Build HRX
         run: |
           cd "${DEVWS_DIR}"
           source .envrc
@@ -121,44 +121,40 @@ jobs:
             --action hrx \
             --action loom \
             --action rocm-health \
-            --action llama-hrx2 \
+            --action llama-hrx \
             --skip-source-branch-check \
             --gfx-targets auto \
             --jobs "$(nproc)"
 
-      - name: Verify HRX2 build configuration
-        run: |
-          grep -F 'GGML_HRX2:BOOL=ON' "${DEVWS_DIR}/build/llama-hrx2/CMakeCache.txt"
-
-      - name: Run sample MUL_MAT correctness config on HRX2
+      - name: Run sample MUL_MAT correctness config on HRX
         run: |
           cd "${DEVWS_DIR}"
           source .envrc
           mkdir -p "${GITHUB_WORKSPACE}/benchmark-results"
           "${DEVWS_DIR}/ci/tools/run-op-test.py" \
-            --test-backend-ops "${DEVWS_DIR}/build/llama-hrx2/bin/test-backend-ops" \
+            --test-backend-ops "${DEVWS_DIR}/build/llama-hrx/bin/test-backend-ops" \
             --test-file "${DEVWS_DIR}/ci/benchmark-configs/test/mul_mat_f16.txt" \
             --op MUL_MAT \
-            --backend HRX20 \
-            --output "${GITHUB_WORKSPACE}/benchmark-results/sample-mul-mat-f16-hrx2-test.jsonl" \
-            --raw-output "${GITHUB_WORKSPACE}/benchmark-results/sample-mul-mat-f16-hrx2-test.txt"
+            --backend HRX0 \
+            --output "${GITHUB_WORKSPACE}/benchmark-results/sample-mul-mat-f16-hrx-test.jsonl" \
+            --raw-output "${GITHUB_WORKSPACE}/benchmark-results/sample-mul-mat-f16-hrx-test.txt"
 
-      - name: Run sample MUL_MAT benchmark config on HRX2
+      - name: Run sample MUL_MAT benchmark config on HRX
         run: |
           cd "${DEVWS_DIR}"
           source .envrc
           mkdir -p "${GITHUB_WORKSPACE}/benchmark-results"
           "${DEVWS_DIR}/ci/tools/run-op-perf.py" \
-            --test-backend-ops "${DEVWS_DIR}/build/llama-hrx2/bin/test-backend-ops" \
+            --test-backend-ops "${DEVWS_DIR}/build/llama-hrx/bin/test-backend-ops" \
             --test-file "${DEVWS_DIR}/ci/benchmark-configs/test/mul_mat_f16.txt" \
             --op MUL_MAT \
-            --backend HRX20 \
-            --output "${GITHUB_WORKSPACE}/benchmark-results/sample-mul-mat-f16-hrx2-perf.jsonl" \
-            --raw-output "${GITHUB_WORKSPACE}/benchmark-results/sample-mul-mat-f16-hrx2-perf.txt"
+            --backend HRX0 \
+            --output "${GITHUB_WORKSPACE}/benchmark-results/sample-mul-mat-f16-hrx-perf.jsonl" \
+            --raw-output "${GITHUB_WORKSPACE}/benchmark-results/sample-mul-mat-f16-hrx-perf.txt"
 
-      - name: Upload HRX2 benchmark results
+      - name: Upload HRX benchmark results
         uses: actions/upload-artifact@v5
         with:
-          name: hrx2-benchmark-results-${{ matrix.name }}
+          name: hrx-benchmark-results-${{ matrix.name }}
           path: benchmark-results/
           if-no-files-found: error
