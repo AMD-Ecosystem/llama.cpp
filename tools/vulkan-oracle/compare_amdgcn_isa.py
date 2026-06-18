@@ -114,8 +114,12 @@ def summarize_isa_events(events):
                 "store_ops": sum(count for op, count in counts.items() if op.startswith(STORE_PREFIXES)),
             })
 
+    hot_prefixes = ("v_wmma", "v_mfma", "v_dot")
     first_wmma_index = next(
         (index for index, event in enumerate(events) if event["opcode"].startswith(("v_wmma", "v_mfma"))),
+        None)
+    first_hot_index = next(
+        (index for index, event in enumerate(events) if event["opcode"].startswith(hot_prefixes)),
         None)
     if first_wmma_index is None:
         pre_wmma = []
@@ -123,6 +127,14 @@ def summarize_isa_events(events):
     else:
         pre_wmma = events[max(0, first_wmma_index - 80):first_wmma_index]
         wmma_window = events[max(0, first_wmma_index - 16):min(len(events), first_wmma_index + 40)]
+    if first_hot_index is None:
+        pre_hot = []
+        hot_window = []
+        hot_opcode = None
+    else:
+        pre_hot = events[max(0, first_hot_index - 96):first_hot_index]
+        hot_window = events[max(0, first_hot_index - 24):min(len(events), first_hot_index + 64)]
+        hot_opcode = events[first_hot_index]["opcode"]
 
     lds_load_offsets = collections.defaultdict(list)
     for event in pre_wmma:
@@ -132,6 +144,7 @@ def summarize_isa_events(events):
         lds_load_offsets[base].append(event["offsets"].get("offset", 0))
 
     wmma_score = score_wmma_window(pre_wmma, wmma_window)
+    hot_score = score_hot_op_window(pre_hot, hot_window, hot_prefixes)
 
     store_windows = []
     seen_store_lines = set()
@@ -156,6 +169,9 @@ def summarize_isa_events(events):
         "pre_wmma_ds_load_b64_offsets": {
             base: values for base, values in sorted(lds_load_offsets.items())
         },
+        "hot_op_score": hot_score,
+        "hot_op_window": hot_window,
+        "hot_opcode": hot_opcode,
         "wmma_score": wmma_score,
         "wmma_window": wmma_window,
     }
@@ -209,6 +225,65 @@ def score_wmma_window(pre_wmma, wmma_window):
         "final_pre_wmma_lgkmcnt": final_wait_lgkmcnt,
         "wmma_in_window": wmma_seen,
         "waitcnt_after_first_wmma": [value for value in waits_between_wmma if value is not None],
+    }
+
+
+def is_vmem_load(opcode):
+    return opcode.startswith(("global_load", "buffer_load", "flat_load"))
+
+
+def is_lds_load(opcode):
+    return opcode.startswith(("ds_load", "ds_read"))
+
+
+def score_hot_op_window(pre_hot, hot_window, hot_prefixes):
+    pre_lds_loads = [event for event in pre_hot if is_lds_load(event["opcode"])]
+    pre_vmem_loads = [event for event in pre_hot if is_vmem_load(event["opcode"])]
+    pre_waits = [event for event in pre_hot if event["opcode"] == "s_waitcnt"]
+    pre_dep_waits = [event for event in pre_hot if event["opcode"] == "s_waitcnt_depctr"]
+
+    last_wait_index = None
+    for index in range(len(pre_hot) - 1, -1, -1):
+        if pre_hot[index]["opcode"] == "s_waitcnt":
+            last_wait_index = index
+            break
+
+    if last_wait_index is None:
+        final_wait_lgkmcnt = None
+        load_like_before_final_wait = len(pre_lds_loads) + len(pre_vmem_loads)
+    else:
+        final_wait_lgkmcnt = parse_lgkmcnt(pre_hot[last_wait_index])
+        load_like_before_final_wait = 0
+        for event in reversed(pre_hot[:last_wait_index]):
+            if is_lds_load(event["opcode"]) or is_vmem_load(event["opcode"]):
+                load_like_before_final_wait += 1
+            elif event["opcode"] not in ("s_waitcnt_depctr",):
+                break
+
+    hot_seen = 0
+    hot_opcodes = collections.Counter()
+    waits_after_first_hot = []
+    loads_after_first_hot = 0
+    for event in hot_window:
+        if event["opcode"].startswith(hot_prefixes):
+            hot_seen += 1
+            hot_opcodes[event["opcode"]] += 1
+        elif hot_seen and event["opcode"] == "s_waitcnt":
+            waits_after_first_hot.append(parse_lgkmcnt(event))
+        elif hot_seen and (is_lds_load(event["opcode"]) or is_vmem_load(event["opcode"])):
+            loads_after_first_hot += 1
+
+    return {
+        "pre_hot_lds_load": len(pre_lds_loads),
+        "pre_hot_vmem_load": len(pre_vmem_loads),
+        "pre_hot_waitcnt": len(pre_waits),
+        "pre_hot_waitcnt_depctr": len(pre_dep_waits),
+        "load_like_immediately_before_final_wait": load_like_before_final_wait,
+        "final_pre_hot_lgkmcnt": final_wait_lgkmcnt,
+        "hot_op_in_window": hot_seen,
+        "hot_opcodes_in_window": dict(sorted(hot_opcodes.items())),
+        "load_like_after_first_hot": loads_after_first_hot,
+        "waitcnt_after_first_hot": [value for value in waits_after_first_hot if value is not None],
     }
 
 
@@ -448,6 +523,15 @@ def write_markdown(path, payload):
                     rendered = json.dumps(score_value) if isinstance(score_value, (list, dict)) else str(score_value)
                     lines.append(f"| `{score_key}` | `{rendered}` |")
                 lines.append("")
+            hot_score = event_summary.get("hot_op_score", {})
+            if hot_score:
+                hot_opcode = event_summary.get("hot_opcode")
+                title = f"First hot-op schedule score (`{hot_opcode}`):" if hot_opcode else "First hot-op schedule score:"
+                lines += [title, "", "| Metric | Value |", "| --- | ---: |"]
+                for score_key, score_value in hot_score.items():
+                    rendered = json.dumps(score_value) if isinstance(score_value, (list, dict)) else str(score_value)
+                    lines.append(f"| `{score_key}` | `{rendered}` |")
+                lines.append("")
             store_blocks = event_summary.get("store_blocks", [])
             if store_blocks:
                 lines += ["Store basic blocks:", "", "| BB | Store Ops | Interesting Ops |", "| --- | ---: | --- |"]
@@ -467,6 +551,13 @@ def write_markdown(path, payload):
                 lines.append("First WMMA window:")
                 lines.append("")
                 for event in wmma_window[:24]:
+                    lines.append(f"- line {event['line']}: `{event['text']}`")
+                lines.append("")
+            hot_window = event_summary.get("hot_op_window", [])
+            if hot_window:
+                lines.append("First hot-op window:")
+                lines.append("")
+                for event in hot_window[:24]:
                     lines.append(f"- line {event['line']}: `{event['text']}`")
                 lines.append("")
 
