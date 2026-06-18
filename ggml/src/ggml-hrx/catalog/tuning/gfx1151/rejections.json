@@ -120,6 +120,14 @@
       "env": "GGML_HRX_ENABLE_Q4_K_Q8_1_X4_MMQL128_BK2_PROMPT=1",
       "artifact": "cache/hrxv1/gfx1151/q4k-mmql128-bk2-focused-20260617-211000/",
       "reason": "The Vulkan-oracle staging-depth probe preserved the accepted Q4 BM128/BN128/WG256/WAVE64/TM4/TN2 route and increased BK_STEP from 1 to 2. It compiled through CMake/Ninja with no spills (SGPR=55, VGPR=145, LDS=16384 bytes) and passed p512 plus odd/tail p513 and p33 focused CPU-reference gates. It is rejected for production promotion because the p513 tail A/B was mixed-to-regressive versus BK1: Vcur 207.89 -> 216.53 us, node 886.36 -> 851.36 us, Qcur narrow 42.36 -> 54.21 us, Qcur p513 877.63 -> 1003.39 us. p512 had useful wins on Vcur and node but was flat on Qcur p512, so this axis is not a robust gfx1151 default."
+    },
+    {
+      "id": "q8_0_prompt_mmq64x128_compile",
+      "date": "2026-06-17",
+      "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X128_PROMPT=1",
+      "artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_mmq64x128.hsaco",
+      "reason": "The BM64/BN128 probe kept the accepted BM64 row ownership while widening the column tile toward Vulkan's 128-wide production family. It compiled through CMake/Ninja, but the public route is not viable before runtime testing: wavefront_size=32, group_segment_fixed_size=4352, vgpr_count=192, vgpr_spill_count=55, private_segment_fixed_size=224. This shows the remaining Q8_0 Vulkan-width gap cannot be closed by simple column widening on the direct-A/staged-B scalar-dot schedule."
     }
   ]
 }
