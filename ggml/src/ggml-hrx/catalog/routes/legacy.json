@@ -5284,6 +5284,49 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x128_boct_wg256_f32",
+    "family": "mul_mat_vec_q4_k_q8_1_x4_mmql128x128_boct_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q4_k_q8_1_x4_mmql128_boct",
+    "artifact_id": "mul_mat_vec_q4_k_q8_1_x4_mmql128_boct_hsaco",
+    "export_name": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x128_boct_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "dense_q4_k_prompt_x_q8_1_x4_mmql128x128_boct_probe"
+    },
+    "shape_guards": {
+      "rows_multiple": 128,
+      "cols_min": 128,
+      "cols_multiple": 128,
+      "k_multiple": 256,
+      "requires_env": "GGML_HRX_ENABLE_Q4_K_Q8_1_X4_MMQL128_BOCT_PROMPT"
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x128_boct_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "candidate_gfx1151_probe",
+      "selection": "Packed-Q8_1/x4 LDS-read issue-order probe adjacent to the accepted B-quad schedule. It preserves the current Q4_K MMQL128 production dataflow, BM128, BN128, wave64, BK_STEP1, and output ownership, but preloads all eight WNITER B-cache positions before issuing dots. This brackets the positive B-pair/B-quad axis against the cost of the full B-cache read window. It is opt-in and full-column-tile only pending compile, correctness, and timing evidence."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x64_wg256_f32",
     "family": "mul_mat_vec_q4_k_q8_1_x4_mmql128x64_wg256",
     "op": "MUL_MAT",
