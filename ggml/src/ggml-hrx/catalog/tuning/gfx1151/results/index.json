@@ -337,6 +337,12 @@
       "date": "2026-06-18",
       "artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x64-medium-focused-20260618-022051/",
       "status": "rejected_focused_perf_regression"
+    },
+    {
+      "id": "q8_0_prompt_wmma16_vk128_h4load_compile_equivalent",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-radv-vs-hrx-wmma16-vk128-h4load-isa-20260618/",
+      "status": "rejected_compile_equivalent_isa"
     }
   ]
 }

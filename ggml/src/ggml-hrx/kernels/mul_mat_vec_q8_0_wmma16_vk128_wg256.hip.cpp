@@ -26,6 +26,10 @@
 #define HRX_Q8_0_WMMA_VK128_W64_OPSEL 0
 #endif
 
+#ifndef HRX_Q8_0_WMMA_VK128_W64_H4LOAD
+#define HRX_Q8_0_WMMA_VK128_W64_H4LOAD 0
+#endif
+
 struct hrx_block_q8_0_wmma_vk128_lhs {
     unsigned short d;
     int8_t qs[32];
@@ -33,6 +37,7 @@ struct hrx_block_q8_0_wmma_vk128_lhs {
 
 typedef _Float16 hrx_q8_0_wmma_vk128_half16_vec __attribute__((ext_vector_type(16)));
 typedef _Float16 hrx_q8_0_wmma_vk128_half8_vec __attribute__((ext_vector_type(8)));
+typedef _Float16 hrx_q8_0_wmma_vk128_half4_vec __attribute__((ext_vector_type(4)));
 
 static __device__ __forceinline__ uint32_t hrx_q8_0_wmma_vk128_pack_f16x2(_Float16 lo, _Float16 hi) {
     union {
@@ -163,6 +168,52 @@ static __device__ __forceinline__ hrx_q8_0_wmma_vk128_half16_vec hrx_q8_0_wmma_v
     for (int i = 0; i < 16; ++i) {
         result[i] = sh_b[col * SHARED_STRIDE + k_base + i];
     }
+    return result;
+}
+
+static __device__ __forceinline__ void hrx_q8_0_wmma_vk128_append_half4(
+        hrx_q8_0_wmma_vk128_half16_vec * result,
+        int base,
+        hrx_q8_0_wmma_vk128_half4_vec values) {
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        (*result)[base + i] = values[i];
+    }
+}
+
+static __device__ __forceinline__ hrx_q8_0_wmma_vk128_half16_vec hrx_q8_0_wmma_vk128_load_a_frag_w64_h4(
+        const _Float16 * sh_a,
+        int row_tile,
+        int k_tile,
+        unsigned int lane) {
+    constexpr int SHARED_STRIDE = HRX_Q8_0_WMMA_VK128_SHARED_STRIDE;
+    const int row = row_tile * 16 + static_cast<int>(lane & 15u);
+    const int k_base = k_tile * 16;
+    const hrx_q8_0_wmma_vk128_half4_vec * row_ptr =
+        reinterpret_cast<const hrx_q8_0_wmma_vk128_half4_vec *>(sh_a + row * SHARED_STRIDE + k_base);
+    hrx_q8_0_wmma_vk128_half16_vec result;
+    hrx_q8_0_wmma_vk128_append_half4(&result, 0, row_ptr[0]);
+    hrx_q8_0_wmma_vk128_append_half4(&result, 4, row_ptr[1]);
+    hrx_q8_0_wmma_vk128_append_half4(&result, 8, row_ptr[2]);
+    hrx_q8_0_wmma_vk128_append_half4(&result, 12, row_ptr[3]);
+    return result;
+}
+
+static __device__ __forceinline__ hrx_q8_0_wmma_vk128_half16_vec hrx_q8_0_wmma_vk128_load_b_frag_w64_h4(
+        const _Float16 * sh_b,
+        int col_tile,
+        int k_tile,
+        unsigned int lane) {
+    constexpr int SHARED_STRIDE = HRX_Q8_0_WMMA_VK128_SHARED_STRIDE;
+    const int col = col_tile * 16 + static_cast<int>(lane & 15u);
+    const int k_base = k_tile * 16;
+    const hrx_q8_0_wmma_vk128_half4_vec * col_ptr =
+        reinterpret_cast<const hrx_q8_0_wmma_vk128_half4_vec *>(sh_b + col * SHARED_STRIDE + k_base);
+    hrx_q8_0_wmma_vk128_half16_vec result;
+    hrx_q8_0_wmma_vk128_append_half4(&result, 0, col_ptr[0]);
+    hrx_q8_0_wmma_vk128_append_half4(&result, 4, col_ptr[1]);
+    hrx_q8_0_wmma_vk128_append_half4(&result, 8, col_ptr[2]);
+    hrx_q8_0_wmma_vk128_append_half4(&result, 12, col_ptr[3]);
     return result;
 }
 
@@ -307,10 +358,17 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
 #if HRX_Q8_0_WMMA_VK128_W64
 #pragma unroll
             for (int k_tile = 0; k_tile < 2; ++k_tile) {
+#if HRX_Q8_0_WMMA_VK128_W64_H4LOAD
+                const hrx_q8_0_wmma_vk128_half16_vec a =
+                    hrx_q8_0_wmma_vk128_load_a_frag_w64_h4(sh_a, row_tile, k_tile, lane);
+                const hrx_q8_0_wmma_vk128_half16_vec b =
+                    hrx_q8_0_wmma_vk128_load_b_frag_w64_h4(sh_b, col_tile, k_tile, lane);
+#else
                 const hrx_q8_0_wmma_vk128_half16_vec a =
                     hrx_q8_0_wmma_vk128_load_a_frag_w64(sh_a, row_tile, k_tile, lane);
                 const hrx_q8_0_wmma_vk128_half16_vec b =
                     hrx_q8_0_wmma_vk128_load_b_frag_w64(sh_b, col_tile, k_tile, lane);
+#endif
                 acc[tile_iter] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
                     a, b, acc[tile_iter], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
             }
