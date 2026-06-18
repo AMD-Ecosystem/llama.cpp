@@ -708,6 +708,15 @@
       "isa_artifact": "cache/hrxv1/gfx1151/q5-bhalf-hotop-score-20260618-145959/",
       "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q5_k_q8_1_x4_mmql128_bhalf.hsaco",
       "reason": "The Q5_K BHALF packed-Q8_1 probe preserved the current MMQL128 BM128/BN128 wave64 dot issue order while storing Q8_1 RHS d/s in LDS as original half payloads and converting after shared load. The first wrapper build accidentally disabled all accumulation because the shared bquad source had no no-prefetch branch; after adding the default branch it compiled through CMake/Ninja with SGPR=49, VGPR=140, LDS=9728, no spills, wave64, and 512 v_dot4_i32_iu8. Static scoring moved footprint slightly below default but did not improve the local dot window: BHALF scored 12 pre-dot LDS loads, final lgkmcnt=1, and 54 dot ops in the first window versus default 13, 2, and 58. Focused p33/p512/p513 CPU-reference gates passed; route traces selected BHALF only on p512 full-tile rows, while p33 stayed on rows2_cols8 and p513 stayed on the existing MMQL tail path. Focused p512 timing was mixed with a 1.10% four-row sum win, but same-binary Qwen2.5 Coder 7B Q5_K_M p512/fa1 model A/B regressed from 455.164 to 454.457 tok/s with BHALF selected and no fallback. Rejected for gfx1151 promotion; RHS half-scale cache footprint is not the missing parity axis by itself."
+    },
+    {
+      "id": "q8_0_prompt_mmq128x64_splitqsum_p33_p512_p513",
+      "date": "2026-06-18",
+      "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq128x64_splitqsum_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ128X64_SPLITQSUM_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmq128x64-splitqsum-focused-20260618-152805/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_mmq128x64_splitqsum.hsaco",
+      "reason": "The BM128/BN64 split-qsum probe retested row ownership after the accepted BN112/BN128 split-qsum routes proved that qsum live-range splitting can remove the Q8_0 register cliff. The new CMake/Ninja-built route fixed the old BM128/BN64 compile blocker, compiling with wave32, SGPR=22, VGPR=144, LDS=2176, no spills, and private segment 0. Focused p33/p512/p513 CPU-reference gates all passed and route traces selected the opt-in provider. Timing rejects it versus current defaults: p512 total 72.631 ms -> 132.665 ms and p513 total 80.896 ms -> 139.952 ms, with large regressions on ffn_gate and result_output. This closes BM128/BN64 row ownership as a Q8_0 packed-path parity axis despite the fixed compile resource shape."
     }
   ]
 }

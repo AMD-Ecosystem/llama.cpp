@@ -335,6 +335,9 @@
   "mul_mat_vec_q8_0_mmq128x64": {
     "path": "mul_mat_vec_q8_0_mmq128x64.hip.cpp"
   },
+  "mul_mat_vec_q8_0_mmq128x64_splitqsum": {
+    "path": "mul_mat_vec_q8_0_mmq128x64_splitqsum.hip.cpp"
+  },
   "mul_mat_vec_q8_0_mmq64x64_ab": {
     "path": "mul_mat_vec_q8_0_mmq64x64_ab.hip.cpp"
   },

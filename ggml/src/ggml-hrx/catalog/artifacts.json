@@ -671,6 +671,12 @@
     "format": "amdgpu-hsaco",
     "storage": "embedded"
   },
+  "mul_mat_vec_q8_0_mmq128x64_splitqsum_hsaco": {
+    "source_id": "mul_mat_vec_q8_0_mmq128x64_splitqsum",
+    "path": "mul_mat_vec_q8_0_mmq128x64_splitqsum.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
   "mul_mat_vec_q8_0_mmq64x64_ab_hsaco": {
     "source_id": "mul_mat_vec_q8_0_mmq64x64_ab",
     "path": "mul_mat_vec_q8_0_mmq64x64_ab.hsaco",
