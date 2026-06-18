@@ -22,6 +22,14 @@
 #define HRX_Q4_K_Q8_1_X4_MMQL128_WN 64
 #endif
 
+#ifndef HRX_Q4_K_Q8_1_X4_MMQL128_A_PAD_WORDS
+#define HRX_Q4_K_Q8_1_X4_MMQL128_A_PAD_WORDS 0
+#endif
+
+#ifndef HRX_Q4_K_Q8_1_X4_MMQL128_B_PAD_WORDS
+#define HRX_Q4_K_Q8_1_X4_MMQL128_B_PAD_WORDS 0
+#endif
+
 struct hrx_block_q4_K_q8_1_mmql_lhs {
     unsigned short d;
     unsigned short dmin;
@@ -38,12 +46,18 @@ struct hrx_q4_k_mmql_a_cache {
     int qs[4];
     float d;
     float min;
+#if HRX_Q4_K_Q8_1_X4_MMQL128_A_PAD_WORDS > 0
+    int pad[HRX_Q4_K_Q8_1_X4_MMQL128_A_PAD_WORDS];
+#endif
 };
 
 struct hrx_q8_1_mmql_b_cache_q4 {
     int qs[8];
     float d;
     float s;
+#if HRX_Q4_K_Q8_1_X4_MMQL128_B_PAD_WORDS > 0
+    int pad[HRX_Q4_K_Q8_1_X4_MMQL128_B_PAD_WORDS];
+#endif
 };
 
 static __device__ __forceinline__ void hrx_get_scale_min_k4_q8_1_mmql(

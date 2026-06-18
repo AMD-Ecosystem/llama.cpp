@@ -1,0 +1,4 @@
+#define HRX_Q4_K_Q8_1_X4_MMQL128_EXPORT hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x128_padcache_wg256_f32
+#define HRX_Q4_K_Q8_1_X4_MMQL128_A_PAD_WORDS 2
+#define HRX_Q4_K_Q8_1_X4_MMQL128_B_PAD_WORDS 6
+#include "mul_mat_vec_q4_k_q8_1_x4_mmql128.hip.cpp"

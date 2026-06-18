@@ -200,6 +200,14 @@
       "env": "GGML_HRX_ENABLE_Q4_K_Q8_1_X4_MMQL128X64_PROMPT=1",
       "artifact": "cache/hrxv1/gfx1151/q4-mmql128x64-focused-20260617-231147/",
       "reason": "The packed-Q8_1/x4 output-ownership probe kept the Q4_K MMQL staged packed dataflow, BM128, wave64, and BK_STEP1, but narrowed the column tile from BN128/WN64 to BN64/WN32. It compiled through CMake/Ninja with lower pressure than the current MMQL128 route (wave64, SGPR=53, VGPR=109 versus 139, LDS=5632 versus 8192, no spills) and halved static dot/store sites. It passed focused p512 and exact p513 CPU-reference rows while selecting the intended provider, and p33 stayed on the existing MMQ64 route. It is rejected for production promotion because same-runner p512 focused perf regressed versus current MMQL128 on every row: Kcur 989.40 -> 1100.29 us, Qcur 4018.51 -> 4817.41 us, ffn_out 14563.47 -> 22394.71 us, ffn_gate 14017.86 -> 20459.41 us. Lowering accumulator footprint alone loses because it doubles the column workgroups and likely reduces B reuse; the Q4 packed path should keep the 128-column tile unless a future schedule also improves load/wait behavior."
+    },
+    {
+      "id": "q4_dense_prompt_mmql128_padcache_deepseek_p33_p512_p513",
+      "date": "2026-06-18",
+      "route": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x128_padcache_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q4_K_Q8_1_X4_MMQL128_PADCACHE_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q4-mmql128-padcache-focused-20260618-001039/",
+      "reason": "The packed-Q8_1/x4 LDS-resource probe preserved the current Q4_K MMQL128 production dataflow, BM128, BN128, wave64, BK_STEP1, and output ownership, but padded shared A-cache rows from 24 to 32 bytes and packed-B cache rows from 40 to 64 bytes. This explicitly tested the Vulkan oracle's larger padded LDS/resource axis without changing column reuse. It compiled through CMake/Ninja with wave64, SGPR=52, VGPR=145, LDS=12288, no spills, and almost unchanged static schedule shape versus current MMQL128: 512 v_dot sites, 46 ds_loads, 12 ds_stores, 18 global loads, 64 global stores, 184 s_waitcnts, and 2 barriers. The route selected correctly for p512 and p513, passed focused CPU-reference rows for p512 and p513, and kept exact p33 on the existing MMQ64 route. It is rejected for production promotion because same-runner p512 focused perf regressed versus current MMQL128 on every row: Kcur 979.58 -> 1326.86 us, Qcur 4108.71 -> 5317.20 us, ffn_out 13816.55 -> 17334.05 us, ffn_gate 12309.63 -> 15366.25 us. Padding the packed-cache rows raises LDS/VGPR pressure but does not materially improve the LDS wait schedule; future packed-path work should target actual LDS-read issue order, B-cache ownership, or instruction scheduling instead of row padding alone."
     }
   ]
 }

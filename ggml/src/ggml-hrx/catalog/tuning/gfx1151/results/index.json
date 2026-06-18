@@ -277,6 +277,12 @@
       "date": "2026-06-17",
       "artifact": "cache/hrxv1/gfx1151/q4-mmql128x64-focused-20260617-231147/",
       "status": "rejected_focused_perf_regression"
+    },
+    {
+      "id": "q4_dense_prompt_mmql128_padcache_deepseek_p33_p512_p513",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q4-mmql128-padcache-focused-20260618-001039/",
+      "status": "rejected_focused_perf_regression"
     }
   ]
 }
