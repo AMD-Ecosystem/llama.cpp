@@ -44,6 +44,7 @@ struct hrx_block_q4_K_wmma_vk128_lhs {
 typedef _Float16 hrx_q4_k_wmma_vk128_half16_vec __attribute__((ext_vector_type(16)));
 typedef _Float16 hrx_q4_k_wmma_vk128_half8_vec __attribute__((ext_vector_type(8)));
 typedef _Float16 hrx_q4_k_wmma_vk128_half4_vec __attribute__((ext_vector_type(4)));
+typedef const __attribute__((address_space(3))) _Float16 * hrx_q4_k_wmma_vk128_lds_half_ptr;
 
 static __device__ __forceinline__ uint32_t hrx_q4_k_wmma_vk128_pack_f16x2(_Float16 lo, _Float16 hi) {
     union {
@@ -214,7 +215,8 @@ static __device__ __forceinline__ void hrx_q4_k_wmma_vk128_append_half4(
     }
 }
 
-static __device__ __forceinline__ hrx_q4_k_wmma_vk128_half4_vec hrx_q4_k_wmma_vk128_ds_read_b64_h4(const _Float16 * ptr) {
+static __device__ __forceinline__ hrx_q4_k_wmma_vk128_half4_vec hrx_q4_k_wmma_vk128_ds_read_b64_h4(
+        hrx_q4_k_wmma_vk128_lds_half_ptr ptr) {
     const __attribute__((address_space(3))) uint64_t * lds_ptr =
         (const __attribute__((address_space(3))) uint64_t *) ptr;
     hrx_q4_k_wmma_vk128_half4_vec value;
@@ -227,14 +229,14 @@ static __device__ __forceinline__ hrx_q4_k_wmma_vk128_half4_vec hrx_q4_k_wmma_vk
 }
 
 static __device__ __forceinline__ hrx_q4_k_wmma_vk128_half16_vec hrx_q4_k_wmma_vk128_load_a_frag_w64_b64asm(
-        const _Float16 * sh_a,
+        hrx_q4_k_wmma_vk128_lds_half_ptr sh_a,
         int row_tile,
         int k_tile,
         unsigned int lane) {
     constexpr int SHARED_STRIDE = HRX_Q4_K_WMMA_VK128_SHARED_STRIDE;
     const int row = row_tile * 16 + static_cast<int>(lane & 15u);
     const int k_base = k_tile * 16;
-    const _Float16 * row_ptr = sh_a + row * SHARED_STRIDE + k_base;
+    hrx_q4_k_wmma_vk128_lds_half_ptr row_ptr = sh_a + row * SHARED_STRIDE + k_base;
     hrx_q4_k_wmma_vk128_half16_vec result;
     hrx_q4_k_wmma_vk128_append_half4(&result, 0, hrx_q4_k_wmma_vk128_ds_read_b64_h4(row_ptr + 0));
     hrx_q4_k_wmma_vk128_append_half4(&result, 4, hrx_q4_k_wmma_vk128_ds_read_b64_h4(row_ptr + 4));
@@ -244,14 +246,14 @@ static __device__ __forceinline__ hrx_q4_k_wmma_vk128_half16_vec hrx_q4_k_wmma_v
 }
 
 static __device__ __forceinline__ hrx_q4_k_wmma_vk128_half16_vec hrx_q4_k_wmma_vk128_load_b_frag_w64_b64asm(
-        const _Float16 * sh_b,
+        hrx_q4_k_wmma_vk128_lds_half_ptr sh_b,
         int col_tile,
         int k_tile,
         unsigned int lane) {
     constexpr int SHARED_STRIDE = HRX_Q4_K_WMMA_VK128_SHARED_STRIDE;
     const int col = col_tile * 16 + static_cast<int>(lane & 15u);
     const int k_base = k_tile * 16;
-    const _Float16 * col_ptr = sh_b + col * SHARED_STRIDE + k_base;
+    hrx_q4_k_wmma_vk128_lds_half_ptr col_ptr = sh_b + col * SHARED_STRIDE + k_base;
     hrx_q4_k_wmma_vk128_half16_vec result;
     hrx_q4_k_wmma_vk128_append_half4(&result, 0, hrx_q4_k_wmma_vk128_ds_read_b64_h4(col_ptr + 0));
     hrx_q4_k_wmma_vk128_append_half4(&result, 4, hrx_q4_k_wmma_vk128_ds_read_b64_h4(col_ptr + 4));
@@ -438,10 +440,14 @@ void HRX_Q4_K_WMMA_VK128_EXPORT(
 #pragma unroll
             for (int k_tile = 0; k_tile < 2; ++k_tile) {
 #if HRX_Q4_K_WMMA_VK128_W64_B64ASM
+                hrx_q4_k_wmma_vk128_lds_half_ptr sh_a_lds =
+                    (hrx_q4_k_wmma_vk128_lds_half_ptr) sh_a;
+                hrx_q4_k_wmma_vk128_lds_half_ptr sh_b_lds =
+                    (hrx_q4_k_wmma_vk128_lds_half_ptr) sh_b;
                 const hrx_q4_k_wmma_vk128_half16_vec a =
-                    hrx_q4_k_wmma_vk128_load_a_frag_w64_b64asm(sh_a, row_tile, k_tile, lane);
+                    hrx_q4_k_wmma_vk128_load_a_frag_w64_b64asm(sh_a_lds, row_tile, k_tile, lane);
                 const hrx_q4_k_wmma_vk128_half16_vec b =
-                    hrx_q4_k_wmma_vk128_load_b_frag_w64_b64asm(sh_b, col_tile, k_tile, lane);
+                    hrx_q4_k_wmma_vk128_load_b_frag_w64_b64asm(sh_b_lds, col_tile, k_tile, lane);
 #elif HRX_Q4_K_WMMA_VK128_W64_H4LOAD
                 const hrx_q4_k_wmma_vk128_half16_vec a =
                     hrx_q4_k_wmma_vk128_load_a_frag_w64_h4(sh_a, row_tile, k_tile, lane);
