@@ -604,6 +604,33 @@
       "artifact": "cache/hrxv1/gfx1151/q8_0-fast-half-fullpair-bufferstore-compile-20260618-123820/",
       "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_fast_half_fullpair_bufferstore_wg256.hsaco",
       "reason": "The fast-half fullpair bufferstore compile-contract probe combined the two source-visible primitives isolated from the RADV Q8_0 large oracle: real-kernel fullpair raw-buffer writeback reaching 192 buffer_store_b32 with two barriers, and low-barrier halfword LDS topology reaching 128 ds_load_u16_d16. It compiled through CMake/Ninja with wave64, SGPR=28, VGPR=195, LDS=22528, no spills, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 128 ds_load_u16_d16, 130 ds_store_b16, 192 buffer_store_b32, and 2 s_barrier. This is the closest current direct-WMMA convergence to the RADV schedule, passing the strict contract on WMMA count, grouped LDS loads, halfword LDS loads, buffer-store count, LDS bytes, barrier count, and spills. It is still rejected before runtime because the strict contract misses two ds_store_b16 sites and three VGPRs versus the RADV target, and the fullpair accumulator-half mapping is diagnostic rather than a correctness candidate. The extra ds_store_b16 sites appear before the final output-stage loop, so the next attempt should preserve the matched final-store surface while reducing prewrite staging/live range pressure."
+    },
+    {
+      "id": "q8_0_direct_wmma_vk128_packstage_fast_half_fullpair_bufferstore_compile_contract",
+      "date": "2026-06-18",
+      "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_fast_half_fullpair_bufferstore_f16acc_wg256_f32",
+      "env": "not runtime-selected",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-packstage-fast-half-fullpair-bufferstore-compile-20260618-124840/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_fast_half_fullpair_bufferstore_wg256.hsaco",
+      "reason": "The pack-stage fast-half fullpair bufferstore compile-contract probe preserved the prior fast-half output/writeback path and changed only A/B LDS staging from scalar half stores to packed ds_write_b32 pair stores. It compiled through CMake/Ninja with wave64, SGPR=28, VGPR=196, LDS=22528, no spills, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 128 ds_load_u16_d16, 128 ds_store_b16, 2 ds_store_b32, 192 buffer_store_b32, and 2 s_barrier. This is the first Q8_0 direct-WMMA HIP C++ object to match the selected RADV large-oracle opcode/LDS/barrier/spill contract exactly, but it is rejected before runtime because the strict resource contract still misses VGPR by four registers (196 vs RADV 192). The next attempt should preserve the pack-stage opcode surface and reduce real live range or accumulator/output ownership pressure."
+    },
+    {
+      "id": "q8_0_direct_wmma_vk128_packstage_dummyhalf_fullpair_bufferstore_pressure",
+      "date": "2026-06-18",
+      "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_dummyhalf_fullpair_bufferstore_f16acc_wg256_f32",
+      "env": "not runtime-selected",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-packstage-dummyhalf-fullpair-bufferstore-compile-20260618-124840/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_dummyhalf_fullpair_bufferstore_wg256.hsaco",
+      "reason": "The pack-stage dummy-half pressure bracket preserved the exact opcode contract from pack-stage fast-half but stored accumulator values directly after issuing the 128 ds_load_u16_d16 instructions, testing whether consuming halfword reload values caused the remaining VGPR pressure. It still compiled at VGPR=196 with no spills while preserving 32 WMMA, 64 ds_load_b64, 128 ds_load_u16_d16, 128 ds_store_b16, 192 buffer_store_b32, 22528 LDS bytes, and two barriers. It is rejected before runtime because it proves the pressure is not caused by halfword reload consumption and the route is diagnostic rather than semantically correct."
+    },
+    {
+      "id": "q8_0_direct_wmma_vk128_packstage_fast_half_fullpair_bufferstore_lb2_pressure",
+      "date": "2026-06-18",
+      "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_fast_half_fullpair_bufferstore_lb2_f16acc_wg256_f32",
+      "env": "not runtime-selected",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-packstage-fast-half-fullpair-bufferstore-lb2-compile-20260618-124958/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_fast_half_fullpair_bufferstore_lb2_wg256.hsaco",
+      "reason": "The pack-stage fast-half launch-bounds pressure bracket preserved the exact opcode contract and changed only the kernel annotation to __launch_bounds__(256, 2). It still compiled at VGPR=196 with no spills while preserving 32 WMMA, 64 ds_load_b64, 128 ds_load_u16_d16, 128 ds_store_b16, 192 buffer_store_b32, 22528 LDS bytes, and two barriers. It is rejected before runtime because a compiler occupancy hint does not reduce the remaining four-register pressure gap; the next attempt needs a source-level live-range or ownership change."
     }
   ]
 }

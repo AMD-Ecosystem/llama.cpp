@@ -772,6 +772,27 @@ ggml_hrx_add_kernel_source(
     FLAGS -O3
 )
 ggml_hrx_add_kernel_source(
+    SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_fast_half_fullpair_bufferstore_wg256.hip.cpp"
+    WAVEFRONT_SIZE 64
+    ARCH_PREFIXES gfx11
+    DEPS "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q8_0_wmma16_vk128_wg256.hip.cpp"
+    FLAGS -O3
+)
+ggml_hrx_add_kernel_source(
+    SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_dummyhalf_fullpair_bufferstore_wg256.hip.cpp"
+    WAVEFRONT_SIZE 64
+    ARCH_PREFIXES gfx11
+    DEPS "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q8_0_wmma16_vk128_wg256.hip.cpp"
+    FLAGS -O3
+)
+ggml_hrx_add_kernel_source(
+    SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_fast_half_fullpair_bufferstore_lb2_wg256.hip.cpp"
+    WAVEFRONT_SIZE 64
+    ARCH_PREFIXES gfx11
+    DEPS "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q8_0_wmma16_vk128_wg256.hip.cpp"
+    FLAGS -O3
+)
+ggml_hrx_add_kernel_source(
     SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_dualstage_bufferstore_wg256.hip.cpp"
     WAVEFRONT_SIZE 64
     ARCH_PREFIXES gfx11
