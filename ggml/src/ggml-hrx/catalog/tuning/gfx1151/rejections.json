@@ -1,0 +1,93 @@
+{
+  "target_key": "gfx1151",
+  "schema": "ggml-hrx-tuning-rejections-v1",
+  "rejections": [
+    {
+      "id": "q5_small_mmql128_selector_only_p512",
+      "date": "2026-06-17",
+      "route": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q5_K_Q8_1_X4_MMQL128_SMALL_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q5small-model-ab-p512-20260617-152157/",
+      "reason": "Focused Vcur row improved, but same-runner p512 model A/B regressed slightly."
+    },
+    {
+      "id": "existing_q4_mul_mat_id_p512",
+      "date": "2026-06-17",
+      "route": "hrx_mul_mat_id_q4_k_wg64_f32",
+      "artifact": "cache/hrxv1/gfx1151/focused-moe-mul-mat-id-opgate-20260617-154557/",
+      "route_trace_artifact": "cache/hrxv1/gfx1151/focused-moe-mul-mat-id-trace-20260617-155927/",
+      "reason": "Focused Q4 MUL_MAT_ID default provider passes but is about 10x slower than same-machine Vulkan MoE labels; Q5 MUL_MAT_ID is unsupported."
+    },
+    {
+      "id": "q6_dense_prompt_existing_staged_mmql_p512",
+      "date": "2026-06-17",
+      "route": "hrx_mul_mat_vec_q6_k_q8_1_x4_mmql64x128_wg256_f32 and hrx_mul_mat_vec_q6_k_q8_1_x4_mmql128x64_wg256_f32",
+      "artifact": "cache/hrxv1/gfx1151/focused-q6-variant-rerank-p512-20260617-170020/",
+      "reason": "Both existing staged Q6 MMQL routes passed CPU-reference focused p512 rows but were 4.7x-4.9x slower than the current direct MMQ64 route on result_output."
+    },
+    {
+      "id": "q6_dense_prompt_mmql128x128_p512",
+      "date": "2026-06-17",
+      "route": "hrx_mul_mat_vec_q6_k_q8_1_x4_mmql128x128_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_Q8_1_X4_MMQL128_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/focused-q6-mmql128-p512-20260617-170743/",
+      "reason": "Vulkan-shaped BM128/BN128/BK_STEP1 staged route passed correctness but took 281.16 ms on p512 result_output versus 94.75 ms for current direct MMQ64."
+    },
+    {
+      "id": "q6_dense_prompt_mmq64x128_p512",
+      "date": "2026-06-17",
+      "route": "hrx_mul_mat_vec_q6_k_q8_1_x4_mmq64x128_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_Q8_1_X4_MMQ64X128_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/focused-q6-mmq64x128-p512-20260617-171056/",
+      "reason": "Column-widened direct route passed correctness but took 194.44 ms on p512 result_output versus 94.75 ms for current direct MMQ64; wider per-thread column work loses on gfx1151."
+    },
+    {
+      "id": "q6_moe_id_mmq16_p33",
+      "date": "2026-06-17",
+      "route": "hrx_mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x16_wg64_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_ID_Q8_1_X4_MMQ16_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-id-model-ab-odd-tail-r3-20260617-183942/",
+      "reason": "Focused p33 correctness passed, but same-runner model A/B regressed from 123.074 to 108.935 tok/s; the selector is therefore guarded to n_tokens >= 128."
+    },
+    {
+      "id": "q8_0_prompt_mmq128x32_wave64_p512",
+      "date": "2026-06-17",
+      "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq128x32_wg256_wave64_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ128X32_WAVE64_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-wave64-focused-p512-20260617-185605/",
+      "reason": "The wave64 compile of the current Q8_0 packed prompt schedule passed focused CPU-reference rows and selected correctly, but regressed every focused p512 row versus the wave32 object: Vcur 524.0 -> 543.4 us, Qcur 2003.9 -> 2709.9 us, ffn_out 12100.7 -> 18948.8 us, ffn_gate 21138.7 -> 35777.0 us, result_output 203806.5 -> 263176.4 us."
+    },
+    {
+      "id": "q8_0_prompt_mmq64x64_ab_p512",
+      "date": "2026-06-17",
+      "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x64_ab_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X64_AB_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x64-ab-focused-p512-20260617-191938/",
+      "reason": "The cooperative A+B LDS staging probe passed focused CPU-reference rows and selected correctly, but regressed every focused p512 row versus the accepted direct-A BM64/BN64 route: Vcur 566.4 -> 684.1 us, Qcur 1940.0 -> 2326.2 us, ffn_out 9800.6 -> 11385.0 us, ffn_gate 8739.3 -> 9634.4 us, result_output 83885.4 -> 91222.7 us."
+    },
+    {
+      "id": "q8_0_prompt_mmq32x64_p512",
+      "date": "2026-06-17",
+      "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq32x64_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ32X64_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmq32x64-focused-p512-20260617-192604/",
+      "reason": "The smaller per-thread output tile probe passed focused CPU-reference rows and reduced VGPR count from 127 to 78, but regressed p512 total time versus accepted BM64/BN64: Vcur 568.5 -> 660.5 us, Qcur 2817.7 -> 2383.9 us, ffn_out 9915.6 -> 12187.4 us, ffn_gate 9046.7 -> 10254.7 us, result_output 83383.4 -> 91489.5 us."
+    },
+    {
+      "id": "q8_0_prompt_mmq128x64_compile",
+      "date": "2026-06-17",
+      "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq128x64_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ128X64_PROMPT=1",
+      "artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_mmq128x64.hsaco",
+      "reason": "The BM128/BN64 probe compiled but the public route spills heavily before runtime testing: wavefront_size=32, vgpr_count=192, vgpr_spill_count=47, private_segment_fixed_size=192, group_segment_fixed_size=2176. Do not run focused/model A/B for this spelling."
+    },
+    {
+      "id": "q8_0_prompt_mmql128x128_compile",
+      "date": "2026-06-17",
+      "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmql128x128_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQL128_PROMPT=1",
+      "artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_q8_1_x4_mmql128.hsaco",
+      "reason": "The Vulkan-large-style BM128/BN128 cooperative A+B staged Q8_0 MMQL probe compiled, but the public route is not viable before runtime testing: wavefront_size=64, group_segment_fixed_size=9216, vgpr_count=192, vgpr_spill_count=472, private_segment_fixed_size=1892. This confirms the naive Q8_0 port of the Q4 MMQL ownership pattern creates excessive live state on gfx1151."
+    }
+  ]
+}

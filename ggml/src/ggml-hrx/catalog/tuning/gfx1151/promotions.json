@@ -1,0 +1,183 @@
+{
+  "target_key": "gfx1151",
+  "schema": "ggml-hrx-tuning-promotions-v1",
+  "promotions": [
+    {
+      "id": "q4_moe_id_widek_mmq16_qwen3_q4xl_p33_p512_p513",
+      "date": "2026-06-17",
+      "status": "accepted_opt_in_candidate",
+      "route": "hrx_mul_mat_id_q4_k_grouped_q8_1_x4_mmq64x16_wg64_f32",
+      "env": "GGML_HRX_ENABLE_Q4_K_ID_Q8_1_X4_MMQ16_WIDE_K_PROMPT=1",
+      "shape_guard": "q4_K MUL_MAT_ID, k % 256 == 0, rows % 64 == 0, n_ids == 8, n_tokens >= 32",
+      "focused_artifacts": [
+        "cache/hrxv1/gfx1151/focused-moe-q4-id-widek-mmq16-20260617-160209/",
+        "cache/hrxv1/gfx1151/focused-moe-q4-id-widek-mmq16-odd-20260617-160622/",
+        "cache/hrxv1/gfx1151/focused-moe-q4-id-widek-mmq16-odd-perf-20260617-160640/"
+      ],
+      "model_artifact": "cache/hrxv1/gfx1151/current-best-with-q4-id-widek-r3-20260617-160734/",
+      "promotion_blockers": [
+        "Q5_K MUL_MAT_ID is a separate opt-in candidate",
+        "broader model basket coverage is still pending",
+        "default selector policy must remain target-specific and avoid perturbing gfx1100"
+      ]
+    },
+    {
+      "id": "q5_moe_id_mmq16_qwen3_q4xl_p33_p512_p513",
+      "date": "2026-06-17",
+      "status": "accepted_opt_in_candidate",
+      "route": "hrx_mul_mat_id_q5_k_grouped_q8_1_x4_mmq64x16_wg64_f32",
+      "env": "GGML_HRX_ENABLE_Q5_K_ID_Q8_1_X4_MMQ16_PROMPT=1",
+      "shape_guard": "q5_K MUL_MAT_ID, k % 256 == 0, rows % 64 == 0, n_ids == 8, n_tokens >= 32",
+      "focused_artifacts": [
+        "cache/hrxv1/gfx1151/focused-moe-q5-id-mmq16-p512-20260617-162033/",
+        "cache/hrxv1/gfx1151/focused-moe-q5-id-mmq16-odd-20260617-162104/"
+      ],
+      "model_artifact": "cache/hrxv1/gfx1151/current-best-with-q4q5-id-r3-20260617-162308/",
+      "compile_evidence": {
+        "hsaco": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_id_q5_k_q8_1_x4_mmq.hsaco",
+        "wavefront_size": 64,
+        "vgpr_count": 119,
+        "sgpr_count": 87,
+        "lds_bytes": 3264,
+        "spill_count": 0,
+        "v_dot_count": 128
+      },
+      "promotion_blockers": [
+        "broader model basket coverage is still pending",
+        "default selector policy must remain target-specific and avoid perturbing gfx1100"
+      ]
+    },
+    {
+      "id": "q6_moe_id_mmq16_qwen3_q6k_p512_p513",
+      "date": "2026-06-17",
+      "status": "accepted_opt_in_candidate",
+      "route": "hrx_mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x16_wg64_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_ID_Q8_1_X4_MMQ16_PROMPT=1",
+      "shape_guard": "q6_K MUL_MAT_ID, k % 256 == 0, rows % 64 == 0, n_ids == 8, n_tokens >= 128",
+      "focused_artifacts": [
+        "cache/hrxv1/gfx1151/q6-mul-mat-id-q8x4-focused-20260617-183451/",
+        "cache/hrxv1/gfx1151/q6-id-odd-tail-focused-20260617-183706/",
+        "cache/hrxv1/gfx1151/q6-id-postguard-focused-20260617-184103/"
+      ],
+      "model_artifacts": [
+        "cache/hrxv1/gfx1151/q6-id-model-ab-p512-fa1-r3-20260617-183602/",
+        "cache/hrxv1/gfx1151/q6-id-model-ab-odd-tail-r3-20260617-183942/"
+      ],
+      "compile_evidence": {
+        "hsaco": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_id_q6_k_q8_1_x4_mmq.hsaco",
+        "wavefront_size": 64
+      },
+      "promotion_blockers": [
+        "p33 model A/B regressed, so the route must stay guarded to n_tokens >= 128",
+        "broader model basket coverage is still pending",
+        "default selector policy must remain target-specific and avoid perturbing gfx1100"
+      ]
+    },
+    {
+      "id": "q4_dense_prompt_mmql128_wide_qwen3_q4xl_p512_p513",
+      "date": "2026-06-17",
+      "status": "accepted_opt_in_candidate",
+      "route": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x128_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q4_K_Q8_1_X4_MMQL128_PROMPT=1",
+      "shape_guard": "q4_K MUL_MAT prompt, k % 256 == 0, rows % 128 == 0, cols >= 128, contiguous tensors, packed Q8_1 x4 RHS",
+      "focused_artifacts": [
+        "cache/hrxv1/gfx1151/focused-q4-mmql128-p512-20260617-164724/",
+        "cache/hrxv1/gfx1151/focused-q4-mmql128-odd-20260617-164835/",
+        "cache/hrxv1/gfx1151/focused-q4-mmq64-odd-compare-20260617-164950/",
+        "cache/hrxv1/gfx1151/q4-mmql128-threshold-route-sanity-20260617-165126/"
+      ],
+      "model_artifact": "cache/hrxv1/gfx1151/q4-mmql128-model-ab-20260617-165235/",
+      "promotion_blockers": [
+        "p33 is faster on the existing MMQ64 route, so the wide route must keep cols >= 128",
+        "broader model basket coverage is still pending",
+        "default selector policy must remain target-specific and avoid perturbing gfx1100"
+      ]
+    },
+    {
+      "id": "d128_flash_attn_prefill_direct_qwen3_q4xl_p33_p512_p513",
+      "date": "2026-06-17",
+      "status": "accepted_opt_in_candidate",
+      "route": "hrx_flash_attn_ext_f32_f16_prefill_direct_d128",
+      "env": "GGML_HRX_ENABLE_F16_PREFILL_FA_DIRECT_D128=1",
+      "shape_guard": "FLASH_ATTN_EXT f32 Q, f16 K/V, f32 dst, no sinks, no bias/softcap, head_dim=128, valid integer GQA ratio; any prompt width for q_heads=32/kv_heads=4, otherwise prompt_tokens >= 128",
+      "focused_artifacts": [
+        "cache/hrxv1/gfx1151/focused-fa1-direct-d128-f32pv-p512-20260617-172350/",
+        "cache/hrxv1/gfx1151/focused-fa1-direct-d128-p33-20260617-173253/",
+        "cache/hrxv1/gfx1151/focused-fa1-direct-d128-p513-20260617-173313/",
+        "cache/hrxv1/gfx1151/fa1-direct-d128-split-regate-20260617-174250/",
+        "cache/hrxv1/gfx1151/fa1-d128-gqa-focused-p512-20260617-175339/",
+        "cache/hrxv1/gfx1151/fa1-d128-gqa-focused-odd-tail-20260617-175638/"
+      ],
+      "route_trace_artifacts": [
+        "cache/hrxv1/gfx1151/fa1-direct-d128-traced-p512-20260617-173115/",
+        "cache/hrxv1/gfx1151/fa1-direct-d128-split-traced-p512-20260617-174708/",
+        "cache/hrxv1/gfx1151/fa1-direct-d128-model-ab-odd-20260617-173548/"
+      ],
+      "model_artifacts": [
+        "cache/hrxv1/gfx1151/fa1-direct-d128-model-ab-p512-20260617-172749/",
+        "cache/hrxv1/gfx1151/fa1-direct-d128-traced-p512-20260617-173115/",
+        "cache/hrxv1/gfx1151/fa1-direct-d128-split-traced-p512-20260617-174708/",
+        "cache/hrxv1/gfx1151/fa1-direct-d128-model-ab-odd-20260617-173548/",
+        "cache/hrxv1/gfx1151/fa1-d128-gqa-model-ab-p512-r3-20260617-175433/",
+        "cache/hrxv1/gfx1151/fa1-d128-gqa-model-ab-odd-tail-r1-20260617-175720/",
+        "cache/hrxv1/gfx1151/fa1-d128-gqa-policy-sanity-20260617-175858/"
+      ],
+      "promotion_blockers": [
+        "broader model basket coverage is still pending",
+        "default selector policy must remain target-specific and avoid perturbing gfx1100",
+        "newly covered D128 GQA p512 rows improve but remain below Vulkan, so prompt-matmul and additional schedule work are still needed before parity"
+      ]
+    },
+    {
+      "id": "q8_0_prompt_mmq128x32_rows1024_llama3_1_q8_p33_p512_p513",
+      "date": "2026-06-17",
+      "status": "accepted_auto_policy_update",
+      "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq128x32_wg256_f32",
+      "env": "auto policy, rollback with GGML_HRX_DISABLE_Q8_0_Q8_1_X4_MMQ128X32_PROMPT=1 or GGML_HRX_DISABLE_Q8_1_MMVQ=1",
+      "shape_guard": "Q8_0 MUL_MAT prompt, k >= 2048, rows >= 1024, cols >= 32, k % 128 == 0, rows % 128 == 0, contiguous tensors, Q8_1 x4 quantize provider available",
+      "focused_artifacts": [
+        "cache/hrxv1/gfx1151/q8_0-kv1024-focused-20260617-180540/",
+        "cache/hrxv1/gfx1151/q8_0-mmvq1024-odd-tail-focused-20260617-181012/",
+        "cache/hrxv1/gfx1151/q8_0-mmvq1024-auto-regate-20260617-181433/"
+      ],
+      "model_artifacts": [
+        "cache/hrxv1/gfx1151/q8_0-mmvq1024-model-ab-p512-r3-20260617-180920/",
+        "cache/hrxv1/gfx1151/q8_0-mmvq1024-model-ab-odd-tail-r3-20260617-181206/",
+        "cache/hrxv1/gfx1151/q8_0-mmvq1024-auto-model-p512-r3-20260617-181455/"
+      ],
+      "promotion_blockers": [
+        "Only the Llama 3.1 8B Q8_0 downloaded basket row has Q8_0 coverage so far",
+        "This closes one prompt-matmul gap but remains far below same-machine Vulkan on the Q8_0 row",
+        "Keep the shared cols >= 32 guard because earlier p31 Q8_1 MMVQ forcing was rejected"
+      ]
+    },
+    {
+      "id": "q8_0_prompt_mmq64x64_llama3_1_q8_p33_p512_p513",
+      "date": "2026-06-17",
+      "status": "accepted_opt_in_candidate",
+      "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x64_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X64_PROMPT=1",
+      "shape_guard": "Q8_0 MUL_MAT prompt, k >= 2048, rows >= 1024, cols >= 32, k % 128 == 0, rows % 128 == 0, contiguous tensors, Q8_1 x4 quantize provider available",
+      "focused_artifacts": [
+        "cache/hrxv1/gfx1151/q8_0-mmq64x64-focused-p512-20260617-190744/",
+        "cache/hrxv1/gfx1151/q8_0-mmq64x64-focused-p512-20260617-190744/odd-tail/"
+      ],
+      "model_artifacts": [
+        "cache/hrxv1/gfx1151/q8_0-mmq64x64-model-ab-20260617-191149/"
+      ],
+      "compile_evidence": {
+        "hsaco": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_mmq64x64.hsaco",
+        "wavefront_size": 32,
+        "vgpr_count": 127,
+        "sgpr_count": 22,
+        "lds_bytes": 2176,
+        "spill_count": 0
+      },
+      "promotion_blockers": [
+        "Only the Llama 3.1 8B Q8_0 downloaded basket row has Q8_0 coverage so far",
+        "This should remain opt-in until target-specific policy plumbing can prefer BM64/BN64 for the winning prompt domain without perturbing gfx1100",
+        "p512 and p513 still reach only about 0.45x same-run Vulkan, so further Q8_0 schedule work must mine the remaining Vulkan dense prompt gap"
+      ]
+    }
+  ]
+}

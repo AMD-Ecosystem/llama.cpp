@@ -1,0 +1,257 @@
+{
+  "add8_f32": {
+    "path": "add8_f32.hip.cpp"
+  },
+  "add_add_f32_broadcast": {
+    "path": "add_add_f32_broadcast.hip.cpp"
+  },
+  "add_f32": {
+    "path": "add_f32.hip.cpp"
+  },
+  "add_f32_broadcast": {
+    "path": "add_f32_broadcast.hip.cpp"
+  },
+  "add_rms_norm_mul_f32_broadcast": {
+    "path": "add_rms_norm_mul_f32_broadcast.hip.cpp"
+  },
+  "add_softplus_mul_f32_broadcast": {
+    "path": "add_softplus_mul_f32_broadcast.hip.cpp"
+  },
+  "argsort_f32": {
+    "path": "argsort_f32.hip.cpp"
+  },
+  "clamp_f32": {
+    "path": "clamp_f32.hip.cpp"
+  },
+  "concat_f32": {
+    "path": "concat_f32.hip.cpp"
+  },
+  "copy_f32_f16": {
+    "path": "copy_f32_f16.hip.cpp"
+  },
+  "copy_strided_f32": {
+    "path": "copy_strided_f32.hip.cpp"
+  },
+  "div_f32_broadcast": {
+    "path": "div_f32_broadcast.hip.cpp"
+  },
+  "flash_attn_ext_f32_bf16_decode": {
+    "path": "flash_attn_ext_f32_bf16_decode.hip.cpp"
+  },
+  "flash_attn_ext_f32_f16_decode": {
+    "path": "flash_attn_ext_f32_f16_decode.hip.cpp"
+  },
+  "flash_attn_ext_f32_f16_decode_reduce": {
+    "path": "flash_attn_ext_f32_f16_decode_reduce.hip.cpp"
+  },
+  "flash_attn_ext_f32_f16_decode_split": {
+    "path": "flash_attn_ext_f32_f16_decode_split.hip.cpp"
+  },
+  "flash_attn_ext_f32_f16_prefill_direct": {
+    "path": "flash_attn_ext_f32_f16_prefill_direct.hip.cpp"
+  },
+  "flash_attn_ext_f32_f16_prefill_direct_d128": {
+    "path": "flash_attn_ext_f32_f16_prefill_direct_d128.hip.cpp"
+  },
+  "flash_attn_ext_f32_f16_prefill_tile8": {
+    "path": "flash_attn_ext_f32_f16_prefill_tile8.hip.cpp"
+  },
+  "flash_attn_ext_f32_f16_prefill_wmma16": {
+    "path": "flash_attn_ext_f32_f16_prefill_wmma16.hip.cpp"
+  },
+  "flash_attn_ext_f32_f32_decode": {
+    "path": "flash_attn_ext_f32_f32_decode.hip.cpp"
+  },
+  "flash_attn_ext_f32_q4_0_decode": {
+    "path": "flash_attn_ext_f32_q4_0_decode.hip.cpp"
+  },
+  "flash_attn_ext_f32_q8_0_decode": {
+    "path": "flash_attn_ext_f32_q8_0_decode.hip.cpp"
+  },
+  "flash_attn_ext_f32_q8_0_q4_0_decode": {
+    "path": "flash_attn_ext_f32_q8_0_q4_0_decode.hip.cpp"
+  },
+  "gated_delta_net_f32": {
+    "path": "gated_delta_net_f32.hip.cpp"
+  },
+  "get_rows_f32": {
+    "path": "get_rows_f32.hip.cpp"
+  },
+  "get_rows_q5_k": {
+    "path": "get_rows_q5_k.hip.cpp"
+  },
+  "mul_add_add_f32_broadcast": {
+    "path": "mul_add_add_f32_broadcast.hip.cpp"
+  },
+  "mul_f32": {
+    "path": "mul_f32.hip.cpp"
+  },
+  "mul_f32_broadcast": {
+    "path": "mul_f32_broadcast.hip.cpp"
+  },
+  "mul_mat_id_q4_k": {
+    "path": "mul_mat_id_q4_k.hip.cpp"
+  },
+  "mul_mat_id_q4_k_mul": {
+    "path": "mul_mat_id_q4_k_mul.hip.cpp"
+  },
+  "mul_mat_id_q4_k_mul_q8_1": {
+    "path": "mul_mat_id_q4_k_mul_q8_1.hip.cpp"
+  },
+  "mul_mat_id_q4_k_q8_1": {
+    "path": "mul_mat_id_q4_k_q8_1.hip.cpp"
+  },
+  "mul_mat_id_q4_k_q8_1_x4_mmq": {
+    "path": "mul_mat_id_q4_k_q8_1_x4_mmq.hip.cpp"
+  },
+  "mul_mat_id_q5_k_q8_1_x4_mmq": {
+    "path": "mul_mat_id_q5_k_q8_1_x4_mmq.hip.cpp"
+  },
+  "mul_mat_id_q6_k_q8_1_x4_mmq": {
+    "path": "mul_mat_id_q6_k_q8_1_x4_mmq.hip.cpp"
+  },
+  "mul_mat_id_q4_k_swiglu": {
+    "path": "mul_mat_id_q4_k_swiglu.hip.cpp"
+  },
+  "mul_mat_vec_bf16": {
+    "path": "mul_mat_vec_bf16.hip.cpp"
+  },
+  "mul_mat_vec_bf16_set_rows": {
+    "path": "mul_mat_vec_bf16_set_rows.hip.cpp"
+  },
+  "mul_mat_vec_bf16_swiglu": {
+    "path": "mul_mat_vec_bf16_swiglu.hip.cpp"
+  },
+  "mul_mat_vec_f16": {
+    "path": "mul_mat_vec_f16.hip.cpp"
+  },
+  "mul_mat_vec_f16_batched": {
+    "path": "mul_mat_vec_f16_batched.hip.cpp"
+  },
+  "mul_mat_vec_f32": {
+    "path": "mul_mat_vec_f32.hip.cpp"
+  },
+  "mul_mat_vec_f32_batched": {
+    "path": "mul_mat_vec_f32_batched.hip.cpp"
+  },
+  "mul_mat_vec_q4_k": {
+    "path": "mul_mat_vec_q4_k.hip.cpp"
+  },
+  "mul_mat_vec_q4_k_q8_1": {
+    "path": "mul_mat_vec_q4_k_q8_1.hip.cpp"
+  },
+  "mul_mat_vec_q4_k_q8_1_x4_wave64": {
+    "path": "mul_mat_vec_q4_k_q8_1_x4_wave64.hip.cpp"
+  },
+  "mul_mat_vec_q4_k_q8_1_x4_mmql128": {
+    "path": "mul_mat_vec_q4_k_q8_1_x4_mmql128.hip.cpp"
+  },
+  "mul_mat_vec_q5_k": {
+    "path": "mul_mat_vec_q5_k.hip.cpp"
+  },
+  "mul_mat_vec_q5_k_q8_1": {
+    "path": "mul_mat_vec_q5_k_q8_1.hip.cpp"
+  },
+  "mul_mat_vec_q5_k_q8_1_wave64": {
+    "path": "mul_mat_vec_q5_k_q8_1_wave64.hip.cpp"
+  },
+  "mul_mat_vec_q6_k": {
+    "path": "mul_mat_vec_q6_k.hip.cpp"
+  },
+  "mul_mat_vec_q6_k_q8_1": {
+    "path": "mul_mat_vec_q6_k_q8_1.hip.cpp"
+  },
+  "mul_mat_vec_q6_k_q8_1_x4_wave64_direct": {
+    "path": "mul_mat_vec_q6_k_q8_1_x4_wave64_direct.hip.cpp"
+  },
+  "mul_mat_vec_q6_k_q8_1_x4_mmql128": {
+    "path": "mul_mat_vec_q6_k_q8_1_x4_mmql128.hip.cpp"
+  },
+  "mul_mat_vec_q6_k_q8_1_wave64": {
+    "path": "mul_mat_vec_q6_k_q8_1_wave64.hip.cpp"
+  },
+  "mul_mat_vec_q8_0": {
+    "path": "mul_mat_vec_q8_0.hip.cpp"
+  },
+  "mul_mat_vec_q8_0_mmq64x64": {
+    "path": "mul_mat_vec_q8_0_mmq64x64.hip.cpp"
+  },
+  "mul_mat_vec_q8_0_mmq32x64": {
+    "path": "mul_mat_vec_q8_0_mmq32x64.hip.cpp"
+  },
+  "mul_mat_vec_q8_0_mmq128x64": {
+    "path": "mul_mat_vec_q8_0_mmq128x64.hip.cpp"
+  },
+  "mul_mat_vec_q8_0_mmq64x64_ab": {
+    "path": "mul_mat_vec_q8_0_mmq64x64_ab.hip.cpp"
+  },
+  "mul_mat_vec_q8_0_wave64": {
+    "path": "mul_mat_vec_q8_0_wave64.hip.cpp"
+  },
+  "mul_mat_vec_q8_0_q8_1_x4_mmql128": {
+    "path": "mul_mat_vec_q8_0_q8_1_x4_mmql128.hip.cpp"
+  },
+  "mul_sum8_f32": {
+    "path": "mul_sum8_f32.hip.cpp"
+  },
+  "quantize_q8_1": {
+    "path": "quantize_q8_1.hip.cpp"
+  },
+  "rms_norm": {
+    "path": "rms_norm.hip.cpp"
+  },
+  "rms_norm_mul_f32": {
+    "path": "rms_norm_mul_f32.hip.cpp"
+  },
+  "rms_norm_mul_rope_f32": {
+    "path": "rms_norm_mul_rope_f32.hip.cpp"
+  },
+  "rope_f32": {
+    "path": "rope_f32.hip.cpp"
+  },
+  "rope_set_rows_f32_f16": {
+    "path": "rope_set_rows_f32_f16.hip.cpp"
+  },
+  "row_reduce_f32": {
+    "path": "row_reduce_f32.hip.cpp"
+  },
+  "scale_f32": {
+    "path": "scale_f32.hip.cpp"
+  },
+  "set_rows_f32_f16": {
+    "path": "set_rows_f32_f16.hip.cpp"
+  },
+  "set_rows_f32_f32": {
+    "path": "set_rows_f32_f32.hip.cpp"
+  },
+  "set_rows_f32_q4_0": {
+    "path": "set_rows_f32_q4_0.hip.cpp"
+  },
+  "set_rows_f32_q8_0": {
+    "path": "set_rows_f32_q8_0.hip.cpp"
+  },
+  "sigmoid_mul_f32_strided": {
+    "path": "sigmoid_mul_f32_strided.hip.cpp"
+  },
+  "soft_max_f32": {
+    "path": "soft_max_f32.hip.cpp"
+  },
+  "ssm_conv_f32": {
+    "path": "ssm_conv_f32.hip.cpp"
+  },
+  "ssm_conv_update_f32": {
+    "path": "ssm_conv_update_f32.hip.cpp"
+  },
+  "topk_moe_f32_shared": {
+    "path": "topk_moe_f32_shared.hip.cpp"
+  },
+  "topk_moe_f32_wave32": {
+    "path": "topk_moe_f32_wave32.hip.cpp"
+  },
+  "topk_moe_f32_wave32_top8_norm": {
+    "path": "topk_moe_f32_wave32_top8_norm.hip.cpp"
+  },
+  "unary_f32": {
+    "path": "unary_f32.hip.cpp"
+  }
+}

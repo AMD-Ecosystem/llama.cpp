@@ -1,0 +1,512 @@
+{
+  "add8_f32_hsaco": {
+    "source_id": "add8_f32",
+    "path": "add8_f32.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "add_add_f32_broadcast_hsaco": {
+    "source_id": "add_add_f32_broadcast",
+    "path": "add_add_f32_broadcast.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "add_f32_hsaco": {
+    "source_id": "add_f32",
+    "path": "add_f32.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "add_f32_broadcast_hsaco": {
+    "source_id": "add_f32_broadcast",
+    "path": "add_f32_broadcast.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "add_rms_norm_mul_f32_broadcast_hsaco": {
+    "source_id": "add_rms_norm_mul_f32_broadcast",
+    "path": "add_rms_norm_mul_f32_broadcast.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "add_softplus_mul_f32_broadcast_hsaco": {
+    "source_id": "add_softplus_mul_f32_broadcast",
+    "path": "add_softplus_mul_f32_broadcast.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "argsort_f32_hsaco": {
+    "source_id": "argsort_f32",
+    "path": "argsort_f32.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "clamp_f32_hsaco": {
+    "source_id": "clamp_f32",
+    "path": "clamp_f32.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "concat_f32_hsaco": {
+    "source_id": "concat_f32",
+    "path": "concat_f32.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "copy_f32_f16_hsaco": {
+    "source_id": "copy_f32_f16",
+    "path": "copy_f32_f16.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "copy_strided_f32_hsaco": {
+    "source_id": "copy_strided_f32",
+    "path": "copy_strided_f32.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "div_f32_broadcast_hsaco": {
+    "source_id": "div_f32_broadcast",
+    "path": "div_f32_broadcast.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "flash_attn_ext_f32_bf16_decode_hsaco": {
+    "source_id": "flash_attn_ext_f32_bf16_decode",
+    "path": "flash_attn_ext_f32_bf16_decode.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "flash_attn_ext_f32_f16_decode_hsaco": {
+    "source_id": "flash_attn_ext_f32_f16_decode",
+    "path": "flash_attn_ext_f32_f16_decode.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "flash_attn_ext_f32_f16_decode_reduce_hsaco": {
+    "source_id": "flash_attn_ext_f32_f16_decode_reduce",
+    "path": "flash_attn_ext_f32_f16_decode_reduce.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "flash_attn_ext_f32_f16_decode_split_hsaco": {
+    "source_id": "flash_attn_ext_f32_f16_decode_split",
+    "path": "flash_attn_ext_f32_f16_decode_split.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "flash_attn_ext_f32_f16_prefill_direct_hsaco": {
+    "source_id": "flash_attn_ext_f32_f16_prefill_direct",
+    "path": "flash_attn_ext_f32_f16_prefill_direct.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "flash_attn_ext_f32_f16_prefill_direct_d128_hsaco": {
+    "source_id": "flash_attn_ext_f32_f16_prefill_direct_d128",
+    "path": "flash_attn_ext_f32_f16_prefill_direct_d128.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "flash_attn_ext_f32_f16_prefill_tile8_hsaco": {
+    "source_id": "flash_attn_ext_f32_f16_prefill_tile8",
+    "path": "flash_attn_ext_f32_f16_prefill_tile8.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "flash_attn_ext_f32_f16_prefill_wmma16_hsaco": {
+    "source_id": "flash_attn_ext_f32_f16_prefill_wmma16",
+    "path": "flash_attn_ext_f32_f16_prefill_wmma16.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "flash_attn_ext_f32_f32_decode_hsaco": {
+    "source_id": "flash_attn_ext_f32_f32_decode",
+    "path": "flash_attn_ext_f32_f32_decode.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "flash_attn_ext_f32_q4_0_decode_hsaco": {
+    "source_id": "flash_attn_ext_f32_q4_0_decode",
+    "path": "flash_attn_ext_f32_q4_0_decode.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "flash_attn_ext_f32_q8_0_decode_hsaco": {
+    "source_id": "flash_attn_ext_f32_q8_0_decode",
+    "path": "flash_attn_ext_f32_q8_0_decode.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "flash_attn_ext_f32_q8_0_q4_0_decode_hsaco": {
+    "source_id": "flash_attn_ext_f32_q8_0_q4_0_decode",
+    "path": "flash_attn_ext_f32_q8_0_q4_0_decode.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "gated_delta_net_f32_hsaco": {
+    "source_id": "gated_delta_net_f32",
+    "path": "gated_delta_net_f32.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "get_rows_f32_hsaco": {
+    "source_id": "get_rows_f32",
+    "path": "get_rows_f32.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "get_rows_q5_k_hsaco": {
+    "source_id": "get_rows_q5_k",
+    "path": "get_rows_q5_k.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_add_add_f32_broadcast_hsaco": {
+    "source_id": "mul_add_add_f32_broadcast",
+    "path": "mul_add_add_f32_broadcast.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_f32_hsaco": {
+    "source_id": "mul_f32",
+    "path": "mul_f32.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_f32_broadcast_hsaco": {
+    "source_id": "mul_f32_broadcast",
+    "path": "mul_f32_broadcast.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_id_q4_k_hsaco": {
+    "source_id": "mul_mat_id_q4_k",
+    "path": "mul_mat_id_q4_k.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_id_q4_k_mul_hsaco": {
+    "source_id": "mul_mat_id_q4_k_mul",
+    "path": "mul_mat_id_q4_k_mul.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_id_q4_k_mul_q8_1_hsaco": {
+    "source_id": "mul_mat_id_q4_k_mul_q8_1",
+    "path": "mul_mat_id_q4_k_mul_q8_1.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_id_q4_k_q8_1_hsaco": {
+    "source_id": "mul_mat_id_q4_k_q8_1",
+    "path": "mul_mat_id_q4_k_q8_1.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_id_q4_k_q8_1_x4_mmq_hsaco": {
+    "source_id": "mul_mat_id_q4_k_q8_1_x4_mmq",
+    "path": "mul_mat_id_q4_k_q8_1_x4_mmq.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_id_q5_k_q8_1_x4_mmq_hsaco": {
+    "source_id": "mul_mat_id_q5_k_q8_1_x4_mmq",
+    "path": "mul_mat_id_q5_k_q8_1_x4_mmq.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_id_q6_k_q8_1_x4_mmq_hsaco": {
+    "source_id": "mul_mat_id_q6_k_q8_1_x4_mmq",
+    "path": "mul_mat_id_q6_k_q8_1_x4_mmq.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_id_q4_k_swiglu_hsaco": {
+    "source_id": "mul_mat_id_q4_k_swiglu",
+    "path": "mul_mat_id_q4_k_swiglu.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_vec_bf16_hsaco": {
+    "source_id": "mul_mat_vec_bf16",
+    "path": "mul_mat_vec_bf16.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_vec_bf16_set_rows_hsaco": {
+    "source_id": "mul_mat_vec_bf16_set_rows",
+    "path": "mul_mat_vec_bf16_set_rows.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_vec_bf16_swiglu_hsaco": {
+    "source_id": "mul_mat_vec_bf16_swiglu",
+    "path": "mul_mat_vec_bf16_swiglu.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_vec_f16_hsaco": {
+    "source_id": "mul_mat_vec_f16",
+    "path": "mul_mat_vec_f16.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_vec_f16_batched_hsaco": {
+    "source_id": "mul_mat_vec_f16_batched",
+    "path": "mul_mat_vec_f16_batched.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_vec_f32_hsaco": {
+    "source_id": "mul_mat_vec_f32",
+    "path": "mul_mat_vec_f32.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_vec_f32_batched_hsaco": {
+    "source_id": "mul_mat_vec_f32_batched",
+    "path": "mul_mat_vec_f32_batched.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_vec_q4_k_hsaco": {
+    "source_id": "mul_mat_vec_q4_k",
+    "path": "mul_mat_vec_q4_k.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_vec_q4_k_q8_1_hsaco": {
+    "source_id": "mul_mat_vec_q4_k_q8_1",
+    "path": "mul_mat_vec_q4_k_q8_1.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_vec_q4_k_q8_1_x4_wave64_hsaco": {
+    "source_id": "mul_mat_vec_q4_k_q8_1_x4_wave64",
+    "path": "mul_mat_vec_q4_k_q8_1_x4_wave64.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_vec_q4_k_q8_1_x4_mmql128_hsaco": {
+    "source_id": "mul_mat_vec_q4_k_q8_1_x4_mmql128",
+    "path": "mul_mat_vec_q4_k_q8_1_x4_mmql128.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_vec_q5_k_hsaco": {
+    "source_id": "mul_mat_vec_q5_k",
+    "path": "mul_mat_vec_q5_k.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_vec_q5_k_q8_1_hsaco": {
+    "source_id": "mul_mat_vec_q5_k_q8_1",
+    "path": "mul_mat_vec_q5_k_q8_1.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_vec_q5_k_q8_1_wave64_hsaco": {
+    "source_id": "mul_mat_vec_q5_k_q8_1_wave64",
+    "path": "mul_mat_vec_q5_k_q8_1_wave64.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_vec_q6_k_hsaco": {
+    "source_id": "mul_mat_vec_q6_k",
+    "path": "mul_mat_vec_q6_k.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_vec_q6_k_q8_1_hsaco": {
+    "source_id": "mul_mat_vec_q6_k_q8_1",
+    "path": "mul_mat_vec_q6_k_q8_1.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_vec_q6_k_q8_1_x4_wave64_direct_hsaco": {
+    "source_id": "mul_mat_vec_q6_k_q8_1_x4_wave64_direct",
+    "path": "mul_mat_vec_q6_k_q8_1_x4_wave64_direct.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_vec_q6_k_q8_1_x4_mmql128_hsaco": {
+    "source_id": "mul_mat_vec_q6_k_q8_1_x4_mmql128",
+    "path": "mul_mat_vec_q6_k_q8_1_x4_mmql128.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_vec_q6_k_q8_1_wave64_hsaco": {
+    "source_id": "mul_mat_vec_q6_k_q8_1_wave64",
+    "path": "mul_mat_vec_q6_k_q8_1_wave64.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_vec_q8_0_hsaco": {
+    "source_id": "mul_mat_vec_q8_0",
+    "path": "mul_mat_vec_q8_0.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_vec_q8_0_mmq64x64_hsaco": {
+    "source_id": "mul_mat_vec_q8_0_mmq64x64",
+    "path": "mul_mat_vec_q8_0_mmq64x64.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_vec_q8_0_mmq32x64_hsaco": {
+    "source_id": "mul_mat_vec_q8_0_mmq32x64",
+    "path": "mul_mat_vec_q8_0_mmq32x64.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_vec_q8_0_mmq128x64_hsaco": {
+    "source_id": "mul_mat_vec_q8_0_mmq128x64",
+    "path": "mul_mat_vec_q8_0_mmq128x64.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_vec_q8_0_mmq64x64_ab_hsaco": {
+    "source_id": "mul_mat_vec_q8_0_mmq64x64_ab",
+    "path": "mul_mat_vec_q8_0_mmq64x64_ab.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_vec_q8_0_wave64_hsaco": {
+    "source_id": "mul_mat_vec_q8_0_wave64",
+    "path": "mul_mat_vec_q8_0_wave64.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_vec_q8_0_q8_1_x4_mmql128_hsaco": {
+    "source_id": "mul_mat_vec_q8_0_q8_1_x4_mmql128",
+    "path": "mul_mat_vec_q8_0_q8_1_x4_mmql128.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_sum8_f32_hsaco": {
+    "source_id": "mul_sum8_f32",
+    "path": "mul_sum8_f32.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "quantize_q8_1_hsaco": {
+    "source_id": "quantize_q8_1",
+    "path": "quantize_q8_1.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "rms_norm_hsaco": {
+    "source_id": "rms_norm",
+    "path": "rms_norm.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "rms_norm_mul_f32_hsaco": {
+    "source_id": "rms_norm_mul_f32",
+    "path": "rms_norm_mul_f32.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "rms_norm_mul_rope_f32_hsaco": {
+    "source_id": "rms_norm_mul_rope_f32",
+    "path": "rms_norm_mul_rope_f32.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "rope_f32_hsaco": {
+    "source_id": "rope_f32",
+    "path": "rope_f32.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "rope_set_rows_f32_f16_hsaco": {
+    "source_id": "rope_set_rows_f32_f16",
+    "path": "rope_set_rows_f32_f16.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "row_reduce_f32_hsaco": {
+    "source_id": "row_reduce_f32",
+    "path": "row_reduce_f32.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "scale_f32_hsaco": {
+    "source_id": "scale_f32",
+    "path": "scale_f32.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "set_rows_f32_f16_hsaco": {
+    "source_id": "set_rows_f32_f16",
+    "path": "set_rows_f32_f16.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "set_rows_f32_f32_hsaco": {
+    "source_id": "set_rows_f32_f32",
+    "path": "set_rows_f32_f32.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "set_rows_f32_q4_0_hsaco": {
+    "source_id": "set_rows_f32_q4_0",
+    "path": "set_rows_f32_q4_0.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "set_rows_f32_q8_0_hsaco": {
+    "source_id": "set_rows_f32_q8_0",
+    "path": "set_rows_f32_q8_0.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "sigmoid_mul_f32_strided_hsaco": {
+    "source_id": "sigmoid_mul_f32_strided",
+    "path": "sigmoid_mul_f32_strided.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "soft_max_f32_hsaco": {
+    "source_id": "soft_max_f32",
+    "path": "soft_max_f32.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "ssm_conv_f32_hsaco": {
+    "source_id": "ssm_conv_f32",
+    "path": "ssm_conv_f32.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "ssm_conv_update_f32_hsaco": {
+    "source_id": "ssm_conv_update_f32",
+    "path": "ssm_conv_update_f32.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "topk_moe_f32_shared_hsaco": {
+    "source_id": "topk_moe_f32_shared",
+    "path": "topk_moe_f32_shared.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "topk_moe_f32_wave32_hsaco": {
+    "source_id": "topk_moe_f32_wave32",
+    "path": "topk_moe_f32_wave32.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "topk_moe_f32_wave32_top8_norm_hsaco": {
+    "source_id": "topk_moe_f32_wave32_top8_norm",
+    "path": "topk_moe_f32_wave32_top8_norm.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "unary_f32_hsaco": {
+    "source_id": "unary_f32",
+    "path": "unary_f32.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  }
+}

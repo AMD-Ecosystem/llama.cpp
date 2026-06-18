@@ -624,3 +624,107 @@ extern "C" __global__ void hrx_mul_mat_vec_f16_batched_cols16_f32(
         if (i11 + 15 < c.cols) { *reinterpret_cast<float *>(dst_row + 15 * c.dst_nb1) = sum15; }
     }
 }
+
+extern "C" __global__ __launch_bounds__(32) void hrx_mul_mat_vec_f16_batched_rows2_cols16_wg32_f32(
+        const __half * src0, const float * src1, float * dst,
+        hrx_mul_mat_vec_f16_batched_constants c) {
+    constexpr int COLS = 16;
+    const long long row0 = static_cast<long long>(__builtin_amdgcn_workgroup_id_x()) * 2;
+    const long long row1 = row0 + 1;
+    const long long outer = __builtin_amdgcn_workgroup_id_y();
+    const unsigned int tid = __builtin_amdgcn_workitem_id_x();
+    if (row0 >= c.rows) {
+        return;
+    }
+
+    const long long col_groups = (c.cols + COLS - 1) / COLS;
+    const long long col_group = outer % col_groups;
+    const long long i11 = col_group * COLS;
+    const long long t = outer / col_groups;
+    const long long i12 = t % c.dst_ne2;
+    const long long i13 = t / c.dst_ne2;
+    if (i13 >= c.dst_ne3) {
+        return;
+    }
+
+    const long long src0_i02 = c.src0_ne2 == c.dst_ne2 ? i12 : i12 / (c.dst_ne2 / c.src0_ne2);
+    const long long src0_i03 = c.src0_ne3 == c.dst_ne3 ? i13 : i13 / (c.dst_ne3 / c.src0_ne3);
+    const char * src0_row0 = reinterpret_cast<const char *>(src0) +
+        row0 * c.src0_nb1 + src0_i02 * c.src0_nb2 + src0_i03 * c.src0_nb3;
+    const char * src0_row1 = reinterpret_cast<const char *>(src0) +
+        row1 * c.src0_nb1 + src0_i02 * c.src0_nb2 + src0_i03 * c.src0_nb3;
+    const char * src1_col0 = reinterpret_cast<const char *>(src1) +
+        i11 * c.src1_nb1 + i12 * c.src1_nb2 + i13 * c.src1_nb3;
+
+    const bool have_row1 = row1 < c.rows;
+    const int rem = static_cast<int>(c.cols - i11 < COLS ? c.cols - i11 : COLS);
+    float sum0[COLS] = {};
+    float sum1[COLS] = {};
+
+    for (long long i = static_cast<long long>(tid) * 2; i < c.k; i += 64) {
+        const long long byte_i_f16 = i * static_cast<long long>(sizeof(__half));
+        const long long byte_i_f32 = i * static_cast<long long>(sizeof(float));
+        const bool have_k1 = i + 1 < c.k;
+
+        float a00;
+        float a01;
+        if (have_k1) {
+            const float2 a0 = __half22float2(*reinterpret_cast<const __half2 *>(src0_row0 + byte_i_f16));
+            a00 = a0.x;
+            a01 = a0.y;
+        } else {
+            a00 = __half2float(*reinterpret_cast<const __half *>(src0_row0 + byte_i_f16));
+            a01 = 0.0f;
+        }
+
+        float a10 = 0.0f;
+        float a11 = 0.0f;
+        if (have_row1) {
+            if (have_k1) {
+                const float2 a1 = __half22float2(*reinterpret_cast<const __half2 *>(src0_row1 + byte_i_f16));
+                a10 = a1.x;
+                a11 = a1.y;
+            } else {
+                a10 = __half2float(*reinterpret_cast<const __half *>(src0_row1 + byte_i_f16));
+            }
+        }
+
+#pragma unroll
+        for (int j = 0; j < COLS; ++j) {
+            if (j < rem) {
+                const char * src1_col = src1_col0 + static_cast<long long>(j) * c.src1_nb1;
+                const float b0 = *reinterpret_cast<const float *>(src1_col + byte_i_f32);
+                const float b1 = have_k1 ?
+                    *reinterpret_cast<const float *>(src1_col + byte_i_f32 + static_cast<long long>(sizeof(float))) : 0.0f;
+                sum0[j] += a00 * b0 + a01 * b1;
+                if (have_row1) {
+                    sum1[j] += a10 * b0 + a11 * b1;
+                }
+            }
+        }
+    }
+
+    for (int offset = 16; offset > 0; offset >>= 1) {
+#pragma unroll
+        for (int j = 0; j < COLS; ++j) {
+            sum0[j] += __shfl_down(sum0[j], offset, 32);
+            sum1[j] += __shfl_down(sum1[j], offset, 32);
+        }
+    }
+
+    if (tid == 0) {
+        char * dst_row0 = reinterpret_cast<char *>(dst) +
+            row0 * sizeof(float) + i11 * c.dst_nb1 + i12 * c.dst_nb2 + i13 * c.dst_nb3;
+        char * dst_row1 = reinterpret_cast<char *>(dst) +
+            row1 * sizeof(float) + i11 * c.dst_nb1 + i12 * c.dst_nb2 + i13 * c.dst_nb3;
+#pragma unroll
+        for (int j = 0; j < COLS; ++j) {
+            if (j < rem) {
+                *reinterpret_cast<float *>(dst_row0 + static_cast<long long>(j) * c.dst_nb1) = sum0[j];
+                if (have_row1) {
+                    *reinterpret_cast<float *>(dst_row1 + static_cast<long long>(j) * c.dst_nb1) = sum1[j];
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,11 @@
+// Compile the existing Q8_0 packed prompt route as a distinct wave64 artifact.
+// The source-level schedule is intentionally unchanged for the gfx1151 probe.
+#define hrx_mul_mat_vec_q8_0_f32 hrx_mul_mat_vec_q8_0_wave64_unused_f32
+#define hrx_mul_mat_vec_q8_0_cols8_f32 hrx_mul_mat_vec_q8_0_cols8_wave64_unused_f32
+#define hrx_mul_mat_vec_q8_0_q8_1_x4_mmq128x32_wg256_f32 hrx_mul_mat_vec_q8_0_q8_1_x4_mmq128x32_wg256_wave64_f32
+#define hrx_mul_mat_vec_q8_0_add_f32 hrx_mul_mat_vec_q8_0_add_wave64_unused_f32
+#define hrx_mul_mat_vec_q8_0_add_cols8_f32 hrx_mul_mat_vec_q8_0_add_cols8_wave64_unused_f32
+#define hrx_mul_mat_vec_q8_0_add_q8_1_x4_mmq128x32_wg256_f32 hrx_mul_mat_vec_q8_0_add_q8_1_x4_mmq128x32_wg256_wave64_f32
+#define hrx_mul_mat_vec_q8_0_add_rows4_cols4_f32 hrx_mul_mat_vec_q8_0_add_rows4_cols4_wave64_unused_f32
+
+#include "mul_mat_vec_q8_0.hip.cpp"

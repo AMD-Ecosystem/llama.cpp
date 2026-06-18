@@ -1,0 +1,25 @@
+{
+  "target_key": "gfx1151",
+  "schema": "ggml-hrx-tuning-shapes-v1",
+  "source": "docs/hrxv1/gfx1151-tuning-plan.md",
+  "model_basket": "shared/models/llamacpp-hrx2-basket-v1",
+  "required_prompt_columns": [
+    1, 2, 3, 4, 7, 8, 15, 16, 17,
+    31, 32, 33, 63, 64, 65,
+    127, 128, 129, 255, 256, 257,
+    511, 512, 513, 767, 768, 769,
+    1023, 1024, 1025
+  ],
+  "required_decode_tokens": [
+    1, 2, 3, 7, 8, 16, 32, 64
+  ],
+  "active_seed_rows": [
+    {
+      "id": "qwen3_30b_q4xl_no_fa_prefill",
+      "model": "unsloth__Qwen3-30B-A3B-Instruct-2507-GGUF/Qwen3-30B-A3B-Instruct-2507-UD-Q4_K_XL.gguf",
+      "prompt_columns": [33, 512, 513],
+      "flash_attention": false,
+      "status": "active_partial_basket"
+    }
+  ]
+}

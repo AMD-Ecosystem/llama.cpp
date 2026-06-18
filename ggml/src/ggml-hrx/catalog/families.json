@@ -1,0 +1,970 @@
+[
+  {
+    "family": "add",
+    "op": "ADD"
+  },
+  {
+    "family": "add8",
+    "op": "ADD"
+  },
+  {
+    "family": "add_add_f32_broadcast",
+    "op": "ADD"
+  },
+  {
+    "family": "add_f32_broadcast",
+    "op": "ADD"
+  },
+  {
+    "family": "add_rms_norm_mul_f32_broadcast",
+    "op": "ADD"
+  },
+  {
+    "family": "add_softplus_mul_f32_broadcast",
+    "op": "ADD"
+  },
+  {
+    "family": "argsort_f32",
+    "op": "ARGSORT"
+  },
+  {
+    "family": "clamp",
+    "op": "CLAMP"
+  },
+  {
+    "family": "clear_u32",
+    "op": "CUSTOM"
+  },
+  {
+    "family": "compact_moe_routes",
+    "op": "CUSTOM"
+  },
+  {
+    "family": "concat",
+    "op": "CONCAT"
+  },
+  {
+    "family": "copy_f32_f16",
+    "op": "CPY"
+  },
+  {
+    "family": "copy_strided",
+    "op": "CPY"
+  },
+  {
+    "family": "div_f32_broadcast",
+    "op": "DIV"
+  },
+  {
+    "family": "flash_attn_ext_f32_bf16_decode",
+    "op": "FLASH_ATTN_EXT"
+  },
+  {
+    "family": "flash_attn_ext_f32_f16_decode",
+    "op": "FLASH_ATTN_EXT"
+  },
+  {
+    "family": "flash_attn_ext_f32_f16_decode_gqa4_split",
+    "op": "FLASH_ATTN_EXT"
+  },
+  {
+    "family": "flash_attn_ext_f32_f16_decode_gqa8_split",
+    "op": "FLASH_ATTN_EXT"
+  },
+  {
+    "family": "flash_attn_ext_f32_f16_decode_reduce",
+    "op": "FLASH_ATTN_EXT"
+  },
+  {
+    "family": "flash_attn_ext_f32_f16_prefill_direct",
+    "op": "FLASH_ATTN_EXT"
+  },
+  {
+    "family": "flash_attn_ext_f32_f16_prefill_direct_d128",
+    "op": "FLASH_ATTN_EXT"
+  },
+  {
+    "family": "flash_attn_ext_f32_f16_prefill_tile8",
+    "op": "FLASH_ATTN_EXT"
+  },
+  {
+    "family": "flash_attn_ext_f32_f16_prefill_wmma16",
+    "op": "FLASH_ATTN_EXT"
+  },
+  {
+    "family": "flash_attn_ext_f32_f32_decode",
+    "op": "FLASH_ATTN_EXT"
+  },
+  {
+    "family": "flash_attn_ext_f32_q4_0_decode",
+    "op": "FLASH_ATTN_EXT"
+  },
+  {
+    "family": "flash_attn_ext_f32_q8_0_decode",
+    "op": "FLASH_ATTN_EXT"
+  },
+  {
+    "family": "flash_attn_ext_f32_q8_0_q4_0_decode",
+    "op": "FLASH_ATTN_EXT"
+  },
+  {
+    "family": "gated_delta_net",
+    "op": "CUSTOM"
+  },
+  {
+    "family": "gated_delta_net_s128_cluster8",
+    "op": "CUSTOM"
+  },
+  {
+    "family": "gated_delta_net_s128_cluster8_nokda",
+    "op": "CUSTOM"
+  },
+  {
+    "family": "gated_delta_net_s128_cluster8_nokda_nomod",
+    "op": "CUSTOM"
+  },
+  {
+    "family": "gated_delta_net_s128_h32_qk16_tok1_nokda",
+    "op": "CUSTOM"
+  },
+  {
+    "family": "gated_delta_net_s128_h32_qk16_tok1_nokda_beta_sigmoid",
+    "op": "CUSTOM"
+  },
+  {
+    "family": "gated_delta_net_s128_h32_qk16_tok1_nokda_beta_sigmoid_direct_gather",
+    "op": "CUSTOM"
+  },
+  {
+    "family": "gated_delta_net_s128_h32_qk16_tok1_nokda_beta_sigmoid_gather",
+    "op": "CUSTOM"
+  },
+  {
+    "family": "get_rows",
+    "op": "GET_ROWS"
+  },
+  {
+    "family": "get_rows_f32_nr1",
+    "op": "GET_ROWS"
+  },
+  {
+    "family": "get_rows_f32_nr1_x4",
+    "op": "GET_ROWS"
+  },
+  {
+    "family": "get_rows_q5_k",
+    "op": "GET_ROWS"
+  },
+  {
+    "family": "l2_norm",
+    "op": "CUSTOM"
+  },
+  {
+    "family": "l2_norm_pair_wg128",
+    "op": "CUSTOM"
+  },
+  {
+    "family": "l2_norm_wg128",
+    "op": "CUSTOM"
+  },
+  {
+    "family": "mul",
+    "op": "MUL"
+  },
+  {
+    "family": "mul_add_add_f32_broadcast",
+    "op": "MUL"
+  },
+  {
+    "family": "mul_f32_broadcast",
+    "op": "MUL"
+  },
+  {
+    "family": "mul_mat_id_q4_k",
+    "op": "MUL_MAT_ID"
+  },
+  {
+    "family": "mul_mat_id_q4_k_grouped_q8_1_x4_mmq64x16_wg64",
+    "op": "MUL_MAT_ID"
+  },
+  {
+    "family": "mul_mat_id_q4_k_grouped_q8_1_x4_mmq64x64_wg64",
+    "op": "MUL_MAT_ID"
+  },
+  {
+    "family": "mul_mat_id_q5_k_grouped_q8_1_x4_mmq64x16_wg64",
+    "op": "MUL_MAT_ID"
+  },
+  {
+    "family": "mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x16_wg64",
+    "op": "MUL_MAT_ID"
+  },
+  {
+    "family": "mul_mat_id_q4_k_grouped_row2_route8_wg64",
+    "op": "MUL_MAT_ID"
+  },
+  {
+    "family": "mul_mat_id_q4_k_mul",
+    "op": "MUL_MAT_ID"
+  },
+  {
+    "family": "mul_mat_id_q4_k_mul_packed_wg64",
+    "op": "MUL_MAT_ID"
+  },
+  {
+    "family": "mul_mat_id_q4_k_mul_q8_1",
+    "op": "MUL_MAT_ID"
+  },
+  {
+    "family": "mul_mat_id_q4_k_mul_rows2_x16_wg32",
+    "op": "MUL_MAT_ID"
+  },
+  {
+    "family": "mul_mat_id_q4_k_mul_wg64",
+    "op": "MUL_MAT_ID"
+  },
+  {
+    "family": "mul_mat_id_q4_k_q8_1",
+    "op": "MUL_MAT_ID"
+  },
+  {
+    "family": "mul_mat_id_q4_k_row4_wg64",
+    "op": "MUL_MAT_ID"
+  },
+  {
+    "family": "mul_mat_id_q4_k_row8_wg64",
+    "op": "MUL_MAT_ID"
+  },
+  {
+    "family": "mul_mat_id_q4_k_rows2_x16_wg32",
+    "op": "MUL_MAT_ID"
+  },
+  {
+    "family": "mul_mat_id_q4_k_swiglu",
+    "op": "MUL_MAT_ID"
+  },
+  {
+    "family": "mul_mat_id_q4_k_swiglu_grouped_q8_1_x4_bn16_wg64",
+    "op": "MUL_MAT_ID"
+  },
+  {
+    "family": "mul_mat_id_q4_k_swiglu_grouped_q8_1_x4_mmq32x64_wg64",
+    "op": "MUL_MAT_ID"
+  },
+  {
+    "family": "mul_mat_id_q4_k_swiglu_grouped_row2_route4_wg64",
+    "op": "MUL_MAT_ID"
+  },
+  {
+    "family": "mul_mat_id_q4_k_swiglu_grouped_row2_route8_wg64",
+    "op": "MUL_MAT_ID"
+  },
+  {
+    "family": "mul_mat_id_q4_k_swiglu_packed_wg32",
+    "op": "MUL_MAT_ID"
+  },
+  {
+    "family": "mul_mat_id_q4_k_swiglu_packed_wg64",
+    "op": "MUL_MAT_ID"
+  },
+  {
+    "family": "mul_mat_id_q4_k_swiglu_row2_wg64",
+    "op": "MUL_MAT_ID"
+  },
+  {
+    "family": "mul_mat_id_q4_k_swiglu_row4_wg64",
+    "op": "MUL_MAT_ID"
+  },
+  {
+    "family": "mul_mat_id_q4_k_swiglu_wg64",
+    "op": "MUL_MAT_ID"
+  },
+  {
+    "family": "mul_mat_id_q4_k_wg64",
+    "op": "MUL_MAT_ID"
+  },
+  {
+    "family": "mul_mat_vec_bf16",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_cols1",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_cols16",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_cols2",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_cols3",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_cols32",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_cols4",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_cols5",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_cols6",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_cols7",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_cols8",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_rows2_cols1",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_rows2_cols16",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_rows2_cols1_wg32",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_rows2_cols1_x8_wg32",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_rows4_k2048_cols1_lds_wg256",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_rows4_k2048_cols1_set",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_rows4_k512_cols1_lds_wg256",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_set",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_swiglu",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_swiglu_cols1",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_swiglu_cols16",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_swiglu_cols2",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_swiglu_cols3",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_swiglu_cols4",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_swiglu_cols5",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_swiglu_cols6",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_swiglu_cols7",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_swiglu_cols8",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_swiglu_rows2_cols1",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_swiglu_rows2_cols8",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_swiglu_rows4_k2048_cols1_lds_wg256",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_swiglu_rows8_k2048_cols1_lds_wg256",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_swiglu_wg128",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_swiglu_wg64",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_swiglu_wmma16x16",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_wg128",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_wg64",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_bf16_wmma16x16",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_f16",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_f16_batched",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_f16_batched_cols1",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_f16_batched_cols16",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_f16_batched_rows2_cols16_wg32",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_f16_batched_cols4",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_f16_batched_cols8",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_f16_batched_rows2_cols1_x8_wg32",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_f32",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_f32_batched",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_f32_batched_cols16",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_f32_batched_cols1_ne2_1",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_f32_batched_cols1_ne2_1_k2048_wg32",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_f32_batched_cols8",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_f32_batched_rows2_cols8",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_f32_cols3",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_f32_cols4",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_f32_cols5",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_f32_cols6",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_f32_cols7",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q4_k",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q4_k_q8_1",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q4_k_q8_1_x4_mmq64x64_wg256",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q4_k_q8_1_x4_mmql128x128_wg256",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q5_k",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q5_k_q8_1",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q5_k_q8_1_mmq32x32_wg128",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q5_k_q8_1_x4_mmq32x32_wg128",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q5_k_q8_1_x4_mmq64x64_wg256",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q5_k_q8_1_x4_mmql128x128_wg256",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q5_k_rows2_cols2_wg128",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q5_k_rows2_cols2_wg64",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q5_k_rows2_cols3_wg128",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q5_k_rows2_cols3_wg64",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q5_k_rows2_cols4_wg128",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q5_k_rows2_cols4_wg64",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q5_k_rows2_cols5_wg128",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q5_k_rows2_cols5_wg64",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q5_k_rows2_cols6_wg128",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q5_k_rows2_cols6_wg64",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q5_k_rows2_cols7_wg128",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q5_k_rows2_cols7_wg64",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q5_k_rows2_cols8_wg128",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q5_k_rows2_cols8_wg64",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q5_k_wg128",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q5_k_wg32",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q5_k_wg64",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_q8_1",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_q8_1_x4_mmq32x32_wg128",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_q8_1_x4_mmq64x64_wg256",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_q8_1_x4_mmq64x128_wg256",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_q8_1_x4_mmql128x128_wg256",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_q8_1_x4_mmql128x64_wg256",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_q8_1_x4_mmql64x128_wg256",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_rows2_cols1_wg32",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_rows2_cols2_wg128",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_rows2_cols2_wg32",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_rows2_cols2_wg64",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_rows2_cols3_wg128",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_rows2_cols3_wg32",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_rows2_cols3_wg64",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_rows2_cols4_wg128",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_rows2_cols4_wg32",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_rows2_cols4_wg64",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_rows2_cols5_wg128",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_rows2_cols5_wg32",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_rows2_cols5_wg64",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_rows2_cols6_wg128",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_rows2_cols6_wg32",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_rows2_cols6_wg64",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_rows2_cols7_wg128",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_rows2_cols7_wg32",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_rows2_cols7_wg64",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_rows2_cols8_wg128",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_rows2_cols8_wg32",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_rows2_cols8_wg64",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_silu_mul_rows2_cols1_wg32",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_wg128",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q6_k_wg64",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q8_0",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q8_0_add",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q8_0_add_cols8",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q8_0_add_q8_1_x4_mmq128x32_wg256",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q8_0_add_rows4_cols4",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q8_0_cols8",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q8_0_q8_1_x4_mmq128x32_wg256",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q8_0_q8_1_x4_mmq64x64_wg256",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q8_0_q8_1_x4_mmq32x64_wg256",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q8_0_q8_1_x4_mmq128x64_wg256",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q8_0_q8_1_x4_mmq64x64_ab_wg256",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q8_0_q8_1_x4_mmq128x32_wg256_wave64",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q8_0_q8_1_x4_mmql128x128_wg256",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_sum8",
+    "op": "MUL"
+  },
+  {
+    "family": "quantize_q8_1",
+    "op": "QUANTIZE"
+  },
+  {
+    "family": "quantize_q8_1_x4",
+    "op": "QUANTIZE"
+  },
+  {
+    "family": "rms_norm",
+    "op": "RMS_NORM"
+  },
+  {
+    "family": "rms_norm_mul",
+    "op": "RMS_NORM"
+  },
+  {
+    "family": "rms_norm_mul_rope",
+    "op": "RMS_NORM"
+  },
+  {
+    "family": "rms_norm_mul_rope_set_rows_f32_f16",
+    "op": "RMS_NORM"
+  },
+  {
+    "family": "rms_norm_mul_wg128",
+    "op": "RMS_NORM"
+  },
+  {
+    "family": "rope",
+    "op": "ROPE"
+  },
+  {
+    "family": "rope_set_rows_f32_f16",
+    "op": "ROPE"
+  },
+  {
+    "family": "scale",
+    "op": "SCALE"
+  },
+  {
+    "family": "scale_get_rows_f32_nr1_x4",
+    "op": "SCALE"
+  },
+  {
+    "family": "set_rows_f32",
+    "op": "SET_ROWS"
+  },
+  {
+    "family": "set_rows_f32_f16",
+    "op": "SET_ROWS"
+  },
+  {
+    "family": "set_rows_f32_q4_0",
+    "op": "SET_ROWS"
+  },
+  {
+    "family": "set_rows_f32_q8_0",
+    "op": "SET_ROWS"
+  },
+  {
+    "family": "sigmoid",
+    "op": "CUSTOM"
+  },
+  {
+    "family": "sigmoid_mul",
+    "op": "CUSTOM"
+  },
+  {
+    "family": "sigmoid_mul_add_add_f32_broadcast",
+    "op": "CUSTOM"
+  },
+  {
+    "family": "sigmoid_mul_f32_strided",
+    "op": "CUSTOM"
+  },
+  {
+    "family": "silu",
+    "op": "CUSTOM"
+  },
+  {
+    "family": "soft_max",
+    "op": "SOFT_MAX"
+  },
+  {
+    "family": "soft_max_f32_mask",
+    "op": "SOFT_MAX"
+  },
+  {
+    "family": "softplus",
+    "op": "CUSTOM"
+  },
+  {
+    "family": "ssm_conv",
+    "op": "CUSTOM"
+  },
+  {
+    "family": "ssm_conv_update",
+    "op": "CUSTOM"
+  },
+  {
+    "family": "ssm_conv_update_gather",
+    "op": "CUSTOM"
+  },
+  {
+    "family": "ssm_conv_update_gather_decode",
+    "op": "CUSTOM"
+  },
+  {
+    "family": "ssm_conv_update_gather_decode_direct",
+    "op": "CUSTOM"
+  },
+  {
+    "family": "sum_rows",
+    "op": "CUSTOM"
+  },
+  {
+    "family": "swiglu",
+    "op": "CUSTOM"
+  },
+  {
+    "family": "topk_moe",
+    "op": "TOP_K"
+  },
+  {
+    "family": "topk_moe_f32_shared4",
+    "op": "TOP_K"
+  },
+  {
+    "family": "topk_moe_f32_shared8",
+    "op": "TOP_K"
+  },
+  {
+    "family": "topk_moe_f32_wave32",
+    "op": "TOP_K"
+  },
+  {
+    "family": "topk_moe_f32_wave32_n128_top8_norm",
+    "op": "TOP_K"
+  },
+  {
+    "family": "topk_moe_f32_wave32_n256_top8_norm",
+    "op": "TOP_K"
+  },
+  {
+    "family": "topk_moe_f32_wave32_n32_top8_norm",
+    "op": "TOP_K"
+  },
+  {
+    "family": "topk_moe_f32_wave32_n64_top8_norm",
+    "op": "TOP_K"
+  }
+]

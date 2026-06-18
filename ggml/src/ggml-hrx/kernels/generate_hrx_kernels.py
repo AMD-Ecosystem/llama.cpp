@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import json
 import pathlib
 import re
 import sys
@@ -864,6 +865,14 @@ KERNELS = [
         "workgroup_size": (256, 1, 1),
     },
     {
+        "name": "hrx_mul_mat_vec_f16_batched_rows2_cols16_wg32_f32",
+        "source": "mul_mat_vec_f16_batched.hip.cpp",
+        "format": None,
+        "binding_count": 3,
+        "constants_size": 128,
+        "workgroup_size": (32, 1, 1),
+    },
+    {
         "name": "hrx_mul_mat_vec_f32_f32",
         "source": "mul_mat_vec_f32.hip.cpp",
         "format": None,
@@ -1487,6 +1496,24 @@ KERNELS = [
         "workgroup_size": (256, 1, 1),
     },
     {
+        "name": "hrx_mul_mat_vec_q6_k_q8_1_x4_mmq64x128_wg256_f32",
+        "source": "mul_mat_vec_q6_k_q8_1_x4_wave64_direct.hip.cpp",
+        "format": None,
+        "binding_count": 3,
+        "parameter_count": 6,
+        "constants_size": 24,
+        "workgroup_size": (256, 1, 1),
+    },
+    {
+        "name": "hrx_mul_mat_vec_q6_k_q8_1_x4_mmql128x128_wg256_f32",
+        "source": "mul_mat_vec_q6_k_q8_1_x4_mmql128.hip.cpp",
+        "format": None,
+        "binding_count": 3,
+        "parameter_count": 6,
+        "constants_size": 24,
+        "workgroup_size": (256, 1, 1),
+    },
+    {
         "name": "hrx_mul_mat_vec_q6_k_q8_1_x4_mmq32x32_wg128_f32",
         "source": "mul_mat_vec_q6_k_q8_1.hip.cpp",
         "format": None,
@@ -1800,9 +1827,205 @@ def unique_sources():
     return sorted({kernel["source"] for kernel in KERNELS})
 
 
+def unique_sources_for(kernels):
+    return sorted({kernel["source"] for kernel in kernels})
+
+
 def kernel_supports_arch(kernel, arch):
     prefixes = DOT8_ARCH_PREFIXES if kernel["source"] in DOT8_SOURCES else kernel.get("arch_prefixes")
     return not prefixes or any(arch.startswith(prefix) for prefix in prefixes)
+
+
+def kernel_source_id(source):
+    return symbol_part(source.removesuffix(".hip.cpp"))
+
+
+def family_for_kernel_name(name):
+    name = name.removeprefix("hrx_")
+    for suffix in ("_f32", "_i32"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+    parts = name.split("_")
+    if len(parts) > 4 and parts[-2] in ("cols", "rows"):
+        return "_".join(parts[:-2])
+    return name
+
+
+def op_for_family(family):
+    if family.startswith("mul_mat"):
+        return "MUL_MAT_ID" if family.startswith("mul_mat_id") else "MUL_MAT"
+    if family.startswith("rms_norm"):
+        return "RMS_NORM"
+    if family.startswith("soft_max"):
+        return "SOFT_MAX"
+    if family.startswith("set_rows"):
+        return "SET_ROWS"
+    if family.startswith("get_rows"):
+        return "GET_ROWS"
+    if family.startswith("quantize"):
+        return "QUANTIZE"
+    if family.startswith("topk"):
+        return "TOP_K"
+    if family.startswith("flash_attn"):
+        return "FLASH_ATTN_EXT"
+    if family.startswith("rope"):
+        return "ROPE"
+    if family.startswith("add"):
+        return "ADD"
+    if family.startswith("mul"):
+        return "MUL"
+    if family.startswith("div"):
+        return "DIV"
+    if family.startswith("scale"):
+        return "SCALE"
+    if family.startswith("clamp"):
+        return "CLAMP"
+    if family.startswith("argsort"):
+        return "ARGSORT"
+    if family.startswith("concat"):
+        return "CONCAT"
+    if family.startswith("copy"):
+        return "CPY"
+    return "CUSTOM"
+
+
+def write_json(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="\n") as f:
+        json.dump(value, f, indent=2)
+        f.write("\n")
+
+
+def export_split_catalog(catalog_dir):
+    sources = {}
+    artifacts = {}
+    families = {}
+    routes = []
+    route_index = []
+
+    for source in unique_sources():
+        source_id = kernel_source_id(source)
+        sources[source_id] = {"path": source}
+        artifacts[source_id + "_hsaco"] = {
+            "source_id": source_id,
+            "path": hsaco_name_for_source(source),
+            "format": "amdgpu-hsaco",
+            "storage": "embedded",
+        }
+
+    seen_route_ids = set()
+    for kernel in KERNELS:
+        route_id = kernel["name"]
+        if route_id in seen_route_ids:
+            raise SystemExit(f"duplicate generated route id: {route_id}")
+        seen_route_ids.add(route_id)
+        source = kernel["source"]
+        source_id = kernel_source_id(source)
+        family = family_for_kernel_name(kernel["name"])
+        families.setdefault(family, {"family": family, "op": op_for_family(family)})
+        wx, wy, wz = kernel["workgroup_size"]
+        route = {
+            "id": route_id,
+            "family": family,
+            "op": op_for_family(family),
+            "target_key": "gfx1100",
+            "source_id": source_id,
+            "artifact_id": source_id + "_hsaco",
+            "export_name": kernel["name"],
+            "loader_format": kernel.get("format") or "amdgpu-hsaco",
+            "priority": 100,
+            "abi": {
+                "binding_count": kernel["binding_count"],
+                "parameter_count": kernel.get("parameter_count", kernel["binding_count"] + 1),
+                "constant_byte_length": kernel["constants_size"],
+            },
+            "dispatch": {
+                "workgroup_size": [wx, wy, wz],
+            },
+            "shape_domain": {
+                "name": "legacy_cxx_default",
+            },
+            "shape_guards": {},
+            "supports": {
+                "legacy_export": kernel["name"],
+            },
+            "evidence_summary": {
+                "status": "accepted_gfx1100_legacy",
+                "selection": "ported_from_pre_catalog_hrx_v1_hardcoded_route",
+            },
+        }
+        if "arch_prefixes" in kernel:
+            route["target_prefixes"] = list(kernel["arch_prefixes"])
+        elif source in DOT8_SOURCES:
+            route["target_prefixes"] = list(DOT8_ARCH_PREFIXES)
+        routes.append(route)
+        route_index.append(route_id)
+
+    write_json(catalog_dir / "metadata.json", {
+        "schema": "ggml-hrx-catalog-v1",
+        "catalog_id": "hrx-v1-legacy-gfx1100",
+        "generated_at": "source",
+        "targets": [
+            {"target_key": "gfx1100", "target_variant": None, "status": "accepted_legacy"},
+            {"target_key": "gfx1151", "target_variant": None, "status": "tuning_seed"},
+        ],
+    })
+    write_json(catalog_dir / "sources.json", sources)
+    write_json(catalog_dir / "artifacts.json", artifacts)
+    write_json(catalog_dir / "families.json", sorted(families.values(), key=lambda item: item["family"]))
+    write_json(catalog_dir / "routes" / "legacy.json", routes)
+    write_json(catalog_dir / "routes" / "index.json", route_index)
+    write_json(catalog_dir / "fusions" / "candidates.json", [])
+
+
+def load_json(path):
+    with pathlib.Path(path).open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def kernels_from_catalog(path, exclude_sources):
+    catalog = load_json(path)
+    sources = catalog.get("sources", {})
+    artifacts = catalog.get("artifacts", {})
+    kernels = []
+    for route in catalog.get("routes", []):
+        source_id = route.get("source_id")
+        artifact_id = route.get("artifact_id")
+        source = sources.get(source_id, {})
+        artifact = artifacts.get(artifact_id, {})
+        source_path = source.get("path")
+        if not source_path:
+            raise SystemExit(f"route {route.get('id')} references source without path: {source_id}")
+        if source_path in exclude_sources:
+            continue
+        abi = route.get("abi", {})
+        dispatch = route.get("dispatch", {})
+        workgroup = dispatch.get("workgroup_size")
+        if not isinstance(workgroup, list) or len(workgroup) != 3:
+            raise SystemExit(f"route {route.get('id')} missing dispatch.workgroup_size")
+        kernel = {
+            "name": route["export_name"],
+            "route_id": route["id"],
+            "family": route["family"],
+            "op": route["op"],
+            "target_key": route["target_key"],
+            "source": source_path,
+            "format": None if route.get("loader_format") == "amdgpu-hsaco" else route.get("loader_format"),
+            "priority": route.get("priority", 0),
+            "binding_count": abi["binding_count"],
+            "parameter_count": abi.get("parameter_count", abi["binding_count"] + 1),
+            "constants_size": abi["constant_byte_length"],
+            "workgroup_size": tuple(workgroup),
+        }
+        prefixes = route.get("target_prefixes") or artifact.get("target_prefixes")
+        if prefixes:
+            kernel["arch_prefixes"] = tuple(prefixes)
+        kernels.append(kernel)
+    return kernels
+
+
+def c_string(value):
+    return json.dumps(str(value))
 
 
 def write_catalog(output, entries):
@@ -1830,12 +2053,21 @@ def write_catalog(output, entries):
             wx, wy, wz = entry["workgroup_size"]
             executable_format = entry["format"]
             executable_format_c = "nullptr" if not executable_format else f'"{executable_format}"'
+            route_id = entry.get("route_id", entry["name"])
+            family = entry.get("family", family_for_kernel_name(entry["name"]))
+            op = entry.get("op", op_for_family(family))
+            target_key = entry.get("target_key", "legacy")
             f.write("    {\n")
-            f.write(f'        "{entry["name"]}",\n')
-            f.write(f'        "{entry["gfx_target"]}",\n')
+            f.write(f"        {c_string(entry['name'])},\n")
+            f.write(f"        {c_string(route_id)},\n")
+            f.write(f"        {c_string(family)},\n")
+            f.write(f"        {c_string(op)},\n")
+            f.write(f"        {c_string(target_key)},\n")
+            f.write(f"        {c_string(entry['gfx_target'])},\n")
             f.write(f"        {entry['data_symbol']},\n")
             f.write(f"        sizeof({entry['data_symbol']}),\n")
             f.write(f"        {executable_format_c},\n")
+            f.write(f"        {entry.get('priority', 0)},\n")
             f.write(f"        {entry['binding_count']},\n")
             f.write(f"        {entry['parameter_count']},\n")
             f.write(f"        {entry['constants_size']},\n")
@@ -1868,18 +2100,36 @@ def write_catalog(output, entries):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--arch", action="append", default=[])
-    parser.add_argument("--source-dir", required=True)
+    parser.add_argument("--source-dir")
     parser.add_argument("--hsaco-root", default="")
-    parser.add_argument("--output", required=True)
+    parser.add_argument("--output")
+    parser.add_argument("--catalog", help="Assembled ggml-hrx-catalog-v1 JSON to embed.")
+    parser.add_argument("--exclude-source", action="append", default=[], help="Catalog source path to omit from this build.")
     parser.add_argument("--list-sources", action="store_true")
+    parser.add_argument("--emit-split-catalog", type=pathlib.Path, help="Bootstrap split catalog JSON from the legacy in-script table.")
     args = parser.parse_args()
 
+    if args.emit_split_catalog:
+        export_split_catalog(args.emit_split_catalog)
+        return 0
+
+    if not args.source_dir:
+        sys.stderr.write("error: --source-dir is required\n")
+        return 1
+
+    exclude_sources = set(args.exclude_source)
+    kernels = kernels_from_catalog(args.catalog, exclude_sources) if args.catalog else [
+        kernel for kernel in KERNELS if kernel["source"] not in exclude_sources
+    ]
     source_dir = pathlib.Path(args.source_dir)
     if args.list_sources:
-        for source in unique_sources():
+        for source in unique_sources_for(kernels):
             print(source_dir / source)
         return 0
 
+    if not args.output:
+        sys.stderr.write("error: --output is required\n")
+        return 1
     output = pathlib.Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1894,7 +2144,7 @@ def main():
     entries = []
     hsaco_cache = {}
     for arch in args.arch:
-        for kernel in KERNELS:
+        for kernel in kernels:
             if not kernel_supports_arch(kernel, arch):
                 continue
             source = kernel["source"]

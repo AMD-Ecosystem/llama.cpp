@@ -24,13 +24,32 @@ if (NOT GGML_HRX_CLANGXX)
     message(FATAL_ERROR "clang++ is required to build HRX HIP kernels")
 endif()
 
+find_path(GGML_HRX_ROCWMMA_INCLUDE_DIR
+    NAMES rocwmma/rocwmma.hpp
+    HINTS "${GGML_HRX_ROCM_PATH}/include"
+    NO_DEFAULT_PATH
+)
+set(GGML_HRX_CATALOG_EXCLUDE_SOURCE_ARGS)
+if (GGML_HRX_ROCWMMA_INCLUDE_DIR)
+    message(STATUS "HRX ROCWMMA headers: ${GGML_HRX_ROCWMMA_INCLUDE_DIR}")
+else()
+    message(WARNING "HRX ROCWMMA headers not found; skipping ROCWMMA-dependent HIP kernels")
+    list(APPEND GGML_HRX_CATALOG_EXCLUDE_SOURCE_ARGS
+        --exclude-source "flash_attn_ext_f32_f16_prefill_wmma16.hip.cpp")
+endif()
+
 set(GGML_HRX_AMDGPU_TARGETS "gfx1100" CACHE STRING "AMDGPU gfx targets to build HRX HSACO kernels for")
 string(REPLACE "," ";" GGML_HRX_AMDGPU_TARGET_LIST "${GGML_HRX_AMDGPU_TARGETS}")
 
 set(GGML_HRX_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set(GGML_HRX_HSACO_ROOT "${GGML_HRX_GENERATED_DIR}/hsaco")
+set(GGML_HRX_CATALOG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/catalog")
+set(GGML_HRX_ASSEMBLED_CATALOG_JSON "${GGML_HRX_GENERATED_DIR}/hrx_catalog.json")
 set(GGML_HRX_KERNEL_CATALOG_CPP "${GGML_HRX_GENERATED_DIR}/hrx_kernel_catalog.cpp")
 set(GGML_HRX_KERNEL_GENERATOR "${CMAKE_CURRENT_SOURCE_DIR}/kernels/generate_hrx_kernels.py")
+set(GGML_HRX_CATALOG_ASSEMBLER "${CMAKE_CURRENT_SOURCE_DIR}/tools/assemble_hrx_catalog.py")
+set(GGML_HRX_CATALOG_VALIDATOR "${CMAKE_CURRENT_SOURCE_DIR}/tools/validate_hrx_catalog.py")
+file(GLOB_RECURSE GGML_HRX_CATALOG_INPUTS CONFIGURE_DEPENDS "${GGML_HRX_CATALOG_DIR}/*.json")
 
 set(GGML_HRX_AMDGPU_TARGET_LIST_CANONICAL)
 set(GGML_HRX_CATALOG_ARCH_ARGS)
@@ -49,6 +68,23 @@ endif()
 
 file(MAKE_DIRECTORY "${GGML_HRX_GENERATED_DIR}" "${GGML_HRX_HSACO_ROOT}")
 set(GGML_HRX_HSACO_OUTPUTS)
+
+add_custom_command(
+    OUTPUT "${GGML_HRX_ASSEMBLED_CATALOG_JSON}"
+    COMMAND "${Python3_EXECUTABLE}"
+        "${GGML_HRX_CATALOG_ASSEMBLER}"
+        --catalog-dir "${GGML_HRX_CATALOG_DIR}"
+        --out "${GGML_HRX_ASSEMBLED_CATALOG_JSON}"
+    COMMAND "${Python3_EXECUTABLE}"
+        "${GGML_HRX_CATALOG_VALIDATOR}"
+        --catalog "${GGML_HRX_ASSEMBLED_CATALOG_JSON}"
+        --source-root "${CMAKE_CURRENT_SOURCE_DIR}/kernels"
+    DEPENDS
+        "${GGML_HRX_CATALOG_ASSEMBLER}"
+        "${GGML_HRX_CATALOG_VALIDATOR}"
+        ${GGML_HRX_CATALOG_INPUTS}
+    VERBATIM
+)
 
 function(ggml_hrx_add_kernel_source)
     cmake_parse_arguments(ARG "" "SOURCE;WAVEFRONT_SIZE" "DEPS;FLAGS;ARCH_PREFIXES" ${ARGN})
@@ -191,20 +227,55 @@ ggml_hrx_add_kernel_source(
         "${CMAKE_CURRENT_SOURCE_DIR}/kernels/flash_attn_ext_f32_f16_prefill_direct_gfx11.inc"
 )
 ggml_hrx_add_kernel_source(
-    SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/flash_attn_ext_f32_f16_prefill_wmma16.hip.cpp"
+    SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/flash_attn_ext_f32_f16_prefill_direct_d128.hip.cpp"
     WAVEFRONT_SIZE 32
     ARCH_PREFIXES gfx11
+    DEPS
+        "${CMAKE_CURRENT_SOURCE_DIR}/kernels/flash_attn_ext_f32_f16_prefill_direct_gfx11.inc"
 )
+if (GGML_HRX_ROCWMMA_INCLUDE_DIR)
+    ggml_hrx_add_kernel_source(
+        SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/flash_attn_ext_f32_f16_prefill_wmma16.hip.cpp"
+        WAVEFRONT_SIZE 32
+        ARCH_PREFIXES gfx11
+        FLAGS "-I${GGML_HRX_ROCWMMA_INCLUDE_DIR}"
+    )
+endif()
 ggml_hrx_add_kernel_source(
     SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_id_q4_k_q8_1_x4_mmq.hip.cpp"
     WAVEFRONT_SIZE 64
     ARCH_PREFIXES gfx11
 )
 ggml_hrx_add_kernel_source(
+    SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_id_q5_k_q8_1_x4_mmq.hip.cpp"
+    WAVEFRONT_SIZE 64
+    ARCH_PREFIXES gfx11
+    FLAGS -O3
+)
+ggml_hrx_add_kernel_source(
+    SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_id_q6_k_q8_1_x4_mmq.hip.cpp"
+    WAVEFRONT_SIZE 64
+    ARCH_PREFIXES gfx11
+    DEPS "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q6_k_q8_1_common.hip.inc"
+    FLAGS -O3
+)
+ggml_hrx_add_kernel_source(
     SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q5_k_q8_1.hip.cpp"
     WAVEFRONT_SIZE 32
     ARCH_PREFIXES gfx11
     DEPS "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q5_k_q8_1_common.hip.inc"
+    FLAGS -O3
+)
+ggml_hrx_add_kernel_source(
+    SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q4_k_q8_1_x4_wave64.hip.cpp"
+    WAVEFRONT_SIZE 64
+    ARCH_PREFIXES gfx11
+    FLAGS -O3
+)
+ggml_hrx_add_kernel_source(
+    SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q4_k_q8_1_x4_mmql128.hip.cpp"
+    WAVEFRONT_SIZE 64
+    ARCH_PREFIXES gfx11
     FLAGS -O3
 )
 ggml_hrx_add_kernel_source(
@@ -222,6 +293,20 @@ ggml_hrx_add_kernel_source(
     FLAGS -O3
 )
 ggml_hrx_add_kernel_source(
+    SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q6_k_q8_1_x4_wave64_direct.hip.cpp"
+    WAVEFRONT_SIZE 64
+    ARCH_PREFIXES gfx11
+    DEPS "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q6_k_q8_1_common.hip.inc"
+    FLAGS -O3
+)
+ggml_hrx_add_kernel_source(
+    SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q6_k_q8_1_x4_mmql128.hip.cpp"
+    WAVEFRONT_SIZE 64
+    ARCH_PREFIXES gfx11
+    DEPS "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q6_k_q8_1_common.hip.inc"
+    FLAGS -O3
+)
+ggml_hrx_add_kernel_source(
     SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q6_k_q8_1_wave64.hip.cpp"
     WAVEFRONT_SIZE 64
     ARCH_PREFIXES gfx11
@@ -232,6 +317,43 @@ ggml_hrx_add_kernel_source(
     SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q8_0.hip.cpp"
     WAVEFRONT_SIZE 32
     ARCH_PREFIXES gfx11
+)
+ggml_hrx_add_kernel_source(
+    SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q8_0_mmq64x64.hip.cpp"
+    WAVEFRONT_SIZE 32
+    ARCH_PREFIXES gfx11
+    DEPS "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q8_0.hip.cpp"
+)
+ggml_hrx_add_kernel_source(
+    SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q8_0_mmq32x64.hip.cpp"
+    WAVEFRONT_SIZE 32
+    ARCH_PREFIXES gfx11
+    DEPS "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q8_0.hip.cpp"
+)
+ggml_hrx_add_kernel_source(
+    SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q8_0_mmq128x64.hip.cpp"
+    WAVEFRONT_SIZE 32
+    ARCH_PREFIXES gfx11
+    DEPS "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q8_0.hip.cpp"
+)
+ggml_hrx_add_kernel_source(
+    SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q8_0_mmq64x64_ab.hip.cpp"
+    WAVEFRONT_SIZE 32
+    ARCH_PREFIXES gfx11
+    DEPS "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q8_0.hip.cpp"
+)
+ggml_hrx_add_kernel_source(
+    SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q8_0_wave64.hip.cpp"
+    WAVEFRONT_SIZE 64
+    ARCH_PREFIXES gfx11
+    DEPS "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q8_0.hip.cpp"
+)
+ggml_hrx_add_kernel_source(
+    SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q8_0_q8_1_x4_mmql128.hip.cpp"
+    WAVEFRONT_SIZE 64
+    ARCH_PREFIXES gfx11
+    DEPS "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q8_0.hip.cpp"
+    FLAGS -O3
 )
 ggml_hrx_add_kernel_source(
     SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/topk_moe_f32_shared.hip.cpp"
@@ -255,12 +377,15 @@ add_custom_command(
     OUTPUT "${GGML_HRX_KERNEL_CATALOG_CPP}"
     COMMAND "${Python3_EXECUTABLE}"
         "${GGML_HRX_KERNEL_GENERATOR}"
+        --catalog "${GGML_HRX_ASSEMBLED_CATALOG_JSON}"
+        ${GGML_HRX_CATALOG_EXCLUDE_SOURCE_ARGS}
         ${GGML_HRX_CATALOG_ARCH_ARGS}
         --source-dir "${CMAKE_CURRENT_SOURCE_DIR}/kernels"
         --hsaco-root "${GGML_HRX_HSACO_ROOT}"
         --output "${GGML_HRX_KERNEL_CATALOG_CPP}"
     DEPENDS
         "${GGML_HRX_KERNEL_GENERATOR}"
+        "${GGML_HRX_ASSEMBLED_CATALOG_JSON}"
         "${CMAKE_CURRENT_SOURCE_DIR}/kernels/hrx_kernel_catalog.h"
         ${GGML_HRX_HSACO_OUTPUTS}
     VERBATIM

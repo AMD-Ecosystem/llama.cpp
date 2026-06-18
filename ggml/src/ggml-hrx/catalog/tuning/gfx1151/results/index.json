@@ -1,0 +1,174 @@
+{
+  "target_key": "gfx1151",
+  "schema": "ggml-hrx-tuning-results-index-v1",
+  "results": [
+    {
+      "id": "current_best_q4_q6_f16_qwen3_q4xl_p33_p512_p513",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/current-best-hrx-vulkan-r3-20260617-154104/",
+      "status": "partial_basket_boulder_ranking"
+    },
+    {
+      "id": "focused_moe_mul_mat_id_and_decomposed",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/focused-moe-mul-mat-id-opgate-20260617-154557/",
+      "status": "rejection_and_next_boulder"
+    },
+    {
+      "id": "current_best_with_q4_id_widek_mmq16_qwen3_q4xl_p33_p512_p513",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/current-best-with-q4-id-widek-r3-20260617-160734/",
+      "status": "accepted_opt_in_candidate"
+    },
+    {
+      "id": "current_best_with_q4q5_id_qwen3_q4xl_p33_p512_p513",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/current-best-with-q4q5-id-r3-20260617-162308/",
+      "status": "accepted_opt_in_candidate"
+    },
+    {
+      "id": "current_best_q4q5_id_vs_vulkan_qwen3_q4xl_p33_p512_p513",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/current-best-q4q5-id-vulkan-r3-20260617-162608/",
+      "status": "partial_basket_vulkan_comparison"
+    },
+    {
+      "id": "q4_dense_prompt_mmql128_wide_qwen3_q4xl_p33_p512_p513",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/q4-mmql128-model-ab-20260617-165235/",
+      "status": "accepted_opt_in_candidate"
+    },
+    {
+      "id": "q6_dense_prompt_schedule_rerank_p512",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/focused-q6-variant-rerank-p512-20260617-170020/",
+      "status": "focused_rejection"
+    },
+    {
+      "id": "q6_dense_prompt_mmql128x128_p512",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/focused-q6-mmql128-p512-20260617-170743/",
+      "status": "focused_rejection"
+    },
+    {
+      "id": "q6_dense_prompt_mmq64x128_p512",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/focused-q6-mmq64x128-p512-20260617-171056/",
+      "status": "focused_rejection"
+    },
+    {
+      "id": "d128_flash_attn_prefill_direct_qwen3_q4xl_p33_p512_p513",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/fa1-direct-d128-model-ab-odd-20260617-173548/",
+      "status": "accepted_opt_in_candidate"
+    },
+    {
+      "id": "d128_flash_attn_prefill_direct_split_regate",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/fa1-direct-d128-split-regate-20260617-174250/",
+      "status": "accepted_opt_in_candidate_split_route"
+    },
+    {
+      "id": "current_best_fa1_downloaded_basket_p512",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/current-best-fa1-basket-p512-r1-20260617-175043/",
+      "status": "partial_basket_boulder_ranking"
+    },
+    {
+      "id": "d128_flash_attn_prefill_direct_general_gqa_p512",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/fa1-d128-gqa-model-ab-p512-r3-20260617-175433/",
+      "status": "accepted_opt_in_policy_broadening"
+    },
+    {
+      "id": "d128_flash_attn_prefill_direct_general_gqa_odd_tail",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/fa1-d128-gqa-policy-sanity-20260617-175858/",
+      "status": "accepted_with_prompt_width_guard"
+    },
+    {
+      "id": "q8_0_prompt_rows1024_mmq128x32_focused",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-kv1024-focused-20260617-180540/",
+      "status": "accepted_auto_policy_update"
+    },
+    {
+      "id": "q8_0_prompt_rows1024_mmq128x32_odd_tail",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmvq1024-model-ab-odd-tail-r3-20260617-181206/",
+      "status": "accepted_auto_policy_update"
+    },
+    {
+      "id": "q8_0_prompt_rows1024_mmq128x32_auto_regate",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmvq1024-auto-regate-20260617-181433/",
+      "status": "post_edit_focused_regate"
+    },
+    {
+      "id": "q8_0_prompt_rows1024_mmq128x32_auto_model_p512",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmvq1024-auto-model-p512-r3-20260617-181455/",
+      "status": "post_edit_model_sanity"
+    },
+    {
+      "id": "q6_moe_id_q8_1_x4_mmq16_focused_p512",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/q6-mul-mat-id-q8x4-focused-20260617-183451/",
+      "status": "accepted_opt_in_candidate_focused"
+    },
+    {
+      "id": "q6_moe_id_q8_1_x4_mmq16_model_p512",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/q6-id-model-ab-p512-fa1-r3-20260617-183602/",
+      "status": "accepted_opt_in_candidate_model"
+    },
+    {
+      "id": "q6_moe_id_q8_1_x4_mmq16_odd_tail_guard",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/q6-id-postguard-focused-20260617-184103/",
+      "status": "accepted_with_prompt_width_guard"
+    },
+    {
+      "id": "q8_0_prompt_mmq128x32_wave64_focused_p512",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-wave64-focused-p512-20260617-185605/",
+      "status": "rejected_focused_perf_regression"
+    },
+    {
+      "id": "q8_0_prompt_mmq64x64_focused_p33_p512_p513",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x64-focused-p512-20260617-190744/",
+      "status": "accepted_opt_in_candidate_focused"
+    },
+    {
+      "id": "q8_0_prompt_mmq64x64_model_p33_p512_p513",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x64-model-ab-20260617-191149/",
+      "status": "accepted_opt_in_candidate_model"
+    },
+    {
+      "id": "q8_0_prompt_mmq64x64_ab_focused_p512",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x64-ab-focused-p512-20260617-191938/",
+      "status": "rejected_focused_perf_regression"
+    },
+    {
+      "id": "q8_0_prompt_mmq32x64_focused_p512",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmq32x64-focused-p512-20260617-192604/",
+      "status": "rejected_focused_perf_regression"
+    },
+    {
+      "id": "q8_0_prompt_mmq128x64_compile",
+      "date": "2026-06-17",
+      "artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_mmq128x64.hsaco",
+      "status": "rejected_compile_resource_spills"
+    },
+    {
+      "id": "q8_0_prompt_mmql128x128_compile",
+      "date": "2026-06-17",
+      "artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_q8_1_x4_mmql128.hsaco",
+      "status": "rejected_compile_resource_spills"
+    }
+  ]
+}
