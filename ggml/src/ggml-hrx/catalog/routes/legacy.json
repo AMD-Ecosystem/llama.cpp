@@ -7270,6 +7270,50 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x64_medium_wg256_f32",
+    "family": "mul_mat_vec_q8_0_q8_1_x4_mmq64x64_medium_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q8_0_mmq64x64_medium",
+    "artifact_id": "mul_mat_vec_q8_0_mmq64x64_medium_hsaco",
+    "export_name": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x64_medium_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 110,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q8_0_prompt_mmq64x64_medium_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q8_0 x F32 -> F32 MUL_MAT",
+      "k_multiple": 128,
+      "rows_multiple": 128,
+      "cols_min": 64,
+      "selector_gate": "GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X64_MEDIUM_PROMPT=1"
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x64_medium_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_probe",
+      "selection": "Q8_0 prompt probe derived from the Vulkan AMD medium integer-MMQ tuple: BLOCK_SIZE=256, BM64, BN64, BK32, WM16, WN16, WMITER=2, TM2, TN2, TK1, WARP16. The exact BK_STEP=4 HIP spelling spills on gfx1151, so this candidate preserves Q8_0 x Q8_1 x4 integer-dot math, cooperative A+B staging, and Vulkan-style per-lane register tiling while reducing the staging depth to BK_STEP=1.",
+      "rejection": "focused p512 CPU-reference correctness passed and the route selected, but timing regressed versus accepted BN96/BN64 on the production-width rows: ffn_out 8405.6 -> 9064.9 us, ffn_gate 7728.5 -> 12024.7 us, result_output 67033.3 -> 110588.7 us. It only improved Vcur/Qcur, so it is not a production Q8_0 path."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x96_wg256_f32",
     "family": "mul_mat_vec_q8_0_q8_1_x4_mmq64x96_wg256",
     "op": "MUL_MAT",

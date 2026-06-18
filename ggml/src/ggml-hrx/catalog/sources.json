@@ -230,6 +230,9 @@
   "mul_mat_vec_q8_0_mmq64x64": {
     "path": "mul_mat_vec_q8_0_mmq64x64.hip.cpp"
   },
+  "mul_mat_vec_q8_0_mmq64x64_medium": {
+    "path": "mul_mat_vec_q8_0_mmq64x64_medium.hip.cpp"
+  },
   "mul_mat_vec_q8_0_mmq64x96": {
     "path": "mul_mat_vec_q8_0_mmq64x96.hip.cpp"
   },

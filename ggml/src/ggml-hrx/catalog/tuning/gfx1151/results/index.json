@@ -325,6 +325,18 @@
       "date": "2026-06-18",
       "artifact": "cache/hrxv1/gfx1151/q8_0-vk128-vs-bn96-focused-20260618-003553/",
       "status": "rejected_current_best_regression"
+    },
+    {
+      "id": "q8_0_prompt_mmq64x64_medium_bk4_compile",
+      "date": "2026-06-18",
+      "artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_mmq64x64_medium.hsaco",
+      "status": "rejected_compile_resource_spills"
+    },
+    {
+      "id": "q8_0_prompt_mmq64x64_medium_bk1_focused_p33_p512_p513",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x64-medium-focused-20260618-022051/",
+      "status": "rejected_focused_perf_regression"
     }
   ]
 }
