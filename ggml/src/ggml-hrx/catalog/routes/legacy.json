@@ -5625,6 +5625,49 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q4_k_wmma16x16_vk128_padded_w64_b64asm_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q4_k_wmma16x16_vk128_padded_w64_b64asm_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q4_k_wmma16_vk128_padded_w64_b64asm_wg256",
+    "artifact_id": "mul_mat_vec_q4_k_wmma16_vk128_padded_w64_b64asm_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q4_k_wmma16x16_vk128_padded_w64_b64asm_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "dense_q4_k_prompt_wmma16x16_vk128_padded_w64_b64asm_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q4_K x F32 -> F32 MUL_MAT",
+      "k_multiple": 256,
+      "rows_min": 128,
+      "cols_min": 128,
+      "requires_env": "GGML_HRX_ENABLE_Q4_K_WMMA16_VK128_PADDED_W64_B64ASM_F16ACC_WG256_PROMPT"
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q4_k_wmma16x16_vk128_padded_w64_b64asm_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_probe",
+      "selection": "RADV-ISA-driven follow-up to the rejected wave64 VK128 padded half4 source probe. It preserves BM128/BN128/BK32/WG256, direct F32 RHS, Vulkan's 40-half padded LDS stride, the ROCm wave64 WMMA builtin, and the same OPSEL/store policy, but uses explicit ds_read_b64 inline assembly for A/B LDS fragment reads. It is rejected after focused correctness: the route emitted LDS ds_load_b64 and selected correctly for p512/p513 while p33 stayed on the narrow route, but p512 and p513 CPU-reference rows failed with NaN/inf. Adding conservative s_waitcnt lgkmcnt(0) after each inline-asm load did not restore correctness and raised static waits to 396. Keep it opt-in only as evidence that forced ds_load_b64 is possible, but the current generic-pointer/fragment spelling is not semantically equivalent to the RADV schedule."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q5_k_f32",
     "family": "mul_mat_vec_q5_k",
     "op": "MUL_MAT",
