@@ -24,6 +24,8 @@ DispatchLoaderDynamic & ggml_vk_default_dispatcher();
 #include <algorithm>
 #include <cmath>
 #include <iomanip>
+#include <fstream>
+#include <filesystem>
 #include <iostream>
 #include <tuple>
 #include <vector>
@@ -99,6 +101,79 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 
 #define GGML_VK_MAX_NODES 8192
 
+static bool vk_trace_jsonl_enabled = false;
+static bool vk_trace_radv_pipeline_labels = false;
+static std::string vk_trace_spv_dir;
+static std::ofstream vk_trace_jsonl;
+static std::mutex vk_trace_mutex;
+
+static std::string vk_trace_json_escape(const std::string & s) {
+    std::ostringstream oss;
+    for (const char c : s) {
+        switch (c) {
+            case '\\': oss << "\\\\"; break;
+            case '"':  oss << "\\\""; break;
+            case '\b': oss << "\\b";  break;
+            case '\f': oss << "\\f";  break;
+            case '\n': oss << "\\n";  break;
+            case '\r': oss << "\\r";  break;
+            case '\t': oss << "\\t";  break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    oss << "\\u" << std::hex << std::setw(4) << std::setfill('0') << int(static_cast<unsigned char>(c));
+                } else {
+                    oss << c;
+                }
+                break;
+        }
+    }
+    return oss.str();
+}
+
+static std::string vk_trace_json_string(const std::string & s) {
+    return "\"" + vk_trace_json_escape(s) + "\"";
+}
+
+static std::string vk_trace_slug(const std::string & s) {
+    std::string out;
+    out.reserve(s.size());
+    for (const char c : s) {
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.') {
+            out.push_back(c);
+        } else {
+            out.push_back('_');
+        }
+    }
+    return out.empty() ? "pipeline" : out;
+}
+
+static uint64_t vk_trace_fnv1a64(const void * data, size_t size) {
+    const auto * bytes = reinterpret_cast<const uint8_t *>(data);
+    uint64_t hash = 1469598103934665603ull;
+    for (size_t i = 0; i < size; ++i) {
+        hash ^= bytes[i];
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+
+static std::string vk_trace_hash_hex(uint64_t hash) {
+    std::ostringstream oss;
+    oss << "0x" << std::hex << std::setw(16) << std::setfill('0') << hash;
+    return oss.str();
+}
+
+static void vk_trace_write_jsonl(const std::string & row) {
+    if (!vk_trace_jsonl_enabled) {
+        return;
+    }
+    std::lock_guard<std::mutex> guard(vk_trace_mutex);
+    if (vk_trace_jsonl.is_open()) {
+        vk_trace_jsonl << row << '\n';
+        vk_trace_jsonl.flush();
+    }
+}
+
 #define VK_CHECK(err, msg)                                          \
     do {                                                            \
         vk::Result err_ = (err);                                    \
@@ -132,6 +207,15 @@ struct vk_pipeline_struct {
     uint32_t parameter_count;
     std::array<uint32_t, 3> wg_denoms;
     uint32_t align;
+    std::string entrypoint;
+    std::string trace_source;
+    std::vector<uint32_t> specialization_constants;
+    bool disable_robustness {};
+    bool require_full_subgroups {};
+    uint32_t required_subgroup_size {};
+    uint64_t spv_hash {};
+    size_t spv_size {};
+    std::string spv_path;
     // true if fields have been set by ggml_vk_create_pipeline
     bool initialized {};
     // set to true to request the pipeline is compiled
@@ -1939,6 +2023,12 @@ struct ggml_backend_vk_context {
     std::vector<int> query_node_idx;
     int32_t num_queries {};
     int32_t query_idx {};
+
+    const ggml_cgraph * trace_cgraph {};
+    const ggml_tensor * trace_node {};
+    const char * trace_fusion_name {};
+    int trace_node_idx = -1;
+    int trace_fusion_node_count {};
 };
 
 static void * const vk_ptr_base = (void *)(uintptr_t) 0x1000;  // NOLINT
@@ -2115,6 +2205,89 @@ static void ggml_vk_wait_for_fence(ggml_backend_vk_context * ctx) {
     ctx->device->device.resetFences({ ctx->fence });
 }
 
+static void vk_trace_append_u32_array(std::ostringstream & oss, const uint32_t * values, size_t count) {
+    oss << '[';
+    for (size_t i = 0; i < count; ++i) {
+        if (i != 0) {
+            oss << ',';
+        }
+        oss << values[i];
+    }
+    oss << ']';
+}
+
+static void vk_trace_append_u32_vector(std::ostringstream & oss, const std::vector<uint32_t> & values) {
+    oss << '[';
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i != 0) {
+            oss << ',';
+        }
+        oss << values[i];
+    }
+    oss << ']';
+}
+
+static void vk_trace_append_pipeline_metadata(std::ostringstream & oss, const vk_pipeline & pipeline) {
+    oss << "\"pipeline\":" << vk_trace_json_string(pipeline->name)
+        << ",\"entrypoint\":" << vk_trace_json_string(pipeline->entrypoint)
+        << ",\"trace_source\":" << vk_trace_json_string(pipeline->trace_source)
+        << ",\"trace_reduction\":\"unknown\""
+        << ",\"trace_workgroup_mode\":\"unknown\""
+        << ",\"spv_size\":" << pipeline->spv_size
+        << ",\"spv_hash\":" << vk_trace_json_string(vk_trace_hash_hex(pipeline->spv_hash))
+        << ",\"spv_path\":" << vk_trace_json_string(pipeline->spv_path)
+        << ",\"push_constant_size\":" << pipeline->push_constant_size
+        << ",\"parameter_count\":" << pipeline->parameter_count
+        << ",\"wg_denoms\":";
+    vk_trace_append_u32_array(oss, pipeline->wg_denoms.data(), pipeline->wg_denoms.size());
+    oss << ",\"spec\":";
+    vk_trace_append_u32_vector(oss, pipeline->specialization_constants);
+    oss << ",\"align\":" << pipeline->align
+        << ",\"disable_robustness\":" << (pipeline->disable_robustness ? "true" : "false")
+        << ",\"require_full_subgroups\":" << (pipeline->require_full_subgroups ? "true" : "false")
+        << ",\"required_subgroup_size\":" << pipeline->required_subgroup_size;
+#if defined(VK_EXT_shader_64bit_indexing)
+    oss << ",\"is_64b_indexing\":" << (pipeline->is_64b_indexing ? "true" : "false");
+#else
+    oss << ",\"is_64b_indexing\":false";
+#endif
+}
+
+static std::string vk_trace_pipeline_metadata_json(const vk_pipeline & pipeline) {
+    std::ostringstream oss;
+    oss << '{';
+    vk_trace_append_pipeline_metadata(oss, pipeline);
+    oss << '}';
+    return oss.str();
+}
+
+static void vk_trace_append_tensor(std::ostringstream & oss, const char * key, const ggml_tensor * tensor) {
+    oss << ",\"" << key << "\":";
+    if (tensor == nullptr) {
+        oss << "null";
+        return;
+    }
+    oss << "{\"name\":" << vk_trace_json_string(tensor->name)
+        << ",\"op\":" << vk_trace_json_string(ggml_op_name(tensor->op))
+        << ",\"type\":" << vk_trace_json_string(ggml_type_name(tensor->type))
+        << ",\"ne\":[" << tensor->ne[0] << ',' << tensor->ne[1] << ',' << tensor->ne[2] << ',' << tensor->ne[3] << ']'
+        << ",\"nb\":[" << tensor->nb[0] << ',' << tensor->nb[1] << ',' << tensor->nb[2] << ',' << tensor->nb[3] << ']'
+        << ",\"view_offs\":" << tensor->view_offs
+        << ",\"flags\":" << tensor->flags
+        << '}';
+}
+
+static void vk_trace_write_pipeline_compile(const vk_pipeline & pipeline) {
+    if (!vk_trace_jsonl_enabled) {
+        return;
+    }
+    std::ostringstream oss;
+    oss << "{\"event\":\"pipeline_compile\",";
+    vk_trace_append_pipeline_metadata(oss, pipeline);
+    oss << '}';
+    vk_trace_write_jsonl(oss.str());
+}
+
 // variables to track number of compiles in progress
 static uint32_t compile_count = 0;
 static std::mutex compile_count_mutex;
@@ -2129,6 +2302,27 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
     GGML_ASSERT(parameter_count > 0);
     GGML_ASSERT(parameter_count <= MAX_PARAMETER_COUNT);
     GGML_ASSERT(wg_denoms[0] > 0 && wg_denoms[1] > 0 && wg_denoms[2] > 0); // NOLINT
+
+    pipeline->entrypoint = entrypoint;
+    pipeline->specialization_constants = specialization_constants;
+    pipeline->disable_robustness = disable_robustness;
+    pipeline->require_full_subgroups = require_full_subgroups;
+    pipeline->required_subgroup_size = required_subgroup_size;
+    pipeline->spv_size = spv_size;
+    pipeline->spv_hash = vk_trace_fnv1a64(spv_data, spv_size);
+
+    if (!vk_trace_spv_dir.empty()) {
+        try {
+            std::filesystem::create_directories(vk_trace_spv_dir);
+            const std::string stem = vk_trace_slug(pipeline->name) + "__" + vk_trace_slug(entrypoint) + "__" + vk_trace_hash_hex(pipeline->spv_hash);
+            const std::filesystem::path spv_path = std::filesystem::path(vk_trace_spv_dir) / (stem + ".spv");
+            std::ofstream spv_out(spv_path, std::ios::binary);
+            spv_out.write(reinterpret_cast<const char *>(spv_data), spv_size);
+            pipeline->spv_path = spv_path.string();
+        } catch (const std::exception & e) {
+            std::cerr << "ggml_vulkan: failed to write SPIR-V trace for " << pipeline->name << ": " << e.what() << std::endl;
+        }
+    }
 
     vk::ShaderModuleCreateInfo shader_module_create_info({}, spv_size, reinterpret_cast<const uint32_t *>(spv_data));
     pipeline->shader_module = device->device.createShaderModule(shader_module_create_info);
@@ -2205,14 +2399,30 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
     }
 #endif
 
-    try {
+    const std::string pipeline_metadata = vk_trace_pipeline_metadata_json(pipeline);
+    if (vk_trace_radv_pipeline_labels) {
+        std::lock_guard<std::mutex> guard(vk_trace_mutex);
+        std::cerr << "GGML_VK_RADV_PIPELINE_BEGIN " << pipeline_metadata << std::endl;
+        try {
+            pipeline->pipeline = device->device.createComputePipeline(VK_NULL_HANDLE, compute_pipeline_create_info).value;
+        } catch (const vk::SystemError& e) {
+            std::cerr << "ggml_vulkan: Compute pipeline creation failed for " << pipeline->name << std::endl;
+            std::cerr << "ggml_vulkan: " << e.what() << std::endl;
+            std::cerr << "GGML_VK_RADV_PIPELINE_END " << pipeline_metadata << std::endl;
+            throw e;
+        }
+        std::cerr << "GGML_VK_RADV_PIPELINE_END " << pipeline_metadata << std::endl;
+    } else {
+        try {
         pipeline->pipeline = device->device.createComputePipeline(VK_NULL_HANDLE, compute_pipeline_create_info).value;
-    } catch (const vk::SystemError& e) {
-        std::cerr << "ggml_vulkan: Compute pipeline creation failed for " << pipeline->name << std::endl;
-        std::cerr << "ggml_vulkan: " << e.what() << std::endl;
-        throw e;
+        } catch (const vk::SystemError& e) {
+            std::cerr << "ggml_vulkan: Compute pipeline creation failed for " << pipeline->name << std::endl;
+            std::cerr << "ggml_vulkan: " << e.what() << std::endl;
+            throw e;
+        }
     }
     pipeline->compiled = true;
+    vk_trace_write_pipeline_compile(pipeline);
 
     if (vk_instance.debug_utils_support) {
         vk::DebugUtilsObjectNameInfoEXT duoni;
@@ -3382,6 +3592,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
                 pipeline->push_constant_size = push_constant_size;
                 pipeline->wg_denoms = wg_denoms;
                 pipeline->align = align;
+                pipeline->trace_source = std::string("embedded ggml-vulkan shader ") + name;
                 pipeline->initialized = true;
 #if defined(VK_EXT_shader_64bit_indexing)
                 pipeline->is_64b_indexing = (i == 1);
@@ -3395,7 +3606,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
             // compiled individually, as needed) and this complexity can be removed.
             {
                 // wait until fewer than N compiles are in progress
-                uint32_t N = std::max(1u, std::thread::hardware_concurrency());
+                uint32_t N = vk_trace_radv_pipeline_labels ? 1u : std::max(1u, std::thread::hardware_concurrency());
                 std::unique_lock<std::mutex> guard(compile_count_mutex);
                 while (compile_count >= N) {
                     compile_count_cond.wait(guard);
@@ -5788,6 +5999,28 @@ static void ggml_vk_instance_init() {
     vk_perf_logger_concurrent = getenv("GGML_VK_PERF_LOGGER_CONCURRENT") != nullptr;
     vk_enable_sync_logger = getenv("GGML_VK_SYNC_LOGGER") != nullptr;
     vk_memory_logger_enabled = getenv("GGML_VK_MEMORY_LOGGER") != nullptr;
+    vk_trace_radv_pipeline_labels = getenv("GGML_VK_TRACE_RADV_PIPELINE_LABELS") != nullptr;
+
+    const char * GGML_VK_TRACE_JSONL = getenv("GGML_VK_TRACE_JSONL");
+    if (GGML_VK_TRACE_JSONL != nullptr) {
+        std::filesystem::path jsonl_path(GGML_VK_TRACE_JSONL);
+        if (jsonl_path.has_parent_path()) {
+            std::filesystem::create_directories(jsonl_path.parent_path());
+        }
+        vk_trace_jsonl.open(jsonl_path, std::ios::out | std::ios::trunc);
+        if (!vk_trace_jsonl.is_open()) {
+            std::cerr << "ggml_vulkan: failed to open GGML_VK_TRACE_JSONL=" << GGML_VK_TRACE_JSONL << std::endl;
+        } else {
+            vk_trace_jsonl_enabled = true;
+        }
+    }
+
+    const char * GGML_VK_TRACE_SPV_DIR = getenv("GGML_VK_TRACE_SPV_DIR");
+    if (GGML_VK_TRACE_SPV_DIR != nullptr) {
+        vk_trace_spv_dir = GGML_VK_TRACE_SPV_DIR;
+        std::filesystem::create_directories(vk_trace_spv_dir);
+    }
+
     const char* GGML_VK_PIPELINE_STATS = getenv("GGML_VK_PIPELINE_STATS");
     if (GGML_VK_PIPELINE_STATS != nullptr) {
         vk_pipeline_stats_filter = GGML_VK_PIPELINE_STATS;
@@ -6494,6 +6727,70 @@ template <typename T, uint32_t N> const T *push_constant_data(const std::array<T
     return t.data();
 }
 
+static void vk_trace_write_dispatch(
+        ggml_backend_vk_context * ctx,
+        const vk_pipeline & pipeline,
+        std::initializer_list<vk::DescriptorBufferInfo> const & descriptor_buffer_infos,
+        const void * push_constants,
+        size_t push_constant_bytes,
+        const std::array<uint32_t, 3> & elements,
+        const std::array<uint32_t, 3> & workgroups) {
+    if (!vk_trace_jsonl_enabled) {
+        return;
+    }
+
+    std::ostringstream oss;
+    oss << "{\"event\":\"dispatch\",";
+    vk_trace_append_pipeline_metadata(oss, pipeline);
+    oss << ",\"elements\":[" << elements[0] << ',' << elements[1] << ',' << elements[2] << ']'
+        << ",\"workgroups\":[" << workgroups[0] << ',' << workgroups[1] << ',' << workgroups[2] << ']'
+        << ",\"bindings\":[";
+    size_t binding = 0;
+    for (const auto & buffer : descriptor_buffer_infos) {
+        if (binding != 0) {
+            oss << ',';
+        }
+        std::ostringstream buffer_handle;
+        buffer_handle << buffer.buffer;
+        oss << "{\"binding\":" << binding++
+            << ",\"buffer\":" << vk_trace_json_string(buffer_handle.str())
+            << ",\"offset\":" << buffer.offset
+            << ",\"range\":" << buffer.range
+            << '}';
+    }
+    oss << "],\"push_constant_words\":[";
+    const auto * words = reinterpret_cast<const uint32_t *>(push_constants);
+    const size_t word_count = push_constant_bytes / sizeof(uint32_t);
+    for (size_t i = 0; i < word_count; ++i) {
+        if (i != 0) {
+            oss << ',';
+        }
+        oss << words[i];
+    }
+    oss << ']';
+
+    if (ctx->trace_node != nullptr) {
+        oss << ",\"node\":{\"idx\":" << ctx->trace_node_idx
+            << ",\"fusion\":" << (ctx->trace_fusion_name ? vk_trace_json_string(ctx->trace_fusion_name) : "null")
+            << ",\"fusion_node_count\":" << ctx->trace_fusion_node_count
+            << ",\"op\":" << vk_trace_json_string(ggml_op_name(ctx->trace_node->op))
+            << ",\"name\":" << vk_trace_json_string(ctx->trace_node->name)
+            << ",\"type\":" << vk_trace_json_string(ggml_type_name(ctx->trace_node->type))
+            << ",\"ne\":[" << ctx->trace_node->ne[0] << ',' << ctx->trace_node->ne[1] << ',' << ctx->trace_node->ne[2] << ',' << ctx->trace_node->ne[3] << ']'
+            << ",\"nb\":[" << ctx->trace_node->nb[0] << ',' << ctx->trace_node->nb[1] << ',' << ctx->trace_node->nb[2] << ',' << ctx->trace_node->nb[3] << ']'
+            << '}';
+        vk_trace_append_tensor(oss, "src0", ctx->trace_node->src[0]);
+        vk_trace_append_tensor(oss, "src1", ctx->trace_node->src[1]);
+        vk_trace_append_tensor(oss, "src2", ctx->trace_node->src[2]);
+        vk_trace_append_tensor(oss, "src3", ctx->trace_node->src[3]);
+    } else {
+        oss << ",\"node\":null";
+    }
+
+    oss << '}';
+    vk_trace_write_jsonl(oss.str());
+}
+
 template <typename T>
 static void ggml_vk_dispatch_pipeline(ggml_backend_vk_context* ctx, vk_context& subctx, vk_pipeline& pipeline, std::initializer_list<vk::DescriptorBufferInfo> const& descriptor_buffer_infos, const T &push_constants, std::array<uint32_t, 3> elements) {
     const uint32_t wg0 = CEIL_DIV(elements[0], pipeline->wg_denoms[0]);
@@ -6523,6 +6820,7 @@ static void ggml_vk_dispatch_pipeline(ggml_backend_vk_context* ctx, vk_context& 
                                 0,
                                 { descriptor_set },
                                 {});
+    vk_trace_write_dispatch(ctx, pipeline, descriptor_buffer_infos, push_constant_data(push_constants), push_constant_size(push_constants), elements, {wg0, wg1, wg2});
     subctx->s->buffer->buf.dispatch(wg0, wg1, wg2);
 }
 
@@ -14577,7 +14875,17 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
                       (i + ctx->num_additional_fused_ops >= last_node) ||
                       (almost_ready && !ctx->almost_ready_fence_pending);
 
+        ctx->trace_cgraph = cgraph;
+        ctx->trace_node = cgraph->nodes[i];
+        ctx->trace_node_idx = i;
+        ctx->trace_fusion_name = fusion_string;
+        ctx->trace_fusion_node_count = ctx->num_additional_fused_ops;
         bool enqueued = ggml_vk_build_graph(ctx, cgraph, i, cgraph->nodes[submit_node_idx], submit_node_idx, i + ctx->num_additional_fused_ops >= last_node, almost_ready, submit);
+        ctx->trace_cgraph = nullptr;
+        ctx->trace_node = nullptr;
+        ctx->trace_node_idx = -1;
+        ctx->trace_fusion_name = nullptr;
+        ctx->trace_fusion_node_count = 0;
 
         if (vk_perf_logger_enabled && enqueued) {
             compute_ctx = ggml_vk_get_compute_ctx(ctx);
