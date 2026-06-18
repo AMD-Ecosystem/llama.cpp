@@ -38,6 +38,10 @@
 #define HRX_Q8_0_WMMA_VK128_STORE_STAGE 0
 #endif
 
+#ifndef HRX_Q8_0_WMMA_VK128_STAGE_ALLOC
+#define HRX_Q8_0_WMMA_VK128_STAGE_ALLOC 0
+#endif
+
 #ifndef HRX_Q8_0_WMMA_VK128_FULL_TILE_STORE
 #define HRX_Q8_0_WMMA_VK128_FULL_TILE_STORE 0
 #endif
@@ -439,10 +443,17 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
     __shared__ _Float16 sh_b[BN * SHARED_STRIDE];
 #if HRX_Q8_0_WMMA_VK128_STORE_STAGE
     __shared__ _Float16 sh_store[WAVE_COUNT * 16 * 16];
+#elif HRX_Q8_0_WMMA_VK128_STAGE_ALLOC
+    __shared__ volatile _Float16 sh_stage_alloc[WAVE_COUNT * 16 * 16];
 #endif
 
     const long long blocks_per_row = k / 32;
     const _Float16 zero = static_cast<_Float16>(0.0f);
+#if HRX_Q8_0_WMMA_VK128_STAGE_ALLOC
+    if (tid < WAVE_COUNT * 16 * 16) {
+        sh_stage_alloc[tid] = zero;
+    }
+#endif
 #if HRX_Q8_0_WMMA_VK128_W64
     hrx_q8_0_wmma_vk128_half8_vec acc[TILES_PER_WAVE] = {};
 #else

@@ -419,6 +419,13 @@
       "status": "rejected_focused_perf_regression"
     },
     {
+      "id": "q8_0_prompt_wmma16_vk128_stagealloc_fullstore_p33_p512_p513",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-stagealloc-fullstore-focused-20260618/",
+      "compile_artifact": "cache/hrxv1/gfx1151/q8_0-stagealloc-fullstore-compile-20260618/",
+      "status": "rejected_focused_perf_regression"
+    },
+    {
       "id": "q8_0_prompt_wmma16_vk128_rocwmma_coopstore_unavailable",
       "date": "2026-06-18",
       "artifact": "local environment inspection",
