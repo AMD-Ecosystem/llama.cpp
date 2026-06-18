@@ -812,6 +812,10 @@
     "op": "MUL_MAT"
   },
   {
+    "family": "mul_mat_vec_q8_0_wmma16x16",
+    "op": "MUL_MAT"
+  },
+  {
     "family": "mul_sum8",
     "op": "MUL"
   },

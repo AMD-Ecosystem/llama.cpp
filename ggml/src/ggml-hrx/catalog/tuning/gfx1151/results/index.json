@@ -169,6 +169,12 @@
       "date": "2026-06-17",
       "artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_q8_1_x4_mmql128.hsaco",
       "status": "rejected_compile_resource_spills"
+    },
+    {
+      "id": "q8_0_prompt_wmma16x16_focused_p33_p512_p513",
+      "date": "2026-06-17",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-wmma16-focused-20260617-203009/",
+      "status": "rejected_focused_perf_regression"
     }
   ]
 }

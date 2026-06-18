@@ -1153,6 +1153,7 @@ struct ggml_backend_hrx_device_context {
     ggml_backend_hrx_op_provider mul_mat_vec_q8_0_q8_1_x4_mmq64x64_ab_wg256_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_q8_0_q8_1_x4_mmq128x32_wg256_wave64_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_q8_0_q8_1_x4_mmql128x128_wg256_provider;
+    ggml_backend_hrx_op_provider mul_mat_vec_q8_0_wmma16x16_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_q8_0_add_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_q8_0_add_cols8_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_q8_0_add_rows4_cols4_provider;
@@ -1381,6 +1382,7 @@ static void ggml_backend_hrx_reset_providers(ggml_backend_hrx_device_context * d
     device_context->mul_mat_vec_q8_0_q8_1_x4_mmq64x64_ab_wg256_provider.reset();
     device_context->mul_mat_vec_q8_0_q8_1_x4_mmq128x32_wg256_wave64_provider.reset();
     device_context->mul_mat_vec_q8_0_q8_1_x4_mmql128x128_wg256_provider.reset();
+    device_context->mul_mat_vec_q8_0_wmma16x16_provider.reset();
     device_context->mul_mat_vec_q8_0_add_provider.reset();
     device_context->mul_mat_vec_q8_0_add_cols8_provider.reset();
     device_context->mul_mat_vec_q8_0_add_rows4_cols4_provider.reset();
@@ -3032,6 +3034,9 @@ static bool ggml_backend_hrx_load_mul_mat_vec_providers(ggml_backend_hrx_device_
     ok = ggml_backend_hrx_load_catalog_provider(
         device_context, "hrx_mul_mat_vec_q8_0_q8_1_x4_mmql128x128_wg256_f32",
         &device_context->mul_mat_vec_q8_0_q8_1_x4_mmql128x128_wg256_provider) || ok;
+    ok = ggml_backend_hrx_load_catalog_provider(
+        device_context, "hrx_mul_mat_vec_q8_0_wmma16x16_f32",
+        &device_context->mul_mat_vec_q8_0_wmma16x16_provider) || ok;
     ok = ggml_backend_hrx_load_catalog_provider(
         device_context, "hrx_mul_mat_vec_q8_0_add_f32",
         &device_context->mul_mat_vec_q8_0_add_provider) || ok;
@@ -4896,7 +4901,18 @@ static const ggml_backend_hrx_op_provider * ggml_backend_hrx_select_mul_mat_vec_
 
 static const ggml_backend_hrx_op_provider * ggml_backend_hrx_select_mul_mat_vec_q8_0_provider(
         const ggml_backend_hrx_device_context * device_context,
+        int64_t k,
+        int64_t rows,
         int64_t cols) {
+    if (ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q8_0_WMMA16_PROMPT") &&
+        !ggml_backend_hrx_approximate_kernels_disabled() &&
+        k > 0 && (k % 32) == 0 &&
+        rows >= 16 &&
+        cols >= 16 &&
+        ggml_backend_hrx_provider_available(device_context->mul_mat_vec_q8_0_wmma16x16_provider)) {
+        return &device_context->mul_mat_vec_q8_0_wmma16x16_provider;
+    }
+
     // The cols8 kernel is tail-safe. W7900/Qwen skinny-prefill profiling shows
     // small positive wins from p3 up; p2 remains on the scalar route as noise.
     if (!ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_Q8_0_COLS8_PROMPT") &&
@@ -5095,7 +5111,7 @@ static bool ggml_backend_hrx_supports_mul_mat_vec_2d(
         (src0->type == GGML_TYPE_Q5_K || src0->type == GGML_TYPE_Q6_K) ?
         ggml_backend_hrx_select_mul_mat_vec_k_provider(device_context, src0->type, src0->ne[0], src0->ne[1], src1->ne[1]) :
         src0->type == GGML_TYPE_Q8_0 ?
-        ggml_backend_hrx_select_mul_mat_vec_q8_0_provider(device_context, src1->ne[1]) :
+        ggml_backend_hrx_select_mul_mat_vec_q8_0_provider(device_context, src0->ne[0], src0->ne[1], src1->ne[1]) :
         ggml_backend_hrx_mul_mat_vec_provider(device_context, src0->type);
     const int64_t block_size = ggml_blck_size(src0->type);
     return provider &&
@@ -5453,6 +5469,9 @@ static ggml_backend_hrx_q8_1_mmvq_variant ggml_backend_hrx_mul_mat_vec_k_q8_1_va
             }
             return variant;
         case GGML_TYPE_Q8_0:
+            if (ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q8_0_WMMA16_PROMPT")) {
+                return variant;
+            }
             if (has_q8_1_x4 &&
                 cols >= 128 &&
                 ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQL128_PROMPT") &&
@@ -9069,7 +9088,8 @@ static ggml_status ggml_backend_hrx_dispatch_mul_mat_vec(
         src0->type == GGML_TYPE_F32 ?
         ggml_backend_hrx_select_mul_mat_vec_f32_provider(context->device_context, constants.cols) :
         src0->type == GGML_TYPE_Q8_0 ?
-        ggml_backend_hrx_select_mul_mat_vec_q8_0_provider(context->device_context, constants.cols) :
+        ggml_backend_hrx_select_mul_mat_vec_q8_0_provider(
+            context->device_context, constants.k, constants.rows, constants.cols) :
         ggml_backend_hrx_mul_mat_vec_provider(context->device_context, src0->type);
     if (!provider || provider->kind != ggml_backend_hrx_provider_kind::hsaco) {
         GGML_LOG_ERROR("%s: MUL_MAT provider is unavailable\n", __func__);
@@ -9113,6 +9133,7 @@ static ggml_status ggml_backend_hrx_dispatch_mul_mat_vec(
         provider == &context->device_context->mul_mat_vec_f32_cols5_provider ? 5 :
         provider == &context->device_context->mul_mat_vec_f32_cols4_provider ? 4 :
         provider == &context->device_context->mul_mat_vec_f32_cols3_provider ? 3 :
+        provider == &context->device_context->mul_mat_vec_q8_0_wmma16x16_provider ? 16 :
         provider == &context->device_context->mul_mat_vec_q8_0_cols8_provider ? 8 : 1;
     const uint32_t provider_rows_per_workgroup =
         q5_k_rows2_prompt_wg64_cols ? 2 :
@@ -9127,6 +9148,7 @@ static ggml_status ggml_backend_hrx_dispatch_mul_mat_vec(
         provider == &context->device_context->mul_mat_vec_bf16_rows2_cols1_x8_wg32_provider ? 2 :
         provider == &context->device_context->mul_mat_vec_bf16_rows2_cols1_wg32_provider ? 2 :
         provider == &context->device_context->mul_mat_vec_bf16_rows2_cols1_provider ? 2 :
+        provider == &context->device_context->mul_mat_vec_q8_0_wmma16x16_provider ? 16 :
         provider == &context->device_context->mul_mat_vec_bf16_rows2_cols16_provider ? 2 : 1;
     const uint32_t workgroup_size = provider->export_info.workgroup_size[0] ?
         provider->export_info.workgroup_size[0] : 256;
