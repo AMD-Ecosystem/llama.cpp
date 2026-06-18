@@ -144,6 +144,29 @@ static __device__ __forceinline__ void hrx_q8_0_wmma16_store_acc_row_major(
     }
 }
 
+static __device__ __forceinline__ void hrx_q8_0_wmma16_store_acc_f16_row_major(
+        float * dst,
+        long long rows_stride,
+        long long row0,
+        long long col0,
+        long long rows,
+        long long cols,
+        hrx_q8_0_wmma16_half16_vec acc,
+        unsigned int lane) {
+    const long long row_base = row0 + static_cast<long long>(lane >> 4);
+    const long long col = col0 + static_cast<long long>(lane & 15u);
+    if (col >= cols) {
+        return;
+    }
+#pragma unroll
+    for (int i = 0; i < 8; ++i) {
+        const long long row = row_base + static_cast<long long>(i * 2);
+        if (row < rows) {
+            dst[col * rows_stride + row] = static_cast<float>(acc[i * 2]);
+        }
+    }
+}
+
 extern "C" __global__ __launch_bounds__(32, 1)
 void hrx_mul_mat_vec_q8_0_wmma16x16_f32(
         const hrx_block_q8_0_wmma16 * src0,
@@ -171,4 +194,33 @@ void hrx_mul_mat_vec_q8_0_wmma16x16_f32(
     }
 
     hrx_q8_0_wmma16_store_acc_row_major(dst, rows, row0, col0, rows, cols, acc, lane);
+}
+
+extern "C" __global__ __launch_bounds__(32, 1)
+void hrx_mul_mat_vec_q8_0_wmma16x16_f16acc_f32(
+        const hrx_block_q8_0_wmma16 * src0,
+        const float * src1,
+        float * dst,
+        long long k,
+        long long rows,
+        long long cols) {
+    const unsigned int lane = __builtin_amdgcn_workitem_id_x() & 31u;
+    const long long row0 = static_cast<long long>(__builtin_amdgcn_workgroup_id_x()) * 16;
+    const long long col0 = static_cast<long long>(__builtin_amdgcn_workgroup_id_y()) * 16;
+    if (row0 >= rows || col0 >= cols) {
+        return;
+    }
+
+    const long long blocks_per_row = k / 32;
+    hrx_q8_0_wmma16_half16_vec acc = {};
+
+    for (long long k0 = 0; k0 < k; k0 += 16) {
+        const hrx_q8_0_wmma16_half16_vec a =
+            hrx_q8_0_wmma16_load_a_row_major(src0, row0, k0, rows, blocks_per_row, lane);
+        const hrx_q8_0_wmma16_half16_vec b =
+            hrx_q8_0_wmma16_load_b_col_major(src1, col0, k0, k, cols, lane);
+        acc = __builtin_amdgcn_wmma_f16_16x16x16_f16_w32(a, b, acc, false);
+    }
+
+    hrx_q8_0_wmma16_store_acc_f16_row_major(dst, rows, row0, col0, rows, cols, acc, lane);
 }
