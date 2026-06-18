@@ -316,6 +316,52 @@
         "Broader basket coverage should confirm no non-Qwen3 Q6_K regression as additional Q6_K models finish downloading",
         "Next schedule work should mechanically close the LDS/load/store deltas rather than broaden aggregate sweeps"
       ]
+    },
+    {
+      "id": "q6_dense_prompt_wmma16_vk64_padded44_w64_qwen3q6_p33",
+      "date": "2026-06-18",
+      "status": "accepted_gfx1151_narrow_prompt_default",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_f16acc_wg256_f32",
+      "env": "default on gfx1151 for Q6_K prompt rows with cols <= 64; rollback with GGML_HRX_DISABLE_Q6_K_WMMA16_VK64_PADDED44_W64_F16ACC_WG256_PROMPT=1; opt-in elsewhere with GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_F16ACC_WG256_PROMPT=1",
+      "shape_guard": "Q6_K MUL_MAT prompt, direct F32 RHS, k % 256 == 0, rows >= 16, 16 <= cols <= 64, contiguous tensors",
+      "focused_artifacts": [
+        "cache/hrxv1/gfx1151/q6-wmma-vk64-padded44-medium-focused-20260618-062606/"
+      ],
+      "model_artifacts": [
+        "cache/hrxv1/gfx1151/q6-wmma-vk64-padded44-medium-focused-20260618-062606/model-default-p33.json",
+        "cache/hrxv1/gfx1151/q6-wmma-vk64-padded44-medium-focused-20260618-062606/model-vk64-p33.json"
+      ],
+      "oracle_artifacts": [
+        "cache/hrxv1/gfx1151/vulkan-oracle-qwen3-30b-q6k-p33-fa1-20260618-061613/"
+      ],
+      "focused_timing_us": {
+        "accepted_default": {
+          "Vcur-0-p33": 678.274081,
+          "ffn_out-0-p33": 3175.026471,
+          "result_output-p33": 18046.025974
+        },
+        "vk64_padded44_w64": {
+          "Vcur-0-p33": 397.769503,
+          "ffn_out-0-p33": 2239.180882,
+          "result_output-p33": 11744.512987
+        }
+      },
+      "model_timing_tok_s": {
+        "qwen3_30b_q6k_p33_fa1_r1_current": 96.68142,
+        "qwen3_30b_q6k_p33_fa1_r1_vk64_padded44_w64": 109.61168
+      },
+      "compile_evidence": {
+        "hsaco": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_wg256.hsaco",
+        "wavefront_size": 64,
+        "lds_bytes": 11264,
+        "spill_count": 0,
+        "isa": "8 visible v_wmma_f16_16x16x16_f16 sites, 16 global_store_b32 sites, 2 barriers; the LDS footprint matches the Vulkan medium route but visible instruction mix still differs from RADV"
+      },
+      "promotion_blockers": [
+        "Static ISA is not an exact RADV clone: RADV medium has 16 WMMA sites, 48 ds_load_b64, 64 ds_load_u16_d16, 64 LDS b16 stores, and 96 buffer stores",
+        "The route is deliberately limited to cols <= 64; p512 and p513 remain on the large-route policy",
+        "Additional Q6_K odd/narrow rows should be feathered in as more models finish downloading"
+      ]
     }
   ]
 }
