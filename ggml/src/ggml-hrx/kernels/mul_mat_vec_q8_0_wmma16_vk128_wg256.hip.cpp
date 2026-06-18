@@ -54,6 +54,22 @@
 #define HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STAGED_WAIT 0
 #endif
 
+#ifndef HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STAGED_WAIT0
+#define HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STAGED_WAIT0 12
+#endif
+
+#ifndef HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STAGED_WAIT1
+#define HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STAGED_WAIT1 8
+#endif
+
+#ifndef HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STAGED_WAIT2
+#define HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STAGED_WAIT2 4
+#endif
+
+#ifndef HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STAGED_WAIT3
+#define HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STAGED_WAIT3 0
+#endif
+
 #ifndef HRX_Q8_0_WMMA_VK128_W64_B64GROUP_PREUSE_FRAGS
 #define HRX_Q8_0_WMMA_VK128_W64_B64GROUP_PREUSE_FRAGS 0
 #endif
@@ -1093,7 +1109,7 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
                 hrx_q8_0_wmma_vk128_preuse_fragments(a0, a1, a2, a3, b0, b1, b2, b3);
 #endif
 #if HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STAGED_WAIT
-                asm volatile("s_waitcnt lgkmcnt(12)\n" ::: "memory");
+                asm volatile("s_waitcnt lgkmcnt(%0)\n" :: "n"(HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STAGED_WAIT0) : "memory");
 #else
                 asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
 #endif
@@ -1102,21 +1118,21 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
                 acc[2] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a2, b0, acc[2], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
                 acc[3] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a3, b0, acc[3], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
 #if HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STAGED_WAIT
-                asm volatile("s_waitcnt lgkmcnt(8)\n" ::: "memory");
+                asm volatile("s_waitcnt lgkmcnt(%0)\n" :: "n"(HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STAGED_WAIT1) : "memory");
 #endif
                 acc[4] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a0, b1, acc[4], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
                 acc[5] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a1, b1, acc[5], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
                 acc[6] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a2, b1, acc[6], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
                 acc[7] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a3, b1, acc[7], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
 #if HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STAGED_WAIT
-                asm volatile("s_waitcnt lgkmcnt(4)\n" ::: "memory");
+                asm volatile("s_waitcnt lgkmcnt(%0)\n" :: "n"(HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STAGED_WAIT2) : "memory");
 #endif
                 acc[8] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a0, b2, acc[8], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
                 acc[9] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a1, b2, acc[9], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
                 acc[10] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a2, b2, acc[10], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
                 acc[11] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a3, b2, acc[11], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
 #if HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STAGED_WAIT
-                asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+                asm volatile("s_waitcnt lgkmcnt(%0)\n" :: "n"(HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STAGED_WAIT3) : "memory");
 #endif
                 acc[12] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a0, b3, acc[12], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
                 acc[13] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a1, b3, acc[13], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
