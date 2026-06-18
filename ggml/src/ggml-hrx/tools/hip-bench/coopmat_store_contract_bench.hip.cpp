@@ -1,6 +1,7 @@
 #include <hip/hip_runtime.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -37,6 +38,33 @@ static __host__ __device__ __forceinline__ unsigned int coopstore_probe_index(
     return (group * HRX_COOPSTORE_VALUES_PER_GROUP + slot) * HRX_COOPSTORE_LANES + lane;
 }
 
+static __host__ __device__ __forceinline__ uint16_t coopstore_probe_stage_value(
+        unsigned int group,
+        unsigned int slot,
+        unsigned int lane) {
+    return static_cast<uint16_t>(0x2000u + ((group & 0x3fu) << 8) + ((lane & 0x3fu) << 2) + (slot & 0x03u));
+}
+
+static __host__ __device__ __forceinline__ float coopstore_probe_expected_value(
+        unsigned int group,
+        unsigned int slot,
+        unsigned int lane) {
+    if (group < 16u) {
+        return coopstore_probe_value(group, slot, lane);
+    }
+    return static_cast<float>(coopstore_probe_stage_value(group, slot, lane));
+}
+
+static __device__ __forceinline__ unsigned int coopstore_probe_stage_index(
+        unsigned int group,
+        unsigned int slot,
+        unsigned int lane) {
+    const unsigned int stage_group = group - 16u;
+    const unsigned int row_lane = lane >> 4;
+    const unsigned int col_lane = lane & 15u;
+    return stage_group * 16u * 16u + col_lane * 16u + row_lane + slot * 4u;
+}
+
 static __device__ __forceinline__ __amdgpu_buffer_rsrc_t coopstore_probe_make_rsrc(
         float * dst,
         unsigned long long extent,
@@ -57,6 +85,37 @@ static __device__ __forceinline__ void coopstore_probe_raw_store(
     const unsigned int index = coopstore_probe_index(group, slot, lane);
     const int byte_offset = static_cast<int>(index * sizeof(float));
     __builtin_amdgcn_raw_buffer_store_b32(__builtin_bit_cast(int, value), rsrc, byte_offset, 0, 0);
+}
+
+static __device__ __forceinline__ void coopstore_probe_raw_store_value(
+        __amdgpu_buffer_rsrc_t rsrc,
+        unsigned int group,
+        unsigned int slot,
+        unsigned int lane,
+        float value) {
+    const unsigned int index = coopstore_probe_index(group, slot, lane);
+    const int byte_offset = static_cast<int>(index * sizeof(float));
+    __builtin_amdgcn_raw_buffer_store_b32(__builtin_bit_cast(int, value), rsrc, byte_offset, 0, 0);
+}
+
+static __device__ __forceinline__ void coopstore_probe_ds_store_u16(
+        __attribute__((address_space(3))) uint16_t * ptr,
+        uint32_t value) {
+    asm volatile("ds_write_b16 %0, %1 offset:0\n"
+                 :
+                 : "v"(ptr), "v"(value)
+                 : "memory");
+}
+
+static __device__ __forceinline__ uint32_t coopstore_probe_ds_load_u16_d16(
+        const __attribute__((address_space(3))) uint16_t * ptr) {
+    uint32_t value = 0;
+    asm volatile("ds_read_u16_d16 %0, %1 offset:0\n"
+                 : "=v"(value)
+                 : "v"(ptr)
+                 : "memory");
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    return value;
 }
 
 #define HRX_COOPSTORE_STORE_GROUP(GROUP_ID) do { \
@@ -182,6 +241,77 @@ void coopstore_probe_branch192(
     if (selected == 47u) { HRX_COOPSTORE_STORE_GROUP(47u); }
 }
 
+#define HRX_COOPSTORE_STAGE_STORE(GROUP_ID, SLOT_ID) do { \
+    __attribute__((address_space(3))) uint16_t * ptr = \
+        (__attribute__((address_space(3))) uint16_t *) (sh_stage + coopstore_probe_stage_index((GROUP_ID), (SLOT_ID), lane)); \
+    coopstore_probe_ds_store_u16(ptr, coopstore_probe_stage_value((GROUP_ID), (SLOT_ID), lane)); \
+} while (0)
+
+#define HRX_COOPSTORE_STAGE_LOAD_STORE(GROUP_ID, SLOT_ID) do { \
+    const __attribute__((address_space(3))) uint16_t * ptr = \
+        (const __attribute__((address_space(3))) uint16_t *) (sh_stage + coopstore_probe_stage_index((GROUP_ID), (SLOT_ID), lane)); \
+    const uint32_t value = coopstore_probe_ds_load_u16_d16(ptr); \
+    coopstore_probe_raw_store_value(rsrc, (GROUP_ID), (SLOT_ID), lane, static_cast<float>(value & 0xffffu)); \
+} while (0)
+
+#define HRX_COOPSTORE_STAGE_STORE_GROUP(GROUP_ID) do { \
+    HRX_COOPSTORE_STAGE_STORE((GROUP_ID), 0u); \
+    HRX_COOPSTORE_STAGE_STORE((GROUP_ID), 1u); \
+    HRX_COOPSTORE_STAGE_STORE((GROUP_ID), 2u); \
+    HRX_COOPSTORE_STAGE_STORE((GROUP_ID), 3u); \
+} while (0)
+
+#define HRX_COOPSTORE_STAGE_LOAD_STORE_GROUP(GROUP_ID) do { \
+    HRX_COOPSTORE_STAGE_LOAD_STORE((GROUP_ID), 0u); \
+    HRX_COOPSTORE_STAGE_LOAD_STORE((GROUP_ID), 1u); \
+    HRX_COOPSTORE_STAGE_LOAD_STORE((GROUP_ID), 2u); \
+    HRX_COOPSTORE_STAGE_LOAD_STORE((GROUP_ID), 3u); \
+} while (0)
+
+#define HRX_COOPSTORE_STAGE_GROUPS_16_31(MACRO) do { \
+    MACRO(16u); MACRO(17u); MACRO(18u); MACRO(19u); \
+    MACRO(20u); MACRO(21u); MACRO(22u); MACRO(23u); \
+    MACRO(24u); MACRO(25u); MACRO(26u); MACRO(27u); \
+    MACRO(28u); MACRO(29u); MACRO(30u); MACRO(31u); \
+} while (0)
+
+#define HRX_COOPSTORE_STAGE_GROUPS_32_47(MACRO) do { \
+    MACRO(32u); MACRO(33u); MACRO(34u); MACRO(35u); \
+    MACRO(36u); MACRO(37u); MACRO(38u); MACRO(39u); \
+    MACRO(40u); MACRO(41u); MACRO(42u); MACRO(43u); \
+    MACRO(44u); MACRO(45u); MACRO(46u); MACRO(47u); \
+} while (0)
+
+extern "C" __global__ __launch_bounds__(256, 1)
+void coopstore_probe_radv_mixed192(float * dst, unsigned long long extent, unsigned int flags) {
+    __shared__ uint16_t sh_stage[32 * 16 * 16];
+    const unsigned int tid = __builtin_amdgcn_workitem_id_x();
+    const unsigned int lane = tid & 63u;
+    const __amdgpu_buffer_rsrc_t rsrc = coopstore_probe_make_rsrc(dst, extent, flags);
+
+    if (tid < 64u) {
+        HRX_COOPSTORE_GROUPS_0_15();
+        HRX_COOPSTORE_STAGE_GROUPS_16_31(HRX_COOPSTORE_STAGE_STORE_GROUP);
+        HRX_COOPSTORE_STAGE_GROUPS_32_47(HRX_COOPSTORE_STAGE_STORE_GROUP);
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+
+    if (tid < 64u) {
+        HRX_COOPSTORE_STAGE_GROUPS_16_31(HRX_COOPSTORE_STAGE_LOAD_STORE_GROUP);
+        HRX_COOPSTORE_STAGE_GROUPS_32_47(HRX_COOPSTORE_STAGE_LOAD_STORE_GROUP);
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+}
+
+#undef HRX_COOPSTORE_STAGE_GROUPS_32_47
+#undef HRX_COOPSTORE_STAGE_GROUPS_16_31
+#undef HRX_COOPSTORE_STAGE_LOAD_STORE_GROUP
+#undef HRX_COOPSTORE_STAGE_STORE_GROUP
+#undef HRX_COOPSTORE_STAGE_LOAD_STORE
+#undef HRX_COOPSTORE_STAGE_STORE
+
 #undef HRX_COOPSTORE_GROUPS_32_47
 #undef HRX_COOPSTORE_GROUPS_16_31
 #undef HRX_COOPSTORE_GROUPS_0_15
@@ -214,7 +344,7 @@ static options parse_options(int argc, char ** argv) {
             opts.flags = parse_u32(argv[i] + 8);
         } else {
             std::fprintf(stderr,
-                "usage: %s [--mode=linear64|linear128|linear192|branch192] [--group=N] [--flags=0x31004000]\n",
+                "usage: %s [--mode=linear64|linear128|linear192|branch192|radv-mixed192] [--group=N] [--flags=0x31004000]\n",
                 argv[0]);
             std::exit(2);
         }
@@ -316,6 +446,17 @@ int main(int argc, char ** argv) {
             for (unsigned int lane = 0; lane < HRX_COOPSTORE_LANES; ++lane) {
                 h_expected[coopstore_probe_index(opts.group, slot, lane)] =
                     coopstore_probe_value(opts.group, slot, lane);
+            }
+        }
+    } else if (opts.mode == "radv-mixed192") {
+        hipLaunchKernelGGL(coopstore_probe_radv_mixed192, dim3(1), dim3(256), 0, 0,
+            d_out.ptr, byte_extent, opts.flags);
+        for (unsigned int group = 0; group < HRX_COOPSTORE_MAX_GROUPS; ++group) {
+            for (unsigned int slot = 0; slot < HRX_COOPSTORE_VALUES_PER_GROUP; ++slot) {
+                for (unsigned int lane = 0; lane < HRX_COOPSTORE_LANES; ++lane) {
+                    h_expected[coopstore_probe_index(group, slot, lane)] =
+                        coopstore_probe_expected_value(group, slot, lane);
+                }
             }
         }
     } else {
