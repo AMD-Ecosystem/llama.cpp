@@ -87,23 +87,32 @@ static float q5_dequant(
     return d * static_cast<float>(q5_value(block, in_block)) - dmin;
 }
 
-static float rhs_value(int col, int k_index) {
+struct case_config {
+    const char * name;
+    uint16_t d_bits;
+    uint16_t dmin_bits;
+    int scale_mask;
+    float rhs_scale;
+};
+
+static float rhs_value(int col, int k_index, const case_config & config) {
     const int raw = (col * 19 + k_index * 7 + 23) & 63;
-    return (static_cast<float>(raw) - 31.0f) * 0.015625f;
+    return (static_cast<float>(raw) - 31.0f) * config.rhs_scale;
 }
 
 static void fill_q5(
         std::vector<hrx_block_q5_K_wmma_vk128_lhs> & blocks,
         int rows,
-        int blocks_per_row) {
+        int blocks_per_row,
+        const case_config & config) {
     for (int row = 0; row < rows; ++row) {
         for (int block_idx = 0; block_idx < blocks_per_row; ++block_idx) {
             hrx_block_q5_K_wmma_vk128_lhs & block =
                 blocks[static_cast<size_t>(row) * blocks_per_row + block_idx];
-            block.d = 0x3400u;
-            block.dmin = 0x2c00u;
+            block.d = config.d_bits;
+            block.dmin = config.dmin_bits;
             for (int i = 0; i < 12; ++i) {
-                block.scales[i] = static_cast<uint8_t>(1 + ((row * 3 + block_idx * 5 + i * 11) & 31));
+                block.scales[i] = static_cast<uint8_t>(1 + ((row * 3 + block_idx * 5 + i * 11) & config.scale_mask));
             }
             for (int i = 0; i < 32; ++i) {
                 block.qh[i] = static_cast<uint8_t>((row * 17 + block_idx * 13 + i * 5) & 0xff);
@@ -117,10 +126,10 @@ static void fill_q5(
     }
 }
 
-static void fill_rhs(std::vector<float> & rhs, int k, int cols) {
+static void fill_rhs(std::vector<float> & rhs, int k, int cols, const case_config & config) {
     for (int col = 0; col < cols; ++col) {
         for (int kk = 0; kk < k; ++kk) {
-            rhs[static_cast<size_t>(col) * k + kk] = rhs_value(col, kk);
+            rhs[static_cast<size_t>(col) * k + kk] = rhs_value(col, kk, config);
         }
     }
 }
@@ -145,13 +154,13 @@ static std::vector<float> cpu_reference(
     return ref;
 }
 
-static int run_case(int rows, int cols, int k) {
+static int run_case(int rows, int cols, int k, const case_config & config) {
     const int blocks_per_row = k / 256;
     std::vector<hrx_block_q5_K_wmma_vk128_lhs> h_src0(static_cast<size_t>(rows) * blocks_per_row);
     std::vector<float> h_src1(static_cast<size_t>(cols) * k);
     std::vector<float> h_dst(static_cast<size_t>(rows) * cols, -777.0f);
-    fill_q5(h_src0, rows, blocks_per_row);
-    fill_rhs(h_src1, k, cols);
+    fill_q5(h_src0, rows, blocks_per_row, config);
+    fill_rhs(h_src1, k, cols, config);
 
     device_buffer<hrx_block_q5_K_wmma_vk128_lhs> d_src0(h_src0.size());
     device_buffer<float> d_src1(h_src1.size());
@@ -208,7 +217,8 @@ static int run_case(int rows, int cols, int k) {
     }
 
     std::printf(
-        "q5-full64-repro rows=%d cols=%d k=%d nan=%zu inf=%zu sentinel=%zu max_abs=%g max_rel=%g idx=%zu actual=%g ref=%g\n",
+        "q5-full64-repro profile=%s rows=%d cols=%d k=%d nan=%zu inf=%zu sentinel=%zu max_abs=%g max_rel=%g idx=%zu actual=%g ref=%g\n",
+        config.name,
         rows,
         cols,
         k,
@@ -224,11 +234,18 @@ static int run_case(int rows, int cols, int k) {
 }
 
 int main() {
+    const case_config small = {"small", 0x2000u, 0x0000u, 3, 0.00390625f};
+    const case_config stress = {"stress", 0x3400u, 0x2c00u, 31, 0.015625f};
     int status = 0;
-    status |= run_case(64, 33, 256);
-    status |= run_case(64, 33, 512);
-    status |= run_case(64, 33, 3584);
-    status |= run_case(64, 64, 3584);
-    status |= run_case(128, 33, 3584);
+    status |= run_case(64, 33, 256, small);
+    status |= run_case(64, 33, 512, small);
+    status |= run_case(64, 33, 3584, small);
+    status |= run_case(64, 64, 3584, small);
+    status |= run_case(128, 33, 3584, small);
+    status |= run_case(64, 33, 256, stress);
+    status |= run_case(64, 33, 512, stress);
+    status |= run_case(64, 33, 3584, stress);
+    status |= run_case(64, 64, 3584, stress);
+    status |= run_case(128, 33, 3584, stress);
     return status;
 }
