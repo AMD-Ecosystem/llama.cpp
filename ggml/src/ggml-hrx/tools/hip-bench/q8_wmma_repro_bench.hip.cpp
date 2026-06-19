@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -1776,9 +1777,60 @@ static float half_bits_to_float(uint16_t h) {
     return sign ? -value : value;
 }
 
+template <typename T>
+static bool read_binary_vector(const std::string & path, std::vector<T> & out, size_t expected_count) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        std::fprintf(stderr, "failed to open %s\n", path.c_str());
+        return false;
+    }
+    file.seekg(0, std::ios::end);
+    const std::streamoff size = file.tellg();
+    file.seekg(0, std::ios::beg);
+    if (size < 0 || static_cast<size_t>(size) != expected_count * sizeof(T)) {
+        std::fprintf(stderr,
+            "unexpected size for %s: got %lld expected %zu\n",
+            path.c_str(),
+            static_cast<long long>(size),
+            expected_count * sizeof(T));
+        return false;
+    }
+    out.resize(expected_count);
+    file.read(reinterpret_cast<char *>(out.data()), size);
+    return static_cast<bool>(file);
+}
+
+static bool read_meta_int(const std::string & path, const std::string & key, int * value) {
+    std::ifstream file(path);
+    if (!file) {
+        std::fprintf(stderr, "failed to open %s\n", path.c_str());
+        return false;
+    }
+    std::string line;
+    const std::string prefix = key + "=";
+    while (std::getline(file, line)) {
+        if (line.rfind(prefix, 0) == 0) {
+            *value = std::atoi(line.c_str() + prefix.size());
+            return true;
+        }
+    }
+    std::fprintf(stderr, "missing %s in %s\n", key.c_str(), path.c_str());
+    return false;
+}
+
 static float rhs_value(int col, int k_index) {
     const int raw = (col * 19 + k_index * 7 + 23) & 63;
     return (static_cast<float>(raw) - 31.0f) * 0.0015f;
+}
+
+static float deterministic_uniform_signed(uint32_t x) {
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    const float u = static_cast<float>(x & 0x00ffffffu) * (1.0f / 8388607.5f);
+    return u - 1.0f;
 }
 
 static void fill_q8(std::vector<hrx_block_q8_0_wmma_vk128_lhs> & blocks, int rows, int blocks_per_row) {
@@ -1794,10 +1846,48 @@ static void fill_q8(std::vector<hrx_block_q8_0_wmma_vk128_lhs> & blocks, int row
     }
 }
 
+static void fill_q8_backend_like(std::vector<hrx_block_q8_0_wmma_vk128_lhs> & blocks, int rows, int blocks_per_row) {
+    for (int row = 0; row < rows; ++row) {
+        for (int block_idx = 0; block_idx < blocks_per_row; ++block_idx) {
+            float values[32];
+            float amax = 0.0f;
+            for (int i = 0; i < 32; ++i) {
+                const uint32_t seed =
+                    0x9e3779b9u ^
+                    static_cast<uint32_t>(row * 0x45d9f3bu) ^
+                    static_cast<uint32_t>(block_idx * 0x119de1f3u) ^
+                    static_cast<uint32_t>(i * 0x3449b1u);
+                values[i] = deterministic_uniform_signed(seed);
+                amax = std::max(amax, std::fabs(values[i]));
+            }
+            const float d = amax / 127.0f;
+            const float id = d != 0.0f ? 1.0f / d : 0.0f;
+            hrx_block_q8_0_wmma_vk128_lhs & block =
+                blocks[static_cast<size_t>(row) * blocks_per_row + block_idx];
+            block.d = float_to_half_bits(d);
+            for (int i = 0; i < 32; ++i) {
+                block.qs[i] = static_cast<int8_t>(std::round(values[i] * id));
+            }
+        }
+    }
+}
+
 static void fill_rhs(std::vector<float> & rhs, int k, int cols) {
     for (int col = 0; col < cols; ++col) {
         for (int kk = 0; kk < k; ++kk) {
             rhs[static_cast<size_t>(col) * k + kk] = rhs_value(col, kk);
+        }
+    }
+}
+
+static void fill_rhs_backend_like(std::vector<float> & rhs, int k, int cols) {
+    for (int col = 0; col < cols; ++col) {
+        for (int kk = 0; kk < k; ++kk) {
+            const uint32_t seed =
+                0x243f6a88u ^
+                static_cast<uint32_t>(col * 0x85ebca6bu) ^
+                static_cast<uint32_t>(kk * 0xc2b2ae35u);
+            rhs[static_cast<size_t>(col) * k + kk] = deterministic_uniform_signed(seed);
         }
     }
 }
@@ -1961,6 +2051,7 @@ static bool output_is_active(size_t index, int rows, const std::string & mode) {
             mode == "array16-direct-raw-bcopy" ||
             mode == "array16-direct-raw-abcopy" ||
             mode == "phase96-bm128-abcopy" ||
+            mode == "phase96-bm128-abcopy-backendlike" ||
             mode == "array8-fullb-2phase" || mode == "batched4" ||
             mode == "array8-fullb-2phase-consume" || mode == "batched4-consume") {
         return true;
@@ -2170,8 +2261,14 @@ static int run_dual_stage_compare_case(const std::string & mode, int rows, int c
     std::vector<float> h_rhs(static_cast<size_t>(cols) * k);
     std::vector<float> h_raw(static_cast<size_t>(rows) * cols, -7777.0f);
     std::vector<float> h_staged(static_cast<size_t>(rows) * cols, -7777.0f);
-    fill_q8(h_q8, rows, blocks_per_row);
-    fill_rhs(h_rhs, k, cols);
+    const bool backend_like = mode == "phase96-bm128-abcopy-backendlike";
+    if (backend_like) {
+        fill_q8_backend_like(h_q8, rows, blocks_per_row);
+        fill_rhs_backend_like(h_rhs, k, cols);
+    } else {
+        fill_q8(h_q8, rows, blocks_per_row);
+        fill_rhs(h_rhs, k, cols);
+    }
     const std::vector<float> ref = cpu_reference(h_q8, h_rhs, k, rows, cols);
 
     device_buffer<hrx_block_q8_0_wmma_vk128_lhs> d_q8(h_q8.size());
@@ -2557,7 +2654,7 @@ static int run_case(const std::string & mode, int rows, int cols, int k) {
             d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
         hipLaunchKernelGGL((q8_array_fullb_phase_repro_kernel<8, 2, 2, 8, false, true, true>), grid, dim3(256, 1, 1), 0, 0,
             d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
-    } else if (mode == "phase96-bm128-abcopy") {
+    } else if (mode == "phase96-bm128-abcopy" || mode == "phase96-bm128-abcopy-backendlike") {
         dim3 bm128_grid((rows + 127) / 128, (cols + 127) / 128, 1);
         hipLaunchKernelGGL((q8_phase96_bm128_repro_kernel<0, 0, 2, true, true>),
             bm128_grid, dim3(256, 1, 1), 0, 0, d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
@@ -2703,6 +2800,8 @@ static int run_case(const std::string & mode, int rows, int cols, int k) {
     size_t sentinel = 0;
     size_t bad = 0;
     float max_abs = 0.0f;
+    double mse = 0.0;
+    double ref_mse = 0.0;
     group_stats by_group[16];
     for (size_t i = 0; i < h_out.size(); ++i) {
         if (!output_is_active(i, rows, mode)) {
@@ -2736,6 +2835,8 @@ static int run_case(const std::string & mode, int rows, int cols, int k) {
         }
         const float expected = expected_value_for_output(i, rows, cols, mode, ref);
         const float err = std::fabs(actual - expected);
+        mse += static_cast<double>(actual - expected) * static_cast<double>(actual - expected);
+        ref_mse += static_cast<double>(expected) * static_cast<double>(expected);
         max_abs = std::max(max_abs, err);
         gs.max_abs = std::max(gs.max_abs, err);
         if (err > 0.25f) {
@@ -2744,10 +2845,11 @@ static int run_case(const std::string & mode, int rows, int cols, int k) {
             note_bad_sample(gs, i, rows, actual, expected, err);
         }
     }
+    const double nmse_value = ref_mse != 0.0 ? mse / ref_mse : 0.0;
 
     std::printf(
-        "%s rows=%d cols=%d k=%d active=%zu bad=%zu nan=%zu inf=%zu sentinel=%zu max_abs=%g\n",
-        mode.c_str(), rows, cols, k, active, bad, nan, inf, sentinel, max_abs);
+        "%s rows=%d cols=%d k=%d active=%zu bad=%zu nan=%zu inf=%zu sentinel=%zu max_abs=%g nmse=%.9f\n",
+        mode.c_str(), rows, cols, k, active, bad, nan, inf, sentinel, max_abs, nmse_value);
     for (int group = 0; group < 16; ++group) {
         const group_stats & gs = by_group[group];
         if (gs.active == 0 || (gs.bad == 0 && gs.nan == 0 && gs.inf == 0 && gs.sentinel == 0)) {
@@ -2778,15 +2880,161 @@ static int run_case(const std::string & mode, int rows, int cols, int k) {
     return (nan == 0 && inf == 0 && sentinel == 0) ? 0 : 1;
 }
 
+static int run_dump_case(const std::string & mode, const std::string & dump_dir) {
+    if (mode != "phase96-bm128-abcopy" && mode != "phase96-bm128-abcopy-backendlike") {
+        std::fprintf(stderr, "--dump-dir replay currently supports phase96-bm128-abcopy modes only\n");
+        return 2;
+    }
+
+    const std::string stem = dump_dir + "/dump-0-MUL_MAT";
+    const std::string meta_path = stem + ".meta.txt";
+    int k = 0;
+    int rows = 0;
+    int cols = 0;
+    if (!read_meta_int(meta_path, "k", &k) ||
+            !read_meta_int(meta_path, "rows", &rows) ||
+            !read_meta_int(meta_path, "cols", &cols)) {
+        return 2;
+    }
+    if (k <= 0 || rows <= 0 || cols <= 0 || (k % 32) != 0) {
+        std::fprintf(stderr, "invalid dump shape rows=%d cols=%d k=%d\n", rows, cols, k);
+        return 2;
+    }
+
+    const int blocks_per_row = k / 32;
+    std::vector<hrx_block_q8_0_wmma_vk128_lhs> h_q8;
+    std::vector<float> h_rhs;
+    std::vector<float> ref;
+    std::vector<float> h_out(static_cast<size_t>(rows) * cols, -7777.0f);
+    if (!read_binary_vector(stem + ".a.q8_0.bin", h_q8, static_cast<size_t>(rows) * blocks_per_row) ||
+            !read_binary_vector(stem + ".b.f32.bin", h_rhs, static_cast<size_t>(cols) * k) ||
+            !read_binary_vector(stem + ".ref.f32.bin", ref, static_cast<size_t>(rows) * cols)) {
+        return 2;
+    }
+
+    device_buffer<hrx_block_q8_0_wmma_vk128_lhs> d_q8(h_q8.size());
+    device_buffer<float> d_rhs(h_rhs.size());
+    device_buffer<float> d_out(h_out.size());
+    HIP_CHECK(hipMemcpy(d_q8.ptr, h_q8.data(), h_q8.size() * sizeof(h_q8[0]), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(d_rhs.ptr, h_rhs.data(), h_rhs.size() * sizeof(h_rhs[0]), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(d_out.ptr, h_out.data(), h_out.size() * sizeof(h_out[0]), hipMemcpyHostToDevice));
+
+    dim3 bm128_grid((rows + 127) / 128, (cols + 127) / 128, 1);
+    hipLaunchKernelGGL((q8_phase96_bm128_repro_kernel<0, 0, 2, true, true>),
+        bm128_grid, dim3(256, 1, 1), 0, 0, d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+    hipLaunchKernelGGL((q8_phase96_bm128_repro_kernel<8, 2, 2, true, true>),
+        bm128_grid, dim3(256, 1, 1), 0, 0, d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+    HIP_CHECK(hipGetLastError());
+    HIP_CHECK(hipDeviceSynchronize());
+    HIP_CHECK(hipMemcpy(h_out.data(), d_out.ptr, h_out.size() * sizeof(h_out[0]), hipMemcpyDeviceToHost));
+
+    size_t active = 0;
+    size_t nan = 0;
+    size_t inf = 0;
+    size_t sentinel = 0;
+    size_t bad = 0;
+    float max_abs = 0.0f;
+    double mse = 0.0;
+    double ref_mse = 0.0;
+    group_stats by_group[16];
+    for (size_t i = 0; i < h_out.size(); ++i) {
+        if (!output_is_active(i, rows, mode)) {
+            continue;
+        }
+        const int group = output_group(i, rows);
+        group_stats & gs = by_group[group];
+        ++active;
+        ++gs.active;
+        const float actual = h_out[i];
+        if (actual == -7777.0f) {
+            ++sentinel;
+            ++gs.sentinel;
+            note_bad_sample(gs, i, rows, actual, 0.0f, INFINITY);
+        }
+        if (std::isnan(actual)) {
+            ++nan;
+            ++bad;
+            ++gs.nan;
+            ++gs.bad;
+            note_bad_sample(gs, i, rows, actual, 0.0f, NAN);
+            continue;
+        }
+        if (std::isinf(actual)) {
+            ++inf;
+            ++bad;
+            ++gs.inf;
+            ++gs.bad;
+            note_bad_sample(gs, i, rows, actual, 0.0f, INFINITY);
+            continue;
+        }
+        const float expected = expected_value_for_output(i, rows, cols, mode, ref);
+        const float err = std::fabs(actual - expected);
+        mse += static_cast<double>(actual - expected) * static_cast<double>(actual - expected);
+        ref_mse += static_cast<double>(expected) * static_cast<double>(expected);
+        max_abs = std::max(max_abs, err);
+        gs.max_abs = std::max(gs.max_abs, err);
+        if (err > 0.25f) {
+            ++bad;
+            ++gs.bad;
+            note_bad_sample(gs, i, rows, actual, expected, err);
+        }
+    }
+    const double nmse_value = ref_mse != 0.0 ? mse / ref_mse : 0.0;
+
+    std::printf(
+        "%s dump=%s rows=%d cols=%d k=%d active=%zu bad=%zu nan=%zu inf=%zu sentinel=%zu max_abs=%g nmse=%.9f\n",
+        mode.c_str(), dump_dir.c_str(), rows, cols, k, active, bad, nan, inf, sentinel, max_abs, nmse_value);
+    for (int group = 0; group < 16; ++group) {
+        const group_stats & gs = by_group[group];
+        if (gs.active == 0 || (gs.bad == 0 && gs.nan == 0 && gs.inf == 0 && gs.sentinel == 0)) {
+            continue;
+        }
+        std::printf(
+            "  group=%d active=%zu bad=%zu nan=%zu inf=%zu sentinel=%zu max_abs=%g\n",
+            group, gs.active, gs.bad, gs.nan, gs.inf, gs.sentinel, gs.max_abs);
+        if (gs.have_first_bad) {
+            std::printf(
+                "    first row=%d col=%d lane=%d slot=%d actual=%g expected=%g err=%g\n",
+                gs.first_row,
+                gs.first_col,
+                gs.first_lane,
+                gs.first_slot,
+                gs.first_actual,
+                gs.first_expected,
+                gs.first_err);
+        }
+        for (int sample = 0; sample < gs.sample_count; ++sample) {
+            std::printf(
+                "    sample row=%d col=%d lane=%d slot=%d actual=%g expected=%g err=%g\n",
+                gs.sample_row[sample],
+                gs.sample_col[sample],
+                gs.sample_lane[sample],
+                gs.sample_slot[sample],
+                gs.sample_actual[sample],
+                gs.sample_expected[sample],
+                gs.sample_err[sample]);
+        }
+    }
+
+    return (nan == 0 && inf == 0 && sentinel == 0) ? 0 : 1;
+}
+
 int main(int argc, char ** argv) {
     std::string mode = "all";
+    std::string dump_dir;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
             mode = argv[++i];
+        } else if (std::strcmp(argv[i], "--dump-dir") == 0 && i + 1 < argc) {
+            dump_dir = argv[++i];
         } else {
-            std::fprintf(stderr, "usage: %s [--mode array8-fullb|array16-direct-raw|array16-direct-raw-bcopy|array16-direct-raw-abcopy|contract-direct192-abcopy|contract-phase96-abcopy|phase96-bm128-abcopy|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|array8-fullb-2phase-bcopy|array8-fullb-2phase-bcopy-stage|array8-fullb-2phase-abcopy|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group0-bcopy-stage|single-group8|single-group8-consume|single-group8-opsel1|single-group8-bmirror0|single-group8-bcopy|single-group8-abcopy|single-group8-bcopy-stage|single-group8-abcopy-stage|single-group8-bcopy-stage-selected|single-group12|single-group12-consume|single-group12-opsel1|single-group12-bmirror0|single-group12-bcopy|single-group12-abcopy|single-group12-bcopy-stage|single-group12-abcopy-stage|single-group12-bcopy-stage-selected|single-group12-abcopy-stage-selected|single-group12-bcopy-stage-selected-acccopy|single-group12-abcopy-stage-selected-acccopy|single-group12-bcopy-stage-selected-regcopy|single-group12-abcopy-stage-selected-regcopy|single-group12-abcopy-dual-stage-raw-first|single-group12-abcopy-dual-stage-stage-first|single-group13|single-group13-consume|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c12-s0-bcopy-stage-selected|remap-c12-s0-abcopy-stage-selected|remap-c0-s12|remap-c0-s12-stage-selected|bfrag-dump|all]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--mode array8-fullb|array16-direct-raw|array16-direct-raw-bcopy|array16-direct-raw-abcopy|contract-direct192-abcopy|contract-phase96-abcopy|phase96-bm128-abcopy|phase96-bm128-abcopy-backendlike|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|array8-fullb-2phase-bcopy|array8-fullb-2phase-bcopy-stage|array8-fullb-2phase-abcopy|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group0-bcopy-stage|single-group8|single-group8-consume|single-group8-opsel1|single-group8-bmirror0|single-group8-bcopy|single-group8-abcopy|single-group8-bcopy-stage|single-group8-abcopy-stage|single-group8-bcopy-stage-selected|single-group12|single-group12-consume|single-group12-opsel1|single-group12-bmirror0|single-group12-bcopy|single-group12-abcopy|single-group12-bcopy-stage|single-group12-abcopy-stage|single-group12-bcopy-stage-selected|single-group12-abcopy-stage-selected|single-group12-bcopy-stage-selected-acccopy|single-group12-abcopy-stage-selected-acccopy|single-group12-bcopy-stage-selected-regcopy|single-group12-abcopy-stage-selected-regcopy|single-group12-abcopy-dual-stage-raw-first|single-group12-abcopy-dual-stage-stage-first|single-group13|single-group13-consume|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c12-s0-bcopy-stage-selected|remap-c12-s0-abcopy-stage-selected|remap-c0-s12|remap-c0-s12-stage-selected|bfrag-dump|all] [--dump-dir <test-backend-ops dump dir>]\n", argv[0]);
             return 2;
         }
+    }
+
+    if (!dump_dir.empty()) {
+        return run_dump_case(mode, dump_dir);
     }
 
     int status = 0;
@@ -2837,6 +3085,13 @@ int main(int argc, char ** argv) {
         status |= run_case("phase96-bm128-abcopy", 128, 129, 14336);
         status |= run_case("phase96-bm128-abcopy", 512, 128, k);
         status |= run_case("phase96-bm128-abcopy", 1024, 128, k);
+    }
+    if (mode == "phase96-bm128-abcopy-backendlike") {
+        status |= run_case("phase96-bm128-abcopy-backendlike", 128, 128, k);
+        status |= run_case("phase96-bm128-abcopy-backendlike", 128, 512, k);
+        status |= run_case("phase96-bm128-abcopy-backendlike", 128, 128, 14336);
+        status |= run_case("phase96-bm128-abcopy-backendlike", 1024, 512, k);
+        status |= run_case("phase96-bm128-abcopy-backendlike", 4096, 512, k);
     }
     if (mode == "all" || mode == "batched4") {
         status |= run_case("batched4", rows, 64, k);

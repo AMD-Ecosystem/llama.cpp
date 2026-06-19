@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cfloat>
 #include <cinttypes>
 #include <cstdarg>
@@ -272,6 +273,81 @@ static std::vector<float> tensor_to_float(const ggml_tensor * t) {
     }
 
     return tv;
+}
+
+static std::string sanitize_path_component(const std::string & s) {
+    std::string out;
+    out.reserve(s.size());
+    for (unsigned char c : s) {
+        if (std::isalnum(c) || c == '-' || c == '_' || c == '.') {
+            out.push_back((char) c);
+        } else {
+            out.push_back('_');
+        }
+    }
+    if (out.empty()) {
+        out = "unnamed";
+    }
+    return out;
+}
+
+static bool write_raw_file(const std::string & path, const void * data, size_t size) {
+    FILE * f = std::fopen(path.c_str(), "wb");
+    if (!f) {
+        return false;
+    }
+    const bool ok = std::fwrite(data, 1, size, f) == size;
+    std::fclose(f);
+    return ok;
+}
+
+static bool dump_tensor_raw_file(const std::string & path, const ggml_tensor * t) {
+    std::vector<uint8_t> buf(ggml_nbytes(t));
+    ggml_backend_tensor_get(t, buf.data(), 0, buf.size());
+    return write_raw_file(path, buf.data(), buf.size());
+}
+
+static bool dump_mul_mat_q8_0_f32_replay_case(
+        const std::string & dump_dir,
+        const std::string & name,
+        const std::string & op_params,
+        const ggml_tensor * backend_out,
+        const ggml_tensor * cpu_out) {
+    const ggml_tensor * a = cpu_out->src[0];
+    const ggml_tensor * b = cpu_out->src[1];
+    if (backend_out->op != GGML_OP_MUL_MAT ||
+            a == nullptr || b == nullptr ||
+            a->type != GGML_TYPE_Q8_0 || b->type != GGML_TYPE_F32 ||
+            a->ne[2] != 1 || a->ne[3] != 1 ||
+            b->ne[2] != 1 || b->ne[3] != 1 ||
+            cpu_out->ne[2] != 1 || cpu_out->ne[3] != 1) {
+        return false;
+    }
+
+    const std::string stem = dump_dir + "/" + sanitize_path_component(name);
+    if (!dump_tensor_raw_file(stem + ".a.q8_0.bin", a) ||
+            !dump_tensor_raw_file(stem + ".b.f32.bin", b) ||
+            !dump_tensor_raw_file(stem + ".ref.f32.bin", cpu_out) ||
+            !dump_tensor_raw_file(stem + ".actual.f32.bin", backend_out)) {
+        std::fprintf(stderr, "failed to write GGML_TEST_BACKEND_OPS_DUMP_DIR files for %s\n", name.c_str());
+        return false;
+    }
+
+    FILE * meta = std::fopen((stem + ".meta.txt").c_str(), "wb");
+    if (!meta) {
+        return false;
+    }
+    std::fprintf(meta, "format=hrx_q8_0_mul_mat_replay_v1\n");
+    std::fprintf(meta, "name=%s\n", name.c_str());
+    std::fprintf(meta, "op_params=%s\n", op_params.c_str());
+    std::fprintf(meta, "k=%" PRId64 "\n", a->ne[0]);
+    std::fprintf(meta, "rows=%" PRId64 "\n", a->ne[1]);
+    std::fprintf(meta, "cols=%" PRId64 "\n", b->ne[1]);
+    std::fprintf(meta, "a_nbytes=%zu\n", ggml_nbytes(a));
+    std::fprintf(meta, "b_nbytes=%zu\n", ggml_nbytes(b));
+    std::fprintf(meta, "out_nbytes=%zu\n", ggml_nbytes(cpu_out));
+    std::fclose(meta);
+    return true;
 }
 
 // normalized mean squared error = mse(a, b) / mse(a, 0)
@@ -1364,19 +1440,40 @@ struct test_case {
             test_case * tc;
             ggml_backend_t backend1;
             ggml_backend_t backend2;
+            const char * dump_dir;
+            int dump_limit;
+            int dump_count;
         };
+
+        const char * dump_dir = std::getenv("GGML_TEST_BACKEND_OPS_DUMP_DIR");
+        int dump_limit = 1;
+        if (const char * dump_limit_env = std::getenv("GGML_TEST_BACKEND_OPS_DUMP_LIMIT")) {
+            dump_limit = std::max(0, std::atoi(dump_limit_env));
+        }
 
         callback_userdata ud {
             true,
             this,
             backend1,
             backend2,
+            dump_dir,
+            dump_limit,
+            0,
         };
 
         auto callback = [](int index, ggml_tensor * t1, ggml_tensor * t2, void * user_data) -> bool {
             callback_userdata * ud = (callback_userdata *) user_data;
             const char * bn1 = ggml_backend_name(ud->backend1);
             const char * bn2 = ggml_backend_name(ud->backend2);
+
+            if (ud->dump_dir != nullptr && ud->dump_count < ud->dump_limit && t1->op == GGML_OP_MUL_MAT) {
+                const std::string dump_name =
+                    "dump-" + std::to_string(ud->dump_count) + "-" + ud->tc->current_op_name;
+                if (dump_mul_mat_q8_0_f32_replay_case(
+                            ud->dump_dir, dump_name, ud->tc->vars(), t1, t2)) {
+                    ++ud->dump_count;
+                }
+            }
 
             if (t1->op == GGML_OP_NONE) {
                 // sentinels must be unchanged
