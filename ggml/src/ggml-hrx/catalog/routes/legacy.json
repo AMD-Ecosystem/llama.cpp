@@ -6666,6 +6666,49 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmq64x48_wg256_f32",
+    "family": "mul_mat_vec_q5_k_q8_1_x4_mmq64x48_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q5_k_q8_1_x4_mmq64x48",
+    "artifact_id": "mul_mat_vec_q5_k_q8_1_x4_mmq64x48_hsaco",
+    "export_name": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmq64x48_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 100,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q5_k_p33_narrow_probe"
+    },
+    "shape_guards": {
+      "rows_multiple": 64,
+      "cols_min": 32,
+      "cols_max": 48,
+      "k_multiple": 256
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmq64x48_wg256_f32",
+      "selector_gate": "GGML_HRX_ENABLE_Q5_K_Q8_1_X4_MMQ64X48_PROMPT=1"
+    },
+    "evidence_summary": {
+      "status": "experimental_gfx1151_probe",
+      "selection": "Q5_K packed-Q8_1/x4 p33 probe. It preserves the current MMQ64 row ownership and dot path while reducing the narrow prompt column tile from BN64/COLS_PER_THREAD16 to BN48/COLS_PER_THREAD12 so p33 avoids staging and carrying columns 49-64. Promotion requires focused p33 correctness, route trace selection on Qcur/ffn_out, no p512/p513 stealing, and same-runner timing improvement."
+    },
+    "target_prefixes": [
+      "gfx1151"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmq64x64_wg256_f32",
     "family": "mul_mat_vec_q5_k_q8_1_x4_mmq64x64_wg256",
     "op": "MUL_MAT",

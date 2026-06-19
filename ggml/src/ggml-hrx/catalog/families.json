@@ -624,6 +624,10 @@
     "op": "MUL_MAT"
   },
   {
+    "family": "mul_mat_vec_q5_k_q8_1_x4_mmq64x48_wg256",
+    "op": "MUL_MAT"
+  },
+  {
     "family": "mul_mat_vec_q5_k_q8_1_x4_mmq64x64_wg256",
     "op": "MUL_MAT"
   },

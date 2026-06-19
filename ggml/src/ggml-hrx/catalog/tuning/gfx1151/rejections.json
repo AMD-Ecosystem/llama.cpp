@@ -3,6 +3,15 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q5_dense_prompt_mmq64x48_p33",
+      "date": "2026-06-18",
+      "route": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmq64x48_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q5_K_Q8_1_X4_MMQ64X48_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q5-mmq64x48-focused-20260618-213624/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q5_k_q8_1_x4_mmq64x48.hsaco",
+      "reason": "The Q5_K packed-Q8_1/x4 BN48 p33 probe preserved the current MMQ64 row ownership and dot path while reducing the narrow prompt column tile from BN64/COLS_PER_THREAD16 to BN48/COLS_PER_THREAD12. It compiled through CMake/Ninja with wave64, SGPR=38, VGPR=132, LDS=1728 bytes, no private segment, 96 v_dot4_i32, 52 LDS reads, 12 stores, and 2 barriers. Focused CPU-reference gates passed for p33, p512, and p513. Route traces proved p33 selected BN48 only for Qcur and ffn_out, while p512 stayed on current MMQL128 and p513 stayed on current B-quad tail routing. It is rejected for general p33 promotion because same-runner focused p33 timing was mixed and net regressive: Qcur improved 330.61 -> 318.00 us, but ffn_out regressed 2586.46 -> 2758.25 us; Kcur stayed on rows2 and ffn_gate stayed on the accepted VK64 narrow route. Smaller BN alone is not the missing Q5 p33 schedule axis; future packed-path work should target K-dependent issue/staging behavior or a route that can distinguish Qcur from large-K ffn_out without regressing the latter."
+    },
+    {
       "id": "q5_small_mmql128_selector_only_p512",
       "date": "2026-06-17",
       "route": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_wg256_f32",
