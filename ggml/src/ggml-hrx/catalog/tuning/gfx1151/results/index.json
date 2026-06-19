@@ -3,6 +3,13 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_motif192_k2_waitload_issue_window_repro",
+      "date": "2026-06-19",
+      "artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-waitload-20260619-162840/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro with embedded gfx1151 object extracted to cache/hrxv1/gfx1151/q8-motif192-k2-waitload-20260619-162840/static/gfx1151.o",
+      "status": "accepted_standalone_k2_motif_issue_window_prior"
+    },
+    {
       "id": "q8_0_motif192_waitload_repro",
       "date": "2026-06-19",
       "stage_artifact": "cache/hrxv1/gfx1151/q8-motif192-stage-waitload-20260619-160737/",

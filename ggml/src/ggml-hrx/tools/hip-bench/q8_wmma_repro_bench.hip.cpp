@@ -597,6 +597,288 @@ static __device__ __forceinline__ hrx_q8_0_wmma_vk128_half8_vec q8_repro_wmma_f1
     return out;
 }
 
+template <int wait_lgkmcnt>
+static __device__ __forceinline__ hrx_q8_0_wmma_vk128_half16_vec q8_repro_dep_copy_initial(
+        hrx_q8_0_wmma_vk128_half16_vec src,
+        hrx_q8_0_wmma_vk128_half16_vec dep0,
+        hrx_q8_0_wmma_vk128_half16_vec dep1,
+        hrx_q8_0_wmma_vk128_half16_vec dep2,
+        hrx_q8_0_wmma_vk128_half16_vec dep3,
+        hrx_q8_0_wmma_vk128_half16_vec dep4,
+        hrx_q8_0_wmma_vk128_half16_vec dep5,
+        hrx_q8_0_wmma_vk128_half16_vec dep6) {
+    const hrx_q8_0_wmma_vk128_u32x8_vec in =
+        __builtin_bit_cast(hrx_q8_0_wmma_vk128_u32x8_vec, src);
+    hrx_q8_0_wmma_vk128_u32x8_vec out;
+    asm volatile("s_waitcnt lgkmcnt(%16)\n\t"
+                 "v_mov_b32 %0, %8\n\t"
+                 "v_mov_b32 %1, %9\n\t"
+                 "v_mov_b32 %2, %10\n\t"
+                 "v_mov_b32 %3, %11\n\t"
+                 "v_mov_b32 %4, %12\n\t"
+                 "v_mov_b32 %5, %13\n\t"
+                 "v_mov_b32 %6, %14\n\t"
+                 "v_mov_b32 %7, %15\n\t"
+                 : "=v"(out[0]), "=v"(out[1]), "=v"(out[2]), "=v"(out[3]),
+                   "=v"(out[4]), "=v"(out[5]), "=v"(out[6]), "=v"(out[7])
+                 : "v"(in[0]), "v"(in[1]), "v"(in[2]), "v"(in[3]),
+                   "v"(in[4]), "v"(in[5]), "v"(in[6]), "v"(in[7]),
+                   "n"(wait_lgkmcnt),
+                   "v"(dep0), "v"(dep1), "v"(dep2), "v"(dep3),
+                   "v"(dep4), "v"(dep5), "v"(dep6)
+                 : "memory");
+    return __builtin_bit_cast(hrx_q8_0_wmma_vk128_half16_vec, out);
+}
+
+template <int wait_lgkmcnt>
+static __device__ __forceinline__ hrx_q8_0_wmma_vk128_half16_vec q8_repro_dep_copy_after_acc(
+        hrx_q8_0_wmma_vk128_half16_vec src,
+        hrx_q8_0_wmma_vk128_half16_vec token,
+        hrx_q8_0_wmma_vk128_half8_vec prev_acc) {
+    const hrx_q8_0_wmma_vk128_u32x8_vec in =
+        __builtin_bit_cast(hrx_q8_0_wmma_vk128_u32x8_vec, src);
+    hrx_q8_0_wmma_vk128_u32x8_vec out;
+    asm volatile("s_waitcnt lgkmcnt(%16)\n\t"
+                 "v_mov_b32 %0, %8\n\t"
+                 "v_mov_b32 %1, %9\n\t"
+                 "v_mov_b32 %2, %10\n\t"
+                 "v_mov_b32 %3, %11\n\t"
+                 "v_mov_b32 %4, %12\n\t"
+                 "v_mov_b32 %5, %13\n\t"
+                 "v_mov_b32 %6, %14\n\t"
+                 "v_mov_b32 %7, %15\n\t"
+                 : "=v"(out[0]), "=v"(out[1]), "=v"(out[2]), "=v"(out[3]),
+                   "=v"(out[4]), "=v"(out[5]), "=v"(out[6]), "=v"(out[7])
+                 : "v"(in[0]), "v"(in[1]), "v"(in[2]), "v"(in[3]),
+                   "v"(in[4]), "v"(in[5]), "v"(in[6]), "v"(in[7]),
+                   "n"(wait_lgkmcnt), "v"(token), "v"(prev_acc)
+                 : "memory");
+    return __builtin_bit_cast(hrx_q8_0_wmma_vk128_half16_vec, out);
+}
+
+static __device__ __forceinline__ hrx_q8_0_wmma_vk128_half16_vec q8_repro_dep_copy_after_token(
+        hrx_q8_0_wmma_vk128_half16_vec src,
+        hrx_q8_0_wmma_vk128_half16_vec token) {
+    const hrx_q8_0_wmma_vk128_u32x8_vec in =
+        __builtin_bit_cast(hrx_q8_0_wmma_vk128_u32x8_vec, src);
+    hrx_q8_0_wmma_vk128_u32x8_vec out;
+    asm volatile("v_mov_b32 %0, %8\n\t"
+                 "v_mov_b32 %1, %9\n\t"
+                 "v_mov_b32 %2, %10\n\t"
+                 "v_mov_b32 %3, %11\n\t"
+                 "v_mov_b32 %4, %12\n\t"
+                 "v_mov_b32 %5, %13\n\t"
+                 "v_mov_b32 %6, %14\n\t"
+                 "v_mov_b32 %7, %15\n\t"
+                 : "=v"(out[0]), "=v"(out[1]), "=v"(out[2]), "=v"(out[3]),
+                   "=v"(out[4]), "=v"(out[5]), "=v"(out[6]), "=v"(out[7])
+                 : "v"(in[0]), "v"(in[1]), "v"(in[2]), "v"(in[3]),
+                   "v"(in[4]), "v"(in[5]), "v"(in[6]), "v"(in[7]),
+                   "v"(token)
+                 : "memory");
+    return __builtin_bit_cast(hrx_q8_0_wmma_vk128_half16_vec, out);
+}
+
+#define Q8_REPRO_DEP_WMMA_INITIAL(ACC, TILE, A, B, W, D0, D1, D2, D3, D4, D5, D6) \
+    do { \
+        const hrx_q8_0_wmma_vk128_half16_vec a_dep = \
+            q8_repro_dep_copy_initial<W>((A), (D0), (D1), (D2), (D3), (D4), (D5), (D6)); \
+        const hrx_q8_0_wmma_vk128_half16_vec b_dep = q8_repro_dep_copy_after_token((B), a_dep); \
+        (ACC)[TILE] = q8_repro_wmma_f16_w64_asm(a_dep, b_dep, (ACC)[TILE]); \
+    } while (0)
+
+#define Q8_REPRO_DEP_WMMA_AFTER(ACC, TILE, A, B, W, TOKEN, PREV) \
+    do { \
+        const hrx_q8_0_wmma_vk128_half16_vec a_dep = \
+            q8_repro_dep_copy_after_acc<W>((A), (TOKEN), (ACC)[PREV]); \
+        const hrx_q8_0_wmma_vk128_half16_vec b_dep = q8_repro_dep_copy_after_token((B), a_dep); \
+        (ACC)[TILE] = q8_repro_wmma_f16_w64_asm(a_dep, b_dep, (ACC)[TILE]); \
+    } while (0)
+
+#define Q8_REPRO_WAIT_WMMA(ACC, TILE, A, B, W) \
+    do { \
+        asm volatile("s_waitcnt lgkmcnt(%0)\n" :: "n"(W) : "memory"); \
+        (ACC)[TILE] = q8_repro_wmma_f16_w64_asm((A), (B), (ACC)[TILE]); \
+    } while (0)
+
+template <bool dependent_ladder>
+static __device__ __forceinline__ void q8_repro_issue_k2_wmma_ladder(
+        hrx_q8_0_wmma_vk128_half8_vec * acc,
+        const hrx_q8_0_wmma_vk128_half16_vec a_frag[2][4],
+        const hrx_q8_0_wmma_vk128_half16_vec b_frag[2][4]) {
+    if constexpr (dependent_ladder) {
+        Q8_REPRO_DEP_WMMA_INITIAL(acc, 0, a_frag[0][0], b_frag[0][0], 51,
+            a_frag[0][1], a_frag[0][2], a_frag[0][3],
+            b_frag[0][0], b_frag[0][1], b_frag[0][2], b_frag[0][3]);
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 1, a_frag[0][1], b_frag[0][0], 47, a_frag[0][0], 0);
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 2, a_frag[0][2], b_frag[0][0], 43, a_frag[0][1], 1);
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 3, a_frag[0][3], b_frag[0][0], 39, a_frag[0][2], 2);
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 4, a_frag[0][0], b_frag[0][1], 40, a_frag[0][3], 3);
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 5, a_frag[0][1], b_frag[0][1], 36, b_frag[0][1], 4);
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 6, a_frag[0][2], b_frag[0][1], 32, a_frag[0][1], 5);
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 7, a_frag[0][3], b_frag[0][1], 24, a_frag[0][2], 6);
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 8, a_frag[0][0], b_frag[0][2], 20, a_frag[0][3], 7);
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 9, a_frag[0][1], b_frag[0][2], 16, b_frag[0][2], 8);
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 10, a_frag[0][2], b_frag[0][2], 12, a_frag[0][1], 9);
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 11, a_frag[0][3], b_frag[0][2], 8, a_frag[0][2], 10);
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 12, a_frag[0][0], b_frag[0][3], 4, a_frag[0][3], 11);
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 13, a_frag[0][1], b_frag[0][3], 0, b_frag[0][3], 12);
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 14, a_frag[0][2], b_frag[0][3], 0, a_frag[0][1], 13);
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 15, a_frag[0][3], b_frag[0][3], 0, a_frag[0][2], 14);
+
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 0, a_frag[1][0], b_frag[1][0], 51, b_frag[1][0], 15);
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 1, a_frag[1][1], b_frag[1][0], 47, a_frag[1][0], 0);
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 2, a_frag[1][2], b_frag[1][0], 43, a_frag[1][1], 1);
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 3, a_frag[1][3], b_frag[1][0], 39, a_frag[1][2], 2);
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 4, a_frag[1][0], b_frag[1][1], 40, a_frag[1][3], 3);
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 5, a_frag[1][1], b_frag[1][1], 36, b_frag[1][1], 4);
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 6, a_frag[1][2], b_frag[1][1], 32, a_frag[1][1], 5);
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 7, a_frag[1][3], b_frag[1][1], 24, a_frag[1][2], 6);
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 8, a_frag[1][0], b_frag[1][2], 20, a_frag[1][3], 7);
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 9, a_frag[1][1], b_frag[1][2], 16, b_frag[1][2], 8);
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 10, a_frag[1][2], b_frag[1][2], 12, a_frag[1][1], 9);
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 11, a_frag[1][3], b_frag[1][2], 8, a_frag[1][2], 10);
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 12, a_frag[1][0], b_frag[1][3], 4, a_frag[1][3], 11);
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 13, a_frag[1][1], b_frag[1][3], 0, b_frag[1][3], 12);
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 14, a_frag[1][2], b_frag[1][3], 0, a_frag[1][1], 13);
+        Q8_REPRO_DEP_WMMA_AFTER(acc, 15, a_frag[1][3], b_frag[1][3], 0, a_frag[1][2], 14);
+    } else {
+        Q8_REPRO_WAIT_WMMA(acc, 0, a_frag[0][0], b_frag[0][0], 51);
+        Q8_REPRO_WAIT_WMMA(acc, 1, a_frag[0][1], b_frag[0][0], 47);
+        Q8_REPRO_WAIT_WMMA(acc, 2, a_frag[0][2], b_frag[0][0], 43);
+        Q8_REPRO_WAIT_WMMA(acc, 3, a_frag[0][3], b_frag[0][0], 39);
+        Q8_REPRO_WAIT_WMMA(acc, 4, a_frag[0][0], b_frag[0][1], 40);
+        Q8_REPRO_WAIT_WMMA(acc, 5, a_frag[0][1], b_frag[0][1], 36);
+        Q8_REPRO_WAIT_WMMA(acc, 6, a_frag[0][2], b_frag[0][1], 32);
+        Q8_REPRO_WAIT_WMMA(acc, 7, a_frag[0][3], b_frag[0][1], 24);
+        Q8_REPRO_WAIT_WMMA(acc, 8, a_frag[0][0], b_frag[0][2], 20);
+        Q8_REPRO_WAIT_WMMA(acc, 9, a_frag[0][1], b_frag[0][2], 16);
+        Q8_REPRO_WAIT_WMMA(acc, 10, a_frag[0][2], b_frag[0][2], 12);
+        Q8_REPRO_WAIT_WMMA(acc, 11, a_frag[0][3], b_frag[0][2], 8);
+        Q8_REPRO_WAIT_WMMA(acc, 12, a_frag[0][0], b_frag[0][3], 4);
+        Q8_REPRO_WAIT_WMMA(acc, 13, a_frag[0][1], b_frag[0][3], 0);
+        Q8_REPRO_WAIT_WMMA(acc, 14, a_frag[0][2], b_frag[0][3], 0);
+        Q8_REPRO_WAIT_WMMA(acc, 15, a_frag[0][3], b_frag[0][3], 0);
+
+        Q8_REPRO_WAIT_WMMA(acc, 0, a_frag[1][0], b_frag[1][0], 51);
+        Q8_REPRO_WAIT_WMMA(acc, 1, a_frag[1][1], b_frag[1][0], 47);
+        Q8_REPRO_WAIT_WMMA(acc, 2, a_frag[1][2], b_frag[1][0], 43);
+        Q8_REPRO_WAIT_WMMA(acc, 3, a_frag[1][3], b_frag[1][0], 39);
+        Q8_REPRO_WAIT_WMMA(acc, 4, a_frag[1][0], b_frag[1][1], 40);
+        Q8_REPRO_WAIT_WMMA(acc, 5, a_frag[1][1], b_frag[1][1], 36);
+        Q8_REPRO_WAIT_WMMA(acc, 6, a_frag[1][2], b_frag[1][1], 32);
+        Q8_REPRO_WAIT_WMMA(acc, 7, a_frag[1][3], b_frag[1][1], 24);
+        Q8_REPRO_WAIT_WMMA(acc, 8, a_frag[1][0], b_frag[1][2], 20);
+        Q8_REPRO_WAIT_WMMA(acc, 9, a_frag[1][1], b_frag[1][2], 16);
+        Q8_REPRO_WAIT_WMMA(acc, 10, a_frag[1][2], b_frag[1][2], 12);
+        Q8_REPRO_WAIT_WMMA(acc, 11, a_frag[1][3], b_frag[1][2], 8);
+        Q8_REPRO_WAIT_WMMA(acc, 12, a_frag[1][0], b_frag[1][3], 4);
+        Q8_REPRO_WAIT_WMMA(acc, 13, a_frag[1][1], b_frag[1][3], 0);
+        Q8_REPRO_WAIT_WMMA(acc, 14, a_frag[1][2], b_frag[1][3], 0);
+        Q8_REPRO_WAIT_WMMA(acc, 15, a_frag[1][3], b_frag[1][3], 0);
+    }
+}
+
+template <bool dependent_ladder>
+__global__ __launch_bounds__(256, 1)
+void q8_motif192_wmma_k2_store_kernel(
+        float * dst,
+        long long rows,
+        long long cols,
+        bool wait_after_load) {
+    constexpr int BM = 128;
+    constexpr int BN = 128;
+    constexpr int BK = 32;
+    constexpr int SHARED_STRIDE = HRX_Q8_0_WMMA_VK128_SHARED_STRIDE;
+
+    const unsigned int tid = __builtin_amdgcn_workitem_id_x();
+    const unsigned int wave = tid >> 6u;
+    const unsigned int lane = tid & 63u;
+    const int wave_row = static_cast<int>(wave & 1u);
+    const int wave_col = static_cast<int>(wave >> 1);
+    const long long row_base = static_cast<long long>(__builtin_amdgcn_workgroup_id_x()) * BM;
+    const long long col_base = static_cast<long long>(__builtin_amdgcn_workgroup_id_y()) * BN;
+    if (row_base >= rows || col_base >= cols) {
+        return;
+    }
+
+    const __amdgpu_buffer_rsrc_t dst_rsrc = hrx_q8_0_wmma_vk128_make_dst_rsrc(dst);
+    __shared__ _Float16 sh_a[BM * SHARED_STRIDE];
+    __shared__ _Float16 sh_b[BN * SHARED_STRIDE];
+    __shared__ _Float16 sh_store[4 * 16 * 16];
+    hrx_q8_0_wmma_vk128_half8_vec acc[16] = {};
+
+    for (int idx = static_cast<int>(tid); idx < BM * BK; idx += 256) {
+        const int r = idx / BK;
+        const int kk = idx - r * BK;
+        const int row_sub = (r & 63) >> 4;
+        sh_a[r * SHARED_STRIDE + kk] = static_cast<_Float16>(1.0f + static_cast<float>(row_sub));
+    }
+    for (int idx = static_cast<int>(tid); idx < BN * BK; idx += 256) {
+        const int c = idx / BK;
+        const int kk = idx - c * BK;
+        const int col_sub = (c & 63) >> 4;
+        sh_b[c * SHARED_STRIDE + kk] = static_cast<_Float16>(1.0f + static_cast<float>(col_sub));
+    }
+    __syncthreads();
+
+    hrx_q8_0_wmma_vk128_lds_half_ptr sh_a_lds =
+        (hrx_q8_0_wmma_vk128_lds_half_ptr) sh_a;
+    hrx_q8_0_wmma_vk128_lds_half_ptr sh_b_lds =
+        (hrx_q8_0_wmma_vk128_lds_half_ptr) sh_b;
+    hrx_q8_0_wmma_vk128_half16_vec a_frag[2][4];
+    hrx_q8_0_wmma_vk128_half16_vec b_frag[2][4];
+
+#pragma unroll
+    for (int k_tile = 0; k_tile < 2; ++k_tile) {
+#pragma unroll
+        for (int row_sub = 0; row_sub < 4; ++row_sub) {
+            a_frag[k_tile][row_sub] =
+                hrx_q8_0_wmma_vk128_load_a_frag_w64_b64asm_nowait(
+                    sh_a_lds, wave_row * 4 + row_sub, k_tile, lane);
+        }
+#pragma unroll
+        for (int col_sub = 0; col_sub < 4; ++col_sub) {
+            b_frag[k_tile][col_sub] =
+                hrx_q8_0_wmma_vk128_load_b_frag_w64_b64asm_nowait(
+                    sh_b_lds, wave_col * 4 + col_sub, k_tile, lane);
+        }
+    }
+
+    q8_repro_issue_k2_wmma_ladder<dependent_ladder>(acc, a_frag, b_frag);
+
+#pragma unroll
+    for (int group = 0; group < 16; ++group) {
+#pragma unroll
+        for (int slot = 0; slot < 4; ++slot) {
+            q8_repro_bm128_raw_store_slot(
+                dst_rsrc, rows, row_base, col_base, rows, cols, acc, wave, group, slot, lane);
+        }
+#pragma unroll
+        for (int slot = 0; slot < 4; ++slot) {
+            q8_repro_motif192_stage_store_slot(sh_store, acc, wave, group + 16, slot, lane);
+        }
+        asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+#pragma unroll
+        for (int slot = 0; slot < 4; ++slot) {
+            q8_repro_motif192_stage_load_store_slot(
+                dst_rsrc, rows, row_base, col_base, rows, cols, sh_store, wave, group + 16, slot, lane, wait_after_load);
+        }
+#pragma unroll
+        for (int slot = 0; slot < 4; ++slot) {
+            q8_repro_motif192_stage_store_slot(sh_store, acc, wave, group + 32, slot, lane);
+        }
+        asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+#pragma unroll
+        for (int slot = 0; slot < 4; ++slot) {
+            q8_repro_motif192_stage_load_store_slot(
+                dst_rsrc, rows, row_base, col_base, rows, cols, sh_store, wave, group + 32, slot, lane, wait_after_load);
+        }
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+}
+
 __global__ __launch_bounds__(256, 1)
 void q8_bfrag_dump_kernel(
         const float * src1,
@@ -2446,6 +2728,125 @@ static int run_motif192_wmma_case(
     return bad == 0 ? 0 : 1;
 }
 
+template <bool dependent_ladder>
+static int run_motif192_wmma_k2_case(
+        const char * label,
+        int rows,
+        int cols,
+        bool wait_after_load) {
+    std::vector<float> h_out(static_cast<size_t>(rows) * cols, -7777.0f);
+    device_buffer<float> d_out(h_out.size());
+    HIP_CHECK(hipMemcpy(d_out.ptr, h_out.data(), h_out.size() * sizeof(h_out[0]), hipMemcpyHostToDevice));
+
+    dim3 grid((rows + 127) / 128, (cols + 127) / 128, 1);
+    hipLaunchKernelGGL((q8_motif192_wmma_k2_store_kernel<dependent_ladder>),
+        grid,
+        dim3(256, 1, 1),
+        0,
+        0,
+        d_out.ptr,
+        rows,
+        cols,
+        wait_after_load);
+    HIP_CHECK(hipGetLastError());
+    HIP_CHECK(hipDeviceSynchronize());
+    HIP_CHECK(hipMemcpy(h_out.data(), d_out.ptr, h_out.size() * sizeof(h_out[0]), hipMemcpyDeviceToHost));
+
+    size_t bad = 0;
+    size_t nan = 0;
+    size_t inf = 0;
+    size_t sentinel = 0;
+    float max_abs = 0.0f;
+    bool have_first_bad = false;
+    int first_row = -1;
+    int first_col = -1;
+    float first_actual = 0.0f;
+    float first_expected = 0.0f;
+    float first_err = 0.0f;
+
+    for (int col = 0; col < cols; ++col) {
+        for (int row = 0; row < rows; ++row) {
+            const size_t index = static_cast<size_t>(col) * rows + static_cast<size_t>(row);
+            const float actual = h_out[index];
+            const float expected = q8_repro_motif192_wmma_expected_value(row, col);
+            if (actual == -7777.0f) {
+                ++sentinel;
+                ++bad;
+                if (!have_first_bad) {
+                    have_first_bad = true;
+                    first_row = row;
+                    first_col = col;
+                    first_actual = actual;
+                    first_expected = expected;
+                    first_err = INFINITY;
+                }
+                continue;
+            }
+            if (std::isnan(actual)) {
+                ++nan;
+                ++bad;
+                if (!have_first_bad) {
+                    have_first_bad = true;
+                    first_row = row;
+                    first_col = col;
+                    first_actual = actual;
+                    first_expected = expected;
+                    first_err = INFINITY;
+                }
+                continue;
+            }
+            if (std::isinf(actual)) {
+                ++inf;
+                ++bad;
+                if (!have_first_bad) {
+                    have_first_bad = true;
+                    first_row = row;
+                    first_col = col;
+                    first_actual = actual;
+                    first_expected = expected;
+                    first_err = INFINITY;
+                }
+                continue;
+            }
+            const float err = std::fabs(actual - expected);
+            max_abs = std::max(max_abs, err);
+            if (err > 0.0f) {
+                ++bad;
+                if (!have_first_bad) {
+                    have_first_bad = true;
+                    first_row = row;
+                    first_col = col;
+                    first_actual = actual;
+                    first_expected = expected;
+                    first_err = err;
+                }
+            }
+        }
+    }
+
+    std::printf(
+        "%s rows=%d cols=%d active=%zu bad=%zu nan=%zu inf=%zu sentinel=%zu max_abs=%g\n",
+        label,
+        rows,
+        cols,
+        h_out.size(),
+        bad,
+        nan,
+        inf,
+        sentinel,
+        max_abs);
+    if (have_first_bad) {
+        std::printf(
+            "  first_bad row=%d col=%d actual=%g expected=%g err=%g\n",
+            first_row,
+            first_col,
+            first_actual,
+            first_expected,
+            first_err);
+    }
+    return bad == 0 ? 0 : 1;
+}
+
 static int run_motif192_wmma_suite(const char * label, int store_mode, bool wait_after_load) {
     int status = 0;
     status |= run_motif192_wmma_case(label, 128, 128, store_mode, wait_after_load);
@@ -2454,6 +2855,18 @@ static int run_motif192_wmma_suite(const char * label, int store_mode, bool wait
     status |= run_motif192_wmma_case(label, 1024, 512, store_mode, wait_after_load);
     status |= run_motif192_wmma_case(label, 4096, 512, store_mode, wait_after_load);
     status |= run_motif192_wmma_case(label, 4096, 513, store_mode, wait_after_load);
+    return status;
+}
+
+template <bool dependent_ladder>
+static int run_motif192_wmma_k2_suite(const char * label, bool wait_after_load) {
+    int status = 0;
+    status |= run_motif192_wmma_k2_case<dependent_ladder>(label, 128, 128, wait_after_load);
+    status |= run_motif192_wmma_k2_case<dependent_ladder>(label, 128, 129, wait_after_load);
+    status |= run_motif192_wmma_k2_case<dependent_ladder>(label, 129, 128, wait_after_load);
+    status |= run_motif192_wmma_k2_case<dependent_ladder>(label, 1024, 512, wait_after_load);
+    status |= run_motif192_wmma_k2_case<dependent_ladder>(label, 4096, 512, wait_after_load);
+    status |= run_motif192_wmma_k2_case<dependent_ladder>(label, 4096, 513, wait_after_load);
     return status;
 }
 
@@ -3920,7 +4333,7 @@ int main(int argc, char ** argv) {
         } else if (std::strcmp(argv[i], "--cols") == 0 && i + 1 < argc) {
             custom_cols = std::atoi(argv[++i]);
         } else {
-            std::fprintf(stderr, "usage: %s [--mode motif192-synth-address|motif192-wmma-address|motif192-wmma-waitload-address|motif192-wmma-direct-address|motif192-wmma-stage16-address|motif192-wmma-stage32-address|motif192-wmma-stage16-waitload-address|motif192-wmma-stage32-waitload-address|array8-fullb|array16-direct-raw|array16-direct-raw-bcopy|array16-direct-raw-abcopy|contract-direct192-raw|contract-direct192-bcopy|contract-direct192-bcopy-hoist|contract-direct192-abcopy|contract-direct192-abcopy-bhoist|contract-bm128-direct192-raw|contract-bm128-direct192-raw-asm|contract-bm128-direct192-bcopy-upper|contract-bm128-direct192-bcopy-upper-asm|contract-bm128-direct192-bcopy-upper-hoist|contract-bm128-direct192-abcopy|contract-bm128-direct192-abcopy-bhoist|contract-bm128-direct192-abcopy-bhoist-asm|contract-phase96-abcopy|phase96-bm128-abcopy|phase96-bm128-abcopy-backendlike|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|array8-fullb-2phase-bcopy|array8-fullb-2phase-bcopy-stage|array8-fullb-2phase-abcopy|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group0-bcopy-stage|single-group8|single-group8-consume|single-group8-opsel1|single-group8-bmirror0|single-group8-bcopy|single-group8-abcopy|single-group8-bcopy-stage|single-group8-abcopy-stage|single-group8-bcopy-stage-selected|single-group12|single-group12-consume|single-group12-opsel1|single-group12-bmirror0|single-group12-bcopy|single-group12-abcopy|single-group12-bcopy-stage|single-group12-abcopy-stage|single-group12-bcopy-stage-selected|single-group12-abcopy-stage-selected|single-group12-bcopy-stage-selected-acccopy|single-group12-abcopy-stage-selected-acccopy|single-group12-bcopy-stage-selected-regcopy|single-group12-abcopy-stage-selected-regcopy|single-group12-abcopy-dual-stage-raw-first|single-group12-abcopy-dual-stage-stage-first|single-group13|single-group13-consume|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c12-s0-bcopy-stage-selected|remap-c12-s0-abcopy-stage-selected|remap-c0-s12|remap-c0-s12-stage-selected|bfrag-dump|all] [--dump-dir <test-backend-ops dump dir>] [--rows N --cols N]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--mode motif192-synth-address|motif192-wmma-address|motif192-wmma-waitload-address|motif192-wmma-k2-directwait-waitload-address|motif192-wmma-k2-depwait-waitload-address|motif192-wmma-direct-address|motif192-wmma-stage16-address|motif192-wmma-stage32-address|motif192-wmma-stage16-waitload-address|motif192-wmma-stage32-waitload-address|array8-fullb|array16-direct-raw|array16-direct-raw-bcopy|array16-direct-raw-abcopy|contract-direct192-raw|contract-direct192-bcopy|contract-direct192-bcopy-hoist|contract-direct192-abcopy|contract-direct192-abcopy-bhoist|contract-bm128-direct192-raw|contract-bm128-direct192-raw-asm|contract-bm128-direct192-bcopy-upper|contract-bm128-direct192-bcopy-upper-asm|contract-bm128-direct192-bcopy-upper-hoist|contract-bm128-direct192-abcopy|contract-bm128-direct192-abcopy-bhoist|contract-bm128-direct192-abcopy-bhoist-asm|contract-phase96-abcopy|phase96-bm128-abcopy|phase96-bm128-abcopy-backendlike|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|array8-fullb-2phase-bcopy|array8-fullb-2phase-bcopy-stage|array8-fullb-2phase-abcopy|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group0-bcopy-stage|single-group8|single-group8-consume|single-group8-opsel1|single-group8-bmirror0|single-group8-bcopy|single-group8-abcopy|single-group8-bcopy-stage|single-group8-abcopy-stage|single-group8-bcopy-stage-selected|single-group12|single-group12-consume|single-group12-opsel1|single-group12-bmirror0|single-group12-bcopy|single-group12-abcopy|single-group12-bcopy-stage|single-group12-abcopy-stage|single-group12-bcopy-stage-selected|single-group12-abcopy-stage-selected|single-group12-bcopy-stage-selected-acccopy|single-group12-abcopy-stage-selected-acccopy|single-group12-bcopy-stage-selected-regcopy|single-group12-abcopy-stage-selected-regcopy|single-group12-abcopy-dual-stage-raw-first|single-group12-abcopy-dual-stage-stage-first|single-group13|single-group13-consume|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c12-s0-bcopy-stage-selected|remap-c12-s0-abcopy-stage-selected|remap-c0-s12|remap-c0-s12-stage-selected|bfrag-dump|all] [--dump-dir <test-backend-ops dump dir>] [--rows N --cols N]\n", argv[0]);
             return 2;
         }
     }
@@ -3976,6 +4389,32 @@ int main(int argc, char ** argv) {
             status |= run_motif192_wmma_suite(
                 "motif192-wmma-waitload-address",
                 Q8_REPRO_MOTIF192_STORE_FULL,
+                true);
+        }
+    }
+    if (mode == "motif192-wmma-k2-directwait-waitload-address") {
+        if (custom_shape) {
+            status |= run_motif192_wmma_k2_case<false>(
+                "motif192-wmma-k2-directwait-waitload-address",
+                custom_rows,
+                custom_cols,
+                true);
+        } else {
+            status |= run_motif192_wmma_k2_suite<false>(
+                "motif192-wmma-k2-directwait-waitload-address",
+                true);
+        }
+    }
+    if (mode == "motif192-wmma-k2-depwait-waitload-address") {
+        if (custom_shape) {
+            status |= run_motif192_wmma_k2_case<true>(
+                "motif192-wmma-k2-depwait-waitload-address",
+                custom_rows,
+                custom_cols,
+                true);
+        } else {
+            status |= run_motif192_wmma_k2_suite<true>(
+                "motif192-wmma-k2-depwait-waitload-address",
                 true);
         }
     }
