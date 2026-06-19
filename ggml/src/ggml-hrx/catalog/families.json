@@ -1200,6 +1200,14 @@
     "op": "MUL_MAT"
   },
   {
+    "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_phase96_abcopy_bufferstore_phase0_f16acc_wg256",
+    "op": "MUL_MAT"
+  },
+  {
+    "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_phase96_abcopy_bufferstore_phase1_f16acc_wg256",
+    "op": "MUL_MAT"
+  },
+  {
     "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_mediumfrag12_combined96_packstage_bufferstore_f16acc_wg256",
     "op": "MUL_MAT"
   },
