@@ -1,0 +1,7 @@
+#define HRX_Q4_K_Q8_1_X4_MMQL128_EXPORT hrx_mul_mat_vec_q4_k_q8_1_x4_mmql64x64_bk2_bpair_wg256_f32
+#define HRX_Q4_K_Q8_1_X4_MMQL128_BM 64
+#define HRX_Q4_K_Q8_1_X4_MMQL128_BN 64
+#define HRX_Q4_K_Q8_1_X4_MMQL128_WN 16
+#define HRX_Q4_K_Q8_1_X4_MMQL128_BK_STEP 2
+#define HRX_Q4_K_Q8_1_X4_MMQL128_PREFETCH_B_PAIR 1
+#include "mul_mat_vec_q4_k_q8_1_x4_mmql128.hip.cpp"

@@ -305,6 +305,12 @@
     "format": "amdgpu-hsaco",
     "storage": "embedded"
   },
+  "mul_mat_vec_q4_k_q8_1_x4_mmql64_bk2_bpair_hsaco": {
+    "source_id": "mul_mat_vec_q4_k_q8_1_x4_mmql64_bk2_bpair",
+    "path": "mul_mat_vec_q4_k_q8_1_x4_mmql64_bk2_bpair.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
   "mul_mat_vec_q4_k_q8_1_x4_mmql64_bk2_bquad_hsaco": {
     "source_id": "mul_mat_vec_q4_k_q8_1_x4_mmql64_bk2_bquad",
     "path": "mul_mat_vec_q4_k_q8_1_x4_mmql64_bk2_bquad.hsaco",

@@ -5233,6 +5233,50 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql64x64_bk2_bpair_wg256_f32",
+    "family": "mul_mat_vec_q4_k_q8_1_x4_mmql64x64_bk2_bpair_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q4_k_q8_1_x4_mmql64_bk2_bpair",
+    "artifact_id": "mul_mat_vec_q4_k_q8_1_x4_mmql64_bk2_bpair_hsaco",
+    "export_name": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql64x64_bk2_bpair_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q4_k_p33_staged_bk2_bpair_probe"
+    },
+    "shape_guards": {
+      "rows_multiple": 64,
+      "cols_min": 32,
+      "cols_max": 64,
+      "k_multiple": 256,
+      "requires_env": "GGML_HRX_ENABLE_Q4_K_Q8_1_X4_MMQL64_BK2_BPAIR_PROMPT"
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql64x64_bk2_bpair_wg256_f32",
+      "selector_gate": "opt-in on gfx1151 for 32 <= cols <= 64 with GGML_HRX_ENABLE_Q4_K_Q8_1_X4_MMQL64_BK2_BPAIR_PROMPT=1"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_probe",
+      "selection": "Q4_K packed-Q8_1/x4 p33 probe preserving the accepted MMQL64 BK2 narrow dataflow and changing only B-cache consume order to preload each TN=2 B-cache pair before issuing dots. It brackets the accepted B-quad route after B-quad won rows>=4096 but regressed Llama 3.2 rows=3072 under force. Focused Llama 3.2 p33 timing improved, but same-binary model A/B rejected forced B-pair, so the route remains opt-in diagnostic only."
+    },
+    "target_prefixes": [
+      "gfx1151"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql64x64_bk2_bquad_wg256_f32",
     "family": "mul_mat_vec_q4_k_q8_1_x4_mmql64x64_bk2_bquad_wg256",
     "op": "MUL_MAT",
