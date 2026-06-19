@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_lds_k2_mixed160_linearstage_topology_control",
+      "date": "2026-06-19",
+      "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-mixed160-linearstage",
+      "env": "standalone CMake-built gfx1151 HIP bench diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/coopstore-lds-k2-linearstage-probe-20260619-085145/",
+      "isa_artifact": "cache/hrxv1/gfx1151/coopstore-lds-k2-linearstage-probe-20260619-085145/compare-wmma_lds_k2_mixed160_linearstage.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract",
+      "reason": "The linear-stage topology control keeps the previously failing K2 live-WMMA plus 96 halfword LDS stage surface, but changes only the synthetic halfword stage address mapping from RADV-like col-major 16x16 groups to lane-linear groups. It built through CMake/Ninja and passed the first five repeated runs, then failed in a longer validation at rep 6 with first_bad=7808 group=30 slot=2 lane=0 actual=1024 expected=15874. In the same rebuilt binary, wmma-lds-k2-mixed160-lo-tight failed immediately at first_bad=4800 group=18 slot=3 lane=0 actual=2048 expected=12803, and wmma-lds-k2-direct192-raw passed five repeated runs. Static evidence shows the linear-stage and tight col-major modes have the same resource and opcode contract: wave64, SGPR=14, VGPR=162, group_segment_fixed_size=28672, no private segment, no spills, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 96 ds_store_b16, 96 ds_load_u16_d16, 160 buffer_store_b32, three barriers, and 103 s_waitcnt. This rejects lane-linear staging as a production workaround but narrows the failure: address topology changes the failure from deterministic early col-major corruption to later flaky corruption without changing opcode/resource counts. The blocker is the combined high-live K2 WMMA plus expanded scalarized halfword-stage surface, with lane topology affecting severity. Future work should reconstruct the real cooperative-store lane ownership or use a lower-level primitive, not promote a lane-linear diagnostic or add more scalarized HIP C++ stage groups."
+    },
+    {
       "id": "q8_0_lds_k2_stage96_accsink_control",
       "date": "2026-06-19",
       "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-stage96-accsink",
