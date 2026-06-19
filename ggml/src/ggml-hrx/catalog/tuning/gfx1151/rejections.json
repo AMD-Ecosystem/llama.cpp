@@ -3,6 +3,15 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_lds_live_wmma_mixed_store_contract",
+      "date": "2026-06-19",
+      "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-radv-mixed96",
+      "env": "standalone CMake-built gfx1151 HIP bench diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/coopstore-lds-live-wmma-mixed-probe-20260619-072609/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract",
+      "reason": "The LDS live-WMMA mixed-store diagnostic joined the next missing RADV axes in one CMake-built fixture: LDS fragment setup loaded through ds_read_b64, f16 WMMA, selected-half raw buffer stores, and the halfword LDS store/load path. The large control mode wmma-lds-radv-mixed192 passed with elements=12288 bad=0 max_abs=0 and emitted wave64, SGPR=14, VGPR=103, LDS=32768, no private segment, no spills, 32 ds_load_b64, 16 v_wmma_f16_16x16x16_f16, 192 buffer_store_b32, 128 ds_store_b16, 128 ds_read_u16_d16, 3 barriers, and 136 waits. The medium mode wmma-lds-radv-mixed96 intentionally computed 16 WMMA groups, direct-stored groups 0..7, staged live accumulator groups 8..15 through halfword LDS, and staged synthetic groups 16..23 as a control. It emitted wave64, SGPR=14, VGPR=95, LDS=24576, no spills, 32 ds_load_b64, 16 WMMA, 96 buffer_store_b32, 64 halfword LDS stores/loads, 3 barriers, and 72 waits, but failed correctness at the live-accumulator halfword stage boundary: elements=12288 bad=1984 max_abs=256 first_bad=2048 actual=2.005 expected=48. Reject the live-accumulator halfword stage contract for production route work until the lane ownership is understood. The result is still useful positive evidence that ds_load_b64 plus live WMMA plus direct raw buffer stores can coexist; the failure is specifically the staged live accumulator halfword path, matching earlier selected-half packstage route failures."
+    },
+    {
       "id": "q5_dense_prompt_vk64_wave4row_batchwait_load_window_p33",
       "date": "2026-06-19",
       "route": "hrx_mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_wave4row_batchwait_f16acc_wg256_f32",

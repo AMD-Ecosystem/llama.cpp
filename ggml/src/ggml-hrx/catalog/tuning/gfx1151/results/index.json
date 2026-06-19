@@ -848,6 +848,12 @@
       "date": "2026-06-19",
       "artifact": "cache/hrxv1/gfx1151/coopstore-live-wmma-mixed-probe-20260619-071800/",
       "status": "primitive_contract_pass_not_production_route"
+    },
+    {
+      "id": "q8_0_lds_live_wmma_mixed_store_contract",
+      "date": "2026-06-19",
+      "artifact": "cache/hrxv1/gfx1151/coopstore-lds-live-wmma-mixed-probe-20260619-072609/",
+      "status": "medium_live_accumulator_halfword_stage_rejected_large_direct_store_control_passed"
     }
   ]
 }
