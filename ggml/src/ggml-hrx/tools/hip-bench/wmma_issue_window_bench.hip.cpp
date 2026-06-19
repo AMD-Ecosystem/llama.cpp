@@ -86,6 +86,95 @@ static __device__ __forceinline__ half16_vec wmma_issue_window_dependent_constan
 }
 
 template <int wait_lgkmcnt>
+static __device__ __forceinline__ half16_vec wmma_issue_window_dep_copy_initial(
+        const half16_vec & src,
+        const half16_vec & dep0, const half16_vec & dep1, const half16_vec & dep2,
+        const half16_vec & dep3, const half16_vec & dep4, const half16_vec & dep5,
+        const half16_vec & dep6) {
+    const u32x8_vec in = __builtin_bit_cast(u32x8_vec, src);
+    u32x8_vec out;
+    asm volatile("s_waitcnt lgkmcnt(%16)\n\t"
+                 "v_mov_b32 %0, %8\n\t"
+                 "v_mov_b32 %1, %9\n\t"
+                 "v_mov_b32 %2, %10\n\t"
+                 "v_mov_b32 %3, %11\n\t"
+                 "v_mov_b32 %4, %12\n\t"
+                 "v_mov_b32 %5, %13\n\t"
+                 "v_mov_b32 %6, %14\n\t"
+                 "v_mov_b32 %7, %15\n\t"
+                 : "=v"(out[0]), "=v"(out[1]), "=v"(out[2]), "=v"(out[3]),
+                   "=v"(out[4]), "=v"(out[5]), "=v"(out[6]), "=v"(out[7])
+                 : "v"(in[0]), "v"(in[1]), "v"(in[2]), "v"(in[3]),
+                   "v"(in[4]), "v"(in[5]), "v"(in[6]), "v"(in[7]),
+                   "n"(wait_lgkmcnt),
+                   "v"(dep0), "v"(dep1), "v"(dep2), "v"(dep3),
+                   "v"(dep4), "v"(dep5), "v"(dep6)
+                 : "memory");
+    return __builtin_bit_cast(half16_vec, out);
+}
+
+template <int wait_lgkmcnt>
+static __device__ __forceinline__ half16_vec wmma_issue_window_dep_copy_after_acc(
+        const half16_vec & src,
+        const half16_vec & token,
+        const half8_vec & prev_acc) {
+    const u32x8_vec in = __builtin_bit_cast(u32x8_vec, src);
+    u32x8_vec out;
+    asm volatile("s_waitcnt lgkmcnt(%16)\n\t"
+                 "v_mov_b32 %0, %8\n\t"
+                 "v_mov_b32 %1, %9\n\t"
+                 "v_mov_b32 %2, %10\n\t"
+                 "v_mov_b32 %3, %11\n\t"
+                 "v_mov_b32 %4, %12\n\t"
+                 "v_mov_b32 %5, %13\n\t"
+                 "v_mov_b32 %6, %14\n\t"
+                 "v_mov_b32 %7, %15\n\t"
+                 : "=v"(out[0]), "=v"(out[1]), "=v"(out[2]), "=v"(out[3]),
+                   "=v"(out[4]), "=v"(out[5]), "=v"(out[6]), "=v"(out[7])
+                 : "v"(in[0]), "v"(in[1]), "v"(in[2]), "v"(in[3]),
+                   "v"(in[4]), "v"(in[5]), "v"(in[6]), "v"(in[7]),
+                   "n"(wait_lgkmcnt), "v"(token), "v"(prev_acc)
+                 : "memory");
+    return __builtin_bit_cast(half16_vec, out);
+}
+
+static __device__ __forceinline__ half16_vec wmma_issue_window_dep_copy_after_token(
+        const half16_vec & src,
+        const half16_vec & token) {
+    const u32x8_vec in = __builtin_bit_cast(u32x8_vec, src);
+    u32x8_vec out;
+    asm volatile("v_mov_b32 %0, %8\n\t"
+                 "v_mov_b32 %1, %9\n\t"
+                 "v_mov_b32 %2, %10\n\t"
+                 "v_mov_b32 %3, %11\n\t"
+                 "v_mov_b32 %4, %12\n\t"
+                 "v_mov_b32 %5, %13\n\t"
+                 "v_mov_b32 %6, %14\n\t"
+                 "v_mov_b32 %7, %15\n\t"
+                 : "=v"(out[0]), "=v"(out[1]), "=v"(out[2]), "=v"(out[3]),
+                   "=v"(out[4]), "=v"(out[5]), "=v"(out[6]), "=v"(out[7])
+                 : "v"(in[0]), "v"(in[1]), "v"(in[2]), "v"(in[3]),
+                   "v"(in[4]), "v"(in[5]), "v"(in[6]), "v"(in[7]),
+                   "v"(token)
+                 : "memory");
+    return __builtin_bit_cast(half16_vec, out);
+}
+
+#define WMMA_ISSUE_WINDOW_DEP_WMMA_INITIAL(ACC, TILE, A, B, W, D0, D1, D2, D3, D4, D5, D6) \
+    do { \
+        const half16_vec a_dep = wmma_issue_window_dep_copy_initial<W>((A), (D0), (D1), (D2), (D3), (D4), (D5), (D6)); \
+        const half16_vec b_dep = wmma_issue_window_dep_copy_after_token((B), a_dep); \
+        (ACC)[TILE] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a_dep, b_dep, (ACC)[TILE], false); \
+    } while (0)
+
+#define WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(ACC, TILE, A, B, W, TOKEN, PREV) \
+    do { \
+        const half16_vec a_dep = wmma_issue_window_dep_copy_after_acc<W>((A), (TOKEN), (ACC)[PREV]); \
+        const half16_vec b_dep = wmma_issue_window_dep_copy_after_token((B), a_dep); \
+        (ACC)[TILE] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a_dep, b_dep, (ACC)[TILE], false); \
+    } while (0)
+
+template <int wait_lgkmcnt>
 __global__ __launch_bounds__(64, 1)
 void wmma_issue_window_probe(float * dst) {
     __shared__ uint64_t sh[16 * 64 * 4];
@@ -147,6 +236,120 @@ void wmma_issue_window_probe(float * dst) {
     }
 }
 
+template <int wait_lgkmcnt>
+__global__ __launch_bounds__(64, 1)
+void wmma_issue_window_realfrag16_probe(float * dst) {
+    __shared__ uint64_t sh[16 * 64 * 4];
+    const unsigned int lane = __builtin_amdgcn_workitem_id_x() & 63u;
+
+#pragma unroll
+    for (unsigned int frag = 0; frag < 8u; ++frag) {
+#pragma unroll
+        for (unsigned int item = 0; item < 4u; ++item) {
+            const uint64_t lo = static_cast<uint64_t>(0x3c00u + ((frag + item + lane) & 7u));
+            const uint64_t packed = lo | (lo << 16) | (lo << 32) | (lo << 48);
+            sh[frag * 256u + lane * 4u + item] = packed;
+        }
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+
+    const __attribute__((address_space(3))) uint64_t * lds =
+        (const __attribute__((address_space(3))) uint64_t *) sh;
+
+    const half16_vec a0 = wmma_issue_window_load_fragment(lds, lane, 0u);
+    const half16_vec a1 = wmma_issue_window_load_fragment(lds, lane, 1u);
+    const half16_vec a2 = wmma_issue_window_load_fragment(lds, lane, 2u);
+    const half16_vec a3 = wmma_issue_window_load_fragment(lds, lane, 3u);
+    const half16_vec b0 = wmma_issue_window_load_fragment(lds, lane, 4u);
+    const half16_vec b1 = wmma_issue_window_load_fragment(lds, lane, 5u);
+    const half16_vec b2 = wmma_issue_window_load_fragment(lds, lane, 6u);
+    const half16_vec b3 = wmma_issue_window_load_fragment(lds, lane, 7u);
+
+    half8_vec acc[16];
+#pragma unroll
+    for (int t = 0; t < 16; ++t) {
+#pragma unroll
+        for (int i = 0; i < 8; ++i) {
+            acc[t][i] = static_cast<_Float16>(0.0f);
+        }
+    }
+
+    WMMA_ISSUE_WINDOW_DEP_WMMA_INITIAL(acc, 0, a0, b0, wait_lgkmcnt, a1, a2, a3, b0, b1, b2, b3);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 1, a1, b0, 47, a0, 0);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 2, a2, b0, 43, a1, 1);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 3, a3, b0, 39, a2, 2);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 4, a0, b1, 40, a3, 3);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 5, a1, b1, 36, b1, 4);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 6, a2, b1, 32, a1, 5);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 7, a3, b1, 24, a2, 6);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 8, a0, b2, 20, a3, 7);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 9, a1, b2, 16, b2, 8);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 10, a2, b2, 12, a1, 9);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 11, a3, b2, 8, a2, 10);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 12, a0, b3, 4, a3, 11);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 13, a1, b3, 0, b3, 12);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 14, a2, b3, 0, a1, 13);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 15, a3, b3, 0, a2, 14);
+
+#pragma unroll
+    for (int i = 0; i < 8; ++i) {
+        dst[lane * 8u + static_cast<unsigned int>(i)] = static_cast<float>(acc[0][i] + acc[15][i]);
+    }
+}
+
+template <int wait_lgkmcnt>
+__global__ __launch_bounds__(64, 1)
+void wmma_issue_window_realfrag8_probe(float * dst) {
+    __shared__ uint64_t sh[12 * 64 * 4];
+    const unsigned int lane = __builtin_amdgcn_workitem_id_x() & 63u;
+
+#pragma unroll
+    for (unsigned int frag = 0; frag < 6u; ++frag) {
+#pragma unroll
+        for (unsigned int item = 0; item < 4u; ++item) {
+            const uint64_t lo = static_cast<uint64_t>(0x3c00u + ((frag + item + lane) & 7u));
+            const uint64_t packed = lo | (lo << 16) | (lo << 32) | (lo << 48);
+            sh[frag * 256u + lane * 4u + item] = packed;
+        }
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+
+    const __attribute__((address_space(3))) uint64_t * lds =
+        (const __attribute__((address_space(3))) uint64_t *) sh;
+
+    const half16_vec a0 = wmma_issue_window_load_fragment(lds, lane, 0u);
+    const half16_vec a1 = wmma_issue_window_load_fragment(lds, lane, 1u);
+    const half16_vec a2 = wmma_issue_window_load_fragment(lds, lane, 2u);
+    const half16_vec a3 = wmma_issue_window_load_fragment(lds, lane, 3u);
+    const half16_vec b0 = wmma_issue_window_load_fragment(lds, lane, 4u);
+    const half16_vec b1 = wmma_issue_window_load_fragment(lds, lane, 5u);
+
+    half8_vec acc[8];
+#pragma unroll
+    for (int t = 0; t < 8; ++t) {
+#pragma unroll
+        for (int i = 0; i < 8; ++i) {
+            acc[t][i] = static_cast<_Float16>(0.0f);
+        }
+    }
+
+    WMMA_ISSUE_WINDOW_DEP_WMMA_INITIAL(acc, 0, a0, b0, wait_lgkmcnt, a1, a2, a3, b0, b1, a0, b0);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 1, a1, b0, 47, a0, 0);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 2, a2, b0, 43, a1, 1);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 3, a3, b0, 39, a2, 2);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 4, a0, b1, 40, a3, 3);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 5, a1, b1, 36, b1, 4);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 6, a2, b1, 32, a1, 5);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 7, a3, b1, 24, a2, 6);
+
+#pragma unroll
+    for (int i = 0; i < 8; ++i) {
+        dst[lane * 8u + static_cast<unsigned int>(i)] = static_cast<float>(acc[0][i] + acc[7][i]);
+    }
+}
+
 template <typename T>
 struct device_buffer {
     T * ptr = nullptr;
@@ -185,7 +388,7 @@ int main(int argc, char ** argv) {
         if (std::strncmp(argv[i], "--mode=", 7) == 0) {
             mode = argv[i] + 7;
         } else {
-            std::fprintf(stderr, "usage: %s [--mode=lgkm51|wait0]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--mode=lgkm51|wait0|realfrag16|realfrag8]\n", argv[0]);
             return 2;
         }
     }
@@ -199,6 +402,10 @@ int main(int argc, char ** argv) {
         hipLaunchKernelGGL((wmma_issue_window_probe<51>), dim3(1), dim3(64), 0, 0, d_out.ptr);
     } else if (mode == "wait0") {
         hipLaunchKernelGGL((wmma_issue_window_probe<0>), dim3(1), dim3(64), 0, 0, d_out.ptr);
+    } else if (mode == "realfrag16") {
+        hipLaunchKernelGGL((wmma_issue_window_realfrag16_probe<51>), dim3(1), dim3(64), 0, 0, d_out.ptr);
+    } else if (mode == "realfrag8") {
+        hipLaunchKernelGGL((wmma_issue_window_realfrag8_probe<51>), dim3(1), dim3(64), 0, 0, d_out.ptr);
     } else {
         std::fprintf(stderr, "unknown mode: %s\n", mode.c_str());
         return 2;
