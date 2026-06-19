@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_dense_prompt_mmq64x128_splitqsum_wave64_fullcols_llama31_p512",
+      "date": "2026-06-19",
+      "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_wave64_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X128_SPLITQSUM_WAVE64_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-wave64-default-postedit-focused-20260619-011031/",
+      "model_artifact": "cache/hrxv1/gfx1151/q8_0-wave64-postedit-default-p512-r3-20260619-011242/ and cache/hrxv1/gfx1151/q8_0-wave64-postedit-rollback-p512-r3-20260619-011254/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_mmq64x128_splitqsum_wave64.hsaco",
+      "reason": "The Q8_0 packed-Q8_1 BN128 split-qsum wave64 probe preserved the accepted BN128 split-qsum source-level dataflow and changed only the compiled wavefront mode. It compiled through CMake/Ninja as wave64 with SGPR=40, VGPR=152, LDS=4352 bytes, no private segment, and no spills. Focused CPU-reference passed for p512 and exact p513 rows. Route traces proved the intended policy split: p512 selected the wave64 BN128 provider under opt-in, exact p513 stayed on BN112, p33 model smoke stayed on BN64, and rollback restored the wave32 BN128 provider. Focused p512 timing improved versus rollback on every measured row in the post-edit artifact, including Vcur 547.266 -> 528.474 us, ffn_gate 6498.759 -> 6133.599 us, and result_output stress 57170.548 -> 53821.143 us. However, same-build Llama 3.1 8B Q8_0 p512/fa1 model A/B rejected default promotion: wave64 default steady throughput was 446.647 tok/s, while rollback to the wave32 BN128 route reached 447.814 tok/s with zero fallback lines. Keep this route opt-in only as a compiler-mode diagnostic; future Q8_0 parity work should target the remaining RADV cooperative-matrix store/lane-ownership and common-runner Vulkan gap rather than default this small focused-only win."
+    },
+    {
       "id": "q4_dense_prompt_mmql64_bk2_bpair_llama32_p33",
       "date": "2026-06-19",
       "route": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql64x64_bk2_bpair_wg256_f32",

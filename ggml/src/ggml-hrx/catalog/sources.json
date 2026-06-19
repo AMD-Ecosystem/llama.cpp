@@ -362,6 +362,9 @@
   "mul_mat_vec_q8_0_mmq64x128_splitqsum": {
     "path": "mul_mat_vec_q8_0_mmq64x128_splitqsum.hip.cpp"
   },
+  "mul_mat_vec_q8_0_mmq64x128_splitqsum_wave64": {
+    "path": "mul_mat_vec_q8_0_mmq64x128_splitqsum_wave64.hip.cpp"
+  },
   "mul_mat_vec_q8_0_mmq64x128_splitqsum8": {
     "path": "mul_mat_vec_q8_0_mmq64x128_splitqsum8.hip.cpp"
   },
