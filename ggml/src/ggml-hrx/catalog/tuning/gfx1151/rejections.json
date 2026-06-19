@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_wmma_group12_dual_stage_order_probe",
+      "date": "2026-06-19",
+      "route": "hrx-hip-bench-q8-wmma-repro --mode=single-group12-abcopy-dual-stage-raw-first/single-group12-abcopy-dual-stage-stage-first",
+      "env": "standalone CMake/Ninja-built gfx1151 HIP bench diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/q8-wmma-dual-stage-20260619-114444/",
+      "isa_artifact": "cache/hrxv1/gfx1151/q8-wmma-dual-stage-20260619-114444/static/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro plus extracted cache/hrxv1/gfx1151/q8-wmma-dual-stage-20260619-114444/static/gfx1151.o",
+      "reason": "The dual-stage order probe preserves the real Q8_0 group12 A+B-copy dependency surface, computes the group12 accumulator once, and writes it to separate raw and selected-stage outputs in the same dispatch. The raw control remained CPU-clean with bad=0 and max_abs=0.00239494, while the standalone selected-stage control reproduced the known finite failure with bad=16 and max_abs=0.348336. In the dual raw-first variant, the raw output stayed CPU-clean, but the staged output no longer crossed the 0.25 CPU threshold and still mismatched the raw output on 60 of 256 active values, with staged_max_abs=0.154939 and mismatch_max_abs=0.156356. In the dual stage-first variant, the source order became more intrusive: raw_sentinel=128, staged_sentinel=64, mismatch=44, and max finite errors stayed below the original standalone failure. Static evidence confirms these are not the too-small synthetic minimization: both dual-stage symbols are wave64/no-spill with LDS=10752, SGPR=34, VGPR=117, two WMMA, and the real Q8 load/dequant dependency surface. Reject dual raw/stage consumption as a production workaround. The useful conclusion is that the group12 selected-stage bug is highly register-lifetime/source-order sensitive; the raw consumer can partially alter the failure, and staging first can disrupt later stores. Future work should stop trying scalarized HIP C++ staging variants and instead use a lower-level cooperative store/lane primitive or a compiler-facing reproducer that preserves this real Q8 dependency surface."
+    },
+    {
       "id": "q8_0_wmma_group12_synthetic_selected_stage_contract_probe",
       "date": "2026-06-19",
       "route": "hrx-hip-bench-wmma-f16-lane-map --mode=group12-selected-stage-contract/group12-selected-stage-contract-hi",
