@@ -132,6 +132,46 @@
       ]
     },
     {
+      "id": "q4_dense_prompt_mmq64_narrow_deepseek_p33",
+      "date": "2026-06-18",
+      "status": "accepted_gfx1151_default",
+      "route": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmq64x64_wg256_f32",
+      "env": "default on gfx1151 for Q4_K prompt rows with 32 <= cols < 128; rollback with GGML_HRX_DISABLE_Q4_K_Q8_1_X4_MMQ64_PROMPT=1; opt-in elsewhere with GGML_HRX_ENABLE_Q4_K_Q8_1_X4_MMQ64_PROMPT=1",
+      "shape_guard": "q4_K MUL_MAT prompt, k % 256 == 0, rows % 64 == 0, 32 <= cols < 128, contiguous tensors, packed Q8_1 x4 RHS",
+      "focused_artifacts": [
+        "cache/hrxv1/gfx1151/deepseek-q4-p33-mmq64-policy-probe-20260618-193047/"
+      ],
+      "model_artifacts": [
+        "cache/hrxv1/gfx1151/deepseek-q4-p33-mmq64-model-ab-20260618-193209/",
+        "cache/hrxv1/gfx1151/vulkan-oracle-deepseek-r1-qwen14b-q4km-p33-fa1-20260618-192733/",
+        "cache/hrxv1/gfx1151/llama31-q4-p33-mmq64-default-smoke-20260618-193620/",
+        "cache/hrxv1/gfx1151/vulkan-oracle-llama31-8b-q4km-p33-fa1-20260617-200738/"
+      ],
+      "focused_result": {
+        "default_total_us": 30428.368619,
+        "mmq64_total_us": 3467.531384,
+        "correctness": "focused CPU-reference passed for Kcur-0, Qcur-0, ffn_out-6, and ffn_gate-0"
+      },
+      "model_result": {
+        "default_tok_s": 15.98997,
+        "mmq64_tok_s": 107.104324,
+        "vulkan_tok_s": 33.009663,
+        "mmq64_over_default": 6.698219,
+        "mmq64_over_vulkan": 3.244635
+      },
+      "guardrail_result": {
+        "llama31_q4km_p33_default_tok_s": 177.760794,
+        "llama31_q4km_p33_rollback_tok_s": 35.147854,
+        "llama31_q4km_p33_vulkan_tok_s": 36.504047,
+        "llama31_q4km_default_over_rollback": 5.057515,
+        "llama31_q4km_default_over_vulkan": 4.869619
+      },
+      "promotion_blockers": [
+        "scope is deliberately limited to narrow prompt rows and must not perturb accepted MMQL128 B-quad p512/p513 policy",
+        "broader p33 basket coverage should be collected as more narrow odd-size rows enter the benchmark set"
+      ]
+    },
+    {
       "id": "d128_flash_attn_prefill_direct_qwen3_q4xl_p33_p512_p513",
       "date": "2026-06-17",
       "status": "accepted_gfx1151_default",
