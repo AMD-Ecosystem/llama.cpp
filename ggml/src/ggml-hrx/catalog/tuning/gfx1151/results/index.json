@@ -842,6 +842,12 @@
       "date": "2026-06-19",
       "artifact": "cache/hrxv1/gfx1151/q8_0-current-b500dd0b8-r3-20260619-065413/",
       "status": "current_worst_dense_prompt_family_p512_0_496x_p513_0_547x_vulkan"
+    },
+    {
+      "id": "q8_0_live_wmma_radv_mixed_store_contract",
+      "date": "2026-06-19",
+      "artifact": "cache/hrxv1/gfx1151/coopstore-live-wmma-mixed-probe-20260619-071800/",
+      "status": "primitive_contract_pass_not_production_route"
     }
   ]
 }

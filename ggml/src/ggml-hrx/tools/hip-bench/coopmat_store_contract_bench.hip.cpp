@@ -1,3 +1,4 @@
+#include <hip/hip_fp16.h>
 #include <hip/hip_runtime.h>
 
 #include <algorithm>
@@ -22,6 +23,9 @@ static constexpr unsigned int HRX_COOPSTORE_VALUES_PER_GROUP = 4;
 static constexpr unsigned int HRX_COOPSTORE_MAX_GROUPS = 48;
 static constexpr unsigned int HRX_COOPSTORE_MAX_VALUES =
     HRX_COOPSTORE_LANES * HRX_COOPSTORE_VALUES_PER_GROUP * HRX_COOPSTORE_MAX_GROUPS;
+
+typedef _Float16 coopstore_probe_half16_vec __attribute__((ext_vector_type(16)));
+typedef _Float16 coopstore_probe_half8_vec __attribute__((ext_vector_type(8)));
 
 static __host__ __device__ __forceinline__ float coopstore_probe_value(
         unsigned int group,
@@ -104,6 +108,15 @@ static __device__ __forceinline__ void coopstore_probe_raw_store_value(
     const unsigned int index = coopstore_probe_index(group, slot, lane);
     const int byte_offset = static_cast<int>(index * sizeof(float));
     __builtin_amdgcn_raw_buffer_store_b32(__builtin_bit_cast(int, value), rsrc, byte_offset, 0, 0);
+}
+
+static __device__ __forceinline__ void coopstore_probe_raw_store_acc(
+        __amdgpu_buffer_rsrc_t rsrc,
+        unsigned int group,
+        unsigned int slot,
+        unsigned int lane,
+        coopstore_probe_half8_vec acc) {
+    coopstore_probe_raw_store_value(rsrc, group, slot, lane, static_cast<float>(acc[slot * 2u]));
 }
 
 static __device__ __forceinline__ void coopstore_probe_ds_store_u16(
@@ -317,6 +330,32 @@ void coopstore_probe_branch192(
 #define HRX_COOPSTORE_STAGE_LOAD_STORE_GROUP_BASE8(GROUP_ID) \
     HRX_COOPSTORE_STAGE_LOAD_STORE_GROUP_BASE((GROUP_ID), 8u)
 
+#define HRX_COOPSTORE_STORE_ACC_GROUP(GROUP_ID) do { \
+    coopstore_probe_raw_store_acc(rsrc, (GROUP_ID), 0u, lane, acc[(GROUP_ID)]); \
+    coopstore_probe_raw_store_acc(rsrc, (GROUP_ID), 1u, lane, acc[(GROUP_ID)]); \
+    coopstore_probe_raw_store_acc(rsrc, (GROUP_ID), 2u, lane, acc[(GROUP_ID)]); \
+    coopstore_probe_raw_store_acc(rsrc, (GROUP_ID), 3u, lane, acc[(GROUP_ID)]); \
+} while (0)
+
+#define HRX_COOPSTORE_ACC_GROUPS_0_7() do { \
+    HRX_COOPSTORE_STORE_ACC_GROUP(0u);  HRX_COOPSTORE_STORE_ACC_GROUP(1u); \
+    HRX_COOPSTORE_STORE_ACC_GROUP(2u);  HRX_COOPSTORE_STORE_ACC_GROUP(3u); \
+    HRX_COOPSTORE_STORE_ACC_GROUP(4u);  HRX_COOPSTORE_STORE_ACC_GROUP(5u); \
+    HRX_COOPSTORE_STORE_ACC_GROUP(6u);  HRX_COOPSTORE_STORE_ACC_GROUP(7u); \
+} while (0)
+
+#define HRX_COOPSTORE_ACC_GROUPS_8_15() do { \
+    HRX_COOPSTORE_STORE_ACC_GROUP(8u);  HRX_COOPSTORE_STORE_ACC_GROUP(9u); \
+    HRX_COOPSTORE_STORE_ACC_GROUP(10u); HRX_COOPSTORE_STORE_ACC_GROUP(11u); \
+    HRX_COOPSTORE_STORE_ACC_GROUP(12u); HRX_COOPSTORE_STORE_ACC_GROUP(13u); \
+    HRX_COOPSTORE_STORE_ACC_GROUP(14u); HRX_COOPSTORE_STORE_ACC_GROUP(15u); \
+} while (0)
+
+#define HRX_COOPSTORE_ACC_GROUPS_0_15() do { \
+    HRX_COOPSTORE_ACC_GROUPS_0_7(); \
+    HRX_COOPSTORE_ACC_GROUPS_8_15(); \
+} while (0)
+
 #define HRX_COOPSTORE_STAGE_GROUPS_8_23(MACRO) do { \
     MACRO(8u);  MACRO(9u);  MACRO(10u); MACRO(11u); \
     MACRO(12u); MACRO(13u); MACRO(14u); MACRO(15u); \
@@ -382,6 +421,88 @@ void coopstore_probe_radv_mixed192(float * dst, unsigned long long extent, unsig
     __syncthreads();
 }
 
+template <unsigned int direct_groups>
+static __device__ __forceinline__ void coopstore_probe_make_wmma_acc(
+        coopstore_probe_half8_vec (&acc)[direct_groups]) {
+    coopstore_probe_half16_vec a[4];
+    coopstore_probe_half16_vec b[4];
+#pragma unroll
+    for (unsigned int frag = 0; frag < 4u; ++frag) {
+#pragma unroll
+        for (unsigned int i = 0; i < 16u; ++i) {
+            a[frag][i] = static_cast<_Float16>(1.0f + static_cast<float>(frag));
+            b[frag][i] = static_cast<_Float16>(1.0f + static_cast<float>(frag));
+        }
+    }
+#pragma unroll
+    for (unsigned int group = 0; group < direct_groups; ++group) {
+#pragma unroll
+        for (unsigned int slot = 0; slot < 8u; ++slot) {
+            acc[group][slot] = static_cast<_Float16>(0.0f);
+        }
+    }
+#pragma unroll
+    for (unsigned int group = 0; group < direct_groups; ++group) {
+        const unsigned int row_frag = group & 3u;
+        const unsigned int col_frag = (group >> 2u) & 3u;
+        acc[group] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
+            a[row_frag], b[col_frag], acc[group], false);
+    }
+}
+
+extern "C" __global__ __launch_bounds__(256, 1)
+void coopstore_probe_wmma_radv_mixed96(float * dst, unsigned long long extent, unsigned int flags) {
+    __shared__ uint16_t sh_stage[16 * 16 * 16];
+    const unsigned int tid = __builtin_amdgcn_workitem_id_x();
+    const unsigned int lane = tid & 63u;
+    const __amdgpu_buffer_rsrc_t rsrc = coopstore_probe_make_rsrc(dst, extent, flags);
+
+    if (tid < 64u) {
+        coopstore_probe_half8_vec acc[8];
+        coopstore_probe_make_wmma_acc(acc);
+        HRX_COOPSTORE_ACC_GROUPS_0_7();
+        HRX_COOPSTORE_STAGE_GROUPS_8_23(HRX_COOPSTORE_STAGE_STORE_GROUP_BASE8);
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+
+    if (tid < 64u) {
+        HRX_COOPSTORE_STAGE_GROUPS_8_23(HRX_COOPSTORE_STAGE_LOAD_STORE_GROUP_BASE8);
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+}
+
+extern "C" __global__ __launch_bounds__(256, 1)
+void coopstore_probe_wmma_radv_mixed192(float * dst, unsigned long long extent, unsigned int flags) {
+    __shared__ uint16_t sh_stage[32 * 16 * 16];
+    const unsigned int tid = __builtin_amdgcn_workitem_id_x();
+    const unsigned int lane = tid & 63u;
+    const __amdgpu_buffer_rsrc_t rsrc = coopstore_probe_make_rsrc(dst, extent, flags);
+
+    if (tid < 64u) {
+        coopstore_probe_half8_vec acc[16];
+        coopstore_probe_make_wmma_acc(acc);
+        HRX_COOPSTORE_ACC_GROUPS_0_15();
+        HRX_COOPSTORE_STAGE_GROUPS_16_31(HRX_COOPSTORE_STAGE_STORE_GROUP);
+        HRX_COOPSTORE_STAGE_GROUPS_32_47(HRX_COOPSTORE_STAGE_STORE_GROUP);
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+
+    if (tid < 64u) {
+        HRX_COOPSTORE_STAGE_GROUPS_16_31(HRX_COOPSTORE_STAGE_LOAD_STORE_GROUP);
+        HRX_COOPSTORE_STAGE_GROUPS_32_47(HRX_COOPSTORE_STAGE_LOAD_STORE_GROUP);
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+}
+
+#undef HRX_COOPSTORE_ACC_GROUPS_0_15
+#undef HRX_COOPSTORE_ACC_GROUPS_8_15
+#undef HRX_COOPSTORE_ACC_GROUPS_0_7
+#undef HRX_COOPSTORE_STORE_ACC_GROUP
+
 #undef HRX_COOPSTORE_STAGE_GROUPS_32_47
 #undef HRX_COOPSTORE_STAGE_GROUPS_16_31
 #undef HRX_COOPSTORE_STAGE_GROUPS_8_23
@@ -430,7 +551,7 @@ static options parse_options(int argc, char ** argv) {
             opts.flags = parse_u32(argv[i] + 8);
         } else {
             std::fprintf(stderr,
-                "usage: %s [--mode=linear64|linear128|linear192|branch192|radv-mixed96|radv-mixed192] [--group=N] [--flags=0x31004000]\n",
+                "usage: %s [--mode=linear64|linear128|linear192|branch192|radv-mixed96|radv-mixed192|wmma-radv-mixed96|wmma-radv-mixed192] [--group=N] [--flags=0x31004000]\n",
                 argv[0]);
             std::exit(2);
         }
@@ -486,6 +607,12 @@ static void compare_outputs(
     if (bad_count != 0) {
         std::exit(1);
     }
+}
+
+static float coopstore_probe_wmma_expected_value(unsigned int group) {
+    const unsigned int row_frag = group & 3u;
+    const unsigned int col_frag = (group >> 2u) & 3u;
+    return static_cast<float>(16u * (1u + row_frag) * (1u + col_frag));
 }
 
 int main(int argc, char ** argv) {
@@ -554,6 +681,30 @@ int main(int argc, char ** argv) {
                 for (unsigned int lane = 0; lane < HRX_COOPSTORE_LANES; ++lane) {
                     h_expected[coopstore_probe_index(group, slot, lane)] =
                         coopstore_probe_expected_value(group, slot, lane);
+                }
+            }
+        }
+    } else if (opts.mode == "wmma-radv-mixed96") {
+        hipLaunchKernelGGL(coopstore_probe_wmma_radv_mixed96, dim3(1), dim3(256), 0, 0,
+            d_out.ptr, byte_extent, opts.flags);
+        for (unsigned int group = 0; group < 24u; ++group) {
+            for (unsigned int slot = 0; slot < HRX_COOPSTORE_VALUES_PER_GROUP; ++slot) {
+                for (unsigned int lane = 0; lane < HRX_COOPSTORE_LANES; ++lane) {
+                    h_expected[coopstore_probe_index(group, slot, lane)] =
+                        group < 8u ? coopstore_probe_wmma_expected_value(group) :
+                                     static_cast<float>(coopstore_probe_stage_value(group, slot, lane));
+                }
+            }
+        }
+    } else if (opts.mode == "wmma-radv-mixed192") {
+        hipLaunchKernelGGL(coopstore_probe_wmma_radv_mixed192, dim3(1), dim3(256), 0, 0,
+            d_out.ptr, byte_extent, opts.flags);
+        for (unsigned int group = 0; group < HRX_COOPSTORE_MAX_GROUPS; ++group) {
+            for (unsigned int slot = 0; slot < HRX_COOPSTORE_VALUES_PER_GROUP; ++slot) {
+                for (unsigned int lane = 0; lane < HRX_COOPSTORE_LANES; ++lane) {
+                    h_expected[coopstore_probe_index(group, slot, lane)] =
+                        group < 16u ? coopstore_probe_wmma_expected_value(group) :
+                                      static_cast<float>(coopstore_probe_stage_value(group, slot, lane));
                 }
             }
         }
