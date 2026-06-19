@@ -309,6 +309,50 @@ void wmma_f16_full64_store_contract_probe(
     }
 }
 
+extern "C" __global__ __launch_bounds__(64, 1)
+void wmma_f16_dual_opsel_two_tile_store_contract_probe(
+        float * dst,
+        unsigned int * counts) {
+    constexpr unsigned int ROWS = 32;
+    const unsigned int lane = __builtin_amdgcn_workitem_id_x() & 63u;
+
+    wmma_lane_map_half16_vec a0;
+    wmma_lane_map_half16_vec b0;
+    wmma_lane_map_half16_vec a1;
+    wmma_lane_map_half16_vec b1;
+    wmma_lane_map_half8_vec acc;
+
+#pragma unroll
+    for (unsigned int i = 0; i < 16u; ++i) {
+        a0[i] = static_cast<_Float16>(1.0f);
+        b0[i] = static_cast<_Float16>(1.0f);
+        a1[i] = static_cast<_Float16>(2.0f);
+        b1[i] = static_cast<_Float16>(1.0f);
+    }
+
+#pragma unroll
+    for (unsigned int i = 0; i < 8u; ++i) {
+        acc[i] = static_cast<_Float16>(0.0f);
+    }
+
+    acc = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a0, b0, acc, false);
+    acc = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a1, b1, acc, true);
+
+    const unsigned int row_lane = lane >> 4u;
+    const unsigned int col = lane & 15u;
+#pragma unroll
+    for (unsigned int reg = 0; reg < 4u; ++reg) {
+        const unsigned int row0 = row_lane + reg * 4u;
+        const unsigned int row1 = row0 + 16u;
+        const unsigned int idx0 = col * ROWS + row0;
+        const unsigned int idx1 = col * ROWS + row1;
+        dst[idx0] = static_cast<float>(acc[reg * 2u]);
+        dst[idx1] = static_cast<float>(acc[reg * 2u + 1u]);
+        atomicAdd(counts + idx0, 1u);
+        atomicAdd(counts + idx1, 1u);
+    }
+}
+
 template <bool use_lds_fragments, bool wait_each_load = false>
 __global__ __launch_bounds__(64, 1)
 void wmma_f16_fulltile_probe(float * dst) {
@@ -1127,13 +1171,80 @@ static int run_full64_store_contract() {
     return status;
 }
 
+static int run_dual_opsel_two_tile_store_contract() {
+    constexpr unsigned int rows = 32;
+    constexpr unsigned int cols = 16;
+    const size_t count = static_cast<size_t>(rows) * cols;
+    device_buffer<float> d_out(count);
+    device_buffer<unsigned int> d_counts(count);
+    std::vector<float> h_out(count, -1.0f);
+    std::vector<unsigned int> h_counts(count, 0u);
+
+    HIP_CHECK(hipMemset(d_out.ptr, 0xff, count * sizeof(float)));
+    HIP_CHECK(hipMemset(d_counts.ptr, 0, count * sizeof(unsigned int)));
+    hipLaunchKernelGGL(
+        wmma_f16_dual_opsel_two_tile_store_contract_probe,
+        dim3(1),
+        dim3(64),
+        0,
+        0,
+        d_out.ptr,
+        d_counts.ptr);
+    HIP_CHECK(hipGetLastError());
+    HIP_CHECK(hipDeviceSynchronize());
+    HIP_CHECK(hipMemcpy(h_out.data(), d_out.ptr, count * sizeof(float), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(h_counts.data(), d_counts.ptr, count * sizeof(unsigned int), hipMemcpyDeviceToHost));
+
+    size_t written = 0;
+    size_t duplicate_coords = 0;
+    size_t missing_target = 0;
+    size_t nan_count = 0;
+    size_t bad_value = 0;
+    for (unsigned int col = 0; col < cols; ++col) {
+        for (unsigned int row = 0; row < rows; ++row) {
+            const size_t idx = static_cast<size_t>(col) * rows + row;
+            const unsigned int touches = h_counts[idx];
+            if (touches != 0u) {
+                ++written;
+            }
+            if (touches > 1u) {
+                ++duplicate_coords;
+            }
+            if (touches == 0u) {
+                ++missing_target;
+            }
+            if (touches != 0u && is_nan(h_out[idx])) {
+                ++nan_count;
+            }
+            const float expected = row < 16u ? 16.0f : 32.0f;
+            if (touches != 0u && !close_enough(h_out[idx], expected)) {
+                ++bad_value;
+            }
+        }
+    }
+
+    const bool valid = duplicate_coords == 0 && missing_target == 0 &&
+        nan_count == 0 && bad_value == 0;
+    std::printf(
+        "dual-opsel-two-tile-store-contract rows=%u cols=%u written=%zu duplicate_coords=%zu missing_target=%zu nan=%zu bad_value=%zu contract_valid=%u\n",
+        rows,
+        cols,
+        written,
+        duplicate_coords,
+        missing_target,
+        nan_count,
+        bad_value,
+        valid ? 1u : 0u);
+    return valid ? 0 : 1;
+}
+
 int main(int argc, char ** argv) {
     std::string mode = "basic";
     for (int i = 1; i < argc; ++i) {
         if (std::strncmp(argv[i], "--mode=", 7) == 0) {
             mode = argv[i] + 7;
         } else {
-            std::fprintf(stderr, "usage: %s [--mode=basic|fulltile-ones|fulltile-lds|fulltile-lds-wait|fulltile-lds-k2|fulltile-lds-k2-wait|fulltile-lds-repeat|fulltile-lds-repeat-wait|fulltile-lds-repeat-one|fulltile-prodstride-k2|fulltile-prodstride-k2-small|combined96-store-contract|full64-store-contract|all]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--mode=basic|fulltile-ones|fulltile-lds|fulltile-lds-wait|fulltile-lds-k2|fulltile-lds-k2-wait|fulltile-lds-repeat|fulltile-lds-repeat-wait|fulltile-lds-repeat-one|fulltile-prodstride-k2|fulltile-prodstride-k2-small|combined96-store-contract|full64-store-contract|dual-opsel-two-tile-store-contract|all]\n", argv[0]);
             return 2;
         }
     }
@@ -1177,6 +1288,9 @@ int main(int argc, char ** argv) {
     if (mode == "full64-store-contract") {
         return run_full64_store_contract();
     }
+    if (mode == "dual-opsel-two-tile-store-contract") {
+        return run_dual_opsel_two_tile_store_contract();
+    }
     if (mode == "all") {
         int status = run_basic_lane_map();
         status |= run_fulltile_probe<false>("fulltile-ones");
@@ -1191,6 +1305,7 @@ int main(int argc, char ** argv) {
         status |= run_fulltile_prodstride_k2_probe<0x3400u>("fulltile-prodstride-k2-small");
         status |= run_combined96_store_contract();
         status |= run_full64_store_contract();
+        status |= run_dual_opsel_two_tile_store_contract();
         return status;
     }
 

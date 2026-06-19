@@ -549,6 +549,30 @@
       "decision": "This retires the broad missing-primitive hypothesis: HIP inline asm can emit the RADV-like store-side surface on gfx1151 without rocWMMA. It is not a production route because it has no live WMMA fragment integration or llama.cpp tensor ABI. The remaining Q8/Q6 gap is the integration contract: combine this low-barrier halfword LDS plus 192 raw buffer-store topology with the real WMMA fragment lane mapping, RADV-like outstanding LDS-load issue window, and acceptable VGPR pressure."
     },
     {
+      "id": "q8_0_wmma_dual_opsel_two_tile_store_contract",
+      "date": "2026-06-19",
+      "artifact": "cache/hrxv1/gfx1151/wmma-dual-opsel-two-tile-20260619-070903/",
+      "compile_artifact": "cache/hrxv1/gfx1151/wmma-dual-opsel-two-tile-20260619-070903/device.hsaco",
+      "status": "primitive_contract_pass_not_runtime_route",
+      "evidence": {
+        "bench_target": "hrx-hip-bench-wmma-f16-lane-map",
+        "mode": "dual-opsel-two-tile-store-contract",
+        "correctness": "rows=32 cols=16 written=512 duplicate_coords=0 missing_target=0 nan=0 bad_value=0 contract_valid=1",
+        "isa": {
+          "wavefront_size": 64,
+          "sgpr_count": 12,
+          "vgpr_count": 22,
+          "private_segment_fixed_size": 0,
+          "v_wmma": 2,
+          "global_store_b32": 8,
+          "global_atomic_add_u32": 8,
+          "s_waitcnt": 1,
+          "spills": 0
+        }
+      },
+      "decision": "The gfx1151 HIP wave64 WMMA builtin can hold two independent 16x16 output tiles in low/high accumulator halves only when the source issues separate low-OPSEL and high-OPSEL WMMA instructions. That makes row+16 high-half writeback semantically valid for an explicit dual-OPSEL computation, but it does not rescue the rejected Q8_0 fullpair route: reading both halves after a single selected-OPSEL WMMA is not a valid second tile, and using both halves this way would add WMMA work rather than explain RADV large-route parity with the same 32-WMMA schedule. Future Q8 direct-WMMA work should keep selected-half ownership unless a lower-level cooperative-matrix primitive exposes RADV store semantics directly."
+    },
+    {
       "id": "q8_0_prompt_mmq64x112_compile",
       "date": "2026-06-18",
       "artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x112-compile-20260618/",
