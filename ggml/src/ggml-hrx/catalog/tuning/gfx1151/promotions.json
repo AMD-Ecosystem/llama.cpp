@@ -64,6 +64,49 @@
       ]
     },
     {
+      "id": "q5_dense_prompt_wmma16_vk64_narrow_ffn_qwen25coder_p33",
+      "date": "2026-06-18",
+      "status": "accepted_gfx1151_default",
+      "route": "hrx_mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_f16acc_wg256_f32",
+      "env": "default on gfx1151 for the narrow Qwen2.5 Coder Q5_K_M FFN gate shape; rollback with GGML_HRX_DISABLE_Q5_K_WMMA16_VK64_PADDED44_W64_F16ACC_WG256_NARROW_PROMPT=1 or GGML_HRX_DISABLE_FAST_APPROX_PROMPT=1; broad opt-in remains GGML_HRX_ENABLE_Q5_K_WMMA16_VK64_PADDED44_W64_F16ACC_WG256_PROMPT=1",
+      "shape_guard": "q5_K MUL_MAT prompt, k == 3584, rows == 18944, 32 <= cols <= 64, gfx1151 only; all other Q5 p33 rows stay on rows2/MMQ64 and p512/p513 stay on MMQL128/B-quad",
+      "vulkan_oracle_artifact": "cache/hrxv1/gfx1151/vulkan-oracle-qwen25coder-7b-q5km-p33-fa1-exact-20260618-195327/",
+      "focused_artifacts": [
+        "cache/hrxv1/gfx1151/q5-current-p33-commitaligned-20260618-205930/",
+        "cache/hrxv1/gfx1151/q5-vk64-padded44-p33-commitaligned-20260618-210114/",
+        "cache/hrxv1/gfx1151/q5-vk64-narrow-default-regate-20260618-210315/"
+      ],
+      "model_artifacts": [
+        "cache/hrxv1/gfx1151/q5-vk64-narrow-model-ab-p33-20260618-210449/",
+        "cache/hrxv1/gfx1151/q5-vk64-narrow-model-ab-p33-commitaligned-20260618-210735/",
+        "cache/hrxv1/gfx1151/basket-after-q4-id-widek-default-commitaligned-20260618-205025/"
+      ],
+      "focused_result": {
+        "p33_correctness": "CPU-reference passed for Kcur-0, Qcur-0, ffn_out-3, and ffn_gate-0",
+        "p512_p513_non_steal": "CPU-reference passed for Q5 p512 and p513 focused rows; route traces show p512 remains on rows2 plus MMQL128 and p513 remains on rows2 plus MMQL128 B-quad",
+        "p33_ffn_gate_us_rollback_to_default": "2438.594517 -> 1819.744589",
+        "p33_ffn_gate_speedup": 1.340075
+      },
+      "model_result": {
+        "qwen25coder_7b_q5km_p33_default_tok_s": 153.531719,
+        "qwen25coder_7b_q5km_p33_rollback_tok_s": 136.855964,
+        "qwen25coder_7b_q5km_p33_vulkan_tok_s": 360.452868,
+        "default_over_rollback": 1.121849,
+        "default_over_vulkan": 0.425941,
+        "rollback_over_vulkan": 0.379678
+      },
+      "compile_evidence": {
+        "hsaco": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q5_k_wmma16_vk64_padded44_w64_wg256.hsaco",
+        "prior_rejection": "q5_dense_prompt_wmma16_vk64_padded44_w64_p33",
+        "vulkan_schedule": "RADV medium Q5_K p33 route matmul_q5_k_f32_f16acc_aligned_m: BM64/BN64/BK32/WG256 wave64, LDS=11264, VGPR=144, no spills"
+      },
+      "promotion_blockers": [
+        "The broad VK64/padded44 route remains rejected because it regresses Kcur, Qcur, and ffn_out; only the exact narrow FFN gate slice is defaulted",
+        "This moves Qwen2.5 Coder 7B Q5_K_M p33 from 0.379x to 0.424x Vulkan, so it is not a parity claim",
+        "The emitted HIP schedule still does not match RADV's WMMA/load/store counts and cooperative-matrix store/lane ownership; further Q5 work should mechanically target that delta rather than widen this selector"
+      ]
+    },
+    {
       "id": "q5_moe_id_mmq16_qwen3_q4xl_p33_p512_p513",
       "date": "2026-06-17",
       "status": "accepted_opt_in_candidate",

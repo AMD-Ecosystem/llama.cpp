@@ -3958,6 +3958,22 @@ static bool ggml_backend_hrx_q5_k_mmql128_bquad_tail_enabled(
            !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_Q5_K_Q8_1_X4_MMQL128_BQUAD_TAIL_PROMPT");
 }
 
+static bool ggml_backend_hrx_q5_k_wmma16_vk64_narrow_ffn_enabled(
+        const ggml_backend_hrx_device_context * device_context,
+        int64_t k,
+        int64_t rows,
+        int64_t cols) {
+    return device_context &&
+           device_context->architecture == "gfx1151" &&
+           !ggml_backend_hrx_approximate_kernels_disabled() &&
+           !ggml_backend_hrx_env_enabled(
+               "GGML_HRX_DISABLE_Q5_K_WMMA16_VK64_PADDED44_W64_F16ACC_WG256_NARROW_PROMPT") &&
+           k == 3584 &&
+           rows == 18944 &&
+           cols >= 32 &&
+           cols <= 64;
+}
+
 static bool ggml_backend_hrx_q4_k_mmql128_bquad_cr_qk_enabled(
         int64_t k,
         int64_t rows,
@@ -5710,7 +5726,8 @@ static const ggml_backend_hrx_op_provider * ggml_backend_hrx_select_mul_mat_vec_
             }
             return &device_context->mul_mat_vec_q4_k_provider;
         case GGML_TYPE_Q5_K: {
-            if (ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q5_K_WMMA16_VK64_PADDED44_W64_F16ACC_WG256_PROMPT") &&
+            if ((ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q5_K_WMMA16_VK64_PADDED44_W64_F16ACC_WG256_PROMPT") ||
+                 ggml_backend_hrx_q5_k_wmma16_vk64_narrow_ffn_enabled(device_context, k, rows, cols)) &&
                 !ggml_backend_hrx_approximate_kernels_disabled() &&
                 k > 0 && (k % 256) == 0 &&
                 rows >= 16 &&
@@ -6431,7 +6448,8 @@ static ggml_backend_hrx_q8_1_mmvq_variant ggml_backend_hrx_mul_mat_vec_k_q8_1_va
             }
             return variant;
         case GGML_TYPE_Q5_K:
-            if (ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q5_K_WMMA16_VK64_PADDED44_W64_F16ACC_WG256_PROMPT")) {
+            if (ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q5_K_WMMA16_VK64_PADDED44_W64_F16ACC_WG256_PROMPT") ||
+                ggml_backend_hrx_q5_k_wmma16_vk64_narrow_ffn_enabled(device_context, src0->ne[0], rows, cols)) {
                 return variant;
             }
             if (ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q5_K_WMMA16_VK128_PADDED_W64_B64GROUP_F16ACC_WG256_PROMPT") ||

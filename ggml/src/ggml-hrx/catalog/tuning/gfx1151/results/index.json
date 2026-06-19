@@ -189,6 +189,24 @@
       "status": "post_default_full_basket_kpi"
     },
     {
+      "id": "q5_dense_prompt_wmma16_vk64_narrow_ffn_default_regate",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q5-vk64-narrow-default-regate-20260618-210315/",
+      "status": "accepted_gfx1151_default_focused_odd_tail_nonsteal"
+    },
+    {
+      "id": "q5_dense_prompt_wmma16_vk64_narrow_ffn_model_p33",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q5-vk64-narrow-model-ab-p33-20260618-210449/",
+      "status": "accepted_gfx1151_default_model_ab"
+    },
+    {
+      "id": "q5_dense_prompt_wmma16_vk64_narrow_ffn_model_p33_commitaligned",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q5-vk64-narrow-model-ab-p33-commitaligned-20260618-210735/",
+      "status": "accepted_gfx1151_default_model_ab_commit_09c3424d7"
+    },
+    {
       "id": "q8_0_prompt_mmq128x32_wave64_focused_p512",
       "date": "2026-06-17",
       "artifact": "cache/hrxv1/gfx1151/q8_0-wave64-focused-p512-20260617-185605/",
