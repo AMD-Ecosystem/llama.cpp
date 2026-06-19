@@ -1005,7 +1005,7 @@
     },
     "dispatch": {
       "workgroup_size": [
-        256,
+        1024,
         1,
         1
       ]
@@ -1019,7 +1019,7 @@
     },
     "evidence_summary": {
       "status": "candidate_gfx1151_vulkan_oracle",
-      "selection": "build-only reduce half of Vulkan p513 split_k_reduce contract; not selected until a partial-producer matmul route exists"
+      "selection": "Build-only reduce half of Vulkan p513 split_k_reduce contract. Dispatch uses 1024 threads per workgroup to match RADV split_k_reduce wg_denoms=[1024,1,1]; keep diagnostic-only until a partial-producer matmul route proves focused correctness and timing."
     }
   },
   {
@@ -6615,7 +6615,7 @@
     },
     "evidence_summary": {
       "status": "rejected_gfx1151_focused_perf_regression_diagnostic",
-      "selection": "Q5_K split-K partial producer for the Vulkan p513 contract. It preserves the accepted B-quad MMQL128 dataflow while adding absolute kb_start/kb_count and partial_base element offset. The opt-in dispatcher writes two F32 scratch partials and reduces them with hrx_split_k_reduce_f32. Focused p513 CPU-reference passed and route traces selected split-K on Qcur/ffn_out/ffn_gate, but focused p513 timing regressed 19.44 ms -> 54.15 ms summed across the four Q5 rows, with ffn_gate 4.85x slower. Keep only as a diagnostic hook; do not promote this mechanical two-pass global-reduce spelling."
+      "selection": "Q5_K split-K partial producer for the Vulkan p513 contract. It preserves the accepted B-quad MMQL128 dataflow while adding absolute kb_start/kb_count and partial_base element offset. The opt-in dispatcher writes two F32 scratch partials and reduces them with hrx_split_k_reduce_f32. Focused p513 CPU-reference passed and route traces selected split-K on Qcur/ffn_out/ffn_gate. After matching RADV split_k_reduce wg_denoms=[1024,1,1], the diagnostic improved from the old 54.15 ms row sum to 23.25 ms, but still regressed the 19.73 ms default row sum by 1.178x and left ffn_gate 1.411x slower. Keep only as a diagnostic hook; do not promote this mechanical two-pass global-reduce spelling."
     },
     "target_prefixes": [
       "gfx1151"
