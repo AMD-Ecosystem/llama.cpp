@@ -50,6 +50,10 @@
 #define HRX_Q6_K_WMMA_VK128_W64_VK64_GROUPK2 0
 #endif
 
+#ifndef HRX_Q6_K_WMMA_VK128_W64_VK64_GROUPK2_WAIT
+#define HRX_Q6_K_WMMA_VK128_W64_VK64_GROUPK2_WAIT 0
+#endif
+
 #ifndef HRX_Q6_K_WMMA_VK128_FULL_TILE_STORE
 #define HRX_Q6_K_WMMA_VK128_FULL_TILE_STORE 0
 #endif
@@ -575,7 +579,7 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
         }
         __syncthreads();
 
-#if HRX_Q6_K_WMMA_VK128_W64_VK64_GROUPK2
+#if HRX_Q6_K_WMMA_VK128_W64_VK64_GROUPK2 || HRX_Q6_K_WMMA_VK128_W64_VK64_GROUPK2_WAIT
         {
             hrx_q6_k_wmma_vk128_lds_half_ptr sh_a_lds =
                 (hrx_q6_k_wmma_vk128_lds_half_ptr) sh_a;
@@ -588,11 +592,21 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
             for (int k_tile = 0; k_tile < 2; ++k_tile) {
 #pragma unroll
                 for (int row_sub = 0; row_sub < 4; ++row_sub) {
+#if HRX_Q6_K_WMMA_VK128_W64_VK64_GROUPK2_WAIT
+                    a_frag[k_tile][row_sub] = hrx_q6_k_wmma_vk128_load_a_frag_w64_b64asm(
+                        sh_a_lds, row_sub, k_tile, lane);
+#else
                     a_frag[k_tile][row_sub] = hrx_q6_k_wmma_vk128_load_a_frag_w64_b64asm_nowait(
                         sh_a_lds, row_sub, k_tile, lane);
+#endif
                 }
+#if HRX_Q6_K_WMMA_VK128_W64_VK64_GROUPK2_WAIT
+                b_frag[k_tile] = hrx_q6_k_wmma_vk128_load_b_frag_w64_b64asm(
+                    sh_b_lds, col_tile, k_tile, lane);
+#else
                 b_frag[k_tile] = hrx_q6_k_wmma_vk128_load_b_frag_w64_b64asm_nowait(
                     sh_b_lds, col_tile, k_tile, lane);
+#endif
             }
             asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
 #pragma unroll
