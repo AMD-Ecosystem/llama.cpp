@@ -562,7 +562,7 @@ void q8_array16_direct_raw_repro_kernel(
     }
 }
 
-template <bool copy_a, bool copy_b>
+template <bool copy_a, bool copy_b, bool hoist_b_copy = false>
 __global__ __launch_bounds__(256, 1)
 void q8_contract_direct192_repro_kernel(
         const hrx_block_q8_0_wmma_vk128_lhs * src0,
@@ -637,6 +637,10 @@ void q8_contract_direct192_repro_kernel(
             for (int k_tile = 0; k_tile < 2; ++k_tile) {
 #pragma unroll
                 for (int col_sub = 0; col_sub < 4; ++col_sub) {
+                    const hrx_q8_0_wmma_vk128_half16_vec b_col_use =
+                        (copy_b && hoist_b_copy) ?
+                            q8_repro_copy_frag(b_frag[k_tile][col_sub]) :
+                            b_frag[k_tile][col_sub];
 #pragma unroll
                     for (int row_sub = 0; row_sub < 4; ++row_sub) {
                         const int group = col_sub * 4 + row_sub;
@@ -644,8 +648,8 @@ void q8_contract_direct192_repro_kernel(
                             q8_repro_copy_frag(a_frag[k_tile][row_sub]) :
                             a_frag[k_tile][row_sub];
                         const hrx_q8_0_wmma_vk128_half16_vec b_use = copy_b ?
-                            q8_repro_copy_frag(b_frag[k_tile][col_sub]) :
-                            b_frag[k_tile][col_sub];
+                            (hoist_b_copy ? b_col_use : q8_repro_copy_frag(b_frag[k_tile][col_sub])) :
+                            b_col_use;
                         acc[group] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
                             a_use,
                             b_use,
@@ -2446,8 +2450,14 @@ static int run_contract_case(const std::string & mode, int rows, int cols, int k
     } else if (mode == "contract-direct192-bcopy") {
         hipLaunchKernelGGL((q8_contract_direct192_repro_kernel<false, true>), grid, dim3(256, 1, 1), 0, 0,
             d_q8.ptr, d_rhs.ptr, d_contract.ptr, k, rows, cols);
+    } else if (mode == "contract-direct192-bcopy-hoist") {
+        hipLaunchKernelGGL((q8_contract_direct192_repro_kernel<false, true, true>), grid, dim3(256, 1, 1), 0, 0,
+            d_q8.ptr, d_rhs.ptr, d_contract.ptr, k, rows, cols);
     } else if (mode == "contract-direct192-abcopy") {
         hipLaunchKernelGGL((q8_contract_direct192_repro_kernel<true, true>), grid, dim3(256, 1, 1), 0, 0,
+            d_q8.ptr, d_rhs.ptr, d_contract.ptr, k, rows, cols);
+    } else if (mode == "contract-direct192-abcopy-bhoist") {
+        hipLaunchKernelGGL((q8_contract_direct192_repro_kernel<true, true, true>), grid, dim3(256, 1, 1), 0, 0,
             d_q8.ptr, d_rhs.ptr, d_contract.ptr, k, rows, cols);
     } else if (mode == "contract-phase96-abcopy") {
         hipLaunchKernelGGL((q8_contract_phase96_repro_kernel<0, 0, 2, 8, 16, 16, true, true>),
@@ -3034,7 +3044,7 @@ int main(int argc, char ** argv) {
         } else if (std::strcmp(argv[i], "--dump-dir") == 0 && i + 1 < argc) {
             dump_dir = argv[++i];
         } else {
-            std::fprintf(stderr, "usage: %s [--mode array8-fullb|array16-direct-raw|array16-direct-raw-bcopy|array16-direct-raw-abcopy|contract-direct192-raw|contract-direct192-bcopy|contract-direct192-abcopy|contract-phase96-abcopy|phase96-bm128-abcopy|phase96-bm128-abcopy-backendlike|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|array8-fullb-2phase-bcopy|array8-fullb-2phase-bcopy-stage|array8-fullb-2phase-abcopy|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group0-bcopy-stage|single-group8|single-group8-consume|single-group8-opsel1|single-group8-bmirror0|single-group8-bcopy|single-group8-abcopy|single-group8-bcopy-stage|single-group8-abcopy-stage|single-group8-bcopy-stage-selected|single-group12|single-group12-consume|single-group12-opsel1|single-group12-bmirror0|single-group12-bcopy|single-group12-abcopy|single-group12-bcopy-stage|single-group12-abcopy-stage|single-group12-bcopy-stage-selected|single-group12-abcopy-stage-selected|single-group12-bcopy-stage-selected-acccopy|single-group12-abcopy-stage-selected-acccopy|single-group12-bcopy-stage-selected-regcopy|single-group12-abcopy-stage-selected-regcopy|single-group12-abcopy-dual-stage-raw-first|single-group12-abcopy-dual-stage-stage-first|single-group13|single-group13-consume|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c12-s0-bcopy-stage-selected|remap-c12-s0-abcopy-stage-selected|remap-c0-s12|remap-c0-s12-stage-selected|bfrag-dump|all] [--dump-dir <test-backend-ops dump dir>]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--mode array8-fullb|array16-direct-raw|array16-direct-raw-bcopy|array16-direct-raw-abcopy|contract-direct192-raw|contract-direct192-bcopy|contract-direct192-bcopy-hoist|contract-direct192-abcopy|contract-direct192-abcopy-bhoist|contract-phase96-abcopy|phase96-bm128-abcopy|phase96-bm128-abcopy-backendlike|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|array8-fullb-2phase-bcopy|array8-fullb-2phase-bcopy-stage|array8-fullb-2phase-abcopy|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group0-bcopy-stage|single-group8|single-group8-consume|single-group8-opsel1|single-group8-bmirror0|single-group8-bcopy|single-group8-abcopy|single-group8-bcopy-stage|single-group8-abcopy-stage|single-group8-bcopy-stage-selected|single-group12|single-group12-consume|single-group12-opsel1|single-group12-bmirror0|single-group12-bcopy|single-group12-abcopy|single-group12-bcopy-stage|single-group12-abcopy-stage|single-group12-bcopy-stage-selected|single-group12-abcopy-stage-selected|single-group12-bcopy-stage-selected-acccopy|single-group12-abcopy-stage-selected-acccopy|single-group12-bcopy-stage-selected-regcopy|single-group12-abcopy-stage-selected-regcopy|single-group12-abcopy-dual-stage-raw-first|single-group12-abcopy-dual-stage-stage-first|single-group13|single-group13-consume|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c12-s0-bcopy-stage-selected|remap-c12-s0-abcopy-stage-selected|remap-c0-s12|remap-c0-s12-stage-selected|bfrag-dump|all] [--dump-dir <test-backend-ops dump dir>]\n", argv[0]);
             return 2;
         }
     }
@@ -3058,7 +3068,9 @@ int main(int argc, char ** argv) {
     }
     if (mode == "contract-direct192-raw" ||
             mode == "contract-direct192-bcopy" ||
+            mode == "contract-direct192-bcopy-hoist" ||
             mode == "contract-direct192-abcopy" ||
+            mode == "contract-direct192-abcopy-bhoist" ||
             mode == "contract-phase96-abcopy") {
         status |= run_contract_case(mode, rows, 64, k);
         status |= run_contract_case(mode, rows, 33, k);
