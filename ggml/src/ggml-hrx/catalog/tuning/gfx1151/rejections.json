@@ -73,6 +73,16 @@
       "reason": "The Q8_0 WMMA compute/store remap probe separates upper-column WMMA compute from raw buffer-store/output coordinate addressing. Each remap mode computes one source group but writes it to another output group; the host checker compares against the compute-group CPU reference. All four remap kernels built as wave64 with no private segment and no spills, emitted two v_wmma_f16_16x16x16_f16, 64 ds_load_b64, four buffer_store_b32, and two barriers. Lower group 0 computed correctly and stored into upper groups: remap-c0-s8 passed rows=64 cols=64 with bad=0, nan=0, max_abs=0.00242398 and rows=64 cols=33 with active=16, bad=0, max_abs=0.00175482; remap-c0-s12 passed p64 with bad=0, max_abs=0.00242398. Upper groups still failed when stored into lower group 0 coordinates: remap-c8-s0 had p64 active=256, bad=256, nan=128, max_abs=11080 and p33 bad=256, nan=128, max_abs=17328; remap-c12-s0 failed finite with p64 max_abs=13.0649 and p33 max_abs=12.8516. Reject the upper-column compute source spelling as a route template, but clear the raw buffer-store coordinate path. The failing axis is the B-fragment/WMMA compute side for col_sub >= 2, not output address calculation. Future work should inspect or remap upper B fragment operand lanes directly before another full64 route attempt."
     },
     {
+      "id": "q8_0_wmma_realdata_opsel1_upper_column_probe",
+      "date": "2026-06-19",
+      "route": "hrx-hip-bench-q8-wmma-repro --mode=single-group0-opsel1/single-group8-opsel1/single-group12-opsel1",
+      "env": "standalone CMake-built gfx1151 HIP bench diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/q8-wmma-opsel1-20260619-095323/",
+      "isa_artifact": "cache/hrxv1/gfx1151/q8-wmma-opsel1-20260619-095323/device-objdump.txt",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro",
+      "reason": "The Q8_0 WMMA OPSEL=1 probe tests whether the upper-column failure is specific to the low accumulator half. All three modes built as wave64 with no private segment and no spills, emitted two v_wmma_f16_16x16x16_f16, 64 ds_load_b64, four buffer_store_b32, and two barriers. The group 0 high-half control passed rows=64 cols=64 and rows=64 cols=33 with bad=0, nan=0, max_abs=0.00242398, proving the high-half D-coordinate store can be correct. Upper groups still failed: single-group8-opsel1 had p64 active=256, bad=256, nan=120, max_abs=13816 and p33 active=16, bad=16, nan=16; single-group12-opsel1 failed p64 finite with max_abs=13.0649. Reject OPSEL=1 as a route repair. The upper-column failure is not just selecting the wrong accumulator half; future work should inspect or remap B operand lanes for col_sub >= 2."
+    },
+    {
       "id": "q8_0_lds_k2_mixed160_splitstage_topology_control",
       "date": "2026-06-19",
       "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-mixed160-splitstage",
