@@ -12,6 +12,10 @@
 #define HRX_Q5_K_Q8_1_X4_MMQL64_PREFETCH_B_QUAD 0
 #endif
 
+#ifndef HRX_Q5_K_Q8_1_X4_MMQL64_PREFETCH_B_PAIR
+#define HRX_Q5_K_Q8_1_X4_MMQL64_PREFETCH_B_PAIR 0
+#endif
+
 #ifndef HRX_Q5_K_Q8_1_X4_MMQL64_ISSUE_CR_MAJOR
 #define HRX_Q5_K_Q8_1_X4_MMQL64_ISSUE_CR_MAJOR 0
 #endif
@@ -179,6 +183,32 @@ extern "C" __global__ void HRX_Q5_K_Q8_1_X4_MMQL64_EXPORT(
                     }
                 }
             }
+#elif HRX_Q5_K_Q8_1_X4_MMQL64_PREFETCH_B_PAIR
+            #pragma unroll
+            for (int wsic = 0; wsic < WNITER; ++wsic) {
+                hrx_q8_1_mmqv_b_cache cache_b_pair[TN];
+                #pragma unroll
+                for (int cc = 0; cc < TN; ++cc) {
+                    cache_b_pair[cc] =
+                        buf_b[k_step * BN + warp_c * WN + wsic * WSUBN + tiwc * TN + cc];
+                }
+                #pragma unroll
+                for (int cc = 0; cc < TN; ++cc) {
+                    const hrx_q8_1_mmqv_b_cache cache_b = cache_b_pair[cc];
+                    #pragma unroll
+                    for (int cr = 0; cr < TM; ++cr) {
+                        int qsum = 0;
+                        #pragma unroll
+                        for (int iqs = 0; iqs < 8; ++iqs) {
+                            qsum += hrx_sudot4_q5_q8_1(
+                                static_cast<uint32_t>(cache_a[cr].qs[iqs]), cache_b.qs[iqs]);
+                        }
+                        sum[(wsic * TN + cc) * TM + cr] +=
+                            cache_a[cr].d * hrx_q5_k_mmqv_b_cache_d(cache_b) * static_cast<float>(qsum) -
+                            cache_a[cr].min * hrx_q5_k_mmqv_b_cache_s(cache_b);
+                    }
+                }
+            }
 #elif HRX_Q5_K_Q8_1_X4_MMQL64_PREFETCH_B_QUAD
             hrx_q8_1_mmqv_b_cache cache_b_quad[WNITER][TN];
             #pragma unroll
@@ -253,4 +283,5 @@ extern "C" __global__ void HRX_Q5_K_Q8_1_X4_MMQL64_EXPORT(
 #undef HRX_Q5_K_Q8_1_X4_MMQL64_EXPORT
 #undef HRX_Q5_K_Q8_1_X4_MMQL64_BK_STEP
 #undef HRX_Q5_K_Q8_1_X4_MMQL64_PREFETCH_B_QUAD
+#undef HRX_Q5_K_Q8_1_X4_MMQL64_PREFETCH_B_PAIR
 #undef HRX_Q5_K_Q8_1_X4_MMQL64_ISSUE_CR_MAJOR

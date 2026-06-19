@@ -1039,6 +1039,15 @@
       "focused_artifact": "cache/hrxv1/gfx1151/q5-p33-disable-vk64-narrow-probe-20260619-045124/",
       "model_artifact": "cache/hrxv1/gfx1151/q5-p33-packed-ffngate-policy-ab-20260619-045226/",
       "reason": "The Q5_K VK64 narrow FFN route was originally defaulted because it beat the rows2 direct-F32 fallback on the exact Qwen2.5 Coder p33 ffn_gate shape. After the packed Q8_1/x4 MMQL64 BK2 BQUAD route became the narrow default, a selector-only A/B showed that the old direct default was now shadowing a faster packed path on the same k=3584 rows=18944 cols=33 row. Focused p33 CPU-reference passed with the old route disabled, p512 and p513 non-steal correctness stayed on the existing large/tail packed routes, and route traces showed ffn_gate moving from VK64 narrow to BQUAD. Same-runner focused timing improved ffn_gate 1711.823 -> 1156.896 us with Kcur/Qcur/ffn_out flat, and same-binary Qwen2.5 Coder 7B Q5_K_M p33/fa1 model throughput improved 170.239 -> 209.917 tok/s. Supersede the VK64 narrow default and keep it opt-in only as a direct-WMMA diagnostic; further Q5 p33 parity work should start from the packed medium route or a true RADV cooperative lane/store clone."
+    },
+    {
+      "id": "q5_dense_prompt_mmql64_bk2_bpair_p33",
+      "date": "2026-06-19",
+      "route": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql64x64_bk2_bpair_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q5_K_Q8_1_X4_MMQL64_BK2_BPAIR_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q5-mmql64-bk2-bpair-focused-20260619-050557/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q5_k_q8_1_x4_mmql64_bk2_bpair.hsaco",
+      "reason": "The Q5_K packed-Q8_1/x4 MMQL64 BK2 B-pair probe bracketed the accepted p33 BQUAD route by preserving BM64/BN64/BK_STEP=2/WG256/wave64 and changing only the B-cache live window from a full WNITER x TN B-quad to one TN-wide pair per WNITER. It built through CMake/Ninja, and focused CPU-reference passed for p33 plus p512/p513 non-steal guards. Route traces proved p33 selected B-pair for Qcur, ffn_out, and ffn_gate while Kcur stayed on rows2; p512 stayed on MMQL128 and p513 stayed on MMQL128 BQUAD tail. Static HSACO comparison showed the intended pressure reduction, wave64 SGPR=62 VGPR=105 LDS=10240 no spills, versus BQUAD VGPR=124 with the same LDS, 256 v_dot sites, 40 ds_load, 24 ds_store, 39 global_load, 16 global_store, and 2 barriers. Same-runner focused timing rejected the route despite lower VGPR: round 1 p33 sum regressed 3071.563 -> 3144.005 us and round 2 regressed 3067.537 -> 3145.376 us. The ffn_out row slightly improved, but Qcur regressed about 2.2% and ffn_gate regressed about 7.5%, so reducing the B live window is not the right packed-medium axis for Q5 p33. Keep BQUAD as the accepted default and keep this B-pair route opt-in only as rejection evidence."
     }
   ]
 }
