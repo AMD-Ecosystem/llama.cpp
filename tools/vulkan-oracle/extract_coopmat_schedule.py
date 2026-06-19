@@ -32,10 +32,25 @@ INTERESTING_PREFIXES = (
     "ds_store",
     "ds_write",
     "s_barrier",
+    "s_and",
+    "s_branch",
+    "s_cbranch",
+    "s_cmp",
     "s_waitcnt",
     "s_load",
+    "s_mov",
+    "v_cmp",
 )
 STORE_PREFIXES = ("buffer_store", "global_store", "flat_store", "ds_store", "ds_write")
+PREDICATE_OPS = (
+    "s_and_b64",
+    "s_cbranch_execz",
+    "s_cbranch_scc0",
+    "s_cbranch_scc1",
+    "s_cmp",
+    "s_mov_b64",
+    "v_cmp",
+)
 
 
 def read_lines(path):
@@ -70,6 +85,16 @@ def extract_offset(rest):
     return offsets
 
 
+def parse_isa_instruction(line):
+    stripped = strip_comment(line)
+    match = ISA_INSTRUCTION_RE.match(stripped)
+    if not match:
+        return None
+    opcode, rest = match.groups()
+    operands = [part.strip() for part in rest.split(",") if part.strip()]
+    return opcode, rest, operands
+
+
 def parse_isa_events(lines):
     events = []
     bb = None
@@ -78,14 +103,12 @@ def parse_isa_events(lines):
         if bb_match:
             bb = bb_match.group(1)
             continue
-        stripped = strip_comment(line)
-        match = ISA_INSTRUCTION_RE.match(stripped)
-        if not match:
+        parsed = parse_isa_instruction(line)
+        if not parsed:
             continue
-        opcode, rest = match.groups()
+        opcode, rest, operands = parsed
         if not opcode.startswith(INTERESTING_PREFIXES):
             continue
-        operands = [part.strip() for part in rest.split(",") if part.strip()]
         events.append({
             "line": index,
             "bb": bb,
@@ -95,6 +118,146 @@ def parse_isa_events(lines):
             "text": line.strip(),
         })
     return events
+
+
+def summarize_store_operand(event):
+    operands = event["operands"]
+    summary = {
+        "line": event["line"],
+        "opcode": event["opcode"],
+        "text": event["text"],
+        "offsets": event["offsets"],
+    }
+    if operands:
+        summary["value"] = operands[0]
+    if event["opcode"].startswith("buffer_store"):
+        if len(operands) > 1:
+            summary["address"] = operands[1]
+        if len(operands) > 2:
+            summary["resource"] = operands[2]
+    elif event["opcode"].startswith(("global_store", "flat_store")):
+        if len(operands) > 1:
+            summary["address"] = operands[1]
+    elif event["opcode"].startswith(("ds_store", "ds_write")):
+        if len(operands) > 1:
+            summary["address"] = operands[0]
+            summary["value"] = operands[1]
+    return summary
+
+
+def summarize_load_operand(event):
+    operands = event["operands"]
+    summary = {
+        "line": event["line"],
+        "opcode": event["opcode"],
+        "text": event["text"],
+        "offsets": event["offsets"],
+    }
+    if operands:
+        summary["dest"] = operands[0]
+    if len(operands) > 1:
+        summary["address"] = operands[1].split()[0]
+    return summary
+
+
+def summarize_store_basic_block_details(events):
+    by_bb = collections.defaultdict(list)
+    for event in events:
+        if event["bb"]:
+            by_bb[event["bb"]].append(event)
+
+    details = []
+    for bb, bb_events in sorted(by_bb.items(), key=lambda item: int(item[0][2:])):
+        store_events = [
+            event for event in bb_events
+            if event["opcode"].startswith(STORE_PREFIXES)
+        ]
+        if not store_events:
+            continue
+        lds_loads = [
+            event for event in bb_events
+            if event["opcode"].startswith(("ds_load", "ds_read"))
+        ]
+        vmem_loads = [
+            event for event in bb_events
+            if event["opcode"].startswith(("buffer_load", "global_load", "flat_load"))
+        ]
+        predicates = [
+            {
+                "line": event["line"],
+                "opcode": event["opcode"],
+                "text": event["text"],
+            }
+            for event in bb_events
+            if event["opcode"].startswith(PREDICATE_OPS)
+            or " exec" in " ".join(event["operands"])
+        ]
+        store_offsets = collections.defaultdict(collections.Counter)
+        for event in store_events:
+            offset = event["offsets"].get("offset", 0)
+            store_offsets[event["opcode"]][offset] += 1
+        details.append({
+            "bb": bb,
+            "line_range": [bb_events[0]["line"], bb_events[-1]["line"]],
+            "store_count": len(store_events),
+            "store_opcode_counts": dict(collections.Counter(event["opcode"] for event in store_events)),
+            "store_offsets": {
+                opcode: dict(sorted(counter.items()))
+                for opcode, counter in sorted(store_offsets.items())
+            },
+            "buffer_store_count": sum(1 for event in store_events if event["opcode"].startswith("buffer_store")),
+            "lds_store_count": sum(1 for event in store_events if event["opcode"].startswith(("ds_store", "ds_write"))),
+            "lds_load_count": len(lds_loads),
+            "vmem_load_count": len(vmem_loads),
+            "stores": [summarize_store_operand(event) for event in store_events],
+            "lds_loads": [summarize_load_operand(event) for event in lds_loads],
+            "vmem_loads": [summarize_load_operand(event) for event in vmem_loads],
+            "predicates": predicates,
+        })
+    return details
+
+
+def store_block_signature(block):
+    return json.dumps({
+        "buffer_store_count": block["buffer_store_count"],
+        "lds_store_count": block["lds_store_count"],
+        "lds_load_count": block["lds_load_count"],
+        "store_opcode_counts": block["store_opcode_counts"],
+        "store_offsets": block["store_offsets"],
+    }, sort_keys=True)
+
+
+def summarize_store_motifs(store_details):
+    motifs = {}
+    for block in store_details:
+        key = store_block_signature(block)
+        motif = motifs.setdefault(key, {
+            "count": 0,
+            "example_bbs": [],
+            "buffer_store_count_per_block": block["buffer_store_count"],
+            "lds_store_count_per_block": block["lds_store_count"],
+            "lds_load_count_per_block": block["lds_load_count"],
+            "store_opcode_counts": block["store_opcode_counts"],
+            "store_offsets": block["store_offsets"],
+            "total_buffer_stores": 0,
+            "total_lds_stores": 0,
+            "total_lds_loads": 0,
+        })
+        motif["count"] += 1
+        motif["total_buffer_stores"] += block["buffer_store_count"]
+        motif["total_lds_stores"] += block["lds_store_count"]
+        motif["total_lds_loads"] += block["lds_load_count"]
+        if len(motif["example_bbs"]) < 8:
+            motif["example_bbs"].append(block["bb"])
+    return sorted(
+        motifs.values(),
+        key=lambda item: (
+            -item["total_buffer_stores"],
+            -item["total_lds_stores"],
+            -item["count"],
+            item["example_bbs"][0],
+        ),
+    )
 
 
 def summarize_isa_events(events):
@@ -148,8 +311,11 @@ def summarize_isa_events(events):
         if len(store_windows) >= 16:
             break
 
+    store_block_details = summarize_store_basic_block_details(events)
     return {
         "store_blocks": store_blocks,
+        "store_block_details": store_block_details,
+        "store_motifs": summarize_store_motifs(store_block_details),
         "store_windows": store_windows,
         "pre_wmma_ds_load_b64_offsets": {
             base: values for base, values in sorted(lds_load_offsets.items())
@@ -380,6 +546,68 @@ def write_markdown(path, payload):
             for block in store_blocks:
                 ops = ", ".join(f"{op}={count}" for op, count in block["opcodes"].items())
                 lines.append(f"| `{block['bb']}` | {block['store_ops']} | `{ops}` |")
+            lines.append("")
+
+        store_details = event_summary.get("store_block_details", [])
+        store_motifs = event_summary.get("store_motifs", [])
+        if store_motifs:
+            lines += [
+                "### Store Motifs",
+                "",
+                "| Motif | Blocks | Example BBs | Buffer Stores | LDS Stores | LDS Loads | Store Offsets |",
+                "| ---: | ---: | --- | ---: | ---: | ---: | --- |",
+            ]
+            for i, motif in enumerate(store_motifs, 1):
+                offsets = []
+                for opcode, values in motif.get("store_offsets", {}).items():
+                    rendered = ",".join(
+                        f"{offset}:{count}" for offset, count in values.items()
+                    )
+                    offsets.append(f"{opcode}({rendered})")
+                lines.append(
+                    f"| {i} | {motif['count']} | `{', '.join(motif['example_bbs'])}` "
+                    f"| {motif['total_buffer_stores']} | {motif['total_lds_stores']} "
+                    f"| {motif['total_lds_loads']} | `{'; '.join(offsets)}` |"
+                )
+            lines.append("")
+
+        if store_details:
+            lines += [
+                "### Store Ownership Details",
+                "",
+                "| BB | Lines | Buffer Stores | LDS Stores | LDS Loads | Store Offsets | Predicate Ops |",
+                "| --- | ---: | ---: | ---: | ---: | --- | --- |",
+            ]
+            for block in store_details:
+                offsets = []
+                for opcode, values in block.get("store_offsets", {}).items():
+                    rendered = ",".join(
+                        f"{offset}:{count}" for offset, count in values.items()
+                    )
+                    offsets.append(f"{opcode}({rendered})")
+                predicate_ops = collections.Counter(item["opcode"] for item in block.get("predicates", []))
+                predicates = ", ".join(f"{op}={count}" for op, count in sorted(predicate_ops.items()))
+                lines.append(
+                    f"| `{block['bb']}` | `{block['line_range'][0]}-{block['line_range'][1]}` "
+                    f"| {block['buffer_store_count']} | {block['lds_store_count']} "
+                    f"| {block['lds_load_count']} | `{'; '.join(offsets)}` | `{predicates}` |"
+                )
+            lines.append("")
+
+            lines += ["#### First Store Blocks", ""]
+            for block in store_details[:8]:
+                lines.append(f"- `{block['bb']}` lines `{block['line_range'][0]}-{block['line_range'][1]}`")
+                for store in block["stores"][:8]:
+                    value = store.get("value", "?")
+                    address = store.get("address", "?")
+                    offsets = store.get("offsets", {})
+                    lines.append(
+                        f"  - line {store['line']}: `{store['opcode']}` value `{value}` "
+                        f"addr `{address}` offsets `{offsets}`"
+                    )
+                if block.get("predicates"):
+                    pred = "; ".join(item["text"] for item in block["predicates"][:4])
+                    lines.append(f"  - predicates: `{pred}`")
             lines.append("")
 
         store_windows = event_summary.get("store_windows", [])
