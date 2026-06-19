@@ -885,6 +885,15 @@
       "artifact": "cache/hrxv1/gfx1151/q6-vk64-h4load-static-20260618-225444/",
       "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_h4load_wg256.hsaco",
       "reason": "The Q6_K VK64 padded44 H4LOAD probe preserved the accepted p33 medium-route clone's BM64/BN64/BK32/WG256/wave64/11264-byte-LDS contract and changed LDS fragment reads from scalar half indexing to half4 chunk loads. This directly tested whether source-visible half4 reads could move the accepted narrow route toward the Qwen3 30B Q6_K p33 RADV medium topology: 16 WMMA sites, 48 ds_load_b64, 64 ds_load_u16_d16, 64 LDS b16 stores, and 96 buffer stores. It built through CMake/Ninja but is compile-equivalent to the accepted VK64 route for the tracked facts: wave64, SGPR=36, VGPR=59, LDS=11264, no spills, 8 visible v_wmma_f16_16x16x16_f16, 20 ds_load_2addr_b64, 0 ds_load_b64, 0 ds_load_u16_d16, 2 ds_store_b16, 16 global_store_b32, 2 s_barrier, and 58 s_waitcnt. Reject before runtime timing; this local HIP C++ load spelling does not expose the missing RADV cooperative load/store topology."
+    },
+    {
+      "id": "q6_dense_prompt_vk64_padded44_groupk2_correctness",
+      "date": "2026-06-18",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_groupk2_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_GROUPK2_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-groupk2-focused-20260618-230100/",
+      "compile_artifact": "cache/hrxv1/gfx1151/q6-vk64-groupk2-static-20260618-230019/",
+      "reason": "The Q6_K VK64 padded44 GROUPK2 probe changed the live fragment topology instead of just changing source load syntax: each wave preloads both K tiles' four A fragments plus one B fragment through nowait b64 LDS reads before issuing the eight WMMAs. This mechanically targeted RADV's p33 medium issue window, where 48 ds_load_b64 appear before the first WMMA with final lgkmcnt(40) and 16 WMMAs in the first window. The compile contract moved in the intended direction versus accepted VK64: wave64, SGPR=40, VGPR=101, LDS=11264, no spills, 40 ds_load_b64, 8 v_wmma_f16_16x16x16_f16, 16 global_store_b32, 2 barriers, 10 s_waitcnt, and 41 s_waitcnt_depctr. However, the scored first window only had 20 pre-WMMA ds_load_b64, final lgkmcnt(0), and 8 WMMAs, still short of RADV. Focused p33 CPU-reference failed all three rows with NaNs while route traces confirmed GROUPK2 selection. p512 and p513 non-steal CPU-reference gates passed and stayed on the existing VK128 provider. Reject before timing/model tests; the simple grouped nowait preload is not a correct substitute for RADV's cooperative load/WMMA schedule."
     }
   ]
 }
