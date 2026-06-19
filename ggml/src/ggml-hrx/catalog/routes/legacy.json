@@ -10910,6 +10910,94 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_bcopy_bufferstore_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_bcopy_bufferstore_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_bcopy_bufferstore_wg256",
+    "artifact_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_bcopy_bufferstore_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_bcopy_bufferstore_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 110,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q8_0_prompt_wmma16x16_vk128_padded_w64_b64group_packstage_bcopy_bufferstore_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q8_0 x F32 -> F32 MUL_MAT",
+      "k_multiple": 32,
+      "win_domain": "rows >= 8192 || k >= 8192",
+      "cols_min": 128,
+      "selector_gate": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_BCOPY_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "prior_delta": "Transfers the passing real-Q8 q8_wmma_repro array8-fullb-2phase-bcopy control into the catalog ABI without the rejected split-selected halfword LDS writeback helper. It preserves B64GROUP, packed ds_write_b32 A/B staging, selected-half raw buffer-store output, and explicit full B-fragment materialization before WMMA. This tests whether the raw B-copy fixture contract survives real model-derived rows before any performance claim."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_bcopy_bufferstore_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_correctness",
+      "selection": "Opt-in only. Built through CMake/Ninja and selected for the Llama 3.1 8B Q8_0 p512 focused rows in cache/hrxv1/gfx1151/q8_0-raw-bcopy-focused-20260619-103916/. The route improved the staged B-copy failure from NaN/ERR~2.7 to finite ERR around 0.25, but still failed ffn_out, ffn_gate, and result_output against CPU reference. Static evidence: wave64, LDS=20480, no private segment, 32 WMMA, 64 ds_load_b64, 128 buffer_store_b32, no halfword stage. Keep as diagnostic-only negative evidence."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
+    "id": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_abcopy_bufferstore_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_abcopy_bufferstore_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_abcopy_bufferstore_wg256",
+    "artifact_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_abcopy_bufferstore_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_abcopy_bufferstore_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 110,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q8_0_prompt_wmma16x16_vk128_padded_w64_b64group_packstage_abcopy_bufferstore_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q8_0 x F32 -> F32 MUL_MAT",
+      "k_multiple": 32,
+      "win_domain": "rows >= 8192 || k >= 8192",
+      "cols_min": 128,
+      "selector_gate": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_ABCOPY_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "prior_delta": "Transfers the cleanest real-Q8 q8_wmma_repro control into the catalog ABI: full A-fragment and B-fragment materialization before WMMA, B64GROUP, packed ds_write_b32 A/B staging, and selected-half raw buffer-store output. This is a bounded correctness probe after raw B-copy selected in real rows but failed finite error around 0.25."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_abcopy_bufferstore_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_correctness",
+      "selection": "Opt-in only. Built through CMake/Ninja and selected for the Llama 3.1 8B Q8_0 p512 focused rows in cache/hrxv1/gfx1151/q8_0-raw-abcopy-focused-20260619-104246/. Full A+B fragment materialization did not repair the catalog ABI transfer: ffn_out, ffn_gate, and result_output failed finite CPU-reference with ERR around 0.25, essentially matching the raw B-copy sibling. Static evidence: wave64, LDS=20480, no private segment, 32 WMMA, 64 ds_load_b64, 128 buffer_store_b32, no halfword stage. Keep as diagnostic-only negative evidence."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_nowait_namedfrag_packstage_bufferstore_f16acc_wg256_f32",
     "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_nowait_namedfrag_packstage_bufferstore_f16acc_wg256",
     "op": "MUL_MAT",

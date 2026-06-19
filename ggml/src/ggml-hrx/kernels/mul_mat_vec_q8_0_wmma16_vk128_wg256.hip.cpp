@@ -142,6 +142,10 @@
 #define HRX_Q8_0_WMMA_VK128_COPY_B_FRAG 0
 #endif
 
+#ifndef HRX_Q8_0_WMMA_VK128_COPY_A_FRAG
+#define HRX_Q8_0_WMMA_VK128_COPY_A_FRAG 0
+#endif
+
 #ifndef HRX_Q8_0_WMMA_VK128_COPY_B_FRAG_MIN_COL_SUB
 #define HRX_Q8_0_WMMA_VK128_COPY_B_FRAG_MIN_COL_SUB 0
 #endif
@@ -170,7 +174,7 @@ typedef __attribute__((address_space(3))) uint16_t * hrx_q8_0_wmma_vk128_lds_u16
 typedef const __attribute__((address_space(3))) uint16_t * hrx_q8_0_wmma_vk128_lds_const_u16_ptr;
 typedef __attribute__((address_space(3))) uint32_t * hrx_q8_0_wmma_vk128_lds_u32_ptr;
 
-#if HRX_Q8_0_WMMA_VK128_COPY_B_FRAG
+#if HRX_Q8_0_WMMA_VK128_COPY_A_FRAG || HRX_Q8_0_WMMA_VK128_COPY_B_FRAG
 static __device__ __forceinline__ hrx_q8_0_wmma_vk128_half16_vec hrx_q8_0_wmma_vk128_copy_frag(
         hrx_q8_0_wmma_vk128_half16_vec frag) {
     const hrx_q8_0_wmma_vk128_u32x8_vec in =
@@ -1694,6 +1698,12 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
 #endif
                 }
                 asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+#if HRX_Q8_0_WMMA_VK128_COPY_A_FRAG
+#pragma unroll
+                for (int row_sub = 0; row_sub < 4; ++row_sub) {
+                    a_frag[row_sub] = hrx_q8_0_wmma_vk128_copy_frag(a_frag[row_sub]);
+                }
+#endif
 #if HRX_Q8_0_WMMA_VK128_COPY_B_FRAG
 #pragma unroll
                 for (int col_sub = 0; col_sub < 4; ++col_sub) {
