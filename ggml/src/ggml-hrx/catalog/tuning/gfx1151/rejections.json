@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_dense_prompt_wmma16_vk128_b64group_bufferstore_p33_p512_p513",
+      "date": "2026-06-19",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk128_padded_w64_b64group_bufferstore_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK128_PADDED_W64_B64GROUP_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-wmma-vk128-b64group-bufferstore-focused-20260619-074930/",
+      "isa_artifact": "cache/hrxv1/gfx1151/q6-b64group-bufferstore-static-20260619-074858/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk128_padded_w64_b64group_bufferstore_wg256.hsaco",
+      "reason": "The Q6_K B64GROUP buffer-store probe filled the remaining untested raw-writeback axis for the dense VK128 direct-F32 WMMA family. It preserves the rejected B64GROUP fragment-read path and adds the gfx11 raw buffer-store descriptor used by Q5/Q8, building through CMake/Ninja as an opt-in catalog route. Static schedule facts were wave64, SGPR=40, VGPR=196, LDS=20480, no spills, 32 v_wmma_f16_16x16x16_f16, 64 LDS reads, 2 LDS writes, 128 VMEM stores, 119 waits, and 2 barriers. Focused CPU-reference gates passed for p33, p512, and p513; route traces proved p33 stayed on the accepted VK64 narrow route while p512 and p513 selected the new provider. Same-runner focused timing rejected the candidate versus the accepted VK128 default: p512 total 211869.442 -> 259294.026 us, with Vcur 1264.654 -> 2432.407 us, ffn_out 22716.399 -> 29124.536 us, and result_output 187888.389 -> 227737.083 us; p513 total 123684.994 -> 155826.953 us, with Vcur 1030.436 -> 1140.124 us, ffn_out 11604.048 -> 16796.850 us, and result_output 111050.510 -> 137889.980 us. The result matches Q5/Q8 negative evidence: raw buffer_store_b32 plus B64GROUP loads is not enough without RADV's cooperative halfword LDS load/store and lane-ownership topology."
+    },
+    {
       "id": "q8_0_dense_prompt_splitqsum_qpack_hoist_p512_p513",
       "date": "2026-06-19",
       "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_wg256_f32 and hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x112_splitqsum_wg256_f32",
