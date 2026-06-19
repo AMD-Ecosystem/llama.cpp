@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_wmma_contract192_copy_axis_probe",
+      "date": "2026-06-19",
+      "route": "hrx-hip-bench-q8-wmma-repro --mode=contract-direct192-raw/contract-direct192-bcopy/contract-direct192-abcopy",
+      "env": "standalone CMake/Ninja-built gfx1151 HIP bench diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/q8-contract192-copy-axis-20260619-135406/",
+      "isa_artifact": "cache/hrxv1/gfx1151/q8-contract192-copy-axis-20260619-135406/static/embedded/direct192-copy-axis-summary.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro with embedded .hip_fatbin gfx1151 object extracted to cache/hrxv1/gfx1151/q8-contract192-copy-axis-20260619-135406/static/embedded/gfx1151.o",
+      "reason": "The contract192 copy-axis probe tests whether the prior correctness-clean but spilling direct192 A+B-copy surface can be repaired by removing one or both fragment copies while preserving the same real Q8_0 dequant, full 192-store contract, f16 WMMA accumulation, and CMake/Ninja gfx1151 compilation. Raw <copy_a=false, copy_b=false> is resource-clean but wrong: rows=64 cols=64 and cols=33 both failed with 256 bad values and NaNs. Static embedded-fatbin evidence for raw is wave64, SGPR=62, VGPR=196, LDS=10240, private_segment=0, no spills, 32 WMMA, 64 ds_load_b64, 192 buffer_store_b32, and two barriers. B-copy <copy_a=false, copy_b=true> passes both p64 and p33 contract correctness with max_abs about 0.00269, proving that A copying is not required for this standalone correctness contract, but it is worse than the existing A+B-copy pressure cliff: wave64, SGPR=62, VGPR=256, LDS=10240, private_segment=280, and 85 VGPR spills with 120 scratch references. A+B-copy remains correctness-clean but still non-production: wave64, SGPR=62, VGPR=256, LDS=10240, private_segment=60, and 14 VGPR spills with 28 scratch references. Reject B-copy as a route template because it trades away A-copy without relieving the compiler cliff and actually increases spilling. The next Q8 parity work should not continue local fragment-copy pivots; it should target lower-level cooperative-store/lane ownership or another spelling that preserves raw-like resources while restoring the B-fragment correctness contract."
+    },
+    {
       "id": "q8_0_wmma_realdata_contract192_store_surface_probe",
       "date": "2026-06-19",
       "route": "hrx-hip-bench-q8-wmma-repro --mode=contract-direct192-abcopy/contract-phase96-abcopy",

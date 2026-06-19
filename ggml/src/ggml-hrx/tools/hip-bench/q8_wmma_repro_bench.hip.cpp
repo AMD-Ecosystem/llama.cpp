@@ -2440,7 +2440,13 @@ static int run_contract_case(const std::string & mode, int rows, int cols, int k
     HIP_CHECK(hipMemcpy(d_contract.ptr, h_contract.data(), h_contract.size() * sizeof(h_contract[0]), hipMemcpyHostToDevice));
 
     dim3 grid((rows + 63) / 64, (cols + 63) / 64, 1);
-    if (mode == "contract-direct192-abcopy") {
+    if (mode == "contract-direct192-raw") {
+        hipLaunchKernelGGL((q8_contract_direct192_repro_kernel<false, false>), grid, dim3(256, 1, 1), 0, 0,
+            d_q8.ptr, d_rhs.ptr, d_contract.ptr, k, rows, cols);
+    } else if (mode == "contract-direct192-bcopy") {
+        hipLaunchKernelGGL((q8_contract_direct192_repro_kernel<false, true>), grid, dim3(256, 1, 1), 0, 0,
+            d_q8.ptr, d_rhs.ptr, d_contract.ptr, k, rows, cols);
+    } else if (mode == "contract-direct192-abcopy") {
         hipLaunchKernelGGL((q8_contract_direct192_repro_kernel<true, true>), grid, dim3(256, 1, 1), 0, 0,
             d_q8.ptr, d_rhs.ptr, d_contract.ptr, k, rows, cols);
     } else if (mode == "contract-phase96-abcopy") {
@@ -3028,7 +3034,7 @@ int main(int argc, char ** argv) {
         } else if (std::strcmp(argv[i], "--dump-dir") == 0 && i + 1 < argc) {
             dump_dir = argv[++i];
         } else {
-            std::fprintf(stderr, "usage: %s [--mode array8-fullb|array16-direct-raw|array16-direct-raw-bcopy|array16-direct-raw-abcopy|contract-direct192-abcopy|contract-phase96-abcopy|phase96-bm128-abcopy|phase96-bm128-abcopy-backendlike|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|array8-fullb-2phase-bcopy|array8-fullb-2phase-bcopy-stage|array8-fullb-2phase-abcopy|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group0-bcopy-stage|single-group8|single-group8-consume|single-group8-opsel1|single-group8-bmirror0|single-group8-bcopy|single-group8-abcopy|single-group8-bcopy-stage|single-group8-abcopy-stage|single-group8-bcopy-stage-selected|single-group12|single-group12-consume|single-group12-opsel1|single-group12-bmirror0|single-group12-bcopy|single-group12-abcopy|single-group12-bcopy-stage|single-group12-abcopy-stage|single-group12-bcopy-stage-selected|single-group12-abcopy-stage-selected|single-group12-bcopy-stage-selected-acccopy|single-group12-abcopy-stage-selected-acccopy|single-group12-bcopy-stage-selected-regcopy|single-group12-abcopy-stage-selected-regcopy|single-group12-abcopy-dual-stage-raw-first|single-group12-abcopy-dual-stage-stage-first|single-group13|single-group13-consume|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c12-s0-bcopy-stage-selected|remap-c12-s0-abcopy-stage-selected|remap-c0-s12|remap-c0-s12-stage-selected|bfrag-dump|all] [--dump-dir <test-backend-ops dump dir>]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--mode array8-fullb|array16-direct-raw|array16-direct-raw-bcopy|array16-direct-raw-abcopy|contract-direct192-raw|contract-direct192-bcopy|contract-direct192-abcopy|contract-phase96-abcopy|phase96-bm128-abcopy|phase96-bm128-abcopy-backendlike|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|array8-fullb-2phase-bcopy|array8-fullb-2phase-bcopy-stage|array8-fullb-2phase-abcopy|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group0-bcopy-stage|single-group8|single-group8-consume|single-group8-opsel1|single-group8-bmirror0|single-group8-bcopy|single-group8-abcopy|single-group8-bcopy-stage|single-group8-abcopy-stage|single-group8-bcopy-stage-selected|single-group12|single-group12-consume|single-group12-opsel1|single-group12-bmirror0|single-group12-bcopy|single-group12-abcopy|single-group12-bcopy-stage|single-group12-abcopy-stage|single-group12-bcopy-stage-selected|single-group12-abcopy-stage-selected|single-group12-bcopy-stage-selected-acccopy|single-group12-abcopy-stage-selected-acccopy|single-group12-bcopy-stage-selected-regcopy|single-group12-abcopy-stage-selected-regcopy|single-group12-abcopy-dual-stage-raw-first|single-group12-abcopy-dual-stage-stage-first|single-group13|single-group13-consume|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c12-s0-bcopy-stage-selected|remap-c12-s0-abcopy-stage-selected|remap-c0-s12|remap-c0-s12-stage-selected|bfrag-dump|all] [--dump-dir <test-backend-ops dump dir>]\n", argv[0]);
             return 2;
         }
     }
@@ -3050,7 +3056,10 @@ int main(int argc, char ** argv) {
         status |= run_case(mode, rows, 64, k);
         status |= run_case(mode, rows, 33, k);
     }
-    if (mode == "contract-direct192-abcopy" || mode == "contract-phase96-abcopy") {
+    if (mode == "contract-direct192-raw" ||
+            mode == "contract-direct192-bcopy" ||
+            mode == "contract-direct192-abcopy" ||
+            mode == "contract-phase96-abcopy") {
         status |= run_contract_case(mode, rows, 64, k);
         status |= run_contract_case(mode, rows, 33, k);
     }
