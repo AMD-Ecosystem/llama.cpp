@@ -3,6 +3,18 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_direct_wmma_vk128_packstage_asmwmma_motif192_k2_directwait_realdata_perf",
+      "date": "2026-06-19",
+      "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_directwait_bufferstore_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_ASMWMMA_MOTIF192_K2_DIRECTWAIT_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-realdata-20260619-163905/",
+      "standalone_prior_artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-waitload-20260619-162840/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-realdata-20260619-163905/static/compare.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_directwait_bufferstore_wg256.hsaco",
+      "perf_artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-realdata-20260619-163905/p512/perf-compare.md and cache/hrxv1/gfx1151/q8-motif192-k2-realdata-20260619-163905/p513/perf-compare.md",
+      "reason": "This opt-in real-data catalog transfer combines the corrected motif192 wait-after-load writeback with the two-K directwait WMMA ladder from the standalone K2 motif repro. It is CMake/Ninja-built, embedded through the JSON catalog, and runtime-selectable only under the explicit env gate. Static comparison against the Llama 3.1 8B Q8_0 p512 RADV large oracle preserves several target headline counts: LDS=22528, 64 ds_load_b64, 32 v_wmma_f16_16x16x16_f16, 128 ds_store_b16, 128 ds_load_u16_d16, 192 buffer_store_b32, and wave64. The real-data catalog ABI does not preserve the no-spill standalone schedule: it compiles at SGPR=56, VGPR=256, private_segment=68, and 16 VGPR spills, with 31 instead of 32 WMMAs in the immediate hot window. Focused CPU-reference gates pass for p33, p512, and p513. Route traces prove p33 stays on existing narrow/default routes, while p512 and p513 select this provider only for ffn_out, ffn_gate, and result_output. Reject for promotion on focused same-runner timing: p512 regresses 1.845x total versus current default, with selected wide rows ffn_out 2.327x slower, ffn_gate 1.912x slower, and result_output 1.811x slower; p513 regresses 1.924x total, with selected wide rows ffn_out 2.151x slower, ffn_gate 1.938x slower, and result_output 1.932x slower. Keep the route opt-in as correctness-clean real-data spill-cliff evidence. The next Q8 work should not be another wrapper around the current real-data branch; it needs to preserve the standalone no-spill K2 motif source shape or lower the ABI pressure before timing."
+    },
+    {
       "id": "q8_0_direct_wmma_vk128_packstage_asmwmma_motif192_waitload_perf",
       "date": "2026-06-19",
       "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_bufferstore_f16acc_wg256_f32",

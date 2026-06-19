@@ -3,6 +3,14 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_direct_wmma_vk128_packstage_asmwmma_motif192_k2_realdata",
+      "date": "2026-06-19",
+      "correctness_artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-realdata-20260619-163905/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-realdata-20260619-163905/static/compare.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_directwait_bufferstore_wg256.hsaco",
+      "status": "rejected_static_spills_and_focused_perf_regression"
+    },
+    {
       "id": "q8_0_motif192_k2_waitload_issue_window_repro",
       "date": "2026-06-19",
       "artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-waitload-20260619-162840/",
