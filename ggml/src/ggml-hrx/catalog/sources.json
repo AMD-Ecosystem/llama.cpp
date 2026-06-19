@@ -485,6 +485,9 @@
   "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_abcopy_bufferstore_wg256": {
     "path": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_abcopy_bufferstore_wg256.hip.cpp"
   },
+  "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_mediumfrag12_combined96_packstage_bufferstore_wg256": {
+    "path": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_mediumfrag12_combined96_packstage_bufferstore_wg256.hip.cpp"
+  },
   "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_bufferstore_wg256": {
     "path": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_bufferstore_wg256.hip.cpp"
   },
