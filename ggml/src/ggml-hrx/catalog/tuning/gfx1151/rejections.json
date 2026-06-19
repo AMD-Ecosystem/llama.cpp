@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_wmma_group12_selected_only_stage_contract",
+      "date": "2026-06-19",
+      "route": "hrx-hip-bench-q8-wmma-repro --mode=single-group8-bcopy-stage-selected/single-group12-bcopy-stage-selected/single-group12-abcopy-stage-selected",
+      "env": "standalone CMake/Ninja-built gfx1151 HIP bench diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/q8-wmma-selected-only-stage-20260619-111309/",
+      "isa_artifact": "cache/hrxv1/gfx1151/q8-wmma-selected-only-stage-20260619-111309/static/selected-stage-symbol-summary.txt",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro plus extracted cache/hrxv1/gfx1151/q8-wmma-selected-only-stage-20260619-111309/static/gfx1151.o",
+      "reason": "The selected-only stage probe tests whether the group12 split-selected staged writeback failure was caused by the dummy OTHER_OPSEL halfword stores in hrx_q8_0_wmma_vk128_store_acc_f16_row_major_w64_fast_half_buffer_split_selected. It adds a standalone selected-only helper that writes and reloads only the selected OPSEL halfwords at the row-major offsets, preserving the real Q8 data path, explicit fragment-copy repair, one active output group, raw gfx11 buffer stores, and CMake/Ninja gfx1151 compilation. The group8 selected-only control passed p64 and p33 with no bad values, NaNs, infinities, or sentinels. Group12 still failed finite p64 correctness: bcopy selected-only had active=256, bad=16, max_abs=0.346383; abcopy selected-only had active=256, bad=16, max_abs=0.348336; neither produced NaNs or infinities. Static selected-symbol evidence confirms the intended reduction in halfword-stage surface: group8/group12 bcopy selected-only are wave64, no spills, LDS=10752, 8 WMMA, 64 B64 LDS reads, 6 halfword LDS stores, 4 halfword reloads, 4 buffer stores, and 81 v_mov_b32. Reject the dummy-other-write hypothesis. The remaining group12 failure follows the col_sub=3 B operand/accumulator/store lane contract even when only selected halfwords are staged; next probes should inspect the exact bad lane/row pattern or use a lower-level cooperative writeback primitive."
+    },
+    {
       "id": "q8_0_wmma_single_group_split_selected_stage_contract",
       "date": "2026-06-19",
       "route": "hrx-hip-bench-q8-wmma-repro --mode=single-group0-bcopy-stage/single-group8-bcopy-stage/single-group8-abcopy-stage/single-group12-bcopy-stage/single-group12-abcopy-stage",
