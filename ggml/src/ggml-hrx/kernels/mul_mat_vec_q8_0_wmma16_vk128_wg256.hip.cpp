@@ -74,6 +74,10 @@
 #define HRX_Q8_0_WMMA_VK128_W64_B64GROUP_PREUSE_FRAGS 0
 #endif
 
+#ifndef HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT
+#define HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT 0
+#endif
+
 #ifndef HRX_Q8_0_WMMA_VK128_STORE_STAGE
 #define HRX_Q8_0_WMMA_VK128_STORE_STAGE 0
 #endif
@@ -130,6 +134,7 @@ struct hrx_block_q8_0_wmma_vk128_lhs {
 typedef _Float16 hrx_q8_0_wmma_vk128_half16_vec __attribute__((ext_vector_type(16)));
 typedef _Float16 hrx_q8_0_wmma_vk128_half8_vec __attribute__((ext_vector_type(8)));
 typedef _Float16 hrx_q8_0_wmma_vk128_half4_vec __attribute__((ext_vector_type(4)));
+typedef uint32_t hrx_q8_0_wmma_vk128_u32x8_vec __attribute__((ext_vector_type(8)));
 typedef const __attribute__((address_space(3))) _Float16 * hrx_q8_0_wmma_vk128_lds_half_ptr;
 typedef volatile __attribute__((address_space(3))) _Float16 * hrx_q8_0_wmma_vk128_lds_volatile_half_ptr;
 typedef __attribute__((address_space(3))) uint16_t * hrx_q8_0_wmma_vk128_lds_u16_ptr;
@@ -150,6 +155,110 @@ static __device__ __forceinline__ void hrx_q8_0_wmma_vk128_preuse_fragments(
         "v"(a0), "v"(a1), "v"(a2), "v"(a3),
         "v"(b0), "v"(b1), "v"(b2), "v"(b3) : "memory");
 }
+#endif
+
+#if HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT
+template <int wait_lgkmcnt>
+static __device__ __forceinline__ hrx_q8_0_wmma_vk128_half16_vec hrx_q8_0_wmma_vk128_dep_copy_initial(
+        hrx_q8_0_wmma_vk128_half16_vec src,
+        hrx_q8_0_wmma_vk128_half16_vec dep0,
+        hrx_q8_0_wmma_vk128_half16_vec dep1,
+        hrx_q8_0_wmma_vk128_half16_vec dep2,
+        hrx_q8_0_wmma_vk128_half16_vec dep3,
+        hrx_q8_0_wmma_vk128_half16_vec dep4,
+        hrx_q8_0_wmma_vk128_half16_vec dep5,
+        hrx_q8_0_wmma_vk128_half16_vec dep6) {
+    const hrx_q8_0_wmma_vk128_u32x8_vec in =
+        __builtin_bit_cast(hrx_q8_0_wmma_vk128_u32x8_vec, src);
+    hrx_q8_0_wmma_vk128_u32x8_vec out;
+    asm volatile("s_waitcnt lgkmcnt(%16)\n\t"
+                 "v_mov_b32 %0, %8\n\t"
+                 "v_mov_b32 %1, %9\n\t"
+                 "v_mov_b32 %2, %10\n\t"
+                 "v_mov_b32 %3, %11\n\t"
+                 "v_mov_b32 %4, %12\n\t"
+                 "v_mov_b32 %5, %13\n\t"
+                 "v_mov_b32 %6, %14\n\t"
+                 "v_mov_b32 %7, %15\n\t"
+                 : "=v"(out[0]), "=v"(out[1]), "=v"(out[2]), "=v"(out[3]),
+                   "=v"(out[4]), "=v"(out[5]), "=v"(out[6]), "=v"(out[7])
+                 : "v"(in[0]), "v"(in[1]), "v"(in[2]), "v"(in[3]),
+                   "v"(in[4]), "v"(in[5]), "v"(in[6]), "v"(in[7]),
+                   "n"(wait_lgkmcnt),
+                   "v"(dep0), "v"(dep1), "v"(dep2), "v"(dep3),
+                   "v"(dep4), "v"(dep5), "v"(dep6)
+                 : "memory");
+    return __builtin_bit_cast(hrx_q8_0_wmma_vk128_half16_vec, out);
+}
+
+template <int wait_lgkmcnt>
+static __device__ __forceinline__ hrx_q8_0_wmma_vk128_half16_vec hrx_q8_0_wmma_vk128_dep_copy_after_acc(
+        hrx_q8_0_wmma_vk128_half16_vec src,
+        hrx_q8_0_wmma_vk128_half16_vec token,
+        hrx_q8_0_wmma_vk128_half8_vec prev_acc) {
+    const hrx_q8_0_wmma_vk128_u32x8_vec in =
+        __builtin_bit_cast(hrx_q8_0_wmma_vk128_u32x8_vec, src);
+    hrx_q8_0_wmma_vk128_u32x8_vec out;
+    asm volatile("s_waitcnt lgkmcnt(%16)\n\t"
+                 "v_mov_b32 %0, %8\n\t"
+                 "v_mov_b32 %1, %9\n\t"
+                 "v_mov_b32 %2, %10\n\t"
+                 "v_mov_b32 %3, %11\n\t"
+                 "v_mov_b32 %4, %12\n\t"
+                 "v_mov_b32 %5, %13\n\t"
+                 "v_mov_b32 %6, %14\n\t"
+                 "v_mov_b32 %7, %15\n\t"
+                 : "=v"(out[0]), "=v"(out[1]), "=v"(out[2]), "=v"(out[3]),
+                   "=v"(out[4]), "=v"(out[5]), "=v"(out[6]), "=v"(out[7])
+                 : "v"(in[0]), "v"(in[1]), "v"(in[2]), "v"(in[3]),
+                   "v"(in[4]), "v"(in[5]), "v"(in[6]), "v"(in[7]),
+                   "n"(wait_lgkmcnt), "v"(token), "v"(prev_acc)
+                 : "memory");
+    return __builtin_bit_cast(hrx_q8_0_wmma_vk128_half16_vec, out);
+}
+
+static __device__ __forceinline__ hrx_q8_0_wmma_vk128_half16_vec hrx_q8_0_wmma_vk128_dep_copy_after_token(
+        hrx_q8_0_wmma_vk128_half16_vec src,
+        hrx_q8_0_wmma_vk128_half16_vec token) {
+    const hrx_q8_0_wmma_vk128_u32x8_vec in =
+        __builtin_bit_cast(hrx_q8_0_wmma_vk128_u32x8_vec, src);
+    hrx_q8_0_wmma_vk128_u32x8_vec out;
+    asm volatile("v_mov_b32 %0, %8\n\t"
+                 "v_mov_b32 %1, %9\n\t"
+                 "v_mov_b32 %2, %10\n\t"
+                 "v_mov_b32 %3, %11\n\t"
+                 "v_mov_b32 %4, %12\n\t"
+                 "v_mov_b32 %5, %13\n\t"
+                 "v_mov_b32 %6, %14\n\t"
+                 "v_mov_b32 %7, %15\n\t"
+                 : "=v"(out[0]), "=v"(out[1]), "=v"(out[2]), "=v"(out[3]),
+                   "=v"(out[4]), "=v"(out[5]), "=v"(out[6]), "=v"(out[7])
+                 : "v"(in[0]), "v"(in[1]), "v"(in[2]), "v"(in[3]),
+                   "v"(in[4]), "v"(in[5]), "v"(in[6]), "v"(in[7]),
+                   "v"(token)
+                 : "memory");
+    return __builtin_bit_cast(hrx_q8_0_wmma_vk128_half16_vec, out);
+}
+
+#define HRX_Q8_0_WMMA_VK128_DEP_WMMA_INITIAL(TILE, A, B, W, D0, D1, D2, D3, D4, D5, D6) \
+    do { \
+        const hrx_q8_0_wmma_vk128_half16_vec a_dep = \
+            hrx_q8_0_wmma_vk128_dep_copy_initial<W>((A), (D0), (D1), (D2), (D3), (D4), (D5), (D6)); \
+        const hrx_q8_0_wmma_vk128_half16_vec b_dep = \
+            hrx_q8_0_wmma_vk128_dep_copy_after_token((B), a_dep); \
+        acc[TILE] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64( \
+            a_dep, b_dep, acc[TILE], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0); \
+    } while (0)
+
+#define HRX_Q8_0_WMMA_VK128_DEP_WMMA_AFTER(TILE, A, B, W, TOKEN, PREV) \
+    do { \
+        const hrx_q8_0_wmma_vk128_half16_vec a_dep = \
+            hrx_q8_0_wmma_vk128_dep_copy_after_acc<W>((A), (TOKEN), acc[PREV]); \
+        const hrx_q8_0_wmma_vk128_half16_vec b_dep = \
+            hrx_q8_0_wmma_vk128_dep_copy_after_token((B), a_dep); \
+        acc[TILE] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64( \
+            a_dep, b_dep, acc[TILE], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0); \
+    } while (0)
 #endif
 
 #if HRX_Q8_0_WMMA_VK128_BUFFER_STORE
@@ -1108,6 +1217,24 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
 #if HRX_Q8_0_WMMA_VK128_W64_B64GROUP_PREUSE_FRAGS
                 hrx_q8_0_wmma_vk128_preuse_fragments(a0, a1, a2, a3, b0, b1, b2, b3);
 #endif
+#if HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT
+                HRX_Q8_0_WMMA_VK128_DEP_WMMA_INITIAL(0, a0, b0, 51, a1, a2, a3, b0, b1, b2, b3);
+                HRX_Q8_0_WMMA_VK128_DEP_WMMA_AFTER(1, a1, b0, 47, a0, 0);
+                HRX_Q8_0_WMMA_VK128_DEP_WMMA_AFTER(2, a2, b0, 43, a1, 1);
+                HRX_Q8_0_WMMA_VK128_DEP_WMMA_AFTER(3, a3, b0, 39, a2, 2);
+                HRX_Q8_0_WMMA_VK128_DEP_WMMA_AFTER(4, a0, b1, 40, a3, 3);
+                HRX_Q8_0_WMMA_VK128_DEP_WMMA_AFTER(5, a1, b1, 36, b1, 4);
+                HRX_Q8_0_WMMA_VK128_DEP_WMMA_AFTER(6, a2, b1, 32, a1, 5);
+                HRX_Q8_0_WMMA_VK128_DEP_WMMA_AFTER(7, a3, b1, 24, a2, 6);
+                HRX_Q8_0_WMMA_VK128_DEP_WMMA_AFTER(8, a0, b2, 20, a3, 7);
+                HRX_Q8_0_WMMA_VK128_DEP_WMMA_AFTER(9, a1, b2, 16, b2, 8);
+                HRX_Q8_0_WMMA_VK128_DEP_WMMA_AFTER(10, a2, b2, 12, a1, 9);
+                HRX_Q8_0_WMMA_VK128_DEP_WMMA_AFTER(11, a3, b2, 8, a2, 10);
+                HRX_Q8_0_WMMA_VK128_DEP_WMMA_AFTER(12, a0, b3, 4, a3, 11);
+                HRX_Q8_0_WMMA_VK128_DEP_WMMA_AFTER(13, a1, b3, 0, b3, 12);
+                HRX_Q8_0_WMMA_VK128_DEP_WMMA_AFTER(14, a2, b3, 0, a1, 13);
+                HRX_Q8_0_WMMA_VK128_DEP_WMMA_AFTER(15, a3, b3, 0, a2, 14);
+#else
 #if HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STAGED_WAIT
                 asm volatile("s_waitcnt lgkmcnt(%0)\n" :: "n"(HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STAGED_WAIT0) : "memory");
 #else
@@ -1138,6 +1265,7 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
                 acc[13] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a1, b3, acc[13], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
                 acc[14] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a2, b3, acc[14], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
                 acc[15] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a3, b3, acc[15], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+#endif
 #else
                 hrx_q8_0_wmma_vk128_half16_vec b_frag[4];
 #pragma unroll

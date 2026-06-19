@@ -753,6 +753,15 @@
       "artifact": "cache/hrxv1/gfx1151/q8_0-nowait-namedfrag-preuse-stagedwait-packstage-score-20260618-continued/",
       "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_nowait_namedfrag_preuse_stagedwait_packstage_bufferstore_wg256.hsaco",
       "reason": "The preuse staged-wait probe combined the prior all-fragment preuse dependency with a wider staged wait ladder at lgkmcnt(24), lgkmcnt(16), lgkmcnt(8), and lgkmcnt(0), testing whether HIP C++ can keep the preuse-created 32-load window partially outstanding before the first WMMA. It built through CMake/Ninja with wave64, SGPR=28, VGPR=212, LDS=20480, no spills, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 2 ds_store_b32, 128 buffer_store_b32, 2 s_barrier, 14 s_waitcnt, and 44 s_waitcnt_depctr. It is rejected at compile-contract gate: the nonzero waits were emitted, but the final pre-WMMA score became 32 pre-WMMA ds_load_b64, 0 loads immediately before the final wait, final lgkmcnt=0, and 16 WMMA in the first window. RADV remains 59 / 59 / lgkmcnt=51 / 22 WMMA with VGPR=192 and the halfword LDS plus 192-store topology."
+    },
+    {
+      "id": "q8_0_direct_wmma_vk128_nowait_namedfrag_depwait_issue_window",
+      "date": "2026-06-18",
+      "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_nowait_namedfrag_depwait_packstage_bufferstore_f16acc_wg256_f32",
+      "env": "not runtime-selected",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-depwait-realfrag-compile-20260618-174000/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_nowait_namedfrag_depwait_packstage_bufferstore_wg256.hsaco",
+      "reason": "The depwait real-fragment probe ports the accepted CMake WMMA issue-window diagnostic into the real Q8_0 direct-WMMA path by copying real A/B fragments through dependency-pinned inline asm and emitting a RADV-like wait ladder. It built through CMake/Ninja with wave64, SGPR=28, VGPR=240, LDS=20480, no spills, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 128 buffer_store_b32, 2 s_barrier, 38 s_waitcnt, and 44 s_waitcnt_depctr. It is rejected at compile-contract gate, before runtime selection: it preserves final pre-WMMA lgkmcnt=51 and the wait ladder, but the real-fragment source only presents one k_tile at a time, so the first-WMMA score is 32 pre-WMMA ds_load_b64 and 32 loads immediately before the final wait rather than RADV's 59 and 59. VGPR pressure also rises to 240 versus RADV's 192."
     }
   ]
 }
