@@ -99,16 +99,35 @@ static __device__ __forceinline__ uint64_t wmma_lane_map_ds_read_b64_nowait(
     return value;
 }
 
+static __device__ __forceinline__ uint64_t wmma_lane_map_ds_read_b64_wait(
+        const __attribute__((address_space(3))) uint64_t * ptr) {
+    uint64_t value = 0;
+    asm volatile("ds_read_b64 %0, %1 offset:0\n"
+                 : "=v"(value)
+                 : "v"(ptr)
+                 : "memory");
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    return value;
+}
+
+template <bool wait_each_load>
 static __device__ __forceinline__ wmma_lane_map_half16_vec wmma_lane_map_load_lds_fragment(
         const __attribute__((address_space(3))) uint64_t * base,
         unsigned int lane,
         unsigned int frag) {
     const unsigned int index = frag * 256u + lane * 4u;
     wmma_lane_map_u64x4_vec raw;
-    raw[0] = wmma_lane_map_ds_read_b64_nowait(base + index + 0u);
-    raw[1] = wmma_lane_map_ds_read_b64_nowait(base + index + 1u);
-    raw[2] = wmma_lane_map_ds_read_b64_nowait(base + index + 2u);
-    raw[3] = wmma_lane_map_ds_read_b64_nowait(base + index + 3u);
+    if constexpr (wait_each_load) {
+        raw[0] = wmma_lane_map_ds_read_b64_wait(base + index + 0u);
+        raw[1] = wmma_lane_map_ds_read_b64_wait(base + index + 1u);
+        raw[2] = wmma_lane_map_ds_read_b64_wait(base + index + 2u);
+        raw[3] = wmma_lane_map_ds_read_b64_wait(base + index + 3u);
+    } else {
+        raw[0] = wmma_lane_map_ds_read_b64_nowait(base + index + 0u);
+        raw[1] = wmma_lane_map_ds_read_b64_nowait(base + index + 1u);
+        raw[2] = wmma_lane_map_ds_read_b64_nowait(base + index + 2u);
+        raw[3] = wmma_lane_map_ds_read_b64_nowait(base + index + 3u);
+    }
     return __builtin_bit_cast(wmma_lane_map_half16_vec, raw);
 }
 
@@ -290,7 +309,7 @@ void wmma_f16_full64_store_contract_probe(
     }
 }
 
-template <bool use_lds_fragments>
+template <bool use_lds_fragments, bool wait_each_load = false>
 __global__ __launch_bounds__(64, 1)
 void wmma_f16_fulltile_probe(float * dst) {
     __shared__ uint64_t sh[16 * 64 * 4];
@@ -317,8 +336,8 @@ void wmma_f16_fulltile_probe(float * dst) {
             (const __attribute__((address_space(3))) uint64_t *) sh;
 #pragma unroll
         for (unsigned int i = 0; i < 4u; ++i) {
-            a[i] = wmma_lane_map_load_lds_fragment(lds, lane, i);
-            b[i] = wmma_lane_map_load_lds_fragment(lds, lane, i + 4u);
+            a[i] = wmma_lane_map_load_lds_fragment<wait_each_load>(lds, lane, i);
+            b[i] = wmma_lane_map_load_lds_fragment<wait_each_load>(lds, lane, i + 4u);
         }
         asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
     } else {
@@ -346,6 +365,228 @@ void wmma_f16_fulltile_probe(float * dst) {
         for (int row = 0; row < 4; ++row) {
             const int tile = col * 4 + row;
             acc[tile] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a[row], b[col], acc[tile], false);
+        }
+    }
+
+#pragma unroll
+    for (int tile = 0; tile < 16; ++tile) {
+#pragma unroll
+        for (int slot = 0; slot < 8; ++slot) {
+            dst[wmma_lane_map_fulltile_index(static_cast<unsigned int>(tile), lane, static_cast<unsigned int>(slot))] =
+                static_cast<float>(acc[tile][slot]);
+        }
+    }
+}
+
+template <bool wait_each_load = false>
+__global__ __launch_bounds__(64, 1)
+void wmma_f16_fulltile_lds_k2_probe(float * dst) {
+    __shared__ uint64_t sh[16 * 64 * 4];
+    const unsigned int lane = __builtin_amdgcn_workitem_id_x() & 63u;
+
+#pragma unroll
+    for (unsigned int frag = 0; frag < 16u; ++frag) {
+#pragma unroll
+        for (unsigned int item = 0; item < 4u; ++item) {
+            const uint64_t half_bits = static_cast<uint64_t>(0x3c00u + ((frag + item + lane) & 7u));
+            const uint64_t packed = half_bits | (half_bits << 16) | (half_bits << 32) | (half_bits << 48);
+            sh[frag * 256u + lane * 4u + item] = packed;
+        }
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+
+    const __attribute__((address_space(3))) uint64_t * lds =
+        (const __attribute__((address_space(3))) uint64_t *) sh;
+    wmma_lane_map_half16_vec a[2][4];
+    wmma_lane_map_half16_vec b[2][4];
+#pragma unroll
+    for (unsigned int k_tile = 0; k_tile < 2u; ++k_tile) {
+#pragma unroll
+        for (unsigned int i = 0; i < 4u; ++i) {
+            a[k_tile][i] = wmma_lane_map_load_lds_fragment<wait_each_load>(lds, lane, k_tile * 8u + i);
+            b[k_tile][i] = wmma_lane_map_load_lds_fragment<wait_each_load>(lds, lane, k_tile * 8u + i + 4u);
+        }
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+
+    wmma_lane_map_half8_vec acc[16];
+#pragma unroll
+    for (int tile = 0; tile < 16; ++tile) {
+#pragma unroll
+        for (int i = 0; i < 8; ++i) {
+            acc[tile][i] = static_cast<_Float16>(0.0f);
+        }
+    }
+
+#pragma unroll
+    for (int k_tile = 0; k_tile < 2; ++k_tile) {
+#pragma unroll
+        for (int col = 0; col < 4; ++col) {
+#pragma unroll
+            for (int row = 0; row < 4; ++row) {
+                const int tile = col * 4 + row;
+                acc[tile] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
+                    a[k_tile][row],
+                    b[k_tile][col],
+                    acc[tile],
+                    false);
+            }
+        }
+    }
+
+#pragma unroll
+    for (int tile = 0; tile < 16; ++tile) {
+#pragma unroll
+        for (int slot = 0; slot < 8; ++slot) {
+            dst[wmma_lane_map_fulltile_index(static_cast<unsigned int>(tile), lane, static_cast<unsigned int>(slot))] =
+                static_cast<float>(acc[tile][slot]);
+        }
+    }
+}
+
+template <bool wait_each_load = false, int repeats = 128, uint16_t base_half_bits = 0x3400u>
+__global__ __launch_bounds__(64, 1)
+void wmma_f16_fulltile_lds_repeat_probe(float * dst) {
+    __shared__ uint64_t sh[16 * 64 * 4];
+    const unsigned int lane = __builtin_amdgcn_workitem_id_x() & 63u;
+
+#pragma unroll
+    for (unsigned int frag = 0; frag < 16u; ++frag) {
+#pragma unroll
+        for (unsigned int item = 0; item < 4u; ++item) {
+            const uint64_t half_bits = static_cast<uint64_t>(base_half_bits + ((frag + item + lane) & 7u));
+            const uint64_t packed = half_bits | (half_bits << 16) | (half_bits << 32) | (half_bits << 48);
+            sh[frag * 256u + lane * 4u + item] = packed;
+        }
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+
+    const __attribute__((address_space(3))) uint64_t * lds =
+        (const __attribute__((address_space(3))) uint64_t *) sh;
+    wmma_lane_map_half16_vec a[2][4];
+    wmma_lane_map_half16_vec b[2][4];
+#pragma unroll
+    for (unsigned int k_tile = 0; k_tile < 2u; ++k_tile) {
+#pragma unroll
+        for (unsigned int i = 0; i < 4u; ++i) {
+            a[k_tile][i] = wmma_lane_map_load_lds_fragment<wait_each_load>(lds, lane, k_tile * 8u + i);
+            b[k_tile][i] = wmma_lane_map_load_lds_fragment<wait_each_load>(lds, lane, k_tile * 8u + i + 4u);
+        }
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+
+    wmma_lane_map_half8_vec acc[16];
+#pragma unroll
+    for (int tile = 0; tile < 16; ++tile) {
+#pragma unroll
+        for (int i = 0; i < 8; ++i) {
+            acc[tile][i] = static_cast<_Float16>(0.0f);
+        }
+    }
+
+    for (int iter = 0; iter < repeats; ++iter) {
+#pragma unroll
+        for (int k_tile = 0; k_tile < 2; ++k_tile) {
+#pragma unroll
+            for (int col = 0; col < 4; ++col) {
+#pragma unroll
+                for (int row = 0; row < 4; ++row) {
+                    const int tile = col * 4 + row;
+                    acc[tile] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
+                        a[k_tile][row],
+                        b[k_tile][col],
+                        acc[tile],
+                        false);
+                }
+            }
+        }
+    }
+
+#pragma unroll
+    for (int tile = 0; tile < 16; ++tile) {
+#pragma unroll
+        for (int slot = 0; slot < 8; ++slot) {
+            dst[wmma_lane_map_fulltile_index(static_cast<unsigned int>(tile), lane, static_cast<unsigned int>(slot))] =
+                static_cast<float>(acc[tile][slot]);
+        }
+    }
+}
+
+static __device__ __forceinline__ wmma_lane_map_half16_vec wmma_lane_map_load_prod_stride44_fragment(
+        const __attribute__((address_space(3))) uint16_t * sh,
+        unsigned int major,
+        unsigned int k_tile) {
+    constexpr unsigned int STRIDE = 44;
+    const unsigned int k_base = k_tile * 16u;
+    const __attribute__((address_space(3))) uint16_t * ptr = sh + major * STRIDE + k_base;
+    wmma_lane_map_u64x4_vec raw;
+    raw[0] = wmma_lane_map_ds_read_b64_nowait((const __attribute__((address_space(3))) uint64_t *) (ptr + 0u));
+    raw[1] = wmma_lane_map_ds_read_b64_nowait((const __attribute__((address_space(3))) uint64_t *) (ptr + 4u));
+    raw[2] = wmma_lane_map_ds_read_b64_nowait((const __attribute__((address_space(3))) uint64_t *) (ptr + 8u));
+    raw[3] = wmma_lane_map_ds_read_b64_nowait((const __attribute__((address_space(3))) uint64_t *) (ptr + 12u));
+    return __builtin_bit_cast(wmma_lane_map_half16_vec, raw);
+}
+
+template <uint16_t base_half_bits = 0x3c00u>
+__global__ __launch_bounds__(64, 1)
+void wmma_f16_fulltile_prodstride_k2_probe(float * dst) {
+    __shared__ uint16_t sh_a[64 * 44];
+    __shared__ uint16_t sh_b[64 * 44];
+    const unsigned int lane = __builtin_amdgcn_workitem_id_x() & 63u;
+
+    for (unsigned int index = lane; index < 64u * 44u; index += 64u) {
+        sh_a[index] = static_cast<uint16_t>(base_half_bits + ((index + lane) & 7u));
+        sh_b[index] = static_cast<uint16_t>(base_half_bits + ((index + 3u * lane) & 7u));
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+
+    const __attribute__((address_space(3))) uint16_t * lds_a =
+        (const __attribute__((address_space(3))) uint16_t *) sh_a;
+    const __attribute__((address_space(3))) uint16_t * lds_b =
+        (const __attribute__((address_space(3))) uint16_t *) sh_b;
+
+    wmma_lane_map_half16_vec a[2][4];
+    wmma_lane_map_half16_vec b[2][4];
+#pragma unroll
+    for (unsigned int k_tile = 0; k_tile < 2u; ++k_tile) {
+#pragma unroll
+        for (unsigned int row_sub = 0; row_sub < 4u; ++row_sub) {
+            const unsigned int row = row_sub * 16u + (lane & 15u);
+            a[k_tile][row_sub] = wmma_lane_map_load_prod_stride44_fragment(lds_a, row, k_tile);
+        }
+#pragma unroll
+        for (unsigned int col_sub = 0; col_sub < 4u; ++col_sub) {
+            const unsigned int col = col_sub * 16u + (lane & 15u);
+            b[k_tile][col_sub] = wmma_lane_map_load_prod_stride44_fragment(lds_b, col, k_tile);
+        }
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+
+    wmma_lane_map_half8_vec acc[16];
+#pragma unroll
+    for (int tile = 0; tile < 16; ++tile) {
+#pragma unroll
+        for (int i = 0; i < 8; ++i) {
+            acc[tile][i] = static_cast<_Float16>(0.0f);
+        }
+    }
+
+#pragma unroll
+    for (int k_tile = 0; k_tile < 2; ++k_tile) {
+#pragma unroll
+        for (int col = 0; col < 4; ++col) {
+#pragma unroll
+            for (int row = 0; row < 4; ++row) {
+                const int tile = col * 4 + row;
+                acc[tile] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
+                    a[k_tile][row],
+                    b[k_tile][col],
+                    acc[tile],
+                    false);
+            }
         }
     }
 
@@ -519,14 +760,14 @@ static int run_basic_lane_map() {
     return 0;
 }
 
-template <bool use_lds_fragments>
+template <bool use_lds_fragments, bool wait_each_load = false>
 static int run_fulltile_probe(const char * mode) {
     const size_t count = 16u * HRX_WMMA_LANE_MAP_LANES * HRX_WMMA_LANE_MAP_ACC_SLOTS;
     device_buffer<float> d_out(count);
     std::vector<float> h_out(count, 0.0f);
 
     HIP_CHECK(hipMemset(d_out.ptr, 0, count * sizeof(float)));
-    hipLaunchKernelGGL((wmma_f16_fulltile_probe<use_lds_fragments>), dim3(1), dim3(64), 0, 0, d_out.ptr);
+    hipLaunchKernelGGL((wmma_f16_fulltile_probe<use_lds_fragments, wait_each_load>), dim3(1), dim3(64), 0, 0, d_out.ptr);
     HIP_CHECK(hipGetLastError());
     HIP_CHECK(hipDeviceSynchronize());
     HIP_CHECK(hipMemcpy(h_out.data(), d_out.ptr, count * sizeof(float), hipMemcpyDeviceToHost));
@@ -593,6 +834,156 @@ static int run_fulltile_probe(const char * mode) {
         return 1;
     }
     return 0;
+}
+
+template <bool wait_each_load = false>
+static int run_fulltile_lds_k2_probe(const char * mode) {
+    const size_t count = 16u * HRX_WMMA_LANE_MAP_LANES * HRX_WMMA_LANE_MAP_ACC_SLOTS;
+    device_buffer<float> d_out(count);
+    std::vector<float> h_out(count, 0.0f);
+
+    HIP_CHECK(hipMemset(d_out.ptr, 0, count * sizeof(float)));
+    hipLaunchKernelGGL((wmma_f16_fulltile_lds_k2_probe<wait_each_load>), dim3(1), dim3(64), 0, 0, d_out.ptr);
+    HIP_CHECK(hipGetLastError());
+    HIP_CHECK(hipDeviceSynchronize());
+    HIP_CHECK(hipMemcpy(h_out.data(), d_out.ptr, count * sizeof(float), hipMemcpyDeviceToHost));
+
+    size_t nan_count = 0;
+    size_t nan_even_slots = 0;
+    size_t nan_odd_slots = 0;
+    size_t first_nan = count;
+    for (unsigned int tile = 0; tile < 16u; ++tile) {
+        for (unsigned int lane = 0; lane < HRX_WMMA_LANE_MAP_LANES; ++lane) {
+            for (unsigned int slot = 0; slot < HRX_WMMA_LANE_MAP_ACC_SLOTS; ++slot) {
+                const size_t idx = wmma_lane_map_fulltile_index(tile, lane, slot);
+                if (!is_nan(h_out[idx])) {
+                    continue;
+                }
+                if (first_nan == count) {
+                    first_nan = idx;
+                }
+                if ((slot & 1u) == 0u) {
+                    ++nan_even_slots;
+                } else {
+                    ++nan_odd_slots;
+                }
+                ++nan_count;
+            }
+        }
+    }
+
+    std::printf("wmma-f16-fulltile-k2 mode=%s elements=%zu nan=%zu nan_even=%zu nan_odd=%zu",
+        mode, h_out.size(), nan_count, nan_even_slots, nan_odd_slots);
+    if (first_nan != count) {
+        const unsigned int slot = first_nan % HRX_WMMA_LANE_MAP_ACC_SLOTS;
+        const unsigned int lane = (first_nan / HRX_WMMA_LANE_MAP_ACC_SLOTS) % HRX_WMMA_LANE_MAP_LANES;
+        const unsigned int tile = first_nan / (HRX_WMMA_LANE_MAP_ACC_SLOTS * HRX_WMMA_LANE_MAP_LANES);
+        std::printf(" first_nan_tile=%u first_nan_lane=%u first_nan_slot=%u", tile, lane, slot);
+    }
+    std::printf("\n");
+
+    return nan_count == 0 ? 0 : 1;
+}
+
+template <bool wait_each_load = false, uint16_t base_half_bits = 0x3400u>
+static int run_fulltile_lds_repeat_probe(const char * mode) {
+    const size_t count = 16u * HRX_WMMA_LANE_MAP_LANES * HRX_WMMA_LANE_MAP_ACC_SLOTS;
+    device_buffer<float> d_out(count);
+    std::vector<float> h_out(count, 0.0f);
+
+    HIP_CHECK(hipMemset(d_out.ptr, 0, count * sizeof(float)));
+    hipLaunchKernelGGL((wmma_f16_fulltile_lds_repeat_probe<wait_each_load, 128, base_half_bits>), dim3(1), dim3(64), 0, 0, d_out.ptr);
+    HIP_CHECK(hipGetLastError());
+    HIP_CHECK(hipDeviceSynchronize());
+    HIP_CHECK(hipMemcpy(h_out.data(), d_out.ptr, count * sizeof(float), hipMemcpyDeviceToHost));
+
+    size_t nan_count = 0;
+    size_t nan_even_slots = 0;
+    size_t nan_odd_slots = 0;
+    size_t inf_even_slots = 0;
+    size_t first_nan = count;
+    for (unsigned int tile = 0; tile < 16u; ++tile) {
+        for (unsigned int lane = 0; lane < HRX_WMMA_LANE_MAP_LANES; ++lane) {
+            for (unsigned int slot = 0; slot < HRX_WMMA_LANE_MAP_ACC_SLOTS; ++slot) {
+                const size_t idx = wmma_lane_map_fulltile_index(tile, lane, slot);
+                const float value = h_out[idx];
+                if (is_nan(value)) {
+                    if (first_nan == count) {
+                        first_nan = idx;
+                    }
+                    if ((slot & 1u) == 0u) {
+                        ++nan_even_slots;
+                    } else {
+                        ++nan_odd_slots;
+                    }
+                    ++nan_count;
+                } else if ((slot & 1u) == 0u && !std::isfinite(value)) {
+                    ++inf_even_slots;
+                }
+            }
+        }
+    }
+
+    std::printf("wmma-f16-fulltile-repeat mode=%s repeats=128 base_half_bits=0x%04x elements=%zu nan=%zu nan_even=%zu nan_odd=%zu inf_even=%zu",
+        mode, static_cast<unsigned int>(base_half_bits), h_out.size(), nan_count, nan_even_slots, nan_odd_slots, inf_even_slots);
+    if (first_nan != count) {
+        const unsigned int slot = first_nan % HRX_WMMA_LANE_MAP_ACC_SLOTS;
+        const unsigned int lane = (first_nan / HRX_WMMA_LANE_MAP_ACC_SLOTS) % HRX_WMMA_LANE_MAP_LANES;
+        const unsigned int tile = first_nan / (HRX_WMMA_LANE_MAP_ACC_SLOTS * HRX_WMMA_LANE_MAP_LANES);
+        std::printf(" first_nan_tile=%u first_nan_lane=%u first_nan_slot=%u", tile, lane, slot);
+    }
+    std::printf("\n");
+
+    return (nan_even_slots == 0 && inf_even_slots == 0) ? 0 : 1;
+}
+
+template <uint16_t base_half_bits = 0x3c00u>
+static int run_fulltile_prodstride_k2_probe(const char * mode) {
+    const size_t count = 16u * HRX_WMMA_LANE_MAP_LANES * HRX_WMMA_LANE_MAP_ACC_SLOTS;
+    device_buffer<float> d_out(count);
+    std::vector<float> h_out(count, 0.0f);
+
+    HIP_CHECK(hipMemset(d_out.ptr, 0, count * sizeof(float)));
+    hipLaunchKernelGGL((wmma_f16_fulltile_prodstride_k2_probe<base_half_bits>), dim3(1), dim3(64), 0, 0, d_out.ptr);
+    HIP_CHECK(hipGetLastError());
+    HIP_CHECK(hipDeviceSynchronize());
+    HIP_CHECK(hipMemcpy(h_out.data(), d_out.ptr, count * sizeof(float), hipMemcpyDeviceToHost));
+
+    size_t nan_count = 0;
+    size_t nan_even_slots = 0;
+    size_t nan_odd_slots = 0;
+    size_t first_nan = count;
+    for (unsigned int tile = 0; tile < 16u; ++tile) {
+        for (unsigned int lane = 0; lane < HRX_WMMA_LANE_MAP_LANES; ++lane) {
+            for (unsigned int slot = 0; slot < HRX_WMMA_LANE_MAP_ACC_SLOTS; ++slot) {
+                const size_t idx = wmma_lane_map_fulltile_index(tile, lane, slot);
+                if (!is_nan(h_out[idx])) {
+                    continue;
+                }
+                if (first_nan == count) {
+                    first_nan = idx;
+                }
+                if ((slot & 1u) == 0u) {
+                    ++nan_even_slots;
+                } else {
+                    ++nan_odd_slots;
+                }
+                ++nan_count;
+            }
+        }
+    }
+
+    std::printf("wmma-f16-fulltile-prodstride-k2 mode=%s base_half_bits=0x%04x elements=%zu nan=%zu nan_even=%zu nan_odd=%zu",
+        mode, static_cast<unsigned int>(base_half_bits), h_out.size(), nan_count, nan_even_slots, nan_odd_slots);
+    if (first_nan != count) {
+        const unsigned int slot = first_nan % HRX_WMMA_LANE_MAP_ACC_SLOTS;
+        const unsigned int lane = (first_nan / HRX_WMMA_LANE_MAP_ACC_SLOTS) % HRX_WMMA_LANE_MAP_LANES;
+        const unsigned int tile = first_nan / (HRX_WMMA_LANE_MAP_ACC_SLOTS * HRX_WMMA_LANE_MAP_LANES);
+        std::printf(" first_nan_tile=%u first_nan_lane=%u first_nan_slot=%u", tile, lane, slot);
+    }
+    std::printf("\n");
+
+    return nan_even_slots == 0 ? 0 : 1;
 }
 
 static int run_combined96_store_contract_case(unsigned int cols) {
@@ -742,7 +1133,7 @@ int main(int argc, char ** argv) {
         if (std::strncmp(argv[i], "--mode=", 7) == 0) {
             mode = argv[i] + 7;
         } else {
-            std::fprintf(stderr, "usage: %s [--mode=basic|fulltile-ones|fulltile-lds|combined96-store-contract|full64-store-contract|all]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--mode=basic|fulltile-ones|fulltile-lds|fulltile-lds-wait|fulltile-lds-k2|fulltile-lds-k2-wait|fulltile-lds-repeat|fulltile-lds-repeat-wait|fulltile-lds-repeat-one|fulltile-prodstride-k2|fulltile-prodstride-k2-small|combined96-store-contract|full64-store-contract|all]\n", argv[0]);
             return 2;
         }
     }
@@ -756,6 +1147,30 @@ int main(int argc, char ** argv) {
     if (mode == "fulltile-lds") {
         return run_fulltile_probe<true>(mode.c_str());
     }
+    if (mode == "fulltile-lds-wait") {
+        return run_fulltile_probe<true, true>(mode.c_str());
+    }
+    if (mode == "fulltile-lds-k2") {
+        return run_fulltile_lds_k2_probe<false>(mode.c_str());
+    }
+    if (mode == "fulltile-lds-k2-wait") {
+        return run_fulltile_lds_k2_probe<true>(mode.c_str());
+    }
+    if (mode == "fulltile-lds-repeat") {
+        return run_fulltile_lds_repeat_probe<false>(mode.c_str());
+    }
+    if (mode == "fulltile-lds-repeat-wait") {
+        return run_fulltile_lds_repeat_probe<true>(mode.c_str());
+    }
+    if (mode == "fulltile-lds-repeat-one") {
+        return run_fulltile_lds_repeat_probe<false, 0x3c00u>(mode.c_str());
+    }
+    if (mode == "fulltile-prodstride-k2") {
+        return run_fulltile_prodstride_k2_probe<0x3c00u>(mode.c_str());
+    }
+    if (mode == "fulltile-prodstride-k2-small") {
+        return run_fulltile_prodstride_k2_probe<0x3400u>(mode.c_str());
+    }
     if (mode == "combined96-store-contract") {
         return run_combined96_store_contract();
     }
@@ -766,6 +1181,14 @@ int main(int argc, char ** argv) {
         int status = run_basic_lane_map();
         status |= run_fulltile_probe<false>("fulltile-ones");
         status |= run_fulltile_probe<true>("fulltile-lds");
+        status |= run_fulltile_probe<true, true>("fulltile-lds-wait");
+        status |= run_fulltile_lds_k2_probe<false>("fulltile-lds-k2");
+        status |= run_fulltile_lds_k2_probe<true>("fulltile-lds-k2-wait");
+        status |= run_fulltile_lds_repeat_probe<false>("fulltile-lds-repeat");
+        status |= run_fulltile_lds_repeat_probe<true>("fulltile-lds-repeat-wait");
+        status |= run_fulltile_lds_repeat_probe<false, 0x3c00u>("fulltile-lds-repeat-one");
+        status |= run_fulltile_prodstride_k2_probe<0x3c00u>("fulltile-prodstride-k2");
+        status |= run_fulltile_prodstride_k2_probe<0x3400u>("fulltile-prodstride-k2-small");
         status |= run_combined96_store_contract();
         status |= run_full64_store_contract();
         return status;
