@@ -17,6 +17,110 @@
     } \
 } while (0)
 
+template <int active_groups>
+__global__ __launch_bounds__(256, 1)
+void q5_full64_active_groups_repro_kernel(
+        const hrx_block_q5_K_wmma_vk128_lhs * src0,
+        const float * src1,
+        float * dst,
+        long long k,
+        long long rows,
+        long long cols) {
+    constexpr int BM = 64;
+    constexpr int BN = 64;
+    constexpr int BK = 32;
+    constexpr int SHARED_STRIDE = 44;
+    static_assert(active_groups >= 1 && active_groups <= 16, "unexpected active group count");
+
+    const unsigned int tid = __builtin_amdgcn_workitem_id_x();
+    const unsigned int wave = tid >> 6u;
+    const unsigned int lane = tid & 63u;
+    const long long row_base = static_cast<long long>(__builtin_amdgcn_workgroup_id_x()) * BM;
+    const long long col_base = static_cast<long long>(__builtin_amdgcn_workgroup_id_y()) * BN;
+    if (row_base >= rows || col_base >= cols) {
+        return;
+    }
+
+    const __amdgpu_buffer_rsrc_t dst_rsrc = hrx_q5_k_wmma_vk128_make_dst_rsrc(dst);
+    __shared__ _Float16 sh_a[BM * SHARED_STRIDE];
+    __shared__ _Float16 sh_b[BN * SHARED_STRIDE];
+
+    const long long blocks_per_row = k / 256;
+    const _Float16 zero = static_cast<_Float16>(0.0f);
+    hrx_q5_k_wmma_vk128_half8_vec acc[active_groups] = {};
+
+    for (long long k0 = 0; k0 < k; k0 += BK) {
+        for (int idx = static_cast<int>(tid); idx < BM * BK; idx += 256) {
+            const int r = idx / BK;
+            const int kk = idx - r * BK;
+            const long long row = row_base + static_cast<long long>(r);
+            sh_a[r * SHARED_STRIDE + kk] = row < rows ?
+                hrx_q5_k_wmma_vk128_load_a_value(src0, row, k0 + kk, blocks_per_row) : zero;
+        }
+        for (int idx = static_cast<int>(tid); idx < BN * BK; idx += 256) {
+            const int c = idx / BK;
+            const int kk = idx - c * BK;
+            const long long col = col_base + static_cast<long long>(c);
+            sh_b[c * SHARED_STRIDE + kk] = col < cols ? static_cast<_Float16>(src1[col * k + k0 + kk]) : zero;
+        }
+        __syncthreads();
+
+        if (wave == 0) {
+            hrx_q5_k_wmma_vk128_lds_half_ptr sh_a_lds =
+                (hrx_q5_k_wmma_vk128_lds_half_ptr) sh_a;
+            hrx_q5_k_wmma_vk128_lds_half_ptr sh_b_lds =
+                (hrx_q5_k_wmma_vk128_lds_half_ptr) sh_b;
+            hrx_q5_k_wmma_vk128_half16_vec a_frag[2][4];
+            hrx_q5_k_wmma_vk128_half16_vec b_frag[2][4];
+#pragma unroll
+            for (int k_tile = 0; k_tile < 2; ++k_tile) {
+#pragma unroll
+                for (int row_sub = 0; row_sub < 4; ++row_sub) {
+                    a_frag[k_tile][row_sub] =
+                        hrx_q5_k_wmma_vk128_load_a_frag_w64_b64asm_nowait(
+                            sh_a_lds, row_sub, k_tile, lane);
+                }
+#pragma unroll
+                for (int col_sub = 0; col_sub < 4; ++col_sub) {
+                    b_frag[k_tile][col_sub] =
+                        hrx_q5_k_wmma_vk128_load_b_frag_w64_b64asm_nowait(
+                            sh_b_lds, col_sub, k_tile, lane);
+                }
+            }
+            asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+#pragma unroll
+            for (int k_tile = 0; k_tile < 2; ++k_tile) {
+#pragma unroll
+                for (int col_sub = 0; col_sub < 4; ++col_sub) {
+#pragma unroll
+                    for (int row_sub = 0; row_sub < 4; ++row_sub) {
+                        const int tile = col_sub * 4 + row_sub;
+                        if (tile < active_groups) {
+                            acc[tile] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
+                                a_frag[k_tile][row_sub],
+                                b_frag[k_tile][col_sub],
+                                acc[tile],
+                                HRX_Q5_K_WMMA_VK128_W64_OPSEL != 0);
+                        }
+                    }
+                }
+            }
+        }
+        __syncthreads();
+    }
+
+    if (wave == 0) {
+#pragma unroll
+        for (int group = 0; group < active_groups; ++group) {
+#pragma unroll
+            for (int slot = 0; slot < 4; ++slot) {
+                hrx_q5_k_wmma_vk128_combined96_raw_store_slot(
+                    dst_rsrc, rows, row_base, col_base, rows, cols, acc, group, slot, lane);
+            }
+        }
+    }
+}
+
 template <typename T>
 struct device_buffer {
     T * ptr = nullptr;
@@ -154,7 +258,131 @@ static std::vector<float> cpu_reference(
     return ref;
 }
 
-static int run_case(int rows, int cols, int k, const case_config & config) {
+static bool output_is_active(size_t index, int rows, int active_groups) {
+    if (active_groups == 0) {
+        return true;
+    }
+    const int row = static_cast<int>(index % static_cast<size_t>(rows));
+    const int col = static_cast<int>(index / static_cast<size_t>(rows));
+    const int row_local = row & 63;
+    const int col_local = col & 63;
+    const int group = (col_local >> 4) * 4 + (row_local >> 4);
+    return group < active_groups;
+}
+
+static const char * variant_name(int active_groups) {
+    switch (active_groups) {
+        case 0: return "catalog-full64";
+        case 1: return "active1";
+        case 4: return "active4";
+        case 8: return "active8";
+        case 12: return "active12";
+        case 16: return "active16";
+        default: return "unknown";
+    }
+}
+
+static void launch_variant(
+        int active_groups,
+        dim3 grid,
+        const hrx_block_q5_K_wmma_vk128_lhs * src0,
+        const float * src1,
+        float * dst,
+        long long k,
+        long long rows,
+        long long cols) {
+    switch (active_groups) {
+        case 0:
+            hipLaunchKernelGGL(
+                hrx_mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_full64_f16acc_wg256_f32,
+                grid,
+                dim3(256, 1, 1),
+                0,
+                0,
+                src0,
+                src1,
+                dst,
+                k,
+                rows,
+                cols);
+            break;
+        case 1:
+            hipLaunchKernelGGL(
+                q5_full64_active_groups_repro_kernel<1>,
+                grid,
+                dim3(256, 1, 1),
+                0,
+                0,
+                src0,
+                src1,
+                dst,
+                k,
+                rows,
+                cols);
+            break;
+        case 4:
+            hipLaunchKernelGGL(
+                q5_full64_active_groups_repro_kernel<4>,
+                grid,
+                dim3(256, 1, 1),
+                0,
+                0,
+                src0,
+                src1,
+                dst,
+                k,
+                rows,
+                cols);
+            break;
+        case 8:
+            hipLaunchKernelGGL(
+                q5_full64_active_groups_repro_kernel<8>,
+                grid,
+                dim3(256, 1, 1),
+                0,
+                0,
+                src0,
+                src1,
+                dst,
+                k,
+                rows,
+                cols);
+            break;
+        case 16:
+            hipLaunchKernelGGL(
+                q5_full64_active_groups_repro_kernel<16>,
+                grid,
+                dim3(256, 1, 1),
+                0,
+                0,
+                src0,
+                src1,
+                dst,
+                k,
+                rows,
+                cols);
+            break;
+        case 12:
+            hipLaunchKernelGGL(
+                q5_full64_active_groups_repro_kernel<12>,
+                grid,
+                dim3(256, 1, 1),
+                0,
+                0,
+                src0,
+                src1,
+                dst,
+                k,
+                rows,
+                cols);
+            break;
+        default:
+            std::fprintf(stderr, "unexpected active group variant: %d\n", active_groups);
+            std::exit(2);
+    }
+}
+
+static int run_case(int rows, int cols, int k, const case_config & config, int active_groups) {
     const int blocks_per_row = k / 256;
     std::vector<hrx_block_q5_K_wmma_vk128_lhs> h_src0(static_cast<size_t>(rows) * blocks_per_row);
     std::vector<float> h_src1(static_cast<size_t>(cols) * k);
@@ -170,12 +398,9 @@ static int run_case(int rows, int cols, int k, const case_config & config) {
     HIP_CHECK(hipMemcpy(d_dst.ptr, h_dst.data(), h_dst.size() * sizeof(h_dst[0]), hipMemcpyHostToDevice));
 
     dim3 grid((rows + 63) / 64, (cols + 63) / 64, 1);
-    hipLaunchKernelGGL(
-        hrx_mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_full64_f16acc_wg256_f32,
+    launch_variant(
+        active_groups,
         grid,
-        dim3(256, 1, 1),
-        0,
-        0,
         d_src0.ptr,
         d_src1.ptr,
         d_dst.ptr,
@@ -187,6 +412,7 @@ static int run_case(int rows, int cols, int k, const case_config & config) {
     HIP_CHECK(hipMemcpy(h_dst.data(), d_dst.ptr, h_dst.size() * sizeof(h_dst[0]), hipMemcpyDeviceToHost));
 
     const std::vector<float> ref = cpu_reference(h_src0, h_src1, k, rows, cols);
+    size_t active_count = 0;
     size_t nan_count = 0;
     size_t inf_count = 0;
     size_t sentinel_count = 0;
@@ -194,6 +420,10 @@ static int run_case(int rows, int cols, int k, const case_config & config) {
     double max_rel = 0.0;
     size_t max_idx = 0;
     for (size_t i = 0; i < h_dst.size(); ++i) {
+        if (!output_is_active(i, rows, active_groups)) {
+            continue;
+        }
+        ++active_count;
         const float actual = h_dst[i];
         if (std::isnan(actual)) {
             ++nan_count;
@@ -217,11 +447,13 @@ static int run_case(int rows, int cols, int k, const case_config & config) {
     }
 
     std::printf(
-        "q5-full64-repro profile=%s rows=%d cols=%d k=%d nan=%zu inf=%zu sentinel=%zu max_abs=%g max_rel=%g idx=%zu actual=%g ref=%g\n",
+        "q5-full64-repro variant=%s profile=%s rows=%d cols=%d k=%d active=%zu nan=%zu inf=%zu sentinel=%zu max_abs=%g max_rel=%g idx=%zu actual=%g ref=%g\n",
+        variant_name(active_groups),
         config.name,
         rows,
         cols,
         k,
+        active_count,
         nan_count,
         inf_count,
         sentinel_count,
@@ -237,15 +469,20 @@ int main() {
     const case_config small = {"small", 0x2000u, 0x0000u, 3, 0.00390625f};
     const case_config stress = {"stress", 0x3400u, 0x2c00u, 31, 0.015625f};
     int status = 0;
-    status |= run_case(64, 33, 256, small);
-    status |= run_case(64, 33, 512, small);
-    status |= run_case(64, 33, 3584, small);
-    status |= run_case(64, 64, 3584, small);
-    status |= run_case(128, 33, 3584, small);
-    status |= run_case(64, 33, 256, stress);
-    status |= run_case(64, 33, 512, stress);
-    status |= run_case(64, 33, 3584, stress);
-    status |= run_case(64, 64, 3584, stress);
-    status |= run_case(128, 33, 3584, stress);
+    status |= run_case(64, 33, 256, small, 0);
+    status |= run_case(64, 33, 512, small, 0);
+    status |= run_case(64, 33, 3584, small, 0);
+    status |= run_case(64, 64, 3584, small, 0);
+    status |= run_case(128, 33, 3584, small, 0);
+    status |= run_case(64, 33, 3584, small, 1);
+    status |= run_case(64, 33, 3584, small, 4);
+    status |= run_case(64, 33, 3584, small, 8);
+    status |= run_case(64, 33, 3584, small, 12);
+    status |= run_case(64, 33, 3584, small, 16);
+    status |= run_case(64, 33, 256, stress, 0);
+    status |= run_case(64, 33, 512, stress, 0);
+    status |= run_case(64, 33, 3584, stress, 0);
+    status |= run_case(64, 64, 3584, stress, 0);
+    status |= run_case(128, 33, 3584, stress, 0);
     return status;
 }
