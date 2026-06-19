@@ -160,7 +160,7 @@ void q8_array8_repro_kernel(
     }
 }
 
-template <int group_base, int col_start, int col_count, int active_groups>
+template <int group_base, int col_start, int col_count, int active_groups, bool consume_unused_b>
 __global__ __launch_bounds__(256, 1)
 void q8_array_fullb_phase_repro_kernel(
         const hrx_block_q8_0_wmma_vk128_lhs * src0,
@@ -229,6 +229,11 @@ void q8_array_fullb_phase_repro_kernel(
                     b_frag[k_tile][col_sub] =
                         hrx_q8_0_wmma_vk128_load_b_frag_w64_b64asm_nowait(
                             sh_b_lds, col_sub, k_tile, lane);
+                    if constexpr (consume_unused_b) {
+                        if (col_sub < col_start || col_sub >= col_start + col_count) {
+                            q8_repro_consume_frag(b_frag[k_tile][col_sub]);
+                        }
+                    }
                 }
             }
             asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
@@ -368,10 +373,28 @@ static bool output_is_active(size_t index, int rows, const std::string & mode) {
     const int row_local = row & 63;
     const int col_local = col & 63;
     const int group = (col_local >> 4) * 4 + (row_local >> 4);
-    if (mode == "array8-fullb-2phase" || mode == "batched4") {
+    if (mode == "array8-fullb-2phase" || mode == "batched4" ||
+            mode == "array8-fullb-2phase-consume" || mode == "batched4-consume") {
         return true;
     }
     return group < 8;
+}
+
+struct group_stats {
+    size_t active = 0;
+    size_t bad = 0;
+    size_t nan = 0;
+    size_t inf = 0;
+    size_t sentinel = 0;
+    float max_abs = 0.0f;
+};
+
+static int output_group(size_t index, int rows) {
+    const int row = static_cast<int>(index % static_cast<size_t>(rows));
+    const int col = static_cast<int>(index / static_cast<size_t>(rows));
+    const int row_local = row & 63;
+    const int col_local = col & 63;
+    return (col_local >> 4) * 4 + (row_local >> 4);
 }
 
 static int run_case(const std::string & mode, int rows, int cols, int k) {
@@ -398,18 +421,32 @@ static int run_case(const std::string & mode, int rows, int cols, int k) {
         hipLaunchKernelGGL((q8_array8_repro_kernel<false>), grid, dim3(256, 1, 1), 0, 0,
             d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
     } else if (mode == "array8-fullb-2phase") {
-        hipLaunchKernelGGL((q8_array_fullb_phase_repro_kernel<0, 0, 2, 8>), grid, dim3(256, 1, 1), 0, 0,
+        hipLaunchKernelGGL((q8_array_fullb_phase_repro_kernel<0, 0, 2, 8, false>), grid, dim3(256, 1, 1), 0, 0,
             d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
-        hipLaunchKernelGGL((q8_array_fullb_phase_repro_kernel<8, 2, 2, 8>), grid, dim3(256, 1, 1), 0, 0,
+        hipLaunchKernelGGL((q8_array_fullb_phase_repro_kernel<8, 2, 2, 8, false>), grid, dim3(256, 1, 1), 0, 0,
+            d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+    } else if (mode == "array8-fullb-2phase-consume") {
+        hipLaunchKernelGGL((q8_array_fullb_phase_repro_kernel<0, 0, 2, 8, true>), grid, dim3(256, 1, 1), 0, 0,
+            d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+        hipLaunchKernelGGL((q8_array_fullb_phase_repro_kernel<8, 2, 2, 8, true>), grid, dim3(256, 1, 1), 0, 0,
             d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
     } else if (mode == "batched4") {
-        hipLaunchKernelGGL((q8_array_fullb_phase_repro_kernel<0, 0, 1, 4>), grid, dim3(256, 1, 1), 0, 0,
+        hipLaunchKernelGGL((q8_array_fullb_phase_repro_kernel<0, 0, 1, 4, false>), grid, dim3(256, 1, 1), 0, 0,
             d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
-        hipLaunchKernelGGL((q8_array_fullb_phase_repro_kernel<4, 1, 1, 4>), grid, dim3(256, 1, 1), 0, 0,
+        hipLaunchKernelGGL((q8_array_fullb_phase_repro_kernel<4, 1, 1, 4, false>), grid, dim3(256, 1, 1), 0, 0,
             d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
-        hipLaunchKernelGGL((q8_array_fullb_phase_repro_kernel<8, 2, 1, 4>), grid, dim3(256, 1, 1), 0, 0,
+        hipLaunchKernelGGL((q8_array_fullb_phase_repro_kernel<8, 2, 1, 4, false>), grid, dim3(256, 1, 1), 0, 0,
             d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
-        hipLaunchKernelGGL((q8_array_fullb_phase_repro_kernel<12, 3, 1, 4>), grid, dim3(256, 1, 1), 0, 0,
+        hipLaunchKernelGGL((q8_array_fullb_phase_repro_kernel<12, 3, 1, 4, false>), grid, dim3(256, 1, 1), 0, 0,
+            d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+    } else if (mode == "batched4-consume") {
+        hipLaunchKernelGGL((q8_array_fullb_phase_repro_kernel<0, 0, 1, 4, true>), grid, dim3(256, 1, 1), 0, 0,
+            d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+        hipLaunchKernelGGL((q8_array_fullb_phase_repro_kernel<4, 1, 1, 4, true>), grid, dim3(256, 1, 1), 0, 0,
+            d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+        hipLaunchKernelGGL((q8_array_fullb_phase_repro_kernel<8, 2, 1, 4, true>), grid, dim3(256, 1, 1), 0, 0,
+            d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+        hipLaunchKernelGGL((q8_array_fullb_phase_repro_kernel<12, 3, 1, 4, true>), grid, dim3(256, 1, 1), 0, 0,
             d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
     } else {
         std::fprintf(stderr, "unknown mode: %s\n", mode.c_str());
@@ -425,35 +462,55 @@ static int run_case(const std::string & mode, int rows, int cols, int k) {
     size_t sentinel = 0;
     size_t bad = 0;
     float max_abs = 0.0f;
+    group_stats by_group[16];
     for (size_t i = 0; i < h_out.size(); ++i) {
         if (!output_is_active(i, rows, mode)) {
             continue;
         }
+        const int group = output_group(i, rows);
+        group_stats & gs = by_group[group];
         ++active;
+        ++gs.active;
         const float actual = h_out[i];
         if (actual == -7777.0f) {
             ++sentinel;
+            ++gs.sentinel;
         }
         if (std::isnan(actual)) {
             ++nan;
             ++bad;
+            ++gs.nan;
+            ++gs.bad;
             continue;
         }
         if (std::isinf(actual)) {
             ++inf;
             ++bad;
+            ++gs.inf;
+            ++gs.bad;
             continue;
         }
         const float err = std::fabs(actual - ref[i]);
         max_abs = std::max(max_abs, err);
+        gs.max_abs = std::max(gs.max_abs, err);
         if (err > 0.25f) {
             ++bad;
+            ++gs.bad;
         }
     }
 
     std::printf(
         "%s rows=%d cols=%d k=%d active=%zu bad=%zu nan=%zu inf=%zu sentinel=%zu max_abs=%g\n",
         mode.c_str(), rows, cols, k, active, bad, nan, inf, sentinel, max_abs);
+    for (int group = 0; group < 16; ++group) {
+        const group_stats & gs = by_group[group];
+        if (gs.active == 0 || (gs.bad == 0 && gs.nan == 0 && gs.inf == 0 && gs.sentinel == 0)) {
+            continue;
+        }
+        std::printf(
+            "  group=%d active=%zu bad=%zu nan=%zu inf=%zu sentinel=%zu max_abs=%g\n",
+            group, gs.active, gs.bad, gs.nan, gs.inf, gs.sentinel, gs.max_abs);
+    }
     return (nan == 0 && inf == 0 && sentinel == 0) ? 0 : 1;
 }
 
@@ -463,7 +520,7 @@ int main(int argc, char ** argv) {
         if (std::strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
             mode = argv[++i];
         } else {
-            std::fprintf(stderr, "usage: %s [--mode array8-fullb|array8-b2|array8-fullb-2phase|batched4|all]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--mode array8-fullb|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|batched4|batched4-consume|all]\n", argv[0]);
             return 2;
         }
     }
@@ -483,9 +540,17 @@ int main(int argc, char ** argv) {
         status |= run_case("array8-fullb-2phase", rows, 64, k);
         status |= run_case("array8-fullb-2phase", rows, 33, k);
     }
+    if (mode == "all" || mode == "array8-fullb-2phase-consume") {
+        status |= run_case("array8-fullb-2phase-consume", rows, 64, k);
+        status |= run_case("array8-fullb-2phase-consume", rows, 33, k);
+    }
     if (mode == "all" || mode == "batched4") {
         status |= run_case("batched4", rows, 64, k);
         status |= run_case("batched4", rows, 33, k);
+    }
+    if (mode == "all" || mode == "batched4-consume") {
+        status |= run_case("batched4-consume", rows, 64, k);
+        status |= run_case("batched4-consume", rows, 33, k);
     }
     return status;
 }
