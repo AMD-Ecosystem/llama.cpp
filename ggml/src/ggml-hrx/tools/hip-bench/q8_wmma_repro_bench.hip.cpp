@@ -372,6 +372,98 @@ void q8_single_group_repro_kernel(
     }
 }
 
+template <int compute_group, int store_group>
+__global__ __launch_bounds__(256, 1)
+void q8_single_group_remap_repro_kernel(
+        const hrx_block_q8_0_wmma_vk128_lhs * src0,
+        const float * src1,
+        float * dst,
+        long long k,
+        long long rows,
+        long long cols) {
+    constexpr int BM = 64;
+    constexpr int BN = 64;
+    constexpr int BK = 32;
+    constexpr int SHARED_STRIDE = HRX_Q8_0_WMMA_VK128_SHARED_STRIDE;
+    constexpr int row_sub = compute_group & 3;
+    constexpr int col_sub = (compute_group >> 2) & 3;
+
+    const unsigned int tid = __builtin_amdgcn_workitem_id_x();
+    const unsigned int wave = tid >> 6u;
+    const unsigned int lane = tid & 63u;
+    const long long row_base = static_cast<long long>(__builtin_amdgcn_workgroup_id_x()) * BM;
+    const long long col_base = static_cast<long long>(__builtin_amdgcn_workgroup_id_y()) * BN;
+    if (row_base >= rows || col_base >= cols) {
+        return;
+    }
+
+    const __amdgpu_buffer_rsrc_t dst_rsrc = hrx_q8_0_wmma_vk128_make_dst_rsrc(dst);
+    __shared__ _Float16 sh_a[BM * SHARED_STRIDE];
+    __shared__ _Float16 sh_b[BN * SHARED_STRIDE];
+
+    const long long blocks_per_row = k / 32;
+    const _Float16 zero = static_cast<_Float16>(0.0f);
+    hrx_q8_0_wmma_vk128_half8_vec acc[1] = {};
+
+    for (long long k0 = 0; k0 < k; k0 += BK) {
+        for (int idx = static_cast<int>(tid); idx < BM * BK; idx += 256) {
+            const int r = idx / BK;
+            const int kk = idx - r * BK;
+            const long long row = row_base + static_cast<long long>(r);
+            sh_a[r * SHARED_STRIDE + kk] = row < rows ?
+                hrx_q8_0_wmma_vk128_load_a_value(src0, row, k0 + kk, blocks_per_row) : zero;
+        }
+        for (int idx = static_cast<int>(tid); idx < BN * BK; idx += 256) {
+            const int c = idx / BK;
+            const int kk = idx - c * BK;
+            const long long col = col_base + static_cast<long long>(c);
+            sh_b[c * SHARED_STRIDE + kk] = col < cols ? static_cast<_Float16>(src1[col * k + k0 + kk]) : zero;
+        }
+        __syncthreads();
+
+        if (wave == 0) {
+            hrx_q8_0_wmma_vk128_lds_half_ptr sh_a_lds =
+                (hrx_q8_0_wmma_vk128_lds_half_ptr) sh_a;
+            hrx_q8_0_wmma_vk128_lds_half_ptr sh_b_lds =
+                (hrx_q8_0_wmma_vk128_lds_half_ptr) sh_b;
+            hrx_q8_0_wmma_vk128_half16_vec a_frag[2][4];
+            hrx_q8_0_wmma_vk128_half16_vec b_frag[2][4];
+#pragma unroll
+            for (int k_tile = 0; k_tile < 2; ++k_tile) {
+#pragma unroll
+                for (int rs = 0; rs < 4; ++rs) {
+                    a_frag[k_tile][rs] =
+                        hrx_q8_0_wmma_vk128_load_a_frag_w64_b64asm_nowait(
+                            sh_a_lds, rs, k_tile, lane);
+                }
+#pragma unroll
+                for (int cs = 0; cs < 4; ++cs) {
+                    b_frag[k_tile][cs] =
+                        hrx_q8_0_wmma_vk128_load_b_frag_w64_b64asm_nowait(
+                            sh_b_lds, cs, k_tile, lane);
+                }
+            }
+            asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+#pragma unroll
+            for (int k_tile = 0; k_tile < 2; ++k_tile) {
+                acc[0] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
+                    a_frag[k_tile][row_sub],
+                    b_frag[k_tile][col_sub],
+                    acc[0],
+                    HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+            }
+        }
+        __syncthreads();
+    }
+
+    if (wave == 0) {
+#pragma unroll
+        for (int slot = 0; slot < 4; ++slot) {
+            q8_repro_raw_store_slot(dst_rsrc, rows, row_base, col_base, rows, cols, acc, 0, store_group, slot, lane);
+        }
+    }
+}
+
 template <typename T>
 struct device_buffer {
     T * ptr = nullptr;
@@ -477,8 +569,38 @@ static int output_group(size_t index, int rows) {
     return (col_local >> 4) * 4 + (row_local >> 4);
 }
 
+static bool remap_mode_groups(const std::string & mode, int * compute_group, int * store_group) {
+    if (mode == "remap-c8-s0") {
+        *compute_group = 8;
+        *store_group = 0;
+        return true;
+    }
+    if (mode == "remap-c0-s8") {
+        *compute_group = 0;
+        *store_group = 8;
+        return true;
+    }
+    if (mode == "remap-c12-s0") {
+        *compute_group = 12;
+        *store_group = 0;
+        return true;
+    }
+    if (mode == "remap-c0-s12") {
+        *compute_group = 0;
+        *store_group = 12;
+        return true;
+    }
+    return false;
+}
+
 static bool output_is_active(size_t index, int rows, const std::string & mode) {
     const int group = output_group(index, rows);
+    int compute_group = 0;
+    int store_group = 0;
+    if (remap_mode_groups(mode, &compute_group, &store_group)) {
+        (void) compute_group;
+        return group == store_group;
+    }
     if (mode == "single-group0" || mode == "single-group0-consume") {
         return group == 0;
     }
@@ -496,6 +618,36 @@ static bool output_is_active(size_t index, int rows, const std::string & mode) {
         return true;
     }
     return group < 8;
+}
+
+static float expected_value_for_output(
+        size_t index,
+        int rows,
+        int cols,
+        const std::string & mode,
+        const std::vector<float> & ref) {
+    int compute_group = 0;
+    int store_group = 0;
+    if (!remap_mode_groups(mode, &compute_group, &store_group)) {
+        return ref[index];
+    }
+
+    const int row = static_cast<int>(index % static_cast<size_t>(rows));
+    const int col = static_cast<int>(index / static_cast<size_t>(rows));
+    const int row_tile_base = row & ~63;
+    const int col_tile_base = col & ~63;
+    const int store_row_sub = store_group & 3;
+    const int store_col_sub = (store_group >> 2) & 3;
+    const int compute_row_sub = compute_group & 3;
+    const int compute_col_sub = (compute_group >> 2) & 3;
+    const int row_inner = (row & 63) - store_row_sub * 16;
+    const int col_inner = (col & 63) - store_col_sub * 16;
+    const int source_row = row_tile_base + compute_row_sub * 16 + row_inner;
+    const int source_col = col_tile_base + compute_col_sub * 16 + col_inner;
+    if (source_row < 0 || source_row >= rows || source_col < 0 || source_col >= cols) {
+        return 0.0f;
+    }
+    return ref[static_cast<size_t>(source_col) * rows + static_cast<size_t>(source_row)];
 }
 
 struct group_stats {
@@ -582,6 +734,18 @@ static int run_case(const std::string & mode, int rows, int cols, int k) {
     } else if (mode == "single-group13-consume") {
         hipLaunchKernelGGL((q8_single_group_repro_kernel<13, true>), grid, dim3(256, 1, 1), 0, 0,
             d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+    } else if (mode == "remap-c8-s0") {
+        hipLaunchKernelGGL((q8_single_group_remap_repro_kernel<8, 0>), grid, dim3(256, 1, 1), 0, 0,
+            d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+    } else if (mode == "remap-c0-s8") {
+        hipLaunchKernelGGL((q8_single_group_remap_repro_kernel<0, 8>), grid, dim3(256, 1, 1), 0, 0,
+            d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+    } else if (mode == "remap-c12-s0") {
+        hipLaunchKernelGGL((q8_single_group_remap_repro_kernel<12, 0>), grid, dim3(256, 1, 1), 0, 0,
+            d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+    } else if (mode == "remap-c0-s12") {
+        hipLaunchKernelGGL((q8_single_group_remap_repro_kernel<0, 12>), grid, dim3(256, 1, 1), 0, 0,
+            d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
     } else {
         std::fprintf(stderr, "unknown mode: %s\n", mode.c_str());
         return 2;
@@ -624,7 +788,8 @@ static int run_case(const std::string & mode, int rows, int cols, int k) {
             ++gs.bad;
             continue;
         }
-        const float err = std::fabs(actual - ref[i]);
+        const float expected = expected_value_for_output(i, rows, cols, mode, ref);
+        const float err = std::fabs(actual - expected);
         max_abs = std::max(max_abs, err);
         gs.max_abs = std::max(gs.max_abs, err);
         if (err > 0.25f) {
@@ -654,7 +819,7 @@ int main(int argc, char ** argv) {
         if (std::strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
             mode = argv[++i];
         } else {
-            std::fprintf(stderr, "usage: %s [--mode array8-fullb|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|batched4|batched4-consume|single-group0|single-group0-consume|single-group8|single-group8-consume|single-group12|single-group12-consume|single-group13|single-group13-consume|all]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--mode array8-fullb|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|batched4|batched4-consume|single-group0|single-group0-consume|single-group8|single-group8-consume|single-group12|single-group12-consume|single-group13|single-group13-consume|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c0-s12|all]\n", argv[0]);
             return 2;
         }
     }
@@ -689,7 +854,9 @@ int main(int argc, char ** argv) {
     if (mode == "single-group0" || mode == "single-group0-consume" ||
             mode == "single-group8" || mode == "single-group8-consume" ||
             mode == "single-group12" || mode == "single-group12-consume" ||
-            mode == "single-group13" || mode == "single-group13-consume") {
+            mode == "single-group13" || mode == "single-group13-consume" ||
+            mode == "remap-c8-s0" || mode == "remap-c0-s8" ||
+            mode == "remap-c12-s0" || mode == "remap-c0-s12") {
         status |= run_case(mode, rows, 64, k);
         status |= run_case(mode, rows, 33, k);
     }
