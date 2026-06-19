@@ -1072,6 +1072,10 @@ if (GGML_HRX_BUILD_HIP_BENCHES)
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/hip-bench/wmma_f16_lane_map_bench.hip.cpp"
         64)
     ggml_hrx_add_hip_bench(
+        hrx-hip-bench-wmma-issue-window
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/hip-bench/wmma_issue_window_bench.hip.cpp"
+        64)
+    ggml_hrx_add_hip_bench(
         hrx-hip-bench-topk-w32
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/hip-bench/topk_moe_bench.hip.cpp"
         32)
@@ -1092,6 +1096,7 @@ if (GGML_HRX_BUILD_HIP_BENCHES)
             hrx-hip-bench-lds-halfword-stage
             hrx-hip-bench-coopmat-store-contract
             hrx-hip-bench-wmma-f16-lane-map
+            hrx-hip-bench-wmma-issue-window
             hrx-hip-bench-topk-w32
             hrx-hip-bench-topk-w64)
 endif()
