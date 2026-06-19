@@ -3898,15 +3898,26 @@ static int run_dump_case(const std::string & mode, const std::string & dump_dir)
 int main(int argc, char ** argv) {
     std::string mode = "all";
     std::string dump_dir;
+    int custom_rows = 0;
+    int custom_cols = 0;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
             mode = argv[++i];
         } else if (std::strcmp(argv[i], "--dump-dir") == 0 && i + 1 < argc) {
             dump_dir = argv[++i];
+        } else if (std::strcmp(argv[i], "--rows") == 0 && i + 1 < argc) {
+            custom_rows = std::atoi(argv[++i]);
+        } else if (std::strcmp(argv[i], "--cols") == 0 && i + 1 < argc) {
+            custom_cols = std::atoi(argv[++i]);
         } else {
-            std::fprintf(stderr, "usage: %s [--mode motif192-synth-address|motif192-wmma-address|motif192-wmma-direct-address|motif192-wmma-stage16-address|motif192-wmma-stage32-address|array8-fullb|array16-direct-raw|array16-direct-raw-bcopy|array16-direct-raw-abcopy|contract-direct192-raw|contract-direct192-bcopy|contract-direct192-bcopy-hoist|contract-direct192-abcopy|contract-direct192-abcopy-bhoist|contract-bm128-direct192-raw|contract-bm128-direct192-raw-asm|contract-bm128-direct192-bcopy-upper|contract-bm128-direct192-bcopy-upper-asm|contract-bm128-direct192-bcopy-upper-hoist|contract-bm128-direct192-abcopy|contract-bm128-direct192-abcopy-bhoist|contract-bm128-direct192-abcopy-bhoist-asm|contract-phase96-abcopy|phase96-bm128-abcopy|phase96-bm128-abcopy-backendlike|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|array8-fullb-2phase-bcopy|array8-fullb-2phase-bcopy-stage|array8-fullb-2phase-abcopy|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group0-bcopy-stage|single-group8|single-group8-consume|single-group8-opsel1|single-group8-bmirror0|single-group8-bcopy|single-group8-abcopy|single-group8-bcopy-stage|single-group8-abcopy-stage|single-group8-bcopy-stage-selected|single-group12|single-group12-consume|single-group12-opsel1|single-group12-bmirror0|single-group12-bcopy|single-group12-abcopy|single-group12-bcopy-stage|single-group12-abcopy-stage|single-group12-bcopy-stage-selected|single-group12-abcopy-stage-selected|single-group12-bcopy-stage-selected-acccopy|single-group12-abcopy-stage-selected-acccopy|single-group12-bcopy-stage-selected-regcopy|single-group12-abcopy-stage-selected-regcopy|single-group12-abcopy-dual-stage-raw-first|single-group12-abcopy-dual-stage-stage-first|single-group13|single-group13-consume|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c12-s0-bcopy-stage-selected|remap-c12-s0-abcopy-stage-selected|remap-c0-s12|remap-c0-s12-stage-selected|bfrag-dump|all] [--dump-dir <test-backend-ops dump dir>]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--mode motif192-synth-address|motif192-wmma-address|motif192-wmma-direct-address|motif192-wmma-stage16-address|motif192-wmma-stage32-address|array8-fullb|array16-direct-raw|array16-direct-raw-bcopy|array16-direct-raw-abcopy|contract-direct192-raw|contract-direct192-bcopy|contract-direct192-bcopy-hoist|contract-direct192-abcopy|contract-direct192-abcopy-bhoist|contract-bm128-direct192-raw|contract-bm128-direct192-raw-asm|contract-bm128-direct192-bcopy-upper|contract-bm128-direct192-bcopy-upper-asm|contract-bm128-direct192-bcopy-upper-hoist|contract-bm128-direct192-abcopy|contract-bm128-direct192-abcopy-bhoist|contract-bm128-direct192-abcopy-bhoist-asm|contract-phase96-abcopy|phase96-bm128-abcopy|phase96-bm128-abcopy-backendlike|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|array8-fullb-2phase-bcopy|array8-fullb-2phase-bcopy-stage|array8-fullb-2phase-abcopy|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group0-bcopy-stage|single-group8|single-group8-consume|single-group8-opsel1|single-group8-bmirror0|single-group8-bcopy|single-group8-abcopy|single-group8-bcopy-stage|single-group8-abcopy-stage|single-group8-bcopy-stage-selected|single-group12|single-group12-consume|single-group12-opsel1|single-group12-bmirror0|single-group12-bcopy|single-group12-abcopy|single-group12-bcopy-stage|single-group12-abcopy-stage|single-group12-bcopy-stage-selected|single-group12-abcopy-stage-selected|single-group12-bcopy-stage-selected-acccopy|single-group12-abcopy-stage-selected-acccopy|single-group12-bcopy-stage-selected-regcopy|single-group12-abcopy-stage-selected-regcopy|single-group12-abcopy-dual-stage-raw-first|single-group12-abcopy-dual-stage-stage-first|single-group13|single-group13-consume|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c12-s0-bcopy-stage-selected|remap-c12-s0-abcopy-stage-selected|remap-c0-s12|remap-c0-s12-stage-selected|bfrag-dump|all] [--dump-dir <test-backend-ops dump dir>] [--rows N --cols N]\n", argv[0]);
             return 2;
         }
+    }
+    const bool custom_shape = custom_rows != 0 || custom_cols != 0;
+    if (custom_shape && (custom_rows <= 0 || custom_cols <= 0)) {
+        std::fprintf(stderr, "--rows and --cols must both be positive when either is provided\n");
+        return 2;
     }
 
     if (!dump_dir.empty()) {
@@ -3917,32 +3928,68 @@ int main(int argc, char ** argv) {
     const int rows = 64;
     const int k = 4096;
     if (mode == "motif192-synth-address") {
-        status |= run_motif192_synthetic_case(128, 128);
-        status |= run_motif192_synthetic_case(128, 129);
-        status |= run_motif192_synthetic_case(129, 128);
-        status |= run_motif192_synthetic_case(1024, 512);
-        status |= run_motif192_synthetic_case(4096, 512);
-        status |= run_motif192_synthetic_case(4096, 513);
+        if (custom_shape) {
+            status |= run_motif192_synthetic_case(custom_rows, custom_cols);
+        } else {
+            status |= run_motif192_synthetic_case(128, 128);
+            status |= run_motif192_synthetic_case(128, 129);
+            status |= run_motif192_synthetic_case(129, 128);
+            status |= run_motif192_synthetic_case(1024, 512);
+            status |= run_motif192_synthetic_case(4096, 512);
+            status |= run_motif192_synthetic_case(4096, 513);
+        }
     }
     if (mode == "motif192-wmma-address") {
-        status |= run_motif192_wmma_suite(
-            "motif192-wmma-address",
-            Q8_REPRO_MOTIF192_STORE_FULL);
+        if (custom_shape) {
+            status |= run_motif192_wmma_case(
+                "motif192-wmma-address",
+                custom_rows,
+                custom_cols,
+                Q8_REPRO_MOTIF192_STORE_FULL);
+        } else {
+            status |= run_motif192_wmma_suite(
+                "motif192-wmma-address",
+                Q8_REPRO_MOTIF192_STORE_FULL);
+        }
     }
     if (mode == "motif192-wmma-direct-address") {
-        status |= run_motif192_wmma_suite(
-            "motif192-wmma-direct-address",
-            Q8_REPRO_MOTIF192_STORE_DIRECT);
+        if (custom_shape) {
+            status |= run_motif192_wmma_case(
+                "motif192-wmma-direct-address",
+                custom_rows,
+                custom_cols,
+                Q8_REPRO_MOTIF192_STORE_DIRECT);
+        } else {
+            status |= run_motif192_wmma_suite(
+                "motif192-wmma-direct-address",
+                Q8_REPRO_MOTIF192_STORE_DIRECT);
+        }
     }
     if (mode == "motif192-wmma-stage16-address") {
-        status |= run_motif192_wmma_suite(
-            "motif192-wmma-stage16-address",
-            Q8_REPRO_MOTIF192_STORE_STAGE16);
+        if (custom_shape) {
+            status |= run_motif192_wmma_case(
+                "motif192-wmma-stage16-address",
+                custom_rows,
+                custom_cols,
+                Q8_REPRO_MOTIF192_STORE_STAGE16);
+        } else {
+            status |= run_motif192_wmma_suite(
+                "motif192-wmma-stage16-address",
+                Q8_REPRO_MOTIF192_STORE_STAGE16);
+        }
     }
     if (mode == "motif192-wmma-stage32-address") {
-        status |= run_motif192_wmma_suite(
-            "motif192-wmma-stage32-address",
-            Q8_REPRO_MOTIF192_STORE_STAGE32);
+        if (custom_shape) {
+            status |= run_motif192_wmma_case(
+                "motif192-wmma-stage32-address",
+                custom_rows,
+                custom_cols,
+                Q8_REPRO_MOTIF192_STORE_STAGE32);
+        } else {
+            status |= run_motif192_wmma_suite(
+                "motif192-wmma-stage32-address",
+                Q8_REPRO_MOTIF192_STORE_STAGE32);
+        }
     }
     if (mode == "all" || mode == "array8-fullb") {
         status |= run_case("array8-fullb", rows, 64, k);

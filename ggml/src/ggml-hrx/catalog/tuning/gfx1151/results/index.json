@@ -3,6 +3,14 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_motif192_staged_window_shape_threshold",
+      "date": "2026-06-19",
+      "artifact": "cache/hrxv1/gfx1151/q8-motif192-stage-threshold-20260619-155915/",
+      "repeat_artifact": "cache/hrxv1/gfx1151/q8-motif192-stage-threshold-repeat-20260619-155951/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro",
+      "status": "staged_fault_is_allocation_sensitive_not_simple_row_threshold"
+    },
+    {
       "id": "q8_0_motif192_staged_window_fault_isolation",
       "date": "2026-06-19",
       "direct_artifact": "cache/hrxv1/gfx1151/q8-motif192-wmma-direct-address-20260619-155416/",
