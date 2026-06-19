@@ -20,6 +20,14 @@
 #define HRX_Q5_K_Q8_1_X4_MMQL64_ISSUE_CR_MAJOR 0
 #endif
 
+#ifndef HRX_Q5_K_Q8_1_X4_MMQL64_TM
+#define HRX_Q5_K_Q8_1_X4_MMQL64_TM 4
+#endif
+
+#ifndef HRX_Q5_K_Q8_1_X4_MMQL64_TN
+#define HRX_Q5_K_Q8_1_X4_MMQL64_TN 2
+#endif
+
 extern "C" __global__ void HRX_Q5_K_Q8_1_X4_MMQL64_EXPORT(
         const hrx_block_q5_K_q8_1_lhs * src0,
         const hrx_block_q8_1_x4_rhs_q5 * src1,
@@ -33,8 +41,8 @@ extern "C" __global__ void HRX_Q5_K_Q8_1_X4_MMQL64_EXPORT(
     constexpr int WM = 64;
     constexpr int WN = 16;
     constexpr int WMITER = 1;
-    constexpr int TM = 4;
-    constexpr int TN = 2;
+    constexpr int TM = HRX_Q5_K_Q8_1_X4_MMQL64_TM;
+    constexpr int TN = HRX_Q5_K_Q8_1_X4_MMQL64_TN;
     constexpr int WNITER = (WM * WN) / (WARP * TM * TN * WMITER);
     constexpr int WSUBM = WM / WMITER;
     constexpr int WSUBN = WN / WNITER;
@@ -44,6 +52,7 @@ extern "C" __global__ void HRX_Q5_K_Q8_1_X4_MMQL64_EXPORT(
     static_assert(BK_STEP >= 1, "unexpected Q5 MMQL64 BK step");
     static_assert(WNITER == 2, "unexpected Q5 MMQL64 narrow tile shape");
     static_assert(WSUBM == 64 && WSUBN == 8, "unexpected Q5 MMQL64 BK2 subtile shape");
+    static_assert(TM * TN == 8, "unexpected Q5 MMQL64 per-lane output ownership");
 
     const unsigned int tid = __builtin_amdgcn_workitem_id_x();
     const int warp_i = static_cast<int>(tid / WARP);
@@ -285,3 +294,5 @@ extern "C" __global__ void HRX_Q5_K_Q8_1_X4_MMQL64_EXPORT(
 #undef HRX_Q5_K_Q8_1_X4_MMQL64_PREFETCH_B_QUAD
 #undef HRX_Q5_K_Q8_1_X4_MMQL64_PREFETCH_B_PAIR
 #undef HRX_Q5_K_Q8_1_X4_MMQL64_ISSUE_CR_MAJOR
+#undef HRX_Q5_K_Q8_1_X4_MMQL64_TM
+#undef HRX_Q5_K_Q8_1_X4_MMQL64_TN

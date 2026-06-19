@@ -1048,6 +1048,15 @@
       "artifact": "cache/hrxv1/gfx1151/q5-mmql64-bk2-bpair-focused-20260619-050557/",
       "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q5_k_q8_1_x4_mmql64_bk2_bpair.hsaco",
       "reason": "The Q5_K packed-Q8_1/x4 MMQL64 BK2 B-pair probe bracketed the accepted p33 BQUAD route by preserving BM64/BN64/BK_STEP=2/WG256/wave64 and changing only the B-cache live window from a full WNITER x TN B-quad to one TN-wide pair per WNITER. It built through CMake/Ninja, and focused CPU-reference passed for p33 plus p512/p513 non-steal guards. Route traces proved p33 selected B-pair for Qcur, ffn_out, and ffn_gate while Kcur stayed on rows2; p512 stayed on MMQL128 and p513 stayed on MMQL128 BQUAD tail. Static HSACO comparison showed the intended pressure reduction, wave64 SGPR=62 VGPR=105 LDS=10240 no spills, versus BQUAD VGPR=124 with the same LDS, 256 v_dot sites, 40 ds_load, 24 ds_store, 39 global_load, 16 global_store, and 2 barriers. Same-runner focused timing rejected the route despite lower VGPR: round 1 p33 sum regressed 3071.563 -> 3144.005 us and round 2 regressed 3067.537 -> 3145.376 us. The ffn_out row slightly improved, but Qcur regressed about 2.2% and ffn_gate regressed about 7.5%, so reducing the B live window is not the right packed-medium axis for Q5 p33. Keep BQUAD as the accepted default and keep this B-pair route opt-in only as rejection evidence."
+    },
+    {
+      "id": "q5_dense_prompt_mmql64_bk2_tn4_bquad_compile",
+      "date": "2026-06-19",
+      "route": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql64x64_bk2_tn4_bquad_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q5_K_Q8_1_X4_MMQL64_BK2_TN4_BQUAD_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q5-mmql64-bk2-tn4-bquad-focused-20260619-051644/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q5_k_q8_1_x4_mmql64_bk2_tn4_bquad.hsaco",
+      "reason": "The Q5_K packed-Q8_1/x4 MMQL64 BK2 TN4/BQUAD probe preserved the accepted p33 BQUAD route's BM64/BN64/BK_STEP=2/WG256/wave64 dataflow and BQUAD issue window, but changed per-lane output ownership from TM4/TN2 to TM2/TN4. This was a bounded packed-RHS/output-ownership axis after BK1, B-pair, B-quad, and CR-major issue order had already been tested. It built through CMake/Ninja but failed the compile-resource gate before runtime tests: wave64 SGPR=62, VGPR=192, VGPR spills=183, private_segment_fixed_size=736, LDS=10240. For comparison, the accepted BQUAD route is wave64 SGPR=62, VGPR=124, no spills, private_segment_fixed_size=0, LDS=10240. TN4 preserves 256 v_dot sites and two barriers but raises ds_load count from 40 to 50 and s_waitcnt count from 119 to 249. Reject before focused correctness/perf; the TN4 ownership pivot hits the gfx1151 register cliff and is not a viable packed-medium schedule."
     }
   ]
 }
