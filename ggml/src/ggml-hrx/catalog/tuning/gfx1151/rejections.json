@@ -13,6 +13,16 @@
       "reason": "The Q4_K packed-Q8_1/x4 MMQL64 BK2 B-pair probe preserved the accepted narrow MMQL64 BK2 dataflow and changed only B-cache consume order to preload each TN=2 B-cache pair before issuing dots. This bracketed the accepted B-quad route after B-quad won Llama 3.1 rows>=4096 but regressed Llama 3.2 rows=3072 under force. It compiled through CMake/Ninja with wave64, SGPR=50, VGPR=103, LDS=8192 bytes, no private segment, and no spills. Focused CPU-reference passed for Llama 3.1 p33, p512, p513, and Llama 3.2 p33; p512/p513 stayed on the accepted MMQL128 B-quad route. Llama 3.2 focused timing improved versus default, 10503.04 -> 10311.44 us, and beat forced B-quad at 10397.44 us. However, same-binary Llama 3.2 3B Q4_K_M p33/fa1 model A/B rejected the route: default averaged 460.129 tok/s, while forced B-pair averaged 441.843 tok/s with 830 Q4 rows selecting B-pair. Llama 3.1 focused p33 also regressed if B-pair was forced globally, 2480.52 -> 2636.33 us. Do not default this selector; keep it as an opt-in diagnostic for future rows=3072 schedule work."
     },
     {
+      "id": "q6_moe_id_wmma16_direct_f32_p33_p512_p513",
+      "date": "2026-06-19",
+      "route": "hrx_mul_mat_id_q6_k_wmma16x16_direct_f16acc_wg32_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_ID_WMMA16_DIRECT_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-id-wmma16-direct-focused-20260619-003510/",
+      "perf_artifact": "cache/hrxv1/gfx1151/q6-id-wmma16-direct-perf-20260619-003759/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_id_q6_k_wmma16_direct.hsaco",
+      "reason": "The Q6_K MUL_MAT_ID direct-F32 WMMA diagnostic reused the existing compacted expert-route list but skipped Q8_1 x4 RHS quantization, binding raw F32 activations to a 16x16 direct-WMMA kernel. It tested whether the proven dense Q6 direct-WMMA lane mapping could serve as a semantic bridge toward Vulkan's matmul_id_subgroup_q6_k_f32_f16acc_aligned_m before attempting a full RADV-like clone. It compiled through CMake/Ninja as a wave32 HSACO with SGPR=54, VGPR=52, no LDS, no private segment, no spills, one visible v_wmma_f16_16x16x16_f16 site, and global stores. Focused CPU-reference passed for Qwen3 Q6_K p33, p512, and p513; route traces confirmed the opt-in direct provider selected with direct_f32=1 while default selected the grouped Q8_1/x4 route. Focused same-runner perf rejected the route before model A/B: p33 gate 300.02 -> 2347.06 us and down 262.13 -> 2153.97 us; p512 gate 2399.79 -> 15890.97 us and down 2319.38 -> 19716.80 us; p513 gate 2495.16 -> 16175.99 us and down 2363.23 -> 20285.69 us. This is 6.5x-8.6x slower than the current grouped Q8_1 route, proving that direct-F32 WMMA without RADV-like cooperative staging/writeback is not a viable Q6 ID path. Keep it opt-in only as a semantic/correctness bridge; future Q6 ID work needs a true Vulkan-medium grouped schedule or lower-level cooperative primitive, not this direct-F32 wrapper."
+    },
+    {
       "id": "q6_dense_prompt_vk128_store_stage_tail_policy_p513",
       "date": "2026-06-18",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk128_padded_w64_store_stage_f16acc_wg256_f32",

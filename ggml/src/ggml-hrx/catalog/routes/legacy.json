@@ -4383,6 +4383,50 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_id_q6_k_wmma16x16_direct_f16acc_wg32_f32",
+    "family": "mul_mat_id_q6_k_wmma16x16_direct_f16acc_wg32",
+    "op": "MUL_MAT_ID",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_id_q6_k_wmma16_direct",
+    "artifact_id": "mul_mat_id_q6_k_wmma16_direct_hsaco",
+    "export_name": "hrx_mul_mat_id_q6_k_wmma16x16_direct_f16acc_wg32_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 5,
+      "parameter_count": 6,
+      "constant_byte_length": 96
+    },
+    "dispatch": {
+      "workgroup_size": [
+        32,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_qwen3_moe_q6_id_direct_f32_wmma16_probe"
+    },
+    "shape_guards": {
+      "rows_multiple": 16,
+      "k_multiple": 256,
+      "n_ids": 8,
+      "cols_min": 32,
+      "requires_env": "GGML_HRX_ENABLE_Q6_K_ID_WMMA16_DIRECT_PROMPT"
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_id_q6_k_wmma16x16_direct_f16acc_wg32_f32",
+      "selector_gate": "opt-in on gfx1151 Q6_K MUL_MAT_ID prompt rows with GGML_HRX_ENABLE_Q6_K_ID_WMMA16_DIRECT_PROMPT=1"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_probe",
+      "selection": "Direct-F32 Q6_K MUL_MAT_ID WMMA diagnostic. It reuses the existing compacted expert-route list but skips Q8_1 x4 RHS quantization, using the proven dense Q6 16x16 direct-WMMA lane mapping as a semantic bridge toward Vulkan matmul_id_subgroup_q6_k_f32_f16acc_aligned_m. Focused p33/p512/p513 CPU-reference passed, and route traces confirmed selection under GGML_HRX_ENABLE_Q6_K_ID_WMMA16_DIRECT_PROMPT=1, but focused same-runner perf was 6.5x-8.6x slower than the current grouped Q8_1/x4 ID route. Keep opt-in only as semantic evidence; do not promote."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_id_q4_k_q8_1_f32",
     "family": "mul_mat_id_q4_k_q8_1",
     "op": "MUL_MAT_ID",
