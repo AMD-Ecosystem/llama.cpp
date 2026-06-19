@@ -7884,6 +7884,50 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_batched4_p33_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_batched4_p33_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q5_k_wmma16_vk64_padded44_w64_batched4_p33_wg256",
+    "artifact_id": "mul_mat_vec_q5_k_wmma16_vk64_padded44_w64_batched4_p33_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_batched4_p33_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q5_dense_prompt_wmma16x16_vk64_padded44_w64_batched4_p33_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q5_K x F32 -> F32 MUL_MAT",
+      "k_multiple": 256,
+      "rows_min": 512,
+      "cols_exact": 33,
+      "requires_env": "GGML_HRX_ENABLE_Q5_K_WMMA16_VK64_PADDED44_W64_BATCHED4_P33_F16ACC_WG256_PROMPT",
+      "prior_delta": "Qwen2.5 Coder 7B Q5_K_M p33 RADV medium route uses BM64/BN64/BK32/WG256 wave64 and only 16 visible WMMA sites. The full batched4 catalog route passed focused p33 correctness but restaged A/B for four group phases, including group_base=12 whose outputs are unused at cols=33. This opt-in probe preserves the exact correctness-clean batched4 source contract while skipping the unused p33 phase so focused evidence can quantify the upper bound of simple phase pruning."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_batched4_p33_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_correctness_probe",
+      "selection": "Opt-in Q5_K p33-pruned batched4 probe. Native repro evidence showed this source contract preserves p33 correctness at k=256 and k=3584, but focused catalog CPU-reference selected the route for all four Qwen2.5 Coder p33 rows and failed ffn_out at k=18944 with finite ERR=0.043113960. Selected-symbol HSACO facts were SGPR=51, VGPR=182, LDS=11264, no spills, 24 WMMA, 192 ds_load_b64, 48 buffer stores, 9 barriers, and 80 waits. Reject before timing/model tests; the full batched4 source contract remains the correctness oracle for wide-K p33."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_wave4row_f16acc_wg256_f32",
     "family": "mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_wave4row_f16acc_wg256",
     "op": "MUL_MAT",

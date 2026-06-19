@@ -581,6 +581,12 @@
     "format": "amdgpu-hsaco",
     "storage": "embedded"
   },
+  "mul_mat_vec_q5_k_wmma16_vk64_padded44_w64_batched4_p33_wg256_hsaco": {
+    "source_id": "mul_mat_vec_q5_k_wmma16_vk64_padded44_w64_batched4_p33_wg256",
+    "path": "mul_mat_vec_q5_k_wmma16_vk64_padded44_w64_batched4_p33_wg256.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
   "mul_mat_vec_q5_k_wmma16_vk64_padded44_w64_wave4row_wg256_hsaco": {
     "source_id": "mul_mat_vec_q5_k_wmma16_vk64_padded44_w64_wave4row_wg256",
     "path": "mul_mat_vec_q5_k_wmma16_vk64_padded44_w64_wave4row_wg256.hsaco",
