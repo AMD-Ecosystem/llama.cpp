@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_lds_k2_mixed160_threshold_contract",
+      "date": "2026-06-19",
+      "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-mixed160-lo and --mode=wmma-lds-k2-mixed160-hi",
+      "env": "standalone CMake-built gfx1151 HIP bench diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/coopstore-lds-k2-mixed-threshold2-probe-20260619-082030/",
+      "isa_artifact": "cache/hrxv1/gfx1151/coopstore-lds-k2-mixed-threshold2-probe-20260619-082030/compare-wmma_lds_k2_mixed160_lo.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract",
+      "reason": "The Q8_0 LDS K2 mixed-stage threshold probe bracketed the halfword-stage surface after the direct-only K2 primitive passed. In the same CMake-built binary, wmma-lds-k2-direct64 passed, wmma-lds-k2-mixed128 passed, and both 160-store variants failed: mixed160-lo staged groups 16..31 plus 32..39 and mixed160-hi staged groups 16..31 plus 40..47, both failing at first_bad=4800 group=18 slot=3 lane=0 actual=2048 expected=12803. Static evidence for the passing mixed128 surface was wave64, SGPR=14, VGPR=162, no spills, 32 WMMA, 64 ds_load_b64, 64 ds_store_b16, 64 ds_load_u16_d16, and 128 buffer_store_b32. The failing mixed160-lo surface kept the same WMMA/LDS-fragment path and moved to 96 ds_store_b16, 96 ds_load_u16_d16, and 160 buffer_store_b32. This rejects the next halfword-stage expansion beyond the correctness-clean 16 staged groups; the corruption is triggered by adding any extra staged group block beyond 16..31, not by the specific 32..39 versus 40..47 address slice. Do not build a production Q8_0 route on this HIP C++ mixed-stage path past the mixed128 surface."
+    },
+    {
       "id": "q8_0_lds_k2_stagefirst_mixed_store_contract",
       "date": "2026-06-19",
       "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-stagefirst-mixed192",
