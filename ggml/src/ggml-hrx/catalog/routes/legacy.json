@@ -8015,6 +8015,50 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_wave4row_batchwait_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_wave4row_batchwait_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q5_k_wmma16_vk64_padded44_w64_wave4row_batchwait_wg256",
+    "artifact_id": "mul_mat_vec_q5_k_wmma16_vk64_padded44_w64_wave4row_batchwait_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_wave4row_batchwait_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q5_dense_prompt_wmma16x16_vk64_padded44_w64_wave4row_batchwait_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q5_K x F32 -> F32 MUL_MAT",
+      "k_multiple": 256,
+      "rows_min": 512,
+      "cols_exact": 33,
+      "requires_env": "GGML_HRX_ENABLE_Q5_K_WMMA16_VK64_PADDED44_W64_WAVE4ROW_BATCHWAIT_F16ACC_WG256_PROMPT",
+      "prior_delta": "Qwen2.5 Coder 7B Q5_K_M p33 RADV medium route batches LDS fragment reads before WMMA issue: BM64/BN64/BK32/WG256 wave64, 48 ds_load_b64, 16 visible WMMA sites, 96 stores, two barriers, and final pre-WMMA lgkmcnt(40). The prior wave4row probe preserved all-wave low-live output ownership and passed correctness, but used per-read lgkmcnt waits and was too slow. This opt-in p33-only probe keeps the same ownership and single A/B staging while issuing each four-B64 fragment read group before one wait, testing wait granularity as an isolated RADV load-window axis."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_wave4row_batchwait_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_perf_probe",
+      "selection": "Opt-in Q5_K p33 wave4row batch-wait load-window probe. It passed focused CPU-reference for all four Qwen2.5 Coder p33 rows, selected the intended direct route after q8_1 selector decline wiring, and did not steal p512/p513. Selected-symbol facts were SGPR=32, VGPR=102, LDS=11264, no spills, 8 visible WMMA, 40 ds_load_b64, 16 buffer stores, 2 barriers, and 36 waits. Same-runner focused timing rejected it versus the current BHALF packed default: p33 sum 3038.316 -> 6225.338 us."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q6_k_f32",
     "family": "mul_mat_vec_q6_k",
     "op": "MUL_MAT",

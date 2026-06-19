@@ -3,6 +3,15 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q5_dense_prompt_vk64_wave4row_batchwait_load_window_p33",
+      "date": "2026-06-19",
+      "route": "hrx_mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_wave4row_batchwait_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q5_K_WMMA16_VK64_PADDED44_W64_WAVE4ROW_BATCHWAIT_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q5-p33-wave4row-batchwait-20260619-064007/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q5_k_wmma16_vk64_padded44_w64_wave4row_batchwait_wg256.hsaco",
+      "reason": "The Q5_K VK64 wave4row batch-wait probe preserved the correctness-clean all-wave low-live direct-WMMA ownership route and changed only the LDS fragment load-window spelling: four ds_load_b64 reads are issued for a fragment before one lgkmcnt wait, instead of the prior wave4row route's per-read wait. This directly tested the RADV p33 medium oracle's batched LDS load-window axis while keeping BM64/BN64/BK32/WG256/wave64, 11264 bytes LDS, and one A/B staging pass per K tile. The route built through CMake/Ninja as an opt-in catalog HSACO and selected for all four Qwen2.5 Coder 7B Q5_K_M p33 focused rows after the q8_1 variant selector was taught to decline packed RHS when this direct route is forced. Focused CPU-reference passed all four p33 rows, and p512/p513 non-steal CPU-reference passed with traces proving p512 stayed on MMQL128 and p513 stayed on MMQL128 BQUAD. Selected-symbol facts were wave64, SGPR=32, VGPR=102, LDS=11264, no private segment, no spills, 8 visible v_wmma_f16_16x16x16_f16, 40 ds_load_b64, 16 buffer_store_b32, 2 barriers, and 36 s_waitcnt. This improves the prior wave4row wait count (51 -> 36) and focused timing modestly, but still rejects versus the accepted BHALF packed default: p33 sum 3038.316 -> 6225.338 us, Kcur 71.559 -> 359.587 us, Qcur 258.398 -> 462.957 us, ffn_out 1552.671 -> 3140.975 us, and ffn_gate 1155.688 -> 2261.818 us. Keep it opt-in only. The result says batching per-fragment LDS waits is correct and directionally better than per-read waits, but direct-F32 WMMA remains the wrong production family for Q5 p33 unless a lower-level RADV-equivalent cooperative writeback/store contract can remove the remaining 2x gap."
+    },
+    {
       "id": "q4_moe_id_wmma16_direct_f32_p33_p512_p513",
       "date": "2026-06-19",
       "route": "hrx_mul_mat_id_q4_k_wmma16x16_direct_f16acc_wg32_f32",
