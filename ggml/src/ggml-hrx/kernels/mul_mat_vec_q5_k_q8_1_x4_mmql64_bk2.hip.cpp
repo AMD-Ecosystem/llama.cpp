@@ -1,13 +1,21 @@
 #include "mul_mat_vec_q5_k_q8_1_common.hip.inc"
 
-extern "C" __global__ void hrx_mul_mat_vec_q5_k_q8_1_x4_mmql64x64_bk2_wg256_f32(
+#ifndef HRX_Q5_K_Q8_1_X4_MMQL64_EXPORT
+#define HRX_Q5_K_Q8_1_X4_MMQL64_EXPORT hrx_mul_mat_vec_q5_k_q8_1_x4_mmql64x64_bk2_wg256_f32
+#endif
+
+#ifndef HRX_Q5_K_Q8_1_X4_MMQL64_BK_STEP
+#define HRX_Q5_K_Q8_1_X4_MMQL64_BK_STEP 2
+#endif
+
+extern "C" __global__ void HRX_Q5_K_Q8_1_X4_MMQL64_EXPORT(
         const hrx_block_q5_K_q8_1_lhs * src0,
         const hrx_block_q8_1_x4_rhs_q5 * src1,
         float * dst,
         long long k, long long rows, long long cols) {
     constexpr int BM = 64;
     constexpr int BN = 64;
-    constexpr int BK_STEP = 2;
+    constexpr int BK_STEP = HRX_Q5_K_Q8_1_X4_MMQL64_BK_STEP;
     constexpr int BLOCK_SIZE = 256;
     constexpr int WARP = 64;
     constexpr int WM = 64;
@@ -21,7 +29,8 @@ extern "C" __global__ void hrx_mul_mat_vec_q5_k_q8_1_x4_mmql64x64_bk2_wg256_f32(
     constexpr int LOAD_VEC_A = 4;
     constexpr int LOAD_VEC_B = 16;
 
-    static_assert(WNITER == 2, "unexpected Q5 MMQL64 BK2 narrow tile shape");
+    static_assert(BK_STEP >= 1, "unexpected Q5 MMQL64 BK step");
+    static_assert(WNITER == 2, "unexpected Q5 MMQL64 narrow tile shape");
     static_assert(WSUBM == 64 && WSUBN == 8, "unexpected Q5 MMQL64 BK2 subtile shape");
 
     const unsigned int tid = __builtin_amdgcn_workitem_id_x();
@@ -179,3 +188,6 @@ extern "C" __global__ void hrx_mul_mat_vec_q5_k_q8_1_x4_mmql64x64_bk2_wg256_f32(
         }
     }
 }
+
+#undef HRX_Q5_K_Q8_1_X4_MMQL64_EXPORT
+#undef HRX_Q5_K_Q8_1_X4_MMQL64_BK_STEP

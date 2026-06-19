@@ -1,0 +1,3 @@
+#define HRX_Q5_K_Q8_1_X4_MMQL64_EXPORT hrx_mul_mat_vec_q5_k_q8_1_x4_mmql64x64_bk1_wg256_f32
+#define HRX_Q5_K_Q8_1_X4_MMQL64_BK_STEP 1
+#include "mul_mat_vec_q5_k_q8_1_x4_mmql64_bk2.hip.cpp"

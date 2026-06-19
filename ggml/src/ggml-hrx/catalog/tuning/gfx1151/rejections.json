@@ -3,6 +3,15 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q5_dense_prompt_mmql64_bk1_p33",
+      "date": "2026-06-18",
+      "route": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql64x64_bk1_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q5_K_Q8_1_X4_MMQL64_BK1_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q5-mmql64-bk1-focused-20260618-222141/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q5_k_q8_1_x4_mmql64_bk1.hsaco",
+      "reason": "The Q5_K packed-Q8_1/x4 BK_STEP=1 probe preserved the accepted p33 MMQL64 BM64/BN64/WG256/wave64 packed integer-dot dataflow while changing only the staged K depth from two Q8_1 blocks to one Q8_1 block. This mechanically tested the Vulkan medium oracle's BK32 slice depth against the accepted BK2 route. It compiled through CMake/Ninja with wave64, SGPR=54, VGPR=92, LDS=5120 bytes, no private segment, 128 v_dot4_i32_iu8, 20 LDS reads, 10 LDS writes, 16 stores, and 2 barriers. Focused CPU-reference gates passed for p33, p512, and p513. Route traces proved p33 selected BK1 for Qcur and ffn_out only, while p512 stayed on current MMQL128 and p513 stayed on current B-quad tail routing. It is rejected for promotion because same-runner focused p33 timing regressed every row versus the accepted BK2 default: Kcur 72.78 -> 76.13 us, Qcur 278.09 -> 307.17 us, ffn_out 1609.18 -> 1873.68 us, and ffn_gate 1784.19 -> 1832.53 us. Despite matching the oracle's nominal BK32 depth, the shallower HIP packed route loses dot throughput and halves the Qcur perf loop count; keep BK2 as the narrow default and look next at issue order, B-cache ownership, or a separate Qcur-only route rather than reducing K staging depth."
+    },
+    {
       "id": "q5_dense_prompt_mmq64x48_p33",
       "date": "2026-06-18",
       "route": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmq64x48_wg256_f32",
