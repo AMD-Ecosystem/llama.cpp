@@ -35,6 +35,7 @@ INTERESTING_PREFIXES = (
     "s_waitcnt",
     "s_load",
 )
+STORE_PREFIXES = ("buffer_store", "global_store", "flat_store", "ds_store", "ds_write")
 
 
 def read_lines(path):
@@ -103,13 +104,13 @@ def summarize_isa_events(events):
         if event["bb"]:
             by_bb[event["bb"]][event["opcode"]] += 1
     for bb, counts in sorted(by_bb.items(), key=lambda item: int(item[0][2:])):
-        if any(op.startswith(("buffer_store", "global_store", "flat_store", "ds_store", "ds_write")) for op in counts):
+        if any(op.startswith(STORE_PREFIXES) for op in counts):
             store_blocks.append({
                 "bb": bb,
                 "opcodes": dict(sorted(counts.items())),
                 "store_ops": sum(
                     count for op, count in counts.items()
-                    if op.startswith(("buffer_store", "global_store", "flat_store", "ds_store", "ds_write"))
+                    if op.startswith(STORE_PREFIXES)
                 ),
             })
 
@@ -130,8 +131,26 @@ def summarize_isa_events(events):
         base = event["operands"][1].split()[0]
         lds_load_offsets[base].append(event["offsets"].get("offset", 0))
 
+    store_windows = []
+    seen_store_lines = set()
+    for index, event in enumerate(events):
+        if not event["opcode"].startswith(STORE_PREFIXES) or event["line"] in seen_store_lines:
+            continue
+        window = events[max(0, index - 4):min(len(events), index + 8)]
+        for item in window:
+            if item["opcode"].startswith(STORE_PREFIXES):
+                seen_store_lines.add(item["line"])
+        store_windows.append({
+            "first_store_line": event["line"],
+            "opcodes": dict(collections.Counter(item["opcode"] for item in window)),
+            "events": window,
+        })
+        if len(store_windows) >= 16:
+            break
+
     return {
         "store_blocks": store_blocks,
+        "store_windows": store_windows,
         "pre_wmma_ds_load_b64_offsets": {
             base: values for base, values in sorted(lds_load_offsets.items())
         },
@@ -361,6 +380,14 @@ def write_markdown(path, payload):
             for block in store_blocks:
                 ops = ", ".join(f"{op}={count}" for op, count in block["opcodes"].items())
                 lines.append(f"| `{block['bb']}` | {block['store_ops']} | `{ops}` |")
+            lines.append("")
+
+        store_windows = event_summary.get("store_windows", [])
+        if store_windows:
+            lines += ["### Store Windows", "", "| First Store Line | Interesting Ops |", "| ---: | --- |"]
+            for window in store_windows[:12]:
+                ops = ", ".join(f"{op}={count}" for op, count in sorted(window["opcodes"].items()))
+                lines.append(f"| {window['first_store_line']} | `{ops}` |")
             lines.append("")
 
         window = event_summary.get("wmma_window", [])
