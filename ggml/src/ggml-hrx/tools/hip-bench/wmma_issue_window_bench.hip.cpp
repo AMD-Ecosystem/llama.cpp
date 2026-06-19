@@ -174,6 +174,11 @@ static __device__ __forceinline__ half16_vec wmma_issue_window_dep_copy_after_to
         (ACC)[TILE] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a_dep, b_dep, (ACC)[TILE], false); \
     } while (0)
 
+#define WMMA_ISSUE_WINDOW_DIRECT_WMMA(ACC, TILE, A, B) \
+    do { \
+        (ACC)[TILE] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64((A), (B), (ACC)[TILE], false); \
+    } while (0)
+
 template <int wait_lgkmcnt>
 __global__ __launch_bounds__(64, 1)
 void wmma_issue_window_probe(float * dst) {
@@ -293,8 +298,76 @@ void wmma_issue_window_realfrag16_probe(float * dst) {
     WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 15, a3, b3, 0, a2, 14);
 
 #pragma unroll
-    for (int i = 0; i < 8; ++i) {
-        dst[lane * 8u + static_cast<unsigned int>(i)] = static_cast<float>(acc[0][i] + acc[15][i]);
+    for (int t = 0; t < 16; ++t) {
+#pragma unroll
+        for (int i = 0; i < 8; ++i) {
+            dst[lane * 128u + static_cast<unsigned int>(t * 8 + i)] = static_cast<float>(acc[t][i]);
+        }
+    }
+}
+
+__global__ __launch_bounds__(64, 1)
+void wmma_issue_window_realfrag16_direct_probe(float * dst) {
+    __shared__ uint64_t sh[16 * 64 * 4];
+    const unsigned int lane = __builtin_amdgcn_workitem_id_x() & 63u;
+
+#pragma unroll
+    for (unsigned int frag = 0; frag < 8u; ++frag) {
+#pragma unroll
+        for (unsigned int item = 0; item < 4u; ++item) {
+            const uint64_t lo = static_cast<uint64_t>(0x3c00u + ((frag + item + lane) & 7u));
+            const uint64_t packed = lo | (lo << 16) | (lo << 32) | (lo << 48);
+            sh[frag * 256u + lane * 4u + item] = packed;
+        }
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+
+    const __attribute__((address_space(3))) uint64_t * lds =
+        (const __attribute__((address_space(3))) uint64_t *) sh;
+
+    const half16_vec a0 = wmma_issue_window_load_fragment(lds, lane, 0u);
+    const half16_vec a1 = wmma_issue_window_load_fragment(lds, lane, 1u);
+    const half16_vec a2 = wmma_issue_window_load_fragment(lds, lane, 2u);
+    const half16_vec a3 = wmma_issue_window_load_fragment(lds, lane, 3u);
+    const half16_vec b0 = wmma_issue_window_load_fragment(lds, lane, 4u);
+    const half16_vec b1 = wmma_issue_window_load_fragment(lds, lane, 5u);
+    const half16_vec b2 = wmma_issue_window_load_fragment(lds, lane, 6u);
+    const half16_vec b3 = wmma_issue_window_load_fragment(lds, lane, 7u);
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+
+    half8_vec acc[16];
+#pragma unroll
+    for (int t = 0; t < 16; ++t) {
+#pragma unroll
+        for (int i = 0; i < 8; ++i) {
+            acc[t][i] = static_cast<_Float16>(0.0f);
+        }
+    }
+
+    WMMA_ISSUE_WINDOW_DIRECT_WMMA(acc, 0, a0, b0);
+    WMMA_ISSUE_WINDOW_DIRECT_WMMA(acc, 1, a1, b0);
+    WMMA_ISSUE_WINDOW_DIRECT_WMMA(acc, 2, a2, b0);
+    WMMA_ISSUE_WINDOW_DIRECT_WMMA(acc, 3, a3, b0);
+    WMMA_ISSUE_WINDOW_DIRECT_WMMA(acc, 4, a0, b1);
+    WMMA_ISSUE_WINDOW_DIRECT_WMMA(acc, 5, a1, b1);
+    WMMA_ISSUE_WINDOW_DIRECT_WMMA(acc, 6, a2, b1);
+    WMMA_ISSUE_WINDOW_DIRECT_WMMA(acc, 7, a3, b1);
+    WMMA_ISSUE_WINDOW_DIRECT_WMMA(acc, 8, a0, b2);
+    WMMA_ISSUE_WINDOW_DIRECT_WMMA(acc, 9, a1, b2);
+    WMMA_ISSUE_WINDOW_DIRECT_WMMA(acc, 10, a2, b2);
+    WMMA_ISSUE_WINDOW_DIRECT_WMMA(acc, 11, a3, b2);
+    WMMA_ISSUE_WINDOW_DIRECT_WMMA(acc, 12, a0, b3);
+    WMMA_ISSUE_WINDOW_DIRECT_WMMA(acc, 13, a1, b3);
+    WMMA_ISSUE_WINDOW_DIRECT_WMMA(acc, 14, a2, b3);
+    WMMA_ISSUE_WINDOW_DIRECT_WMMA(acc, 15, a3, b3);
+
+#pragma unroll
+    for (int t = 0; t < 16; ++t) {
+#pragma unroll
+        for (int i = 0; i < 8; ++i) {
+            dst[lane * 128u + static_cast<unsigned int>(t * 8 + i)] = static_cast<float>(acc[t][i]);
+        }
     }
 }
 
@@ -345,8 +418,66 @@ void wmma_issue_window_realfrag8_probe(float * dst) {
     WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 7, a3, b1, 24, a2, 6);
 
 #pragma unroll
-    for (int i = 0; i < 8; ++i) {
-        dst[lane * 8u + static_cast<unsigned int>(i)] = static_cast<float>(acc[0][i] + acc[7][i]);
+    for (int t = 0; t < 8; ++t) {
+#pragma unroll
+        for (int i = 0; i < 8; ++i) {
+            dst[lane * 128u + static_cast<unsigned int>(t * 8 + i)] = static_cast<float>(acc[t][i]);
+        }
+    }
+}
+
+__global__ __launch_bounds__(64, 1)
+void wmma_issue_window_realfrag8_direct_probe(float * dst) {
+    __shared__ uint64_t sh[12 * 64 * 4];
+    const unsigned int lane = __builtin_amdgcn_workitem_id_x() & 63u;
+
+#pragma unroll
+    for (unsigned int frag = 0; frag < 6u; ++frag) {
+#pragma unroll
+        for (unsigned int item = 0; item < 4u; ++item) {
+            const uint64_t lo = static_cast<uint64_t>(0x3c00u + ((frag + item + lane) & 7u));
+            const uint64_t packed = lo | (lo << 16) | (lo << 32) | (lo << 48);
+            sh[frag * 256u + lane * 4u + item] = packed;
+        }
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+
+    const __attribute__((address_space(3))) uint64_t * lds =
+        (const __attribute__((address_space(3))) uint64_t *) sh;
+
+    const half16_vec a0 = wmma_issue_window_load_fragment(lds, lane, 0u);
+    const half16_vec a1 = wmma_issue_window_load_fragment(lds, lane, 1u);
+    const half16_vec a2 = wmma_issue_window_load_fragment(lds, lane, 2u);
+    const half16_vec a3 = wmma_issue_window_load_fragment(lds, lane, 3u);
+    const half16_vec b0 = wmma_issue_window_load_fragment(lds, lane, 4u);
+    const half16_vec b1 = wmma_issue_window_load_fragment(lds, lane, 5u);
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+
+    half8_vec acc[8];
+#pragma unroll
+    for (int t = 0; t < 8; ++t) {
+#pragma unroll
+        for (int i = 0; i < 8; ++i) {
+            acc[t][i] = static_cast<_Float16>(0.0f);
+        }
+    }
+
+    WMMA_ISSUE_WINDOW_DIRECT_WMMA(acc, 0, a0, b0);
+    WMMA_ISSUE_WINDOW_DIRECT_WMMA(acc, 1, a1, b0);
+    WMMA_ISSUE_WINDOW_DIRECT_WMMA(acc, 2, a2, b0);
+    WMMA_ISSUE_WINDOW_DIRECT_WMMA(acc, 3, a3, b0);
+    WMMA_ISSUE_WINDOW_DIRECT_WMMA(acc, 4, a0, b1);
+    WMMA_ISSUE_WINDOW_DIRECT_WMMA(acc, 5, a1, b1);
+    WMMA_ISSUE_WINDOW_DIRECT_WMMA(acc, 6, a2, b1);
+    WMMA_ISSUE_WINDOW_DIRECT_WMMA(acc, 7, a3, b1);
+
+#pragma unroll
+    for (int t = 0; t < 8; ++t) {
+#pragma unroll
+        for (int i = 0; i < 8; ++i) {
+            dst[lane * 128u + static_cast<unsigned int>(t * 8 + i)] = static_cast<float>(acc[t][i]);
+        }
     }
 }
 
@@ -388,12 +519,12 @@ int main(int argc, char ** argv) {
         if (std::strncmp(argv[i], "--mode=", 7) == 0) {
             mode = argv[i] + 7;
         } else {
-            std::fprintf(stderr, "usage: %s [--mode=lgkm51|wait0|realfrag16|realfrag8]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--mode=lgkm51|wait0|realfrag16|realfrag8|realfrag16-direct|realfrag8-direct]\n", argv[0]);
             return 2;
         }
     }
 
-    const size_t count = 64u * 8u;
+    const size_t count = 64u * 16u * 8u;
     device_buffer<float> d_out(count);
     std::vector<float> h_out(count);
     HIP_CHECK(hipMemset(d_out.ptr, 0, count * sizeof(float)));
@@ -406,6 +537,10 @@ int main(int argc, char ** argv) {
         hipLaunchKernelGGL((wmma_issue_window_realfrag16_probe<51>), dim3(1), dim3(64), 0, 0, d_out.ptr);
     } else if (mode == "realfrag8") {
         hipLaunchKernelGGL((wmma_issue_window_realfrag8_probe<51>), dim3(1), dim3(64), 0, 0, d_out.ptr);
+    } else if (mode == "realfrag16-direct") {
+        hipLaunchKernelGGL(wmma_issue_window_realfrag16_direct_probe, dim3(1), dim3(64), 0, 0, d_out.ptr);
+    } else if (mode == "realfrag8-direct") {
+        hipLaunchKernelGGL(wmma_issue_window_realfrag8_direct_probe, dim3(1), dim3(64), 0, 0, d_out.ptr);
     } else {
         std::fprintf(stderr, "unknown mode: %s\n", mode.c_str());
         return 2;
