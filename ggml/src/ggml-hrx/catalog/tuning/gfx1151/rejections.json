@@ -807,6 +807,15 @@
       "reason": "The two-K-tile direct-wait probe preserved the K2 preload shape but removed the dependency-copy v_mov path, issuing direct WMMA calls with explicit RADV-like wait counts. It built through CMake/Ninja with wave64, SGPR=29, VGPR=196, no spills, private segment=0, LDS=20480, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 128 buffer_store_b32, 2 s_barrier, and 37 s_waitcnt. This proves the K2 register cliff is caused by the dependency-copy machinery, not by the two-K source variables alone. It is still rejected at compile-contract gate because the compiler collapses the first-WMMA issue window back to 24 pre-WMMA ds_load_b64, zero loads immediately before final wait, final lgkmcnt=0, and 16 WMMAs in the first window. RADV remains 59/59/lgkmcnt=51/22 with VGPR=192 and no spills."
     },
     {
+      "id": "q8_0_direct_wmma_vk128_nowait_namedfrag_depwait_k2_raw_issue_window",
+      "date": "2026-06-18",
+      "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_nowait_namedfrag_depwait_k2_raw_packstage_bufferstore_f16acc_wg256_f32",
+      "env": "not runtime-selected",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-depwait-k2-raw-compile-20260618-190254/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_nowait_namedfrag_depwait_k2_raw_packstage_bufferstore_wg256.hsaco",
+      "reason": "The two-K-tile raw-fragment depwait probe preserved the K2 RADV-like wait ladder but loaded both K tiles as raw u64x4 LDS fragments, casting to half16 only at the WMMA boundary. This mechanically tested whether the K2 spill cliff was caused by the half16 vector representation rather than by exposing both K tiles and dependency-copying operands. It built through CMake/Ninja with the same tracked pressure contract as the original K2 depwait route: wave64, SGPR=29, VGPR=256, VGPR spills=30, private segment=124, LDS=20480, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 128 buffer_store_b32, 2 s_barrier, 67 s_waitcnt, and 44 s_waitcnt_depctr. The first-WMMA score stays in the K2 neighborhood, with 57 pre-WMMA ds_load_b64, 31 loads immediately before final wait, final lgkmcnt=51, and 20 WMMAs in the first window. Rejected before runtime because raw fragment representation does not reduce pressure or recover RADV's no-spill 192-VGPR contract, 59/59 issue window, or halfword LDS/writeback topology."
+    },
+    {
       "id": "q8_0_prompt_mmq64x128_splitqsum_bstripe_compile_contract",
       "date": "2026-06-18",
       "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bstripe_wg256_f32",
