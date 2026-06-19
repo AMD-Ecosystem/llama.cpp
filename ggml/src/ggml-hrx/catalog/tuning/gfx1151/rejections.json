@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_wmma_group12_synthetic_selected_stage_contract_probe",
+      "date": "2026-06-19",
+      "route": "hrx-hip-bench-wmma-f16-lane-map --mode=group12-selected-stage-contract/group12-selected-stage-contract-hi",
+      "env": "standalone CMake/Ninja-built gfx1151 HIP bench diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/wmma-f16-group12-selected-stage-20260619-113828/",
+      "isa_artifact": "cache/hrxv1/gfx1151/wmma-f16-group12-selected-stage-20260619-113828/static/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-wmma-f16-lane-map plus extracted cache/hrxv1/gfx1151/wmma-f16-group12-selected-stage-20260619-113828/static/lane-map/gfx1151.o",
+      "reason": "The synthetic group12 selected-stage contract probe tries to minimize the real Q8_0 group12 failure to WMMA plus selected halfword LDS writeback with the same 256-thread/wave0 launch shape, group12 coordinates, prod-stride LDS fragments, and both OPSEL halves. Both synthetic modes passed: selected_opsel=0 and selected_opsel=1 each wrote the full 256-value group12 tile with no duplicate, missing, unexpected, NaN, or raw-vs-staged mismatch. The same artifact reran the real Q8 single-group12-abcopy-stage-selected repro, which still failed p64 with active=256, bad=16, no NaNs/infinities/sentinels, max_abs=0.348336, and the known col 50 / col 57 lane pattern. Static evidence shows the minimization is too small: the synthetic symbols are wave64/no-spill with LDS=11776, SGPR=22, VGPR=40, and two WMMA, while the real Q8 selected-stage group12 symbols retain the Q8 load/dequant dependency surface at LDS=10752, SGPR=41, VGPR=117, and two WMMA. Reject the hypothesis that WMMA plus selected halfword staging alone is enough to reproduce the bug. The next compact reproducer must preserve more of the real Q8 fragment/dequant/register dependency surface or drop to a lower-level cooperative store/lane primitive."
+    },
+    {
       "id": "q8_0_wmma_group12_accumulator_copy_stage_probe",
       "date": "2026-06-19",
       "route": "hrx-hip-bench-q8-wmma-repro --mode=single-group12-bcopy-stage-selected-acccopy/single-group12-abcopy-stage-selected-acccopy/single-group12-bcopy-stage-selected-regcopy/single-group12-abcopy-stage-selected-regcopy",

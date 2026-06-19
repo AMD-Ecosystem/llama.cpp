@@ -644,6 +644,112 @@ void wmma_f16_fulltile_prodstride_k2_probe(float * dst) {
     }
 }
 
+template <bool selected_opsel, uint16_t base_half_bits = 0x3400u>
+__global__ __launch_bounds__(256, 1)
+void wmma_f16_group12_selected_stage_contract_probe(
+        float * raw,
+        float * staged,
+        unsigned int * raw_counts,
+        unsigned int * staged_counts,
+        unsigned int rows,
+        unsigned int cols) {
+    constexpr unsigned int GROUP = 12u;
+    constexpr unsigned int ROW_SUB = GROUP & 3u;
+    constexpr unsigned int COL_SUB = (GROUP >> 2u) & 3u;
+    constexpr unsigned int STRIDE = 44u;
+
+    __shared__ uint16_t sh_a[64 * STRIDE];
+    __shared__ uint16_t sh_b[64 * STRIDE];
+    __shared__ uint16_t stage[16 * 16];
+
+    const unsigned int tid = __builtin_amdgcn_workitem_id_x();
+    const unsigned int wave = tid >> 6u;
+    const unsigned int lane = tid & 63u;
+
+    for (unsigned int index = tid; index < 64u * STRIDE; index += 256u) {
+        sh_a[index] = static_cast<uint16_t>(base_half_bits + ((index * 3u + 1u) & 7u));
+        sh_b[index] = static_cast<uint16_t>(base_half_bits + ((index * 5u + 3u) & 7u));
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+
+    if (wave != 0u) {
+        return;
+    }
+
+    const __attribute__((address_space(3))) uint16_t * lds_a =
+        (const __attribute__((address_space(3))) uint16_t *) sh_a;
+    const __attribute__((address_space(3))) uint16_t * lds_b =
+        (const __attribute__((address_space(3))) uint16_t *) sh_b;
+
+    wmma_lane_map_half16_vec a[2][4];
+    wmma_lane_map_half16_vec b[2][4];
+#pragma unroll
+    for (unsigned int k_tile = 0; k_tile < 2u; ++k_tile) {
+#pragma unroll
+        for (unsigned int row_sub = 0; row_sub < 4u; ++row_sub) {
+            const unsigned int row = row_sub * 16u + (lane & 15u);
+            a[k_tile][row_sub] = wmma_lane_map_load_prod_stride44_fragment(lds_a, row, k_tile);
+        }
+#pragma unroll
+        for (unsigned int col_sub = 0; col_sub < 4u; ++col_sub) {
+            const unsigned int col = col_sub * 16u + (lane & 15u);
+            b[k_tile][col_sub] = wmma_lane_map_load_prod_stride44_fragment(lds_b, col, k_tile);
+        }
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+
+    wmma_lane_map_half8_vec acc;
+#pragma unroll
+    for (unsigned int slot = 0; slot < 8u; ++slot) {
+        acc[slot] = static_cast<_Float16>(0.0f);
+    }
+
+#pragma unroll
+    for (unsigned int k_tile = 0; k_tile < 2u; ++k_tile) {
+        acc = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
+            a[k_tile][ROW_SUB],
+            b[k_tile][COL_SUB],
+            acc,
+            selected_opsel);
+    }
+
+    const unsigned int row_lane = lane >> 4u;
+    const unsigned int col_lane = lane & 15u;
+    const unsigned int col = COL_SUB * 16u + col_lane;
+    const unsigned int col_major_base = col_lane * 16u + row_lane;
+    __attribute__((address_space(3))) uint16_t * sh_u16 =
+        (__attribute__((address_space(3))) uint16_t *) stage;
+
+#pragma unroll
+    for (unsigned int reg = 0; reg < 4u; ++reg) {
+        const unsigned int slot = reg * 2u + (selected_opsel ? 1u : 0u);
+        const unsigned int row = row_lane + reg * 4u;
+        const size_t dst_index = static_cast<size_t>(col) * rows + row;
+        if (row < rows && col < cols) {
+            raw[dst_index] = static_cast<float>(acc[slot]);
+            atomicAdd(raw_counts + dst_index, 1u);
+        }
+        wmma_lane_map_ds_write_b16(
+            sh_u16 + col_major_base + reg * 4u,
+            static_cast<uint32_t>(wmma_lane_map_f16_to_u16(acc[slot])));
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+
+#pragma unroll
+    for (unsigned int reg = 0; reg < 4u; ++reg) {
+        const unsigned int row = row_lane + reg * 4u;
+        const size_t dst_index = static_cast<size_t>(col) * rows + row;
+        const _Float16 value = wmma_lane_map_u16_to_f16(
+            wmma_lane_map_ds_read_u16_d16(sh_u16 + col_major_base + reg * 4u));
+        asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+        if (row < rows && col < cols) {
+            staged[dst_index] = static_cast<float>(value);
+            atomicAdd(staged_counts + dst_index, 1u);
+        }
+    }
+}
+
 template <typename T>
 struct device_buffer {
     T * ptr = nullptr;
@@ -1030,6 +1136,134 @@ static int run_fulltile_prodstride_k2_probe(const char * mode) {
     return nan_even_slots == 0 ? 0 : 1;
 }
 
+template <bool selected_opsel>
+static int run_group12_selected_stage_contract_probe(const char * mode) {
+    constexpr unsigned int rows = 64;
+    constexpr unsigned int cols = 64;
+    const size_t count = static_cast<size_t>(rows) * cols;
+    device_buffer<float> d_raw(count);
+    device_buffer<float> d_staged(count);
+    device_buffer<unsigned int> d_raw_counts(count);
+    device_buffer<unsigned int> d_staged_counts(count);
+    std::vector<float> h_raw(count, -1.0f);
+    std::vector<float> h_staged(count, -1.0f);
+    std::vector<unsigned int> h_raw_counts(count, 0u);
+    std::vector<unsigned int> h_staged_counts(count, 0u);
+
+    HIP_CHECK(hipMemset(d_raw.ptr, 0xff, count * sizeof(float)));
+    HIP_CHECK(hipMemset(d_staged.ptr, 0xff, count * sizeof(float)));
+    HIP_CHECK(hipMemset(d_raw_counts.ptr, 0, count * sizeof(unsigned int)));
+    HIP_CHECK(hipMemset(d_staged_counts.ptr, 0, count * sizeof(unsigned int)));
+    hipLaunchKernelGGL(
+        (wmma_f16_group12_selected_stage_contract_probe<selected_opsel>),
+        dim3(1),
+        dim3(256),
+        0,
+        0,
+        d_raw.ptr,
+        d_staged.ptr,
+        d_raw_counts.ptr,
+        d_staged_counts.ptr,
+        rows,
+        cols);
+    HIP_CHECK(hipGetLastError());
+    HIP_CHECK(hipDeviceSynchronize());
+    HIP_CHECK(hipMemcpy(h_raw.data(), d_raw.ptr, count * sizeof(float), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(h_staged.data(), d_staged.ptr, count * sizeof(float), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(h_raw_counts.data(), d_raw_counts.ptr, count * sizeof(unsigned int), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(h_staged_counts.data(), d_staged_counts.ptr, count * sizeof(unsigned int), hipMemcpyDeviceToHost));
+
+    size_t active = 0;
+    size_t raw_duplicates = 0;
+    size_t staged_duplicates = 0;
+    size_t missing_raw = 0;
+    size_t missing_staged = 0;
+    size_t unexpected_raw = 0;
+    size_t unexpected_staged = 0;
+    size_t nan_raw = 0;
+    size_t nan_staged = 0;
+    size_t mismatch = 0;
+    size_t first_mismatch = count;
+    for (unsigned int col = 0; col < cols; ++col) {
+        for (unsigned int row = 0; row < rows; ++row) {
+            const size_t idx = static_cast<size_t>(col) * rows + row;
+            const bool target = col >= 48u && col < 64u && row < 16u;
+            const unsigned int raw_touches = h_raw_counts[idx];
+            const unsigned int staged_touches = h_staged_counts[idx];
+            if (target) {
+                ++active;
+                if (raw_touches == 0u) {
+                    ++missing_raw;
+                }
+                if (staged_touches == 0u) {
+                    ++missing_staged;
+                }
+            } else {
+                if (raw_touches != 0u) {
+                    ++unexpected_raw;
+                }
+                if (staged_touches != 0u) {
+                    ++unexpected_staged;
+                }
+            }
+            if (raw_touches > 1u) {
+                ++raw_duplicates;
+            }
+            if (staged_touches > 1u) {
+                ++staged_duplicates;
+            }
+            if (raw_touches != 0u && is_nan(h_raw[idx])) {
+                ++nan_raw;
+            }
+            if (staged_touches != 0u && is_nan(h_staged[idx])) {
+                ++nan_staged;
+            }
+            if (target && raw_touches != 0u && staged_touches != 0u &&
+                    !close_enough(h_raw[idx], h_staged[idx])) {
+                if (first_mismatch == count) {
+                    first_mismatch = idx;
+                }
+                ++mismatch;
+            }
+        }
+    }
+
+    const bool valid = raw_duplicates == 0 && staged_duplicates == 0 &&
+        missing_raw == 0 && missing_staged == 0 &&
+        unexpected_raw == 0 && unexpected_staged == 0 &&
+        nan_raw == 0 && nan_staged == 0 && mismatch == 0;
+
+    std::printf(
+        "group12-selected-stage-contract mode=%s rows=%u cols=%u selected_opsel=%u active=%zu raw_duplicates=%zu staged_duplicates=%zu missing_raw=%zu missing_staged=%zu unexpected_raw=%zu unexpected_staged=%zu nan_raw=%zu nan_staged=%zu mismatch=%zu contract_valid=%u",
+        mode,
+        rows,
+        cols,
+        selected_opsel ? 1u : 0u,
+        active,
+        raw_duplicates,
+        staged_duplicates,
+        missing_raw,
+        missing_staged,
+        unexpected_raw,
+        unexpected_staged,
+        nan_raw,
+        nan_staged,
+        mismatch,
+        valid ? 1u : 0u);
+    if (first_mismatch != count) {
+        const unsigned int row = static_cast<unsigned int>(first_mismatch % rows);
+        const unsigned int col = static_cast<unsigned int>(first_mismatch / rows);
+        std::printf(" first_mismatch_row=%u first_mismatch_col=%u raw=%f staged=%f",
+            row,
+            col,
+            static_cast<double>(h_raw[first_mismatch]),
+            static_cast<double>(h_staged[first_mismatch]));
+    }
+    std::printf("\n");
+
+    return valid ? 0 : 1;
+}
+
 static int run_combined96_store_contract_case(unsigned int cols) {
     constexpr unsigned int rows = 64;
     const size_t count = static_cast<size_t>(rows) * cols;
@@ -1244,7 +1478,7 @@ int main(int argc, char ** argv) {
         if (std::strncmp(argv[i], "--mode=", 7) == 0) {
             mode = argv[i] + 7;
         } else {
-            std::fprintf(stderr, "usage: %s [--mode=basic|fulltile-ones|fulltile-lds|fulltile-lds-wait|fulltile-lds-k2|fulltile-lds-k2-wait|fulltile-lds-repeat|fulltile-lds-repeat-wait|fulltile-lds-repeat-one|fulltile-prodstride-k2|fulltile-prodstride-k2-small|combined96-store-contract|full64-store-contract|dual-opsel-two-tile-store-contract|all]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--mode=basic|fulltile-ones|fulltile-lds|fulltile-lds-wait|fulltile-lds-k2|fulltile-lds-k2-wait|fulltile-lds-repeat|fulltile-lds-repeat-wait|fulltile-lds-repeat-one|fulltile-prodstride-k2|fulltile-prodstride-k2-small|group12-selected-stage-contract|group12-selected-stage-contract-hi|combined96-store-contract|full64-store-contract|dual-opsel-two-tile-store-contract|all]\n", argv[0]);
             return 2;
         }
     }
@@ -1282,6 +1516,12 @@ int main(int argc, char ** argv) {
     if (mode == "fulltile-prodstride-k2-small") {
         return run_fulltile_prodstride_k2_probe<0x3400u>(mode.c_str());
     }
+    if (mode == "group12-selected-stage-contract") {
+        return run_group12_selected_stage_contract_probe<false>(mode.c_str());
+    }
+    if (mode == "group12-selected-stage-contract-hi") {
+        return run_group12_selected_stage_contract_probe<true>(mode.c_str());
+    }
     if (mode == "combined96-store-contract") {
         return run_combined96_store_contract();
     }
@@ -1303,6 +1543,8 @@ int main(int argc, char ** argv) {
         status |= run_fulltile_lds_repeat_probe<false, 0x3c00u>("fulltile-lds-repeat-one");
         status |= run_fulltile_prodstride_k2_probe<0x3c00u>("fulltile-prodstride-k2");
         status |= run_fulltile_prodstride_k2_probe<0x3400u>("fulltile-prodstride-k2-small");
+        status |= run_group12_selected_stage_contract_probe<false>("group12-selected-stage-contract");
+        status |= run_group12_selected_stage_contract_probe<true>("group12-selected-stage-contract-hi");
         status |= run_combined96_store_contract();
         status |= run_full64_store_contract();
         status |= run_dual_opsel_two_tile_store_contract();
