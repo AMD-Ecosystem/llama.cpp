@@ -4885,6 +4885,12 @@ static bool ggml_backend_hrx_supports_sigmoid_mul_f32(
     return true;
 }
 
+static bool ggml_backend_hrx_supports_mul_mat_id_q4_k_swiglu(
+        const ggml_backend_hrx_device_context * device_context,
+        const ggml_tensor * gate,
+        const ggml_tensor * up,
+        const ggml_tensor * swiglu);
+
 static bool ggml_backend_hrx_supports_swiglu_f32(
         const ggml_backend_hrx_device_context * device_context,
         const ggml_tensor * op) {
@@ -4892,10 +4898,17 @@ static bool ggml_backend_hrx_supports_swiglu_f32(
     const ggml_tensor * src1 = op->src[1];
     const bool narrow_moe_swiglu =
         op->ne[1] == 8 && op->ne[2] < 128 && op->ne[3] == 1;
+    const bool narrow_moe_id_fusion =
+        narrow_moe_swiglu &&
+        !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_Q4_K_ID_SWIGLU_NARROW_PROMPT_FUSION") &&
+        !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_FUSION") &&
+        !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_MUL_MAT_ID_SWIGLU_FUSION") &&
+        ggml_backend_hrx_supports_mul_mat_id_q4_k_swiglu(device_context, src0, src1, op);
     return !ggml_backend_hrx_approximate_kernels_disabled() &&
            !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_SWIGLU") &&
-           (!narrow_moe_swiglu || ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_NARROW_MOE_SWIGLU")) &&
-           device_context->swiglu_provider.kind == ggml_backend_hrx_provider_kind::hsaco &&
+           (!narrow_moe_swiglu || narrow_moe_id_fusion ||
+            ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_NARROW_MOE_SWIGLU")) &&
+           (narrow_moe_id_fusion || device_context->swiglu_provider.kind == ggml_backend_hrx_provider_kind::hsaco) &&
            op->op == GGML_OP_GLU &&
            ggml_get_glu_op(op) == GGML_GLU_OP_SWIGLU &&
            src0 && src1 &&
