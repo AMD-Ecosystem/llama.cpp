@@ -250,6 +250,46 @@ void wmma_f16_combined96_store_contract_probe(
     }
 }
 
+extern "C" __global__ __launch_bounds__(256, 1)
+void wmma_f16_full64_store_contract_probe(
+        float * dst,
+        unsigned int * counts,
+        unsigned int rows,
+        unsigned int cols) {
+    const unsigned int tid = __builtin_amdgcn_workitem_id_x();
+    const unsigned int wave = tid >> 6u;
+    const unsigned int lane = tid & 63u;
+    if (wave != 0u) {
+        return;
+    }
+
+    wmma_lane_map_half8_vec acc[16];
+#pragma unroll
+    for (unsigned int acc_index = 0; acc_index < 16u; ++acc_index) {
+#pragma unroll
+        for (unsigned int slot = 0; slot < 8u; ++slot) {
+            acc[acc_index][slot] = static_cast<_Float16>(
+                wmma_lane_map_combined96_value(acc_index, slot, lane));
+        }
+    }
+
+#pragma unroll
+    for (unsigned int group = 0; group < 16u; ++group) {
+#pragma unroll
+        for (unsigned int slot = 0; slot < 4u; ++slot) {
+            wmma_lane_map_combined96_write_coord(
+                dst,
+                counts,
+                rows,
+                cols,
+                group,
+                slot,
+                lane,
+                static_cast<float>(acc[group][slot * 2u]));
+        }
+    }
+}
+
 template <bool use_lds_fragments>
 __global__ __launch_bounds__(64, 1)
 void wmma_f16_fulltile_probe(float * dst) {
@@ -620,11 +660,79 @@ static int run_combined96_store_contract_case(unsigned int cols) {
     return 0;
 }
 
+static int run_full64_store_contract_case(unsigned int cols) {
+    constexpr unsigned int rows = 64;
+    const size_t count = static_cast<size_t>(rows) * cols;
+    device_buffer<float> d_out(count);
+    device_buffer<unsigned int> d_counts(count);
+    std::vector<float> h_out(count, -1.0f);
+    std::vector<unsigned int> h_counts(count, 0u);
+
+    HIP_CHECK(hipMemset(d_out.ptr, 0xff, count * sizeof(float)));
+    HIP_CHECK(hipMemset(d_counts.ptr, 0, count * sizeof(unsigned int)));
+    hipLaunchKernelGGL(
+        wmma_f16_full64_store_contract_probe,
+        dim3(1),
+        dim3(256),
+        0,
+        0,
+        d_out.ptr,
+        d_counts.ptr,
+        rows,
+        cols);
+    HIP_CHECK(hipGetLastError());
+    HIP_CHECK(hipDeviceSynchronize());
+    HIP_CHECK(hipMemcpy(h_out.data(), d_out.ptr, count * sizeof(float), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(h_counts.data(), d_counts.ptr, count * sizeof(unsigned int), hipMemcpyDeviceToHost));
+
+    size_t written = 0;
+    size_t duplicate_coords = 0;
+    size_t missing_target = 0;
+    size_t nan_count = 0;
+    for (unsigned int col = 0; col < cols; ++col) {
+        for (unsigned int row = 0; row < rows; ++row) {
+            const size_t idx = static_cast<size_t>(col) * rows + row;
+            const unsigned int touches = h_counts[idx];
+            if (touches != 0u) {
+                ++written;
+            }
+            if (touches > 1u) {
+                ++duplicate_coords;
+            }
+            if (touches == 0u) {
+                ++missing_target;
+            }
+            if (touches != 0u && is_nan(h_out[idx])) {
+                ++nan_count;
+            }
+        }
+    }
+
+    std::printf(
+        "full64-store-contract rows=%u cols=%u written=%zu duplicate_coords=%zu missing_target=%zu nan=%zu contract_valid=%u\n",
+        rows,
+        cols,
+        written,
+        duplicate_coords,
+        missing_target,
+        nan_count,
+        duplicate_coords == 0 && missing_target == 0 && nan_count == 0 ? 1u : 0u);
+    return 0;
+}
+
 static int run_combined96_store_contract() {
     int status = 0;
     status |= run_combined96_store_contract_case(32);
     status |= run_combined96_store_contract_case(33);
     status |= run_combined96_store_contract_case(64);
+    return status;
+}
+
+static int run_full64_store_contract() {
+    int status = 0;
+    status |= run_full64_store_contract_case(32);
+    status |= run_full64_store_contract_case(33);
+    status |= run_full64_store_contract_case(64);
     return status;
 }
 
@@ -634,7 +742,7 @@ int main(int argc, char ** argv) {
         if (std::strncmp(argv[i], "--mode=", 7) == 0) {
             mode = argv[i] + 7;
         } else {
-            std::fprintf(stderr, "usage: %s [--mode=basic|fulltile-ones|fulltile-lds|combined96-store-contract|all]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--mode=basic|fulltile-ones|fulltile-lds|combined96-store-contract|full64-store-contract|all]\n", argv[0]);
             return 2;
         }
     }
@@ -651,11 +759,15 @@ int main(int argc, char ** argv) {
     if (mode == "combined96-store-contract") {
         return run_combined96_store_contract();
     }
+    if (mode == "full64-store-contract") {
+        return run_full64_store_contract();
+    }
     if (mode == "all") {
         int status = run_basic_lane_map();
         status |= run_fulltile_probe<false>("fulltile-ones");
         status |= run_fulltile_probe<true>("fulltile-lds");
         status |= run_combined96_store_contract();
+        status |= run_full64_store_contract();
         return status;
     }
 
