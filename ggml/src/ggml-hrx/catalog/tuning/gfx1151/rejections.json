@@ -107,6 +107,14 @@
       "reason": "Focused p33 correctness passed, but same-runner model A/B regressed from 123.074 to 108.935 tok/s; the selector is therefore guarded to n_tokens >= 128."
     },
     {
+      "id": "q6_moe_id_mmq16_threshold32_p33_policy",
+      "date": "2026-06-18",
+      "route": "hrx_mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x16_wg64_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_ID_Q8_1_X4_MMQ16_PROMPT=1 with grouped_min_prompt_tokens=32 diagnostic",
+      "artifact": "cache/hrxv1/gfx1151/q6-id-threshold32-experiment-20260618-182836/",
+      "reason": "Lowering the Q6_K MUL_MAT_ID grouped-route threshold from 128 to 32 eliminated the catastrophic p33 scheduler split cliff caused by HRX-resident expert weights being copied back to CPU, and focused p33/p512 Q6 ID rows passed. It is still rejected as a default policy because same-runner Qwen3 30B Q6_K p33 was slower than the current disabled/narrow policy (105.182 tok/s versus 112.943 tok/s) and far below same-machine Vulkan p33 (182.233 tok/s). The fix for p33 should be a true Vulkan-medium Q6 ID schedule or decoupled expert-weight placement, not forcing the production grouped route into the narrow regime."
+    },
+    {
       "id": "q8_0_prompt_mmq128x32_wave64_p512",
       "date": "2026-06-17",
       "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq128x32_wg256_wave64_f32",
