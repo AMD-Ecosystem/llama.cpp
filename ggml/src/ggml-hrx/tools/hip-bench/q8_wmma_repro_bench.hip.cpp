@@ -354,6 +354,113 @@ void q8_array8_repro_kernel(
     }
 }
 
+template <bool copy_a, bool copy_b>
+__global__ __launch_bounds__(256, 1)
+void q8_array16_direct_raw_repro_kernel(
+        const hrx_block_q8_0_wmma_vk128_lhs * src0,
+        const float * src1,
+        float * dst,
+        long long k,
+        long long rows,
+        long long cols) {
+    constexpr int BM = 64;
+    constexpr int BN = 64;
+    constexpr int BK = 32;
+    constexpr int SHARED_STRIDE = HRX_Q8_0_WMMA_VK128_SHARED_STRIDE;
+    constexpr int ACTIVE_GROUPS = 16;
+
+    const unsigned int tid = __builtin_amdgcn_workitem_id_x();
+    const unsigned int wave = tid >> 6u;
+    const unsigned int lane = tid & 63u;
+    const long long row_base = static_cast<long long>(__builtin_amdgcn_workgroup_id_x()) * BM;
+    const long long col_base = static_cast<long long>(__builtin_amdgcn_workgroup_id_y()) * BN;
+    if (row_base >= rows || col_base >= cols) {
+        return;
+    }
+
+    const __amdgpu_buffer_rsrc_t dst_rsrc = hrx_q8_0_wmma_vk128_make_dst_rsrc(dst);
+    __shared__ _Float16 sh_a[BM * SHARED_STRIDE];
+    __shared__ _Float16 sh_b[BN * SHARED_STRIDE];
+
+    const long long blocks_per_row = k / 32;
+    const _Float16 zero = static_cast<_Float16>(0.0f);
+    hrx_q8_0_wmma_vk128_half8_vec acc[ACTIVE_GROUPS] = {};
+
+    for (long long k0 = 0; k0 < k; k0 += BK) {
+        for (int idx = static_cast<int>(tid); idx < BM * BK; idx += 256) {
+            const int r = idx / BK;
+            const int kk = idx - r * BK;
+            const long long row = row_base + static_cast<long long>(r);
+            sh_a[r * SHARED_STRIDE + kk] = row < rows ?
+                hrx_q8_0_wmma_vk128_load_a_value(src0, row, k0 + kk, blocks_per_row) : zero;
+        }
+        for (int idx = static_cast<int>(tid); idx < BN * BK; idx += 256) {
+            const int c = idx / BK;
+            const int kk = idx - c * BK;
+            const long long col = col_base + static_cast<long long>(c);
+            sh_b[c * SHARED_STRIDE + kk] = col < cols ? static_cast<_Float16>(src1[col * k + k0 + kk]) : zero;
+        }
+        __syncthreads();
+
+        if (wave == 0) {
+            hrx_q8_0_wmma_vk128_lds_half_ptr sh_a_lds =
+                (hrx_q8_0_wmma_vk128_lds_half_ptr) sh_a;
+            hrx_q8_0_wmma_vk128_lds_half_ptr sh_b_lds =
+                (hrx_q8_0_wmma_vk128_lds_half_ptr) sh_b;
+            hrx_q8_0_wmma_vk128_half16_vec a_frag[2][4];
+            hrx_q8_0_wmma_vk128_half16_vec b_frag[2][4];
+#pragma unroll
+            for (int k_tile = 0; k_tile < 2; ++k_tile) {
+#pragma unroll
+                for (int row_sub = 0; row_sub < 4; ++row_sub) {
+                    a_frag[k_tile][row_sub] =
+                        hrx_q8_0_wmma_vk128_load_a_frag_w64_b64asm_nowait(
+                            sh_a_lds, row_sub, k_tile, lane);
+                }
+#pragma unroll
+                for (int col_sub = 0; col_sub < 4; ++col_sub) {
+                    b_frag[k_tile][col_sub] =
+                        hrx_q8_0_wmma_vk128_load_b_frag_w64_b64asm_nowait(
+                            sh_b_lds, col_sub, k_tile, lane);
+                }
+            }
+            asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+#pragma unroll
+            for (int k_tile = 0; k_tile < 2; ++k_tile) {
+#pragma unroll
+                for (int col_sub = 0; col_sub < 4; ++col_sub) {
+#pragma unroll
+                    for (int row_sub = 0; row_sub < 4; ++row_sub) {
+                        const int group = col_sub * 4 + row_sub;
+                        const hrx_q8_0_wmma_vk128_half16_vec a_use = copy_a ?
+                            q8_repro_copy_frag(a_frag[k_tile][row_sub]) :
+                            a_frag[k_tile][row_sub];
+                        const hrx_q8_0_wmma_vk128_half16_vec b_use = copy_b ?
+                            q8_repro_copy_frag(b_frag[k_tile][col_sub]) :
+                            b_frag[k_tile][col_sub];
+                        acc[group] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
+                            a_use,
+                            b_use,
+                            acc[group],
+                            HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                    }
+                }
+            }
+        }
+        __syncthreads();
+    }
+
+    if (wave == 0) {
+#pragma unroll
+        for (int group = 0; group < ACTIVE_GROUPS; ++group) {
+#pragma unroll
+            for (int slot = 0; slot < 4; ++slot) {
+                q8_repro_raw_store_slot(dst_rsrc, rows, row_base, col_base, rows, cols, acc, group, group, slot, lane);
+            }
+        }
+    }
+}
+
 template <
     int group_base,
     int col_start,
@@ -1398,7 +1505,10 @@ static bool output_is_active(size_t index, int rows, const std::string & mode) {
     if (mode == "single-group13" || mode == "single-group13-consume") {
         return group == 13;
     }
-    if (mode == "array8-fullb-2phase" || mode == "batched4" ||
+    if (mode == "array16-direct-raw" ||
+            mode == "array16-direct-raw-bcopy" ||
+            mode == "array16-direct-raw-abcopy" ||
+            mode == "array8-fullb-2phase" || mode == "batched4" ||
             mode == "array8-fullb-2phase-consume" || mode == "batched4-consume") {
         return true;
     }
@@ -1783,6 +1893,15 @@ static int run_case(const std::string & mode, int rows, int cols, int k) {
     if (mode == "array8-fullb") {
         hipLaunchKernelGGL((q8_array8_repro_kernel<true>), grid, dim3(256, 1, 1), 0, 0,
             d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+    } else if (mode == "array16-direct-raw") {
+        hipLaunchKernelGGL((q8_array16_direct_raw_repro_kernel<false, false>), grid, dim3(256, 1, 1), 0, 0,
+            d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+    } else if (mode == "array16-direct-raw-bcopy") {
+        hipLaunchKernelGGL((q8_array16_direct_raw_repro_kernel<false, true>), grid, dim3(256, 1, 1), 0, 0,
+            d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+    } else if (mode == "array16-direct-raw-abcopy") {
+        hipLaunchKernelGGL((q8_array16_direct_raw_repro_kernel<true, true>), grid, dim3(256, 1, 1), 0, 0,
+            d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
     } else if (mode == "array8-b2") {
         hipLaunchKernelGGL((q8_array8_repro_kernel<false>), grid, dim3(256, 1, 1), 0, 0,
             d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
@@ -2032,7 +2151,7 @@ int main(int argc, char ** argv) {
         if (std::strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
             mode = argv[++i];
         } else {
-            std::fprintf(stderr, "usage: %s [--mode array8-fullb|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|array8-fullb-2phase-bcopy|array8-fullb-2phase-bcopy-stage|array8-fullb-2phase-abcopy|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group0-bcopy-stage|single-group8|single-group8-consume|single-group8-opsel1|single-group8-bmirror0|single-group8-bcopy|single-group8-abcopy|single-group8-bcopy-stage|single-group8-abcopy-stage|single-group8-bcopy-stage-selected|single-group12|single-group12-consume|single-group12-opsel1|single-group12-bmirror0|single-group12-bcopy|single-group12-abcopy|single-group12-bcopy-stage|single-group12-abcopy-stage|single-group12-bcopy-stage-selected|single-group12-abcopy-stage-selected|single-group12-bcopy-stage-selected-acccopy|single-group12-abcopy-stage-selected-acccopy|single-group12-bcopy-stage-selected-regcopy|single-group12-abcopy-stage-selected-regcopy|single-group12-abcopy-dual-stage-raw-first|single-group12-abcopy-dual-stage-stage-first|single-group13|single-group13-consume|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c12-s0-bcopy-stage-selected|remap-c12-s0-abcopy-stage-selected|remap-c0-s12|remap-c0-s12-stage-selected|bfrag-dump|all]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--mode array8-fullb|array16-direct-raw|array16-direct-raw-bcopy|array16-direct-raw-abcopy|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|array8-fullb-2phase-bcopy|array8-fullb-2phase-bcopy-stage|array8-fullb-2phase-abcopy|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group0-bcopy-stage|single-group8|single-group8-consume|single-group8-opsel1|single-group8-bmirror0|single-group8-bcopy|single-group8-abcopy|single-group8-bcopy-stage|single-group8-abcopy-stage|single-group8-bcopy-stage-selected|single-group12|single-group12-consume|single-group12-opsel1|single-group12-bmirror0|single-group12-bcopy|single-group12-abcopy|single-group12-bcopy-stage|single-group12-abcopy-stage|single-group12-bcopy-stage-selected|single-group12-abcopy-stage-selected|single-group12-bcopy-stage-selected-acccopy|single-group12-abcopy-stage-selected-acccopy|single-group12-bcopy-stage-selected-regcopy|single-group12-abcopy-stage-selected-regcopy|single-group12-abcopy-dual-stage-raw-first|single-group12-abcopy-dual-stage-stage-first|single-group13|single-group13-consume|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c12-s0-bcopy-stage-selected|remap-c12-s0-abcopy-stage-selected|remap-c0-s12|remap-c0-s12-stage-selected|bfrag-dump|all]\n", argv[0]);
             return 2;
         }
     }
@@ -2043,6 +2162,12 @@ int main(int argc, char ** argv) {
     if (mode == "all" || mode == "array8-fullb") {
         status |= run_case("array8-fullb", rows, 64, k);
         status |= run_case("array8-fullb", rows, 33, k);
+    }
+    if (mode == "array16-direct-raw" ||
+            mode == "array16-direct-raw-bcopy" ||
+            mode == "array16-direct-raw-abcopy") {
+        status |= run_case(mode, rows, 64, k);
+        status |= run_case(mode, rows, 33, k);
     }
     if (mode == "all" || mode == "array8-b2") {
         status |= run_case("array8-b2", rows, 64, k);
