@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_lds_k2_mixed160_tight_halfword_stage_contract",
+      "date": "2026-06-19",
+      "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-mixed160-lo-tight and --mode=wmma-lds-k2-mixed160-hi-tight",
+      "env": "standalone CMake-built gfx1151 HIP bench diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/coopstore-lds-k2-mixed160-tight-raw-control-20260619-082600/",
+      "isa_artifact": "cache/hrxv1/gfx1151/coopstore-lds-k2-mixed160-tight-raw-control-20260619-082600/compare-wmma_lds_k2_mixed160_lo_tight.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract",
+      "reason": "The tight mixed160 probe separated three possible causes for the K2 mixed-stage threshold: raw buffer-store count, total LDS allocation, and halfword LDS stage expansion. In the same CMake-built binary, direct160-raw passed with 160 buffer_store_b32, 32 WMMA, 64 ds_load_b64, no ds_store_b16, no ds_load_u16_d16, SGPR=14, VGPR=153, and no spills. Both mixed160-lo-tight and mixed160-hi-tight failed at first_bad=4800 group=18 slot=3 lane=0 actual=2048 expected=12803 despite reducing group_segment_fixed_size to 28672 bytes versus the earlier non-tight mixed160 32768 bytes. Static evidence for the failing tight mixed160 surface was SGPR=14, VGPR=162, no spills, 32 WMMA, 64 ds_load_b64, 96 ds_store_b16, 96 ds_load_u16_d16, and 160 buffer_store_b32. This rejects the LDS-allocation-size and raw-store-count hypotheses: the break is specific to expanding the scalarized halfword LDS stage beyond the passing mixed128 surface in the K2 live-WMMA context."
+    },
+    {
       "id": "q8_0_lds_k2_mixed160_threshold_contract",
       "date": "2026-06-19",
       "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-mixed160-lo and --mode=wmma-lds-k2-mixed160-hi",
