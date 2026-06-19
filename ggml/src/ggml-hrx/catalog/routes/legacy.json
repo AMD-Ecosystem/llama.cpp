@@ -5233,6 +5233,51 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql64x64_bk2_bquad_wg256_f32",
+    "family": "mul_mat_vec_q4_k_q8_1_x4_mmql64x64_bk2_bquad_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q4_k_q8_1_x4_mmql64_bk2_bquad",
+    "artifact_id": "mul_mat_vec_q4_k_q8_1_x4_mmql64_bk2_bquad_hsaco",
+    "export_name": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql64x64_bk2_bquad_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q4_k_p33_staged_bk2_bquad_probe"
+    },
+    "shape_guards": {
+      "rows_multiple": 64,
+      "cols_min": 32,
+      "cols_max": 64,
+      "rows_min_default": 4096,
+      "k_multiple": 256,
+      "k_min_default": 4096
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql64x64_bk2_bquad_wg256_f32",
+      "selector_gate": "default on gfx1151 for k >= 4096, rows >= 4096, and 32 <= cols <= 64; rollback with GGML_HRX_DISABLE_Q4_K_Q8_1_X4_MMQL64_BK2_BQUAD_PROMPT=1; force with GGML_HRX_ENABLE_Q4_K_Q8_1_X4_MMQL64_BK2_BQUAD_PROMPT=1"
+    },
+    "evidence_summary": {
+      "status": "accepted_gfx1151_default",
+      "selection": "Q4_K packed-Q8_1/x4 p33 provider preserving the accepted MMQL64 BK2 narrow dataflow and changing only B-cache consume order to preload the two WNITER B-cache positions before issuing dots. This ports the accepted Q5 narrow B-quad issue-window pivot and brackets the RADV medium-pipeline LDS-read window without changing tile size or K staging depth. Final default policy is narrowed to k >= 4096 and rows >= 4096 after Llama 3.2 3B p33 exposed a k=8192/rows=3072 ffn_out regression under force. Final regate passed p33/p512/p513 CPU-reference, p512/p513 stayed on MMQL128 B-quad, Llama 3.1 8B Q4_K_M p33 improved 200.02 -> 220.22 tok/s versus rollback, and Llama 3.2 3B p33 selected no B-quad rows by default."
+    },
+    "target_prefixes": [
+      "gfx1151"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bsplit4_wg256_f32",
     "family": "mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bsplit4_wg256",
     "op": "MUL_MAT",
