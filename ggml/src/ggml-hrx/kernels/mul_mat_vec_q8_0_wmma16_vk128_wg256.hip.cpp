@@ -1747,12 +1747,23 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
                         sh_b_lds, wave_col * 4 + col_sub, k_tile, lane);
                 }
                 asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+#if HRX_Q8_0_WMMA_VK128_COPY_B_FRAG
+#pragma unroll
+                for (int col_sub = 0; col_sub < 4; ++col_sub) {
+                    if (col_sub >= HRX_Q8_0_WMMA_VK128_COPY_B_FRAG_MIN_COL_SUB) {
+                        b_frag[col_sub] = hrx_q8_0_wmma_vk128_copy_frag(b_frag[col_sub]);
+                    }
+                }
+#endif
 #pragma unroll
                 for (int row_sub = 0; row_sub < 4; ++row_sub) {
-                    const hrx_q8_0_wmma_vk128_half16_vec a_frag_row =
+                    hrx_q8_0_wmma_vk128_half16_vec a_frag_row =
                         hrx_q8_0_wmma_vk128_load_a_frag_w64_b64asm(
                             sh_a_lds, wave_row * 4 + row_sub, k_tile, lane);
                     asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+#if HRX_Q8_0_WMMA_VK128_COPY_A_FRAG
+                    a_frag_row = hrx_q8_0_wmma_vk128_copy_frag(a_frag_row);
+#endif
 #pragma unroll
                     for (int col_sub = 0; col_sub < 4; ++col_sub) {
                         const int tile_iter = col_sub * 4 + row_sub;
