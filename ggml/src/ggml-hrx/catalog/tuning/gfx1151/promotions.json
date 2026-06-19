@@ -3,6 +3,52 @@
   "schema": "ggml-hrx-tuning-promotions-v1",
   "promotions": [
     {
+      "id": "q5_dense_prompt_mmql64_bk2_bquad_bhalf_qwen25coder_p33",
+      "date": "2026-06-19",
+      "status": "accepted_gfx1151_default",
+      "route": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql64x64_bk2_bquad_bhalf_wg256_f32",
+      "env": "default on gfx1151 for Q5_K packed-Q8_1 prompt rows with 32 <= cols <= 64; rollback with GGML_HRX_DISABLE_Q5_K_Q8_1_X4_MMQL64_BK2_BQUAD_BHALF_PROMPT=1; force with GGML_HRX_ENABLE_Q5_K_Q8_1_X4_MMQL64_BK2_BQUAD_BHALF_PROMPT=1",
+      "shape_guard": "Q5_K MUL_MAT prompt, packed Q8_1 x4 RHS, rows % 64 == 0, k % 256 == 0, 32 <= cols <= 64, contiguous tensors, gfx1151 only; p512 stays on MMQL128 and p513 stays on MMQL128 B-quad tail routing",
+      "prior_art_schedule": "Vulkan p33 medium Q5_K oracle: matmul_q5_k_f32_f16acc_aligned_m with spec [128,64,64,32,64,32,2,16,16,16,64], wg_denoms [64,64,1], wave64, LDS 11264, VGPR 144, no spills. This candidate preserves the accepted HIP packed integer-dot MMQL64/BK_STEP=2/BQUAD route and brackets the remaining B-cache footprint/scale-conversion axis by storing RHS d/s as half payloads in LDS.",
+      "focused_artifacts": [
+        "cache/hrxv1/gfx1151/q5-mmql64-bk2-bquad-bhalf-20260619-061615/",
+        "cache/hrxv1/gfx1151/q5-bquad-bhalf-default-postpromotion-20260619-062244/"
+      ],
+      "model_artifacts": [
+        "cache/hrxv1/gfx1151/q5-mmql64-bk2-bquad-bhalf-20260619-061615/",
+        "cache/hrxv1/gfx1151/q5-bquad-bhalf-default-postpromotion-20260619-062244/"
+      ],
+      "focused_result": {
+        "p33_correctness": "CPU-reference passed for Kcur-0, Qcur-0, ffn_out-3, and ffn_gate-0",
+        "p512_p513_non_steal": "Post-promotion default CPU-reference passed for Q5 p512 and p513 focused rows; route traces show p512 remains on rows2 plus MMQL128 and p513 remains on rows2 plus MMQL128 B-quad tail routing",
+        "postpromotion_p33_round1_sum_us_default_to_rollback": "3027.406807 -> 3076.388160",
+        "postpromotion_p33_round2_sum_us_default_to_rollback": "3035.154640 -> 3086.045951",
+        "postpromotion_p33_qcur_us_round2_default_to_rollback": "257.528592 -> 259.448791",
+        "postpromotion_p33_ffn_out_us_round2_default_to_rollback": "1541.924964 -> 1582.095238",
+        "postpromotion_p33_ffn_gate_us_round2_default_to_rollback": "1160.300144 -> 1171.256133"
+      },
+      "model_result": {
+        "qwen25coder_7b_q5km_p33_postpromotion_default_tok_s": 211.406107,
+        "qwen25coder_7b_q5km_p33_rollback_tok_s": 209.982618,
+        "default_over_rollback": 1.006779
+      },
+      "compile_evidence": {
+        "hsaco": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q5_k_q8_1_x4_mmql64_bk2_bquad_bhalf.hsaco",
+        "wavefront_size": 64,
+        "vgpr_count": 122,
+        "sgpr_count": 61,
+        "lds_bytes": 9728,
+        "private_segment_fixed_size": 0,
+        "opcode_summary": "256 v_dot4_i32_iu8, 39 global loads, 16 global stores, 2 barriers, 117 waits",
+        "default_bquad_delta": "same dot/global-store/barrier counts as BQUAD; LDS drops 10240 -> 9728, VGPR 124 -> 122, SGPR 62 -> 61, waits 119 -> 117"
+      },
+      "promotion_blockers": [
+        "This is a small local p33 lift, not a Vulkan parity claim",
+        "Only narrow prompt columns are defaulted; production-width p512/p513 policy remains unchanged",
+        "The remaining Q5 p33 gap still needs either a true RADV cooperative-matrix clone or another packed medium schedule axis"
+      ]
+    },
+    {
       "id": "q4_dense_prompt_mmql64_bk2_bquad_rows4096_p33",
       "date": "2026-06-19",
       "status": "accepted_gfx1151_default",
