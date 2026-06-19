@@ -6876,6 +6876,49 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql64x64_bk2_bquad_wg256_f32",
+    "family": "mul_mat_vec_q5_k_q8_1_x4_mmql64x64_bk2_bquad_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q5_k_q8_1_x4_mmql64_bk2_bquad",
+    "artifact_id": "mul_mat_vec_q5_k_q8_1_x4_mmql64_bk2_bquad_hsaco",
+    "export_name": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql64x64_bk2_bquad_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 100,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q5_k_p33_staged_bk2_bquad_probe"
+    },
+    "shape_guards": {
+      "rows_multiple": 64,
+      "cols_min": 32,
+      "cols_max": 64,
+      "k_multiple": 256
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql64x64_bk2_bquad_wg256_f32",
+      "selector_gate": "default on gfx1151 for 32 <= cols <= 64; rollback with GGML_HRX_DISABLE_Q5_K_Q8_1_X4_MMQL64_BK2_BQUAD_PROMPT=1; force with GGML_HRX_ENABLE_Q5_K_Q8_1_X4_MMQL64_BK2_BQUAD_PROMPT=1"
+    },
+    "evidence_summary": {
+      "status": "accepted_gfx1151_default",
+      "selection": "Q5_K packed-Q8_1/x4 p33 B-cache issue-order default. It preserves the accepted MMQL64 BM64/BN64/WG256/wave64/BK_STEP=2 dataflow, but preloads the full WNITER x TN B-cache window before issuing dot products. Focused p33/p512/p513 correctness passed with p512 and p513 non-steal route guards; p33 timing improved Qcur 278.01 -> 258.87 us and ffn_out 1598.03 -> 1555.08 us; same-binary Qwen2.5 Coder 7B Q5_K_M p33 improved 168.18 -> 170.02 tok/s."
+    },
+    "target_prefixes": [
+      "gfx1151"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_f16acc_wg256_f32",
     "family": "mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_f16acc_wg256",
     "op": "MUL_MAT",
