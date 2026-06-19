@@ -513,7 +513,40 @@
       "id": "q8_0_prompt_wmma16_vk128_rocwmma_coopstore_unavailable",
       "date": "2026-06-18",
       "artifact": "local environment inspection",
-      "status": "blocked_missing_matrix_store_primitive"
+      "status": "superseded_rocwmma_missing_but_inline_asm_primitive_available",
+      "superseded_by": "q8_0_prompt_wmma16_vk128_inline_asm_coopstore_radv_mixed192_primitive",
+      "note": "rocWMMA headers remain absent from /srv/vm-shared/rocm/rocm-head, but a CMake-built HIP inline-asm primitive now proves the halfword LDS plus raw buffer-store surface is expressible without rocWMMA."
+    },
+    {
+      "id": "q8_0_prompt_wmma16_vk128_inline_asm_coopstore_radv_mixed192_primitive",
+      "date": "2026-06-19",
+      "artifact": "cache/hrxv1/gfx1151/coopstore-radv-mixed192-primitive-20260619-070221/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract.0.hipv4-amdgcn-amd-amdhsa--gfx1151",
+      "status": "primitive_contract_pass_not_runtime_route",
+      "evidence": {
+        "bench_targets": [
+          "hrx-hip-bench-coopmat-store-contract",
+          "hrx-hip-bench-lds-halfword-stage"
+        ],
+        "correctness": [
+          "coopmat-store-contract --mode=radv-mixed192: elements=12288 bad=0 max_abs=0",
+          "lds-halfword-stage --mode=bulk128-wg256: elements=8192 bad=0"
+        ],
+        "coopstore_probe_radv_mixed192_isa": {
+          "wavefront_size": 64,
+          "sgpr_count": 10,
+          "vgpr_count": 32,
+          "private_segment_fixed_size": 0,
+          "buffer_store_b32": 192,
+          "global_store_b32": 0,
+          "ds_load_u16_d16_or_ds_read_u16_d16": 128,
+          "ds_store_b16": 128,
+          "s_barrier": 2,
+          "s_waitcnt": 135,
+          "v_wmma": 0
+        }
+      },
+      "decision": "This retires the broad missing-primitive hypothesis: HIP inline asm can emit the RADV-like store-side surface on gfx1151 without rocWMMA. It is not a production route because it has no live WMMA fragment integration or llama.cpp tensor ABI. The remaining Q8/Q6 gap is the integration contract: combine this low-barrier halfword LDS plus 192 raw buffer-store topology with the real WMMA fragment lane mapping, RADV-like outstanding LDS-load issue window, and acceptable VGPR pressure."
     },
     {
       "id": "q8_0_prompt_mmq64x112_compile",
