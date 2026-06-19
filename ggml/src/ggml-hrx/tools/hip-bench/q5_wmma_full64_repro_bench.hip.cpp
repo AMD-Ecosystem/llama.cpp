@@ -467,6 +467,7 @@ void q5_array_fullb_phase_repro_kernel(
     }
 }
 
+template <int group_base_end>
 __global__ __launch_bounds__(256, 1)
 void q5_full64_batched4_repro_kernel(
         const hrx_block_q5_K_wmma_vk128_lhs * src0,
@@ -479,6 +480,8 @@ void q5_full64_batched4_repro_kernel(
     constexpr int BN = 64;
     constexpr int BK = 32;
     constexpr int SHARED_STRIDE = 44;
+    static_assert(group_base_end > 0 && group_base_end <= 16 && (group_base_end % 4) == 0,
+        "unexpected batched4 group_base_end");
 
     const unsigned int tid = __builtin_amdgcn_workitem_id_x();
     const unsigned int wave = tid >> 6u;
@@ -497,7 +500,7 @@ void q5_full64_batched4_repro_kernel(
     const _Float16 zero = static_cast<_Float16>(0.0f);
 
 #pragma unroll
-    for (int group_base = 0; group_base < 16; group_base += 4) {
+    for (int group_base = 0; group_base < group_base_end; group_base += 4) {
         hrx_q5_k_wmma_vk128_half8_vec acc[4] = {};
 
         for (long long k0 = 0; k0 < k; k0 += BK) {
@@ -974,6 +977,9 @@ static bool output_is_active(size_t index, int rows, int active_groups) {
     if (active_groups == -104) {
         return group < 12;
     }
+    if (active_groups == -5) {
+        return group < 12;
+    }
     if (active_groups == -105) {
         return true;
     }
@@ -999,6 +1005,7 @@ static const char * variant_name(int active_groups) {
         case -98: return "combined96-raw8-wait0";
         case -97: return "combined96-raw8";
         case -96: return "combined96";
+        case -5: return "batched4-p33";
         case -4: return "batched4";
         case 0: return "catalog-full64";
         case 1: return "active1";
@@ -1186,7 +1193,21 @@ static void launch_variant(
             break;
         case -4:
             hipLaunchKernelGGL(
-                q5_full64_batched4_repro_kernel,
+                (q5_full64_batched4_repro_kernel<16>),
+                grid,
+                dim3(256, 1, 1),
+                0,
+                0,
+                src0,
+                src1,
+                dst,
+                k,
+                rows,
+                cols);
+            break;
+        case -5:
+            hipLaunchKernelGGL(
+                (q5_full64_batched4_repro_kernel<12>),
                 grid,
                 dim3(256, 1, 1),
                 0,
@@ -1437,6 +1458,8 @@ int main() {
     status |= run_case(64, 33, 3584, small, 8);
     status |= run_case(64, 33, 3584, small, 12);
     status |= run_case(64, 33, 3584, small, 16);
+    status |= run_case(64, 33, 256, small, -5);
+    status |= run_case(64, 33, 3584, small, -5);
     status |= run_case(64, 33, 3584, small, -4);
     status |= run_case(64, 64, 3584, small, -4);
     status |= run_case(64, 33, 256, stress, 0);
