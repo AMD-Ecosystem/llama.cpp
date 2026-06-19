@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_direct_wmma_vk128_packstage_asmwmma_motif192_gpu_fault",
+      "date": "2026-06-19",
+      "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_bufferstore_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_ASMWMMA_MOTIF192_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q8-asmwmma-motif192-focused-20260619-153414/",
+      "control_artifact": "cache/hrxv1/gfx1151/coopstore-radv-motif192-20260619-150932/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_bufferstore_wg256.hsaco",
+      "reason": "The motif192 catalog transfer ports the accepted tight RADV cooperative-store fixture into the real Q8_0 direct-WMMA catalog ABI. It is CMake/Ninja-built, opt-in only, and explicitly wired through the HRX v1 runtime provider table after the generated catalog assembly. Static HSACO evidence matches the intended core motif counts: wave64, LDS=22528, private_segment=0, no spills, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 128 ds_store_b16, 128 ds_load_u16_d16, and 192 buffer_store_b32. The production route is still not RADV-equivalent: it has SGPR=56 and VGPR=212 versus the standalone fixture's SGPR=14/VGPR=137, emits 60 waitcnt-class instructions rather than the fixture's 168, and has three barriers rather than two. Focused p33/p512 route tests proved the runtime wiring: p33 stayed guarded out on the existing narrow Q8_1 x4 route and passed all five rows, while p512 selected this motif provider on the first wide row after Vcur/Qcur stayed on Q8_1 x4 split-qsum. That selected p512 ffn_out row immediately faulted the GPU with 'Memory access fault by GPU node-1 ... Page not present or supervisor privilege' before producing CSV output. Reject this catalog route for promotion. The standalone tight motif remains a valid schedule prior, but the real ABI transfer has an unsafe output or LDS/addressing contract and must not be used for performance testing until the memory fault is explained in a smaller reproducer."
+    },
+    {
       "id": "q8_0_direct_wmma_vk128_packstage_asmwmma_fast_half_split_selected_correctness",
       "date": "2026-06-19",
       "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_fast_half_split_selected_bufferstore_f16acc_wg256_f32",
