@@ -952,6 +952,16 @@
       "artifact": "cache/hrxv1/gfx1151/q6-vk64-groupk2-wait-focused-20260618-230642/",
       "compile_artifact": "cache/hrxv1/gfx1151/q6-vk64-groupk2-wait-static-20260618-230620/",
       "reason": "The GROUPK2_WAIT probe kept GROUPK2's two-K grouped fragment topology but replaced nowait b64 fragment reads with the existing per-load wait helper to isolate whether GROUPK2's NaNs were a wait/dependency issue or a lane/fragment mapping issue. It built through CMake/Ninja with wave64, SGPR=40, VGPR=101, LDS=11264, no spills, 40 ds_load_b64, 8 v_wmma_f16_16x16x16_f16, 16 global_store_b32, 2 barriers, 50 s_waitcnt, and 41 s_waitcnt_depctr. The scored first window remained far from RADV: 20 pre-WMMA ds_load_b64, final lgkmcnt(0), and only 4 WMMAs in the first-WMMA window versus RADV's 48/lgkmcnt(40)/16. Focused p33 CPU-reference selected the route and changed the failure mode from NaNs to finite mismatch: Vcur passed, ffn_out failed with ERR 0.001619838, and result_output failed with ERR 0.007942211. p512 and p513 non-steal gates passed and stayed on VK128. Reject before timing/model testing; the missing schedule cannot be recovered by simply adding per-load waits to the grouped scalar-fragment preload."
+    },
+    {
+      "id": "q5_dense_prompt_vk64_fullstore_narrow_ffn_mixed_perf",
+      "date": "2026-06-19",
+      "route": "hrx_mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_fullstore_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q5_K_WMMA16_VK64_PADDED44_W64_FULLSTORE_F16ACC_WG256_NARROW_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q5-vk64-fullstore-narrow-focused-20260619-020742/",
+      "postedit_artifact": "cache/hrxv1/gfx1151/q5-vk64-fullstore-default-postedit-20260619-021200/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q5_k_wmma16_vk64_padded44_w64_fullstore_wg256.hsaco",
+      "reason": "This probe preserved the accepted Q5_K VK64 padded44 wave64 narrow FFN-gate schedule and changed only the full-tile writeback policy. It built through CMake/Ninja with wave64, SGPR=32, VGPR=75, LDS=11264, private segment=0, and no spills. Focused CPU-reference passed for p33 and p512/p513 non-steal gates; p33 route traces selected the fullstore provider only for the k=3584 rows=18944 cols=33 FFN gate/up slice, while p512/p513 stayed on rows2 plus MMQL128 routes. Initial focused timing improved ffn_gate 1797.31 -> 1758.83 us and repeated model A/B improved Qwen2.5 Coder Q5_K_M p33 steady tok/s 169.717 -> 171.064. However, post-edit same-runner focused timing was mixed: one pass regressed ffn_gate 1827.65 -> 1864.51 us, while the rerun improved ffn_gate 1821.96 -> 1810.51 us with noisy neighboring rows. Reject for default promotion because the focused kernel signal is not stable enough for an exact-route default; keep opt-in as a diagnostic writeback-axis probe."
     }
   ]
 }

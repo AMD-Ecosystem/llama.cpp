@@ -41,16 +41,22 @@ def classify_label(label: str) -> str:
     return op.lower()
 
 
-def parse_perf_log(path: pathlib.Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
+def parse_perf_blocks(path: pathlib.Path) -> list[list[dict[str, Any]]]:
+    blocks: list[list[dict[str, Any]]] = []
     if not path.exists():
-        return rows
+        return blocks
+    current: list[dict[str, Any]] = []
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("Vulkan Timings:"):
+            if current:
+                blocks.append(current)
+                current = []
+            continue
         match = PERF_RE.match(line)
         if not match:
             continue
         label = match.group("label")
-        rows.append(
+        current.append(
             {
                 "label": label,
                 "family": classify_label(label),
@@ -59,7 +65,13 @@ def parse_perf_log(path: pathlib.Path) -> list[dict[str, Any]]:
                 "total_us": float(match.group("total")),
             }
         )
-    return rows
+    if current:
+        blocks.append(current)
+    return blocks
+
+
+def flatten_blocks(blocks: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    return [row for block in blocks for row in block]
 
 
 def summarize_perf(rows: list[dict[str, Any]], top: int) -> dict[str, Any]:
@@ -103,6 +115,21 @@ def summarize_perf(rows: list[dict[str, Any]], top: int) -> dict[str, Any]:
     return {
         "top_labels": sorted(by_label.values(), key=lambda row: row["total_us_sum"], reverse=True)[:top],
         "top_families": sorted(by_family.values(), key=lambda row: row["total_us_sum"], reverse=True)[:top],
+    }
+
+
+def summarize_perf_blocks(blocks: list[list[dict[str, Any]]], top: int) -> dict[str, Any]:
+    all_rows = flatten_blocks(blocks)
+    steady_blocks = blocks[1:] if len(blocks) > 1 else blocks
+    steady_rows = flatten_blocks(steady_blocks)
+    cold_rows = blocks[0] if blocks else []
+    return {
+        "blocks": len(blocks),
+        "rows_all": len(all_rows),
+        "rows_steady": len(steady_rows),
+        "all": summarize_perf(all_rows, top),
+        "steady": summarize_perf(steady_rows, top),
+        "cold": summarize_perf(cold_rows, top),
     }
 
 
@@ -173,8 +200,8 @@ def analyze(root: pathlib.Path, top: int) -> dict[str, Any]:
     for log in sorted((root / "vulkan").glob("*/p*/stderr.log")):
         model = log.parents[1].name
         case = log.parent.name
-        perf_rows = parse_perf_log(log)
-        perf = summarize_perf(perf_rows, top)
+        perf_blocks = parse_perf_blocks(log)
+        perf = summarize_perf_blocks(perf_blocks, top)
         summary = summary_rows.get((model, case), {})
         hrx_record = records.get(("hrx", model, case))
         models.append(
@@ -184,7 +211,9 @@ def analyze(root: pathlib.Path, top: int) -> dict[str, Any]:
                 "steady_ratio": summary.get("steady_ratio"),
                 "hrx_steady_ts": summary.get("hrx_steady_ts"),
                 "vulkan_steady_ts": summary.get("vulkan_steady_ts"),
-                "vulkan_perf_rows": len(perf_rows),
+                "vulkan_perf_blocks": perf["blocks"],
+                "vulkan_perf_rows": perf["rows_all"],
+                "vulkan_perf_steady_rows": perf["rows_steady"],
                 "vulkan": perf,
                 "hrx": summarize_routes(hrx_record, top),
             }
@@ -219,20 +248,29 @@ def write_markdown(path: pathlib.Path, report: dict[str, Any], top: int) -> None
             [
                 f"## {model['model']} / {model['case']} / {ratio_s}",
                 "",
-                "| Vulkan family | summed time | dispatches |",
+                f"Vulkan perf blocks: `{model.get('vulkan_perf_blocks', 0)}`; steady skips the first block when multiple blocks are present.",
+                "",
+                "| Vulkan steady family | summed time | dispatches |",
                 "| --- | ---: | ---: |",
             ]
         )
-        for row in model["vulkan"]["top_families"][:top]:
+        for row in model["vulkan"]["steady"]["top_families"][:top]:
             lines.append(
                 f"| `{row['family']}` | {fmt_us(row['total_us_sum'])} | {row['dispatch_count_sum']} |"
             )
-        lines.extend(["", "| Vulkan label | summed time | weighted avg | dispatches |", "| --- | ---: | ---: | ---: |"])
-        for row in model["vulkan"]["top_labels"][:top]:
+        lines.extend(["", "| Vulkan steady label | summed time | weighted avg | dispatches |", "| --- | ---: | ---: | ---: |"])
+        for row in model["vulkan"]["steady"]["top_labels"][:top]:
             lines.append(
                 f"| `{row['label']}` | {fmt_us(row['total_us_sum'])} | "
                 f"{fmt_us(row['avg_us_weighted'])} | {row['dispatch_count_sum']} |"
             )
+        if model.get("vulkan_perf_blocks", 0) > 1:
+            lines.extend(["", "| Vulkan cold label | summed time | weighted avg | dispatches |", "| --- | ---: | ---: | ---: |"])
+            for row in model["vulkan"]["cold"]["top_labels"][: min(5, top)]:
+                lines.append(
+                    f"| `{row['label']}` | {fmt_us(row['total_us_sum'])} | "
+                    f"{fmt_us(row['avg_us_weighted'])} | {row['dispatch_count_sum']} |"
+                )
         lines.extend(["", "| HRX route | count |", "| --- | ---: |"])
         for row in model["hrx"]["top_routes"][:top]:
             lines.append(f"| `{row['provider']}` | {row['count']} |")
