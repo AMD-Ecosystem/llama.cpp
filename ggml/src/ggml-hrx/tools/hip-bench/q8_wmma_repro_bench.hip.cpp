@@ -73,6 +73,57 @@ static __device__ __forceinline__ void q8_repro_consume_frag(
     asm volatile("" :: "v"(frag[0]), "v"(frag[4]), "v"(frag[8]), "v"(frag[12]) : "memory");
 }
 
+__global__ __launch_bounds__(256, 1)
+void q8_bfrag_dump_kernel(
+        const float * src1,
+        float * dump,
+        long long k,
+        long long cols) {
+    constexpr int BN = 64;
+    constexpr int BK = 32;
+    constexpr int SHARED_STRIDE = HRX_Q8_0_WMMA_VK128_SHARED_STRIDE;
+
+    const unsigned int tid = __builtin_amdgcn_workitem_id_x();
+    const unsigned int wave = tid >> 6u;
+    const unsigned int lane = tid & 63u;
+    __shared__ _Float16 sh_b[BN * SHARED_STRIDE];
+
+    const _Float16 zero = static_cast<_Float16>(0.0f);
+    for (int idx = static_cast<int>(tid); idx < BN * BK; idx += 256) {
+        const int c = idx / BK;
+        const int kk = idx - c * BK;
+        sh_b[c * SHARED_STRIDE + kk] = c < cols ? static_cast<_Float16>(src1[c * k + kk]) : zero;
+    }
+    __syncthreads();
+
+    if (wave == 0) {
+        hrx_q8_0_wmma_vk128_lds_half_ptr sh_b_lds =
+            (hrx_q8_0_wmma_vk128_lds_half_ptr) sh_b;
+        hrx_q8_0_wmma_vk128_half16_vec b_frag[2][4];
+#pragma unroll
+        for (int k_tile = 0; k_tile < 2; ++k_tile) {
+#pragma unroll
+            for (int col_sub = 0; col_sub < 4; ++col_sub) {
+                b_frag[k_tile][col_sub] =
+                    hrx_q8_0_wmma_vk128_load_b_frag_w64_b64asm_nowait(
+                        sh_b_lds, col_sub, k_tile, lane);
+            }
+        }
+        asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+#pragma unroll
+        for (int k_tile = 0; k_tile < 2; ++k_tile) {
+#pragma unroll
+            for (int col_sub = 0; col_sub < 4; ++col_sub) {
+#pragma unroll
+                for (int elem = 0; elem < 16; ++elem) {
+                    const int index = (((k_tile * 4 + col_sub) * 64 + static_cast<int>(lane)) * 16) + elem;
+                    dump[index] = static_cast<float>(b_frag[k_tile][col_sub][elem]);
+                }
+            }
+        }
+    }
+}
+
 template <bool full_b>
 __global__ __launch_bounds__(256, 1)
 void q8_array8_repro_kernel(
@@ -487,6 +538,99 @@ void q8_single_group_remap_repro_kernel(
     }
 }
 
+template <int group_id, int mirror_col_sub>
+__global__ __launch_bounds__(256, 1)
+void q8_single_group_bmirror_repro_kernel(
+        const hrx_block_q8_0_wmma_vk128_lhs * src0,
+        const float * src1,
+        float * dst,
+        long long k,
+        long long rows,
+        long long cols) {
+    constexpr int BM = 64;
+    constexpr int BN = 64;
+    constexpr int BK = 32;
+    constexpr int SHARED_STRIDE = HRX_Q8_0_WMMA_VK128_SHARED_STRIDE;
+    constexpr int row_sub = group_id & 3;
+    constexpr int col_sub = (group_id >> 2) & 3;
+
+    const unsigned int tid = __builtin_amdgcn_workitem_id_x();
+    const unsigned int wave = tid >> 6u;
+    const unsigned int lane = tid & 63u;
+    const long long row_base = static_cast<long long>(__builtin_amdgcn_workgroup_id_x()) * BM;
+    const long long col_base = static_cast<long long>(__builtin_amdgcn_workgroup_id_y()) * BN;
+    if (row_base >= rows || col_base >= cols) {
+        return;
+    }
+
+    const __amdgpu_buffer_rsrc_t dst_rsrc = hrx_q8_0_wmma_vk128_make_dst_rsrc(dst);
+    __shared__ _Float16 sh_a[BM * SHARED_STRIDE];
+    __shared__ _Float16 sh_b[BN * SHARED_STRIDE];
+
+    const long long blocks_per_row = k / 32;
+    const _Float16 zero = static_cast<_Float16>(0.0f);
+    hrx_q8_0_wmma_vk128_half8_vec acc[1] = {};
+
+    for (long long k0 = 0; k0 < k; k0 += BK) {
+        for (int idx = static_cast<int>(tid); idx < BM * BK; idx += 256) {
+            const int r = idx / BK;
+            const int kk = idx - r * BK;
+            const long long row = row_base + static_cast<long long>(r);
+            sh_a[r * SHARED_STRIDE + kk] = row < rows ?
+                hrx_q8_0_wmma_vk128_load_a_value(src0, row, k0 + kk, blocks_per_row) : zero;
+        }
+        for (int idx = static_cast<int>(tid); idx < BN * BK; idx += 256) {
+            const int c = idx / BK;
+            const int kk = idx - c * BK;
+            const long long source_col = col_base + static_cast<long long>(mirror_col_sub * 16 + (c & 15));
+            sh_b[c * SHARED_STRIDE + kk] = source_col < cols ?
+                static_cast<_Float16>(src1[source_col * k + k0 + kk]) : zero;
+        }
+        __syncthreads();
+
+        if (wave == 0) {
+            hrx_q8_0_wmma_vk128_lds_half_ptr sh_a_lds =
+                (hrx_q8_0_wmma_vk128_lds_half_ptr) sh_a;
+            hrx_q8_0_wmma_vk128_lds_half_ptr sh_b_lds =
+                (hrx_q8_0_wmma_vk128_lds_half_ptr) sh_b;
+            hrx_q8_0_wmma_vk128_half16_vec a_frag[2][4];
+            hrx_q8_0_wmma_vk128_half16_vec b_frag[2][4];
+#pragma unroll
+            for (int k_tile = 0; k_tile < 2; ++k_tile) {
+#pragma unroll
+                for (int rs = 0; rs < 4; ++rs) {
+                    a_frag[k_tile][rs] =
+                        hrx_q8_0_wmma_vk128_load_a_frag_w64_b64asm_nowait(
+                            sh_a_lds, rs, k_tile, lane);
+                }
+#pragma unroll
+                for (int cs = 0; cs < 4; ++cs) {
+                    b_frag[k_tile][cs] =
+                        hrx_q8_0_wmma_vk128_load_b_frag_w64_b64asm_nowait(
+                            sh_b_lds, cs, k_tile, lane);
+                }
+            }
+            asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+#pragma unroll
+            for (int k_tile = 0; k_tile < 2; ++k_tile) {
+                acc[0] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
+                    a_frag[k_tile][row_sub],
+                    b_frag[k_tile][col_sub],
+                    acc[0],
+                    HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+            }
+        }
+        __syncthreads();
+    }
+
+    if (wave == 0) {
+#pragma unroll
+        for (int slot = 0; slot < 4; ++slot) {
+            q8_repro_raw_store_slot(dst_rsrc, rows, row_base, col_base, rows, cols, acc, 0, group_id, slot, lane);
+        }
+    }
+}
+
 template <int group_id>
 __global__ __launch_bounds__(256, 1)
 void q8_single_group_opsel1_repro_kernel(
@@ -718,11 +862,29 @@ static bool remap_mode_groups(const std::string & mode, int * compute_group, int
     return false;
 }
 
+static bool bmirror_mode_groups(const std::string & mode, int * compute_group, int * store_group) {
+    if (mode == "single-group8-bmirror0") {
+        *compute_group = 0;
+        *store_group = 8;
+        return true;
+    }
+    if (mode == "single-group12-bmirror0") {
+        *compute_group = 0;
+        *store_group = 12;
+        return true;
+    }
+    return false;
+}
+
 static bool output_is_active(size_t index, int rows, const std::string & mode) {
     const int group = output_group(index, rows);
     int compute_group = 0;
     int store_group = 0;
     if (remap_mode_groups(mode, &compute_group, &store_group)) {
+        (void) compute_group;
+        return group == store_group;
+    }
+    if (bmirror_mode_groups(mode, &compute_group, &store_group)) {
         (void) compute_group;
         return group == store_group;
     }
@@ -762,7 +924,8 @@ static float expected_value_for_output(
         const std::vector<float> & ref) {
     int compute_group = 0;
     int store_group = 0;
-    if (!remap_mode_groups(mode, &compute_group, &store_group)) {
+    if (!remap_mode_groups(mode, &compute_group, &store_group) &&
+            !bmirror_mode_groups(mode, &compute_group, &store_group)) {
         return ref[index];
     }
 
@@ -792,6 +955,92 @@ struct group_stats {
     size_t sentinel = 0;
     float max_abs = 0.0f;
 };
+
+static int run_bfrag_dump_case(int cols, int k) {
+    constexpr int dump_count = 2 * 4 * 64 * 16;
+    std::vector<float> h_rhs(static_cast<size_t>(cols) * k);
+    std::vector<float> h_dump(dump_count, -7777.0f);
+    fill_rhs(h_rhs, k, cols);
+
+    device_buffer<float> d_rhs(h_rhs.size());
+    device_buffer<float> d_dump(h_dump.size());
+    HIP_CHECK(hipMemcpy(d_rhs.ptr, h_rhs.data(), h_rhs.size() * sizeof(h_rhs[0]), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(d_dump.ptr, h_dump.data(), h_dump.size() * sizeof(h_dump[0]), hipMemcpyHostToDevice));
+
+    hipLaunchKernelGGL(q8_bfrag_dump_kernel, dim3(1, 1, 1), dim3(256, 1, 1), 0, 0,
+        d_rhs.ptr, d_dump.ptr, k, cols);
+    HIP_CHECK(hipGetLastError());
+    HIP_CHECK(hipDeviceSynchronize());
+    HIP_CHECK(hipMemcpy(h_dump.data(), d_dump.ptr, h_dump.size() * sizeof(h_dump[0]), hipMemcpyDeviceToHost));
+
+    size_t active = 0;
+    size_t bad = 0;
+    size_t sentinel = 0;
+    size_t nan = 0;
+    float max_abs = 0.0f;
+    int first_bad_k_tile = -1;
+    int first_bad_col_sub = -1;
+    int first_bad_lane = -1;
+    int first_bad_elem = -1;
+    float first_bad_actual = 0.0f;
+    float first_bad_expected = 0.0f;
+
+    for (int k_tile = 0; k_tile < 2; ++k_tile) {
+        for (int col_sub = 0; col_sub < 4; ++col_sub) {
+            for (int lane = 0; lane < 64; ++lane) {
+                const int col = col_sub * 16 + (lane & 15);
+                for (int elem = 0; elem < 16; ++elem) {
+                    const int index = (((k_tile * 4 + col_sub) * 64 + lane) * 16) + elem;
+                    const float actual = h_dump[index];
+                    const int k_index = k_tile * 16 + elem;
+                    const float expected = col < cols ?
+                        half_bits_to_float(float_to_half_bits(rhs_value(col, k_index))) : 0.0f;
+                    ++active;
+                    if (actual == -7777.0f) {
+                        ++sentinel;
+                    }
+                    if (std::isnan(actual)) {
+                        ++nan;
+                        ++bad;
+                        if (first_bad_k_tile < 0) {
+                            first_bad_k_tile = k_tile;
+                            first_bad_col_sub = col_sub;
+                            first_bad_lane = lane;
+                            first_bad_elem = elem;
+                            first_bad_actual = actual;
+                            first_bad_expected = expected;
+                        }
+                        continue;
+                    }
+                    const float err = std::fabs(actual - expected);
+                    max_abs = std::max(max_abs, err);
+                    if (err > 0.0f || actual == -7777.0f) {
+                        ++bad;
+                        if (first_bad_k_tile < 0) {
+                            first_bad_k_tile = k_tile;
+                            first_bad_col_sub = col_sub;
+                            first_bad_lane = lane;
+                            first_bad_elem = elem;
+                            first_bad_actual = actual;
+                            first_bad_expected = expected;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    std::printf(
+        "bfrag-dump cols=%d k=%d active=%zu bad=%zu nan=%zu sentinel=%zu max_abs=%g\n",
+        cols, k, active, bad, nan, sentinel, max_abs);
+    if (first_bad_k_tile >= 0) {
+        std::printf(
+            "  first_bad k_tile=%d col_sub=%d lane=%d elem=%d actual=%g expected=%g\n",
+            first_bad_k_tile, first_bad_col_sub, first_bad_lane, first_bad_elem,
+            first_bad_actual, first_bad_expected);
+    }
+    return (bad == 0 && nan == 0 && sentinel == 0) ? 0 : 1;
+}
 
 static int run_case(const std::string & mode, int rows, int cols, int k) {
     const int blocks_per_row = k / 32;
@@ -889,6 +1138,12 @@ static int run_case(const std::string & mode, int rows, int cols, int k) {
     } else if (mode == "remap-c0-s12") {
         hipLaunchKernelGGL((q8_single_group_remap_repro_kernel<0, 12>), grid, dim3(256, 1, 1), 0, 0,
             d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+    } else if (mode == "single-group8-bmirror0") {
+        hipLaunchKernelGGL((q8_single_group_bmirror_repro_kernel<8, 0>), grid, dim3(256, 1, 1), 0, 0,
+            d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+    } else if (mode == "single-group12-bmirror0") {
+        hipLaunchKernelGGL((q8_single_group_bmirror_repro_kernel<12, 0>), grid, dim3(256, 1, 1), 0, 0,
+            d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
     } else {
         std::fprintf(stderr, "unknown mode: %s\n", mode.c_str());
         return 2;
@@ -962,7 +1217,7 @@ int main(int argc, char ** argv) {
         if (std::strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
             mode = argv[++i];
         } else {
-            std::fprintf(stderr, "usage: %s [--mode array8-fullb|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group8|single-group8-consume|single-group8-opsel1|single-group12|single-group12-consume|single-group12-opsel1|single-group13|single-group13-consume|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c0-s12|all]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--mode array8-fullb|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group8|single-group8-consume|single-group8-opsel1|single-group8-bmirror0|single-group12|single-group12-consume|single-group12-opsel1|single-group12-bmirror0|single-group13|single-group13-consume|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c0-s12|bfrag-dump|all]\n", argv[0]);
             return 2;
         }
     }
@@ -994,12 +1249,18 @@ int main(int argc, char ** argv) {
         status |= run_case("batched4-consume", rows, 64, k);
         status |= run_case("batched4-consume", rows, 33, k);
     }
+    if (mode == "bfrag-dump") {
+        status |= run_bfrag_dump_case(64, k);
+        status |= run_bfrag_dump_case(33, k);
+    }
     if (mode == "single-group0" || mode == "single-group0-consume" ||
             mode == "single-group0-opsel1" ||
             mode == "single-group8" || mode == "single-group8-consume" ||
             mode == "single-group8-opsel1" ||
+            mode == "single-group8-bmirror0" ||
             mode == "single-group12" || mode == "single-group12-consume" ||
             mode == "single-group12-opsel1" ||
+            mode == "single-group12-bmirror0" ||
             mode == "single-group13" || mode == "single-group13-consume" ||
             mode == "remap-c8-s0" || mode == "remap-c0-s8" ||
             mode == "remap-c12-s0" || mode == "remap-c0-s12") {

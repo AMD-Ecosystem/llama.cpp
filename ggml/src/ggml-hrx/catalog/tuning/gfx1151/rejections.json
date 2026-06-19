@@ -1273,6 +1273,15 @@
       "artifact": "cache/hrxv1/gfx1151/q5-mmql64-bk2-tn4-bquad-focused-20260619-051644/",
       "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q5_k_q8_1_x4_mmql64_bk2_tn4_bquad.hsaco",
       "reason": "The Q5_K packed-Q8_1/x4 MMQL64 BK2 TN4/BQUAD probe preserved the accepted p33 BQUAD route's BM64/BN64/BK_STEP=2/WG256/wave64 dataflow and BQUAD issue window, but changed per-lane output ownership from TM4/TN2 to TM2/TN4. This was a bounded packed-RHS/output-ownership axis after BK1, B-pair, B-quad, and CR-major issue order had already been tested. It built through CMake/Ninja but failed the compile-resource gate before runtime tests: wave64 SGPR=62, VGPR=192, VGPR spills=183, private_segment_fixed_size=736, LDS=10240. For comparison, the accepted BQUAD route is wave64 SGPR=62, VGPR=124, no spills, private_segment_fixed_size=0, LDS=10240. TN4 preserves 256 v_dot sites and two barriers but raises ds_load count from 40 to 50 and s_waitcnt count from 119 to 249. Reject before focused correctness/perf; the TN4 ownership pivot hits the gfx1151 register cliff and is not a viable packed-medium schedule."
+    },
+    {
+      "id": "q8_0_wmma_upper_bfrag_bmirror_correctness",
+      "date": "2026-06-19",
+      "route": "hrx-hip-bench-q8-wmma-repro diagnostic modes bfrag-dump, single-group8-bmirror0, and single-group12-bmirror0",
+      "env": "bench-only, no production selector",
+      "artifact": "cache/hrxv1/gfx1151/q8-wmma-bfrag-bmirror-20260619-100138/",
+      "compile_artifact": "cache/hrxv1/gfx1151/q8-wmma-bfrag-bmirror-20260619-100138/static/",
+      "reason": "The Q8_0 WMMA repro added a B-fragment dump that stages RHS through the same padded LDS layout and loads all four B column fragments with the production ds_read_b64 helper. It passed exactly for cols=64 and cols=33: active=8192, bad=0, nan=0, sentinel=0, max_abs=0. This clears raw upper-column B-fragment load values, including the odd p33 edge. The follow-up bmirror modes mirrored lower-column RHS values into the upper B column tiles, then computed through the upper col_sub paths and compared against lower-column CPU reference values. Both upper paths still failed: group8 reported p64 bad=256 nan=96 max_abs=16976 and p33 bad=16 nan=8 max_abs=5484; group12 reported p64 bad=256 nan=0 max_abs=12.9951. Static device evidence stayed small and non-spilling: bmirror group8 wave64 SGPR=40 VGPR=99 LDS=10240, bmirror group12 wave64 SGPR=32 VGPR=110 LDS=10240, each with 2 WMMA, 64 ds_load_b64, 4 buffer_store_b32, and 2 barriers. Reject the hypothesis that distinct upper-column RHS data or raw B-fragment loads explain the upper-column failure. The remaining blocker is the upper B operand slot/register/WMMA consumption contract in this HIP C++ spelling; the next probe should change operand materialization or use a lower-level WMMA operand spelling, not retest B-value staging."
     }
   ]
 }
