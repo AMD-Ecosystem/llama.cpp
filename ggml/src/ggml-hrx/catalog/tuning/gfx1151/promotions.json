@@ -322,6 +322,56 @@
       ]
     },
     {
+      "id": "q4_dense_prompt_mmql64_bk2_llama31_p33",
+      "date": "2026-06-18",
+      "status": "accepted_gfx1151_default",
+      "route": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql64x64_bk2_wg256_f32",
+      "env": "default on gfx1151 for Q4_K packed-Q8_1 prompt rows with 32 <= cols <= 64; rollback with GGML_HRX_DISABLE_Q4_K_Q8_1_X4_MMQL64_BK2_PROMPT=1; force with GGML_HRX_ENABLE_Q4_K_Q8_1_X4_MMQL64_BK2_PROMPT=1",
+      "shape_guard": "q4_K MUL_MAT prompt, k % 256 == 0, rows % 64 == 0, 32 <= cols <= 64, contiguous tensors, packed Q8_1 x4 RHS",
+      "prior_art_schedule": "Vulkan p33 medium aligned Q4_K oracle: matmul_q4_k_f32_f16acc_aligned_m with spec [128,64,64,32,64,32,2,16,16,16,64], wg_denoms [64,64,1], wave64, LDS 11264, VGPR 144, no spills. This HIP candidate keeps the packed integer-dot HRX contract but moves the p33 route from direct-A/staged-B MMQ64 to staged A+B MMQL64 with BK_STEP=2, matching the successful Q5 narrow BK2 dataflow pivot.",
+      "focused_artifacts": [
+        "cache/hrxv1/gfx1151/q4-mmql64-bk2-focused-20260618-220618/",
+        "cache/hrxv1/gfx1151/q4-mmql64-bk2-default-regate-20260618-220918/"
+      ],
+      "model_artifacts": [
+        "cache/hrxv1/gfx1151/q4-mmql64-bk2-llama31-model-ab-20260618-220739/",
+        "cache/hrxv1/gfx1151/q4-mmql64-bk2-default-model-ab-20260618-221010/"
+      ],
+      "focused_result": {
+        "correctness": "CPU-reference passed for exact p33 rows and p512/p513 guard rows; route traces selected MMQL64 BK2 on p33 and kept MMQL128 B-quad on p512/p513",
+        "default_total_us": 3525.120736,
+        "candidate_total_us": 2960.220103,
+        "candidate_over_default": 1.190834,
+        "row_notes": "Kcur, Qcur, and ffn_out improved; ffn_gate regressed 1223.01 -> 1362.89 us, so model-level A/B decided promotion"
+      },
+      "model_result": {
+        "model": "Meta-Llama-3.1-8B-Instruct-Q4_K_M",
+        "case": "p33/n0/fa1/r3",
+        "default_tok_s": 183.336456,
+        "candidate_tok_s": 203.836496,
+        "candidate_over_default": 1.111815,
+        "route_switch": "570 Q4_K p33 MUL_MAT dispatches switched from hrx_mul_mat_vec_q4_k_q8_1_x4_mmq64x64_wg256_f32 to hrx_mul_mat_vec_q4_k_q8_1_x4_mmql64x64_bk2_wg256_f32",
+        "default_regate_tok_s": 199.228271,
+        "rollback_regate_tok_s": 181.574685,
+        "default_over_rollback_regate": 1.097225
+      },
+      "compile_evidence": {
+        "hsaco": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q4_k_q8_1_x4_mmql64_bk2.hsaco",
+        "wavefront_size": 64,
+        "sgpr": 50,
+        "vgpr": 93,
+        "lds_bytes": 8192,
+        "spills": 0,
+        "integer_dot_sites": 256,
+        "barriers": 2
+      },
+      "promotion_blockers": [
+        "broader p33 basket coverage is still pending after the default regate",
+        "this route deliberately does not replace accepted p512/p513 MMQL128 B-quad policy",
+        "remaining Llama 3.1 Q4_K_M p33 gap to Vulkan is still large, so the next Q4 work should continue mechanically comparing RADV medium-pipeline schedule details"
+      ]
+    },
+    {
       "id": "d128_flash_attn_prefill_direct_qwen3_q4xl_p33_p512_p513",
       "date": "2026-06-17",
       "status": "accepted_gfx1151_default",

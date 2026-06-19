@@ -540,6 +540,10 @@
     "op": "MUL_MAT"
   },
   {
+    "family": "mul_mat_vec_q4_k_q8_1_x4_mmql64x64_bk2_wg256",
+    "op": "MUL_MAT"
+  },
+  {
     "family": "mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bsplit4_wg256",
     "op": "MUL_MAT"
   },

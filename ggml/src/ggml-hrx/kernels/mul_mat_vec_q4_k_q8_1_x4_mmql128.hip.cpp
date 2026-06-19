@@ -177,9 +177,10 @@ extern "C" __global__ void HRX_Q4_K_Q8_1_X4_MMQL128_EXPORT(
     constexpr int LOAD_VEC_A = 8;
     constexpr int LOAD_VEC_B = HRX_Q4_K_Q8_1_X4_MMQL128_LOAD_VEC_B;
 
-    static_assert(BM == 128 && (BN == 128 || BN == 64), "unexpected Q4 MMQ tile shape");
+    static_assert((BM == 128 && (BN == 128 || BN == 64)) || (BM == 64 && BN == 64),
+        "unexpected Q4 MMQ tile shape");
     static_assert(LOAD_VEC_B == 16 || LOAD_VEC_B == 8, "unexpected Q4 MMQ B-cache load split");
-    static_assert(WNITER == 8 || WNITER == 4, "unexpected Q4 MMQ column iteration count");
+    static_assert(WNITER == 8 || WNITER == 4 || WNITER == 2, "unexpected Q4 MMQ column iteration count");
     static_assert(WSUBM == 64 && WSUBN == 8, "unexpected Vulkan large Q4 MMQ subtile shape");
 
     const unsigned int tid = __builtin_amdgcn_workitem_id_x();
