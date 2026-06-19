@@ -263,6 +263,11 @@ static __device__ __forceinline__ void q8_repro_motif192_stage_load_store_slot(
     }
 }
 
+static constexpr int Q8_REPRO_MOTIF192_STORE_FULL = 0;
+static constexpr int Q8_REPRO_MOTIF192_STORE_DIRECT = 1;
+static constexpr int Q8_REPRO_MOTIF192_STORE_STAGE16 = 2;
+static constexpr int Q8_REPRO_MOTIF192_STORE_STAGE32 = 3;
+
 __global__ __launch_bounds__(256, 1)
 void q8_motif192_synthetic_store_kernel(
         float * dst,
@@ -330,7 +335,8 @@ __global__ __launch_bounds__(256, 1)
 void q8_motif192_wmma_store_kernel(
         float * dst,
         long long rows,
-        long long cols) {
+        long long cols,
+        int store_mode) {
     constexpr int BM = 128;
     constexpr int BN = 128;
     constexpr int BK = 32;
@@ -405,30 +411,39 @@ void q8_motif192_wmma_store_kernel(
 
 #pragma unroll
     for (int group = 0; group < 16; ++group) {
+        if (store_mode == Q8_REPRO_MOTIF192_STORE_FULL ||
+                store_mode == Q8_REPRO_MOTIF192_STORE_DIRECT) {
 #pragma unroll
-        for (int slot = 0; slot < 4; ++slot) {
-            q8_repro_bm128_raw_store_slot(
-                dst_rsrc, rows, row_base, col_base, rows, cols, acc, wave, group, slot, lane);
+            for (int slot = 0; slot < 4; ++slot) {
+                q8_repro_bm128_raw_store_slot(
+                    dst_rsrc, rows, row_base, col_base, rows, cols, acc, wave, group, slot, lane);
+            }
         }
+        if (store_mode == Q8_REPRO_MOTIF192_STORE_FULL ||
+                store_mode == Q8_REPRO_MOTIF192_STORE_STAGE16) {
 #pragma unroll
-        for (int slot = 0; slot < 4; ++slot) {
-            q8_repro_motif192_stage_store_slot(sh_store, acc, wave, group + 16, slot, lane);
+            for (int slot = 0; slot < 4; ++slot) {
+                q8_repro_motif192_stage_store_slot(sh_store, acc, wave, group + 16, slot, lane);
+            }
+            asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+#pragma unroll
+            for (int slot = 0; slot < 4; ++slot) {
+                q8_repro_motif192_stage_load_store_slot(
+                    dst_rsrc, rows, row_base, col_base, rows, cols, sh_store, wave, group + 16, slot, lane);
+            }
         }
-        asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+        if (store_mode == Q8_REPRO_MOTIF192_STORE_FULL ||
+                store_mode == Q8_REPRO_MOTIF192_STORE_STAGE32) {
 #pragma unroll
-        for (int slot = 0; slot < 4; ++slot) {
-            q8_repro_motif192_stage_load_store_slot(
-                dst_rsrc, rows, row_base, col_base, rows, cols, sh_store, wave, group + 16, slot, lane);
-        }
+            for (int slot = 0; slot < 4; ++slot) {
+                q8_repro_motif192_stage_store_slot(sh_store, acc, wave, group + 32, slot, lane);
+            }
+            asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
 #pragma unroll
-        for (int slot = 0; slot < 4; ++slot) {
-            q8_repro_motif192_stage_store_slot(sh_store, acc, wave, group + 32, slot, lane);
-        }
-        asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
-#pragma unroll
-        for (int slot = 0; slot < 4; ++slot) {
-            q8_repro_motif192_stage_load_store_slot(
-                dst_rsrc, rows, row_base, col_base, rows, cols, sh_store, wave, group + 32, slot, lane);
+            for (int slot = 0; slot < 4; ++slot) {
+                q8_repro_motif192_stage_load_store_slot(
+                    dst_rsrc, rows, row_base, col_base, rows, cols, sh_store, wave, group + 32, slot, lane);
+            }
         }
     }
     asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
@@ -2314,14 +2329,14 @@ static int run_motif192_synthetic_case(int rows, int cols) {
     return bad == 0 ? 0 : 1;
 }
 
-static int run_motif192_wmma_case(int rows, int cols) {
+static int run_motif192_wmma_case(const char * label, int rows, int cols, int store_mode) {
     std::vector<float> h_out(static_cast<size_t>(rows) * cols, -7777.0f);
     device_buffer<float> d_out(h_out.size());
     HIP_CHECK(hipMemcpy(d_out.ptr, h_out.data(), h_out.size() * sizeof(h_out[0]), hipMemcpyHostToDevice));
 
     dim3 grid((rows + 127) / 128, (cols + 127) / 128, 1);
     hipLaunchKernelGGL(q8_motif192_wmma_store_kernel, grid, dim3(256, 1, 1), 0, 0,
-        d_out.ptr, rows, cols);
+        d_out.ptr, rows, cols, store_mode);
     HIP_CHECK(hipGetLastError());
     HIP_CHECK(hipDeviceSynchronize());
     HIP_CHECK(hipMemcpy(h_out.data(), d_out.ptr, h_out.size() * sizeof(h_out[0]), hipMemcpyDeviceToHost));
@@ -2399,7 +2414,8 @@ static int run_motif192_wmma_case(int rows, int cols) {
     }
 
     std::printf(
-        "motif192-wmma-address rows=%d cols=%d active=%zu bad=%zu nan=%zu inf=%zu sentinel=%zu max_abs=%g\n",
+        "%s rows=%d cols=%d active=%zu bad=%zu nan=%zu inf=%zu sentinel=%zu max_abs=%g\n",
+        label,
         rows,
         cols,
         h_out.size(),
@@ -2418,6 +2434,17 @@ static int run_motif192_wmma_case(int rows, int cols) {
             first_err);
     }
     return bad == 0 ? 0 : 1;
+}
+
+static int run_motif192_wmma_suite(const char * label, int store_mode) {
+    int status = 0;
+    status |= run_motif192_wmma_case(label, 128, 128, store_mode);
+    status |= run_motif192_wmma_case(label, 128, 129, store_mode);
+    status |= run_motif192_wmma_case(label, 129, 128, store_mode);
+    status |= run_motif192_wmma_case(label, 1024, 512, store_mode);
+    status |= run_motif192_wmma_case(label, 4096, 512, store_mode);
+    status |= run_motif192_wmma_case(label, 4096, 513, store_mode);
+    return status;
 }
 
 template <typename T>
@@ -3877,7 +3904,7 @@ int main(int argc, char ** argv) {
         } else if (std::strcmp(argv[i], "--dump-dir") == 0 && i + 1 < argc) {
             dump_dir = argv[++i];
         } else {
-            std::fprintf(stderr, "usage: %s [--mode motif192-synth-address|motif192-wmma-address|array8-fullb|array16-direct-raw|array16-direct-raw-bcopy|array16-direct-raw-abcopy|contract-direct192-raw|contract-direct192-bcopy|contract-direct192-bcopy-hoist|contract-direct192-abcopy|contract-direct192-abcopy-bhoist|contract-bm128-direct192-raw|contract-bm128-direct192-raw-asm|contract-bm128-direct192-bcopy-upper|contract-bm128-direct192-bcopy-upper-asm|contract-bm128-direct192-bcopy-upper-hoist|contract-bm128-direct192-abcopy|contract-bm128-direct192-abcopy-bhoist|contract-bm128-direct192-abcopy-bhoist-asm|contract-phase96-abcopy|phase96-bm128-abcopy|phase96-bm128-abcopy-backendlike|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|array8-fullb-2phase-bcopy|array8-fullb-2phase-bcopy-stage|array8-fullb-2phase-abcopy|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group0-bcopy-stage|single-group8|single-group8-consume|single-group8-opsel1|single-group8-bmirror0|single-group8-bcopy|single-group8-abcopy|single-group8-bcopy-stage|single-group8-abcopy-stage|single-group8-bcopy-stage-selected|single-group12|single-group12-consume|single-group12-opsel1|single-group12-bmirror0|single-group12-bcopy|single-group12-abcopy|single-group12-bcopy-stage|single-group12-abcopy-stage|single-group12-bcopy-stage-selected|single-group12-abcopy-stage-selected|single-group12-bcopy-stage-selected-acccopy|single-group12-abcopy-stage-selected-acccopy|single-group12-bcopy-stage-selected-regcopy|single-group12-abcopy-stage-selected-regcopy|single-group12-abcopy-dual-stage-raw-first|single-group12-abcopy-dual-stage-stage-first|single-group13|single-group13-consume|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c12-s0-bcopy-stage-selected|remap-c12-s0-abcopy-stage-selected|remap-c0-s12|remap-c0-s12-stage-selected|bfrag-dump|all] [--dump-dir <test-backend-ops dump dir>]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--mode motif192-synth-address|motif192-wmma-address|motif192-wmma-direct-address|motif192-wmma-stage16-address|motif192-wmma-stage32-address|array8-fullb|array16-direct-raw|array16-direct-raw-bcopy|array16-direct-raw-abcopy|contract-direct192-raw|contract-direct192-bcopy|contract-direct192-bcopy-hoist|contract-direct192-abcopy|contract-direct192-abcopy-bhoist|contract-bm128-direct192-raw|contract-bm128-direct192-raw-asm|contract-bm128-direct192-bcopy-upper|contract-bm128-direct192-bcopy-upper-asm|contract-bm128-direct192-bcopy-upper-hoist|contract-bm128-direct192-abcopy|contract-bm128-direct192-abcopy-bhoist|contract-bm128-direct192-abcopy-bhoist-asm|contract-phase96-abcopy|phase96-bm128-abcopy|phase96-bm128-abcopy-backendlike|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|array8-fullb-2phase-bcopy|array8-fullb-2phase-bcopy-stage|array8-fullb-2phase-abcopy|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group0-bcopy-stage|single-group8|single-group8-consume|single-group8-opsel1|single-group8-bmirror0|single-group8-bcopy|single-group8-abcopy|single-group8-bcopy-stage|single-group8-abcopy-stage|single-group8-bcopy-stage-selected|single-group12|single-group12-consume|single-group12-opsel1|single-group12-bmirror0|single-group12-bcopy|single-group12-abcopy|single-group12-bcopy-stage|single-group12-abcopy-stage|single-group12-bcopy-stage-selected|single-group12-abcopy-stage-selected|single-group12-bcopy-stage-selected-acccopy|single-group12-abcopy-stage-selected-acccopy|single-group12-bcopy-stage-selected-regcopy|single-group12-abcopy-stage-selected-regcopy|single-group12-abcopy-dual-stage-raw-first|single-group12-abcopy-dual-stage-stage-first|single-group13|single-group13-consume|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c12-s0-bcopy-stage-selected|remap-c12-s0-abcopy-stage-selected|remap-c0-s12|remap-c0-s12-stage-selected|bfrag-dump|all] [--dump-dir <test-backend-ops dump dir>]\n", argv[0]);
             return 2;
         }
     }
@@ -3898,12 +3925,24 @@ int main(int argc, char ** argv) {
         status |= run_motif192_synthetic_case(4096, 513);
     }
     if (mode == "motif192-wmma-address") {
-        status |= run_motif192_wmma_case(128, 128);
-        status |= run_motif192_wmma_case(128, 129);
-        status |= run_motif192_wmma_case(129, 128);
-        status |= run_motif192_wmma_case(1024, 512);
-        status |= run_motif192_wmma_case(4096, 512);
-        status |= run_motif192_wmma_case(4096, 513);
+        status |= run_motif192_wmma_suite(
+            "motif192-wmma-address",
+            Q8_REPRO_MOTIF192_STORE_FULL);
+    }
+    if (mode == "motif192-wmma-direct-address") {
+        status |= run_motif192_wmma_suite(
+            "motif192-wmma-direct-address",
+            Q8_REPRO_MOTIF192_STORE_DIRECT);
+    }
+    if (mode == "motif192-wmma-stage16-address") {
+        status |= run_motif192_wmma_suite(
+            "motif192-wmma-stage16-address",
+            Q8_REPRO_MOTIF192_STORE_STAGE16);
+    }
+    if (mode == "motif192-wmma-stage32-address") {
+        status |= run_motif192_wmma_suite(
+            "motif192-wmma-stage32-address",
+            Q8_REPRO_MOTIF192_STORE_STAGE32);
     }
     if (mode == "all" || mode == "array8-fullb") {
         status |= run_case("array8-fullb", rows, 64, k);

@@ -3,6 +3,15 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_motif192_staged_window_fault_isolation",
+      "date": "2026-06-19",
+      "direct_artifact": "cache/hrxv1/gfx1151/q8-motif192-wmma-direct-address-20260619-155416/",
+      "stage16_artifact": "cache/hrxv1/gfx1151/q8-motif192-wmma-stage16-address-20260619-155431/",
+      "stage32_artifact": "cache/hrxv1/gfx1151/q8-motif192-wmma-stage32-address-20260619-155447/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro",
+      "status": "isolated_fault_to_staged_halfword_writeback"
+    },
+    {
       "id": "q8_0_motif192_wmma_address_repro",
       "date": "2026-06-19",
       "artifact": "cache/hrxv1/gfx1151/q8-motif192-wmma-address-linebuf-20260619-154833/",
