@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_lds_k2_mixed160_splitstage_topology_control",
+      "date": "2026-06-19",
+      "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-mixed160-splitstage",
+      "env": "standalone CMake-built gfx1151 HIP bench diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/coopstore-lds-k2-splitstage-probe-20260619-085731/",
+      "isa_artifact": "cache/hrxv1/gfx1151/coopstore-lds-k2-splitstage-probe-20260619-085731/compare-wmma_lds_k2_mixed160_splitstage.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract",
+      "reason": "The split-stage topology control keeps the K2 live-WMMA surface and the total mixed160 store/load contract, but stages and drains the synthetic halfword LDS groups in two chunks instead of bulk-storing all 96 halfword pairs before loading them. It computes the same 32 v_wmma_f16_16x16x16_f16 sites, direct-stores live accumulator groups 0..15, then stores/loads groups 16..31 and stores/loads groups 32..39 with a reused 16-group LDS stage window. It built through CMake/Ninja and passed 20 repeated runs with elements=12288 bad=0 max_abs=0. In the same rebuilt binary, wmma-lds-k2-mixed160-lo-tight failed immediately at first_bad=4800 group=18 slot=3 lane=0 actual=2048 expected=12803, while wmma-lds-k2-direct192-raw passed five repeated runs. Static evidence for split-stage was wave64, SGPR=14, VGPR=162, group_segment_fixed_size=24576, no private segment, no spills, 32 WMMA, 64 ds_load_b64, 96 ds_store_b16, 96 ds_load_u16_d16, 160 buffer_store_b32, five barriers, and 105 s_waitcnt. Compared with the failing tight col-major bulk-stage mode, the key opcode counts and VGPR are unchanged, but the bulk live halfword-stage residency is reduced and two extra barriers are introduced. Do not promote this fixture as a route by itself: it is a correctness-clean diagnostic for the staging/order axis, not a full RADV 192-store cooperative-store clone. The next Q8_0 route experiment should try chunked cooperative writeback or low-residency halfword staging in the real catalog ABI, then judge whether the extra barrier/order cost can beat the current packed-Q8_1 route."
+    },
+    {
       "id": "q8_0_lds_k2_mixed160_linearstage_topology_control",
       "date": "2026-06-19",
       "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-mixed160-linearstage",
