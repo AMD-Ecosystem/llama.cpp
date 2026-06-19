@@ -3,6 +3,15 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_dense_prompt_splitqsum_qpack_hoist_p512_p513",
+      "date": "2026-06-19",
+      "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_wg256_f32 and hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x112_splitqsum_wg256_f32",
+      "env": "temporary source probe; no runtime env gate retained",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-qpack-hoist-focused-20260619-073318/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_mmq64x128_splitqsum.hsaco and mul_mat_vec_q8_0_mmq64x112_splitqsum.hsaco",
+      "reason": "The Q8_0 packed-Q8_1 split-qsum qpack-hoist probe preserved the accepted BN128/BN112 split-qsum route policy and changed only the inner K-block A-pack lifetime: eight hrx_q8_0_pack4 results were computed once per kb and reused across the two column chunks instead of recomputing each pack inside each chunk. It built through CMake/Ninja and focused CPU-reference passed for the five p512 exported rows and five exact p513 odd-tail rows. Route traces proved p512 selected BN128 split-qsum for all rows and p513 selected BN112 split-qsum for all rows. Focused timing rejected the source change versus the previous current-head artifact: p512 total 72712.698 -> 75663.326 us, with result_output 56659.810 -> 58707.143 us; p513 total 81093.295 -> 83117.543 us, with result_output 63606.143 -> 64912.571 us. Static HSACO evidence did not show a catastrophic resource cliff: BN128 remained wave32, SGPR=27, VGPR=152, LDS=4352, no spills; BN112 moved only from the prior VGPR=134 to VGPR=135, LDS=3808, no spills. The regression therefore appears to be a source-level scheduling/live-range side effect rather than a useful reduction in emitted work. The runtime source was reverted. Do not repeat this qpack-hoist axis unless paired with a materially different packed schedule or lower-level codegen evidence."
+    },
+    {
       "id": "q8_0_lds_live_wmma_mixed_store_contract",
       "date": "2026-06-19",
       "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-radv-mixed96",

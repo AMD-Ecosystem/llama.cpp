@@ -3,6 +3,12 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_dense_prompt_splitqsum_qpack_hoist_p512_p513",
+      "date": "2026-06-19",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-qpack-hoist-focused-20260619-073318/",
+      "status": "rejected_focused_perf_regression"
+    },
+    {
       "id": "current_best_q4_q6_f16_qwen3_q4xl_p33_p512_p513",
       "date": "2026-06-17",
       "artifact": "cache/hrxv1/gfx1151/current-best-hrx-vulkan-r3-20260617-154104/",
