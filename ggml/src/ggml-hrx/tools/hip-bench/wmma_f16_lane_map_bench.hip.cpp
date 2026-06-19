@@ -2,6 +2,7 @@
 #include <hip/hip_runtime.h>
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -109,6 +110,144 @@ static __device__ __forceinline__ wmma_lane_map_half16_vec wmma_lane_map_load_ld
     raw[2] = wmma_lane_map_ds_read_b64_nowait(base + index + 2u);
     raw[3] = wmma_lane_map_ds_read_b64_nowait(base + index + 3u);
     return __builtin_bit_cast(wmma_lane_map_half16_vec, raw);
+}
+
+static __device__ __forceinline__ void wmma_lane_map_ds_write_b16(
+        __attribute__((address_space(3))) uint16_t * ptr,
+        uint32_t value) {
+    asm volatile("ds_write_b16 %0, %1 offset:0\n"
+                 :
+                 : "v"(ptr), "v"(value)
+                 : "memory");
+}
+
+static __device__ __forceinline__ uint32_t wmma_lane_map_ds_read_u16_d16(
+        const __attribute__((address_space(3))) uint16_t * ptr) {
+    uint32_t value = 0;
+    asm volatile("ds_read_u16_d16 %0, %1 offset:0\n"
+                 : "=v"(value)
+                 : "v"(ptr)
+                 : "memory");
+    return value;
+}
+
+static __device__ __forceinline__ uint16_t wmma_lane_map_f16_to_u16(_Float16 value) {
+    return __builtin_bit_cast(uint16_t, value);
+}
+
+static __device__ __forceinline__ _Float16 wmma_lane_map_u16_to_f16(uint32_t value) {
+    return __builtin_bit_cast(_Float16, static_cast<uint16_t>(value));
+}
+
+static __device__ __forceinline__ unsigned int wmma_lane_map_combined96_stage_index(
+        unsigned int group,
+        unsigned int slot,
+        unsigned int lane) {
+    const unsigned int stage_group = group - 8u;
+    const unsigned int row_lane = lane >> 4u;
+    const unsigned int col_lane = lane & 15u;
+    return stage_group * 16u * 16u + col_lane * 16u + row_lane + slot * 4u;
+}
+
+static __host__ __device__ __forceinline__ float wmma_lane_map_combined96_value(
+        unsigned int acc_index,
+        unsigned int slot,
+        unsigned int lane) {
+    return static_cast<float>(1 + acc_index * 1024u + slot * 64u + lane);
+}
+
+static __device__ __forceinline__ void wmma_lane_map_combined96_write_coord(
+        float * dst,
+        unsigned int * counts,
+        unsigned int rows,
+        unsigned int cols,
+        unsigned int group,
+        unsigned int slot,
+        unsigned int lane,
+        float value) {
+    const unsigned int row = (group & 3u) * 16u + (lane >> 4u) + slot * 4u;
+    const unsigned int col = ((group >> 2u) & 3u) * 16u + (lane & 15u);
+    if (row < rows && col < cols) {
+        const unsigned int index = col * rows + row;
+        dst[index] = value;
+        atomicAdd(counts + index, 1u);
+    }
+}
+
+extern "C" __global__ __launch_bounds__(256, 1)
+void wmma_f16_combined96_store_contract_probe(
+        float * dst,
+        unsigned int * counts,
+        unsigned int rows,
+        unsigned int cols) {
+    __shared__ uint16_t stage[16 * 16 * 16];
+
+    const unsigned int tid = __builtin_amdgcn_workitem_id_x();
+    const unsigned int wave = tid >> 6u;
+    const unsigned int lane = tid & 63u;
+    if (wave != 0u) {
+        return;
+    }
+
+    wmma_lane_map_half8_vec acc[8];
+#pragma unroll
+    for (unsigned int acc_index = 0; acc_index < 8u; ++acc_index) {
+#pragma unroll
+        for (unsigned int slot = 0; slot < 8u; ++slot) {
+            acc[acc_index][slot] = static_cast<_Float16>(
+                wmma_lane_map_combined96_value(acc_index, slot, lane));
+        }
+    }
+
+#pragma unroll
+    for (unsigned int group = 0; group < 8u; ++group) {
+        const unsigned int acc_index = group & 7u;
+#pragma unroll
+        for (unsigned int slot = 0; slot < 4u; ++slot) {
+            wmma_lane_map_combined96_write_coord(
+                dst,
+                counts,
+                rows,
+                cols,
+                group,
+                slot,
+                lane,
+                static_cast<float>(acc[acc_index][slot * 2u]));
+        }
+    }
+
+#pragma unroll
+    for (unsigned int group = 8u; group < 24u; ++group) {
+        const unsigned int acc_index = group & 7u;
+#pragma unroll
+        for (unsigned int slot = 0; slot < 4u; ++slot) {
+            wmma_lane_map_ds_write_b16(
+                (__attribute__((address_space(3))) uint16_t *) (stage + wmma_lane_map_combined96_stage_index(group, slot, lane)),
+                static_cast<uint32_t>(wmma_lane_map_f16_to_u16(acc[acc_index][slot * 2u])));
+        }
+    }
+
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+
+#pragma unroll
+    for (unsigned int group = 8u; group < 24u; ++group) {
+#pragma unroll
+        for (unsigned int slot = 0; slot < 4u; ++slot) {
+            const _Float16 value = wmma_lane_map_u16_to_f16(
+                wmma_lane_map_ds_read_u16_d16(
+                    (const __attribute__((address_space(3))) uint16_t *) (stage + wmma_lane_map_combined96_stage_index(group, slot, lane))));
+            wmma_lane_map_combined96_write_coord(
+                dst,
+                counts,
+                rows,
+                cols,
+                group,
+                slot,
+                lane,
+                static_cast<float>(value));
+        }
+    }
 }
 
 template <bool use_lds_fragments>
@@ -416,13 +555,86 @@ static int run_fulltile_probe(const char * mode) {
     return 0;
 }
 
+static int run_combined96_store_contract_case(unsigned int cols) {
+    constexpr unsigned int rows = 64;
+    const size_t count = static_cast<size_t>(rows) * cols;
+    device_buffer<float> d_out(count);
+    device_buffer<unsigned int> d_counts(count);
+    std::vector<float> h_out(count, -1.0f);
+    std::vector<unsigned int> h_counts(count, 0u);
+
+    HIP_CHECK(hipMemset(d_out.ptr, 0xff, count * sizeof(float)));
+    HIP_CHECK(hipMemset(d_counts.ptr, 0, count * sizeof(unsigned int)));
+    hipLaunchKernelGGL(
+        wmma_f16_combined96_store_contract_probe,
+        dim3(1),
+        dim3(256),
+        0,
+        0,
+        d_out.ptr,
+        d_counts.ptr,
+        rows,
+        cols);
+    HIP_CHECK(hipGetLastError());
+    HIP_CHECK(hipDeviceSynchronize());
+    HIP_CHECK(hipMemcpy(h_out.data(), d_out.ptr, count * sizeof(float), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(h_counts.data(), d_counts.ptr, count * sizeof(unsigned int), hipMemcpyDeviceToHost));
+
+    size_t written = 0;
+    size_t duplicate_coords = 0;
+    size_t missing_first_half = 0;
+    size_t unexpected_second_half = 0;
+    size_t nan_count = 0;
+    for (unsigned int col = 0; col < cols; ++col) {
+        for (unsigned int row = 0; row < rows; ++row) {
+            const size_t idx = static_cast<size_t>(col) * rows + row;
+            const unsigned int touches = h_counts[idx];
+            if (touches != 0u) {
+                ++written;
+            }
+            if (touches > 1u) {
+                ++duplicate_coords;
+            }
+            if (col < 32u && touches == 0u) {
+                ++missing_first_half;
+            }
+            if (col >= 32u && touches != 0u) {
+                ++unexpected_second_half;
+            }
+            if (touches != 0u && is_nan(h_out[idx])) {
+                ++nan_count;
+            }
+        }
+    }
+
+    std::printf(
+        "combined96-store-contract rows=%u cols=%u written=%zu duplicate_coords=%zu missing_first_half=%zu unexpected_second_half=%zu nan=%zu contract_valid=%u\n",
+        rows,
+        cols,
+        written,
+        duplicate_coords,
+        missing_first_half,
+        unexpected_second_half,
+        nan_count,
+        duplicate_coords == 0 && missing_first_half == 0 && unexpected_second_half == 0 && nan_count == 0 ? 1u : 0u);
+    return 0;
+}
+
+static int run_combined96_store_contract() {
+    int status = 0;
+    status |= run_combined96_store_contract_case(32);
+    status |= run_combined96_store_contract_case(33);
+    status |= run_combined96_store_contract_case(64);
+    return status;
+}
+
 int main(int argc, char ** argv) {
     std::string mode = "basic";
     for (int i = 1; i < argc; ++i) {
         if (std::strncmp(argv[i], "--mode=", 7) == 0) {
             mode = argv[i] + 7;
         } else {
-            std::fprintf(stderr, "usage: %s [--mode=basic|fulltile-ones|fulltile-lds|all]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--mode=basic|fulltile-ones|fulltile-lds|combined96-store-contract|all]\n", argv[0]);
             return 2;
         }
     }
@@ -436,10 +648,14 @@ int main(int argc, char ** argv) {
     if (mode == "fulltile-lds") {
         return run_fulltile_probe<true>(mode.c_str());
     }
+    if (mode == "combined96-store-contract") {
+        return run_combined96_store_contract();
+    }
     if (mode == "all") {
         int status = run_basic_lane_map();
         status |= run_fulltile_probe<false>("fulltile-ones");
         status |= run_fulltile_probe<true>("fulltile-lds");
+        status |= run_combined96_store_contract();
         return status;
     }
 
