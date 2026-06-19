@@ -4164,11 +4164,11 @@ static bool ggml_backend_hrx_q5_k_wmma16_vk64_narrow_ffn_enabled(
         int64_t k,
         int64_t rows,
         int64_t cols) {
-    return device_context &&
+    return ggml_backend_hrx_env_enabled(
+               "GGML_HRX_ENABLE_Q5_K_WMMA16_VK64_PADDED44_W64_F16ACC_WG256_NARROW_PROMPT") &&
+           device_context &&
            device_context->architecture == "gfx1151" &&
            !ggml_backend_hrx_approximate_kernels_disabled() &&
-           !ggml_backend_hrx_env_enabled(
-               "GGML_HRX_DISABLE_Q5_K_WMMA16_VK64_PADDED44_W64_F16ACC_WG256_NARROW_PROMPT") &&
            k == 3584 &&
            rows == 18944 &&
            cols >= 32 &&
