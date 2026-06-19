@@ -1281,6 +1281,7 @@ if (GGML_HRX_BUILD_HIP_BENCHES)
                 "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q5_k_wmma16_vk64_padded44_w64_full64_wg256.hip.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q6_k.hip.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q8_0.hip.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q8_0_wmma16_vk128_wg256.hip.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/kernels/rms_norm_mul_f32.hip.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/kernels/add_rms_norm_mul_f32_broadcast.hip.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/kernels/topk_moe_f32_common.hip.inc"
@@ -1340,6 +1341,10 @@ if (GGML_HRX_BUILD_HIP_BENCHES)
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/hip-bench/q5_wmma_full64_repro_bench.hip.cpp"
         64)
     ggml_hrx_add_hip_bench(
+        hrx-hip-bench-q8-wmma-repro
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/hip-bench/q8_wmma_repro_bench.hip.cpp"
+        64)
+    ggml_hrx_add_hip_bench(
         hrx-hip-bench-wmma-issue-window
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/hip-bench/wmma_issue_window_bench.hip.cpp"
         64)
@@ -1365,6 +1370,7 @@ if (GGML_HRX_BUILD_HIP_BENCHES)
             hrx-hip-bench-coopmat-store-contract
             hrx-hip-bench-wmma-f16-lane-map
             hrx-hip-bench-q5-wmma-full64-repro
+            hrx-hip-bench-q8-wmma-repro
             hrx-hip-bench-wmma-issue-window
             hrx-hip-bench-topk-w32
             hrx-hip-bench-topk-w64)
