@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_lds_k2_live_wmma_mixed_store_contract",
+      "date": "2026-06-19",
+      "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-radv-mixed192",
+      "env": "standalone CMake-built gfx1151 HIP bench diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/coopstore-lds-k2-live-wmma-mixed-probe-20260619-080339/",
+      "isa_artifact": "cache/hrxv1/gfx1151/coopstore-lds-k2-live-wmma-mixed-probe-20260619-080339/compare-k2.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract",
+      "reason": "The Q8_0 LDS K2 live-WMMA mixed-store fixture tested whether a CMake-built HIP C++ diagnostic can reproduce the current RADV large Q8_0 store/load opcode contract while keeping live WMMA accumulators. The existing controls passed repeatedly: wmma-radv-mixed192 and wmma-lds-radv-mixed192 both reported elements=12288 bad=0 max_abs=0. The new K2 mode accumulates two LDS-loaded WMMA phases into groups 0..15, then uses the established direct raw buffer-store path for groups 0..15 and synthetic halfword LDS stage/load/store controls for groups 16..47. It built through CMake/Ninja and emitted wave64, SGPR=14, VGPR=162, LDS=32768, no private segment, no spills, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 128 ds_load_u16_d16, 128 ds_store_b16, 192 buffer_store_b32, 3 barriers, and 135 s_waitcnt. This matches the current RADV Q8_0 p512 large oracle on the key opcode counts, but correctness failed consistently: elements=12288 bad=2112 max_abs=50625 first_bad=4800 actual=2048 expected=12803. Reject this K2 mixed-store contract for production route work. The result is useful negative evidence that matching RADV's headline opcode counts from HIP C++ is still insufficient without the exact cooperative-matrix lane ownership/topology; the next Q8_0 route needs a lower-level primitive or different source form, not another scalarized clone that only matches counts."
+    },
+    {
       "id": "q6_dense_prompt_wmma16_vk128_b64group_bufferstore_p33_p512_p513",
       "date": "2026-06-19",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk128_padded_w64_b64group_bufferstore_f16acc_wg256_f32",
