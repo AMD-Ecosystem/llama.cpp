@@ -7214,7 +7214,7 @@ static const ggml_backend_hrx_op_provider * ggml_backend_hrx_select_mul_mat_id_q
     // W7900/Qwen small-prefill profiling shows the rows2_x16 route is faster
     // below p32; grouped routes amortize their routing/tile structure from p32 up.
     static constexpr int64_t grouped_min_prompt_tokens = 32;
-    if (ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q4_K_ID_Q8_1_X4_MMQ16_WIDE_K_PROMPT") &&
+    if (!ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_Q4_K_ID_Q8_1_X4_MMQ16_WIDE_K_PROMPT") &&
         !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_Q8_1_MMVQ") &&
         k % 256 == 0 && rows % 64 == 0 && n_ids == 8 && n_tokens >= grouped_min_prompt_tokens &&
         ggml_backend_hrx_provider_available(device_context->clear_u32_provider) &&

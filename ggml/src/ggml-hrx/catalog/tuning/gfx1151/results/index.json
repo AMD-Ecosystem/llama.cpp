@@ -153,6 +153,36 @@
       "status": "rejected_policy_p33_cliff"
     },
     {
+      "id": "q4_moe_id_q8_1_x4_mmq16_widek_current_regate",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q4-id-widek-current-regate-20260618-204002/",
+      "status": "accepted_gfx1151_default_focused_exact_odd_tail"
+    },
+    {
+      "id": "q4_moe_id_q8_1_x4_mmq16_widek_postedit_default_regate",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q4-id-widek-default-postedit-regate-20260618-204720/",
+      "status": "post_edit_focused_regate_and_rollback_smoke"
+    },
+    {
+      "id": "q4_moe_id_q8_1_x4_mmq16_widek_current_default_model_subset",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q4-id-widek-current-default-20260618-204154/",
+      "status": "default_baseline_model_subset"
+    },
+    {
+      "id": "q4_moe_id_q8_1_x4_mmq16_widek_current_optin_model_subset",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q4-id-widek-current-optin-20260618-204241/",
+      "status": "accepted_gfx1151_default_model_subset"
+    },
+    {
+      "id": "q4_moe_id_q8_1_x4_mmq16_widek_current_vulkan_model_subset",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q4-id-widek-current-vulkan-20260618-204346/",
+      "status": "same_commit_vulkan_model_subset"
+    },
+    {
       "id": "q8_0_prompt_mmq128x32_wave64_focused_p512",
       "date": "2026-06-17",
       "artifact": "cache/hrxv1/gfx1151/q8_0-wave64-focused-p512-20260617-185605/",

@@ -4,21 +4,59 @@
   "promotions": [
     {
       "id": "q4_moe_id_widek_mmq16_qwen3_q4xl_p33_p512_p513",
-      "date": "2026-06-17",
-      "status": "accepted_opt_in_candidate",
+      "date": "2026-06-18",
+      "status": "accepted_gfx1151_default",
       "route": "hrx_mul_mat_id_q4_k_grouped_q8_1_x4_mmq64x16_wg64_f32",
-      "env": "GGML_HRX_ENABLE_Q4_K_ID_Q8_1_X4_MMQ16_WIDE_K_PROMPT=1",
+      "env": "default on gfx1151; rollback with GGML_HRX_DISABLE_Q4_K_ID_Q8_1_X4_MMQ16_WIDE_K_PROMPT=1 or GGML_HRX_DISABLE_Q8_1_MMVQ=1",
       "shape_guard": "q4_K MUL_MAT_ID, k % 256 == 0, rows % 64 == 0, n_ids == 8, n_tokens >= 32",
       "focused_artifacts": [
         "cache/hrxv1/gfx1151/focused-moe-q4-id-widek-mmq16-20260617-160209/",
         "cache/hrxv1/gfx1151/focused-moe-q4-id-widek-mmq16-odd-20260617-160622/",
-        "cache/hrxv1/gfx1151/focused-moe-q4-id-widek-mmq16-odd-perf-20260617-160640/"
+        "cache/hrxv1/gfx1151/focused-moe-q4-id-widek-mmq16-odd-perf-20260617-160640/",
+        "cache/hrxv1/gfx1151/q4-id-widek-current-regate-20260618-204002/",
+        "cache/hrxv1/gfx1151/q4-id-widek-default-postedit-regate-20260618-204720/"
       ],
-      "model_artifact": "cache/hrxv1/gfx1151/current-best-with-q4-id-widek-r3-20260617-160734/",
+      "model_artifacts": [
+        "cache/hrxv1/gfx1151/current-best-with-q4-id-widek-r3-20260617-160734/",
+        "cache/hrxv1/gfx1151/q4-id-widek-current-default-20260618-204154/",
+        "cache/hrxv1/gfx1151/q4-id-widek-current-optin-20260618-204241/",
+        "cache/hrxv1/gfx1151/q4-id-widek-current-vulkan-20260618-204346/"
+      ],
+      "model_result": {
+        "qwen3_30b_q4xl_p33_default_tok_s": 97.33775,
+        "qwen3_30b_q4xl_p33_widek_tok_s": 155.184,
+        "qwen3_30b_q4xl_p33_vulkan_tok_s": 221.4775,
+        "qwen3_30b_q4xl_p512_default_tok_s": 289.4505,
+        "qwen3_30b_q4xl_p512_widek_tok_s": 630.757,
+        "qwen3_30b_q4xl_p512_vulkan_tok_s": 1243.28,
+        "qwen3_30b_q4xl_p513_default_tok_s": 287.1625,
+        "qwen3_30b_q4xl_p513_widek_tok_s": 632.8755,
+        "qwen3_30b_q4xl_p513_vulkan_tok_s": 1186.36,
+        "qwen3_coder_30b_q4km_p33_default_tok_s": 102.083,
+        "qwen3_coder_30b_q4km_p33_widek_tok_s": 152.6955,
+        "qwen3_coder_30b_q4km_p33_vulkan_tok_s": 203.8995,
+        "qwen3_coder_30b_q4km_p512_default_tok_s": 403.337,
+        "qwen3_coder_30b_q4km_p512_widek_tok_s": 876.437,
+        "qwen3_coder_30b_q4km_p512_vulkan_tok_s": 1173.525,
+        "qwen3_coder_30b_q4km_p513_default_tok_s": 396.6755,
+        "qwen3_coder_30b_q4km_p513_widek_tok_s": 853.2295,
+        "qwen3_coder_30b_q4km_p513_vulkan_tok_s": 1125.39,
+        "steady_geomean_widek_over_default": 1.941333,
+        "steady_geomean_widek_over_vulkan": 0.65698
+      },
+      "compile_evidence": {
+        "hsaco": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_id_q4_k_q8_1_x4_mmq.hsaco",
+        "kernel": "hrx_mul_mat_id_q4_k_grouped_q8_1_x4_mmq64x16_wg64_f32",
+        "wavefront_size": 64,
+        "vgpr_count": 107,
+        "sgpr_count": 87,
+        "lds_bytes": 3264,
+        "spill_count": 0
+      },
       "promotion_blockers": [
-        "Q5_K MUL_MAT_ID is a separate opt-in candidate",
-        "broader model basket coverage is still pending",
-        "default selector policy must remain target-specific and avoid perturbing gfx1100"
+        "Q5_K MUL_MAT_ID is a separate opt-in candidate and the mixed Q5 rows in the Qwen3 exports remain unsupported by this Q4-specific route",
+        "the route lifts the Qwen3/Qwen3-Coder Q4 MoE p33/p512/p513 subset from a 0.338x Vulkan geomean to 0.657x Vulkan, but parity still requires closing the remaining RADV medium-subgroup schedule delta",
+        "broader post-default full-basket coverage is still pending"
       ]
     },
     {
