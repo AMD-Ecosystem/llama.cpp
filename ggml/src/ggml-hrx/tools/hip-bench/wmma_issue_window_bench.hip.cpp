@@ -18,6 +18,7 @@
 
 typedef _Float16 half16_vec __attribute__((ext_vector_type(16)));
 typedef _Float16 half8_vec __attribute__((ext_vector_type(8)));
+typedef uint32_t u32x8_vec __attribute__((ext_vector_type(8)));
 typedef uint64_t u64x4_vec __attribute__((ext_vector_type(4)));
 
 static __device__ __forceinline__ uint64_t wmma_issue_window_ds_read_b64(
@@ -43,25 +44,45 @@ static __device__ __forceinline__ half16_vec wmma_issue_window_load_fragment(
     return __builtin_bit_cast(half16_vec, raw);
 }
 
-static __device__ __forceinline__ void wmma_issue_window_sink_fragments(
+template <int wait_lgkmcnt>
+static __device__ __forceinline__ half16_vec wmma_issue_window_dependent_constant(
         const half16_vec & a0, const half16_vec & a1, const half16_vec & a2, const half16_vec & a3,
         const half16_vec & a4, const half16_vec & a5, const half16_vec & a6, const half16_vec & a7,
         const half16_vec & b0, const half16_vec & b1, const half16_vec & b2, const half16_vec & b3,
         const half16_vec & b4, const half16_vec & b5, const half16_vec & b6, const half16_vec & b7) {
-    asm volatile(""
-                 :
+    u32x8_vec bits;
+    if constexpr (wait_lgkmcnt == 51) {
+        asm volatile("s_waitcnt lgkmcnt(51)\n\t"
+                     "v_mov_b32 %0, 0x3c003c00\n\t"
+                     "v_mov_b32 %1, 0x3c003c00\n\t"
+                     "v_mov_b32 %2, 0x3c003c00\n\t"
+                     "v_mov_b32 %3, 0x3c003c00\n\t"
+                     "v_mov_b32 %4, 0x3c003c00\n\t"
+                     "v_mov_b32 %5, 0x3c003c00\n\t"
+                     "v_mov_b32 %6, 0x3c003c00\n\t"
+                     "v_mov_b32 %7, 0x3c003c00\n\t"
+                     : "=v"(bits[0]), "=v"(bits[1]), "=v"(bits[2]), "=v"(bits[3]),
+                       "=v"(bits[4]), "=v"(bits[5]), "=v"(bits[6]), "=v"(bits[7])
+                     : "v"(a0), "v"(a1), "v"(a2), "v"(a3), "v"(a4), "v"(a5), "v"(a6), "v"(a7),
+                       "v"(b0), "v"(b1), "v"(b2), "v"(b3), "v"(b4), "v"(b5), "v"(b6), "v"(b7)
+                     : "memory");
+    } else {
+        asm volatile("s_waitcnt lgkmcnt(0)\n\t"
+                     "v_mov_b32 %0, 0x3c003c00\n\t"
+                     "v_mov_b32 %1, 0x3c003c00\n\t"
+                     "v_mov_b32 %2, 0x3c003c00\n\t"
+                     "v_mov_b32 %3, 0x3c003c00\n\t"
+                     "v_mov_b32 %4, 0x3c003c00\n\t"
+                     "v_mov_b32 %5, 0x3c003c00\n\t"
+                     "v_mov_b32 %6, 0x3c003c00\n\t"
+                     "v_mov_b32 %7, 0x3c003c00\n\t"
+                     : "=v"(bits[0]), "=v"(bits[1]), "=v"(bits[2]), "=v"(bits[3]),
+                       "=v"(bits[4]), "=v"(bits[5]), "=v"(bits[6]), "=v"(bits[7])
                  : "v"(a0), "v"(a1), "v"(a2), "v"(a3), "v"(a4), "v"(a5), "v"(a6), "v"(a7),
                    "v"(b0), "v"(b1), "v"(b2), "v"(b3), "v"(b4), "v"(b5), "v"(b6), "v"(b7)
                  : "memory");
-}
-
-static __device__ __forceinline__ half16_vec wmma_issue_window_constant_fragment(float value) {
-    half16_vec result;
-#pragma unroll
-    for (int i = 0; i < 16; ++i) {
-        result[i] = static_cast<_Float16>(value);
     }
-    return result;
+    return __builtin_bit_cast(half16_vec, bits);
 }
 
 template <int wait_lgkmcnt>
@@ -102,30 +123,23 @@ void wmma_issue_window_probe(float * dst) {
     const half16_vec a7 = wmma_issue_window_load_fragment(lds, lane, 7u);
     const half16_vec b7 = wmma_issue_window_load_fragment(lds, lane, 15u);
 
-    wmma_issue_window_sink_fragments(a0, a1, a2, a3, a4, a5, a6, a7, b0, b1, b2, b3, b4, b5, b6, b7);
-
-    if constexpr (wait_lgkmcnt == 51) {
-        asm volatile("s_waitcnt lgkmcnt(51)\n" ::: "memory");
-    } else {
-        asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
-    }
-
-    const half16_vec ones = wmma_issue_window_constant_fragment(1.0f);
-    const half16_vec twos = wmma_issue_window_constant_fragment(2.0f);
+    const half16_vec ones =
+        wmma_issue_window_dependent_constant<wait_lgkmcnt>(a0, a1, a2, a3, a4, a5, a6, a7,
+                                                           b0, b1, b2, b3, b4, b5, b6, b7);
     half8_vec acc;
 #pragma unroll
     for (int i = 0; i < 8; ++i) {
         acc[i] = static_cast<_Float16>(0.0f);
     }
 
-    acc = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(ones, twos, acc, false);
-    acc = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(ones, twos, acc, true);
-    acc = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(ones, twos, acc, false);
-    acc = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(ones, twos, acc, true);
-    acc = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(ones, twos, acc, false);
-    acc = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(ones, twos, acc, true);
-    acc = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(ones, twos, acc, false);
-    acc = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(ones, twos, acc, true);
+    acc = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(ones, ones, acc, false);
+    acc = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(ones, ones, acc, true);
+    acc = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(ones, ones, acc, false);
+    acc = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(ones, ones, acc, true);
+    acc = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(ones, ones, acc, false);
+    acc = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(ones, ones, acc, true);
+    acc = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(ones, ones, acc, false);
+    acc = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(ones, ones, acc, true);
 
 #pragma unroll
     for (int i = 0; i < 8; ++i) {
