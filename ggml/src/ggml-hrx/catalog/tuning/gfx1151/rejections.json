@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_direct_wmma_vk128_packstage_fast_half_split_selected_correctness",
+      "date": "2026-06-19",
+      "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_fast_half_split_selected_bufferstore_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_FAST_HALF_SPLIT_SELECTED_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-packstage-fast-half-split-selected-focused-20260619-091236/",
+      "isa_artifact": "cache/hrxv1/gfx1151/q8_0-packstage-fast-half-split-selected-compile-20260619-090824/compare-radv.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_fast_half_split_selected_bufferstore_wg256.hsaco",
+      "reason": "The packstage fast-half split-selected route ports the passing split-stage cooperative-store fixture back into the real Q8_0 direct-WMMA catalog ABI. It preserves the correctness-oriented selected-half D-coordinate map, B64GROUP LDS fragment reads, packed A/B LDS staging, raw buffer stores, and low-residency two-chunk halfword output staging. The route built through CMake/Ninja as an opt-in wave64 HSACO with SGPR=28, VGPR=196, LDS=22528, no private segment, no spills, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 128 ds_load_u16_d16, 128 ds_store_b16, 128 buffer_store_b32, 2 barriers, and 199 waitcnt-class instructions. Static RADV comparison rejects the compile contract despite the matched halfword-LDS topology: the Vulkan Q8_0 p512 large oracle has VGPR=192, 192 buffer_store_b32, and a broad first-WMMA LDS issue window with 59 ds_load_b64 before the final wait and final pre-WMMA lgkmcnt=51, while this HIP C++ route has only 24 pre-WMMA ds_load_b64, one load immediately before the final wait, final lgkmcnt=0, and a shorter WMMA window. Focused p512 CPU-reference with GGML_HRX_TRACE_ROUTES=1 then rejected the real route before timing/model tests: Vcur and Qcur passed on the packed Q8_1 provider, while route traces proved this opt-in provider selected for ffn_out, ffn_gate, and result_output; those rows failed with ffn_out ERR=2.934616473, ffn_gate ERR=2.956634549, and result_output NaN at index 6188064. Keep this provider opt-in only as negative evidence. The split-stage fixture solved a synthetic halfword-stage residency/order failure, but the real catalog route still lacks the exact RADV cooperative-store lane ownership and load scheduling contract."
+    },
+    {
       "id": "q8_0_lds_k2_mixed160_splitstage_topology_control",
       "date": "2026-06-19",
       "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-mixed160-splitstage",
