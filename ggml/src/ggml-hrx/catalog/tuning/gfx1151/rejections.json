@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_lds_k2_direct192_raw_store_count_control",
+      "date": "2026-06-19",
+      "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-direct192-raw",
+      "env": "standalone CMake-built gfx1151 HIP bench diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/coopstore-lds-k2-direct192-raw-probe-20260619-083318/",
+      "isa_artifact": "cache/hrxv1/gfx1151/coopstore-lds-k2-direct192-raw-probe-20260619-083318/compare-wmma_lds_k2_direct192_raw.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract",
+      "reason": "The direct192 raw-store control separates full RADV-sized raw buffer-store count from the failing scalarized halfword LDS stage in the Q8_0 K2 live-WMMA fixture. In repeated runs, direct192-raw passed with elements=12288 bad=0 max_abs=0, while mixed128-padded32 passed and the RADV-like mixed192 control failed consistently at first_bad=4800 group=18 slot=3 lane=0 actual=2048 expected=12803. Static evidence for direct192-raw was wave64, SGPR=14, VGPR=153, group_segment_fixed_size=16384, no private segment, no spills, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 192 buffer_store_b32, no ds_store_b16, no ds_load_u16_d16, two barriers, and 7 s_waitcnt. This rejects the hypothesis that 192 raw buffer stores or the K2 live-WMMA direct-store surface is the corruption trigger. The remaining blocker is the scalarized halfword LDS stage expansion beyond the passing 64-store/load-pair surface, so production Q8_0 work should pivot to a lower-level cooperative-store primitive or compiler reproducer rather than adding more HIP C++ halfword stage groups."
+    },
+    {
       "id": "q8_0_lds_k2_mixed128_padded32_control",
       "date": "2026-06-19",
       "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-mixed128-padded32",
