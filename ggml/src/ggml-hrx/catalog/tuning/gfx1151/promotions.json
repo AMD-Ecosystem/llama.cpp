@@ -108,6 +108,51 @@
       ]
     },
     {
+      "id": "q5_dense_prompt_mmql64_bk2_qwen25coder_p33",
+      "date": "2026-06-18",
+      "status": "accepted_gfx1151_default",
+      "route": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql64x64_bk2_wg256_f32",
+      "env": "default on gfx1151 for Q5_K packed-Q8_1 prompt rows with 32 <= cols <= 64; rollback with GGML_HRX_DISABLE_Q5_K_Q8_1_X4_MMQL64_BK2_PROMPT=1; force with GGML_HRX_ENABLE_Q5_K_Q8_1_X4_MMQL64_BK2_PROMPT=1",
+      "shape_guard": "Q5_K MUL_MAT prompt, packed Q8_1 x4 RHS, rows % 64 == 0, k % 256 == 0, 32 <= cols <= 64, contiguous tensors, gfx1151 only; p512 stays on MMQL128 and p513 stays on B-quad tail routing",
+      "vulkan_oracle_artifact": "cache/hrxv1/gfx1151/vulkan-oracle-qwen25coder-7b-q5km-p33-fa1-20260618-063510/",
+      "focused_artifacts": [
+        "cache/hrxv1/gfx1151/q5-mmql64-bk2-focused-20260618-214600/",
+        "cache/hrxv1/gfx1151/q5-mmql64-bk2-default-regate-20260618-215108/"
+      ],
+      "model_artifacts": [
+        "cache/hrxv1/gfx1151/q5-mmql64-bk2-model-ab-sourcebuild-20260618-214835/",
+        "cache/hrxv1/gfx1151/q5-mmql64-bk2-default-model-ab-20260618-215207/"
+      ],
+      "focused_result": {
+        "p33_correctness": "CPU-reference passed for Kcur-0, Qcur-0, ffn_out-3, and ffn_gate-0",
+        "p512_p513_non_steal": "CPU-reference passed for Q5 p512 and p513 focused rows; route traces show p512 remains on rows2 plus MMQL128 and p513 remains on rows2 plus B-quad tail routing",
+        "p33_qcur_us_rollback_to_default": "331.582930 -> 277.689900",
+        "p33_ffn_out_us_rollback_to_default": "2520.578644 -> 1578.477633",
+        "p33_qcur_speedup": 1.194076,
+        "p33_ffn_out_speedup": 1.596842
+      },
+      "model_result": {
+        "qwen25coder_7b_q5km_p33_default_tok_s": 168.205428,
+        "qwen25coder_7b_q5km_p33_rollback_tok_s": 153.206448,
+        "default_over_rollback": 1.0979
+      },
+      "compile_evidence": {
+        "hsaco": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q5_k_q8_1_x4_mmql64_bk2.hsaco",
+        "wavefront_size": 64,
+        "vgpr_count": 97,
+        "sgpr_count": 62,
+        "lds_bytes": 10240,
+        "private_segment_fixed_size": 0,
+        "opcode_summary": "256 v_dot4_i32, 40 LDS reads, 24 LDS writes, 16 stores, 2 barriers",
+        "vulkan_schedule": "RADV medium Q5_K p33 route matmul_q5_k_f32_f16acc_aligned_m: BM64/BN64/BK32/WG256 wave64, LDS=11264, VGPR=144, no spills"
+      },
+      "promotion_blockers": [
+        "This is a packed integer-dot route, not an exact RADV cooperative-matrix clone",
+        "Qwen2.5 Coder 7B Q5_K_M p33 still remains below the captured Vulkan p33 row, so further Q5 work should continue from RADV medium schedule deltas",
+        "Only p33/narrow prompt columns are defaulted; production-width p512/p513 policy remains MMQL128/B-quad"
+      ]
+    },
+    {
       "id": "q5_moe_id_mmq16_qwen3_q4xl_p33_p512_p513",
       "date": "2026-06-17",
       "status": "accepted_opt_in_candidate",
