@@ -21,6 +21,63 @@ typedef _Float16 half8_vec __attribute__((ext_vector_type(8)));
 typedef uint32_t u32x8_vec __attribute__((ext_vector_type(8)));
 typedef uint64_t u64x4_vec __attribute__((ext_vector_type(4)));
 
+static __device__ __forceinline__ __amdgpu_buffer_rsrc_t wmma_issue_window_make_rsrc(
+        float * dst,
+        unsigned long long extent) {
+    return __builtin_amdgcn_make_buffer_rsrc(
+        dst,
+        static_cast<unsigned short>(0),
+        extent,
+        static_cast<int>(0x31004000u));
+}
+
+static __device__ __forceinline__ unsigned int wmma_issue_window_store_index(
+        unsigned int group,
+        unsigned int slot,
+        unsigned int lane) {
+    return (group * 4u + slot) * 64u + lane;
+}
+
+static __device__ __forceinline__ unsigned int wmma_issue_window_stage_index_base8(
+        unsigned int group,
+        unsigned int slot,
+        unsigned int lane) {
+    const unsigned int stage_group = group - 8u;
+    const unsigned int row_lane = lane >> 4;
+    const unsigned int col_lane = lane & 15u;
+    return stage_group * 16u * 16u + col_lane * 16u + row_lane + slot * 4u;
+}
+
+static __device__ __forceinline__ void wmma_issue_window_raw_store(
+        __amdgpu_buffer_rsrc_t rsrc,
+        unsigned int group,
+        unsigned int slot,
+        unsigned int lane,
+        float value) {
+    const unsigned int index = wmma_issue_window_store_index(group, slot, lane);
+    const int byte_offset = static_cast<int>(index * sizeof(float));
+    __builtin_amdgcn_raw_buffer_store_b32(__builtin_bit_cast(int, value), rsrc, byte_offset, 0, 0);
+}
+
+static __device__ __forceinline__ void wmma_issue_window_ds_write_b16(
+        __attribute__((address_space(3))) uint16_t * ptr,
+        uint32_t value) {
+    asm volatile("ds_write_b16 %0, %1 offset:0\n"
+                 :
+                 : "v"(ptr), "v"(value)
+                 : "memory");
+}
+
+static __device__ __forceinline__ uint32_t wmma_issue_window_ds_read_u16_d16(
+        const __attribute__((address_space(3))) uint16_t * ptr) {
+    uint32_t value = 0;
+    asm volatile("ds_read_u16_d16 %0, %1 offset:0\n"
+                 : "=v"(value)
+                 : "v"(ptr)
+                 : "memory");
+    return value;
+}
+
 static __device__ __forceinline__ uint64_t wmma_issue_window_ds_read_b64(
         const __attribute__((address_space(3))) uint64_t * ptr) {
     uint64_t value = 0;
@@ -441,6 +498,152 @@ void wmma_issue_window_mediumfrag12_probe(float * dst) {
     }
 }
 
+#define WMMA_ISSUE_WINDOW_RAW_STORE_GROUP(GROUP_ID) do { \
+    const unsigned int group = (GROUP_ID); \
+    wmma_issue_window_raw_store(rsrc, group, 0u, lane, acc[group & 7u][0] == acc[group & 7u][0] ? static_cast<float>(acc[group & 7u][0]) : 0.0f); \
+    wmma_issue_window_raw_store(rsrc, group, 1u, lane, acc[group & 7u][2] == acc[group & 7u][2] ? static_cast<float>(acc[group & 7u][2]) : 0.0f); \
+    wmma_issue_window_raw_store(rsrc, group, 2u, lane, acc[group & 7u][4] == acc[group & 7u][4] ? static_cast<float>(acc[group & 7u][4]) : 0.0f); \
+    wmma_issue_window_raw_store(rsrc, group, 3u, lane, acc[group & 7u][6] == acc[group & 7u][6] ? static_cast<float>(acc[group & 7u][6]) : 0.0f); \
+} while (0)
+
+#define WMMA_ISSUE_WINDOW_STAGE_STORE(GROUP_ID, SLOT_ID) do { \
+    const unsigned int group = (GROUP_ID); \
+    const unsigned int slot = (SLOT_ID); \
+    const _Float16 value_h = acc[group & 7u][((slot) * 2u + 1u) & 7u] == acc[group & 7u][((slot) * 2u + 1u) & 7u] ? \
+        acc[group & 7u][((slot) * 2u + 1u) & 7u] : static_cast<_Float16>(0.0f); \
+    __attribute__((address_space(3))) uint16_t * ptr = \
+        (__attribute__((address_space(3))) uint16_t *) (stage + wmma_issue_window_stage_index_base8(group, slot, lane)); \
+    wmma_issue_window_ds_write_b16(ptr, static_cast<uint32_t>(__builtin_bit_cast(uint16_t, value_h))); \
+} while (0)
+
+#define WMMA_ISSUE_WINDOW_STAGE_LOAD_STORE(GROUP_ID, SLOT_ID) do { \
+    const unsigned int group = (GROUP_ID); \
+    const unsigned int slot = (SLOT_ID); \
+    const __attribute__((address_space(3))) uint16_t * ptr = \
+        (const __attribute__((address_space(3))) uint16_t *) (stage + wmma_issue_window_stage_index_base8(group, slot, lane)); \
+    const uint32_t value = wmma_issue_window_ds_read_u16_d16(ptr); \
+    wmma_issue_window_raw_store(rsrc, group, slot, lane, static_cast<float>(value & 0xffffu)); \
+} while (0)
+
+#define WMMA_ISSUE_WINDOW_STAGE_STORE_GROUP(GROUP_ID) do { \
+    WMMA_ISSUE_WINDOW_STAGE_STORE((GROUP_ID), 0u); \
+    WMMA_ISSUE_WINDOW_STAGE_STORE((GROUP_ID), 1u); \
+    WMMA_ISSUE_WINDOW_STAGE_STORE((GROUP_ID), 2u); \
+    WMMA_ISSUE_WINDOW_STAGE_STORE((GROUP_ID), 3u); \
+} while (0)
+
+#define WMMA_ISSUE_WINDOW_STAGE_LOAD_STORE_GROUP(GROUP_ID) do { \
+    WMMA_ISSUE_WINDOW_STAGE_LOAD_STORE((GROUP_ID), 0u); \
+    WMMA_ISSUE_WINDOW_STAGE_LOAD_STORE((GROUP_ID), 1u); \
+    WMMA_ISSUE_WINDOW_STAGE_LOAD_STORE((GROUP_ID), 2u); \
+    WMMA_ISSUE_WINDOW_STAGE_LOAD_STORE((GROUP_ID), 3u); \
+} while (0)
+
+#define WMMA_ISSUE_WINDOW_STAGE_GROUPS_8_23(MACRO) do { \
+    MACRO(8u);  MACRO(9u);  MACRO(10u); MACRO(11u); \
+    MACRO(12u); MACRO(13u); MACRO(14u); MACRO(15u); \
+    MACRO(16u); MACRO(17u); MACRO(18u); MACRO(19u); \
+    MACRO(20u); MACRO(21u); MACRO(22u); MACRO(23u); \
+} while (0)
+
+template <int wait_lgkmcnt>
+__global__ __launch_bounds__(256, 1)
+void wmma_issue_window_mediumfrag12_combined96_probe(float * dst, unsigned long long extent) {
+    __shared__ uint64_t sh[4 * 64 * 4];
+    __shared__ volatile uint16_t pad[1536];
+    const unsigned int tid = __builtin_amdgcn_workitem_id_x();
+    const unsigned int lane = tid & 63u;
+    const __amdgpu_buffer_rsrc_t rsrc = wmma_issue_window_make_rsrc(dst, extent);
+    __attribute__((address_space(3))) uint16_t * stage =
+        (__attribute__((address_space(3))) uint16_t *) sh;
+    const __attribute__((address_space(3))) volatile uint16_t * pad_ptr =
+        (const __attribute__((address_space(3))) volatile uint16_t *) pad;
+    asm volatile("" :: "v"(pad_ptr) : "memory");
+
+    if (tid < 64u) {
+#pragma unroll
+        for (unsigned int frag = 0; frag < 4u; ++frag) {
+#pragma unroll
+            for (unsigned int item = 0; item < 4u; ++item) {
+                const uint64_t lo = static_cast<uint64_t>(0x3c00u + ((frag + item + lane) & 7u));
+                const uint64_t packed = lo | (lo << 16) | (lo << 32) | (lo << 48);
+                sh[frag * 256u + lane * 4u + item] = packed;
+            }
+        }
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+
+    if (tid < 64u) {
+        const __attribute__((address_space(3))) uint64_t * lds =
+            (const __attribute__((address_space(3))) uint64_t *) sh;
+
+        const half16_vec a0 = wmma_issue_window_load_fragment(lds, lane, 0u);
+        const half16_vec a1 = wmma_issue_window_load_fragment(lds, lane, 1u);
+        const half16_vec a2 = wmma_issue_window_load_fragment(lds, lane, 2u);
+        const half16_vec a3 = wmma_issue_window_load_fragment(lds, lane, 3u);
+        const half16_vec b0 = wmma_issue_window_load_fragment(lds, lane, 0u);
+        const half16_vec b1 = wmma_issue_window_load_fragment(lds, lane, 1u);
+        const half16_vec a4 = wmma_issue_window_load_fragment(lds, lane, 2u);
+        const half16_vec a5 = wmma_issue_window_load_fragment(lds, lane, 3u);
+        const half16_vec a6 = wmma_issue_window_load_fragment(lds, lane, 0u);
+        const half16_vec a7 = wmma_issue_window_load_fragment(lds, lane, 1u);
+        const half16_vec b2 = wmma_issue_window_load_fragment(lds, lane, 2u);
+        const half16_vec b3 = wmma_issue_window_load_fragment(lds, lane, 3u);
+
+        half8_vec acc[8];
+#pragma unroll
+        for (int t = 0; t < 8; ++t) {
+#pragma unroll
+            for (int i = 0; i < 8; ++i) {
+                acc[t][i] = static_cast<_Float16>(0.0f);
+            }
+        }
+
+        WMMA_ISSUE_WINDOW_DEP_WMMA_INITIAL(acc, 0, a0, b0, wait_lgkmcnt, a1, a2, a3, b0, b1, a4, b2);
+        WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 1, a1, b0, 39, a0, 0);
+        WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 2, a2, b0, 35, a1, 1);
+        WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 3, a3, b0, 31, a2, 2);
+        WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 4, a0, b1, 27, a3, 3);
+        WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 5, a1, b1, 23, b1, 4);
+        WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 6, a2, b1, 19, a1, 5);
+        WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 7, a3, b1, 15, a2, 6);
+        WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 0, a4, b2, 11, a3, 7);
+        WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 1, a5, b2, 7, b2, 0);
+        WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 2, a6, b2, 3, a5, 1);
+        WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 3, a7, b2, 0, a6, 2);
+        WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 4, a4, b3, 0, a7, 3);
+        WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 5, a5, b3, 0, b3, 4);
+        WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 6, a6, b3, 0, a5, 5);
+        WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 7, a7, b3, 0, a6, 6);
+
+        WMMA_ISSUE_WINDOW_RAW_STORE_GROUP(0u);
+        WMMA_ISSUE_WINDOW_RAW_STORE_GROUP(1u);
+        WMMA_ISSUE_WINDOW_RAW_STORE_GROUP(2u);
+        WMMA_ISSUE_WINDOW_RAW_STORE_GROUP(3u);
+        WMMA_ISSUE_WINDOW_RAW_STORE_GROUP(4u);
+        WMMA_ISSUE_WINDOW_RAW_STORE_GROUP(5u);
+        WMMA_ISSUE_WINDOW_RAW_STORE_GROUP(6u);
+        WMMA_ISSUE_WINDOW_RAW_STORE_GROUP(7u);
+        WMMA_ISSUE_WINDOW_STAGE_GROUPS_8_23(WMMA_ISSUE_WINDOW_STAGE_STORE_GROUP);
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+
+    if (tid < 64u) {
+        WMMA_ISSUE_WINDOW_STAGE_GROUPS_8_23(WMMA_ISSUE_WINDOW_STAGE_LOAD_STORE_GROUP);
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+}
+
+#undef WMMA_ISSUE_WINDOW_STAGE_GROUPS_8_23
+#undef WMMA_ISSUE_WINDOW_STAGE_LOAD_STORE_GROUP
+#undef WMMA_ISSUE_WINDOW_STAGE_STORE_GROUP
+#undef WMMA_ISSUE_WINDOW_STAGE_LOAD_STORE
+#undef WMMA_ISSUE_WINDOW_STAGE_STORE
+#undef WMMA_ISSUE_WINDOW_RAW_STORE_GROUP
+
 template <int wait_lgkmcnt>
 __global__ __launch_bounds__(64, 1)
 void wmma_issue_window_realfrag8_probe(float * dst) {
@@ -610,7 +813,7 @@ int main(int argc, char ** argv) {
         if (std::strncmp(argv[i], "--mode=", 7) == 0) {
             mode = argv[i] + 7;
         } else {
-            std::fprintf(stderr, "usage: %s [--mode=lgkm51|wait0|realfrag16|mediumfrag12|realfrag8|realfrag16-direct|realfrag8-direct]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--mode=lgkm51|wait0|realfrag16|mediumfrag12|mediumfrag12-combined96|realfrag8|realfrag16-direct|realfrag8-direct]\n", argv[0]);
             return 2;
         }
     }
@@ -628,6 +831,9 @@ int main(int argc, char ** argv) {
         hipLaunchKernelGGL((wmma_issue_window_realfrag16_probe<51>), dim3(1), dim3(64), 0, 0, d_out.ptr);
     } else if (mode == "mediumfrag12") {
         hipLaunchKernelGGL((wmma_issue_window_mediumfrag12_probe<40>), dim3(1), dim3(64), 0, 0, d_out.ptr);
+    } else if (mode == "mediumfrag12-combined96") {
+        const unsigned long long byte_extent = static_cast<unsigned long long>(count * sizeof(float));
+        hipLaunchKernelGGL((wmma_issue_window_mediumfrag12_combined96_probe<40>), dim3(1), dim3(256), 0, 0, d_out.ptr, byte_extent);
     } else if (mode == "realfrag8") {
         hipLaunchKernelGGL((wmma_issue_window_realfrag8_probe<51>), dim3(1), dim3(64), 0, 0, d_out.ptr);
     } else if (mode == "realfrag16-direct") {
