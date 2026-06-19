@@ -3,6 +3,14 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_motif192_wmma_address_repro",
+      "date": "2026-06-19",
+      "artifact": "cache/hrxv1/gfx1151/q8-motif192-wmma-address-linebuf-20260619-154833/",
+      "secondary_artifact": "cache/hrxv1/gfx1151/q8-motif192-synth-address-20260619-154442/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro",
+      "status": "reproduced_p512_gpu_memory_fault_in_cmake_bench"
+    },
+    {
       "id": "q8_0_direct_wmma_vk128_packstage_asmwmma_motif192_p33_p512",
       "date": "2026-06-19",
       "artifact": "cache/hrxv1/gfx1151/q8-asmwmma-motif192-focused-20260619-153414/",

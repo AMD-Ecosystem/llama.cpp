@@ -202,6 +202,239 @@ static __device__ __forceinline__ void q8_repro_contract_store_synthetic(
         q8_repro_contract_synthetic_value(group, slot, lane));
 }
 
+static __device__ __forceinline__ _Float16 q8_repro_motif192_synthetic_half(
+        int group,
+        int slot,
+        unsigned int lane) {
+    return static_cast<_Float16>(q8_repro_contract_synthetic_value(group & 15, slot, lane));
+}
+
+static __device__ __forceinline__ int q8_repro_motif192_stage_index(
+        unsigned int wave,
+        int group,
+        int slot,
+        unsigned int lane) {
+    const int row_lane = static_cast<int>(lane >> 4);
+    const int col_lane = static_cast<int>(lane & 15u);
+    return static_cast<int>(wave) * 16 * 16 + col_lane * 16 + row_lane + slot * 4;
+}
+
+static __device__ __forceinline__ void q8_repro_motif192_stage_store_slot(
+        _Float16 * sh_store,
+        const hrx_q8_0_wmma_vk128_half8_vec * acc,
+        unsigned int wave,
+        int group,
+        int slot,
+        unsigned int lane) {
+    const int acc_index = group & 15;
+    hrx_q8_0_wmma_vk128_lds_u16_ptr sh_u16 =
+        (hrx_q8_0_wmma_vk128_lds_u16_ptr) sh_store;
+    hrx_q8_0_wmma_vk128_ds_store_u16(
+        sh_u16 + q8_repro_motif192_stage_index(wave, group, slot, lane),
+        hrx_q8_0_wmma_vk128_f16_to_u16(acc[acc_index][slot * 2 + HRX_Q8_0_WMMA_VK128_W64_OPSEL]));
+}
+
+static __device__ __forceinline__ void q8_repro_motif192_stage_load_store_slot(
+        __amdgpu_buffer_rsrc_t dst_rsrc,
+        long long rows_stride,
+        long long row_base,
+        long long col_base,
+        long long rows,
+        long long cols,
+        const _Float16 * sh_store,
+        unsigned int wave,
+        int group,
+        int slot,
+        unsigned int lane) {
+    const int group16 = group & 15;
+    const int wave_row = static_cast<int>(wave & 1u);
+    const int wave_col = static_cast<int>(wave >> 1);
+    const int row_lane = static_cast<int>(lane >> 4);
+    const int col_lane = static_cast<int>(lane & 15u);
+    const long long row = row_base + static_cast<long long>(wave_row * 64 + (group16 & 3) * 16 + row_lane + slot * 4);
+    const long long col = col_base + static_cast<long long>(wave_col * 64 + ((group16 >> 2) & 3) * 16 + col_lane);
+    hrx_q8_0_wmma_vk128_lds_const_u16_ptr sh_u16 =
+        (hrx_q8_0_wmma_vk128_lds_const_u16_ptr) sh_store;
+    const _Float16 value = hrx_q8_0_wmma_vk128_u16_to_f16(
+        hrx_q8_0_wmma_vk128_ds_load_u16_d16(
+            sh_u16 + q8_repro_motif192_stage_index(wave, group, slot, lane)));
+    if (row < rows && col < cols) {
+        hrx_q8_0_wmma_vk128_buffer_store_f32(dst_rsrc, col * rows_stride + row, static_cast<float>(value));
+    }
+}
+
+__global__ __launch_bounds__(256, 1)
+void q8_motif192_synthetic_store_kernel(
+        float * dst,
+        long long rows,
+        long long cols) {
+    constexpr int BM = 128;
+    constexpr int BN = 128;
+
+    const unsigned int tid = __builtin_amdgcn_workitem_id_x();
+    const unsigned int wave = tid >> 6u;
+    const unsigned int lane = tid & 63u;
+    const long long row_base = static_cast<long long>(__builtin_amdgcn_workgroup_id_x()) * BM;
+    const long long col_base = static_cast<long long>(__builtin_amdgcn_workgroup_id_y()) * BN;
+    if (row_base >= rows || col_base >= cols) {
+        return;
+    }
+
+    const __amdgpu_buffer_rsrc_t dst_rsrc = hrx_q8_0_wmma_vk128_make_dst_rsrc(dst);
+    __shared__ _Float16 sh_store[4 * 16 * 16];
+    hrx_q8_0_wmma_vk128_half8_vec acc[16] = {};
+
+#pragma unroll
+    for (int group = 0; group < 16; ++group) {
+#pragma unroll
+        for (int slot = 0; slot < 4; ++slot) {
+            const _Float16 value = q8_repro_motif192_synthetic_half(group, slot, lane);
+            acc[group][slot * 2 + 0] = value;
+            acc[group][slot * 2 + 1] = value;
+        }
+    }
+
+#pragma unroll
+    for (int group = 0; group < 16; ++group) {
+#pragma unroll
+        for (int slot = 0; slot < 4; ++slot) {
+            q8_repro_bm128_raw_store_slot(
+                dst_rsrc, rows, row_base, col_base, rows, cols, acc, wave, group, slot, lane);
+        }
+#pragma unroll
+        for (int slot = 0; slot < 4; ++slot) {
+            q8_repro_motif192_stage_store_slot(sh_store, acc, wave, group + 16, slot, lane);
+        }
+        asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+#pragma unroll
+        for (int slot = 0; slot < 4; ++slot) {
+            q8_repro_motif192_stage_load_store_slot(
+                dst_rsrc, rows, row_base, col_base, rows, cols, sh_store, wave, group + 16, slot, lane);
+        }
+#pragma unroll
+        for (int slot = 0; slot < 4; ++slot) {
+            q8_repro_motif192_stage_store_slot(sh_store, acc, wave, group + 32, slot, lane);
+        }
+        asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+#pragma unroll
+        for (int slot = 0; slot < 4; ++slot) {
+            q8_repro_motif192_stage_load_store_slot(
+                dst_rsrc, rows, row_base, col_base, rows, cols, sh_store, wave, group + 32, slot, lane);
+        }
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+}
+
+__global__ __launch_bounds__(256, 1)
+void q8_motif192_wmma_store_kernel(
+        float * dst,
+        long long rows,
+        long long cols) {
+    constexpr int BM = 128;
+    constexpr int BN = 128;
+    constexpr int BK = 32;
+    constexpr int SHARED_STRIDE = HRX_Q8_0_WMMA_VK128_SHARED_STRIDE;
+
+    const unsigned int tid = __builtin_amdgcn_workitem_id_x();
+    const unsigned int wave = tid >> 6u;
+    const unsigned int lane = tid & 63u;
+    const int wave_row = static_cast<int>(wave & 1u);
+    const int wave_col = static_cast<int>(wave >> 1);
+    const long long row_base = static_cast<long long>(__builtin_amdgcn_workgroup_id_x()) * BM;
+    const long long col_base = static_cast<long long>(__builtin_amdgcn_workgroup_id_y()) * BN;
+    if (row_base >= rows || col_base >= cols) {
+        return;
+    }
+
+    const __amdgpu_buffer_rsrc_t dst_rsrc = hrx_q8_0_wmma_vk128_make_dst_rsrc(dst);
+    __shared__ _Float16 sh_a[BM * SHARED_STRIDE];
+    __shared__ _Float16 sh_b[BN * SHARED_STRIDE];
+    __shared__ _Float16 sh_store[4 * 16 * 16];
+    hrx_q8_0_wmma_vk128_half8_vec acc[16] = {};
+
+    for (int idx = static_cast<int>(tid); idx < BM * BK; idx += 256) {
+        const int r = idx / BK;
+        const int kk = idx - r * BK;
+        const int row_sub = (r & 63) >> 4;
+        sh_a[r * SHARED_STRIDE + kk] = static_cast<_Float16>(1.0f + static_cast<float>(row_sub));
+    }
+    for (int idx = static_cast<int>(tid); idx < BN * BK; idx += 256) {
+        const int c = idx / BK;
+        const int kk = idx - c * BK;
+        const int col_sub = (c & 63) >> 4;
+        sh_b[c * SHARED_STRIDE + kk] = static_cast<_Float16>(1.0f + static_cast<float>(col_sub));
+    }
+    __syncthreads();
+
+    hrx_q8_0_wmma_vk128_lds_half_ptr sh_a_lds =
+        (hrx_q8_0_wmma_vk128_lds_half_ptr) sh_a;
+    hrx_q8_0_wmma_vk128_lds_half_ptr sh_b_lds =
+        (hrx_q8_0_wmma_vk128_lds_half_ptr) sh_b;
+
+#pragma unroll
+    for (int k_tile = 0; k_tile < 2; ++k_tile) {
+        hrx_q8_0_wmma_vk128_half16_vec a_frag[4];
+        hrx_q8_0_wmma_vk128_half16_vec b_frag[4];
+#pragma unroll
+        for (int row_sub = 0; row_sub < 4; ++row_sub) {
+            a_frag[row_sub] =
+                hrx_q8_0_wmma_vk128_load_a_frag_w64_b64asm_nowait(
+                    sh_a_lds, wave_row * 4 + row_sub, k_tile, lane);
+        }
+#pragma unroll
+        for (int col_sub = 0; col_sub < 4; ++col_sub) {
+            b_frag[col_sub] =
+                hrx_q8_0_wmma_vk128_load_b_frag_w64_b64asm_nowait(
+                    sh_b_lds, wave_col * 4 + col_sub, k_tile, lane);
+        }
+        asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+#pragma unroll
+        for (int col_sub = 0; col_sub < 4; ++col_sub) {
+#pragma unroll
+            for (int row_sub = 0; row_sub < 4; ++row_sub) {
+                const int local = col_sub * 4 + row_sub;
+                acc[local] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
+                    a_frag[row_sub],
+                    b_frag[col_sub],
+                    acc[local],
+                    HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+            }
+        }
+    }
+
+#pragma unroll
+    for (int group = 0; group < 16; ++group) {
+#pragma unroll
+        for (int slot = 0; slot < 4; ++slot) {
+            q8_repro_bm128_raw_store_slot(
+                dst_rsrc, rows, row_base, col_base, rows, cols, acc, wave, group, slot, lane);
+        }
+#pragma unroll
+        for (int slot = 0; slot < 4; ++slot) {
+            q8_repro_motif192_stage_store_slot(sh_store, acc, wave, group + 16, slot, lane);
+        }
+        asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+#pragma unroll
+        for (int slot = 0; slot < 4; ++slot) {
+            q8_repro_motif192_stage_load_store_slot(
+                dst_rsrc, rows, row_base, col_base, rows, cols, sh_store, wave, group + 16, slot, lane);
+        }
+#pragma unroll
+        for (int slot = 0; slot < 4; ++slot) {
+            q8_repro_motif192_stage_store_slot(sh_store, acc, wave, group + 32, slot, lane);
+        }
+        asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+#pragma unroll
+        for (int slot = 0; slot < 4; ++slot) {
+            q8_repro_motif192_stage_load_store_slot(
+                dst_rsrc, rows, row_base, col_base, rows, cols, sh_store, wave, group + 32, slot, lane);
+        }
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+}
+
 static __device__ __forceinline__ hrx_q8_0_wmma_vk128_half8_vec q8_repro_copy_acc(
         hrx_q8_0_wmma_vk128_half8_vec acc);
 
@@ -1954,6 +2187,239 @@ static float half_bits_to_float(uint16_t h) {
     return sign ? -value : value;
 }
 
+static float q8_repro_motif192_expected_value(int row, int col) {
+    const int tile_row = row & 127;
+    const int tile_col = col & 127;
+    const int row_in_wave = tile_row & 63;
+    const int col_in_wave = tile_col & 63;
+    const int row_sub = row_in_wave >> 4;
+    const int col_sub = col_in_wave >> 4;
+    const int group = col_sub * 4 + row_sub;
+    const int slot = (row_in_wave & 15) >> 2;
+    const int row_lane = row_in_wave & 3;
+    const int col_lane = col_in_wave & 15;
+    const int lane = row_lane * 16 + col_lane;
+    return half_bits_to_float(float_to_half_bits(q8_repro_contract_synthetic_value(group, slot, static_cast<unsigned int>(lane))));
+}
+
+static float q8_repro_motif192_wmma_expected_value(int row, int col) {
+    const int row_sub = ((row & 127) & 63) >> 4;
+    const int col_sub = ((col & 127) & 63) >> 4;
+    return 32.0f * static_cast<float>((row_sub + 1) * (col_sub + 1));
+}
+
+static int run_motif192_synthetic_case(int rows, int cols) {
+    std::vector<float> h_out(static_cast<size_t>(rows) * cols, -7777.0f);
+    device_buffer<float> d_out(h_out.size());
+    HIP_CHECK(hipMemcpy(d_out.ptr, h_out.data(), h_out.size() * sizeof(h_out[0]), hipMemcpyHostToDevice));
+
+    dim3 grid((rows + 127) / 128, (cols + 127) / 128, 1);
+    hipLaunchKernelGGL(q8_motif192_synthetic_store_kernel, grid, dim3(256, 1, 1), 0, 0,
+        d_out.ptr, rows, cols);
+    HIP_CHECK(hipGetLastError());
+    HIP_CHECK(hipDeviceSynchronize());
+    HIP_CHECK(hipMemcpy(h_out.data(), d_out.ptr, h_out.size() * sizeof(h_out[0]), hipMemcpyDeviceToHost));
+
+    size_t bad = 0;
+    size_t nan = 0;
+    size_t inf = 0;
+    size_t sentinel = 0;
+    float max_abs = 0.0f;
+    bool have_first_bad = false;
+    int first_row = -1;
+    int first_col = -1;
+    float first_actual = 0.0f;
+    float first_expected = 0.0f;
+    float first_err = 0.0f;
+
+    for (int col = 0; col < cols; ++col) {
+        for (int row = 0; row < rows; ++row) {
+            const size_t index = static_cast<size_t>(col) * rows + static_cast<size_t>(row);
+            const float actual = h_out[index];
+            const float expected = q8_repro_motif192_expected_value(row, col);
+            if (actual == -7777.0f) {
+                ++sentinel;
+                ++bad;
+                if (!have_first_bad) {
+                    have_first_bad = true;
+                    first_row = row;
+                    first_col = col;
+                    first_actual = actual;
+                    first_expected = expected;
+                    first_err = INFINITY;
+                }
+                continue;
+            }
+            if (std::isnan(actual)) {
+                ++nan;
+                ++bad;
+                if (!have_first_bad) {
+                    have_first_bad = true;
+                    first_row = row;
+                    first_col = col;
+                    first_actual = actual;
+                    first_expected = expected;
+                    first_err = INFINITY;
+                }
+                continue;
+            }
+            if (std::isinf(actual)) {
+                ++inf;
+                ++bad;
+                if (!have_first_bad) {
+                    have_first_bad = true;
+                    first_row = row;
+                    first_col = col;
+                    first_actual = actual;
+                    first_expected = expected;
+                    first_err = INFINITY;
+                }
+                continue;
+            }
+            const float err = std::fabs(actual - expected);
+            max_abs = std::max(max_abs, err);
+            if (err > 0.0f) {
+                ++bad;
+                if (!have_first_bad) {
+                    have_first_bad = true;
+                    first_row = row;
+                    first_col = col;
+                    first_actual = actual;
+                    first_expected = expected;
+                    first_err = err;
+                }
+            }
+        }
+    }
+
+    std::printf(
+        "motif192-synth-address rows=%d cols=%d active=%zu bad=%zu nan=%zu inf=%zu sentinel=%zu max_abs=%g\n",
+        rows,
+        cols,
+        h_out.size(),
+        bad,
+        nan,
+        inf,
+        sentinel,
+        max_abs);
+    if (have_first_bad) {
+        std::printf(
+            "  first_bad row=%d col=%d actual=%g expected=%g err=%g\n",
+            first_row,
+            first_col,
+            first_actual,
+            first_expected,
+            first_err);
+    }
+    return bad == 0 ? 0 : 1;
+}
+
+static int run_motif192_wmma_case(int rows, int cols) {
+    std::vector<float> h_out(static_cast<size_t>(rows) * cols, -7777.0f);
+    device_buffer<float> d_out(h_out.size());
+    HIP_CHECK(hipMemcpy(d_out.ptr, h_out.data(), h_out.size() * sizeof(h_out[0]), hipMemcpyHostToDevice));
+
+    dim3 grid((rows + 127) / 128, (cols + 127) / 128, 1);
+    hipLaunchKernelGGL(q8_motif192_wmma_store_kernel, grid, dim3(256, 1, 1), 0, 0,
+        d_out.ptr, rows, cols);
+    HIP_CHECK(hipGetLastError());
+    HIP_CHECK(hipDeviceSynchronize());
+    HIP_CHECK(hipMemcpy(h_out.data(), d_out.ptr, h_out.size() * sizeof(h_out[0]), hipMemcpyDeviceToHost));
+
+    size_t bad = 0;
+    size_t nan = 0;
+    size_t inf = 0;
+    size_t sentinel = 0;
+    float max_abs = 0.0f;
+    bool have_first_bad = false;
+    int first_row = -1;
+    int first_col = -1;
+    float first_actual = 0.0f;
+    float first_expected = 0.0f;
+    float first_err = 0.0f;
+
+    for (int col = 0; col < cols; ++col) {
+        for (int row = 0; row < rows; ++row) {
+            const size_t index = static_cast<size_t>(col) * rows + static_cast<size_t>(row);
+            const float actual = h_out[index];
+            const float expected = q8_repro_motif192_wmma_expected_value(row, col);
+            if (actual == -7777.0f) {
+                ++sentinel;
+                ++bad;
+                if (!have_first_bad) {
+                    have_first_bad = true;
+                    first_row = row;
+                    first_col = col;
+                    first_actual = actual;
+                    first_expected = expected;
+                    first_err = INFINITY;
+                }
+                continue;
+            }
+            if (std::isnan(actual)) {
+                ++nan;
+                ++bad;
+                if (!have_first_bad) {
+                    have_first_bad = true;
+                    first_row = row;
+                    first_col = col;
+                    first_actual = actual;
+                    first_expected = expected;
+                    first_err = INFINITY;
+                }
+                continue;
+            }
+            if (std::isinf(actual)) {
+                ++inf;
+                ++bad;
+                if (!have_first_bad) {
+                    have_first_bad = true;
+                    first_row = row;
+                    first_col = col;
+                    first_actual = actual;
+                    first_expected = expected;
+                    first_err = INFINITY;
+                }
+                continue;
+            }
+            const float err = std::fabs(actual - expected);
+            max_abs = std::max(max_abs, err);
+            if (err > 0.0f) {
+                ++bad;
+                if (!have_first_bad) {
+                    have_first_bad = true;
+                    first_row = row;
+                    first_col = col;
+                    first_actual = actual;
+                    first_expected = expected;
+                    first_err = err;
+                }
+            }
+        }
+    }
+
+    std::printf(
+        "motif192-wmma-address rows=%d cols=%d active=%zu bad=%zu nan=%zu inf=%zu sentinel=%zu max_abs=%g\n",
+        rows,
+        cols,
+        h_out.size(),
+        bad,
+        nan,
+        inf,
+        sentinel,
+        max_abs);
+    if (have_first_bad) {
+        std::printf(
+            "  first_bad row=%d col=%d actual=%g expected=%g err=%g\n",
+            first_row,
+            first_col,
+            first_actual,
+            first_expected,
+            first_err);
+    }
+    return bad == 0 ? 0 : 1;
+}
+
 template <typename T>
 static bool read_binary_vector(const std::string & path, std::vector<T> & out, size_t expected_count) {
     std::ifstream file(path, std::ios::binary);
@@ -3411,7 +3877,7 @@ int main(int argc, char ** argv) {
         } else if (std::strcmp(argv[i], "--dump-dir") == 0 && i + 1 < argc) {
             dump_dir = argv[++i];
         } else {
-            std::fprintf(stderr, "usage: %s [--mode array8-fullb|array16-direct-raw|array16-direct-raw-bcopy|array16-direct-raw-abcopy|contract-direct192-raw|contract-direct192-bcopy|contract-direct192-bcopy-hoist|contract-direct192-abcopy|contract-direct192-abcopy-bhoist|contract-bm128-direct192-raw|contract-bm128-direct192-raw-asm|contract-bm128-direct192-bcopy-upper|contract-bm128-direct192-bcopy-upper-asm|contract-bm128-direct192-bcopy-upper-hoist|contract-bm128-direct192-abcopy|contract-bm128-direct192-abcopy-bhoist|contract-bm128-direct192-abcopy-bhoist-asm|contract-phase96-abcopy|phase96-bm128-abcopy|phase96-bm128-abcopy-backendlike|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|array8-fullb-2phase-bcopy|array8-fullb-2phase-bcopy-stage|array8-fullb-2phase-abcopy|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group0-bcopy-stage|single-group8|single-group8-consume|single-group8-opsel1|single-group8-bmirror0|single-group8-bcopy|single-group8-abcopy|single-group8-bcopy-stage|single-group8-abcopy-stage|single-group8-bcopy-stage-selected|single-group12|single-group12-consume|single-group12-opsel1|single-group12-bmirror0|single-group12-bcopy|single-group12-abcopy|single-group12-bcopy-stage|single-group12-abcopy-stage|single-group12-bcopy-stage-selected|single-group12-abcopy-stage-selected|single-group12-bcopy-stage-selected-acccopy|single-group12-abcopy-stage-selected-acccopy|single-group12-bcopy-stage-selected-regcopy|single-group12-abcopy-stage-selected-regcopy|single-group12-abcopy-dual-stage-raw-first|single-group12-abcopy-dual-stage-stage-first|single-group13|single-group13-consume|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c12-s0-bcopy-stage-selected|remap-c12-s0-abcopy-stage-selected|remap-c0-s12|remap-c0-s12-stage-selected|bfrag-dump|all] [--dump-dir <test-backend-ops dump dir>]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--mode motif192-synth-address|motif192-wmma-address|array8-fullb|array16-direct-raw|array16-direct-raw-bcopy|array16-direct-raw-abcopy|contract-direct192-raw|contract-direct192-bcopy|contract-direct192-bcopy-hoist|contract-direct192-abcopy|contract-direct192-abcopy-bhoist|contract-bm128-direct192-raw|contract-bm128-direct192-raw-asm|contract-bm128-direct192-bcopy-upper|contract-bm128-direct192-bcopy-upper-asm|contract-bm128-direct192-bcopy-upper-hoist|contract-bm128-direct192-abcopy|contract-bm128-direct192-abcopy-bhoist|contract-bm128-direct192-abcopy-bhoist-asm|contract-phase96-abcopy|phase96-bm128-abcopy|phase96-bm128-abcopy-backendlike|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|array8-fullb-2phase-bcopy|array8-fullb-2phase-bcopy-stage|array8-fullb-2phase-abcopy|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group0-bcopy-stage|single-group8|single-group8-consume|single-group8-opsel1|single-group8-bmirror0|single-group8-bcopy|single-group8-abcopy|single-group8-bcopy-stage|single-group8-abcopy-stage|single-group8-bcopy-stage-selected|single-group12|single-group12-consume|single-group12-opsel1|single-group12-bmirror0|single-group12-bcopy|single-group12-abcopy|single-group12-bcopy-stage|single-group12-abcopy-stage|single-group12-bcopy-stage-selected|single-group12-abcopy-stage-selected|single-group12-bcopy-stage-selected-acccopy|single-group12-abcopy-stage-selected-acccopy|single-group12-bcopy-stage-selected-regcopy|single-group12-abcopy-stage-selected-regcopy|single-group12-abcopy-dual-stage-raw-first|single-group12-abcopy-dual-stage-stage-first|single-group13|single-group13-consume|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c12-s0-bcopy-stage-selected|remap-c12-s0-abcopy-stage-selected|remap-c0-s12|remap-c0-s12-stage-selected|bfrag-dump|all] [--dump-dir <test-backend-ops dump dir>]\n", argv[0]);
             return 2;
         }
     }
@@ -3423,6 +3889,22 @@ int main(int argc, char ** argv) {
     int status = 0;
     const int rows = 64;
     const int k = 4096;
+    if (mode == "motif192-synth-address") {
+        status |= run_motif192_synthetic_case(128, 128);
+        status |= run_motif192_synthetic_case(128, 129);
+        status |= run_motif192_synthetic_case(129, 128);
+        status |= run_motif192_synthetic_case(1024, 512);
+        status |= run_motif192_synthetic_case(4096, 512);
+        status |= run_motif192_synthetic_case(4096, 513);
+    }
+    if (mode == "motif192-wmma-address") {
+        status |= run_motif192_wmma_case(128, 128);
+        status |= run_motif192_wmma_case(128, 129);
+        status |= run_motif192_wmma_case(129, 128);
+        status |= run_motif192_wmma_case(1024, 512);
+        status |= run_motif192_wmma_case(4096, 512);
+        status |= run_motif192_wmma_case(4096, 513);
+    }
     if (mode == "all" || mode == "array8-fullb") {
         status |= run_case("array8-fullb", rows, 64, k);
         status |= run_case("array8-fullb", rows, 33, k);
