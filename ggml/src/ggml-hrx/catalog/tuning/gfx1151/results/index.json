@@ -661,6 +661,13 @@
       "artifact": "cache/hrxv1/gfx1151/q8_0-mmq128x64-splitqsum-focused-20260618-152805/",
       "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_mmq128x64_splitqsum.hsaco",
       "status": "rejected_focused_perf_regression"
+    },
+    {
+      "id": "q8_0_prompt_mmq64x128_splitqsum_bstripe_compile_contract",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x128-splitqsum-bstripe-compile-20260618/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_mmq64x128_splitqsum_bstripe.hsaco",
+      "status": "rejected_compile_contract"
     }
   ]
 }
