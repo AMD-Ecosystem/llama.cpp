@@ -981,6 +981,15 @@
       "artifact": "cache/hrxv1/gfx1151/q5-p33-combined96-catalog-20260619-030619/",
       "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q5_k_wmma16_vk64_padded44_w64_combined96_wg256.hsaco",
       "reason": "The Q5_K VK64 combined96 probe transplanted the standalone p33 medium fixture into the real direct-F32 Q5 wrapper as a p33-only opt-in catalog route. It built through CMake/Ninja and preserved the main RADV p33 total surface better than prior VK64 probes: wave64, LDS=11264, private segment=0, 16 v_wmma_f16_16x16x16_f16, 48 ds_load_b64, 64 ds_load_u16_d16, and 96 buffer_store_b32. However, the real ABI schedule did not preserve the fixture's issue window: static compare against RADV aligned_m showed SGPR=55 versus 108, VGPR=142 versus 144, 66 ds_store_b16 versus 64, 4 barriers versus 2, only 20 pre-WMMA ds_load_b64 versus 48, and final pre-WMMA lgkmcnt(0) versus 40. Focused p33 CPU-reference selected the combined96 route for all four Qwen2.5 Coder Q5_K_M rows and failed all four with NaNs. Reject before timing/model tests; the catalog port proves the opcode-count surface is reachable in the real ABI, but lane ownership and compiler scheduling still need a lower-level dependency/lane-mapping reproducer before another production promotion attempt."
+    },
+    {
+      "id": "q5_dense_prompt_vk64_full64_correctness",
+      "date": "2026-06-19",
+      "route": "hrx_mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_full64_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q5_K_WMMA16_VK64_PADDED44_W64_FULL64_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q5-p33-full64-catalog-20260619-032340/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q5_k_wmma16_vk64_padded44_w64_full64_wg256.hsaco",
+      "reason": "The Q5_K VK64 full64 probe repaired the combined96 output-ownership bug by computing all 16 medium-tile output groups in wave0 and writing only groups 0..15. It built through CMake/Ninja and selected for all four Qwen2.5 Coder Q5_K_M p33 focused rows, but CPU-reference failed all four with NaNs. Static compare against the p33 RADV medium oracle shows this is not a viable schedule clone: SGPR=64 versus 108, VGPR=198 versus 144, LDS=11264, no spills, 32 v_wmma_f16_16x16x16_f16 versus 16, 64 ds_load_b64 versus 48, 64 buffer_store_b32 versus 96, no ds_load_u16_d16 store stage, 3 barriers versus 2, only 24 pre-WMMA ds_load_b64 in the scored first window, and final pre-WMMA lgkmcnt(0) instead of RADV lgkmcnt(40). Reject before timing/model tests; full output ownership alone is not sufficient and the HIP builtin/register allocation for 16 live f16 WMMA accumulators is beyond the useful schedule family."
     }
   ]
 }

@@ -7666,6 +7666,50 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_full64_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_full64_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q5_k_wmma16_vk64_padded44_w64_full64_wg256",
+    "artifact_id": "mul_mat_vec_q5_k_wmma16_vk64_padded44_w64_full64_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_full64_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q5_dense_prompt_wmma16x16_vk64_padded44_w64_full64_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q5_K x F32 -> F32 MUL_MAT",
+      "k_multiple": 256,
+      "rows_min": 512,
+      "cols_exact": 33,
+      "requires_env": "GGML_HRX_ENABLE_Q5_K_WMMA16_VK64_PADDED44_W64_FULL64_F16ACC_WG256_PROMPT",
+      "prior_delta": "Qwen2.5 Coder 7B Q5_K_M p33 RADV medium route uses BM64/BN64/BK32/WG256 wave64. This opt-in probe repairs the rejected combined96 ownership bug by computing all 16 medium-tile outputs in wave0 and writing only groups 0..15, so focused correctness can separate output ownership from remaining RADV issue-window/store-surface deltas."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_full64_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_correctness_probe",
+      "selection": "Opt-in Q5_K p33 full64 schedule-port probe. It built through CMake/Ninja and selected for all focused p33 rows, but failed CPU-reference with NaNs. Static compare shows the route repairs the duplicate output ownership bug but diverges from RADV with VGPR=198, 32 WMMA sites, 64 ds_load_b64, 64 buffer_store_b32, no ds_load_u16_d16 store stage, and final pre-WMMA lgkmcnt(0). Reject before timing/model tests."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q6_k_f32",
     "family": "mul_mat_vec_q6_k",
     "op": "MUL_MAT",
