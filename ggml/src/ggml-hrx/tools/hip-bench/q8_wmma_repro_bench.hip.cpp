@@ -70,6 +70,79 @@ static __device__ __forceinline__ void q8_repro_raw_store_value(
     }
 }
 
+static constexpr int Q8_REPRO_CONTRACT_LANES = 64;
+static constexpr int Q8_REPRO_CONTRACT_SLOTS = 4;
+static constexpr int Q8_REPRO_CONTRACT_GROUPS = 48;
+static constexpr int Q8_REPRO_CONTRACT_VALUES =
+    Q8_REPRO_CONTRACT_GROUPS * Q8_REPRO_CONTRACT_SLOTS * Q8_REPRO_CONTRACT_LANES;
+
+static __host__ __device__ __forceinline__ int q8_repro_contract_index(
+        int group,
+        int slot,
+        unsigned int lane) {
+    return (group * Q8_REPRO_CONTRACT_SLOTS + slot) * Q8_REPRO_CONTRACT_LANES + static_cast<int>(lane);
+}
+
+static __host__ __device__ __forceinline__ float q8_repro_contract_synthetic_value(
+        int group,
+        int slot,
+        unsigned int lane) {
+    const int bits = static_cast<int>(
+        (static_cast<unsigned int>(group) * 1009u + static_cast<unsigned int>(slot) * 131u + lane * 17u) & 0x7fffu);
+    return static_cast<float>(bits - 16384) * 0.001953125f;
+}
+
+static __device__ __forceinline__ void q8_repro_contract_store_value(
+        __amdgpu_buffer_rsrc_t contract_rsrc,
+        int group,
+        int slot,
+        unsigned int lane,
+        float value) {
+    const int index = q8_repro_contract_index(group, slot, lane);
+    __builtin_amdgcn_raw_buffer_store_b32(
+        __builtin_bit_cast(int, value),
+        contract_rsrc,
+        index * static_cast<int>(sizeof(float)),
+        0,
+        0);
+}
+
+static __device__ __forceinline__ void q8_repro_contract_store_acc(
+        __amdgpu_buffer_rsrc_t contract_rsrc,
+        long long rows,
+        long long cols,
+        const hrx_q8_0_wmma_vk128_half8_vec * acc,
+        int acc_index,
+        int group,
+        int slot,
+        unsigned int lane) {
+    const int row_lane = static_cast<int>(lane >> 4);
+    const int col_lane = static_cast<int>(lane & 15u);
+    const long long row = static_cast<long long>((group & 3) * 16 + row_lane + slot * 4);
+    const long long col = static_cast<long long>(((group >> 2) & 3) * 16 + col_lane);
+    if (row < rows && col < cols) {
+        q8_repro_contract_store_value(
+            contract_rsrc,
+            group,
+            slot,
+            lane,
+            static_cast<float>(acc[acc_index][slot * 2 + HRX_Q8_0_WMMA_VK128_W64_OPSEL]));
+    }
+}
+
+static __device__ __forceinline__ void q8_repro_contract_store_synthetic(
+        __amdgpu_buffer_rsrc_t contract_rsrc,
+        int group,
+        int slot,
+        unsigned int lane) {
+    q8_repro_contract_store_value(
+        contract_rsrc,
+        group,
+        slot,
+        lane,
+        q8_repro_contract_synthetic_value(group, slot, lane));
+}
+
 static __device__ __forceinline__ hrx_q8_0_wmma_vk128_half8_vec q8_repro_copy_acc(
         hrx_q8_0_wmma_vk128_half8_vec acc);
 
@@ -461,6 +534,120 @@ void q8_array16_direct_raw_repro_kernel(
     }
 }
 
+template <bool copy_a, bool copy_b>
+__global__ __launch_bounds__(256, 1)
+void q8_contract_direct192_repro_kernel(
+        const hrx_block_q8_0_wmma_vk128_lhs * src0,
+        const float * src1,
+        float * contract,
+        long long k,
+        long long rows,
+        long long cols) {
+    constexpr int BM = 64;
+    constexpr int BN = 64;
+    constexpr int BK = 32;
+    constexpr int SHARED_STRIDE = HRX_Q8_0_WMMA_VK128_SHARED_STRIDE;
+    constexpr int ACTIVE_GROUPS = 16;
+
+    const unsigned int tid = __builtin_amdgcn_workitem_id_x();
+    const unsigned int wave = tid >> 6u;
+    const unsigned int lane = tid & 63u;
+    const long long row_base = static_cast<long long>(__builtin_amdgcn_workgroup_id_x()) * BM;
+    const long long col_base = static_cast<long long>(__builtin_amdgcn_workgroup_id_y()) * BN;
+    if (row_base >= rows || col_base >= cols) {
+        return;
+    }
+
+    const __amdgpu_buffer_rsrc_t contract_rsrc = hrx_q8_0_wmma_vk128_make_dst_rsrc(contract);
+    __shared__ _Float16 sh_a[BM * SHARED_STRIDE];
+    __shared__ _Float16 sh_b[BN * SHARED_STRIDE];
+
+    const long long blocks_per_row = k / 32;
+    const _Float16 zero = static_cast<_Float16>(0.0f);
+    hrx_q8_0_wmma_vk128_half8_vec acc[ACTIVE_GROUPS] = {};
+
+    for (long long k0 = 0; k0 < k; k0 += BK) {
+        for (int idx = static_cast<int>(tid); idx < BM * BK; idx += 256) {
+            const int r = idx / BK;
+            const int kk = idx - r * BK;
+            const long long row = row_base + static_cast<long long>(r);
+            sh_a[r * SHARED_STRIDE + kk] = row < rows ?
+                hrx_q8_0_wmma_vk128_load_a_value(src0, row, k0 + kk, blocks_per_row) : zero;
+        }
+        for (int idx = static_cast<int>(tid); idx < BN * BK; idx += 256) {
+            const int c = idx / BK;
+            const int kk = idx - c * BK;
+            const long long col = col_base + static_cast<long long>(c);
+            sh_b[c * SHARED_STRIDE + kk] = col < cols ? static_cast<_Float16>(src1[col * k + k0 + kk]) : zero;
+        }
+        __syncthreads();
+
+        if (wave == 0) {
+            hrx_q8_0_wmma_vk128_lds_half_ptr sh_a_lds =
+                (hrx_q8_0_wmma_vk128_lds_half_ptr) sh_a;
+            hrx_q8_0_wmma_vk128_lds_half_ptr sh_b_lds =
+                (hrx_q8_0_wmma_vk128_lds_half_ptr) sh_b;
+            hrx_q8_0_wmma_vk128_half16_vec a_frag[2][4];
+            hrx_q8_0_wmma_vk128_half16_vec b_frag[2][4];
+#pragma unroll
+            for (int k_tile = 0; k_tile < 2; ++k_tile) {
+#pragma unroll
+                for (int row_sub = 0; row_sub < 4; ++row_sub) {
+                    a_frag[k_tile][row_sub] =
+                        hrx_q8_0_wmma_vk128_load_a_frag_w64_b64asm_nowait(
+                            sh_a_lds, row_sub, k_tile, lane);
+                }
+#pragma unroll
+                for (int col_sub = 0; col_sub < 4; ++col_sub) {
+                    b_frag[k_tile][col_sub] =
+                        hrx_q8_0_wmma_vk128_load_b_frag_w64_b64asm_nowait(
+                            sh_b_lds, col_sub, k_tile, lane);
+                }
+            }
+            asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+#pragma unroll
+            for (int k_tile = 0; k_tile < 2; ++k_tile) {
+#pragma unroll
+                for (int col_sub = 0; col_sub < 4; ++col_sub) {
+#pragma unroll
+                    for (int row_sub = 0; row_sub < 4; ++row_sub) {
+                        const int group = col_sub * 4 + row_sub;
+                        const hrx_q8_0_wmma_vk128_half16_vec a_use = copy_a ?
+                            q8_repro_copy_frag(a_frag[k_tile][row_sub]) :
+                            a_frag[k_tile][row_sub];
+                        const hrx_q8_0_wmma_vk128_half16_vec b_use = copy_b ?
+                            q8_repro_copy_frag(b_frag[k_tile][col_sub]) :
+                            b_frag[k_tile][col_sub];
+                        acc[group] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
+                            a_use,
+                            b_use,
+                            acc[group],
+                            HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                    }
+                }
+            }
+        }
+        __syncthreads();
+    }
+
+    if (wave == 0) {
+#pragma unroll
+        for (int group = 0; group < ACTIVE_GROUPS; ++group) {
+#pragma unroll
+            for (int slot = 0; slot < 4; ++slot) {
+                q8_repro_contract_store_acc(contract_rsrc, rows, cols, acc, group, group, slot, lane);
+            }
+        }
+#pragma unroll
+        for (int group = 16; group < Q8_REPRO_CONTRACT_GROUPS; ++group) {
+#pragma unroll
+            for (int slot = 0; slot < Q8_REPRO_CONTRACT_SLOTS; ++slot) {
+                q8_repro_contract_store_synthetic(contract_rsrc, group, slot, lane);
+            }
+        }
+    }
+}
+
 template <
     int group_base,
     int col_start,
@@ -627,6 +814,133 @@ void q8_array_fullb_phase_repro_kernel(
                 for (int slot = 0; slot < 4; ++slot) {
                     q8_repro_raw_store_slot(dst_rsrc, rows, row_base, col_base, rows, cols, acc, local, group, slot, lane);
                 }
+            }
+        }
+    }
+}
+
+template <
+    int group_base,
+    int col_start,
+    int col_count,
+    int active_groups,
+    int synthetic_group_base,
+    int synthetic_groups,
+    bool copy_a,
+    bool copy_b>
+__global__ __launch_bounds__(256, 1)
+void q8_contract_phase96_repro_kernel(
+        const hrx_block_q8_0_wmma_vk128_lhs * src0,
+        const float * src1,
+        float * contract,
+        long long k,
+        long long rows,
+        long long cols) {
+    constexpr int BM = 64;
+    constexpr int BN = 64;
+    constexpr int BK = 32;
+    constexpr int SHARED_STRIDE = HRX_Q8_0_WMMA_VK128_SHARED_STRIDE;
+    static_assert(active_groups >= 1 && active_groups <= 8, "unexpected phase size");
+    static_assert(col_count >= 1 && col_count <= 2, "unexpected column group count");
+    static_assert(synthetic_groups >= 0 && synthetic_groups <= 16, "unexpected synthetic group count");
+
+    const unsigned int tid = __builtin_amdgcn_workitem_id_x();
+    const unsigned int wave = tid >> 6u;
+    const unsigned int lane = tid & 63u;
+    const long long row_base = static_cast<long long>(__builtin_amdgcn_workgroup_id_x()) * BM;
+    const long long col_base = static_cast<long long>(__builtin_amdgcn_workgroup_id_y()) * BN;
+    if (row_base >= rows || col_base >= cols) {
+        return;
+    }
+
+    const __amdgpu_buffer_rsrc_t contract_rsrc = hrx_q8_0_wmma_vk128_make_dst_rsrc(contract);
+    __shared__ _Float16 sh_a[BM * SHARED_STRIDE];
+    __shared__ _Float16 sh_b[BN * SHARED_STRIDE];
+
+    const long long blocks_per_row = k / 32;
+    const _Float16 zero = static_cast<_Float16>(0.0f);
+    hrx_q8_0_wmma_vk128_half8_vec acc[active_groups] = {};
+
+    for (long long k0 = 0; k0 < k; k0 += BK) {
+        for (int idx = static_cast<int>(tid); idx < BM * BK; idx += 256) {
+            const int r = idx / BK;
+            const int kk = idx - r * BK;
+            const long long row = row_base + static_cast<long long>(r);
+            sh_a[r * SHARED_STRIDE + kk] = row < rows ?
+                hrx_q8_0_wmma_vk128_load_a_value(src0, row, k0 + kk, blocks_per_row) : zero;
+        }
+        for (int idx = static_cast<int>(tid); idx < BN * BK; idx += 256) {
+            const int c = idx / BK;
+            const int kk = idx - c * BK;
+            const long long col = col_base + static_cast<long long>(c);
+            sh_b[c * SHARED_STRIDE + kk] = col < cols ? static_cast<_Float16>(src1[col * k + k0 + kk]) : zero;
+        }
+        __syncthreads();
+
+        if (wave == 0) {
+            hrx_q8_0_wmma_vk128_lds_half_ptr sh_a_lds =
+                (hrx_q8_0_wmma_vk128_lds_half_ptr) sh_a;
+            hrx_q8_0_wmma_vk128_lds_half_ptr sh_b_lds =
+                (hrx_q8_0_wmma_vk128_lds_half_ptr) sh_b;
+            hrx_q8_0_wmma_vk128_half16_vec a_frag[2][4];
+            hrx_q8_0_wmma_vk128_half16_vec b_frag[2][4];
+#pragma unroll
+            for (int k_tile = 0; k_tile < 2; ++k_tile) {
+#pragma unroll
+                for (int row_sub = 0; row_sub < 4; ++row_sub) {
+                    a_frag[k_tile][row_sub] =
+                        hrx_q8_0_wmma_vk128_load_a_frag_w64_b64asm_nowait(
+                            sh_a_lds, row_sub, k_tile, lane);
+                }
+#pragma unroll
+                for (int col_sub = 0; col_sub < 4; ++col_sub) {
+                    b_frag[k_tile][col_sub] =
+                        hrx_q8_0_wmma_vk128_load_b_frag_w64_b64asm_nowait(
+                            sh_b_lds, col_sub, k_tile, lane);
+                }
+            }
+            asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+#pragma unroll
+            for (int k_tile = 0; k_tile < 2; ++k_tile) {
+#pragma unroll
+                for (int col_delta = 0; col_delta < col_count; ++col_delta) {
+                    const int col_sub = col_start + col_delta;
+#pragma unroll
+                    for (int row_sub = 0; row_sub < 4; ++row_sub) {
+                        const int local = col_delta * 4 + row_sub;
+                        const hrx_q8_0_wmma_vk128_half16_vec a_use = copy_a ?
+                            q8_repro_copy_frag(a_frag[k_tile][row_sub]) :
+                            a_frag[k_tile][row_sub];
+                        const hrx_q8_0_wmma_vk128_half16_vec b_use = copy_b ?
+                            q8_repro_copy_frag(b_frag[k_tile][col_sub]) :
+                            b_frag[k_tile][col_sub];
+                        acc[local] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
+                            a_use,
+                            b_use,
+                            acc[local],
+                            HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                    }
+                }
+            }
+        }
+        __syncthreads();
+    }
+
+    if (wave == 0) {
+#pragma unroll
+        for (int local = 0; local < active_groups; ++local) {
+            const int group = group_base + local;
+#pragma unroll
+            for (int slot = 0; slot < Q8_REPRO_CONTRACT_SLOTS; ++slot) {
+                q8_repro_contract_store_acc(contract_rsrc, rows, cols, acc, local, group, slot, lane);
+            }
+        }
+#pragma unroll
+        for (int group_delta = 0; group_delta < synthetic_groups; ++group_delta) {
+            const int group = synthetic_group_base + group_delta;
+#pragma unroll
+            for (int slot = 0; slot < Q8_REPRO_CONTRACT_SLOTS; ++slot) {
+                q8_repro_contract_store_synthetic(contract_rsrc, group, slot, lane);
             }
         }
     }
@@ -1873,6 +2187,180 @@ static int run_dual_stage_compare_case(const std::string & mode, int rows, int c
             raw_sentinel == 0 && staged_sentinel == 0) ? 0 : 1;
 }
 
+static int run_contract_case(const std::string & mode, int rows, int cols, int k) {
+    const int blocks_per_row = k / 32;
+    std::vector<hrx_block_q8_0_wmma_vk128_lhs> h_q8(static_cast<size_t>(rows) * blocks_per_row);
+    std::vector<float> h_rhs(static_cast<size_t>(cols) * k);
+    std::vector<float> h_contract(Q8_REPRO_CONTRACT_VALUES, -7777.0f);
+    fill_q8(h_q8, rows, blocks_per_row);
+    fill_rhs(h_rhs, k, cols);
+    const std::vector<float> ref = cpu_reference(h_q8, h_rhs, k, rows, cols);
+
+    device_buffer<hrx_block_q8_0_wmma_vk128_lhs> d_q8(h_q8.size());
+    device_buffer<float> d_rhs(h_rhs.size());
+    device_buffer<float> d_contract(h_contract.size());
+    HIP_CHECK(hipMemcpy(d_q8.ptr, h_q8.data(), h_q8.size() * sizeof(h_q8[0]), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(d_rhs.ptr, h_rhs.data(), h_rhs.size() * sizeof(h_rhs[0]), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(d_contract.ptr, h_contract.data(), h_contract.size() * sizeof(h_contract[0]), hipMemcpyHostToDevice));
+
+    dim3 grid((rows + 63) / 64, (cols + 63) / 64, 1);
+    if (mode == "contract-direct192-abcopy") {
+        hipLaunchKernelGGL((q8_contract_direct192_repro_kernel<true, true>), grid, dim3(256, 1, 1), 0, 0,
+            d_q8.ptr, d_rhs.ptr, d_contract.ptr, k, rows, cols);
+    } else if (mode == "contract-phase96-abcopy") {
+        hipLaunchKernelGGL((q8_contract_phase96_repro_kernel<0, 0, 2, 8, 16, 16, true, true>),
+            grid, dim3(256, 1, 1), 0, 0, d_q8.ptr, d_rhs.ptr, d_contract.ptr, k, rows, cols);
+        hipLaunchKernelGGL((q8_contract_phase96_repro_kernel<8, 2, 2, 8, 32, 16, true, true>),
+            grid, dim3(256, 1, 1), 0, 0, d_q8.ptr, d_rhs.ptr, d_contract.ptr, k, rows, cols);
+    } else {
+        std::fprintf(stderr, "unknown contract mode: %s\n", mode.c_str());
+        return 2;
+    }
+    HIP_CHECK(hipGetLastError());
+    HIP_CHECK(hipDeviceSynchronize());
+    HIP_CHECK(hipMemcpy(h_contract.data(), d_contract.ptr, h_contract.size() * sizeof(h_contract[0]), hipMemcpyDeviceToHost));
+
+    size_t active = 0;
+    size_t inactive = 0;
+    size_t bad = 0;
+    size_t nan = 0;
+    size_t inf = 0;
+    size_t sentinel = 0;
+    size_t unexpected = 0;
+    float max_abs = 0.0f;
+    bool have_first_bad = false;
+    int first_group = -1;
+    int first_slot = -1;
+    int first_lane = -1;
+    float first_actual = 0.0f;
+    float first_expected = 0.0f;
+    float first_err = 0.0f;
+
+    for (int group = 0; group < Q8_REPRO_CONTRACT_GROUPS; ++group) {
+        for (int slot = 0; slot < Q8_REPRO_CONTRACT_SLOTS; ++slot) {
+            for (int lane = 0; lane < Q8_REPRO_CONTRACT_LANES; ++lane) {
+                const int index = q8_repro_contract_index(group, slot, static_cast<unsigned int>(lane));
+                const float actual = h_contract[static_cast<size_t>(index)];
+                bool should_be_active = true;
+                float expected = 0.0f;
+                if (group < 16) {
+                    const int row = (group & 3) * 16 + (lane >> 4) + slot * 4;
+                    const int col = ((group >> 2) & 3) * 16 + (lane & 15);
+                    should_be_active = row < rows && col < cols;
+                    if (should_be_active) {
+                        expected = ref[static_cast<size_t>(col) * rows + static_cast<size_t>(row)];
+                    }
+                } else {
+                    expected = q8_repro_contract_synthetic_value(group, slot, static_cast<unsigned int>(lane));
+                }
+
+                if (!should_be_active) {
+                    ++inactive;
+                    if (actual != -7777.0f) {
+                        ++unexpected;
+                        ++bad;
+                        if (!have_first_bad) {
+                            have_first_bad = true;
+                            first_group = group;
+                            first_slot = slot;
+                            first_lane = lane;
+                            first_actual = actual;
+                            first_expected = -7777.0f;
+                            first_err = INFINITY;
+                        }
+                    }
+                    continue;
+                }
+
+                ++active;
+                if (actual == -7777.0f) {
+                    ++sentinel;
+                    ++bad;
+                    if (!have_first_bad) {
+                        have_first_bad = true;
+                        first_group = group;
+                        first_slot = slot;
+                        first_lane = lane;
+                        first_actual = actual;
+                        first_expected = expected;
+                        first_err = INFINITY;
+                    }
+                    continue;
+                }
+                if (std::isnan(actual)) {
+                    ++nan;
+                    ++bad;
+                    if (!have_first_bad) {
+                        have_first_bad = true;
+                        first_group = group;
+                        first_slot = slot;
+                        first_lane = lane;
+                        first_actual = actual;
+                        first_expected = expected;
+                        first_err = NAN;
+                    }
+                    continue;
+                }
+                if (std::isinf(actual)) {
+                    ++inf;
+                    ++bad;
+                    if (!have_first_bad) {
+                        have_first_bad = true;
+                        first_group = group;
+                        first_slot = slot;
+                        first_lane = lane;
+                        first_actual = actual;
+                        first_expected = expected;
+                        first_err = INFINITY;
+                    }
+                    continue;
+                }
+                const float err = std::fabs(actual - expected);
+                max_abs = std::max(max_abs, err);
+                const float threshold = group < 16 ? 0.25f : 0.0f;
+                if (err > threshold) {
+                    ++bad;
+                    if (!have_first_bad) {
+                        have_first_bad = true;
+                        first_group = group;
+                        first_slot = slot;
+                        first_lane = lane;
+                        first_actual = actual;
+                        first_expected = expected;
+                        first_err = err;
+                    }
+                }
+            }
+        }
+    }
+
+    std::printf(
+        "%s rows=%d cols=%d k=%d active=%zu inactive=%zu bad=%zu nan=%zu inf=%zu sentinel=%zu unexpected=%zu max_abs=%g\n",
+        mode.c_str(),
+        rows,
+        cols,
+        k,
+        active,
+        inactive,
+        bad,
+        nan,
+        inf,
+        sentinel,
+        unexpected,
+        max_abs);
+    if (have_first_bad) {
+        std::printf(
+            "  first_bad group=%d slot=%d lane=%d actual=%g expected=%g err=%g\n",
+            first_group,
+            first_slot,
+            first_lane,
+            first_actual,
+            first_expected,
+            first_err);
+    }
+    return bad == 0 ? 0 : 1;
+}
+
 static int run_case(const std::string & mode, int rows, int cols, int k) {
     const int blocks_per_row = k / 32;
     std::vector<hrx_block_q8_0_wmma_vk128_lhs> h_q8(static_cast<size_t>(rows) * blocks_per_row);
@@ -2151,7 +2639,7 @@ int main(int argc, char ** argv) {
         if (std::strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
             mode = argv[++i];
         } else {
-            std::fprintf(stderr, "usage: %s [--mode array8-fullb|array16-direct-raw|array16-direct-raw-bcopy|array16-direct-raw-abcopy|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|array8-fullb-2phase-bcopy|array8-fullb-2phase-bcopy-stage|array8-fullb-2phase-abcopy|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group0-bcopy-stage|single-group8|single-group8-consume|single-group8-opsel1|single-group8-bmirror0|single-group8-bcopy|single-group8-abcopy|single-group8-bcopy-stage|single-group8-abcopy-stage|single-group8-bcopy-stage-selected|single-group12|single-group12-consume|single-group12-opsel1|single-group12-bmirror0|single-group12-bcopy|single-group12-abcopy|single-group12-bcopy-stage|single-group12-abcopy-stage|single-group12-bcopy-stage-selected|single-group12-abcopy-stage-selected|single-group12-bcopy-stage-selected-acccopy|single-group12-abcopy-stage-selected-acccopy|single-group12-bcopy-stage-selected-regcopy|single-group12-abcopy-stage-selected-regcopy|single-group12-abcopy-dual-stage-raw-first|single-group12-abcopy-dual-stage-stage-first|single-group13|single-group13-consume|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c12-s0-bcopy-stage-selected|remap-c12-s0-abcopy-stage-selected|remap-c0-s12|remap-c0-s12-stage-selected|bfrag-dump|all]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--mode array8-fullb|array16-direct-raw|array16-direct-raw-bcopy|array16-direct-raw-abcopy|contract-direct192-abcopy|contract-phase96-abcopy|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|array8-fullb-2phase-bcopy|array8-fullb-2phase-bcopy-stage|array8-fullb-2phase-abcopy|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group0-bcopy-stage|single-group8|single-group8-consume|single-group8-opsel1|single-group8-bmirror0|single-group8-bcopy|single-group8-abcopy|single-group8-bcopy-stage|single-group8-abcopy-stage|single-group8-bcopy-stage-selected|single-group12|single-group12-consume|single-group12-opsel1|single-group12-bmirror0|single-group12-bcopy|single-group12-abcopy|single-group12-bcopy-stage|single-group12-abcopy-stage|single-group12-bcopy-stage-selected|single-group12-abcopy-stage-selected|single-group12-bcopy-stage-selected-acccopy|single-group12-abcopy-stage-selected-acccopy|single-group12-bcopy-stage-selected-regcopy|single-group12-abcopy-stage-selected-regcopy|single-group12-abcopy-dual-stage-raw-first|single-group12-abcopy-dual-stage-stage-first|single-group13|single-group13-consume|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c12-s0-bcopy-stage-selected|remap-c12-s0-abcopy-stage-selected|remap-c0-s12|remap-c0-s12-stage-selected|bfrag-dump|all]\n", argv[0]);
             return 2;
         }
     }
@@ -2168,6 +2656,10 @@ int main(int argc, char ** argv) {
             mode == "array16-direct-raw-abcopy") {
         status |= run_case(mode, rows, 64, k);
         status |= run_case(mode, rows, 33, k);
+    }
+    if (mode == "contract-direct192-abcopy" || mode == "contract-phase96-abcopy") {
+        status |= run_contract_case(mode, rows, 64, k);
+        status |= run_contract_case(mode, rows, 33, k);
     }
     if (mode == "all" || mode == "array8-b2") {
         status |= run_case("array8-b2", rows, 64, k);

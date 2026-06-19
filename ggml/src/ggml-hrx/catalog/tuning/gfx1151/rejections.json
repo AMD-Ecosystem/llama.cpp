@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_wmma_realdata_contract192_store_surface_probe",
+      "date": "2026-06-19",
+      "route": "hrx-hip-bench-q8-wmma-repro --mode=contract-direct192-abcopy/contract-phase96-abcopy",
+      "env": "standalone CMake/Ninja-built gfx1151 HIP bench diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/q8-contract192-repro-20260619-123924/",
+      "isa_artifact": "cache/hrxv1/gfx1151/q8-contract192-repro-20260619-123924/static/summary.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro plus extracted cache/hrxv1/gfx1151/q8-contract192-repro-20260619-123924/static/fatbin/gfx1151.o",
+      "reason": "The real-data contract192 store-surface probe tests the exact one-workgroup Q8_0 direct192 writeback surface suggested by the Vulkan oracle while preserving real Q8 dequant, full A/B fragment materialization, f16 WMMA accumulation, raw gfx11 buffer stores, and CMake/Ninja gfx1151 compilation. The single-dispatch contract-direct192-abcopy mode passed CPU-reference validation for rows=64 cols=64 and odd/narrow cols=33 with no bad values, NaNs, infinities, sentinels, or unexpected inactive writes, and emitted the target 32 WMMA, 64 ds_load_b64, and 192 buffer_store_b32 surface. Static extraction from the executable fatbin shows the production blocker: the one-kernel shape reaches VGPR=256, private_segment_fixed_size=60, and 14 VGPR spills. The two-dispatch contract-phase96-abcopy lifetime split also passed p64 and p33 and covers the same 192 total stores as two 96-store phases; each phase emits 16 WMMA, 64 ds_load_b64, and 96 buffer_store_b32 at VGPR=247 with no private segment and no spills. Reject the single-dispatch direct192 HIP C++ shape as a production route because the exact Vulkan-like store surface is correct but spills. Treat the phase96 split as positive schedule evidence only: the next Q8 candidate should either port that lifetime split into the production ABI for measured A/B or use a lower-level cooperative writeback primitive that preserves the true 192-store Vulkan surface without the HIP C++ VGPR cliff."
+    },
+    {
       "id": "q8_0_wmma_group12_dual_stage_order_probe",
       "date": "2026-06-19",
       "route": "hrx-hip-bench-q8-wmma-repro --mode=single-group12-abcopy-dual-stage-raw-first/single-group12-abcopy-dual-stage-stage-first",
