@@ -3,6 +3,18 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_direct_wmma_vk128_packstage_asmwmma_perf_rejection",
+      "date": "2026-06-19",
+      "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_bufferstore_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_ASMWMMA_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q8-asmwmma-packstage-wired-focused-20260619-143542/",
+      "correctness_artifact": "cache/hrxv1/gfx1151/q8-asmwmma-packstage-wired-focused-20260619-143542/p33,p512,p513/test/",
+      "perf_artifact": "cache/hrxv1/gfx1151/q8-asmwmma-packstage-wired-focused-20260619-143542/p33,p512,p513/perf-compare.md",
+      "isa_artifact": "cache/hrxv1/gfx1151/q8-asmwmma-packstage-wired-focused-20260619-143542/static/radv-vs-asmwmma-packstage.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_bufferstore_wg256.hsaco",
+      "reason": "The packstage inline-WMMA catalog transfer ports the standalone BM128 direct192 inline-asm discovery into the real Q8_0 catalog ABI. It keeps the existing B64GROUP packed LDS staging and raw buffer-store writeback, but emits v_wmma_f16_16x16x16_f16 via inline asm to avoid the HIP builtin B-fragment correctness cliff observed in the bench repro. The route is opt-in and CMake/Ninja-built. Focused CPU-reference gates passed for p33, p512, and p513. Route traces proved p33 stayed on the existing narrow packed route, while p512 and p513 selected the asm-WMMA provider only for ffn_out, ffn_gate, and result_output; Vcur and Qcur stayed on packed Q8_1. Static comparison against the RADV p512 Q8_0 large oracle shows a viable no-spill direct-WMMA compile surface but not RADV parity: wave64, SGPR=28, VGPR=212, LDS=20480, private_segment=0, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 128 buffer_store_b32, 2 ds_store_b32, and two barriers, versus RADV SGPR=108, VGPR=192, LDS=22528, 192 buffer_store_b32, 128 ds_store_b16, and 128 ds_load_u16_d16. Focused same-runner timing rejects promotion before model tests: p512 total regressed 72948.716 -> 94465.939 us, and p513 total regressed 81603.554 -> 109759.971 us. Selected large rows regressed by about 1.29x-1.41x on p512 and 1.33x-1.38x on p513. Keep this provider opt-in as positive correctness/ABI evidence that inline WMMA fixes the production B operand contract without spills, but reject it for production because it remains slower than the current packed-Q8_1 split-qsum path and still lacks the RADV cooperative halfword store/load/writeback topology."
+    },
+    {
       "id": "q8_0_wmma_bm128_upper_bcopy_contract_probe",
       "date": "2026-06-19",
       "route": "hrx-hip-bench-q8-wmma-repro --mode=contract-bm128-direct192-bcopy-upper/contract-bm128-direct192-bcopy-upper-hoist",

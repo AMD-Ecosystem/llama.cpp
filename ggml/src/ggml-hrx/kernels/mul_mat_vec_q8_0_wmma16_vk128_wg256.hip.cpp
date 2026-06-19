@@ -170,6 +170,10 @@
 #define HRX_Q8_0_WMMA_VK128_COPY_B_FRAG_MIN_COL_SUB 0
 #endif
 
+#ifndef HRX_Q8_0_WMMA_VK128_USE_ASM_WMMA
+#define HRX_Q8_0_WMMA_VK128_USE_ASM_WMMA 0
+#endif
+
 #ifndef HRX_Q8_0_WMMA_VK128_ASSUME_FULL_TILES
 #define HRX_Q8_0_WMMA_VK128_ASSUME_FULL_TILES 0
 #endif
@@ -379,8 +383,7 @@ static __device__ __forceinline__ hrx_q8_0_wmma_vk128_half16_vec hrx_q8_0_wmma_v
             hrx_q8_0_wmma_vk128_dep_copy_initial<W>((A), (D0), (D1), (D2), (D3), (D4), (D5), (D6)); \
         const hrx_q8_0_wmma_vk128_half16_vec b_dep = \
             hrx_q8_0_wmma_vk128_dep_copy_after_token((B), a_dep); \
-        acc[TILE] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64( \
-            a_dep, b_dep, acc[TILE], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0); \
+        acc[TILE] = hrx_q8_0_wmma_vk128_wmma_f16_w64(a_dep, b_dep, acc[TILE]); \
     } while (0)
 
 #define HRX_Q8_0_WMMA_VK128_DEP_WMMA_AFTER(TILE, A, B, W, TOKEN, PREV) \
@@ -389,16 +392,41 @@ static __device__ __forceinline__ hrx_q8_0_wmma_vk128_half16_vec hrx_q8_0_wmma_v
             hrx_q8_0_wmma_vk128_dep_copy_after_acc<W>((A), (TOKEN), acc[PREV]); \
         const hrx_q8_0_wmma_vk128_half16_vec b_dep = \
             hrx_q8_0_wmma_vk128_dep_copy_after_token((B), a_dep); \
-        acc[TILE] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64( \
-            a_dep, b_dep, acc[TILE], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0); \
+        acc[TILE] = hrx_q8_0_wmma_vk128_wmma_f16_w64(a_dep, b_dep, acc[TILE]); \
     } while (0)
 #endif
+
+static __device__ __forceinline__ hrx_q8_0_wmma_vk128_half8_vec hrx_q8_0_wmma_vk128_wmma_f16_w64(
+        hrx_q8_0_wmma_vk128_half16_vec a_frag,
+        hrx_q8_0_wmma_vk128_half16_vec b_frag,
+        hrx_q8_0_wmma_vk128_half8_vec acc) {
+#if HRX_Q8_0_WMMA_VK128_USE_ASM_WMMA
+    hrx_q8_0_wmma_vk128_half8_vec out;
+#if HRX_Q8_0_WMMA_VK128_W64_OPSEL
+    asm volatile("v_wmma_f16_16x16x16_f16 %0, %1, %2, %3 op_sel:[0,0,1]\n"
+                 : "=v"(out)
+                 : "v"(a_frag), "v"(b_frag), "v"(acc)
+                 : "memory");
+#else
+    asm volatile("v_wmma_f16_16x16x16_f16 %0, %1, %2, %3\n"
+                 : "=v"(out)
+                 : "v"(a_frag), "v"(b_frag), "v"(acc)
+                 : "memory");
+#endif
+    return out;
+#else
+    return __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
+        a_frag,
+        b_frag,
+        acc,
+        HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+#endif
+}
 
 #define HRX_Q8_0_WMMA_VK128_WAIT_WMMA(TILE, A, B, W) \
     do { \
         asm volatile("s_waitcnt lgkmcnt(%0)\n" :: "n"(W) : "memory"); \
-        acc[TILE] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64( \
-            (A), (B), acc[TILE], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0); \
+        acc[TILE] = hrx_q8_0_wmma_vk128_wmma_f16_w64((A), (B), acc[TILE]); \
     } while (0)
 
 #if HRX_Q8_0_WMMA_VK128_BUFFER_STORE
@@ -1606,11 +1634,7 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
 #pragma unroll
                     for (int row_sub = 0; row_sub < 4; ++row_sub) {
                         const int local = col_delta * 4 + row_sub;
-                        acc[local] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
-                            a_frag[row_sub],
-                            b_frag[col_sub],
-                            acc[local],
-                            HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                        acc[local] = hrx_q8_0_wmma_vk128_wmma_f16_w64(a_frag[row_sub], b_frag[col_sub], acc[local]);
                     }
                 }
             }
@@ -1817,11 +1841,7 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
 #pragma unroll
                     for (int row_sub = 0; row_sub < 4; ++row_sub) {
                         const int tile_iter = col_sub * 4 + row_sub;
-                        acc[tile_iter] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
-                            a_frag[row_sub],
-                            b_frag,
-                            acc[tile_iter],
-                            HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                        acc[tile_iter] = hrx_q8_0_wmma_vk128_wmma_f16_w64(a_frag[row_sub], b_frag, acc[tile_iter]);
                     }
                 }
 #elif HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STREAM_ROW
@@ -1852,11 +1872,7 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
 #pragma unroll
                     for (int col_sub = 0; col_sub < 4; ++col_sub) {
                         const int tile_iter = col_sub * 4 + row_sub;
-                        acc[tile_iter] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
-                            a_frag_row,
-                            b_frag[col_sub],
-                            acc[tile_iter],
-                            HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                        acc[tile_iter] = hrx_q8_0_wmma_vk128_wmma_f16_w64(a_frag_row, b_frag[col_sub], acc[tile_iter]);
                     }
                 }
 #elif HRX_Q8_0_WMMA_VK128_W64_B64GROUP_NAMED_FRAGS
@@ -1921,31 +1937,31 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
 #else
                 asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
 #endif
-                acc[0] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a0, b0, acc[0], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
-                acc[1] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a1, b0, acc[1], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
-                acc[2] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a2, b0, acc[2], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
-                acc[3] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a3, b0, acc[3], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                acc[0] = hrx_q8_0_wmma_vk128_wmma_f16_w64(a0, b0, acc[0]);
+                acc[1] = hrx_q8_0_wmma_vk128_wmma_f16_w64(a1, b0, acc[1]);
+                acc[2] = hrx_q8_0_wmma_vk128_wmma_f16_w64(a2, b0, acc[2]);
+                acc[3] = hrx_q8_0_wmma_vk128_wmma_f16_w64(a3, b0, acc[3]);
 #if HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STAGED_WAIT
                 asm volatile("s_waitcnt lgkmcnt(%0)\n" :: "n"(HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STAGED_WAIT1) : "memory");
 #endif
-                acc[4] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a0, b1, acc[4], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
-                acc[5] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a1, b1, acc[5], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
-                acc[6] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a2, b1, acc[6], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
-                acc[7] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a3, b1, acc[7], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                acc[4] = hrx_q8_0_wmma_vk128_wmma_f16_w64(a0, b1, acc[4]);
+                acc[5] = hrx_q8_0_wmma_vk128_wmma_f16_w64(a1, b1, acc[5]);
+                acc[6] = hrx_q8_0_wmma_vk128_wmma_f16_w64(a2, b1, acc[6]);
+                acc[7] = hrx_q8_0_wmma_vk128_wmma_f16_w64(a3, b1, acc[7]);
 #if HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STAGED_WAIT
                 asm volatile("s_waitcnt lgkmcnt(%0)\n" :: "n"(HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STAGED_WAIT2) : "memory");
 #endif
-                acc[8] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a0, b2, acc[8], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
-                acc[9] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a1, b2, acc[9], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
-                acc[10] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a2, b2, acc[10], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
-                acc[11] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a3, b2, acc[11], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                acc[8] = hrx_q8_0_wmma_vk128_wmma_f16_w64(a0, b2, acc[8]);
+                acc[9] = hrx_q8_0_wmma_vk128_wmma_f16_w64(a1, b2, acc[9]);
+                acc[10] = hrx_q8_0_wmma_vk128_wmma_f16_w64(a2, b2, acc[10]);
+                acc[11] = hrx_q8_0_wmma_vk128_wmma_f16_w64(a3, b2, acc[11]);
 #if HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STAGED_WAIT
                 asm volatile("s_waitcnt lgkmcnt(%0)\n" :: "n"(HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STAGED_WAIT3) : "memory");
 #endif
-                acc[12] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a0, b3, acc[12], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
-                acc[13] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a1, b3, acc[13], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
-                acc[14] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a2, b3, acc[14], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
-                acc[15] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(a3, b3, acc[15], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                acc[12] = hrx_q8_0_wmma_vk128_wmma_f16_w64(a0, b3, acc[12]);
+                acc[13] = hrx_q8_0_wmma_vk128_wmma_f16_w64(a1, b3, acc[13]);
+                acc[14] = hrx_q8_0_wmma_vk128_wmma_f16_w64(a2, b3, acc[14]);
+                acc[15] = hrx_q8_0_wmma_vk128_wmma_f16_w64(a3, b3, acc[15]);
 #endif
 #else
                 hrx_q8_0_wmma_vk128_half16_vec b_frag[4];
@@ -1989,11 +2005,7 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
 #pragma unroll
                     for (int row_sub = 0; row_sub < 4; ++row_sub) {
                         const int tile_iter = col_sub * 4 + row_sub;
-                        acc[tile_iter] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
-                            a_frag[row_sub],
-                            b_frag[col_sub],
-                            acc[tile_iter],
-                            HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                        acc[tile_iter] = hrx_q8_0_wmma_vk128_wmma_f16_w64(a_frag[row_sub], b_frag[col_sub], acc[tile_iter]);
                     }
                 }
 #endif
@@ -2020,8 +2032,7 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
                 const hrx_q8_0_wmma_vk128_half16_vec b =
                     hrx_q8_0_wmma_vk128_load_b_frag_w64(sh_b, col_tile, k_tile, lane);
 #endif
-                acc[tile_iter] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
-                    a, b, acc[tile_iter], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                acc[tile_iter] = hrx_q8_0_wmma_vk128_wmma_f16_w64(a, b, acc[tile_iter]);
             }
 #else
 #if HRX_Q8_0_WMMA_VK128_PREFETCH_FRAGS

@@ -10734,6 +10734,50 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_bufferstore_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_bufferstore_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_bufferstore_wg256",
+    "artifact_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_bufferstore_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_bufferstore_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 110,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q8_0_prompt_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_bufferstore_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q8_0 x F32 -> F32 MUL_MAT",
+      "k_multiple": 32,
+      "win_domain": "rows >= 8192 || k >= 8192",
+      "cols_min": 128,
+      "selector_gate": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_ASMWMMA_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "prior_delta": "Transfers the BM128 direct192 inline-WMMA bench discovery into the raw packstage catalog ABI. It preserves the existing B64GROUP packed A/B LDS staging and selected-half raw buffer stores, but emits v_wmma_f16_16x16x16_f16 through inline asm instead of the HIP builtin to test whether the corrected live B operand contract survives real model-derived rows."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_bufferstore_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "opt_in_gfx1151_rejected_perf",
+      "selection": "Focused p33/p512/p513 CPU-reference gates passed in cache/hrxv1/gfx1151/q8-asmwmma-packstage-wired-focused-20260619-143542/. Route traces proved p33 stayed on the narrow packed route while p512/p513 selected this provider only for ffn_out, ffn_gate, and result_output. Static HSACO was no-spill but still missed RADV's halfword cooperative writeback topology, and same-runner focused timing regressed p512 by 1.295x and p513 by 1.345x versus current packed-Q8_1 split-qsum routing. Keep opt-in as ABI evidence only."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_nowait_packstage_bufferstore_f16acc_wg256_f32",
     "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_nowait_packstage_bufferstore_f16acc_wg256",
     "op": "MUL_MAT",

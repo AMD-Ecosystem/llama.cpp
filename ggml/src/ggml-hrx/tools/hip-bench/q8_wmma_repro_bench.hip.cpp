@@ -325,6 +325,25 @@ static __device__ __forceinline__ hrx_q8_0_wmma_vk128_half8_vec q8_repro_copy_ac
     return __builtin_bit_cast(hrx_q8_0_wmma_vk128_half8_vec, out);
 }
 
+static __device__ __forceinline__ hrx_q8_0_wmma_vk128_half8_vec q8_repro_wmma_f16_w64_asm(
+        hrx_q8_0_wmma_vk128_half16_vec a_frag,
+        hrx_q8_0_wmma_vk128_half16_vec b_frag,
+        hrx_q8_0_wmma_vk128_half8_vec acc) {
+    hrx_q8_0_wmma_vk128_half8_vec out;
+#if HRX_Q8_0_WMMA_VK128_W64_OPSEL
+    asm volatile("v_wmma_f16_16x16x16_f16 %0, %1, %2, %3 op_sel:[0,0,1]\n"
+                 : "=v"(out)
+                 : "v"(a_frag), "v"(b_frag), "v"(acc)
+                 : "memory");
+#else
+    asm volatile("v_wmma_f16_16x16x16_f16 %0, %1, %2, %3\n"
+                 : "=v"(out)
+                 : "v"(a_frag), "v"(b_frag), "v"(acc)
+                 : "memory");
+#endif
+    return out;
+}
+
 __global__ __launch_bounds__(256, 1)
 void q8_bfrag_dump_kernel(
         const float * src1,
@@ -711,7 +730,7 @@ void q8_contract_direct192_repro_kernel(
     }
 }
 
-template <bool copy_a, bool copy_b, bool hoist_b_copy = false, int copy_b_min_col_sub = 0>
+template <bool copy_a, bool copy_b, bool hoist_b_copy = false, int copy_b_min_col_sub = 0, bool use_asm_wmma = false>
 __global__ __launch_bounds__(256, 1)
 void q8_contract_bm128_direct192_repro_kernel(
         const hrx_block_q8_0_wmma_vk128_lhs * src0,
@@ -801,11 +820,15 @@ void q8_contract_bm128_direct192_repro_kernel(
                     const hrx_q8_0_wmma_vk128_half16_vec b_use = do_b_copy ?
                         (hoist_b_copy ? b_col_use : q8_repro_copy_frag(b_frag[k_tile][col_sub])) :
                         b_col_use;
-                    acc[group] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
-                        a_use,
-                        b_use,
-                        acc[group],
-                        HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                    if constexpr (use_asm_wmma) {
+                        acc[group] = q8_repro_wmma_f16_w64_asm(a_use, b_use, acc[group]);
+                    } else {
+                        acc[group] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
+                            a_use,
+                            b_use,
+                            acc[group],
+                            HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                    }
                 }
             }
         }
@@ -2783,8 +2806,14 @@ static int run_bm128_contract_case(const std::string & mode, int rows, int cols,
     if (mode == "contract-bm128-direct192-raw") {
         hipLaunchKernelGGL((q8_contract_bm128_direct192_repro_kernel<false, false>),
             grid, dim3(256, 1, 1), 0, 0, d_q8.ptr, d_rhs.ptr, d_contract.ptr, k, rows, cols);
+    } else if (mode == "contract-bm128-direct192-raw-asm") {
+        hipLaunchKernelGGL((q8_contract_bm128_direct192_repro_kernel<false, false, false, 0, true>),
+            grid, dim3(256, 1, 1), 0, 0, d_q8.ptr, d_rhs.ptr, d_contract.ptr, k, rows, cols);
     } else if (mode == "contract-bm128-direct192-bcopy-upper") {
         hipLaunchKernelGGL((q8_contract_bm128_direct192_repro_kernel<false, true, false, 2>),
+            grid, dim3(256, 1, 1), 0, 0, d_q8.ptr, d_rhs.ptr, d_contract.ptr, k, rows, cols);
+    } else if (mode == "contract-bm128-direct192-bcopy-upper-asm") {
+        hipLaunchKernelGGL((q8_contract_bm128_direct192_repro_kernel<false, true, false, 2, true>),
             grid, dim3(256, 1, 1), 0, 0, d_q8.ptr, d_rhs.ptr, d_contract.ptr, k, rows, cols);
     } else if (mode == "contract-bm128-direct192-bcopy-upper-hoist") {
         hipLaunchKernelGGL((q8_contract_bm128_direct192_repro_kernel<false, true, true, 2>),
@@ -2794,6 +2823,9 @@ static int run_bm128_contract_case(const std::string & mode, int rows, int cols,
             grid, dim3(256, 1, 1), 0, 0, d_q8.ptr, d_rhs.ptr, d_contract.ptr, k, rows, cols);
     } else if (mode == "contract-bm128-direct192-abcopy-bhoist") {
         hipLaunchKernelGGL((q8_contract_bm128_direct192_repro_kernel<true, true, true>),
+            grid, dim3(256, 1, 1), 0, 0, d_q8.ptr, d_rhs.ptr, d_contract.ptr, k, rows, cols);
+    } else if (mode == "contract-bm128-direct192-abcopy-bhoist-asm") {
+        hipLaunchKernelGGL((q8_contract_bm128_direct192_repro_kernel<true, true, true, 0, true>),
             grid, dim3(256, 1, 1), 0, 0, d_q8.ptr, d_rhs.ptr, d_contract.ptr, k, rows, cols);
     } else {
         std::fprintf(stderr, "unknown BM128 contract mode: %s\n", mode.c_str());
@@ -3379,7 +3411,7 @@ int main(int argc, char ** argv) {
         } else if (std::strcmp(argv[i], "--dump-dir") == 0 && i + 1 < argc) {
             dump_dir = argv[++i];
         } else {
-            std::fprintf(stderr, "usage: %s [--mode array8-fullb|array16-direct-raw|array16-direct-raw-bcopy|array16-direct-raw-abcopy|contract-direct192-raw|contract-direct192-bcopy|contract-direct192-bcopy-hoist|contract-direct192-abcopy|contract-direct192-abcopy-bhoist|contract-bm128-direct192-raw|contract-bm128-direct192-bcopy-upper|contract-bm128-direct192-bcopy-upper-hoist|contract-bm128-direct192-abcopy|contract-bm128-direct192-abcopy-bhoist|contract-phase96-abcopy|phase96-bm128-abcopy|phase96-bm128-abcopy-backendlike|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|array8-fullb-2phase-bcopy|array8-fullb-2phase-bcopy-stage|array8-fullb-2phase-abcopy|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group0-bcopy-stage|single-group8|single-group8-consume|single-group8-opsel1|single-group8-bmirror0|single-group8-bcopy|single-group8-abcopy|single-group8-bcopy-stage|single-group8-abcopy-stage|single-group8-bcopy-stage-selected|single-group12|single-group12-consume|single-group12-opsel1|single-group12-bmirror0|single-group12-bcopy|single-group12-abcopy|single-group12-bcopy-stage|single-group12-abcopy-stage|single-group12-bcopy-stage-selected|single-group12-abcopy-stage-selected|single-group12-bcopy-stage-selected-acccopy|single-group12-abcopy-stage-selected-acccopy|single-group12-bcopy-stage-selected-regcopy|single-group12-abcopy-stage-selected-regcopy|single-group12-abcopy-dual-stage-raw-first|single-group12-abcopy-dual-stage-stage-first|single-group13|single-group13-consume|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c12-s0-bcopy-stage-selected|remap-c12-s0-abcopy-stage-selected|remap-c0-s12|remap-c0-s12-stage-selected|bfrag-dump|all] [--dump-dir <test-backend-ops dump dir>]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--mode array8-fullb|array16-direct-raw|array16-direct-raw-bcopy|array16-direct-raw-abcopy|contract-direct192-raw|contract-direct192-bcopy|contract-direct192-bcopy-hoist|contract-direct192-abcopy|contract-direct192-abcopy-bhoist|contract-bm128-direct192-raw|contract-bm128-direct192-raw-asm|contract-bm128-direct192-bcopy-upper|contract-bm128-direct192-bcopy-upper-asm|contract-bm128-direct192-bcopy-upper-hoist|contract-bm128-direct192-abcopy|contract-bm128-direct192-abcopy-bhoist|contract-bm128-direct192-abcopy-bhoist-asm|contract-phase96-abcopy|phase96-bm128-abcopy|phase96-bm128-abcopy-backendlike|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|array8-fullb-2phase-bcopy|array8-fullb-2phase-bcopy-stage|array8-fullb-2phase-abcopy|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group0-bcopy-stage|single-group8|single-group8-consume|single-group8-opsel1|single-group8-bmirror0|single-group8-bcopy|single-group8-abcopy|single-group8-bcopy-stage|single-group8-abcopy-stage|single-group8-bcopy-stage-selected|single-group12|single-group12-consume|single-group12-opsel1|single-group12-bmirror0|single-group12-bcopy|single-group12-abcopy|single-group12-bcopy-stage|single-group12-abcopy-stage|single-group12-bcopy-stage-selected|single-group12-abcopy-stage-selected|single-group12-bcopy-stage-selected-acccopy|single-group12-abcopy-stage-selected-acccopy|single-group12-bcopy-stage-selected-regcopy|single-group12-abcopy-stage-selected-regcopy|single-group12-abcopy-dual-stage-raw-first|single-group12-abcopy-dual-stage-stage-first|single-group13|single-group13-consume|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c12-s0-bcopy-stage-selected|remap-c12-s0-abcopy-stage-selected|remap-c0-s12|remap-c0-s12-stage-selected|bfrag-dump|all] [--dump-dir <test-backend-ops dump dir>]\n", argv[0]);
             return 2;
         }
     }
@@ -3411,10 +3443,13 @@ int main(int argc, char ** argv) {
         status |= run_contract_case(mode, rows, 33, k);
     }
     if (mode == "contract-bm128-direct192-raw" ||
+            mode == "contract-bm128-direct192-raw-asm" ||
             mode == "contract-bm128-direct192-bcopy-upper" ||
+            mode == "contract-bm128-direct192-bcopy-upper-asm" ||
             mode == "contract-bm128-direct192-bcopy-upper-hoist" ||
             mode == "contract-bm128-direct192-abcopy" ||
-            mode == "contract-bm128-direct192-abcopy-bhoist") {
+            mode == "contract-bm128-direct192-abcopy-bhoist" ||
+            mode == "contract-bm128-direct192-abcopy-bhoist-asm") {
         status |= run_bm128_contract_case(mode, 128, 128, k);
         status |= run_bm128_contract_case(mode, 128, 33, k);
     }
