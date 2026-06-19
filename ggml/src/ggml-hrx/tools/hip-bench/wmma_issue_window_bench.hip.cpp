@@ -373,6 +373,76 @@ void wmma_issue_window_realfrag16_direct_probe(float * dst) {
 
 template <int wait_lgkmcnt>
 __global__ __launch_bounds__(64, 1)
+void wmma_issue_window_mediumfrag12_probe(float * dst) {
+    __shared__ uint64_t sh[12 * 64 * 4];
+    const unsigned int lane = __builtin_amdgcn_workitem_id_x() & 63u;
+
+#pragma unroll
+    for (unsigned int frag = 0; frag < 12u; ++frag) {
+#pragma unroll
+        for (unsigned int item = 0; item < 4u; ++item) {
+            const uint64_t lo = static_cast<uint64_t>(0x3c00u + ((frag + item + lane) & 7u));
+            const uint64_t packed = lo | (lo << 16) | (lo << 32) | (lo << 48);
+            sh[frag * 256u + lane * 4u + item] = packed;
+        }
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+
+    const __attribute__((address_space(3))) uint64_t * lds =
+        (const __attribute__((address_space(3))) uint64_t *) sh;
+
+    const half16_vec a0 = wmma_issue_window_load_fragment(lds, lane, 0u);
+    const half16_vec a1 = wmma_issue_window_load_fragment(lds, lane, 1u);
+    const half16_vec a2 = wmma_issue_window_load_fragment(lds, lane, 2u);
+    const half16_vec a3 = wmma_issue_window_load_fragment(lds, lane, 3u);
+    const half16_vec b0 = wmma_issue_window_load_fragment(lds, lane, 4u);
+    const half16_vec b1 = wmma_issue_window_load_fragment(lds, lane, 5u);
+    const half16_vec a4 = wmma_issue_window_load_fragment(lds, lane, 6u);
+    const half16_vec a5 = wmma_issue_window_load_fragment(lds, lane, 7u);
+    const half16_vec a6 = wmma_issue_window_load_fragment(lds, lane, 8u);
+    const half16_vec a7 = wmma_issue_window_load_fragment(lds, lane, 9u);
+    const half16_vec b2 = wmma_issue_window_load_fragment(lds, lane, 10u);
+    const half16_vec b3 = wmma_issue_window_load_fragment(lds, lane, 11u);
+
+    half8_vec acc[8];
+#pragma unroll
+    for (int t = 0; t < 8; ++t) {
+#pragma unroll
+        for (int i = 0; i < 8; ++i) {
+            acc[t][i] = static_cast<_Float16>(0.0f);
+        }
+    }
+
+    WMMA_ISSUE_WINDOW_DEP_WMMA_INITIAL(acc, 0, a0, b0, wait_lgkmcnt, a1, a2, a3, b0, b1, a4, b2);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 1, a1, b0, 39, a0, 0);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 2, a2, b0, 35, a1, 1);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 3, a3, b0, 31, a2, 2);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 4, a0, b1, 27, a3, 3);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 5, a1, b1, 23, b1, 4);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 6, a2, b1, 19, a1, 5);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 7, a3, b1, 15, a2, 6);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 0, a4, b2, 11, a3, 7);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 1, a5, b2, 7, b2, 0);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 2, a6, b2, 3, a5, 1);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 3, a7, b2, 0, a6, 2);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 4, a4, b3, 0, a7, 3);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 5, a5, b3, 0, b3, 4);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 6, a6, b3, 0, a5, 5);
+    WMMA_ISSUE_WINDOW_DEP_WMMA_AFTER(acc, 7, a7, b3, 0, a6, 6);
+
+#pragma unroll
+    for (int t = 0; t < 8; ++t) {
+#pragma unroll
+        for (int i = 0; i < 8; ++i) {
+            const float value = static_cast<float>(acc[t][i]);
+            dst[lane * 128u + static_cast<unsigned int>(t * 8 + i)] = value == value ? value : 0.0f;
+        }
+    }
+}
+
+template <int wait_lgkmcnt>
+__global__ __launch_bounds__(64, 1)
 void wmma_issue_window_realfrag8_probe(float * dst) {
     __shared__ uint64_t sh[12 * 64 * 4];
     const unsigned int lane = __builtin_amdgcn_workitem_id_x() & 63u;
@@ -540,7 +610,7 @@ int main(int argc, char ** argv) {
         if (std::strncmp(argv[i], "--mode=", 7) == 0) {
             mode = argv[i] + 7;
         } else {
-            std::fprintf(stderr, "usage: %s [--mode=lgkm51|wait0|realfrag16|realfrag8|realfrag16-direct|realfrag8-direct]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--mode=lgkm51|wait0|realfrag16|mediumfrag12|realfrag8|realfrag16-direct|realfrag8-direct]\n", argv[0]);
             return 2;
         }
     }
@@ -556,6 +626,8 @@ int main(int argc, char ** argv) {
         hipLaunchKernelGGL((wmma_issue_window_probe<0>), dim3(1), dim3(64), 0, 0, d_out.ptr);
     } else if (mode == "realfrag16") {
         hipLaunchKernelGGL((wmma_issue_window_realfrag16_probe<51>), dim3(1), dim3(64), 0, 0, d_out.ptr);
+    } else if (mode == "mediumfrag12") {
+        hipLaunchKernelGGL((wmma_issue_window_mediumfrag12_probe<40>), dim3(1), dim3(64), 0, 0, d_out.ptr);
     } else if (mode == "realfrag8") {
         hipLaunchKernelGGL((wmma_issue_window_realfrag8_probe<51>), dim3(1), dim3(64), 0, 0, d_out.ptr);
     } else if (mode == "realfrag16-direct") {
