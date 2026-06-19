@@ -183,6 +183,12 @@
       "status": "same_commit_vulkan_model_subset"
     },
     {
+      "id": "basket_after_q4_moe_id_q8_1_x4_mmq16_widek_default",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/basket-after-q4-id-widek-default-commitaligned-20260618-205025/",
+      "status": "post_default_full_basket_kpi"
+    },
+    {
       "id": "q8_0_prompt_mmq128x32_wave64_focused_p512",
       "date": "2026-06-17",
       "artifact": "cache/hrxv1/gfx1151/q8_0-wave64-focused-p512-20260617-185605/",

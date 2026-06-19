@@ -20,7 +20,8 @@
         "cache/hrxv1/gfx1151/current-best-with-q4-id-widek-r3-20260617-160734/",
         "cache/hrxv1/gfx1151/q4-id-widek-current-default-20260618-204154/",
         "cache/hrxv1/gfx1151/q4-id-widek-current-optin-20260618-204241/",
-        "cache/hrxv1/gfx1151/q4-id-widek-current-vulkan-20260618-204346/"
+        "cache/hrxv1/gfx1151/q4-id-widek-current-vulkan-20260618-204346/",
+        "cache/hrxv1/gfx1151/basket-after-q4-id-widek-default-commitaligned-20260618-205025/"
       ],
       "model_result": {
         "qwen3_30b_q4xl_p33_default_tok_s": 97.33775,
@@ -42,7 +43,10 @@
         "qwen3_coder_30b_q4km_p513_widek_tok_s": 853.2295,
         "qwen3_coder_30b_q4km_p513_vulkan_tok_s": 1125.39,
         "steady_geomean_widek_over_default": 1.941333,
-        "steady_geomean_widek_over_vulkan": 0.65698
+        "steady_geomean_widek_over_vulkan": 0.65698,
+        "full_basket_post_default_avg_geomean_over_vulkan": 0.578585,
+        "full_basket_post_default_steady_geomean_over_vulkan": 0.573459,
+        "full_basket_rows_below_parity": 24
       },
       "compile_evidence": {
         "hsaco": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_id_q4_k_q8_1_x4_mmq.hsaco",
