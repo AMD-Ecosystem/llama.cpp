@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_wmma_group12_accumulator_copy_stage_probe",
+      "date": "2026-06-19",
+      "route": "hrx-hip-bench-q8-wmma-repro --mode=single-group12-bcopy-stage-selected-acccopy/single-group12-abcopy-stage-selected-acccopy/single-group12-bcopy-stage-selected-regcopy/single-group12-abcopy-stage-selected-regcopy",
+      "env": "standalone CMake/Ninja-built gfx1151 HIP bench diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/q8-wmma-group12-regcopy-20260619-113027/",
+      "isa_artifact": "cache/hrxv1/gfx1151/q8-wmma-group12-regcopy-20260619-113027/static/symbol-summary.txt",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro plus extracted cache/hrxv1/gfx1151/q8-wmma-group12-regcopy-20260619-113027/static/gfx1151.o",
+      "reason": "The group12 accumulator-copy staged-store probe tests whether the remaining selected-only stage failure is repairable by explicitly moving the WMMA accumulator vector before the scalarized LDS halfword store. The baseline group12 selected-stage controls reproduced the deterministic finite p64 failure with bad=16 and max_abs about 0.346-0.348 at the known col 50 / col 57 lane pattern. A one-time accumulator copy before selected-stage writeback reduced the error surface but did not fix correctness: both B-copy and A+B-copy acccopy modes had bad=12, no NaNs/infinities/sentinels, and the bad samples moved to slots 1..3 while slot 0 disappeared. Per-slot accumulator copy immediately before each selected halfword store made the failure much worse: B-copy regcopy had bad=46, max_abs=514.864; A+B-copy regcopy had bad=43, max_abs=514.867. The static summary confirms separate group12 selected-stage instantiations were emitted; one-time acccopy variants add a small v_mov_b32 surface while regcopy variants add more moves. Reject accumulator-copy as a production workaround. The partial slot-0 change is useful evidence that the bug is register/layout sensitive, but not a route repair. Future Q8_0 direct-WMMA work should move to a lower-level cooperative store/lane primitive or a compact compiler reproducer, not more scalarized selected-stage copies."
+    },
+    {
       "id": "q8_0_wmma_group12_remap_stage_selected_contract",
       "date": "2026-06-19",
       "route": "hrx-hip-bench-q8-wmma-repro --mode=remap-c0-s12/remap-c0-s12-stage-selected/remap-c12-s0/remap-c12-s0-bcopy-stage-selected/remap-c12-s0-abcopy-stage-selected",
