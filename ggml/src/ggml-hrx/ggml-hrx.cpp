@@ -12375,6 +12375,27 @@ static ggml_status ggml_backend_hrx_dispatch_mul_mat_id_q4_k_swiglu(
             { provider->export_info.workgroup_size[0] ? provider->export_info.workgroup_size[0] : 64, 1, 1 },
             0,
         };
+        if (ggml_backend_hrx_trace_routes_enabled()) {
+            std::fprintf(
+                stderr,
+                "HRX route MUL_MAT_ID_SWIGLU provider=%s type=%s k=%" PRId64 " rows=%" PRId64
+                " n_ids=%" PRId64 " n_tokens=%" PRId64 " n_experts=%" PRId64
+                " grouped=1 q8_1_x4=%d bn16=%d route_capacity=%zu wg_count=[%u,%u,%u] dst=%s\n",
+                provider->name.c_str(),
+                ggml_type_name(up->src[0]->type),
+                grouped_constants.k,
+                grouped_constants.rows,
+                grouped_constants.n_ids,
+                grouped_constants.n_tokens,
+                grouped_constants.n_experts,
+                use_q8_1_x4_mmq ? 1 : 0,
+                use_q8_1_x4_mmq_bn16 ? 1 : 0,
+                route_capacity,
+                grouped_config.workgroup_count[0],
+                grouped_config.workgroup_count[1],
+                grouped_config.workgroup_count[2],
+                swiglu->name);
+        }
         return GGML_HRX_CHECK(hrx_stream_dispatch(
             context->stream, provider->executable, provider->export_ordinal, &grouped_config,
             &grouped_constants, sizeof(grouped_constants), grouped_bindings, 6, HRX_DISPATCH_FLAG_NONE)) ?
@@ -12391,6 +12412,24 @@ static ggml_status ggml_backend_hrx_dispatch_mul_mat_id_q4_k_swiglu(
         { provider->export_info.workgroup_size[0] ? provider->export_info.workgroup_size[0] : 256, 1, 1 },
         0,
     };
+    if (ggml_backend_hrx_trace_routes_enabled()) {
+        std::fprintf(
+            stderr,
+            "HRX route MUL_MAT_ID_SWIGLU provider=%s type=%s k=%" PRId64 " rows=%" PRId64
+            " n_ids=%" PRId64 " n_tokens=%" PRId64 " n_experts=%" PRId64
+            " grouped=0 q8_1_x4=0 bn16=0 wg_count=[%u,%u,%u] dst=%s\n",
+            provider->name.c_str(),
+            ggml_type_name(up->src[0]->type),
+            constants.k,
+            constants.rows,
+            constants.n_ids,
+            constants.n_tokens,
+            constants.n_experts,
+            config.workgroup_count[0],
+            config.workgroup_count[1],
+            config.workgroup_count[2],
+            swiglu->name);
+    }
     return GGML_HRX_CHECK(hrx_stream_dispatch(
         context->stream, provider->executable, provider->export_ordinal, &config,
         &constants, sizeof(constants), bindings, 5, HRX_DISPATCH_FLAG_NONE)) ?
