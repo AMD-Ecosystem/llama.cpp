@@ -1037,11 +1037,17 @@ static bool two_phase_copy_mode(const std::string & mode) {
 }
 
 static bool copy_mode_group(const std::string & mode, int * group_id) {
-    if (mode == "single-group8-bcopy" || mode == "single-group8-abcopy") {
+    if (mode == "single-group0-bcopy-stage") {
+        *group_id = 0;
+        return true;
+    }
+    if (mode == "single-group8-bcopy" || mode == "single-group8-abcopy" ||
+            mode == "single-group8-bcopy-stage" || mode == "single-group8-abcopy-stage") {
         *group_id = 8;
         return true;
     }
-    if (mode == "single-group12-bcopy" || mode == "single-group12-abcopy") {
+    if (mode == "single-group12-bcopy" || mode == "single-group12-abcopy" ||
+            mode == "single-group12-bcopy-stage" || mode == "single-group12-abcopy-stage") {
         *group_id = 12;
         return true;
     }
@@ -1350,6 +1356,21 @@ static int run_case(const std::string & mode, int rows, int cols, int k) {
     } else if (mode == "single-group12-abcopy") {
         hipLaunchKernelGGL((q8_single_group_copy_repro_kernel<12, true, true>), grid, dim3(256, 1, 1), 0, 0,
             d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+    } else if (mode == "single-group0-bcopy-stage") {
+        hipLaunchKernelGGL((q8_array_fullb_phase_repro_kernel<0, 0, 1, 1, false, false, true, true>), grid, dim3(256, 1, 1), 0, 0,
+            d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+    } else if (mode == "single-group8-bcopy-stage") {
+        hipLaunchKernelGGL((q8_array_fullb_phase_repro_kernel<8, 2, 1, 1, false, false, true, true>), grid, dim3(256, 1, 1), 0, 0,
+            d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+    } else if (mode == "single-group8-abcopy-stage") {
+        hipLaunchKernelGGL((q8_array_fullb_phase_repro_kernel<8, 2, 1, 1, false, true, true, true>), grid, dim3(256, 1, 1), 0, 0,
+            d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+    } else if (mode == "single-group12-bcopy-stage") {
+        hipLaunchKernelGGL((q8_array_fullb_phase_repro_kernel<12, 3, 1, 1, false, false, true, true>), grid, dim3(256, 1, 1), 0, 0,
+            d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+    } else if (mode == "single-group12-abcopy-stage") {
+        hipLaunchKernelGGL((q8_array_fullb_phase_repro_kernel<12, 3, 1, 1, false, true, true, true>), grid, dim3(256, 1, 1), 0, 0,
+            d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
     } else {
         std::fprintf(stderr, "unknown mode: %s\n", mode.c_str());
         return 2;
@@ -1423,7 +1444,7 @@ int main(int argc, char ** argv) {
         if (std::strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
             mode = argv[++i];
         } else {
-            std::fprintf(stderr, "usage: %s [--mode array8-fullb|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|array8-fullb-2phase-bcopy|array8-fullb-2phase-bcopy-stage|array8-fullb-2phase-abcopy|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group8|single-group8-consume|single-group8-opsel1|single-group8-bmirror0|single-group8-bcopy|single-group8-abcopy|single-group12|single-group12-consume|single-group12-opsel1|single-group12-bmirror0|single-group12-bcopy|single-group12-abcopy|single-group13|single-group13-consume|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c0-s12|bfrag-dump|all]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--mode array8-fullb|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|array8-fullb-2phase-bcopy|array8-fullb-2phase-bcopy-stage|array8-fullb-2phase-abcopy|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group0-bcopy-stage|single-group8|single-group8-consume|single-group8-opsel1|single-group8-bmirror0|single-group8-bcopy|single-group8-abcopy|single-group8-bcopy-stage|single-group8-abcopy-stage|single-group12|single-group12-consume|single-group12-opsel1|single-group12-bmirror0|single-group12-bcopy|single-group12-abcopy|single-group12-bcopy-stage|single-group12-abcopy-stage|single-group13|single-group13-consume|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c0-s12|bfrag-dump|all]\n", argv[0]);
             return 2;
         }
     }
@@ -1472,14 +1493,17 @@ int main(int argc, char ** argv) {
     }
     if (mode == "single-group0" || mode == "single-group0-consume" ||
             mode == "single-group0-opsel1" ||
+            mode == "single-group0-bcopy-stage" ||
             mode == "single-group8" || mode == "single-group8-consume" ||
             mode == "single-group8-opsel1" ||
             mode == "single-group8-bmirror0" ||
             mode == "single-group8-bcopy" || mode == "single-group8-abcopy" ||
+            mode == "single-group8-bcopy-stage" || mode == "single-group8-abcopy-stage" ||
             mode == "single-group12" || mode == "single-group12-consume" ||
             mode == "single-group12-opsel1" ||
             mode == "single-group12-bmirror0" ||
             mode == "single-group12-bcopy" || mode == "single-group12-abcopy" ||
+            mode == "single-group12-bcopy-stage" || mode == "single-group12-abcopy-stage" ||
             mode == "single-group13" || mode == "single-group13-consume" ||
             mode == "remap-c8-s0" || mode == "remap-c0-s8" ||
             mode == "remap-c12-s0" || mode == "remap-c0-s12") {
