@@ -17,6 +17,11 @@
     } \
 } while (0)
 
+static __device__ __forceinline__ void q5_repro_consume_frag(
+        hrx_q5_k_wmma_vk128_half16_vec frag) {
+    asm volatile("" :: "v"(frag[0]), "v"(frag[4]), "v"(frag[8]), "v"(frag[12]) : "memory");
+}
+
 template <int active_groups>
 __global__ __launch_bounds__(256, 1)
 void q5_full64_active_groups_repro_kernel(
@@ -189,6 +194,109 @@ void q5_array8_b2_repro_kernel(
                         hrx_q5_k_wmma_vk128_load_b_frag_w64_b64asm_nowait(
                             sh_b_lds, col_sub, k_tile, lane);
                 }
+            }
+            asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+#pragma unroll
+            for (int k_tile = 0; k_tile < 2; ++k_tile) {
+#pragma unroll
+                for (int col_sub = 0; col_sub < 2; ++col_sub) {
+#pragma unroll
+                    for (int row_sub = 0; row_sub < 4; ++row_sub) {
+                        const int tile = col_sub * 4 + row_sub;
+                        acc[tile] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
+                            a_frag[k_tile][row_sub],
+                            b_frag[k_tile][col_sub],
+                            acc[tile],
+                            HRX_Q5_K_WMMA_VK128_W64_OPSEL != 0);
+                    }
+                }
+            }
+        }
+        __syncthreads();
+    }
+
+    if (wave == 0) {
+#pragma unroll
+        for (int group = 0; group < ACTIVE_GROUPS; ++group) {
+#pragma unroll
+            for (int slot = 0; slot < 4; ++slot) {
+                hrx_q5_k_wmma_vk128_combined96_raw_store_slot(
+                    dst_rsrc, rows, row_base, col_base, rows, cols, acc, group, slot, lane);
+            }
+        }
+    }
+}
+
+__global__ __launch_bounds__(256, 1)
+void q5_array8_fullb_noif_repro_kernel(
+        const hrx_block_q5_K_wmma_vk128_lhs * src0,
+        const float * src1,
+        float * dst,
+        long long k,
+        long long rows,
+        long long cols) {
+    constexpr int BM = 64;
+    constexpr int BN = 64;
+    constexpr int BK = 32;
+    constexpr int SHARED_STRIDE = 44;
+    constexpr int ACTIVE_GROUPS = 8;
+
+    const unsigned int tid = __builtin_amdgcn_workitem_id_x();
+    const unsigned int wave = tid >> 6u;
+    const unsigned int lane = tid & 63u;
+    const long long row_base = static_cast<long long>(__builtin_amdgcn_workgroup_id_x()) * BM;
+    const long long col_base = static_cast<long long>(__builtin_amdgcn_workgroup_id_y()) * BN;
+    if (row_base >= rows || col_base >= cols) {
+        return;
+    }
+
+    const __amdgpu_buffer_rsrc_t dst_rsrc = hrx_q5_k_wmma_vk128_make_dst_rsrc(dst);
+    __shared__ _Float16 sh_a[BM * SHARED_STRIDE];
+    __shared__ _Float16 sh_b[BN * SHARED_STRIDE];
+
+    const long long blocks_per_row = k / 256;
+    const _Float16 zero = static_cast<_Float16>(0.0f);
+    hrx_q5_k_wmma_vk128_half8_vec acc[ACTIVE_GROUPS] = {};
+
+    for (long long k0 = 0; k0 < k; k0 += BK) {
+        for (int idx = static_cast<int>(tid); idx < BM * BK; idx += 256) {
+            const int r = idx / BK;
+            const int kk = idx - r * BK;
+            const long long row = row_base + static_cast<long long>(r);
+            sh_a[r * SHARED_STRIDE + kk] = row < rows ?
+                hrx_q5_k_wmma_vk128_load_a_value(src0, row, k0 + kk, blocks_per_row) : zero;
+        }
+        for (int idx = static_cast<int>(tid); idx < BN * BK; idx += 256) {
+            const int c = idx / BK;
+            const int kk = idx - c * BK;
+            const long long col = col_base + static_cast<long long>(c);
+            sh_b[c * SHARED_STRIDE + kk] = col < cols ? static_cast<_Float16>(src1[col * k + k0 + kk]) : zero;
+        }
+        __syncthreads();
+
+        if (wave == 0) {
+            hrx_q5_k_wmma_vk128_lds_half_ptr sh_a_lds =
+                (hrx_q5_k_wmma_vk128_lds_half_ptr) sh_a;
+            hrx_q5_k_wmma_vk128_lds_half_ptr sh_b_lds =
+                (hrx_q5_k_wmma_vk128_lds_half_ptr) sh_b;
+            hrx_q5_k_wmma_vk128_half16_vec a_frag[2][4];
+            hrx_q5_k_wmma_vk128_half16_vec b_frag[2][4];
+#pragma unroll
+            for (int k_tile = 0; k_tile < 2; ++k_tile) {
+#pragma unroll
+                for (int row_sub = 0; row_sub < 4; ++row_sub) {
+                    a_frag[k_tile][row_sub] =
+                        hrx_q5_k_wmma_vk128_load_a_frag_w64_b64asm_nowait(
+                            sh_a_lds, row_sub, k_tile, lane);
+                }
+#pragma unroll
+                for (int col_sub = 0; col_sub < 4; ++col_sub) {
+                    b_frag[k_tile][col_sub] =
+                        hrx_q5_k_wmma_vk128_load_b_frag_w64_b64asm_nowait(
+                            sh_b_lds, col_sub, k_tile, lane);
+                }
+                q5_repro_consume_frag(b_frag[k_tile][2]);
+                q5_repro_consume_frag(b_frag[k_tile][3]);
             }
             asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
 #pragma unroll
@@ -751,7 +859,8 @@ static bool output_is_active(size_t index, int rows, int active_groups) {
     const int row_local = row & 63;
     const int col_local = col & 63;
     const int group = (col_local >> 4) * 4 + (row_local >> 4);
-    if (active_groups == -102 || active_groups == -97 || active_groups == -98 || active_groups == -100) {
+    if (active_groups == -103 || active_groups == -102 || active_groups == -97 ||
+            active_groups == -98 || active_groups == -100) {
         return group < 8;
     }
     if (active_groups <= 0) {
@@ -762,6 +871,7 @@ static bool output_is_active(size_t index, int rows, int active_groups) {
 
 static const char * variant_name(int active_groups) {
     switch (active_groups) {
+        case -103: return "array8-fullb-noif";
         case -102: return "array8-b2";
         case -101: return "combined96-bpad";
         case -100: return "combined96-raw8-bpad";
@@ -790,6 +900,20 @@ static void launch_variant(
         long long rows,
         long long cols) {
     switch (active_groups) {
+        case -103:
+            hipLaunchKernelGGL(
+                q5_array8_fullb_noif_repro_kernel,
+                grid,
+                dim3(256, 1, 1),
+                0,
+                0,
+                src0,
+                src1,
+                dst,
+                k,
+                rows,
+                cols);
+            break;
         case -102:
             hipLaunchKernelGGL(
                 q5_array8_b2_repro_kernel,
@@ -1127,6 +1251,9 @@ int main() {
     status |= run_case(64, 33, 256, small, -102);
     status |= run_case(64, 33, 3584, small, -102);
     status |= run_case(64, 64, 3584, small, -102);
+    status |= run_case(64, 33, 256, small, -103);
+    status |= run_case(64, 33, 3584, small, -103);
+    status |= run_case(64, 64, 3584, small, -103);
     status |= run_case(64, 33, 3584, small, 1);
     status |= run_case(64, 33, 3584, small, 4);
     status |= run_case(64, 33, 3584, small, 8);
