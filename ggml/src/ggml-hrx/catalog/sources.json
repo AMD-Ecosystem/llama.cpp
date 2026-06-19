@@ -104,6 +104,9 @@
   "mul_mat_id_q4_k_q8_1_x4_mmq": {
     "path": "mul_mat_id_q4_k_q8_1_x4_mmq.hip.cpp"
   },
+  "mul_mat_id_q4_k_wmma16_direct": {
+    "path": "mul_mat_id_q4_k_wmma16_direct.hip.cpp"
+  },
   "mul_mat_id_q5_k_q8_1_x4_mmq": {
     "path": "mul_mat_id_q5_k_q8_1_x4_mmq.hip.cpp"
   },

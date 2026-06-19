@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q4_moe_id_wmma16_direct_f32_p33_p512_p513",
+      "date": "2026-06-19",
+      "route": "hrx_mul_mat_id_q4_k_wmma16x16_direct_f16acc_wg32_f32",
+      "env": "GGML_HRX_ENABLE_Q4_K_ID_WMMA16_DIRECT_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q4-id-wmma16-direct-focused-20260619-033650/",
+      "isa_artifact": "cache/hrxv1/gfx1151/q4-id-wmma16-direct-focused-20260619-033650/radv-vs-hrx-compare.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_id_q4_k_wmma16_direct.hsaco",
+      "reason": "The Q4_K MUL_MAT_ID direct-F32 WMMA diagnostic reused the compacted expert-route list from grouped MoE ID dispatch but skipped Q8_1 x4 RHS quantization, binding raw F32 activations to a 16x16 direct-WMMA kernel. It tested whether a simple semantic bridge toward Vulkan's matmul_id_subgroup_q4_k_f32_f16acc_aligned_m could close the remaining Qwen3/Qwen3-Coder Q4 MoE gap after the grouped Q8_1 x4 wide-K route became the accepted default. The route compiled through CMake/Ninja as a wave32 HSACO with SGPR=54, VGPR=72, LDS=0, no private segment, no spills, one visible v_wmma_f16_16x16x16_f16 site, and eight global_store_b32 stores. Focused CPU-reference gates passed for p512 and for the current p33/p513 exported odd-tail files, which contain n_tokens=1024 rows. Route traces confirmed direct_f32=1 and the expected grids: p512 gate/down [48,32,128]/[128,32,128], odd-tail gate/down [48,64,128]/[128,64,128]. Same-runner focused timing rejected the route versus the accepted hrx_mul_mat_id_q4_k_grouped_q8_1_x4_mmq64x16_wg64_f32 route: p512 gate 2007.26 -> 11632.45 us and down 2020.09 -> 16746.50 us; p513-export gate 4028.31 -> 27770.79 us and down 3883.70 -> 35241.63 us; p33-export gate 4098.52 -> 26938.39 us and down 3918.56 -> 36080.42 us. The RADV comparison also shows this is not the winning schedule: RADV uses SGPR=108, VGPR=144, LDS=12288, 16 WMMA sites, 52 ds_load_b64, 32 ds_load_u16_d16, 32 ds_store_b16, 32 buffer_store_b32, and 24 barriers, while the direct HIP route has no LDS staging, one WMMA site, and scalar global stores. Keep this provider opt-in only as a correctness/ABI bridge. Future Q4 MoE ID parity work should target the RADV medium-subgroup cooperative staging/writeback or improve the existing packed-Q8 path structurally, not replace it with raw-F32 direct WMMA."
+    },
+    {
       "id": "q8_0_dense_prompt_mmq64x128_splitqsum_wave64_fullcols_llama31_p512",
       "date": "2026-06-19",
       "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_wave64_wg256_f32",

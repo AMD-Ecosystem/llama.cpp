@@ -4305,6 +4305,50 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_id_q4_k_wmma16x16_direct_f16acc_wg32_f32",
+    "family": "mul_mat_id_q4_k_wmma16x16_direct_f16acc_wg32",
+    "op": "MUL_MAT_ID",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_id_q4_k_wmma16_direct",
+    "artifact_id": "mul_mat_id_q4_k_wmma16_direct_hsaco",
+    "export_name": "hrx_mul_mat_id_q4_k_wmma16x16_direct_f16acc_wg32_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 5,
+      "parameter_count": 6,
+      "constant_byte_length": 96
+    },
+    "dispatch": {
+      "workgroup_size": [
+        32,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_qwen3_moe_q4_id_direct_f32_wmma16_probe"
+    },
+    "shape_guards": {
+      "rows_multiple": 16,
+      "k_multiple": 256,
+      "n_ids": 8,
+      "cols_min": 32,
+      "requires_env": "GGML_HRX_ENABLE_Q4_K_ID_WMMA16_DIRECT_PROMPT"
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_id_q4_k_wmma16x16_direct_f16acc_wg32_f32",
+      "selector_gate": "opt-in on gfx1151 Q4_K MUL_MAT_ID prompt rows with GGML_HRX_ENABLE_Q4_K_ID_WMMA16_DIRECT_PROMPT=1"
+    },
+    "evidence_summary": {
+      "status": "experimental_gfx1151_probe",
+      "selection": "Direct-F32 Q4_K MUL_MAT_ID WMMA diagnostic. It reuses the compacted expert-route list but skips Q8_1 x4 RHS quantization, binding raw F32 activations to a 16x16 direct-WMMA kernel. The probe is anchored to the Vulkan matmul_id_subgroup_q4_k_f32_f16acc_aligned_m oracle and exists to prove or reject the MoE ID ABI/direct-RHS semantic bridge before attempting a lower-level RADV-like staged clone."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_id_q5_k_grouped_q8_1_x4_mmq64x16_wg64_f32",
     "family": "mul_mat_id_q5_k_grouped_q8_1_x4_mmq64x16_wg64",
     "op": "MUL_MAT_ID",
