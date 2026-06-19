@@ -58,19 +58,22 @@
         "cache/hrxv1/gfx1151/q6-mul-mat-id-q8x4-focused-20260617-183451/",
         "cache/hrxv1/gfx1151/q6-id-odd-tail-focused-20260617-183706/",
         "cache/hrxv1/gfx1151/q6-id-postguard-focused-20260617-184103/",
-        "cache/hrxv1/gfx1151/q6-id-default-swiglu-regate-20260618-181018/"
+        "cache/hrxv1/gfx1151/q6-id-default-swiglu-regate-20260618-181018/",
+        "cache/hrxv1/gfx1151/q6-id-clean-and-focused-after-shapefirst-20260618-182346/"
       ],
       "model_artifacts": [
         "cache/hrxv1/gfx1151/q6-id-model-ab-p512-fa1-r3-20260617-183602/",
         "cache/hrxv1/gfx1151/q6-id-model-ab-odd-tail-r3-20260617-183942/",
-        "cache/hrxv1/gfx1151/q6-id-default-swiglu-ab-20260618-181050/"
+        "cache/hrxv1/gfx1151/q6-id-default-swiglu-ab-20260618-181050/",
+        "cache/hrxv1/gfx1151/q6-id-p33-splittrace-20260618-181907/",
+        "cache/hrxv1/gfx1151/q6-id-p33-shapefirst-support-20260618-182309/"
       ],
       "compile_evidence": {
         "hsaco": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_id_q6_k_q8_1_x4_mmq.hsaco",
         "wavefront_size": 64
       },
       "promotion_blockers": [
-        "p33 model A/B regressed when Q6 ID was enabled or defaulted even though route and scheduler histograms showed no Q6 ID selection; default promotion requires isolating that hidden p33 mechanism first",
+        "p33 model A/B regressed when Q6 ID was enabled or defaulted even though route histograms showed no Q6 ID dispatches. Enhanced scheduler split traces isolated the mechanism: enabling Q6 ID makes p33 copy 864 extra Q6 expert weight inputs from HRX0 to CPU, increasing split inputs from 900 to 1764 even after narrow SWIGLU stays on CPU. Default promotion requires fixing that expert-weight placement/copy behavior first",
         "the default promotion probe did remove the main Qwen3 Q6_K p512/p513 MUL_MAT_ID CPU fallback and improved p512/p513, but p33 safety failed",
         "broader model basket coverage and clean same-run Vulkan ratios are still pending"
       ]

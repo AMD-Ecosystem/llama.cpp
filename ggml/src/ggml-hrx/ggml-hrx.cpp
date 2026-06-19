@@ -4690,8 +4690,11 @@ static bool ggml_backend_hrx_supports_swiglu_f32(
         const ggml_tensor * op) {
     const ggml_tensor * src0 = op->src[0];
     const ggml_tensor * src1 = op->src[1];
+    const bool narrow_moe_swiglu =
+        op->ne[1] == 8 && op->ne[2] < 128 && op->ne[3] == 1;
     return !ggml_backend_hrx_approximate_kernels_disabled() &&
            !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_SWIGLU") &&
+           (!narrow_moe_swiglu || ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_NARROW_MOE_SWIGLU")) &&
            device_context->swiglu_provider.kind == ggml_backend_hrx_provider_kind::hsaco &&
            op->op == GGML_OP_GLU &&
            ggml_get_glu_op(op) == GGML_GLU_OP_SWIGLU &&
@@ -7512,12 +7515,7 @@ static bool ggml_backend_hrx_supports_mul_mat_id_q6_k(
         return false;
     }
 
-    const ggml_backend_hrx_op_provider * provider =
-        ggml_backend_hrx_select_mul_mat_id_q6_k_provider(
-            device_context, src0->ne[0], src0->ne[1], src2->ne[0], src2->ne[1]);
-    return provider &&
-           provider->kind == ggml_backend_hrx_provider_kind::hsaco &&
-           src0->type == GGML_TYPE_Q6_K &&
+    if (!(src0->type == GGML_TYPE_Q6_K &&
            src1->type == GGML_TYPE_F32 &&
            src2->type == GGML_TYPE_I32 &&
            op->type == GGML_TYPE_F32 &&
@@ -7527,7 +7525,7 @@ static bool ggml_backend_hrx_supports_mul_mat_id_q6_k(
            src1->ne[1] > 0 &&
            src1->ne[2] > 0 &&
            src2->ne[0] > 0 &&
-           src2->ne[1] > 0 &&
+           src2->ne[1] >= 128 &&
            src0->ne[0] % 256 == 0 &&
            src0->ne[3] == 1 &&
            src1->ne[3] == 1 &&
@@ -7545,7 +7543,15 @@ static bool ggml_backend_hrx_supports_mul_mat_id_q6_k(
            src0->nb[0] == ggml_type_size(src0->type) &&
            src1->nb[0] == ggml_type_size(src1->type) &&
            src2->nb[0] == ggml_type_size(src2->type) &&
-           op->nb[0] == ggml_type_size(op->type);
+           op->nb[0] == ggml_type_size(op->type))) {
+        return false;
+    }
+
+    const ggml_backend_hrx_op_provider * provider =
+        ggml_backend_hrx_select_mul_mat_id_q6_k_provider(
+            device_context, src0->ne[0], src0->ne[1], src2->ne[0], src2->ne[1]);
+    return provider &&
+           provider->kind == ggml_backend_hrx_provider_kind::hsaco;
 }
 
 static bool ggml_backend_hrx_supports_mul_mat_id_q4_k_q8_1(

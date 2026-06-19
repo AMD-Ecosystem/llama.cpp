@@ -4376,7 +4376,7 @@
     },
     "evidence_summary": {
       "status": "accepted_gfx1151_opt_in_candidate",
-      "selection": "follows accepted Q5 MoE grouped Q8_1 x4 MMQ16 and dense Q6_K Q8_1 x4 wave64 priors; p512/p513 focused CPU-reference gates passed and Qwen3 Q6_K p512 live scheduler traces showed the route removes the main production-width MUL_MAT_ID CPU fallback. A default promotion probe improved p512/p513 but still regressed p33 despite no Q6 ID route selection in p33 traces, so the route remains opt-in pending the hidden p33 mechanism."
+      "selection": "follows accepted Q5 MoE grouped Q8_1 x4 MMQ16 and dense Q6_K Q8_1 x4 wave64 priors; p512/p513 focused CPU-reference gates passed and Qwen3 Q6_K p512 live scheduler traces showed the route removes the main production-width MUL_MAT_ID CPU fallback. A default promotion probe improved p512/p513 but still regressed p33 despite no Q6 ID route dispatches. Enhanced split traces isolated extra HRX0-to-CPU expert-weight split inputs under the Q6 ID enable path, so the route remains opt-in pending a scheduler/placement fix for narrow prompts."
     },
     "target_prefixes": [
       "gfx11"
