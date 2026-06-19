@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_lds_k2_stage96_accsink_control",
+      "date": "2026-06-19",
+      "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-stage96-accsink",
+      "env": "standalone CMake-built gfx1151 HIP bench diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/coopstore-lds-k2-stage96-accsink-probe-20260619-084215/",
+      "isa_artifact": "cache/hrxv1/gfx1151/coopstore-lds-k2-stage96-accsink-probe-20260619-084215/compare-wmma_lds_k2_stage96_accsink.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract",
+      "reason": "The stage96 accsink control tests whether the K2 live-WMMA context plus 96 scalarized halfword LDS stage store/load pairs is sufficient to reproduce the mixed160 corruption. It computes two LDS-loaded WMMA phases, consumes one accumulator group through an unchecked LDS sink, and checks only the synthetic halfword-stage output for groups 16..39. The mode passed the first repeated sweeps and then failed once in a 20-rep validation at first_bad=8640 group=33 slot=3 lane=0 actual=1024 expected=16643; mixed160-lo-tight failed consistently in the same binary at first_bad=4800 group=18 slot=3 lane=0. Static evidence for accsink was wave64, SGPR=14, VGPR=57, group_segment_fixed_size=29184, no private segment, no spills, 2 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 100 ds_store_b16, 96 ds_load_u16_d16, 96 buffer_store_b32, three barriers, and 104 s_waitcnt. This rejects the stronger hypothesis that K2 WMMA plus 96 halfword-stage pairs is a deterministic failure by itself; the minimized surface is only intermittently bad and fails later. The failing mixed160 surface additionally carries the full 32-WMMA live accumulator/direct raw-store topology with 160 buffer_store_b32 and VGPR=162, which makes the corruption deterministic and earlier. Treat accsink as a compact flaky reproducer axis and keep production work away from the combined high-live accumulator raw-store plus expanded halfword-stage surface."
+    },
+    {
       "id": "q8_0_lds_k2_direct192_raw_store_count_control",
       "date": "2026-06-19",
       "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-direct192-raw",
