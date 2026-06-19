@@ -870,12 +870,14 @@
         "cache/hrxv1/gfx1151/q8_0-mmq64x128-splitqsum-default-regate-20260618/"
       ],
       "model_artifacts": [
-        "cache/hrxv1/gfx1151/q8_0-mmq64x128-splitqsum-default-model-ab-20260618/"
+        "cache/hrxv1/gfx1151/q8_0-mmq64x128-splitqsum-default-model-ab-20260618/",
+        "cache/hrxv1/gfx1151/q8_0-current-b500dd0b8-r3-20260619-065413/",
+        "cache/hrxv1/gfx1151/basket-current-b500dd0b8-20260619-064909/"
       ],
       "oracle_artifacts": [
         "cache/hrxv1/gfx1151/vulkan-oracle-llama31-8b-q8_0-p512-fa1-20260617-200453/",
-        "cache/hrxv1/gfx1151/vulkan-oracle-llama31-8b-q8_0-p33-fa1-20260618-continued/",
-        "cache/hrxv1/gfx1151/vulkan-oracle-llama31-8b-q8_0-p513-fa1-20260618-continued/"
+        "cache/hrxv1/gfx1151/vulkan-oracle-llama31-8b-q8_0-p33-fa1-20260618-194300/",
+        "cache/hrxv1/gfx1151/vulkan-oracle-llama31-8b-q8_0-p513-fa1-20260618-193949/"
       ],
       "focused_timing_us": {
         "p512_default_bn112_to_bn128_splitqsum": {
@@ -895,7 +897,12 @@
       },
       "model_timing_tok_s": {
         "llama3_1_8b_q8_0_p512_fa1_r3_default_bn128": 456.488968,
-        "llama3_1_8b_q8_0_p512_fa1_r3_rollback_bn112": 440.297327
+        "llama3_1_8b_q8_0_p512_fa1_r3_rollback_bn112": 440.297327,
+        "current_b500dd0b8_llama3_1_8b_q8_0_p33_hrx_vulkan_ratio": "204.532 / 219.561 = 0.932x",
+        "current_b500dd0b8_llama3_1_8b_q8_0_p512_hrx_vulkan_ratio": "457.820 / 922.183 = 0.496x",
+        "current_b500dd0b8_llama3_1_8b_q8_0_p513_hrx_vulkan_ratio": "428.332 / 783.038 = 0.547x",
+        "current_b500dd0b8_full_basket_avg_geomean_hrx_over_vulkan": 0.606799,
+        "current_b500dd0b8_full_basket_steady_geomean_hrx_over_vulkan": 0.603999
       },
       "compile_evidence": {
         "hsaco": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_mmq64x128_splitqsum.hsaco",
