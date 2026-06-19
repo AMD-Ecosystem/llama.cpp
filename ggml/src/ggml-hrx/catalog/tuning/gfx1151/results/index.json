@@ -3,6 +3,12 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_bm128_direct192_contract_standalone",
+      "date": "2026-06-19",
+      "artifact": "cache/hrxv1/gfx1151/q8-bm128-direct192-contract-20260619-141120/",
+      "status": "rejected_correctness_requires_spilling_fragment_materialization"
+    },
+    {
       "id": "q8_0_contract192_abcopy_bhoist_standalone",
       "date": "2026-06-19",
       "artifact": "cache/hrxv1/gfx1151/q8-contract192-abcopy-bhoist-20260619-140145/",
