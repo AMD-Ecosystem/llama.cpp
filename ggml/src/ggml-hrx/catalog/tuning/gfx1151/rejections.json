@@ -135,6 +135,16 @@
       "reason": "The Q5_K VK64/padded44 direct-F32 WMMA probe mechanically targeted the p33 Vulkan medium oracle matmul_q5_k_f32_f16acc_aligned_m: BM64/BN64/BK32/WG256, wave64, and 11264 bytes LDS. It compiled through CMake/Ninja, passed p33 CPU-reference, and p512/p513 correctness gates confirmed it does not steal production-width rows. It is rejected for default promotion because same-runner focused p33 timing was mixed and mostly regressive versus the current rows2_cols8 route: Kcur 71.92 -> 347.35 us, Qcur 331.19 -> 458.33 us, ffn_out 2583.19 -> 3082.48 us, ffn_gate 2330.04 -> 1742.43 us. The emitted HSACO is still not the RADV medium schedule: SGPR=32, VGPR=75, LDS=11264, no spills, 8 WMMA sites, 2 ds_store_b16, 16 global stores, and 2 barriers versus RADV's SGPR=108, VGPR=144, LDS=11264, no spills, 16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 64 ds_store_b16, and 96 buffer stores. Matching tile/LDS shape without cooperative-matrix store/lane ownership is insufficient."
     },
     {
+      "id": "q5_dense_prompt_wmma16_vk64_groupk2_p33",
+      "date": "2026-06-19",
+      "route": "hrx_mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_groupk2_f16acc_wg256_f32 and hrx_mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_groupk2_wait_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q5_K_WMMA16_VK64_PADDED44_W64_GROUPK2_F16ACC_WG256_PROMPT=1 / GGML_HRX_ENABLE_Q5_K_WMMA16_VK64_PADDED44_W64_GROUPK2_WAIT_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q5-vk64-groupk2-focused-20260619-023220/",
+      "isa_artifact": "cache/hrxv1/gfx1151/q5-vk64-groupk2-isa-20260619-023058/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q5_k_wmma16_vk64_padded44_w64_groupk2_wg256.hsaco and mul_mat_vec_q5_k_wmma16_vk64_padded44_w64_groupk2_wait_wg256.hsaco",
+      "reason": "The Q5_K VK64 GROUPK2 probes ported the prior Q6 two-K grouped fragment-read diagnostic into the p33 Q5 medium route. They compiled through CMake/Ninja as wave64, SGPR=32, VGPR=123, LDS=11264, no private segment, and no spills. Static ISA moved one axis toward RADV by forcing 40 plain ds_load_b64, but the built HSACOs still missed the p33 RADV contract: 8 visible WMMA sites versus 16, 24 pre-WMMA ds_load_b64 versus 48, final pre-WMMA lgkmcnt(0) versus 40, no ds_load_u16_d16, no buffer_store_b32 writeback, only 2 ds_store_b16, and 16 global_store_b32. Focused p33 CPU-reference rejected both variants. GROUPK2 selected on all four rows and failed all four, including a NaN on ffn_out. GROUPK2_WAIT selected on all four rows and improved dependency behavior, passing Kcur and Qcur, but still failed ffn_out (ERR=0.000916021) and ffn_gate (ERR=0.004372403). Reject before timing/model tests; this confirms the Q6-style grouped fragment spelling is not the missing Q5 p33 RADV schedule and future direct-WMMA work needs a lower-level cooperative matrix load/store/lane-ownership fixture or a different source form that can reach 16 WMMA plus high-lgkmcnt issue shape."
+    },
+    {
       "id": "q5_dense_prompt_bquad_splitk_reduce_wg1024_p513",
       "date": "2026-06-18",
       "route": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bquad_splitk_part_wg256_f32 + hrx_split_k_reduce_f32",

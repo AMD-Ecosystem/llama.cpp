@@ -1,0 +1,7 @@
+#define HRX_Q5_K_WMMA_VK128_EXPORT hrx_mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_groupk2_wait_f16acc_wg256_f32
+#define HRX_Q5_K_WMMA_VK128_BM 64
+#define HRX_Q5_K_WMMA_VK128_BN 64
+#define HRX_Q5_K_WMMA_VK128_SHARED_STRIDE 44
+#define HRX_Q5_K_WMMA_VK128_W64 1
+#define HRX_Q5_K_WMMA_VK128_W64_VK64_GROUPK2_WAIT 1
+#include "mul_mat_vec_q5_k_wmma16_vk128_wg256.hip.cpp"
