@@ -712,6 +712,10 @@
     "op": "MUL_MAT"
   },
   {
+    "family": "mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_combined96_f16acc_wg256",
+    "op": "MUL_MAT"
+  },
+  {
     "family": "mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_f16acc_wg256",
     "op": "MUL_MAT"
   },

@@ -972,6 +972,15 @@
       "postedit_artifact": "cache/hrxv1/gfx1151/q5-vk64-fullstore-default-postedit-20260619-021200/",
       "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q5_k_wmma16_vk64_padded44_w64_fullstore_wg256.hsaco",
       "reason": "This probe preserved the accepted Q5_K VK64 padded44 wave64 narrow FFN-gate schedule and changed only the full-tile writeback policy. It built through CMake/Ninja with wave64, SGPR=32, VGPR=75, LDS=11264, private segment=0, and no spills. Focused CPU-reference passed for p33 and p512/p513 non-steal gates; p33 route traces selected the fullstore provider only for the k=3584 rows=18944 cols=33 FFN gate/up slice, while p512/p513 stayed on rows2 plus MMQL128 routes. Initial focused timing improved ffn_gate 1797.31 -> 1758.83 us and repeated model A/B improved Qwen2.5 Coder Q5_K_M p33 steady tok/s 169.717 -> 171.064. However, post-edit same-runner focused timing was mixed: one pass regressed ffn_gate 1827.65 -> 1864.51 us, while the rerun improved ffn_gate 1821.96 -> 1810.51 us with noisy neighboring rows. Reject for default promotion because the focused kernel signal is not stable enough for an exact-route default; keep opt-in as a diagnostic writeback-axis probe."
+    },
+    {
+      "id": "q5_dense_prompt_vk64_combined96_correctness",
+      "date": "2026-06-19",
+      "route": "hrx_mul_mat_vec_q5_k_wmma16x16_vk64_padded44_w64_combined96_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q5_K_WMMA16_VK64_PADDED44_W64_COMBINED96_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q5-p33-combined96-catalog-20260619-030619/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q5_k_wmma16_vk64_padded44_w64_combined96_wg256.hsaco",
+      "reason": "The Q5_K VK64 combined96 probe transplanted the standalone p33 medium fixture into the real direct-F32 Q5 wrapper as a p33-only opt-in catalog route. It built through CMake/Ninja and preserved the main RADV p33 total surface better than prior VK64 probes: wave64, LDS=11264, private segment=0, 16 v_wmma_f16_16x16x16_f16, 48 ds_load_b64, 64 ds_load_u16_d16, and 96 buffer_store_b32. However, the real ABI schedule did not preserve the fixture's issue window: static compare against RADV aligned_m showed SGPR=55 versus 108, VGPR=142 versus 144, 66 ds_store_b16 versus 64, 4 barriers versus 2, only 20 pre-WMMA ds_load_b64 versus 48, and final pre-WMMA lgkmcnt(0) versus 40. Focused p33 CPU-reference selected the combined96 route for all four Qwen2.5 Coder Q5_K_M rows and failed all four with NaNs. Reject before timing/model tests; the catalog port proves the opcode-count surface is reachable in the real ABI, but lane ownership and compiler scheduling still need a lower-level dependency/lane-mapping reproducer before another production promotion attempt."
     }
   ]
 }
