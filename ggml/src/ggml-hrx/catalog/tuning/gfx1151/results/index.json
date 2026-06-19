@@ -10,6 +10,13 @@
       "status": "oracle_store_motif_contract_extracted"
     },
     {
+      "id": "q8_0_coopstore_radv_motif192_fixture",
+      "date": "2026-06-19",
+      "artifact": "cache/hrxv1/gfx1151/coopstore-radv-motif192-20260619-150932/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract with embedded gfx1151 HSACO extracted to cache/hrxv1/gfx1151/coopstore-radv-motif192-20260619-150932/coopmat-store-contract-gfx1151.hsaco",
+      "status": "accepted_standalone_motif192_correctness_prior"
+    },
+    {
       "id": "q8_0_direct_wmma_vk128_packstage_asmwmma_fast_half_split_selected_p33_p512_p513",
       "date": "2026-06-19",
       "artifact": "cache/hrxv1/gfx1151/q8-asmwmma-fast-half-split-selected-focused-20260619-145643/",
