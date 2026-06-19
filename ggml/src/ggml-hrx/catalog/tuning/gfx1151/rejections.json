@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_lds_k2_stagefirst_mixed_store_contract",
+      "date": "2026-06-19",
+      "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-stagefirst-mixed192",
+      "env": "standalone CMake-built gfx1151 HIP bench diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/coopstore-lds-k2-stagefirst-mixed-probe-20260619-081501/",
+      "isa_artifact": "cache/hrxv1/gfx1151/coopstore-lds-k2-stagefirst-mixed-probe-20260619-081501/compare-stagefirst.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract",
+      "reason": "The Q8_0 LDS K2 stage-first mixed-store fixture tested whether the prior K2 mixed halfword-stage failure was only a source-ordering issue. It stores the synthetic halfword LDS groups before the two LDS-loaded WMMA phases and direct raw buffer stores, then loads/stores the synthetic groups after a barrier. The split direct-only K2 control passed in the same binary with bad=0, but both the stage-first mode and the original mixed mode failed identically at first_bad=4800 group=18 slot=3 lane=0 actual=2048 expected=12803. Static evidence again matched the RADV headline opcode counts: wave64, SGPR=14, VGPR=162, LDS=32768, no spills, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 128 ds_load_u16_d16, 128 ds_store_b16, 192 buffer_store_b32, 3 barriers, and 135 s_waitcnt. Reject this source-ordering axis. The remaining issue is not simply whether halfword LDS stage stores are issued before or after K2 WMMA; it is the combined HIP C++ lane/topology contract for live K2 WMMA plus the halfword-stage surface."
+    },
+    {
       "id": "q8_0_lds_k2_live_wmma_mixed_store_contract",
       "date": "2026-06-19",
       "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-radv-mixed192",
