@@ -10686,8 +10686,8 @@
       "legacy_export": "hrx_flash_attn_ext_f32_f16_prefill_direct_d128"
     },
     "evidence_summary": {
-      "status": "accepted_gfx1151_opt_in_candidate",
-      "selection": "GGML_HRX_ENABLE_F16_PREFILL_FA_DIRECT_D128=1; focused p33/p512/p513 CPU-reference gates passed. H32/HKV4 keeps the original accepted behavior; other D128 valid-GQA shapes require prompt_tokens >= 128 after p33 model smoke found a small H24 regression."
+      "status": "accepted_gfx1151_default",
+      "selection": "default on gfx1151 unless GGML_HRX_DISABLE_F16_PREFILL_FA_DIRECT_D128=1; opt-in elsewhere with GGML_HRX_ENABLE_F16_PREFILL_FA_DIRECT_D128=1. Focused p33/p512/p513 CPU-reference gates passed. H32/HKV4 keeps the original accepted behavior; other D128 valid-GQA shapes require prompt_tokens >= 128 after p33 model smoke found a small H24 regression."
     },
     "target_prefixes": [
       "gfx11"

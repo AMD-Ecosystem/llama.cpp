@@ -129,9 +129,9 @@
     {
       "id": "d128_flash_attn_prefill_direct_qwen3_q4xl_p33_p512_p513",
       "date": "2026-06-17",
-      "status": "accepted_opt_in_candidate",
+      "status": "accepted_gfx1151_default",
       "route": "hrx_flash_attn_ext_f32_f16_prefill_direct_d128",
-      "env": "GGML_HRX_ENABLE_F16_PREFILL_FA_DIRECT_D128=1",
+      "env": "default on gfx1151; rollback with GGML_HRX_DISABLE_F16_PREFILL_FA_DIRECT_D128=1; opt-in elsewhere with GGML_HRX_ENABLE_F16_PREFILL_FA_DIRECT_D128=1",
       "shape_guard": "FLASH_ATTN_EXT f32 Q, f16 K/V, f32 dst, no sinks, no bias/softcap, head_dim=128, valid integer GQA ratio; any prompt width for q_heads=32/kv_heads=4, otherwise prompt_tokens >= 128",
       "focused_artifacts": [
         "cache/hrxv1/gfx1151/focused-fa1-direct-d128-f32pv-p512-20260617-172350/",

@@ -7762,6 +7762,9 @@ static bool ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_direct(
 static bool ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_direct_d128(
         const ggml_backend_hrx_device_context * device_context,
         const ggml_tensor * op) {
+    if (ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_F16_PREFILL_FA_DIRECT_D128")) {
+        return false;
+    }
     const ggml_tensor * q = op->src[0];
     const ggml_tensor * k = op->src[1];
     if (!q || !k || k->ne[2] <= 0 || q->ne[2] <= 0 || (q->ne[2] % k->ne[2]) != 0) {
@@ -7771,7 +7774,10 @@ static bool ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_direct_d128
     if (!accepted_qwen3_shape && q->ne[1] < 128) {
         return false;
     }
-    return ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_F16_PREFILL_FA_DIRECT_D128") &&
+    const bool enabled =
+        ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_F16_PREFILL_FA_DIRECT_D128") ||
+        device_context->architecture == "gfx1151";
+    return enabled &&
         ggml_backend_hrx_supports_flash_attn_ext_f32_f16_prefill_common(
             op, device_context->flash_attn_ext_f16_prefill_direct_d128_provider,
             "GGML_HRX_DISABLE_F16_PREFILL_FA_DIRECT", true, true, 128, q->ne[2], k->ne[2]);
