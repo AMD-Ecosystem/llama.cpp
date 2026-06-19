@@ -553,7 +553,13 @@ void q8_single_group_repro_kernel(
     }
 }
 
-template <int compute_group, int store_group>
+template <
+    int compute_group,
+    int store_group,
+    bool copy_a = false,
+    bool copy_b = false,
+    bool stage_store = false,
+    bool selected_only_stage = false>
 __global__ __launch_bounds__(256, 1)
 void q8_single_group_remap_repro_kernel(
         const hrx_block_q8_0_wmma_vk128_lhs * src0,
@@ -627,9 +633,15 @@ void q8_single_group_remap_repro_kernel(
             asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
 #pragma unroll
             for (int k_tile = 0; k_tile < 2; ++k_tile) {
+                const hrx_q8_0_wmma_vk128_half16_vec a_use = copy_a ?
+                    q8_repro_copy_frag(a_frag[k_tile][row_sub]) :
+                    a_frag[k_tile][row_sub];
+                const hrx_q8_0_wmma_vk128_half16_vec b_use = copy_b ?
+                    q8_repro_copy_frag(b_frag[k_tile][col_sub]) :
+                    b_frag[k_tile][col_sub];
                 acc[0] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
-                    a_frag[k_tile][row_sub],
-                    b_frag[k_tile][col_sub],
+                    a_use,
+                    b_use,
                     acc[0],
                     HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
             }
@@ -638,9 +650,35 @@ void q8_single_group_remap_repro_kernel(
     }
 
     if (wave == 0) {
+        if constexpr (stage_store) {
+            __shared__ _Float16 sh_store[16 * 16];
+            const long long row0 = row_base + static_cast<long long>((store_group & 3) * 16);
+            const long long col0 = col_base + static_cast<long long>(((store_group >> 2) & 3) * 16);
+            if constexpr (selected_only_stage) {
+                q8_repro_selected_only_stage_store_slot(
+                    dst_rsrc,
+                    rows,
+                    row0,
+                    col0,
+                    acc[0],
+                    lane,
+                    (hrx_q8_0_wmma_vk128_lds_volatile_half_ptr) sh_store);
+            } else {
+                hrx_q8_0_wmma_vk128_store_acc_f16_row_major_w64_fast_half_buffer_split_selected(
+                    dst_rsrc,
+                    rows,
+                    row0,
+                    col0,
+                    acc[0],
+                    lane,
+                    0,
+                    (hrx_q8_0_wmma_vk128_lds_volatile_half_ptr) sh_store);
+            }
+        } else {
 #pragma unroll
-        for (int slot = 0; slot < 4; ++slot) {
-            q8_repro_raw_store_slot(dst_rsrc, rows, row_base, col_base, rows, cols, acc, 0, store_group, slot, lane);
+            for (int slot = 0; slot < 4; ++slot) {
+                q8_repro_raw_store_slot(dst_rsrc, rows, row_base, col_base, rows, cols, acc, 0, store_group, slot, lane);
+            }
         }
     }
 }
@@ -1059,7 +1097,18 @@ static bool remap_mode_groups(const std::string & mode, int * compute_group, int
         *store_group = 0;
         return true;
     }
+    if (mode == "remap-c12-s0-bcopy-stage-selected" ||
+            mode == "remap-c12-s0-abcopy-stage-selected") {
+        *compute_group = 12;
+        *store_group = 0;
+        return true;
+    }
     if (mode == "remap-c0-s12") {
+        *compute_group = 0;
+        *store_group = 12;
+        return true;
+    }
+    if (mode == "remap-c0-s12-stage-selected") {
         *compute_group = 0;
         *store_group = 12;
         return true;
@@ -1192,7 +1241,74 @@ struct group_stats {
     size_t inf = 0;
     size_t sentinel = 0;
     float max_abs = 0.0f;
+    bool have_first_bad = false;
+    int first_row = -1;
+    int first_col = -1;
+    int first_lane = -1;
+    int first_slot = -1;
+    float first_actual = 0.0f;
+    float first_expected = 0.0f;
+    float first_err = 0.0f;
+    int sample_count = 0;
+    int sample_row[16] = {};
+    int sample_col[16] = {};
+    int sample_lane[16] = {};
+    int sample_slot[16] = {};
+    float sample_actual[16] = {};
+    float sample_expected[16] = {};
+    float sample_err[16] = {};
 };
+
+static void note_first_bad(
+        group_stats & gs,
+        size_t index,
+        int rows,
+        float actual,
+        float expected,
+        float err) {
+    if (gs.have_first_bad) {
+        return;
+    }
+    const int row = static_cast<int>(index % static_cast<size_t>(rows));
+    const int col = static_cast<int>(index / static_cast<size_t>(rows));
+    const int row_lane = row & 3;
+    const int slot = (row >> 2) & 3;
+    const int col_lane = col & 15;
+    gs.have_first_bad = true;
+    gs.first_row = row;
+    gs.first_col = col;
+    gs.first_lane = row_lane * 16 + col_lane;
+    gs.first_slot = slot;
+    gs.first_actual = actual;
+    gs.first_expected = expected;
+    gs.first_err = err;
+}
+
+static void note_bad_sample(
+        group_stats & gs,
+        size_t index,
+        int rows,
+        float actual,
+        float expected,
+        float err) {
+    note_first_bad(gs, index, rows, actual, expected, err);
+    if (gs.sample_count >= 16) {
+        return;
+    }
+    const int row = static_cast<int>(index % static_cast<size_t>(rows));
+    const int col = static_cast<int>(index / static_cast<size_t>(rows));
+    const int row_lane = row & 3;
+    const int slot = (row >> 2) & 3;
+    const int col_lane = col & 15;
+    const int sample = gs.sample_count++;
+    gs.sample_row[sample] = row;
+    gs.sample_col[sample] = col;
+    gs.sample_lane[sample] = row_lane * 16 + col_lane;
+    gs.sample_slot[sample] = slot;
+    gs.sample_actual[sample] = actual;
+    gs.sample_expected[sample] = expected;
+    gs.sample_err[sample] = err;
+}
 
 static int run_bfrag_dump_case(int cols, int k) {
     constexpr int dump_count = 2 * 4 * 64 * 16;
@@ -1388,8 +1504,17 @@ static int run_case(const std::string & mode, int rows, int cols, int k) {
     } else if (mode == "remap-c12-s0") {
         hipLaunchKernelGGL((q8_single_group_remap_repro_kernel<12, 0>), grid, dim3(256, 1, 1), 0, 0,
             d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+    } else if (mode == "remap-c12-s0-bcopy-stage-selected") {
+        hipLaunchKernelGGL((q8_single_group_remap_repro_kernel<12, 0, false, true, true, true>), grid, dim3(256, 1, 1), 0, 0,
+            d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+    } else if (mode == "remap-c12-s0-abcopy-stage-selected") {
+        hipLaunchKernelGGL((q8_single_group_remap_repro_kernel<12, 0, true, true, true, true>), grid, dim3(256, 1, 1), 0, 0,
+            d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
     } else if (mode == "remap-c0-s12") {
         hipLaunchKernelGGL((q8_single_group_remap_repro_kernel<0, 12>), grid, dim3(256, 1, 1), 0, 0,
+            d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+    } else if (mode == "remap-c0-s12-stage-selected") {
+        hipLaunchKernelGGL((q8_single_group_remap_repro_kernel<0, 12, false, false, true, true>), grid, dim3(256, 1, 1), 0, 0,
             d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
     } else if (mode == "single-group8-bmirror0") {
         hipLaunchKernelGGL((q8_single_group_bmirror_repro_kernel<8, 0>), grid, dim3(256, 1, 1), 0, 0,
@@ -1460,12 +1585,14 @@ static int run_case(const std::string & mode, int rows, int cols, int k) {
         if (actual == -7777.0f) {
             ++sentinel;
             ++gs.sentinel;
+            note_bad_sample(gs, i, rows, actual, 0.0f, INFINITY);
         }
         if (std::isnan(actual)) {
             ++nan;
             ++bad;
             ++gs.nan;
             ++gs.bad;
+            note_bad_sample(gs, i, rows, actual, 0.0f, NAN);
             continue;
         }
         if (std::isinf(actual)) {
@@ -1473,6 +1600,7 @@ static int run_case(const std::string & mode, int rows, int cols, int k) {
             ++bad;
             ++gs.inf;
             ++gs.bad;
+            note_bad_sample(gs, i, rows, actual, 0.0f, INFINITY);
             continue;
         }
         const float expected = expected_value_for_output(i, rows, cols, mode, ref);
@@ -1482,6 +1610,7 @@ static int run_case(const std::string & mode, int rows, int cols, int k) {
         if (err > 0.25f) {
             ++bad;
             ++gs.bad;
+            note_bad_sample(gs, i, rows, actual, expected, err);
         }
     }
 
@@ -1496,6 +1625,24 @@ static int run_case(const std::string & mode, int rows, int cols, int k) {
         std::printf(
             "  group=%d active=%zu bad=%zu nan=%zu inf=%zu sentinel=%zu max_abs=%g\n",
             group, gs.active, gs.bad, gs.nan, gs.inf, gs.sentinel, gs.max_abs);
+        if (gs.have_first_bad) {
+            std::printf(
+                "    first_bad row=%d col=%d lane=%d slot=%d actual=%g expected=%g err=%g\n",
+                gs.first_row, gs.first_col, gs.first_lane, gs.first_slot,
+                gs.first_actual, gs.first_expected, gs.first_err);
+        }
+        for (int sample = 0; sample < gs.sample_count; ++sample) {
+            std::printf(
+                "    bad_sample[%d] row=%d col=%d lane=%d slot=%d actual=%g expected=%g err=%g\n",
+                sample,
+                gs.sample_row[sample],
+                gs.sample_col[sample],
+                gs.sample_lane[sample],
+                gs.sample_slot[sample],
+                gs.sample_actual[sample],
+                gs.sample_expected[sample],
+                gs.sample_err[sample]);
+        }
     }
     return (nan == 0 && inf == 0 && sentinel == 0) ? 0 : 1;
 }
@@ -1506,7 +1653,7 @@ int main(int argc, char ** argv) {
         if (std::strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
             mode = argv[++i];
         } else {
-            std::fprintf(stderr, "usage: %s [--mode array8-fullb|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|array8-fullb-2phase-bcopy|array8-fullb-2phase-bcopy-stage|array8-fullb-2phase-abcopy|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group0-bcopy-stage|single-group8|single-group8-consume|single-group8-opsel1|single-group8-bmirror0|single-group8-bcopy|single-group8-abcopy|single-group8-bcopy-stage|single-group8-abcopy-stage|single-group8-bcopy-stage-selected|single-group12|single-group12-consume|single-group12-opsel1|single-group12-bmirror0|single-group12-bcopy|single-group12-abcopy|single-group12-bcopy-stage|single-group12-abcopy-stage|single-group12-bcopy-stage-selected|single-group12-abcopy-stage-selected|single-group13|single-group13-consume|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c0-s12|bfrag-dump|all]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--mode array8-fullb|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|array8-fullb-2phase-bcopy|array8-fullb-2phase-bcopy-stage|array8-fullb-2phase-abcopy|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group0-bcopy-stage|single-group8|single-group8-consume|single-group8-opsel1|single-group8-bmirror0|single-group8-bcopy|single-group8-abcopy|single-group8-bcopy-stage|single-group8-abcopy-stage|single-group8-bcopy-stage-selected|single-group12|single-group12-consume|single-group12-opsel1|single-group12-bmirror0|single-group12-bcopy|single-group12-abcopy|single-group12-bcopy-stage|single-group12-abcopy-stage|single-group12-bcopy-stage-selected|single-group12-abcopy-stage-selected|single-group13|single-group13-consume|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c12-s0-bcopy-stage-selected|remap-c12-s0-abcopy-stage-selected|remap-c0-s12|remap-c0-s12-stage-selected|bfrag-dump|all]\n", argv[0]);
             return 2;
         }
     }
@@ -1571,7 +1718,11 @@ int main(int argc, char ** argv) {
             mode == "single-group12-abcopy-stage-selected" ||
             mode == "single-group13" || mode == "single-group13-consume" ||
             mode == "remap-c8-s0" || mode == "remap-c0-s8" ||
-            mode == "remap-c12-s0" || mode == "remap-c0-s12") {
+            mode == "remap-c12-s0" ||
+            mode == "remap-c12-s0-bcopy-stage-selected" ||
+            mode == "remap-c12-s0-abcopy-stage-selected" ||
+            mode == "remap-c0-s12" ||
+            mode == "remap-c0-s12-stage-selected") {
         status |= run_case(mode, rows, 64, k);
         status |= run_case(mode, rows, 33, k);
     }

@@ -3,6 +3,15 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_wmma_group12_remap_stage_selected_contract",
+      "date": "2026-06-19",
+      "route": "hrx-hip-bench-q8-wmma-repro --mode=remap-c0-s12/remap-c0-s12-stage-selected/remap-c12-s0/remap-c12-s0-bcopy-stage-selected/remap-c12-s0-abcopy-stage-selected",
+      "env": "standalone CMake/Ninja-built gfx1151 HIP bench diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/q8-wmma-remap-stage-20260619-112352/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro",
+      "reason": "The group12 remap stage probe splits the prior selected-only stage failure into compute-group and store-group axes. The raw remap-c0-s12 control passed p64 with bad=0 and max_abs=0.00242398; remap-c0-s12-stage-selected also passed p64 with bad=0 and max_abs=0.0660001, showing that the selected-only staged store into group12 coordinates is not independently enough to fail. The raw remap-c12-s0 control failed because the uncopied group12 B-fragment contract is invalid for this remap, but remap-c12-s0-abcopy-stage-selected passed p64 with bad=0 and max_abs=0.114, showing that group12 WMMA compute plus selected-only staged store can be correct when stored into group0 coordinates after explicit A+B fragment materialization. By contrast, the earlier single-group12-abcopy-stage-selected result with the same selected-only helper failed p64 with bad=16 and max_abs=0.348336, with deterministic bad samples only at col 50 odd rows and col 57 even rows. Reject the hypothesis that either group12 compute or group12 staged-store coordinates are independently broken. The remaining failure is the combined col_sub=3/group12 WMMA accumulator plus group12 selected staged writeback lane contract, likely a compiler/register-layout interaction rather than a simple output-coordinate formula. Do not promote another HIP C++ scalarized selected-stage route until a lower-level cooperative store/lane primitive or compiler reproducer explains this combined case."
+    },
+    {
       "id": "q8_0_wmma_group12_selected_only_stage_contract",
       "date": "2026-06-19",
       "route": "hrx-hip-bench-q8-wmma-repro --mode=single-group8-bcopy-stage-selected/single-group12-bcopy-stage-selected/single-group12-abcopy-stage-selected",
