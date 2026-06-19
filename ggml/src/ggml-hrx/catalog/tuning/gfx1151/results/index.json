@@ -129,6 +129,30 @@
       "status": "accepted_with_prompt_width_guard"
     },
     {
+      "id": "q6_moe_id_q8_1_x4_mmq16_threshold32_default_regate",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q6-id-threshold32-default-regate-20260618-201739/",
+      "status": "accepted_gfx1151_default_focused"
+    },
+    {
+      "id": "q6_moe_id_q8_1_x4_mmq16_threshold32_default_model",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/qwen3-q6-id-threshold32-default-20260618-201756/",
+      "status": "accepted_gfx1151_default_model"
+    },
+    {
+      "id": "q6_moe_id_q8_1_x4_mmq16_threshold32_rollback_model",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/qwen3-q6-id-threshold32-rollback-20260618-201820/",
+      "status": "rollback_comparison"
+    },
+    {
+      "id": "q6_moe_id_q8_1_x4_mmq16_threshold64_default_model",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/qwen3-q6-id-threshold64-default-20260618-202012/",
+      "status": "rejected_policy_p33_cliff"
+    },
+    {
       "id": "q8_0_prompt_mmq128x32_wave64_focused_p512",
       "date": "2026-06-17",
       "artifact": "cache/hrxv1/gfx1151/q8_0-wave64-focused-p512-20260617-185605/",

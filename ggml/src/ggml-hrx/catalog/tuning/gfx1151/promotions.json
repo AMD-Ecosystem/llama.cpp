@@ -49,33 +49,52 @@
     },
     {
       "id": "q6_moe_id_mmq16_qwen3_q6k_p512_p513",
-      "date": "2026-06-17",
-      "status": "accepted_opt_in_candidate",
+      "date": "2026-06-18",
+      "status": "accepted_gfx1151_default",
       "route": "hrx_mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x16_wg64_f32",
-      "env": "GGML_HRX_ENABLE_Q6_K_ID_Q8_1_X4_MMQ16_PROMPT=1",
-      "shape_guard": "q6_K MUL_MAT_ID, k % 256 == 0, rows % 64 == 0, n_ids == 8, n_tokens >= 128",
+      "env": "default on gfx1151; rollback with GGML_HRX_DISABLE_Q6_K_ID_Q8_1_X4_MMQ16_PROMPT=1 or GGML_HRX_DISABLE_Q8_1_MMVQ=1",
+      "shape_guard": "q6_K MUL_MAT_ID, k % 256 == 0, rows % 64 == 0, n_ids == 8, n_tokens >= 32",
       "focused_artifacts": [
         "cache/hrxv1/gfx1151/q6-mul-mat-id-q8x4-focused-20260617-183451/",
         "cache/hrxv1/gfx1151/q6-id-odd-tail-focused-20260617-183706/",
         "cache/hrxv1/gfx1151/q6-id-postguard-focused-20260617-184103/",
         "cache/hrxv1/gfx1151/q6-id-default-swiglu-regate-20260618-181018/",
-        "cache/hrxv1/gfx1151/q6-id-clean-and-focused-after-shapefirst-20260618-182346/"
+        "cache/hrxv1/gfx1151/q6-id-clean-and-focused-after-shapefirst-20260618-182346/",
+        "cache/hrxv1/gfx1151/q6-id-threshold32-default-regate-20260618-201739/"
       ],
       "model_artifacts": [
         "cache/hrxv1/gfx1151/q6-id-model-ab-p512-fa1-r3-20260617-183602/",
         "cache/hrxv1/gfx1151/q6-id-model-ab-odd-tail-r3-20260617-183942/",
         "cache/hrxv1/gfx1151/q6-id-default-swiglu-ab-20260618-181050/",
         "cache/hrxv1/gfx1151/q6-id-p33-splittrace-20260618-181907/",
-        "cache/hrxv1/gfx1151/q6-id-p33-shapefirst-support-20260618-182309/"
+        "cache/hrxv1/gfx1151/q6-id-p33-shapefirst-support-20260618-182309/",
+        "cache/hrxv1/gfx1151/qwen3-q6-id-threshold32-default-20260618-201756/",
+        "cache/hrxv1/gfx1151/qwen3-q6-id-threshold32-rollback-20260618-201820/",
+        "cache/hrxv1/gfx1151/basket-head-full-commitaligned-20260618-200300/"
       ],
+      "model_result": {
+        "qwen3_30b_q6k_p33_default_tok_s": 97.0174,
+        "qwen3_30b_q6k_p33_rollback_tok_s": 114.2875,
+        "qwen3_30b_q6k_p33_vulkan_tok_s": 170.2975,
+        "qwen3_30b_q6k_p512_default_tok_s": 588.0515,
+        "qwen3_30b_q6k_p512_rollback_tok_s": 238.2565,
+        "qwen3_30b_q6k_p512_vulkan_tok_s": 984.0585,
+        "qwen3_30b_q6k_p513_default_tok_s": 573.0805,
+        "qwen3_30b_q6k_p513_rollback_tok_s": 215.994,
+        "qwen3_30b_q6k_p513_vulkan_tok_s": 942.842,
+        "steady_geomean_default_over_rollback": 1.771462,
+        "steady_geomean_default_over_vulkan": 0.591477,
+        "steady_geomean_rollback_over_vulkan": 0.333892
+      },
       "compile_evidence": {
         "hsaco": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_id_q6_k_q8_1_x4_mmq.hsaco",
         "wavefront_size": 64
       },
       "promotion_blockers": [
-        "p33 model A/B regressed when Q6 ID was enabled or defaulted even though route histograms showed no Q6 ID dispatches. Enhanced scheduler split traces isolated the mechanism: enabling Q6 ID makes p33 copy 864 extra Q6 expert weight inputs from HRX0 to CPU, increasing split inputs from 900 to 1764 even after narrow SWIGLU stays on CPU. Default promotion requires fixing that expert-weight placement/copy behavior first",
-        "the default promotion probe did remove the main Qwen3 Q6_K p512/p513 MUL_MAT_ID CPU fallback and improved p512/p513, but p33 safety failed",
-        "broader model basket coverage and clean same-run Vulkan ratios are still pending"
+        "p33 is still 15.1% slower than rollback when the grouped Q6 ID provider is forced to handle the narrow prompt row, but this avoids the severe 15 tok/s placement cliff seen when the policy is active and the provider declines p33",
+        "threshold-64 was rejected because it preserved p512/p513 wins but reproduced the p33 cliff with no visible Q6 ID route selection",
+        "the route lifts Qwen3 30B Q6_K p512/p513 from about 0.23x Vulkan to about 0.60x Vulkan, but parity still requires a true narrow-prompt Q6 ID schedule or expert-weight placement fix and additional dense Q6/Vulkan schedule work",
+        "broader full-basket coverage after this default is still pending"
       ]
     },
     {

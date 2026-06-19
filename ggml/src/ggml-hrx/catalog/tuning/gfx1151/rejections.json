@@ -112,7 +112,16 @@
       "route": "hrx_mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x16_wg64_f32",
       "env": "GGML_HRX_ENABLE_Q6_K_ID_Q8_1_X4_MMQ16_PROMPT=1 with grouped_min_prompt_tokens=32 diagnostic",
       "artifact": "cache/hrxv1/gfx1151/q6-id-threshold32-experiment-20260618-182836/",
-      "reason": "Lowering the Q6_K MUL_MAT_ID grouped-route threshold from 128 to 32 eliminated the catastrophic p33 scheduler split cliff caused by HRX-resident expert weights being copied back to CPU, and focused p33/p512 Q6 ID rows passed. It is still rejected as a default policy because same-runner Qwen3 30B Q6_K p33 was slower than the current disabled/narrow policy (105.182 tok/s versus 112.943 tok/s) and far below same-machine Vulkan p33 (182.233 tok/s). The fix for p33 should be a true Vulkan-medium Q6 ID schedule or decoupled expert-weight placement, not forcing the production grouped route into the narrow regime."
+      "superseded_by": "q6_moe_id_mmq16_qwen3_q6k_p512_p513",
+      "reason": "This p33-only policy rejection remains valid locally: lowering the Q6_K MUL_MAT_ID grouped-route threshold from 128 to 32 made Qwen3 30B Q6_K p33 slower than the disabled/narrow policy. It is superseded for production default selection by the commit-aligned 2026-06-18 basket evidence, where threshold-32 avoided the severe p33 placement cliff and lifted p512/p513 enough to improve the p33/p512/p513 steady geomean versus same-commit Vulkan from 0.334x with rollback to 0.591x."
+    },
+    {
+      "id": "q6_moe_id_mmq16_threshold64_default_policy",
+      "date": "2026-06-18",
+      "route": "hrx_mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x16_wg64_f32",
+      "env": "default policy diagnostic with grouped_min_prompt_tokens=64",
+      "artifact": "cache/hrxv1/gfx1151/qwen3-q6-id-threshold64-default-20260618-202012/",
+      "reason": "The threshold-64 diagnostic kept the grouped Q6 ID provider on p512/p513 and preserved the large prompt win, but p33 fell to 15.351 steady tok/s even though the route trace showed no Q6 ID dispatches. Rollback on the same build reached 114.288 tok/s, and threshold-32 reached 97.017 tok/s with Q6 ID selected. Declining p33 while leaving the policy active therefore reintroduces the expert-weight placement/runtime cliff; do not use threshold-64 as the default policy until the placement split is fixed."
     },
     {
       "id": "q8_0_prompt_mmq128x32_wave64_p512",

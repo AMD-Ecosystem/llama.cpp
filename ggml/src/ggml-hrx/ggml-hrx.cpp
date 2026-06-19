@@ -7295,8 +7295,8 @@ static const ggml_backend_hrx_op_provider * ggml_backend_hrx_select_mul_mat_id_q
         int64_t rows,
         int64_t n_ids,
         int64_t n_tokens) {
-    static constexpr int64_t grouped_min_prompt_tokens = 128;
-    if (ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q6_K_ID_Q8_1_X4_MMQ16_PROMPT") &&
+    static constexpr int64_t grouped_min_prompt_tokens = 32;
+    if (!ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_Q6_K_ID_Q8_1_X4_MMQ16_PROMPT") &&
         !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_Q8_1_MMVQ") &&
         k % 256 == 0 && rows % 64 == 0 && n_ids == 8 && n_tokens >= grouped_min_prompt_tokens &&
         ggml_backend_hrx_provider_available(device_context->clear_u32_provider) &&
@@ -7538,7 +7538,7 @@ static bool ggml_backend_hrx_supports_mul_mat_id_q6_k(
            src1->ne[1] > 0 &&
            src1->ne[2] > 0 &&
            src2->ne[0] > 0 &&
-           src2->ne[1] >= 128 &&
+           src2->ne[1] >= 32 &&
            src0->ne[0] % 256 == 0 &&
            src0->ne[3] == 1 &&
            src1->ne[3] == 1 &&
