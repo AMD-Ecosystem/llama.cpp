@@ -11,6 +11,8 @@
 
 #define HRX_Q8_0_WMMA_VK128_EXPORT hrx_q8_0_wmma_repro_unused_route
 #define HRX_Q8_0_WMMA_VK128_BUFFER_STORE 1
+#define HRX_Q8_0_WMMA_VK128_STORE_STAGE_FAST_HALF 1
+#define HRX_Q8_0_WMMA_VK128_STORE_STAGE_FAST_HALF_SPLIT_SELECTED 1
 #include "../../kernels/mul_mat_vec_q8_0_wmma16_vk128_wg256.hip.cpp"
 
 #define HIP_CHECK(expr) do { \
@@ -255,7 +257,15 @@ void q8_array8_repro_kernel(
     }
 }
 
-template <int group_base, int col_start, int col_count, int active_groups, bool consume_unused_b, bool copy_a = false, bool copy_b = false>
+template <
+    int group_base,
+    int col_start,
+    int col_count,
+    int active_groups,
+    bool consume_unused_b,
+    bool copy_a = false,
+    bool copy_b = false,
+    bool stage_store = false>
 __global__ __launch_bounds__(256, 1)
 void q8_array_fullb_phase_repro_kernel(
         const hrx_block_q8_0_wmma_vk128_lhs * src0,
@@ -360,12 +370,31 @@ void q8_array_fullb_phase_repro_kernel(
     }
 
     if (wave == 0) {
+        if constexpr (stage_store) {
+            __shared__ _Float16 sh_store[16 * 16];
 #pragma unroll
-        for (int local = 0; local < active_groups; ++local) {
-            const int group = group_base + local;
+            for (int local = 0; local < active_groups; ++local) {
+                const int group = group_base + local;
+                const long long row0 = row_base + static_cast<long long>((group & 3) * 16);
+                const long long col0 = col_base + static_cast<long long>(((group >> 2) & 3) * 16);
+                hrx_q8_0_wmma_vk128_store_acc_f16_row_major_w64_fast_half_buffer_split_selected(
+                    dst_rsrc,
+                    rows,
+                    row0,
+                    col0,
+                    acc[local],
+                    lane,
+                    0,
+                    (hrx_q8_0_wmma_vk128_lds_volatile_half_ptr) sh_store);
+            }
+        } else {
 #pragma unroll
-            for (int slot = 0; slot < 4; ++slot) {
-                q8_repro_raw_store_slot(dst_rsrc, rows, row_base, col_base, rows, cols, acc, local, group, slot, lane);
+            for (int local = 0; local < active_groups; ++local) {
+                const int group = group_base + local;
+#pragma unroll
+                for (int slot = 0; slot < 4; ++slot) {
+                    q8_repro_raw_store_slot(dst_rsrc, rows, row_base, col_base, rows, cols, acc, local, group, slot, lane);
+                }
             }
         }
     }
@@ -1002,7 +1031,9 @@ static bool bmirror_mode_groups(const std::string & mode, int * compute_group, i
 }
 
 static bool two_phase_copy_mode(const std::string & mode) {
-    return mode == "array8-fullb-2phase-bcopy" || mode == "array8-fullb-2phase-abcopy";
+    return mode == "array8-fullb-2phase-bcopy" ||
+        mode == "array8-fullb-2phase-bcopy-stage" ||
+        mode == "array8-fullb-2phase-abcopy";
 }
 
 static bool copy_mode_group(const std::string & mode, int * group_id) {
@@ -1228,6 +1259,11 @@ static int run_case(const std::string & mode, int rows, int cols, int k) {
             d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
         hipLaunchKernelGGL((q8_array_fullb_phase_repro_kernel<8, 2, 2, 8, false, false, true>), grid, dim3(256, 1, 1), 0, 0,
             d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+    } else if (mode == "array8-fullb-2phase-bcopy-stage") {
+        hipLaunchKernelGGL((q8_array_fullb_phase_repro_kernel<0, 0, 2, 8, false, false, true, true>), grid, dim3(256, 1, 1), 0, 0,
+            d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+        hipLaunchKernelGGL((q8_array_fullb_phase_repro_kernel<8, 2, 2, 8, false, false, true, true>), grid, dim3(256, 1, 1), 0, 0,
+            d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
     } else if (mode == "array8-fullb-2phase-abcopy") {
         hipLaunchKernelGGL((q8_array_fullb_phase_repro_kernel<0, 0, 2, 8, false, true, true>), grid, dim3(256, 1, 1), 0, 0,
             d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
@@ -1387,7 +1423,7 @@ int main(int argc, char ** argv) {
         if (std::strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
             mode = argv[++i];
         } else {
-            std::fprintf(stderr, "usage: %s [--mode array8-fullb|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|array8-fullb-2phase-bcopy|array8-fullb-2phase-abcopy|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group8|single-group8-consume|single-group8-opsel1|single-group8-bmirror0|single-group8-bcopy|single-group8-abcopy|single-group12|single-group12-consume|single-group12-opsel1|single-group12-bmirror0|single-group12-bcopy|single-group12-abcopy|single-group13|single-group13-consume|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c0-s12|bfrag-dump|all]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--mode array8-fullb|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|array8-fullb-2phase-bcopy|array8-fullb-2phase-bcopy-stage|array8-fullb-2phase-abcopy|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group8|single-group8-consume|single-group8-opsel1|single-group8-bmirror0|single-group8-bcopy|single-group8-abcopy|single-group12|single-group12-consume|single-group12-opsel1|single-group12-bmirror0|single-group12-bcopy|single-group12-abcopy|single-group13|single-group13-consume|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c0-s12|bfrag-dump|all]\n", argv[0]);
             return 2;
         }
     }
@@ -1414,6 +1450,9 @@ int main(int argc, char ** argv) {
     if (mode == "array8-fullb-2phase-bcopy") {
         status |= run_case("array8-fullb-2phase-bcopy", rows, 64, k);
         status |= run_case("array8-fullb-2phase-bcopy", rows, 33, k);
+    }
+    if (mode == "array8-fullb-2phase-bcopy-stage") {
+        status |= run_case("array8-fullb-2phase-bcopy-stage", rows, 64, k);
     }
     if (mode == "array8-fullb-2phase-abcopy") {
         status |= run_case("array8-fullb-2phase-abcopy", rows, 64, k);
