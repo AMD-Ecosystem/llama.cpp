@@ -773,6 +773,18 @@
       "artifact": "cache/hrxv1/gfx1151/q8_0-depwait-k2-raw-compile-20260618-190254/",
       "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_nowait_namedfrag_depwait_k2_raw_packstage_bufferstore_wg256.hsaco",
       "status": "rejected_compile_contract"
+    },
+    {
+      "id": "basket_current_b500dd0b8_all_downloaded_p33_p512_p513",
+      "date": "2026-06-19",
+      "artifact": "cache/hrxv1/gfx1151/basket-current-b500dd0b8-20260619-064909/",
+      "status": "current_full_basket_kpi_steady_geomean_0_604x_vulkan"
+    },
+    {
+      "id": "q8_0_current_b500dd0b8_llama31_p33_p512_p513",
+      "date": "2026-06-19",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-current-b500dd0b8-r3-20260619-065413/",
+      "status": "current_worst_dense_prompt_family_p512_0_496x_p513_0_547x_vulkan"
     }
   ]
 }
