@@ -102,6 +102,10 @@
 #define HRX_Q8_0_WMMA_VK128_W64_MOTIF192 0
 #endif
 
+#ifndef HRX_Q8_0_WMMA_VK128_W64_MOTIF192_WAIT_LOAD
+#define HRX_Q8_0_WMMA_VK128_W64_MOTIF192_WAIT_LOAD 0
+#endif
+
 #ifndef HRX_Q8_0_WMMA_VK128_W64_PHASE96
 #define HRX_Q8_0_WMMA_VK128_W64_PHASE96 0
 #endif
@@ -1465,6 +1469,9 @@ static __device__ __forceinline__ void hrx_q8_0_wmma_vk128_motif192_stage_load_s
         hrx_q8_0_wmma_vk128_ds_load_u16_d16(
             hrx_q8_0_wmma_vk128_combined96_stage_const_ptr(
                 sh_store, hrx_q8_0_wmma_vk128_motif192_stage_index(wave, group, slot, lane))));
+#if HRX_Q8_0_WMMA_VK128_W64_MOTIF192_WAIT_LOAD
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+#endif
     if (row < rows && col < cols) {
         hrx_q8_0_wmma_vk128_buffer_store_f32(dst_rsrc, col * rows_stride + row, static_cast<float>(value));
     }
