@@ -3,6 +3,15 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q5_dense_prompt_mmq64x48_qcur_policy_p33",
+      "date": "2026-06-18",
+      "route": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmq64x48_wg256_f32",
+      "env": "not retained; temporary exact-Qcur default selector tested with rollback GGML_HRX_DISABLE_Q5_K_Q8_1_X4_MMQ64X48_QCUR_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q5-mmq64x48-qcur-default-20260618-234556/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q5_k_q8_1_x4_mmq64x48.hsaco",
+      "reason": "The Q5_K p33 Qcur-only selector split retested the rejected BN48 packed-Q8_1 route after BQUAD became the accepted narrow default. The temporary policy selected BN48 only for the exact Qcur geometry k=3584, rows=3584, 32 <= cols <= 48; Kcur stayed on rows2, ffn_out stayed on MMQL64 BK2 BQUAD, ffn_gate stayed on the accepted VK64 narrow route, and p512/p513 CPU-reference gates passed without stealing the large/tail routes. Focused p33 CPU-reference passed, but same-runner timing rejected the policy versus rollback to current BQUAD: Qcur regressed 259.21 -> 317.72 us, ffn_out was essentially unchanged at 1574.78 -> 1582.74 us, and the four-row sum regressed 3668.84 -> 3746.88 us. This closes the simple Qcur-only BN48 selector idea; future Q5 p33 work needs a different schedule contract than smaller BN ownership."
+    },
+    {
       "id": "q5_dense_prompt_mmql64_bk1_p33",
       "date": "2026-06-18",
       "route": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql64x64_bk1_wg256_f32",
