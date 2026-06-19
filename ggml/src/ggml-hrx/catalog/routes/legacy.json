@@ -4375,8 +4375,8 @@
       "legacy_export": "hrx_mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x16_wg64_f32"
     },
     "evidence_summary": {
-      "status": "candidate_gfx1151_opt_in",
-      "selection": "follows accepted Q5 MoE grouped Q8_1 x4 MMQ16 and dense Q6_K Q8_1 x4 wave64 priors; p512/p513 passed and improved, but p33 model A/B regressed, so the candidate is guarded to production-width prefill"
+      "status": "accepted_gfx1151_opt_in_candidate",
+      "selection": "follows accepted Q5 MoE grouped Q8_1 x4 MMQ16 and dense Q6_K Q8_1 x4 wave64 priors; p512/p513 focused CPU-reference gates passed and Qwen3 Q6_K p512 live scheduler traces showed the route removes the main production-width MUL_MAT_ID CPU fallback. A default promotion probe improved p512/p513 but still regressed p33 despite no Q6 ID route selection in p33 traces, so the route remains opt-in pending the hidden p33 mechanism."
     },
     "target_prefixes": [
       "gfx11"
