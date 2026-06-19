@@ -86,6 +86,10 @@
 #define HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT_K2_PREUSE 1
 #endif
 
+#ifndef HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT_K2_DIRECT
+#define HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT_K2_DIRECT 0
+#endif
+
 #ifndef HRX_Q8_0_WMMA_VK128_STORE_STAGE
 #define HRX_Q8_0_WMMA_VK128_STORE_STAGE 0
 #endif
@@ -294,6 +298,13 @@ static __device__ __forceinline__ hrx_q8_0_wmma_vk128_half16_vec hrx_q8_0_wmma_v
             a_dep, b_dep, acc[TILE], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0); \
     } while (0)
 #endif
+
+#define HRX_Q8_0_WMMA_VK128_WAIT_WMMA(TILE, A, B, W) \
+    do { \
+        asm volatile("s_waitcnt lgkmcnt(%0)\n" :: "n"(W) : "memory"); \
+        acc[TILE] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64( \
+            (A), (B), acc[TILE], HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0); \
+    } while (0)
 
 #if HRX_Q8_0_WMMA_VK128_BUFFER_STORE
 static constexpr int HRX_Q8_0_WMMA_VK128_RAW_BUFFER_FLAGS_GFX11 = 0x31004000;
@@ -1202,6 +1213,41 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
                 a10, a11, a12, a13, b10, b11, b12, b13);
 #endif
 
+#if HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT_K2_DIRECT
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(0, a00, b00, 51);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(1, a01, b00, 47);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(2, a02, b00, 43);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(3, a03, b00, 39);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(4, a00, b01, 40);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(5, a01, b01, 36);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(6, a02, b01, 32);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(7, a03, b01, 24);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(8, a00, b02, 20);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(9, a01, b02, 16);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(10, a02, b02, 12);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(11, a03, b02, 8);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(12, a00, b03, 4);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(13, a01, b03, 0);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(14, a02, b03, 0);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(15, a03, b03, 0);
+
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(0, a10, b10, 51);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(1, a11, b10, 47);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(2, a12, b10, 43);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(3, a13, b10, 39);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(4, a10, b11, 40);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(5, a11, b11, 36);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(6, a12, b11, 32);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(7, a13, b11, 24);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(8, a10, b12, 20);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(9, a11, b12, 16);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(10, a12, b12, 12);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(11, a13, b12, 8);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(12, a10, b13, 4);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(13, a11, b13, 0);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(14, a12, b13, 0);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(15, a13, b13, 0);
+#else
             HRX_Q8_0_WMMA_VK128_DEP_WMMA_INITIAL(0, a00, b00, 51, a01, a02, a03, b00, b01, b02, b03);
             HRX_Q8_0_WMMA_VK128_DEP_WMMA_AFTER(1, a01, b00, 47, a00, 0);
             HRX_Q8_0_WMMA_VK128_DEP_WMMA_AFTER(2, a02, b00, 43, a01, 1);
@@ -1235,6 +1281,7 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
             HRX_Q8_0_WMMA_VK128_DEP_WMMA_AFTER(13, a11, b13, 0, b13, 12);
             HRX_Q8_0_WMMA_VK128_DEP_WMMA_AFTER(14, a12, b13, 0, a11, 13);
             HRX_Q8_0_WMMA_VK128_DEP_WMMA_AFTER(15, a13, b13, 0, a12, 14);
+#endif
 #else
 #pragma unroll
             for (int k_tile = 0; k_tile < 2; ++k_tile) {
