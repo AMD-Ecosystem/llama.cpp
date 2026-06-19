@@ -82,6 +82,10 @@
 #define HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT_K2 0
 #endif
 
+#ifndef HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT_K2_PREUSE
+#define HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT_K2_PREUSE 1
+#endif
+
 #ifndef HRX_Q8_0_WMMA_VK128_STORE_STAGE
 #define HRX_Q8_0_WMMA_VK128_STORE_STAGE 0
 #endif
@@ -1192,9 +1196,11 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
             const hrx_q8_0_wmma_vk128_half16_vec b13 =
                 hrx_q8_0_wmma_vk128_load_b_frag_w64_b64asm_nowait(sh_b_lds, wave_col * 4 + 3, 1, lane);
 
+#if HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT_K2_PREUSE
             hrx_q8_0_wmma_vk128_preuse_fragments_k2(
                 a00, a01, a02, a03, b00, b01, b02, b03,
                 a10, a11, a12, a13, b10, b11, b12, b13);
+#endif
 
             HRX_Q8_0_WMMA_VK128_DEP_WMMA_INITIAL(0, a00, b00, 51, a01, a02, a03, b00, b01, b02, b03);
             HRX_Q8_0_WMMA_VK128_DEP_WMMA_AFTER(1, a01, b00, 47, a00, 0);
