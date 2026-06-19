@@ -207,6 +207,12 @@
       "status": "accepted_gfx1151_default_model_ab_commit_09c3424d7"
     },
     {
+      "id": "q5_dense_prompt_wmma16_vk64_narrow_ffn_model_p33_code_ff1f839c8",
+      "date": "2026-06-18",
+      "artifact": "cache/hrxv1/gfx1151/q5-vk64-narrow-model-ab-p33-code-ff1f839c8-20260618-210913/",
+      "status": "accepted_gfx1151_default_model_ab_commit_ff1f839c8"
+    },
+    {
       "id": "q8_0_prompt_mmq128x32_wave64_focused_p512",
       "date": "2026-06-17",
       "artifact": "cache/hrxv1/gfx1151/q8_0-wave64-focused-p512-20260617-185605/",

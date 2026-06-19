@@ -79,6 +79,7 @@
       "model_artifacts": [
         "cache/hrxv1/gfx1151/q5-vk64-narrow-model-ab-p33-20260618-210449/",
         "cache/hrxv1/gfx1151/q5-vk64-narrow-model-ab-p33-commitaligned-20260618-210735/",
+        "cache/hrxv1/gfx1151/q5-vk64-narrow-model-ab-p33-code-ff1f839c8-20260618-210913/",
         "cache/hrxv1/gfx1151/basket-after-q4-id-widek-default-commitaligned-20260618-205025/"
       ],
       "focused_result": {
@@ -88,12 +89,12 @@
         "p33_ffn_gate_speedup": 1.340075
       },
       "model_result": {
-        "qwen25coder_7b_q5km_p33_default_tok_s": 153.531719,
-        "qwen25coder_7b_q5km_p33_rollback_tok_s": 136.855964,
+        "qwen25coder_7b_q5km_p33_default_tok_s": 153.593625,
+        "qwen25coder_7b_q5km_p33_rollback_tok_s": 137.120217,
         "qwen25coder_7b_q5km_p33_vulkan_tok_s": 360.452868,
-        "default_over_rollback": 1.121849,
-        "default_over_vulkan": 0.425941,
-        "rollback_over_vulkan": 0.379678
+        "default_over_rollback": 1.120138,
+        "default_over_vulkan": 0.426113,
+        "rollback_over_vulkan": 0.380411
       },
       "compile_evidence": {
         "hsaco": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q5_k_wmma16_vk64_padded44_w64_wg256.hsaco",
