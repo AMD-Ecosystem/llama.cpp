@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_lds_k2_mixed128_padded32_control",
+      "date": "2026-06-19",
+      "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-mixed128-padded32",
+      "env": "standalone CMake-built gfx1151 HIP bench diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/coopstore-lds-k2-mixed128-padded32-probe-20260619-083017/",
+      "isa_artifact": "cache/hrxv1/gfx1151/coopstore-lds-k2-mixed128-padded32-probe-20260619-083017/compare-wmma_lds_k2_mixed128_padded32.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract",
+      "reason": "The padded mixed128 control separates total LDS footprint from halfword-stage count in the Q8_0 K2 mixed fixture. It performs the same operations as the passing mixed128 mode, but allocates the full 32-group halfword stage used by failing mixed192. It passed with bad=0 while mixed160-lo-tight failed in the same run. Static evidence for mixed128-padded32 was wave64, SGPR=14, VGPR=162, group_segment_fixed_size=32768, no spills, 32 WMMA, 64 ds_load_b64, 64 ds_store_b16, 64 ds_load_u16_d16, and 128 buffer_store_b32. This confirms total LDS allocation/footprint is not the failure trigger. The first failing axis remains expansion of the scalarized halfword stage from 64 to 96 store/load pairs in the K2 live-WMMA context, so production Q8_0 work should not pursue the full RADV 128-pair halfword surface through this HIP C++ spelling."
+    },
+    {
       "id": "q8_0_lds_k2_mixed160_tight_halfword_stage_contract",
       "date": "2026-06-19",
       "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-mixed160-lo-tight and --mode=wmma-lds-k2-mixed160-hi-tight",
