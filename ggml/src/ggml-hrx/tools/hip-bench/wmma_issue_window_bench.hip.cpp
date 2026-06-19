@@ -502,12 +502,33 @@ struct device_buffer {
 
 static void check_finite(const std::vector<float> & values) {
     size_t bad = 0;
-    for (float value : values) {
-        if (!(value == value)) {
-            ++bad;
+    size_t bad_even_slots = 0;
+    size_t bad_odd_slots = 0;
+    size_t first_bad = values.size();
+    for (size_t idx = 0; idx < values.size(); ++idx) {
+        if (values[idx] == values[idx]) {
+            continue;
+        }
+        if (first_bad == values.size()) {
+            first_bad = idx;
+        }
+        ++bad;
+        const size_t slot = idx & 7u;
+        if ((slot & 1u) == 0u) {
+            ++bad_even_slots;
+        } else {
+            ++bad_odd_slots;
         }
     }
-    std::printf("check: elements=%zu nan=%zu\n", values.size(), bad);
+    std::printf("check: elements=%zu nan=%zu nan_even=%zu nan_odd=%zu",
+        values.size(), bad, bad_even_slots, bad_odd_slots);
+    if (first_bad != values.size()) {
+        const size_t slot = first_bad & 7u;
+        const size_t lane = (first_bad / 128u) & 63u;
+        const size_t tile = (first_bad / 8u) & 15u;
+        std::printf(" first_nan_tile=%zu first_nan_lane=%zu first_nan_slot=%zu", tile, lane, slot);
+    }
+    std::printf("\n");
     if (bad != 0) {
         std::exit(1);
     }
