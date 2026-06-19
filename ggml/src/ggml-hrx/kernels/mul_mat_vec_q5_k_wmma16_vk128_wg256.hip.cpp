@@ -58,8 +58,20 @@
 #define HRX_Q5_K_WMMA_VK128_STORE_STAGE_BATCH_TILES 0
 #endif
 
+#ifndef HRX_Q5_K_WMMA_VK128_STORE_STAGE_FAST_HALF
+#define HRX_Q5_K_WMMA_VK128_STORE_STAGE_FAST_HALF 0
+#endif
+
+#ifndef HRX_Q5_K_WMMA_VK128_STORE_STAGE_FAST_HALF_SELECTED
+#define HRX_Q5_K_WMMA_VK128_STORE_STAGE_FAST_HALF_SELECTED 0
+#endif
+
 #ifndef HRX_Q5_K_WMMA_VK128_BUFFER_STORE
 #define HRX_Q5_K_WMMA_VK128_BUFFER_STORE 0
+#endif
+
+#ifndef HRX_Q5_K_WMMA_VK128_PACK_STAGE_B32
+#define HRX_Q5_K_WMMA_VK128_PACK_STAGE_B32 0
 #endif
 
 struct hrx_block_q5_K_wmma_vk128_lhs {
@@ -74,6 +86,10 @@ typedef _Float16 hrx_q5_k_wmma_vk128_half16_vec __attribute__((ext_vector_type(1
 typedef _Float16 hrx_q5_k_wmma_vk128_half8_vec __attribute__((ext_vector_type(8)));
 typedef _Float16 hrx_q5_k_wmma_vk128_half4_vec __attribute__((ext_vector_type(4)));
 typedef const __attribute__((address_space(3))) _Float16 * hrx_q5_k_wmma_vk128_lds_half_ptr;
+typedef volatile __attribute__((address_space(3))) _Float16 * hrx_q5_k_wmma_vk128_lds_volatile_half_ptr;
+typedef __attribute__((address_space(3))) uint16_t * hrx_q5_k_wmma_vk128_lds_u16_ptr;
+typedef const __attribute__((address_space(3))) uint16_t * hrx_q5_k_wmma_vk128_lds_const_u16_ptr;
+typedef __attribute__((address_space(3))) uint32_t * hrx_q5_k_wmma_vk128_lds_u32_ptr;
 
 #if HRX_Q5_K_WMMA_VK128_BUFFER_STORE
 static constexpr int HRX_Q5_K_WMMA_VK128_RAW_BUFFER_FLAGS_GFX11 = 0x31004000;
@@ -117,6 +133,66 @@ static __device__ __forceinline__ _Float16 hrx_q5_k_wmma_vk128_unpack_f16x2(uint
     pack.u = bits;
     return pack.h[idx];
 }
+
+static __device__ __forceinline__ uint16_t hrx_q5_k_wmma_vk128_f16_to_u16(_Float16 value) {
+    union {
+        _Float16 h;
+        uint16_t u;
+    } pack;
+    pack.h = value;
+    return pack.u;
+}
+
+static __device__ __forceinline__ _Float16 hrx_q5_k_wmma_vk128_u16_to_f16(uint32_t value) {
+    union {
+        uint16_t u;
+        _Float16 h;
+    } pack;
+    pack.u = static_cast<uint16_t>(value);
+    return pack.h;
+}
+
+static __device__ __forceinline__ uint32_t hrx_q5_k_wmma_vk128_f16_pair_to_u32(_Float16 lo, _Float16 hi) {
+    union {
+        _Float16 h[2];
+        uint32_t u;
+    } pack;
+    pack.h[0] = lo;
+    pack.h[1] = hi;
+    return pack.u;
+}
+
+#if HRX_Q5_K_WMMA_VK128_PACK_STAGE_B32
+static __device__ __forceinline__ void hrx_q5_k_wmma_vk128_ds_store_u32(
+        hrx_q5_k_wmma_vk128_lds_u32_ptr ptr,
+        uint32_t value) {
+    asm volatile("ds_write_b32 %0, %1 offset:0\n"
+                 :
+                 : "v"(ptr), "v"(value)
+                 : "memory");
+}
+#endif
+
+#if HRX_Q5_K_WMMA_VK128_STORE_STAGE_FAST_HALF
+static __device__ __forceinline__ void hrx_q5_k_wmma_vk128_ds_store_u16(
+        hrx_q5_k_wmma_vk128_lds_u16_ptr ptr,
+        uint16_t value) {
+    asm volatile("ds_write_b16 %0, %1 offset:0\n"
+                 :
+                 : "v"(ptr), "v"(static_cast<uint32_t>(value))
+                 : "memory");
+}
+
+static __device__ __forceinline__ uint32_t hrx_q5_k_wmma_vk128_ds_load_u16_d16(
+        hrx_q5_k_wmma_vk128_lds_const_u16_ptr ptr) {
+    uint32_t value = 0;
+    asm volatile("ds_read_u16_d16 %0, %1 offset:0\n"
+                 : "=v"(value)
+                 : "v"(ptr)
+                 : "memory");
+    return value;
+}
+#endif
 
 static __device__ __forceinline__ hrx_q5_k_wmma_vk128_half16_vec hrx_q5_k_wmma_vk128_duplicate_input(
         _Float16 x0, _Float16 x1, _Float16 x2, _Float16 x3,
@@ -510,6 +586,61 @@ static __device__ __forceinline__ void hrx_q5_k_wmma_vk128_store_acc_f16_row_maj
 }
 #endif
 
+#if HRX_Q5_K_WMMA_VK128_STORE_STAGE_FAST_HALF && HRX_Q5_K_WMMA_VK128_BUFFER_STORE
+static __device__ __forceinline__ void hrx_q5_k_wmma_vk128_store_acc_f16_row_major_w64_fast_half_buffer_selected(
+        __amdgpu_buffer_rsrc_t dst_rsrc,
+        long long rows_stride,
+        long long row0,
+        long long col0,
+        hrx_q5_k_wmma_vk128_half8_vec acc,
+        unsigned int lane,
+        unsigned int wave,
+        hrx_q5_k_wmma_vk128_lds_volatile_half_ptr sh_store) {
+    constexpr int TILE_STRIDE = 16 * 16;
+    constexpr int SELECTED_OPSEL = HRX_Q5_K_WMMA_VK128_W64_OPSEL;
+    constexpr int OTHER_OPSEL = SELECTED_OPSEL == 0 ? 1 : 0;
+    const int row_lane = static_cast<int>(lane >> 4);
+    const int col_lane = static_cast<int>(lane & 15u);
+    const int tile_base = static_cast<int>(wave) * TILE_STRIDE;
+    const int col_major_base = tile_base + col_lane * 16 + row_lane;
+    hrx_q5_k_wmma_vk128_lds_u16_ptr sh_u16 =
+        (hrx_q5_k_wmma_vk128_lds_u16_ptr) sh_store;
+    const long long col = col0 + static_cast<long long>(col_lane);
+#pragma unroll
+    for (int reg = 0; reg < 4; ++reg) {
+        const int selected_offset =
+            col_major_base + ((reg * 4 + SELECTED_OPSEL * 2) & 15);
+        const int other_offset =
+            col_major_base + ((reg * 4 + OTHER_OPSEL * 2) & 15);
+        hrx_q5_k_wmma_vk128_ds_store_u16(
+            sh_u16 + selected_offset,
+            hrx_q5_k_wmma_vk128_f16_to_u16(acc[reg * 2 + SELECTED_OPSEL]));
+        hrx_q5_k_wmma_vk128_ds_store_u16(
+            sh_u16 + other_offset,
+            hrx_q5_k_wmma_vk128_f16_to_u16(acc[reg * 2 + OTHER_OPSEL]));
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+
+#pragma unroll
+    for (int reg = 0; reg < 4; ++reg) {
+        const int selected_offset =
+            col_major_base + ((reg * 4 + SELECTED_OPSEL * 2) & 15);
+        const int other_offset =
+            col_major_base + ((reg * 4 + OTHER_OPSEL * 2) & 15);
+        const _Float16 selected = hrx_q5_k_wmma_vk128_u16_to_f16(
+            hrx_q5_k_wmma_vk128_ds_load_u16_d16(sh_u16 + selected_offset));
+        const uint32_t other_bits = hrx_q5_k_wmma_vk128_ds_load_u16_d16(sh_u16 + other_offset);
+        (void) other_bits;
+        asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+        const long long row = row0 + static_cast<long long>(row_lane + reg * 4);
+        hrx_q5_k_wmma_vk128_buffer_store_f32(
+            dst_rsrc,
+            col * rows_stride + row,
+            static_cast<float>(selected));
+    }
+}
+#endif
+
 static __device__ __forceinline__ void hrx_q5_k_wmma_vk128_store_acc_f16_row_major_w64_stage(
         float * dst,
         long long rows_stride,
@@ -673,6 +804,8 @@ void HRX_Q5_K_WMMA_VK128_EXPORT(
 #else
     __shared__ _Float16 sh_store[WAVE_COUNT * 16 * 16];
 #endif
+#elif HRX_Q5_K_WMMA_VK128_STORE_STAGE_FAST_HALF
+    __shared__ _Float16 sh_store[WAVE_COUNT * 16 * 16];
 #endif
 
     const long long blocks_per_row = k / 256;
@@ -684,6 +817,36 @@ void HRX_Q5_K_WMMA_VK128_EXPORT(
 #endif
 
     for (long long k0 = 0; k0 < k; k0 += BK) {
+#if HRX_Q5_K_WMMA_VK128_PACK_STAGE_B32
+        hrx_q5_k_wmma_vk128_lds_u32_ptr sh_a_u32 = (hrx_q5_k_wmma_vk128_lds_u32_ptr) sh_a;
+        hrx_q5_k_wmma_vk128_lds_u32_ptr sh_b_u32 = (hrx_q5_k_wmma_vk128_lds_u32_ptr) sh_b;
+        constexpr int PACKS_PER_K = BK / 2;
+        constexpr int SHARED_STRIDE_PACKS = SHARED_STRIDE / 2;
+        for (int idx = static_cast<int>(tid); idx < BM * PACKS_PER_K; idx += 256) {
+            const int r = idx / PACKS_PER_K;
+            const int kk_pair = idx - r * PACKS_PER_K;
+            const int kk = kk_pair * 2;
+            const long long row = row_base + static_cast<long long>(r);
+            const _Float16 a0 = row < rows ?
+                hrx_q5_k_wmma_vk128_load_a_value(src0, row, k0 + kk + 0, blocks_per_row) : zero;
+            const _Float16 a1 = row < rows ?
+                hrx_q5_k_wmma_vk128_load_a_value(src0, row, k0 + kk + 1, blocks_per_row) : zero;
+            hrx_q5_k_wmma_vk128_ds_store_u32(
+                sh_a_u32 + r * SHARED_STRIDE_PACKS + kk_pair,
+                hrx_q5_k_wmma_vk128_f16_pair_to_u32(a0, a1));
+        }
+        for (int idx = static_cast<int>(tid); idx < BN * PACKS_PER_K; idx += 256) {
+            const int c = idx / PACKS_PER_K;
+            const int kk_pair = idx - c * PACKS_PER_K;
+            const int kk = kk_pair * 2;
+            const long long col = col_base + static_cast<long long>(c);
+            const _Float16 b0 = col < cols ? static_cast<_Float16>(src1[col * k + k0 + kk + 0]) : zero;
+            const _Float16 b1 = col < cols ? static_cast<_Float16>(src1[col * k + k0 + kk + 1]) : zero;
+            hrx_q5_k_wmma_vk128_ds_store_u32(
+                sh_b_u32 + c * SHARED_STRIDE_PACKS + kk_pair,
+                hrx_q5_k_wmma_vk128_f16_pair_to_u32(b0, b1));
+        }
+#else
         for (int idx = static_cast<int>(tid); idx < BM * BK; idx += 256) {
             const int r = idx / BK;
             const int kk = idx - r * BK;
@@ -697,6 +860,7 @@ void HRX_Q5_K_WMMA_VK128_EXPORT(
             const long long col = col_base + static_cast<long long>(c);
             sh_b[c * SHARED_STRIDE + kk] = col < cols ? static_cast<_Float16>(src1[col * k + k0 + kk]) : zero;
         }
+#endif
         __syncthreads();
 
 #if HRX_Q5_K_WMMA_VK128_W64_B64GROUP
@@ -863,6 +1027,17 @@ void HRX_Q5_K_WMMA_VK128_EXPORT(
         const long long tile_col0 = col_base + static_cast<long long>(col_tile * 16);
         if (tile_row0 + 16 <= rows && tile_col0 + 16 <= cols) {
 #if HRX_Q5_K_WMMA_VK128_BUFFER_STORE
+#if HRX_Q5_K_WMMA_VK128_STORE_STAGE_FAST_HALF && HRX_Q5_K_WMMA_VK128_STORE_STAGE_FAST_HALF_SELECTED
+            hrx_q5_k_wmma_vk128_store_acc_f16_row_major_w64_fast_half_buffer_selected(
+                dst_rsrc,
+                rows,
+                tile_row0,
+                tile_col0,
+                acc[tile_iter],
+                lane,
+                wave,
+                (hrx_q5_k_wmma_vk128_lds_volatile_half_ptr) sh_store);
+#else
             hrx_q5_k_wmma_vk128_store_acc_f16_row_major_w64_buffer_full(
                 dst_rsrc,
                 rows,
@@ -870,6 +1045,7 @@ void HRX_Q5_K_WMMA_VK128_EXPORT(
                 tile_col0,
                 acc[tile_iter],
                 lane);
+#endif
 #else
             hrx_q5_k_wmma_vk128_store_acc_f16_row_major_w64_full(
                 dst,
