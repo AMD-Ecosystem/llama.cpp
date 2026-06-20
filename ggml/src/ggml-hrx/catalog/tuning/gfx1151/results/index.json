@@ -3,6 +3,20 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_k_wmma_vk64_ring96_k2_kloop_typedstage_correct_but_slow",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-k2-kloop-typedstage-focused-218a34349-20260620-031732/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_typedstage_wg256.hsaco",
+      "status": "rejected_correct_no_spills_but_slower_than_default",
+      "findings": [
+        "the route-facing typed-stage transfer passes focused p33 CPU-reference for Vcur-0 and result_output odd-tail rows with route traces selecting the new provider for cols=33",
+        "the CMake/Ninja-built gfx1151 HSACO is no-spill wave64 with LDS=19456, SGPR=42, VGPR=154, private_segment=0, 16 visible WMMA, 96 ds_load-class instructions, 64 buffer_store_b32, 92 s_waitcnt, and 14 s_waitcnt_depctr",
+        "focused p33 timing is 1.818x slower than the accepted default: 13202.312 us versus 7260.192 us",
+        "the result_output cols33 row is the decisive regression at 11845.056 us versus 5959.364 us",
+        "the standalone typed-stage fixture does not transfer into the real Q6 ABI as a production schedule; next Q6 medium work should target a different lane/writeback contract that preserves the 96-store RADV oracle shape without this LDS load/wait surface"
+      ]
+    },
+    {
       "id": "q6_k_wmma_vk64_medium_kloop_asm_typedstage_mixed96_fixture_accepted_standalone_prior",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/coopstore-k2-kloop-asm-typedstage-mixed96-3a081b0ce-20260620-030410/",
