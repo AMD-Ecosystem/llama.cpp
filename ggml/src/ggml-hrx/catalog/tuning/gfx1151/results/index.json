@@ -65,6 +65,23 @@
       ]
     },
     {
+      "id": "q8_0_hot_region_compare_radv_vs_scalar_and_directwmma",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-hot-region-compare-20260620-continue/",
+      "tool": "tools/vulkan-oracle/extract_hot_regions.py",
+      "oracle_artifact": "cache/hrxv1/gfx1151/vulkan-oracle-llama31-8b-q8_0-p512-fa1-20260617-200453/",
+      "status": "schedule_evidence_no_route_promotion",
+      "findings": [
+        "added a reusable hot-region extractor for AMDGCN text to compare math-centered windows across RADV and HIP without relying on RADV basic-block labels or HIP symbol metadata",
+        "ran it on the Q8_0 p512 RADV large oracle, current accepted BK2+wave64 scalar-dot route, rejected BK2+wave64 buffer-store route, and packstage full-tile direct-WMMA control",
+        "RADV large has one compact hot region with 32 v_wmma_f16_16x16x16_f16 ops, 65 LDS loads in the selected window, 16 stores, 22 waitcnt-class ops, and one barrier; shader-wide totals are 32 WMMA, 204 loads, 324 stores across all compiled branches, 171 waits, and two barriers",
+        "current accepted BK2+wave64 has eight scalar v_dot4_i32_iu8 regions totaling 512 dot ops, 158 loads, 64 stores, 186 waits, and two barriers; representative regions carry 57-71 dot ops each with repeated lgkmcnt waits",
+        "the rejected buffer-store wrapper reduces whole-symbol waits from 186 to 154 but preserves the same eight scalar-dot hot-region structure and therefore did not move the kernel into the RADV schedule family, matching its focused p512 timing regression",
+        "packstage full-tile is the closest direct-WMMA control by primitive count, with 32 WMMA in two 16-WMMA regions and far fewer whole-symbol loads/stores than RADV, but its hot windows have many more local waits and prior focused timing rejected it",
+        "next Q8 p512 candidate should not be another store-only change on the scalar-dot BK2 route. The next evidence-backed axis is a lower-wait direct-WMMA lane/writeback topology that preserves the RADV 32-WMMA/64-active-store full-tile branch, or a consciously separate packed-Q8 dataflow with its own Vulkan/HIP prior ledger."
+      ]
+    },
+    {
       "id": "q8_0_packstage_asmwmma_fast_half_fullpair_compile_contract",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-packstage-asmwmma-fast-half-fullpair-compile-20260620-062855/",
