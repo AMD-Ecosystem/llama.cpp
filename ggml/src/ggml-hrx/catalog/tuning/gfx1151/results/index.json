@@ -3,6 +3,35 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q5_k_large_accepted_bhalf_static_contract_gap",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q5-large-accepted-static-contract-20260620-110321/",
+      "tool": "tools/vulkan-oracle/compare_amdgcn_isa.py, analyze_amdgcn_issue_window.py, extract_store_clusters.py, summarize_isa_compare_matrix.py, and check_isa_contract.py",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q5_k_q8_1_x4_mmql128_bhalf.hsaco",
+      "status": "schedule_evidence_no_route_promotion",
+      "candidate_gate": {
+        "production_target": "Qwen2.5 Coder 7B Q5_K_M p512 dense prompt rows where current HRX selects hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bhalf_wg256_f32 and remains behind Vulkan",
+        "baseline_command": "static comparison of the accepted CMake/Ninja-built Q5_K packed-Q8_1 BHALF HSACO against the Qwen2.5 Coder 7B Q5_K_M p512 Vulkan oracle",
+        "variant_command": "none; evidence-only schedule contract audit",
+        "same_runner_comparison_method": "not applicable; no runtime selector or production route changed",
+        "route_trace_path": "not applicable; accepted provider selection was already established by prior current-basket route traces",
+        "scheduler_trace_path": "compare-q5-large-radv-vs-hrx-bhalf.md, q5-large-issue-window.md, q5-large-compare-matrix.md, and q5-large-radv-contract-check.json in the artifact",
+        "focused_cpu_reference": "not run; this is static schedule triage for the already accepted route",
+        "compile_report_path": "compare-q5-large-radv-vs-hrx-bhalf.md",
+        "target_listing_path": "hip/q5-bhalf-symbol.amdgcn.txt",
+        "prior_art_schedule_source": "Vulkan oracle matmul_q5_k_f32_f16acc_aligned_l hash 0x0ee599afb33ff07b from cache/hrxv1/gfx1151/vulkan-oracle-qwen25coder-7b-q5km-p512-fa1-20260617-200349/",
+        "promotion_rule": "do not promote from this evidence. The next Q5 p512 candidate must materially reproduce the RADV WMMA/LDS/writeback contract or prove a better same-runner route; scalar-dot MMQL B-window reshuffles are no longer a credible parity path."
+      },
+      "findings": [
+        "the accepted Q5_K p512 BHALF route is resource-clean but structurally unlike the RADV winner: HRX reports wave64, SGPR=49, VGPR=140, LDS=9728, private=0, and no spills, while RADV uses SGPR=108, VGPR=192, LDS=22528, and no spills",
+        "the math primitive differs completely: RADV emits 32 v_wmma_f16_16x16x16_f16 ops, while the accepted HRX route emits 512 v_dot4_i32_iu8 ops and no WMMA",
+        "the writeback path also differs completely: RADV emits 192 buffer_store_b32 ops plus 128 ds_store_b16 and 128 ds_load_u16_d16 store-stage operations, while HRX emits 64 global_store_b32 ops and no buffer_store_b32, ds_store_b16, or ds_load_u16_d16",
+        "first-hot issue-window evidence shows RADV enters WMMA after 32 LDS loads with final pre-hot lgkmcnt(24), whereas HRX enters the dot loop after only 12 LDS loads with lgkmcnt(1)",
+        "check_isa_contract.py intentionally fails exact RADV contract checks for WMMA count, buffer stores, LDS b64 loads, d16 LDS load/store writeback, LDS bytes, and WMMA issue-window fields; zero-spill checks pass",
+        "decision: record as evidence-only. The next Q5 large-route work should target a lower-level WMMA plus RADV-like halfword LDS writeback/store-stage clone, or another dataflow with comparable static evidence, not another packed scalar-dot MMQL prefetch or selector-only pivot"
+      ]
+    },
+    {
       "id": "q8_0_prompt_mmq64x128_splitqsum_bk2_wave64_bfull32_compile_contract",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8_0-packed-bfull32-compile-20260620-105336/",
