@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_wmma_vk64_radv96_accdirect_fixture_correctness",
+      "date": "2026-06-20",
+      "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-vk64-radv96-accdirect",
+      "env": "bench-only, no production selector",
+      "artifact": "cache/hrxv1/gfx1151/coopstore-vk64-radv96-accdirect-20260619-223343/",
+      "control_artifact": "cache/hrxv1/gfx1151/coopstore-vk64-radv96-accdirect-20260619-223343/control.stdout.txt",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract",
+      "reason": "The accumulator-direct Q6 VK64/RADV96 fixture closes a hole in the earlier passing coopstore diagnostic. The original `wmma-lds-vk64-radv96` mode computed the compact ring WMMA accumulators but wrote synthetic direct-output values, so it proved the broad opcode/store surface without checking the accumulator lane contract. The new `wmma-lds-vk64-radv96-accdirect` sibling keeps the same CMake/Ninja-built fixture shape and writes computed ring WMMA accumulator groups 0..7 through the direct raw-store path while preserving the staged synthetic groups 8..23. The original control still passes with `bad=0`; the accumulator-direct mode fails immediately and deterministically with `bad=256`, first failure `group=5 slot=0 lane=0`, e.g. actual finite/invalid values such as `-28848` where the expected ring WMMA value is `128`. Reject the RING96 accumulator/lane contract as an unproven production prior. This explains the finite ERR failures in both Q6 RING96 catalog transfers and means the next Q6 p33 probe must first repair or replace the ring WMMA lane ownership in a fixture before another real Q6 catalog route is justified."
+    },
+    {
       "id": "q6_k_wmma_vk64_padded44_ring96_fast_half_bufferstore_correctness",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_fast_half_bufferstore_f16acc_wg256_f32",
