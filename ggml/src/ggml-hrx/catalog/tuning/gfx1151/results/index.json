@@ -6,16 +6,18 @@
       "id": "q8_0_direct_wmma_vk128_streamrow_fast_half_split_selected_correctness",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-streamrow-fast-half-split-selected-focused-20260620-044445/",
+      "performance_artifact": "cache/hrxv1/gfx1151/q8-streamrow-selected-perf-f3547f4df-20260620-045640/",
       "static_artifact": "cache/hrxv1/gfx1151/q8-streamrow-split-selected-static-cc1514341-20260620-044110/",
       "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_streamrow_packstage_fast_half_split_selected_bufferstore_wg256.hsaco",
-      "status": "rejected_focused_correctness",
+      "status": "rejected_focused_correctness_and_perf",
       "findings": [
         "added an opt-in CMake/Ninja-built Q8_0 direct-WMMA route that intersects the stream-row issue order from the RADV-static full-pair probe with the split-selected fast-half writeback path from the selected-half correctness probes",
         "static HSACO evidence stayed viable and low-pressure: wave64, SGPR=28, VGPR=189, LDS=22528, no private segment, no spills, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 128 ds_load_u16_d16, 128 ds_store_b16, 128 buffer_store_b32, 207 waitcnt-class instructions, and 2 barriers",
         "the static surface preserves stream-row VGPR pressure and LDS staging but still writes only the selected-half 128 buffer stores, not the Vulkan large-route 192-store cooperative writeback contract",
         "focused p512 CPU-reference rejected the route: Vcur and Qcur stayed on packed Q8_1 and passed, while ffn_out, ffn_gate, and result_output selected this provider and failed with ERR=3.057523242, ERR=2.702882808, and result_output NaN at index 6188064",
         "focused p513 tail coverage rejected the same selected large rows with ERR=3.044825120, ERR=2.772994017, and result_output NaN at index 6188064; p33 was correctly guarded out and passed on existing narrow routes",
-        "do not run model A/B or promote; this closes the stream-row plus split-selected intersection, and the next Q8 large-route work should target a correctness-proven 192-store/full-output lane ownership primitive or lower-level cooperative writeback rather than another selected-half stream-row variant"
+        "same-runner backend-op perf also rejected the related selected-half streamrow candidate: p512 total default/candidate=0.653x and p513 total default/candidate=0.690x, with large-row regressions of 1.17x-1.59x candidate/default while p33 stayed guarded out",
+        "do not run model A/B or promote; this closes the stream-row plus selected-half intersection, and the next Q8 large-route work should target a correctness-proven 192-store/full-output lane ownership primitive or lower-level cooperative writeback rather than another selected-half stream-row variant"
       ]
     },
     {
