@@ -1300,6 +1300,10 @@
     "op": "MUL_MAT"
   },
   {
+    "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_baseoff_raw16_fulltile_bufferstore_f16acc_wg256",
+    "op": "MUL_MAT"
+  },
+  {
     "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_nomem_motif192_k2_directwait_bufferstore_f16acc_wg256",
     "op": "MUL_MAT"
   },

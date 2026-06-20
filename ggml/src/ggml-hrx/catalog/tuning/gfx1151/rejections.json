@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_motif192_k2_baseoff_raw16_fulltile_catalog_perf",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_baseoff_raw16_fulltile_bufferstore_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_ASMWMMA_MOTIF192_K2_BASEOFF_RAW16_FULLTILE_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q8-baseoff-raw16-fulltile-focused-20260620-130715/",
+      "performance_artifact": "cache/hrxv1/gfx1151/q8-baseoff-raw16-fulltile-perf-20260620-130754/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-baseoff-raw16-fulltile-compile-20260620-130642/static/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_baseoff_raw16_fulltile_bufferstore_wg256.hsaco",
+      "reason": "This opt-in route crossed the rejected base-offset K2 operand schedule with the rejected raw16 full-tile writeback route. It preserved the base-offset route's RADV-like one 32-WMMA region, 64 immediate LDS fragment reads, and final lgkmcnt(51), but replaced the motif192 staged 192-store writeback with compact raw16 direct full-tile stores. Static HSACO evidence is resource-clean: wave64, SGPR=20, VGPR=212, LDS=20480, private_segment=0, no spills, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 64 buffer_store_b32, and no ds_store_b16/ds_load_u16_d16 staged writeback. Focused p33, p512, and p513 CPU-reference gates passed. Route traces prove p33 and p513 stayed on existing narrow/tail routes while p512 selected this provider only for ffn_out, ffn_gate, and result_output. Reject for promotion because same-runner p512 timing regressed every selected wide row versus the packed-Q8_1 default: ffn_out 6727.474 -> 7944.738 us, ffn_gate 5937.151 -> 6496.369 us, result_output 52545.548 -> 62754.857 us, and total 67561.515 -> 79565.982 us. The useful conclusion is that reproducing RADV's one-window operand schedule and removing motif192 staged writeback still does not recover parity in this HIP C++ spelling; the remaining gap points at lane ownership/writeback semantics or lower-level codegen rather than another local source-level store compaction."
+    },
+    {
       "id": "q8_0_motif192_k2_baseoff_catalog_perf",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_baseoff_bufferstore_f16acc_wg256_f32",
