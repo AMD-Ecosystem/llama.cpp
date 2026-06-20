@@ -125,6 +125,32 @@ static __device__ __forceinline__ void q8_repro_bm128_direct_raw_store_slot(
     }
 }
 
+static __device__ __forceinline__ void q8_repro_bm128_direct_raw_store_acc_slot(
+        __amdgpu_buffer_rsrc_t dst_rsrc,
+        long long rows_stride,
+        long long row_base,
+        long long col_base,
+        long long rows,
+        long long cols,
+        hrx_q8_0_wmma_vk128_half8_vec acc,
+        unsigned int wave,
+        int group,
+        int slot,
+        unsigned int lane) {
+    const int wave_row = static_cast<int>(wave & 1u);
+    const int wave_col = static_cast<int>(wave >> 1);
+    const int row_lane = static_cast<int>(lane >> 4);
+    const int col_lane = static_cast<int>(lane & 15u);
+    const long long row = row_base + static_cast<long long>(wave_row * 64 + (group & 3) * 16 + row_lane + slot * 4);
+    const long long col = col_base + static_cast<long long>(wave_col * 64 + ((group >> 2) & 3) * 16 + col_lane);
+    if (row < rows && col < cols) {
+        hrx_q8_0_wmma_vk128_buffer_store_f32(
+            dst_rsrc,
+            col * rows_stride + row,
+            static_cast<float>(acc[slot * 2 + HRX_Q8_0_WMMA_VK128_W64_OPSEL]));
+    }
+}
+
 static constexpr int Q8_REPRO_CONTRACT_LANES = 64;
 static constexpr int Q8_REPRO_CONTRACT_SLOTS = 4;
 static constexpr int Q8_REPRO_CONTRACT_GROUPS = 48;
@@ -3319,6 +3345,164 @@ void q8_bm128_direct192_output_repro_kernel(
         }
     }
 }
+
+#define Q8_REPRO_SCALAR_WAIT_WMMA(ACC, A, B, W) do { \
+    asm volatile("s_waitcnt lgkmcnt(" #W ")\n" ::: "memory"); \
+    (ACC) = q8_repro_wmma_f16_w64_asm((A), (B), (ACC)); \
+} while (0)
+
+#define Q8_REPRO_SCALAR_STORE_GROUP(ACC, GROUP_ID) do { \
+    q8_repro_bm128_direct_raw_store_acc_slot( \
+        dst_rsrc, rows, row_base, col_base, rows, cols, (ACC), wave, (GROUP_ID), 0, lane); \
+    q8_repro_bm128_direct_raw_store_acc_slot( \
+        dst_rsrc, rows, row_base, col_base, rows, cols, (ACC), wave, (GROUP_ID), 1, lane); \
+    q8_repro_bm128_direct_raw_store_acc_slot( \
+        dst_rsrc, rows, row_base, col_base, rows, cols, (ACC), wave, (GROUP_ID), 2, lane); \
+    q8_repro_bm128_direct_raw_store_acc_slot( \
+        dst_rsrc, rows, row_base, col_base, rows, cols, (ACC), wave, (GROUP_ID), 3, lane); \
+} while (0)
+
+__global__ __launch_bounds__(256, 1)
+void q8_bm128_direct192_scalaracc_output_repro_kernel(
+        const hrx_block_q8_0_wmma_vk128_lhs * src0,
+        const float * src1,
+        float * dst,
+        long long k,
+        long long rows,
+        long long cols) {
+    constexpr int BM = 128;
+    constexpr int BN = 128;
+    constexpr int BK = 32;
+    constexpr int SHARED_STRIDE = HRX_Q8_0_WMMA_VK128_SHARED_STRIDE;
+
+    const unsigned int tid = __builtin_amdgcn_workitem_id_x();
+    const unsigned int wave = tid >> 6u;
+    const unsigned int lane = tid & 63u;
+    const int wave_row = static_cast<int>(wave & 1u);
+    const int wave_col = static_cast<int>(wave >> 1);
+    const long long row_base = static_cast<long long>(__builtin_amdgcn_workgroup_id_x()) * BM;
+    const long long col_base = static_cast<long long>(__builtin_amdgcn_workgroup_id_y()) * BN;
+    if (row_base >= rows || col_base >= cols) {
+        return;
+    }
+
+    const __amdgpu_buffer_rsrc_t dst_rsrc = hrx_q8_0_wmma_vk128_make_dst_rsrc(dst);
+    __shared__ _Float16 sh_a[BM * SHARED_STRIDE];
+    __shared__ _Float16 sh_b[BN * SHARED_STRIDE];
+
+    const long long blocks_per_row = k / 32;
+    const _Float16 zero = static_cast<_Float16>(0.0f);
+    hrx_q8_0_wmma_vk128_half8_vec acc0 = {};
+    hrx_q8_0_wmma_vk128_half8_vec acc1 = {};
+    hrx_q8_0_wmma_vk128_half8_vec acc2 = {};
+    hrx_q8_0_wmma_vk128_half8_vec acc3 = {};
+    hrx_q8_0_wmma_vk128_half8_vec acc4 = {};
+    hrx_q8_0_wmma_vk128_half8_vec acc5 = {};
+    hrx_q8_0_wmma_vk128_half8_vec acc6 = {};
+    hrx_q8_0_wmma_vk128_half8_vec acc7 = {};
+    hrx_q8_0_wmma_vk128_half8_vec acc8 = {};
+    hrx_q8_0_wmma_vk128_half8_vec acc9 = {};
+    hrx_q8_0_wmma_vk128_half8_vec acc10 = {};
+    hrx_q8_0_wmma_vk128_half8_vec acc11 = {};
+    hrx_q8_0_wmma_vk128_half8_vec acc12 = {};
+    hrx_q8_0_wmma_vk128_half8_vec acc13 = {};
+    hrx_q8_0_wmma_vk128_half8_vec acc14 = {};
+    hrx_q8_0_wmma_vk128_half8_vec acc15 = {};
+
+    for (long long k0 = 0; k0 < k; k0 += BK) {
+        for (int idx = static_cast<int>(tid); idx < BM * BK; idx += 256) {
+            const int r = idx / BK;
+            const int kk = idx - r * BK;
+            const long long row = row_base + static_cast<long long>(r);
+            sh_a[r * SHARED_STRIDE + kk] = row < rows ?
+                hrx_q8_0_wmma_vk128_load_a_value(src0, row, k0 + kk, blocks_per_row) : zero;
+        }
+        for (int idx = static_cast<int>(tid); idx < BN * BK; idx += 256) {
+            const int c = idx / BK;
+            const int kk = idx - c * BK;
+            const long long col = col_base + static_cast<long long>(c);
+            sh_b[c * SHARED_STRIDE + kk] = col < cols ? static_cast<_Float16>(src1[col * k + k0 + kk]) : zero;
+        }
+        __syncthreads();
+
+        hrx_q8_0_wmma_vk128_lds_half_ptr sh_a_lds =
+            (hrx_q8_0_wmma_vk128_lds_half_ptr) sh_a;
+        hrx_q8_0_wmma_vk128_lds_half_ptr sh_b_lds =
+            (hrx_q8_0_wmma_vk128_lds_half_ptr) sh_b;
+        hrx_q8_0_wmma_vk128_half16_vec a_frag[2][4];
+        hrx_q8_0_wmma_vk128_half16_vec b_frag[2][4];
+#pragma unroll
+        for (int k_tile = 0; k_tile < 2; ++k_tile) {
+#pragma unroll
+            for (int row_sub = 0; row_sub < 4; ++row_sub) {
+                a_frag[k_tile][row_sub] =
+                    hrx_q8_0_wmma_vk128_load_a_frag_w64_b64asm_nowait(
+                        sh_a_lds, wave_row * 4 + row_sub, k_tile, lane);
+            }
+#pragma unroll
+            for (int col_sub = 0; col_sub < 4; ++col_sub) {
+                b_frag[k_tile][col_sub] =
+                    hrx_q8_0_wmma_vk128_load_b_frag_w64_b64asm_nowait(
+                        sh_b_lds, wave_col * 4 + col_sub, k_tile, lane);
+            }
+        }
+
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc0, a_frag[0][0], b_frag[0][0], 51);
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc1, a_frag[0][1], b_frag[0][0], 47);
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc2, a_frag[0][2], b_frag[0][0], 43);
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc3, a_frag[0][3], b_frag[0][0], 39);
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc4, a_frag[0][0], b_frag[0][1], 40);
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc5, a_frag[0][1], b_frag[0][1], 36);
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc6, a_frag[0][2], b_frag[0][1], 32);
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc7, a_frag[0][3], b_frag[0][1], 24);
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc8, a_frag[0][0], b_frag[0][2], 20);
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc9, a_frag[0][1], b_frag[0][2], 16);
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc10, a_frag[0][2], b_frag[0][2], 12);
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc11, a_frag[0][3], b_frag[0][2], 8);
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc12, a_frag[0][0], b_frag[0][3], 4);
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc13, a_frag[0][1], b_frag[0][3], 0);
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc14, a_frag[0][2], b_frag[0][3], 0);
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc15, a_frag[0][3], b_frag[0][3], 0);
+
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc0, a_frag[1][0], b_frag[1][0], 51);
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc1, a_frag[1][1], b_frag[1][0], 47);
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc2, a_frag[1][2], b_frag[1][0], 43);
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc3, a_frag[1][3], b_frag[1][0], 39);
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc4, a_frag[1][0], b_frag[1][1], 40);
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc5, a_frag[1][1], b_frag[1][1], 36);
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc6, a_frag[1][2], b_frag[1][1], 32);
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc7, a_frag[1][3], b_frag[1][1], 24);
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc8, a_frag[1][0], b_frag[1][2], 20);
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc9, a_frag[1][1], b_frag[1][2], 16);
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc10, a_frag[1][2], b_frag[1][2], 12);
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc11, a_frag[1][3], b_frag[1][2], 8);
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc12, a_frag[1][0], b_frag[1][3], 4);
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc13, a_frag[1][1], b_frag[1][3], 0);
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc14, a_frag[1][2], b_frag[1][3], 0);
+        Q8_REPRO_SCALAR_WAIT_WMMA(acc15, a_frag[1][3], b_frag[1][3], 0);
+        __syncthreads();
+    }
+
+    Q8_REPRO_SCALAR_STORE_GROUP(acc0, 0);
+    Q8_REPRO_SCALAR_STORE_GROUP(acc1, 1);
+    Q8_REPRO_SCALAR_STORE_GROUP(acc2, 2);
+    Q8_REPRO_SCALAR_STORE_GROUP(acc3, 3);
+    Q8_REPRO_SCALAR_STORE_GROUP(acc4, 4);
+    Q8_REPRO_SCALAR_STORE_GROUP(acc5, 5);
+    Q8_REPRO_SCALAR_STORE_GROUP(acc6, 6);
+    Q8_REPRO_SCALAR_STORE_GROUP(acc7, 7);
+    Q8_REPRO_SCALAR_STORE_GROUP(acc8, 8);
+    Q8_REPRO_SCALAR_STORE_GROUP(acc9, 9);
+    Q8_REPRO_SCALAR_STORE_GROUP(acc10, 10);
+    Q8_REPRO_SCALAR_STORE_GROUP(acc11, 11);
+    Q8_REPRO_SCALAR_STORE_GROUP(acc12, 12);
+    Q8_REPRO_SCALAR_STORE_GROUP(acc13, 13);
+    Q8_REPRO_SCALAR_STORE_GROUP(acc14, 14);
+    Q8_REPRO_SCALAR_STORE_GROUP(acc15, 15);
+}
+
+#undef Q8_REPRO_SCALAR_STORE_GROUP
+#undef Q8_REPRO_SCALAR_WAIT_WMMA
 
 template <
     bool use_asm_wmma,
@@ -7261,6 +7445,7 @@ static bool output_is_active(size_t index, int rows, const std::string & mode) {
             mode == "bm128-direct192-raw-output" ||
             mode == "bm128-direct192-raw-asm-output" ||
             mode == "bm128-direct192-raw-asm-inout-output" ||
+            mode == "bm128-direct192-scalaracc-raw-asm-output" ||
             mode == "bm128-streamk-raw-output" ||
             mode == "bm128-streamk-raw-asm-output" ||
             mode == "bm128-streamk-raw-asm-inout-output" ||
@@ -8103,6 +8288,10 @@ static int run_case(const std::string & mode, int rows, int cols, int k, size_t 
     } else if (mode == "bm128-direct192-raw-asm-inout-output") {
         dim3 bm128_grid((rows + 127) / 128, (cols + 127) / 128, 1);
         hipLaunchKernelGGL((q8_bm128_direct192_output_repro_kernel<true, true>),
+            bm128_grid, dim3(256, 1, 1), 0, 0, d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+    } else if (mode == "bm128-direct192-scalaracc-raw-asm-output") {
+        dim3 bm128_grid((rows + 127) / 128, (cols + 127) / 128, 1);
+        hipLaunchKernelGGL(q8_bm128_direct192_scalaracc_output_repro_kernel,
             bm128_grid, dim3(256, 1, 1), 0, 0, d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
     } else if (mode == "bm128-streamk-raw-output") {
         dim3 bm128_grid((rows + 127) / 128, (cols + 127) / 128, 1);
@@ -9069,6 +9258,7 @@ int main(int argc, char ** argv) {
     if (mode == "bm128-direct192-raw-output" ||
             mode == "bm128-direct192-raw-asm-output" ||
             mode == "bm128-direct192-raw-asm-inout-output" ||
+            mode == "bm128-direct192-scalaracc-raw-asm-output" ||
             mode == "bm128-streamk-raw-output" ||
             mode == "bm128-streamk-raw-asm-output" ||
             mode == "bm128-streamk-raw-asm-inout-output" ||
