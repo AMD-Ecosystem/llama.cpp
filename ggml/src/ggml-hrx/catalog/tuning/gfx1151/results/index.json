@@ -3,6 +3,20 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_prompt_mmq64x128_splitqsum_bk4_wave64_staging_depth",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-bk4-wave64-focused-c939cb248-20260620-035101/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_mmq64x128_splitqsum_bk4_wave64.hsaco",
+      "status": "rejected_focused_perf_regression_after_correctness_pass",
+      "findings": [
+        "added an opt-in CMake/Ninja-built Q8_0 packed-Q8_1 BN128 split-qsum BK4 route compiled wave64 to bracket staging depth beyond the accepted BK2+wave64 full-column default",
+        "CPU-reference passed p33, p512, and p513; route traces kept p33 on BN64, selected BK4 only for all five p512 rows, and kept p513 on BN112 split-qsum",
+        "static HSACO evidence for the target symbol is wave64, SGPR=40, VGPR=149, LDS=17408, private_segment=0, and no VGPR/SGPR spills",
+        "same-runner focused p512 timing regressed versus the current default BK2+wave64 route: total 67385.475 -> 71851.889 us; every exported row was slower",
+        "this closes the simple deeper-RHS-staging axis for the packed Q8_0 route; the remaining large gap still needs a materially different lane/store or dataflow primitive, not BK_STEP > 2"
+      ]
+    },
+    {
       "id": "q8_0_prompt_mmq64x128_splitqsum_bk2_wave64_full_column_accepted",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-bk2-wave64-focused-7c603fa92-20260620-033342/",

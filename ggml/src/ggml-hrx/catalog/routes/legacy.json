@@ -10796,6 +10796,51 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk4_wave64_wg256_f32",
+    "family": "mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk4_wave64_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q8_0_mmq64x128_splitqsum_bk4_wave64",
+    "artifact_id": "mul_mat_vec_q8_0_mmq64x128_splitqsum_bk4_wave64_hsaco",
+    "export_name": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk4_wave64_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 110,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q8_0_prompt_mmq64x128_splitqsum_bk4_wave64_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q8_0 x F32 -> F32 MUL_MAT",
+      "k_multiple": 128,
+      "rows_multiple": 128,
+      "cols_min": 128,
+      "cols_multiple_for_selector": 128,
+      "selector_gate": "diagnostic opt-in only for full-column rows with GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X128_SPLITQSUM_BK4_WAVE64_PROMPT=1; disable with GGML_HRX_DISABLE_Q8_0_Q8_1_X4_MMQ64X128_SPLITQSUM_BK4_WAVE64_PROMPT=1",
+      "prior_delta": "Extends the accepted BK2+wave64 packed Q8_0 BN128 split-qsum route to BK_STEP=4, using twice the RHS staging depth to reduce per-K-block barrier overhead. This is a bounded staging-depth probe derived from the Vulkan large oracle's low-barrier large-route behavior, not a cooperative-matrix lane/store clone."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk4_wave64_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "probe_pending_focused_gate",
+      "selection": "Opt-in only until p33/p512/p513 Q8_0 CPU-reference gates, route traces, static resource evidence, and focused p512 timing compare it against the accepted BK2+wave64 default."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum8_wg256_f32",
     "family": "mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum8_wg256",
     "op": "MUL_MAT",

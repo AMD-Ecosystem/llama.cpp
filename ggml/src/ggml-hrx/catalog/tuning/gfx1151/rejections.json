@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_prompt_mmq64x128_splitqsum_bk4_wave64_staging_depth",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk4_wave64_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X128_SPLITQSUM_BK4_WAVE64_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q8-bk4-wave64-focused-c939cb248-20260620-035101/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-bk4-wave64-focused-c939cb248-20260620-035101/static/summary.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_mmq64x128_splitqsum_bk4_wave64.hsaco",
+      "reason": "The BK4 wave64 probe tested the next bounded packed-route staging-depth axis after the accepted BK2+wave64 Q8_0 full-column route. It doubles RHS staging depth to four Q8 blocks per barrier while preserving BM64/BN128, split-qsum live ranges, Q8_1 x4 packed RHS, wave64 compilation, p33 BN64 fallback, and p513 BN112 tail fallback. This is a Vulkan-oracle-informed low-barrier probe, not a cooperative-matrix lane/store clone. It built through normal CMake/Ninja HSACO generation and passed CPU-reference gates for p33, p512, and p513. Route traces selected BK4 only for p512 full-column rows, kept p33 on hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x64_wg256_f32, and kept p513 on hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x112_splitqsum_wg256_f32. Static evidence for the target symbol is wave64, SGPR=40, VGPR=149, LDS=17408 bytes, private_segment=0, and no spills. Reject before model A/B because same-runner focused p512 timing regressed every row versus the current default BK2+wave64 route: total 67385.475 -> 71851.889 us, Vcur 550.591 -> 593.338 us, Qcur 1826.475 -> 1973.649 us, ffn_out 6711.770 -> 7250.352 us, ffn_gate 5965.709 -> 6378.503 us, and result_output 52330.929 -> 55656.048 us. The extra staging depth reduces barrier frequency but increases LDS footprint and pressure enough to lose on gfx1151; keep BK2+wave64 as the packed-route default and move Q8 parity work back to a materially different lane/store or dataflow primitive."
+    },
+    {
       "id": "q8_0_motif192_accpark_fixture_correctness",
       "date": "2026-06-20",
       "route": "hrx-hip-bench-q8-wmma-repro --mode=motif192-wmma-k2-realdata-fullk-accpark-directwait-waitload-address and --mode=motif192-wmma-k2-realdata-fullk-accparkfull8-directwait-waitload-address",
