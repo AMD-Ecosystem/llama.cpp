@@ -3,6 +3,60 @@
   "schema": "ggml-hrx-tuning-promotions-v1",
   "promotions": [
     {
+      "id": "q8_0_prompt_mmq64x128_splitqsum_bk2_wave64_full_column_llama3_1_q8",
+      "date": "2026-06-20",
+      "status": "accepted_gfx1151_full_column_default",
+      "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_wg256_f32",
+      "env": "default on gfx1151 for Q8_0 prompt rows with cols % 128 == 0; rollback with GGML_HRX_DISABLE_Q8_0_Q8_1_X4_MMQ64X128_SPLITQSUM_BK2_WAVE64_PROMPT=1; force with GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X128_SPLITQSUM_BK2_WAVE64_PROMPT=1",
+      "shape_guard": "Q8_0 MUL_MAT prompt, k >= 2048, rows >= 1024, cols >= 128, cols % 128 == 0, k % 128 == 0, rows % 128 == 0, contiguous tensors, Q8_1 x4 quantize provider available, gfx1151 only; p33 stays on BN64 and p513/tails stay on BN112 split-qsum",
+      "prior_art_schedule": "This is a bounded packed-route composition of two previously isolated Q8_0 axes: BK_STEP=2 staging and wave64 compilation, preserving the accepted BM64/BN128 split-qsum packed-Q8_1 scalar-dot dataflow. It is not a direct RADV cooperative-matrix clone, but it is driven by the Vulkan large aligned oracle's full-column wave64 regime and tests whether the known focused gains compose before leaving the packed-Q8_1 family.",
+      "focused_artifacts": [
+        "cache/hrxv1/gfx1151/q8-bk2-wave64-focused-7c603fa92-20260620-033342/",
+        "cache/hrxv1/gfx1151/q8-bk2-wave64-focused-7c603fa92-20260620-033342/postpromotion/"
+      ],
+      "model_artifacts": [
+        "cache/hrxv1/gfx1151/q8-bk2-wave64-focused-7c603fa92-20260620-033342/model-ab/",
+        "cache/hrxv1/gfx1151/q8-bk2-wave64-focused-7c603fa92-20260620-033342/model-ab-repeat/"
+      ],
+      "focused_result": {
+        "correctness": "CPU-reference passed for p33, p512, and p513 focused Q8_0 rows",
+        "route_policy": "p33 default stayed on hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x64_wg256_f32; p512 default selected BK2+wave64 for all five rows; p513 default stayed on hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x112_splitqsum_wg256_f32",
+        "optin_p512_sweep_total_us": {
+          "default": 71895.284,
+          "bk2": 70350.094,
+          "wave64": 68829.332,
+          "bk2_wave64": 68376.935,
+          "bk2_wave64_speedup_vs_default": 1.0515
+        },
+        "postpromotion_p512_default_to_rollback_total_us": "68467.936 -> 73819.158",
+        "postpromotion_default_speedup_vs_rollback": 1.0782
+      },
+      "model_result": {
+        "llama31_8b_q8_0_p512_pair1_default_steady_tok_s": 451.51925,
+        "llama31_8b_q8_0_p512_pair1_bk2_wave64_steady_tok_s": 470.24875,
+        "llama31_8b_q8_0_p512_pair1_ratio": 1.0415,
+        "llama31_8b_q8_0_p512_pair2_default_steady_tok_s": 453.85225,
+        "llama31_8b_q8_0_p512_pair2_bk2_wave64_steady_tok_s": 465.83275,
+        "llama31_8b_q8_0_p512_pair2_ratio": 1.0264,
+        "fallback_mentions": 0
+      },
+      "compile_evidence": {
+        "hsaco": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_mmq64x128_splitqsum_bk2_wave64.hsaco",
+        "wavefront_size": 64,
+        "sgpr_count": 52,
+        "vgpr_count": 169,
+        "lds_bytes": 8704,
+        "private_segment_fixed_size": 0,
+        "vgpr_spill_count": 0,
+        "sgpr_spill_count": 0
+      },
+      "promotion_blockers": [
+        "This is a Q8_0 packed-route lift, not a Vulkan parity claim",
+        "It remains far from the RADV large aligned cooperative-matrix schedule family; p512 is still expected to be materially below same-machine Vulkan",
+        "Only full-column rows are defaulted; odd/tail p513 and narrow p33 remain separate route regimes"
+      ]
+    },
+    {
       "id": "q5_dense_prompt_mmql64_bk2_bquad_bhalf_qwen25coder_p33",
       "date": "2026-06-19",
       "status": "accepted_gfx1151_default",

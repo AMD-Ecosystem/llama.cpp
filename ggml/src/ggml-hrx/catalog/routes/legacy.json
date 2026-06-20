@@ -10751,6 +10751,51 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_wg256_f32",
+    "family": "mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q8_0_mmq64x128_splitqsum_bk2_wave64",
+    "artifact_id": "mul_mat_vec_q8_0_mmq64x128_splitqsum_bk2_wave64_hsaco",
+    "export_name": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 110,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q8_0_prompt_mmq64x128_splitqsum_bk2_wave64_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q8_0 x F32 -> F32 MUL_MAT",
+      "k_multiple": 128,
+      "rows_multiple": 128,
+      "cols_min": 128,
+      "cols_multiple_for_selector": 128,
+      "selector_gate": "default on gfx1151 for full-column rows with cols % 128 == 0; rollback/disable with GGML_HRX_DISABLE_Q8_0_Q8_1_X4_MMQ64X128_SPLITQSUM_BK2_WAVE64_PROMPT=1; force with GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X128_SPLITQSUM_BK2_WAVE64_PROMPT=1",
+      "prior_delta": "Combines the two separately useful Q8_0 packed-path pivots: BK_STEP=2 staging and wave64 compilation, while preserving the accepted BM64/BN128 split-qsum route, full-column selector domain, and p33/p513 fallback policy. This tests whether focused backend-op gains from K staging depth and wave mode compose before leaving the packed-Q8_1 scalar-dot family."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "accepted_gfx1151_full_column_default",
+      "selection": "Q8_0 packed-Q8_1 BN128 split-qsum BK2 route compiled wave64. Focused p33, p512, and p513 CPU-reference gates passed; route traces kept p33 on BN64, kept p513 on BN112 split-qsum, and selected BK2+wave64 for all five p512 rows. Focused p512 same-runner sweep improved total row time 71895.284 -> 68376.935 us, a 1.0515x speedup over default. Two same-binary Llama 3.1 8B Q8_0 p512/fa1 model A/B pairs improved steady throughput by 1.0415x and 1.0264x with zero fallback mentions. This is a narrow packed-route lift, not a Vulkan parity endpoint."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum8_wg256_f32",
     "family": "mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum8_wg256",
     "op": "MUL_MAT",

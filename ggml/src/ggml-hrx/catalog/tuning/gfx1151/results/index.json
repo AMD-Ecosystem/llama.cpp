@@ -3,6 +3,22 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_prompt_mmq64x128_splitqsum_bk2_wave64_full_column_accepted",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-bk2-wave64-focused-7c603fa92-20260620-033342/",
+      "postpromotion_artifact": "cache/hrxv1/gfx1151/q8-bk2-wave64-focused-7c603fa92-20260620-033342/postpromotion/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_mmq64x128_splitqsum_bk2_wave64.hsaco",
+      "status": "accepted_gfx1151_default_full_column_q8_0_prompt",
+      "findings": [
+        "added a CMake/Ninja-built opt-in Q8_0 packed-Q8_1 BN128 split-qsum BK2 route compiled wave64, then promoted it narrowly to gfx1151 full-column rows after focused and model evidence",
+        "focused CPU-reference passed p33, p512, and p513; route traces kept p33 on BN64, selected BK2+wave64 for all five p512 rows, and kept p513 on BN112 split-qsum",
+        "same-runner p512 focused sweep showed the combined axis beating default and both isolated pivots: default 71895.284 us, BK2 70350.094 us, wave64 68829.332 us, and BK2+wave64 68376.935 us",
+        "post-promotion default/rollback focused p512 timing improved 73819.158 -> 68467.936 us, a 1.0782x speedup, with rollback returning to the accepted BN128 split-qsum route",
+        "two same-binary Llama 3.1 8B Q8_0 p512/fa1 model A/B pairs improved steady throughput by 1.0415x and 1.0264x with zero fallback mentions and intended provider selection",
+        "static HSACO evidence for the target symbol is wave64, SGPR=52, VGPR=169, LDS=8704, no private segment, and no VGPR/SGPR spills; this is still a packed scalar-dot route, not a RADV cooperative-matrix clone"
+      ]
+    },
+    {
       "id": "q8_0_motif192_accpark_fixture_rejected_correctness",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-motif192-accpark-probe-c3a0256a6-20260620-032420/",
