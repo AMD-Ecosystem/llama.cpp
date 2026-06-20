@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_coopstore_radv_motif192_typedstage_fixture",
+      "date": "2026-06-20",
+      "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-radv-motif192-typedstage",
+      "env": "standalone CMake/Ninja-built gfx1151 HIP bench diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/coopstore-radv-motif192-typedstage-0c3c29345-20260620-041714/",
+      "control_artifact": "cache/hrxv1/gfx1151/coopstore-radv-motif192-typedstage-0c3c29345-20260620-041714/wmma-lds-k2-radv-motif192.stdout and cache/hrxv1/gfx1151/coopstore-radv-motif192-typedstage-0c3c29345-20260620-041714/wmma-lds-k2-direct192-raw.stdout",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract",
+      "reason": "This bounded fixture tested whether replacing the accepted inline halfword LDS stage in the RADV-like Q8 motif192 store contract with typed uint16_t LDS accesses would preserve correctness while offering a more transferable C++ source shape. It was built through the normal CMake/Ninja hrx-hip-bench-coopmat-store-contract target at commit 0c3c29345 plus this diagnostic patch. Reject before any route transfer: the typed-stage mode fails the standalone 192-store contract with finite accumulator corruption in group 12 only, bad=256/12288, max_abs=63.5, first_bad=3072 group=12 slot=0 lane=0 actual=64.5 expected=128. The same binary's inline RADV motif control passes with bad=0, and the direct192 raw control also passes with bad=0. The typed C++ LDS stage therefore is not a repair for Q8 motif192 transfer; it perturbs the accumulator/writeback contract even before real Q8 catalog ABI pressure is introduced. Continue from the accepted inline motif prior or a lower-level cooperative writeback primitive, not from typed-stage motif192."
+    },
+    {
       "id": "q8_0_wmma_colsub3_selected_stage_neighbor_contract",
       "date": "2026-06-20",
       "route": "hrx-hip-bench-q8-wmma-repro --mode=single-group13-bcopy-stage-selected/.../single-group15-abcopy-stage-selected",
