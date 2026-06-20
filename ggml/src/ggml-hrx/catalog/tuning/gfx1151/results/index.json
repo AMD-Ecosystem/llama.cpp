@@ -3,6 +3,20 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_wmma_colsub3_selected_stage_neighbor_contract",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-wmma-colsub3-selected-stage-neighbors-83ac04165-20260620-040550/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro",
+      "status": "rejected_fixture_correctness_colsub3_selected_stage_fails_all_row_groups",
+      "findings": [
+        "added CMake/Ninja-built standalone Q8 WMMA repro modes for single-group13/14/15 selected-stage B-copy and A+B-copy probes; no production route or selector was changed",
+        "same-binary group8 selected-stage control passed rows=64 cols=64 k=4096 with active=256 bad=0 and rows=64 cols=33 with active=16 bad=0",
+        "every col-sub-3 rows=64 cols=64 selected-stage group failed with the same finite 16-bad-lane signature and no NaNs, infinities, or sentinels: groups 12, 13, 14, and 15 all failed under both B-copy and A+B-copy materialization",
+        "p33 produced no active outputs for groups 12-15 because cols=33 does not reach col_sub=3, so the useful signal is the p64 selected-stage lane contract",
+        "this closes the group12-specific hypothesis; Q8 large-route parity work should next pursue a different col_sub=3 lane/store primitive or a closer RADV writeback mapping rather than more row-group remaps, accumulator copies, or local staged-store variants"
+      ]
+    },
+    {
       "id": "current_after_q8_bk2_wave64_p512_rank",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/current-after-q8-bk2-wave64-p512-r1-20260620-034147/",

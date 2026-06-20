@@ -3,6 +3,15 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_wmma_colsub3_selected_stage_neighbor_contract",
+      "date": "2026-06-20",
+      "route": "hrx-hip-bench-q8-wmma-repro --mode=single-group13-bcopy-stage-selected/.../single-group15-abcopy-stage-selected",
+      "env": "standalone CMake/Ninja-built gfx1151 HIP bench diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/q8-wmma-colsub3-selected-stage-neighbors-83ac04165-20260620-040550/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro",
+      "reason": "The col-sub-3 selected-stage neighbor probe extended the real-Q8 WMMA repro fixture from the known failing group12 selected-stage case to groups 13, 14, and 15 while preserving the same q8_array_fullb_phase_repro_kernel source shape, B-copy/A+B-copy staging, selected-only staged writeback, rows=64, cols=64, and k=4096. The same CMake/Ninja-built binary kept the group8 selected-stage control correctness-clean with bad=0 for 256 active p64 outputs and 16 active p33 outputs. All col-sub-3 p64 neighbors failed with the same finite 16-bad-lane signature and no NaNs, infinities, or sentinels: group12 bcopy bad=16 max_abs=0.346383, group12 abcopy bad=16 max_abs=0.348336, group13 bcopy bad=16 max_abs=0.346383, group13 abcopy bad=16 max_abs=0.348336, group14 bcopy bad=16 max_abs=0.346383, group14 abcopy bad=16 max_abs=0.348336, group15 bcopy bad=16 max_abs=0.346383, and group15 abcopy bad=16 max_abs=0.348336. p33 has no active col-sub-3 outputs for these groups, so it is only a dispatcher sanity row. This rejects the idea that the earlier group12 failure was a row-sub-specific accident; the broken contract follows col_sub=3 across row groups when real Q8 load/dequant dependency, copied B fragment materialization, and selected staged writeback are combined. The next Q8 large-route probe should target a different col-sub-3 lane/store primitive or direct RADV-style writeback mapping instead of adding more group-local remaps or accumulator copies."
+    },
+    {
       "id": "q8_0_prompt_mmq64x128_splitqsum_bk4_wave64_staging_depth",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk4_wave64_wg256_f32",
