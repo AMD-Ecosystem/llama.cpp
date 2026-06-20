@@ -3,6 +3,22 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "current_after_q8_bk2_wave64_p512_rank",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/current-after-q8-bk2-wave64-p512-r1-20260620-034147/",
+      "analysis_artifact": "cache/hrxv1/gfx1151/current-after-q8-bk2-wave64-p512-r1-20260620-034147/analysis/",
+      "status": "current_basket_kpi_steady_geomean_0_576x_vulkan",
+      "findings": [
+        "same-machine p512/fa1/r1 basket after the accepted Q8_0 BK2+wave64 full-column route reports avg geomean 0.575746x and steady geomean 0.575747x Vulkan, with zero HRX fallback mentions in all rows",
+        "worst remaining rows are still dense quantized prompt routes: Llama 3.1 8B Q8_0 at 0.512x, Qwen2.5 Coder 7B Q5_K_M at 0.537x, Qwen3 30B Q6_K at 0.541x, and Llama 3.1 8B Q4_K_M at 0.551x Vulkan",
+        "the Vulkan perf-rank artifact shows the Q8_0 row spends 528.112 ms in dense/q8_0, the Q5 row spends 324.520 ms in dense/q5_K plus 74.460 ms in dense/q6_K, and the Q6 MoE row spends 358.370 ms in moe_id/q6_K plus 73.340 ms in dense/q6_K",
+        "Q5 p512 currently selects hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bhalf_wg256_f32 for 124 full-width rows; prior Q5 large direct-WMMA B64GROUP, FULLSTORE, STORE_STAGE, B64GROUP+FULLSTORE, B64GROUP+STORE_STAGE, BUFFERSTORE, and PACKSTAGE fast-half variants are already recorded as correctness or focused-performance rejections",
+        "Q6 p512 currently selects hrx_mul_mat_vec_q6_k_wmma16x16_vk128_padded_w64_f16acc_wg256_f32 for 192 dense rows and hrx_mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x16_wg64_f32 for 141 MoE-ID rows; recent VK64 kloop typed-stage transfer was correctness-clean but 1.818x slower than the accepted p33 default",
+        "Q8_0 p512 currently selects hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_wg256_f32 for 159 rows; the BK4 staging-depth probe passed correctness but regressed every p512 row",
+        "next parity work should mechanically target the remaining RADV cooperative store/lane-ownership contract in focused fixtures or route-local probes; do not spend the next experiment on Q5/Q6/Q8 selector-only changes, BK-depth changes, B-pair/B-quad reshuffles, or already rejected direct-WMMA store-stage/fullstore combinations"
+      ]
+    },
+    {
       "id": "q8_0_prompt_mmq64x128_splitqsum_bk4_wave64_staging_depth",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-bk4-wave64-focused-c939cb248-20260620-035101/",
