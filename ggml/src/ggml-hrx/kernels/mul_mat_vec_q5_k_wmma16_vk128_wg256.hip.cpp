@@ -82,6 +82,10 @@
 #define HRX_Q5_K_WMMA_VK128_STORE_STAGE_FAST_HALF_SELECTED 0
 #endif
 
+#ifndef HRX_Q5_K_WMMA_VK128_MOTIF192_FULL_WRITEBACK
+#define HRX_Q5_K_WMMA_VK128_MOTIF192_FULL_WRITEBACK 0
+#endif
+
 #ifndef HRX_Q5_K_WMMA_VK128_BUFFER_STORE
 #define HRX_Q5_K_WMMA_VK128_BUFFER_STORE 0
 #endif
@@ -603,6 +607,135 @@ static __device__ __forceinline__ void hrx_q5_k_wmma_vk128_store_acc_f16_row_maj
 #endif
 
 #if HRX_Q5_K_WMMA_VK128_STORE_STAGE_FAST_HALF && HRX_Q5_K_WMMA_VK128_BUFFER_STORE
+static __device__ __forceinline__ int hrx_q5_k_wmma_vk128_motif192_stage_index(
+        unsigned int wave,
+        int group,
+        int slot,
+        unsigned int lane) {
+    (void) group;
+    const int row_lane = static_cast<int>(lane >> 4);
+    const int col_lane = static_cast<int>(lane & 15u);
+    return static_cast<int>(wave) * 16 * 16 + col_lane * 16 + row_lane + slot * 4;
+}
+
+static __device__ __forceinline__ void hrx_q5_k_wmma_vk128_motif192_raw_store_slot(
+        __amdgpu_buffer_rsrc_t dst_rsrc,
+        long long rows_stride,
+        long long row_base,
+        long long col_base,
+        long long rows,
+        long long cols,
+        const hrx_q5_k_wmma_vk128_half8_vec * acc,
+        unsigned int wave,
+        int group,
+        int slot,
+        unsigned int lane) {
+    const int group16 = group & 15;
+    const int wave_row = static_cast<int>(wave & 1u);
+    const int wave_col = static_cast<int>(wave >> 1);
+    const int row_lane = static_cast<int>(lane >> 4);
+    const int col_lane = static_cast<int>(lane & 15u);
+    const long long row = row_base + static_cast<long long>(
+        wave_row * 64 + (group16 & 3) * 16 + row_lane + slot * 4);
+    const long long col = col_base + static_cast<long long>(
+        wave_col * 64 + ((group16 >> 2) & 3) * 16 + col_lane);
+    if (row < rows && col < cols) {
+        hrx_q5_k_wmma_vk128_buffer_store_f32(
+            dst_rsrc,
+            col * rows_stride + row,
+            static_cast<float>(acc[group16][slot * 2 + HRX_Q5_K_WMMA_VK128_W64_OPSEL]));
+    }
+}
+
+static __device__ __forceinline__ void hrx_q5_k_wmma_vk128_motif192_stage_store_slot(
+        hrx_q5_k_wmma_vk128_lds_volatile_half_ptr sh_store,
+        const hrx_q5_k_wmma_vk128_half8_vec * acc,
+        unsigned int wave,
+        int group,
+        int slot,
+        unsigned int lane) {
+    const int acc_index = group & 15;
+    hrx_q5_k_wmma_vk128_lds_u16_ptr sh_u16 =
+        (hrx_q5_k_wmma_vk128_lds_u16_ptr) sh_store;
+    hrx_q5_k_wmma_vk128_ds_store_u16(
+        sh_u16 + hrx_q5_k_wmma_vk128_motif192_stage_index(wave, group, slot, lane),
+        hrx_q5_k_wmma_vk128_f16_to_u16(acc[acc_index][slot * 2 + HRX_Q5_K_WMMA_VK128_W64_OPSEL]));
+}
+
+static __device__ __forceinline__ void hrx_q5_k_wmma_vk128_motif192_stage_load_store_slot(
+        __amdgpu_buffer_rsrc_t dst_rsrc,
+        long long rows_stride,
+        long long row_base,
+        long long col_base,
+        long long rows,
+        long long cols,
+        hrx_q5_k_wmma_vk128_lds_volatile_half_ptr sh_store,
+        unsigned int wave,
+        int group,
+        int slot,
+        unsigned int lane) {
+    const int group16 = group & 15;
+    const int wave_row = static_cast<int>(wave & 1u);
+    const int wave_col = static_cast<int>(wave >> 1);
+    const int row_lane = static_cast<int>(lane >> 4);
+    const int col_lane = static_cast<int>(lane & 15u);
+    const long long row = row_base + static_cast<long long>(
+        wave_row * 64 + (group16 & 3) * 16 + row_lane + slot * 4);
+    const long long col = col_base + static_cast<long long>(
+        wave_col * 64 + ((group16 >> 2) & 3) * 16 + col_lane);
+    hrx_q5_k_wmma_vk128_lds_const_u16_ptr sh_u16 =
+        (hrx_q5_k_wmma_vk128_lds_const_u16_ptr) sh_store;
+    const _Float16 value = hrx_q5_k_wmma_vk128_u16_to_f16(
+        hrx_q5_k_wmma_vk128_ds_load_u16_d16(
+            sh_u16 + hrx_q5_k_wmma_vk128_motif192_stage_index(wave, group, slot, lane)));
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    if (row < rows && col < cols) {
+        hrx_q5_k_wmma_vk128_buffer_store_f32(dst_rsrc, col * rows_stride + row, static_cast<float>(value));
+    }
+}
+
+#define HRX_Q5_K_WMMA_VK128_MOTIF192_RAW_STORE_GROUP(GROUP_ID) do { \
+    hrx_q5_k_wmma_vk128_motif192_raw_store_slot(dst_rsrc, rows, row_base, col_base, rows, cols, acc, wave, (GROUP_ID), 0, lane); \
+    hrx_q5_k_wmma_vk128_motif192_raw_store_slot(dst_rsrc, rows, row_base, col_base, rows, cols, acc, wave, (GROUP_ID), 1, lane); \
+    hrx_q5_k_wmma_vk128_motif192_raw_store_slot(dst_rsrc, rows, row_base, col_base, rows, cols, acc, wave, (GROUP_ID), 2, lane); \
+    hrx_q5_k_wmma_vk128_motif192_raw_store_slot(dst_rsrc, rows, row_base, col_base, rows, cols, acc, wave, (GROUP_ID), 3, lane); \
+} while (0)
+
+#define HRX_Q5_K_WMMA_VK128_MOTIF192_STAGE_STORE_GROUP(GROUP_ID) do { \
+    hrx_q5_k_wmma_vk128_motif192_stage_store_slot((hrx_q5_k_wmma_vk128_lds_volatile_half_ptr) sh_store, acc, wave, (GROUP_ID), 0, lane); \
+    hrx_q5_k_wmma_vk128_motif192_stage_store_slot((hrx_q5_k_wmma_vk128_lds_volatile_half_ptr) sh_store, acc, wave, (GROUP_ID), 1, lane); \
+    hrx_q5_k_wmma_vk128_motif192_stage_store_slot((hrx_q5_k_wmma_vk128_lds_volatile_half_ptr) sh_store, acc, wave, (GROUP_ID), 2, lane); \
+    hrx_q5_k_wmma_vk128_motif192_stage_store_slot((hrx_q5_k_wmma_vk128_lds_volatile_half_ptr) sh_store, acc, wave, (GROUP_ID), 3, lane); \
+} while (0)
+
+#define HRX_Q5_K_WMMA_VK128_MOTIF192_STAGE_LOAD_STORE_GROUP(GROUP_ID) do { \
+    hrx_q5_k_wmma_vk128_motif192_stage_load_store_slot(dst_rsrc, rows, row_base, col_base, rows, cols, (hrx_q5_k_wmma_vk128_lds_volatile_half_ptr) sh_store, wave, (GROUP_ID), 0, lane); \
+    hrx_q5_k_wmma_vk128_motif192_stage_load_store_slot(dst_rsrc, rows, row_base, col_base, rows, cols, (hrx_q5_k_wmma_vk128_lds_volatile_half_ptr) sh_store, wave, (GROUP_ID), 1, lane); \
+    hrx_q5_k_wmma_vk128_motif192_stage_load_store_slot(dst_rsrc, rows, row_base, col_base, rows, cols, (hrx_q5_k_wmma_vk128_lds_volatile_half_ptr) sh_store, wave, (GROUP_ID), 2, lane); \
+    hrx_q5_k_wmma_vk128_motif192_stage_load_store_slot(dst_rsrc, rows, row_base, col_base, rows, cols, (hrx_q5_k_wmma_vk128_lds_volatile_half_ptr) sh_store, wave, (GROUP_ID), 3, lane); \
+} while (0)
+
+#define HRX_Q5_K_WMMA_VK128_MOTIF192_GROUP(GROUP_ID) do { \
+    HRX_Q5_K_WMMA_VK128_MOTIF192_RAW_STORE_GROUP((GROUP_ID)); \
+    HRX_Q5_K_WMMA_VK128_MOTIF192_STAGE_STORE_GROUP((GROUP_ID) + 16); \
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory"); \
+    HRX_Q5_K_WMMA_VK128_MOTIF192_STAGE_LOAD_STORE_GROUP((GROUP_ID) + 16); \
+    HRX_Q5_K_WMMA_VK128_MOTIF192_STAGE_STORE_GROUP((GROUP_ID) + 32); \
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory"); \
+    HRX_Q5_K_WMMA_VK128_MOTIF192_STAGE_LOAD_STORE_GROUP((GROUP_ID) + 32); \
+} while (0)
+
+#define HRX_Q5_K_WMMA_VK128_MOTIF192_GROUPS_0_15() do { \
+    HRX_Q5_K_WMMA_VK128_MOTIF192_GROUP(0);  HRX_Q5_K_WMMA_VK128_MOTIF192_GROUP(1); \
+    HRX_Q5_K_WMMA_VK128_MOTIF192_GROUP(2);  HRX_Q5_K_WMMA_VK128_MOTIF192_GROUP(3); \
+    HRX_Q5_K_WMMA_VK128_MOTIF192_GROUP(4);  HRX_Q5_K_WMMA_VK128_MOTIF192_GROUP(5); \
+    HRX_Q5_K_WMMA_VK128_MOTIF192_GROUP(6);  HRX_Q5_K_WMMA_VK128_MOTIF192_GROUP(7); \
+    HRX_Q5_K_WMMA_VK128_MOTIF192_GROUP(8);  HRX_Q5_K_WMMA_VK128_MOTIF192_GROUP(9); \
+    HRX_Q5_K_WMMA_VK128_MOTIF192_GROUP(10); HRX_Q5_K_WMMA_VK128_MOTIF192_GROUP(11); \
+    HRX_Q5_K_WMMA_VK128_MOTIF192_GROUP(12); HRX_Q5_K_WMMA_VK128_MOTIF192_GROUP(13); \
+    HRX_Q5_K_WMMA_VK128_MOTIF192_GROUP(14); HRX_Q5_K_WMMA_VK128_MOTIF192_GROUP(15); \
+} while (0)
+
 static __device__ __forceinline__ void hrx_q5_k_wmma_vk128_store_acc_f16_row_major_w64_fast_half_buffer_selected(
         __amdgpu_buffer_rsrc_t dst_rsrc,
         long long rows_stride,
@@ -1313,6 +1446,10 @@ void HRX_Q5_K_WMMA_VK128_EXPORT(
         }
         __syncthreads();
     }
+#elif HRX_Q5_K_WMMA_VK128_W64 && HRX_Q5_K_WMMA_VK128_MOTIF192_FULL_WRITEBACK
+    HRX_Q5_K_WMMA_VK128_MOTIF192_GROUPS_0_15();
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
 #else
 #pragma unroll
     for (int tile_iter = 0; tile_iter < TILES_PER_WAVE; ++tile_iter) {
