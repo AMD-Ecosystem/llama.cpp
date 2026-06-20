@@ -1769,6 +1769,22 @@
       "static_artifact": "cache/hrxv1/gfx1151/q8-raw16-static-compare-20260620-080255/summary.md",
       "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_raw16_bufferstore_wg256.hsaco",
       "status": "rejected_focused_perf_regression"
+    },
+    {
+      "id": "q8_0_bm128phase96_directwait_asmwmma_correctness",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-bm128phase96-directwait-asmwmma-focused-20260620-091154/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-bm128phase96-directwait-asmwmma-compile-20260620-090818/static-summary.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_directwait_asmwmma_bufferstore_phase0_wg256.hsaco and phase1_wg256.hsaco",
+      "status": "rejected_focused_correctness"
+    },
+    {
+      "id": "q8_0_bm128phase96_directwait_bready_asmwmma_correctness",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-bm128phase96-directwait-bready-asmwmma-focused-20260620-091608/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-bm128phase96-directwait-bready-asmwmma-compile-20260620-091551/static-summary.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_directwait_bready_asmwmma_bufferstore_phase0_wg256.hsaco and phase1_wg256.hsaco",
+      "status": "rejected_focused_correctness"
     }
   ]
 }

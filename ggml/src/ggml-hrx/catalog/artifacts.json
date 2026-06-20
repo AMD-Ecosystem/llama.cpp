@@ -1169,6 +1169,30 @@
     "format": "amdgpu-hsaco",
     "storage": "embedded"
   },
+  "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_directwait_asmwmma_bufferstore_phase0_wg256_hsaco": {
+    "source_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_directwait_asmwmma_bufferstore_phase0_wg256",
+    "path": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_directwait_asmwmma_bufferstore_phase0_wg256.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_directwait_asmwmma_bufferstore_phase1_wg256_hsaco": {
+    "source_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_directwait_asmwmma_bufferstore_phase1_wg256",
+    "path": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_directwait_asmwmma_bufferstore_phase1_wg256.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_directwait_bready_asmwmma_bufferstore_phase0_wg256_hsaco": {
+    "source_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_directwait_bready_asmwmma_bufferstore_phase0_wg256",
+    "path": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_directwait_bready_asmwmma_bufferstore_phase0_wg256.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
+  "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_directwait_bready_asmwmma_bufferstore_phase1_wg256_hsaco": {
+    "source_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_directwait_bready_asmwmma_bufferstore_phase1_wg256",
+    "path": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_directwait_bready_asmwmma_bufferstore_phase1_wg256.hsaco",
+    "format": "amdgpu-hsaco",
+    "storage": "embedded"
+  },
   "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_mediumfrag12_combined96_packstage_bufferstore_wg256_hsaco": {
     "source_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_mediumfrag12_combined96_packstage_bufferstore_wg256",
     "path": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_mediumfrag12_combined96_packstage_bufferstore_wg256.hsaco",

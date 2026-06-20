@@ -12866,6 +12866,182 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_asmwmma_bufferstore_phase0_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_asmwmma_bufferstore_phase0_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_directwait_asmwmma_bufferstore_phase0_wg256",
+    "artifact_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_directwait_asmwmma_bufferstore_phase0_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_asmwmma_bufferstore_phase0_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 110,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q8_0_prompt_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_asmwmma_bufferstore_phase0_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q8_0 x F32 -> F32 MUL_MAT",
+      "k_multiple": 32,
+      "win_domain": "rows >= 8192 || k >= 8192",
+      "cols_min": 128,
+      "selector_gate": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_BM128PHASE96_DIRECTWAIT_ASMWMMA_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "prior_delta": "BM128-specific transfer of the phase96 direct-wait inline-WMMA issue schedule. It keeps the specialized BM128 row/column and store contract that passed focused correctness in the A-copy route, but replaces the all-operands wait with delayed lgkmcnt waits derived from the RADV Q8_0 large aligned oracle. Phase0 computes and stores output groups 0..7 and must be launched with phase1."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_asmwmma_bufferstore_phase0_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "opt_in_probe_requires_focused_gate",
+      "selection": "Opt-in only. Static CMake/Ninja-built gfx1151 evidence in cache/hrxv1/gfx1151/q8-bm128phase96-directwait-asmwmma-compile-20260620-090818/ shows each phase is wave64, SGPR=50, VGPR=163, LDS=20480, no private segment, no spills, 16 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 32 buffer_store_b32, two barriers, and a delayed wait ladder with final pre-WMMA lgkmcnt=31. It must pass focused p33/p512/p513 CPU-reference, route, and timing gates before any model-level benchmark or promotion."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
+    "id": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_asmwmma_bufferstore_phase1_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_asmwmma_bufferstore_phase1_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_directwait_asmwmma_bufferstore_phase1_wg256",
+    "artifact_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_directwait_asmwmma_bufferstore_phase1_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_asmwmma_bufferstore_phase1_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 110,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q8_0_prompt_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_asmwmma_bufferstore_phase1_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q8_0 x F32 -> F32 MUL_MAT",
+      "k_multiple": 32,
+      "win_domain": "rows >= 8192 || k >= 8192",
+      "cols_min": 128,
+      "selector_gate": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_BM128PHASE96_DIRECTWAIT_ASMWMMA_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "prior_delta": "BM128-specific transfer of the phase96 direct-wait inline-WMMA issue schedule. It keeps the specialized BM128 row/column and store contract that passed focused correctness in the A-copy route, but replaces the all-operands wait with delayed lgkmcnt waits derived from the RADV Q8_0 large aligned oracle. Phase1 computes and stores output groups 8..15 and must be launched with phase0."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_asmwmma_bufferstore_phase1_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "opt_in_probe_requires_focused_gate",
+      "selection": "Opt-in only. Static CMake/Ninja-built gfx1151 evidence in cache/hrxv1/gfx1151/q8-bm128phase96-directwait-asmwmma-compile-20260620-090818/ shows each phase is wave64, SGPR=50, VGPR=163, LDS=20480, no private segment, no spills, 16 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 32 buffer_store_b32, two barriers, and a delayed wait ladder with final pre-WMMA lgkmcnt=31. It must pass focused p33/p512/p513 CPU-reference, route, and timing gates before any model-level benchmark or promotion."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
+    "id": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_bready_asmwmma_bufferstore_phase0_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_bready_asmwmma_bufferstore_phase0_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_directwait_bready_asmwmma_bufferstore_phase0_wg256",
+    "artifact_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_directwait_bready_asmwmma_bufferstore_phase0_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_bready_asmwmma_bufferstore_phase0_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 110,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q8_0_prompt_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_bready_asmwmma_bufferstore_phase0_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q8_0 x F32 -> F32 MUL_MAT",
+      "k_multiple": 32,
+      "win_domain": "rows >= 8192 || k >= 8192",
+      "cols_min": 128,
+      "selector_gate": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_BM128PHASE96_DIRECTWAIT_BREADY_ASMWMMA_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "prior_delta": "B-ready bracket around the failed BM128 direct-wait inline-WMMA probe. It preserves the specialized BM128 phase/store contract and waits until the selected B column fragment should be resident before issuing each column group. Phase0 computes and stores output groups 0..7 and must be launched with phase1."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_bready_asmwmma_bufferstore_phase0_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "opt_in_probe_requires_focused_gate",
+      "selection": "Opt-in only. Added after the aggressive BM128 direct-wait probe selected correctly but failed p512/p513 CPU-reference with finite ERR, showing the first wait ladder was too early for the HIP operand load order. This bracket must pass focused p33/p512/p513 CPU-reference, route, static, and timing gates before any model-level benchmark or promotion."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
+    "id": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_bready_asmwmma_bufferstore_phase1_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_bready_asmwmma_bufferstore_phase1_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_directwait_bready_asmwmma_bufferstore_phase1_wg256",
+    "artifact_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_directwait_bready_asmwmma_bufferstore_phase1_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_bready_asmwmma_bufferstore_phase1_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 110,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q8_0_prompt_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_bready_asmwmma_bufferstore_phase1_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q8_0 x F32 -> F32 MUL_MAT",
+      "k_multiple": 32,
+      "win_domain": "rows >= 8192 || k >= 8192",
+      "cols_min": 128,
+      "selector_gate": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_BM128PHASE96_DIRECTWAIT_BREADY_ASMWMMA_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "prior_delta": "B-ready bracket around the failed BM128 direct-wait inline-WMMA probe. It preserves the specialized BM128 phase/store contract and waits until the selected B column fragment should be resident before issuing each column group. Phase1 computes and stores output groups 8..15 and must be launched with phase0."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_bready_asmwmma_bufferstore_phase1_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "opt_in_probe_requires_focused_gate",
+      "selection": "Opt-in only. Added after the aggressive BM128 direct-wait probe selected correctly but failed p512/p513 CPU-reference with finite ERR, showing the first wait ladder was too early for the HIP operand load order. This bracket must pass focused p33/p512/p513 CPU-reference, route, static, and timing gates before any model-level benchmark or promotion."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_mediumfrag12_combined96_packstage_bufferstore_f16acc_wg256_f32",
     "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_mediumfrag12_combined96_packstage_bufferstore_f16acc_wg256",
     "op": "MUL_MAT",
