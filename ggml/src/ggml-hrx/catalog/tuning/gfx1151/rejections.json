@@ -3,6 +3,15 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_wmma_vk64_padded44_wn32_b64asm_compile",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_b64asm_f16acc_wg128_f32",
+      "env": "not runtime-selected; CMake/Ninja compile-contract probe",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-wn32-b64asm-wg128-static-5674d6b23-20260619-214337/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_wn32_b64asm_wg128.hsaco",
+      "reason": "The Q6_K VK64 padded44 WN32/WG128 b64asm compile probe tested the next exact static delta from the rejected WN32 route: keep the Qwen3 30B Q6_K p33 Vulkan medium ownership tuple, but force explicit ds_read_b64 fragment loads through the shared HIP helper. It built through the normal CMake/Ninja HSACO path and is intentionally not wired into runtime selection. Static comparison against the exact RADV medium oracle rejects it before focused correctness or timing: it converts the load opcode class to plain ds_load_b64, but over-serializes the schedule with per-fragment lgkmcnt(0) waits. HSACO emits 128 ds_load_b64 versus RADV 48, 137 s_waitcnt plus 82 s_waitcnt_depctr versus RADV 115 plus 2, only 4 WMMA in the first hot-op window versus RADV 16, and final pre-WMMA lgkmcnt=0 versus RADV 40. It also keeps the old writeback surface: 32 global_store_b32, 0 buffer_store_b32, 0 ds_load_u16_d16, and 2 ds_store_b16 versus RADV 96 buffer_store_b32, 64 ds_load_u16_d16, and 64 ds_store_b16. The useful conclusion is that explicit b64 loads are necessary but not sufficient; the next Q6 p33 probe needs grouped/no-wait LDS-load scheduling plus RADV-style halfword/buffer writeback rather than the current per-fragment b64 helper."
+    },
+    {
       "id": "q6_k_wmma_vk64_padded44_wn32_wg128_perf",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_f16acc_wg128_f32",

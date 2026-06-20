@@ -9175,6 +9175,51 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_b64asm_f16acc_wg128_f32",
+    "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_b64asm_f16acc_wg128",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_wn32_b64asm_wg128",
+    "artifact_id": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_wn32_b64asm_wg128_hsaco",
+    "export_name": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_b64asm_f16acc_wg128_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        128,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q6_dense_prompt_wmma16x16_vk64_padded44_w64_wn32_b64asm_f16acc_wg128_compile_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q6_K x F32 -> F32 MUL_MAT",
+      "k_multiple": 256,
+      "rows_min": 16,
+      "cols_min": 16,
+      "cols_max": 64,
+      "selector_gate": "none; compile-contract probe only",
+      "prior_delta": "Derived from the rejected WN32/WG128 p33 route. It preserves the Qwen3 30B Q6_K p33 Vulkan medium headline ownership tuple, but forces explicit ds_read_b64 fragment loads through the shared HIP helper to test whether the CMake-built HSACO can recover RADV's plain ds_load_b64 opcode class and pre-WMMA wait window without changing runtime route selection."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_b64asm_f16acc_wg128_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_compile_contract",
+      "selection": "Not wired into runtime selection. Built through CMake/Ninja and compared against the Qwen3 30B Q6_K p33 Vulkan medium oracle in cache/hrxv1/gfx1151/q6-vk64-wn32-b64asm-wg128-static-5674d6b23-20260619-214337/. It forced plain ds_load_b64 but over-serialized the current HIP helper: HSACO emitted 128 ds_load_b64 versus RADV 48, 137 s_waitcnt plus 82 s_waitcnt_depctr versus RADV 115 plus 2, and the first-WMMA hot window shrank to 4 WMMA with final lgkmcnt=0. It also kept global_store_b32 writeback and missed RADV's 64 ds_load_u16_d16, 64 ds_store_b16, and 96 buffer_store_b32 topology. Reject before runtime; the next Q6 p33 candidate needs grouped/no-wait LDS-load scheduling and RADV-style writeback, not per-fragment b64 helper waits."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q6_k_wmma16x16_vk128_padded_w64_b64group_f16acc_wg256_f32",
     "family": "mul_mat_vec_q6_k_wmma16x16_vk128_padded_w64_b64group_f16acc_wg256",
     "op": "MUL_MAT",
