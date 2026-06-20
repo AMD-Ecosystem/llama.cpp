@@ -1029,6 +1029,50 @@
         "Qwen3-Coder p512 showed high single-run variance, so the accepted evidence uses a repeated r7 same-binary rollback/default check",
         "Further MoE parity work still needs a true Vulkan-like subgroup ID/SWIGLU schedule or a lower-level packed dataflow change"
       ]
+    },
+    {
+      "id": "q4_dense_prompt_mmql128_rows3072_llama32_p512",
+      "date": "2026-06-20",
+      "status": "accepted_gfx1151_shape_policy",
+      "route": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x128_wg256_f32 for Q4_K rows == 3072, cols == 512 prompt rows on gfx1151; keep B-quad elsewhere",
+      "env": "default on gfx1151 for Q4_K packed-Q8_1 prompt rows with rows == 3072 and cols == 512; rollback with GGML_HRX_DISABLE_Q4_K_Q8_1_X4_MMQL128_ROWS3072_PROMPT=1; force with GGML_HRX_ENABLE_Q4_K_Q8_1_X4_MMQL128_ROWS3072_PROMPT=1",
+      "shape_guard": "Q4_K MUL_MAT prompt, packed Q8_1 x4 RHS, rows == 3072, cols == 512, k % 256 == 0, contiguous tensors, gfx1151 only by default; force env may be used for broader full-column experiments; p33 and p513 stay on existing policies by default",
+      "prior_art_schedule": "This is a data-driven policy split inside the existing packed integer-dot MMQL128 family after the B-cache preload axis was bracketed. Current B-quad remains better for several rows and other models, but Llama 3.2 3B Q4_K_M p512 focused evidence shows the base MMQL128 consume order wins specifically on rows=3072 Qcur and ffn_out rows while B-quad remains better or neutral on rows=1024/8192 and p513 tails.",
+      "focused_artifacts": [
+        "cache/hrxv1/gfx1151/q4-llama32-p512-existing-variant-sweep-2d7392555-20260619-234839/",
+        "cache/hrxv1/gfx1151/q4-llama32-base-mmql128-routecheck-2d7392555-20260619-235056/",
+        "cache/hrxv1/gfx1151/q4-llama32-rows3072-cols512-default-regate-2d7392555-20260620-000208/",
+        "cache/hrxv1/gfx1151/q4-llama32-rows3072-p33-nonsteal-2d7392555-20260619-235629/"
+      ],
+      "model_artifacts": [
+        "cache/hrxv1/gfx1151/q4-llama32-base-mmql128-model-ab-2d7392555-20260619-235217/",
+        "cache/hrxv1/gfx1151/q4-llama32-rows3072-cols512-default-model-ab-2d7392555-20260620-000317/"
+      ],
+      "focused_result": {
+        "p512_existing_variant_sweep": "base MMQL128 was best of default, base, BK2, BSPLIT4, PADCACHE, BPAIR, BQUAD_CR, BQUAD_CR_QK, and MMQL128x64 on Llama 3.2 Q4_K_M p512 focused rows: 4964.757 us versus default B-quad 5413.983 us, ratio 0.917",
+        "p512_routecheck_forced_base": "base MMQL128 selected for all four p512 focused rows and measured 5073.703 us versus default B-quad 5525.167 us, ratio 0.918",
+        "postedit_p512_default_vs_rollback": "final cols==512 default selected base MMQL128 for rows=3072 Qcur/ffn_out and B-quad for Kcur/ffn_gate; total 5073.574 us versus rollback 5464.462 us, ratio 0.928",
+        "postedit_p513_default_vs_rollback": "final cols==512 default selected only B-quad, matching rollback route selection; focused p513 measured 10360.312 us versus rollback 10117.993 us, treated as unchanged-route noise rather than a promoted p513 win",
+        "p33_non_steal": "CPU-reference passed and route traces stayed on hrx_mul_mat_vec_q4_k_q8_1_x4_mmql64x64_bk2_wg256_f32 plus hrx_mul_mat_vec_q4_k_q8_1_x4_mmql64x64_bk2_bquad_wg256_f32, with no rows3072/base MMQL128 selection"
+      },
+      "model_result": {
+        "forced_base_llama32_3b_q4km_p512_default_to_base_tok_s": "1414.054958 -> 1504.525041",
+        "forced_base_llama32_3b_q4km_p512_base_over_default": 1.064,
+        "postedit_llama32_3b_q4km_p512_rollback_to_default_tok_s": "1475.154347 -> 1534.832691",
+        "postedit_llama32_3b_q4km_p512_default_over_rollback": 1.0405,
+        "postedit_llama32_3b_q4km_p512_route_switch": "default selected base MMQL128 for 350 Q4 dispatches and kept B-quad for 480 Q4 dispatches; rollback selected B-quad for 830 Q4 dispatches",
+        "p513_route_note": "final focused p513 regate selected B-quad under both default and rollback; p513 is treated as unchanged by this policy rather than a primary promotion target"
+      },
+      "compile_evidence": {
+        "hsaco": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q4_k_q8_1_x4_mmql128.hsaco",
+        "kernel": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x128_wg256_f32",
+        "source_change": "selector-only policy; no new HSACO"
+      },
+      "promotion_blockers": [
+        "This is not a Vulkan parity claim; it is a narrow route-policy lift for the current worst Llama 3.2 p512 row",
+        "p513 model A/B is neutral and broader full-column sizes are not proven, so the default is deliberately limited to cols == 512",
+        "Other Q4_K p512 models previously benefited from B-quad; this policy is deliberately keyed to rows == 3072 rather than disabling B-quad globally"
+      ]
     }
   ]
 }
