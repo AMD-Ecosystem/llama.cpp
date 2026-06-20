@@ -8279,6 +8279,7 @@ static const ggml_backend_hrx_op_provider * ggml_backend_hrx_select_mul_mat_id_q
     // W7900/Qwen small-prefill profiling shows the rows2_x16 route is faster
     // below p32; grouped routes amortize their routing/tile structure from p32 up.
     static constexpr int64_t grouped_min_prompt_tokens = 32;
+    static constexpr int64_t wide_route_min_prompt_tokens = 128;
     if (ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q4_K_ID_WMMA16_DIRECT_PROMPT") &&
         device_context &&
         device_context->architecture == "gfx1151" &&
@@ -8287,6 +8288,17 @@ static const ggml_backend_hrx_op_provider * ggml_backend_hrx_select_mul_mat_id_q
         ggml_backend_hrx_provider_available(device_context->compact_moe_routes_provider) &&
         ggml_backend_hrx_provider_available(device_context->mul_mat_id_q4_k_wmma16x16_direct_f16acc_wg32_provider)) {
         return &device_context->mul_mat_id_q4_k_wmma16x16_direct_f16acc_wg32_provider;
+    }
+    if (!ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_Q4_K_ID_Q8_1_X4_MMQ64X64_WIDE_K_PROMPT") &&
+        device_context &&
+        device_context->architecture == "gfx1151" &&
+        !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_Q8_1_MMVQ") &&
+        k % 256 == 0 && rows % 64 == 0 && n_ids == 8 && n_tokens >= wide_route_min_prompt_tokens &&
+        ggml_backend_hrx_provider_available(device_context->clear_u32_provider) &&
+        ggml_backend_hrx_provider_available(device_context->compact_moe_routes_provider) &&
+        ggml_backend_hrx_provider_available(device_context->quantize_q8_1_x4_provider) &&
+        ggml_backend_hrx_provider_available(device_context->mul_mat_id_q4_k_grouped_q8_1_x4_mmq64x64_wg64_provider)) {
+        return &device_context->mul_mat_id_q4_k_grouped_q8_1_x4_mmq64x64_wg64_provider;
     }
     if (!ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_Q4_K_ID_Q8_1_X4_MMQ16_WIDE_K_PROMPT") &&
         !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_Q8_1_MMVQ") &&
@@ -12576,7 +12588,7 @@ static ggml_status ggml_backend_hrx_dispatch_mul_mat_id_q4_k(
                 stderr,
                 "HRX route MUL_MAT_ID provider=%s type=%s k=%" PRId64 " rows=%" PRId64
                 " n_ids=%" PRId64 " n_tokens=%" PRId64 " n_experts=%" PRId64
-                " grouped=1 q8_1_x4=%d direct_f32=%d route_capacity=%zu wg_count=[%u,%u,%u] dst=%s\n",
+                " grouped=1 q8_1_x4=%d mmq16=%d direct_f32=%d route_capacity=%zu wg_count=[%u,%u,%u] dst=%s\n",
                 provider->name.c_str(),
                 ggml_type_name(src0->type),
                 grouped_constants.k,
@@ -12585,6 +12597,7 @@ static ggml_status ggml_backend_hrx_dispatch_mul_mat_id_q4_k(
                 grouped_constants.n_tokens,
                 grouped_constants.n_experts,
                 use_q8_1_x4_mmq ? 1 : 0,
+                use_q8_1_x4_mmq16 ? 1 : 0,
                 use_direct_f32 ? 1 : 0,
                 route_capacity,
                 grouped_config.workgroup_count[0],

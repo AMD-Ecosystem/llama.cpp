@@ -918,6 +918,65 @@
         "The route still uses BM64, wave32, packed Q8_1 RHS, and scalar integer dot; it does not reproduce Vulkan's direct-F32 cooperative-matrix large route",
         "Next Q8_0 parity work should keep targeting the remaining RADV/HIP cooperative-matrix load/store/lane-ownership delta or a lower-level equivalent"
       ]
+    },
+    {
+      "id": "q4_moe_id_mmq64x64_wide_prompt_qwen3_q4_p512_p513",
+      "date": "2026-06-20",
+      "status": "accepted_gfx1151_production_width_default",
+      "route": "hrx_mul_mat_id_q4_k_grouped_q8_1_x4_mmq64x64_wg64_f32",
+      "env": "default on gfx1151 for Q4_K MUL_MAT_ID grouped Q8_1 x4 rows with n_tokens >= 128; rollback with GGML_HRX_DISABLE_Q4_K_ID_Q8_1_X4_MMQ64X64_WIDE_K_PROMPT=1",
+      "shape_guard": "Q4_K MUL_MAT_ID, packed Q8_1 x4 RHS, k % 256 == 0, rows % 64 == 0, n_ids == 8, n_tokens >= 128, contiguous tensors, gfx1151 only; p33/narrow prompt stays on the accepted MMQ64x16 route",
+      "focused_artifacts": [
+        "cache/hrxv1/gfx1151/q4-id-mmq64x64-wide-focused-20260619-195332/",
+        "cache/hrxv1/gfx1151/q4-id-mmq64x64-wide-perf-20260619-195409/",
+        "cache/hrxv1/gfx1151/q4-id-mmq64x64-wide-guard-20260619-195547/",
+        "cache/hrxv1/gfx1151/q4-id-mmq64x64-wide-default-final-20260619-195832/"
+      ],
+      "model_artifacts": [
+        "cache/hrxv1/gfx1151/q4-id-mmq64x64-wide-default-model-20260619-195624/",
+        "cache/hrxv1/gfx1151/q4-id-mmq64x64-wide-optin-model-20260619-195653/"
+      ],
+      "oracle_artifacts": [
+        "cache/hrxv1/gfx1151/vulkan-oracle-qwen3-30b-q4kxl-p512-fa1-commitaligned-20260618-200653/",
+        "cache/hrxv1/gfx1151/vulkan-oracle-qwen3-coder-30b-q4km-p512-fa1-commitaligned-20260618-200659/"
+      ],
+      "focused_timing_us": {
+        "p33_guarded_out": {
+          "ffn_moe_gate": "249.274 -> 275.748 when forced, rejected for p33",
+          "ffn_moe_down": "250.120 -> 254.205 when forced, rejected for p33"
+        },
+        "p512_default_bn16_to_bn32": {
+          "ffn_moe_gate": "2045.208 -> 1671.968",
+          "ffn_moe_down": "2013.478 -> 1589.218",
+          "supported_total_ratio": 0.804
+        },
+        "p513_default_bn16_to_bn32": {
+          "ffn_moe_gate": "2059.297 -> 1781.843",
+          "ffn_moe_down": "2061.355 -> 1657.349",
+          "supported_total_ratio": 0.835
+        }
+      },
+      "model_timing_tok_s": {
+        "qwen3_30b_q4xl_p512_steady_default_to_wide": "593.0285 -> 652.8210",
+        "qwen3_30b_q4xl_p513_steady_default_to_wide": "592.1030 -> 633.3515",
+        "qwen3_coder_30b_q4km_p512_steady_default_to_wide": "855.7555 -> 903.0075",
+        "qwen3_coder_30b_q4km_p513_steady_default_to_wide": "825.4795 -> 847.0980"
+      },
+      "compile_evidence": {
+        "hsaco": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_id_q4_k_q8_1_x4_mmq.hsaco",
+        "kernel": "hrx_mul_mat_id_q4_k_grouped_q8_1_x4_mmq64x64_wg64_f32",
+        "wavefront_size": 64,
+        "sgpr": 87,
+        "vgpr": 136,
+        "lds_bytes": 3968,
+        "spills": 0,
+        "static_delta": "accepted MMQ64x16 route is SGPR=87, VGPR=107, LDS=3264, no spills; the wider route spends more pressure to halve route-tile columns on p512/p513."
+      },
+      "promotion_blockers": [
+        "This is a packed Q8_1 x4 route-tile improvement, not an exact Vulkan matmul_id_subgroup_q4_k cooperative-matrix clone",
+        "p33/narrow prompt regressed when forced to the wider route and is deliberately guarded to the accepted MMQ64x16 route",
+        "The fused Q4_K SWIGLU route remains BN16; further MoE parity requires a separate SWIGLU schedule and/or a lower-level Vulkan-like subgroup ID schedule"
+      ]
     }
   ]
 }
