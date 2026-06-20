@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_wmma_vk64_padded44_ring96_fast_half_bufferstore_correctness",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_fast_half_bufferstore_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_FAST_HALF_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-fast-half-bufferstore-focused-6e893b66e-20260619-222222/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-fast-half-bufferstore-static-6e893b66e-20260619-222137/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_fast_half_bufferstore_wg256.hsaco",
+      "reason": "The Q6_K VK64 padded44 RING96 fast-half buffer-store probe combined the previous RING96 fragment-load schedule with the corrected WN32 fast-half selected/dummy LDS writeback stage. It built through normal CMake/Ninja HSACO generation and selected only under the opt-in env. Static comparison against the Qwen3 30B Q6_K p33 RADV medium oracle shows it preserves the useful RING96 math/load surface with wave64, 16 v_wmma_f16_16x16x16_f16, and 48 total ds_load_b64, while adding halfword LDS writeback with 128 ds_load_u16_d16, 130 ds_store_b16, 64 buffer_store_b32, and no global stores. It is still not a RADV clone: LDS grows to 15360 bytes versus RADV 11264, VGPR rises to 163 versus RADV 144, buffer_store_b32 is 64 versus RADV 96, halfword LDS traffic overshoots RADV's 64/64 load/store pair, pre-WMMA ds_load_b64 is only 28 versus RADV 48, and final pre-WMMA lgkmcnt remains 0 versus RADV 40. Focused CPU-reference rejects it before timing: p33 and generated p64 route traces selected this provider for all Q6 rows, but p33 failed with finite ERR around 33.1-33.9 and p64 failed with finite ERR around 2.99-3.00. The useful conclusion is precise: RING96's correctness failure is not fixed by the collision-safe selected-half writeback stage. The remaining issue is in the ring fragment/lane ownership or outstanding-load schedule itself; the next probe should not keep layering post-accumulator staging on this RING96 source."
+    },
+    {
       "id": "q6_k_wmma_vk64_padded44_wn32_fast_half_bufferstore_perf",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_fast_half_bufferstore_f16acc_wg128_f32",

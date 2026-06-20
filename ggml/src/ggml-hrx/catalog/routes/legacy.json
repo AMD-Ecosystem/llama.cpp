@@ -9130,6 +9130,51 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_fast_half_bufferstore_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_fast_half_bufferstore_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_fast_half_bufferstore_wg256",
+    "artifact_id": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_fast_half_bufferstore_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_fast_half_bufferstore_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q6_dense_prompt_wmma16x16_vk64_padded44_w64_ring96_fast_half_bufferstore_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q6_K x F32 -> F32 MUL_MAT",
+      "k_multiple": 256,
+      "rows_min": 16,
+      "cols_min": 16,
+      "cols_max": 64,
+      "requires_env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_FAST_HALF_BUFFERSTORE_F16ACC_WG256_PROMPT",
+      "prior_delta": "Derived from two rejected Qwen3 30B Q6_K p33 Vulkan-medium probes. The RING96 route reached the useful 16-WMMA/48-ds_load_b64 surface and VK64 LDS footprint but failed p33 correctness while missing RADV's halfword writeback. The WN32 fast-half buffer-store route proved the explicit ds_write_b16/ds_read_u16_d16 selected-half writeback can be made semantically correct with a separate dummy-half tile, but it lost the RING96 load surface and regressed timing. This opt-in route combines those two axes to test whether RING96 correctness failure was specifically the missing halfword LDS/writeback lane contract."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_fast_half_bufferstore_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_correctness_probe",
+      "selection": "Opt-in Q6_K VK64 padded44 RING96 fast-half buffer-store probe. CMake/Ninja built the HSACO and static comparison in cache/hrxv1/gfx1151/q6-vk64-ring96-fast-half-bufferstore-static-6e893b66e-20260619-222137/ preserved the useful RING96 surface with 16 WMMA and 48 total ds_load_b64 while adding halfword LDS writeback, 64 buffer stores, and no global stores. It still differs from the Qwen3 30B Q6_K p33 RADV medium oracle: LDS=15360 versus 11264, VGPR=163 versus 144, buffer_store_b32=64 versus 96, ds_load_u16_d16/ds_store_b16=128/130 versus 64/64, pre-WMMA ds_load_b64=28 versus 48, and final pre-WMMA lgkmcnt=0 versus 40. Focused CPU-reference in cache/hrxv1/gfx1151/q6-vk64-ring96-fast-half-bufferstore-focused-6e893b66e-20260619-222222/ selected this provider for all p33 and p64 Q6 rows and failed with finite ERR around 33 on p33 and 3 on p64. Reject before timing/model tests: collision-safe selected-half writeback does not repair RING96's lane/fragment mapping."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_f16acc_wg128_f32",
     "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_f16acc_wg128",
     "op": "MUL_MAT",

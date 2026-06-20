@@ -948,7 +948,19 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
         if (tid < 64u) {
             const int row_tile = group & 3;
             const int col_tile = (group >> 2) & 3;
-#if HRX_Q6_K_WMMA_VK128_BUFFER_STORE
+#if HRX_Q6_K_WMMA_VK128_STORE_STAGE_FAST_HALF
+            hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_fast_half_buffer_selected(
+                dst_rsrc,
+                rows,
+                row_base + static_cast<long long>(row_tile * 16),
+                col_base + static_cast<long long>(col_tile * 16),
+                rows,
+                cols,
+                acc[group],
+                lane,
+                wave,
+                (hrx_q6_k_wmma_vk128_lds_volatile_half_ptr) sh_store);
+#elif HRX_Q6_K_WMMA_VK128_BUFFER_STORE
             hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_buffer(
                 dst_rsrc,
                 rows,
