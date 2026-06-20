@@ -62,6 +62,14 @@
 #define HRX_Q6_K_WMMA_VK128_W64_VK64_RING96 0
 #endif
 
+#ifndef HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_COPY_A
+#define HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_COPY_A 0
+#endif
+
+#ifndef HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_COPY_B
+#define HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_COPY_B 0
+#endif
+
 #ifndef HRX_Q6_K_WMMA_VK128_FULL_TILE_STORE
 #define HRX_Q6_K_WMMA_VK128_FULL_TILE_STORE 0
 #endif
@@ -88,6 +96,7 @@ struct hrx_block_q6_K_wmma_vk128_lhs {
 typedef _Float16 hrx_q6_k_wmma_vk128_half16_vec __attribute__((ext_vector_type(16)));
 typedef _Float16 hrx_q6_k_wmma_vk128_half8_vec __attribute__((ext_vector_type(8)));
 typedef _Float16 hrx_q6_k_wmma_vk128_half4_vec __attribute__((ext_vector_type(4)));
+typedef uint32_t hrx_q6_k_wmma_vk128_u32x8_vec __attribute__((ext_vector_type(8)));
 typedef const __attribute__((address_space(3))) _Float16 * hrx_q6_k_wmma_vk128_lds_half_ptr;
 typedef volatile __attribute__((address_space(3))) _Float16 * hrx_q6_k_wmma_vk128_lds_volatile_half_ptr;
 typedef __attribute__((address_space(3))) uint16_t * hrx_q6_k_wmma_vk128_lds_u16_ptr;
@@ -152,6 +161,26 @@ static __device__ __forceinline__ _Float16 hrx_q6_k_wmma_vk128_u16_to_f16(uint32
     } pack;
     pack.u = static_cast<uint16_t>(value);
     return pack.h;
+}
+
+static __device__ __forceinline__ hrx_q6_k_wmma_vk128_half16_vec hrx_q6_k_wmma_vk128_copy_frag(
+        hrx_q6_k_wmma_vk128_half16_vec frag) {
+    const hrx_q6_k_wmma_vk128_u32x8_vec in = __builtin_bit_cast(hrx_q6_k_wmma_vk128_u32x8_vec, frag);
+    hrx_q6_k_wmma_vk128_u32x8_vec out;
+    asm volatile("v_mov_b32 %0, %8\n\t"
+                 "v_mov_b32 %1, %9\n\t"
+                 "v_mov_b32 %2, %10\n\t"
+                 "v_mov_b32 %3, %11\n\t"
+                 "v_mov_b32 %4, %12\n\t"
+                 "v_mov_b32 %5, %13\n\t"
+                 "v_mov_b32 %6, %14\n\t"
+                 "v_mov_b32 %7, %15\n\t"
+                 : "=v"(out[0]), "=v"(out[1]), "=v"(out[2]), "=v"(out[3]),
+                   "=v"(out[4]), "=v"(out[5]), "=v"(out[6]), "=v"(out[7])
+                 : "v"(in[0]), "v"(in[1]), "v"(in[2]), "v"(in[3]),
+                   "v"(in[4]), "v"(in[5]), "v"(in[6]), "v"(in[7])
+                 : "memory");
+    return __builtin_bit_cast(hrx_q6_k_wmma_vk128_half16_vec, out);
 }
 
 static __device__ __forceinline__ hrx_q6_k_wmma_vk128_half16_vec hrx_q6_k_wmma_vk128_duplicate_input(
@@ -793,9 +822,17 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
             for (int group = 0; group < 16; ++group) {
                 const int row_frag = group & 3;
                 const int col_frag = (group >> 2) & 3;
+                hrx_q6_k_wmma_vk128_half16_vec a_use = a_frag[row_frag];
+                hrx_q6_k_wmma_vk128_half16_vec b_use = b_frag[col_frag];
+#if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_COPY_A
+                a_use = hrx_q6_k_wmma_vk128_copy_frag(a_use);
+#endif
+#if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_COPY_B
+                b_use = hrx_q6_k_wmma_vk128_copy_frag(b_use);
+#endif
                 acc[group] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
-                    a_frag[row_frag],
-                    b_frag[col_frag],
+                    a_use,
+                    b_use,
                     acc[group],
                     HRX_Q6_K_WMMA_VK128_W64_OPSEL != 0);
             }

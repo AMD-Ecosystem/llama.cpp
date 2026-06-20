@@ -9130,6 +9130,51 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_copya_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_copya_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_copya_wg256",
+    "artifact_id": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_copya_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_copya_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q6_dense_prompt_wmma16x16_vk64_padded44_w64_ring96_copya_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q6_K x F32 -> F32 MUL_MAT",
+      "k_multiple": 256,
+      "rows_min": 16,
+      "cols_min": 16,
+      "cols_max": 64,
+      "requires_env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_COPYA_F16ACC_WG256_PROMPT",
+      "prior_delta": "Derived from the Q6 VK64 RADV96 standalone fixture in cache/hrxv1/gfx1151/coopstore-vk64-radv96-accdirect-copy-20260619-224152/. The accumulator-direct RING96 fixture failed only output group 5 with NaNs/Infs, while explicit v_mov_b32 materialization of A, B, or A+B fragments repaired the fixture. This opt-in catalog route ports the smallest repair, A-fragment materialization before each RING96 WMMA, into the real Q6 VK64 source to test whether the production correctness failure is the same fragment lifetime/compiler-lowering issue."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_copya_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_correctness_probe",
+      "selection": "Opt-in Q6_K VK64 padded44 RING96 copy-A fragment-materialization probe. CMake/Ninja built the HSACO in cache/hrxv1/gfx1151/q6-vk64-ring96-copya-static-824c8bcc5-20260619-225048/. Static evidence preserved wave64, LDS=11264, no spills, 16 WMMA, and 48 ds_load_b64 with all 48 visible before WMMA, but raised VGPR to 191 and still missed RADV's halfword/store contract. Focused p33 CPU-reference in cache/hrxv1/gfx1151/q6-vk64-ring96-copya-focused-824c8bcc5-20260619-225129/ selected this provider for all three Q6 rows and failed with finite ERR around 33.1-34.3. Reject before timing/model tests; A-fragment materialization alone does not transfer the standalone fixture repair into the real Q6 catalog route."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_fast_half_bufferstore_f16acc_wg256_f32",
     "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_fast_half_bufferstore_f16acc_wg256",
     "op": "MUL_MAT",

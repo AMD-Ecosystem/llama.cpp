@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_wmma_vk64_padded44_ring96_copya_correctness",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_copya_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_COPYA_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-copya-focused-824c8bcc5-20260619-225129/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-copya-static-824c8bcc5-20260619-225048/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_copya_wg256.hsaco",
+      "reason": "The Q6_K VK64 padded44 RING96 copy-A probe transferred the smallest standalone fragment-materialization repair from `hrx-hip-bench-coopmat-store-contract` into the real catalog route. It built through normal CMake/Ninja HSACO generation and selected only under the opt-in env. Static comparison against the Qwen3 30B Q6_K p33 RADV medium oracle showed one useful movement relative to base RING96: it preserved wave64, LDS=11264, no spills, 16 v_wmma_f16_16x16x16_f16, and 48 total ds_load_b64, and the hot window now exposes all 48 pre-WMMA ds_load_b64. The cost is high pressure, VGPR 191 versus base RING96 163 and RADV 144, while the store contract still has only 64 buffer stores, 2 ds_store_b16, no ds_load_u16_d16, and final pre-WMMA lgkmcnt=0. Focused p33 CPU-reference rejects it before timing: route traces selected this provider for Vcur, ffn_out, and result_output, but all three failed with finite ERR around 33.1-34.3. The standalone fixture repair does not transfer as A-fragment materialization alone; the next production-directed probe must either test B/A+B materialization or change the lane/writeback contract, not time this route."
+    },
+    {
       "id": "q6_k_wmma_vk64_radv96_accdirect_fixture_correctness",
       "date": "2026-06-20",
       "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-vk64-radv96-accdirect",
