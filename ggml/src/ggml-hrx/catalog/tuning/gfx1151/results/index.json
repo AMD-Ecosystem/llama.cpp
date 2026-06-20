@@ -3,6 +3,24 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_direct_wmma_vk128_packstage_asmwmma_motif192_k2_raw16_fulltile_perf",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-raw16-fulltile-focused-20260620-081017/",
+      "performance_artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-raw16-fulltile-perf-20260620-081101/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-raw16-fulltile-static-compare-20260620-081544/summary.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_raw16_fulltile_bufferstore_wg256.hsaco",
+      "status": "rejected_focused_perf_after_correctness_pass",
+      "findings": [
+        "added an opt-in CMake/Ninja-built Q8_0 raw16 full-tile route that crosses the correctness-clean raw16 inline-WMMA lane ownership with HRX_Q8_0_WMMA_VK128_ASSUME_FULL_TILES=1, guarded to rows_multiple=128, cols_multiple=128, cols>=512, k_multiple=32, and rows>=8192 || k>=8192",
+        "focused CPU-reference passed p33, p512, and p513; route traces proved p33 stayed on the existing narrow packed-Q8_1 route, p512 selected raw16_fulltile only for ffn_out, ffn_gate, and result_output, and p513 stayed on the existing tail-capable split-qsum route",
+        "same-runner focused timing rejected promotion versus the accepted packed-Q8_1 split-qsum baseline: p512 ffn_out 6719.849 -> 8258.924 us, ffn_gate 5948.866 -> 6720.997 us, and result_output 52216.357 -> 57505.262 us; p512 total was 67224.605 -> 74849.332 us, or 0.898x baseline speed",
+        "p513 declined the full-tile route as intended; the measured p513 total delta 79891.111 -> 81016.820 us should be treated as run noise and route-overhead context rather than selected-kernel evidence",
+        "static comparison shows the full-tile axis was meaningful: guarded raw16 had 64 one-store buffer clusters, while raw16_fulltile has 17 multi-store buffer clusters plus two LDS stores, lowers vmem loads from 6 to 3, and lowers wait-class instructions from 29 to 23",
+        "static comparison also explains the remaining performance gap: RADV has one compact 32-WMMA hot region, while both raw16 and raw16_fulltile split into two 16-WMMA hot regions and retain three barriers; store-guard removal helps raw16 but does not reproduce the Vulkan schedule",
+        "keep this route opt-in only. The next Q8 large-route candidate should target the WMMA hot-region/control-flow and cooperative writeback dataflow, not another full-tile store-guard wrapper."
+      ]
+    },
+    {
       "id": "q8_0_radv_large_store_path_audit",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-radv-store-path-audit-20260620-continue/",

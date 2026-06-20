@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_direct_wmma_vk128_packstage_asmwmma_motif192_k2_raw16_fulltile_perf",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_raw16_fulltile_bufferstore_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_ASMWMMA_MOTIF192_K2_RAW16_FULLTILE_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-raw16-fulltile-focused-20260620-081017/",
+      "performance_artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-raw16-fulltile-perf-20260620-081101/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-raw16-fulltile-static-compare-20260620-081544/summary.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_raw16_fulltile_bufferstore_wg256.hsaco",
+      "reason": "This opt-in route tested the narrow bounds-control pivot after guarded raw16 passed correctness but scalarized writeback into many one-store clusters. It keeps the real-output raw16 inline-WMMA lane ownership and direct buffer-store writeback, but defines HRX_Q8_0_WMMA_VK128_ASSUME_FULL_TILES=1 and is selected only for full-tile p512-style Q8_0 prompt rows with rows_multiple=128, cols_multiple=128, cols>=512, k_multiple=32, and rows>=8192 || k>=8192. Focused CPU-reference passed p33, p512, and p513. Route traces prove p33 stayed on existing narrow packed-Q8_1 routes, p512 selected this provider only for ffn_out, ffn_gate, and result_output, and p513 stayed on existing tail-capable split-qsum routes. Static comparison against RADV, the accepted packed-Q8_1 baseline, and guarded raw16 shows the pivot worked locally: raw16_fulltile compacts output stores from 64 one-store buffer clusters into 17 multi-store buffer clusters plus two LDS stores, lowers vmem loads from 6 to 3, and lowers wait-class instructions from 29 to 23. Reject for promotion because focused timing remains slower than the accepted packed-Q8_1 split-qsum baseline: p512 total 67224.605 -> 74849.332 us, ffn_out 6719.849 -> 8258.924 us, ffn_gate 5948.866 -> 6720.997 us, and result_output 52216.357 -> 57505.262 us. It is materially better than guarded raw16, but static evidence still shows the missing Vulkan schedule shape: RADV has one 32-WMMA hot region, while both HIP raw16 variants split into two 16-WMMA hot regions and retain three barriers. Keep the route opt-in as a useful negative result; next Q8 large-route work should target WMMA hot-region/control-flow and cooperative writeback dataflow rather than repeating store-guard removal."
+    },
+    {
       "id": "q8_0_direct_wmma_vk128_packstage_asmwmma_motif192_k2_raw16_real_output_perf",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_raw16_bufferstore_f16acc_wg256_f32",

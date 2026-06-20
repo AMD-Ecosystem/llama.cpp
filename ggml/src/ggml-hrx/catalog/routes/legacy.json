@@ -12162,6 +12162,52 @@
     }
   },
   {
+    "id": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_raw16_fulltile_bufferstore_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_raw16_fulltile_bufferstore_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_raw16_fulltile_bufferstore_wg256",
+    "artifact_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_raw16_fulltile_bufferstore_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_raw16_fulltile_bufferstore_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 110,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q8_0_prompt_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_raw16_fulltile_bufferstore_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q8_0 x F32 -> F32 MUL_MAT",
+      "k_multiple": 32,
+      "rows_multiple": 128,
+      "cols_multiple": 128,
+      "win_domain": "rows >= 8192 || k >= 8192",
+      "cols_min": 512,
+      "selector_gate": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_ASMWMMA_MOTIF192_K2_RAW16_FULLTILE_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "prior_delta": "Crosses the correctness-clean raw16 real-output lane ownership with ASSUME_FULL_TILES=1 after static evidence showed the raw16 route was scalarized into many one-store guarded clusters. This route is intentionally full-tile p512-style only: p33 and p513 must remain on existing narrow/tail routes unless separately proven."
+    },
+    "evidence_summary": {
+      "status": "opt_in_gfx1151_rejected_focused_perf",
+      "selection": "Focused gate artifact cache/hrxv1/gfx1151/q8-motif192-k2-raw16-fulltile-focused-20260620-081017/ passed CPU-reference rows for p33, p512, and p513. Route traces proved p33 stayed on existing narrow packed-Q8_1 routes, p512 selected this full-tile raw16 provider only for ffn_out, ffn_gate, and result_output, and p513 stayed on existing tail-capable split-qsum routes. Static artifact cache/hrxv1/gfx1151/q8-raw16-fulltile-static-compare-20260620-081544/summary.md shows the full-tile spelling compacted guarded raw16 stores from 64 one-store buffer clusters to 17 multi-store buffer clusters, but it still has two 16-WMMA hot regions and three barriers instead of RADV's one 32-WMMA hot region. Reject for promotion on same-runner focused timing in cache/hrxv1/gfx1151/q8-motif192-k2-raw16-fulltile-perf-20260620-081101/: p512 selected rows regressed versus the packed-Q8_1 baseline with ffn_out 6719.849 -> 8258.924 us, ffn_gate 5948.866 -> 6720.997 us, and result_output 52216.357 -> 57505.262 us. Keep opt-in only as evidence that store-guard removal helps raw16 but is not enough for parity."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ],
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_raw16_fulltile_bufferstore_f16acc_wg256_f32"
+    }
+  },
+  {
     "id": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_ktilefrag_nowaitload_bufferstore_f16acc_wg256_f32",
     "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_ktilefrag_nowaitload_bufferstore_f16acc_wg256",
     "op": "MUL_MAT",

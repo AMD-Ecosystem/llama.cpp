@@ -1485,12 +1485,19 @@ static __device__ __forceinline__ void hrx_q8_0_wmma_vk128_motif192_raw_store_sl
     const int acc_index = HRX_Q8_0_WMMA_VK128_W64_MOTIF192_RAW16_ONLY ? group16 : (group16 & 7);
     const long long row = row_base + static_cast<long long>(wave_row * 64 + (group16 & 3) * 16 + row_lane + slot * 4);
     const long long col = col_base + static_cast<long long>(wave_col * 64 + ((group16 >> 2) & 3) * 16 + col_lane);
+#if HRX_Q8_0_WMMA_VK128_ASSUME_FULL_TILES
+    hrx_q8_0_wmma_vk128_buffer_store_f32(
+        dst_rsrc,
+        col * rows_stride + row,
+        static_cast<float>(acc[acc_index][slot * 2 + HRX_Q8_0_WMMA_VK128_W64_OPSEL]));
+#else
     if (row < rows && col < cols) {
         hrx_q8_0_wmma_vk128_buffer_store_f32(
             dst_rsrc,
             col * rows_stride + row,
             static_cast<float>(acc[acc_index][slot * 2 + HRX_Q8_0_WMMA_VK128_W64_OPSEL]));
     }
+#endif
 }
 
 static __device__ __forceinline__ void hrx_q8_0_wmma_vk128_motif192_stage_store_slot(
