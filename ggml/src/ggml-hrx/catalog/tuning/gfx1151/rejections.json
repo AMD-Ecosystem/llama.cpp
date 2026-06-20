@@ -1033,6 +1033,15 @@
       "reason": "The B-half packed-Q8_1/x4 probe is the bounded midpoint between accepted B-quad and rejected B-oct. It preserves the current MMQL128/B-quad dataflow, BM128, BN128, wave64, BK_STEP1, and output ownership, but preloads four WNITER B-cache positions before issuing dots. This tests whether the useful B-oct pre-dot LDS load-window movement can be approximated without carrying the full B window live. It built through normal CMake/Ninja and moved the parsed pre-hot load score from B-quad's 16 toward B-oct at 26, with final pre-hot lgkmcnt 19, but it already hits the same pressure cliff: wave64, SGPR=53, VGPR=192, LDS=8192, private_segment_fixed_size=76, and vgpr_spill_count=18 with scratch load traffic. Reject at the compile/static gate before focused runtime. The B-cache live-window axis is now bracketed: B-quad is the largest no-spill accepted point, B-half spills, and B-oct spills harder."
     },
     {
+      "id": "q4_dense_prompt_mmql128_bhalf_cr_compile",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bhalf_cr_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q4_K_Q8_1_X4_MMQL128_BHALF_CR_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q4-mmql128-bhalf-cr-static-e7e35977e-20260619-234116/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q4_k_q8_1_x4_mmql128_bhalf_cr.hsaco",
+      "reason": "The B-half-CR packed-Q8_1/x4 probe tested whether CR-major consume order could reduce the B-half live range enough to recover a no-spill schedule while preserving the four-WNITER B-cache preload window, current MMQL128/B-quad dataflow, BM128, BN128, wave64, BK_STEP1, and output ownership. It built through normal CMake/Ninja and generated the intended HSACO/catalog route, but static evidence still rejects it before runtime: wave64, SGPR=53, VGPR=192, LDS=8192, private/scratch segment 68 bytes, and vgpr_spill_count=16. The CR-major order slightly improves over B-half's 76-byte private segment and 18 VGPR spills, but it remains beyond the gfx1151 resource envelope and does not become a focused correctness or timing candidate. The B-cache preload axis remains bracketed: B-quad/B-quad-CR are no-spill, B-half-CR and B-half spill, and B-oct spills harder."
+    },
+    {
       "id": "q4_dense_prompt_mmql128_bquad_cr_p33_p512_p513",
       "date": "2026-06-18",
       "route": "hrx_mul_mat_vec_q4_k_q8_1_x4_mmql128x128_bquad_cr_wg256_f32",
