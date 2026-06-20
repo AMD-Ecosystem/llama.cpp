@@ -10796,6 +10796,51 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_bpair_wg256_f32",
+    "family": "mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_bpair_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q8_0_mmq64x128_splitqsum_bk2_wave64_bpair",
+    "artifact_id": "mul_mat_vec_q8_0_mmq64x128_splitqsum_bk2_wave64_bpair_hsaco",
+    "export_name": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_bpair_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 110,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q8_0_prompt_mmq64x128_splitqsum_bk2_wave64_bpair_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q8_0 x F32 -> F32 MUL_MAT",
+      "k_multiple": 128,
+      "rows_multiple": 128,
+      "cols_min": 128,
+      "cols_multiple_for_selector": 128,
+      "selector_gate": "diagnostic opt-in only for full-column rows with GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X128_SPLITQSUM_BK2_WAVE64_BPAIR_PROMPT=1; disabled with GGML_HRX_DISABLE_Q8_0_Q8_1_X4_MMQ64X128_SPLITQSUM_BK2_WAVE64_BPAIR_PROMPT=1",
+      "prior_delta": "Preserves the accepted Q8_0 packed-Q8_1 BM64/BN128 split-qsum BK2 wave64 route and changes only per-iqs B-cache issue order by loading one 16-column chunk into a short-lived B-pair array before dot issue. This brackets Q4/Q5 B-pair/B-quad LDS-read issue-window evidence without widening qsum live range to 32 columns."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_bpair_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_focused_perf_no_schedule_delta",
+      "selection": "Opt-in diagnostic only. CMake/Ninja HSACO compile passed and p33, p512, and p513 CPU-reference gates passed. Route traces kept p33 on existing narrow/default routes, selected B-pair for all five p512 rows under opt-in, and kept p513 on scalar plus BN112 split-qsum fallback routes. Static HSACO comparison showed no measured schedule/resource movement versus the accepted parent: both are wave64, SGPR=52, VGPR=169, LDS=8704, scratch=0, vgpr_spills=0, 768 v_dot4_i32_iu8, 222 LDS reads, 58 LDS writes, 108 VMEM loads, 98 VMEM stores, 843 wait-class instructions, and 12 barriers. Focused p512 timing regressed slightly versus the accepted BK2+wave64 default, 67574.698 -> 67870.350 us, so do not promote or model-test this source spelling."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_chunk32_wg256_f32",
     "family": "mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_chunk32_wg256",
     "op": "MUL_MAT",

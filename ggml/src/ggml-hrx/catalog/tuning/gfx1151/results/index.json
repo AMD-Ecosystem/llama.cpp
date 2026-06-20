@@ -3,6 +3,22 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_prompt_mmq64x128_splitqsum_bk2_wave64_bpair_issue_order",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-bk2-wave64-bpair-focused-edaf02ca6-20260620-050945/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-bk2-wave64-bpair-static-edaf02ca6-20260620-050857/static.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_mmq64x128_splitqsum_bk2_wave64_bpair.hsaco",
+      "status": "rejected_focused_perf_no_schedule_delta",
+      "findings": [
+        "added a CMake/Ninja-built opt-in Q8_0 packed-Q8_1 BM64/BN128 split-qsum BK2 wave64 B-pair route that preserves the accepted full-column default and preloads one 16-column B-cache chunk before each qpack dot issue",
+        "static HSACO comparison passed but showed no measured schedule/resource movement versus the accepted parent: both are wave64, SGPR=52, VGPR=169, LDS=8704, scratch=0, vgpr_spills=0, 768 v_dot4_i32_iu8, 222 LDS reads, 58 LDS writes, 108 VMEM loads, 98 VMEM stores, 843 wait-class instructions, and 12 barriers",
+        "focused CPU-reference passed p33, p512, and p513; route traces kept p33 on existing narrow/default routes, selected B-pair for all five p512 rows under opt-in, and kept p513 on scalar plus BN112 split-qsum tail routes",
+        "same-runner p512 focused timing rejected the probe versus the accepted BK2+wave64 default: total 67574.698 -> 67870.350 us, bpair/default 1.004x",
+        "p513 guarded-tail timing also showed no benefit: total 80508.296 -> 81337.770 us, with both default and opt-in staying on the same p513 fallback routes",
+        "do not promote or model-test; this closes the short-lived B-cache preload spelling for the current Q8 packed route because HIP emitted no useful schedule delta and focused timing was slightly slower"
+      ]
+    },
+    {
       "id": "q8_0_direct_wmma_vk128_streamrow_fast_half_split_selected_correctness",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-streamrow-fast-half-split-selected-focused-20260620-044445/",

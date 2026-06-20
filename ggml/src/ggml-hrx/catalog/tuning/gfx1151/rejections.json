@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_prompt_mmq64x128_splitqsum_bk2_wave64_bpair_issue_order",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_bpair_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X128_SPLITQSUM_BK2_WAVE64_BPAIR_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q8-bk2-wave64-bpair-focused-edaf02ca6-20260620-050945/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-bk2-wave64-bpair-static-edaf02ca6-20260620-050857/static.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_mmq64x128_splitqsum_bk2_wave64_bpair.hsaco",
+      "reason": "The B-pair probe preserved the accepted Q8_0 packed-Q8_1 BM64/BN128 split-qsum BK2 wave64 full-column route and changed only per-iqs B-cache issue order by loading one 16-column chunk into a short-lived local array before dot issue. It was intended to bracket the positive Q4/Q5 B-pair/B-quad LDS-read issue-window axis without repeating the rejected chunk32 qsum live-range spill. It built through normal CMake/Ninja HSACO generation and passed p33, p512, and p513 CPU-reference gates. Route traces selected B-pair for all five p512 rows under opt-in, kept p33 on existing narrow/default routes, and kept p513 on scalar plus BN112 split-qsum fallback routes. Reject before model A/B because static HSACO comparison showed no measured schedule/resource movement versus the accepted parent, and focused timing was slightly slower: both parent and B-pair are wave64, SGPR=52, VGPR=169, LDS=8704, scratch=0, vgpr_spills=0, 768 v_dot4_i32_iu8, 222 LDS reads, 58 LDS writes, 108 VMEM loads, 98 VMEM stores, 843 wait-class instructions, and 12 barriers; p512 total regressed 67574.698 -> 67870.350 us (bpair/default 1.004x). This closes the short-lived B-cache preload spelling for the current Q8 packed route. Continue Q8 parity work with the RADV cooperative store/lane-ownership target or a materially different dataflow primitive, not another source-only B-read reshuffle in this family."
+    },
+    {
       "id": "q8_0_prompt_mmq64x128_splitqsum_bk2_wave64_chunk32_compile_spills",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_chunk32_wg256_f32",

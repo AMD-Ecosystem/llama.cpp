@@ -1035,6 +1035,12 @@ ggml_hrx_add_kernel_source(
     DEPS "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q8_0.hip.cpp"
 )
 ggml_hrx_add_kernel_source(
+    SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q8_0_mmq64x128_splitqsum_bk2_wave64_bpair.hip.cpp"
+    WAVEFRONT_SIZE 64
+    ARCH_PREFIXES gfx11
+    DEPS "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q8_0.hip.cpp"
+)
+ggml_hrx_add_kernel_source(
     SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q8_0_mmq64x128_splitqsum_bk2_wave64_chunk32.hip.cpp"
     WAVEFRONT_SIZE 64
     ARCH_PREFIXES gfx11
