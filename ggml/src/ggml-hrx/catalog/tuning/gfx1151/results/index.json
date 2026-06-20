@@ -33,6 +33,66 @@
       ]
     },
     {
+      "id": "q8_0_coopstore_wmma_lds_k2_direct192_timing",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/coopstore-wmma-lds-k2-timing-a68924c17-dirty-20260620-161000/",
+      "source_commit": "a68924c17-dirty",
+      "tool": "CMake/Ninja-built hrx-hip-bench-coopmat-store-contract with --mode=timing --timing-iters=20000",
+      "status": "accepted_bench_timing_prior_reject_motif_halfword_stage_as_next_transfer",
+      "candidate_gate": {
+        "production_target": "Llama 3.1 8B Q8_0 p512/p513 dense prompt large route; isolate whether the lower-level RADV-like Q8 store/ownership surface is cheap enough before another production selector transfer",
+        "baseline_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-direct64",
+        "variant_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract --mode=timing --timing-iters=20000",
+        "same_runner_comparison_method": "same binary, same allocation, sequential timing of correctness-clean coopstore primitives; HIP event timings are invalid/negative on this stack, so use host_avg_us only as a relative signal",
+        "route_trace_path": "not applicable; standalone lower-level CMake-built fixture only",
+        "scheduler_trace_path": "prior static primitive artifact cache/hrxv1/gfx1151/coopstore-wmma-lds-k2-direct192-raw-recheck-d33b98a86-20260620-053314/ plus this timing artifact summary.json",
+        "focused_cpu_reference": "timed modes wmma-lds-k2-direct64, wmma-lds-k2-direct160-raw, wmma-lds-k2-direct192-raw, wmma-lds-k2-radv-motif192, and radv-mixed192 all reported bad=0 in the fixture",
+        "compile_report_path": "CMake/Ninja-built hrx-hip-bench-coopmat-store-contract in build/hrx-v1-catalog-gfx1151/bin",
+        "target_listing_path": "prior direct192 raw static listing under cache/hrxv1/gfx1151/coopstore-wmma-lds-k2-direct192-raw-recheck-d33b98a86-20260620-053314/",
+        "prior_art_schedule_source": "Llama 3.1 8B Q8_0 p512/p513 RADV large oracle with 32 WMMA, 64 LDS loads, 192 buffer stores, VGPR=192, LDS=22528, no spills; prior direct192 raw HIP primitive with 32 WMMA, 64 ds_load_b64, 192 buffer_store_b32, no spills",
+        "promotion_rule": "do not promote this fixture directly. The next route-facing Q8 candidate may use the direct192 raw ownership primitive, but must pass focused p512/p513 correctness and route traces and beat the accepted Q8 default in same-runner timing. Do not transfer the motif halfword-stage surface as the next production candidate."
+      },
+      "timing": {
+        "note": "HIP event elapsed values were negative on this ROCm stack; host timings are same-binary relative signal only.",
+        "rows": [
+          {
+            "mode": "wmma-lds-k2-direct64",
+            "host_avg_us": 3.026133,
+            "ratio_vs_direct64": 1.0
+          },
+          {
+            "mode": "wmma-lds-k2-direct160-raw",
+            "host_avg_us": 3.389806,
+            "ratio_vs_direct64": 1.12018
+          },
+          {
+            "mode": "wmma-lds-k2-direct192-raw",
+            "host_avg_us": 3.47522,
+            "ratio_vs_direct64": 1.14841
+          },
+          {
+            "mode": "wmma-lds-k2-radv-motif192",
+            "host_avg_us": 7.82388,
+            "ratio_vs_direct64": 2.58544
+          },
+          {
+            "mode": "radv-mixed192",
+            "host_avg_us": 6.510449,
+            "ratio_vs_direct64": 2.15141
+          }
+        ]
+      },
+      "findings": [
+        "added a timing mode to the CMake-built coopmat store contract fixture so Q8 store/ownership primitives can be compared without adding a production selector",
+        "direct192 raw remains the useful lower-level Q8 primitive: it is correctness-clean and only about 1.15x direct64 in same-binary host timing while matching the target 192 buffer-store surface from the prior static artifact",
+        "direct160 raw is also correctness-clean and about 1.12x direct64, but it is not the RADV large-route 192-store contract",
+        "the motif halfword-stage surface is correctness-clean but about 2.59x direct64 and 2.25x direct192 raw in this fixture, so it is not a cheap next transfer path for Q8 p512/p513",
+        "the pure radv-mixed192 non-WMMA store/stage surface is about 2.15x direct64, confirming the halfword-stage/staged-store motif is expensive even before production matmul live ranges",
+        "wmma-lds-k2-radv-mixed192 still fails fixture correctness; wmma-lds-k2-mixed128 was excluded from timing after an unstable clean/failing correctness result across reruns",
+        "next Q8 work should either integrate direct192 raw with lower route-facing live range or find a cheaper cooperative-store/lane-ownership primitive; do not add another wrapper around the motif halfword stage"
+      ]
+    },
+    {
       "id": "q6_k_wmma_vk64_ring96_k2_kloop_asm_copyab_direct64_probe",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q6-ring96-kloop-asm-copyab-repro-d2876700f-20260620-144438/",

@@ -2,6 +2,7 @@
 #include <hip/hip_runtime.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cmath>
 #include <cstdio>
@@ -2264,6 +2265,7 @@ struct options {
     std::string mode = "branch192";
     unsigned int group = 17;
     unsigned int flags = 0x31004000u;
+    unsigned int timing_iters = 10000;
 };
 
 static unsigned int parse_u32(const char * value) {
@@ -2285,9 +2287,11 @@ static options parse_options(int argc, char ** argv) {
             opts.group = std::min(HRX_COOPSTORE_MAX_GROUPS - 1u, parse_u32(argv[i] + 8));
         } else if (std::strncmp(argv[i], "--flags=", 8) == 0) {
             opts.flags = parse_u32(argv[i] + 8);
+        } else if (std::strncmp(argv[i], "--timing-iters=", 15) == 0) {
+            opts.timing_iters = std::max(1u, parse_u32(argv[i] + 15));
         } else {
             std::fprintf(stderr,
-                "usage: %s [--mode=linear64|linear128|linear192|branch192|radv-mixed96|radv-mixed192|wmma-radv-mixed96|wmma-radv-mixed192|wmma-lds-radv-mixed96|wmma-lds-radv-mixed192|wmma-lds-k2-radv-mixed192|wmma-lds-k2-radv-motif192|wmma-lds-k2-radv-motif192-typedstage|wmma-lds-k2-stagefirst-mixed192|wmma-lds-k2-mixed96|wmma-lds-k2-typedstage-mixed96|wmma-lds-k2-kloop-mixed96|wmma-lds-k2-kloop-direct64|wmma-lds-k2-kloop-asm-mixed96|wmma-lds-k2-kloop-asm-stagefirst-mixed96|wmma-lds-k2-kloop-asm-linearstage-mixed96|wmma-lds-k2-kloop-asm-typedstage-mixed96|wmma-lds-k2-kloop-asm-direct64|wmma-lds-vk64-radv96|wmma-lds-vk64-radv96-accdirect|wmma-lds-vk64-radv96-accslots|wmma-lds-vk64-radv96-accdirect-copya|wmma-lds-vk64-radv96-accdirect-copyb|wmma-lds-vk64-radv96-accdirect-copyab|wmma-lds-k2-mixed128|wmma-lds-k2-mixed128-padded32|wmma-lds-k2-mixed160-lo|wmma-lds-k2-mixed160-hi|wmma-lds-k2-mixed160-lo-tight|wmma-lds-k2-mixed160-hi-tight|wmma-lds-k2-stage96-accsink|wmma-lds-k2-mixed160-linearstage|wmma-lds-k2-mixed160-splitstage|wmma-lds-k2-direct160-raw|wmma-lds-k2-direct192-raw|wmma-lds-k2-direct64] [--group=N] [--flags=0x31004000]\n",
+                "usage: %s [--mode=linear64|linear128|linear192|branch192|radv-mixed96|radv-mixed192|wmma-radv-mixed96|wmma-radv-mixed192|wmma-lds-radv-mixed96|wmma-lds-radv-mixed192|wmma-lds-k2-radv-mixed192|wmma-lds-k2-radv-motif192|wmma-lds-k2-radv-motif192-typedstage|wmma-lds-k2-stagefirst-mixed192|wmma-lds-k2-mixed96|wmma-lds-k2-typedstage-mixed96|wmma-lds-k2-kloop-mixed96|wmma-lds-k2-kloop-direct64|wmma-lds-k2-kloop-asm-mixed96|wmma-lds-k2-kloop-asm-stagefirst-mixed96|wmma-lds-k2-kloop-asm-linearstage-mixed96|wmma-lds-k2-kloop-asm-typedstage-mixed96|wmma-lds-k2-kloop-asm-direct64|wmma-lds-vk64-radv96|wmma-lds-vk64-radv96-accdirect|wmma-lds-vk64-radv96-accslots|wmma-lds-vk64-radv96-accdirect-copya|wmma-lds-vk64-radv96-accdirect-copyb|wmma-lds-vk64-radv96-accdirect-copyab|wmma-lds-k2-mixed128|wmma-lds-k2-mixed128-padded32|wmma-lds-k2-mixed160-lo|wmma-lds-k2-mixed160-hi|wmma-lds-k2-mixed160-lo-tight|wmma-lds-k2-mixed160-hi-tight|wmma-lds-k2-stage96-accsink|wmma-lds-k2-mixed160-linearstage|wmma-lds-k2-mixed160-splitstage|wmma-lds-k2-direct160-raw|wmma-lds-k2-direct192-raw|wmma-lds-k2-direct64|timing] [--group=N] [--flags=0x31004000] [--timing-iters=N]\n",
                 argv[0]);
             std::exit(2);
         }
@@ -2426,6 +2430,58 @@ static float coopstore_probe_wmma_ring12_expected_value(unsigned int group) {
     return static_cast<float>(16u * (1u + (row_frag & 3u)) * (1u + ((col_frag + 6u) & 3u)));
 }
 
+static void run_timing_suite(
+        float * d_out,
+        size_t count,
+        unsigned long long byte_extent,
+        unsigned int flags,
+        unsigned int timing_iters) {
+    constexpr unsigned int warmup_iters = 128;
+
+    std::printf("coopmat-store-timing-suite iters=%u warmup=%u flags=0x%x bytes=%llu\n",
+        timing_iters, warmup_iters, flags, byte_extent);
+
+#define HRX_COOPSTORE_TIME_CASE(MODE_NAME, KERNEL_NAME) do { \
+        HIP_CHECK(hipMemset(d_out, 0, count * sizeof(float))); \
+        for (unsigned int iter = 0; iter < warmup_iters; ++iter) { \
+            hipLaunchKernelGGL(KERNEL_NAME, dim3(1), dim3(256), 0, 0, d_out, byte_extent, flags); \
+        } \
+        HIP_CHECK(hipGetLastError()); \
+        HIP_CHECK(hipDeviceSynchronize()); \
+        hipEvent_t start_event = nullptr; \
+        hipEvent_t stop_event = nullptr; \
+        HIP_CHECK(hipEventCreate(&start_event)); \
+        HIP_CHECK(hipEventCreate(&stop_event)); \
+        const auto host_start = std::chrono::steady_clock::now(); \
+        HIP_CHECK(hipEventRecord(start_event, 0)); \
+        for (unsigned int iter = 0; iter < timing_iters; ++iter) { \
+            hipLaunchKernelGGL(KERNEL_NAME, dim3(1), dim3(256), 0, 0, d_out, byte_extent, flags); \
+        } \
+        HIP_CHECK(hipGetLastError()); \
+        HIP_CHECK(hipEventRecord(stop_event, 0)); \
+        HIP_CHECK(hipEventSynchronize(stop_event)); \
+        const auto host_stop = std::chrono::steady_clock::now(); \
+        float event_ms = 0.0f; \
+        HIP_CHECK(hipEventElapsedTime(&event_ms, start_event, stop_event)); \
+        HIP_CHECK(hipEventDestroy(start_event)); \
+        HIP_CHECK(hipEventDestroy(stop_event)); \
+        const double host_us = std::chrono::duration<double, std::micro>(host_stop - host_start).count(); \
+        std::printf("coopmat-store-timing mode=%s iters=%u event_total_us=%.3f event_avg_us=%.6f host_total_us=%.3f host_avg_us=%.6f\n", \
+            (MODE_NAME), timing_iters, \
+            static_cast<double>(event_ms) * 1000.0, \
+            static_cast<double>(event_ms) * 1000.0 / static_cast<double>(timing_iters), \
+            host_us, host_us / static_cast<double>(timing_iters)); \
+    } while (0)
+
+    HRX_COOPSTORE_TIME_CASE("wmma-lds-k2-direct64", coopstore_probe_wmma_lds_k2_direct64);
+    HRX_COOPSTORE_TIME_CASE("wmma-lds-k2-direct160-raw", coopstore_probe_wmma_lds_k2_direct160_raw);
+    HRX_COOPSTORE_TIME_CASE("wmma-lds-k2-direct192-raw", coopstore_probe_wmma_lds_k2_direct192_raw);
+    HRX_COOPSTORE_TIME_CASE("wmma-lds-k2-radv-motif192", coopstore_probe_wmma_lds_k2_radv_motif192);
+    HRX_COOPSTORE_TIME_CASE("radv-mixed192", coopstore_probe_radv_mixed192);
+
+#undef HRX_COOPSTORE_TIME_CASE
+}
+
 int main(int argc, char ** argv) {
     const options opts = parse_options(argc, argv);
     const size_t count = HRX_COOPSTORE_MAX_VALUES;
@@ -2436,7 +2492,10 @@ int main(int argc, char ** argv) {
     std::vector<float> h_expected(count, 0.0f);
     HIP_CHECK(hipMemset(d_out.ptr, 0, count * sizeof(float)));
 
-    if (opts.mode == "linear64") {
+    if (opts.mode == "timing") {
+        run_timing_suite(d_out.ptr, count, byte_extent, opts.flags, opts.timing_iters);
+        return 0;
+    } else if (opts.mode == "linear64") {
         hipLaunchKernelGGL(coopstore_probe_linear64, dim3(1), dim3(64), 0, 0, d_out.ptr, byte_extent, opts.flags);
         for (unsigned int group = 0; group < 16; ++group) {
             for (unsigned int slot = 0; slot < HRX_COOPSTORE_VALUES_PER_GROUP; ++slot) {
