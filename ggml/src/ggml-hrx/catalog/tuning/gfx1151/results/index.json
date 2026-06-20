@@ -115,6 +115,23 @@
       ]
     },
     {
+      "id": "q8_0_bm128_direct192_asm_real_output_fixture",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-bm128-direct192-output-20260620-continue/",
+      "tool": "hrx-hip-bench-q8-wmma-repro",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro",
+      "status": "accepted_real_output_fixture_prior_not_production_route",
+      "findings": [
+        "added a real-output BM128xBN128 direct192 Q8 WMMA diagnostic to the CMake/Ninja-built q8_wmma_repro harness so the previously accepted tile-local inline-WMMA contract can write normal dst[col * rows + row] tiles across multiple workgroups and edge columns",
+        "the raw inline-assembly WMMA mode passed k=4096 rows=128 cols=128, rows=128 cols=33, rows=4096 cols=512, and rows=4096 cols=513 with bad=0, nan=0, inf=0, sentinel=0; p512 max_abs=0.00268994 and p513 max_abs=0.00268994",
+        "the same inline-assembly mode also passed production-depth k=14336 spot checks for rows=128 cols=128 and rows=128 cols=33 with bad=0, nan=0, inf=0, sentinel=0, and max_abs=0.00796381",
+        "the HIP builtin WMMA control failed the same real-output fixture: at k=4096 it failed p128 with bad=494 max_abs=7.57994, p33 with bad=247 max_abs=7.57994, p512 with bad=162780 nan=1588 max_abs=24960, and p513 with bad=164811 nan=1536 max_abs=24816",
+        "the builtin control also failed k=14336 p128 and p33 with bad=512 and bad=256 respectively, max_abs=26.8066; the harness currently returns zero for custom single-shape runs despite nonzero bad counts, so the stdout evidence is authoritative for those two rejection rows",
+        "this closes the prior gap between the tile-local direct192 contract and full-width output proof: inline assembly preserves the real-output lane/writeback contract across p512 and p513 at k4096, while the compiler builtin spelling is not a valid correctness primitive for this schedule on gfx1151",
+        "do not promote this fixture directly. It still loads F32 RHS and is not wired to the production Q8 catalog ABI or timing path. The next route-facing Q8 candidate should port this exact inline-WMMA lane/writeback ownership into a production Q8 provider or a lower-level cooperative store primitive, then run focused backend-op p33/p512/p513 timing against the accepted packed-Q8_1 split-qsum baseline."
+      ]
+    },
+    {
       "id": "q8_0_packstage_asmwmma_fast_half_fullpair_compile_contract",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-packstage-asmwmma-fast-half-fullpair-compile-20260620-062855/",
