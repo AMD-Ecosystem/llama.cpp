@@ -201,6 +201,10 @@
 #define HRX_Q8_0_WMMA_VK128_USE_ASM_WMMA 0
 #endif
 
+#ifndef HRX_Q8_0_WMMA_VK128_ASM_WMMA_NO_MEMORY_CLOBBER
+#define HRX_Q8_0_WMMA_VK128_ASM_WMMA_NO_MEMORY_CLOBBER 0
+#endif
+
 #ifndef HRX_Q8_0_WMMA_VK128_ASSUME_FULL_TILES
 #define HRX_Q8_0_WMMA_VK128_ASSUME_FULL_TILES 0
 #endif
@@ -430,15 +434,27 @@ static __device__ __forceinline__ hrx_q8_0_wmma_vk128_half8_vec hrx_q8_0_wmma_vk
 #if HRX_Q8_0_WMMA_VK128_USE_ASM_WMMA
     hrx_q8_0_wmma_vk128_half8_vec out;
 #if HRX_Q8_0_WMMA_VK128_W64_OPSEL
+#if HRX_Q8_0_WMMA_VK128_ASM_WMMA_NO_MEMORY_CLOBBER
+    asm volatile("v_wmma_f16_16x16x16_f16 %0, %1, %2, %3 op_sel:[0,0,1]\n"
+                 : "=v"(out)
+                 : "v"(a_frag), "v"(b_frag), "v"(acc));
+#else
     asm volatile("v_wmma_f16_16x16x16_f16 %0, %1, %2, %3 op_sel:[0,0,1]\n"
                  : "=v"(out)
                  : "v"(a_frag), "v"(b_frag), "v"(acc)
                  : "memory");
+#endif
+#else
+#if HRX_Q8_0_WMMA_VK128_ASM_WMMA_NO_MEMORY_CLOBBER
+    asm volatile("v_wmma_f16_16x16x16_f16 %0, %1, %2, %3\n"
+                 : "=v"(out)
+                 : "v"(a_frag), "v"(b_frag), "v"(acc));
 #else
     asm volatile("v_wmma_f16_16x16x16_f16 %0, %1, %2, %3\n"
                  : "=v"(out)
                  : "v"(a_frag), "v"(b_frag), "v"(acc)
                  : "memory");
+#endif
 #endif
     return out;
 #else
