@@ -3,6 +3,20 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_motif192_k2_colpairfrag_issue_window_probe",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-colpairfrag-probe-2e0adbb6c-20260620-042343/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro with embedded gfx1151 object extracted to cache/hrxv1/gfx1151/q8-motif192-k2-colpairfrag-probe-2e0adbb6c-20260620-042343/static/fatbin/gfx1151.o",
+      "status": "rejected_standalone_issue_window_axis_not_better_than_ktilefrag",
+      "findings": [
+        "added a standalone CMake/Ninja-built Q8 motif192 ColPairFrag probe that brackets the StreamFrag versus KTileFrag issue-window axis by loading A[4] plus B[2] for each K-tile column pair, issuing 8 WMMAs, then loading the second column pair",
+        "correctness passed all aligned, odd-row, odd-column, p512, and p513 rows with bad=0, including 4096x512 and 4096x513",
+        "static extraction for q8_motif192_wmma_k2_realdata_fullk_colpairfrag_store_kernel is wave64, SGPR=60, VGPR=220, LDS=22528, private segment=0, no spills, 32 v_wmma, 96 ds_load_b64, 130 ds_store_b16, 128 ds_load_u16_d16, and 192 buffer_store_b32",
+        "same-binary timing showed ColPairFrag improves over StreamFrag on large rows but is still slightly slower than KTileFrag: p512 full ratios were StreamFrag 0.829759, KTileFrag 0.677126, ColPairFrag 0.683114; p513 ratios were StreamFrag 0.778130, KTileFrag 0.661626, ColPairFrag 0.678013",
+        "reject ColPairFrag for route transfer because it reloads A fragments per column pair, increasing ds_load_b64 from KTileFrag's 64 to 96 without winning timing; the next Q8 parity probe should preserve KTileFrag's load count while reducing catalog transfer overhead or use a lower-level cooperative writeback/lane ownership primitive"
+      ]
+    },
+    {
       "id": "q8_0_large_route_isa_window_summary_after_colsub3_probe",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-isa-window-summary-3c3e41acb-20260620-041115/",

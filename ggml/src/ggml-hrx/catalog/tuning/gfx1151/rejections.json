@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_motif192_k2_colpairfrag_standalone_transfer",
+      "date": "2026-06-20",
+      "route": "hrx-hip-bench-q8-wmma-repro --mode=motif192-wmma-k2-realdata-fullk-colpairfrag-directwait-waitload-address and --mode=motif192-wmma-k2-realdata-fullk-colpairfrag-timing",
+      "env": "standalone CMake/Ninja-built gfx1151 HIP bench diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-colpairfrag-probe-2e0adbb6c-20260620-042343/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-colpairfrag-probe-2e0adbb6c-20260620-042343/static/colpairfrag-opcode-summary.txt",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro",
+      "reason": "The ColPairFrag probe bracketed the Q8 RADV motif192 issue-window/live-range axis between the accepted but over-serialized StreamFrag shape and the wider KTileFrag shape. It loads A[4] plus B[2] for each K-tile column pair, issues 8 WMMAs, then loads the second column pair, preserving the motif192 192-store writeback contract and the real Q8/RHS full-k data path. Correctness passed aligned, odd-row, odd-column, p512, and p513 rows with bad=0. Static extraction is no-spill and preserves the target store surface: wave64, SGPR=60, VGPR=220, LDS=22528, private segment=0, 32 v_wmma, 96 ds_load_b64, 130 ds_store_b16, 128 ds_load_u16_d16, and 192 buffer_store_b32. Reject for catalog transfer before route work because same-binary timing did not beat the existing KTileFrag standalone point: at 4096x512, StreamFrag/full=0.829759, KTileFrag/full=0.677126, and ColPairFrag/full=0.683114; at 4096x513, StreamFrag/full=0.778130, KTileFrag/full=0.661626, and ColPairFrag/full=0.678013. The extra A-fragment reloads raise ds_load_b64 from KTileFrag's 64 to 96 without improving timing, so a production transfer should not use ColPairFrag. The next Q8 candidate should preserve KTileFrag's load count while addressing catalog transfer overhead, or move to a lower-level cooperative writeback/lane ownership primitive."
+    },
+    {
       "id": "q8_0_coopstore_radv_motif192_typedstage_fixture",
       "date": "2026-06-20",
       "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-radv-motif192-typedstage",
