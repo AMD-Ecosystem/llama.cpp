@@ -90,6 +90,10 @@
 #define HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT_K2_DIRECT 0
 #endif
 
+#ifndef HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STREAMFRAG_K2
+#define HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STREAMFRAG_K2 0
+#endif
+
 #ifndef HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT_K2_RAW
 #define HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT_K2_RAW 0
 #endif
@@ -442,6 +446,17 @@ static __device__ __forceinline__ hrx_q8_0_wmma_vk128_half8_vec hrx_q8_0_wmma_vk
     do { \
         asm volatile("s_waitcnt lgkmcnt(%0)\n" :: "n"(W) : "memory"); \
         acc[TILE] = hrx_q8_0_wmma_vk128_wmma_f16_w64((A), (B), acc[TILE]); \
+    } while (0)
+
+#define HRX_Q8_0_WMMA_VK128_STREAMFRAG_WMMA(TILE, ROW_SUB, COL_SUB) \
+    do { \
+        const hrx_q8_0_wmma_vk128_half16_vec a_stream = \
+            hrx_q8_0_wmma_vk128_load_a_frag_w64_b64asm_nowait( \
+                sh_a_lds, wave_row * 4 + (ROW_SUB), k_tile, lane); \
+        const hrx_q8_0_wmma_vk128_half16_vec b_stream = \
+            hrx_q8_0_wmma_vk128_load_b_frag_w64_b64asm_nowait( \
+                sh_b_lds, wave_col * 4 + (COL_SUB), k_tile, lane); \
+        HRX_Q8_0_WMMA_VK128_WAIT_WMMA((TILE), a_stream, b_stream, 0); \
     } while (0)
 
 #if HRX_Q8_0_WMMA_VK128_BUFFER_STORE
@@ -2001,7 +2016,24 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
 #pragma unroll
             for (int k_tile = 0; k_tile < 2; ++k_tile) {
                 hrx_q8_0_wmma_vk128_half16_vec a_frag[4];
-#if HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STREAM_COL
+#if HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STREAMFRAG_K2
+                HRX_Q8_0_WMMA_VK128_STREAMFRAG_WMMA(0, 0, 0);
+                HRX_Q8_0_WMMA_VK128_STREAMFRAG_WMMA(1, 1, 0);
+                HRX_Q8_0_WMMA_VK128_STREAMFRAG_WMMA(2, 2, 0);
+                HRX_Q8_0_WMMA_VK128_STREAMFRAG_WMMA(3, 3, 0);
+                HRX_Q8_0_WMMA_VK128_STREAMFRAG_WMMA(4, 0, 1);
+                HRX_Q8_0_WMMA_VK128_STREAMFRAG_WMMA(5, 1, 1);
+                HRX_Q8_0_WMMA_VK128_STREAMFRAG_WMMA(6, 2, 1);
+                HRX_Q8_0_WMMA_VK128_STREAMFRAG_WMMA(7, 3, 1);
+                HRX_Q8_0_WMMA_VK128_STREAMFRAG_WMMA(8, 0, 2);
+                HRX_Q8_0_WMMA_VK128_STREAMFRAG_WMMA(9, 1, 2);
+                HRX_Q8_0_WMMA_VK128_STREAMFRAG_WMMA(10, 2, 2);
+                HRX_Q8_0_WMMA_VK128_STREAMFRAG_WMMA(11, 3, 2);
+                HRX_Q8_0_WMMA_VK128_STREAMFRAG_WMMA(12, 0, 3);
+                HRX_Q8_0_WMMA_VK128_STREAMFRAG_WMMA(13, 1, 3);
+                HRX_Q8_0_WMMA_VK128_STREAMFRAG_WMMA(14, 2, 3);
+                HRX_Q8_0_WMMA_VK128_STREAMFRAG_WMMA(15, 3, 3);
+#elif HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STREAM_COL
 #pragma unroll
                 for (int row_sub = 0; row_sub < 4; ++row_sub) {
                     a_frag[row_sub] = hrx_q8_0_wmma_vk128_load_a_frag_w64_b64asm(

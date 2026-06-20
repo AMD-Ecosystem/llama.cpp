@@ -1,0 +1,11 @@
+#define HRX_Q8_0_WMMA_VK128_EXPORT hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_streamfrag_bufferstore_f16acc_wg256_f32
+#define HRX_Q8_0_WMMA_VK128_SHARED_STRIDE 40
+#define HRX_Q8_0_WMMA_VK128_W64 1
+#define HRX_Q8_0_WMMA_VK128_W64_B64GROUP 1
+#define HRX_Q8_0_WMMA_VK128_W64_MOTIF192_K2 1
+#define HRX_Q8_0_WMMA_VK128_W64_MOTIF192_WAIT_LOAD 1
+#define HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STREAMFRAG_K2 1
+#define HRX_Q8_0_WMMA_VK128_BUFFER_STORE 1
+#define HRX_Q8_0_WMMA_VK128_PACK_STAGE_B32 1
+#define HRX_Q8_0_WMMA_VK128_USE_ASM_WMMA 1
+#include "mul_mat_vec_q8_0_wmma16_vk128_wg256.hip.cpp"
