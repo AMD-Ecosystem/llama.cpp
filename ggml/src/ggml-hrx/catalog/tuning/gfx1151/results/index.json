@@ -3,6 +3,22 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_motif192_ktilefrag_storebatch_fixture",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-ktilefrag-storebatch-1c424153b-20260620-051947/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-ktilefrag-storebatch-1c424153b-20260620-051947/static/summary.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro with embedded gfx1151 object extracted to cache/hrxv1/gfx1151/q8-motif192-k2-ktilefrag-storebatch-1c424153b-20260620-051947/static/fatbin/gfx1151.o",
+      "status": "rejected_static_resource_spills_after_correctness_pass",
+      "findings": [
+        "added a standalone CMake/Ninja-built Q8 motif192 KTileFrag storebatch probe that preserves the real-Q8 full-k data path and 192-store output contract while batching raw stores, grouped LDS stage stores, and grouped LDS load/store phases",
+        "correctness passed aligned, odd-row, odd-column, p512, and p513 rows with bad=0, including 4096x512 and 4096x513",
+        "static extraction shows the storebatch probe preserves the visible core opcode surface versus the KTileFrag control: both are wave64 with 32 v_wmma, 64 ds_read_b64, 128 ds_load_u16_d16, 130 ds_store_b16, 192 buffer_store_b32, and 3 barriers",
+        "the grouped-stage spelling is rejected by resource metadata before timing: the KTileFrag control is SGPR=60, VGPR=211, LDS=22528, private_segment=0, sgpr_spills=0, vgpr_spills=0; storebatch is SGPR=106, VGPR=215, LDS=53248, private_segment=0, sgpr_spills=40, vgpr_spills=0",
+        "do not transfer this source shape into the production catalog; it proves collision-free batched store clustering can be semantically valid, but this HIP C++ grouped-stage spelling creates too much LDS and scalar pressure for gfx1151",
+        "the next Q8 parity probe should keep KTileFrag's 64 ds_read_b64 and correctness-clean 192-store contract while looking for a lower-pressure cooperative writeback or lane-ownership primitive"
+      ]
+    },
+    {
       "id": "q8_0_prompt_mmq64x128_splitqsum_bk2_wave64_bpair_issue_order",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-bk2-wave64-bpair-focused-edaf02ca6-20260620-050945/",
