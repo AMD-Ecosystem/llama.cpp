@@ -111,10 +111,15 @@ def main():
     parser.add_argument("--match-hot-score", action="append", default=[],
                         metavar="FIELD",
                         help="Require RHS event_summary.hot_op_score FIELD to exactly match RADV/LHS.")
+    parser.add_argument("--match-store-score", action="append", default=[],
+                        metavar="FIELD",
+                        help="Require RHS event_summary.store_cluster_score FIELD to exactly match RADV/LHS.")
     parser.add_argument("--rhs-wmma-score-max", type=parse_score_limit, action="append", default=[],
                         metavar="FIELD=N", help="Require RHS event_summary.wmma_score FIELD <= N.")
     parser.add_argument("--rhs-hot-score-max", type=parse_score_limit, action="append", default=[],
                         metavar="FIELD=N", help="Require RHS event_summary.hot_op_score FIELD <= N.")
+    parser.add_argument("--rhs-store-score-max", type=parse_score_limit, action="append", default=[],
+                        metavar="FIELD=N", help="Require RHS event_summary.store_cluster_score FIELD <= N.")
     parser.add_argument("--require-zero-spills", action="store_true",
                         help="Require normalized RHS sgpr_spills and vgpr_spills to be zero.")
     parser.add_argument("--out-json", type=pathlib.Path)
@@ -152,11 +157,17 @@ def main():
     for field in args.match_hot_score:
         add_match_score_check(checks, "hot_op_score", field, lhs, rhs)
 
+    for field in args.match_store_score:
+        add_match_score_check(checks, "store_cluster_score", field, lhs, rhs)
+
     for field, limit in args.rhs_wmma_score_max:
         add_score_max_check(checks, "wmma_score", field, limit, rhs)
 
     for field, limit in args.rhs_hot_score_max:
         add_score_max_check(checks, "hot_op_score", field, limit, rhs)
+
+    for field, limit in args.rhs_store_score_max:
+        add_score_max_check(checks, "store_cluster_score", field, limit, rhs)
 
     if args.require_zero_spills:
         for resource in ("sgpr_spills", "vgpr_spills"):

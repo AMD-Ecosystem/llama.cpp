@@ -95,6 +95,142 @@ def parse_isa_events(lines):
     return events
 
 
+def is_store(opcode):
+    return opcode.startswith(STORE_PREFIXES)
+
+
+def summarize_store_clusters(events, max_store_gap=8):
+    store_indices = [
+        index for index, event in enumerate(events)
+        if is_store(event["opcode"])
+    ]
+    if not store_indices:
+        return []
+
+    groups = []
+    current = [store_indices[0]]
+    for index in store_indices[1:]:
+        if index - current[-1] <= max_store_gap:
+            current.append(index)
+        else:
+            groups.append(current)
+            current = [index]
+    groups.append(current)
+
+    clusters = []
+    for group in groups:
+        first = group[0]
+        last = group[-1]
+        window = events[max(0, first - 4):min(len(events), last + 8)]
+        store_events = [
+            event for event in window
+            if is_store(event["opcode"])
+        ]
+        store_offsets = collections.defaultdict(collections.Counter)
+        for event in store_events:
+            offset = event["offsets"].get("offset", 0)
+            store_offsets[event["opcode"]][offset] += 1
+        clusters.append({
+            "first_store_line": events[first]["line"],
+            "last_store_line": events[last]["line"],
+            "event_count": len(window),
+            "opcodes": dict(collections.Counter(event["opcode"] for event in window)),
+            "store_opcode_counts": dict(collections.Counter(event["opcode"] for event in store_events)),
+            "store_offsets": {
+                opcode: dict(sorted(counter.items()))
+                for opcode, counter in sorted(store_offsets.items())
+            },
+            "store_ops": len(store_events),
+            "buffer_store_ops": sum(
+                1 for event in store_events
+                if event["opcode"].startswith("buffer_store")
+            ),
+            "global_store_ops": sum(
+                1 for event in store_events
+                if event["opcode"].startswith(("global_store", "flat_store"))
+            ),
+            "lds_store_ops": sum(
+                1 for event in store_events
+                if event["opcode"].startswith(("ds_store", "ds_write"))
+            ),
+            "lds_load_ops": sum(
+                1 for event in window
+                if is_lds_load(event["opcode"])
+            ),
+            "vmem_load_ops": sum(
+                1 for event in window
+                if is_vmem_load(event["opcode"])
+            ),
+            "waitcnt_ops": sum(
+                1 for event in window
+                if event["opcode"] == "s_waitcnt"
+            ),
+            "hot_ops": sum(
+                1 for event in window
+                if event["opcode"].startswith(("v_wmma", "v_mfma", "v_dot"))
+            ),
+        })
+    return clusters
+
+
+def summarize_store_cluster_motifs(clusters):
+    motifs = {}
+    for cluster in clusters:
+        key = json.dumps({
+            "store_opcode_counts": cluster["store_opcode_counts"],
+            "store_offsets": cluster["store_offsets"],
+            "store_ops": cluster["store_ops"],
+            "buffer_store_ops": cluster["buffer_store_ops"],
+            "global_store_ops": cluster["global_store_ops"],
+            "lds_store_ops": cluster["lds_store_ops"],
+            "lds_load_ops": cluster["lds_load_ops"],
+            "vmem_load_ops": cluster["vmem_load_ops"],
+            "waitcnt_ops": cluster["waitcnt_ops"],
+            "hot_ops": cluster["hot_ops"],
+        }, sort_keys=True)
+        motif = motifs.setdefault(key, {
+            "count": 0,
+            "example_first_store_lines": [],
+            "store_opcode_counts": cluster["store_opcode_counts"],
+            "store_offsets": cluster["store_offsets"],
+            "store_ops_per_cluster": cluster["store_ops"],
+            "buffer_store_ops_per_cluster": cluster["buffer_store_ops"],
+            "global_store_ops_per_cluster": cluster["global_store_ops"],
+            "lds_store_ops_per_cluster": cluster["lds_store_ops"],
+            "lds_load_ops_per_cluster": cluster["lds_load_ops"],
+            "vmem_load_ops_per_cluster": cluster["vmem_load_ops"],
+            "waitcnt_ops_per_cluster": cluster["waitcnt_ops"],
+            "hot_ops_per_cluster": cluster["hot_ops"],
+        })
+        motif["count"] += 1
+        if len(motif["example_first_store_lines"]) < 8:
+            motif["example_first_store_lines"].append(cluster["first_store_line"])
+    return sorted(
+        motifs.values(),
+        key=lambda item: (
+            -item["count"],
+            -item["buffer_store_ops_per_cluster"],
+            -item["lds_store_ops_per_cluster"],
+            item["example_first_store_lines"][0],
+        ),
+    )
+
+
+def summarize_store_cluster_score(clusters, motifs):
+    return {
+        "store_clusters": len(clusters),
+        "store_cluster_motifs": len(motifs),
+        "store_ops": sum(cluster["store_ops"] for cluster in clusters),
+        "buffer_store_ops": sum(cluster["buffer_store_ops"] for cluster in clusters),
+        "global_store_ops": sum(cluster["global_store_ops"] for cluster in clusters),
+        "lds_store_ops": sum(cluster["lds_store_ops"] for cluster in clusters),
+        "lds_load_ops": sum(cluster["lds_load_ops"] for cluster in clusters),
+        "vmem_load_ops": sum(cluster["vmem_load_ops"] for cluster in clusters),
+        "waitcnt_ops": sum(cluster["waitcnt_ops"] for cluster in clusters),
+        "hot_ops": sum(cluster["hot_ops"] for cluster in clusters),
+    }
+
+
 def summarize_isa_events(events):
     store_blocks = []
     by_bb = collections.defaultdict(collections.Counter)
@@ -149,11 +285,11 @@ def summarize_isa_events(events):
     store_windows = []
     seen_store_lines = set()
     for index, event in enumerate(events):
-        if not event["opcode"].startswith(STORE_PREFIXES) or event["line"] in seen_store_lines:
+        if not is_store(event["opcode"]) or event["line"] in seen_store_lines:
             continue
         window = events[max(0, index - 4):min(len(events), index + 8)]
         for item in window:
-            if item["opcode"].startswith(STORE_PREFIXES):
+            if is_store(item["opcode"]):
                 seen_store_lines.add(item["line"])
         store_windows.append({
             "first_store_line": event["line"],
@@ -163,8 +299,13 @@ def summarize_isa_events(events):
         if len(store_windows) >= 16:
             break
 
+    store_clusters = summarize_store_clusters(events)
+    store_cluster_motifs = summarize_store_cluster_motifs(store_clusters)
     return {
         "store_blocks": store_blocks,
+        "store_clusters": store_clusters,
+        "store_cluster_motifs": store_cluster_motifs,
+        "store_cluster_score": summarize_store_cluster_score(store_clusters, store_cluster_motifs),
         "store_windows": store_windows,
         "pre_wmma_ds_load_b64_offsets": {
             base: values for base, values in sorted(lds_load_offsets.items())
@@ -538,6 +679,40 @@ def write_markdown(path, payload):
                 for block in store_blocks[:24]:
                     ops = ", ".join(f"{op}={count}" for op, count in block["opcodes"].items())
                     lines.append(f"| `{block['bb']}` | {block['store_ops']} | `{ops}` |")
+                lines.append("")
+            store_score = event_summary.get("store_cluster_score", {})
+            if store_score:
+                lines += ["Label-independent store cluster score:", "", "| Metric | Value |", "| --- | ---: |"]
+                for score_key, score_value in store_score.items():
+                    lines.append(f"| `{score_key}` | `{score_value}` |")
+                lines.append("")
+            store_motifs = event_summary.get("store_cluster_motifs", [])
+            if store_motifs:
+                lines += [
+                    "Store cluster motifs:",
+                    "",
+                    "| Motif | Count | Store Ops | Buffer Stores | Global Stores | LDS Stores | LDS Loads | VMEM Loads | Waits | Hot Ops |",
+                    "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+                ]
+                for index, motif in enumerate(store_motifs[:12], 1):
+                    lines.append(
+                        "| "
+                        + " | ".join(
+                            [
+                                str(index),
+                                str(motif["count"]),
+                                str(motif["store_ops_per_cluster"]),
+                                str(motif["buffer_store_ops_per_cluster"]),
+                                str(motif["global_store_ops_per_cluster"]),
+                                str(motif["lds_store_ops_per_cluster"]),
+                                str(motif["lds_load_ops_per_cluster"]),
+                                str(motif["vmem_load_ops_per_cluster"]),
+                                str(motif["waitcnt_ops_per_cluster"]),
+                                str(motif["hot_ops_per_cluster"]),
+                            ]
+                        )
+                        + " |"
+                    )
                 lines.append("")
             store_windows = event_summary.get("store_windows", [])
             if store_windows:
