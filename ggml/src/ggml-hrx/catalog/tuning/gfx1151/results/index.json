@@ -155,6 +155,58 @@
       ]
     },
     {
+      "id": "q8_0_coopstore_accslots_raw192_probe",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/coopstore-k2-accslots-raw192-87ea346a6-dirty-20260620-162252/",
+      "source_commit": "87ea346a6-dirty",
+      "tool": "CMake/Ninja-built hrx-hip-bench-coopmat-store-contract plus embedded .hip_fatbin extraction with clang-offload-bundler",
+      "status": "rejected_standalone_correctness_low_live_192_store_probe",
+      "candidate_gate": {
+        "production_target": "Llama 3.1 8B Q8_0 p512/p513 dense prompt large route; test whether 192 buffer stores can be kept while reducing live WMMA accumulators below the direct192 raw primitive",
+        "baseline_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-direct192-raw",
+        "variant_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-accslots-raw192",
+        "same_runner_comparison_method": "standalone correctness only; timing was skipped because the variant failed the deterministic fixture check",
+        "route_trace_path": "not applicable; standalone lower-level fixture only",
+        "scheduler_trace_path": "static/summary.md and static/symbols/accslots_raw192.amdgcn.txt in the artifact",
+        "focused_cpu_reference": "direct192 raw control passed bad=0; accslots raw192 failed with bad=3072/12288, max_abs about 65k, first_bad group=0 slot=0 lane=0 actual=35 expected=32, and NaNs in the accumulator groups",
+        "compile_report_path": "static/fatbin/gfx1151-readobj-notes.txt and static/summary.json",
+        "target_listing_path": "static/fatbin/gfx1151-objdump.txt and static/symbols/*.amdgcn.txt",
+        "prior_art_schedule_source": "Q8_0 RADV large oracle and the correctness-clean direct192 raw primitive; this probe tests whether accumulator-slot ownership can preserve the 192-store surface with lower live state",
+        "promotion_rule": "reject before timing or route work. Any future low-live Q8 ownership primitive must first pass this standalone correctness contract, then show no-spill 192-store static evidence before p33/p512/p513 focused route gates."
+      },
+      "static_matrix": {
+        "accslots_raw192": {
+          "sgpr": 14,
+          "vgpr": 113,
+          "lds": 16384,
+          "scratch": 0,
+          "vgpr_spill": 0,
+          "wmma": 16,
+          "ds_load_b64": 64,
+          "buffer_store_b32": 192,
+          "store_ops": 208
+        },
+        "direct192_raw_control": {
+          "sgpr": 14,
+          "vgpr": 153,
+          "lds": 16384,
+          "scratch": 0,
+          "vgpr_spill": 0,
+          "wmma": 32,
+          "ds_load_b64": 64,
+          "buffer_store_b32": 192,
+          "store_ops": 208
+        }
+      },
+      "findings": [
+        "added bench-only mode wmma-lds-k2-accslots-raw192; it computes only eight accumulator vectors, writes logical groups 0-15 through accumulator slots, and fills groups 16-47 with direct raw stores",
+        "the intended pressure reduction did occur in the CMake-built object: accslots raw192 is wave64, SGPR=14, VGPR=113, LDS=16384, private=0, no spills, and 192 buffer_store_b32 versus direct192 raw VGPR=153",
+        "the semantic contract failed immediately: direct192 raw passed bad=0, while accslots raw192 failed bad=3072/12288 with first_bad group=0 slot=0 lane=0 actual=35 expected=32 and NaNs in the accumulator-owned groups",
+        "static codegen also shows the reason this is not a RADV large clone: lowering the live accumulator surface reduced visible WMMA from 32 to 16, so it is no longer doing the same two-K-tile accumulation work",
+        "decision: keep this as a rejected fixture probe. The next Q8 low-level axis must not assume accumulator-slot remapping is free; it must preserve the full 32-WMMA semantic contract while finding a different way to lower store/live-range pressure."
+      ]
+    },
+    {
       "id": "q8_0_coopstore_wmma_lds_k2_direct192_timing",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/coopstore-wmma-lds-k2-timing-a68924c17-dirty-20260620-161000/",
