@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_vk64_h4load_prefetch2_p33_focused_regression",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_h4load_prefetch2_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_H4LOAD_PREFETCH2_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-p33-h4load-prefetch2-focused-20260620-140341/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-h4load-prefetch2-static-20260620-140255/compare-radv.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_h4load_prefetch2_wg256.hsaco",
+      "reason": "This opt-in route tested whether source-visible fragment hoisting could move the accepted Q6_K VK64 padded44 H4LOAD p33 path toward the Qwen3 30B Q6_K p33 RADV medium route's long LDS-load issue window. The route preserves BM64/BN64/BK32, WG256, wave64, 11264-byte LDS, half4 fragment loads, and the accepted output ownership, but loads both K-subtile A/B fragments into local vectors before issuing the two W64 WMMA ops for each owned tile. It built through the normal CMake/Ninja HSACO path and is resource-clean: wave64, SGPR=36, VGPR=59, LDS=11264, private_segment=0, no spills. Reject for promotion because static comparison shows the compiler did not produce the RADV schedule: HIP still has 8 visible WMMA sites versus RADV's 16, 20 ds_load_2addr_b64 and 0 pre-WMMA ds_load_b64 by the compare heuristic versus RADV's 48 ds_load_b64, final pre-WMMA lgkmcnt(0) versus RADV lgkmcnt(40), and 16 global_store_b32 versus RADV 96 buffer_store_b32. Focused p33 CPU-reference passed all 10 rows, and route traces prove cols=33 Q6 rows selected the prefetch2 provider while cols=1 stayed on rows2_cols1. Same-runner focused timing regressed: total 6710.341 -> 6860.614 us (default/variant 0.978x), result_output 5866.980 -> 6018.388 us, while the small Qcur/Vcur movements were noise-level. Keep opt-in only. The useful conclusion is that C++ two-subtile fragment hoisting is not enough; the next Q6 p33 parity attempt needs a more structural lane/cooperative-fragment spelling that reaches RADV's 16-WMMA and high-lgkmcnt LDS window."
+    },
+    {
       "id": "q6_k_vk64_h4load_bufferstore_p33_focused_noise",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_h4load_bufferstore_f16acc_wg256_f32",

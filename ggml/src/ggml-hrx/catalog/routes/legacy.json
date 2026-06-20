@@ -9125,6 +9125,51 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_h4load_prefetch2_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_h4load_prefetch2_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_h4load_prefetch2_wg256",
+    "artifact_id": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_h4load_prefetch2_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_h4load_prefetch2_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q6_dense_prompt_wmma16x16_vk64_padded44_w64_h4load_prefetch2_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q6_K x F32 -> F32 MUL_MAT",
+      "k_multiple": 256,
+      "rows_min": 16,
+      "cols_min": 16,
+      "cols_max": 64,
+      "requires_env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_H4LOAD_PREFETCH2_F16ACC_WG256_PROMPT",
+      "prior_delta": "Qwen3 30B Q6_K p33 Vulkan medium route hoists a long LDS fragment-load window before the first WMMA: 48 ds_load_b64, final pre-WMMA lgkmcnt=40, and 16 visible WMMA sites. The accepted VK64 H4LOAD route matches the 11264-byte LDS footprint but issues only 8 visible WMMA sites and keeps the W64 fragment loads local to each K-subtile. This opt-in probe preserves the accepted route and hoists both K-subtile H4LOAD fragment reads before issuing the two W64 WMMA ops for each owned tile."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_h4load_prefetch2_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_focused_perf_regression",
+      "selection": "Opt-in Q6_K VK64 padded44 H4LOAD prefetch2 probe. It preserved the accepted BM64/BN64/WG256/wave64/H4LOAD route and hoisted both K-subtile fragment reads in source before issuing WMMA. Static HSACO comparison against the Qwen3 30B Q6_K p33 RADV medium route showed the compiler did not produce the target issue window: HIP still emits 8 visible WMMA sites, 20 ds_load_2addr_b64, 0 pre-WMMA ds_load_b64 by the compare heuristic, final pre-WMMA lgkmcnt(0), and 16 global_store_b32, while RADV has 16 WMMA, 48 ds_load_b64, final pre-WMMA lgkmcnt(40), and 96 buffer_store_b32. Focused p33 CPU-reference passed all rows and route traces selected prefetch2 for the four cols=33 Q6 rows, but same-runner timing regressed total row time 6710.341 -> 6860.614 us and result_output 5866.980 -> 6018.388 us. Keep opt-in diagnostic only; source-level two-subtile fragment hoisting is not sufficient to force the RADV schedule."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_h4load_bufferstore_f16acc_wg256_f32",
     "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_h4load_bufferstore_f16acc_wg256",
     "op": "MUL_MAT",

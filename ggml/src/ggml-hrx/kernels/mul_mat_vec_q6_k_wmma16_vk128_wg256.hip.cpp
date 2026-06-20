@@ -1178,6 +1178,38 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
             int col_tile = 0;
             hrx_q6_k_wmma_vk128_tile_map(static_cast<int>(wave), tile_iter, &row_tile, &col_tile);
 #if HRX_Q6_K_WMMA_VK128_W64
+#if HRX_Q6_K_WMMA_VK128_PREFETCH_FRAGS
+            hrx_q6_k_wmma_vk128_half16_vec a_frag[2];
+            hrx_q6_k_wmma_vk128_half16_vec b_frag[2];
+#pragma unroll
+            for (int k_tile = 0; k_tile < 2; ++k_tile) {
+#if HRX_Q6_K_WMMA_VK128_W64_B64ASM
+                hrx_q6_k_wmma_vk128_lds_half_ptr sh_a_lds =
+                    (hrx_q6_k_wmma_vk128_lds_half_ptr) sh_a;
+                hrx_q6_k_wmma_vk128_lds_half_ptr sh_b_lds =
+                    (hrx_q6_k_wmma_vk128_lds_half_ptr) sh_b;
+                a_frag[k_tile] =
+                    hrx_q6_k_wmma_vk128_load_a_frag_w64_b64asm(sh_a_lds, row_tile, k_tile, lane);
+                b_frag[k_tile] =
+                    hrx_q6_k_wmma_vk128_load_b_frag_w64_b64asm(sh_b_lds, col_tile, k_tile, lane);
+#elif HRX_Q6_K_WMMA_VK128_W64_H4LOAD
+                a_frag[k_tile] =
+                    hrx_q6_k_wmma_vk128_load_a_frag_w64_h4(sh_a, row_tile, k_tile, lane);
+                b_frag[k_tile] =
+                    hrx_q6_k_wmma_vk128_load_b_frag_w64_h4(sh_b, col_tile, k_tile, lane);
+#else
+                a_frag[k_tile] =
+                    hrx_q6_k_wmma_vk128_load_a_frag_w64(sh_a, row_tile, k_tile, lane);
+                b_frag[k_tile] =
+                    hrx_q6_k_wmma_vk128_load_b_frag_w64(sh_b, col_tile, k_tile, lane);
+#endif
+            }
+#pragma unroll
+            for (int k_tile = 0; k_tile < 2; ++k_tile) {
+                acc[tile_iter] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
+                    a_frag[k_tile], b_frag[k_tile], acc[tile_iter], HRX_Q6_K_WMMA_VK128_W64_OPSEL != 0);
+            }
+#else
 #pragma unroll
             for (int k_tile = 0; k_tile < 2; ++k_tile) {
 #if HRX_Q6_K_WMMA_VK128_W64_B64ASM
@@ -1203,6 +1235,7 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
                 acc[tile_iter] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
                     a, b, acc[tile_iter], HRX_Q6_K_WMMA_VK128_W64_OPSEL != 0);
             }
+#endif
 #else
 #if HRX_Q6_K_WMMA_VK128_PREFETCH_FRAGS
             hrx_q6_k_wmma_vk128_half16_vec a_frag[2];
