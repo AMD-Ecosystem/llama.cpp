@@ -1269,6 +1269,31 @@ static __device__ __forceinline__ void q8_repro_issue_k2_wmma_ladder_colpairfrag
     }
 }
 
+static __device__ __forceinline__ void q8_repro_prefetch_k2_fragments_for_wait51(
+        hrx_q8_0_wmma_vk128_lds_half_ptr sh_a_lds,
+        hrx_q8_0_wmma_vk128_lds_half_ptr sh_b_lds,
+        int wave_row,
+        int wave_col,
+        unsigned int lane) {
+#pragma unroll
+    for (int k_tile = 0; k_tile < 2; ++k_tile) {
+#pragma unroll
+        for (int row_sub = 0; row_sub < 4; ++row_sub) {
+            const hrx_q8_0_wmma_vk128_half16_vec frag =
+                hrx_q8_0_wmma_vk128_load_a_frag_w64_b64asm_nowait(
+                    sh_a_lds, wave_row * 4 + row_sub, k_tile, lane);
+            asm volatile("" :: "v"(frag[0]), "v"(frag[4]), "v"(frag[8]), "v"(frag[12]) : "memory");
+        }
+#pragma unroll
+        for (int col_sub = 0; col_sub < 4; ++col_sub) {
+            const hrx_q8_0_wmma_vk128_half16_vec frag =
+                hrx_q8_0_wmma_vk128_load_b_frag_w64_b64asm_nowait(
+                    sh_b_lds, wave_col * 4 + col_sub, k_tile, lane);
+            asm volatile("" :: "v"(frag[0]), "v"(frag[4]), "v"(frag[8]), "v"(frag[12]) : "memory");
+        }
+    }
+}
+
 template <bool dependent_ladder>
 __global__ __launch_bounds__(256, 1)
 void q8_motif192_wmma_k2_store_kernel(
@@ -3295,7 +3320,12 @@ void q8_bm128_direct192_output_repro_kernel(
     }
 }
 
-template <bool use_asm_wmma, bool use_asm_inout = false, bool copy_a = false, bool copy_b = false>
+template <
+    bool use_asm_wmma,
+    bool use_asm_inout = false,
+    bool copy_a = false,
+    bool copy_b = false,
+    bool prefetch_wait51 = false>
 __global__ __launch_bounds__(256, 1)
 void q8_bm128_streamk_output_repro_kernel(
         const hrx_block_q8_0_wmma_vk128_lhs * src0,
@@ -3365,7 +3395,13 @@ void q8_bm128_streamk_output_repro_kernel(
                     hrx_q8_0_wmma_vk128_load_b_frag_w64_b64asm_nowait(
                         sh_b_lds, wave_col * 4 + col_sub, k_tile, lane);
             }
-            asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+            if constexpr (prefetch_wait51) {
+                q8_repro_prefetch_k2_fragments_for_wait51(
+                    sh_a_lds, sh_b_lds, wave_row, wave_col, lane);
+                asm volatile("s_waitcnt lgkmcnt(51)\n" ::: "memory");
+            } else {
+                asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+            }
 #pragma unroll
             for (int col_sub = 0; col_sub < 4; ++col_sub) {
 #pragma unroll
@@ -7228,6 +7264,7 @@ static bool output_is_active(size_t index, int rows, const std::string & mode) {
             mode == "bm128-streamk-raw-output" ||
             mode == "bm128-streamk-raw-asm-output" ||
             mode == "bm128-streamk-raw-asm-inout-output" ||
+            mode == "bm128-streamk-prefetch51-raw-asm-output" ||
             mode == "bm128-streamk-abcopy-output" ||
             mode == "phase96-bm128-raw" ||
             mode == "phase96-bm128-raw-asm" ||
@@ -8078,6 +8115,10 @@ static int run_case(const std::string & mode, int rows, int cols, int k, size_t 
     } else if (mode == "bm128-streamk-raw-asm-inout-output") {
         dim3 bm128_grid((rows + 127) / 128, (cols + 127) / 128, 1);
         hipLaunchKernelGGL((q8_bm128_streamk_output_repro_kernel<true, true>),
+            bm128_grid, dim3(256, 1, 1), 0, 0, d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+    } else if (mode == "bm128-streamk-prefetch51-raw-asm-output") {
+        dim3 bm128_grid((rows + 127) / 128, (cols + 127) / 128, 1);
+        hipLaunchKernelGGL((q8_bm128_streamk_output_repro_kernel<true, false, false, false, true>),
             bm128_grid, dim3(256, 1, 1), 0, 0, d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
     } else if (mode == "bm128-streamk-abcopy-output") {
         dim3 bm128_grid((rows + 127) / 128, (cols + 127) / 128, 1);
@@ -9031,6 +9072,7 @@ int main(int argc, char ** argv) {
             mode == "bm128-streamk-raw-output" ||
             mode == "bm128-streamk-raw-asm-output" ||
             mode == "bm128-streamk-raw-asm-inout-output" ||
+            mode == "bm128-streamk-prefetch51-raw-asm-output" ||
             mode == "bm128-streamk-abcopy-output") {
         if (custom_shape) {
             status |= run_case(mode, custom_rows, custom_cols, k, sample_stride);

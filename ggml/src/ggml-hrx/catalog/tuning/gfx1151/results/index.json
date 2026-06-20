@@ -2132,6 +2132,35 @@
         "no top-30 total-gap HSACO was unmentioned in the Q8 ledger or gfx1151 tuning database",
         "decision: do not add another wrapper around the current direct-WMMA HIP C++ family. The next Q8 parity work needs a lower-level cooperative store/lane primitive or a materially different accumulator ownership source form."
       ]
+    },
+    {
+      "id": "q8_0_bm128_streamk_prefetch51_real_output_probe",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-streamk-prefetch51-output-probe-20260620-121652/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-streamk-prefetch51-output-probe-20260620-121652/static/",
+      "status": "rejected_diagnostic_not_route_candidate",
+      "candidate_gate": {
+        "production_target": "Llama 3.1 8B Q8_0 p512/p513 dense prompt rows where HRX v1 still needs to mechanically close the RADV one-window WMMA schedule gap",
+        "baseline_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro --mode bm128-streamk-raw-asm-output",
+        "variant_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro --mode bm128-streamk-prefetch51-raw-asm-output",
+        "same_runner_comparison_method": "not timed; rejected from static schedule evidence before route transfer",
+        "route_trace_path": "not applicable; benchmark-only diagnostic and no runtime selector changed",
+        "scheduler_trace_path": "static/issue-compare.md and static/compare-prefetch51.md",
+        "focused_cpu_reference": "correctness.stdout passed 128x128, 128x33, 4096x512, and 4096x513 real-output rows with bad=0",
+        "compile_report_path": "static/readelf-notes.txt",
+        "target_listing_path": "static/device-objdump.amdgcn.txt and static/streamk-prefetch51-raw-asm.symbol.amdgcn.txt",
+        "prior_art_schedule_source": "RADV Q8_0 large oracle matmul_q8_0_f32_f16acc_aligned_l hash 0x72d309e22f889977 plus the prior BM128 stream-K output fixture",
+        "promotion_rule": "do not transfer wait-only stream-K prefetch variants. A promotable route must combine correctness/no-spill codegen with one 32-WMMA region, useful non-redundant operand loads, and same-runner p512/p513 wins over the current packed-Q8_1 route."
+      },
+      "findings": [
+        "added benchmark-only mode bm128-streamk-prefetch51-raw-asm-output to hrx-hip-bench-q8-wmma-repro",
+        "the mode preserves stream-K real-output correctness on aligned, narrow, p512, and p513 rows",
+        "static metadata is no-spill: wave64 SGPR=50 VGPR=211 LDS=20480 private=0",
+        "the prefetch pressure successfully changes the first-region final wait from stream-K's lgkmcnt=0 to lgkmcnt=51, and raises immediate LDS loads before that wait to 96",
+        "the compiler still emits two 16-WMMA regions rather than RADV's one 32-WMMA region",
+        "the added LDS loads are redundant prefetch pressure, not useful single-load operand ownership, so this is not a production route candidate",
+        "decision: reject before timing/catalog transfer. The useful next source axis is a lower-level operand/accumulator ownership form that keeps both K-tile operand banks schedulable as one no-spill 32-WMMA region."
+      ]
     }
   ]
 }
