@@ -3,6 +3,18 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_wmma_vk64_padded44_wn32_wg128_perf",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_f16acc_wg128_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_WN32_F16ACC_WG128_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-wn32-wg128-focused-7dd3c71db-20260619-213323/",
+      "perf_artifact": "cache/hrxv1/gfx1151/q6-vk64-wn32-wg128-perf-ab-7dd3c71db-20260619-213359/",
+      "nonsteal_artifact": "cache/hrxv1/gfx1151/q6-vk64-wn32-wg128-nonsteal-p512p513-130360d-20260619-213945/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-vk64-wn32-wg128-static-7dd3c71db-20260619-213128/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_wn32_wg128.hsaco",
+      "reason": "The Q6_K VK64 padded44 WN32/WG128 probe mechanically tested the Qwen3 30B Q6_K p33 Vulkan medium ownership tuple: spec=[128,64,64,32,64,32,2,16,16,16,64], two wave64 subgroups per WG128 workgroup, each subgroup owning full 64 rows and 32 columns, yielding 16 WMMA instructions across two K tiles. It built through the normal CMake/Ninja HSACO path and selected only under the opt-in env. Static comparison against the exact RADV medium oracle confirmed the intended headline surface with wave64, workgroup_size=[128,1,1], SGPR=36, VGPR=119, no private segment, and 16 v_wmma_f16_16x16x16_f16, but rejected schedule parity before model tests because the emitted memory/writeback contract was still unlike RADV: 0 ds_load_b64 versus 48, 24 ds_load_2addr_b64 instead of plain b64 loads, 0 ds_load_u16_d16 versus 64, 2 ds_store_b16 versus 64, 32 global_store_b32 versus RADV's 96 buffer_store_b32, 19 s_waitcnt versus RADV 115, 82 s_waitcnt_depctr versus RADV 2, and final pre-WMMA lgkmcnt=10 versus RADV 40. Focused p33 CPU-reference with route tracing passed all three Q6 rows and proved the provider selected for Vcur, ffn_out, and result_output. Wide/tail non-steal gates with the same opt-in enabled passed p512 and p513 and route logs proved both stayed on the existing VK128 provider. Same-runner focused timing rejected promotion: accepted default VK64 total 14143.062 us, WN32/WG128 total 20203.678 us, with baseline/candidate ratios 0.546, 0.646, and 0.719. Keep the route opt-in only. The useful conclusion is precise: matching Vulkan's two-wave WN32 ownership and WMMA count is not enough; the next Q6 p33 candidate must target the lower-level RADV LDS/load/writeback/wait schedule while preserving correctness."
+    },
+    {
       "id": "q6_k_wmma_vk64_padded44_ring96_correctness",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_f16acc_wg256_f32",

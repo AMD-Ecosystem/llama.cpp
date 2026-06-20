@@ -18,6 +18,10 @@
 #define HRX_Q6_K_WMMA_VK128_BN 128
 #endif
 
+#ifndef HRX_Q6_K_WMMA_VK128_WG_SIZE
+#define HRX_Q6_K_WMMA_VK128_WG_SIZE 256
+#endif
+
 #ifndef HRX_Q6_K_WMMA_VK128_PREFETCH_FRAGS
 #define HRX_Q6_K_WMMA_VK128_PREFETCH_FRAGS 0
 #endif
@@ -596,7 +600,7 @@ static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_tile_map(
 #endif
 }
 
-extern "C" __global__ __launch_bounds__(256, 1)
+extern "C" __global__ __launch_bounds__(HRX_Q6_K_WMMA_VK128_WG_SIZE, 1)
 void HRX_Q6_K_WMMA_VK128_EXPORT(
         const hrx_block_q6_K_wmma_vk128_lhs * src0,
         const float * src1,
@@ -613,10 +617,11 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
 #else
     constexpr int WAVE = 32;
 #endif
+    constexpr int WG_SIZE = HRX_Q6_K_WMMA_VK128_WG_SIZE;
     constexpr int ROW_TILES = BM / 16;
     constexpr int COL_TILES = BN / 16;
     constexpr int TILE_COUNT = ROW_TILES * COL_TILES;
-    constexpr int WAVE_COUNT = 256 / WAVE;
+    constexpr int WAVE_COUNT = WG_SIZE / WAVE;
     constexpr int TILES_PER_WAVE = TILE_COUNT / WAVE_COUNT;
 
     const unsigned int tid = __builtin_amdgcn_workitem_id_x();
@@ -648,14 +653,14 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
 #endif
 
     for (long long k0 = 0; k0 < k; k0 += BK) {
-        for (int idx = static_cast<int>(tid); idx < BM * BK; idx += 256) {
+        for (int idx = static_cast<int>(tid); idx < BM * BK; idx += WG_SIZE) {
             const int r = idx / BK;
             const int kk = idx - r * BK;
             const long long row = row_base + static_cast<long long>(r);
             sh_a[r * SHARED_STRIDE + kk] = row < rows ?
                 hrx_q6_k_wmma_vk128_load_a_value(src0, row, k0 + kk, blocks_per_row) : zero;
         }
-        for (int idx = static_cast<int>(tid); idx < BN * BK; idx += 256) {
+        for (int idx = static_cast<int>(tid); idx < BN * BK; idx += WG_SIZE) {
             const int c = idx / BK;
             const int kk = idx - c * BK;
             const long long col = col_base + static_cast<long long>(c);

@@ -365,6 +365,9 @@
   "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_wg256": {
     "path": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_wg256.hip.cpp"
   },
+  "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_wn32_wg128": {
+    "path": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_wn32_wg128.hip.cpp"
+  },
   "mul_mat_vec_q6_k_wmma16_vk128_padded_w64_fullstore_wg256": {
     "path": "mul_mat_vec_q6_k_wmma16_vk128_padded_w64_fullstore_wg256.hip.cpp"
   },
