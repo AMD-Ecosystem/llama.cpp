@@ -12118,6 +12118,50 @@
     }
   },
   {
+    "id": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_raw16_bufferstore_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_raw16_bufferstore_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_raw16_bufferstore_wg256",
+    "artifact_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_raw16_bufferstore_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_raw16_bufferstore_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 110,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q8_0_prompt_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_raw16_bufferstore_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q8_0 x F32 -> F32 MUL_MAT",
+      "k_multiple": 32,
+      "win_domain": "rows >= 8192 || k >= 8192",
+      "cols_min": 512,
+      "selector_gate": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_ASMWMMA_MOTIF192_K2_RAW16_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "prior_delta": "Transfers the real-output BM128 direct192 fixture from cache/hrxv1/gfx1151/q8-bm128-direct192-output-20260620-continue/ into the real Q8_0 catalog ABI as a raw16-only route. It keeps the motif192/K2 fragment issue family, inline v_wmma, 128x128 prompt tiling, and direct buffer-store writeback, but writes each of the 16 accumulator groups once with acc[group] ownership instead of the older staged motif192 192-store surface or the group&7 raw-store alias."
+    },
+    "evidence_summary": {
+      "status": "opt_in_gfx1151_rejected_focused_perf",
+      "selection": "Focused gate artifact cache/hrxv1/gfx1151/q8-motif192-k2-raw16-focused-20260620-075630/ passed CPU-reference rows for p33, p512, and p513. Route traces proved p33 stayed on existing narrow packed-Q8_1 routes, while p512 and p513 selected this raw16 provider only for ffn_out, ffn_gate, and result_output. Reject for promotion on same-runner focused timing in cache/hrxv1/gfx1151/q8-motif192-k2-raw16-perf-20260620-075710/: p512 selected rows regressed to 0.662x, 0.722x, and 0.731x baseline for ffn_out, ffn_gate, and result_output; p513 selected rows regressed to 0.740x, 0.753x, and 0.763x baseline. Keep opt-in as evidence that the real-output BM128 direct192 raw inline-WMMA lane ownership transfers correctly into the catalog ABI, but it does not beat the accepted packed-Q8_1 split-qsum baseline."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ],
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_raw16_bufferstore_f16acc_wg256_f32"
+    }
+  },
+  {
     "id": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_ktilefrag_nowaitload_bufferstore_f16acc_wg256_f32",
     "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_ktilefrag_nowaitload_bufferstore_f16acc_wg256",
     "op": "MUL_MAT",

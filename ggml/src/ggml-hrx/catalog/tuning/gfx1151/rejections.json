@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_direct_wmma_vk128_packstage_asmwmma_motif192_k2_raw16_real_output_perf",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_raw16_bufferstore_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_ASMWMMA_MOTIF192_K2_RAW16_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-raw16-focused-20260620-075630/",
+      "performance_artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-raw16-perf-20260620-075710/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-raw16-static-compare-20260620-080255/summary.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_raw16_bufferstore_wg256.hsaco",
+      "reason": "This opt-in route transfers the real-output BM128 direct192 inline-WMMA fixture into the real Q8_0 catalog ABI by using raw16 accumulator ownership, acc[group], instead of the earlier motif192 raw-store alias, acc[group & 7]. It keeps the motif192/K2 fragment issue family, 128x128 prompt tiling, inline v_wmma, and direct buffer-store writeback, but intentionally avoids the staged 192-store halfword surface. It built through normal CMake/Ninja HSACO generation and passed focused CPU-reference gates for p33, p512, and p513. Route traces prove p33 stayed on the existing narrow packed-Q8_1 route, while p512 and p513 selected this provider only for ffn_out, ffn_gate, and result_output; Vcur/Qcur stayed on the accepted packed-Q8_1 split-qsum defaults. Reject for promotion on focused same-runner timing: selected p512 rows regressed versus baseline with ffn_out 6793.610 -> 10258.680 us, ffn_gate 5954.997 -> 8247.695 us, and result_output 52247.357 -> 71429.881 us. Selected p513 rows regressed with ffn_out 7612.516 -> 10282.187 us, ffn_gate 7292.665 -> 9681.466 us, and result_output 62832.167 -> 82342.262 us. Static comparison against RADV and the current packed-Q8_1 default shows why this is not a parity route: raw16 has the desired 32 WMMA ops and 64 active buffer stores, but it splits into two 16-WMMA hot regions with three barriers and scalarizes writeback into many one-store clusters, while RADV has one 32-WMMA hot region and compact four-store full-tile blocks. Keep this route opt-in as positive evidence that the standalone raw inline-WMMA real-output lane ownership transfers into the production ABI. The next Q8 large-route work should not repeat raw16 direct stores as a promotion candidate; it needs either a lower-wait direct-WMMA schedule with the RADV full-tile cooperative-store ownership, or a materially better packed-Q8_1 dataflow."
+    },
+    {
       "id": "q8_0_packstage_asmwmma_fast_half_fullpair_compile_contract",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_fast_half_fullpair_bufferstore_f16acc_wg256_f32",

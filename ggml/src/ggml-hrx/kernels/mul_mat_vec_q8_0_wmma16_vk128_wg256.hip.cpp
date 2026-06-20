@@ -121,6 +121,10 @@
 #define HRX_Q8_0_WMMA_VK128_W64_MOTIF192_WAIT_LOAD 0
 #endif
 
+#ifndef HRX_Q8_0_WMMA_VK128_W64_MOTIF192_RAW16_ONLY
+#define HRX_Q8_0_WMMA_VK128_W64_MOTIF192_RAW16_ONLY 0
+#endif
+
 #ifndef HRX_Q8_0_WMMA_VK128_W64_PHASE96
 #define HRX_Q8_0_WMMA_VK128_W64_PHASE96 0
 #endif
@@ -1474,8 +1478,19 @@ static __device__ __forceinline__ void hrx_q8_0_wmma_vk128_motif192_raw_store_sl
         int slot,
         unsigned int lane) {
     const int group16 = group & 15;
-    hrx_q8_0_wmma_vk128_combined96_raw_store_slot(
-        dst_rsrc, rows_stride, row_base, col_base, rows, cols, acc, wave, group16, slot, lane);
+    const int wave_row = static_cast<int>(wave & 1u);
+    const int wave_col = static_cast<int>(wave >> 1);
+    const int row_lane = static_cast<int>(lane >> 4);
+    const int col_lane = static_cast<int>(lane & 15u);
+    const int acc_index = HRX_Q8_0_WMMA_VK128_W64_MOTIF192_RAW16_ONLY ? group16 : (group16 & 7);
+    const long long row = row_base + static_cast<long long>(wave_row * 64 + (group16 & 3) * 16 + row_lane + slot * 4);
+    const long long col = col_base + static_cast<long long>(wave_col * 64 + ((group16 >> 2) & 3) * 16 + col_lane);
+    if (row < rows && col < cols) {
+        hrx_q8_0_wmma_vk128_buffer_store_f32(
+            dst_rsrc,
+            col * rows_stride + row,
+            static_cast<float>(acc[acc_index][slot * 2 + HRX_Q8_0_WMMA_VK128_W64_OPSEL]));
+    }
 }
 
 static __device__ __forceinline__ void hrx_q8_0_wmma_vk128_motif192_stage_store_slot(
@@ -1563,6 +1578,17 @@ static __device__ __forceinline__ void hrx_q8_0_wmma_vk128_motif192_stage_load_s
     HRX_Q8_0_WMMA_VK128_MOTIF192_GROUP(10); HRX_Q8_0_WMMA_VK128_MOTIF192_GROUP(11); \
     HRX_Q8_0_WMMA_VK128_MOTIF192_GROUP(12); HRX_Q8_0_WMMA_VK128_MOTIF192_GROUP(13); \
     HRX_Q8_0_WMMA_VK128_MOTIF192_GROUP(14); HRX_Q8_0_WMMA_VK128_MOTIF192_GROUP(15); \
+} while (0)
+
+#define HRX_Q8_0_WMMA_VK128_MOTIF192_RAW_GROUPS_0_15() do { \
+    HRX_Q8_0_WMMA_VK128_MOTIF192_RAW_STORE_GROUP(0);  HRX_Q8_0_WMMA_VK128_MOTIF192_RAW_STORE_GROUP(1); \
+    HRX_Q8_0_WMMA_VK128_MOTIF192_RAW_STORE_GROUP(2);  HRX_Q8_0_WMMA_VK128_MOTIF192_RAW_STORE_GROUP(3); \
+    HRX_Q8_0_WMMA_VK128_MOTIF192_RAW_STORE_GROUP(4);  HRX_Q8_0_WMMA_VK128_MOTIF192_RAW_STORE_GROUP(5); \
+    HRX_Q8_0_WMMA_VK128_MOTIF192_RAW_STORE_GROUP(6);  HRX_Q8_0_WMMA_VK128_MOTIF192_RAW_STORE_GROUP(7); \
+    HRX_Q8_0_WMMA_VK128_MOTIF192_RAW_STORE_GROUP(8);  HRX_Q8_0_WMMA_VK128_MOTIF192_RAW_STORE_GROUP(9); \
+    HRX_Q8_0_WMMA_VK128_MOTIF192_RAW_STORE_GROUP(10); HRX_Q8_0_WMMA_VK128_MOTIF192_RAW_STORE_GROUP(11); \
+    HRX_Q8_0_WMMA_VK128_MOTIF192_RAW_STORE_GROUP(12); HRX_Q8_0_WMMA_VK128_MOTIF192_RAW_STORE_GROUP(13); \
+    HRX_Q8_0_WMMA_VK128_MOTIF192_RAW_STORE_GROUP(14); HRX_Q8_0_WMMA_VK128_MOTIF192_RAW_STORE_GROUP(15); \
 } while (0)
 #endif
 #endif
@@ -2350,7 +2376,11 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
     asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
     __syncthreads();
 #elif HRX_Q8_0_WMMA_VK128_W64_MOTIF192_FAMILY
+#if HRX_Q8_0_WMMA_VK128_W64_MOTIF192_RAW16_ONLY
+    HRX_Q8_0_WMMA_VK128_MOTIF192_RAW_GROUPS_0_15();
+#else
     HRX_Q8_0_WMMA_VK128_MOTIF192_GROUPS_0_15();
+#endif
     asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
     __syncthreads();
 #elif HRX_Q8_0_WMMA_VK128_W64_PHASE96
