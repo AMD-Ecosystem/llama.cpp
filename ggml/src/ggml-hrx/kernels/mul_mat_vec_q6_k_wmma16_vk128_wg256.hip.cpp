@@ -74,6 +74,10 @@
 #define HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP 0
 #endif
 
+#ifndef HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT
+#define HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT 0
+#endif
+
 #ifndef HRX_Q6_K_WMMA_VK128_W64_INLINE_WMMA
 #define HRX_Q6_K_WMMA_VK128_W64_INLINE_WMMA 0
 #endif
@@ -209,6 +213,11 @@ static __device__ __forceinline__ hrx_q6_k_wmma_vk128_half16_vec hrx_q6_k_wmma_v
                    "v"(in[4]), "v"(in[5]), "v"(in[6]), "v"(in[7])
                  : "memory");
     return __builtin_bit_cast(hrx_q6_k_wmma_vk128_half16_vec, out);
+}
+
+static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_consume_frag(
+        hrx_q6_k_wmma_vk128_half16_vec frag) {
+    asm volatile("" :: "v"(frag[0]), "v"(frag[4]), "v"(frag[8]), "v"(frag[12]) : "memory");
 }
 
 #if HRX_Q6_K_WMMA_VK128_W64_INLINE_WMMA
@@ -908,7 +917,18 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
                     b_frag[frag] = hrx_q6_k_wmma_vk128_load_b_frag_w64_b64asm_nowait(
                         sh_b_lds, frag, k_tile, lane);
                 }
+#if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT
+#pragma unroll
+                for (int frag = 0; frag < 4; ++frag) {
+                    const hrx_q6_k_wmma_vk128_half16_vec b_pad =
+                        hrx_q6_k_wmma_vk128_load_b_frag_w64_b64asm_nowait(
+                            sh_b_lds, frag, k_tile, lane);
+                    hrx_q6_k_wmma_vk128_consume_frag(b_pad);
+                }
+                asm volatile("s_waitcnt lgkmcnt(40)\n" ::: "memory");
+#else
                 asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+#endif
 #pragma unroll
                 for (int group = 0; group < 16; ++group) {
                     const int row_frag = group & 3;

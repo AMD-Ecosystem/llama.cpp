@@ -129,6 +129,38 @@
       ]
     },
     {
+      "id": "q6_k_wmma_vk64_ring96_k2_kloop_asm_copyab_padwait40_probe",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q6-ring96-kloop-asm-copyab-padwait40-repro-582e0b73f-20260620-150559/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-ring96-kloop-asm-copyab-padwait40-static-20260620-150623/",
+      "tool": "CMake/Ninja-built hrx-hip-bench-q6-wmma-ring96-kloop-asm-padwait-repro plus generated gfx1151 HSACO static extraction, issue-window analysis, and compare_amdgcn_isa.py against the Qwen3 30B Q6_K p33 RADV medium oracle",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_padwait_wg256.hsaco",
+      "status": "rejected_synthetic_correctness_despite_radv_first_window_match",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K p33 dense prompt medium route; isolate whether the corrected direct64 inline-WMMA K-loop can mimic RADV's first-WMMA LDS-load and lgkmcnt window without changing output ownership",
+        "baseline_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q6-wmma-ring96-kloop-asm-repro and the Qwen3 30B Q6_K p33 RADV medium oracle issue-window summary",
+        "variant_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q6-wmma-ring96-kloop-asm-padwait-repro",
+        "same_runner_comparison_method": "synthetic production-ABI Q6 rows compare normal CPU reference and old cross-rotated reference; static HSACO issue-window compared against RADV p33 medium schedule",
+        "route_trace_path": "not applicable; standalone repro and CMake-built HSACO only",
+        "scheduler_trace_path": "cache/hrxv1/gfx1151/q6-ring96-kloop-asm-copyab-padwait40-static-20260620-150623/compare-radv.md and issue-window.md",
+        "focused_cpu_reference": "deterministic small rows failed normal CPU reference: 64x33 k256 bad_gt_0p25=112, 64x33 k512 bad_gt_0p25=131, 64x33 k3584 bad_gt_0p25=205, 64x64 k3584 bad_gt_0p25=436, and 128x33 k3584 bad_gt_0p25=396",
+        "compile_report_path": "cache/hrxv1/gfx1151/q6-ring96-kloop-asm-copyab-padwait40-static-20260620-150623/readobj-notes.txt",
+        "target_listing_path": "cache/hrxv1/gfx1151/q6-ring96-kloop-asm-copyab-padwait40-static-20260620-150623/objdump.txt",
+        "prior_art_schedule_source": "Qwen3 30B Q6_K p33 RADV medium oracle matmul_q6_k_f32_f16acc_aligned_m hash 0x6eebdfb4c3043b23 plus the direct64, side-store, and fast-stage corrected K-loop probes",
+        "promotion_rule": "reject before route promotion. Matching the first-window 48 LDS loads and lgkmcnt(40) is not sufficient; any future route-facing candidate must reproduce the full operand-readiness/wait ladder or lane ownership contract, pass p33 CPU-reference rows, and beat H4LOAD timing."
+      },
+      "findings": [
+        "added a CMake-built exploratory padwait wrapper hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_padwait_f16acc_wg256_f32 and hrx-hip-bench-q6-wmma-ring96-kloop-asm-padwait-repro without adding a runtime selector",
+        "the probe adds four extra nowait B-fragment LDS loads before the first WMMA group and pins the first-WMMA wait to s_waitcnt lgkmcnt(40), deliberately trying to match RADV's medium-route first issue window",
+        "static metadata from the CMake-built HSACO is wave64, LDS=11264, SGPR=42, VGPR=154, private_segment=0, and no SGPR/VGPR spills",
+        "static opcode counts are 16 v_wmma_f16_16x16x16_f16, 48 ds_load_b64, 0 ds_load_u16_d16, 2 ds_store_b16, 64 buffer_store_b32, 10 s_waitcnt, and 18 s_waitcnt_depctr",
+        "issue-window evidence matches the RADV headline tuple: both RADV and this HIP probe have one 16-WMMA region, 48 immediate pre-WMMA LDS loads, and final pre-WMMA lgkmcnt=40",
+        "correctness failed before any timing or selector work: deterministic failures concentrate first in group 0, with finite errors and no NaN/Inf on the small rows",
+        "this proves HIP C++ inline asm can force the exact RADV first-window load/wait tuple without spills, but it does not prove the same operand readiness or lane/register contract",
+        "decision: keep bench-only and rejected. The next Q6 p33 axis should reproduce RADV's subsequent wait ladder, operand/lane ownership, or selected 96-store output topology rather than adding more pre-WMMA padding loads."
+      ]
+    },
+    {
       "id": "q6_k_wmma_vk64_medium_unrolled_k2_typedstage_mixed96_fixture_prior",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/coopstore-k2-typedstage-mixed96-9e59a04c2-20260620-141031/",

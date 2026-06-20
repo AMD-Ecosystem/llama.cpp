@@ -19,6 +19,10 @@
 #include "../../kernels/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_faststage_wg256.hip.cpp"
 #define HRX_Q6_REPRO_KERNEL hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_faststage_f16acc_wg256_f32
 #define HRX_Q6_REPRO_LABEL "q6-ring96-kloop-asm-copyab-faststage-repro"
+#elif HRX_Q6_REPRO_KLOOP_ASM_COPYAB_PADWAIT
+#include "../../kernels/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_padwait_wg256.hip.cpp"
+#define HRX_Q6_REPRO_KERNEL hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_padwait_f16acc_wg256_f32
+#define HRX_Q6_REPRO_LABEL "q6-ring96-kloop-asm-copyab-padwait-repro"
 #elif HRX_Q6_REPRO_KLOOP_ASM_COPYAB_SIDESTORE
 #include "../../kernels/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_sidestore_wg256.hip.cpp"
 #define HRX_Q6_REPRO_KERNEL hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_sidestore_f16acc_wg256_f32
