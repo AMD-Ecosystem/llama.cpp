@@ -3,6 +3,20 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_k_wmma_vk64_medium_kloop_asm_typedstage_mixed96_fixture_accepted_standalone_prior",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/coopstore-k2-kloop-asm-typedstage-mixed96-3a081b0ce-20260620-030410/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract embedded .hip_fatbin unbundled to cache/hrxv1/gfx1151/coopstore-k2-kloop-asm-typedstage-mixed96-3a081b0ce-20260620-030410/static/fatbin/gfx1151.o",
+      "status": "accepted_standalone_fixture_not_production_route",
+      "findings": [
+        "the typed-stage mixed96 fixture keeps the accepted inline-WMMA low-live kloop accumulator primitive and replaces only the unstable inline halfword LDS stage with normal typed shared-memory uint16_t stores and loads over the collision-free linear stage layout",
+        "correctness passed 100/100 repeated runs with bad=0 and max_abs=0; the same-binary direct64 inline-WMMA control passed 50/50, while the inline-DS linearstage mixed96 control remained unstable",
+        "static evidence from the actual executable fatbin: wave64, LDS=20480, SGPR=18, VGPR=144, private_segment=0, no spills, 16 visible WMMA, 36 ds_load-class instructions, 20 ds_store-class instructions, 96 buffer_store_b32, and 11 s_waitcnt",
+        "the compiler lowered the typed stage to paired 64-bit LDS operations rather than the fragile inline b16/d16 sequence, reducing the wait/load/store surface while preserving the 96-store output contract",
+        "use this as the next Q6 medium catalog-transfer prior only after wiring a real-data route under opt-in and passing focused CPU-reference and route-trace gates; this standalone fixture is not a production promotion"
+      ]
+    },
+    {
       "id": "q6_k_wmma_vk64_medium_kloop_asm_linearstage_mixed96_fixture_rejected_staged_writeback_instability",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/coopstore-k2-kloop-asm-linearstage-mixed96-2696631c2-20260620-025820/",
