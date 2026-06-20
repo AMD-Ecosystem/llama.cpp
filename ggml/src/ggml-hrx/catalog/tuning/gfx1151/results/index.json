@@ -20,6 +20,21 @@
       ]
     },
     {
+      "id": "q8_0_radv_large_store_block_extract",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-radv-store-block-extract-20260620-continue/",
+      "tool": "tools/vulkan-oracle/classify_radv_store_paths.py --blocks-out-dir",
+      "oracle_artifact": "cache/hrxv1/gfx1151/vulkan-oracle-llama31-8b-q8_0-p512-fa1-20260617-200453/",
+      "status": "schedule_evidence_no_route_promotion",
+      "findings": [
+        "extended the RADV store-path classifier to emit one AMDGCN snippet file per classified store basic block, plus blocks/index.md, so the full-tile direct global store path can be inspected without re-splitting the whole shader dump",
+        "ran the tool on matmul_q8_0_f32_f16acc_aligned_l for the Llama 3.1 8B Q8_0 p512/fa1 Vulkan oracle",
+        "the artifact contains 16 direct_global_store snippets, 16 full_tile_staged_store snippets, 16 partial_tile_stage_entry snippets, 64 partial_tile_scalar_store snippets, and the single LDS-stage block",
+        "the first direct full-tile block, blocks/direct_global_store/BB6-line781.amdgcn.txt, computes the output address, waits lgkmcnt(0), issues four buffer_store_b32 stores at offsets 0/16/32/48, then branches past the fallback blocks",
+        "this is the next concrete lane/store schedule target for Q8 large-route parity: compare HIP direct-store candidates against the direct_global_store snippets and the preceding WMMA/load window, rather than treating the shader-wide 192-store static total as the hot branch contract"
+      ]
+    },
+    {
       "id": "q8_0_packstage_asmwmma_fast_half_fullpair_compile_contract",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-packstage-asmwmma-fast-half-fullpair-compile-20260620-062855/",

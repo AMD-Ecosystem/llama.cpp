@@ -34,8 +34,14 @@ def parse_blocks(path: pathlib.Path) -> list[dict]:
     for line_no, raw in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
         bb_match = BB_RE.match(raw.strip())
         if bb_match:
-            current = {"bb": bb_match.group(1), "start_line": line_no, "events": []}
+            if current is not None:
+                current["end_line"] = line_no - 1
+            current = {"bb": bb_match.group(1), "start_line": line_no, "end_line": line_no, "events": [], "lines": []}
             blocks.append(current)
+        if current is not None:
+            current["lines"].append(raw)
+            current["end_line"] = line_no
+        if bb_match:
             continue
         if current is None:
             continue
@@ -116,6 +122,7 @@ def summarize(path: pathlib.Path) -> dict:
         row = {
             "bb": block["bb"],
             "start_line": block["start_line"],
+            "end_line": block["end_line"],
             "class": klass,
             "buffer_store_ops": buffer_stores,
             "lds_store_ops": lds_stores,
@@ -125,6 +132,7 @@ def summarize(path: pathlib.Path) -> dict:
             "branch_targets": branch_targets(block["events"]),
             "opcodes": dict(sorted(counts.items())),
             "first_events": block["events"][:8],
+            "lines": block["lines"],
         }
         rows.append(row)
         summary[klass]["blocks"] += 1
@@ -195,17 +203,44 @@ def write_markdown(path: pathlib.Path, payload: dict) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def write_block_snippets(out_dir: pathlib.Path, payload: dict) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    index_lines = [
+        "# RADV Store Block Snippets",
+        "",
+        f"- ISA: `{payload['isa']}`",
+        "",
+        "| BB | Lines | Class | Buffer Stores | LDS Stores | LDS Loads | Snippet |",
+        "| --- | --- | --- | ---: | ---: | ---: | --- |",
+    ]
+    for block in payload["store_blocks"]:
+        class_dir = out_dir / block["class"]
+        class_dir.mkdir(parents=True, exist_ok=True)
+        snippet_name = f"{block['bb']}-line{block['start_line']}.amdgcn.txt"
+        snippet_path = class_dir / snippet_name
+        snippet_path.write_text("\n".join(block["lines"]) + "\n", encoding="utf-8")
+        rel = snippet_path.relative_to(out_dir)
+        index_lines.append(
+            f"| `{block['bb']}` | {block['start_line']}-{block['end_line']} | `{block['class']}` | "
+            f"{block['buffer_store_ops']} | {block['lds_store_ops']} | {block['lds_load_ops']} | `{rel}` |"
+        )
+    (out_dir / "index.md").write_text("\n".join(index_lines) + "\n", encoding="utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--isa", required=True, type=pathlib.Path)
     parser.add_argument("--json-out", required=True, type=pathlib.Path)
     parser.add_argument("--md-out", required=True, type=pathlib.Path)
+    parser.add_argument("--blocks-out-dir", type=pathlib.Path)
     args = parser.parse_args()
 
     payload = summarize(args.isa)
     args.json_out.parent.mkdir(parents=True, exist_ok=True)
     args.json_out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     write_markdown(args.md_out, payload)
+    if args.blocks_out_dir is not None:
+        write_block_snippets(args.blocks_out_dir, payload)
     return 0
 
 
