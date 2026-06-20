@@ -35,6 +35,22 @@
       ]
     },
     {
+      "id": "q8_0_store_cluster_compare_current_vs_directwmma",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-store-cluster-compare-symbols-20260620-continue/",
+      "tool": "tools/vulkan-oracle/extract_store_clusters.py",
+      "oracle_artifact": "cache/hrxv1/gfx1151/vulkan-oracle-llama31-8b-q8_0-p512-fa1-20260617-200453/",
+      "status": "schedule_evidence_no_route_promotion",
+      "findings": [
+        "added a generic store-cluster extractor for RADV/HIP AMDGCN text and used symbol-scoped llvm-objdump output to compare the Q8 Vulkan large oracle, current packed BK2+wave64 default, and direct-WMMA controls",
+        "RADV large oracle totals remain 32 WMMA, 192 buffer stores across all compiled paths, 132 LDS stores, 192 LDS loads, and 171 waitcnt-class instructions; the direct full-tile snippets show sixteen clusters of four buffer_store_b32 stores, one per active 16x16 output group in the full-tile branch",
+        "current accepted Q8 BK2+wave64 target symbol is not in the RADV store family: totals are store_ops=64, buffer_store_ops=0, lds_store_ops=32, load_ops=158, lds_load_ops=136, vmem_load_ops=22, hot_ops=512, waitcnt_ops=186, and output is scalar global_store_b32 clusters after integer-dot accumulation",
+        "packstage fulltile direct-WMMA control has the corrected active full-tile store count with buffer_store_ops=64, lds_store_ops=2, lds_load_ops=64, hot_ops=32, waitcnt_ops=85, but its store clusters are eight clusters of eight buffer stores rather than RADV's sixteen clusters of four and prior focused timing rejected it",
+        "streamrow selected direct-WMMA control has buffer_store_ops=128 and 32 WMMA but is both correctness/perf rejected; it should not be used as the next store primitive",
+        "next implementation target should either create a direct-WMMA store topology closer to RADV's sixteen 4-store clusters at 64 total active stores, or pivot packed-Q8 dataflow; do not continue chasing 192-store fullpair/selected-half branches for the p512 hot full-tile path"
+      ]
+    },
+    {
       "id": "q8_0_packstage_asmwmma_fast_half_fullpair_compile_contract",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-packstage-asmwmma-fast-half-fullpair-compile-20260620-062855/",
