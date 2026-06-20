@@ -3,6 +3,23 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_issue_window_compare_radv_vs_raw16_fulltile",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-issue-window-compare-20260620-082240/",
+      "tool": "tools/vulkan-oracle/analyze_amdgcn_issue_window.py",
+      "oracle_artifact": "cache/hrxv1/gfx1151/vulkan-oracle-llama31-8b-q8_0-p512-fa1-20260617-200453/",
+      "source_artifact": "cache/hrxv1/gfx1151/q8-raw16-fulltile-static-compare-20260620-081544/",
+      "status": "schedule_evidence_no_route_promotion",
+      "findings": [
+        "added a reusable AMDGCN issue-window analyzer to compare RADV/HIP hot-region counts, pre-hot loads, immediate loads before the final wait, and final pre-hot wait values without relying on backend-specific block labels",
+        "ran the analyzer on the Q8_0 RADV large oracle, accepted packed BK2+wave64 HIP route, rejected guarded raw16 route, and rejected raw16 full-tile route",
+        "RADV large has one 32-WMMA hot region; its first hot region sees 71 pre-hot loads, including 59 immediate LDS loads before the final s_waitcnt lgkmcnt(51)",
+        "accepted packed BK2+wave64 remains in a different scalar-dot family: eight hot regions, 512 v_dot ops, first region has 71 dot ops, 30 pre-hot loads, zero immediate loads before the final wait, and final s_waitcnt vmcnt(2) lgkmcnt(16)",
+        "guarded raw16 and raw16_fulltile both have the desired 32 WMMA total but split into two 16-WMMA regions; their first region has only 32 immediate LDS loads before s_waitcnt lgkmcnt(0)",
+        "raw16_fulltile improves output store clustering but not the pre-WMMA issue window or hot-region split, confirming the next Q8 candidate must target load/wait scheduling and single-region WMMA issue rather than another store-only or full-tile guard pivot"
+      ]
+    },
+    {
       "id": "q8_0_direct_wmma_vk128_packstage_asmwmma_motif192_k2_raw16_fulltile_perf",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-raw16-fulltile-focused-20260620-081017/",
