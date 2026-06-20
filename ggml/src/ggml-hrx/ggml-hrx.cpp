@@ -8432,10 +8432,22 @@ static const ggml_backend_hrx_op_provider * ggml_backend_hrx_select_mul_mat_id_q
         int64_t rows,
         int64_t n_ids,
         int64_t n_tokens) {
-    // W7900/Qwen profiling shows the Q8_1 x4 SWIGLU route loses to the grouped F32 route
-    // below this prompt size.
+    // gfx1151/Qwen3 profiling shows the wider BN32 route wins at production prompt widths
+    // but is not safe for narrow p33 model prompts. Keep BN16 as the narrow fallback.
     static constexpr int64_t q8_1_x4_min_prompt_tokens = 32;
+    static constexpr int64_t q8_1_x4_mmq_min_prompt_tokens = 128;
     const bool q8_1_x4_bn16_prompt_shape = n_tokens >= q8_1_x4_min_prompt_tokens;
+    const bool q8_1_x4_mmq_prompt_shape = n_tokens >= q8_1_x4_mmq_min_prompt_tokens;
+    if (!ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_Q4_K_SWIGLU_Q8_1_X4_MMQ_PROMPT") &&
+        !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_Q8_1_MMVQ") &&
+        k == 2048 && rows % 16 == 0 && n_ids == 8 && q8_1_x4_mmq_prompt_shape &&
+        ggml_backend_hrx_provider_available(device_context->clear_u32_provider) &&
+        ggml_backend_hrx_provider_available(device_context->compact_moe_routes_provider) &&
+        ggml_backend_hrx_provider_available(device_context->quantize_q8_1_x4_provider) &&
+        ggml_backend_hrx_provider_available(
+            device_context->mul_mat_id_q4_k_swiglu_grouped_q8_1_x4_mmq32x64_wg64_provider)) {
+        return &device_context->mul_mat_id_q4_k_swiglu_grouped_q8_1_x4_mmq32x64_wg64_provider;
+    }
     if (!ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_Q4_K_SWIGLU_Q8_1_X4_BN16_PROMPT") &&
         !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_Q8_1_MMVQ") &&
         k == 2048 && rows % 16 == 0 && n_ids == 8 && q8_1_x4_bn16_prompt_shape &&
@@ -8445,16 +8457,6 @@ static const ggml_backend_hrx_op_provider * ggml_backend_hrx_select_mul_mat_id_q
         ggml_backend_hrx_provider_available(
             device_context->mul_mat_id_q4_k_swiglu_grouped_q8_1_x4_bn16_wg64_provider)) {
         return &device_context->mul_mat_id_q4_k_swiglu_grouped_q8_1_x4_bn16_wg64_provider;
-    }
-    if (!ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_Q4_K_SWIGLU_Q8_1_X4_MMQ_PROMPT") &&
-        !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_Q8_1_MMVQ") &&
-        k == 2048 && rows % 16 == 0 && n_ids == 8 && q8_1_x4_bn16_prompt_shape &&
-        ggml_backend_hrx_provider_available(device_context->clear_u32_provider) &&
-        ggml_backend_hrx_provider_available(device_context->compact_moe_routes_provider) &&
-        ggml_backend_hrx_provider_available(device_context->quantize_q8_1_x4_provider) &&
-        ggml_backend_hrx_provider_available(
-            device_context->mul_mat_id_q4_k_swiglu_grouped_q8_1_x4_mmq32x64_wg64_provider)) {
-        return &device_context->mul_mat_id_q4_k_swiglu_grouped_q8_1_x4_mmq32x64_wg64_provider;
     }
     // W7900/Qwen small-prefill profiling shows the packed route wins through
     // p8; grouped routes are reserved for larger prompts where route compaction

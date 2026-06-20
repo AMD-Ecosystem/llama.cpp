@@ -4475,6 +4475,24 @@ int main() {
             run_mul_mat_id_q4_k_swiglu_sparse_small_prompt_case(backend.get());
             return 0;
         }
+        if (std::strcmp(test_only, "mul_mat_id_q4_k_swiglu_grouped_q8_1_prompt") == 0) {
+            run_mul_mat_id_q4_k_swiglu_fusion_case(
+                backend.get(), "mul_mat_id_q4_k_swiglu_grouped_q8_1_prompt",
+                2048, 16, 8, 512, 4, 2.0e-1f, true);
+            return 0;
+        }
+        if (std::strcmp(test_only, "mul_mat_id_q4_k_swiglu_grouped_q8_1_tail_tokens33") == 0) {
+            run_mul_mat_id_q4_k_swiglu_fusion_case(
+                backend.get(), "mul_mat_id_q4_k_swiglu_grouped_q8_1_tail_tokens33",
+                2048, 16, 8, 33, 4, 2.0e-1f, true);
+            return 0;
+        }
+        if (std::strcmp(test_only, "mul_mat_id_q4_k_swiglu_grouped_q8_1_tail_tokens513") == 0) {
+            run_mul_mat_id_q4_k_swiglu_fusion_case(
+                backend.get(), "mul_mat_id_q4_k_swiglu_grouped_q8_1_tail_tokens513",
+                2048, 16, 8, 513, 4, 2.0e-1f, true);
+            return 0;
+        }
         std::fprintf(stderr, "unknown GGML_HRX_TEST_ONLY=%s\n", test_only);
         return 1;
     }

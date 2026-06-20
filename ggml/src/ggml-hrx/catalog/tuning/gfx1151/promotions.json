@@ -977,6 +977,58 @@
         "p33/narrow prompt regressed when forced to the wider route and is deliberately guarded to the accepted MMQ64x16 route",
         "The fused Q4_K SWIGLU route remains BN16; further MoE parity requires a separate SWIGLU schedule and/or a lower-level Vulkan-like subgroup ID schedule"
       ]
+    },
+    {
+      "id": "q4_moe_swiglu_bn32_production_prompt_qwen3_q4_p512_p513",
+      "date": "2026-06-20",
+      "status": "accepted_gfx1151_production_width_default",
+      "route": "hrx_mul_mat_id_q4_k_swiglu_grouped_q8_1_x4_mmq32x64_wg64_f32",
+      "env": "default on gfx1151 for Q4_K MUL_MAT_ID_SWIGLU grouped Q8_1 x4 rows with n_tokens >= 128; rollback with GGML_HRX_DISABLE_Q4_K_SWIGLU_Q8_1_X4_MMQ_PROMPT=1",
+      "shape_guard": "Q4_K MUL_MAT_ID_SWIGLU, packed Q8_1 x4 RHS, k == 2048, rows % 16 == 0, n_ids == 8, n_tokens >= 128, clear/compact/quantize helpers available, gfx1151 only; p33/narrow prompt stays on the accepted BN16 grouped route",
+      "prior_art_schedule": "This is a bounded route-width bracket around the accepted Q4_K MoE grouped Q8_1 x4 packed schedule, not a direct Vulkan cooperative-matrix clone. It follows the accepted production-width MoE ID widening axis by halving route-tile columns on p512/p513 while preserving wave64 and no-spill CMake-built HSACO metadata.",
+      "focused_artifacts": [
+        "cache/hrxv1/gfx1151/q4-swiglu-bn32-testonly-focused-20260619-201844/",
+        "cache/hrxv1/gfx1151/q4-swiglu-bn32-default-focused-20260619-202435/"
+      ],
+      "model_artifacts": [
+        "cache/hrxv1/gfx1151/q4xl-swiglu-bn32-model-ab-20260619-201944/",
+        "cache/hrxv1/gfx1151/q4xl-swiglu-bn32-p512p513-ab-20260619-202041/",
+        "cache/hrxv1/gfx1151/q4-swiglu-bn32-default-rollback-model-ab-20260619-202537/",
+        "cache/hrxv1/gfx1151/q4-swiglu-bn32-coder-p512-repeat-20260619-202658/"
+      ],
+      "oracle_artifacts": [
+        "cache/hrxv1/gfx1151/vulkan-oracle-qwen3-30b-q4kxl-p512-fa1-commitaligned-20260618-200653/",
+        "cache/hrxv1/gfx1151/vulkan-oracle-qwen3-coder-30b-q4km-p512-fa1-commitaligned-20260618-200659/"
+      ],
+      "focused_result": {
+        "p33_default_route": "post-promotion default selects hrx_mul_mat_id_q4_k_swiglu_grouped_q8_1_x4_bn16_wg64_f32 for n_tokens=33, wg_count=[1,3,4]",
+        "p512_default_route": "post-promotion default selects hrx_mul_mat_id_q4_k_swiglu_grouped_q8_1_x4_mmq32x64_wg64_f32 for n_tokens=512, wg_count=[1,16,4]",
+        "p513_default_route": "post-promotion default selects hrx_mul_mat_id_q4_k_swiglu_grouped_q8_1_x4_mmq32x64_wg64_f32 for n_tokens=513, wg_count=[1,17,4]",
+        "forced_p33_model_rejection": "forcing BN32 on Qwen3 Q4_K_XL p33 selected the expected provider for all 47 prompt SWIGLU rows, then llama-bench failed prompt decode with res=-3; keep p33 guarded to BN16"
+      },
+      "model_timing_tok_s": {
+        "qwen3_30b_q4xl_p512_rollback_bn16_to_default_bn32": "649.672260 -> 675.584051",
+        "qwen3_30b_q4xl_p513_rollback_bn16_to_default_bn32": "638.696683 -> 658.203124",
+        "qwen3_coder_30b_q4km_p512_r7_rollback_bn16_to_default_bn32": "897.755701 -> 910.888614",
+        "qwen3_coder_30b_q4km_p513_rollback_bn16_to_default_bn32": "839.875777 -> 877.717409",
+        "qwen3_30b_q4xl_p33_default_bn16": 200.261427
+      },
+      "compile_evidence": {
+        "hsaco": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_id_q4_k_q8_1_x4_mmq.hsaco",
+        "kernel": "hrx_mul_mat_id_q4_k_swiglu_grouped_q8_1_x4_mmq32x64_wg64_f32",
+        "wavefront_size": 64,
+        "sgpr": 87,
+        "vgpr": 136,
+        "lds_bytes": 3968,
+        "spills": 0,
+        "static_artifact": "cache/hrxv1/gfx1151/q4-swiglu-current-static-20260619-201635/"
+      },
+      "promotion_blockers": [
+        "This is a packed Q8_1 x4 route-width promotion, not an exact Vulkan subgroup/cooperative-matrix SWIGLU schedule",
+        "p33/narrow prompt is not safe on BN32 in model integration and is deliberately guarded to the accepted BN16 route",
+        "Qwen3-Coder p512 showed high single-run variance, so the accepted evidence uses a repeated r7 same-binary rollback/default check",
+        "Further MoE parity work still needs a true Vulkan-like subgroup ID/SWIGLU schedule or a lower-level packed dataflow change"
+      ]
     }
   ]
 }
