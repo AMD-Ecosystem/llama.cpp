@@ -3,6 +3,20 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_k_wmma_vk64_medium_kloop_asm_linearstage_mixed96_fixture_rejected_staged_writeback_instability",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/coopstore-k2-kloop-asm-linearstage-mixed96-2696631c2-20260620-025820/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract embedded .hip_fatbin unbundled to cache/hrxv1/gfx1151/coopstore-k2-kloop-asm-linearstage-mixed96-2696631c2-20260620-025820/static/fatbin/gfx1151.o",
+      "status": "rejected_fixture_correctness_intermittent_linearstage_mixed96_staged_writeback",
+      "findings": [
+        "the linear-stage mixed96 fixture tested whether the prior inline-WMMA kloop mixed96 instability was caused by the RADV-style swizzled LDS stage index by switching only the synthetic staged groups 16..23 to collision-free linear LDS addresses",
+        "the pivot improved but did not fix correctness: the first 20-run sweep failed 2/20 expected-pass runs and the longer 100-run repeat failed 34/100 expected-pass runs, usually in staged group 20 slot 2 with 32 or 64 bad lanes",
+        "the same-binary direct64 inline-WMMA control remained stable, passing 50/50 with bad=0 and max_abs=0, so the accumulator-only low-level WMMA primitive is still useful",
+        "static evidence remains attractive but insufficient: wave64, LDS=20480, SGPR=18, VGPR=144, private_segment=0, no spills, 16 visible WMMA, 64 ds_load-class instructions, 48 ds_store-class instructions, 96 buffer_store_b32, and 38 s_waitcnt",
+        "do not use the linear-stage mixed96 fixture as a production Q6 route prior; the staged writeback/lane ownership topology still needs a separate correctness-proven design before timing or model-level integration"
+      ]
+    },
+    {
       "id": "q6_k_wmma_vk64_medium_kloop_asm_direct64_fixture_accepted_accumulator_contract",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/coopstore-k2-kloop-asm-stagefirst-mixed96-6246dce65-20260620-025249/",

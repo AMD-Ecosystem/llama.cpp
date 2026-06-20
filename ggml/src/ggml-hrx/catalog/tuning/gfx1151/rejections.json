@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_wmma_vk64_medium_kloop_asm_linearstage_mixed96_fixture_staged_writeback_instability",
+      "date": "2026-06-20",
+      "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-kloop-asm-linearstage-mixed96",
+      "env": "standalone CMake/Ninja-built gfx1151 HIP bench diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/coopstore-k2-kloop-asm-linearstage-mixed96-2696631c2-20260620-025820/",
+      "control_artifact": "cache/hrxv1/gfx1151/coopstore-k2-kloop-asm-linearstage-mixed96-2696631c2-20260620-025820/kloop-asm-direct64-repeat50.log and cache/hrxv1/gfx1151/coopstore-k2-kloop-asm-linearstage-mixed96-2696631c2-20260620-025820/kloop-asm-linearstage-mixed96-repeat100.log",
+      "static_artifact": "cache/hrxv1/gfx1151/coopstore-k2-kloop-asm-linearstage-mixed96-2696631c2-20260620-025820/static/symbol-summary.txt",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract embedded .hip_fatbin unbundled to cache/hrxv1/gfx1151/coopstore-k2-kloop-asm-linearstage-mixed96-2696631c2-20260620-025820/static/fatbin/gfx1151.o",
+      "reason": "The linear-stage mixed96 fixture kept the inline v_wmma_f16_16x16x16_f16 kloop accumulator repair and replaced only the mixed96 synthetic staged groups 16..23 with collision-free linear LDS stage addresses. This isolates whether the prior staged group 20/21 instability was caused by the RADV-style swizzled stage index. It improved but did not fix the contract: the first 20-run sweep failed 2/20 expected-pass runs, and a longer repeat failed 34/100 expected-pass runs, usually in staged group=20 slot=2 with 32 or 64 bad lanes. The same binary's direct64 inline-WMMA control passed 50/50 with bad=0 and max_abs=0, so the accumulator-only primitive remains accepted. Static evidence is not the blocker: wave64, LDS=20480, SGPR=18, VGPR=144, private_segment=0, no spills, 16 visible WMMA, 64 ds_load-class instructions, 48 ds_store-class instructions, 96 buffer_store_b32, and 38 s_waitcnt. Do not transfer this linear-stage mixed96 source shape into the Q6 production catalog; the next route-facing Q6 medium attempt needs a different correctness-proven writeback/lane ownership topology, not another address-layout-only variant."
+    },
+    {
       "id": "q6_k_wmma_vk64_medium_kloop_asm_mixed96_fixture_staged_writeback_instability",
       "date": "2026-06-20",
       "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-kloop-asm-mixed96 and --mode=wmma-lds-k2-kloop-asm-stagefirst-mixed96",
