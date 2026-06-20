@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_wmma_vk64_padded44_ring96_k2_kloop_copyab_perf",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_copyab_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_COPYAB_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-k2-kloop-copyab-focused-5c4ce47bc-20260620-022526/",
+      "perf_artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-k2-kloop-copyab-focused-5c4ce47bc-20260620-022526/perf-compare-kloop-vs-default.md",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-k2-kloop-copyab-focused-5c4ce47bc-20260620-022526/readobj-notes.txt and cache/hrxv1/gfx1151/q6-vk64-ring96-k2-kloop-copyab-focused-5c4ce47bc-20260620-022526/isa-counts.txt",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_copyab_wg256.hsaco",
+      "reason": "The Q6_K VK64 padded44 RING96 K2 K-loop copy-A+B probe tests whether the corrected matching-K RING96 math can be expressed with a smaller compiler-facing static/live surface than the previous full, streamed, and pair-column K2 spellings. It keeps the same corrected K2 accumulation but puts the two K subtiles behind a non-unrolled source loop so only one subtile's A/B fragments are live at a time. This achieves the static objective: CMake/Ninja-built HSACO reports wave64, LDS=11264, SGPR=42, VGPR=177, private_segment=0, vgpr_spill_count=0, 16 visible WMMA, 32 static ds_load-class instructions, 64 buffer_store_b32, 10 s_waitcnt, and 18 s_waitcnt_depctr. Focused p33 CPU-reference passed Vcur, ffn_out, and result_output with route traces selecting this provider for all three rows. Reject for production performance before model tests. Same-runner focused timing is slower than the accepted VK64 default: total 14273.602 -> 23938.541 us, Vcur 397.200 -> 505.509 us, ffn_out 2487.616 -> 2892.785 us, and result_output 11388.786 -> 20540.247 us. Keep opt-in only. The useful conclusion is that a no-spill corrected-K2 16-static-WMMA surface is possible in HIP C++, but this looped spelling does not reproduce RADV throughput; the dynamic loop/control/wait structure and remaining 64-store output contract are still inferior to the oracle. The next Q6 medium attempt should keep the reduced static live surface while targeting RADV's writeback/store topology and outstanding-load behavior."
+    },
+    {
       "id": "q6_k_wmma_vk64_padded44_ring96_k2_paircol_copyab_perf",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_paircol_copyab_f16acc_wg256_f32",

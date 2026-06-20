@@ -3,6 +3,20 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_k_wmma_vk64_ring96_k2_kloop_correct_static_oracle_surface_but_slow",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-k2-kloop-copyab-focused-5c4ce47bc-20260620-022526/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_copyab_wg256.hsaco",
+      "status": "rejected_correct_no_spills_static_wmma_surface_but_slow",
+      "findings": [
+        "the K-loop route passes focused p33 CPU-reference for Vcur, ffn_out, and result_output with route traces selecting the new provider",
+        "the source-loop spelling achieves the intended static/live-range objective: wave64, LDS=11264, SGPR=42, VGPR=177, no private segment, no spills, 16 visible WMMA, 32 static ds_load-class instructions, 64 buffer_store_b32, 10 s_waitcnt, and 18 s_waitcnt_depctr",
+        "focused p33 timing is 1.677x slower than the accepted VK64 default: 23938.541 us versus 14273.602 us",
+        "this is the first correctness-clean corrected-K2 RING96 source shape with a 16-static-WMMA no-spill surface, but the dynamic loop/control/wait behavior and 64-store output contract still do not match RADV throughput",
+        "next Q6 medium work should preserve the reduced static live surface while attacking the remaining RADV deltas: writeback/store topology, outstanding-load behavior, and 96-store contract"
+      ]
+    },
+    {
       "id": "q6_k_wmma_vk64_ring96_k2_paircol_correct_no_spill_but_slow",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-k2-paircol-copyab-fresh-a48956f70-20260620-021614/",
