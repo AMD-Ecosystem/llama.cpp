@@ -1049,11 +1049,15 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
 #if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_COPY_B
                     b_use = hrx_q6_k_wmma_vk128_copy_frag(b_use);
 #endif
+#if HRX_Q6_K_WMMA_VK128_W64_INLINE_WMMA
+                    acc[group] = hrx_q6_k_wmma_vk128_wmma_f16_w64_asm(a_use, b_use, acc[group]);
+#else
                     acc[group] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
                         a_use,
                         b_use,
                         acc[group],
                         HRX_Q6_K_WMMA_VK128_W64_OPSEL != 0);
+#endif
                 }
             }
         }

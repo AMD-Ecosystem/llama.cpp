@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_wmma_vk64_padded44_ring96_k2_asm_typedstage_perf",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_asm_typedstage_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_ASM_TYPEDSTAGE_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-p33-ring96-k2-asm-typedstage-focused-20260620-142852/",
+      "perf_artifact": "cache/hrxv1/gfx1151/q6-p33-ring96-k2-asm-typedstage-focused-20260620-142852/perf-compare.md",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-ring96-k2-asm-typedstage-static-20260620-142824/compare-radv.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_asm_typedstage_wg256.hsaco",
+      "reason": "This opt-in route tested the only distinct lower-level continuation of the rejected unrolled K2 typed-stage production route: keep the corrected K2 copy-A+B typed-stage ABI, but force WMMA through inline v_wmma_f16_16x16x16_f16 instead of the HIP builtin. Reject for promotion. Static evidence shows the inline primitive moves in the right direction only locally: spills fall from the previous builtin route's vgpr_spill_count=39/private_segment=160 to vgpr_spill_count=23/private_segment=96, but the route still has VGPR=256, LDS=19456 versus RADV 11264, 32 WMMA versus RADV 16, 64 ds_load_b64 versus RADV 48, only 2 ds_store_b16 versus RADV 64, and 64 buffer_store_b32 versus RADV 96. Focused p33 CPU-reference passed all 10 rows and route traces prove cols=33 Q6 rows selected this provider while cols=1 stayed on rows2_cols1. Same-runner focused timing remains far slower than the accepted H4LOAD default: total 6765.601 -> 25294.366 us (default/variant 0.267x), Qcur 243.281 -> 725.575 us, Vcur 182.756 -> 288.740 us, node_28 400.073 -> 739.147 us, and result_output 5922.840 -> 23524.312 us. Keep opt-in only. The useful conclusion is that inline WMMA can reduce the spill surface but cannot save the unrolled K2 typed-stage topology; the next Q6 p33 parity attempt should abandon unrolled 32-WMMA K2 typed-stage and pursue a true 16-WMMA/96-store ownership primitive or a different packed schedule."
+    },
+    {
       "id": "q6_k_wmma_vk64_padded44_ring96_k2_typedstage_perf",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_typedstage_f16acc_wg256_f32",
