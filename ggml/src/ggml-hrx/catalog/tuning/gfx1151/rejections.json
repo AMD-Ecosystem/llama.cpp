@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_wmma_vk64_padded44_ring96_k2_typedstage_perf",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_typedstage_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_TYPEDSTAGE_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-p33-ring96-k2-typedstage-focused-20260620-142211/",
+      "perf_artifact": "cache/hrxv1/gfx1151/q6-p33-ring96-k2-typedstage-focused-20260620-142211/perf-compare.md",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-ring96-k2-typedstage-static-20260620-141916/compare-radv.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_typedstage_wg256.hsaco",
+      "reason": "This opt-in route tested the route-facing transfer of the accepted standalone unrolled K2 typed-stage mixed96 fixture into the real Q6_K p33 ABI. It preserved the corrected K2 copy-A+B ring schedule and added typed uint16_t LDS staging before raw buffer stores, with the selector ordered ahead of the gfx1151 H4LOAD default so the env var selects the candidate without disabling the default. Reject for promotion. Static RADV comparison shows the transfer inherits the unrolled K2 pressure cliff instead of the RADV medium contract: wave64, LDS=19456 versus RADV 11264, SGPR=45, VGPR=256, private_segment=160, vgpr_spill_count=39, 32 WMMA versus RADV 16, 64 ds_load_b64 versus RADV 48, only 2 ds_store_b16 versus RADV 64, and 64 buffer_store_b32 versus RADV 96. Focused p33 CPU-reference passed all 10 rows and route traces prove cols=33 Q6 rows selected this provider while cols=1 stayed on rows2_cols1. Same-runner focused timing regressed severely: total 6795.834 -> 31761.837 us (default/variant 0.214x), Qcur 243.353 -> 880.738 us, Vcur 183.005 -> 340.922 us, node_28 399.875 -> 927.096 us, and result_output 5953.060 -> 29596.528 us. Keep opt-in only. The useful conclusion is that unrolled typed-stage writeback is correctness-clean in the production ABI but not viable because it spills and is roughly 5x slower on the dominant result_output row; the next Q6 p33 parity attempt needs a lower-pressure/lower-level 16-WMMA + 96-store lane ownership primitive, not another unrolled K2 typed-stage variant."
+    },
+    {
       "id": "q6_k_vk64_h4load_prefetch2_p33_focused_regression",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_h4load_prefetch2_f16acc_wg256_f32",

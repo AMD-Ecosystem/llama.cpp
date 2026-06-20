@@ -9575,6 +9575,51 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_typedstage_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_typedstage_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_typedstage_wg256",
+    "artifact_id": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_typedstage_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_typedstage_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q6_dense_prompt_wmma16x16_vk64_padded44_w64_ring96_k2_typedstage_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q6_K x F32 -> F32 MUL_MAT",
+      "k_multiple": 256,
+      "rows_min": 16,
+      "cols_min": 16,
+      "cols_max": 64,
+      "requires_env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_TYPEDSTAGE_F16ACC_WG256_PROMPT",
+      "prior_delta": "Route-facing transfer of the accepted standalone unrolled K2 typed-stage mixed96 fixture in cache/hrxv1/gfx1151/coopstore-k2-typedstage-mixed96-9e59a04c2-20260620-141031/. It keeps the corrected K2 copy-A+B ring schedule but uses the unrolled K2 source spelling instead of the rejected kloop typed-stage route, then stages selected accumulator halves through typed uint16_t LDS before raw buffer stores. Expected signal is whether the standalone typed-stage correctness/no-spill primitive can survive the real Q6 ABI and avoid the kloop route's LDS wait/load pressure."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_typedstage_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_perf_probe",
+      "selection": "Opt-in diagnostic only. CMake/Ninja built the gfx1151 HSACO and focused p33 CPU-reference passed with route traces selecting this provider for all cols=33 Q6 rows. Static comparison against the Qwen3 30B Q6_K p33 RADV medium oracle rejected the compile shape: wave64, LDS=19456, SGPR=45, VGPR=256, private_segment=160, vgpr_spill_count=39, 32 visible WMMA, 64 ds_load_b64, 64 ds_load_u16_d16, only 2 ds_store_b16, and 64 buffer_store_b32. Same-runner focused p33 timing regressed badly versus the accepted H4LOAD default: total 6795.834 -> 31761.837 us and result_output cols33 5953.060 -> 29596.528 us. Artifact: cache/hrxv1/gfx1151/q6-p33-ring96-k2-typedstage-focused-20260620-142211/."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_typedstage_f16acc_wg256_f32",
     "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_typedstage_f16acc_wg256",
     "op": "MUL_MAT",
