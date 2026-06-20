@@ -3,6 +3,34 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q5_k_large_existing_family_static_matrix",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q5-large-existing-family-static-matrix-20260620-110552/",
+      "tool": "tools/vulkan-oracle/compare_amdgcn_isa.py and summarize_isa_compare_matrix.py",
+      "status": "schedule_evidence_no_route_promotion",
+      "candidate_gate": {
+        "production_target": "Qwen2.5 Coder 7B Q5_K_M p512 dense prompt rows where current HRX remains behind the Vulkan large aligned Q5_K schedule",
+        "baseline_command": "Q5_K Vulkan oracle matmul_q5_k_f32_f16acc_aligned_l hash 0x0ee599afb33ff07b",
+        "variant_command": "static comparison of all existing CMake/Ninja-built Q5_K MMQL128 and VK128 WMMA p512 candidate HSACOs",
+        "same_runner_comparison_method": "not applicable; static family triage only",
+        "route_trace_path": "not applicable; no runtime selector changed",
+        "scheduler_trace_path": "matrix.md and per-candidate compare markdown files in the artifact",
+        "focused_cpu_reference": "not run; this summarizes already-built candidate surfaces and prior rejected/accepted routes",
+        "compile_report_path": "per-candidate compare JSON/markdown files in the artifact",
+        "target_listing_path": "per-candidate compare JSON/markdown files in the artifact",
+        "prior_art_schedule_source": "Vulkan oracle matmul_q5_k_f32_f16acc_aligned_l hash 0x0ee599afb33ff07b from cache/hrxv1/gfx1151/vulkan-oracle-qwen25coder-7b-q5km-p512-fa1-20260617-200349/",
+        "promotion_rule": "do not promote from static matrix evidence. A future Q5 p512 candidate must pass p33/p512/p513 CPU-reference and route gates, preserve no-spill codegen, and show same-runner performance before default selection."
+      },
+      "findings": [
+        "the scalar MMQL128 family is not structurally close to RADV: all five variants emit 512 v_dot4_i32_iu8 ops, no v_wmma, no ds_load_b64, no d16 LDS writeback, and only 64 global stores; CR raises the first-window load count to 28 but spills 452 bytes and was already performance-rejected",
+        "the direct-WMMA VK128 family reaches the correct 32-WMMA count in most p512 variants, but the non-B64GROUP forms do not emit RADV-like ds_load_b64 fragment loads and keep only 64 or 128 scalar global stores",
+        "the B64GROUP WMMA variants reach 64 ds_load_b64 and a closer first-window pre-load count of 24, but their final pre-WMMA lgkmcnt is 0 instead of RADV's 24, so the compiler is not preserving the same outstanding LDS-load issue window",
+        "the closest static surface is wmma_vk128_b64group_packstage_fast_half_selected_bufferstore: SGPR=37, VGPR=199, LDS=22528, no spills, 32 WMMA, 64 ds_load_b64, 128 ds_load_u16_d16, 128 ds_store_b16, and 128 buffer_store_b32",
+        "that closest surface still misses RADV's 192 buffer stores, store-cluster shape, and first-window wait strategy; prior focused evidence already rejected this family, so it should not be re-enabled as-is",
+        "decision: future Q5 p512 work should build a new lower-level WMMA plus halfword LDS writeback/lane-ownership contract, likely borrowing the Q8 inline-asm/store-contract work, instead of adding another MMQL B-cache issue-order variant"
+      ]
+    },
+    {
       "id": "q5_k_large_accepted_bhalf_static_contract_gap",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q5-large-accepted-static-contract-20260620-110321/",
