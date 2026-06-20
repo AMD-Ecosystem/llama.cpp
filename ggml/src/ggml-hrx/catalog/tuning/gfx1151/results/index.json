@@ -2074,6 +2074,38 @@
       ]
     },
     {
+      "id": "q8_0_packstage_asmwmma_streamk_raw16_fulltile_bufferstore",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-streamk-catalog-focused-20260620-120540/",
+      "performance_artifact": "cache/hrxv1/gfx1151/q8-streamk-catalog-focused-20260620-120540/p512.perf-compare.md and p513.perf-compare.md",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-streamk-catalog-focused-20260620-120540/static/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_streamk_raw16_fulltile_bufferstore_wg256.hsaco",
+      "status": "rejected_focused_perf_regression",
+      "candidate_gate": {
+        "production_target": "Llama 3.1 8B Q8_0 p512 dense prompt rows where current HRX packed-Q8_1 split-qsum remains behind the Vulkan large aligned Q8_0 route, with p33 and p513 odd/tail policy checks",
+        "baseline_command": "build/hrx-v1-catalog-gfx1151/bin/test-backend-ops perf -b HRX0 -o MUL_MAT --output csv --test-file p512-q8_0-prompt.txt with no stream-K env",
+        "variant_command": "same command with GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_ASMWMMA_STREAMK_RAW16_FULLTILE_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+        "same_runner_comparison_method": "tools/hrxv1_compare_backend_op_perf.py on focused p512 and p513 perf CSVs",
+        "route_trace_path": "p33.trace-routes.stderr, p512.trace-routes.stderr, and p513.trace-routes.stderr in the artifact",
+        "scheduler_trace_path": "static/compare-radv.md and static/issue-window.md",
+        "focused_cpu_reference": "p33.trace-test.csv, p512.trace-test.csv, and p513.trace-test.csv all passed",
+        "compile_report_path": "static/device-readelf-notes.txt",
+        "target_listing_path": "static/device-objdump.amdgcn.txt",
+        "prior_art_schedule_source": "q8_0_bm128_streamk_output_repro_prior plus RADV Q8_0 large oracle matmul_q8_0_f32_f16acc_aligned_l hash 0x72d309e22f889977",
+        "promotion_rule": "reject for promotion unless a future source form preserves stream-K correctness/no-spill codegen while moving to the RADV one-window 32-WMMA, 59-immediate-LDS-load, lgkmcnt=51 issue contract and beating the current split-qsum route in p512/p513 same-runner gates"
+      },
+      "findings": [
+        "added a CMake/Ninja-built opt-in catalog route that transfers the standalone BM128/BN128 stream-K inline-WMMA fixture into the real Q8_0 catalog ABI with raw16 direct full-tile stores",
+        "focused p33, p512, and p513 CPU-reference gates passed",
+        "route traces proved p33 stayed on existing narrow routes, p512 selected stream-K only for ffn_out, ffn_gate, and result_output, and p513 stayed on existing tail-capable split-qsum routes",
+        "static metadata is no-spill: wave64 SGPR=24 VGPR=209 LDS=20480 private_segment=0, with 32 WMMA and 64 ds_load_b64",
+        "issue-window evidence still differs materially from RADV: stream-K emits two 16-WMMA regions with 32 immediate LDS loads and final lgkmcnt=0, while RADV emits one 32-WMMA region with 59 immediate LDS loads and lgkmcnt=51",
+        "same-runner focused p512 perf rejects promotion: total 67396.530 -> 77748.753 us (0.867x), ffn_out 6799.683 -> 8153.384 us, ffn_gate 5935.131 -> 7106.497 us, and result_output 52316.714 -> 60065.905 us",
+        "p513 stayed guarded out and measured as noise-level at 80421.697 -> 81497.350 us (0.987x total)",
+        "decision: keep the route opt-in as a useful no-spill ABI transfer diagnostic, but do not promote. The next Q8 parity axis needs a lower-level cooperative lane/store primitive or a source form that preserves correctness while reproducing RADV's long outstanding LDS-load/single-window issue schedule."
+      ]
+    },
+    {
       "id": "q8_0_direct_wmma_family_current_static_rank",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-direct-wmma-family-current-rank-20260620-113948/",
