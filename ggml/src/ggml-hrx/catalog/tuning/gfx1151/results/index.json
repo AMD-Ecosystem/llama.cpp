@@ -18,6 +18,22 @@
       ]
     },
     {
+      "id": "q8_0_phase96_bm128_backendlike_fixture_prior",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-phase96-bm128-backendlike-recheck-008406e9d-20260620-054852/",
+      "static_artifact": "same CMake/Ninja-built hrx-hip-bench-q8-wmma-repro binary as the previously recorded BM128 phase96 catalog/repro evidence",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro",
+      "status": "accepted_standalone_backendlike_data_prior_not_production_route",
+      "findings": [
+        "ran the existing phase96-bm128-abcopy-backendlike fixture to isolate whether the specialized BM128 phase96 spelling still passes with backend-like Q8/RHS value distributions and production-width columns",
+        "correctness passed all built-in backend-like rows with bad=0, nan=0, inf=0, sentinel=0: 128x128 k4096, 128x512 k4096, 128x128 k14336, 1024x512 k4096, and 4096x512 k4096",
+        "max_abs stayed at 0.00268994 for k4096 rows and 0.00796381 for the k14336 row, with nmse around 0.000233338 to 0.000281430",
+        "this supersedes the earlier data-distribution suspicion from the rejected phase96 catalog transfer: backend-like values and full p512-scale columns are not enough to reproduce the catalog failure",
+        "do not promote from this fixture because the prior BM128 phase96 catalog provider already passed focused correctness and then regressed p512/p513 timing by about 3.2x-3.3x versus the current packed-Q8_1 split-qsum default",
+        "next Q8 work should either port a materially lower-overhead version of the specialized BM128 repro spelling or pivot to a lower-level cooperative writeback/lane-store primitive; do not repeat real-output-only phase clones without a specific ABI/performance delta"
+      ]
+    },
+    {
       "id": "q8_0_coopstore_wmma_lds_k2_direct192_raw_prior",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/coopstore-wmma-lds-k2-direct192-raw-recheck-d33b98a86-20260620-053314/",
