@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_wmma_bm128_direct192_inline_asm_contract_probe",
+      "date": "2026-06-19",
+      "route": "hrx-hip-bench-q8-wmma-repro --mode=contract-bm128-direct192-raw-asm/contract-bm128-direct192-bcopy-upper-asm/contract-bm128-direct192-abcopy-bhoist-asm",
+      "env": "standalone CMake/Ninja-built gfx1151 HIP bench diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/q8-bm128-direct192-asm-contract-20260619-181343/",
+      "isa_artifact": "cache/hrxv1/gfx1151/q8-bm128-direct192-asm-contract-20260619-181343/static/symbol-summary.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro with embedded .hip_fatbin gfx1151 object extracted to cache/hrxv1/gfx1151/q8-bm128-direct192-asm-contract-20260619-181343/static/fatbin/gfx1151.o",
+      "reason": "The BM128 direct192 inline-asm contract probe tests the lower-level B operand/lane hypothesis left by the upper-B-copy rejection. It reuses the same CMake/Ninja-built standalone BM128/BN128 four-wave direct192 contract rows but switches selected modes from the HIP WMMA builtin to explicit inline v_wmma_f16_16x16x16_f16. The non-asm raw control reproduced the known failure on p128 and p33 with first bad at group 16 and max_abs=7.57994. Raw inline asm passed both p128 and odd p33 with bad=0, no NaNs, no infinities, no sentinels, and tight max_abs=0.00268994/0.00262882. Upper-B-copy inline asm also passed both rows with the same tight errors, while A+B-copy/B-hoist inline asm passed only at loose max_abs=0.109229. Static extraction shows raw inline asm preserves the desired standalone contract surface better than the copy repairs: wave64, SGPR=50, VGPR=195, private_segment=0, 32 WMMA, 64 ds_load_b64, and 192 buffer_store_b32. The extracted disassembly still contains scratch op mnemonics, so production promotion must use private_segment and focused HSACO evidence rather than this standalone summary alone. This is not a route promotion because the 192-store diagnostic includes a contract side-effect surface that a real-output-only provider may not preserve. The useful conclusion is precise: the raw direct192 semantics are repaired by inline WMMA operand spelling, not by fragment copies. The next route-facing candidate should port the raw inline-asm operand contract into a production ABI that preserves the required store/lane surface, then run focused p33/p512/p513 CPU-reference, route, static, and timing gates against the packed-Q8_1 default."
+    },
+    {
       "id": "q8_0_direct_wmma_vk128_packstage_asmwmma_motif192_k2_ktilefrag_realdata_perf",
       "date": "2026-06-19",
       "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_ktilefrag_bufferstore_f16acc_wg256_f32",
