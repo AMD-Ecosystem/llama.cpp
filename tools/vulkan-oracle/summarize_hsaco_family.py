@@ -87,6 +87,8 @@ def load_reference_contract(path):
 
 def add_reference_deltas(rows, reference):
     if not reference:
+        for row in rows:
+            add_contract_summary(row)
         return rows
 
     ref_store = reference.get("store_cluster_score", {})
@@ -139,12 +141,48 @@ def add_reference_deltas(rows, reference):
             "wmma_gap": wmma_gap,
             "total_gap": store_gap + wmma_gap,
         }
+        add_contract_summary(row)
     return rows
+
+
+def add_contract_summary(row):
+    failures = []
+    resources = row.get("resources", {})
+    scratch = resources.get("scratch_bytes") or 0
+    sgpr_spills = resources.get("sgpr_spills") or 0
+    vgpr_spills = resources.get("vgpr_spills") or 0
+    if scratch:
+        failures.append(f"scratch={scratch}")
+    if sgpr_spills:
+        failures.append(f"sgpr_spills={sgpr_spills}")
+    if vgpr_spills:
+        failures.append(f"vgpr_spills={vgpr_spills}")
+
+    reference_delta = row.get("reference_delta", {})
+    for group_name in ("store", "wmma"):
+        for field, delta in sorted(reference_delta.get(group_name, {}).items()):
+            if isinstance(delta, int) and delta != 0:
+                failures.append(f"{group_name}.{field}={delta:+d}")
+
+    row["contract_failures"] = failures
+    row["static_contract_pass"] = not failures
+    return row
 
 
 def sort_rows(rows, sort_key):
     if sort_key == "name":
         return sorted(rows, key=lambda row: row["name"])
+    if sort_key == "contract":
+        return sorted(rows, key=lambda row: (
+            0 if row.get("static_contract_pass") else 1,
+            row.get("resources", {}).get("scratch_bytes") or 0,
+            row.get("resources", {}).get("sgpr_spills") or 0,
+            row.get("resources", {}).get("vgpr_spills") or 0,
+            row.get("reference_delta", {}).get("total_gap", 10**9),
+            row.get("reference_delta", {}).get("store_gap", 10**9),
+            row.get("reference_delta", {}).get("wmma_gap", 10**9),
+            row["name"],
+        ))
     if sort_key == "store-gap":
         return sorted(rows, key=lambda row: (
             row.get("reference_delta", {}).get("store_gap", 10**9),
@@ -267,8 +305,8 @@ def write_markdown(path, rows, reference=None):
             "",
         ]
     lines += [
-        "| HSACO | Wave | VGPR | SGPR | LDS | Scratch | VGPR Spills | v_dot | v_wmma | LDS Read | LDS Write | VMEM Load | VMEM Store | Store Clusters | Store VMEM | Store LDS | dClusters | dVMEM Store | dLDS Store | Store Gap | WMMA Gap | Total Gap | Wait | Barrier | Hot Op | Pre-Hot Loads | Final Wait | Hot Window |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: |",
+        "| HSACO | Static Contract | Wave | VGPR | SGPR | LDS | Scratch | VGPR Spills | v_dot | v_wmma | LDS Read | LDS Write | VMEM Load | VMEM Store | Store Clusters | Store VMEM | Store LDS | dClusters | dVMEM Store | dLDS Store | Store Gap | WMMA Gap | Total Gap | Wait | Barrier | Hot Op | Pre-Hot Loads | Final Wait | Hot Window | Contract Failures |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | --- |",
     ]
     for row in rows:
         res = row["resources"]
@@ -281,6 +319,7 @@ def write_markdown(path, rows, reference=None):
             "| "
             + " | ".join([
                 f"`{row['name']}`",
+                "`pass`" if row.get("static_contract_pass") else "`fail`",
                 render_value(res.get("wavefront_size")),
                 render_value(res.get("vgpr")),
                 render_value(res.get("sgpr")),
@@ -308,6 +347,7 @@ def write_markdown(path, rows, reference=None):
                 render_value(pre_hot_loads),
                 render_value(hot.get("final_pre_hot_lgkmcnt")),
                 render_value(hot.get("hot_op_in_window")),
+                "<br>".join(f"`{item}`" for item in row.get("contract_failures", [])),
             ])
             + " |"
         )
@@ -336,7 +376,7 @@ def main():
     parser.add_argument("--llvm-readelf", default="llvm-readelf", type=pathlib.Path)
     parser.add_argument("--reference-compare-json", type=pathlib.Path,
                         help="RADV-vs-HSACO compare JSON; uses the LHS event scores as the ranking contract.")
-    parser.add_argument("--sort", choices=("input", "name", "store-gap", "total-gap", "resource"),
+    parser.add_argument("--sort", choices=("input", "name", "contract", "store-gap", "total-gap", "resource"),
                         default="input")
     parser.add_argument("--out-json", type=pathlib.Path)
     parser.add_argument("--out-md", type=pathlib.Path)
