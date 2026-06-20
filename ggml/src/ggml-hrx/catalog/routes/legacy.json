@@ -11155,6 +11155,51 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_chunk8_wg256_f32",
+    "family": "mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_chunk8_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q8_0_mmq64x128_splitqsum_bk2_wave64_chunk8",
+    "artifact_id": "mul_mat_vec_q8_0_mmq64x128_splitqsum_bk2_wave64_chunk8_hsaco",
+    "export_name": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_chunk8_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 110,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q8_0_prompt_mmq64x128_splitqsum_bk2_wave64_chunk8_full_column"
+    },
+    "shape_guards": {
+      "dtype": "Q8_0 x F32 -> F32 MUL_MAT",
+      "k_multiple": 128,
+      "rows_multiple": 128,
+      "cols_min": 128,
+      "cols_multiple_for_selector": 128,
+      "selector_gate": "default on gfx1151 for full-column rows with cols % 128 == 0; force with GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X128_SPLITQSUM_BK2_WAVE64_CHUNK8_PROMPT=1; rollback with GGML_HRX_DISABLE_Q8_0_Q8_1_X4_MMQ64X128_SPLITQSUM_BK2_WAVE64_CHUNK8_PROMPT=1",
+      "prior_delta": "Preserves the accepted Q8_0 packed-Q8_1 BM64/BN128 split-qsum BK2 wave64 route and changes only COL_CHUNK from 16 to 8. This brackets the qsum live-range axis between rejected splitqsum8 and accepted BK2+wave64 without changing p33 or p513 route policy."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_chunk8_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "accepted_gfx1151_full_column_default",
+      "selection": "CMake/Ninja built the gfx1151 HSACO through the generated catalog path. Static summary showed wave64, SGPR=52, VGPR=137, LDS=8704, no scratch, no spills, 768 v_dot4_i32_iu8, and the same first-hot-dot issue window as the accepted BK2+wave64 parent, while reducing VGPR from 169 to 137. Focused CPU-reference gates passed p33, p512, and p513. Route traces kept p33 on BN64, selected chunk8 for all five p512 full-column rows, and kept p513 on BN112 split-qsum. Focused p512 timing improved 67412.437 -> 65964.768 us, and repeated Llama 3.1 8B Q8_0 p512/fa1 model A/B improved steady throughput 470.376 -> 479.021 tok/s with zero fallback mentions."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk4_wave64_wg256_f32",
     "family": "mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk4_wave64_wg256",
     "op": "MUL_MAT",

@@ -3,6 +3,37 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_prompt_mmq64x128_splitqsum_bk2_wave64_chunk8_full_column_accepted",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-bk2-wave64-chunk8-focused-b8dd07298-dirty-20260620-163515/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-bk2-wave64-chunk8-static-b8dd07298-dirty-20260620-163352/",
+      "model_artifact": "cache/hrxv1/gfx1151/q8-bk2-wave64-chunk8-model-ab-repeat-b8dd07298-dirty-20260620-163700/",
+      "source_commit": "b8dd07298-dirty",
+      "tool": "CMake/Ninja-built HRX catalog HSACO, summarize_hsaco_family.py, focused test-backend-ops CPU-reference/perf gates, and same-binary llama-bench A/B",
+      "status": "accepted_default_gfx1151_full_column_q8_0_prompt",
+      "candidate_gate": {
+        "production_target": "Llama 3.1 8B Q8_0 p512/fa1 full-column dense prompt rows on gfx1151; p33 and p513 are non-target sanity rows",
+        "baseline_command": "test-backend-ops perf -b HRX0 -o MUL_MAT --test-file q8_0-current-focused-p512/focused/q8_0_prompt.txt with default BK2+wave64 route",
+        "variant_command": "same command with GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X128_SPLITQSUM_BK2_WAVE64_CHUNK8_PROMPT=1",
+        "same_runner_comparison_method": "serial same-binary backend-op perf plus same-binary llama-bench p512/fa1 A/B",
+        "route_trace_path": "correctness/*.stderr.log and model A/B stderr.log files in the artifact directories",
+        "scheduler_trace_path": "static summary over generated HSACO family: q8-bk2-wave64-chunk8-static-b8dd07298-dirty-20260620-163352/summary.md",
+        "focused_cpu_reference": "p33, p512, and p513 focused Q8_0 MUL_MAT rows all passed under chunk8 opt-in",
+        "compile_report_path": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_mmq64x128_splitqsum_bk2_wave64_chunk8.hsaco",
+        "target_listing_path": "q8-bk2-wave64-chunk8-static-b8dd07298-dirty-20260620-163352/summary.json",
+        "prior_art_schedule_source": "accepted packed Q8_0 BK2+wave64 full-column route plus rejected splitqsum8/chunk32 live-range bounds; Vulkan large Q8 oracle remains the long-term schedule target",
+        "promotion_rule": "default only for gfx1151 full-column Q8_0 prompt rows when p33/p512/p513 CPU-reference gates pass, p512 route trace selects chunk8, static compile has no scratch/spills, and focused plus model A/B are non-regressive versus BK2+wave64"
+      },
+      "findings": [
+        "chunk8 preserves the accepted BK2+wave64 packed dataflow and first-hot-dot window, but lowers VGPR from 169 to 137 with no scratch or spills",
+        "focused p33 route stayed on BN64, p512 selected chunk8 for all five rows, and p513 stayed on BN112 split-qsum",
+        "focused p512 backend-op total improved 67412.437 -> 65964.768 us, ratio 0.9785",
+        "post-promotion default policy selected chunk8 for p512 only, passed p33/p512/p513 focused correctness, and improved p512 total 68428.228 -> 66067.426 us versus rollback",
+        "same-binary Llama 3.1 8B Q8_0 p512/fa1 repeated model A/B improved steady throughput 470.376 -> 479.021 tok/s, ratio 1.0184, with zero fallback mentions",
+        "promote as a local full-column Q8 lift with rollback; this does not resolve the larger RADV cooperative-matrix schedule gap"
+      ]
+    },
+    {
       "id": "mission_checkpoint_after_q6_typedstage_rejections",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/current-head-e5f41a291-commitaligned/",
