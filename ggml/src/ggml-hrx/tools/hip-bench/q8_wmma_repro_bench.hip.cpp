@@ -7278,6 +7278,39 @@ static float expected_value_for_output(
     return ref[static_cast<size_t>(source_col) * rows + static_cast<size_t>(source_row)];
 }
 
+static float expected_value_for_output_sample(
+        size_t index,
+        int rows,
+        int cols,
+        const std::string & mode,
+        const std::vector<hrx_block_q8_0_wmma_vk128_lhs> & blocks,
+        const std::vector<float> & rhs,
+        int k) {
+    int compute_group = 0;
+    int store_group = 0;
+    int row = static_cast<int>(index % static_cast<size_t>(rows));
+    int col = static_cast<int>(index / static_cast<size_t>(rows));
+
+    if (remap_mode_groups(mode, &compute_group, &store_group) ||
+            bmirror_mode_groups(mode, &compute_group, &store_group)) {
+        const int row_tile_base = row & ~63;
+        const int col_tile_base = col & ~63;
+        const int store_row_sub = store_group & 3;
+        const int store_col_sub = (store_group >> 2) & 3;
+        const int compute_row_sub = compute_group & 3;
+        const int compute_col_sub = (compute_group >> 2) & 3;
+        const int row_inner = (row & 63) - store_row_sub * 16;
+        const int col_inner = (col & 63) - store_col_sub * 16;
+        row = row_tile_base + compute_row_sub * 16 + row_inner;
+        col = col_tile_base + compute_col_sub * 16 + col_inner;
+        if (row < 0 || row >= rows || col < 0 || col >= cols) {
+            return 0.0f;
+        }
+    }
+
+    return cpu_reference_value(blocks, rhs, k, rows, cols, row, col);
+}
+
 struct group_stats {
     size_t active = 0;
     size_t bad = 0;
@@ -7990,14 +8023,17 @@ static int run_bm128_contract_case(const std::string & mode, int rows, int cols,
     return bad == 0 ? 0 : 1;
 }
 
-static int run_case(const std::string & mode, int rows, int cols, int k) {
+static int run_case(const std::string & mode, int rows, int cols, int k, size_t sample_stride = 0) {
     const int blocks_per_row = k / 32;
     std::vector<hrx_block_q8_0_wmma_vk128_lhs> h_q8(static_cast<size_t>(rows) * blocks_per_row);
     std::vector<float> h_rhs(static_cast<size_t>(cols) * k);
     std::vector<float> h_out(static_cast<size_t>(rows) * cols, -7777.0f);
     fill_q8(h_q8, rows, blocks_per_row);
     fill_rhs(h_rhs, k, cols);
-    const std::vector<float> ref = cpu_reference(h_q8, h_rhs, k, rows, cols);
+    std::vector<float> ref;
+    if (sample_stride == 0) {
+        ref = cpu_reference(h_q8, h_rhs, k, rows, cols);
+    }
 
     device_buffer<hrx_block_q8_0_wmma_vk128_lhs> d_q8(h_q8.size());
     device_buffer<float> d_rhs(h_rhs.size());
@@ -8273,12 +8309,15 @@ static int run_case(const std::string & mode, int rows, int cols, int k) {
     double mse = 0.0;
     double ref_mse = 0.0;
     group_stats by_group[16];
-    for (size_t i = 0; i < h_out.size(); ++i) {
+    const size_t step = sample_stride == 0 ? 1 : sample_stride;
+    size_t checked = 0;
+    for (size_t i = 0; i < h_out.size(); i += step) {
         if (!output_is_active(i, rows, mode)) {
             continue;
         }
         const int group = output_group(i, rows);
         group_stats & gs = by_group[group];
+        ++checked;
         ++active;
         ++gs.active;
         const float actual = h_out[i];
@@ -8303,7 +8342,9 @@ static int run_case(const std::string & mode, int rows, int cols, int k) {
             note_bad_sample(gs, i, rows, actual, 0.0f, INFINITY);
             continue;
         }
-        const float expected = expected_value_for_output(i, rows, cols, mode, ref);
+        const float expected = sample_stride == 0 ?
+            expected_value_for_output(i, rows, cols, mode, ref) :
+            expected_value_for_output_sample(i, rows, cols, mode, h_q8, h_rhs, k);
         const float err = std::fabs(actual - expected);
         mse += static_cast<double>(actual - expected) * static_cast<double>(actual - expected);
         ref_mse += static_cast<double>(expected) * static_cast<double>(expected);
@@ -8318,8 +8359,8 @@ static int run_case(const std::string & mode, int rows, int cols, int k) {
     const double nmse_value = ref_mse != 0.0 ? mse / ref_mse : 0.0;
 
     std::printf(
-        "%s rows=%d cols=%d k=%d active=%zu bad=%zu nan=%zu inf=%zu sentinel=%zu max_abs=%g nmse=%.9f\n",
-        mode.c_str(), rows, cols, k, active, bad, nan, inf, sentinel, max_abs, nmse_value);
+        "%s rows=%d cols=%d k=%d active=%zu checked=%zu stride=%zu bad=%zu nan=%zu inf=%zu sentinel=%zu max_abs=%g nmse=%.9f\n",
+        mode.c_str(), rows, cols, k, active, checked, step, bad, nan, inf, sentinel, max_abs, nmse_value);
     for (int group = 0; group < 16; ++group) {
         const group_stats & gs = by_group[group];
         if (gs.active == 0 || (gs.bad == 0 && gs.nan == 0 && gs.inf == 0 && gs.sentinel == 0)) {
@@ -8495,6 +8536,7 @@ int main(int argc, char ** argv) {
     int custom_rows = 0;
     int custom_cols = 0;
     int custom_k = 0;
+    size_t sample_stride = 0;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
             mode = argv[++i];
@@ -8506,8 +8548,10 @@ int main(int argc, char ** argv) {
             custom_cols = std::atoi(argv[++i]);
         } else if (std::strcmp(argv[i], "--k") == 0 && i + 1 < argc) {
             custom_k = std::atoi(argv[++i]);
+        } else if (std::strcmp(argv[i], "--sample-stride") == 0 && i + 1 < argc) {
+            sample_stride = static_cast<size_t>(std::strtoull(argv[++i], nullptr, 10));
         } else {
-            std::fprintf(stderr, "usage: %s [--mode motif192-synth-address|motif192-wmma-address|motif192-wmma-waitload-address|motif192-wmma-k2-directwait-waitload-address|motif192-wmma-k2-depwait-waitload-address|motif192-wmma-k2-realdata-k32-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-phase8-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-phase8seq-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-streamfrag-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-ktilefrag-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-ktilefrag-storebatch-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-ktilefrag-storebatch4-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-colpairfrag-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-accpark-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-accparkfull8-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-timing|motif192-wmma-k2-realdata-fullk-phase8seq-timing|motif192-wmma-k2-realdata-fullk-streamfrag-timing|motif192-wmma-k2-realdata-fullk-ktilefrag-timing|motif192-wmma-k2-realdata-fullk-ktilefrag-storebatch-timing|motif192-wmma-k2-realdata-fullk-ktilefrag-storebatch4-timing|motif192-wmma-k2-realdata-fullk-colpairfrag-timing|motif192-wmma-k2-realdata-fullk-accpark-timing|motif192-wmma-k2-realdata-fullk-accparkfull8-timing|motif192-wmma-direct-address|motif192-wmma-stage16-address|motif192-wmma-stage32-address|motif192-wmma-stage16-waitload-address|motif192-wmma-stage32-waitload-address|array8-fullb|array16-direct-raw|array16-direct-raw-bcopy|array16-direct-raw-abcopy|bm128-direct192-raw-output|bm128-direct192-raw-asm-output|bm128-direct192-raw-asm-inout-output|bm128-streamk-raw-output|bm128-streamk-raw-asm-output|bm128-streamk-raw-asm-inout-output|bm128-streamk-abcopy-output|contract-direct192-raw|contract-direct192-bcopy|contract-direct192-bcopy-hoist|contract-direct192-abcopy|contract-direct192-abcopy-bhoist|contract-bm128-direct192-raw|contract-bm128-direct192-raw-asm|contract-bm128-direct192-bcopy-upper|contract-bm128-direct192-bcopy-upper-asm|contract-bm128-direct192-bcopy-upper-hoist|contract-bm128-direct192-abcopy|contract-bm128-direct192-abcopy-bhoist|contract-bm128-direct192-abcopy-bhoist-asm|contract-phase96-abcopy|phase96-bm128-raw|phase96-bm128-raw-asm|phase96-bm128-acopy|phase96-bm128-bcopy|phase96-bm128-abcopy|phase96-bm128-abcopy-backendlike|phase96-bm128-abcopy-asm|phase96-bm128-abcopy-asm-backendlike|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|array8-fullb-2phase-bcopy|array8-fullb-2phase-bcopy-stage|array8-fullb-2phase-abcopy|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group0-bcopy-stage|single-group8|single-group8-consume|single-group8-opsel1|single-group8-bmirror0|single-group8-bcopy|single-group8-abcopy|single-group8-bcopy-stage|single-group8-abcopy-stage|single-group8-bcopy-stage-selected|single-group12|single-group12-consume|single-group12-opsel1|single-group12-bmirror0|single-group12-bcopy|single-group12-abcopy|single-group12-bcopy-stage|single-group12-abcopy-stage|single-group12-bcopy-stage-selected|single-group12-abcopy-stage-selected|single-group12-bcopy-stage-selected-acccopy|single-group12-abcopy-stage-selected-acccopy|single-group12-bcopy-stage-selected-regcopy|single-group12-abcopy-stage-selected-regcopy|single-group12-abcopy-dual-stage-raw-first|single-group12-abcopy-dual-stage-stage-first|single-group13|single-group13-consume|single-group13-bcopy-stage-selected|single-group13-abcopy-stage-selected|single-group14-bcopy-stage-selected|single-group14-abcopy-stage-selected|single-group15-bcopy-stage-selected|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c12-s0-bcopy-stage-selected|remap-c12-s0-abcopy-stage-selected|remap-c0-s12|remap-c0-s12-stage-selected|bfrag-dump|all] [--dump-dir <test-backend-ops dump dir>] [--rows N --cols N] [--k N]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--mode MODE] [--dump-dir <test-backend-ops dump dir>] [--rows N --cols N] [--k N] [--sample-stride N]\n", argv[0]);
             return 2;
         }
     }
@@ -8989,7 +9033,7 @@ int main(int argc, char ** argv) {
             mode == "bm128-streamk-raw-asm-inout-output" ||
             mode == "bm128-streamk-abcopy-output") {
         if (custom_shape) {
-            status |= run_case(mode, custom_rows, custom_cols, k);
+            status |= run_case(mode, custom_rows, custom_cols, k, sample_stride);
         } else {
             status |= run_case(mode, 128, 128, k);
             status |= run_case(mode, 128, 33, k);

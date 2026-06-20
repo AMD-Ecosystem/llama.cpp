@@ -3,6 +3,34 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_bm128_streamk_sampled_production_shape_gate",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-streamk-sampled-production-20260620-104147/",
+      "tool": "hrx-hip-bench-q8-wmma-repro --mode=bm128-streamk-raw-asm-output --sample-stride",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro",
+      "status": "accepted_harness_infrastructure_not_production_route",
+      "candidate_gate": {
+        "production_target": "Production-row Q8_0 BM128 direct-output fixture checks for p33, p512, and p513 column regimes",
+        "baseline_command": "exhaustive small-row control: hrx-hip-bench-q8-wmma-repro --mode bm128-streamk-raw-asm-output --rows 128 --cols 128 --k 4096",
+        "variant_command": "sampled full-row checks: --rows 128256 --cols 33/512/513 --k 4096 --sample-stride 128256 or 8016",
+        "same_runner_comparison_method": "correctness-only harness infrastructure; no runtime route or timing promotion",
+        "route_trace_path": "not applicable; standalone fixture only",
+        "scheduler_trace_path": "inherits q8_0_bm128_streamk_output_repro_prior static evidence",
+        "focused_cpu_reference": "sampled on-demand cpu_reference_value checks avoid full 128256-row reference materialization",
+        "compile_report_path": "CMake/Ninja-built benchmark executable",
+        "target_listing_path": "not regenerated for this harness-only change",
+        "prior_art_schedule_source": "q8_0_bm128_streamk_output_repro_prior",
+        "promotion_rule": "use this checker to gate future production-shape fixture probes; do not promote without catalog ABI route traces, static HSACO evidence, and same-runner timing"
+      },
+      "findings": [
+        "added --sample-stride to generic real-output q8_wmma_repro run_case modes; default remains exhaustive CPU-reference checking",
+        "full 128256x512x4096 stream-K asm output check sampled 8192 outputs with bad=0, max_abs=0.00256789, and nmse=0.000284503",
+        "full 128256x513x4096 tail-column check sampled one row per column, including the 513th column, with bad=0 and max_abs=0.00256789",
+        "full 128256x33x4096 narrow-column check sampled one row per column with bad=0 and max_abs=0.00229698",
+        "decision: accept as evidence infrastructure for production-shape fixture gates, not as a route promotion"
+      ]
+    },
+    {
       "id": "q8_0_bm128_streamk_output_repro_prior",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-bm128-streamk-output-probe-20260620-101951/",
