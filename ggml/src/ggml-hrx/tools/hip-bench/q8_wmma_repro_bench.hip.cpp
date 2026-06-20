@@ -3680,6 +3680,7 @@ void q8_bm128_direct192_rawfrag_output_repro_kernel(
     }
 }
 
+template <bool skip_output_store = false>
 __global__ __launch_bounds__(256, 1)
 void q8_bm128_direct192_baseoff_output_repro_kernel(
         const hrx_block_q8_0_wmma_vk128_lhs * src0,
@@ -3790,8 +3791,10 @@ void q8_bm128_direct192_baseoff_output_repro_kernel(
     for (int group = 0; group < ACTIVE_GROUPS; ++group) {
 #pragma unroll
         for (int slot = 0; slot < 4; ++slot) {
-            q8_repro_bm128_direct_raw_store_slot(
-                dst_rsrc, rows, row_base, col_base, rows, cols, acc, wave, group, slot, lane);
+            if constexpr (!skip_output_store) {
+                q8_repro_bm128_direct_raw_store_slot(
+                    dst_rsrc, rows, row_base, col_base, rows, cols, acc, wave, group, slot, lane);
+            }
         }
     }
 }
@@ -8595,7 +8598,7 @@ static int run_case(const std::string & mode, int rows, int cols, int k, size_t 
             bm128_grid, dim3(256, 1, 1), 0, 0, d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
     } else if (mode == "bm128-direct192-baseoff-raw-asm-output") {
         dim3 bm128_grid((rows + 127) / 128, (cols + 127) / 128, 1);
-        hipLaunchKernelGGL(q8_bm128_direct192_baseoff_output_repro_kernel,
+        hipLaunchKernelGGL((q8_bm128_direct192_baseoff_output_repro_kernel<false>),
             bm128_grid, dim3(256, 1, 1), 0, 0, d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
     } else if (mode == "bm128-streamk-raw-output") {
         dim3 bm128_grid((rows + 127) / 128, (cols + 127) / 128, 1);
@@ -8950,7 +8953,10 @@ static void launch_bm128_direct192_output_timing_variant(
         hipLaunchKernelGGL(q8_bm128_direct192_rawfrag_output_repro_kernel,
             grid, dim3(256, 1, 1), 0, 0, d_q8, d_rhs, d_out, k, rows, cols);
     } else if (variant == "baseoff-raw-asm") {
-        hipLaunchKernelGGL(q8_bm128_direct192_baseoff_output_repro_kernel,
+        hipLaunchKernelGGL((q8_bm128_direct192_baseoff_output_repro_kernel<false>),
+            grid, dim3(256, 1, 1), 0, 0, d_q8, d_rhs, d_out, k, rows, cols);
+    } else if (variant == "baseoff-raw-asm-nostore") {
+        hipLaunchKernelGGL((q8_bm128_direct192_baseoff_output_repro_kernel<true>),
             grid, dim3(256, 1, 1), 0, 0, d_q8, d_rhs, d_out, k, rows, cols);
     } else {
         std::fprintf(stderr, "unknown direct192 timing variant: %s\n", variant.c_str());
@@ -9007,6 +9013,7 @@ static int run_bm128_direct192_output_timing_case(int rows, int cols, int k, int
         "scalaracc-raw-asm",
         "rawfrag-raw-asm",
         "baseoff-raw-asm",
+        "baseoff-raw-asm-nostore",
     };
     for (const char * variant : variants) {
         const double avg_ms = time_bm128_direct192_output_variant(

@@ -2794,6 +2794,40 @@
         "nostore removes the output surface as expected: store-cluster totals fall from 66 store ops with 64 buffer_store_b32 in the bufferstore control to 2 LDS setup stores and zero buffer stores",
         "interpretation: the output writeback code adds cost but is not the structural cause of the baseoff raw16 fulltile route regression. Continue Q8 work only with a materially different lower-level primitive, not another wrapper-only route."
       ]
+    },
+    {
+      "id": "q8_0_bm128_direct192_baseoff_nostore_timing",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-direct192-baseoff-nostore-timing-59d70faf1-20260620-155913/",
+      "related_artifacts": [
+        "cache/hrxv1/gfx1151/q8-direct192-output-timing-2c447aef6-20260620-154435/",
+        "cache/hrxv1/gfx1151/q8-baseoff-raw16-fulltile-nostore-compile-20260620-155333/",
+        "cache/hrxv1/gfx1151/vulkan-oracle-llama31-8b-q8_0-p512-fa1-20260617-200453/"
+      ],
+      "status": "rejected_writeback_removal_not_primary_axis",
+      "tool": "CMake/Ninja-built hrx-hip-bench-q8-wmma-repro with bm128-direct192-output-timing mode",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro",
+      "candidate_gate": {
+        "production_target": "Llama 3.1 8B Q8_0 p512/p513 dense prompt rows where prior baseoff raw16 route transfer regressed despite a strong standalone direct192 primitive",
+        "baseline_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro --mode bm128-direct192-output-timing --k 4096, variant=baseoff-raw-asm",
+        "variant_command": "same CMake/Ninja-built timing binary and mode with variant=baseoff-raw-asm-nostore",
+        "same_runner_comparison_method": "same process, same allocated inputs, sequential variant timing across 128x33, 128x128, 4096x512, and 4096x513 at k4096",
+        "route_trace_path": "not applicable; benchmark-only lower-level fixture and no runtime selector changed",
+        "scheduler_trace_path": "inherits q8-baseoff-raw16-fulltile-nostore-compile-20260620-155333/static/issue-window.md",
+        "focused_cpu_reference": "baseoff output path still passed bm128-direct192-baseoff-raw-asm-output correctness at 128x33, 128x128, 4096x512, and 4096x513 after templating; nostore is timing-only by construction",
+        "compile_report_path": "not separately extracted for the bench binary; CMake/Ninja build of hrx-hip-bench-q8-wmma-repro succeeded",
+        "target_listing_path": "symbols.txt lists both baseoff output template instantiations in the timing artifact",
+        "prior_art_schedule_source": "RADV Q8_0 large oracle matmul_q8_0_f32_f16acc_aligned_l hash 0x72d309e22f889977 plus q8_0_bm128_direct192_baseoff_timing_prior",
+        "promotion_rule": "do not pursue output-store removal as the next Q8 parity axis. Future Q8 work must change accumulator ownership, cooperative store/lane mapping, or a source form that preserves the one-window outstanding LDS-load schedule without relying on writeback elision."
+      },
+      "findings": [
+        "added timing-only baseoff-raw-asm-nostore to the existing bm128-direct192-output-timing suite; no provider selector or production route was changed",
+        "the existing baseoff output correctness path still passes after the template change: 128x33, 128x128, 4096x512, and 4096x513 at k4096 all have bad=0, nan=0, inf=0, and sentinel=0",
+        "nostore is neutral on narrow rows: 128x33 is 565.407 us baseoff versus 565.584 us nostore, and 128x128 is 920.008 us versus 920.239 us",
+        "nostore only modestly improves large rows: 4096x512 is 3370.3 us baseoff versus 3259.64 us nostore, and 4096x513 is 3608.59 us versus 3387.06 us",
+        "the 3.3% p512 and 6.1% p513 large-row timing deltas are far smaller than the remaining Vulkan parity gap and align with the static compile-contract result that output stores do not change the first-WMMA issue window",
+        "decision: close writeback elision as a primary Q8 axis. The next useful Q8 step must target lower-level accumulator/cooperative-store ownership or the outstanding LDS-load source form, not another nostore/fulltile wrapper."
+      ]
     }
   ]
 }
