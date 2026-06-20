@@ -3,6 +3,34 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_k_wmma_vk64_medium_kloop_asm_direct64_fixture_accepted_accumulator_contract",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/coopstore-k2-kloop-asm-stagefirst-mixed96-6246dce65-20260620-025249/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract embedded .hip_fatbin unbundled to cache/hrxv1/gfx1151/coopstore-k2-kloop-asm-stagefirst-mixed96-6246dce65-20260620-025249/static/fatbin/gfx1151.o",
+      "status": "accepted_standalone_accumulator_fixture_not_production_route",
+      "findings": [
+        "the inline-WMMA direct64 fixture keeps the non-unrolled two-iteration kloop source shape but replaces the HIP builtin WMMA call with explicit inline v_wmma_f16_16x16x16_f16 operand spelling",
+        "correctness passed 10/10 in the final same-binary sweep with bad=0 and max_abs=0; the earlier standalone artifact also passed 10/10",
+        "same-binary builtin controls still failed: wmma-lds-k2-kloop-direct64 failed as expected and the older builtin mixed96 kloop failed as expected, while unrolled wmma-lds-k2-mixed96 remained the positive mixed96 control",
+        "static evidence from the actual executable fatbin: wave64, LDS=16384, SGPR=14, VGPR=144, private_segment=0, no spills, 16 visible WMMA, 32 ds_load-class instructions, 16 ds_store-class instructions, 64 buffer_store_b32, and 6 s_waitcnt",
+        "use this only as a low-level accumulator/operand prior: inline WMMA repairs the kloop accumulator lane contract, but it does not by itself prove the RADV-like mixed96 staged writeback route"
+      ]
+    },
+    {
+      "id": "q6_k_wmma_vk64_medium_kloop_asm_mixed96_fixture_rejected_staged_writeback_instability",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/coopstore-k2-kloop-asm-stagefirst-mixed96-6246dce65-20260620-025249/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract embedded .hip_fatbin unbundled to cache/hrxv1/gfx1151/coopstore-k2-kloop-asm-stagefirst-mixed96-6246dce65-20260620-025249/static/fatbin/gfx1151.o",
+      "status": "rejected_fixture_correctness_intermittent_mixed96_staged_writeback",
+      "findings": [
+        "the inline-WMMA mixed96 fixture tested the direct64 repair against the closer Q6 medium store contract: 16 computed accumulator groups plus staged synthetic groups 16..23 for the 96-store shape",
+        "post-accumulate mixed96 was unstable rather than cleanly correct: a 10-run sweep had both passing and failing runs, with failures in staged group 21 slot 0 instead of computed accumulator groups 0..15",
+        "the stage-first mixed96 control also failed 10/20 expected-pass runs with the same staged group 21 slot 0 pattern, so moving the synthetic stage writes before the kloop does not repair the contract",
+        "static evidence is attractive but insufficient: both inline-WMMA mixed96 variants are wave64, LDS=20480, SGPR=18, VGPR=144, private_segment=0, no spills, 16 visible WMMA, 64 ds_load-class instructions, 48 ds_store-class instructions, 96 buffer_store_b32, and 38 s_waitcnt",
+        "do not port this mixed96 kloop-asm fixture into the production Q6 catalog; the next Q6 medium route needs a different writeback/lane ownership topology while preserving the inline WMMA accumulator repair as a possible primitive"
+      ]
+    },
+    {
       "id": "q6_k_wmma_vk64_medium_kloop_direct64_fixture_rejected_correctness",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/coopstore-k2-kloop-direct64-4d694bdcc-20260620-024120/",

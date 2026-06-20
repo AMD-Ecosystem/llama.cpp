@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_wmma_vk64_medium_kloop_asm_mixed96_fixture_staged_writeback_instability",
+      "date": "2026-06-20",
+      "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-kloop-asm-mixed96 and --mode=wmma-lds-k2-kloop-asm-stagefirst-mixed96",
+      "env": "standalone CMake/Ninja-built gfx1151 HIP bench diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/coopstore-k2-kloop-asm-stagefirst-mixed96-6246dce65-20260620-025249/",
+      "control_artifact": "cache/hrxv1/gfx1151/coopstore-k2-kloop-asm-stagefirst-mixed96-6246dce65-20260620-025249/kloop-asm-direct64-control.log, cache/hrxv1/gfx1151/coopstore-k2-kloop-asm-stagefirst-mixed96-6246dce65-20260620-025249/kloop-builtin-mixed96-control.log, and cache/hrxv1/gfx1151/coopstore-k2-kloop-asm-stagefirst-mixed96-6246dce65-20260620-025249/unrolled-mixed96-control.log",
+      "static_artifact": "cache/hrxv1/gfx1151/coopstore-k2-kloop-asm-stagefirst-mixed96-6246dce65-20260620-025249/static/symbol-summary.txt",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract embedded .hip_fatbin unbundled to cache/hrxv1/gfx1151/coopstore-k2-kloop-asm-stagefirst-mixed96-6246dce65-20260620-025249/static/fatbin/gfx1151.o",
+      "reason": "Inline assembly repairs the non-unrolled kloop accumulator-only direct64 fixture, but the closer mixed96 staged writeback contract remains unstable. In the same CMake/Ninja-built binary, --mode=wmma-lds-k2-kloop-asm-direct64 passed 10/10 with bad=0 and max_abs=0. The post-accumulate mixed96 sibling sometimes passed and sometimes failed; failing runs showed wrong synthetic staged values in group=21 slot=0, not accumulator groups 0..15. The stage-first mixed96 control failed 10/20 expected-pass runs with the same group=21 slot=0 staged-output pattern, so moving stage writes before the kloop does not make the source shape reliable. Builtin kloop direct64 and mixed96 remained rejected controls, and unrolled mixed96 passed 5/5. Static evidence for both asm mixed96 variants is not the blocker: wave64, LDS=20480, SGPR=18, VGPR=144, private_segment=0, no spills, 16 visible WMMA, 64 ds_load-class instructions, 48 ds_store-class instructions, 96 buffer_store_b32, and 38 s_waitcnt. Do not transfer the mixed96 kloop-asm source shape into the Q6 production catalog; preserve inline WMMA as an accumulator primitive, but find a different writeback/lane ownership topology for the RADV-like 96-store route."
+    },
+    {
       "id": "q6_k_wmma_vk64_medium_kloop_direct64_fixture_correctness",
       "date": "2026-06-20",
       "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-kloop-direct64",
