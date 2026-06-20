@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_motif192_k2_ktilefrag_nowaitload_correctness",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_ktilefrag_nowaitload_bufferstore_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_ASMWMMA_MOTIF192_K2_KTILEFRAG_NOWAITLOAD_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q8-ktilefrag-nowaitload-focused-20260620-061720/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-ktilefrag-nowaitload-focused-20260620-061720/static/summary.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_ktilefrag_nowaitload_bufferstore_wg256.hsaco",
+      "reason": "added an opt-in CMake/Ninja-built Q8_0 KTileFrag nowaitload route that preserves the rejected KTileFrag motif192 K2 catalog transfer and changes only the staged-output ds_load_u16_d16 wait-after-load contract by leaving HRX_Q8_0_WMMA_VK128_W64_MOTIF192_WAIT_LOAD disabled focused p33 CPU-reference passed and route traces proved the new route was guarded out, using hrx_mul_mat_vec_q8_0_f32 for cols=1 rows and the existing q8_1 x4 mmq64x64 route for cols=33 rows focused p512 selected the nowaitload provider for the large k=14336 rows=4096 cols=512 Q8 row and immediately faulted the GPU with a page-not-present memory access before CSV completion focused p513 selected the same provider for the large k=14336 rows=4096 cols=513 tail row and faulted with the same page-not-present GPU memory access; p513 exit code was 141 static HSACO inspection shows the nowaitload route kept the intended no-spill wave64 surface: SGPR=56, VGPR=212, LDS=22528, private_segment=0, 32 v_wmma, 64 ds_load_b64, 128 ds_store_b16, 128 ds_load_u16_d16, 192 buffer_store_b32, and no scratch/private references reject before timing or model A/B: removing the wait-after-load does not repair KTileFrag performance and instead breaks the correctness/runtime safety contract for production-width Q8 rows. The WAIT_LOAD fence is required for this KTileFrag dataflow on gfx1151."
+    },
+    {
       "id": "q8_0_bm128phase96_acopy_bufferstore_route_perf",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_acopy_bufferstore_phase0_f16acc_wg256_f32 + hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_acopy_bufferstore_phase1_f16acc_wg256_f32",

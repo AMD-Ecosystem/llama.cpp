@@ -12061,12 +12061,54 @@
       "selector_gate": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_ASMWMMA_MOTIF192_K2_KTILEFRAG_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
       "prior_delta": "Transfers the CMake/Ninja-built KTileFrag repro from cache/hrxv1/gfx1151/q8-motif192-k2-realdata-fullk-ktilefrag-20260619-175606/ into the real Q8_0 catalog ABI. It preserves one launch, one K traversal, all 16 accumulators, motif192 writeback, 128x128 prompt tiling, 64 ds_load_b64, 32 v_wmma, 192 buffer_store_b32, and no spills by loading one K tile's four A plus four B fragments at a time and issuing that tile's WMMA ladder with delayed waits 12/8/4/0."
     },
-    "supports": {
-      "legacy_export": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_ktilefrag_bufferstore_f16acc_wg256_f32"
-    },
     "evidence_summary": {
       "status": "opt_in_gfx1151_rejected_focused_perf",
       "selection": "Focused gate artifact cache/hrxv1/gfx1151/q8-motif192-k2-ktilefrag-focused-20260619-180304/ passed CPU-reference rows for p33, p512, and p513. Route traces proved p33 stayed on existing narrow packed-Q8_1 routes, while p512 and p513 selected this provider only for ffn_out, ffn_gate, and result_output. Built catalog HSACO preserved the intended no-spill wave64 surface with SGPR=56, VGPR=212, LDS=22528, private_segment=0, 64 ds_load_b64, 32 v_wmma, 128 ds_store_b16, 128 ds_load_u16_d16, and 192 buffer_store_b32. Reject for promotion on same-runner focused timing: p512 regressed 1.272x total versus current default, with selected rows ffn_gate 1.289x slower, ffn_out 1.414x slower, and result_output 1.263x slower; p513 regressed 1.335x total, with selected rows ffn_gate 1.374x slower, ffn_out 1.370x slower, and result_output 1.339x slower. Keep opt-in as evidence that per-K-tile fragment batching recovers a no-spill delayed-wait direct-WMMA schedule, but it still does not beat the packed-Q8_1 default."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ],
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_ktilefrag_bufferstore_f16acc_wg256_f32"
+    }
+  },
+  {
+    "id": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_ktilefrag_nowaitload_bufferstore_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_ktilefrag_nowaitload_bufferstore_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_ktilefrag_nowaitload_bufferstore_wg256",
+    "artifact_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_ktilefrag_nowaitload_bufferstore_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_ktilefrag_nowaitload_bufferstore_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 110,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q8_0_prompt_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_ktilefrag_nowaitload_bufferstore_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q8_0 x F32 -> F32 MUL_MAT",
+      "k_multiple": 32,
+      "win_domain": "rows >= 8192 || k >= 8192",
+      "cols_min": 512,
+      "selector_gate": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_ASMWMMA_MOTIF192_K2_KTILEFRAG_NOWAITLOAD_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "prior_delta": "Bounded sibling of the KTileFrag motif192 K2 route from cache/hrxv1/gfx1151/q8-motif192-k2-ktilefrag-focused-20260619-180304/. It preserves KTileFrag accumulation, one launch, one K traversal, all 16 accumulators, motif192 writeback, 128x128 prompt tiling, inline WMMA, 64 ds_load_b64, 32 v_wmma, 192 buffer_store_b32, CMake/Ninja HSACO generation, and changes only the staged-output ds_load_u16_d16 wait-after-load contract by leaving HRX_Q8_0_WMMA_VK128_W64_MOTIF192_WAIT_LOAD disabled.",
+      "selection": "Opt-in probe only. Requires focused p33/p512/p513 CPU-reference, route traces, static HSACO inspection, and same-runner timing before any decision."
+    },
+    "evidence_summary": {
+      "status": "opt_in_gfx1151_rejected_focused_correctness_gpu_memory_fault",
+      "selection": "Focused artifact cache/hrxv1/gfx1151/q8-ktilefrag-nowaitload-focused-20260620-061720/ proves p33 is correctly guarded out, while p512 and p513 production-width rows select this provider and fault the GPU with page-not-present memory access before CSV completion. Built HSACO is wave64, SGPR=56, VGPR=212, LDS=22528, private_segment=0, with no scratch/private references, 32 v_wmma, 64 ds_load_b64, 128 ds_store_b16, 128 ds_load_u16_d16, and 192 buffer_store_b32. Reject before timing or model A/B; HRX_Q8_0_WMMA_VK128_W64_MOTIF192_WAIT_LOAD is required for this KTileFrag dataflow on gfx1151."
     },
     "target_prefixes": [
       "gfx11"
