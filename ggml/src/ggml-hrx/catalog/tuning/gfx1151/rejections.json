@@ -3,6 +3,19 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_mmq64x128_splitqsum_wave64_repeat_model_noise",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_wave64_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X128_SPLITQSUM_WAVE64_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q8-p512-existing-packed-sweep-868aa0606-20260620-002656/",
+      "model_artifacts": [
+        "cache/hrxv1/gfx1151/q8-p512-wave64-model-ab-868aa0606-20260620-003624/",
+        "cache/hrxv1/gfx1151/q8-p512-wave64-model-ab-repeat-868aa0606-20260620-003706/",
+        "cache/hrxv1/gfx1151/q8-p512-wave64-model-ab-repeat2-868aa0606-20260620-003815/"
+      ],
+      "reason": "The current-head packed Q8_0 full-column wave64 repeat confirms the earlier rejection instead of justifying a default route change. A serial focused backend-op sweep over existing packed Q8_0 p512 providers selected the wave64 BN128 split-qsum provider as the best passing route: total 70468.331 us versus 72800.787 us for the default wave32 BN128 split-qsum route, a 1.033x focused speedup, with route traces selecting hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_wave64_wg256_f32 for all five exported rows. Same-binary Llama 3.1 8B Q8_0 p512/fa1 model A/B did not produce stable production evidence: three repeated pairs reported steady wave64/default ratios of 1.006, 1.037, and 1.005, while the first average ratio was slightly negative at 0.995. All runs had zero fallback lines and selected the intended provider under opt-in. This route remains a useful opt-in diagnostic showing the wavefront-mode axis can help the isolated backend-op rows, but the model-level gain is small/noisy and does not address the documented RADV/HIP structural gap. Do not promote this isolated wave64 pivot by default; continue Q8_0 parity work on the Vulkan-oracle schedule deltas, especially cooperative-matrix lane/store ownership and packed dataflow."
+    },
+    {
       "id": "q6_k_wmma_vk64_padded44_ring96_copyb_copyab_correctness",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_copyb_f16acc_wg256_f32 and hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_copyab_f16acc_wg256_f32",
