@@ -1226,6 +1226,7 @@ struct ggml_backend_hrx_device_context {
     ggml_backend_hrx_op_provider mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_groupk2_wait_f16acc_wg256_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_f16acc_wg256_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_f16acc_wg128_provider;
+    ggml_backend_hrx_op_provider mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_bufferstore_f16acc_wg128_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_q6_k_wmma16x16_vk128_padded_w64_fullstore_f16acc_wg256_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_q6_k_wmma16x16_vk128_padded_w64_store_stage_f16acc_wg256_provider;
     ggml_backend_hrx_op_provider mul_mat_vec_q6_k_wmma16x16_vk128_padded_w64_b64group_f16acc_wg256_provider;
@@ -1576,6 +1577,7 @@ static void ggml_backend_hrx_reset_providers(ggml_backend_hrx_device_context * d
     device_context->mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_groupk2_wait_f16acc_wg256_provider.reset();
     device_context->mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_f16acc_wg256_provider.reset();
     device_context->mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_f16acc_wg128_provider.reset();
+    device_context->mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_bufferstore_f16acc_wg128_provider.reset();
     device_context->mul_mat_vec_q6_k_wmma16x16_vk128_padded_w64_fullstore_f16acc_wg256_provider.reset();
     device_context->mul_mat_vec_q6_k_wmma16x16_vk128_padded_w64_store_stage_f16acc_wg256_provider.reset();
     device_context->mul_mat_vec_q6_k_wmma16x16_vk128_padded_w64_b64group_f16acc_wg256_provider.reset();
@@ -3454,6 +3456,9 @@ static bool ggml_backend_hrx_load_mul_mat_vec_providers(ggml_backend_hrx_device_
     ok = ggml_backend_hrx_load_catalog_provider(
         device_context, "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_f16acc_wg128_f32",
         &device_context->mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_f16acc_wg128_provider) || ok;
+    ok = ggml_backend_hrx_load_catalog_provider(
+        device_context, "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_bufferstore_f16acc_wg128_f32",
+        &device_context->mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_bufferstore_f16acc_wg128_provider) || ok;
     ok = ggml_backend_hrx_load_catalog_provider(
         device_context, "hrx_mul_mat_vec_q6_k_wmma16x16_vk128_padded_w64_fullstore_f16acc_wg256_f32",
         &device_context->mul_mat_vec_q6_k_wmma16x16_vk128_padded_w64_fullstore_f16acc_wg256_provider) || ok;
@@ -6581,6 +6586,15 @@ static const ggml_backend_hrx_op_provider * ggml_backend_hrx_select_mul_mat_vec_
                 ggml_backend_hrx_provider_available(
                     device_context->mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_groupk2_wait_f16acc_wg256_provider)) {
                 return &device_context->mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_groupk2_wait_f16acc_wg256_provider;
+            }
+            if (ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_WN32_BUFFERSTORE_F16ACC_WG128_PROMPT") &&
+                !ggml_backend_hrx_approximate_kernels_disabled() &&
+                k > 0 && (k % 256) == 0 &&
+                rows >= 16 &&
+                cols >= 16 && cols <= 64 &&
+                ggml_backend_hrx_provider_available(
+                    device_context->mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_bufferstore_f16acc_wg128_provider)) {
+                return &device_context->mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_bufferstore_f16acc_wg128_provider;
             }
             if (ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_WN32_F16ACC_WG128_PROMPT") &&
                 !ggml_backend_hrx_approximate_kernels_disabled() &&
@@ -11998,6 +12012,7 @@ static ggml_status ggml_backend_hrx_dispatch_mul_mat_vec(
         provider == &context->device_context->mul_mat_vec_q6_k_wmma16x16_vk128_padded_w64_fullstore_f16acc_wg256_provider ? 128 :
         provider == &context->device_context->mul_mat_vec_q6_k_wmma16x16_vk128_padded_w64_store_stage_f16acc_wg256_provider ? 128 :
         provider == &context->device_context->mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_f16acc_wg128_provider ? 64 :
+        provider == &context->device_context->mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_bufferstore_f16acc_wg128_provider ? 64 :
         provider == &context->device_context->mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_f16acc_wg256_provider ? 64 :
         provider == &context->device_context->mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_groupk2_wait_f16acc_wg256_provider ? 64 :
         provider == &context->device_context->mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_groupk2_f16acc_wg256_provider ? 64 :
@@ -12083,6 +12098,7 @@ static ggml_status ggml_backend_hrx_dispatch_mul_mat_vec(
         provider == &context->device_context->mul_mat_vec_q6_k_wmma16x16_vk128_padded_w64_fullstore_f16acc_wg256_provider ? 128 :
         provider == &context->device_context->mul_mat_vec_q6_k_wmma16x16_vk128_padded_w64_store_stage_f16acc_wg256_provider ? 128 :
         provider == &context->device_context->mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_f16acc_wg128_provider ? 64 :
+        provider == &context->device_context->mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_bufferstore_f16acc_wg128_provider ? 64 :
         provider == &context->device_context->mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_f16acc_wg256_provider ? 64 :
         provider == &context->device_context->mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_groupk2_wait_f16acc_wg256_provider ? 64 :
         provider == &context->device_context->mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_groupk2_f16acc_wg256_provider ? 64 :

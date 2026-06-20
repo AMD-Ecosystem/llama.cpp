@@ -9175,6 +9175,51 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_bufferstore_f16acc_wg128_f32",
+    "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_bufferstore_f16acc_wg128",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_wn32_bufferstore_wg128",
+    "artifact_id": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_wn32_bufferstore_wg128_hsaco",
+    "export_name": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_bufferstore_f16acc_wg128_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        128,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q6_dense_prompt_wmma16x16_vk64_padded44_w64_wn32_bufferstore_f16acc_wg128_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q6_K x F32 -> F32 MUL_MAT",
+      "k_multiple": 256,
+      "rows_min": 16,
+      "cols_min": 16,
+      "cols_max": 64,
+      "requires_env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_WN32_BUFFERSTORE_F16ACC_WG128_PROMPT",
+      "prior_delta": "Derived from the corrected WN32/WG128 p33 route. It preserves the Qwen3 30B Q6_K p33 Vulkan medium ownership tuple and changes only the output writeback primitive from global_store_b32 to raw buffer_store_b32, testing the first writeback opcode axis before adding RADV's halfword LDS store/load topology."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_bufferstore_f16acc_wg128_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_perf_probe",
+      "selection": "Opt-in Q6_K VK64 padded44 WN32/WG128 buffer-store probe. CMake/Ninja built the HSACO and static comparison in cache/hrxv1/gfx1151/q6-vk64-wn32-bufferstore-static-6306b996f-20260619-215623/ showed the intended isolated writeback movement: global_store_b32 was replaced by buffer_store_b32=32 while preserving the WN32/WG128 16-WMMA surface. The route still misses RADV's full writeback and LDS topology: RADV has 96 buffer_store_b32, 64 ds_load_u16_d16, 64 ds_store_b16, 48 ds_load_b64, and final pre-WMMA lgkmcnt=40; this route has 32 buffer stores, 0 ds_load_u16_d16, 2 ds_store_b16, 0 ds_load_b64, and final pre-WMMA lgkmcnt=10. Focused CPU-reference in cache/hrxv1/gfx1151/q6-vk64-wn32-bufferstore-focused-6306b996f-20260619-215642/ selected this provider and passed p33 plus generated p64 rows. Same-runner focused timing in cache/hrxv1/gfx1151/q6-vk64-wn32-bufferstore-perf-ab-6306b996f-20260619-215703/ rejected promotion: default VK64 total 14419.733 us versus WN32 buffer-store 20074.564 us, with per-row baseline/candidate ratios 0.547, 0.674, and 0.736. Keep opt-in only; raw buffer stores alone do not close the p33 gap."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_b64asm_f16acc_wg128_f32",
     "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_b64asm_f16acc_wg128",
     "op": "MUL_MAT",

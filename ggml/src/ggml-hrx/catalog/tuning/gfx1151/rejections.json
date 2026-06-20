@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_wmma_vk64_padded44_wn32_bufferstore_perf",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_bufferstore_f16acc_wg128_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_WN32_BUFFERSTORE_F16ACC_WG128_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-wn32-bufferstore-focused-6306b996f-20260619-215642/",
+      "perf_artifact": "cache/hrxv1/gfx1151/q6-vk64-wn32-bufferstore-perf-ab-6306b996f-20260619-215703/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-vk64-wn32-bufferstore-static-6306b996f-20260619-215623/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_wn32_bufferstore_wg128.hsaco",
+      "reason": "The Q6_K VK64 padded44 WN32/WG128 buffer-store probe isolates the first writeback opcode axis after the corrected WN32 route: keep the same two-wave medium tile ownership and direct-F32 RHS math, but switch output writes from global_store_b32 to raw buffer_store_b32. It built through the normal CMake/Ninja HSACO path and selected only under the opt-in env. Static comparison against the Qwen3 30B Q6_K p33 RADV medium oracle showed the intended narrow movement, with buffer_store_b32=32 and global_store_b32=0, while preserving 16 WMMA and no spills. It is still far from the RADV contract: RADV has 96 buffer_store_b32, 64 ds_load_u16_d16, 64 ds_store_b16, 48 ds_load_b64, and final pre-WMMA lgkmcnt=40; this route has 32 buffer stores, 0 ds_load_u16_d16, 2 ds_store_b16, 0 ds_load_b64, and final pre-WMMA lgkmcnt=10. Focused CPU-reference with route traces passed p33 and generated p64 rows. Same-runner focused timing rejected promotion: default VK64 total 14419.733 us, WN32 buffer-store total 20074.564 us, with baseline/candidate ratios 0.547, 0.674, and 0.736. Raw buffer stores alone are not enough; the next Q6 p33 probe must add the RADV halfword LDS store/load topology and/or grouped outstanding LDS load schedule."
+    },
+    {
       "id": "q6_k_wmma_vk64_padded44_wn32_b64asm_compile",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_b64asm_f16acc_wg128_f32",
