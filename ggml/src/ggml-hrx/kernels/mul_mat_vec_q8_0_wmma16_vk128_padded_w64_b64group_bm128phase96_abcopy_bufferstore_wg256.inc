@@ -18,13 +18,25 @@
 #define HRX_Q8_0_WMMA_VK128_HELPER_EXPORT hrx_q8_0_wmma16x16_vk128_bm128phase96_helper_unused
 #endif
 
+#ifndef HRX_Q8_0_WMMA_VK128_BM128_PHASE96_COPY_A
+#define HRX_Q8_0_WMMA_VK128_BM128_PHASE96_COPY_A 1
+#endif
+
+#ifndef HRX_Q8_0_WMMA_VK128_BM128_PHASE96_COPY_B
+#define HRX_Q8_0_WMMA_VK128_BM128_PHASE96_COPY_B 1
+#endif
+
 #define HRX_Q8_0_WMMA_VK128_EXPORT HRX_Q8_0_WMMA_VK128_HELPER_EXPORT
 #define HRX_Q8_0_WMMA_VK128_SHARED_STRIDE 40
 #define HRX_Q8_0_WMMA_VK128_W64 1
 #define HRX_Q8_0_WMMA_VK128_W64_B64GROUP 1
 #define HRX_Q8_0_WMMA_VK128_BUFFER_STORE 1
+#if HRX_Q8_0_WMMA_VK128_BM128_PHASE96_COPY_A
 #define HRX_Q8_0_WMMA_VK128_COPY_A_FRAG 1
+#endif
+#if HRX_Q8_0_WMMA_VK128_BM128_PHASE96_COPY_B
 #define HRX_Q8_0_WMMA_VK128_COPY_B_FRAG 1
+#endif
 #define HRX_Q8_0_WMMA_VK128_COPY_B_FRAG_MIN_COL_SUB 0
 #include "mul_mat_vec_q8_0_wmma16_vk128_wg256.hip.cpp"
 
@@ -72,6 +84,8 @@ void HRX_Q8_0_WMMA_VK128_BM128_PHASE96_EXPORT(
     constexpr int GROUP_BASE = HRX_Q8_0_WMMA_VK128_BM128_PHASE96_GROUP_BASE;
     constexpr int COL_START = HRX_Q8_0_WMMA_VK128_BM128_PHASE96_COL_START;
     constexpr int COL_COUNT = HRX_Q8_0_WMMA_VK128_BM128_PHASE96_COL_COUNT;
+    constexpr bool COPY_A = HRX_Q8_0_WMMA_VK128_BM128_PHASE96_COPY_A != 0;
+    constexpr bool COPY_B = HRX_Q8_0_WMMA_VK128_BM128_PHASE96_COPY_B != 0;
     static_assert(COL_COUNT >= 1 && COL_COUNT <= 2, "unexpected column group count");
 
     const unsigned int tid = __builtin_amdgcn_workitem_id_x();
@@ -138,10 +152,12 @@ void HRX_Q8_0_WMMA_VK128_BM128_PHASE96_EXPORT(
 #pragma unroll
                 for (int row_sub = 0; row_sub < 4; ++row_sub) {
                     const int local = col_delta * 4 + row_sub;
-                    const hrx_q8_0_wmma_vk128_half16_vec a_use =
-                        hrx_q8_0_wmma_vk128_copy_frag(a_frag[row_sub]);
-                    const hrx_q8_0_wmma_vk128_half16_vec b_use =
-                        hrx_q8_0_wmma_vk128_copy_frag(b_frag[col_sub]);
+                    const hrx_q8_0_wmma_vk128_half16_vec a_use = COPY_A ?
+                        hrx_q8_0_wmma_vk128_copy_frag(a_frag[row_sub]) :
+                        a_frag[row_sub];
+                    const hrx_q8_0_wmma_vk128_half16_vec b_use = COPY_B ?
+                        hrx_q8_0_wmma_vk128_copy_frag(b_frag[col_sub]) :
+                        b_frag[col_sub];
                     acc[local] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
                         a_use,
                         b_use,

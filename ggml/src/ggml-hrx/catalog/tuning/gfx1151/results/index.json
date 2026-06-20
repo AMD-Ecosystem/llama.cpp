@@ -3,6 +3,23 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_bm128phase96_acopy_bufferstore_route_perf",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-bm128phase96-acopy-focused-20260620-060329/",
+      "performance_artifact": "cache/hrxv1/gfx1151/q8-bm128phase96-acopy-focused-20260620-060329/perf-compare/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-bm128phase96-acopy-focused-20260620-060329/static/phase0.summary.md and cache/hrxv1/gfx1151/q8-bm128phase96-acopy-focused-20260620-060329/static/phase1.summary.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_acopy_bufferstore_phase0_wg256.hsaco and build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_acopy_bufferstore_phase1_wg256.hsaco",
+      "status": "rejected_focused_perf_regression_after_correctness_pass",
+      "findings": [
+        "added an opt-in CMake/Ninja-built Q8_0 BM128 phase96 A-copy route that preserves the prior two-phase BM128/BN128/wave64 direct-WMMA topology while copying only the A fragments, after the standalone copy-axis fixture showed A-only copy was correctness-clean and lower-pressure than A+B copy",
+        "focused CPU-reference passed p33, p512, and p513; route traces kept p33 on hrx_mul_mat_vec_q8_0_f32, selected the A-copy phase0+phase1 providers for all five p512 rows, and selected A-copy only for the large p513 rows while narrow p513 residual rows stayed on the conservative Q8 provider",
+        "built HSACO static evidence is resource-clean but not schedule-winning: phase0 and phase1 are wave64, SGPR=50, VGPR=167, LDS=20480, private_segment=0, uses_dynamic_stack=false, with no scratch references; visible counts are 48 v_wmma, 128 ds_load_b64, 32 buffer_store_b32, and 4 barriers per HSACO including helper symbol text",
+        "same-runner backend-op timing rejects the route versus the current packed-Q8_1 split-qsum baseline: p512 total 238198.682 us versus 67935.472 us, acopy/baseline=3.506x; p513 total 277953.679 us versus 80442.123 us, acopy/baseline=3.455x",
+        "p33 timing stayed effectively neutral because the opt-in route is correctly guarded out: acopy/baseline=0.987x with both runs using hrx_mul_mat_vec_q8_0_f32",
+        "do not promote or model-test this route; A-only fragment materialization fixes the small standalone BM128 copy-axis correctness surface, but the route-facing direct-WMMA BM128 phase96 topology remains far slower than the accepted packed-Q8_1 split-qsum schedule on gfx1151"
+      ]
+    },
+    {
       "id": "current_after_feed7b008_p512_eight_model_rank",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/current-p512-r1-after-feed7b008-20260620-054240/",

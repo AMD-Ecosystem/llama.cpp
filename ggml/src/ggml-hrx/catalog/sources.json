@@ -572,6 +572,12 @@
   "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_abcopy_bufferstore_phase1_wg256": {
     "path": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_abcopy_bufferstore_phase1_wg256.hip.cpp"
   },
+  "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_acopy_bufferstore_phase0_wg256": {
+    "path": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_acopy_bufferstore_phase0_wg256.hip.cpp"
+  },
+  "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_acopy_bufferstore_phase1_wg256": {
+    "path": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_acopy_bufferstore_phase1_wg256.hip.cpp"
+  },
   "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_mediumfrag12_combined96_packstage_bufferstore_wg256": {
     "path": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_mediumfrag12_combined96_packstage_bufferstore_wg256.hip.cpp"
   },
