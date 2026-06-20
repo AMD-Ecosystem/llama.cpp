@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_motif192_k2_baseoff_catalog_perf",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_baseoff_bufferstore_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_ASMWMMA_MOTIF192_K2_BASEOFF_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q8-baseoff-realdata-20260620-focused-wired/",
+      "performance_artifact": "cache/hrxv1/gfx1151/q8-baseoff-realdata-20260620-perf-wired/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-baseoff-realdata-20260620-compile/static/isa.txt",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_baseoff_bufferstore_wg256.hsaco",
+      "reason": "This opt-in route transferred the standalone no-spill base-offset LDS fragment-load probe into the real Q8_0 catalog ABI. It preserves the motif192 K2 direct-wait WMMA ladder and 192-store writeback surface, but spells A/B fragment LDS reads as two row/column base pointers with immediate ds_read_b64 offsets to test the RADV-like LDS address contract. The CMake/Ninja-built HSACO is resource-clean: wave64, SGPR=56, VGPR=213, LDS=22528, private_segment=0, no spills, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 128 ds_store_b16, 128 ds_load_u16_d16, and 192 buffer_store_b32. Focused p33, p512, and p513 CPU-reference gates passed, and route traces prove p33 stayed on existing narrow/default routes while p512 and p513 selected this provider only for ffn_out, ffn_gate, and result_output. Reject before model A/B because same-runner focused timing regressed the selected wide rows: p512 ffn_out 6765.448 -> 10304.590 us, ffn_gate 5936.081 -> 8757.799 us, result_output 52415.214 -> 79468.667 us; p513 ffn_out 7753.306 -> 10700.160 us, ffn_gate 6922.980 -> 10173.983 us, result_output 63115.333 -> 92365.143 us. The useful conclusion is that base+immediate LDS addressing alone does not recover Vulkan parity; the next Q8 large-route candidate needs a lower-pressure/lower-level cooperative operand or writeback primitive that also changes the WMMA issue/wait schedule."
+    },
+    {
       "id": "q8_0_motif192_k2_accparkfull8_customk_recheck",
       "date": "2026-06-20",
       "route": "hrx-hip-bench-q8-wmma-repro --mode=motif192-wmma-k2-realdata-fullk-accparkfull8-directwait-waitload-address",
