@@ -3,6 +3,19 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_k_wmma_vk64_ring96_k2_copyab_correct_but_spills",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-k2-copyab-focused-9a964c8b3-20260620-015954/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_copyab_wg256.hsaco",
+      "status": "rejected_correctness_fixed_but_spill_bound",
+      "findings": [
+        "K2 copy-A+B fixes the source-level cross/rotated RING96 math: focused p33 CPU-reference passed Vcur, ffn_out, and result_output with route traces selecting the new provider",
+        "the built HSACO preserves wave64 and 11264-byte LDS but spills heavily: VGPR=256, private_segment=128, vgpr_spill_count=31",
+        "focused p33 timing is 3.663x slower than the accepted VK64 default: 51243.250 us versus 13988.144 us",
+        "use this as a correctness-control reference only; the next Q6 medium attempt needs a RADV-like 16-WMMA/48-load/96-store schedule without doubling K-subtile WMMA work or spilling"
+      ]
+    },
+    {
       "id": "q6_k_wmma_vk64_ring96_cross_reference_diagnosis",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-crossref-3cf09b622-20260620-015053/",

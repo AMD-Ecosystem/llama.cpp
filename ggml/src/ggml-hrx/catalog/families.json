@@ -1032,6 +1032,10 @@
     "op": "MUL_MAT"
   },
   {
+    "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_copyab_f16acc_wg256",
+    "op": "MUL_MAT"
+  },
+  {
     "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_fast_half_bufferstore_f16acc_wg256",
     "op": "MUL_MAT"
   },

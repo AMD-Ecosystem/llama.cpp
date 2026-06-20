@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_wmma_vk64_padded44_ring96_k2_copyab_perf",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_copyab_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_COPYAB_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-k2-copyab-focused-9a964c8b3-20260620-015954/",
+      "perf_artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-k2-copyab-focused-9a964c8b3-20260620-015954/perf-compare-k2-vs-default.md",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-k2-copyab-focused-9a964c8b3-20260620-015954/readobj-notes.txt and cache/hrxv1/gfx1151/q6-vk64-ring96-k2-copyab-focused-9a964c8b3-20260620-015954/isa-counts.txt",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_copyab_wg256.hsaco",
+      "reason": "The Q6_K VK64 padded44 RING96 K2 copy-A+B probe is the first production-ABI transfer after the cross-reference diagnosis proved old RING96 computed a cross/rotated product. It keeps the single-wave BM64/BN64/BK32/WG256/wave64 and 11264-byte LDS footprint, but explicitly accumulates both K subtiles against matching B fragments before the unrotated store. This repairs correctness: focused p33 CPU-reference passed Vcur, ffn_out, and result_output with route traces selecting this provider for all three rows. Reject for production performance before model tests. The CMake/Ninja-built HSACO spills badly: wave64, LDS=11264, SGPR=65, VGPR=256, private_segment=128, and vgpr_spill_count=31, with 32 visible WMMA, 64 ds_load-class instructions, 64 buffer_store_b32, and scratch traffic. Same-runner focused timing is much slower than the accepted VK64 default: total 13988.144 -> 51243.250 us, Vcur 397.181 -> 662.780 us, ffn_out 2368.391 -> 5971.729 us, and result_output 11222.571 -> 44608.740 us. Keep the route opt-in only as useful evidence: the cross-tile math is now fixed, but doubling the K-subtile WMMA work in this HIP spelling causes spills and is not the RADV medium schedule."
+    },
+    {
       "id": "q6_k_wmma_vk64_padded44_wave4row_batchwait_perf",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wave4row_batchwait_f16acc_wg256_f32",
