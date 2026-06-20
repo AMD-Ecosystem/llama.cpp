@@ -3,6 +3,19 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_k_wmma_vk64_ring96_copyab_synthetic_repro",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-repro-compare-bda2429af-20260620-014712/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q6-wmma-vk64-repro and build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q6-wmma-ring96-repro",
+      "status": "rejected_ring96_copyab_reproduces_finite_mismatch_in_synthetic_production_abi",
+      "findings": [
+        "accepted VK64 repro stays within normal F16 error on small profiles: p33 k3584 max_abs=0.081543 and bad_gt_0p25=0",
+        "RING96 copy-A+B repro fails the same synthetic production-ABI cases with large finite mismatch: p33 k256 bad_gt_0p25=1100, p33 k3584 bad_gt_0p25=1749, and p64 k3584 bad_gt_0p25=3675",
+        "the mismatch is not a model-export or harness artifact; it reproduces with deterministic synthetic Q6 blocks while the accepted VK64 route remains correct on the same data",
+        "next Q6 medium work should use this repro to bracket group/lane ownership or abandon the current RING96 accumulation topology before another catalog transfer"
+      ]
+    },
+    {
       "id": "q6_k_wmma_vk64_radv96_accslots_lane_contract",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/coopstore-vk64-radv96-accslots-f053b49ae-20260620-013913/",
