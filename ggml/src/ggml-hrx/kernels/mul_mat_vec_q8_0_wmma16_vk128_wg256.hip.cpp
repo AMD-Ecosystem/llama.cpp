@@ -137,6 +137,10 @@
 #define HRX_Q8_0_WMMA_VK128_W64_PHASE96_COL_COUNT 2
 #endif
 
+#ifndef HRX_Q8_0_WMMA_VK128_W64_PHASE96_DIRECT_WAIT
+#define HRX_Q8_0_WMMA_VK128_W64_PHASE96_DIRECT_WAIT 0
+#endif
+
 #ifndef HRX_Q8_0_WMMA_VK128_STORE_STAGE
 #define HRX_Q8_0_WMMA_VK128_STORE_STAGE 0
 #endif
@@ -1808,6 +1812,19 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
                         hrx_q8_0_wmma_vk128_load_b_frag_w64_b64asm_nowait(
                             sh_b_lds, wave_col * 4 + col_sub, k_tile, lane);
                 }
+#if HRX_Q8_0_WMMA_VK128_W64_PHASE96_DIRECT_WAIT
+#if HRX_Q8_0_WMMA_VK128_W64_PHASE96_COL_COUNT != 2
+#error "phase96 direct-wait probe expects exactly two output columns"
+#endif
+                HRX_Q8_0_WMMA_VK128_WAIT_WMMA(0, a_frag[0], b_frag[HRX_Q8_0_WMMA_VK128_W64_PHASE96_COL_START + 0], 31);
+                HRX_Q8_0_WMMA_VK128_WAIT_WMMA(1, a_frag[1], b_frag[HRX_Q8_0_WMMA_VK128_W64_PHASE96_COL_START + 0], 27);
+                HRX_Q8_0_WMMA_VK128_WAIT_WMMA(2, a_frag[2], b_frag[HRX_Q8_0_WMMA_VK128_W64_PHASE96_COL_START + 0], 23);
+                HRX_Q8_0_WMMA_VK128_WAIT_WMMA(3, a_frag[3], b_frag[HRX_Q8_0_WMMA_VK128_W64_PHASE96_COL_START + 0], 19);
+                HRX_Q8_0_WMMA_VK128_WAIT_WMMA(4, a_frag[0], b_frag[HRX_Q8_0_WMMA_VK128_W64_PHASE96_COL_START + 1], 20);
+                HRX_Q8_0_WMMA_VK128_WAIT_WMMA(5, a_frag[1], b_frag[HRX_Q8_0_WMMA_VK128_W64_PHASE96_COL_START + 1], 16);
+                HRX_Q8_0_WMMA_VK128_WAIT_WMMA(6, a_frag[2], b_frag[HRX_Q8_0_WMMA_VK128_W64_PHASE96_COL_START + 1], 12);
+                HRX_Q8_0_WMMA_VK128_WAIT_WMMA(7, a_frag[3], b_frag[HRX_Q8_0_WMMA_VK128_W64_PHASE96_COL_START + 1], 8);
+#else
                 asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
 #if HRX_Q8_0_WMMA_VK128_COPY_A_FRAG
 #pragma unroll
@@ -1832,6 +1849,7 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
                         acc[local] = hrx_q8_0_wmma_vk128_wmma_f16_w64(a_frag[row_sub], b_frag[col_sub], acc[local]);
                     }
                 }
+#endif
             }
 #elif HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT_K2
 #if HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT_K2_RAW

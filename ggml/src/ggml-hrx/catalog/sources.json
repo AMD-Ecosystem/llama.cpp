@@ -643,5 +643,11 @@
   },
   "unary_f32": {
     "path": "unary_f32.hip.cpp"
+  },
+  "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_phase96_directwait_asmwmma_bufferstore_phase0_wg256": {
+    "path": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_phase96_directwait_asmwmma_bufferstore_phase0_wg256.hip.cpp"
+  },
+  "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_phase96_directwait_asmwmma_bufferstore_phase1_wg256": {
+    "path": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_phase96_directwait_asmwmma_bufferstore_phase1_wg256.hip.cpp"
   }
 }
