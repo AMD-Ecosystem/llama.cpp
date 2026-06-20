@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_motif192_ktilefrag_storebatch4_fixture",
+      "date": "2026-06-20",
+      "route": "hrx-hip-bench-q8-wmma-repro --mode=motif192-wmma-k2-realdata-fullk-ktilefrag-storebatch4-directwait-waitload-address",
+      "env": "standalone CMake/Ninja-built gfx1151 HIP bench diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-ktilefrag-storebatch4-3a2b6281f-20260620-052930/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-ktilefrag-storebatch4-3a2b6281f-20260620-052930/summary.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro with embedded gfx1151 object extracted to cache/hrxv1/gfx1151/q8-motif192-k2-ktilefrag-storebatch4-3a2b6281f-20260620-052930/static/fatbin/gfx1151.o",
+      "reason": "The KTileFrag storebatch4 probe narrowed the prior all-group storebatch rejection by batching staged writeback in four-group chunks instead of all sixteen groups. It kept the real-Q8 full-k KTileFrag accumulation, the visible 192-store output contract, and normal CMake/Ninja bench compilation, with no production selector changes. Correctness passed aligned, odd-row, odd-column, p512, and p513 rows with bad=0. Reject before timing or catalog transfer because static resource metadata still fails despite the smaller LDS footprint: the KTileFrag control is wave64, SGPR=60, VGPR=211, LDS=22528, private_segment=0, sgpr_spills=0, vgpr_spills=0; storebatch4 is wave64, SGPR=106, VGPR=211, LDS=28672, private_segment=0, sgpr_spills=36, vgpr_spills=0. The visible core opcode surface remains matched at 32 v_wmma, 64 ds_load_b64, 128 ds_load_u16_d16, 130 ds_store_b16, 192 buffer_store_b32, and 3 barriers, so the failure is scalar pressure in this grouped-stage HIP C++ spelling, not the store contract. Do not continue shrinking the same grouped-stage batching family; the next Q8 large-route probe should target a different lower-pressure cooperative writeback or lane-ownership primitive."
+    },
+    {
       "id": "q8_0_motif192_ktilefrag_storebatch_fixture",
       "date": "2026-06-20",
       "route": "hrx-hip-bench-q8-wmma-repro --mode=motif192-wmma-k2-realdata-fullk-ktilefrag-storebatch-directwait-waitload-address",
