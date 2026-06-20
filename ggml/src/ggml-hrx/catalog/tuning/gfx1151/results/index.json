@@ -3,6 +3,13 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_k_wmma_vk64_radv96_fragment_copy_fixture",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/coopstore-vk64-radv96-accdirect-copy-20260619-224152/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract with embedded gfx1151 object extracted to cache/hrxv1/gfx1151/coopstore-vk64-radv96-accdirect-copy-20260619-224152/fatbin.gfx1151.o",
+      "status": "accepted_standalone_fragment_copy_repairs_q6_ring_group5_accumulator"
+    },
+    {
       "id": "q8_0_dense_prompt_mmq64x128_splitqsum_bk2_model_ab",
       "date": "2026-06-19",
       "artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x128-splitqsum-bk2-focused-20260619-184940/",
