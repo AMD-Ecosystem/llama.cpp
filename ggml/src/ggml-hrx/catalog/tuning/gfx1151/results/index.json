@@ -13,8 +13,23 @@
         "rechecked the existing CMake/Ninja-built coopmat-store-contract lower-level Q8 WMMA LDS K2 direct192 raw primitive after grouped-stage KTileFrag batching failed static SGPR-spill gates",
         "direct192 raw correctness passed exactly with elements=12288 bad=0 max_abs=0; same-binary controls direct64 and mixed128 also passed, while radv-motif192 still failed with bad=32 in group 28 slot 1",
         "static evidence for coopstore_probe_wmma_lds_k2_direct192_raw is wave64, SGPR=14, VGPR=153, LDS=16384, private_segment=0, no SGPR/VGPR spills, 32 v_wmma, 64 ds_load_b64, 192 buffer_store_b32, 7 waitcnt-class instructions, and 2 barriers",
-        "this is the first current positive primitive with the target 32-WMMA/64-LDS-load/192-direct-store surface and no grouped-stage scalar-pressure cliff",
-        "do not treat it as a production route because it is a standalone fixture and deliberately skips the RADV halfword-stage surface; the next Q8 large-route probe should port this direct192 raw ownership primitive into a real-Q8 backend-like fixture or route-local diagnostic before timing"
+        "this is the current positive primitive with the target 32-WMMA/64-LDS-load/192-direct-store surface and no grouped-stage scalar-pressure cliff",
+        "do not treat it as a production route because it is a standalone fixture and deliberately skips the RADV halfword-stage surface; route-facing direct192, motif192 K2/KTileFrag, and packed-Q8_1 issue-order transfers have since shown that the remaining gap is not another wrapper around this primitive but a lower-level lane/store primitive or materially different packed dataflow"
+      ]
+    },
+    {
+      "id": "q8_0_wmma_group12_dualstage_recheck",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-wmma-group12-dualstage-recheck-48ad54756-20260620-053941/",
+      "static_artifact": "not extracted; existing CMake/Ninja-built fixture recheck",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro",
+      "status": "rejected_fixture_stage_order_does_not_repair_colsub3",
+      "findings": [
+        "rechecked the existing single-group12 dual-stage AB-copy fixture after the col_sub=3 selected-stage neighbor probe failed groups 12 through 15",
+        "raw-first on rows=64 cols=64 keeps raw_bad=0 and staged_bad=0 but raw and staged paths still disagree on 60 active lane/slot values, with first mismatch row=12 col=48 lane=0 slot=3 raw=-0.000448465 staged=0.0321191 expected=-3.0559e-09",
+        "stage-first is worse, with raw_bad=128, staged_bad=64, raw_sentinel=128, staged_sentinel=64, and first mismatch row=12 col=49 lane=1 slot=3",
+        "cols=33 has no active group12/col_sub3 outputs, matching the previous selected-stage neighbor probe's p33 interpretation",
+        "reject this local stage-order repair before route transfer; the next Q8 large-route attempt needs a different lane/store primitive or lower-level cooperative writeback path, not another raw-versus-staged ordering variant"
       ]
     },
     {
