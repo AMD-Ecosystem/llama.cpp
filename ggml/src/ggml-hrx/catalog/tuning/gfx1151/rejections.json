@@ -1569,6 +1569,15 @@
       "reason": "The Q5_K packed-Q8_1/x4 MMQL64 BK2 B-pair probe bracketed the accepted p33 BQUAD route by preserving BM64/BN64/BK_STEP=2/WG256/wave64 and changing only the B-cache live window from a full WNITER x TN B-quad to one TN-wide pair per WNITER. It built through CMake/Ninja, and focused CPU-reference passed for p33 plus p512/p513 non-steal guards. Route traces proved p33 selected B-pair for Qcur, ffn_out, and ffn_gate while Kcur stayed on rows2; p512 stayed on MMQL128 and p513 stayed on MMQL128 BQUAD tail. Static HSACO comparison showed the intended pressure reduction, wave64 SGPR=62 VGPR=105 LDS=10240 no spills, versus BQUAD VGPR=124 with the same LDS, 256 v_dot sites, 40 ds_load, 24 ds_store, 39 global_load, 16 global_store, and 2 barriers. Same-runner focused timing rejected the route despite lower VGPR: round 1 p33 sum regressed 3071.563 -> 3144.005 us and round 2 regressed 3067.537 -> 3145.376 us. The ffn_out row slightly improved, but Qcur regressed about 2.2% and ffn_gate regressed about 7.5%, so reducing the B live window is not the right packed-medium axis for Q5 p33. Keep BQUAD as the accepted default and keep this B-pair route opt-in only as rejection evidence."
     },
     {
+      "id": "q5_dense_prompt_mmql64_bk2_bpair_bhalf_p33",
+      "date": "2026-06-19",
+      "route": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql64x64_bk2_bpair_bhalf_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q5_K_Q8_1_X4_MMQL64_BK2_BPAIR_BHALF_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q5-mmql64-bk2-bpair-bhalf-20260619-191522/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q5_k_q8_1_x4_mmql64_bk2_bpair_bhalf.hsaco",
+      "reason": "The Q5_K packed-Q8_1/x4 MMQL64 BK2 B-pair+BHALF probe crossed the accepted half-scale RHS payload with the previously rejected lower-live B-pair issue window. It preserved BM64/BN64/BK_STEP=2/WG256/wave64 and built through CMake/Ninja as a normal catalog HSACO. Static evidence showed the intended low-pressure shape: wave64, SGPR=61, VGPR=105, LDS=9728, no private segment, no spills, 256 v_dot4_i32_iu8 sites, 48 LDS reads, 30 LDS writes, 39 VMEM loads, 16 VMEM stores, 114 waitcnt-class instructions, and 2 barriers. Focused CPU-reference passed for p33, p512, and p513. Route traces proved p33 selected this provider for Qcur, ffn_out, and ffn_gate while Kcur stayed on rows2; p512 stayed on MMQL128 and p513 stayed on the accepted MMQL128 BQUAD tail route. Same-runner focused p33 timing rejected it versus the current BHALF+BQUAD default in two rounds: total 3029.411 -> 3140.802 us and 3018.821 -> 3100.522 us. ffn_out was flat/slightly mixed, but Qcur regressed about 3.2% and ffn_gate regressed 5.5-10.0%. Lowering the B live window remains the wrong axis even after preserving half-scale RHS payloads; keep BHALF+BQUAD as the p33 default and leave this route opt-in only for reproduction."
+    },
+    {
       "id": "q5_dense_prompt_mmql64_bk2_tn4_bquad_compile",
       "date": "2026-06-19",
       "route": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql64x64_bk2_tn4_bquad_wg256_f32",
