@@ -3,6 +3,15 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_p33_packed_fallback_policy_recheck",
+      "date": "2026-06-20",
+      "route": "Q6_K packed Q8_1 fallback routes after disabling accepted VK64/VK128 WMMA defaults",
+      "env": "GGML_HRX_DISABLE_Q6_K_WMMA16_VK64_PADDED44_W64_F16ACC_WG256_PROMPT=1 and GGML_HRX_DISABLE_Q6_K_WMMA16_VK128_PADDED_W64_F16ACC_WG256_PROMPT=1, optionally with GGML_HRX_ENABLE_Q6_K_Q8_1_X4_MMQ64_PROMPT=1 / GGML_HRX_ENABLE_Q6_K_Q8_1_X4_MMQL128_PROMPT=1 / disable MMQL128/MMQ32 controls",
+      "artifact": "cache/hrxv1/gfx1151/q6-p33-packed-fallback-sweep-2f96532e7-20260620-004900/",
+      "context_artifact": "cache/hrxv1/gfx1151/q4-p33-current-hrx-vulkan-focused-620234634-20260620-004145/",
+      "reason": "The current-head Q6 p33 packed fallback audit confirms the accepted VK64 WMMA route remains better overall on the Llama 3.1 odd rows. Disabling VK64/VK128 WMMA and allowing packed policy selected rows2_cols8_wg32 and measured 94127.449 us on the Q6 focus rows versus 14440.438 us for default. Forcing MMQ64 improved only Vcur, 396.587 -> 81.649 us, but regressed ffn_out-0, 2235.143 -> 3291.959 us, and result_output, 11808.708 -> 21521.182 us, for Q6 focus 24894.790 us. Other packed fallbacks were much slower: forced MMQL128 93937.795 us, disable MMQL128 240114.002 us, and disable MMQL128 plus MMQ32 253897.869 us. Keep VK64 as p33 default; the remaining p33 gap needs a new RADV-derived cooperative load/store or lane-ownership source candidate, not a packed-route policy rollback."
+    },
+    {
       "id": "q6_vk64_p33_current_variant_sweep_no_promotion",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_*",
