@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_wmma_vk64_padded44_ring96_copyb_copyab_correctness",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_copyb_f16acc_wg256_f32 and hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_copyab_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_COPYB_F16ACC_WG256_PROMPT=1 or GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_COPYAB_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-copyb-copyab-focused-05ac2f85a-20260619-225847/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-copyb-copyab-static-05ac2f85a-20260619-225807/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_copyb_wg256.hsaco and build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_copyab_wg256.hsaco",
+      "reason": "The Q6_K VK64 padded44 RING96 copy-B and copy-A+B probes completed the route-facing transfer of the standalone fragment-materialization repair. Both built through normal CMake/Ninja HSACO generation and selected only under explicit opt-in env vars. Static comparison against the Qwen3 30B Q6_K p33 RADV medium oracle showed both preserve wave64, LDS=11264, no spills, 16 v_wmma_f16_16x16x16_f16, 48 total ds_load_b64, and 64 buffer_store_b32. Copy-B is the lowest-pressure copy variant at VGPR 175; copy-A+B is VGPR 183; both remain above base RING96 VGPR 163 and RADV medium VGPR 144, and both still miss RADV's halfword/store contract with only 2 ds_store_b16, no ds_load_u16_d16, 64 not 96 buffer stores, and final pre-WMMA lgkmcnt=0. Focused p33 CPU-reference rejects both before timing: route traces selected the intended copy-B provider for Vcur, ffn_out, and result_output with finite ERR 33.06, 34.18, and 33.99; copy-A+B selected for the same rows with finite ERR 32.21, 34.98, and 33.56. The standalone fixture repair does not transfer through this real Q6 RING96 catalog ABI. Future Q6 medium work should change the lane/writeback contract or test a different schedule family instead of adding more whole-fragment copies to this route."
+    },
+    {
       "id": "q6_k_wmma_vk64_padded44_ring96_copya_correctness",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_copya_f16acc_wg256_f32",
