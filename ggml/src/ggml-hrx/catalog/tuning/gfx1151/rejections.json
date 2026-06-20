@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_wmma_vk64_padded44_wave4row_perf",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wave4row_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_WAVE4ROW_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-wave4row-focused-8edcf2b47-20260620-010601/",
+      "perf_artifact": "cache/hrxv1/gfx1151/q6-vk64-wave4row-focused-perf-8edcf2b47-20260620-010650/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-vk64-wave4row-static-8edcf2b47-20260620-010302/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_wave4row_wg256.hsaco",
+      "reason": "The Q6_K VK64 wave4row probe tested whether the Q5_K all-wave low-live row-stripe ownership transfer could improve the Qwen3 30B Q6_K p33 medium regime. It keeps BM64/BN64/BK32/WG256/wave64 and 11264 bytes LDS, maps each of four wave64 waves to one 16-row stripe, keeps four live accumulators per wave, stages A/B once per K tile, and uses explicit b64 fragment loads plus raw buffer stores. It built through normal CMake/Ninja HSACO generation and selected only under opt-in. Static comparison against the p33 RADV medium oracle rejects schedule parity before promotion: the selected symbol is wave64, SGPR=40, VGPR=92, LDS=11264, no spills, but still only exposes 8 visible v_wmma_f16_16x16x16_f16 versus RADV's 16, 40 ds_load_b64 versus 48, 16 buffer_store_b32 versus 96, 2 ds_store_b16 versus 64, 0 ds_load_u16_d16 versus 64, and final pre-WMMA lgkmcnt=0 versus RADV's 40. Focused p33 CPU-reference passed all rows with route traces selecting this provider for Vcur, ffn_out, and result_output. Same-runner focused timing rejects it versus the accepted VK64 default: Q6 focus sum 14392.095 -> 15505.364 us, Vcur 397.828 -> 455.930 us, ffn_out 2237.969 -> 2377.337 us, and result_output 11756.299 -> 12672.097 us. Keep opt-in only. The useful conclusion is that low-live all-wave row ownership is correct for Q6, but it does not recover the RADV medium load/writeback contract or p33 performance; the next Q6 p33 attempt should target grouped outstanding LDS loads plus a compact 96-buffer-store/halfword writeback topology rather than another direct-F32 WMMA ownership reshuffle."
+    },
+    {
       "id": "q6_p33_packed_fallback_policy_recheck",
       "date": "2026-06-20",
       "route": "Q6_K packed Q8_1 fallback routes after disabling accepted VK64/VK128 WMMA defaults",
