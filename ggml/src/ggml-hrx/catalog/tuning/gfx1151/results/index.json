@@ -3,6 +3,20 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_k_wmma_vk64_medium_kloop_mixed96_fixture_rejected_correctness",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/coopstore-k2-kloop-mixed96-20260620-023139/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract embedded .hip_fatbin unbundled to cache/hrxv1/gfx1151/coopstore-k2-kloop-mixed96-20260620-023139/static/fatbin/gfx1151.o",
+      "status": "rejected_fixture_correctness_despite_good_static_surface",
+      "findings": [
+        "the non-unrolled kloop mixed96 fixture targets the Q6 medium continuation after the corrected-K2 RING96 K-loop route: keep the reduced live/static surface while adding the RADV-like 96-store mixed output contract",
+        "static evidence from the actual executable fatbin is attractive: wave64, LDS=20480, SGPR=18, VGPR=138, private_segment=0, no spills, 16 visible WMMA, 64 ds_load-class instructions, 48 ds_store-class instructions, 96 buffer_store_b32, and 40 s_waitcnt",
+        "correctness rejects the source shape before catalog transfer: 20/20 repeated runs failed, usually first_bad group=3 slot=0 lane=0 with expected 128 becoming NaN or a large finite wrong value",
+        "the same-binary unrolled control wmma-lds-k2-mixed96 passed 5/5 with bad=0 and max_abs=0",
+        "do not port the non-unrolled kloop mixed96 spelling into the Q6 production catalog; the next Q6 medium probe needs a different correctness-proven low-live writeback/store topology"
+      ]
+    },
+    {
       "id": "q6_k_wmma_vk64_ring96_k2_kloop_correct_static_oracle_surface_but_slow",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-k2-kloop-copyab-focused-5c4ce47bc-20260620-022526/",

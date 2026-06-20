@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_wmma_vk64_medium_kloop_mixed96_fixture_correctness",
+      "date": "2026-06-20",
+      "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-kloop-mixed96",
+      "env": "standalone CMake/Ninja-built gfx1151 HIP bench diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/coopstore-k2-kloop-mixed96-20260620-023139/",
+      "control_artifact": "cache/hrxv1/gfx1151/coopstore-k2-kloop-mixed96-20260620-023139/unrolled-mixed96-control.log",
+      "static_artifact": "cache/hrxv1/gfx1151/coopstore-k2-kloop-mixed96-20260620-023139/readobj-notes.txt and cache/hrxv1/gfx1151/coopstore-k2-kloop-mixed96-20260620-023139/isa-counts.txt",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract embedded .hip_fatbin unbundled to cache/hrxv1/gfx1151/coopstore-k2-kloop-mixed96-20260620-023139/static/fatbin/gfx1151.o",
+      "reason": "The Q6_K VK64 medium kloop mixed96 standalone fixture tests the exact next hypothesis after the corrected-K2 RING96 route: preserve the reduced compiler-facing static surface from the non-unrolled K-loop spelling while adopting the RADV-like 96-buffer-store mixed output contract. It builds through the normal CMake/Ninja hrx-hip-bench-coopmat-store-contract target and the embedded executable fatbin was unbundled for static evidence because the compiler sidecar object was stale. Static evidence is superficially attractive: wave64, LDS=20480, SGPR=18, VGPR=138, private_segment=0, no spills, 16 visible WMMA, 64 ds_load-class instructions, 48 ds_store-class instructions, 96 buffer_store_b32, 40 s_waitcnt, and no scratch. Reject before any catalog transfer because correctness fails deterministically: 20/20 repeated runs of --mode=wmma-lds-k2-kloop-mixed96 failed, usually with first_bad group=3 slot=0 lane=0 where expected 128 became NaN or a large finite wrong value, sometimes with additional staged group 20/21 corruption. The same CMake-built binary's unrolled control --mode=wmma-lds-k2-mixed96 passed 5/5 with bad=0 and max_abs=0. Therefore this non-unrolled source-loop shape is not a safe route to the RADV medium 16-WMMA/96-store contract in HIP C++; dynamic loop/control behavior likely perturbs the WMMA accumulator or lane contract even though static resources look good. The next Q6 medium attempt should avoid this kloop source spelling and instead pursue a correctness-proven low-live writeback/store topology."
+    },
+    {
       "id": "q6_k_wmma_vk64_padded44_ring96_k2_kloop_copyab_perf",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_copyab_f16acc_wg256_f32",
