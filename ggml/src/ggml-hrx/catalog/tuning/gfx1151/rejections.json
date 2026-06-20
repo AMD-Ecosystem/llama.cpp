@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_directwait_raw16_fulltile_compile_contract",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_directwait_raw16_fulltile_bufferstore_f16acc_wg256_f32",
+      "env": "compile-only CMake/Ninja probe; not runtime-selected",
+      "artifact": "cache/hrxv1/gfx1151/q8-directwait-raw16-fulltile-compile-20260620-082553/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-directwait-raw16-fulltile-compile-20260620-082553/hsaco-summary.md and cache/hrxv1/gfx1151/q8-directwait-raw16-fulltile-compile-20260620-082553/issue-window.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_directwait_raw16_fulltile_bufferstore_wg256.hsaco",
+      "reason": "This compile-contract probe tested the direct intersection left by the latest Q8 evidence: preserve the raw16 real-output lane ownership and full-tile raw buffer stores that passed focused correctness, but replace the two 16-WMMA per-K-tile source shape with the motif192 K2 direct-wait issue ladder. It built through the normal CMake/Ninja HSACO path and was deliberately not wired into runtime selection. Static issue-window evidence confirms the intended schedule movement: versus raw16_fulltile, it changes from two 16-WMMA regions to one 32-WMMA region, restores final pre-WMMA s_waitcnt lgkmcnt(51), and raises immediate LDS loads before the final wait from 32 to 47. RADV large remains better at 59 immediate LDS loads before lgkmcnt(51). Reject before focused p33/p512/p513 runtime gates because the resource contract fails: wave64, SGPR=24, VGPR=256, LDS=20480, scratch=56 bytes, and 13 VGPR spills. The visible opcode surface is 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 64 buffer_store_b32, 2 ds_store_b32, 66 wait-class ops, and 3 barriers. This proves the simple direct-wait plus raw16/full-tile cross can recover the RADV-like issue window only by reaching the gfx1151 register cliff. The next Q8 large-route work must reduce live range or move to a lower-level cooperative writeback/operand primitive before adding another runtime route."
+    },
+    {
       "id": "q8_0_direct_wmma_vk128_packstage_asmwmma_motif192_k2_raw16_fulltile_perf",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_raw16_fulltile_bufferstore_f16acc_wg256_f32",

@@ -3,6 +3,22 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_directwait_raw16_fulltile_compile_contract",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-directwait-raw16-fulltile-compile-20260620-082553/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-directwait-raw16-fulltile-compile-20260620-082553/hsaco-summary.md and cache/hrxv1/gfx1151/q8-directwait-raw16-fulltile-compile-20260620-082553/issue-window.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_directwait_raw16_fulltile_bufferstore_wg256.hsaco",
+      "status": "rejected_compile_contract_spills_after_issue_window_improvement",
+      "findings": [
+        "added a CMake/Ninja-built compile-contract wrapper that crosses the prior motif192 K2 direct-wait issue ladder with the correctness-clean raw16 real-output ownership and ASSUME_FULL_TILES=1 output path",
+        "the candidate improved the specific RADV-facing issue-window axis versus raw16_fulltile: it emits one 32-WMMA hot region instead of two 16-WMMA regions and restores a final pre-WMMA s_waitcnt lgkmcnt(51)",
+        "issue-window comparison against RADV large and raw16_fulltile shows pre-hot loads=67, immediate LDS loads before final wait=47, and final lgkmcnt=51; RADV large has pre-hot loads=71, immediate LDS loads=59, final lgkmcnt=51, and raw16_fulltile had only 32 immediate LDS loads before lgkmcnt(0)",
+        "reject before runtime gates because the compile resource contract fails: wave64, SGPR=24, VGPR=256, LDS=20480, scratch=56 bytes, and 13 VGPR spills",
+        "visible opcode surface is 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 64 buffer_store_b32, 2 ds_store_b32, 66 wait-class ops, and 3 barriers",
+        "this closes the simple direct-wait plus raw16/full-tile cross: recovering the RADV-like issue window under the current source-visible 16-accumulator ABI still reaches the gfx1151 VGPR cliff. The next Q8 attempt needs lower live range or a lower-level cooperative writeback/operand primitive, not another wrapper around the same live fragment surface."
+      ]
+    },
+    {
       "id": "q8_0_issue_window_compare_radv_vs_raw16_fulltile",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-issue-window-compare-20260620-082240/",
