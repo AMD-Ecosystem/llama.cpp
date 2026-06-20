@@ -82,6 +82,23 @@
       ]
     },
     {
+      "id": "q8_0_direct192_standalone_hot_region_compare",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-direct192-standalone-hot-region-compare-20260620-continue/",
+      "tool": "tools/vulkan-oracle/extract_objdump_symbol.py and tools/vulkan-oracle/extract_hot_regions.py",
+      "oracle_artifact": "cache/hrxv1/gfx1151/vulkan-oracle-llama31-8b-q8_0-p512-fa1-20260617-200453/",
+      "status": "schedule_transfer_evidence_no_route_promotion",
+      "findings": [
+        "added a reusable objdump symbol extractor so symbol-scoped HIP ISA from CMake/Ninja-built fatbins can be fed into the Vulkan-oracle hot-region and store-cluster tooling without mixing neighboring fixture kernels",
+        "extracted coopstore_probe_wmma_lds_k2_direct192_raw from the existing coopmat-store-contract fatbin and compared it against the Q8_0 RADV large oracle, current accepted BK2+wave64 scalar-dot route, rejected scalar buffer-store route, and rejected packstage full-tile direct-WMMA route",
+        "the standalone direct192 primitive preserves the key RADV-class primitive surface: 32 v_wmma_f16_16x16x16_f16 ops, 64 ds_load_b64 LDS loads, 192 buffer_store_b32 VMEM stores, two barriers, no VMEM loads in the symbol-scoped hot path, and no spills in the prior metadata",
+        "its whole-symbol waitcnt-class count is only 8, versus 171 for the full RADV large pipeline, 85 for the route-shaped packstage full-tile transfer, 186 for the accepted BK2+wave64 scalar-dot route, and 154 for the rejected scalar buffer-store wrapper",
+        "the direct192 primitive still splits into two 16-WMMA hot regions rather than RADV's single 32-WMMA region, but its local windows are low-wait: 4 waitcnt-class ops around each 16-WMMA region instead of packstage full-tile's 69 and 41 waitcnt-class local windows",
+        "do not promote this result: the primitive is a standalone fixture, not the production Q8 catalog ABI, and it skips the RADV halfword-stage surface. Route-facing direct192/motif192/KTileFrag transfers have already shown correctness, pressure, or timing failures.",
+        "next Q8 p512 work should mechanically port this low-wait direct192 lane/writeback ownership into a real-Q8 route-local diagnostic, or expose an equivalent lower-level cooperative store primitive. Another scalar-dot store wrapper or packstage halfword-stage variant is not an evidence-backed route to Vulkan parity."
+      ]
+    },
+    {
       "id": "q8_0_packstage_asmwmma_fast_half_fullpair_compile_contract",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-packstage-asmwmma-fast-half-fullpair-compile-20260620-062855/",
