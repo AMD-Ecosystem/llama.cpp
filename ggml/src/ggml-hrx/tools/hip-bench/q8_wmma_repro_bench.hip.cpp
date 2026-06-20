@@ -8925,6 +8925,114 @@ static int run_case(const std::string & mode, int rows, int cols, int k, size_t 
     return (nan == 0 && inf == 0 && sentinel == 0) ? 0 : 1;
 }
 
+static void launch_bm128_direct192_output_timing_variant(
+        const std::string & variant,
+        const hrx_block_q8_0_wmma_vk128_lhs * d_q8,
+        const float * d_rhs,
+        float * d_out,
+        int rows,
+        int cols,
+        int k) {
+    const dim3 grid((rows + 127) / 128, (cols + 127) / 128, 1);
+    if (variant == "raw") {
+        hipLaunchKernelGGL((q8_bm128_direct192_output_repro_kernel<false>),
+            grid, dim3(256, 1, 1), 0, 0, d_q8, d_rhs, d_out, k, rows, cols);
+    } else if (variant == "raw-asm") {
+        hipLaunchKernelGGL((q8_bm128_direct192_output_repro_kernel<true>),
+            grid, dim3(256, 1, 1), 0, 0, d_q8, d_rhs, d_out, k, rows, cols);
+    } else if (variant == "raw-asm-inout") {
+        hipLaunchKernelGGL((q8_bm128_direct192_output_repro_kernel<true, true>),
+            grid, dim3(256, 1, 1), 0, 0, d_q8, d_rhs, d_out, k, rows, cols);
+    } else if (variant == "scalaracc-raw-asm") {
+        hipLaunchKernelGGL(q8_bm128_direct192_scalaracc_output_repro_kernel,
+            grid, dim3(256, 1, 1), 0, 0, d_q8, d_rhs, d_out, k, rows, cols);
+    } else if (variant == "rawfrag-raw-asm") {
+        hipLaunchKernelGGL(q8_bm128_direct192_rawfrag_output_repro_kernel,
+            grid, dim3(256, 1, 1), 0, 0, d_q8, d_rhs, d_out, k, rows, cols);
+    } else if (variant == "baseoff-raw-asm") {
+        hipLaunchKernelGGL(q8_bm128_direct192_baseoff_output_repro_kernel,
+            grid, dim3(256, 1, 1), 0, 0, d_q8, d_rhs, d_out, k, rows, cols);
+    } else {
+        std::fprintf(stderr, "unknown direct192 timing variant: %s\n", variant.c_str());
+        std::exit(2);
+    }
+}
+
+static double time_bm128_direct192_output_variant(
+        const std::string & variant,
+        const hrx_block_q8_0_wmma_vk128_lhs * d_q8,
+        const float * d_rhs,
+        float * d_out,
+        int rows,
+        int cols,
+        int k,
+        int reps) {
+    constexpr int warmup_reps = 3;
+    HIP_CHECK(hipDeviceSynchronize());
+    for (int rep = 0; rep < warmup_reps; ++rep) {
+        launch_bm128_direct192_output_timing_variant(variant, d_q8, d_rhs, d_out, rows, cols, k);
+        HIP_CHECK(hipGetLastError());
+    }
+    HIP_CHECK(hipDeviceSynchronize());
+
+    const auto start = std::chrono::steady_clock::now();
+    for (int rep = 0; rep < reps; ++rep) {
+        launch_bm128_direct192_output_timing_variant(variant, d_q8, d_rhs, d_out, rows, cols, k);
+        HIP_CHECK(hipGetLastError());
+    }
+    HIP_CHECK(hipDeviceSynchronize());
+    const auto stop = std::chrono::steady_clock::now();
+    return std::chrono::duration<double, std::milli>(stop - start).count() / static_cast<double>(reps);
+}
+
+static int run_bm128_direct192_output_timing_case(int rows, int cols, int k, int reps) {
+    const int blocks_per_row = k / 32;
+    std::vector<hrx_block_q8_0_wmma_vk128_lhs> h_q8(static_cast<size_t>(rows) * blocks_per_row);
+    std::vector<float> h_rhs(static_cast<size_t>(cols) * k);
+    std::vector<float> h_out(static_cast<size_t>(rows) * cols, -7777.0f);
+    fill_q8(h_q8, rows, blocks_per_row);
+    fill_rhs(h_rhs, k, cols);
+
+    device_buffer<hrx_block_q8_0_wmma_vk128_lhs> d_q8(h_q8.size());
+    device_buffer<float> d_rhs(h_rhs.size());
+    device_buffer<float> d_out(h_out.size());
+    HIP_CHECK(hipMemcpy(d_q8.ptr, h_q8.data(), h_q8.size() * sizeof(h_q8[0]), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(d_rhs.ptr, h_rhs.data(), h_rhs.size() * sizeof(h_rhs[0]), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(d_out.ptr, h_out.data(), h_out.size() * sizeof(h_out[0]), hipMemcpyHostToDevice));
+
+    const char * variants[] = {
+        "raw",
+        "raw-asm",
+        "raw-asm-inout",
+        "scalaracc-raw-asm",
+        "rawfrag-raw-asm",
+        "baseoff-raw-asm",
+    };
+    for (const char * variant : variants) {
+        const double avg_ms = time_bm128_direct192_output_variant(
+            variant, d_q8.ptr, d_rhs.ptr, d_out.ptr, rows, cols, k, reps);
+        std::printf(
+            "bm128-direct192-output-timing variant=%s rows=%d cols=%d k=%d reps=%d avg_ms=%g avg_us=%g\n",
+            variant,
+            rows,
+            cols,
+            k,
+            reps,
+            avg_ms,
+            avg_ms * 1000.0);
+    }
+    return 0;
+}
+
+static int run_bm128_direct192_output_timing_suite(int k) {
+    int status = 0;
+    status |= run_bm128_direct192_output_timing_case(128, 128, k, 80);
+    status |= run_bm128_direct192_output_timing_case(128, 33, k, 80);
+    status |= run_bm128_direct192_output_timing_case(4096, 512, k, 12);
+    status |= run_bm128_direct192_output_timing_case(4096, 513, k, 12);
+    return status;
+}
+
 static int run_dump_case(const std::string & mode, const std::string & dump_dir) {
     if (mode != "phase96-bm128-abcopy" && mode != "phase96-bm128-abcopy-backendlike") {
         std::fprintf(stderr, "--dump-dir replay currently supports phase96-bm128-abcopy modes only\n");
@@ -9472,6 +9580,13 @@ int main(int argc, char ** argv) {
             status |= run_motif192_wmma_k2_realdata_fullk_accparkfull8_timing_suite(
                 "motif192-wmma-k2-realdata-fullk-accparkfull8-timing",
                 true);
+        }
+    }
+    if (mode == "bm128-direct192-output-timing") {
+        if (custom_shape) {
+            status |= run_bm128_direct192_output_timing_case(custom_rows, custom_cols, k, 50);
+        } else {
+            status |= run_bm128_direct192_output_timing_suite(k);
         }
     }
     if (mode == "motif192-wmma-direct-address") {
