@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_wmma_vk64_medium_kloop_direct64_fixture_correctness",
+      "date": "2026-06-20",
+      "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-kloop-direct64",
+      "env": "standalone CMake/Ninja-built gfx1151 HIP bench diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/coopstore-k2-kloop-direct64-4d694bdcc-20260620-024120/",
+      "control_artifact": "cache/hrxv1/gfx1151/coopstore-k2-kloop-direct64-4d694bdcc-20260620-024120/unrolled-direct64-control.log and cache/hrxv1/gfx1151/coopstore-k2-kloop-direct64-4d694bdcc-20260620-024120/unrolled-mixed96-control.log",
+      "static_artifact": "cache/hrxv1/gfx1151/coopstore-k2-kloop-direct64-4d694bdcc-20260620-024120/readobj-notes.txt and cache/hrxv1/gfx1151/coopstore-k2-kloop-direct64-4d694bdcc-20260620-024120/isa-counts.txt",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract embedded .hip_fatbin unbundled to cache/hrxv1/gfx1151/coopstore-k2-kloop-direct64-4d694bdcc-20260620-024120/static/fatbin/gfx1151.o",
+      "reason": "The Q6_K VK64 medium kloop direct64 standalone fixture isolates the previous kloop mixed96 failure by removing the staged halfword/writeback path entirely. It keeps the same non-unrolled two-iteration source loop and direct-stores only computed accumulator groups 0..15. This proves the corruption is not caused by mixed96 staged output interaction. In the same CMake/Ninja-built binary, --mode=wmma-lds-k2-kloop-direct64 failed 10/10 repeated runs with the same group=3 slot=0 lane=0 first_bad pattern as kloop mixed96, while unrolled --mode=wmma-lds-k2-direct64 passed 5/5 with bad=0 and unrolled --mode=wmma-lds-k2-mixed96 passed 5/5 with bad=0. Static evidence makes this a semantic/lane-contract rejection rather than a pressure rejection: kloop direct64 is wave64, LDS=16384, SGPR=14, VGPR=138, private_segment=0, no spills, 16 visible WMMA, 32 ds_load-class instructions, 16 ds_store-class instructions, 64 buffer_store_b32, 7 s_waitcnt, and no scratch. Do not use the non-unrolled kloop source spelling as a Q6 medium schedule primitive even when its static surface resembles RADV. The next Q6 medium attempt should use explicit unrolled/template phase spelling or a lower-level WMMA operand primitive to reduce live range without relying on a dynamic source loop."
+    },
+    {
       "id": "q6_k_wmma_vk64_medium_kloop_mixed96_fixture_correctness",
       "date": "2026-06-20",
       "route": "hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-kloop-mixed96",
