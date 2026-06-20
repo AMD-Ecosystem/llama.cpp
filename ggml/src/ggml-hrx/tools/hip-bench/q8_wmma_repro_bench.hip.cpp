@@ -8659,7 +8659,7 @@ int main(int argc, char ** argv) {
                 "motif192-wmma-k2-realdata-fullk-directwait-waitload-address",
                 custom_rows,
                 custom_cols,
-                4096,
+                k,
                 true);
         } else {
             status |= run_motif192_wmma_k2_realdata_fullk_suite<false>(
@@ -8673,7 +8673,7 @@ int main(int argc, char ** argv) {
                 "motif192-wmma-k2-realdata-fullk-phase8-directwait-waitload-address",
                 custom_rows,
                 custom_cols,
-                4096,
+                k,
                 true);
         } else {
             status |= run_motif192_wmma_k2_realdata_fullk_phase8_suite(
@@ -8687,7 +8687,7 @@ int main(int argc, char ** argv) {
                 "motif192-wmma-k2-realdata-fullk-phase8seq-directwait-waitload-address",
                 custom_rows,
                 custom_cols,
-                4096,
+                k,
                 true);
         } else {
             status |= run_motif192_wmma_k2_realdata_fullk_phase8seq_suite(
@@ -8701,7 +8701,7 @@ int main(int argc, char ** argv) {
                 "motif192-wmma-k2-realdata-fullk-streamfrag-directwait-waitload-address",
                 custom_rows,
                 custom_cols,
-                4096,
+                k,
                 true);
         } else {
             status |= run_motif192_wmma_k2_realdata_fullk_streamfrag_suite(
@@ -8715,7 +8715,7 @@ int main(int argc, char ** argv) {
                 "motif192-wmma-k2-realdata-fullk-ktilefrag-directwait-waitload-address",
                 custom_rows,
                 custom_cols,
-                4096,
+                k,
                 true);
         } else {
             status |= run_motif192_wmma_k2_realdata_fullk_ktilefrag_suite(
@@ -8729,7 +8729,7 @@ int main(int argc, char ** argv) {
                 "motif192-wmma-k2-realdata-fullk-ktilefrag-storebatch-directwait-waitload-address",
                 custom_rows,
                 custom_cols,
-                4096,
+                k,
                 true,
                 true);
         } else {
@@ -8745,7 +8745,7 @@ int main(int argc, char ** argv) {
                 "motif192-wmma-k2-realdata-fullk-ktilefrag-storebatch4-directwait-waitload-address",
                 custom_rows,
                 custom_cols,
-                4096,
+                k,
                 true,
                 false,
                 true);
@@ -8763,7 +8763,7 @@ int main(int argc, char ** argv) {
                 "motif192-wmma-k2-realdata-fullk-colpairfrag-directwait-waitload-address",
                 custom_rows,
                 custom_cols,
-                4096,
+                k,
                 true);
         } else {
             status |= run_motif192_wmma_k2_realdata_fullk_colpairfrag_suite(
@@ -8777,7 +8777,7 @@ int main(int argc, char ** argv) {
                 "motif192-wmma-k2-realdata-fullk-accpark-directwait-waitload-address",
                 custom_rows,
                 custom_cols,
-                4096,
+                k,
                 true);
         } else {
             status |= run_motif192_wmma_k2_realdata_fullk_accpark_suite(
@@ -8791,7 +8791,7 @@ int main(int argc, char ** argv) {
                 "motif192-wmma-k2-realdata-fullk-accparkfull8-directwait-waitload-address",
                 custom_rows,
                 custom_cols,
-                4096,
+                k,
                 true);
         } else {
             status |= run_motif192_wmma_k2_realdata_fullk_accparkfull8_suite(

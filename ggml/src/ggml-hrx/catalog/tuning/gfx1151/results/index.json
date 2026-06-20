@@ -3,6 +3,36 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_motif192_k2_accparkfull8_customk_recheck",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-realdata-fullk-accparkfull8-customk-20260620-114615/",
+      "tool": "hrx-hip-bench-q8-wmma-repro --mode motif192-wmma-k2-realdata-fullk-accparkfull8-directwait-waitload-address with custom --k support, plus compare_amdgcn_isa.py and analyze_amdgcn_issue_window.py",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro with embedded gfx1151 HIP object extracted to the artifact static directory",
+      "status": "rejected_fixture_correctness_and_compile_contract",
+      "candidate_gate": {
+        "production_target": "Llama 3.1 8B Q8_0 p512/p513 dense prompt rows where a RADV-like motif192 direct-WMMA route would need lower accumulator pressure without replaying the K loop",
+        "baseline_command": "Q8_0 Vulkan oracle matmul_q8_0_f32_f16acc_aligned_l hash 0x72d309e22f889977 and prior correctness-clean KTileFrag/motif192 fixtures",
+        "variant_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro --mode motif192-wmma-k2-realdata-fullk-accparkfull8-directwait-waitload-address --rows 128 --cols 128 --k 32, --k 4096, and full suite",
+        "same_runner_comparison_method": "not run; rejected before timing because one-BK correctness and static resource contract both fail",
+        "route_trace_path": "not applicable; standalone CMake/Ninja-built fixture only",
+        "scheduler_trace_path": "static/compare-radv.md and static/issue-compare.md in the artifact",
+        "focused_cpu_reference": "fixture sampled CPU-reference checks for k32, k4096, exact, odd, p512, and p513 rows; all failed with finite wrong values",
+        "compile_report_path": "static/compare-radv.md",
+        "target_listing_path": "static/accparkfull8.symbol.amdgcn.txt",
+        "prior_art_schedule_source": "Q8_0 Vulkan large oracle plus earlier motif192 K2 KTileFrag and AccPark fixture evidence",
+        "promotion_rule": "reject accumulator parking as a Q8 large-route parity direction unless a future lower-level primitive proves exact one-BK correctness and no-spill codegen before any catalog transfer"
+      },
+      "findings": [
+        "fixed the Q8 repro harness so custom --k is honored by the real-data full-K fixture family, allowing one-BK separation from full-loop lifetime effects",
+        "AccParkFull8 failed the one-BK k32 row with bad=1264, nan=0, inf=0, sentinel=0, proving the full-vector LDS parking/loadback spelling is not a valid representation of the WMMA accumulator state",
+        "the full-loop and suite rows also failed: k4096 128x128 bad=2392, suite 128x128 bad=2640, 128x129 bad=3217, 129x128 bad=2877, 1024x512 bad=305, 4096x512 bad=798, and 4096x513 bad=901",
+        "static extraction reports wave64, SGPR=90, VGPR=256, LDS=55296, private_segment=388, and 152 VGPR spills",
+        "visible opcode counts are 32 WMMA, 64 ds_load_b64, 194 ds_store_b16, 288 ds_load_u16_d16, and 192 buffer_store_b32, so matching the output-store count does not make the accumulator parking contract valid",
+        "issue-window analysis shows two 16-WMMA regions and zero immediate loads before the first final wait, while RADV has one 32-WMMA region and 59 immediate LDS loads before lgkmcnt(51)",
+        "decision: do not continue the accumulator-parking family. Future Q8 parity work should move to a lower-level accumulator/store-ownership primitive or a materially different dataflow."
+      ]
+    },
+    {
       "id": "q5_k_large_existing_family_static_matrix",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q5-large-existing-family-static-matrix-20260620-110552/",
