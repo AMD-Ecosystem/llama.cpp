@@ -3,6 +3,15 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_motif192_accpark_fixture_correctness",
+      "date": "2026-06-20",
+      "route": "hrx-hip-bench-q8-wmma-repro --mode=motif192-wmma-k2-realdata-fullk-accpark-directwait-waitload-address and --mode=motif192-wmma-k2-realdata-fullk-accparkfull8-directwait-waitload-address",
+      "env": "standalone CMake/Ninja-built gfx1151 HIP bench diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/q8-motif192-accpark-probe-c3a0256a6-20260620-032420/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro",
+      "reason": "The Q8_0 motif192 accpark probes tested a lower-live continuation after the accepted direct192/raw and inline-WMMA standalone contracts: keep the real Q8/RHS full-k data path and RADV-like motif192 direct+staged output shape, but park eight-accumulator groups in LDS between K tiles so HIP C++ does not need all live accumulators in registers across the full k loop. Both probes were built through the normal CMake/Ninja hrx-hip-bench-q8-wmma-repro target at commit c3a0256a6. Reject before timing or catalog transfer because correctness fails on the smallest full/odd shapes with finite wrong values and no memory-fault signature. accpark failed rows=128 cols=128 with bad=5009/8192 checked, max_abs=2059.88, nmse=46.4604, and first_bad row=6 col=0 actual=1.14441e-05 expected=27.5211; rows=128 cols=33 failed bad=2992/4224, max_abs=98.0263. accparkfull8 also failed rows=128 cols=128 with bad=2644/8192, max_abs=13086.7, and rows=128 cols=33 with bad=2634/4224. Large p512/p513 smoke rows likewise failed with hundreds to thousands of finite bad samples. Accumulator parking through LDS does not preserve the real Q8 WMMA lane/writeback contract, so the next Q8 large-route probe should target a different lower-level store/lane primitive rather than parking selected-half accumulators through shared memory."
+    },
+    {
       "id": "q6_k_wmma_vk64_padded44_ring96_k2_kloop_typedstage_perf",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_typedstage_f16acc_wg256_f32",

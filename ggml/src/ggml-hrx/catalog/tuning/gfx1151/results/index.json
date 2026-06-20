@@ -3,6 +3,20 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_motif192_accpark_fixture_rejected_correctness",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-motif192-accpark-probe-c3a0256a6-20260620-032420/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro",
+      "status": "rejected_fixture_correctness_accumulator_parking_breaks_real_q8_contract",
+      "findings": [
+        "the probe targeted Llama 3.1 8B Q8_0 p512/fa1 large-route parity work by testing whether the real-Q8 motif192 direct/staged output contract can lower live accumulator pressure by parking eight accumulator groups through LDS between K tiles",
+        "both accpark and accparkfull8 built through the normal CMake/Ninja hrx-hip-bench-q8-wmma-repro target and used real synthetic-backend-like Q8/RHS data with k=4096",
+        "accpark failed rows=128 cols=128 with bad=5009/8192 checked, max_abs=2059.88, nmse=46.4604, and first_bad row=6 col=0 actual=1.14441e-05 expected=27.5211; rows=128 cols=33 failed bad=2992/4224",
+        "accparkfull8 also failed rows=128 cols=128 with bad=2644/8192, max_abs=13086.7, and rows=128 cols=33 with bad=2634/4224",
+        "there were no NaNs, infinities, or sentinel outputs in the small-shape failures, so this is a semantic lane/writeback-contract rejection rather than a memory-fault or timeout; do not transfer this accumulator-parking strategy into the production Q8 catalog"
+      ]
+    },
+    {
       "id": "q6_k_wmma_vk64_ring96_k2_kloop_typedstage_correct_but_slow",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-k2-kloop-typedstage-focused-218a34349-20260620-031732/",
