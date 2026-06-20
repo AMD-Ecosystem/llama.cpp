@@ -3,6 +3,35 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_prompt_mmq64x128_splitqsum_bk2_wave64_bfull32_compile_contract",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-packed-bfull32-compile-20260620-105336/",
+      "tool": "tools/vulkan-oracle/compare_amdgcn_isa.py and tools/vulkan-oracle/summarize_hsaco_family.py against the current Llama 3.1 8B Q8_0 p512 RADV oracle",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_mmq64x128_splitqsum_bk2_wave64_bfull32.hsaco",
+      "status": "rejected_compile_contract_spills_same_first_hot_signature",
+      "candidate_gate": {
+        "production_target": "Llama 3.1 8B Q8_0 p512 dense prompt rows where current HRX packed-Q8_1 split-qsum remains behind Vulkan",
+        "baseline_command": "current accepted packed-Q8_1 split-qsum BK2 wave64 HSACO built by CMake/Ninja",
+        "variant_command": "CMake/Ninja-built compile-contract kernel mul_mat_vec_q8_0_mmq64x128_splitqsum_bk2_wave64_bfull32.hip.cpp",
+        "same_runner_comparison_method": "not run; rejected by static resource and issue-window evidence before route selection or timing",
+        "route_trace_path": "not applicable; no runtime route selector was added",
+        "scheduler_trace_path": "compare-radv.md and family-summary.md in the artifact",
+        "focused_cpu_reference": "not run; compile-contract probe only",
+        "compile_report_path": "CMake/Ninja-built HSACO metadata in compare-radv.md",
+        "target_listing_path": "CMake/Ninja-built HSACO ISA in compare-radv.md",
+        "prior_art_schedule_source": "current Q8_0 Vulkan oracle matmul_q8_0_f32_f16acc_aligned_l hash 0x72d309e22f889977 plus accepted packed-Q8_1 BK2 wave64 route",
+        "promotion_rule": "reject unless the candidate moves the first-hot load/wait signature without spills; future Q8 packed-path attempts should use a lower-live spelling or pivot dataflow"
+      },
+      "findings": [
+        "added a compile-only sibling of the accepted BM64/BN128/BK2/wave64 packed Q8_0 route that preloads all 32 owned B-cache values for each iqs stripe before computing qpack and issuing dot products",
+        "the probe built through the normal CMake/Ninja HSACO path and was deliberately not wired into runtime selection",
+        "static resource metadata fails the compile contract: wave64, SGPR=52, VGPR=192, LDS=8704, scratch=336 bytes, and 115 VGPR spills",
+        "the first-dot schedule signature did not move versus the accepted BK2+wave64 parent or the prior chunk32 rejection: 28 pre-hot loads, 21 load-like ops immediately before the final wait, final pre-hot lgkmcnt(16), 60 hot dot ops, and zero load-like ops after the first hot op",
+        "family summary shows bfull32 is effectively the same static shape as chunk32: both spill with scratch=336 and VGPR spills=115 while preserving the same 28/21/16/60/0 first-hot signature",
+        "decision: reject before focused correctness or timing. Whole-owned-column B preload in this HIP C++ packed route only widens live range; it does not mechanically approach the RADV oracle issue window"
+      ]
+    },
+    {
       "id": "q8_0_packed_hsaco_family_current_hotdelta",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8_0-packed-hsaco-family-current-hotdelta-20260620-104921/",
