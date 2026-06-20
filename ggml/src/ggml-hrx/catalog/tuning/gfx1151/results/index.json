@@ -2696,6 +2696,38 @@
         "remaining deltas are still production-relevant: buffer_store_b32 remains 64 versus RADV 96, LDS is 15360 versus RADV 11264, and VGPR is 170 versus RADV 144",
         "decision: keep as a diagnostic. The next Q6 source axis should solve selected-output 96-store ownership without duplicating stores or writing invalid OPSEL halves, or should test whether this mixedstage primitive has any focused timing value before deeper catalog transfer."
       ]
+    },
+    {
+      "id": "q6_k_vk64_padladder_mixedstage_timing_rejected",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q6-ring96-mixedstage-timing-65a9cd35e-20260620-153918/",
+      "related_artifacts": [
+        "cache/hrxv1/gfx1151/q6-ring96-kloop-asm-copyab-padladder-mixedstage-repro-a283708cb-20260620-153034/",
+        "cache/hrxv1/gfx1151/vulkan-oracle-qwen3-30b-q6k-p33-fa1-20260618-061613/"
+      ],
+      "status": "rejected_same_runner_timing_regression",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K p33 dense prompt rows where HRX VK64 still needs RADV-medium writeback convergence",
+        "baseline_command": "HRX_Q6_REPRO_TIMING_ITERS=5000 build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q6-wmma-vk64-repro",
+        "variant_command": "HRX_Q6_REPRO_TIMING_ITERS=5000 build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q6-wmma-ring96-kloop-asm-padladder-mixedstage-repro",
+        "same_runner_comparison_method": "same repro harness, same process shape list, sequential runs, host_avg_us used because hipEventElapsedTime returned invalid negative elapsed values on this ROCm/gfx1151 stack",
+        "route_trace_path": "not applicable; benchmark-only diagnostic and no runtime selector changed",
+        "scheduler_trace_path": "q6-ring96-kloop-asm-copyab-padladder-mixedstage-repro-a283708cb-20260620-153034/static/compare-radv.md and static/issue-window.md",
+        "focused_cpu_reference": "all three binaries exited status 0; deterministic rows retained nan=0, inf=0, sentinel=0",
+        "compile_report_path": "q6-ring96-kloop-asm-copyab-padladder-mixedstage-repro-a283708cb-20260620-153034/static/readelf-notes.txt",
+        "target_listing_path": "q6-ring96-kloop-asm-copyab-padladder-mixedstage-repro-a283708cb-20260620-153034/static/objdump.txt",
+        "prior_art_schedule_source": "RADV Q6_K medium oracle matmul_q6_k_f32_f16acc_aligned_m hash 0x6eebdfb4c3043b23 plus the accepted VK64 Q6 repro",
+        "promotion_rule": "do not transfer the padladder faststage or mixedstage selected-half surface into a catalog route. Future Q6 work should only continue if it changes the output ownership or LDS footprint enough to explain a path toward RADV's 96-store, lower-resource schedule."
+      },
+      "findings": [
+        "added opt-in HRX_Q6_REPRO_TIMING_ITERS timing to the shared Q6 repro harness; the default correctness-only behavior is unchanged",
+        "validated accepted VK64, padladder-faststage, and padladder-mixedstage through CMake/Ninja-built binaries",
+        "HIP event elapsed timing was unusable on this stack and is reported as nan by the harness when negative; host_avg_us is the comparison field for this artifact",
+        "on the representative 64x33 k3584 small row, accepted VK64 measured 311.52 us host_avg_us, faststage 416.352 us, and mixedstage 415.597 us",
+        "on 64x64 k3584 small, accepted VK64 measured 354.337 us, faststage 458.746 us, and mixedstage 457.766 us",
+        "on 128x33 k3584 small, accepted VK64 measured 311.958 us, faststage 415.703 us, and mixedstage 416.14 us",
+        "mixedstage is marginally better than faststage on two rows but remains about 1.30x-1.34x slower than the accepted VK64 repro, so the selected-half staged writeback surface is rejected for route transfer"
+      ]
     }
   ]
 }

@@ -1,6 +1,7 @@
 #include <hip/hip_runtime.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -133,6 +134,26 @@ struct case_config {
     int scale_mask;
     float rhs_scale;
 };
+
+static int timing_iters() {
+    static int cached = -1;
+    if (cached >= 0) {
+        return cached;
+    }
+    cached = 0;
+    const char * value = std::getenv("HRX_Q6_REPRO_TIMING_ITERS");
+    if (!value || value[0] == '\0') {
+        return cached;
+    }
+    char * end = nullptr;
+    const long parsed = std::strtol(value, &end, 10);
+    if (end == value || parsed <= 0 || parsed > 1000000) {
+        std::fprintf(stderr, "Ignoring invalid HRX_Q6_REPRO_TIMING_ITERS=%s\n", value);
+        return cached;
+    }
+    cached = static_cast<int>(parsed);
+    return cached;
+}
 
 static float rhs_value(int col, int k_index, const case_config & config) {
     const int raw = (col * 19 + k_index * 7 + 23) & 63;
@@ -366,6 +387,70 @@ static int run_case(int rows, int cols, int k, const case_config & config) {
         first = false;
     }
     std::printf("\n");
+
+    const int iters = timing_iters();
+    if (iters > 0) {
+        constexpr int warmup_iters = 5;
+        for (int iter = 0; iter < warmup_iters; ++iter) {
+            hipLaunchKernelGGL(
+                HRX_Q6_REPRO_KERNEL,
+                grid,
+                dim3(256, 1, 1),
+                0,
+                0,
+                d_src0.ptr,
+                d_src1.ptr,
+                d_dst.ptr,
+                static_cast<long long>(k),
+                static_cast<long long>(rows),
+                static_cast<long long>(cols));
+            HIP_CHECK(hipGetLastError());
+        }
+        HIP_CHECK(hipDeviceSynchronize());
+
+        hipEvent_t start = nullptr;
+        hipEvent_t stop = nullptr;
+        HIP_CHECK(hipEventCreate(&start));
+        HIP_CHECK(hipEventCreate(&stop));
+        const auto host_start = std::chrono::steady_clock::now();
+        HIP_CHECK(hipEventRecord(start, 0));
+        for (int iter = 0; iter < iters; ++iter) {
+            hipLaunchKernelGGL(
+                HRX_Q6_REPRO_KERNEL,
+                grid,
+                dim3(256, 1, 1),
+                0,
+                0,
+                d_src0.ptr,
+                d_src1.ptr,
+                d_dst.ptr,
+                static_cast<long long>(k),
+                static_cast<long long>(rows),
+                static_cast<long long>(cols));
+            HIP_CHECK(hipGetLastError());
+        }
+        HIP_CHECK(hipEventRecord(stop, 0));
+        HIP_CHECK(hipEventSynchronize(stop));
+        const auto host_stop = std::chrono::steady_clock::now();
+        float elapsed_ms = 0.0f;
+        HIP_CHECK(hipEventElapsedTime(&elapsed_ms, start, stop));
+        HIP_CHECK(hipEventDestroy(start));
+        HIP_CHECK(hipEventDestroy(stop));
+        const double hip_avg_us = elapsed_ms >= 0.0f ?
+            static_cast<double>(elapsed_ms) * 1000.0 / static_cast<double>(iters) : NAN;
+        const double host_elapsed_ms = std::chrono::duration<double, std::milli>(host_stop - host_start).count();
+        std::printf(
+            "%s timing profile=%s rows=%d cols=%d k=%d iters=%d hip_avg_us=%g host_avg_us=%g\n",
+            HRX_Q6_REPRO_LABEL,
+            config.name,
+            rows,
+            cols,
+            k,
+            iters,
+            hip_avg_us,
+            host_elapsed_ms * 1000.0 / static_cast<double>(iters));
+    }
+
     return (nan_count == 0 && inf_count == 0 && sentinel_count == 0) ? 0 : 1;
 }
 
