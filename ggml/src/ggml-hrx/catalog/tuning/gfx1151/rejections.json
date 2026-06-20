@@ -3,6 +3,18 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_direct_wmma_vk128_packstage_asmwmma_motif192_k2_ktilefrag_realdata_perf",
+      "date": "2026-06-19",
+      "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_ktilefrag_bufferstore_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_ASMWMMA_MOTIF192_K2_KTILEFRAG_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-ktilefrag-focused-20260619-180304/",
+      "standalone_prior_artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-realdata-fullk-ktilefrag-20260619-175606/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-ktilefrag-focused-20260619-180304/static/summary.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_ktilefrag_bufferstore_wg256.hsaco",
+      "perf_artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-ktilefrag-focused-20260619-180304/perf-p512-compare.md and cache/hrxv1/gfx1151/q8-motif192-k2-ktilefrag-focused-20260619-180304/perf-p513-compare.md",
+      "reason": "This opt-in real-data catalog transfer ports the KTileFrag K2 repro into the production Q8_0 direct-WMMA catalog ABI. The standalone prior brackets the successful middle point between spilling full-K fragment retention and serialized StreamFrag: load one K tile's four A plus four B fragments at a time, issue that tile's 16 WMMA updates with delayed waits 12/8/4/0, then repeat for the second K tile. The prior passed aligned, odd-column, odd-row, wide, and tail rows and beat the spilling full-K fixture on same-runner timing, including about 0.65x-0.68x full-K time on 4096x512/4096x513. The catalog transfer built through CMake/Ninja and preserved the desired no-spill static surface: wave64, SGPR=56, VGPR=212, LDS=22528, private_segment=0, 64 ds_load_b64, 32 v_wmma_f16_16x16x16_f16, 128 ds_store_b16, 128 ds_load_u16_d16, and 192 buffer_store_b32. Focused CPU-reference gates passed for p33, p512, and p513. Route traces proved p33 stayed on existing narrow packed-Q8_1 routes, while p512 and p513 selected this provider only for ffn_out, ffn_gate, and result_output; Vcur/Qcur stayed on the current packed-Q8_1 split-qsum provider. Reject for promotion on same-runner focused timing against the current default: p512 regressed 1.272x total, with selected rows ffn_gate 1.289x slower, ffn_out 1.414x slower, and result_output 1.263x slower; p513 regressed 1.335x total, with selected rows ffn_gate 1.374x slower, ffn_out 1.370x slower, and result_output 1.339x slower. Keep this route opt-in only as evidence that the HIP compiler can preserve a no-spill delayed-wait direct-WMMA schedule if fragment lifetime is scoped per K tile. The remaining Q8 parity path likely needs either the packed-Q8_1 dataflow improved toward the Vulkan large family, or a lower-level cooperative-matrix store/load primitive beyond this direct-WMMA Q8_0 F32-RHS family."
+    },
+    {
       "id": "q8_0_direct_wmma_vk128_packstage_asmwmma_motif192_k2_streamfrag_realdata_perf",
       "date": "2026-06-19",
       "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_streamfrag_bufferstore_f16acc_wg256_f32",

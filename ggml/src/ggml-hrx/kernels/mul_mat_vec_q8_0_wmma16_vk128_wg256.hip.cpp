@@ -94,6 +94,10 @@
 #define HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STREAMFRAG_K2 0
 #endif
 
+#ifndef HRX_Q8_0_WMMA_VK128_W64_B64GROUP_KTILEFRAG_K2
+#define HRX_Q8_0_WMMA_VK128_W64_B64GROUP_KTILEFRAG_K2 0
+#endif
+
 #ifndef HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT_K2_RAW
 #define HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT_K2_RAW 0
 #endif
@@ -2016,7 +2020,37 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
 #pragma unroll
             for (int k_tile = 0; k_tile < 2; ++k_tile) {
                 hrx_q8_0_wmma_vk128_half16_vec a_frag[4];
-#if HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STREAMFRAG_K2
+#if HRX_Q8_0_WMMA_VK128_W64_B64GROUP_KTILEFRAG_K2
+#pragma unroll
+                for (int row_sub = 0; row_sub < 4; ++row_sub) {
+                    a_frag[row_sub] =
+                        hrx_q8_0_wmma_vk128_load_a_frag_w64_b64asm_nowait(
+                            sh_a_lds, wave_row * 4 + row_sub, k_tile, lane);
+                }
+                hrx_q8_0_wmma_vk128_half16_vec b_frag[4];
+#pragma unroll
+                for (int col_sub = 0; col_sub < 4; ++col_sub) {
+                    b_frag[col_sub] =
+                        hrx_q8_0_wmma_vk128_load_b_frag_w64_b64asm_nowait(
+                            sh_b_lds, wave_col * 4 + col_sub, k_tile, lane);
+                }
+                HRX_Q8_0_WMMA_VK128_WAIT_WMMA(0, a_frag[0], b_frag[0], 12);
+                HRX_Q8_0_WMMA_VK128_WAIT_WMMA(1, a_frag[1], b_frag[0], 12);
+                HRX_Q8_0_WMMA_VK128_WAIT_WMMA(2, a_frag[2], b_frag[0], 12);
+                HRX_Q8_0_WMMA_VK128_WAIT_WMMA(3, a_frag[3], b_frag[0], 12);
+                HRX_Q8_0_WMMA_VK128_WAIT_WMMA(4, a_frag[0], b_frag[1], 8);
+                HRX_Q8_0_WMMA_VK128_WAIT_WMMA(5, a_frag[1], b_frag[1], 8);
+                HRX_Q8_0_WMMA_VK128_WAIT_WMMA(6, a_frag[2], b_frag[1], 8);
+                HRX_Q8_0_WMMA_VK128_WAIT_WMMA(7, a_frag[3], b_frag[1], 8);
+                HRX_Q8_0_WMMA_VK128_WAIT_WMMA(8, a_frag[0], b_frag[2], 4);
+                HRX_Q8_0_WMMA_VK128_WAIT_WMMA(9, a_frag[1], b_frag[2], 4);
+                HRX_Q8_0_WMMA_VK128_WAIT_WMMA(10, a_frag[2], b_frag[2], 4);
+                HRX_Q8_0_WMMA_VK128_WAIT_WMMA(11, a_frag[3], b_frag[2], 4);
+                HRX_Q8_0_WMMA_VK128_WAIT_WMMA(12, a_frag[0], b_frag[3], 0);
+                HRX_Q8_0_WMMA_VK128_WAIT_WMMA(13, a_frag[1], b_frag[3], 0);
+                HRX_Q8_0_WMMA_VK128_WAIT_WMMA(14, a_frag[2], b_frag[3], 0);
+                HRX_Q8_0_WMMA_VK128_WAIT_WMMA(15, a_frag[3], b_frag[3], 0);
+#elif HRX_Q8_0_WMMA_VK128_W64_B64GROUP_STREAMFRAG_K2
                 HRX_Q8_0_WMMA_VK128_STREAMFRAG_WMMA(0, 0, 0);
                 HRX_Q8_0_WMMA_VK128_STREAMFRAG_WMMA(1, 1, 0);
                 HRX_Q8_0_WMMA_VK128_STREAMFRAG_WMMA(2, 2, 0);
