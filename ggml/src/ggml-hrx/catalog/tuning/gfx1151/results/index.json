@@ -3,6 +3,38 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_bm128_streamk_output_repro_prior",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-bm128-streamk-output-probe-20260620-101951/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-bm128-streamk-output-probe-20260620-101951/summary.md and static/issue-compare.md",
+      "tool": "hrx-hip-bench-q8-wmma-repro --mode=bm128-streamk-raw-asm-output",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro with embedded .hip_fatbin extracted to cache/hrxv1/gfx1151/q8-bm128-streamk-output-probe-20260620-101951/static/device.hsaco",
+      "status": "accepted_standalone_prior_not_production_route",
+      "candidate_gate": {
+        "production_target": "Llama 3.1 8B Q8_0 prompt p512 large rows plus p33/p513 odd-tail coverage before any route promotion",
+        "baseline_command": "current packed-Q8_1 split-qsum focused test-backend-ops rows from cache/hrxv1/gfx1151/q8_0-wmma-vk128-b64group-focused-20260618-032500/test-files/",
+        "variant_command": "standalone fixture build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro --mode=bm128-streamk-raw-asm-output",
+        "same_runner_comparison_method": "not yet promoted to runtime route; next step is opt-in catalog transfer followed by focused same-runner backend-op timing versus split-qsum",
+        "route_trace_path": "pending route-local transfer; standalone fixture only",
+        "scheduler_trace_path": "static/issue-compare.md",
+        "focused_cpu_reference": "p128, p33, p512, p513 at k4096 plus 4096x512x14336 passed with bad=0",
+        "compile_report_path": "static/device-readobj-notes.txt and static/streamk-raw-asm.symbol.amdgcn.txt",
+        "target_listing_path": "static/device-objdump.amdgcn.txt",
+        "prior_art_schedule_source": "RADV Q8_0 large oracle matmul_q8_0_f32_f16acc_aligned_l hash 0x72d309e22f889977 plus coopstore direct64/direct192 no-spill store priors",
+        "promotion_rule": "do not promote from this fixture; transfer stream-K operand lifetime into an opt-in catalog route, require p33/p512/p513 correctness and route traces, no spills, then same-runner timing win over current split-qsum"
+      },
+      "findings": [
+        "added benchmark-only BM128/BN128 stream-K real-output Q8 WMMA modes that keep one K-tile A/B fragment bank live at a time while preserving direct global output stores",
+        "builtin stream-K control remains semantically invalid at production width: p512 bad=6740 and p513 bad=6811 with NaNs, so raw builtin WMMA is still not a valid route template",
+        "stream-K inline asm and +v inout variants passed p128, p33, p512, and p513 at k4096 with bad=0 and max_abs <= 0.00268994; stream-K A+B-copy also passed the same rows",
+        "stream-K inline asm additionally passed the high-K production-style row 4096x512x14336 with bad=0 and max_abs=0.00796381; a 128256x512x4096 full CPU-reference fixture was stopped as too expensive for this harness",
+        "static extraction from the rebuilt executable's embedded gfx1151 HSACO shows stream-K asm wave64 SGPR=50 VGPR=211 LDS=20480 private=0 and no spills, versus direct192 asm VGPR=256 private=64 and 15 VGPR spills",
+        "stream-K asm-inout has the same no-spill resource shape as stream-K asm; stream-K A+B-copy also remains no-spill at VGPR=223",
+        "issue-window analysis shows stream-K still differs from RADV: HIP emits two 16-WMMA regions with final lgkmcnt(0), while RADV large has one 32-WMMA region with 59 immediate LDS loads before lgkmcnt(51)",
+        "decision: accept as a route-transfer prior, not a production route. The next Q8 catalog candidate should port this stream-K operand lifetime under opt-in and gate focused p33/p512/p513 correctness, route selection, static no-spill, and same-runner timing against current split-qsum"
+      ]
+    },
+    {
       "id": "q8_0_phase96_bm128_asm_fixture_prior",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-phase96-bm128-asm-fixture-20260620-095753/",
