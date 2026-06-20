@@ -3,6 +3,19 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_k_wmma_vk64_radv96_accslots_lane_contract",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/coopstore-vk64-radv96-accslots-f053b49ae-20260620-013913/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract",
+      "status": "diagnosed_ring12_accumulator_slot_contract_failure",
+      "findings": [
+        "control mode wmma-lds-vk64-radv96 still passes with bad=0",
+        "accdirect mode still fails only group 5, all selected even output slots 0..3 across all 64 lanes",
+        "accslots mode exposes all eight accumulator elements for direct groups 0..7 and fails 2816 elements: odd slots fail for most groups, and selected even slots also fail for source groups 3, 4, and 5",
+        "do not transfer another Q6 RING96 catalog route until the standalone fixture has a correctness-proven accumulator lane/slot contract"
+      ]
+    },
+    {
       "id": "q6_k_wmma_vk64_radv96_fragment_copy_fixture",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/coopstore-vk64-radv96-accdirect-copy-20260619-224152/",

@@ -130,6 +130,16 @@ static __device__ __forceinline__ void coopstore_probe_raw_store_acc(
     coopstore_probe_raw_store_value(rsrc, group, slot, lane, static_cast<float>(acc[slot * 2u]));
 }
 
+static __device__ __forceinline__ void coopstore_probe_raw_store_acc_element(
+        __amdgpu_buffer_rsrc_t rsrc,
+        unsigned int group,
+        unsigned int slot,
+        unsigned int lane,
+        coopstore_probe_half8_vec acc,
+        unsigned int element) {
+    coopstore_probe_raw_store_value(rsrc, group, slot, lane, static_cast<float>(acc[element]));
+}
+
 static __device__ __forceinline__ void coopstore_probe_ds_store_u16(
         __attribute__((address_space(3))) uint16_t * ptr,
         uint32_t value) {
@@ -511,6 +521,28 @@ void coopstore_probe_branch192(
     coopstore_probe_raw_store_acc(rsrc, (GROUP_ID), 1u, lane, acc[(GROUP_ID)]); \
     coopstore_probe_raw_store_acc(rsrc, (GROUP_ID), 2u, lane, acc[(GROUP_ID)]); \
     coopstore_probe_raw_store_acc(rsrc, (GROUP_ID), 3u, lane, acc[(GROUP_ID)]); \
+} while (0)
+
+#define HRX_COOPSTORE_STORE_ACC_ELEMENT(OUT_GROUP_ID, SLOT_ID, SRC_GROUP_ID, ELEMENT_ID) \
+    coopstore_probe_raw_store_acc_element( \
+        rsrc, (OUT_GROUP_ID), (SLOT_ID), lane, acc[(SRC_GROUP_ID)], (ELEMENT_ID))
+
+#define HRX_COOPSTORE_STORE_ACC_SLOTS_GROUP(SRC_GROUP_ID) do { \
+    HRX_COOPSTORE_STORE_ACC_ELEMENT((SRC_GROUP_ID), 0u, (SRC_GROUP_ID), 0u); \
+    HRX_COOPSTORE_STORE_ACC_ELEMENT((SRC_GROUP_ID), 1u, (SRC_GROUP_ID), 1u); \
+    HRX_COOPSTORE_STORE_ACC_ELEMENT((SRC_GROUP_ID), 2u, (SRC_GROUP_ID), 2u); \
+    HRX_COOPSTORE_STORE_ACC_ELEMENT((SRC_GROUP_ID), 3u, (SRC_GROUP_ID), 3u); \
+    HRX_COOPSTORE_STORE_ACC_ELEMENT((SRC_GROUP_ID) + 8u, 0u, (SRC_GROUP_ID), 4u); \
+    HRX_COOPSTORE_STORE_ACC_ELEMENT((SRC_GROUP_ID) + 8u, 1u, (SRC_GROUP_ID), 5u); \
+    HRX_COOPSTORE_STORE_ACC_ELEMENT((SRC_GROUP_ID) + 8u, 2u, (SRC_GROUP_ID), 6u); \
+    HRX_COOPSTORE_STORE_ACC_ELEMENT((SRC_GROUP_ID) + 8u, 3u, (SRC_GROUP_ID), 7u); \
+} while (0)
+
+#define HRX_COOPSTORE_ACC_SLOTS_GROUPS_0_7() do { \
+    HRX_COOPSTORE_STORE_ACC_SLOTS_GROUP(0u); HRX_COOPSTORE_STORE_ACC_SLOTS_GROUP(1u); \
+    HRX_COOPSTORE_STORE_ACC_SLOTS_GROUP(2u); HRX_COOPSTORE_STORE_ACC_SLOTS_GROUP(3u); \
+    HRX_COOPSTORE_STORE_ACC_SLOTS_GROUP(4u); HRX_COOPSTORE_STORE_ACC_SLOTS_GROUP(5u); \
+    HRX_COOPSTORE_STORE_ACC_SLOTS_GROUP(6u); HRX_COOPSTORE_STORE_ACC_SLOTS_GROUP(7u); \
 } while (0)
 
 #define HRX_COOPSTORE_ACC_GROUPS_0_7() do { \
@@ -1194,6 +1226,31 @@ void coopstore_probe_wmma_lds_vk64_radv96_accdirect(float * dst, unsigned long l
     __syncthreads();
 }
 
+extern "C" __global__ __launch_bounds__(256, 1)
+void coopstore_probe_wmma_lds_vk64_radv96_accslots(float * dst, unsigned long long extent, unsigned int flags) {
+    __shared__ uint64_t sh_frag[4 * 64 * 4];
+    const unsigned int tid = __builtin_amdgcn_workitem_id_x();
+    const unsigned int lane = tid & 63u;
+    const __amdgpu_buffer_rsrc_t rsrc = coopstore_probe_make_rsrc(dst, extent, flags);
+
+    if (tid < 64u) {
+        coopstore_probe_init_lds_fragments4(sh_frag, lane);
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+
+    if (tid < 64u) {
+        const __attribute__((address_space(3))) uint64_t * lds =
+            (const __attribute__((address_space(3))) uint64_t *) sh_frag;
+        coopstore_probe_half8_vec acc[16];
+        coopstore_probe_zero_acc(acc);
+        coopstore_probe_accumulate_wmma_from_lds_ring12(lds, lane, acc);
+        HRX_COOPSTORE_ACC_SLOTS_GROUPS_0_7();
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+}
+
 template <bool copy_a, bool copy_b>
 __global__ __launch_bounds__(256, 1)
 void coopstore_probe_wmma_lds_vk64_radv96_accdirect_copy(float * dst, unsigned long long extent, unsigned int flags) {
@@ -1747,6 +1804,9 @@ void coopstore_probe_wmma_lds_k2_direct64(float * dst, unsigned long long extent
 #undef HRX_COOPSTORE_ACC_GROUPS_0_15
 #undef HRX_COOPSTORE_ACC_GROUPS_8_15
 #undef HRX_COOPSTORE_ACC_GROUPS_0_7
+#undef HRX_COOPSTORE_ACC_SLOTS_GROUPS_0_7
+#undef HRX_COOPSTORE_STORE_ACC_SLOTS_GROUP
+#undef HRX_COOPSTORE_STORE_ACC_ELEMENT
 #undef HRX_COOPSTORE_RADV_MOTIF_GROUPS_0_15
 #undef HRX_COOPSTORE_RADV_MOTIF_GROUP
 #undef HRX_COOPSTORE_STORE_ACC_GROUP
@@ -1819,7 +1879,7 @@ static options parse_options(int argc, char ** argv) {
             opts.flags = parse_u32(argv[i] + 8);
         } else {
             std::fprintf(stderr,
-                "usage: %s [--mode=linear64|linear128|linear192|branch192|radv-mixed96|radv-mixed192|wmma-radv-mixed96|wmma-radv-mixed192|wmma-lds-radv-mixed96|wmma-lds-radv-mixed192|wmma-lds-k2-radv-mixed192|wmma-lds-k2-radv-motif192|wmma-lds-k2-stagefirst-mixed192|wmma-lds-k2-mixed96|wmma-lds-vk64-radv96|wmma-lds-vk64-radv96-accdirect|wmma-lds-vk64-radv96-accdirect-copya|wmma-lds-vk64-radv96-accdirect-copyb|wmma-lds-vk64-radv96-accdirect-copyab|wmma-lds-k2-mixed128|wmma-lds-k2-mixed128-padded32|wmma-lds-k2-mixed160-lo|wmma-lds-k2-mixed160-hi|wmma-lds-k2-mixed160-lo-tight|wmma-lds-k2-mixed160-hi-tight|wmma-lds-k2-stage96-accsink|wmma-lds-k2-mixed160-linearstage|wmma-lds-k2-mixed160-splitstage|wmma-lds-k2-direct160-raw|wmma-lds-k2-direct192-raw|wmma-lds-k2-direct64] [--group=N] [--flags=0x31004000]\n",
+                "usage: %s [--mode=linear64|linear128|linear192|branch192|radv-mixed96|radv-mixed192|wmma-radv-mixed96|wmma-radv-mixed192|wmma-lds-radv-mixed96|wmma-lds-radv-mixed192|wmma-lds-k2-radv-mixed192|wmma-lds-k2-radv-motif192|wmma-lds-k2-stagefirst-mixed192|wmma-lds-k2-mixed96|wmma-lds-vk64-radv96|wmma-lds-vk64-radv96-accdirect|wmma-lds-vk64-radv96-accslots|wmma-lds-vk64-radv96-accdirect-copya|wmma-lds-vk64-radv96-accdirect-copyb|wmma-lds-vk64-radv96-accdirect-copyab|wmma-lds-k2-mixed128|wmma-lds-k2-mixed128-padded32|wmma-lds-k2-mixed160-lo|wmma-lds-k2-mixed160-hi|wmma-lds-k2-mixed160-lo-tight|wmma-lds-k2-mixed160-hi-tight|wmma-lds-k2-stage96-accsink|wmma-lds-k2-mixed160-linearstage|wmma-lds-k2-mixed160-splitstage|wmma-lds-k2-direct160-raw|wmma-lds-k2-direct192-raw|wmma-lds-k2-direct64] [--group=N] [--flags=0x31004000]\n",
                 argv[0]);
             std::exit(2);
         }
@@ -1856,6 +1916,7 @@ static void compare_outputs(
     size_t nan_count = 0;
     size_t inf_count = 0;
     size_t bad_groups[HRX_COOPSTORE_MAX_GROUPS] = {};
+    size_t bad_group_slots[HRX_COOPSTORE_MAX_GROUPS][HRX_COOPSTORE_VALUES_PER_GROUP] = {};
     for (size_t i = 0; i < actual.size(); ++i) {
         const double diff = std::abs(static_cast<double>(actual[i]) - static_cast<double>(expected[i]));
         if (std::isnan(static_cast<double>(actual[i]))) {
@@ -1872,8 +1933,13 @@ static void compare_outputs(
             }
             const unsigned int bad_group =
                 static_cast<unsigned int>(i / (HRX_COOPSTORE_LANES * HRX_COOPSTORE_VALUES_PER_GROUP));
+            const unsigned int bad_slot =
+                static_cast<unsigned int>((i / HRX_COOPSTORE_LANES) % HRX_COOPSTORE_VALUES_PER_GROUP);
             if (bad_group < HRX_COOPSTORE_MAX_GROUPS) {
                 ++bad_groups[bad_group];
+                if (bad_slot < HRX_COOPSTORE_VALUES_PER_GROUP) {
+                    ++bad_group_slots[bad_group][bad_slot];
+                }
             }
             ++bad_count;
         }
@@ -1901,6 +1967,36 @@ static void compare_outputs(
             }
             std::printf("%u:%zu", group, bad_groups[group]);
             first_group_printed = false;
+        }
+        std::printf(" bad_slots=");
+        bool first_slot_printed = true;
+        for (unsigned int group = 0; group < HRX_COOPSTORE_MAX_GROUPS; ++group) {
+            for (unsigned int slot = 0; slot < HRX_COOPSTORE_VALUES_PER_GROUP; ++slot) {
+                if (bad_group_slots[group][slot] == 0) {
+                    continue;
+                }
+                if (!first_slot_printed) {
+                    std::printf(",");
+                }
+                std::printf("%u/%u:%zu", group, slot, bad_group_slots[group][slot]);
+                first_slot_printed = false;
+            }
+        }
+        std::printf(" samples=");
+        size_t printed = 0;
+        for (size_t i = 0; i < actual.size() && printed < 12; ++i) {
+            const double diff = std::abs(static_cast<double>(actual[i]) - static_cast<double>(expected[i]));
+            if (diff == 0.0) {
+                continue;
+            }
+            const unsigned int lane = i % HRX_COOPSTORE_LANES;
+            const unsigned int slot = (i / HRX_COOPSTORE_LANES) % HRX_COOPSTORE_VALUES_PER_GROUP;
+            const unsigned int group = i / (HRX_COOPSTORE_LANES * HRX_COOPSTORE_VALUES_PER_GROUP);
+            if (printed != 0) {
+                std::printf(",");
+            }
+            std::printf("%u/%u/%u:%g!=%g", group, slot, lane, actual[i], expected[i]);
+            ++printed;
         }
     }
     std::printf("\n");
@@ -2108,6 +2204,18 @@ int main(int argc, char ** argv) {
                     h_expected[coopstore_probe_index(group, slot, lane)] =
                         group < 8u ? coopstore_probe_wmma_ring12_expected_value(group) :
                                      static_cast<float>(coopstore_probe_stage_value(group, slot, lane));
+                }
+            }
+        }
+    } else if (opts.mode == "wmma-lds-vk64-radv96-accslots") {
+        hipLaunchKernelGGL(coopstore_probe_wmma_lds_vk64_radv96_accslots, dim3(1), dim3(256), 0, 0,
+            d_out.ptr, byte_extent, opts.flags);
+        for (unsigned int group = 0; group < 16u; ++group) {
+            const unsigned int src_group = group < 8u ? group : group - 8u;
+            for (unsigned int slot = 0; slot < HRX_COOPSTORE_VALUES_PER_GROUP; ++slot) {
+                for (unsigned int lane = 0; lane < HRX_COOPSTORE_LANES; ++lane) {
+                    h_expected[coopstore_probe_index(group, slot, lane)] =
+                        coopstore_probe_wmma_ring12_expected_value(src_group);
                 }
             }
         }
