@@ -3,6 +3,22 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_motif192_k2_splitstage_fulltile_compile_contract",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-splitstage-fulltile-compile-20260620-085900/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-splitstage-fulltile-compile-20260620-085900/hsaco-summary.md and cache/hrxv1/gfx1151/q8-motif192-k2-splitstage-fulltile-compile-20260620-085900/issue-window.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_splitstage_fulltile_bufferstore_wg256.hsaco",
+      "status": "rejected_compile_contract_fulltile_reduces_sgpr_not_vgpr_spills",
+      "findings": [
+        "added a CMake/Ninja-built full-tile sibling for the Q8_0 motif192 K2 splitstage compile contract and taught motif192 staged drain stores to honor HRX_Q8_0_WMMA_VK128_ASSUME_FULL_TILES",
+        "the full-tile axis materially reduced scalar/control pressure versus the guarded splitstage probe: SGPR 106 -> 25, SGPR spills 44 -> 0, instruction count 2617 -> 1404, branch-class ops 208 -> 7, and wait-class ops 80 -> 71",
+        "the vector live-range failure remains: wave64, VGPR=256, LDS=22528, scratch=60 bytes, and 14 VGPR spills; reject before runtime correctness or timing",
+        "issue-window comparison shows one 32-WMMA region and final pre-WMMA lgkmcnt(51), but immediate LDS loads before that wait are 47, matching the prior directwait raw16/fulltile compile contract and still below RADV's 59",
+        "visible opcode surface is 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 96 ds_store_b16, 96 ds_load_u16_d16, 160 buffer_store_b32, 71 wait-class ops, and 5 barriers",
+        "this closes the simple control-reduction followup to splitstage. The scalar branch/control problem is fixable, but the remaining Q8 parity blocker is the VGPR live surface of the route-local staged writeback plus accumulator ownership; next work should reduce resident accumulator/output groups or move below this HIP C++ staged-drain spelling."
+      ]
+    },
+    {
       "id": "q8_0_motif192_k2_splitstage_compile_contract",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-splitstage-compile-20260620-085538/",

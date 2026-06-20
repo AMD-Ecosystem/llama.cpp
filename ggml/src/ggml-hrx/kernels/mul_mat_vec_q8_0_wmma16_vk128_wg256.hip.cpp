@@ -1548,9 +1548,13 @@ static __device__ __forceinline__ void hrx_q8_0_wmma_vk128_motif192_stage_load_s
 #if HRX_Q8_0_WMMA_VK128_W64_MOTIF192_WAIT_LOAD
     asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
 #endif
+#if HRX_Q8_0_WMMA_VK128_ASSUME_FULL_TILES
+    hrx_q8_0_wmma_vk128_buffer_store_f32(dst_rsrc, col * rows_stride + row, static_cast<float>(value));
+#else
     if (row < rows && col < cols) {
         hrx_q8_0_wmma_vk128_buffer_store_f32(dst_rsrc, col * rows_stride + row, static_cast<float>(value));
     }
+#endif
 }
 
 #define HRX_Q8_0_WMMA_VK128_MOTIF192_RAW_STORE_GROUP(GROUP_ID) do { \
