@@ -12954,6 +12954,182 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_acopy_asmwmma_bufferstore_phase0_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_acopy_asmwmma_bufferstore_phase0_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_directwait_acopy_asmwmma_bufferstore_phase0_wg256",
+    "artifact_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_directwait_acopy_asmwmma_bufferstore_phase0_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_acopy_asmwmma_bufferstore_phase0_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 110,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q8_0_prompt_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_acopy_asmwmma_bufferstore_phase0_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q8_0 x F32 -> F32 MUL_MAT",
+      "k_multiple": 32,
+      "win_domain": "rows >= 8192 || k >= 8192",
+      "cols_min": 128,
+      "selector_gate": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_BM128PHASE96_DIRECTWAIT_ACOPY_ASMWMMA_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "prior_delta": "BM128-specific direct-wait transfer with A-fragment materialization. This keeps the specialized BM128 phase/store contract, preserves the delayed wait ladder, and adds the A-only materialization boundary from the correctness-passing BM128 A-copy route. Phase0 computes and stores output groups 0..7 and must be launched with phase1."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_acopy_asmwmma_bufferstore_phase0_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "opt_in_probe_requires_focused_gate",
+      "selection": "Opt-in only. Added after the no-copy BM128 direct-wait probes selected correctly but failed p512/p513 CPU-reference, while the all-wait BM128 A-copy route passed correctness but was too slow. This probe must pass static HSACO inspection and focused p33/p512/p513 CPU-reference/route gates before timing or model-level promotion."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
+    "id": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_acopy_asmwmma_bufferstore_phase1_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_acopy_asmwmma_bufferstore_phase1_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_directwait_acopy_asmwmma_bufferstore_phase1_wg256",
+    "artifact_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_directwait_acopy_asmwmma_bufferstore_phase1_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_acopy_asmwmma_bufferstore_phase1_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 110,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q8_0_prompt_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_acopy_asmwmma_bufferstore_phase1_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q8_0 x F32 -> F32 MUL_MAT",
+      "k_multiple": 32,
+      "win_domain": "rows >= 8192 || k >= 8192",
+      "cols_min": 128,
+      "selector_gate": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_BM128PHASE96_DIRECTWAIT_ACOPY_ASMWMMA_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "prior_delta": "BM128-specific direct-wait transfer with A-fragment materialization. This keeps the specialized BM128 phase/store contract, preserves the delayed wait ladder, and adds the A-only materialization boundary from the correctness-passing BM128 A-copy route. Phase1 computes and stores output groups 8..15 and must be launched with phase0."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_acopy_asmwmma_bufferstore_phase1_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "opt_in_probe_requires_focused_gate",
+      "selection": "Opt-in only. Added after the no-copy BM128 direct-wait probes selected correctly but failed p512/p513 CPU-reference, while the all-wait BM128 A-copy route passed correctness but was too slow. This probe must pass static HSACO inspection and focused p33/p512/p513 CPU-reference/route gates before timing or model-level promotion."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
+    "id": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_bcopy_asmwmma_bufferstore_phase0_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_bcopy_asmwmma_bufferstore_phase0_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_directwait_bcopy_asmwmma_bufferstore_phase0_wg256",
+    "artifact_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_directwait_bcopy_asmwmma_bufferstore_phase0_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_bcopy_asmwmma_bufferstore_phase0_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 110,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q8_0_prompt_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_bcopy_asmwmma_bufferstore_phase0_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q8_0 x F32 -> F32 MUL_MAT",
+      "k_multiple": 32,
+      "win_domain": "rows >= 8192 || k >= 8192",
+      "cols_min": 128,
+      "selector_gate": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_BM128PHASE96_DIRECTWAIT_BCOPY_ASMWMMA_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "prior_delta": "BM128-specific direct-wait transfer with B-fragment materialization. This keeps the specialized BM128 phase/store contract, preserves the delayed wait ladder, and tests the B-only materialization boundary suggested by the standalone fragment-copy diagnostic. Phase0 computes and stores output groups 0..7 and must be launched with phase1."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_bcopy_asmwmma_bufferstore_phase0_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "opt_in_probe_requires_focused_gate",
+      "selection": "Opt-in only. Added after the no-copy BM128 direct-wait probes selected correctly but failed p512/p513 CPU-reference, while standalone fragment-copy diagnostics implicated B-operand materialization and selected-half writeback. This probe must pass static HSACO inspection and focused p33/p512/p513 CPU-reference/route gates before timing or model-level promotion."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
+    "id": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_bcopy_asmwmma_bufferstore_phase1_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_bcopy_asmwmma_bufferstore_phase1_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_directwait_bcopy_asmwmma_bufferstore_phase1_wg256",
+    "artifact_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_bm128phase96_directwait_bcopy_asmwmma_bufferstore_phase1_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_bcopy_asmwmma_bufferstore_phase1_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 110,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q8_0_prompt_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_bcopy_asmwmma_bufferstore_phase1_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q8_0 x F32 -> F32 MUL_MAT",
+      "k_multiple": 32,
+      "win_domain": "rows >= 8192 || k >= 8192",
+      "cols_min": 128,
+      "selector_gate": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_BM128PHASE96_DIRECTWAIT_BCOPY_ASMWMMA_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "prior_delta": "BM128-specific direct-wait transfer with B-fragment materialization. This keeps the specialized BM128 phase/store contract, preserves the delayed wait ladder, and tests the B-only materialization boundary suggested by the standalone fragment-copy diagnostic. Phase1 computes and stores output groups 8..15 and must be launched with phase0."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_bcopy_asmwmma_bufferstore_phase1_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "opt_in_probe_requires_focused_gate",
+      "selection": "Opt-in only. Added after the no-copy BM128 direct-wait probes selected correctly but failed p512/p513 CPU-reference, while standalone fragment-copy diagnostics implicated B-operand materialization and selected-half writeback. This probe must pass static HSACO inspection and focused p33/p512/p513 CPU-reference/route gates before timing or model-level promotion."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_bready_asmwmma_bufferstore_phase0_f16acc_wg256_f32",
     "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_bm128phase96_directwait_bready_asmwmma_bufferstore_phase0_f16acc_wg256",
     "op": "MUL_MAT",

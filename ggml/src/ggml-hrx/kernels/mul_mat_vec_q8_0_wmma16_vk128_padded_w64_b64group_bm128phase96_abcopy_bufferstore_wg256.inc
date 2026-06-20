@@ -153,6 +153,21 @@ void HRX_Q8_0_WMMA_VK128_BM128_PHASE96_EXPORT(
                     hrx_q8_0_wmma_vk128_load_b_frag_w64_b64asm_nowait(
                         sh_b_lds, wave_col * 4 + col_sub, k_tile, lane);
             }
+#if HRX_Q8_0_WMMA_VK128_BM128_PHASE96_DIRECT_WAIT || HRX_Q8_0_WMMA_VK128_BM128_PHASE96_DIRECT_WAIT_BREADY
+#if HRX_Q8_0_WMMA_VK128_BM128_PHASE96_COPY_A
+#pragma unroll
+            for (int row_sub = 0; row_sub < 4; ++row_sub) {
+                a_frag[row_sub] = hrx_q8_0_wmma_vk128_copy_frag(a_frag[row_sub]);
+            }
+#endif
+#if HRX_Q8_0_WMMA_VK128_BM128_PHASE96_COPY_B
+#pragma unroll
+            for (int col_delta = 0; col_delta < COL_COUNT; ++col_delta) {
+                const int col_sub = COL_START + col_delta;
+                b_frag[col_sub] = hrx_q8_0_wmma_vk128_copy_frag(b_frag[col_sub]);
+            }
+#endif
+#endif
 #if HRX_Q8_0_WMMA_VK128_BM128_PHASE96_DIRECT_WAIT_BREADY
 #if HRX_Q8_0_WMMA_VK128_BM128_PHASE96_COL_COUNT != 2
 #error "BM128 phase96 B-ready direct-wait probe expects exactly two output columns"
