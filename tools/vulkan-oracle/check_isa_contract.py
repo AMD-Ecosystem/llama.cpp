@@ -18,8 +18,32 @@ def parse_limit(value):
     return name, limit
 
 
+def parse_score_limit(value):
+    if "=" not in value:
+        raise argparse.ArgumentTypeError(f"expected SCORE_FIELD=VALUE, got {value!r}")
+    name, raw = value.split("=", 1)
+    if not name:
+        raise argparse.ArgumentTypeError(f"empty SCORE_FIELD in {value!r}")
+    try:
+        limit = int(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"VALUE must be an integer in {value!r}") from exc
+    return name, limit
+
+
 def interesting_opcodes(summary):
     return summary.get("interesting_opcodes", {})
+
+
+def event_score(summary, name):
+    return summary.get("event_summary", {}).get(name, {})
+
+
+def score_field(summary, score_name, field):
+    score = event_score(summary, score_name)
+    if not isinstance(score, dict) or field not in score:
+        return None, False
+    return score[field], True
 
 
 def normalized_resources(summary):
@@ -47,6 +71,19 @@ def add_check(checks, kind, name, lhs, rhs, passed, rule):
     })
 
 
+def add_match_score_check(checks, score_name, field, lhs, rhs):
+    lhs_value, lhs_present = score_field(lhs, score_name, field)
+    rhs_value, rhs_present = score_field(rhs, score_name, field)
+    passed = lhs_present and rhs_present and lhs_value == rhs_value
+    add_check(checks, score_name, field, lhs_value, rhs_value, passed, "rhs == lhs")
+
+
+def add_score_max_check(checks, score_name, field, limit, rhs):
+    rhs_value, rhs_present = score_field(rhs, score_name, field)
+    passed = rhs_present and isinstance(rhs_value, int) and rhs_value <= limit
+    add_check(checks, score_name, field, None, rhs_value, passed, f"rhs <= {limit}")
+
+
 def load_compare(path):
     data = json.loads(path.read_text(encoding="utf-8"))
     lhs_key = data.get("lhs_key", "radv")
@@ -68,6 +105,16 @@ def main():
                         metavar="OPCODE=N", help="Require RHS opcode count <= N.")
     parser.add_argument("--rhs-resource-max", type=parse_limit, action="append", default=[],
                         metavar="RESOURCE=N", help="Require normalized RHS resource <= N.")
+    parser.add_argument("--match-wmma-score", action="append", default=[],
+                        metavar="FIELD",
+                        help="Require RHS event_summary.wmma_score FIELD to exactly match RADV/LHS.")
+    parser.add_argument("--match-hot-score", action="append", default=[],
+                        metavar="FIELD",
+                        help="Require RHS event_summary.hot_op_score FIELD to exactly match RADV/LHS.")
+    parser.add_argument("--rhs-wmma-score-max", type=parse_score_limit, action="append", default=[],
+                        metavar="FIELD=N", help="Require RHS event_summary.wmma_score FIELD <= N.")
+    parser.add_argument("--rhs-hot-score-max", type=parse_score_limit, action="append", default=[],
+                        metavar="FIELD=N", help="Require RHS event_summary.hot_op_score FIELD <= N.")
     parser.add_argument("--require-zero-spills", action="store_true",
                         help="Require normalized RHS sgpr_spills and vgpr_spills to be zero.")
     parser.add_argument("--out-json", type=pathlib.Path)
@@ -98,6 +145,18 @@ def main():
         rhs_value = rhs_resources.get(resource)
         passed = isinstance(rhs_value, int) and rhs_value <= limit
         add_check(checks, "resource", resource, None, rhs_value, passed, f"rhs <= {limit}")
+
+    for field in args.match_wmma_score:
+        add_match_score_check(checks, "wmma_score", field, lhs, rhs)
+
+    for field in args.match_hot_score:
+        add_match_score_check(checks, "hot_op_score", field, lhs, rhs)
+
+    for field, limit in args.rhs_wmma_score_max:
+        add_score_max_check(checks, "wmma_score", field, limit, rhs)
+
+    for field, limit in args.rhs_hot_score_max:
+        add_score_max_check(checks, "hot_op_score", field, limit, rhs)
 
     if args.require_zero_spills:
         for resource in ("sgpr_spills", "vgpr_spills"):
