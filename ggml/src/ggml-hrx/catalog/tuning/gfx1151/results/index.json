@@ -3,6 +3,22 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_motif192_k2_splitstage_compile_contract",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-splitstage-compile-20260620-085538/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-splitstage-compile-20260620-085538/hsaco-summary.md and cache/hrxv1/gfx1151/q8-motif192-k2-splitstage-compile-20260620-085538/issue-window.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_splitstage_bufferstore_wg256.hsaco",
+      "status": "rejected_compile_contract_splitstage_spills",
+      "findings": [
+        "added a CMake/Ninja-built compile-contract wrapper for the Q8_0 motif192 K2 splitstage writeback ordering learned from the standalone cooperative-store fixture: direct raw groups 0..15, stage and drain groups 16..31, then reuse the stage window for groups 32..39",
+        "the candidate is deliberately not runtime-selectable; it was rejected statically before focused correctness or model timing because the compile resource contract fails",
+        "issue-window comparison shows the candidate preserves the desired one-region 32-WMMA shape and final pre-WMMA s_waitcnt lgkmcnt(51); pre-hot loads are 64 and immediate LDS loads before the final wait are 48, close to the previous directwait raw16/fulltile compile contract and still short of RADV's 59 immediate LDS loads",
+        "the resource result is worse than the prior directwait raw16/fulltile failure: wave64, SGPR=106, VGPR=256, LDS=22528, scratch=76 bytes, 44 SGPR spills, and 18 VGPR spills",
+        "visible opcode surface is 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 96 ds_store_b16, 96 ds_load_u16_d16, 160 buffer_store_b32, 80 wait-class ops, and 5 barriers",
+        "this closes the direct route-local transfer of the standalone splitstage prior. In the real Q8 catalog ABI, batched staged writeback adds too much scalar/vector live state; the next Q8 parity axis should reduce live output/address state or use a lower-level cooperative writeback primitive rather than adding more staged writeback surface to this HIP C++ spelling."
+      ]
+    },
+    {
       "id": "q8_0_bm128_direct192_asm_inout_output_probe",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-bm128-direct192-asm-inout-output-20260620-084556/",

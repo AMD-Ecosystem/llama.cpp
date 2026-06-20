@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_motif192_k2_splitstage_compile_contract",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_splitstage_bufferstore_f16acc_wg256_f32",
+      "env": "compile-only CMake/Ninja probe; not runtime-selected",
+      "artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-splitstage-compile-20260620-085538/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-splitstage-compile-20260620-085538/hsaco-summary.md and cache/hrxv1/gfx1151/q8-motif192-k2-splitstage-compile-20260620-085538/issue-window.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_splitstage_bufferstore_wg256.hsaco",
+      "reason": "This compile-contract probe tested the direct route-local transfer of the standalone cooperative-store splitstage prior. It adds an explicit motif192 K2 output ordering that raw-stores groups 0..15, stages and drains groups 16..31, then reuses the same LDS stage window for groups 32..39. The kernel is built through the normal CMake/Ninja HSACO path and is deliberately not runtime-selectable. Static issue-window evidence shows the intended local schedule shape is present: one 32-WMMA hot region, final pre-WMMA s_waitcnt lgkmcnt(51), 64 pre-hot loads, and 48 immediate LDS loads before the final wait. Reject before focused correctness or timing because the real Q8 catalog ABI resource contract is worse than the prior directwait raw16/fulltile failure: wave64, SGPR=106, VGPR=256, LDS=22528, scratch=76 bytes, 44 SGPR spills, and 18 VGPR spills. The visible opcode surface is 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 96 ds_store_b16, 96 ds_load_u16_d16, 160 buffer_store_b32, 80 wait-class ops, and 5 barriers. The useful conclusion is that batching the staged writeback preserves the desired WMMA/wait window but adds too much scalar/vector live state once embedded in the production Q8 ABI. The next Q8 large-route attempt should reduce live output/address state or move to a lower-level cooperative writeback primitive rather than adding more staged writeback surface to this HIP C++ spelling."
+    },
+    {
       "id": "q8_0_bm128_direct192_asm_inout_output_probe",
       "date": "2026-06-20",
       "route": "hrx-hip-bench-q8-wmma-repro --mode=bm128-direct192-raw-asm-inout-output",
