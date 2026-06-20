@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_directwait_raw16_fulltile_nostore_compile_contract",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_directwait_raw16_fulltile_nostore_f16acc_wg256_f32",
+      "env": "compile-only CMake/Ninja probe; not runtime-selected",
+      "artifact": "cache/hrxv1/gfx1151/q8-directwait-raw16-fulltile-nostore-compile-20260620-083157/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-directwait-raw16-fulltile-nostore-compile-20260620-083157/hsaco-summary.md and cache/hrxv1/gfx1151/q8-directwait-raw16-fulltile-nostore-compile-20260620-083157/issue-window.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_directwait_raw16_fulltile_nostore_wg256.hsaco",
+      "reason": "This compile-contract probe isolates whether the previous direct-wait raw16 full-tile spill cliff is caused primarily by the final output-store block. It preserves the same motif192 K2 direct-wait issue ladder, raw16 accumulator ownership, full-tile assumptions, packed A/B LDS staging, and inline WMMA spelling, but defines HRX_Q8_0_WMMA_VK128_SKIP_OUTPUT_STORE=1 and is not runtime-selectable. It built through the normal CMake/Ninja HSACO path and preserved the intended issue-window shape: one 32-WMMA hot region, final pre-WMMA s_waitcnt lgkmcnt(51), 67 pre-hot loads, and 47 immediate LDS loads before the final wait. Removing output stores drops visible store ops from 66 to 2, but the static resource contract still fails: wave64, SGPR=22, VGPR=256, LDS=20480, scratch=48 bytes, and 11 VGPR spills. This is only a small improvement over the output-writing directwait raw16 fulltile probe, which had SGPR=24, VGPR=256, scratch=56 bytes, and 13 VGPR spills. Reject before correctness/model gates because the no-store kernel cannot produce valid output and because the compile contract still fails. The conclusion is that the register cliff is dominated by the live two-K operand/accumulator/direct-wait surface, not by final writeback; the next Q8 large-route attempt must reduce live fragment ownership or use a lower-level cooperative operand/writeback primitive rather than another store-only wrapper."
+    },
+    {
       "id": "q8_0_directwait_raw16_fulltile_compile_contract",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_directwait_raw16_fulltile_bufferstore_f16acc_wg256_f32",

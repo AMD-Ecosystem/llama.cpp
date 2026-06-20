@@ -3,6 +3,21 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_directwait_raw16_fulltile_nostore_compile_contract",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-directwait-raw16-fulltile-nostore-compile-20260620-083157/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-directwait-raw16-fulltile-nostore-compile-20260620-083157/hsaco-summary.md and cache/hrxv1/gfx1151/q8-directwait-raw16-fulltile-nostore-compile-20260620-083157/issue-window.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_directwait_raw16_fulltile_nostore_wg256.hsaco",
+      "status": "rejected_compile_contract_spills_persist_without_output_stores",
+      "findings": [
+        "added a CMake/Ninja-built compile-contract wrapper that preserves the direct-wait raw16 full-tile issue ladder but defines HRX_Q8_0_WMMA_VK128_SKIP_OUTPUT_STORE=1 so the final output writeback is elided",
+        "the candidate is deliberately not runtime-selectable and was rejected statically before focused correctness or model timing because it does not write valid output",
+        "issue-window comparison shows the desired one-region 32-WMMA schedule and final pre-WMMA s_waitcnt lgkmcnt(51) are preserved; versus the output-writing directwait raw16/fulltile probe, stores drop from 66 to 2 while pre-hot loads and immediate loads stay at 67 and 47",
+        "resource pressure barely improves: wave64, SGPR=22, VGPR=256, LDS=20480, scratch=48 bytes, and 11 VGPR spills versus SGPR=24, VGPR=256, scratch=56 bytes, and 13 VGPR spills with output stores enabled",
+        "this isolates the cliff to the live fragment/accumulator/direct-wait surface rather than the final output-store block. The next Q8 parity path should reduce the two-K live operand surface or move below HIP C++ source-visible fragment ownership; store-only pivots are unlikely to recover the missing RADV schedule."
+      ]
+    },
+    {
       "id": "q8_0_directwait_raw16_fulltile_compile_contract",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-directwait-raw16-fulltile-compile-20260620-082553/",
