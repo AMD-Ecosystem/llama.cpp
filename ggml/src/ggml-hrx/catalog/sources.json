@@ -395,6 +395,9 @@
   "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_wave4row_wg256": {
     "path": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_wave4row_wg256.hip.cpp"
   },
+  "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_wave4row_batchwait_wg256": {
+    "path": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_wave4row_batchwait_wg256.hip.cpp"
+  },
   "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_wave4row_fast_half_bufferstore_wg256": {
     "path": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_wave4row_fast_half_bufferstore_wg256.hip.cpp"
   },

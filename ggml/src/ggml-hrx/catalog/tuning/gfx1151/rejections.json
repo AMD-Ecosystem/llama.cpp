@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_wmma_vk64_padded44_wave4row_batchwait_perf",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wave4row_batchwait_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_WAVE4ROW_BATCHWAIT_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-wave4row-batchwait-focused-d44824a2d-20260620-012838/",
+      "perf_artifact": "cache/hrxv1/gfx1151/q6-vk64-wave4row-batchwait-perf-d44824a2d-20260620-012920/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-vk64-wave4row-batchwait-static-d44824a2d-20260620-012725/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_wave4row_batchwait_wg256.hsaco",
+      "reason": "The Q6_K VK64 wave4row batch-wait probe transferred the Q5_K batch-wait load-window spelling to the correctness-clean Q6 wave4row route. It preserves BM64/BN64/BK32/WG256/wave64, 11264 bytes LDS, four-wave row-stripe ownership, four live accumulators per wave, direct F32 RHS, and raw buffer stores, while issuing each four-B64 fragment read group before one lgkmcnt wait instead of relying on a single post-load wait. It built through normal CMake/Ninja HSACO generation and selected only under explicit opt-in. Static comparison against the Qwen3 30B Q6_K p33 RADV medium oracle rejects schedule parity: wave64, SGPR=40, VGPR=92, LDS=11264, no spills, 40 ds_load_b64, 36 waitcnt-class ops, and 8 visible WMMA. This preserves the footprint but still misses RADV's 16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 64 ds_store_b16, 96 buffer_store_b32, and final pre-WMMA lgkmcnt=40; the emitted hot window remains only 12 pre-WMMA b64 loads and lgkmcnt=0. Focused p33 CPU-reference passed with route traces selecting this provider for Vcur, ffn_out, and result_output. Same-runner focused timing rejects promotion versus the accepted VK64 default: Q6 focus sum 14300.111 -> 14966.007 us, Vcur 397.506 -> 412.490 us, ffn_out 2233.021 -> 2315.128 us, and result_output 11669.584 -> 12238.390 us. Keep opt-in only. The useful conclusion is that per-fragment batch waits are correct but do not recover the RADV outstanding-load/writeback contract for Q6 p33; the next useful probe needs a different low-level fragment/writeback topology or packed schedule, not another wait-only reshuffle of the 8-WMMA direct route."
+    },
+    {
       "id": "q6_k_wmma_vk64_padded44_wave4row_fast_half_bufferstore_perf",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wave4row_fast_half_bufferstore_f16acc_wg256_f32",
