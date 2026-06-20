@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_wmma_vk64_padded44_wn32_fast_half_bufferstore_perf",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_fast_half_bufferstore_f16acc_wg128_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_WN32_FAST_HALF_BUFFERSTORE_F16ACC_WG128_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-wn32-fast-half-bufferstore-focused-36ea7fa0e-20260619-221112/",
+      "perf_artifact": "cache/hrxv1/gfx1151/q6-vk64-wn32-fast-half-bufferstore-perf-ab-36ea7fa0e-20260619-221151/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-vk64-wn32-fast-half-bufferstore-static-36ea7fa0e-20260619-221131/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_wn32_fast_half_bufferstore_wg128.hsaco",
+      "reason": "The Q6_K VK64 padded44 WN32/WG128 fast-half buffer-store probe tested the next writeback topology axis after the raw buffer-store rejection: preserve corrected two-wave BM64/BN64 WN32 ownership and raw buffer stores, then stage the selected accumulator half through explicit ds_write_b16/ds_read_u16_d16 with a separate dummy-half LDS tile to avoid lane collisions. The route built through normal CMake/Ninja HSACO generation and selected only under the opt-in env. A first same-source attempt using the Q8 selected-offset trick failed p33 correctness with finite ERR around 1.6 because dummy half placement collided with selected row lanes; the corrected separate-dummy-tile layout passed focused CPU-reference p33 and generated p64 rows with route traces selecting this provider. Static comparison against the Qwen3 30B Q6_K p33 RADV medium oracle shows useful partial convergence: 16 v_wmma_f16_16x16x16_f16, wave64, no spills, 64 ds_load_u16_d16, 66 ds_store_b16, and no global stores. It is still not a RADV schedule clone: LDS grows to 13312 bytes versus RADV 11264, buffer_store_b32 remains 32 versus RADV 96, ds_load_b64 is still emitted as 24 ds_load_2addr_b64 rather than RADV's 48 ds_load_b64, s_waitcnt_depctr is 16 versus RADV 2, and final pre-WMMA lgkmcnt is 14 versus RADV 40. Same-runner focused timing rejects promotion: default VK64 total 14318.417 us, fast-half buffer-store total 21592.474 us, with baseline/candidate ratios Vcur 0.544, ffn_out 0.702, and result_output 0.660. Keep opt-in only. The useful conclusion is that semantically safe halfword LDS writeback alone increases work and does not close p33; the next probe must combine RADV-like grouped outstanding LDS loads with a compact, non-colliding 96-buffer-store writeback shape rather than adding post-accumulator staging to the current HIP source."
+    },
+    {
       "id": "q6_k_wmma_vk64_padded44_wn32_bufferstore_perf",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_bufferstore_f16acc_wg128_f32",
