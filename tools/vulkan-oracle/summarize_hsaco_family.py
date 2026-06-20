@@ -37,6 +37,8 @@ def load_hsaco_summary(path, llvm_objdump, llvm_readelf, symbol=None):
     interesting = summary.get("interesting_opcodes", {})
     event_summary = summary.get("event_summary", {})
     hot_score = event_summary.get("hot_op_score", {})
+    wmma_score = event_summary.get("wmma_score", {})
+    store_score = event_summary.get("store_cluster_score", {})
 
     row = {
         "file": str(path),
@@ -49,6 +51,8 @@ def load_hsaco_summary(path, llvm_objdump, llvm_readelf, symbol=None):
         "interesting_opcodes": interesting,
         "hot_opcode": event_summary.get("hot_opcode"),
         "hot_op_score": hot_score,
+        "wmma_score": wmma_score,
+        "store_cluster_score": store_score,
     }
 
     for field, prefixes in OPCODE_FIELDS:
@@ -58,6 +62,111 @@ def load_hsaco_summary(path, llvm_objdump, llvm_readelf, symbol=None):
         )
 
     return row
+
+
+def load_reference_contract(path):
+    if not path:
+        return None
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if "store_cluster_score" in data or "wmma_score" in data:
+        return {
+            "store_cluster_score": data.get("store_cluster_score", {}),
+            "wmma_score": data.get("wmma_score", {}),
+        }
+
+    lhs_key = data.get("lhs_key", "radv")
+    lhs = data.get(lhs_key, {})
+    event_summary = lhs.get("event_summary", {})
+    return {
+        "name": lhs.get("name"),
+        "store_cluster_score": event_summary.get("store_cluster_score", {}),
+        "wmma_score": event_summary.get("wmma_score", {}),
+    }
+
+
+def add_reference_deltas(rows, reference):
+    if not reference:
+        return rows
+
+    ref_store = reference.get("store_cluster_score", {})
+    ref_wmma = reference.get("wmma_score", {})
+    store_fields = (
+        "store_clusters",
+        "store_ops",
+        "vmem_store_ops",
+        "lds_store_ops",
+        "buffer_store_ops",
+        "global_store_ops",
+    )
+    wmma_fields = (
+        "pre_wmma_ds_load_b64",
+        "final_pre_wmma_lgkmcnt",
+        "wmma_in_window",
+    )
+
+    for row in rows:
+        store = row.get("store_cluster_score", {})
+        wmma = row.get("wmma_score", {})
+        store_delta = {}
+        store_gap = 0
+        for field in store_fields:
+            lhs = ref_store.get(field)
+            rhs = store.get(field)
+            if isinstance(lhs, int) and isinstance(rhs, int):
+                delta = rhs - lhs
+                store_delta[field] = delta
+                store_gap += abs(delta)
+            else:
+                store_delta[field] = None
+
+        wmma_delta = {}
+        wmma_gap = 0
+        for field in wmma_fields:
+            lhs = ref_wmma.get(field)
+            rhs = wmma.get(field)
+            if isinstance(lhs, int) and isinstance(rhs, int):
+                delta = rhs - lhs
+                wmma_delta[field] = delta
+                wmma_gap += abs(delta)
+            else:
+                wmma_delta[field] = None
+
+        row["reference_delta"] = {
+            "store": store_delta,
+            "wmma": wmma_delta,
+            "store_gap": store_gap,
+            "wmma_gap": wmma_gap,
+            "total_gap": store_gap + wmma_gap,
+        }
+    return rows
+
+
+def sort_rows(rows, sort_key):
+    if sort_key == "name":
+        return sorted(rows, key=lambda row: row["name"])
+    if sort_key == "store-gap":
+        return sorted(rows, key=lambda row: (
+            row.get("reference_delta", {}).get("store_gap", 10**9),
+            row.get("resources", {}).get("scratch_bytes") or 0,
+            row.get("resources", {}).get("vgpr_spills") or 0,
+            row["name"],
+        ))
+    if sort_key == "total-gap":
+        return sorted(rows, key=lambda row: (
+            row.get("reference_delta", {}).get("total_gap", 10**9),
+            row.get("resources", {}).get("scratch_bytes") or 0,
+            row.get("resources", {}).get("vgpr_spills") or 0,
+            row["name"],
+        ))
+    if sort_key == "resource":
+        return sorted(rows, key=lambda row: (
+            row.get("resources", {}).get("scratch_bytes") or 0,
+            row.get("resources", {}).get("vgpr_spills") or 0,
+            row.get("resources", {}).get("vgpr") or 0,
+            row["name"],
+        ))
+    return rows
 
 
 def parse_hsaco_metadata_all(readelf_lines):
@@ -143,16 +252,30 @@ def render_value(value):
     return f"`{value}`"
 
 
-def write_markdown(path, rows):
+def write_markdown(path, rows, reference=None):
     lines = [
         "# HSACO Family Summary",
         "",
-        "| HSACO | Wave | VGPR | SGPR | LDS | Scratch | VGPR Spills | v_dot | v_wmma | LDS Read | LDS Write | VMEM Load | VMEM Store | Wait | Barrier | Hot Op | Pre-Hot Loads | Final Wait | Hot Window |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: |",
+    ]
+    if reference:
+        lines += [
+            "Reference contract:",
+            "",
+            f"- name: `{reference.get('name') or ''}`",
+            f"- store score: `{json.dumps(reference.get('store_cluster_score', {}), sort_keys=True)}`",
+            f"- WMMA score: `{json.dumps(reference.get('wmma_score', {}), sort_keys=True)}`",
+            "",
+        ]
+    lines += [
+        "| HSACO | Wave | VGPR | SGPR | LDS | Scratch | VGPR Spills | v_dot | v_wmma | LDS Read | LDS Write | VMEM Load | VMEM Store | Store Clusters | Store VMEM | Store LDS | dClusters | dVMEM Store | dLDS Store | Store Gap | WMMA Gap | Total Gap | Wait | Barrier | Hot Op | Pre-Hot Loads | Final Wait | Hot Window |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: |",
     ]
     for row in rows:
         res = row["resources"]
         hot = row.get("hot_op_score", {})
+        store = row.get("store_cluster_score", {})
+        ref_delta = row.get("reference_delta", {})
+        store_delta = ref_delta.get("store", {})
         pre_hot_loads = hot.get("pre_hot_lds_load", 0) + hot.get("pre_hot_vmem_load", 0)
         lines.append(
             "| "
@@ -170,6 +293,15 @@ def write_markdown(path, rows):
                 render_value(row.get("lds_write")),
                 render_value(row.get("vmem_load")),
                 render_value(row.get("vmem_store")),
+                render_value(store.get("store_clusters")),
+                render_value(store.get("vmem_store_ops")),
+                render_value(store.get("lds_store_ops")),
+                render_value(store_delta.get("store_clusters")),
+                render_value(store_delta.get("vmem_store_ops")),
+                render_value(store_delta.get("lds_store_ops")),
+                render_value(ref_delta.get("store_gap")),
+                render_value(ref_delta.get("wmma_gap")),
+                render_value(ref_delta.get("total_gap")),
                 render_value(row.get("s_waitcnt")),
                 render_value(row.get("s_barrier")),
                 f"`{row.get('hot_opcode') or ''}`",
@@ -202,6 +334,10 @@ def main():
     parser.add_argument("--symbol", help="Optional symbol substring to use for every HSACO.")
     parser.add_argument("--llvm-objdump", default="llvm-objdump", type=pathlib.Path)
     parser.add_argument("--llvm-readelf", default="llvm-readelf", type=pathlib.Path)
+    parser.add_argument("--reference-compare-json", type=pathlib.Path,
+                        help="RADV-vs-HSACO compare JSON; uses the LHS event scores as the ranking contract.")
+    parser.add_argument("--sort", choices=("input", "name", "store-gap", "total-gap", "resource"),
+                        default="input")
     parser.add_argument("--out-json", type=pathlib.Path)
     parser.add_argument("--out-md", type=pathlib.Path)
     args = parser.parse_args()
@@ -214,9 +350,14 @@ def main():
         load_hsaco_summary(path, args.llvm_objdump, args.llvm_readelf, args.symbol)
         for path in hsacos
     ]
+    reference = load_reference_contract(args.reference_compare_json)
+    add_reference_deltas(rows, reference)
+    rows = sort_rows(rows, args.sort)
     payload = {
         "hsaco_dir": str(args.hsaco_dir),
         "patterns": args.glob,
+        "reference": reference,
+        "sort": args.sort,
         "count": len(rows),
         "rows": rows,
     }
@@ -225,7 +366,7 @@ def main():
         args.out_json.parent.mkdir(parents=True, exist_ok=True)
         args.out_json.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     if args.out_md:
-        write_markdown(args.out_md, rows)
+        write_markdown(args.out_md, rows, reference)
 
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
