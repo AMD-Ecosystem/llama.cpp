@@ -3,6 +3,39 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "current_e5f41a291_commit_aligned_basket_q6_p33_baseline",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/current-head-e5f41a291-commitaligned/",
+      "focused_artifact": "cache/hrxv1/gfx1151/q6-p33-current-e5f41a291-baseline-20260620-133447/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-p33-current-e5f41a291-baseline-20260620-133447/static/",
+      "tool": "tools/hrxv1_basket_benchmark.py plus focused test-backend-ops and compare_amdgcn_isa.py against the Qwen3 30B Q6_K p33 Vulkan oracle",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_wg256.hsaco",
+      "status": "current_basket_kpi_steady_geomean_0_631x_vulkan_q6_p33_next_boulder",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K p33/fa1 dense prompt rows, especially result_output cols=33, where current HRX is the worst clean same-machine basket row at 0.476x Vulkan",
+        "baseline_command": "python3 tools/hrxv1_basket_benchmark.py --models all --backends hrx,vulkan --repetitions 1 --flash-attn 1 --tag current-head-e5f41a291-commitaligned",
+        "variant_command": "none; current-head KPI and focused baseline capture only",
+        "same_runner_comparison_method": "future candidates must compare focused test-backend-ops perf against q6-p33-current-e5f41a291-baseline-20260620-133447/perf.csv before model-level A/B",
+        "route_trace_path": "q6-p33-current-e5f41a291-baseline-20260620-133447/test.routes.log and perf.routes.log",
+        "scheduler_trace_path": "q6-p33-current-e5f41a291-baseline-20260620-133447/static/compare-radv.md",
+        "focused_cpu_reference": "q6-p33-current-e5f41a291-baseline-20260620-133447/test.csv passed all current p33 focused rows",
+        "compile_report_path": "q6-p33-current-e5f41a291-baseline-20260620-133447/static/readelf-notes.txt",
+        "target_listing_path": "q6-p33-current-e5f41a291-baseline-20260620-133447/static/objdump.amdgcn.txt",
+        "prior_art_schedule_source": "Vulkan oracle matmul_q6_k_f32_f16acc_aligned_m hash 0x6eebdfb4c3043b23 from cache/hrxv1/gfx1151/vulkan-oracle-qwen3-30b-q6k-p33-fa1-20260618-061613/",
+        "promotion_rule": "promote a Q6 p33 candidate only if it passes p33 CPU-reference and route gates, beats this focused result_output cols=33 baseline, preserves p512/p513 policy, and has written schedule evidence explaining the RADV/HRX delta it closes"
+      },
+      "findings": [
+        "after rebuilding HRX and Vulkan, all basket rows reported build commit e5f41a291, HRX rows reported backends=HRX, Vulkan rows reported backends=Vulkan, all statuses were zero, and HRX fallback_lines summed to zero",
+        "the clean current-head basket reports average geomean HRX/Vulkan 0.631x and steady geomean 0.631x",
+        "the worst steady row is Qwen3 30B Q6_K p33 at 86.472 tok/s HRX versus 181.574 tok/s Vulkan, ratio 0.476x, selecting hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_f16acc_wg256_f32 as the top HRX route",
+        "focused current-head p33 test-backend-ops passed CPU-reference rows; focused perf total is 8082.322 us, with result_output cols=33 taking 6081.564 us and dominating the row",
+        "route traces show the p33 Q6 cols=33 rows select hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_f16acc_wg256_f32, while cols=1 rows stay on hrx_mul_mat_vec_q6_k_rows2_cols1_wg32_f32",
+        "static comparison confirms the current HRX route is resource-clean but not the RADV medium schedule family: HRX wave64 SGPR=36, VGPR=59, LDS=11264, no spills, 8 WMMA, 20 LDS reads, 16 global_store_b32, and no buffer_store_b32",
+        "the RADV p33 medium oracle is wave64-equivalent, SGPR=108, VGPR=144, LDS=11264, no spills, with 16 WMMA, 48 pre-WMMA ds_load_b64, final pre-hot lgkmcnt=40, 96 buffer_store_b32, 64 ds_store_b16, and 64 ds_load_u16_d16",
+        "decision: the next parity work should target a Q6 p33 medium-route schedule delta around useful 16-WMMA/48-LDS-load/writeback behavior or a proven alternative that beats the current p33 focused baseline; do not continue selector-only or already rejected ring96/kloop typed-stage variants without a new mechanical delta."
+      ]
+    },
+    {
       "id": "q8_0_motif192_k2_baseoff_raw16_clause4_fulltile_catalog_perf",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-baseoff-raw16-clause4-focused-20260620-132126/",
