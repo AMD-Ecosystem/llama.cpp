@@ -1073,6 +1073,45 @@
         "p513 model A/B is neutral and broader full-column sizes are not proven, so the default is deliberately limited to cols == 512",
         "Other Q4_K p512 models previously benefited from B-quad; this policy is deliberately keyed to rows == 3072 rather than disabling B-quad globally"
       ]
+    },
+    {
+      "id": "q5_dense_prompt_mmql128_bhalf_qwen25coder_p512",
+      "date": "2026-06-20",
+      "status": "accepted_gfx1151_shape_policy",
+      "route": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bhalf_wg256_f32 for Q5_K cols == 512 prompt rows on gfx1151; keep existing narrow and tail policies elsewhere",
+      "env": "default on gfx1151 for Q5_K packed-Q8_1 prompt rows with cols == 512; rollback with GGML_HRX_DISABLE_Q5_K_Q8_1_X4_MMQL128_BHALF_P512_PROMPT=1; broad force with GGML_HRX_ENABLE_Q5_K_Q8_1_X4_MMQL128_BHALF_PROMPT=1",
+      "shape_guard": "Q5_K MUL_MAT prompt, packed Q8_1 x4 RHS, rows % 128 == 0, cols == 512, k % 256 == 0 through the existing variant gate, contiguous tensors, gfx1151 only by default; p33 stays on MMQL64 BK2/B-quad/B-half narrow policy and p513 stays on MMQL128 B-quad tail policy",
+      "prior_art_schedule": "This is an evidence-driven packed-route policy split after the Q5 direct-WMMA VK128 family repeatedly failed to beat the packed MMQL128 path. It preserves MMQL128 BM128/BN128 packed integer-dot dataflow and changes only the B-cache scale/payload footprint using the existing B-half variant.",
+      "focused_artifacts": [
+        "cache/hrxv1/gfx1151/q5-p512-existing-mmql128-sweep-af39e5ecf-20260620-001049/",
+        "cache/hrxv1/gfx1151/q5-p512-bhalf-default-regate-af39e5ecf-20260620-001436/"
+      ],
+      "model_artifacts": [
+        "cache/hrxv1/gfx1151/q5-p512-mmql128-bhalf-model-ab-af39e5ecf-20260620-001239/",
+        "cache/hrxv1/gfx1151/q5-p512-bhalf-default-model-ab-af39e5ecf-20260620-001615/"
+      ],
+      "focused_result": {
+        "p512_existing_variant_sweep": "B-half was best among default, B-half, B-pair, B-quad, and CR on Qwen2.5 Coder Q5_K_M p512 focused rows: 16389.827 us versus default 16914.507 us, ratio 0.969. B-pair and B-quad were flat/regressive; CR was 2.718x default time.",
+        "postedit_p512_default_vs_rollback": "final default selected B-half on the intended p512 rows and measured 16270.776 us versus rollback 17012.774 us, ratio 0.956",
+        "p33_p513_non_steal": "p33 route selection was identical under default and rollback, staying on MMQL64 BK2 B-quad B-half plus rows2 cols8; p513 route selection was identical under default and rollback, staying on MMQL128 B-quad plus rows2 cols8"
+      },
+      "model_result": {
+        "forced_bhalf_qwen25coder_7b_q5km_p512_default_to_bhalf_tok_s": "581.190048 -> 587.769099",
+        "forced_bhalf_qwen25coder_7b_q5km_p512_bhalf_over_default": 1.0113,
+        "postedit_qwen25coder_7b_q5km_p512_rollback_to_default_tok_s": "575.319795 -> 591.028398",
+        "postedit_qwen25coder_7b_q5km_p512_default_over_rollback": 1.0273,
+        "route_switch": "post-edit model route traces switched 620 Q5 dispatches from base MMQL128 to B-half over five repetitions; rows2 cols8, wg32, Q6, and flash-attention routes were unchanged"
+      },
+      "compile_evidence": {
+        "hsaco": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q5_k_q8_1_x4_mmql128_bhalf.hsaco",
+        "kernel": "hrx_mul_mat_vec_q5_k_q8_1_x4_mmql128x128_bhalf_wg256_f32",
+        "source_change": "selector-only policy; existing HSACO"
+      },
+      "promotion_blockers": [
+        "This is a small packed-route policy lift, not a Vulkan parity claim",
+        "The direct-WMMA VK128 family remains rejected for Q5 p512 because it does not beat the packed Q8_1 path despite matching several RADV headline counts",
+        "Broader full-column sizes are not proven by this gate; default is deliberately limited to cols == 512"
+      ]
     }
   ]
 }
