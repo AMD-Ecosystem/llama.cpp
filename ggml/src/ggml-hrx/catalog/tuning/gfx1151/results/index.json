@@ -97,6 +97,38 @@
       ]
     },
     {
+      "id": "q6_k_wmma_vk64_ring96_k2_kloop_asm_copyab_faststage_probe",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q6-ring96-kloop-asm-copyab-faststage-repro-81e567b9b-20260620-145815/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-ring96-kloop-asm-copyab-faststage-static-20260620-145839/",
+      "tool": "CMake/Ninja-built hrx-hip-bench-q6-wmma-ring96-kloop-asm-faststage-repro plus generated gfx1151 HSACO static extraction and compare_amdgcn_isa.py against the Qwen3 30B Q6_K p33 RADV medium oracle",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_faststage_wg256.hsaco",
+      "status": "accepted_synthetic_correctness_probe_not_route_promoted",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K p33 dense prompt medium route; test whether the corrected K-loop copy-A+B path can use the existing fast-half selected output stage for real checked outputs",
+        "baseline_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q6-wmma-ring96-kloop-asm-repro and hrx-hip-bench-q6-wmma-ring96-kloop-asm-sidestore-repro",
+        "variant_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q6-wmma-ring96-kloop-asm-faststage-repro",
+        "same_runner_comparison_method": "synthetic production-ABI Q6 rows compare normal CPU reference and old cross-rotated reference; static HSACO compared against the RADV p33 medium schedule, direct64, and side-store probes",
+        "route_trace_path": "not applicable; standalone repro and CMake-built HSACO only",
+        "scheduler_trace_path": "cache/hrxv1/gfx1151/q6-ring96-kloop-asm-copyab-faststage-static-20260620-145839/compare-radv.md and issue-window.md",
+        "focused_cpu_reference": "small rows 64x33 k256, 64x33 k512, 64x33 k3584, 64x64 k3584, and 128x33 k3584 all had bad_gt_0p25=0 against the normal CPU reference",
+        "compile_report_path": "cache/hrxv1/gfx1151/q6-ring96-kloop-asm-copyab-faststage-static-20260620-145839/readobj-notes.txt",
+        "target_listing_path": "cache/hrxv1/gfx1151/q6-ring96-kloop-asm-copyab-faststage-static-20260620-145839/objdump.txt",
+        "prior_art_schedule_source": "Qwen3 30B Q6_K p33 RADV medium oracle matmul_q6_k_f32_f16acc_aligned_m hash 0x6eebdfb4c3043b23 plus the direct64 and side-store corrected K-loop probes",
+        "promotion_rule": "do not promote from this synthetic probe. A route-facing candidate still needs p33 focused route traces, same-runner timing against H4LOAD, and a static schedule that does not add halfword-stage traffic while retaining only the old 64-store output contract."
+      },
+      "findings": [
+        "added a CMake-built exploratory real-output fast-stage wrapper hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_faststage_f16acc_wg256_f32 and hrx-hip-bench-q6-wmma-ring96-kloop-asm-faststage-repro without adding a runtime selector",
+        "the fast-stage loop writes the checked output tile through hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_fast_half_buffer_selected; deterministic 64x33 k256, 64x33 k512, 64x33 k3584, 64x64 k3584, and 128x33 k3584 rows all passed normal CPU reference with bad_gt_0p25=0",
+        "static metadata from the CMake-built HSACO is wave64, LDS=15360, SGPR=50, VGPR=153, private_segment=0, and no SGPR/VGPR spills",
+        "static opcode counts are 16 v_wmma_f16_16x16x16_f16, 32 ds_load_b64, 128 ds_load_u16_d16, 130 ds_store_b16, 64 buffer_store_b32, 90 s_waitcnt, and 15 s_waitcnt_depctr",
+        "this proves the selected fast-half output helper is semantically usable with the corrected K-loop Q6 ABI, unlike the older non-K2 RING96 correctness failures",
+        "this does not move toward the RADV medium output topology: it doubles the halfword LDS traffic versus the side-store probe but still emits only the old 64 real buffer stores rather than RADV's 96",
+        "the math issue window remains short: RADV has 48 immediate pre-WMMA ds_load_b64 and final pre-WMMA lgkmcnt=40, while this HIP fast-stage probe has 32 immediate pre-WMMA ds_load_b64 and final pre-WMMA lgkmcnt=0",
+        "decision: keep bench-only. The useful next axis is a real 96-store selected-output topology or lower-level cooperative writeback primitive, not routing this 64-store fast-stage variant."
+      ]
+    },
+    {
       "id": "q6_k_wmma_vk64_medium_unrolled_k2_typedstage_mixed96_fixture_prior",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/coopstore-k2-typedstage-mixed96-9e59a04c2-20260620-141031/",
