@@ -149,6 +149,10 @@ def summarize_store_clusters(events, max_store_gap=8):
                 1 for event in store_events
                 if event["opcode"].startswith(("global_store", "flat_store"))
             ),
+            "vmem_store_ops": sum(
+                1 for event in store_events
+                if event["opcode"].startswith(("buffer_store", "global_store", "flat_store"))
+            ),
             "lds_store_ops": sum(
                 1 for event in store_events
                 if event["opcode"].startswith(("ds_store", "ds_write"))
@@ -182,6 +186,7 @@ def summarize_store_cluster_motifs(clusters):
             "store_ops": cluster["store_ops"],
             "buffer_store_ops": cluster["buffer_store_ops"],
             "global_store_ops": cluster["global_store_ops"],
+            "vmem_store_ops": cluster["vmem_store_ops"],
             "lds_store_ops": cluster["lds_store_ops"],
             "lds_load_ops": cluster["lds_load_ops"],
             "vmem_load_ops": cluster["vmem_load_ops"],
@@ -196,6 +201,7 @@ def summarize_store_cluster_motifs(clusters):
             "store_ops_per_cluster": cluster["store_ops"],
             "buffer_store_ops_per_cluster": cluster["buffer_store_ops"],
             "global_store_ops_per_cluster": cluster["global_store_ops"],
+            "vmem_store_ops_per_cluster": cluster["vmem_store_ops"],
             "lds_store_ops_per_cluster": cluster["lds_store_ops"],
             "lds_load_ops_per_cluster": cluster["lds_load_ops"],
             "vmem_load_ops_per_cluster": cluster["vmem_load_ops"],
@@ -223,6 +229,7 @@ def summarize_store_cluster_score(clusters, motifs):
         "store_ops": sum(cluster["store_ops"] for cluster in clusters),
         "buffer_store_ops": sum(cluster["buffer_store_ops"] for cluster in clusters),
         "global_store_ops": sum(cluster["global_store_ops"] for cluster in clusters),
+        "vmem_store_ops": sum(cluster["vmem_store_ops"] for cluster in clusters),
         "lds_store_ops": sum(cluster["lds_store_ops"] for cluster in clusters),
         "lds_load_ops": sum(cluster["lds_load_ops"] for cluster in clusters),
         "vmem_load_ops": sum(cluster["vmem_load_ops"] for cluster in clusters),
@@ -691,8 +698,8 @@ def write_markdown(path, payload):
                 lines += [
                     "Store cluster motifs:",
                     "",
-                    "| Motif | Count | Store Ops | Buffer Stores | Global Stores | LDS Stores | LDS Loads | VMEM Loads | Waits | Hot Ops |",
-                    "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+                    "| Motif | Count | Store Ops | VMEM Stores | Buffer Stores | Global Stores | LDS Stores | LDS Loads | VMEM Loads | Waits | Hot Ops |",
+                    "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
                 ]
                 for index, motif in enumerate(store_motifs[:12], 1):
                     lines.append(
@@ -702,6 +709,7 @@ def write_markdown(path, payload):
                                 str(index),
                                 str(motif["count"]),
                                 str(motif["store_ops_per_cluster"]),
+                                str(motif["vmem_store_ops_per_cluster"]),
                                 str(motif["buffer_store_ops_per_cluster"]),
                                 str(motif["global_store_ops_per_cluster"]),
                                 str(motif["lds_store_ops_per_cluster"]),

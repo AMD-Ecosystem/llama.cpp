@@ -65,6 +65,8 @@ def load_row(path):
     rhs_wmma = event_score(rhs, "wmma_score")
     lhs_hot = event_score(lhs, "hot_op_score")
     rhs_hot = event_score(rhs, "hot_op_score")
+    lhs_store = event_score(lhs, "store_cluster_score")
+    rhs_store = event_score(rhs, "store_cluster_score")
 
     row = {
         "file": str(path),
@@ -79,6 +81,8 @@ def load_row(path):
         "candidate_wmma_score": rhs_wmma,
         "radv_hot_score": lhs_hot,
         "candidate_hot_score": rhs_hot,
+        "radv_store_score": lhs_store,
+        "candidate_store_score": rhs_store,
     }
     return row
 
@@ -87,14 +91,15 @@ def write_markdown(path, rows):
     lines = [
         "# ISA Compare Matrix",
         "",
-        "| Candidate | SGPR | VGPR | LDS | Scratch | Wave | Hot op | WMMA/dot | LDS b64 | d16 loads | LDS stores | Stores | Barriers | Waits | First-window loads | Final lgkmcnt | Hot ops in window |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Candidate | SGPR | VGPR | LDS | Scratch | Wave | Hot op | WMMA/dot | LDS b64 | d16 loads | LDS stores | Stores | Store clusters | VMEM stores | Store LDS stores | Barriers | Waits | First-window loads | Final lgkmcnt | Hot ops in window |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for row in rows:
         res = row["candidate_resources"]
         op = row["candidate_opcodes"]
         hot = row["candidate_hot_score"]
         wmma = row["candidate_wmma_score"]
+        store = row["candidate_store_score"]
         hot_opcodes = hot.get("hot_opcodes_in_window") or {}
         hot_name = next(iter(hot_opcodes), "")
         math_count = op.get("v_wmma_f16_16x16x16_f16", 0) or op.get("v_dot4_i32_iu8", 0)
@@ -130,6 +135,9 @@ def write_markdown(path, rows):
                     fmt(op.get("ds_load_u16_d16", 0)),
                     fmt(op.get("ds_store_b16", 0)),
                     fmt(store_count),
+                    fmt(store.get("store_clusters")),
+                    fmt(store.get("vmem_store_ops")),
+                    fmt(store.get("lds_store_ops")),
                     fmt(op.get("s_barrier", 0)),
                     fmt(op.get("s_waitcnt", 0)),
                     fmt(first_loads),
@@ -145,8 +153,8 @@ def write_markdown(path, rows):
             "",
             "## RADV Reference Rows",
             "",
-            "| Candidate | RADV SGPR | RADV VGPR | RADV LDS | RADV math | RADV LDS b64 | RADV d16 loads | RADV stores | RADV first-window loads | RADV final lgkmcnt | RADV hot ops in window |",
-            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            "| Candidate | RADV SGPR | RADV VGPR | RADV LDS | RADV math | RADV LDS b64 | RADV d16 loads | RADV stores | RADV store clusters | RADV VMEM stores | RADV store LDS stores | RADV first-window loads | RADV final lgkmcnt | RADV hot ops in window |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
     for row in rows:
@@ -154,6 +162,7 @@ def write_markdown(path, rows):
         op = row["radv_opcodes"]
         hot = row["radv_hot_score"]
         wmma = row["radv_wmma_score"]
+        store = row["radv_store_score"]
         math_count = op.get("v_wmma_f16_16x16x16_f16", 0) or op.get("v_dot4_i32_iu8", 0)
         store_count = op.get("buffer_store_b32", 0) or op.get("global_store_b32", 0)
         first_loads = wmma.get("pre_wmma_ds_load_b64") or hot.get("pre_hot_lds_load")
@@ -171,6 +180,9 @@ def write_markdown(path, rows):
                     fmt(op.get("ds_load_b64", 0)),
                     fmt(op.get("ds_load_u16_d16", 0)),
                     fmt(store_count),
+                    fmt(store.get("store_clusters")),
+                    fmt(store.get("vmem_store_ops")),
+                    fmt(store.get("lds_store_ops")),
                     fmt(first_loads),
                     fmt(final_lgkmcnt),
                     fmt(hot_window),
