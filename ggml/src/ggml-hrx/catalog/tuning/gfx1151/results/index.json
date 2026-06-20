@@ -3,6 +3,21 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_large_route_isa_window_summary_after_colsub3_probe",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-isa-window-summary-3c3e41acb-20260620-041115/",
+      "tool": "ggml/src/ggml-hrx/tools/hrx_isa_window_summary.py",
+      "status": "schedule_evidence_no_route_promotion",
+      "findings": [
+        "added a reusable ISA window summarizer for RADV/HIP AMDGCN text dumps and ran it on the Q8_0 large Vulkan oracle plus current CMake/Ninja-built HIP Q8 direct-WMMA HSACOs",
+        "RADV matmul_q8_0_f32_f16acc_aligned_l has 32 v_wmma, 64 ds_load_b64, 128 ds_load_u16_d16, 128 ds_store_b16, 192 buffer_store_b32, 2 barriers, 169 s_waitcnt, 2 s_waitcnt_depctr, and no spills in the existing stats artifact",
+        "the HIP stream-row full-pair diagnostic still matches the main visible RADV store/load opcode contract: 32 v_wmma, 64 ds_load_b64, 128 ds_load_u16_d16, 128 ds_store_b16, 192 buffer_store_b32, and 2 barriers, but it uses diagnostic full-pair writeback with invalid row+16 ownership",
+        "the HIP pack-stage split-selected correctness probe preserves the RADV LDS load/stage surface but has only 128 buffer_store_b32, confirming it is a selected-half route rather than a RADV-equivalent 192-store cooperative writeback",
+        "the HIP stream-row selected probe has only 64 ds_load_b64, no ds_load_u16_d16, no ds_store_b16, and 128 buffer_store_b32; its prior finite CPU-reference failure should not be treated as evidence against the RADV 192-store writeback family",
+        "next Q8 large-route work should not repeat stream-row selected or row-group remaps; the remaining mechanical target is a correctness-proven 192-store/full-output lane ownership primitive, or a lower-level cooperative writeback that preserves the RADV store surface without the invalid row+16 full-pair assumption"
+      ]
+    },
+    {
       "id": "q8_0_wmma_colsub3_selected_stage_neighbor_contract",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-wmma-colsub3-selected-stage-neighbors-83ac04165-20260620-040550/",
