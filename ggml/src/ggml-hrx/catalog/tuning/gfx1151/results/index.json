@@ -99,6 +99,22 @@
       ]
     },
     {
+      "id": "q8_0_bm128_direct192_asm_k14336_contract",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-bm128-direct192-k14336-contract-20260620-continue/",
+      "tool": "hrx-hip-bench-q8-wmma-repro",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro",
+      "status": "accepted_tile_contract_prior_not_production_route",
+      "findings": [
+        "extended the Q8 WMMA repro harness so contract and BM128 contract modes honor custom rows/cols within their single-tile contract surface and accept --k for model-depth checks; oversized custom contract shapes now fail fast instead of aliasing multiple workgroups into one contract buffer",
+        "ran contract-bm128-direct192-raw-asm at k=14336 to match the Llama 3.1 8B Q8_0 production-depth row while keeping the fixture's valid one-tile p128 and p33 surfaces",
+        "raw inline-WMMA passed p128 and odd/narrow p33 at k=14336 with bad=0, nan=0, inf=0, sentinel=0, unexpected=0, and max_abs=0.00796381 for both rows",
+        "the raw HIP builtin control still failed at k=14336, matching the prior k4096 lane-contract diagnosis: p128 had bad=512 max_abs=26.8066 and p33 had bad=256 max_abs=26.8066, first_bad group=16 slot=0 lane=0",
+        "the invalid p512-style custom contract smoke, rows=4096 cols=512 k=14336, now exits 2 with 'custom contract shapes are limited to one 128x128 tile', preventing false full-width conclusions from the tile-local contract buffer",
+        "this strengthens the inline-WMMA B operand/lane prior at production K depth, but it is still not a production route or p512 proof. The next route-facing step must write real output tiles or allocate a per-workgroup contract surface before claiming full p512/p513 coverage."
+      ]
+    },
+    {
       "id": "q8_0_packstage_asmwmma_fast_half_fullpair_compile_contract",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-packstage-asmwmma-fast-half-fullpair-compile-20260620-062855/",
