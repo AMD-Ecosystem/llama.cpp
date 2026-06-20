@@ -12159,6 +12159,50 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_fast_half_fullpair_bufferstore_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_fast_half_fullpair_bufferstore_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_fast_half_fullpair_bufferstore_wg256",
+    "artifact_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_fast_half_fullpair_bufferstore_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_fast_half_fullpair_bufferstore_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 110,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q8_0_prompt_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_fast_half_fullpair_bufferstore_f16acc_wg256_compile_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q8_0 x F32 -> F32 MUL_MAT",
+      "k_multiple": 32,
+      "win_domain": "rows >= 8192 || k >= 8192",
+      "cols_min": 128,
+      "selector_gate": "none; compile-contract probe only",
+      "prior_delta": "Crosses the correctness-clean inline-WMMA B operand contract with the closest tracked RADV-like full-pair fast-half store topology. It preserves VK128 B64GROUP packed A/B LDS staging, 128 ds_store_b16, 128 ds_load_u16_d16, 192 buffer_store_b32, 22528 bytes LDS, and CMake/Ninja HSACO generation while changing only the WMMA spelling to inline v_wmma_f16_16x16x16_f16. Runtime promotion is blocked unless later work repairs the inherited full-pair accumulator/output ownership map."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_fast_half_fullpair_bufferstore_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_compile_contract",
+      "selection": "Not wired into runtime selection. Static artifact cache/hrxv1/gfx1151/q8-packstage-asmwmma-fast-half-fullpair-compile-20260620-062855/ shows the route preserves the RADV-like fullpair opcode/LDS surface without spilling, but compiles to VGPR=212 versus VGPR=196 for the non-asm fullpair control, VGPR=189 for the stream-row fullpair control, and VGPR=192 for the RADV large Q8_0 oracle. Reject before focused backend-op gates because it inherits the known invalid fullpair accumulator/output ownership map and does not improve the static schedule."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_nowait_packstage_bufferstore_f16acc_wg256_f32",
     "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_nowait_packstage_bufferstore_f16acc_wg256",
     "op": "MUL_MAT",
