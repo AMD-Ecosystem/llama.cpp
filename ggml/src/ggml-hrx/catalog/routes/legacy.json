@@ -9125,6 +9125,51 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_h4load_bufferstore_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_h4load_bufferstore_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_h4load_bufferstore_wg256",
+    "artifact_id": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_h4load_bufferstore_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_h4load_bufferstore_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q6_dense_prompt_wmma16x16_vk64_padded44_w64_h4load_bufferstore_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q6_K x F32 -> F32 MUL_MAT",
+      "k_multiple": 256,
+      "rows_min": 16,
+      "cols_min": 16,
+      "cols_max": 64,
+      "requires_env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_H4LOAD_BUFFERSTORE_F16ACC_WG256_PROMPT",
+      "prior_delta": "Qwen3 30B Q6_K p33 Vulkan medium route uses 11264 bytes LDS, 16 WMMA sites, 48 ds_load_b64, 64 ds_load_u16_d16, 64 LDS b16 stores, and 96 buffer stores. This opt-in probe preserves the accepted VK64 padded44 H4LOAD medium route and changes the writeback path to full-tile buffer stores where the tile is in bounds, testing the RADV store-surface delta without changing the default route."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_h4load_bufferstore_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_focused_noise_level",
+      "selection": "Opt-in Q6_K VK64 padded44 H4LOAD plus full-tile buffer-store probe. Static HSACO comparison confirmed that the writeback changed from global stores to 32 buffer_store_b32 ops without spills, but the schedule still emitted only 8 WMMA sites and remained far from RADV's 16-WMMA, 96-buffer-store medium topology. Focused p33 CPU-reference passed and route traces selected the intended provider for cols=33 rows, but timing was only noise-level versus the current default: total 6792.123 -> 6773.449 us and result_output 5949.016 -> 5934.592 us. Keep opt-in diagnostic only; buffer-store writeback alone is not the parity lever."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_groupk2_f16acc_wg256_f32",
     "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_groupk2_f16acc_wg256",
     "op": "MUL_MAT",
