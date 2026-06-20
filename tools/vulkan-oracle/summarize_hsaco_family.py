@@ -73,6 +73,7 @@ def load_reference_contract(path):
         return {
             "store_cluster_score": data.get("store_cluster_score", {}),
             "wmma_score": data.get("wmma_score", {}),
+            "hot_op_score": data.get("hot_op_score", {}),
         }
 
     lhs_key = data.get("lhs_key", "radv")
@@ -82,6 +83,7 @@ def load_reference_contract(path):
         "name": lhs.get("name"),
         "store_cluster_score": event_summary.get("store_cluster_score", {}),
         "wmma_score": event_summary.get("wmma_score", {}),
+        "hot_op_score": event_summary.get("hot_op_score", {}),
     }
 
 
@@ -93,6 +95,7 @@ def add_reference_deltas(rows, reference):
 
     ref_store = reference.get("store_cluster_score", {})
     ref_wmma = reference.get("wmma_score", {})
+    ref_hot = reference.get("hot_op_score", {})
     store_fields = (
         "store_clusters",
         "store_ops",
@@ -103,8 +106,17 @@ def add_reference_deltas(rows, reference):
     )
     wmma_fields = (
         "pre_wmma_ds_load_b64",
+        "load_b64_immediately_before_final_wait",
         "final_pre_wmma_lgkmcnt",
         "wmma_in_window",
+    )
+    hot_fields = (
+        "pre_hot_lds_load",
+        "pre_hot_vmem_load",
+        "load_like_immediately_before_final_wait",
+        "final_pre_hot_lgkmcnt",
+        "hot_op_in_window",
+        "load_like_after_first_hot",
     )
 
     for row in rows:
@@ -134,11 +146,25 @@ def add_reference_deltas(rows, reference):
             else:
                 wmma_delta[field] = None
 
+        hot_delta = {}
+        hot_gap = 0
+        for field in hot_fields:
+            lhs = ref_hot.get(field)
+            rhs = row.get("hot_op_score", {}).get(field)
+            if isinstance(lhs, int) and isinstance(rhs, int):
+                delta = rhs - lhs
+                hot_delta[field] = delta
+                hot_gap += abs(delta)
+            else:
+                hot_delta[field] = None
+
         row["reference_delta"] = {
             "store": store_delta,
             "wmma": wmma_delta,
+            "hot": hot_delta,
             "store_gap": store_gap,
             "wmma_gap": wmma_gap,
+            "hot_gap": hot_gap,
             "total_gap": store_gap + wmma_gap,
         }
         add_contract_summary(row)
@@ -193,6 +219,7 @@ def sort_rows(rows, sort_key):
     if sort_key == "total-gap":
         return sorted(rows, key=lambda row: (
             row.get("reference_delta", {}).get("total_gap", 10**9),
+            row.get("reference_delta", {}).get("hot_gap", 10**9),
             row.get("resources", {}).get("scratch_bytes") or 0,
             row.get("resources", {}).get("vgpr_spills") or 0,
             row["name"],
@@ -302,11 +329,12 @@ def write_markdown(path, rows, reference=None):
             f"- name: `{reference.get('name') or ''}`",
             f"- store score: `{json.dumps(reference.get('store_cluster_score', {}), sort_keys=True)}`",
             f"- WMMA score: `{json.dumps(reference.get('wmma_score', {}), sort_keys=True)}`",
+            f"- hot-op score: `{json.dumps(reference.get('hot_op_score', {}), sort_keys=True)}`",
             "",
         ]
     lines += [
-        "| HSACO | Static Contract | Wave | VGPR | SGPR | LDS | Scratch | VGPR Spills | v_dot | v_wmma | LDS Read | LDS Write | VMEM Load | VMEM Store | Store Clusters | Store VMEM | Store LDS | dClusters | dVMEM Store | dLDS Store | Store Gap | WMMA Gap | Total Gap | Wait | Barrier | Hot Op | Pre-Hot Loads | Final Wait | Hot Window | Contract Failures |",
-        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | --- |",
+        "| HSACO | Static Contract | Wave | VGPR | SGPR | LDS | Scratch | VGPR Spills | v_dot | v_wmma | LDS Read | LDS Write | VMEM Load | VMEM Store | Store Clusters | Store VMEM | Store LDS | dClusters | dVMEM Store | dLDS Store | Store Gap | WMMA Gap | Hot Gap | Total Gap | Wait | Barrier | Hot Op | Pre-Hot Loads | Immediate Loads | Final Wait | Hot Window | Loads After Hot | Contract Failures |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
     for row in rows:
         res = row["resources"]
@@ -340,13 +368,16 @@ def write_markdown(path, rows, reference=None):
                 render_value(store_delta.get("lds_store_ops")),
                 render_value(ref_delta.get("store_gap")),
                 render_value(ref_delta.get("wmma_gap")),
+                render_value(ref_delta.get("hot_gap")),
                 render_value(ref_delta.get("total_gap")),
                 render_value(row.get("s_waitcnt")),
                 render_value(row.get("s_barrier")),
                 f"`{row.get('hot_opcode') or ''}`",
                 render_value(pre_hot_loads),
+                render_value(hot.get("load_like_immediately_before_final_wait")),
                 render_value(hot.get("final_pre_hot_lgkmcnt")),
                 render_value(hot.get("hot_op_in_window")),
+                render_value(hot.get("load_like_after_first_hot")),
                 "<br>".join(f"`{item}`" for item in row.get("contract_failures", [])),
             ])
             + " |"

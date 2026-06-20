@@ -3,6 +3,34 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_packed_hsaco_family_current_hotdelta",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-packed-hsaco-family-current-hotdelta-20260620-104921/",
+      "tool": "tools/vulkan-oracle/summarize_hsaco_family.py --reference-compare-json q8_0-current-radv-vs-hrx-isa accepted_bn128_splitqsum.json",
+      "status": "schedule_evidence_no_route_promotion",
+      "candidate_gate": {
+        "production_target": "Llama 3.1 8B Q8_0 p512/p513 dense prompt rows where current HRX packed-Q8_1 split-qsum remains behind Vulkan",
+        "baseline_command": "current CMake/Ninja-built packed-Q8_1 HSACO family under build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151",
+        "variant_command": "static triage only; no runtime selector or production route changed",
+        "same_runner_comparison_method": "not applicable; static schedule triage artifact used to choose the next kernel/schedule axis",
+        "route_trace_path": "not applicable; no runtime route selection",
+        "scheduler_trace_path": "summary.json and summary.md in the artifact",
+        "focused_cpu_reference": "not run; this is evidence infrastructure and schedule triage",
+        "compile_report_path": "CMake/Ninja-built HSACO metadata read with llvm-readelf",
+        "target_listing_path": "CMake/Ninja-built HSACO ISA read with llvm-objdump",
+        "prior_art_schedule_source": "current Llama 3.1 8B Q8_0 p512 Vulkan oracle matmul_q8_0_f32_f16acc_aligned_l hash 0x72d309e22f889977",
+        "promotion_rule": "do not promote from static triage; require a future candidate to move the first-hot issue window or use a different proven dataflow before focused p33/p512/p513 gates"
+      },
+      "findings": [
+        "extended summarize_hsaco_family.py to carry RADV hot-op reference scores and render immediate pre-final-wait loads plus load-like ops after the first hot op",
+        "reran the current packed-Q8_1 Q8_0 HSACO family against the refreshed Q8_0 Vulkan oracle reference",
+        "all packed split-qsum variants, including accepted BK2+wave64, share the same first-dot shape: 28 pre-hot loads, 21 load-like ops immediately before the final wait, 60 hot dot ops, and zero load-like ops after the first hot op",
+        "wave64 variants only move final pre-hot lgkmcnt from 14 to 16 and do not change the key first-hot issue window; BK2/BK4 raise work and resources but still keep the same 28/21/60/0 schedule shape",
+        "chunk32 and naive MMQL128 remain spilling outliers, while lower-VGPR variants such as splitqsum8 still keep the same issue window and were previously timing-rejected",
+        "decision: do not continue Q8_0 with simple BN/BM/BK/wave/split-qsum reshapes. The next packed-path attempt must explicitly change the first-dot load/wait window or pivot to a lower-level dataflow rather than preserving this static signature"
+      ]
+    },
+    {
       "id": "q8_0_bm128_streamk_sampled_production_shape_gate",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-streamk-sampled-production-20260620-104147/",
