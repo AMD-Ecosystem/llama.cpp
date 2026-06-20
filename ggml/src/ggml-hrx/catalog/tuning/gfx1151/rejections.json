@@ -3,6 +3,15 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_vk64_p33_current_variant_sweep_no_promotion",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_*",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_{H4LOAD,GROUPK2,GROUPK2_WAIT,WN32,WN32_BUFFERSTORE,WN32_FAST_HALF,RING96,RING96_COPYA,RING96_COPYB,RING96_COPYAB,RING96_FAST_HALF}_F16ACC_*",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-p33-current-variant-sweep-620234634-20260620-004401/",
+      "context_artifact": "cache/hrxv1/gfx1151/q4-p33-current-hrx-vulkan-focused-620234634-20260620-004145/",
+      "reason": "A current-head focused HRX/Vulkan refresh on the Llama 3.1 8B Q4_K_M p33 exported rows showed the largest remaining odd-size gap inside this nominal Q4 row comes from embedded Q6_K rows using the accepted VK64 p33 route: Vcur was 397.261 us versus Vulkan 135.049 us, ffn_out-0 was 2371.184 us versus 857.343 us, and result_output was 11817.773 us versus 8580.169 us. A serial current-head sweep of existing Q6 VK64/WN32/RING96 p33 variants then tested the available route-selectable pivots with CPU-reference first. H4LOAD passed but was only noise-level on the Q6 focus rows, 14308.225 us versus default 14336.825 us, and regressed total focused time, 16243.212 us versus 16187.618 us. WN32, WN32_BUFFERSTORE, and WN32_FAST_HALF passed but were much slower on Q6 focus rows at 20284.283, 20420.293, and 21910.811 us. GROUPK2, GROUPK2_WAIT, RING96, RING96_FAST_HALF, RING96_COPYA, RING96_COPYB, and RING96_COPYAB all failed focused CPU-reference before timing. Keep the accepted VK64 route as the p33 default. The remaining Q6 p33 parity gap is not solved by the existing source-visible VK64/WN32/RING96 catalog variants; the next useful attempt needs a materially different RADV-derived cooperative load/store or lane-ownership primitive."
+    },
+    {
       "id": "q8_0_mmq64x128_splitqsum_wave64_repeat_model_noise",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_wave64_wg256_f32",
