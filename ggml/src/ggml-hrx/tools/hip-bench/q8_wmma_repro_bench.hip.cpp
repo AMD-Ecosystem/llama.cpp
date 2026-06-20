@@ -3598,7 +3598,8 @@ template <
     int col_start,
     int col_count,
     bool copy_a,
-    bool copy_b>
+    bool copy_b,
+    bool use_asm_wmma = false>
 __global__ __launch_bounds__(256, 1)
 void q8_phase96_bm128_repro_kernel(
         const hrx_block_q8_0_wmma_vk128_lhs * src0,
@@ -3682,11 +3683,15 @@ void q8_phase96_bm128_repro_kernel(
                     const hrx_q8_0_wmma_vk128_half16_vec b_use = copy_b ?
                         q8_repro_copy_frag(b_frag[col_sub]) :
                         b_frag[col_sub];
-                    acc[local] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
-                        a_use,
-                        b_use,
-                        acc[local],
-                        HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                    if constexpr (use_asm_wmma) {
+                        acc[local] = q8_repro_wmma_f16_w64_asm(a_use, b_use, acc[local]);
+                    } else {
+                        acc[local] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
+                            a_use,
+                            b_use,
+                            acc[local],
+                            HRX_Q8_0_WMMA_VK128_W64_OPSEL != 0);
+                    }
                 }
             }
         }
@@ -7104,11 +7109,15 @@ static bool output_is_active(size_t index, int rows, const std::string & mode) {
             mode == "array16-direct-raw-abcopy" ||
             mode == "bm128-direct192-raw-output" ||
             mode == "bm128-direct192-raw-asm-output" ||
+            mode == "bm128-direct192-raw-asm-inout-output" ||
             mode == "phase96-bm128-raw" ||
+            mode == "phase96-bm128-raw-asm" ||
             mode == "phase96-bm128-acopy" ||
             mode == "phase96-bm128-bcopy" ||
             mode == "phase96-bm128-abcopy" ||
             mode == "phase96-bm128-abcopy-backendlike" ||
+            mode == "phase96-bm128-abcopy-asm" ||
+            mode == "phase96-bm128-abcopy-asm-backendlike" ||
             mode == "array8-fullb-2phase" || mode == "batched4" ||
             mode == "array8-fullb-2phase-consume" || mode == "batched4-consume") {
         return true;
@@ -7318,7 +7327,9 @@ static int run_dual_stage_compare_case(const std::string & mode, int rows, int c
     std::vector<float> h_rhs(static_cast<size_t>(cols) * k);
     std::vector<float> h_raw(static_cast<size_t>(rows) * cols, -7777.0f);
     std::vector<float> h_staged(static_cast<size_t>(rows) * cols, -7777.0f);
-    const bool backend_like = mode == "phase96-bm128-abcopy-backendlike";
+    const bool backend_like =
+        mode == "phase96-bm128-abcopy-backendlike" ||
+        mode == "phase96-bm128-abcopy-asm-backendlike";
     if (backend_like) {
         fill_q8_backend_like(h_q8, rows, blocks_per_row);
         fill_rhs_backend_like(h_rhs, k, cols);
@@ -7935,6 +7946,12 @@ static int run_case(const std::string & mode, int rows, int cols, int k) {
             bm128_grid, dim3(256, 1, 1), 0, 0, d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
         hipLaunchKernelGGL((q8_phase96_bm128_repro_kernel<8, 2, 2, false, false>),
             bm128_grid, dim3(256, 1, 1), 0, 0, d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+    } else if (mode == "phase96-bm128-raw-asm") {
+        dim3 bm128_grid((rows + 127) / 128, (cols + 127) / 128, 1);
+        hipLaunchKernelGGL((q8_phase96_bm128_repro_kernel<0, 0, 2, false, false, true>),
+            bm128_grid, dim3(256, 1, 1), 0, 0, d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+        hipLaunchKernelGGL((q8_phase96_bm128_repro_kernel<8, 2, 2, false, false, true>),
+            bm128_grid, dim3(256, 1, 1), 0, 0, d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
     } else if (mode == "phase96-bm128-acopy") {
         dim3 bm128_grid((rows + 127) / 128, (cols + 127) / 128, 1);
         hipLaunchKernelGGL((q8_phase96_bm128_repro_kernel<0, 0, 2, true, false>),
@@ -7952,6 +7969,13 @@ static int run_case(const std::string & mode, int rows, int cols, int k) {
         hipLaunchKernelGGL((q8_phase96_bm128_repro_kernel<0, 0, 2, true, true>),
             bm128_grid, dim3(256, 1, 1), 0, 0, d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
         hipLaunchKernelGGL((q8_phase96_bm128_repro_kernel<8, 2, 2, true, true>),
+            bm128_grid, dim3(256, 1, 1), 0, 0, d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+    } else if (mode == "phase96-bm128-abcopy-asm" ||
+            mode == "phase96-bm128-abcopy-asm-backendlike") {
+        dim3 bm128_grid((rows + 127) / 128, (cols + 127) / 128, 1);
+        hipLaunchKernelGGL((q8_phase96_bm128_repro_kernel<0, 0, 2, true, true, true>),
+            bm128_grid, dim3(256, 1, 1), 0, 0, d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
+        hipLaunchKernelGGL((q8_phase96_bm128_repro_kernel<8, 2, 2, true, true, true>),
             bm128_grid, dim3(256, 1, 1), 0, 0, d_q8.ptr, d_rhs.ptr, d_out.ptr, k, rows, cols);
     } else if (mode == "batched4") {
         hipLaunchKernelGGL((q8_array_fullb_phase_repro_kernel<0, 0, 1, 4, false>), grid, dim3(256, 1, 1), 0, 0,
@@ -8348,7 +8372,7 @@ int main(int argc, char ** argv) {
         } else if (std::strcmp(argv[i], "--k") == 0 && i + 1 < argc) {
             custom_k = std::atoi(argv[++i]);
         } else {
-            std::fprintf(stderr, "usage: %s [--mode motif192-synth-address|motif192-wmma-address|motif192-wmma-waitload-address|motif192-wmma-k2-directwait-waitload-address|motif192-wmma-k2-depwait-waitload-address|motif192-wmma-k2-realdata-k32-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-phase8-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-phase8seq-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-streamfrag-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-ktilefrag-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-ktilefrag-storebatch-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-ktilefrag-storebatch4-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-colpairfrag-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-accpark-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-accparkfull8-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-timing|motif192-wmma-k2-realdata-fullk-phase8seq-timing|motif192-wmma-k2-realdata-fullk-streamfrag-timing|motif192-wmma-k2-realdata-fullk-ktilefrag-timing|motif192-wmma-k2-realdata-fullk-ktilefrag-storebatch-timing|motif192-wmma-k2-realdata-fullk-ktilefrag-storebatch4-timing|motif192-wmma-k2-realdata-fullk-colpairfrag-timing|motif192-wmma-k2-realdata-fullk-accpark-timing|motif192-wmma-k2-realdata-fullk-accparkfull8-timing|motif192-wmma-direct-address|motif192-wmma-stage16-address|motif192-wmma-stage32-address|motif192-wmma-stage16-waitload-address|motif192-wmma-stage32-waitload-address|array8-fullb|array16-direct-raw|array16-direct-raw-bcopy|array16-direct-raw-abcopy|bm128-direct192-raw-output|bm128-direct192-raw-asm-output|bm128-direct192-raw-asm-inout-output|contract-direct192-raw|contract-direct192-bcopy|contract-direct192-bcopy-hoist|contract-direct192-abcopy|contract-direct192-abcopy-bhoist|contract-bm128-direct192-raw|contract-bm128-direct192-raw-asm|contract-bm128-direct192-bcopy-upper|contract-bm128-direct192-bcopy-upper-asm|contract-bm128-direct192-bcopy-upper-hoist|contract-bm128-direct192-abcopy|contract-bm128-direct192-abcopy-bhoist|contract-bm128-direct192-abcopy-bhoist-asm|contract-phase96-abcopy|phase96-bm128-raw|phase96-bm128-acopy|phase96-bm128-bcopy|phase96-bm128-abcopy|phase96-bm128-abcopy-backendlike|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|array8-fullb-2phase-bcopy|array8-fullb-2phase-bcopy-stage|array8-fullb-2phase-abcopy|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group0-bcopy-stage|single-group8|single-group8-consume|single-group8-opsel1|single-group8-bmirror0|single-group8-bcopy|single-group8-abcopy|single-group8-bcopy-stage|single-group8-abcopy-stage|single-group8-bcopy-stage-selected|single-group12|single-group12-consume|single-group12-opsel1|single-group12-bmirror0|single-group12-bcopy|single-group12-abcopy|single-group12-bcopy-stage|single-group12-abcopy-stage|single-group12-bcopy-stage-selected|single-group12-abcopy-stage-selected|single-group12-bcopy-stage-selected-acccopy|single-group12-abcopy-stage-selected-acccopy|single-group12-bcopy-stage-selected-regcopy|single-group12-abcopy-stage-selected-regcopy|single-group12-abcopy-dual-stage-raw-first|single-group12-abcopy-dual-stage-stage-first|single-group13|single-group13-consume|single-group13-bcopy-stage-selected|single-group13-abcopy-stage-selected|single-group14-bcopy-stage-selected|single-group14-abcopy-stage-selected|single-group15-bcopy-stage-selected|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c12-s0-bcopy-stage-selected|remap-c12-s0-abcopy-stage-selected|remap-c0-s12|remap-c0-s12-stage-selected|bfrag-dump|all] [--dump-dir <test-backend-ops dump dir>] [--rows N --cols N] [--k N]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--mode motif192-synth-address|motif192-wmma-address|motif192-wmma-waitload-address|motif192-wmma-k2-directwait-waitload-address|motif192-wmma-k2-depwait-waitload-address|motif192-wmma-k2-realdata-k32-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-phase8-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-phase8seq-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-streamfrag-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-ktilefrag-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-ktilefrag-storebatch-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-ktilefrag-storebatch4-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-colpairfrag-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-accpark-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-accparkfull8-directwait-waitload-address|motif192-wmma-k2-realdata-fullk-timing|motif192-wmma-k2-realdata-fullk-phase8seq-timing|motif192-wmma-k2-realdata-fullk-streamfrag-timing|motif192-wmma-k2-realdata-fullk-ktilefrag-timing|motif192-wmma-k2-realdata-fullk-ktilefrag-storebatch-timing|motif192-wmma-k2-realdata-fullk-ktilefrag-storebatch4-timing|motif192-wmma-k2-realdata-fullk-colpairfrag-timing|motif192-wmma-k2-realdata-fullk-accpark-timing|motif192-wmma-k2-realdata-fullk-accparkfull8-timing|motif192-wmma-direct-address|motif192-wmma-stage16-address|motif192-wmma-stage32-address|motif192-wmma-stage16-waitload-address|motif192-wmma-stage32-waitload-address|array8-fullb|array16-direct-raw|array16-direct-raw-bcopy|array16-direct-raw-abcopy|bm128-direct192-raw-output|bm128-direct192-raw-asm-output|bm128-direct192-raw-asm-inout-output|contract-direct192-raw|contract-direct192-bcopy|contract-direct192-bcopy-hoist|contract-direct192-abcopy|contract-direct192-abcopy-bhoist|contract-bm128-direct192-raw|contract-bm128-direct192-raw-asm|contract-bm128-direct192-bcopy-upper|contract-bm128-direct192-bcopy-upper-asm|contract-bm128-direct192-bcopy-upper-hoist|contract-bm128-direct192-abcopy|contract-bm128-direct192-abcopy-bhoist|contract-bm128-direct192-abcopy-bhoist-asm|contract-phase96-abcopy|phase96-bm128-raw|phase96-bm128-raw-asm|phase96-bm128-acopy|phase96-bm128-bcopy|phase96-bm128-abcopy|phase96-bm128-abcopy-backendlike|phase96-bm128-abcopy-asm|phase96-bm128-abcopy-asm-backendlike|array8-b2|array8-fullb-2phase|array8-fullb-2phase-consume|array8-fullb-2phase-bcopy|array8-fullb-2phase-bcopy-stage|array8-fullb-2phase-abcopy|batched4|batched4-consume|single-group0|single-group0-consume|single-group0-opsel1|single-group0-bcopy-stage|single-group8|single-group8-consume|single-group8-opsel1|single-group8-bmirror0|single-group8-bcopy|single-group8-abcopy|single-group8-bcopy-stage|single-group8-abcopy-stage|single-group8-bcopy-stage-selected|single-group12|single-group12-consume|single-group12-opsel1|single-group12-bmirror0|single-group12-bcopy|single-group12-abcopy|single-group12-bcopy-stage|single-group12-abcopy-stage|single-group12-bcopy-stage-selected|single-group12-abcopy-stage-selected|single-group12-bcopy-stage-selected-acccopy|single-group12-abcopy-stage-selected-acccopy|single-group12-bcopy-stage-selected-regcopy|single-group12-abcopy-stage-selected-regcopy|single-group12-abcopy-dual-stage-raw-first|single-group12-abcopy-dual-stage-stage-first|single-group13|single-group13-consume|single-group13-bcopy-stage-selected|single-group13-abcopy-stage-selected|single-group14-bcopy-stage-selected|single-group14-abcopy-stage-selected|single-group15-bcopy-stage-selected|remap-c8-s0|remap-c0-s8|remap-c12-s0|remap-c12-s0-bcopy-stage-selected|remap-c12-s0-abcopy-stage-selected|remap-c0-s12|remap-c0-s12-stage-selected|bfrag-dump|all] [--dump-dir <test-backend-ops dump dir>] [--rows N --cols N] [--k N]\n", argv[0]);
             return 2;
         }
     }
@@ -8894,9 +8918,11 @@ int main(int argc, char ** argv) {
         status |= run_case("array8-fullb-2phase-abcopy", rows, 33, k);
     }
     if (mode == "phase96-bm128-raw" ||
+            mode == "phase96-bm128-raw-asm" ||
             mode == "phase96-bm128-acopy" ||
             mode == "phase96-bm128-bcopy" ||
-            mode == "phase96-bm128-abcopy") {
+            mode == "phase96-bm128-abcopy" ||
+            mode == "phase96-bm128-abcopy-asm") {
         status |= run_case(mode, 128, 128, k);
         status |= run_case(mode, 128, 129, k);
         status |= run_case(mode, 128, 33, k);
@@ -8905,12 +8931,13 @@ int main(int argc, char ** argv) {
         status |= run_case(mode, 512, 128, k);
         status |= run_case(mode, 1024, 128, k);
     }
-    if (mode == "phase96-bm128-abcopy-backendlike") {
-        status |= run_case("phase96-bm128-abcopy-backendlike", 128, 128, k);
-        status |= run_case("phase96-bm128-abcopy-backendlike", 128, 512, k);
-        status |= run_case("phase96-bm128-abcopy-backendlike", 128, 128, 14336);
-        status |= run_case("phase96-bm128-abcopy-backendlike", 1024, 512, k);
-        status |= run_case("phase96-bm128-abcopy-backendlike", 4096, 512, k);
+    if (mode == "phase96-bm128-abcopy-backendlike" ||
+            mode == "phase96-bm128-abcopy-asm-backendlike") {
+        status |= run_case(mode, 128, 128, k);
+        status |= run_case(mode, 128, 512, k);
+        status |= run_case(mode, 128, 128, 14336);
+        status |= run_case(mode, 1024, 512, k);
+        status |= run_case(mode, 4096, 512, k);
     }
     if (mode == "all" || mode == "batched4") {
         status |= run_case("batched4", rows, 64, k);
