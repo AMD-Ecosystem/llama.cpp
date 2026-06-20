@@ -10796,6 +10796,51 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_chunk32_wg256_f32",
+    "family": "mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_chunk32_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q8_0_mmq64x128_splitqsum_bk2_wave64_chunk32",
+    "artifact_id": "mul_mat_vec_q8_0_mmq64x128_splitqsum_bk2_wave64_chunk32_hsaco",
+    "export_name": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_chunk32_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 110,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q8_0_prompt_mmq64x128_splitqsum_bk2_wave64_chunk32_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q8_0 x F32 -> F32 MUL_MAT",
+      "k_multiple": 128,
+      "rows_multiple": 128,
+      "cols_min": 128,
+      "cols_multiple_for_selector": 128,
+      "selector_gate": "opt-in only for full-column rows with GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X128_SPLITQSUM_BK2_WAVE64_CHUNK32_PROMPT=1; disabled with GGML_HRX_DISABLE_Q8_0_Q8_1_X4_MMQ64X128_SPLITQSUM_BK2_WAVE64_CHUNK32_PROMPT=1",
+      "prior_delta": "Preserves the accepted Q8_0 packed-Q8_1 BM64/BN128 split-qsum BK2 wave64 route and changes only COL_CHUNK from 16 to 32 so each Q8_0 qpack is reused across all 32 columns owned by the lane. This brackets the B-cache/dot issue-window and qpack-reuse axis against a larger qsum live range."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_chunk32_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_compile_resource_spills",
+      "selection": "Opt-in only. CMake/Ninja-built static comparison rejected this source shape before runtime timing: accepted BK2+wave64 parent is wave64, SGPR=52, VGPR=169, LDS=8704, scratch=0, vgpr_spills=0; chunk32 is wave64, SGPR=52, VGPR=192, LDS=8704, scratch=336, vgpr_spills=115. The wider qsum live range does not move the dot/load/store counts and should not be promoted."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk4_wave64_wg256_f32",
     "family": "mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk4_wave64_wg256",
     "op": "MUL_MAT",

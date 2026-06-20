@@ -3,6 +3,20 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_prompt_mmq64x128_splitqsum_bk2_wave64_chunk32_compile",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-bk2-wave64-chunk32-static-803e43002-20260620-043451/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_mmq64x128_splitqsum_bk2_wave64_chunk32.hsaco",
+      "status": "rejected_compile_resource_spills",
+      "findings": [
+        "added a CMake/Ninja-built opt-in catalog route that preserves the accepted Q8_0 packed-Q8_1 BM64/BN128 split-qsum BK2 wave64 dataflow and changes only COL_CHUNK from 16 to 32",
+        "the intended axis was Q8_0 qpack reuse and a wider B-cache/dot issue window across all 32 columns owned by each lane",
+        "static comparison against the accepted BK2+wave64 parent rejects the source shape before runtime testing: parent is wave64, SGPR=52, VGPR=169, LDS=8704, scratch=0, vgpr_spills=0; chunk32 is wave64, SGPR=52, VGPR=192, LDS=8704, scratch=336, vgpr_spills=115",
+        "dot/load/store class counts remain essentially unchanged, so the wider qsum live range adds scratch pressure without moving the schedule toward the RADV large-route contract",
+        "keep the route opt-in only and do not run model A/B; the next packed-route probe should not widen the full 32-column qsum live range in this source spelling"
+      ]
+    },
+    {
       "id": "q8_0_motif192_k2_colpairfrag_issue_window_probe",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-colpairfrag-probe-2e0adbb6c-20260620-042343/",

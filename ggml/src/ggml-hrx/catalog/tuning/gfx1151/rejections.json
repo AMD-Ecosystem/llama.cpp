@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_prompt_mmq64x128_splitqsum_bk2_wave64_chunk32_compile_spills",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_chunk32_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X128_SPLITQSUM_BK2_WAVE64_CHUNK32_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q8-bk2-wave64-chunk32-static-803e43002-20260620-043451/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-bk2-wave64-chunk32-static-803e43002-20260620-043451/static.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_mmq64x128_splitqsum_bk2_wave64_chunk32.hsaco",
+      "reason": "The chunk32 packed-route probe preserved the accepted Q8_0 packed-Q8_1 BM64/BN128 split-qsum BK2 wave64 route and changed only COL_CHUNK from 16 to 32 so each Q8_0 qpack could be reused across all 32 columns owned by the lane. It built through the normal CMake/Ninja HSACO catalog path and remained opt-in only. Reject before correctness or model timing because the wider qsum live range spills: static comparison against the accepted parent shows the parent at wave64, SGPR=52, VGPR=169, LDS=8704, scratch=0, vgpr_spills=0, while chunk32 is wave64, SGPR=52, VGPR=192, LDS=8704, scratch=336, and vgpr_spills=115. The visible dot/load/store counts remain the same, so the source shape buys no schedule-contract movement toward RADV and only adds scratch pressure. Keep BK2+wave64 as the packed-route default; future packed Q8 probes should preserve qpack reuse with a lower-live accumulation topology or return to the RADV cooperative lane/store target."
+    },
+    {
       "id": "q8_0_motif192_k2_colpairfrag_standalone_transfer",
       "date": "2026-06-20",
       "route": "hrx-hip-bench-q8-wmma-repro --mode=motif192-wmma-k2-realdata-fullk-colpairfrag-directwait-waitload-address and --mode=motif192-wmma-k2-realdata-fullk-colpairfrag-timing",
