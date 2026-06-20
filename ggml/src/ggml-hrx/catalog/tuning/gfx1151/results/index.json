@@ -3,6 +3,13 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_direct_wmma_vk128_nowait_namedfrag_depwait_k2_raw_asmwmma_issue_window",
+      "date": "2026-06-19",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-depwait-k2-raw-asmwmma-compile-20260619-182212/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_nowait_namedfrag_depwait_k2_raw_asmwmma_packstage_bufferstore_wg256.hsaco",
+      "status": "rejected_compile_contract_spill_cliff_worse_than_raw_k2"
+    },
+    {
       "id": "q8_0_bm128_direct192_inline_asm_contract_standalone",
       "date": "2026-06-19",
       "artifact": "cache/hrxv1/gfx1151/q8-bm128-direct192-asm-contract-20260619-181343/",

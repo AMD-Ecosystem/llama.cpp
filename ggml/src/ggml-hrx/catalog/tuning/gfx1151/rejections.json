@@ -3,6 +3,15 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_direct_wmma_vk128_nowait_namedfrag_depwait_k2_raw_asmwmma_issue_window",
+      "date": "2026-06-19",
+      "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_nowait_namedfrag_depwait_k2_raw_asmwmma_packstage_bufferstore_f16acc_wg256_f32",
+      "env": "not runtime-selected; CMake/Ninja compile-contract probe",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-depwait-k2-raw-asmwmma-compile-20260619-182212/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_nowait_namedfrag_depwait_k2_raw_asmwmma_packstage_bufferstore_wg256.hsaco",
+      "reason": "The raw K2 inline-WMMA compile-contract probe crosses the prior two-K-tile raw-fragment depwait route with the standalone BM128 direct192 discovery that explicit inline v_wmma_f16_16x16x16_f16 repairs the raw B-operand/lane contract. It is built through CMake/Ninja as a separate HSACO-producing candidate and intentionally is not wired into runtime selection. Static evidence rejects it before focused p33/p512/p513 runtime gates: it keeps the expected wave64, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 128 buffer_store_b32, 2 ds_store_b32, 2 barriers, and LDS=20480 surface, but compiles to SGPR=29, VGPR=256, private_segment=172, and 42 VGPR spills. The older non-inline raw K2 compile probe was already rejected at SGPR=29, VGPR=256, private_segment=124, and 30 VGPR spills, so inline WMMA worsens the production pressure cliff instead of repairing it. The disassembly still has the RADV-like lgkmcnt(51) ladder, but it relies on scratch traffic and lacks RADV's no-spill VGPR=192, LDS=22528, halfword LDS writeback, and 192 buffer-store topology. Reject as a production route. The useful conclusion is that the standalone raw direct192 inline-asm correctness repair does not transfer through the source-visible K2 depwait production ABI; next Q8 work should either lower ABI/live-range pressure before exposing both K tiles or move to a lower-level cooperative-matrix/writeback primitive."
+    },
+    {
       "id": "q8_0_wmma_bm128_direct192_inline_asm_contract_probe",
       "date": "2026-06-19",
       "route": "hrx-hip-bench-q8-wmma-repro --mode=contract-bm128-direct192-raw-asm/contract-bm128-direct192-bcopy-upper-asm/contract-bm128-direct192-abcopy-bhoist-asm",
