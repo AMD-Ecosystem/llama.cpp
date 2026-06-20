@@ -3,6 +3,21 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_coopstore_wmma_lds_k2_direct192_raw_prior",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/coopstore-wmma-lds-k2-direct192-raw-recheck-d33b98a86-20260620-053314/",
+      "static_artifact": "cache/hrxv1/gfx1151/coopstore-wmma-lds-k2-direct192-raw-recheck-d33b98a86-20260620-053314/summary.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract with embedded gfx1151 object extracted to cache/hrxv1/gfx1151/coopstore-wmma-lds-k2-direct192-raw-recheck-d33b98a86-20260620-053314/static/fatbin/gfx1151.o",
+      "status": "accepted_standalone_prior_not_production_route",
+      "findings": [
+        "rechecked the existing CMake/Ninja-built coopmat-store-contract lower-level Q8 WMMA LDS K2 direct192 raw primitive after grouped-stage KTileFrag batching failed static SGPR-spill gates",
+        "direct192 raw correctness passed exactly with elements=12288 bad=0 max_abs=0; same-binary controls direct64 and mixed128 also passed, while radv-motif192 still failed with bad=32 in group 28 slot 1",
+        "static evidence for coopstore_probe_wmma_lds_k2_direct192_raw is wave64, SGPR=14, VGPR=153, LDS=16384, private_segment=0, no SGPR/VGPR spills, 32 v_wmma, 64 ds_load_b64, 192 buffer_store_b32, 7 waitcnt-class instructions, and 2 barriers",
+        "this is the first current positive primitive with the target 32-WMMA/64-LDS-load/192-direct-store surface and no grouped-stage scalar-pressure cliff",
+        "do not treat it as a production route because it is a standalone fixture and deliberately skips the RADV halfword-stage surface; the next Q8 large-route probe should port this direct192 raw ownership primitive into a real-Q8 backend-like fixture or route-local diagnostic before timing"
+      ]
+    },
+    {
       "id": "q8_0_motif192_ktilefrag_storebatch4_fixture",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-ktilefrag-storebatch4-3a2b6281f-20260620-052930/",
