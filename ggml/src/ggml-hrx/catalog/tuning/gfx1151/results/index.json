@@ -3,6 +3,22 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_bm128_direct192_asm_inout_output_probe",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-bm128-direct192-asm-inout-output-20260620-084556/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-bm128-direct192-asm-inout-output-20260620-084556/summary.md",
+      "tool": "hrx-hip-bench-q8-wmma-repro --mode=bm128-direct192-raw-asm-inout-output",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro",
+      "status": "rejected_operand_constraint_probe_spills_unchanged",
+      "findings": [
+        "added a benchmark-only inline-WMMA primitive using a +v read/write accumulator operand so the compiler sees the WMMA destination and accumulator as the same register tuple",
+        "correctness passed for the real-output direct192 rows: k4096 p128, p33, p512, p513 all bad=0, and k14336 p128/p33 both bad=0",
+        "static extraction from the CMake/Ninja-built benchmark binary shows the inout specialization did not reduce the compiler cliff: wave64, SGPR=50, VGPR=256, LDS=20480, private_segment=64, and 15 VGPR spills, matching the previous correctness-clean inline-assembly output specialization",
+        "issue-window comparison also remained unchanged: one 32-WMMA region with 64 ds_load_b64, 64 buffer_store_b32, and final pre-WMMA lgkmcnt(0), still unlike RADV large's no-spill lgkmcnt(51) schedule",
+        "reject as a production route template. The remaining Q8 p512 gap is not caused by exposing the inline-assembly accumulator as separate input/output operands; continue toward a lower-level cooperative operand/writeback primitive or a materially different packed-Q8 dataflow."
+      ]
+    },
+    {
       "id": "q8_0_directwait_raw16_fulltile_nostore_compile_contract",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-directwait-raw16-fulltile-nostore-compile-20260620-083157/",
