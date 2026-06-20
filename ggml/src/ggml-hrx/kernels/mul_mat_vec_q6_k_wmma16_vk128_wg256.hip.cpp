@@ -70,6 +70,10 @@
 #define HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_STREAM 0
 #endif
 
+#ifndef HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_PAIRCOL
+#define HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_PAIRCOL 0
+#endif
+
 #ifndef HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_COPY_A
 #define HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_COPY_A 0
 #endif
@@ -786,7 +790,7 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
 #if HRX_Q6_K_WMMA_VK128_BUFFER_STORE
     const __amdgpu_buffer_rsrc_t dst_rsrc = hrx_q6_k_wmma_vk128_make_dst_rsrc(dst);
 #endif
-#if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96 || HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2 || HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_STREAM
+#if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96 || HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2 || HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_STREAM || HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_PAIRCOL
     hrx_q6_k_wmma_vk128_half8_vec acc[16] = {};
 #elif HRX_Q6_K_WMMA_VK128_W64
     hrx_q6_k_wmma_vk128_half8_vec acc[TILES_PER_WAVE] = {};
@@ -810,7 +814,54 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
         }
         __syncthreads();
 
-#if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_STREAM
+#if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_PAIRCOL
+        if (tid < 64u) {
+            hrx_q6_k_wmma_vk128_lds_half_ptr sh_a_lds =
+                (hrx_q6_k_wmma_vk128_lds_half_ptr) sh_a;
+            hrx_q6_k_wmma_vk128_lds_half_ptr sh_b_lds =
+                (hrx_q6_k_wmma_vk128_lds_half_ptr) sh_b;
+#pragma unroll
+            for (int col_pair = 0; col_pair < 2; ++col_pair) {
+                hrx_q6_k_wmma_vk128_half16_vec b_frag[2][2];
+#pragma unroll
+                for (int k_tile = 0; k_tile < 2; ++k_tile) {
+#pragma unroll
+                    for (int col_sub = 0; col_sub < 2; ++col_sub) {
+                        b_frag[k_tile][col_sub] = hrx_q6_k_wmma_vk128_load_b_frag_w64_b64asm_nowait(
+                            sh_b_lds, col_pair * 2 + col_sub, k_tile, lane);
+                    }
+                }
+                asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+#pragma unroll
+                for (int row_frag = 0; row_frag < 4; ++row_frag) {
+#pragma unroll
+                    for (int k_tile = 0; k_tile < 2; ++k_tile) {
+                        hrx_q6_k_wmma_vk128_half16_vec a_use =
+                            hrx_q6_k_wmma_vk128_load_a_frag_w64_b64asm_nowait(
+                                sh_a_lds, row_frag, k_tile, lane);
+                        asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+#pragma unroll
+                        for (int col_sub = 0; col_sub < 2; ++col_sub) {
+                            hrx_q6_k_wmma_vk128_half16_vec a_col_use = a_use;
+                            hrx_q6_k_wmma_vk128_half16_vec b_use = b_frag[k_tile][col_sub];
+#if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_COPY_A
+                            a_col_use = hrx_q6_k_wmma_vk128_copy_frag(a_col_use);
+#endif
+#if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_COPY_B
+                            b_use = hrx_q6_k_wmma_vk128_copy_frag(b_use);
+#endif
+                            const int group = (col_pair * 2 + col_sub) * 4 + row_frag;
+                            acc[group] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
+                                a_col_use,
+                                b_use,
+                                acc[group],
+                                HRX_Q6_K_WMMA_VK128_W64_OPSEL != 0);
+                        }
+                    }
+                }
+            }
+        }
+#elif HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_STREAM
         if (tid < 64u) {
             hrx_q6_k_wmma_vk128_lds_half_ptr sh_a_lds =
                 (hrx_q6_k_wmma_vk128_lds_half_ptr) sh_a;
@@ -1068,7 +1119,7 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
         __syncthreads();
     }
 
-#if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96 || HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2 || HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_STREAM
+#if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96 || HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2 || HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_STREAM || HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_PAIRCOL
 #pragma unroll
     for (int group = 0; group < 16; ++group) {
         if (tid < 64u) {

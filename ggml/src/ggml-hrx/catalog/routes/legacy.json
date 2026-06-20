@@ -9441,6 +9441,51 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_paircol_copyab_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_paircol_copyab_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_paircol_copyab_wg256",
+    "artifact_id": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_paircol_copyab_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_paircol_copyab_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q6_dense_prompt_wmma16x16_vk64_padded44_w64_ring96_k2_paircol_copyab_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q6_K x F32 -> F32 MUL_MAT",
+      "k_multiple": 256,
+      "rows_min": 16,
+      "cols_min": 16,
+      "cols_max": 64,
+      "requires_env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_PAIRCOL_COPYAB_F16ACC_WG256_PROMPT",
+      "prior_delta": "Derived from the K2 copy-A+B and K2 streamed copy-A+B probes. Full K2 fixed old RING96's cross/rotated math but spilled at VGPR=256; streamed K2 removed spills at VGPR=175 but amplified LDS loads to 160. This opt-in route keeps corrected matching-K subtile accumulation while holding two B column fragments at a time and reusing each A load across the two columns. Expected signal is a middle-ground no-spill schedule with much less LDS reload traffic than streamed K2."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_paircol_copyab_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_perf_probe",
+      "selection": "Opt-in Q6_K VK64 padded44 RING96 K2 pair-column copy-A+B probe. CMake/Ninja built the HSACO and focused p33 CPU-reference in cache/hrxv1/gfx1151/q6-vk64-ring96-k2-paircol-copyab-fresh-a48956f70-20260620-021614/ selected this provider for Vcur, ffn_out, and result_output with all rows passing after A-fragment materialization was moved per WMMA use. Static evidence shows wave64, LDS=11264, VGPR=191, no spills, no private segment, 32 WMMA, 96 ds_load-class instructions, 64 buffer_store_b32, and 43 waitcnt-class instructions. Same-runner focused timing is 1.644x slower than accepted VK64 default. Keep as opt-in evidence only."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_fast_half_bufferstore_f16acc_wg256_f32",
     "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_fast_half_bufferstore_f16acc_wg256",
     "op": "MUL_MAT",
