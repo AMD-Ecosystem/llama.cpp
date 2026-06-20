@@ -2042,6 +2042,34 @@
         "same-binary fixture timing rejects the lower-live decomposition: phase8seq is 1.26237x slower than full-k at 4096x512 and 1.2645x slower at 4096x513, with larger losses on smaller rows",
         "decision: do not continue Q8 large-route work through phase8seq or half-tile lower-live decomposition. The next parity axis should pursue a lower-level cooperative writeback/lane primitive, or preserve the KTileFrag 64-ds_load_b64/single-window issue shape without the route-facing HIP C++ live-range cliff."
       ]
+    },
+    {
+      "id": "q8_0_direct_wmma_family_current_static_rank",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-direct-wmma-family-current-rank-20260620-113948/",
+      "tool": "tools/vulkan-oracle/summarize_hsaco_family.py --glob 'mul_mat_vec_q8_0_wmma16_vk128*.hsaco' --reference-compare-json q8_0-packed-bfull32-compile-20260620-105336/compare-radv.json",
+      "status": "schedule_evidence_no_route_promotion",
+      "candidate_gate": {
+        "production_target": "Llama 3.1 8B Q8_0 p512/p513 dense prompt rows where current HRX remains behind the Vulkan large aligned Q8_0 route",
+        "baseline_command": "static comparison against RADV oracle matmul_q8_0_f32_f16acc_aligned_l hash 0x72d309e22f889977",
+        "variant_command": "static sweep of all current CMake/Ninja-built mul_mat_vec_q8_0_wmma16_vk128*.hsaco surfaces",
+        "same_runner_comparison_method": "not applicable; static triage only",
+        "route_trace_path": "not applicable; no runtime selector changed",
+        "scheduler_trace_path": "summary.json, summary.md, and conclusion.md in the artifact",
+        "focused_cpu_reference": "not run; this summarizes existing built candidates and prior focused decisions",
+        "compile_report_path": "per-HSACO metadata inside summary.json",
+        "target_listing_path": "per-HSACO llvm-objdump summaries inside summary.json",
+        "prior_art_schedule_source": "Vulkan oracle matmul_q8_0_f32_f16acc_aligned_l from cache/hrxv1/gfx1151/vulkan-oracle-llama31-8b-q8_0-p512-fa1-20260617-200453/",
+        "promotion_rule": "do not promote from static rank evidence. A future Q8 large candidate must change the lower-level cooperative store/lane-ownership or accumulator-ownership primitive before focused route gates."
+      },
+      "findings": [
+        "ranked 76 current Q8_0 VK128 direct-WMMA HSACOs against the RADV large Q8_0 oracle contract",
+        "the closest total-gap rows are the already rejected directwait motif192 surfaces: they preserve 192 stores and the RADV-like wait window but compile at VGPR=256 with scratch and VGPR spills",
+        "the best no-spill 192-store surfaces are the already rejected KTileFrag/motif192/fullpair families; they preserve the visible writeback opcode count but miss the one-window RADV load/wait schedule",
+        "the best WMMA issue-window rows are directwait/depwait variants that either spill badly or emit only 128 buffer stores, so they do not combine RADV-like scheduling with the cooperative writeback surface",
+        "no top-30 total-gap HSACO was unmentioned in the Q8 ledger or gfx1151 tuning database",
+        "decision: do not add another wrapper around the current direct-WMMA HIP C++ family. The next Q8 parity work needs a lower-level cooperative store/lane primitive or a materially different accumulator ownership source form."
+      ]
     }
   ]
 }
