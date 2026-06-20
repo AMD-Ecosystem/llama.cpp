@@ -51,6 +51,20 @@
       ]
     },
     {
+      "id": "q8_0_existing_packstage_cluster_audit",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-existing-packstage-cluster-audit-20260620-continue/",
+      "tool": "tools/vulkan-oracle/extract_store_clusters.py",
+      "status": "schedule_evidence_no_route_promotion",
+      "findings": [
+        "audited existing CMake/Ninja-built guarded packstage and namedfrag-packstage Q8 direct-WMMA HSACOs before adding another near-duplicate store-topology wrapper",
+        "both guarded packstage target symbols have totals store_ops=130, buffer_store_ops=128, lds_store_ops=2, load_ops=70, lds_load_ops=64, vmem_load_ops=6, hot_ops=32, waitcnt_ops=116, with 82 store clusters",
+        "the guarded route contains four-store direct clusters but also emits selected-half scalar/fallback stores, so it is not a cleaner p512 hot-branch clone than the already-tested fulltile aligned route",
+        "the aligned-only packstage_fulltile route remains the closest 64-active-store runtime probe: wave64, SGPR=24, VGPR=193, LDS=20480, no spills, 32 WMMA, 64 ds_load_b64, 64 buffer_store_b32, correctness-passed p512, and timing-rejected versus packed-Q8_1 defaults",
+        "do not add another source wrapper solely to toggle ASSUME_FULL_TILES or named fragment spelling. That axis is already covered; the unresolved delta is lower-level cooperative writeback/lane ownership or a materially different packed-Q8 dataflow."
+      ]
+    },
+    {
       "id": "q8_0_packstage_asmwmma_fast_half_fullpair_compile_contract",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-packstage-asmwmma-fast-half-fullpair-compile-20260620-062855/",
