@@ -78,6 +78,10 @@
 #define HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT 0
 #endif
 
+#ifndef HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT_LADDER
+#define HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT_LADDER 0
+#endif
+
 #ifndef HRX_Q6_K_WMMA_VK128_W64_INLINE_WMMA
 #define HRX_Q6_K_WMMA_VK128_W64_INLINE_WMMA 0
 #endif
@@ -918,12 +922,21 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
                         sh_b_lds, frag, k_tile, lane);
                 }
 #if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT
+#if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT_LADDER
+                hrx_q6_k_wmma_vk128_half16_vec b_pad_keep[4];
+#endif
 #pragma unroll
                 for (int frag = 0; frag < 4; ++frag) {
+#if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT_LADDER
+                    b_pad_keep[frag] =
+                        hrx_q6_k_wmma_vk128_load_b_frag_w64_b64asm_nowait(
+                            sh_b_lds, frag, k_tile, lane);
+#else
                     const hrx_q6_k_wmma_vk128_half16_vec b_pad =
                         hrx_q6_k_wmma_vk128_load_b_frag_w64_b64asm_nowait(
                             sh_b_lds, frag, k_tile, lane);
                     hrx_q6_k_wmma_vk128_consume_frag(b_pad);
+#endif
                 }
                 asm volatile("s_waitcnt lgkmcnt(40)\n" ::: "memory");
 #else
@@ -931,6 +944,17 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
 #endif
 #pragma unroll
                 for (int group = 0; group < 16; ++group) {
+#if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT_LADDER
+                    if (group == 1) {
+                        asm volatile("s_waitcnt lgkmcnt(36)\n" ::: "memory");
+                    } else if (group == 2) {
+                        asm volatile("s_waitcnt lgkmcnt(28)\n" ::: "memory");
+                    } else if (group == 3) {
+                        asm volatile("s_waitcnt lgkmcnt(20)\n" ::: "memory");
+                    } else if (group == 12) {
+                        asm volatile("s_waitcnt lgkmcnt(16)\n" ::: "memory");
+                    }
+#endif
                     const int row_frag = group & 3;
                     const int col_frag = (group >> 2) & 3;
                     hrx_q6_k_wmma_vk128_half16_vec a_use = a_frag[row_frag];
@@ -951,6 +975,12 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
                         HRX_Q6_K_WMMA_VK128_W64_OPSEL != 0);
 #endif
                 }
+#if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT_LADDER
+#pragma unroll
+                for (int frag = 0; frag < 4; ++frag) {
+                    hrx_q6_k_wmma_vk128_consume_frag(b_pad_keep[frag]);
+                }
+#endif
             }
         }
 #elif HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_PAIRCOL
