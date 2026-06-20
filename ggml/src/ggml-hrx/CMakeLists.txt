@@ -1537,6 +1537,8 @@ if (GGML_HRX_BUILD_HIP_BENCHES)
                 "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q5_k_wmma16_vk128_wg256.hip.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q5_k_wmma16_vk64_padded44_w64_full64_wg256.hip.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q6_k.hip.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/hip-bench/q6_wmma_ring96_repro_bench.hip.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/hip-bench/q6_wmma_vk64_repro_bench.hip.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q8_0.hip.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q8_0_wmma16_vk128_wg256.hip.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/kernels/rms_norm_mul_f32.hip.cpp"

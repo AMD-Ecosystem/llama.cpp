@@ -3,6 +3,19 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_k_wmma_vk64_ring96_cross_reference_diagnosis",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-crossref-3cf09b622-20260620-015053/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q6-wmma-vk64-repro and build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q6-wmma-ring96-repro",
+      "status": "diagnosed_ring96_computes_cross_rotated_b_tile_not_matmul",
+      "findings": [
+        "accepted VK64 matches the normal CPU reference on small profiles and rejects the cross/rotated reference: p33 k3584 normal bad_gt_0p25=0 while cross_bad_gt_0p25=1737",
+        "RING96 copy-A+B rejects the normal CPU reference but matches the cross/rotated reference: p33 k3584 normal bad_gt_0p25=1749 while cross_bad_gt_0p25=0 and cross_max_abs=0.046875",
+        "the source-level cause is the current RING96 loop loading A from k-tile 0 and B from k-tile 1 with a +2 column-tile rotation, then storing under the unrotated output column tile",
+        "do not continue copy/wait/store-stage variants of this RING96 topology; a correct medium route must accumulate both K subtiles against the matching B tile ownership while preserving the useful RADV-like 16-WMMA/48-b64 static surface"
+      ]
+    },
+    {
       "id": "q6_k_wmma_vk64_ring96_copyab_synthetic_repro",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-repro-compare-bda2429af-20260620-014712/",

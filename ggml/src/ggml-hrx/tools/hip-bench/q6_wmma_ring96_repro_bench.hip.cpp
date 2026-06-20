@@ -164,6 +164,37 @@ static std::vector<float> cpu_reference(
     return ref;
 }
 
+static std::vector<float> ring96_cross_reference(
+        const std::vector<hrx_block_q6_K_wmma_vk128_lhs> & blocks,
+        const std::vector<float> & rhs,
+        int k,
+        int rows,
+        int cols) {
+    const int blocks_per_row = k / 256;
+    std::vector<float> ref(static_cast<size_t>(rows) * cols, 0.0f);
+    for (int col = 0; col < cols; ++col) {
+        const int col_tile_base = (col / 64) * 64;
+        const int col_local = col - col_tile_base;
+        const int col_lane = col_local & 15;
+        const int stored_col_tile = (col_local >> 4) & 3;
+        const int source_col_tile = (stored_col_tile + 2) & 3;
+        const int source_col = col_tile_base + source_col_tile * 16 + col_lane;
+        for (int row = 0; row < rows; ++row) {
+            float sum = 0.0f;
+            if (source_col < cols) {
+                for (int k0 = 0; k0 < k; k0 += 32) {
+                    for (int kk = 0; kk < 16; ++kk) {
+                        sum += q6_dequant(blocks, row, k0 + kk, blocks_per_row) *
+                            rhs[static_cast<size_t>(source_col) * k + k0 + 16 + kk];
+                    }
+                }
+            }
+            ref[static_cast<size_t>(col) * rows + row] = sum;
+        }
+    }
+    return ref;
+}
+
 static int run_case(int rows, int cols, int k, const case_config & config) {
     if ((k % 256) != 0) {
         std::fprintf(stderr, "k must be a multiple of 256\n");
@@ -203,14 +234,19 @@ static int run_case(int rows, int cols, int k, const case_config & config) {
     HIP_CHECK(hipMemcpy(h_dst.data(), d_dst.ptr, h_dst.size() * sizeof(h_dst[0]), hipMemcpyDeviceToHost));
 
     const std::vector<float> ref = cpu_reference(h_src0, h_src1, k, rows, cols);
+    const std::vector<float> cross_ref = ring96_cross_reference(h_src0, h_src1, k, rows, cols);
     size_t nan_count = 0;
     size_t inf_count = 0;
     size_t sentinel_count = 0;
     size_t bad_count = 0;
+    size_t cross_bad_count = 0;
     size_t bad_groups[16] = {};
     double max_group_abs[16] = {};
     double max_abs = 0.0;
     double max_rel = 0.0;
+    double cross_max_abs = 0.0;
+    double cross_max_rel = 0.0;
+    size_t cross_max_idx = 0;
     size_t max_idx = 0;
     for (size_t i = 0; i < h_dst.size(); ++i) {
         const float actual = h_dst[i];
@@ -233,11 +269,17 @@ static int run_case(int rows, int cols, int k, const case_config & config) {
         const double diff = std::abs(static_cast<double>(actual) - static_cast<double>(ref[i]));
         const double denom = std::max(1.0, std::abs(static_cast<double>(ref[i])));
         const double rel = diff / denom;
+        const double cross_diff = std::abs(static_cast<double>(actual) - static_cast<double>(cross_ref[i]));
+        const double cross_denom = std::max(1.0, std::abs(static_cast<double>(cross_ref[i])));
+        const double cross_rel = cross_diff / cross_denom;
         if (diff > 0.25) {
             ++bad_count;
             if (group >= 0 && group < 16) {
                 ++bad_groups[group];
             }
+        }
+        if (cross_diff > 0.25) {
+            ++cross_bad_count;
         }
         if (group >= 0 && group < 16 && diff > max_group_abs[group]) {
             max_group_abs[group] = diff;
@@ -247,12 +289,19 @@ static int run_case(int rows, int cols, int k, const case_config & config) {
             max_rel = rel;
             max_idx = i;
         }
+        if (cross_diff > cross_max_abs) {
+            cross_max_abs = cross_diff;
+            cross_max_rel = cross_rel;
+            cross_max_idx = i;
+        }
     }
 
     const int max_row = static_cast<int>(max_idx % static_cast<size_t>(rows));
     const int max_col = static_cast<int>(max_idx / static_cast<size_t>(rows));
+    const int cross_max_row = static_cast<int>(cross_max_idx % static_cast<size_t>(rows));
+    const int cross_max_col = static_cast<int>(cross_max_idx / static_cast<size_t>(rows));
     std::printf(
-        "%s profile=%s rows=%d cols=%d k=%d elements=%zu nan=%zu inf=%zu sentinel=%zu bad_gt_0p25=%zu max_abs=%g max_rel=%g idx=%zu row=%d col=%d actual=%g ref=%g bad_groups=",
+        "%s profile=%s rows=%d cols=%d k=%d elements=%zu nan=%zu inf=%zu sentinel=%zu bad_gt_0p25=%zu max_abs=%g max_rel=%g idx=%zu row=%d col=%d actual=%g ref=%g cross_bad_gt_0p25=%zu cross_max_abs=%g cross_max_rel=%g cross_idx=%zu cross_row=%d cross_col=%d cross_ref=%g bad_groups=",
         HRX_Q6_REPRO_LABEL,
         config.name,
         rows,
@@ -269,7 +318,14 @@ static int run_case(int rows, int cols, int k, const case_config & config) {
         max_row,
         max_col,
         h_dst[max_idx],
-        ref[max_idx]);
+        ref[max_idx],
+        cross_bad_count,
+        cross_max_abs,
+        cross_max_rel,
+        cross_max_idx,
+        cross_max_row,
+        cross_max_col,
+        cross_ref[cross_max_idx]);
     bool first = true;
     for (int group = 0; group < 16; ++group) {
         if (bad_groups[group] == 0 && max_group_abs[group] == 0.0) {
