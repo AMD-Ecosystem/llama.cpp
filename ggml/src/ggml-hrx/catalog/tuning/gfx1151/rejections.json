@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_dense_prompt_mmq64x128_splitqsum_bk2_model_ab",
+      "date": "2026-06-19",
+      "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X128_SPLITQSUM_BK2_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x128-splitqsum-bk2-focused-20260619-184940/",
+      "model_artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x128-splitqsum-bk2-model-ab-20260619-185116/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x128-splitqsum-bk2-compile-20260619-184847/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_mmq64x128_splitqsum_bk2.hsaco",
+      "reason": "The Q8_0 packed-Q8_1/x4 BN128 split-qsum BK2 probe preserved the accepted full-column BM64/BN128 split-qsum dataflow and changed only the staged K depth from one Q8_1 block per barrier to two. This tests barrier amortization and K staging depth as a packed-path alternative after direct WMMA routes failed correctness or regressed badly. It built through CMake/Ninja with wave32, SGPR=34, VGPR=173, LDS=8704 bytes, private_segment=0, and no spills for the target symbol. Focused CPU-reference gates passed for p33, p512, and p513. Route traces proved p512 selected BK2 for all five Q8_0 rows, p33 stayed on the accepted BN64 route, and p513 stayed on the accepted BN112 tail route. Focused p512 same-runner timing improved 2.0% total versus current BN128 split-qsum, 72626.813 -> 71171.571 us, with ffn_out 1.033x, ffn_gate 1.016x, and result_output 1.021x faster, while Vcur and Qcur slightly regressed. Same-binary Llama 3.1 8B Q8_0 p512/fa1 model A/B rejected promotion: baseline averaged 458.964864 tok/s, BK2 averaged 457.465526 tok/s, ratio 0.9967, with route logs confirming 795 Q8_0 rows selected the intended provider. Keep BK2 opt-in as a useful packed-path schedule bracket; do not default it."
+    },
+    {
       "id": "q8_0_direct_wmma_vk128_phase96_directwait_asmwmma_correctness",
       "date": "2026-06-19",
       "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_phase96_directwait_asmwmma_bufferstore_phase0_f16acc_wg256_f32 + phase1",

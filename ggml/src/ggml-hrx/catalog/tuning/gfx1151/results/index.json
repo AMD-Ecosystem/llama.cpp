@@ -3,6 +3,15 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_dense_prompt_mmq64x128_splitqsum_bk2_model_ab",
+      "date": "2026-06-19",
+      "artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x128-splitqsum-bk2-focused-20260619-184940/",
+      "model_artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x128-splitqsum-bk2-model-ab-20260619-185116/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8_0-mmq64x128-splitqsum-bk2-compile-20260619-184847/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_mmq64x128_splitqsum_bk2.hsaco",
+      "status": "rejected_model_ab_after_focused_p512_win"
+    },
+    {
       "id": "q8_0_direct_wmma_vk128_phase96_directwait_asmwmma_correctness",
       "date": "2026-06-19",
       "artifact": "cache/hrxv1/gfx1151/q8-phase96-directwait-asmwmma-focused-20260619-183828/",
