@@ -3,6 +3,39 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_motif192_k2_baseoff_raw16_clause4_fulltile_catalog_perf",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-baseoff-raw16-clause4-focused-20260620-132126/",
+      "performance_artifact": "cache/hrxv1/gfx1151/q8-baseoff-raw16-clause4-perf-20260620-132214/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-baseoff-raw16-clause4-compile-20260620-131719/",
+      "tool": "CMake/Ninja-built HRX v1 Q8_0 catalog route plus static RADV store-cluster/issue-window comparison and focused p33/p512/p513 test-backend-ops gates",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_baseoff_raw16_clause4_fulltile_bufferstore_wg256.hsaco",
+      "status": "rejected_focused_perf_regression",
+      "candidate_gate": {
+        "production_target": "Llama 3.1 8B Q8_0 p512 dense prompt rows where current HRX packed-Q8_1 split-qsum remains behind the Vulkan large aligned Q8_0 route, with p33 and p513 odd/tail policy checks",
+        "baseline_command": "build/hrx-v1-catalog-gfx1151/bin/test-backend-ops perf -b HRX0 -o MUL_MAT --output csv --test-file p512-q8_0-prompt.txt without the clause4 env",
+        "variant_command": "same command with GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_ASMWMMA_MOTIF192_K2_BASEOFF_RAW16_CLAUSE4_FULLTILE_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+        "same_runner_comparison_method": "tools/hrxv1_compare_backend_op_perf.py on focused p512 perf CSVs",
+        "route_trace_path": "p33/trace.txt, p512/trace.txt, and p513/trace.txt in the focused artifact",
+        "scheduler_trace_path": "static/compare-radv.md, static/issue-window.md, and clusters/baseoff-raw16-clause4.md in the static artifact",
+        "focused_cpu_reference": "p33/test.csv, p512/test.csv, and p513/test.csv all passed",
+        "compile_report_path": "static/readelf-notes.txt",
+        "target_listing_path": "static/device-objdump.amdgcn.txt and static/symbol.amdgcn.txt",
+        "prior_art_schedule_source": "RADV Q8_0 large oracle matmul_q8_0_f32_f16acc_aligned_l hash 0x72d309e22f889977, q8_0_radv_large_store_block_extract, and q8_0_motif192_k2_baseoff_raw16_fulltile_catalog_perf",
+        "promotion_rule": "reject for promotion unless a future candidate preserves correctness/no-spill codegen, keeps the RADV one-window outstanding LDS-load schedule, and beats the current packed-Q8_1 route in focused p512/p513 same-runner gates"
+      },
+      "findings": [
+        "added an opt-in catalog route that preserves the base-offset raw16 full-tile K2 schedule but wraps each four-slot motif raw-store group with s_clause 0x3 plus a separator",
+        "static HSACO evidence is resource-clean: wave64, SGPR=20, VGPR=212, LDS=20480, private_segment=0, no spills, 32 WMMA, 64 ds_load_b64, and 64 buffer_store_b32",
+        "issue-window evidence preserves the previous good operand schedule: one 32-WMMA region, 64 immediate LDS loads before final wait, and lgkmcnt(51)",
+        "store-cluster evidence moved the direct store shape in the intended direction: effectively sixteen 4-store buffer clusters at 64 active stores, matching the RADV direct full-tile branch better than the previous eight 8-store cluster shape",
+        "focused p33, p512, and p513 CPU-reference gates passed",
+        "route traces proved p33 and p513 stayed guarded out while p512 selected this provider only for ffn_out, ffn_gate, and result_output",
+        "same-runner focused p512 perf rejected promotion: total 76827.008 -> 81591.385 us, ffn_out 6816.084 -> 7951.201 us, ffn_gate 5959.384 -> 7190.273 us, and result_output 61699.619 -> 64076.952 us",
+        "decision: keep opt-in only. Store clustering is not the remaining decisive delta; future Q8 large-route work needs a lower-level cooperative lane/dataflow primitive or a materially different packed-Q8 schedule."
+      ]
+    },
+    {
       "id": "q8_0_motif192_k2_baseoff_raw16_fulltile_catalog_perf",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-baseoff-raw16-fulltile-focused-20260620-130715/",
