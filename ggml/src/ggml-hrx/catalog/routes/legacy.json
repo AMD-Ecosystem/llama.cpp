@@ -9576,6 +9576,51 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wave4row_fast_half_bufferstore_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wave4row_fast_half_bufferstore_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_wave4row_fast_half_bufferstore_wg256",
+    "artifact_id": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_wave4row_fast_half_bufferstore_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wave4row_fast_half_bufferstore_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q6_dense_prompt_wmma16x16_vk64_padded44_w64_wave4row_fast_half_bufferstore_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q6_K x F32 -> F32 MUL_MAT",
+      "k_multiple": 256,
+      "rows_min": 16,
+      "cols_min": 16,
+      "cols_max": 64,
+      "requires_env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_WAVE4ROW_FAST_HALF_BUFFERSTORE_F16ACC_WG256_PROMPT",
+      "prior_delta": "Derived from the correctness-clean but slow Q6_K wave4row probe and the rejected WN32 fast-half buffer-store route. It preserves wave4row's all-wave low-live row-stripe ownership and single A/B staging pass, then adds selected-half ds_write_b16/ds_read_u16_d16 writeback while reusing the A LDS allocation after the K loop. This tests whether the missing RADV halfword writeback topology can be introduced without the WN32 route's added LDS footprint or accumulator pressure."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wave4row_fast_half_bufferstore_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_focused_perf",
+      "selection": "Opt-in only. Static comparison in cache/hrxv1/gfx1151/q6-vk64-wave4row-fast-half-static-9e43861dd-20260620-011552/ proved the intended narrow movement: selected-half writeback appears with ds_load_u16_d16=32 and ds_store_b16=34 while preserving LDS=11264, wave64, no spills, and VGPR=93. Focused p33 CPU-reference in cache/hrxv1/gfx1151/q6-vk64-wave4row-fast-half-focused-9e43861dd-20260620-011707/ passed and selected this provider for all three Q6_K rows. Same-runner focused timing in cache/hrxv1/gfx1151/q6-vk64-wave4row-fast-half-perf-9e43861dd-20260620-011736/ rejected promotion: Q6 focus sum 14027.611 -> 15555.615 us, with Vcur 397.715 -> 455.538 us, ffn_out 2244.604 -> 2350.778 us, and result_output 11385.292 -> 12749.299 us. The route still has only 8 WMMA and 16 buffer stores versus RADV's 16/96."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_b64asm_f16acc_wg128_f32",
     "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wn32_b64asm_f16acc_wg128",
     "op": "MUL_MAT",

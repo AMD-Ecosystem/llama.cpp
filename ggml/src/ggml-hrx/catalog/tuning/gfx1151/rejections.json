@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_wmma_vk64_padded44_wave4row_fast_half_bufferstore_perf",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wave4row_fast_half_bufferstore_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_WAVE4ROW_FAST_HALF_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-wave4row-fast-half-focused-9e43861dd-20260620-011707/",
+      "perf_artifact": "cache/hrxv1/gfx1151/q6-vk64-wave4row-fast-half-perf-9e43861dd-20260620-011736/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-vk64-wave4row-fast-half-static-9e43861dd-20260620-011552/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_wave4row_fast_half_bufferstore_wg256.hsaco",
+      "reason": "The Q6_K VK64 wave4row fast-half buffer-store probe tested the next narrow axis after the correctness-clean but slow wave4row route: preserve all-wave low-live row-stripe ownership and single A/B staging, then add selected-half ds_write_b16/ds_read_u16_d16 writeback while reusing the A LDS allocation after the K loop. It built through normal CMake/Ninja HSACO generation and selected only under explicit opt-in. Static comparison against the Qwen3 30B Q6_K p33 RADV medium oracle showed the intended partial movement without an LDS cliff: wave64, SGPR=40, VGPR=93, LDS=11264, no spills, ds_load_u16_d16=32, ds_store_b16=34, buffer_store_b32=16, and 8 WMMA. This preserves the medium LDS footprint and adds halfword writeback versus plain wave4row, but still remains far from RADV's 16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 64 ds_store_b16, 96 buffer_store_b32, and final pre-WMMA lgkmcnt=40. Focused p33 CPU-reference passed with route traces selecting this provider for Vcur, ffn_out, and result_output. Same-runner focused timing rejects promotion: Q6 focus sum 14027.611 -> 15555.615 us, Vcur 397.715 -> 455.538 us, ffn_out 2244.604 -> 2350.778 us, and result_output 11385.292 -> 12749.299 us. Keep opt-in only. The useful conclusion is that selected-half LDS writeback can be added to wave4row without extra LDS or correctness loss, but it does not fix the p33 gap; the next Q6 medium attempt needs to recover the 16-WMMA/48-b64 outstanding load window and 96-store contract, not just add halfword writeback to an 8-WMMA direct-F32 schedule."
+    },
+    {
       "id": "q6_k_wmma_vk64_padded44_wave4row_perf",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_wave4row_f16acc_wg256_f32",
