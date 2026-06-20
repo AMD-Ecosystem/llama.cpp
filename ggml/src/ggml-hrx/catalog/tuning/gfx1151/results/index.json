@@ -3,6 +3,20 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_k_wmma_vk64_ring96_k2_stream_copyab_no_spill_but_slow",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-k2-stream-copyab-focused-236633deb-20260620-020817/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_stream_copyab_wg256.hsaco",
+      "status": "rejected_correct_no_spills_but_load_bound",
+      "findings": [
+        "streaming the corrected K2 ownership keeps focused p33 correctness: Vcur, ffn_out, and result_output passed with route traces selecting the new provider",
+        "the pressure objective succeeded relative to full K2 copy-A+B: VGPR drops to 175, private_segment=0, and vgpr_spill_count=0 while preserving wave64 and LDS=11264",
+        "the cost is LDS/load amplification: 32 WMMA, 160 ds_load-class instructions, 64 buffer_store_b32, and 61 s_waitcnt-class instructions",
+        "focused p33 timing is 1.729x slower than the accepted VK64 default: 24640.156 us versus 14254.969 us",
+        "next Q6 medium work needs corrected K2 ownership with fragment sharing that does not spill and does not reload per row-fragment"
+      ]
+    },
+    {
       "id": "q6_k_wmma_vk64_ring96_k2_copyab_correct_but_spills",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-k2-copyab-focused-9a964c8b3-20260620-015954/",

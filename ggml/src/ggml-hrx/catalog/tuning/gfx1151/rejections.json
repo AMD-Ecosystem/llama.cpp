@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_wmma_vk64_padded44_ring96_k2_stream_copyab_perf",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_stream_copyab_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_STREAM_COPYAB_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-k2-stream-copyab-focused-236633deb-20260620-020817/",
+      "perf_artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-k2-stream-copyab-focused-236633deb-20260620-020817/perf-compare-stream-vs-default.md",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-k2-stream-copyab-focused-236633deb-20260620-020817/readobj-notes.txt and cache/hrxv1/gfx1151/q6-vk64-ring96-k2-stream-copyab-focused-236633deb-20260620-020817/isa-counts.txt",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_stream_copyab_wg256.hsaco",
+      "reason": "The Q6_K VK64 padded44 RING96 K2 streamed copy-A+B probe isolates the pressure axis after the correctness-clean but spill-bound K2 copy-A+B route. It keeps corrected matching-K subtile accumulation, but streams one output column-fragment group at a time: two B fragments remain live across four row fragments while A fragments are loaded on demand. This preserves the single-wave BM64/BN64/BK32/WG256/wave64 and 11264-byte LDS footprint and removes the K2 spill cliff: CMake/Ninja-built HSACO reports SGPR=65, VGPR=175, private_segment=0, and vgpr_spill_count=0. Focused p33 CPU-reference passed Vcur, ffn_out, and result_output with route traces selecting this provider for all three rows. Reject for production performance before model tests. The no-spill tradeoff increases LDS traffic and waits: 32 visible WMMA, 160 ds_load-class instructions, 64 buffer_store_b32, and 61 s_waitcnt-class instructions. Same-runner focused timing is slower than the accepted VK64 default: total 14254.969 -> 24640.156 us, Vcur 397.222 -> 545.102 us, ffn_out 2360.844 -> 3041.781 us, and result_output 11496.903 -> 21053.273 us. Keep opt-in only. The useful conclusion is that corrected K2 ownership is now proven and the spill can be removed, but the streamed HIP spelling is load/wait bound; the next Q6 medium attempt needs to share fragments without full-array spilling or per-row reload amplification."
+    },
+    {
       "id": "q6_k_wmma_vk64_padded44_ring96_k2_copyab_perf",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_copyab_f16acc_wg256_f32",
