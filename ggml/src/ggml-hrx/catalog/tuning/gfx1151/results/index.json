@@ -3,6 +3,23 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_radv_large_store_path_audit",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-radv-store-path-audit-20260620-continue/",
+      "tool": "tools/vulkan-oracle/classify_radv_store_paths.py",
+      "oracle_artifact": "cache/hrxv1/gfx1151/vulkan-oracle-llama31-8b-q8_0-p512-fa1-20260617-200453/",
+      "status": "schedule_evidence_target_corrected_no_route_promotion",
+      "findings": [
+        "added a reusable RADV ISA store-path classifier to separate hot full-aligned coopMatStore blocks from compiled unaligned and partial-edge fallback blocks before using static opcode counts as HIP porting targets",
+        "ran the classifier on the Q8_0 p512 large Vulkan oracle pipeline matmul_q8_0_f32_f16acc_aligned_l, hash 0x72d309e22f889977",
+        "the shader-wide static totals remain 32 v_wmma, 192 buffer_store_b32, 132 LDS stores, 192 LDS loads, and 2 barriers, matching the earlier coarse RADV signature",
+        "the 192 buffer_store_b32 total is not one hot full-tile store path: it decomposes into 16 direct_global_store blocks with 64 buffer stores, 16 full_tile_staged_store fallback blocks with 64 buffer stores, and 64 partial_tile_scalar_store fallback blocks with 64 buffer stores",
+        "for p512 production Q8_0 shapes the output stride is aligned and the representative output dimensions are multiples of the 128x128 large tile, so the Vulkan shader source selects the is_aligned && is_in_bounds coopMatStore-to-global branch for full tiles rather than the staged or partial fallback branches",
+        "this corrects the next Q8 parity target: do not chase row+16 fullpair or staged-halfword routes solely to reproduce a static 192-store count. The active full-tile target is the direct cooperative-matrix global-store lane ownership and surrounding RADV load/wait schedule, while p513 edge coverage needs a separate partial-path guard",
+        "the earlier 64-store HIP direct routes are still rejected by timing, so this is not a rollback to those routes. It means the remaining gap is cooperative-matrix store ownership, load issue order, and packed-dataflow quality under the active 64-store branch, not another invalid fullpair output map."
+      ]
+    },
+    {
       "id": "q8_0_packstage_asmwmma_fast_half_fullpair_compile_contract",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-packstage-asmwmma-fast-half-fullpair-compile-20260620-062855/",
