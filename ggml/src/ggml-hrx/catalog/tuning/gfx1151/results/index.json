@@ -65,6 +65,38 @@
       ]
     },
     {
+      "id": "q6_k_wmma_vk64_ring96_k2_kloop_asm_copyab_sidestore_probe",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q6-ring96-kloop-asm-copyab-sidestore-repro-31cb42b27-20260620-145415/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-ring96-kloop-asm-copyab-sidestore-static-20260620-145436/",
+      "tool": "CMake/Ninja-built hrx-hip-bench-q6-wmma-ring96-kloop-asm-sidestore-repro plus generated gfx1151 HSACO static extraction and compare_amdgcn_isa.py against the Qwen3 30B Q6_K p33 RADV medium oracle",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_sidestore_wg256.hsaco",
+      "status": "accepted_synthetic_codegen_probe_not_routeable",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K p33 dense prompt medium route; isolate whether the corrected direct64 inline-WMMA K-loop can tolerate a RADV-like halfword LDS/store side surface before adding any runtime selector",
+        "baseline_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q6-wmma-ring96-kloop-asm-repro",
+        "variant_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q6-wmma-ring96-kloop-asm-sidestore-repro",
+        "same_runner_comparison_method": "synthetic production-ABI Q6 rows compare normal CPU reference and old cross-rotated reference; static HSACO compared against the RADV p33 medium schedule and the direct64 K-loop probe",
+        "route_trace_path": "not applicable; standalone repro and CMake-built HSACO only",
+        "scheduler_trace_path": "cache/hrxv1/gfx1151/q6-ring96-kloop-asm-copyab-sidestore-static-20260620-145436/compare-radv.md and issue-window.md",
+        "focused_cpu_reference": "small rows 64x33 k256, 64x33 k512, 64x33 k3584, 64x64 k3584, and 128x33 k3584 all had bad_gt_0p25=0 against the normal CPU reference",
+        "compile_report_path": "cache/hrxv1/gfx1151/q6-ring96-kloop-asm-copyab-sidestore-static-20260620-145436/readobj-notes.txt",
+        "target_listing_path": "cache/hrxv1/gfx1151/q6-ring96-kloop-asm-copyab-sidestore-static-20260620-145436/objdump.txt",
+        "prior_art_schedule_source": "Qwen3 30B Q6_K p33 RADV medium oracle matmul_q6_k_f32_f16acc_aligned_m hash 0x6eebdfb4c3043b23 plus the direct64 K-loop probe from q6_k_wmma_vk64_ring96_k2_kloop_asm_copyab_direct64_probe",
+        "promotion_rule": "do not promote this side-store probe. The side writes intentionally target col_tile+4 so they are out of range for the checked <=64-column repro shapes and would be unsafe for a real route. A route-facing candidate must integrate the halfword stage into the true output ownership contract, pass focused p33 route traces/correctness, and beat H4LOAD timing."
+      },
+      "findings": [
+        "added a CMake-built exploratory side-store wrapper hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_sidestore_f16acc_wg256_f32 and hrx-hip-bench-q6-wmma-ring96-kloop-asm-sidestore-repro without adding any runtime selector",
+        "the side-store loop preserves direct64 checked outputs: deterministic 64x33 k256, 64x33 k512, 64x33 k3584, 64x64 k3584, and 128x33 k3584 rows all passed normal CPU reference with bad_gt_0p25=0 and rejected the old cross-rotated reference",
+        "static metadata from the CMake-built HSACO is wave64, LDS=15360, SGPR=50, VGPR=153, private_segment=0, and no SGPR/VGPR spills",
+        "static opcode counts now move toward the RADV store-side surface: 16 v_wmma_f16_16x16x16_f16, 32 ds_load_b64, 64 ds_load_u16_d16, 66 ds_store_b16, 96 buffer_store_b32, 50 s_waitcnt, and 20 s_waitcnt_depctr",
+        "compared with the direct64 K-loop probe, the halfword side stage supplies the missing 96 buffer-store and 64 halfword LDS load/store classes without increasing VGPR or introducing spills",
+        "compared with RADV, the math issue window still does not match: RADV has 48 immediate pre-WMMA ds_load_b64 and final pre-WMMA lgkmcnt=40, while this HIP side-store probe has 32 immediate pre-WMMA ds_load_b64 and final pre-WMMA lgkmcnt=0",
+        "the store surface is diagnostic only because the side writes are deliberately out of the checked output tile; this proves the codegen surface is possible, not that the production output ownership contract is solved",
+        "next useful Q6 p33 work should combine this no-spill store-side primitive with a real selected-output lane/writeback contract and a RADV-like 48-load outstanding issue window, rather than routing this probe"
+      ]
+    },
+    {
       "id": "q6_k_wmma_vk64_medium_unrolled_k2_typedstage_mixed96_fixture_prior",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/coopstore-k2-typedstage-mixed96-9e59a04c2-20260620-141031/",

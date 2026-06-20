@@ -106,6 +106,10 @@
 #define HRX_Q6_K_WMMA_VK128_STORE_STAGE_TYPED_LINEAR 0
 #endif
 
+#ifndef HRX_Q6_K_WMMA_VK128_SIDE_STAGE_FAST_HALF
+#define HRX_Q6_K_WMMA_VK128_SIDE_STAGE_FAST_HALF 0
+#endif
+
 #ifndef HRX_Q6_K_WMMA_VK128_BUFFER_STORE
 #define HRX_Q6_K_WMMA_VK128_BUFFER_STORE 0
 #endif
@@ -700,7 +704,7 @@ static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_store_acc_f16_row_maj
     __syncthreads();
 }
 
-#if HRX_Q6_K_WMMA_VK128_STORE_STAGE_FAST_HALF && HRX_Q6_K_WMMA_VK128_BUFFER_STORE
+#if (HRX_Q6_K_WMMA_VK128_STORE_STAGE_FAST_HALF || HRX_Q6_K_WMMA_VK128_SIDE_STAGE_FAST_HALF) && HRX_Q6_K_WMMA_VK128_BUFFER_STORE
 static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_ds_store_u16(
         hrx_q6_k_wmma_vk128_lds_u16_ptr ptr,
         uint16_t value) {
@@ -850,7 +854,7 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
 
     __shared__ _Float16 sh_a[BM * SHARED_STRIDE];
     __shared__ _Float16 sh_b[BN * SHARED_STRIDE];
-#if HRX_Q6_K_WMMA_VK128_STORE_STAGE_FAST_HALF
+#if HRX_Q6_K_WMMA_VK128_STORE_STAGE_FAST_HALF || HRX_Q6_K_WMMA_VK128_SIDE_STAGE_FAST_HALF
     __shared__ _Float16 sh_store[WAVE_COUNT * 2 * 16 * 16];
 #elif HRX_Q6_K_WMMA_VK128_STORE_STAGE_TYPED_LINEAR
     __shared__ uint16_t sh_store_typed[16 * 64 * 4];
@@ -1345,6 +1349,26 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
 #endif
         }
     }
+#if HRX_Q6_K_WMMA_VK128_SIDE_STAGE_FAST_HALF && HRX_Q6_K_WMMA_VK128_BUFFER_STORE
+#pragma unroll
+    for (int group = 0; group < 8; ++group) {
+        if (tid < 64u) {
+            const int row_tile = group & 3;
+            const int col_tile = (group >> 2) & 1;
+            hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_fast_half_buffer_selected(
+                dst_rsrc,
+                rows,
+                row_base + static_cast<long long>(row_tile * 16),
+                col_base + static_cast<long long>((col_tile + 4) * 16),
+                rows,
+                cols,
+                acc[group],
+                lane,
+                wave,
+                (hrx_q6_k_wmma_vk128_lds_volatile_half_ptr) sh_store);
+        }
+    }
+#endif
 #endif
 #else
 #pragma unroll
