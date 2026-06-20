@@ -184,6 +184,7 @@
       "id": "q8_0_bm128_direct192_asm_real_output_fixture",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-bm128-direct192-output-20260620-continue/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-bm128-direct192-output-static-20260620-084002/summary.md",
       "tool": "hrx-hip-bench-q8-wmma-repro",
       "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro",
       "status": "accepted_real_output_fixture_prior_not_production_route",
@@ -194,6 +195,8 @@
         "the HIP builtin WMMA control failed the same real-output fixture: at k=4096 it failed p128 with bad=494 max_abs=7.57994, p33 with bad=247 max_abs=7.57994, p512 with bad=162780 nan=1588 max_abs=24960, and p513 with bad=164811 nan=1536 max_abs=24816",
         "the builtin control also failed k=14336 p128 and p33 with bad=512 and bad=256 respectively, max_abs=26.8066; the harness currently returns zero for custom single-shape runs despite nonzero bad counts, so the stdout evidence is authoritative for those two rejection rows",
         "this closes the prior gap between the tile-local direct192 contract and full-width output proof: inline assembly preserves the real-output lane/writeback contract across p512 and p513 at k4096, while the compiler builtin spelling is not a valid correctness primitive for this schedule on gfx1151",
+        "static extraction from the same CMake/Ninja-built benchmark binary shows why this is not a route template: the correctness-clean inline-assembly specialization is wave64, SGPR=50, VGPR=256, LDS=20480, private_segment=64, and 15 VGPR spills; the no-spill builtin specialization is wave64, SGPR=50, VGPR=195, LDS=20480, private_segment=0, but it is the correctness-bad control",
+        "issue-window and store-cluster comparison show the inline-assembly real-output fixture emits one 32-WMMA region with 64 ds_load_b64 and 64 buffer_store_b32, but final pre-WMMA wait is lgkmcnt(0) rather than RADV's lgkmcnt(51), and it lacks the tracked 192-store cooperative writeback surface of the Vulkan large oracle",
         "do not promote this fixture directly. It still loads F32 RHS and is not wired to the production Q8 catalog ABI or timing path. The next route-facing Q8 candidate should port this exact inline-WMMA lane/writeback ownership into a production Q8 provider or a lower-level cooperative store primitive, then run focused backend-op p33/p512/p513 timing against the accepted packed-Q8_1 split-qsum baseline."
       ]
     },
