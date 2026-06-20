@@ -2189,6 +2189,62 @@
         "this improves on the prior direct192 inline-asm output fixture's 15 VGPR spills but remains far from a promotable no-spill route",
         "decision: reject before timing/catalog transfer. The useful next source axis must reduce live two-K operand-bank pressure without splitting into stream-K's two 16-WMMA regions."
       ]
+    },
+    {
+      "id": "q8_0_bm128_direct192_rawfrag_real_output_probe",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-direct192-rawfrag-output-probe-20260620-123248/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-direct192-rawfrag-output-probe-20260620-123248/static/",
+      "status": "rejected_compile_spills",
+      "candidate_gate": {
+        "production_target": "Llama 3.1 8B Q8_0 p512/p513 dense prompt rows needing a no-spill one-window 32-WMMA HRX schedule comparable to RADV",
+        "baseline_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro --mode bm128-direct192-scalaracc-raw-asm-output",
+        "variant_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro --mode bm128-direct192-rawfrag-raw-asm-output",
+        "same_runner_comparison_method": "not timed; rejected from resource metadata before route transfer",
+        "route_trace_path": "not applicable; benchmark-only diagnostic and no runtime selector changed",
+        "scheduler_trace_path": "static/issue-compare.md and static/compare-rawfrag.md",
+        "focused_cpu_reference": "correctness.stdout passed 128x128, 128x33, 4096x512, and 4096x513 real-output rows with bad=0",
+        "compile_report_path": "static/readelf-notes.txt",
+        "target_listing_path": "static/device-objdump.amdgcn.txt and static/direct192-rawfrag-raw-asm.symbol.amdgcn.txt",
+        "prior_art_schedule_source": "RADV Q8_0 large oracle matmul_q8_0_f32_f16acc_aligned_l hash 0x72d309e22f889977 plus scalaracc and direct192 inline-asm fixtures",
+        "promotion_rule": "do not transfer rawfrag direct192 variants while VGPR=256/private memory/spills remain. This result points at LDS address-register pressure rather than raw half16 fragment value representation."
+      },
+      "findings": [
+        "added benchmark-only mode bm128-direct192-rawfrag-raw-asm-output to keep loaded A/B operands as raw u64x4 fragments until each WMMA use",
+        "the mode preserves real-output correctness on aligned, narrow, p512, and p513 rows",
+        "rawfrag keeps a single 32-WMMA region and final pre-WMMA lgkmcnt=51",
+        "static metadata is unchanged from scalaracc: wave64 SGPR=50 VGPR=256 LDS=20480 private=48 with 11 VGPR spills",
+        "scratch loads appear around LDS address use, so the remaining cliff is likely address-bank lifetime rather than half16 fragment value spelling",
+        "decision: reject before timing/catalog transfer."
+      ]
+    },
+    {
+      "id": "q8_0_bm128_direct192_baseoff_real_output_probe",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-direct192-baseoff-output-probe-20260620-123727/",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-direct192-baseoff-output-probe-20260620-123727/static/",
+      "status": "compile_contract_pass_needs_route_timing",
+      "candidate_gate": {
+        "production_target": "Llama 3.1 8B Q8_0 p512/p513 dense prompt rows needing a no-spill one-window 32-WMMA HRX schedule comparable to RADV",
+        "baseline_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro --mode bm128-direct192-raw-asm-inout-output",
+        "variant_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro --mode bm128-direct192-baseoff-raw-asm-output",
+        "same_runner_comparison_method": "static compile-contract pass only so far; next step is production/catalog route transfer with same-binary p512/p513 timing against the accepted packed-Q8_1 route",
+        "route_trace_path": "not applicable yet; benchmark-only diagnostic and no runtime selector changed",
+        "scheduler_trace_path": "static/issue-compare.md and static/compare-baseoff.md",
+        "focused_cpu_reference": "correctness.stdout passed 128x128, 128x33, 4096x512, and 4096x513 real-output rows with bad=0",
+        "compile_report_path": "static/readelf-notes.txt",
+        "target_listing_path": "static/device-objdump.amdgcn.txt and static/direct192-baseoff-raw-asm.symbol.amdgcn.txt",
+        "prior_art_schedule_source": "RADV Q8_0 large oracle matmul_q8_0_f32_f16acc_aligned_l hash 0x72d309e22f889977. Base-offset LDS addressing intentionally mirrors RADV's small base-register set with immediate ds_read_b64 offsets.",
+        "promotion_rule": "do not default from repro evidence alone. Transfer the base-offset LDS load primitive into a catalog candidate, keep rollback, run focused p33/p512/p513 correctness and route traces, then promote only if same-runner timing beats the current Q8 large route without regressions."
+      },
+      "findings": [
+        "added benchmark-only mode bm128-direct192-baseoff-raw-asm-output using two base LDS address registers plus immediate ds_read_b64 offsets instead of one pointer value per fragment",
+        "the mode preserves real-output correctness on aligned, narrow, p512, and p513 rows",
+        "baseoff keeps a single 32-WMMA region, 64 useful LDS fragment loads, 64 direct output stores, and final pre-WMMA lgkmcnt=51",
+        "static metadata escapes the direct192 register cliff: wave64 SGPR=50 VGPR=212 LDS=20480 private=0 with no SGPR or VGPR spills",
+        "the first-hot issue window uses only two pre-WMMA LDS base registers, matching the RADV addressing shape more closely than rawfrag's many base registers",
+        "remaining delta: this is still the simple direct-output surface with 64 buffer stores, not RADV's 192 buffer-store/cooperative writeback surface, so route timing is required before production promotion"
+      ]
     }
   ]
 }
