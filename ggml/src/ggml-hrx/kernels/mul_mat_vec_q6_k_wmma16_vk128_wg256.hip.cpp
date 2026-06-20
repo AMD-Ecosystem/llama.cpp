@@ -570,10 +570,11 @@ static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_tile_map(
         int * col_tile) {
     constexpr int ROW_TILES = HRX_Q6_K_WMMA_VK128_BM / 16;
 #if HRX_Q6_K_WMMA_VK128_W64
-    constexpr int WAVE_COUNT = 4;
+    constexpr int WAVE = 64;
 #else
-    constexpr int WAVE_COUNT = 8;
+    constexpr int WAVE = 32;
 #endif
+    constexpr int WAVE_COUNT = HRX_Q6_K_WMMA_VK128_WG_SIZE / WAVE;
     constexpr int TILE_COUNT = (HRX_Q6_K_WMMA_VK128_BM / 16) * (HRX_Q6_K_WMMA_VK128_BN / 16);
     constexpr int TILES_PER_WAVE = TILE_COUNT / WAVE_COUNT;
 #if HRX_Q6_K_WMMA_VK128_PAIR64_TILE_MAP
