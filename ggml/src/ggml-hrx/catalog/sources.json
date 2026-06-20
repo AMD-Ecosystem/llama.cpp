@@ -473,6 +473,9 @@
   "mul_mat_vec_q8_0_mmq64x128_splitqsum_bk2_wave64": {
     "path": "mul_mat_vec_q8_0_mmq64x128_splitqsum_bk2_wave64.hip.cpp"
   },
+  "mul_mat_vec_q8_0_mmq64x128_splitqsum_bk2_wave64_bufferstore": {
+    "path": "mul_mat_vec_q8_0_mmq64x128_splitqsum_bk2_wave64_bufferstore.hip.cpp"
+  },
   "mul_mat_vec_q8_0_mmq64x128_splitqsum_bk2_wave64_bpair": {
     "path": "mul_mat_vec_q8_0_mmq64x128_splitqsum_bk2_wave64_bpair.hip.cpp"
   },

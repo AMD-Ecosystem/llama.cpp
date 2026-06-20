@@ -10796,6 +10796,51 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_bufferstore_wg256_f32",
+    "family": "mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_bufferstore_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q8_0_mmq64x128_splitqsum_bk2_wave64_bufferstore",
+    "artifact_id": "mul_mat_vec_q8_0_mmq64x128_splitqsum_bk2_wave64_bufferstore_hsaco",
+    "export_name": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_bufferstore_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 110,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q8_0_prompt_mmq64x128_splitqsum_bk2_wave64_bufferstore_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q8_0 x F32 -> F32 MUL_MAT",
+      "k_multiple": 128,
+      "rows_multiple": 128,
+      "cols_min": 128,
+      "cols_multiple_for_selector": 128,
+      "selector_gate": "diagnostic opt-in only for full-column rows with GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X128_SPLITQSUM_BK2_WAVE64_BUFFERSTORE_PROMPT=1; disabled with GGML_HRX_DISABLE_Q8_0_Q8_1_X4_MMQ64X128_SPLITQSUM_BK2_WAVE64_BUFFERSTORE_PROMPT=1",
+      "prior_delta": "Preserves the accepted Q8_0 packed-Q8_1 BM64/BN128 split-qsum BK2 wave64 route and changes only output writeback from ordinary HIP global stores to explicit raw buffer_store_b32. This isolates the RADV direct full-tile store-cluster delta without changing row ownership, Q8_1 packing, K staging, or odd/tail route policy."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_bufferstore_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_focused_perf_regression",
+      "selection": "Opt-in only. CMake/Ninja built gfx1151 HSACO as a normal embedded catalog kernel. Target-symbol static comparison against the accepted parent shows the intended narrow ISA delta: same wave64 scalar-dot schedule class, no spills, same LDS footprint, 768 v_dot4_i32_iu8, with target writeback changed from 32 global_store_b32 plus 32 LDS stores to 32 buffer_store_b32 plus 32 LDS stores and lower waitcnt-class count. Focused p33, p512, and p513 CPU-reference gates passed with zero fallback mentions; route traces kept p33 on existing narrow routes, selected bufferstore for all five p512 rows under opt-in, and kept p513 on existing odd-tail routes. Focused p512 timing rejected promotion: accepted default total 67129.344 us versus bufferstore 67452.018 us, with result_output 51986.786 -> 52294.405 us."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_bpair_wg256_f32",
     "family": "mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_bpair_wg256",
     "op": "MUL_MAT",
