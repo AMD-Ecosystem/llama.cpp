@@ -6610,6 +6610,36 @@
         "interpretation: the exact RADV encoding is reachable from a CMake-built HIP diagnostic, but the naive physical-register ABI does not reproduce the normal symbolic WMMA semantics and does not preserve the upper four accumulator words as a compact dst/C contract would require.",
         "next route-facing work should not use raw .long WMMA without first building a real operand/lane contract. The practical next axis is either a deeper register-ABI fixture that explains RADV's operand setup, or a pivot to packed Q8_1/x4 dataflow. Repeating normal HIP C++ WMMA wrappers remains low value unless their built ISA first closes the compact-accumulator screen."
       ]
+    },
+    {
+      "id": "q6_dense_p33_packed_mmq64_current_rejection_edbb30666",
+      "date": "2026-06-21",
+      "source_commit": "edbb30666",
+      "artifact": "cache/hrxv1/gfx1151/q6-dense-p33-packed-mmq64-current-edbb30666-20260621-042319/",
+      "status": "rejected_p33_dense_dominant_rows_regress_vs_h4load",
+      "tool": "CMake/Ninja-built test-backend-ops with HRX route/provider traces and catalog HSACO static dump",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K p33 dense prompt MUL_MAT rows, especially ffn_out-0-p33 and result_output-p33, where HRX remains below the same-machine Vulkan/RADV oracle",
+        "baseline_command": "GGML_HRX_TRACE_ROUTES=1 GGML_HRX_TRACE_PROVIDERS=1 build/hrx-v1-catalog-gfx1151/bin/test-backend-ops perf -b HRX0 -o MUL_MAT --test-file cache/hrxv1/gfx1151/q6-wmma-vk64-padded44-medium-focused-20260618-062606/q6_prompt_p33.txt --output csv",
+        "variant_command": "GGML_HRX_TRACE_ROUTES=1 GGML_HRX_TRACE_PROVIDERS=1 GGML_HRX_DISABLE_Q6_K_WMMA16_VK64_PADDED44_W64_H4LOAD_F16ACC_WG256_PROMPT=1 GGML_HRX_DISABLE_Q6_K_WMMA16_VK64_PADDED44_W64_F16ACC_WG256_PROMPT=1 GGML_HRX_DISABLE_Q6_K_WMMA16_VK128_PADDED_W64_F16ACC_WG256_PROMPT=1 GGML_HRX_ENABLE_Q6_K_Q8_1_X4_MMQ64_PROMPT=1 build/hrx-v1-catalog-gfx1151/bin/test-backend-ops perf -b HRX0 -o MUL_MAT --test-file cache/hrxv1/gfx1151/q6-wmma-vk64-padded44-medium-focused-20260618-062606/q6_prompt_p33.txt --output csv",
+        "same_runner_comparison_method": "same current-commit test-backend-ops binary and focused three-row Q6 p33 test file; compare default H4LOAD routing against forced packed Q8_1/x4 MMQ64 routing with route traces enabled",
+        "route_trace_path": "artifact default-perf.stderr.log, variant-test.stderr.log, variant-perf.stderr.log, default-route-counts.json, and variant-route-counts.json",
+        "scheduler_trace_path": "artifact static/mmq64-static-summary.md and static/mmq64-objdump.txt",
+        "focused_cpu_reference": "variant-test.stdout.csv passes all three focused rows: Vcur-0-p33, ffn_out-0-p33, and result_output-p33",
+        "compile_report_path": "artifact static/mmq64-readelf-notes.txt",
+        "target_listing_path": "artifact static/mmq64-objdump.txt for CMake generated build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_q8_1_x4_wave64_direct.hsaco",
+        "prior_art_schedule_source": "Qwen3 30B Q6_K p33 Vulkan/RADV oracle, accepted H4LOAD dense Q6 p33 route, previous dense packed Q6 route rejections, and accepted Q6 ID packed MMQ16 route evidence",
+        "promotion_rule": "reject unless a packed dataflow candidate passes focused CPU-reference, route traces prove the intended provider selected, and same-runner focused timing beats H4LOAD on the dominant p33 dense rows before model-level promotion."
+      },
+      "findings": [
+        "the forced packed MMQ64 variant passes CPU-reference on the three focused Q6 p33 rows, so the rejection is performance/schedule based rather than a correctness failure",
+        "default route tracing selects hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_h4load_f16acc_wg256_f32 9028 times across the focused perf run",
+        "variant route tracing selects hrx_mul_mat_vec_q6_k_q8_1_x4_mmq64x64_wg256_f32 759 times and hrx_mul_mat_vec_q6_k_rows2_cols8_wg32_f32 16383 times; the small Vcur row does not exercise the packed MMQ64 provider",
+        "same-runner focused timings: Vcur-0-p33 improves 397.035 us to 80.874 us only because it routes to rows2_cols8, but ffn_out-0-p33 regresses 2435.153 us to 3241.849 us and result_output-p33 regresses 11651.747 us to 21654.494 us",
+        "total focused p33 time regresses from 14483.934 us to 24977.216 us, or 0.580x the H4LOAD default",
+        "static summary for the packed MMQ64 HSACO shows 384 v_dot4_i32_iu8, zero v_wmma_f16_16x16x16_f16, zero LDS reads/writes, 48 global_store_b32, 4 barriers, and 366 waitcnt-class ops, so this is not converging toward the RADV cooperative-matrix/H4LOAD schedule family",
+        "decision: do not promote packed MMQ64 for dense Q6 p33. Continue schedule-driven work from the RADV/H4LOAD WMMA topology, or use packed Q8_1/x4 only where focused evidence shows it wins the relevant shape family."
+      ]
     }
   ]
 }
