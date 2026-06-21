@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_vk64_q6addr_overlaya_scalarstage_copyclobber_static_ca882d914_dirty",
+      "date": "2026-06-21",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_overlaya_scalarstage_copyclobber_f16acc_wg256_f32",
+      "env": "static screen only; no route selector or production environment gate",
+      "artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-q6addr-overlaya-scalarstage-copyclobber-ca882d914-dirty-20260621-061327/",
+      "perf_artifact": "not run; rejected at static operand-ownership gate before focused runtime timing",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-q6addr-overlaya-scalarstage-copyclobber-ca882d914-dirty-20260621-061327/summary.md and compact-accumulator/wmma-ownership.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_overlaya_scalarstage_copyclobber_wg256.hsaco",
+      "reason": "This CMake/Ninja-built Q6_K p33 diagnostic tested whether the rejected q6addr overlay-A scalar-stage prewait route's no-memory-clobber fragment-copy spelling was causing LLVM to collapse WMMA operand ownership. It preserves the q6addr output ownership, overlay-A LDS allocation, scalar ds_write_b16 staged stores, restored pre-WMMA lgkmcnt(40), and all headline medium-oracle counts except the already-known store-cluster miss: 16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 66 ds_store_b16 versus RADV 64, 96 buffer_store_b32, 11264-byte LDS, two barriers, no spills, compact f16 accumulator screen pass, load_b64_immediately_before_final_wait=48, and final_pre_wmma_lgkmcnt=40. Reject before runtime route timing because the deeper WMMA ownership still does not match RADV: RADV uses 8 A operand banks reused twice, 4 B banks reused four times, and 8 dst/C banks reused twice, while this HIP spelling uses only 4 A and 4 B banks with the first 13 WMMAs collapsed onto one A/B pair and 16 one-shot dst/C banks. The emitted wait ladder also remains sparse at 40/36/28/20/16 instead of RADV's denser 40/36/32/28/24/16/7/6/1/0 progression. The useful conclusion is that ordinary asm memory clobbers can perturb register assignment but do not mechanically recover the RADV issue topology; future Q6 p33 work needs a lower-level WMMA issue/operand-bank primitive or a different dataflow, not another route wrapper around this copy path."
+    },
+    {
       "id": "q6_k_vk64_q6addr_overlaya_scalarstage_prewait_route_4e709c7a9_dirty",
       "date": "2026-06-21",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_overlaya_scalarstage_prewait_f16acc_wg256_f32",
