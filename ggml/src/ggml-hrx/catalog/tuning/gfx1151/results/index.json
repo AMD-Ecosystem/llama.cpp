@@ -3,6 +3,47 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_k_radvissuecompact_fixture_e6f7cabfc_dirty",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/q6-radvissuecompact-fixture-e6f7cabfc-dirty-20260621-080208/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-radvissuecompact-screen-e6f7cabfc-dirty-20260621-080208/",
+      "source_commit": "e6f7cabfc-dirty",
+      "tool": "CMake/Ninja-built hrx-hip-bench-q6-id-subgroup-contract fixture, embedded executable fatbin extraction, and tools/vulkan-oracle/run_q6_medium_contract_screen.py with compact ownership checking",
+      "status": "accepted_gfx1151_diagnostic_fixture_not_production_route",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K p33 dense prompt MUL_MAT medium route; specifically whether HIP C++ inline WMMA can preserve the RADV medium route's compact accumulator reuse and lgkmcnt issue ladder in isolation",
+        "baseline_command": "cmake --build build/hrx-v1-catalog-gfx1151 --target hrx-hip-bench-q6-id-subgroup-contract -j$(nproc)",
+        "variant_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q6-id-subgroup-contract 5000",
+        "same_runner_comparison_method": "single CMake/Ninja-built fixture binary reports direct, staged, banked, bankedcompact, radvissuecompact, and production-address probes in one run; static screen compares the unbundled gfx1151 fatbin symbol against the Qwen3 Q6 p33 RADV medium oracle",
+        "route_trace_path": "not applicable; standalone fixture only, no production provider selected",
+        "scheduler_trace_path": "static_artifact summary.md plus compact-accumulator/wmma-ownership.json",
+        "focused_cpu_reference": "fixture validation in bench.stdout.csv; radvissuecompact valid=1",
+        "compile_report_path": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q6-id-subgroup-contract built by CMake/Ninja; artifact static/unbundled.gfx1151 extracted from the executable .hip_fatbin because the sidecar offload object was stale",
+        "target_listing_path": "static_artifact hip.objdump.txt and compact-accumulator/hip.objdump.txt",
+        "prior_art_schedule_source": "Qwen3 30B Q6_K p33 RADV medium oracle matmul_q6_k_f32_f16acc_aligned_m__main__6eebdfb4c3043b23 and rejected q6_k_vk64_q6addr_upperdepnomem_compact_route_rejection_3abc55517_dirty",
+        "promotion_rule": "do not promote directly. Use this as the lower-level issue-order primitive for the next production-ABI Q6 p33 candidate; production promotion still requires focused CPU-reference p33/p512/p513, route traces, exact or intentionally-deviated static evidence, and same-runner timing versus H4LOAD."
+      },
+      "focused_result": {
+        "fixture_validation": {
+          "radvissuecompact": "valid=1, 3.737842 us",
+          "bankedcompact": "valid=1, 3.802199 us",
+          "prodaddr_bankedcompact": "valid=1, missed=0, duplicated=0, max_count=1, 4.895888 us"
+        },
+        "static_contract": {
+          "exact_static_contract_passed": false,
+          "compact_f16_accumulator_screen_passed": true,
+          "wmma_operand_topology_contract_passed": true,
+          "matching_facts": "16 WMMA, two barriers, no spills, compact width-4 dst/C operands, dst/C reuse [2 x 8 banks], A reuse [2 x 8 banks], B reuse [4 x 4 banks], and lgkmcnt ladder [40,36,32,28,24,16,7,6,1,0]",
+          "intentional_fixture_misses": "synthetic fixture uses LDS 28672 vs RADV 11264, 52 ds_load_b64 vs 48, 32 ds_store_b16/ds_load_u16_d16 vs RADV 64/64, and global validation stores instead of the production 96 buffer_store_b32 surface"
+        }
+      },
+      "findings": [
+        "Persistent compact u32x4 accumulators are enough to make HIP preserve RADV's WMMA dst/C reuse histogram and wait ladder in a CMake-built diagnostic fixture.",
+        "This isolates the prior production-route failure: compact accumulator width was not sufficient because the route still collapsed operand ownership; the missing primitive is now reproducible in a standalone fixture.",
+        "The next useful Q6 p33 candidate should transfer this persistent-accumulator issue primitive into a production-ABI fixture or route while separately matching the RADV store/LDS surface."
+      ]
+    },
+    {
       "id": "q6_k_vk64_q6addr_upperdepnomem_compact_route_rejection_3abc55517_dirty",
       "date": "2026-06-21",
       "artifact": "cache/hrxv1/gfx1151/q6-vk64-q6addr-upperdepnomem-compact-route-3abc55517-dirty-20260621-075138/",
