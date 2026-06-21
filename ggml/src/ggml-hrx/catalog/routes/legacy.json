@@ -7898,9 +7898,10 @@
       "k_multiple": 256,
       "rows_min": 128,
       "cols_min": 128,
+      "selector_gate": "GGML_HRX_ENABLE_Q5_K_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_FAST_HALF_MOTIF192_ASMWAIT_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
       "default_policy": "default on for gfx1151 exact current Qwen2.5 Q5 small-projection row only: k=3584, rows=512, cols>=512",
       "rollback": "GGML_HRX_DISABLE_Q5_K_WMMA16_VK128_MOTIF192_ASMWAIT_SMALLPROJ_PROMPT=1",
-      "selection_domain": "p33 and large Q/FFN rows stay on existing routes",
+      "selection_domain": "explicit selector gate tests broader Q5 prompt rows; default policy remains restricted to the exact small-projection row",
       "prior_delta": "Bounded sibling of the rejected RADVLadder source-level wait probe. It preserves motif192 writeback, A0/B0..B3/A1..A3 operand loading, row-major WMMA issue, and CMake/Ninja HSACO generation, but binds each lgkmcnt wait and v_wmma instruction in one inline-asm block to test whether the HIP compiler can be forced to preserve the intended wait/use ordering."
     },
     "supports": {
@@ -7908,7 +7909,7 @@
     },
     "evidence_summary": {
       "status": "accepted_gfx1151_q5_smallproj_default",
-      "selection": "Accepted as the default gfx1151 Qwen2.5 Q5 small-projection route only for k=3584, rows=512, cols>=512. Static issue-window evidence shows the inline-asm wait/use spelling preserves row-major WMMAs after the intended lgkmcnt waits and improves the immediate LDS-load window versus the rejected RADVLadder source spelling, while still not matching RADV's three-region lgkmcnt(24) shape. Focused p33/p512/p513 CPU-reference gates passed for default and rollback; p33 routing is unchanged, and p512/p513 switch only Kcur to this ASMWAIT route while Qcur/FFN stay on packed-Q8 routes. Same-runner Kcur timing improved from 780.981 us to 742.777 us at p512 and from 728.029 us to 693.861 us at p513. Rollback: GGML_HRX_DISABLE_Q5_K_WMMA16_VK128_MOTIF192_ASMWAIT_SMALLPROJ_PROMPT=1."
+      "selection": "Accepted as the default gfx1151 Qwen2.5 Q5 small-projection route only for k=3584, rows=512, cols>=512. Static issue-window evidence shows the inline-asm wait/use spelling preserves row-major WMMAs after the intended lgkmcnt waits and improves the immediate LDS-load window versus the rejected RADVLadder source spelling, while still not matching RADV's three-region lgkmcnt(24) shape. Focused p33/p512/p513 CPU-reference gates passed for default and rollback; p33 routing is unchanged, and p512/p513 switch only Kcur to this ASMWAIT route while Qcur/FFN stay on packed-Q8 routes. Same-runner Kcur timing improved from 780.981 us to 742.777 us at p512 and from 728.029 us to 693.861 us at p513. Broader prompt selection is diagnostic-only through GGML_HRX_ENABLE_Q5_K_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_FAST_HALF_MOTIF192_ASMWAIT_BUFFERSTORE_F16ACC_WG256_PROMPT=1. Rollback: GGML_HRX_DISABLE_Q5_K_WMMA16_VK128_MOTIF192_ASMWAIT_SMALLPROJ_PROMPT=1."
     },
     "target_prefixes": [
       "gfx11"

@@ -6978,6 +6978,15 @@ static const ggml_backend_hrx_op_provider * ggml_backend_hrx_select_mul_mat_vec_
                     device_context->mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_packstage_fast_half_motif192_radvladder_bufferstore_f16acc_wg256_provider)) {
                 return &device_context->mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_packstage_fast_half_motif192_radvladder_bufferstore_f16acc_wg256_provider;
             }
+            if (ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q5_K_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_FAST_HALF_MOTIF192_ASMWAIT_BUFFERSTORE_F16ACC_WG256_PROMPT") &&
+                !ggml_backend_hrx_approximate_kernels_disabled() &&
+                k > 0 && (k % 256) == 0 &&
+                rows >= 128 &&
+                cols >= 128 &&
+                ggml_backend_hrx_provider_available(
+                    device_context->mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_packstage_fast_half_motif192_asmwait_bufferstore_f16acc_wg256_provider)) {
+                return &device_context->mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_packstage_fast_half_motif192_asmwait_bufferstore_f16acc_wg256_provider;
+            }
             if (!ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_Q5_K_WMMA16_VK128_MOTIF192_ASMWAIT_SMALLPROJ_PROMPT") &&
                 !ggml_backend_hrx_approximate_kernels_disabled() &&
                 device_context && device_context->architecture == "gfx1151" &&
@@ -8110,6 +8119,7 @@ static ggml_backend_hrx_q8_1_mmvq_variant ggml_backend_hrx_mul_mat_vec_k_q8_1_va
                 ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q5_K_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_FAST_HALF_SELECTED_BUFFERSTORE_F16ACC_WG256_PROMPT") ||
                 ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q5_K_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_FAST_HALF_MOTIF192_BUFFERSTORE_F16ACC_WG256_PROMPT") ||
                 ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q5_K_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_FAST_HALF_MOTIF192_RADVLADDER_BUFFERSTORE_F16ACC_WG256_PROMPT") ||
+                ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q5_K_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_FAST_HALF_MOTIF192_ASMWAIT_BUFFERSTORE_F16ACC_WG256_PROMPT") ||
                 ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q5_K_WMMA16_VK128_PADDED_W64_B64GROUP_FULLSTORE_F16ACC_WG256_PROMPT") ||
                 ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q5_K_WMMA16_VK128_PADDED_W64_FULLSTORE_F16ACC_WG256_PROMPT") ||
                 ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q5_K_WMMA16_VK128_PADDED_W64_F16ACC_WG256_PROMPT")) {

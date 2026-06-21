@@ -3,6 +3,63 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q5_motif192_asmwait_broad_optin_rejection_130360d_dirty",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/q5-asmwait-broad-optin-focused-130360d-dirty-20260621-032342/",
+      "source_commit": "130360d-dirty",
+      "tool": "test-backend-ops focused Q5_K p33/p512/p513 default-vs-broad-ASMWAIT opt-in correctness, perf, and route traces",
+      "status": "rejected_opt_in_correct_broad_prompt_perf_regression",
+      "candidate_gate": {
+        "production_target": "Qwen2.5 Coder 7B Q5_K_M focused prompt MUL_MAT rows at p33, p512, and p513, testing whether the accepted small-projection ASMWAIT wait/use repair should broaden to Qcur and FFN rows",
+        "baseline_command": "GGML_HRX_TRACE_ROUTES=1 GGML_HRX_TRACE_PROVIDERS=1 build/hrx-v1-catalog-gfx1151/bin/test-backend-ops test/perf -b HRX0 -o MUL_MAT --test-file cache/hrxv1/gfx1151/q5-mmql128-bquad-focused-20260618/q5_prompt_p{33,512,513}.txt --output csv",
+        "variant_command": "GGML_HRX_ENABLE_Q5_K_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_FAST_HALF_MOTIF192_ASMWAIT_BUFFERSTORE_F16ACC_WG256_PROMPT=1 with the same test-backend-ops commands and row files",
+        "same_runner_comparison_method": "sequential same-binary HRX0 focused CPU-reference and perf runs, default policy versus broad ASMWAIT opt-in, with route traces from stderr and csv timing parsed per row",
+        "route_trace_path": "artifact default-p33/p512/p513-*.stderr and optin-p33/p512/p513-*.stderr",
+        "scheduler_trace_path": "cache/hrxv1/gfx1151/q5-motif192-asmwait-static-463473bdd-dirty-20260621-024909/issue-window.md and q5-asmwait-vs-radv.md",
+        "focused_cpu_reference": "artifact default/optin p33,p512,p513 test csv files; all focused rows passed",
+        "compile_report_path": "CMake/Ninja-built ASMWAIT HSACO in build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/",
+        "target_listing_path": "cache/hrxv1/gfx1151/q5-motif192-asmwait-static-463473bdd-dirty-20260621-024909/hip.objdump.wmma128.txt",
+        "prior_art_schedule_source": "Qwen2.5 Coder 7B Q5_K_M Vulkan aligned_l RADV oracle and the accepted small-projection ASMWAIT route",
+        "promotion_rule": "keep broad ASMWAIT behind the explicit diagnostic selector gate and do not default it. Future broad Q5 prompt work must target the remaining RADV/HIP three-region, wait, barrier, VGPR, and store-cadence deltas or a different packed-Q8_1 dataflow."
+      },
+      "focused_result": {
+        "correctness": "all default and opt-in p33/p512/p513 focused rows passed",
+        "route_selection": {
+          "default_p33": "Kcur rows2_cols8; Qcur and FFN rows packed-Q8_1/x4 mmql64x64",
+          "default_p512_p513": "Kcur ASMWAIT small-projection; Qcur and FFN rows packed-Q8_1/x4 mmql128x128",
+          "optin_p33": "Kcur unchanged rows2_cols8; Qcur and FFN rows also rows2_cols8 under the broad selector",
+          "optin_p512_p513": "Kcur, Qcur, and FFN rows all ASMWAIT"
+        },
+        "default_over_optin_speed_ratio": {
+          "p33": {
+            "Kcur-0": 1.002,
+            "Qcur-0": 0.547,
+            "ffn_out-3": 0.525,
+            "ffn_gate-0": 0.390
+          },
+          "p512": {
+            "Kcur-0": 1.001,
+            "Qcur-0": 0.645,
+            "ffn_out-3": 0.599,
+            "ffn_gate-0": 0.559
+          },
+          "p513": {
+            "Kcur-0": 0.998,
+            "Qcur-0": 0.616,
+            "ffn_out-3": 0.585,
+            "ffn_gate-0": 0.580
+          }
+        }
+      },
+      "findings": [
+        "the broad diagnostic selector is correctness-clean and route traces prove it can force ASMWAIT onto Qcur and FFN rows",
+        "ASMWAIT remains neutral on the already-accepted Kcur small-projection domain but is consistently slower on broader rows",
+        "p33 broad routing is especially poor because the selector falls through to the narrow rows2_cols8 route for Qcur and FFN, regressing ffn_gate to 0.390x of default speed",
+        "p512 and p513 broad routing regresses every Qcur and FFN row to 0.559x-0.645x of default speed despite using the intended ASMWAIT provider",
+        "decision: preserve the explicit opt-in hook for reproducibility, keep the production default restricted to the exact small-projection row, and move future Q5 work to RADV first-region/load-store cadence or packed-route improvements instead of broad ASMWAIT policy"
+      ]
+    },
+    {
       "id": "q6_p33_current_h4load_baseline_b94b8052d",
       "date": "2026-06-21",
       "artifact": "cache/hrxv1/gfx1151/q6-p33-current-b94b8052d-baseline-20260621-0340/",
