@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_vk64_q6addr_overlaya_scalarstage_prewait_route_4e709c7a9_dirty",
+      "date": "2026-06-21",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_overlaya_scalarstage_prewait_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASM_COPYAB_Q6ADDR_UPPERDEPNOMEM_OVERLAYA_SCALARSTAGE_PREWAIT_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-q6addr-overlaya-scalarstage-prewait-route-4e709c7a9-dirty-20260621-060846/",
+      "perf_artifact": "cache/hrxv1/gfx1151/q6-vk64-q6addr-overlaya-scalarstage-prewait-route-4e709c7a9-dirty-20260621-060846/p33-default-perf.csv and p33-prewait-perf.csv",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-q6addr-overlaya-scalarstage-prewait-4e709c7a9-dirty-20260621-060558/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_overlaya_scalarstage_prewait_wg256.hsaco",
+      "reason": "This opt-in Q6_K p33 route tested whether the rejected q6addr overlay-A scalar-stage route was missing only the RADV first-WMMA wait shape. It preserves natural q6addr output ownership, overlay-A LDS allocation, scalar ds_write_b16 staged stores, and no-memory-clobber fragment copies, but restores s_waitcnt lgkmcnt(40) before the WMMA issue window. It built through CMake/Ninja, selected for all three focused p33 rows, and passed CPU-reference. Static evidence closes the intended wait-shape gap: load_b64_immediately_before_final_wait=48 and final_pre_wmma_lgkmcnt=40 match RADV, while 16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 96 buffer_store_b32, 11264-byte LDS, two barriers, and no spills are preserved. Reject because same-runner focused p33 timing still regresses every row versus default: total 14719.324 us -> 24051.987 us and result_output 11885.416 us -> 20650.948 us. Matching static store count and pre-WMMA wait placement is not enough; the next Q6 p33 attempt needs a deeper operand/live-range/issue topology change or a different dataflow."
+    },
+    {
       "id": "q6_k_vk64_q6addr_overlaya_scalarstage_route_514817511_dirty",
       "date": "2026-06-21",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_overlaya_scalarstage_f16acc_wg256_f32",
