@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_vk64_depwait_p33stage12_rejection_c9dc2a616_dirty",
+      "date": "2026-06-21",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_depwait_p33stage12_f16acc_wg256_f32",
+      "env": "standalone CMake/Ninja-built Q6 p33 diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-kloop-depwait-p33stage12-c9dc2a616-dirty-20260621-011022/",
+      "perf_artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-kloop-depwait-p33stage12-c9dc2a616-dirty-20260621-011022/stdout.txt, depwait.stdout.txt, stagefull.stdout.txt, and accepted-vk64.stdout.txt",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-kloop-depwait-p33stage12-c9dc2a616-dirty-20260621-011022/static/radv-compare.md and hsaco-summary.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_depwait_p33stage12_wg256.hsaco",
+      "reason": "This standalone p33 diagnostic tested whether preserving the depwait first-WMMA window while staging only the first 12 p33 column groups could reproduce RADV's 96-store output surface without carrying the full stagefull branch cost. It built through CMake/Ninja and passed normal p33 correctness for 64x33 k256, 64x33 k512, 64x33 k3584, and 128x33 k3584; the stress row remains in the known VK64 calibration failure band. Static comparison matched the 96 buffer_store_b32 headline, 16 WMMA, 48 ds_load_b64, LDS=11264, two barriers, no spills, and first-WMMA lgkmcnt(40), but it still missed RADV's real halfword cluster topology and lower pressure: HIP had VGPR=169, 50 ds_store_b16, 48 ds_load_u16_d16, and three store clusters versus RADV's VGPR=144, 64 ds_store_b16, 64 ds_load_u16_d16, and eleven store clusters. Reject before route selection or model A/B because same-session timing stayed in the slow depwait/stagefull band and remained far behind the accepted VK64 repro: 64x33 k3584 was 413.900 us versus 308.252 us, and 128x33 k3584 was 414.057 us versus 326.901 us. Future Q6 p33 work should target RADV's halfword store/loadback cluster topology and lower accumulator/output live range, not headline store count or wait ladder alone."
+    },
+    {
       "id": "q6_k_vk64_padladder_radv96_duplicate_p33_perf",
       "date": "2026-06-21",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_padladder_radv96_duplicate_f16acc_wg256_f32",

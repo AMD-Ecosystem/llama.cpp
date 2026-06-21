@@ -3,6 +3,63 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_k_vk64_depwait_p33stage12_rejection_c9dc2a616_dirty",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-kloop-depwait-p33stage12-c9dc2a616-dirty-20260621-011022/",
+      "source_commit": "c9dc2a616-dirty",
+      "tool": "CMake/Ninja-built hrx-hip-bench-q6-wmma-ring96-kloop-asm-depwait-p33stage12-repro plus same-session depwait, stagefull, and accepted VK64 standalone comparators",
+      "status": "rejected_standalone_timing_96_store_headline_no_signal",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K p33 dense prompt medium route on gfx1151; test whether limiting staged full-tile output to the first 12 p33 column groups preserves RADV's 96-store output surface without the full stagefull branch cost",
+        "baseline_command": "HRX_Q6_REPRO_TIMING_ITERS=200 build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q6-wmma-vk64-repro plus depwait and stagefull comparators",
+        "variant_command": "cmake --build build/hrx-v1-catalog-gfx1151 --target hrx-hip-bench-q6-wmma-ring96-kloop-asm-depwait-p33stage12-repro ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_depwait_p33stage12_wg256.hsaco -j$(nproc); HRX_Q6_REPRO_TIMING_ITERS=200 build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q6-wmma-ring96-kloop-asm-depwait-p33stage12-repro",
+        "same_runner_comparison_method": "standalone Q6 repro correctness/timing against the accepted VK64 p33 repro plus depwait and stagefull schedule-family comparators; no route selector or model A/B because timing stayed far behind the accepted VK64 route",
+        "route_trace_path": "not applicable; standalone probe only",
+        "scheduler_trace_path": "cache/hrxv1/gfx1151/q6-vk64-ring96-kloop-depwait-p33stage12-c9dc2a616-dirty-20260621-011022/static/radv-compare.md and hsaco-summary.md",
+        "focused_cpu_reference": "normal p33 rows passed for 64x33 k256, 64x33 k512, 64x33 k3584, and 128x33 k3584; stress row remains in the known VK64 calibration failure band",
+        "compile_report_path": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_depwait_p33stage12_wg256.hsaco",
+        "target_listing_path": "cache/hrxv1/gfx1151/q6-vk64-ring96-kloop-depwait-p33stage12-c9dc2a616-dirty-20260621-011022/static/hsaco-summary.md",
+        "prior_art_schedule_source": "Qwen3 30B Q6_K p33 Vulkan matmul_q6_k_f32_f16acc_aligned_m oracle plus depwait, p33branch, p33stagetail, and stagefull rejected standalone probes",
+        "promotion_rule": "reject unless a future p33 writeback policy beats the accepted VK64/default p33 route while preserving correctness and materially matching RADV's halfword store/loadback cluster topology and lower VGPR pressure"
+      },
+      "static_result": {
+        "correctness": "normal p33 rows passed; stress row remains in known VK64 calibration failure band",
+        "timing_us": {
+          "p33stage12_64x33_k3584": 413.9,
+          "p33stage12_128x33_k3584": 414.057,
+          "accepted_vk64_64x33_k3584": 308.252,
+          "accepted_vk64_128x33_k3584": 326.901,
+          "depwait_64x33_k3584": 409.868,
+          "stagefull_64x33_k3584": 412.181
+        },
+        "hip_p33stage12": {
+          "vgpr": 169,
+          "lds_bytes": 11264,
+          "buffer_store_b32": 96,
+          "ds_store_b16": 50,
+          "ds_load_u16_d16": 48,
+          "store_clusters": 3,
+          "pre_hot_loads": 59,
+          "immediate_lds_loads": 48,
+          "final_lgkmcnt": 40
+        },
+        "radv_p33_medium": {
+          "vgpr": 144,
+          "lds_bytes": 11264,
+          "buffer_store_b32": 96,
+          "ds_store_b16": 64,
+          "ds_load_u16_d16": 64,
+          "store_clusters": 11
+        }
+      },
+      "findings": [
+        "p33-stage12 preserves the RADV-like first-WMMA issue window and matches the 96 buffer_store_b32 headline",
+        "same-runner standalone timing stays in the slow depwait/stagefull band and is roughly 1.34x slower than the accepted VK64 p33 repro at 64x33 k3584",
+        "the static surface still misses RADV's halfword store/loadback clustering and lower VGPR pressure",
+        "future Q6 p33 work should target real RADV halfword cluster topology and lower accumulator/output live range rather than store count alone"
+      ]
+    },
+    {
       "id": "q6_k_vk64_padladder_radv96_duplicate_p33_perf",
       "date": "2026-06-21",
       "artifact": "cache/hrxv1/gfx1151/q6-vk64-padladder-radv96-duplicate-perf-e0071be01-dirty-20260620-215702/",
