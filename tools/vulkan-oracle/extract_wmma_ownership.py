@@ -4,6 +4,7 @@ import collections
 import json
 import pathlib
 import re
+import sys
 
 
 ISA_INSTRUCTION_RE = re.compile(r"^\s+([A-Za-z0-9_.]+)\s*(.*)$")
@@ -391,6 +392,29 @@ def compare(lhs, rhs):
     return result
 
 
+def compact_f16_accumulator_failures(summaries):
+    failures = []
+    for summary in summaries:
+        label = summary["label"]
+        wmma = summary["wmma"]
+        count = wmma["count"]
+        compact = wmma.get("compact_f16_summary", {})
+        if count == 0:
+            failures.append(f"{label}: no WMMA instructions found")
+            continue
+        for operand in ("dst", "c"):
+            widths = compact.get(operand, {})
+            width4 = widths.get("width4", 0)
+            width8 = widths.get("width8", 0)
+            other = widths.get("other", 0)
+            if width4 != count or width8 != 0 or other != 0:
+                failures.append(
+                    f"{label}: {operand} compact accumulator check failed "
+                    f"(wmma={count}, width4={width4}, width8={width8}, other={other})"
+                )
+    return failures
+
+
 def write_markdown(path, payload):
     lines = ["# WMMA Ownership Extract", ""]
     summaries = payload["summaries"]
@@ -541,6 +565,15 @@ def parse_args():
     parser.add_argument("--compare-symbol", help="Optional llvm-objdump symbol substring for the comparison ISA.")
     parser.add_argument("--out-json", type=pathlib.Path)
     parser.add_argument("--out-md", type=pathlib.Path)
+    parser.add_argument(
+        "--require-compact-f16-accumulators",
+        action="store_true",
+        help=(
+            "Exit non-zero unless every summarized ISA uses width-4 dst and C "
+            "operands for every f16 WMMA. This is the RADV-style gfx1151 Q6 ID "
+            "static screen."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -567,6 +600,12 @@ def main():
     if args.out_md:
         args.out_md.parent.mkdir(parents=True, exist_ok=True)
         write_markdown(args.out_md, payload)
+    if args.require_compact_f16_accumulators:
+        failures = compact_f16_accumulator_failures(summaries)
+        if failures:
+            for failure in failures:
+                print(f"compact-f16-accumulator-check: {failure}", file=sys.stderr)
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":

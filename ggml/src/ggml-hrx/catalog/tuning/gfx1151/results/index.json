@@ -3,6 +3,63 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_id_compact_accumulator_screen_577ddc0f5_dirty",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q6-id-compact-accumulator-screen-577ddc0f5-dirty-20260620-235650/",
+      "source_commit": "577ddc0f5-dirty",
+      "tool": "extract_wmma_ownership.py --require-compact-f16-accumulators plus CMake/Ninja-built hrx-hip-bench-q6-id-subgroup-contract",
+      "status": "accepted_static_screen_current_hip_fixture_rejected",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K MUL_MAT_ID p33/fa1 RADV-style compact f16 WMMA dst/C ownership on gfx1151",
+        "baseline_command": "python3 tools/vulkan-oracle/extract_wmma_ownership.py --isa <RADV Q6 ID ISA> --label RADV_Q6_ID --require-compact-f16-accumulators",
+        "variant_command": "python3 tools/vulkan-oracle/extract_wmma_ownership.py --isa <HIP objdump> --label HIP_BANKED_COMPACT --symbol q6_id_subgroup_contract_banked_compact_probe --require-compact-f16-accumulators",
+        "same_runner_comparison_method": "same extractor and same operand-width rule applied to the RADV oracle and the current CMake/Ninja-built HIP fixture object",
+        "route_trace_path": "not applicable; static primitive screen only and no production selector changed",
+        "scheduler_trace_path": "static/radv-vs-hip-ownership.{json,md}, static/radv-compact-check.stdout.json, static/hip-compact-check.stderr.log",
+        "focused_cpu_reference": "fixture bench validates direct, staged, loaddeep, minstore, banked, and bankedcompact rows with valid=1 over 2048 values",
+        "compile_report_path": "static/device-gfx1151.elf, static/device-objdump.txt, static/device-readelf-notes.txt",
+        "target_listing_path": "CMake target hrx-hip-bench-q6-id-subgroup-contract built in build/hrx-v1-catalog-gfx1151",
+        "prior_art_schedule_source": "Qwen3 30B Q6_K p33 Vulkan matmul_id_subgroup_q6_k_f32_f16acc_aligned_m oracle at cache/hrxv1/gfx1151/vulkan-oracle-qwen3-30b-q6k-p33-fa1-20260618-061613/",
+        "promotion_rule": "a RADV-style f16 WMMA Q6 ID candidate must pass --require-compact-f16-accumulators before route-facing timing unless it is explicitly documented as an intentional packed-route deviation with focused p33/p512/p513 wins."
+      },
+      "static_result": {
+        "radv_q6_id": {
+          "wmma_count": 16,
+          "ds_load_b64": 52,
+          "wait_ladder": [40, 36, 32, 28, 24, 16, 12, 8, 4, 0],
+          "widths": {
+            "dst": {"width4": 16, "width8": 0, "other": 0},
+            "a": {"width4": 0, "width8": 16, "other": 0},
+            "b": {"width4": 0, "width8": 16, "other": 0},
+            "c": {"width4": 16, "width8": 0, "other": 0}
+          },
+          "compact_check": "pass"
+        },
+        "hip_bankedcompact": {
+          "wmma_count": 16,
+          "ds_load_b64": 52,
+          "wait_ladder": [40, 36, 32, 28, 24, 16, 12, 8, 4, 0],
+          "widths": {
+            "dst": {"width4": 0, "width8": 16, "other": 0},
+            "a": {"width4": 0, "width8": 16, "other": 0},
+            "b": {"width4": 0, "width8": 16, "other": 0},
+            "c": {"width4": 0, "width8": 16, "other": 0}
+          },
+          "compact_check": "fail",
+          "failure": [
+            "dst compact accumulator check failed (wmma=16, width4=0, width8=16, other=0)",
+            "c compact accumulator check failed (wmma=16, width4=0, width8=16, other=0)"
+          ]
+        }
+      },
+      "findings": [
+        "added a hard extractor gate for compact f16 WMMA accumulators so the Q6 ID primitive blocker is no longer a manual markdown-only inspection",
+        "the RADV Q6 ID oracle passes because all 16 f16 WMMAs use width4 dst and C operands while keeping width8 A/B operands",
+        "the current HIP bankedcompact fixture still validates and matches RADV on 16 WMMAs, 52 ds_load_b64, and the wait ladder, but fails the new screen because all dst/C operands are width8",
+        "decision: keep the current grouped Q8_1/x4 route as the production floor. Do not spend focused backend-op time on another RADV-style f16 WMMA Q6 ID candidate unless its built ISA first passes this compact-accumulator screen, or unless the candidate is deliberately a packed-route deviation."
+      ]
+    },
+    {
       "id": "q6_id_bankedcompact_width_analysis_67da9c87c_dirty",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q6-id-bankedcompact-width-analysis-67da9c87c-dirty-20260620-234925/",
