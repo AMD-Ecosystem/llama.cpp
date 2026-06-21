@@ -3,6 +3,58 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_moe_id_mmq64x32_p33_output_ownership_rejection_cd0f064bd_dirty",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/q6-id-mmq64x32-focused-cd0f064bd-dirty-20260621-012104/",
+      "source_commit": "cd0f064bd-dirty",
+      "tool": "CMake/Ninja-built HRX v1 catalog HSACO, test-backend-ops focused p33 CPU-reference/perf, GGML_HRX_TRACE_ROUTES=1 route traces, and HSACO static summary",
+      "status": "rejected_opt_in_correct_p33_perf_regression",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K MUL_MAT_ID p33 focused rows ffn_moe_gate-0 and ffn_moe_down-0 on gfx1151; test intermediate packed-Q8_1/x4 route tile/output ownership between accepted MMQ16 and rejected MMQ64",
+        "baseline_command": "GGML_HRX_TRACE_ROUTES=1 GGML_HRX_TRACE_PROVIDERS=1 build/hrx-v1-catalog-gfx1151/bin/test-backend-ops perf -b HRX0 -o MUL_MAT_ID --test-file cache/hrxv1/gfx1151/q6-id-odd-tail-focused-20260617-183706/p33/focused/moe_qk_prompt.txt --output csv",
+        "variant_command": "GGML_HRX_ENABLE_Q6_K_ID_Q8_1_X4_MMQ32_PROMPT=1 GGML_HRX_EXPECT_MUL_MAT_ID_Q6_PROVIDER=hrx_mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x32_wg64_f32 GGML_HRX_TRACE_ROUTES=1 GGML_HRX_TRACE_PROVIDERS=1 build/hrx-v1-catalog-gfx1151/bin/test-backend-ops test|perf -b HRX0 -o MUL_MAT_ID --test-file cache/hrxv1/gfx1151/q6-id-odd-tail-focused-20260617-183706/p33/focused/moe_qk_prompt.txt --output csv",
+        "same_runner_comparison_method": "same test-backend-ops binary and focused p33 rows, default MMQ64x16 route versus opt-in MMQ64x32 route from the same artifact",
+        "route_trace_path": "cache/hrxv1/gfx1151/q6-id-mmq64x32-focused-cd0f064bd-dirty-20260621-012104/test.stderr.log, default-perf.stderr.log, and mmq32-perf.stderr.log",
+        "scheduler_trace_path": "cache/hrxv1/gfx1151/q6-id-mmq64x32-focused-cd0f064bd-dirty-20260621-012104/hsaco-summary.md",
+        "focused_cpu_reference": "cache/hrxv1/gfx1151/q6-id-mmq64x32-focused-cd0f064bd-dirty-20260621-012104/test.stdout.csv; both p33 rows passed",
+        "compile_report_path": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_id_q6_k_q8_1_x4_mmq.hsaco",
+        "target_listing_path": "CMake/Ninja target ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_id_q6_k_q8_1_x4_mmq.hsaco",
+        "prior_art_schedule_source": "Qwen3 30B Q6_K p33 Vulkan matmul_id_subgroup_q6_k_f32_f16acc_aligned_m oracle, accepted MMQ64x16 packed Q8_1/x4 floor, and rejected MMQ64x64 one-Y-group probe",
+        "promotion_rule": "reject unless focused p33 CPU-reference passes, route trace proves MMQ32 selection with route_tile_n=32, and same-runner timing beats the accepted MMQ16 floor on both gate/up-shaped and down rows before p512/p513 gates"
+      },
+      "static_result": {
+        "route_result": "opt-in MMQ32 selected with route_tile_n=32 and p33 workgroups [12,2,128] for gate/up and [32,2,128] for down",
+        "correctness": "focused CPU-reference passed ffn_moe_gate-0 and ffn_moe_down-0",
+        "timing_us": {
+          "default_total": 580.217,
+          "mmq32_total": 606.418,
+          "default_gate": 308.434,
+          "mmq32_gate": 327.414,
+          "default_down": 271.782,
+          "mmq32_down": 279.005
+        },
+        "hip_mmq32": {
+          "wave": 64,
+          "vgpr": 126,
+          "sgpr": 68,
+          "lds_bytes": 3840,
+          "scratch": 0,
+          "vgpr_spills": 0,
+          "v_dot4_i32_iu8": 256,
+          "lds_read": 62,
+          "lds_write": 26,
+          "global_store_b32": 32,
+          "barriers": 2
+        }
+      },
+      "findings": [
+        "the intermediate route tile closes the packed-route bracket between accepted MMQ16 and rejected MMQ64",
+        "route selection and correctness were clean, so the regression is schedule quality rather than ABI failure",
+        "p33 total regressed 4.5 percent versus the accepted MMQ16 floor and both focused rows slowed",
+        "future Q6 ID work should stop route-tile-only packed probes and move to a real compact f16-WMMA lowering path or a different packed dataflow/packing-cost hypothesis"
+      ]
+    },
+    {
       "id": "q6_k_vk64_depwait_p33stage12_rejection_c9dc2a616_dirty",
       "date": "2026-06-21",
       "artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-kloop-depwait-p33stage12-c9dc2a616-dirty-20260621-011022/",

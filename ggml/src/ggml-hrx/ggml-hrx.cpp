@@ -1115,6 +1115,7 @@ struct ggml_backend_hrx_device_context {
     ggml_backend_hrx_op_provider mul_mat_id_q4_k_wmma16x16_direct_f16acc_wg32_provider;
     ggml_backend_hrx_op_provider mul_mat_id_q5_k_grouped_q8_1_x4_mmq64x16_wg64_provider;
     ggml_backend_hrx_op_provider mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x16_wg64_provider;
+    ggml_backend_hrx_op_provider mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x32_wg64_provider;
     ggml_backend_hrx_op_provider mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x64_wg64_provider;
     ggml_backend_hrx_op_provider mul_mat_id_q6_k_wmma16x16_direct_f16acc_wg32_provider;
     ggml_backend_hrx_op_provider mul_mat_id_q6_k_wmma16x16_staged_vk64_f16acc_wg256_provider;
@@ -1506,6 +1507,7 @@ static void ggml_backend_hrx_reset_providers(ggml_backend_hrx_device_context * d
     device_context->mul_mat_id_q4_k_wmma16x16_direct_f16acc_wg32_provider.reset();
     device_context->mul_mat_id_q5_k_grouped_q8_1_x4_mmq64x16_wg64_provider.reset();
     device_context->mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x16_wg64_provider.reset();
+    device_context->mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x32_wg64_provider.reset();
     device_context->mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x64_wg64_provider.reset();
     device_context->mul_mat_id_q6_k_wmma16x16_direct_f16acc_wg32_provider.reset();
     device_context->mul_mat_id_q6_k_wmma16x16_staged_vk64_f16acc_wg256_provider.reset();
@@ -3954,6 +3956,9 @@ static bool ggml_backend_hrx_load_mul_mat_id_providers(ggml_backend_hrx_device_c
     ok = ggml_backend_hrx_load_catalog_provider(
         device_context, "hrx_mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x16_wg64_f32",
         &device_context->mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x16_wg64_provider) || ok;
+    ok = ggml_backend_hrx_load_catalog_provider(
+        device_context, "hrx_mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x32_wg64_f32",
+        &device_context->mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x32_wg64_provider) || ok;
     ok = ggml_backend_hrx_load_catalog_provider(
         device_context, "hrx_mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x64_wg64_f32",
         &device_context->mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x64_wg64_provider) || ok;
@@ -9280,6 +9285,18 @@ static const ggml_backend_hrx_op_provider * ggml_backend_hrx_select_mul_mat_id_q
         ggml_backend_hrx_provider_available(device_context->mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x64_wg64_provider)) {
         return &device_context->mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x64_wg64_provider;
     }
+    if (ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q6_K_ID_Q8_1_X4_MMQ32_PROMPT") &&
+        !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_Q8_1_MMVQ") &&
+        device_context &&
+        device_context->architecture == "gfx1151" &&
+        k % 256 == 0 && rows % 64 == 0 && n_ids == 8 &&
+        n_tokens >= grouped_min_prompt_tokens && n_tokens <= 64 &&
+        ggml_backend_hrx_provider_available(device_context->clear_u32_provider) &&
+        ggml_backend_hrx_provider_available(device_context->compact_moe_routes_provider) &&
+        ggml_backend_hrx_provider_available(device_context->quantize_q8_1_x4_provider) &&
+        ggml_backend_hrx_provider_available(device_context->mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x32_wg64_provider)) {
+        return &device_context->mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x32_wg64_provider;
+    }
     if (!ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_Q6_K_ID_Q8_1_X4_MMQ16_PROMPT") &&
         !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_Q8_1_MMVQ") &&
         k % 256 == 0 && rows % 64 == 0 && n_ids == 8 && n_tokens >= grouped_min_prompt_tokens &&
@@ -14029,7 +14046,8 @@ static ggml_status ggml_backend_hrx_dispatch_mul_mat_id_qk_grouped_q8_1_x4(
         constants.dst_nb2,
     };
     const int64_t route_tile_n =
-        provider == &context->device_context->mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x64_wg64_provider ? 64 : 16;
+        provider == &context->device_context->mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x64_wg64_provider ? 64 :
+        provider == &context->device_context->mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x32_wg64_provider ? 32 : 16;
     hrx_dispatch_config_t grouped_config = {
         { static_cast<uint32_t>((grouped_constants.rows + 63) / 64),
           static_cast<uint32_t>((grouped_constants.n_tokens + route_tile_n - 1) / route_tile_n),

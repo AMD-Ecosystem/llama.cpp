@@ -4427,6 +4427,46 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x32_wg64_f32",
+    "family": "mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x32_wg64",
+    "op": "MUL_MAT_ID",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_id_q6_k_q8_1_x4_mmq",
+    "artifact_id": "mul_mat_id_q6_k_q8_1_x4_mmq_hsaco",
+    "export_name": "hrx_mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x32_wg64_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 20,
+    "abi": {
+      "binding_count": 5,
+      "parameter_count": 6,
+      "constant_byte_length": 96
+    },
+    "dispatch": {
+      "workgroup_size": [
+        64,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_qwen3_moe_q6_prompt_narrow_mmq32"
+    },
+    "shape_guards": {
+      "selection": "opt_in_only; q6_K MUL_MAT_ID, k % 256 == 0, rows % 64 == 0, n_ids == 8, 32 <= n_tokens <= 64"
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x32_wg64_f32",
+      "selector_gate": "opt-in on gfx1151 with GGML_HRX_ENABLE_Q6_K_ID_Q8_1_X4_MMQ32_PROMPT=1"
+    },
+    "evidence_summary": {
+      "status": "exploratory_gfx1151_perf_probe",
+      "selection": "Q6_K MUL_MAT_ID p33 packed-route output-ownership probe. It keeps the accepted grouped Q8_1 x4 integer-dot dataflow and the same CMake-built HSACO source as the MMQ64x16 and rejected MMQ64x64 routes, but uses an intermediate route tile of 32 tokens. This brackets the accepted three-Y-group p33 floor and the rejected one-Y-group Vulkan-grid clone to test whether the BN64 gate/up regression came from excessive per-workgroup token ownership. Promotion requires focused p33 CPU-reference, p512 and p513 odd/tail gates, route traces proving opt-in selection only, and same-runner timing beating the MMQ64x16 floor for both gate/up-shaped and down rows."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x64_wg64_f32",
     "family": "mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x64_wg64",
     "op": "MUL_MAT_ID",

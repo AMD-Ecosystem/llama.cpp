@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_moe_id_mmq64x32_p33_output_ownership_rejection_cd0f064bd_dirty",
+      "date": "2026-06-21",
+      "route": "hrx_mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x32_wg64_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_ID_Q8_1_X4_MMQ32_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-id-mmq64x32-focused-cd0f064bd-dirty-20260621-012104/",
+      "perf_artifact": "cache/hrxv1/gfx1151/q6-id-mmq64x32-focused-cd0f064bd-dirty-20260621-012104/default-perf.stdout.csv, mmq32-perf.stdout.csv, compare.md, and compare.json",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-id-mmq64x32-focused-cd0f064bd-dirty-20260621-012104/hsaco-summary.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_id_q6_k_q8_1_x4_mmq.hsaco",
+      "reason": "This opt-in packed-Q8_1/x4 Q6_K MUL_MAT_ID route tested the intermediate route_tile_n=32 output-ownership point between the accepted MMQ64x16 floor and the rejected MMQ64x64 one-Y-group Vulkan-grid probe. It built through the normal CMake/Ninja HSACO source, selected under GGML_HRX_ENABLE_Q6_K_ID_Q8_1_X4_MMQ32_PROMPT=1, and passed focused p33 CPU-reference for ffn_moe_gate-0 and ffn_moe_down-0. Route traces proved route_tile_n=32 and workgroups [12,2,128] for gate/up and [32,2,128] for down. Static evidence was resource-clean: wave64, SGPR=68, VGPR=126, LDS=3840, no scratch/spills, 256 v_dot4_i32_iu8, 62 LDS-read ops, 26 LDS-write ops, 32 global stores, and two barriers. Reject before p512/p513 or model A/B because same-runner p33 focused timing regressed both rows versus the accepted MMQ16 floor: total 580.217 -> 606.418 us, ffn_moe_gate-0 308.434 -> 327.414 us, and ffn_moe_down-0 271.782 -> 279.005 us. This closes route-tile-only packed probes for Q6 ID p33; future work needs a real compact f16-WMMA lowering path or a different packed dataflow/packing-cost hypothesis."
+    },
+    {
       "id": "q6_k_vk64_depwait_p33stage12_rejection_c9dc2a616_dirty",
       "date": "2026-06-21",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_depwait_p33stage12_f16acc_wg256_f32",
