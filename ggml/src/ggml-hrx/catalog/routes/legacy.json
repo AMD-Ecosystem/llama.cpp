@@ -6955,8 +6955,8 @@
       "selector_gate": "GGML_HRX_ENABLE_Q5_K_Q8_1_X4_MMQL128_BPAIR_PROMPT=1"
     },
     "evidence_summary": {
-      "status": "candidate_gfx1151_schedule_probe",
-      "selection": "Q5_K packed-Q8_1/x4 follow-up to the positive Q4_K B-pair schedule axis and rejected Q5 B-quad transfer. It preserves the current Q5 MMQL128 packed dataflow, BM128, BN128, wave64, and BK_STEP1 while preloading only the two B-cache rows for each TN=2 micro-iteration before dot consumption. Keep opt-in until p33, p512, and p513 focused gates prove correctness, route selection, ISA pressure, and timing."
+      "status": "rejected_gfx1151_focused_perf_regression",
+      "selection": "Q5_K packed-Q8_1/x4 B-pair probe after the positive Q4_K B-pair schedule axis and rejected Q5 B-quad full-tile transfer. It preserves the current Q5 MMQL128 packed dataflow, BM128, BN128, wave64, and BK_STEP1 while preloading only the two B-cache rows for each TN=2 micro-iteration before dot consumption. It built through CMake/Ninja without spills (wave64, SGPR=50, VGPR=149, LDS=10240) and passed focused p33, p512, and p513 CPU-reference gates. Route traces proved p512 selected B-pair for the three packed Q5 rows, p33 stayed on narrow/MMQ64 routes, and p513 tails fell back to current MMQL128. Reject for promotion because same-runner p512 focused timing regressed three of four rows: Kcur 870.47 -> 876.16 us, Qcur 1220.50 -> 1268.61 us, ffn_out 7342.03 -> 7576.46 us; only ffn_gate improved 6940.84 -> 6729.86 us. Keep opt-in only; the Q4 B-cache read-clustering axis does not transfer to Q5_K at pair or quad cluster size."
     },
     "target_prefixes": [
       "gfx1151"
