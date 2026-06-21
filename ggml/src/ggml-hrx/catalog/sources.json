@@ -461,6 +461,9 @@
   "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_copyab_q6addr_upperdepnomem_compact_helper4_wg256": {
     "path": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_copyab_q6addr_upperdepnomem_compact_helper4_wg256.hip.cpp"
   },
+  "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_storekill_q6addr_upperdepnomem_wg256": {
+    "path": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_storekill_q6addr_upperdepnomem_wg256.hip.cpp"
+  },
   "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_compact_rawbuf_helper4_wg256": {
     "path": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_compact_rawbuf_helper4_wg256.hip.cpp"
   },
