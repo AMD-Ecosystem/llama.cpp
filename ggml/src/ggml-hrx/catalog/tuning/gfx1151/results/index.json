@@ -3,6 +3,77 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_k_vk128_current_static_delta_matrix",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk128-current-static-matrix-f706b1831-20260620-185341/",
+      "source_commit": "f706b1831",
+      "tool": "tools/vulkan-oracle/compare_amdgcn_isa.py and summarize_hsaco_family.py against the Qwen3 30B Q6_K p512 Vulkan oracle",
+      "status": "accepted_static_constraint_no_new_route",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K p512/p513 dense prompt large route; choose the next route axis only after comparing current VK128 HIP variants against RADV large",
+        "baseline_command": "compare_amdgcn_isa.py --radv-isa cache/hrxv1/gfx1151/vulkan-oracle-qwen3-30b-q6k-p512-fa1-20260617-200437/radv/isa/matmul_q6_k_f32_f16acc_aligned_l__main__6eebdfb4c3043b23.amdgcn.txt --radv-stats .../stats/matmul_q6_k_f32_f16acc_aligned_l__main__6eebdfb4c3043b23.stats.txt",
+        "variant_command": "same comparison against current CMake/Ninja-built VK128 default, B64GROUP, fullstore, store_stage, B64GROUP+fullstore, and B64GROUP+store_stage HSACOs",
+        "same_runner_comparison_method": "static ISA/resource comparison only; this closes already-built source-visible wrapper axes before a new route is added",
+        "route_trace_path": "not applicable; no runtime selector changed",
+        "scheduler_trace_path": "artifact compare/*.md, q6-vk128-static-deltas.md, and hsaco-family-summary.md",
+        "focused_cpu_reference": "not run because no new executable route was introduced; prior rows for these variants are recorded in the Q6 ledger and rejection DB",
+        "compile_report_path": "artifact hsaco-family-summary.md",
+        "target_listing_path": "artifact compare/*.json and q6-vk128-static-deltas.json",
+        "prior_art_schedule_source": "Qwen3 30B Q6_K Vulkan large oracle plus accepted/rejected VK128 HIP route family",
+        "promotion_rule": "do not add another isolated B64/fullstore/store-stage wrapper. The next Q6 route candidate must first lower staged-writeback barrier count or introduce a lower-level cooperative load/store primitive that can approach RADV's two-barrier LDS/writeback topology."
+      },
+      "static_matrix": {
+        "radv_large": {
+          "sgpr": 108,
+          "vgpr": 192,
+          "lds": 22528,
+          "scratch": 0,
+          "wmma": 32,
+          "ds_load_b64": 64,
+          "ds_load_u16_d16": 128,
+          "ds_store_b16": 128,
+          "buffer_store_b32": 192,
+          "barrier": 2,
+          "wait": 190,
+          "hot_final_lgkmcnt": 24,
+          "hot_immediate_loads": 32
+        },
+        "accepted_vk128_default": {
+          "sgpr": 36,
+          "vgpr": 156,
+          "lds": 20480,
+          "scratch": 0,
+          "wmma": 32,
+          "ds_load_b64": 0,
+          "ds_load_u16_d16": 0,
+          "ds_store_b16": 2,
+          "stores": 64,
+          "barrier": 2,
+          "wait": 151
+        },
+        "b64group_store_stage": {
+          "sgpr": 40,
+          "vgpr": 196,
+          "lds": 22528,
+          "scratch": 0,
+          "wmma": 32,
+          "ds_load_b64": 64,
+          "ds_load_u16_d16": 64,
+          "ds_store_b16": 66,
+          "stores": 64,
+          "barrier": 34,
+          "wait": 367
+        }
+      },
+      "findings": [
+        "the accepted VK128 default preserves low barrier count and no spills, but misses RADV's LDS footprint, ds_load_b64 grouping, halfword LDS stage/loadback, and 192 buffer-store writeback",
+        "B64GROUP and B64GROUP+fullstore match the ds_load_b64 axis but push VGPR to 196-197 and still miss the 22528-byte LDS footprint and halfword stage/loadback surface",
+        "store-stage and B64GROUP+store-stage reach the 22528-byte LDS footprint without spills, but emit only 64 halfword LDS loadbacks, about half the RADV stage surface, and inflate ordering to 34 barriers",
+        "the closest source-visible combined wrapper is b64group_store_stage, but its barrier/order footprint is structurally unlike RADV and prior focused timing already rejected this family",
+        "next Q6 dense prompt work should target lower-level cooperative store/load ownership or a staged writeback spelling that keeps two-barrier ordering before any runtime selector promotion"
+      ]
+    },
+    {
       "id": "q8_0_motif192_k2_splitstage_full192_compile_contract",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-splitstage-full192-compile-6d97c30a7-dirty-20260620-184843/",
