@@ -75,6 +75,12 @@ static __device__ __forceinline__ q6id_contract_half16_vec q6id_contract_load_fr
     return __builtin_bit_cast(q6id_contract_half16_vec, raw);
 }
 
+static __device__ __forceinline__ void q6id_contract_sink_fragment(q6id_contract_half16_vec frag) {
+    const q6id_contract_u32x8_vec raw = __builtin_bit_cast(q6id_contract_u32x8_vec, frag);
+    asm volatile("" :: "v"(raw[0]), "v"(raw[1]), "v"(raw[2]), "v"(raw[3]),
+                       "v"(raw[4]), "v"(raw[5]), "v"(raw[6]), "v"(raw[7]) : "memory");
+}
+
 static __device__ __forceinline__ void q6id_contract_ds_write_b16(
         __attribute__((address_space(3))) uint16_t * ptr,
         uint32_t value) {
@@ -237,6 +243,91 @@ void q6_id_subgroup_contract_staged_probe(float * dst, unsigned int * counts) {
     }
 }
 
+extern "C" __global__ __launch_bounds__(256, 1)
+void q6_id_subgroup_contract_loaddeep_probe(float * dst, unsigned int * counts) {
+    __shared__ uint64_t sh_frag[4 * 256];
+    __shared__ uint16_t sh_stage[HRX_Q6ID_CONTRACT_VALUES];
+
+    const unsigned int tid = __builtin_amdgcn_workitem_id_x();
+    const unsigned int lane = tid & 63u;
+    const unsigned int wave = tid >> 6u;
+
+    if (wave == 0u) {
+        q6id_contract_init_fragments(sh_frag, lane);
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+
+    if (wave == 0u) {
+    const q6id_contract_half16_vec f0 = q6id_contract_load_fragment(
+        (const __attribute__((address_space(3))) uint64_t *) sh_frag, 0u, lane);
+    const q6id_contract_half16_vec f1 = q6id_contract_load_fragment(
+        (const __attribute__((address_space(3))) uint64_t *) sh_frag, 1u, lane);
+    const q6id_contract_half16_vec f2 = q6id_contract_load_fragment(
+        (const __attribute__((address_space(3))) uint64_t *) sh_frag, 2u, lane);
+    const q6id_contract_half16_vec f3 = q6id_contract_load_fragment(
+        (const __attribute__((address_space(3))) uint64_t *) sh_frag, 3u, lane);
+    q6id_contract_sink_fragment(q6id_contract_load_fragment(
+        (const __attribute__((address_space(3))) uint64_t *) sh_frag, 0u, lane));
+    q6id_contract_sink_fragment(q6id_contract_load_fragment(
+        (const __attribute__((address_space(3))) uint64_t *) sh_frag, 1u, lane));
+    q6id_contract_sink_fragment(q6id_contract_load_fragment(
+        (const __attribute__((address_space(3))) uint64_t *) sh_frag, 2u, lane));
+    q6id_contract_sink_fragment(q6id_contract_load_fragment(
+        (const __attribute__((address_space(3))) uint64_t *) sh_frag, 3u, lane));
+    q6id_contract_sink_fragment(q6id_contract_load_fragment(
+        (const __attribute__((address_space(3))) uint64_t *) sh_frag, 0u, lane));
+    q6id_contract_sink_fragment(q6id_contract_load_fragment(
+        (const __attribute__((address_space(3))) uint64_t *) sh_frag, 1u, lane));
+    q6id_contract_sink_fragment(q6id_contract_load_fragment(
+        (const __attribute__((address_space(3))) uint64_t *) sh_frag, 2u, lane));
+    q6id_contract_sink_fragment(q6id_contract_load_fragment(
+        (const __attribute__((address_space(3))) uint64_t *) sh_frag, 3u, lane));
+    q6id_contract_sink_fragment(q6id_contract_load_fragment(
+        (const __attribute__((address_space(3))) uint64_t *) sh_frag, 0u, lane));
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+
+    HRX_Q6ID_CONTRACT_WMMA(0u, f0, f1);
+    HRX_Q6ID_CONTRACT_WMMA(1u, f2, f3);
+    HRX_Q6ID_CONTRACT_WMMA(2u, f0, f1);
+    HRX_Q6ID_CONTRACT_WMMA(3u, f2, f3);
+    HRX_Q6ID_CONTRACT_WMMA(4u, f0, f1);
+    HRX_Q6ID_CONTRACT_WMMA(5u, f2, f3);
+    HRX_Q6ID_CONTRACT_WMMA(6u, f0, f1);
+    HRX_Q6ID_CONTRACT_WMMA(7u, f1, f2);
+    HRX_Q6ID_CONTRACT_WMMA(8u, f3, f0);
+    HRX_Q6ID_CONTRACT_WMMA(9u, f1, f2);
+    HRX_Q6ID_CONTRACT_WMMA(10u, f3, f0);
+    HRX_Q6ID_CONTRACT_WMMA(11u, f1, f2);
+    HRX_Q6ID_CONTRACT_WMMA(12u, f3, f0);
+    HRX_Q6ID_CONTRACT_WMMA(13u, f0, f2);
+    HRX_Q6ID_CONTRACT_WMMA(14u, f0, f2);
+    HRX_Q6ID_CONTRACT_WMMA(15u, f0, f2);
+    }
+
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+
+    if (wave == 0u) {
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(0u);
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(1u);
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(2u);
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(3u);
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(4u);
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(5u);
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(6u);
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(7u);
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(8u);
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(9u);
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(10u);
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(11u);
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(12u);
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(13u);
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(14u);
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(15u);
+    }
+}
+
 static double elapsed_us(const std::chrono::steady_clock::time_point & a,
         const std::chrono::steady_clock::time_point & b) {
     return std::chrono::duration<double, std::micro>(b - a).count();
@@ -254,6 +345,8 @@ static double run_kernel(const std::string & name, int reps, float * d_dst, unsi
     for (int i = 0; i < reps; ++i) {
         if (name == "direct") {
             q6_id_subgroup_contract_direct_probe<<<1, 256>>>(d_dst, d_counts);
+        } else if (name == "loaddeep") {
+            q6_id_subgroup_contract_loaddeep_probe<<<1, 256>>>(d_dst, d_counts);
         } else {
             q6_id_subgroup_contract_staged_probe<<<1, 256>>>(d_dst, d_counts);
         }
@@ -318,13 +411,21 @@ int main(int argc, char ** argv) {
     HIP_CHECK(hipDeviceSynchronize());
     const bool staged_ok = validate(d_dst, d_counts);
 
+    clear_buffers(d_dst, d_counts);
+    q6_id_subgroup_contract_loaddeep_probe<<<1, 256>>>(d_dst, d_counts);
+    HIP_CHECK(hipGetLastError());
+    HIP_CHECK(hipDeviceSynchronize());
+    const bool loaddeep_ok = validate(d_dst, d_counts);
+
     const double direct_us = run_kernel("direct", reps, d_dst, d_counts);
     const double staged_us = run_kernel("staged", reps, d_dst, d_counts);
+    const double loaddeep_us = run_kernel("loaddeep", reps, d_dst, d_counts);
     std::printf("kernel,valid,us\n");
     std::printf("direct,%d,%.6f\n", direct_ok ? 1 : 0, direct_us);
     std::printf("staged,%d,%.6f\n", staged_ok ? 1 : 0, staged_us);
+    std::printf("loaddeep,%d,%.6f\n", loaddeep_ok ? 1 : 0, loaddeep_us);
 
     HIP_CHECK(hipFree(d_dst));
     HIP_CHECK(hipFree(d_counts));
-    return (direct_ok && staged_ok) ? 0 : 1;
+    return (direct_ok && staged_ok && loaddeep_ok) ? 0 : 1;
 }
