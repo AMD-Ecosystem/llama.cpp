@@ -3,6 +3,41 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q4_packed_issue_screen_current_425e16cf2",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/q4-packed-issue-screen-current-425e16cf2-20260621-014443/",
+      "source_commit": "425e16cf2",
+      "tool": "tools/vulkan-oracle/run_q4_packed_issue_screen.py over CMake/Ninja-built gfx1151 Q4_K packed HSACOs",
+      "status": "accepted_static_checkpoint_no_route_promotion",
+      "candidate_gate": {
+        "production_target": "Llama Q4_K dense prompt p512/p513 large rows and p33 narrow rows on gfx1151, using the same-machine Vulkan aligned_l/aligned_m oracle contracts",
+        "baseline_command": "python3 tools/vulkan-oracle/run_q4_packed_issue_screen.py --out-dir cache/hrxv1/gfx1151/q4-packed-issue-screen-current-425e16cf2-20260621-014443",
+        "variant_command": "same static screen across existing CMake/Ninja-built Q4_K packed HSACO variants; no new runtime selector or candidate route",
+        "same_runner_comparison_method": "static RADV-vs-HIP HSACO comparison using compare_amdgcn_isa.py and summarize_hsaco_family.py with separate large p512/p513 and narrow p33 oracle contracts",
+        "route_trace_path": "not applicable; static screen only",
+        "scheduler_trace_path": "cache/hrxv1/gfx1151/q4-packed-issue-screen-current-425e16cf2-20260621-014443/summary.md plus large/family-summary.md and narrow/family-summary.md",
+        "focused_cpu_reference": "not run; existing focused/runtime evidence remains authoritative for individual variants",
+        "compile_report_path": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q4_k_q8_1_x4_mmql*.hsaco",
+        "target_listing_path": "CMake/Ninja-generated HSACO directory build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151",
+        "prior_art_schedule_source": "Vulkan oracle Llama 3.1 8B Q4_K_M p512 aligned_l and p33 aligned_m RADV ISA/stats captures",
+        "promotion_rule": "no route promotion from this screen. A future Q4 route must close one of the recorded structural gaps and then pass focused p33/p512/p513 CPU-reference, route trace, same-runner timing, and model A/B gates."
+      },
+      "static_result": {
+        "large_oracle": "matmul_q4_k_f32_f16acc_aligned_l with 32 ds_load_b64 before first WMMA wait, final lgkmcnt 24, 21 first-window WMMA hot ops, 192 buffer stores, and 132 LDS stores in the parsed store score",
+        "large_nearest_static_row": "mul_mat_vec_q4_k_q8_1_x4_mmql128_bk2.hsaco had the lowest total static gap in the packed family, but it remains an integer-dot route with 1024 v_dot, zero v_wmma, only 64 global stores, final lgkmcnt 2, and the earlier focused p512/p513 BK2 runtime rejection remains authoritative",
+        "large_default_bquad": "mul_mat_vec_q4_k_q8_1_x4_mmql128_bquad.hsaco is resource-clean but still has zero v_wmma, only 16 pre-hot loads, final lgkmcnt 9, 64 global stores, and no RADV-like WMMA/store surface",
+        "narrow_oracle": "matmul_q4_k_f32_f16acc_aligned_m with 48 ds_load_b64 before first WMMA wait, final lgkmcnt 40, 16 first-window WMMA hot ops, 96 buffer stores, and 68 LDS stores in the parsed store score",
+        "narrow_nearest_static_row": "mul_mat_vec_q4_k_q8_1_x4_mmql64_bk2_bquad.hsaco remains the closest narrow packed row and the accepted p33 default for rows>=4096, but it is still an integer-dot route with zero v_wmma, 16 pre-hot loads, final lgkmcnt 9, 16 global stores, and a large store/WMMA gap"
+      },
+      "findings": [
+        "added a reusable Q4 packed issue-screen wrapper that compares large and narrow Q4_K packed HSACO families against the correct separate RADV oracle contracts",
+        "the screen prevents treating large p512/p513 and p33 as one policy regime and records the exact built HSACO files inspected",
+        "all current packed Q4 variants fail the RADV static contract because they are still packed-Q8_1 integer-dot schedules, not cooperative-matrix direct-F32 schedules",
+        "BK2 is closest by this static score because it raises staging depth and LDS footprint, but prior focused timing rejected it for production due mixed p512/p513 behavior",
+        "next Q4 work should not rerun BK2/B-pair/B-quad/B-half/B-oct axes; it needs a new lower-level primitive or a different packed dataflow that materially changes the store surface, first-hot load window, or WMMA-equivalent ownership while preserving focused correctness"
+      ]
+    },
+    {
       "id": "q6_moe_id_mmq64x32_p33_output_ownership_rejection_cd0f064bd_dirty",
       "date": "2026-06-21",
       "artifact": "cache/hrxv1/gfx1151/q6-id-mmq64x32-focused-cd0f064bd-dirty-20260621-012104/",
