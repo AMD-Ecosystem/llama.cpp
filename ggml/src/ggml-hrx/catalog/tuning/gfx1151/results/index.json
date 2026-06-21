@@ -3127,6 +3127,34 @@
         "the next useful Q6 implementation axis is a correctness-proven selected-output 96-store/cooperative-store ownership primitive or another lower-resource form that changes the RADV event-window delta, not a new selector around the already rejected wrappers",
         "Q8_0 p512/p513 and Q5_K p512/p513 remain adjacent boulders, but their recent direct-WMMA/writeback-elision probes are likewise rejected unless the next candidate changes accumulator ownership, cooperative store mapping, or packed dataflow materially."
       ]
+    },
+    {
+      "id": "q8_0_coopstore_contract_refresh_f38c84b5e",
+      "date": "2026-06-20",
+      "source_commit": "f38c84b5e",
+      "artifact": "cache/hrxv1/gfx1151/q8-coopstore-contract-refresh-f38c84b5e-20260620-173114/",
+      "status": "refresh_confirms_direct192_raw_pass_mixed192_stage_fail",
+      "tool": "CMake/Ninja-built hrx-hip-bench-coopmat-store-contract",
+      "candidate_gate": {
+        "production_target": "Llama 3.1 8B Q8_0 p512/p513 dense prompt rows where the remaining Vulkan/RADV delta is centered on cooperative-matrix accumulator ownership and selected global-store mapping",
+        "baseline_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-direct192-raw --flags=0x31004000",
+        "variant_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-radv-mixed192 --flags=0x31004000",
+        "same_runner_comparison_method": "same CMake/Ninja-built focused fixture, same flags and output surface, direct raw store contract compared against RADV-shaped mixed halfword staging contract",
+        "route_trace_path": "not applicable; low-level store-contract fixture and no production selector changed",
+        "scheduler_trace_path": "inherits q8_0-prompt-schedule-ledger.md and the prior direct192/baseoff timing artifacts",
+        "focused_cpu_reference": "direct192 raw passes with elements=12288, bad=0, max_abs=0; mixed192 fails with elements=12288, bad=2112, max_abs=50625",
+        "compile_report_path": "CMake/Ninja build target hrx-hip-bench-coopmat-store-contract from source commit f38c84b5e",
+        "target_listing_path": "not extracted for this refresh; use prior static direct192/baseoff artifacts for HSACO/ISA comparisons",
+        "prior_art_schedule_source": "RADV Q8_0 large oracle matmul_q8_0_f32_f16acc_aligned_l hash 0x72d309e22f889977 plus direct192 raw lower-level fixtures",
+        "promotion_rule": "do not promote another Q8 halfword-staging or wrapper-only route from this evidence. The next Q8 candidate must preserve the direct192/raw correctness surface while changing production accumulator ownership, cooperative store mapping, or another named RADV event-window delta."
+      },
+      "findings": [
+        "rebuilt and reran the focused cooperative-store contract fixture at source commit f38c84b5e after the post-Q5 parity checkpoint",
+        "wmma-lds-k2-direct192-raw remains correctness-clean with elements=12288, bad=0, and max_abs=0",
+        "wmma-lds-k2-radv-mixed192 still fails with 2112 bad elements, first_bad group=18 slot=3 lane=0, and the grouped bad-slot pattern seen in earlier halfword-stage failures",
+        "the refresh confirms the useful Q8 path is not another mixed halfword staging wrapper. Direct 192 raw selected-output ownership is a valid lower-level surface, while the RADV-shaped mixed staging transfer still violates the HIP C++/compiler register or lane contract.",
+        "next Q8 code should either transfer the direct192 raw ownership primitive into a production-ABI diagnostic with focused p33/p512/p513 timing, or produce a compact compiler reproducer for the failing mixed192 stage. Do not rerun the already rejected baseoff raw16/fulltile/clause4/nostore wrappers as route candidates."
+      ]
     }
   ]
 }
