@@ -4999,6 +4999,54 @@ static bool ggml_backend_hrx_provider_matches_env(
     return false;
 }
 
+static bool ggml_backend_hrx_env_i64_filter_matches(const char * env_name, int64_t actual, bool * valid) {
+    const char * expected = std::getenv(env_name);
+    if (!expected || expected[0] == '\0') {
+        return true;
+    }
+    errno = 0;
+    char * end = nullptr;
+    const long long parsed = std::strtoll(expected, &end, 10);
+    if (errno != 0 || end == expected || *end != '\0') {
+        GGML_LOG_ERROR("%s: invalid %s=%s\n", __func__, env_name, expected);
+        *valid = false;
+        return false;
+    }
+    return static_cast<int64_t>(parsed) == actual;
+}
+
+static bool ggml_backend_hrx_mul_mat_provider_matches_env(
+        const ggml_backend_hrx_op_provider * provider,
+        ggml_type type,
+        int64_t k,
+        int64_t rows,
+        int64_t cols) {
+    const char * expected = std::getenv("GGML_HRX_EXPECT_MUL_MAT_PROVIDER");
+    if (!expected || expected[0] == '\0') {
+        return true;
+    }
+
+    const char * expected_type = std::getenv("GGML_HRX_EXPECT_MUL_MAT_TYPE");
+    if (expected_type && expected_type[0] != '\0' && std::strcmp(expected_type, ggml_type_name(type)) != 0) {
+        return true;
+    }
+
+    bool valid = true;
+    const bool shape_matches =
+        ggml_backend_hrx_env_i64_filter_matches("GGML_HRX_EXPECT_MUL_MAT_K", k, &valid) &&
+        ggml_backend_hrx_env_i64_filter_matches("GGML_HRX_EXPECT_MUL_MAT_ROWS", rows, &valid) &&
+        ggml_backend_hrx_env_i64_filter_matches("GGML_HRX_EXPECT_MUL_MAT_COLS", cols, &valid);
+    if (!valid) {
+        return false;
+    }
+    if (!shape_matches) {
+        return true;
+    }
+
+    return ggml_backend_hrx_provider_matches_env(
+        "GGML_HRX_EXPECT_MUL_MAT_PROVIDER", provider, "MUL_MAT");
+}
+
 static bool ggml_backend_hrx_supports_rms_norm(
         const ggml_backend_hrx_device_context * device_context,
         const ggml_tensor * op) {
@@ -12445,6 +12493,10 @@ static ggml_status ggml_backend_hrx_dispatch_mul_mat_vec_k_q8_1(
     };
 
     const auto & provider = *variant.provider;
+    if (!ggml_backend_hrx_mul_mat_provider_matches_env(
+            &provider, src0->type, constants.k, constants.rows, constants.cols)) {
+        return GGML_STATUS_FAILED;
+    }
     const uint32_t workgroup_size = provider.export_info.workgroup_size[0] ?
         provider.export_info.workgroup_size[0] : 256;
     hrx_dispatch_config_t config = {
@@ -13238,6 +13290,10 @@ static ggml_status ggml_backend_hrx_dispatch_mul_mat_vec(
         ggml_backend_hrx_mul_mat_vec_provider(context->device_context, src0->type);
     if (!provider || provider->kind != ggml_backend_hrx_provider_kind::hsaco) {
         GGML_LOG_ERROR("%s: MUL_MAT provider is unavailable\n", __func__);
+        return GGML_STATUS_FAILED;
+    }
+    if (!ggml_backend_hrx_mul_mat_provider_matches_env(
+            provider, src0->type, constants.k, constants.rows, constants.cols)) {
         return GGML_STATUS_FAILED;
     }
 
