@@ -3413,7 +3413,9 @@ static void run_timing_suite(
         size_t count,
         unsigned long long byte_extent,
         unsigned int flags,
-        unsigned int timing_iters) {
+        unsigned int timing_iters,
+        unsigned int rows,
+        unsigned int cols) {
     constexpr unsigned int warmup_iters = 128;
 
     std::printf("coopmat-store-timing-suite iters=%u warmup=%u flags=0x%x bytes=%llu\n",
@@ -3459,6 +3461,59 @@ static void run_timing_suite(
     HRX_COOPSTORE_TIME_CASE("radv-mixed192", coopstore_probe_radv_mixed192);
 
 #undef HRX_COOPSTORE_TIME_CASE
+
+#define HRX_COOPSTORE_TIME_Q6ADDR_CASE(MODE_NAME, KERNEL_NAME) do { \
+        HIP_CHECK(hipMemset(d_out, 0, count * sizeof(float))); \
+        for (unsigned int iter = 0; iter < warmup_iters; ++iter) { \
+            hipLaunchKernelGGL(KERNEL_NAME, dim3(1), dim3(256), 0, 0, \
+                d_out, byte_extent, flags, rows, cols); \
+        } \
+        HIP_CHECK(hipGetLastError()); \
+        HIP_CHECK(hipDeviceSynchronize()); \
+        hipEvent_t start_event = nullptr; \
+        hipEvent_t stop_event = nullptr; \
+        HIP_CHECK(hipEventCreate(&start_event)); \
+        HIP_CHECK(hipEventCreate(&stop_event)); \
+        const auto host_start = std::chrono::steady_clock::now(); \
+        HIP_CHECK(hipEventRecord(start_event, 0)); \
+        for (unsigned int iter = 0; iter < timing_iters; ++iter) { \
+            hipLaunchKernelGGL(KERNEL_NAME, dim3(1), dim3(256), 0, 0, \
+                d_out, byte_extent, flags, rows, cols); \
+        } \
+        HIP_CHECK(hipGetLastError()); \
+        HIP_CHECK(hipEventRecord(stop_event, 0)); \
+        HIP_CHECK(hipEventSynchronize(stop_event)); \
+        const auto host_stop = std::chrono::steady_clock::now(); \
+        float event_ms = 0.0f; \
+        HIP_CHECK(hipEventElapsedTime(&event_ms, start_event, stop_event)); \
+        HIP_CHECK(hipEventDestroy(start_event)); \
+        HIP_CHECK(hipEventDestroy(stop_event)); \
+        const double host_us = std::chrono::duration<double, std::micro>(host_stop - host_start).count(); \
+        std::printf("coopmat-store-timing mode=%s rows=%u cols=%u iters=%u event_total_us=%.3f event_avg_us=%.6f host_total_us=%.3f host_avg_us=%.6f\n", \
+            (MODE_NAME), rows, cols, timing_iters, \
+            static_cast<double>(event_ms) * 1000.0, \
+            static_cast<double>(event_ms) * 1000.0 / static_cast<double>(timing_iters), \
+            host_us, host_us / static_cast<double>(timing_iters)); \
+    } while (0)
+
+    HRX_COOPSTORE_TIME_Q6ADDR_CASE("wmma-lds-vk64-radv96-accdirect-copyab-q6addr",
+        (coopstore_probe_wmma_lds_vk64_radv96_accdirect_copy_q6addr<true, true, true>));
+    HRX_COOPSTORE_TIME_Q6ADDR_CASE("wmma-lds-vk64-radv96-accdirect-copyab-q6addr-nosink",
+        (coopstore_probe_wmma_lds_vk64_radv96_accdirect_copy_q6addr<true, true, false>));
+    HRX_COOPSTORE_TIME_Q6ADDR_CASE("wmma-lds-vk64-radv96-accdirect-copyab-q6addr-upperreal",
+        (coopstore_probe_wmma_lds_vk64_radv96_accdirect_copy_q6addr_upperreal<true, true>));
+    HRX_COOPSTORE_TIME_Q6ADDR_CASE("wmma-lds-vk64-radv96-accdirect-copyab-q6addr-upperwait",
+        (coopstore_probe_wmma_lds_vk64_radv96_accdirect_copy_q6addr_upperwait<true, true>));
+    HRX_COOPSTORE_TIME_Q6ADDR_CASE("wmma-lds-vk64-radv96-accdirect-copyab-q6addr-upperdepwait",
+        (coopstore_probe_wmma_lds_vk64_radv96_accdirect_copy_q6addr_upperdepwait<true, true>));
+    HRX_COOPSTORE_TIME_Q6ADDR_CASE("wmma-lds-vk64-radv96-accdirect-copyab-q6addr-upperdepnomem",
+        (coopstore_probe_wmma_lds_vk64_radv96_accdirect_copy_q6addr_upperdepnomem<true, true>));
+    HRX_COOPSTORE_TIME_Q6ADDR_CASE("wmma-lds-vk64-radv96-accdirect-copyab-q6addr-upperexpwait",
+        (coopstore_probe_wmma_lds_vk64_radv96_accdirect_copy_q6addr_upperexpwait<true, true>));
+    HRX_COOPSTORE_TIME_Q6ADDR_CASE("wmma-lds-vk64-radv96-accdirect-copyab-q6addr-upperwide",
+        (coopstore_probe_wmma_lds_vk64_radv96_accdirect_copy_q6addr_upperwide<true, true>));
+
+#undef HRX_COOPSTORE_TIME_Q6ADDR_CASE
 }
 
 int main(int argc, char ** argv) {
@@ -3479,7 +3534,7 @@ int main(int argc, char ** argv) {
     HIP_CHECK(hipMemset(d_out.ptr, 0, count * sizeof(float)));
 
     if (opts.mode == "timing") {
-        run_timing_suite(d_out.ptr, count, byte_extent, opts.flags, opts.timing_iters);
+        run_timing_suite(d_out.ptr, count, byte_extent, opts.flags, opts.timing_iters, opts.rows, opts.cols);
         return 0;
     } else if (opts.mode == "linear64") {
         hipLaunchKernelGGL(coopstore_probe_linear64, dim3(1), dim3(64), 0, 0, d_out.ptr, byte_extent, opts.flags);

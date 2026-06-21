@@ -6640,6 +6640,83 @@
         "static summary for the packed MMQ64 HSACO shows 384 v_dot4_i32_iu8, zero v_wmma_f16_16x16x16_f16, zero LDS reads/writes, 48 global_store_b32, 4 barriers, and 366 waitcnt-class ops, so this is not converging toward the RADV cooperative-matrix/H4LOAD schedule family",
         "decision: do not promote packed MMQ64 for dense Q6 p33. Continue schedule-driven work from the RADV/H4LOAD WMMA topology, or use packed Q8_1/x4 only where focused evidence shows it wins the relevant shape family."
       ]
+    },
+    {
+      "id": "q6_k_vk64_radv96_q6addr_upperdepnomem_current_prior_ab8ae9a82",
+      "date": "2026-06-21",
+      "source_commit": "ab8ae9a82-dirty",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-radv96-q6addr-current-ab8ae9a82-20260621-043029/",
+      "status": "accepted_low_level_q6addr_store_prior_no_route_promotion",
+      "tool": "CMake/Ninja-built hrx-hip-bench-coopmat-store-contract with current-commit q6addr timing extensions",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K p33 dense prompt medium-route output ownership, specifically RADV's 16-WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 64 ds_store_b16, 96 buffer_store_b32, low-barrier store surface",
+        "baseline_command": "cmake --build build/hrx-v1-catalog-gfx1151 --target hrx-hip-bench-coopmat-store-contract -j$(nproc); build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract --mode=timing --timing-iters=2000 --rows={64,128} --cols=33",
+        "variant_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-vk64-radv96-accdirect-copyab-q6addr-{base,nosink,upperreal,upperwait,upperdepwait,upperdepnomem,upperexpwait,upperwide} --rows={64,128,64} --cols={33,33,96}",
+        "same_runner_comparison_method": "same rebuilt native HIP fixture binary at current commit; compare q6addr variants across odd/narrow 64x33, 128x33, and 64x96 surfaces using fixture correctness and same-process host timing. HIP event timing was invalid in this run and is not used.",
+        "route_trace_path": "not applicable; low-level fixture only and no production selector changed",
+        "scheduler_trace_path": "artifact static/q6addr-static-summary.md, static/upperdepnomem.symbol.isa.txt, static/upperdepnomem.hot-regions.md, and static/upperdepnomem.store-clusters.md",
+        "focused_cpu_reference": "all q6addr variants pass fixture correctness with bad=0 and max_abs=0 for 64x33, 128x33, and 64x96",
+        "compile_report_path": "artifact static/current-embedded-notes.txt extracted from the executable .hip_fatbin; the adjacent .hipv4 sidecar was stale/incomplete and must not be used for this run",
+        "target_listing_path": "artifact static/current-embedded-objdump.txt and symbol-scoped static/upperdepnomem.symbol.isa.txt",
+        "prior_art_schedule_source": "Qwen3 30B Q6_K p33 RADV medium oracle matmul_q6_k_f32_f16acc_aligned_m plus rejected p33stage12/p33stage16/p33stage12-shadow/sidecar/no-merge/valuebarrier/inlineonly/banded/upper-stage route transfers",
+        "promotion_rule": "do not promote from fixture evidence alone. A route-facing transfer must preserve the upperdepnomem store surface, pass focused p33/p512/p513 MUL_MAT CPU-reference rows with route traces, and beat the accepted H4LOAD/VK128 defaults before model-level promotion."
+      },
+      "static_result": {
+        "upperdepnomem": {
+          "wmma": 16,
+          "ds_load_b64": 48,
+          "ds_load_u16_d16": 64,
+          "ds_store_b16": 64,
+          "buffer_store_b32": 96,
+          "s_barrier": 1,
+          "s_waitcnt": 72,
+          "s_waitcnt_depctr": 1,
+          "sgpr": 50,
+          "vgpr": 154,
+          "lds_bytes": 11264,
+          "spills": "none"
+        },
+        "base_q6addr": {
+          "wmma": 16,
+          "ds_load_b64": 48,
+          "ds_load_u16_d16": 64,
+          "ds_store_b16": 80,
+          "buffer_store_b32": 96,
+          "s_barrier": 8,
+          "s_waitcnt": 82,
+          "s_waitcnt_depctr": 4,
+          "sgpr": 50,
+          "vgpr": 150,
+          "lds_bytes": 11264,
+          "spills": "none"
+        }
+      },
+      "timing_result": {
+        "host_timing_only": true,
+        "upperdepnomem_host_avg_us": {
+          "64x33": 5.155201,
+          "128x33": 5.138921,
+          "64x96": 5.51785
+        },
+        "base_q6addr_host_avg_us": {
+          "64x33": 6.405616,
+          "128x33": 6.490746,
+          "64x96": 7.027726
+        },
+        "upperexpwait_host_avg_us": {
+          "64x33": 5.231063,
+          "128x33": 5.206481,
+          "64x96": 5.599507
+        }
+      },
+      "findings": [
+        "extended the CMake/Ninja-built coopmat-store-contract timing mode to include q6addr ownership variants with the selected rows/cols, so future low-level Q6 store experiments can be ranked without ad hoc helpers",
+        "current-commit correctness rerun passes all tested q6addr variants on odd/narrow 64x33, 128x33, and 64x96 surfaces with bad=0 and max_abs=0",
+        "upperdepnomem is the fastest q6addr fixture in same-process host timing for every tested shape: 5.155201 us on 64x33, 5.138921 us on 128x33, and 5.517850 us on 64x96",
+        "static extraction from the embedded executable fatbin, not the stale sidecar object, shows upperdepnomem matches the RADV medium headline store surface: 16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 64 ds_store_b16, 96 buffer_store_b32, LDS=11264, no spills",
+        "upperdepnomem also improves the previous base q6addr barrier/wait surface from 8 barriers and 4 depctrs to 1 barrier and 1 depctr, at VGPR 154 versus base q6addr VGPR 150 and RADV medium VGPR 144",
+        "decision: treat upperdepnomem as the next low-level store-ownership prior for Q6 p33 route work. The remaining risk is production ABI transfer: previous route-facing copies of adjacent ideas regressed badly, so the next route candidate must preserve this exact lower-barrier surface before timing against H4LOAD."
+      ]
     }
   ]
 }
