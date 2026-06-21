@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_vk64_q6addr_upperdepnomem_wait12312_9d5ef7e05_dirty",
+      "date": "2026-06-21",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_wait12312_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASM_COPYAB_Q6ADDR_UPPERDEPNOMEM_WAIT12312_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-q6addr-upperdepnomem-wait12312-route-9d5ef7e05-dirty-20260621-093355/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-q6addr-upperdepnomem-wait12312-9d5ef7e05-dirty-20260621-093340/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_wait12312_wg256.hsaco",
+      "reason": "This opt-in Q6_K p33 route tested whether adding the full ladder's group-12 lgkmcnt(16) wait to the rejected wait123 route was enough to restore correctness without retaining extra b_pad fragments. Static evidence preserved the intended first-WMMA window and changed only the wait axis: 16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 96 buffer_store_b32, two barriers, no spills, load_b64_immediately_before_final_wait=48, final_pre_wmma_lgkmcnt=40, and s_waitcnt=84. Reject before timing because focused CPU-reference still fails on selected p33 rows: ffn_out-0 ERR=0.034907384 and result_output ERR=0.053243924. Group-12 wait placement alone is not sufficient; the next bracket should test retained pad-fragment dependencies or move to a lower-level issue primitive."
+    },
+    {
       "id": "q6_k_vk64_q6addr_upperdepnomem_wait123_97feed48f_dirty",
       "date": "2026-06-21",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_wait123_f16acc_wg256_f32",
