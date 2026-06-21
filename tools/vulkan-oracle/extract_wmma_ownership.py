@@ -570,8 +570,8 @@ def parse_args():
         action="store_true",
         help=(
             "Exit non-zero unless every summarized ISA uses width-4 dst and C "
-            "operands for every f16 WMMA. This is the RADV-style gfx1151 Q6 ID "
-            "static screen."
+            "operands for every f16 WMMA. This is the RADV-style gfx1151 compact "
+            "accumulator static screen used by Q6 ID and Q8 large-route probes."
         ),
     )
     return parser.parse_args()
