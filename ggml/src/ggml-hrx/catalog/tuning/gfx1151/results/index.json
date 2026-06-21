@@ -7253,6 +7253,43 @@
         "focused CPU-reference fails every p33 row with finite ERR around 1.8, which is much worse than the previous padwait no-ladder finite errors",
         "decision: reject before perf. The synthetic fixture's ring12 alias group order is not semantically compatible with the real production Q6 output tile mapping; the next route-facing step should prove a production-ABI lane/output fixture instead of another splice of the ring12 alias order."
       ]
+    },
+    {
+      "id": "q6_k_vk64_q6addr_production_upperdepnomem_map_fixture",
+      "date": "2026-06-21",
+      "source_commit": "89e0e95cc",
+      "artifact": "cache/hrxv1/gfx1151/q6addr-production-map-59a4e2f6f-dirty-20260621-071024/",
+      "status": "accepted_gfx1151_diagnostic_fixture",
+      "route": "standalone CMake/Ninja-built hrx-hip-bench-coopmat-store-contract mode q6addr-production-upperdepnomem-map",
+      "env": "no production selector; fixture only",
+      "candidate_gate": {
+        "production_target": "Q6_K p33 dense prompt q6addr upperdepnomem production ABI/output transfer before another route-facing gfx1151 splice",
+        "baseline_command": "cmake --build build/hrx-v1-catalog-gfx1151 --target hrx-hip-bench-coopmat-store-contract -j$(nproc)",
+        "variant_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract --mode=q6addr-production-upperdepnomem-map --rows={64,128,64,64,64} --cols={33,33,96,97,191}",
+        "same_runner_comparison_method": "same executable and same process-style fixture checks across odd/narrow and tail-column shapes",
+        "route_trace_path": "not applicable; no production route",
+        "scheduler_trace_path": "fixture source and generated CMake/Ninja-built executable",
+        "focused_cpu_reference": "fixture dense-output contract passed for rows/cols 64x33, 128x33, 64x96, 64x97, and 64x191; existing upperdepnomem compatibility mode also passed 64x96",
+        "compile_report_path": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract built through CMake/Ninja",
+        "target_listing_path": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract.0.hipv4-amdgcn-amd-amdhsa--gfx1151",
+        "prior_art_schedule_source": "q6_k_vk64_radv96_q6addr_upperdepnomem_current_prior_ab8ae9a82 plus route-facing q6addr upperdepnomem, padwait, and ring12alias rejections",
+        "promotion_rule": "do not promote from fixture evidence alone. Use this as a focused production-ABI gate before route-facing Q6 upperdepnomem candidates; production promotion still requires focused p33/p512/p513 CPU-reference, route traces, static schedule comparison, and same-runner perf versus accepted defaults."
+      },
+      "correctness_result": {
+        "64x33": "passed bad=0 max_abs=0",
+        "128x33": "passed bad=0 max_abs=0",
+        "64x96": "passed bad=0 max_abs=0",
+        "64x97": "passed bad=0 max_abs=0",
+        "64x191": "passed bad=0 max_abs=0",
+        "existing_upperdepnomem_64x96": "passed bad=0 max_abs=0"
+      },
+      "findings": [
+        "The first fixture spelling reused the older swizzled LDS index and failed; the accepted fixture uses the production RADV96 lane*4+reg LDS layout.",
+        "The fixture also had to match the production union-based f16/u16 conversion helper; direct vector-element __builtin_bit_cast caused adjacent slot confusion in the synthetic staged store.",
+        "The corrected fixture proves direct groups, duplicated upper groups, production Q6addr source-group mapping, dense row/column stores, odd p33 columns, and wider tail columns agree without WMMA math.",
+        "This does not overturn previous production route rejections: the route-facing upperdepnomem family was already mostly ABI/correctness clean and lost because the production HSACO did not preserve the low-wait/dependency surface of the fixture/RADV prior.",
+        "Next Q6 p33 work should use this fixture as a pre-route gate, then focus on preserving the low-barrier/low-depctr schedule surface rather than another blind output-mapping splice."
+      ]
     }
   ]
 }
