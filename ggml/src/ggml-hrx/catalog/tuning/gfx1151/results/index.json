@@ -3,6 +3,124 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "wmma_f16_mixed_compact_hip_primitive_probe_ee02cd25e",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/wmma-f16-mixed-compact-hip-bench-ee02cd25e-dirty-20260621-continue/",
+      "additional_artifacts": [
+        "cache/hrxv1/gfx1151/wmma-mc-mixed-compact-mattr-ee02cd25e-rerun-20260621-continue/",
+        "cache/hrxv1/gfx1151/wmma-mc-mixed-compact-default-ee02cd25e-20260621-continue/"
+      ],
+      "source_commit": "ee02cd25e",
+      "tool": "CMake/Ninja-built hrx-hip-bench-wmma-f16-mixed-compact plus tools/vulkan-oracle/run_wmma_mc_compact_probe.py",
+      "status": "accepted_static_primitive_prerequisite_no_route_promotion",
+      "candidate_gate": {
+        "production_target": "All gfx1151 dense quantized direct-WMMA prompt routes whose RADV oracle uses compact width4 dst/C f16 WMMA ownership",
+        "baseline_command": "python3 tools/vulkan-oracle/run_wmma_mc_compact_probe.py --mcpu gfx1151 --out-dir cache/hrxv1/gfx1151/wmma-mc-mixed-compact-default-ee02cd25e-20260621-continue",
+        "variant_command": "cmake --build build/hrx-v1-catalog-gfx1151 --target hrx-hip-bench-wmma-f16-mixed-compact -j$(nproc); llvm-objdump -d --mcpu=gfx1151 --mattr=+wmma-128b-insts,+wavefrontsize64 device.gfx1151.o; extract_wmma_ownership.py --require-compact-f16-accumulators",
+        "same_runner_comparison_method": "same ROCm toolchain and gfx1151 target; compare llvm-mc spelling acceptance against the CMake/Ninja-built HIP device object disassembled with and without the WMMA-128b mattr",
+        "route_trace_path": "not applicable; assembler primitive screen only",
+        "scheduler_trace_path": "static/device.gfx1151.wmma128.objdump.txt and static/wmma-ownership-wmma128.md in the artifact directory",
+        "focused_cpu_reference": "not run; primitive runtime smoke only, no executable route or runtime selector changed",
+        "compile_report_path": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-wmma-f16-mixed-compact.0.hipv4-amdgcn-amd-amdhsa--gfx1151",
+        "target_listing_path": "static/device.gfx1151.notes.txt plus static/wmma-ownership-wmma128.json",
+        "prior_art_schedule_source": "RADV Q4/Q5/Q6/Q8 dense prompt ISA lines such as `v_wmma_f16_16x16x16_f16 v[72:75], v[96:103], v[104:111], v[72:75]`",
+        "promotion_rule": "no route promotion. A future route candidate may use this primitive only after its built HSACO passes focused p33/p512/p513 correctness, route trace, compact ownership screen with objdump --mattr=+wmma-128b-insts,+wavefrontsize64, and timing gates."
+      },
+      "static_result": {
+        "llvm_mc_default_target_mode": {
+          "width8_accepted": true,
+          "width4_all_accepted": false,
+          "width4_mixed_accepted": false,
+          "radv_mixed_accepted": false
+        },
+        "llvm_mc_wmma_128b_wave64_mode": {
+          "width8_accepted": false,
+          "width4_all_accepted": false,
+          "width4_mixed_accepted": true,
+          "radv_mixed_accepted": true
+        },
+        "hip_cmake_device_object": {
+          "runtime_smoke": "wmma-f16-mixed-compact lanes=64 words=256 zero_words=0 first=0x3c004c00",
+          "ordinary_objdump": "prints the compact encoding as width8 dst/C: v[9:16]",
+          "wmma128_objdump": "prints the same encoding as compact mixed: dst/C v[9:12], A/B v[1:8]",
+          "ownership_screen": "passes compact f16 accumulator requirement",
+          "wavefront_size": 64,
+          "vgpr_count": 13,
+          "sgpr_count": 10,
+          "private_segment_fixed_size": 0,
+          "group_segment_fixed_size": 0
+        }
+      },
+      "findings": [
+        "the earlier all-width4 LLVM-MC probe was too broad: RADV does not use width4 for A/B operands",
+        "the exact RADV mixed form, width4 dst/C with width8 A/B, is accepted by the workspace ROCm llvm-mc when `+wmma-128b-insts,+wavefrontsize64` is enabled",
+        "CMake/Ninja-built HIP C++ inline asm can emit the same compact mixed f16 WMMA encoding using a uint32x4 accumulator operand and half16 A/B operands",
+        "ordinary llvm-objdump disassembly is misleading for this primitive: without `--mattr=+wmma-128b-insts,+wavefrontsize64`, it prints the compact encoding as width8 dst/C",
+        "tools/vulkan-oracle/run_wmma_compact_screen.py now disassembles HIP HSACOs with the WMMA-128b mattr by default so future compact screens do not falsely reject this form",
+        "next concrete step is to port this primitive into a route-facing Q6/Q8 direct-WMMA candidate and prove focused p33/p512/p513 correctness before any performance promotion"
+      ]
+    },
+    {
+      "id": "direct_wmma_compact_screen_fixed_disassembly_ee02cd25e",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/q4-w64-b64group-compact-screen-fixed-disasm-ee02cd25e-20260621-continue/",
+      "additional_artifacts": [
+        "cache/hrxv1/gfx1151/q5-large-motif192-compact-screen-fixed-disasm-ee02cd25e-20260621-continue/",
+        "cache/hrxv1/gfx1151/q5-p33-wave4row-compact-screen-fixed-disasm-ee02cd25e-20260621-continue/",
+        "cache/hrxv1/gfx1151/q6-large-accepted-compact-screen-fixed-disasm-ee02cd25e-20260621-continue/",
+        "cache/hrxv1/gfx1151/q6-p33-h4load-compact-screen-fixed-disasm-ee02cd25e-20260621-continue/"
+      ],
+      "source_commit": "ee02cd25e",
+      "tool": "tools/vulkan-oracle/run_wmma_compact_screen.py after adding llvm-objdump --mattr=+wmma-128b-insts,+wavefrontsize64",
+      "status": "accepted_static_correction_no_route_promotion",
+      "supersedes": [
+        "q4_q5_direct_wmma_compact_accumulator_screen_364fe690b",
+        "q6_dense_accepted_compact_accumulator_screen_56e8e5cca"
+      ],
+      "candidate_gate": {
+        "production_target": "Current Q4_K, Q5_K, and Q6_K direct-WMMA dense prompt candidates on gfx1151 compared to same-machine RADV aligned_l/aligned_m oracle schedules",
+        "baseline_command": "previous run_wmma_compact_screen.py artifacts disassembled HIP HSACOs without the WMMA-128b mattr and are not valid for accumulator-width decisions",
+        "variant_command": "python3 tools/vulkan-oracle/run_wmma_compact_screen.py --objdump-mattr +wmma-128b-insts,+wavefrontsize64 over the same RADV ISA copies and CMake/Ninja-built HIP HSACOs",
+        "same_runner_comparison_method": "static RADV-vs-HIP ISA ownership comparison with extract_wmma_ownership.py and --require-compact-f16-accumulators after WMMA-128b-aware disassembly",
+        "route_trace_path": "not applicable; static screen only",
+        "scheduler_trace_path": "wmma-ownership.json and compact-check.stderr.log under each fixed-disasm artifact directory",
+        "focused_cpu_reference": "not run; no selector or route changed",
+        "compile_report_path": "CMake/Ninja-generated HSACO files under build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151",
+        "target_listing_path": "same generated HSACO directory plus each fixed-disasm artifact wmma-ownership summary",
+        "prior_art_schedule_source": "RADV Vulkan oracle ISA for Q4_K/Q5_K/Q6_K p512 aligned_l and p33 aligned_m captures",
+        "promotion_rule": "no route promotion from this correction. Future work should optimize the remaining concrete schedule deltas and must still pass focused p33/p512/p513 correctness, route trace, timing, and model A/B gates."
+      },
+      "static_result": {
+        "q4_large": {
+          "screen": "passes compact f16 accumulator requirement after WMMA-128b-aware disassembly",
+          "remaining_delta": "HIP matches 32 WMMA, 64 ds_load_b64, and compact dst/C, but writes only 64 global_store_b32 with 2 ds_store_b16 versus RADV 192 buffer_store_b32 plus 128 ds_store_b16 and LDS loadback/writeback staging"
+        },
+        "q5_large_motif192": {
+          "screen": "passes compact f16 accumulator requirement after WMMA-128b-aware disassembly",
+          "remaining_delta": "HIP matches 32 WMMA, 64 ds_load_b64, compact dst/C, 192 buffer_store_b32, and 128 ds_store_b16; the remaining investigation should focus on wait/barrier ordering, LDS loadback details, correctness/timing history, and any non-count store-address/lane-map differences"
+        },
+        "q5_p33_wave4row": {
+          "screen": "passes compact f16 accumulator requirement after WMMA-128b-aware disassembly",
+          "remaining_delta": "HIP now shows 40 WMMA and 104 ds_load_b64 versus RADV 16 WMMA and 48 ds_load_b64, with 80 buffer_store_b32 versus RADV 96 and only 4 ds_store_b16 versus RADV 64"
+        },
+        "q6_large": {
+          "screen": "passes compact f16 accumulator requirement after WMMA-128b-aware disassembly",
+          "remaining_delta": "HIP matches 32 compact WMMA, but still has zero parsed ds_load_b64 and only 64 global_store_b32 plus 2 ds_store_b16 versus RADV 64 ds_load_b64, 192 buffer_store_b32, and 128 ds_store_b16"
+        },
+        "q6_p33_h4load": {
+          "screen": "passes compact f16 accumulator requirement after WMMA-128b-aware disassembly",
+          "remaining_delta": "HIP still has 8 WMMA, zero parsed ds_load_b64, and 16 global_store_b32 versus RADV 16 WMMA, 48 ds_load_b64, and 96 buffer_store_b32"
+        }
+      },
+      "findings": [
+        "the previous Q4/Q5/Q6 compact-accumulator rejection was a disassembly-mode error, not an emitted-code fact",
+        "ordinary llvm-objdump prints gfx1151 compact f16 WMMA encodings as width8 dst/C unless `--mattr=+wmma-128b-insts,+wavefrontsize64` is supplied",
+        "current Q4, Q5, and Q6 direct-WMMA HSACOs all pass the compact dst/C ownership screen under the corrected disassembly",
+        "the active schedule gap is now narrower and more concrete: store/writeback surface, LDS loadback, wait/barrier topology, lane-map correctness, and measured route performance, not accumulator operand width by itself",
+        "the Q5 large motif192 route is the closest static clone and should be investigated from correctness/timing and wait/store-address evidence before another broad direct-WMMA variant sweep"
+      ]
+    },
+    {
       "id": "q6_dense_accepted_compact_accumulator_screen_56e8e5cca",
       "date": "2026-06-21",
       "artifact": "cache/hrxv1/gfx1151/q6-large-accepted-compact-screen-56e8e5cca-20260621-continue/",
@@ -11,7 +129,8 @@
       ],
       "source_commit": "56e8e5cca",
       "tool": "tools/vulkan-oracle/run_wmma_compact_screen.py over current CMake/Ninja-built accepted Q6_K dense prompt HSACOs",
-      "status": "accepted_static_constraint_no_route_promotion",
+      "status": "superseded_invalid_static_screen_missing_wmma128_objdump_mattr",
+      "superseded_by": "direct_wmma_compact_screen_fixed_disassembly_ee02cd25e",
       "candidate_gate": {
         "production_target": "Qwen3 30B Q6_K dense prompt p512/p513 large and p33 narrow rows on gfx1151, using same-machine Vulkan aligned_l/aligned_m oracle schedules",
         "baseline_command": "python3 tools/vulkan-oracle/run_wmma_compact_screen.py with RADV Q6_K p512 aligned_l and p33 aligned_m ISA captures",
@@ -38,10 +157,8 @@
         }
       },
       "findings": [
-        "the accepted dense Q6_K large route has the same 32-WMMA headline as RADV but does not reproduce compact dst/C ownership or the RADV LDS loadback/writeback surface",
-        "the accepted dense Q6_K p33 H4LOAD route is farther from RADV than the large route: it has half the WMMA issue count and a much smaller store surface",
-        "this confirms the compact-accumulator/writeback blocker spans Q4_K, Q5_K, Q6_K, and Q8_0 direct-WMMA clone attempts on gfx1151",
-        "future Q6 dense prompt work should not add another VK128/VK64 source wrapper around the current HIP C++ WMMA form; the next route-facing axis needs lower-level cooperative ownership or a measured packed-Q8_1/x4 dataflow pivot"
+        "superseded by direct_wmma_compact_screen_fixed_disassembly_ee02cd25e: this screen disassembled HIP HSACOs without `--mattr=+wmma-128b-insts,+wavefrontsize64`, causing compact gfx1151 WMMA encodings to print as width8 dst/C",
+        "the corrected Q6 screens pass compact dst/C ownership; the remaining Q6 deltas are WMMA count for p33, parsed LDS fragment loads, store/writeback surface, and wait/barrier topology"
       ]
     },
     {
@@ -54,7 +171,8 @@
       ],
       "source_commit": "364fe690b",
       "tool": "tools/vulkan-oracle/run_wmma_compact_screen.py over CMake/Ninja-built gfx1151 Q4_K and Q5_K direct-WMMA HSACOs",
-      "status": "rejected_static_direct_wmma_clone_axis_no_route_promotion",
+      "status": "superseded_invalid_static_screen_missing_wmma128_objdump_mattr",
+      "superseded_by": "direct_wmma_compact_screen_fixed_disassembly_ee02cd25e",
       "candidate_gate": {
         "production_target": "Q4_K and Q5_K dense prompt p512/p513 large rows plus Q5_K p33 narrow rows on gfx1151, comparing current direct-WMMA HIP C++ candidates against same-machine RADV aligned_l/aligned_m oracle schedules",
         "baseline_command": "python3 tools/vulkan-oracle/run_wmma_compact_screen.py with RADV ISA from the Q4_K p512 aligned_l, Q5_K p512 aligned_l, and Q5_K p33 aligned_m oracle captures",
@@ -86,11 +204,8 @@
         }
       },
       "findings": [
-        "the compact f16 WMMA accumulator mismatch is not isolated to Q8; it also appears on Q4_K and Q5_K direct-WMMA clone attempts",
-        "Q5 large motif192 already matches the RADV 192-store and halfword staging headline, so the remaining loss is not explained by store count alone",
-        "HIP C++/LLVM emits width-8 dst/C accumulator operands where RADV uses compact width-4 dst/C operands for the same large aligned schedule family",
-        "the current Q5 p33 direct-WMMA wave4row candidate is farther away than the large route because it has half the WMMA issue count and a much smaller writeback surface",
-        "do not add more Q4/Q5 direct-WMMA catalog variants in this family unless they change the lower-level accumulator ownership primitive or intentionally pivot to a measured packed-Q8_1 dataflow"
+        "superseded by direct_wmma_compact_screen_fixed_disassembly_ee02cd25e: this screen disassembled HIP HSACOs without `--mattr=+wmma-128b-insts,+wavefrontsize64`, causing compact gfx1151 WMMA encodings to print as width8 dst/C",
+        "the corrected Q4/Q5 screens pass compact dst/C ownership; remaining deltas are store/writeback surface, wait/barrier ordering, p33 shape policy, correctness history, and measured timing"
       ]
     },
     {

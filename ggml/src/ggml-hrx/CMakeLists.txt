@@ -2052,6 +2052,7 @@ if (GGML_HRX_BUILD_HIP_BENCHES)
                 -O3
                 -g
                 "${GGML_HRX_HIP_BENCH_WAVE_FLAG}"
+                ${ARGN}
                 -I "${CMAKE_CURRENT_SOURCE_DIR}/kernels"
                 "${SOURCE}"
                 -L "${GGML_HRX_ROCM_PATH}/lib"
@@ -2125,6 +2126,10 @@ if (GGML_HRX_BUILD_HIP_BENCHES)
     ggml_hrx_add_hip_bench(
         hrx-hip-bench-wmma-f16-lane-map
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/hip-bench/wmma_f16_lane_map_bench.hip.cpp"
+        64)
+    ggml_hrx_add_hip_bench(
+        hrx-hip-bench-wmma-f16-mixed-compact
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/hip-bench/wmma_f16_mixed_compact_bench.hip.cpp"
         64)
     ggml_hrx_add_hip_bench(
         hrx-hip-bench-q6-id-subgroup-contract

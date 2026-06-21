@@ -57,6 +57,14 @@ def main():
     parser.add_argument("--out-dir", required=True, type=pathlib.Path)
     parser.add_argument("--llvm-objdump", default=default_objdump())
     parser.add_argument(
+        "--objdump-mattr",
+        default="+wmma-128b-insts,+wavefrontsize64",
+        help=(
+            "Optional llvm-objdump --mattr value. The gfx1151 compact f16 WMMA "
+            "encoding disassembles as width8 without +wmma-128b-insts."
+        ),
+    )
+    parser.add_argument(
         "--fail-on-compact-miss",
         action="store_true",
         help="Return the compact screen's non-zero exit code instead of only recording it in the artifact.",
@@ -75,7 +83,10 @@ def main():
 
     shutil.copyfile(args.radv_isa, radv_copy)
 
-    objdump_cmd = [args.llvm_objdump, "-d", str(args.hip_hsaco)]
+    objdump_cmd = [args.llvm_objdump, "-d"]
+    if args.objdump_mattr:
+        objdump_cmd.append(f"--mattr={args.objdump_mattr}")
+    objdump_cmd.append(str(args.hip_hsaco))
     objdump_proc = run(objdump_cmd, stdout_path=hip_objdump, stderr_path=args.out_dir / "objdump.stderr.log")
 
     extract_cmd = [
@@ -104,6 +115,8 @@ def main():
         "hip_hsaco": str(args.hip_hsaco),
         "hip_symbol": args.hip_symbol,
         "llvm_objdump": args.llvm_objdump,
+        "objdump_mattr": args.objdump_mattr,
+        "objdump_command": objdump_cmd,
         "objdump_returncode": objdump_proc.returncode,
         "compact_check_returncode": extract_proc.returncode,
         "passes_compact_f16_accumulator_screen": extract_proc.returncode == 0,
