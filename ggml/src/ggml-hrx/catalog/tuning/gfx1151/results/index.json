@@ -3,6 +3,54 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_motif192_k2_splitstage_full192_compile_contract",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-motif192-k2-splitstage-full192-compile-6d97c30a7-dirty-20260620-184843/",
+      "source_commit": "6d97c30a7-dirty",
+      "tool": "CMake/Ninja-built HRX v1 catalog HSACO plus tools/vulkan-oracle/summarize_hsaco_family.py",
+      "status": "rejected_compile_contract_not_runtime_selected",
+      "candidate_gate": {
+        "production_target": "Llama 3.1 8B Q8_0 p512 dense prompt large route; route-facing transfer of the low-level mixed192 staged-drain ordering repair",
+        "baseline_command": "prior compile-contract probes q8_0_motif192_k2_splitstage_compile_contract and q8_0_motif192_k2_splitstage_fulltile_compile_contract",
+        "variant_command": "ninja -C build/hrx-v1-catalog-gfx1151 generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_splitstage_full192_bufferstore_wg256.hsaco",
+        "same_runner_comparison_method": "static HSACO resource and opcode comparison only; no runtime route selector was wired",
+        "route_trace_path": "not applicable; compile-contract probe only",
+        "scheduler_trace_path": "artifact hsaco-summary.md and hsaco-summary.json",
+        "focused_cpu_reference": "not run because static resource contract failed before backend-op promotion",
+        "compile_report_path": "artifact hsaco-summary.md",
+        "target_listing_path": "artifact hsaco-summary.json and copied HSACO",
+        "prior_art_schedule_source": "low-level q8_0_coopstore_mixed192_splitstage_reproducer and prior route-local splitstage/fulltile compile-contract rejections",
+        "promotion_rule": "reject before runtime testing unless a future lower-level writeback spelling keeps the 192-store staged-drain surface with zero scratch/spills and materially lower VGPR pressure"
+      },
+      "static_matrix": {
+        "splitstage_full192_route_probe": {
+          "wavefront": 64,
+          "sgpr": 106,
+          "vgpr": 256,
+          "lds": 22528,
+          "scratch": 76,
+          "sgpr_spill": 38,
+          "vgpr_spill": 18,
+          "instructions": 2827,
+          "wmma": 32,
+          "ds_load_b64": 64,
+          "ds_load_u16_d16": 128,
+          "ds_store_b16": 128,
+          "buffer_store_b32": 192,
+          "s_waitcnt": 58,
+          "s_waitcnt_depctr": 18,
+          "s_waitcnt_vscnt": 4,
+          "s_barrier": 5
+        }
+      },
+      "findings": [
+        "added a CMake/Ninja-built route-local full192 splitstage wrapper that extends the staged-drain helper from groups 16..39 to groups 16..47",
+        "the route-local probe preserves the intended full output surface: 32 WMMA, 64 ds_load_b64, 128 halfword LDS stores, 128 halfword LDS loads, and 192 scalar buffer_store_b32",
+        "the production Q8 ABI still fails the static resource contract with VGPR=256, scratch=76 bytes, 38 SGPR spills, and 18 VGPR spills",
+        "this closes the direct full192 staged-drain wrapper axis: the low-level ordering repair does not transfer into a promotable HIP C++ catalog route without a lower-pressure writeback or ownership primitive"
+      ]
+    },
+    {
       "id": "q8_0_coopstore_mixed192_splitstage_reproducer",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-coopstore-mixed192-splitstage8-daab8df81-20260620-184051/",
