@@ -3,6 +3,63 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_large_baseoff_split59_probe_286187e2c",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/q8-baseoff-split59-probe-286187e2c-20260621-001116/",
+      "source_commit": "286187e2c",
+      "tool": "CMake/Ninja-built hrx-hip-bench-q8-wmma-repro plus analyze_amdgcn_issue_window.py issue-window contract",
+      "status": "accepted_diagnostic_probe_not_production_route",
+      "candidate_gate": {
+        "production_target": "Llama 3.1 8B Q8_0 MUL_MAT p512/p513 large aligned RADV-style split LDS issue window on gfx1151",
+        "baseline_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q8-wmma-repro --mode bm128-direct192-output-timing --rows 4096 --cols 512 --k 4096",
+        "variant_command": "same timing sweep including baseoff-split59-raw-asm and baseoff-split59-raw-asm-nostore variants",
+        "same_runner_comparison_method": "single CMake/Ninja-built HIP fixture executable comparing baseoff and baseoff-split59 variants in the same timing sweep",
+        "route_trace_path": "not applicable; diagnostic fixture only and no production selector changed",
+        "scheduler_trace_path": "artifact static/hip-split59-issue-window.{json,md}, static/baseoff-split59-symbol.amdgcn.txt, static/device-objdump.amdgcn.txt",
+        "focused_cpu_reference": "artifact correctness-128x128.stdout, correctness-128x33.stdout, and correctness-4096x513-sampled.stdout all report bad=0/nan=0/inf=0/sentinel=0",
+        "compile_report_path": "artifact static/device-readobj-notes.txt and static/readelf-notes.txt",
+        "target_listing_path": "CMake target hrx-hip-bench-q8-wmma-repro built in build/hrx-v1-catalog-gfx1151",
+        "prior_art_schedule_source": "Llama 3.1 8B Q8_0 p512 Vulkan matmul_q8_0_f32_f16acc_aligned_l oracle at cache/hrxv1/gfx1151/vulkan-oracle-llama31-8b-q8_0-p512-fa1-20260617-200453/",
+        "promotion_rule": "do not promote this fixture directly. A production-ABI Q8_0 large candidate may transfer the split59 load window only after focused p512/p513 route correctness, route trace selection, static issue-window pass, and same-binary model A/B wins over the current route."
+      },
+      "static_result": {
+        "hip_split59": {
+          "region_count": 1,
+          "first_region_wmma": 32,
+          "first_region_final_lgkmcnt": 51,
+          "first_region_immediate_lds_loads": 59,
+          "contract_check": "pass"
+        },
+        "hip_baseoff_control": {
+          "region_count": 1,
+          "first_region_wmma": 32,
+          "first_region_final_lgkmcnt": 51,
+          "first_region_immediate_lds_loads": 64,
+          "contract_check": "fail"
+        }
+      },
+      "timing_result": {
+        "rows4096_cols512_k4096_avg_us": {
+          "baseoff_raw_asm": 3204.14,
+          "baseoff_split59_raw_asm": 3173.51,
+          "baseoff_raw_asm_nostore": 3026.6,
+          "baseoff_split59_raw_asm_nostore": 3009.54
+        },
+        "rows4096_cols513_k4096_avg_us": {
+          "baseoff_raw_asm": 3320.93,
+          "baseoff_split59_raw_asm": 3306.26,
+          "baseoff_raw_asm_nostore": 3143.98,
+          "baseoff_split59_raw_asm_nostore": 3107.06
+        }
+      },
+      "findings": [
+        "added a baseoff-split59 diagnostic fixture that delays the same five A-side ds_read_b64 operations RADV delays until after the first four WMMAs",
+        "the split59 built ISA passes the executable issue-window screen while the baseoff control still fails at 64 immediate LDS loads",
+        "the split59 fixture is correctness-clean on 128x128, narrow 128x33, and sampled 4096x513 tail coverage",
+        "fixture timing shows a small positive signal over baseoff on 4096x512 and 4096x513, including no-output-store rows, so the split-load window is worth transferring into a production-ABI Q8_0 candidate."
+      ]
+    },
+    {
       "id": "q8_large_issue_window_screen_54ee59dbd",
       "date": "2026-06-21",
       "artifact": "cache/hrxv1/gfx1151/q8-large-issue-window-screen-54ee59dbd-20260621-000539/",
