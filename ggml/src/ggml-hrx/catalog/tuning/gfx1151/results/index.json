@@ -3,6 +3,47 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_medium_h4load_current_floor_static_contract_screen_95d74563f",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-h4load-95d74563f-20260621/",
+      "source_commit": "95d74563f",
+      "tool": "tools/vulkan-oracle/run_q6_medium_contract_screen.py comparing the Qwen3 30B Q6_K p33 RADV medium oracle against the CMake/Ninja-built Q6 VK64 H4LOAD HSACO",
+      "status": "static_contract_screen_current_floor_miss",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K p33 dense prompt MUL_MAT rows, current worst same-machine basket row, testing whether the current VK64 H4LOAD p33 floor can be treated as an exact clone of the RADV medium aligned schedule",
+        "baseline_command": "RADV oracle artifact cache/hrxv1/gfx1151/vulkan-oracle-qwen3-30b-q6k-p33-fa1-20260618-061613/radv/isa/matmul_q6_k_f32_f16acc_aligned_m__main__6eebdfb4c3043b23.amdgcn.txt plus matching stats",
+        "variant_command": "python3 tools/vulkan-oracle/run_q6_medium_contract_screen.py --radv-isa <q6 p33 radv isa> --radv-stats <q6 p33 radv stats> --hip-hsaco build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_h4load_wg256.hsaco --hip-symbol hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_h4load_f16acc_wg256_f32 --check-compact-accumulators",
+        "same_runner_comparison_method": "static RADV-vs-HSACO comparison only; this is a pre-timing exact-schedule screen, not promotion evidence",
+        "route_trace_path": "not applicable; uses already selected current-floor HSACO and Vulkan oracle ISA",
+        "scheduler_trace_path": "artifact isa-compare.json, isa-compare.md, contract-check.json, compact-accumulator/wmma-ownership.json, and compact-accumulator/wmma-ownership.md",
+        "focused_cpu_reference": "not run in this screen; prior focused p33 floor artifacts already prove route correctness. Future candidates that pass this static screen still need focused CPU-reference p33/p512/p513 gates.",
+        "compile_report_path": "CMake/Ninja-built HSACO build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_h4load_wg256.hsaco",
+        "target_listing_path": "artifact compact-accumulator/hip.objdump.txt and isa-compare.md",
+        "prior_art_schedule_source": "Qwen3 30B Q6_K p33 Vulkan oracle matmul_q6_k_f32_f16acc_aligned_m, spec [128,64,64,32,64,32,2,16,16,16,64], LDS=11264, VGPR=144, 16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 64 ds_store_b16, and 96 buffer_store_b32",
+        "promotion_rule": "do not treat VK64 H4LOAD or similar routes as exact Vulkan-clone candidates unless they pass this static contract screen and then beat the current floor in focused p33 timing. Measured deviations may still proceed, but they must be described as deviations before timing."
+      },
+      "focused_result": {
+        "exact_static_contract": "failed",
+        "compact_f16_accumulator_screen": "passed",
+        "radv_vs_hip_key_facts": {
+          "lds_bytes": "11264 vs 11264",
+          "v_wmma_f16_16x16x16_f16": "16 vs 8",
+          "ds_load_b64": "48 vs 0",
+          "ds_load_u16_d16": "64 vs 0",
+          "ds_store_b16": "64 vs 2",
+          "buffer_store_b32": "96 vs 0",
+          "global_store_b32": "0 vs 16",
+          "final_pre_wmma_lgkmcnt": "40 vs 0",
+          "spills": "none on both sides"
+        }
+      },
+      "findings": [
+        "the current H4LOAD p33 floor is not blocked by compact f16 accumulator operand ownership; it passes the compact screen with the current objdump mattr path",
+        "the actual static miss is the medium-route cooperative load/store surface: HIP has half the visible WMMA sites, no RADV-style b64 LDS load window, no halfword LDS loadback surface, and scalar global stores instead of the RADV buffer-store topology",
+        "future Q6 p33 work should not repeat selector, prefetch, H4LOAD, wait-ladder, or store-count-only probes. A candidate either needs to pass this exact static screen before claiming to clone RADV, or explicitly frame itself as a measured packed/dataflow deviation and beat the current p33 floor in focused timing."
+      ]
+    },
+    {
       "id": "q8_chunk8_p513_tail_policy_rejection_eb508497e",
       "date": "2026-06-21",
       "artifact": "cache/hrxv1/gfx1151/q8-chunk8-p513-force-eb508497e-20260621-033140/",
