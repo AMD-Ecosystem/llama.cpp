@@ -3,6 +3,15 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_vk64_q6addr_asmwait_radvseq_acc8_storemix_loadspan_8071ce4a7_dirty",
+      "date": "2026-06-21",
+      "route": "static-only HSACO: hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_storekill_storemix_q6addr_upperdepnomem_f16acc_wg256_f32",
+      "env": "not provider-wired; CMake/Ninja static probe only; re-screened with register-renaming-normalized sequence checks and precise ds_load_b64 subrange provenance",
+      "artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-asmwait-radvseq-acc8-storemix-loadspan-8071ce4a7-dirty-20260621-111039/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_storekill_storemix_q6addr_upperdepnomem_wg256.hsaco",
+      "reason": "This tooling refresh re-screened the mixed-LDS Q6_K p33 static probe with precise ds_load_b64 subrange provenance after the normalized sequence screen showed false broad load-group collapses. The ownership contract now passes: dst/A/B/C reuse, unique-bank counts, operand first-use patterns, A/B load-source first-use patterns, and the lgkmcnt ladder all match RADV under register renaming. The candidate also matches the RADV mixed store/load surface and headline issue facts: 16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 64 ds_store_b16, 4 ds_store_2addr_b32, 2 ds_store_b128, 96 buffer_store_b32, store-cluster lds_store_ops=70, two barriers, and zero spills. Reject before provider wiring because this is still not a production route: LDS remains 14336 versus RADV 11264, instruction count is 2022 versus RADV 2343, and ACC8 aliases sixteen logical outputs through eight accumulator banks without a valid writeback contract. The next Q6 p33 work should target 11264-byte LDS allocation plus production-valid eight-bank accumulator reuse; do not spend more time on store counts, operand order, or load-source provenance in this branch."
+    },
+    {
       "id": "q6_k_vk64_q6addr_asmwait_radvseq_acc8_storemix_normalized_8071ce4a7_dirty",
       "date": "2026-06-21",
       "route": "static-only HSACO: hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_storekill_storemix_q6addr_upperdepnomem_f16acc_wg256_f32",

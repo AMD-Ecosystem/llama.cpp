@@ -191,6 +191,42 @@ def find_defining_load_group(groups, rng, before_line):
     return max(candidates, key=lambda group: group["line_range"][1])
 
 
+def find_defining_load_span(loads, rng, before_line):
+    if not rng:
+        return None
+
+    selected_by_reg = {}
+    for load in loads:
+        if load["line"] >= before_line or not ranges_overlap(load["dest"], rng):
+            continue
+        lo = max(load["dest"][0], rng[0])
+        hi = min(load["dest"][1], rng[1])
+        for reg in range(lo, hi + 1):
+            previous = selected_by_reg.get(reg)
+            if previous is None or load["line"] > previous["line"]:
+                selected_by_reg[reg] = load
+    if not selected_by_reg:
+        return None
+
+    selected = sorted(
+        {id(load): load for load in selected_by_reg.values()}.values(),
+        key=lambda load: load["line"],
+    )
+    dest = [
+        min(max(load["dest"][0], rng[0]) for load in selected),
+        max(min(load["dest"][1], rng[1]) for load in selected),
+    ]
+    covered = sorted(selected_by_reg)
+    return {
+        "dest": render_range(dest),
+        "line_range": [selected[0]["line"], selected[-1]["line"]],
+        "offsets": [load["offset"] for load in selected],
+        "addresses": sorted(set(load["address"] for load in selected)),
+        "covered_registers": covered,
+        "complete": covered == list(range(rng[0], rng[1] + 1)),
+    }
+
+
 def find_preceding_wait(events, event_index):
     for index in range(event_index - 1, -1, -1):
         event = events[index]
@@ -205,7 +241,7 @@ def find_preceding_wait(events, event_index):
     return None
 
 
-def summarize_wmma(events, load_groups):
+def summarize_wmma(events, loads, load_groups):
     wmma_events = []
     operand_uses = {
         "dst": collections.Counter(),
@@ -245,15 +281,19 @@ def summarize_wmma(events, load_groups):
             wait_ladder.append(wait["lgkmcnt"])
 
         def loaded_by(rng):
-            group = find_defining_load_group(load_groups, rng, event["line"])
+            group = find_defining_load_span(loads, rng, event["line"])
+            if not group:
+                group = find_defining_load_group(load_groups, rng, event["line"])
             if not group:
                 return None
-            load_group_uses[group["dest_text"]] += 1
+            dest_text = group.get("dest") or group.get("dest_text")
+            load_group_uses[dest_text] += 1
             return {
-                "dest": group["dest_text"],
+                "dest": dest_text,
                 "line_range": group["line_range"],
                 "offsets": group["offsets"],
                 "addresses": group["addresses"],
+                "complete": group.get("complete"),
             }
 
         item = {
@@ -337,7 +377,7 @@ def summarize_isa(path, symbol=None, label=None):
     lines = extract_symbol(read_lines(path), symbol)
     events = parse_events(lines)
     loads, load_groups = summarize_ds_loads(events)
-    wmma = summarize_wmma(events, load_groups)
+    wmma = summarize_wmma(events, loads, load_groups)
     opcode_counts = collections.Counter(event["opcode"] for event in events)
     return {
         "label": label or pathlib.Path(path).name,
