@@ -222,6 +222,10 @@
 #define HRX_Q6_K_WMMA_VK128_STORE_RADV96_COMPACT_STOREKILL 0
 #endif
 
+#ifndef HRX_Q6_K_WMMA_VK128_STORE_RADV96_COMPACT_STOREKILL_SKIP_LAST2
+#define HRX_Q6_K_WMMA_VK128_STORE_RADV96_COMPACT_STOREKILL_SKIP_LAST2 0
+#endif
+
 #ifndef HRX_Q6_K_WMMA_VK128_STORE_RADV96_COMPACT_HELPER4
 #define HRX_Q6_K_WMMA_VK128_STORE_RADV96_COMPACT_HELPER4 0
 #endif
@@ -1097,6 +1101,21 @@ static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_store_acc_f16_row_maj
         (hrx_q6_k_wmma_vk128_lds_u16_ptr) sh_store + stage_base + 2;
     hrx_q6_k_wmma_vk128_lds_u16_ptr const ptr3 =
         (hrx_q6_k_wmma_vk128_lds_u16_ptr) sh_store + stage_base + 3;
+#if HRX_Q6_K_WMMA_VK128_STORE_RADV96_COMPACT_STOREKILL_SKIP_LAST2
+    if (group == 23) {
+        asm volatile(
+            "ds_write_b16 %4, %0 offset:0\n"
+            "ds_write_b16 %5, %1 offset:0\n"
+            "v_mov_b32 %0, 0\n"
+            "v_mov_b32 %1, 0\n"
+            "v_mov_b32 %2, 0\n"
+            "v_mov_b32 %3, 0\n"
+            : "+v"(acc[0]), "+v"(acc[1]), "+v"(acc[2]), "+v"(acc[3])
+            : "v"(ptr0), "v"(ptr1)
+            : "memory");
+        return;
+    }
+#endif
     asm volatile(
         "ds_write_b16 %4, %0 offset:0\n"
         "ds_write_b16 %5, %1 offset:0\n"

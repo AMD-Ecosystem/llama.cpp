@@ -3,6 +3,15 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_vk64_q6addr_asmwait_radvseq_acc8_storekill_skip2_fedaad60e_dirty",
+      "date": "2026-06-21",
+      "route": "static-only HSACO: hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_storekill_skip2_q6addr_upperdepnomem_f16acc_wg256_f32",
+      "env": "not provider-wired; CMake/Ninja static probe only",
+      "artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-asmwait-radvseq-acc8-storekill-skip2-fedaad60e-dirty-20260621-105512/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_storekill_skip2_q6addr_upperdepnomem_wg256.hsaco",
+      "reason": "This static-only Q6_K p33 probe tested the narrow next axis after storekill: remove the two excess scalar halfword stores while preserving the recovered RADV A/B issue sequence, ACC8 dst/C reuse, and exact wait ladder. It succeeds on that narrow axis. The candidate matches RADV on 16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 64 ds_store_b16, 96 buffer_store_b32, two barriers, zero scratch/spills, compact f16 accumulator form, load_b64_immediately_before_final_wait=48, final_pre_wmma_lgkmcnt=40, wmma_in_window=16, the lgkmcnt ladder [40,36,32,28,24,16,7,6,1,0], and dst/A/B/C reuse plus unique-bank counts. Reject before provider wiring because the full static contract still fails and the route remains intentionally static-only: store-cluster LDS stores are now 64 versus RADV 70, ordered dst/A/B/C register sequences still differ, A/B load-source provenance is too broad after the first operands, LDS remains 14336 versus RADV 11264, and instruction count is 2031 versus RADV 2343. This proves opcode count and ownership repair can coexist, but exact RADV clone work still needs the mixed LDS store-cluster surface and production-valid accumulator/writeback ownership."
+    },
+    {
       "id": "q6_k_vk64_q6addr_asmwait_radvseq_acc8_storekill_45461dec0_dirty",
       "date": "2026-06-21",
       "route": "static-only HSACO: hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_storekill_q6addr_upperdepnomem_f16acc_wg256_f32",
