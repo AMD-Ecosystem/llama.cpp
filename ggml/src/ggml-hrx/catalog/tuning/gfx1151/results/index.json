@@ -3,10 +3,10 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
-      "id": "q8_large_baseoff_split59_probe_286187e2c",
+      "id": "q8_large_baseoff_split59_probe_fd70da2e0",
       "date": "2026-06-21",
-      "artifact": "cache/hrxv1/gfx1151/q8-baseoff-split59-probe-286187e2c-20260621-001116/",
-      "source_commit": "286187e2c",
+      "artifact": "cache/hrxv1/gfx1151/q8-baseoff-split59-probe-fd70da2e0-20260621-001116/",
+      "source_commit": "fd70da2e0",
       "tool": "CMake/Ninja-built hrx-hip-bench-q8-wmma-repro plus analyze_amdgcn_issue_window.py issue-window contract",
       "status": "accepted_diagnostic_probe_not_production_route",
       "candidate_gate": {
