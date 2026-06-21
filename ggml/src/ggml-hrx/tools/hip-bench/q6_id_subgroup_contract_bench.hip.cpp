@@ -295,6 +295,16 @@ static __device__ __attribute__((noinline)) void q6id_contract_prod_stage_compac
     q6id_contract_prod_stage_compact_acc(sh_prod_stage, group_base + 3u, lane, acc3);
 }
 
+static __device__ __attribute__((noinline)) void q6id_contract_prod_stage_compact_acc2(
+        uint16_t * sh_prod_stage,
+        unsigned int group_base,
+        unsigned int lane,
+        q6id_contract_u32x4_vec acc0,
+        q6id_contract_u32x4_vec acc1) {
+    q6id_contract_prod_stage_compact_acc(sh_prod_stage, group_base + 0u, lane, acc0);
+    q6id_contract_prod_stage_compact_acc(sh_prod_stage, group_base + 1u, lane, acc1);
+}
+
 static __device__ __forceinline__ _Float16 q6id_contract_u16_to_f16(uint32_t value) {
     union {
         uint16_t u;
@@ -1259,6 +1269,133 @@ void q6_id_subgroup_contract_prodaddr_radv_issue_compact_helper4_probe(float * d
 }
 
 extern "C" __global__ __launch_bounds__(256, 1)
+void q6_id_subgroup_contract_prodaddr_radv_issue_compact_helper2_probe(float * dst, unsigned int * counts) {
+    __shared__ uint64_t sh_frag[12 * 256];
+    __shared__ uint16_t sh_prod_stage[16 * 64 * 4];
+
+    const unsigned int tid = __builtin_amdgcn_workitem_id_x();
+    const unsigned int lane = tid & 63u;
+    const unsigned int wave = tid >> 6u;
+
+    if (wave == 0u) {
+        q6id_contract_init_banked_fragments(sh_frag, lane);
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+
+    if (wave == 0u) {
+        q6id_contract_sink_fragment(q6id_contract_load_fragment(
+            (const __attribute__((address_space(3))) uint64_t *) sh_frag, 0u, lane));
+        const q6id_contract_half16_vec a0 = q6id_contract_load_fragment(
+            (const __attribute__((address_space(3))) uint64_t *) sh_frag, 0u, lane);
+        const q6id_contract_half16_vec b0 = q6id_contract_load_fragment(
+            (const __attribute__((address_space(3))) uint64_t *) sh_frag, 8u, lane);
+        const q6id_contract_half16_vec b1 = q6id_contract_load_fragment(
+            (const __attribute__((address_space(3))) uint64_t *) sh_frag, 9u, lane);
+        const q6id_contract_half16_vec a1 = q6id_contract_load_fragment(
+            (const __attribute__((address_space(3))) uint64_t *) sh_frag, 1u, lane);
+        const q6id_contract_half16_vec a2 = q6id_contract_load_fragment(
+            (const __attribute__((address_space(3))) uint64_t *) sh_frag, 2u, lane);
+        const q6id_contract_half16_vec a3 = q6id_contract_load_fragment(
+            (const __attribute__((address_space(3))) uint64_t *) sh_frag, 3u, lane);
+        const q6id_contract_half16_vec a4 = q6id_contract_load_fragment(
+            (const __attribute__((address_space(3))) uint64_t *) sh_frag, 4u, lane);
+        const q6id_contract_half16_vec b2 = q6id_contract_load_fragment(
+            (const __attribute__((address_space(3))) uint64_t *) sh_frag, 10u, lane);
+        const q6id_contract_half16_vec b3 = q6id_contract_load_fragment(
+            (const __attribute__((address_space(3))) uint64_t *) sh_frag, 11u, lane);
+        const q6id_contract_half16_vec a5 = q6id_contract_load_fragment(
+            (const __attribute__((address_space(3))) uint64_t *) sh_frag, 5u, lane);
+        const q6id_contract_half16_vec a6 = q6id_contract_load_fragment(
+            (const __attribute__((address_space(3))) uint64_t *) sh_frag, 6u, lane);
+        const q6id_contract_half16_vec a7 = q6id_contract_load_fragment(
+            (const __attribute__((address_space(3))) uint64_t *) sh_frag, 7u, lane);
+
+        {
+            q6id_contract_u32x4_vec acc0 = q6id_contract_init_compact_prod_acc(0u, lane);
+            q6id_contract_u32x4_vec acc1 = q6id_contract_init_compact_prod_acc(1u, lane);
+            q6id_contract_u32x4_vec acc2 = q6id_contract_init_compact_prod_acc(2u, lane);
+            q6id_contract_u32x4_vec acc3 = q6id_contract_init_compact_prod_acc(3u, lane);
+            q6id_contract_u32x4_vec acc4 = q6id_contract_init_compact_prod_acc(4u, lane);
+            q6id_contract_u32x4_vec acc5 = q6id_contract_init_compact_prod_acc(5u, lane);
+            q6id_contract_u32x4_vec acc6 = q6id_contract_init_compact_prod_acc(6u, lane);
+            q6id_contract_u32x4_vec acc7 = q6id_contract_init_compact_prod_acc(7u, lane);
+
+            HRX_Q6ID_CONTRACT_WAIT_LGKMCNT_DEPS(40, a0, b0);
+            HRX_Q6ID_CONTRACT_WMMA_COMPACT_ACC(acc0, a0, b0);
+            HRX_Q6ID_CONTRACT_WAIT_LGKMCNT_DEPS(36, a0, b1);
+            HRX_Q6ID_CONTRACT_WMMA_COMPACT_ACC(acc1, a0, b1);
+            HRX_Q6ID_CONTRACT_WAIT_LGKMCNT_DEPS(32, a1, b0);
+            HRX_Q6ID_CONTRACT_WMMA_COMPACT_ACC(acc2, a1, b0);
+            HRX_Q6ID_CONTRACT_WMMA_COMPACT_ACC(acc3, a1, b1);
+            HRX_Q6ID_CONTRACT_WAIT_LGKMCNT_DEPS(28, a2, b0);
+            HRX_Q6ID_CONTRACT_WMMA_COMPACT_ACC(acc4, a2, b0);
+            HRX_Q6ID_CONTRACT_WMMA_COMPACT_ACC(acc5, a2, b1);
+            HRX_Q6ID_CONTRACT_WAIT_LGKMCNT_DEPS(24, a3, b0);
+            HRX_Q6ID_CONTRACT_WMMA_COMPACT_ACC(acc6, a3, b0);
+            HRX_Q6ID_CONTRACT_WMMA_COMPACT_ACC(acc7, a3, b1);
+
+            q6id_contract_prod_stage_compact_acc2(sh_prod_stage, 0u, lane, acc0, acc1);
+            q6id_contract_prod_stage_compact_acc2(sh_prod_stage, 2u, lane, acc2, acc3);
+            q6id_contract_prod_stage_compact_acc2(sh_prod_stage, 4u, lane, acc4, acc5);
+            q6id_contract_prod_stage_compact_acc2(sh_prod_stage, 6u, lane, acc6, acc7);
+        }
+
+        {
+            q6id_contract_u32x4_vec acc0 = q6id_contract_init_compact_prod_acc(8u, lane);
+            q6id_contract_u32x4_vec acc1 = q6id_contract_init_compact_prod_acc(9u, lane);
+            q6id_contract_u32x4_vec acc2 = q6id_contract_init_compact_prod_acc(10u, lane);
+            q6id_contract_u32x4_vec acc3 = q6id_contract_init_compact_prod_acc(11u, lane);
+            q6id_contract_u32x4_vec acc4 = q6id_contract_init_compact_prod_acc(12u, lane);
+            q6id_contract_u32x4_vec acc5 = q6id_contract_init_compact_prod_acc(13u, lane);
+            q6id_contract_u32x4_vec acc6 = q6id_contract_init_compact_prod_acc(15u, lane);
+            q6id_contract_u32x4_vec acc7 = q6id_contract_init_compact_prod_acc(14u, lane);
+
+            HRX_Q6ID_CONTRACT_WAIT_LGKMCNT_DEPS(16, a4, b2);
+            HRX_Q6ID_CONTRACT_WMMA_COMPACT_ACC(acc0, a4, b2);
+            HRX_Q6ID_CONTRACT_WAIT_LGKMCNT_DEPS(7, a4, b3);
+            HRX_Q6ID_CONTRACT_WMMA_COMPACT_ACC(acc1, a4, b3);
+            HRX_Q6ID_CONTRACT_WMMA_COMPACT_ACC(acc2, a5, b2);
+            HRX_Q6ID_CONTRACT_WAIT_LGKMCNT_DEPS(6, a5, b3);
+            HRX_Q6ID_CONTRACT_WMMA_COMPACT_ACC(acc3, a5, b3);
+            HRX_Q6ID_CONTRACT_WAIT_LGKMCNT_DEPS(1, a6, b2);
+            HRX_Q6ID_CONTRACT_WMMA_COMPACT_ACC(acc4, a6, b2);
+            HRX_Q6ID_CONTRACT_WMMA_COMPACT_ACC(acc5, a6, b3);
+            HRX_Q6ID_CONTRACT_WAIT_LGKMCNT_DEPS(0, a7, b3);
+            HRX_Q6ID_CONTRACT_WMMA_COMPACT_ACC(acc7, a7, b3);
+            HRX_Q6ID_CONTRACT_WMMA_COMPACT_ACC(acc6, a7, b2);
+
+            q6id_contract_prod_stage_compact_acc2(sh_prod_stage, 8u, lane, acc0, acc1);
+            q6id_contract_prod_stage_compact_acc2(sh_prod_stage, 10u, lane, acc2, acc3);
+            q6id_contract_prod_stage_compact_acc2(sh_prod_stage, 12u, lane, acc4, acc5);
+            q6id_contract_prod_stage_compact_acc2(sh_prod_stage, 14u, lane, acc7, acc6);
+        }
+    }
+
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+
+    if (wave == 0u) {
+        HRX_Q6ID_CONTRACT_PROD_STAGE_FLUSH(0u);
+        HRX_Q6ID_CONTRACT_PROD_STAGE_FLUSH(1u);
+        HRX_Q6ID_CONTRACT_PROD_STAGE_FLUSH(2u);
+        HRX_Q6ID_CONTRACT_PROD_STAGE_FLUSH(3u);
+        HRX_Q6ID_CONTRACT_PROD_STAGE_FLUSH(4u);
+        HRX_Q6ID_CONTRACT_PROD_STAGE_FLUSH(5u);
+        HRX_Q6ID_CONTRACT_PROD_STAGE_FLUSH(6u);
+        HRX_Q6ID_CONTRACT_PROD_STAGE_FLUSH(7u);
+        HRX_Q6ID_CONTRACT_PROD_STAGE_FLUSH(8u);
+        HRX_Q6ID_CONTRACT_PROD_STAGE_FLUSH(9u);
+        HRX_Q6ID_CONTRACT_PROD_STAGE_FLUSH(10u);
+        HRX_Q6ID_CONTRACT_PROD_STAGE_FLUSH(11u);
+        HRX_Q6ID_CONTRACT_PROD_STAGE_FLUSH(12u);
+        HRX_Q6ID_CONTRACT_PROD_STAGE_FLUSH(13u);
+        HRX_Q6ID_CONTRACT_PROD_STAGE_FLUSH(14u);
+        HRX_Q6ID_CONTRACT_PROD_STAGE_FLUSH(15u);
+    }
+}
+
+extern "C" __global__ __launch_bounds__(256, 1)
 void q6_id_subgroup_contract_prodaddr_radv_issue_compact_scoped_probe(float * dst, unsigned int * counts) {
     __shared__ uint64_t sh_frag[12 * 256];
     __shared__ uint16_t sh_prod_stage[16 * 64 * 4];
@@ -2031,6 +2168,8 @@ static double run_prod_kernel(const std::string & name, int reps, float * d_dst,
             q6_id_subgroup_contract_prodaddr_radv_issue_compact_helper_probe<<<1, 256>>>(d_dst, d_counts);
         } else if (name == "prodaddr-radvissuecompact-helper4") {
             q6_id_subgroup_contract_prodaddr_radv_issue_compact_helper4_probe<<<1, 256>>>(d_dst, d_counts);
+        } else if (name == "prodaddr-radvissuecompact-helper2") {
+            q6_id_subgroup_contract_prodaddr_radv_issue_compact_helper2_probe<<<1, 256>>>(d_dst, d_counts);
         } else if (name == "prodaddr-radvissuecompact-scoped") {
             q6_id_subgroup_contract_prodaddr_radv_issue_compact_scoped_probe<<<1, 256>>>(d_dst, d_counts);
         } else if (name == "prodaddr-radvissuecompact-clobber") {
@@ -2214,6 +2353,12 @@ int main(int argc, char ** argv) {
     const prod_validate_result prod_radvissuecompact_helper4 = validate_prod(d_prod_dst, d_prod_counts, false);
 
     clear_prod_buffers(d_prod_dst, d_prod_counts);
+    q6_id_subgroup_contract_prodaddr_radv_issue_compact_helper2_probe<<<1, 256>>>(d_prod_dst, d_prod_counts);
+    HIP_CHECK(hipGetLastError());
+    HIP_CHECK(hipDeviceSynchronize());
+    const prod_validate_result prod_radvissuecompact_helper2 = validate_prod(d_prod_dst, d_prod_counts, false);
+
+    clear_prod_buffers(d_prod_dst, d_prod_counts);
     q6_id_subgroup_contract_prodaddr_radv_issue_compact_scoped_probe<<<1, 256>>>(d_prod_dst, d_prod_counts);
     HIP_CHECK(hipGetLastError());
     HIP_CHECK(hipDeviceSynchronize());
@@ -2244,6 +2389,7 @@ int main(int argc, char ** argv) {
     const double prod_radvissuecompact_us = run_prod_kernel("prodaddr-radvissuecompact", reps, d_prod_dst, d_prod_counts);
     const double prod_radvissuecompact_helper_us = run_prod_kernel("prodaddr-radvissuecompact-helper", reps, d_prod_dst, d_prod_counts);
     const double prod_radvissuecompact_helper4_us = run_prod_kernel("prodaddr-radvissuecompact-helper4", reps, d_prod_dst, d_prod_counts);
+    const double prod_radvissuecompact_helper2_us = run_prod_kernel("prodaddr-radvissuecompact-helper2", reps, d_prod_dst, d_prod_counts);
     const double prod_radvissuecompact_scoped_us = run_prod_kernel("prodaddr-radvissuecompact-scoped", reps, d_prod_dst, d_prod_counts);
     const double prod_radvissuecompact_clobber_us = run_prod_kernel("prodaddr-radvissuecompact-clobber", reps, d_prod_dst, d_prod_counts);
     const double prod_radvissuecompact_storekill_us = run_prod_kernel("prodaddr-radvissuecompact-storekill", reps, d_prod_dst, d_prod_counts);
@@ -2265,6 +2411,9 @@ int main(int argc, char ** argv) {
     std::printf("prodaddr_radvissuecompact_helper4,%d,%.6f\n",
         prod_radvissuecompact_helper4.ok ? 1 : 0,
         prod_radvissuecompact_helper4_us);
+    std::printf("prodaddr_radvissuecompact_helper2,%d,%.6f\n",
+        prod_radvissuecompact_helper2.ok ? 1 : 0,
+        prod_radvissuecompact_helper2_us);
     std::printf("prodaddr_radvissuecompact_scoped,%d,%.6f\n",
         prod_radvissuecompact_scoped.ok ? 1 : 0,
         prod_radvissuecompact_scoped_us);
@@ -2304,6 +2453,11 @@ int main(int argc, char ** argv) {
         prod_radvissuecompact_helper4.missed,
         prod_radvissuecompact_helper4.duplicated,
         prod_radvissuecompact_helper4.max_count);
+    std::printf("prodaddr_radvissuecompact_helper2,%d,missed=%u,duplicated=%u,max_count=%u\n",
+        prod_radvissuecompact_helper2.ok ? 1 : 0,
+        prod_radvissuecompact_helper2.missed,
+        prod_radvissuecompact_helper2.duplicated,
+        prod_radvissuecompact_helper2.max_count);
     std::printf("prodaddr_radvissuecompact_scoped,%d,missed=%u,duplicated=%u,max_count=%u\n",
         prod_radvissuecompact_scoped.ok ? 1 : 0,
         prod_radvissuecompact_scoped.missed,
@@ -2328,6 +2482,7 @@ int main(int argc, char ** argv) {
             radvissuecompact_ok &&
             prod_direct.ok && prod_radv96_duplicate.ok && prod_bankedcompact.ok &&
             prod_radvissuecompact.ok && prod_radvissuecompact_helper.ok &&
-            prod_radvissuecompact_helper4.ok && prod_radvissuecompact_scoped.ok && prod_radvissuecompact_clobber.ok &&
+            prod_radvissuecompact_helper4.ok && prod_radvissuecompact_helper2.ok &&
+            prod_radvissuecompact_scoped.ok && prod_radvissuecompact_clobber.ok &&
             prod_radvissuecompact_storekill.ok) ? 0 : 1;
 }

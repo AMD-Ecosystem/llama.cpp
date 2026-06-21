@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_prodaddr_radvissuecompact_helper2_fixture_459d54e32_dirty",
+      "date": "2026-06-21",
+      "route": "hrx-hip-bench-q6-id-subgroup-contract q6_id_subgroup_contract_prodaddr_radv_issue_compact_helper2_probe",
+      "env": "standalone CMake/Ninja-built gfx1151 HIP bench diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/q6-prodaddr-radvissuecompact-helper2-fixture-459d54e32-dirty-20260621-085824/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-prodaddr-radvissuecompact-helper2-screen-459d54e32-dirty-20260621-085824/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q6-id-subgroup-contract with embedded .hip_fatbin gfx1151 object extracted to artifact static/unbundled.gfx1151",
+      "reason": "This fixture tested whether shrinking the accepted helper4 staging boundary to helper2 would remove or further reduce the helper ABI scratch/call penalty while preserving RADV's compact f16 WMMA operand ownership. The CMake/Ninja-built fixture validated production-address coverage: prodaddr_radvissuecompact_helper2 valid=1, missed=0, duplicated=0, max_count=1. Static evidence is positive for the schedule signal: compact f16 accumulator screen passed, WMMA operand-topology contract passed, and the helper2 symbol preserves RADV's dst/C reuse [2 x 8 banks], A reuse [2 x 8 banks], B reuse [4 x 4 banks], and lgkmcnt ladder [40,36,32,28,24,16,7,6,1,0]. Reject the helper2 arity axis because it does not improve on helper4: scratch_bytes remains 8, SGPR=35 and VGPR=137 remain unchanged, exact static contract still fails for the same fixture/prod-surface reasons, and same-run timing is slower than helper4 at 5.159956 us versus 5.071643 us. Future Q6 p33 work should preserve helper4's ownership with a no-call/lower-level primitive rather than splitting the noinline helper boundary further."
+    },
+    {
       "id": "q6_k_vk64_q6addr_upperdepnomem_compact_storekill_route_322b59763_dirty",
       "date": "2026-06-21",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_compact_storekill_f16acc_wg256_f32",
