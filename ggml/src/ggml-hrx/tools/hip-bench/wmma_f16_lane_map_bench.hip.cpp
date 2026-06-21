@@ -243,6 +243,28 @@ static __device__ __forceinline__ _Float16 wmma_lane_map_u16_to_f16(uint32_t val
     return __builtin_bit_cast(_Float16, static_cast<uint16_t>(value));
 }
 
+static constexpr int HRX_WMMA_LANE_MAP_RAW_BUFFER_FLAGS_GFX11 = 0x31004000;
+
+static __device__ __forceinline__ __amdgpu_buffer_rsrc_t wmma_lane_map_make_dst_rsrc(float * dst) {
+    return __builtin_amdgcn_make_buffer_rsrc(
+        dst,
+        static_cast<unsigned short>(0),
+        0xffffffffull,
+        HRX_WMMA_LANE_MAP_RAW_BUFFER_FLAGS_GFX11);
+}
+
+static __device__ __forceinline__ void wmma_lane_map_buffer_store_f32(
+        __amdgpu_buffer_rsrc_t dst_rsrc,
+        size_t elem_offset,
+        float value) {
+    __builtin_amdgcn_raw_buffer_store_b32(
+        __builtin_bit_cast(int, value),
+        dst_rsrc,
+        static_cast<int>(elem_offset * sizeof(float)),
+        0,
+        0);
+}
+
 static __device__ __forceinline__ unsigned int wmma_lane_map_combined96_stage_index(
         unsigned int group,
         unsigned int slot,
@@ -733,8 +755,10 @@ template <bool selected_opsel, uint16_t base_half_bits = 0x3400u>
 __global__ __launch_bounds__(256, 1)
 void wmma_f16_group12_selected_stage_contract_probe(
         float * raw,
+        float * buffer,
         float * staged,
         unsigned int * raw_counts,
+        unsigned int * buffer_counts,
         unsigned int * staged_counts,
         unsigned int rows,
         unsigned int cols) {
@@ -750,6 +774,7 @@ void wmma_f16_group12_selected_stage_contract_probe(
     const unsigned int tid = __builtin_amdgcn_workitem_id_x();
     const unsigned int wave = tid >> 6u;
     const unsigned int lane = tid & 63u;
+    const __amdgpu_buffer_rsrc_t buffer_rsrc = wmma_lane_map_make_dst_rsrc(buffer);
 
     for (unsigned int index = tid; index < 64u * STRIDE; index += 256u) {
         sh_a[index] = static_cast<uint16_t>(base_half_bits + ((index * 3u + 1u) & 7u));
@@ -812,8 +837,11 @@ void wmma_f16_group12_selected_stage_contract_probe(
         const unsigned int row = row_lane + reg * 4u;
         const size_t dst_index = static_cast<size_t>(col) * rows + row;
         if (row < rows && col < cols) {
-            raw[dst_index] = static_cast<float>(acc[slot]);
+            const float value = static_cast<float>(acc[slot]);
+            raw[dst_index] = value;
+            wmma_lane_map_buffer_store_f32(buffer_rsrc, dst_index, value);
             atomicAdd(raw_counts + dst_index, 1u);
+            atomicAdd(buffer_counts + dst_index, 1u);
         }
         wmma_lane_map_ds_write_b16(
             sh_u16 + col_major_base + reg * 4u,
@@ -1281,17 +1309,23 @@ static int run_group12_selected_stage_contract_probe(const char * mode) {
     constexpr unsigned int cols = 64;
     const size_t count = static_cast<size_t>(rows) * cols;
     device_buffer<float> d_raw(count);
+    device_buffer<float> d_buffer(count);
     device_buffer<float> d_staged(count);
     device_buffer<unsigned int> d_raw_counts(count);
+    device_buffer<unsigned int> d_buffer_counts(count);
     device_buffer<unsigned int> d_staged_counts(count);
     std::vector<float> h_raw(count, -1.0f);
+    std::vector<float> h_buffer(count, -1.0f);
     std::vector<float> h_staged(count, -1.0f);
     std::vector<unsigned int> h_raw_counts(count, 0u);
+    std::vector<unsigned int> h_buffer_counts(count, 0u);
     std::vector<unsigned int> h_staged_counts(count, 0u);
 
     HIP_CHECK(hipMemset(d_raw.ptr, 0xff, count * sizeof(float)));
+    HIP_CHECK(hipMemset(d_buffer.ptr, 0xff, count * sizeof(float)));
     HIP_CHECK(hipMemset(d_staged.ptr, 0xff, count * sizeof(float)));
     HIP_CHECK(hipMemset(d_raw_counts.ptr, 0, count * sizeof(unsigned int)));
+    HIP_CHECK(hipMemset(d_buffer_counts.ptr, 0, count * sizeof(unsigned int)));
     HIP_CHECK(hipMemset(d_staged_counts.ptr, 0, count * sizeof(unsigned int)));
     hipLaunchKernelGGL(
         (wmma_f16_group12_selected_stage_contract_probe<selected_opsel>),
@@ -1300,39 +1334,52 @@ static int run_group12_selected_stage_contract_probe(const char * mode) {
         0,
         0,
         d_raw.ptr,
+        d_buffer.ptr,
         d_staged.ptr,
         d_raw_counts.ptr,
+        d_buffer_counts.ptr,
         d_staged_counts.ptr,
         rows,
         cols);
     HIP_CHECK(hipGetLastError());
     HIP_CHECK(hipDeviceSynchronize());
     HIP_CHECK(hipMemcpy(h_raw.data(), d_raw.ptr, count * sizeof(float), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(h_buffer.data(), d_buffer.ptr, count * sizeof(float), hipMemcpyDeviceToHost));
     HIP_CHECK(hipMemcpy(h_staged.data(), d_staged.ptr, count * sizeof(float), hipMemcpyDeviceToHost));
     HIP_CHECK(hipMemcpy(h_raw_counts.data(), d_raw_counts.ptr, count * sizeof(unsigned int), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(h_buffer_counts.data(), d_buffer_counts.ptr, count * sizeof(unsigned int), hipMemcpyDeviceToHost));
     HIP_CHECK(hipMemcpy(h_staged_counts.data(), d_staged_counts.ptr, count * sizeof(unsigned int), hipMemcpyDeviceToHost));
 
     size_t active = 0;
     size_t raw_duplicates = 0;
+    size_t buffer_duplicates = 0;
     size_t staged_duplicates = 0;
     size_t missing_raw = 0;
+    size_t missing_buffer = 0;
     size_t missing_staged = 0;
     size_t unexpected_raw = 0;
+    size_t unexpected_buffer = 0;
     size_t unexpected_staged = 0;
     size_t nan_raw = 0;
+    size_t nan_buffer = 0;
     size_t nan_staged = 0;
-    size_t mismatch = 0;
+    size_t raw_buffer_mismatch = 0;
+    size_t raw_staged_mismatch = 0;
     size_t first_mismatch = count;
     for (unsigned int col = 0; col < cols; ++col) {
         for (unsigned int row = 0; row < rows; ++row) {
             const size_t idx = static_cast<size_t>(col) * rows + row;
             const bool target = col >= 48u && col < 64u && row < 16u;
             const unsigned int raw_touches = h_raw_counts[idx];
+            const unsigned int buffer_touches = h_buffer_counts[idx];
             const unsigned int staged_touches = h_staged_counts[idx];
             if (target) {
                 ++active;
                 if (raw_touches == 0u) {
                     ++missing_raw;
+                }
+                if (buffer_touches == 0u) {
+                    ++missing_buffer;
                 }
                 if (staged_touches == 0u) {
                     ++missing_staged;
@@ -1341,6 +1388,9 @@ static int run_group12_selected_stage_contract_probe(const char * mode) {
                 if (raw_touches != 0u) {
                     ++unexpected_raw;
                 }
+                if (buffer_touches != 0u) {
+                    ++unexpected_buffer;
+                }
                 if (staged_touches != 0u) {
                     ++unexpected_staged;
                 }
@@ -1348,54 +1398,74 @@ static int run_group12_selected_stage_contract_probe(const char * mode) {
             if (raw_touches > 1u) {
                 ++raw_duplicates;
             }
+            if (buffer_touches > 1u) {
+                ++buffer_duplicates;
+            }
             if (staged_touches > 1u) {
                 ++staged_duplicates;
             }
             if (raw_touches != 0u && is_nan(h_raw[idx])) {
                 ++nan_raw;
             }
+            if (buffer_touches != 0u && is_nan(h_buffer[idx])) {
+                ++nan_buffer;
+            }
             if (staged_touches != 0u && is_nan(h_staged[idx])) {
                 ++nan_staged;
+            }
+            if (target && raw_touches != 0u && buffer_touches != 0u &&
+                    !close_enough(h_raw[idx], h_buffer[idx])) {
+                if (first_mismatch == count) {
+                    first_mismatch = idx;
+                }
+                ++raw_buffer_mismatch;
             }
             if (target && raw_touches != 0u && staged_touches != 0u &&
                     !close_enough(h_raw[idx], h_staged[idx])) {
                 if (first_mismatch == count) {
                     first_mismatch = idx;
                 }
-                ++mismatch;
+                ++raw_staged_mismatch;
             }
         }
     }
 
-    const bool valid = raw_duplicates == 0 && staged_duplicates == 0 &&
-        missing_raw == 0 && missing_staged == 0 &&
-        unexpected_raw == 0 && unexpected_staged == 0 &&
-        nan_raw == 0 && nan_staged == 0 && mismatch == 0;
+    const bool valid = raw_duplicates == 0 && buffer_duplicates == 0 && staged_duplicates == 0 &&
+        missing_raw == 0 && missing_buffer == 0 && missing_staged == 0 &&
+        unexpected_raw == 0 && unexpected_buffer == 0 && unexpected_staged == 0 &&
+        nan_raw == 0 && nan_buffer == 0 && nan_staged == 0 &&
+        raw_buffer_mismatch == 0 && raw_staged_mismatch == 0;
 
     std::printf(
-        "group12-selected-stage-contract mode=%s rows=%u cols=%u selected_opsel=%u active=%zu raw_duplicates=%zu staged_duplicates=%zu missing_raw=%zu missing_staged=%zu unexpected_raw=%zu unexpected_staged=%zu nan_raw=%zu nan_staged=%zu mismatch=%zu contract_valid=%u",
+        "group12-selected-stage-contract mode=%s rows=%u cols=%u selected_opsel=%u active=%zu raw_duplicates=%zu buffer_duplicates=%zu staged_duplicates=%zu missing_raw=%zu missing_buffer=%zu missing_staged=%zu unexpected_raw=%zu unexpected_buffer=%zu unexpected_staged=%zu nan_raw=%zu nan_buffer=%zu nan_staged=%zu raw_buffer_mismatch=%zu raw_staged_mismatch=%zu contract_valid=%u",
         mode,
         rows,
         cols,
         selected_opsel ? 1u : 0u,
         active,
         raw_duplicates,
+        buffer_duplicates,
         staged_duplicates,
         missing_raw,
+        missing_buffer,
         missing_staged,
         unexpected_raw,
+        unexpected_buffer,
         unexpected_staged,
         nan_raw,
+        nan_buffer,
         nan_staged,
-        mismatch,
+        raw_buffer_mismatch,
+        raw_staged_mismatch,
         valid ? 1u : 0u);
     if (first_mismatch != count) {
         const unsigned int row = static_cast<unsigned int>(first_mismatch % rows);
         const unsigned int col = static_cast<unsigned int>(first_mismatch / rows);
-        std::printf(" first_mismatch_row=%u first_mismatch_col=%u raw=%f staged=%f",
+        std::printf(" first_mismatch_row=%u first_mismatch_col=%u raw=%f buffer=%f staged=%f",
             row,
             col,
             static_cast<double>(h_raw[first_mismatch]),
+            static_cast<double>(h_buffer[first_mismatch]),
             static_cast<double>(h_staged[first_mismatch]));
     }
     std::printf("\n");

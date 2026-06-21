@@ -3,6 +3,56 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "wmma_selected_buffer_store_contract_e93e3ba32_dirty",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/wmma-selected-buffer-contract-e93e3ba32-dirty-20260621/",
+      "source_commit": "e93e3ba32-dirty",
+      "tool": "CMake/Ninja-built hrx-hip-bench-wmma-f16-lane-map with embedded fatbin extraction and gfx1151 disassembly",
+      "status": "accepted_primitive_prerequisite_no_route_promotion",
+      "candidate_gate": {
+        "production_target": "Primitive prerequisite for a future Q6_K p33 dense prompt MUL_MAT selected-accumulator writeback route; this probe only tests whether HIP can express raw buffer stores for selected WMMA accumulator halves with the known group-12 coordinate mapping",
+        "baseline_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-wmma-f16-lane-map --mode=group12-selected-stage-contract and --mode=group12-selected-stage-contract-hi before adding the raw-buffer output path",
+        "variant_command": "cmake --build build/hrx-v1-catalog-gfx1151 --target hrx-hip-bench-wmma-f16-lane-map -j$(nproc); build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-wmma-f16-lane-map --mode=group12-selected-stage-contract; build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-wmma-f16-lane-map --mode=group12-selected-stage-contract-hi",
+        "same_runner_comparison_method": "single-fixture coordinate contract comparing scalar global stores, raw buffer stores, and LDS-staged loadback for the selected group-12 WMMA accumulator coordinates",
+        "route_trace_path": "not applicable; standalone primitive fixture only, no production route selection",
+        "scheduler_trace_path": "artifact summary.md, readelf-selected.txt, selected-lo.objdump.txt, and selected-hi.objdump.txt",
+        "focused_cpu_reference": "fixture validates exact coordinate coverage and value equality for raw, raw-buffer, and staged outputs; both selected_opsel halves report contract_valid=1 with zero duplicate, missing, unexpected, NaN, or mismatch counts",
+        "compile_report_path": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-wmma-f16-lane-map embedded .hip_fatbin extracted to artifact unbundle-gfx1151.o",
+        "target_listing_path": "artifact selected-lo.objdump.txt, selected-hi.objdump.txt, and readelf-selected.txt",
+        "prior_art_schedule_source": "Qwen3 30B Q6_K p33 Vulkan oracle writeback topology and prior rejected p33stage12/p33stage16/p33stage12-shadow probes showing that source-visible staging/store-count matches are not enough without lower-live lane/writeback ownership",
+        "promotion_rule": "accept only as primitive prerequisite. Do not route or promote from this result alone; a route candidate must use the raw-buffer drain in a Q6 p33 kernel and pass static RADV comparison, focused correctness including odd/tail prefill rows, route traces, and same-runner timing against the current VK64 floor."
+      },
+      "focused_result": {
+        "low_opsel": "contract_valid=1 raw_duplicates=0 buffer_duplicates=0 staged_duplicates=0 missing_raw=0 missing_buffer=0 missing_staged=0 unexpected_raw=0 unexpected_buffer=0 unexpected_staged=0 nan_raw=0 nan_buffer=0 nan_staged=0 raw_buffer_mismatch=0 raw_staged_mismatch=0",
+        "high_opsel": "contract_valid=1 raw_duplicates=0 buffer_duplicates=0 staged_duplicates=0 missing_raw=0 missing_buffer=0 missing_staged=0 unexpected_raw=0 unexpected_buffer=0 unexpected_staged=0 nan_raw=0 nan_buffer=0 nan_staged=0 raw_buffer_mismatch=0 raw_staged_mismatch=0",
+        "static_selected_stage": {
+          "source": "executable .hip_fatbin, not stale sidecar .hipv4-amdgcn-amd-amdhsa--gfx1151",
+          "kernarg_segment_size": 56,
+          "group_segment_fixed_size": 11776,
+          "sgpr_count": 30,
+          "vgpr_count": 40,
+          "sgpr_spill_count": 0,
+          "vgpr_spill_count": 0,
+          "wavefront_size": 64,
+          "per_symbol_opcode_counts": {
+            "v_wmma_f16_16x16x16_f16": 2,
+            "buffer_store_b32": 4,
+            "global_store_b32": 8,
+            "global_atomic_add_u32": 12,
+            "ds_store_b16": 22,
+            "ds_load_u16_d16": 4,
+            "s_barrier": 1
+          }
+        }
+      },
+      "findings": [
+        "raw-buffer direct stores can be expressed from the HIP C++ fixture with __builtin_amdgcn_make_buffer_rsrc plus __builtin_amdgcn_raw_buffer_store_b32",
+        "the selected low and high accumulator halves match the scalar and LDS-staged output paths exactly for the known group-12 coordinate contract",
+        "the real embedded fatbin reports six pointer arguments plus rows/cols for the updated fixture; the adjacent .hipv4 sidecar was stale and must not be used as evidence for this run",
+        "decision: use this as a prerequisite for the next Q6 p33 lower-live writeback candidate, not as a route promotion or performance claim"
+      ]
+    },
+    {
       "id": "q6_k_vk64_depwait_p33stage12_shadow_rejection_a32034a3e_dirty",
       "date": "2026-06-21",
       "artifact": "cache/hrxv1/gfx1151/q6-vk64-p33stage12-shadow-a32034a3e-dirty-20260621/",
