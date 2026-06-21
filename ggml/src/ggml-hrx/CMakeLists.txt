@@ -984,6 +984,13 @@ ggml_hrx_add_kernel_source(
     FLAGS -O3
 )
 ggml_hrx_add_kernel_source(
+    SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_depwait_p33stage16_wg256.hip.cpp"
+    WAVEFRONT_SIZE 64
+    ARCH_PREFIXES gfx11
+    DEPS "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q6_k_wmma16_vk128_wg256.hip.cpp"
+    FLAGS -O3
+)
+ggml_hrx_add_kernel_source(
     SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_padladder_faststage_wg256.hip.cpp"
     WAVEFRONT_SIZE 64
     ARCH_PREFIXES gfx11
@@ -2204,6 +2211,10 @@ if (GGML_HRX_BUILD_HIP_BENCHES)
     ggml_hrx_add_hip_bench(
         hrx-hip-bench-q6-wmma-ring96-kloop-asm-depwait-p33stage12-repro
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/hip-bench/q6_wmma_ring96_kloop_asm_depwait_p33stage12_repro_bench.hip.cpp"
+        64)
+    ggml_hrx_add_hip_bench(
+        hrx-hip-bench-q6-wmma-ring96-kloop-asm-depwait-p33stage16-repro
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/hip-bench/q6_wmma_ring96_kloop_asm_depwait_p33stage16_repro_bench.hip.cpp"
         64)
     ggml_hrx_add_hip_bench(
         hrx-hip-bench-q6-wmma-ring96-kloop-asm-padladder-faststage-repro

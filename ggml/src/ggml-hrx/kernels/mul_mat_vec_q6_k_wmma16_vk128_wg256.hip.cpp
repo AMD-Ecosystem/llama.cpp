@@ -130,6 +130,10 @@
 #define HRX_Q6_K_WMMA_VK128_P33_STAGE12_STORE 0
 #endif
 
+#ifndef HRX_Q6_K_WMMA_VK128_P33_STAGE16_STORE
+#define HRX_Q6_K_WMMA_VK128_P33_STAGE16_STORE 0
+#endif
+
 #ifndef HRX_Q6_K_WMMA_VK128_STORE_STAGE
 #define HRX_Q6_K_WMMA_VK128_STORE_STAGE 0
 #endif
@@ -1023,6 +1027,59 @@ static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_store_acc_f16_row_maj
         :
         : "v"(v0), "v"(v1), "v"(v2), "v"(v3), "v"(byte_offset), "s"(dst_rsrc)
         : "memory");
+}
+#endif
+
+#if HRX_Q6_K_WMMA_VK128_P33_STAGE16_STORE
+static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_stage_p33_all_buffer(
+        __amdgpu_buffer_rsrc_t dst_rsrc,
+        long long rows_stride,
+        long long row0,
+        long long col0,
+        long long rows,
+        long long cols,
+        hrx_q6_k_wmma_vk128_half8_vec acc,
+        unsigned int lane,
+        hrx_q6_k_wmma_vk128_lds_u16_ptr sh_store) {
+    const int row_lane = static_cast<int>(lane >> 4);
+    const int col_lane = static_cast<int>(lane & 15u);
+    const int col_major_base = col_lane * 16 + row_lane;
+#pragma unroll
+    for (int reg = 0; reg < 4; ++reg) {
+        hrx_q6_k_wmma_vk128_ds_store_u16(
+            sh_store + col_major_base + reg * 4,
+            hrx_q6_k_wmma_vk128_f16_to_u16(acc[reg * 2 + HRX_Q6_K_WMMA_VK128_W64_OPSEL]));
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+
+    const _Float16 h0 = hrx_q6_k_wmma_vk128_u16_to_f16(
+        hrx_q6_k_wmma_vk128_ds_load_u16_d16(sh_store + col_major_base + 0));
+    const _Float16 h1 = hrx_q6_k_wmma_vk128_u16_to_f16(
+        hrx_q6_k_wmma_vk128_ds_load_u16_d16(sh_store + col_major_base + 4));
+    const _Float16 h2 = hrx_q6_k_wmma_vk128_u16_to_f16(
+        hrx_q6_k_wmma_vk128_ds_load_u16_d16(sh_store + col_major_base + 8));
+    const _Float16 h3 = hrx_q6_k_wmma_vk128_u16_to_f16(
+        hrx_q6_k_wmma_vk128_ds_load_u16_d16(sh_store + col_major_base + 12));
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+
+    const long long col = col0 + static_cast<long long>(col_lane);
+    const long long row = row0 + static_cast<long long>(row_lane);
+    if (col < cols && row + 12 < rows) {
+        const int byte_offset = static_cast<int>((col * rows_stride + row) * static_cast<long long>(sizeof(float)));
+        const int v0 = __builtin_bit_cast(int, static_cast<float>(h0));
+        const int v1 = __builtin_bit_cast(int, static_cast<float>(h1));
+        const int v2 = __builtin_bit_cast(int, static_cast<float>(h2));
+        const int v3 = __builtin_bit_cast(int, static_cast<float>(h3));
+        asm volatile(
+            "s_clause 0x3\n"
+            "buffer_store_b32 %0, %4, %5, 0 offen\n"
+            "buffer_store_b32 %1, %4, %5, 0 offen offset:16\n"
+            "buffer_store_b32 %2, %4, %5, 0 offen offset:32\n"
+            "buffer_store_b32 %3, %4, %5, 0 offen offset:48\n"
+            :
+            : "v"(v0), "v"(v1), "v"(v2), "v"(v3), "v"(byte_offset), "s"(dst_rsrc)
+            : "memory");
+    }
 }
 #endif
 
@@ -2192,7 +2249,20 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
                 wave,
                 (hrx_q6_k_wmma_vk128_lds_volatile_half_ptr) sh_store);
 #elif HRX_Q6_K_WMMA_VK128_BUFFER_STORE
-#if HRX_Q6_K_WMMA_VK128_P33_STAGE12_STORE
+#if HRX_Q6_K_WMMA_VK128_P33_STAGE16_STORE
+            const long long tile_row0 = row_base + static_cast<long long>(row_tile * 16);
+            const long long tile_col0 = col_base + static_cast<long long>(col_tile * 16);
+            hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_stage_p33_all_buffer(
+                dst_rsrc,
+                rows,
+                tile_row0,
+                tile_col0,
+                rows,
+                cols,
+                acc[group],
+                lane,
+                (hrx_q6_k_wmma_vk128_lds_u16_ptr) sh_b);
+#elif HRX_Q6_K_WMMA_VK128_P33_STAGE12_STORE
             const long long tile_row0 = row_base + static_cast<long long>(row_tile * 16);
             const long long tile_col0 = col_base + static_cast<long long>(col_tile * 16);
             if (group < 12) {
