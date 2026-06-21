@@ -82,6 +82,10 @@
 #define HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT_LADDER 0
 #endif
 
+#ifndef HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_EXPWAIT_LADDER
+#define HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_EXPWAIT_LADDER 0
+#endif
+
 #ifndef HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_DEPWAIT
 #define HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_DEPWAIT 0
 #endif
@@ -1349,7 +1353,29 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
 #endif
 #pragma unroll
                 for (int group = 0; group < 16; ++group) {
-#if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT_LADDER
+#if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_EXPWAIT_LADDER
+                    if (group == 1) {
+                        asm volatile("s_waitcnt lgkmcnt(36)\n" ::: "memory");
+                    } else if (group == 2) {
+                        asm volatile("s_waitcnt lgkmcnt(32)\n" ::: "memory");
+                    } else if (group == 3) {
+                        asm volatile("s_waitcnt lgkmcnt(28)\n" ::: "memory");
+                    } else if (group == 4) {
+                        asm volatile("s_waitcnt lgkmcnt(24)\n" ::: "memory");
+                    } else if (group == 5) {
+                        asm volatile("s_waitcnt lgkmcnt(20)\n" ::: "memory");
+                    } else if (group == 6) {
+                        asm volatile("s_waitcnt lgkmcnt(16)\n" ::: "memory");
+                    } else if (group == 7) {
+                        asm volatile("s_waitcnt lgkmcnt(12)\n" ::: "memory");
+                    } else if (group == 8) {
+                        asm volatile("s_waitcnt lgkmcnt(8)\n" ::: "memory");
+                    } else if (group == 9) {
+                        asm volatile("s_waitcnt lgkmcnt(4)\n" ::: "memory");
+                    } else if (group == 10) {
+                        asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+                    }
+#elif HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT_LADDER
                     if (group == 1) {
                         asm volatile("s_waitcnt lgkmcnt(36)\n" ::: "memory");
                     } else if (group == 2) {
