@@ -30,6 +30,10 @@ static constexpr unsigned int HRX_Q6ID_CONTRACT_GROUPS = 16;
 static constexpr unsigned int HRX_Q6ID_CONTRACT_SLOTS = 2;
 static constexpr unsigned int HRX_Q6ID_CONTRACT_VALUES =
     HRX_Q6ID_CONTRACT_GROUPS * HRX_Q6ID_CONTRACT_SLOTS * HRX_Q6ID_CONTRACT_LANES;
+static constexpr unsigned int HRX_Q6ID_CONTRACT_PROD_ROWS = 64;
+static constexpr unsigned int HRX_Q6ID_CONTRACT_PROD_COLS = 33;
+static constexpr unsigned int HRX_Q6ID_CONTRACT_PROD_VALUES =
+    HRX_Q6ID_CONTRACT_PROD_ROWS * HRX_Q6ID_CONTRACT_PROD_COLS;
 
 static __host__ __device__ __forceinline__ unsigned int q6id_contract_index(
         unsigned int group,
@@ -120,6 +124,39 @@ static __device__ __forceinline__ void q6id_contract_store_value(
     const unsigned int index = q6id_contract_index(group, slot, lane);
     dst[index] = value;
     atomicAdd(counts + index, 1u);
+}
+
+static __device__ __forceinline__ float q6id_contract_prod_value(
+        unsigned int group,
+        unsigned int reg,
+        unsigned int lane) {
+    return 1.0f + static_cast<float>(group) * 0.03125f +
+        static_cast<float>(reg) * 0.00390625f +
+        static_cast<float>(lane) * 0.00006103515625f;
+}
+
+static __device__ __forceinline__ void q6id_contract_prod_store_group(
+        float * dst,
+        unsigned int * counts,
+        unsigned int group,
+        unsigned int lane,
+        float value_bias) {
+    const unsigned int row_tile = group & 3u;
+    const unsigned int col_tile = (group >> 2u) & 3u;
+    const unsigned int row_lane = lane >> 4u;
+    const unsigned int col = col_tile * 16u + (lane & 15u);
+    if (col >= HRX_Q6ID_CONTRACT_PROD_COLS) {
+        return;
+    }
+#pragma unroll
+    for (unsigned int reg = 0; reg < 4u; ++reg) {
+        const unsigned int row = row_tile * 16u + row_lane + reg * 4u;
+        if (row < HRX_Q6ID_CONTRACT_PROD_ROWS) {
+            const unsigned int index = col * HRX_Q6ID_CONTRACT_PROD_ROWS + row;
+            dst[index] = q6id_contract_prod_value(group, reg, lane) + value_bias;
+            atomicAdd(counts + index, 1u);
+        }
+    }
 }
 
 static __device__ __forceinline__ unsigned int q6id_contract_stage_index(
@@ -235,6 +272,85 @@ void q6_id_subgroup_contract_direct_probe(float * dst, unsigned int * counts) {
     for (unsigned int group = 0; group < HRX_Q6ID_CONTRACT_GROUPS; ++group) {
         q6id_contract_store_value(dst, counts, group, 0u, lane, q6id_contract_seed(group, 0u, lane));
         q6id_contract_store_value(dst, counts, group, 1u, lane, q6id_contract_seed(group, 1u, lane));
+    }
+}
+
+extern "C" __global__ __launch_bounds__(256, 1)
+void q6_id_subgroup_contract_prodaddr_direct_probe(float * dst, unsigned int * counts) {
+    const unsigned int lane = __builtin_amdgcn_workitem_id_x() & 63u;
+    const unsigned int wave = __builtin_amdgcn_workitem_id_x() >> 6u;
+    if (wave != 0u) {
+        return;
+    }
+
+#pragma unroll
+    for (unsigned int group = 0; group < HRX_Q6ID_CONTRACT_GROUPS; ++group) {
+        q6id_contract_prod_store_group(dst, counts, group, lane, 0.0f);
+    }
+}
+
+extern "C" __global__ __launch_bounds__(256, 1)
+void q6_id_subgroup_contract_prodaddr_radv96_duplicate_probe(float * dst, unsigned int * counts) {
+    __shared__ uint16_t sh_stage[6 * 64 * 4];
+
+    const unsigned int tid = __builtin_amdgcn_workitem_id_x();
+    const unsigned int lane = tid & 63u;
+    const unsigned int wave = tid >> 6u;
+    if (wave != 0u) {
+        return;
+    }
+
+#pragma unroll
+    for (unsigned int group = 0; group < 8u; ++group) {
+        q6id_contract_prod_store_group(dst, counts, group, lane, 0.0f);
+    }
+
+#pragma unroll
+    for (unsigned int group = 8u; group < 14u; ++group) {
+        const unsigned int stage_base = (group - 8u) * 64u * 4u + lane * 4u;
+#pragma unroll
+        for (unsigned int reg = 0; reg < 4u; ++reg) {
+            sh_stage[stage_base + reg] = static_cast<uint16_t>(0x1000u + group * 16u + reg);
+        }
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+#pragma unroll
+    for (unsigned int group = 8u; group < 14u; ++group) {
+        q6id_contract_prod_store_group(dst, counts, group, lane, 0.0f);
+    }
+
+#pragma unroll
+    for (unsigned int group = 14u; group < 20u; ++group) {
+        const unsigned int acc_group = group < 16u ? group : group - 8u;
+        const unsigned int stage_base = (group - 14u) * 64u * 4u + lane * 4u;
+#pragma unroll
+        for (unsigned int reg = 0; reg < 4u; ++reg) {
+            sh_stage[stage_base + reg] = static_cast<uint16_t>(0x2000u + acc_group * 16u + reg);
+        }
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+#pragma unroll
+    for (unsigned int group = 14u; group < 20u; ++group) {
+        if (group < 16u) {
+            q6id_contract_prod_store_group(dst, counts, group, lane, 0.0f);
+        } else {
+            q6id_contract_prod_store_group(dst, counts, group - 8u, lane, 0.0f);
+        }
+    }
+
+#pragma unroll
+    for (unsigned int group = 20u; group < 24u; ++group) {
+        const unsigned int acc_group = group - 8u;
+        const unsigned int stage_base = (group - 20u) * 64u * 4u + lane * 4u;
+#pragma unroll
+        for (unsigned int reg = 0; reg < 4u; ++reg) {
+            sh_stage[stage_base + reg] = static_cast<uint16_t>(0x3000u + acc_group * 16u + reg);
+        }
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+#pragma unroll
+    for (unsigned int group = 20u; group < 24u; ++group) {
+        q6id_contract_prod_store_group(dst, counts, group - 8u, lane, 0.0f);
     }
 }
 
@@ -675,6 +791,11 @@ static void clear_buffers(float * d_dst, unsigned int * d_counts) {
     HIP_CHECK(hipMemset(d_counts, 0, HRX_Q6ID_CONTRACT_VALUES * sizeof(unsigned int)));
 }
 
+static void clear_prod_buffers(float * d_dst, unsigned int * d_counts) {
+    HIP_CHECK(hipMemset(d_dst, 0, HRX_Q6ID_CONTRACT_PROD_VALUES * sizeof(float)));
+    HIP_CHECK(hipMemset(d_counts, 0, HRX_Q6ID_CONTRACT_PROD_VALUES * sizeof(unsigned int)));
+}
+
 static double run_kernel(const std::string & name, int reps, float * d_dst, unsigned int * d_counts) {
     clear_buffers(d_dst, d_counts);
     HIP_CHECK(hipDeviceSynchronize());
@@ -725,6 +846,46 @@ static bool validate(float * d_dst, unsigned int * d_counts) {
     return ok;
 }
 
+struct prod_validate_result {
+    bool ok = false;
+    unsigned int missed = 0;
+    unsigned int duplicated = 0;
+    unsigned int max_count = 0;
+};
+
+static prod_validate_result validate_prod(float * d_dst, unsigned int * d_counts, bool allow_tail_duplicates) {
+    std::vector<float> values(HRX_Q6ID_CONTRACT_PROD_VALUES);
+    std::vector<unsigned int> counts(HRX_Q6ID_CONTRACT_PROD_VALUES);
+    HIP_CHECK(hipMemcpy(values.data(), d_dst, values.size() * sizeof(float), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(counts.data(), d_counts, counts.size() * sizeof(unsigned int), hipMemcpyDeviceToHost));
+
+    prod_validate_result result;
+    result.ok = true;
+    for (unsigned int col = 0; col < HRX_Q6ID_CONTRACT_PROD_COLS; ++col) {
+        for (unsigned int row = 0; row < HRX_Q6ID_CONTRACT_PROD_ROWS; ++row) {
+            const unsigned int index = col * HRX_Q6ID_CONTRACT_PROD_ROWS + row;
+            const unsigned int count = counts[index];
+            result.max_count = std::max(result.max_count, count);
+            const bool duplicate_allowed = allow_tail_duplicates && col == 32u;
+            const bool count_ok = duplicate_allowed ? (count >= 1u && count <= 2u) : (count == 1u);
+            if (count == 0u) {
+                ++result.missed;
+            } else if (count > 1u) {
+                ++result.duplicated;
+            }
+            if (!count_ok || !std::isfinite(values[index])) {
+                if (result.ok) {
+                    std::fprintf(stderr,
+                        "prod validation failure at row=%u col=%u count=%u value=%f allow_tail_duplicates=%d\n",
+                        row, col, count, values[index], allow_tail_duplicates ? 1 : 0);
+                }
+                result.ok = false;
+            }
+        }
+    }
+    return result;
+}
+
 int main(int argc, char ** argv) {
     int reps = 10000;
     if (argc > 1) {
@@ -741,6 +902,10 @@ int main(int argc, char ** argv) {
     unsigned int * d_counts = nullptr;
     HIP_CHECK(hipMalloc(&d_dst, HRX_Q6ID_CONTRACT_VALUES * sizeof(float)));
     HIP_CHECK(hipMalloc(&d_counts, HRX_Q6ID_CONTRACT_VALUES * sizeof(unsigned int)));
+    float * d_prod_dst = nullptr;
+    unsigned int * d_prod_counts = nullptr;
+    HIP_CHECK(hipMalloc(&d_prod_dst, HRX_Q6ID_CONTRACT_PROD_VALUES * sizeof(float)));
+    HIP_CHECK(hipMalloc(&d_prod_counts, HRX_Q6ID_CONTRACT_PROD_VALUES * sizeof(unsigned int)));
 
     clear_buffers(d_dst, d_counts);
     q6_id_subgroup_contract_direct_probe<<<1, 256>>>(d_dst, d_counts);
@@ -778,6 +943,18 @@ int main(int argc, char ** argv) {
     HIP_CHECK(hipDeviceSynchronize());
     const bool bankedcompact_ok = validate(d_dst, d_counts);
 
+    clear_prod_buffers(d_prod_dst, d_prod_counts);
+    q6_id_subgroup_contract_prodaddr_direct_probe<<<1, 256>>>(d_prod_dst, d_prod_counts);
+    HIP_CHECK(hipGetLastError());
+    HIP_CHECK(hipDeviceSynchronize());
+    const prod_validate_result prod_direct = validate_prod(d_prod_dst, d_prod_counts, false);
+
+    clear_prod_buffers(d_prod_dst, d_prod_counts);
+    q6_id_subgroup_contract_prodaddr_radv96_duplicate_probe<<<1, 256>>>(d_prod_dst, d_prod_counts);
+    HIP_CHECK(hipGetLastError());
+    HIP_CHECK(hipDeviceSynchronize());
+    const prod_validate_result prod_radv96_duplicate = validate_prod(d_prod_dst, d_prod_counts, true);
+
     const double direct_us = run_kernel("direct", reps, d_dst, d_counts);
     const double staged_us = run_kernel("staged", reps, d_dst, d_counts);
     const double loaddeep_us = run_kernel("loaddeep", reps, d_dst, d_counts);
@@ -791,8 +968,21 @@ int main(int argc, char ** argv) {
     std::printf("minstore,%d,%.6f\n", minstore_ok ? 1 : 0, minstore_us);
     std::printf("banked,%d,%.6f\n", banked_ok ? 1 : 0, banked_us);
     std::printf("bankedcompact,%d,%.6f\n", bankedcompact_ok ? 1 : 0, bankedcompact_us);
+    std::printf("prodaddr_direct,%d,missed=%u,duplicated=%u,max_count=%u\n",
+        prod_direct.ok ? 1 : 0,
+        prod_direct.missed,
+        prod_direct.duplicated,
+        prod_direct.max_count);
+    std::printf("prodaddr_radv96_duplicate,%d,missed=%u,duplicated=%u,max_count=%u\n",
+        prod_radv96_duplicate.ok ? 1 : 0,
+        prod_radv96_duplicate.missed,
+        prod_radv96_duplicate.duplicated,
+        prod_radv96_duplicate.max_count);
 
     HIP_CHECK(hipFree(d_dst));
     HIP_CHECK(hipFree(d_counts));
-    return (direct_ok && staged_ok && loaddeep_ok && minstore_ok && banked_ok && bankedcompact_ok) ? 0 : 1;
+    HIP_CHECK(hipFree(d_prod_dst));
+    HIP_CHECK(hipFree(d_prod_counts));
+    return (direct_ok && staged_ok && loaddeep_ok && minstore_ok && banked_ok && bankedcompact_ok &&
+            prod_direct.ok && prod_radv96_duplicate.ok) ? 0 : 1;
 }
