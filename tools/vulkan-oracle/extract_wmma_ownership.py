@@ -212,6 +212,12 @@ def summarize_wmma(events, load_groups):
         "b": collections.Counter(),
         "c": collections.Counter(),
     }
+    operand_widths = {
+        "dst": collections.Counter(),
+        "a": collections.Counter(),
+        "b": collections.Counter(),
+        "c": collections.Counter(),
+    }
     load_group_uses = collections.Counter()
     wait_ladder = []
 
@@ -262,7 +268,17 @@ def summarize_wmma(events, load_groups):
             rendered = render_range(rng)
             if rendered:
                 operand_uses[key][rendered] += 1
+                operand_widths[key][range_width(rng)] += 1
         wmma_events.append(item)
+
+    compact_f16_summary = {
+        key: {
+            "width4": widths.get(4, 0),
+            "width8": widths.get(8, 0),
+            "other": sum(count for width, count in widths.items() if width not in (4, 8)),
+        }
+        for key, widths in operand_widths.items()
+    }
 
     return {
         "count": len(wmma_events),
@@ -271,6 +287,11 @@ def summarize_wmma(events, load_groups):
             key: dict(counter.most_common())
             for key, counter in operand_uses.items()
         },
+        "operand_widths": {
+            key: {str(width): count for width, count in sorted(counter.items())}
+            for key, counter in operand_widths.items()
+        },
+        "compact_f16_summary": compact_f16_summary,
         "load_group_uses": dict(load_group_uses.most_common()),
         "wait_ladder": wait_ladder,
     }
@@ -349,6 +370,7 @@ def compare(lhs, rhs):
             "rhs": rhs_wmma["wait_ladder"],
         },
         "operand_bank_overlap": {},
+        "operand_widths": {},
     }
     for key in ("dst", "a", "b", "c"):
         lhs_set = set_from(lhs_wmma["unique_operands"].get(key, {}))
@@ -359,6 +381,12 @@ def compare(lhs, rhs):
             "common": sorted(lhs_set & rhs_set),
             "lhs_only": sorted(lhs_set - rhs_set),
             "rhs_only": sorted(rhs_set - lhs_set),
+        }
+        result["operand_widths"][key] = {
+            "lhs": lhs_wmma.get("operand_widths", {}).get(key, {}),
+            "rhs": rhs_wmma.get("operand_widths", {}).get(key, {}),
+            "lhs_compact_f16": lhs_wmma.get("compact_f16_summary", {}).get(key, {}),
+            "rhs_compact_f16": rhs_wmma.get("compact_f16_summary", {}).get(key, {}),
         }
     return result
 
@@ -388,6 +416,21 @@ def write_markdown(path, payload):
             for operand, count in summary["wmma"]["unique_operands"].get(key, {}).items():
                 lines.append(f"| `{operand}` | {count} |")
             lines.append("")
+        lines += [
+            "### Operand Widths",
+            "",
+            "| Operand | Width Histogram | Width4 | Width8 | Other |",
+            "| --- | --- | ---: | ---: | ---: |",
+        ]
+        for key in ("dst", "a", "b", "c"):
+            widths = summary["wmma"].get("operand_widths", {}).get(key, {})
+            compact = summary["wmma"].get("compact_f16_summary", {}).get(key, {})
+            lines.append(
+                f"| `{key}` | `{json.dumps(widths, sort_keys=True)}` "
+                f"| {compact.get('width4', 0)} | {compact.get('width8', 0)} "
+                f"| {compact.get('other', 0)} |"
+            )
+        lines.append("")
         lines += [
             "### WMMA Sequence",
             "",
@@ -450,6 +493,31 @@ def write_markdown(path, payload):
             lines.append(
                 f"| `{key}` | {item['lhs_unique']} | {item['rhs_unique']} "
                 f"| {common} | {lhs_only} | {rhs_only} |"
+            )
+        lines += [
+            "",
+            "### Operand Width Comparison",
+            "",
+            "| Operand | LHS Widths | RHS Widths | LHS Width4/8/Other | RHS Width4/8/Other |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+        for key, item in comparison.get("operand_widths", {}).items():
+            lhs_compact = item.get("lhs_compact_f16", {})
+            rhs_compact = item.get("rhs_compact_f16", {})
+            lhs_tuple = (
+                lhs_compact.get("width4", 0),
+                lhs_compact.get("width8", 0),
+                lhs_compact.get("other", 0),
+            )
+            rhs_tuple = (
+                rhs_compact.get("width4", 0),
+                rhs_compact.get("width8", 0),
+                rhs_compact.get("other", 0),
+            )
+            lines.append(
+                f"| `{key}` | `{json.dumps(item.get('lhs', {}), sort_keys=True)}` "
+                f"| `{json.dumps(item.get('rhs', {}), sort_keys=True)}` "
+                f"| `{lhs_tuple}` | `{rhs_tuple}` |"
             )
         lines += [
             "",
