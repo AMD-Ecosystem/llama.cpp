@@ -10716,6 +10716,55 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_identity_direct8_q6addr_upperdepnomem_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_identity_direct8_q6addr_upperdepnomem_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_identity_direct8_q6addr_upperdepnomem_wg256",
+    "artifact_id": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_identity_direct8_q6addr_upperdepnomem_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_identity_direct8_q6addr_upperdepnomem_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q6_dense_prompt_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_identity_direct8_q6addr_upperdepnomem_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q6_K x F32 -> F32 MUL_MAT",
+      "k_multiple": 256,
+      "rows_min": 16,
+      "cols_min": 16,
+      "cols_max": 64,
+      "requires_env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASMWAIT_RADVSEQ_ACC8_IDENTITY_DIRECT8_Q6ADDR_UPPERDEPNOMEM_F16ACC_WG256_PROMPT",
+      "prior_delta": "Bracketed ACC8 semantic probe derived from the rejected mapped-direct8 route. It preserves the same RADV-sequence ACC8 math and direct eight-output-tile writeback but stores acc[group] to group rather than applying the derived {0,2,4,6,1,3,5,7} map. Expected signal is whether the previous CPU-reference failure was caused by the map or by ACC8/direct writeback more generally."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_identity_direct8_q6addr_upperdepnomem_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_focused_correctness",
+      "selection": "Opt-in diagnostic selected for Qwen3 Q6 p33 ffn_out-0 and result_output under GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASMWAIT_RADVSEQ_ACC8_IDENTITY_DIRECT8_Q6ADDR_UPPERDEPNOMEM_F16ACC_WG256_PROMPT=1, while Vcur-0 stayed on rows2_cols8 as expected.",
+      "prior_art": "cache/hrxv1/gfx1151/q6-acc8-mapped-direct8-route-3e8f72f6b-dirty-20260621-113135/ and cache/hrxv1/gfx1151/q6-medium-contract-screen-acc8-mapped-direct8-3e8f72f6b-dirty-20260621-113255/.",
+      "artifact": "cache/hrxv1/gfx1151/q6-acc8-identity-direct8-route-25820081b-dirty-20260621-114304/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-acc8-identity-direct8-25820081b-dirty-20260621-114350/",
+      "reason": "Rejected before timing: focused CPU-reference failed ffn_out-0-p33 with ERR 1.524415220 and result_output-p33 with ERR 1.515298112. This was worse than the mapped-direct8 probe, so the derived map was at least closer than identity. Static screen again matched compact f16 accumulator ownership, WMMA operand topology, 16 WMMA ops, 48 ds_load_b64 ops, and the RADV wait ladder, but direct8 still lacks the RADV 96-store/halfword LDS writeback surface."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_overlaya_f16acc_wg256_f32",
     "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_overlaya_f16acc_wg256",
     "op": "MUL_MAT",
