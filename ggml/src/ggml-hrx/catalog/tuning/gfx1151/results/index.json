@@ -1131,7 +1131,7 @@
         "focused_cpu_reference": "latest Q6 typed-stage and Q8/Q5 transfer candidates either passed focused rows then lost timing, or failed correctness/resource gates before promotion",
         "compile_report_path": "CMake/Ninja-built generated HSACOs under build/hrx-v1-catalog-gfx1151 and CMake-built hip-bench executables",
         "target_listing_path": "compare_amdgcn_isa.py, hrx_isa_window_summary.py, and extracted hip-bench fatbin/objdump artifacts referenced by the rejection rows",
-        "prior_art_schedule_source": "RADV Vulkan oracle medium and large aligned prompt schedules: Q6 p33 medium 16 WMMA/48 ds_load_b64/96 buffer_store_b32/no spills, Q8/Q5 large 32 WMMA/64 ds_load_b64/192 buffer_store_b32/no spills",
+        "prior_art_schedule_source": "RADV Vulkan oracle medium and large aligned prompt schedules, with store-path totals interpreted by branch. Q6 p33 medium remains 16 WMMA/48 ds_load_b64/96 static buffer_store_b32/no spills. Q8/Q6 large have 32 WMMA/64 ds_load_b64/no spills, but the 192 static buffer_store_b32 total is split across direct, staged, and partial/tail writeback alternatives rather than a single full-tile hot path.",
         "promotion_rule": "do not promote another source-level HIP C++ wrapper for Q6 p33, Q8 p512, or Q5 p512 unless it proves a new lower-level ownership/store primitive or materially different packed dataflow, then passes p33/p512/p513 focused correctness, route traces, static no-spill evidence, and same-runner timing against the accepted default"
       },
       "findings": [
