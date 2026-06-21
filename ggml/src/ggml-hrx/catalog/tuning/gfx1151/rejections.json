@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_vk64_q6addr_upperdepnomem_padkeep_fc1a5537c_dirty",
+      "date": "2026-06-21",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_padkeep_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASM_COPYAB_Q6ADDR_UPPERDEPNOMEM_PADKEEP_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-q6addr-upperdepnomem-padkeep-route-fc1a5537c-dirty-20260621-093903/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-q6addr-upperdepnomem-padkeep-fc1a5537c-dirty-20260621-093849/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_padkeep_wg256.hsaco",
+      "reason": "This opt-in Q6_K p33 route tested retained b_pad fragment dependencies after wait123 and wait12312 failed correctness. It keeps q6addr upperdepnomem output ownership, COPY_NOMEM fragment copies, the initial lgkmcnt(40), and full PADWAIT_LADDER wait placement, then restores retained b_pad fragments consumed after the WMMA loop. Focused CPU-reference passed for selected ffn_out-0 and result_output p33 rows, proving retained pad fragments are the correctness-preserving dependency in this HIP C++ spelling. Reject for promotion because it is still far from the RADV schedule and slow: static screening reports VGPR 170 versus RADV 144, LDS 14336 versus 11264, ds_store_b16 2 versus 64, store-cluster LDS stores 10 versus 70, and same-runner focused p33 timing regressed total 13805.372 us -> 23515.047 us, with result_output 11509.188 us -> 20647.195 us. Keep as correctness evidence only; next work needs a lower-cost way to preserve the dependency or a lower-level issue primitive."
+    },
+    {
       "id": "q6_k_vk64_q6addr_upperdepnomem_wait12312_9d5ef7e05_dirty",
       "date": "2026-06-21",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_wait12312_f16acc_wg256_f32",
