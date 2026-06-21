@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_vk64_q6addr_asmwait_radvseq_acc8_storemix_overlaya_route_689b104b7_dirty",
+      "date": "2026-06-21",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_storekill_storemix_overlaya_q6addr_upperdepnomem_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASMWAIT_RADVSEQ_ACC8_STOREMIX_OVERLAYA_Q6ADDR_UPPERDEPNOMEM_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-acc8-storemix-overlaya-route-689b104b7-dirty-20260621-115021/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-asmwait-radvseq-acc8-storemix-overlaya-b67392555-dirty-20260621-111436/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_storekill_storemix_overlaya_q6addr_upperdepnomem_wg256.hsaco",
+      "reason": "This opt-in Q6_K p33 route promoted the exact static-contract-passing ACC8 storemix overlay-A HSACO into the runtime selector. The HSACO matches the Q6 p33 RADV medium static screen: 16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 64 ds_store_b16, 96 buffer_store_b32, 11264-byte LDS, two barriers, zero spills, compact ownership, and the RADV wait ladder. It selected for the intended ffn_out and result_output p33 dense rows, but focused CPU-reference failed: ffn_out ERR=1.507813505 and result_output ERR=1.515982246. Reject before timing. Conclusion: the current static screen can match opcode/ownership/wait shape while missing the semantic value/lane mapping needed for Q6 output correctness. Future work needs a lower-level fragment-coordinate/value fixture or a different cooperative-matrix spelling, not more timing of this ACC8 storemix route."
+    },
+    {
       "id": "q6_k_vk64_q6addr_asmwait_radvseq_acc8_identity_direct8_25820081b_dirty",
       "date": "2026-06-21",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_identity_direct8_q6addr_upperdepnomem_f16acc_wg256_f32",

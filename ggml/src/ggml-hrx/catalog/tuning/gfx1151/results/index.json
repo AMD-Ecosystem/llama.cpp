@@ -3,6 +3,52 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_k_vk64_q6addr_asmwait_radvseq_acc8_storemix_overlaya_route_689b104b7_dirty",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/q6-acc8-storemix-overlaya-route-689b104b7-dirty-20260621-115021/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-asmwait-radvseq-acc8-storemix-overlaya-b67392555-dirty-20260621-111436/",
+      "source_commit": "689b104b7-dirty",
+      "tool": "CMake/Ninja-built ACC8 storemix overlay-A Q6 ASMWAIT RADV-sequence HSACO, test-backend-ops focused CPU-reference, and existing tools/vulkan-oracle/run_q6_medium_contract_screen.py artifact",
+      "status": "rejected_gfx1151_focused_correctness",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_storekill_storemix_overlaya_q6addr_upperdepnomem_f16acc_wg256_f32",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K p33 dense prompt medium-route exact static clone. Promote the static-contract-passing ACC8 storemix overlay-A HSACO to a selectable route and test whether its RADV-matched mixed LDS/writeback surface is CPU-reference correct.",
+        "baseline_command": "static contract artifact cache/hrxv1/gfx1151/q6-medium-contract-screen-asmwait-radvseq-acc8-storemix-overlaya-b67392555-dirty-20260621-111436/ plus prior mapped/identity direct8 focused rejections.",
+        "variant_command": "cmake --build build/hrx-v1-catalog-gfx1151 --target test-backend-ops -j$(nproc), then GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASMWAIT_RADVSEQ_ACC8_STOREMIX_OVERLAYA_Q6ADDR_UPPERDEPNOMEM_F16ACC_WG256_PROMPT=1 test-backend-ops test -b HRX0 -o MUL_MAT --test-file cache/hrxv1/gfx1151/q6-wmma-vk64-padded44-medium-focused-20260618-062606/q6_prompt_p33.txt --output csv",
+        "same_runner_comparison_method": "not run; rejected before timing because focused CPU-reference failed.",
+        "route_trace_path": "cache/hrxv1/gfx1151/q6-acc8-storemix-overlaya-route-689b104b7-dirty-20260621-115021/p33-correctness.routes.log",
+        "scheduler_trace_path": "cache/hrxv1/gfx1151/q6-medium-contract-screen-asmwait-radvseq-acc8-storemix-overlaya-b67392555-dirty-20260621-111436/summary.md and compact-accumulator/wmma-ownership.md",
+        "focused_cpu_reference": "cache/hrxv1/gfx1151/q6-acc8-storemix-overlaya-route-689b104b7-dirty-20260621-115021/p33-correctness.csv",
+        "compile_report_path": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_storekill_storemix_overlaya_q6addr_upperdepnomem_wg256.hsaco built by CMake/Ninja.",
+        "target_listing_path": "static artifact compact-accumulator/hip.objdump.txt, compact-accumulator/wmma-ownership.md, and isa-compare.md.",
+        "prior_art_schedule_source": "Qwen3 30B Q6_K p33 RADV medium oracle and the storemix overlay-A static screen that matched every source-controlled static contract check.",
+        "promotion_rule": "reject before timing unless focused CPU-reference passes for the selected dense rows and route traces prove selection without fallback."
+      },
+      "focused_result": {
+        "selected_provider": true,
+        "passed": false,
+        "passed_rows": [
+          "Vcur-0-p33 stayed on hrx_mul_mat_vec_q6_k_rows2_cols8_wg32_f32 and passed"
+        ],
+        "failed_rows": [
+          "ffn_out-0-p33 ERR=1.507813505",
+          "result_output-p33 ERR=1.515982246"
+        ]
+      },
+      "static_result": {
+        "exact_static_contract_passed": true,
+        "compact_f16_accumulator_screen_passed": true,
+        "wmma_operand_topology_passed": true,
+        "matching_facts": "16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 64 ds_store_b16, 96 buffer_store_b32, two barriers, 11264-byte LDS, zero spills, compact ownership, operand first-use patterns, A/B load-source first-use patterns, and the lgkmcnt ladder all match RADV under the current source-controlled screen.",
+        "remaining_misses": "Focused CPU-reference fails despite exact static screen pass, so the missing evidence is semantic value/lane-coordinate correctness for the ACC8 compact fragment and mixed store surface."
+      },
+      "findings": [
+        "exact RADV static contract matching is not sufficient for this Q6 ACC8 route",
+        "the p33 failure is now narrowed to a semantic fragment/value mapping issue rather than route wiring, opcode counts, wait ladder, LDS footprint, or store-surface counts",
+        "next Q6 work should build a low-level fragment-coordinate/value fixture or use a different cooperative-matrix spelling before adding more catalog routes"
+      ]
+    },
+    {
       "id": "q6_k_vk64_q6addr_asmwait_radvseq_acc8_identity_direct8_25820081b_dirty",
       "date": "2026-06-21",
       "artifact": "cache/hrxv1/gfx1151/q6-acc8-identity-direct8-route-25820081b-dirty-20260621-114304/",
