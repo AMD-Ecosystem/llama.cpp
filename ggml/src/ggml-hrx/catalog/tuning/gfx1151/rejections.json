@@ -25,6 +25,36 @@
       "reason": "This opt-in route transferred the standalone upperexpwait fixture's explicit first-WMMA wait ladder into the production Q6_K p33 catalog path. It built through CMake/Ninja, selected under GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASM_COPYAB_PADLADDER_EXPWAIT_F16ACC_WG256_PROMPT=1, and passed focused CPU-reference for Vcur-0-p33, ffn_out-0-p33, and result_output-p33. Reject for promotion because same-runner focused timing regressed every row versus the accepted H4LOAD default: Vcur-0-p33 397.144 -> 514.373 us, ffn_out-0-p33 2405.729 -> 2922.757 us, result_output-p33 11301.292 -> 20686.143 us, and total focused time 14.104 ms -> 24.123 ms. Static evidence shows why this is not a full RADV clone: although it has 16 WMMA, 48 ds_load_b64, 2 barriers, and the intended explicit wait shape, it still uses only 64 buffer_store_b32, only 2 ds_store_b16, and retains the high-cost K2/padladder dataflow. Future Q6 p33 work should target output/store ownership and lower-cost dataflow instead of another explicit-wait-only transfer."
     },
     {
+      "id": "q6_k_vk64_depwait_p33stagetail_rejection_da3ac5ad8_dirty",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_depwait_p33stagetail_f16acc_wg256_f32",
+      "env": "standalone CMake/Ninja-built Q6 p33 diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-kloop-depwait-p33stagetail-da3ac5ad8-dirty-20260620-204240/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-kloop-depwait-p33stagetail-da3ac5ad8-dirty-20260620-204240/",
+      "compile_artifact": "CMake/Ninja-built gfx1151 catalog HSACO for the p33stagetail diagnostic",
+      "reason": "This standalone Q6_K p33 diagnostic tested whether staging only the odd p33 tail could recover useful RADV-like halfword writeback while preserving the depwait first-WMMA window. Normal p33 rows passed CPU-reference and the static first-WMMA window stayed RADV-like: 59 pre-hot loads, 48 immediate LDS loads, and final lgkmcnt(40). Reject before route selection because same-runner standalone timing was flat versus depwait and p33branch comparators: 64x33 k3584 was 407.462 us versus depwait 406.415 us, and 128x33 k3584 was 412.732 us versus depwait 412.703 us. The static writeback surface remains far from RADV p33 medium: HIP p33stagetail has 48 buffer_store_b32, 18 ds_store_b16, 16 ds_load_u16_d16, and VGPR=170, while RADV has 96 buffer_store_b32, 64 ds_store_b16, 64 ds_load_u16_d16, and VGPR=144. Odd-tail staging alone is a closed axis; future work needs a lower-live per-tile staged ownership primitive."
+    },
+    {
+      "id": "q6_k_vk64_depwait_p33branch_rejection_eff506276_dirty",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_depwait_p33branch_f16acc_wg256_f32",
+      "env": "standalone CMake/Ninja-built Q6 p33 diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-kloop-depwait-p33branch-eff506276-dirty-20260620-203715/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-kloop-depwait-p33branch-eff506276-dirty-20260620-203715/",
+      "compile_artifact": "CMake/Ninja-built gfx1151 catalog HSACO for the p33branch diagnostic",
+      "reason": "This standalone Q6_K p33 diagnostic tested whether specializing branch paths for p33 would lower unused output lifetime while preserving RADV's depwait issue window. Normal p33 rows passed CPU-reference, LDS stayed at 11264 bytes, barrier count stayed at 2, and the first-WMMA window remained 59 pre-hot loads, 48 immediate LDS loads, and final lgkmcnt(40). Reject before route selection because timing was flat or regressive: 64x33 k3584 was 404.506 us versus depwait 404.773 us, while 128x33 k3584 was 414.557 us versus depwait 408.095 us. The branch specialization also compiles away the wrong work: HIP drops to 48 buffer_store_b32 and 2 ds_store_b16 instead of RADV's 96 buffer_store_b32 and 64 ds_store_b16. Deleting unused branches is not the parity schedule."
+    },
+    {
+      "id": "q6_k_vk64_depwait_stagefull_rejection_169147f5e_dirty",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_depwait_stagefull_f16acc_wg256_f32",
+      "env": "standalone CMake/Ninja-built Q6 p33 diagnostic; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-kloop-depwait-stagefull-169147f5e-dirty-20260620-202900/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-kloop-depwait-stagefull-169147f5e-dirty-20260620-202900/",
+      "compile_artifact": "CMake/Ninja-built gfx1151 catalog HSACO for the stagefull diagnostic",
+      "reason": "This standalone Q6_K p33 diagnostic composed the preserved RADV first-WMMA issue window with full halfword staged output traffic at RADV's 11264-byte LDS footprint. Normal rows passed CPU-reference and the static surface matched RADV on 64 ds_store_b16, 64 ds_load_u16_d16, 2 barriers, and no spills. Reject before route selection because timing stayed in the slow depwait family: 64x33 k3584 was 412.707 us, 64x64 k3584 was 453.952 us, and 128x33 k3584 was 412.762 us. The generic full/tail branch surface duplicates stores and live output values, producing 128 buffer_store_b32 and VGPR=169 instead of RADV's 96 buffer_store_b32 and VGPR=144. Future Q6 p33 work should separate full-column tiles from odd/tail columns with a lower-live per-tile staged branch primitive rather than reusing the generic full-stage drain."
+    },
+    {
       "id": "wmma_f16_inline_compact_accumulator_probe",
       "date": "2026-06-21",
       "route": "hrx-hip-bench-wmma-f16-lane-map --mode=inline-compact-acc",
