@@ -1,0 +1,11 @@
+#define HRX_Q5_K_WMMA_VK128_EXPORT hrx_mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_packstage_fast_half_motif192_asmwait_bufferstore_f16acc_wg256_f32
+#define HRX_Q5_K_WMMA_VK128_SHARED_STRIDE 40
+#define HRX_Q5_K_WMMA_VK128_W64 1
+#define HRX_Q5_K_WMMA_VK128_W64_B64GROUP 1
+#define HRX_Q5_K_WMMA_VK128_W64_B64GROUP_ASMWAIT 1
+#define HRX_Q5_K_WMMA_VK128_FULL_TILE_STORE 1
+#define HRX_Q5_K_WMMA_VK128_STORE_STAGE_FAST_HALF 1
+#define HRX_Q5_K_WMMA_VK128_MOTIF192_FULL_WRITEBACK 1
+#define HRX_Q5_K_WMMA_VK128_BUFFER_STORE 1
+#define HRX_Q5_K_WMMA_VK128_PACK_STAGE_B32 1
+#include "mul_mat_vec_q5_k_wmma16_vk128_wg256.hip.cpp"

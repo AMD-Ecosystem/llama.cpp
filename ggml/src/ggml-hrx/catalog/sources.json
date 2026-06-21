@@ -332,6 +332,9 @@
   "mul_mat_vec_q5_k_wmma16_vk128_padded_w64_b64group_packstage_fast_half_motif192_radvladder_bufferstore_wg256": {
     "path": "mul_mat_vec_q5_k_wmma16_vk128_padded_w64_b64group_packstage_fast_half_motif192_radvladder_bufferstore_wg256.hip.cpp"
   },
+  "mul_mat_vec_q5_k_wmma16_vk128_padded_w64_b64group_packstage_fast_half_motif192_asmwait_bufferstore_wg256": {
+    "path": "mul_mat_vec_q5_k_wmma16_vk128_padded_w64_b64group_packstage_fast_half_motif192_asmwait_bufferstore_wg256.hip.cpp"
+  },
   "mul_mat_vec_q5_k_wmma16_vk128_padded_w64_b64group_store_stage_wg256": {
     "path": "mul_mat_vec_q5_k_wmma16_vk128_padded_w64_b64group_store_stage_wg256.hip.cpp"
   },
