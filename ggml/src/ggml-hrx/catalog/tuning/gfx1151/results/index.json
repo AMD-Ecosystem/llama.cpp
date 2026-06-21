@@ -7385,6 +7385,45 @@
         "This does not overturn previous production route rejections: the route-facing upperdepnomem family was already mostly ABI/correctness clean and lost because the production HSACO did not preserve the low-wait/dependency surface of the fixture/RADV prior.",
         "Next Q6 p33 work should use this fixture as a pre-route gate, then focus on preserving the low-barrier/low-depctr schedule surface rather than another blind output-mapping splice."
       ]
+    },
+    {
+      "id": "q6_k_p33_vcur512_rows2_cols8_selector_rejection_7ca0f4023_dirty",
+      "date": "2026-06-21",
+      "source_commit": "7ca0f4023-dirty",
+      "artifact": "cache/hrxv1/gfx1151/qwen3-q6-p33-vcur512-default-7ca0f4023-dirty-20260621-073904/",
+      "status": "rejected_selector_only_model_smoke",
+      "route": "hrx_mul_mat_vec_q6_k_rows2_cols8_wg32_f32",
+      "env": "temporary default-policy extension only; reverted before commit",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K p33 dense prompt Vcur-0 row with shape q6_K[2048,512] x f32[2048,33], while preserving accepted H4LOAD for the dominant ffn/result rows",
+        "baseline_command": "GGML_HRX_TRACE_ROUTES=1 GGML_HRX_TRACE_PROVIDERS=1 build/hrx-v1-catalog-gfx1151/bin/test-backend-ops perf -b HRX0 -o MUL_MAT --test-file cache/hrxv1/gfx1151/qwen3-q6-p33-export-7ca0f4023-20260621-073306/focus/qk_prompt.txt --output csv",
+        "variant_command": "same focused command after temporarily broadening the existing gfx1151 Q6 Vcur rows2_cols8 selector from k=4096/rows=1024 to also include k=2048/rows=512",
+        "same_runner_comparison_method": "same rebuilt binary, sequential focused p33 dense MUL_MAT rows plus same-binary Qwen3 30B Q6_K p33 llama-bench default versus rollback",
+        "route_trace_path": "baseline qwen3-q6-p33-vcur512-baseline-7ca0f4023-20260621-073813/qk-perf.trace.log, variant qwen3-q6-p33-vcur512-default-7ca0f4023-dirty-20260621-073904/qk-perf.trace.log, rollback qwen3-q6-p33-vcur512-rollback-7ca0f4023-dirty-20260621-073930/qk-perf.trace.log",
+        "scheduler_trace_path": "not applicable; existing rows2_cols8 direct-F32 provider, selector-policy probe only",
+        "focused_cpu_reference": "variant focused test passed all four exported Qwen3 Q6 p33 dense MUL_MAT rows",
+        "compile_report_path": "CMake/Ninja rebuild of ggml-hrx.cpp and test-backend-ops in build/hrx-v1-catalog-gfx1151",
+        "target_listing_path": "existing generated HSACO for hrx_mul_mat_vec_q6_k_rows2_cols8_wg32_f32",
+        "prior_art_schedule_source": "previous accepted k=4096/rows=1024 Vcur selector promotion and rejected dense packed-MMQ64 fallback, which showed rows2_cols8 can be a good isolated Vcur path but not a broad p33 replacement",
+        "promotion_rule": "reject unless the isolated focused win produces a same-binary model improvement; do not promote selector-only pebbles that do not move the worst p33 model row."
+      },
+      "timing_result": {
+        "focused_baseline_total_us": 6735.748209,
+        "focused_variant_total_us": 6580.963447,
+        "focused_rollback_total_us": 6721.694622,
+        "vcur_baseline_us": 182.029297,
+        "vcur_variant_us": 24.765503,
+        "vcur_rollback_us": 181.791992,
+        "model_default_tok_s": 77.946248,
+        "model_rollback_tok_s": 83.944414
+      },
+      "findings": [
+        "focused route traces prove the temporary selector moved only the exact k=2048 rows=512 Vcur-like row from H4LOAD to rows2_cols8; rollback returned that row to H4LOAD",
+        "the focused row win is real: Vcur-0 improved from about 182 us to about 25 us, while node_28, Qcur-0, and result_output stayed on H4LOAD and were within noise",
+        "the focused total improvement is only about 155 us because result_output remains the dominant p33 dense row at roughly 5.9 ms",
+        "same-binary Qwen3 30B Q6_K p33 llama-bench did not justify promotion: default averaged 77.946 tok/s versus rollback 83.944 tok/s over three no-warmup samples, with high variance but no positive model signal",
+        "decision: revert the selector extension and record this as a rejected selector-only pebble. Future Q6 p33 work should stay on the dominant result_output/ffn schedule gap or a route that moves model-level evidence."
+      ]
     }
   ]
 }
