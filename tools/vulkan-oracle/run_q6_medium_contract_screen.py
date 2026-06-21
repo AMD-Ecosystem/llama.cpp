@@ -214,14 +214,18 @@ def ownership_contract(compact: dict | None) -> dict | None:
         item = operand_sequences.get(operand, {})
         lhs_sequence = item.get("lhs", [])
         rhs_sequence = item.get("rhs", [])
+        lhs_pattern = item.get("lhs_pattern", [])
+        rhs_pattern = item.get("rhs_pattern", [])
         checks.append(
             {
-                "kind": "wmma_operand_sequence",
+                "kind": "wmma_operand_sequence_pattern",
                 "name": operand,
-                "lhs": lhs_sequence,
-                "rhs": rhs_sequence,
-                "rule": "rhs operand/load sequence == lhs operand/load sequence",
-                "passed": rhs_sequence == lhs_sequence,
+                "lhs": lhs_pattern,
+                "rhs": rhs_pattern,
+                "lhs_exact": lhs_sequence,
+                "rhs_exact": rhs_sequence,
+                "rule": "rhs operand/load first-use pattern == lhs operand/load first-use pattern",
+                "passed": rhs_pattern == lhs_pattern,
             }
         )
 

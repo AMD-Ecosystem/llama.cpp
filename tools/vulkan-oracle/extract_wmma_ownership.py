@@ -365,6 +365,18 @@ def compare(lhs, rhs):
     def set_from(counter_dict):
         return set(counter_dict.keys())
 
+    def canonical_sequence(sequence):
+        names = {}
+        result = []
+        for item in sequence:
+            if item is None:
+                result.append(None)
+                continue
+            if item not in names:
+                names[item] = f"r{len(names)}"
+            result.append(names[item])
+        return result
+
     lhs_wmma = lhs["wmma"]
     rhs_wmma = rhs["wmma"]
     result = {
@@ -403,9 +415,17 @@ def compare(lhs, rhs):
             "rhs_compact_f16": rhs_wmma.get("compact_f16_summary", {}).get(key, {}),
         }
     for key in ("dst", "a", "b", "c", "a_load", "b_load"):
+        lhs_sequence = lhs_wmma.get("operand_sequences", {}).get(key, [])
+        rhs_sequence = rhs_wmma.get("operand_sequences", {}).get(key, [])
+        lhs_pattern = canonical_sequence(lhs_sequence)
+        rhs_pattern = canonical_sequence(rhs_sequence)
         result["operand_sequences"][key] = {
-            "lhs": lhs_wmma.get("operand_sequences", {}).get(key, []),
-            "rhs": rhs_wmma.get("operand_sequences", {}).get(key, []),
+            "lhs": lhs_sequence,
+            "rhs": rhs_sequence,
+            "lhs_pattern": lhs_pattern,
+            "rhs_pattern": rhs_pattern,
+            "exact_match": lhs_sequence == rhs_sequence,
+            "pattern_match": lhs_pattern == rhs_pattern,
         }
     return result
 
@@ -565,14 +585,14 @@ def write_markdown(path, payload):
             "",
             "### Operand Sequence Comparison",
             "",
-            "| Operand | LHS Sequence | RHS Sequence | Match |",
-            "| --- | --- | --- | --- |",
+            "| Operand | LHS Pattern | RHS Pattern | Pattern Match | Exact Match |",
+            "| --- | --- | --- | --- | --- |",
         ]
         for key, item in comparison.get("operand_sequences", {}).items():
-            lhs = item.get("lhs", [])
-            rhs = item.get("rhs", [])
             lines.append(
-                f"| `{key}` | `{json.dumps(lhs)}` | `{json.dumps(rhs)}` | `{lhs == rhs}` |"
+                f"| `{key}` | `{json.dumps(item.get('lhs_pattern', []))}` "
+                f"| `{json.dumps(item.get('rhs_pattern', []))}` "
+                f"| `{item.get('pattern_match', False)}` | `{item.get('exact_match', False)}` |"
             )
         lines += [
             "",

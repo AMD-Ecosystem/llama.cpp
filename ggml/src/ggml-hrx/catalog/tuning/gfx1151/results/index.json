@@ -3,6 +3,54 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_k_vk64_q6addr_asmwait_radvseq_acc8_storemix_normalized_8071ce4a7_dirty",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-asmwait-radvseq-acc8-storemix-normalized-8071ce4a7-dirty-20260621-110734/",
+      "source_commit": "8071ce4a7-dirty",
+      "tool": "tools/vulkan-oracle/extract_wmma_ownership.py and run_q6_medium_contract_screen.py with register-renaming-normalized WMMA sequence checks",
+      "status": "rejected_gfx1151_static_probe_load_source_provenance_and_lds_footprint_remaining",
+      "route": "static-only HSACO: hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_storekill_storemix_q6addr_upperdepnomem_f16acc_wg256_f32",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K p33 dense prompt medium-route WMMA issue, operand ownership, load-source provenance, and complete mixed LDS store surface. Re-screen the mixed-LDS probe with a register-renaming-normalized ownership gate so physical VGPR numbering does not masquerade as a schedule miss.",
+        "baseline_command": "static comparison against Qwen3 30B Q6_K p33 RADV medium oracle and q6_k_vk64_q6addr_asmwait_radvseq_acc8_storemix_899ede090_dirty.",
+        "variant_command": "run_q6_medium_contract_screen.py on the existing CMake/Ninja-built mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_storekill_storemix_q6addr_upperdepnomem_wg256.hsaco after normalized-sequence tooling refresh",
+        "same_runner_comparison_method": "not run; still rejected at static schedule gate before route wiring, focused correctness, or timing.",
+        "route_trace_path": "not applicable; no production provider wired.",
+        "scheduler_trace_path": "artifact summary.md, isa-compare.md, contract-check.json, compact-accumulator/wmma-ownership.json, and compact-accumulator/wmma-ownership.md.",
+        "focused_cpu_reference": "not run after static rejection.",
+        "compile_report_path": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_storekill_storemix_q6addr_upperdepnomem_wg256.hsaco from commit 8071ce4a7.",
+        "target_listing_path": "artifact compact-accumulator/hip.objdump.txt, compact-accumulator/wmma-ownership.md, and isa-compare.md.",
+        "prior_art_schedule_source": "Qwen3 30B Q6_K p33 RADV medium oracle plus q6_k_vk64_q6addr_asmwait_radvseq_acc8_storemix_899ede090_dirty.",
+        "promotion_rule": "reject before provider wiring unless a candidate matches RADV opcode/resource counts, first-WMMA wait window, compact accumulator form, dst/A/B/C operand first-use patterns, A/B load-source first-use patterns, exact mixed LDS store/loadback surface, and production-valid writeback ownership."
+      },
+      "static_result": {
+        "exact_static_contract_passed": false,
+        "compact_f16_accumulator_screen_passed": true,
+        "wmma_operand_topology_passed": false,
+        "matching_facts": "16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 64 ds_store_b16, 4 ds_store_2addr_b32, 2 ds_store_b128, 96 buffer_store_b32, two barriers, zero scratch/spills, compact f16 accumulator screen pass, load_b64_immediately_before_final_wait=48, final_pre_wmma_lgkmcnt=40, wmma_in_window=16, store-cluster LDS stores=70, exact RADV lgkmcnt ladder [40,36,32,28,24,16,7,6,1,0], dst/A/B/C reuse and unique-bank counts, and dst/A/B/C operand first-use patterns all match RADV under register renaming.",
+        "repaired_facts": "The normalized ownership gate proves the previous literal dst/A/B/C register-sequence failures were physical VGPR-number differences, not actual operand-order misses. HIP and RADV share the same dst/C pattern [0,1,2,3,4,5,6,7,0,1,2,3,4,5,7,6], A pattern [0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7], and B pattern [0,1,0,1,0,1,0,1,2,3,2,3,2,3,3,2].",
+        "remaining_misses": "A/B load-source provenance remains collapsed after the first groups: A load pattern is RADV [0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7] versus HIP [0,0,1,1,2,2,2,2,2,2,2,2,2,2,2,2], and B load pattern is RADV [0,1,0,1,0,1,0,1,2,3,2,3,2,3,3,2] versus HIP [0,1,0,1,0,1,0,1,2,2,2,2,2,2,2,2]. LDS is 14336 versus 11264, instruction count is 2022 versus RADV 2343, and the route remains static-only because ACC8 aliases sixteen logical accumulators through eight and is not a production-valid writeback contract.",
+        "resource_facts": {
+          "sgpr": 42,
+          "vgpr": 141,
+          "lds_bytes": 14336,
+          "scratch_bytes": 0,
+          "instructions": 2022,
+          "s_waitcnt": 89,
+          "buffer_store_b32": 96,
+          "ds_store_b16": 64,
+          "ds_store_2addr_b32": 4,
+          "ds_store_b128": 2,
+          "lds_store_ops": 70
+        }
+      },
+      "findings": [
+        "the mixed-store ACC8 probe now matches RADV on operand issue order under register renaming; future work should not chase literal VGPR numbers for dst/A/B/C",
+        "the meaningful remaining static schedule miss is A/B load-source provenance after the first load groups, plus the 14336-byte HIP LDS allocation and non-production ACC8 writeback contract",
+        "next Q6 p33 work should target tighter DS-load grouping/provenance and a production-valid eight-bank accumulator reuse/writeback path rather than more store surface or operand-order probes"
+      ]
+    },
+    {
       "id": "q6_k_vk64_q6addr_asmwait_radvseq_acc8_storemix_899ede090_dirty",
       "date": "2026-06-21",
       "artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-asmwait-radvseq-acc8-storemix-899ede090-dirty-20260621-110136/",

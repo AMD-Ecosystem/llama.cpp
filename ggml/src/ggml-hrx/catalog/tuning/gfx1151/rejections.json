@@ -3,6 +3,15 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_vk64_q6addr_asmwait_radvseq_acc8_storemix_normalized_8071ce4a7_dirty",
+      "date": "2026-06-21",
+      "route": "static-only HSACO: hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_storekill_storemix_q6addr_upperdepnomem_f16acc_wg256_f32",
+      "env": "not provider-wired; CMake/Ninja static probe only; re-screened with register-renaming-normalized ownership tooling",
+      "artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-asmwait-radvseq-acc8-storemix-normalized-8071ce4a7-dirty-20260621-110734/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_storekill_storemix_q6addr_upperdepnomem_wg256.hsaco",
+      "reason": "This tooling refresh re-screened the mixed-LDS Q6_K p33 static probe with WMMA sequence checks normalized by first-use register pattern. It corrects the earlier over-strict interpretation: dst, A, B, and C operand sequences all match RADV under register renaming, in addition to the already matched reuse histograms, unique-bank counts, wait ladder, mixed LDS store surface, 16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 64 ds_store_b16, 4 ds_store_2addr_b32, 2 ds_store_b128, 96 buffer_store_b32, two barriers, and zero spills. Reject before provider wiring because the true remaining static misses are still promotion-blocking: A load-source provenance collapses from RADV's eight first-use groups to three, B load-source provenance collapses from four groups to three with the second half all sourced from one broad load range, LDS is 14336 versus RADV 11264, instruction count is 2022 versus RADV 2343, and ACC8 is not a production-valid sixteen-output writeback contract. Future Q6 p33 work should target load-source grouping/provenance and production-valid eight-bank accumulator reuse, not literal VGPR numbering or more store-count probes."
+    },
+    {
       "id": "q6_k_vk64_q6addr_asmwait_radvseq_acc8_storemix_899ede090_dirty",
       "date": "2026-06-21",
       "route": "static-only HSACO: hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_storekill_storemix_q6addr_upperdepnomem_f16acc_wg256_f32",
