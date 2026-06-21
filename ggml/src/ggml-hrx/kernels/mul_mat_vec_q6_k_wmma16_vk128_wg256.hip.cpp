@@ -114,6 +114,10 @@
 #define HRX_Q6_K_WMMA_VK128_FULL_TILE_STAGE_STORE 0
 #endif
 
+#ifndef HRX_Q6_K_WMMA_VK128_P33_BRANCH_STORE
+#define HRX_Q6_K_WMMA_VK128_P33_BRANCH_STORE 0
+#endif
+
 #ifndef HRX_Q6_K_WMMA_VK128_STORE_STAGE
 #define HRX_Q6_K_WMMA_VK128_STORE_STAGE 0
 #endif
@@ -2060,7 +2064,29 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
                 wave,
                 (hrx_q6_k_wmma_vk128_lds_volatile_half_ptr) sh_store);
 #elif HRX_Q6_K_WMMA_VK128_BUFFER_STORE
-#if HRX_Q6_K_WMMA_VK128_FULL_TILE_STORE
+#if HRX_Q6_K_WMMA_VK128_P33_BRANCH_STORE
+            const long long tile_row0 = row_base + static_cast<long long>(row_tile * 16);
+            const long long tile_col0 = col_base + static_cast<long long>(col_tile * 16);
+            if (group < 8) {
+                hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_buffer_full(
+                    dst_rsrc,
+                    rows,
+                    tile_row0,
+                    tile_col0,
+                    acc[group],
+                    lane);
+            } else if (group < 12) {
+                hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_buffer(
+                    dst_rsrc,
+                    rows,
+                    tile_row0,
+                    tile_col0,
+                    rows,
+                    cols,
+                    acc[group],
+                    lane);
+            }
+#elif HRX_Q6_K_WMMA_VK128_FULL_TILE_STORE
             const long long tile_row0 = row_base + static_cast<long long>(row_tile * 16);
             const long long tile_col0 = col_base + static_cast<long long>(col_tile * 16);
             if (tile_row0 + 16 <= rows && tile_col0 + 16 <= cols) {
