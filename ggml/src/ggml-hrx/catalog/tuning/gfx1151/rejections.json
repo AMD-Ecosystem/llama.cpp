@@ -202,10 +202,10 @@
       "date": "2026-06-21",
       "route": "tools/vulkan-oracle/run_wmma_mc_compact_probe.py --mcpu gfx1151",
       "env": "ROCm llvm-mc assembler primitive screen; no production selector",
-      "artifact": "cache/hrxv1/gfx1151/wmma-mc-compact-current-4e34cbae6-20260621-013523/",
-      "static_artifact": "cache/hrxv1/gfx1151/wmma-mc-compact-current-4e34cbae6-20260621-013523/summary.md, width4.stderr, and width8.stdout",
+      "artifact": "cache/hrxv1/gfx1151/wmma-mc-compact-current-rocm-head-20260621-continue/",
+      "static_artifact": "cache/hrxv1/gfx1151/wmma-mc-compact-current-rocm-head-20260621-continue/summary.md, width4_all.stderr, width4_mixed.stderr, radv_mixed.stderr, and width8.stdout",
       "compile_artifact": "/srv/vm-shared/projects/llamacpp-devws/rocm/llvm/bin/llvm-mc",
-      "reason": "This primitive screen tests whether the ROCm LLVM gfx1151 assembler accepts the RADV-style compact f16 WMMA operand form directly. The normal width-8 form `v_wmma_f16_16x16x16_f16 v[0:7], v[0:7], v[0:7], v[0:7]` assembles and emits encoding bytes, while the compact width-4 form `v_wmma_f16_16x16x16_f16 v[0:3], v[0:3], v[0:3], v[0:3]` is rejected with `operands are not valid for this GPU or mode`. Reject the straightforward LLVM-MC route for emitting compact width-4 dst/C f16 WMMA ownership on gfx1151; future exact RADV clones need a different compiler/target-description path, a non-LLVM code object path, or a measured non-compact deviation."
+      "reason": "This primitive screen tests whether the current custom ROCm head LLVM gfx1151 assembler accepts the RADV-style compact f16 WMMA operand form directly. The normal width-8 form `v_wmma_f16_16x16x16_f16 v[0:7], v[0:7], v[0:7], v[0:7]` assembles and emits encoding bytes. The all-width4, mixed-width4, and exact RADV-style mixed forms are all rejected with `operands are not valid for this GPU or mode`, including `v_wmma_f16_16x16x16_f16 v[72:75], v[96:103], v[104:111], v[72:75]`. Reject the straightforward LLVM-MC route for emitting compact width-4 dst/C f16 WMMA ownership on gfx1151 under /srv/vm-shared/rocm/rocm-head; future exact RADV clones need a different compiler/target-description path, a non-LLVM code object path, or a measured non-compact deviation."
     },
     {
       "id": "q8_0_motif192_k2_baseoff_split59_catalog_perf",
