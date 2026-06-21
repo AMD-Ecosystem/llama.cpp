@@ -5,19 +5,21 @@
     {
       "id": "q6_dense_prompt_vcur_rows2_cols8_qwen3q6_p33",
       "date": "2026-06-21",
-      "status": "accepted_opt_in_candidate",
+      "status": "accepted_gfx1151_exact_shape_default",
       "route": "hrx_mul_mat_vec_q6_k_rows2_cols8_wg32_f32",
-      "env": "GGML_HRX_ENABLE_Q6_K_VCUR_ROWS2_COLS8_WG32_PROMPT=1",
-      "shape_guard": "Q6_K MUL_MAT prompt, direct F32 RHS, k == 4096, rows == 1024, 16 <= cols <= 64, rows2_cols8_wg32 provider available; ordered before the gfx1151 H4LOAD p33 default and intentionally inert for p512/p513 tail rows",
+      "env": "default on gfx1151 for the exact Vcur-like shape; rollback with GGML_HRX_DISABLE_Q6_K_VCUR_ROWS2_COLS8_WG32_PROMPT=1; force elsewhere with GGML_HRX_ENABLE_Q6_K_VCUR_ROWS2_COLS8_WG32_PROMPT=1",
+      "shape_guard": "Q6_K MUL_MAT prompt, direct F32 RHS, k == 4096, rows == 1024, 16 <= cols <= 64, rows2_cols8_wg32 provider available, gfx1151 default; ordered before the H4LOAD p33 default and intentionally inert for p512/p513 tail rows",
       "prior_art_schedule": "This is a selector-policy extraction from the rejected Q6 packed-fallback audit, not a new RADV schedule clone. The broad packed fallback was rejected because it regressed ffn_out and result_output, but its route trace exposed that the Vcur-sized p33 row was actually using the existing rows2_cols8_wg32 direct-F32 provider and was much faster than H4LOAD. This candidate isolates only that exact row shape while preserving the accepted RADV-derived H4LOAD/VK128 WMMA policy for the dominant rows.",
       "focused_artifacts": [
-        "cache/hrxv1/gfx1151/q6-vcur-rows2-cols8-optin-e6f02cae6-dirty-20260621-063201/"
+        "cache/hrxv1/gfx1151/q6-vcur-rows2-cols8-optin-e6f02cae6-dirty-20260621-063201/",
+        "cache/hrxv1/gfx1151/q6-vcur-rows2-cols8-default-3b3816cb2-dirty-20260621-064112/"
       ],
       "model_artifacts": [
         "cache/hrxv1/gfx1151/q6-vcur-rows2-cols8-optin-e6f02cae6-dirty-20260621-063201/llama31-q4-default-model-p33.json",
         "cache/hrxv1/gfx1151/q6-vcur-rows2-cols8-optin-e6f02cae6-dirty-20260621-063201/llama31-q4-variant-model-p33.json",
         "cache/hrxv1/gfx1151/q6-vcur-rows2-cols8-optin-e6f02cae6-dirty-20260621-063201/default-model-p33.json",
-        "cache/hrxv1/gfx1151/q6-vcur-rows2-cols8-optin-e6f02cae6-dirty-20260621-063201/variant-model-p33.json"
+        "cache/hrxv1/gfx1151/q6-vcur-rows2-cols8-optin-e6f02cae6-dirty-20260621-063201/variant-model-p33.json",
+        "cache/hrxv1/gfx1151/q6-vcur-rows2-cols8-repeat-3b3816cb2-20260621-063932/"
       ],
       "focused_result": {
         "correctness": "CPU-reference passed for p33 focused Q6 rows with and without opt-in; p512 and p513 non-steal CPU-reference checks also passed",
@@ -27,19 +29,31 @@
         "p33_vcur_speedup": 4.809,
         "p33_total_default_us": 14689.536,
         "p33_total_optin_us": 14238.593,
-        "p33_total_speedup": 1.032
+        "p33_total_speedup": 1.032,
+        "postdefault_correctness": "CPU-reference passed for p33, p512, and p513 focused Q6 rows in both default and rollback modes",
+        "postdefault_route_policy": "default p33 selects rows2_cols8_wg32 only for k=4096 rows=1024 cols=33; rollback p33 selects H4LOAD for that row; p512 and p513 remain unchanged on VK128 in both modes; no fallback/error/provider_unavailable route lines",
+        "postdefault_p33_vcur_default_us": 81.987,
+        "postdefault_p33_vcur_rollback_us": 397.833,
+        "postdefault_p33_total_default_us": 13960.454,
+        "postdefault_p33_total_rollback_us": 14341.599,
+        "postdefault_p33_total_speedup": 1.027
       },
       "model_result": {
         "llama31_8b_q4_k_m_p33_default_tok_s": 222.032945,
         "llama31_8b_q4_k_m_p33_optin_tok_s": 229.587911,
         "llama31_8b_q4_k_m_p33_speedup": 1.034,
+        "llama31_8b_q4_k_m_p33_repeat_pair1_default_tok_s": 229.794753,
+        "llama31_8b_q4_k_m_p33_repeat_pair1_optin_tok_s": 234.652079,
+        "llama31_8b_q4_k_m_p33_repeat_pair2_default_tok_s": 228.746326,
+        "llama31_8b_q4_k_m_p33_repeat_pair2_optin_tok_s": 237.319645,
+        "llama31_8b_q4_k_m_p33_repeat_geomean_speedup": 1.029,
         "llama31_route_policy": "48 Vcur dispatches moved from H4LOAD to rows2_cols8_wg32; 45 ffn_out dispatches stayed on H4LOAD; no fallback/error route lines",
         "qwen3_30b_q6_k_p33_default_tok_s": 80.715194,
         "qwen3_30b_q6_k_p33_optin_tok_s": 90.226229,
         "qwen3_route_policy": "Qwen3 p33 did not exercise the exact guard because its dense Q6 rows are k=2048/rows=512, k=4096/rows=2048, and k=2048/rows=4096; treat the apparent tok/s movement as noise, not promotion evidence"
       },
       "promotion_blockers": [
-        "Opt-in only until a repeated Llama 3.1 p33 A/B or broader basket gate proves the end-to-end win is stable enough to default",
+        "This is defaulted only for one exact gfx1151 Vcur-like shape; broader shape expansion still requires focused evidence",
         "This does not close the Q6 p33 RADV/HIP schedule gap on ffn_out or result_output",
         "The broad packed-Q8_1 fallback remains rejected; do not reinterpret this as a packed MMQ64 promotion"
       ]

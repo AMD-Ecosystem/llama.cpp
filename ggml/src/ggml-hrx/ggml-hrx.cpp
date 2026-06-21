@@ -7107,7 +7107,9 @@ static const ggml_backend_hrx_op_provider * ggml_backend_hrx_select_mul_mat_vec_
                 provider : &device_context->mul_mat_vec_q5_k_provider;
         }
         case GGML_TYPE_Q6_K: {
-            if (ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q6_K_VCUR_ROWS2_COLS8_WG32_PROMPT") &&
+            if ((ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q6_K_VCUR_ROWS2_COLS8_WG32_PROMPT") ||
+                 (device_context->architecture == "gfx1151" &&
+                  !ggml_backend_hrx_env_enabled("GGML_HRX_DISABLE_Q6_K_VCUR_ROWS2_COLS8_WG32_PROMPT"))) &&
                 k == 4096 &&
                 rows == 1024 &&
                 cols >= 16 && cols <= 64 &&
