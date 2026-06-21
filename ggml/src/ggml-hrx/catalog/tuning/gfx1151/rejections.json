@@ -3,6 +3,18 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_chunk8_p513_tail_policy_eb508497e",
+      "date": "2026-06-21",
+      "route": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_chunk8_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X128_SPLITQSUM_BK2_WAVE64_CHUNK8_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q8-chunk8-p513-force-eb508497e-20260621-033140/",
+      "model_artifact": "cache/hrxv1/gfx1151/q8-chunk8-p513-model-ab-eb508497e-20260621-033310/",
+      "perf_artifact": "cache/hrxv1/gfx1151/q8-chunk8-p513-force-eb508497e-20260621-033140/default-perf.csv and force-perf.csv",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-current-contract-refresh-08451f1de-20260620-165004/q8-mmq-family-summary.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_mmq64x128_splitqsum_bk2_wave64_chunk8.hsaco",
+      "reason": "This tail-policy probe tested whether the accepted Q8_0 p512 chunk8 packed-route live-range reduction should also default for p513 odd production-width tails. The route already supports bounds checks, and forcing it selected chunk8 for all five Llama 3.1 8B Q8_0 p513 focused rows. Default and forced CPU-reference both passed 5/5 rows. Focused timing favored forced chunk8 overall: total 80877.091 -> 78974.807 us, with ffn_out 1.036x, ffn_gate 1.055x, and result_output 1.022x faster than default, though Vcur and Qcur regressed. Reject for production promotion because the same-binary p513 llama-bench model row regressed despite zero fallback mentions and clean route selection: default 426.462449 tok/s versus forced chunk8 424.109357 tok/s, 0.9945x. Keep chunk8 default restricted to full-column rows; future p513 work needs model-level neutrality or a stronger explanation for the focused/model mismatch before changing tail policy."
+    },
+    {
       "id": "q5_k_motif192_asmwait_broad_prompt_optin_130360d_dirty",
       "date": "2026-06-21",
       "route": "hrx_mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_packstage_fast_half_motif192_asmwait_bufferstore_f16acc_wg256_f32",

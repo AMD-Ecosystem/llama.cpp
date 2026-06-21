@@ -3,6 +3,56 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_chunk8_p513_tail_policy_rejection_eb508497e",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/q8-chunk8-p513-force-eb508497e-20260621-033140/",
+      "model_artifact": "cache/hrxv1/gfx1151/q8-chunk8-p513-model-ab-eb508497e-20260621-033310/",
+      "source_commit": "eb508497e",
+      "tool": "test-backend-ops focused Q8_0 p513 default-vs-forced-chunk8 correctness/perf with route traces, followed by same-binary llama-bench model A/B",
+      "status": "rejected_correct_focused_win_model_regression",
+      "candidate_gate": {
+        "production_target": "Llama 3.1 8B Q8_0 p513 odd production-width prompt rows, testing whether the accepted p512 chunk8 live-range reduction can replace the existing BN112 split-qsum tail route",
+        "baseline_command": "GGML_HRX_TRACE_ROUTES=1 GGML_HRX_TRACE_PROVIDERS=1 build/hrx-v1-catalog-gfx1151/bin/test-backend-ops test/perf -b HRX0 -o MUL_MAT --test-file cache/hrxv1/gfx1151/q8_0-mmvq1024-odd-tail-focused-20260617-181012/p513/q8_0_prompt_all.txt --output csv",
+        "variant_command": "GGML_HRX_ENABLE_Q8_0_Q8_1_X4_MMQ64X128_SPLITQSUM_BK2_WAVE64_CHUNK8_PROMPT=1 with the same focused test/perf commands, then llama-bench -p 513 -n 0 -b 1024 -ub 1024 -fa 1 -r 3 -o json --no-warmup -ngl 99 -dev HRX0",
+        "same_runner_comparison_method": "sequential same-binary HRX0 focused rows and same-binary llama-bench default versus forced chunk8, with route traces proving provider selection and backend labels audited from JSON",
+        "route_trace_path": "focused artifact default/force *.stderr and model artifact default.stderr/force.stderr",
+        "scheduler_trace_path": "cache/hrxv1/gfx1151/q8-current-contract-refresh-08451f1de-20260620-165004/q8-mmq-family-summary.md",
+        "focused_cpu_reference": "artifact default-test.csv and force-test.csv; both passed 5/5 rows",
+        "compile_report_path": "CMake/Ninja-built chunk8 HSACO in build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/",
+        "target_listing_path": "cache/hrxv1/gfx1151/q8-current-contract-refresh-08451f1de-20260620-165004/q8-mmq-family-summary.md",
+        "prior_art_schedule_source": "accepted Q8_0 p512 chunk8 live-range reduction and Llama 3.1 8B Q8_0 Vulkan large aligned p513 oracle",
+        "promotion_rule": "do not broaden chunk8 to p513 tails unless a same-binary model row improves or remains neutral. Backend-op-only p513 wins are insufficient because the full row regressed."
+      },
+      "focused_result": {
+        "correctness": "default and forced chunk8 p513 both passed 5/5 focused rows",
+        "route_selection": {
+          "default": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x112_splitqsum_wg256_f32 for all p513 focused rows",
+          "forced": "hrx_mul_mat_vec_q8_0_q8_1_x4_mmq64x128_splitqsum_bk2_wave64_chunk8_wg256_f32 for all p513 focused rows"
+        },
+        "focused_default_over_forced_speed_ratio": {
+          "Vcur-0": 0.936,
+          "Qcur-0": 0.966,
+          "ffn_out-0": 1.036,
+          "ffn_gate-0": 1.055,
+          "result_output": 1.022,
+          "total": 1.024
+        },
+        "model_ab": {
+          "default_tok_s": 426.462449,
+          "forced_tok_s": 424.109357,
+          "forced_over_default": 0.9945,
+          "fallback_mentions": 0,
+          "backend": "HRX"
+        }
+      },
+      "findings": [
+        "the chunk8 kernel is tail-correct when forced on p513, so the existing bounds checks are semantically sufficient for odd production-width tails",
+        "focused p513 timing improves the large FFN/result rows enough to give a 1.024x total backend-op speed ratio over the default BN112 split-qsum route",
+        "the full llama-bench p513 row regresses to 0.9945x of default despite zero fallback mentions and correct route selection",
+        "decision: keep chunk8 default restricted to full-column rows. Future Q8 p513 work should not promote a tail policy from focused backend-op timing alone; it needs same-binary model neutrality or a stronger route-level explanation for the integration loss."
+      ]
+    },
+    {
       "id": "q5_motif192_asmwait_broad_optin_rejection_130360d_dirty",
       "date": "2026-06-21",
       "artifact": "cache/hrxv1/gfx1151/q5-asmwait-broad-optin-focused-130360d-dirty-20260621-032342/",
