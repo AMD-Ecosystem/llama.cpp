@@ -4752,8 +4752,8 @@ static bool ggml_backend_hrx_q5_k_wmma16_vk128_motif192_smallproj_enabled(
         int64_t k,
         int64_t rows,
         int64_t cols) {
-    return ggml_backend_hrx_env_enabled(
-               "GGML_HRX_ENABLE_Q5_K_WMMA16_VK128_MOTIF192_SMALLPROJ_PROMPT") &&
+    return !ggml_backend_hrx_env_enabled(
+               "GGML_HRX_DISABLE_Q5_K_WMMA16_VK128_MOTIF192_SMALLPROJ_PROMPT") &&
            device_context &&
            device_context->architecture == "gfx1151" &&
            !ggml_backend_hrx_approximate_kernels_disabled() &&
