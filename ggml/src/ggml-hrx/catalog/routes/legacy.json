@@ -10190,7 +10190,7 @@
       "rows_min": 16,
       "cols_min": 16,
       "selector_gate": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK128_PADDED_W64_B64GROUP_F16ACC_WG256_PROMPT=1",
-      "prior_delta": "Vulkan oracle matmul_q6_k_f32_f16acc_aligned_l uses BM128/BN128/BK32/WG256 wave64, 32 f16 WMMA ops, 64 ds_load_b64, 128 ds_load_u16_d16, 128 LDS b16 stores, 192 global stores, and 22528 bytes LDS. This probe preserves the accepted Q6 VK128 padded wave64 direct-F32 route and changes the fragment-read window from compiler-selected ds_load_b128 to grouped ds_read_b64 fragment loads before each 4x4 WMMA block."
+      "prior_delta": "Vulkan oracle matmul_q6_k_f32_f16acc_aligned_l uses BM128/BN128/BK32/WG256 wave64, 32 f16 WMMA ops, 64 ds_load_b64, 22528 bytes LDS, and compiled writeback alternatives whose static stores split into a 64-store direct full-tile path plus staged and partial/tail fallbacks. This probe predates that branch-path audit; it preserves the accepted Q6 VK128 padded wave64 direct-F32 route and changes the fragment-read window from compiler-selected ds_load_b128 to grouped ds_read_b64 fragment loads before each 4x4 WMMA block."
     },
     "supports": {
       "legacy_export": "hrx_mul_mat_vec_q6_k_wmma16x16_vk128_padded_w64_b64group_f16acc_wg256_f32"
@@ -10234,7 +10234,7 @@
       "rows_min": 16,
       "cols_min": 16,
       "selector_gate": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK128_PADDED_W64_B64GROUP_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
-      "prior_delta": "Vulkan oracle matmul_q6_k_f32_f16acc_aligned_l uses BM128/BN128/BK32/WG256 wave64, 32 f16 WMMA ops, 64 ds_load_b64, 128 ds_load_u16_d16, 128 LDS b16 stores, 192 buffer_store_b32, and 22528 bytes LDS. This probe preserves the rejected Q6 B64GROUP fragment-read path and changes full/edge writeback to the gfx11 raw buffer-store primitive, isolating buffer_store_b32 writeback from the explicit LDS store-stage path."
+      "prior_delta": "Vulkan oracle matmul_q6_k_f32_f16acc_aligned_l uses BM128/BN128/BK32/WG256 wave64, 32 f16 WMMA ops, 64 ds_load_b64, 22528 bytes LDS, and compiled writeback alternatives whose 192 static buffer_store_b32 ops decompose into 64 direct full-tile stores, 64 full-tile staged fallback stores, and 64 partial/tail stores. This probe preserves the rejected Q6 B64GROUP fragment-read path and changes full/edge writeback to the gfx11 raw buffer-store primitive; after the store-path audit, treat it as a buffer-store primitive probe rather than evidence that the active p512 branch needs 192 stores."
     },
     "supports": {
       "legacy_export": "hrx_mul_mat_vec_q6_k_wmma16x16_vk128_padded_w64_b64group_bufferstore_f16acc_wg256_f32"
@@ -10278,14 +10278,14 @@
       "rows_min": 16,
       "cols_min": 16,
       "selector_gate": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK128_PADDED_W64_FULLSTORE_F16ACC_WG256_PROMPT=1",
-      "prior_delta": "Vulkan oracle matmul_q6_k_f32_f16acc_aligned_l has a direct coopMatStore path for full in-bounds aligned tiles and emits 192 buffer_store_b32. This probe preserves the accepted Q6 VK128 padded wave64 math path and splits full-tile writeback from the guarded edge path so interior p512/p513 tiles avoid scalar row/column guards and move the emitted store shape toward RADV."
+      "prior_delta": "Vulkan oracle matmul_q6_k_f32_f16acc_aligned_l has a direct coopMatStore path for full in-bounds aligned tiles, while the shader-wide 192 static buffer_store_b32 ops also include staged and partial/tail fallback paths. This probe preserves the accepted Q6 VK128 padded wave64 math path and splits full-tile writeback from the guarded edge path so interior p512 tiles can be compared against the active direct-store branch instead of the aggregate static store count."
     },
     "supports": {
       "legacy_export": "hrx_mul_mat_vec_q6_k_wmma16x16_vk128_padded_w64_fullstore_f16acc_wg256_f32"
     },
     "evidence_summary": {
       "status": "rejected_gfx1151_focused_mixed_small_signal",
-      "selection": "Opt-in Q6_K direct-F32 WMMA VK128 full-tile store split probe. It mechanically targets the RADV writeback/lane-ownership delta after the accepted default and B64GROUP probe still emitted only 64 global stores versus RADV's 192 buffer stores. The route passed p33/p512/p513 CPU-reference gates and emitted 128 global_store_b32 sites, but focused timing was mixed and too small to promote versus the accepted default."
+      "selection": "Opt-in Q6_K direct-F32 WMMA VK128 full-tile store split probe. It was originally measured against the coarse RADV writeback/lane-ownership delta before the store-path audit separated direct, staged, and partial/tail branches. The route passed p33/p512/p513 CPU-reference gates and emitted 128 global_store_b32 sites, but focused timing was mixed and too small to promote versus the accepted default. Future Q6 p512 work should compare against the active direct 64-store branch and keep p513 tail behavior as a separate gate."
     },
     "target_prefixes": [
       "gfx11"
@@ -10366,14 +10366,14 @@
       "rows_min": 16,
       "cols_min": 16,
       "selector_gate": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK128_PADDED_W64_B64GROUP_FULLSTORE_F16ACC_WG256_PROMPT=1",
-      "prior_delta": "Vulkan oracle matmul_q6_k_f32_f16acc_aligned_l uses BM128/BN128/BK32/WG256 wave64, 32 f16 WMMA ops, 64 ds_load_b64, 128 ds_load_u16_d16, 128 LDS b16 stores, 192 global stores, and 22528 bytes LDS. This probe combines the two previously isolated source-visible deltas: grouped ds_read_b64 fragment loads before each 4x4 WMMA block and unguarded full-tile writeback for interior p512/p513 tiles."
+      "prior_delta": "Vulkan oracle matmul_q6_k_f32_f16acc_aligned_l uses BM128/BN128/BK32/WG256 wave64, 32 f16 WMMA ops, 64 ds_load_b64, 22528 bytes LDS, and separate direct, staged, and partial/tail writeback paths. This probe combines two pre-audit source-visible deltas: grouped ds_read_b64 fragment loads before each 4x4 WMMA block and unguarded full-tile writeback for interior p512/p513 tiles. Future Q6 work should compare against the active branch rather than the shader-wide aggregate store count."
     },
     "supports": {
       "legacy_export": "hrx_mul_mat_vec_q6_k_wmma16x16_vk128_padded_w64_b64group_fullstore_f16acc_wg256_f32"
     },
     "evidence_summary": {
       "status": "rejected_gfx1151_focused_perf_regression",
-      "selection": "Opt-in Q6_K direct-F32 WMMA VK128 b64group plus full-tile store probe. It mechanically combines the RADV fragment-read and writeback-count axes after each isolated axis failed to reach production performance. The combined route passed p33/p512/p513 CPU-reference gates and emitted 64 ds_load_b64 plus 128 global_store_b32, but focused timing regressed every row versus the accepted default."
+      "selection": "Opt-in Q6_K direct-F32 WMMA VK128 b64group plus full-tile store probe. It mechanically combined the RADV fragment-read axis with the old coarse writeback-count axis before the store-path audit separated direct, staged, and partial/tail paths. The combined route passed p33/p512/p513 CPU-reference gates and emitted 64 ds_load_b64 plus 128 global_store_b32, but focused timing regressed every row versus the accepted default."
     },
     "target_prefixes": [
       "gfx11"

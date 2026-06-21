@@ -864,10 +864,10 @@
         "sgpr_count": 36,
         "lds_bytes": 20480,
         "spill_count": 0,
-        "isa": "32 v_wmma_f16_16x16x16_f16 instructions; no scratch; still differs from RADV's 22528-byte LDS, ds_load_b64/ds_load_u16_d16 mix, and 192 stores"
+        "isa": "32 v_wmma_f16_16x16x16_f16 instructions; no scratch; still differs from RADV's 22528-byte LDS and ds_load_b64/ds_load_u16_d16 mix. The earlier 192-store comparison is superseded by the RADV store-path audit: those static stores are split across direct, staged, and partial/tail branches."
       },
       "promotion_blockers": [
-        "Still not exact RADV schedule parity: emitted HIP has 20480 LDS bytes, 64 stores, and ds_load_b128 where RADV has 22528 LDS bytes, 192 stores, 64 ds_load_b64, and 128 ds_load_u16_d16",
+        "Still not exact RADV schedule parity: emitted HIP has 20480 LDS bytes and ds_load_b128 where RADV has 22528 LDS bytes, 64 ds_load_b64, and 128 ds_load_u16_d16. Store-count comparisons must use the active RADV branch: the shader-wide 192 buffer_store_b32 total is split across direct, staged, and partial/tail paths.",
         "Broader basket coverage should confirm no non-Qwen3 Q6_K regression as additional Q6_K models finish downloading",
         "Next schedule work should mechanically close the LDS/load/store deltas rather than broaden aggregate sweeps"
       ]
