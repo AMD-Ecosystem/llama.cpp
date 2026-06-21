@@ -430,7 +430,7 @@
       "date": "2026-06-21",
       "artifact": "cache/hrxv1/gfx1151/q8-baseoff-split59-realdata-67045a7c93d0-dirty-20260621-002755/",
       "source_commit": "67045a7c93d0-dirty",
-      "tool": "CMake/Ninja-built HRX v1 catalog kernel, analyze_amdgcn_issue_window.py, test-backend-ops focused correctness/perf, and GGML_HRX_TRACE_ROUTES=1 route traces",
+      "tool": "CMake/Ninja-built HRX v1 catalog kernel, analyze_amdgcn_issue_window.py, run_wmma_compact_screen.py, test-backend-ops focused correctness/perf, and GGML_HRX_TRACE_ROUTES=1 route traces",
       "status": "rejected_opt_in_static_match_perf_regression",
       "candidate_gate": {
         "production_target": "Llama prompt Q8_0 dense MUL_MAT p512/p513 large rows on gfx1151, targeting Vulkan RADV Q8_0 large split LDS issue window",
@@ -438,7 +438,7 @@
         "variant_command": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_ASMWMMA_MOTIF192_K2_BASEOFF_SPLIT59_BUFFERSTORE_F16ACC_WG256_PROMPT=1 test-backend-ops perf -b HRX0 -o MUL_MAT against the same exported p512/p513 rows",
         "same_runner_comparison_method": "tools/hrxv1_compare_backend_op_perf.py over same exported backend-op files, same HRX backend binary, default versus opt-in split59 provider",
         "route_trace_path": "artifact focused/p33/route-trace.txt, focused/p512/route-trace.txt, focused/p513/route-trace.txt",
-        "scheduler_trace_path": "artifact static/issue-window.{json,md}, static/hsaco-summary.{json,md}, static/symbol.amdgcn.txt; follow-up ownership artifact cache/hrxv1/gfx1151/q8-split59-radv-ownership-dc8406cb1-20260621-003703/wmma-ownership.{json,md}",
+        "scheduler_trace_path": "artifact static/issue-window.{json,md}, static/hsaco-summary.{json,md}, static/symbol.amdgcn.txt; ownership artifacts cache/hrxv1/gfx1151/q8-split59-radv-ownership-dc8406cb1-20260621-003703/wmma-ownership.{json,md} and cache/hrxv1/gfx1151/q8-compact-screen-current-86d94bd97-20260621-012828/wmma-ownership.{json,md}",
         "focused_cpu_reference": "artifact focused/correctness-summary.json; p33 10/10, p512 5/5, and p513 10/10 rows passed",
         "compile_report_path": "artifact static/readelf-notes.txt and static/hsaco-summary.md",
         "target_listing_path": "CMake target build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_baseoff_split59_bufferstore_wg256.hsaco",
@@ -462,6 +462,8 @@
         },
         "ownership_vs_radv": {
           "artifact": "cache/hrxv1/gfx1151/q8-split59-radv-ownership-dc8406cb1-20260621-003703/",
+          "current_head_artifact": "cache/hrxv1/gfx1151/q8-compact-screen-current-86d94bd97-20260621-012828/",
+          "current_head_tool": "tools/vulkan-oracle/run_wmma_compact_screen.py",
           "radv_dst_width4": 32,
           "radv_c_width4": 32,
           "hip_dst_width8": 32,
