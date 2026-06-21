@@ -2113,6 +2113,10 @@ if (GGML_HRX_BUILD_HIP_BENCHES)
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/hip-bench/wmma_f16_lane_map_bench.hip.cpp"
         64)
     ggml_hrx_add_hip_bench(
+        hrx-hip-bench-q6-id-subgroup-contract
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/hip-bench/q6_id_subgroup_contract_bench.hip.cpp"
+        64)
+    ggml_hrx_add_hip_bench(
         hrx-hip-bench-q5-wmma-full64-repro
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/hip-bench/q5_wmma_full64_repro_bench.hip.cpp"
         64)
@@ -2257,6 +2261,7 @@ if (GGML_HRX_BUILD_HIP_BENCHES)
             hrx-hip-bench-lds-halfword-stage
             hrx-hip-bench-coopmat-store-contract
             hrx-hip-bench-wmma-f16-lane-map
+            hrx-hip-bench-q6-id-subgroup-contract
             hrx-hip-bench-q5-wmma-full64-repro
             hrx-hip-bench-q6-wmma-ring96-repro
             hrx-hip-bench-q6-wmma-vk64-repro
