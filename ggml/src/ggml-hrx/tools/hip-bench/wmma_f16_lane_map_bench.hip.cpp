@@ -19,6 +19,7 @@
 
 typedef _Float16 wmma_lane_map_half16_vec __attribute__((ext_vector_type(16)));
 typedef _Float16 wmma_lane_map_half8_vec __attribute__((ext_vector_type(8)));
+typedef uint32_t wmma_lane_map_u32x4_vec __attribute__((ext_vector_type(4)));
 typedef uint64_t wmma_lane_map_u64x4_vec __attribute__((ext_vector_type(4)));
 
 static constexpr unsigned int HRX_WMMA_LANE_MAP_LANES = 64;
@@ -115,6 +116,61 @@ void wmma_f16_lane_map_tied_probe(float * dst) {
     for (int i = 0; i < 8; ++i) {
         dst[wmma_lane_map_index(op_sel ? 1u : 0u, lane, static_cast<unsigned int>(i))] =
             static_cast<float>(acc[i]);
+    }
+}
+
+static __device__ __forceinline__ uint32_t wmma_lane_map_pack2_f16(float lo, float hi) {
+    const uint32_t lo_bits = static_cast<uint32_t>(
+        __builtin_bit_cast(uint16_t, static_cast<_Float16>(lo)));
+    const uint32_t hi_bits = static_cast<uint32_t>(
+        __builtin_bit_cast(uint16_t, static_cast<_Float16>(hi)));
+    return lo_bits | (hi_bits << 16);
+}
+
+template <int variant>
+__global__ __launch_bounds__(64, 1)
+void wmma_f16_inline_compact_acc_probe(uint32_t * dst) {
+    const unsigned int lane = __builtin_amdgcn_workitem_id_x() & 63u;
+
+    wmma_lane_map_half16_vec a;
+    wmma_lane_map_half16_vec b;
+    wmma_lane_map_u32x4_vec acc;
+
+#pragma unroll
+    for (int i = 0; i < 16; ++i) {
+        a[i] = static_cast<_Float16>(1.0f);
+        b[i] = static_cast<_Float16>(1.0f);
+    }
+
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        acc[i] = wmma_lane_map_pack2_f16(
+            wmma_lane_map_sentinel(lane, static_cast<unsigned int>(i * 2)),
+            wmma_lane_map_sentinel(lane, static_cast<unsigned int>(i * 2 + 1)));
+    }
+
+    wmma_lane_map_u32x4_vec out = acc;
+    if constexpr (variant == 0) {
+        asm volatile("v_wmma_f16_16x16x16_f16 %0, %1, %2, %0\n"
+                     : "+v"(out)
+                     : "v"(a), "v"(b)
+                     : "memory");
+    } else if constexpr (variant == 1) {
+        asm volatile("v_wmma_f16_16x16x16_f16 %0, %1, %2, %3\n"
+                     : "=v"(out)
+                     : "v"(a), "v"(b), "v"(acc)
+                     : "memory");
+    } else {
+        asm volatile("v_wmma_f16_16x16x16_f16 %0, %1, %2, %3\n"
+                     : "=v"(out)
+                     : "v"(a), "v"(b), "0"(acc)
+                     : "memory");
+    }
+
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        dst[(static_cast<unsigned int>(variant) * HRX_WMMA_LANE_MAP_LANES + lane) * 4u + static_cast<unsigned int>(i)] =
+            out[i];
     }
 }
 
@@ -962,6 +1018,37 @@ static int run_tied_basic_lane_map() {
     return 0;
 }
 
+static int run_inline_compact_acc_probe() {
+    constexpr size_t variants = 3;
+    const size_t count = variants * HRX_WMMA_LANE_MAP_LANES * 4u;
+    device_buffer<uint32_t> d_out(count);
+    std::vector<uint32_t> h_out(count, 0u);
+
+    HIP_CHECK(hipMemset(d_out.ptr, 0, count * sizeof(uint32_t)));
+    hipLaunchKernelGGL((wmma_f16_inline_compact_acc_probe<0>), dim3(1), dim3(64), 0, 0, d_out.ptr);
+    HIP_CHECK(hipGetLastError());
+    hipLaunchKernelGGL((wmma_f16_inline_compact_acc_probe<1>), dim3(1), dim3(64), 0, 0, d_out.ptr);
+    HIP_CHECK(hipGetLastError());
+    hipLaunchKernelGGL((wmma_f16_inline_compact_acc_probe<2>), dim3(1), dim3(64), 0, 0, d_out.ptr);
+    HIP_CHECK(hipGetLastError());
+    HIP_CHECK(hipDeviceSynchronize());
+    HIP_CHECK(hipMemcpy(h_out.data(), d_out.ptr, count * sizeof(uint32_t), hipMemcpyDeviceToHost));
+
+    size_t zero_words = 0;
+    for (uint32_t value : h_out) {
+        if (value == 0u) {
+            ++zero_words;
+        }
+    }
+    std::printf(
+        "wmma-f16-inline-compact-acc variants=%zu lanes=%u words=%zu zero_words=%zu\n",
+        variants,
+        HRX_WMMA_LANE_MAP_LANES,
+        count,
+        zero_words);
+    return zero_words == count ? 1 : 0;
+}
+
 template <bool use_lds_fragments, bool wait_each_load = false>
 static int run_fulltile_probe(const char * mode) {
     const size_t count = 16u * HRX_WMMA_LANE_MAP_LANES * HRX_WMMA_LANE_MAP_ACC_SLOTS;
@@ -1530,7 +1617,7 @@ int main(int argc, char ** argv) {
         if (std::strncmp(argv[i], "--mode=", 7) == 0) {
             mode = argv[i] + 7;
         } else {
-            std::fprintf(stderr, "usage: %s [--mode=basic|tied-basic|fulltile-ones|fulltile-lds|fulltile-lds-wait|fulltile-lds-k2|fulltile-lds-k2-wait|fulltile-lds-repeat|fulltile-lds-repeat-wait|fulltile-lds-repeat-one|fulltile-prodstride-k2|fulltile-prodstride-k2-small|group12-selected-stage-contract|group12-selected-stage-contract-hi|combined96-store-contract|full64-store-contract|dual-opsel-two-tile-store-contract|all]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--mode=basic|tied-basic|inline-compact-acc|fulltile-ones|fulltile-lds|fulltile-lds-wait|fulltile-lds-k2|fulltile-lds-k2-wait|fulltile-lds-repeat|fulltile-lds-repeat-wait|fulltile-lds-repeat-one|fulltile-prodstride-k2|fulltile-prodstride-k2-small|group12-selected-stage-contract|group12-selected-stage-contract-hi|combined96-store-contract|full64-store-contract|dual-opsel-two-tile-store-contract|all]\n", argv[0]);
             return 2;
         }
     }
@@ -1540,6 +1627,9 @@ int main(int argc, char ** argv) {
     }
     if (mode == "tied-basic") {
         return run_tied_basic_lane_map();
+    }
+    if (mode == "inline-compact-acc") {
+        return run_inline_compact_acc_probe();
     }
     if (mode == "fulltile-ones") {
         return run_fulltile_probe<false>(mode.c_str());
@@ -1589,6 +1679,7 @@ int main(int argc, char ** argv) {
     if (mode == "all") {
         int status = run_basic_lane_map();
         status |= run_tied_basic_lane_map();
+        status |= run_inline_compact_acc_probe();
         status |= run_fulltile_probe<false>("fulltile-ones");
         status |= run_fulltile_probe<true>("fulltile-lds");
         status |= run_fulltile_probe<true, true>("fulltile-lds-wait");
