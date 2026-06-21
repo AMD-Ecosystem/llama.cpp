@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q8_0_motif192_k2_baseoff_split59_catalog_perf",
+      "date": "2026-06-21",
+      "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_baseoff_split59_bufferstore_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_ASMWMMA_MOTIF192_K2_BASEOFF_SPLIT59_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q8-baseoff-split59-realdata-67045a7c93d0-dirty-20260621-002755/",
+      "perf_artifact": "cache/hrxv1/gfx1151/q8-baseoff-split59-realdata-67045a7c93d0-dirty-20260621-002755/perf/p512/compare.md and perf/p513/compare.md",
+      "static_artifact": "cache/hrxv1/gfx1151/q8-baseoff-split59-realdata-67045a7c93d0-dirty-20260621-002755/static/issue-window.md and static/hsaco-summary.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_baseoff_split59_bufferstore_wg256.hsaco",
+      "reason": "This opt-in route transferred the standalone split59 diagnostic into the production Q8_0 catalog ABI. It built through the normal CMake/Ninja HSACO path and passes the accepted RADV-style issue-window screen: wave64, VGPR=205, SGPR=56, LDS=22528, no spills, one 32-WMMA region, final s_waitcnt lgkmcnt(51), and exactly 59 immediate LDS loads before the first WMMA. Focused CPU-reference passed p33, p512, and p513, including odd/tail p513 coverage. Route traces show p33 stayed on narrow/default routes and p512/p513 selected split59 only for ffn_out, ffn_gate, and result_output wide rows. Reject for promotion because same-runner focused timing regressed severely versus the default packed-Q8_1 route: p512 total 65392.050 -> 98726.973 us (1.510x slower) and p513 total 81068.259 -> 114518.954 us (1.413x slower), with every selected ffn/result row 1.35x-1.61x slower. Static RADV issue-window equivalence is therefore not sufficient; the next Q8 parity attempt needs a lower-level cooperative operand/writeback/lane-ownership primitive or materially different packed route, not another load-window-only tweak."
+    },
+    {
       "id": "q6_k_id_wmma16_staged_vk64_perf",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_id_q6_k_wmma16x16_staged_vk64_f16acc_wg256_f32",

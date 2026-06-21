@@ -3,6 +3,74 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_motif192_k2_baseoff_split59_catalog_perf",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/q8-baseoff-split59-realdata-67045a7c93d0-dirty-20260621-002755/",
+      "source_commit": "67045a7c93d0-dirty",
+      "tool": "CMake/Ninja-built HRX v1 catalog kernel, analyze_amdgcn_issue_window.py, test-backend-ops focused correctness/perf, and GGML_HRX_TRACE_ROUTES=1 route traces",
+      "status": "rejected_opt_in_static_match_perf_regression",
+      "candidate_gate": {
+        "production_target": "Llama prompt Q8_0 dense MUL_MAT p512/p513 large rows on gfx1151, targeting Vulkan RADV Q8_0 large split LDS issue window",
+        "baseline_command": "test-backend-ops perf -b HRX0 -o MUL_MAT against exported p512/p513 Q8_0 rows with the default packed-Q8_1 route",
+        "variant_command": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_ASMWMMA_MOTIF192_K2_BASEOFF_SPLIT59_BUFFERSTORE_F16ACC_WG256_PROMPT=1 test-backend-ops perf -b HRX0 -o MUL_MAT against the same exported p512/p513 rows",
+        "same_runner_comparison_method": "tools/hrxv1_compare_backend_op_perf.py over same exported backend-op files, same HRX backend binary, default versus opt-in split59 provider",
+        "route_trace_path": "artifact focused/p33/route-trace.txt, focused/p512/route-trace.txt, focused/p513/route-trace.txt",
+        "scheduler_trace_path": "artifact static/issue-window.{json,md}, static/hsaco-summary.{json,md}, static/symbol.amdgcn.txt",
+        "focused_cpu_reference": "artifact focused/correctness-summary.json; p33 10/10, p512 5/5, and p513 10/10 rows passed",
+        "compile_report_path": "artifact static/readelf-notes.txt and static/hsaco-summary.md",
+        "target_listing_path": "CMake target build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_baseoff_split59_bufferstore_wg256.hsaco",
+        "prior_art_schedule_source": "Llama 3.1 8B Q8_0 p512 Vulkan matmul_q8_0_f32_f16acc_aligned_l oracle and accepted q8_large_issue_window_screen_54ee59dbd screen",
+        "promotion_rule": "reject unless a follow-up variant wins same-runner p512/p513 focused timing while preserving p33/narrow route behavior and odd-tail p513 correctness"
+      },
+      "static_result": {
+        "hip_split59": {
+          "wavefront_size": 64,
+          "sgpr_count": 56,
+          "vgpr_count": 205,
+          "lds_bytes": 22528,
+          "scratch_bytes": 0,
+          "spills": "none",
+          "wmma": 32,
+          "ds_load_b64": 64,
+          "buffer_store_b32": 192,
+          "first_region_immediate_lds_loads": 59,
+          "first_region_final_lgkmcnt": 51,
+          "contract_check": "pass"
+        }
+      },
+      "route_result": {
+        "p33": "split59 not selected; cols=1 default F32 route and cols=33 packed Q8_1 route remained active",
+        "p512": "split59 selected only for ffn_out-0, ffn_gate-0, and result_output; Vcur-0 and Qcur-0 stayed on packed Q8_1 routes",
+        "p513": "split59 selected only for wide 513-column ffn_out-0, ffn_gate-0, and result_output rows; cols=1 residual rows stayed on default F32 route"
+      },
+      "timing_result": {
+        "p512_total_us": {
+          "default": 65392.05,
+          "split59": 98726.973,
+          "ratio_split59_over_default": 1.51
+        },
+        "p513_total_us": {
+          "default": 81068.259,
+          "split59": 114518.954,
+          "ratio_split59_over_default": 1.413
+        },
+        "selected_row_ratios": {
+          "p512_ffn_out": 1.606,
+          "p512_ffn_gate": 1.519,
+          "p512_result_output": 1.519,
+          "p513_ffn_out": 1.347,
+          "p513_ffn_gate": 1.451,
+          "p513_result_output": 1.432
+        }
+      },
+      "findings": [
+        "the production ABI split59 route successfully transfers the diagnostic RADV-like 59-immediate-LDS issue window into a CMake/Ninja-built HSACO without spills",
+        "focused p33/p512/p513 CPU-reference and route traces prove the selector is bounded to intended wide rows and does not poison narrow or odd-tail fallback rows",
+        "same-runner focused timing regresses all selected large rows versus the packed-Q8_1 default, so the route must remain opt-in and rejected for promotion",
+        "matching the visible RADV issue-window contract is not enough; the remaining Q8 parity work must change cooperative operand ownership, writeback/lane ownership, or packed dataflow rather than only moving LDS wait/load placement"
+      ]
+    },
+    {
       "id": "q8_large_baseoff_split59_probe_fd70da2e0",
       "date": "2026-06-21",
       "artifact": "cache/hrxv1/gfx1151/q8-baseoff-split59-probe-fd70da2e0-20260621-001116/",

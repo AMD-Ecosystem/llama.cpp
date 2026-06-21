@@ -106,6 +106,10 @@
 #define HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT_K2_BASEOFF 0
 #endif
 
+#ifndef HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT_K2_SPLIT59
+#define HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT_K2_SPLIT59 0
+#endif
+
 #ifndef HRX_Q8_0_WMMA_VK128_W64_MEDIUMFRAG12_COMBINED96
 #define HRX_Q8_0_WMMA_VK128_W64_MEDIUMFRAG12_COMBINED96 0
 #endif
@@ -871,6 +875,26 @@ static __device__ __forceinline__ hrx_q8_0_wmma_vk128_u64x4_vec hrx_q8_0_wmma_vk
         : "=v"(result[0]), "=v"(result[1]), "=v"(result[2]), "=v"(result[3])
         : "v"(lds_ptr),
           "n"(BASE_OFF + 0), "n"(BASE_OFF + 8), "n"(BASE_OFF + 16), "n"(BASE_OFF + 24)
+        : "memory");
+    return result;
+}
+
+template <int row_sub, int k_tile, int elem>
+static __device__ __forceinline__ uint64_t hrx_q8_0_wmma_vk128_load_a_raw_frag_lane_w64_baseoff_nowait(
+        hrx_q8_0_wmma_vk128_lds_half_ptr sh_a,
+        int wave_row,
+        unsigned int lane) {
+    static_assert(elem >= 0 && elem < 4, "raw fragment lane must be in [0, 4)");
+    constexpr int SHARED_STRIDE = HRX_Q8_0_WMMA_VK128_SHARED_STRIDE;
+    constexpr int BASE_OFF = (row_sub * 16 * SHARED_STRIDE + k_tile * 16) * static_cast<int>(sizeof(_Float16));
+    const int row = wave_row * 64 + static_cast<int>(lane & 15u);
+    const __attribute__((address_space(3))) uint64_t * lds_ptr =
+        (const __attribute__((address_space(3))) uint64_t *) (sh_a + row * SHARED_STRIDE);
+    uint64_t result;
+    asm volatile(
+        "ds_read_b64 %0, %1 offset:%2\n\t"
+        : "=v"(result)
+        : "v"(lds_ptr), "n"(BASE_OFF + elem * 8)
         : "memory");
     return result;
 }
@@ -2059,6 +2083,104 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
 #elif HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT_K2
 #if HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT_K2_RAW || \
     HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT_K2_BASEOFF
+#if HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT_K2_BASEOFF && \
+    HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT_K2_SPLIT59
+            const hrx_q8_0_wmma_vk128_u64x4_vec a00_raw =
+                hrx_q8_0_wmma_vk128_load_a_raw_frag_w64_baseoff_nowait<0, 0>(sh_a_lds, wave_row, lane);
+            const hrx_q8_0_wmma_vk128_u64x4_vec a01_raw =
+                hrx_q8_0_wmma_vk128_load_a_raw_frag_w64_baseoff_nowait<1, 0>(sh_a_lds, wave_row, lane);
+            const hrx_q8_0_wmma_vk128_u64x4_vec a02_raw =
+                hrx_q8_0_wmma_vk128_load_a_raw_frag_w64_baseoff_nowait<2, 0>(sh_a_lds, wave_row, lane);
+            const hrx_q8_0_wmma_vk128_u64x4_vec a03_raw =
+                hrx_q8_0_wmma_vk128_load_a_raw_frag_w64_baseoff_nowait<3, 0>(sh_a_lds, wave_row, lane);
+            const hrx_q8_0_wmma_vk128_u64x4_vec b00_raw =
+                hrx_q8_0_wmma_vk128_load_b_raw_frag_w64_baseoff_nowait<0, 0>(sh_b_lds, wave_col, lane);
+            const hrx_q8_0_wmma_vk128_u64x4_vec b01_raw =
+                hrx_q8_0_wmma_vk128_load_b_raw_frag_w64_baseoff_nowait<1, 0>(sh_b_lds, wave_col, lane);
+            const hrx_q8_0_wmma_vk128_u64x4_vec b02_raw =
+                hrx_q8_0_wmma_vk128_load_b_raw_frag_w64_baseoff_nowait<2, 0>(sh_b_lds, wave_col, lane);
+            const hrx_q8_0_wmma_vk128_u64x4_vec b03_raw =
+                hrx_q8_0_wmma_vk128_load_b_raw_frag_w64_baseoff_nowait<3, 0>(sh_b_lds, wave_col, lane);
+            const hrx_q8_0_wmma_vk128_u64x4_vec a10_raw =
+                hrx_q8_0_wmma_vk128_load_a_raw_frag_w64_baseoff_nowait<0, 1>(sh_a_lds, wave_row, lane);
+            const hrx_q8_0_wmma_vk128_u64x4_vec a11_raw =
+                hrx_q8_0_wmma_vk128_load_a_raw_frag_w64_baseoff_nowait<1, 1>(sh_a_lds, wave_row, lane);
+            hrx_q8_0_wmma_vk128_u64x4_vec a12_raw;
+            a12_raw[0] =
+                hrx_q8_0_wmma_vk128_load_a_raw_frag_lane_w64_baseoff_nowait<2, 1, 0>(sh_a_lds, wave_row, lane);
+            a12_raw[1] =
+                hrx_q8_0_wmma_vk128_load_a_raw_frag_lane_w64_baseoff_nowait<2, 1, 1>(sh_a_lds, wave_row, lane);
+            a12_raw[2] =
+                hrx_q8_0_wmma_vk128_load_a_raw_frag_lane_w64_baseoff_nowait<2, 1, 2>(sh_a_lds, wave_row, lane);
+            const hrx_q8_0_wmma_vk128_u64x4_vec b10_raw =
+                hrx_q8_0_wmma_vk128_load_b_raw_frag_w64_baseoff_nowait<0, 1>(sh_b_lds, wave_col, lane);
+            const hrx_q8_0_wmma_vk128_u64x4_vec b11_raw =
+                hrx_q8_0_wmma_vk128_load_b_raw_frag_w64_baseoff_nowait<1, 1>(sh_b_lds, wave_col, lane);
+            const hrx_q8_0_wmma_vk128_u64x4_vec b12_raw =
+                hrx_q8_0_wmma_vk128_load_b_raw_frag_w64_baseoff_nowait<2, 1>(sh_b_lds, wave_col, lane);
+            const hrx_q8_0_wmma_vk128_u64x4_vec b13_raw =
+                hrx_q8_0_wmma_vk128_load_b_raw_frag_w64_baseoff_nowait<3, 1>(sh_b_lds, wave_col, lane);
+
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(
+                0, hrx_q8_0_wmma_vk128_raw_frag_to_half16(a00_raw), hrx_q8_0_wmma_vk128_raw_frag_to_half16(b00_raw), 51);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(
+                1, hrx_q8_0_wmma_vk128_raw_frag_to_half16(a01_raw), hrx_q8_0_wmma_vk128_raw_frag_to_half16(b00_raw), 47);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(
+                2, hrx_q8_0_wmma_vk128_raw_frag_to_half16(a02_raw), hrx_q8_0_wmma_vk128_raw_frag_to_half16(b00_raw), 43);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(
+                3, hrx_q8_0_wmma_vk128_raw_frag_to_half16(a03_raw), hrx_q8_0_wmma_vk128_raw_frag_to_half16(b00_raw), 39);
+
+            a12_raw[3] =
+                hrx_q8_0_wmma_vk128_load_a_raw_frag_lane_w64_baseoff_nowait<2, 1, 3>(sh_a_lds, wave_row, lane);
+            const hrx_q8_0_wmma_vk128_u64x4_vec a13_raw =
+                hrx_q8_0_wmma_vk128_load_a_raw_frag_w64_baseoff_nowait<3, 1>(sh_a_lds, wave_row, lane);
+
+            const hrx_q8_0_wmma_vk128_half16_vec a00 = hrx_q8_0_wmma_vk128_raw_frag_to_half16(a00_raw);
+            const hrx_q8_0_wmma_vk128_half16_vec a01 = hrx_q8_0_wmma_vk128_raw_frag_to_half16(a01_raw);
+            const hrx_q8_0_wmma_vk128_half16_vec a02 = hrx_q8_0_wmma_vk128_raw_frag_to_half16(a02_raw);
+            const hrx_q8_0_wmma_vk128_half16_vec a03 = hrx_q8_0_wmma_vk128_raw_frag_to_half16(a03_raw);
+            const hrx_q8_0_wmma_vk128_half16_vec b01 = hrx_q8_0_wmma_vk128_raw_frag_to_half16(b01_raw);
+            const hrx_q8_0_wmma_vk128_half16_vec b02 = hrx_q8_0_wmma_vk128_raw_frag_to_half16(b02_raw);
+            const hrx_q8_0_wmma_vk128_half16_vec b03 = hrx_q8_0_wmma_vk128_raw_frag_to_half16(b03_raw);
+            const hrx_q8_0_wmma_vk128_half16_vec a10 = hrx_q8_0_wmma_vk128_raw_frag_to_half16(a10_raw);
+            const hrx_q8_0_wmma_vk128_half16_vec a11 = hrx_q8_0_wmma_vk128_raw_frag_to_half16(a11_raw);
+            const hrx_q8_0_wmma_vk128_half16_vec a12 = hrx_q8_0_wmma_vk128_raw_frag_to_half16(a12_raw);
+            const hrx_q8_0_wmma_vk128_half16_vec a13 = hrx_q8_0_wmma_vk128_raw_frag_to_half16(a13_raw);
+            const hrx_q8_0_wmma_vk128_half16_vec b10 = hrx_q8_0_wmma_vk128_raw_frag_to_half16(b10_raw);
+            const hrx_q8_0_wmma_vk128_half16_vec b11 = hrx_q8_0_wmma_vk128_raw_frag_to_half16(b11_raw);
+            const hrx_q8_0_wmma_vk128_half16_vec b12 = hrx_q8_0_wmma_vk128_raw_frag_to_half16(b12_raw);
+            const hrx_q8_0_wmma_vk128_half16_vec b13 = hrx_q8_0_wmma_vk128_raw_frag_to_half16(b13_raw);
+
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(4, a00, b01, 40);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(5, a01, b01, 36);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(6, a02, b01, 32);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(7, a03, b01, 24);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(8, a00, b02, 20);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(9, a01, b02, 16);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(10, a02, b02, 12);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(11, a03, b02, 8);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(12, a00, b03, 4);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(13, a01, b03, 0);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(14, a02, b03, 0);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(15, a03, b03, 0);
+
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(0, a10, b10, 51);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(1, a11, b10, 47);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(2, a12, b10, 43);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(3, a13, b10, 39);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(4, a10, b11, 40);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(5, a11, b11, 36);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(6, a12, b11, 32);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(7, a13, b11, 24);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(8, a10, b12, 20);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(9, a11, b12, 16);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(10, a12, b12, 12);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(11, a13, b12, 8);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(12, a10, b13, 4);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(13, a11, b13, 0);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(14, a12, b13, 0);
+            HRX_Q8_0_WMMA_VK128_WAIT_WMMA(15, a13, b13, 0);
+#else
 #if HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT_K2_BASEOFF
             const hrx_q8_0_wmma_vk128_u64x4_vec a00_raw =
                 hrx_q8_0_wmma_vk128_load_a_raw_frag_w64_baseoff_nowait<0, 0>(sh_a_lds, wave_row, lane);
@@ -2165,6 +2287,7 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
                 hrx_q8_0_wmma_vk128_raw_frag_to_half16(b12_raw);
             const hrx_q8_0_wmma_vk128_half16_vec b13 =
                 hrx_q8_0_wmma_vk128_raw_frag_to_half16(b13_raw);
+#endif
 #else
             const hrx_q8_0_wmma_vk128_half16_vec a00 =
                 hrx_q8_0_wmma_vk128_load_a_frag_w64_b64asm_nowait(sh_a_lds, wave_row * 4 + 0, 0, lane);
@@ -2206,6 +2329,8 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
 #endif
 #endif
 
+#if !(HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT_K2_BASEOFF && \
+      HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT_K2_SPLIT59)
 #if HRX_Q8_0_WMMA_VK128_W64_B64GROUP_DEPENDENT_WAIT_K2_DIRECT
             HRX_Q8_0_WMMA_VK128_WAIT_WMMA(0, a00, b00, 51);
             HRX_Q8_0_WMMA_VK128_WAIT_WMMA(1, a01, b00, 47);
@@ -2274,6 +2399,7 @@ void HRX_Q8_0_WMMA_VK128_EXPORT(
             HRX_Q8_0_WMMA_VK128_DEP_WMMA_AFTER(13, a11, b13, 0, b13, 12);
             HRX_Q8_0_WMMA_VK128_DEP_WMMA_AFTER(14, a12, b13, 0, a11, 13);
             HRX_Q8_0_WMMA_VK128_DEP_WMMA_AFTER(15, a13, b13, 0, a12, 14);
+#endif
 #endif
 #else
 #pragma unroll

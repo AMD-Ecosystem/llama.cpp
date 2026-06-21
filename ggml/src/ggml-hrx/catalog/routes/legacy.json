@@ -12518,6 +12518,50 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_baseoff_split59_bufferstore_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_baseoff_split59_bufferstore_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_baseoff_split59_bufferstore_wg256",
+    "artifact_id": "mul_mat_vec_q8_0_wmma16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_baseoff_split59_bufferstore_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_baseoff_split59_bufferstore_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 110,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q8_0_prompt_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_baseoff_split59_bufferstore_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q8_0 x F32 -> F32 MUL_MAT",
+      "k_multiple": 32,
+      "win_domain": "rows >= 8192 || k >= 8192",
+      "cols_min": 128,
+      "selector_gate": "GGML_HRX_ENABLE_Q8_0_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_ASMWMMA_MOTIF192_K2_BASEOFF_SPLIT59_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "prior_delta": "Transfers the accepted diagnostic split59 issue-window schedule from cache/hrxv1/gfx1151/q8-baseoff-split59-probe-fd70da2e0-20260621-001116/ into a real Q8_0 catalog ABI. It keeps the base-offset LDS address contract and motif192 writeback surface but delays the final a12 lane plus a13 until after the first four WMMAs so the first hot region targets RADV's 59 immediate LDS-load window instead of the older HIP baseoff 64-load window."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_baseoff_split59_bufferstore_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_opt_in_static_match_perf_regression",
+      "selection": "Route-facing probe only, kept behind its explicit selector gate. CMake/Ninja build passed and the built HSACO matched the RADV Q8_0 large issue-window screen with one 32-WMMA region, final lgkmcnt(51), and exactly 59 immediate LDS loads. Focused CPU-reference p33/p512/p513 passed, and route traces proved p33 stayed on narrow/default routes while p512/p513 selected this provider only for intended wide ffn_out, ffn_gate, and result_output rows. Reject for promotion because same-runner focused perf lost badly to the packed-Q8_1 default: p512 total 65392.050 -> 98726.973 us (1.510x slower) and p513 total 81068.259 -> 114518.954 us (1.413x slower). Artifact: cache/hrxv1/gfx1151/q8-baseoff-split59-realdata-67045a7c93d0-dirty-20260621-002755/. Static issue-window matching alone is insufficient; next Q8 work needs lower-level cooperative operand/writeback/lane ownership or a materially different packed dataflow."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_baseoff_raw16_fulltile_bufferstore_f16acc_wg256_f32",
     "family": "mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_baseoff_raw16_fulltile_bufferstore_f16acc_wg256",
     "op": "MUL_MAT",
