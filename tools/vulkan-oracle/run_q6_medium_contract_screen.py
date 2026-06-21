@@ -133,6 +133,103 @@ def compact_check(script_dir: pathlib.Path, args: argparse.Namespace, out_dir: p
     return summary
 
 
+def reuse_histogram(summary: dict, operand: str) -> list[int]:
+    uses = summary.get("wmma", {}).get("unique_operands", {}).get(operand, {})
+    return sorted((int(count) for count in uses.values()), reverse=True)
+
+
+def ownership_contract(compact: dict | None) -> dict | None:
+    if compact is None:
+        return None
+    ownership_path = compact.get("artifacts", {}).get("ownership_json")
+    if not ownership_path:
+        return {
+            "passed": False,
+            "checks": [
+                {
+                    "kind": "ownership_artifact",
+                    "name": "ownership_json",
+                    "lhs": None,
+                    "rhs": None,
+                    "rule": "artifact must exist",
+                    "passed": False,
+                }
+            ],
+        }
+    ownership_file = pathlib.Path(ownership_path)
+    if not ownership_file.exists():
+        return {
+            "passed": False,
+            "checks": [
+                {
+                    "kind": "ownership_artifact",
+                    "name": "ownership_json",
+                    "lhs": None,
+                    "rhs": str(ownership_file),
+                    "rule": "artifact must exist",
+                    "passed": False,
+                }
+            ],
+        }
+
+    ownership = load_json(ownership_file)
+    summaries = ownership.get("summaries", [])
+    comparison = ownership.get("comparison", {})
+    checks = []
+
+    if len(summaries) >= 2:
+        lhs_summary, rhs_summary = summaries[0], summaries[1]
+        for operand in ("dst", "a", "b", "c"):
+            lhs_hist = reuse_histogram(lhs_summary, operand)
+            rhs_hist = reuse_histogram(rhs_summary, operand)
+            checks.append(
+                {
+                    "kind": "wmma_operand_reuse",
+                    "name": operand,
+                    "lhs": lhs_hist,
+                    "rhs": rhs_hist,
+                    "rule": "rhs reuse histogram == lhs reuse histogram",
+                    "passed": rhs_hist == lhs_hist,
+                }
+            )
+
+    bank_overlap = comparison.get("operand_bank_overlap", {})
+    for operand in ("dst", "a", "b", "c"):
+        item = bank_overlap.get(operand, {})
+        lhs_unique = item.get("lhs_unique")
+        rhs_unique = item.get("rhs_unique")
+        checks.append(
+            {
+                "kind": "wmma_operand_unique_banks",
+                "name": operand,
+                "lhs": lhs_unique,
+                "rhs": rhs_unique,
+                "rule": "rhs unique bank count == lhs unique bank count",
+                "passed": rhs_unique == lhs_unique,
+            }
+        )
+
+    wait_ladder = comparison.get("wait_ladder", {})
+    lhs_wait = wait_ladder.get("lhs")
+    rhs_wait = wait_ladder.get("rhs")
+    checks.append(
+        {
+            "kind": "wmma_wait_ladder",
+            "name": "lgkmcnt_sequence",
+            "lhs": lhs_wait,
+            "rhs": rhs_wait,
+            "rule": "rhs wait ladder == lhs wait ladder",
+            "passed": rhs_wait == lhs_wait,
+        }
+    )
+
+    return {
+        "passed": all(check["passed"] for check in checks),
+        "ownership_json": str(ownership_file),
+        "checks": checks,
+    }
+
+
 def write_markdown(path: pathlib.Path, payload: dict) -> None:
     compare = payload["compare"]
     contract = payload["contract"]
@@ -156,6 +253,10 @@ def write_markdown(path: pathlib.Path, payload: dict) -> None:
     if payload.get("compact_check") is not None:
         lines.append(
             f"- compact f16 accumulator screen passed: `{payload['compact_check'].get('passes_compact_f16_accumulator_screen')}`"
+        )
+    if payload.get("ownership_contract") is not None:
+        lines.append(
+            f"- WMMA operand-topology contract passed: `{payload['ownership_contract'].get('passed')}`"
         )
     lines += [
         "",
@@ -199,14 +300,32 @@ def write_markdown(path: pathlib.Path, payload: dict) -> None:
             f"`{check.get('rhs')}` | `{check['rule']}` | `{check['passed']}` |"
         )
 
+    if payload.get("ownership_contract") is not None:
+        lines += [
+            "",
+            "## WMMA Operand-Topology Checks",
+            "",
+            f"- ownership artifact: `{payload['ownership_contract'].get('ownership_json')}`",
+            "",
+            "| Kind | Name | RADV | HIP | Rule | Pass |",
+            "| --- | --- | --- | --- | --- | --- |",
+        ]
+        for check in payload["ownership_contract"].get("checks", []):
+            lines.append(
+                f"| `{check['kind']}` | `{check['name']}` | "
+                f"`{json.dumps(check.get('lhs'), sort_keys=True)}` | "
+                f"`{json.dumps(check.get('rhs'), sort_keys=True)}` | "
+                f"`{check['rule']}` | `{check['passed']}` |"
+            )
+
     lines += [
         "",
         "## Interpretation",
         "",
     ]
-    if payload["passes_exact_contract"]:
+    if payload["passes_full_static_contract"]:
         lines.append(
-            "The HIP candidate matches the source-controlled exact static contract. "
+            "The HIP candidate matches the source-controlled exact static contract, including requested ownership screens. "
             "This is still not promotion evidence; run focused CPU-reference, route-trace, and same-runner p33/p512/p513 timing gates next."
         )
     else:
@@ -288,6 +407,9 @@ def main() -> int:
     passes_compact = True
     if compact is not None:
         passes_compact = bool(compact.get("passes_compact_f16_accumulator_screen"))
+    ownership = ownership_contract(compact)
+    passes_ownership = True if ownership is None else bool(ownership.get("passed"))
+    passes_full_static = passes_contract and passes_compact and passes_ownership
 
     summary = {
         "schema": "q6-medium-static-contract-screen-v1",
@@ -301,7 +423,9 @@ def main() -> int:
         "compare_returncode": compare_proc.returncode,
         "contract_returncode": contract_proc.returncode,
         "passes_exact_contract": passes_contract,
+        "passes_full_static_contract": passes_full_static,
         "compact_check": compact,
+        "ownership_contract": ownership,
         "artifacts": {
             "isa_compare_json": str(compare_json),
             "isa_compare_md": str(compare_md),
@@ -316,7 +440,7 @@ def main() -> int:
     write_markdown(args.out_dir / "summary.md", summary)
     print(json.dumps({k: v for k, v in summary.items() if k not in ("compare", "contract")}, indent=2, sort_keys=True))
 
-    if args.fail_on_contract_miss and (not passes_contract or not passes_compact):
+    if args.fail_on_contract_miss and not passes_full_static:
         return 1
     return 0
 
