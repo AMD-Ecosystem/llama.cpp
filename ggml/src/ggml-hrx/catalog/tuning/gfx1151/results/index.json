@@ -3,6 +3,77 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_id_subgroup_contract_banked_deps_4bbd6ce54_dirty",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q6-id-subgroup-contract-banked-deps-4bbd6ce54-dirty-20260620-232846/",
+      "source_commit": "4bbd6ce54 plus this result's fixture source",
+      "tool": "CMake/Ninja-built hrx-hip-bench-q6-id-subgroup-contract, llvm-objdump --offloading, extract_wmma_ownership.py, and extract_objdump_symbol.py",
+      "status": "rejected_route_candidate_accepted_operand_cardinality_fixture",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K MUL_MAT_ID p33/fa1 banked subgroup-ID WMMA ownership clone on gfx1151",
+        "baseline_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q6-id-subgroup-contract 2000, direct/staged/loaddeep/minstore rows",
+        "variant_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q6-id-subgroup-contract 2000, banked row",
+        "same_runner_comparison_method": "single executable micro-fixture timing only; no production route or model A/B because the fixture is slower and misses the exact RADV wait ladder",
+        "route_trace_path": "not applicable; no production route changed",
+        "scheduler_trace_path": "artifact static/wmma-ownership.{json,md}, static/banked-symbol.amdgcn.txt, static/device-objdump.txt, and static/device-readelf-notes.txt",
+        "focused_cpu_reference": "artifact bench.stdout.csv reports banked valid=1 over the fixture's 2048 output values",
+        "compile_report_path": "artifact static/device-readelf-notes.txt",
+        "target_listing_path": "CMake target hrx-hip-bench-q6-id-subgroup-contract built in build/hrx-v1-catalog-gfx1151",
+        "prior_art_schedule_source": "Qwen3 30B Q6_K p33 Vulkan matmul_id_subgroup_q6_k_f32_f16acc_aligned_m oracle at cache/hrxv1/gfx1151/vulkan-oracle-qwen3-30b-q6k-p33-fa1-20260618-061613/",
+        "promotion_rule": "reject unless the route-facing candidate preserves RADV's 8 A banks, 4 B banks, decreasing wait ladder, correctness on p33/p512/p513 focused rows, and beats the current grouped Q8_1/x4 MUL_MAT_ID provider."
+      },
+      "static_result": {
+        "correctness": "pass",
+        "timing_us": {
+          "direct": 2.266737,
+          "staged": 3.361962,
+          "loaddeep": 3.539264,
+          "minstore": 3.45453,
+          "banked": 3.766118
+        },
+        "radv_contract": {
+          "wmma": 16,
+          "ds_load_b64": 52,
+          "a_operand_banks": 8,
+          "b_operand_banks": 4,
+          "dst_operand_banks": 8,
+          "wait_ladder": [40, 36, 32, 28, 24, 16, 12, 8, 4, 0],
+          "ds_store_b128": 2
+        },
+        "hip_banked_result": {
+          "wavefront_size": 64,
+          "sgpr": 14,
+          "vgpr": 110,
+          "lds_bytes": 12288,
+          "scratch_bytes": 0,
+          "sgpr_spills": 0,
+          "vgpr_spills": 0,
+          "wmma": 16,
+          "ds_load_b64": 52,
+          "a_operand_banks": 8,
+          "b_operand_banks": 4,
+          "dst_operand_banks": 7,
+          "wait_ladder": [0, 36, 32, 28, 24, 16, 8, 4],
+          "ds_load_u16_d16": 32,
+          "ds_store_b16": 32,
+          "ds_store_b128": 24,
+          "global_store_b32": 32,
+          "barriers": 2,
+          "s_waitcnt": 46
+        },
+        "interpretation": [
+          "HIP C++ can preserve the RADV Q6 ID operand-bank cardinality in a valid CMake-built fixture: 8 A banks, 4 B banks, 16 WMMAs, and 52 ds_load_b64",
+          "the dependency-anchored wait spelling still does not preserve the exact RADV issue ladder: early WMMAs move ahead of the intended lgkmcnt(40), and lgkmcnt(12)/lgkmcnt(0) are not visible in the extracted sequence",
+          "the row is slower than minstore and staged in the micro-fixture, so it is a static schedule probe rather than a production route candidate"
+        ]
+      },
+      "findings": [
+        "added q6_id_subgroup_contract_banked_probe to the CMake/Ninja-built subgroup-contract bench",
+        "the banked row validates and materially improves the minstore operand-ownership match from 1 A / 1 B bank to 8 A / 4 B banks",
+        "route-facing work should next preserve this operand cardinality while solving the wait-order and ds_store_b128 inflation before full p33/p512/p513 integration"
+      ]
+    },
+    {
       "id": "q6_k_vk64_depwait_direct_rejection_1d2fabbb1_dirty",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-kloop-depwait-direct-1d2fabbb1-dirty-20260620-195910/",

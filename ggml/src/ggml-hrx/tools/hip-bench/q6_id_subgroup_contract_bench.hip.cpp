@@ -133,6 +133,19 @@ static __device__ __forceinline__ void q6id_contract_init_fragments(
     }
 }
 
+static __device__ __forceinline__ void q6id_contract_init_banked_fragments(
+        uint64_t * sh_frag,
+        unsigned int lane) {
+#pragma unroll
+    for (unsigned int frag = 0; frag < 12u; ++frag) {
+        const uint64_t packed = q6id_contract_half_pack4(1.0f + static_cast<float>(frag & 3u));
+#pragma unroll
+        for (unsigned int item = 0; item < 4u; ++item) {
+            sh_frag[frag * 256u + lane * 4u + item] = packed;
+        }
+    }
+}
+
 static __device__ __forceinline__ void q6id_contract_init_fragment0(
         uint64_t * sh_frag,
         unsigned int lane) {
@@ -171,6 +184,17 @@ static __device__ __forceinline__ void q6id_contract_init_fragment0(
     q6id_contract_store_value(dst, counts, _group, 1u, lane, static_cast<float>(v1)); \
 } while (0)
 
+#define HRX_Q6ID_CONTRACT_WAIT_LGKMCNT(VALUE) \
+    asm volatile("s_waitcnt lgkmcnt(" #VALUE ")\n" ::: "memory")
+
+#define HRX_Q6ID_CONTRACT_WAIT_LGKMCNT_DEPS(VALUE, A_FRAG, B_FRAG) do { \
+    const q6id_contract_u32x8_vec _a_raw = __builtin_bit_cast(q6id_contract_u32x8_vec, (A_FRAG)); \
+    const q6id_contract_u32x8_vec _b_raw = __builtin_bit_cast(q6id_contract_u32x8_vec, (B_FRAG)); \
+    asm volatile("s_waitcnt lgkmcnt(" #VALUE ")\n" \
+                 :: "v"(_a_raw[0]), "v"(_a_raw[7]), "v"(_b_raw[0]), "v"(_b_raw[7]) \
+                 : "memory"); \
+} while (0)
+
 extern "C" __global__ __launch_bounds__(256, 1)
 void q6_id_subgroup_contract_direct_probe(float * dst, unsigned int * counts) {
     const unsigned int lane = __builtin_amdgcn_workitem_id_x() & 63u;
@@ -183,6 +207,100 @@ void q6_id_subgroup_contract_direct_probe(float * dst, unsigned int * counts) {
     for (unsigned int group = 0; group < HRX_Q6ID_CONTRACT_GROUPS; ++group) {
         q6id_contract_store_value(dst, counts, group, 0u, lane, q6id_contract_seed(group, 0u, lane));
         q6id_contract_store_value(dst, counts, group, 1u, lane, q6id_contract_seed(group, 1u, lane));
+    }
+}
+
+extern "C" __global__ __launch_bounds__(256, 1)
+void q6_id_subgroup_contract_banked_probe(float * dst, unsigned int * counts) {
+    __shared__ uint64_t sh_frag[12 * 256];
+    __shared__ uint16_t sh_stage[HRX_Q6ID_CONTRACT_VALUES];
+
+    const unsigned int tid = __builtin_amdgcn_workitem_id_x();
+    const unsigned int lane = tid & 63u;
+    const unsigned int wave = tid >> 6u;
+
+    if (wave == 0u) {
+        q6id_contract_init_banked_fragments(sh_frag, lane);
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+
+    if (wave == 0u) {
+    q6id_contract_sink_fragment(q6id_contract_load_fragment(
+        (const __attribute__((address_space(3))) uint64_t *) sh_frag, 0u, lane));
+    const q6id_contract_half16_vec a0 = q6id_contract_load_fragment(
+        (const __attribute__((address_space(3))) uint64_t *) sh_frag, 0u, lane);
+    const q6id_contract_half16_vec b0 = q6id_contract_load_fragment(
+        (const __attribute__((address_space(3))) uint64_t *) sh_frag, 8u, lane);
+    const q6id_contract_half16_vec b1 = q6id_contract_load_fragment(
+        (const __attribute__((address_space(3))) uint64_t *) sh_frag, 9u, lane);
+    const q6id_contract_half16_vec a1 = q6id_contract_load_fragment(
+        (const __attribute__((address_space(3))) uint64_t *) sh_frag, 1u, lane);
+    const q6id_contract_half16_vec a2 = q6id_contract_load_fragment(
+        (const __attribute__((address_space(3))) uint64_t *) sh_frag, 2u, lane);
+    const q6id_contract_half16_vec a3 = q6id_contract_load_fragment(
+        (const __attribute__((address_space(3))) uint64_t *) sh_frag, 3u, lane);
+    const q6id_contract_half16_vec a4 = q6id_contract_load_fragment(
+        (const __attribute__((address_space(3))) uint64_t *) sh_frag, 4u, lane);
+    const q6id_contract_half16_vec b2 = q6id_contract_load_fragment(
+        (const __attribute__((address_space(3))) uint64_t *) sh_frag, 10u, lane);
+    const q6id_contract_half16_vec b3 = q6id_contract_load_fragment(
+        (const __attribute__((address_space(3))) uint64_t *) sh_frag, 11u, lane);
+    const q6id_contract_half16_vec a5 = q6id_contract_load_fragment(
+        (const __attribute__((address_space(3))) uint64_t *) sh_frag, 5u, lane);
+    const q6id_contract_half16_vec a6 = q6id_contract_load_fragment(
+        (const __attribute__((address_space(3))) uint64_t *) sh_frag, 6u, lane);
+    const q6id_contract_half16_vec a7 = q6id_contract_load_fragment(
+        (const __attribute__((address_space(3))) uint64_t *) sh_frag, 7u, lane);
+
+    HRX_Q6ID_CONTRACT_WAIT_LGKMCNT_DEPS(40, a0, b0);
+    HRX_Q6ID_CONTRACT_WMMA(0u, a0, b0);
+    HRX_Q6ID_CONTRACT_WAIT_LGKMCNT_DEPS(36, a0, b1);
+    HRX_Q6ID_CONTRACT_WMMA(1u, a0, b1);
+    HRX_Q6ID_CONTRACT_WAIT_LGKMCNT_DEPS(32, a1, b0);
+    HRX_Q6ID_CONTRACT_WMMA(2u, a1, b0);
+    HRX_Q6ID_CONTRACT_WMMA(3u, a1, b1);
+    HRX_Q6ID_CONTRACT_WAIT_LGKMCNT_DEPS(28, a2, b0);
+    HRX_Q6ID_CONTRACT_WMMA(4u, a2, b0);
+    HRX_Q6ID_CONTRACT_WMMA(5u, a2, b1);
+    HRX_Q6ID_CONTRACT_WAIT_LGKMCNT_DEPS(24, a3, b1);
+    HRX_Q6ID_CONTRACT_WMMA(6u, a3, b1);
+    HRX_Q6ID_CONTRACT_WMMA(7u, a3, b0);
+    HRX_Q6ID_CONTRACT_WAIT_LGKMCNT_DEPS(16, a4, b2);
+    HRX_Q6ID_CONTRACT_WMMA(8u, a4, b2);
+    HRX_Q6ID_CONTRACT_WAIT_LGKMCNT_DEPS(12, a4, b3);
+    HRX_Q6ID_CONTRACT_WMMA(9u, a4, b3);
+    HRX_Q6ID_CONTRACT_WAIT_LGKMCNT_DEPS(8, a5, b2);
+    HRX_Q6ID_CONTRACT_WMMA(10u, a5, b2);
+    HRX_Q6ID_CONTRACT_WMMA(11u, a5, b3);
+    HRX_Q6ID_CONTRACT_WAIT_LGKMCNT_DEPS(4, a6, b2);
+    HRX_Q6ID_CONTRACT_WMMA(12u, a6, b2);
+    HRX_Q6ID_CONTRACT_WMMA(13u, a6, b3);
+    HRX_Q6ID_CONTRACT_WAIT_LGKMCNT_DEPS(0, a7, b3);
+    HRX_Q6ID_CONTRACT_WMMA(14u, a7, b3);
+    HRX_Q6ID_CONTRACT_WMMA(15u, a7, b2);
+    }
+
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+
+    if (wave == 0u) {
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(0u);
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(1u);
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(2u);
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(3u);
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(4u);
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(5u);
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(6u);
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(7u);
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(8u);
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(9u);
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(10u);
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(11u);
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(12u);
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(13u);
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(14u);
+    HRX_Q6ID_CONTRACT_STAGE_FLUSH(15u);
     }
 }
 
@@ -442,6 +560,8 @@ static double run_kernel(const std::string & name, int reps, float * d_dst, unsi
     for (int i = 0; i < reps; ++i) {
         if (name == "direct") {
             q6_id_subgroup_contract_direct_probe<<<1, 256>>>(d_dst, d_counts);
+        } else if (name == "banked") {
+            q6_id_subgroup_contract_banked_probe<<<1, 256>>>(d_dst, d_counts);
         } else if (name == "loaddeep") {
             q6_id_subgroup_contract_loaddeep_probe<<<1, 256>>>(d_dst, d_counts);
         } else if (name == "minstore") {
@@ -522,17 +642,25 @@ int main(int argc, char ** argv) {
     HIP_CHECK(hipDeviceSynchronize());
     const bool minstore_ok = validate(d_dst, d_counts);
 
+    clear_buffers(d_dst, d_counts);
+    q6_id_subgroup_contract_banked_probe<<<1, 256>>>(d_dst, d_counts);
+    HIP_CHECK(hipGetLastError());
+    HIP_CHECK(hipDeviceSynchronize());
+    const bool banked_ok = validate(d_dst, d_counts);
+
     const double direct_us = run_kernel("direct", reps, d_dst, d_counts);
     const double staged_us = run_kernel("staged", reps, d_dst, d_counts);
     const double loaddeep_us = run_kernel("loaddeep", reps, d_dst, d_counts);
     const double minstore_us = run_kernel("minstore", reps, d_dst, d_counts);
+    const double banked_us = run_kernel("banked", reps, d_dst, d_counts);
     std::printf("kernel,valid,us\n");
     std::printf("direct,%d,%.6f\n", direct_ok ? 1 : 0, direct_us);
     std::printf("staged,%d,%.6f\n", staged_ok ? 1 : 0, staged_us);
     std::printf("loaddeep,%d,%.6f\n", loaddeep_ok ? 1 : 0, loaddeep_us);
     std::printf("minstore,%d,%.6f\n", minstore_ok ? 1 : 0, minstore_us);
+    std::printf("banked,%d,%.6f\n", banked_ok ? 1 : 0, banked_us);
 
     HIP_CHECK(hipFree(d_dst));
     HIP_CHECK(hipFree(d_counts));
-    return (direct_ok && staged_ok && loaddeep_ok && minstore_ok) ? 0 : 1;
+    return (direct_ok && staged_ok && loaddeep_ok && minstore_ok && banked_ok) ? 0 : 1;
 }
