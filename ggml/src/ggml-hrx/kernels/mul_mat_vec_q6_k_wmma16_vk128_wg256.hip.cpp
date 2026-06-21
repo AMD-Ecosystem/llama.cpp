@@ -82,6 +82,10 @@
 #define HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT_LADDER 0
 #endif
 
+#ifndef HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT_WAIT123
+#define HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT_WAIT123 0
+#endif
+
 #ifndef HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_EXPWAIT_LADDER
 #define HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_EXPWAIT_LADDER 0
 #endif
@@ -1672,6 +1676,14 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
                         asm volatile("s_waitcnt lgkmcnt(20)\n" ::: "memory");
                     } else if (group == 12) {
                         asm volatile("s_waitcnt lgkmcnt(16)\n" ::: "memory");
+                    }
+#elif HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT_WAIT123
+                    if (group == 1) {
+                        asm volatile("s_waitcnt lgkmcnt(36)\n" ::: "memory");
+                    } else if (group == 2) {
+                        asm volatile("s_waitcnt lgkmcnt(28)\n" ::: "memory");
+                    } else if (group == 3) {
+                        asm volatile("s_waitcnt lgkmcnt(20)\n" ::: "memory");
                     }
 #endif
 #if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_RING12_ALIAS
