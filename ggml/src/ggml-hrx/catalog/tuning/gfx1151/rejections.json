@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_dense_accepted_compact_accumulator_screen_56e8e5cca",
+      "date": "2026-06-21",
+      "route": "current accepted Q6_K dense direct-WMMA routes: vk128 p512/p513 and vk64 h4load p33",
+      "env": "static screen only; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/q6-large-accepted-compact-screen-56e8e5cca-20260621-continue/",
+      "perf_artifact": "not run; this records a static prerequisite screen against existing accepted routes",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-large-accepted-compact-screen-56e8e5cca-20260621-continue/wmma-ownership.json and cache/hrxv1/gfx1151/q6-p33-h4load-compact-screen-56e8e5cca-20260621-continue/wmma-ownership.json",
+      "compile_artifact": "CMake/Ninja-generated gfx1151 HSACOs for mul_mat_vec_q6_k_wmma16_vk128_padded_w64_wg256 and mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_h4load_wg256",
+      "reason": "This static screen tests the accepted dense Q6_K direct-WMMA routes against RADV compact f16 accumulator ownership. Both fail tools/vulkan-oracle/run_wmma_compact_screen.py --require-compact-f16-accumulators. The large p512/p513 accepted VK128 route matches RADV's 32-WMMA headline but emits width-8 dst/C operands for all 32 WMMA, has zero ds_load_b64 in the extracted symbol, only 64 global stores, only 2 ds_store_b16, no ds_load_u16_d16, and 128 depctrs; RADV large uses compact width-4 dst/C, 64 ds_load_b64, 192 buffer stores, 128 ds_store_b16, 128 ds_load_u16_d16, and two barriers. The accepted p33 H4LOAD route is farther away: 8 WMMA, width-8 dst/C, 16 global stores, 2 ds_store_b16, and no ds_load_u16_d16 versus RADV p33's 16 WMMA, compact width-4 dst/C, 48 ds_load_b64, 96 buffer stores, and 64 halfword store/loadback ops. This extends the compact-accumulator/writeback blocker across the current Q6 dense defaults; future Q6 dense work should not add another VK128/VK64 HIP C++ WMMA wrapper unless it changes the lower-level ownership primitive or intentionally pivots to a measured packed-Q8_1/x4 route."
+    },
+    {
       "id": "q4_q5_direct_wmma_compact_accumulator_screen_364fe690b",
       "date": "2026-06-21",
       "route": "Q4_K/Q5_K direct-WMMA clone family: q4 vk128 b64group, q5 vk128 motif192 bufferstore, and q5 p33 wave4row",
