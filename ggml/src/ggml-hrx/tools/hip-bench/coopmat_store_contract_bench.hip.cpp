@@ -3667,13 +3667,15 @@ static void run_timing_suite(
 
 int main(int argc, char ** argv) {
     const options opts = parse_options(argc, argv);
-    const size_t count = HRX_COOPSTORE_MAX_VALUES;
+    const unsigned long long requested_values =
+        static_cast<unsigned long long>(opts.rows) * static_cast<unsigned long long>(opts.cols);
+    const size_t count = static_cast<size_t>(
+        requested_values > static_cast<unsigned long long>(HRX_COOPSTORE_MAX_VALUES) ?
+            requested_values : static_cast<unsigned long long>(HRX_COOPSTORE_MAX_VALUES));
     const unsigned long long byte_extent = static_cast<unsigned long long>(count * sizeof(float));
-    if (opts.rows == 0 || opts.cols == 0 ||
-            static_cast<unsigned long long>(opts.rows) * static_cast<unsigned long long>(opts.cols) >
-                static_cast<unsigned long long>(count)) {
-        std::fprintf(stderr, "invalid rows/cols for fixed output buffer: rows=%u cols=%u max=%zu\n",
-            opts.rows, opts.cols, count);
+    if (opts.rows == 0 || opts.cols == 0) {
+        std::fprintf(stderr, "invalid rows/cols: rows=%u cols=%u\n",
+            opts.rows, opts.cols);
         return 2;
     }
 

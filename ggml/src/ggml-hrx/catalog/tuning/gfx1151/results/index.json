@@ -3,6 +3,43 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6addr_production_upperdepnomem_map_dynbuf_49d47201f_dirty",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/q6addr-production-map-dynbuf-49d47201f-dirty-20260621-091356/",
+      "source_commit": "49d47201f-dirty",
+      "tool": "CMake/Ninja-built hrx-hip-bench-coopmat-store-contract --mode=q6addr-production-upperdepnomem-map with dynamic output buffer sizing",
+      "status": "accepted_low_level_production_map_gate_not_route_promotion",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K p33 dense prompt medium-route q6addr upperdepnomem production output mapping, before another route-facing transfer of the low-wait q6addr store primitive",
+        "baseline_command": "cmake --build build/hrx-v1-catalog-gfx1151 --target hrx-hip-bench-coopmat-store-contract -j$(nproc)",
+        "variant_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract --mode=q6addr-production-upperdepnomem-map --flags=0x31004000 --rows=<rows> --cols=<cols>",
+        "same_runner_comparison_method": "same rebuilt native HIP fixture binary at current source; validate the production q6addr upperdepnomem source-group map across p33, full/tail, and narrow-wide output surfaces",
+        "route_trace_path": "not applicable; low-level production-map fixture and no production selector changed",
+        "scheduler_trace_path": "inherits q6_k_vk64_radv96_q6addr_upperdepnomem_current_prior_ab8ae9a82 for the static low-wait/store-surface prior; this artifact validates map correctness only",
+        "focused_cpu_reference": "artifact stdout rows all report bad=0 and max_abs=0 for 64x33, 128x33, 64x96, 64x97, 64x191, 128x96, 128x191, and 32x383",
+        "compile_report_path": "artifact build.log; CMake/Ninja regenerated hrx-hip-bench-coopmat-store-contract after dynamic buffer harness edit",
+        "target_listing_path": "not extracted; no new kernel schedule claim is made by this map-only gate",
+        "prior_art_schedule_source": "q6_k_vk64_radv96_q6addr_upperdepnomem_current_prior_ab8ae9a82 and the rejected route-facing upperdepnomem transfer q6_k_vk64_padladder_upperdepnomem_p33_perf",
+        "promotion_rule": "do not promote from this fixture alone. A route-facing candidate must still preserve the low-wait/low-depctr fixture schedule in the production HSACO, pass focused p33 CPU-reference with route traces, and beat accepted H4LOAD timing before p512/p513/model promotion."
+      },
+      "focused_result": {
+        "64x33": "elements=12288, bad=0, max_abs=0",
+        "128x33": "elements=12288, bad=0, max_abs=0",
+        "64x96": "elements=12288, bad=0, max_abs=0",
+        "64x97": "elements=12288, bad=0, max_abs=0",
+        "64x191": "elements=12288, bad=0, max_abs=0",
+        "128x96": "elements=12288, bad=0, max_abs=0",
+        "128x191": "elements=24448, bad=0, max_abs=0",
+        "32x383": "elements=12288, bad=0, max_abs=0"
+      },
+      "findings": [
+        "extended the CMake/Ninja-built coopmat-store-contract harness to allocate at least rows*cols output elements, removing the previous fixed 12288-element cap that blocked larger odd/tail production-map checks",
+        "the production q6addr upperdepnomem source-group map validates on the p33 odd/narrow rows already used by Q6 focused gates and on larger tail-like surfaces, including 128x191",
+        "this strengthens the prerequisite evidence for upperdepnomem route work: output coordinate mapping is not the remaining blocker",
+        "the remaining blocker is still schedule transfer. The previous route-facing upperdepnomem candidate passed correctness but failed to preserve the low-wait/low-depctr fixture surface and regressed H4LOAD timing."
+      ]
+    },
+    {
       "id": "q6_k_vk64_q6addr_upperdepnomem_compact_helper4_route_rejection_3ff10bb41_dirty",
       "date": "2026-06-21",
       "artifact": "cache/hrxv1/gfx1151/q6-vk64-q6addr-compact-helper4-route-3ff10bb41-dirty-20260621-090659/",
