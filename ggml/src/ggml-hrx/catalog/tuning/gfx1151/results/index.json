@@ -3,6 +3,54 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_k_vk64_q6addr_upperdepnomem_prewait_correctness_rejection_899fb4d1f_dirty",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-q6addr-upperdepnomem-prewait-route-899fb4d1f-dirty-20260621-092002/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-q6addr-upperdepnomem-prewait-899fb4d1f-dirty-20260621-091945/",
+      "source_commit": "899fb4d1f-dirty",
+      "tool": "CMake/Ninja-built Q6 q6addr upperdepnomem prewait generated HSACO, tools/vulkan-oracle/run_q6_medium_contract_screen.py, and focused test-backend-ops p33 CPU-reference",
+      "status": "rejected_gfx1151_correctness_probe",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_prewait_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASM_COPYAB_Q6ADDR_UPPERDEPNOMEM_PREWAIT_F16ACC_WG256_PROMPT=1",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K p33 dense prompt medium-route WMMA issue window. Test whether removing the intra-loop PADWAIT_LADDER while forcing the initial lgkmcnt(40) pre-WMMA wait restores correctness and reduces the q6addr upperdepnomem route's wait surface.",
+        "baseline_command": "static and focused correctness comparison against rejected q6_k_vk64_q6addr_upperdepnomem_route_rejection_b5a364ae8_dirty, q6_k_vk64_padwait_upperdepnomem_p33_correctness, and the accepted H4LOAD default; no perf run after correctness failure",
+        "variant_command": "GGML_HRX_TRACE_ROUTES=1 GGML_HRX_TRACE_PROVIDERS=1 GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASM_COPYAB_Q6ADDR_UPPERDEPNOMEM_PREWAIT_F16ACC_WG256_PROMPT=1 build/hrx-v1-catalog-gfx1151/bin/test-backend-ops test -b HRX0 -o MUL_MAT --test-file cache/hrxv1/gfx1151/q6-wmma-vk64-padded44-medium-focused-20260618-062606/q6_prompt_p33.txt --output csv",
+        "same_runner_comparison_method": "same rebuilt test-backend-ops binary and same focused odd p33 Q6 MUL_MAT rows used for previous upperdepnomem route-transfer probes",
+        "route_trace_path": "artifact p33-correctness.trace.log",
+        "scheduler_trace_path": "static_artifact summary.md, isa-compare.md, and contract-check.json",
+        "focused_cpu_reference": "artifact p33-correctness.csv selected the prewait provider for ffn_out-0-p33 and result_output-p33 and failed both rows with finite ERR 0.036587931 and 0.053280036; Vcur-0-p33 passed on rows2_cols8 and did not select this provider",
+        "compile_report_path": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_prewait_wg256.hsaco built by CMake/Ninja",
+        "target_listing_path": "static_artifact isa-compare.md and unbundled HIP objdump artifacts",
+        "prior_art_schedule_source": "Qwen3 30B Q6_K p33 RADV medium oracle matmul_q6_k_f32_f16acc_aligned_m, rejected q6addr upperdepnomem route b5a364ae8, rejected padwait upperdepnomem route c6d522040, and accepted q6addr production-map fixture q6addr_production_upperdepnomem_map_dynbuf_49d47201f_dirty",
+        "promotion_rule": "reject immediately on focused CPU-reference failure. Do not run perf/model tests for a route that corrupts p33 rows."
+      },
+      "static_result": {
+        "exact_static_contract_passed": false,
+        "matching_facts": "16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 96 buffer_store_b32, two barriers, no spills, pre_wmma_ds_load_b64=48, load_b64_immediately_before_final_wait=48, final_pre_wmma_lgkmcnt=40, and wmma_in_window=16",
+        "misses": "LDS 14336 versus RADV 11264, VGPR 165 versus RADV 144, ds_store_b16 2 versus RADV 64, store-cluster LDS stores 10 versus RADV 70, and s_waitcnt 80 versus RADV 115. The route improves the rejected padladder upperdepnomem wait count but remains a static deviation.",
+        "resource_facts": {
+          "sgpr": 42,
+          "vgpr": 165,
+          "lds_bytes": 14336,
+          "scratch_bytes": 0,
+          "instructions": 2172,
+          "s_waitcnt": 80
+        }
+      },
+      "focused_result": {
+        "Vcur-0-p33": "passed but selected rows2_cols8, not the prewait provider",
+        "ffn_out-0-p33": "failed ERR=0.036587931 with prewait provider selected",
+        "result_output-p33": "failed ERR=0.053280036 with prewait provider selected"
+      },
+      "findings": [
+        "the route built through CMake/Ninja and selected under the explicit opt-in env for the dominant ffn_out and result_output p33 rows",
+        "forcing the initial pre-WMMA wait while removing the intra-loop ladder restores the intended static window facts: 48 immediate ds_load_b64 before lgkmcnt(40), 16 WMMAs in the window, and 80 waitcnt-class ops instead of the rejected padladder upperdepnomem route's 100",
+        "focused CPU-reference fails on the selected rows with finite errors, matching the earlier no-ladder correctness failure pattern despite the restored initial prewait",
+        "decision: reject before timing. The intra-loop ladder or an equivalent dependency structure is still semantically required for this production q6addr upperdepnomem spelling; prewait alone is not a viable transfer."
+      ]
+    },
+    {
       "id": "q6addr_production_upperdepnomem_map_dynbuf_49d47201f_dirty",
       "date": "2026-06-21",
       "artifact": "cache/hrxv1/gfx1151/q6addr-production-map-dynbuf-49d47201f-dirty-20260621-091356/",

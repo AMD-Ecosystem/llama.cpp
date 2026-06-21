@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_vk64_q6addr_upperdepnomem_prewait_899fb4d1f_dirty",
+      "date": "2026-06-21",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_prewait_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASM_COPYAB_Q6ADDR_UPPERDEPNOMEM_PREWAIT_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-q6addr-upperdepnomem-prewait-route-899fb4d1f-dirty-20260621-092002/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-q6addr-upperdepnomem-prewait-899fb4d1f-dirty-20260621-091945/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_prewait_wg256.hsaco",
+      "reason": "This opt-in Q6_K p33 route tested a one-axis repair after the no-ladder padwait correctness failure: keep q6addr upperdepnomem output ownership and COPY_NOMEM fragment copies, remove the intra-loop PADWAIT_LADDER waits, but force the initial lgkmcnt(40) pre-WMMA wait. Static evidence moved in the intended direction: 16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 96 buffer_store_b32, two barriers, no spills, load_b64_immediately_before_final_wait=48, final_pre_wmma_lgkmcnt=40, and s_waitcnt reduced to 80 versus the rejected padladder route's 100. Reject before timing because focused CPU-reference fails on the selected p33 rows: ffn_out-0 ERR=0.036587931 and result_output ERR=0.053280036. Prewait alone restores the visible wait window but not the dependency/correctness contract; future q6addr upperdepnomem work needs an equivalent safe intra-loop dependency structure or a different route primitive."
+    },
+    {
       "id": "q6_k_vk64_q6addr_upperdepnomem_compact_helper4_route_3ff10bb41_dirty",
       "date": "2026-06-21",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_compact_helper4_f16acc_wg256_f32",

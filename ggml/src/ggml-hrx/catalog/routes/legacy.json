@@ -10286,6 +10286,54 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_prewait_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_prewait_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_prewait_wg256",
+    "artifact_id": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_prewait_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_prewait_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q6_dense_prompt_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_prewait_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q6_K x F32 -> F32 MUL_MAT",
+      "k_multiple": 256,
+      "rows_min": 16,
+      "cols_min": 16,
+      "cols_max": 64,
+      "requires_env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASM_COPYAB_Q6ADDR_UPPERDEPNOMEM_PREWAIT_F16ACC_WG256_PROMPT",
+      "prior_delta": "One-axis follow-up to the q6addr upperdepnomem and padwait probes. It keeps q6addr upperdepnomem production output ownership and COPY_NOMEM fragment copies, removes the intra-loop PADWAIT_LADDER waits, but forces the initial lgkmcnt(40) pre-WMMA wait. Expected signal is whether correctness is restored versus the no-ladder padwait failure while reducing the wait/depctr surface that made the padladder upperdepnomem route slow."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_prewait_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_correctness_probe",
+      "selection": "Opt-in diagnostic only. CMake/Ninja built the HSACO and focused Qwen3 Q6 p33 route traces in cache/hrxv1/gfx1151/q6-vk64-q6addr-upperdepnomem-prewait-route-899fb4d1f-dirty-20260621-092002/ prove this provider selected for ffn_out-0 and result_output under GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASM_COPYAB_Q6ADDR_UPPERDEPNOMEM_PREWAIT_F16ACC_WG256_PROMPT=1.",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-q6addr-upperdepnomem-prewait-route-899fb4d1f-dirty-20260621-092002/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-q6addr-upperdepnomem-prewait-899fb4d1f-dirty-20260621-091945/",
+      "reason": "Rejected before timing because focused CPU-reference fails on selected rows: ffn_out-0 ERR=0.036587931 and result_output ERR=0.053280036. Static screening shows the intended wait-window improvement, including final_pre_wmma_lgkmcnt=40 and s_waitcnt reduced to 80, but the route still misses the LDS-store surface and correctness contract."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_compact_storekill_f16acc_wg256_f32",
     "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_compact_storekill_f16acc_wg256",
     "op": "MUL_MAT",
