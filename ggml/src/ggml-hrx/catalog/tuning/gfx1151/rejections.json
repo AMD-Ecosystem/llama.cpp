@@ -2579,6 +2579,15 @@
       "artifact": "cache/hrxv1/gfx1151/q6-vk64-padladder-upperdepnomem-route-cda2fce86-dirty-20260621-044619/",
       "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_padladder_upperdepnomem_wg256.hsaco",
       "reason": "This opt-in Q6_K dense p33 route transferred the q6addr upperdepnomem low-level fixture into the production MUL_MAT ABI by combining no-memory-clobber fragment copies, RADV96 duplicate/q6addr-like store ownership, and no-sync staged store sections. It built through normal CMake/Ninja catalog HSACO generation and passed focused p33 CPU-reference for Vcur, ffn_out, and result_output with route traces proving provider selection. Static evidence shows the transfer is incomplete: the HSACO keeps 16 WMMA, 48 ds_load_b64, and 96 buffer_store_b32, but emits 2 barriers, 100 waitcnt, and 17 depctr waits instead of the fixture upperdepnomem surface of 1 barrier, 72 waitcnt, and 1 depctr. Same-runner focused p33 perf rejects promotion: total row time regresses from 14474.198 us to 24160.140 us (1.669x slower), with result_output-p33 regressing 11645.558 us to 20693.623 us. Keep opt-in diagnostic only; do not spend p512/p513/model promotion time on this route until the production ABI can reproduce the fixture's low wait/depctr contract."
+    },
+    {
+      "id": "q6_k_vk64_padwait_upperdepnomem_p33_correctness",
+      "date": "2026-06-21",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_padwait_upperdepnomem_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASM_COPYAB_PADWAIT_UPPERDEPNOMEM_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-padwait-upperdepnomem-route-c6d522040-dirty-20260621-045517/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_padwait_upperdepnomem_wg256.hsaco",
+      "reason": "This opt-in one-axis Q6_K p33 probe removed the PADWAIT_LADDER waits from the rejected padladder upperdepnomem route while preserving no-memory-clobber copies and RADV96 duplicate/q6addr-like store ownership. It built through normal CMake/Ninja HSACO generation and statically moved in the intended direction: ordinary waitcnt count dropped from 100 to 79 with 16 WMMA, 48 ds_load_b64, and 96 buffer_store_b32 still present. It did not fix the depctr surface, which stayed at 17 waits. Focused p33 CPU-reference selected this provider for Vcur, ffn_out, and result_output, then failed all rows with finite ERR 0.036-0.070. Reject before perf. The removed ladder waits are correctness-relevant in the current production 4-frag+pad topology; the next route-facing transfer must port the fixture's ring12/topology contract, not simply delete waits."
     }
   ]
 }

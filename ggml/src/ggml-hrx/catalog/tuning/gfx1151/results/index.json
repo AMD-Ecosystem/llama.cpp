@@ -6779,6 +6779,50 @@
         "the dominant result_output-p33 row regresses 11645.558 us to 20693.623 us, so p512/p513/model promotion is not warranted for this route",
         "decision: keep the route opt-in as a rejected diagnostic. The next Q6 route-facing transfer needs to reproduce the fixture's low depctr/wait contract inside the production ABI, not just combine no-memory-clobber copies with RADV96 duplicate store ownership."
       ]
+    },
+    {
+      "id": "q6_k_vk64_padwait_upperdepnomem_p33_correctness",
+      "date": "2026-06-21",
+      "source_commit": "c6d522040-dirty",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-padwait-upperdepnomem-route-c6d522040-dirty-20260621-045517/",
+      "status": "rejected_gfx1151_correctness_probe",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_padwait_upperdepnomem_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASM_COPYAB_PADWAIT_UPPERDEPNOMEM_F16ACC_WG256_PROMPT=1",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K p33 dense prompt medium-route WMMA issue window. Test whether removing only the PADWAIT_LADDER waits from the rejected route-facing upperdepnomem transfer moves the HSACO toward the low-level fixture's no-ladder surface while preserving correctness.",
+        "baseline_command": "static and focused correctness comparison against q6_k_vk64_padladder_upperdepnomem_p33_perf and the accepted H4LOAD default; no perf baseline run after correctness failure",
+        "variant_command": "GGML_HRX_TRACE_ROUTES=1 GGML_HRX_TRACE_PROVIDERS=1 GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASM_COPYAB_PADWAIT_UPPERDEPNOMEM_F16ACC_WG256_PROMPT=1 build/hrx-v1-catalog-gfx1151/bin/test-backend-ops test -b HRX0 -o MUL_MAT --output csv --test-file cache/hrxv1/gfx1151/q6-wmma-vk64-padded44-medium-focused-20260618-062606/q6_prompt_p33.txt",
+        "same_runner_comparison_method": "same rebuilt test-backend-ops binary and same focused odd p33 Q6 MUL_MAT rows used for the previous upperdepnomem route transfer",
+        "route_trace_path": "artifact p33-correctness.trace.log",
+        "scheduler_trace_path": "artifact static/padwait-upperdepnomem.objdump.txt and static/padwait-upperdepnomem.static-summary.md",
+        "focused_cpu_reference": "artifact p33-correctness.csv selected the padwait upperdepnomem provider for Vcur-0-p33, ffn_out-0-p33, and result_output-p33 and failed all rows with finite ERR 0.036-0.070",
+        "compile_report_path": "artifact static/padwait-upperdepnomem.readelf-notes.txt from CMake/Ninja generated HSACO",
+        "target_listing_path": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_padwait_upperdepnomem_wg256.hsaco",
+        "prior_art_schedule_source": "rejected q6_k_vk64_padladder_upperdepnomem_p33_perf plus low-level q6addr upperdepnomem fixture",
+        "promotion_rule": "reject immediately on focused CPU-reference failure; do not run perf/model tests for a route that corrupts p33 rows."
+      },
+      "static_result": {
+        "wmma": 16,
+        "ds_load_b64": 48,
+        "ds_read_u16_d16": 0,
+        "ds_store_b16_text_count": 2,
+        "buffer_store_b32": 96,
+        "s_barrier": 2,
+        "s_waitcnt": 79,
+        "s_waitcnt_depctr": 17,
+        "scratch_or_private_text_count": 0
+      },
+      "correctness_result": {
+        "Vcur-0-p33": "failed ERR 0.069777496 > 0.000500000",
+        "ffn_out-0-p33": "failed ERR 0.036204980 > 0.000500000",
+        "result_output-p33": "failed ERR 0.055182462 > 0.000500000"
+      },
+      "findings": [
+        "removing PADWAIT_LADDER is a real one-axis static movement: ordinary waitcnt count drops from the rejected padladder upperdepnomem route's 100 to 79 while retaining 16 WMMA, 48 ds_load_b64, and 96 buffer_store_b32",
+        "the depctr problem is unchanged at 17, so this local edit does not reproduce the low-level fixture's 1-depctr surface",
+        "focused CPU-reference fails all three odd p33 rows with finite errors while route traces confirm the intended provider selected",
+        "decision: reject before perf. The ladder waits are correctness-relevant in the production 4-frag+pad topology; the fixture's no-ladder/no-wait behavior likely depends on its different ring12 fragment topology and must be transferred structurally rather than by deleting waits in the current route."
+      ]
     }
   ]
 }

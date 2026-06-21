@@ -413,6 +413,9 @@
   "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_typedstage_wg256": {
     "path": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_typedstage_wg256.hip.cpp"
   },
+  "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_padwait_upperdepnomem_wg256": {
+    "path": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_padwait_upperdepnomem_wg256.hip.cpp"
+  },
   "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_padladder_expwait_wg256": {
     "path": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_padladder_expwait_wg256.hip.cpp"
   },
