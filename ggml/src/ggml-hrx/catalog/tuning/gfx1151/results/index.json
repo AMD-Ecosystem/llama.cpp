@@ -3,6 +3,47 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_p33_current_h4load_baseline_b94b8052d",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/q6-p33-current-b94b8052d-baseline-20260621-0340/",
+      "source_commit": "b94b8052d",
+      "tool": "test-backend-ops focused Q6_K p33 MUL_MAT correctness and perf with GGML_HRX_TRACE_ROUTES=1",
+      "status": "current_q6_p33_h4load_promotion_floor",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K p33 dense prompt focused MUL_MAT rows, especially result_output cols=33, after current basket identified this as the worst HRX/Vulkan row",
+        "baseline_command": "GGML_HRX_TRACE_ROUTES=1 build/hrx-v1-catalog-gfx1151/bin/test-backend-ops test/perf -b HRX0 -o MUL_MAT --test-file cache/hrxv1/gfx1151/q6-id-odd-tail-focused-20260617-183706/p33/ops.txt --output csv",
+        "variant_command": "none; current accepted H4LOAD baseline only",
+        "same_runner_comparison_method": "future candidates must use the same test-backend-ops binary, same focused row file, route traces, and compare total focused time plus selected Q6 cols=33 rows against this artifact",
+        "route_trace_path": "artifact test.routes.log and perf.routes.log",
+        "scheduler_trace_path": "use prior Q6 p33 H4LOAD static artifact and RADV medium oracle for source-change candidates",
+        "focused_cpu_reference": "artifact test.csv; 10/10 rows passed",
+        "compile_report_path": "current CMake/Ninja H4LOAD HSACO in build/hrx-v1-catalog-gfx1151",
+        "target_listing_path": "prior H4LOAD static listing plus current generated HSACO",
+        "prior_art_schedule_source": "Qwen3 30B Q6_K p33 Vulkan medium oracle matmul_q6_k_f32_f16acc_aligned_m hash 0x6eebdfb4c3043b23 and accepted H4LOAD default evidence",
+        "promotion_rule": "a Q6 p33 replacement must pass the same focused rows, keep cols=1 on rows2_cols1, prove cols=33 route selection, beat 7938.780 us total and 5935.772 us result_output timing, and provide static RADV/HIP schedule evidence before model A/B."
+      },
+      "focused_result": {
+        "correctness": "10/10 passed",
+        "total_us": 7938.779843,
+        "selected_q6_p33_us": {
+          "Vcur-0": 182.914,
+          "node_28": 399.617,
+          "Qcur-0": 243.114,
+          "result_output": 5935.772
+        },
+        "route_split": {
+          "cols_33": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_h4load_f16acc_wg256_f32",
+          "cols_1": "hrx_mul_mat_vec_q6_k_rows2_cols1_wg32_f32"
+        }
+      },
+      "findings": [
+        "current focused correctness is clean at the same source line as the basket KPI record",
+        "result_output remains the dominant focused row at 5.936 ms, so the next Q6 p33 route should optimize that shape first",
+        "route traces confirm the accepted p33 policy split: H4LOAD owns Q6 cols=33 prompt rows while cols=1 rows remain on rows2_cols1",
+        "use this artifact as the promotion floor for future Q6 p33 schedule candidates; basket tok/s alone is not sufficient for route promotion"
+      ]
+    },
+    {
       "id": "current_basket_after_q5_asmwait_4f30f87cd",
       "date": "2026-06-21",
       "artifact": "cache/hrxv1/gfx1151/basket-current-4f30f87cd-r1/",
