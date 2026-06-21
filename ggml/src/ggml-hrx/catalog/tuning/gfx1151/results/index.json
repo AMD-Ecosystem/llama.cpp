@@ -3,6 +3,93 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q5_motif192_current_issue_window_refresh_672a5c6ed",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/q5-motif192-current-issue-window-672a5c6ed-20260621-022817/",
+      "source_commit": "672a5c6ed",
+      "tool": "compare_amdgcn_isa.py, llvm-objdump --mattr=+wmma-128b-insts,+wavefrontsize64, extract_objdump_symbol.py, and analyze_amdgcn_issue_window.py",
+      "status": "accepted_static_schedule_delta_no_route_change",
+      "candidate_gate": {
+        "production_target": "Qwen2.5 Coder 7B Q5_K_M p512/p513 prompt rows using the Q5 motif192 direct-WMMA family on gfx1151, compared to the same-machine RADV aligned_l oracle",
+        "baseline_command": "RADV oracle ISA cache/hrxv1/gfx1151/vulkan-oracle-qwen25coder-7b-q5km-p512-fa1-20260617-200349/radv/isa/matmul_q5_k_f32_f16acc_aligned_l__main__0ee599afb33ff07b.amdgcn.txt",
+        "variant_command": "CMake/Ninja-built HSACO build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q5_k_wmma16_vk128_padded_w64_b64group_packstage_fast_half_motif192_bufferstore_wg256.hsaco disassembled with --mattr=+wmma-128b-insts,+wavefrontsize64",
+        "same_runner_comparison_method": "static symbol-scoped RADV-vs-HIP ISA comparison on the current committed HSACO plus corrected compact WMMA ownership evidence",
+        "route_trace_path": "not applicable; static schedule refresh only. Route evidence is q5_motif192_smallproj_exact_regate_793ba1865.",
+        "scheduler_trace_path": "artifact issue-window.json, issue-window.md, q5-motif192-vs-radv.json, q5-motif192-vs-radv.md, and hip.motif192.wmma128.isa.txt",
+        "focused_cpu_reference": "not rerun in this static refresh; see q5_motif192_smallproj_exact_regate_793ba1865 for p33/p512/p513 correctness",
+        "compile_report_path": "existing CMake/Ninja-built Q5 motif192 HSACO in build/hrx-v1-catalog-gfx1151",
+        "target_listing_path": "artifact hip.objdump.wmma128.txt and hip.motif192.wmma128.isa.txt",
+        "prior_art_schedule_source": "Q5 Vulkan oracle aligned_l RADV ISA hash 0x0ee599afb33ff07b and corrected compact ownership screen direct_wmma_compact_screen_fixed_disassembly_ee02cd25e",
+        "promotion_rule": "no route promotion. Next candidate must explicitly bracket the RADV first-region load window and store cadence, then pass focused p33/p512/p513 correctness, route, static ISA, and timing gates before any policy change."
+      },
+      "static_result": {
+        "count_parity": {
+          "radv": {
+            "wmma": 32,
+            "ds_load_b64": 64,
+            "ds_load_u16_d16": 128,
+            "ds_store_b16": 128,
+            "buffer_store_b32": 192,
+            "s_waitcnt": 185,
+            "s_waitcnt_depctr": 1,
+            "s_barrier": 2,
+            "sgpr": 108,
+            "vgpr": 192,
+            "lds": 22528,
+            "spills": 0
+          },
+          "hip_motif192": {
+            "wmma": 32,
+            "ds_load_b64": 64,
+            "ds_load_u16_d16": 128,
+            "ds_store_b16": 128,
+            "buffer_store_b32": 192,
+            "s_waitcnt": 245,
+            "s_waitcnt_depctr": 21,
+            "s_barrier": 3,
+            "sgpr": 56,
+            "vgpr": 199,
+            "lds": 22528,
+            "spills": 0,
+            "wavefront_size": 64
+          }
+        },
+        "first_region_delta": {
+          "radv": {
+            "hot_regions": 3,
+            "first_region_wmma": 12,
+            "first_region_pre_loads": 64,
+            "first_region_pre_lds_loads": 32,
+            "first_region_pre_vmem_loads": 32,
+            "first_region_immediate_loads_before_final_wait": 32,
+            "first_region_final_lgkmcnt": 24
+          },
+          "hip_motif192": {
+            "hot_regions": 2,
+            "first_region_wmma": 16,
+            "first_region_pre_loads": 24,
+            "first_region_pre_lds_loads": 24,
+            "first_region_pre_vmem_loads": 0,
+            "first_region_immediate_loads_before_final_wait": 1,
+            "first_region_final_lgkmcnt": 0
+          }
+        },
+        "store_cadence_delta": {
+          "radv_store_clusters": 19,
+          "radv_store_motifs": 5,
+          "hip_store_clusters": 2,
+          "hip_store_motifs": 2
+        }
+      },
+      "findings": [
+        "Q5 motif192 is not missing the compact WMMA primitive or headline store counts on the current committed build",
+        "the current structural gap is the schedule: RADV enters the first WMMA region with 64 pre-loads and a delayed lgkmcnt(24), while HIP enters with 24 pre-loads and lgkmcnt(0)",
+        "HIP motif192 has many more dependency waits and one extra barrier: 245 s_waitcnt plus 21 s_waitcnt_depctr versus RADV 185 plus 1",
+        "RADV exposes 19 smaller store clusters and 5 motifs, while HIP collapses the writeback into 2 broad clusters and 2 motifs",
+        "the next Q5 candidate should bracket the RADV first-region load window and store cadence rather than broadening motif192 routing or cloning only high-level counts"
+      ]
+    },
+    {
       "id": "q5_motif192_smallproj_exact_regate_793ba1865",
       "date": "2026-06-21",
       "artifact": "cache/hrxv1/gfx1151/q5-motif192-current-regate-exact-793ba1865-20260621-022123/",
