@@ -3093,6 +3093,40 @@
         "the 3.3% p512 and 6.1% p513 large-row timing deltas are far smaller than the remaining Vulkan parity gap and align with the static compile-contract result that output stores do not change the first-WMMA issue window",
         "decision: close writeback elision as a primary Q8 axis. The next useful Q8 step must target lower-level accumulator/cooperative-store ownership or the outstanding LDS-load source form, not another nostore/fulltile wrapper."
       ]
+    },
+    {
+      "id": "mission_checkpoint_after_q5_motif192_commit_aligned",
+      "date": "2026-06-20",
+      "source_commit": "85edc5327",
+      "artifact": "cache/hrxv1/gfx1151/basket-after-q5-motif192-default-85edc5327-commitaligned-r1/",
+      "related_artifacts": [
+        "cache/hrxv1/gfx1151/q6-repeat-after-q5-motif192-85edc5327-r3/",
+        "cache/hrxv1/gfx1151/q5-motif192-smallproj-default-regate-20260620-171010/",
+        "cache/hrxv1/gfx1151/q5-motif192-smallproj-default-model-ab-repeat-20260620-171312/"
+      ],
+      "status": "active_parity_mission_steady_geomean_0_642x_vulkan_q6_repeat_0_523x",
+      "tool": "CMake/Ninja-built HRX and Vulkan llama-bench binaries, tools/hrxv1_basket_benchmark.py, focused route traces, and repeated same-machine Q6 model rows",
+      "candidate_gate": {
+        "production_target": "gfx1151 HRX v1 dense quantized prompt rows still below same-machine Vulkan after accepted Q8 chunk8 and Q5 motif192 small-projection defaults",
+        "baseline_command": "python3 tools/hrxv1_basket_benchmark.py --models all --cases p33,p512,p513 --backends hrx,vulkan --repetitions 1 --flash-attn 1 --tag basket-after-q5-motif192-default-85edc5327-commitaligned-r1",
+        "variant_command": "python3 tools/hrxv1_basket_benchmark.py --models unsloth-qwen3-30b-a3b-instruct-2507-gguf-qwen3-30b-a3b-instruct-2507-q6-k --cases p33,p512,p513 --backends hrx,vulkan --repetitions 3 --flash-attn 1 --tag q6-repeat-after-q5-motif192-85edc5327-r3",
+        "same_runner_comparison_method": "commit-aligned HRX/Vulkan llama-bench JSON rows with backend identity checked; Q6 worst-cluster repeated separately because the one-rep basket is noisy",
+        "route_trace_path": "per-row stderr logs under the HRX artifact directories; zero HRX fallback lines in the summarized records",
+        "scheduler_trace_path": "Q6 RADV oracle and lower-level CMake-built probe artifacts already recorded in q6k-vulkan-oracle-schedule-ledger.md and this tuning index",
+        "focused_cpu_reference": "no new route promoted in this checkpoint; latest touched Q5 motif192 route was covered by q5-motif192-smallproj-default-regate-20260620-171010",
+        "compile_report_path": "build/hrx-v1-catalog-gfx1151 generated HSACO tree from source commit 85edc5327",
+        "target_listing_path": "not generated for this checkpoint; use per-candidate static artifacts for route promotion decisions",
+        "prior_art_schedule_source": "RADV Vulkan medium/large aligned prompt schedules for Q4_K, Q5_K, Q6_K, and Q8_0 plus accepted/rejected HRX v1 CMake-built probe history",
+        "promotion_rule": "treat aggregate rows only as boulder ranking. Do not promote another Q6/Q8/Q5 route unless it has a named RADV schedule delta, focused p33/p512/p513 CPU-reference coverage including odd/tail rows, route traces, no-spill static evidence, and same-runner timing against the accepted default."
+      },
+      "findings": [
+        "the first post-Q5 motif192 basket with both HRX and Vulkan rebuilt at commit 85edc5327 reports steady geomean 0.642x Vulkan with zero fallbacks; this supersedes the invalid earlier basket where Vulkan still reported the previous commit",
+        "the repeated Qwen3 30B Q6_K p33/p512/p513 artifact reports Q6-only steady geomean 0.523x Vulkan, confirming Q6 remains a stable worst cluster after the Q5 motif192 lift",
+        "Q6 repeated ratios are p33 0.476x, p512 0.544x, and p513 0.554x; dense Q6 routes are H4LOAD VK64 for p33 and VK128 padded W64 for p512/p513, with grouped Q6 ID still selected separately",
+        "the Q6 lower-level probe ledger rejects existing RING96, WN32, wave4row, padladder faststage, and mixedstage transfers as either correctness failures or same-runner timing regressions; do not rerun those as production candidates without a materially different ownership/store primitive",
+        "the next useful Q6 implementation axis is a correctness-proven selected-output 96-store/cooperative-store ownership primitive or another lower-resource form that changes the RADV event-window delta, not a new selector around the already rejected wrappers",
+        "Q8_0 p512/p513 and Q5_K p512/p513 remain adjacent boulders, but their recent direct-WMMA/writeback-elision probes are likewise rejected unless the next candidate changes accumulator ownership, cooperative store mapping, or packed dataflow materially."
+      ]
     }
   ]
 }
