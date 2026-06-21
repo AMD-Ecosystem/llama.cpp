@@ -3,6 +3,15 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_vk64_q6addr_compact_helper4_asmwait_sequence_gate_bc0ba5dbb",
+      "date": "2026-06-21",
+      "route": "static-only HSACO: hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_copyab_q6addr_upperdepnomem_compact_helper4_f16acc_wg256_f32",
+      "env": "not provider-wired; CMake/Ninja static probe only",
+      "artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-asmwait-sequence-bc0ba5dbb-20260621-103043/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asmwait_copyab_q6addr_upperdepnomem_compact_helper4_wg256.hsaco",
+      "reason": "This refresh reran the ASMWAIT compact-helper4 Q6_K p33 static probe after extending the WMMA ownership tooling with ordered dst/A/B/C and load-source sequence checks. The candidate still matches the tempting headline RADV facts: 16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 96 buffer_store_b32, two barriers, no spills, compact f16 accumulator form, load_b64_immediately_before_final_wait=48, final_pre_wmma_lgkmcnt=40, and wmma_in_window=16. Reject remains firm because the ordered operand topology is wrong: RADV uses eight A banks reused twice and four B banks reused four times, while HIP ASMWAIT uses one A bank and one B bank for all 16 WMMAs; RADV dst/C use eight banks reused twice, while HIP dst/C are 16 single-use banks. The artifact also records remaining ds_store_b16, LDS-store, LDS-byte, VGPR, and extra-wait misses. Future Q6 p33 exact-clone candidates must pass this sequence-level gate before focused correctness or timing."
+    },
+    {
       "id": "q6_k_vk64_q6addr_compact_helper4_asmwait_static_68d28f5cc_dirty",
       "date": "2026-06-21",
       "route": "static-only HSACO: hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_copyab_q6addr_upperdepnomem_compact_helper4_f16acc_wg256_f32",

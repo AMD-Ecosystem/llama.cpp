@@ -209,6 +209,22 @@ def ownership_contract(compact: dict | None) -> dict | None:
             }
         )
 
+    operand_sequences = comparison.get("operand_sequences", {})
+    for operand in ("dst", "a", "b", "c", "a_load", "b_load"):
+        item = operand_sequences.get(operand, {})
+        lhs_sequence = item.get("lhs", [])
+        rhs_sequence = item.get("rhs", [])
+        checks.append(
+            {
+                "kind": "wmma_operand_sequence",
+                "name": operand,
+                "lhs": lhs_sequence,
+                "rhs": rhs_sequence,
+                "rule": "rhs operand/load sequence == lhs operand/load sequence",
+                "passed": rhs_sequence == lhs_sequence,
+            }
+        )
+
     wait_ladder = comparison.get("wait_ladder", {})
     lhs_wait = wait_ladder.get("lhs")
     rhs_wait = wait_ladder.get("rhs")

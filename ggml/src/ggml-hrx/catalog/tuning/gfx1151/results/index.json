@@ -3,6 +3,41 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_k_vk64_q6addr_compact_helper4_asmwait_sequence_gate_bc0ba5dbb",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-asmwait-sequence-bc0ba5dbb-20260621-103043/",
+      "source_commit": "bc0ba5dbb",
+      "tool": "tools/vulkan-oracle/run_q6_medium_contract_screen.py with sequence-level WMMA operand topology checks",
+      "status": "rejected_gfx1151_static_probe_tooling_refresh",
+      "route": "static-only HSACO: hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_copyab_q6addr_upperdepnomem_compact_helper4_f16acc_wg256_f32",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K p33 dense prompt medium-route WMMA issue window and operand ownership sequence.",
+        "baseline_command": "static comparison against Qwen3 30B Q6_K p33 RADV medium oracle.",
+        "variant_command": "python3 tools/vulkan-oracle/run_q6_medium_contract_screen.py on the CMake/Ninja-built ASMWAIT compact-helper4 HSACO with --check-compact-accumulators.",
+        "same_runner_comparison_method": "not run; rejected at strict static schedule gate before route wiring or focused timing.",
+        "route_trace_path": "not applicable; no production provider wired.",
+        "scheduler_trace_path": "artifact summary.md, compact-accumulator/wmma-ownership.md, compact-accumulator/wmma-ownership.json, and contract-check.json.",
+        "focused_cpu_reference": "not run after static rejection.",
+        "compile_report_path": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asmwait_copyab_q6addr_upperdepnomem_compact_helper4_wg256.hsaco built by CMake/Ninja.",
+        "target_listing_path": "artifact compact-accumulator/hip.objdump.txt and compact-accumulator/wmma-ownership.md.",
+        "prior_art_schedule_source": "Qwen3 30B Q6_K p33 RADV medium oracle plus the earlier q6_k_vk64_q6addr_compact_helper4_asmwait_static_rejection_68d28f5cc_dirty.",
+        "promotion_rule": "reject exact Vulkan-clone claims unless the candidate matches RADV opcode/resource counts, first-WMMA wait window, compact accumulator form, and ordered dst/A/B/C/load-source WMMA operand sequences."
+      },
+      "static_result": {
+        "exact_static_contract_passed": false,
+        "compact_f16_accumulator_screen_passed": true,
+        "wmma_operand_topology_passed": false,
+        "matching_facts": "16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 96 buffer_store_b32, two barriers, zero scratch/spills, compact f16 accumulator screen pass, load_b64_immediately_before_final_wait=48, final_pre_wmma_lgkmcnt=40, and wmma_in_window=16.",
+        "sequence_misses": "RADV A operand sequence uses eight banks reused twice, B uses four banks reused four times, and dst/C use eight banks reused twice. HIP ASMWAIT uses one A bank and one B bank for all 16 WMMAs, while dst/C are 16 single-use banks. A/B load-source sequences are null for HIP under this spelling, so the ASMWAIT route does not preserve the RADV operand provenance.",
+        "remaining_count_misses": "ds_store_b16 is 2 versus RADV 64, store-cluster LDS stores are 4 versus RADV 70, LDS is 14336 versus 11264, VGPR is 171 versus 144, and HIP has six extra lgkmcnt(0) wait anchors."
+      },
+      "findings": [
+        "sequence-level operand topology is now part of the Q6 medium static gate, preventing candidates from passing headline count screens while collapsing A/B bank ownership",
+        "the ASMWAIT compact-helper4 candidate remains a static rejection and should not be provider-wired or timed",
+        "future Q6 p33 work must preserve wait/use and ordered A/B operand-bank progression together, or explicitly pivot to a different packed/lower-level dataflow"
+      ]
+    },
+    {
       "id": "q6_k_vk64_q6addr_compact_helper4_asmwait_static_rejection_68d28f5cc_dirty",
       "date": "2026-06-21",
       "artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-asmwait-compact-helper4-68d28f5cc-dirty-20260621-102223/",

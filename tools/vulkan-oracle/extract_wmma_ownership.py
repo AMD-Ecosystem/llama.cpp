@@ -221,6 +221,14 @@ def summarize_wmma(events, load_groups):
     }
     load_group_uses = collections.Counter()
     wait_ladder = []
+    operand_sequences = {
+        "dst": [],
+        "a": [],
+        "b": [],
+        "c": [],
+        "a_load": [],
+        "b_load": [],
+    }
 
     for index, event in enumerate(events):
         if not event["opcode"].startswith(("v_wmma", "v_mfma")):
@@ -267,9 +275,12 @@ def summarize_wmma(events, load_groups):
         }
         for key, rng in (("dst", dst), ("a", a), ("b", b), ("c", c)):
             rendered = render_range(rng)
+            operand_sequences[key].append(rendered)
             if rendered:
                 operand_uses[key][rendered] += 1
                 operand_widths[key][range_width(rng)] += 1
+        operand_sequences["a_load"].append(item["a_loaded_by"]["dest"] if item.get("a_loaded_by") else None)
+        operand_sequences["b_load"].append(item["b_loaded_by"]["dest"] if item.get("b_loaded_by") else None)
         wmma_events.append(item)
 
     compact_f16_summary = {
@@ -294,6 +305,7 @@ def summarize_wmma(events, load_groups):
         },
         "compact_f16_summary": compact_f16_summary,
         "load_group_uses": dict(load_group_uses.most_common()),
+        "operand_sequences": operand_sequences,
         "wait_ladder": wait_ladder,
     }
 
@@ -371,6 +383,7 @@ def compare(lhs, rhs):
             "rhs": rhs_wmma["wait_ladder"],
         },
         "operand_bank_overlap": {},
+        "operand_sequences": {},
         "operand_widths": {},
     }
     for key in ("dst", "a", "b", "c"):
@@ -388,6 +401,11 @@ def compare(lhs, rhs):
             "rhs": rhs_wmma.get("operand_widths", {}).get(key, {}),
             "lhs_compact_f16": lhs_wmma.get("compact_f16_summary", {}).get(key, {}),
             "rhs_compact_f16": rhs_wmma.get("compact_f16_summary", {}).get(key, {}),
+        }
+    for key in ("dst", "a", "b", "c", "a_load", "b_load"):
+        result["operand_sequences"][key] = {
+            "lhs": lhs_wmma.get("operand_sequences", {}).get(key, []),
+            "rhs": rhs_wmma.get("operand_sequences", {}).get(key, []),
         }
     return result
 
@@ -542,6 +560,19 @@ def write_markdown(path, payload):
                 f"| `{key}` | `{json.dumps(item.get('lhs', {}), sort_keys=True)}` "
                 f"| `{json.dumps(item.get('rhs', {}), sort_keys=True)}` "
                 f"| `{lhs_tuple}` | `{rhs_tuple}` |"
+            )
+        lines += [
+            "",
+            "### Operand Sequence Comparison",
+            "",
+            "| Operand | LHS Sequence | RHS Sequence | Match |",
+            "| --- | --- | --- | --- |",
+        ]
+        for key, item in comparison.get("operand_sequences", {}).items():
+            lhs = item.get("lhs", [])
+            rhs = item.get("rhs", [])
+            lines.append(
+                f"| `{key}` | `{json.dumps(lhs)}` | `{json.dumps(rhs)}` | `{lhs == rhs}` |"
             )
         lines += [
             "",
