@@ -4427,6 +4427,46 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x64_wg64_f32",
+    "family": "mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x64_wg64",
+    "op": "MUL_MAT_ID",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_id_q6_k_q8_1_x4_mmq",
+    "artifact_id": "mul_mat_id_q6_k_q8_1_x4_mmq_hsaco",
+    "export_name": "hrx_mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x64_wg64_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 20,
+    "abi": {
+      "binding_count": 5,
+      "parameter_count": 6,
+      "constant_byte_length": 96
+    },
+    "dispatch": {
+      "workgroup_size": [
+        64,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_qwen3_moe_q6_prompt_narrow_mmq64"
+    },
+    "shape_guards": {
+      "selection": "opt_in_only; q6_K MUL_MAT_ID, k % 256 == 0, rows % 64 == 0, n_ids == 8, 32 <= n_tokens <= 64"
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x64_wg64_f32",
+      "selector_gate": "opt-in on gfx1151 with GGML_HRX_ENABLE_Q6_K_ID_Q8_1_X4_MMQ64_PROMPT=1"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_perf_probe",
+      "selection": "Q6_K MUL_MAT_ID p33 token-grouping probe. It keeps the accepted grouped Q8_1 x4 integer-dot schedule and same CMake-built HSACO as the MMQ64x16 route, but widens the route tile to 64 tokens so p33 launches one Y workgroup like the Vulkan matmul_id_subgroup_q6_k_f32_f16acc_aligned_m oracle. Focused p33 CPU-reference passed and route traces proved the intended [12,1,128]/[32,1,128] workgroups, but same-runner focused perf was slightly slower overall and likely model-regressive because the gate/up-shaped row slowed more than the down row improved. Keep opt-in only as a rejected diagnostic."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_id_q6_k_wmma16x16_direct_f16acc_wg32_f32",
     "family": "mul_mat_id_q6_k_wmma16x16_direct_f16acc_wg32",
     "op": "MUL_MAT_ID",

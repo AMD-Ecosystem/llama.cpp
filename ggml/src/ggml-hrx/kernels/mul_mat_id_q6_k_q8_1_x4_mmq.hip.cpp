@@ -141,11 +141,13 @@ static __device__ __forceinline__ void hrx_mul_mat_id_q6_k_grouped_q8_1_x4_mmq_w
     constexpr int LOADS_A = BM / LOAD_STRIDE_A;
     constexpr int LOADS_B = (BN + LOAD_STRIDE_B - 1) / LOAD_STRIDE_B;
 
-    static_assert(BN == 16, "unexpected Q6 MoE MMQ route tile");
+    static_assert(BN == 16 || BN == 64, "unexpected Q6 MoE MMQ route tile");
     static_assert(TN == 1, "unexpected Q6 MoE MMQ thread route tile");
     static_assert(WNITER * WARP * TM * TN * WMITER == WM * WN, "invalid Q6 MoE MMQ tile");
     static_assert(WSUBM == 64, "unexpected Q6 MoE MMQ M subtile shape");
-    static_assert(LOADS_A == 8 && LOADS_B == 1, "unexpected Q6 MoE MMQ load shape");
+    static_assert(LOADS_A == 8, "unexpected Q6 MoE MMQ A load shape");
+    static_assert((BN == 16 && LOADS_B == 1) || (BN == 64 && LOADS_B == 2),
+            "unexpected Q6 MoE MMQ B load shape");
 
     const unsigned int tid = __builtin_amdgcn_workitem_id_x();
     const long long row_base = static_cast<long long>(__builtin_amdgcn_workgroup_id_x()) * BM;
@@ -288,4 +290,14 @@ extern "C" __global__ void hrx_mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x16_wg64_f32
         float * dst,
         hrx_mul_mat_id_q6_k_grouped_constants c) {
     hrx_mul_mat_id_q6_k_grouped_q8_1_x4_mmq_wg64_impl<16, 1>(src0, src1, counts, routes, dst, c);
+}
+
+extern "C" __global__ void hrx_mul_mat_id_q6_k_grouped_q8_1_x4_mmq64x64_wg64_f32(
+        const hrx_block_q6_K_q8_1_lhs * src0,
+        const hrx_block_q8_1_x4_rhs_q6 * src1,
+        const uint32_t * counts,
+        const uint32_t * routes,
+        float * dst,
+        hrx_mul_mat_id_q6_k_grouped_constants c) {
+    hrx_mul_mat_id_q6_k_grouped_q8_1_x4_mmq_wg64_impl<64, 1>(src0, src1, counts, routes, dst, c);
 }
