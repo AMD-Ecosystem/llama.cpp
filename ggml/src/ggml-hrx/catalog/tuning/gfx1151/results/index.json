@@ -3,6 +3,108 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_0_coopstore_mixed192_splitstage_reproducer",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q8-coopstore-mixed192-splitstage8-daab8df81-20260620-184051/",
+      "source_commit": "daab8df81-dirty",
+      "tool": "CMake/Ninja-built hrx-hip-bench-coopmat-store-contract plus embedded gfx1151 object extraction",
+      "status": "accepted_low_level_order_repair_not_route_candidate",
+      "candidate_gate": {
+        "production_target": "Llama 3.1 8B Q8_0 p512/p513 dense prompt large route; isolate whether the RADV-shaped mixed192 halfword-stage failure is repaired by draining staged accumulator writeback in batches",
+        "baseline_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-radv-mixed192 --flags=0x31004000",
+        "variant_command": "same fixture with --mode=wmma-lds-k2-mixed192-splitstage and --mode=wmma-lds-k2-mixed192-splitstage8",
+        "same_runner_comparison_method": "same CMake/Ninja-built low-level fixture, same flags and output surface, focused correctness with five repeated pass checks for both splitstage variants plus embedded gfx1151 metadata/opcode extraction",
+        "route_trace_path": "not applicable; standalone compiler/ownership reproducer and no production selector changed",
+        "scheduler_trace_path": "artifact static/summary.md and static/fatbin/gfx1151-readobj-notes.txt",
+        "focused_cpu_reference": "direct192 raw passed bad=0; full radv-mixed192 failed bad=2112 with first_bad group=18 slot=3 lane=0; mixed160-splitstage passed bad=0; mixed192-splitstage and mixed192-splitstage8 passed bad=0, with five repeat passes each",
+        "compile_report_path": "artifact static/fatbin/gfx1151-readobj-notes.txt",
+        "target_listing_path": "artifact static/fatbin/gfx1151-objdump.txt and static/symbols/*.amdgcn.txt",
+        "prior_art_schedule_source": "RADV Q8_0 large oracle, correctness-clean direct192 raw primitive, failing wmma-lds-k2-radv-mixed192 halfword-stage fixture, and the previous single-group/staged-width brackets",
+        "promotion_rule": "do not promote this fixture. A future Q8 large route candidate may use the split/drain ordering only if it preserves correctness on focused backend-op odd/tail rows and beats the accepted packed-Q8_1 default with route evidence; otherwise keep it as a compiler/ownership reproducer."
+      },
+      "static_matrix": {
+        "direct192_raw_control": {
+          "sgpr": 14,
+          "vgpr": 153,
+          "lds": 16384,
+          "scratch": 0,
+          "vgpr_spill": 0,
+          "wmma": 32,
+          "ds_load_b64": 64,
+          "ds_load_u16_d16": 0,
+          "ds_store_b16": 0,
+          "buffer_store_b32": 192,
+          "s_waitcnt": 8,
+          "s_barrier": 2
+        },
+        "radv_mixed192_control": {
+          "sgpr": 14,
+          "vgpr": 162,
+          "lds": 32768,
+          "scratch": 0,
+          "vgpr_spill": 0,
+          "wmma": 32,
+          "ds_load_b64": 64,
+          "ds_load_u16_d16": 128,
+          "ds_store_b16": 128,
+          "buffer_store_b32": 192,
+          "s_waitcnt": 137,
+          "s_barrier": 3
+        },
+        "mixed160_splitstage_control": {
+          "sgpr": 14,
+          "vgpr": 162,
+          "lds": 24576,
+          "scratch": 0,
+          "vgpr_spill": 0,
+          "wmma": 32,
+          "ds_load_b64": 64,
+          "ds_load_u16_d16": 96,
+          "ds_store_b16": 96,
+          "buffer_store_b32": 160,
+          "s_waitcnt": 108,
+          "s_barrier": 5
+        },
+        "mixed192_splitstage": {
+          "sgpr": 14,
+          "vgpr": 162,
+          "lds": 24576,
+          "scratch": 0,
+          "vgpr_spill": 0,
+          "wmma": 32,
+          "ds_load_b64": 64,
+          "ds_load_u16_d16": 128,
+          "ds_store_b16": 128,
+          "buffer_store_b32": 192,
+          "s_waitcnt": 140,
+          "s_barrier": 5
+        },
+        "mixed192_splitstage8": {
+          "sgpr": 14,
+          "vgpr": 162,
+          "lds": 24576,
+          "scratch": 0,
+          "vgpr_spill": 0,
+          "wmma": 32,
+          "ds_load_b64": 64,
+          "ds_load_u16_d16": 128,
+          "ds_store_b16": 128,
+          "buffer_store_b32": 192,
+          "s_waitcnt": 143,
+          "s_barrier": 7
+        }
+      },
+      "findings": [
+        "added two CMake/Ninja-built low-level modes: wmma-lds-k2-mixed192-splitstage and wmma-lds-k2-mixed192-splitstage8",
+        "the unsplit full RADV-shaped mixed192 staging control still fails with bad=2112 and the established group18/group19/group23/... pattern, so the baseline compiler/ownership bug remains reproducible",
+        "the splitstage variants both pass bad=0 in the final rebuilt binary; each was repeated five times after the initial run",
+        "a prior intermediate build with only mixed192-splitstage failed narrowly at group46 slot1 while preserving the same broad static shape, so this source family is codegen-sensitive and should not be promoted without route-level evidence",
+        "both passing variants keep 32 WMMA, 64 ds_load_b64, 128 halfword LDS stores, 128 halfword LDS loads, 192 scalar buffer_store_b32, 162 VGPR, 24576 bytes LDS, and no spills",
+        "the correctness repair is paid for with more ordering: mixed192-splitstage has 140 s_waitcnt and 5 barriers versus the failing unsplit control at 137 s_waitcnt and 3 barriers; splitstage8 raises this to 143 s_waitcnt and 7 barriers",
+        "decision: this proves the full 192-output staged writeback can be made semantically safe by staged-drain batching, but it is not route material yet. The next production-facing Q8 candidate should transfer only the ordering fact into a route wrapper and must beat the accepted default in focused odd/tail backend-op timing before model A/B."
+      ]
+    },
+    {
       "id": "q8_0_coopstore_stage_one18_reproducer",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q8-coopstore-stage-one18-e23846da8-20260620-183120/",
