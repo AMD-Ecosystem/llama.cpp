@@ -10196,6 +10196,51 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_ring12alias_upperdepnomem_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_ring12alias_upperdepnomem_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_ring12alias_upperdepnomem_wg256",
+    "artifact_id": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_ring12alias_upperdepnomem_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_ring12alias_upperdepnomem_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q6_dense_prompt_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_ring12alias_upperdepnomem_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q6_K x F32 -> F32 MUL_MAT",
+      "k_multiple": 256,
+      "rows_min": 16,
+      "cols_min": 16,
+      "cols_max": 64,
+      "requires_env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASM_COPYAB_RING12ALIAS_UPPERDEPNOMEM_F16ACC_WG256_PROMPT",
+      "prior_delta": "Route-facing structural transfer of the fastest q6addr upperdepnomem fixture's WMMA issue topology. The fixture uses six A and six B fragment slots with group%6/(group+group/6)%6 issue order, but its LDS loader aliases those slots through a four-fragment ring. This opt-in production probe preserves the real Q6 VK64 ABI and wraps frag 4/5 back to the valid 64x64 production fragments with frag&3 instead of inventing out-of-bounds 96-wide tile data. Expected signal is whether the fixture's low-wait group order, not only its store surface, can survive against real Q6 prompt rows."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_ring12alias_upperdepnomem_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_correctness_probe",
+      "selection": "Opt-in Q6_K VK64 ring12-alias upperdepnomem probe. CMake/Ninja built the HSACO and static screening in cache/hrxv1/gfx1151/q6-vk64-ring12alias-upperdepnomem-route-7c0d40a7f-dirty-20260621-050644/ confirmed the intended fixture-style 12-fragment-load surface: 16 WMMA, 48 ds_load_b64, 96 buffer_store_b32, wave64, VGPR=185, and no spills. It did not reproduce the low-level fixture's low wait surface: production still emits 2 barriers, 96 waitcnt, and 17 depctr waits. Focused p33 CPU-reference selected this provider for Vcur, ffn_out, and result_output but failed all rows with finite ERR around 1.8. Reject before perf; the fixture's ring12 alias issue order is not semantically compatible with the real production Q6 tile/output mapping."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_fast_half_bufferstore_f16acc_wg256_f32",
     "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_fast_half_bufferstore_f16acc_wg256",
     "op": "MUL_MAT",

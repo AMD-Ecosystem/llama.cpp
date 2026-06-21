@@ -2588,6 +2588,15 @@
       "artifact": "cache/hrxv1/gfx1151/q6-vk64-padwait-upperdepnomem-route-c6d522040-dirty-20260621-045517/",
       "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_padwait_upperdepnomem_wg256.hsaco",
       "reason": "This opt-in one-axis Q6_K p33 probe removed the PADWAIT_LADDER waits from the rejected padladder upperdepnomem route while preserving no-memory-clobber copies and RADV96 duplicate/q6addr-like store ownership. It built through normal CMake/Ninja HSACO generation and statically moved in the intended direction: ordinary waitcnt count dropped from 100 to 79 with 16 WMMA, 48 ds_load_b64, and 96 buffer_store_b32 still present. It did not fix the depctr surface, which stayed at 17 waits. Focused p33 CPU-reference selected this provider for Vcur, ffn_out, and result_output, then failed all rows with finite ERR 0.036-0.070. Reject before perf. The removed ladder waits are correctness-relevant in the current production 4-frag+pad topology; the next route-facing transfer must port the fixture's ring12/topology contract, not simply delete waits."
+    },
+    {
+      "id": "q6_k_vk64_ring12alias_upperdepnomem_p33_correctness",
+      "date": "2026-06-21",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_ring12alias_upperdepnomem_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASM_COPYAB_RING12ALIAS_UPPERDEPNOMEM_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-ring12alias-upperdepnomem-route-7c0d40a7f-dirty-20260621-050644/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_ring12alias_upperdepnomem_wg256.hsaco",
+      "reason": "This opt-in Q6_K p33 structural probe tested whether the low-level q6addr upperdepnomem fixture's ring12 WMMA issue topology could be transferred safely to the real Q6 VK64 production ABI. The fixture's six A/six B slots are not six unique 64x64 production fragments, so the route wraps frag 4/5 back to valid production fragments with frag&3 while using group%6 and (group+group/6)%6 issue order. It built through normal CMake/Ninja catalog HSACO generation. Static evidence preserved 16 WMMA, 48 ds_load_b64, 96 buffer_store_b32, wave64, VGPR=185, and no spills, but it still emitted 2 barriers, 96 waitcnt, and 17 depctr waits instead of the fixture's 1 barrier and 1 depctr. Focused p33 CPU-reference selected this provider for Vcur, ffn_out, and result_output and failed all rows with finite ERR 1.79-1.83. Reject before perf. The synthetic fixture's ring12 alias issue order is not mathematically compatible with the real production output tile mapping; future work should stop trying to splice that alias order into the production route and instead build a production-ABI fixture that proves the exact lane/output contract first."
     }
   ]
 }
