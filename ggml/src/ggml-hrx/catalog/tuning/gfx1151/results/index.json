@@ -3,6 +3,47 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_k_prodaddr_radvissuecompact_helper_fixture_207dd135f_dirty",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/q6-prodaddr-radvissuecompact-helper-fixture-207dd135f-dirty-20260621-081933/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-prodaddr-radvissuecompact-helper-screen-207dd135f-dirty-20260621-081933/",
+      "source_commit": "207dd135f-dirty",
+      "tool": "CMake/Ninja-built hrx-hip-bench-q6-id-subgroup-contract fixture, executable .hip_fatbin extraction, llvm-nm symbol capture, and tools/vulkan-oracle/run_q6_medium_contract_screen.py with compact ownership checking",
+      "status": "accepted_gfx1151_diagnostic_fixture_not_production_route",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K p33 dense prompt MUL_MAT medium route; specifically whether an explicit staging helper boundary can preserve production-address coverage while recovering RADV's eight-bank compact f16 C/dst reuse",
+        "baseline_command": "cmake --build build/hrx-v1-catalog-gfx1151 --target hrx-hip-bench-q6-id-subgroup-contract -j$(nproc)",
+        "variant_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q6-id-subgroup-contract 5000",
+        "same_runner_comparison_method": "single CMake/Ninja-built fixture binary reports all existing probes plus prodaddr_radvissuecompact_helper in one run; static screen compares the unbundled gfx1151 fatbin symbol q6_id_subgroup_contract_prodaddr_radv_issue_compact_helper_probe against the Qwen3 Q6 p33 RADV medium oracle",
+        "route_trace_path": "not applicable; standalone fixture only, no production provider selected",
+        "scheduler_trace_path": "static_artifact summary.md, isa-compare.md, compact-accumulator/wmma-ownership.json, and artifact static/symbols.demangled.txt",
+        "focused_cpu_reference": "fixture validation in bench.stdout.csv; prodaddr_radvissuecompact_helper valid=1, missed=0, duplicated=0, max_count=1",
+        "compile_report_path": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q6-id-subgroup-contract built by CMake/Ninja; artifact static/unbundled.gfx1151 extracted from the executable .hip_fatbin",
+        "target_listing_path": "static_artifact compact-accumulator/hip.objdump.txt and artifact static/symbols.demangled.txt",
+        "prior_art_schedule_source": "Qwen3 30B Q6_K p33 RADV medium oracle matmul_q6_k_f32_f16acc_aligned_m__main__6eebdfb4c3043b23 plus q6_k_prodaddr_radvissuecompact_fixture_rejection_33259315e_dirty",
+        "promotion_rule": "do not promote directly. This proves a helper boundary can recover RADV's eight-bank C/dst reuse under production-address validation, but production route work still needs an inline or otherwise no-call/no-scratch spelling that keeps the helper's ownership facts while restoring the RADV store surface and passing focused p33/p512/p513 backend-op gates."
+      },
+      "focused_result": {
+        "fixture_validation": {
+          "prodaddr_radvissuecompact": "valid=1, missed=0, duplicated=0, max_count=1, 4.951490 us",
+          "prodaddr_radvissuecompact_helper": "valid=1, missed=0, duplicated=0, max_count=1, 5.501181 us"
+        },
+        "static_contract": {
+          "exact_static_contract_passed": false,
+          "compact_f16_accumulator_screen_passed": true,
+          "wmma_operand_topology_contract_passed": true,
+          "matching_facts": "16 WMMA, compact width-4 dst/C operands, A reuse [2 x 8 banks], B reuse [4 x 4 banks], C/dst reuse [2 x 8 banks], and exact lgkmcnt ladder [40,36,32,28,24,16,7,6,1,0]",
+          "misses": "the staging helper is a real local device function q6id_contract_prod_stage_compact_acc8, HIP reports scratch_bytes=20, the kernel-symbol screen sees ds_store_b16=0 because the staging stores are in the helper symbol, LDS remains 32768 vs RADV 11264, ds_load_b64 is 52 vs RADV 48, and validation still uses fixture global_store_b32 rather than RADV's 96 buffer_store_b32 production surface"
+        }
+      },
+      "findings": [
+        "The rejected inlined production-address spelling failed because staging groups 0-7 before variable reuse still led HIP to allocate sixteen single-use C/dst banks.",
+        "Moving the staging surface behind an explicit helper boundary recovers RADV's eight reused C/dst banks while preserving p33 output coverage and the exact wait ladder.",
+        "The helper boundary is not route-ready: it introduces an out-of-line device function, scratch, slower fixture timing, and a split static surface that the current kernel-symbol screen cannot treat as an exact RADV clone.",
+        "The next production-facing probe should preserve this lifetime boundary without a call, or use a low-level staging spelling that proves the same eight-bank reuse and no scratch in the generated HSACO."
+      ]
+    },
+    {
       "id": "q6_k_prodaddr_radvissuecompact_fixture_rejection_33259315e_dirty",
       "date": "2026-06-21",
       "artifact": "cache/hrxv1/gfx1151/q6-prodaddr-radvissuecompact-fixture-33259315e-dirty-20260621-081401/",
