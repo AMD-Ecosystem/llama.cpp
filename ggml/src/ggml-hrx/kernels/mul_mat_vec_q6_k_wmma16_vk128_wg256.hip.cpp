@@ -122,6 +122,10 @@
 #define HRX_Q6_K_WMMA_VK128_STORE_BANDED_STAGE 0
 #endif
 
+#ifndef HRX_Q6_K_WMMA_VK128_STORE_UPPER_STAGE
+#define HRX_Q6_K_WMMA_VK128_STORE_UPPER_STAGE 0
+#endif
+
 #ifndef HRX_Q6_K_WMMA_VK128_SIDE_STAGE_FAST_HALF
 #define HRX_Q6_K_WMMA_VK128_SIDE_STAGE_FAST_HALF 0
 #endif
@@ -694,7 +698,7 @@ static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_load_typed_stage_stor
 }
 #endif
 
-#if (HRX_Q6_K_WMMA_VK128_STORE_RADV96_SIDECAR || HRX_Q6_K_WMMA_VK128_STORE_BANDED_STAGE) && HRX_Q6_K_WMMA_VK128_BUFFER_STORE
+#if (HRX_Q6_K_WMMA_VK128_STORE_RADV96_SIDECAR || HRX_Q6_K_WMMA_VK128_STORE_BANDED_STAGE || HRX_Q6_K_WMMA_VK128_STORE_UPPER_STAGE) && HRX_Q6_K_WMMA_VK128_BUFFER_STORE
 static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_radv96_stage(
         hrx_q6_k_wmma_vk128_half8_vec acc,
         int group,
@@ -947,6 +951,8 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
     __shared__ _Float16 sh_b[BN * SHARED_STRIDE];
 #if HRX_Q6_K_WMMA_VK128_STORE_STAGE_FAST_HALF || HRX_Q6_K_WMMA_VK128_SIDE_STAGE_FAST_HALF || HRX_Q6_K_WMMA_VK128_MIXED_DIRECT_FAST_HALF
     __shared__ _Float16 sh_store[WAVE_COUNT * 2 * 16 * 16];
+#elif HRX_Q6_K_WMMA_VK128_STORE_UPPER_STAGE
+    __shared__ uint16_t sh_store_upper[8 * 64 * 4];
 #elif HRX_Q6_K_WMMA_VK128_STORE_BANDED_STAGE
     __shared__ uint16_t sh_store_banded[6 * 64 * 4];
 #elif HRX_Q6_K_WMMA_VK128_STORE_RADV96_SIDECAR
@@ -1408,7 +1414,58 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
     }
 
 #if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96 || HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2 || HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_STREAM || HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP || HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_PAIRCOL
-#if HRX_Q6_K_WMMA_VK128_STORE_BANDED_STAGE
+#if HRX_Q6_K_WMMA_VK128_STORE_UPPER_STAGE
+#pragma unroll
+    for (int group = 0; group < 8; ++group) {
+        if (tid < 64u) {
+            const int row_tile = group & 3;
+            const int col_tile = (group >> 2) & 3;
+            hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_buffer(
+                dst_rsrc,
+                rows,
+                row_base + static_cast<long long>(row_tile * 16),
+                col_base + static_cast<long long>(col_tile * 16),
+                rows,
+                cols,
+                acc[group],
+                lane);
+        }
+    }
+
+#pragma unroll
+    for (int group = 8; group < 16; ++group) {
+        if (tid < 64u) {
+            hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_radv96_stage(
+                acc[group],
+                group,
+                8,
+                lane,
+                sh_store_upper);
+        }
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+#pragma unroll
+    for (int group = 8; group < 16; ++group) {
+        if (tid < 64u) {
+            const int row_tile = group & 3;
+            const int col_tile = (group >> 2) & 3;
+            hrx_q6_k_wmma_vk128_load_radv96_stage_store_buffer_w64(
+                dst_rsrc,
+                rows,
+                row_base + static_cast<long long>(row_tile * 16),
+                col_base + static_cast<long long>(col_tile * 16),
+                rows,
+                cols,
+                group,
+                8,
+                lane,
+                sh_store_upper);
+        }
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+#elif HRX_Q6_K_WMMA_VK128_STORE_BANDED_STAGE
 #pragma unroll
     for (int group = 0; group < 8; ++group) {
         if (tid < 64u) {

@@ -3,6 +3,82 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_k_vk64_ring96_kloop_upper_stage_probe",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-kloop-upper-stage-repro-8c096ba3d-20260620-180931/",
+      "source_commit": "8c096ba3d-dirty",
+      "tool": "CMake/Ninja-built gfx1151 catalog HSACO plus CMake/Ninja-built hrx-hip-bench-q6-wmma-ring96-kloop-asm-upper-stage-repro",
+      "status": "rejected_standalone_timing_despite_lower_barrier_upper_stage",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K gfx1151 p33 dense prompt medium route; test whether a single upper-half staged drain removes the extra barrier cost from the rejected 16-group banded-stage probe",
+        "baseline_command": "cmake --build build/hrx-v1-catalog-gfx1151 --target hrx-hip-bench-q6-wmma-vk64-repro -j$(nproc); HRX_Q6_REPRO_TIMING_ITERS=1000 build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q6-wmma-vk64-repro",
+        "variant_command": "cmake --build build/hrx-v1-catalog-gfx1151 --target hrx-hip-bench-q6-wmma-ring96-kloop-asm-upper-stage-repro -j$(nproc); HRX_Q6_REPRO_TIMING_ITERS=1000 build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-q6-wmma-ring96-kloop-asm-upper-stage-repro",
+        "same_runner_comparison_method": "standalone Q6 repro correctness and host timing, plus static HSACO comparison against accepted VK64 and rejected banded-stage; no production route or model A/B because standalone timing regressed",
+        "route_trace_path": "not applicable; standalone probe and catalog HSACO only",
+        "scheduler_trace_path": "artifact static/upper-stage.* plus static/summary.txt",
+        "focused_cpu_reference": "normal small rows 64x33 k256/k512/k3584, 64x64 k3584, and 128x33 k3584 passed with bad_gt_0p25=0; stress 64x33 k3584 failed with bad_gt_0p25=2044/2112, matching the accepted VK64 stress calibration artifact",
+        "compile_report_path": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_upper_stage_wg256.hsaco",
+        "target_listing_path": "artifact static/upper-stage.notes.txt and static/upper-stage.isa.txt",
+        "prior_art_schedule_source": "Q6 p33 Vulkan medium oracle plus the rejected banded-stage probe: preserve direct stores for groups 0..7, but stage groups 8..15 in one upper-half pass instead of two staged bands",
+        "promotion_rule": "reject unless a future candidate preserves normal focused correctness, avoids the stress issue or proves it is non-production, and beats accepted VK64 in same-runner backend-op or standalone timing before route-facing integration"
+      },
+      "static_matrix": {
+        "upper_stage": {
+          "sgpr": 42,
+          "vgpr": 153,
+          "lds": 15360,
+          "scratch": 0,
+          "wavefront_size": 64,
+          "wmma": 16,
+          "buffer_store_b32": 64,
+          "ds_load": 64,
+          "ds_store": 6,
+          "s_waitcnt": 64,
+          "s_barrier": 4
+        },
+        "banded_stage_comparator": {
+          "sgpr": 42,
+          "vgpr": 153,
+          "lds": 14336,
+          "scratch": 0,
+          "wavefront_size": 64,
+          "wmma": 16,
+          "buffer_store_b32": 64,
+          "ds_load": 64,
+          "ds_store": 6,
+          "s_waitcnt": 68,
+          "s_barrier": 6
+        },
+        "accepted_vk64_comparator": {
+          "sgpr": 36,
+          "vgpr": 59,
+          "lds": 11264,
+          "scratch": 0,
+          "wavefront_size": 64,
+          "wmma": 8,
+          "ds_load": 20,
+          "ds_store": 2,
+          "s_waitcnt": 58,
+          "s_barrier": 2
+        },
+        "radv_q6_p33_medium_target": {
+          "vgpr": 144,
+          "lds": 11264,
+          "wmma": 16,
+          "buffer_store_b32": 96,
+          "spill": 0
+        }
+      },
+      "findings": [
+        "probe keeps the route-facing K-loop/copy-A+B compute path, drains groups 0..7 directly, and stages groups 8..15 through one upper-half LDS pass",
+        "normal Q6 repro rows, including odd/narrow 64x33 cases, were CPU-reference clean with bad_gt_0p25=0 and no NaNs/Infs",
+        "stress row still fails with 2044 bad elements out of 2112, but accepted VK64 fails the same synthetic stress row while passing normal rows, so this is not sufficient by itself to reject the axis",
+        "static lowering improved the banded-stage barrier surface from 6 to 4 barriers and s_waitcnt from 68 to 64, with the same VGPR 153 and no spills, but increased LDS from 14336 to 15360",
+        "standalone timing remains in the rejected staged-drain band: 409.154 us on 64x33 k3584 and 449.998 us on 64x64 k3584, versus accepted VK64 calibration at 309.269 us and 352.721 us",
+        "decision: reject for production and do not run model A/B. This closes the lower-overhead upper-stage spelling; the next useful Q6 work needs a materially different output-ownership/store primitive closer to RADV's 96-store medium route."
+      ]
+    },
+    {
       "id": "q6_k_vk64_ring96_kloop_banded_stage_probe",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q6-vk64-ring96-kloop-banded-stage-repro-e10ed3617-20260620-175952/",
