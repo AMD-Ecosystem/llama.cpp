@@ -12,6 +12,18 @@
 #include "../../kernels/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_wg256.hip.cpp"
 #define HRX_Q6_REPRO_KERNEL hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_f16acc_wg256_f32
 #define HRX_Q6_REPRO_LABEL "q6-vk64-accepted-repro"
+#elif HRX_Q6_REPRO_H4LOAD
+#include "../../kernels/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_h4load_wg256.hip.cpp"
+#define HRX_Q6_REPRO_KERNEL hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_h4load_f16acc_wg256_f32
+#define HRX_Q6_REPRO_LABEL "q6-vk64-h4load-repro"
+#elif HRX_Q6_REPRO_H4LOAD_BUFFERSTORE
+#include "../../kernels/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_h4load_bufferstore_wg256.hip.cpp"
+#define HRX_Q6_REPRO_KERNEL hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_h4load_bufferstore_f16acc_wg256_f32
+#define HRX_Q6_REPRO_LABEL "q6-vk64-h4load-bufferstore-repro"
+#elif HRX_Q6_REPRO_H4LOAD_PREFETCH2
+#include "../../kernels/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_h4load_prefetch2_wg256.hip.cpp"
+#define HRX_Q6_REPRO_KERNEL hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_h4load_prefetch2_f16acc_wg256_f32
+#define HRX_Q6_REPRO_LABEL "q6-vk64-h4load-prefetch2-repro"
 #elif HRX_Q6_REPRO_KLOOP_ASM_COPYAB
 #include "../../kernels/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_wg256.hip.cpp"
 #define HRX_Q6_REPRO_KERNEL hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_f16acc_wg256_f32

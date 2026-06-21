@@ -2196,6 +2196,18 @@ if (GGML_HRX_BUILD_HIP_BENCHES)
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/hip-bench/q6_wmma_vk64_repro_bench.hip.cpp"
         64)
     ggml_hrx_add_hip_bench(
+        hrx-hip-bench-q6-wmma-vk64-h4load-repro
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/hip-bench/q6_wmma_vk64_h4load_repro_bench.hip.cpp"
+        64)
+    ggml_hrx_add_hip_bench(
+        hrx-hip-bench-q6-wmma-vk64-h4load-bufferstore-repro
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/hip-bench/q6_wmma_vk64_h4load_bufferstore_repro_bench.hip.cpp"
+        64)
+    ggml_hrx_add_hip_bench(
+        hrx-hip-bench-q6-wmma-vk64-h4load-prefetch2-repro
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/hip-bench/q6_wmma_vk64_h4load_prefetch2_repro_bench.hip.cpp"
+        64)
+    ggml_hrx_add_hip_bench(
         hrx-hip-bench-q8-wmma-repro
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/hip-bench/q8_wmma_repro_bench.hip.cpp"
         64)
