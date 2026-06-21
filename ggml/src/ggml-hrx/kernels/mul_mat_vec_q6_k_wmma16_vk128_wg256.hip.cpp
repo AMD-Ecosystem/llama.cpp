@@ -106,6 +106,10 @@
 #define HRX_Q6_K_WMMA_VK128_W64_INLINE_WMMA 0
 #endif
 
+#ifndef HRX_Q6_K_WMMA_VK128_W64_COMPACT_ACC
+#define HRX_Q6_K_WMMA_VK128_W64_COMPACT_ACC 0
+#endif
+
 #ifndef HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_PAIRCOL
 #define HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_PAIRCOL 0
 #endif
@@ -237,6 +241,7 @@ typedef _Float16 hrx_q6_k_wmma_vk128_half16_vec __attribute__((ext_vector_type(1
 typedef _Float16 hrx_q6_k_wmma_vk128_half8_vec __attribute__((ext_vector_type(8)));
 typedef _Float16 hrx_q6_k_wmma_vk128_half4_vec __attribute__((ext_vector_type(4)));
 typedef uint32_t hrx_q6_k_wmma_vk128_u32x8_vec __attribute__((ext_vector_type(8)));
+typedef uint32_t hrx_q6_k_wmma_vk128_u32x4_vec __attribute__((ext_vector_type(4)));
 typedef const __attribute__((address_space(3))) _Float16 * hrx_q6_k_wmma_vk128_lds_half_ptr;
 typedef volatile __attribute__((address_space(3))) _Float16 * hrx_q6_k_wmma_vk128_lds_volatile_half_ptr;
 typedef __attribute__((address_space(3))) uint16_t * hrx_q6_k_wmma_vk128_lds_u16_ptr;
@@ -447,6 +452,25 @@ static __device__ __forceinline__ hrx_q6_k_wmma_vk128_half8_vec hrx_q6_k_wmma_vk
                  : "v"(a_frag), "v"(b_frag), "v"(acc)
                  : "memory");
     return out;
+}
+#endif
+
+#if HRX_Q6_K_WMMA_VK128_W64_COMPACT_ACC
+static __device__ __forceinline__ hrx_q6_k_wmma_vk128_u32x4_vec hrx_q6_k_wmma_vk128_wmma_f16_w64_compact(
+        hrx_q6_k_wmma_vk128_half16_vec a_frag,
+        hrx_q6_k_wmma_vk128_half16_vec b_frag,
+        hrx_q6_k_wmma_vk128_u32x4_vec acc) {
+    asm volatile("v_wmma_f16_16x16x16_f16 %0, %1, %2, %0\n"
+                 : "+v"(acc)
+                 : "v"(a_frag), "v"(b_frag)
+                 : "memory");
+    return acc;
+}
+
+static __device__ __forceinline__ _Float16 hrx_q6_k_wmma_vk128_compact_acc_selected(
+        hrx_q6_k_wmma_vk128_u32x4_vec acc,
+        int reg) {
+    return hrx_q6_k_wmma_vk128_u16_to_f16(acc[reg] & 0xffffu);
 }
 #endif
 
@@ -864,6 +888,34 @@ static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_store_acc_f16_row_maj
         }
     }
 }
+
+#if HRX_Q6_K_WMMA_VK128_W64_COMPACT_ACC
+static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_compact_buffer(
+        __amdgpu_buffer_rsrc_t dst_rsrc,
+        long long rows_stride,
+        long long row0,
+        long long col0,
+        long long rows,
+        long long cols,
+        hrx_q6_k_wmma_vk128_u32x4_vec acc,
+        unsigned int lane) {
+    const long long row_lane = static_cast<long long>(lane >> 4);
+    const long long col = col0 + static_cast<long long>(lane & 15u);
+    if (col >= cols) {
+        return;
+    }
+#pragma unroll
+    for (int reg = 0; reg < 4; ++reg) {
+        const long long row = row0 + row_lane + static_cast<long long>(reg * 4);
+        if (row < rows) {
+            hrx_q6_k_wmma_vk128_buffer_store_f32(
+                dst_rsrc,
+                col * rows_stride + row,
+                static_cast<float>(hrx_q6_k_wmma_vk128_compact_acc_selected(acc, reg)));
+        }
+    }
+}
+#endif
 #endif
 
 #if HRX_Q6_K_WMMA_VK128_STORE_STAGE_TYPED_LINEAR && HRX_Q6_K_WMMA_VK128_BUFFER_STORE
@@ -936,6 +988,21 @@ static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_store_acc_f16_row_maj
 #endif
     }
 }
+
+#if HRX_Q6_K_WMMA_VK128_W64_COMPACT_ACC
+static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_radv96_stage_compact(
+        hrx_q6_k_wmma_vk128_u32x4_vec acc,
+        int group,
+        int base_group,
+        unsigned int lane,
+        uint16_t * sh_store) {
+    const int stage_base = (group - base_group) * 64 * 4 + static_cast<int>(lane) * 4;
+#pragma unroll
+    for (int reg = 0; reg < 4; ++reg) {
+        sh_store[stage_base + reg] = static_cast<uint16_t>(acc[reg] & 0xffffu);
+    }
+}
+#endif
 
 static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_load_radv96_stage_store_buffer_w64(
         __amdgpu_buffer_rsrc_t dst_rsrc,
@@ -1438,7 +1505,11 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
     uint16_t * const sh_store_radv96 = reinterpret_cast<uint16_t *>(sh_a);
 #endif
 #if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96 || HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2 || HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_STREAM || HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP || HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_PAIRCOL
+#if HRX_Q6_K_WMMA_VK128_W64_COMPACT_ACC
+    hrx_q6_k_wmma_vk128_u32x4_vec acc[16] = {};
+#else
     hrx_q6_k_wmma_vk128_half8_vec acc[16] = {};
+#endif
 #elif HRX_Q6_K_WMMA_VK128_W64
     hrx_q6_k_wmma_vk128_half8_vec acc[TILES_PER_WAVE] = {};
 #else
@@ -1591,7 +1662,9 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
                                 b_frag[2], a_frag[3], b_frag[3]);
                         const hrx_q6_k_wmma_vk128_half16_vec b_dep =
                             hrx_q6_k_wmma_vk128_dep_copy_after_token(b_use, a_dep);
-#if HRX_Q6_K_WMMA_VK128_W64_INLINE_WMMA
+#if HRX_Q6_K_WMMA_VK128_W64_COMPACT_ACC
+                        acc[group] = hrx_q6_k_wmma_vk128_wmma_f16_w64_compact(a_dep, b_dep, acc[group]);
+#elif HRX_Q6_K_WMMA_VK128_W64_INLINE_WMMA
                         acc[group] = hrx_q6_k_wmma_vk128_wmma_f16_w64_asm(a_dep, b_dep, acc[group]);
 #else
                         acc[group] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
@@ -1601,7 +1674,9 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
                             HRX_Q6_K_WMMA_VK128_W64_OPSEL != 0);
 #endif
                     } else {
-#if HRX_Q6_K_WMMA_VK128_W64_INLINE_WMMA
+#if HRX_Q6_K_WMMA_VK128_W64_COMPACT_ACC
+                        acc[group] = hrx_q6_k_wmma_vk128_wmma_f16_w64_compact(a_use, b_use, acc[group]);
+#elif HRX_Q6_K_WMMA_VK128_W64_INLINE_WMMA
                         acc[group] = hrx_q6_k_wmma_vk128_wmma_f16_w64_asm(a_use, b_use, acc[group]);
 #else
                         acc[group] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
@@ -1612,7 +1687,9 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
 #endif
                     }
 #else
-#if HRX_Q6_K_WMMA_VK128_W64_INLINE_WMMA
+#if HRX_Q6_K_WMMA_VK128_W64_COMPACT_ACC
+                    acc[group] = hrx_q6_k_wmma_vk128_wmma_f16_w64_compact(a_use, b_use, acc[group]);
+#elif HRX_Q6_K_WMMA_VK128_W64_INLINE_WMMA
                     acc[group] = hrx_q6_k_wmma_vk128_wmma_f16_w64_asm(a_use, b_use, acc[group]);
 #else
                     acc[group] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w64(
@@ -1980,6 +2057,17 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
         if (tid < 64u) {
             const int row_tile = group & 3;
             const int col_tile = (group >> 2) & 3;
+#if HRX_Q6_K_WMMA_VK128_W64_COMPACT_ACC
+            hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_compact_buffer(
+                dst_rsrc,
+                rows,
+                row_base + static_cast<long long>(row_tile * 16),
+                col_base + static_cast<long long>(col_tile * 16),
+                rows,
+                cols,
+                acc[group],
+                lane);
+#else
             hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_buffer(
                 dst_rsrc,
                 rows,
@@ -1989,6 +2077,7 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
                 cols,
                 acc[group],
                 lane);
+#endif
         }
     }
 
@@ -2031,6 +2120,17 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
         if (tid < 64u) {
             const int row_tile = group & 3;
             const int col_tile = (group >> 2) & 3;
+#if HRX_Q6_K_WMMA_VK128_W64_COMPACT_ACC
+            hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_compact_buffer(
+                dst_rsrc,
+                rows,
+                row_base + static_cast<long long>(row_tile * 16),
+                col_base + static_cast<long long>(col_tile * 16),
+                rows,
+                cols,
+                acc[group],
+                lane);
+#else
             hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_buffer(
                 dst_rsrc,
                 rows,
@@ -2040,6 +2140,7 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
                 cols,
                 acc[group],
                 lane);
+#endif
         }
     }
 
@@ -2118,6 +2219,17 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
         if (tid < 64u) {
             const int row_tile = group & 3;
             const int col_tile = (group >> 2) & 3;
+#if HRX_Q6_K_WMMA_VK128_W64_COMPACT_ACC
+            hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_compact_buffer(
+                dst_rsrc,
+                rows,
+                row_base + static_cast<long long>(row_tile * 16),
+                col_base + static_cast<long long>(col_tile * 16),
+                rows,
+                cols,
+                acc[group],
+                lane);
+#else
             hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_buffer(
                 dst_rsrc,
                 rows,
@@ -2127,18 +2239,28 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
                 cols,
                 acc[group],
                 lane);
+#endif
         }
     }
 
 #pragma unroll
     for (int group = 8; group < 14; ++group) {
         if (tid < 64u) {
+#if HRX_Q6_K_WMMA_VK128_W64_COMPACT_ACC
+            hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_radv96_stage_compact(
+                acc[group],
+                group,
+                8,
+                lane,
+                sh_store_radv96);
+#else
             hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_radv96_stage(
                 acc[group],
                 group,
                 8,
                 lane,
                 sh_store_radv96);
+#endif
         }
     }
     asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
@@ -2172,12 +2294,21 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
     for (int group = 14; group < 20; ++group) {
         if (tid < 64u) {
             const int acc_group = group < 16 ? group : group - 8;
+#if HRX_Q6_K_WMMA_VK128_W64_COMPACT_ACC
+            hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_radv96_stage_compact(
+                acc[acc_group],
+                group,
+                14,
+                lane,
+                sh_store_radv96);
+#else
             hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_radv96_stage(
                 acc[acc_group],
                 group,
                 14,
                 lane,
                 sh_store_radv96);
+#endif
         }
     }
     asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
@@ -2253,12 +2384,21 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
 #pragma unroll
     for (int group = 20; group < 24; ++group) {
         if (tid < 64u) {
+#if HRX_Q6_K_WMMA_VK128_W64_COMPACT_ACC
+            hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_radv96_stage_compact(
+                acc[group - 8],
+                group,
+                20,
+                lane,
+                sh_store_radv96);
+#else
             hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_radv96_stage(
                 acc[group - 8],
                 group,
                 20,
                 lane,
                 sh_store_radv96);
+#endif
         }
     }
     asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
