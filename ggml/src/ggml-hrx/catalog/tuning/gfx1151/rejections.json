@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_vk64_q6addr_overlaya_scalarstage_route_514817511_dirty",
+      "date": "2026-06-21",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_overlaya_scalarstage_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASM_COPYAB_Q6ADDR_UPPERDEPNOMEM_OVERLAYA_SCALARSTAGE_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-q6addr-overlaya-scalarstage-route-514817511-dirty-20260621-055904/",
+      "perf_artifact": "cache/hrxv1/gfx1151/q6-vk64-q6addr-overlaya-scalarstage-route-514817511-dirty-20260621-055904/p33-default-perf.csv and p33-scalarstage-perf.csv",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-q6addr-overlaya-scalarstage-514817511-dirty-20260621-055551/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_overlaya_scalarstage_wg256.hsaco",
+      "reason": "This opt-in Q6_K p33 route tested the next mechanical Vulkan-oracle delta after q6addr overlay-A: preserve natural q6addr output ownership and the 11264-byte overlay-A LDS allocation, but force the RADV96 staged accumulator writes through scalar ds_write_b16. It built through CMake/Ninja, selected for all three focused p33 rows, and passed CPU-reference. Static evidence shows the intended LDS-store move: ds_store_b16 changes from overlay-A's 2 to 66 versus RADV 64, and store-cluster LDS stores change from 10 to 66 versus RADV 70 while preserving 16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 96 buffer_store_b32, two barriers, and no spills. Reject because the remaining first-WMMA wait/issue shape is still wrong, with load_b64_immediately_before_final_wait=0 and final_pre_wmma_lgkmcnt=0 versus RADV 48 and 40, and same-runner focused p33 timing regresses every row: total 14449.219 us -> 24126.241 us and result_output 11676.416 us -> 20695.260 us. Future q6addr-family work should stop treating scalar LDS-store count as sufficient and target the RADV wait/issue shape or a different dataflow."
+    },
+    {
       "id": "q6_k_vk64_depwait_p33stage12_shadow_a32034a3e_dirty",
       "date": "2026-06-21",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_depwait_p33stage12_shadow_f16acc_wg256_f32",

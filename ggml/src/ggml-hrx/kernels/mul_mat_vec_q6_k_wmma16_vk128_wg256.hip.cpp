@@ -178,6 +178,10 @@
 #define HRX_Q6_K_WMMA_VK128_STORE_RADV96_OVERLAY_A 0
 #endif
 
+#ifndef HRX_Q6_K_WMMA_VK128_STORE_RADV96_SCALAR_ASM
+#define HRX_Q6_K_WMMA_VK128_STORE_RADV96_SCALAR_ASM 0
+#endif
+
 #ifndef HRX_Q6_K_WMMA_VK128_STORE_RADV96_NOSYNC
 #define HRX_Q6_K_WMMA_VK128_STORE_RADV96_NOSYNC 0
 #endif
@@ -913,8 +917,19 @@ static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_store_acc_f16_row_maj
     const int stage_base = (group - base_group) * 64 * 4 + static_cast<int>(lane) * 4;
 #pragma unroll
     for (int reg = 0; reg < 4; ++reg) {
+#if HRX_Q6_K_WMMA_VK128_STORE_RADV96_SCALAR_ASM
+        hrx_q6_k_wmma_vk128_lds_u16_ptr const ptr =
+            (hrx_q6_k_wmma_vk128_lds_u16_ptr) sh_store + stage_base + reg;
+        const uint32_t value =
+            static_cast<uint32_t>(hrx_q6_k_wmma_vk128_f16_to_u16(acc[reg * 2 + HRX_Q6_K_WMMA_VK128_W64_OPSEL]));
+        asm volatile("ds_write_b16 %0, %1 offset:0\n"
+                     :
+                     : "v"(ptr), "v"(value)
+                     : "memory");
+#else
         sh_store[stage_base + reg] =
             hrx_q6_k_wmma_vk128_f16_to_u16(acc[reg * 2 + HRX_Q6_K_WMMA_VK128_W64_OPSEL]);
+#endif
     }
 }
 
