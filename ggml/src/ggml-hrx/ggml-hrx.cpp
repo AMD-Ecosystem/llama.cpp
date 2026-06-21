@@ -7107,6 +7107,14 @@ static const ggml_backend_hrx_op_provider * ggml_backend_hrx_select_mul_mat_vec_
                 provider : &device_context->mul_mat_vec_q5_k_provider;
         }
         case GGML_TYPE_Q6_K: {
+            if (ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q6_K_VCUR_ROWS2_COLS8_WG32_PROMPT") &&
+                k == 4096 &&
+                rows == 1024 &&
+                cols >= 16 && cols <= 64 &&
+                ggml_backend_hrx_provider_available(
+                    device_context->mul_mat_vec_q6_k_rows2_cols2_8_wg32_providers[8 - 2])) {
+                return &device_context->mul_mat_vec_q6_k_rows2_cols2_8_wg32_providers[8 - 2];
+            }
             if (ggml_backend_hrx_env_enabled("GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_H4LOAD_PREFETCH2_F16ACC_WG256_PROMPT") &&
                 !ggml_backend_hrx_approximate_kernels_disabled() &&
                 k > 0 && (k % 256) == 0 &&
