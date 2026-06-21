@@ -3,6 +3,69 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_k_vk64_q6addr_overlaya_route_rejection_a46964184_dirty",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-q6addr-overlaya-route-a46964184-dirty-20260621-054527/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-q6addr-overlaya-a46964184-dirty-20260621-054502/",
+      "source_commit": "a46964184-dirty",
+      "tool": "CMake/Ninja-built Q6 q6addr upperdepnomem overlay-A generated HSACO, tools/vulkan-oracle/run_q6_medium_contract_screen.py, and focused test-backend-ops p33 CPU-reference/perf",
+      "status": "rejected_gfx1151_perf_probe",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K p33 dense prompt MUL_MAT medium route, specifically whether removing the extra q6addr store-stage LDS allocation moves the previously correct q6addr route toward RADV performance",
+        "baseline_command": "env ROCM_PATH=/srv/vm-shared/projects/llamacpp-devws/rocm GGML_HRX_ROCM_PATH=/srv/vm-shared/projects/llamacpp-devws/rocm GGML_HRX_TRACE_ROUTES=1 GGML_HRX_TRACE_PROVIDERS=1 LD_LIBRARY_PATH=/srv/vm-shared/projects/llamacpp-devws/build/hrx-v1-catalog-gfx1151/bin:/srv/vm-shared/projects/llamacpp-devws/rocm/lib:/srv/vm-shared/projects/llamacpp-devws/rocm/lib/rocm_sysdeps/lib:/srv/vm-shared/projects/llamacpp-devws/rocm/lib64 build/hrx-v1-catalog-gfx1151/bin/test-backend-ops perf -b HRX0 -o MUL_MAT --test-file cache/hrxv1/gfx1151/q6-wmma-vk64-padded44-medium-focused-20260618-062606/q6_prompt_p33.txt --output csv",
+        "variant_command": "cmake --build build/hrx-v1-catalog-gfx1151 --target ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_overlaya_wg256.hsaco test-backend-ops -j$(nproc); env ROCM_PATH=/srv/vm-shared/projects/llamacpp-devws/rocm GGML_HRX_ROCM_PATH=/srv/vm-shared/projects/llamacpp-devws/rocm GGML_HRX_TRACE_ROUTES=1 GGML_HRX_TRACE_PROVIDERS=1 GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASM_COPYAB_Q6ADDR_UPPERDEPNOMEM_OVERLAYA_F16ACC_WG256_PROMPT=1 LD_LIBRARY_PATH=/srv/vm-shared/projects/llamacpp-devws/build/hrx-v1-catalog-gfx1151/bin:/srv/vm-shared/projects/llamacpp-devws/rocm/lib:/srv/vm-shared/projects/llamacpp-devws/rocm/lib/rocm_sysdeps/lib:/srv/vm-shared/projects/llamacpp-devws/rocm/lib64 build/hrx-v1-catalog-gfx1151/bin/test-backend-ops test -b HRX0 -o MUL_MAT --test-file cache/hrxv1/gfx1151/q6-wmma-vk64-padded44-medium-focused-20260618-062606/q6_prompt_p33.txt --output csv; same env with test-backend-ops perf",
+        "same_runner_comparison_method": "same test-backend-ops binary and same focused p33 three-row test file; correctness before timing; default and opt-in perf run in the same artifact directory with route traces enabled",
+        "route_trace_path": "artifact p33-correctness.trace.log and p33-overlaya-perf.trace.log; all focused rows select hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_overlaya_f16acc_wg256_f32",
+        "scheduler_trace_path": "static_artifact summary.md, isa-compare.md, and compact-accumulator/hip.objdump.txt",
+        "focused_cpu_reference": "artifact p33-correctness.csv; Vcur-0-p33, ffn_out-0-p33, and result_output-p33 all passed",
+        "compile_report_path": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_overlaya_wg256.hsaco built by CMake/Ninja",
+        "target_listing_path": "static_artifact compact-accumulator/hip.objdump.txt and isa-compare.md",
+        "prior_art_schedule_source": "q6_k_vk64_q6addr_upperdepnomem_route_rejection_b5a364ae8_dirty, q6_k_vk64_radv96_q6addr_upperdepnomem_current_prior_ab8ae9a82, and Qwen3 30B Q6_K p33 RADV medium oracle matmul_q6_k_f32_f16acc_aligned_m__main__6eebdfb4c3043b23",
+        "promotion_rule": "reject before model-basket promotion. Future q6addr-family work should not spend more probes solely on LDS allocation; it must address the remaining RADV ds_store_b16/staged-store topology and first-WMMA wait shape, or beat the accepted H4LOAD default in focused timing."
+      },
+      "focused_result": {
+        "static_contract": {
+          "exact_contract": "failed",
+          "compact_f16_accumulator_screen": "passed",
+          "radv_vs_overlaya": {
+            "lds_bytes": "11264 vs 11264",
+            "sgpr": "108 vs 42",
+            "vgpr": "144 vs 170",
+            "v_wmma_f16_16x16x16_f16": "16 vs 16",
+            "ds_load_b64": "48 vs 48",
+            "ds_load_u16_d16": "64 vs 64",
+            "ds_store_b16": "64 vs 2",
+            "buffer_store_b32": "96 vs 96",
+            "s_barrier": "2 vs 2",
+            "final_pre_wmma_lgkmcnt": "40 vs 0"
+          }
+        },
+        "correctness": {
+          "exitcode": 0,
+          "rows_passed": [
+            "Vcur-0-p33",
+            "ffn_out-0-p33",
+            "result_output-p33"
+          ]
+        },
+        "focused_timing_us": {
+          "default_vcur_p33": 397.016,
+          "overlaya_vcur_p33": 509.591,
+          "default_ffn_out_p33": 2253.922,
+          "overlaya_ffn_out_p33": 2939.353,
+          "default_result_output_p33": 11898.916,
+          "overlaya_result_output_p33": 20663.649
+        }
+      },
+      "findings": [
+        "overlaying the q6addr store stage onto the no-longer-live A LDS tile fixed the intended LDS allocation delta: HIP now reports 11264 bytes, matching RADV",
+        "the route remains focused-correct for the p33 Q6_K rows and still preserves the headline 16-WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 96 buffer_store_b32, two-barrier, no-spill surface",
+        "the remaining exact-contract misses are unchanged from the non-overlay q6addr route: only two ds_store_b16 instructions, store-cluster LDS stores 10 vs RADV 70, and final pre-WMMA lgkmcnt(0) instead of RADV lgkmcnt(40)",
+        "same-runner focused p33 timing remains slower on every row, with the large result_output row 1.737x slower than the current H4LOAD default",
+        "decision: keep this as an opt-in rejected diagnostic; the q6addr family needs a different staged-store/wait topology rather than more LDS-allocation-only probes"
+      ]
+    },
+    {
       "id": "q6_k_vk64_q6addr_upperdepnomem_route_rejection_b5a364ae8_dirty",
       "date": "2026-06-21",
       "artifact": "cache/hrxv1/gfx1151/q6-vk64-q6addr-upperdepnomem-route-b5a364ae8-dirty-20260621-053721/",
