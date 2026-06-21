@@ -4587,7 +4587,7 @@
     {
       "id": "q6_id_subgroup_contract_fixture_a93bb23ff_dirty",
       "date": "2026-06-20",
-      "source_commit": "60b86bd75",
+      "source_commit": "4dbcc52c9",
       "artifact": "cache/hrxv1/gfx1151/q6-id-subgroup-contract-bench-a93bb23ff-dirty-20260620-225935/",
       "status": "accepted_low_level_fixture_rejects_naive_all_stage_contract_as_route_candidate",
       "tool": "CMake/Ninja-built hrx-hip-bench-q6-id-subgroup-contract",
@@ -4609,7 +4609,7 @@
         "the staged motif validates and emits wave64, 12 KiB LDS, 16 visible v_wmma_f16_16x16x16_f16, 32 ds_store_b16, 32 ds_load_u16_d16, 32 buffer_store_b32, 2 barriers, SGPR=14, VGPR=50, private_segment=0, and no dynamic stack",
         "the staged motif remains only a partial RADV clone: it emits 16 ds_load_b64 and 8 ds_store_b128 versus RADV ID's 52 ds_load_b64 and 2 ds_store_b128, so it does not yet reproduce the operand-load/lane-ownership contract",
         "same-process timing is slower for the staged motif: direct 2.228195 us versus staged 3.366400 us over 2000 reps on AMD Radeon 8060S Graphics",
-        "artifact directory was captured before commit and therefore carries the a93bb23ff-dirty label; the committed fixture is 60b86bd75",
+        "artifact directory was captured before commit and therefore carries the a93bb23ff-dirty label; the committed fixture was introduced in 4dbcc52c9",
         "intermediate invalid versions exposed two useful correctness constraints: all waves in a 256-thread workgroup must participate in barriers, and large accumulator sentinels can produce invalid f16 WMMA values on this fixture. The committed fixture uses small finite seeds and full-workgroup barrier participation.",
         "decision: keep this as a low-level evidence fixture. The next Q6 ID route attempt should not be another top-level direct-F32 staged route; it must close the remaining operand-load/lane-ownership delta or pivot back to a packed Q8_1/x4 schedule that improves gate/up and down together."
       ]
