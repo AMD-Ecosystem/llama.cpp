@@ -3,6 +3,15 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_vk64_q6addr_compact_helper4_asmwait_radvseq_acc8_660e802a1_dirty",
+      "date": "2026-06-21",
+      "route": "static-only HSACO: hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_copyab_q6addr_upperdepnomem_compact_helper4_f16acc_wg256_f32",
+      "env": "not provider-wired; CMake/Ninja static probe only",
+      "artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-asmwait-radvseq-acc8-660e802a1-dirty-20260621-104553/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_copyab_q6addr_upperdepnomem_compact_helper4_wg256.hsaco",
+      "reason": "This static-only Q6_K p33 probe tested the next exact RADV-clone axis after the RADV-sequence probe fixed A/B reuse but left dst/C as 16 single-use banks. It feeds the 16 WMMAs through an explicit 8-accumulator reuse pattern while preserving the RADV A/B operand issue sequence. The result is a strong partial repair: dst/A/B/C reuse and unique-bank counts all match RADV, the lgkmcnt ladder exactly matches RADV [40,36,32,28,24,16,7,6,1,0], and the candidate still preserves 16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 96 buffer_store_b32, two barriers, zero scratch/spills, compact f16 accumulator form, load_b64_immediately_before_final_wait=48, final_pre_wmma_lgkmcnt=40, and wmma_in_window=16. VGPR improves to 141 versus RADV 144 and versus the prior RADV-sequence probe's 174. Reject before provider wiring because this is intentionally not production-valid writeback and the full static contract still fails: ordered dst/A/B/C register sequences do not match RADV, A/B load-source provenance remains too broad after the first operands, ds_store_b16 is 2 versus RADV 64, store-cluster LDS stores are 4 versus 70, and LDS is 14336 versus 11264. Future Q6 p33 work should preserve this ownership shape while creating a valid sixteen-output writeback and RADV-like halfword LDS store/loadback surface."
+    },
+    {
       "id": "q6_k_vk64_q6addr_compact_helper4_asmwait_radvseq_5e7d658f8_dirty",
       "date": "2026-06-21",
       "route": "static-only HSACO: hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_copyab_q6addr_upperdepnomem_compact_helper4_f16acc_wg256_f32",

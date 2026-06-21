@@ -3,6 +3,50 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_k_vk64_q6addr_compact_helper4_asmwait_radvseq_acc8_660e802a1_dirty",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-asmwait-radvseq-acc8-660e802a1-dirty-20260621-104553/",
+      "source_commit": "660e802a1-dirty",
+      "tool": "CMake/Ninja-built RADV-sequence ACC8 Q6 ASMWAIT compact-helper4 HSACO and tools/vulkan-oracle/run_q6_medium_contract_screen.py",
+      "status": "rejected_gfx1151_static_probe_operand_reuse_repaired_sequence_and_store_miss",
+      "route": "static-only HSACO: hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_copyab_q6addr_upperdepnomem_compact_helper4_f16acc_wg256_f32",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K p33 dense prompt medium-route WMMA issue window and operand ownership. Test whether explicit RADV A/B issue order plus an 8-accumulator dst/C reuse pattern can match the RADV medium-route ownership topology.",
+        "baseline_command": "static comparison against Qwen3 30B Q6_K p33 RADV medium oracle and q6_k_vk64_q6addr_compact_helper4_asmwait_radvseq_5e7d658f8_dirty.",
+        "variant_command": "cmake --build build/hrx-v1-catalog-gfx1151 --target test-backend-ops -j$(nproc), then run_q6_medium_contract_screen.py on mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_copyab_q6addr_upperdepnomem_compact_helper4_wg256.hsaco",
+        "same_runner_comparison_method": "not run; rejected at static schedule gate before route wiring, focused correctness, or timing.",
+        "route_trace_path": "not applicable; no production provider wired.",
+        "scheduler_trace_path": "artifact summary.md, isa-compare.md, contract-check.json, and compact-accumulator/wmma-ownership.json.",
+        "focused_cpu_reference": "not run after static rejection.",
+        "compile_report_path": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_copyab_q6addr_upperdepnomem_compact_helper4_wg256.hsaco built by CMake/Ninja.",
+        "target_listing_path": "artifact compact-accumulator/hip.objdump.txt, compact-accumulator/wmma-ownership.md, and isa-compare.md.",
+        "prior_art_schedule_source": "Qwen3 30B Q6_K p33 RADV medium oracle plus q6_k_vk64_q6addr_compact_helper4_asmwait_radvseq_5e7d658f8_dirty.",
+        "promotion_rule": "reject before provider wiring unless a candidate matches RADV opcode/resource counts, first-WMMA wait window, compact accumulator form, dst/A/B/C reuse and ordered operand/load-source sequences, and the LDS halfword store/loadback surface."
+      },
+      "static_result": {
+        "exact_static_contract_passed": false,
+        "compact_f16_accumulator_screen_passed": true,
+        "wmma_operand_topology_passed": false,
+        "matching_facts": "16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 96 buffer_store_b32, two barriers, zero scratch/spills, compact f16 accumulator screen pass, load_b64_immediately_before_final_wait=48, final_pre_wmma_lgkmcnt=40, wmma_in_window=16, and exact RADV lgkmcnt ladder [40,36,32,28,24,16,7,6,1,0].",
+        "repaired_facts": "dst/A/B/C reuse and unique-bank counts now all match RADV: dst/C eight banks reused twice, A eight banks reused twice, and B four banks reused four times. VGPR drops to 141 versus RADV 144 and prior RADV-sequence probe 174.",
+        "remaining_misses": "ordered dst/A/B/C operand register sequences still differ from RADV; A/B load-source provenance remains too broad after the first operands; ds_store_b16 is 2 versus RADV 64; store-cluster LDS stores are 4 versus 70; LDS is 14336 versus 11264; instruction count is 1884 versus RADV 2343.",
+        "resource_facts": {
+          "sgpr": 44,
+          "vgpr": 141,
+          "lds_bytes": 14336,
+          "scratch_bytes": 0,
+          "instructions": 1884,
+          "s_waitcnt": 89,
+          "buffer_store_b32": 96
+        }
+      },
+      "findings": [
+        "explicit A/B sequencing plus ACC8 aliasing is the first HIP C++ static probe in this branch to match RADV dst/A/B/C reuse and unique-bank topology together",
+        "the remaining static misses are now ordered register/load-source provenance and the RADV halfword LDS store/loadback surface, not broad WMMA ownership counts",
+        "this remains static-only because the ACC8 aliasing intentionally breaks the sixteen-logical-accumulator production writeback contract; future work needs a production-valid writeback topology or lower-level primitive that preserves this ownership shape"
+      ]
+    },
+    {
       "id": "q6_k_vk64_q6addr_compact_helper4_asmwait_radvseq_5e7d658f8_dirty",
       "date": "2026-06-21",
       "artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-asmwait-radvseq-5e7d658f8-dirty-20260621-104054/",

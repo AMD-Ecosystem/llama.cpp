@@ -102,6 +102,10 @@
 #define HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_ASMWAIT_RADVSEQ 0
 #endif
 
+#ifndef HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_ASMWAIT_RADVSEQ_ACC8
+#define HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_ASMWAIT_RADVSEQ_ACC8 0
+#endif
+
 #ifndef HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_EXPWAIT_LADDER
 #define HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_EXPWAIT_LADDER 0
 #endif
@@ -1799,36 +1803,39 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
                     }
 #endif
 #if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_ASMWAIT_RADVSEQ && HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_ASMWAIT_LADDER && HRX_Q6_K_WMMA_VK128_W64_COMPACT_ACC
-#define HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(G, W, A, B) \
+#define HRX_Q6_K_WMMA_VK128_RADVSEQ_ACC(G, C) \
+                    acc[(HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_ASMWAIT_RADVSEQ_ACC8 ? (C) : (G))]
+#define HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(G, W, C, A, B) \
                     else if (group == (G)) { \
-                        acc[group] = hrx_q6_k_wmma_vk128_wmma_f16_w64_compact_asmwait<W>( \
-                            (A), (B), acc[group]); \
+                        HRX_Q6_K_WMMA_VK128_RADVSEQ_ACC(G, C) = hrx_q6_k_wmma_vk128_wmma_f16_w64_compact_asmwait<W>( \
+                            (A), (B), HRX_Q6_K_WMMA_VK128_RADVSEQ_ACC(G, C)); \
                     }
-#define HRX_Q6_K_WMMA_VK128_RADVSEQ_NOWAIT(G, A, B) \
+#define HRX_Q6_K_WMMA_VK128_RADVSEQ_NOWAIT(G, C, A, B) \
                     else if (group == (G)) { \
-                        acc[group] = hrx_q6_k_wmma_vk128_wmma_f16_w64_compact( \
-                            (A), (B), acc[group]); \
+                        HRX_Q6_K_WMMA_VK128_RADVSEQ_ACC(G, C) = hrx_q6_k_wmma_vk128_wmma_f16_w64_compact( \
+                            (A), (B), HRX_Q6_K_WMMA_VK128_RADVSEQ_ACC(G, C)); \
                     }
                     if (false) {
                     }
-                    HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(0, 40, a_frag[0], b_frag[0])
-                    HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(1, 36, a_frag[0], b_frag[1])
-                    HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(2, 32, a_frag[1], b_frag[0])
-                    HRX_Q6_K_WMMA_VK128_RADVSEQ_NOWAIT(3, a_frag[1], b_frag[1])
-                    HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(4, 28, a_frag[2], b_frag[0])
-                    HRX_Q6_K_WMMA_VK128_RADVSEQ_NOWAIT(5, a_frag[2], b_frag[1])
-                    HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(6, 24, a_frag[3], b_frag[0])
-                    HRX_Q6_K_WMMA_VK128_RADVSEQ_NOWAIT(7, a_frag[3], b_frag[1])
-                    HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(8, 16, a_pad_keep[0], b_frag[2])
-                    HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(9, 7, a_pad_keep[0], b_frag[3])
-                    HRX_Q6_K_WMMA_VK128_RADVSEQ_NOWAIT(10, a_pad_keep[1], b_frag[2])
-                    HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(11, 6, a_pad_keep[1], b_frag[3])
-                    HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(12, 1, a_pad_keep[2], b_frag[2])
-                    HRX_Q6_K_WMMA_VK128_RADVSEQ_NOWAIT(13, a_pad_keep[2], b_frag[3])
-                    HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(14, 0, a_pad_keep[3], b_frag[3])
-                    HRX_Q6_K_WMMA_VK128_RADVSEQ_NOWAIT(15, a_pad_keep[3], b_frag[2])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(0, 40, 0, a_frag[0], b_frag[0])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(1, 36, 1, a_frag[0], b_frag[1])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(2, 32, 2, a_frag[1], b_frag[0])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_NOWAIT(3, 3, a_frag[1], b_frag[1])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(4, 28, 4, a_frag[2], b_frag[0])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_NOWAIT(5, 5, a_frag[2], b_frag[1])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(6, 24, 6, a_frag[3], b_frag[0])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_NOWAIT(7, 7, a_frag[3], b_frag[1])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(8, 16, 0, a_pad_keep[0], b_frag[2])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(9, 7, 1, a_pad_keep[0], b_frag[3])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_NOWAIT(10, 2, a_pad_keep[1], b_frag[2])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(11, 6, 3, a_pad_keep[1], b_frag[3])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(12, 1, 4, a_pad_keep[2], b_frag[2])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_NOWAIT(13, 5, a_pad_keep[2], b_frag[3])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(14, 0, 7, a_pad_keep[3], b_frag[3])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_NOWAIT(15, 6, a_pad_keep[3], b_frag[2])
 #undef HRX_Q6_K_WMMA_VK128_RADVSEQ_NOWAIT
 #undef HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT
+#undef HRX_Q6_K_WMMA_VK128_RADVSEQ_ACC
 #else
 #if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_RING12_ALIAS
                     const int row_frag = group % 6;
