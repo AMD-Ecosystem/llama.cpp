@@ -142,6 +142,10 @@
 #define HRX_Q6_K_WMMA_VK128_STORE_RADV96_SIDECAR 0
 #endif
 
+#ifndef HRX_Q6_K_WMMA_VK128_STORE_RADV96_DUPLICATE
+#define HRX_Q6_K_WMMA_VK128_STORE_RADV96_DUPLICATE 0
+#endif
+
 #ifndef HRX_Q6_K_WMMA_VK128_STORE_BANDED_STAGE
 #define HRX_Q6_K_WMMA_VK128_STORE_BANDED_STAGE 0
 #endif
@@ -844,7 +848,7 @@ static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_load_typed_stage_stor
 }
 #endif
 
-#if (HRX_Q6_K_WMMA_VK128_STORE_RADV96_SIDECAR || HRX_Q6_K_WMMA_VK128_STORE_BANDED_STAGE || HRX_Q6_K_WMMA_VK128_STORE_UPPER_STAGE) && HRX_Q6_K_WMMA_VK128_BUFFER_STORE
+#if (HRX_Q6_K_WMMA_VK128_STORE_RADV96_SIDECAR || HRX_Q6_K_WMMA_VK128_STORE_RADV96_DUPLICATE || HRX_Q6_K_WMMA_VK128_STORE_BANDED_STAGE || HRX_Q6_K_WMMA_VK128_STORE_UPPER_STAGE) && HRX_Q6_K_WMMA_VK128_BUFFER_STORE
 static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_radv96_stage(
         hrx_q6_k_wmma_vk128_half8_vec acc,
         int group,
@@ -1266,7 +1270,7 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
     __shared__ uint16_t sh_store_upper[8 * 64 * 4];
 #elif HRX_Q6_K_WMMA_VK128_STORE_BANDED_STAGE
     __shared__ uint16_t sh_store_banded[6 * 64 * 4];
-#elif HRX_Q6_K_WMMA_VK128_STORE_RADV96_SIDECAR
+#elif HRX_Q6_K_WMMA_VK128_STORE_RADV96_SIDECAR || HRX_Q6_K_WMMA_VK128_STORE_RADV96_DUPLICATE
     __shared__ uint16_t sh_store_radv96[6 * 64 * 4];
 #elif HRX_Q6_K_WMMA_VK128_STORE_STAGE_TYPED_LINEAR
     __shared__ uint16_t sh_store_typed[16 * 64 * 4];
@@ -1906,7 +1910,7 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
     }
     asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
     __syncthreads();
-#elif HRX_Q6_K_WMMA_VK128_STORE_RADV96_SIDECAR
+#elif HRX_Q6_K_WMMA_VK128_STORE_RADV96_SIDECAR || HRX_Q6_K_WMMA_VK128_STORE_RADV96_DUPLICATE
 #pragma unroll
     for (int group = 0; group < 8; ++group) {
         if (tid < 64u) {
@@ -1990,6 +1994,22 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
                     lane,
                     sh_store_radv96);
             } else {
+#if HRX_Q6_K_WMMA_VK128_STORE_RADV96_DUPLICATE
+                const int acc_group = group - 8;
+                const int row_tile = acc_group & 3;
+                const int col_tile = (acc_group >> 2) & 3;
+                hrx_q6_k_wmma_vk128_load_radv96_stage_store_buffer_w64(
+                    dst_rsrc,
+                    rows,
+                    row_base + static_cast<long long>(row_tile * 16),
+                    col_base + static_cast<long long>(col_tile * 16),
+                    rows,
+                    cols,
+                    group,
+                    14,
+                    lane,
+                    sh_store_radv96);
+#else
                 hrx_q6_k_wmma_vk128_load_radv96_stage_store_sidecar_w64(
                     dst_rsrc,
                     rows * cols,
@@ -1997,6 +2017,7 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
                     14,
                     lane,
                     sh_store_radv96);
+#endif
             }
         }
     }
@@ -2019,6 +2040,22 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
 #pragma unroll
     for (int group = 20; group < 24; ++group) {
         if (tid < 64u) {
+#if HRX_Q6_K_WMMA_VK128_STORE_RADV96_DUPLICATE
+            const int acc_group = group - 8;
+            const int row_tile = acc_group & 3;
+            const int col_tile = (acc_group >> 2) & 3;
+            hrx_q6_k_wmma_vk128_load_radv96_stage_store_buffer_w64(
+                dst_rsrc,
+                rows,
+                row_base + static_cast<long long>(row_tile * 16),
+                col_base + static_cast<long long>(col_tile * 16),
+                rows,
+                cols,
+                group,
+                20,
+                lane,
+                sh_store_radv96);
+#else
             hrx_q6_k_wmma_vk128_load_radv96_stage_store_sidecar_w64(
                 dst_rsrc,
                 rows * cols,
@@ -2026,6 +2063,7 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
                 20,
                 lane,
                 sh_store_radv96);
+#endif
         }
     }
     asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
