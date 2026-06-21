@@ -94,6 +94,10 @@
 #define HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT_WAIT12312 0
 #endif
 
+#ifndef HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_ASMWAIT_LADDER
+#define HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_ASMWAIT_LADDER 0
+#endif
+
 #ifndef HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_EXPWAIT_LADDER
 #define HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_EXPWAIT_LADDER 0
 #endif
@@ -492,6 +496,19 @@ static __device__ __forceinline__ hrx_q6_k_wmma_vk128_u32x4_vec hrx_q6_k_wmma_vk
     asm volatile("v_wmma_f16_16x16x16_f16 %0, %1, %2, %0\n"
                  : "+v"(acc)
                  : "v"(a_frag), "v"(b_frag)
+                 : "memory");
+    return acc;
+}
+
+template <int WAIT>
+static __device__ __forceinline__ hrx_q6_k_wmma_vk128_u32x4_vec hrx_q6_k_wmma_vk128_wmma_f16_w64_compact_asmwait(
+        hrx_q6_k_wmma_vk128_half16_vec a_frag,
+        hrx_q6_k_wmma_vk128_half16_vec b_frag,
+        hrx_q6_k_wmma_vk128_u32x4_vec acc) {
+    asm volatile("s_waitcnt lgkmcnt(%3)\n"
+                 "v_wmma_f16_16x16x16_f16 %0, %1, %2, %0\n"
+                 : "+v"(acc)
+                 : "v"(a_frag), "v"(b_frag), "n"(WAIT)
                  : "memory");
     return acc;
 }
@@ -1713,7 +1730,8 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
 #endif
 #pragma unroll
                 for (int group = 0; group < 16; ++group) {
-#if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_EXPWAIT_LADDER
+#if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_ASMWAIT_LADDER
+#elif HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_EXPWAIT_LADDER
                     if (group == 1) {
                         asm volatile("s_waitcnt lgkmcnt(36)\n" ::: "memory");
                     } else if (group == 2) {
@@ -1829,7 +1847,32 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
 #endif
                     }
 #else
-#if HRX_Q6_K_WMMA_VK128_W64_COMPACT_ACC
+#if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_ASMWAIT_LADDER && HRX_Q6_K_WMMA_VK128_W64_COMPACT_ACC
+#define HRX_Q6_K_WMMA_VK128_ASMWAIT_GROUP(G, W) \
+                    else if (group == (G)) { \
+                        acc[group] = hrx_q6_k_wmma_vk128_wmma_f16_w64_compact_asmwait<W>( \
+                            a_use, b_use, acc[group]); \
+                    }
+                    if (false) {
+                    }
+                    HRX_Q6_K_WMMA_VK128_ASMWAIT_GROUP(0, 40)
+                    HRX_Q6_K_WMMA_VK128_ASMWAIT_GROUP(1, 36)
+                    HRX_Q6_K_WMMA_VK128_ASMWAIT_GROUP(2, 32)
+                    HRX_Q6_K_WMMA_VK128_ASMWAIT_GROUP(3, 28)
+                    HRX_Q6_K_WMMA_VK128_ASMWAIT_GROUP(4, 24)
+                    HRX_Q6_K_WMMA_VK128_ASMWAIT_GROUP(5, 16)
+                    HRX_Q6_K_WMMA_VK128_ASMWAIT_GROUP(6, 7)
+                    HRX_Q6_K_WMMA_VK128_ASMWAIT_GROUP(7, 6)
+                    HRX_Q6_K_WMMA_VK128_ASMWAIT_GROUP(8, 1)
+                    HRX_Q6_K_WMMA_VK128_ASMWAIT_GROUP(9, 0)
+                    HRX_Q6_K_WMMA_VK128_ASMWAIT_GROUP(10, 0)
+                    HRX_Q6_K_WMMA_VK128_ASMWAIT_GROUP(11, 0)
+                    HRX_Q6_K_WMMA_VK128_ASMWAIT_GROUP(12, 0)
+                    HRX_Q6_K_WMMA_VK128_ASMWAIT_GROUP(13, 0)
+                    HRX_Q6_K_WMMA_VK128_ASMWAIT_GROUP(14, 0)
+                    HRX_Q6_K_WMMA_VK128_ASMWAIT_GROUP(15, 0)
+#undef HRX_Q6_K_WMMA_VK128_ASMWAIT_GROUP
+#elif HRX_Q6_K_WMMA_VK128_W64_COMPACT_ACC
                     acc[group] = hrx_q6_k_wmma_vk128_wmma_f16_w64_compact(a_use, b_use, acc[group]);
 #elif HRX_Q6_K_WMMA_VK128_W64_INLINE_WMMA
                     acc[group] = hrx_q6_k_wmma_vk128_wmma_f16_w64_asm(a_use, b_use, acc[group]);

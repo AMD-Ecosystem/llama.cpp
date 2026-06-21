@@ -3,6 +3,15 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_vk64_q6addr_compact_helper4_asmwait_static_68d28f5cc_dirty",
+      "date": "2026-06-21",
+      "route": "static-only HSACO: hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_copyab_q6addr_upperdepnomem_compact_helper4_f16acc_wg256_f32",
+      "env": "not provider-wired; CMake/Ninja static probe only",
+      "artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-asmwait-compact-helper4-68d28f5cc-dirty-20260621-102223/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asmwait_copyab_q6addr_upperdepnomem_compact_helper4_wg256.hsaco",
+      "reason": "This CMake/Ninja-built Q6_K p33 static probe tested whether Q5-style ASMWAIT could repair the compact-helper4 production route's missing RADV wait/use surface by putting s_waitcnt and v_wmma in one inline-asm block. Static screening shows the useful and bad effects clearly. It now matches RADV on 16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 96 buffer_store_b32, two barriers, zero scratch/spills, final_pre_wmma_lgkmcnt=40, load_b64_immediately_before_final_wait=48, and wmma_in_window=16. Reject before provider wiring because the same spelling collapses A and B operand ownership to one bank reused 16 times instead of RADV's 8xA/4xB reuse pattern, keeps dst/C as 16 single-use banks instead of RADV's eight reused banks, emits only 2 ds_store_b16 versus RADV 64, has LDS stores 4 versus 70, LDS 14336 versus 11264, VGPR 171 versus 144, and adds six extra lgkmcnt(0) anchors. ASMWAIT alone is not the missing Q6 p33 primitive; future work needs wait/use plus A/B ownership preservation or a different dataflow."
+    },
+    {
       "id": "q6_k_vk64_q6addr_compact_rawbuf_helper4_4f2a208e9_dirty",
       "date": "2026-06-21",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_compact_rawbuf_helper4_f16acc_wg256_f32",

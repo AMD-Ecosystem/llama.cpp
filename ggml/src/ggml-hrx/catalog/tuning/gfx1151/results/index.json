@@ -3,6 +3,50 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_k_vk64_q6addr_compact_helper4_asmwait_static_rejection_68d28f5cc_dirty",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-asmwait-compact-helper4-68d28f5cc-dirty-20260621-102223/",
+      "source_commit": "68d28f5cc-dirty",
+      "tool": "CMake/Ninja-built Q6 compact helper4 ASMWAIT HSACO and tools/vulkan-oracle/run_q6_medium_contract_screen.py",
+      "status": "rejected_gfx1151_static_probe",
+      "route": "static-only HSACO: hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_copyab_q6addr_upperdepnomem_compact_helper4_f16acc_wg256_f32",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K p33 dense prompt medium-route WMMA issue window. Test whether placing the wait and compact WMMA in one inline-asm block can preserve the RADV wait/use surface inside the q6addr compact-helper4 production spelling.",
+        "baseline_command": "static comparison against Qwen3 30B Q6_K p33 RADV medium oracle and the rejected compact-helper4 route",
+        "variant_command": "cmake --build build/hrx-v1-catalog-gfx1151 --target test-backend-ops -j$(nproc), then run_q6_medium_contract_screen.py on mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asmwait_copyab_q6addr_upperdepnomem_compact_helper4_wg256.hsaco",
+        "same_runner_comparison_method": "not run; rejected at static schedule gate before route wiring or focused timing",
+        "route_trace_path": "not applicable; no production provider wired",
+        "scheduler_trace_path": "artifact summary.md, isa-compare.md, contract-check.json, and compact-accumulator/wmma-ownership.json",
+        "focused_cpu_reference": "not run after static rejection",
+        "compile_report_path": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asmwait_copyab_q6addr_upperdepnomem_compact_helper4_wg256.hsaco built by CMake/Ninja",
+        "target_listing_path": "artifact isa-compare.md and compact-accumulator/wmma-ownership.md",
+        "prior_art_schedule_source": "Qwen3 30B Q6_K p33 RADV medium oracle, rejected compact-helper4 production route, and accepted Q5 ASMWAIT narrow wait/use repair",
+        "promotion_rule": "reject before route wiring unless static screening preserves RADV WMMA count, LDS loads, final wait/use window, A/B operand bank ownership, compact accumulator ownership, and store surface."
+      },
+      "static_result": {
+        "exact_static_contract_passed": false,
+        "compact_f16_accumulator_screen_passed": true,
+        "wmma_operand_topology_passed": false,
+        "matching_facts": "16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 96 buffer_store_b32, two barriers, zero scratch/spills, compact f16 accumulator screen pass, pre_wmma_ds_load_b64=48, load_b64_immediately_before_final_wait=48, final_pre_wmma_lgkmcnt=40, and wmma_in_window=16",
+        "misses": "A operand ownership collapsed to one bank reused 16 times versus RADV eight banks reused twice, B collapsed to one bank reused 16 times versus RADV four banks reused four times, dst/C remains 16 single-use banks versus RADV eight reused banks, ds_store_b16 is 2 versus RADV 64, LDS stores are 4 versus 70, LDS bytes are 14336 versus 11264, VGPR is 171 versus 144, and the wait ladder has six extra lgkmcnt(0) anchors",
+        "resource_facts": {
+          "sgpr": 44,
+          "vgpr": 171,
+          "lds_bytes": 14336,
+          "scratch_bytes": 0,
+          "instructions": 2203,
+          "s_waitcnt": 95,
+          "buffer_store_b32": 96
+        }
+      },
+      "findings": [
+        "the inline wait+compact-WMMA primitive successfully forces the visible first-WMMA issue window that prior compact-helper4 production builds missed",
+        "the same primitive destroys the useful A/B operand-bank topology, collapsing both operands to one reusable bank instead of the RADV 8xA/4xB pattern",
+        "the route still misses the RADV halfword LDS store surface and carries higher VGPR/LDS pressure, so focused correctness and timing would not be a valid promotion screen",
+        "decision: do not wire this HSACO into provider selection. Future Q6 p33 work needs a lower-level primitive that preserves both wait/use and A/B operand ownership, or a materially different packed/dataflow pivot."
+      ]
+    },
+    {
       "id": "q6_k_vk64_q6addr_compact_rawbuf_helper4_perf_rejection_4f2a208e9_dirty",
       "date": "2026-06-21",
       "artifact": "cache/hrxv1/gfx1151/q6-vk64-q6addr-compact-rawbuf-helper4-route-4f2a208e9-dirty-20260621-101000/",
