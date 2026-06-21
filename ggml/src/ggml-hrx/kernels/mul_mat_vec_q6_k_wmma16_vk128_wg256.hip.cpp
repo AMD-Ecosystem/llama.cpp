@@ -206,6 +206,10 @@
 #define HRX_Q6_K_WMMA_VK128_STORE_Q6ADDR_UPPERDEPNOMEM 0
 #endif
 
+#ifndef HRX_Q6_K_WMMA_VK128_STORE_ACC8_MAPPED_DIRECT8
+#define HRX_Q6_K_WMMA_VK128_STORE_ACC8_MAPPED_DIRECT8 0
+#endif
+
 #ifndef HRX_Q6_K_WMMA_VK128_STORE_RADV96_OVERLAY_A
 #define HRX_Q6_K_WMMA_VK128_STORE_RADV96_OVERLAY_A 0
 #endif
@@ -2497,6 +2501,27 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
     asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
     __syncthreads();
 #elif HRX_Q6_K_WMMA_VK128_STORE_RADV96_SIDECAR || HRX_Q6_K_WMMA_VK128_STORE_RADV96_DUPLICATE || HRX_Q6_K_WMMA_VK128_STORE_Q6ADDR_UPPERDEPNOMEM
+#if HRX_Q6_K_WMMA_VK128_STORE_ACC8_MAPPED_DIRECT8
+    static_assert(HRX_Q6_K_WMMA_VK128_W64_COMPACT_ACC,
+                  "ACC8 mapped direct store requires compact accumulators");
+#pragma unroll
+    for (int group = 0; group < 8; ++group) {
+        if (tid < 64u) {
+            constexpr int acc_map[8] = {0, 2, 4, 6, 1, 3, 5, 7};
+            const int row_tile = group & 3;
+            const int col_tile = group >> 2;
+            hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_compact_buffer(
+                dst_rsrc,
+                rows,
+                row_base + static_cast<long long>(row_tile * 16),
+                col_base + static_cast<long long>(col_tile * 16),
+                rows,
+                cols,
+                acc[acc_map[group]],
+                lane);
+        }
+    }
+#else
 #pragma unroll
     for (int group = 0; group < 8; ++group) {
         if (tid < 64u) {
@@ -2773,6 +2798,7 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
     asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
 #if !HRX_Q6_K_WMMA_VK128_STORE_RADV96_NOSYNC
     __syncthreads();
+#endif
 #endif
 #endif
 #elif HRX_Q6_K_WMMA_VK128_STORE_STAGE_DUAL_HALF
