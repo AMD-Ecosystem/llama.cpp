@@ -7825,6 +7825,50 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_packstage_fast_half_motif192_radvladder_bufferstore_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_packstage_fast_half_motif192_radvladder_bufferstore_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q5_k_wmma16_vk128_padded_w64_b64group_packstage_fast_half_motif192_radvladder_bufferstore_wg256",
+    "artifact_id": "mul_mat_vec_q5_k_wmma16_vk128_padded_w64_b64group_packstage_fast_half_motif192_radvladder_bufferstore_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_packstage_fast_half_motif192_radvladder_bufferstore_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 112,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q5_dense_prompt_wmma16x16_vk128_padded_w64_b64group_packstage_fast_half_motif192_radvladder_bufferstore_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q5_K x F32 -> F32 MUL_MAT",
+      "k_multiple": 256,
+      "rows_min": 128,
+      "cols_min": 128,
+      "selector_gate": "GGML_HRX_ENABLE_Q5_K_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_FAST_HALF_MOTIF192_RADVLADDER_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "prior_delta": "Bounded sibling of the Q5_K motif192 probe. It preserves the CMake/Ninja-built motif192 direct-WMMA/writeback surface and changes only the operand issue ladder: nowait ds_read_b64 fragments load in A0,B0,B1,B2,B3,A1,A2,A3 order, then issue row-major WMMAs with lgkmcnt 12/8/4/0. The intended static signal is movement toward the RADV first-window pattern of A reuse across B operands and fewer drained per-fragment waits without changing output ownership."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_packstage_fast_half_motif192_radvladder_bufferstore_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "opt_in_gfx1151_rejected_static_issue_window",
+      "selection": "Static artifact cache/hrxv1/gfx1151/q5-motif192-radvladder-static-9a77735f1-dirty-20260621-024106/ rejects this route before focused runtime gates. The CMake/Ninja-built HSACO is resource-clean and preserves the headline motif192 opcode surface, but the compiler issued the first eight WMMAs before the explicit lgkmcnt 12/8/4/0 ladder. Issue-window analysis shows first-region final lgkmcnt(0) with 0 immediate LDS loads versus RADV lgkmcnt(24) with 32 immediate LDS loads. Keep opt-in as diagnostic code only; do not promote without a lower-level scheduling spelling that preserves the intended wait/use order."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_store_stage_f16acc_wg256_f32",
     "family": "mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_store_stage_f16acc_wg256",
     "op": "MUL_MAT",

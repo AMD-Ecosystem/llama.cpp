@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q5_k_motif192_radvladder_static_issue_window_9a77735f1_dirty",
+      "date": "2026-06-21",
+      "route": "hrx_mul_mat_vec_q5_k_wmma16x16_vk128_padded_w64_b64group_packstage_fast_half_motif192_radvladder_bufferstore_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q5_K_WMMA16_VK128_PADDED_W64_B64GROUP_PACKSTAGE_FAST_HALF_MOTIF192_RADVLADDER_BUFFERSTORE_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q5-motif192-radvladder-static-9a77735f1-dirty-20260621-024106/",
+      "perf_artifact": "not run; rejected at static issue-window gate before focused runtime timing",
+      "static_artifact": "cache/hrxv1/gfx1151/q5-motif192-radvladder-static-9a77735f1-dirty-20260621-024106/q5-radvladder-vs-radv.md and issue-window.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q5_k_wmma16_vk128_padded_w64_b64group_packstage_fast_half_motif192_radvladder_bufferstore_wg256.hsaco",
+      "reason": "This opt-in CMake/Ninja-built Q5_K motif192 sibling tested a narrow RADV issue-ladder pivot without changing writeback: nowait fragment loads in A0,B0,B1,B2,B3,A1,A2,A3 order followed by row-major WMMAs with explicit lgkmcnt 12/8/4/0 waits. The HSACO is resource-clean and preserves the headline RADV-like surface: wave64, SGPR=56, VGPR=199, LDS=22528, no spills, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 128 ds_store_b16, 128 ds_load_u16_d16, and 192 buffer_store_b32. It does move the first emitted WMMAs toward RADV's A-reuse-across-B operand order, but the compiler does not preserve the intended wait ladder: issue-window analysis shows HIP has 3 regions, first region 8 WMMA, 24 pre-loads, 0 immediate loads before final wait, and final lgkmcnt(0), while RADV has 3 regions, first region 12 WMMA, 64 pre-loads, 32 immediate LDS loads, and final lgkmcnt(24). The emitted ISA places the first eight WMMAs before the explicit lgkmcnt 12/8/4/0 ladder, leaving repeated waits stranded after those WMMAs. Reject before focused correctness/timing because this source-level C++ spelling does not mechanically express the RADV schedule. The next Q5 direct-WMMA probe should use a lower-level scheduling primitive, such as inline WMMA/wait blocks, or pivot away from direct-WMMA if packed-Q8_1 evidence dominates."
+    },
+    {
       "id": "q6_dense_accepted_compact_accumulator_screen_56e8e5cca",
       "date": "2026-06-21",
       "route": "current accepted Q6_K dense direct-WMMA routes: vk128 p512/p513 and vk64 h4load p33",
