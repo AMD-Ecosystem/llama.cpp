@@ -142,6 +142,10 @@
 #define HRX_Q6_K_WMMA_VK128_NOMERGE_BUFFER_STORE 0
 #endif
 
+#ifndef HRX_Q6_K_WMMA_VK128_VALUE_BARRIER_BUFFER_STORE
+#define HRX_Q6_K_WMMA_VK128_VALUE_BARRIER_BUFFER_STORE 0
+#endif
+
 struct hrx_block_q6_K_wmma_vk128_lhs {
     uint8_t ql[128];
     uint8_t qh[64];
@@ -173,12 +177,17 @@ static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_buffer_store_f32(
         __amdgpu_buffer_rsrc_t dst_rsrc,
         long long elem_offset,
         float value) {
+    const int value_bits = __builtin_bit_cast(int, value);
+    const int byte_offset = static_cast<int>(elem_offset * static_cast<long long>(sizeof(float)));
     __builtin_amdgcn_raw_buffer_store_b32(
-        __builtin_bit_cast(int, value),
+        value_bits,
         dst_rsrc,
-        static_cast<int>(elem_offset * static_cast<long long>(sizeof(float))),
+        byte_offset,
         0,
         0);
+#if HRX_Q6_K_WMMA_VK128_VALUE_BARRIER_BUFFER_STORE
+    asm volatile("" :: "v"(value_bits), "v"(byte_offset));
+#endif
 #if HRX_Q6_K_WMMA_VK128_NOMERGE_BUFFER_STORE
     asm volatile("" ::: "memory");
 #endif

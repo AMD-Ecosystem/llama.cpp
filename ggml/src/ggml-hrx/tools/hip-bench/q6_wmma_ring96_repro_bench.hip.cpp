@@ -50,6 +50,11 @@
 #define HRX_Q6_REPRO_KERNEL hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_radv96_sidecar_nomerge_f16acc_wg256_f32
 #define HRX_Q6_REPRO_LABEL "q6-ring96-kloop-asm-copyab-radv96-sidecar-nomerge-repro"
 #define HRX_Q6_REPRO_EXTRA_DST_FLOATS (8 * 64 * 4)
+#elif HRX_Q6_REPRO_KLOOP_ASM_COPYAB_RADV96_SIDECAR_VALUEBARRIER
+#include "../../kernels/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_radv96_sidecar_valuebarrier_wg256.hip.cpp"
+#define HRX_Q6_REPRO_KERNEL hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_radv96_sidecar_valuebarrier_f16acc_wg256_f32
+#define HRX_Q6_REPRO_LABEL "q6-ring96-kloop-asm-copyab-radv96-sidecar-valuebarrier-repro"
+#define HRX_Q6_REPRO_EXTRA_DST_FLOATS (8 * 64 * 4)
 #elif HRX_Q6_REPRO_KLOOP_ASM_COPYAB_BANDED_STAGE
 #include "../../kernels/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_banded_stage_wg256.hip.cpp"
 #define HRX_Q6_REPRO_KERNEL hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_banded_stage_f16acc_wg256_f32
