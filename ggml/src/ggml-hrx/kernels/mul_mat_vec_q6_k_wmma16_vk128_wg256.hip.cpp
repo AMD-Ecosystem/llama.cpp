@@ -198,6 +198,10 @@
 #define HRX_Q6_K_WMMA_VK128_STORE_RADV96_COMPACT_STOREKILL 0
 #endif
 
+#ifndef HRX_Q6_K_WMMA_VK128_STORE_RADV96_COMPACT_HELPER4
+#define HRX_Q6_K_WMMA_VK128_STORE_RADV96_COMPACT_HELPER4 0
+#endif
+
 #ifndef HRX_Q6_K_WMMA_VK128_STORE_BANDED_STAGE
 #define HRX_Q6_K_WMMA_VK128_STORE_BANDED_STAGE 0
 #endif
@@ -1029,6 +1033,27 @@ static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_store_acc_f16_row_maj
     }
 #endif
 }
+
+#if HRX_Q6_K_WMMA_VK128_STORE_RADV96_COMPACT_HELPER4
+static __device__ __attribute__((noinline)) void hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_radv96_stage_compact4(
+        uint16_t * sh_store,
+        int group_base,
+        int base_group,
+        unsigned int lane,
+        hrx_q6_k_wmma_vk128_u32x4_vec acc0,
+        hrx_q6_k_wmma_vk128_u32x4_vec acc1,
+        hrx_q6_k_wmma_vk128_u32x4_vec acc2,
+        hrx_q6_k_wmma_vk128_u32x4_vec acc3) {
+    hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_radv96_stage_compact(
+        acc0, group_base + 0, base_group, lane, sh_store);
+    hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_radv96_stage_compact(
+        acc1, group_base + 1, base_group, lane, sh_store);
+    hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_radv96_stage_compact(
+        acc2, group_base + 2, base_group, lane, sh_store);
+    hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_radv96_stage_compact(
+        acc3, group_base + 3, base_group, lane, sh_store);
+}
+#endif
 #endif
 
 static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_load_radv96_stage_store_buffer_w64(
@@ -2270,6 +2295,16 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
         }
     }
 
+#if HRX_Q6_K_WMMA_VK128_W64_COMPACT_ACC && HRX_Q6_K_WMMA_VK128_STORE_RADV96_COMPACT_HELPER4
+    if (tid < 64u) {
+        hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_radv96_stage_compact4(
+            sh_store_radv96, 8, 8, lane, acc[8], acc[9], acc[10], acc[11]);
+        hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_radv96_stage_compact(
+            acc[12], 12, 8, lane, sh_store_radv96);
+        hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_radv96_stage_compact(
+            acc[13], 13, 8, lane, sh_store_radv96);
+    }
+#else
 #pragma unroll
     for (int group = 8; group < 14; ++group) {
         if (tid < 64u) {
@@ -2290,6 +2325,7 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
 #endif
         }
     }
+#endif
     asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
 #if !HRX_Q6_K_WMMA_VK128_STORE_RADV96_NOSYNC
     __syncthreads();
@@ -2317,6 +2353,16 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
     __syncthreads();
 #endif
 
+#if HRX_Q6_K_WMMA_VK128_W64_COMPACT_ACC && HRX_Q6_K_WMMA_VK128_STORE_RADV96_COMPACT_HELPER4
+    if (tid < 64u) {
+        hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_radv96_stage_compact4(
+            sh_store_radv96, 14, 14, lane, acc[14], acc[15], acc[8], acc[9]);
+        hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_radv96_stage_compact(
+            acc[10], 18, 14, lane, sh_store_radv96);
+        hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_radv96_stage_compact(
+            acc[11], 19, 14, lane, sh_store_radv96);
+    }
+#else
 #pragma unroll
     for (int group = 14; group < 20; ++group) {
         if (tid < 64u) {
@@ -2338,6 +2384,7 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
 #endif
         }
     }
+#endif
     asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
 #if !HRX_Q6_K_WMMA_VK128_STORE_RADV96_NOSYNC
     __syncthreads();
@@ -2408,6 +2455,12 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
     __syncthreads();
 #endif
 
+#if HRX_Q6_K_WMMA_VK128_W64_COMPACT_ACC && HRX_Q6_K_WMMA_VK128_STORE_RADV96_COMPACT_HELPER4
+    if (tid < 64u) {
+        hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_radv96_stage_compact4(
+            sh_store_radv96, 20, 20, lane, acc[12], acc[13], acc[14], acc[15]);
+    }
+#else
 #pragma unroll
     for (int group = 20; group < 24; ++group) {
         if (tid < 64u) {
@@ -2428,6 +2481,7 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
 #endif
         }
     }
+#endif
     asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
 #if !HRX_Q6_K_WMMA_VK128_STORE_RADV96_NOSYNC
     __syncthreads();

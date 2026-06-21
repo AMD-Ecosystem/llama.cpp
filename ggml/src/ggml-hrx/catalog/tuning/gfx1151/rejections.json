@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_vk64_q6addr_upperdepnomem_compact_helper4_route_3ff10bb41_dirty",
+      "date": "2026-06-21",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_compact_helper4_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASM_COPYAB_Q6ADDR_UPPERDEPNOMEM_COMPACT_HELPER4_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-q6addr-compact-helper4-route-3ff10bb41-dirty-20260621-090659/",
+      "perf_artifact": "cache/hrxv1/gfx1151/q6-vk64-q6addr-compact-helper4-route-3ff10bb41-dirty-20260621-090659/p33-default-perf.csv and p33-helper4-perf.csv",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-q6addr-compact-helper4-3ff10bb41-dirty-20260621-090632/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_compact_helper4_wg256.hsaco",
+      "reason": "This opt-in Q6_K p33 route tested whether the accepted prodaddr_radvissuecompact_helper4 fixture's RADV-matching compact WMMA ownership transfers into the production q6addr compact route. It built through CMake/Ninja as a normal catalog HSACO, selected for all four exported Qwen3 Q6 p33 dense MUL_MAT rows under the explicit env gate, and passed focused CPU-reference. Reject because the production route does not preserve the helper4 fixture ownership signal: compact f16 accumulator screening passes, but the ownership contract fails with dst/C [1 x 16 banks] instead of RADV [2 x 8 banks], A [16] instead of [2 x 8], B [16] instead of [4 x 4], and wait ladder [0,36,28,20,16] instead of [40,36,32,28,24,16,7,6,1,0]. Resource shape is also worse at LDS 14336 versus RADV 11264 and VGPR 171 versus RADV 144. Same-runner focused p33 timing regressed every row versus H4LOAD: total 6790.599 us -> 13117.455 us, with result_output 5963.836 us -> 11954.168 us. Helper4's useful fixture boundary does not transfer into the current q6addr production route; future work should use a lower-level operand/control primitive or different dataflow rather than adding more wrappers around this compact route."
+    },
+    {
       "id": "q6_k_prodaddr_radvissuecompact_helper2_fixture_459d54e32_dirty",
       "date": "2026-06-21",
       "route": "hrx-hip-bench-q6-id-subgroup-contract q6_id_subgroup_contract_prodaddr_radv_issue_compact_helper2_probe",
