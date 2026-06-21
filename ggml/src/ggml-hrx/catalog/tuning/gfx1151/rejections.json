@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_vk64_q6addr_upperdepnomem_padtoken_c68df8665_dirty",
+      "date": "2026-06-21",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_padtoken_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASM_COPYAB_Q6ADDR_UPPERDEPNOMEM_PADTOKEN_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-q6addr-upperdepnomem-padtoken-route-c68df8665-dirty-20260621-094532/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-q6addr-upperdepnomem-padtoken-c68df8665-dirty-20260621-094518/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_padtoken_wg256.hsaco",
+      "reason": "This opt-in Q6_K p33 route followed rejected padkeep by retaining only the four consumed b_pad token half4 vectors per fragment instead of full half16 fragments, while keeping q6addr upperdepnomem output ownership, COPY_NOMEM fragment copies, the initial lgkmcnt(40), and full PADWAIT_LADDER wait placement. Focused CPU-reference passed for the selected ffn_out-0 and result_output p33 rows, showing the narrowed retained-token dependency is semantically sufficient for correctness. Reject for promotion because it does not reduce the schedule cost: static screening remains VGPR 170 versus RADV 144, LDS 14336 versus 11264, ds_store_b16 2 versus 64, store-cluster LDS stores 10 versus 70, and same-runner focused p33 timing regressed total 13929.736 us -> 23561.427 us, with result_output 11377.669 us -> 20672.896 us. This closes the C++ liveness-narrowing axis; future work needs a lower-level dependency/issue primitive or a different dataflow rather than retaining smaller pad tokens."
+    },
+    {
       "id": "q6_k_vk64_q6addr_upperdepnomem_padkeep_fc1a5537c_dirty",
       "date": "2026-06-21",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_padkeep_f16acc_wg256_f32",

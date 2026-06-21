@@ -82,6 +82,10 @@
 #define HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT_LADDER 0
 #endif
 
+#ifndef HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT_TOKENKEEP
+#define HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT_TOKENKEEP 0
+#endif
+
 #ifndef HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT_WAIT123
 #define HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT_WAIT123 0
 #endif
@@ -397,6 +401,11 @@ static __device__ __forceinline__ hrx_q6_k_wmma_vk128_half16_vec hrx_q6_k_wmma_v
 static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_consume_frag(
         hrx_q6_k_wmma_vk128_half16_vec frag) {
     asm volatile("" :: "v"(frag[0]), "v"(frag[4]), "v"(frag[8]), "v"(frag[12]) : "memory");
+}
+
+static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_consume_frag_tokens(
+        hrx_q6_k_wmma_vk128_half4_vec frag_tokens) {
+    asm volatile("" :: "v"(frag_tokens[0]), "v"(frag_tokens[1]), "v"(frag_tokens[2]), "v"(frag_tokens[3]) : "memory");
 }
 
 #if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_DEPWAIT
@@ -1625,14 +1634,28 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
 #if !HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_RING12_ALIAS
 #if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT
 #if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT_LADDER
+#if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT_TOKENKEEP
+                hrx_q6_k_wmma_vk128_half4_vec b_pad_keep[4];
+#else
                 hrx_q6_k_wmma_vk128_half16_vec b_pad_keep[4];
+#endif
 #endif
 #pragma unroll
                 for (int frag = 0; frag < 4; ++frag) {
 #if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT_LADDER
+#if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT_TOKENKEEP
+                    const hrx_q6_k_wmma_vk128_half16_vec b_pad =
+                        hrx_q6_k_wmma_vk128_load_b_frag_w64_b64asm_nowait(
+                            sh_b_lds, frag, k_tile, lane);
+                    b_pad_keep[frag][0] = b_pad[0];
+                    b_pad_keep[frag][1] = b_pad[4];
+                    b_pad_keep[frag][2] = b_pad[8];
+                    b_pad_keep[frag][3] = b_pad[12];
+#else
                     b_pad_keep[frag] =
                         hrx_q6_k_wmma_vk128_load_b_frag_w64_b64asm_nowait(
                             sh_b_lds, frag, k_tile, lane);
+#endif
 #else
                     const hrx_q6_k_wmma_vk128_half16_vec b_pad =
                         hrx_q6_k_wmma_vk128_load_b_frag_w64_b64asm_nowait(
@@ -1781,7 +1804,11 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
 #if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT_LADDER && !HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_RING12_ALIAS
 #pragma unroll
                 for (int frag = 0; frag < 4; ++frag) {
+#if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT_TOKENKEEP
+                    hrx_q6_k_wmma_vk128_consume_frag_tokens(b_pad_keep[frag]);
+#else
                     hrx_q6_k_wmma_vk128_consume_frag(b_pad_keep[frag]);
+#endif
                 }
 #endif
             }
