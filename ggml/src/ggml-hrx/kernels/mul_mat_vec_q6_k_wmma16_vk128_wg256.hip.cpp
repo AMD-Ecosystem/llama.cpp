@@ -138,6 +138,10 @@
 #define HRX_Q6_K_WMMA_VK128_BUFFER_STORE 0
 #endif
 
+#ifndef HRX_Q6_K_WMMA_VK128_NOMERGE_BUFFER_STORE
+#define HRX_Q6_K_WMMA_VK128_NOMERGE_BUFFER_STORE 0
+#endif
+
 struct hrx_block_q6_K_wmma_vk128_lhs {
     uint8_t ql[128];
     uint8_t qh[64];
@@ -175,6 +179,9 @@ static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_buffer_store_f32(
         static_cast<int>(elem_offset * static_cast<long long>(sizeof(float))),
         0,
         0);
+#if HRX_Q6_K_WMMA_VK128_NOMERGE_BUFFER_STORE
+    asm volatile("" ::: "memory");
+#endif
 }
 #endif
 
