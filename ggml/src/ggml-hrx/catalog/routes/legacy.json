@@ -10619,6 +10619,54 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_compact_rawbuf_helper4_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_compact_rawbuf_helper4_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_compact_rawbuf_helper4_wg256",
+    "artifact_id": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_compact_rawbuf_helper4_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_compact_rawbuf_helper4_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q6_dense_prompt_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_compact_rawbuf_helper4_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q6_K x F32 -> F32 MUL_MAT",
+      "k_multiple": 256,
+      "rows_min": 16,
+      "cols_min": 16,
+      "cols_max": 64,
+      "requires_env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASM_COPYAB_Q6ADDR_UPPERDEPNOMEM_COMPACT_RAWBUF_HELPER4_F16ACC_WG256_PROMPT",
+      "prior_delta": "Route-facing transfer of the accepted prodaddr-radvissuecompact-helper4-rawbuf primitive. It preserves the compact u32x4 accumulator, q6addr group ownership, and helper4 drain granularity, but replaces the rejected compact-helper4 route's LDS halfword stage/flush with direct selected-output raw-buffer stores for groups 8..15. Expected signal is whether the no-scratch direct-store primitive reduces the production route cost while preserving focused p33 correctness."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_compact_rawbuf_helper4_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_perf_probe",
+      "selection": "Opt-in diagnostic only. Focused Qwen3 Q6 p33 CPU-reference passed and route traces prove this provider selected for Vcur-0, node_28, Qcur-0, and result_output under GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASM_COPYAB_Q6ADDR_UPPERDEPNOMEM_COMPACT_RAWBUF_HELPER4_F16ACC_WG256_PROMPT=1.",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-q6addr-compact-rawbuf-helper4-route-4f2a208e9-dirty-20260621-101000/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-q6addr-compact-rawbuf-helper4-4f2a208e9-dirty-20260621-101000/",
+      "reason": "Rejected because the accepted raw-buffer helper4 primitive is correct in the production route but does not preserve the RADV schedule. Static screening keeps zero scratch/spills, 16 WMMA, 48 ds_load_b64, 11264-byte LDS, and compact f16 accumulator pass, but loses the halfword LDS surface, RADV 96-store surface, WMMA operand topology, and wait ladder. Same-runner focused p33 timing regressed from 6747.559 us to 13107.191 us total, with result_output 5921.208 us to 11958.104 us."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_overlaya_f16acc_wg256_f32",
     "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_overlaya_f16acc_wg256",
     "op": "MUL_MAT",

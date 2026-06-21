@@ -3,6 +3,85 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_k_vk64_q6addr_compact_rawbuf_helper4_perf_rejection_4f2a208e9_dirty",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-q6addr-compact-rawbuf-helper4-route-4f2a208e9-dirty-20260621-101000/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-q6addr-compact-rawbuf-helper4-4f2a208e9-dirty-20260621-101000/",
+      "source_commit": "4f2a208e9-dirty",
+      "tool": "CMake/Ninja-built Q6 compact raw-buffer helper4 generated HSACO, tools/vulkan-oracle/run_q6_medium_contract_screen.py, and focused test-backend-ops p33 CPU-reference/perf",
+      "status": "rejected_gfx1151_perf_probe",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_compact_rawbuf_helper4_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASM_COPYAB_Q6ADDR_UPPERDEPNOMEM_COMPACT_RAWBUF_HELPER4_F16ACC_WG256_PROMPT=1",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K p33 dense prompt medium-route MUL_MAT rows. Test whether the accepted no-scratch raw-buffer helper4 primitive reduces the rejected compact-helper4 production route by replacing the LDS halfword stage/flush for groups 8..15 with direct selected-output raw-buffer stores.",
+        "baseline_command": "same rebuilt test-backend-ops binary without the rawbuf helper4 env gate: test-backend-ops perf -b HRX0 -o MUL_MAT --test-file cache/hrxv1/gfx1151/qwen3-q6-p33-export-7ca0f4023-20260621-073306/focus/qk_prompt.txt --output csv",
+        "variant_command": "same command with GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASM_COPYAB_Q6ADDR_UPPERDEPNOMEM_COMPACT_RAWBUF_HELPER4_F16ACC_WG256_PROMPT=1 after focused correctness passed",
+        "same_runner_comparison_method": "same rebuilt test-backend-ops binary, sequential focused p33 dense MUL_MAT rows, route/provider traces enabled for default and variant",
+        "route_trace_path": "artifact p33-correctness.trace.log, p33-perf-default.trace.log, and p33-perf-rawbuf-helper4.trace.log",
+        "scheduler_trace_path": "static_artifact summary.md, isa-compare.md, contract-check.json, and compact-accumulator/wmma-ownership.json",
+        "focused_cpu_reference": "artifact p33-correctness.csv selected rawbuf helper4 for Vcur-0, node_28, Qcur-0, and result_output and passed all four rows",
+        "compile_report_path": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_compact_rawbuf_helper4_wg256.hsaco built by CMake/Ninja",
+        "target_listing_path": "static_artifact isa-compare.md and compact-accumulator/wmma-ownership.md",
+        "prior_art_schedule_source": "Qwen3 30B Q6_K p33 RADV medium oracle matmul_q6_k_f32_f16acc_aligned_m, accepted q6_prodaddr_helper4_inline_rawbuf_primitive_ad4e72005_dirty fixture, and rejected compact_helper4 production route",
+        "promotion_rule": "reject unless correctness-clean, route-confirmed, no-spill, and same-runner focused timing beats accepted H4LOAD/default on dominant p33 rows before p512/p513/model promotion."
+      },
+      "static_result": {
+        "exact_static_contract_passed": false,
+        "compact_f16_accumulator_screen_passed": true,
+        "wmma_operand_topology_passed": false,
+        "matching_facts": "16 WMMA, 48 ds_load_b64, 11264 LDS bytes, two barriers, zero scratch/spills, and compact f16 accumulator screen pass",
+        "misses": "ds_load_u16_d16 0 versus RADV 64, ds_store_b16 2 versus RADV 64, buffer_store_b32 64 versus RADV 96, load_b64_immediately_before_final_wait 0 versus RADV 48, final_pre_wmma_lgkmcnt 0 versus RADV 40, wait ladder [0,36,28,20,16] versus [40,36,32,28,24,16,7,6,1,0], and WMMA operand reuse/unique-bank topology mismatch",
+        "resource_facts": {
+          "sgpr": 42,
+          "vgpr": 170,
+          "lds_bytes": 11264,
+          "scratch_bytes": 0,
+          "instructions": 1538,
+          "s_waitcnt": 13,
+          "buffer_store_b32": 64
+        }
+      },
+      "focused_result": {
+        "Vcur-0": "passed with rawbuf helper4 provider selected",
+        "node_28": "passed with rawbuf helper4 provider selected",
+        "Qcur-0": "passed with rawbuf helper4 provider selected",
+        "result_output": "passed with rawbuf helper4 provider selected"
+      },
+      "timing_result": {
+        "default_total_us": 6747.559,
+        "rawbuf_helper4_total_us": 13107.191,
+        "rawbuf_helper4_over_default": 1.943,
+        "rows": {
+          "Vcur-0": {
+            "default_us": 182.240234,
+            "rawbuf_helper4_us": 239.062988,
+            "ratio": 1.312
+          },
+          "node_28": {
+            "default_us": 400.030669,
+            "rawbuf_helper4_us": 551.021939,
+            "ratio": 1.377
+          },
+          "Qcur-0": {
+            "default_us": 244.079919,
+            "rawbuf_helper4_us": 359.001791,
+            "ratio": 1.471
+          },
+          "result_output": {
+            "default_us": 5921.208,
+            "rawbuf_helper4_us": 11958.104,
+            "ratio": 2.02
+          }
+        }
+      },
+      "findings": [
+        "the no-scratch raw-buffer helper4 primitive transfers semantically into the production q6addr compact route and passes focused p33 CPU-reference on all four exported Qwen3 Q6 dense rows",
+        "the production route does not preserve the RADV schedule: the direct raw-buffer drain removes the halfword LDS surface and still loses the RADV WMMA operand topology and wait ladder",
+        "same-runner focused p33 timing is nearly 2x slower than the current default H4LOAD route, with result_output about 2.02x slower",
+        "decision: reject for promotion. This closes the direct raw-buffer drain axis for the current q6addr compact route; future work needs a lower-level operand/wait/store topology primitive or a different dataflow."
+      ]
+    },
+    {
       "id": "q6_prodaddr_helper4_inline_rawbuf_primitive_ad4e72005_dirty",
       "date": "2026-06-21",
       "artifact": "cache/hrxv1/gfx1151/q6-prodaddr-radvissuecompact-helper4-rawbuf-inline-fixture-ad4e72005-dirty-20260621-095917/",
