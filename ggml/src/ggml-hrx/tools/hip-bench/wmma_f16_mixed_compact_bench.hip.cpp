@@ -57,30 +57,101 @@ void wmma_f16_mixed_compact_probe(uint32_t * dst) {
     }
 }
 
+__global__ __launch_bounds__(64, 1)
+void wmma_f16_raw_radv_compact_encoding_probe(uint32_t * dst) {
+    uint32_t o0 = 0;
+    uint32_t o1 = 0;
+    uint32_t o2 = 0;
+    uint32_t o3 = 0;
+
+    // RADV Q6_K medium emits compact f16 accumulator operands such as:
+    // v_wmma_f16_16x16x16_f16 v[40:43], v[56:63], v[64:71], v[40:43]
+    // LLVM MC rejects that symbolic operand form for gfx1151, so this probe
+    // injects the RADV instruction encoding directly as a diagnostic.
+    asm volatile(
+        "v_mov_b32 v40, 0\n\t"
+        "v_mov_b32 v41, 0\n\t"
+        "v_mov_b32 v42, 0\n\t"
+        "v_mov_b32 v43, 0\n\t"
+        "v_mov_b32 v56, 0x3c003c00\n\t"
+        "v_mov_b32 v57, 0x3c003c00\n\t"
+        "v_mov_b32 v58, 0x3c003c00\n\t"
+        "v_mov_b32 v59, 0x3c003c00\n\t"
+        "v_mov_b32 v60, 0x3c003c00\n\t"
+        "v_mov_b32 v61, 0x3c003c00\n\t"
+        "v_mov_b32 v62, 0x3c003c00\n\t"
+        "v_mov_b32 v63, 0x3c003c00\n\t"
+        "v_mov_b32 v64, 0x3c003c00\n\t"
+        "v_mov_b32 v65, 0x3c003c00\n\t"
+        "v_mov_b32 v66, 0x3c003c00\n\t"
+        "v_mov_b32 v67, 0x3c003c00\n\t"
+        "v_mov_b32 v68, 0x3c003c00\n\t"
+        "v_mov_b32 v69, 0x3c003c00\n\t"
+        "v_mov_b32 v70, 0x3c003c00\n\t"
+        "v_mov_b32 v71, 0x3c003c00\n\t"
+        ".long 0xcc424028\n\t"
+        ".long 0x1ca28138\n\t"
+        "v_mov_b32 %0, v40\n\t"
+        "v_mov_b32 %1, v41\n\t"
+        "v_mov_b32 %2, v42\n\t"
+        "v_mov_b32 %3, v43\n\t"
+        : "=v"(o0), "=v"(o1), "=v"(o2), "=v"(o3)
+        :
+        : "memory");
+
+    const uint32_t lane = __builtin_amdgcn_workitem_id_x() & 63u;
+    dst[lane * 4u + 0u] = o0;
+    dst[lane * 4u + 1u] = o1;
+    dst[lane * 4u + 2u] = o2;
+    dst[lane * 4u + 3u] = o3;
+}
+
 int main() {
     constexpr size_t lanes = 64;
     constexpr size_t words_per_lane = 4;
     constexpr size_t count = lanes * words_per_lane;
 
-    uint32_t * d_out = nullptr;
-    HIP_CHECK(hipMalloc(&d_out, count * sizeof(uint32_t)));
-    HIP_CHECK(hipMemset(d_out, 0, count * sizeof(uint32_t)));
+    uint32_t * d_symbolic = nullptr;
+    uint32_t * d_raw = nullptr;
+    HIP_CHECK(hipMalloc(&d_symbolic, count * sizeof(uint32_t)));
+    HIP_CHECK(hipMalloc(&d_raw, count * sizeof(uint32_t)));
+    HIP_CHECK(hipMemset(d_symbolic, 0, count * sizeof(uint32_t)));
+    HIP_CHECK(hipMemset(d_raw, 0, count * sizeof(uint32_t)));
 
-    hipLaunchKernelGGL(wmma_f16_mixed_compact_probe, dim3(1), dim3(64), 0, 0, d_out);
+    hipLaunchKernelGGL(wmma_f16_mixed_compact_probe, dim3(1), dim3(64), 0, 0, d_symbolic);
+    HIP_CHECK(hipGetLastError());
+    hipLaunchKernelGGL(wmma_f16_raw_radv_compact_encoding_probe, dim3(1), dim3(64), 0, 0, d_raw);
     HIP_CHECK(hipGetLastError());
     HIP_CHECK(hipDeviceSynchronize());
 
-    std::vector<uint32_t> h_out(count, 0u);
-    HIP_CHECK(hipMemcpy(h_out.data(), d_out, count * sizeof(uint32_t), hipMemcpyDeviceToHost));
-    HIP_CHECK(hipFree(d_out));
+    std::vector<uint32_t> h_symbolic(count, 0u);
+    std::vector<uint32_t> h_raw(count, 0u);
+    HIP_CHECK(hipMemcpy(h_symbolic.data(), d_symbolic, count * sizeof(uint32_t), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(h_raw.data(), d_raw, count * sizeof(uint32_t), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipFree(d_symbolic));
+    HIP_CHECK(hipFree(d_raw));
 
-    size_t zero_words = 0;
-    for (uint32_t value : h_out) {
+    size_t symbolic_zero_words = 0;
+    for (uint32_t value : h_symbolic) {
         if (value == 0u) {
-            ++zero_words;
+            ++symbolic_zero_words;
         }
     }
-    std::printf("wmma-f16-mixed-compact lanes=%zu words=%zu zero_words=%zu first=0x%08x\n",
-        lanes, count, zero_words, h_out.empty() ? 0u : h_out[0]);
-    return zero_words == count ? 1 : 0;
+
+    size_t raw_zero_words = 0;
+    size_t raw_expected_words = 0;
+    for (uint32_t value : h_raw) {
+        if (value == 0u) {
+            ++raw_zero_words;
+        }
+        if (value == 0x4c004c00u) {
+            ++raw_expected_words;
+        }
+    }
+
+    std::printf("wmma-f16-mixed-compact-symbolic lanes=%zu words=%zu zero_words=%zu first=0x%08x\n",
+        lanes, count, symbolic_zero_words, h_symbolic.empty() ? 0u : h_symbolic[0]);
+    std::printf("wmma-f16-raw-radv-compact-encoding lanes=%zu words=%zu zero_words=%zu expected_16x2_words=%zu first=0x%08x\n",
+        lanes, count, raw_zero_words, raw_expected_words, h_raw.empty() ? 0u : h_raw[0]);
+    return symbolic_zero_words == count || raw_zero_words == count ? 1 : 0;
 }

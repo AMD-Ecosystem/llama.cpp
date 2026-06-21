@@ -2320,6 +2320,7 @@ if (GGML_HRX_BUILD_HIP_BENCHES)
             hrx-hip-bench-lds-halfword-stage
             hrx-hip-bench-coopmat-store-contract
             hrx-hip-bench-wmma-f16-lane-map
+            hrx-hip-bench-wmma-f16-mixed-compact
             hrx-hip-bench-q6-id-subgroup-contract
             hrx-hip-bench-q5-wmma-full64-repro
             hrx-hip-bench-q6-wmma-ring96-repro
