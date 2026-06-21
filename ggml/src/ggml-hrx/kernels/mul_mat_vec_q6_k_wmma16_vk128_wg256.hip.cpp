@@ -106,6 +106,10 @@
 #define HRX_Q6_K_WMMA_VK128_FULL_TILE_STORE 0
 #endif
 
+#ifndef HRX_Q6_K_WMMA_VK128_FULL_TILE_CLAUSE4_STORE
+#define HRX_Q6_K_WMMA_VK128_FULL_TILE_CLAUSE4_STORE 0
+#endif
+
 #ifndef HRX_Q6_K_WMMA_VK128_STORE_STAGE
 #define HRX_Q6_K_WMMA_VK128_STORE_STAGE 0
 #endif
@@ -729,6 +733,22 @@ static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_store_acc_f16_row_maj
         unsigned int lane) {
     const long long row_lane = static_cast<long long>(lane >> 4);
     const long long col = col0 + static_cast<long long>(lane & 15u);
+#if HRX_Q6_K_WMMA_VK128_FULL_TILE_CLAUSE4_STORE
+    const int byte_offset = static_cast<int>((col * rows_stride + row0 + row_lane) * static_cast<long long>(sizeof(float)));
+    const int v0 = __builtin_bit_cast(int, static_cast<float>(acc[0 + HRX_Q6_K_WMMA_VK128_W64_OPSEL]));
+    const int v1 = __builtin_bit_cast(int, static_cast<float>(acc[2 + HRX_Q6_K_WMMA_VK128_W64_OPSEL]));
+    const int v2 = __builtin_bit_cast(int, static_cast<float>(acc[4 + HRX_Q6_K_WMMA_VK128_W64_OPSEL]));
+    const int v3 = __builtin_bit_cast(int, static_cast<float>(acc[6 + HRX_Q6_K_WMMA_VK128_W64_OPSEL]));
+    asm volatile(
+        "s_clause 0x3\n"
+        "buffer_store_b32 %0, %4, %5, 0 offen\n"
+        "buffer_store_b32 %1, %4, %5, 0 offen offset:16\n"
+        "buffer_store_b32 %2, %4, %5, 0 offen offset:32\n"
+        "buffer_store_b32 %3, %4, %5, 0 offen offset:48\n"
+        :
+        : "v"(v0), "v"(v1), "v"(v2), "v"(v3), "v"(byte_offset), "s"(dst_rsrc)
+        : "memory");
+#else
 #pragma unroll
     for (int reg = 0; reg < 4; ++reg) {
         const long long row = row0 + row_lane + static_cast<long long>(reg * 4);
@@ -737,6 +757,7 @@ static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_store_acc_f16_row_maj
             col * rows_stride + row,
             static_cast<float>(acc[reg * 2 + HRX_Q6_K_WMMA_VK128_W64_OPSEL]));
     }
+#endif
 }
 
 static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_buffer(
@@ -1986,6 +2007,29 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
                 wave,
                 (hrx_q6_k_wmma_vk128_lds_volatile_half_ptr) sh_store);
 #elif HRX_Q6_K_WMMA_VK128_BUFFER_STORE
+#if HRX_Q6_K_WMMA_VK128_FULL_TILE_STORE
+            const long long tile_row0 = row_base + static_cast<long long>(row_tile * 16);
+            const long long tile_col0 = col_base + static_cast<long long>(col_tile * 16);
+            if (tile_row0 + 16 <= rows && tile_col0 + 16 <= cols) {
+                hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_buffer_full(
+                    dst_rsrc,
+                    rows,
+                    tile_row0,
+                    tile_col0,
+                    acc[group],
+                    lane);
+            } else {
+                hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_buffer(
+                    dst_rsrc,
+                    rows,
+                    tile_row0,
+                    tile_col0,
+                    rows,
+                    cols,
+                    acc[group],
+                    lane);
+            }
+#else
             hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_buffer(
                 dst_rsrc,
                 rows,
@@ -1995,6 +2039,7 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
                 cols,
                 acc[group],
                 lane);
+#endif
 #else
             hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64(
                 dst,
