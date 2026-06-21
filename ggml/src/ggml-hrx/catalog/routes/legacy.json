@@ -10196,6 +10196,51 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_wg256",
+    "artifact_id": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q6_dense_prompt_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q6_K x F32 -> F32 MUL_MAT",
+      "k_multiple": 256,
+      "rows_min": 16,
+      "cols_min": 16,
+      "cols_max": 64,
+      "requires_env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASM_COPYAB_Q6ADDR_UPPERDEPNOMEM_F16ACC_WG256_PROMPT",
+      "prior_delta": "Route-facing transfer of the fastest low-level q6addr upperdepnomem fixture's output ownership without duplicating extra groups onto in-bounds production columns. Groups 16-23 keep their natural q6addr column tiles, so in the p33/p64 prompt regime they exercise the staged/load/store surface but are out of bounds for real output. Expected signal is whether the q6addr fixture's 96-store static surface can transfer without the duplicate-output traffic that made the prior RADV96 duplicate route slow."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_perf_probe",
+      "selection": "Opt-in Q6_K VK64 q6addr upperdepnomem probe. CMake/Ninja built the HSACO and focused p33 CPU-reference in cache/hrxv1/gfx1151/q6-vk64-q6addr-upperdepnomem-route-b5a364ae8-dirty-20260621-053721/ selected this provider for Vcur, ffn_out, and result_output with all rows passing. Static screening in cache/hrxv1/gfx1151/q6-medium-contract-screen-q6addr-upperdepnomem-b5a364ae8-dirty-20260621-053631/ matched 16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 96 buffer_store_b32, two barriers, and no spills, but missed the exact RADV contract on ds_store_b16, LDS bytes, store-cluster LDS stores, and first-WMMA wait shape. Same-runner focused p33 timing rejected it versus the accepted H4LOAD default: Vcur 396.945 -> 509.251 us, ffn_out 2381.788 -> 2951.796 us, and result_output 11852.669 -> 20639.597 us. Keep opt-in diagnostic only; natural q6addr output ownership is correct but does not preserve the low-level fixture schedule well enough to beat the current floor."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_ring12alias_upperdepnomem_f16acc_wg256_f32",
     "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_ring12alias_upperdepnomem_f16acc_wg256",
     "op": "MUL_MAT",
