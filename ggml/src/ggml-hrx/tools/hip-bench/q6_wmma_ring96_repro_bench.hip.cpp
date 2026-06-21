@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 
 #if HRX_Q6_REPRO_ACCEPTED_VK64
@@ -117,6 +118,10 @@
 #define HRX_Q6_REPRO_KERNEL hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_radv96_sidecar_inlineonly_f16acc_wg256_f32
 #define HRX_Q6_REPRO_LABEL "q6-ring96-kloop-asm-copyab-radv96-sidecar-inlineonly-repro"
 #define HRX_Q6_REPRO_EXTRA_DST_FLOATS (8 * 64 * 4)
+#elif HRX_Q6_REPRO_KLOOP_ASM_COPYAB_RING12ALIAS_UPPERDEPNOMEM
+#include "../../kernels/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_ring12alias_upperdepnomem_wg256.hip.cpp"
+#define HRX_Q6_REPRO_KERNEL hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_ring12alias_upperdepnomem_f16acc_wg256_f32
+#define HRX_Q6_REPRO_LABEL "q6-ring96-kloop-asm-copyab-ring12alias-upperdepnomem-repro"
 #elif HRX_Q6_REPRO_KLOOP_ASM_COPYAB_DEPWAIT_RADV96_SIDECAR
 #include "../../kernels/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_depwait_radv96_sidecar_wg256.hip.cpp"
 #define HRX_Q6_REPRO_KERNEL hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_depwait_radv96_sidecar_f16acc_wg256_f32
@@ -255,6 +260,17 @@ static int timing_iters() {
     }
     cached = static_cast<int>(parsed);
     return cached;
+}
+
+static bool q6_repro_strict_numeric_for_profile(const char * profile) {
+    const char * value = std::getenv("HRX_Q6_REPRO_STRICT_NUMERIC");
+    if (!value || value[0] == '\0' || std::strcmp(value, "0") == 0 || std::strcmp(value, "false") == 0) {
+        return false;
+    }
+    if (std::strcmp(value, "all") == 0) {
+        return true;
+    }
+    return std::strcmp(profile, "stress") != 0;
 }
 
 static float rhs_value(int col, int k_index, const case_config & config) {
@@ -470,8 +486,10 @@ static int run_case(int rows, int cols, int k, const case_config & config) {
     const int max_col = static_cast<int>(max_idx / static_cast<size_t>(rows));
     const int cross_max_row = static_cast<int>(cross_max_idx % static_cast<size_t>(rows));
     const int cross_max_col = static_cast<int>(cross_max_idx / static_cast<size_t>(rows));
+    const bool strict_numeric = q6_repro_strict_numeric_for_profile(config.name);
+    const bool numeric_ok = bad_count == 0;
     std::printf(
-        "%s profile=%s rows=%d cols=%d k=%d elements=%zu nan=%zu inf=%zu sentinel=%zu bad_gt_0p25=%zu max_abs=%g max_rel=%g idx=%zu row=%d col=%d actual=%g ref=%g cross_bad_gt_0p25=%zu cross_max_abs=%g cross_max_rel=%g cross_idx=%zu cross_row=%d cross_col=%d cross_ref=%g sidecar_written=%zu sidecar_nan=%zu sidecar_inf=%zu sidecar_max_abs=%g bad_groups=",
+        "%s profile=%s rows=%d cols=%d k=%d elements=%zu nan=%zu inf=%zu sentinel=%zu bad_gt_0p25=%zu strict_numeric=%d numeric_ok=%d max_abs=%g max_rel=%g idx=%zu row=%d col=%d actual=%g ref=%g cross_bad_gt_0p25=%zu cross_max_abs=%g cross_max_rel=%g cross_idx=%zu cross_row=%d cross_col=%d cross_ref=%g sidecar_written=%zu sidecar_nan=%zu sidecar_inf=%zu sidecar_max_abs=%g bad_groups=",
         HRX_Q6_REPRO_LABEL,
         config.name,
         rows,
@@ -482,6 +500,8 @@ static int run_case(int rows, int cols, int k, const case_config & config) {
         inf_count,
         sentinel_count,
         bad_count,
+        strict_numeric ? 1 : 0,
+        numeric_ok ? 1 : 0,
         max_abs,
         max_rel,
         max_idx,
@@ -577,6 +597,7 @@ static int run_case(int rows, int cols, int k, const case_config & config) {
     }
 
     return (nan_count == 0 && inf_count == 0 && sentinel_count == 0 &&
+            (!strict_numeric || numeric_ok) &&
             (HRX_Q6_REPRO_EXTRA_DST_FLOATS == 0 || sidecar_written > 0) &&
             sidecar_nan == 0 && sidecar_inf == 0) ? 0 : 1;
 }

@@ -2281,6 +2281,10 @@ if (GGML_HRX_BUILD_HIP_BENCHES)
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/hip-bench/q6_wmma_ring96_kloop_asm_radv96_sidecar_inlineonly_repro_bench.hip.cpp"
         64)
     ggml_hrx_add_hip_bench(
+        hrx-hip-bench-q6-wmma-ring96-kloop-asm-ring12alias-upperdepnomem-repro
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/hip-bench/q6_wmma_ring96_kloop_asm_ring12alias_upperdepnomem_repro_bench.hip.cpp"
+        64)
+    ggml_hrx_add_hip_bench(
         hrx-hip-bench-q6-wmma-ring96-kloop-asm-depwait-radv96-sidecar-repro
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/hip-bench/q6_wmma_ring96_kloop_asm_depwait_radv96_sidecar_repro_bench.hip.cpp"
         64)
