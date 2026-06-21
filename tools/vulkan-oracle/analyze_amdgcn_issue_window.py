@@ -15,6 +15,7 @@ import collections
 import json
 import pathlib
 import re
+import sys
 
 
 INSTRUCTION_RE = re.compile(r"^\s*(?:(?:[0-9a-fA-F]+|BB[0-9]+):\s*)?([A-Za-z0-9_.]+)\b")
@@ -265,6 +266,119 @@ def write_markdown(payload: dict, md_out: pathlib.Path) -> None:
     md_out.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def required_args(args: argparse.Namespace) -> dict:
+    checks = {
+        "require_region_count": args.require_region_count,
+        "require_first_region_hot_count": args.require_first_region_hot_count,
+        "require_first_region_wmma": args.require_first_region_wmma,
+        "require_first_region_dot": args.require_first_region_dot,
+        "require_first_region_final_lgkmcnt": args.require_first_region_final_lgkmcnt,
+        "require_first_region_final_vmcnt": args.require_first_region_final_vmcnt,
+        "min_first_region_immediate_loads": args.min_first_region_immediate_loads,
+        "min_first_region_immediate_lds_loads": args.min_first_region_immediate_lds_loads,
+        "max_first_region_immediate_loads": args.max_first_region_immediate_loads,
+        "max_first_region_immediate_lds_loads": args.max_first_region_immediate_lds_loads,
+    }
+    return {key: value for key, value in checks.items() if value is not None}
+
+
+def validate_contract(payload: dict, checks: dict) -> list[str]:
+    failures: list[str] = []
+    if not checks:
+        return failures
+
+    for item in payload["files"]:
+        label = item["label"]
+        if checks.get("require_region_count") is not None and item["region_count"] != checks["require_region_count"]:
+            failures.append(
+                f"{label}: region_count={item['region_count']} "
+                f"expected {checks['require_region_count']}"
+            )
+
+        if not item["regions"]:
+            failures.append(f"{label}: no hot region found")
+            continue
+
+        first = item["regions"][0]
+        hot_counts = first.get("hot_opcode_counts", {})
+        first_wmma = sum(count for opcode, count in hot_counts.items() if opcode.startswith("v_wmma"))
+        first_dot = sum(count for opcode, count in hot_counts.items() if opcode.startswith("v_dot"))
+        final_wait = first.get("final_wait", {})
+        immediate = first.get("immediate_loads_before_final_wait", {})
+
+        if (
+            checks.get("require_first_region_hot_count") is not None
+            and first["hot_event_count"] != checks["require_first_region_hot_count"]
+        ):
+            failures.append(
+                f"{label}: first_region.hot_event_count={first['hot_event_count']} "
+                f"expected {checks['require_first_region_hot_count']}"
+            )
+        if checks.get("require_first_region_wmma") is not None and first_wmma != checks["require_first_region_wmma"]:
+            failures.append(
+                f"{label}: first_region.wmma={first_wmma} "
+                f"expected {checks['require_first_region_wmma']}"
+            )
+        if checks.get("require_first_region_dot") is not None and first_dot != checks["require_first_region_dot"]:
+            failures.append(
+                f"{label}: first_region.dot={first_dot} "
+                f"expected {checks['require_first_region_dot']}"
+            )
+        if (
+            checks.get("require_first_region_final_lgkmcnt") is not None
+            and final_wait.get("lgkmcnt") != checks["require_first_region_final_lgkmcnt"]
+        ):
+            failures.append(
+                f"{label}: first_region.final_lgkmcnt={final_wait.get('lgkmcnt')} "
+                f"expected {checks['require_first_region_final_lgkmcnt']}"
+            )
+        if (
+            checks.get("require_first_region_final_vmcnt") is not None
+            and final_wait.get("vmcnt") != checks["require_first_region_final_vmcnt"]
+        ):
+            failures.append(
+                f"{label}: first_region.final_vmcnt={final_wait.get('vmcnt')} "
+                f"expected {checks['require_first_region_final_vmcnt']}"
+            )
+
+        immediate_loads = immediate.get("load_ops", 0)
+        immediate_lds_loads = immediate.get("lds_load_ops", 0)
+        if (
+            checks.get("min_first_region_immediate_loads") is not None
+            and immediate_loads < checks["min_first_region_immediate_loads"]
+        ):
+            failures.append(
+                f"{label}: first_region.immediate_loads={immediate_loads} "
+                f"minimum {checks['min_first_region_immediate_loads']}"
+            )
+        if (
+            checks.get("min_first_region_immediate_lds_loads") is not None
+            and immediate_lds_loads < checks["min_first_region_immediate_lds_loads"]
+        ):
+            failures.append(
+                f"{label}: first_region.immediate_lds_loads={immediate_lds_loads} "
+                f"minimum {checks['min_first_region_immediate_lds_loads']}"
+            )
+        if (
+            checks.get("max_first_region_immediate_loads") is not None
+            and immediate_loads > checks["max_first_region_immediate_loads"]
+        ):
+            failures.append(
+                f"{label}: first_region.immediate_loads={immediate_loads} "
+                f"maximum {checks['max_first_region_immediate_loads']}"
+            )
+        if (
+            checks.get("max_first_region_immediate_lds_loads") is not None
+            and immediate_lds_loads > checks["max_first_region_immediate_lds_loads"]
+        ):
+            failures.append(
+                f"{label}: first_region.immediate_lds_loads={immediate_lds_loads} "
+                f"maximum {checks['max_first_region_immediate_lds_loads']}"
+            )
+
+    return failures
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", action="append", required=True, type=parse_input, metavar="LABEL=ISA")
@@ -273,6 +387,16 @@ def main() -> int:
     parser.add_argument("--pre-events", type=int, default=96)
     parser.add_argument("--post-events", type=int, default=32)
     parser.add_argument("--max-hot-gap", type=int, default=12)
+    parser.add_argument("--require-region-count", type=int)
+    parser.add_argument("--require-first-region-hot-count", type=int)
+    parser.add_argument("--require-first-region-wmma", type=int)
+    parser.add_argument("--require-first-region-dot", type=int)
+    parser.add_argument("--require-first-region-final-lgkmcnt", type=int)
+    parser.add_argument("--require-first-region-final-vmcnt", type=int)
+    parser.add_argument("--min-first-region-immediate-loads", type=int)
+    parser.add_argument("--min-first-region-immediate-lds-loads", type=int)
+    parser.add_argument("--max-first-region-immediate-loads", type=int)
+    parser.add_argument("--max-first-region-immediate-lds-loads", type=int)
     args = parser.parse_args()
 
     payload = {
@@ -285,10 +409,19 @@ def main() -> int:
             for label, path in args.input
         ],
     }
+    checks = required_args(args)
+    failures = validate_contract(payload, checks)
+    payload["contract_checks"] = {
+        "requirements": checks,
+        "passed": not failures,
+        "failures": failures,
+    }
     args.json_out.parent.mkdir(parents=True, exist_ok=True)
     args.json_out.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     write_markdown(payload, args.md_out)
-    return 0
+    for failure in failures:
+        print(f"issue-window-contract: {failure}", file=sys.stderr)
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":

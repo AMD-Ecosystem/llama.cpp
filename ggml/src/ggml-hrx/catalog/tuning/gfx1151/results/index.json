@@ -3,6 +3,50 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q8_large_issue_window_screen_54ee59dbd",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/q8-large-issue-window-screen-54ee59dbd-20260621-000539/",
+      "source_commit": "54ee59dbd",
+      "tool": "analyze_amdgcn_issue_window.py --require-region-count --require-first-region-wmma --require-first-region-final-lgkmcnt --min/max-first-region-immediate-lds-loads",
+      "status": "accepted_static_screen_current_hip_baseoff_rejected",
+      "candidate_gate": {
+        "production_target": "Llama 3.1 8B Q8_0 MUL_MAT p512/p513 large aligned RADV-style f16 WMMA issue window on gfx1151",
+        "baseline_command": "python3 tools/vulkan-oracle/analyze_amdgcn_issue_window.py --input RADV_Q8_LARGE=<RADV Q8 large ISA> --require-region-count 1 --require-first-region-wmma 32 --require-first-region-final-lgkmcnt 51 --min-first-region-immediate-lds-loads 59 --max-first-region-immediate-lds-loads 59",
+        "variant_command": "python3 tools/vulkan-oracle/analyze_amdgcn_issue_window.py --input HIP_BASEOFF=<HIP direct192 baseoff ISA> --same requirements",
+        "same_runner_comparison_method": "same analyzer and same first-hot-region issue-window requirements applied to the RADV oracle and the current HIP baseoff prior",
+        "route_trace_path": "not applicable; static schedule screen only and no production selector changed",
+        "scheduler_trace_path": "artifact radv-q8-large-issue-window-pass.{json,md}, hip-baseoff-issue-window-fail.{json,md,stderr}",
+        "focused_cpu_reference": "source HIP baseoff prior artifact cache/hrxv1/gfx1151/q8-direct192-baseoff-output-probe-20260620-123727/ reports correctness-clean output probe",
+        "compile_report_path": "source HIP baseoff prior artifact static/readelf-notes.txt and static/device-objdump.amdgcn.txt",
+        "target_listing_path": "not applicable for this source-only analyzer change; future HIP variants must still come from CMake/Ninja-built targets",
+        "prior_art_schedule_source": "Llama 3.1 8B Q8_0 p512 Vulkan matmul_q8_0_f32_f16acc_aligned_l oracle at cache/hrxv1/gfx1151/vulkan-oracle-llama31-8b-q8_0-p512-fa1-20260617-200453/",
+        "promotion_rule": "a Q8_0 large aligned f16-WMMA candidate must pass the one-region, 32-WMMA, lgkmcnt(51), exactly-59-immediate-LDS-load issue-window screen before focused p512/p513 route timing unless it is explicitly documented as an intentional deviation with same-runner wins."
+      },
+      "static_result": {
+        "radv_q8_large": {
+          "region_count": 1,
+          "first_region_wmma": 32,
+          "first_region_final_lgkmcnt": 51,
+          "first_region_immediate_lds_loads": 59,
+          "contract_check": "pass"
+        },
+        "hip_baseoff_prior": {
+          "region_count": 1,
+          "first_region_wmma": 32,
+          "first_region_final_lgkmcnt": 51,
+          "first_region_immediate_lds_loads": 64,
+          "contract_check": "fail",
+          "failure": "first_region.immediate_lds_loads=64 maximum 59"
+        }
+      },
+      "findings": [
+        "extended analyze_amdgcn_issue_window.py with executable --require-* contract checks and nonzero exit on mismatch",
+        "the RADV Q8_0 large oracle passes the screen: one hot region, 32 f16 WMMAs, final s_waitcnt lgkmcnt(51), and 59 immediate LDS loads before the wait",
+        "the current HIP direct192/baseoff lower-level prior matches the one-region, 32-WMMA, and lgkmcnt(51) parts but fails because it has 64 immediate LDS loads before the final wait",
+        "decision: do not promote or route-time another Q8_0 large f16-WMMA candidate unless it passes this issue-window screen, or unless the deviation is deliberate and backed by focused p512/p513 wins."
+      ]
+    },
+    {
       "id": "q6_id_compact_accumulator_screen_577ddc0f5_dirty",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q6-id-compact-accumulator-screen-577ddc0f5-dirty-20260620-235650/",
