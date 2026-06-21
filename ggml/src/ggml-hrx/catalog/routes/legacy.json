@@ -4511,6 +4511,51 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_id_q6_k_wmma16x16_staged_vk64_f16acc_wg256_f32",
+    "family": "mul_mat_id_q6_k_wmma16x16_staged_vk64_f16acc_wg256",
+    "op": "MUL_MAT_ID",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_id_q6_k_wmma16_staged_vk64",
+    "artifact_id": "mul_mat_id_q6_k_wmma16_staged_vk64_hsaco",
+    "export_name": "hrx_mul_mat_id_q6_k_wmma16x16_staged_vk64_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 5,
+      "parameter_count": 6,
+      "constant_byte_length": 96
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_qwen3_moe_q6_id_staged_vk64_wmma16_probe"
+    },
+    "shape_guards": {
+      "rows_multiple": 64,
+      "k_multiple": 256,
+      "n_ids": 8,
+      "cols_min": 32,
+      "requires_env": "GGML_HRX_ENABLE_Q6_K_ID_WMMA16_STAGED_VK64_PROMPT",
+      "prior_delta": "Exploratory RADV-style Q6_K MUL_MAT_ID bridge: direct F32 RHS, wave64, BM64/BN64/BK32, WG256, one p33 Y workgroup, 48-half LDS stride for roughly the Vulkan ID route's 12 KiB staged surface, and 16 visible WMMA sites. It is not a promotion route until focused p33/p512/p513 correctness, route traces, static ISA, and same-runner timing beat the accepted grouped Q8_1/x4 floor."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_id_q6_k_wmma16x16_staged_vk64_f16acc_wg256_f32",
+      "selector_gate": "opt-in on gfx1151 Q6_K MUL_MAT_ID prompt rows with GGML_HRX_ENABLE_Q6_K_ID_WMMA16_STAGED_VK64_PROMPT=1"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_perf_probe",
+      "selection": "Opt-in staged-F32 Q6_K MUL_MAT_ID WMMA diagnostic. Built through CMake/Ninja and captured in cache/hrxv1/gfx1151/q6-id-wmma16-staged-vk64-focused-c95718b4e-dirty-20260620-224319/. Static facts: wave64, LDS=12288, SGPR=67, VGPR=113, private_segment=0, no spills, 8 visible static WMMA, route_tile_n=64. Focused p33 and p513 CPU-reference passed, with p33 route traces matching Vulkan's one-Y-group geometry [12,1,128] and [32,1,128]. Same-runner timing rejected it versus the accepted grouped Q8_1/x4 route: p33 gate 290.697 -> 342.517 us, p33 down 261.210 -> 359.243 us, p513 gate 2474.333 -> 2901.407 us, and p513 down 2331.777 -> 3232.209 us. Keep opt-in only; RADV-like p33 Y-grid plus 12 KiB staged F32 WMMA geometry is not enough without the remaining subgroup-ID dataflow/lane-ownership contract."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_id_q4_k_q8_1_f32",
     "family": "mul_mat_id_q4_k_q8_1",
     "op": "MUL_MAT_ID",

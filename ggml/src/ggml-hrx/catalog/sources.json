@@ -116,6 +116,9 @@
   "mul_mat_id_q6_k_wmma16_direct": {
     "path": "mul_mat_id_q6_k_wmma16_direct.hip.cpp"
   },
+  "mul_mat_id_q6_k_wmma16_staged_vk64": {
+    "path": "mul_mat_id_q6_k_wmma16_staged_vk64.hip.cpp"
+  },
   "mul_mat_id_q4_k_swiglu": {
     "path": "mul_mat_id_q4_k_swiglu.hip.cpp"
   },

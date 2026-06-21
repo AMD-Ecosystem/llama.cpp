@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_id_wmma16_staged_vk64_perf",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_id_q6_k_wmma16x16_staged_vk64_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_ID_WMMA16_STAGED_VK64_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-id-wmma16-staged-vk64-focused-c95718b4e-dirty-20260620-224319/",
+      "perf_artifact": "cache/hrxv1/gfx1151/q6-id-wmma16-staged-vk64-focused-c95718b4e-dirty-20260620-224319/perf-compare.md",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-id-wmma16-staged-vk64-focused-c95718b4e-dirty-20260620-224319/static/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_id_q6_k_wmma16_staged_vk64.hsaco",
+      "reason": "This opt-in Q6_K MUL_MAT_ID route tested the cleanest next RADV-style ID bridge after the direct-F32 WG32 bridge and packed MMQ64x64 token-grouping probe were rejected. It preserves direct F32 RHS semantics but moves the schedule toward the Vulkan p33 ID oracle: wave64, WG256, BM64/BN64/BK32, route_tile_n=64 giving p33 workgroups [12,1,128] and [32,1,128], 12288-byte LDS matching RADV's ID LDS footprint, no spills, and 8 visible static WMMA sites. Focused p33 and p513 CPU-reference passed for ffn_moe_gate-0 and ffn_moe_down-0, and route traces proved the intended provider and geometry. Reject for promotion because same-runner focused timing lost to the accepted grouped Q8_1/x4 route on every measured row: p33 gate 290.697 -> 342.517 us, p33 down 261.210 -> 359.243 us, p513 gate 2474.333 -> 2901.407 us, and p513 down 2331.777 -> 3232.209 us. The useful conclusion is that top-level RADV-like WG/Y-grid/LDS geometry and direct F32 staging are insufficient; the next Q6 ID attempt needs the actual RADV subgroup-ID dataflow, lane ownership, LDS halfword/loadback contract, or a packed route that improves gate/up as well as down."
+    },
+    {
       "id": "q6_k_vk128_b64group_stage_corrected_compile_contract",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk128_padded_w64_b64group_typedstage_f16acc_wg256_f32 and hrx_mul_mat_vec_q6_k_wmma16x16_vk128_padded_w64_b64group_dualstage_f16acc_wg256_f32",
