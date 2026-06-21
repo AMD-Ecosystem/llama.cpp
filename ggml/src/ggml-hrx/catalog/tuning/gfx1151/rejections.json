@@ -3,6 +3,15 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_vk64_q6addr_compact_helper4_asmwait_radvseq_5e7d658f8_dirty",
+      "date": "2026-06-21",
+      "route": "static-only HSACO: hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_copyab_q6addr_upperdepnomem_compact_helper4_f16acc_wg256_f32",
+      "env": "not provider-wired; CMake/Ninja static probe only",
+      "artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-asmwait-radvseq-5e7d658f8-dirty-20260621-104054/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_copyab_q6addr_upperdepnomem_compact_helper4_wg256.hsaco",
+      "reason": "This static-only Q6_K p33 probe tested an explicit RADV A/B operand issue sequence inside the ASMWAIT compact-helper4 route, replacing the old extra B pad loads with extra A loads and issuing WMMAs in the RADV A0/A0/A1/A1/A2/A2/A3/A3/A4/A4/A5/A5/A6/A6/A7/A7 and B0/B1/B0/B1/B0/B1/B0/B1/B2/B3/B2/B3/B2/B3/B3/B2 pattern. It built through CMake/Ninja and improved the real target axis: A reuse now matches RADV's eight banks reused twice, B reuse now matches RADV's four banks reused four times, and the lgkmcnt ladder exactly matches RADV [40,36,32,28,24,16,7,6,1,0] while preserving 16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 96 buffer_store_b32, two barriers, no spills, compact f16 accumulator form, load_b64_immediately_before_final_wait=48, final_pre_wmma_lgkmcnt=40, and wmma_in_window=16. Reject before provider wiring because the full static contract still fails: dst/C remain 16 single-use banks instead of RADV's eight reused banks, ordered A/B operand register sequences still differ, A/B load-source provenance is too broad after the first operands, ds_store_b16 is 2 versus RADV 64, store-cluster LDS stores are 4 versus 70, LDS is 14336 versus 11264, and VGPR is 174 versus 144. This is useful partial evidence, not a route candidate; the next Q6 p33 primitive must control compact accumulator grouping/writeback ownership together with A/B operand order."
+    },
+    {
       "id": "q6_k_vk64_q6addr_compact_helper4_asmwait_sequence_gate_bc0ba5dbb",
       "date": "2026-06-21",
       "route": "static-only HSACO: hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_copyab_q6addr_upperdepnomem_compact_helper4_f16acc_wg256_f32",

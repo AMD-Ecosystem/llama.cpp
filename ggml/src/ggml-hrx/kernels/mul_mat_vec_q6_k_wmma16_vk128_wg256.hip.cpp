@@ -98,6 +98,10 @@
 #define HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_ASMWAIT_LADDER 0
 #endif
 
+#ifndef HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_ASMWAIT_RADVSEQ
+#define HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_ASMWAIT_RADVSEQ 0
+#endif
+
 #ifndef HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_EXPWAIT_LADDER
 #define HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_EXPWAIT_LADDER 0
 #endif
@@ -1681,6 +1685,9 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
 #else
                 hrx_q6_k_wmma_vk128_half16_vec a_frag[4];
                 hrx_q6_k_wmma_vk128_half16_vec b_frag[4];
+#if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_ASMWAIT_RADVSEQ
+                hrx_q6_k_wmma_vk128_half16_vec a_pad_keep[4];
+#endif
 #pragma unroll
                 for (int frag = 0; frag < 4; ++frag) {
                     a_frag[frag] = hrx_q6_k_wmma_vk128_load_a_frag_w64_b64asm_nowait(
@@ -1688,9 +1695,17 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
                     b_frag[frag] = hrx_q6_k_wmma_vk128_load_b_frag_w64_b64asm_nowait(
                         sh_b_lds, frag, k_tile, lane);
                 }
+#if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_ASMWAIT_RADVSEQ
+#pragma unroll
+                for (int frag = 0; frag < 4; ++frag) {
+                    a_pad_keep[frag] = hrx_q6_k_wmma_vk128_load_a_frag_w64_b64asm_nowait(
+                        sh_a_lds, frag, k_tile, lane);
+                }
+#endif
 #endif
 #if !HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_RING12_ALIAS
 #if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT
+#if !HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_ASMWAIT_RADVSEQ
 #if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT_LADDER
 #if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT_TOKENKEEP
                 hrx_q6_k_wmma_vk128_half4_vec b_pad_keep[4];
@@ -1721,6 +1736,7 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
                     hrx_q6_k_wmma_vk128_consume_frag(b_pad);
 #endif
                 }
+#endif
 #if !HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_DEPWAIT && (!HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_COPY_NOMEM || HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_FORCE_PREWAIT)
                 asm volatile("s_waitcnt lgkmcnt(40)\n" ::: "memory");
 #endif
@@ -1782,6 +1798,38 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
                         asm volatile("s_waitcnt lgkmcnt(16)\n" ::: "memory");
                     }
 #endif
+#if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_ASMWAIT_RADVSEQ && HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_ASMWAIT_LADDER && HRX_Q6_K_WMMA_VK128_W64_COMPACT_ACC
+#define HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(G, W, A, B) \
+                    else if (group == (G)) { \
+                        acc[group] = hrx_q6_k_wmma_vk128_wmma_f16_w64_compact_asmwait<W>( \
+                            (A), (B), acc[group]); \
+                    }
+#define HRX_Q6_K_WMMA_VK128_RADVSEQ_NOWAIT(G, A, B) \
+                    else if (group == (G)) { \
+                        acc[group] = hrx_q6_k_wmma_vk128_wmma_f16_w64_compact( \
+                            (A), (B), acc[group]); \
+                    }
+                    if (false) {
+                    }
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(0, 40, a_frag[0], b_frag[0])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(1, 36, a_frag[0], b_frag[1])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(2, 32, a_frag[1], b_frag[0])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_NOWAIT(3, a_frag[1], b_frag[1])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(4, 28, a_frag[2], b_frag[0])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_NOWAIT(5, a_frag[2], b_frag[1])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(6, 24, a_frag[3], b_frag[0])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_NOWAIT(7, a_frag[3], b_frag[1])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(8, 16, a_pad_keep[0], b_frag[2])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(9, 7, a_pad_keep[0], b_frag[3])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_NOWAIT(10, a_pad_keep[1], b_frag[2])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(11, 6, a_pad_keep[1], b_frag[3])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(12, 1, a_pad_keep[2], b_frag[2])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_NOWAIT(13, a_pad_keep[2], b_frag[3])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT(14, 0, a_pad_keep[3], b_frag[3])
+                    HRX_Q6_K_WMMA_VK128_RADVSEQ_NOWAIT(15, a_pad_keep[3], b_frag[2])
+#undef HRX_Q6_K_WMMA_VK128_RADVSEQ_NOWAIT
+#undef HRX_Q6_K_WMMA_VK128_RADVSEQ_WAIT
+#else
 #if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_RING12_ALIAS
                     const int row_frag = group % 6;
                     const int col_frag = (group + group / 6) % 6;
@@ -1884,8 +1932,9 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
                         HRX_Q6_K_WMMA_VK128_W64_OPSEL != 0);
 #endif
 #endif
+#endif
                 }
-#if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT_LADDER && !HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_RING12_ALIAS
+#if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT_LADDER && !HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_RING12_ALIAS && !HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_ASMWAIT_RADVSEQ
 #pragma unroll
                 for (int frag = 0; frag < 4; ++frag) {
 #if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP_PADWAIT_TOKENKEEP

@@ -3,6 +3,50 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_k_vk64_q6addr_compact_helper4_asmwait_radvseq_5e7d658f8_dirty",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-asmwait-radvseq-5e7d658f8-dirty-20260621-104054/",
+      "source_commit": "5e7d658f8-dirty",
+      "tool": "CMake/Ninja-built RADV-sequence Q6 ASMWAIT compact-helper4 HSACO and tools/vulkan-oracle/run_q6_medium_contract_screen.py",
+      "status": "rejected_gfx1151_static_probe_partial_operand_repair",
+      "route": "static-only HSACO: hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_copyab_q6addr_upperdepnomem_compact_helper4_f16acc_wg256_f32",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K p33 dense prompt medium-route WMMA issue window and operand ownership. Test whether explicit RADV A/B operand issue order can repair the ASMWAIT compact-helper4 A/B collapse without provider wiring.",
+        "baseline_command": "static comparison against Qwen3 30B Q6_K p33 RADV medium oracle and prior ASMWAIT compact-helper4 sequence-gate rejection.",
+        "variant_command": "cmake --build build/hrx-v1-catalog-gfx1151 --target test-backend-ops -j$(nproc), then run_q6_medium_contract_screen.py on mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_copyab_q6addr_upperdepnomem_compact_helper4_wg256.hsaco",
+        "same_runner_comparison_method": "not run; rejected at static schedule gate before route wiring, focused correctness, or timing.",
+        "route_trace_path": "not applicable; no production provider wired.",
+        "scheduler_trace_path": "artifact summary.md, isa-compare.md, contract-check.json, and compact-accumulator/wmma-ownership.json.",
+        "focused_cpu_reference": "not run after static rejection.",
+        "compile_report_path": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_copyab_q6addr_upperdepnomem_compact_helper4_wg256.hsaco built by CMake/Ninja.",
+        "target_listing_path": "artifact compact-accumulator/hip.objdump.txt, compact-accumulator/wmma-ownership.md, and isa-compare.md.",
+        "prior_art_schedule_source": "Qwen3 30B Q6_K p33 RADV medium oracle plus q6_k_vk64_q6addr_compact_helper4_asmwait_sequence_gate_bc0ba5dbb.",
+        "promotion_rule": "reject before provider wiring unless a candidate matches RADV opcode/resource counts, first-WMMA wait window, compact accumulator form, and ordered dst/A/B/C/load-source WMMA operand sequences."
+      },
+      "static_result": {
+        "exact_static_contract_passed": false,
+        "compact_f16_accumulator_screen_passed": true,
+        "wmma_operand_topology_passed": false,
+        "matching_facts": "16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 96 buffer_store_b32, two barriers, zero scratch/spills, compact f16 accumulator screen pass, load_b64_immediately_before_final_wait=48, final_pre_wmma_lgkmcnt=40, wmma_in_window=16, and exact RADV lgkmcnt ladder [40,36,32,28,24,16,7,6,1,0].",
+        "repaired_facts": "A operand reuse now matches RADV eight banks reused twice, and B operand reuse now matches RADV four banks reused four times. This proves explicit A/B source sequencing can defeat the earlier ASMWAIT all-operands-collapse failure.",
+        "remaining_misses": "dst/C ownership remains 16 single-use banks instead of RADV eight banks reused twice; ordered A/B operand register sequences still differ; A/B load-source sequences are still too broad after the first operands; ds_store_b16 is 2 versus RADV 64; store-cluster LDS stores are 4 versus 70; LDS is 14336 versus 11264; VGPR is 174 versus 144.",
+        "resource_facts": {
+          "sgpr": 44,
+          "vgpr": 174,
+          "lds_bytes": 14336,
+          "scratch_bytes": 0,
+          "instructions": 1947,
+          "s_waitcnt": 89,
+          "buffer_store_b32": 96
+        }
+      },
+      "findings": [
+        "explicit RADV A/B issue order is a useful partial primitive: it fixes A/B reuse and unique-bank topology without losing the headline wait/load/store counts",
+        "the probe still cannot be promoted because compact accumulator dst/C ownership and the LDS halfword store surface remain wrong",
+        "future Q6 p33 work should target accumulator grouping/writeback ownership next, or move to a lower-level primitive that controls A/B operand order and compact dst/C reuse together"
+      ]
+    },
+    {
       "id": "q6_k_vk64_q6addr_compact_helper4_asmwait_sequence_gate_bc0ba5dbb",
       "date": "2026-06-21",
       "artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-asmwait-sequence-bc0ba5dbb-20260621-103043/",
