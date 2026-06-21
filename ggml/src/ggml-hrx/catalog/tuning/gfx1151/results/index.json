@@ -6583,11 +6583,11 @@
       ]
     },
     {
-      "id": "wmma_f16_raw_radv_compact_encoding_probe_b48a59c82_dirty",
+      "id": "wmma_f16_raw_radv_compact_lowhigh_probe_5ed4b89b_dirty",
       "date": "2026-06-21",
-      "source_commit": "b48a59c82-dirty",
-      "artifact": "cache/hrxv1/gfx1151/wmma-raw-radv-compact-encoding-b48a59c82-dirty-semantics-20260621-041610/",
-      "status": "accepted_encoding_reachability_rejected_semantics_no_route_promotion",
+      "source_commit": "5ed4b89b-dirty",
+      "artifact": "cache/hrxv1/gfx1151/wmma-raw-radv-compact-lowhigh-5ed4b89b-dirty-20260621-041937/",
+      "status": "rejected_raw_encoding_physical_register_abi_semantics",
       "tool": "CMake/Ninja-built hrx-hip-bench-wmma-f16-mixed-compact",
       "candidate_gate": {
         "production_target": "Qwen3 30B Q6_K p33 dense prompt rows where RADV emits compact f16 WMMA accumulator operands in the medium aligned route",
@@ -6596,19 +6596,19 @@
         "same_runner_comparison_method": "same CMake/Ninja-built native HIP bench executable, same process, symbolic HIP inline-WMMA row versus raw injected RADV compact encoding words",
         "route_trace_path": "not applicable; low-level primitive fixture only and no production selector changed",
         "scheduler_trace_path": "artifact static/device-objdump.txt and static/summary.md",
-        "focused_cpu_reference": "fixture runtime writes nonzero output for both symbolic and raw rows; raw row reports 252 nonzero words out of 256 but 0 words match the simple all-ones packed-f16 16.0 expectation",
+        "focused_cpu_reference": "fixture runtime writes nonzero output overall, but the strengthened low/high check rejects the raw ABI: low_symbolic_matches=0/256, high_seed_matches=0/256, and high_changed=256/256",
         "compile_report_path": "artifact static/device-readelf-notes.txt from extracted AMDGPU bundle",
         "target_listing_path": "artifact static/device-objdump.txt from extracted AMDGPU bundle",
         "prior_art_schedule_source": "Qwen3 30B Q6_K p33 RADV medium oracle matmul_q6_k_f32_f16acc_aligned_m hash 0x6eebdfb4c3043b23, including raw instruction words CC424028 1CA28138 for v_wmma_f16_16x16x16_f16 v[40:43], v[56:63], v[64:71], v[40:43]",
-        "promotion_rule": "do not promote this fixture directly. A route-facing candidate would need a safe ABI for physical VGPR ownership, a passing all-ones or lane-map semantic contract, p33/p512/p513 focused CPU-reference rows, route traces, and same-runner timing versus the accepted Q6 defaults."
+        "promotion_rule": "do not promote this fixture or raw .long route transfers directly. A route-facing candidate would need a safe ABI for physical VGPR ownership, a passing low/high or lane-map semantic contract, p33/p512/p513 focused CPU-reference rows, route traces, and same-runner timing versus the accepted Q6 defaults."
       },
       "findings": [
-        "added a raw RADV compact encoding row to the existing mixed-compact WMMA fixture and added the fixture to the aggregate hrx-hip-bench CMake target",
+        "added a raw RADV compact encoding row to the existing mixed-compact WMMA fixture, added the fixture to the aggregate hrx-hip-bench CMake target, then strengthened the raw row to seed and store all eight accumulator words v40:v47",
         "LLVM MC still rejects the symbolic compact dst/C plus width8 A/B f16 WMMA operand form, but a HIP C++ inline-asm block can inject the exact RADV instruction words through .long",
-        "runtime output: symbolic row zero_words=0 first=0x3c004c00; raw RADV encoding row zero_words=4 expected_16x2_words=0 first=0x00000000, so the encoded instruction executes but does not satisfy the simple all-ones WMMA semantic check",
+        "runtime output: symbolic row zero_words=0 first=0x3c004c00; raw RADV encoding row zero_words=8, low_symbolic_matches=0, high_seed_matches=0, high_changed=256, first8 all zero for lane 0",
         "device objdump confirms the raw row contains CC424028 1CA28138, matching the RADV oracle bytes. LLVM objdump prints those bytes as v[40:47], while the RADV oracle labels the same bytes as compact v[40:43].",
-        "interpretation: the hardware/RADV compact encoding is reachable from a CMake-built HIP diagnostic, but this probe has not proven a correct operand/lane contract. LLVM's normal symbolic operand model and disassembler also do not expose the compact accumulator contract.",
-        "next route-facing work should either build a safer physical-register ABI around this raw encoding and first pass an all-ones or lane-map semantic contract, or pivot to a packed Q8_1/x4 dataflow. Repeating normal HIP C++ WMMA wrappers remains low value unless their built ISA first closes the compact-accumulator screen."
+        "interpretation: the exact RADV encoding is reachable from a CMake-built HIP diagnostic, but the naive physical-register ABI does not reproduce the normal symbolic WMMA semantics and does not preserve the upper four accumulator words as a compact dst/C contract would require.",
+        "next route-facing work should not use raw .long WMMA without first building a real operand/lane contract. The practical next axis is either a deeper register-ABI fixture that explains RADV's operand setup, or a pivot to packed Q8_1/x4 dataflow. Repeating normal HIP C++ WMMA wrappers remains low value unless their built ISA first closes the compact-accumulator screen."
       ]
     }
   ]
