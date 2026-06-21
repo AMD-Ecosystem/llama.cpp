@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_vk64_q6addr_upperdepnomem_compact_storekill_route_322b59763_dirty",
+      "date": "2026-06-21",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_compact_storekill_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASM_COPYAB_Q6ADDR_UPPERDEPNOMEM_COMPACT_STOREKILL_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-q6addr-compact-storekill-route-322b59763-dirty-20260621-084231/",
+      "perf_artifact": "cache/hrxv1/gfx1151/q6-vk64-q6addr-compact-storekill-route-322b59763-dirty-20260621-084231/p33-default-perf.csv and p33-storekill-perf.csv",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-q6addr-compact-storekill-322b59763-dirty-20260621-084202/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_compact_storekill_wg256.hsaco",
+      "reason": "This opt-in Q6_K p33 route tested the measured-deviation path from the prodaddr_radvissuecompact_storekill fixture: preserve the rejected q6addr compact production route, but fuse each compact LDS halfword store with immediate accumulator register kills. It built through CMake/Ninja as a normal catalog HSACO, selected for all four exported Qwen3 Q6 p33 dense MUL_MAT rows under the explicit env gate, and passed focused CPU-reference. Static evidence confirms compact f16 accumulator width and preserves several RADV medium headline counts: 16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 96 buffer_store_b32, two barriers, and no spills. Reject because it still misses the exact RADV ownership/wait contract: LDS 14336 versus 11264, ds_store_b16 66 versus 64, store-cluster LDS stores 66 versus 70, load_b64_immediately_before_final_wait 0 versus 48, final_pre_wmma_lgkmcnt 0 versus 40, dst/C sixteen single-use banks versus RADV eight reused banks, and A/B each one bank versus RADV A eight banks/B four banks. Same-runner focused p33 timing regressed every row versus H4LOAD: total 6692.836 us -> 13090.906 us, with result_output 5866.588 us -> 11937.696 us. Storekill does not rescue the compact q6addr production route; future Q6 p33 work needs a lower-level operand-bank/issue primitive or a different dataflow, not more C++ lifetime hints around the current compact route."
+    },
+    {
       "id": "q6_k_vk64_q6addr_upperdepnomem_compact_route_3abc55517_dirty",
       "date": "2026-06-21",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_compact_f16acc_wg256_f32",

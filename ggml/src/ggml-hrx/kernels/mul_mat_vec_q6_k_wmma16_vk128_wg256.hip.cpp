@@ -194,6 +194,10 @@
 #define HRX_Q6_K_WMMA_VK128_STORE_RADV96_NOSYNC 0
 #endif
 
+#ifndef HRX_Q6_K_WMMA_VK128_STORE_RADV96_COMPACT_STOREKILL
+#define HRX_Q6_K_WMMA_VK128_STORE_RADV96_COMPACT_STOREKILL 0
+#endif
+
 #ifndef HRX_Q6_K_WMMA_VK128_STORE_BANDED_STAGE
 #define HRX_Q6_K_WMMA_VK128_STORE_BANDED_STAGE 0
 #endif
@@ -991,16 +995,39 @@ static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_store_acc_f16_row_maj
 
 #if HRX_Q6_K_WMMA_VK128_W64_COMPACT_ACC
 static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_radv96_stage_compact(
-        hrx_q6_k_wmma_vk128_u32x4_vec acc,
+        hrx_q6_k_wmma_vk128_u32x4_vec & acc,
         int group,
         int base_group,
         unsigned int lane,
         uint16_t * sh_store) {
     const int stage_base = (group - base_group) * 64 * 4 + static_cast<int>(lane) * 4;
+#if HRX_Q6_K_WMMA_VK128_STORE_RADV96_COMPACT_STOREKILL
+    hrx_q6_k_wmma_vk128_lds_u16_ptr const ptr0 =
+        (hrx_q6_k_wmma_vk128_lds_u16_ptr) sh_store + stage_base;
+    hrx_q6_k_wmma_vk128_lds_u16_ptr const ptr1 =
+        (hrx_q6_k_wmma_vk128_lds_u16_ptr) sh_store + stage_base + 1;
+    hrx_q6_k_wmma_vk128_lds_u16_ptr const ptr2 =
+        (hrx_q6_k_wmma_vk128_lds_u16_ptr) sh_store + stage_base + 2;
+    hrx_q6_k_wmma_vk128_lds_u16_ptr const ptr3 =
+        (hrx_q6_k_wmma_vk128_lds_u16_ptr) sh_store + stage_base + 3;
+    asm volatile(
+        "ds_write_b16 %4, %0 offset:0\n"
+        "ds_write_b16 %5, %1 offset:0\n"
+        "ds_write_b16 %6, %2 offset:0\n"
+        "ds_write_b16 %7, %3 offset:0\n"
+        "v_mov_b32 %0, 0\n"
+        "v_mov_b32 %1, 0\n"
+        "v_mov_b32 %2, 0\n"
+        "v_mov_b32 %3, 0\n"
+        : "+v"(acc[0]), "+v"(acc[1]), "+v"(acc[2]), "+v"(acc[3])
+        : "v"(ptr0), "v"(ptr1), "v"(ptr2), "v"(ptr3)
+        : "memory");
+#else
 #pragma unroll
     for (int reg = 0; reg < 4; ++reg) {
         sh_store[stage_base + reg] = static_cast<uint16_t>(acc[reg] & 0xffffu);
     }
+#endif
 }
 #endif
 

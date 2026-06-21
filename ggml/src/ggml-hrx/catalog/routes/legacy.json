@@ -10286,6 +10286,51 @@
     ]
   },
   {
+    "id": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_compact_storekill_f16acc_wg256_f32",
+    "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_compact_storekill_f16acc_wg256",
+    "op": "MUL_MAT",
+    "target_key": "gfx1151",
+    "source_id": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_compact_storekill_wg256",
+    "artifact_id": "mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_compact_storekill_wg256_hsaco",
+    "export_name": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_compact_storekill_f16acc_wg256_f32",
+    "loader_format": "amdgpu-hsaco",
+    "priority": 10,
+    "abi": {
+      "binding_count": 3,
+      "parameter_count": 6,
+      "constant_byte_length": 24
+    },
+    "dispatch": {
+      "workgroup_size": [
+        256,
+        1,
+        1
+      ]
+    },
+    "shape_domain": {
+      "name": "gfx1151_q6_dense_prompt_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_compact_storekill_f16acc_wg256_probe"
+    },
+    "shape_guards": {
+      "dtype": "Q6_K x F32 -> F32 MUL_MAT",
+      "k_multiple": 256,
+      "rows_min": 16,
+      "cols_min": 16,
+      "cols_max": 64,
+      "requires_env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASM_COPYAB_Q6ADDR_UPPERDEPNOMEM_COMPACT_STOREKILL_F16ACC_WG256_PROMPT",
+      "prior_delta": "Measured-deviation follow-up to the rejected q6addr compact route and the passing prodaddr-radvissuecompact-storekill fixture. It preserves the compact u32x4 accumulator and natural q6addr output topology, but fuses each compact LDS halfword store with immediate accumulator register kills to test whether the fixture's local lifetime improvement produces a real production p33 timing signal. This is not expected to satisfy the exact RADV operand-bank reuse screen by itself."
+    },
+    "supports": {
+      "legacy_export": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_compact_storekill_f16acc_wg256_f32"
+    },
+    "evidence_summary": {
+      "status": "rejected_gfx1151_perf_probe",
+      "selection": "Opt-in Q6_K VK64 q6addr upperdepnomem compact-storekill probe. CMake/Ninja built the HSACO and focused Qwen3 Q6 p33 CPU-reference in cache/hrxv1/gfx1151/q6-vk64-q6addr-compact-storekill-route-322b59763-dirty-20260621-084231/ selected this provider for Vcur-0, node_28, Qcur-0, and result_output with all rows passing. Static screening in cache/hrxv1/gfx1151/q6-medium-contract-screen-q6addr-compact-storekill-322b59763-dirty-20260621-084202/ confirms compact f16 accumulator widths, 16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 96 buffer_store_b32, two barriers, and no spills, but the exact RADV contract still misses: LDS 14336 versus 11264, ds_store_b16 66 versus 64, load_b64_immediately_before_final_wait 0 versus 48, final_pre_wmma_lgkmcnt 0 versus 40, and WMMA operand reuse/banking. Same-runner focused timing rejected it versus H4LOAD: total p33 row time 6692.836 us -> 13090.906 us and result_output 5866.588 us -> 11937.696 us. Keep opt-in diagnostic only; fused store+kill does not rescue the compact q6addr route."
+    },
+    "target_prefixes": [
+      "gfx11"
+    ]
+  },
+  {
     "id": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_overlaya_f16acc_wg256_f32",
     "family": "mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_q6addr_upperdepnomem_overlaya_f16acc_wg256",
     "op": "MUL_MAT",
