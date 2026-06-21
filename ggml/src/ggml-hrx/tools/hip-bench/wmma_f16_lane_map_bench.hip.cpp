@@ -89,6 +89,35 @@ void wmma_f16_lane_map_probe(float * dst) {
     }
 }
 
+template <bool op_sel>
+__global__ __launch_bounds__(64, 1)
+void wmma_f16_lane_map_tied_probe(float * dst) {
+    const unsigned int lane = __builtin_amdgcn_workitem_id_x() & 63u;
+
+    wmma_lane_map_half16_vec a;
+    wmma_lane_map_half16_vec b;
+    wmma_lane_map_half8_vec acc;
+
+#pragma unroll
+    for (int i = 0; i < 16; ++i) {
+        a[i] = static_cast<_Float16>(1.0f);
+        b[i] = static_cast<_Float16>(1.0f);
+    }
+
+#pragma unroll
+    for (int i = 0; i < 8; ++i) {
+        acc[i] = static_cast<_Float16>(wmma_lane_map_sentinel(lane, static_cast<unsigned int>(i)));
+    }
+
+    acc = __builtin_amdgcn_wmma_f16_16x16x16_f16_tied_w64(a, b, acc, op_sel);
+
+#pragma unroll
+    for (int i = 0; i < 8; ++i) {
+        dst[wmma_lane_map_index(op_sel ? 1u : 0u, lane, static_cast<unsigned int>(i))] =
+            static_cast<float>(acc[i]);
+    }
+}
+
 static __device__ __forceinline__ uint64_t wmma_lane_map_ds_read_b64_nowait(
         const __attribute__((address_space(3))) uint64_t * ptr) {
     uint64_t value = 0;
@@ -910,6 +939,29 @@ static int run_basic_lane_map() {
     return 0;
 }
 
+static int run_tied_basic_lane_map() {
+    const size_t count =
+        HRX_WMMA_LANE_MAP_OPSELS * HRX_WMMA_LANE_MAP_LANES * HRX_WMMA_LANE_MAP_ACC_SLOTS;
+    device_buffer<float> d_out(count);
+    std::vector<float> h_out(count, 0.0f);
+
+    HIP_CHECK(hipMemset(d_out.ptr, 0, count * sizeof(float)));
+    hipLaunchKernelGGL(wmma_f16_lane_map_tied_probe<false>, dim3(1), dim3(64), 0, 0, d_out.ptr);
+    HIP_CHECK(hipGetLastError());
+    hipLaunchKernelGGL(wmma_f16_lane_map_tied_probe<true>, dim3(1), dim3(64), 0, 0, d_out.ptr);
+    HIP_CHECK(hipGetLastError());
+    HIP_CHECK(hipDeviceSynchronize());
+    HIP_CHECK(hipMemcpy(h_out.data(), d_out.ptr, count * sizeof(float), hipMemcpyDeviceToHost));
+
+    std::printf("wmma-f16-lane-map op=v_wmma_f16_16x16x16_f16_tied_w64 lanes=%u slots=%u\n",
+        HRX_WMMA_LANE_MAP_LANES,
+        HRX_WMMA_LANE_MAP_ACC_SLOTS);
+    print_summary(h_out);
+    print_coord_map(h_out);
+    compare_outputs(h_out);
+    return 0;
+}
+
 template <bool use_lds_fragments, bool wait_each_load = false>
 static int run_fulltile_probe(const char * mode) {
     const size_t count = 16u * HRX_WMMA_LANE_MAP_LANES * HRX_WMMA_LANE_MAP_ACC_SLOTS;
@@ -1478,13 +1530,16 @@ int main(int argc, char ** argv) {
         if (std::strncmp(argv[i], "--mode=", 7) == 0) {
             mode = argv[i] + 7;
         } else {
-            std::fprintf(stderr, "usage: %s [--mode=basic|fulltile-ones|fulltile-lds|fulltile-lds-wait|fulltile-lds-k2|fulltile-lds-k2-wait|fulltile-lds-repeat|fulltile-lds-repeat-wait|fulltile-lds-repeat-one|fulltile-prodstride-k2|fulltile-prodstride-k2-small|group12-selected-stage-contract|group12-selected-stage-contract-hi|combined96-store-contract|full64-store-contract|dual-opsel-two-tile-store-contract|all]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--mode=basic|tied-basic|fulltile-ones|fulltile-lds|fulltile-lds-wait|fulltile-lds-k2|fulltile-lds-k2-wait|fulltile-lds-repeat|fulltile-lds-repeat-wait|fulltile-lds-repeat-one|fulltile-prodstride-k2|fulltile-prodstride-k2-small|group12-selected-stage-contract|group12-selected-stage-contract-hi|combined96-store-contract|full64-store-contract|dual-opsel-two-tile-store-contract|all]\n", argv[0]);
             return 2;
         }
     }
 
     if (mode == "basic") {
         return run_basic_lane_map();
+    }
+    if (mode == "tied-basic") {
+        return run_tied_basic_lane_map();
     }
     if (mode == "fulltile-ones") {
         return run_fulltile_probe<false>(mode.c_str());
@@ -1533,6 +1588,7 @@ int main(int argc, char ** argv) {
     }
     if (mode == "all") {
         int status = run_basic_lane_map();
+        status |= run_tied_basic_lane_map();
         status |= run_fulltile_probe<false>("fulltile-ones");
         status |= run_fulltile_probe<true>("fulltile-lds");
         status |= run_fulltile_probe<true, true>("fulltile-lds-wait");

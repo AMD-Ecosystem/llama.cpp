@@ -3,6 +3,58 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "wmma_f16_tied_lane_map_0eba9b41c_dirty",
+      "date": "2026-06-20",
+      "artifact": "cache/hrxv1/gfx1151/wmma-f16-tied-lane-map-ownership-0eba9b41c-dirty-20260620-234412/",
+      "source_commit": "0eba9b41c plus this result's fixture source",
+      "tool": "CMake/Ninja-built hrx-hip-bench-wmma-f16-lane-map, llvm-objdump --offloading, extract_wmma_ownership.py, and extract_objdump_symbol.py",
+      "status": "rejected_primitive_probe_tied_builtin_not_compact_dst",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K MUL_MAT_ID p33/fa1 RADV-like compact f16 WMMA dst/C primitive on gfx1151",
+        "baseline_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-wmma-f16-lane-map --mode=basic",
+        "variant_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-wmma-f16-lane-map --mode=tied-basic",
+        "same_runner_comparison_method": "single executable lane-map correctness plus RADV/HIP WMMA ownership extraction; no route or model A/B because this only tests the primitive operand form",
+        "route_trace_path": "not applicable; no production route changed",
+        "scheduler_trace_path": "artifact static/wmma-ownership-tied-opsel0.{json,md}, static/tied-opsel0-symbol.amdgcn.txt, static/device-objdump.txt, and static/device-readelf-notes.txt",
+        "focused_cpu_reference": "artifact lane-map.stdout.txt reports expected op_sel lane-map behavior and exits successfully",
+        "compile_report_path": "artifact static/device-readelf-notes.txt",
+        "target_listing_path": "CMake target hrx-hip-bench-wmma-f16-lane-map built in build/hrx-v1-catalog-gfx1151",
+        "prior_art_schedule_source": "Qwen3 30B Q6_K p33 Vulkan matmul_id_subgroup_q6_k_f32_f16acc_aligned_m oracle at cache/hrxv1/gfx1151/vulkan-oracle-qwen3-30b-q6k-p33-fa1-20260618-061613/",
+        "promotion_rule": "reject this primitive unless it emits a RADV-like compact dst/C operand form and preserves lane-map correctness."
+      },
+      "static_result": {
+        "correctness": "pass",
+        "radv_contract": {
+          "dst_operand_example": "v[52:55]",
+          "c_operand_example": "v[52:55]",
+          "operand_style": "packed four-register f16 WMMA dst/C banks in RADV ISA text"
+        },
+        "hip_tied_lane_map_result": {
+          "wavefront_size": 64,
+          "sgpr": 12,
+          "vgpr": 13,
+          "scratch_bytes": 0,
+          "sgpr_spills": 0,
+          "vgpr_spills": 0,
+          "wmma": 1,
+          "dst_operand_example": "v[9:16]",
+          "c_operand_example": "v[9:16]",
+          "global_store_b128": 2,
+          "s_waitcnt": 1
+        },
+        "interpretation": [
+          "the tied f16 WMMA builtin validates and preserves the same lane-map behavior as the untied builtin",
+          "the tied builtin does not change the emitted LLVM objdump operand form; the simple probe still emits v[9:16] for dst/C instead of a RADV-like compact four-register bank",
+          "Q6 ID work should not expect __builtin_amdgcn_wmma_f16_16x16x16_f16_tied_w64 alone to solve the accumulator ownership mismatch"
+        ]
+      },
+      "findings": [
+        "added --mode=tied-basic to the CMake/Ninja-built WMMA f16 lane-map bench",
+        "confirmed that Clang exposes and compiles __builtin_amdgcn_wmma_f16_16x16x16_f16_tied_w64 on gfx1151",
+        "rejected the tied builtin as the missing RADV compact dst/C primitive because its emitted operand range matches the ordinary HIP builtin in the simple lane-map probe"
+      ]
+    },
+    {
       "id": "q6_id_subgroup_contract_bankedcompact_0a468b9fd_dirty",
       "date": "2026-06-20",
       "artifact": "cache/hrxv1/gfx1151/q6-id-subgroup-contract-bankedcompact-0a468b9fd-dirty-20260620-233607/",
