@@ -3,6 +3,61 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_k_vk64_padladder_radv96_duplicate_p33_perf",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-padladder-radv96-duplicate-perf-e0071be01-dirty-20260620-215702/",
+      "source_commit": "e0071be01-dirty",
+      "tool": "CMake/Ninja-built HRX v1 catalog kernel, test-backend-ops focused correctness/perf, GGML_HRX_TRACE_ROUTES=1 route traces, and RADV/HIP ISA issue-window comparison",
+      "status": "rejected_opt_in_correct_perf_regression",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K p33 dense MUL_MAT prompt rows on gfx1151, targeting RADV p33 medium 96-store output ownership while keeping the first-WMMA lgkmcnt(40) window",
+        "baseline_command": "GGML_HRX_TRACE_ROUTES=1 GGML_HRX_TRACE_PROVIDERS=1 test-backend-ops perf -b HRX0 -o MUL_MAT --test-file cache/hrxv1/gfx1151/q6-wmma-vk64-padded44-medium-focused-20260618-062606/q6_prompt_p33.txt --output csv",
+        "variant_command": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASM_COPYAB_PADLADDER_RADV96_DUPLICATE_F16ACC_WG256_PROMPT=1 GGML_HRX_TRACE_ROUTES=1 GGML_HRX_TRACE_PROVIDERS=1 test-backend-ops test|perf -b HRX0 -o MUL_MAT --test-file cache/hrxv1/gfx1151/q6-wmma-vk64-padded44-medium-focused-20260618-062606/q6_prompt_p33.txt --output csv",
+        "same_runner_comparison_method": "same test-backend-ops binary and exported p33 Q6_K rows, default H4LOAD route versus opt-in padladder RADV96 duplicate-output provider",
+        "route_trace_path": "cache/hrxv1/gfx1151/q6-vk64-padladder-radv96-duplicate-focused-e0071be01-dirty-20260620-215636/test.stderr.log and cache/hrxv1/gfx1151/q6-vk64-padladder-radv96-duplicate-perf-e0071be01-dirty-20260620-215702/duplicate.stderr.log",
+        "scheduler_trace_path": "cache/hrxv1/gfx1151/q6-vk64-padladder-radv96-duplicate-static-e0071be01-dirty-20260620-215319/issue-window.{json,md}, counts.txt, and objdump.txt",
+        "focused_cpu_reference": "cache/hrxv1/gfx1151/q6-vk64-padladder-radv96-duplicate-focused-e0071be01-dirty-20260620-215636/test.stdout.csv; all three rows passed",
+        "compile_report_path": "cache/hrxv1/gfx1151/q6-vk64-padladder-radv96-duplicate-static-e0071be01-dirty-20260620-215319/readobj-notes.txt",
+        "target_listing_path": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_padladder_radv96_duplicate_wg256.hsaco",
+        "prior_art_schedule_source": "Qwen3 30B Q6_K p33 Vulkan matmul_q6_k_f32_f16acc_aligned_m oracle and rejected sidecar/no-merge store probes",
+        "promotion_rule": "reject unless the route beats the accepted H4LOAD default on focused p33 timing while preserving correctness, route selection, and sentinel safety"
+      },
+      "static_result": {
+        "hip_vs_radv": {
+          "wmma": "16 vs 16",
+          "ds_load_b64": "48 vs 48",
+          "ds_load_u16_d16": "64 vs 64",
+          "ds_store_b16": "2 vs 64",
+          "buffer_store_b32": "96 vs 96",
+          "s_waitcnt": "108 vs 117",
+          "s_waitcnt_depctr": "17 vs 2",
+          "s_barrier": "8 vs 2"
+        },
+        "first_wmma_window": "final lgkmcnt(40) with 16 f16 WMMAs in the RADV-like medium route family"
+      },
+      "route_result": {
+        "p33": "opt-in duplicate provider selected for Vcur-0-p33, ffn_out-0-p33, and result_output-p33; focused CPU-reference passed all three rows"
+      },
+      "timing_result": {
+        "p33_total_us": {
+          "default": 14461.614042,
+          "duplicate": 23963.93625,
+          "ratio_duplicate_over_default": 1.657
+        },
+        "selected_row_ratios": {
+          "Vcur-0-p33": 1.297,
+          "ffn_out-0-p33": 1.133,
+          "result_output-p33": 1.781
+        }
+      },
+      "findings": [
+        "the route-facing duplicate-output transfer avoids the sidecar sentinel failure and is correct on the focused p33 rows",
+        "it matches the RADV medium headline on 16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 96 buffer_store_b32, and the lgkmcnt(40) first-WMMA window",
+        "it still misses the low-cost RADV store topology, with only 2 ds_store_b16, 8 barriers, and 17 depctrs versus RADV's 64 ds_store_b16, 2 barriers, and 2 depctrs",
+        "same-runner focused timing regresses 1.657x total, so in-bounds duplicate stores are not the missing Q6 p33 parity schedule"
+      ]
+    },
+    {
       "id": "q6_k_vk64_padladder_expwait_p33_perf",
       "date": "2026-06-21",
       "artifact": "cache/hrxv1/gfx1151/q6-vk64-padladder-expwait-perf-7af9c70e1-dirty-20260620-221524/",
