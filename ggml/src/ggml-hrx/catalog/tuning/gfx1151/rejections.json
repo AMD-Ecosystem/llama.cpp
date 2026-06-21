@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_vk64_depwait_p33stage12_shadow_a32034a3e_dirty",
+      "date": "2026-06-21",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_depwait_p33stage12_shadow_f16acc_wg256_f32",
+      "env": "standalone diagnostic only; no route selector or production environment gate",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-p33stage12-shadow-a32034a3e-dirty-20260621/",
+      "perf_artifact": "cache/hrxv1/gfx1151/q6-vk64-p33stage12-shadow-a32034a3e-dirty-20260621/accepted-vk64.stdout.txt, p33stage12.stdout.txt, and p33stage12-shadow.stdout.txt",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-p33stage12-shadow-a32034a3e-dirty-20260621/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_depwait_p33stage12_shadow_wg256.hsaco",
+      "reason": "This diagnostic tested the direct intersection of the two prior p33stage12/stage16 findings: preserve p33stage12's useful 96 buffer_store_b32 output surface while adding shadow halfword LDS store/loadback for groups 12-15 to recover the p33stage16/RADV 64 ds_load_u16_d16 count. It built through CMake/Ninja and passed normal standalone p33 correctness rows with bad_gt_0p25=0. Static evidence shows the intended surface was mostly reached: 16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 96 buffer_store_b32, 11264 LDS bytes, two barriers, final pre-WMMA lgkmcnt(40), compact f16 accumulator screen pass, and no spills. Reject because the exact contract still misses RADV's LDS-store cluster (HIP ds_store_b16=66 versus RADV 64; store-cluster LDS stores 66 versus RADV 70), VGPR remains 169 versus RADV 144, and same-session standalone timing stays in the rejected p33stage12 band instead of the accepted VK64 band: 64x33 k3584 accepted 311.783 us, p33stage12 413.458 us, p33stage12-shadow 412.051 us; 128x33 k3584 accepted 312.303 us, p33stage12 410.709 us, p33stage12-shadow 411.889 us. Matching the headline 96-store plus 64-halfword-loadback surface is insufficient; future Q6 p33 work needs lower-live lane/writeback ownership or a different dataflow, not more shadow drain traffic."
+    },
+    {
       "id": "q6_k_vk64_depwait_p33stage16_ca3de2514_dirty",
       "date": "2026-06-21",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_depwait_p33stage16_f16acc_wg256_f32",
