@@ -3,6 +3,60 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_k_vk64_padladder_expwait_p33_perf",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-padladder-expwait-perf-7af9c70e1-dirty-20260620-221524/",
+      "source_commit": "7af9c70e1-dirty",
+      "tool": "CMake/Ninja-built HRX v1 catalog kernel, test-backend-ops focused correctness/perf, GGML_HRX_TRACE_ROUTES=1 route traces, and extracted HSACO ISA summary",
+      "status": "rejected_opt_in_correct_perf_regression",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K p33 dense MUL_MAT prompt rows on gfx1151, targeting the RADV p33 medium first-WMMA lgkmcnt(40) issue window",
+        "baseline_command": "GGML_HRX_TRACE_ROUTES=1 GGML_HRX_TRACE_PROVIDERS=1 test-backend-ops perf -b HRX0 -o MUL_MAT --test-file cache/hrxv1/gfx1151/q6-wmma-vk64-padded44-medium-focused-20260618-062606/q6_prompt_p33.txt --output csv",
+        "variant_command": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASM_COPYAB_PADLADDER_EXPWAIT_F16ACC_WG256_PROMPT=1 GGML_HRX_TRACE_ROUTES=1 GGML_HRX_TRACE_PROVIDERS=1 test-backend-ops test|perf -b HRX0 -o MUL_MAT --test-file cache/hrxv1/gfx1151/q6-wmma-vk64-padded44-medium-focused-20260618-062606/q6_prompt_p33.txt --output csv",
+        "same_runner_comparison_method": "same test-backend-ops binary and exported p33 Q6_K rows, default H4LOAD route versus opt-in padladder-expwait provider",
+        "route_trace_path": "cache/hrxv1/gfx1151/q6-vk64-padladder-expwait-focused-routetrace-7af9c70e1-dirty-20260620-221508/expwait-test-p33.routes.log and cache/hrxv1/gfx1151/q6-vk64-padladder-expwait-perf-7af9c70e1-dirty-20260620-221524/*.routes.log",
+        "scheduler_trace_path": "cache/hrxv1/gfx1151/q6-vk64-padladder-expwait-static-7af9c70e1-dirty-20260620-221355/isa-summary.{json,md} and expwait.amdgcn.txt",
+        "focused_cpu_reference": "cache/hrxv1/gfx1151/q6-vk64-padladder-expwait-focused-routetrace-7af9c70e1-dirty-20260620-221508/expwait-test-p33.csv; all three rows passed",
+        "compile_report_path": "cache/hrxv1/gfx1151/q6-vk64-padladder-expwait-static-7af9c70e1-dirty-20260620-221355/expwait.notes.txt",
+        "target_listing_path": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_padladder_expwait_wg256.hsaco",
+        "prior_art_schedule_source": "Qwen3 30B Q6_K p33 Vulkan matmul_q6_k_f32_f16acc_aligned_m oracle and standalone upperexpwait fixture at cache/hrxv1/gfx1151/q6-vk64-radv96-q6addr-upperexpwait-fixture-6366a6eb8-dirty-20260620-212919/",
+        "promotion_rule": "reject unless the opt-in route beats the accepted H4LOAD default on focused p33 timing while preserving correctness and route selection"
+      },
+      "static_result": {
+        "wavefront_size": 64,
+        "instruction_count": 1565,
+        "wmma": 16,
+        "ds_load_b64": 48,
+        "ds_store_b16": 2,
+        "buffer_store_b32": 64,
+        "global_load": 11,
+        "s_barrier": 2,
+        "s_waitcnt": 20,
+        "s_waitcnt_depctr": 18
+      },
+      "route_result": {
+        "p33": "opt-in expwait provider selected for Vcur-0-p33, ffn_out-0-p33, and result_output-p33; focused CPU-reference passed all three rows"
+      },
+      "timing_result": {
+        "p33_total_us": {
+          "default": 14104.165558,
+          "expwait": 24123.273058,
+          "ratio_expwait_over_default": 1.71
+        },
+        "selected_row_ratios": {
+          "Vcur-0-p33": 1.295,
+          "ffn_out-0-p33": 1.215,
+          "result_output-p33": 1.83
+        }
+      },
+      "findings": [
+        "the route-facing transfer of the accepted upperexpwait fixture builds through the normal catalog HSACO path and selects under its opt-in environment variable",
+        "focused p33 CPU-reference and route traces show the candidate is semantically valid for the tested Q6_K rows",
+        "explicit wait-ladder transfer alone is not enough: focused p33 timing regresses 1.71x total against the accepted H4LOAD default",
+        "future Q6 p33 work should target the remaining structural RADV deltas, especially output/store ownership and lower-cost dataflow, rather than another explicit-wait-only route"
+      ]
+    },
+    {
       "id": "wmma_f16_inline_compact_accumulator_probe",
       "date": "2026-06-21",
       "artifact": "cache/hrxv1/gfx1151/wmma-f16-inline-compact-acc-7172c1b12-dirty-20260621-004515/",

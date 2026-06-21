@@ -3,6 +3,17 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_vk64_padladder_expwait_p33_perf",
+      "date": "2026-06-21",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_padladder_expwait_f16acc_wg256_f32",
+      "env": "GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASM_COPYAB_PADLADDER_EXPWAIT_F16ACC_WG256_PROMPT=1",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk64-padladder-expwait-perf-7af9c70e1-dirty-20260620-221524/",
+      "perf_artifact": "cache/hrxv1/gfx1151/q6-vk64-padladder-expwait-perf-7af9c70e1-dirty-20260620-221524/default-perf-p33.csv and expwait-perf-p33.csv",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-vk64-padladder-expwait-static-7af9c70e1-dirty-20260620-221355/isa-summary.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_padladder_expwait_wg256.hsaco",
+      "reason": "This opt-in route transferred the standalone upperexpwait fixture's explicit first-WMMA wait ladder into the production Q6_K p33 catalog path. It built through CMake/Ninja, selected under GGML_HRX_ENABLE_Q6_K_WMMA16_VK64_PADDED44_W64_RING96_K2_KLOOP_ASM_COPYAB_PADLADDER_EXPWAIT_F16ACC_WG256_PROMPT=1, and passed focused CPU-reference for Vcur-0-p33, ffn_out-0-p33, and result_output-p33. Reject for promotion because same-runner focused timing regressed every row versus the accepted H4LOAD default: Vcur-0-p33 397.144 -> 514.373 us, ffn_out-0-p33 2405.729 -> 2922.757 us, result_output-p33 11301.292 -> 20686.143 us, and total focused time 14.104 ms -> 24.123 ms. Static evidence shows why this is not a full RADV clone: although it has 16 WMMA, 48 ds_load_b64, 2 barriers, and the intended explicit wait shape, it still uses only 64 buffer_store_b32, only 2 ds_store_b16, and retains the high-cost K2/padladder dataflow. Future Q6 p33 work should target output/store ownership and lower-cost dataflow instead of another explicit-wait-only transfer."
+    },
+    {
       "id": "wmma_f16_inline_compact_accumulator_probe",
       "date": "2026-06-21",
       "route": "hrx-hip-bench-wmma-f16-lane-map --mode=inline-compact-acc",
