@@ -3155,6 +3155,34 @@
         "the refresh confirms the useful Q8 path is not another mixed halfword staging wrapper. Direct 192 raw selected-output ownership is a valid lower-level surface, while the RADV-shaped mixed staging transfer still violates the HIP C++/compiler register or lane contract.",
         "next Q8 code should either transfer the direct192 raw ownership primitive into a production-ABI diagnostic with focused p33/p512/p513 timing, or produce a compact compiler reproducer for the failing mixed192 stage. Do not rerun the already rejected baseoff raw16/fulltile/clause4/nostore wrappers as route candidates."
       ]
+    },
+    {
+      "id": "q8_0_coopstore_accslots_raw192_refresh_1689ea832",
+      "date": "2026-06-20",
+      "source_commit": "1689ea832",
+      "artifact": "cache/hrxv1/gfx1151/q8-coopstore-accslots-refresh-1689ea832-20260620-173516/",
+      "status": "rejected_accumulator_slot_reuse_breaks_direct192_raw_contract",
+      "tool": "CMake/Ninja-built hrx-hip-bench-coopmat-store-contract",
+      "candidate_gate": {
+        "production_target": "Q8_0 p512/p513 dense prompt rows where the route-local direct192/raw transfers hit resource or timing cliffs; test whether reusing eight accumulator slots can reduce the live surface without losing the correctness-clean raw 192-store ownership",
+        "baseline_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-direct192-raw --flags=0x31004000",
+        "variant_command": "build/hrx-v1-catalog-gfx1151/bin/hrx-hip-bench-coopmat-store-contract --mode=wmma-lds-k2-accslots-raw192 --flags=0x31004000",
+        "same_runner_comparison_method": "same CMake/Ninja-built focused fixture, same output surface and flags, direct raw 16-slot accumulator ownership versus eight-slot accumulator reuse with the same raw 192-store envelope",
+        "route_trace_path": "not applicable; low-level store-contract fixture and no production selector changed",
+        "scheduler_trace_path": "artifact timing.stdout.txt includes same-process host timing for direct64, direct160, direct192, accslots-raw192, radv-motif192, and radv-mixed192; HIP event timings are invalid on this run and should not be used",
+        "focused_cpu_reference": "direct192 raw passes with elements=12288, bad=0, max_abs=0; accslots-raw192 fails with elements=12288, bad=3072, max_abs=65472, nan=75",
+        "compile_report_path": "CMake/Ninja build target hrx-hip-bench-coopmat-store-contract from source commit 1689ea832",
+        "target_listing_path": "not extracted for this refresh; use this only as a correctness rejection",
+        "prior_art_schedule_source": "RADV Q8_0 large oracle matmul_q8_0_f32_f16acc_aligned_l hash 0x72d309e22f889977 plus correctness-clean direct192 raw fixture",
+        "promotion_rule": "do not pursue eight-slot accumulator reuse for Q8 direct192 production transfer. Any future lower-live-state Q8 candidate must first pass this store-contract style gate before catalog integration."
+      },
+      "findings": [
+        "direct192-raw reconfirmed clean in the same artifact with elements=12288, bad=0, and max_abs=0",
+        "accslots-raw192 failed the focused store contract with 3072 bad elements, max_abs=65472, 75 NaNs, and first_bad group=0 slot=0 lane=0",
+        "the bad pattern covers groups 0-15, including full slot failures for groups 0-7 and alternating slot failures for groups 8-15, so this is an accumulator ownership violation rather than a tail-only or staged-writeback issue",
+        "same-process host timing is directionally consistent with the motivation, with accslots-raw192 around 3.30 us versus direct192-raw around 3.47 us, but correctness failure makes the timing non-promotable; HIP event timing in this artifact is invalid and must be ignored",
+        "decision: close the simple accumulator-slot reuse axis. The next Q8 lower-level action must preserve the 16-slot direct raw accumulator contract or find a different explicit lane mapping that passes the same gate before any production-ABI transfer."
+      ]
     }
   ]
 }
