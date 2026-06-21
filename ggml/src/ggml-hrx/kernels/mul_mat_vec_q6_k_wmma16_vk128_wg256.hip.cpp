@@ -226,6 +226,10 @@
 #define HRX_Q6_K_WMMA_VK128_STORE_RADV96_COMPACT_STOREKILL_SKIP_LAST2 0
 #endif
 
+#ifndef HRX_Q6_K_WMMA_VK128_STORE_RADV96_COMPACT_STOREKILL_MIXED_LDS
+#define HRX_Q6_K_WMMA_VK128_STORE_RADV96_COMPACT_STOREKILL_MIXED_LDS 0
+#endif
+
 #ifndef HRX_Q6_K_WMMA_VK128_STORE_RADV96_COMPACT_HELPER4
 #define HRX_Q6_K_WMMA_VK128_STORE_RADV96_COMPACT_HELPER4 0
 #endif
@@ -286,6 +290,7 @@ typedef const __attribute__((address_space(3))) _Float16 * hrx_q6_k_wmma_vk128_l
 typedef volatile __attribute__((address_space(3))) _Float16 * hrx_q6_k_wmma_vk128_lds_volatile_half_ptr;
 typedef __attribute__((address_space(3))) uint16_t * hrx_q6_k_wmma_vk128_lds_u16_ptr;
 typedef const __attribute__((address_space(3))) uint16_t * hrx_q6_k_wmma_vk128_lds_const_u16_ptr;
+typedef __attribute__((address_space(3))) uint32_t * hrx_q6_k_wmma_vk128_lds_u32_ptr;
 
 #if HRX_Q6_K_WMMA_VK128_BUFFER_STORE
 static constexpr int HRX_Q6_K_WMMA_VK128_RAW_BUFFER_FLAGS_GFX11 = 0x31004000;
@@ -1103,6 +1108,20 @@ static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_store_acc_f16_row_maj
         (hrx_q6_k_wmma_vk128_lds_u16_ptr) sh_store + stage_base + 3;
 #if HRX_Q6_K_WMMA_VK128_STORE_RADV96_COMPACT_STOREKILL_SKIP_LAST2
     if (group == 23) {
+#if HRX_Q6_K_WMMA_VK128_STORE_RADV96_COMPACT_STOREKILL_MIXED_LDS
+        hrx_q6_k_wmma_vk128_lds_u32_ptr const ptr32 =
+            (hrx_q6_k_wmma_vk128_lds_u32_ptr) sh_store + (stage_base >> 1);
+        asm volatile(
+            "ds_write2_b32 %0, %1, %2 offset0:0 offset1:1\n"
+            "ds_write2_b32 %0, %2, %3 offset0:2 offset1:3\n"
+            "ds_write2_b32 %0, %3, %4 offset0:4 offset1:5\n"
+            "ds_write2_b32 %0, %4, %1 offset0:6 offset1:7\n"
+            "ds_write_b128 %0, %5 offset:32\n"
+            "ds_write_b128 %0, %5 offset:64\n"
+            :
+            : "v"(ptr32), "v"(acc[0]), "v"(acc[1]), "v"(acc[2]), "v"(acc[3]), "v"(acc)
+            : "memory");
+#endif
         asm volatile(
             "ds_write_b16 %4, %0 offset:0\n"
             "ds_write_b16 %5, %1 offset:0\n"

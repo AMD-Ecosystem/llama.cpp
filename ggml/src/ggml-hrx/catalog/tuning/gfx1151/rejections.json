@@ -3,6 +3,15 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_vk64_q6addr_asmwait_radvseq_acc8_storemix_899ede090_dirty",
+      "date": "2026-06-21",
+      "route": "static-only HSACO: hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_storekill_storemix_q6addr_upperdepnomem_f16acc_wg256_f32",
+      "env": "not provider-wired; CMake/Ninja static probe only",
+      "artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-asmwait-radvseq-acc8-storemix-899ede090-dirty-20260621-110136/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_storekill_storemix_q6addr_upperdepnomem_wg256.hsaco",
+      "reason": "This static-only Q6_K p33 probe tested the missing non-b16 LDS store surface after skip2 matched the 64 scalar halfword stores but undershot RADV's store-cluster LDS count. The explicit mixed LDS inline asm is viable through CMake/Ninja and lands the intended opcode surface: 4 ds_store_2addr_b32, 2 ds_store_b128, 64 ds_store_b16, and store-cluster lds_store_ops=70, all matching RADV. It also preserves the strong near-clone facts from ACC8: 16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 96 buffer_store_b32, two barriers, zero scratch/spills, compact f16 accumulator form, load_b64_immediately_before_final_wait=48, final_pre_wmma_lgkmcnt=40, wmma_in_window=16, the lgkmcnt ladder [40,36,32,28,24,16,7,6,1,0], and dst/A/B/C reuse plus unique-bank counts. Reject before provider wiring because the full static contract still fails and the route remains intentionally not production-valid: ordered dst/A/B/C register sequences differ from RADV, A/B load-source provenance remains too broad after the first operands, LDS is 14336 versus RADV 11264, instruction count is 2022 versus RADV 2343, and ACC8 aliases sixteen logical outputs through eight accumulator banks. This closes the store-count axis for this branch; next work should target lower-level WMMA operand/register ordering and production-valid eight-bank writeback ownership."
+    },
+    {
       "id": "q6_k_vk64_q6addr_asmwait_radvseq_acc8_storekill_skip2_fedaad60e_dirty",
       "date": "2026-06-21",
       "route": "static-only HSACO: hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_storekill_skip2_q6addr_upperdepnomem_f16acc_wg256_f32",

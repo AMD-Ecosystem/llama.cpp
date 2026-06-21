@@ -3,6 +3,54 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_k_vk64_q6addr_asmwait_radvseq_acc8_storemix_899ede090_dirty",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-asmwait-radvseq-acc8-storemix-899ede090-dirty-20260621-110136/",
+      "source_commit": "899ede090-dirty",
+      "tool": "CMake/Ninja-built RADV-sequence ACC8 Q6 ASMWAIT mixed-LDS store surface HSACO and tools/vulkan-oracle/run_q6_medium_contract_screen.py",
+      "status": "rejected_gfx1151_static_probe_operand_sequence_and_lds_footprint_remaining",
+      "route": "static-only HSACO: hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_storekill_storemix_q6addr_upperdepnomem_f16acc_wg256_f32",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K p33 dense prompt medium-route WMMA issue, operand ownership, and complete RADV mixed LDS store surface. Test whether explicit ds_write2_b32 plus ds_write_b128 can restore RADV's non-b16 LDS store instructions without disturbing the recovered ACC8 ownership and wait ladder.",
+        "baseline_command": "static comparison against Qwen3 30B Q6_K p33 RADV medium oracle and q6_k_vk64_q6addr_asmwait_radvseq_acc8_storekill_skip2_fedaad60e_dirty.",
+        "variant_command": "cmake --build build/hrx-v1-catalog-gfx1151 --target test-backend-ops -j$(nproc), then run_q6_medium_contract_screen.py on mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_storekill_storemix_q6addr_upperdepnomem_wg256.hsaco",
+        "same_runner_comparison_method": "not run; rejected at static schedule gate before route wiring, focused correctness, or timing.",
+        "route_trace_path": "not applicable; no production provider wired.",
+        "scheduler_trace_path": "artifact summary.md, isa-compare.md, contract-check.json, and compact-accumulator/wmma-ownership.json.",
+        "focused_cpu_reference": "not run after static rejection.",
+        "compile_report_path": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_storekill_storemix_q6addr_upperdepnomem_wg256.hsaco built by CMake/Ninja.",
+        "target_listing_path": "artifact compact-accumulator/hip.objdump.txt, compact-accumulator/wmma-ownership.md, and isa-compare.md.",
+        "prior_art_schedule_source": "Qwen3 30B Q6_K p33 RADV medium oracle plus q6_k_vk64_q6addr_asmwait_radvseq_acc8_storekill_skip2_fedaad60e_dirty.",
+        "promotion_rule": "reject before provider wiring unless a candidate matches RADV opcode/resource counts, first-WMMA wait window, compact accumulator form, dst/A/B/C reuse and ordered operand/load-source sequences, exact mixed LDS store/loadback surface, and production-valid writeback ownership."
+      },
+      "static_result": {
+        "exact_static_contract_passed": false,
+        "compact_f16_accumulator_screen_passed": true,
+        "wmma_operand_topology_passed": false,
+        "matching_facts": "16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 64 ds_store_b16, 4 ds_store_2addr_b32, 2 ds_store_b128, 96 buffer_store_b32, two barriers, zero scratch/spills, compact f16 accumulator screen pass, load_b64_immediately_before_final_wait=48, final_pre_wmma_lgkmcnt=40, wmma_in_window=16, store-cluster LDS stores=70, exact RADV lgkmcnt ladder [40,36,32,28,24,16,7,6,1,0], and dst/A/B/C reuse plus unique-bank counts all match RADV.",
+        "repaired_facts": "Compared with skip2, explicit mixed LDS stores move lds_store_ops from 64 to exact RADV 70 and emit the missing RADV non-b16 LDS store opcodes: ds_store_2addr_b32=4 and ds_store_b128=2. VGPR remains 141 with no spills.",
+        "remaining_misses": "Ordered dst/A/B/C operand register sequences still differ from RADV, A/B load-source provenance remains too broad after the first operands, LDS is 14336 versus 11264, and instruction count is 2022 versus RADV 2343. The route is still static-only because ACC8 aliases sixteen logical accumulators through eight and is not a production-valid writeback contract.",
+        "resource_facts": {
+          "sgpr": 42,
+          "vgpr": 141,
+          "lds_bytes": 14336,
+          "scratch_bytes": 0,
+          "instructions": 2022,
+          "s_waitcnt": 89,
+          "buffer_store_b32": 96,
+          "ds_store_b16": 64,
+          "ds_store_2addr_b32": 4,
+          "ds_store_b128": 2,
+          "lds_store_ops": 70
+        }
+      },
+      "findings": [
+        "HIP inline asm can explicitly emit RADV's missing mixed LDS store surface through ds_write2_b32 and ds_write_b128 while preserving the recovered ACC8 ownership counts",
+        "the Q6 p33 near-clone branch is no longer blocked on store opcode counts; the remaining static blockers are ordered operand/load-source register topology, LDS footprint, and production-valid accumulator/writeback ownership",
+        "future work should stop adding store-count probes in this family and move to a lower-level WMMA operand/register assignment primitive or a production-valid eight-bank accumulator reuse/writeback topology"
+      ]
+    },
+    {
       "id": "q6_k_vk64_q6addr_asmwait_radvseq_acc8_storekill_skip2_fedaad60e_dirty",
       "date": "2026-06-21",
       "artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-asmwait-radvseq-acc8-storekill-skip2-fedaad60e-dirty-20260621-105512/",
