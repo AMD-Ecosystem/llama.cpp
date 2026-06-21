@@ -87,6 +87,16 @@
       "reason": "This primitive probe tested whether HIP C++ inline asm can directly express RADV-style compact f16 WMMA dst/C accumulator ownership on gfx1151. It added three CMake/Ninja-built variants to hrx-hip-bench-wmma-f16-lane-map: tied read/write '+v(out)', separate '=v(out)' with 'v(acc)' C, and '=v(out)' with matching '0(acc)' C. Runtime smoke completed with nonzero output for all variants. Reject as a compact-accumulator primitive because extract_wmma_ownership.py --require-compact-f16-accumulators failed all three variants: each emitted one v_wmma_f16_16x16x16_f16 with width-8 dst and width-8 C operands, and zero width-4 dst/C operands. This closes the obvious inline-asm operand-constraint axis for reproducing the RADV Q6/Q8 compact accumulator form; future f16-WMMA oracle clones need a different lowering/primitive path or must be explicitly justified as measured width-8 deviations."
     },
     {
+      "id": "wmma_f16_llvm_mc_compact_form_probe",
+      "date": "2026-06-21",
+      "route": "tools/vulkan-oracle/run_wmma_mc_compact_probe.py --mcpu gfx1151",
+      "env": "ROCm llvm-mc assembler primitive screen; no production selector",
+      "artifact": "cache/hrxv1/gfx1151/wmma-mc-compact-current-4e34cbae6-20260621-013523/",
+      "static_artifact": "cache/hrxv1/gfx1151/wmma-mc-compact-current-4e34cbae6-20260621-013523/summary.md, width4.stderr, and width8.stdout",
+      "compile_artifact": "/srv/vm-shared/projects/llamacpp-devws/rocm/llvm/bin/llvm-mc",
+      "reason": "This primitive screen tests whether the ROCm LLVM gfx1151 assembler accepts the RADV-style compact f16 WMMA operand form directly. The normal width-8 form `v_wmma_f16_16x16x16_f16 v[0:7], v[0:7], v[0:7], v[0:7]` assembles and emits encoding bytes, while the compact width-4 form `v_wmma_f16_16x16x16_f16 v[0:3], v[0:3], v[0:3], v[0:3]` is rejected with `operands are not valid for this GPU or mode`. Reject the straightforward LLVM-MC route for emitting compact width-4 dst/C f16 WMMA ownership on gfx1151; future exact RADV clones need a different compiler/target-description path, a non-LLVM code object path, or a measured non-compact deviation."
+    },
+    {
       "id": "q8_0_motif192_k2_baseoff_split59_catalog_perf",
       "date": "2026-06-21",
       "route": "hrx_mul_mat_vec_q8_0_wmma16x16_vk128_padded_w64_b64group_packstage_asmwmma_motif192_k2_baseoff_split59_bufferstore_f16acc_wg256_f32",

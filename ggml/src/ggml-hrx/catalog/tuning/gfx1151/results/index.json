@@ -426,6 +426,41 @@
       ]
     },
     {
+      "id": "wmma_f16_llvm_mc_compact_form_probe",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/wmma-mc-compact-current-4e34cbae6-20260621-013523/",
+      "source_commit": "4e34cbae6-dirty",
+      "tool": "tools/vulkan-oracle/run_wmma_mc_compact_probe.py --mcpu gfx1151",
+      "status": "rejected_static_primitive_width4_form_unavailable",
+      "candidate_gate": {
+        "production_target": "gfx1151 RADV-style f16 WMMA compact width-4 dst/C accumulator ownership primitive for Q6_K/Q8_0 dense quantized prompt-matmul oracle clones",
+        "baseline_command": "llvm-mc -triple=amdgcn-amd-amdhsa -mcpu=gfx1151 --show-encoding width8.s",
+        "variant_command": "llvm-mc -triple=amdgcn-amd-amdhsa -mcpu=gfx1151 --show-encoding width4.s",
+        "same_runner_comparison_method": "same llvm-mc binary and target; compare assembler acceptance for width8 versus width4 operand forms",
+        "route_trace_path": "not applicable; assembler primitive screen only and no production selector changed",
+        "scheduler_trace_path": "artifact summary.json, summary.md, width8.stdout, width4.stderr",
+        "focused_cpu_reference": "not applicable; no runtime kernel launched",
+        "compile_report_path": "artifact width8.stdout and width4.stderr",
+        "target_listing_path": "not applicable; this probes assembler acceptance before object generation",
+        "prior_art_schedule_source": "RADV Q6 ID and Q8 large gfx1151 Vulkan oracle kernels emit width-4 dst/C operands for f16 WMMA accumulator ownership",
+        "promotion_rule": "do not use straightforward LLVM MC as the compact width-4 f16 WMMA emission path on gfx1151 unless a future ROCm/target-description change makes width4 assemble successfully."
+      },
+      "static_result": {
+        "llvm_mc": "/srv/vm-shared/projects/llamacpp-devws/rocm/llvm/bin/llvm-mc",
+        "mcpu": "gfx1151",
+        "width8_form": "accepted",
+        "width8_encoding": "[0x00,0x40,0x42,0xcc,0x00,0x01,0x02,0x1c]",
+        "width4_form": "rejected",
+        "width4_error": "operands are not valid for this GPU or mode"
+      },
+      "findings": [
+        "the normal gfx1151 width8 f16 WMMA form assembles under the workspace ROCm llvm-mc",
+        "the RADV-style compact width4 f16 WMMA operand form is rejected before object generation",
+        "the compact accumulator mismatch is therefore not only a HIP C++ operand-constraint problem; the straightforward LLVM assembler path also does not expose that form for gfx1151",
+        "future exact f16-WMMA oracle clones need a target-description/compiler change, a non-LLVM code-object path, or a measured non-compact deviation"
+      ]
+    },
+    {
       "id": "q8_0_motif192_k2_baseoff_split59_catalog_perf",
       "date": "2026-06-21",
       "artifact": "cache/hrxv1/gfx1151/q8-baseoff-split59-realdata-67045a7c93d0-dirty-20260621-002755/",
