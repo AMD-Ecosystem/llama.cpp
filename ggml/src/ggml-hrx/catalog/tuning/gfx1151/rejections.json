@@ -3,6 +3,15 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_vk64_q6addr_asmwait_radvseq_acc8_storemix_overlaya_b67392555_dirty",
+      "date": "2026-06-21",
+      "route": "static-only HSACO: hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_storekill_storemix_overlaya_q6addr_upperdepnomem_f16acc_wg256_f32",
+      "env": "not provider-wired; CMake/Ninja static probe only; exact Q6 p33 RADV medium static contract pass",
+      "artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-asmwait-radvseq-acc8-storemix-overlaya-b67392555-dirty-20260621-111436/",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_storekill_storemix_overlaya_q6addr_upperdepnomem_wg256.hsaco",
+      "reason": "This static-only Q6_K p33 probe is the first HIP C++ catalog-built HSACO in this branch to pass the full source-controlled RADV medium static contract: 16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 64 ds_store_b16, 4 ds_store_2addr_b32, 2 ds_store_b128, 96 buffer_store_b32, store-cluster lds_store_ops=70, two barriers, 11264-byte LDS, zero spills, compact f16 accumulator form, RADV first-WMMA wait/use window, exact lgkmcnt ladder, and the corrected WMMA ownership/load-source topology. Reject for production provider wiring only because it is still an ACC8 topology probe: sixteen logical outputs are aliased through eight accumulator banks and no correctness-proven writeback path exists. The next Q6 p33 work should preserve this exact static contract while implementing production-valid writeback, then run focused CPU-reference, route trace, and p33/p512/p513 timing gates."
+    },
+    {
       "id": "q6_k_vk64_q6addr_asmwait_radvseq_acc8_storemix_loadspan_8071ce4a7_dirty",
       "date": "2026-06-21",
       "route": "static-only HSACO: hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_storekill_storemix_q6addr_upperdepnomem_f16acc_wg256_f32",

@@ -3,6 +3,54 @@
   "schema": "ggml-hrx-tuning-results-index-v1",
   "results": [
     {
+      "id": "q6_k_vk64_q6addr_asmwait_radvseq_acc8_storemix_overlaya_b67392555_dirty",
+      "date": "2026-06-21",
+      "artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-asmwait-radvseq-acc8-storemix-overlaya-b67392555-dirty-20260621-111436/",
+      "source_commit": "b67392555-dirty",
+      "tool": "CMake/Ninja-built overlay-A RADV-sequence ACC8 Q6 ASMWAIT mixed-LDS HSACO and tools/vulkan-oracle/run_q6_medium_contract_screen.py with load-span ownership extraction",
+      "status": "static_contract_passed_not_production_valid",
+      "route": "static-only HSACO: hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_storekill_storemix_overlaya_q6addr_upperdepnomem_f16acc_wg256_f32",
+      "candidate_gate": {
+        "production_target": "Qwen3 30B Q6_K p33 dense prompt medium-route exact RADV static clone: WMMA issue, load-source provenance, wait ladder, mixed LDS store/loadback surface, and RADV 11264-byte LDS footprint. Test whether overlaying the RADV96 store buffer on sh_a removes the extra 3072-byte LDS allocation without perturbing the matched topology.",
+        "baseline_command": "static comparison against Qwen3 30B Q6_K p33 RADV medium oracle and q6_k_vk64_q6addr_asmwait_radvseq_acc8_storemix_loadspan_8071ce4a7_dirty.",
+        "variant_command": "cmake --build build/hrx-v1-catalog-gfx1151 --target test-backend-ops -j$(nproc), then run_q6_medium_contract_screen.py on mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_storekill_storemix_overlaya_q6addr_upperdepnomem_wg256.hsaco",
+        "same_runner_comparison_method": "not run; the static contract passes, but the route is intentionally not provider-wired because ACC8 aliases sixteen logical accumulators through eight and lacks production-valid writeback.",
+        "route_trace_path": "not applicable; no production provider wired.",
+        "scheduler_trace_path": "artifact summary.md, isa-compare.md, contract-check.json, compact-accumulator/wmma-ownership.json, and compact-accumulator/wmma-ownership.md.",
+        "focused_cpu_reference": "not run; expected invalid until the ACC8 writeback contract is repaired.",
+        "compile_report_path": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asmwait_radvseq_acc8_storekill_storemix_overlaya_q6addr_upperdepnomem_wg256.hsaco built by CMake/Ninja.",
+        "target_listing_path": "artifact compact-accumulator/hip.objdump.txt, compact-accumulator/wmma-ownership.md, and isa-compare.md.",
+        "prior_art_schedule_source": "Qwen3 30B Q6_K p33 RADV medium oracle plus q6_k_vk64_q6addr_asmwait_radvseq_acc8_storemix_loadspan_8071ce4a7_dirty.",
+        "promotion_rule": "do not provider-wire until a candidate keeps this exact static contract and implements production-valid sixteen-output writeback or an equivalent correctness-proven eight-bank accumulator reuse path."
+      },
+      "static_result": {
+        "exact_static_contract_passed": true,
+        "compact_f16_accumulator_screen_passed": true,
+        "wmma_operand_topology_passed": true,
+        "matching_facts": "The candidate matches RADV on the full source-controlled Q6 p33 medium static contract: 16 WMMA, 48 ds_load_b64, 64 ds_load_u16_d16, 64 ds_store_b16, 4 ds_store_2addr_b32, 2 ds_store_b128, 96 buffer_store_b32, two barriers, 11264-byte LDS, zero scratch/spills, compact f16 accumulator screen pass, load_b64_immediately_before_final_wait=48, final_pre_wmma_lgkmcnt=40, wmma_in_window=16, store-cluster LDS stores=70, exact lgkmcnt ladder [40,36,32,28,24,16,7,6,1,0], dst/A/B/C reuse and unique-bank counts, dst/A/B/C operand first-use patterns, and A/B load-source first-use patterns.",
+        "repaired_facts": "Overlaying the RADV96 store buffer on sh_a removes the extra 3072-byte sh_store_radv96 allocation: lds_bytes moves from 14336 to exact RADV 11264 while preserving the mixed-store surface and ownership topology.",
+        "remaining_misses": "This is not production-valid: ACC8 aliases sixteen logical accumulators through eight banks and the candidate has no correctness-proven sixteen-output writeback. Instruction count remains lower than RADV, 2029 versus 2343, but it is not part of the exact static promotion gate.",
+        "resource_facts": {
+          "sgpr": 42,
+          "vgpr": 141,
+          "lds_bytes": 11264,
+          "scratch_bytes": 0,
+          "instructions": 2029,
+          "s_waitcnt": 89,
+          "buffer_store_b32": 96,
+          "ds_store_b16": 64,
+          "ds_store_2addr_b32": 4,
+          "ds_store_b128": 2,
+          "lds_store_ops": 70
+        }
+      },
+      "findings": [
+        "a HIP C++ catalog-built HSACO can match the Q6 p33 RADV medium static schedule contract under the current oracle screen",
+        "the previous LDS footprint blocker is solved by overlaying the RADV96 store buffer on sh_a after the K loop",
+        "the remaining engineering problem is production validity: preserve this exact static topology while producing all sixteen logical outputs correctly, or prove an equivalent writeback path through focused CPU-reference and route traces"
+      ]
+    },
+    {
       "id": "q6_k_vk64_q6addr_asmwait_radvseq_acc8_storemix_loadspan_8071ce4a7_dirty",
       "date": "2026-06-21",
       "artifact": "cache/hrxv1/gfx1151/q6-medium-contract-screen-asmwait-radvseq-acc8-storemix-loadspan-8071ce4a7-dirty-20260621-111039/",
