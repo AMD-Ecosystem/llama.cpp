@@ -40,6 +40,11 @@
 #include "../../kernels/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_sidestore_wg256.hip.cpp"
 #define HRX_Q6_REPRO_KERNEL hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_sidestore_f16acc_wg256_f32
 #define HRX_Q6_REPRO_LABEL "q6-ring96-kloop-asm-copyab-sidestore-repro"
+#elif HRX_Q6_REPRO_KLOOP_ASM_COPYAB_RADV96_SIDECAR
+#include "../../kernels/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_radv96_sidecar_wg256.hip.cpp"
+#define HRX_Q6_REPRO_KERNEL hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_asm_copyab_radv96_sidecar_f16acc_wg256_f32
+#define HRX_Q6_REPRO_LABEL "q6-ring96-kloop-asm-copyab-radv96-sidecar-repro"
+#define HRX_Q6_REPRO_EXTRA_DST_FLOATS (8 * 64 * 4)
 #elif HRX_Q6_REPRO_KLOOP_BUILTIN_TYPEDSTAGE
 #include "../../kernels/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_k2_kloop_builtin_typedstage_wg256.hip.cpp"
 #define HRX_Q6_REPRO_KERNEL hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_k2_kloop_builtin_typedstage_f16acc_wg256_f32
@@ -48,6 +53,10 @@
 #include "../../kernels/mul_mat_vec_q6_k_wmma16_vk64_padded44_w64_ring96_copyab_wg256.hip.cpp"
 #define HRX_Q6_REPRO_KERNEL hrx_mul_mat_vec_q6_k_wmma16x16_vk64_padded44_w64_ring96_copyab_f16acc_wg256_f32
 #define HRX_Q6_REPRO_LABEL "q6-ring96-copyab-repro"
+#endif
+
+#ifndef HRX_Q6_REPRO_EXTRA_DST_FLOATS
+#define HRX_Q6_REPRO_EXTRA_DST_FLOATS 0
 #endif
 
 #define HIP_CHECK(expr) do { \
@@ -258,16 +267,17 @@ static int run_case(int rows, int cols, int k, const case_config & config) {
     std::vector<hrx_block_q6_K_wmma_vk128_lhs> h_src0(static_cast<size_t>(rows) * blocks_per_row);
     std::vector<float> h_src1(static_cast<size_t>(cols) * k);
     std::vector<float> h_dst(static_cast<size_t>(rows) * cols, -777.0f);
+    std::vector<float> h_dst_device(h_dst.size() + HRX_Q6_REPRO_EXTRA_DST_FLOATS, -777.0f);
 
     fill_q6(h_src0, rows, blocks_per_row, config);
     fill_rhs(h_src1, k, cols, config);
 
     device_buffer<hrx_block_q6_K_wmma_vk128_lhs> d_src0(h_src0.size());
     device_buffer<float> d_src1(h_src1.size());
-    device_buffer<float> d_dst(h_dst.size());
+    device_buffer<float> d_dst(h_dst_device.size());
     HIP_CHECK(hipMemcpy(d_src0.ptr, h_src0.data(), h_src0.size() * sizeof(h_src0[0]), hipMemcpyHostToDevice));
     HIP_CHECK(hipMemcpy(d_src1.ptr, h_src1.data(), h_src1.size() * sizeof(h_src1[0]), hipMemcpyHostToDevice));
-    HIP_CHECK(hipMemcpy(d_dst.ptr, h_dst.data(), h_dst.size() * sizeof(h_dst[0]), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(d_dst.ptr, h_dst_device.data(), h_dst_device.size() * sizeof(h_dst_device[0]), hipMemcpyHostToDevice));
 
     const dim3 grid((rows + 63) / 64, (cols + 63) / 64, 1);
     hipLaunchKernelGGL(
@@ -284,7 +294,8 @@ static int run_case(int rows, int cols, int k, const case_config & config) {
         static_cast<long long>(cols));
     HIP_CHECK(hipGetLastError());
     HIP_CHECK(hipDeviceSynchronize());
-    HIP_CHECK(hipMemcpy(h_dst.data(), d_dst.ptr, h_dst.size() * sizeof(h_dst[0]), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(h_dst_device.data(), d_dst.ptr, h_dst_device.size() * sizeof(h_dst_device[0]), hipMemcpyDeviceToHost));
+    std::copy(h_dst_device.begin(), h_dst_device.begin() + static_cast<long long>(h_dst.size()), h_dst.begin());
 
     const std::vector<float> ref = cpu_reference(h_src0, h_src1, k, rows, cols);
     const std::vector<float> cross_ref = ring96_cross_reference(h_src0, h_src1, k, rows, cols);
@@ -301,6 +312,23 @@ static int run_case(int rows, int cols, int k, const case_config & config) {
     double cross_max_rel = 0.0;
     size_t cross_max_idx = 0;
     size_t max_idx = 0;
+    size_t sidecar_written = 0;
+    size_t sidecar_nan = 0;
+    size_t sidecar_inf = 0;
+    double sidecar_max_abs = 0.0;
+    for (size_t i = h_dst.size(); i < h_dst_device.size(); ++i) {
+        const float value = h_dst_device[i];
+        if (value != -777.0f) {
+            ++sidecar_written;
+        }
+        if (std::isnan(value)) {
+            ++sidecar_nan;
+        } else if (std::isinf(value)) {
+            ++sidecar_inf;
+        } else if (value != -777.0f) {
+            sidecar_max_abs = std::max(sidecar_max_abs, std::abs(static_cast<double>(value)));
+        }
+    }
     for (size_t i = 0; i < h_dst.size(); ++i) {
         const float actual = h_dst[i];
         const int row = static_cast<int>(i % static_cast<size_t>(rows));
@@ -354,7 +382,7 @@ static int run_case(int rows, int cols, int k, const case_config & config) {
     const int cross_max_row = static_cast<int>(cross_max_idx % static_cast<size_t>(rows));
     const int cross_max_col = static_cast<int>(cross_max_idx / static_cast<size_t>(rows));
     std::printf(
-        "%s profile=%s rows=%d cols=%d k=%d elements=%zu nan=%zu inf=%zu sentinel=%zu bad_gt_0p25=%zu max_abs=%g max_rel=%g idx=%zu row=%d col=%d actual=%g ref=%g cross_bad_gt_0p25=%zu cross_max_abs=%g cross_max_rel=%g cross_idx=%zu cross_row=%d cross_col=%d cross_ref=%g bad_groups=",
+        "%s profile=%s rows=%d cols=%d k=%d elements=%zu nan=%zu inf=%zu sentinel=%zu bad_gt_0p25=%zu max_abs=%g max_rel=%g idx=%zu row=%d col=%d actual=%g ref=%g cross_bad_gt_0p25=%zu cross_max_abs=%g cross_max_rel=%g cross_idx=%zu cross_row=%d cross_col=%d cross_ref=%g sidecar_written=%zu sidecar_nan=%zu sidecar_inf=%zu sidecar_max_abs=%g bad_groups=",
         HRX_Q6_REPRO_LABEL,
         config.name,
         rows,
@@ -378,7 +406,11 @@ static int run_case(int rows, int cols, int k, const case_config & config) {
         cross_max_idx,
         cross_max_row,
         cross_max_col,
-        cross_ref[cross_max_idx]);
+        cross_ref[cross_max_idx],
+        sidecar_written,
+        sidecar_nan,
+        sidecar_inf,
+        sidecar_max_abs);
     bool first = true;
     for (int group = 0; group < 16; ++group) {
         if (bad_groups[group] == 0 && max_group_abs[group] == 0.0) {
@@ -455,7 +487,9 @@ static int run_case(int rows, int cols, int k, const case_config & config) {
             host_elapsed_ms * 1000.0 / static_cast<double>(iters));
     }
 
-    return (nan_count == 0 && inf_count == 0 && sentinel_count == 0) ? 0 : 1;
+    return (nan_count == 0 && inf_count == 0 && sentinel_count == 0 &&
+            (HRX_Q6_REPRO_EXTRA_DST_FLOATS == 0 || sidecar_written > 0) &&
+            sidecar_nan == 0 && sidecar_inf == 0) ? 0 : 1;
 }
 
 int main() {

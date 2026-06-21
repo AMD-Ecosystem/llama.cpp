@@ -114,6 +114,10 @@
 #define HRX_Q6_K_WMMA_VK128_STORE_STAGE_TYPED_LINEAR 0
 #endif
 
+#ifndef HRX_Q6_K_WMMA_VK128_STORE_RADV96_SIDECAR
+#define HRX_Q6_K_WMMA_VK128_STORE_RADV96_SIDECAR 0
+#endif
+
 #ifndef HRX_Q6_K_WMMA_VK128_SIDE_STAGE_FAST_HALF
 #define HRX_Q6_K_WMMA_VK128_SIDE_STAGE_FAST_HALF 0
 #endif
@@ -686,6 +690,72 @@ static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_load_typed_stage_stor
 }
 #endif
 
+#if HRX_Q6_K_WMMA_VK128_STORE_RADV96_SIDECAR && HRX_Q6_K_WMMA_VK128_BUFFER_STORE
+static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_radv96_stage(
+        hrx_q6_k_wmma_vk128_half8_vec acc,
+        int group,
+        int base_group,
+        unsigned int lane,
+        uint16_t * sh_store) {
+    const int stage_base = (group - base_group) * 64 * 4 + static_cast<int>(lane) * 4;
+#pragma unroll
+    for (int reg = 0; reg < 4; ++reg) {
+        sh_store[stage_base + reg] =
+            hrx_q6_k_wmma_vk128_f16_to_u16(acc[reg * 2 + HRX_Q6_K_WMMA_VK128_W64_OPSEL]);
+    }
+}
+
+static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_load_radv96_stage_store_buffer_w64(
+        __amdgpu_buffer_rsrc_t dst_rsrc,
+        long long rows_stride,
+        long long row0,
+        long long col0,
+        long long rows,
+        long long cols,
+        int group,
+        int base_group,
+        unsigned int lane,
+        uint16_t * sh_store) {
+    const int row_lane = static_cast<int>(lane >> 4);
+    const int col_lane = static_cast<int>(lane & 15u);
+    const long long col = col0 + static_cast<long long>(col_lane);
+    if (col >= cols) {
+        return;
+    }
+    const int stage_base = (group - base_group) * 64 * 4 + static_cast<int>(lane) * 4;
+#pragma unroll
+    for (int reg = 0; reg < 4; ++reg) {
+        const long long row = row0 + static_cast<long long>(row_lane + reg * 4);
+        if (row < rows) {
+            const _Float16 selected = hrx_q6_k_wmma_vk128_u16_to_f16(sh_store[stage_base + reg]);
+            hrx_q6_k_wmma_vk128_buffer_store_f32(
+                dst_rsrc,
+                col * rows_stride + row,
+                static_cast<float>(selected));
+        }
+    }
+}
+
+static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_load_radv96_stage_store_sidecar_w64(
+        __amdgpu_buffer_rsrc_t dst_rsrc,
+        long long sidecar_base,
+        int group,
+        int base_group,
+        unsigned int lane,
+        uint16_t * sh_store) {
+    const int stage_base = (group - base_group) * 64 * 4 + static_cast<int>(lane) * 4;
+    const long long group_base = sidecar_base + static_cast<long long>(group - 16) * 64 * 4;
+#pragma unroll
+    for (int reg = 0; reg < 4; ++reg) {
+        const _Float16 selected = hrx_q6_k_wmma_vk128_u16_to_f16(sh_store[stage_base + reg]);
+        hrx_q6_k_wmma_vk128_buffer_store_f32(
+            dst_rsrc,
+            group_base + static_cast<long long>(lane) * 4 + reg,
+            static_cast<float>(selected));
+    }
+}
+#endif
+
 static __device__ __forceinline__ void hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_stage(
         float * dst,
         long long rows_stride,
@@ -873,6 +943,8 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
     __shared__ _Float16 sh_b[BN * SHARED_STRIDE];
 #if HRX_Q6_K_WMMA_VK128_STORE_STAGE_FAST_HALF || HRX_Q6_K_WMMA_VK128_SIDE_STAGE_FAST_HALF || HRX_Q6_K_WMMA_VK128_MIXED_DIRECT_FAST_HALF
     __shared__ _Float16 sh_store[WAVE_COUNT * 2 * 16 * 16];
+#elif HRX_Q6_K_WMMA_VK128_STORE_RADV96_SIDECAR
+    __shared__ uint16_t sh_store_radv96[6 * 64 * 4];
 #elif HRX_Q6_K_WMMA_VK128_STORE_STAGE_TYPED_LINEAR
     __shared__ uint16_t sh_store_typed[16 * 64 * 4];
 #elif HRX_Q6_K_WMMA_VK128_STORE_STAGE
@@ -1330,7 +1402,131 @@ void HRX_Q6_K_WMMA_VK128_EXPORT(
     }
 
 #if HRX_Q6_K_WMMA_VK128_W64_VK64_RING96 || HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2 || HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_STREAM || HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_KLOOP || HRX_Q6_K_WMMA_VK128_W64_VK64_RING96_K2_PAIRCOL
-#if HRX_Q6_K_WMMA_VK128_STORE_STAGE_TYPED_LINEAR
+#if HRX_Q6_K_WMMA_VK128_STORE_RADV96_SIDECAR
+#pragma unroll
+    for (int group = 0; group < 8; ++group) {
+        if (tid < 64u) {
+            const int row_tile = group & 3;
+            const int col_tile = (group >> 2) & 3;
+            hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_buffer(
+                dst_rsrc,
+                rows,
+                row_base + static_cast<long long>(row_tile * 16),
+                col_base + static_cast<long long>(col_tile * 16),
+                rows,
+                cols,
+                acc[group],
+                lane);
+        }
+    }
+
+#pragma unroll
+    for (int group = 8; group < 14; ++group) {
+        if (tid < 64u) {
+            hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_radv96_stage(
+                acc[group],
+                group,
+                8,
+                lane,
+                sh_store_radv96);
+        }
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+#pragma unroll
+    for (int group = 8; group < 14; ++group) {
+        if (tid < 64u) {
+            const int row_tile = group & 3;
+            const int col_tile = (group >> 2) & 3;
+            hrx_q6_k_wmma_vk128_load_radv96_stage_store_buffer_w64(
+                dst_rsrc,
+                rows,
+                row_base + static_cast<long long>(row_tile * 16),
+                col_base + static_cast<long long>(col_tile * 16),
+                rows,
+                cols,
+                group,
+                8,
+                lane,
+                sh_store_radv96);
+        }
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+
+#pragma unroll
+    for (int group = 14; group < 20; ++group) {
+        if (tid < 64u) {
+            const int acc_group = group < 16 ? group : group - 8;
+            hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_radv96_stage(
+                acc[acc_group],
+                group,
+                14,
+                lane,
+                sh_store_radv96);
+        }
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+#pragma unroll
+    for (int group = 14; group < 20; ++group) {
+        if (tid < 64u) {
+            if (group < 16) {
+                const int row_tile = group & 3;
+                const int col_tile = (group >> 2) & 3;
+                hrx_q6_k_wmma_vk128_load_radv96_stage_store_buffer_w64(
+                    dst_rsrc,
+                    rows,
+                    row_base + static_cast<long long>(row_tile * 16),
+                    col_base + static_cast<long long>(col_tile * 16),
+                    rows,
+                    cols,
+                    group,
+                    14,
+                    lane,
+                    sh_store_radv96);
+            } else {
+                hrx_q6_k_wmma_vk128_load_radv96_stage_store_sidecar_w64(
+                    dst_rsrc,
+                    rows * cols,
+                    group,
+                    14,
+                    lane,
+                    sh_store_radv96);
+            }
+        }
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+
+#pragma unroll
+    for (int group = 20; group < 24; ++group) {
+        if (tid < 64u) {
+            hrx_q6_k_wmma_vk128_store_acc_f16_row_major_w64_radv96_stage(
+                acc[group - 8],
+                group,
+                20,
+                lane,
+                sh_store_radv96);
+        }
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+#pragma unroll
+    for (int group = 20; group < 24; ++group) {
+        if (tid < 64u) {
+            hrx_q6_k_wmma_vk128_load_radv96_stage_store_sidecar_w64(
+                dst_rsrc,
+                rows * cols,
+                group,
+                20,
+                lane,
+                sh_store_radv96);
+        }
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)\n" ::: "memory");
+    __syncthreads();
+#elif HRX_Q6_K_WMMA_VK128_STORE_STAGE_TYPED_LINEAR
 #pragma unroll
     for (int group = 0; group < 16; ++group) {
         if (tid < 64u) {
