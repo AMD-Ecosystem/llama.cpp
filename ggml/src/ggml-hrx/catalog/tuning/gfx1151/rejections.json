@@ -3,6 +3,16 @@
   "schema": "ggml-hrx-tuning-rejections-v1",
   "rejections": [
     {
+      "id": "q6_k_vk128_b64group_stage_corrected_compile_contract",
+      "date": "2026-06-20",
+      "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk128_padded_w64_b64group_typedstage_f16acc_wg256_f32 and hrx_mul_mat_vec_q6_k_wmma16x16_vk128_padded_w64_b64group_dualstage_f16acc_wg256_f32",
+      "env": "compile-only CMake/Ninja probes; not runtime-selected",
+      "artifact": "cache/hrxv1/gfx1151/q6-vk128-b64group-stage-corrected-static-3ed63ee6f-dirty-20260620-190630/",
+      "static_artifact": "cache/hrxv1/gfx1151/q6-vk128-b64group-stage-corrected-static-3ed63ee6f-dirty-20260620-190630/hsaco-summary.md and compare/*.md",
+      "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk128_padded_w64_b64group_typedstage_wg256.hsaco and mul_mat_vec_q6_k_wmma16_vk128_padded_w64_b64group_dualstage_wg256.hsaco",
+      "reason": "This corrected compile-contract probe fixes the normal non-RING VK128 output branch so STORE_STAGE_TYPED_LINEAR and the new STORE_STAGE_DUAL_HALF path are actually exercised for B64GROUP. The earlier typed-stage artifact is superseded because it had silently used the default output path. Corrected typed-stage is rejected statically: wave64, SGPR=40, VGPR=196, LDS=28672, no spills, 32 WMMA, 64 ds_load_b64, roughly 64 halfword loadbacks, 16 ds_store_b64, 2 ds_store_b16, 64 buffer_store_b32, 220 wait-class ops, and 34 barriers. Dual-stage is the useful bracket because it forces the missing halfword class in the normal VK128 branch: wave64, SGPR=40, VGPR=196, LDS=22528, no spills, 32 WMMA, 64 ds_load_b64, 128 ds_load_u16_d16, 130 ds_store_b16, 64 buffer_store_b32, 204 wait-class ops, and 34 barriers. Reject both before focused correctness or timing. Dual-stage proves inline DS can force the Q6 large halfword LDS surface, but this HIP C++ per-tile staged-drain topology still misses RADV's 192 buffer_store_b32 cooperative writeback, two-barrier schedule, VGPR=192 ceiling, and long outstanding-load issue window."
+    },
+    {
       "id": "q6_k_vk128_b64group_typedstage_compile_contract",
       "date": "2026-06-20",
       "route": "hrx_mul_mat_vec_q6_k_wmma16x16_vk128_padded_w64_b64group_typedstage_f16acc_wg256_f32",
@@ -10,7 +20,7 @@
       "artifact": "cache/hrxv1/gfx1151/q6-vk128-b64group-typedstage-compile-f3cf206e5-dirty-20260620-185939/",
       "static_artifact": "cache/hrxv1/gfx1151/q6-vk128-b64group-typedstage-compile-f3cf206e5-dirty-20260620-185939/hsaco-summary.md and compare-radv.md",
       "compile_artifact": "build/hrx-v1-catalog-gfx1151/ggml/src/ggml-hrx/generated/hsaco/gfx1151/mul_mat_vec_q6_k_wmma16_vk128_padded_w64_b64group_typedstage_wg256.hsaco",
-      "reason": "This compile-contract probe tested the only remaining source-visible low-barrier Q6 VK128 bracket after the static delta matrix: combine B64GROUP fragment loads with the existing typed linear accumulator staging path and explicit raw buffer stores. It built through the normal CMake/Ninja HSACO path and was deliberately not wired into runtime selection. Reject before focused correctness or timing because the emitted HSACO preserves only the B64GROUP side of the RADV contract: wave64, SGPR=40, VGPR=197, LDS=20480, no spills, 32 v_wmma_f16_16x16x16_f16, 64 ds_load_b64, 2 ds_store_b16, zero ds_load_u16_d16, 64 buffer_store_b32, 96 wait-class ops, and 2 barriers. The RADV large Q6 oracle is SGPR=108, VGPR=192, LDS=22528, 128 ds_store_b16, 128 ds_load_u16_d16, 192 buffer_store_b32, and 2 barriers. The useful conclusion is that this macro combination gets optimized/lowered back into the incomplete 64-store shape instead of the desired staged writeback surface; the next Q6 large-route attempt needs a different cooperative writeback or lane-ownership primitive, not another B64GROUP+typedstage wrapper."
+      "reason": "Superseded by q6_k_vk128_b64group_stage_corrected_compile_contract. This original compile-contract probe built through CMake/Ninja, but later inspection found that the normal non-RING VK128 output branch did not honor HRX_Q6_K_WMMA_VK128_STORE_STAGE_TYPED_LINEAR, so this artifact describes the default B64GROUP output path rather than a real typed-stage store path. Keep it only as stale-evidence context; use the corrected artifact for decisions."
     },
     {
       "id": "q8_0_motif192_k2_splitstage_full192_compile_contract",
