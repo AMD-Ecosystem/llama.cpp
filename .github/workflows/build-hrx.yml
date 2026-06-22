@@ -8,7 +8,6 @@ on:
     types: [opened, synchronize, reopened]
     branches:
       - hrx-v2
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -166,3 +165,22 @@ jobs:
           name: hrx-benchmark-results-${{ matrix.name }}
           path: benchmark-results/
           if-no-files-found: error
+
+      # TODO: switch to github.event.pull_request.base.sha, github.event.before is for testing
+      - name: Download previous HRX benchmark results
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PARENT_SHA: ${{ github.event.before || github.event.pull_request.base.sha }}
+        run: |
+          python3 "${DEVWS_DIR}/ci/tools/download-parent-artifact.py" \
+            "hrx-benchmark-results-${{ matrix.name }}" \
+            "${GITHUB_WORKSPACE}/benchmark-results/previous"
+
+      - name: Compare HRX benchmark results
+        run: |
+          python3 "${DEVWS_DIR}/ci/tools/compare-op-perf.py" \
+            "${GITHUB_WORKSPACE}/benchmark-results/previous/sample-mul-mat-f16-cpu-perf.jsonl" \
+            "${GITHUB_WORKSPACE}/benchmark-results/sample-mul-mat-f16-cpu-perf.jsonl" \
+            --max-regression-pct 5 \
+            --require-all-cases \
+            --skip-missing-baseline
