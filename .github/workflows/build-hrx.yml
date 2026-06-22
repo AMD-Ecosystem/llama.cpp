@@ -28,10 +28,11 @@ jobs:
             gpu_target: gfx1151
             runner: linux-gfx1151-gpu-rocm
             rocm_tarball: therock-dist-linux-gfx1151-7.14.0a20260617.tar.gz
-          - name: gfx1201_9070
-            gpu_target: gfx1201
-            runner: linux-gfx120X-gpu-rocm
-            rocm_tarball: therock-dist-linux-gfx120X-all-7.14.0a20260617.tar.gz
+          # Disable gfx1201_9070 build for now, runner is unstable.
+          # - name: gfx1201_9070
+          #   gpu_target: gfx1201
+          #   runner: linux-gfx120X-gpu-rocm
+          #   rocm_tarball: therock-dist-linux-gfx120X-all-7.14.0a20260617.tar.gz
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     defaults:
