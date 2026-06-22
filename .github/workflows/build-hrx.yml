@@ -1,10 +1,13 @@
-name: HRX CI
+name: HRX v2 CI
 
 on:
+  push:
+    branches:
+      - hrx-v2
   pull_request:
     types: [opened, synchronize, reopened]
     branches:
-      - hrx-integration
+      - hrx-v2
 
 permissions:
   contents: read
@@ -15,81 +18,173 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  hrx-build:
-    name: ubuntu-latest
-    runs-on: ubuntu-latest
+  hrx2-build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: gfx1151_strix-halo
+            gpu_target: gfx1151
+            runner: linux-gfx1151-gpu-rocm
+            rocm_tarball: therock-dist-linux-gfx1151-7.14.0a20260617.tar.gz
+          # Disable gfx1201_9070 build for now, runner is unstable.
+          # - name: gfx1201_9070
+          #   gpu_target: gfx1201
+          #   runner: linux-gfx120X-gpu-rocm
+          #   rocm_tarball: therock-dist-linux-gfx120X-all-7.14.0a20260617.tar.gz
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash --noprofile --norc -exo pipefail {0}
+    container:
+      image: ghcr.io/rocm/no_rocm_image_ubuntu24_04@sha256:fba5f55a122dbb15925e98c51fe65bffe88c36e11ebb25b73daf2bea04202dc3
+      # --user 0:0: actions running inside the container need to write to some
+      #             files set up outside the container by the runner agent.  In
+      #             June 2026 some runner agents set those files up with
+      #             permissions for a "tester" user with UID/GID 1001, which
+      #             matches the user in no_rocm_image_ubuntu24_04, and some are
+      #             set up as root; accessing a file owned by root with user
+      #             "tester" gives an EACCES. Running as root is the common
+      #             denominator.
+      # --device kfd/dri: GPU access.
+      options: >-
+        --user 0:0
+        --device /dev/kfd
+        --device /dev/dri
     env:
-      HRX_WORK_DIR: ${{ github.workspace }}
-      # Public location for bench tooling (rsuderman/llamacpp_ci and fork
-      # AaronStGeorge/llamacpp_ci)
-      #TODO: switch to ROCm/llamacpp-hrx-bench once it is open sourced.
-      BENCH_REPOSITORY: AaronStGeorge/llamacpp_ci
-      BENCH_REF: 'main'
-      BENCH_DIR: ${{ github.workspace }}/bench
-      LLAMA_SRC_DIR: ${{ github.workspace }}/llama-src
-      HRX_ARTIFACT_SET: 'core-with-upstream-hip'
+      DEVWS_REPOSITORY: AaronStGeorge/llamacpp-devws
+      DEVWS_REF: ci-scripts
+      DEVWS_DIR: ${{ github.workspace }}/devws-src
+      ROCM_DIR: /work/rocm
+      ROCM_TARBALL_BASE_URL: https://rocm.nightlies.amd.com/tarball-multi-arch
+      ROCM_TARBALL_NAME: ${{ matrix.rocm_tarball }}
+      LLAMACPP_DEVWS_SKIP_VENV: "1"
       CCACHE_COMPILERCHECK: content
+      HSA_FORCE_FINE_GRAIN_PCIE: "1"
 
     steps:
-      - name: Checkout llama.cpp (under test)
+      - name: Checkout dev workspace tooling
         uses: actions/checkout@v6
         with:
-          path: llama-src
+          repository: ${{ env.DEVWS_REPOSITORY }}
+          ref: ${{ env.DEVWS_REF }}
+          path: devws-src
 
-      - name: Checkout bench tooling
+      - name: Checkout llama.cpp under test
         uses: actions/checkout@v6
         with:
-          repository: ${{ env.BENCH_REPOSITORY }}
-          ref: ${{ env.BENCH_REF }}
-          path: bench
+          path: devws-src/sources/llama.cpp
 
-      - name: Install ROCm build dependencies
-        run: "${BENCH_DIR}/scripts/hrx/install-rocm-deps.sh"
+      - name: Checkout HRX System
+        uses: actions/checkout@v6
+        with:
+          repository: ROCm/hrx-system
+          ref: main
+          path: devws-src/sources/hrx-system
+
+      - name: Runner identity
+        env:
+          MATRIX_NAME: ${{ matrix.name }}
+          MATRIX_GPU_TARGET: ${{ matrix.gpu_target }}
+          MATRIX_RUNS_ON: ${{ matrix.runner }}
+        run: "${GITHUB_WORKSPACE}/devws-src/ci/runner-info.sh"
+
+      - name: Install host build dependencies
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential \
+            ca-certificates \
+            ccache \
+            cmake \
+            curl \
+            git \
+            glslc \
+            libvulkan-dev \
+            ninja-build \
+            pkg-config \
+            python3 \
+            tar \
+            xz-utils
+
+      - name: Fetch ROCm nightly tarball
+        run: "${DEVWS_DIR}/ci/fetch-rocm-nightly.sh"
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ubuntu-latest-${{ env.HRX_ARTIFACT_SET }}
+          key: hrx-v2-${{ matrix.name }}
           evict-old-files: 1d
           save: ${{ github.event_name == 'pull_request' }}
 
-      - name: Checkout HRX
-        run: "${BENCH_DIR}/scripts/hrx/checkout-hrx.sh"
-
-      - name: Fetch ROCm assets
-        run: "${BENCH_DIR}/scripts/hrx/fetch-rocm-assets.sh"
-
       - name: Build HRX
-        run: "${BENCH_DIR}/scripts/hrx/build-hrx.sh"
-
-      - name: Validate HRX
-        run: "${BENCH_DIR}/scripts/hrx/validate-hrx.sh"
-
-      - name: Build llama.cpp with HRX
-        run: "${BENCH_DIR}/scripts/hrx/build-llama-hrx.sh"
+        run: |
+          cd "${DEVWS_DIR}"
+          source .envrc
+          python3 skills/bootstrap-hrx-llama-builds/scripts/bootstrap_builds.py \
+            --workspace "${DEVWS_DIR}" \
+            --action check \
+            --action hrx \
+            --action loom \
+            --action rocm-health \
+            --action llama-hrx \
+            --skip-source-branch-check \
+            --gfx-targets auto \
+            --jobs "$(nproc)"
 
       - name: Run sample MUL_MAT correctness config on CPU
         run: |
-          . "${BENCH_DIR}/scripts/hrx/env.sh"
-          "${BENCH_DIR}/tools/run-op-test.py" \
-            --test-backend-ops "${LLAMA_BUILD_DIR}/bin/test-backend-ops" \
-            --test-file "${BENCH_DIR}/benchmark-configs/test/mul_mat_f16.txt" \
+          cd "${DEVWS_DIR}"
+          source .envrc
+          mkdir -p "${GITHUB_WORKSPACE}/benchmark-results"
+          "${DEVWS_DIR}/ci/tools/run-op-test.py" \
+            --test-backend-ops "${DEVWS_DIR}/build/llama-hrx/bin/test-backend-ops" \
+            --test-file "${DEVWS_DIR}/ci/benchmark-configs/test/mul_mat_f16.txt" \
             --op MUL_MAT \
             --backend CPU \
-            --output benchmark-results/sample-mul-mat-f16-cpu-test.jsonl
+            --output "${GITHUB_WORKSPACE}/benchmark-results/sample-mul-mat-f16-cpu-test.jsonl" \
+            --raw-output "${GITHUB_WORKSPACE}/benchmark-results/sample-mul-mat-f16-cpu-test.txt"
 
       - name: Run sample MUL_MAT benchmark config on CPU
+        env:
+          GGML_TEST_BACKEND_OPS_PERF_MIN_US: "2000000"
         run: |
-          . "${BENCH_DIR}/scripts/hrx/env.sh"
-          "${BENCH_DIR}/tools/run-op-perf.py" \
-            --test-backend-ops "${LLAMA_BUILD_DIR}/bin/test-backend-ops" \
-            --test-file "${BENCH_DIR}/benchmark-configs/test/mul_mat_f16.txt" \
+          cd "${DEVWS_DIR}"
+          source .envrc
+          mkdir -p "${GITHUB_WORKSPACE}/benchmark-results"
+          "${DEVWS_DIR}/ci/tools/run-op-perf.py" \
+            --test-backend-ops "${DEVWS_DIR}/build/llama-hrx/bin/test-backend-ops" \
+            --test-file "${DEVWS_DIR}/ci/benchmark-configs/test/mul_mat_f16.txt" \
             --op MUL_MAT \
             --backend CPU \
-            --output benchmark-results/sample-mul-mat-f16-cpu-perf.jsonl
+            --output "${GITHUB_WORKSPACE}/benchmark-results/sample-mul-mat-f16-cpu-perf.jsonl" \
+            --raw-output "${GITHUB_WORKSPACE}/benchmark-results/sample-mul-mat-f16-cpu-perf.txt"
 
-      - name: Upload CPU benchmark results
+      - name: Upload HRX benchmark results
         uses: actions/upload-artifact@v5
         with:
-          name: cpu-benchmark-results
+          name: hrx-benchmark-results-${{ matrix.name }}
           path: benchmark-results/
+          if-no-files-found: error
+
+      # TODO: switch to github.event.pull_request.base.sha, github.event.before is for testing
+      - name: Download previous HRX benchmark results
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PARENT_SHA: ${{ github.event.before || github.event.pull_request.base.sha }}
+        run: |
+          python3 "${DEVWS_DIR}/ci/tools/download-parent-artifact.py" \
+            "hrx-benchmark-results-${{ matrix.name }}" \
+            "${GITHUB_WORKSPACE}/benchmark-results/previous"
+
+      - name: Compare HRX benchmark results
+        run: |
+          python3 "${DEVWS_DIR}/ci/tools/compare-op-perf.py" \
+            "${GITHUB_WORKSPACE}/benchmark-results/previous/sample-mul-mat-f16-cpu-perf.jsonl" \
+            "${GITHUB_WORKSPACE}/benchmark-results/sample-mul-mat-f16-cpu-perf.jsonl" \
+            --max-regression-pct 5 \
+            --min-regression-us 5 \
+            --require-all-cases \
+            --skip-missing-baseline

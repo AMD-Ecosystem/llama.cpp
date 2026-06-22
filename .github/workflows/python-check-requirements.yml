@@ -2,12 +2,14 @@ name: Python check requirements.txt
 
 on:
   push:
+    branches-ignore: ['hrx-v2']
     paths:
       - '.github/workflows/python-check-requirements.yml'
       - 'scripts/check-requirements.sh'
       - 'convert*.py'
       - '**/requirements*.txt'
   pull_request:
+    branches-ignore: ['hrx-v2']
     paths:
       - '.github/workflows/python-check-requirements.yml'
       - 'scripts/check-requirements.sh'

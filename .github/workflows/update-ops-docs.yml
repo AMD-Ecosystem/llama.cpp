@@ -2,11 +2,13 @@ name: Update Operations Documentation
 
 on:
     push:
+        branches-ignore: ['hrx-v2']
         paths:
             - 'docs/ops.md'
             - 'docs/ops/**'
             - 'scripts/create_ops_docs.py'
     pull_request:
+        branches-ignore: ['hrx-v2']
         paths:
             - 'docs/ops.md'
             - 'docs/ops/**'

@@ -20,6 +20,7 @@ on:
 
   pull_request:
     types: [opened, synchronize, reopened]
+    branches-ignore: ['hrx-v2']
     paths: [
       '.github/workflows/build-apple.yml',
       'ggml/src/ggml-metal/**'

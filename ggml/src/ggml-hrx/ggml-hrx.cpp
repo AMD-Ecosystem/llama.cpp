@@ -2521,16 +2521,16 @@ static bool ggml_backend_hrx_load_catalog_provider(
                         executable, export_ordinal, &export_info)) &&
                     export_info.binding_count == entry->binding_count &&
                     export_info.parameter_count == entry->parameter_count &&
-                    export_info.constant_count * sizeof(uint32_t) == entry->constants_size;
+                    export_info.constant_byte_length == entry->constants_size;
     if (!ok) {
         GGML_LOG_WARN(
             "%s: HRX catalog kernel %s has unsupported ABI "
-            "(bindings=%u expected=%u constants=%u constants_size=%u parameters=%u expected_parameters=%u workgroup=%ux%ux%u)\n",
+            "(bindings=%u expected=%u constant_bytes=%u expected_constant_bytes=%u parameters=%u expected_parameters=%u workgroup=%ux%ux%u)\n",
             __func__,
             entry->name,
             export_info.binding_count,
             entry->binding_count,
-            export_info.constant_count,
+            export_info.constant_byte_length,
             entry->constants_size,
             export_info.parameter_count,
             entry->parameter_count,

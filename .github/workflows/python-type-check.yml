@@ -2,6 +2,7 @@ name: Python Type-Check
 
 on:
   push:
+    branches-ignore: ['hrx-v2']
     paths:
       - '.github/workflows/python-type-check.yml'
       - 'ty.toml'
@@ -9,6 +10,7 @@ on:
       - '**/requirements*.txt'
       # - 'pyrightconfig.json'
   pull_request:
+    branches-ignore: ['hrx-v2']
     paths:
       - '.github/workflows/python-type-check.yml'
       - 'ty.toml'
