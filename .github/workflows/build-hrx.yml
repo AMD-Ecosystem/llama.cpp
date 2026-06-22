@@ -148,6 +148,8 @@ jobs:
             --raw-output "${GITHUB_WORKSPACE}/benchmark-results/sample-mul-mat-f16-cpu-test.txt"
 
       - name: Run sample MUL_MAT benchmark config on CPU
+        env:
+          GGML_TEST_BACKEND_OPS_PERF_MIN_US: "2000000"
         run: |
           cd "${DEVWS_DIR}"
           source .envrc
@@ -183,5 +185,6 @@ jobs:
             "${GITHUB_WORKSPACE}/benchmark-results/previous/sample-mul-mat-f16-cpu-perf.jsonl" \
             "${GITHUB_WORKSPACE}/benchmark-results/sample-mul-mat-f16-cpu-perf.jsonl" \
             --max-regression-pct 5 \
+            --min-regression-us 5 \
             --require-all-cases \
             --skip-missing-baseline
