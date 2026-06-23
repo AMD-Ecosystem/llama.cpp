@@ -1213,6 +1213,11 @@ void ggml_cuda_mul_mat_vec_q(
 
     const int64_t ids_stride = ids ? ids->nb[1] / ggml_type_size(ids->type) : 0;
 
+    // Log kernel dimensions for profiling analysis
+    // Matrix-vector operation: y[M] = A[M,K] × x[K] where M=ne00, K=ne10
+    fprintf(stderr, "[MUL_MAT_VEC_Q] M=%ld K=%ld ne00=%ld ne01=%ld ne10=%ld ne11=%ld ne02=%ld ne12=%ld ne03=%ld ne13=%ld type=%d\n",
+            ne00, ne10, ne00, ne01, ne10, ne11, ne02, ne12, ne03, ne13, src0->type);
+
     mul_mat_vec_q_switch_type(
         src0->data, src0->type, src1_q8_1.get(), ids_d, fusion_local, dst_d, ne00,
         ne01,              ncols_dst,     s01, stride_col_y,     stride_col_dst,
