@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 
 using namespace ggml_cuda_mma;
 
@@ -277,8 +278,26 @@ static constexpr __host__ __device__ int mmq_get_mma_tile_x_k(ggml_type type) {
 #define MMQ_TILE_Y_K     (MMQ_TILE_NE_K + MMQ_TILE_NE_K / QI8_1)
 #define MMQ_TILE_Y_FP4_K MMQ_TILE_Y_K
 
+static int mmq_get_tile_y_k_padded_host(const int mmq_x, const int cc, const int warp_size, const int nwarps) {
+    const int pad = GGML_CUDA_CC_IS_RDNA3_5(cc) ? 2*nwarps*warp_size : nwarps*warp_size;
+    return GGML_PAD(mmq_x*MMQ_TILE_Y_K, pad);
+}
+
+#if defined(RDNA3_5)
+static constexpr __device__ int mmq_get_tile_y_k_padded_device(const int mmq_x, const int nwarps, const int warp_size) {
+    return GGML_PAD(mmq_x*MMQ_TILE_Y_K, 2*nwarps*warp_size);
+}
+#else
+static constexpr __device__ int mmq_get_tile_y_k_padded_device(const int mmq_x, const int nwarps, const int warp_size) {
+    return GGML_PAD(mmq_x*MMQ_TILE_Y_K, nwarps*warp_size);
+}
+#endif // RDNA3_5
+
 static int mmq_get_granularity_host(const int mmq_x, const int cc) {
     if (amd_mfma_available(cc) || amd_wmma_available(cc)) {
+        if (GGML_CUDA_CC_IS_RDNA3_5(cc) && mmq_x >= 64) {
+            return 32;
+        }
         return mmq_x >= 128 ? 32 : 16;
     } else if (turing_mma_available(cc) && mmq_x >= 48) {
         return 16;
@@ -289,7 +308,11 @@ static int mmq_get_granularity_host(const int mmq_x, const int cc) {
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
 static constexpr __device__ int mmq_get_granularity_device(const int mmq_x) {
+#if defined(RDNA3_5)
+    return mmq_x >= 64 ? 32 : 16;
+#else
     return mmq_x >= 128 ? 32 : 16;
+#endif // RDNA3_5
 }
 #elif defined(TURING_MMA_AVAILABLE)
 static constexpr __device__ int mmq_get_granularity_device(const int mmq_x) {
@@ -3455,6 +3478,40 @@ struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_IQ4_XS> {
     static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q8_0_q8_1_dp4a<mmq_x, mmq_y>;
 };
 
+#if defined(RDNA3_5)
+// Software-pipeline activation tile loads: issue global loads into registers, run WMMA,
+// then store to LDS. Overlaps memory latency with vec_dot on gfx115x (no ISA prefetch).
+template <int mmq_x, int nwarps, int warp_size, int nchunks>
+static __device__ __forceinline__ void mmq_tile_y_load_global(
+        int * __restrict__ tile_y, const int * __restrict__ by) {
+#pragma unroll
+    for (int c = 0; c < nchunks; ++c) {
+        const int l = c*(nwarps*warp_size) + threadIdx.y*warp_size + threadIdx.x;
+        tile_y[l] = by[l];
+    }
+}
+
+template <int nwarps, int warp_size, int nchunks>
+static __device__ __forceinline__ void mmq_tile_y_load_global_to_regs(
+        const int * __restrict__ by, int (&cache)[nchunks]) {
+#pragma unroll
+    for (int c = 0; c < nchunks; ++c) {
+        const int l = c*(nwarps*warp_size) + threadIdx.y*warp_size + threadIdx.x;
+        cache[c] = by[l];
+    }
+}
+
+template <int nwarps, int warp_size, int nchunks>
+static __device__ __forceinline__ void mmq_tile_y_store_regs(
+        int * __restrict__ tile_y, const int (&cache)[nchunks]) {
+#pragma unroll
+    for (int c = 0; c < nchunks; ++c) {
+        const int l = c*(nwarps*warp_size) + threadIdx.y*warp_size + threadIdx.x;
+        tile_y[l] = cache[c];
+    }
+}
+#endif // RDNA3_5
+
 template <ggml_type type, int mmq_x, bool need_check, bool fixup>
 static __device__ __forceinline__ void mul_mat_q_process_tile(
         const char * __restrict__ x, const int offset_x, const int * __restrict__ y,
@@ -3470,7 +3527,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 
     extern __shared__ int data_mul_mat_q[];
     int * tile_y = data_mul_mat_q + mmq_x;
-    int * tile_x = tile_y + GGML_PAD(mmq_x*MMQ_TILE_Y_K, nwarps*warp_size);
+    int * tile_x = tile_y + mmq_get_tile_y_k_padded_device(mmq_x, nwarps, warp_size);
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
     constexpr vec_dot_mmq_t    vec_dot    = mmq_type_traits<mmq_x, mmq_y, need_check, type>::vec_dot_mma;
@@ -3494,39 +3551,93 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 
     constexpr int sz = sizeof(block_q8_1_mmq) / sizeof(int);
 
-    for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
-        load_tiles(x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
-        {
-            const int * by0 = y + ncols_y * (kb0 * qk / ne_block) * sz;
-#pragma unroll
-            for (int l0 = 0; l0 < mmq_x * MMQ_TILE_Y_K; l0 += nwarps * warp_size) {
-                int l = l0 + threadIdx.y*warp_size + threadIdx.x;
+#if defined(RDNA3_5)
+    constexpr int tile_y_elems       = mmq_x*MMQ_TILE_Y_K;
+    constexpr int tile_y_load_stride   = nwarps*warp_size;
+    if constexpr (mmq_x <= 64 && tile_y_elems % tile_y_load_stride == 0) {
+        constexpr int tile_y_nchunks = tile_y_elems/tile_y_load_stride;
 
-                tile_y[l] = by0[l];
+        int  y0_next_cache[tile_y_nchunks];
+        bool have_y0_prefetch = false;
+
+        for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
+            load_tiles(x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
+
+            const int yk = kb0 * qk / ne_block;
+            const int * by0 = y + ncols_y * yk * sz;
+            const int * by1 = y + ncols_y * (yk + 1) * sz;
+
+            if (have_y0_prefetch) {
+                mmq_tile_y_store_regs<nwarps, warp_size, tile_y_nchunks>(tile_y, y0_next_cache);
+                have_y0_prefetch = false;
+            } else {
+                mmq_tile_y_load_global<mmq_x, nwarps, warp_size, tile_y_nchunks>(tile_y, by0);
             }
-        }
 
-        __syncthreads();
+            __syncthreads();
 
-        vec_dot(tile_x, tile_y, sum, 0);
+            int y1_cache[tile_y_nchunks];
+            mmq_tile_y_load_global_to_regs<nwarps, warp_size, tile_y_nchunks>(by1, y1_cache);
 
-        __syncthreads();
+            vec_dot(tile_x, tile_y, sum, 0);
 
-        {
-            const int * by0 = y + ncols_y * ((kb0 * qk / ne_block) * sz + sz);
-#pragma unroll
-            for (int l0 = 0; l0 < mmq_x * MMQ_TILE_Y_K; l0 += nwarps * warp_size) {
-                int l = l0 + threadIdx.y*warp_size + threadIdx.x;
+            __syncthreads();
 
-                tile_y[l] = by0[l];
+            mmq_tile_y_store_regs<nwarps, warp_size, tile_y_nchunks>(tile_y, y1_cache);
+
+            __syncthreads();
+
+            const int kb0_next = kb0 + blocks_per_iter;
+            if (kb0_next < kb0_stop) {
+                const int * by0_next = y + ncols_y * (kb0_next * qk / ne_block) * sz;
+                mmq_tile_y_load_global_to_regs<nwarps, warp_size, tile_y_nchunks>(by0_next, y0_next_cache);
+                have_y0_prefetch = true;
             }
+
+            vec_dot(tile_x, tile_y, sum, MMQ_TILE_NE_K);
+
+            __syncthreads();
         }
+    } else
+#endif // RDNA3_5
+    {
+        for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
+            load_tiles(x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
 
-        __syncthreads();
+            const int yk = kb0 * qk / ne_block;
+            const int * by0 = y + ncols_y * yk * sz;
+            const int * by1 = y + ncols_y * (yk + 1) * sz;
 
-        vec_dot(tile_x, tile_y, sum, MMQ_TILE_NE_K);
+            {
+#pragma unroll
+                for (int l0 = 0; l0 < mmq_x * MMQ_TILE_Y_K; l0 += nwarps * warp_size) {
+                    int l = l0 + threadIdx.y*warp_size + threadIdx.x;
 
-        __syncthreads();
+                    tile_y[l] = by0[l];
+                }
+            }
+
+            __syncthreads();
+
+            vec_dot(tile_x, tile_y, sum, 0);
+
+            __syncthreads();
+
+            {
+#pragma unroll
+                for (int l0 = 0; l0 < mmq_x * MMQ_TILE_Y_K; l0 += nwarps * warp_size) {
+                    int l = l0 + threadIdx.y*warp_size + threadIdx.x;
+
+                    tile_y[l] = by1[l];
+                }
+            }
+
+            __syncthreads();
+
+            vec_dot(tile_x, tile_y, sum, MMQ_TILE_NE_K);
+
+            __syncthreads();
+        }
     }
 
     if (fixup) {
@@ -3948,7 +4059,10 @@ static size_t mmq_get_nbytes_shared(const int mmq_x, const int mmq_y, const int 
     const size_t nbs_ids = mmq_x*sizeof(int);
     const size_t nbs_x = (turing_mma_available(cc) || amd_mfma_available(cc) || amd_wmma_available(cc)) ? mmq_y*mmq_tile_x_k*sizeof(int) : txs.qs*sizeof(int) + txs.dm*sizeof(half2) + txs.sc*sizeof(int);
     const size_t nbs_y = mmq_x * (sizeof(block_q8_1_mmq));
-    return nbs_ids + nbs_x + GGML_PAD(nbs_y, nwarps*warp_size*sizeof(int));
+    const int tile_y_k_padded = mmq_get_tile_y_k_padded_host(mmq_x, cc, warp_size, nwarps);
+    const size_t nbs_y_padded = std::max(nbs_y, (size_t) tile_y_k_padded*sizeof(int));
+    const int pad = GGML_CUDA_CC_IS_RDNA3_5(cc) ? 2*nwarps*warp_size : nwarps*warp_size;
+    return nbs_ids + nbs_x + GGML_PAD(nbs_y_padded, pad*sizeof(int));
 }
 
 template <ggml_type type, int mmq_x>
@@ -4140,6 +4254,19 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
             }
             if (mmq_x_lds > 0) {
                 mmq_x_best = mmq_x_lds;
+            }
+        }
+    }
+#endif // GGML_USE_HIP
+
+#if defined(GGML_USE_HIP)
+    if (GGML_CUDA_CC_IS_RDNA3_5(cc)) {
+        if (const char * force = getenv("MMQ_FORCE_MMQ_X")) {
+            const int mmq_x_force = atoi(force);
+            if (mmq_x_force >= 8 && mmq_x_force <= mmq_x_max &&
+                mmq_x_force % mmq_get_granularity_host(mmq_x_force, cc) == 0 &&
+                mmq_get_nbytes_shared<type>(mmq_x_force, mmq_y, cc, warp_size, nwarps) <= smpbo) {
+                mmq_x_best = mmq_x_force;
             }
         }
     }
