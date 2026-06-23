@@ -6,6 +6,8 @@
 
 #include <climits>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 
 using namespace ggml_cuda_mma;
 
@@ -3957,6 +3959,7 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     const int warp_size = ggml_cuda_info().devices[id].warp_size;
     const int nwarps = mmq_get_nwarps_host(cc, warp_size);
     const int mmq_y = get_mmq_y_host(cc);
+    const size_t smpbo = ggml_cuda_info().devices[id].smpbo;
 
     const dim3 block_dims(warp_size, nwarps, 1);
 
@@ -3969,6 +3972,19 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     const int ntx  = (args.ncols_max + mmq_x - 1) / mmq_x;
     const int ntzw = args.nchannels_y * args.nsamples_y;
     const dim3 block_nums_xy_tiling(nty, ntx, ntzw);
+
+    const auto log_launch_config = [&](const dim3 & grid, const bool need_check, const char * path) {
+        fprintf(stderr,
+            "[MUL_MAT_Q_LAUNCH] type=%d mmq_x=%d mmq_y=%d nwarps=%d warp_size=%d "
+            "nbytes_shared=%d smpbo=%zu grid=(%u,%u,%u) block=(%u,%u,%u) "
+            "ntx=%d nty=%d ntzw=%d ncols_max=%ld nrows_x=%ld use_stream_k=%d need_check=%d path=%s\n",
+            type, mmq_x, mmq_y, nwarps, warp_size,
+            nbytes_shared, smpbo,
+            grid.x, grid.y, grid.z,
+            block_dims.x, block_dims.y, block_dims.z,
+            ntx, nty, ntzw, args.ncols_max, args.nrows_x,
+            args.use_stream_k ? 1 : 0, need_check ? 1 : 0, path);
+    };
 
     GGML_ASSERT(args.nchannels_y % args.nchannels_x == 0);
     GGML_ASSERT(args.nsamples_y  % args.nsamples_x  == 0);
@@ -3985,6 +4001,7 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     if (!args.use_stream_k) {
         if (args.nrows_x % mmq_y == 0) {
             constexpr bool need_check = false;
+            log_launch_config(block_nums_xy_tiling, need_check, "tiling");
             mul_mat_q<type, mmq_x, need_check><<<block_nums_xy_tiling, block_dims, nbytes_shared, stream>>>
                 (args.x, args.y, args.ids_dst, args.expert_bounds, args.dst, nullptr,
                  blocks_per_ne00_fd, args.nrows_x, args.ncols_dst, args.stride_row_x, args.ncols_y, args.nrows_dst,
@@ -3993,6 +4010,7 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
                  ntx_fd);
         } else {
             constexpr bool need_check = true;
+            log_launch_config(block_nums_xy_tiling, need_check, "tiling");
             mul_mat_q<type, mmq_x, need_check><<<block_nums_xy_tiling, block_dims, nbytes_shared, stream>>>
                 (args.x, args.y, args.ids_dst, args.expert_bounds, args.dst, nullptr,
                  blocks_per_ne00_fd, args.nrows_x, args.ncols_dst, args.stride_row_x, args.ncols_y, args.nrows_dst,
@@ -4025,6 +4043,7 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
 
     if (args.nrows_x % mmq_y == 0) {
         constexpr bool need_check = false;
+        log_launch_config(block_nums_stream_k, need_check, "stream_k");
         mul_mat_q<type, mmq_x, need_check><<<block_nums_stream_k, block_dims, nbytes_shared, stream>>>
             (args.x, args.y, args.ids_dst, args.expert_bounds, args.dst, tmp_fixup.ptr,
              blocks_per_ne00_fd, args.nrows_x, args.ncols_dst, args.stride_row_x, args.ncols_y, args.nrows_dst,
@@ -4043,6 +4062,7 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
              ntx_fd);
     } else {
         constexpr bool need_check = true;
+        log_launch_config(block_nums_stream_k, need_check, "stream_k");
         mul_mat_q<type, mmq_x, need_check><<<block_nums_stream_k, block_dims, nbytes_shared, stream>>>
             (args.x, args.y, args.ids_dst, args.expert_bounds, args.dst, tmp_fixup.ptr,
              blocks_per_ne00_fd, args.nrows_x, args.ncols_dst, args.stride_row_x, args.ncols_y, args.nrows_dst,
@@ -4090,6 +4110,40 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
             ntiles_x_best = ntiles_x;
         }
     }
+
+#if defined(GGML_USE_HIP)
+    // RDNA3.5 (gfx115x): mmq_x=128 uses ~59% of LDS/CU → 1 WG/CU. Pick the smallest
+    // mmq_x with nbytes_shared <= smpbo/2 (2 WGs/CU) without doubling M-tile count.
+    if (GGML_CUDA_CC_IS_RDNA3_5(cc) && mmq_x_best > 0) {
+        const size_t lds_dual_wg = smpbo / 2;
+        const size_t nbytes_best = mmq_get_nbytes_shared<type>(mmq_x_best, mmq_y, cc, warp_size, nwarps);
+        if (nbytes_best > lds_dual_wg) {
+            int mmq_x_lds = 0;
+            size_t nbytes_lds_min = SIZE_MAX;
+            for (int mmq_x = 8; mmq_x <= mmq_x_max; mmq_x += 8) {
+                const int granularity = mmq_get_granularity_host(mmq_x, cc);
+                if (mmq_x % granularity != 0) {
+                    continue;
+                }
+                const size_t nbytes = mmq_get_nbytes_shared<type>(mmq_x, mmq_y, cc, warp_size, nwarps);
+                if (nbytes > smpbo || nbytes > lds_dual_wg) {
+                    continue;
+                }
+                const int ntiles_x = (args.ncols_max + mmq_x - 1) / mmq_x;
+                if (ntiles_x > ntiles_x_best * 2) {
+                    continue;
+                }
+                if (nbytes < nbytes_lds_min) {
+                    mmq_x_lds = mmq_x;
+                    nbytes_lds_min = nbytes;
+                }
+            }
+            if (mmq_x_lds > 0) {
+                mmq_x_best = mmq_x_lds;
+            }
+        }
+    }
+#endif // GGML_USE_HIP
 
     switch (mmq_x_best) {
         case   8:
