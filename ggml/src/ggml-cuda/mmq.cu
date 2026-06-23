@@ -159,9 +159,10 @@ void ggml_cuda_mul_mat_q(
             use_stream_k, ne1};
 
         // Log kernel dimensions for profiling analysis
-        // Matrix operation: C[M,N] = A[M,K] × B[K,N] where M=ne1, N=ne00, K=ne10
+        // dst[ne01, ne11] = src0[ne00, ne01] @ src1[ne10, ne11]; ne00==ne10 (K)
+        // GEMM C[M,N] = W[N,K] @ X[K,M]: M=ne11, N=ne01, K=ne00
         fprintf(stderr, "[MUL_MAT_Q] M=%ld N=%ld K=%ld ne00=%ld ne01=%ld ne1=%ld ne11=%ld ne02=%ld ne12=%ld ne03=%ld ne13=%ld type=%d\n",
-                ne1, ne00, ne10, ne00, ne01, ne1, ne11, ne02, ne12, ne03, ne13, src0->type);
+                ne11, ne01, ne00, ne00, ne01, ne1, ne11, ne02, ne12, ne03, ne13, src0->type);
 
         ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
         return;
@@ -227,7 +228,7 @@ void ggml_cuda_mul_mat_q(
 
     // Log kernel dimensions for profiling analysis (batched/MoE path)
     fprintf(stderr, "[MUL_MAT_Q_MoE] M=%ld N=%ld K=%ld ne_get_rows=%ld ne00=%ld ne01=%ld ne02=%ld ne12=%ld type=%d\n",
-            ne_get_rows, ne00, ne10, ne_get_rows, ne00, ne01, ne02, ne12, src0->type);
+            ne11_flat, ne01, ne00, ne_get_rows, ne00, ne01, ne02, ne12, src0->type);
 
     ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
 }
