@@ -1,6 +1,76 @@
 message(STATUS "Using HRX backend")
 
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
 find_package(hrx CONFIG REQUIRED)
+find_package(loomc CONFIG REQUIRED)
+
+set(GGML_HRX_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set(GGML_HRX_CATALOG_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/catalog")
+set(GGML_HRX_ASSEMBLED_CATALOG "${GGML_HRX_GENERATED_DIR}/catalog.json")
+set(GGML_HRX_EMBEDDED_CPP "${GGML_HRX_GENERATED_DIR}/hrx_embedded_catalog.cpp")
+set(GGML_HRX_EMBEDDED_H "${GGML_HRX_GENERATED_DIR}/hrx_embedded_catalog.h")
+file(GLOB_RECURSE GGML_HRX_CATALOG_PARTS CONFIGURE_DEPENDS
+    "${GGML_HRX_CATALOG_SOURCE_DIR}/*.json"
+)
+
+get_target_property(_GGML_HRX_HRX_LOCATION hrx::hrx IMPORTED_LOCATION_RELWITHDEBINFO)
+if(NOT _GGML_HRX_HRX_LOCATION)
+    get_target_property(_GGML_HRX_HRX_LOCATION hrx::hrx IMPORTED_LOCATION_RELEASE)
+endif()
+if(NOT _GGML_HRX_HRX_LOCATION)
+    get_target_property(_GGML_HRX_HRX_LOCATION hrx::hrx IMPORTED_LOCATION)
+endif()
+if(_GGML_HRX_HRX_LOCATION)
+    get_filename_component(_GGML_HRX_HRX_PREFIX "${_GGML_HRX_HRX_LOCATION}/../.." ABSOLUTE)
+endif()
+if(hrx_DIR)
+    get_filename_component(_GGML_HRX_HRX_DIR_PREFIX "${hrx_DIR}/../../../.." ABSOLUTE)
+endif()
+find_program(GGML_HRX_LOOM_LINK_EXECUTABLE
+    NAMES loom-link
+    HINTS
+        "${_GGML_HRX_HRX_PREFIX}/bin"
+        "${_GGML_HRX_HRX_DIR_PREFIX}/bin"
+    REQUIRED
+)
+
+add_custom_command(
+    OUTPUT ${GGML_HRX_ASSEMBLED_CATALOG}
+    COMMAND
+        ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tools/assemble_hrx_catalog.py
+        --catalog-dir ${GGML_HRX_CATALOG_SOURCE_DIR}
+        --out ${GGML_HRX_ASSEMBLED_CATALOG}
+    DEPENDS
+        ${GGML_HRX_CATALOG_PARTS}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tools/assemble_hrx_catalog.py
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT
+        ${GGML_HRX_EMBEDDED_CPP}
+        ${GGML_HRX_EMBEDDED_H}
+    COMMAND
+        ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tools/validate_hrx_catalog.py
+        --catalog ${GGML_HRX_ASSEMBLED_CATALOG}
+        --source-root ${CMAKE_CURRENT_SOURCE_DIR}
+        --artifact-root ${GGML_HRX_GENERATED_DIR}
+    COMMAND
+        ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_hrx_embedded.py
+        --catalog ${GGML_HRX_ASSEMBLED_CATALOG}
+        --source-root ${CMAKE_CURRENT_SOURCE_DIR}
+        --artifact-root ${GGML_HRX_GENERATED_DIR}
+        --out-cpp ${GGML_HRX_EMBEDDED_CPP}
+        --out-h ${GGML_HRX_EMBEDDED_H}
+    DEPENDS
+        ${GGML_HRX_ASSEMBLED_CATALOG}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tools/validate_hrx_catalog.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_hrx_embedded.py
+    VERBATIM
+)
 
 option(GGML_HRX_EMBED_ROCM_LIBS "Bundle HRX/ROCm runtime libraries next to the HRX backend" OFF)
 set(GGML_HRX_EMBED_LIBRARY_DIRS "" CACHE STRING "Library directories to scan when GGML_HRX_EMBED_ROCM_LIBS=ON")
@@ -11,10 +81,20 @@ endif()
 
 ggml_add_backend_library(ggml-hrx
                          ggml-hrx.cpp
+                         ggml-hrx-catalog.cpp
+                         ${GGML_HRX_EMBEDDED_CPP}
+                         loom-jit/ggml-hrx-loom-jit.cpp
                          ../../include/ggml-hrx.h
                         )
 
-target_link_libraries(ggml-hrx PRIVATE hrx::hrx)
+target_link_libraries(ggml-hrx PRIVATE
+    hrx::hrx
+    loomc::loomc
+)
+target_include_directories(ggml-hrx PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../../vendor
+    ${GGML_HRX_GENERATED_DIR}
+)
 
 if (GGML_HRX_EMBED_ROCM_LIBS)
     if (NOT CMAKE_SYSTEM_NAME MATCHES "Linux")
