@@ -2511,13 +2511,22 @@ static __device__ __forceinline__ void vec_dot_q4_K_q8_1_mma(
 
 #pragma unroll
             for (int n = 0; n < ntx; ++n) {
+                float2 scl[tile_C::ne];
+
+#pragma unroll
+                for (int l = 0; l < tile_C::ne; ++l) {
+                    scl[l].x = dmA[n][l].x*dsB.x;
+                    scl[l].y = dmA[n][l].y*dsB.y;
+                }
+
                 tile_C C;
                 mma(C, A[n], B);
 
 #pragma unroll
                 for (int l = 0; l < tile_C::ne; ++l) {
-                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += dmA[n][l].x*dsB.x*C.x[l];
-                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += dmA[n][l].y*dsB.y;
+                    const int si = (j0/tile_C::J + n)*tile_C::ne + l;
+                    sum[si] += scl[l].x*C.x[l];
+                    sum[si] += scl[l].y;
                 }
             }
         }
