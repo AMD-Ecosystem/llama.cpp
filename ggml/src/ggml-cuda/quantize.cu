@@ -401,9 +401,11 @@ void quantize_mmq_q8_1_cuda(
     const dim3 num_blocks(ne1, block_num_y, ne2*ne3);
     const dim3 block_size(CUDA_QUANTIZE_BLOCK_SIZE_MMQ, 1, 1);
 
-    // Log kernel dimensions for profiling analysis
-    fprintf(stderr, "[QUANTIZE_MMQ_Q8_1] ne00=%ld ne0=%ld ne1=%ld ne2=%ld ne3=%ld grid=(%u,%u,%u) type=%d\n",
-            ne00, ne0, ne1, ne2, ne3, num_blocks.x, num_blocks.y, num_blocks.z, type_src0);
+    // Log kernel dimensions for profiling analysis (GGML_CUDA_MM_LOG=1).
+    if (ggml_cuda_mm_log_enabled()) {
+        fprintf(stderr, "[QUANTIZE_MMQ_Q8_1] ne00=%ld ne0=%ld ne1=%ld ne2=%ld ne3=%ld grid=(%u,%u,%u) type=%d\n",
+                ne00, ne0, ne1, ne2, ne3, num_blocks.x, num_blocks.y, num_blocks.z, type_src0);
+    }
 
     switch (mmq_get_q8_1_ds_layout(type_src0)) {
         case MMQ_Q8_1_DS_LAYOUT_D4:

@@ -1639,3 +1639,12 @@ static __inline__ void ggml_cuda_kernel_launch(Kernel kernel, const ggml_cuda_ke
     CUDA_CHECK(cudaGetLastError());
 }
 
+// Opt-in stderr logging for MMQ/MMVQ kernel dimensions (set GGML_CUDA_MM_LOG=1).
+static inline bool ggml_cuda_mm_log_enabled() {
+    static int enabled = -1;
+    if (enabled < 0) {
+        enabled = getenv("GGML_CUDA_MM_LOG") ? 1 : 0;
+    }
+    return enabled;
+}
+

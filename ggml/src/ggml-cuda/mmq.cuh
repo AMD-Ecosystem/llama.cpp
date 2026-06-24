@@ -4463,6 +4463,9 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     const dim3 block_nums_xy_tiling(nty, ntx, ntzw);
 
     const auto log_launch_config = [&](const dim3 & grid, const bool need_check, const char * path) {
+        if (!ggml_cuda_mm_log_enabled()) {
+            return;
+        }
         fprintf(stderr,
             "[MUL_MAT_Q_LAUNCH] type=%d mmq_x=%d mmq_y=%d nwarps=%d warp_size=%d "
             "nbytes_shared=%d smpbo=%zu grid=(%u,%u,%u) block=(%u,%u,%u) "
