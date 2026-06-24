@@ -40,11 +40,25 @@ static __device__ __forceinline__ void mmq_profile_phase_begin(uint64_t * const 
     t0 = clock64();
 }
 
+// Safe delta for clock64(): unsigned (t1 - t0) wraps to ~2^64 when t1 < t0 (non-monotonic
+// timestamp across __syncthreads / wave scheduling). Discard small backward glitches; keep
+// genuine 64-bit counter wrap (t0 near UINT64_MAX, t1 small).
+static __device__ __forceinline__ uint64_t mmq_profile_phase_cycles(const uint64_t t0, const uint64_t t1) {
+    if (t1 >= t0) {
+        return t1 - t0;
+    }
+    const uint64_t backward = t0 - t1;
+    if (backward > (UINT64_MAX / 2)) {
+        return t1 - t0; // unsigned wrap
+    }
+    return 0;
+}
+
 static __device__ __forceinline__ void mmq_profile_phase_end(uint64_t * const profile, const uint64_t t0, const int phase) {
     if (!mmq_profile_want_sample(profile)) {
         return;
     }
-    profile[phase] += clock64() - t0;
+    profile[phase] += mmq_profile_phase_cycles(t0, clock64());
 }
 
 static bool mmq_profile_phases_enabled() {
@@ -86,7 +100,8 @@ struct mmq_profile_guard {
         uint64_t h[MMQ_PROFILE_N] = {};
         CUDA_CHECK(cudaMemcpy(h, buf.get(), sizeof(h), cudaMemcpyDeviceToHost));
         const uint64_t total = h[MMQ_PROFILE_LOAD_TILES] + h[MMQ_PROFILE_Y_ACT] + h[MMQ_PROFILE_VEC_DOT];
-        if (total > 0) {
+        // Skip corrupt rows (overflow / legacy bad deltas) — see mmq_profile_phase_cycles.
+        if (total > 0 && total < 5000000000ULL) {
             fprintf(stderr,
                 "[MMQ_PROFILE] type=%d mmq_x=%d nrows_x=%ld ncols_max=%ld "
                 "load_tiles=%.1f%% y_act=%.1f%% vec_dot=%.1f%% "
