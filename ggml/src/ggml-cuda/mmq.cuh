@@ -2233,6 +2233,11 @@ static __device__ __forceinline__ int unpack_scales_q45_K(const int * scales, co
            ((scales[ksc/2]              >> (2 * (ksc % 2)))       & 0x30303030);  // upper 2 bits
 }
 
+// LDS int offset for pseudo-q8_1 qs within one weight row (matches Q4_1 / WMMA ldmatrix layout).
+static __device__ __forceinline__ int mmq_q4_K_qs_lds_k(const int txi, const int nibble) {
+    return ((txi >> 3) << 4) + (txi & 7) + (nibble << 3);
+}
+
 #if defined(RDNA3_5)
 // gfx115x mmq_y=64: 128 threads map 2:1 to rows for scale/dm prep (no warp divergence).
 template <int mmq_y, bool need_check>
@@ -2269,6 +2274,35 @@ static __device__ __forceinline__ void load_tiles_q4_K_dm_rdna35(
         x_dm[i*MMQ_MMA_TILE_X_K_Q8_1 + sizeof(int)*dm_ksc + l] = dm*make_half2(sc8[l], m8[l]);
     }
 }
+
+// gfx115x WMMA: one warp per row, coalesced qs global load, nibble expand to ldmatrix-ready LDS.
+template <int mmq_y, bool need_check>
+static __device__ __forceinline__ void load_tiles_q4_K_qs_wmma_rdna35(
+        const char * __restrict__ x, int * __restrict__ x_qs, const int kbx0, const int i_max, const int stride) {
+    constexpr int nwarps      = mmq_get_nwarps_device();
+    constexpr int warp_size   = ggml_cuda_get_physical_warp_size();
+    constexpr int qs_per_row  = MMQ_ITER_K / (4 * QR4_K); // 32 ints per block_q4_K::qs
+    static_assert(qs_per_row == 32, "bad Q4_K qs_per_row");
+    constexpr int nrows       = warp_size / qs_per_row;
+    static_assert(nrows == 1, "Q4_K RDNA3.5 WMMA qs path expects one row per warp");
+
+#pragma unroll
+    for (int i0 = 0; i0 < mmq_y; i0 += nrows*nwarps) {
+        int i = i0 + threadIdx.y;
+
+        if (need_check) {
+            i = min(i, i_max);
+        }
+
+        const block_q4_K * bxi = (const block_q4_K *) x + kbx0 + i*stride;
+        const int qs0 = ((const int *) bxi->qs)[threadIdx.x];
+
+        int * row_qs = x_qs + i*MMQ_MMA_TILE_X_K_Q8_1;
+        const int kqs = mmq_q4_K_qs_lds_k(threadIdx.x, 0);
+        row_qs[kqs]    = qs0 & 0x0F0F0F0F;
+        row_qs[kqs+8]  = (qs0 >> 4) & 0x0F0F0F0F;
+    }
+}
 #endif // RDNA3_5
 
 template <int mmq_y, bool need_check> static __device__ __forceinline__ void load_tiles_q4_K(
@@ -2289,8 +2323,8 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
 #if defined(RDNA3_5) && defined(AMD_WMMA_AVAILABLE) && !defined(AMD_MFMA_AVAILABLE)
     // dm first: warms cache lines before qs reads from same block_q4_K.
     load_tiles_q4_K_dm_rdna35<mmq_y, need_check>(x, x_dm, kbx0, i_max, stride);
-#endif
-
+    load_tiles_q4_K_qs_wmma_rdna35<mmq_y, need_check>(x, x_qs, kbx0, i_max, stride);
+#else
     constexpr int threads_per_row = MMQ_ITER_K / (4 * QR4_K);
     constexpr int nrows = warp_size / threads_per_row;
     const int txi = warp_size > threads_per_row ? threadIdx.x % threads_per_row : threadIdx.x;
@@ -2311,12 +2345,13 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
 #endif
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
-        x_qs[i*MMQ_MMA_TILE_X_K_Q8_1 + 16*(txi/8) + txi % 8 + 0] = (qs0 >> 0) & 0x0F0F0F0F;
-        x_qs[i*MMQ_MMA_TILE_X_K_Q8_1 + 16*(txi/8) + txi % 8 + 8] = (qs0 >> 4) & 0x0F0F0F0F;
+        x_qs[i*MMQ_MMA_TILE_X_K_Q8_1 + mmq_q4_K_qs_lds_k(txi, 0)] = (qs0 >> 0) & 0x0F0F0F0F;
+        x_qs[i*MMQ_MMA_TILE_X_K_Q8_1 + mmq_q4_K_qs_lds_k(txi, 1)] = (qs0 >> 4) & 0x0F0F0F0F;
 #else
         x_qs[i*(MMQ_TILE_NE_K + 1) + txi] = qs0;
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
     }
+#endif // RDNA3_5 WMMA qs path
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
 #if defined(RDNA3_5) && defined(AMD_WMMA_AVAILABLE) && !defined(AMD_MFMA_AVAILABLE)
