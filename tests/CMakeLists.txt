@@ -240,6 +240,7 @@ llama_build_and_test(test-gguf.cpp)
 llama_build_and_test(test-backend-ops.cpp)
 if (GGML_HRX)
     llama_build_and_test(test-backend-hrx.cpp)
+    target_include_directories(test-backend-hrx PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src/ggml-hrx)
 endif()
 
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model")

@@ -5,12 +5,14 @@ find_package(hrx CONFIG REQUIRED)
 find_package(loomc CONFIG REQUIRED)
 
 set(GGML_HRX_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
-set(GGML_HRX_CATALOG_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/catalog")
-set(GGML_HRX_ASSEMBLED_CATALOG "${GGML_HRX_GENERATED_DIR}/catalog.json")
+set(GGML_HRX_CATALOG_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/generated/catalog")
+set(GGML_HRX_PROCESSED_CATALOG_DIR "${GGML_HRX_GENERATED_DIR}/catalog")
+set(GGML_HRX_ASSEMBLED_CATALOG "${GGML_HRX_PROCESSED_CATALOG_DIR}/catalog.json")
 set(GGML_HRX_EMBEDDED_CPP "${GGML_HRX_GENERATED_DIR}/hrx_embedded_catalog.cpp")
 set(GGML_HRX_EMBEDDED_H "${GGML_HRX_GENERATED_DIR}/hrx_embedded_catalog.h")
 file(GLOB_RECURSE GGML_HRX_CATALOG_PARTS CONFIGURE_DEPENDS
     "${GGML_HRX_CATALOG_SOURCE_DIR}/*.json"
+    "${GGML_HRX_CATALOG_SOURCE_DIR}/*.loom"
 )
 
 get_target_property(_GGML_HRX_HRX_LOCATION hrx::hrx IMPORTED_LOCATION_RELWITHDEBINFO)
@@ -38,12 +40,14 @@ add_custom_command(
     OUTPUT ${GGML_HRX_ASSEMBLED_CATALOG}
     COMMAND
         ${Python3_EXECUTABLE}
-        ${CMAKE_CURRENT_SOURCE_DIR}/tools/assemble_hrx_catalog.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/tools/prepare_hrx_catalog.py
         --catalog-dir ${GGML_HRX_CATALOG_SOURCE_DIR}
-        --out ${GGML_HRX_ASSEMBLED_CATALOG}
+        --processed-dir ${GGML_HRX_PROCESSED_CATALOG_DIR}
+        --loom-link ${GGML_HRX_LOOM_LINK_EXECUTABLE}
     DEPENDS
         ${GGML_HRX_CATALOG_PARTS}
         ${CMAKE_CURRENT_SOURCE_DIR}/tools/assemble_hrx_catalog.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/tools/prepare_hrx_catalog.py
     VERBATIM
 )
 
@@ -55,14 +59,15 @@ add_custom_command(
         ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/tools/validate_hrx_catalog.py
         --catalog ${GGML_HRX_ASSEMBLED_CATALOG}
-        --source-root ${CMAKE_CURRENT_SOURCE_DIR}
-        --artifact-root ${GGML_HRX_GENERATED_DIR}
+        --source-root ${GGML_HRX_PROCESSED_CATALOG_DIR}
+        --artifact-root ${GGML_HRX_PROCESSED_CATALOG_DIR}
+        --require-artifacts
     COMMAND
         ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_hrx_embedded.py
         --catalog ${GGML_HRX_ASSEMBLED_CATALOG}
-        --source-root ${CMAKE_CURRENT_SOURCE_DIR}
-        --artifact-root ${GGML_HRX_GENERATED_DIR}
+        --source-root ${GGML_HRX_PROCESSED_CATALOG_DIR}
+        --artifact-root ${GGML_HRX_PROCESSED_CATALOG_DIR}
         --out-cpp ${GGML_HRX_EMBEDDED_CPP}
         --out-h ${GGML_HRX_EMBEDDED_H}
     DEPENDS

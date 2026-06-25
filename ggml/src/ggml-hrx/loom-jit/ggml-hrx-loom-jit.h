@@ -30,6 +30,15 @@ typedef struct ggml_hrx_loom_jit_config_binding_t {
   const char* value;
 } ggml_hrx_loom_jit_config_binding_t;
 
+typedef struct ggml_hrx_loom_jit_launch_config_t {
+  uint32_t workgroup_count[3];
+  uint32_t workgroup_size[3];
+  uint32_t subgroup_size;
+  uint64_t workgroup_storage_bytes;
+  size_t workload_argument_count;
+  uint32_t fields;
+} ggml_hrx_loom_jit_launch_config_t;
+
 typedef struct ggml_hrx_loom_jit_compile_options_t {
   size_t structure_size;
   const void* source_data;
@@ -41,6 +50,8 @@ typedef struct ggml_hrx_loom_jit_compile_options_t {
   const char* artifact_identifier;
   const ggml_hrx_loom_jit_config_binding_t* config_bindings;
   size_t config_binding_count;
+  const int64_t* workload_arguments;
+  size_t workload_argument_count;
 } ggml_hrx_loom_jit_compile_options_t;
 
 typedef struct ggml_hrx_loom_jit_compile_result_t {
@@ -50,6 +61,7 @@ typedef struct ggml_hrx_loom_jit_compile_result_t {
   size_t manifest_json_size;
   char* compile_report_json;
   size_t compile_report_json_size;
+  ggml_hrx_loom_jit_launch_config_t launch_config;
 } ggml_hrx_loom_jit_compile_result_t;
 
 hrx_status_t ggml_hrx_loom_jit_amdgpu_create(

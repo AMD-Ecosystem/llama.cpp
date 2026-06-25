@@ -2,6 +2,7 @@
 #include <ggml-backend.h>
 #include <ggml-cpp.h>
 #include <ggml-hrx.h>
+#include <ggml-hrx-test.h>
 
 #include <algorithm>
 #include <array>
@@ -458,6 +459,103 @@ static void run_mul_mat_vec_batched_case(
         tensor_to_float(out),
         reference_mul_mat_batched(lhs_reference, rhs_f32, k, rows, cols, lhs_ne2, lhs_ne3, out_ne2, out_ne3),
         tolerance, label);
+}
+
+static bool ggml_type_from_name(const char * name, ggml_type * out_type) {
+    if (!name || !out_type) {
+        return false;
+    }
+    if (std::strcmp(name, "F32") == 0) {
+        *out_type = GGML_TYPE_F32;
+        return true;
+    }
+    if (std::strcmp(name, "F16") == 0) {
+        *out_type = GGML_TYPE_F16;
+        return true;
+    }
+    if (std::strcmp(name, "BF16") == 0) {
+        *out_type = GGML_TYPE_BF16;
+        return true;
+    }
+    if (std::strcmp(name, "Q4_K") == 0) {
+        *out_type = GGML_TYPE_Q4_K;
+        return true;
+    }
+    if (std::strcmp(name, "Q5_K") == 0) {
+        *out_type = GGML_TYPE_Q5_K;
+        return true;
+    }
+    if (std::strcmp(name, "Q6_K") == 0) {
+        *out_type = GGML_TYPE_Q6_K;
+        return true;
+    }
+    if (std::strcmp(name, "Q8_0") == 0) {
+        *out_type = GGML_TYPE_Q8_0;
+        return true;
+    }
+    return false;
+}
+
+static void run_catalog_mul_mat_schedule_case(
+        ggml_backend_t backend,
+        ggml_backend_dev_t dev,
+        const ggml_backend_hrx_test_case & cfg) {
+    GGML_ASSERT(cfg.op == "MUL_MAT");
+    GGML_ASSERT(!cfg.id.empty() && !cfg.expected_route_id.empty() && cfg.repeat > 0);
+
+    ggml_type lhs_type = GGML_TYPE_COUNT;
+    ggml_type rhs_type = GGML_TYPE_COUNT;
+    ggml_type dst_type = GGML_TYPE_COUNT;
+    GGML_ASSERT(ggml_type_from_name(cfg.src0_type.c_str(), &lhs_type));
+    GGML_ASSERT(ggml_type_from_name(cfg.src1_type.c_str(), &rhs_type));
+    GGML_ASSERT(ggml_type_from_name(cfg.dst_type.c_str(), &dst_type));
+    GGML_ASSERT(rhs_type == GGML_TYPE_F32);
+    GGML_ASSERT(dst_type == GGML_TYPE_F32);
+    GGML_ASSERT(cfg.k > 0 && cfg.rows > 0 && cfg.cols > 0);
+
+    ggml_backend_hrx_test_reset_dispatch_record();
+    for (uint32_t i = 0; i < cfg.repeat; ++i) {
+        run_mul_mat_vec_case(
+            backend, dev, lhs_type, cfg.k, cfg.rows, cfg.cols,
+            cfg.tolerance, cfg.id.c_str());
+    }
+
+    const ggml_backend_hrx_test_route_record record =
+        ggml_backend_hrx_test_get_route_record(cfg.expected_route_id);
+    GGML_ASSERT(record.dispatch_count == cfg.repeat);
+    GGML_ASSERT(record.jit_compile_count <= 1);
+    GGML_ASSERT(record.jit_compile_count + record.jit_cache_hit_count == cfg.repeat);
+}
+
+static void run_catalog_mul_mat_q4_k_f32_case(ggml_backend_t backend, ggml_backend_dev_t dev) {
+    {
+        ggml_context_ptr ctx = make_context();
+        ggml_tensor * lhs = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_Q4_K, 256, 3);
+        ggml_tensor * rhs = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, 256, 1);
+        ggml_tensor * out = ggml_mul_mat(ctx.get(), lhs, rhs);
+        GGML_ASSERT(ggml_backend_dev_supports_op(dev, out));
+    }
+    {
+        ggml_context_ptr ctx = make_context();
+        ggml_tensor * lhs = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_Q4_K, 256, 3, 2);
+        ggml_tensor * rhs = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, 256, 1, 2);
+        ggml_tensor * out = ggml_mul_mat(ctx.get(), lhs, rhs);
+        GGML_ASSERT(!ggml_backend_dev_supports_op(dev, out));
+    }
+    {
+        ggml_context_ptr ctx = make_context();
+        ggml_tensor * lhs = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_Q4_K, 256, 3);
+        ggml_tensor * rhs = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F16, 256, 1);
+        ggml_tensor * out = ggml_mul_mat(ctx.get(), lhs, rhs);
+        GGML_ASSERT(!ggml_backend_dev_supports_op(dev, out));
+    }
+
+    const std::vector<ggml_backend_hrx_test_case> cases =
+        ggml_backend_hrx_test_cases(dev, "mul_mat_q4_k_f32");
+    GGML_ASSERT(!cases.empty());
+    for (const ggml_backend_hrx_test_case & cfg : cases) {
+        run_catalog_mul_mat_schedule_case(backend, dev, cfg);
+    }
 }
 
 static void run_mul_mat_id_q4_k_case(
@@ -4471,14 +4569,22 @@ int main() {
     GGML_ASSERT(backend != nullptr);
 
     if (const char * test_only = std::getenv("GGML_HRX_TEST_ONLY")) {
-        if (std::strcmp(test_only, "mul_mat_id_q4_k_swiglu_sparse_small_prompt") == 0) {
-            run_mul_mat_id_q4_k_swiglu_sparse_small_prompt_case(backend.get());
+        if (std::strcmp(test_only, "catalog_mul_mat_q4_k_f32") == 0) {
+            run_catalog_mul_mat_q4_k_f32_case(backend.get(), dev);
             return 0;
         }
         std::fprintf(stderr, "unknown GGML_HRX_TEST_ONLY=%s\n", test_only);
         return 1;
     }
 
+    run_catalog_mul_mat_q4_k_f32_case(backend.get(), dev);
+    ggml_backend_synchronize(backend.get());
+    return 0;
+
+// HRX3 backend coverage is catalog-driven. The legacy hard-coded HRX1/HRX2
+// matrix below is intentionally disabled until each case is reintroduced via
+// device-specific catalog test schedules emitted by the kernel bench.
+#if 0
     ggml_context_ptr ctx = make_context();
     ggml_tensor * src  = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 8);
     ggml_tensor * view = ggml_view_1d(ctx.get(), src, 4, 2 * sizeof(float));
@@ -5075,4 +5181,5 @@ int main() {
 
     ggml_backend_synchronize(backend.get());
     return 0;
+#endif
 }

@@ -1,0 +1,13 @@
+{
+  "schema": "ggml-hrx-catalog-v1",
+  "layout": "ggml-hrx-split-catalog-v1",
+  "catalog_id": "hrx3-gfx1100-mul-mat-q4-k-f32",
+  "generated_at": "2026-06-25T06:26:20.363030+00:00",
+  "generator": "ggml-hrx-kernel-bench export-llama",
+  "targets": [
+    {
+      "target_key": "gfx1100",
+      "target_variant": null
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "schema": "ggml-hrx-test-schedule-v1",
+  "target_key": "gfx1100",
+  "family": "mul_mat_q4_k_f32",
+  "cases": [
+    {
+      "id": "mul_mat_q4_k_f32_direct_decode_k256_r3_c1",
+      "op": "MUL_MAT",
+      "expected_route_id": "mul_mat_q4_k_f32_direct_k256_32768_r1_32768_c1_wg256",
+      "supports": {
+        "src0_type": "Q4_K",
+        "src1_type": "F32",
+        "dst_type": "F32"
+      },
+      "shape": {
+        "k": 256,
+        "rows": 3,
+        "cols": 1
+      },
+      "tolerance": 0.08,
+      "repeat": 2
+    }
+  ]
+}

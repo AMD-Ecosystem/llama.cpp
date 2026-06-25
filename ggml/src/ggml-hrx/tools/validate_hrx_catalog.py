@@ -29,10 +29,12 @@ def main():
     artifacts = catalog.get("artifacts")
     routes = catalog.get("routes")
     fusions = catalog.get("fusions", [])
+    test_schedules = catalog.get("test_schedules", [])
     require(isinstance(sources, dict), "sources must be an object")
     require(isinstance(artifacts, dict), "artifacts must be an object")
     require(isinstance(routes, list), "routes must be an array")
     require(isinstance(fusions, list), "fusions must be an array")
+    require(isinstance(test_schedules, list), "test_schedules must be an array")
 
     for source_id, source in sources.items():
         require(isinstance(source, dict), f"source {source_id} must be an object")
@@ -74,6 +76,24 @@ def main():
         fusion_id = fusion.get("id")
         require(fusion_id and fusion_id not in fusion_ids, "fusion id must be present and unique")
         fusion_ids.add(fusion_id)
+
+    test_case_ids = set()
+    for schedule in test_schedules:
+        require(isinstance(schedule, dict), "test_schedules entries must be objects")
+        require(schedule.get("schema") == "ggml-hrx-test-schedule-v1", "test schedule has unsupported schema")
+        require(schedule.get("target_key"), "test schedule missing target_key")
+        require(schedule.get("family"), "test schedule missing family")
+        cases = schedule.get("cases")
+        require(isinstance(cases, list), "test schedule cases must be an array")
+        for case in cases:
+            require(isinstance(case, dict), "test case entries must be objects")
+            case_id = case.get("id")
+            require(case_id and case_id not in test_case_ids, "test case id must be present and unique")
+            test_case_ids.add(case_id)
+            require(case.get("expected_route_id") in route_ids, f"test case {case_id} references unknown route")
+            require(case.get("op"), f"test case {case_id} missing op")
+            require(isinstance(case.get("shape"), dict), f"test case {case_id} missing shape")
+            require(isinstance(case.get("supports"), dict), f"test case {case_id} missing supports")
 
 
 if __name__ == "__main__":

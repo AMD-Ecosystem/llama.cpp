@@ -1,6 +1,7 @@
 #include "ggml-hrx.h"
 
 #include "ggml-hrx-catalog.h"
+#include "ggml-hrx-test.h"
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
 #include "loom-jit/ggml-hrx-loom-jit.h"
@@ -18,11 +19,13 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <new>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -35,6 +38,29 @@ static constexpr size_t GGML_HRX_STAGING_ARENA_DEFAULT_SIZE = 8 * 1024 * 1024;
 
 struct ggml_backend_hrx_reg_context;
 
+struct ggml_backend_hrx_test_dispatch_recorder {
+    std::mutex mutex;
+    bool enabled = false;
+    std::map<std::string, ggml_backend_hrx_test_route_record> routes;
+};
+
+static ggml_backend_hrx_test_dispatch_recorder g_ggml_backend_hrx_test_dispatch_recorder;
+
+struct ggml_backend_hrx_compiled_route {
+    const ggml_backend_hrx_catalog_route * route = nullptr;
+    hrx_executable_t executable = nullptr;
+    uint32_t export_ordinal = 0;
+    hrx_executable_export_info_t export_info = {};
+    ggml_hrx_loom_jit_launch_config_t launch_config = {};
+};
+
+struct ggml_backend_hrx_compiled_route_deleter {
+    void operator()(ggml_backend_hrx_compiled_route * route) const;
+};
+
+using ggml_backend_hrx_compiled_route_ptr =
+    std::unique_ptr<ggml_backend_hrx_compiled_route, ggml_backend_hrx_compiled_route_deleter>;
+
 struct ggml_backend_hrx_options {
     std::string catalog_dir;
     std::string evidence_dir;
@@ -45,6 +71,30 @@ struct ggml_backend_hrx_options {
     bool trace_graph = false;
     size_t staging_arena_size = GGML_HRX_STAGING_ARENA_DEFAULT_SIZE;
 };
+
+static void ggml_backend_hrx_test_record_jit_compile(const std::string & route_id) {
+    std::lock_guard<std::mutex> lock(g_ggml_backend_hrx_test_dispatch_recorder.mutex);
+    if (!g_ggml_backend_hrx_test_dispatch_recorder.enabled) {
+        return;
+    }
+    g_ggml_backend_hrx_test_dispatch_recorder.routes[route_id].jit_compile_count++;
+}
+
+static void ggml_backend_hrx_test_record_jit_cache_hit(const std::string & route_id) {
+    std::lock_guard<std::mutex> lock(g_ggml_backend_hrx_test_dispatch_recorder.mutex);
+    if (!g_ggml_backend_hrx_test_dispatch_recorder.enabled) {
+        return;
+    }
+    g_ggml_backend_hrx_test_dispatch_recorder.routes[route_id].jit_cache_hit_count++;
+}
+
+static void ggml_backend_hrx_test_record_dispatch(const std::string & route_id) {
+    std::lock_guard<std::mutex> lock(g_ggml_backend_hrx_test_dispatch_recorder.mutex);
+    if (!g_ggml_backend_hrx_test_dispatch_recorder.enabled) {
+        return;
+    }
+    g_ggml_backend_hrx_test_dispatch_recorder.routes[route_id].dispatch_count++;
+}
 
 struct ggml_backend_hrx_staging_arena {
     hrx_stream_t stream = nullptr;
@@ -69,6 +119,8 @@ struct ggml_backend_hrx_device_context {
     std::vector<hrx_stream_t> live_streams;
     std::vector<ggml_backend_hrx_staging_arena> staging_arenas;
     hrx_stream_t active_stream = nullptr;
+    std::mutex compiled_routes_mutex;
+    std::map<std::string, ggml_backend_hrx_compiled_route_ptr> compiled_routes;
 };
 
 struct ggml_backend_hrx_reg_context {
@@ -117,6 +169,14 @@ static bool ggml_backend_hrx_log_status(hrx_status_t status, const char * expr, 
 
 #define GGML_HRX_CHECK(expr) ggml_backend_hrx_log_status((expr), #expr, __FILE__, __LINE__)
 
+void ggml_backend_hrx_compiled_route_deleter::operator()(ggml_backend_hrx_compiled_route * route) const {
+    if (route && route->executable) {
+        hrx_executable_release(route->executable);
+        route->executable = nullptr;
+    }
+    delete route;
+}
+
 static size_t ggml_backend_hrx_align_up(size_t value, size_t alignment) {
     GGML_ASSERT(alignment > 0);
     const size_t remainder = value % alignment;
@@ -129,6 +189,10 @@ static size_t ggml_backend_hrx_staging_arena_capacity(const ggml_backend_hrx_dev
         device_context->options->staging_arena_size :
         GGML_HRX_STAGING_ARENA_DEFAULT_SIZE;
     return ggml_backend_hrx_align_up(std::max(requested, GGML_HRX_ALIGNMENT), GGML_HRX_ALIGNMENT);
+}
+
+static std::string ggml_backend_hrx_test_case_index_key(const std::string & target_key, const std::string & family) {
+    return target_key + "\n" + family;
 }
 
 static ggml_guid_t ggml_backend_hrx_guid(void) {
@@ -250,6 +314,28 @@ static void ggml_backend_hrx_trace_event(
     std::lock_guard<std::mutex> lock(reg_context->trace_mutex);
     reg_context->trace_jsonl << event.dump() << '\n';
     reg_context->trace_jsonl.flush();
+}
+
+static void ggml_backend_hrx_write_evidence_file(
+        ggml_backend_hrx_device_context * device_context,
+        const std::string & name,
+        const void * data,
+        size_t size) {
+    if (!device_context || !device_context->options || device_context->options->evidence_dir.empty() ||
+        !data || size == 0) {
+        return;
+    }
+    std::string path = device_context->options->evidence_dir;
+    if (!path.empty() && path.back() != '/') {
+        path += '/';
+    }
+    path += name;
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    if (!file.is_open()) {
+        GGML_LOG_WARN("%s: failed to open evidence file %s\n", __func__, path.c_str());
+        return;
+    }
+    file.write(static_cast<const char *>(data), static_cast<std::streamsize>(size));
 }
 
 static size_t ggml_backend_hrx_tensor_offset(const ggml_backend_hrx_buffer_context * context, const ggml_tensor * tensor) {
@@ -989,6 +1075,401 @@ static bool ggml_backend_hrx_is_metadata_op(const ggml_tensor * op) {
     }
 }
 
+static const char * ggml_backend_hrx_catalog_type_name(enum ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_F32:
+            return "F32";
+        case GGML_TYPE_F16:
+            return "F16";
+        case GGML_TYPE_Q4_K:
+            return "Q4_K";
+        case GGML_TYPE_Q5_K:
+            return "Q5_K";
+        case GGML_TYPE_Q6_K:
+            return "Q6_K";
+        case GGML_TYPE_Q8_0:
+            return "Q8_0";
+        default:
+            return ggml_type_name(type);
+    }
+}
+
+static bool ggml_backend_hrx_make_mul_mat_problem(
+        ggml_backend_hrx_device_context * device_context,
+        const ggml_tensor * node,
+        ggml_backend_hrx_catalog_problem * out_problem) {
+    if (!device_context || !node || node->op != GGML_OP_MUL_MAT || !node->src[0] || !node->src[1] || !out_problem) {
+        return false;
+    }
+    const ggml_tensor * src0 = node->src[0];
+    const ggml_tensor * src1 = node->src[1];
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1) || !ggml_is_contiguous(node)) {
+        return false;
+    }
+    out_problem->op = "MUL_MAT";
+    out_problem->target_key = device_context->architecture;
+    out_problem->supports = {
+        {"src0_type", ggml_backend_hrx_catalog_type_name(src0->type)},
+        {"src1_type", ggml_backend_hrx_catalog_type_name(src1->type)},
+        {"dst_type", ggml_backend_hrx_catalog_type_name(node->type)},
+        {"layout", "contiguous"},
+    };
+    out_problem->shape = {
+        {"k", src0->ne[0]},
+        {"rows", src0->ne[1]},
+        {"cols", src1->ne[1]},
+    };
+    out_problem->facts = {
+        {"src0.ne0", src0->ne[0]},
+        {"src0.ne1", src0->ne[1]},
+        {"src0.ne2", src0->ne[2]},
+        {"src0.ne3", src0->ne[3]},
+        {"src1.ne0", src1->ne[0]},
+        {"src1.ne1", src1->ne[1]},
+        {"src1.ne2", src1->ne[2]},
+        {"src1.ne3", src1->ne[3]},
+        {"dst.ne0", node->ne[0]},
+        {"dst.ne1", node->ne[1]},
+        {"dst.ne2", node->ne[2]},
+        {"dst.ne3", node->ne[3]},
+    };
+    return true;
+}
+
+static std::string ggml_backend_hrx_compiled_route_key(
+        const ggml_backend_hrx_catalog_route & route,
+        const std::vector<ggml_backend_hrx_catalog_binding> & bindings,
+        const std::vector<int64_t> & workload_arguments,
+        const std::string & target_key) {
+    std::string key = target_key;
+    key += "|";
+    key += route.id;
+    key += "|";
+    key += route.artifact_id;
+    key += "|";
+    key += route.root_symbol;
+    for (const auto & binding : bindings) {
+        key += "|";
+        key += binding.key;
+        key += "=";
+        key += binding.value;
+    }
+    for (int64_t value : workload_arguments) {
+        key += "|arg=";
+        key += std::to_string(value);
+    }
+    return key;
+}
+
+static bool ggml_backend_hrx_resolve_workload_arguments(
+        const ggml_backend_hrx_catalog_route & route,
+        const ggml_backend_hrx_catalog_problem & problem,
+        std::vector<int64_t> * out_arguments,
+        std::string * out_error) {
+    out_arguments->clear();
+    for (const std::string & source : route.workload_argument_sources) {
+        static constexpr const char * k_shape_prefix = "shape.";
+        std::string shape_key = source;
+        if (shape_key.compare(0, 6, k_shape_prefix) == 0) {
+            shape_key = shape_key.substr(6);
+        }
+        const auto it = problem.shape.find(shape_key);
+        if (it == problem.shape.end()) {
+            if (out_error) {
+                *out_error = "route " + route.id + " workload argument references missing shape value " + source;
+            }
+            return false;
+        }
+        out_arguments->push_back(it->second);
+    }
+    return true;
+}
+
+static ggml_backend_hrx_buffer_context * ggml_backend_hrx_tensor_buffer_context(const ggml_tensor * tensor) {
+    if (!tensor) {
+        return nullptr;
+    }
+    ggml_backend_buffer_t buffer = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+    if (!buffer || buffer->iface.get_base != ggml_backend_hrx_buffer_get_base) {
+        return nullptr;
+    }
+    return ggml_backend_hrx_get_buffer_context(buffer);
+}
+
+static bool ggml_backend_hrx_make_tensor_binding(
+        ggml_backend_hrx_device_context * device_context,
+        const ggml_tensor * tensor,
+        hrx_buffer_ref_t * out_ref) {
+    auto * buffer_context = ggml_backend_hrx_tensor_buffer_context(tensor);
+    if (!buffer_context || buffer_context->device_context != device_context || !buffer_context->buffer || !out_ref) {
+        return false;
+    }
+    *out_ref = {
+        /* .buffer = */ buffer_context->buffer,
+        /* .offset = */ ggml_backend_hrx_tensor_offset(buffer_context, tensor),
+        /* .length = */ ggml_nbytes(tensor),
+    };
+    return true;
+}
+
+static ggml_backend_hrx_compiled_route * ggml_backend_hrx_get_compiled_route(
+        ggml_backend_hrx_device_context * device_context,
+        const ggml_backend_hrx_catalog_route & route,
+        const ggml_backend_hrx_catalog_problem & problem,
+        const std::vector<ggml_backend_hrx_catalog_binding> & resolved_bindings,
+        const std::vector<int64_t> & workload_arguments) {
+    if (!device_context || !device_context->jit || !device_context->reg_context || !device_context->reg_context->catalog) {
+        return nullptr;
+    }
+    const std::string cache_key = ggml_backend_hrx_compiled_route_key(route, resolved_bindings, workload_arguments, problem.target_key);
+    {
+        std::lock_guard<std::mutex> lock(device_context->compiled_routes_mutex);
+        const auto it = device_context->compiled_routes.find(cache_key);
+        if (it != device_context->compiled_routes.end()) {
+            ggml_backend_hrx_test_record_jit_cache_hit(route.id);
+            ggml_backend_hrx_trace_event(device_context->reg_context, {
+                {"event", "route_jit_cache_hit"},
+                {"device", device_context->name},
+                {"route_id", route.id},
+                {"artifact_id", route.artifact_id},
+                {"launch_workload_argument_count", it->second->launch_config.workload_argument_count},
+                {"workgroup_count", {
+                    it->second->launch_config.workgroup_count[0],
+                    it->second->launch_config.workgroup_count[1],
+                    it->second->launch_config.workgroup_count[2],
+                }},
+                {"workgroup_size", {
+                    it->second->launch_config.workgroup_size[0],
+                    it->second->launch_config.workgroup_size[1],
+                    it->second->launch_config.workgroup_size[2],
+                }},
+            });
+            return it->second.get();
+        }
+    }
+
+    const auto * artifact = ggml_backend_hrx_catalog_find_artifact(*device_context->reg_context->catalog, route.artifact_id);
+    if (!artifact || artifact->data.empty()) {
+        GGML_LOG_ERROR("%s: route %s references missing artifact %s\n", __func__, route.id.c_str(), route.artifact_id.c_str());
+        return nullptr;
+    }
+
+    std::vector<ggml_hrx_loom_jit_config_binding_t> jit_bindings;
+    jit_bindings.reserve(resolved_bindings.size());
+    for (const auto & binding : resolved_bindings) {
+        jit_bindings.push_back({
+            /* .key = */ binding.key.c_str(),
+            /* .value = */ binding.value.c_str(),
+        });
+    }
+    const std::string module_name = "ggml_hrx_" + route.id;
+    ggml_hrx_loom_jit_compile_options_t compile_options = {
+        /* .structure_size = */ sizeof(ggml_hrx_loom_jit_compile_options_t),
+        /* .source_data = */ artifact->data.data(),
+        /* .source_size = */ artifact->data.size(),
+        /* .source_format = */ GGML_HRX_LOOM_JIT_SOURCE_FORMAT_BYTECODE,
+        /* .source_identifier = */ artifact->path.c_str(),
+        /* .root_symbol = */ route.root_symbol.c_str(),
+        /* .module_name = */ module_name.c_str(),
+        /* .artifact_identifier = */ route.id.c_str(),
+        /* .config_bindings = */ jit_bindings.data(),
+        /* .config_binding_count = */ jit_bindings.size(),
+        /* .workload_arguments = */ workload_arguments.empty() ? nullptr : workload_arguments.data(),
+        /* .workload_argument_count = */ workload_arguments.size(),
+    };
+    ggml_hrx_loom_jit_compile_result_t compile_result = {};
+    if (!GGML_HRX_CHECK(ggml_hrx_loom_jit_amdgpu_compile(device_context->jit, &compile_options, &compile_result))) {
+        ggml_hrx_loom_jit_compile_result_deinitialize(&compile_result);
+        return nullptr;
+    }
+    ggml_backend_hrx_write_evidence_file(
+        device_context, route.id + ".hsaco", compile_result.hsaco_data, compile_result.hsaco_size);
+    ggml_backend_hrx_write_evidence_file(
+        device_context, route.id + ".compile-report.json",
+        compile_result.compile_report_json, compile_result.compile_report_json_size);
+
+    hrx_executable_t executable = nullptr;
+    if (!GGML_HRX_CHECK(hrx_executable_load_data(
+            device_context->device,
+            compile_result.hsaco_data,
+            compile_result.hsaco_size,
+            device_context->architecture.c_str(),
+            &executable))) {
+        ggml_hrx_loom_jit_compile_result_deinitialize(&compile_result);
+        return nullptr;
+    }
+    uint32_t export_ordinal = 0;
+    const char * export_name = route.export_name.empty() ? nullptr : route.export_name.c_str();
+    if (!export_name || !GGML_HRX_CHECK(hrx_executable_lookup_export_by_name(executable, export_name, &export_ordinal))) {
+        GGML_LOG_ERROR("%s: failed to resolve export %s for route %s\n", __func__, export_name ? export_name : "<empty>", route.id.c_str());
+        hrx_executable_release(executable);
+        ggml_hrx_loom_jit_compile_result_deinitialize(&compile_result);
+        return nullptr;
+    }
+    hrx_executable_export_info_t export_info = {};
+    if (!GGML_HRX_CHECK(hrx_executable_export_info(executable, export_ordinal, &export_info))) {
+        hrx_executable_release(executable);
+        ggml_hrx_loom_jit_compile_result_deinitialize(&compile_result);
+        return nullptr;
+    }
+    if (export_info.binding_count != route.binding_count ||
+        export_info.parameter_count != route.parameter_count ||
+        export_info.constant_byte_length != route.constant_byte_length) {
+        GGML_LOG_ERROR(
+            "%s: route %s JIT export ABI mismatch "
+            "(bindings=%u expected=%u constants_size=%u expected_constants_size=%u "
+            "parameters=%u expected_parameters=%u)\n",
+            __func__,
+            route.id.c_str(),
+            export_info.binding_count,
+            route.binding_count,
+            export_info.constant_byte_length,
+            route.constant_byte_length,
+            export_info.parameter_count,
+            route.parameter_count);
+        hrx_executable_release(executable);
+        ggml_hrx_loom_jit_compile_result_deinitialize(&compile_result);
+        return nullptr;
+    }
+
+    ggml_backend_hrx_compiled_route_ptr compiled(new (std::nothrow) ggml_backend_hrx_compiled_route());
+    if (!compiled) {
+        hrx_executable_release(executable);
+        ggml_hrx_loom_jit_compile_result_deinitialize(&compile_result);
+        return nullptr;
+    }
+    compiled->route = &route;
+    compiled->executable = executable;
+    compiled->export_ordinal = export_ordinal;
+    compiled->export_info = export_info;
+    compiled->launch_config = compile_result.launch_config;
+
+    ggml_backend_hrx_test_record_jit_compile(route.id);
+    ggml_backend_hrx_trace_event(device_context->reg_context, {
+        {"event", "route_jit_compiled"},
+        {"device", device_context->name},
+        {"route_id", route.id},
+        {"artifact_id", route.artifact_id},
+        {"root_symbol", route.root_symbol},
+        {"launch_workload_argument_count", compile_result.launch_config.workload_argument_count},
+        {"binding_count", export_info.binding_count},
+        {"parameter_count", export_info.parameter_count},
+        {"constant_byte_length", export_info.constant_byte_length},
+        {"workgroup_count", {
+            compile_result.launch_config.workgroup_count[0],
+            compile_result.launch_config.workgroup_count[1],
+            compile_result.launch_config.workgroup_count[2],
+        }},
+        {"workgroup_size", {
+            compile_result.launch_config.workgroup_size[0],
+            compile_result.launch_config.workgroup_size[1],
+            compile_result.launch_config.workgroup_size[2],
+        }},
+    });
+    ggml_hrx_loom_jit_compile_result_deinitialize(&compile_result);
+
+    std::lock_guard<std::mutex> lock(device_context->compiled_routes_mutex);
+    auto inserted = device_context->compiled_routes.emplace(cache_key, std::move(compiled));
+    if (!inserted.second) {
+        return inserted.first->second.get();
+    }
+    return inserted.first->second.get();
+}
+
+static bool ggml_backend_hrx_dispatch_mul_mat(
+        ggml_backend_hrx_device_context * device_context,
+        const ggml_tensor * node) {
+    ggml_backend_hrx_catalog_problem problem;
+    if (!ggml_backend_hrx_make_mul_mat_problem(device_context, node, &problem) ||
+        !device_context->reg_context || !device_context->reg_context->catalog) {
+        return false;
+    }
+    const auto * route = ggml_backend_hrx_catalog_find_route(*device_context->reg_context->catalog, problem);
+    if (!route) {
+        return false;
+    }
+    if (route->binding_count != 3 || route->constant_byte_length != 0) {
+        ggml_backend_hrx_trace_event(device_context->reg_context, {
+            {"event", "route_rejected"},
+            {"reason", "unsupported_abi"},
+            {"route_id", route->id},
+            {"binding_count", route->binding_count},
+            {"constant_byte_length", route->constant_byte_length},
+        });
+        return false;
+    }
+
+    std::vector<ggml_backend_hrx_catalog_binding> resolved_bindings;
+    std::string binding_error;
+    if (!ggml_backend_hrx_catalog_make_config_bindings(*route, problem, &resolved_bindings, &binding_error)) {
+        GGML_LOG_ERROR("%s: %s\n", __func__, binding_error.c_str());
+        return false;
+    }
+    std::vector<int64_t> workload_arguments;
+    std::string workload_error;
+    if (!ggml_backend_hrx_resolve_workload_arguments(*route, problem, &workload_arguments, &workload_error)) {
+        GGML_LOG_ERROR("%s: %s\n", __func__, workload_error.c_str());
+        return false;
+    }
+    auto * compiled = ggml_backend_hrx_get_compiled_route(device_context, *route, problem, resolved_bindings, workload_arguments);
+    if (!compiled || !compiled->executable) {
+        return false;
+    }
+
+    hrx_buffer_ref_t bindings[3] = {};
+    if (!ggml_backend_hrx_make_tensor_binding(device_context, node->src[0], &bindings[0]) ||
+        !ggml_backend_hrx_make_tensor_binding(device_context, node->src[1], &bindings[1]) ||
+        !ggml_backend_hrx_make_tensor_binding(device_context, node, &bindings[2])) {
+        return false;
+    }
+
+    hrx_dispatch_config_t dispatch_config = {
+        /* .workgroup_count = */ {
+            compiled->launch_config.workgroup_count[0],
+            compiled->launch_config.workgroup_count[1],
+            compiled->launch_config.workgroup_count[2],
+        },
+        /* .workgroup_size = */ {
+            compiled->launch_config.workgroup_size[0],
+            compiled->launch_config.workgroup_size[1],
+            compiled->launch_config.workgroup_size[2],
+        },
+        /* .subgroup_size = */ compiled->launch_config.subgroup_size,
+    };
+    ggml_backend_hrx_trace_event(device_context->reg_context, {
+        {"event", "route_dispatch"},
+        {"device", device_context->name},
+        {"route_id", route->id},
+        {"shape", {
+            {"k", problem.shape["k"]},
+            {"rows", problem.shape["rows"]},
+            {"cols", problem.shape["cols"]},
+        }},
+        {"launch_workload_argument_count", compiled->launch_config.workload_argument_count},
+        {"workgroup_count", {
+            dispatch_config.workgroup_count[0],
+            dispatch_config.workgroup_count[1],
+            dispatch_config.workgroup_count[2],
+        }},
+        {"workgroup_size", {
+            dispatch_config.workgroup_size[0],
+            dispatch_config.workgroup_size[1],
+            dispatch_config.workgroup_size[2],
+        }},
+    });
+    ggml_backend_hrx_test_record_dispatch(route->id);
+    return GGML_HRX_CHECK(hrx_stream_dispatch(
+        device_context->active_stream,
+        compiled->executable,
+        compiled->export_ordinal,
+        &dispatch_config,
+        nullptr,
+        0,
+        bindings,
+        3,
+        HRX_DISPATCH_FLAG_NONE));
+}
+
 static enum ggml_status ggml_backend_hrx_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     auto * context = static_cast<ggml_backend_hrx_context *>(backend->context);
     if (context->device_context->options && context->device_context->options->trace_graph) {
@@ -1009,6 +1490,9 @@ static enum ggml_status ggml_backend_hrx_graph_compute(ggml_backend_t backend, g
     for (int i = 0; cgraph && i < cgraph->n_nodes; ++i) {
         const ggml_tensor * node = cgraph->nodes[i];
         if (!ggml_backend_hrx_is_metadata_op(node)) {
+            if (node->op == GGML_OP_MUL_MAT && ggml_backend_hrx_dispatch_mul_mat(context->device_context, node)) {
+                continue;
+            }
             if (context->device_context->options && context->device_context->options->trace_graph) {
                 ggml_backend_hrx_trace_event(context->device_context->reg_context, {
                     {"event", "unsupported_compute_node"},
@@ -1018,7 +1502,7 @@ static enum ggml_status ggml_backend_hrx_graph_compute(ggml_backend_t backend, g
                 });
             }
             GGML_LOG_ERROR(
-                "%s: HRX3 phase2 backend has no compute routes; unsupported op %s node=%s\n",
+                "%s: HRX3 backend has no matching compute route; unsupported op %s node=%s\n",
                 __func__, ggml_op_desc(node), ggml_get_name(node));
             return GGML_STATUS_FAILED;
         }
@@ -1114,8 +1598,15 @@ static ggml_backend_t ggml_backend_hrx_device_init_backend(ggml_backend_dev_t de
 }
 
 static bool ggml_backend_hrx_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
-    GGML_UNUSED(dev);
-    return ggml_backend_hrx_is_metadata_op(op);
+    if (ggml_backend_hrx_is_metadata_op(op)) {
+        return true;
+    }
+    auto * device_context = ggml_backend_hrx_get_device_context(dev);
+    ggml_backend_hrx_catalog_problem problem;
+    return ggml_backend_hrx_make_mul_mat_problem(device_context, op, &problem) &&
+        device_context->reg_context &&
+        device_context->reg_context->catalog &&
+        ggml_backend_hrx_catalog_find_route(*device_context->reg_context->catalog, problem) != nullptr;
 }
 
 static bool ggml_backend_hrx_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
@@ -1177,6 +1668,11 @@ static const ggml_backend_reg_i ggml_backend_hrx_reg_i = {
 
 ggml_backend_hrx_reg_context::~ggml_backend_hrx_reg_context() {
     for (auto & device_context : device_contexts) {
+        if (device_context) {
+            ggml_backend_hrx_sync_streams(device_context.get());
+            std::lock_guard<std::mutex> lock(device_context->compiled_routes_mutex);
+            device_context->compiled_routes.clear();
+        }
         if (device_context && device_context->transfer_stream) {
             hrx_status_t status = hrx_stream_synchronize(device_context->transfer_stream);
             if (!hrx_status_is_ok(status)) {
@@ -1399,6 +1895,75 @@ ggml_backend_reg_t ggml_backend_hrx_reg(void) {
     }
 
     return &reg;
+}
+
+std::vector<ggml_backend_hrx_test_case> ggml_backend_hrx_test_cases(
+        ggml_backend_dev_t dev,
+        const std::string & family) {
+    std::vector<ggml_backend_hrx_test_case> out;
+    if (!dev || family.empty()) {
+        return out;
+    }
+    auto * device_context = ggml_backend_hrx_get_device_context(dev);
+    if (!device_context || !device_context->reg_context || !device_context->reg_context->catalog) {
+        return out;
+    }
+    const auto & catalog = *device_context->reg_context->catalog;
+    const auto it = catalog.test_cases_by_target_family.find(
+        ggml_backend_hrx_test_case_index_key(device_context->architecture, family));
+    if (it == catalog.test_cases_by_target_family.end()) {
+        return out;
+    }
+    auto string_value = [](const std::map<std::string, std::string> & values, const char * key) -> std::string {
+        const auto it = values.find(key);
+        return it == values.end() ? std::string() : it->second;
+    };
+    auto i64_value = [](const std::map<std::string, int64_t> & values, const char * key) -> int64_t {
+        const auto it = values.find(key);
+        return it == values.end() ? 0 : it->second;
+    };
+    out.reserve(it->second.size());
+    for (const size_t test_case_index : it->second) {
+        if (test_case_index >= catalog.test_cases.size()) {
+            continue;
+        }
+        const auto & catalog_case = catalog.test_cases[test_case_index];
+        ggml_backend_hrx_test_case test_case;
+        test_case.id = catalog_case.id;
+        test_case.op = catalog_case.op;
+        test_case.family = catalog_case.family;
+        test_case.expected_route_id = catalog_case.expected_route_id;
+        test_case.src0_type = string_value(catalog_case.supports, "src0_type");
+        test_case.src1_type = string_value(catalog_case.supports, "src1_type");
+        test_case.dst_type = string_value(catalog_case.supports, "dst_type");
+        test_case.k = i64_value(catalog_case.shape, "k");
+        test_case.rows = i64_value(catalog_case.shape, "rows");
+        test_case.cols = i64_value(catalog_case.shape, "cols");
+        test_case.tolerance = catalog_case.tolerance;
+        test_case.repeat = catalog_case.repeat;
+        out.push_back(std::move(test_case));
+    }
+    return out;
+}
+
+void ggml_backend_hrx_test_reset_dispatch_record(void) {
+    std::lock_guard<std::mutex> lock(g_ggml_backend_hrx_test_dispatch_recorder.mutex);
+    g_ggml_backend_hrx_test_dispatch_recorder.enabled = true;
+    g_ggml_backend_hrx_test_dispatch_recorder.routes.clear();
+}
+
+ggml_backend_hrx_test_route_record ggml_backend_hrx_test_get_route_record(
+        const std::string & route_id) {
+    ggml_backend_hrx_test_route_record record;
+    if (route_id.empty()) {
+        return record;
+    }
+    std::lock_guard<std::mutex> lock(g_ggml_backend_hrx_test_dispatch_recorder.mutex);
+    const auto it = g_ggml_backend_hrx_test_dispatch_recorder.routes.find(route_id);
+    if (it == g_ggml_backend_hrx_test_dispatch_recorder.routes.end()) {
+        return record;
+    }
+    return it->second;
 }
 
 GGML_BACKEND_DL_IMPL(ggml_backend_hrx_reg)
