@@ -4,10 +4,14 @@
   "family": "get_rows_q4_k_f32",
   "cases": [
     {
-      "id": "get_rows_q4_k_f32_get_rows_q4_k_f32_n2048_r1_512_wg256_smoke",
+      "id": "get_rows_q4_k_f32_get_rows_q4_k_f32_n2048_r1_512_wg256_decode-1_ncols2048_nrows1",
       "op": "GET_ROWS",
       "scenario": "get_rows",
       "expected_route_id": "get_rows_q4_k_f32_n2048_r1_512_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "decode-1"
+      },
       "supports": {
         "src0_type": "Q4_K",
         "src1_type": "I32",
@@ -16,10 +20,164 @@
       },
       "shape": {
         "ncols": 2048,
-        "nrows": 3
+        "nrows": 1
       },
       "tolerance": 0.0,
-      "repeat": 2
+      "repeat": 1
+    },
+    {
+      "id": "get_rows_q4_k_f32_get_rows_q4_k_f32_n2048_r1_512_wg256_short-prompt_ncols2048_nrows8",
+      "op": "GET_ROWS",
+      "scenario": "get_rows",
+      "expected_route_id": "get_rows_q4_k_f32_n2048_r1_512_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "short-prompt"
+      },
+      "supports": {
+        "src0_type": "Q4_K",
+        "src1_type": "I32",
+        "dst_type": "F32",
+        "layout": "quantized_embedding_rows_1d"
+      },
+      "shape": {
+        "ncols": 2048,
+        "nrows": 8
+      },
+      "tolerance": 0.0,
+      "repeat": 1
+    },
+    {
+      "id": "get_rows_q4_k_f32_get_rows_q4_k_f32_n2048_r1_512_wg256_pot-128_ncols2048_nrows128",
+      "op": "GET_ROWS",
+      "scenario": "get_rows",
+      "expected_route_id": "get_rows_q4_k_f32_n2048_r1_512_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "pot-128"
+      },
+      "supports": {
+        "src0_type": "Q4_K",
+        "src1_type": "I32",
+        "dst_type": "F32",
+        "layout": "quantized_embedding_rows_1d"
+      },
+      "shape": {
+        "ncols": 2048,
+        "nrows": 128
+      },
+      "tolerance": 0.0,
+      "repeat": 1
+    },
+    {
+      "id": "get_rows_q4_k_f32_get_rows_q4_k_f32_n2048_r1_512_wg256_tail-129_ncols2048_nrows129",
+      "op": "GET_ROWS",
+      "scenario": "get_rows",
+      "expected_route_id": "get_rows_q4_k_f32_n2048_r1_512_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "tail-129"
+      },
+      "supports": {
+        "src0_type": "Q4_K",
+        "src1_type": "I32",
+        "dst_type": "F32",
+        "layout": "quantized_embedding_rows_1d"
+      },
+      "shape": {
+        "ncols": 2048,
+        "nrows": 129
+      },
+      "tolerance": 0.0,
+      "repeat": 1
+    },
+    {
+      "id": "get_rows_q4_k_f32_get_rows_q4_k_f32_n2048_r1_512_wg256_long_ncols2048_nrows512",
+      "op": "GET_ROWS",
+      "scenario": "get_rows",
+      "expected_route_id": "get_rows_q4_k_f32_n2048_r1_512_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "long"
+      },
+      "supports": {
+        "src0_type": "Q4_K",
+        "src1_type": "I32",
+        "dst_type": "F32",
+        "layout": "quantized_embedding_rows_1d"
+      },
+      "shape": {
+        "ncols": 2048,
+        "nrows": 512
+      },
+      "tolerance": 0.0,
+      "repeat": 1
+    },
+    {
+      "id": "get_rows_q4_k_f32_get_rows_q4_k_f32_n4096_r1_512_wg256_decode-1_ncols4096_nrows1",
+      "op": "GET_ROWS",
+      "scenario": "get_rows",
+      "expected_route_id": "get_rows_q4_k_f32_n4096_r1_512_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "decode-1"
+      },
+      "supports": {
+        "src0_type": "Q4_K",
+        "src1_type": "I32",
+        "dst_type": "F32",
+        "layout": "quantized_embedding_rows_1d"
+      },
+      "shape": {
+        "ncols": 4096,
+        "nrows": 1
+      },
+      "tolerance": 0.0,
+      "repeat": 1
+    },
+    {
+      "id": "get_rows_q4_k_f32_get_rows_q4_k_f32_n4096_r1_512_wg256_short-prompt_ncols4096_nrows8",
+      "op": "GET_ROWS",
+      "scenario": "get_rows",
+      "expected_route_id": "get_rows_q4_k_f32_n4096_r1_512_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "short-prompt"
+      },
+      "supports": {
+        "src0_type": "Q4_K",
+        "src1_type": "I32",
+        "dst_type": "F32",
+        "layout": "quantized_embedding_rows_1d"
+      },
+      "shape": {
+        "ncols": 4096,
+        "nrows": 8
+      },
+      "tolerance": 0.0,
+      "repeat": 1
+    },
+    {
+      "id": "get_rows_q4_k_f32_get_rows_q4_k_f32_n4096_r1_512_wg256_pot-128_ncols4096_nrows128",
+      "op": "GET_ROWS",
+      "scenario": "get_rows",
+      "expected_route_id": "get_rows_q4_k_f32_n4096_r1_512_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "pot-128"
+      },
+      "supports": {
+        "src0_type": "Q4_K",
+        "src1_type": "I32",
+        "dst_type": "F32",
+        "layout": "quantized_embedding_rows_1d"
+      },
+      "shape": {
+        "ncols": 4096,
+        "nrows": 128
+      },
+      "tolerance": 0.0,
+      "repeat": 1
     }
   ]
 }

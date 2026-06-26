@@ -4,10 +4,14 @@
   "family": "get_rows_f32",
   "cases": [
     {
-      "id": "get_rows_f32_get_rows_f32_n2048_r1_64_wg256_smoke",
+      "id": "get_rows_f32_get_rows_f32_n2048_r1_64_wg256_decode-1_ncols2048_nrows1",
       "op": "GET_ROWS",
       "scenario": "get_rows",
       "expected_route_id": "get_rows_f32_n2048_r1_64_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "decode-1"
+      },
       "supports": {
         "src0_type": "F32",
         "src1_type": "I32",
@@ -16,10 +20,76 @@
       },
       "shape": {
         "ncols": 2048,
-        "nrows": 3
+        "nrows": 1
       },
       "tolerance": 1e-06,
-      "repeat": 2
+      "repeat": 1
+    },
+    {
+      "id": "get_rows_f32_get_rows_f32_n2048_r1_64_wg256_short-prompt_ncols2048_nrows8",
+      "op": "GET_ROWS",
+      "scenario": "get_rows",
+      "expected_route_id": "get_rows_f32_n2048_r1_64_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "short-prompt"
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "I32",
+        "dst_type": "F32",
+        "layout": "embedding_rows_1d"
+      },
+      "shape": {
+        "ncols": 2048,
+        "nrows": 8
+      },
+      "tolerance": 1e-06,
+      "repeat": 1
+    },
+    {
+      "id": "get_rows_f32_get_rows_f32_n2048_r1_64_wg256_pot-128_ncols2048_nrows32",
+      "op": "GET_ROWS",
+      "scenario": "get_rows",
+      "expected_route_id": "get_rows_f32_n2048_r1_64_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "pot-128"
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "I32",
+        "dst_type": "F32",
+        "layout": "embedding_rows_1d"
+      },
+      "shape": {
+        "ncols": 2048,
+        "nrows": 32
+      },
+      "tolerance": 1e-06,
+      "repeat": 1
+    },
+    {
+      "id": "get_rows_f32_get_rows_f32_n2048_r1_64_wg256_long_ncols2048_nrows64",
+      "op": "GET_ROWS",
+      "scenario": "get_rows",
+      "expected_route_id": "get_rows_f32_n2048_r1_64_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "long"
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "I32",
+        "dst_type": "F32",
+        "layout": "embedding_rows_1d"
+      },
+      "shape": {
+        "ncols": 2048,
+        "nrows": 64
+      },
+      "tolerance": 1e-06,
+      "repeat": 1
     }
   ]
 }

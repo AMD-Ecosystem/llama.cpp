@@ -4,10 +4,14 @@
   "family": "rope_scale_f32",
   "cases": [
     {
-      "id": "rope_scale_f32_rope_neox_f32_freq_scale_n128_d96_h24_t1_wg256_smoke",
+      "id": "rope_scale_f32_rope_neox_f32_freq_scale_n128_d96_h24_t1_wg256_smoke_ncols128_ntokens1",
       "op": "ROPE_SCALE",
       "scenario": "rope",
       "expected_route_id": "rope_neox_f32_freq_scale_n128_d96_h24_t1_wg256",
+      "schedule": {
+        "source": "atlas-test",
+        "scenario": "smoke"
+      },
       "supports": {
         "src0_type": "F32",
         "src1_type": "I32",
@@ -26,7 +30,7 @@
         "freq_scale": 2
       },
       "tolerance": 0.0001,
-      "repeat": 2
+      "repeat": 1
     }
   ]
 }

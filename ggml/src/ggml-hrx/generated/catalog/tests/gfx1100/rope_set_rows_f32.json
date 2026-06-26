@@ -4,10 +4,42 @@
   "family": "rope_set_rows_f32",
   "cases": [
     {
-      "id": "rope_set_rows_f32_rope_neox_f32_freq_set_rows_f16_n128_d96_h8_t1_512_wg256_smoke",
+      "id": "rope_set_rows_f32_rope_neox_f32_freq_set_rows_f16_n128_d96_h24_t1_512_wg256_prompt-128_ncols128_ntokens128",
+      "op": "SET_ROWS",
+      "scenario": "rope_set_rows",
+      "expected_route_id": "rope_neox_f32_freq_set_rows_f16_n128_d96_h24_t1_512_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "prompt-128"
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "I32",
+        "dst_type": "F16",
+        "mode": "NEOX",
+        "freq_factor": "present",
+        "ext_factor": "0",
+        "layout": "rope-view-set-rows-f16"
+      },
+      "shape": {
+        "ncols": 128,
+        "n_dims": 96,
+        "nheads": 24,
+        "ntokens": 128,
+        "dst_rows": 130
+      },
+      "tolerance": 0.001,
+      "repeat": 1
+    },
+    {
+      "id": "rope_set_rows_f32_rope_neox_f32_freq_set_rows_f16_n128_d96_h8_t1_512_wg256_multi-token_ncols128_ntokens8",
       "op": "SET_ROWS",
       "scenario": "rope_set_rows",
       "expected_route_id": "rope_neox_f32_freq_set_rows_f16_n128_d96_h8_t1_512_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "multi-token"
+      },
       "supports": {
         "src0_type": "F32",
         "src1_type": "I32",
@@ -21,11 +53,67 @@
         "ncols": 128,
         "n_dims": 96,
         "nheads": 8,
-        "ntokens": 1,
-        "dst_rows": 4
+        "ntokens": 8,
+        "dst_rows": 10
       },
       "tolerance": 0.001,
-      "repeat": 2
+      "repeat": 1
+    },
+    {
+      "id": "rope_set_rows_f32_rope_neox_f32_freq_set_rows_f16_n128_d96_h8_t1_512_wg256_prompt-128_ncols128_ntokens128",
+      "op": "SET_ROWS",
+      "scenario": "rope_set_rows",
+      "expected_route_id": "rope_neox_f32_freq_set_rows_f16_n128_d96_h8_t1_512_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "prompt-128"
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "I32",
+        "dst_type": "F16",
+        "mode": "NEOX",
+        "freq_factor": "present",
+        "ext_factor": "0",
+        "layout": "rope-view-set-rows-f16"
+      },
+      "shape": {
+        "ncols": 128,
+        "n_dims": 96,
+        "nheads": 8,
+        "ntokens": 128,
+        "dst_rows": 130
+      },
+      "tolerance": 0.001,
+      "repeat": 1
+    },
+    {
+      "id": "rope_set_rows_f32_rope_normal_f32_freq_set_rows_f16_n128_d128_h32_t1_512_wg256_prompt-128_ncols128_ntokens128",
+      "op": "SET_ROWS",
+      "scenario": "rope_set_rows",
+      "expected_route_id": "rope_normal_f32_freq_set_rows_f16_n128_d128_h32_t1_512_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "prompt-128"
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "I32",
+        "dst_type": "F16",
+        "mode": "NORMAL",
+        "freq_factor": "present",
+        "ext_factor": "0",
+        "layout": "rope-view-set-rows-f16"
+      },
+      "shape": {
+        "ncols": 128,
+        "n_dims": 128,
+        "nheads": 32,
+        "ntokens": 128,
+        "dst_rows": 130
+      },
+      "tolerance": 0.001,
+      "repeat": 1
     }
   ]
 }

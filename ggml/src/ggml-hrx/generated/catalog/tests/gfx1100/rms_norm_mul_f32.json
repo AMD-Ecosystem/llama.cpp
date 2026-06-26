@@ -4,10 +4,14 @@
   "family": "rms_norm_mul_f32",
   "cases": [
     {
-      "id": "rms_norm_mul_f32_rms_norm_mul_f32_n3072_r1_vector_vw8_wg32_smoke",
+      "id": "rms_norm_mul_f32_rms_norm_mul_f32_n3072_r1_vector_vw8_wg32_decode-1_ncols3072_nrows1",
       "op": "MUL",
       "scenario": "rms_norm_mul",
       "expected_route_id": "rms_norm_mul_f32_n3072_r1_vector_vw8_wg32",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "decode-1"
+      },
       "supports": {
         "src0_type": "F32",
         "weight_type": "F32",
@@ -19,7 +23,73 @@
         "nrows": 1
       },
       "tolerance": 3e-05,
-      "repeat": 2
+      "repeat": 1
+    },
+    {
+      "id": "rms_norm_mul_f32_rms_norm_mul_f32_n3072_r512_vector_vw8_wg32_decode-1_ncols3072_nrows512",
+      "op": "MUL",
+      "scenario": "rms_norm_mul",
+      "expected_route_id": "rms_norm_mul_f32_n3072_r512_vector_vw8_wg32",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "decode-1"
+      },
+      "supports": {
+        "src0_type": "F32",
+        "weight_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous_src_row_broadcast_weight"
+      },
+      "shape": {
+        "ncols": 3072,
+        "nrows": 512
+      },
+      "tolerance": 3e-05,
+      "repeat": 1
+    },
+    {
+      "id": "rms_norm_mul_f32_rms_norm_mul_f32_n3072_r64_vector_vw8_wg32_decode-1_ncols3072_nrows64",
+      "op": "MUL",
+      "scenario": "rms_norm_mul",
+      "expected_route_id": "rms_norm_mul_f32_n3072_r64_vector_vw8_wg32",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "decode-1"
+      },
+      "supports": {
+        "src0_type": "F32",
+        "weight_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous_src_row_broadcast_weight"
+      },
+      "shape": {
+        "ncols": 3072,
+        "nrows": 64
+      },
+      "tolerance": 3e-05,
+      "repeat": 1
+    },
+    {
+      "id": "rms_norm_mul_f32_rms_norm_mul_f32_n4096_r1_vector_vw8_wg32_decode-1_ncols4096_nrows1",
+      "op": "MUL",
+      "scenario": "rms_norm_mul",
+      "expected_route_id": "rms_norm_mul_f32_n4096_r1_vector_vw8_wg32",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "decode-1"
+      },
+      "supports": {
+        "src0_type": "F32",
+        "weight_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous_src_row_broadcast_weight"
+      },
+      "shape": {
+        "ncols": 4096,
+        "nrows": 1
+      },
+      "tolerance": 3e-05,
+      "repeat": 1
     }
   ]
 }

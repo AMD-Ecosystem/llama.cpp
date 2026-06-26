@@ -4,10 +4,36 @@
   "family": "div_f32",
   "cases": [
     {
-      "id": "div_f32_div_f32_n8_r1_rhscolbroadcast_wg256_smoke",
+      "id": "div_f32_div_f32_n8_r16_rhscolbroadcast_wg256_decode-1_ncols8_nrows16",
+      "op": "DIV",
+      "scenario": "div",
+      "expected_route_id": "div_f32_n8_r16_rhscolbroadcast_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "decode-1"
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous_src0_rhs_column_broadcast"
+      },
+      "shape": {
+        "ncols": 8,
+        "nrows": 16
+      },
+      "tolerance": 1e-06,
+      "repeat": 1
+    },
+    {
+      "id": "div_f32_div_f32_n8_r1_rhscolbroadcast_wg256_decode-1_ncols8_nrows1",
       "op": "DIV",
       "scenario": "div",
       "expected_route_id": "div_f32_n8_r1_rhscolbroadcast_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "decode-1"
+      },
       "supports": {
         "src0_type": "F32",
         "src1_type": "F32",
@@ -19,7 +45,29 @@
         "nrows": 1
       },
       "tolerance": 1e-06,
-      "repeat": 2
+      "repeat": 1
+    },
+    {
+      "id": "div_f32_div_f32_n8_r64_rhscolbroadcast_wg256_decode-1_ncols8_nrows64",
+      "op": "DIV",
+      "scenario": "div",
+      "expected_route_id": "div_f32_n8_r64_rhscolbroadcast_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "decode-1"
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous_src0_rhs_column_broadcast"
+      },
+      "shape": {
+        "ncols": 8,
+        "nrows": 64
+      },
+      "tolerance": 1e-06,
+      "repeat": 1
     }
   ]
 }

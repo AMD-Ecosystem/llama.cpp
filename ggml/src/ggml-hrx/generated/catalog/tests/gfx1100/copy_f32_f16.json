@@ -4,10 +4,14 @@
   "family": "copy_f32_f16",
   "cases": [
     {
-      "id": "copy_f32_f16_copy_f32_f16_generic_wg256_smoke",
+      "id": "copy_f32_f16_copy_f32_f16_generic_wg256_decode-1_ncols257_nrows1",
       "op": "CPY",
       "scenario": "cpy",
       "expected_route_id": "copy_f32_f16_generic_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "decode-1"
+      },
       "supports": {
         "src0_type": "F32",
         "dst_type": "F16",
@@ -18,7 +22,7 @@
         "nrows": 1
       },
       "tolerance": 1e-06,
-      "repeat": 2
+      "repeat": 1
     }
   ]
 }

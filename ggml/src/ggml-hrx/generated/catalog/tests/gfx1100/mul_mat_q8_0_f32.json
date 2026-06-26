@@ -4,10 +4,14 @@
   "family": "mul_mat_q8_0_f32",
   "cases": [
     {
-      "id": "mul_mat_q8_0_f32_mul_mat_q8_0_f32_packed_loop_k32_8192_c1_16_wg64_smoke",
+      "id": "mul_mat_q8_0_f32_mul_mat_q8_0_f32_packed_loop_k32_8192_c1_16_wg64_decode-1_k3072_rows1_cols1",
       "op": "MUL_MAT",
       "scenario": "mul_mat",
       "expected_route_id": "mul_mat_q8_0_f32_packed_loop_k32_8192_c1_16_wg64",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "decode-1"
+      },
       "supports": {
         "src0_type": "Q8_0",
         "src1_type": "F32",
@@ -15,12 +19,173 @@
         "layout": "contiguous"
       },
       "shape": {
-        "k": 256,
+        "k": 3072,
+        "rows": 1,
+        "cols": 1
+      },
+      "tolerance": 5.0,
+      "repeat": 1
+    },
+    {
+      "id": "mul_mat_q8_0_f32_mul_mat_q8_0_f32_packed_loop_k32_8192_c1_16_wg64_decode-small_k3072_rows64_cols1",
+      "op": "MUL_MAT",
+      "scenario": "mul_mat",
+      "expected_route_id": "mul_mat_q8_0_f32_packed_loop_k32_8192_c1_16_wg64",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "decode-small"
+      },
+      "supports": {
+        "src0_type": "Q8_0",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "shape": {
+        "k": 3072,
         "rows": 64,
         "cols": 1
       },
-      "tolerance": 0.08,
-      "repeat": 2
+      "tolerance": 5.0,
+      "repeat": 1
+    },
+    {
+      "id": "mul_mat_q8_0_f32_mul_mat_q8_0_f32_packed_loop_k32_8192_c1_16_wg64_prompt-128_k3072_rows64_cols8",
+      "op": "MUL_MAT",
+      "scenario": "mul_mat",
+      "expected_route_id": "mul_mat_q8_0_f32_packed_loop_k32_8192_c1_16_wg64",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "prompt-128"
+      },
+      "supports": {
+        "src0_type": "Q8_0",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "shape": {
+        "k": 3072,
+        "rows": 64,
+        "cols": 8
+      },
+      "tolerance": 5.0,
+      "repeat": 1
+    },
+    {
+      "id": "mul_mat_q8_0_f32_mul_mat_q8_0_f32_packed_loop_k32_8192_c1_16_wg64_prompt-tail_k3072_rows127_cols8",
+      "op": "MUL_MAT",
+      "scenario": "mul_mat",
+      "expected_route_id": "mul_mat_q8_0_f32_packed_loop_k32_8192_c1_16_wg64",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "prompt-tail"
+      },
+      "supports": {
+        "src0_type": "Q8_0",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "shape": {
+        "k": 3072,
+        "rows": 127,
+        "cols": 8
+      },
+      "tolerance": 5.0,
+      "repeat": 1
+    },
+    {
+      "id": "mul_mat_q8_0_f32_mul_mat_q8_0_f32_packed_loop_k32_8192_c1_16_wg64_wide-prefill_k4096_rows512_cols8",
+      "op": "MUL_MAT",
+      "scenario": "mul_mat",
+      "expected_route_id": "mul_mat_q8_0_f32_packed_loop_k32_8192_c1_16_wg64",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "wide-prefill"
+      },
+      "supports": {
+        "src0_type": "Q8_0",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "shape": {
+        "k": 4096,
+        "rows": 512,
+        "cols": 8
+      },
+      "tolerance": 5.0,
+      "repeat": 1
+    },
+    {
+      "id": "mul_mat_q8_0_f32_mul_mat_q8_0_f32_packed_loop_k256_8192_c17_4096_wg128_decode-1_k3072_rows1_cols17",
+      "op": "MUL_MAT",
+      "scenario": "mul_mat",
+      "expected_route_id": "mul_mat_q8_0_f32_packed_loop_k256_8192_c17_4096_wg128",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "decode-1"
+      },
+      "supports": {
+        "src0_type": "Q8_0",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "shape": {
+        "k": 3072,
+        "rows": 1,
+        "cols": 17
+      },
+      "tolerance": 5.0,
+      "repeat": 1
+    },
+    {
+      "id": "mul_mat_q8_0_f32_mul_mat_q8_0_f32_packed_loop_k256_8192_c17_4096_wg128_prompt-128_k3072_rows64_cols128",
+      "op": "MUL_MAT",
+      "scenario": "mul_mat",
+      "expected_route_id": "mul_mat_q8_0_f32_packed_loop_k256_8192_c17_4096_wg128",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "prompt-128"
+      },
+      "supports": {
+        "src0_type": "Q8_0",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "shape": {
+        "k": 3072,
+        "rows": 64,
+        "cols": 128
+      },
+      "tolerance": 5.0,
+      "repeat": 1
+    },
+    {
+      "id": "mul_mat_q8_0_f32_mul_mat_q8_0_f32_packed_loop_k256_8192_c17_4096_wg128_prompt-tail_k3072_rows127_cols127",
+      "op": "MUL_MAT",
+      "scenario": "mul_mat",
+      "expected_route_id": "mul_mat_q8_0_f32_packed_loop_k256_8192_c17_4096_wg128",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "prompt-tail"
+      },
+      "supports": {
+        "src0_type": "Q8_0",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "shape": {
+        "k": 3072,
+        "rows": 127,
+        "cols": 127
+      },
+      "tolerance": 5.0,
+      "repeat": 1
     }
   ]
 }

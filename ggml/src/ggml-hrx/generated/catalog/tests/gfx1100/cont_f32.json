@@ -4,10 +4,14 @@
   "family": "cont_f32",
   "cases": [
     {
-      "id": "cont_f32_cont_f32_n128_r8_wg256_smoke",
+      "id": "cont_f32_cont_f32_generic_wg256_decode-1_ncols128_nrows1",
       "op": "CONT",
       "scenario": "cont",
-      "expected_route_id": "cont_f32_n128_r8_wg256",
+      "expected_route_id": "cont_f32_generic_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "decode-1"
+      },
       "supports": {
         "src0_type": "F32",
         "dst_type": "F32",
@@ -15,10 +19,10 @@
       },
       "shape": {
         "ncols": 128,
-        "nrows": 8
+        "nrows": 1
       },
       "tolerance": 1e-06,
-      "repeat": 2
+      "repeat": 1
     }
   ]
 }

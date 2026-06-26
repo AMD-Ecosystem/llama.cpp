@@ -4,10 +4,14 @@
   "family": "mul_mat_f32_f32",
   "cases": [
     {
-      "id": "mul_mat_f32_f32_mul_mat_f32_f32_moe_logits_k2048_r128_c1_512_wg256_smoke",
+      "id": "mul_mat_f32_f32_mul_mat_f32_f32_moe_logits_k2048_r128_c1_512_wg256_smoke_k2048_rows128_cols1",
       "op": "MUL_MAT",
       "scenario": "mul_mat",
       "expected_route_id": "mul_mat_f32_f32_moe_logits_k2048_r128_c1_512_wg256",
+      "schedule": {
+        "source": "atlas-smoke",
+        "scenario": "smoke"
+      },
       "supports": {
         "src0_type": "F32",
         "src1_type": "F32",
@@ -20,7 +24,30 @@
         "cols": 1
       },
       "tolerance": 0.0001,
-      "repeat": 2
+      "repeat": 1
+    },
+    {
+      "id": "mul_mat_f32_f32_mul_mat_f32_f32_moe_logits_k2048_r128_c1_512_wg256_mid_k2048_rows128_cols256",
+      "op": "MUL_MAT",
+      "scenario": "mul_mat",
+      "expected_route_id": "mul_mat_f32_f32_moe_logits_k2048_r128_c1_512_wg256",
+      "schedule": {
+        "source": "atlas-midpoint",
+        "scenario": "mid"
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "shape": {
+        "k": 2048,
+        "rows": 128,
+        "cols": 256
+      },
+      "tolerance": 0.0001,
+      "repeat": 1
     }
   ]
 }

@@ -4,10 +4,35 @@
   "family": "sum_rows_f32",
   "cases": [
     {
-      "id": "sum_rows_f32_sum_rows_f32_n8_r1_wg32_smoke",
+      "id": "sum_rows_f32_sum_rows_f32_n8_r16_wg32_decode-1_ncols8_nrows16",
+      "op": "SUM_ROWS",
+      "scenario": "sum_rows",
+      "expected_route_id": "sum_rows_f32_n8_r16_wg32",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "decode-1"
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous_row_reduction"
+      },
+      "shape": {
+        "ncols": 8,
+        "nrows": 16
+      },
+      "tolerance": 1e-06,
+      "repeat": 1
+    },
+    {
+      "id": "sum_rows_f32_sum_rows_f32_n8_r1_wg32_decode-1_ncols8_nrows1",
       "op": "SUM_ROWS",
       "scenario": "sum_rows",
       "expected_route_id": "sum_rows_f32_n8_r1_wg32",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "decode-1"
+      },
       "supports": {
         "src0_type": "F32",
         "dst_type": "F32",
@@ -18,7 +43,28 @@
         "nrows": 1
       },
       "tolerance": 1e-06,
-      "repeat": 2
+      "repeat": 1
+    },
+    {
+      "id": "sum_rows_f32_sum_rows_f32_n8_r64_wg32_decode-1_ncols8_nrows64",
+      "op": "SUM_ROWS",
+      "scenario": "sum_rows",
+      "expected_route_id": "sum_rows_f32_n8_r64_wg32",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "decode-1"
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous_row_reduction"
+      },
+      "shape": {
+        "ncols": 8,
+        "nrows": 64
+      },
+      "tolerance": 1e-06,
+      "repeat": 1
     }
   ]
 }

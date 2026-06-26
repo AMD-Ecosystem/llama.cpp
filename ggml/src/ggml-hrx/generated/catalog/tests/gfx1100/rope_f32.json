@@ -4,10 +4,14 @@
   "family": "rope_f32",
   "cases": [
     {
-      "id": "rope_f32_rope_normal_f32_freq_n128_d128_h32_t1_64_wg256_smoke",
+      "id": "rope_f32_rope_normal_f32_freq_n128_d128_h32_t1_64_wg256_prompt-128_ncols128_ntokens32",
       "op": "ROPE",
       "scenario": "rope",
       "expected_route_id": "rope_normal_f32_freq_n128_d128_h32_t1_64_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "prompt-128"
+      },
       "supports": {
         "src0_type": "F32",
         "src1_type": "I32",
@@ -22,11 +26,153 @@
         "ncols": 128,
         "n_dims": 128,
         "nheads": 32,
-        "ntokens": 1,
+        "ntokens": 32,
         "freq_scale": 1
       },
       "tolerance": 0.0001,
-      "repeat": 2
+      "repeat": 1
+    },
+    {
+      "id": "rope_f32_rope_normal_f32_freq_n128_d128_h8_24_t1_64_wg256_multi-token_ncols128_ntokens8",
+      "op": "ROPE",
+      "scenario": "rope",
+      "expected_route_id": "rope_normal_f32_freq_n128_d128_h8_24_t1_64_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "multi-token"
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "I32",
+        "src2_type": "F32",
+        "dst_type": "F32",
+        "mode": "NORMAL",
+        "freq_factor": "src2",
+        "ext_factor": "0",
+        "layout": "element-strided-head-token-ne3-1"
+      },
+      "shape": {
+        "ncols": 128,
+        "n_dims": 128,
+        "nheads": 8,
+        "ntokens": 8,
+        "freq_scale": 1
+      },
+      "tolerance": 0.0001,
+      "repeat": 1
+    },
+    {
+      "id": "rope_f32_rope_normal_f32_freq_n128_d128_h8_24_t1_64_wg256_prompt-128_ncols128_ntokens32",
+      "op": "ROPE",
+      "scenario": "rope",
+      "expected_route_id": "rope_normal_f32_freq_n128_d128_h8_24_t1_64_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "prompt-128"
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "I32",
+        "src2_type": "F32",
+        "dst_type": "F32",
+        "mode": "NORMAL",
+        "freq_factor": "src2",
+        "ext_factor": "0",
+        "layout": "element-strided-head-token-ne3-1"
+      },
+      "shape": {
+        "ncols": 128,
+        "n_dims": 128,
+        "nheads": 8,
+        "ntokens": 32,
+        "freq_scale": 1
+      },
+      "tolerance": 0.0001,
+      "repeat": 1
+    },
+    {
+      "id": "rope_f32_rope_normal_f32_n128_d128_h32_t1_64_wg256_prompt-128_ncols128_ntokens32",
+      "op": "ROPE",
+      "scenario": "rope",
+      "expected_route_id": "rope_normal_f32_n128_d128_h32_t1_64_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "prompt-128"
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "I32",
+        "dst_type": "F32",
+        "mode": "NORMAL",
+        "freq_factor": "none",
+        "ext_factor": "0",
+        "layout": "element-strided-head-token-ne3-1"
+      },
+      "shape": {
+        "ncols": 128,
+        "n_dims": 128,
+        "nheads": 32,
+        "ntokens": 32,
+        "freq_scale": 1
+      },
+      "tolerance": 0.0001,
+      "repeat": 1
+    },
+    {
+      "id": "rope_f32_rope_normal_f32_n128_d128_h8_t1_64_wg256_multi-token_ncols128_ntokens8",
+      "op": "ROPE",
+      "scenario": "rope",
+      "expected_route_id": "rope_normal_f32_n128_d128_h8_t1_64_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "multi-token"
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "I32",
+        "dst_type": "F32",
+        "mode": "NORMAL",
+        "freq_factor": "none",
+        "ext_factor": "0",
+        "layout": "element-strided-head-token-ne3-1"
+      },
+      "shape": {
+        "ncols": 128,
+        "n_dims": 128,
+        "nheads": 8,
+        "ntokens": 8,
+        "freq_scale": 1
+      },
+      "tolerance": 0.0001,
+      "repeat": 1
+    },
+    {
+      "id": "rope_f32_rope_normal_f32_n128_d128_h8_t1_64_wg256_prompt-128_ncols128_ntokens32",
+      "op": "ROPE",
+      "scenario": "rope",
+      "expected_route_id": "rope_normal_f32_n128_d128_h8_t1_64_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "prompt-128"
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "I32",
+        "dst_type": "F32",
+        "mode": "NORMAL",
+        "freq_factor": "none",
+        "ext_factor": "0",
+        "layout": "element-strided-head-token-ne3-1"
+      },
+      "shape": {
+        "ncols": 128,
+        "n_dims": 128,
+        "nheads": 8,
+        "ntokens": 32,
+        "freq_scale": 1
+      },
+      "tolerance": 0.0001,
+      "repeat": 1
     }
   ]
 }

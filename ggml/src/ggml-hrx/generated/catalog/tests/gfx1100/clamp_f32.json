@@ -4,10 +4,35 @@
   "family": "clamp_f32",
   "cases": [
     {
-      "id": "clamp_f32_clamp_f32_n1_r1_contiguous_wg256_smoke",
+      "id": "clamp_f32_clamp_f32_n1_r16_contiguous_wg256_decode-1_ncols1_nrows16",
+      "op": "CLAMP",
+      "scenario": "clamp",
+      "expected_route_id": "clamp_f32_n1_r16_contiguous_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "decode-1"
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "shape": {
+        "ncols": 1,
+        "nrows": 16
+      },
+      "tolerance": 1e-06,
+      "repeat": 1
+    },
+    {
+      "id": "clamp_f32_clamp_f32_n1_r1_contiguous_wg256_decode-1_ncols1_nrows1",
       "op": "CLAMP",
       "scenario": "clamp",
       "expected_route_id": "clamp_f32_n1_r1_contiguous_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "decode-1"
+      },
       "supports": {
         "src0_type": "F32",
         "dst_type": "F32",
@@ -18,7 +43,28 @@
         "nrows": 1
       },
       "tolerance": 1e-06,
-      "repeat": 2
+      "repeat": 1
+    },
+    {
+      "id": "clamp_f32_clamp_f32_n1_r64_contiguous_wg256_decode-1_ncols1_nrows64",
+      "op": "CLAMP",
+      "scenario": "clamp",
+      "expected_route_id": "clamp_f32_n1_r64_contiguous_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "decode-1"
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "shape": {
+        "ncols": 1,
+        "nrows": 64
+      },
+      "tolerance": 1e-06,
+      "repeat": 1
     }
   ]
 }

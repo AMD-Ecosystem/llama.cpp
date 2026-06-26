@@ -16,13 +16,6 @@
       "path": "artifacts/mul_mat_q5_k_f32_wmma64x64_f16acc_k3072_r5120_c64_128_wg128_loombc.loombc",
       "storage": "embedded"
     },
-    "mul_mat_q5_k_f32_wmma128x128_f16acc_k256_8192_r128_32768_c128_512_wg256_loombc": {
-      "format": "loom-bytecode",
-      "source_id": "mul_mat_q5_k_f32",
-      "root_symbol": "@hrx2_mul_mat_q5_k_f32_wmma128x128_f16acc",
-      "path": "artifacts/mul_mat_q5_k_f32_wmma128x128_f16acc_k256_8192_r128_32768_c128_512_wg256_loombc.loombc",
-      "storage": "embedded"
-    },
     "mul_mat_q5_k_f32_dot16_k256_32768_r1_262144_c1_wg32_loombc": {
       "format": "loom-bytecode",
       "source_id": "mul_mat_q5_k_f32",

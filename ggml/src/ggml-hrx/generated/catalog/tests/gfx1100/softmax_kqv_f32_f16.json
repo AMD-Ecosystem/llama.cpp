@@ -4,10 +4,14 @@
   "family": "softmax_kqv_f32_f16",
   "cases": [
     {
-      "id": "softmax_kqv_f32_f16_softmax_kqv_f32_f16_decode_kv256_d128_h24_hkv8_wg64_rows2_smoke",
+      "id": "softmax_kqv_f32_f16_softmax_kqv_f32_f16_decode_kv256_d128_h24_hkv8_wg64_rows2_smoke_shape",
       "op": "CONT",
       "scenario": "softmax_kqv",
       "expected_route_id": "softmax_kqv_f32_f16_decode_kv256_d128_h24_hkv8_wg64_rows2",
+      "schedule": {
+        "source": "atlas-test",
+        "scenario": "smoke"
+      },
       "supports": {
         "kq_type": "F32",
         "mask_type": "F32",
@@ -24,7 +28,7 @@
         "d": 128
       },
       "tolerance": 0.05,
-      "repeat": 2
+      "repeat": 1
     }
   ]
 }

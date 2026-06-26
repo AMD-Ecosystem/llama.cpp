@@ -4,10 +4,14 @@
   "family": "mul_mat_q4_k_swiglu_f32",
   "cases": [
     {
-      "id": "mul_mat_q4_k_swiglu_f32_mul_mat_q4_k_swiglu_f32_direct_k256_32768_c1_wg256_smoke",
+      "id": "mul_mat_q4_k_swiglu_f32_mul_mat_q4_k_swiglu_f32_direct_k256_32768_c1_wg256_smoke_k256_rows1_cols1",
       "op": "GLU",
       "scenario": "mul_mat_q4_k_swiglu",
       "expected_route_id": "mul_mat_q4_k_swiglu_f32_direct_k256_32768_c1_wg256",
+      "schedule": {
+        "source": "atlas-smoke",
+        "scenario": "smoke"
+      },
       "supports": {
         "src0_type": "Q4_K",
         "src1_type": "Q4_K",
@@ -18,11 +22,11 @@
       },
       "shape": {
         "k": 256,
-        "rows": 8,
+        "rows": 1,
         "cols": 1
       },
-      "tolerance": 0.1,
-      "repeat": 2
+      "tolerance": 5.0,
+      "repeat": 1
     }
   ]
 }

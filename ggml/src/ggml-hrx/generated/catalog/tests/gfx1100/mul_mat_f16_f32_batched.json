@@ -4,10 +4,14 @@
   "family": "mul_mat_f16_f32_batched",
   "cases": [
     {
-      "id": "mul_mat_f16_f32_batched_mul_mat_f16_f32_batched_attention_wg256_smoke",
+      "id": "mul_mat_f16_f32_batched_mul_mat_f16_f32_batched_attention_rows2_cols8_wg128_decode-1_k128_rows512_cols512",
       "op": "MUL_MAT",
       "scenario": "mul_mat",
-      "expected_route_id": "mul_mat_f16_f32_batched_attention_wg256",
+      "expected_route_id": "mul_mat_f16_f32_batched_attention_rows2_cols8_wg128",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "decode-1"
+      },
       "supports": {
         "src0_type": "F16",
         "src1_type": "F32",
@@ -15,12 +19,81 @@
         "layout": "batched_attention_broadcast"
       },
       "shape": {
-        "k": 256,
-        "rows": 128,
-        "cols": 1
+        "k": 128,
+        "rows": 512,
+        "cols": 512
       },
       "tolerance": 0.03,
-      "repeat": 2
+      "repeat": 1
+    },
+    {
+      "id": "mul_mat_f16_f32_batched_mul_mat_f16_f32_batched_attention_cols8_wg256_decode-1_k128_rows128_cols512",
+      "op": "MUL_MAT",
+      "scenario": "mul_mat",
+      "expected_route_id": "mul_mat_f16_f32_batched_attention_cols8_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "decode-1"
+      },
+      "supports": {
+        "src0_type": "F16",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "layout": "batched_attention_broadcast"
+      },
+      "shape": {
+        "k": 128,
+        "rows": 128,
+        "cols": 512
+      },
+      "tolerance": 0.03,
+      "repeat": 1
+    },
+    {
+      "id": "mul_mat_f16_f32_batched_mul_mat_f16_f32_batched_attention_cols8_wg256_decode-small_k576_rows128_cols768",
+      "op": "MUL_MAT",
+      "scenario": "mul_mat",
+      "expected_route_id": "mul_mat_f16_f32_batched_attention_cols8_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "decode-small"
+      },
+      "supports": {
+        "src0_type": "F16",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "layout": "batched_attention_broadcast"
+      },
+      "shape": {
+        "k": 576,
+        "rows": 128,
+        "cols": 768
+      },
+      "tolerance": 0.03,
+      "repeat": 1
+    },
+    {
+      "id": "mul_mat_f16_f32_batched_mul_mat_f16_f32_batched_attention_cols8_wg256_prompt-tail_k576_rows129_cols768",
+      "op": "MUL_MAT",
+      "scenario": "mul_mat",
+      "expected_route_id": "mul_mat_f16_f32_batched_attention_cols8_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "prompt-tail"
+      },
+      "supports": {
+        "src0_type": "F16",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "layout": "batched_attention_broadcast"
+      },
+      "shape": {
+        "k": 576,
+        "rows": 129,
+        "cols": 768
+      },
+      "tolerance": 0.03,
+      "repeat": 1
     }
   ]
 }

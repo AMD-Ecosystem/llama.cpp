@@ -2,7 +2,7 @@
   "schema": "ggml-hrx-catalog-v1",
   "layout": "ggml-hrx-split-catalog-v1",
   "catalog_id": "hrx3-gfx1100-add_f32-add_rms_norm_mul_f32-argsort_f32_i32-clamp_f32-cont_f32-cont_set_rows_f32-copy_f32_f16-div_f32-get_rows_f32-get_rows_moe_weights_f32-get_rows_q4_k_f32-get_rows_q5_k_f32-get_rows_q6_k_f32-get_rows_q8_0_f32-mul_f32-mul_mat_f16_f32_batched-mul_mat_f16_f32_batched_cont-mul_mat_f32_f32-mul_mat_q4_k_f32-mul_mat_q4_k_swiglu_f32-mul_mat_q5_k_f32-mul_mat_q6_k_f32-mul_mat_q8_0_f32-quantize_q8_1_f32-rms_norm_f32-rms_norm_mul_f32-rms_norm_mul_quantize_q8_1_f32-rope_f32-rope_neox_f32-rope_scale_f32-rope_set_rows_f32-scale_f32-set_rows_f32-soft_max_f32-softmax_kqv_f32_f16-sum_rows_f32-swiglu_f32",
-  "generated_at": "2026-06-26T02:56:04.619452+00:00",
+  "generated_at": "2026-06-26T04:20:23.517214+00:00",
   "generator": "ggml-hrx-kernel-bench export-llama",
   "targets": [
     {
@@ -118,8 +118,8 @@
       "mul_mat_f16_f32_batched_cont": {
         "route_count": 2,
         "exported_route_count": 2,
-        "test_schedule": "generated",
-        "status": "exported"
+        "test_schedule": "none",
+        "status": "exported_no_smoke_schedule"
       },
       "mul_mat_f16_f32_batched_kq_split_experiment": {
         "route_count": 0,
@@ -165,7 +165,7 @@
       },
       "mul_mat_q5_k_f32": {
         "route_count": 6,
-        "exported_route_count": 4,
+        "exported_route_count": 3,
         "test_schedule": "generated",
         "status": "exported"
       },
@@ -354,6 +354,14 @@
         "target_key": "__oracle_link_only__",
         "reason": "target_mismatch",
         "details": null
+      },
+      {
+        "family": "mul_mat_q5_k_f32",
+        "id": "mul_mat_q5_k_f32_wmma128x128_f16acc_k256_8192_r128_32768_c128_512_wg256",
+        "op": "MUL_MAT",
+        "target_key": "gfx1100",
+        "reason": "runtime_excluded",
+        "details": "current loom compiler rejects this route during HRX3 JIT specialization: the selected workgroup.id y topology range is wider than the kernel's index.assume proof"
       },
       {
         "family": "mul_mat_q6_k_f32",

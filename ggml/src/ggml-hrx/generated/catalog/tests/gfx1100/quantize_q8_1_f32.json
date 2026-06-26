@@ -4,10 +4,14 @@
   "family": "quantize_q8_1_f32",
   "cases": [
     {
-      "id": "quantize_q8_1_f32_quantize_q8_1_f32_generic_wg32_smoke",
+      "id": "quantize_q8_1_f32_quantize_q8_1_f32_generic_wg32_default_ncols256_nrows1",
       "op": "QUANTIZE",
       "scenario": "quantize_q8_1",
       "expected_route_id": "quantize_q8_1_f32_generic_wg32",
+      "schedule": {
+        "source": "atlas-axisless-default",
+        "scenario": "default"
+      },
       "supports": {
         "src0_type": "F32",
         "dst_type": "Q8_1",
@@ -15,10 +19,10 @@
       },
       "shape": {
         "ncols": 256,
-        "nrows": 2
+        "nrows": 1
       },
       "tolerance": 0.0,
-      "repeat": 2
+      "repeat": 1
     }
   ]
 }

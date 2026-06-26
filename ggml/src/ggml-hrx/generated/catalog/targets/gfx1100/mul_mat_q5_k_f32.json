@@ -115,117 +115,6 @@
       }
     },
     {
-      "id": "mul_mat_q5_k_f32_wmma128x128_f16acc_k256_8192_r128_32768_c128_512_wg256",
-      "family": "mul_mat_q5_k_f32",
-      "op": "MUL_MAT",
-      "source_id": "mul_mat_q5_k_f32",
-      "artifact_id": "mul_mat_q5_k_f32_wmma128x128_f16acc_k256_8192_r128_32768_c128_512_wg256_loombc",
-      "root_symbol": "@hrx2_mul_mat_q5_k_f32_wmma128x128_f16acc",
-      "export_name": "hrx2_mul_mat_q5_k_f32_wmma128x128_f16acc",
-      "abi": {
-        "binding_count": 3,
-        "parameter_count": 3,
-        "constant_byte_length": 0
-      },
-      "dispatch": {
-        "workgroup_size": [
-          256,
-          1,
-          1
-        ],
-        "rows_per_workgroup": 128,
-        "cols_per_workgroup": 128
-      },
-      "shape_domain": {
-        "name": "wmma128x128_f16acc_k256_8192_rows128_32768_cols64_1024_wg256",
-        "k_min": 256,
-        "k_max": 8192,
-        "rows_min": 128,
-        "rows_max": 32768,
-        "cols_min": 64,
-        "cols_max": 1024
-      },
-      "shape_guards": {
-        "k_multiple_of": 256,
-        "rows_multiple_of": 128,
-        "cols_multiple_of": 64
-      },
-      "specialization": {
-        "mode": "jit_config",
-        "bindings": [
-          {
-            "key": "@hrx2.shape.k",
-            "source": "shape.k"
-          },
-          {
-            "key": "@hrx2.shape.rows",
-            "source": "shape.rows"
-          },
-          {
-            "key": "@hrx2.shape.cols",
-            "source": "shape.cols"
-          },
-          {
-            "key": "@hrx2.tuning.workgroup_size",
-            "value": "256"
-          }
-        ]
-      },
-      "supports": {
-        "src0_type": "Q5_K",
-        "src1_type": "F32",
-        "dst_type": "F32",
-        "layout": "contiguous"
-      },
-      "target_key": "gfx1100",
-      "loader_format": "amdgpu-hsaco",
-      "constraints": [
-        {
-          "source": "src0.ne2",
-          "eq": 1
-        },
-        {
-          "source": "src0.ne3",
-          "eq": 1
-        },
-        {
-          "source": "src1.ne2",
-          "eq": 1
-        },
-        {
-          "source": "src1.ne3",
-          "eq": 1
-        },
-        {
-          "source": "dst.ne2",
-          "eq": 1
-        },
-        {
-          "source": "dst.ne3",
-          "eq": 1
-        },
-        {
-          "source": "src0.ne0",
-          "eq_source": "src1.ne0"
-        },
-        {
-          "source": "dst.ne0",
-          "eq_source": "src0.ne1"
-        },
-        {
-          "source": "dst.ne1",
-          "eq_source": "src1.ne1"
-        }
-      ],
-      "evidence": {
-        "hrx2": {
-          "phase": "dogfood-q5-k-wmma128-prefill",
-          "algorithm": "q5_k_f32_128x128_wmma_f16acc",
-          "selection": "prompt shapes use the checked WMMA route; dot16/direct routes remain decode fallback"
-        }
-      }
-    },
-    {
       "id": "mul_mat_q5_k_f32_dot16_k256_32768_r1_262144_c1_wg32",
       "family": "mul_mat_q5_k_f32",
       "op": "MUL_MAT",
@@ -364,7 +253,7 @@
         "rows_min": 1,
         "rows_max": 262144,
         "cols_min": 1,
-        "cols_max": 512
+        "cols_max": 64
       },
       "shape_guards": {
         "k_multiple_of": 256

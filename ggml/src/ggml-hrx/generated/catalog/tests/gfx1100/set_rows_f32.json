@@ -4,10 +4,14 @@
   "family": "set_rows_f32",
   "cases": [
     {
-      "id": "set_rows_f32_set_rows_f32_f16_generic_smoke",
+      "id": "set_rows_f32_set_rows_f32_f16_generic_decode-1_ncols128_nrows1",
       "op": "SET_ROWS",
       "scenario": "set_rows",
       "expected_route_id": "set_rows_f32_f16_generic",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "decode-1"
+      },
       "supports": {
         "src0_type": "F32",
         "src1_type": "I64",
@@ -16,11 +20,80 @@
       },
       "shape": {
         "ncols": 128,
-        "nrows": 2,
+        "nrows": 1,
         "dst_rows": 4
       },
       "tolerance": 1e-06,
-      "repeat": 2
+      "repeat": 1
+    },
+    {
+      "id": "set_rows_f32_set_rows_f32_f16_generic_short-prompt_ncols128_nrows8",
+      "op": "SET_ROWS",
+      "scenario": "set_rows",
+      "expected_route_id": "set_rows_f32_f16_generic",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "short-prompt"
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "I64",
+        "dst_type": "F16",
+        "layout": "contiguous_rows"
+      },
+      "shape": {
+        "ncols": 128,
+        "nrows": 8,
+        "dst_rows": 17
+      },
+      "tolerance": 1e-06,
+      "repeat": 1
+    },
+    {
+      "id": "set_rows_f32_set_rows_f32_f16_generic_pot-128_ncols128_nrows128",
+      "op": "SET_ROWS",
+      "scenario": "set_rows",
+      "expected_route_id": "set_rows_f32_f16_generic",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "pot-128"
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "I64",
+        "dst_type": "F16",
+        "layout": "contiguous_rows"
+      },
+      "shape": {
+        "ncols": 128,
+        "nrows": 128,
+        "dst_rows": 257
+      },
+      "tolerance": 1e-06,
+      "repeat": 1
+    },
+    {
+      "id": "set_rows_f32_set_rows_f32_f16_generic_tail-129_ncols129_nrows129",
+      "op": "SET_ROWS",
+      "scenario": "set_rows",
+      "expected_route_id": "set_rows_f32_f16_generic",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "tail-129"
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "I64",
+        "dst_type": "F16",
+        "layout": "contiguous_rows"
+      },
+      "shape": {
+        "ncols": 129,
+        "nrows": 129,
+        "dst_rows": 259
+      },
+      "tolerance": 1e-06,
+      "repeat": 1
     }
   ]
 }

@@ -4,10 +4,14 @@
   "family": "mul_f32",
   "cases": [
     {
-      "id": "mul_f32_mul_f32_contiguous_2d_r64_1048576_wg256_smoke",
+      "id": "mul_f32_mul_f32_contiguous_2d_r64_1048576_wg256_decode-1_ncols128_nrows64",
       "op": "MUL",
       "scenario": "mul",
       "expected_route_id": "mul_f32_contiguous_2d_r64_1048576_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "decode-1"
+      },
       "supports": {
         "src0_type": "F32",
         "src1_type": "F32",
@@ -15,11 +19,77 @@
         "layout": "contiguous"
       },
       "shape": {
-        "ncols": 8,
+        "ncols": 128,
         "nrows": 64
       },
       "tolerance": 1e-06,
-      "repeat": 2
+      "repeat": 1
+    },
+    {
+      "id": "mul_f32_mul_f32_contiguous_2d_r64_1048576_wg256_short-prompt_ncols128_nrows524320",
+      "op": "MUL",
+      "scenario": "mul",
+      "expected_route_id": "mul_f32_contiguous_2d_r64_1048576_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "short-prompt"
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "shape": {
+        "ncols": 128,
+        "nrows": 524320
+      },
+      "tolerance": 1e-06,
+      "repeat": 1
+    },
+    {
+      "id": "mul_f32_mul_f32_contiguous_2d_r64_1048576_wg256_pot-128_ncols128_nrows128",
+      "op": "MUL",
+      "scenario": "mul",
+      "expected_route_id": "mul_f32_contiguous_2d_r64_1048576_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "pot-128"
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "shape": {
+        "ncols": 128,
+        "nrows": 128
+      },
+      "tolerance": 1e-06,
+      "repeat": 1
+    },
+    {
+      "id": "mul_f32_mul_f32_contiguous_2d_r64_1048576_wg256_tail-129_ncols129_nrows129",
+      "op": "MUL",
+      "scenario": "mul",
+      "expected_route_id": "mul_f32_contiguous_2d_r64_1048576_wg256",
+      "schedule": {
+        "source": "llm-atlas",
+        "scenario": "tail-129"
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "shape": {
+        "ncols": 129,
+        "nrows": 129
+      },
+      "tolerance": 1e-06,
+      "repeat": 1
     }
   ]
 }
