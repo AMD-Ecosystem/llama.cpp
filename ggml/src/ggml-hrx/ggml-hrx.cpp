@@ -2209,7 +2209,10 @@ static bool ggml_backend_hrx_make_cont_request(
     }
     if (!device_context || !out_request || !node || node->op != GGML_OP_CONT || !node->src[0] ||
         !ggml_backend_hrx_is_f32_row_contiguous(node->src[0]) ||
-        !ggml_backend_hrx_is_f32_row_contiguous(node)) {
+        !ggml_backend_hrx_is_f32_row_contiguous(node) ||
+        // The generic Loom CONT kernel indexes i0 directly across node->ne[0].
+        // Flattening layouts such as attention PERMUTE->CONT need a dedicated route.
+        node->src[0]->ne[0] != node->ne[0]) {
         return false;
     }
     out_request->problem = {};
@@ -2357,7 +2360,8 @@ static bool ggml_backend_hrx_make_rope_request(
         std::vector<const ggml_tensor *>{node->src[0], node->src[1], freq, node} :
         std::vector<const ggml_tensor *>{node->src[0], node->src[1], node};
     out_request->constants.clear();
-    ggml_backend_hrx_append_constant<float>(&out_request->constants, -2.0f * std::log(freq_base) / static_cast<float>(n_dims));
+    // Loom ROPE kernels compute pow(theta_scale, pair), so pass the geometric base.
+    ggml_backend_hrx_append_constant<float>(&out_request->constants, std::pow(freq_base, -2.0f / static_cast<float>(n_dims)));
     ggml_backend_hrx_append_constant<float>(&out_request->constants, freq_scale);
     ggml_backend_hrx_append_constant<float>(&out_request->constants, attn_factor);
     if (out_request->problem.op == "ROPE_SCALE") {
