@@ -6,6 +6,7 @@
     {
       "id": "mul_mat_f32_f32_mul_mat_f32_f32_moe_logits_k2048_r128_c1_512_wg256_smoke",
       "op": "MUL_MAT",
+      "scenario": "mul_mat",
       "expected_route_id": "mul_mat_f32_f32_moe_logits_k2048_r128_c1_512_wg256",
       "supports": {
         "src0_type": "F32",

@@ -45,44 +45,6 @@
       },
       "target_key": "gfx1100",
       "loader_format": "amdgpu-hsaco",
-      "constraints": [
-        {
-          "source": "src0.ne2",
-          "eq": 1
-        },
-        {
-          "source": "src0.ne3",
-          "eq": 1
-        },
-        {
-          "source": "src1.ne2",
-          "eq": 1
-        },
-        {
-          "source": "src1.ne3",
-          "eq": 1
-        },
-        {
-          "source": "dst.ne2",
-          "eq": 1
-        },
-        {
-          "source": "dst.ne3",
-          "eq": 1
-        },
-        {
-          "source": "src0.ne0",
-          "eq_source": "src1.ne0"
-        },
-        {
-          "source": "dst.ne0",
-          "eq_source": "src0.ne1"
-        },
-        {
-          "source": "dst.ne1",
-          "eq_source": "src1.ne1"
-        }
-      ],
       "evidence": {
         "hrx2": {
           "phase": "loom_dogfood_fusion_ratchet_decode_kqv_cont_probe",
@@ -172,44 +134,6 @@
       },
       "target_key": "gfx1100",
       "loader_format": "amdgpu-hsaco",
-      "constraints": [
-        {
-          "source": "src0.ne2",
-          "eq": 1
-        },
-        {
-          "source": "src0.ne3",
-          "eq": 1
-        },
-        {
-          "source": "src1.ne2",
-          "eq": 1
-        },
-        {
-          "source": "src1.ne3",
-          "eq": 1
-        },
-        {
-          "source": "dst.ne2",
-          "eq": 1
-        },
-        {
-          "source": "dst.ne3",
-          "eq": 1
-        },
-        {
-          "source": "src0.ne0",
-          "eq_source": "src1.ne0"
-        },
-        {
-          "source": "dst.ne0",
-          "eq_source": "src0.ne1"
-        },
-        {
-          "source": "dst.ne1",
-          "eq_source": "src1.ne1"
-        }
-      ],
       "evidence": {
         "hrx2": {
           "phase": "loom_dogfood_p512_kqv_live_route_probe",

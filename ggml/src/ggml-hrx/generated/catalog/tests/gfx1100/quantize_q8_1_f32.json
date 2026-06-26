@@ -1,0 +1,24 @@
+{
+  "schema": "ggml-hrx-test-schedule-v1",
+  "target_key": "gfx1100",
+  "family": "quantize_q8_1_f32",
+  "cases": [
+    {
+      "id": "quantize_q8_1_f32_quantize_q8_1_f32_generic_wg32_smoke",
+      "op": "QUANTIZE",
+      "scenario": "quantize_q8_1",
+      "expected_route_id": "quantize_q8_1_f32_generic_wg32",
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "Q8_1",
+        "layout": "contiguous"
+      },
+      "shape": {
+        "ncols": 256,
+        "nrows": 2
+      },
+      "tolerance": 0.0,
+      "repeat": 2
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "schema": "ggml-hrx-test-schedule-v1",
+  "target_key": "gfx1100",
+  "family": "add_rms_norm_mul_f32",
+  "cases": [
+    {
+      "id": "add_rms_norm_mul_f32_add_rms_norm_mul_f32_n3072_r1_vector_vw4_wg32_smoke",
+      "op": "MUL",
+      "scenario": "add_rms_norm_mul",
+      "expected_route_id": "add_rms_norm_mul_f32_n3072_r1_vector_vw4_wg32",
+      "supports": {
+        "src_type": "F32",
+        "weight_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous_same_shape_add"
+      },
+      "shape": {
+        "ncols": 3072,
+        "nrows": 1
+      },
+      "tolerance": 3e-05,
+      "repeat": 2
+    }
+  ]
+}

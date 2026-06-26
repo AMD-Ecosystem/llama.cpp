@@ -1,0 +1,31 @@
+{
+  "schema": "ggml-hrx-test-schedule-v1",
+  "target_key": "gfx1100",
+  "family": "rope_set_rows_f32",
+  "cases": [
+    {
+      "id": "rope_set_rows_f32_rope_neox_f32_freq_set_rows_f16_n128_d96_h8_t1_512_wg256_smoke",
+      "op": "SET_ROWS",
+      "scenario": "rope_set_rows",
+      "expected_route_id": "rope_neox_f32_freq_set_rows_f16_n128_d96_h8_t1_512_wg256",
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "I32",
+        "dst_type": "F16",
+        "mode": "NEOX",
+        "freq_factor": "present",
+        "ext_factor": "0",
+        "layout": "rope-view-set-rows-f16"
+      },
+      "shape": {
+        "ncols": 128,
+        "n_dims": 96,
+        "nheads": 8,
+        "ntokens": 1,
+        "dst_rows": 4
+      },
+      "tolerance": 0.001,
+      "repeat": 2
+    }
+  ]
+}

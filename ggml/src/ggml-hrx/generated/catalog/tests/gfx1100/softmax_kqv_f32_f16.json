@@ -1,0 +1,30 @@
+{
+  "schema": "ggml-hrx-test-schedule-v1",
+  "target_key": "gfx1100",
+  "family": "softmax_kqv_f32_f16",
+  "cases": [
+    {
+      "id": "softmax_kqv_f32_f16_softmax_kqv_f32_f16_decode_kv256_d128_h24_hkv8_wg64_rows2_smoke",
+      "op": "CONT",
+      "scenario": "softmax_kqv",
+      "expected_route_id": "softmax_kqv_f32_f16_decode_kv256_d128_h24_hkv8_wg64_rows2",
+      "supports": {
+        "kq_type": "F32",
+        "mask_type": "F32",
+        "v_type": "F16",
+        "dst_type": "F32",
+        "layout": "phi4_decode_kq_softmax_kqv_permute_cont",
+        "fusion": "SOFT_MAX + MUL_MAT(F16xF32) + PERMUTE + CONT"
+      },
+      "shape": {
+        "kv": 256,
+        "n": 1,
+        "nheads": 24,
+        "nheads_kv": 8,
+        "d": 128
+      },
+      "tolerance": 0.05,
+      "repeat": 2
+    }
+  ]
+}

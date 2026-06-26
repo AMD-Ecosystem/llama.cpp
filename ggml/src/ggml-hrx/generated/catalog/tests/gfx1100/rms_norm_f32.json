@@ -6,6 +6,7 @@
     {
       "id": "rms_norm_f32_rms_norm_f32_n64_r60_vector_vw4_wg1024_smoke",
       "op": "RMS_NORM",
+      "scenario": "rms_norm",
       "expected_route_id": "rms_norm_f32_n64_r60_vector_vw4_wg1024",
       "supports": {
         "src0_type": "F32",

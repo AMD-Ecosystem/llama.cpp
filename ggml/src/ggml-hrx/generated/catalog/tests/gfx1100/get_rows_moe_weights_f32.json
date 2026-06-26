@@ -1,0 +1,28 @@
+{
+  "schema": "ggml-hrx-test-schedule-v1",
+  "target_key": "gfx1100",
+  "family": "get_rows_moe_weights_f32",
+  "cases": [
+    {
+      "id": "get_rows_moe_weights_f32_get_rows_moe_weights_f32_ne128_k8_t1_wg256_smoke",
+      "op": "GET_ROWS",
+      "scenario": "get_rows",
+      "expected_route_id": "get_rows_moe_weights_f32_ne128_k8_t1_wg256",
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "I32",
+        "dst_type": "F32",
+        "layout": "moe_weights_topk_view"
+      },
+      "shape": {
+        "ncols": 8,
+        "nrows": 1,
+        "nselected": 8,
+        "ntokens": 1,
+        "nexperts": 128
+      },
+      "tolerance": 1e-06,
+      "repeat": 2
+    }
+  ]
+}

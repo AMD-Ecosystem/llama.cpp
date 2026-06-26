@@ -6,6 +6,7 @@
     {
       "id": "div_f32_div_f32_n8_r1_rhscolbroadcast_wg256_smoke",
       "op": "DIV",
+      "scenario": "div",
       "expected_route_id": "div_f32_n8_r1_rhscolbroadcast_wg256",
       "supports": {
         "src0_type": "F32",

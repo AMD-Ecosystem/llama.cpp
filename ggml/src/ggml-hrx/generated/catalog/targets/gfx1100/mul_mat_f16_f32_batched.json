@@ -120,44 +120,6 @@
       },
       "target_key": "gfx1100",
       "loader_format": "amdgpu-hsaco",
-      "constraints": [
-        {
-          "source": "src0.ne2",
-          "eq": 1
-        },
-        {
-          "source": "src0.ne3",
-          "eq": 1
-        },
-        {
-          "source": "src1.ne2",
-          "eq": 1
-        },
-        {
-          "source": "src1.ne3",
-          "eq": 1
-        },
-        {
-          "source": "dst.ne2",
-          "eq": 1
-        },
-        {
-          "source": "dst.ne3",
-          "eq": 1
-        },
-        {
-          "source": "src0.ne0",
-          "eq_source": "src1.ne0"
-        },
-        {
-          "source": "dst.ne0",
-          "eq_source": "src0.ne1"
-        },
-        {
-          "source": "dst.ne1",
-          "eq_source": "src1.ne1"
-        }
-      ],
       "evidence": {
         "hrx2": {
           "phase": "loom_dogfood_f16_wmma64x64_broad_vector_limit_control",
@@ -284,44 +246,6 @@
       },
       "target_key": "gfx1100",
       "loader_format": "amdgpu-hsaco",
-      "constraints": [
-        {
-          "source": "src0.ne2",
-          "eq": 1
-        },
-        {
-          "source": "src0.ne3",
-          "eq": 1
-        },
-        {
-          "source": "src1.ne2",
-          "eq": 1
-        },
-        {
-          "source": "src1.ne3",
-          "eq": 1
-        },
-        {
-          "source": "dst.ne2",
-          "eq": 1
-        },
-        {
-          "source": "dst.ne3",
-          "eq": 1
-        },
-        {
-          "source": "src0.ne0",
-          "eq_source": "src1.ne0"
-        },
-        {
-          "source": "dst.ne0",
-          "eq_source": "src0.ne1"
-        },
-        {
-          "source": "dst.ne1",
-          "eq_source": "src1.ne1"
-        }
-      ],
       "evidence": {
         "hrx2": {
           "phase": "loom_dogfood_f16_wmma64x64_broad_vector_limit_control",
@@ -412,44 +336,6 @@
       },
       "target_key": "gfx1100",
       "loader_format": "amdgpu-hsaco",
-      "constraints": [
-        {
-          "source": "src0.ne2",
-          "eq": 1
-        },
-        {
-          "source": "src0.ne3",
-          "eq": 1
-        },
-        {
-          "source": "src1.ne2",
-          "eq": 1
-        },
-        {
-          "source": "src1.ne3",
-          "eq": 1
-        },
-        {
-          "source": "dst.ne2",
-          "eq": 1
-        },
-        {
-          "source": "dst.ne3",
-          "eq": 1
-        },
-        {
-          "source": "src0.ne0",
-          "eq_source": "src1.ne0"
-        },
-        {
-          "source": "dst.ne0",
-          "eq_source": "src0.ne1"
-        },
-        {
-          "source": "dst.ne1",
-          "eq_source": "src1.ne1"
-        }
-      ],
       "evidence": {
         "hrx2": {
           "phase": "loom_dogfood_p512_kqv_live_route_probe",
@@ -572,44 +458,6 @@
       },
       "target_key": "gfx1100",
       "loader_format": "amdgpu-hsaco",
-      "constraints": [
-        {
-          "source": "src0.ne2",
-          "eq": 1
-        },
-        {
-          "source": "src0.ne3",
-          "eq": 1
-        },
-        {
-          "source": "src1.ne2",
-          "eq": 1
-        },
-        {
-          "source": "src1.ne3",
-          "eq": 1
-        },
-        {
-          "source": "dst.ne2",
-          "eq": 1
-        },
-        {
-          "source": "dst.ne3",
-          "eq": 1
-        },
-        {
-          "source": "src0.ne0",
-          "eq_source": "src1.ne0"
-        },
-        {
-          "source": "dst.ne0",
-          "eq_source": "src0.ne1"
-        },
-        {
-          "source": "dst.ne1",
-          "eq_source": "src1.ne1"
-        }
-      ],
       "evidence": {
         "hrx2": {
           "phase": "loom_dogfood_p512_kq_vulkan_contract_probe",
@@ -735,44 +583,6 @@
       },
       "target_key": "gfx1100",
       "loader_format": "amdgpu-hsaco",
-      "constraints": [
-        {
-          "source": "src0.ne2",
-          "eq": 1
-        },
-        {
-          "source": "src0.ne3",
-          "eq": 1
-        },
-        {
-          "source": "src1.ne2",
-          "eq": 1
-        },
-        {
-          "source": "src1.ne3",
-          "eq": 1
-        },
-        {
-          "source": "dst.ne2",
-          "eq": 1
-        },
-        {
-          "source": "dst.ne3",
-          "eq": 1
-        },
-        {
-          "source": "src0.ne0",
-          "eq_source": "src1.ne0"
-        },
-        {
-          "source": "dst.ne0",
-          "eq_source": "src0.ne1"
-        },
-        {
-          "source": "dst.ne1",
-          "eq_source": "src1.ne1"
-        }
-      ],
       "evidence": {
         "hrx2": {
           "phase": "phase2a-f16-attention-row-tiling-probe",
@@ -897,44 +707,6 @@
       },
       "target_key": "gfx1100",
       "loader_format": "amdgpu-hsaco",
-      "constraints": [
-        {
-          "source": "src0.ne2",
-          "eq": 1
-        },
-        {
-          "source": "src0.ne3",
-          "eq": 1
-        },
-        {
-          "source": "src1.ne2",
-          "eq": 1
-        },
-        {
-          "source": "src1.ne3",
-          "eq": 1
-        },
-        {
-          "source": "dst.ne2",
-          "eq": 1
-        },
-        {
-          "source": "dst.ne3",
-          "eq": 1
-        },
-        {
-          "source": "src0.ne0",
-          "eq_source": "src1.ne0"
-        },
-        {
-          "source": "dst.ne0",
-          "eq_source": "src0.ne1"
-        },
-        {
-          "source": "dst.ne1",
-          "eq_source": "src1.ne1"
-        }
-      ],
       "evidence": {
         "hrx2": {
           "phase": "phase2a-f16-attention-cols8-prior",
@@ -1057,44 +829,6 @@
       },
       "target_key": "gfx1100",
       "loader_format": "amdgpu-hsaco",
-      "constraints": [
-        {
-          "source": "src0.ne2",
-          "eq": 1
-        },
-        {
-          "source": "src0.ne3",
-          "eq": 1
-        },
-        {
-          "source": "src1.ne2",
-          "eq": 1
-        },
-        {
-          "source": "src1.ne3",
-          "eq": 1
-        },
-        {
-          "source": "dst.ne2",
-          "eq": 1
-        },
-        {
-          "source": "dst.ne3",
-          "eq": 1
-        },
-        {
-          "source": "src0.ne0",
-          "eq_source": "src1.ne0"
-        },
-        {
-          "source": "dst.ne0",
-          "eq_source": "src0.ne1"
-        },
-        {
-          "source": "dst.ne1",
-          "eq_source": "src1.ne1"
-        }
-      ],
       "evidence": {
         "hrx2": {
           "phase": "phase2a-p512-attention-route-coverage",

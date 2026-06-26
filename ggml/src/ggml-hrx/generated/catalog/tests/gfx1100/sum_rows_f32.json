@@ -6,6 +6,7 @@
     {
       "id": "sum_rows_f32_sum_rows_f32_n8_r1_wg32_smoke",
       "op": "SUM_ROWS",
+      "scenario": "sum_rows",
       "expected_route_id": "sum_rows_f32_n8_r1_wg32",
       "supports": {
         "src0_type": "F32",

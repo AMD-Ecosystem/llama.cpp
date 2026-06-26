@@ -6,6 +6,7 @@
     {
       "id": "add_f32_add_f32_n3072_r1_wg256_smoke",
       "op": "ADD",
+      "scenario": "add",
       "expected_route_id": "add_f32_n3072_r1_wg256",
       "supports": {
         "src0_type": "F32",

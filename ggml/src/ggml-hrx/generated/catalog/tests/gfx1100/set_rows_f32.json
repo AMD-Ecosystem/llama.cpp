@@ -1,0 +1,26 @@
+{
+  "schema": "ggml-hrx-test-schedule-v1",
+  "target_key": "gfx1100",
+  "family": "set_rows_f32",
+  "cases": [
+    {
+      "id": "set_rows_f32_set_rows_f32_f16_generic_smoke",
+      "op": "SET_ROWS",
+      "scenario": "set_rows",
+      "expected_route_id": "set_rows_f32_f16_generic",
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "I64",
+        "dst_type": "F16",
+        "layout": "contiguous_rows"
+      },
+      "shape": {
+        "ncols": 128,
+        "nrows": 2,
+        "dst_rows": 4
+      },
+      "tolerance": 1e-06,
+      "repeat": 2
+    }
+  ]
+}

@@ -6,6 +6,7 @@
     {
       "id": "argsort_f32_i32_argsort_f32_i32_n128_r1_desc_wg128_smoke",
       "op": "ARGSORT",
+      "scenario": "argsort",
       "expected_route_id": "argsort_f32_i32_n128_r1_desc_wg128",
       "supports": {
         "src0_type": "F32",

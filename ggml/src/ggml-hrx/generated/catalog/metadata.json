@@ -1,13 +1,376 @@
 {
   "schema": "ggml-hrx-catalog-v1",
   "layout": "ggml-hrx-split-catalog-v1",
-  "catalog_id": "hrx3-gfx1100-kernel-complete",
-  "generated_at": "2026-06-26T01:36:02.450034+00:00",
+  "catalog_id": "hrx3-gfx1100-add_f32-add_rms_norm_mul_f32-argsort_f32_i32-clamp_f32-cont_f32-cont_set_rows_f32-copy_f32_f16-div_f32-get_rows_f32-get_rows_moe_weights_f32-get_rows_q4_k_f32-get_rows_q5_k_f32-get_rows_q6_k_f32-get_rows_q8_0_f32-mul_f32-mul_mat_f16_f32_batched-mul_mat_f16_f32_batched_cont-mul_mat_f32_f32-mul_mat_q4_k_f32-mul_mat_q4_k_swiglu_f32-mul_mat_q5_k_f32-mul_mat_q6_k_f32-mul_mat_q8_0_f32-quantize_q8_1_f32-rms_norm_f32-rms_norm_mul_f32-rms_norm_mul_quantize_q8_1_f32-rope_f32-rope_neox_f32-rope_scale_f32-rope_set_rows_f32-scale_f32-set_rows_f32-soft_max_f32-softmax_kqv_f32_f16-sum_rows_f32-swiglu_f32",
+  "generated_at": "2026-06-26T02:56:04.619452+00:00",
   "generator": "ggml-hrx-kernel-bench export-llama",
   "targets": [
     {
       "target_key": "gfx1100",
       "target_variant": null
     }
-  ]
+  ],
+  "coverage": {
+    "target_key": "gfx1100",
+    "families": {
+      "add_f32": {
+        "route_count": 8,
+        "exported_route_count": 8,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "add_rms_norm_mul_f32": {
+        "route_count": 2,
+        "exported_route_count": 2,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "argsort_f32_i32": {
+        "route_count": 3,
+        "exported_route_count": 3,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "clamp_f32": {
+        "route_count": 3,
+        "exported_route_count": 3,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "cont_f32": {
+        "route_count": 6,
+        "exported_route_count": 6,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "cont_set_rows_f32": {
+        "route_count": 1,
+        "exported_route_count": 1,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "copy_f32_f16": {
+        "route_count": 1,
+        "exported_route_count": 1,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "div_f32": {
+        "route_count": 3,
+        "exported_route_count": 3,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "flash_attn_fa0_f32_f16": {
+        "route_count": 0,
+        "exported_route_count": 0,
+        "test_schedule": "none",
+        "status": "no_routes"
+      },
+      "get_rows_f32": {
+        "route_count": 9,
+        "exported_route_count": 9,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "get_rows_moe_weights_f32": {
+        "route_count": 3,
+        "exported_route_count": 3,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "get_rows_q4_k_f32": {
+        "route_count": 3,
+        "exported_route_count": 3,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "get_rows_q5_k_f32": {
+        "route_count": 1,
+        "exported_route_count": 1,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "get_rows_q6_k_f32": {
+        "route_count": 4,
+        "exported_route_count": 4,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "get_rows_q8_0_f32": {
+        "route_count": 1,
+        "exported_route_count": 1,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "mul_f32": {
+        "route_count": 7,
+        "exported_route_count": 7,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "mul_mat_f16_f32_batched": {
+        "route_count": 10,
+        "exported_route_count": 7,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "mul_mat_f16_f32_batched_cont": {
+        "route_count": 2,
+        "exported_route_count": 2,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "mul_mat_f16_f32_batched_kq_split_experiment": {
+        "route_count": 0,
+        "exported_route_count": 0,
+        "test_schedule": "none",
+        "status": "no_routes"
+      },
+      "mul_mat_f32_f32": {
+        "route_count": 1,
+        "exported_route_count": 1,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "mul_mat_id_q4_k_f32": {
+        "route_count": 1,
+        "exported_route_count": 0,
+        "test_schedule": "none",
+        "status": "runtime_excluded"
+      },
+      "mul_mat_id_q5_k_f32": {
+        "route_count": 1,
+        "exported_route_count": 0,
+        "test_schedule": "none",
+        "status": "runtime_excluded"
+      },
+      "mul_mat_id_q6_k_f32": {
+        "route_count": 1,
+        "exported_route_count": 0,
+        "test_schedule": "none",
+        "status": "runtime_excluded"
+      },
+      "mul_mat_q4_k_f32": {
+        "route_count": 7,
+        "exported_route_count": 4,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "mul_mat_q4_k_swiglu_f32": {
+        "route_count": 4,
+        "exported_route_count": 4,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "mul_mat_q5_k_f32": {
+        "route_count": 6,
+        "exported_route_count": 4,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "mul_mat_q6_k_f32": {
+        "route_count": 6,
+        "exported_route_count": 5,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "mul_mat_q8_0_f32": {
+        "route_count": 10,
+        "exported_route_count": 10,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "quantize_q8_1_f32": {
+        "route_count": 2,
+        "exported_route_count": 1,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "rms_norm_f32": {
+        "route_count": 35,
+        "exported_route_count": 35,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "rms_norm_mul_f32": {
+        "route_count": 6,
+        "exported_route_count": 6,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "rms_norm_mul_quantize_q8_1_f32": {
+        "route_count": 1,
+        "exported_route_count": 1,
+        "test_schedule": "none",
+        "status": "exported_no_smoke_schedule"
+      },
+      "rope_f32": {
+        "route_count": 6,
+        "exported_route_count": 6,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "rope_neox_f32": {
+        "route_count": 37,
+        "exported_route_count": 37,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "rope_scale_f32": {
+        "route_count": 3,
+        "exported_route_count": 3,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "rope_set_rows_f32": {
+        "route_count": 4,
+        "exported_route_count": 4,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "scale_f32": {
+        "route_count": 3,
+        "exported_route_count": 3,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "set_rows_f32": {
+        "route_count": 2,
+        "exported_route_count": 2,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "soft_max_f32": {
+        "route_count": 17,
+        "exported_route_count": 17,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "softmax_kqv_f32_f16": {
+        "route_count": 1,
+        "exported_route_count": 1,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "sum_rows_f32": {
+        "route_count": 3,
+        "exported_route_count": 3,
+        "test_schedule": "generated",
+        "status": "exported"
+      },
+      "swiglu_f32": {
+        "route_count": 12,
+        "exported_route_count": 12,
+        "test_schedule": "generated",
+        "status": "exported"
+      }
+    },
+    "skipped_routes": [
+      {
+        "family": "mul_mat_f16_f32_batched",
+        "id": "experiment_kq_pack_k_f16_p512_wg256",
+        "op": "EXPERIMENT",
+        "target_key": "gfx1100",
+        "reason": "experiment",
+        "details": null
+      },
+      {
+        "family": "mul_mat_f16_f32_batched",
+        "id": "experiment_kq_pack_q_f32_f16_p512_wg256",
+        "op": "EXPERIMENT",
+        "target_key": "gfx1100",
+        "reason": "experiment",
+        "details": null
+      },
+      {
+        "family": "mul_mat_f16_f32_batched",
+        "id": "experiment_kq_matmul_f16_f16_p512_wg256",
+        "op": "EXPERIMENT",
+        "target_key": "gfx1100",
+        "reason": "experiment",
+        "details": null
+      },
+      {
+        "family": "mul_mat_id_q4_k_f32",
+        "id": "mul_mat_id_q4_k_f32_k768_2048_r768_2048_s8_t1_512_wg256",
+        "op": "MUL_MAT_ID",
+        "target_key": "",
+        "reason": "runtime_excluded",
+        "details": "current loom verifier rejects this root with subrange proof failures on quantized block vector loads during HRX3 JIT specialization"
+      },
+      {
+        "family": "mul_mat_id_q5_k_f32",
+        "id": "mul_mat_id_q5_k_f32_k256_32768_r1_262144_s1_128_t1_512_wg256",
+        "op": "MUL_MAT_ID",
+        "target_key": "",
+        "reason": "runtime_excluded",
+        "details": "current loom verifier rejects this root with subrange proof failures on quantized block vector loads during HRX3 JIT specialization"
+      },
+      {
+        "family": "mul_mat_id_q6_k_f32",
+        "id": "mul_mat_id_q6_k_f32_k256_32768_r1_262144_s1_128_t1_512_wg256",
+        "op": "MUL_MAT_ID",
+        "target_key": "",
+        "reason": "runtime_excluded",
+        "details": "current loom verifier rejects this root with subrange proof failures on quantized block loads during HRX3 JIT specialization"
+      },
+      {
+        "family": "mul_mat_q4_k_f32",
+        "id": "split_k_reduce2_f32_p64_q4_prompt",
+        "op": "EXPERIMENT",
+        "target_key": "gfx1100",
+        "reason": "experiment",
+        "details": null
+      },
+      {
+        "family": "mul_mat_q4_k_f32",
+        "id": "split_k_reduce2_f32_dynamic_wg256",
+        "op": "EXPERIMENT",
+        "target_key": "gfx1100",
+        "reason": "experiment",
+        "details": null
+      },
+      {
+        "family": "mul_mat_q4_k_f32",
+        "id": "mul_mat_q4_k_q8_1_x4_mmq64x32_k256_8192_r1_32768_c16_wg256",
+        "op": "MUL_MAT",
+        "target_key": "gfx1100",
+        "reason": "runtime_excluded",
+        "details": "current loom verifier rejects this root: workgroup barriers are control-dependent on lane-varying row/column bounds"
+      },
+      {
+        "family": "mul_mat_q5_k_f32",
+        "id": "oracle_link_only_mul_mat_vec_q5_k_q8_1_x4_f32_wg64",
+        "op": "MUL_MAT",
+        "target_key": "__oracle_link_only__",
+        "reason": "target_mismatch",
+        "details": null
+      },
+      {
+        "family": "mul_mat_q5_k_f32",
+        "id": "oracle_link_only_mul_mat_vec_q5_k_q8_1_x4_f32_vcache_wg64",
+        "op": "MUL_MAT",
+        "target_key": "__oracle_link_only__",
+        "reason": "target_mismatch",
+        "details": null
+      },
+      {
+        "family": "mul_mat_q6_k_f32",
+        "id": "oracle_link_only_mul_mat_vec_q6_k_f32_f32_wg64",
+        "op": "MUL_MAT",
+        "target_key": "__oracle_link_only__",
+        "reason": "target_mismatch",
+        "details": null
+      },
+      {
+        "family": "quantize_q8_1_f32",
+        "id": "oracle_link_only_quantize_q8_1_x4_f32_wg64",
+        "op": "QUANTIZE",
+        "target_key": "__oracle_link_only__",
+        "reason": "target_mismatch",
+        "details": null
+      }
+    ]
+  }
 }

@@ -6,6 +6,7 @@
     {
       "id": "soft_max_f32_soft_max_f32_n128_r1_wg128_smoke",
       "op": "SOFT_MAX",
+      "scenario": "soft_max",
       "expected_route_id": "soft_max_f32_n128_r1_wg128",
       "supports": {
         "src0_type": "F32",

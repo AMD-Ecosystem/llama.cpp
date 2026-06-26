@@ -1,0 +1,28 @@
+{
+  "schema": "ggml-hrx-test-schedule-v1",
+  "target_key": "gfx1100",
+  "family": "mul_mat_q4_k_swiglu_f32",
+  "cases": [
+    {
+      "id": "mul_mat_q4_k_swiglu_f32_mul_mat_q4_k_swiglu_f32_direct_k256_32768_c1_wg256_smoke",
+      "op": "GLU",
+      "scenario": "mul_mat_q4_k_swiglu",
+      "expected_route_id": "mul_mat_q4_k_swiglu_f32_direct_k256_32768_c1_wg256",
+      "supports": {
+        "src0_type": "Q4_K",
+        "src1_type": "Q4_K",
+        "rhs_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous",
+        "fusion": "MUL_MAT_Q4_K + MUL_MAT_Q4_K + SWIGLU"
+      },
+      "shape": {
+        "k": 256,
+        "rows": 8,
+        "cols": 1
+      },
+      "tolerance": 0.1,
+      "repeat": 2
+    }
+  ]
+}

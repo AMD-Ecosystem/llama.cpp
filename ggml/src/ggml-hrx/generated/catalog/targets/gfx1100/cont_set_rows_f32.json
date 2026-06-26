@@ -134,7 +134,7 @@
         "src1_type": "I64",
         "dst_type": "F16",
         "layout": "cont_src0_to_reshape_set_rows",
-        "cont_ncols": 128
+        "cont_ncols": "128"
       },
       "target_key": "gfx1100",
       "loader_format": "amdgpu-hsaco",

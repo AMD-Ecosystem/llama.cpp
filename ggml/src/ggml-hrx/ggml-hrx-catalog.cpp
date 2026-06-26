@@ -347,6 +347,7 @@ static bool ggml_backend_hrx_parse_test_schedules(
             test_case.family = family;
             test_case.id = case_json.value("id", "");
             test_case.op = case_json.value("op", "");
+            test_case.scenario = case_json.value("scenario", "");
             test_case.expected_route_id = case_json.value("expected_route_id", "");
             test_case.repeat = static_cast<uint32_t>(case_json.value("repeat", 1));
             if (case_json.contains("tolerance") && case_json["tolerance"].is_number()) {

@@ -6,6 +6,7 @@
     {
       "id": "cont_f32_cont_f32_n128_r8_wg256_smoke",
       "op": "CONT",
+      "scenario": "cont",
       "expected_route_id": "cont_f32_n128_r8_wg256",
       "supports": {
         "src0_type": "F32",

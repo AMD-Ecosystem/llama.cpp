@@ -11,6 +11,7 @@
 #include <cerrno>
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cinttypes>
 #include <cstddef>
 #include <cstdint>
@@ -1101,6 +1102,8 @@ static const char * ggml_backend_hrx_catalog_type_name(enum ggml_type type) {
             return "Q8_0";
         case GGML_TYPE_Q8_1:
             return "Q8_1";
+        case GGML_TYPE_I64:
+            return "I64";
         default:
             return ggml_type_name(type);
     }
@@ -1136,6 +1139,10 @@ static bool ggml_backend_hrx_is_f32_row_contiguous(const ggml_tensor * tensor) {
     return tensor && tensor->type == GGML_TYPE_F32 && tensor->nb[0] == sizeof(float);
 }
 
+static bool ggml_backend_hrx_is_row_contiguous(const ggml_tensor * tensor) {
+    return tensor && tensor->nb[0] == ggml_type_size(tensor->type);
+}
+
 static void ggml_backend_hrx_add_tensor_facts(
         ggml_backend_hrx_catalog_problem * problem,
         const char * prefix,
@@ -1147,6 +1154,44 @@ static void ggml_backend_hrx_add_tensor_facts(
         problem->facts[std::string(prefix) + ".ne" + std::to_string(i)] = tensor->ne[i];
         problem->facts[std::string(prefix) + ".nb" + std::to_string(i)] = tensor->nb[i];
     }
+}
+
+static bool ggml_backend_hrx_request_matches_loaded_route(
+        ggml_backend_hrx_device_context * device_context,
+        const ggml_backend_hrx_dispatch_request & request,
+        const char * family) {
+    if (!device_context || !device_context->reg_context || !device_context->reg_context->catalog) {
+        return false;
+    }
+    const auto * route = ggml_backend_hrx_catalog_find_route(*device_context->reg_context->catalog, request.problem);
+    return route && (!family || route->family == family);
+}
+
+static const ggml_tensor * ggml_backend_hrx_zero_offset_source_chain_target(
+        const ggml_tensor * tensor,
+        enum ggml_op op) {
+    for (const ggml_tensor * cur = tensor; cur != nullptr;) {
+        if (cur->op == op) {
+            return cur;
+        }
+        if (cur->view_offs != 0) {
+            return nullptr;
+        }
+        if (cur->view_src) {
+            cur = cur->view_src;
+            continue;
+        }
+        if ((cur->op == GGML_OP_VIEW ||
+             cur->op == GGML_OP_RESHAPE ||
+             cur->op == GGML_OP_PERMUTE ||
+             cur->op == GGML_OP_TRANSPOSE) &&
+            cur->src[0]) {
+            cur = cur->src[0];
+            continue;
+        }
+        return nullptr;
+    }
+    return nullptr;
 }
 
 static bool ggml_backend_hrx_make_mul_mat_problem(
@@ -1167,7 +1212,8 @@ static bool ggml_backend_hrx_make_mul_mat_problem(
         {"src0_type", ggml_backend_hrx_catalog_type_name(src0->type)},
         {"src1_type", ggml_backend_hrx_catalog_type_name(src1->type)},
         {"dst_type", ggml_backend_hrx_catalog_type_name(node->type)},
-        {"layout", "contiguous"},
+        {"layout", (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F32 && node->type == GGML_TYPE_F32) ?
+            "batched_attention_broadcast" : "contiguous"},
     };
     out_problem->shape = {
         {"k", src0->ne[0]},
@@ -1181,15 +1227,15 @@ static bool ggml_backend_hrx_make_mul_mat_problem(
     out_problem->shape["mul_mat_f16.dst_ne3"] = node->ne[3];
     out_problem->shape["mul_mat_f16.src0_ne2"] = src0->ne[2];
     out_problem->shape["mul_mat_f16.src0_ne3"] = src0->ne[3];
-    out_problem->shape["mul_mat_f16.src0_stride_row"] = src0->nb[1] / ggml_type_size(src0->type);
-    out_problem->shape["mul_mat_f16.src0_stride_ne2"] = src0->nb[2] / ggml_type_size(src0->type);
-    out_problem->shape["mul_mat_f16.src0_stride_ne3"] = src0->nb[3] / ggml_type_size(src0->type);
-    out_problem->shape["mul_mat_f16.src1_stride_col"] = src1->nb[1] / ggml_type_size(src1->type);
-    out_problem->shape["mul_mat_f16.src1_stride_ne2"] = src1->nb[2] / ggml_type_size(src1->type);
-    out_problem->shape["mul_mat_f16.src1_stride_ne3"] = src1->nb[3] / ggml_type_size(src1->type);
-    out_problem->shape["mul_mat_f16.dst_stride_col"] = node->nb[1] / ggml_type_size(node->type);
-    out_problem->shape["mul_mat_f16.dst_stride_ne2"] = node->nb[2] / ggml_type_size(node->type);
-    out_problem->shape["mul_mat_f16.dst_stride_ne3"] = node->nb[3] / ggml_type_size(node->type);
+    out_problem->shape["mul_mat_f16.src0_stride_row"] = src0->nb[1];
+    out_problem->shape["mul_mat_f16.src0_stride_ne2"] = src0->nb[2];
+    out_problem->shape["mul_mat_f16.src0_stride_ne3"] = src0->nb[3];
+    out_problem->shape["mul_mat_f16.src1_stride_col"] = src1->nb[1];
+    out_problem->shape["mul_mat_f16.src1_stride_ne2"] = src1->nb[2];
+    out_problem->shape["mul_mat_f16.src1_stride_ne3"] = src1->nb[3];
+    out_problem->shape["mul_mat_f16.dst_stride_col"] = node->nb[1];
+    out_problem->shape["mul_mat_f16.dst_stride_ne2"] = node->nb[2];
+    out_problem->shape["mul_mat_f16.dst_stride_ne3"] = node->nb[3];
     out_problem->facts = {
         {"src0.ne0", src0->ne[0]},
         {"src0.ne1", src0->ne[1]},
@@ -1293,12 +1339,130 @@ static bool ggml_backend_hrx_make_add_request(
     return true;
 }
 
+static bool ggml_backend_hrx_make_rms_norm_mul_request(
+        ggml_backend_hrx_device_context * device_context,
+        const ggml_tensor * node,
+        ggml_backend_hrx_dispatch_request * out_request) {
+    if (!device_context || !out_request || !node || node->op != GGML_OP_MUL ||
+        !node->src[0] || !node->src[1] || node->src[0]->op != GGML_OP_RMS_NORM ||
+        !node->src[0]->src[0] || node->src[0]->type != GGML_TYPE_F32 ||
+        node->src[0]->src[0]->type != GGML_TYPE_F32 || node->src[1]->type != GGML_TYPE_F32 ||
+        node->type != GGML_TYPE_F32 ||
+        !ggml_backend_hrx_is_f32_row_contiguous(node->src[0]->src[0]) ||
+        !ggml_backend_hrx_is_f32_row_contiguous(node->src[1]) ||
+        !ggml_backend_hrx_is_f32_row_contiguous(node)) {
+        return false;
+    }
+    const ggml_tensor * src = node->src[0]->src[0];
+    const ggml_tensor * weight = node->src[1];
+    const int64_t ncols = node->ne[0];
+    const int64_t nrows = ggml_backend_hrx_tensor_row_count(node);
+    if (src->ne[0] != ncols || ggml_backend_hrx_tensor_row_count(src) != nrows ||
+        weight->ne[0] != ncols || ggml_backend_hrx_tensor_row_count(weight) != 1) {
+        return false;
+    }
+
+    out_request->problem = {};
+    out_request->problem.op = "MUL";
+    out_request->problem.target_key = device_context->architecture;
+    out_request->problem.supports = {
+        {"src0_type", ggml_backend_hrx_catalog_type_name(src->type)},
+        {"weight_type", ggml_backend_hrx_catalog_type_name(weight->type)},
+        {"dst_type", ggml_backend_hrx_catalog_type_name(node->type)},
+        {"layout", "contiguous_src_row_broadcast_weight"},
+    };
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "rms_norm_mul", "ncols", ncols);
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "rms_norm_mul", "nrows", nrows);
+    ggml_backend_hrx_add_tensor_facts(&out_request->problem, "src0", src);
+    ggml_backend_hrx_add_tensor_facts(&out_request->problem, "src1", weight);
+    ggml_backend_hrx_add_tensor_facts(&out_request->problem, "dst", node);
+    out_request->tensors = {src, weight, node};
+    out_request->constants.clear();
+    float eps = 0.0f;
+    std::memcpy(&eps, node->src[0]->op_params, sizeof(float));
+    ggml_backend_hrx_append_constant(&out_request->constants, eps);
+    return true;
+}
+
+static bool ggml_backend_hrx_make_add_rms_norm_mul_request(
+        ggml_backend_hrx_device_context * device_context,
+        const ggml_tensor * node,
+        ggml_backend_hrx_dispatch_request * out_request) {
+    if (!device_context || !out_request || !node || node->op != GGML_OP_MUL ||
+        !node->src[0] || !node->src[1] || node->src[0]->op != GGML_OP_RMS_NORM ||
+        !node->src[0]->src[0] || node->src[0]->src[0]->op != GGML_OP_ADD ||
+        !node->src[0]->src[0]->src[0] || !node->src[0]->src[0]->src[1] ||
+        node->src[0]->type != GGML_TYPE_F32 ||
+        node->src[0]->src[0]->type != GGML_TYPE_F32 ||
+        node->src[0]->src[0]->src[0]->type != GGML_TYPE_F32 ||
+        node->src[0]->src[0]->src[1]->type != GGML_TYPE_F32 ||
+        node->src[1]->type != GGML_TYPE_F32 ||
+        node->type != GGML_TYPE_F32 ||
+        !ggml_backend_hrx_is_f32_row_contiguous(node->src[0]->src[0]->src[0]) ||
+        !ggml_backend_hrx_is_f32_row_contiguous(node->src[0]->src[0]->src[1]) ||
+        !ggml_backend_hrx_is_f32_row_contiguous(node->src[0]->src[0]) ||
+        !ggml_backend_hrx_is_f32_row_contiguous(node->src[1]) ||
+        !ggml_backend_hrx_is_f32_row_contiguous(node)) {
+        return false;
+    }
+    const ggml_tensor * add = node->src[0]->src[0];
+    const ggml_tensor * src0 = add->src[0];
+    const ggml_tensor * src1 = add->src[1];
+    const ggml_tensor * weight = node->src[1];
+    const int64_t ncols = node->ne[0];
+    const int64_t nrows = ggml_backend_hrx_tensor_row_count(node);
+    if (src0->ne[0] != ncols || ggml_backend_hrx_tensor_row_count(src0) != nrows ||
+        src1->ne[0] != ncols || ggml_backend_hrx_tensor_row_count(src1) != nrows ||
+        weight->ne[0] != ncols || ggml_backend_hrx_tensor_row_count(weight) != 1 ||
+        add->ne[0] != ncols || ggml_backend_hrx_tensor_row_count(add) != nrows) {
+        return false;
+    }
+
+    out_request->problem = {};
+    out_request->problem.op = "MUL";
+    out_request->problem.target_key = device_context->architecture;
+    out_request->problem.supports = {
+        {"src_type", ggml_backend_hrx_catalog_type_name(src0->type)},
+        {"weight_type", ggml_backend_hrx_catalog_type_name(weight->type)},
+        {"dst_type", ggml_backend_hrx_catalog_type_name(node->type)},
+        {"layout", "contiguous_same_shape_add"},
+    };
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "add_rms_norm_mul", "ncols", ncols);
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "add_rms_norm_mul", "nrows", nrows);
+    ggml_backend_hrx_add_tensor_facts(&out_request->problem, "src0", src0);
+    ggml_backend_hrx_add_tensor_facts(&out_request->problem, "src1", src1);
+    ggml_backend_hrx_add_tensor_facts(&out_request->problem, "add_dst", add);
+    ggml_backend_hrx_add_tensor_facts(&out_request->problem, "weight", weight);
+    ggml_backend_hrx_add_tensor_facts(&out_request->problem, "dst", node);
+    out_request->tensors = {src0, src1, add, weight, node};
+    out_request->constants.clear();
+    float eps = 0.0f;
+    std::memcpy(&eps, node->src[0]->op_params, sizeof(float));
+    ggml_backend_hrx_append_constant(&out_request->constants, eps);
+    return true;
+}
+
 static bool ggml_backend_hrx_make_mul_request(
         ggml_backend_hrx_device_context * device_context,
         const ggml_tensor * node,
         ggml_backend_hrx_dispatch_request * out_request) {
     if (!device_context || !out_request || !node || node->op != GGML_OP_MUL) {
         return false;
+    }
+    ggml_backend_hrx_dispatch_request fused_request;
+    if (ggml_backend_hrx_make_add_rms_norm_mul_request(device_context, node, &fused_request) &&
+        device_context->reg_context &&
+        device_context->reg_context->catalog &&
+        ggml_backend_hrx_catalog_find_route(*device_context->reg_context->catalog, fused_request.problem)) {
+        *out_request = std::move(fused_request);
+        return true;
+    }
+    if (ggml_backend_hrx_make_rms_norm_mul_request(device_context, node, &fused_request) &&
+        device_context->reg_context &&
+        device_context->reg_context->catalog &&
+        ggml_backend_hrx_catalog_find_route(*device_context->reg_context->catalog, fused_request.problem)) {
+        *out_request = std::move(fused_request);
+        return true;
     }
     ggml_backend_hrx_binary_f32_layout layout;
     if (!ggml_backend_hrx_describe_binary_f32_layout(node, &layout)) {
@@ -1359,6 +1523,72 @@ static bool ggml_backend_hrx_make_mul_mat_request(
         return false;
     }
     out_request->tensors = {node->src[0], node->src[1], node};
+    out_request->constants.clear();
+    return true;
+}
+
+static bool ggml_backend_hrx_make_mul_mat_id_request(
+        ggml_backend_hrx_device_context * device_context,
+        const ggml_tensor * node,
+        ggml_backend_hrx_dispatch_request * out_request) {
+    if (!device_context || !out_request || !node || node->op != GGML_OP_MUL_MAT_ID ||
+        !node->src[0] || !node->src[1] || !node->src[2] ||
+        node->src[1]->type != GGML_TYPE_F32 || node->src[2]->type != GGML_TYPE_I32 ||
+        node->type != GGML_TYPE_F32 || !ggml_is_contiguous(node->src[0]) ||
+        !ggml_is_contiguous(node->src[1]) || !ggml_is_contiguous(node->src[2]) ||
+        !ggml_is_contiguous(node)) {
+        return false;
+    }
+    const ggml_tensor * src0 = node->src[0];
+    const ggml_tensor * src1 = node->src[1];
+    const ggml_tensor * ids = node->src[2];
+    const char * layout = nullptr;
+    if (src0->type == GGML_TYPE_Q4_K) {
+        layout = "q4_k_expert_planes_rhs_token_or_selected_rows";
+    } else if (src0->type == GGML_TYPE_Q5_K) {
+        layout = "q5_k_expert_planes_rhs_token_or_selected_rows";
+    } else if (src0->type == GGML_TYPE_Q6_K) {
+        layout = "q6_k_expert_planes_rhs_token_or_selected_rows";
+    } else {
+        return false;
+    }
+
+    out_request->problem = {};
+    out_request->problem.op = "MUL_MAT_ID";
+    out_request->problem.target_key = device_context->architecture;
+    out_request->problem.supports = {
+        {"src0_type", ggml_backend_hrx_catalog_type_name(src0->type)},
+        {"src1_type", ggml_backend_hrx_catalog_type_name(src1->type)},
+        {"src2_type", ggml_backend_hrx_catalog_type_name(ids->type)},
+        {"dst_type", ggml_backend_hrx_catalog_type_name(node->type)},
+        {"layout", layout},
+    };
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "mul_mat_id", "k", src0->ne[0]);
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "mul_mat_id", "rows", src0->ne[1]);
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "mul_mat_id", "nexperts", src0->ne[2]);
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "mul_mat_id", "nselected", ids->ne[0]);
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "mul_mat_id", "ntokens", ids->ne[1]);
+    out_request->problem.shape["k"] = src0->ne[0];
+    out_request->problem.shape["rows"] = src0->ne[1];
+    out_request->problem.shape["cols"] = ids->ne[0];
+    out_request->problem.shape["nrows"] = ids->ne[1];
+    ggml_backend_hrx_set_shape_alias(
+        &out_request->problem, "mul_mat_id", "src1_selected_stride",
+        src1->ne[1] == 1 ? 0 : static_cast<int64_t>(src1->nb[1] / sizeof(float)));
+    ggml_backend_hrx_set_shape_alias(
+        &out_request->problem, "mul_mat_id", "src1_token_stride",
+        static_cast<int64_t>(src1->nb[2] / sizeof(float)));
+    ggml_backend_hrx_set_shape_alias(
+        &out_request->problem, "mul_mat_id", "idx_token_stride",
+        static_cast<int64_t>(ids->nb[1] / sizeof(int32_t)));
+    ggml_backend_hrx_set_shape_alias(
+        &out_request->problem, "mul_mat_id", "dst_token_stride",
+        static_cast<int64_t>(node->nb[2] / sizeof(float)));
+    ggml_backend_hrx_add_tensor_facts(&out_request->problem, "src0", src0);
+    ggml_backend_hrx_add_tensor_facts(&out_request->problem, "src1", src1);
+    ggml_backend_hrx_add_tensor_facts(&out_request->problem, "src2", ids);
+    ggml_backend_hrx_add_tensor_facts(&out_request->problem, "dst", node);
+    out_request->tensors = {src0, src1, ids, node};
     out_request->constants.clear();
     return true;
 }
@@ -1572,22 +1802,61 @@ static bool ggml_backend_hrx_make_get_rows_request(
         ggml_backend_hrx_dispatch_request * out_request) {
     if (!device_context || !out_request || !node || node->op != GGML_OP_GET_ROWS ||
         !node->src[0] || !node->src[1] || node->src[1]->type != GGML_TYPE_I32 ||
-        !ggml_backend_hrx_is_f32_row_contiguous(node->src[0]) ||
+        !ggml_backend_hrx_is_row_contiguous(node->src[0]) ||
         !ggml_backend_hrx_is_f32_row_contiguous(node)) {
+        return false;
+    }
+    const bool quantized_src = ggml_is_quantized(node->src[0]->type);
+    if (node->src[0]->type != GGML_TYPE_F32 && !quantized_src) {
         return false;
     }
     out_request->problem = {};
     out_request->problem.op = "GET_ROWS";
     out_request->problem.target_key = device_context->architecture;
+    const bool moe_weights_view =
+        node->src[0]->type == GGML_TYPE_F32 &&
+        node->src[0]->ne[0] == 1 &&
+        node->src[0]->ne[2] == node->ne[2] &&
+        node->src[0]->ne[3] == node->ne[3] &&
+        node->src[1]->ne[0] == node->ne[1] &&
+        node->src[1]->ne[1] == node->ne[2] &&
+        node->src[1]->ne[2] == node->ne[3] &&
+        node->ne[0] == 1 &&
+        node->ne[1] > 0 &&
+        node->ne[2] > 0;
     out_request->problem.supports = {
         {"src0_type", ggml_backend_hrx_catalog_type_name(node->src[0]->type)},
         {"src1_type", ggml_backend_hrx_catalog_type_name(node->src[1]->type)},
         {"dst_type", ggml_backend_hrx_catalog_type_name(node->type)},
-        {"layout", "embedding_rows_1d"},
+        {"layout", moe_weights_view ? "moe_weights_topk_view" :
+            (quantized_src ? "quantized_embedding_rows_1d" : "embedding_rows_1d")},
     };
-    ggml_backend_hrx_set_shape_alias(&out_request->problem, "get_rows", "ncols", node->ne[0]);
-    ggml_backend_hrx_set_shape_alias(&out_request->problem, "get_rows", "nrows", node->ne[1]);
+    if (moe_weights_view) {
+        // Route domains for the MoE gather are keyed by the logical output
+        // matrix [topk, tokens], while the underlying ggml_get_rows tensor is
+        // shaped [1, topk, tokens]. Keep both fact families available without
+        // letting the standard get_rows aliases overwrite the route keys.
+        out_request->problem.shape["ncols"] = node->ne[1];
+        out_request->problem.shape["nrows"] = node->ne[2];
+        out_request->problem.shape["get_rows.ncols"] = node->ne[0];
+        out_request->problem.shape["get_rows.nrows"] = node->ne[1];
+    } else {
+        ggml_backend_hrx_set_shape_alias(&out_request->problem, "get_rows", "ncols", node->ne[0]);
+        ggml_backend_hrx_set_shape_alias(&out_request->problem, "get_rows", "nrows", node->ne[1]);
+    }
     ggml_backend_hrx_set_shape_alias(&out_request->problem, "get_rows", "src0_nrows", node->src[0]->ne[1]);
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "get_rows_moe", "nexperts", node->src[0]->ne[1]);
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "get_rows_moe", "nselected", node->src[1]->ne[0]);
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "get_rows_moe", "ntokens", node->src[1]->ne[1]);
+    ggml_backend_hrx_set_shape_alias(
+        &out_request->problem, "get_rows_moe", "src0_token_stride",
+        static_cast<int64_t>(node->src[0]->nb[2] / sizeof(float)));
+    ggml_backend_hrx_set_shape_alias(
+        &out_request->problem, "get_rows_moe", "idx_token_stride",
+        static_cast<int64_t>(node->src[1]->nb[1] / sizeof(int32_t)));
+    ggml_backend_hrx_set_shape_alias(
+        &out_request->problem, "get_rows_moe", "dst_token_stride",
+        static_cast<int64_t>(node->nb[2] / sizeof(float)));
     ggml_backend_hrx_set_shape_alias(
         &out_request->problem, "get_rows", "idx_row_stride",
         node->src[1]->ne[1] == 1 ? 1 : node->src[1]->nb[1] / sizeof(int32_t));
@@ -1599,10 +1868,345 @@ static bool ggml_backend_hrx_make_get_rows_request(
     return true;
 }
 
+static bool ggml_backend_hrx_make_set_rows_request(
+        ggml_backend_hrx_device_context * device_context,
+        const ggml_tensor * node,
+        ggml_backend_hrx_dispatch_request * out_request) {
+    if (!device_context || !out_request || !node || node->op != GGML_OP_SET_ROWS ||
+        !node->src[0] || !node->src[1] || !node->src[2] ||
+        node->src[0]->type != GGML_TYPE_F32 ||
+        (node->src[1]->type != GGML_TYPE_I64 && node->src[1]->type != GGML_TYPE_I32) ||
+        !ggml_backend_hrx_is_f32_row_contiguous(node->src[0]) ||
+        !ggml_is_contiguous(node->src[1]) ||
+        !ggml_backend_hrx_is_row_contiguous(node)) {
+        return false;
+    }
+
+    auto make_cont_set_rows = [&]() -> bool {
+        const ggml_tensor * cont = ggml_backend_hrx_zero_offset_source_chain_target(node->src[0], GGML_OP_CONT);
+        if (!cont || !cont->src[0] || cont->type != GGML_TYPE_F32 || node->type != GGML_TYPE_F16 ||
+            node->src[1]->type != GGML_TYPE_I64 ||
+            !ggml_backend_hrx_is_f32_row_contiguous(cont->src[0]) ||
+            !ggml_backend_hrx_is_f32_row_contiguous(cont) ||
+            cont->view_src != nullptr ||
+            ggml_nelements(node->src[0]) != ggml_nelements(cont)) {
+            return false;
+        }
+
+        ggml_backend_hrx_dispatch_request request = {};
+        request.problem.op = "SET_ROWS";
+        request.problem.target_key = device_context->architecture;
+        request.problem.supports = {
+            {"src0_type", ggml_backend_hrx_catalog_type_name(cont->type)},
+            {"src1_type", ggml_backend_hrx_catalog_type_name(node->src[1]->type)},
+            {"dst_type", ggml_backend_hrx_catalog_type_name(node->type)},
+            {"layout", "cont_src0_to_reshape_set_rows"},
+            {"cont_ncols", std::to_string(cont->ne[0])},
+        };
+        ggml_backend_hrx_set_shape_alias(&request.problem, "cont", "ncols", cont->ne[0]);
+        ggml_backend_hrx_set_shape_alias(&request.problem, "cont", "ne1", cont->ne[1]);
+        ggml_backend_hrx_set_shape_alias(&request.problem, "cont", "ne2", cont->ne[2]);
+        ggml_backend_hrx_set_shape_alias(&request.problem, "cont", "src_nb1", cont->src[0]->nb[1] / sizeof(float));
+        ggml_backend_hrx_set_shape_alias(&request.problem, "cont", "src_nb2", cont->src[0]->nb[2] / sizeof(float));
+        ggml_backend_hrx_set_shape_alias(&request.problem, "cont", "src_nb3", cont->src[0]->nb[3] / sizeof(float));
+        ggml_backend_hrx_set_shape_alias(&request.problem, "set_rows", "nc", node->ne[0]);
+        ggml_backend_hrx_set_shape_alias(&request.problem, "set_rows", "nr", node->src[0]->ne[1]);
+        ggml_backend_hrx_set_shape_alias(&request.problem, "set_rows", "ne02", node->src[0]->ne[2]);
+        ggml_backend_hrx_set_shape_alias(&request.problem, "set_rows", "ne03", node->src[0]->ne[3]);
+        ggml_backend_hrx_set_shape_alias(&request.problem, "set_rows", "ne1", node->ne[1]);
+        ggml_backend_hrx_set_shape_alias(&request.problem, "set_rows", "ne11", node->src[1]->ne[1]);
+        ggml_backend_hrx_set_shape_alias(&request.problem, "set_rows", "ne12", node->src[1]->ne[2]);
+        ggml_backend_hrx_set_shape_alias(&request.problem, "set_rows", "src0_nb1", node->src[0]->nb[1] / sizeof(float));
+        ggml_backend_hrx_set_shape_alias(&request.problem, "set_rows", "src0_nb2", node->src[0]->nb[2] / sizeof(float));
+        ggml_backend_hrx_set_shape_alias(&request.problem, "set_rows", "src0_nb3", node->src[0]->nb[3] / sizeof(float));
+        ggml_backend_hrx_set_shape_alias(&request.problem, "set_rows", "idx_nb0", node->src[1]->nb[0] / sizeof(int64_t));
+        ggml_backend_hrx_set_shape_alias(&request.problem, "set_rows", "idx_nb1", node->src[1]->nb[1] / sizeof(int64_t));
+        ggml_backend_hrx_set_shape_alias(&request.problem, "set_rows", "idx_nb2", node->src[1]->nb[2] / sizeof(int64_t));
+        ggml_backend_hrx_set_shape_alias(&request.problem, "set_rows", "dst_nb1", node->nb[1] / sizeof(ggml_fp16_t));
+        ggml_backend_hrx_set_shape_alias(&request.problem, "set_rows", "dst_nb2", node->nb[2] / sizeof(ggml_fp16_t));
+        ggml_backend_hrx_set_shape_alias(&request.problem, "set_rows", "dst_nb3", node->nb[3] / sizeof(ggml_fp16_t));
+        request.problem.shape["ncols"] = node->ne[0];
+        request.problem.shape["nrows"] = node->src[0]->ne[1];
+        ggml_backend_hrx_add_tensor_facts(&request.problem, "src0", cont->src[0]);
+        ggml_backend_hrx_add_tensor_facts(&request.problem, "src1", node->src[1]);
+        ggml_backend_hrx_add_tensor_facts(&request.problem, "dst", node);
+        request.tensors = {cont->src[0], node->src[1], node};
+        request.constants.clear();
+        if (!ggml_backend_hrx_request_matches_loaded_route(device_context, request, "cont_set_rows_f32")) {
+            return false;
+        }
+        *out_request = std::move(request);
+        return true;
+    };
+
+    auto make_rope_set_rows = [&]() -> bool {
+        const ggml_tensor * rope = ggml_backend_hrx_zero_offset_source_chain_target(node->src[0], GGML_OP_ROPE);
+        if (!rope || !rope->src[0] || !rope->src[1] || !rope->src[2] ||
+            rope->src[0]->type != GGML_TYPE_F32 || rope->src[1]->type != GGML_TYPE_I32 ||
+            rope->src[2]->type != GGML_TYPE_F32 || rope->type != GGML_TYPE_F32 ||
+            node->src[1]->type != GGML_TYPE_I64 || node->type != GGML_TYPE_F16 ||
+            !ggml_backend_hrx_is_f32_row_contiguous(rope->src[0]) ||
+            !ggml_is_contiguous(rope->src[1]) ||
+            !ggml_is_contiguous(rope->src[2]) ||
+            !ggml_backend_hrx_is_f32_row_contiguous(rope) ||
+            rope->view_src != nullptr ||
+            node->src[0]->ne[0] != rope->ne[0] * rope->ne[1] ||
+            node->src[0]->ne[1] != rope->ne[2] ||
+            node->src[0]->ne[2] != 1 ||
+            node->src[0]->ne[3] != 1 ||
+            node->src[0]->nb[0] != sizeof(float) ||
+            node->src[0]->nb[1] != rope->nb[2] ||
+            node->ne[0] != rope->ne[0] * rope->ne[1]) {
+            return false;
+        }
+
+        int32_t n_dims = 0;
+        int32_t mode = 0;
+        float freq_base = 10000.0f;
+        float freq_scale = 1.0f;
+        float ext_factor = 0.0f;
+        float attn_factor = 1.0f;
+        std::memcpy(&n_dims, reinterpret_cast<const uint8_t *>(rope->op_params) + sizeof(int32_t), sizeof(int32_t));
+        std::memcpy(&mode, reinterpret_cast<const uint8_t *>(rope->op_params) + 2 * sizeof(int32_t), sizeof(int32_t));
+        std::memcpy(&freq_base, reinterpret_cast<const uint8_t *>(rope->op_params) + 5 * sizeof(float), sizeof(float));
+        std::memcpy(&freq_scale, reinterpret_cast<const uint8_t *>(rope->op_params) + 6 * sizeof(float), sizeof(float));
+        std::memcpy(&ext_factor, reinterpret_cast<const uint8_t *>(rope->op_params) + 7 * sizeof(float), sizeof(float));
+        std::memcpy(&attn_factor, reinterpret_cast<const uint8_t *>(rope->op_params) + 8 * sizeof(float), sizeof(float));
+        if (ext_factor != 0.0f || (mode & ~(GGML_ROPE_TYPE_NEOX)) != 0) {
+            return false;
+        }
+
+        ggml_backend_hrx_dispatch_request request = {};
+        request.problem.op = "SET_ROWS";
+        request.problem.target_key = device_context->architecture;
+        request.problem.supports = {
+            {"src0_type", ggml_backend_hrx_catalog_type_name(rope->src[0]->type)},
+            {"src1_type", ggml_backend_hrx_catalog_type_name(rope->src[1]->type)},
+            {"dst_type", ggml_backend_hrx_catalog_type_name(node->type)},
+            {"mode", (mode & GGML_ROPE_TYPE_NEOX) ? "NEOX" : "NORMAL"},
+            {"freq_factor", "present"},
+            {"ext_factor", "0"},
+            {"layout", "rope-view-set-rows-f16"},
+        };
+        const int64_t nheads = rope->src[0]->ne[1];
+        const int64_t ntokens = rope->src[0]->ne[2];
+        ggml_backend_hrx_set_shape_alias(&request.problem, "rope", "ncols", rope->src[0]->ne[0]);
+        ggml_backend_hrx_set_shape_alias(&request.problem, "rope", "n_dims", n_dims);
+        ggml_backend_hrx_set_shape_alias(&request.problem, "rope", "nheads", nheads);
+        ggml_backend_hrx_set_shape_alias(&request.problem, "rope", "ntokens", ntokens);
+        ggml_backend_hrx_set_shape_alias(&request.problem, "rope", "src0_head_stride", rope->src[0]->nb[1] / sizeof(float));
+        ggml_backend_hrx_set_shape_alias(&request.problem, "rope", "src0_token_stride", rope->src[0]->nb[2] / sizeof(float));
+        ggml_backend_hrx_set_shape_alias(&request.problem, "rope", "pos_token_stride", rope->src[1]->nb[0] / sizeof(int32_t));
+        request.problem.shape["ncols"] = rope->src[0]->ne[0];
+        request.problem.shape["nrows"] = nheads * ntokens;
+        request.problem.shape["n_dims"] = n_dims;
+        request.problem.shape["rows"] = nheads;
+        request.problem.shape["cols"] = ntokens;
+        ggml_backend_hrx_set_shape_alias(&request.problem, "set_rows", "ne1", node->ne[1]);
+        ggml_backend_hrx_set_shape_alias(&request.problem, "set_rows", "ne11", node->src[1]->ne[1]);
+        ggml_backend_hrx_set_shape_alias(&request.problem, "set_rows", "ne12", node->src[1]->ne[2]);
+        ggml_backend_hrx_set_shape_alias(&request.problem, "set_rows", "idx_nb0", node->src[1]->nb[0] / sizeof(int64_t));
+        ggml_backend_hrx_set_shape_alias(&request.problem, "set_rows", "idx_nb1", node->src[1]->nb[1] / sizeof(int64_t));
+        ggml_backend_hrx_set_shape_alias(&request.problem, "set_rows", "idx_nb2", node->src[1]->nb[2] / sizeof(int64_t));
+        ggml_backend_hrx_set_shape_alias(&request.problem, "set_rows", "dst_nb1", node->nb[1] / sizeof(ggml_fp16_t));
+        ggml_backend_hrx_set_shape_alias(&request.problem, "set_rows", "dst_nb2", node->nb[2] / sizeof(ggml_fp16_t));
+        ggml_backend_hrx_set_shape_alias(&request.problem, "set_rows", "dst_nb3", node->nb[3] / sizeof(ggml_fp16_t));
+        ggml_backend_hrx_add_tensor_facts(&request.problem, "src0", rope->src[0]);
+        ggml_backend_hrx_add_tensor_facts(&request.problem, "src1", rope->src[1]);
+        ggml_backend_hrx_add_tensor_facts(&request.problem, "src2", rope->src[2]);
+        ggml_backend_hrx_add_tensor_facts(&request.problem, "idx", node->src[1]);
+        ggml_backend_hrx_add_tensor_facts(&request.problem, "dst", node);
+        request.tensors = {rope->src[0], rope->src[1], rope->src[2], node->src[1], node};
+        request.constants.clear();
+        ggml_backend_hrx_append_constant<float>(&request.constants, std::pow(freq_base, -2.0f / static_cast<float>(n_dims)));
+        ggml_backend_hrx_append_constant<float>(&request.constants, freq_scale);
+        ggml_backend_hrx_append_constant<float>(&request.constants, attn_factor);
+        if (!ggml_backend_hrx_request_matches_loaded_route(device_context, request, "rope_set_rows_f32")) {
+            return false;
+        }
+        *out_request = std::move(request);
+        return true;
+    };
+
+    if (make_rope_set_rows() || make_cont_set_rows()) {
+        return true;
+    }
+
+    const ggml_tensor * src = node->src[0];
+    const ggml_tensor * idx = node->src[1];
+    out_request->problem = {};
+    out_request->problem.op = "SET_ROWS";
+    out_request->problem.target_key = device_context->architecture;
+    out_request->problem.supports = {
+        {"src0_type", ggml_backend_hrx_catalog_type_name(src->type)},
+        {"src1_type", ggml_backend_hrx_catalog_type_name(idx->type)},
+        {"dst_type", ggml_backend_hrx_catalog_type_name(node->type)},
+        {"layout", "contiguous_rows"},
+    };
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "set_rows", "nc", node->ne[0]);
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "set_rows", "nr", src->ne[1]);
+    out_request->problem.shape["ncols"] = node->ne[0];
+    out_request->problem.shape["nrows"] = src->ne[1];
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "set_rows", "ne02", src->ne[2]);
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "set_rows", "ne03", src->ne[3]);
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "set_rows", "ne1", node->ne[1]);
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "set_rows", "ne11", idx->ne[1]);
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "set_rows", "ne12", idx->ne[2]);
+    const size_t dst_element_size = node->type == GGML_TYPE_F16 ? sizeof(ggml_fp16_t) : sizeof(float);
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "set_rows", "src0_nb1", src->nb[1] / sizeof(float));
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "set_rows", "src0_nb2", src->nb[2] / sizeof(float));
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "set_rows", "src0_nb3", src->nb[3] / sizeof(float));
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "set_rows", "idx_nb0", idx->nb[0] / sizeof(int64_t));
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "set_rows", "idx_nb1", idx->nb[1] / sizeof(int64_t));
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "set_rows", "idx_nb2", idx->nb[2] / sizeof(int64_t));
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "set_rows", "dst_nb1", node->nb[1] / dst_element_size);
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "set_rows", "dst_nb2", node->nb[2] / dst_element_size);
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "set_rows", "dst_nb3", node->nb[3] / dst_element_size);
+    ggml_backend_hrx_add_tensor_facts(&out_request->problem, "src0", src);
+    ggml_backend_hrx_add_tensor_facts(&out_request->problem, "src1", idx);
+    ggml_backend_hrx_add_tensor_facts(&out_request->problem, "src2", node->src[2]);
+    ggml_backend_hrx_add_tensor_facts(&out_request->problem, "dst", node);
+    out_request->tensors = {src, idx, node};
+    out_request->constants.clear();
+    return true;
+}
+
+static bool ggml_backend_hrx_make_mul_mat_f16_cont_request(
+        ggml_backend_hrx_device_context * device_context,
+        const ggml_tensor * node,
+        ggml_backend_hrx_dispatch_request * out_request) {
+    if (!device_context || !out_request || !node || node->op != GGML_OP_CONT ||
+        !node->src[0] || node->src[0]->op != GGML_OP_PERMUTE ||
+        !node->src[0]->src[0] || node->src[0]->src[0]->op != GGML_OP_MUL_MAT ||
+        !node->src[0]->src[0]->src[0] || !node->src[0]->src[0]->src[1] ||
+        node->type != GGML_TYPE_F32 || node->view_src != nullptr ||
+        !ggml_is_contiguous(node)) {
+        return false;
+    }
+    const ggml_tensor * permute = node->src[0];
+    const ggml_tensor * mul_mat = permute->src[0];
+    if (ggml_get_op_params_i32(permute, 0) != 0 ||
+        ggml_get_op_params_i32(permute, 1) != 2 ||
+        ggml_get_op_params_i32(permute, 2) != 1 ||
+        ggml_get_op_params_i32(permute, 3) != 3 ||
+        !ggml_backend_hrx_make_mul_mat_problem(device_context, mul_mat, &out_request->problem)) {
+        return false;
+    }
+    const int64_t rows = mul_mat->src[0]->ne[1];
+    const int64_t cols = mul_mat->src[1]->ne[1];
+    if (mul_mat->src[0]->type != GGML_TYPE_F16 ||
+        mul_mat->src[1]->type != GGML_TYPE_F32 ||
+        mul_mat->type != GGML_TYPE_F32 ||
+        permute->ne[0] != mul_mat->ne[0] ||
+        permute->ne[1] != mul_mat->ne[2] ||
+        permute->ne[2] != mul_mat->ne[1] ||
+        permute->ne[3] != mul_mat->ne[3] ||
+        node->ne[0] != rows * mul_mat->ne[2] ||
+        node->ne[1] != cols ||
+        node->ne[2] != mul_mat->ne[3] ||
+        node->ne[3] != 1) {
+        return false;
+    }
+
+    out_request->problem.op = "CONT";
+    out_request->problem.supports["layout"] = "decode_kqv_permute_contiguous_noalias";
+    out_request->tensors = {mul_mat->src[0], mul_mat->src[1], node};
+    out_request->constants.clear();
+    if (!ggml_backend_hrx_request_matches_loaded_route(device_context, *out_request, "mul_mat_f16_f32_batched_cont")) {
+        return false;
+    }
+    return true;
+}
+
+static bool ggml_backend_hrx_make_softmax_kqv_request(
+        ggml_backend_hrx_device_context * device_context,
+        const ggml_tensor * node,
+        ggml_backend_hrx_dispatch_request * out_request) {
+    if (!device_context || !out_request || !node || node->op != GGML_OP_CONT ||
+        !node->src[0] || node->src[0]->op != GGML_OP_PERMUTE ||
+        !node->src[0]->src[0] || node->src[0]->src[0]->op != GGML_OP_MUL_MAT ||
+        !node->src[0]->src[0]->src[0] || !node->src[0]->src[0]->src[1] ||
+        node->src[0]->src[0]->src[1]->op != GGML_OP_SOFT_MAX ||
+        !node->src[0]->src[0]->src[1]->src[0] ||
+        !node->src[0]->src[0]->src[1]->src[1] ||
+        node->type != GGML_TYPE_F32 || !ggml_is_contiguous(node)) {
+        return false;
+    }
+    const ggml_tensor * permute = node->src[0];
+    const ggml_tensor * kqv = permute->src[0];
+    const ggml_tensor * softmax = kqv->src[1];
+    const ggml_tensor * kq = softmax->src[0];
+    const ggml_tensor * mask = softmax->src[1];
+    const ggml_tensor * v = kqv->src[0];
+    if (ggml_get_op_params_i32(permute, 0) != 0 ||
+        ggml_get_op_params_i32(permute, 1) != 2 ||
+        ggml_get_op_params_i32(permute, 2) != 1 ||
+        ggml_get_op_params_i32(permute, 3) != 3 ||
+        kq->type != GGML_TYPE_F32 ||
+        mask->type != GGML_TYPE_F32 ||
+        softmax->type != GGML_TYPE_F32 ||
+        v->type != GGML_TYPE_F16 ||
+        kqv->type != GGML_TYPE_F32 ||
+        kqv->src[1] != softmax ||
+        !ggml_is_contiguous(kq) ||
+        !ggml_is_contiguous(mask) ||
+        !ggml_is_contiguous(v)) {
+        return false;
+    }
+    const int64_t kv = kq->ne[0];
+    const int64_t n = kq->ne[1];
+    const int64_t nheads = kq->ne[2];
+    const int64_t d = v->ne[1];
+    if (kq->ne[3] != 1 ||
+        mask->ne[0] != kv || mask->ne[1] != n || mask->ne[2] != nheads || mask->ne[3] != 1 ||
+        v->ne[0] != kv ||
+        kqv->ne[0] != d || kqv->ne[1] != n || kqv->ne[2] != nheads || kqv->ne[3] != 1 ||
+        node->ne[0] != d * nheads || node->ne[1] != n || node->ne[2] != 1 || node->ne[3] != 1) {
+        return false;
+    }
+
+    ggml_backend_hrx_dispatch_request request = {};
+    request.problem.op = "CONT";
+    request.problem.target_key = device_context->architecture;
+    request.problem.supports = {
+        {"kq_type", ggml_backend_hrx_catalog_type_name(kq->type)},
+        {"mask_type", ggml_backend_hrx_catalog_type_name(mask->type)},
+        {"v_type", ggml_backend_hrx_catalog_type_name(v->type)},
+        {"dst_type", ggml_backend_hrx_catalog_type_name(node->type)},
+        {"layout", "phi4_decode_kq_softmax_kqv_permute_cont"},
+        {"fusion", "SOFT_MAX + MUL_MAT(F16xF32) + PERMUTE + CONT"},
+    };
+    request.problem.shape = {
+        {"k", kv},
+        {"rows", n},
+        {"cols", nheads},
+    };
+    ggml_backend_hrx_add_tensor_facts(&request.problem, "src0", kq);
+    ggml_backend_hrx_add_tensor_facts(&request.problem, "src1", mask);
+    ggml_backend_hrx_add_tensor_facts(&request.problem, "src2", v);
+    ggml_backend_hrx_add_tensor_facts(&request.problem, "dst", node);
+    request.tensors = {kq, mask, v, node};
+    request.constants.clear();
+    float scale = 1.0f;
+    std::memcpy(&scale, softmax->op_params, sizeof(scale));
+    ggml_backend_hrx_append_constant<float>(&request.constants, scale);
+    if (!ggml_backend_hrx_request_matches_loaded_route(device_context, request, "softmax_kqv_f32_f16")) {
+        return false;
+    }
+    *out_request = std::move(request);
+    return true;
+}
+
 static bool ggml_backend_hrx_make_cont_request(
         ggml_backend_hrx_device_context * device_context,
         const ggml_tensor * node,
         ggml_backend_hrx_dispatch_request * out_request) {
+    if (ggml_backend_hrx_make_softmax_kqv_request(device_context, node, out_request)) {
+        return true;
+    }
+    if (ggml_backend_hrx_make_mul_mat_f16_cont_request(device_context, node, out_request)) {
+        return true;
+    }
     if (!device_context || !out_request || !node || node->op != GGML_OP_CONT || !node->src[0] ||
         !ggml_backend_hrx_is_f32_row_contiguous(node->src[0]) ||
         !ggml_backend_hrx_is_f32_row_contiguous(node)) {
@@ -1638,6 +2242,31 @@ static bool ggml_backend_hrx_make_cpy_request(
         !ggml_is_contiguous(node->src[0]) || !ggml_is_contiguous(node)) {
         return false;
     }
+    if (node->src[0]->type == GGML_TYPE_F32 && node->type == GGML_TYPE_Q8_1) {
+        out_request->problem = {};
+        out_request->problem.op = "QUANTIZE";
+        out_request->problem.target_key = device_context->architecture;
+        out_request->problem.supports = {
+            {"src0_type", ggml_backend_hrx_catalog_type_name(node->src[0]->type)},
+            {"dst_type", ggml_backend_hrx_catalog_type_name(node->type)},
+            {"layout", "contiguous"},
+        };
+        ggml_backend_hrx_set_shape_alias(&out_request->problem, "q8_1", "blocks", node->src[0]->ne[0] / ggml_blck_size(GGML_TYPE_Q8_1));
+        ggml_backend_hrx_set_shape_alias(&out_request->problem, "q8_1", "ne1", node->src[0]->ne[1]);
+        ggml_backend_hrx_set_shape_alias(&out_request->problem, "q8_1", "z_count", node->src[0]->ne[2] * node->src[0]->ne[3]);
+        out_request->tensors = {node->src[0], node};
+        out_request->constants.clear();
+        ggml_backend_hrx_append_constant<int32_t>(&out_request->constants, static_cast<int32_t>(node->src[0]->ne[0]));
+        ggml_backend_hrx_append_constant<int32_t>(&out_request->constants, static_cast<int32_t>(node->src[0]->nb[1] / sizeof(float)));
+        ggml_backend_hrx_append_constant<int32_t>(&out_request->constants, static_cast<int32_t>(node->src[0]->nb[2] / sizeof(float)));
+        ggml_backend_hrx_append_constant<int32_t>(&out_request->constants, static_cast<int32_t>(node->src[0]->nb[3] / sizeof(float)));
+        ggml_backend_hrx_append_constant<int32_t>(&out_request->constants, static_cast<int32_t>(node->ne[0]));
+        ggml_backend_hrx_append_constant<int32_t>(&out_request->constants, static_cast<int32_t>(node->ne[1]));
+        ggml_backend_hrx_append_constant<int32_t>(&out_request->constants, static_cast<int32_t>(node->ne[2]));
+        ggml_backend_hrx_add_tensor_facts(&out_request->problem, "src0", node->src[0]);
+        ggml_backend_hrx_add_tensor_facts(&out_request->problem, "dst", node);
+        return true;
+    }
     out_request->problem = {};
     out_request->problem.op = "CPY";
     out_request->problem.target_key = device_context->architecture;
@@ -1656,10 +2285,159 @@ static bool ggml_backend_hrx_make_cpy_request(
     return true;
 }
 
+static bool ggml_backend_hrx_make_rope_request(
+        ggml_backend_hrx_device_context * device_context,
+        const ggml_tensor * node,
+        ggml_backend_hrx_dispatch_request * out_request) {
+    if (!device_context || !out_request || !node || node->op != GGML_OP_ROPE ||
+        !node->src[0] || !node->src[1] || node->src[0]->type != GGML_TYPE_F32 ||
+        node->src[1]->type != GGML_TYPE_I32 || node->type != GGML_TYPE_F32 ||
+        !ggml_backend_hrx_is_f32_row_contiguous(node->src[0]) ||
+        !ggml_is_contiguous(node->src[1]) ||
+        !ggml_backend_hrx_is_f32_row_contiguous(node)) {
+        return false;
+    }
+    const ggml_tensor * freq = node->src[2];
+    if (freq && (freq->type != GGML_TYPE_F32 || !ggml_is_contiguous(freq))) {
+        return false;
+    }
+    int32_t n_dims = 0;
+    int32_t mode = 0;
+    float freq_base = 10000.0f;
+    float freq_scale = 1.0f;
+    float ext_factor = 0.0f;
+    float attn_factor = 1.0f;
+    std::memcpy(&n_dims, reinterpret_cast<const uint8_t *>(node->op_params) + sizeof(int32_t), sizeof(int32_t));
+    std::memcpy(&mode, reinterpret_cast<const uint8_t *>(node->op_params) + 2 * sizeof(int32_t), sizeof(int32_t));
+    std::memcpy(&freq_base, reinterpret_cast<const uint8_t *>(node->op_params) + 5 * sizeof(float), sizeof(float));
+    std::memcpy(&freq_scale, reinterpret_cast<const uint8_t *>(node->op_params) + 6 * sizeof(float), sizeof(float));
+    std::memcpy(&ext_factor, reinterpret_cast<const uint8_t *>(node->op_params) + 7 * sizeof(float), sizeof(float));
+    std::memcpy(&attn_factor, reinterpret_cast<const uint8_t *>(node->op_params) + 8 * sizeof(float), sizeof(float));
+    if (ext_factor != 0.0f || (mode & ~(GGML_ROPE_TYPE_NEOX)) != 0) {
+        return false;
+    }
+    out_request->problem = {};
+    out_request->problem.op = freq_scale == 1.0f ? "ROPE" : "ROPE_SCALE";
+    out_request->problem.target_key = device_context->architecture;
+    out_request->problem.supports = {
+        {"src0_type", ggml_backend_hrx_catalog_type_name(node->src[0]->type)},
+        {"src1_type", ggml_backend_hrx_catalog_type_name(node->src[1]->type)},
+        {"dst_type", ggml_backend_hrx_catalog_type_name(node->type)},
+        {"mode", (mode & GGML_ROPE_TYPE_NEOX) ? "NEOX" : "NORMAL"},
+        {"freq_factor", freq ? "src2" : "none"},
+        {"ext_factor", "0"},
+        {"layout", "element-strided-head-token-ne3-1"},
+    };
+    if (freq) {
+        out_request->problem.supports["src2_type"] = ggml_backend_hrx_catalog_type_name(freq->type);
+    }
+    const int64_t ntokens = node->src[0]->ne[2];
+    const int64_t nheads = node->src[0]->ne[1];
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "rope", "ncols", node->src[0]->ne[0]);
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "rope", "n_dims", n_dims);
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "rope", "nheads", nheads);
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "rope", "ntokens", ntokens);
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "rope", "src0_head_stride", node->src[0]->nb[1] / sizeof(float));
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "rope", "src0_token_stride", node->src[0]->nb[2] / sizeof(float));
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "rope", "dst_head_stride", node->nb[1] / sizeof(float));
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "rope", "dst_token_stride", node->nb[2] / sizeof(float));
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "rope", "pos_token_stride", node->src[1]->nb[0] / sizeof(int32_t));
+    out_request->problem.shape["ncols"] = node->src[0]->ne[0];
+    out_request->problem.shape["nrows"] = nheads * ntokens;
+    out_request->problem.shape["n_dims"] = n_dims;
+    out_request->problem.shape["rows"] = nheads;
+    out_request->problem.shape["cols"] = ntokens;
+    ggml_backend_hrx_add_tensor_facts(&out_request->problem, "src0", node->src[0]);
+    ggml_backend_hrx_add_tensor_facts(&out_request->problem, "src1", node->src[1]);
+    if (freq) {
+        ggml_backend_hrx_add_tensor_facts(&out_request->problem, "src2", freq);
+    }
+    ggml_backend_hrx_add_tensor_facts(&out_request->problem, "dst", node);
+    out_request->tensors = freq ?
+        std::vector<const ggml_tensor *>{node->src[0], node->src[1], freq, node} :
+        std::vector<const ggml_tensor *>{node->src[0], node->src[1], node};
+    out_request->constants.clear();
+    ggml_backend_hrx_append_constant<float>(&out_request->constants, -2.0f * std::log(freq_base) / static_cast<float>(n_dims));
+    ggml_backend_hrx_append_constant<float>(&out_request->constants, freq_scale);
+    ggml_backend_hrx_append_constant<float>(&out_request->constants, attn_factor);
+    if (out_request->problem.op == "ROPE_SCALE") {
+        ggml_backend_hrx_append_constant<float>(&out_request->constants, 1.0f);
+    }
+    return true;
+}
+
+static bool ggml_backend_hrx_make_mul_mat_q4_k_swiglu_request(
+        ggml_backend_hrx_device_context * device_context,
+        const ggml_tensor * node,
+        ggml_backend_hrx_dispatch_request * out_request) {
+    if (!device_context || !out_request || !node || node->op != GGML_OP_GLU ||
+        ggml_get_glu_op(node) != GGML_GLU_OP_SWIGLU ||
+        !node->src[0] || !node->src[1] ||
+        node->src[0]->op != GGML_OP_MUL_MAT ||
+        node->src[1]->op != GGML_OP_MUL_MAT ||
+        !node->src[0]->src[0] || !node->src[0]->src[1] ||
+        !node->src[1]->src[0] || !node->src[1]->src[1] ||
+        node->src[0]->src[1] != node->src[1]->src[1] ||
+        node->src[0]->src[0]->type != GGML_TYPE_Q4_K ||
+        node->src[1]->src[0]->type != GGML_TYPE_Q4_K ||
+        node->src[0]->src[1]->type != GGML_TYPE_F32 ||
+        node->type != GGML_TYPE_F32 ||
+        !ggml_are_same_shape(node->src[0], node->src[1]) ||
+        !ggml_are_same_shape(node->src[0], node) ||
+        !ggml_is_contiguous(node->src[0]->src[0]) ||
+        !ggml_is_contiguous(node->src[1]->src[0]) ||
+        !ggml_is_contiguous(node->src[0]->src[1]) ||
+        !ggml_is_contiguous(node)) {
+        return false;
+    }
+
+    const ggml_tensor * x = node->src[0];
+    const ggml_tensor * gate = node->src[1];
+    const ggml_tensor * rhs = x->src[1];
+    const int64_t k = x->src[0]->ne[0];
+    const int64_t rows = x->src[0]->ne[1];
+    const int64_t cols = rhs->ne[1];
+    if (gate->src[0]->ne[0] != k || gate->src[0]->ne[1] != rows ||
+        node->ne[0] != rows || ggml_backend_hrx_tensor_row_count(node) != cols) {
+        return false;
+    }
+
+    ggml_backend_hrx_dispatch_request request = {};
+    request.problem.op = "GLU";
+    request.problem.target_key = device_context->architecture;
+    request.problem.supports = {
+        {"src0_type", ggml_backend_hrx_catalog_type_name(x->src[0]->type)},
+        {"src1_type", ggml_backend_hrx_catalog_type_name(gate->src[0]->type)},
+        {"rhs_type", ggml_backend_hrx_catalog_type_name(rhs->type)},
+        {"dst_type", ggml_backend_hrx_catalog_type_name(node->type)},
+        {"layout", "contiguous"},
+        {"fusion", "MUL_MAT_Q4_K + MUL_MAT_Q4_K + SWIGLU"},
+    };
+    request.problem.shape = {
+        {"k", k},
+        {"rows", rows},
+        {"cols", cols},
+    };
+    ggml_backend_hrx_add_tensor_facts(&request.problem, "src0", x->src[0]);
+    ggml_backend_hrx_add_tensor_facts(&request.problem, "src1", rhs);
+    ggml_backend_hrx_add_tensor_facts(&request.problem, "gate", gate->src[0]);
+    ggml_backend_hrx_add_tensor_facts(&request.problem, "dst", node);
+    request.tensors = {x->src[0], gate->src[0], rhs, node};
+    request.constants.clear();
+    if (!ggml_backend_hrx_request_matches_loaded_route(device_context, request, "mul_mat_q4_k_swiglu_f32")) {
+        return false;
+    }
+    *out_request = std::move(request);
+    return true;
+}
+
 static bool ggml_backend_hrx_make_glu_request(
         ggml_backend_hrx_device_context * device_context,
         const ggml_tensor * node,
         ggml_backend_hrx_dispatch_request * out_request) {
+    if (ggml_backend_hrx_make_mul_mat_q4_k_swiglu_request(device_context, node, out_request)) {
+        return true;
+    }
     if (!device_context || !out_request || !node || node->op != GGML_OP_GLU || !node->src[0] ||
         ggml_get_glu_op(node) != GGML_GLU_OP_SWIGLU ||
         !ggml_backend_hrx_is_f32_row_contiguous(node->src[0]) ||
@@ -1714,6 +2492,8 @@ static bool ggml_backend_hrx_make_dispatch_request(
             return ggml_backend_hrx_make_div_request(device_context, node, out_request);
         case GGML_OP_MUL_MAT:
             return ggml_backend_hrx_make_mul_mat_request(device_context, node, out_request);
+        case GGML_OP_MUL_MAT_ID:
+            return ggml_backend_hrx_make_mul_mat_id_request(device_context, node, out_request);
         case GGML_OP_SCALE:
             return ggml_backend_hrx_make_scale_request(device_context, node, out_request);
         case GGML_OP_CLAMP:
@@ -1728,10 +2508,14 @@ static bool ggml_backend_hrx_make_dispatch_request(
             return ggml_backend_hrx_make_argsort_request(device_context, node, out_request);
         case GGML_OP_GET_ROWS:
             return ggml_backend_hrx_make_get_rows_request(device_context, node, out_request);
+        case GGML_OP_SET_ROWS:
+            return ggml_backend_hrx_make_set_rows_request(device_context, node, out_request);
         case GGML_OP_CONT:
             return ggml_backend_hrx_make_cont_request(device_context, node, out_request);
         case GGML_OP_CPY:
             return ggml_backend_hrx_make_cpy_request(device_context, node, out_request);
+        case GGML_OP_ROPE:
+            return ggml_backend_hrx_make_rope_request(device_context, node, out_request);
         case GGML_OP_GLU:
             return ggml_backend_hrx_make_glu_request(device_context, node, out_request);
         default:
@@ -2071,6 +2855,96 @@ static bool ggml_backend_hrx_dispatch_node(
         HRX_DISPATCH_FLAG_NONE));
 }
 
+static bool ggml_backend_hrx_is_fused_producer_node(
+        ggml_backend_hrx_device_context * device_context,
+        const ggml_cgraph * cgraph,
+        int node_index) {
+    if (!device_context || !cgraph || node_index < 0 || node_index >= cgraph->n_nodes) {
+        return false;
+    }
+    const ggml_tensor * producer = cgraph->nodes[node_index];
+    if (!producer ||
+        (producer->op != GGML_OP_RMS_NORM &&
+         producer->op != GGML_OP_ADD &&
+         producer->op != GGML_OP_CONT &&
+         producer->op != GGML_OP_ROPE &&
+         producer->op != GGML_OP_MUL_MAT &&
+         producer->op != GGML_OP_SOFT_MAX)) {
+        return false;
+    }
+    for (int i = node_index + 1; i < cgraph->n_nodes; ++i) {
+        const ggml_tensor * consumer = cgraph->nodes[i];
+        if (!consumer || !consumer->src[0]) {
+            continue;
+        }
+        bool producer_consumed = false;
+        const char * expected_family = nullptr;
+        if (consumer->op == GGML_OP_MUL) {
+            const bool rms_norm_mul_producer =
+                producer->op == GGML_OP_RMS_NORM && consumer->src[0] == producer;
+            const bool add_rms_norm_mul_producer =
+                consumer->src[0]->op == GGML_OP_RMS_NORM &&
+                consumer->src[0]->src[0] &&
+                ((producer->op == GGML_OP_RMS_NORM && consumer->src[0] == producer) ||
+                 (producer->op == GGML_OP_ADD && consumer->src[0]->src[0] == producer));
+            producer_consumed = rms_norm_mul_producer || add_rms_norm_mul_producer;
+            expected_family = add_rms_norm_mul_producer ? "add_rms_norm_mul_f32" :
+                (rms_norm_mul_producer ? "rms_norm_mul_f32" : nullptr);
+        } else if (consumer->op == GGML_OP_SET_ROWS) {
+            if (producer->op == GGML_OP_CONT &&
+                ggml_backend_hrx_zero_offset_source_chain_target(consumer->src[0], GGML_OP_CONT) == producer) {
+                producer_consumed = true;
+                expected_family = "cont_set_rows_f32";
+            } else if (producer->op == GGML_OP_ROPE &&
+                       ggml_backend_hrx_zero_offset_source_chain_target(consumer->src[0], GGML_OP_ROPE) == producer) {
+                producer_consumed = true;
+                expected_family = "rope_set_rows_f32";
+            }
+        } else if (consumer->op == GGML_OP_GLU) {
+            if (producer->op == GGML_OP_MUL_MAT && (consumer->src[0] == producer || consumer->src[1] == producer)) {
+                producer_consumed = true;
+                expected_family = "mul_mat_q4_k_swiglu_f32";
+            }
+        } else if (consumer->op == GGML_OP_CONT) {
+            if (producer->op == GGML_OP_MUL_MAT &&
+                consumer->src[0] &&
+                consumer->src[0]->op == GGML_OP_PERMUTE &&
+                consumer->src[0]->src[0] == producer) {
+                producer_consumed = true;
+                expected_family = (producer->src[1] && producer->src[1]->op == GGML_OP_SOFT_MAX) ?
+                    "softmax_kqv_f32_f16" : "mul_mat_f16_f32_batched_cont";
+            } else if (producer->op == GGML_OP_SOFT_MAX &&
+                       consumer->src[0] &&
+                       consumer->src[0]->op == GGML_OP_PERMUTE &&
+                       consumer->src[0]->src[0] &&
+                       consumer->src[0]->src[0]->op == GGML_OP_MUL_MAT &&
+                       consumer->src[0]->src[0]->src[1] == producer) {
+                producer_consumed = true;
+                expected_family = "softmax_kqv_f32_f16";
+            }
+        }
+        if (!producer_consumed || !expected_family) {
+            continue;
+        }
+        ggml_backend_hrx_dispatch_request request = {};
+        if (!ggml_backend_hrx_make_dispatch_request(device_context, consumer, &request) ||
+            !device_context->reg_context || !device_context->reg_context->catalog) {
+            continue;
+        }
+        const auto * route = ggml_backend_hrx_catalog_find_route(*device_context->reg_context->catalog, request.problem);
+        if (route && route->family == expected_family) {
+            ggml_backend_hrx_trace_event(device_context->reg_context, {
+                {"event", "fused_producer_skipped"},
+                {"producer_op", ggml_op_desc(producer)},
+                {"consumer_op", ggml_op_desc(consumer)},
+                {"route_id", route->id},
+            });
+            return true;
+        }
+    }
+    return false;
+}
+
 static enum ggml_status ggml_backend_hrx_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     auto * context = static_cast<ggml_backend_hrx_context *>(backend->context);
     if (context->device_context->options && context->device_context->options->trace_graph) {
@@ -2091,6 +2965,9 @@ static enum ggml_status ggml_backend_hrx_graph_compute(ggml_backend_t backend, g
     for (int i = 0; cgraph && i < cgraph->n_nodes; ++i) {
         const ggml_tensor * node = cgraph->nodes[i];
         if (!ggml_backend_hrx_is_metadata_op(node)) {
+            if (ggml_backend_hrx_is_fused_producer_node(context->device_context, cgraph, i)) {
+                continue;
+            }
             if (ggml_backend_hrx_dispatch_node(context->device_context, node)) {
                 continue;
             }
@@ -2204,10 +3081,29 @@ static bool ggml_backend_hrx_device_supports_op(ggml_backend_dev_t dev, const gg
     }
     auto * device_context = ggml_backend_hrx_get_device_context(dev);
     ggml_backend_hrx_dispatch_request request;
-    return ggml_backend_hrx_make_dispatch_request(device_context, op, &request) &&
+    if (!ggml_backend_hrx_make_dispatch_request(device_context, op, &request)) {
+        ggml_backend_hrx_trace_event(device_context->reg_context, {
+            {"event", "supports_op_rejected"},
+            {"reason", "request_builder"},
+            {"op", ggml_op_desc(op)},
+            {"node", ggml_get_name(op)},
+        });
+        return false;
+    }
+    const bool supported =
         device_context->reg_context &&
         device_context->reg_context->catalog &&
         ggml_backend_hrx_catalog_find_route(*device_context->reg_context->catalog, request.problem) != nullptr;
+    if (!supported) {
+        ggml_backend_hrx_trace_event(device_context->reg_context, {
+            {"event", "supports_op_rejected"},
+            {"reason", "no_catalog_route"},
+            {"op", request.problem.op},
+            {"supports", request.problem.supports},
+            {"shape", request.problem.shape},
+        });
+    }
+    return supported;
 }
 
 static bool ggml_backend_hrx_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
@@ -2535,6 +3431,7 @@ std::vector<ggml_backend_hrx_test_case> ggml_backend_hrx_test_cases(
         test_case.id = catalog_case.id;
         test_case.op = catalog_case.op;
         test_case.family = catalog_case.family;
+        test_case.scenario = catalog_case.scenario;
         test_case.expected_route_id = catalog_case.expected_route_id;
         test_case.supports = catalog_case.supports;
         test_case.shape = catalog_case.shape;

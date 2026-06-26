@@ -13,6 +13,7 @@ struct ggml_backend_hrx_test_case {
     std::string id;
     std::string op;
     std::string family;
+    std::string scenario;
     std::string expected_route_id;
     std::map<std::string, std::string> supports;
     std::map<std::string, int64_t> shape;

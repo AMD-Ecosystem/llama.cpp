@@ -1,24 +1,24 @@
 {
   "schema": "ggml-hrx-test-schedule-v1",
   "target_key": "gfx1100",
-  "family": "get_rows_f32",
+  "family": "get_rows_q8_0_f32",
   "cases": [
     {
-      "id": "get_rows_f32_get_rows_f32_n2048_r1_64_wg256_smoke",
+      "id": "get_rows_q8_0_f32_get_rows_q8_0_f32_n4096_r1_512_wg256_smoke",
       "op": "GET_ROWS",
       "scenario": "get_rows",
-      "expected_route_id": "get_rows_f32_n2048_r1_64_wg256",
+      "expected_route_id": "get_rows_q8_0_f32_n4096_r1_512_wg256",
       "supports": {
-        "src0_type": "F32",
+        "src0_type": "Q8_0",
         "src1_type": "I32",
         "dst_type": "F32",
-        "layout": "embedding_rows_1d"
+        "layout": "quantized_embedding_rows_1d"
       },
       "shape": {
-        "ncols": 2048,
+        "ncols": 4096,
         "nrows": 3
       },
-      "tolerance": 1e-06,
+      "tolerance": 0.0,
       "repeat": 2
     }
   ]

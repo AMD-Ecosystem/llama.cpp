@@ -6,6 +6,7 @@
     {
       "id": "clamp_f32_clamp_f32_n1_r1_contiguous_wg256_smoke",
       "op": "CLAMP",
+      "scenario": "clamp",
       "expected_route_id": "clamp_f32_n1_r1_contiguous_wg256",
       "supports": {
         "src0_type": "F32",

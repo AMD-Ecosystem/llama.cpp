@@ -6,6 +6,7 @@
     {
       "id": "mul_mat_q5_k_f32_mul_mat_q5_k_f32_dot16_k256_32768_r1_262144_c1_wg32_smoke",
       "op": "MUL_MAT",
+      "scenario": "mul_mat",
       "expected_route_id": "mul_mat_q5_k_f32_dot16_k256_32768_r1_262144_c1_wg32",
       "supports": {
         "src0_type": "Q5_K",

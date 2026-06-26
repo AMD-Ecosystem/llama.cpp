@@ -6,6 +6,7 @@
     {
       "id": "scale_f32_scale_f32_n128_r24_wg256_smoke",
       "op": "SCALE",
+      "scenario": "scale",
       "expected_route_id": "scale_f32_n128_r24_wg256",
       "supports": {
         "src0_type": "F32",

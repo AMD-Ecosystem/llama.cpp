@@ -6,6 +6,7 @@
     {
       "id": "mul_mat_q8_0_f32_mul_mat_q8_0_f32_packed_loop_k32_8192_c1_16_wg64_smoke",
       "op": "MUL_MAT",
+      "scenario": "mul_mat",
       "expected_route_id": "mul_mat_q8_0_f32_packed_loop_k32_8192_c1_16_wg64",
       "supports": {
         "src0_type": "Q8_0",

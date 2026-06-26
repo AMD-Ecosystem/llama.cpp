@@ -1,0 +1,32 @@
+{
+  "schema": "ggml-hrx-test-schedule-v1",
+  "target_key": "gfx1100",
+  "family": "rope_scale_f32",
+  "cases": [
+    {
+      "id": "rope_scale_f32_rope_neox_f32_freq_scale_n128_d96_h24_t1_wg256_smoke",
+      "op": "ROPE_SCALE",
+      "scenario": "rope",
+      "expected_route_id": "rope_neox_f32_freq_scale_n128_d96_h24_t1_wg256",
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "I32",
+        "src2_type": "F32",
+        "dst_type": "F32",
+        "mode": "NEOX",
+        "freq_factor": "src2",
+        "ext_factor": "0",
+        "layout": "element-strided-head-token-ne3-1"
+      },
+      "shape": {
+        "ncols": 128,
+        "n_dims": 96,
+        "nheads": 24,
+        "ntokens": 1,
+        "freq_scale": 2
+      },
+      "tolerance": 0.0001,
+      "repeat": 2
+    }
+  ]
+}
