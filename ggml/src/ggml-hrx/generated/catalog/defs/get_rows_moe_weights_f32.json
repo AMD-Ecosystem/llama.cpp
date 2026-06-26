@@ -1,0 +1,34 @@
+{
+  "schema": "ggml-hrx-kernel-def-v1",
+  "family": "get_rows_moe_weights_f32",
+  "op": "GET_ROWS",
+  "sources": {
+    "get_rows_moe_weights_f32": {
+      "path": "kernels/get_rows_moe_weights_f32.loom",
+      "sha256": "b8e917af4b2d93a57c987dd7a4ca726f90d5fd33ce44d2cd64557f5a1c345ec7"
+    }
+  },
+  "artifacts": {
+    "get_rows_moe_weights_f32_ne128_k8_t16_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "get_rows_moe_weights_f32",
+      "root_symbol": "@hrx2_get_rows_moe_weights_f32",
+      "path": "artifacts/get_rows_moe_weights_f32_ne128_k8_t16_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "get_rows_moe_weights_f32_ne128_k8_t1_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "get_rows_moe_weights_f32",
+      "root_symbol": "@hrx2_get_rows_moe_weights_f32",
+      "path": "artifacts/get_rows_moe_weights_f32_ne128_k8_t1_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "get_rows_moe_weights_f32_ne128_k8_t64_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "get_rows_moe_weights_f32",
+      "root_symbol": "@hrx2_get_rows_moe_weights_f32",
+      "path": "artifacts/get_rows_moe_weights_f32_ne128_k8_t64_wg256_loombc.loombc",
+      "storage": "embedded"
+    }
+  }
+}

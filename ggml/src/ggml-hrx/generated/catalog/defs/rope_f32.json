@@ -1,0 +1,59 @@
+{
+  "schema": "ggml-hrx-kernel-def-v1",
+  "family": "rope_f32",
+  "op": "ROPE",
+  "sources": {
+    "rope_neox_f32_freq": {
+      "path": "kernels/rope_neox_f32_freq.loom",
+      "sha256": "6272ea87916f6eff5d62581249b15cf362d15d55d9b5525e562e77091ba1d976"
+    },
+    "rope_normal_f32": {
+      "path": "kernels/rope_normal_f32.loom",
+      "sha256": "112e83c9ad74045f73ce62722603063a50a02f2a7f4aebb24e1f70a3fed3d843"
+    }
+  },
+  "artifacts": {
+    "rope_normal_f32_freq_n128_d128_h32_t1_64_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32_freq",
+      "root_symbol": "@hrx2_rope_normal_f32_freq",
+      "path": "artifacts/rope_normal_f32_freq_n128_d128_h32_t1_64_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_normal_f32_freq_n128_d128_h32_t512_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32_freq",
+      "root_symbol": "@hrx2_rope_normal_f32_freq",
+      "path": "artifacts/rope_normal_f32_freq_n128_d128_h32_t512_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_normal_f32_freq_n128_d128_h8_24_t1_64_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32_freq",
+      "root_symbol": "@hrx2_rope_normal_f32_freq",
+      "path": "artifacts/rope_normal_f32_freq_n128_d128_h8_24_t1_64_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_normal_f32_freq_n128_d128_h8_24_t512_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32_freq",
+      "root_symbol": "@hrx2_rope_normal_f32_freq",
+      "path": "artifacts/rope_normal_f32_freq_n128_d128_h8_24_t512_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_normal_f32_n128_d128_h32_t1_64_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_normal_f32",
+      "root_symbol": "@hrx2_rope_normal_f32",
+      "path": "artifacts/rope_normal_f32_n128_d128_h32_t1_64_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_normal_f32_n128_d128_h8_t1_64_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_normal_f32",
+      "root_symbol": "@hrx2_rope_normal_f32",
+      "path": "artifacts/rope_normal_f32_n128_d128_h8_t1_64_wg256_loombc.loombc",
+      "storage": "embedded"
+    }
+  }
+}

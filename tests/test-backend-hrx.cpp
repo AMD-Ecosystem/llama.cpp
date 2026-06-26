@@ -506,17 +506,28 @@ static void run_catalog_mul_mat_schedule_case(
     ggml_type lhs_type = GGML_TYPE_COUNT;
     ggml_type rhs_type = GGML_TYPE_COUNT;
     ggml_type dst_type = GGML_TYPE_COUNT;
-    GGML_ASSERT(ggml_type_from_name(cfg.src0_type.c_str(), &lhs_type));
-    GGML_ASSERT(ggml_type_from_name(cfg.src1_type.c_str(), &rhs_type));
-    GGML_ASSERT(ggml_type_from_name(cfg.dst_type.c_str(), &dst_type));
+    const auto support_value = [&](const char * key) -> const char * {
+        const auto it = cfg.supports.find(key);
+        return it == cfg.supports.end() ? "" : it->second.c_str();
+    };
+    const auto shape_value = [&](const char * key) -> int64_t {
+        const auto it = cfg.shape.find(key);
+        return it == cfg.shape.end() ? 0 : it->second;
+    };
+    GGML_ASSERT(ggml_type_from_name(support_value("src0_type"), &lhs_type));
+    GGML_ASSERT(ggml_type_from_name(support_value("src1_type"), &rhs_type));
+    GGML_ASSERT(ggml_type_from_name(support_value("dst_type"), &dst_type));
     GGML_ASSERT(rhs_type == GGML_TYPE_F32);
     GGML_ASSERT(dst_type == GGML_TYPE_F32);
-    GGML_ASSERT(cfg.k > 0 && cfg.rows > 0 && cfg.cols > 0);
+    const int64_t k = shape_value("k");
+    const int64_t rows = shape_value("rows");
+    const int64_t cols = shape_value("cols");
+    GGML_ASSERT(k > 0 && rows > 0 && cols > 0);
 
     ggml_backend_hrx_test_reset_dispatch_record();
     for (uint32_t i = 0; i < cfg.repeat; ++i) {
         run_mul_mat_vec_case(
-            backend, dev, lhs_type, cfg.k, cfg.rows, cfg.cols,
+            backend, dev, lhs_type, k, rows, cols,
             cfg.tolerance, cfg.id.c_str());
     }
 
@@ -555,6 +566,308 @@ static void run_catalog_mul_mat_q4_k_f32_case(ggml_backend_t backend, ggml_backe
     GGML_ASSERT(!cases.empty());
     for (const ggml_backend_hrx_test_case & cfg : cases) {
         run_catalog_mul_mat_schedule_case(backend, dev, cfg);
+    }
+}
+
+static int64_t catalog_shape(const ggml_backend_hrx_test_case & cfg, const char * key) {
+    const auto it = cfg.shape.find(key);
+    GGML_ASSERT(it != cfg.shape.end());
+    return it->second;
+}
+
+static const std::string & catalog_support(const ggml_backend_hrx_test_case & cfg, const char * key) {
+    const auto it = cfg.supports.find(key);
+    GGML_ASSERT(it != cfg.supports.end());
+    return it->second;
+}
+
+static void run_cpy_f32_f16_case(ggml_backend_t backend);
+static void run_argsort_case(ggml_backend_t backend, int64_t ncols, int64_t nrows, ggml_sort_order order);
+
+static void run_catalog_pointwise_once(ggml_backend_t backend, ggml_backend_dev_t dev, const ggml_backend_hrx_test_case & cfg) {
+    const int64_t ncols = catalog_shape(cfg, "ncols");
+    const int64_t nrows = catalog_shape(cfg, "nrows");
+    const std::string & layout = catalog_support(cfg, "layout");
+    ggml_context_ptr ctx = make_context();
+    ggml_tensor * lhs = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, ncols, nrows);
+    ggml_tensor * rhs = nullptr;
+    if (layout == "contiguous_src0_rhs_column_broadcast") {
+        rhs = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, 1, nrows);
+    } else if (layout == "contiguous_src0_rhs_row_broadcast") {
+        rhs = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, ncols, 1);
+    } else {
+        rhs = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, ncols, nrows);
+    }
+    ggml_tensor * out = cfg.op == "ADD" ? ggml_add(ctx.get(), lhs, rhs) :
+        (cfg.op == "MUL" ? ggml_mul(ctx.get(), lhs, rhs) : ggml_div(ctx.get(), lhs, rhs));
+    GGML_ASSERT(ggml_backend_dev_supports_op(dev, out));
+
+    ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), 16, false);
+    ggml_build_forward_expand(graph, out);
+    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(), backend));
+    GGML_ASSERT(buffer != nullptr);
+
+    std::vector<float> lhs_data(static_cast<size_t>(ncols * nrows));
+    std::vector<float> rhs_data(static_cast<size_t>(ggml_nelements(rhs)));
+    std::vector<float> expected(lhs_data.size());
+    for (int64_t i = 0; i < ncols * nrows; ++i) {
+        lhs_data[i] = static_cast<float>(static_cast<int>(i % 17) - 8) * 0.125f;
+    }
+    for (size_t i = 0; i < rhs_data.size(); ++i) {
+        rhs_data[i] = static_cast<float>(static_cast<int>(i % 11) + 1) * 0.25f;
+    }
+    for (int64_t row = 0; row < nrows; ++row) {
+        for (int64_t col = 0; col < ncols; ++col) {
+            const float a = lhs_data[static_cast<size_t>(row * ncols + col)];
+            float b = 0.0f;
+            if (layout == "contiguous_src0_rhs_column_broadcast") {
+                b = rhs_data[static_cast<size_t>(row)];
+            } else if (layout == "contiguous_src0_rhs_row_broadcast") {
+                b = rhs_data[static_cast<size_t>(col)];
+            } else {
+                b = rhs_data[static_cast<size_t>(row * ncols + col)];
+            }
+            expected[static_cast<size_t>(row * ncols + col)] =
+                cfg.op == "ADD" ? a + b : (cfg.op == "MUL" ? a * b : a / b);
+        }
+    }
+    ggml_backend_tensor_set(lhs, lhs_data.data(), 0, lhs_data.size() * sizeof(float));
+    ggml_backend_tensor_set(rhs, rhs_data.data(), 0, rhs_data.size() * sizeof(float));
+    GGML_ASSERT(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+    expect_near(tensor_to_float(out), expected, cfg.tolerance, cfg.id.c_str());
+}
+
+static void run_catalog_unary_once(ggml_backend_t backend, ggml_backend_dev_t dev, const ggml_backend_hrx_test_case & cfg) {
+    const int64_t ncols = catalog_shape(cfg, "ncols");
+    const int64_t nrows = catalog_shape(cfg, "nrows");
+    ggml_context_ptr ctx = make_context();
+    ggml_tensor * src = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, ncols, nrows);
+    ggml_tensor * out = nullptr;
+    if (cfg.op == "SCALE") {
+        out = ggml_scale_bias(ctx.get(), src, 1.25f, -0.75f);
+    } else if (cfg.op == "CLAMP") {
+        out = ggml_clamp(ctx.get(), src, -1.5f, 2.0f);
+    } else if (cfg.op == "RMS_NORM") {
+        out = ggml_rms_norm(ctx.get(), src, 1.0e-6f);
+    } else if (cfg.op == "SUM_ROWS") {
+        out = ggml_sum_rows(ctx.get(), src);
+    } else if (cfg.op == "SOFT_MAX") {
+        out = ggml_soft_max_ext(ctx.get(), src, nullptr, 0.25f, 0.0f);
+    } else {
+        GGML_ABORT("unsupported catalog unary op");
+    }
+    GGML_ASSERT(ggml_backend_dev_supports_op(dev, out));
+
+    ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), 16, false);
+    ggml_build_forward_expand(graph, out);
+    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(), backend));
+    GGML_ASSERT(buffer != nullptr);
+
+    std::vector<float> src_data(static_cast<size_t>(ncols * nrows));
+    for (size_t i = 0; i < src_data.size(); ++i) {
+        src_data[i] = static_cast<float>(static_cast<int>(i % 29) - 14) * 0.0625f;
+    }
+    ggml_backend_tensor_set(src, src_data.data(), 0, src_data.size() * sizeof(float));
+    GGML_ASSERT(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+
+    if (cfg.op == "SCALE" || cfg.op == "CLAMP" || cfg.op == "RMS_NORM" || cfg.op == "SOFT_MAX") {
+        std::vector<float> expected(src_data.size());
+        for (int64_t row = 0; row < nrows; ++row) {
+            if (cfg.op == "RMS_NORM") {
+                float sum = 0.0f;
+                for (int64_t col = 0; col < ncols; ++col) {
+                    const float value = src_data[static_cast<size_t>(row * ncols + col)];
+                    sum += value * value;
+                }
+                const float scale = 1.0f / std::sqrt(sum / static_cast<float>(ncols) + 1.0e-6f);
+                for (int64_t col = 0; col < ncols; ++col) {
+                    expected[static_cast<size_t>(row * ncols + col)] = src_data[static_cast<size_t>(row * ncols + col)] * scale;
+                }
+            } else if (cfg.op == "SOFT_MAX") {
+                float max_value = -INFINITY;
+                for (int64_t col = 0; col < ncols; ++col) {
+                    max_value = std::max(max_value, src_data[static_cast<size_t>(row * ncols + col)] * 0.25f);
+                }
+                float sum = 0.0f;
+                for (int64_t col = 0; col < ncols; ++col) {
+                    sum += std::exp(src_data[static_cast<size_t>(row * ncols + col)] * 0.25f - max_value);
+                }
+                for (int64_t col = 0; col < ncols; ++col) {
+                    expected[static_cast<size_t>(row * ncols + col)] =
+                        std::exp(src_data[static_cast<size_t>(row * ncols + col)] * 0.25f - max_value) / sum;
+                }
+            } else {
+                for (int64_t col = 0; col < ncols; ++col) {
+                    const size_t index = static_cast<size_t>(row * ncols + col);
+                    expected[index] = cfg.op == "SCALE" ? src_data[index] * 1.25f - 0.75f :
+                        (src_data[index] < -1.5f ? -1.5f : (src_data[index] > 2.0f ? 2.0f : src_data[index]));
+                }
+            }
+        }
+        expect_near(tensor_to_float(out), expected, cfg.tolerance, cfg.id.c_str());
+    } else {
+        std::vector<float> expected(static_cast<size_t>(nrows));
+        for (int64_t row = 0; row < nrows; ++row) {
+            float sum = 0.0f;
+            for (int64_t col = 0; col < ncols; ++col) {
+                sum += src_data[static_cast<size_t>(row * ncols + col)];
+            }
+            expected[static_cast<size_t>(row)] = sum;
+        }
+        expect_near(tensor_to_float(out), expected, cfg.tolerance, cfg.id.c_str());
+    }
+}
+
+using catalog_case_runner = void (*)(ggml_backend_t, ggml_backend_dev_t, const ggml_backend_hrx_test_case &);
+
+static void run_catalog_checked_case(
+        ggml_backend_t backend,
+        ggml_backend_dev_t dev,
+        const ggml_backend_hrx_test_case & cfg,
+        catalog_case_runner runner) {
+    GGML_ASSERT(!cfg.id.empty() && !cfg.expected_route_id.empty() && cfg.repeat > 0);
+    ggml_backend_hrx_test_reset_dispatch_record();
+    for (uint32_t i = 0; i < cfg.repeat; ++i) {
+        runner(backend, dev, cfg);
+    }
+    const ggml_backend_hrx_test_route_record record =
+        ggml_backend_hrx_test_get_route_record(cfg.expected_route_id);
+    GGML_ASSERT(record.dispatch_count == cfg.repeat);
+    GGML_ASSERT(record.jit_compile_count <= 1);
+    GGML_ASSERT(record.jit_compile_count + record.jit_cache_hit_count == cfg.repeat);
+}
+
+static void run_catalog_argsort_once(ggml_backend_t backend, ggml_backend_dev_t dev, const ggml_backend_hrx_test_case & cfg) {
+    GGML_UNUSED(dev);
+    run_argsort_case(backend, catalog_shape(cfg, "ncols"), catalog_shape(cfg, "nrows"), GGML_SORT_ORDER_DESC);
+}
+
+static void run_catalog_copy_once(ggml_backend_t backend, ggml_backend_dev_t dev, const ggml_backend_hrx_test_case & cfg) {
+    GGML_UNUSED(dev);
+    GGML_ASSERT(catalog_shape(cfg, "ncols") == 257);
+    run_cpy_f32_f16_case(backend);
+}
+
+static void run_catalog_get_rows_once(ggml_backend_t backend, ggml_backend_dev_t dev, const ggml_backend_hrx_test_case & cfg) {
+    const int64_t ncols = catalog_shape(cfg, "ncols");
+    const int64_t rows_to_get = catalog_shape(cfg, "nrows");
+    ggml_context_ptr ctx = make_context();
+    ggml_tensor * src = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, ncols, 8);
+    ggml_tensor * rows = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, rows_to_get);
+    ggml_tensor * out = ggml_get_rows(ctx.get(), src, rows);
+    GGML_ASSERT(ggml_backend_dev_supports_op(dev, out));
+
+    ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), 16, false);
+    ggml_build_forward_expand(graph, out);
+    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(), backend));
+    GGML_ASSERT(buffer != nullptr);
+
+    std::vector<float> src_data(static_cast<size_t>(ncols * 8));
+    std::vector<int32_t> row_data(static_cast<size_t>(rows_to_get));
+    for (size_t i = 0; i < src_data.size(); ++i) {
+        src_data[i] = static_cast<float>(static_cast<int>(i % 251) - 125) * 0.03125f;
+    }
+    for (int64_t row = 0; row < rows_to_get; ++row) {
+        row_data[static_cast<size_t>(row)] = static_cast<int32_t>((row * 3) % 8);
+    }
+    ggml_backend_tensor_set(src, src_data.data(), 0, src_data.size() * sizeof(float));
+    ggml_backend_tensor_set(rows, row_data.data(), 0, row_data.size() * sizeof(int32_t));
+    GGML_ASSERT(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+
+    std::vector<float> expected;
+    expected.reserve(static_cast<size_t>(ncols * rows_to_get));
+    for (int64_t row = 0; row < rows_to_get; ++row) {
+        const int64_t selected = row_data[static_cast<size_t>(row)];
+        for (int64_t col = 0; col < ncols; ++col) {
+            expected.push_back(src_data[static_cast<size_t>(selected * ncols + col)]);
+        }
+    }
+    expect_eq(tensor_to_float(out), expected, cfg.id.c_str());
+}
+
+static void run_catalog_cont_once(ggml_backend_t backend, ggml_backend_dev_t dev, const ggml_backend_hrx_test_case & cfg) {
+    const int64_t ncols = catalog_shape(cfg, "ncols");
+    const int64_t nrows = catalog_shape(cfg, "nrows");
+    ggml_context_ptr ctx = make_context();
+    ggml_tensor * base = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, ncols + 2, nrows);
+    ggml_tensor * view = ggml_view_2d(ctx.get(), base, ncols, nrows, base->nb[1], sizeof(float));
+    ggml_tensor * out = ggml_cont(ctx.get(), view);
+    GGML_ASSERT(ggml_backend_dev_supports_op(dev, out));
+
+    ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), 16, false);
+    ggml_build_forward_expand(graph, out);
+    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(), backend));
+    GGML_ASSERT(buffer != nullptr);
+
+    std::vector<float> base_data(static_cast<size_t>((ncols + 2) * nrows));
+    for (size_t i = 0; i < base_data.size(); ++i) {
+        base_data[i] = static_cast<float>(static_cast<int>(i % 127) - 63) * 0.0625f;
+    }
+    ggml_backend_tensor_set(base, base_data.data(), 0, base_data.size() * sizeof(float));
+    GGML_ASSERT(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+
+    std::vector<float> expected;
+    expected.reserve(static_cast<size_t>(ncols * nrows));
+    for (int64_t row = 0; row < nrows; ++row) {
+        for (int64_t col = 1; col <= ncols; ++col) {
+            expected.push_back(base_data[static_cast<size_t>(row * (ncols + 2) + col)]);
+        }
+    }
+    expect_eq(tensor_to_float(out), expected, cfg.id.c_str());
+}
+
+static void run_catalog_swiglu_once(ggml_backend_t backend, ggml_backend_dev_t dev, const ggml_backend_hrx_test_case & cfg) {
+    const int64_t ncols = catalog_shape(cfg, "ncols");
+    const int64_t nrows = catalog_shape(cfg, "nrows");
+    ggml_context_ptr ctx = make_context();
+    ggml_tensor * lhs = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, ncols, nrows);
+    ggml_tensor * rhs = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, ncols, nrows);
+    ggml_tensor * out = ggml_swiglu_split(ctx.get(), lhs, rhs);
+    GGML_ASSERT(ggml_backend_dev_supports_op(dev, out));
+
+    ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), 16, false);
+    ggml_build_forward_expand(graph, out);
+    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(), backend));
+    GGML_ASSERT(buffer != nullptr);
+
+    std::vector<float> lhs_data(static_cast<size_t>(ncols * nrows));
+    std::vector<float> rhs_data(lhs_data.size());
+    std::vector<float> expected(lhs_data.size());
+    for (size_t i = 0; i < lhs_data.size(); ++i) {
+        lhs_data[i] = static_cast<float>(static_cast<int>(i % 17) - 8) * 0.125f;
+        rhs_data[i] = static_cast<float>(static_cast<int>(i % 11) - 5) * 0.25f;
+        expected[i] = lhs_data[i] / (1.0f + std::exp(-lhs_data[i])) * rhs_data[i];
+    }
+    ggml_backend_tensor_set(lhs, lhs_data.data(), 0, lhs_data.size() * sizeof(float));
+    ggml_backend_tensor_set(rhs, rhs_data.data(), 0, rhs_data.size() * sizeof(float));
+    GGML_ASSERT(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+    expect_near(tensor_to_float(out), expected, cfg.tolerance, cfg.id.c_str());
+}
+
+static void run_catalog_schedule_case(
+        ggml_backend_t backend,
+        ggml_backend_dev_t dev,
+        const ggml_backend_hrx_test_case & cfg) {
+    if (cfg.op == "MUL_MAT") {
+        run_catalog_mul_mat_schedule_case(backend, dev, cfg);
+    } else if (cfg.op == "ADD" || cfg.op == "MUL" || cfg.op == "DIV") {
+        run_catalog_checked_case(backend, dev, cfg, run_catalog_pointwise_once);
+    } else if (cfg.op == "SCALE" || cfg.op == "CLAMP" || cfg.op == "RMS_NORM" ||
+               cfg.op == "SUM_ROWS" || cfg.op == "SOFT_MAX") {
+        run_catalog_checked_case(backend, dev, cfg, run_catalog_unary_once);
+    } else if (cfg.op == "ARGSORT") {
+        run_catalog_checked_case(backend, dev, cfg, run_catalog_argsort_once);
+    } else if (cfg.op == "GET_ROWS") {
+        run_catalog_checked_case(backend, dev, cfg, run_catalog_get_rows_once);
+    } else if (cfg.op == "CONT") {
+        run_catalog_checked_case(backend, dev, cfg, run_catalog_cont_once);
+    } else if (cfg.op == "CPY") {
+        run_catalog_checked_case(backend, dev, cfg, run_catalog_copy_once);
+    } else if (cfg.op == "GLU") {
+        run_catalog_checked_case(backend, dev, cfg, run_catalog_swiglu_once);
+    } else {
+        std::fprintf(stderr, "unsupported catalog test op %s for case %s\n", cfg.op.c_str(), cfg.id.c_str());
+        std::abort();
     }
 }
 
@@ -4573,11 +4886,26 @@ int main() {
             run_catalog_mul_mat_q4_k_f32_case(backend.get(), dev);
             return 0;
         }
+        static constexpr const char * prefix = "catalog_";
+        if (std::strncmp(test_only, prefix, std::strlen(prefix)) == 0) {
+            const std::vector<ggml_backend_hrx_test_case> cases =
+                ggml_backend_hrx_test_cases(dev, test_only + std::strlen(prefix));
+            GGML_ASSERT(!cases.empty());
+            for (const ggml_backend_hrx_test_case & cfg : cases) {
+                run_catalog_schedule_case(backend.get(), dev, cfg);
+            }
+            ggml_backend_synchronize(backend.get());
+            return 0;
+        }
         std::fprintf(stderr, "unknown GGML_HRX_TEST_ONLY=%s\n", test_only);
         return 1;
     }
 
-    run_catalog_mul_mat_q4_k_f32_case(backend.get(), dev);
+    const std::vector<ggml_backend_hrx_test_case> cases = ggml_backend_hrx_test_cases(dev, "");
+    GGML_ASSERT(!cases.empty());
+    for (const ggml_backend_hrx_test_case & cfg : cases) {
+        run_catalog_schedule_case(backend.get(), dev, cfg);
+    }
     ggml_backend_synchronize(backend.get());
     return 0;
 

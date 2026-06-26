@@ -1,0 +1,141 @@
+{
+  "schema": "ggml-hrx-target-routes-v1",
+  "target_key": "gfx1100",
+  "key": "add_rms_norm_mul_f32",
+  "routes": [
+    {
+      "id": "add_rms_norm_mul_f32_n3072_r1_vector_vw4_wg32",
+      "family": "add_rms_norm_mul_f32",
+      "op": "MUL",
+      "source_id": "add_rms_norm_mul_f32",
+      "artifact_id": "add_rms_norm_mul_f32_n3072_r1_vector_vw4_wg32_loombc",
+      "root_symbol": "@hrx2_add_rms_norm_mul_f32_static_vector_tail",
+      "export_name": "hrx2_add_rms_norm_mul_f32_static_vector_tail",
+      "abi": {
+        "binding_count": 5,
+        "parameter_count": 6,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          32,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "add_rms_norm_mul_f32_n3072_r1",
+        "ncols_min": 3072,
+        "ncols_max": 3072,
+        "nrows_min": 1,
+        "nrows_max": 1
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.add_rms_norm_mul.ncols",
+            "source": "shape.ncols"
+          },
+          {
+            "key": "@hrx2.shape.add_rms_norm_mul.nrows",
+            "source": "shape.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.add_rms_norm_mul.workgroup_size",
+            "value": "32"
+          },
+          {
+            "key": "@hrx2.tuning.add_rms_norm_mul.vector_width",
+            "value": "4"
+          }
+        ]
+      },
+      "supports": {
+        "src_type": "F32",
+        "weight_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous_same_shape_add"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "phase2a-runtime-fusion",
+          "algorithm": "decode_only_add_rms_norm_mul",
+          "selection": "prefill route rejected after basket A/B",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "add_rms_norm_mul_f32_n4096_r1_vector_vw4_wg32",
+      "family": "add_rms_norm_mul_f32",
+      "op": "MUL",
+      "source_id": "add_rms_norm_mul_f32",
+      "artifact_id": "add_rms_norm_mul_f32_n4096_r1_vector_vw4_wg32_loombc",
+      "root_symbol": "@hrx2_add_rms_norm_mul_f32_static_vector_tail",
+      "export_name": "hrx2_add_rms_norm_mul_f32_static_vector_tail",
+      "abi": {
+        "binding_count": 5,
+        "parameter_count": 6,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          32,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "add_rms_norm_mul_f32_n4096_r1",
+        "ncols_min": 4096,
+        "ncols_max": 4096,
+        "nrows_min": 1,
+        "nrows_max": 1
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.add_rms_norm_mul.ncols",
+            "source": "shape.ncols"
+          },
+          {
+            "key": "@hrx2.shape.add_rms_norm_mul.nrows",
+            "source": "shape.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.add_rms_norm_mul.workgroup_size",
+            "value": "32"
+          },
+          {
+            "key": "@hrx2.tuning.add_rms_norm_mul.vector_width",
+            "value": "4"
+          }
+        ]
+      },
+      "supports": {
+        "src_type": "F32",
+        "weight_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous_same_shape_add"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "phase2a-runtime-fusion",
+          "algorithm": "decode_only_add_rms_norm_mul",
+          "selection": "prefill route rejected after basket A/B",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    }
+  ]
+}

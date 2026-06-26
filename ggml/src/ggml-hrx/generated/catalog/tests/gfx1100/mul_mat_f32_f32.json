@@ -1,24 +1,24 @@
 {
   "schema": "ggml-hrx-test-schedule-v1",
   "target_key": "gfx1100",
-  "family": "mul_mat_q4_k_f32",
+  "family": "mul_mat_f32_f32",
   "cases": [
     {
-      "id": "mul_mat_q4_k_f32_mul_mat_q4_k_f32_direct_k256_32768_r1_32768_c1_wg256_smoke",
+      "id": "mul_mat_f32_f32_mul_mat_f32_f32_moe_logits_k2048_r128_c1_512_wg256_smoke",
       "op": "MUL_MAT",
-      "expected_route_id": "mul_mat_q4_k_f32_direct_k256_32768_r1_32768_c1_wg256",
+      "expected_route_id": "mul_mat_f32_f32_moe_logits_k2048_r128_c1_512_wg256",
       "supports": {
-        "src0_type": "Q4_K",
+        "src0_type": "F32",
         "src1_type": "F32",
         "dst_type": "F32",
         "layout": "contiguous"
       },
       "shape": {
-        "k": 256,
-        "rows": 3,
+        "k": 2048,
+        "rows": 128,
         "cols": 1
       },
-      "tolerance": 0.08,
+      "tolerance": 0.0001,
       "repeat": 2
     }
   ]

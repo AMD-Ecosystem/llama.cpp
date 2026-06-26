@@ -1,0 +1,34 @@
+{
+  "schema": "ggml-hrx-kernel-def-v1",
+  "family": "get_rows_q4_k_f32",
+  "op": "GET_ROWS",
+  "sources": {
+    "get_rows_q4_k_f32": {
+      "path": "kernels/get_rows_q4_k_f32.loom",
+      "sha256": "51ca39c3aa48faad58627d7462fad421498df772f194423ebc50a74e4e249369"
+    }
+  },
+  "artifacts": {
+    "get_rows_q4_k_f32_n2048_r1_512_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "get_rows_q4_k_f32",
+      "root_symbol": "@hrx2_get_rows_q4_k_f32",
+      "path": "artifacts/get_rows_q4_k_f32_n2048_r1_512_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "get_rows_q4_k_f32_n4096_r1_512_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "get_rows_q4_k_f32",
+      "root_symbol": "@hrx2_get_rows_q4_k_f32",
+      "path": "artifacts/get_rows_q4_k_f32_n4096_r1_512_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "get_rows_q4_k_f32_n5120_r1_512_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "get_rows_q4_k_f32",
+      "root_symbol": "@hrx2_get_rows_q4_k_f32",
+      "path": "artifacts/get_rows_q4_k_f32_n5120_r1_512_wg256_loombc.loombc",
+      "storage": "embedded"
+    }
+  }
+}

@@ -1,0 +1,137 @@
+config.decl @hrx2.shape.rms_norm_mul.ncols : %value: index where [range(%value, 1, 65536)]
+config.decl @hrx2.shape.rms_norm_mul.nrows : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2.tuning.rms_norm_mul.workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+config.decl @hrx2.tuning.rms_norm_mul.vector_width : %value: index where [range(%value, 1, 16)]
+
+kernel.def export("hrx2_rms_norm_mul_f32_static_scalar") @hrx2_rms_norm_mul_f32_static_scalar() {
+  %unit = index.constant 1 : index
+  %nrows = config.get @hrx2.shape.rms_norm_mul.nrows : index
+  %workgroup_size = config.get @hrx2.tuning.rms_norm_mul.workgroup_size : index
+  kernel.launch.config workgroups(%nrows, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%eps: f32, %src: buffer, %weight: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %ncols = config.get @hrx2.shape.rms_norm_mul.ncols : index
+  %nrows = config.get @hrx2.shape.rms_norm_mul.nrows : index
+  %workgroup_size = config.get @hrx2.tuning.rms_norm_mul.workgroup_size : index
+  %ncols_bounded = index.assume %ncols [range(%ncols, 1, 65536)] : index
+  %nrows_bounded = index.assume %nrows [range(%nrows, 1, 1048576)] : index
+  %row0 = kernel.workgroup.id<x> : index
+  %row = index.assume %row0 [range(%row0, 0, 1048575)] : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+  %zero_f32 = scalar.constant 0.0 : f32
+
+  %src_global = buffer.assume.memory_space<global> %src : buffer
+  %weight_global = buffer.assume.memory_space<global> %weight : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src_noalias, %weight_noalias, %dst_noalias = buffer.assume.noalias %src_global, %weight_global, %dst_global : buffer, buffer, buffer
+  %src_view = buffer.view %src_noalias[%base] : buffer -> view<[%nrows_bounded]x[%ncols_bounded]xf32, #dense>
+  %weight_view = buffer.view %weight_noalias[%base] : buffer -> view<[%ncols_bounded]xf32, #dense>
+  %dst_view = buffer.view %dst_noalias[%base] : buffer -> view<[%nrows_bounded]x[%ncols_bounded]xf32, #dense>
+
+  %sum = scf.for %col = [%lane to %ncols_bounded step %workgroup_size](%acc = %zero_f32 : f32) -> (f32) {
+    %value = view.load %src_view[%row, %col] : view<[%nrows_bounded]x[%ncols_bounded]xf32, #dense> -> f32
+    %square = scalar.mulf<reassoc|nnan|ninf|nsz> %value, %value : f32
+    %next = scalar.addf<reassoc|nnan|ninf|nsz> %acc, %square : f32
+    scf.yield %next : f32
+  }
+
+  %row_sum = kernel.workgroup.reduce<addf> %sum : f32
+  %ncols_i32 = index.cast %ncols_bounded : index to i32
+  %ncols_f32 = scalar.sitofp %ncols_i32 : i32 to f32
+  %mean = scalar.divf<nnan|ninf|nsz|arcp> %row_sum, %ncols_f32 : f32
+  %mean_eps = scalar.addf<nnan|ninf|nsz> %mean, %eps : f32
+  %scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %mean_eps : f32
+
+  scf.for %col = [%lane to %ncols_bounded step %workgroup_size] {
+    %value = view.load %src_view[%row, %col] : view<[%nrows_bounded]x[%ncols_bounded]xf32, #dense> -> f32
+    %weight_value = view.load %weight_view[%col] : view<[%ncols_bounded]xf32, #dense> -> f32
+    %normed = scalar.mulf<nnan|ninf|nsz> %value, %scale : f32
+    %result = scalar.mulf<nnan|ninf|nsz> %normed, %weight_value : f32
+    view.store %result, %dst_view[%row, %col] : f32, view<[%nrows_bounded]x[%ncols_bounded]xf32, #dense>
+  }
+  kernel.return
+}
+
+kernel.def export("hrx2_rms_norm_mul_f32_static_vector_tail") @hrx2_rms_norm_mul_f32_static_vector_tail() {
+  %unit = index.constant 1 : index
+  %nrows = config.get @hrx2.shape.rms_norm_mul.nrows : index
+  %workgroup_size = config.get @hrx2.tuning.rms_norm_mul.workgroup_size : index
+  kernel.launch.config workgroups(%nrows, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%eps: f32, %src: buffer, %weight: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %ncols = config.get @hrx2.shape.rms_norm_mul.ncols : index
+  %nrows = config.get @hrx2.shape.rms_norm_mul.nrows : index
+  %vector_width = config.get @hrx2.tuning.rms_norm_mul.vector_width : index
+  %workgroup_size = config.get @hrx2.tuning.rms_norm_mul.workgroup_size : index
+  %ncols_bounded = index.assume %ncols [range(%ncols, 1, 65536)] : index
+  %nrows_bounded = index.assume %nrows [range(%nrows, 1, 1048576)] : index
+  %vector_width_bounded = index.assume %vector_width [range(%vector_width, 2, 16)] : index
+  %logical_cols = index.div %ncols_bounded, %vector_width_bounded : index
+  %tail_start = index.mul %logical_cols, %vector_width_bounded : index
+  %element_count = index.mul %ncols_bounded, %nrows_bounded : index
+  %row0 = kernel.workgroup.id<x> : index
+  %row = index.assume %row0 [range(%row0, 0, 1048575)] : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+  %zero_f32 = scalar.constant 0.0 : f32
+
+  %src_global = buffer.assume.memory_space<global> %src : buffer
+  %weight_global = buffer.assume.memory_space<global> %weight : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src_noalias, %weight_noalias, %dst_noalias = buffer.assume.noalias %src_global, %weight_global, %dst_global : buffer, buffer, buffer
+  %src_view = buffer.view %src_noalias[%base] : buffer -> view<[%element_count]xf32, #dense>
+  %weight_view = buffer.view %weight_noalias[%base] : buffer -> view<[%ncols_bounded]xf32, #dense>
+  %dst_view = buffer.view %dst_noalias[%base] : buffer -> view<[%element_count]xf32, #dense>
+  %row_base = index.mul %row, %ncols_bounded : index
+
+  %sum_vec = scf.for %vcol = [%lane to %logical_cols step %workgroup_size](%acc = %zero_f32 : f32) -> (f32) {
+    %col0 = index.mul %vcol, %vector_width_bounded : index
+    %linear0 = index.add %row_base, %col0 : index
+    %linear = index.assume %linear0 [range(%linear0, 0, 67108863)] : index
+    %values = vector.load %src_view[%linear] : view<[%element_count]xf32, #dense> -> vector<[%vector_width_bounded]xf32>
+    %squares = vector.mulf<reassoc|nnan|ninf|nsz> %values, %values : vector<[%vector_width_bounded]xf32>
+    %next = vector.reduce<addf, reassoc|nnan|ninf|nsz> %squares, %acc : vector<[%vector_width_bounded]xf32>, f32
+    scf.yield %next : f32
+  }
+
+  %tail_lane0 = index.add %tail_start, %lane : index
+  %sum = scf.for %col = [%tail_lane0 to %ncols_bounded step %workgroup_size](%acc = %sum_vec : f32) -> (f32) {
+    %linear0 = index.add %row_base, %col : index
+    %linear = index.assume %linear0 [range(%linear0, 0, 67108863)] : index
+    %value = view.load %src_view[%linear] : view<[%element_count]xf32, #dense> -> f32
+    %square = scalar.mulf<reassoc|nnan|ninf|nsz> %value, %value : f32
+    %next = scalar.addf<reassoc|nnan|ninf|nsz> %acc, %square : f32
+    scf.yield %next : f32
+  }
+
+  %row_sum = kernel.workgroup.reduce<addf> %sum : f32
+  %ncols_i32 = index.cast %ncols_bounded : index to i32
+  %ncols_f32 = scalar.sitofp %ncols_i32 : i32 to f32
+  %mean = scalar.divf<nnan|ninf|nsz|arcp> %row_sum, %ncols_f32 : f32
+  %mean_eps = scalar.addf<nnan|ninf|nsz> %mean, %eps : f32
+  %scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %mean_eps : f32
+  %scale_vector = vector.splat %scale : vector<[%vector_width_bounded]xf32>
+
+  scf.for %vcol = [%lane to %logical_cols step %workgroup_size] {
+    %col0 = index.mul %vcol, %vector_width_bounded : index
+    %linear0 = index.add %row_base, %col0 : index
+    %linear = index.assume %linear0 [range(%linear0, 0, 67108863)] : index
+    %values = vector.load %src_view[%linear] : view<[%element_count]xf32, #dense> -> vector<[%vector_width_bounded]xf32>
+    %weights = vector.load %weight_view[%col0] : view<[%ncols_bounded]xf32, #dense> -> vector<[%vector_width_bounded]xf32>
+    %normed = vector.mulf<nnan|ninf|nsz> %values, %scale_vector : vector<[%vector_width_bounded]xf32>
+    %result = vector.mulf<nnan|ninf|nsz> %normed, %weights : vector<[%vector_width_bounded]xf32>
+    vector.store %result, %dst_view[%linear] : vector<[%vector_width_bounded]xf32>, view<[%element_count]xf32, #dense>
+  }
+
+  scf.for %col = [%tail_lane0 to %ncols_bounded step %workgroup_size] {
+    %linear0 = index.add %row_base, %col : index
+    %linear = index.assume %linear0 [range(%linear0, 0, 67108863)] : index
+    %value = view.load %src_view[%linear] : view<[%element_count]xf32, #dense> -> f32
+    %weight_value = view.load %weight_view[%col] : view<[%ncols_bounded]xf32, #dense> -> f32
+    %normed = scalar.mulf<nnan|ninf|nsz> %value, %scale : f32
+    %result = scalar.mulf<nnan|ninf|nsz> %normed, %weight_value : f32
+    view.store %result, %dst_view[%linear] : f32, view<[%element_count]xf32, #dense>
+  }
+  kernel.return
+}

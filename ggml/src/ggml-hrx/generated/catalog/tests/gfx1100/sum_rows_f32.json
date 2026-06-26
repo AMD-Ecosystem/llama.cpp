@@ -1,0 +1,23 @@
+{
+  "schema": "ggml-hrx-test-schedule-v1",
+  "target_key": "gfx1100",
+  "family": "sum_rows_f32",
+  "cases": [
+    {
+      "id": "sum_rows_f32_sum_rows_f32_n8_r1_wg32_smoke",
+      "op": "SUM_ROWS",
+      "expected_route_id": "sum_rows_f32_n8_r1_wg32",
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous_row_reduction"
+      },
+      "shape": {
+        "ncols": 8,
+        "nrows": 1
+      },
+      "tolerance": 1e-06,
+      "repeat": 2
+    }
+  ]
+}

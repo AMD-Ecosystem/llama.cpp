@@ -1,0 +1,55 @@
+{
+  "schema": "ggml-hrx-kernel-def-v1",
+  "family": "rms_norm_mul_f32",
+  "op": "MUL",
+  "sources": {
+    "rms_norm_mul_f32": {
+      "path": "kernels/rms_norm_mul_f32.loom",
+      "sha256": "907860794277f15851f3bcae2d0653c7ff88d33c0af23c3c2cc8d35afbe303eb"
+    }
+  },
+  "artifacts": {
+    "rms_norm_mul_f32_n3072_r1_vector_vw8_wg32_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_mul_f32",
+      "root_symbol": "@hrx2_rms_norm_mul_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_mul_f32_n3072_r1_vector_vw8_wg32_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_mul_f32_n3072_r512_vector_vw8_wg32_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_mul_f32",
+      "root_symbol": "@hrx2_rms_norm_mul_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_mul_f32_n3072_r512_vector_vw8_wg32_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_mul_f32_n3072_r64_vector_vw8_wg32_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_mul_f32",
+      "root_symbol": "@hrx2_rms_norm_mul_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_mul_f32_n3072_r64_vector_vw8_wg32_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_mul_f32_n4096_r1_vector_vw8_wg32_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_mul_f32",
+      "root_symbol": "@hrx2_rms_norm_mul_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_mul_f32_n4096_r1_vector_vw8_wg32_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_mul_f32_n4096_r512_vector_vw8_wg32_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_mul_f32",
+      "root_symbol": "@hrx2_rms_norm_mul_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_mul_f32_n4096_r512_vector_vw8_wg32_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_mul_f32_n4096_r64_vector_vw8_wg32_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_mul_f32",
+      "root_symbol": "@hrx2_rms_norm_mul_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_mul_f32_n4096_r64_vector_vw8_wg32_loombc.loombc",
+      "storage": "embedded"
+    }
+  }
+}

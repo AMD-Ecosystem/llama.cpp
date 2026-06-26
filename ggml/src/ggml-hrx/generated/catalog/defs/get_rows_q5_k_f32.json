@@ -1,0 +1,20 @@
+{
+  "schema": "ggml-hrx-kernel-def-v1",
+  "family": "get_rows_q5_k_f32",
+  "op": "GET_ROWS",
+  "sources": {
+    "get_rows_q5_k_f32": {
+      "path": "kernels/get_rows_q5_k_f32.loom",
+      "sha256": "9c2b10d47a0b151250fa6c601dd0afa1223ef7fb0eed01c229c04a56246c5f57"
+    }
+  },
+  "artifacts": {
+    "get_rows_q5_k_f32_n3584_r1_512_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "get_rows_q5_k_f32",
+      "root_symbol": "@hrx2_get_rows_q5_k_f32",
+      "path": "artifacts/get_rows_q5_k_f32_n3584_r1_512_wg256_loombc.loombc",
+      "storage": "embedded"
+    }
+  }
+}

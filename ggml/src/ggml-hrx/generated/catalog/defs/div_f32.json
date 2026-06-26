@@ -1,0 +1,34 @@
+{
+  "schema": "ggml-hrx-kernel-def-v1",
+  "family": "div_f32",
+  "op": "DIV",
+  "sources": {
+    "pointwise_f32": {
+      "path": "kernels/pointwise_f32.loom",
+      "sha256": "ee448f3f69b87471794038d652a52b938601d75dd679098fb80145744ac19d1e"
+    }
+  },
+  "artifacts": {
+    "div_f32_n8_r16_rhscolbroadcast_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "pointwise_f32",
+      "root_symbol": "@hrx2_div_f32",
+      "path": "artifacts/div_f32_n8_r16_rhscolbroadcast_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "div_f32_n8_r1_rhscolbroadcast_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "pointwise_f32",
+      "root_symbol": "@hrx2_div_f32",
+      "path": "artifacts/div_f32_n8_r1_rhscolbroadcast_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "div_f32_n8_r64_rhscolbroadcast_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "pointwise_f32",
+      "root_symbol": "@hrx2_div_f32",
+      "path": "artifacts/div_f32_n8_r64_rhscolbroadcast_wg256_loombc.loombc",
+      "storage": "embedded"
+    }
+  }
+}

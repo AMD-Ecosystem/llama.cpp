@@ -1,0 +1,45 @@
+{
+  "schema": "ggml-hrx-kernel-def-v1",
+  "family": "mul_mat_q4_k_swiglu_f32",
+  "op": "GLU",
+  "sources": {
+    "mul_mat_q4_k_packed_q8_1_x4_swiglu_f32": {
+      "path": "kernels/mul_mat_q4_k_packed_q8_1_x4_swiglu_f32.loom",
+      "sha256": "1a989fce8556e0a48302df91618a3e581e756f411fe4bfd4e9ddf82c880a58cc"
+    },
+    "mul_mat_q4_k_swiglu_f32": {
+      "path": "kernels/mul_mat_q4_k_swiglu_f32.loom",
+      "sha256": "f55f43f3dbecf9a2f68785bbbc9690a4c08fb693940b7466c2ac28ff4deb8ae4"
+    }
+  },
+  "artifacts": {
+    "mul_mat_q4_k_packed_q8_1_x4_swiglu_f32_direct_k256_32768_c1_wg64_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "mul_mat_q4_k_packed_q8_1_x4_swiglu_f32",
+      "root_symbol": "@hrx2_mul_mat_q4_k_packed_q8_1_x4_swiglu_f32_static",
+      "path": "artifacts/mul_mat_q4_k_packed_q8_1_x4_swiglu_f32_direct_k256_32768_c1_wg64_loombc.loombc",
+      "storage": "embedded"
+    },
+    "mul_mat_q4_k_q8_1_swiglu_f32_direct_k256_32768_c1_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "mul_mat_q4_k_swiglu_f32",
+      "root_symbol": "@hrx2_mul_mat_q4_k_q8_1_swiglu_f32_static",
+      "path": "artifacts/mul_mat_q4_k_q8_1_swiglu_f32_direct_k256_32768_c1_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "mul_mat_q4_k_swiglu_f32_direct_k256_32768_c1_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "mul_mat_q4_k_swiglu_f32",
+      "root_symbol": "@hrx2_mul_mat_q4_k_swiglu_f32_static",
+      "path": "artifacts/mul_mat_q4_k_swiglu_f32_direct_k256_32768_c1_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "mul_mat_q4_k_packed_swiglu_f32_direct_k256_32768_c1_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "mul_mat_q4_k_swiglu_f32",
+      "root_symbol": "@hrx2_mul_mat_q4_k_packed_swiglu_f32_static",
+      "path": "artifacts/mul_mat_q4_k_packed_swiglu_f32_direct_k256_32768_c1_wg256_loombc.loombc",
+      "storage": "embedded"
+    }
+  }
+}

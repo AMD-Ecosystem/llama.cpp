@@ -1,0 +1,163 @@
+config.decl @hrx2.shape.swiglu.ncols : %value: index where [range(%value, 1, 65536)]
+config.decl @hrx2.shape.swiglu.nrows : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2.tuning.swiglu.workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+
+kernel.def export("hrx2_swiglu_f32") @hrx2_swiglu_f32() {
+  %unit = index.constant 1 : index
+  %minus_one = index.constant -1 : index
+  %ncols = config.get @hrx2.shape.swiglu.ncols : index
+  %nrows = config.get @hrx2.shape.swiglu.nrows : index
+  %workgroup_size = config.get @hrx2.tuning.swiglu.workgroup_size : index
+  %total = index.mul %ncols, %nrows : index
+  %rounding = index.add %workgroup_size, %minus_one : index
+  %rounded = index.add %total, %rounding : index
+  %workgroups = index.div %rounded, %workgroup_size : index
+  kernel.launch.config workgroups(%workgroups, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%src0: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %ncols = config.get @hrx2.shape.swiglu.ncols : index
+  %nrows = config.get @hrx2.shape.swiglu.nrows : index
+  %workgroup_size = config.get @hrx2.tuning.swiglu.workgroup_size : index
+  %ncols_bounded = index.assume %ncols [range(%ncols, 1, 65536)] : index
+  %nrows_bounded = index.assume %nrows [range(%nrows, 1, 1048576)] : index
+  %workgroup0 = kernel.workgroup.id<x> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %workgroup = index.assume %workgroup0 [range(%workgroup0, 0, 4194303)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+  %linear_mul0 = index.mul %workgroup, %workgroup_size : index
+  %linear_mul = index.assume %linear_mul0 [range(%linear_mul0, 0, 1073741823)] : index
+  %linear_add0 = index.add %linear_mul, %lane : index
+  %linear = index.assume %linear_add0 [range(%linear_add0, 0, 1073741823)] : index
+  %total0 = index.mul %ncols_bounded, %nrows_bounded : index
+  %total = index.assume %total0 [range(%total0, 1, 1073741824)] : index
+  %in_bounds = index.cmp ult, %linear, %total : index
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_noalias, %dst_noalias = buffer.assume.noalias %src0_global, %dst_global : buffer, buffer
+  %src0_view = buffer.view %src0_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+  %dst_view = buffer.view %dst_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+
+  scf.if %in_bounds {
+    %col = index.rem %linear, %ncols_bounded : index
+    %row = index.div %linear, %ncols_bounded : index
+    %src_row_raw = index.mul %row, %ncols_bounded : index
+    %src_row_half = index.assume %src_row_raw [range(%src_row_raw, 0, 1073741823)] : index
+    %two = index.constant 2 : index
+    %src_row_raw2 = index.mul %src_row_half, %two : index
+    %src_row = index.assume %src_row_raw2 [range(%src_row_raw2, 0, 1073741823)] : index
+    %x_idx_raw = index.add %src_row, %col : index
+    %x_idx = index.assume %x_idx_raw [range(%x_idx_raw, 0, 1073741823)] : index
+    %g_idx_raw = index.add %x_idx, %ncols_bounded : index
+    %g_idx = index.assume %g_idx_raw [range(%g_idx_raw, 0, 1073741823)] : index
+    %x = view.load %src0_view[%x_idx] : view<1073741824xf32, #dense> -> f32
+    %gate = view.load %src0_view[%g_idx] : view<1073741824xf32, #dense> -> f32
+    %silu = scalar.siluf %x : f32
+    %result = scalar.mulf<nnan|ninf|nsz> %silu, %gate : f32
+    view.store %result, %dst_view[%linear] : f32, view<1073741824xf32, #dense>
+  }
+  kernel.return
+}
+
+kernel.def export("hrx2_swiglu_f32_split") @hrx2_swiglu_f32_split() {
+  %unit = index.constant 1 : index
+  %minus_one = index.constant -1 : index
+  %ncols = config.get @hrx2.shape.swiglu.ncols : index
+  %nrows = config.get @hrx2.shape.swiglu.nrows : index
+  %workgroup_size = config.get @hrx2.tuning.swiglu.workgroup_size : index
+  %total = index.mul %ncols, %nrows : index
+  %rounding = index.add %workgroup_size, %minus_one : index
+  %rounded = index.add %total, %rounding : index
+  %workgroups = index.div %rounded, %workgroup_size : index
+  kernel.launch.config workgroups(%workgroups, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%src0: buffer, %src1: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %ncols = config.get @hrx2.shape.swiglu.ncols : index
+  %nrows = config.get @hrx2.shape.swiglu.nrows : index
+  %workgroup_size = config.get @hrx2.tuning.swiglu.workgroup_size : index
+  %ncols_bounded = index.assume %ncols [range(%ncols, 1, 65536)] : index
+  %nrows_bounded = index.assume %nrows [range(%nrows, 1, 1048576)] : index
+  %workgroup0 = kernel.workgroup.id<x> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %workgroup = index.assume %workgroup0 [range(%workgroup0, 0, 4194303)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+  %linear_mul0 = index.mul %workgroup, %workgroup_size : index
+  %linear_mul = index.assume %linear_mul0 [range(%linear_mul0, 0, 1073741823)] : index
+  %linear_add0 = index.add %linear_mul, %lane : index
+  %linear = index.assume %linear_add0 [range(%linear_add0, 0, 1073741823)] : index
+  %total0 = index.mul %ncols_bounded, %nrows_bounded : index
+  %total = index.assume %total0 [range(%total0, 1, 1073741824)] : index
+  %in_bounds = index.cmp ult, %linear, %total : index
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %src1_global = buffer.assume.memory_space<global> %src1 : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_view = buffer.view %src0_global[%base] : buffer -> view<1073741824xf32, #dense>
+  %src1_view = buffer.view %src1_global[%base] : buffer -> view<1073741824xf32, #dense>
+  %dst_view = buffer.view %dst_global[%base] : buffer -> view<1073741824xf32, #dense>
+
+  scf.if %in_bounds {
+    %x = view.load %src0_view[%linear] : view<1073741824xf32, #dense> -> f32
+    %gate = view.load %src1_view[%linear] : view<1073741824xf32, #dense> -> f32
+    %silu = scalar.siluf %x : f32
+    %result = scalar.mulf<nnan|ninf|nsz> %silu, %gate : f32
+    view.store %result, %dst_view[%linear] : f32, view<1073741824xf32, #dense>
+  }
+  kernel.return
+}
+
+kernel.def export("hrx2_geglu_f32_split") @hrx2_geglu_f32_split() {
+  %unit = index.constant 1 : index
+  %minus_one = index.constant -1 : index
+  %ncols = config.get @hrx2.shape.swiglu.ncols : index
+  %nrows = config.get @hrx2.shape.swiglu.nrows : index
+  %workgroup_size = config.get @hrx2.tuning.swiglu.workgroup_size : index
+  %total = index.mul %ncols, %nrows : index
+  %rounding = index.add %workgroup_size, %minus_one : index
+  %rounded = index.add %total, %rounding : index
+  %workgroups = index.div %rounded, %workgroup_size : index
+  kernel.launch.config workgroups(%workgroups, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%src0: buffer, %src1: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %ncols = config.get @hrx2.shape.swiglu.ncols : index
+  %nrows = config.get @hrx2.shape.swiglu.nrows : index
+  %workgroup_size = config.get @hrx2.tuning.swiglu.workgroup_size : index
+  %ncols_bounded = index.assume %ncols [range(%ncols, 1, 65536)] : index
+  %nrows_bounded = index.assume %nrows [range(%nrows, 1, 1048576)] : index
+  %workgroup0 = kernel.workgroup.id<x> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %workgroup = index.assume %workgroup0 [range(%workgroup0, 0, 4194303)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+  %linear_mul0 = index.mul %workgroup, %workgroup_size : index
+  %linear_mul = index.assume %linear_mul0 [range(%linear_mul0, 0, 1073741823)] : index
+  %linear_add0 = index.add %linear_mul, %lane : index
+  %linear = index.assume %linear_add0 [range(%linear_add0, 0, 1073741823)] : index
+  %total0 = index.mul %ncols_bounded, %nrows_bounded : index
+  %total = index.assume %total0 [range(%total0, 1, 1073741824)] : index
+  %in_bounds = index.cmp ult, %linear, %total : index
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %src1_global = buffer.assume.memory_space<global> %src1 : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_view = buffer.view %src0_global[%base] : buffer -> view<1073741824xf32, #dense>
+  %src1_view = buffer.view %src1_global[%base] : buffer -> view<1073741824xf32, #dense>
+  %dst_view = buffer.view %dst_global[%base] : buffer -> view<1073741824xf32, #dense>
+
+  scf.if %in_bounds {
+    %x = view.load %src0_view[%linear] : view<1073741824xf32, #dense> -> f32
+    %gate = view.load %src1_view[%linear] : view<1073741824xf32, #dense> -> f32
+    %one_f32 = scalar.constant 1.0 : f32
+    %sqrt_2_over_pi_times_two = scalar.constant 1.5957691216057308 : f32
+    %gelu_coef = scalar.constant 0.044715 : f32
+    %x2 = scalar.mulf<nnan|ninf|nsz> %x, %x : f32
+    %coef_x2 = scalar.mulf<nnan|ninf|nsz> %gelu_coef, %x2 : f32
+    %inner = scalar.addf<nnan|ninf|nsz> %one_f32, %coef_x2 : f32
+    %poly = scalar.mulf<nnan|ninf|nsz> %x, %inner : f32
+    %logistic_arg = scalar.mulf<nnan|ninf|nsz> %sqrt_2_over_pi_times_two, %poly : f32
+    %logistic = scalar.logisticf %logistic_arg : f32
+    %gelu = scalar.mulf<nnan|ninf|nsz> %x, %logistic : f32
+    %result = scalar.mulf<nnan|ninf|nsz> %gelu, %gate : f32
+    view.store %result, %dst_view[%linear] : f32, view<1073741824xf32, #dense>
+  }
+  kernel.return
+}

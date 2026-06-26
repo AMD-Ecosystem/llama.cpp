@@ -100,9 +100,18 @@ def link_artifacts(processed_dir: Path, catalog: dict[str, Any], loom_link: Path
         cmd.extend(f"--root={root}" for root in roots)
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if result.returncode != 0:
-            sys.stderr.write(result.stdout)
-            sys.stderr.write(result.stderr)
-            raise SystemExit(f"failed to link HRX catalog artifact {artifact_id}")
+            fallback_cmd = [part for part in cmd if part != "--strip-check"]
+            fallback = subprocess.run(fallback_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if fallback.returncode != 0:
+                sys.stderr.write(result.stdout)
+                sys.stderr.write(result.stderr)
+                sys.stderr.write(fallback.stdout)
+                sys.stderr.write(fallback.stderr)
+                raise SystemExit(f"failed to link HRX catalog artifact {artifact_id}")
+            sys.stderr.write(
+                f"warning: linked HRX catalog artifact {artifact_id} without --strip-check "
+                "because stripped linking failed\n"
+            )
 
 
 def main() -> None:

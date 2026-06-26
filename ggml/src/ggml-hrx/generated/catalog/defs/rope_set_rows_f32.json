@@ -1,0 +1,41 @@
+{
+  "schema": "ggml-hrx-kernel-def-v1",
+  "family": "rope_set_rows_f32",
+  "op": "SET_ROWS",
+  "sources": {
+    "rope_set_rows_f32": {
+      "path": "kernels/rope_set_rows_f32.loom",
+      "sha256": "708c6bd01a762f81dfbff93aeb2dc9b32f6ff109494739328a5175ef80f69c6a"
+    }
+  },
+  "artifacts": {
+    "rope_neox_f32_freq_set_rows_f16_n128_d96_h24_t1_512_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_set_rows_f32",
+      "root_symbol": "@hrx2_rope_neox_f32_freq_set_rows_f16",
+      "path": "artifacts/rope_neox_f32_freq_set_rows_f16_n128_d96_h24_t1_512_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_freq_set_rows_f16_n128_d96_h8_t1_512_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_set_rows_f32",
+      "root_symbol": "@hrx2_rope_neox_f32_freq_set_rows_f16",
+      "path": "artifacts/rope_neox_f32_freq_set_rows_f16_n128_d96_h8_t1_512_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_normal_f32_freq_set_rows_f16_n128_d128_h32_t1_512_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_set_rows_f32",
+      "root_symbol": "@hrx2_rope_normal_f32_freq_set_rows_f16",
+      "path": "artifacts/rope_normal_f32_freq_set_rows_f16_n128_d128_h32_t1_512_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_normal_f32_freq_set_rows_f16_n128_d128_h8_24_t1_512_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_set_rows_f32",
+      "root_symbol": "@hrx2_rope_normal_f32_freq_set_rows_f16",
+      "path": "artifacts/rope_normal_f32_freq_set_rows_f16_n128_d128_h8_24_t1_512_wg256_loombc.loombc",
+      "storage": "embedded"
+    }
+  }
+}

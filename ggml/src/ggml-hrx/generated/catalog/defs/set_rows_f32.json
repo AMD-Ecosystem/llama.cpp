@@ -1,0 +1,27 @@
+{
+  "schema": "ggml-hrx-kernel-def-v1",
+  "family": "set_rows_f32",
+  "op": "SET_ROWS",
+  "sources": {
+    "set_rows_f32": {
+      "path": "kernels/set_rows_f32.loom",
+      "sha256": "1d72894fd466fa8a058f77f409bca3a41f4c376526def0e91005d6c508bd6b2f"
+    }
+  },
+  "artifacts": {
+    "set_rows_f32_f16_generic_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "set_rows_f32",
+      "root_symbol": "@hrx2_set_rows_f32_f16",
+      "path": "artifacts/set_rows_f32_f16_generic_loombc.loombc",
+      "storage": "embedded"
+    },
+    "set_rows_f32_f32_generic_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "set_rows_f32",
+      "root_symbol": "@hrx2_set_rows_f32_f32",
+      "path": "artifacts/set_rows_f32_f32_generic_loombc.loombc",
+      "storage": "embedded"
+    }
+  }
+}

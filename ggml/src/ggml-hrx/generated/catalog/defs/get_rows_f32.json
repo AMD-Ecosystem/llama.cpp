@@ -1,0 +1,76 @@
+{
+  "schema": "ggml-hrx-kernel-def-v1",
+  "family": "get_rows_f32",
+  "op": "GET_ROWS",
+  "sources": {
+    "get_rows_f32": {
+      "path": "kernels/get_rows_f32.loom",
+      "sha256": "fe66e444a7cee36861dd9827c8d0090ce3dfbe5437cc1c11491be48d703fb044"
+    }
+  },
+  "artifacts": {
+    "get_rows_f32_n2048_r1_64_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "get_rows_f32",
+      "root_symbol": "@hrx2_get_rows_f32",
+      "path": "artifacts/get_rows_f32_n2048_r1_64_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "get_rows_f32_n3072_r1_64_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "get_rows_f32",
+      "root_symbol": "@hrx2_get_rows_f32",
+      "path": "artifacts/get_rows_f32_n3072_r1_64_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "get_rows_f32_n3584_r1_64_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "get_rows_f32",
+      "root_symbol": "@hrx2_get_rows_f32",
+      "path": "artifacts/get_rows_f32_n3584_r1_64_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "get_rows_f32_n4096_r1_64_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "get_rows_f32",
+      "root_symbol": "@hrx2_get_rows_f32",
+      "path": "artifacts/get_rows_f32_n4096_r1_64_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "get_rows_f32_n5120_r1_64_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "get_rows_f32",
+      "root_symbol": "@hrx2_get_rows_f32",
+      "path": "artifacts/get_rows_f32_n5120_r1_64_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "get_rows_f32_n5376_r1_64_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "get_rows_f32",
+      "root_symbol": "@hrx2_get_rows_f32",
+      "path": "artifacts/get_rows_f32_n5376_r1_64_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "get_rows_f32_n3072_r1024_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "get_rows_f32",
+      "root_symbol": "@hrx2_get_rows_f32",
+      "path": "artifacts/get_rows_f32_n3072_r1024_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "get_rows_f32_n3584_r512_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "get_rows_f32",
+      "root_symbol": "@hrx2_get_rows_f32",
+      "path": "artifacts/get_rows_f32_n3584_r512_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "get_rows_f32_n4096_r512_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "get_rows_f32",
+      "root_symbol": "@hrx2_get_rows_f32",
+      "path": "artifacts/get_rows_f32_n4096_r512_wg256_loombc.loombc",
+      "storage": "embedded"
+    }
+  }
+}

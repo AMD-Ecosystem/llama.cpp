@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -13,12 +14,8 @@ struct ggml_backend_hrx_test_case {
     std::string op;
     std::string family;
     std::string expected_route_id;
-    std::string src0_type;
-    std::string src1_type;
-    std::string dst_type;
-    int64_t k = 0;
-    int64_t rows = 0;
-    int64_t cols = 0;
+    std::map<std::string, std::string> supports;
+    std::map<std::string, int64_t> shape;
     float tolerance = 0.0f;
     uint32_t repeat = 1;
 };

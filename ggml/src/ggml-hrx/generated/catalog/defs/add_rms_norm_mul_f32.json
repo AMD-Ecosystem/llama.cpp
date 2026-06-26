@@ -1,0 +1,27 @@
+{
+  "schema": "ggml-hrx-kernel-def-v1",
+  "family": "add_rms_norm_mul_f32",
+  "op": "MUL",
+  "sources": {
+    "add_rms_norm_mul_f32": {
+      "path": "kernels/add_rms_norm_mul_f32.loom",
+      "sha256": "c0e800d297b293a0fb7cb2356b2a15817178e25f8692483e3062c099f45ca3b0"
+    }
+  },
+  "artifacts": {
+    "add_rms_norm_mul_f32_n3072_r1_vector_vw4_wg32_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "add_rms_norm_mul_f32",
+      "root_symbol": "@hrx2_add_rms_norm_mul_f32_static_vector_tail",
+      "path": "artifacts/add_rms_norm_mul_f32_n3072_r1_vector_vw4_wg32_loombc.loombc",
+      "storage": "embedded"
+    },
+    "add_rms_norm_mul_f32_n4096_r1_vector_vw4_wg32_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "add_rms_norm_mul_f32",
+      "root_symbol": "@hrx2_add_rms_norm_mul_f32_static_vector_tail",
+      "path": "artifacts/add_rms_norm_mul_f32_n4096_r1_vector_vw4_wg32_loombc.loombc",
+      "storage": "embedded"
+    }
+  }
+}

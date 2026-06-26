@@ -1,0 +1,187 @@
+{
+  "schema": "ggml-hrx-target-routes-v1",
+  "target_key": "gfx1100",
+  "key": "scale_f32",
+  "routes": [
+    {
+      "id": "scale_f32_n128_r24_wg256",
+      "family": "scale_f32",
+      "op": "SCALE",
+      "source_id": "pointwise_f32",
+      "artifact_id": "scale_f32_n128_r24_wg256_loombc",
+      "root_symbol": "@hrx2_scale_f32",
+      "export_name": "hrx2_scale_f32",
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 4,
+        "constant_byte_length": 8
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "scale_f32_n128_r24",
+        "ncols_min": 128,
+        "ncols_max": 128,
+        "nrows_min": 24,
+        "nrows_max": 24
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.pointwise.ncols",
+            "source": "shape.ncols"
+          },
+          {
+            "key": "@hrx2.shape.pointwise.nrows",
+            "source": "shape.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.pointwise.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "phase1_0_phi4_smoke",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "scale_f32_n128_r384_wg256",
+      "family": "scale_f32",
+      "op": "SCALE",
+      "source_id": "pointwise_f32",
+      "artifact_id": "scale_f32_n128_r384_wg256_loombc",
+      "root_symbol": "@hrx2_scale_f32",
+      "export_name": "hrx2_scale_f32",
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 4,
+        "constant_byte_length": 8
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "scale_f32_n128_r384",
+        "ncols_min": 128,
+        "ncols_max": 128,
+        "nrows_min": 384,
+        "nrows_max": 384
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.pointwise.ncols",
+            "source": "shape.ncols"
+          },
+          {
+            "key": "@hrx2.shape.pointwise.nrows",
+            "source": "shape.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.pointwise.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "phase1_0_phi4_smoke",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "scale_f32_generic_wg256",
+      "family": "scale_f32",
+      "op": "SCALE",
+      "source_id": "pointwise_f32",
+      "artifact_id": "scale_f32_generic_wg256_loombc",
+      "root_symbol": "@hrx2_scale_f32",
+      "export_name": "hrx2_scale_f32",
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 4,
+        "constant_byte_length": 8
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "scale_f32_generic",
+        "ncols_min": 1,
+        "ncols_max": 65536,
+        "nrows_min": 1,
+        "nrows_max": 1048576
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.pointwise.ncols",
+            "source": "shape.ncols"
+          },
+          {
+            "key": "@hrx2.shape.pointwise.nrows",
+            "source": "shape.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.pointwise.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "phase1_0_unit_coverage",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    }
+  ]
+}

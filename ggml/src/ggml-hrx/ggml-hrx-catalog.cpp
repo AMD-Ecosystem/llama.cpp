@@ -633,6 +633,21 @@ const ggml_backend_hrx_catalog_route * ggml_backend_hrx_catalog_find_route(
             }
         }
         if (match) {
+            for (const auto & binding : route.bindings) {
+                if (!binding.source.empty()) {
+                    static constexpr const char * k_shape_prefix = "shape.";
+                    std::string shape_key = binding.source;
+                    if (shape_key.compare(0, 6, k_shape_prefix) == 0) {
+                        shape_key = shape_key.substr(6);
+                    }
+                    if (problem.shape.find(shape_key) == problem.shape.end()) {
+                        match = false;
+                        break;
+                    }
+                }
+            }
+        }
+        if (match) {
             return &route;
         }
     }

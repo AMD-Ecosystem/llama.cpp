@@ -1,0 +1,290 @@
+amdgpu.target<gfx1100> @hrx2_gfx1100_wave32 {subgroup_size = 32}
+
+kernel.def target(@hrx2_gfx1100_wave32) export("hrx2_rms_norm_scale_f32_n3072_r1_wg32") @hrx2_rms_norm_scale_f32_n3072_r1_wg32() {
+  %one = index.constant 1 : index
+  %thirtytwo = index.constant 32 : index
+  kernel.launch.config workgroups(%one, %one, %one) workgroup_size(%thirtytwo, %one, %one) : index
+} launch(%eps: f32, %src: buffer, %scale_dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero_index = index.constant 0 : index
+  %zero_f32 = scalar.constant 0.0 : f32
+  %eight = index.constant 8 : index
+  %thirtytwo = index.constant 32 : index
+  %logical_cols = index.constant 384 : index
+  %ncols_f32 = scalar.constant 3072.0 : f32
+
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 31)] : index
+
+  %src_global = buffer.assume.memory_space<global> %src : buffer
+  %scale_global = buffer.assume.memory_space<global> %scale_dst : buffer
+  %src_noalias, %scale_noalias = buffer.assume.noalias %src_global, %scale_global : buffer, buffer
+  %src_view = buffer.view %src_noalias[%base] : buffer -> view<3072xf32, #dense>
+  %scale_view = buffer.view %scale_noalias[%base] : buffer -> view<1xf32, #dense>
+
+  %sum = scf.for %vcol = [%lane to %logical_cols step %thirtytwo](%acc = %zero_f32 : f32) -> (f32) {
+    %col0 = index.mul %vcol, %eight : index
+    %col = index.assume %col0 [range(%col0, 0, 3064), mul(%col0, 8)] : index
+    %values = vector.load %src_view[%col] : view<3072xf32, #dense> -> vector<8xf32>
+    %squares = vector.mulf<reassoc|nnan|ninf|nsz> %values, %values : vector<8xf32>
+    %next = vector.reduce<addf, reassoc|nnan|ninf|nsz> %squares, %acc : vector<8xf32>, f32
+    scf.yield %next : f32
+  }
+
+  %row_sum = kernel.subgroup.reduce<addf> %sum : f32
+  %mean = scalar.divf<nnan|ninf|nsz|arcp> %row_sum, %ncols_f32 : f32
+  %mean_eps = scalar.addf<nnan|ninf|nsz> %mean, %eps : f32
+  %scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %mean_eps : f32
+  %is_lane_zero = index.cmp eq, %lane, %zero_index : index
+  scf.if %is_lane_zero {
+    view.store %scale, %scale_view[%zero_index] : f32, view<1xf32, #dense>
+  }
+  kernel.return
+}
+
+kernel.def target(@hrx2_gfx1100_wave32) export("hrx2_rms_norm_mul_quantize_q8_1_x4_f32_scale_buffer_scalar_store") @hrx2_rms_norm_mul_quantize_q8_1_x4_f32_scale_buffer_scalar_store() {
+  %one = index.constant 1 : index
+  %twentyfour = index.constant 24 : index
+  %thirtytwo = index.constant 32 : index
+  kernel.launch.config workgroups(%twentyfour, %one, %one) workgroup_size(%thirtytwo, %one, %one) : index
+} launch(%src: buffer, %weight: buffer, %scale_src: buffer, %dst_q8_x4: buffer) {
+  %base = index.constant 0 : offset
+  %zero_index = index.constant 0 : index
+  %one = index.constant 1 : index
+  %two = index.constant 2 : index
+  %three = index.constant 3 : index
+  %four = index.constant 4 : index
+  %eight = index.constant 8 : index
+  %sixteen = index.constant 16 : index
+  %seventytwo = index.constant 72 : index
+  %zero_f32 = scalar.constant 0.0 : f32
+  %one_f32 = scalar.constant 1.0 : f32
+  %one_twentyseven_f32 = scalar.constant 127.0 : f32
+
+  %workgroup0 = kernel.workgroup.id<x> : index
+  %workgroup = index.assume %workgroup0 [range(%workgroup0, 0, 23)] : index
+  %lane0 = kernel.subgroup.lane.id : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 31)] : index
+  %block_in_wg = index.div %lane, %eight : index
+  %iqs = index.rem %lane, %eight : index
+  %workgroup_block_base = index.mul %workgroup, %four : index
+  %ib = index.add %workgroup_block_base, %block_in_wg : index
+  %outer = index.div %ib, %four : index
+  %inner = index.rem %ib, %four : index
+
+  %src_global = buffer.assume.memory_space<global> %src : buffer
+  %weight_global = buffer.assume.memory_space<global> %weight : buffer
+  %scale_global = buffer.assume.memory_space<global> %scale_src : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst_q8_x4 : buffer
+  %src_noalias, %weight_noalias, %scale_noalias, %dst_noalias = buffer.assume.noalias %src_global, %weight_global, %scale_global, %dst_global : buffer, buffer, buffer, buffer
+  %src_view = buffer.view %src_noalias[%base] : buffer -> view<3072xf32, #dense>
+  %weight_view = buffer.view %weight_noalias[%base] : buffer -> view<3072xf32, #dense>
+  %scale_view = buffer.view %scale_noalias[%base] : buffer -> view<1xf32, #dense>
+  %dst_i8_view = buffer.view %dst_noalias[%base] : buffer -> view<3456xi8, #dense>
+  %dst_f16_view = buffer.view %dst_noalias[%base] : buffer -> view<1728xf16, #dense>
+
+  %rms_scale = view.load %scale_view[%zero_index] : view<1xf32, #dense> -> f32
+  %rms_scale_vec = vector.splat %rms_scale : vector<4xf32>
+  %a_vec_slot = index.mul %ib, %eight : index
+  %a_vec_index = index.add %a_vec_slot, %iqs : index
+  %a_index0 = index.mul %a_vec_index, %four : index
+  %a_index = index.assume %a_index0 [range(%a_index0, 0, 3068), mul(%a_index0, 4)] : index
+
+  %src_vals = vector.load %src_view[%a_index] : view<3072xf32, #dense> -> vector<4xf32>
+  %weight_vals = vector.load %weight_view[%a_index] : view<3072xf32, #dense> -> vector<4xf32>
+  %normed = vector.mulf<nnan|ninf|nsz> %src_vals, %rms_scale_vec : vector<4xf32>
+  %vals = vector.mulf<nnan|ninf|nsz> %normed, %weight_vals : vector<4xf32>
+
+  %abs_vals = vector.absf %vals : vector<4xf32>
+  %thread_max = vector.reduce<maxnumf, reassoc|nnan|nsz> %abs_vals, %zero_f32 : vector<4xf32>, f32
+  %amax = kernel.subgroup.reduce<maxnumf> %thread_max {cluster_size = 8} : f32
+  %d = scalar.divf %amax, %one_twentyseven_f32 : f32
+  %zero_for_cmp = scalar.subf %d, %d : f32
+  %d_nonzero = scalar.cmpf one, %d, %zero_for_cmp : f32
+  %d_inv = scf.if %d_nonzero -> (f32) {
+    %d_inv_candidate = scalar.divf %one_f32, %d : f32
+    scf.yield %d_inv_candidate : f32
+  } else {
+    scf.yield %zero_f32 : f32
+  }
+  %d_inv_vec = vector.splat %d_inv : vector<4xf32>
+  %scaled = vector.mulf %vals, %d_inv_vec : vector<4xf32>
+  %rounded = vector.roundf %scaled : vector<4xf32>
+  %rounded0 = vector.extract %rounded[0] : vector<4xf32> -> f32
+  %rounded1 = vector.extract %rounded[1] : vector<4xf32> -> f32
+  %rounded2 = vector.extract %rounded[2] : vector<4xf32> -> f32
+  %rounded3 = vector.extract %rounded[3] : vector<4xf32> -> f32
+  %q0 = scalar.fptosi %rounded0 : f32 to i32
+  %q1 = scalar.fptosi %rounded1 : f32 to i32
+  %q2 = scalar.fptosi %rounded2 : f32 to i32
+  %q3 = scalar.fptosi %rounded3 : f32 to i32
+  %q0_i8 = scalar.trunci %q0 : i32 to i8
+  %q1_i8 = scalar.trunci %q1 : i32 to i8
+  %q2_i8 = scalar.trunci %q2 : i32 to i8
+  %q3_i8 = scalar.trunci %q3 : i32 to i8
+
+  %outer_byte_base = index.mul %outer, %seventytwo : index
+  %outer_byte_base4 = index.mul %outer_byte_base, %two : index
+  %inner_qs_slot = index.mul %inner, %eight : index
+  %inner_qs_word = index.add %inner_qs_slot, %iqs : index
+  %inner_qs_byte = index.mul %inner_qs_word, %four : index
+  %qs_payload = index.add %outer_byte_base4, %sixteen : index
+  %qs_byte_index0 = index.add %qs_payload, %inner_qs_byte : index
+  %qs_byte_index = index.assume %qs_byte_index0 [range(%qs_byte_index0, 16, 3452)] : index
+  %qs_byte_index1_raw = index.add %qs_byte_index, %one : index
+  %qs_byte_index1 = index.assume %qs_byte_index1_raw [range(%qs_byte_index1_raw, 17, 3453)] : index
+  %qs_byte_index2_raw = index.add %qs_byte_index, %two : index
+  %qs_byte_index2 = index.assume %qs_byte_index2_raw [range(%qs_byte_index2_raw, 18, 3454)] : index
+  %qs_byte_index3_raw = index.add %qs_byte_index, %three : index
+  %qs_byte_index3 = index.assume %qs_byte_index3_raw [range(%qs_byte_index3_raw, 19, 3455)] : index
+  view.store %q0_i8, %dst_i8_view[%qs_byte_index] : i8, view<3456xi8, #dense>
+  view.store %q1_i8, %dst_i8_view[%qs_byte_index1] : i8, view<3456xi8, #dense>
+  view.store %q2_i8, %dst_i8_view[%qs_byte_index2] : i8, view<3456xi8, #dense>
+  view.store %q3_i8, %dst_i8_view[%qs_byte_index3] : i8, view<3456xi8, #dense>
+
+  %thread_sum = vector.reduce<addf, reassoc|nnan|nsz> %rounded, %zero_f32 : vector<4xf32>, f32
+  %block_sum = kernel.subgroup.reduce<addf> %thread_sum {cluster_size = 8} : f32
+  %lane_in_block_zero = index.cmp eq, %iqs, %zero_index : index
+  scf.if %lane_in_block_zero {
+    %sum_d = scalar.mulf %block_sum, %d : f32
+    %d_f16 = scalar.fptrunc %d : f32 to f16
+    %sum_d_f16 = scalar.fptrunc %sum_d : f32 to f16
+    %inner_ds_slot = index.mul %inner, %two : index
+    %ds_base0 = index.add %outer_byte_base, %inner_ds_slot : index
+    %ds_base = index.assume %ds_base0 [range(%ds_base0, 0, 1726)] : index
+    %ds_sum0 = index.add %ds_base, %one : index
+    %ds_sum = index.assume %ds_sum0 [range(%ds_sum0, 1, 1727)] : index
+    view.store %d_f16, %dst_f16_view[%ds_base] : f16, view<1728xf16, #dense>
+    view.store %sum_d_f16, %dst_f16_view[%ds_sum] : f16, view<1728xf16, #dense>
+  }
+  kernel.return
+}
+
+kernel.def target(@hrx2_gfx1100_wave32) export("hrx2_rms_norm_mul_quantize_q8_1_x4_f32_recompute") @hrx2_rms_norm_mul_quantize_q8_1_x4_f32_recompute() {
+  %one = index.constant 1 : index
+  %twentyfour = index.constant 24 : index
+  %thirtytwo = index.constant 32 : index
+  kernel.launch.config workgroups(%twentyfour, %one, %one) workgroup_size(%thirtytwo, %one, %one) : index
+} launch(%eps: f32, %src: buffer, %weight: buffer, %dst_q8_x4: buffer) {
+  %base = index.constant 0 : offset
+  %zero_index = index.constant 0 : index
+  %one = index.constant 1 : index
+  %two = index.constant 2 : index
+  %four = index.constant 4 : index
+  %eight = index.constant 8 : index
+  %sixteen = index.constant 16 : index
+  %thirtytwo = index.constant 32 : index
+  %seventytwo = index.constant 72 : index
+  %onetwentyseven = index.constant 127 : index
+  %ncols = index.constant 3072 : index
+  %eight_i32 = scalar.constant 8 : i32
+  %sixteen_i32 = scalar.constant 16 : i32
+  %twentyfour_i32 = scalar.constant 24 : i32
+  %zero_f32 = scalar.constant 0.0 : f32
+  %one_f32 = scalar.constant 1.0 : f32
+  %one_twentyseven_f32 = scalar.constant 127.0 : f32
+  %ncols_f32 = scalar.constant 3072.0 : f32
+  %mask_ff = scalar.constant 255 : i32
+
+  %outer0 = kernel.workgroup.id<x> : index
+  %outer = index.assume %outer0 [range(%outer0, 0, 23)] : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 31)] : index
+
+  %src_global = buffer.assume.memory_space<global> %src : buffer
+  %weight_global = buffer.assume.memory_space<global> %weight : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst_q8_x4 : buffer
+  %src_noalias, %weight_noalias, %dst_noalias = buffer.assume.noalias %src_global, %weight_global, %dst_global : buffer, buffer, buffer
+  %src_view = buffer.view %src_noalias[%base] : buffer -> view<3072xf32, #dense>
+  %weight_view = buffer.view %weight_noalias[%base] : buffer -> view<3072xf32, #dense>
+  %dst_i8_view = buffer.view %dst_noalias[%base] : buffer -> view<3456xi8, #dense>
+  %dst_f16_view = buffer.view %dst_noalias[%base] : buffer -> view<1728xf16, #dense>
+
+  %sum = scf.for %col0 = [%lane to %ncols step %thirtytwo](%acc = %zero_f32 : f32) -> (f32) {
+    %col = index.assume %col0 [range(%col0, 0, 3071)] : index
+    %value = view.load %src_view[%col] : view<3072xf32, #dense> -> f32
+    %square = scalar.mulf<reassoc|nnan|ninf|nsz> %value, %value : f32
+    %next = scalar.addf<reassoc|nnan|ninf|nsz> %acc, %square : f32
+    scf.yield %next : f32
+  }
+  %row_sum = kernel.subgroup.reduce<addf> %sum : f32
+  %mean = scalar.divf<nnan|ninf|nsz|arcp> %row_sum, %ncols_f32 : f32
+  %mean_eps = scalar.addf<nnan|ninf|nsz> %mean, %eps : f32
+  %rms_scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %mean_eps : f32
+  %rms_scale_vec = vector.splat %rms_scale : vector<4xf32>
+
+  %block_in_outer = index.div %lane, %eight : index
+  %iqs = index.rem %lane, %eight : index
+  %outer_block_base = index.mul %outer, %four : index
+  %ib = index.add %outer_block_base, %block_in_outer : index
+  %a_vec_slot = index.mul %ib, %eight : index
+  %a_vec_index = index.add %a_vec_slot, %iqs : index
+  %a_index0 = index.mul %a_vec_index, %four : index
+  %a_index = index.assume %a_index0 [range(%a_index0, 0, 3068), mul(%a_index0, 4)] : index
+
+  %src_vals = vector.load %src_view[%a_index] : view<3072xf32, #dense> -> vector<4xf32>
+  %weight_vals = vector.load %weight_view[%a_index] : view<3072xf32, #dense> -> vector<4xf32>
+  %normed = vector.mulf<nnan|ninf|nsz> %src_vals, %rms_scale_vec : vector<4xf32>
+  %vals = vector.mulf<nnan|ninf|nsz> %normed, %weight_vals : vector<4xf32>
+
+  %abs_vals = vector.absf %vals : vector<4xf32>
+  %thread_max = vector.reduce<maxnumf, reassoc|nnan|nsz> %abs_vals, %zero_f32 : vector<4xf32>, f32
+  %amax = kernel.subgroup.reduce<maxnumf> %thread_max {cluster_size = 8} : f32
+  %d = scalar.divf %amax, %one_twentyseven_f32 : f32
+  %zero_for_cmp = scalar.subf %d, %d : f32
+  %d_nonzero = scalar.cmpf one, %d, %zero_for_cmp : f32
+  %d_inv = scf.if %d_nonzero -> (f32) {
+    %d_inv_candidate = scalar.divf %one_f32, %d : f32
+    scf.yield %d_inv_candidate : f32
+  } else {
+    scf.yield %zero_f32 : f32
+  }
+  %d_inv_vec = vector.splat %d_inv : vector<4xf32>
+  %scaled = vector.mulf %vals, %d_inv_vec : vector<4xf32>
+  %rounded = vector.roundf %scaled : vector<4xf32>
+  %q_i32 = vector.fptosi %rounded : vector<4xf32> to vector<4xi32>
+
+  %q0 = vector.extract %q_i32[0] : vector<4xi32> -> i32
+  %q1 = vector.extract %q_i32[1] : vector<4xi32> -> i32
+  %q2 = vector.extract %q_i32[2] : vector<4xi32> -> i32
+  %q3 = vector.extract %q_i32[3] : vector<4xi32> -> i32
+  %q0_b = scalar.andi %q0, %mask_ff : i32
+  %q1_b = scalar.andi %q1, %mask_ff : i32
+  %q2_b = scalar.andi %q2, %mask_ff : i32
+  %q3_b = scalar.andi %q3, %mask_ff : i32
+  %q1_s = scalar.shli %q1_b, %eight_i32 : i32
+  %q2_s = scalar.shli %q2_b, %sixteen_i32 : i32
+  %q3_s = scalar.shli %q3_b, %twentyfour_i32 : i32
+  %q_lo = scalar.ori %q0_b, %q1_s : i32
+  %q_hi = scalar.ori %q2_s, %q3_s : i32
+  %q_word = scalar.ori %q_lo, %q_hi : i32
+  %q_word_vec = vector.splat %q_word : vector<1xi32>
+  %q_pack = vector.bitcast %q_word_vec : vector<1xi32> to vector<4xi8>
+
+  %outer_byte_base = index.mul %outer, %seventytwo : index
+  %outer_byte_base4 = index.mul %outer_byte_base, %two : index
+  %inner_qs_slot = index.mul %block_in_outer, %eight : index
+  %inner_qs_word = index.add %inner_qs_slot, %iqs : index
+  %inner_qs_byte = index.mul %inner_qs_word, %four : index
+  %qs_payload = index.add %outer_byte_base4, %sixteen : index
+  %qs_byte_index0 = index.add %qs_payload, %inner_qs_byte : index
+  %qs_byte_index = index.assume %qs_byte_index0 [range(%qs_byte_index0, 16, 3452)] : index
+  vector.store %q_pack, %dst_i8_view[%qs_byte_index] : vector<4xi8>, view<3456xi8, #dense>
+
+  %thread_sum = vector.reduce<addf, reassoc|nnan|nsz> %rounded, %zero_f32 : vector<4xf32>, f32
+  %block_sum = kernel.subgroup.reduce<addf> %thread_sum {cluster_size = 8} : f32
+  %lane_in_block_zero = index.cmp eq, %iqs, %zero_index : index
+  scf.if %lane_in_block_zero {
+    %sum_d = scalar.mulf %block_sum, %d : f32
+    %d_f16 = scalar.fptrunc %d : f32 to f16
+    %sum_d_f16 = scalar.fptrunc %sum_d : f32 to f16
+    %inner_ds_slot = index.mul %block_in_outer, %two : index
+    %ds_base0 = index.add %outer_byte_base, %inner_ds_slot : index
+    %ds_base = index.assume %ds_base0 [range(%ds_base0, 0, 1726)] : index
+    %ds_sum0 = index.add %ds_base, %one : index
+    %ds_sum = index.assume %ds_sum0 [range(%ds_sum0, 1, 1727)] : index
+    view.store %d_f16, %dst_f16_view[%ds_base] : f16, view<1728xf16, #dense>
+    view.store %sum_d_f16, %dst_f16_view[%ds_sum] : f16, view<1728xf16, #dense>
+  }
+  kernel.return
+}

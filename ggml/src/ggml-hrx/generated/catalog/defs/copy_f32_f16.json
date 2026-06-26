@@ -1,0 +1,20 @@
+{
+  "schema": "ggml-hrx-kernel-def-v1",
+  "family": "copy_f32_f16",
+  "op": "CPY",
+  "sources": {
+    "copy_f32_f16": {
+      "path": "kernels/copy_f32_f16.loom",
+      "sha256": "16b5d9ac137d253ce20c2d6cec2581e2944fd2e7b25525aecbb25aaaf8ea8f95"
+    }
+  },
+  "artifacts": {
+    "copy_f32_f16_generic_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "copy_f32_f16",
+      "root_symbol": "@hrx2_copy_f32_f16",
+      "path": "artifacts/copy_f32_f16_generic_wg256_loombc.loombc",
+      "storage": "embedded"
+    }
+  }
+}

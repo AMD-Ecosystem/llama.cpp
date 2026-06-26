@@ -1,0 +1,20 @@
+{
+  "schema": "ggml-hrx-kernel-def-v1",
+  "family": "softmax_kqv_f32_f16",
+  "op": "CONT",
+  "sources": {
+    "softmax_kqv_f32_f16": {
+      "path": "kernels/softmax_kqv_f32_f16.loom",
+      "sha256": "b25abc867f7186633596e82abe55e119c7b762b92cfebb9fd87ef549f6fefe87"
+    }
+  },
+  "artifacts": {
+    "softmax_kqv_f32_f16_decode_kv256_d128_h24_hkv8_wg64_rows2_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "softmax_kqv_f32_f16",
+      "root_symbol": "@hrx2_softmax_kqv_f32_f16_decode_rows2",
+      "path": "artifacts/softmax_kqv_f32_f16_decode_kv256_d128_h24_hkv8_wg64_rows2_loombc.loombc",
+      "storage": "embedded"
+    }
+  }
+}

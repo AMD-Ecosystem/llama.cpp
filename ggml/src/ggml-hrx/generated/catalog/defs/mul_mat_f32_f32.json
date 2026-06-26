@@ -1,0 +1,20 @@
+{
+  "schema": "ggml-hrx-kernel-def-v1",
+  "family": "mul_mat_f32_f32",
+  "op": "MUL_MAT",
+  "sources": {
+    "mul_mat_f32_f32": {
+      "path": "kernels/mul_mat_f32_f32.loom",
+      "sha256": "164369d509ab3e8eb701530fc10adef0f017c5967ff671d4fc665167609aa398"
+    }
+  },
+  "artifacts": {
+    "mul_mat_f32_f32_moe_logits_k2048_r128_c1_512_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "mul_mat_f32_f32",
+      "root_symbol": "@hrx2_mul_mat_f32_f32_static",
+      "path": "artifacts/mul_mat_f32_f32_moe_logits_k2048_r128_c1_512_wg256_loombc.loombc",
+      "storage": "embedded"
+    }
+  }
+}

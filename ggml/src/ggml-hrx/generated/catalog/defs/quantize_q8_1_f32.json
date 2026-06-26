@@ -1,0 +1,20 @@
+{
+  "schema": "ggml-hrx-kernel-def-v1",
+  "family": "quantize_q8_1_f32",
+  "op": "QUANTIZE",
+  "sources": {
+    "quantize_q8_1_f32": {
+      "path": "kernels/quantize_q8_1_f32.loom",
+      "sha256": "0c208c455e437a02e77fd07711794a1e57509f782bb6ba676f4127422b9107f3"
+    }
+  },
+  "artifacts": {
+    "quantize_q8_1_f32_generic_wg32_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "quantize_q8_1_f32",
+      "root_symbol": "@hrx2_quantize_q8_1_f32",
+      "path": "artifacts/quantize_q8_1_f32_generic_wg32_loombc.loombc",
+      "storage": "embedded"
+    }
+  }
+}

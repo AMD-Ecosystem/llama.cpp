@@ -1,0 +1,97 @@
+{
+  "schema": "ggml-hrx-kernel-def-v1",
+  "family": "swiglu_f32",
+  "op": "GLU",
+  "sources": {
+    "swiglu_f32": {
+      "path": "kernels/swiglu_f32.loom",
+      "sha256": "f35bcd62bfa569bedbf95b35d800f90f18736b3a5c8b850844bddd4648cc8dbf"
+    }
+  },
+  "artifacts": {
+    "geglu_f32_split_n21504_r1_64_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "swiglu_f32",
+      "root_symbol": "@hrx2_geglu_f32_split",
+      "path": "artifacts/geglu_f32_split_n21504_r1_64_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "swiglu_f32_split_large_n13824_32768_r1_64_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "swiglu_f32",
+      "root_symbol": "@hrx2_swiglu_f32_split",
+      "path": "artifacts/swiglu_f32_split_large_n13824_32768_r1_64_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "swiglu_f32_split_large_n13824_32768_r512_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "swiglu_f32",
+      "root_symbol": "@hrx2_swiglu_f32_split",
+      "path": "artifacts/swiglu_f32_split_large_n13824_32768_r512_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "swiglu_f32_split_n8192_r1_64_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "swiglu_f32",
+      "root_symbol": "@hrx2_swiglu_f32_split",
+      "path": "artifacts/swiglu_f32_split_n8192_r1_64_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "swiglu_f32_split_n8192_r512_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "swiglu_f32",
+      "root_symbol": "@hrx2_swiglu_f32_split",
+      "path": "artifacts/swiglu_f32_split_n8192_r512_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "swiglu_f32_split_n14336_r1_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "swiglu_f32",
+      "root_symbol": "@hrx2_swiglu_f32_split",
+      "path": "artifacts/swiglu_f32_split_n14336_r1_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "swiglu_f32_split_n768_r128_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "swiglu_f32",
+      "root_symbol": "@hrx2_swiglu_f32_split",
+      "path": "artifacts/swiglu_f32_split_n768_r128_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "swiglu_f32_split_n768_r512_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "swiglu_f32",
+      "root_symbol": "@hrx2_swiglu_f32_split",
+      "path": "artifacts/swiglu_f32_split_n768_r512_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "swiglu_f32_split_n768_r8_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "swiglu_f32",
+      "root_symbol": "@hrx2_swiglu_f32_split",
+      "path": "artifacts/swiglu_f32_split_n768_r8_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "swiglu_f32_n8192_r16_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "swiglu_f32",
+      "root_symbol": "@hrx2_swiglu_f32",
+      "path": "artifacts/swiglu_f32_n8192_r16_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "swiglu_f32_n8192_r1_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "swiglu_f32",
+      "root_symbol": "@hrx2_swiglu_f32",
+      "path": "artifacts/swiglu_f32_n8192_r1_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "swiglu_f32_generic_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "swiglu_f32",
+      "root_symbol": "@hrx2_swiglu_f32",
+      "path": "artifacts/swiglu_f32_generic_wg256_loombc.loombc",
+      "storage": "embedded"
+    }
+  }
+}

@@ -1,0 +1,66 @@
+config.decl @hrx2.shape.k : %value: index where [range(%value, 1, 8192)]
+config.decl @hrx2.shape.rows : %value: index where [range(%value, 1, 8192)]
+config.decl @hrx2.shape.cols : %value: index where [range(%value, 1, 512)]
+config.decl @hrx2.tuning.workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+
+kernel.def export("hrx2_mul_mat_f32_f32_static") @hrx2_mul_mat_f32_f32_static() {
+  %unit = index.constant 1 : index
+  %rows = config.get @hrx2.shape.rows : index
+  %cols = config.get @hrx2.shape.cols : index
+  %workgroup_size = config.get @hrx2.tuning.workgroup_size : index
+  kernel.launch.config workgroups(%rows, %cols, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%src0: buffer, %src1: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero_f32 = scalar.constant 0.0 : f32
+  %zero_i32 = scalar.constant 0 : i32
+  %unit = index.constant 1 : index
+
+  %k = config.get @hrx2.shape.k : index
+  %rows = config.get @hrx2.shape.rows : index
+  %cols = config.get @hrx2.shape.cols : index
+  %workgroup_size = config.get @hrx2.tuning.workgroup_size : index
+  %k_bounded = index.assume %k [range(%k, 1, 8192)] : index
+  %rows_bounded = index.assume %rows [range(%rows, 1, 8192)] : index
+  %cols_bounded = index.assume %cols [range(%cols, 1, 512)] : index
+
+  %row0 = kernel.workgroup.id<x> : index
+  %row = index.assume %row0 [range(%row0, 0, 8191)] : index
+  %col0 = kernel.workgroup.id<y> : index
+  %col = index.assume %col0 [range(%col0, 0, 511)] : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+
+  %src0_count = index.mul %rows_bounded, %k_bounded : index
+  %src1_count = index.mul %cols_bounded, %k_bounded : index
+  %dst_count = index.mul %cols_bounded, %rows_bounded : index
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %src1_global = buffer.assume.memory_space<global> %src1 : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_noalias, %src1_noalias, %dst_noalias = buffer.assume.noalias %src0_global, %src1_global, %dst_global : buffer, buffer, buffer
+  %src0_view = buffer.view %src0_noalias[%base] : buffer -> view<[%src0_count]xf32, #dense>
+  %src1_view = buffer.view %src1_noalias[%base] : buffer -> view<[%src1_count]xf32, #dense>
+  %dst_view = buffer.view %dst_noalias[%base] : buffer -> view<[%dst_count]xf32, #dense>
+
+  %src0_row_base = index.mul %row, %k_bounded : index
+  %src1_col_base = index.mul %col, %k_bounded : index
+  %sum = scf.for %i = [%lane to %k_bounded step %workgroup_size](%acc = %zero_f32 : f32) -> (f32) {
+    %src0_index = index.add %src0_row_base, %i : index
+    %src1_index = index.add %src1_col_base, %i : index
+    %a = view.load %src0_view[%src0_index] : view<[%src0_count]xf32, #dense> -> f32
+    %b = view.load %src1_view[%src1_index] : view<[%src1_count]xf32, #dense> -> f32
+    %product = scalar.mulf<reassoc|nnan|ninf|nsz> %a, %b : f32
+    %next = scalar.addf<reassoc|nnan|ninf|nsz> %acc, %product : f32
+    scf.yield %next : f32
+  }
+  %dot = kernel.workgroup.reduce<addf> %sum : f32
+
+  %dst_col_base = index.mul %col, %rows_bounded : index
+  %dst_index = index.add %dst_col_base, %row : index
+  %lane_i32 = index.cast %lane : index to i32
+  %is_lane0 = scalar.cmpi eq, %lane_i32, %zero_i32 : i32
+  scf.if %is_lane0 {
+    view.store %dot, %dst_view[%dst_index] : f32, view<[%dst_count]xf32, #dense>
+  }
+  kernel.return
+}

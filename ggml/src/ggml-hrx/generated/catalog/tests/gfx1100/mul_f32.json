@@ -1,0 +1,24 @@
+{
+  "schema": "ggml-hrx-test-schedule-v1",
+  "target_key": "gfx1100",
+  "family": "mul_f32",
+  "cases": [
+    {
+      "id": "mul_f32_mul_f32_contiguous_2d_r64_1048576_wg256_smoke",
+      "op": "MUL",
+      "expected_route_id": "mul_f32_contiguous_2d_r64_1048576_wg256",
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "layout": "contiguous"
+      },
+      "shape": {
+        "ncols": 8,
+        "nrows": 64
+      },
+      "tolerance": 1e-06,
+      "repeat": 2
+    }
+  ]
+}

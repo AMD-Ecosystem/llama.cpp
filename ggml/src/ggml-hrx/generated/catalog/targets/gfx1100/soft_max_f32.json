@@ -1,0 +1,1664 @@
+{
+  "schema": "ggml-hrx-target-routes-v1",
+  "target_key": "gfx1100",
+  "key": "soft_max_f32",
+  "routes": [
+    {
+      "id": "soft_max_f32_mask_n256_r1536_wg64_lanes4",
+      "family": "soft_max_f32",
+      "op": "SOFT_MAX",
+      "source_id": "soft_max_f32",
+      "artifact_id": "soft_max_f32_mask_n256_r1536_wg64_lanes4_loombc",
+      "root_symbol": "@hrx2_soft_max_f32_mask_n256_wg64_lanes4",
+      "export_name": "hrx2_soft_max_f32_mask_n256_wg64_lanes4",
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 4,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          64,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "soft_max_f32_mask_n256_r1536_wg64_lanes4",
+        "ncols_min": 256,
+        "ncols_max": 256,
+        "nrows_min": 1536,
+        "nrows_max": 1536,
+        "rows_min": 0,
+        "rows_max": 0,
+        "cols_min": 0,
+        "cols_max": 0
+      },
+      "shape_guards": {
+        "ncols_multiple_of": 256
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.soft_max.ncols",
+            "source": "shape.soft_max.ncols"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.nrows",
+            "source": "shape.soft_max.nrows"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.ne01",
+            "source": "shape.soft_max.ne01"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.ne02",
+            "source": "shape.soft_max.ne02"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb1",
+            "source": "shape.soft_max.mask_nb1"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb2",
+            "source": "shape.soft_max.mask_nb2"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb3",
+            "source": "shape.soft_max.mask_nb3"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne1",
+            "source": "shape.soft_max.mask_ne1"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne2",
+            "source": "shape.soft_max.mask_ne2"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne3",
+            "source": "shape.soft_max.mask_ne3"
+          },
+          {
+            "key": "@hrx2.tuning.soft_max.workgroup_size",
+            "value": "64"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "mask": "required",
+        "max_bias": "0",
+        "sinks": "none",
+        "layout": "contiguous"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "route-slice-30-soft-max-f32",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "soft_max_f32_mask_n256_r1792_wg256",
+      "family": "soft_max_f32",
+      "op": "SOFT_MAX",
+      "source_id": "soft_max_f32",
+      "artifact_id": "soft_max_f32_mask_n256_r1792_wg256_loombc",
+      "root_symbol": "@hrx2_soft_max_f32_mask",
+      "export_name": "hrx2_soft_max_f32_mask",
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 4,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "soft_max_f32_mask_n256_r1792_wg256",
+        "ncols_min": 256,
+        "ncols_max": 256,
+        "nrows_min": 1792,
+        "nrows_max": 1792,
+        "rows_min": 0,
+        "rows_max": 0,
+        "cols_min": 0,
+        "cols_max": 0
+      },
+      "shape_guards": {
+        "ncols_multiple_of": 256
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.soft_max.ncols",
+            "source": "shape.soft_max.ncols"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.nrows",
+            "source": "shape.soft_max.nrows"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.ne01",
+            "source": "shape.soft_max.ne01"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.ne02",
+            "source": "shape.soft_max.ne02"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb1",
+            "source": "shape.soft_max.mask_nb1"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb2",
+            "source": "shape.soft_max.mask_nb2"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb3",
+            "source": "shape.soft_max.mask_nb3"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne1",
+            "source": "shape.soft_max.mask_ne1"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne2",
+            "source": "shape.soft_max.mask_ne2"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne3",
+            "source": "shape.soft_max.mask_ne3"
+          },
+          {
+            "key": "@hrx2.tuning.soft_max.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "mask": "required",
+        "max_bias": "0",
+        "sinks": "none",
+        "layout": "contiguous"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "route-slice-30-soft-max-f32",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "soft_max_f32_mask_n256_r2048_wg256",
+      "family": "soft_max_f32",
+      "op": "SOFT_MAX",
+      "source_id": "soft_max_f32",
+      "artifact_id": "soft_max_f32_mask_n256_r2048_wg256_loombc",
+      "root_symbol": "@hrx2_soft_max_f32_mask",
+      "export_name": "hrx2_soft_max_f32_mask",
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 4,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "soft_max_f32_mask_n256_r2048_wg256",
+        "ncols_min": 256,
+        "ncols_max": 256,
+        "nrows_min": 2048,
+        "nrows_max": 2048,
+        "rows_min": 0,
+        "rows_max": 0,
+        "cols_min": 0,
+        "cols_max": 0
+      },
+      "shape_guards": {
+        "ncols_multiple_of": 256
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.soft_max.ncols",
+            "source": "shape.soft_max.ncols"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.nrows",
+            "source": "shape.soft_max.nrows"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.ne01",
+            "source": "shape.soft_max.ne01"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.ne02",
+            "source": "shape.soft_max.ne02"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb1",
+            "source": "shape.soft_max.mask_nb1"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb2",
+            "source": "shape.soft_max.mask_nb2"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb3",
+            "source": "shape.soft_max.mask_nb3"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne1",
+            "source": "shape.soft_max.mask_ne1"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne2",
+            "source": "shape.soft_max.mask_ne2"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne3",
+            "source": "shape.soft_max.mask_ne3"
+          },
+          {
+            "key": "@hrx2.tuning.soft_max.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "mask": "required",
+        "max_bias": "0",
+        "sinks": "none",
+        "layout": "contiguous"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "route-slice-30-soft-max-f32",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "soft_max_f32_mask_n256_r24_wg256",
+      "family": "soft_max_f32",
+      "op": "SOFT_MAX",
+      "source_id": "soft_max_f32",
+      "artifact_id": "soft_max_f32_mask_n256_r24_wg256_loombc",
+      "root_symbol": "@hrx2_soft_max_f32_mask",
+      "export_name": "hrx2_soft_max_f32_mask",
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 4,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "soft_max_f32_mask_n256_r24_wg256",
+        "ncols_min": 256,
+        "ncols_max": 256,
+        "nrows_min": 24,
+        "nrows_max": 24,
+        "rows_min": 0,
+        "rows_max": 0,
+        "cols_min": 0,
+        "cols_max": 0
+      },
+      "shape_guards": {
+        "ncols_multiple_of": 256
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.soft_max.ncols",
+            "source": "shape.soft_max.ncols"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.nrows",
+            "source": "shape.soft_max.nrows"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.ne01",
+            "source": "shape.soft_max.ne01"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.ne02",
+            "source": "shape.soft_max.ne02"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb1",
+            "source": "shape.soft_max.mask_nb1"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb2",
+            "source": "shape.soft_max.mask_nb2"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb3",
+            "source": "shape.soft_max.mask_nb3"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne1",
+            "source": "shape.soft_max.mask_ne1"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne2",
+            "source": "shape.soft_max.mask_ne2"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne3",
+            "source": "shape.soft_max.mask_ne3"
+          },
+          {
+            "key": "@hrx2.tuning.soft_max.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "mask": "required",
+        "max_bias": "0",
+        "sinks": "none",
+        "layout": "contiguous"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "route-slice-30-soft-max-f32",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "soft_max_f32_mask_n256_r2560_wg256",
+      "family": "soft_max_f32",
+      "op": "SOFT_MAX",
+      "source_id": "soft_max_f32",
+      "artifact_id": "soft_max_f32_mask_n256_r2560_wg256_loombc",
+      "root_symbol": "@hrx2_soft_max_f32_mask",
+      "export_name": "hrx2_soft_max_f32_mask",
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 4,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "soft_max_f32_mask_n256_r2560_wg256",
+        "ncols_min": 256,
+        "ncols_max": 256,
+        "nrows_min": 2560,
+        "nrows_max": 6144,
+        "rows_min": 0,
+        "rows_max": 0,
+        "cols_min": 0,
+        "cols_max": 0
+      },
+      "shape_guards": {
+        "ncols_multiple_of": 256
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.soft_max.ncols",
+            "source": "shape.soft_max.ncols"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.nrows",
+            "source": "shape.soft_max.nrows"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.ne01",
+            "source": "shape.soft_max.ne01"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.ne02",
+            "source": "shape.soft_max.ne02"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb1",
+            "source": "shape.soft_max.mask_nb1"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb2",
+            "source": "shape.soft_max.mask_nb2"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb3",
+            "source": "shape.soft_max.mask_nb3"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne1",
+            "source": "shape.soft_max.mask_ne1"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne2",
+            "source": "shape.soft_max.mask_ne2"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne3",
+            "source": "shape.soft_max.mask_ne3"
+          },
+          {
+            "key": "@hrx2.tuning.soft_max.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "mask": "required",
+        "max_bias": "0",
+        "sinks": "none",
+        "layout": "contiguous"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "route-slice-30-soft-max-f32",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "soft_max_f32_mask_n256_r28_wg256",
+      "family": "soft_max_f32",
+      "op": "SOFT_MAX",
+      "source_id": "soft_max_f32",
+      "artifact_id": "soft_max_f32_mask_n256_r28_wg256_loombc",
+      "root_symbol": "@hrx2_soft_max_f32_mask",
+      "export_name": "hrx2_soft_max_f32_mask",
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 4,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "soft_max_f32_mask_n256_r28_wg256",
+        "ncols_min": 256,
+        "ncols_max": 256,
+        "nrows_min": 28,
+        "nrows_max": 28,
+        "rows_min": 0,
+        "rows_max": 0,
+        "cols_min": 0,
+        "cols_max": 0
+      },
+      "shape_guards": {
+        "ncols_multiple_of": 256
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.soft_max.ncols",
+            "source": "shape.soft_max.ncols"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.nrows",
+            "source": "shape.soft_max.nrows"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.ne01",
+            "source": "shape.soft_max.ne01"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.ne02",
+            "source": "shape.soft_max.ne02"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb1",
+            "source": "shape.soft_max.mask_nb1"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb2",
+            "source": "shape.soft_max.mask_nb2"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb3",
+            "source": "shape.soft_max.mask_nb3"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne1",
+            "source": "shape.soft_max.mask_ne1"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne2",
+            "source": "shape.soft_max.mask_ne2"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne3",
+            "source": "shape.soft_max.mask_ne3"
+          },
+          {
+            "key": "@hrx2.tuning.soft_max.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "mask": "required",
+        "max_bias": "0",
+        "sinks": "none",
+        "layout": "contiguous"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "route-slice-30-soft-max-f32",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "soft_max_f32_mask_n256_r32_wg256",
+      "family": "soft_max_f32",
+      "op": "SOFT_MAX",
+      "source_id": "soft_max_f32",
+      "artifact_id": "soft_max_f32_mask_n256_r32_wg256_loombc",
+      "root_symbol": "@hrx2_soft_max_f32_mask",
+      "export_name": "hrx2_soft_max_f32_mask",
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 4,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "soft_max_f32_mask_n256_r32_wg256",
+        "ncols_min": 256,
+        "ncols_max": 256,
+        "nrows_min": 32,
+        "nrows_max": 32,
+        "rows_min": 0,
+        "rows_max": 0,
+        "cols_min": 0,
+        "cols_max": 0
+      },
+      "shape_guards": {
+        "ncols_multiple_of": 256
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.soft_max.ncols",
+            "source": "shape.soft_max.ncols"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.nrows",
+            "source": "shape.soft_max.nrows"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.ne01",
+            "source": "shape.soft_max.ne01"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.ne02",
+            "source": "shape.soft_max.ne02"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb1",
+            "source": "shape.soft_max.mask_nb1"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb2",
+            "source": "shape.soft_max.mask_nb2"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb3",
+            "source": "shape.soft_max.mask_nb3"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne1",
+            "source": "shape.soft_max.mask_ne1"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne2",
+            "source": "shape.soft_max.mask_ne2"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne3",
+            "source": "shape.soft_max.mask_ne3"
+          },
+          {
+            "key": "@hrx2.tuning.soft_max.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "mask": "required",
+        "max_bias": "0",
+        "sinks": "none",
+        "layout": "contiguous"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "route-slice-30-soft-max-f32",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "soft_max_f32_mask_n256_r384_wg256",
+      "family": "soft_max_f32",
+      "op": "SOFT_MAX",
+      "source_id": "soft_max_f32",
+      "artifact_id": "soft_max_f32_mask_n256_r384_wg256_loombc",
+      "root_symbol": "@hrx2_soft_max_f32_mask",
+      "export_name": "hrx2_soft_max_f32_mask",
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 4,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "soft_max_f32_mask_n256_r384_wg256",
+        "ncols_min": 256,
+        "ncols_max": 256,
+        "nrows_min": 384,
+        "nrows_max": 384,
+        "rows_min": 0,
+        "rows_max": 0,
+        "cols_min": 0,
+        "cols_max": 0
+      },
+      "shape_guards": {
+        "ncols_multiple_of": 256
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.soft_max.ncols",
+            "source": "shape.soft_max.ncols"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.nrows",
+            "source": "shape.soft_max.nrows"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.ne01",
+            "source": "shape.soft_max.ne01"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.ne02",
+            "source": "shape.soft_max.ne02"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb1",
+            "source": "shape.soft_max.mask_nb1"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb2",
+            "source": "shape.soft_max.mask_nb2"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb3",
+            "source": "shape.soft_max.mask_nb3"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne1",
+            "source": "shape.soft_max.mask_ne1"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne2",
+            "source": "shape.soft_max.mask_ne2"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne3",
+            "source": "shape.soft_max.mask_ne3"
+          },
+          {
+            "key": "@hrx2.tuning.soft_max.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "mask": "required",
+        "max_bias": "0",
+        "sinks": "none",
+        "layout": "contiguous"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "route-slice-30-soft-max-f32",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "soft_max_f32_mask_n256_r40_wg256",
+      "family": "soft_max_f32",
+      "op": "SOFT_MAX",
+      "source_id": "soft_max_f32",
+      "artifact_id": "soft_max_f32_mask_n256_r40_wg256_loombc",
+      "root_symbol": "@hrx2_soft_max_f32_mask",
+      "export_name": "hrx2_soft_max_f32_mask",
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 4,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "soft_max_f32_mask_n256_r40_wg256",
+        "ncols_min": 256,
+        "ncols_max": 256,
+        "nrows_min": 40,
+        "nrows_max": 40,
+        "rows_min": 0,
+        "rows_max": 0,
+        "cols_min": 0,
+        "cols_max": 0
+      },
+      "shape_guards": {
+        "ncols_multiple_of": 256
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.soft_max.ncols",
+            "source": "shape.soft_max.ncols"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.nrows",
+            "source": "shape.soft_max.nrows"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.ne01",
+            "source": "shape.soft_max.ne01"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.ne02",
+            "source": "shape.soft_max.ne02"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb1",
+            "source": "shape.soft_max.mask_nb1"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb2",
+            "source": "shape.soft_max.mask_nb2"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb3",
+            "source": "shape.soft_max.mask_nb3"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne1",
+            "source": "shape.soft_max.mask_ne1"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne2",
+            "source": "shape.soft_max.mask_ne2"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne3",
+            "source": "shape.soft_max.mask_ne3"
+          },
+          {
+            "key": "@hrx2.tuning.soft_max.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "mask": "required",
+        "max_bias": "0",
+        "sinks": "none",
+        "layout": "contiguous"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "route-slice-30-soft-max-f32",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "soft_max_f32_mask_n256_r448_wg256",
+      "family": "soft_max_f32",
+      "op": "SOFT_MAX",
+      "source_id": "soft_max_f32",
+      "artifact_id": "soft_max_f32_mask_n256_r448_wg256_loombc",
+      "root_symbol": "@hrx2_soft_max_f32_mask",
+      "export_name": "hrx2_soft_max_f32_mask",
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 4,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "soft_max_f32_mask_n256_r448_wg256",
+        "ncols_min": 256,
+        "ncols_max": 256,
+        "nrows_min": 448,
+        "nrows_max": 448,
+        "rows_min": 0,
+        "rows_max": 0,
+        "cols_min": 0,
+        "cols_max": 0
+      },
+      "shape_guards": {
+        "ncols_multiple_of": 256
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.soft_max.ncols",
+            "source": "shape.soft_max.ncols"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.nrows",
+            "source": "shape.soft_max.nrows"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.ne01",
+            "source": "shape.soft_max.ne01"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.ne02",
+            "source": "shape.soft_max.ne02"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb1",
+            "source": "shape.soft_max.mask_nb1"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb2",
+            "source": "shape.soft_max.mask_nb2"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb3",
+            "source": "shape.soft_max.mask_nb3"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne1",
+            "source": "shape.soft_max.mask_ne1"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne2",
+            "source": "shape.soft_max.mask_ne2"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne3",
+            "source": "shape.soft_max.mask_ne3"
+          },
+          {
+            "key": "@hrx2.tuning.soft_max.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "mask": "required",
+        "max_bias": "0",
+        "sinks": "none",
+        "layout": "contiguous"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "route-slice-30-soft-max-f32",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "soft_max_f32_mask_n256_r512_wg256",
+      "family": "soft_max_f32",
+      "op": "SOFT_MAX",
+      "source_id": "soft_max_f32",
+      "artifact_id": "soft_max_f32_mask_n256_r512_wg256_loombc",
+      "root_symbol": "@hrx2_soft_max_f32_mask",
+      "export_name": "hrx2_soft_max_f32_mask",
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 4,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "soft_max_f32_mask_n256_r512_wg256",
+        "ncols_min": 256,
+        "ncols_max": 256,
+        "nrows_min": 512,
+        "nrows_max": 512,
+        "rows_min": 0,
+        "rows_max": 0,
+        "cols_min": 0,
+        "cols_max": 0
+      },
+      "shape_guards": {
+        "ncols_multiple_of": 256
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.soft_max.ncols",
+            "source": "shape.soft_max.ncols"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.nrows",
+            "source": "shape.soft_max.nrows"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.ne01",
+            "source": "shape.soft_max.ne01"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.ne02",
+            "source": "shape.soft_max.ne02"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb1",
+            "source": "shape.soft_max.mask_nb1"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb2",
+            "source": "shape.soft_max.mask_nb2"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb3",
+            "source": "shape.soft_max.mask_nb3"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne1",
+            "source": "shape.soft_max.mask_ne1"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne2",
+            "source": "shape.soft_max.mask_ne2"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne3",
+            "source": "shape.soft_max.mask_ne3"
+          },
+          {
+            "key": "@hrx2.tuning.soft_max.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "mask": "required",
+        "max_bias": "0",
+        "sinks": "none",
+        "layout": "contiguous"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "route-slice-30-soft-max-f32",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "soft_max_f32_mask_n256_r640_wg256",
+      "family": "soft_max_f32",
+      "op": "SOFT_MAX",
+      "source_id": "soft_max_f32",
+      "artifact_id": "soft_max_f32_mask_n256_r640_wg256_loombc",
+      "root_symbol": "@hrx2_soft_max_f32_mask",
+      "export_name": "hrx2_soft_max_f32_mask",
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 4,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "soft_max_f32_mask_n256_r640_wg256",
+        "ncols_min": 256,
+        "ncols_max": 256,
+        "nrows_min": 640,
+        "nrows_max": 640,
+        "rows_min": 0,
+        "rows_max": 0,
+        "cols_min": 0,
+        "cols_max": 0
+      },
+      "shape_guards": {
+        "ncols_multiple_of": 256
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.soft_max.ncols",
+            "source": "shape.soft_max.ncols"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.nrows",
+            "source": "shape.soft_max.nrows"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.ne01",
+            "source": "shape.soft_max.ne01"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.ne02",
+            "source": "shape.soft_max.ne02"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb1",
+            "source": "shape.soft_max.mask_nb1"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb2",
+            "source": "shape.soft_max.mask_nb2"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb3",
+            "source": "shape.soft_max.mask_nb3"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne1",
+            "source": "shape.soft_max.mask_ne1"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne2",
+            "source": "shape.soft_max.mask_ne2"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne3",
+            "source": "shape.soft_max.mask_ne3"
+          },
+          {
+            "key": "@hrx2.tuning.soft_max.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "mask": "required",
+        "max_bias": "0",
+        "sinks": "none",
+        "layout": "contiguous"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "route-slice-30-soft-max-f32",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "soft_max_f32_mask_n512_r24_16384_wg64_lanes8",
+      "family": "soft_max_f32",
+      "op": "SOFT_MAX",
+      "source_id": "soft_max_f32",
+      "artifact_id": "soft_max_f32_mask_n512_r24_16384_wg64_lanes8_loombc",
+      "root_symbol": "@hrx2_soft_max_f32_mask_n512_wg64_lanes8",
+      "export_name": "hrx2_soft_max_f32_mask_n512_wg64_lanes8",
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 4,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          64,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "soft_max_f32_mask_n512_r24_16384_wg64_lanes8",
+        "ncols_min": 512,
+        "ncols_max": 512,
+        "nrows_min": 24,
+        "nrows_max": 16384,
+        "rows_min": 0,
+        "rows_max": 0,
+        "cols_min": 0,
+        "cols_max": 0
+      },
+      "shape_guards": {
+        "ncols_multiple_of": 512
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.soft_max.ncols",
+            "source": "shape.soft_max.ncols"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.nrows",
+            "source": "shape.soft_max.nrows"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.ne01",
+            "source": "shape.soft_max.ne01"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.ne02",
+            "source": "shape.soft_max.ne02"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb1",
+            "source": "shape.soft_max.mask_nb1"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb2",
+            "source": "shape.soft_max.mask_nb2"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb3",
+            "source": "shape.soft_max.mask_nb3"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne1",
+            "source": "shape.soft_max.mask_ne1"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne2",
+            "source": "shape.soft_max.mask_ne2"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne3",
+            "source": "shape.soft_max.mask_ne3"
+          },
+          {
+            "key": "@hrx2.tuning.soft_max.workgroup_size",
+            "value": "64"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "mask": "required",
+        "max_bias": "0",
+        "sinks": "none",
+        "layout": "contiguous"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "phase2a-p512-attention-route-coverage",
+          "selection": "vulkan_shape_wg64_lanes8",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "soft_max_f32_mask_n768_r24_32768_wg1024",
+      "family": "soft_max_f32",
+      "op": "SOFT_MAX",
+      "source_id": "soft_max_f32",
+      "artifact_id": "soft_max_f32_mask_n768_r24_32768_wg1024_loombc",
+      "root_symbol": "@hrx2_soft_max_f32_mask",
+      "export_name": "hrx2_soft_max_f32_mask",
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 4,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          1024,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "soft_max_f32_mask_n768_r24_32768_wg1024",
+        "ncols_min": 768,
+        "ncols_max": 1024,
+        "nrows_min": 24,
+        "nrows_max": 32768,
+        "rows_min": 0,
+        "rows_max": 0,
+        "cols_min": 0,
+        "cols_max": 0
+      },
+      "shape_guards": {
+        "ncols_multiple_of": 256
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.soft_max.ncols",
+            "source": "shape.soft_max.ncols"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.nrows",
+            "source": "shape.soft_max.nrows"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.ne01",
+            "source": "shape.soft_max.ne01"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.ne02",
+            "source": "shape.soft_max.ne02"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb1",
+            "source": "shape.soft_max.mask_nb1"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb2",
+            "source": "shape.soft_max.mask_nb2"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_nb3",
+            "source": "shape.soft_max.mask_nb3"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne1",
+            "source": "shape.soft_max.mask_ne1"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne2",
+            "source": "shape.soft_max.mask_ne2"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.mask_ne3",
+            "source": "shape.soft_max.mask_ne3"
+          },
+          {
+            "key": "@hrx2.tuning.soft_max.workgroup_size",
+            "value": "1024"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "mask": "required",
+        "max_bias": "0",
+        "sinks": "none",
+        "layout": "contiguous"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "true-mixed-p512n64-route-coverage",
+          "selection": "generic_masked_softmax_n768",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "soft_max_f32_n128_r16_wg128",
+      "family": "soft_max_f32",
+      "op": "SOFT_MAX",
+      "source_id": "soft_max_f32",
+      "artifact_id": "soft_max_f32_n128_r16_wg128_loombc",
+      "root_symbol": "@hrx2_soft_max_f32",
+      "export_name": "hrx2_soft_max_f32",
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 3,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          128,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "soft_max_f32_n128_r16_wg128",
+        "ncols_min": 128,
+        "ncols_max": 128,
+        "nrows_min": 16,
+        "nrows_max": 16,
+        "rows_min": 0,
+        "rows_max": 0,
+        "cols_min": 0,
+        "cols_max": 0
+      },
+      "shape_guards": {
+        "ncols_multiple_of": 128
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.soft_max.ncols",
+            "source": "shape.soft_max.ncols"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.nrows",
+            "source": "shape.soft_max.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.soft_max.workgroup_size",
+            "value": "128"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "none",
+        "dst_type": "F32",
+        "mask": "none",
+        "max_bias": "0",
+        "sinks": "none",
+        "layout": "contiguous"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "route-slice-30-soft-max-f32",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "soft_max_f32_n128_r1_wg128",
+      "family": "soft_max_f32",
+      "op": "SOFT_MAX",
+      "source_id": "soft_max_f32",
+      "artifact_id": "soft_max_f32_n128_r1_wg128_loombc",
+      "root_symbol": "@hrx2_soft_max_f32",
+      "export_name": "hrx2_soft_max_f32",
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 3,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          128,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "soft_max_f32_n128_r1_wg128",
+        "ncols_min": 128,
+        "ncols_max": 128,
+        "nrows_min": 1,
+        "nrows_max": 1,
+        "rows_min": 0,
+        "rows_max": 0,
+        "cols_min": 0,
+        "cols_max": 0
+      },
+      "shape_guards": {
+        "ncols_multiple_of": 128
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.soft_max.ncols",
+            "source": "shape.soft_max.ncols"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.nrows",
+            "source": "shape.soft_max.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.soft_max.workgroup_size",
+            "value": "128"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "none",
+        "dst_type": "F32",
+        "mask": "none",
+        "max_bias": "0",
+        "sinks": "none",
+        "layout": "contiguous"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "route-slice-30-soft-max-f32",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "soft_max_f32_n128_r64_wg128",
+      "family": "soft_max_f32",
+      "op": "SOFT_MAX",
+      "source_id": "soft_max_f32",
+      "artifact_id": "soft_max_f32_n128_r64_wg128_loombc",
+      "root_symbol": "@hrx2_soft_max_f32",
+      "export_name": "hrx2_soft_max_f32",
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 3,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          128,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "soft_max_f32_n128_r64_wg128",
+        "ncols_min": 128,
+        "ncols_max": 128,
+        "nrows_min": 64,
+        "nrows_max": 64,
+        "rows_min": 0,
+        "rows_max": 0,
+        "cols_min": 0,
+        "cols_max": 0
+      },
+      "shape_guards": {
+        "ncols_multiple_of": 128
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.soft_max.ncols",
+            "source": "shape.soft_max.ncols"
+          },
+          {
+            "key": "@hrx2.shape.soft_max.nrows",
+            "source": "shape.soft_max.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.soft_max.workgroup_size",
+            "value": "128"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "none",
+        "dst_type": "F32",
+        "mask": "none",
+        "max_bias": "0",
+        "sinks": "none",
+        "layout": "contiguous"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "route-slice-30-soft-max-f32",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    }
+  ]
+}

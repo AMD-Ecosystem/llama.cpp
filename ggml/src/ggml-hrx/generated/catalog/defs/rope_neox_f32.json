@@ -1,0 +1,276 @@
+{
+  "schema": "ggml-hrx-kernel-def-v1",
+  "family": "rope_neox_f32",
+  "op": "ROPE",
+  "sources": {
+    "rope_neox_f32": {
+      "path": "kernels/rope_neox_f32.loom",
+      "sha256": "fae5c9fcd23482bbb0662aa13c5b200bbe76ee104b0890fb13a80d7b072b2ed4"
+    },
+    "rope_neox_f32_freq": {
+      "path": "kernels/rope_neox_f32_freq.loom",
+      "sha256": "6272ea87916f6eff5d62581249b15cf362d15d55d9b5525e562e77091ba1d976"
+    }
+  },
+  "artifacts": {
+    "rope_neox_f32_freq_n128_d128_h24_t16_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32_freq",
+      "root_symbol": "@hrx2_rope_neox_f32_freq",
+      "path": "artifacts/rope_neox_f32_freq_n128_d128_h24_t16_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_freq_n128_d128_h24_t1_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32_freq",
+      "root_symbol": "@hrx2_rope_neox_f32_freq",
+      "path": "artifacts/rope_neox_f32_freq_n128_d128_h24_t1_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_freq_n128_d128_h24_t64_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32_freq",
+      "root_symbol": "@hrx2_rope_neox_f32_freq",
+      "path": "artifacts/rope_neox_f32_freq_n128_d128_h24_t64_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_freq_n128_d128_h32_t16_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32_freq",
+      "root_symbol": "@hrx2_rope_neox_f32_freq",
+      "path": "artifacts/rope_neox_f32_freq_n128_d128_h32_t16_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_freq_n128_d128_h32_t1_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32_freq",
+      "root_symbol": "@hrx2_rope_neox_f32_freq",
+      "path": "artifacts/rope_neox_f32_freq_n128_d128_h32_t1_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_freq_n128_d128_h32_t64_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32_freq",
+      "root_symbol": "@hrx2_rope_neox_f32_freq",
+      "path": "artifacts/rope_neox_f32_freq_n128_d128_h32_t64_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_freq_n128_d128_h8_t16_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32_freq",
+      "root_symbol": "@hrx2_rope_neox_f32_freq",
+      "path": "artifacts/rope_neox_f32_freq_n128_d128_h8_t16_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_freq_n128_d128_h8_t1_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32_freq",
+      "root_symbol": "@hrx2_rope_neox_f32_freq",
+      "path": "artifacts/rope_neox_f32_freq_n128_d128_h8_t1_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_freq_n128_d128_h8_t64_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32_freq",
+      "root_symbol": "@hrx2_rope_neox_f32_freq",
+      "path": "artifacts/rope_neox_f32_freq_n128_d128_h8_t64_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_freq_n128_d96_h24_t1024_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32_freq",
+      "root_symbol": "@hrx2_rope_neox_f32_freq",
+      "path": "artifacts/rope_neox_f32_freq_n128_d96_h24_t1024_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_freq_n128_d96_h24_t16_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32_freq",
+      "root_symbol": "@hrx2_rope_neox_f32_freq",
+      "path": "artifacts/rope_neox_f32_freq_n128_d96_h24_t16_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_freq_n128_d96_h24_t1_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32_freq",
+      "root_symbol": "@hrx2_rope_neox_f32_freq",
+      "path": "artifacts/rope_neox_f32_freq_n128_d96_h24_t1_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_freq_n128_d96_h24_t64_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32_freq",
+      "root_symbol": "@hrx2_rope_neox_f32_freq",
+      "path": "artifacts/rope_neox_f32_freq_n128_d96_h24_t64_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_freq_n128_d96_h8_t1024_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32_freq",
+      "root_symbol": "@hrx2_rope_neox_f32_freq",
+      "path": "artifacts/rope_neox_f32_freq_n128_d96_h8_t1024_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_freq_n128_d96_h8_t16_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32_freq",
+      "root_symbol": "@hrx2_rope_neox_f32_freq",
+      "path": "artifacts/rope_neox_f32_freq_n128_d96_h8_t16_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_freq_n128_d96_h8_t1_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32_freq",
+      "root_symbol": "@hrx2_rope_neox_f32_freq",
+      "path": "artifacts/rope_neox_f32_freq_n128_d96_h8_t1_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_freq_n128_d96_h8_t64_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32_freq",
+      "root_symbol": "@hrx2_rope_neox_f32_freq",
+      "path": "artifacts/rope_neox_f32_freq_n128_d96_h8_t64_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_n128_h16_t16_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32",
+      "root_symbol": "@hrx2_rope_neox_f32",
+      "path": "artifacts/rope_neox_f32_n128_h16_t16_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_n128_h16_t1_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32",
+      "root_symbol": "@hrx2_rope_neox_f32",
+      "path": "artifacts/rope_neox_f32_n128_h16_t1_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_n128_h16_t64_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32",
+      "root_symbol": "@hrx2_rope_neox_f32",
+      "path": "artifacts/rope_neox_f32_n128_h16_t64_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_n128_h28_t16_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32",
+      "root_symbol": "@hrx2_rope_neox_f32",
+      "path": "artifacts/rope_neox_f32_n128_h28_t16_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_n128_h28_t1_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32",
+      "root_symbol": "@hrx2_rope_neox_f32",
+      "path": "artifacts/rope_neox_f32_n128_h28_t1_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_n128_h28_t512_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32",
+      "root_symbol": "@hrx2_rope_neox_f32",
+      "path": "artifacts/rope_neox_f32_n128_h28_t512_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_n128_h28_t64_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32",
+      "root_symbol": "@hrx2_rope_neox_f32",
+      "path": "artifacts/rope_neox_f32_n128_h28_t64_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_n128_h32_t16_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32",
+      "root_symbol": "@hrx2_rope_neox_f32",
+      "path": "artifacts/rope_neox_f32_n128_h32_t16_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_n128_h32_t1_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32",
+      "root_symbol": "@hrx2_rope_neox_f32",
+      "path": "artifacts/rope_neox_f32_n128_h32_t1_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_n128_h32_t64_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32",
+      "root_symbol": "@hrx2_rope_neox_f32",
+      "path": "artifacts/rope_neox_f32_n128_h32_t64_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_n128_h40_t16_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32",
+      "root_symbol": "@hrx2_rope_neox_f32",
+      "path": "artifacts/rope_neox_f32_n128_h40_t16_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_n128_h40_t1_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32",
+      "root_symbol": "@hrx2_rope_neox_f32",
+      "path": "artifacts/rope_neox_f32_n128_h40_t1_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_n128_h40_t64_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32",
+      "root_symbol": "@hrx2_rope_neox_f32",
+      "path": "artifacts/rope_neox_f32_n128_h40_t64_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_n128_h4_t16_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32",
+      "root_symbol": "@hrx2_rope_neox_f32",
+      "path": "artifacts/rope_neox_f32_n128_h4_t16_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_n128_h4_t1_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32",
+      "root_symbol": "@hrx2_rope_neox_f32",
+      "path": "artifacts/rope_neox_f32_n128_h4_t1_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_n128_h4_t512_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32",
+      "root_symbol": "@hrx2_rope_neox_f32",
+      "path": "artifacts/rope_neox_f32_n128_h4_t512_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_n128_h4_t64_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32",
+      "root_symbol": "@hrx2_rope_neox_f32",
+      "path": "artifacts/rope_neox_f32_n128_h4_t64_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_n128_h8_t16_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32",
+      "root_symbol": "@hrx2_rope_neox_f32",
+      "path": "artifacts/rope_neox_f32_n128_h8_t16_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_n128_h8_t1_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32",
+      "root_symbol": "@hrx2_rope_neox_f32",
+      "path": "artifacts/rope_neox_f32_n128_h8_t1_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rope_neox_f32_n128_h8_t64_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rope_neox_f32",
+      "root_symbol": "@hrx2_rope_neox_f32",
+      "path": "artifacts/rope_neox_f32_n128_h8_t64_wg256_loombc.loombc",
+      "storage": "embedded"
+    }
+  }
+}

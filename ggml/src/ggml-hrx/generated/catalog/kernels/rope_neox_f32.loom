@@ -1,0 +1,118 @@
+config.decl @hrx2.shape.rope.ncols : %value: index where [range(%value, 2, 4096), mul(%value, 2)]
+config.decl @hrx2.shape.rope.nheads : %value: index where [range(%value, 1, 256)]
+config.decl @hrx2.shape.rope.ntokens : %value: index where [range(%value, 1, 4096)]
+config.decl @hrx2.shape.rope.src0_head_stride : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2.shape.rope.src0_token_stride : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2.shape.rope.dst_head_stride : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2.shape.rope.dst_token_stride : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2.shape.rope.pos_token_stride : %value: index where [range(%value, 1, 1024)]
+config.decl @hrx2.tuning.rope.workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+
+kernel.def export("hrx2_rope_neox_f32") @hrx2_rope_neox_f32() {
+  %unit = index.constant 1 : index
+  %minus_one = index.constant -1 : index
+  %ncols = config.get @hrx2.shape.rope.ncols : index
+  %nheads = config.get @hrx2.shape.rope.nheads : index
+  %ntokens = config.get @hrx2.shape.rope.ntokens : index
+  %workgroup_size = config.get @hrx2.tuning.rope.workgroup_size : index
+  %two = index.constant 2 : index
+  %half_cols = index.div %ncols, %two : index
+  %rows = index.mul %nheads, %ntokens : index
+  %total = index.mul %half_cols, %rows : index
+  %rounding = index.add %workgroup_size, %minus_one : index
+  %rounded = index.add %total, %rounding : index
+  %workgroups = index.div %rounded, %workgroup_size : index
+  kernel.launch.config workgroups(%workgroups, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%theta_scale: f32, %freq_scale: f32, %attn_factor: f32, %src0: buffer, %pos: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %one = index.constant 1 : index
+  %two = index.constant 2 : index
+  %minus_one_f32 = scalar.constant -1.0 : f32
+  %ncols = config.get @hrx2.shape.rope.ncols : index
+  %nheads = config.get @hrx2.shape.rope.nheads : index
+  %ntokens = config.get @hrx2.shape.rope.ntokens : index
+  %src0_head_stride = config.get @hrx2.shape.rope.src0_head_stride : index
+  %src0_token_stride = config.get @hrx2.shape.rope.src0_token_stride : index
+  %dst_head_stride = config.get @hrx2.shape.rope.dst_head_stride : index
+  %dst_token_stride = config.get @hrx2.shape.rope.dst_token_stride : index
+  %pos_token_stride = config.get @hrx2.shape.rope.pos_token_stride : index
+  %workgroup_size = config.get @hrx2.tuning.rope.workgroup_size : index
+  %ncols_bounded = index.assume %ncols [range(%ncols, 2, 4096)] : index
+  %nheads_bounded = index.assume %nheads [range(%nheads, 1, 256)] : index
+  %ntokens_bounded = index.assume %ntokens [range(%ntokens, 1, 4096)] : index
+  %src0_head_stride_bounded = index.assume %src0_head_stride [range(%src0_head_stride, 1, 1048576)] : index
+  %src0_token_stride_bounded = index.assume %src0_token_stride [range(%src0_token_stride, 1, 1048576)] : index
+  %dst_head_stride_bounded = index.assume %dst_head_stride [range(%dst_head_stride, 1, 1048576)] : index
+  %dst_token_stride_bounded = index.assume %dst_token_stride [range(%dst_token_stride, 1, 1048576)] : index
+  %pos_token_stride_bounded = index.assume %pos_token_stride [range(%pos_token_stride, 1, 1024)] : index
+  %half_cols = index.div %ncols_bounded, %two : index
+  %rows0 = index.mul %nheads_bounded, %ntokens_bounded : index
+  %rows = index.assume %rows0 [range(%rows0, 1, 1048576)] : index
+  %total0 = index.mul %half_cols, %rows : index
+  %total = index.assume %total0 [range(%total0, 1, 1073741824)] : index
+  %src0_count = index.mul %src0_token_stride_bounded, %ntokens_bounded : index
+  %dst_count = index.mul %dst_token_stride_bounded, %ntokens_bounded : index
+  %pos_count = index.mul %pos_token_stride_bounded, %ntokens_bounded : index
+
+  %workgroup0 = kernel.workgroup.id<x> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %workgroup = index.assume %workgroup0 [range(%workgroup0, 0, 4194303)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+  %linear_mul0 = index.mul %workgroup, %workgroup_size : index
+  %linear_mul = index.assume %linear_mul0 [range(%linear_mul0, 0, 1073741823)] : index
+  %linear_add0 = index.add %linear_mul, %lane : index
+  %linear = index.assume %linear_add0 [range(%linear_add0, 0, 1073741823)] : index
+  %in_bounds = index.cmp ult, %linear, %total : index
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %pos_global = buffer.assume.memory_space<global> %pos : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_noalias, %pos_noalias, %dst_noalias = buffer.assume.noalias %src0_global, %pos_global, %dst_global : buffer, buffer, buffer
+  %src0_view = buffer.view %src0_noalias[%base] : buffer -> view<[%src0_count]xf32, #dense>
+  %pos_view = buffer.view %pos_noalias[%base] : buffer -> view<[%pos_count]xi32, #dense>
+  %dst_view = buffer.view %dst_noalias[%base] : buffer -> view<[%dst_count]xf32, #dense>
+
+  scf.if %in_bounds {
+    %pair = index.rem %linear, %half_cols : index
+    %row = index.div %linear, %half_cols : index
+    %head = index.rem %row, %nheads_bounded : index
+    %token = index.div %row, %nheads_bounded : index
+    %src0_head_base = index.mul %head, %src0_head_stride_bounded : index
+    %src0_token_base = index.mul %token, %src0_token_stride_bounded : index
+    %src0_base0 = index.add %src0_head_base, %src0_token_base : index
+    %src0_base = index.assume %src0_base0 [range(%src0_base0, 0, 1073741823)] : index
+    %dst_head_base = index.mul %head, %dst_head_stride_bounded : index
+    %dst_token_base = index.mul %token, %dst_token_stride_bounded : index
+    %dst_base0 = index.add %dst_head_base, %dst_token_base : index
+    %dst_base = index.assume %dst_base0 [range(%dst_base0, 0, 1073741823)] : index
+    %off1 = index.add %pair, %half_cols : index
+    %src0_idx0 = index.add %src0_base, %pair : index
+    %src0_idx1 = index.add %src0_base, %off1 : index
+    %dst_idx0 = index.add %dst_base, %pair : index
+    %dst_idx1 = index.add %dst_base, %off1 : index
+    %pos_idx0 = index.mul %token, %pos_token_stride_bounded : index
+    %pos_idx = index.assume %pos_idx0 [range(%pos_idx0, 0, 4194303)] : index
+    %pos_i32 = view.load %pos_view[%pos_idx] : view<[%pos_count]xi32, #dense> -> i32
+    %pos_f32 = scalar.sitofp %pos_i32 : i32 to f32
+    %pair_i32 = index.cast %pair : index to i32
+    %pair_f32 = scalar.sitofp %pair_i32 : i32 to f32
+    %theta_pow = scalar.powf<afn> %theta_scale, %pair_f32 : f32
+    %theta_pos = scalar.mulf<nnan|ninf|nsz> %pos_f32, %theta_pow : f32
+    %theta = scalar.mulf<nnan|ninf|nsz> %theta_pos, %freq_scale : f32
+    %cos0 = scalar.cosf<afn> %theta : f32
+    %sin0 = scalar.sinf<afn> %theta : f32
+    %cos_theta = scalar.mulf<nnan|ninf|nsz> %cos0, %attn_factor : f32
+    %sin_theta = scalar.mulf<nnan|ninf|nsz> %sin0, %attn_factor : f32
+    %x0 = view.load %src0_view[%src0_idx0] : view<[%src0_count]xf32, #dense> -> f32
+    %x1 = view.load %src0_view[%src0_idx1] : view<[%src0_count]xf32, #dense> -> f32
+    %x0_cos = scalar.mulf<nnan|ninf|nsz> %x0, %cos_theta : f32
+    %x1_sin = scalar.mulf<nnan|ninf|nsz> %x1, %sin_theta : f32
+    %out0 = scalar.subf<nnan|ninf|nsz> %x0_cos, %x1_sin : f32
+    %x0_sin = scalar.mulf<nnan|ninf|nsz> %x0, %sin_theta : f32
+    %x1_cos = scalar.mulf<nnan|ninf|nsz> %x1, %cos_theta : f32
+    %out1 = scalar.addf<nnan|ninf|nsz> %x0_sin, %x1_cos : f32
+    view.store %out0, %dst_view[%dst_idx0] : f32, view<[%dst_count]xf32, #dense>
+    view.store %out1, %dst_view[%dst_idx1] : f32, view<[%dst_count]xf32, #dense>
+  }
+  kernel.return
+}

@@ -1,0 +1,69 @@
+{
+  "schema": "ggml-hrx-kernel-def-v1",
+  "family": "add_f32",
+  "op": "ADD",
+  "sources": {
+    "pointwise_f32": {
+      "path": "kernels/pointwise_f32.loom",
+      "sha256": "ee448f3f69b87471794038d652a52b938601d75dd679098fb80145744ac19d1e"
+    }
+  },
+  "artifacts": {
+    "add_f32_contiguous_2d_r64_1048576_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "pointwise_f32",
+      "root_symbol": "@hrx2_add_f32_contiguous_2d",
+      "path": "artifacts/add_f32_contiguous_2d_r64_1048576_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "add_f32_rhs_row_broadcast_2d_r64_1048576_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "pointwise_f32",
+      "root_symbol": "@hrx2_add_f32_rhs_row_broadcast_2d",
+      "path": "artifacts/add_f32_rhs_row_broadcast_2d_r64_1048576_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "add_f32_n2048_r16_lhsrhsrowstride_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "pointwise_f32",
+      "root_symbol": "@hrx2_add_f32",
+      "path": "artifacts/add_f32_n2048_r16_lhsrhsrowstride_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "add_f32_n2048_r16_rhsrowstride_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "pointwise_f32",
+      "root_symbol": "@hrx2_add_f32",
+      "path": "artifacts/add_f32_n2048_r16_rhsrowstride_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "add_f32_n2048_r64_rhsrowstride_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "pointwise_f32",
+      "root_symbol": "@hrx2_add_f32",
+      "path": "artifacts/add_f32_n2048_r64_rhsrowstride_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "add_f32_n3072_r16_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "pointwise_f32",
+      "root_symbol": "@hrx2_add_f32",
+      "path": "artifacts/add_f32_n3072_r16_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "add_f32_n3072_r1_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "pointwise_f32",
+      "root_symbol": "@hrx2_add_f32",
+      "path": "artifacts/add_f32_n3072_r1_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "add_f32_generic_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "pointwise_f32",
+      "root_symbol": "@hrx2_add_f32",
+      "path": "artifacts/add_f32_generic_wg256_loombc.loombc",
+      "storage": "embedded"
+    }
+  }
+}

@@ -1,0 +1,132 @@
+{
+  "schema": "ggml-hrx-kernel-def-v1",
+  "family": "soft_max_f32",
+  "op": "SOFT_MAX",
+  "sources": {
+    "soft_max_f32": {
+      "path": "kernels/soft_max_f32.loom",
+      "sha256": "666cf4514a2fe6f8ab46268ee3370a4959512deab58c4422b83d42362e907803"
+    }
+  },
+  "artifacts": {
+    "soft_max_f32_mask_n256_r1536_wg64_lanes4_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "soft_max_f32",
+      "root_symbol": "@hrx2_soft_max_f32_mask_n256_wg64_lanes4",
+      "path": "artifacts/soft_max_f32_mask_n256_r1536_wg64_lanes4_loombc.loombc",
+      "storage": "embedded"
+    },
+    "soft_max_f32_mask_n256_r1792_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "soft_max_f32",
+      "root_symbol": "@hrx2_soft_max_f32_mask",
+      "path": "artifacts/soft_max_f32_mask_n256_r1792_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "soft_max_f32_mask_n256_r2048_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "soft_max_f32",
+      "root_symbol": "@hrx2_soft_max_f32_mask",
+      "path": "artifacts/soft_max_f32_mask_n256_r2048_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "soft_max_f32_mask_n256_r24_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "soft_max_f32",
+      "root_symbol": "@hrx2_soft_max_f32_mask",
+      "path": "artifacts/soft_max_f32_mask_n256_r24_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "soft_max_f32_mask_n256_r2560_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "soft_max_f32",
+      "root_symbol": "@hrx2_soft_max_f32_mask",
+      "path": "artifacts/soft_max_f32_mask_n256_r2560_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "soft_max_f32_mask_n256_r28_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "soft_max_f32",
+      "root_symbol": "@hrx2_soft_max_f32_mask",
+      "path": "artifacts/soft_max_f32_mask_n256_r28_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "soft_max_f32_mask_n256_r32_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "soft_max_f32",
+      "root_symbol": "@hrx2_soft_max_f32_mask",
+      "path": "artifacts/soft_max_f32_mask_n256_r32_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "soft_max_f32_mask_n256_r384_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "soft_max_f32",
+      "root_symbol": "@hrx2_soft_max_f32_mask",
+      "path": "artifacts/soft_max_f32_mask_n256_r384_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "soft_max_f32_mask_n256_r40_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "soft_max_f32",
+      "root_symbol": "@hrx2_soft_max_f32_mask",
+      "path": "artifacts/soft_max_f32_mask_n256_r40_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "soft_max_f32_mask_n256_r448_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "soft_max_f32",
+      "root_symbol": "@hrx2_soft_max_f32_mask",
+      "path": "artifacts/soft_max_f32_mask_n256_r448_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "soft_max_f32_mask_n256_r512_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "soft_max_f32",
+      "root_symbol": "@hrx2_soft_max_f32_mask",
+      "path": "artifacts/soft_max_f32_mask_n256_r512_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "soft_max_f32_mask_n256_r640_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "soft_max_f32",
+      "root_symbol": "@hrx2_soft_max_f32_mask",
+      "path": "artifacts/soft_max_f32_mask_n256_r640_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "soft_max_f32_mask_n512_r24_16384_wg64_lanes8_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "soft_max_f32",
+      "root_symbol": "@hrx2_soft_max_f32_mask_n512_wg64_lanes8",
+      "path": "artifacts/soft_max_f32_mask_n512_r24_16384_wg64_lanes8_loombc.loombc",
+      "storage": "embedded"
+    },
+    "soft_max_f32_mask_n768_r24_32768_wg1024_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "soft_max_f32",
+      "root_symbol": "@hrx2_soft_max_f32_mask",
+      "path": "artifacts/soft_max_f32_mask_n768_r24_32768_wg1024_loombc.loombc",
+      "storage": "embedded"
+    },
+    "soft_max_f32_n128_r16_wg128_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "soft_max_f32",
+      "root_symbol": "@hrx2_soft_max_f32",
+      "path": "artifacts/soft_max_f32_n128_r16_wg128_loombc.loombc",
+      "storage": "embedded"
+    },
+    "soft_max_f32_n128_r1_wg128_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "soft_max_f32",
+      "root_symbol": "@hrx2_soft_max_f32",
+      "path": "artifacts/soft_max_f32_n128_r1_wg128_loombc.loombc",
+      "storage": "embedded"
+    },
+    "soft_max_f32_n128_r64_wg128_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "soft_max_f32",
+      "root_symbol": "@hrx2_soft_max_f32",
+      "path": "artifacts/soft_max_f32_n128_r64_wg128_loombc.loombc",
+      "storage": "embedded"
+    }
+  }
+}

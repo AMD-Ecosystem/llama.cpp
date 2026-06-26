@@ -1,0 +1,258 @@
+{
+  "schema": "ggml-hrx-kernel-def-v1",
+  "family": "rms_norm_f32",
+  "op": "RMS_NORM",
+  "sources": {
+    "rms_norm_f32": {
+      "path": "kernels/rms_norm_f32.loom",
+      "sha256": "9c6e345569bb719bd17c427c5d057c7dfc67adfcef4cebc8250ae6b60702371f"
+    }
+  },
+  "artifacts": {
+    "rms_norm_f32_n64_r60_vector_vw4_wg1024_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n64_r60_vector_vw4_wg1024_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n1025_r60_vector_tail_vw2_wg64_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n1025_r60_vector_tail_vw2_wg64_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n128_r1024_vector_vw4_wg64_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n128_r1024_vector_vw4_wg64_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n128_r16_vector_vw4_wg64_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n128_r16_vector_vw4_wg64_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n128_r2048_vector_vw4_wg64_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n128_r2048_vector_vw4_wg64_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n128_r256_vector_vw4_wg64_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n128_r256_vector_vw4_wg64_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n128_r32_vector_vw4_wg64_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n128_r32_vector_vw4_wg64_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n128_r4_vector_vw4_wg64_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n128_r4_vector_vw4_wg64_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n128_r512_vector_vw4_wg64_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n128_r512_vector_vw4_wg64_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n128_r64_vector_vw4_wg64_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n128_r64_vector_vw4_wg64_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n3072_r1_vector_vw4_wg32_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n3072_r1_vector_vw4_wg32_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n3072_r64_vector_vw4_wg32_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n3072_r64_vector_vw4_wg32_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n3584_r16_vector_vw4_wg512_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n3584_r16_vector_vw4_wg512_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n3584_r1_vector_vw4_wg512_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n3584_r1_vector_vw4_wg512_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n3584_r64_vector_vw4_wg512_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n3584_r64_vector_vw4_wg512_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n4096_r16_vector_vw4_wg512_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n4096_r16_vector_vw4_wg512_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n4096_r64_vector_vw4_wg512_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n4096_r64_vector_vw4_wg512_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n3072_r1024_vector_vw4_wg32_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n3072_r1024_vector_vw4_wg32_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n3072_r16_vector_vw4_wg32_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n3072_r16_vector_vw4_wg32_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n3584_r512_vector_vw4_wg512_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n3584_r512_vector_vw4_wg512_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n4096_r512_vector_vw4_wg512_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n4096_r512_vector_vw4_wg512_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n4096_r1_vector_vw4_wg512_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n4096_r1_vector_vw4_wg512_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n4096_r32_scalar_wg1024_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_scalar",
+      "path": "artifacts/rms_norm_f32_n4096_r32_scalar_wg1024_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n512_r32_vector_vw2_wg512_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n512_r32_vector_vw2_wg512_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n8192_r1_vector_vw4_wg1024_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n8192_r1_vector_vw4_wg1024_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n2048_r16_vector_vw4_wg512_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n2048_r16_vector_vw4_wg512_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n2048_r1_vector_vw4_wg512_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n2048_r1_vector_vw4_wg512_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n2048_r64_vector_vw4_wg512_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n2048_r64_vector_vw4_wg512_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n5120_r16_vector_vw4_wg512_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n5120_r16_vector_vw4_wg512_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n5120_r1_vector_vw4_wg512_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n5120_r1_vector_vw4_wg512_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n5120_r64_vector_vw4_wg512_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n5120_r64_vector_vw4_wg512_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n5376_r16_vector_vw4_wg512_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n5376_r16_vector_vw4_wg512_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n5376_r1_vector_vw4_wg512_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n5376_r1_vector_vw4_wg512_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n5376_r64_vector_vw4_wg512_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n5376_r64_vector_vw4_wg512_loombc.loombc",
+      "storage": "embedded"
+    },
+    "rms_norm_f32_n8192_r32_vector_vw4_wg512_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "rms_norm_f32",
+      "root_symbol": "@hrx2_rms_norm_f32_static_vector_tail",
+      "path": "artifacts/rms_norm_f32_n8192_r32_vector_vw4_wg512_loombc.loombc",
+      "storage": "embedded"
+    }
+  }
+}

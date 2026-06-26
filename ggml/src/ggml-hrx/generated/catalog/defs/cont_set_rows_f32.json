@@ -1,0 +1,20 @@
+{
+  "schema": "ggml-hrx-kernel-def-v1",
+  "family": "cont_set_rows_f32",
+  "op": "SET_ROWS",
+  "sources": {
+    "cont_set_rows_f32": {
+      "path": "kernels/cont_set_rows_f32.loom",
+      "sha256": "a0eda8e87912c480de58efc75118b24bf622fcbd9a85805f3d94e3998f5f1a0c"
+    }
+  },
+  "artifacts": {
+    "cont_set_rows_f32_f16_n128_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "cont_set_rows_f32",
+      "root_symbol": "@hrx2_cont_set_rows_f32_f16",
+      "path": "artifacts/cont_set_rows_f32_f16_n128_wg256_loombc.loombc",
+      "storage": "embedded"
+    }
+  }
+}

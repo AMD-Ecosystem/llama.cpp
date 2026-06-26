@@ -1,0 +1,83 @@
+{
+  "schema": "ggml-hrx-kernel-def-v1",
+  "family": "mul_mat_q8_0_f32",
+  "op": "MUL_MAT",
+  "sources": {
+    "mul_mat_q8_0_f32": {
+      "path": "kernels/mul_mat_q8_0_f32.loom",
+      "sha256": "a4da7d82c55ba6e83d22d77da7442e0356a7df106482c9ddf325935a8c4c6e4e"
+    }
+  },
+  "artifacts": {
+    "mul_mat_q8_0_f32_packed_scfunroll_k256_8192_c1_16_wg64_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "mul_mat_q8_0_f32",
+      "root_symbol": "@hrx2_mul_mat_q8_0_f32_static_packed_scf_unroll",
+      "path": "artifacts/mul_mat_q8_0_f32_packed_scfunroll_k256_8192_c1_16_wg64_loombc.loombc",
+      "storage": "embedded"
+    },
+    "mul_mat_q8_0_f32_packed_loop_k32_8192_c1_16_wg64_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "mul_mat_q8_0_f32",
+      "root_symbol": "@hrx2_mul_mat_q8_0_f32_static_packed",
+      "path": "artifacts/mul_mat_q8_0_f32_packed_loop_k32_8192_c1_16_wg64_loombc.loombc",
+      "storage": "embedded"
+    },
+    "mul_mat_q8_0_f32_k256_r16_c8_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "mul_mat_q8_0_f32",
+      "root_symbol": "@hrx2_mul_mat_q8_0_f32_static",
+      "path": "artifacts/mul_mat_q8_0_f32_k256_r16_c8_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "mul_mat_q8_0_f32_k512_r64_c8_wg64_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "mul_mat_q8_0_f32",
+      "root_symbol": "@hrx2_mul_mat_q8_0_f32_static",
+      "path": "artifacts/mul_mat_q8_0_f32_k512_r64_c8_wg64_loombc.loombc",
+      "storage": "embedded"
+    },
+    "mul_mat_q8_0_f32_exact_skinny_pot_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "mul_mat_q8_0_f32",
+      "root_symbol": "@hrx2_mul_mat_q8_0_f32_static",
+      "path": "artifacts/mul_mat_q8_0_f32_exact_skinny_pot_loombc.loombc",
+      "storage": "embedded"
+    },
+    "mul_mat_q8_0_f32_exact_narrow_pot_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "mul_mat_q8_0_f32",
+      "root_symbol": "@hrx2_mul_mat_q8_0_f32_static",
+      "path": "artifacts/mul_mat_q8_0_f32_exact_narrow_pot_loombc.loombc",
+      "storage": "embedded"
+    },
+    "mul_mat_q8_0_f32_packed_loop_k256_8192_c17_4096_wg128_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "mul_mat_q8_0_f32",
+      "root_symbol": "@hrx2_mul_mat_q8_0_f32_static_packed",
+      "path": "artifacts/mul_mat_q8_0_f32_packed_loop_k256_8192_c17_4096_wg128_loombc.loombc",
+      "storage": "embedded"
+    },
+    "mul_mat_q8_0_f32_exact_wide_pot_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "mul_mat_q8_0_f32",
+      "root_symbol": "@hrx2_mul_mat_q8_0_f32_static",
+      "path": "artifacts/mul_mat_q8_0_f32_exact_wide_pot_loombc.loombc",
+      "storage": "embedded"
+    },
+    "mul_mat_q8_0_f32_exact_wide_irregular_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "mul_mat_q8_0_f32",
+      "root_symbol": "@hrx2_mul_mat_q8_0_f32_static",
+      "path": "artifacts/mul_mat_q8_0_f32_exact_wide_irregular_loombc.loombc",
+      "storage": "embedded"
+    },
+    "mul_mat_q8_0_f32_contiguous_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "mul_mat_q8_0_f32",
+      "root_symbol": "@hrx2_mul_mat_q8_0_f32",
+      "path": "artifacts/mul_mat_q8_0_f32_contiguous_loombc.loombc",
+      "storage": "embedded"
+    }
+  }
+}

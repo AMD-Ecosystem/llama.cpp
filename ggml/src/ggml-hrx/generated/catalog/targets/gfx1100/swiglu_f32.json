@@ -1,0 +1,756 @@
+{
+  "schema": "ggml-hrx-target-routes-v1",
+  "target_key": "gfx1100",
+  "key": "swiglu_f32",
+  "routes": [
+    {
+      "id": "geglu_f32_split_n21504_r1_64_wg256",
+      "family": "swiglu_f32",
+      "op": "GLU",
+      "source_id": "swiglu_f32",
+      "artifact_id": "geglu_f32_split_n21504_r1_64_wg256_loombc",
+      "root_symbol": "@hrx2_geglu_f32_split",
+      "export_name": "hrx2_geglu_f32_split",
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 3,
+        "constant_byte_length": 0
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "geglu_f32_split_n21504_r1_64_wg256",
+        "ncols_min": 21504,
+        "ncols_max": 21504,
+        "nrows_min": 1,
+        "nrows_max": 64
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.swiglu.ncols",
+            "source": "shape.swiglu.ncols"
+          },
+          {
+            "key": "@hrx2.shape.swiglu.nrows",
+            "source": "shape.swiglu.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.swiglu.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "glu_op": "GEGLU",
+        "layout": "contiguous_split_geglu"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "route-slice-44-glu-large-split",
+          "selection": "Gemma 3 split-source GEGLU width from the phase 1 basket",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "swiglu_f32_split_large_n13824_32768_r1_64_wg256",
+      "family": "swiglu_f32",
+      "op": "GLU",
+      "source_id": "swiglu_f32",
+      "artifact_id": "swiglu_f32_split_large_n13824_32768_r1_64_wg256_loombc",
+      "root_symbol": "@hrx2_swiglu_f32_split",
+      "export_name": "hrx2_swiglu_f32_split",
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 3,
+        "constant_byte_length": 0
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "swiglu_f32_split_large_n13824_32768_r1_64_wg256",
+        "ncols_min": 13824,
+        "ncols_max": 32768,
+        "nrows_min": 1,
+        "nrows_max": 64
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.swiglu.ncols",
+            "source": "shape.swiglu.ncols"
+          },
+          {
+            "key": "@hrx2.shape.swiglu.nrows",
+            "source": "shape.swiglu.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.swiglu.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "glu_op": "SWIGLU",
+        "layout": "contiguous_split_swiglu"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "route-slice-44-glu-large-split",
+          "selection": "large split-source FFN SWIGLU widths from the phase 1 basket",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "swiglu_f32_split_large_n13824_32768_r512_wg256",
+      "family": "swiglu_f32",
+      "op": "GLU",
+      "source_id": "swiglu_f32",
+      "artifact_id": "swiglu_f32_split_large_n13824_32768_r512_wg256_loombc",
+      "root_symbol": "@hrx2_swiglu_f32_split",
+      "export_name": "hrx2_swiglu_f32_split",
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 3,
+        "constant_byte_length": 0
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "swiglu_f32_split_large_n13824_32768_r512_wg256",
+        "ncols_min": 13824,
+        "ncols_max": 32768,
+        "nrows_min": 512,
+        "nrows_max": 512
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.swiglu.ncols",
+            "source": "shape.swiglu.ncols"
+          },
+          {
+            "key": "@hrx2.shape.swiglu.nrows",
+            "source": "shape.swiglu.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.swiglu.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "glu_op": "SWIGLU",
+        "layout": "contiguous_split_swiglu"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "phase2a-p512-route-coverage",
+          "selection": "basket_p512_cpu_fallback_elimination",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "swiglu_f32_split_n8192_r1_64_wg256",
+      "family": "swiglu_f32",
+      "op": "GLU",
+      "source_id": "swiglu_f32",
+      "artifact_id": "swiglu_f32_split_n8192_r1_64_wg256_loombc",
+      "root_symbol": "@hrx2_swiglu_f32_split",
+      "export_name": "hrx2_swiglu_f32_split",
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 3,
+        "constant_byte_length": 0
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "swiglu_f32_split_n8192_r1_64_wg256",
+        "ncols_min": 8192,
+        "ncols_max": 8192,
+        "nrows_min": 1,
+        "nrows_max": 64
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.swiglu.ncols",
+            "source": "shape.swiglu.ncols"
+          },
+          {
+            "key": "@hrx2.shape.swiglu.nrows",
+            "source": "shape.swiglu.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.swiglu.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "glu_op": "SWIGLU",
+        "layout": "contiguous_split_swiglu"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "route-slice-34-swiglu-llama32-split",
+          "selection": "llama32_q4k_decode_narrow_prefill64_glu_export",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "swiglu_f32_split_n8192_r512_wg256",
+      "family": "swiglu_f32",
+      "op": "GLU",
+      "source_id": "swiglu_f32",
+      "artifact_id": "swiglu_f32_split_n8192_r512_wg256_loombc",
+      "root_symbol": "@hrx2_swiglu_f32_split",
+      "export_name": "hrx2_swiglu_f32_split",
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 3,
+        "constant_byte_length": 0
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "swiglu_f32_split_n8192_r512_wg256",
+        "ncols_min": 8192,
+        "ncols_max": 8192,
+        "nrows_min": 512,
+        "nrows_max": 512
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.swiglu.ncols",
+            "source": "shape.swiglu.ncols"
+          },
+          {
+            "key": "@hrx2.shape.swiglu.nrows",
+            "source": "shape.swiglu.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.swiglu.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "glu_op": "SWIGLU",
+        "layout": "contiguous_split_swiglu"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "phase2a-p512-route-coverage",
+          "selection": "basket_p512_cpu_fallback_elimination",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "swiglu_f32_split_n14336_r1_wg256",
+      "family": "swiglu_f32",
+      "op": "GLU",
+      "source_id": "swiglu_f32",
+      "artifact_id": "swiglu_f32_split_n14336_r1_wg256_loombc",
+      "root_symbol": "@hrx2_swiglu_f32_split",
+      "export_name": "hrx2_swiglu_f32_split",
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 3,
+        "constant_byte_length": 0
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "swiglu_f32_split_n14336_r1_wg256",
+        "ncols_min": 14336,
+        "ncols_max": 14336,
+        "nrows_min": 1,
+        "nrows_max": 1
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.swiglu.ncols",
+            "source": "shape.swiglu.ncols"
+          },
+          {
+            "key": "@hrx2.shape.swiglu.nrows",
+            "source": "shape.swiglu.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.swiglu.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "glu_op": "SWIGLU",
+        "layout": "contiguous_split_swiglu"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "phase1.0-basket-route-slice",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "swiglu_f32_split_n768_r128_wg256",
+      "family": "swiglu_f32",
+      "op": "GLU",
+      "source_id": "swiglu_f32",
+      "artifact_id": "swiglu_f32_split_n768_r128_wg256_loombc",
+      "root_symbol": "@hrx2_swiglu_f32_split",
+      "export_name": "hrx2_swiglu_f32_split",
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 3,
+        "constant_byte_length": 0
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "swiglu_f32_split_n768_r128_wg256",
+        "ncols_min": 768,
+        "ncols_max": 768,
+        "nrows_min": 128,
+        "nrows_max": 128
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.swiglu.ncols",
+            "source": "shape.swiglu.ncols"
+          },
+          {
+            "key": "@hrx2.shape.swiglu.nrows",
+            "source": "shape.swiglu.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.swiglu.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "glu_op": "SWIGLU",
+        "layout": "contiguous_split_swiglu"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "phase1.0-basket-route-slice",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "swiglu_f32_split_n768_r512_wg256",
+      "family": "swiglu_f32",
+      "op": "GLU",
+      "source_id": "swiglu_f32",
+      "artifact_id": "swiglu_f32_split_n768_r512_wg256_loombc",
+      "root_symbol": "@hrx2_swiglu_f32_split",
+      "export_name": "hrx2_swiglu_f32_split",
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 3,
+        "constant_byte_length": 0
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "swiglu_f32_split_n768_r512_wg256",
+        "ncols_min": 768,
+        "ncols_max": 768,
+        "nrows_min": 512,
+        "nrows_max": 512
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.swiglu.ncols",
+            "source": "shape.swiglu.ncols"
+          },
+          {
+            "key": "@hrx2.shape.swiglu.nrows",
+            "source": "shape.swiglu.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.swiglu.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "glu_op": "SWIGLU",
+        "layout": "contiguous_split_swiglu"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "phase1.0-basket-route-slice",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "swiglu_f32_split_n768_r8_wg256",
+      "family": "swiglu_f32",
+      "op": "GLU",
+      "source_id": "swiglu_f32",
+      "artifact_id": "swiglu_f32_split_n768_r8_wg256_loombc",
+      "root_symbol": "@hrx2_swiglu_f32_split",
+      "export_name": "hrx2_swiglu_f32_split",
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 3,
+        "constant_byte_length": 0
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "swiglu_f32_split_n768_r8_wg256",
+        "ncols_min": 768,
+        "ncols_max": 768,
+        "nrows_min": 8,
+        "nrows_max": 8
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.swiglu.ncols",
+            "source": "shape.swiglu.ncols"
+          },
+          {
+            "key": "@hrx2.shape.swiglu.nrows",
+            "source": "shape.swiglu.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.swiglu.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "glu_op": "SWIGLU",
+        "layout": "contiguous_split_swiglu"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "phase1.0-basket-route-slice",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "swiglu_f32_n8192_r16_wg256",
+      "family": "swiglu_f32",
+      "op": "GLU",
+      "source_id": "swiglu_f32",
+      "artifact_id": "swiglu_f32_n8192_r16_wg256_loombc",
+      "root_symbol": "@hrx2_swiglu_f32",
+      "export_name": "hrx2_swiglu_f32",
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 2,
+        "constant_byte_length": 0
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "swiglu_f32_n8192_r16",
+        "ncols_min": 8192,
+        "ncols_max": 8192,
+        "nrows_min": 16,
+        "nrows_max": 16
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.swiglu.ncols",
+            "source": "shape.swiglu.ncols"
+          },
+          {
+            "key": "@hrx2.shape.swiglu.nrows",
+            "source": "shape.swiglu.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.swiglu.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "packed_contiguous",
+        "glu_op": "SWIGLU",
+        "swapped": false
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "phase1_0_phi4_smoke",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "swiglu_f32_n8192_r1_wg256",
+      "family": "swiglu_f32",
+      "op": "GLU",
+      "source_id": "swiglu_f32",
+      "artifact_id": "swiglu_f32_n8192_r1_wg256_loombc",
+      "root_symbol": "@hrx2_swiglu_f32",
+      "export_name": "hrx2_swiglu_f32",
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 2,
+        "constant_byte_length": 0
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "swiglu_f32_n8192_r1",
+        "ncols_min": 8192,
+        "ncols_max": 8192,
+        "nrows_min": 1,
+        "nrows_max": 1
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.swiglu.ncols",
+            "source": "shape.swiglu.ncols"
+          },
+          {
+            "key": "@hrx2.shape.swiglu.nrows",
+            "source": "shape.swiglu.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.swiglu.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "packed_contiguous",
+        "glu_op": "SWIGLU",
+        "swapped": false
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "phase1_0_phi4_smoke",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "swiglu_f32_generic_wg256",
+      "family": "swiglu_f32",
+      "op": "GLU",
+      "source_id": "swiglu_f32",
+      "artifact_id": "swiglu_f32_generic_wg256_loombc",
+      "root_symbol": "@hrx2_swiglu_f32",
+      "export_name": "hrx2_swiglu_f32",
+      "abi": {
+        "binding_count": 2,
+        "parameter_count": 2,
+        "constant_byte_length": 0
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "swiglu_f32_generic",
+        "ncols_min": 1,
+        "ncols_max": 65536,
+        "nrows_min": 1,
+        "nrows_max": 1048576
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.swiglu.ncols",
+            "source": "shape.swiglu.ncols"
+          },
+          {
+            "key": "@hrx2.shape.swiglu.nrows",
+            "source": "shape.swiglu.nrows"
+          },
+          {
+            "key": "@hrx2.tuning.swiglu.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "F32",
+        "layout": "packed_contiguous",
+        "glu_op": "SWIGLU",
+        "swapped": false
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "phase1_0_unit_coverage",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    }
+  ]
+}

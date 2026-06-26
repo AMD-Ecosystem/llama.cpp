@@ -1,0 +1,24 @@
+{
+  "schema": "ggml-hrx-test-schedule-v1",
+  "target_key": "gfx1100",
+  "family": "argsort_f32_i32",
+  "cases": [
+    {
+      "id": "argsort_f32_i32_argsort_f32_i32_n128_r1_desc_wg128_smoke",
+      "op": "ARGSORT",
+      "expected_route_id": "argsort_f32_i32_n128_r1_desc_wg128",
+      "supports": {
+        "src0_type": "F32",
+        "dst_type": "I32",
+        "order": "DESC",
+        "layout": "contiguous_rows"
+      },
+      "shape": {
+        "ncols": 128,
+        "nrows": 1
+      },
+      "tolerance": 1e-06,
+      "repeat": 2
+    }
+  ]
+}

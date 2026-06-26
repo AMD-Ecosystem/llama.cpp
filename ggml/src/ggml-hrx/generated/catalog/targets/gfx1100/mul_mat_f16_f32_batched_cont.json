@@ -1,0 +1,223 @@
+{
+  "schema": "ggml-hrx-target-routes-v1",
+  "target_key": "gfx1100",
+  "key": "mul_mat_f16_f32_batched_cont",
+  "routes": [
+    {
+      "id": "mul_mat_f16_f32_batched_kqv_cont_decode_k768_rows2_wg64",
+      "family": "mul_mat_f16_f32_batched_cont",
+      "op": "CONT",
+      "source_id": "mul_mat_vec_f16_f32_f32_vk_clone_k768",
+      "artifact_id": "mul_mat_f16_f32_batched_kqv_cont_decode_k768_rows2_wg64_loombc",
+      "root_symbol": "@hrx2_vk_clone_mul_mat_vec_f16_f32_f32_cont",
+      "export_name": "hrx2_vk_clone_mul_mat_vec_f16_f32_f32_cont",
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 3,
+        "constant_byte_length": 0
+      },
+      "dispatch": {
+        "workgroup_size": [
+          64,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 2,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "attention_kqv_decode_k768_cont_rows2",
+        "k_min": 768,
+        "k_max": 768,
+        "rows_min": 128,
+        "rows_max": 128,
+        "cols_min": 1,
+        "cols_max": 1
+      },
+      "shape_guards": {
+        "rows_multiple_of": 2
+      },
+      "supports": {
+        "src0_type": "F16",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "layout": "decode_kqv_permute_contiguous_noalias"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "constraints": [
+        {
+          "source": "src0.ne2",
+          "eq": 1
+        },
+        {
+          "source": "src0.ne3",
+          "eq": 1
+        },
+        {
+          "source": "src1.ne2",
+          "eq": 1
+        },
+        {
+          "source": "src1.ne3",
+          "eq": 1
+        },
+        {
+          "source": "dst.ne2",
+          "eq": 1
+        },
+        {
+          "source": "dst.ne3",
+          "eq": 1
+        },
+        {
+          "source": "src0.ne0",
+          "eq_source": "src1.ne0"
+        },
+        {
+          "source": "dst.ne0",
+          "eq_source": "src0.ne1"
+        },
+        {
+          "source": "dst.ne1",
+          "eq_source": "src1.ne1"
+        }
+      ],
+      "evidence": {
+        "hrx2": {
+          "phase": "loom_dogfood_fusion_ratchet_decode_kqv_cont_probe",
+          "algorithm": "vulkan_clone_rows2_k768_matvec_writes_final_contiguous_layout",
+          "selection": "only legal when KQV_CONT output does not overlap src0/src1"
+        }
+      }
+    },
+    {
+      "id": "mul_mat_f16_f32_batched_kqv_cont_tile128_wg256",
+      "family": "mul_mat_f16_f32_batched_cont",
+      "op": "CONT",
+      "source_id": "mul_mat_f16_f32_batched",
+      "artifact_id": "mul_mat_f16_f32_batched_kqv_cont_tile128_wg256_loombc",
+      "root_symbol": "@hrx2_mul_mat_f16_f32_batched_kqv_wmma128x128_contiguous",
+      "export_name": "hrx2_mul_mat_f16_f32_batched_kqv_wmma128x128_contiguous",
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 3,
+        "constant_byte_length": 0
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 128,
+        "cols_per_workgroup": 128
+      },
+      "shape_domain": {
+        "name": "attention_kqv_p512_cont_tile128",
+        "k_min": 512,
+        "k_max": 1024,
+        "rows_min": 128,
+        "rows_max": 128,
+        "cols_min": 512,
+        "cols_max": 512
+      },
+      "shape_guards": {
+        "k_pow2": true,
+        "rows_multiple_of": 128,
+        "cols_multiple_of": 128
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.mul_mat_f16.k",
+            "source": "shape.mul_mat_f16.k"
+          },
+          {
+            "key": "@hrx2.shape.mul_mat_f16.rows",
+            "source": "shape.mul_mat_f16.rows"
+          },
+          {
+            "key": "@hrx2.shape.mul_mat_f16.cols",
+            "source": "shape.mul_mat_f16.cols"
+          },
+          {
+            "key": "@hrx2.shape.mul_mat_f16.dst_ne2",
+            "source": "shape.mul_mat_f16.dst_ne2"
+          },
+          {
+            "key": "@hrx2.shape.mul_mat_f16.dst_ne3",
+            "source": "shape.mul_mat_f16.dst_ne3"
+          },
+          {
+            "key": "@hrx2.shape.mul_mat_f16.src1_stride_col",
+            "source": "shape.mul_mat_f16.src1_stride_col"
+          },
+          {
+            "key": "@hrx2.shape.mul_mat_f16.src1_stride_ne2",
+            "source": "shape.mul_mat_f16.src1_stride_ne2"
+          },
+          {
+            "key": "@hrx2.shape.mul_mat_f16.src1_stride_ne3",
+            "source": "shape.mul_mat_f16.src1_stride_ne3"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F16",
+        "src1_type": "F32",
+        "dst_type": "F32",
+        "layout": "p512_kqv_batched_attention_permute_contiguous"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "constraints": [
+        {
+          "source": "src0.ne2",
+          "eq": 1
+        },
+        {
+          "source": "src0.ne3",
+          "eq": 1
+        },
+        {
+          "source": "src1.ne2",
+          "eq": 1
+        },
+        {
+          "source": "src1.ne3",
+          "eq": 1
+        },
+        {
+          "source": "dst.ne2",
+          "eq": 1
+        },
+        {
+          "source": "dst.ne3",
+          "eq": 1
+        },
+        {
+          "source": "src0.ne0",
+          "eq_source": "src1.ne0"
+        },
+        {
+          "source": "dst.ne0",
+          "eq_source": "src0.ne1"
+        },
+        {
+          "source": "dst.ne1",
+          "eq_source": "src1.ne1"
+        }
+      ],
+      "evidence": {
+        "hrx2": {
+          "phase": "loom_dogfood_p512_kqv_live_route_probe",
+          "algorithm": "tile128_wmma_f16xf32_f16acc_fused_permute_contiguous_store",
+          "selection": "p512_kqv_shape_only; source_only_until_artifacts_are_regenerated",
+          "ggml_cpu_reference": "f32 reference is stricter than Vulkan f16acc semantics; use model/Vulkan f16acc gate"
+        }
+      }
+    }
+  ]
+}

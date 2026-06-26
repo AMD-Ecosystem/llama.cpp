@@ -1,0 +1,394 @@
+amdgpu.target<gfx1100> @hrx2_gfx1100_wave64 {subgroup_size = 64}
+
+kernel.def target(@hrx2_gfx1100_wave64) export("hrx2_softmax_kqv_f32_f16_decode_rows2") @hrx2_softmax_kqv_f32_f16_decode_rows2() {
+  %one = index.constant 1 : index
+  %sixtyfour = index.constant 64 : index
+  %twentyfour = index.constant 24 : index
+  kernel.launch.config workgroups(%sixtyfour, %twentyfour, %one) workgroup_size(%sixtyfour, %one, %one) : index
+} launch(%scale: f32, %kq: buffer, %mask: buffer, %v: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %one = index.constant 1 : index
+  %two = index.constant 2 : index
+  %three = index.constant 3 : index
+  %sixtyfour = index.constant 64 : index
+  %onetwentyeight = index.constant 128 : index
+  %twentysix = index.constant 256 : index
+  %thirtytwok = index.constant 32768 : index
+  %zero_i32 = scalar.constant 0 : i32
+  %zero_f32 = scalar.constant 0.0 : f32
+
+  %workgroup_x0 = kernel.workgroup.id<x> : index
+  %workgroup_x = index.assume %workgroup_x0 [range(%workgroup_x0, 0, 63)] : index
+  %head0 = kernel.workgroup.id<y> : index
+  %head = index.assume %head0 [range(%head0, 0, 23)] : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 63)] : index
+  %first_row0 = index.mul %workgroup_x, %two : index
+  %first_row = index.assume %first_row0 [range(%first_row0, 0, 126), mul(%first_row0, 2)] : index
+  %second_row0 = index.add %first_row, %one : index
+  %second_row = index.assume %second_row0 [range(%second_row0, 1, 127)] : index
+  %kv_head0 = index.div %head, %three : index
+  %kv_head = index.assume %kv_head0 [range(%kv_head0, 0, 7)] : index
+
+  %kq_global = buffer.assume.memory_space<global> %kq : buffer
+  %mask_global = buffer.assume.memory_space<global> %mask : buffer
+  %v_global = buffer.assume.memory_space<global> %v : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %kq_noalias, %mask_noalias, %v_noalias, %dst_noalias = buffer.assume.noalias %kq_global, %mask_global, %v_global, %dst_global : buffer, buffer, buffer, buffer
+  %kq_view = buffer.view %kq_noalias[%base] : buffer -> view<6144xf32, #dense>
+  %mask_view = buffer.view %mask_noalias[%base] : buffer -> view<256xf32, #dense>
+  %v_view = buffer.view %v_noalias[%base] : buffer -> view<262144xf16, #dense>
+  %dst_view = buffer.view %dst_noalias[%base] : buffer -> view<3072xf32, #dense>
+
+  %head_base0 = index.mul %head, %twentysix : index
+  %head_base = index.assume %head_base0 [range(%head_base0, 0, 5888), mul(%head_base0, 256)] : index
+  %kv_base0 = index.mul %kv_head, %thirtytwok : index
+  %kv_base = index.assume %kv_base0 [range(%kv_base0, 0, 229376), mul(%kv_base0, 32768)] : index
+  %row0_base0 = index.mul %first_row, %twentysix : index
+  %row0_base = index.assume %row0_base0 [range(%row0_base0, 0, 32256), mul(%row0_base0, 512)] : index
+  %row1_base0 = index.mul %second_row, %twentysix : index
+  %row1_base = index.assume %row1_base0 [range(%row1_base0, 256, 32512), mul(%row1_base0, 256)] : index
+  %v_row0_base0 = index.add %kv_base, %row0_base : index
+  %v_row0_base = index.assume %v_row0_base0 [range(%v_row0_base0, 0, 261632)] : index
+  %v_row1_base0 = index.add %kv_base, %row1_base : index
+  %v_row1_base = index.assume %v_row1_base0 [range(%v_row1_base0, 256, 261888)] : index
+
+  %col0 = index.assume %lane [range(%lane, 0, 63)] : index
+  %col1_raw = index.add %lane, %sixtyfour : index
+  %col1 = index.assume %col1_raw [range(%col1_raw, 64, 127)] : index
+  %col2_raw = index.add %col1, %sixtyfour : index
+  %col2 = index.assume %col2_raw [range(%col2_raw, 128, 191)] : index
+  %col3_raw = index.add %col2, %sixtyfour : index
+  %col3 = index.assume %col3_raw [range(%col3_raw, 192, 255)] : index
+
+  %kq0_idx0 = index.add %head_base, %col0 : index
+  %kq0_idx = index.assume %kq0_idx0 [range(%kq0_idx0, 0, 6143)] : index
+  %kq1_idx0 = index.add %head_base, %col1 : index
+  %kq1_idx = index.assume %kq1_idx0 [range(%kq1_idx0, 0, 6143)] : index
+  %kq2_idx0 = index.add %head_base, %col2 : index
+  %kq2_idx = index.assume %kq2_idx0 [range(%kq2_idx0, 0, 6143)] : index
+  %kq3_idx0 = index.add %head_base, %col3 : index
+  %kq3_idx = index.assume %kq3_idx0 [range(%kq3_idx0, 0, 6143)] : index
+
+  %kq0 = view.load %kq_view[%kq0_idx] : view<6144xf32, #dense> -> f32
+  %kq1 = view.load %kq_view[%kq1_idx] : view<6144xf32, #dense> -> f32
+  %kq2 = view.load %kq_view[%kq2_idx] : view<6144xf32, #dense> -> f32
+  %kq3 = view.load %kq_view[%kq3_idx] : view<6144xf32, #dense> -> f32
+  %m0 = view.load %mask_view[%col0] : view<256xf32, #dense> -> f32
+  %m1 = view.load %mask_view[%col1] : view<256xf32, #dense> -> f32
+  %m2 = view.load %mask_view[%col2] : view<256xf32, #dense> -> f32
+  %m3 = view.load %mask_view[%col3] : view<256xf32, #dense> -> f32
+  %s0a = scalar.mulf<nnan|ninf|nsz> %kq0, %scale : f32
+  %s1a = scalar.mulf<nnan|ninf|nsz> %kq1, %scale : f32
+  %s2a = scalar.mulf<nnan|ninf|nsz> %kq2, %scale : f32
+  %s3a = scalar.mulf<nnan|ninf|nsz> %kq3, %scale : f32
+  %s0 = scalar.addf<nnan|ninf|nsz> %s0a, %m0 : f32
+  %s1 = scalar.addf<nnan|ninf|nsz> %s1a, %m1 : f32
+  %s2 = scalar.addf<nnan|ninf|nsz> %s2a, %m2 : f32
+  %s3 = scalar.addf<nnan|ninf|nsz> %s3a, %m3 : f32
+  %max01 = scalar.maxnumf %s0, %s1 : f32
+  %max23 = scalar.maxnumf %s2, %s3 : f32
+  %thread_max = scalar.maxnumf %max01, %max23 : f32
+  %row_max = kernel.workgroup.reduce<maxnumf> %thread_max : f32
+  %shift0 = scalar.subf<nnan|ninf|nsz> %s0, %row_max : f32
+  %shift1 = scalar.subf<nnan|ninf|nsz> %s1, %row_max : f32
+  %shift2 = scalar.subf<nnan|ninf|nsz> %s2, %row_max : f32
+  %shift3 = scalar.subf<nnan|ninf|nsz> %s3, %row_max : f32
+  %e0 = scalar.expf<afn> %shift0 : f32
+  %e1 = scalar.expf<afn> %shift1 : f32
+  %e2 = scalar.expf<afn> %shift2 : f32
+  %e3 = scalar.expf<afn> %shift3 : f32
+  %sum01 = scalar.addf<nnan|ninf|nsz> %e0, %e1 : f32
+  %sum23 = scalar.addf<nnan|ninf|nsz> %e2, %e3 : f32
+  %thread_sum = scalar.addf<nnan|ninf|nsz> %sum01, %sum23 : f32
+  %row_sum = kernel.workgroup.reduce<addf> %thread_sum : f32
+  %p0 = scalar.divf<nnan|ninf|nsz|arcp> %e0, %row_sum : f32
+  %p1 = scalar.divf<nnan|ninf|nsz|arcp> %e1, %row_sum : f32
+  %p2 = scalar.divf<nnan|ninf|nsz|arcp> %e2, %row_sum : f32
+  %p3 = scalar.divf<nnan|ninf|nsz|arcp> %e3, %row_sum : f32
+
+  %v00_idx0 = index.add %v_row0_base, %col0 : index
+  %v00_idx = index.assume %v00_idx0 [range(%v00_idx0, 0, 262143)] : index
+  %v01_idx0 = index.add %v_row0_base, %col1 : index
+  %v01_idx = index.assume %v01_idx0 [range(%v01_idx0, 0, 262143)] : index
+  %v02_idx0 = index.add %v_row0_base, %col2 : index
+  %v02_idx = index.assume %v02_idx0 [range(%v02_idx0, 0, 262143)] : index
+  %v03_idx0 = index.add %v_row0_base, %col3 : index
+  %v03_idx = index.assume %v03_idx0 [range(%v03_idx0, 0, 262143)] : index
+  %v10_idx0 = index.add %v_row1_base, %col0 : index
+  %v10_idx = index.assume %v10_idx0 [range(%v10_idx0, 0, 262143)] : index
+  %v11_idx0 = index.add %v_row1_base, %col1 : index
+  %v11_idx = index.assume %v11_idx0 [range(%v11_idx0, 0, 262143)] : index
+  %v12_idx0 = index.add %v_row1_base, %col2 : index
+  %v12_idx = index.assume %v12_idx0 [range(%v12_idx0, 0, 262143)] : index
+  %v13_idx0 = index.add %v_row1_base, %col3 : index
+  %v13_idx = index.assume %v13_idx0 [range(%v13_idx0, 0, 262143)] : index
+
+  %v00_h = view.load %v_view[%v00_idx] : view<262144xf16, #dense> -> f16
+  %v01_h = view.load %v_view[%v01_idx] : view<262144xf16, #dense> -> f16
+  %v02_h = view.load %v_view[%v02_idx] : view<262144xf16, #dense> -> f16
+  %v03_h = view.load %v_view[%v03_idx] : view<262144xf16, #dense> -> f16
+  %v10_h = view.load %v_view[%v10_idx] : view<262144xf16, #dense> -> f16
+  %v11_h = view.load %v_view[%v11_idx] : view<262144xf16, #dense> -> f16
+  %v12_h = view.load %v_view[%v12_idx] : view<262144xf16, #dense> -> f16
+  %v13_h = view.load %v_view[%v13_idx] : view<262144xf16, #dense> -> f16
+  %v00 = scalar.extf %v00_h : f16 to f32
+  %v01 = scalar.extf %v01_h : f16 to f32
+  %v02 = scalar.extf %v02_h : f16 to f32
+  %v03 = scalar.extf %v03_h : f16 to f32
+  %v10 = scalar.extf %v10_h : f16 to f32
+  %v11 = scalar.extf %v11_h : f16 to f32
+  %v12 = scalar.extf %v12_h : f16 to f32
+  %v13 = scalar.extf %v13_h : f16 to f32
+
+  %acc00 = scalar.mulf<reassoc|nnan|ninf|nsz> %v00, %p0 : f32
+  %acc01 = scalar.fmaf<reassoc|nnan|ninf|nsz> %v01, %p1, %acc00 : f32
+  %acc02 = scalar.fmaf<reassoc|nnan|ninf|nsz> %v02, %p2, %acc01 : f32
+  %acc0 = scalar.fmaf<reassoc|nnan|ninf|nsz> %v03, %p3, %acc02 : f32
+  %acc10 = scalar.mulf<reassoc|nnan|ninf|nsz> %v10, %p0 : f32
+  %acc11 = scalar.fmaf<reassoc|nnan|ninf|nsz> %v11, %p1, %acc10 : f32
+  %acc12 = scalar.fmaf<reassoc|nnan|ninf|nsz> %v12, %p2, %acc11 : f32
+  %acc1 = scalar.fmaf<reassoc|nnan|ninf|nsz> %v13, %p3, %acc12 : f32
+  %dot0 = kernel.workgroup.reduce<addf> %acc0 : f32
+  %dot1 = kernel.workgroup.reduce<addf> %acc1 : f32
+
+  %dst_head_base0 = index.mul %head, %onetwentyeight : index
+  %dst_head_base = index.assume %dst_head_base0 [range(%dst_head_base0, 0, 2944), mul(%dst_head_base0, 128)] : index
+  %dst0_idx0 = index.add %dst_head_base, %first_row : index
+  %dst0_idx = index.assume %dst0_idx0 [range(%dst0_idx0, 0, 3070)] : index
+  %dst1_idx0 = index.add %dst_head_base, %second_row : index
+  %dst1_idx = index.assume %dst1_idx0 [range(%dst1_idx0, 1, 3071)] : index
+  %lane_i32 = index.cast %lane : index to i32
+  %is_lane0 = scalar.cmpi eq, %lane_i32, %zero_i32 : i32
+  scf.if %is_lane0 {
+    view.store %dot0, %dst_view[%dst0_idx] : f32, view<3072xf32, #dense>
+    view.store %dot1, %dst_view[%dst1_idx] : f32, view<3072xf32, #dense>
+  }
+  kernel.return
+}
+
+kernel.def target(@hrx2_gfx1100_wave64) export("hrx2_softmax_kqv_f32_f16_decode_kv512_rows128_wg256") @hrx2_softmax_kqv_f32_f16_decode_kv512_rows128_wg256() {
+  %one = index.constant 1 : index
+  %twofiftysix = index.constant 256 : index
+  %twentyfour = index.constant 24 : index
+  kernel.launch.config workgroups(%one, %twentyfour, %one) workgroup_size(%twofiftysix, %one, %one) : index
+} launch(%scale: f32, %kq: buffer, %mask: buffer, %v: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %three = index.constant 3 : index
+  %onetwentyeight_rows = index.constant 128 : index
+  %twofiftysix = index.constant 256 : index
+  %onetwentyeight = index.constant 128 : index
+  %kv = index.constant 512 : index
+  %v_head_stride = index.constant 65536 : index
+  %zero_i32 = scalar.constant 0 : i32
+
+  %workgroup_x0 = kernel.workgroup.id<x> : index
+  %workgroup_x = index.assume %workgroup_x0 [range(%workgroup_x0, 0, 0)] : index
+  %head0 = kernel.workgroup.id<y> : index
+  %head = index.assume %head0 [range(%head0, 0, 23)] : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
+  %first_row0 = index.mul %workgroup_x, %onetwentyeight_rows : index
+  %first_row = index.assume %first_row0 [range(%first_row0, 0, 0), mul(%first_row0, 128)] : index
+  %kv_head0 = index.div %head, %three : index
+  %kv_head = index.assume %kv_head0 [range(%kv_head0, 0, 7)] : index
+
+  %kq_global = buffer.assume.memory_space<global> %kq : buffer
+  %mask_global = buffer.assume.memory_space<global> %mask : buffer
+  %v_global = buffer.assume.memory_space<global> %v : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %kq_noalias, %mask_noalias, %v_noalias, %dst_noalias = buffer.assume.noalias %kq_global, %mask_global, %v_global, %dst_global : buffer, buffer, buffer, buffer
+  %kq_view = buffer.view %kq_noalias[%base] : buffer -> view<12288xf32, #dense>
+  %mask_view = buffer.view %mask_noalias[%base] : buffer -> view<512xf32, #dense>
+  %v_view = buffer.view %v_noalias[%base] : buffer -> view<524288xf16, #dense>
+  %dst_view = buffer.view %dst_noalias[%base] : buffer -> view<3072xf32, #dense>
+
+  %head_base0 = index.mul %head, %kv : index
+  %head_base = index.assume %head_base0 [range(%head_base0, 0, 11776), mul(%head_base0, 512)] : index
+  %kv_base0 = index.mul %kv_head, %v_head_stride : index
+  %kv_base = index.assume %kv_base0 [range(%kv_base0, 0, 458752), mul(%kv_base0, 65536)] : index
+  %dst_head_base0 = index.mul %head, %onetwentyeight : index
+  %dst_head_base = index.assume %dst_head_base0 [range(%dst_head_base0, 0, 2944), mul(%dst_head_base0, 128)] : index
+
+  %col0 = index.assume %lane [range(%lane, 0, 255)] : index
+  %col1_raw = index.add %col0, %twofiftysix : index
+  %col1 = index.assume %col1_raw [range(%col1_raw, 256, 511)] : index
+
+  %kq0_idx0 = index.add %head_base, %col0 : index
+  %kq0_idx = index.assume %kq0_idx0 [range(%kq0_idx0, 0, 12287)] : index
+  %kq1_idx0 = index.add %head_base, %col1 : index
+  %kq1_idx = index.assume %kq1_idx0 [range(%kq1_idx0, 0, 12287)] : index
+
+  %kq0 = view.load %kq_view[%kq0_idx] : view<12288xf32, #dense> -> f32
+  %m0 = view.load %mask_view[%col0] : view<512xf32, #dense> -> f32
+  %s0a = scalar.mulf<nnan|ninf|nsz> %kq0, %scale : f32
+  %s0 = scalar.addf<nnan|ninf|nsz> %s0a, %m0 : f32
+  %kq1 = view.load %kq_view[%kq1_idx] : view<12288xf32, #dense> -> f32
+  %m1 = view.load %mask_view[%col1] : view<512xf32, #dense> -> f32
+  %s1a = scalar.mulf<nnan|ninf|nsz> %kq1, %scale : f32
+  %s1 = scalar.addf<nnan|ninf|nsz> %s1a, %m1 : f32
+  %thread_max0 = scalar.maxnumf %s0, %s1 : f32
+  %row_max = kernel.workgroup.reduce<maxnumf> %thread_max0 : f32
+  %shift0 = scalar.subf<nnan|ninf|nsz> %s0, %row_max : f32
+  %e0 = scalar.expf<afn> %shift0 : f32
+  %shift1 = scalar.subf<nnan|ninf|nsz> %s1, %row_max : f32
+  %e1 = scalar.expf<afn> %shift1 : f32
+  %thread_sum0 = scalar.addf<nnan|ninf|nsz> %e0, %e1 : f32
+  %row_sum = kernel.workgroup.reduce<addf> %thread_sum0 : f32
+  %p0 = scalar.divf<nnan|ninf|nsz|arcp> %e0, %row_sum : f32
+  %p1 = scalar.divf<nnan|ninf|nsz|arcp> %e1, %row_sum : f32
+
+  scf.for %row_offset = [%zero to %onetwentyeight_rows step %one] {
+    %row0 = index.add %first_row, %row_offset : index
+    %row = index.assume %row0 [range(%row0, 0, 127)] : index
+    %v_row_offset0 = index.mul %row, %kv : index
+    %v_row_offset = index.assume %v_row_offset0 [range(%v_row_offset0, 0, 65024), mul(%v_row_offset0, 512)] : index
+    %v_row_base0 = index.add %kv_base, %v_row_offset : index
+    %v_row_base = index.assume %v_row_base0 [range(%v_row_base0, 0, 523776)] : index
+    %v0_idx0 = index.add %v_row_base, %col0 : index
+    %v0_idx = index.assume %v0_idx0 [range(%v0_idx0, 0, 524287)] : index
+    %v1_idx0 = index.add %v_row_base, %col1 : index
+    %v1_idx = index.assume %v1_idx0 [range(%v1_idx0, 0, 524287)] : index
+
+    %v0_h = view.load %v_view[%v0_idx] : view<524288xf16, #dense> -> f16
+    %v0_f32 = scalar.extf %v0_h : f16 to f32
+    %v1_h = view.load %v_view[%v1_idx] : view<524288xf16, #dense> -> f16
+    %v1_f32 = scalar.extf %v1_h : f16 to f32
+    %acc0 = scalar.mulf<reassoc|nnan|ninf|nsz> %v0_f32, %p0 : f32
+    %acc1 = scalar.fmaf<reassoc|nnan|ninf|nsz> %v1_f32, %p1, %acc0 : f32
+    %dot = kernel.workgroup.reduce<addf> %acc1 : f32
+
+    %dst_idx0 = index.add %dst_head_base, %row : index
+    %dst_idx = index.assume %dst_idx0 [range(%dst_idx0, 0, 3071)] : index
+    %lane_i32 = index.cast %lane : index to i32
+    %is_lane0 = scalar.cmpi eq, %lane_i32, %zero_i32 : i32
+    scf.if %is_lane0 {
+      view.store %dot, %dst_view[%dst_idx] : f32, view<3072xf32, #dense>
+    }
+  }
+  kernel.return
+}
+
+kernel.def target(@hrx2_gfx1100_wave64) export("hrx2_softmax_kqv_f32_f16_decode_kv768_rows128_wg256") @hrx2_softmax_kqv_f32_f16_decode_kv768_rows128_wg256() {
+  %one = index.constant 1 : index
+  %twofiftysix = index.constant 256 : index
+  %twentyfour = index.constant 24 : index
+  kernel.launch.config workgroups(%one, %twentyfour, %one) workgroup_size(%twofiftysix, %one, %one) : index
+} launch(%scale: f32, %kq: buffer, %mask: buffer, %v: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %three = index.constant 3 : index
+  %onetwentyeight_rows = index.constant 128 : index
+  %twofiftysix = index.constant 256 : index
+  %onetwentyeight = index.constant 128 : index
+  %kv = index.constant 768 : index
+  %v_head_stride = index.constant 98304 : index
+  %zero_i32 = scalar.constant 0 : i32
+
+  %workgroup_x0 = kernel.workgroup.id<x> : index
+  %workgroup_x = index.assume %workgroup_x0 [range(%workgroup_x0, 0, 0)] : index
+  %head0 = kernel.workgroup.id<y> : index
+  %head = index.assume %head0 [range(%head0, 0, 23)] : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
+  %first_row0 = index.mul %workgroup_x, %onetwentyeight_rows : index
+  %first_row = index.assume %first_row0 [range(%first_row0, 0, 0), mul(%first_row0, 128)] : index
+  %kv_head0 = index.div %head, %three : index
+  %kv_head = index.assume %kv_head0 [range(%kv_head0, 0, 7)] : index
+
+  %kq_global = buffer.assume.memory_space<global> %kq : buffer
+  %mask_global = buffer.assume.memory_space<global> %mask : buffer
+  %v_global = buffer.assume.memory_space<global> %v : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %kq_noalias, %mask_noalias, %v_noalias, %dst_noalias = buffer.assume.noalias %kq_global, %mask_global, %v_global, %dst_global : buffer, buffer, buffer, buffer
+  %kq_view = buffer.view %kq_noalias[%base] : buffer -> view<18432xf32, #dense>
+  %mask_view = buffer.view %mask_noalias[%base] : buffer -> view<768xf32, #dense>
+  %v_view = buffer.view %v_noalias[%base] : buffer -> view<786432xf16, #dense>
+  %dst_view = buffer.view %dst_noalias[%base] : buffer -> view<3072xf32, #dense>
+
+  %head_base0 = index.mul %head, %kv : index
+  %head_base = index.assume %head_base0 [range(%head_base0, 0, 17664), mul(%head_base0, 768)] : index
+  %kv_base0 = index.mul %kv_head, %v_head_stride : index
+  %kv_base = index.assume %kv_base0 [range(%kv_base0, 0, 688128), mul(%kv_base0, 98304)] : index
+  %dst_head_base0 = index.mul %head, %onetwentyeight : index
+  %dst_head_base = index.assume %dst_head_base0 [range(%dst_head_base0, 0, 2944), mul(%dst_head_base0, 128)] : index
+
+  %col0 = index.assume %lane [range(%lane, 0, 255)] : index
+  %col1_raw = index.add %col0, %twofiftysix : index
+  %col1 = index.assume %col1_raw [range(%col1_raw, 256, 511)] : index
+  %col2_raw = index.add %col1, %twofiftysix : index
+  %col2 = index.assume %col2_raw [range(%col2_raw, 512, 767)] : index
+
+  %kq0_idx0 = index.add %head_base, %col0 : index
+  %kq0_idx = index.assume %kq0_idx0 [range(%kq0_idx0, 0, 18431)] : index
+  %kq1_idx0 = index.add %head_base, %col1 : index
+  %kq1_idx = index.assume %kq1_idx0 [range(%kq1_idx0, 0, 18431)] : index
+  %kq2_idx0 = index.add %head_base, %col2 : index
+  %kq2_idx = index.assume %kq2_idx0 [range(%kq2_idx0, 0, 18431)] : index
+
+  %kq0 = view.load %kq_view[%kq0_idx] : view<18432xf32, #dense> -> f32
+  %m0 = view.load %mask_view[%col0] : view<768xf32, #dense> -> f32
+  %s0a = scalar.mulf<nnan|ninf|nsz> %kq0, %scale : f32
+  %s0 = scalar.addf<nnan|ninf|nsz> %s0a, %m0 : f32
+  %kq1 = view.load %kq_view[%kq1_idx] : view<18432xf32, #dense> -> f32
+  %m1 = view.load %mask_view[%col1] : view<768xf32, #dense> -> f32
+  %s1a = scalar.mulf<nnan|ninf|nsz> %kq1, %scale : f32
+  %s1 = scalar.addf<nnan|ninf|nsz> %s1a, %m1 : f32
+  %kq2 = view.load %kq_view[%kq2_idx] : view<18432xf32, #dense> -> f32
+  %m2 = view.load %mask_view[%col2] : view<768xf32, #dense> -> f32
+  %s2a = scalar.mulf<nnan|ninf|nsz> %kq2, %scale : f32
+  %s2 = scalar.addf<nnan|ninf|nsz> %s2a, %m2 : f32
+  %thread_max0 = scalar.maxnumf %s0, %s1 : f32
+  %thread_max1 = scalar.maxnumf %thread_max0, %s2 : f32
+  %row_max = kernel.workgroup.reduce<maxnumf> %thread_max1 : f32
+  %shift0 = scalar.subf<nnan|ninf|nsz> %s0, %row_max : f32
+  %e0 = scalar.expf<afn> %shift0 : f32
+  %shift1 = scalar.subf<nnan|ninf|nsz> %s1, %row_max : f32
+  %e1 = scalar.expf<afn> %shift1 : f32
+  %shift2 = scalar.subf<nnan|ninf|nsz> %s2, %row_max : f32
+  %e2 = scalar.expf<afn> %shift2 : f32
+  %thread_sum0 = scalar.addf<nnan|ninf|nsz> %e0, %e1 : f32
+  %thread_sum1 = scalar.addf<nnan|ninf|nsz> %thread_sum0, %e2 : f32
+  %row_sum = kernel.workgroup.reduce<addf> %thread_sum1 : f32
+  %p0 = scalar.divf<nnan|ninf|nsz|arcp> %e0, %row_sum : f32
+  %p1 = scalar.divf<nnan|ninf|nsz|arcp> %e1, %row_sum : f32
+  %p2 = scalar.divf<nnan|ninf|nsz|arcp> %e2, %row_sum : f32
+
+  scf.for %row_offset = [%zero to %onetwentyeight_rows step %one] {
+    %row0 = index.add %first_row, %row_offset : index
+    %row = index.assume %row0 [range(%row0, 0, 127)] : index
+    %v_row_offset0 = index.mul %row, %kv : index
+    %v_row_offset = index.assume %v_row_offset0 [range(%v_row_offset0, 0, 97536), mul(%v_row_offset0, 768)] : index
+    %v_row_base0 = index.add %kv_base, %v_row_offset : index
+    %v_row_base = index.assume %v_row_base0 [range(%v_row_base0, 0, 785664)] : index
+    %v0_idx0 = index.add %v_row_base, %col0 : index
+    %v0_idx = index.assume %v0_idx0 [range(%v0_idx0, 0, 786431)] : index
+    %v1_idx0 = index.add %v_row_base, %col1 : index
+    %v1_idx = index.assume %v1_idx0 [range(%v1_idx0, 0, 786431)] : index
+    %v2_idx0 = index.add %v_row_base, %col2 : index
+    %v2_idx = index.assume %v2_idx0 [range(%v2_idx0, 0, 786431)] : index
+
+    %v0_h = view.load %v_view[%v0_idx] : view<786432xf16, #dense> -> f16
+    %v0_f32 = scalar.extf %v0_h : f16 to f32
+    %v1_h = view.load %v_view[%v1_idx] : view<786432xf16, #dense> -> f16
+    %v1_f32 = scalar.extf %v1_h : f16 to f32
+    %v2_h = view.load %v_view[%v2_idx] : view<786432xf16, #dense> -> f16
+    %v2_f32 = scalar.extf %v2_h : f16 to f32
+    %acc0 = scalar.mulf<reassoc|nnan|ninf|nsz> %v0_f32, %p0 : f32
+    %acc1 = scalar.fmaf<reassoc|nnan|ninf|nsz> %v1_f32, %p1, %acc0 : f32
+    %acc2 = scalar.fmaf<reassoc|nnan|ninf|nsz> %v2_f32, %p2, %acc1 : f32
+    %dot = kernel.workgroup.reduce<addf> %acc2 : f32
+
+    %dst_idx0 = index.add %dst_head_base, %row : index
+    %dst_idx = index.assume %dst_idx0 [range(%dst_idx0, 0, 3071)] : index
+    %lane_i32 = index.cast %lane : index to i32
+    %is_lane0 = scalar.cmpi eq, %lane_i32, %zero_i32 : i32
+    scf.if %is_lane0 {
+      view.store %dot, %dst_view[%dst_idx] : f32, view<3072xf32, #dense>
+    }
+  }
+  kernel.return
+}

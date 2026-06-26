@@ -1,0 +1,54 @@
+{
+  "schema": "ggml-hrx-target-routes-v1",
+  "target_key": "gfx1100",
+  "key": "rms_norm_mul_quantize_q8_1_f32",
+  "routes": [
+    {
+      "id": "rms_norm_mul_quantize_q8_1_x4_f32_n3072_r1_recompute_wg32",
+      "family": "rms_norm_mul_quantize_q8_1_f32",
+      "op": "QUANTIZE",
+      "source_id": "rms_norm_mul_quantize_q8_1_f32",
+      "artifact_id": "rms_norm_mul_quantize_q8_1_x4_f32_n3072_r1_recompute_wg32_loombc",
+      "root_symbol": "@hrx2_rms_norm_mul_quantize_q8_1_x4_f32_recompute",
+      "export_name": "hrx2_rms_norm_mul_quantize_q8_1_x4_f32_recompute",
+      "abi": {
+        "binding_count": 3,
+        "parameter_count": 4,
+        "constant_byte_length": 4
+      },
+      "dispatch": {
+        "workgroup_size": [
+          32,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "rms_norm_mul_quantize_q8_1_x4_f32_n3072_r1",
+        "ncols_min": 3072,
+        "ncols_max": 3072,
+        "nrows_min": 1,
+        "nrows_max": 1
+      },
+      "supports": {
+        "src0_type": "F32",
+        "weight_type": "F32",
+        "dst_type": "Q8_1_X4",
+        "layout": "decode_rhs_rms_norm_mul_to_q8_1_x4"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "fusion-ratchet-20260620-rms-quantize",
+          "algorithm": "recompute RMS scale inside q8_1_x4 staging and skip materialized F32 RMS_NORM_MUL output",
+          "route_free_split_p50_ns": 3294,
+          "route_free_fused_p50_ns": 2281,
+          "ggml_cpu_reference": "required"
+        }
+      }
+    }
+  ]
+}

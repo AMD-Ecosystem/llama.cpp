@@ -1,0 +1,62 @@
+{
+  "schema": "ggml-hrx-kernel-def-v1",
+  "family": "mul_f32",
+  "op": "MUL",
+  "sources": {
+    "pointwise_f32": {
+      "path": "kernels/pointwise_f32.loom",
+      "sha256": "ee448f3f69b87471794038d652a52b938601d75dd679098fb80145744ac19d1e"
+    }
+  },
+  "artifacts": {
+    "mul_f32_contiguous_2d_r64_1048576_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "pointwise_f32",
+      "root_symbol": "@hrx2_mul_f32_contiguous_2d",
+      "path": "artifacts/mul_f32_contiguous_2d_r64_1048576_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "mul_f32_rhs_row_broadcast_2d_r64_1048576_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "pointwise_f32",
+      "root_symbol": "@hrx2_mul_f32_rhs_row_broadcast_2d",
+      "path": "artifacts/mul_f32_rhs_row_broadcast_2d_r64_1048576_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "mul_f32_n2048_r128_rhscolbroadcast_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "pointwise_f32",
+      "root_symbol": "@hrx2_mul_f32",
+      "path": "artifacts/mul_f32_n2048_r128_rhscolbroadcast_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "mul_f32_n2048_r8_rhscolbroadcast_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "pointwise_f32",
+      "root_symbol": "@hrx2_mul_f32",
+      "path": "artifacts/mul_f32_n2048_r8_rhscolbroadcast_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "mul_f32_n3072_r16_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "pointwise_f32",
+      "root_symbol": "@hrx2_mul_f32",
+      "path": "artifacts/mul_f32_n3072_r16_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "mul_f32_n3072_r1_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "pointwise_f32",
+      "root_symbol": "@hrx2_mul_f32",
+      "path": "artifacts/mul_f32_n3072_r1_wg256_loombc.loombc",
+      "storage": "embedded"
+    },
+    "mul_f32_generic_wg256_loombc": {
+      "format": "loom-bytecode",
+      "source_id": "pointwise_f32",
+      "root_symbol": "@hrx2_mul_f32",
+      "path": "artifacts/mul_f32_generic_wg256_loombc.loombc",
+      "storage": "embedded"
+    }
+  }
+}

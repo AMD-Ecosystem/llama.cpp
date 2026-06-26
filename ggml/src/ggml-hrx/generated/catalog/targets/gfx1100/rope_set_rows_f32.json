@@ -1,0 +1,495 @@
+{
+  "schema": "ggml-hrx-target-routes-v1",
+  "target_key": "gfx1100",
+  "key": "rope_set_rows_f32",
+  "routes": [
+    {
+      "id": "rope_neox_f32_freq_set_rows_f16_n128_d96_h24_t1_512_wg256",
+      "family": "rope_set_rows_f32",
+      "op": "SET_ROWS",
+      "source_id": "rope_set_rows_f32",
+      "artifact_id": "rope_neox_f32_freq_set_rows_f16_n128_d96_h24_t1_512_wg256_loombc",
+      "root_symbol": "@hrx2_rope_neox_f32_freq_set_rows_f16",
+      "export_name": "hrx2_rope_neox_f32_freq_set_rows_f16",
+      "abi": {
+        "binding_count": 5,
+        "parameter_count": 8,
+        "constant_byte_length": 12
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "rope_neox_f32_freq_set_rows_f16_n128_d96_h24_t1_512_wg256",
+        "ncols_min": 128,
+        "ncols_max": 128,
+        "n_dims_min": 96,
+        "n_dims_max": 96,
+        "nrows_min": 24,
+        "nrows_max": 12288,
+        "rows_min": 24,
+        "rows_max": 24,
+        "cols_min": 1,
+        "cols_max": 512
+      },
+      "shape_guards": {
+        "ncols_multiple_of": 2
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.rope.ncols",
+            "source": "shape.rope.ncols"
+          },
+          {
+            "key": "@hrx2.shape.rope.n_dims",
+            "source": "shape.rope.n_dims"
+          },
+          {
+            "key": "@hrx2.shape.rope.nheads",
+            "source": "shape.rope.nheads"
+          },
+          {
+            "key": "@hrx2.shape.rope.ntokens",
+            "source": "shape.rope.ntokens"
+          },
+          {
+            "key": "@hrx2.shape.rope.src0_head_stride",
+            "source": "shape.rope.src0_head_stride"
+          },
+          {
+            "key": "@hrx2.shape.rope.src0_token_stride",
+            "source": "shape.rope.src0_token_stride"
+          },
+          {
+            "key": "@hrx2.shape.rope.pos_token_stride",
+            "source": "shape.rope.pos_token_stride"
+          },
+          {
+            "key": "@hrx2.shape.set_rows.ne1",
+            "source": "shape.set_rows.ne1"
+          },
+          {
+            "key": "@hrx2.stride.set_rows.idx_nb0",
+            "source": "shape.set_rows.idx_nb0"
+          },
+          {
+            "key": "@hrx2.stride.set_rows.idx_nb1",
+            "source": "shape.set_rows.idx_nb1"
+          },
+          {
+            "key": "@hrx2.stride.set_rows.idx_nb2",
+            "source": "shape.set_rows.idx_nb2"
+          },
+          {
+            "key": "@hrx2.stride.set_rows.dst_nb1",
+            "source": "shape.set_rows.dst_nb1"
+          },
+          {
+            "key": "@hrx2.tuning.rope_set_rows.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "I32",
+        "dst_type": "F16",
+        "mode": "NEOX",
+        "freq_factor": "present",
+        "ext_factor": "0",
+        "layout": "rope-view-set-rows-f16"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "phase2a-fusion-preflight",
+          "selection": "Phi decode traces show NEOX d96 h24 route",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "rope_neox_f32_freq_set_rows_f16_n128_d96_h8_t1_512_wg256",
+      "family": "rope_set_rows_f32",
+      "op": "SET_ROWS",
+      "source_id": "rope_set_rows_f32",
+      "artifact_id": "rope_neox_f32_freq_set_rows_f16_n128_d96_h8_t1_512_wg256_loombc",
+      "root_symbol": "@hrx2_rope_neox_f32_freq_set_rows_f16",
+      "export_name": "hrx2_rope_neox_f32_freq_set_rows_f16",
+      "abi": {
+        "binding_count": 5,
+        "parameter_count": 8,
+        "constant_byte_length": 12
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "rope_neox_f32_freq_set_rows_f16_n128_d96_h8_t1_512_wg256",
+        "ncols_min": 128,
+        "ncols_max": 128,
+        "n_dims_min": 96,
+        "n_dims_max": 96,
+        "nrows_min": 8,
+        "nrows_max": 4096,
+        "rows_min": 8,
+        "rows_max": 8,
+        "cols_min": 1,
+        "cols_max": 512
+      },
+      "shape_guards": {
+        "ncols_multiple_of": 2
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.rope.ncols",
+            "source": "shape.rope.ncols"
+          },
+          {
+            "key": "@hrx2.shape.rope.n_dims",
+            "source": "shape.rope.n_dims"
+          },
+          {
+            "key": "@hrx2.shape.rope.nheads",
+            "source": "shape.rope.nheads"
+          },
+          {
+            "key": "@hrx2.shape.rope.ntokens",
+            "source": "shape.rope.ntokens"
+          },
+          {
+            "key": "@hrx2.shape.rope.src0_head_stride",
+            "source": "shape.rope.src0_head_stride"
+          },
+          {
+            "key": "@hrx2.shape.rope.src0_token_stride",
+            "source": "shape.rope.src0_token_stride"
+          },
+          {
+            "key": "@hrx2.shape.rope.pos_token_stride",
+            "source": "shape.rope.pos_token_stride"
+          },
+          {
+            "key": "@hrx2.shape.set_rows.ne1",
+            "source": "shape.set_rows.ne1"
+          },
+          {
+            "key": "@hrx2.stride.set_rows.idx_nb0",
+            "source": "shape.set_rows.idx_nb0"
+          },
+          {
+            "key": "@hrx2.stride.set_rows.idx_nb1",
+            "source": "shape.set_rows.idx_nb1"
+          },
+          {
+            "key": "@hrx2.stride.set_rows.idx_nb2",
+            "source": "shape.set_rows.idx_nb2"
+          },
+          {
+            "key": "@hrx2.stride.set_rows.dst_nb1",
+            "source": "shape.set_rows.dst_nb1"
+          },
+          {
+            "key": "@hrx2.tuning.rope_set_rows.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "I32",
+        "dst_type": "F16",
+        "mode": "NEOX",
+        "freq_factor": "present",
+        "ext_factor": "0",
+        "layout": "rope-view-set-rows-f16"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "phase2a-fusion-preflight",
+          "selection": "Phi decode traces show NEOX d96 h8 route",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "rope_normal_f32_freq_set_rows_f16_n128_d128_h32_t1_512_wg256",
+      "family": "rope_set_rows_f32",
+      "op": "SET_ROWS",
+      "source_id": "rope_set_rows_f32",
+      "artifact_id": "rope_normal_f32_freq_set_rows_f16_n128_d128_h32_t1_512_wg256_loombc",
+      "root_symbol": "@hrx2_rope_normal_f32_freq_set_rows_f16",
+      "export_name": "hrx2_rope_normal_f32_freq_set_rows_f16",
+      "abi": {
+        "binding_count": 5,
+        "parameter_count": 8,
+        "constant_byte_length": 12
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "rope_normal_f32_freq_set_rows_f16_n128_d128_h32_t1_512_wg256",
+        "ncols_min": 128,
+        "ncols_max": 128,
+        "n_dims_min": 128,
+        "n_dims_max": 128,
+        "nrows_min": 32,
+        "nrows_max": 16384,
+        "rows_min": 32,
+        "rows_max": 32,
+        "cols_min": 1,
+        "cols_max": 512
+      },
+      "shape_guards": {
+        "ncols_multiple_of": 2
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.rope.ncols",
+            "source": "shape.rope.ncols"
+          },
+          {
+            "key": "@hrx2.shape.rope.n_dims",
+            "source": "shape.rope.n_dims"
+          },
+          {
+            "key": "@hrx2.shape.rope.nheads",
+            "source": "shape.rope.nheads"
+          },
+          {
+            "key": "@hrx2.shape.rope.ntokens",
+            "source": "shape.rope.ntokens"
+          },
+          {
+            "key": "@hrx2.shape.rope.src0_head_stride",
+            "source": "shape.rope.src0_head_stride"
+          },
+          {
+            "key": "@hrx2.shape.rope.src0_token_stride",
+            "source": "shape.rope.src0_token_stride"
+          },
+          {
+            "key": "@hrx2.shape.rope.pos_token_stride",
+            "source": "shape.rope.pos_token_stride"
+          },
+          {
+            "key": "@hrx2.shape.set_rows.ne1",
+            "source": "shape.set_rows.ne1"
+          },
+          {
+            "key": "@hrx2.shape.set_rows.ne11",
+            "source": "shape.set_rows.ne11"
+          },
+          {
+            "key": "@hrx2.shape.set_rows.ne12",
+            "source": "shape.set_rows.ne12"
+          },
+          {
+            "key": "@hrx2.stride.set_rows.idx_nb0",
+            "source": "shape.set_rows.idx_nb0"
+          },
+          {
+            "key": "@hrx2.stride.set_rows.idx_nb1",
+            "source": "shape.set_rows.idx_nb1"
+          },
+          {
+            "key": "@hrx2.stride.set_rows.idx_nb2",
+            "source": "shape.set_rows.idx_nb2"
+          },
+          {
+            "key": "@hrx2.stride.set_rows.dst_nb1",
+            "source": "shape.set_rows.dst_nb1"
+          },
+          {
+            "key": "@hrx2.stride.set_rows.dst_nb2",
+            "source": "shape.set_rows.dst_nb2"
+          },
+          {
+            "key": "@hrx2.stride.set_rows.dst_nb3",
+            "source": "shape.set_rows.dst_nb3"
+          },
+          {
+            "key": "@hrx2.tuning.rope_set_rows.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "I32",
+        "dst_type": "F16",
+        "mode": "NORMAL",
+        "freq_factor": "present",
+        "ext_factor": "0",
+        "layout": "rope-view-set-rows-f16"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "phase2a-fusion-preflight",
+          "selection": "decode traces show ROPE->VIEW->SET_ROWS pairs on Llama/Phi basket",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    },
+    {
+      "id": "rope_normal_f32_freq_set_rows_f16_n128_d128_h8_24_t1_512_wg256",
+      "family": "rope_set_rows_f32",
+      "op": "SET_ROWS",
+      "source_id": "rope_set_rows_f32",
+      "artifact_id": "rope_normal_f32_freq_set_rows_f16_n128_d128_h8_24_t1_512_wg256_loombc",
+      "root_symbol": "@hrx2_rope_normal_f32_freq_set_rows_f16",
+      "export_name": "hrx2_rope_normal_f32_freq_set_rows_f16",
+      "abi": {
+        "binding_count": 5,
+        "parameter_count": 8,
+        "constant_byte_length": 12
+      },
+      "dispatch": {
+        "workgroup_size": [
+          256,
+          1,
+          1
+        ],
+        "rows_per_workgroup": 1,
+        "cols_per_workgroup": 1
+      },
+      "shape_domain": {
+        "name": "rope_normal_f32_freq_set_rows_f16_n128_d128_h8_24_t1_512_wg256",
+        "ncols_min": 128,
+        "ncols_max": 128,
+        "n_dims_min": 128,
+        "n_dims_max": 128,
+        "nrows_min": 8,
+        "nrows_max": 12288,
+        "rows_min": 8,
+        "rows_max": 24,
+        "cols_min": 1,
+        "cols_max": 512
+      },
+      "shape_guards": {
+        "ncols_multiple_of": 2
+      },
+      "specialization": {
+        "mode": "jit_config",
+        "bindings": [
+          {
+            "key": "@hrx2.shape.rope.ncols",
+            "source": "shape.rope.ncols"
+          },
+          {
+            "key": "@hrx2.shape.rope.n_dims",
+            "source": "shape.rope.n_dims"
+          },
+          {
+            "key": "@hrx2.shape.rope.nheads",
+            "source": "shape.rope.nheads"
+          },
+          {
+            "key": "@hrx2.shape.rope.ntokens",
+            "source": "shape.rope.ntokens"
+          },
+          {
+            "key": "@hrx2.shape.rope.src0_head_stride",
+            "source": "shape.rope.src0_head_stride"
+          },
+          {
+            "key": "@hrx2.shape.rope.src0_token_stride",
+            "source": "shape.rope.src0_token_stride"
+          },
+          {
+            "key": "@hrx2.shape.rope.pos_token_stride",
+            "source": "shape.rope.pos_token_stride"
+          },
+          {
+            "key": "@hrx2.shape.set_rows.ne1",
+            "source": "shape.set_rows.ne1"
+          },
+          {
+            "key": "@hrx2.shape.set_rows.ne11",
+            "source": "shape.set_rows.ne11"
+          },
+          {
+            "key": "@hrx2.shape.set_rows.ne12",
+            "source": "shape.set_rows.ne12"
+          },
+          {
+            "key": "@hrx2.stride.set_rows.idx_nb0",
+            "source": "shape.set_rows.idx_nb0"
+          },
+          {
+            "key": "@hrx2.stride.set_rows.idx_nb1",
+            "source": "shape.set_rows.idx_nb1"
+          },
+          {
+            "key": "@hrx2.stride.set_rows.idx_nb2",
+            "source": "shape.set_rows.idx_nb2"
+          },
+          {
+            "key": "@hrx2.stride.set_rows.dst_nb1",
+            "source": "shape.set_rows.dst_nb1"
+          },
+          {
+            "key": "@hrx2.stride.set_rows.dst_nb2",
+            "source": "shape.set_rows.dst_nb2"
+          },
+          {
+            "key": "@hrx2.stride.set_rows.dst_nb3",
+            "source": "shape.set_rows.dst_nb3"
+          },
+          {
+            "key": "@hrx2.tuning.rope_set_rows.workgroup_size",
+            "value": "256"
+          }
+        ]
+      },
+      "supports": {
+        "src0_type": "F32",
+        "src1_type": "I32",
+        "dst_type": "F16",
+        "mode": "NORMAL",
+        "freq_factor": "present",
+        "ext_factor": "0",
+        "layout": "rope-view-set-rows-f16"
+      },
+      "target_key": "gfx1100",
+      "loader_format": "amdgpu-hsaco",
+      "evidence": {
+        "hrx2": {
+          "phase": "phase2a-fusion-preflight",
+          "selection": "decode traces show ROPE->VIEW->SET_ROWS pairs on Llama/Phi basket",
+          "ggml_cpu_reference": "required"
+        }
+      }
+    }
+  ]
+}

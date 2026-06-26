@@ -1,0 +1,475 @@
+config.decl @hrx2.shape.soft_max.ncols : %value: index where [range(%value, 1, 4096)]
+config.decl @hrx2.shape.soft_max.nrows : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2.shape.soft_max.ne01 : %value: index where [range(%value, 1, 4096)]
+config.decl @hrx2.shape.soft_max.ne02 : %value: index where [range(%value, 1, 4096)]
+config.decl @hrx2.shape.soft_max.mask_nb1 : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2.shape.soft_max.mask_nb2 : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2.shape.soft_max.mask_nb3 : %value: index where [range(%value, 1, 1048576)]
+config.decl @hrx2.shape.soft_max.mask_ne1 : %value: index where [range(%value, 1, 4096)]
+config.decl @hrx2.shape.soft_max.mask_ne2 : %value: index where [range(%value, 1, 4096)]
+config.decl @hrx2.shape.soft_max.mask_ne3 : %value: index where [range(%value, 1, 4096)]
+config.decl @hrx2.tuning.soft_max.workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+
+amdgpu.target<gfx1100> @hrx2_softmax_gfx1100_wave64 {subgroup_size = 64}
+
+kernel.def export("hrx2_soft_max_f32") @hrx2_soft_max_f32() {
+  %unit = index.constant 1 : index
+  %nrows = config.get @hrx2.shape.soft_max.nrows : index
+  %workgroup_size = config.get @hrx2.tuning.soft_max.workgroup_size : index
+  kernel.launch.config workgroups(%nrows, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%scale: f32, %src0: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %ncols = config.get @hrx2.shape.soft_max.ncols : index
+  %nrows = config.get @hrx2.shape.soft_max.nrows : index
+  %workgroup_size = config.get @hrx2.tuning.soft_max.workgroup_size : index
+  %ncols_bounded = index.assume %ncols [range(%ncols, 1, 4096)] : index
+  %nrows_bounded = index.assume %nrows [range(%nrows, 1, 1048576)] : index
+  %row0 = kernel.workgroup.id<x> : index
+  %row = index.assume %row0 [range(%row0, 0, 1048575)] : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+  %minus_inf = scalar.constant -3.4028234663852886e+38 : f32
+  %zero_f32 = scalar.constant 0.0 : f32
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_noalias, %dst_noalias = buffer.assume.noalias %src0_global, %dst_global : buffer, buffer
+  %src0_view = buffer.view %src0_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+  %dst_view = buffer.view %dst_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+
+  %row_offset0 = index.mul %row, %ncols_bounded : index
+  %row_offset = index.assume %row_offset0 [range(%row_offset0, 0, 1073741823)] : index
+  %col_in_bounds = index.cmp ult, %lane, %ncols_bounded : index
+  %input_value = scf.if %col_in_bounds -> (f32) {
+    %idx0 = index.add %row_offset, %lane : index
+    %idx = index.assume %idx0 [range(%idx0, 0, 1073741823)] : index
+    %x = view.load %src0_view[%idx] : view<1073741824xf32, #dense> -> f32
+    %scaled = scalar.mulf<nnan|ninf|nsz> %x, %scale : f32
+    scf.yield %scaled : f32
+  } else {
+    scf.yield %minus_inf : f32
+  }
+
+  %row_max = kernel.workgroup.reduce<maxnumf> %input_value : f32
+  %shifted = scalar.subf<nnan|ninf|nsz> %input_value, %row_max : f32
+  %exp_value = scf.if %col_in_bounds -> (f32) {
+    %exp0 = scalar.expf<afn> %shifted : f32
+    scf.yield %exp0 : f32
+  } else {
+    scf.yield %zero_f32 : f32
+  }
+  %row_sum = kernel.workgroup.reduce<addf> %exp_value : f32
+  %norm = scalar.divf<nnan|ninf|nsz|arcp> %exp_value, %row_sum : f32
+  scf.if %col_in_bounds {
+    %idx0 = index.add %row_offset, %lane : index
+    %idx = index.assume %idx0 [range(%idx0, 0, 1073741823)] : index
+    view.store %norm, %dst_view[%idx] : f32, view<1073741824xf32, #dense>
+  }
+  kernel.return
+}
+
+kernel.def target(@hrx2_softmax_gfx1100_wave64) export("hrx2_soft_max_f32_mask_n256_wg64_lanes4") @hrx2_soft_max_f32_mask_n256_wg64_lanes4() {
+  %unit = index.constant 1 : index
+  %nrows = config.get @hrx2.shape.soft_max.nrows : index
+  %workgroup_size = config.get @hrx2.tuning.soft_max.workgroup_size : index
+  kernel.launch.config workgroups(%nrows, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%scale: f32, %src0: buffer, %mask: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %sixty_four = index.constant 64 : index
+  %one_twenty_eight = index.constant 128 : index
+  %one_ninety_two = index.constant 192 : index
+  %two_fifty_six = index.constant 256 : index
+  %ne01 = config.get @hrx2.shape.soft_max.ne01 : index
+  %ne02 = config.get @hrx2.shape.soft_max.ne02 : index
+  %mask_nb1 = config.get @hrx2.shape.soft_max.mask_nb1 : index
+  %mask_nb2 = config.get @hrx2.shape.soft_max.mask_nb2 : index
+  %mask_nb3 = config.get @hrx2.shape.soft_max.mask_nb3 : index
+  %mask_ne1 = config.get @hrx2.shape.soft_max.mask_ne1 : index
+  %mask_ne2 = config.get @hrx2.shape.soft_max.mask_ne2 : index
+  %mask_ne3 = config.get @hrx2.shape.soft_max.mask_ne3 : index
+  %ne01_bounded = index.assume %ne01 [range(%ne01, 1, 4096)] : index
+  %ne02_bounded = index.assume %ne02 [range(%ne02, 1, 4096)] : index
+  %mask_nb1_bounded = index.assume %mask_nb1 [range(%mask_nb1, 1, 1048576)] : index
+  %mask_nb2_bounded = index.assume %mask_nb2 [range(%mask_nb2, 1, 1048576)] : index
+  %mask_nb3_bounded = index.assume %mask_nb3 [range(%mask_nb3, 1, 1048576)] : index
+  %mask_ne1_bounded = index.assume %mask_ne1 [range(%mask_ne1, 1, 4096)] : index
+  %mask_ne2_bounded = index.assume %mask_ne2 [range(%mask_ne2, 1, 4096)] : index
+  %mask_ne3_bounded = index.assume %mask_ne3 [range(%mask_ne3, 1, 4096)] : index
+  %row0 = kernel.workgroup.id<x> : index
+  %row = index.assume %row0 [range(%row0, 0, 1535)] : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 63)] : index
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %mask_global = buffer.assume.memory_space<global> %mask : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_noalias, %mask_noalias, %dst_noalias = buffer.assume.noalias %src0_global, %mask_global, %dst_global : buffer, buffer, buffer
+  %src0_view = buffer.view %src0_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+  %mask_view = buffer.view %mask_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+  %dst_view = buffer.view %dst_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+
+  %row_offset0 = index.mul %row, %two_fifty_six : index
+  %row_offset = index.assume %row_offset0 [range(%row_offset0, 0, 393215), mul(%row_offset0, 256)] : index
+  %i01 = index.rem %row, %ne01_bounded : index
+  %row_div_ne01 = index.div %row, %ne01_bounded : index
+  %i02 = index.rem %row_div_ne01, %ne02_bounded : index
+  %row_div_ne010 = index.mul %ne01_bounded, %ne02_bounded : index
+  %row_div_ne01ne02 = index.div %row, %row_div_ne010 : index
+  %i03 = index.assume %row_div_ne01ne02 [range(%row_div_ne01ne02, 0, 1023)] : index
+  %mask_i01 = index.rem %i01, %mask_ne1_bounded : index
+  %mask_i02 = index.rem %i02, %mask_ne2_bounded : index
+  %mask_i03 = index.rem %i03, %mask_ne3_bounded : index
+  %mask_base1 = index.mul %mask_i01, %mask_nb1_bounded : index
+  %mask_base2 = index.mul %mask_i02, %mask_nb2_bounded : index
+  %mask_base12 = index.add %mask_base1, %mask_base2 : index
+  %mask_base3 = index.mul %mask_i03, %mask_nb3_bounded : index
+  %mask_base0 = index.add %mask_base12, %mask_base3 : index
+  %mask_base = index.assume %mask_base0 [range(%mask_base0, 0, 1048575)] : index
+
+  %col0 = index.add %lane, %zero : index
+  %col1 = index.add %lane, %sixty_four : index
+  %col2 = index.add %lane, %one_twenty_eight : index
+  %col3 = index.add %lane, %one_ninety_two : index
+  %idx00 = index.add %row_offset, %col0 : index
+  %idx10 = index.add %row_offset, %col1 : index
+  %idx20 = index.add %row_offset, %col2 : index
+  %idx30 = index.add %row_offset, %col3 : index
+  %idx0 = index.assume %idx00 [range(%idx00, 0, 393215)] : index
+  %idx1 = index.assume %idx10 [range(%idx10, 0, 393215)] : index
+  %idx2 = index.assume %idx20 [range(%idx20, 0, 393215)] : index
+  %idx3 = index.assume %idx30 [range(%idx30, 0, 393215)] : index
+  %mask_idx00 = index.add %mask_base, %col0 : index
+  %mask_idx10 = index.add %mask_base, %col1 : index
+  %mask_idx20 = index.add %mask_base, %col2 : index
+  %mask_idx30 = index.add %mask_base, %col3 : index
+  %mask_idx0 = index.assume %mask_idx00 [range(%mask_idx00, 0, 1048575)] : index
+  %mask_idx1 = index.assume %mask_idx10 [range(%mask_idx10, 0, 1048575)] : index
+  %mask_idx2 = index.assume %mask_idx20 [range(%mask_idx20, 0, 1048575)] : index
+  %mask_idx3 = index.assume %mask_idx30 [range(%mask_idx30, 0, 1048575)] : index
+
+  %x0 = view.load %src0_view[%idx0] : view<1073741824xf32, #dense> -> f32
+  %x1 = view.load %src0_view[%idx1] : view<1073741824xf32, #dense> -> f32
+  %x2 = view.load %src0_view[%idx2] : view<1073741824xf32, #dense> -> f32
+  %x3 = view.load %src0_view[%idx3] : view<1073741824xf32, #dense> -> f32
+  %m0 = view.load %mask_view[%mask_idx0] : view<1073741824xf32, #dense> -> f32
+  %m1 = view.load %mask_view[%mask_idx1] : view<1073741824xf32, #dense> -> f32
+  %m2 = view.load %mask_view[%mask_idx2] : view<1073741824xf32, #dense> -> f32
+  %m3 = view.load %mask_view[%mask_idx3] : view<1073741824xf32, #dense> -> f32
+  %scaled0 = scalar.mulf<nnan|ninf|nsz> %x0, %scale : f32
+  %scaled1 = scalar.mulf<nnan|ninf|nsz> %x1, %scale : f32
+  %scaled2 = scalar.mulf<nnan|ninf|nsz> %x2, %scale : f32
+  %scaled3 = scalar.mulf<nnan|ninf|nsz> %x3, %scale : f32
+  %biased0 = scalar.addf<nnan|ninf|nsz> %scaled0, %m0 : f32
+  %biased1 = scalar.addf<nnan|ninf|nsz> %scaled1, %m1 : f32
+  %biased2 = scalar.addf<nnan|ninf|nsz> %scaled2, %m2 : f32
+  %biased3 = scalar.addf<nnan|ninf|nsz> %scaled3, %m3 : f32
+
+  %max01 = scalar.maxnumf %biased0, %biased1 : f32
+  %max23 = scalar.maxnumf %biased2, %biased3 : f32
+  %thread_max = scalar.maxnumf %max01, %max23 : f32
+  %row_max = kernel.workgroup.reduce<maxnumf> %thread_max : f32
+  %shifted0 = scalar.subf<nnan|ninf|nsz> %biased0, %row_max : f32
+  %shifted1 = scalar.subf<nnan|ninf|nsz> %biased1, %row_max : f32
+  %shifted2 = scalar.subf<nnan|ninf|nsz> %biased2, %row_max : f32
+  %shifted3 = scalar.subf<nnan|ninf|nsz> %biased3, %row_max : f32
+  %exp0 = scalar.expf<afn> %shifted0 : f32
+  %exp1 = scalar.expf<afn> %shifted1 : f32
+  %exp2 = scalar.expf<afn> %shifted2 : f32
+  %exp3 = scalar.expf<afn> %shifted3 : f32
+  %sum01 = scalar.addf<nnan|ninf|nsz> %exp0, %exp1 : f32
+  %sum23 = scalar.addf<nnan|ninf|nsz> %exp2, %exp3 : f32
+  %thread_sum = scalar.addf<nnan|ninf|nsz> %sum01, %sum23 : f32
+  %row_sum = kernel.workgroup.reduce<addf> %thread_sum : f32
+  %norm0 = scalar.divf<nnan|ninf|nsz|arcp> %exp0, %row_sum : f32
+  %norm1 = scalar.divf<nnan|ninf|nsz|arcp> %exp1, %row_sum : f32
+  %norm2 = scalar.divf<nnan|ninf|nsz|arcp> %exp2, %row_sum : f32
+  %norm3 = scalar.divf<nnan|ninf|nsz|arcp> %exp3, %row_sum : f32
+  view.store %norm0, %dst_view[%idx0] : f32, view<1073741824xf32, #dense>
+  view.store %norm1, %dst_view[%idx1] : f32, view<1073741824xf32, #dense>
+  view.store %norm2, %dst_view[%idx2] : f32, view<1073741824xf32, #dense>
+  view.store %norm3, %dst_view[%idx3] : f32, view<1073741824xf32, #dense>
+  kernel.return
+}
+
+kernel.def target(@hrx2_softmax_gfx1100_wave64) export("hrx2_soft_max_f32_mask_n512_wg64_lanes8") @hrx2_soft_max_f32_mask_n512_wg64_lanes8() {
+  %unit = index.constant 1 : index
+  %nrows = config.get @hrx2.shape.soft_max.nrows : index
+  %workgroup_size = config.get @hrx2.tuning.soft_max.workgroup_size : index
+  kernel.launch.config workgroups(%nrows, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%scale: f32, %src0: buffer, %mask: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %zero = index.constant 0 : index
+  %sixty_four = index.constant 64 : index
+  %one_twenty_eight = index.constant 128 : index
+  %one_ninety_two = index.constant 192 : index
+  %two_fifty_six = index.constant 256 : index
+  %three_twenty = index.constant 320 : index
+  %three_eighty_four = index.constant 384 : index
+  %four_forty_eight = index.constant 448 : index
+  %five_twelve = index.constant 512 : index
+  %ne01 = config.get @hrx2.shape.soft_max.ne01 : index
+  %ne02 = config.get @hrx2.shape.soft_max.ne02 : index
+  %mask_nb1 = config.get @hrx2.shape.soft_max.mask_nb1 : index
+  %mask_nb2 = config.get @hrx2.shape.soft_max.mask_nb2 : index
+  %mask_nb3 = config.get @hrx2.shape.soft_max.mask_nb3 : index
+  %mask_ne1 = config.get @hrx2.shape.soft_max.mask_ne1 : index
+  %mask_ne2 = config.get @hrx2.shape.soft_max.mask_ne2 : index
+  %mask_ne3 = config.get @hrx2.shape.soft_max.mask_ne3 : index
+  %ne01_bounded = index.assume %ne01 [range(%ne01, 1, 4096)] : index
+  %ne02_bounded = index.assume %ne02 [range(%ne02, 1, 4096)] : index
+  %mask_nb1_bounded = index.assume %mask_nb1 [range(%mask_nb1, 1, 1048576)] : index
+  %mask_nb2_bounded = index.assume %mask_nb2 [range(%mask_nb2, 1, 1048576)] : index
+  %mask_nb3_bounded = index.assume %mask_nb3 [range(%mask_nb3, 1, 1048576)] : index
+  %mask_ne1_bounded = index.assume %mask_ne1 [range(%mask_ne1, 1, 4096)] : index
+  %mask_ne2_bounded = index.assume %mask_ne2 [range(%mask_ne2, 1, 4096)] : index
+  %mask_ne3_bounded = index.assume %mask_ne3 [range(%mask_ne3, 1, 4096)] : index
+  %row0 = kernel.workgroup.id<x> : index
+  %row = index.assume %row0 [range(%row0, 0, 16383)] : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 63)] : index
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %mask_global = buffer.assume.memory_space<global> %mask : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_noalias, %mask_noalias, %dst_noalias = buffer.assume.noalias %src0_global, %mask_global, %dst_global : buffer, buffer, buffer
+  %src0_view = buffer.view %src0_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+  %mask_view = buffer.view %mask_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+  %dst_view = buffer.view %dst_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+
+  %row_offset0 = index.mul %row, %five_twelve : index
+  %row_offset = index.assume %row_offset0 [range(%row_offset0, 0, 8388096), mul(%row_offset0, 512)] : index
+  %i01 = index.rem %row, %ne01_bounded : index
+  %row_div_ne01 = index.div %row, %ne01_bounded : index
+  %i02 = index.rem %row_div_ne01, %ne02_bounded : index
+  %row_div_ne010 = index.mul %ne01_bounded, %ne02_bounded : index
+  %row_div_ne01ne02 = index.div %row, %row_div_ne010 : index
+  %i03 = index.assume %row_div_ne01ne02 [range(%row_div_ne01ne02, 0, 1023)] : index
+  %mask_i01 = index.rem %i01, %mask_ne1_bounded : index
+  %mask_i02 = index.rem %i02, %mask_ne2_bounded : index
+  %mask_i03 = index.rem %i03, %mask_ne3_bounded : index
+  %mask_base1 = index.mul %mask_i01, %mask_nb1_bounded : index
+  %mask_base2 = index.mul %mask_i02, %mask_nb2_bounded : index
+  %mask_base12 = index.add %mask_base1, %mask_base2 : index
+  %mask_base3 = index.mul %mask_i03, %mask_nb3_bounded : index
+  %mask_base0 = index.add %mask_base12, %mask_base3 : index
+  %mask_base = index.assume %mask_base0 [range(%mask_base0, 0, 1073741823)] : index
+
+  %col0 = index.add %lane, %zero : index
+  %col1 = index.add %lane, %sixty_four : index
+  %col2 = index.add %lane, %one_twenty_eight : index
+  %col3 = index.add %lane, %one_ninety_two : index
+  %col4 = index.add %lane, %two_fifty_six : index
+  %col5 = index.add %lane, %three_twenty : index
+  %col6 = index.add %lane, %three_eighty_four : index
+  %col7 = index.add %lane, %four_forty_eight : index
+  %idx00 = index.add %row_offset, %col0 : index
+  %idx10 = index.add %row_offset, %col1 : index
+  %idx20 = index.add %row_offset, %col2 : index
+  %idx30 = index.add %row_offset, %col3 : index
+  %idx40 = index.add %row_offset, %col4 : index
+  %idx50 = index.add %row_offset, %col5 : index
+  %idx60 = index.add %row_offset, %col6 : index
+  %idx70 = index.add %row_offset, %col7 : index
+  %idx0 = index.assume %idx00 [range(%idx00, 0, 8388607)] : index
+  %idx1 = index.assume %idx10 [range(%idx10, 0, 8388607)] : index
+  %idx2 = index.assume %idx20 [range(%idx20, 0, 8388607)] : index
+  %idx3 = index.assume %idx30 [range(%idx30, 0, 8388607)] : index
+  %idx4 = index.assume %idx40 [range(%idx40, 0, 8388607)] : index
+  %idx5 = index.assume %idx50 [range(%idx50, 0, 8388607)] : index
+  %idx6 = index.assume %idx60 [range(%idx60, 0, 8388607)] : index
+  %idx7 = index.assume %idx70 [range(%idx70, 0, 8388607)] : index
+  %mask_idx00 = index.add %mask_base, %col0 : index
+  %mask_idx10 = index.add %mask_base, %col1 : index
+  %mask_idx20 = index.add %mask_base, %col2 : index
+  %mask_idx30 = index.add %mask_base, %col3 : index
+  %mask_idx40 = index.add %mask_base, %col4 : index
+  %mask_idx50 = index.add %mask_base, %col5 : index
+  %mask_idx60 = index.add %mask_base, %col6 : index
+  %mask_idx70 = index.add %mask_base, %col7 : index
+  %mask_idx0 = index.assume %mask_idx00 [range(%mask_idx00, 0, 1073741823)] : index
+  %mask_idx1 = index.assume %mask_idx10 [range(%mask_idx10, 0, 1073741823)] : index
+  %mask_idx2 = index.assume %mask_idx20 [range(%mask_idx20, 0, 1073741823)] : index
+  %mask_idx3 = index.assume %mask_idx30 [range(%mask_idx30, 0, 1073741823)] : index
+  %mask_idx4 = index.assume %mask_idx40 [range(%mask_idx40, 0, 1073741823)] : index
+  %mask_idx5 = index.assume %mask_idx50 [range(%mask_idx50, 0, 1073741823)] : index
+  %mask_idx6 = index.assume %mask_idx60 [range(%mask_idx60, 0, 1073741823)] : index
+  %mask_idx7 = index.assume %mask_idx70 [range(%mask_idx70, 0, 1073741823)] : index
+
+  %x0 = view.load %src0_view[%idx0] : view<1073741824xf32, #dense> -> f32
+  %x1 = view.load %src0_view[%idx1] : view<1073741824xf32, #dense> -> f32
+  %x2 = view.load %src0_view[%idx2] : view<1073741824xf32, #dense> -> f32
+  %x3 = view.load %src0_view[%idx3] : view<1073741824xf32, #dense> -> f32
+  %x4 = view.load %src0_view[%idx4] : view<1073741824xf32, #dense> -> f32
+  %x5 = view.load %src0_view[%idx5] : view<1073741824xf32, #dense> -> f32
+  %x6 = view.load %src0_view[%idx6] : view<1073741824xf32, #dense> -> f32
+  %x7 = view.load %src0_view[%idx7] : view<1073741824xf32, #dense> -> f32
+  %m0 = view.load %mask_view[%mask_idx0] : view<1073741824xf32, #dense> -> f32
+  %m1 = view.load %mask_view[%mask_idx1] : view<1073741824xf32, #dense> -> f32
+  %m2 = view.load %mask_view[%mask_idx2] : view<1073741824xf32, #dense> -> f32
+  %m3 = view.load %mask_view[%mask_idx3] : view<1073741824xf32, #dense> -> f32
+  %m4 = view.load %mask_view[%mask_idx4] : view<1073741824xf32, #dense> -> f32
+  %m5 = view.load %mask_view[%mask_idx5] : view<1073741824xf32, #dense> -> f32
+  %m6 = view.load %mask_view[%mask_idx6] : view<1073741824xf32, #dense> -> f32
+  %m7 = view.load %mask_view[%mask_idx7] : view<1073741824xf32, #dense> -> f32
+  %scaled0 = scalar.mulf<nnan|ninf|nsz> %x0, %scale : f32
+  %scaled1 = scalar.mulf<nnan|ninf|nsz> %x1, %scale : f32
+  %scaled2 = scalar.mulf<nnan|ninf|nsz> %x2, %scale : f32
+  %scaled3 = scalar.mulf<nnan|ninf|nsz> %x3, %scale : f32
+  %scaled4 = scalar.mulf<nnan|ninf|nsz> %x4, %scale : f32
+  %scaled5 = scalar.mulf<nnan|ninf|nsz> %x5, %scale : f32
+  %scaled6 = scalar.mulf<nnan|ninf|nsz> %x6, %scale : f32
+  %scaled7 = scalar.mulf<nnan|ninf|nsz> %x7, %scale : f32
+  %biased0 = scalar.addf<nnan|ninf|nsz> %scaled0, %m0 : f32
+  %biased1 = scalar.addf<nnan|ninf|nsz> %scaled1, %m1 : f32
+  %biased2 = scalar.addf<nnan|ninf|nsz> %scaled2, %m2 : f32
+  %biased3 = scalar.addf<nnan|ninf|nsz> %scaled3, %m3 : f32
+  %biased4 = scalar.addf<nnan|ninf|nsz> %scaled4, %m4 : f32
+  %biased5 = scalar.addf<nnan|ninf|nsz> %scaled5, %m5 : f32
+  %biased6 = scalar.addf<nnan|ninf|nsz> %scaled6, %m6 : f32
+  %biased7 = scalar.addf<nnan|ninf|nsz> %scaled7, %m7 : f32
+
+  %max01 = scalar.maxnumf %biased0, %biased1 : f32
+  %max23 = scalar.maxnumf %biased2, %biased3 : f32
+  %max45 = scalar.maxnumf %biased4, %biased5 : f32
+  %max67 = scalar.maxnumf %biased6, %biased7 : f32
+  %max03 = scalar.maxnumf %max01, %max23 : f32
+  %max47 = scalar.maxnumf %max45, %max67 : f32
+  %thread_max = scalar.maxnumf %max03, %max47 : f32
+  %row_max = kernel.workgroup.reduce<maxnumf> %thread_max : f32
+  %shifted0 = scalar.subf<nnan|ninf|nsz> %biased0, %row_max : f32
+  %shifted1 = scalar.subf<nnan|ninf|nsz> %biased1, %row_max : f32
+  %shifted2 = scalar.subf<nnan|ninf|nsz> %biased2, %row_max : f32
+  %shifted3 = scalar.subf<nnan|ninf|nsz> %biased3, %row_max : f32
+  %shifted4 = scalar.subf<nnan|ninf|nsz> %biased4, %row_max : f32
+  %shifted5 = scalar.subf<nnan|ninf|nsz> %biased5, %row_max : f32
+  %shifted6 = scalar.subf<nnan|ninf|nsz> %biased6, %row_max : f32
+  %shifted7 = scalar.subf<nnan|ninf|nsz> %biased7, %row_max : f32
+  %exp0 = scalar.expf<afn> %shifted0 : f32
+  %exp1 = scalar.expf<afn> %shifted1 : f32
+  %exp2 = scalar.expf<afn> %shifted2 : f32
+  %exp3 = scalar.expf<afn> %shifted3 : f32
+  %exp4 = scalar.expf<afn> %shifted4 : f32
+  %exp5 = scalar.expf<afn> %shifted5 : f32
+  %exp6 = scalar.expf<afn> %shifted6 : f32
+  %exp7 = scalar.expf<afn> %shifted7 : f32
+  %sum01 = scalar.addf<nnan|ninf|nsz> %exp0, %exp1 : f32
+  %sum23 = scalar.addf<nnan|ninf|nsz> %exp2, %exp3 : f32
+  %sum45 = scalar.addf<nnan|ninf|nsz> %exp4, %exp5 : f32
+  %sum67 = scalar.addf<nnan|ninf|nsz> %exp6, %exp7 : f32
+  %sum03 = scalar.addf<nnan|ninf|nsz> %sum01, %sum23 : f32
+  %sum47 = scalar.addf<nnan|ninf|nsz> %sum45, %sum67 : f32
+  %thread_sum = scalar.addf<nnan|ninf|nsz> %sum03, %sum47 : f32
+  %row_sum = kernel.workgroup.reduce<addf> %thread_sum : f32
+  %norm0 = scalar.divf<nnan|ninf|nsz|arcp> %exp0, %row_sum : f32
+  %norm1 = scalar.divf<nnan|ninf|nsz|arcp> %exp1, %row_sum : f32
+  %norm2 = scalar.divf<nnan|ninf|nsz|arcp> %exp2, %row_sum : f32
+  %norm3 = scalar.divf<nnan|ninf|nsz|arcp> %exp3, %row_sum : f32
+  %norm4 = scalar.divf<nnan|ninf|nsz|arcp> %exp4, %row_sum : f32
+  %norm5 = scalar.divf<nnan|ninf|nsz|arcp> %exp5, %row_sum : f32
+  %norm6 = scalar.divf<nnan|ninf|nsz|arcp> %exp6, %row_sum : f32
+  %norm7 = scalar.divf<nnan|ninf|nsz|arcp> %exp7, %row_sum : f32
+  view.store %norm0, %dst_view[%idx0] : f32, view<1073741824xf32, #dense>
+  view.store %norm1, %dst_view[%idx1] : f32, view<1073741824xf32, #dense>
+  view.store %norm2, %dst_view[%idx2] : f32, view<1073741824xf32, #dense>
+  view.store %norm3, %dst_view[%idx3] : f32, view<1073741824xf32, #dense>
+  view.store %norm4, %dst_view[%idx4] : f32, view<1073741824xf32, #dense>
+  view.store %norm5, %dst_view[%idx5] : f32, view<1073741824xf32, #dense>
+  view.store %norm6, %dst_view[%idx6] : f32, view<1073741824xf32, #dense>
+  view.store %norm7, %dst_view[%idx7] : f32, view<1073741824xf32, #dense>
+  kernel.return
+}
+
+kernel.def export("hrx2_soft_max_f32_mask") @hrx2_soft_max_f32_mask() {
+  %unit = index.constant 1 : index
+  %nrows = config.get @hrx2.shape.soft_max.nrows : index
+  %workgroup_size = config.get @hrx2.tuning.soft_max.workgroup_size : index
+  kernel.launch.config workgroups(%nrows, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%scale: f32, %src0: buffer, %mask: buffer, %dst: buffer) {
+  %base = index.constant 0 : offset
+  %ncols = config.get @hrx2.shape.soft_max.ncols : index
+  %nrows = config.get @hrx2.shape.soft_max.nrows : index
+  %ne01 = config.get @hrx2.shape.soft_max.ne01 : index
+  %ne02 = config.get @hrx2.shape.soft_max.ne02 : index
+  %mask_nb1 = config.get @hrx2.shape.soft_max.mask_nb1 : index
+  %mask_nb2 = config.get @hrx2.shape.soft_max.mask_nb2 : index
+  %mask_nb3 = config.get @hrx2.shape.soft_max.mask_nb3 : index
+  %mask_ne1 = config.get @hrx2.shape.soft_max.mask_ne1 : index
+  %mask_ne2 = config.get @hrx2.shape.soft_max.mask_ne2 : index
+  %mask_ne3 = config.get @hrx2.shape.soft_max.mask_ne3 : index
+  %workgroup_size = config.get @hrx2.tuning.soft_max.workgroup_size : index
+  %ncols_bounded = index.assume %ncols [range(%ncols, 1, 4096)] : index
+  %nrows_bounded = index.assume %nrows [range(%nrows, 1, 1048576)] : index
+  %ne01_bounded = index.assume %ne01 [range(%ne01, 1, 4096)] : index
+  %ne02_bounded = index.assume %ne02 [range(%ne02, 1, 4096)] : index
+  %mask_nb1_bounded = index.assume %mask_nb1 [range(%mask_nb1, 1, 1048576)] : index
+  %mask_nb2_bounded = index.assume %mask_nb2 [range(%mask_nb2, 1, 1048576)] : index
+  %mask_nb3_bounded = index.assume %mask_nb3 [range(%mask_nb3, 1, 1048576)] : index
+  %mask_ne1_bounded = index.assume %mask_ne1 [range(%mask_ne1, 1, 4096)] : index
+  %mask_ne2_bounded = index.assume %mask_ne2 [range(%mask_ne2, 1, 4096)] : index
+  %mask_ne3_bounded = index.assume %mask_ne3 [range(%mask_ne3, 1, 4096)] : index
+  %row0 = kernel.workgroup.id<x> : index
+  %row = index.assume %row0 [range(%row0, 0, 1048575)] : index
+  %lane0 = kernel.workitem.id<x> : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 1023)] : index
+  %minus_inf = scalar.constant -3.4028234663852886e+38 : f32
+  %zero_f32 = scalar.constant 0.0 : f32
+
+  %src0_global = buffer.assume.memory_space<global> %src0 : buffer
+  %mask_global = buffer.assume.memory_space<global> %mask : buffer
+  %dst_global = buffer.assume.memory_space<global> %dst : buffer
+  %src0_noalias, %mask_noalias, %dst_noalias = buffer.assume.noalias %src0_global, %mask_global, %dst_global : buffer, buffer, buffer
+  %src0_view = buffer.view %src0_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+  %mask_view = buffer.view %mask_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+  %dst_view = buffer.view %dst_noalias[%base] : buffer -> view<1073741824xf32, #dense>
+
+  %row_offset0 = index.mul %row, %ncols_bounded : index
+  %row_offset = index.assume %row_offset0 [range(%row_offset0, 0, 1073741823)] : index
+  %i01 = index.rem %row, %ne01_bounded : index
+  %row_div_ne01 = index.div %row, %ne01_bounded : index
+  %i02 = index.rem %row_div_ne01, %ne02_bounded : index
+  %row_div_ne010 = index.mul %ne01_bounded, %ne02_bounded : index
+  %row_div_ne01ne02 = index.div %row, %row_div_ne010 : index
+  %i03 = index.assume %row_div_ne01ne02 [range(%row_div_ne01ne02, 0, 1048575)] : index
+  %mask_i01 = index.rem %i01, %mask_ne1_bounded : index
+  %mask_i02 = index.rem %i02, %mask_ne2_bounded : index
+  %mask_i03 = index.rem %i03, %mask_ne3_bounded : index
+  %mask_base1 = index.mul %mask_i01, %mask_nb1_bounded : index
+  %mask_base2 = index.mul %mask_i02, %mask_nb2_bounded : index
+  %mask_base12 = index.add %mask_base1, %mask_base2 : index
+  %mask_base3 = index.mul %mask_i03, %mask_nb3_bounded : index
+  %mask_base0 = index.add %mask_base12, %mask_base3 : index
+  %mask_base = index.assume %mask_base0 [range(%mask_base0, 0, 1073741823)] : index
+
+  %col_in_bounds = index.cmp ult, %lane, %ncols_bounded : index
+  %input_value = scf.if %col_in_bounds -> (f32) {
+    %idx0 = index.add %row_offset, %lane : index
+    %idx = index.assume %idx0 [range(%idx0, 0, 1073741823)] : index
+    %mask_idx0 = index.add %mask_base, %lane : index
+    %mask_idx = index.assume %mask_idx0 [range(%mask_idx0, 0, 1073741823)] : index
+    %x = view.load %src0_view[%idx] : view<1073741824xf32, #dense> -> f32
+    %m = view.load %mask_view[%mask_idx] : view<1073741824xf32, #dense> -> f32
+    %scaled = scalar.mulf<nnan|ninf|nsz> %x, %scale : f32
+    %biased = scalar.addf<nnan|ninf|nsz> %scaled, %m : f32
+    scf.yield %biased : f32
+  } else {
+    scf.yield %minus_inf : f32
+  }
+
+  %row_max = kernel.workgroup.reduce<maxnumf> %input_value : f32
+  %shifted = scalar.subf<nnan|ninf|nsz> %input_value, %row_max : f32
+  %exp_value = scf.if %col_in_bounds -> (f32) {
+    %exp0 = scalar.expf<afn> %shifted : f32
+    scf.yield %exp0 : f32
+  } else {
+    scf.yield %zero_f32 : f32
+  }
+  %row_sum = kernel.workgroup.reduce<addf> %exp_value : f32
+  %norm = scalar.divf<nnan|ninf|nsz|arcp> %exp_value, %row_sum : f32
+  scf.if %col_in_bounds {
+    %idx0 = index.add %row_offset, %lane : index
+    %idx = index.assume %idx0 [range(%idx0, 0, 1073741823)] : index
+    view.store %norm, %dst_view[%idx] : f32, view<1073741824xf32, #dense>
+  }
+  kernel.return
+}
