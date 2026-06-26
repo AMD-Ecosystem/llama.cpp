@@ -1156,6 +1156,57 @@ static void ggml_backend_hrx_add_tensor_facts(
     }
 }
 
+static ggml_backend_buffer_t ggml_backend_hrx_tensor_storage_buffer(const ggml_tensor * tensor) {
+    if (!tensor) {
+        return nullptr;
+    }
+    ggml_backend_buffer_t buffer = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+    if (!buffer || buffer->iface.get_base != ggml_backend_hrx_buffer_get_base) {
+        return nullptr;
+    }
+    return buffer;
+}
+
+static bool ggml_backend_hrx_tensor_storage_range(
+        const ggml_tensor * tensor,
+        ggml_backend_buffer_t * out_buffer,
+        size_t * out_offset,
+        size_t * out_length) {
+    ggml_backend_buffer_t buffer = ggml_backend_hrx_tensor_storage_buffer(tensor);
+    if (!buffer || !tensor || !tensor->data) {
+        return false;
+    }
+    auto * context = ggml_backend_hrx_get_buffer_context(buffer);
+    *out_buffer = buffer;
+    *out_offset = ggml_backend_hrx_tensor_offset(context, tensor);
+    *out_length = ggml_nbytes(tensor);
+    return true;
+}
+
+static void ggml_backend_hrx_add_tensor_overlap_facts(
+        ggml_backend_hrx_catalog_problem * problem,
+        const std::vector<const ggml_tensor *> & tensors) {
+    for (size_t i = 0; i < tensors.size(); ++i) {
+        for (size_t j = i + 1; j < tensors.size(); ++j) {
+            int64_t overlaps = 0;
+            ggml_backend_buffer_t buffer_i = nullptr;
+            ggml_backend_buffer_t buffer_j = nullptr;
+            size_t offset_i = 0;
+            size_t offset_j = 0;
+            size_t length_i = 0;
+            size_t length_j = 0;
+            if (ggml_backend_hrx_tensor_storage_range(tensors[i], &buffer_i, &offset_i, &length_i) &&
+                ggml_backend_hrx_tensor_storage_range(tensors[j], &buffer_j, &offset_j, &length_j) &&
+                buffer_i == buffer_j) {
+                const size_t end_i = offset_i + length_i;
+                const size_t end_j = offset_j + length_j;
+                overlaps = std::max(offset_i, offset_j) < std::min(end_i, end_j) ? 1 : 0;
+            }
+            problem->facts["tensor_overlap." + std::to_string(i) + "_" + std::to_string(j)] = overlaps;
+        }
+    }
+}
+
 static bool ggml_backend_hrx_request_matches_loaded_route(
         ggml_backend_hrx_device_context * device_context,
         const ggml_backend_hrx_dispatch_request & request,
@@ -1163,7 +1214,9 @@ static bool ggml_backend_hrx_request_matches_loaded_route(
     if (!device_context || !device_context->reg_context || !device_context->reg_context->catalog) {
         return false;
     }
-    const auto * route = ggml_backend_hrx_catalog_find_route(*device_context->reg_context->catalog, request.problem);
+    ggml_backend_hrx_catalog_problem problem = request.problem;
+    ggml_backend_hrx_add_tensor_overlap_facts(&problem, request.tensors);
+    const auto * route = ggml_backend_hrx_catalog_find_route(*device_context->reg_context->catalog, problem);
     return route && (!family || route->family == family);
 }
 
@@ -1747,9 +1800,12 @@ static bool ggml_backend_hrx_make_soft_max_request(
     out_request->problem.shape["cols"] = 0;
     ggml_backend_hrx_set_shape_alias(&out_request->problem, "soft_max", "ne01", node->src[0]->ne[1]);
     ggml_backend_hrx_set_shape_alias(&out_request->problem, "soft_max", "ne02", node->src[0]->ne[2]);
-    ggml_backend_hrx_set_shape_alias(&out_request->problem, "soft_max", "mask_nb1", mask ? mask->nb[1] : 0);
-    ggml_backend_hrx_set_shape_alias(&out_request->problem, "soft_max", "mask_nb2", mask ? mask->nb[2] : 0);
-    ggml_backend_hrx_set_shape_alias(&out_request->problem, "soft_max", "mask_nb3", mask ? mask->nb[3] : 0);
+    // The Loom softmax kernels view the mask as f32 elements, so the mask
+    // strides must be expressed in elements. Passing ggml byte strides here
+    // makes live attention read the wrong causal-mask rows.
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "soft_max", "mask_nb1", mask ? mask->nb[1] / sizeof(float) : 0);
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "soft_max", "mask_nb2", mask ? mask->nb[2] / sizeof(float) : 0);
+    ggml_backend_hrx_set_shape_alias(&out_request->problem, "soft_max", "mask_nb3", mask ? mask->nb[3] / sizeof(float) : 0);
     ggml_backend_hrx_set_shape_alias(&out_request->problem, "soft_max", "mask_ne1", mask ? mask->ne[1] : 0);
     ggml_backend_hrx_set_shape_alias(&out_request->problem, "soft_max", "mask_ne2", mask ? mask->ne[2] : 0);
     ggml_backend_hrx_set_shape_alias(&out_request->problem, "soft_max", "mask_ne3", mask ? mask->ne[3] : 0);
@@ -2775,6 +2831,7 @@ static bool ggml_backend_hrx_dispatch_node(
         !device_context->reg_context || !device_context->reg_context->catalog) {
         return false;
     }
+    ggml_backend_hrx_add_tensor_overlap_facts(&request.problem, request.tensors);
     const auto * route = ggml_backend_hrx_catalog_find_route(*device_context->reg_context->catalog, request.problem);
     if (!route) {
         return false;
@@ -2815,6 +2872,25 @@ static bool ggml_backend_hrx_dispatch_node(
             return false;
         }
     }
+    nlohmann::json binding_trace = nlohmann::json::array();
+    for (size_t i = 0; i < request.tensors.size(); ++i) {
+        const ggml_tensor * tensor = request.tensors[i];
+        binding_trace.push_back({
+            {"index", i},
+            {"name", tensor ? tensor->name : ""},
+            {"buffer", reinterpret_cast<uintptr_t>(bindings[i].buffer)},
+            {"offset", bindings[i].offset},
+            {"length", bindings[i].length},
+            {"view_offset", tensor ? tensor->view_offs : 0},
+            {"op", tensor ? ggml_op_name(tensor->op) : ""},
+        });
+    }
+    nlohmann::json constant_trace = nlohmann::json::array();
+    for (size_t offset = 0; offset + sizeof(float) <= request.constants.size(); offset += sizeof(float)) {
+        float value = 0.0f;
+        std::memcpy(&value, request.constants.data() + offset, sizeof(float));
+        constant_trace.push_back(value);
+    }
 
     hrx_dispatch_config_t dispatch_config = {
         /* .workgroup_count = */ {
@@ -2834,6 +2910,8 @@ static bool ggml_backend_hrx_dispatch_node(
         {"device", device_context->name},
         {"route_id", route->id},
         {"shape", request.problem.shape},
+        {"bindings", binding_trace},
+        {"constants_f32", constant_trace},
         {"launch_workload_argument_count", compiled->launch_config.workload_argument_count},
         {"workgroup_count", {
             dispatch_config.workgroup_count[0],
@@ -2935,6 +3013,7 @@ static bool ggml_backend_hrx_is_fused_producer_node(
             !device_context->reg_context || !device_context->reg_context->catalog) {
             continue;
         }
+        ggml_backend_hrx_add_tensor_overlap_facts(&request.problem, request.tensors);
         const auto * route = ggml_backend_hrx_catalog_find_route(*device_context->reg_context->catalog, request.problem);
         if (route && route->family == expected_family) {
             ggml_backend_hrx_trace_event(device_context->reg_context, {
@@ -3094,6 +3173,7 @@ static bool ggml_backend_hrx_device_supports_op(ggml_backend_dev_t dev, const gg
         });
         return false;
     }
+    ggml_backend_hrx_add_tensor_overlap_facts(&request.problem, request.tensors);
     const bool supported =
         device_context->reg_context &&
         device_context->reg_context->catalog &&

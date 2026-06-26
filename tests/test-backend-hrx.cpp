@@ -1091,6 +1091,175 @@ static void run_catalog_set_rows_once(ggml_backend_t backend, ggml_backend_dev_t
     expect_near(tensor_to_float(out), expected, cfg.tolerance, cfg.id.c_str());
 }
 
+static void run_live_kv_set_rows_flat_case(ggml_backend_t backend, ggml_backend_dev_t dev) {
+    const int64_t head_dim = 128;
+    const int64_t nheads_kv = 8;
+    const int64_t ncols = head_dim * nheads_kv;
+    const int64_t kv_size = 256;
+    const int64_t ntokens = 42;
+
+    ggml_context_ptr ctx = make_context();
+    ggml_tensor * cache = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F16, ncols, kv_size);
+    ggml_tensor * v_cur_base = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, head_dim, nheads_kv, ntokens);
+    ggml_tensor * v_cur = ggml_view_2d(ctx.get(), v_cur_base, ncols, ntokens, ncols * sizeof(float), 0);
+    ggml_tensor * rows = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I64, ntokens);
+    ggml_tensor * out = ggml_set_rows(ctx.get(), cache, v_cur, rows);
+
+    GGML_ASSERT(ggml_backend_dev_supports_op(dev, out));
+    ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), 16, false);
+    ggml_build_forward_expand(graph, out);
+    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(), backend));
+    GGML_ASSERT(buffer != nullptr);
+
+    std::vector<uint8_t> cache_zero(ggml_nbytes(cache), 0);
+    std::vector<float> v_data(static_cast<size_t>(head_dim * nheads_kv * ntokens));
+    std::vector<int64_t> row_data = { 0, 1 };
+    std::vector<float> expected(static_cast<size_t>(ncols * kv_size), 0.0f);
+
+    for (int64_t token = 0; token < ntokens; ++token) {
+        for (int64_t head = 0; head < nheads_kv; ++head) {
+            for (int64_t dim = 0; dim < head_dim; ++dim) {
+                const size_t index = static_cast<size_t>(dim + head_dim * (head + nheads_kv * token));
+                v_data[index] = static_cast<float>(static_cast<int>((dim * 17 + head * 31 + token * 47) % 251) - 125) / 113.0f;
+                expected[static_cast<size_t>(dim + head_dim * head + ncols * row_data[static_cast<size_t>(token)])] =
+                    ggml_fp16_to_fp32(ggml_fp32_to_fp16(v_data[index]));
+            }
+        }
+    }
+
+    ggml_backend_tensor_set(cache, cache_zero.data(), 0, cache_zero.size());
+    ggml_backend_tensor_set(v_cur_base, v_data.data(), 0, v_data.size() * sizeof(float));
+    ggml_backend_tensor_set(rows, row_data.data(), 0, row_data.size() * sizeof(int64_t));
+    GGML_ASSERT(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(backend);
+    expect_near(tensor_to_float(out), expected, 1.0e-3f, "live_kv_set_rows_flat");
+}
+
+static void run_live_kv_kqv_direct_case(ggml_backend_t backend, ggml_backend_dev_t dev) {
+    const int64_t head_dim = 128;
+    const int64_t nheads_kv = 8;
+    const int64_t nheads = 24;
+    const int64_t kv_size = 256;
+    const int64_t ntokens = 2;
+
+    ggml_context_ptr ctx = make_context();
+    ggml_tensor * v = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F16, kv_size, head_dim, nheads_kv);
+    ggml_tensor * probs = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, kv_size, ntokens, nheads);
+    ggml_tensor * out = ggml_mul_mat(ctx.get(), v, probs);
+
+    GGML_ASSERT(ggml_backend_dev_supports_op(dev, out));
+    ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), 16, false);
+    ggml_build_forward_expand(graph, out);
+    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(), backend));
+    GGML_ASSERT(buffer != nullptr);
+
+    std::vector<float> v_f32(static_cast<size_t>(kv_size * head_dim * nheads_kv), 0.0f);
+    std::vector<uint16_t> v_f16(v_f32.size(), 0);
+    std::vector<float> probs_data(static_cast<size_t>(kv_size * ntokens * nheads), 0.0f);
+    std::vector<float> expected(static_cast<size_t>(head_dim * ntokens * nheads), 0.0f);
+
+    for (int64_t kv_head = 0; kv_head < nheads_kv; ++kv_head) {
+        for (int64_t dim = 0; dim < head_dim; ++dim) {
+            for (int64_t token = 0; token < ntokens; ++token) {
+                // Keep non-selected tokens initialized too, so the test catches
+                // wrong token indexing instead of accidentally reading zeros.
+                const size_t index = static_cast<size_t>(token + kv_size * (dim + head_dim * kv_head));
+                v_f32[index] = static_cast<float>(static_cast<int>((dim * 17 + kv_head * 31 + token * 47) % 251) - 125) / 113.0f;
+                v_f16[index] = ggml_fp32_to_fp16(v_f32[index]);
+            }
+        }
+    }
+    for (int64_t head = 0; head < nheads; ++head) {
+        for (int64_t col = 0; col < ntokens; ++col) {
+            probs_data[static_cast<size_t>(col + kv_size * (col + ntokens * head))] = 1.0f;
+            const int64_t kv_head = head / (nheads / nheads_kv);
+            for (int64_t dim = 0; dim < head_dim; ++dim) {
+                const size_t v_index = static_cast<size_t>(col + kv_size * (dim + head_dim * kv_head));
+                expected[static_cast<size_t>(dim + head_dim * (col + ntokens * head))] =
+                    ggml_fp16_to_fp32(v_f16[v_index]);
+            }
+        }
+    }
+
+    ggml_backend_tensor_set(v, v_f16.data(), 0, v_f16.size() * sizeof(uint16_t));
+    ggml_backend_tensor_set(probs, probs_data.data(), 0, probs_data.size() * sizeof(float));
+    GGML_ASSERT(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(backend);
+    expect_near(tensor_to_float(out), expected, 1.0e-3f, "live_kv_kqv_direct");
+}
+
+static void run_live_kv_set_rows_update_case(ggml_backend_t backend, ggml_backend_dev_t dev) {
+    const int64_t head_dim = 128;
+    const int64_t nheads_kv = 8;
+    const int64_t nheads = 24;
+    const int64_t ncols = head_dim * nheads_kv;
+    const int64_t kv_size = 256;
+    const int64_t ntokens = 2;
+    const int64_t out_cols = 2;
+
+    ggml_context_ptr ctx = make_context();
+    ggml_tensor * cache = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F16, ncols, kv_size);
+    ggml_tensor * v_cur_base = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, head_dim, nheads_kv, ntokens);
+    ggml_tensor * v_cur = ggml_view_2d(ctx.get(), v_cur_base, ncols, ntokens, ncols * sizeof(float), 0);
+    ggml_tensor * rows = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I64, ntokens);
+    ggml_tensor * set = ggml_set_rows(ctx.get(), cache, v_cur, rows);
+
+    // This mirrors llama_kv_cache::get_v for the non-transposed V cache used
+    // without flash attention, followed by build_attn_mha's transpose+cont
+    // materialization before the V * softmax(KQ) matmul.
+    ggml_tensor * v_view = ggml_view_4d(
+        ctx.get(), set,
+        head_dim, nheads_kv, kv_size, 1,
+        head_dim * sizeof(ggml_fp16_t),
+        ncols * sizeof(ggml_fp16_t),
+        ncols * kv_size * sizeof(ggml_fp16_t),
+        0);
+    ggml_tensor * v_perm = ggml_permute(ctx.get(), v_view, 0, 2, 1, 3);
+    ggml_tensor * v_cont = ggml_cont(ctx.get(), ggml_transpose(ctx.get(), v_perm));
+    ggml_tensor * probs = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, kv_size, out_cols, nheads);
+    ggml_tensor * out = ggml_mul_mat(ctx.get(), v_cont, probs);
+
+    GGML_ASSERT(ggml_backend_dev_supports_op(dev, out));
+    ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), 32, false);
+    ggml_build_forward_expand(graph, out);
+    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(), backend));
+    GGML_ASSERT(buffer != nullptr);
+
+    std::vector<uint8_t> cache_zero(ggml_nbytes(cache), 0);
+    std::vector<float> v_data(static_cast<size_t>(head_dim * nheads_kv * ntokens));
+    std::vector<int64_t> row_data = { 0, 1 };
+    std::vector<float> probs_data(static_cast<size_t>(kv_size * out_cols * nheads), 0.0f);
+    std::vector<float> expected(static_cast<size_t>(head_dim * out_cols * nheads), 0.0f);
+
+    for (int64_t token = 0; token < ntokens; ++token) {
+        for (int64_t head = 0; head < nheads_kv; ++head) {
+            for (int64_t dim = 0; dim < head_dim; ++dim) {
+                const size_t index = static_cast<size_t>(dim + head_dim * (head + nheads_kv * token));
+                v_data[index] = static_cast<float>(static_cast<int>((dim * 17 + head * 31 + token * 47) % 251) - 125) / 113.0f;
+            }
+        }
+    }
+    for (int64_t head = 0; head < nheads; ++head) {
+        for (int64_t col = 0; col < out_cols; ++col) {
+            probs_data[static_cast<size_t>(col + kv_size * (col + out_cols * head))] = 1.0f;
+            const int64_t kv_head = head / (nheads / nheads_kv);
+            for (int64_t dim = 0; dim < head_dim; ++dim) {
+                expected[static_cast<size_t>(dim + head_dim * (col + out_cols * head))] =
+                    ggml_fp16_to_fp32(ggml_fp32_to_fp16(
+                        v_data[static_cast<size_t>(dim + head_dim * (kv_head + nheads_kv * col))]));
+            }
+        }
+    }
+
+    ggml_backend_tensor_set(cache, cache_zero.data(), 0, cache_zero.size());
+    ggml_backend_tensor_set(v_cur_base, v_data.data(), 0, v_data.size() * sizeof(float));
+    ggml_backend_tensor_set(rows, row_data.data(), 0, row_data.size() * sizeof(int64_t));
+    ggml_backend_tensor_set(probs, probs_data.data(), 0, probs_data.size() * sizeof(float));
+    GGML_ASSERT(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(backend);
+    expect_near(tensor_to_float(out), expected, 1.0e-3f, "live_kv_set_rows_kqv_readback");
+}
+
 static void run_catalog_cont_set_rows_once(ggml_backend_t backend, ggml_backend_dev_t dev, const ggml_backend_hrx_test_case & cfg) {
     const int64_t cont_ncols = catalog_shape_or(cfg, "cont_ncols", 128);
     const int64_t cont_rows = catalog_shape_or(cfg, "cont_rows", 2);
@@ -1194,13 +1363,14 @@ static std::vector<float> run_catalog_rope_cpu_reference(
         int64_t ntokens,
         int64_t n_dims,
         int mode,
-        float freq_scale) {
+        float freq_scale,
+        float freq_base = 10000.0f) {
     ggml_context_ptr ctx = make_context();
     ggml_tensor * src = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, ncols, nheads, ntokens);
     ggml_tensor * pos = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, ntokens);
     ggml_tensor * freq = freq_data.empty() ? nullptr :
         ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, std::max<int64_t>(1, n_dims / 2));
-    ggml_tensor * out = ggml_rope_ext(ctx.get(), src, pos, freq, static_cast<int>(n_dims), mode, 0, 10000.0f, freq_scale, 0.0f, 1.0f, 1.0f, 1.0f);
+    ggml_tensor * out = ggml_rope_ext(ctx.get(), src, pos, freq, static_cast<int>(n_dims), mode, 0, freq_base, freq_scale, 0.0f, 1.0f, 1.0f, 1.0f);
     ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), 16, false);
     ggml_build_forward_expand(graph, out);
     ggml_backend_ptr cpu_backend(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr));
@@ -1260,6 +1430,243 @@ static void run_catalog_rope_once(ggml_backend_t backend, ggml_backend_dev_t dev
         tensor_to_float(out),
         run_catalog_rope_cpu_reference(src_data, pos_data, freq_data, ncols, nheads, ntokens, n_dims, mode, freq_scale),
         cfg.tolerance, cfg.id.c_str());
+}
+
+static void run_live_rope_normal_freq_case(ggml_backend_t backend, ggml_backend_dev_t dev) {
+    const int64_t ncols = 128;
+    const int64_t nheads = 24;
+    const int64_t ntokens = 2;
+    const int64_t n_dims = 128;
+    const int mode = GGML_ROPE_TYPE_NORMAL;
+    const float freq_scale = 1.0f;
+
+    ggml_context_ptr ctx = make_context();
+    ggml_tensor * src = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, ncols, nheads, ntokens);
+    ggml_tensor * pos = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, ntokens);
+    ggml_tensor * freq = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, n_dims / 2);
+    ggml_tensor * out = ggml_rope_ext(
+        ctx.get(), src, pos, freq, static_cast<int>(n_dims), mode, 0,
+        10000.0f, freq_scale, 0.0f, 1.0f, 1.0f, 1.0f);
+    GGML_ASSERT(ggml_backend_dev_supports_op(dev, out));
+
+    ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), 16, false);
+    ggml_build_forward_expand(graph, out);
+    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(), backend));
+    GGML_ASSERT(buffer != nullptr);
+
+    std::vector<float> src_data(static_cast<size_t>(ncols * nheads * ntokens));
+    std::vector<int32_t> pos_data(static_cast<size_t>(ntokens));
+    // ggml_rope_ext src2 is a correction factor tensor, not precomputed
+    // inverse frequencies. Use a smooth non-uniform profile so this catches
+    // src2 indexing and theta/factor arithmetic bugs that all-ones factors
+    // would hide.
+    std::vector<float> freq_data(static_cast<size_t>(n_dims / 2));
+    for (size_t i = 0; i < freq_data.size(); ++i) {
+        const float t = freq_data.size() == 1 ? 0.0f : static_cast<float>(i) / static_cast<float>(freq_data.size() - 1);
+        freq_data[i] = 1.0f + 7.0f * t;
+    }
+    for (int64_t i = 0; i < ntokens; ++i) {
+        pos_data[static_cast<size_t>(i)] = static_cast<int32_t>(i);
+    }
+    for (size_t i = 0; i < src_data.size(); ++i) {
+        src_data[i] = static_cast<float>(static_cast<int>((i * 13 + 11) % 101) - 50) * 0.03125f;
+    }
+    ggml_backend_tensor_set(src, src_data.data(), 0, src_data.size() * sizeof(float));
+    ggml_backend_tensor_set(pos, pos_data.data(), 0, pos_data.size() * sizeof(int32_t));
+    ggml_backend_tensor_set(freq, freq_data.data(), 0, freq_data.size() * sizeof(float));
+    GGML_ASSERT(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+
+    expect_near(
+        tensor_to_float(out),
+        run_catalog_rope_cpu_reference(src_data, pos_data, freq_data, ncols, nheads, ntokens, n_dims, mode, freq_scale),
+        2.0e-5f, "live_rope_normal_freq");
+}
+
+static void run_live_rope_normal_freq_inplace_case(ggml_backend_t backend, ggml_backend_dev_t dev) {
+    const int64_t ncols = 128;
+    const int64_t nheads = 24;
+    const int64_t ntokens = 42;
+    const int64_t n_dims = 128;
+    const int mode = GGML_ROPE_TYPE_NORMAL;
+    const float freq_scale = 1.0f;
+
+    ggml_context_ptr ctx = make_context();
+    ggml_tensor * src = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, ncols, nheads, ntokens);
+    ggml_tensor * pos = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, ntokens);
+    ggml_tensor * freq = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, n_dims / 2);
+    // ggml's graph allocator is allowed to place an out-of-place ROPE result
+    // over a dead producer. Use the explicit in-place API here so the test
+    // always exercises the same src0/dst aliasing contract, independent of
+    // allocator heuristics.
+    ggml_tensor * out = ggml_rope_ext_inplace(
+        ctx.get(), src, pos, freq, static_cast<int>(n_dims), mode, 0,
+        10000.0f, freq_scale, 0.0f, 1.0f, 1.0f, 1.0f);
+    GGML_ASSERT(out->view_src == src);
+    GGML_ASSERT(out->view_offs == 0);
+    GGML_ASSERT(ggml_backend_dev_supports_op(dev, out));
+
+    ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), 16, false);
+    ggml_build_forward_expand(graph, out);
+    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(), backend));
+    GGML_ASSERT(buffer != nullptr);
+    GGML_ASSERT(out->buffer == src->buffer);
+    GGML_ASSERT(out->data == src->data);
+
+    std::vector<float> src_data(static_cast<size_t>(ncols * nheads * ntokens));
+    std::vector<int32_t> pos_data(static_cast<size_t>(ntokens));
+    std::vector<float> freq_data(static_cast<size_t>(n_dims / 2));
+    for (size_t i = 0; i < freq_data.size(); ++i) {
+        const float t = freq_data.size() == 1 ? 0.0f : static_cast<float>(i) / static_cast<float>(freq_data.size() - 1);
+        freq_data[i] = 1.0f + 7.0f * t;
+    }
+    for (int64_t i = 0; i < ntokens; ++i) {
+        pos_data[static_cast<size_t>(i)] = static_cast<int32_t>(i);
+    }
+    for (size_t i = 0; i < src_data.size(); ++i) {
+        src_data[i] = static_cast<float>(static_cast<int>((i * 13 + 11) % 101) - 50) * 0.03125f;
+    }
+
+    ggml_backend_tensor_set(src, src_data.data(), 0, src_data.size() * sizeof(float));
+    ggml_backend_tensor_set(pos, pos_data.data(), 0, pos_data.size() * sizeof(int32_t));
+    ggml_backend_tensor_set(freq, freq_data.data(), 0, freq_data.size() * sizeof(float));
+    GGML_ASSERT(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+
+    expect_near(
+        tensor_to_float(out),
+        run_catalog_rope_cpu_reference(src_data, pos_data, freq_data, ncols, nheads, ntokens, n_dims, mode, freq_scale),
+        2.0e-5f, "live_rope_normal_freq_inplace");
+}
+
+static void run_live_rope_normal_freq_reused_producer_case(ggml_backend_t backend, ggml_backend_dev_t dev) {
+    const int64_t ncols = 128;
+    const int64_t nheads = 24;
+    const int64_t ntokens = 42;
+    const int64_t n_dims = 128;
+    const int mode = GGML_ROPE_TYPE_NORMAL;
+    const float freq_scale = 1.0f;
+    const float producer_scale = 1.25f;
+
+    ggml_context_ptr ctx = make_context();
+    ggml_tensor * src = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, ncols, nheads, ntokens);
+    ggml_tensor * produced = ggml_scale(ctx.get(), src, producer_scale);
+    ggml_tensor * pos = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, ntokens);
+    ggml_tensor * freq = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, n_dims / 2);
+    // This mirrors the live Q path more closely than ggml_rope_ext_inplace:
+    // ROPE is logically out-of-place, but ggml's graph allocator may reuse the
+    // dead producer storage for the ROPE result. The HRX kernel must therefore
+    // be correct when src0 and dst bindings are the same allocation.
+    ggml_tensor * out = ggml_rope_ext(
+        ctx.get(), produced, pos, freq, static_cast<int>(n_dims), mode, 0,
+        10000.0f, freq_scale, 0.0f, 1.0f, 1.0f, 1.0f);
+    GGML_ASSERT(ggml_backend_dev_supports_op(dev, produced));
+    GGML_ASSERT(ggml_backend_dev_supports_op(dev, out));
+
+    ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), 16, false);
+    ggml_build_forward_expand(graph, out);
+    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(), backend));
+    GGML_ASSERT(buffer != nullptr);
+
+    std::vector<float> src_data(static_cast<size_t>(ncols * nheads * ntokens));
+    std::vector<int32_t> pos_data(static_cast<size_t>(ntokens));
+    std::vector<float> freq_data(static_cast<size_t>(n_dims / 2));
+    for (size_t i = 0; i < freq_data.size(); ++i) {
+        const float t = freq_data.size() == 1 ? 0.0f : static_cast<float>(i) / static_cast<float>(freq_data.size() - 1);
+        freq_data[i] = 1.0f + 7.0f * t;
+    }
+    for (size_t i = 0; i < src_data.size(); ++i) {
+        src_data[i] = static_cast<float>(static_cast<int>((i * 13 + 11) % 101) - 50) * 0.03125f;
+    }
+
+    std::vector<float> produced_data(src_data.size());
+    for (size_t i = 0; i < src_data.size(); ++i) {
+        produced_data[i] = src_data[i] * producer_scale;
+    }
+
+    ggml_backend_tensor_set(src, src_data.data(), 0, src_data.size() * sizeof(float));
+    ggml_backend_tensor_set(pos, pos_data.data(), 0, pos_data.size() * sizeof(int32_t));
+    ggml_backend_tensor_set(freq, freq_data.data(), 0, freq_data.size() * sizeof(float));
+    GGML_ASSERT(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+
+    expect_near(
+        tensor_to_float(out),
+        run_catalog_rope_cpu_reference(produced_data, pos_data, freq_data, ncols, nheads, ntokens, n_dims, mode, freq_scale),
+        2.0e-5f, "live_rope_normal_freq_reused_producer");
+}
+
+static void run_live_rope_normal_freq_reused_producer_sched_case(ggml_backend_t backend, ggml_backend_dev_t dev) {
+    const int64_t ncols = 128;
+    const int64_t nheads = 24;
+    const int64_t n_dims = 128;
+    const int mode = GGML_ROPE_TYPE_NORMAL;
+    const float freq_scale = 1.0f;
+    const float freq_base = 500000.0f;
+    const float producer_scale = 1.25f;
+    const std::vector<float> freq_data = {
+        1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+        1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+        1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+        1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.23493707f, 1.65132928f, 2.27665949f,
+        3.29226279f, 5.171597f, 9.66673088f, 32.0f, 32.0f, 32.0f,
+        32.0f, 32.0f, 32.0f, 32.0f, 32.0f, 32.0f, 32.0f, 32.0f,
+        32.0f, 32.0f, 32.0f, 32.0f, 32.0f, 32.0f, 32.0f, 32.0f,
+        32.0f, 32.0f, 32.0f, 32.0f, 32.0f, 32.0f, 32.0f, 32.0f,
+        32.0f, 32.0f,
+    };
+
+    auto run_case = [&](int64_t ntokens, int32_t pos_base, const char * label) {
+        ggml_backend_ptr cpu_backend(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr));
+        GGML_ASSERT(cpu_backend != nullptr);
+        ggml_backend_t sched_backends[] = { backend, cpu_backend.get() };
+        ggml_backend_sched_t sched = ggml_backend_sched_new(sched_backends, nullptr, 2, 32, false, true);
+        GGML_ASSERT(sched != nullptr);
+
+        ggml_context_ptr ctx = make_context();
+        ggml_tensor * src = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, ncols, nheads, ntokens);
+        ggml_tensor * produced = ggml_scale(ctx.get(), src, producer_scale);
+        ggml_tensor * pos = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, ntokens);
+        ggml_tensor * freq = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, n_dims / 2);
+        ggml_tensor * out = ggml_rope_ext(
+            ctx.get(), produced, pos, freq, static_cast<int>(n_dims), mode, 0,
+            freq_base, freq_scale, 0.0f, 1.0f, 1.0f, 1.0f);
+        GGML_ASSERT(ggml_backend_dev_supports_op(dev, produced));
+        GGML_ASSERT(ggml_backend_dev_supports_op(dev, out));
+
+        ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), 16, false);
+        ggml_build_forward_expand(graph, out);
+        ggml_backend_sched_set_tensor_backend(sched, src, backend);
+        ggml_backend_sched_set_tensor_backend(sched, pos, backend);
+        ggml_backend_sched_set_tensor_backend(sched, freq, backend);
+        GGML_ASSERT(ggml_backend_sched_alloc_graph(sched, graph));
+
+        std::vector<float> src_data(static_cast<size_t>(ncols * nheads * ntokens));
+        std::vector<int32_t> pos_data(static_cast<size_t>(ntokens));
+        for (int64_t i = 0; i < ntokens; ++i) {
+            pos_data[static_cast<size_t>(i)] = pos_base + static_cast<int32_t>(i);
+        }
+        for (size_t i = 0; i < src_data.size(); ++i) {
+            src_data[i] = static_cast<float>(static_cast<int>((i * 13 + 11) % 101) - 50) * 0.03125f;
+        }
+
+        std::vector<float> produced_data(src_data.size());
+        for (size_t i = 0; i < src_data.size(); ++i) {
+            produced_data[i] = src_data[i] * producer_scale;
+        }
+
+        ggml_backend_tensor_set(src, src_data.data(), 0, src_data.size() * sizeof(float));
+        ggml_backend_tensor_set(pos, pos_data.data(), 0, pos_data.size() * sizeof(int32_t));
+        ggml_backend_tensor_set(freq, freq_data.data(), 0, freq_data.size() * sizeof(float));
+        GGML_ASSERT(ggml_backend_sched_graph_compute(sched, graph) == GGML_STATUS_SUCCESS);
+
+        expect_near(
+            tensor_to_float(out),
+            run_catalog_rope_cpu_reference(produced_data, pos_data, freq_data, ncols, nheads, ntokens, n_dims, mode, freq_scale, freq_base),
+            2.0e-5f, label);
+        ggml_backend_sched_free(sched);
+    };
+
+    run_case(42, 0, "live_rope_normal_freq_reused_producer_sched_prompt");
+    run_case(2, 42, "live_rope_normal_freq_reused_producer_sched_pair");
+    run_case(1, 44, "live_rope_normal_freq_reused_producer_sched_decode");
 }
 
 static void run_catalog_rope_set_rows_once(ggml_backend_t backend, ggml_backend_dev_t dev, const ggml_backend_hrx_test_case & cfg) {
@@ -5595,6 +6002,41 @@ int main() {
             run_catalog_mul_mat_q4_k_f32_case(backend.get(), dev);
             return 0;
         }
+        if (std::strcmp(test_only, "live_kv_set_rows") == 0) {
+            run_live_kv_set_rows_update_case(backend.get(), dev);
+            ggml_backend_synchronize(backend.get());
+            return 0;
+        }
+        if (std::strcmp(test_only, "live_kv_set_rows_flat") == 0) {
+            run_live_kv_set_rows_flat_case(backend.get(), dev);
+            ggml_backend_synchronize(backend.get());
+            return 0;
+        }
+        if (std::strcmp(test_only, "live_kv_kqv_direct") == 0) {
+            run_live_kv_kqv_direct_case(backend.get(), dev);
+            ggml_backend_synchronize(backend.get());
+            return 0;
+        }
+        if (std::strcmp(test_only, "live_rope_normal_freq") == 0) {
+            run_live_rope_normal_freq_case(backend.get(), dev);
+            ggml_backend_synchronize(backend.get());
+            return 0;
+        }
+        if (std::strcmp(test_only, "live_rope_normal_freq_inplace") == 0) {
+            run_live_rope_normal_freq_inplace_case(backend.get(), dev);
+            ggml_backend_synchronize(backend.get());
+            return 0;
+        }
+        if (std::strcmp(test_only, "live_rope_normal_freq_reused_producer") == 0) {
+            run_live_rope_normal_freq_reused_producer_case(backend.get(), dev);
+            ggml_backend_synchronize(backend.get());
+            return 0;
+        }
+        if (std::strcmp(test_only, "live_rope_normal_freq_reused_producer_sched") == 0) {
+            run_live_rope_normal_freq_reused_producer_sched_case(backend.get(), dev);
+            ggml_backend_synchronize(backend.get());
+            return 0;
+        }
         static constexpr const char * prefix = "catalog_";
         if (std::strncmp(test_only, prefix, std::strlen(prefix)) == 0) {
             const std::vector<ggml_backend_hrx_test_case> cases =
@@ -5612,6 +6054,7 @@ int main() {
 
     const std::vector<ggml_backend_hrx_test_case> cases = ggml_backend_hrx_test_cases(dev, "");
     GGML_ASSERT(!cases.empty());
+    run_live_rope_normal_freq_inplace_case(backend.get(), dev);
     for (const ggml_backend_hrx_test_case & cfg : cases) {
         run_catalog_schedule_case(backend.get(), dev, cfg);
     }

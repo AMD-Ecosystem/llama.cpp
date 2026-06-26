@@ -215,6 +215,10 @@
         {
           "source": "dst.ne1",
           "eq_source": "src1.ne1"
+        },
+        {
+          "source": "tensor_overlap.2_3",
+          "eq": 0
         }
       ],
       "evidence": {
@@ -327,6 +331,10 @@
         {
           "source": "dst.ne1",
           "eq_source": "src1.ne1"
+        },
+        {
+          "source": "tensor_overlap.2_3",
+          "eq": 0
         }
       ],
       "evidence": {

@@ -59,11 +59,10 @@ kernel.def export("hrx2_rope_neox_f32_freq") @hrx2_rope_neox_f32_freq() {
   %pos_descriptor = buffer.assume.memory_space<descriptor> %pos : buffer
   %freq_descriptor = buffer.assume.memory_space<descriptor> %freq : buffer
   %dst_descriptor = buffer.assume.memory_space<descriptor> %dst : buffer
-  %src0_noalias, %pos_noalias, %freq_noalias, %dst_noalias = buffer.assume.noalias %src0_descriptor, %pos_descriptor, %freq_descriptor, %dst_descriptor : buffer, buffer, buffer, buffer
-  %src0_view = buffer.view %src0_noalias[%base] : buffer -> view<[%src0_count]xf32, #dense>
-  %pos_view = buffer.view %pos_noalias[%base] : buffer -> view<[%pos_count]xi32, #dense>
-  %freq_view = buffer.view %freq_noalias[%base] : buffer -> view<[%half_dims]xf32, #dense>
-  %dst_view = buffer.view %dst_noalias[%base] : buffer -> view<[%dst_count]xf32, #dense>
+  %src0_view = buffer.view %src0_descriptor[%base] : buffer -> view<[%src0_count]xf32, #dense>
+  %pos_view = buffer.view %pos_descriptor[%base] : buffer -> view<[%pos_count]xi32, #dense>
+  %freq_view = buffer.view %freq_descriptor[%base] : buffer -> view<[%half_dims]xf32, #dense>
+  %dst_view = buffer.view %dst_descriptor[%base] : buffer -> view<[%dst_count]xf32, #dense>
 
   scf.if %in_bounds {
     %pair = index.assume %lane [range(%lane, 0, 1023)] : index
@@ -186,11 +185,10 @@ kernel.def export("hrx2_rope_neox_f32_freq_scale") @hrx2_rope_neox_f32_freq_scal
   %pos_descriptor = buffer.assume.memory_space<descriptor> %pos : buffer
   %freq_descriptor = buffer.assume.memory_space<descriptor> %freq : buffer
   %dst_descriptor = buffer.assume.memory_space<descriptor> %dst : buffer
-  %src0_noalias, %pos_noalias, %freq_noalias, %dst_noalias = buffer.assume.noalias %src0_descriptor, %pos_descriptor, %freq_descriptor, %dst_descriptor : buffer, buffer, buffer, buffer
-  %src0_view = buffer.view %src0_noalias[%base] : buffer -> view<[%src0_count]xf32, #dense>
-  %pos_view = buffer.view %pos_noalias[%base] : buffer -> view<[%pos_count]xi32, #dense>
-  %freq_view = buffer.view %freq_noalias[%base] : buffer -> view<[%half_dims]xf32, #dense>
-  %dst_view = buffer.view %dst_noalias[%base] : buffer -> view<[%dst_count]xf32, #dense>
+  %src0_view = buffer.view %src0_descriptor[%base] : buffer -> view<[%src0_count]xf32, #dense>
+  %pos_view = buffer.view %pos_descriptor[%base] : buffer -> view<[%pos_count]xi32, #dense>
+  %freq_view = buffer.view %freq_descriptor[%base] : buffer -> view<[%half_dims]xf32, #dense>
+  %dst_view = buffer.view %dst_descriptor[%base] : buffer -> view<[%dst_count]xf32, #dense>
 
   scf.if %in_bounds {
     %pair = index.assume %lane [range(%lane, 0, 1023)] : index
@@ -332,11 +330,10 @@ kernel.def export("hrx2_rope_normal_f32_freq") @hrx2_rope_normal_f32_freq() {
   %pos_global = buffer.assume.memory_space<global> %pos : buffer
   %freq_global = buffer.assume.memory_space<global> %freq : buffer
   %dst_global = buffer.assume.memory_space<global> %dst : buffer
-  %src0_noalias, %pos_noalias, %freq_noalias, %dst_noalias = buffer.assume.noalias %src0_global, %pos_global, %freq_global, %dst_global : buffer, buffer, buffer, buffer
-  %src0_view = buffer.view %src0_noalias[%base] : buffer -> view<[%src0_count]xf32, #dense>
-  %pos_view = buffer.view %pos_noalias[%base] : buffer -> view<[%pos_count]xi32, #dense>
-  %freq_view = buffer.view %freq_noalias[%base] : buffer -> view<[%half_dims]xf32, #dense>
-  %dst_view = buffer.view %dst_noalias[%base] : buffer -> view<[%dst_count]xf32, #dense>
+  %src0_view = buffer.view %src0_global[%base] : buffer -> view<[%src0_count]xf32, #dense>
+  %pos_view = buffer.view %pos_global[%base] : buffer -> view<[%pos_count]xi32, #dense>
+  %freq_view = buffer.view %freq_global[%base] : buffer -> view<[%half_dims]xf32, #dense>
+  %dst_view = buffer.view %dst_global[%base] : buffer -> view<[%dst_count]xf32, #dense>
 
   scf.if %in_bounds {
     %pair = index.rem %linear, %half_cols : index
