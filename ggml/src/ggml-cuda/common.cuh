@@ -1507,6 +1507,34 @@ struct ggml_backend_cuda_context {
     ggml_cuda_pool & pool() {
         return pool(device);
     }
+
+    struct q8_1_cache_entry {
+        const void * src1_data = nullptr;
+        void *       q8_1_buf  = nullptr;
+        size_t       buf_size  = 0;
+    };
+    q8_1_cache_entry q8_1_cache;
+
+    void * q8_1_cache_get_or_alloc(const void * src1_data, size_t needed_size, bool * cache_hit) {
+        if (q8_1_cache.src1_data == src1_data && q8_1_cache.q8_1_buf) {
+            *cache_hit = true;
+            return q8_1_cache.q8_1_buf;
+        }
+        if (q8_1_cache.buf_size < needed_size) {
+            if (q8_1_cache.q8_1_buf) {
+                CUDA_CHECK(cudaFree(q8_1_cache.q8_1_buf));
+            }
+            CUDA_CHECK(cudaMalloc(&q8_1_cache.q8_1_buf, needed_size));
+            q8_1_cache.buf_size = needed_size;
+        }
+        q8_1_cache.src1_data = src1_data;
+        *cache_hit = false;
+        return q8_1_cache.q8_1_buf;
+    }
+
+    void q8_1_cache_invalidate() {
+        q8_1_cache.src1_data = nullptr;
+    }
 };
 
 struct ggml_cuda_mm_fusion_args_host {
@@ -1516,6 +1544,9 @@ struct ggml_cuda_mm_fusion_args_host {
     const ggml_tensor * x_scale = nullptr;
     const ggml_tensor * gate_scale = nullptr;
     ggml_glu_op glu_op;
+    const ggml_tensor * rms_norm_src = nullptr;
+    const ggml_tensor * rms_norm_weights = nullptr;
+    float rms_norm_eps = 0.0f;
 };
 struct ggml_cuda_mm_fusion_args_device {
     const void * x_bias = nullptr;
@@ -1524,6 +1555,9 @@ struct ggml_cuda_mm_fusion_args_device {
     const void * x_scale = nullptr;
     const void * gate_scale = nullptr;
     ggml_glu_op glu_op;
+    const void * rms_norm_src = nullptr;
+    const void * rms_norm_weights = nullptr;
+    float rms_norm_eps = 0.0f;
 };
 
 struct ggml_cuda_kernel_launch_params {

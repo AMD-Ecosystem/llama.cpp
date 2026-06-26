@@ -3751,6 +3751,36 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         return 2;
     }
 
+    // RMS_NORM + MUL + MUL_MAT: fold rms_norm+mul+quantize into a single MMVQ dispatch
+    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL }, {}) &&
+        i + 2 < cgraph->n_nodes &&
+        cgraph->nodes[i + 2]->op == GGML_OP_MUL_MAT) {
+
+        ggml_tensor * rms_node = cgraph->nodes[i];
+        ggml_tensor * mul_node = cgraph->nodes[i + 1];
+        ggml_tensor * mm_node  = cgraph->nodes[i + 2];
+
+        if (ggml_node_has_n_uses(cgraph, i + 1, 1) &&
+            (mm_node->src[1] == mul_node) &&
+            ggml_cuda_should_fuse_mul_mat_vec_q(mm_node)) {
+
+            float eps;
+            memcpy(&eps, rms_node->op_params, sizeof(float));
+
+            const ggml_tensor * mul_weights = (mul_node->src[0] == rms_node)
+                                            ? mul_node->src[1] : mul_node->src[0];
+
+            ggml_cuda_mm_fusion_args_host fusion_data{};
+            fusion_data.rms_norm_src     = rms_node->src[0];
+            fusion_data.rms_norm_weights = mul_weights;
+            fusion_data.rms_norm_eps     = eps;
+
+            ggml_cuda_mul_mat_vec_q(*cuda_ctx, mm_node->src[0], mm_node->src[1],
+                                    mm_node->src[2], mm_node, &fusion_data);
+            return 2;
+        }
+    }
+
     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL }, {})) {
         ggml_cuda_op_rms_norm_fused(*cuda_ctx, node, cgraph->nodes[i + 1]);
         return 1;
@@ -3883,6 +3913,8 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
             } else {
                 stream_ctx.concurrent_events.clear();
             }
+
+            cuda_ctx->q8_1_cache_invalidate();
 
             for (int i = 0; i < cgraph->n_nodes; i++) {
                 ggml_tensor * node = cgraph->nodes[i];

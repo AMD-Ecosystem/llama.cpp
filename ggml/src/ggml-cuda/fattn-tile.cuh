@@ -314,8 +314,20 @@ static constexpr __host__ __device__ uint32_t ggml_cuda_fattn_tile_get_config_am
 }
 
 static constexpr __host__ __device__ uint32_t ggml_cuda_fattn_tile_get_config_amd_rdna3_5(const int DKQ, const int DV, const int ncols) {
-    // With rocWMMA FlashAttention off, D=256 prefill runs on the tile kernel; on RDNA3.5 a smaller
-    // K tile with higher occupancy is faster than the shared RDNA values. Other cases fall back.
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE( 72,  72,  2,  64, 4,  64,  72)
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE( 72,  72,  4, 128, 4,  64,  72)
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE( 72,  72,  8, 128, 4,  64,  72)
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE( 72,  72, 16, 128, 4,  64,  72)
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE( 72,  72, 32, 128, 4,  64,  72)
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE( 72,  72, 64, 128, 4,  64,  72)
+
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE( 80,  80,  2,  64, 4,  64,  80)
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE( 80,  80,  4, 128, 4,  64,  80)
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE( 80,  80,  8, 256, 4,  64,  80)
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE( 80,  80, 16, 256, 4,  64,  80)
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE( 80,  80, 32, 256, 4,  64,  80)
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE( 80,  80, 64, 256, 4,  64,  80)
+
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(256, 256, 32, 256, 4, 64, 64)
 
     return ggml_cuda_fattn_tile_get_config_amd_rdna(DKQ, DV, ncols);

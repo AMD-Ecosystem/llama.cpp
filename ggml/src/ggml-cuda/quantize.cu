@@ -51,6 +51,66 @@ static __global__ void quantize_q8_1(
     y[ib].ds = make_half2(d, sum);
 }
 
+template <int block_size>
+static __global__ void rms_norm_mul_quantize_q8_1(
+        const float * __restrict__ x, const float * __restrict__ weights, void * __restrict__ vy,
+        const int64_t ncols, const int64_t ne0_padded,
+        const int64_t x_stride_row, const int64_t x_stride_channel, const int64_t x_stride_sample,
+        const float eps) {
+    const int row     = blockIdx.x;
+    const int channel = blockIdx.y;
+    const int sample  = blockIdx.z;
+    const int tid     = threadIdx.x;
+
+    const float * x_row = x + sample*x_stride_sample + channel*x_stride_channel + row*x_stride_row;
+
+    // Phase 1: compute sum of squares for RMS norm
+    float sum_sq = 0.0f;
+    for (int col = tid; col < ncols; col += block_size) {
+        const float xi = x_row[col];
+        sum_sq += xi * xi;
+    }
+
+    extern __shared__ float s_buf[];
+    sum_sq = block_reduce<block_reduce_method::SUM, block_size>(sum_sq, s_buf);
+    const float rms_scale = rsqrtf(sum_sq / ncols + eps);
+
+    // Phase 2: apply rms_norm * weights, then quantize to Q8_1
+    const int nrows     = gridDim.x;
+    const int nchannels = gridDim.y;
+    const int64_t row_offset = ((int64_t(sample)*nchannels + channel)*nrows + row) * ne0_padded;
+    block_q8_1 * y = (block_q8_1 *)vy;
+    const int64_t ib_base = row_offset / QK8_1;
+
+    const int warp_id = tid / WARP_SIZE;
+    const int lane_id = tid % WARP_SIZE;
+    const int n_groups = ne0_padded / QK8_1;
+
+    for (int group = warp_id; group < n_groups; group += block_size / WARP_SIZE) {
+        const int col = group * QK8_1 + lane_id;
+        float val = 0.0f;
+        if (col < ncols) {
+            val = rms_scale * x_row[col] * weights[col];
+        }
+
+        float amax = fabsf(val);
+        float sum  = val;
+
+        amax = warp_reduce_max<QK8_1>(amax);
+        sum  = warp_reduce_sum<QK8_1>(sum);
+
+        const float  d = amax / 127.0f;
+        const int8_t q = amax == 0.0f ? 0 : (int8_t)roundf(val / d);
+
+        const int64_t ib = ib_base + group;
+        y[ib].qs[lane_id] = q;
+
+        if (lane_id == 0) {
+            y[ib].ds = make_half2(d, sum);
+        }
+    }
+}
+
 __device__ __forceinline__ uint8_t compute_e8m0_scale(float amax) {
     if (!(amax > 0.0f)) {
         return 0;
@@ -387,6 +447,22 @@ void quantize_row_q8_1_cuda(
     const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(num_blocks, block_size, 0, stream);
     ggml_cuda_kernel_launch(quantize_q8_1, launch_params, x, vy, ne00, s01, s02, s03, ne0, ne1, ne2_fastdiv);
     GGML_UNUSED(type_src0);
+}
+
+void quantize_row_q8_1_rms_norm_cuda(
+        const float * x, const float * weights, void * vy, const float eps,
+        const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
+        const int64_t ne0, const int64_t ne1, const int64_t ne2, const int64_t ne3, cudaStream_t stream) {
+    GGML_ASSERT(ne0 % QK8_1 == 0);
+    GGML_ASSERT(ne00 <= 8192);
+
+    constexpr int block_size = CUDA_QUANTIZE_BLOCK_SIZE; // 256
+    const dim3 num_blocks(ne1, ne2, ne3);
+    const dim3 block_dims(block_size, 1, 1);
+    const size_t shmem = block_size / WARP_SIZE * sizeof(float);
+    const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(num_blocks, block_dims, shmem, stream);
+    ggml_cuda_kernel_launch(rms_norm_mul_quantize_q8_1<block_size>, launch_params,
+                            x, weights, vy, ne00, ne0, s01, s02, s03, eps);
 }
 
 void quantize_mmq_q8_1_cuda(
