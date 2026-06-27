@@ -5,9 +5,11 @@ on:
   push:
     branches:
       - master
+      - gfx11 # ROCm fork-local, DO NOT UPSTREAM
   pull_request:
     branches:
       - master
+      - gfx11 # ROCm fork-local, DO NOT UPSTREAM
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
