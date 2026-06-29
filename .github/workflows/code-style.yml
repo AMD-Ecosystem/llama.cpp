@@ -5,9 +5,11 @@ on:
   push:
     branches:
       - master
+      - gfx11 # ROCm fork-local, DO NOT UPSTREAM
   pull_request:
     branches:
       - master
+      - gfx11 # ROCm fork-local, DO NOT UPSTREAM
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
@@ -15,7 +17,9 @@ concurrency:
 
 jobs:
   model-naming:
-    runs-on: [self-hosted, fast]
+    # ROCm fork-local: upstream uses [self-hosted, fast] runners that don't
+    # exist in this fork. DO NOT UPSTREAM this runner change.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
       - name: Check model naming conventions
