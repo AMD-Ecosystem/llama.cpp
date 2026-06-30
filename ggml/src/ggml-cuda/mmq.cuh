@@ -3062,19 +3062,69 @@ static __device__ __forceinline__ void vec_dot_q6_K_q8_1_mma(
 
     const int i0 = (threadIdx.y / ntx) * rows_per_warp;
 
-    constexpr int j_step = ntx*tile_C::J;
-    constexpr int nj     = (mmq_x + j_step - 1) / j_step;
+#if defined(GGML_USE_HIP)
+    if (g_mmq_profile) {
+        for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += 4) {
+            const int k0 = k00 + k01;
+
+            tile_A A[ntx];
+            float sclA[ntx][tile_C::ne];
+
+            uint64_t t_vec_sub = 0;
+            mmq_profile_vec_sub_begin(t_vec_sub);
+#pragma unroll
+            for (int n = 0; n < ntx; ++n) {
+                load_ldmatrix(A[n], x_qs + (i0 + n*tile_A::I)*MMQ_MMA_TILE_X_K_Q6_K + k0, MMQ_MMA_TILE_X_K_Q6_K);
+
+#pragma unroll
+                for (int l = 0; l < tile_C::ne; ++l) {
+                    const int i = i0 + n*tile_A::I + tile_C::get_i(l);
+                    const int8_t * sc = (const int8_t *) (x_sc + i*MMQ_MMA_TILE_X_K_Q6_K + k00/16);
+                    sclA[n][l] = (float) sc[k01/4] * x_df[i*MMQ_MMA_TILE_X_K_Q6_K];
+                }
+            }
+            mmq_profile_vec_sub_end(t_vec_sub, MMQ_PROFILE_VEC_A);
+
+#pragma unroll
+            for (int j0 = 0; j0 < mmq_x; j0 += ntx*tile_C::J) {
+                tile_B B;
+
+                mmq_profile_vec_sub_begin(t_vec_sub);
+                load_ldmatrix(B, y_qs + j0*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K);
+                const int j = j0 + tile_C::get_j(0);
+                const float dB = y_df[j*MMQ_TILE_Y_K + k01/QI8_1];
+                mmq_profile_vec_sub_end(t_vec_sub, MMQ_PROFILE_VEC_B);
+
+                tile_C C[ntx];
+
+                mmq_profile_vec_sub_begin(t_vec_sub);
+#pragma unroll
+                for (int n = 0; n < ntx; ++n) {
+                    mma(C[n], A[n], B);
+                }
+                mmq_profile_vec_sub_end(t_vec_sub, MMQ_PROFILE_VEC_MMA);
+
+                mmq_profile_vec_sub_begin(t_vec_sub);
+#pragma unroll
+                for (int n = 0; n < ntx; ++n) {
+#pragma unroll
+                    for (int l = 0; l < tile_C::ne; ++l) {
+                        sum[(j0/tile_C::J + n)*tile_C::ne + l] += C[n].x[l]*sclA[n][l]*dB;
+                    }
+                }
+                mmq_profile_vec_sub_end(t_vec_sub, MMQ_PROFILE_VEC_EPILOGUE);
+            }
+        }
+        return;
+    }
+#endif // GGML_USE_HIP
 
     for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += 4) {
         const int k0 = k00 + k01;
 
         tile_A A[ntx];
         float sclA[ntx][tile_C::ne];
-        tile_B Btile[nj];
-        float  dBt[nj];
 
-        uint64_t t_vec_sub = 0;
-        mmq_profile_vec_sub_begin(t_vec_sub);
 #pragma unroll
         for (int n = 0; n < ntx; ++n) {
             load_ldmatrix(A[n], x_qs + (i0 + n*tile_A::I)*MMQ_MMA_TILE_X_K_Q6_K + k0, MMQ_MMA_TILE_X_K_Q6_K);
@@ -3085,55 +3135,26 @@ static __device__ __forceinline__ void vec_dot_q6_K_q8_1_mma(
                 const int8_t * sc = (const int8_t *) (x_sc + i*MMQ_MMA_TILE_X_K_Q6_K + k00/16);
                 sclA[n][l] = (float) sc[k01/4] * x_df[i*MMQ_MMA_TILE_X_K_Q6_K];
             }
-
-            if (!g_mmq_profile && n < nj) {
-                const int j0 = n*j_step;
-                load_generic(Btile[n], y_qs + j0*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K);
-                dBt[n] = y_df[(j0 + tile_C::get_j(0))*MMQ_TILE_Y_K + k01/QI8_1];
-            }
         }
-        mmq_profile_vec_sub_end(t_vec_sub, MMQ_PROFILE_VEC_A);
-
-        mmq_profile_vec_sub_begin(t_vec_sub);
-        if (g_mmq_profile) {
-#pragma unroll
-            for (int t = 0; t < nj; ++t) {
-                const int j0 = t*j_step;
-                load_generic(Btile[t], y_qs + j0*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K);
-                dBt[t] = y_df[(j0 + tile_C::get_j(0))*MMQ_TILE_Y_K + k01/QI8_1];
-            }
-        } else {
-#pragma unroll
-            for (int t = ntx; t < nj; ++t) {
-                const int j0 = t*j_step;
-                load_generic(Btile[t], y_qs + j0*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K);
-                dBt[t] = y_df[(j0 + tile_C::get_j(0))*MMQ_TILE_Y_K + k01/QI8_1];
-            }
-        }
-        mmq_profile_vec_sub_end(t_vec_sub, MMQ_PROFILE_VEC_B);
 
 #pragma unroll
-        for (int t = 0; t < nj; ++t) {
-            const int j0 = t*j_step;
+        for (int j0 = 0; j0 < mmq_x; j0 += ntx*tile_C::J) {
+            tile_B B;
+            load_ldmatrix(B, y_qs + j0*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K);
 
-            tile_C C[ntx];
+            const int j = j0 + tile_C::get_j(0);
+            const float dB = y_df[j*MMQ_TILE_Y_K + k01/QI8_1];
 
-            mmq_profile_vec_sub_begin(t_vec_sub);
 #pragma unroll
             for (int n = 0; n < ntx; ++n) {
-                mma(C[n], A[n], Btile[t]);
-            }
-            mmq_profile_vec_sub_end(t_vec_sub, MMQ_PROFILE_VEC_MMA);
+                tile_C C;
+                mma(C, A[n], B);
 
-            mmq_profile_vec_sub_begin(t_vec_sub);
-#pragma unroll
-            for (int n = 0; n < ntx; ++n) {
 #pragma unroll
                 for (int l = 0; l < tile_C::ne; ++l) {
-                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += C[n].x[l]*sclA[n][l]*dBt[t];
+                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += C.x[l]*sclA[n][l]*dB;
                 }
             }
-            mmq_profile_vec_sub_end(t_vec_sub, MMQ_PROFILE_VEC_EPILOGUE);
         }
     }
 #elif defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
