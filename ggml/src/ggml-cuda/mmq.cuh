@@ -4655,6 +4655,23 @@ struct mmq_args {
     bool use_stream_k; int64_t ncols_max;
 };
 
+#if defined(GGML_USE_HIP)
+// RDNA3.5 dual-WG (mmq_x=64, nbytes <= smpbo/2) helps K-quants with large per-tile LDS
+// (Q6_K WMMA tuning). Block quants (Q5_0, Q8_0, Q4_0) are faster at mmq_x=128 ntx=1.
+static bool mmq_rdna35_dual_wg_eligible(const ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+            return true;
+        default:
+            return false;
+    }
+}
+#endif // GGML_USE_HIP
+
 template<ggml_type type>
 static size_t mmq_get_nbytes_shared(const int mmq_x, const int mmq_y, const int cc, const int warp_size, const int nwarps) {
     const tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(type, mmq_y);
@@ -4836,9 +4853,9 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
     }
 
 #if defined(GGML_USE_HIP)
-    // RDNA3.5 (gfx115x): mmq_x=128 uses ~59% of LDS/CU → 1 WG/CU. Pick the smallest
-    // mmq_x with nbytes_shared <= smpbo/2 (2 WGs/CU) without doubling M-tile count.
-    if (GGML_CUDA_CC_IS_RDNA3_5(cc) && mmq_x_best > 0) {
+    // RDNA3.5 (gfx115x): mmq_x=128 uses ~59% of LDS/CU → 1 WG/CU. For K-quants only,
+    // pick the smallest mmq_x with nbytes_shared <= smpbo/2 (2 WGs/CU).
+    if (GGML_CUDA_CC_IS_RDNA3_5(cc) && mmq_x_best > 0 && mmq_rdna35_dual_wg_eligible(type)) {
         const size_t lds_dual_wg = smpbo / 2;
         const size_t nbytes_best = mmq_get_nbytes_shared<type>(mmq_x_best, mmq_y, cc, warp_size, nwarps);
         if (nbytes_best > lds_dual_wg) {
@@ -4902,8 +4919,7 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
         }
     }
 
-    // Q6_K narrow-N (batch ≤128): use the RDNA3.5 dual-WG path (mmq_x=64, ntx=2) from
-    // smpbo/2 selection above — faster end-to-end than mmq_x=128 ntx=1 on gfx115x prefill.
+    // Q6_K / K-quants narrow-N: dual-WG path (mmq_x=64, ntx=2) from smpbo/2 selection.
 #endif // GGML_USE_HIP
 
 #if defined(GGML_USE_HIP)
