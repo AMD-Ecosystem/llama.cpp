@@ -4902,36 +4902,8 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
         }
     }
 
-    // Narrow N (batch ≤128): Q6_K only — prefer mmq_x=128 for ntx=1 when LDS allows.
-    // Q6_K at mmq_x=128 uses ~38 KiB (1 WG/CU) but beats mmq_x=64 with ntx=2; do not
-    // require smpbo/2 here — that policy is for Q4_K dual-WG, not Q6 narrow-N.
-    if (GGML_CUDA_CC_IS_RDNA3_5(cc) && type == GGML_TYPE_Q6_K && args.ncols_max <= mmq_x_max) {
-        const int ntx_cur = (args.ncols_max + mmq_x_best - 1) / mmq_x_best;
-        if (ntx_cur > 1) {
-            const int nty  = (args.nrows_x + mmq_y - 1) / mmq_y;
-            const int ntzw = static_cast<int>(args.nchannels_y * args.nsamples_y);
-
-            for (int mmq_x = mmq_x_max; mmq_x >= 8; mmq_x -= 8) {
-                const int granularity = mmq_get_granularity_host(mmq_x, cc);
-                if (mmq_x % granularity != 0) {
-                    continue;
-                }
-                const size_t nbytes = mmq_get_nbytes_shared<type>(mmq_x, mmq_y, cc, warp_size, nwarps);
-                if (nbytes > smpbo) {
-                    continue;
-                }
-                const int ntx = (args.ncols_max + mmq_x - 1) / mmq_x;
-                if (ntx != 1) {
-                    continue;
-                }
-                const int grid_blocks = nty * ntx * ntzw;
-                if (grid_blocks >= 8) {
-                    mmq_x_best = mmq_x;
-                    break;
-                }
-            }
-        }
-    }
+    // Q6_K narrow-N (batch ≤128): use the RDNA3.5 dual-WG path (mmq_x=64, ntx=2) from
+    // smpbo/2 selection above — faster end-to-end than mmq_x=128 ntx=1 on gfx115x prefill.
 #endif // GGML_USE_HIP
 
 #if defined(GGML_USE_HIP)
