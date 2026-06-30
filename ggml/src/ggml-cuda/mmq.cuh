@@ -2998,23 +2998,42 @@ static __device__ __forceinline__ void vec_dot_q6_K_q8_1_mma(
             }
         }
 
-#pragma unroll
-        for (int j0 = 0; j0 < mmq_x; j0 += ntx*tile_C::J) {
-            tile_B B;
-            load_ldmatrix(B, y_qs + j0*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K);
+        constexpr int j_step = ntx*tile_C::J;
 
-            const int j = j0 + tile_C::get_j(0);
-            const float dB = y_df[j*MMQ_TILE_Y_K + k01/QI8_1];
+        tile_B B0;
+        load_ldmatrix(B0, y_qs + 0, MMQ_TILE_Y_K);
+        float dB0 = y_df[tile_C::get_j(0)*MMQ_TILE_Y_K + k01/QI8_1];
+
+#pragma unroll
+        for (int j0 = 0; j0 < mmq_x; j0 += j_step) {
+            const int j0_next = j0 + j_step;
+
+            tile_B B1;
+            float dB1 = 0.0f;
+            if (j0_next < mmq_x) {
+                load_ldmatrix(B1, y_qs + j0_next*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K);
+                const int jn = j0_next + tile_C::get_j(0);
+                dB1 = y_df[jn*MMQ_TILE_Y_K + k01/QI8_1];
+            }
+
+            tile_C C[ntx];
 
 #pragma unroll
             for (int n = 0; n < ntx; ++n) {
-                tile_C C;
-                mma(C, A[n], B);
+                mma(C[n], A[n], B0);
+            }
 
 #pragma unroll
+            for (int n = 0; n < ntx; ++n) {
+#pragma unroll
                 for (int l = 0; l < tile_C::ne; ++l) {
-                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += C.x[l]*sclA[n][l]*dB;
+                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += C[n].x[l]*sclA[n][l]*dB0;
                 }
+            }
+
+            if (j0_next < mmq_x) {
+                B0 = B1;
+                dB0 = dB1;
             }
         }
     }
