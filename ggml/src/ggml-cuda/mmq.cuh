@@ -14,12 +14,22 @@ using namespace ggml_cuda_mma;
 
 #if defined(GGML_USE_HIP)
 enum mmq_profile_phase {
-    MMQ_PROFILE_LOAD_TILES = 0,
-    MMQ_PROFILE_Y_ACT      = 1,
-    MMQ_PROFILE_VEC_DOT    = 2,
-    MMQ_PROFILE_KB_ITERS   = 3,
-    MMQ_PROFILE_N          = 4,
+    MMQ_PROFILE_LOAD_TILES   = 0,
+    MMQ_PROFILE_Y_ACT        = 1,
+    MMQ_PROFILE_VEC_DOT      = 2,
+    MMQ_PROFILE_KB_ITERS     = 3,
+    MMQ_PROFILE_VEC_A        = 4, // load_ldmatrix A + sclA hoist
+    MMQ_PROFILE_VEC_B        = 5, // load_ldmatrix B + dB
+    MMQ_PROFILE_VEC_MMA      = 6, // mma()
+    MMQ_PROFILE_VEC_EPILOGUE = 7, // sum[] FP32 epilogue
+    MMQ_PROFILE_N            = 8,
 };
+
+__device__ uint64_t * g_mmq_profile = nullptr;
+
+static __device__ __forceinline__ void mmq_profile_bind(uint64_t * const profile) {
+    g_mmq_profile = profile;
+}
 
 static __device__ __forceinline__ bool mmq_profile_want_sample(uint64_t * const profile) {
     return profile && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0
@@ -61,12 +71,41 @@ static __device__ __forceinline__ void mmq_profile_phase_end(uint64_t * const pr
     profile[phase] += mmq_profile_phase_cycles(t0, clock64());
 }
 
+// vec_dot sub-phase timers: barrier-wrap so thread (0,0) measures WG wall time, not one lane only.
+static __device__ __forceinline__ void mmq_profile_vec_sub_begin(uint64_t & t0) {
+    if (!g_mmq_profile) {
+        return;
+    }
+    __syncthreads();
+    mmq_profile_phase_begin(g_mmq_profile, t0);
+}
+
+static __device__ __forceinline__ void mmq_profile_vec_sub_end(uint64_t & t0, const int phase) {
+    if (!g_mmq_profile) {
+        return;
+    }
+    __syncthreads();
+    mmq_profile_phase_end(g_mmq_profile, t0, phase);
+}
+
 static bool mmq_profile_phases_enabled() {
     static int enabled = -1;
     if (enabled < 0) {
         enabled = getenv("MMQ_PROFILE_PHASES") ? 1 : 0;
     }
     return enabled;
+}
+
+static bool mmq_profile_vec_sub_enabled() {
+    static int enabled = -1;
+    if (enabled < 0) {
+        enabled = getenv("MMQ_PROFILE_VEC_SUB") ? 1 : 0;
+    }
+    return enabled;
+}
+
+static bool mmq_profile_any_enabled() {
+    return mmq_profile_phases_enabled() || mmq_profile_vec_sub_enabled();
 }
 
 struct mmq_profile_guard {
@@ -115,10 +154,41 @@ struct mmq_profile_guard {
                 (unsigned long long) h[MMQ_PROFILE_Y_ACT],
                 (unsigned long long) h[MMQ_PROFILE_VEC_DOT],
                 (unsigned long long) total);
+            if (mmq_profile_vec_sub_enabled()) {
+                const uint64_t vec_sub = h[MMQ_PROFILE_VEC_A] + h[MMQ_PROFILE_VEC_B]
+                    + h[MMQ_PROFILE_VEC_MMA] + h[MMQ_PROFILE_VEC_EPILOGUE];
+                if (vec_sub > 0 && vec_sub < 5000000000ULL) {
+                    fprintf(stderr,
+                        "[MMQ_PROFILE_VEC] type=%d mmq_x=%d nrows_x=%ld "
+                        "vec_a=%.1f%% vec_b=%.1f%% vec_mma=%.1f%% vec_epi=%.1f%% "
+                        "cycles_a=%llu cycles_b=%llu cycles_mma=%llu cycles_epi=%llu "
+                        "cycles_vec_sub=%llu cycles_vec=%llu vec_sub_pct_of_vec=%.1f%% "
+                        "mma_epi_ratio=%.3f\n",
+                        type, mmq_x, (long) nrows_x,
+                        100.0*h[MMQ_PROFILE_VEC_A]/vec_sub,
+                        100.0*h[MMQ_PROFILE_VEC_B]/vec_sub,
+                        100.0*h[MMQ_PROFILE_VEC_MMA]/vec_sub,
+                        100.0*h[MMQ_PROFILE_VEC_EPILOGUE]/vec_sub,
+                        (unsigned long long) h[MMQ_PROFILE_VEC_A],
+                        (unsigned long long) h[MMQ_PROFILE_VEC_B],
+                        (unsigned long long) h[MMQ_PROFILE_VEC_MMA],
+                        (unsigned long long) h[MMQ_PROFILE_VEC_EPILOGUE],
+                        (unsigned long long) vec_sub,
+                        (unsigned long long) h[MMQ_PROFILE_VEC_DOT],
+                        100.0*vec_sub/h[MMQ_PROFILE_VEC_DOT],
+                        (double) h[MMQ_PROFILE_VEC_MMA] / (double) h[MMQ_PROFILE_VEC_EPILOGUE]);
+                }
+            }
         }
     }
 };
 #else
+static __device__ __forceinline__ void mmq_profile_bind(uint64_t *) {}
+
+static __device__ __forceinline__ void mmq_profile_vec_sub_begin(uint64_t &) {}
+
+static __device__ __forceinline__ void mmq_profile_vec_sub_end(uint64_t &, const int) {}
+
 static __device__ __forceinline__ void mmq_profile_kb_iter(uint64_t *) {}
 
 static __device__ __forceinline__ void mmq_profile_phase_begin(uint64_t *, uint64_t &) {}
@@ -126,6 +196,14 @@ static __device__ __forceinline__ void mmq_profile_phase_begin(uint64_t *, uint6
 static __device__ __forceinline__ void mmq_profile_phase_end(uint64_t *, const uint64_t, const int) {}
 
 static bool mmq_profile_phases_enabled() {
+    return false;
+}
+
+static bool mmq_profile_vec_sub_enabled() {
+    return false;
+}
+
+static bool mmq_profile_any_enabled() {
     return false;
 }
 
@@ -2980,6 +3058,80 @@ static __device__ __forceinline__ void vec_dot_q6_K_q8_1_mma(
 
     const int i0 = (threadIdx.y / ntx) * rows_per_warp;
 
+#if defined(GGML_USE_HIP)
+    if (g_mmq_profile) {
+        for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += 4) {
+            const int k0 = k00 + k01;
+
+            tile_A A[ntx];
+            float sclA[ntx][tile_C::ne];
+
+            uint64_t t_vec_sub = 0;
+            mmq_profile_vec_sub_begin(t_vec_sub);
+#pragma unroll
+            for (int n = 0; n < ntx; ++n) {
+                load_ldmatrix(A[n], x_qs + (i0 + n*tile_A::I)*MMQ_MMA_TILE_X_K_Q6_K + k0, MMQ_MMA_TILE_X_K_Q6_K);
+
+#pragma unroll
+                for (int l = 0; l < tile_C::ne; ++l) {
+                    const int i = i0 + n*tile_A::I + tile_C::get_i(l);
+                    const int8_t * sc = (const int8_t *) (x_sc + i*MMQ_MMA_TILE_X_K_Q6_K + k00/16);
+                    sclA[n][l] = (float) sc[k01/4] * x_df[i*MMQ_MMA_TILE_X_K_Q6_K];
+                }
+            }
+            mmq_profile_vec_sub_end(t_vec_sub, MMQ_PROFILE_VEC_A);
+
+            constexpr int j_step = ntx*tile_C::J;
+
+            tile_B B0;
+            mmq_profile_vec_sub_begin(t_vec_sub);
+            load_ldmatrix(B0, y_qs + 0, MMQ_TILE_Y_K);
+            float dB0 = y_df[tile_C::get_j(0)*MMQ_TILE_Y_K + k01/QI8_1];
+            mmq_profile_vec_sub_end(t_vec_sub, MMQ_PROFILE_VEC_B);
+
+#pragma unroll
+            for (int j0 = 0; j0 < mmq_x; j0 += j_step) {
+                const int j0_next = j0 + j_step;
+
+                tile_B B1;
+                float dB1 = 0.0f;
+                mmq_profile_vec_sub_begin(t_vec_sub);
+                if (j0_next < mmq_x) {
+                    load_ldmatrix(B1, y_qs + j0_next*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K);
+                    const int jn = j0_next + tile_C::get_j(0);
+                    dB1 = y_df[jn*MMQ_TILE_Y_K + k01/QI8_1];
+                }
+                mmq_profile_vec_sub_end(t_vec_sub, MMQ_PROFILE_VEC_B);
+
+                tile_C C[ntx];
+
+                mmq_profile_vec_sub_begin(t_vec_sub);
+#pragma unroll
+                for (int n = 0; n < ntx; ++n) {
+                    mma(C[n], A[n], B0);
+                }
+                mmq_profile_vec_sub_end(t_vec_sub, MMQ_PROFILE_VEC_MMA);
+
+                mmq_profile_vec_sub_begin(t_vec_sub);
+#pragma unroll
+                for (int n = 0; n < ntx; ++n) {
+#pragma unroll
+                    for (int l = 0; l < tile_C::ne; ++l) {
+                        sum[(j0/tile_C::J + n)*tile_C::ne + l] += C[n].x[l]*sclA[n][l]*dB0;
+                    }
+                }
+                mmq_profile_vec_sub_end(t_vec_sub, MMQ_PROFILE_VEC_EPILOGUE);
+
+                if (j0_next < mmq_x) {
+                    B0 = B1;
+                    dB0 = dB1;
+                }
+            }
+        }
+        return;
+    }
+#endif // GGML_USE_HIP
+
     for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += 4) {
         const int k0 = k00 + k01;
 
@@ -2998,23 +3150,42 @@ static __device__ __forceinline__ void vec_dot_q6_K_q8_1_mma(
             }
         }
 
-#pragma unroll
-        for (int j0 = 0; j0 < mmq_x; j0 += ntx*tile_C::J) {
-            tile_B B;
-            load_ldmatrix(B, y_qs + j0*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K);
+        constexpr int j_step = ntx*tile_C::J;
 
-            const int j = j0 + tile_C::get_j(0);
-            const float dB = y_df[j*MMQ_TILE_Y_K + k01/QI8_1];
+        tile_B B0;
+        load_ldmatrix(B0, y_qs + 0, MMQ_TILE_Y_K);
+        float dB0 = y_df[tile_C::get_j(0)*MMQ_TILE_Y_K + k01/QI8_1];
+
+#pragma unroll
+        for (int j0 = 0; j0 < mmq_x; j0 += j_step) {
+            const int j0_next = j0 + j_step;
+
+            tile_B B1;
+            float dB1 = 0.0f;
+            if (j0_next < mmq_x) {
+                load_ldmatrix(B1, y_qs + j0_next*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K);
+                const int jn = j0_next + tile_C::get_j(0);
+                dB1 = y_df[jn*MMQ_TILE_Y_K + k01/QI8_1];
+            }
+
+            tile_C C[ntx];
 
 #pragma unroll
             for (int n = 0; n < ntx; ++n) {
-                tile_C C;
-                mma(C, A[n], B);
+                mma(C[n], A[n], B0);
+            }
 
 #pragma unroll
+            for (int n = 0; n < ntx; ++n) {
+#pragma unroll
                 for (int l = 0; l < tile_C::ne; ++l) {
-                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += C.x[l]*sclA[n][l]*dB;
+                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += C[n].x[l]*sclA[n][l]*dB0;
                 }
+            }
+
+            if (j0_next < mmq_x) {
+                B0 = B1;
+                dB0 = dB1;
             }
         }
     }
@@ -3952,20 +4123,22 @@ struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_IQ4_XS> {
 template <int mmq_x, int nwarps, int warp_size, int nchunks>
 static __device__ __forceinline__ void mmq_tile_y_load_global(
         int * __restrict__ tile_y, const int * __restrict__ by) {
+    constexpr int valid_elems = mmq_x*MMQ_TILE_Y_K;
 #pragma unroll
     for (int c = 0; c < nchunks; ++c) {
         const int l = c*(nwarps*warp_size) + threadIdx.y*warp_size + threadIdx.x;
-        tile_y[l] = by[l];
+        tile_y[l] = l < valid_elems ? by[l] : 0;
     }
 }
 
-template <int nwarps, int warp_size, int nchunks>
+template <int mmq_x, int nwarps, int warp_size, int nchunks>
 static __device__ __forceinline__ void mmq_tile_y_load_global_to_regs(
         const int * __restrict__ by, int (&cache)[nchunks]) {
+    constexpr int valid_elems = mmq_x*MMQ_TILE_Y_K;
 #pragma unroll
     for (int c = 0; c < nchunks; ++c) {
         const int l = c*(nwarps*warp_size) + threadIdx.y*warp_size + threadIdx.x;
-        cache[c] = by[l];
+        cache[c] = l < valid_elems ? by[l] : 0;
     }
 }
 
@@ -4018,10 +4191,14 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 
     float sum[mmq_x*mmq_y / (nwarps*warp_size)] = {0.0f};
 
+#if defined(GGML_USE_HIP)
+    mmq_profile_bind(mmq_profile);
+#endif
+
     constexpr int sz = sizeof(block_q8_1_mmq) / sizeof(int);
 
 #if defined(RDNA3_5)
-    constexpr int tile_y_elems       = mmq_x*MMQ_TILE_Y_K;
+    constexpr int tile_y_elems       = mmq_get_tile_y_k_padded_device(mmq_x, nwarps, warp_size);
     constexpr int tile_y_load_stride   = nwarps*warp_size;
     if constexpr (mmq_x <= 64 && tile_y_elems % tile_y_load_stride == 0) {
         constexpr int tile_y_nchunks = tile_y_elems/tile_y_load_stride;
@@ -4061,7 +4238,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
                     __syncthreads();
 
                     int y1_cache[tile_y_nchunks];
-                    mmq_tile_y_load_global_to_regs<nwarps, warp_size, tile_y_nchunks>(by1, y1_cache);
+                    mmq_tile_y_load_global_to_regs<mmq_x, nwarps, warp_size, tile_y_nchunks>(by1, y1_cache);
 
                     mmq_profile_phase_end(mmq_profile, t0, MMQ_PROFILE_Y_ACT);
 
@@ -4079,7 +4256,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
                     const int kb0_next = kb0 + blocks_per_iter;
                     if (kb0_next < kb0_stop) {
                         const int * by0_next = y + ncols_y * (kb0_next * qk / ne_block) * sz;
-                        mmq_tile_y_load_global_to_regs<nwarps, warp_size, tile_y_nchunks>(by0_next, y0_next_cache);
+                        mmq_tile_y_load_global_to_regs<mmq_x, nwarps, warp_size, tile_y_nchunks>(by0_next, y0_next_cache);
                         have_y0_prefetch = true;
                     }
 
@@ -4107,7 +4284,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
                 __syncthreads();
 
                 int y1_cache[tile_y_nchunks];
-                mmq_tile_y_load_global_to_regs<nwarps, warp_size, tile_y_nchunks>(by1, y1_cache);
+                mmq_tile_y_load_global_to_regs<mmq_x, nwarps, warp_size, tile_y_nchunks>(by1, y1_cache);
 
                 vec_dot(tile_x, tile_y, sum, 0);
 
@@ -4120,7 +4297,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
                 const int kb0_next = kb0 + blocks_per_iter;
                 if (kb0_next < kb0_stop) {
                     const int * by0_next = y + ncols_y * (kb0_next * qk / ne_block) * sz;
-                    mmq_tile_y_load_global_to_regs<nwarps, warp_size, tile_y_nchunks>(by0_next, y0_next_cache);
+                    mmq_tile_y_load_global_to_regs<mmq_x, nwarps, warp_size, tile_y_nchunks>(by0_next, y0_next_cache);
                     have_y0_prefetch = true;
                 }
 
@@ -4227,6 +4404,10 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
     } else {
         write_back(sum, ids_dst, dst, stride_col_dst, tile_x_max_i, tile_y_max_j);
     }
+
+#if defined(GGML_USE_HIP)
+    mmq_profile_bind(nullptr);
+#endif
 }
 
 
@@ -4644,7 +4825,8 @@ static size_t mmq_get_nbytes_shared(const int mmq_x, const int mmq_y, const int 
     const int tile_y_k_padded = mmq_get_tile_y_k_padded_host(mmq_x, cc, warp_size, nwarps);
     const size_t nbs_y_padded = std::max(nbs_y, (size_t) tile_y_k_padded*sizeof(int));
     const int pad = GGML_CUDA_CC_IS_RDNA3_5(cc) ? 2*nwarps*warp_size : nwarps*warp_size;
-    return nbs_ids + nbs_x + GGML_PAD(nbs_y_padded, pad*sizeof(int));
+    size_t nbytes = nbs_ids + nbs_x + GGML_PAD(nbs_y_padded, pad*sizeof(int));
+    return nbytes;
 }
 
 template <ggml_type type, int mmq_x>
@@ -4659,7 +4841,7 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
 
     const dim3 block_dims(warp_size, nwarps, 1);
 
-    mmq_profile_guard prof_guard(ctx.pool(id), mmq_profile_phases_enabled(), type, mmq_x,
+    mmq_profile_guard prof_guard(ctx.pool(id), mmq_profile_any_enabled(), type, mmq_x,
         args.nrows_x, args.ncols_max, stream);
 
     const int nbytes_shared = mmq_get_nbytes_shared<type>(mmq_x, mmq_y, cc, warp_size, nwarps);
@@ -4880,12 +5062,14 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
         }
     }
 
-    // Narrow N (batch ≤128): Q6_K only — prefer mmq_x=128 for ntx=1 when LDS allows.
+    // Narrow N (batch ≤128): Q6_K only — prefer mmq_x=128 for ntx=1 when LDS allows
+    // dual-WG residency (nbytes <= smpbo/2). Forcing 128 at 38 KiB caps occupancy at 1 WG/CU.
     if (GGML_CUDA_CC_IS_RDNA3_5(cc) && type == GGML_TYPE_Q6_K && args.ncols_max <= mmq_x_max) {
         const int ntx_cur = (args.ncols_max + mmq_x_best - 1) / mmq_x_best;
         if (ntx_cur > 1) {
             const int nty  = (args.nrows_x + mmq_y - 1) / mmq_y;
             const int ntzw = static_cast<int>(args.nchannels_y * args.nsamples_y);
+            const size_t lds_dual_wg = smpbo / 2;
 
             for (int mmq_x = mmq_x_max; mmq_x >= 8; mmq_x -= 8) {
                 const int granularity = mmq_get_granularity_host(mmq_x, cc);
@@ -4893,7 +5077,7 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
                     continue;
                 }
                 const size_t nbytes = mmq_get_nbytes_shared<type>(mmq_x, mmq_y, cc, warp_size, nwarps);
-                if (nbytes > smpbo) {
+                if (nbytes > smpbo || nbytes > lds_dual_wg) {
                     continue;
                 }
                 const int ntx = (args.ncols_max + mmq_x - 1) / mmq_x;
