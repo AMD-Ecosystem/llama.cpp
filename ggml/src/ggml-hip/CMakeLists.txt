@@ -155,3 +155,19 @@ if (GGML_HIP_RCCL)
 endif()
 
 target_link_libraries(ggml-hip PRIVATE ggml-base hip::host roc::rocblas roc::hipblas)
+
+# Per-op roofline profiling via rocprofiler-sdk. The library is loaded at runtime with
+# dlopen and its symbols resolved with dlsym, so only its headers and libdl are needed
+# to build; it is not linked (its constructors abort when linked into an early-loaded
+# shared object).
+if (GGML_HIP_ROOFLINE)
+    find_path(ROCPROFILER_SDK_INCLUDE_DIR rocprofiler-sdk/rocprofiler.h)
+    if (NOT ROCPROFILER_SDK_INCLUDE_DIR)
+        message(FATAL_ERROR "GGML_HIP_ROOFLINE requires rocprofiler-sdk headers (set CMAKE_PREFIX_PATH to the ROCm root)")
+    endif()
+    target_sources(ggml-hip PRIVATE ../ggml-cuda/ggml-cuda-roofline.cpp)
+    set_source_files_properties(../ggml-cuda/ggml-cuda-roofline.cpp PROPERTIES LANGUAGE CXX)
+    target_include_directories(ggml-hip PRIVATE ${ROCPROFILER_SDK_INCLUDE_DIR})
+    target_compile_definitions(ggml-hip PRIVATE GGML_HIP_ROOFLINE)
+    target_link_libraries(ggml-hip PRIVATE ${CMAKE_DL_LIBS})
+endif()

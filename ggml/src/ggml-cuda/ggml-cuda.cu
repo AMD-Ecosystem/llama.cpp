@@ -2,6 +2,10 @@
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
 
+#ifdef GGML_HIP_ROOFLINE
+#include "ggml-cuda/ggml-cuda-roofline.h"
+#endif
+
 #include "ggml-cuda/allreduce.cuh"
 #include "ggml-cuda/common.cuh"
 #include "ggml-cuda/acc.cuh"
@@ -4380,9 +4384,16 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                     continue;
                 }
 
+#ifdef GGML_HIP_ROOFLINE
+                ggml_cuda_roofline_begin_op(node);
+#endif
+
                 int nodes_to_skip = ggml_cuda_try_fuse(cuda_ctx, cgraph, i);
 
                 if (nodes_to_skip != 0) {
+#ifdef GGML_HIP_ROOFLINE
+                    ggml_cuda_roofline_fuse_ops(cgraph, i, nodes_to_skip + 1);
+#endif
                     i += nodes_to_skip;
                     continue;
                 }
@@ -5648,6 +5659,14 @@ static const ggml_backend_reg_i ggml_backend_cuda_reg_interface = {
 
 // backend registry
 ggml_backend_reg_t ggml_backend_cuda_reg() {
+#ifdef GGML_HIP_ROOFLINE
+    ggml_cuda_roofline_init();  // configure rocprofiler tracing before any stream is created
+    if (ggml_cuda_info().device_count > 0) {
+        char arch[32];
+        snprintf(arch, sizeof(arch), "gfx%x", ggml_cuda_info().devices[0].cc & 0xffff);
+        ggml_cuda_roofline_set_device(arch);
+    }
+#endif
     static ggml_backend_reg reg;
     static bool initialized = false;
 

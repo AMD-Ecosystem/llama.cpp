@@ -35,6 +35,13 @@
 #    include <windows.h>
 #endif
 
+// Optional per-op roofline profiler (HIP build with GGML_HIP_ROOFLINE). Used to drop
+// warmup from the report. Compiled out entirely otherwise. See
+// ggml/src/ggml-cuda/ggml-cuda-roofline.cpp.
+#ifdef GGML_HIP_ROOFLINE
+#include "ggml-cuda-roofline.h"
+#endif
+
 // utils
 static uint64_t get_time_ns() {
     using clock = std::chrono::high_resolution_clock;
@@ -2354,6 +2361,12 @@ int llama_bench(int argc, char ** argv) {
                 }
             }
         }
+
+        // Discard warmup from the per-op roofline profiler so the report covers only
+        // the measured runs below. Compiled out unless GGML_HIP_ROOFLINE is set.
+#ifdef GGML_HIP_ROOFLINE
+        ggml_cuda_roofline_reset();
+#endif
 
         for (int i = 0; i < params.reps; i++) {
             llama_memory_clear(llama_get_memory(ctx), false);
