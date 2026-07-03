@@ -740,8 +740,10 @@ void ggml_cuda_op_mul_mat_vec_f(
     const int cc = ggml_cuda_info().devices[id].cc;
     const enum ggml_prec prec = fast_fp16_available(cc) ? ggml_prec(dst->op_params[0]) : GGML_PREC_F32;
 
-    // ggml_cuda_op provides single, contiguous matrices
-    const int64_t stride_row         = ne00;
+    // honor a padded row stride (nb[1]) when src0 is passed through un-copied; equals ne00 for
+    // the packed case
+    const int64_t stride_row         = ggml_cuda_is_contiguous_rows(src0)
+        ? (int64_t) (src0->nb[1] / ggml_type_size(src0->type)) : ne00;
     const int64_t stride_col_y       = ne10;
     const int64_t stride_col_dst     = id == ctx.device ? ne0 : row_diff; // main device has larger memory buffer
     const int64_t nchannels_x        = 1;

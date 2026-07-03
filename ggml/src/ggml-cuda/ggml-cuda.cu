@@ -692,11 +692,57 @@ static void * ggml_backend_cuda_buffer_get_base(ggml_backend_buffer_t buffer) {
     return ctx->dev_ptr;
 }
 
+// One cache line, added to a weight's row stride when the packed row size is a multiple of
+// 2048 bytes to avoid cache-set aliasing in matmul. Enabled by default; disable with
+// GGML_CUDA_NO_PAD_WEIGHTS.
+#define GGML_CUDA_CACHE_LINE 128
+#define GGML_CUDA_ROW_ALIAS_STRIDE 2048
+
+static bool ggml_cuda_pad_weights_enabled() {
+    static const bool enabled = getenv("GGML_CUDA_NO_PAD_WEIGHTS") == nullptr;
+    return enabled;
+}
+
+// A float GEMM weight (tagged GGML_TENSOR_FLAG_PAD_ROWS by the loader) whose packed row size
+// aliases at GGML_CUDA_ROW_ALIAS_STRIDE and therefore benefits from a one-cache-line row-stride
+// pad. Quantized weights are excluded: a 128-byte pad is not a multiple of their block size and
+// would misalign the block-indexed matmul kernels.
+static bool ggml_cuda_should_pad_weight(const ggml_tensor * tensor) {
+    if (!ggml_cuda_pad_weights_enabled()) {
+        return false;
+    }
+    if (tensor->view_src != nullptr || !(tensor->flags & GGML_TENSOR_FLAG_PAD_ROWS)
+            || ggml_is_quantized(tensor->type) || tensor->ne[1] <= 1) {
+        return false;
+    }
+    return ggml_row_size(tensor->type, tensor->ne[0]) % GGML_CUDA_ROW_ALIAS_STRIDE == 0;
+}
+
+// Row stride (nb[1]) in bytes for a weight tensor: the packed row size, plus one cache line
+// when padding applies.
+static size_t ggml_cuda_padded_nb1(const ggml_tensor * tensor) {
+    const size_t packed = ggml_row_size(tensor->type, tensor->ne[0]);
+    return ggml_cuda_should_pad_weight(tensor) ? packed + GGML_CUDA_CACHE_LINE : packed;
+}
+
 static enum ggml_status ggml_backend_cuda_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
 
     if (tensor->view_src != NULL) {
         assert(tensor->view_src->buffer->buft == buffer->buft);
+        return GGML_STATUS_SUCCESS;
+    }
+
+    if (ggml_backend_buffer_get_usage(buffer) != GGML_BACKEND_BUFFER_USAGE_COMPUTE
+            && ggml_cuda_should_pad_weight(tensor)) {
+        tensor->nb[1] = ggml_cuda_padded_nb1(tensor);
+        tensor->nb[2] = tensor->nb[1] * tensor->ne[1];
+        tensor->nb[3] = tensor->nb[2] * tensor->ne[2];
+
+        // zero the allocation so the inter-row padding gaps hold no NaNs
+        ggml_cuda_set_device(ctx->device);
+        CUDA_CHECK(cudaMemset((char *) tensor->data, 0,
+            ggml_backend_buft_get_alloc_size(buffer->buft, tensor)));
         return GGML_STATUS_SUCCESS;
     }
 
@@ -853,6 +899,16 @@ static size_t ggml_backend_cuda_buffer_type_get_alloc_size(ggml_backend_buffer_t
         if (ne0 % MATRIX_ROW_PADDING != 0) {
             GGML_ASSERT(tensor->nb[0] == ggml_element_size(tensor));
             size += ggml_row_size(tensor->type, MATRIX_ROW_PADDING - ne0 % MATRIX_ROW_PADDING);
+        }
+    }
+
+    // K-dimension cache-line padding: reserve the padded per-row stride for weight matrices.
+    if (ggml_cuda_should_pad_weight(tensor)) {
+        const size_t   padded_nb1 = ggml_cuda_padded_nb1(tensor);
+        const int64_t  nrows      = tensor->ne[1] * tensor->ne[2] * tensor->ne[3];
+        const size_t   padded_sz  = padded_nb1 * nrows;
+        if (padded_sz > size) {
+            size = padded_sz;
         }
     }
 
