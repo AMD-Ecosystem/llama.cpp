@@ -652,11 +652,57 @@ static void * ggml_backend_cuda_buffer_get_base(ggml_backend_buffer_t buffer) {
     return ctx->dev_ptr;
 }
 
+// One cache line, added to a weight's row stride when the packed row size is a multiple of
+// 2048 bytes to avoid cache-set aliasing in matmul. Enabled by default; disable with
+// GGML_CUDA_NO_PAD_WEIGHTS.
+#define GGML_CUDA_CACHE_LINE 128
+#define GGML_CUDA_ROW_ALIAS_STRIDE 2048
+
+static bool ggml_cuda_pad_weights_enabled() {
+    static const bool enabled = getenv("GGML_CUDA_NO_PAD_WEIGHTS") == nullptr;
+    return enabled;
+}
+
+// A float GEMM weight (tagged GGML_TENSOR_FLAG_PAD_ROWS by the loader) whose packed row size
+// aliases at GGML_CUDA_ROW_ALIAS_STRIDE and therefore benefits from a one-cache-line row-stride
+// pad. Quantized weights are excluded: a 128-byte pad is not a multiple of their block size and
+// would misalign the block-indexed matmul kernels.
+static bool ggml_cuda_should_pad_weight(const ggml_tensor * tensor) {
+    if (!ggml_cuda_pad_weights_enabled()) {
+        return false;
+    }
+    if (tensor->view_src != nullptr || !(tensor->flags & GGML_TENSOR_FLAG_PAD_ROWS)
+            || ggml_is_quantized(tensor->type) || tensor->ne[1] <= 1) {
+        return false;
+    }
+    return ggml_row_size(tensor->type, tensor->ne[0]) % GGML_CUDA_ROW_ALIAS_STRIDE == 0;
+}
+
+// Row stride (nb[1]) in bytes for a weight tensor: the packed row size, plus one cache line
+// when padding applies.
+static size_t ggml_cuda_padded_nb1(const ggml_tensor * tensor) {
+    const size_t packed = ggml_row_size(tensor->type, tensor->ne[0]);
+    return ggml_cuda_should_pad_weight(tensor) ? packed + GGML_CUDA_CACHE_LINE : packed;
+}
+
 static enum ggml_status ggml_backend_cuda_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
 
     if (tensor->view_src != NULL) {
         assert(tensor->view_src->buffer->buft == buffer->buft);
+        return GGML_STATUS_SUCCESS;
+    }
+
+    if (ggml_backend_buffer_get_usage(buffer) != GGML_BACKEND_BUFFER_USAGE_COMPUTE
+            && ggml_cuda_should_pad_weight(tensor)) {
+        tensor->nb[1] = ggml_cuda_padded_nb1(tensor);
+        tensor->nb[2] = tensor->nb[1] * tensor->ne[1];
+        tensor->nb[3] = tensor->nb[2] * tensor->ne[2];
+
+        // zero the allocation so the inter-row padding gaps hold no NaNs
+        ggml_cuda_set_device(ctx->device);
+        CUDA_CHECK(cudaMemset((char *) tensor->data, 0,
+            ggml_backend_buft_get_alloc_size(buffer->buft, tensor)));
         return GGML_STATUS_SUCCESS;
     }
 
@@ -813,6 +859,16 @@ static size_t ggml_backend_cuda_buffer_type_get_alloc_size(ggml_backend_buffer_t
         if (ne0 % MATRIX_ROW_PADDING != 0) {
             GGML_ASSERT(tensor->nb[0] == ggml_element_size(tensor));
             size += ggml_row_size(tensor->type, MATRIX_ROW_PADDING - ne0 % MATRIX_ROW_PADDING);
+        }
+    }
+
+    // K-dimension cache-line padding: reserve the padded per-row stride for weight matrices.
+    if (ggml_cuda_should_pad_weight(tensor)) {
+        const size_t   padded_nb1 = ggml_cuda_padded_nb1(tensor);
+        const int64_t  nrows      = tensor->ne[1] * tensor->ne[2] * tensor->ne[3];
+        const size_t   padded_sz  = padded_nb1 * nrows;
+        if (padded_sz > size) {
+            size = padded_sz;
         }
     }
 
@@ -1642,6 +1698,15 @@ static void ggml_cuda_op_mul_mat_cublas(
 
     const int64_t row_diff = row_high - row_low;
 
+    // src0 leading dimension: honor a padded row stride when src0 is passed through un-converted
+    // (row-contiguous). When src0 is converted/dequantized into a packed temp buffer, or copied
+    // to contiguous upstream, lda is the packed ne00.
+    const bool    src0_row_contig = ggml_cuda_is_contiguous_rows(src0);
+    const int64_t s01             = (int64_t) (src0->nb[1] / ggml_type_size(src0->type));
+    const int64_t lda_f16  = (src0->type == GGML_TYPE_F16  && src0_row_contig) ? s01 : ne00;
+    const int64_t lda_f32  = (src0->type == GGML_TYPE_F32  && src0_row_contig) ? s01 : ne00;
+    const int64_t lda_bf16 = (src0->type == GGML_TYPE_BF16 && src0_row_contig) ? s01 : ne00;
+
     int id = ggml_cuda_get_device();
 
     // the main device has a larger memory buffer to hold the results from all GPUs
@@ -1656,11 +1721,11 @@ static void ggml_cuda_op_mul_mat_cublas(
     const bool use_fp16 =
         src0->type != GGML_TYPE_NVFP4 &&
         (src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type)) &&
-        ggml_is_contiguous(src0) &&
+        (ggml_is_contiguous(src0) || src0_row_contig) &&
         row_diff == src0->ne[1] &&
         dst->op_params[0] == GGML_PREC_DEFAULT;
 
-    if (supports_bf16 && src0->type == GGML_TYPE_BF16 && ggml_is_contiguous(src0) && row_diff == src0->ne[1]) {
+    if (supports_bf16 && src0->type == GGML_TYPE_BF16 && (ggml_is_contiguous(src0) || src0_row_contig) && row_diff == src0->ne[1]) {
         ggml_cuda_pool_alloc<nv_bfloat16> src1_as_bf16(ctx.pool(id));
         if (src1->type != GGML_TYPE_BF16) {
             const to_bf16_cuda_t to_bf16_cuda = ggml_get_to_bf16_cuda(src1->type);
@@ -1680,7 +1745,7 @@ static void ggml_cuda_op_mul_mat_cublas(
         CUBLAS_CHECK(
             cublasGemmEx(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N,
                     row_diff, src1_ncols, ne10,
-                    &alpha_f32,  src0_ptr,       CUDA_R_16BF, ne00,
+                    &alpha_f32,  src0_ptr,       CUDA_R_16BF, lda_bf16,
                                  src1_ptr,       CUDA_R_16BF, ne10,
                     &beta_f32,   dst_bf16.get(), CUDA_R_16BF, ldc,
                     CUBLAS_COMPUTE_32F,
@@ -1724,7 +1789,7 @@ static void ggml_cuda_op_mul_mat_cublas(
             CUBLAS_CHECK(
                 cublasGemmEx(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N,
                         row_diff, src1_ncols, ne10,
-                        &alpha, src0_ptr,  CUDA_R_16F, ne00,
+                        &alpha, src0_ptr,  CUDA_R_16F, lda_f16,
                                 src1_ptr,  CUDA_R_16F, ne10,
                         &beta,   dst_dd_i, CUDA_R_32F, ldc,
                         CUBLAS_COMPUTE_32F,
@@ -1738,7 +1803,7 @@ static void ggml_cuda_op_mul_mat_cublas(
             CUBLAS_CHECK(
                 cublasGemmEx(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N,
                         row_diff, src1_ncols, ne10,
-                        &alpha_f16, src0_ptr,      CUDA_R_16F, ne00,
+                        &alpha_f16, src0_ptr,      CUDA_R_16F, lda_f16,
                                     src1_ptr,      CUDA_R_16F, ne10,
                         &beta_f16,  dst_f16.get(), CUDA_R_16F, ldc,
                         CUBLAS_COMPUTE_16F,
@@ -1774,7 +1839,7 @@ static void ggml_cuda_op_mul_mat_cublas(
         CUBLAS_CHECK(
             cublasSgemm(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N,
                     row_diff, src1_ncols, ne10,
-                    &alpha, src0_ddf_i,  ne00,
+                    &alpha, src0_ddf_i,  lda_f32,
                             src1_ddf1_i, ne10,
                     &beta,  dst_dd_i,    ldc));
     }
@@ -1845,7 +1910,10 @@ static void ggml_cuda_op_mul_mat(
     const size_t q8_1_ts = sizeof(block_q8_1);
     const size_t q8_1_bs = QK8_1;
 
-    const bool src0_is_contiguous = ggml_is_contiguous(src0);
+    // A non-quantized weight that is row-contiguous but has a padded row stride can be fed to
+    // cuBLAS directly (via lda); no need to copy it into a packed buffer.
+    const bool src0_is_contiguous = ggml_is_contiguous(src0)
+        || (!ggml_is_quantized(src0->type) && ggml_cuda_is_contiguous_rows(src0));
     const bool src1_is_contiguous = ggml_is_contiguous(src1);
 
     const int64_t src1_padded_col_size = GGML_PAD(ne10, MATRIX_ROW_PADDING);
@@ -2018,7 +2086,9 @@ static void ggml_cuda_op_mul_mat(
                 }
 
                 // for split tensors the data begins at i0 == i0_offset_low
-                const size_t nbytes_src0_matrix = ne01*ne00*src0_ts / src0_bs;
+                // use the real per-matrix stride (nb[2]) so a padded row stride is honored;
+                // when src0 was copied to a packed temp buffer, fall back to the packed size
+                const size_t nbytes_src0_matrix = src0_is_contiguous ? src0->nb[2] : (ne01*ne00*src0_ts / src0_bs);
                 char  *  src0_dd_i =  dev[id].src0_dd + ((i03/i03_divisor)*ne02 + (i02/i02_divisor)) * nbytes_src0_matrix;
                 float * src1_ddf_i = dev[id].src1_ddf + (i0*ne11 + src1_col_0) * ne10;
                 char  * src1_ddq_i = dev[id].src1_ddq +  src1_ddq_i_offset;

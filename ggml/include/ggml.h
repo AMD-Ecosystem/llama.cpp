@@ -647,6 +647,7 @@ extern "C" {
         GGML_TENSOR_FLAG_PARAM   =  4, // ...contains trainable parameters
         GGML_TENSOR_FLAG_LOSS    =  8, // ...defines loss for numerical optimization (multiple loss tensors add up)
         GGML_TENSOR_FLAG_COMPUTE = 16, // ...must be computed
+        GGML_TENSOR_FLAG_PAD_ROWS = 32, // ...is a GEMM weight whose row stride a backend may pad to avoid cache-set aliasing
     };
 
     enum ggml_tri_type {
