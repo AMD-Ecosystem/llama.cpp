@@ -1394,7 +1394,9 @@ struct ggml_backend_cuda_context {
     cudaEvent_t copy_event = nullptr;
 
     cudaStream_t streams[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = { { nullptr } };
-    cublasHandle_t cublas_handles[GGML_CUDA_MAX_DEVICES] = {nullptr};
+    // one cuBLAS handle per (device, stream): the handle carries a workspace that must not be shared
+    // by concurrent streams, otherwise overlapped GEMMs corrupt each other's results
+    cublasHandle_t cublas_handles[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = { { nullptr } };
 
     int curr_stream_no = 0;
 
@@ -1472,12 +1474,13 @@ struct ggml_backend_cuda_context {
     ggml_cuda_stream_context & stream_context() { return concurrent_stream_context; }
 
     cublasHandle_t cublas_handle(int device) {
-        if (cublas_handles[device] == nullptr) {
+        cublasHandle_t & handle = cublas_handles[device][curr_stream_no];
+        if (handle == nullptr) {
             ggml_cuda_set_device(device);
-            CUBLAS_CHECK(cublasCreate(&cublas_handles[device]));
-            CUBLAS_CHECK(cublasSetMathMode(cublas_handles[device], CUBLAS_TF32_TENSOR_OP_MATH));
+            CUBLAS_CHECK(cublasCreate(&handle));
+            CUBLAS_CHECK(cublasSetMathMode(handle, CUBLAS_TF32_TENSOR_OP_MATH));
         }
-        return cublas_handles[device];
+        return handle;
     }
 
     cublasHandle_t cublas_handle() {

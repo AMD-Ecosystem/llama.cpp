@@ -648,8 +648,10 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
                 CUDA_CHECK(cudaStreamDestroy(streams[i][j]));
             }
         }
-        if (cublas_handles[i] != nullptr) {
-            CUBLAS_CHECK(cublasDestroy(cublas_handles[i]));
+        for (int j = 0; j < GGML_CUDA_MAX_STREAMS; ++j) {
+            if (cublas_handles[i][j] != nullptr) {
+                CUBLAS_CHECK(cublasDestroy(cublas_handles[i][j]));
+            }
         }
     }
 }
