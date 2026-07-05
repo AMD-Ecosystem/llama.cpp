@@ -1759,7 +1759,12 @@ static __global__ void flash_attn_ext_f16(
 #endif // __CUDA_ARCH__ == GGML_CUDA_CC_TURING
 
 #if defined(AMD_WMMA_AVAILABLE)
+    // DKQ=256 is only tuned/validated on RDNA3.5; other AMD WMMA archs keep the DKQ<=128 limit.
+#if defined(RDNA3_5)
+    if (ncols1*ncols2 < 16 || ncols2 == 1 || DKQ > 256) {
+#else
     if (ncols1*ncols2 < 16 || ncols2 == 1 || DKQ > 128) {
+#endif // defined(RDNA3_5)
         NO_DEVICE_CODE;
         return;
     }
