@@ -1459,6 +1459,11 @@ struct ggml_backend_cuda_context {
 
     ggml_cuda_stream_context concurrent_stream_context;
 
+    // dedicated buffer for the branches of overlapped concurrent regions (attention QKV, MoE shared
+    // expert), reused across layers so their scratch never aliases tensors read across the region
+    ggml_backend_buffer_t concurrent_scratch      = nullptr;
+    size_t                concurrent_scratch_size = 0;
+
     ~ggml_backend_cuda_context();
 
     cudaStream_t stream(int device, int stream) {

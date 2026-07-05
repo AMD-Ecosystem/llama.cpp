@@ -654,6 +654,9 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
             }
         }
     }
+    if (concurrent_scratch != nullptr) {
+        ggml_backend_buffer_free(concurrent_scratch);
+    }
 }
 
 
@@ -4188,6 +4191,11 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
     // store {fork_idx, join_idx}
     std::vector<std::pair<int, int>> concurrent_node_ranges;
 
+    // per-event lists of concurrent branch nodes to place in the dedicated scratch buffer (below),
+    // so the branches are mutually disjoint and disjoint from tensors read across the region -
+    // this replaces the fragile node interleaving that ggml-alloc/execution order can desync
+    std::vector<std::vector<const ggml_tensor *>> concurrent_groups;
+
     for (const auto & [root_node, count] : fan_out) {
         if (count >= min_fan_out && count <= max_fan_out) {
             const int root_node_idx = node_indices[root_node];
@@ -4279,10 +4287,6 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
                 int fork_node_idx = node_indices[root_node];
                 int join_node_idx = node_indices[join_node];
 
-                int       current_branch_idx = 0;
-                int       current_node_idx   = fork_node_idx + 1;
-                const int n_branches         = nodes_per_branch.size();
-
                 int total_branch_nodes = 0;
                 for (std::vector<const ggml_tensor *> branch_nodes : nodes_per_branch) {
                     total_branch_nodes += branch_nodes.size();
@@ -4311,37 +4315,64 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
                 GGML_LOG_DEBUG("Adding stream at node %s %p\n", root_node->name, root_node);
                 concurrent_node_ranges.emplace_back(fork_node_idx, join_node_idx);
 
-                // interleave tensors to extend lifetimes so that ggml graph doesn't recycle them
-                // example transformation:
-                // [attn-norm, QMul, QNorm, QRope, KMul, KNorm, KRope, VMul, attn] ->
-                // [attn-norm, QMul, KMul, VMul, QNorm, VNorm, QRope, KRope, attn]
-                while (current_node_idx < join_node_idx) {
-                    std::vector<const ggml_tensor *> & branch_nodes = nodes_per_branch[current_branch_idx];
-
-                    bool has_node = false;
-                    for (std::vector<const ggml_tensor *> branch_node : nodes_per_branch) {
-                        has_node |= branch_node.size() > 0;
+                // place all branch nodes in the dedicated scratch buffer (below) instead of
+                // interleaving them: ggml-alloc then keeps the branches mutually disjoint and
+                // disjoint from the fork output that every branch reads concurrently
+                std::vector<const ggml_tensor *> group;
+                for (const auto & branch_nodes : nodes_per_branch) {
+                    for (const ggml_tensor * n : branch_nodes) {
+                        group.push_back(n);
                     }
+                }
+                concurrent_groups.push_back(std::move(group));
+            }
+        }
+    }
 
-                    GGML_ASSERT(has_node);
+    // Place every concurrent branch in a dedicated buffer so its nodes never share an address with
+    // each other or with tensors read across the region (which ggml-alloc could otherwise recycle,
+    // corrupting concurrent reads). Layers run sequentially, so one buffer sized to the largest
+    // region is reused across all of them; within a region each node gets a distinct offset so the
+    // concurrent scratch stays disjoint.
+    if (!concurrent_groups.empty()) {
+        const size_t alignment = 128;
 
-                    if (branch_nodes.empty()) {
-                        current_branch_idx = (current_branch_idx + 1) % n_branches;
+        const auto group_footprint = [&](const std::vector<const ggml_tensor *> & group) {
+            size_t off = 0;
+            for (const ggml_tensor * n : group) {
+                if (is_noop(n) || n->view_src != nullptr) {
+                    continue;
+                }
+                off += GGML_PAD(ggml_nbytes(n), alignment);
+            }
+            return off;
+        };
+
+        size_t needed = 0;
+        for (const auto & group : concurrent_groups) {
+            needed = std::max(needed, group_footprint(group));
+        }
+
+        if (needed > 0) {
+            if (cuda_ctx->concurrent_scratch == nullptr || cuda_ctx->concurrent_scratch_size < needed) {
+                if (cuda_ctx->concurrent_scratch != nullptr) {
+                    ggml_backend_buffer_free(cuda_ctx->concurrent_scratch);
+                }
+                cuda_ctx->concurrent_scratch      = ggml_backend_buft_alloc_buffer(ggml_backend_cuda_buffer_type(cuda_ctx->device), needed);
+                cuda_ctx->concurrent_scratch_size = needed;
+            }
+
+            char * const base = (char *) ggml_backend_buffer_get_base(cuda_ctx->concurrent_scratch);
+            for (const auto & group : concurrent_groups) {
+                size_t off = 0;
+                for (const ggml_tensor * cn : group) {
+                    if (is_noop(cn) || cn->view_src != nullptr) {
                         continue;
                     }
-
-                    cgraph->nodes[current_node_idx] = const_cast<ggml_tensor *>(branch_nodes.front());
-                    current_node_idx++;
-                    branch_nodes.erase(branch_nodes.begin());
-
-                    // append all empty nodes
-                    while (!branch_nodes.empty() && is_noop(branch_nodes.front())) {
-                        cgraph->nodes[current_node_idx] = const_cast<ggml_tensor *>(branch_nodes.front());
-                        current_node_idx++;
-                        branch_nodes.erase(branch_nodes.begin());
-                    }
-
-                    current_branch_idx = (current_branch_idx + 1) % n_branches;
+                    ggml_tensor * n = const_cast<ggml_tensor *>(cn);
+                    n->data   = base + off;
+                    n->buffer = cuda_ctx->concurrent_scratch;
+                    off += GGML_PAD(ggml_nbytes(n), alignment);
                 }
             }
         }
