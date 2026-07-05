@@ -614,8 +614,10 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
                 CUDA_CHECK(cudaStreamDestroy(streams[i][j]));
             }
         }
-        if (cublas_handles[i] != nullptr) {
-            CUBLAS_CHECK(cublasDestroy(cublas_handles[i]));
+        for (int j = 0; j < GGML_CUDA_MAX_STREAMS; ++j) {
+            if (cublas_handles[i][j] != nullptr) {
+                CUBLAS_CHECK(cublasDestroy(cublas_handles[i][j]));
+            }
         }
     }
 }
@@ -1993,7 +1995,9 @@ static void ggml_cuda_op_mul_mat(
         const bool  dst_on_device = id == dst_ctx->device;
 
         ggml_cuda_set_device(id);
-        cudaStream_t stream = ctx.stream(id, 0);
+        // single-GPU work must run on the context's current stream so it participates correctly in
+        // multi-stream concurrency; multi-GPU split keeps its per-device stream 0 for peer sync
+        cudaStream_t stream = split ? ctx.stream(id, 0) : ctx.stream();
 
         if (src0_is_contiguous) {
             dev[id].src0_dd = split ? (char *) src0_extra->data_device[id] : (char *) src0->data;
@@ -2067,7 +2071,9 @@ static void ggml_cuda_op_mul_mat(
             const int64_t row_diff = dev[id].row_high - dev[id].row_low;
 
             ggml_cuda_set_device(id);
-            cudaStream_t stream = ctx.stream(id, is);
+            // single-GPU work must run on the context's current stream to participate in multi-stream
+            // concurrency; the per-column pipelining streams are only used by the multi-GPU split path
+            cudaStream_t stream = split ? ctx.stream(id, is) : ctx.stream();
 
             // wait for main GPU data if necessary
             if (split && (id != ctx.device || is != 0)) {
