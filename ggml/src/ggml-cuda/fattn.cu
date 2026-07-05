@@ -499,6 +499,13 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         if (can_use_vector_kernel && Q->ne[1] <= 2) {
             return BEST_FATTN_KERNEL_VEC;
         }
+        // The mma-f16 kernel also lowers to RDNA WMMA instructions here, and at D=256 it packs
+        // ncols2 GQA query heads into a full 16-wide tile where the wmma kernel leaves it mostly
+        // empty. Needs GQA (ncols2 >= 2) and a filled tile (ncols1*ncols2 >= 16). Restricted to
+        // RDNA3.5, the only AMD arch this was tuned/validated on.
+        if (GGML_CUDA_CC_IS_RDNA3_5(cc) && Q->ne[0] == 256 && gqa_opt_applies && Q->ne[1]*gqa_ratio_eff >= 16) {
+            return BEST_FATTN_KERNEL_MMA_F16;
+        }
         return BEST_FATTN_KERNEL_WMMA_F16;
     }
 
