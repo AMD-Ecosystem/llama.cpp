@@ -89,6 +89,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
@@ -3900,8 +3901,11 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                         is_concurrent_event_active = false;
                         concurrent_event           = nullptr;
                     } else {
-                        GGML_ASSERT (concurrent_event->stream_mapping.find(node) != concurrent_event->stream_mapping.end());
-                        cuda_ctx->curr_stream_no = concurrent_event->stream_mapping[node];
+                        // region nodes not mapped to a concurrent stream run on the main stream:
+                        // this keeps the routed branch on the main stream while only the shared
+                        // expert forks off (the vLLM shared-expert model)
+                        auto it = concurrent_event->stream_mapping.find(node);
+                        cuda_ctx->curr_stream_no = it != concurrent_event->stream_mapping.end() ? it->second : 0;
                         GGML_LOG_DEBUG("Setting stream no to %d for node %s\n", cuda_ctx->curr_stream_no, node->name);
                     }
                 } else if (i - prev_i > 1) {
@@ -3910,7 +3914,8 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                     try_launch_concurrent_event(prev_node);
 
                     if (is_concurrent_event_active) {
-                        cuda_ctx->curr_stream_no = concurrent_event->stream_mapping[node];
+                        auto it = concurrent_event->stream_mapping.find(node);
+                        cuda_ctx->curr_stream_no = it != concurrent_event->stream_mapping.end() ? it->second : 0;
                         GGML_LOG_DEBUG("Setting stream no to %d for node %s\n", cuda_ctx->curr_stream_no, node->name);
                     }
                 }
@@ -4329,11 +4334,129 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
         }
     }
 
-    // Place every concurrent branch in a dedicated buffer so its nodes never share an address with
-    // each other or with tensors read across the region (which ggml-alloc could otherwise recycle,
-    // corrupting concurrent reads). Layers run sequentially, so one buffer sized to the largest
-    // region is reused across all of them; within a region each node gets a distinct offset so the
-    // concurrent scratch stays disjoint.
+    // MoE shared-expert overlap: run the shared expert on a separate stream, overlapped with the
+    // routed experts. fork = the FFN-input norm feeding both branches, join = ggml_add(ffn_moe_out,
+    // ffn_shexp*). Operands are matched by the names set via cb() in the model graph. Decode only
+    // (gated below): prefill is compute-bound and gains nothing from the overlap.
+    const auto reach_backward = [](const ggml_tensor * start) {
+        std::unordered_set<const ggml_tensor *> seen;
+        std::vector<const ggml_tensor *> stack = { start };
+        while (!stack.empty()) {
+            const ggml_tensor * t = stack.back();
+            stack.pop_back();
+            if (!t || seen.count(t)) {
+                continue;
+            }
+            seen.insert(t);
+            for (int s = 0; s < GGML_MAX_SRC; ++s) {
+                if (t->src[s]) {
+                    stack.push_back(t->src[s]);
+                }
+            }
+        }
+        return seen;
+    };
+
+    for (int join_idx = 0; join_idx < cgraph->n_nodes; ++join_idx) {
+        ggml_tensor * join_node = cgraph->nodes[join_idx];
+        if (join_node->op != GGML_OP_ADD) {
+            continue;
+        }
+
+        // Only overlap during decode (single token). Overlapping the shared expert only helps when
+        // the routed branch leaves the GPU underutilized for it to run alongside; that is the case in
+        // decode (batch 1, latency/occupancy-bound) but not in prefill, where the routed matmuls are
+        // large and already saturate the GPU, so the overlap adds contention without a speedup.
+        if (ggml_nrows(join_node) > 1) {
+            continue;
+        }
+
+        ggml_tensor * routed_out = nullptr;
+        ggml_tensor * shexp_out  = nullptr;
+        for (int s = 0; s < 2; ++s) {
+            ggml_tensor * x = join_node->src[s];
+            ggml_tensor * y = join_node->src[1 - s];
+            if (x && y && strstr(x->name, "ffn_moe_out") && strstr(y->name, "ffn_shexp")) {
+                routed_out = x;
+                shexp_out  = y;
+            }
+        }
+        if (!routed_out || !shexp_out) {
+            continue;
+        }
+
+        const std::unordered_set<const ggml_tensor *> reach_routed = reach_backward(routed_out);
+        const std::unordered_set<const ggml_tensor *> reach_shexp  = reach_backward(shexp_out);
+
+        // fork = highest-index node reachable from both branches (the ffn_norm output)
+        int fork_idx = -1;
+        for (const ggml_tensor * t : reach_routed) {
+            if (!reach_shexp.count(t)) {
+                continue;
+            }
+            auto it = node_indices.find(t);
+            if (it != node_indices.end() && it->second < join_idx && it->second > fork_idx) {
+                fork_idx = it->second;
+            }
+        }
+        if (fork_idx < 0) {
+            continue;
+        }
+
+        bool overlaps = false;
+        for (const auto & [start, end] : concurrent_node_ranges) {
+            if (!(join_idx < start || fork_idx > end)) {
+                overlaps = true;
+            }
+        }
+        if (overlaps) {
+            continue;
+        }
+
+        // partition the region (fork_idx, join_idx): shared-expert nodes -> stream 2, routed -> 1
+        std::vector<std::vector<const ggml_tensor *>> nodes_per_branch(2);
+        for (int i = fork_idx + 1; i < join_idx; ++i) {
+            const ggml_tensor * n = cgraph->nodes[i];
+            const int branch = reach_shexp.count(n) ? 1 : 0;
+            nodes_per_branch[branch].push_back(n);
+        }
+        if (nodes_per_branch[0].empty() || nodes_per_branch[1].empty()) {
+            continue;
+        }
+
+        // vLLM shared-expert model: the routed experts stay on the main stream and only the shared
+        // expert forks onto a single aux stream, joined at the add. Keeping the large routed branch
+        // on the main stream avoids migrating it and needs only one fork/join.
+        ggml_cuda_concurrent_event concurrent_event(1);
+        concurrent_event.join_node = join_node;
+        for (const ggml_tensor * n : nodes_per_branch[1]) {
+            concurrent_event.stream_mapping[n] = 1;
+        }
+
+        const ggml_tensor * fork_node = cgraph->nodes[fork_idx];
+        concurrent_event.original_order.reserve(join_idx - fork_idx - 1);
+        for (int i = fork_idx + 1; i < join_idx; ++i) {
+            concurrent_event.original_order.push_back(cgraph->nodes[i]);
+        }
+
+        std::unordered_map<const ggml_tensor *, ggml_cuda_concurrent_event> & concurrent_events = cuda_ctx->stream_context().concurrent_events;
+        if (concurrent_events.find(fork_node) != concurrent_events.end()) {
+            continue;
+        }
+        concurrent_events.emplace(fork_node, std::move(concurrent_event));
+        GGML_LOG_DEBUG("Adding shared-expert stream at node %s %p\n", fork_node->name, fork_node);
+        concurrent_node_ranges.emplace_back(fork_idx, join_idx);
+
+        // the shared-expert nodes get a dedicated buffer (below), so the graph order is left intact
+        // and no interleaving is needed to keep the branch non-overlapping
+        concurrent_groups.push_back(nodes_per_branch[1]);
+    }
+
+    // Place every concurrent branch (attention QKV and MoE shared-expert) in a dedicated buffer so
+    // its nodes never share an address with each other or with tensors read across the region (which
+    // ggml-alloc could otherwise recycle, corrupting concurrent reads). Layers run sequentially, so
+    // one buffer sized to the largest region is reused across all of them; within a region each node
+    // gets a distinct offset so the concurrent scratch stays disjoint.
     if (!concurrent_groups.empty()) {
         const size_t alignment = 128;
 
