@@ -4076,6 +4076,18 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
     int mmq_x_best  = 0;
     int ntiles_x_best = INT_MAX;
 
+    // ncols_max assumes every token can land in a single tile column range; for MoE that is the
+    // worst case of all tokens routed to one expert, but experts typically receive only
+    // ncols_dst/nchannels_y tokens. Tiling over ~2x that average keeps the common per-expert
+    // tiles filled instead of mostly empty; the 2x covers routing imbalance and larger batches
+    // converge back to ncols_max.
+    // Restricted to RDNA3.5, the only arch this MoE tile sizing was tuned/validated on.
+    int64_t ncols_to_tile = args.ncols_max;
+    if (args.expert_bounds != nullptr && GGML_CUDA_CC_IS_RDNA3_5(cc)) {
+        const int64_t ncols_per_expert = (args.ncols_dst + args.nchannels_y - 1) / args.nchannels_y;
+        ncols_to_tile = 2*ncols_per_expert < args.ncols_max ? 2*ncols_per_expert : args.ncols_max;
+    }
+
     for (int mmq_x = 8; mmq_x <= mmq_x_max && ntiles_x_best > 1; mmq_x += 8) {
         const int granularity = mmq_get_granularity_host(mmq_x, cc);
 
@@ -4083,7 +4095,7 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
             continue;
         }
 
-        const int ntiles_x = (args.ncols_max + mmq_x - 1) / mmq_x;
+        const int ntiles_x = (ncols_to_tile + mmq_x - 1) / mmq_x;
 
         if (ntiles_x < ntiles_x_best) {
             mmq_x_best = mmq_x;
