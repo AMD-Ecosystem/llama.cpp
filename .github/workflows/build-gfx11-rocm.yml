@@ -220,6 +220,7 @@ jobs:
           -DGGML_CUDA_FORCE_CUBLAS=OFF \
           -DGGML_RPC=ON \
           -DGGML_HIP_ROCWMMA_FATTN=OFF \
+          -DGGML_HIP_ROOFLINE=ON \
           -DLLAMA_BUILD_BORINGSSL=ON \
           -DGGML_NATIVE=OFF \
           -DGGML_STATIC=OFF \
