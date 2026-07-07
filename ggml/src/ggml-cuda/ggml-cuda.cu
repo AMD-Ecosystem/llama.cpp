@@ -1755,15 +1755,45 @@ static void ggml_cuda_op_mul_mat_cublas(
         to_fp32_cuda(dst_bf16.get(), dst_dd_i, row_diff*src1_ncols, stream);
     } else if (fast_fp16_hardware_available(cc) && use_fp16) {
         // convert src0 and src1 to fp16, multiply as fp16, convert dst to fp32
-        ggml_cuda_pool_alloc<half> src0_as_f16(ctx.pool(id));
-        if (src0->type != GGML_TYPE_F16) {
+        int64_t lda_use = lda_f16;
+        const half * src0_ptr = nullptr;
+        ggml_cuda_pool_alloc<half> src0_as_f16(ctx.pool(id)); // fallback (non-cached) storage
+        if (src0->type == GGML_TYPE_F16) {
+            src0_ptr = (const half *) src0_dd_i;
+        } else {
             const to_fp16_cuda_t to_fp16_cuda = ggml_get_to_fp16_cuda(src0->type);
             GGML_ASSERT(to_fp16_cuda != nullptr);
-            size_t ne = row_diff*ne00;
-            src0_as_f16.alloc(ne);
-            to_fp16_cuda(src0_dd_i, src0_as_f16.get(), ne, stream);
+            const size_t ne = row_diff*ne00;
+            // GGML_PREFILL_DEQUANT: dequantize the weight ONCE into a persistent K-padded f16 buffer
+            // (+1 cache line, avoids cache-set aliasing) and cache it by weight pointer. Subsequent
+            // calls reuse it, so only the activation convert + GEMM run per call.
+            static const int deq_pad = getenv("GGML_PREFILL_DEQUANT") ? (GGML_CUDA_CACHE_LINE/(int)sizeof(half)) : 0;
+            const bool do_cache = deq_pad && (ne00 % (GGML_CUDA_ROW_ALIAS_STRIDE/(int)sizeof(half)) == 0);
+            if (do_cache) {
+                const int64_t lda_pad = ne00 + deq_pad;
+                static std::mutex cache_mtx;
+                static std::unordered_map<const void *, std::pair<half *, int64_t>> cache;
+                std::lock_guard<std::mutex> lk(cache_mtx);
+                auto it = cache.find(src0_dd_i);
+                if (it == cache.end()) {
+                    half * buf = nullptr;
+                    CUDA_CHECK(cudaMalloc(&buf, (size_t)row_diff*lda_pad*sizeof(half)));
+                    ggml_cuda_pool_alloc<half> tmp(ctx.pool(id), ne);
+                    to_fp16_cuda(src0_dd_i, tmp.get(), ne, stream);
+                    CUDA_CHECK(cudaMemcpy2DAsync(buf, lda_pad*sizeof(half),
+                                                 tmp.get(), ne00*sizeof(half),
+                                                 ne00*sizeof(half), row_diff, cudaMemcpyDeviceToDevice, stream));
+                    CUDA_CHECK(cudaStreamSynchronize(stream)); // finish before tmp is recycled (one-time)
+                    it = cache.emplace(src0_dd_i, std::make_pair(buf, lda_pad)).first;
+                }
+                src0_ptr = it->second.first;
+                lda_use  = it->second.second;
+            } else {
+                src0_as_f16.alloc(ne);
+                to_fp16_cuda(src0_dd_i, src0_as_f16.get(), ne, stream);
+                src0_ptr = src0_as_f16.get();
+            }
         }
-        const half * src0_ptr = src0->type == GGML_TYPE_F16 ? (const half *) src0_dd_i : src0_as_f16.get();
 
         ggml_cuda_pool_alloc<half> src1_as_f16(ctx.pool(id));
         if (src1->type != GGML_TYPE_F16) {
@@ -1789,7 +1819,7 @@ static void ggml_cuda_op_mul_mat_cublas(
             CUBLAS_CHECK(
                 cublasGemmEx(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N,
                         row_diff, src1_ncols, ne10,
-                        &alpha, src0_ptr,  CUDA_R_16F, lda_f16,
+                        &alpha, src0_ptr,  CUDA_R_16F, lda_use,
                                 src1_ptr,  CUDA_R_16F, ne10,
                         &beta,   dst_dd_i, CUDA_R_32F, ldc,
                         CUBLAS_COMPUTE_32F,
@@ -1803,7 +1833,7 @@ static void ggml_cuda_op_mul_mat_cublas(
             CUBLAS_CHECK(
                 cublasGemmEx(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N,
                         row_diff, src1_ncols, ne10,
-                        &alpha_f16, src0_ptr,      CUDA_R_16F, lda_f16,
+                        &alpha_f16, src0_ptr,      CUDA_R_16F, lda_use,
                                     src1_ptr,      CUDA_R_16F, ne10,
                         &beta_f16,  dst_f16.get(), CUDA_R_16F, ldc,
                         CUBLAS_COMPUTE_16F,
@@ -2654,6 +2684,21 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         use_mul_mat_vec_f       = use_mul_mat_vec_f         && ggml_cuda_should_use_mmvf(src0->type, cc, src0->ne, src0->nb, src1->ne[1]);
         use_mul_mat_vec_q       = use_mul_mat_vec_q         && ggml_cuda_should_use_mmvq(src0->type, cc, src1->ne[1]);
         any_gpus_with_slow_fp16 = any_gpus_with_slow_fp16   || !fast_fp16_hardware_available(cc);
+    }
+
+    // GGML_PREFILL_DEQUANT=<min_tokens>: for large-batch (prefill) quantized GEMMs, force the
+    // dequantize-to-f16 + hipBLAS path (K-padded, see op_mul_mat_cublas) instead of MMQ.
+    {
+        static const int prefill_dequant_min = [] {
+            const char * env = getenv("GGML_PREFILL_DEQUANT");
+            if (env == nullptr) return 0;
+            const int v = atoi(env);
+            return v > 1 ? v : 32;
+        }();
+        if (prefill_dequant_min > 0 && ggml_is_quantized(src0->type) && src1->ne[1] >= prefill_dequant_min) {
+            use_mul_mat_q     = false;
+            use_mul_mat_vec_q = false;
+        }
     }
 
     // debug helpers
