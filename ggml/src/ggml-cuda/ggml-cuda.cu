@@ -1426,7 +1426,45 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
     bool is_src0_cont_2 = ggml_is_contiguous_2(src0);
     bool is_src1_cont_2 = ggml_is_contiguous_2(src1);
 
-    if (src0->type == compute_type) {
+    bool src0_cached = false;
+    if constexpr (compute_type == GGML_TYPE_F16) {
+        // GGML_PREFILL_DEQUANT: dequantize a quantized weight ONCE into a persistent K-padded f16
+        // buffer (+1 cache line, avoids cache-set aliasing) cached by weight pointer. Subsequent
+        // calls reuse it, so only the per-call activation convert + GEMM run.
+        static const int deq_pad = getenv("GGML_PREFILL_DEQUANT") ? (GGML_CUDA_CACHE_LINE/(int)sizeof(half)) : 0;
+        const bool do_cache = deq_pad && ggml_is_quantized(src0->type)
+            && ne02 == 1 && ne03 == 1 && ggml_is_contiguously_allocated(src0)
+            && (ne00 % (GGML_CUDA_ROW_ALIAS_STRIDE/(int)sizeof(half)) == 0);
+        if (do_cache) {
+            const int64_t lda_pad = ne00 + deq_pad;
+            static std::mutex cache_mtx;
+            static std::unordered_map<const void *, std::pair<half *, int64_t>> cache;
+            std::lock_guard<std::mutex> lk(cache_mtx);
+            auto it = cache.find(src0->data);
+            if (it == cache.end()) {
+                half * buf = nullptr;
+                CUDA_CHECK(cudaMalloc(&buf, (size_t)ne01*lda_pad*sizeof(half)));
+                const auto convert_func = traits::convert(src0->type);
+                GGML_ASSERT(convert_func != nullptr);
+                ggml_cuda_pool_alloc<cuda_t> tmp(ctx.pool(), ggml_nelements(src0));
+                convert_func(src0->data, tmp.get(), ggml_nelements(src0), main_stream);
+                CUDA_CHECK(cudaMemcpy2DAsync(buf, lda_pad*sizeof(half),
+                                             tmp.get(), ne00*sizeof(half),
+                                             ne00*sizeof(half), ne01, cudaMemcpyDeviceToDevice, main_stream));
+                CUDA_CHECK(cudaStreamSynchronize(main_stream)); // finish before tmp is recycled (one-time)
+                it = cache.emplace(src0->data, std::make_pair(buf, lda_pad)).first;
+            }
+            src0_ptr = (const cuda_t *) it->second.first;
+            s01 = it->second.second;
+            s02 = ne01*s01;
+            s03 = ne02*s02;
+            src0_cached = true;
+        }
+    }
+
+    if (src0_cached) {
+        // src0_ptr / strides already set from the K-padded dequant cache
+    } else if (src0->type == compute_type) {
         src0_ptr = (const cuda_t *) src0->data;
     } else {
         src0_alloc.alloc(ggml_nelements(src0));
@@ -1815,6 +1853,17 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     const int cc        = ggml_cuda_info().devices[ctx.device].cc;
     const int warp_size = ggml_cuda_info().devices[ctx.device].warp_size;
 
+    // GGML_PREFILL_DEQUANT=<min_tokens>: for large-batch (prefill) quantized GEMMs, skip MMQ/MMVQ
+    // and fall through to the dequantize-to-f16 + hipBLAS path (K-padded, see
+    // ggml_cuda_mul_mat_cublas_impl), which caches the dequantized weight by pointer.
+    static const int prefill_dequant_min = [] {
+        const char * env = getenv("GGML_PREFILL_DEQUANT");
+        if (env == nullptr) return 0;
+        const int v = atoi(env);
+        return v > 1 ? v : 32;
+    }();
+    const bool prefill_dequant = prefill_dequant_min > 0 && ggml_is_quantized(src0->type) && ne11 >= prefill_dequant_min;
+
     if (ggml_cuda_should_use_mmvf(src0->type, cc, src0->ne, src0->nb, ne11)) {
         // The custom F16 vector kernel can be used over batched cuBLAS GEMM.
         // But this is only faster for GPUs without tensor cores or with a thin src0 matrix (particularly KQV in attention)
@@ -1846,11 +1895,11 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         ggml_cuda_mul_mat_f(ctx, src0, src1, nullptr, dst);
         return;
     }
-    if (ggml_cuda_should_use_mmvq(src0->type, cc, ne11)) {
+    if (!prefill_dequant && ggml_cuda_should_use_mmvq(src0->type, cc, ne11)) {
         ggml_cuda_mul_mat_vec_q(ctx, src0, src1, nullptr, dst);
         return;
     }
-    if (ggml_cuda_should_use_mmq(src0->type, cc, ne11, /*n_experts =*/ 0)) {
+    if (!prefill_dequant && ggml_cuda_should_use_mmq(src0->type, cc, ne11, /*n_experts =*/ 0)) {
         ggml_cuda_mul_mat_q(ctx, src0, src1, nullptr, dst);
         return;
     }
