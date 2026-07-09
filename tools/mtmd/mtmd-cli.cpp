@@ -10,6 +10,13 @@
 #include "mtmd.h"
 #include "mtmd-helper.h"
 
+// Optional per-op roofline profiler (HIP build with GGML_HIP_ROOFLINE). Used to
+// discard warmup so the report covers only the measured prefill. Compiled out
+// otherwise. See ggml/src/ggml-cuda/ggml-cuda-roofline.cpp.
+#ifdef GGML_HIP_ROOFLINE
+#include "ggml-cuda-roofline.h"
+#endif
+
 #include <vector>
 #include <limits.h>
 #include <cinttypes>
@@ -453,6 +460,11 @@ int main(int argc, char ** argv) {
                 return 1; // error is already printed by libmtmd
             }
         }
+        // Discard warmup from the per-op roofline profiler so the report covers
+        // only the measured prefill below. Compiled out unless GGML_HIP_ROOFLINE.
+#ifdef GGML_HIP_ROOFLINE
+        ggml_cuda_roofline_reset();
+#endif
         if (eval_message(ctx, msg)) {
             return 1;
         }

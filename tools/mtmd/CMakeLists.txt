@@ -134,6 +134,13 @@ if (LLAMA_BUILD_TOOLS)
     target_link_libraries  (${TARGET} PRIVATE llama-common mtmd Threads::Threads)
     target_compile_features(${TARGET} PRIVATE cxx_std_17)
 
+    # Compile in the post-warmup roofline reset only when the HIP profiler is built
+    # (ggml-cuda-roofline.cpp, linked via ggml-hip). No-op in every other build.
+    if (GGML_HIP_ROOFLINE)
+        target_compile_definitions(${TARGET} PRIVATE GGML_HIP_ROOFLINE)
+        target_include_directories(${TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../ggml/src/ggml-cuda)
+    endif()
+
     # mtmd-debug tool
     add_executable(llama-mtmd-debug debug/mtmd-debug.cpp)
     set_target_properties(llama-mtmd-debug PROPERTIES OUTPUT_NAME llama-mtmd-debug)
