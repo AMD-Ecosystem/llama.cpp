@@ -2959,7 +2959,85 @@ static __device__ __forceinline__ void vec_dot_q6_K_q8_1_dp4a(
 template <int mmq_x, int mmq_y>
 static __device__ __forceinline__ void vec_dot_q6_K_q8_1_mma(
     const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
-#if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
+#if defined(RDNA3_5) && defined(AMD_WMMA_AVAILABLE) && !defined(AMD_MFMA_AVAILABLE)
+    // Hoist sclA = sc[k01/4]*d per k-slice — scales were loaded per (n,l) in j-loop.
+    constexpr data_layout input_layout = get_input_data_layout();
+    typedef tile<16,  4, int, input_layout>        tile_A;
+    typedef tile<16,  4, int, input_layout>        tile_B;
+    typedef tile<16, 16, int, DATA_LAYOUT_J_MAJOR> tile_C;
+
+    constexpr int granularity   = mmq_get_granularity_device(mmq_x);
+    constexpr int rows_per_warp = granularity;
+    constexpr int ntx           = rows_per_warp/tile_C::I;
+
+    y += (threadIdx.y % ntx) * (tile_C::J*MMQ_TILE_Y_K);
+
+    const int   * x_qs = (const int   *) x;
+    const float * x_df = (const float *) x_qs + MMQ_TILE_NE_K*2;
+    const int   * x_sc = (const int   *) x_df + MMQ_TILE_NE_K/QI6_K;
+    const int   * y_qs = (const int   *) y + 4;
+    const float * y_df = (const float *) y;
+
+    const int i0 = (threadIdx.y / ntx) * rows_per_warp;
+
+    for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += 4) {
+        const int k0 = k00 + k01;
+
+        tile_A A[ntx];
+        float sclA[ntx][tile_C::ne];
+
+#pragma unroll
+        for (int n = 0; n < ntx; ++n) {
+            load_ldmatrix(A[n], x_qs + (i0 + n*tile_A::I)*MMQ_MMA_TILE_X_K_Q6_K + k0, MMQ_MMA_TILE_X_K_Q6_K);
+
+#pragma unroll
+            for (int l = 0; l < tile_C::ne; ++l) {
+                const int i = i0 + n*tile_A::I + tile_C::get_i(l);
+                const int8_t * sc = (const int8_t *) (x_sc + i*MMQ_MMA_TILE_X_K_Q6_K + k00/16);
+                sclA[n][l] = (float) sc[k01/4] * x_df[i*MMQ_MMA_TILE_X_K_Q6_K];
+            }
+        }
+
+        constexpr int j_step = ntx*tile_C::J;
+
+        tile_B B0;
+        load_ldmatrix(B0, y_qs + 0, MMQ_TILE_Y_K);
+        float dB0 = y_df[tile_C::get_j(0)*MMQ_TILE_Y_K + k01/QI8_1];
+
+#pragma unroll
+        for (int j0 = 0; j0 < mmq_x; j0 += j_step) {
+            const int j0_next = j0 + j_step;
+
+            tile_B B1;
+            float dB1 = 0.0f;
+            if (j0_next < mmq_x) {
+                load_ldmatrix(B1, y_qs + j0_next*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K);
+                const int jn = j0_next + tile_C::get_j(0);
+                dB1 = y_df[jn*MMQ_TILE_Y_K + k01/QI8_1];
+            }
+
+            tile_C C[ntx];
+
+#pragma unroll
+            for (int n = 0; n < ntx; ++n) {
+                mma(C[n], A[n], B0);
+            }
+
+#pragma unroll
+            for (int n = 0; n < ntx; ++n) {
+#pragma unroll
+                for (int l = 0; l < tile_C::ne; ++l) {
+                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += C[n].x[l]*sclA[n][l]*dB0;
+                }
+            }
+
+            if (j0_next < mmq_x) {
+                B0 = B1;
+                dB0 = dB1;
+            }
+        }
+    }
+#elif defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
     constexpr data_layout input_layout = get_input_data_layout();
     typedef tile<16,  4, int, input_layout>        tile_A;
     typedef tile<16,  4, int, input_layout>        tile_B;
@@ -3887,6 +3965,7 @@ struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_IQ4_XS> {
     static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q8_0_q8_1_dp4a<mmq_x, mmq_y>;
 };
 
+
 #if defined(RDNA3_5)
 // Software-pipeline activation tile loads: issue global loads into registers, run WMMA,
 // then store to LDS. Overlaps memory latency with vec_dot on gfx115x (no ISA prefetch).
@@ -4169,6 +4248,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
         write_back(sum, ids_dst, dst, stride_col_dst, tile_x_max_i, tile_y_max_j);
     }
 }
+
 
 
 // The mul_mat_q kernel implements "stream-k" work partitioning as described in https://arxiv.org/abs/2301.03598
@@ -4575,6 +4655,23 @@ struct mmq_args {
     bool use_stream_k; int64_t ncols_max;
 };
 
+#if defined(GGML_USE_HIP)
+// RDNA3.5 dual-WG (mmq_x=64, nbytes <= smpbo/2) helps K-quants with large per-tile LDS
+// (Q6_K WMMA tuning). Block quants (Q5_0, Q8_0, Q4_0) are faster at mmq_x=128 ntx=1.
+static bool mmq_rdna35_dual_wg_eligible(const ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+            return true;
+        default:
+            return false;
+    }
+}
+#endif // GGML_USE_HIP
+
 template<ggml_type type>
 static size_t mmq_get_nbytes_shared(const int mmq_x, const int mmq_y, const int cc, const int warp_size, const int nwarps) {
     const tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(type, mmq_y);
@@ -4585,7 +4682,8 @@ static size_t mmq_get_nbytes_shared(const int mmq_x, const int mmq_y, const int 
     const int tile_y_k_padded = mmq_get_tile_y_k_padded_host(mmq_x, cc, warp_size, nwarps);
     const size_t nbs_y_padded = std::max(nbs_y, (size_t) tile_y_k_padded*sizeof(int));
     const int pad = GGML_CUDA_CC_IS_RDNA3_5(cc) ? 2*nwarps*warp_size : nwarps*warp_size;
-    return nbs_ids + nbs_x + GGML_PAD(nbs_y_padded, pad*sizeof(int));
+    size_t nbytes = nbs_ids + nbs_x + GGML_PAD(nbs_y_padded, pad*sizeof(int));
+    return nbytes;
 }
 
 template <ggml_type type, int mmq_x>
@@ -4755,9 +4853,9 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
     }
 
 #if defined(GGML_USE_HIP)
-    // RDNA3.5 (gfx115x): mmq_x=128 uses ~59% of LDS/CU → 1 WG/CU. Pick the smallest
-    // mmq_x with nbytes_shared <= smpbo/2 (2 WGs/CU) without doubling M-tile count.
-    if (GGML_CUDA_CC_IS_RDNA3_5(cc) && mmq_x_best > 0) {
+    // RDNA3.5 (gfx115x): mmq_x=128 uses ~59% of LDS/CU → 1 WG/CU. For K-quants only,
+    // pick the smallest mmq_x with nbytes_shared <= smpbo/2 (2 WGs/CU).
+    if (GGML_CUDA_CC_IS_RDNA3_5(cc) && mmq_x_best > 0 && mmq_rdna35_dual_wg_eligible(type)) {
         const size_t lds_dual_wg = smpbo / 2;
         const size_t nbytes_best = mmq_get_nbytes_shared<type>(mmq_x_best, mmq_y, cc, warp_size, nwarps);
         if (nbytes_best > lds_dual_wg) {
@@ -4820,6 +4918,8 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
             mmq_x_best = mmq_x_tiny;
         }
     }
+
+    // Q6_K / K-quants narrow-N: dual-WG path (mmq_x=64, ntx=2) from smpbo/2 selection.
 #endif // GGML_USE_HIP
 
 #if defined(GGML_USE_HIP)
