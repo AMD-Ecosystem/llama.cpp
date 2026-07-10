@@ -444,7 +444,10 @@ jobs:
         # The parsed assistant answer ("content" field, printed with -v) must
         # contain 4 and no other digit, so "4" / "The answer is 4." pass while
         # "5", "14", "22" fail. This is the deterministic correctness check.
-        answer_content=$(grep -oE '"content":"[^"]*"' "$output_file" | tail -1)
+        # llama-cli now runs via an in-process server (upstream #24948); its
+        # stream ends with a verbose stop chunk carrying an empty "content":"",
+        # so drop empty matches before taking the last real answer chunk.
+        answer_content=$(grep -oE '"content":"[^"]*"' "$output_file" | grep -v '"content":""' | tail -1)
         if echo "$answer_content" | grep -qE '4' && ! echo "$answer_content" | grep -qE '[0-35-9]'; then
           found_answer=true
         fi
