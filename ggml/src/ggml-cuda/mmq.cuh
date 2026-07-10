@@ -2867,7 +2867,7 @@ static __device__ __forceinline__ void vec_dot_q6_K_q8_1_mma(
         constexpr int j_step = ntx*tile_C::J;
 
         tile_B B0;
-        load_ldmatrix(B0, y_qs + 0, MMQ_TILE_Y_K);
+        load_ldmatrix(B0, y_qs + k01, MMQ_TILE_Y_K);
         float dB0 = y_df[tile_C::get_j(0)*MMQ_TILE_Y_K + k01/QI8_1];
 
 #pragma unroll
