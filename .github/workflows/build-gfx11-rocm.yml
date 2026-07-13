@@ -221,6 +221,8 @@ jobs:
           -DGGML_RPC=ON \
           -DGGML_HIP_ROCWMMA_FATTN=OFF \
           -DGGML_HIP_ROOFLINE=ON \
+          -DLLAMA_BUILD_UI=OFF \
+          -DLLAMA_USE_PREBUILT_UI=OFF \
           -DLLAMA_BUILD_BORINGSSL=ON \
           -DGGML_NATIVE=OFF \
           -DGGML_STATIC=OFF \
