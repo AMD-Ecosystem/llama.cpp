@@ -350,9 +350,13 @@ void write_report() {
         for (int p = 0; p < n_op_params; p++) { if (p) out << ", "; out << rec.op_params[p]; }
         out << "], ";
         out << "\"bytes\": " << rec.bytes << ", ";
-        out << "\"dst_bytes\": " << rec.dst_bytes << ", ";
+        out << "\"dst_bytes\": " << rec.dst_bytes << ", \"dst_sid\": " << rec.dst_sid << ", ";
         out << "\"src_bytes\": [";
         for (int j = 0; j < rec.n_src; j++) { if (j) out << ", "; out << rec.src_bytes[j]; }
+        out << "], \"src_ids\": [";
+        for (int j = 0; j < rec.n_src; j++) { if (j) out << ", "; out << rec.src_ids[j]; }
+        out << "], \"src_sids\": [";
+        for (int j = 0; j < rec.n_src; j++) { if (j) out << ", "; out << rec.src_sids[j]; }
         out << "], ";
         out << "\"M\": " << rec.M << ", \"N\": " << rec.N << ", \"K\": " << rec.K
             << ", \"n_experts\": " << rec.n_experts << ", \"top_k\": " << rec.top_k << ", ";
