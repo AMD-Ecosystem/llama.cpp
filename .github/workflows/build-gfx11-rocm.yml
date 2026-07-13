@@ -198,7 +198,7 @@ jobs:
         echo "Current llama.cpp commit:"
         git log --oneline -1
 
-    - name: ccache
+    - name: Setup ccache
       # Auto-consumed by the build: llama.cpp's CMake sets ccache as the compile
       # launcher when GGML_CCACHE is ON (default) and ccache is on PATH, so no
       # cmake flags are needed. Persists across runs via actions/cache. Nightly
