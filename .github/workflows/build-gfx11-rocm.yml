@@ -198,6 +198,19 @@ jobs:
         echo "Current llama.cpp commit:"
         git log --oneline -1
 
+    - name: ccache
+      # Auto-consumed by the build: llama.cpp's CMake sets ccache as the compile
+      # launcher when GGML_CCACHE is ON (default) and ccache is on PATH, so no
+      # cmake flags are needed. Persists across runs via actions/cache. Nightly
+      # ROCm bumps change the compiler and will miss (expected); incremental
+      # commits on the same ROCm hit. Only write the cache from pushes to gfx11
+      # so PRs read but don't thrash the shared store.
+      uses: ggml-org/ccache-action@v1.2.21
+      with:
+        key: gfx11-rocm-multiarch
+        evict-old-files: 1d
+        save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/gfx11' }}
+
     - name: Build Llama.cpp + ROCm
       run: |
         gpu_targets="${{ env.GPU_TARGETS }}"
