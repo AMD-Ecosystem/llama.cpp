@@ -53,6 +53,9 @@ struct op_record {
     int64_t      bytes                   = 0;             // total HBM traffic: destination + all sources
     int64_t      dst_bytes               = 0;             // ggml_nbytes(destination)
     int64_t      src_bytes[GGML_MAX_SRC] = {};            // ggml_nbytes(source)
+    uint64_t     dst_sid                 = 0;             // storage id (view_src root) of destination
+    uint64_t     src_ids[GGML_MAX_SRC]   = {};           // source tensor id (dedup key)
+    uint64_t     src_sids[GGML_MAX_SRC]  = {};           // source storage id (view_src root)
     int64_t      M = 0, N = 0, K = 0, n_experts = 0, top_k = 0;  // matmul dimensions
     std::vector<op_record> fused_nodes;                  // per-node geometry when this row is a fused group (else empty)
 };
@@ -148,6 +151,16 @@ uint64_t hash_mix(uint64_t hash, uint64_t value) {
     return hash;
 }
 
+// Storage identity: ggml points a view/in-place tensor's view_src at the buffer it aliases, so
+// following the chain to the end yields the tensor that actually owns the HBM. Two tensors touch
+// the same memory iff they share this root. VIEW/RESHAPE outputs carry view_src, and so do
+// in-place ops (e.g. CPY does ggml_view_tensor(dst)), which lets the consumer tell a read that
+// actually targets the op's own output (an in-place destination) from a genuine input read.
+const ggml_tensor * roofline_storage(const ggml_tensor * t) {
+    while (t && t->view_src) t = t->view_src;
+    return t;
+}
+
 // Fill a record's geometry and single-node HBM byte fields from one ggml node.
 void fill_head_record(op_record & rec, const ggml_tensor * node) {
     const ggml_tensor * src0 = node->src[0];
@@ -169,10 +182,13 @@ void fill_head_record(op_record & rec, const ggml_tensor * node) {
     // total HBM traffic for this op: write the destination and read every source.
     rec.dst_bytes = (int64_t) ggml_nbytes(node);
     rec.bytes     = rec.dst_bytes;
+    rec.dst_sid   = (uint64_t) (uintptr_t) roofline_storage(node);
     for (int j = 0; j < GGML_MAX_SRC; j++) {
         if (node->src[j]) {
             rec.src_bytes[j] = (int64_t) ggml_nbytes(node->src[j]);
             rec.bytes       += rec.src_bytes[j];
+            rec.src_ids[j]   = (uint64_t) (uintptr_t) node->src[j];
+            rec.src_sids[j]  = (uint64_t) (uintptr_t) roofline_storage(node->src[j]);
         }
     }
 
@@ -245,9 +261,11 @@ void write_shape(std::ostringstream & out, const char * key, const int64_t ne[4]
     out << "\"" << key << "\": [" << ne[0] << ", " << ne[1] << ", " << ne[2] << ", " << ne[3] << "]";
 }
 
-// One fused node's geometry: op name, types, shapes, params, and matmul dims. Enough for
-// the consumer to sum exact FLOPs and render each fused op's config. Byte fields are
-// omitted: the fused row's group-level bytes are authoritative.
+// One fused node's geometry plus the raw per-tensor facts the consumer needs to compute the
+// fused group's HBM traffic itself: destination/source byte counts, a storage id per tensor
+// (view_src root -- tells which tensors alias the same buffer), and a source tensor id (dedup
+// key). The consumer applies the exclusion policy (skip views, drop in-place destinations and
+// internal reads, dedup); the producer only reports facts.
 void write_fused_node(std::ostringstream & out, const op_record & rec) {
     out << "{\"ggml_op\": \"" << rec.op << "\", "
         << "\"dtype\": \"" << rec.dtype << "\", \"quant\": \"" << rec.quant << "\", ";
@@ -265,8 +283,15 @@ void write_fused_node(std::ostringstream & out, const op_record & rec) {
     }
     out << "], \"op_params\": [";
     for (int p = 0; p < n_op_params; p++) { if (p) out << ", "; out << rec.op_params[p]; }
+    out << "], \"dst_bytes\": " << rec.dst_bytes << ", \"dst_sid\": " << rec.dst_sid << ", ";
+    out << "\"src_bytes\": [";
+    for (int j = 0; j < rec.n_src; j++) { if (j) out << ", "; out << rec.src_bytes[j]; }
+    out << "], \"src_ids\": [";
+    for (int j = 0; j < rec.n_src; j++) { if (j) out << ", "; out << rec.src_ids[j]; }
+    out << "], \"src_sids\": [";
+    for (int j = 0; j < rec.n_src; j++) { if (j) out << ", "; out << rec.src_sids[j]; }
     out << "], \"M\": " << rec.M << ", \"N\": " << rec.N << ", \"K\": " << rec.K
-        << ", \"top_k\": " << rec.top_k << "}";
+        << ", \"n_experts\": " << rec.n_experts << ", \"top_k\": " << rec.top_k << "}";
 }
 
 // Write the per-invocation JSON report. Registered with atexit while profiling is active.
@@ -479,81 +504,21 @@ void ggml_cuda_roofline_fuse_ops(const struct ggml_cgraph * cgraph, int node_idx
 
     const ggml_tensor * head = cgraph->nodes[node_idx];
 
-    // Keep the head op's geometry (op name, shapes, M/N/K) so the row is still labelled by
-    // the head op; the byte fields below are replaced with the fused-group traffic.
+    // Keep the head op's geometry (op name, shapes, M/N/K) so the row is still labelled by the
+    // head op. The row-level byte fields stay head-only and are ignored for fused rows; the
+    // consumer derives the group's traffic from the per-node facts recorded below.
     op_record rec;
     fill_head_record(rec, head);
 
-    // Record every fused node's geometry (op name + shapes + params + matmul dims) so the
-    // consumer can sum exact FLOPs across the whole fused group. FLOPs are additive under
-    // fusion (only memory traffic is saved), so per-node geometry is all it needs; byte
-    // fields on the sub-records are left unused (the group total below is authoritative).
+    // Record every fused node's geometry plus its raw per-tensor byte/storage facts (captured by
+    // fill_head_record while the graph is live). The consumer sums exact FLOPs across the group
+    // and computes the group's external HBM traffic from these facts -- see write_fused_node.
     rec.fused_nodes.reserve(node_count);
     for (int j = node_idx; j < node_idx + node_count; ++j) {
         op_record sub;
         fill_head_record(sub, cgraph->nodes[j]);
         rec.fused_nodes.push_back(std::move(sub));
     }
-
-    // Correct HBM traffic for the fused kernel: intermediate tensors produced and consumed
-    // inside the span never reach global memory, so count only external inputs and outputs.
-    // A tensor is internal iff it is the output of one of the fused nodes (in ggml the node
-    // tensor is its own output), matching ggml_cuda_check_fusion_memory_ranges.
-    std::unordered_set<const ggml_tensor *> produced;
-    for (int j = node_idx; j < node_idx + node_count; ++j) {
-        produced.insert(cgraph->nodes[j]);
-    }
-
-    // External inputs (weights + activations), deduplicated; intermediates skipped. Unlike
-    // the fusion overlap check, leaf tensors (op == GGML_OP_NONE, e.g. weights) ARE counted.
-    // MoE (MUL_MAT_ID) expert weights are stored for all experts but only the routed ones
-    // (min(M*top_k, n_experts)) are read, so src0 of such a node is scaled by that fraction
-    // to avoid over-counting; every other source is read in full.
-    const auto input_bytes = [](const ggml_tensor * n, int s, const ggml_tensor * src) -> int64_t {
-        const int64_t full = (int64_t) ggml_nbytes(src);
-        if (n->op == GGML_OP_MUL_MAT_ID && s == 0 && n->src[0] && n->src[1]) {
-            const int64_t n_experts = n->src[0]->ne[2];
-            // top_k = experts routed per token = ids (src2) ->ne[0]; src1->ne[1] is 1 when
-            // the input is broadcast, so use ids and fall back only if it is absent.
-            const int64_t top_k     = n->src[2] ? n->src[2]->ne[0] : n->src[1]->ne[1];
-            const int64_t m         = n->src[1]->ne[2];
-            if (n_experts > 0) {
-                const int64_t used = m > 0 ? std::min(m * top_k, n_experts) : n_experts;
-                return full * used / n_experts;
-            }
-        }
-        return full;
-    };
-    int64_t bytes = 0;
-    std::unordered_set<const ggml_tensor *> counted_inputs;
-    for (int j = node_idx; j < node_idx + node_count; ++j) {
-        const ggml_tensor * n = cgraph->nodes[j];
-        for (int s = 0; s < GGML_MAX_SRC; ++s) {
-            const ggml_tensor * src = n->src[s];
-            if (src && !produced.count(src) && counted_inputs.insert(src).second) {
-                bytes += input_bytes(n, s, src);
-            }
-        }
-    }
-
-    // External outputs: fused nodes not consumed as a source by any other fused node.
-    int64_t dst_bytes = 0;
-    for (int j = node_idx; j < node_idx + node_count; ++j) {
-        const ggml_tensor * n = cgraph->nodes[j];
-        bool consumed = false;
-        for (int k = node_idx; k < node_idx + node_count && !consumed; ++k) {
-            for (int s = 0; s < GGML_MAX_SRC; ++s) {
-                if (cgraph->nodes[k]->src[s] == n) { consumed = true; break; }
-            }
-        }
-        if (!consumed) {
-            dst_bytes += (int64_t) ggml_nbytes(n);
-        }
-    }
-    bytes += dst_bytes;
-
-    rec.bytes     = bytes;
-    rec.dst_bytes = dst_bytes;
 
     // Fused geometry id: head geometry plus each fused node's op and destination shape, so
     // identical fusions deduplicate and distinct ones stay separate.
