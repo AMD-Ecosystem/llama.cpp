@@ -208,7 +208,7 @@ jobs:
       uses: ggml-org/ccache-action@v1.2.21
       with:
         key: gfx11-rocm-multiarch
-        evict-old-files: 1d
+        evict-old-files: 7d
         save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/gfx11' }}
 
     - name: Build Llama.cpp + ROCm
