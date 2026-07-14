@@ -53,9 +53,15 @@ struct op_record {
     int64_t      bytes                   = 0;             // total HBM traffic: destination + all sources
     int64_t      dst_bytes               = 0;             // ggml_nbytes(destination)
     int64_t      src_bytes[GGML_MAX_SRC] = {};            // ggml_nbytes(source)
-    uint64_t     dst_sid                 = 0;             // storage id (view_src root) of destination
-    uint64_t     src_ids[GGML_MAX_SRC]   = {};           // source tensor id (dedup key)
-    uint64_t     src_sids[GGML_MAX_SRC]  = {};           // source storage id (view_src root)
+    // Two identities per tensor, so the consumer can tell which tensors actually move memory
+    // without seeing the graph. A *tensor id* is one ggml_tensor's address (identifies a single
+    // tensor; used to dedup a tensor read by several ops). A *storage id* is the address of the
+    // tensor that owns the underlying buffer -- ggml's view_src root -- so tensors that alias the
+    // same memory (a view and its source; an in-place op's output and the dst it was handed in as
+    // a source) share one storage id; that is how the consumer spots internal and in-place tensors.
+    uint64_t     dst_sid                 = 0;             // destination's storage id (its buffer)
+    uint64_t     src_ids[GGML_MAX_SRC]   = {};            // each source's tensor id (dedup key)
+    uint64_t     src_sids[GGML_MAX_SRC]  = {};            // each source's storage id (its buffer)
     int64_t      M = 0, N = 0, K = 0, n_experts = 0, top_k = 0;  // matmul dimensions
     std::vector<op_record> fused_nodes;                  // per-node geometry when this row is a fused group (else empty)
 };
@@ -261,11 +267,11 @@ void write_shape(std::ostringstream & out, const char * key, const int64_t ne[4]
     out << "\"" << key << "\": [" << ne[0] << ", " << ne[1] << ", " << ne[2] << ", " << ne[3] << "]";
 }
 
-// One fused node's geometry plus the raw per-tensor facts the consumer needs to compute the
-// fused group's HBM traffic itself: destination/source byte counts, a storage id per tensor
-// (view_src root -- tells which tensors alias the same buffer), and a source tensor id (dedup
-// key). The consumer applies the exclusion policy (skip views, drop in-place destinations and
-// internal reads, dedup); the producer only reports facts.
+// One fused node: its geometry plus the raw per-tensor data the consumer needs to compute the
+// fused group's HBM traffic itself -- destination/source byte counts, a storage id per tensor
+// (which buffer it uses, so aliasing tensors are recognised) and a source tensor id (dedup key).
+// The consumer applies the exclusion policy (skip views, drop in-place destinations and internal
+// reads, dedup); the producer only records each tensor's size and identity.
 void write_fused_node(std::ostringstream & out, const op_record & rec) {
     out << "{\"ggml_op\": \"" << rec.op << "\", "
         << "\"dtype\": \"" << rec.dtype << "\", \"quant\": \"" << rec.quant << "\", ";
@@ -510,13 +516,13 @@ void ggml_cuda_roofline_fuse_ops(const struct ggml_cgraph * cgraph, int node_idx
 
     // Keep the head op's geometry (op name, shapes, M/N/K) so the row is still labelled by the
     // head op. The row-level byte fields stay head-only and are ignored for fused rows; the
-    // consumer derives the group's traffic from the per-node facts recorded below.
+    // consumer derives the group's traffic from the per-node data recorded below.
     op_record rec;
     fill_head_record(rec, head);
 
-    // Record every fused node's geometry plus its raw per-tensor byte/storage facts (captured by
-    // fill_head_record while the graph is live). The consumer sums exact FLOPs across the group
-    // and computes the group's external HBM traffic from these facts -- see write_fused_node.
+    // Record every fused node's geometry plus its raw per-tensor byte counts and storage/tensor
+    // ids (captured by fill_head_record while the graph is live). The consumer sums exact FLOPs
+    // across the group and computes its external HBM traffic from them -- see write_fused_node.
     rec.fused_nodes.reserve(node_count);
     for (int j = node_idx; j < node_idx + node_count; ++j) {
         op_record sub;
