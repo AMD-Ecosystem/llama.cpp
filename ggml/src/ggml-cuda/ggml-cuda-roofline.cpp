@@ -59,9 +59,9 @@ struct op_record {
     // tensor that owns the underlying buffer -- ggml's view_src root -- so tensors that alias the
     // same memory (a view and its source; an in-place op's output and the dst it was handed in as
     // a source) share one storage id; that is how the consumer spots internal and in-place tensors.
-    uint64_t     dst_sid                 = 0;             // destination's storage id (its buffer)
-    uint64_t     src_ids[GGML_MAX_SRC]   = {};            // each source's tensor id (dedup key)
-    uint64_t     src_sids[GGML_MAX_SRC]  = {};            // each source's storage id (its buffer)
+    uint64_t     dst_storage_id          = 0;             // destination's storage id (its buffer)
+    uint64_t     src_tensor_ids[GGML_MAX_SRC]  = {};      // each source's tensor id (dedup key)
+    uint64_t     src_storage_ids[GGML_MAX_SRC] = {};      // each source's storage id (its buffer)
     int64_t      M = 0, N = 0, K = 0, n_experts = 0, top_k = 0;  // matmul dimensions
     std::vector<op_record> fused_nodes;                  // per-node geometry when this row is a fused group (else empty)
 };
@@ -188,13 +188,13 @@ void fill_head_record(op_record & rec, const ggml_tensor * node) {
     // total HBM traffic for this op: write the destination and read every source.
     rec.dst_bytes = (int64_t) ggml_nbytes(node);
     rec.bytes     = rec.dst_bytes;
-    rec.dst_sid   = (uint64_t) (uintptr_t) roofline_storage(node);
+    rec.dst_storage_id   = (uint64_t) (uintptr_t) roofline_storage(node);
     for (int j = 0; j < GGML_MAX_SRC; j++) {
         if (node->src[j]) {
             rec.src_bytes[j] = (int64_t) ggml_nbytes(node->src[j]);
             rec.bytes       += rec.src_bytes[j];
-            rec.src_ids[j]   = (uint64_t) (uintptr_t) node->src[j];
-            rec.src_sids[j]  = (uint64_t) (uintptr_t) roofline_storage(node->src[j]);
+            rec.src_tensor_ids[j]   = (uint64_t) (uintptr_t) node->src[j];
+            rec.src_storage_ids[j]  = (uint64_t) (uintptr_t) roofline_storage(node->src[j]);
         }
     }
 
@@ -289,13 +289,13 @@ void write_fused_node(std::ostringstream & out, const op_record & rec) {
     }
     out << "], \"op_params\": [";
     for (int p = 0; p < n_op_params; p++) { if (p) out << ", "; out << rec.op_params[p]; }
-    out << "], \"dst_bytes\": " << rec.dst_bytes << ", \"dst_sid\": " << rec.dst_sid << ", ";
+    out << "], \"dst_bytes\": " << rec.dst_bytes << ", \"dst_storage_id\": " << rec.dst_storage_id << ", ";
     out << "\"src_bytes\": [";
     for (int j = 0; j < rec.n_src; j++) { if (j) out << ", "; out << rec.src_bytes[j]; }
-    out << "], \"src_ids\": [";
-    for (int j = 0; j < rec.n_src; j++) { if (j) out << ", "; out << rec.src_ids[j]; }
-    out << "], \"src_sids\": [";
-    for (int j = 0; j < rec.n_src; j++) { if (j) out << ", "; out << rec.src_sids[j]; }
+    out << "], \"src_tensor_ids\": [";
+    for (int j = 0; j < rec.n_src; j++) { if (j) out << ", "; out << rec.src_tensor_ids[j]; }
+    out << "], \"src_storage_ids\": [";
+    for (int j = 0; j < rec.n_src; j++) { if (j) out << ", "; out << rec.src_storage_ids[j]; }
     out << "], \"M\": " << rec.M << ", \"N\": " << rec.N << ", \"K\": " << rec.K
         << ", \"n_experts\": " << rec.n_experts << ", \"top_k\": " << rec.top_k << "}";
 }
@@ -356,13 +356,13 @@ void write_report() {
         for (int p = 0; p < n_op_params; p++) { if (p) out << ", "; out << rec.op_params[p]; }
         out << "], ";
         out << "\"bytes\": " << rec.bytes << ", ";
-        out << "\"dst_bytes\": " << rec.dst_bytes << ", \"dst_sid\": " << rec.dst_sid << ", ";
+        out << "\"dst_bytes\": " << rec.dst_bytes << ", \"dst_storage_id\": " << rec.dst_storage_id << ", ";
         out << "\"src_bytes\": [";
         for (int j = 0; j < rec.n_src; j++) { if (j) out << ", "; out << rec.src_bytes[j]; }
-        out << "], \"src_ids\": [";
-        for (int j = 0; j < rec.n_src; j++) { if (j) out << ", "; out << rec.src_ids[j]; }
-        out << "], \"src_sids\": [";
-        for (int j = 0; j < rec.n_src; j++) { if (j) out << ", "; out << rec.src_sids[j]; }
+        out << "], \"src_tensor_ids\": [";
+        for (int j = 0; j < rec.n_src; j++) { if (j) out << ", "; out << rec.src_tensor_ids[j]; }
+        out << "], \"src_storage_ids\": [";
+        for (int j = 0; j < rec.n_src; j++) { if (j) out << ", "; out << rec.src_storage_ids[j]; }
         out << "], ";
         out << "\"M\": " << rec.M << ", \"N\": " << rec.N << ", \"K\": " << rec.K
             << ", \"n_experts\": " << rec.n_experts << ", \"top_k\": " << rec.top_k << ", ";
