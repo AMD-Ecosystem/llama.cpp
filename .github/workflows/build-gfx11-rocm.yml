@@ -15,6 +15,10 @@ on:
         description: 'Publish a dated GitHub Release (b<YYYYMMDD>) with the built binaries. Set true only for the nightly dispatch.'
         required: false
         default: 'false'
+      roofline:
+        description: 'Build with per-op roofline profiling support (GGML_HIP_ROOFLINE) and bundle the profiler libs (librocprofiler-sdk + libdw). Set false for lean builds.'
+        required: false
+        default: 'true'
 
 # Tracks the latest multiarch ROCm nightly (auto-detected). The earlier pin to
 # 7.14.0a20260608 worked around a libhsa-runtime64 regression (build 1b2a555677)
@@ -28,6 +32,9 @@ on:
 
 env:
   ROCM_VERSION: ${{ github.event.inputs.rocm_version || 'latest' }}
+  # Default ON so push/PR/cron (non-dispatch) runs keep roofline, matching prior
+  # always-on behavior; a workflow_dispatch can pass 'false' for a lean build.
+  ROOFLINE: ${{ github.event.inputs.roofline || 'true' }}
 
 jobs:
   build-ubuntu:
@@ -49,6 +56,11 @@ jobs:
 
     - name: Checkout repository
       uses: actions/checkout@v4
+
+    - name: Set up Node.js (for llama-ui build from source)
+      uses: actions/setup-node@v6
+      with:
+        node-version: "24"
 
     - name: Clean up existing ROCm directory (safety precaution)
       run: |
@@ -198,6 +210,19 @@ jobs:
         echo "Current llama.cpp commit:"
         git log --oneline -1
 
+    - name: Setup ccache
+      # Auto-consumed by the build: llama.cpp's CMake sets ccache as the compile
+      # launcher when GGML_CCACHE is ON (default) and ccache is on PATH, so no
+      # cmake flags are needed. Persists across runs via actions/cache. Nightly
+      # ROCm bumps change the compiler and will miss (expected); incremental
+      # commits on the same ROCm hit. Only write the cache from pushes to gfx11
+      # so PRs read but don't thrash the shared store.
+      uses: ggml-org/ccache-action@v1.2.21
+      with:
+        key: gfx11-rocm-multiarch
+        evict-old-files: 7d
+        save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/gfx11' }}
+
     - name: Build Llama.cpp + ROCm
       run: |
         gpu_targets="${{ env.GPU_TARGETS }}"
@@ -220,7 +245,7 @@ jobs:
           -DGGML_CUDA_FORCE_CUBLAS=OFF \
           -DGGML_RPC=ON \
           -DGGML_HIP_ROCWMMA_FATTN=OFF \
-          -DGGML_HIP_ROOFLINE=ON \
+          -DGGML_HIP_ROOFLINE=${{ env.ROOFLINE == 'true' && 'ON' || 'OFF' }} \
           -DLLAMA_BUILD_BORINGSSL=ON \
           -DGGML_NATIVE=OFF \
           -DGGML_STATIC=OFF \
@@ -258,8 +283,6 @@ jobs:
 
         # Copy required ROCm libraries to build directory
         # If artifacts from ROCm or Llama.cpp change, you may need to update this list.
-        # To regenerate the list, run:
-        #   utils/gather_required_libs.py --rocm-dir /opt/rocm --dest-dir build/bin
         echo "Copying required ROCm libraries to build directory..."
         cp -v /opt/rocm/lib/libhipblas.so* "$build_bin_path/" 2>/dev/null || echo "libhipblas.so* not found"
         cp -v /opt/rocm/lib/librocblas.so* "$build_bin_path/" 2>/dev/null || echo "librocblas.so* not found"
@@ -269,6 +292,14 @@ jobs:
         cp -v /opt/rocm/lib/libhipblaslt.so* "$build_bin_path/" 2>/dev/null || echo "libhipblaslt.so* not found"
         cp -v /opt/rocm/lib/rocm_sysdeps/lib/librocm_sysdeps_liblzma.so* "$build_bin_path/" 2>/dev/null || echo "librocm_sysdeps_liblzma.so* not found"
         cp -v /opt/rocm/lib/librocprofiler-register.so* "$build_bin_path/" 2>/dev/null || echo "librocprofiler-register.so* not found"
+        # Roofline builds dlopen librocprofiler-sdk.so.1 at runtime (ggml-cuda-roofline.cpp);
+        # the release must ship it plus its one bundle-missing dep libdw
+        # (librocm_sysdeps_dw.so.1 — a hard DT_NEEDED of the sdk lib). The $ORIGIN RPATH
+        # step below lets the dlopen resolve both locally with no LD_LIBRARY_PATH.
+        if [ "${{ env.ROOFLINE }}" = "true" ]; then
+          cp -v /opt/rocm/lib/librocprofiler-sdk.so* "$build_bin_path/" 2>/dev/null || echo "librocprofiler-sdk.so* not found"
+          cp -v /opt/rocm/lib/rocm_sysdeps/lib/librocm_sysdeps_dw.so* "$build_bin_path/" 2>/dev/null || echo "librocm_sysdeps_dw.so* not found"
+        fi
         cp -v /opt/rocm/lib/libamd_comgr.so* "$build_bin_path/" 2>/dev/null || echo "libamd_comgr.so* not found"
         cp -v /opt/rocm/lib/libamd_comgr_loader.so* "$build_bin_path/" 2>/dev/null || echo "libamd_comgr_loader.so* not found"
         cp -v /opt/rocm/lib/libhsa-runtime64.so* "$build_bin_path/" 2>/dev/null || echo "libhsa-runtime64.so* not found"
@@ -444,7 +475,10 @@ jobs:
         # The parsed assistant answer ("content" field, printed with -v) must
         # contain 4 and no other digit, so "4" / "The answer is 4." pass while
         # "5", "14", "22" fail. This is the deterministic correctness check.
-        answer_content=$(grep -oE '"content":"[^"]*"' "$output_file" | tail -1)
+        # llama-cli now runs via an in-process server (upstream #24948); its
+        # stream ends with a verbose stop chunk carrying an empty "content":"",
+        # so drop empty matches before taking the last real answer chunk.
+        answer_content=$(grep -oE '"content":"[^"]*"' "$output_file" | grep -v '"content":""' | tail -1)
         if echo "$answer_content" | grep -qE '4' && ! echo "$answer_content" | grep -qE '[0-35-9]'; then
           found_answer=true
         fi
