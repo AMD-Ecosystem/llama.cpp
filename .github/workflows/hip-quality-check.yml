@@ -65,6 +65,8 @@ jobs:
             -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
             -DGPU_TARGETS=gfx942 \
             -DGGML_HIP=ON \
+            -DLLAMA_BUILD_UI=OFF \
+            -DLLAMA_USE_PREBUILT_UI=OFF \
             -DGGML_HIP_EXPORT_METRICS=Off \
             -DCMAKE_HIP_FLAGS="-Werror -Wno-tautological-compare" \
             -DCMAKE_BUILD_TYPE=Release
@@ -78,6 +80,8 @@ jobs:
             -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
             -DGPU_TARGETS=gfx908 \
             -DGGML_HIP=ON \
+            -DLLAMA_BUILD_UI=OFF \
+            -DLLAMA_USE_PREBUILT_UI=OFF \
             -DGGML_HIP_EXPORT_METRICS=On \
             -DCMAKE_HIP_FLAGS="" \
             -DCMAKE_BUILD_TYPE=Release
