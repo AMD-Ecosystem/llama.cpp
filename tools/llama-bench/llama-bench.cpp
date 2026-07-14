@@ -35,6 +35,13 @@
 #    include <windows.h>
 #endif
 
+// Optional per-op roofline profiler (HIP build with GGML_HIP_ROOFLINE). Used to drop
+// warmup from the report. Compiled out entirely otherwise. See
+// ggml/src/ggml-cuda/ggml-cuda-roofline.cpp.
+#ifdef GGML_HIP_ROOFLINE
+#include "ggml-cuda-roofline.h"
+#endif
+
 // utils
 static uint64_t get_time_ns() {
     using clock = std::chrono::high_resolution_clock;
@@ -323,6 +330,7 @@ struct cmd_params {
     std::vector<std::string>         hf_repo;
     std::vector<std::string>         hf_file;
     std::string                      hf_token;
+    bool                             offline;
     std::vector<int>                 n_prompt;
     std::vector<int>                 n_gen;
     std::vector<std::pair<int, int>> n_pg;
@@ -367,6 +375,7 @@ static const cmd_params cmd_params_defaults = {
     /* hf_repo              */ {},
     /* hf_file              */ {},
     /* hf_token             */ "",
+    /* offline              */ false,
     /* n_prompt             */ { 512 },
     /* n_gen                */ { 128 },
     /* n_pg                 */ {},
@@ -437,6 +446,8 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("                                              (default: unused)\n");
     printf("  -hft, --hf-token <token>                    Hugging Face access token\n");
     printf("                                              (default: value from HF_TOKEN environment variable)\n");
+    printf("  --offline                                   Offline mode: forces use of cache, prevents network access\n");
+    printf("                                              (default: disabled)\n");
     printf("  -p, --n-prompt <n>                          (default: %s)\n", join(cmd_params_defaults.n_prompt, ",").c_str());
     printf("  -n, --n-gen <n>                             (default: %s)\n", join(cmd_params_defaults.n_gen, ",").c_str());
     printf("  -pg <pp,tg>                                 (default: %s)\n", join(transform_to_str(cmd_params_defaults.n_pg, pair_str), ",").c_str());
@@ -558,6 +569,8 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     break;
                 }
                 params.hf_token = argv[i];
+            } else if (arg == "--offline") {
+                params.offline = true;
             } else if (arg == "-p" || arg == "--n-prompt") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1029,24 +1042,23 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
 
     if (!params.hf_repo.empty()) {
         for (size_t i = 0; i < params.hf_repo.size(); i++) {
-            common_params_model model;
-
-            if (params.hf_file.empty() || params.hf_file[i].empty()) {
-                model.hf_repo = params.hf_repo[i];
-            } else {
-                model.hf_repo = params.hf_repo[i];
-                model.hf_file = params.hf_file[i];
+            common_params p;
+            p.hf_token      = params.hf_token;
+            p.offline       = params.offline;
+            p.model.hf_repo = params.hf_repo[i];
+            if (!params.hf_file.empty() && !params.hf_file[i].empty()) {
+                p.model.hf_file = params.hf_file[i];
             }
 
-            common_download_opts opts;
-            opts.bearer_token = params.hf_token;
-            auto download_result = common_download_model(model, opts);
-            if (download_result.model_path.empty()) {
+            // only the text model file is needed
+            common_models_handler models_handler = common_models_handler_init(p, LLAMA_EXAMPLE_BENCH);
+            common_models_handler_apply(models_handler, p);
+            if (p.model.path.empty()) {
                 fprintf(stderr, "error: failed to download model from HuggingFace\n");
                 exit(1);
             }
 
-            params.model.push_back(download_result.model_path);
+            params.model.push_back(p.model.path);
         }
     }
 
@@ -2349,6 +2361,12 @@ int llama_bench(int argc, char ** argv) {
                 }
             }
         }
+
+        // Discard warmup from the per-op roofline profiler so the report covers only
+        // the measured runs below. Compiled out unless GGML_HIP_ROOFLINE is set.
+#ifdef GGML_HIP_ROOFLINE
+        ggml_cuda_roofline_reset();
+#endif
 
         for (int i = 0; i < params.reps; i++) {
             llama_memory_clear(llama_get_memory(ctx), false);
