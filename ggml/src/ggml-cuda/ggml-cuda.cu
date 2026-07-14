@@ -3921,7 +3921,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                 }
 
 #ifdef GGML_HIP_ROOFLINE
-                ggml_cuda_roofline_begin_op(node);
+                ggml_cuda_roofline_begin_op(node, (void *) cuda_ctx->stream());
 #endif
 
                 int nodes_to_skip = ggml_cuda_try_fuse(cuda_ctx, cgraph, i);
