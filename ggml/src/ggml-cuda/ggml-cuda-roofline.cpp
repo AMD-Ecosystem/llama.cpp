@@ -59,6 +59,10 @@ struct op_record {
     // tensor that owns the underlying buffer -- ggml's view_src root -- so tensors that alias the
     // same memory (a view and its source; an in-place op's output and the dst it was handed in as
     // a source) share one storage id; that is how the consumer spots internal and in-place tensors.
+    // Both are needed -- the storage id alone is not enough. Distinct sources can alias one buffer
+    // (e.g. two ops reading the first and second half of the same tensor: one storage id, two
+    // tensor ids). Both halves are genuinely read, so read dedup must key on the tensor id;
+    // deduping on the storage id would count the buffer once and undercount its traffic.
     uint64_t     dst_storage_id          = 0;             // destination's storage id (its buffer)
     uint64_t     src_tensor_ids[GGML_MAX_SRC]  = {};      // each source's tensor id (dedup key)
     uint64_t     src_storage_ids[GGML_MAX_SRC] = {};      // each source's storage id (its buffer)
