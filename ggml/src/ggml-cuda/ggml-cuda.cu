@@ -1759,6 +1759,27 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         ggml_cuda_mul_mat_vec_f(ctx, src0, src1, nullptr, dst);
         return;
     }
+    // A single-column f32 weight (ne01 == 1) times a wide activation (ne11 > MMVF_MAX_BATCH_SIZE)
+    // misses mmvf above because ne11 is the batch dim, so it falls back to a wasteful f32 cuBLAS
+    // GEMM. The output is a vector, so swapping the operands is transpose-free: the activation
+    // becomes the matrix and the single-column weight the lone F32 vector, with dst reinterpreted
+    // as [ne11, 1].
+    if (ne01 == 1 && ne11 > MMVF_MAX_BATCH_SIZE && ne2 == 1 && ne3 == 1
+            && src0->type == GGML_TYPE_F32
+            && ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst)
+            && ggml_cuda_should_use_mmvf(src1->type, cc, src1->ne, src1->nb, /*ne11 =*/ 1)) {
+        // dst is [ne00=1, ne11] (one output feature, ne11 tokens); the swapped GEMV instead
+        // produces [ne11, 1] (ne11 rows, a single vector column). Both are the same ne11
+        // contiguous floats, so we only relabel the shape of a shallow copy - no data moves:
+        ggml_tensor dst_vec = *dst;
+        dst_vec.ne[0] = ne11;                    // rows: one result per token
+        dst_vec.ne[1] = 1;                       // a single output vector column
+        dst_vec.nb[1] = dst_vec.nb[0]*ne11;      // nb[0] (element stride) stays; row dim spans ne11
+        dst_vec.nb[2] = dst_vec.nb[1];           // higher dims are 1 -> same stride
+        dst_vec.nb[3] = dst_vec.nb[1];
+        ggml_cuda_mul_mat_vec_f(ctx, src1, src0, nullptr, &dst_vec);
+        return;
+    }
     if (ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, ne11, /*mul_mat_id =*/ false)) {
         ggml_cuda_mul_mat_f(ctx, src0, src1, nullptr, dst);
         return;

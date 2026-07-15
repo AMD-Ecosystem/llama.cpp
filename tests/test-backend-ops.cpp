@@ -8555,6 +8555,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 2880, 32, 2880, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_MXFP4, GGML_TYPE_F32, 2880, 32, 2880, {1, 1}, {1, 1}));
 
+    // single-row f32 weight (m == 1) against a wide activation (n): the second column count sweeps
+    // across MMVF_MAX_BATCH_SIZE (8) so both the direct mmvf path (n <= 8) and the CUDA/HIP
+    // operand-swap GEMV path (n > 8, which would otherwise fall back to an f32 cuBLAS GEMM) are
+    // exercised and checked against the CPU reference. Regression guard for the mul_mat_vec_f swap.
+    for (int64_t n : {1, 7, 8, 9, 16, 128, 512}) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 1, n, 2048, {1, 1}, {1, 1}));
+    }
+
 
 #if 0
     {
