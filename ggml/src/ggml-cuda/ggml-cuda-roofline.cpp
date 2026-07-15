@@ -18,6 +18,8 @@
 #include <rocprofiler-sdk/rocprofiler.h>
 #include <rocprofiler-sdk/registration.h>
 
+#include <hip/hip_runtime_api.h>   // hipStreamSynchronize / hipMemcpy: read back MoE routing ids
+
 #include <dlfcn.h>
 #include <cxxabi.h>
 
@@ -83,6 +85,9 @@ std::unordered_map<uint64_t, op_record>              g_records;      // geometry
 std::unordered_map<uint64_t, uint64_t>               g_invocations;  // invocation id -> geometry id
 std::unordered_map<uint64_t, std::vector<dispatch>>  g_dispatches;   // invocation id -> dispatches
 std::unordered_map<uint64_t, std::string>            g_kernel_names; // kernel id -> demangled symbol
+// MoE routing is data-dependent, so the count of distinct experts actually read is captured
+// per invocation (not per shape): one entry per MUL_MAT_ID launch. See count_active_experts.
+std::unordered_map<uint64_t, int64_t>                g_invocation_experts;  // invocation id -> distinct experts routed
 std::atomic<uint64_t>                                g_next_invocation{1};
 thread_local uint64_t                                g_current_invocation = 0;  // id pushed by the last begin_op on this thread
 
@@ -219,6 +224,36 @@ void fill_head_record(op_record & rec, const ggml_tensor * node) {
     }
 }
 
+// Distinct experts actually routed by a MoE (MUL_MAT_ID) launch. The number of expert weight
+// slabs streamed from HBM is data-dependent -- it is the count of unique ids, not the shape
+// bound min(M*top_k, E) -- and varies per launch, so it is read back for every invocation.
+//
+// The ids tensor is produced by an upstream op on the same stream and may still be in flight,
+// so the stream is synchronized before the copy. This slows the profiling run but does not
+// perturb the report: every roofline figure is derived from per-kernel device timestamps, which
+// a host-side sync between ops leaves untouched. Returns 0 (ids not counted) on any failure or
+// a non-i32 / missing ids tensor; callers then fall back to the shape bound in the consumer.
+int64_t count_active_experts(const ggml_tensor * ids, int64_t n_experts, hipStream_t stream) {
+    if (!ids || ids->type != GGML_TYPE_I32 || ids->data == nullptr || n_experts <= 0) return 0;
+    if (hipStreamSynchronize(stream) != hipSuccess) return 0;
+
+    std::vector<char> host(ggml_nbytes(ids));
+    if (hipMemcpy(host.data(), ids->data, host.size(), hipMemcpyDeviceToHost) != hipSuccess) return 0;
+
+    std::vector<uint8_t> seen(n_experts, 0);
+    int64_t used = 0;
+    for (int64_t i2 = 0; i2 < ids->ne[2]; ++i2) {
+        for (int64_t i1 = 0; i1 < ids->ne[1]; ++i1) {
+            const int32_t * row = (const int32_t *) (host.data() + i2 * ids->nb[2] + i1 * ids->nb[1]);
+            for (int64_t i0 = 0; i0 < ids->ne[0]; ++i0) {
+                const int32_t e = row[i0];
+                if (e >= 0 && e < n_experts && !seen[e]) { seen[e] = 1; ++used; }
+            }
+        }
+    }
+    return used;
+}
+
 // Dedup hash of one node's geometry (destination, all sources, op params, types); distinct
 // shapes get distinct ids so the report can be deduplicated.
 uint64_t head_geometry_id(const op_record & rec, const ggml_tensor * node) {
@@ -312,7 +347,11 @@ void write_report() {
     std::lock_guard<std::mutex> lock(g_mutex);
     double total_us = 0.0;
     for (auto & [invocation, dispatches] : g_dispatches) {
-        for (const auto & d : dispatches) total_us += d.duration_ns / 1e3;
+        // invocation 0 is the sentinel used to shield MoE ids read-backs (see begin_op): any
+        // copy kernel it emitted is not part of any op, so keep it out of the total too.
+        if (invocation != 0) {
+            for (const auto & d : dispatches) total_us += d.duration_ns / 1e3;
+        }
         // order kernels within an op causally (buffer records arrive unordered)
         std::sort(dispatches.begin(), dispatches.end(),
                   [](const dispatch & a, const dispatch & b) { return a.start_ns < b.start_ns; });
@@ -368,8 +407,14 @@ void write_report() {
         out << "], \"src_storage_ids\": [";
         for (int j = 0; j < rec.n_src; j++) { if (j) out << ", "; out << rec.src_storage_ids[j]; }
         out << "], ";
+        // experts_used: distinct experts this specific launch routed, read back per invocation
+        // (0 for non-MoE ops). The consumer scales the expert-weight HBM traffic by this instead
+        // of the shape bound min(M*top_k, E), which over-counts when routing leaves experts idle.
+        auto experts_it = g_invocation_experts.find(invocation);
+        const int64_t experts_used = experts_it != g_invocation_experts.end() ? experts_it->second : 0;
         out << "\"M\": " << rec.M << ", \"N\": " << rec.N << ", \"K\": " << rec.K
-            << ", \"n_experts\": " << rec.n_experts << ", \"top_k\": " << rec.top_k << ", ";
+            << ", \"n_experts\": " << rec.n_experts << ", \"top_k\": " << rec.top_k
+            << ", \"experts_used\": " << experts_used << ", ";
         out << "\"kernels\": [";
         bool kernel_first = true;
         for (const auto & d : dispatch_it->second) {
@@ -473,11 +518,12 @@ void ggml_cuda_roofline_reset(void) {
     g_records.clear();
     g_invocations.clear();
     g_dispatches.clear();
+    g_invocation_experts.clear();
     // g_next_invocation stays monotonic so a late warmup record cannot collide with a
     // post-reset invocation id; g_kernel_names is kept (code objects do not reload).
 }
 
-void ggml_cuda_roofline_begin_op(const struct ggml_tensor * node) {
+void ggml_cuda_roofline_begin_op(const struct ggml_tensor * node, void * stream) {
     if (!g_active || node == nullptr || !p_push_id) return;
 
     op_record rec;
@@ -487,6 +533,28 @@ void ggml_cuda_roofline_begin_op(const struct ggml_tensor * node) {
     // Each op invocation gets a unique correlation id so its kernels stay separate; the
     // shared geometry is stored once per shape.
     const uint64_t invocation = g_next_invocation.fetch_add(1, std::memory_order_relaxed);
+
+    // rocprofiler keeps a per-thread external-correlation-id stack; the id is captured at each
+    // kernel dispatch. This thread id is needed for that bookkeeping and for the MoE read below,
+    // so resolve it up front.
+    static thread_local rocprofiler_thread_id_t thread_id = [] {
+        rocprofiler_thread_id_t t = 0; if (p_get_thread_id) p_get_thread_id(&t); return t;
+    }();
+
+    // MoE: capture how many distinct experts this launch actually routes (see count_active_experts).
+    // Reading the ids tensor may lower to a copy kernel; push a sentinel correlation id (0, never a
+    // real invocation) around it so such a dispatch is attributed to no op and skipped by
+    // write_report, instead of polluting the previous op still on the stack.
+    if (stream && node->op == GGML_OP_MUL_MAT_ID && node->src[2]) {
+        rocprofiler_user_data_t sentinel; sentinel.value = 0;
+        p_push_id(g_context, thread_id, sentinel);
+        const int64_t used = count_active_experts(node->src[2], rec.n_experts, (hipStream_t) stream);
+        rocprofiler_user_data_t popped;
+        p_pop_id(g_context, thread_id, &popped);
+        std::lock_guard<std::mutex> lock(g_mutex);
+        g_invocation_experts[invocation] = used;
+    }
+
     {
         std::lock_guard<std::mutex> lock(g_mutex);
         g_invocations.emplace(invocation, geometry_id);
@@ -495,9 +563,6 @@ void ggml_cuda_roofline_begin_op(const struct ggml_tensor * node) {
 
     // Tag the kernels launched until the next op with this invocation id. rocprofiler
     // keeps a per-thread stack, so pop the previous id before pushing the new one.
-    static thread_local rocprofiler_thread_id_t thread_id = [] {
-        rocprofiler_thread_id_t t = 0; if (p_get_thread_id) p_get_thread_id(&t); return t;
-    }();
     static thread_local bool pushed = false;
     if (pushed) {
         rocprofiler_user_data_t previous;
