@@ -1265,6 +1265,8 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
             }
             return has_simdgroup_mm; // TODO: over-restricted for vec-kernels
         case GGML_OP_SSM_CONV:
+            // the channels-major input layout is only implemented on CPU/CUDA
+            return has_simdgroup_reduction && ggml_ssm_conv_get_layout(op) == GGML_SSM_CONV_LAYOUT_TIME_MAJOR;
         case GGML_OP_SSM_SCAN:
             return has_simdgroup_reduction;
         case GGML_OP_RWKV_WKV6:
