@@ -88,6 +88,10 @@ std::unordered_map<uint64_t, std::string>            g_kernel_names; // kernel i
 // MoE routing is data-dependent, so the count of distinct experts actually read is captured
 // per invocation (not per shape): one entry per MUL_MAT_ID launch. See count_active_experts.
 std::unordered_map<uint64_t, int64_t>                g_invocation_experts;  // invocation id -> distinct experts routed
+// Per-expert routed-token counts for the same launch (length n_experts, index e = number of
+// (token, slot) routings that selected expert e; Σ = n_tokens*top_k). Emitted as tokens_per_expert
+// so the consumer can show the routing-load distribution (skew that drives MoE-GEMM padding).
+std::unordered_map<uint64_t, std::vector<int32_t>>   g_invocation_expert_hist;  // invocation id -> per-expert token counts
 std::atomic<uint64_t>                                g_next_invocation{1};
 thread_local uint64_t                                g_current_invocation = 0;  // id pushed by the last begin_op on this thread
 
@@ -233,21 +237,30 @@ void fill_head_record(op_record & rec, const ggml_tensor * node) {
 // perturb the report: every roofline figure is derived from per-kernel device timestamps, which
 // a host-side sync between ops leaves untouched. Returns 0 (ids not counted) on any failure or
 // a non-i32 / missing ids tensor; callers then fall back to the shape bound in the consumer.
-int64_t count_active_experts(const ggml_tensor * ids, int64_t n_experts, hipStream_t stream) {
+// Also fills *counts* with the per-expert routed-token count (length n_experts, index e = number
+// of routings that selected expert e): the same single host-side pass that counts distinct experts
+// yields the full load distribution at no extra cost. *counts* is cleared and left empty on any
+// failure (missing / non-i32 ids); the return value stays the distinct-expert count as before.
+int64_t count_active_experts(const ggml_tensor * ids, int64_t n_experts, hipStream_t stream,
+                             std::vector<int32_t> & counts) {
+    counts.clear();
     if (!ids || ids->type != GGML_TYPE_I32 || ids->data == nullptr || n_experts <= 0) return 0;
     if (hipStreamSynchronize(stream) != hipSuccess) return 0;
 
     std::vector<char> host(ggml_nbytes(ids));
     if (hipMemcpy(host.data(), ids->data, host.size(), hipMemcpyDeviceToHost) != hipSuccess) return 0;
 
-    std::vector<uint8_t> seen(n_experts, 0);
+    counts.assign(n_experts, 0);
     int64_t used = 0;
     for (int64_t i2 = 0; i2 < ids->ne[2]; ++i2) {
         for (int64_t i1 = 0; i1 < ids->ne[1]; ++i1) {
             const int32_t * row = (const int32_t *) (host.data() + i2 * ids->nb[2] + i1 * ids->nb[1]);
             for (int64_t i0 = 0; i0 < ids->ne[0]; ++i0) {
                 const int32_t e = row[i0];
-                if (e >= 0 && e < n_experts && !seen[e]) { seen[e] = 1; ++used; }
+                if (e >= 0 && e < n_experts) {
+                    if (counts[e] == 0) ++used;
+                    ++counts[e];
+                }
             }
         }
     }
@@ -415,6 +428,15 @@ void write_report() {
         out << "\"M\": " << rec.M << ", \"N\": " << rec.N << ", \"K\": " << rec.K
             << ", \"n_experts\": " << rec.n_experts << ", \"top_k\": " << rec.top_k
             << ", \"experts_used\": " << experts_used << ", ";
+        // tokens_per_expert: per-expert routed-token counts for this launch (length n_experts,
+        // index e = routings to expert e). Present only for MoE launches whose ids were read back;
+        // lets the consumer render the routing-load distribution under --show-histograms.
+        auto hist_it = g_invocation_expert_hist.find(invocation);
+        if (hist_it != g_invocation_expert_hist.end()) {
+            out << "\"tokens_per_expert\": [";
+            for (size_t e = 0; e < hist_it->second.size(); ++e) { if (e) out << ", "; out << hist_it->second[e]; }
+            out << "], ";
+        }
         out << "\"kernels\": [";
         bool kernel_first = true;
         for (const auto & d : dispatch_it->second) {
@@ -548,11 +570,13 @@ void ggml_cuda_roofline_begin_op(const struct ggml_tensor * node, void * stream)
     if (stream && node->op == GGML_OP_MUL_MAT_ID && node->src[2]) {
         rocprofiler_user_data_t sentinel; sentinel.value = 0;
         p_push_id(g_context, thread_id, sentinel);
-        const int64_t used = count_active_experts(node->src[2], rec.n_experts, (hipStream_t) stream);
+        std::vector<int32_t> hist;
+        const int64_t used = count_active_experts(node->src[2], rec.n_experts, (hipStream_t) stream, hist);
         rocprofiler_user_data_t popped;
         p_pop_id(g_context, thread_id, &popped);
         std::lock_guard<std::mutex> lock(g_mutex);
         g_invocation_experts[invocation] = used;
+        if (!hist.empty()) g_invocation_expert_hist[invocation] = std::move(hist);
     }
 
     {
