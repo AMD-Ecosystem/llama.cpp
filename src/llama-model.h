@@ -256,6 +256,7 @@ struct llama_layer {
     struct ggml_tensor * wkv_a_mqa = nullptr;
     struct ggml_tensor * wkv_b     = nullptr;
     struct ggml_tensor * wkv       = nullptr;
+    struct ggml_tensor * wkv_concat = nullptr;
     struct ggml_tensor * wk_b      = nullptr;
     struct ggml_tensor * wv_b      = nullptr;
     struct ggml_tensor * wqkv_b    = nullptr;
