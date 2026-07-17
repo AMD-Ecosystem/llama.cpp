@@ -4596,6 +4596,11 @@ struct ggml_backend_cuda_device_context {
     int op_offload_min_batch_size;
 };
 
+static int ggml_backend_cuda_get_device_cc(ggml_backend_dev_t dev) {
+    ggml_backend_cuda_device_context * ctx = (ggml_backend_cuda_device_context *)dev->context;
+    return ggml_cuda_info().devices[ctx->device].cc;
+}
+
 static const char * ggml_backend_cuda_device_get_name(ggml_backend_dev_t dev) {
     ggml_backend_cuda_device_context * ctx = (ggml_backend_cuda_device_context *)dev->context;
     return ctx->name.c_str();
@@ -5343,6 +5348,9 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
     }
     if (strcmp(name, "ggml_backend_get_features") == 0) {
         return (void *)ggml_backend_cuda_get_features;
+    }
+    if (strcmp(name, "ggml_backend_cuda_get_device_cc") == 0) {
+        return (void *)ggml_backend_cuda_get_device_cc;
     }
     return nullptr;
 }

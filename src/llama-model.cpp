@@ -1641,36 +1641,58 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         }
     }
 
-    for (size_t il = 0; il < model->layers.size(); ++il) {
-        auto & layer = model->layers[il];
-        if (!layer.wk || !layer.wv || layer.wqkv)  continue;
-        if (layer.wk->type != layer.wv->type)       continue;
-        if (layer.wk->ne[0] != layer.wv->ne[0])     continue;
+    {
+        bool fuse_kv = false;
+        for (auto & layer : model->layers) {
+            if (!layer.wk || !layer.wk->buffer) continue;
+            auto buft = ggml_backend_buffer_get_type(layer.wk->buffer);
+            auto * dev = ggml_backend_buft_get_device(buft);
+            if (!dev) break;
+            auto * reg = ggml_backend_dev_backend_reg(dev);
+            if (!reg) break;
+            auto * fn = (int (*)(ggml_backend_dev_t)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_get_device_cc");
+            if (fn) {
+                const int cc = fn(dev);
+                constexpr int cc_rdna3_5 = 0x1000000 + 0x1150;
+                constexpr int cc_rdna4   = 0x1000000 + 0x1200;
+                fuse_kv = (cc >= cc_rdna3_5 && cc < cc_rdna4);
+            }
+            break;
+        }
 
-        const size_t wk_bytes = ggml_nbytes(layer.wk);
-        const size_t wv_bytes = ggml_nbytes(layer.wv);
+        if (fuse_kv) {
+            for (size_t il = 0; il < model->layers.size(); ++il) {
+                auto & layer = model->layers[il];
+                if (!layer.wk || !layer.wv || layer.wqkv)  continue;
+                if (layer.wk->type != layer.wv->type)       continue;
+                if (layer.wk->ne[0] != layer.wv->ne[0])     continue;
 
-        ggml_init_params ctx_params = { ggml_tensor_overhead(), nullptr, true };
-        auto ctx = ggml_context_ptr(ggml_init(ctx_params));
+                const size_t wk_bytes = ggml_nbytes(layer.wk);
+                const size_t wv_bytes = ggml_nbytes(layer.wv);
 
-        auto * t = ggml_new_tensor_2d(ctx.get(), layer.wk->type,
-                                       layer.wk->ne[0],
-                                       layer.wk->ne[1] + layer.wv->ne[1]);
-        ggml_format_name(t, "blk.%d.attn_kv_concat.weight", (int)il);
+                ggml_init_params ctx_params = { ggml_tensor_overhead(), nullptr, true };
+                auto ctx = ggml_context_ptr(ggml_init(ctx_params));
 
-        auto buft = ggml_backend_buffer_get_type(layer.wk->buffer);
-        auto * buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft);
-        if (!buf) continue;
+                auto * t = ggml_new_tensor_2d(ctx.get(), layer.wk->type,
+                                               layer.wk->ne[0],
+                                               layer.wk->ne[1] + layer.wv->ne[1]);
+                ggml_format_name(t, "blk.%d.attn_kv_concat.weight", (int)il);
 
-        std::vector<uint8_t> staging(std::max(wk_bytes, wv_bytes));
-        ggml_backend_tensor_get(layer.wk, staging.data(), 0, wk_bytes);
-        ggml_backend_tensor_set(t, staging.data(), 0, wk_bytes);
-        ggml_backend_tensor_get(layer.wv, staging.data(), 0, wv_bytes);
-        ggml_backend_tensor_set(t, staging.data(), wk_bytes, wv_bytes);
+                auto buft = ggml_backend_buffer_get_type(layer.wk->buffer);
+                auto * buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft);
+                if (!buf) continue;
 
-        layer.wkv_concat = t;
-        pimpl->wkv_concat_ctxs.push_back(std::move(ctx));
-        pimpl->wkv_concat_bufs.emplace_back(buf);
+                std::vector<uint8_t> staging(std::max(wk_bytes, wv_bytes));
+                ggml_backend_tensor_get(layer.wk, staging.data(), 0, wk_bytes);
+                ggml_backend_tensor_set(t, staging.data(), 0, wk_bytes);
+                ggml_backend_tensor_get(layer.wv, staging.data(), 0, wv_bytes);
+                ggml_backend_tensor_set(t, staging.data(), wk_bytes, wv_bytes);
+
+                layer.wkv_concat = t;
+                pimpl->wkv_concat_ctxs.push_back(std::move(ctx));
+                pimpl->wkv_concat_bufs.emplace_back(buf);
+            }
+        }
     }
 
     return true;
