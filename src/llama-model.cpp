@@ -1015,6 +1015,9 @@ struct llama_model::impl {
 
     bool has_tensor_overrides;
 
+    std::vector<ggml_context_ptr>        wkv_concat_ctxs;
+    std::vector<ggml_backend_buffer_ptr> wkv_concat_bufs;
+
     std::vector<float> tensor_split_owned;
 };
 
@@ -1636,6 +1639,38 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         for (auto & mapping : ml.mappings) {
             pimpl->mappings.emplace_back(std::move(mapping));
         }
+    }
+
+    for (size_t il = 0; il < model->layers.size(); ++il) {
+        auto & layer = model->layers[il];
+        if (!layer.wk || !layer.wv || layer.wqkv)  continue;
+        if (layer.wk->type != layer.wv->type)       continue;
+        if (layer.wk->ne[0] != layer.wv->ne[0])     continue;
+
+        const size_t wk_bytes = ggml_nbytes(layer.wk);
+        const size_t wv_bytes = ggml_nbytes(layer.wv);
+
+        ggml_init_params ctx_params = { ggml_tensor_overhead(), nullptr, true };
+        auto ctx = ggml_context_ptr(ggml_init(ctx_params));
+
+        auto * t = ggml_new_tensor_2d(ctx.get(), layer.wk->type,
+                                       layer.wk->ne[0],
+                                       layer.wk->ne[1] + layer.wv->ne[1]);
+        ggml_format_name(t, "blk.%d.attn_kv_concat.weight", (int)il);
+
+        auto buft = ggml_backend_buffer_get_type(layer.wk->buffer);
+        auto * buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft);
+        if (!buf) continue;
+
+        std::vector<uint8_t> staging(std::max(wk_bytes, wv_bytes));
+        ggml_backend_tensor_get(layer.wk, staging.data(), 0, wk_bytes);
+        ggml_backend_tensor_set(t, staging.data(), 0, wk_bytes);
+        ggml_backend_tensor_get(layer.wv, staging.data(), 0, wv_bytes);
+        ggml_backend_tensor_set(t, staging.data(), wk_bytes, wv_bytes);
+
+        layer.wkv_concat = t;
+        pimpl->wkv_concat_ctxs.push_back(std::move(ctx));
+        pimpl->wkv_concat_bufs.emplace_back(buf);
     }
 
     return true;
