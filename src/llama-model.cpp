@@ -1653,9 +1653,8 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             auto * fn = (int (*)(ggml_backend_dev_t)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_get_device_cc");
             if (fn) {
                 const int cc = fn(dev);
-                constexpr int cc_rdna3_5 = 0x1000000 + 0x1150;
-                constexpr int cc_rdna4   = 0x1000000 + 0x1200;
-                fuse_kv = (cc >= cc_rdna3_5 && cc < cc_rdna4);
+                constexpr int cc_gfx1151 = 0x1000000 + 0x1151;
+                fuse_kv = (cc == cc_gfx1151);
             }
             break;
         }
