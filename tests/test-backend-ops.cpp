@@ -8566,6 +8566,30 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 2880, 32, 2880, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_MXFP4, GGML_TYPE_F32, 2880, 32, 2880, {1, 1}, {1, 1}));
 
+    // RDNA3.5 MMQ prefill shapes (PR #32, gfx1151) — profile M×N×K = n×m×k
+    {
+        // P0 FFN up (Q4_K occupancy / LDS / vec_dot)
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 12288, 128, 4096, {1, 1}, {1, 1}));
+        // Q6_K FFN down + B-tile prefetch
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K, GGML_TYPE_F32, 4096, 128, 12288, {1, 1}, {1, 1}));
+        // Q4_K FFN down / attn
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 4096, 128, 4096, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 8192, 128, 4096, {1, 1}, {1, 1}));
+        // Q6_K / Q4_K small projection
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K, GGML_TYPE_F32, 1024, 128, 4096, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 1024, 128, 4096, {1, 1}, {1, 1}));
+        // Tiny-N gate (Q8_0 / Q4_0 tile policy when nrows_x <= 32)
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 32, 128, 4096, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 32, 128, 4096, {1, 1}, {1, 1}));
+        for (int64_t gate_n : {8, 16, 64}) {
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, gate_n, 128, 4096, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, gate_n, 128, 4096, {1, 1}, {1, 1}));
+        }
+        // Decode / small-M (MTP verify uses M=4)
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 4096, 1, 4096, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 4096, 4, 4096, {1, 1}, {1, 1}));
+    }
+
     // single-row f32 weight (m == 1) against a wide activation (n): the second column count sweeps
     // across MMVF_MAX_BATCH_SIZE (8) so both the direct mmvf path (n <= 8) and the CUDA/HIP
     // operand-swap GEMV path (n > 8, which would otherwise fall back to an f32 cuBLAS GEMM) are
@@ -9568,7 +9592,26 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         }
     }
 
-    // qwen3-30b-a3b
+    // RDNA3.5 MMQ prefill perf (PR #32) — same shapes as eval block above
+    {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 12288, 128, 4096, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K, GGML_TYPE_F32, 4096, 128, 12288, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 4096, 128, 4096, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 8192, 128, 4096, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K, GGML_TYPE_F32, 1024, 128, 4096, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 1024, 128, 4096, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 32, 128, 4096, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 32, 128, 4096, {1, 1}, {1, 1}));
+        for (int64_t gate_n : {8, 16, 64}) {
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, gate_n, 128, 4096, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, gate_n, 128, 4096, {1, 1}, {1, 1}));
+        }
+        for (int64_t m : {1, 4, 128}) {
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 4096, m, 4096, {1, 1}, {1, 1}));
+        }
+    }
+
+    // qwen3-30b-a3b MoE (PR #32 MUL_MAT_ID tile sizing) — Q4_K / Q6_K / Q8_0 already in type_a loop below
     for (int bs : {1, 4, 8, 32, 64, 128, 256, 512}) {
         for (ggml_type type_a : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_Q4_K, GGML_TYPE_Q6_K, GGML_TYPE_IQ2_XS}) {
             for (ggml_type type_b : {GGML_TYPE_F32}) {
