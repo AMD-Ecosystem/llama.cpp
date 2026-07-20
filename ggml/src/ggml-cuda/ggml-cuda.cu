@@ -4124,9 +4124,13 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
     GGML_UNUSED(cgraph);
 #endif
 
-    static bool enable_graph_optimization = [] {
-        const char * env     = getenv("GGML_CUDA_GRAPH_OPT");
-        return env != nullptr && atoi(env) == 1;
+    static bool enable_graph_optimization = [cuda_ctx] {
+        const char * env = getenv("GGML_CUDA_GRAPH_OPT");
+        if (env != nullptr) {
+            return atoi(env) == 1;
+        }
+        const int cc = ggml_cuda_info().devices[cuda_ctx->device].cc;
+        return GGML_CUDA_CC_IS_RDNA3_5(cc);
     }();
 
     if (!enable_graph_optimization) {
