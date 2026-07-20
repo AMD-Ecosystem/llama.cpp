@@ -24,7 +24,12 @@ void ggml_cuda_roofline_reset(void);
 
 // Tag the GPU kernels launched for this op so their device time is attributed to it.
 // Call once per op, before its kernel(s) are dispatched. No-op unless active.
-void ggml_cuda_roofline_begin_op(const struct ggml_tensor * node);
+//
+// stream is the op's CUDA/HIP stream (passed as void * to keep this header free of the HIP
+// runtime): for MoE (MUL_MAT_ID) it is synchronized so the routing ids tensor can be read
+// back and the distinct active-expert count captured for this specific launch. Pass nullptr
+// if unavailable (the MoE expert count is then skipped).
+void ggml_cuda_roofline_begin_op(const struct ggml_tensor * node, void * stream);
 
 // Override the record of the op tagged by the last begin_op so it covers a fused span of
 // node_count nodes (cgraph->nodes[node_idx .. node_idx+node_count-1]): lists every fused op

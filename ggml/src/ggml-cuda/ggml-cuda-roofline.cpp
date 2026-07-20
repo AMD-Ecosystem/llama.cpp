@@ -18,6 +18,8 @@
 #include <rocprofiler-sdk/rocprofiler.h>
 #include <rocprofiler-sdk/registration.h>
 
+#include <hip/hip_runtime_api.h>   // hipStreamSynchronize / hipMemcpy: read back MoE routing ids
+
 #include <dlfcn.h>
 #include <cxxabi.h>
 
@@ -53,6 +55,19 @@ struct op_record {
     int64_t      bytes                   = 0;             // total HBM traffic: destination + all sources
     int64_t      dst_bytes               = 0;             // ggml_nbytes(destination)
     int64_t      src_bytes[GGML_MAX_SRC] = {};            // ggml_nbytes(source)
+    // Two identities per tensor, so the consumer can tell which tensors actually move memory
+    // without seeing the graph. A *tensor id* is one ggml_tensor's address (identifies a single
+    // tensor; used to dedup a tensor read by several ops). A *storage id* is the address of the
+    // tensor that owns the underlying buffer -- ggml's view_src root -- so tensors that alias the
+    // same memory (a view and its source; an in-place op's output and the dst it was handed in as
+    // a source) share one storage id; that is how the consumer spots internal and in-place tensors.
+    // Both are needed -- the storage id alone is not enough. Distinct sources can alias one buffer
+    // (e.g. two ops reading the first and second half of the same tensor: one storage id, two
+    // tensor ids). Both halves are genuinely read, so read dedup must key on the tensor id;
+    // deduping on the storage id would count the buffer once and undercount its traffic.
+    uint64_t     dst_storage_id          = 0;             // destination's storage id (its buffer)
+    uint64_t     src_tensor_ids[GGML_MAX_SRC]  = {};      // each source's tensor id (dedup key)
+    uint64_t     src_storage_ids[GGML_MAX_SRC] = {};      // each source's storage id (its buffer)
     int64_t      M = 0, N = 0, K = 0, n_experts = 0, top_k = 0;  // matmul dimensions
     std::vector<op_record> fused_nodes;                  // per-node geometry when this row is a fused group (else empty)
 };
@@ -70,6 +85,13 @@ std::unordered_map<uint64_t, op_record>              g_records;      // geometry
 std::unordered_map<uint64_t, uint64_t>               g_invocations;  // invocation id -> geometry id
 std::unordered_map<uint64_t, std::vector<dispatch>>  g_dispatches;   // invocation id -> dispatches
 std::unordered_map<uint64_t, std::string>            g_kernel_names; // kernel id -> demangled symbol
+// MoE routing is data-dependent, so the count of distinct experts actually read is captured
+// per invocation (not per shape): one entry per MUL_MAT_ID launch. See count_active_experts.
+std::unordered_map<uint64_t, int64_t>                g_invocation_experts;  // invocation id -> distinct experts routed
+// Per-expert routed-token counts for the same launch (length n_experts, index e = number of
+// (token, slot) routings that selected expert e; Σ = n_tokens*top_k). Emitted as tokens_per_expert
+// so the consumer can show the routing-load distribution (skew that drives MoE-GEMM padding).
+std::unordered_map<uint64_t, std::vector<int32_t>>   g_invocation_expert_hist;  // invocation id -> per-expert token counts
 std::atomic<uint64_t>                                g_next_invocation{1};
 thread_local uint64_t                                g_current_invocation = 0;  // id pushed by the last begin_op on this thread
 
@@ -148,6 +170,16 @@ uint64_t hash_mix(uint64_t hash, uint64_t value) {
     return hash;
 }
 
+// Storage identity: ggml points a view/in-place tensor's view_src at the buffer it aliases, so
+// following the chain to the end yields the tensor that actually owns the HBM. Two tensors touch
+// the same memory iff they share this root. VIEW/RESHAPE outputs carry view_src, and so do
+// in-place ops (e.g. CPY does ggml_view_tensor(dst)), which lets the consumer tell a read that
+// actually targets the op's own output (an in-place destination) from a genuine input read.
+const ggml_tensor * roofline_storage(const ggml_tensor * t) {
+    while (t && t->view_src) t = t->view_src;
+    return t;
+}
+
 // Fill a record's geometry and single-node HBM byte fields from one ggml node.
 void fill_head_record(op_record & rec, const ggml_tensor * node) {
     const ggml_tensor * src0 = node->src[0];
@@ -169,10 +201,13 @@ void fill_head_record(op_record & rec, const ggml_tensor * node) {
     // total HBM traffic for this op: write the destination and read every source.
     rec.dst_bytes = (int64_t) ggml_nbytes(node);
     rec.bytes     = rec.dst_bytes;
+    rec.dst_storage_id   = (uint64_t) (uintptr_t) roofline_storage(node);
     for (int j = 0; j < GGML_MAX_SRC; j++) {
         if (node->src[j]) {
             rec.src_bytes[j] = (int64_t) ggml_nbytes(node->src[j]);
             rec.bytes       += rec.src_bytes[j];
+            rec.src_tensor_ids[j]   = (uint64_t) (uintptr_t) node->src[j];
+            rec.src_storage_ids[j]  = (uint64_t) (uintptr_t) roofline_storage(node->src[j]);
         }
     }
 
@@ -191,6 +226,45 @@ void fill_head_record(op_record & rec, const ggml_tensor * node) {
             rec.top_k     = node->src[2] ? node->src[2]->ne[0] : src1->ne[1];
         }
     }
+}
+
+// Distinct experts actually routed by a MoE (MUL_MAT_ID) launch. The number of expert weight
+// slabs streamed from HBM is data-dependent -- it is the count of unique ids, not the shape
+// bound min(M*top_k, E) -- and varies per launch, so it is read back for every invocation.
+//
+// The ids tensor is produced by an upstream op on the same stream and may still be in flight,
+// so the stream is synchronized before the copy. This slows the profiling run but does not
+// perturb the report: every roofline figure is derived from per-kernel device timestamps, which
+// a host-side sync between ops leaves untouched. Returns 0 (ids not counted) on any failure or
+// a non-i32 / missing ids tensor; callers then fall back to the shape bound in the consumer.
+// Also fills *counts* with the per-expert routed-token count (length n_experts, index e = number
+// of routings that selected expert e): the same single host-side pass that counts distinct experts
+// yields the full load distribution at no extra cost. *counts* is cleared and left empty on any
+// failure (missing / non-i32 ids); the return value stays the distinct-expert count as before.
+int64_t count_active_experts(const ggml_tensor * ids, int64_t n_experts, hipStream_t stream,
+                             std::vector<int32_t> & counts) {
+    counts.clear();
+    if (!ids || ids->type != GGML_TYPE_I32 || ids->data == nullptr || n_experts <= 0) return 0;
+    if (hipStreamSynchronize(stream) != hipSuccess) return 0;
+
+    std::vector<char> host(ggml_nbytes(ids));
+    if (hipMemcpy(host.data(), ids->data, host.size(), hipMemcpyDeviceToHost) != hipSuccess) return 0;
+
+    counts.assign(n_experts, 0);
+    int64_t used = 0;
+    for (int64_t i2 = 0; i2 < ids->ne[2]; ++i2) {
+        for (int64_t i1 = 0; i1 < ids->ne[1]; ++i1) {
+            const int32_t * row = (const int32_t *) (host.data() + i2 * ids->nb[2] + i1 * ids->nb[1]);
+            for (int64_t i0 = 0; i0 < ids->ne[0]; ++i0) {
+                const int32_t e = row[i0];
+                if (e >= 0 && e < n_experts) {
+                    if (counts[e] == 0) ++used;
+                    ++counts[e];
+                }
+            }
+        }
+    }
+    return used;
 }
 
 // Dedup hash of one node's geometry (destination, all sources, op params, types); distinct
@@ -245,9 +319,11 @@ void write_shape(std::ostringstream & out, const char * key, const int64_t ne[4]
     out << "\"" << key << "\": [" << ne[0] << ", " << ne[1] << ", " << ne[2] << ", " << ne[3] << "]";
 }
 
-// One fused node's geometry: op name, types, shapes, params, and matmul dims. Enough for
-// the consumer to sum exact FLOPs and render each fused op's config. Byte fields are
-// omitted: the fused row's group-level bytes are authoritative.
+// One fused node: its geometry plus the raw per-tensor data the consumer needs to compute the
+// fused group's HBM traffic itself -- destination/source byte counts, a storage id per tensor
+// (which buffer it uses, so aliasing tensors are recognised) and a source tensor id (dedup key).
+// The consumer applies the exclusion policy (skip views, drop in-place destinations and internal
+// reads, dedup); the producer only records each tensor's size and identity.
 void write_fused_node(std::ostringstream & out, const op_record & rec) {
     out << "{\"ggml_op\": \"" << rec.op << "\", "
         << "\"dtype\": \"" << rec.dtype << "\", \"quant\": \"" << rec.quant << "\", ";
@@ -265,8 +341,15 @@ void write_fused_node(std::ostringstream & out, const op_record & rec) {
     }
     out << "], \"op_params\": [";
     for (int p = 0; p < n_op_params; p++) { if (p) out << ", "; out << rec.op_params[p]; }
+    out << "], \"dst_bytes\": " << rec.dst_bytes << ", \"dst_storage_id\": " << rec.dst_storage_id << ", ";
+    out << "\"src_bytes\": [";
+    for (int j = 0; j < rec.n_src; j++) { if (j) out << ", "; out << rec.src_bytes[j]; }
+    out << "], \"src_tensor_ids\": [";
+    for (int j = 0; j < rec.n_src; j++) { if (j) out << ", "; out << rec.src_tensor_ids[j]; }
+    out << "], \"src_storage_ids\": [";
+    for (int j = 0; j < rec.n_src; j++) { if (j) out << ", "; out << rec.src_storage_ids[j]; }
     out << "], \"M\": " << rec.M << ", \"N\": " << rec.N << ", \"K\": " << rec.K
-        << ", \"top_k\": " << rec.top_k << "}";
+        << ", \"n_experts\": " << rec.n_experts << ", \"top_k\": " << rec.top_k << "}";
 }
 
 // Write the per-invocation JSON report. Registered with atexit while profiling is active.
@@ -277,7 +360,11 @@ void write_report() {
     std::lock_guard<std::mutex> lock(g_mutex);
     double total_us = 0.0;
     for (auto & [invocation, dispatches] : g_dispatches) {
-        for (const auto & d : dispatches) total_us += d.duration_ns / 1e3;
+        // invocation 0 is the sentinel used to shield MoE ids read-backs (see begin_op): any
+        // copy kernel it emitted is not part of any op, so keep it out of the total too.
+        if (invocation != 0) {
+            for (const auto & d : dispatches) total_us += d.duration_ns / 1e3;
+        }
         // order kernels within an op causally (buffer records arrive unordered)
         std::sort(dispatches.begin(), dispatches.end(),
                   [](const dispatch & a, const dispatch & b) { return a.start_ns < b.start_ns; });
@@ -325,12 +412,31 @@ void write_report() {
         for (int p = 0; p < n_op_params; p++) { if (p) out << ", "; out << rec.op_params[p]; }
         out << "], ";
         out << "\"bytes\": " << rec.bytes << ", ";
-        out << "\"dst_bytes\": " << rec.dst_bytes << ", ";
+        out << "\"dst_bytes\": " << rec.dst_bytes << ", \"dst_storage_id\": " << rec.dst_storage_id << ", ";
         out << "\"src_bytes\": [";
         for (int j = 0; j < rec.n_src; j++) { if (j) out << ", "; out << rec.src_bytes[j]; }
+        out << "], \"src_tensor_ids\": [";
+        for (int j = 0; j < rec.n_src; j++) { if (j) out << ", "; out << rec.src_tensor_ids[j]; }
+        out << "], \"src_storage_ids\": [";
+        for (int j = 0; j < rec.n_src; j++) { if (j) out << ", "; out << rec.src_storage_ids[j]; }
         out << "], ";
+        // experts_used: distinct experts this specific launch routed, read back per invocation
+        // (0 for non-MoE ops). The consumer scales the expert-weight HBM traffic by this instead
+        // of the shape bound min(M*top_k, E), which over-counts when routing leaves experts idle.
+        auto experts_it = g_invocation_experts.find(invocation);
+        const int64_t experts_used = experts_it != g_invocation_experts.end() ? experts_it->second : 0;
         out << "\"M\": " << rec.M << ", \"N\": " << rec.N << ", \"K\": " << rec.K
-            << ", \"n_experts\": " << rec.n_experts << ", \"top_k\": " << rec.top_k << ", ";
+            << ", \"n_experts\": " << rec.n_experts << ", \"top_k\": " << rec.top_k
+            << ", \"experts_used\": " << experts_used << ", ";
+        // tokens_per_expert: per-expert routed-token counts for this launch (length n_experts,
+        // index e = routings to expert e). Present only for MoE launches whose ids were read back;
+        // lets the consumer render the routing-load distribution under --show-histograms.
+        auto hist_it = g_invocation_expert_hist.find(invocation);
+        if (hist_it != g_invocation_expert_hist.end()) {
+            out << "\"tokens_per_expert\": [";
+            for (size_t e = 0; e < hist_it->second.size(); ++e) { if (e) out << ", "; out << hist_it->second[e]; }
+            out << "], ";
+        }
         out << "\"kernels\": [";
         bool kernel_first = true;
         for (const auto & d : dispatch_it->second) {
@@ -434,11 +540,12 @@ void ggml_cuda_roofline_reset(void) {
     g_records.clear();
     g_invocations.clear();
     g_dispatches.clear();
+    g_invocation_experts.clear();
     // g_next_invocation stays monotonic so a late warmup record cannot collide with a
     // post-reset invocation id; g_kernel_names is kept (code objects do not reload).
 }
 
-void ggml_cuda_roofline_begin_op(const struct ggml_tensor * node) {
+void ggml_cuda_roofline_begin_op(const struct ggml_tensor * node, void * stream) {
     if (!g_active || node == nullptr || !p_push_id) return;
 
     op_record rec;
@@ -448,6 +555,30 @@ void ggml_cuda_roofline_begin_op(const struct ggml_tensor * node) {
     // Each op invocation gets a unique correlation id so its kernels stay separate; the
     // shared geometry is stored once per shape.
     const uint64_t invocation = g_next_invocation.fetch_add(1, std::memory_order_relaxed);
+
+    // rocprofiler keeps a per-thread external-correlation-id stack; the id is captured at each
+    // kernel dispatch. This thread id is needed for that bookkeeping and for the MoE read below,
+    // so resolve it up front.
+    static thread_local rocprofiler_thread_id_t thread_id = [] {
+        rocprofiler_thread_id_t t = 0; if (p_get_thread_id) p_get_thread_id(&t); return t;
+    }();
+
+    // MoE: capture how many distinct experts this launch actually routes (see count_active_experts).
+    // Reading the ids tensor may lower to a copy kernel; push a sentinel correlation id (0, never a
+    // real invocation) around it so such a dispatch is attributed to no op and skipped by
+    // write_report, instead of polluting the previous op still on the stack.
+    if (stream && node->op == GGML_OP_MUL_MAT_ID && node->src[2]) {
+        rocprofiler_user_data_t sentinel; sentinel.value = 0;
+        p_push_id(g_context, thread_id, sentinel);
+        std::vector<int32_t> hist;
+        const int64_t used = count_active_experts(node->src[2], rec.n_experts, (hipStream_t) stream, hist);
+        rocprofiler_user_data_t popped;
+        p_pop_id(g_context, thread_id, &popped);
+        std::lock_guard<std::mutex> lock(g_mutex);
+        g_invocation_experts[invocation] = used;
+        if (!hist.empty()) g_invocation_expert_hist[invocation] = std::move(hist);
+    }
+
     {
         std::lock_guard<std::mutex> lock(g_mutex);
         g_invocations.emplace(invocation, geometry_id);
@@ -456,9 +587,6 @@ void ggml_cuda_roofline_begin_op(const struct ggml_tensor * node) {
 
     // Tag the kernels launched until the next op with this invocation id. rocprofiler
     // keeps a per-thread stack, so pop the previous id before pushing the new one.
-    static thread_local rocprofiler_thread_id_t thread_id = [] {
-        rocprofiler_thread_id_t t = 0; if (p_get_thread_id) p_get_thread_id(&t); return t;
-    }();
     static thread_local bool pushed = false;
     if (pushed) {
         rocprofiler_user_data_t previous;
@@ -479,81 +607,21 @@ void ggml_cuda_roofline_fuse_ops(const struct ggml_cgraph * cgraph, int node_idx
 
     const ggml_tensor * head = cgraph->nodes[node_idx];
 
-    // Keep the head op's geometry (op name, shapes, M/N/K) so the row is still labelled by
-    // the head op; the byte fields below are replaced with the fused-group traffic.
+    // Keep the head op's geometry (op name, shapes, M/N/K) so the row is still labelled by the
+    // head op. The row-level byte fields stay head-only and are ignored for fused rows; the
+    // consumer derives the group's traffic from the per-node data recorded below.
     op_record rec;
     fill_head_record(rec, head);
 
-    // Record every fused node's geometry (op name + shapes + params + matmul dims) so the
-    // consumer can sum exact FLOPs across the whole fused group. FLOPs are additive under
-    // fusion (only memory traffic is saved), so per-node geometry is all it needs; byte
-    // fields on the sub-records are left unused (the group total below is authoritative).
+    // Record every fused node's geometry plus its raw per-tensor byte counts and storage/tensor
+    // ids (captured by fill_head_record while the graph is live). The consumer sums exact FLOPs
+    // across the group and computes its external HBM traffic from them -- see write_fused_node.
     rec.fused_nodes.reserve(node_count);
     for (int j = node_idx; j < node_idx + node_count; ++j) {
         op_record sub;
         fill_head_record(sub, cgraph->nodes[j]);
         rec.fused_nodes.push_back(std::move(sub));
     }
-
-    // Correct HBM traffic for the fused kernel: intermediate tensors produced and consumed
-    // inside the span never reach global memory, so count only external inputs and outputs.
-    // A tensor is internal iff it is the output of one of the fused nodes (in ggml the node
-    // tensor is its own output), matching ggml_cuda_check_fusion_memory_ranges.
-    std::unordered_set<const ggml_tensor *> produced;
-    for (int j = node_idx; j < node_idx + node_count; ++j) {
-        produced.insert(cgraph->nodes[j]);
-    }
-
-    // External inputs (weights + activations), deduplicated; intermediates skipped. Unlike
-    // the fusion overlap check, leaf tensors (op == GGML_OP_NONE, e.g. weights) ARE counted.
-    // MoE (MUL_MAT_ID) expert weights are stored for all experts but only the routed ones
-    // (min(M*top_k, n_experts)) are read, so src0 of such a node is scaled by that fraction
-    // to avoid over-counting; every other source is read in full.
-    const auto input_bytes = [](const ggml_tensor * n, int s, const ggml_tensor * src) -> int64_t {
-        const int64_t full = (int64_t) ggml_nbytes(src);
-        if (n->op == GGML_OP_MUL_MAT_ID && s == 0 && n->src[0] && n->src[1]) {
-            const int64_t n_experts = n->src[0]->ne[2];
-            // top_k = experts routed per token = ids (src2) ->ne[0]; src1->ne[1] is 1 when
-            // the input is broadcast, so use ids and fall back only if it is absent.
-            const int64_t top_k     = n->src[2] ? n->src[2]->ne[0] : n->src[1]->ne[1];
-            const int64_t m         = n->src[1]->ne[2];
-            if (n_experts > 0) {
-                const int64_t used = m > 0 ? std::min(m * top_k, n_experts) : n_experts;
-                return full * used / n_experts;
-            }
-        }
-        return full;
-    };
-    int64_t bytes = 0;
-    std::unordered_set<const ggml_tensor *> counted_inputs;
-    for (int j = node_idx; j < node_idx + node_count; ++j) {
-        const ggml_tensor * n = cgraph->nodes[j];
-        for (int s = 0; s < GGML_MAX_SRC; ++s) {
-            const ggml_tensor * src = n->src[s];
-            if (src && !produced.count(src) && counted_inputs.insert(src).second) {
-                bytes += input_bytes(n, s, src);
-            }
-        }
-    }
-
-    // External outputs: fused nodes not consumed as a source by any other fused node.
-    int64_t dst_bytes = 0;
-    for (int j = node_idx; j < node_idx + node_count; ++j) {
-        const ggml_tensor * n = cgraph->nodes[j];
-        bool consumed = false;
-        for (int k = node_idx; k < node_idx + node_count && !consumed; ++k) {
-            for (int s = 0; s < GGML_MAX_SRC; ++s) {
-                if (cgraph->nodes[k]->src[s] == n) { consumed = true; break; }
-            }
-        }
-        if (!consumed) {
-            dst_bytes += (int64_t) ggml_nbytes(n);
-        }
-    }
-    bytes += dst_bytes;
-
-    rec.bytes     = bytes;
-    rec.dst_bytes = dst_bytes;
 
     // Fused geometry id: head geometry plus each fused node's op and destination shape, so
     // identical fusions deduplicate and distinct ones stay separate.
