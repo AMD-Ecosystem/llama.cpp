@@ -1643,6 +1643,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
 
     {
         bool fuse_kv = false;
+        // Check first layer only — single-GPU assumption for Strix Halo iGPU.
         for (auto & layer : model->layers) {
             if (!layer.wk || !layer.wk->buffer) continue;
             auto buft = ggml_backend_buffer_get_type(layer.wk->buffer);
@@ -1660,11 +1661,13 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         }
 
         if (fuse_kv) {
+            LLAMA_LOG_INFO("%s: fusing attn_k + attn_v weights for gfx1151 MMVQ occupancy\n", __func__);
             for (size_t il = 0; il < model->layers.size(); ++il) {
                 auto & layer = model->layers[il];
                 if (!layer.wk || !layer.wv || layer.wqkv)  continue;
                 if (layer.wk->type != layer.wv->type)       continue;
                 if (layer.wk->ne[0] != layer.wv->ne[0])     continue;
+                if (!layer.wv->buffer || layer.wv->buffer != layer.wk->buffer) continue;
 
                 const size_t wk_bytes = ggml_nbytes(layer.wk);
                 const size_t wv_bytes = ggml_nbytes(layer.wv);
