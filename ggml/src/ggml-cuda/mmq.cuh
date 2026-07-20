@@ -1330,6 +1330,12 @@ template <int mmq_x, int mmq_y>
 static __device__ __forceinline__ void vec_dot_q4_0_q8_1_mma(
     const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
 #if defined(RDNA3_5) && defined(AMD_WMMA_AVAILABLE) && !defined(AMD_MFMA_AVAILABLE)
+    // Small ncols prefill (mmq_x<=32): dedicated path regresses ~35% vs q8_0 alias on gfx1151.
+    if constexpr (mmq_x <= 32) {
+        vec_dot_q8_0_q8_1_mma<mmq_x, mmq_y, MMQ_Q8_1_DS_LAYOUT_DS4>(x, y, sum, k00);
+        return;
+    }
+
     constexpr data_layout input_layout = get_input_data_layout();
     typedef tile<16,  8, int, input_layout>        tile_A;
     typedef tile<16,  8, int, input_layout>        tile_B;

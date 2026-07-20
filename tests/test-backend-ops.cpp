@@ -8588,6 +8588,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         // Decode / small-M (MTP verify uses M=4)
         test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 4096, 1, 4096, {1, 1}, {1, 1}));
         test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 4096, 4, 4096, {1, 1}, {1, 1}));
+        // Q4_0 short-prompt prefill (MTP harness input_len ~22-32)
+        for (int64_t n : {22, 32, 128}) {
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 12288, n, 4096, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 4096, n, 4096, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 4096, n, 12288, {1, 1}, {1, 1}));
+        }
     }
 
     // single-row f32 weight (m == 1) against a wide activation (n): the second column count sweeps
@@ -9608,6 +9614,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         }
         for (int64_t m : {1, 4, 128}) {
             test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 4096, m, 4096, {1, 1}, {1, 1}));
+        }
+        // Q4_0 short-prompt prefill (MTP harness input_len ~22-32)
+        for (int64_t n : {22, 32, 128}) {
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 12288, n, 4096, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 4096, n, 4096, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 4096, n, 12288, {1, 1}, {1, 1}));
         }
     }
 
