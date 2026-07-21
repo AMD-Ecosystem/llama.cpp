@@ -1502,34 +1502,30 @@ llm_graph_qkv llm_graph_context::build_qkv(
         Vcur = ggml_view_3d(ctx0, qkv, n_embd_head, n_head_kv, n_tokens,
             ggml_row_size(qkv->type, n_embd_head), qkv->nb[1],
             ggml_row_size(qkv->type, n_embd_q + n_embd_kv));
-    } else if (layer.wkv_concat && loras->empty() && !layer.wk_s && !layer.wv_s) {
-        Qcur = build_lora_mm(layer.wq, cur, layer.wq_s);
-        cb(Qcur, "Qcur", il);
-        if (layer.wq_b) {
-            Qcur = ggml_add(ctx0, Qcur, layer.wq_b);
-            cb(Qcur, "Qcur", il);
-        }
-        if (hparams.f_clamp_kqv > 0.0f) {
-            Qcur = ggml_clamp(ctx0, Qcur, -hparams.f_clamp_kqv, hparams.f_clamp_kqv);
-            cb(Qcur, "Qcur_clamped", il);
-        }
+    } else if (layer.wqk_concat && loras->empty() && !layer.wq_s && !layer.wk_s) {
+        ggml_tensor * qk = ggml_mul_mat(ctx0, layer.wqk_concat, cur);
+        cb(qk, "qk_concat", il);
 
-        ggml_tensor * kv = ggml_mul_mat(ctx0, layer.wkv_concat, cur);
-        cb(kv, "kv_concat", il);
+        Vcur = build_lora_mm(layer.wv, cur, layer.wv_s);
+        cb(Vcur, "Vcur", il);
 
-        const bool has_kv_bias = layer.wk_b || layer.wv_b;
+        const bool has_qk_bias = layer.wq_b || layer.wk_b;
         const bool has_clamp   = hparams.f_clamp_kqv > 0.0f;
 
-        if (has_kv_bias || has_clamp) {
-            Kcur = ggml_view_2d(ctx0, kv, n_embd_kv, n_tokens, kv->nb[1], 0);
+        if (has_qk_bias || has_clamp) {
+            Qcur = ggml_view_2d(ctx0, qk, n_embd_q,  n_tokens, qk->nb[1], 0);
+            cb(Qcur, "Qcur", il);
+            Kcur = ggml_view_2d(ctx0, qk, n_embd_kv, n_tokens, qk->nb[1],
+                                 ggml_row_size(qk->type, n_embd_q));
             cb(Kcur, "Kcur", il);
-            Vcur = ggml_view_2d(ctx0, kv, n_embd_kv, n_tokens, kv->nb[1],
-                                 ggml_row_size(kv->type, n_embd_kv));
-            cb(Vcur, "Vcur", il);
 
+            Qcur = ggml_cont(ctx0, Qcur);
             Kcur = ggml_cont(ctx0, Kcur);
-            Vcur = ggml_cont(ctx0, Vcur);
 
+            if (layer.wq_b) {
+                Qcur = ggml_add(ctx0, Qcur, layer.wq_b);
+                cb(Qcur, "Qcur", il);
+            }
             if (layer.wk_b) {
                 Kcur = ggml_add(ctx0, Kcur, layer.wk_b);
                 cb(Kcur, "Kcur", il);
@@ -1539,6 +1535,8 @@ llm_graph_qkv llm_graph_context::build_qkv(
                 cb(Vcur, "Vcur", il);
             }
             if (has_clamp) {
+                Qcur = ggml_clamp(ctx0, Qcur, -hparams.f_clamp_kqv, hparams.f_clamp_kqv);
+                cb(Qcur, "Qcur_clamped", il);
                 Kcur = ggml_clamp(ctx0, Kcur, -hparams.f_clamp_kqv, hparams.f_clamp_kqv);
                 cb(Kcur, "Kcur_clamped", il);
                 Vcur = ggml_clamp(ctx0, Vcur, -hparams.f_clamp_kqv, hparams.f_clamp_kqv);
@@ -1549,14 +1547,15 @@ llm_graph_qkv llm_graph_context::build_qkv(
             Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
             Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
         } else {
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
-            Kcur = ggml_view_3d(ctx0, kv, n_embd_head, n_head_kv, n_tokens,
-                ggml_row_size(kv->type, n_embd_head), kv->nb[1], 0);
+            Qcur = ggml_view_3d(ctx0, qk, n_embd_head, n_head, n_tokens,
+                ggml_row_size(qk->type, n_embd_head), qk->nb[1], 0);
+            cb(Qcur, "Qcur", il);
+            Kcur = ggml_view_3d(ctx0, qk, n_embd_head, n_head_kv, n_tokens,
+                ggml_row_size(qk->type, n_embd_head), qk->nb[1],
+                ggml_row_size(qk->type, n_embd_q));
             cb(Kcur, "Kcur", il);
-            Vcur = ggml_view_3d(ctx0, kv, n_embd_head, n_head_kv, n_tokens,
-                ggml_row_size(kv->type, n_embd_head), kv->nb[1],
-                ggml_row_size(kv->type, n_embd_kv));
-            cb(Vcur, "Vcur", il);
+
+            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
         }
     } else {
         // separate Q/K/V path
