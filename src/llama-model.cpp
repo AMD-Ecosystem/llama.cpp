@@ -1015,8 +1015,8 @@ struct llama_model::impl {
 
     bool has_tensor_overrides;
 
-    std::vector<ggml_context_ptr>        wqk_concat_ctxs;
-    std::vector<ggml_backend_buffer_ptr> wqk_concat_bufs;
+    std::vector<ggml_context_ptr>        wkv_concat_ctxs;
+    std::vector<ggml_backend_buffer_ptr> wkv_concat_bufs;
 
     std::vector<float> tensor_split_owned;
 };
@@ -1642,53 +1642,57 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     }
 
     {
-        bool fuse_qk = false;
+        bool fuse_kv = false;
+        // Check first layer only — single-GPU assumption for Strix Halo iGPU.
         for (auto & layer : model->layers) {
-            if (!layer.wq || !layer.wq->buffer) continue;
-            auto buft = ggml_backend_buffer_get_type(layer.wq->buffer);
+            if (!layer.wk || !layer.wk->buffer) continue;
+            auto buft = ggml_backend_buffer_get_type(layer.wk->buffer);
             auto * dev = ggml_backend_buft_get_device(buft);
             if (!dev) break;
-            auto dev_type = ggml_backend_dev_type(dev);
-            if (dev_type == GGML_BACKEND_DEVICE_TYPE_GPU ||
-                dev_type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
-                fuse_qk = true;
+            auto * reg = ggml_backend_dev_backend_reg(dev);
+            if (!reg) break;
+            auto * fn = (int (*)(ggml_backend_dev_t)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_get_device_cc");
+            if (fn) {
+                const int cc = fn(dev);
+                constexpr int cc_gfx1151 = 0x1000000 + 0x1151;
+                fuse_kv = (cc == cc_gfx1151);
             }
             break;
         }
 
-        if (fuse_qk) {
-            LLAMA_LOG_INFO("%s: fusing attn_q + attn_k weights for improved MMVQ occupancy\n", __func__);
+        if (fuse_kv) {
+            LLAMA_LOG_INFO("%s: fusing attn_k + attn_v weights for gfx1151 MMVQ occupancy\n", __func__);
             for (size_t il = 0; il < model->layers.size(); ++il) {
                 auto & layer = model->layers[il];
-                if (!layer.wq || !layer.wk || layer.wqkv)  continue;
-                if (layer.wq->type != layer.wk->type)       continue;
-                if (layer.wq->ne[0] != layer.wk->ne[0])     continue;
-                if (!layer.wk->buffer || layer.wk->buffer != layer.wq->buffer) continue;
+                if (!layer.wk || !layer.wv || layer.wqkv)  continue;
+                if (layer.wk->type != layer.wv->type)       continue;
+                if (layer.wk->ne[0] != layer.wv->ne[0])     continue;
+                if (!layer.wv->buffer || layer.wv->buffer != layer.wk->buffer) continue;
 
-                const size_t wq_bytes = ggml_nbytes(layer.wq);
                 const size_t wk_bytes = ggml_nbytes(layer.wk);
+                const size_t wv_bytes = ggml_nbytes(layer.wv);
 
                 ggml_init_params ctx_params = { ggml_tensor_overhead(), nullptr, true };
                 auto ctx = ggml_context_ptr(ggml_init(ctx_params));
 
-                auto * t = ggml_new_tensor_2d(ctx.get(), layer.wq->type,
-                                               layer.wq->ne[0],
-                                               layer.wq->ne[1] + layer.wk->ne[1]);
-                ggml_format_name(t, "blk.%d.attn_qk_concat.weight", (int)il);
+                auto * t = ggml_new_tensor_2d(ctx.get(), layer.wk->type,
+                                               layer.wk->ne[0],
+                                               layer.wk->ne[1] + layer.wv->ne[1]);
+                ggml_format_name(t, "blk.%d.attn_kv_concat.weight", (int)il);
 
-                auto buft = ggml_backend_buffer_get_type(layer.wq->buffer);
+                auto buft = ggml_backend_buffer_get_type(layer.wk->buffer);
                 auto * buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft);
                 if (!buf) continue;
 
-                std::vector<uint8_t> staging(std::max(wq_bytes, wk_bytes));
-                ggml_backend_tensor_get(layer.wq, staging.data(), 0, wq_bytes);
-                ggml_backend_tensor_set(t, staging.data(), 0, wq_bytes);
+                std::vector<uint8_t> staging(std::max(wk_bytes, wv_bytes));
                 ggml_backend_tensor_get(layer.wk, staging.data(), 0, wk_bytes);
-                ggml_backend_tensor_set(t, staging.data(), wq_bytes, wk_bytes);
+                ggml_backend_tensor_set(t, staging.data(), 0, wk_bytes);
+                ggml_backend_tensor_get(layer.wv, staging.data(), 0, wv_bytes);
+                ggml_backend_tensor_set(t, staging.data(), wk_bytes, wv_bytes);
 
-                layer.wqk_concat = t;
-                pimpl->wqk_concat_ctxs.push_back(std::move(ctx));
-                pimpl->wqk_concat_bufs.emplace_back(buf);
+                layer.wkv_concat = t;
+                pimpl->wkv_concat_ctxs.push_back(std::move(ctx));
+                pimpl->wkv_concat_bufs.emplace_back(buf);
             }
         }
     }
