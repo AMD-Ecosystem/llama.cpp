@@ -4398,13 +4398,11 @@ static size_t mmq_get_nbytes_shared(const int mmq_x, const int mmq_y, const int 
     const size_t nbs_x = (turing_mma_available(cc) || amd_mfma_available(cc) || amd_wmma_available(cc)) ? mmq_y*mmq_tile_x_k*sizeof(int) : txs.qs*sizeof(int) + txs.dm*sizeof(half2) + txs.sc*sizeof(int);
     const size_t nbs_y = mmq_x * (sizeof(block_q8_1_mmq));
 #if defined(GGML_USE_HIP)
-    const bool q4k_legacy = type == GGML_TYPE_Q4_K && !GGML_CUDA_CC_IS_RDNA3_5(cc);
-#else
-    const bool q4k_legacy = false;
-#endif
-    if (q4k_legacy) {
+    // Q4_K off RDNA3.5 (e.g. gfx11): upstream LDS sizing, not RDNA3.5 padded y-tile layout.
+    if (type == GGML_TYPE_Q4_K && !GGML_CUDA_CC_IS_RDNA3_5(cc)) {
         return nbs_ids + nbs_x + GGML_PAD(nbs_y, nwarps*warp_size*sizeof(int));
     }
+#endif
     const int tile_y_k_padded = mmq_get_tile_y_k_padded_host(mmq_x, cc, warp_size, nwarps);
     const size_t nbs_y_padded = std::max(nbs_y, (size_t) tile_y_k_padded*sizeof(int));
     const int pad = GGML_CUDA_CC_IS_RDNA3_5(cc) ? 2*nwarps*warp_size : nwarps*warp_size;
@@ -4547,12 +4545,7 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
     // converge back to ncols_max.
     // Restricted to RDNA3.5, the only arch this MoE tile sizing was tuned/validated on.
     int64_t ncols_to_tile = args.ncols_max;
-#if defined(GGML_USE_HIP)
-    const bool q4k_legacy_tile = type == GGML_TYPE_Q4_K && !GGML_CUDA_CC_IS_RDNA3_5(cc);
-#else
-    const bool q4k_legacy_tile = false;
-#endif
-    if (!q4k_legacy_tile && args.expert_bounds != nullptr && GGML_CUDA_CC_IS_RDNA3_5(cc)) {
+    if (args.expert_bounds != nullptr && GGML_CUDA_CC_IS_RDNA3_5(cc)) {
         const int64_t ncols_per_expert = (args.ncols_dst + args.nchannels_y - 1) / args.nchannels_y;
         ncols_to_tile = 2*ncols_per_expert < args.ncols_max ? 2*ncols_per_expert : args.ncols_max;
     }
@@ -4575,7 +4568,7 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
 #if defined(GGML_USE_HIP)
     // RDNA3.5 (gfx115x): mmq_x=128 uses ~59% of LDS/CU → 1 WG/CU. For K-quants only,
     // pick the smallest mmq_x with nbytes_shared <= smpbo/2 (2 WGs/CU).
-    if (!q4k_legacy_tile && GGML_CUDA_CC_IS_RDNA3_5(cc) && mmq_x_best > 0 && mmq_rdna35_dual_wg_eligible(type)) {
+    if (GGML_CUDA_CC_IS_RDNA3_5(cc) && mmq_x_best > 0 && mmq_rdna35_dual_wg_eligible(type)) {
         const size_t lds_dual_wg = smpbo / 2;
         const size_t nbytes_best = mmq_get_nbytes_shared<type>(mmq_x_best, mmq_y, cc, warp_size, nwarps);
         if (nbytes_best > lds_dual_wg) {
@@ -4609,7 +4602,7 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
 #if defined(GGML_USE_HIP)
     // Tiny M (e.g. gate 128×32×4096 Q8_0): prefer largest mmq_x within LDS so N is not
     // split; occupancy is irrelevant when only a handful of blocks launch.
-    if (!q4k_legacy_tile && GGML_CUDA_CC_IS_RDNA3_5(cc) && args.nrows_x <= 32) {
+    if (GGML_CUDA_CC_IS_RDNA3_5(cc) && args.nrows_x <= 32) {
         const int nty  = (args.nrows_x + mmq_y - 1) / mmq_y;
         const int ntzw = static_cast<int>(args.nchannels_y * args.nsamples_y);
 
