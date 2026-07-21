@@ -3768,40 +3768,6 @@ struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_IQ4_XS> {
 };
 
 
-#if defined(RDNA3_5)
-// Software-pipeline activation tile loads: issue global loads into registers, run WMMA,
-// then store to LDS. Overlaps memory latency with vec_dot on gfx115x (no ISA prefetch).
-template <int mmq_x, int nwarps, int warp_size, int nchunks>
-static __device__ __forceinline__ void mmq_tile_y_load_global(
-        int * __restrict__ tile_y, const int * __restrict__ by) {
-#pragma unroll
-    for (int c = 0; c < nchunks; ++c) {
-        const int l = c*(nwarps*warp_size) + threadIdx.y*warp_size + threadIdx.x;
-        tile_y[l] = by[l];
-    }
-}
-
-template <int nwarps, int warp_size, int nchunks>
-static __device__ __forceinline__ void mmq_tile_y_load_global_to_regs(
-        const int * __restrict__ by, int (&cache)[nchunks]) {
-#pragma unroll
-    for (int c = 0; c < nchunks; ++c) {
-        const int l = c*(nwarps*warp_size) + threadIdx.y*warp_size + threadIdx.x;
-        cache[c] = by[l];
-    }
-}
-
-template <int nwarps, int warp_size, int nchunks>
-static __device__ __forceinline__ void mmq_tile_y_store_regs(
-        int * __restrict__ tile_y, const int (&cache)[nchunks]) {
-#pragma unroll
-    for (int c = 0; c < nchunks; ++c) {
-        const int l = c*(nwarps*warp_size) + threadIdx.y*warp_size + threadIdx.x;
-        tile_y[l] = cache[c];
-    }
-}
-#endif // RDNA3_5
-
 #if defined(GGML_USE_HIP) && defined(RDNA3_5)
 // HIP/clang post-RA scheduler (postmisched) may interleave v_fma_mix between
 // ds_load_b128 and WMMA on the hot K-loop when no CFG/barrier hints are present
@@ -3863,100 +3829,43 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 
     constexpr int sz = sizeof(block_q8_1_mmq) / sizeof(int);
 
-#if defined(RDNA3_5)
-    constexpr int tile_y_elems       = mmq_x*MMQ_TILE_Y_K;
-    constexpr int tile_y_load_stride   = nwarps*warp_size;
-    if constexpr (mmq_x <= 64 && tile_y_elems % tile_y_load_stride == 0) {
-        constexpr int tile_y_nchunks = tile_y_elems/tile_y_load_stride;
-
-        int  y0_next_cache[tile_y_nchunks];
-        bool have_y0_prefetch = false;
-
-        for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
-            {
-                MMQ_HIP_TILE_BARRIER();
-                load_tiles(x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
-                MMQ_HIP_TILE_BARRIER();
-            }
-
-            const int yk = kb0 * qk / ne_block;
-            const int * by0 = y + ncols_y * yk * sz;
-            const int * by1 = y + ncols_y * (yk + 1) * sz;
-
-            {
-                MMQ_HIP_TILE_BARRIER();
-
-                if (have_y0_prefetch) {
-                    mmq_tile_y_store_regs<nwarps, warp_size, tile_y_nchunks>(tile_y, y0_next_cache);
-                    have_y0_prefetch = false;
-                } else {
-                    mmq_tile_y_load_global<mmq_x, nwarps, warp_size, tile_y_nchunks>(tile_y, by0);
-                }
-
-                __syncthreads();
-
-                int y1_cache[tile_y_nchunks];
-                mmq_tile_y_load_global_to_regs<nwarps, warp_size, tile_y_nchunks>(by1, y1_cache);
-
-                vec_dot(tile_x, tile_y, sum, 0);
-
-                __syncthreads();
-
-                mmq_tile_y_store_regs<nwarps, warp_size, tile_y_nchunks>(tile_y, y1_cache);
-
-                __syncthreads();
-
-                const int kb0_next = kb0 + blocks_per_iter;
-                if (kb0_next < kb0_stop) {
-                    const int * by0_next = y + ncols_y * (kb0_next * qk / ne_block) * sz;
-                    mmq_tile_y_load_global_to_regs<nwarps, warp_size, tile_y_nchunks>(by0_next, y0_next_cache);
-                    have_y0_prefetch = true;
-                }
-
-                vec_dot(tile_x, tile_y, sum, MMQ_TILE_NE_K);
-
-                MMQ_HIP_TILE_BARRIER();
-            }
+    // RDNA3.5: global→LDS activation loads only. Register-staged prefetch of by1/by0
+    // across vec_dot (WMMA) produced wrong tile_y on gfx1151 (MTP accept regression).
+    for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
+        {
+            MMQ_HIP_TILE_BARRIER();
+            load_tiles(x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
+            MMQ_HIP_TILE_BARRIER();
         }
-    } else
-#endif // RDNA3_5
-    {
-        for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
-            {
-                MMQ_HIP_TILE_BARRIER();
-                load_tiles(x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
-                MMQ_HIP_TILE_BARRIER();
-            }
 
-            const int yk = kb0 * qk / ne_block;
-            const int * by0 = y + ncols_y * yk * sz;
-            const int * by1 = y + ncols_y * (yk + 1) * sz;
+        const int yk = kb0 * qk / ne_block;
+        const int * by0 = y + ncols_y * yk * sz;
+        const int * by1 = y + ncols_y * (yk + 1) * sz;
 
-            {
-                MMQ_HIP_TILE_BARRIER();
+        {
+            MMQ_HIP_TILE_BARRIER();
 #pragma unroll
-                for (int l0 = 0; l0 < mmq_x * MMQ_TILE_Y_K; l0 += nwarps * warp_size) {
-                    int l = l0 + threadIdx.y*warp_size + threadIdx.x;
+            for (int l0 = 0; l0 < mmq_x * MMQ_TILE_Y_K; l0 += nwarps * warp_size) {
+                int l = l0 + threadIdx.y*warp_size + threadIdx.x;
 
-                    tile_y[l] = by0[l];
-                }
-                __syncthreads();
-
-                vec_dot(tile_x, tile_y, sum, 0);
-
-                __syncthreads();
-#pragma unroll
-                for (int l0 = 0; l0 < mmq_x * MMQ_TILE_Y_K; l0 += nwarps * warp_size) {
-                    int l = l0 + threadIdx.y*warp_size + threadIdx.x;
-
-                    tile_y[l] = by1[l];
-                }
-                __syncthreads();
-
-                vec_dot(tile_x, tile_y, sum, MMQ_TILE_NE_K);
-
-                MMQ_HIP_TILE_BARRIER();
+                tile_y[l] = by0[l];
             }
+            __syncthreads();
+
+            vec_dot(tile_x, tile_y, sum, 0);
+
+            __syncthreads();
+#pragma unroll
+            for (int l0 = 0; l0 < mmq_x * MMQ_TILE_Y_K; l0 += nwarps * warp_size) {
+                int l = l0 + threadIdx.y*warp_size + threadIdx.x;
+
+                tile_y[l] = by1[l];
+            }
+            __syncthreads();
+
+            vec_dot(tile_x, tile_y, sum, MMQ_TILE_NE_K);
+
+            MMQ_HIP_TILE_BARRIER();
         }
     }
 
@@ -3966,7 +3875,6 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
         write_back(sum, ids_dst, dst, stride_col_dst, tile_x_max_i, tile_y_max_j);
     }
 }
-
 
 
 // The mul_mat_q kernel implements "stream-k" work partitioning as described in https://arxiv.org/abs/2301.03598
@@ -4492,7 +4400,7 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
              blocks_per_ne00_fd, args.nrows_x, args.ncols_dst, args.stride_row_x, args.ncols_y, args.nrows_dst,
              channel_ratio_fd, nchannels_y_fd, args.stride_channel_x, args.stride_channel_y, args.stride_channel_dst,
              sample_ratio_fd, nsamples_y_fd, args.stride_sample_x, args.stride_sample_y, args.stride_sample_dst,
-                 ntx_fd);
+             ntx_fd);
 
         if (!fixup_needed) {
             return;
@@ -4510,7 +4418,7 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
              blocks_per_ne00_fd, args.nrows_x, args.ncols_dst, args.stride_row_x, args.ncols_y, args.nrows_dst,
              channel_ratio_fd, nchannels_y_fd, args.stride_channel_x, args.stride_channel_y, args.stride_channel_dst,
              sample_ratio_fd, nsamples_y_fd, args.stride_sample_x, args.stride_sample_y, args.stride_sample_dst,
-                 ntx_fd);
+             ntx_fd);
 
         if (!fixup_needed) {
             return;
