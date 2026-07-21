@@ -4001,13 +4001,18 @@ static __global__ void mul_mat_q(
         const uint3 blocks_per_ne00, const int nrows_x, const int ncols_dst, const int stride_row_x, const int ncols_y, const int stride_col_dst,
         const uint3 channel_ratio, const uint3 nchannels_y, const int stride_channel_x, const int stride_channel_y, const int stride_channel_dst,
         const uint3 sample_ratio, const uint3 nsamples_y, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst,
-        const uint3 ntx) {
+        const uint3 ntx,
+        const int32_t * __restrict__ block_expert, const int32_t * __restrict__ block_start, const int n_experts) {
 
     // Skip unused template specializations for faster compilation:
     if (mmq_x > get_mmq_x_max_device() || mmq_x % mmq_get_granularity_device(mmq_x) != 0) {
         NO_DEVICE_CODE;
         return;
     }
+
+    // block_expert/block_start/n_experts are only consumed by the RDNA3.5 compacted-MoE path below;
+    // reference them here so the stream-K compile (which does not use them) stays warning-free.
+    GGML_UNUSED_VARS(block_expert, block_start, n_experts);
 
     constexpr int nwarps = mmq_get_nwarps_device();
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
@@ -4036,11 +4041,24 @@ static __global__ void mul_mat_q(
     // On non-CDNA AMD or old CUDA the performance with stream-k was worse, use conventional tiling instead:
 #if (defined(GGML_USE_HIP) && !defined(CDNA)) || __CUDA_ARCH__ < GGML_CUDA_CC_VOLTA
     {
-        const uint2 tmp2 = fast_div_modulo(blockIdx.z, nchannels_y);
-        const int wt = tmp2.x;
-        const int zt = tmp2.y;
-        const int jt = blockIdx.y;
-        const int it = blockIdx.x;
+        int wt, zt, jt, it;
+        if (block_expert != nullptr) {
+            // Compacted MoE tiling: blockIdx.y indexes a compacted mmq_x-wide column block.
+            it = blockIdx.x;
+            const int m_block = blockIdx.y;
+            if (m_block >= block_start[n_experts]) { // padding block beyond the real work -> exit
+                return;
+            }
+            zt = block_expert[m_block];        // expert owning this column block
+            jt = m_block - block_start[zt];     // local column-tile index within the expert
+            wt = 0;                             // MoE requires ne13 == 1 -> single sample
+        } else {
+            const uint2 tmp2 = fast_div_modulo(blockIdx.z, nchannels_y);
+            wt = tmp2.x;
+            zt = tmp2.y;
+            jt = blockIdx.y;
+            it = blockIdx.x;
+        }
 
         // Defaults for regular matrix multiplication:
         int col_low    = 0;
@@ -4421,6 +4439,61 @@ static size_t mmq_get_nbytes_shared(const int mmq_x, const int mmq_y, const int 
     return nbytes;
 }
 
+// CUDA/HIP maximum grid.y dimension; bounds the compacted-MoE grid (falls back to the legacy grid above it).
+static constexpr int MMQ_MAX_GRIDDIM_Y = 65535;
+
+// RDNA3.5-only compacted MoE tiling: launch only the minimum number of mmq_x-wide column
+// blocks implied by the actual per-expert token counts (padded to mmq_x), instead of the worst-case
+// (ne02 * ceil(ne12/mmq_x)) grid. Modeled on vLLM's moe_align_block_size + fused_moe_kernel.
+
+// From expert_bounds (prefix-sum of tokens-per-expert, ne02+1 entries) build:
+//   block_start[e]      = exclusive prefix sum of ceil(tokens_e / mmq_x)   (size n_experts+1)
+//   block_start[n_experts] = total number of real column blocks (device-side "num_tokens_post_padded")
+//   block_expert[m]     = expert owning compacted column block m           (size >= block_start[n_experts])
+// Single block; no host synchronization. Shared memory: (n_experts+1) ints for the prefix sum.
+static __global__ void mmq_build_moe_block_map(
+        const int32_t * __restrict__ expert_bounds, const int n_experts, const int mmq_x,
+        int32_t * __restrict__ block_start, int32_t * __restrict__ block_expert) {
+    extern __shared__ int s_start[]; // exclusive prefix sum, kept in fast shared memory
+    const int tid = threadIdx.x;
+
+    // per-expert padded tile counts
+    for (int e = tid; e < n_experts; e += blockDim.x) {
+        const int c = expert_bounds[e + 1] - expert_bounds[e];
+        s_start[e] = (c + mmq_x - 1) / mmq_x;
+    }
+    __syncthreads();
+
+    // exclusive prefix sum (n_experts <= 256, single pass over fast shared memory)
+    if (tid == 0) {
+        int acc = 0;
+        for (int e = 0; e < n_experts; ++e) {
+            const int t = s_start[e];
+            s_start[e] = acc;
+            acc += t;
+        }
+        s_start[n_experts] = acc;
+    }
+    __syncthreads();
+
+    // publish block_start (parallel)
+    for (int e = tid; e <= n_experts; e += blockDim.x) {
+        block_start[e] = s_start[e];
+    }
+
+    // scatter block_expert in parallel: each column block binary-searches its owning expert.
+    // Fully load-balanced across the flat [0, total) range regardless of routing imbalance.
+    const int total = s_start[n_experts];
+    for (int m = tid; m < total; m += blockDim.x) {
+        int lo = 0, hi = n_experts;
+        while (lo < hi) {
+            const int mid = (lo + hi) >> 1;
+            if (s_start[mid] <= m) { lo = mid + 1; } else { hi = mid; }
+        }
+        block_expert[m] = lo - 1;
+    }
+}
+
 template <ggml_type type, int mmq_x>
 static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
     const int id = ggml_cuda_get_device();
@@ -4456,22 +4529,51 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     const uint3 sample_ratio_fd    = init_fastdiv_values(sample_ratio);
 
     if (!args.use_stream_k) {
+        // RDNA3.5 compacted-MoE tiling: replace the worst-case (nty, ntx, ne02) grid with a
+        // (nty, max_m_blocks) grid sized to the host-known upper bound of padded per-expert column blocks.
+        // block_expert/block_start are built on-device from expert_bounds; padding blocks self-exit.
+        const bool use_compact = args.expert_bounds != nullptr && GGML_CUDA_CC_IS_RDNA3_5(cc);
+
+        const int32_t * block_expert_ptr = nullptr;
+        const int32_t * block_start_ptr  = nullptr;
+        int n_experts = 0;
+        dim3 block_nums = block_nums_xy_tiling;
+
+        ggml_cuda_pool & pool = ctx.pool(id);
+        ggml_cuda_pool_alloc<int32_t> block_start(pool);
+        ggml_cuda_pool_alloc<int32_t> block_expert(pool);
+        if (use_compact) {
+            n_experts = args.nchannels_y;
+            // vLLM's max_num_m_blocks = ceil((ne_get_rows + n_experts*(mmq_x-1)) / mmq_x)
+            const int64_t max_m_blocks = (args.ncols_dst + int64_t(n_experts)*(mmq_x - 1) + mmq_x - 1) / mmq_x;
+            if (max_m_blocks < MMQ_MAX_GRIDDIM_Y) { // fits the grid.y limit; otherwise fall back to the legacy grid
+                block_start.alloc(n_experts + 1);
+                block_expert.alloc(max_m_blocks);
+                const int build_nthreads = 256; // single block; parallel prefix + scatter
+                mmq_build_moe_block_map<<<1, build_nthreads, (n_experts + 1)*sizeof(int), stream>>>(
+                    args.expert_bounds, n_experts, mmq_x, block_start.ptr, block_expert.ptr);
+                block_expert_ptr = block_expert.ptr;
+                block_start_ptr  = block_start.ptr;
+                block_nums = dim3(nty, (unsigned) max_m_blocks, 1);
+            }
+        }
+
         if (args.nrows_x % mmq_y == 0) {
             constexpr bool need_check = false;
-            mul_mat_q<type, mmq_x, need_check><<<block_nums_xy_tiling, block_dims, nbytes_shared, stream>>>
+            mul_mat_q<type, mmq_x, need_check><<<block_nums, block_dims, nbytes_shared, stream>>>
                 (args.x, args.y, args.ids_dst, args.expert_bounds, args.dst, nullptr,
                  blocks_per_ne00_fd, args.nrows_x, args.ncols_dst, args.stride_row_x, args.ncols_y, args.nrows_dst,
                  channel_ratio_fd, nchannels_y_fd, args.stride_channel_x, args.stride_channel_y, args.stride_channel_dst,
                  sample_ratio_fd, nsamples_y_fd, args.stride_sample_x, args.stride_sample_y, args.stride_sample_dst,
-                 ntx_fd);
+                 ntx_fd, block_expert_ptr, block_start_ptr, n_experts);
         } else {
             constexpr bool need_check = true;
-            mul_mat_q<type, mmq_x, need_check><<<block_nums_xy_tiling, block_dims, nbytes_shared, stream>>>
+            mul_mat_q<type, mmq_x, need_check><<<block_nums, block_dims, nbytes_shared, stream>>>
                 (args.x, args.y, args.ids_dst, args.expert_bounds, args.dst, nullptr,
                  blocks_per_ne00_fd, args.nrows_x, args.ncols_dst, args.stride_row_x, args.ncols_y, args.nrows_dst,
                  channel_ratio_fd, nchannels_y_fd, args.stride_channel_x, args.stride_channel_y, args.stride_channel_dst,
                  sample_ratio_fd, nsamples_y_fd, args.stride_sample_x, args.stride_sample_y, args.stride_sample_dst,
-                 ntx_fd);
+                 ntx_fd, block_expert_ptr, block_start_ptr, n_experts);
         }
         return;
     }
@@ -4503,7 +4605,7 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
              blocks_per_ne00_fd, args.nrows_x, args.ncols_dst, args.stride_row_x, args.ncols_y, args.nrows_dst,
              channel_ratio_fd, nchannels_y_fd, args.stride_channel_x, args.stride_channel_y, args.stride_channel_dst,
              sample_ratio_fd, nsamples_y_fd, args.stride_sample_x, args.stride_sample_y, args.stride_sample_dst,
-             ntx_fd);
+             ntx_fd, nullptr, nullptr, 0);
 
         if (!fixup_needed) {
             return;
@@ -4521,7 +4623,7 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
              blocks_per_ne00_fd, args.nrows_x, args.ncols_dst, args.stride_row_x, args.ncols_y, args.nrows_dst,
              channel_ratio_fd, nchannels_y_fd, args.stride_channel_x, args.stride_channel_y, args.stride_channel_dst,
              sample_ratio_fd, nsamples_y_fd, args.stride_sample_x, args.stride_sample_y, args.stride_sample_dst,
-             ntx_fd);
+             ntx_fd, nullptr, nullptr, 0);
 
         if (!fixup_needed) {
             return;
