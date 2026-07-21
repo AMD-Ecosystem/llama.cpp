@@ -3809,9 +3809,19 @@ static __device__ __forceinline__ void mmq_tile_y_store_regs(
 // load_tiles / vec_dot phases into separate scheduling regions (same effect as
 // the old MMQ_CODEGEN_SPLIT_COLD dead branch, without unreachable code).
 // Repro + ASM metrics: https://github.com/liangliangchang/hipcc-issue
-#define MMQ_HIP_TILE_BARRIER() __syncthreads()
+//
+// mmq_x<=32 (small-N prefill/decode): skip tile barriers — cost scales with K
+// (e.g. Q4_0 n=32 alt-K) with no measured scheduler benefit on gfx1151.
+template <int mmq_x_val>
+static __device__ __forceinline__ void mmq_hip_tile_barrier() {
+    if constexpr (mmq_x_val > 32) {
+        __syncthreads();
+    }
+}
 #else
-#define MMQ_HIP_TILE_BARRIER() ((void)0)
+template <int /*mmq_x_val*/>
+static __device__ __forceinline__ void mmq_hip_tile_barrier() {
+}
 #endif
 
 template <ggml_type type, int mmq_x, bool need_check, bool fixup>
@@ -3874,9 +3884,9 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 
         for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
             {
-                MMQ_HIP_TILE_BARRIER();
+                mmq_hip_tile_barrier<mmq_x>();
                 load_tiles(x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
-                MMQ_HIP_TILE_BARRIER();
+                mmq_hip_tile_barrier<mmq_x>();
             }
 
             const int yk = kb0 * qk / ne_block;
@@ -3884,7 +3894,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
             const int * by1 = y + ncols_y * (yk + 1) * sz;
 
             {
-                MMQ_HIP_TILE_BARRIER();
+                mmq_hip_tile_barrier<mmq_x>();
 
                 if (have_y0_prefetch) {
                     mmq_tile_y_store_regs<nwarps, warp_size, tile_y_nchunks>(tile_y, y0_next_cache);
@@ -3918,7 +3928,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
                     have_y0_prefetch = true;
                 }
 
-                MMQ_HIP_TILE_BARRIER();
+                mmq_hip_tile_barrier<mmq_x>();
             }
         }
     } else
@@ -3926,9 +3936,9 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
     {
         for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
             {
-                MMQ_HIP_TILE_BARRIER();
+                mmq_hip_tile_barrier<mmq_x>();
                 load_tiles(x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
-                MMQ_HIP_TILE_BARRIER();
+                mmq_hip_tile_barrier<mmq_x>();
             }
 
             const int yk = kb0 * qk / ne_block;
@@ -3936,7 +3946,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
             const int * by1 = y + ncols_y * (yk + 1) * sz;
 
             {
-                MMQ_HIP_TILE_BARRIER();
+                mmq_hip_tile_barrier<mmq_x>();
 #pragma unroll
                 for (int l0 = 0; l0 < mmq_x * MMQ_TILE_Y_K; l0 += nwarps * warp_size) {
                     int l = l0 + threadIdx.y*warp_size + threadIdx.x;
@@ -3958,7 +3968,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 
                 vec_dot(tile_x, tile_y, sum, MMQ_TILE_NE_K);
 
-                MMQ_HIP_TILE_BARRIER();
+                mmq_hip_tile_barrier<mmq_x>();
             }
         }
     }
@@ -4377,12 +4387,11 @@ struct mmq_args {
 
 #if defined(GGML_USE_HIP)
 // RDNA3.5 dual-WG (mmq_x=64, nbytes <= smpbo/2) helps K-quants with large per-tile LDS
-// (Q6_K WMMA tuning). Block quants (Q5_0, Q8_0, Q4_0) are faster at mmq_x=128 ntx=1.
+// (Q6_K WMMA tuning). Block quants (Q5_0, Q8_0, Q4_0) and Q4_K prefill are faster at mmq_x=128 ntx=1.
 static bool mmq_rdna35_dual_wg_eligible(const ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
-        case GGML_TYPE_Q4_K:
         case GGML_TYPE_Q5_K:
         case GGML_TYPE_Q6_K:
             return true;
@@ -4636,6 +4645,13 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
 
     // Q6_K / K-quants narrow-N: dual-WG path (mmq_x=64, ntx=2) from smpbo/2 selection.
 #endif // GGML_USE_HIP
+
+    if (getenv("GGML_CUDA_MMQ_DEBUG")) {
+        const size_t nbytes_best = mmq_get_nbytes_shared<type>(mmq_x_best, mmq_y, cc, warp_size, nwarps);
+        fprintf(stderr, "MMQ_DEBUG type=%d m=%lld ncols_max=%lld mmq_x_best=%d nbytes=%zu smpbo=%zu ntiles_x=%d\n",
+                (int) type, (long long) args.nrows_x, (long long) args.ncols_max, mmq_x_best, nbytes_best, smpbo,
+                (int) ((args.ncols_max + mmq_x_best - 1) / mmq_x_best));
+    }
 
     switch (mmq_x_best) {
         case   8:
