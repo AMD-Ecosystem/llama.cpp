@@ -1643,25 +1643,36 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
 
     {
         bool fuse_kv = false;
-        // Check first layer only — single-GPU assumption for Strix Halo iGPU.
         for (auto & layer : model->layers) {
             if (!layer.wk || !layer.wk->buffer) continue;
             auto buft = ggml_backend_buffer_get_type(layer.wk->buffer);
             auto * dev = ggml_backend_buft_get_device(buft);
             if (!dev) break;
-            auto * reg = ggml_backend_dev_backend_reg(dev);
-            if (!reg) break;
-            auto * fn = (int (*)(ggml_backend_dev_t)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_get_device_cc");
-            if (fn) {
-                const int cc = fn(dev);
-                constexpr int cc_gfx1151 = 0x1000000 + 0x1151;
-                fuse_kv = (cc == cc_gfx1151);
+
+            auto dev_type = ggml_backend_dev_type(dev);
+            if (dev_type != GGML_BACKEND_DEVICE_TYPE_GPU &&
+                dev_type != GGML_BACKEND_DEVICE_TYPE_IGPU) {
+                break;
             }
+
+            size_t free = 0, total = 0;
+            ggml_backend_dev_memory(dev, &free, &total);
+
+            size_t fusion_cost = 0;
+            for (auto & l : model->layers) {
+                if (l.wk && l.wv && !l.wqkv &&
+                    l.wk->type == l.wv->type &&
+                    l.wk->ne[0] == l.wv->ne[0]) {
+                    fusion_cost += ggml_nbytes(l.wk) + ggml_nbytes(l.wv);
+                }
+            }
+
+            fuse_kv = (free > fusion_cost * 2);
             break;
         }
 
         if (fuse_kv) {
-            LLAMA_LOG_INFO("%s: fusing attn_k + attn_v weights for gfx1151 MMVQ occupancy\n", __func__);
+            LLAMA_LOG_INFO("%s: fusing attn_k + attn_v weights for improved MMVQ occupancy\n", __func__);
             for (size_t il = 0; il < model->layers.size(); ++il) {
                 auto & layer = model->layers[il];
                 if (!layer.wk || !layer.wv || layer.wqkv)  continue;
