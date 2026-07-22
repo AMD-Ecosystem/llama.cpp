@@ -1,3 +1,5 @@
+#pragma once
+
 #include "common.cuh"
 
 // Prototype: dequantize-to-float matvec for K-quant weights (decode, n=1).

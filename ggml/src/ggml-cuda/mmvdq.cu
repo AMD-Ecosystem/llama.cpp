@@ -20,9 +20,20 @@ bool ggml_cuda_dq_q6k_enabled(bool arch_default) {
     return ov < 0 ? arch_default : (bool) ov;
 }
 
+// Rows-per-block tuning knob. Only 1/2/4/8 are instantiated; anything else
+// warns once and falls back to 1. Cached so we don't re-read the env per matvec.
+static int dq_num_rows_init() {
+    const char * v = getenv("GGML_CUDA_DQ_ROWS");
+    if (!v) return 1;
+    const int r = atoi(v);
+    if (r == 1 || r == 2 || r == 4 || r == 8) return r;
+    GGML_LOG_WARN("%s: unsupported GGML_CUDA_DQ_ROWS=%s (expected 1/2/4/8), using 1\n", __func__, v);
+    return 1;
+}
+
 static int dq_num_rows() {
-    const char * rows_env = getenv("GGML_CUDA_DQ_ROWS");
-    return rows_env ? atoi(rows_env) : 1;
+    static const int rows = dq_num_rows_init();
+    return rows;
 }
 
 // Q4_K scale/min extraction, identical to get_scale_min_k4 in convert.cu.
@@ -72,6 +83,8 @@ static __device__ __forceinline__ float dq_dot_q4_K(
 }
 
 // Per-super-block dot for one Q5_K block against pre-loaded (float2) activation.
+// Scale unpacking (s04l/s04h/s8) and the qh bit-plane merges mirror the canonical
+// vec_dot_q5_K_q8_1 in vecdotq.cuh — keep in sync if that changes.
 static __device__ __forceinline__ float dq_dot_q5_K(
         const block_q5_K * b, int q_offset, int l0, int v_im,
         const float2 & by10, const float2 & by116, const float2 & by132, const float2 & by148,
@@ -133,6 +146,8 @@ static __device__ __forceinline__ float dq_dot_q5_K(
 }
 
 // Per-super-block dot for one Q6_K block against pre-loaded (float4) activation.
+// The ql/qh bit-plane merges (q0u..q3u) and the -32 bias mirror the canonical
+// vec_dot_q6_K_q8_1 in vecdotq.cuh — keep in sync if that changes.
 static __device__ __forceinline__ float dq_dot_q6_K(
         const block_q6_K * b, int ql_offset, int qh_offset, int s_offset,
         const float4 & by0, const float4 & by32, const float4 & by64, const float4 & by96) {
@@ -224,6 +239,7 @@ static __global__ void mul_mat_vec_dq_q4_K(
 
 #pragma unroll
         for (int n = 0; n < num_rows; ++n) {
+            if (first_row + n >= nrows_x) break;
             const block_q4_K * b = &x[(int64_t) (first_row + n) * nblocks + i];
             sumf[n] += dq_dot_q4_K(b, g.q_offset, g.v_im, by10, by132, by20, by232, sum10, sum32, sum20, sum42);
         }
@@ -269,6 +285,7 @@ static __global__ void mul_mat_vec_dq_glu_q4_K(
 
 #pragma unroll
         for (int n = 0; n < num_rows; ++n) {
+            if (first_row + n >= nrows_x) break;
             const int64_t off = (int64_t) (first_row + n) * nblocks + i;
             up[n]   += dq_dot_q4_K(&xu[off], g.q_offset, g.v_im, by10, by132, by20, by232, sum10, sum32, sum20, sum42);
             gate[n] += dq_dot_q4_K(&xg[off], g.q_offset, g.v_im, by10, by132, by20, by232, sum10, sum32, sum20, sum42);
@@ -335,6 +352,7 @@ static __global__ void mul_mat_vec_dq_q5_K(
 
 #pragma unroll
         for (int n = 0; n < num_rows; ++n) {
+            if (first_row + n >= nrows_x) break;
             const block_q5_K * b = &x[(int64_t) (first_row + n) * nblocks + i];
             sumf[n] += dq_dot_q5_K(b, g.q_offset, g.l0, g.v_im, DQ_Q5_K_ARGS);
         }
@@ -370,6 +388,7 @@ static __global__ void mul_mat_vec_dq_glu_q5_K(
 
 #pragma unroll
         for (int n = 0; n < num_rows; ++n) {
+            if (first_row + n >= nrows_x) break;
             const int64_t off = (int64_t) (first_row + n) * nblocks + i;
             up[n]   += dq_dot_q5_K(&xu[off], g.q_offset, g.l0, g.v_im, DQ_Q5_K_ARGS);
             gate[n] += dq_dot_q5_K(&xg[off], g.q_offset, g.l0, g.v_im, DQ_Q5_K_ARGS);
@@ -422,6 +441,7 @@ static __global__ void mul_mat_vec_dq_q6_K(
 
 #pragma unroll
         for (int n = 0; n < num_rows; ++n) {
+            if (first_row + n >= nrows_x) break;
             const block_q6_K * b = &x[(int64_t) (first_row + n) * nblocks + i];
             sumf[n] += dq_dot_q6_K(b, g.ql_offset, g.qh_offset, g.s_offset, by0, by32, by64, by96);
         }
@@ -460,6 +480,7 @@ static __global__ void mul_mat_vec_dq_glu_q6_K(
 
 #pragma unroll
         for (int n = 0; n < num_rows; ++n) {
+            if (first_row + n >= nrows_x) break;
             const int64_t off = (int64_t) (first_row + n) * nblocks + i;
             up[n]   += dq_dot_q6_K(&xu[off], g.ql_offset, g.qh_offset, g.s_offset, by0, by32, by64, by96);
             gate[n] += dq_dot_q6_K(&xg[off], g.ql_offset, g.qh_offset, g.s_offset, by0, by32, by64, by96);
@@ -518,10 +539,10 @@ static void launch_dq_glu_q6_K(const void * vx_up, const void * vx_gate, const f
 
 #define DQ_DISPATCH_ROWS(LAUNCH, ...)                          \
     switch (dq_num_rows()) {                                   \
-        case 1:  LAUNCH<1>(__VA_ARGS__); break;               \
+        case 2:  LAUNCH<2>(__VA_ARGS__); break;               \
         case 4:  LAUNCH<4>(__VA_ARGS__); break;               \
         case 8:  LAUNCH<8>(__VA_ARGS__); break;               \
-        default: LAUNCH<2>(__VA_ARGS__); break;               \
+        default: LAUNCH<1>(__VA_ARGS__); break;               \
     }
 
 void ggml_cuda_mul_mat_vec_dq_q4_K(

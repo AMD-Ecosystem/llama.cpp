@@ -3598,7 +3598,8 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
                 const bool dq_default = GGML_CUDA_CC_IS_RDNA3_5(ggml_cuda_info().devices[cuda_ctx->device].cc);
                 if (ggml_cuda_dq_mmv_enabled(dq_default) && ids == nullptr
                         && ggml_get_glu_op(glu) == GGML_GLU_OP_SWIGLU
-                        && (src0->type == GGML_TYPE_Q4_K || src0->type == GGML_TYPE_Q5_K || src0->type == GGML_TYPE_Q6_K)
+                        && (src0->type == GGML_TYPE_Q4_K || src0->type == GGML_TYPE_Q5_K
+                            || (src0->type == GGML_TYPE_Q6_K && ggml_cuda_dq_q6k_enabled(dq_default)))
                         && gate->src[0]->type == src0->type && ggml_are_same_shape(src0, gate->src[0])
                         && src1->type == GGML_TYPE_F32 && glu->type == GGML_TYPE_F32
                         && src1->ne[1] == 1 && src0->ne[0] % QK_K == 0
