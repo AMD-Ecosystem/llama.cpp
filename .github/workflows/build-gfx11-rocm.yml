@@ -7,12 +7,18 @@ on:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
     inputs:
-      rocm_version:
-        description: 'ROCm version to use (e.g., 7.14.0a20260608) or "latest" to auto-detect'
+      build_set:
+        description: 'Which variants to build: nightly (A: gfx11 + latest nightly), weekly (B+C: master + gfx11 on the frozen 7.14 release), or all.'
         required: false
-        default: 'latest'
+        default: 'nightly'
+        type: choice
+        options: [nightly, weekly, all]
+      rocm_version:
+        description: 'Override ROCm version for ALL built variants (e.g. 7.14.0a20260608). Empty = per-variant channel auto-detect.'
+        required: false
+        default: ''
       create_release:
-        description: 'Publish a dated GitHub Release (b<YYYYMMDD>) with the built binaries. Set true only for the nightly dispatch.'
+        description: 'Publish/refresh the per-variant rolling GitHub Release. Set true only for cron dispatches.'
         required: false
         default: 'false'
       roofline:
@@ -20,34 +26,84 @@ on:
         required: false
         default: 'true'
 
-# Tracks the latest multiarch ROCm nightly (auto-detected). The earlier pin to
-# 7.14.0a20260608 worked around a libhsa-runtime64 regression (build 1b2a555677)
-# that segfaulted in GpuAgent::InitDma on the gfx115x runners; that issue
-# (https://github.com/ROCm/TheRock/issues/5763) is now resolved. Pass an explicit
-# rocm_version (e.g. 7.14.0a20260608) to pin a specific nightly again.
+# Three build variants (see the `setup` job matrix):
+#   A  gfx11  + latest nightly ROCm  -> rolling tag gfx11-rocm-nightly  (nightly)
+#   B  master + 7.14 release ROCm    -> rolling tag master-rocm-714     (weekly)
+#   C  gfx11  + 7.14 release ROCm    -> rolling tag gfx11-rocm-714      (weekly)
 #
-# Nightly is driven externally (GitHub cron only fires from the default branch).
-# On a host you control, with `gh` authenticated (token scope: repo + workflow):
-#   0 13 * * *  gh workflow run build-gfx11-rocm.yml --repo ROCm/llama.cpp --ref gfx11 -f rocm_version=latest
+# ROCm channels resolve against TheRock's multiarch tarball host:
+#   latest -> highest therock-dist-linux-multiarch-*.tar.gz overall (7.15 nightly today)
+#   7.14   -> highest therock-dist-linux-multiarch-7.14.0a*.tar.gz. The 7.14 line is
+#            FROZEN (last build 7.14.0a20260624, when 7.15 alphas began), so "7.14
+#            release" is that final alpha; only the llama.cpp source changes weekly.
+# An explicit rocm_version input overrides the channel for every variant.
+#
+# push/PR build only variant A's shape (triggering ref + latest) and never release.
+# The 7.14 variants build via external cron (GitHub cron only fires from the default
+# branch). On a host you control, with `gh` authenticated (token scope: repo + workflow):
+#   # nightly (variant A)
+#   7 13 * * *  gh workflow run build-gfx11-rocm.yml --repo AMD-Ecosystem/llama.cpp --ref gfx11 -f build_set=nightly -f create_release=true
+#   # weekly Thursday (variants B + C), ready ahead of weekend regressions
+#   7  9 * * 4  gh workflow run build-gfx11-rocm.yml --repo AMD-Ecosystem/llama.cpp --ref gfx11 -f build_set=weekly  -f create_release=true
 
 env:
-  ROCM_VERSION: ${{ github.event.inputs.rocm_version || 'latest' }}
   # Default ON so push/PR/cron (non-dispatch) runs keep roofline, matching prior
   # always-on behavior; a workflow_dispatch can pass 'false' for a lean build.
   ROOFLINE: ${{ github.event.inputs.roofline || 'true' }}
 
 jobs:
-  build-ubuntu:
+  setup:
     runs-on: ubuntu-24.04
-    # Single multiarch build: one fat binary covering all current CI arches,
-    # sourced from TheRock's multiarch tarball (arch-neutral host + per-arch
-    # Tensile DBs). gfx1100-1103 (RDNA3 desktop + Hawk Point/Phoenix 760M/780M),
-    # gfx1150/1151/1153 (RDNA3.5 Strix APUs).
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+    - name: Compute build matrix
+      id: set-matrix
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        BUILD_SET: ${{ github.event.inputs.build_set || 'nightly' }}
+        ROCM_OVERRIDE: ${{ github.event.inputs.rocm_version || '' }}
+      run: |
+        # Variant definitions. ref="" means "the ref that triggered this run"
+        # (used for push/PR so CI builds the pushed code, not gfx11 tip).
+        # rocm_channel is overridden wholesale when ROCM_OVERRIDE is set.
+        a_ch="latest"; b_ch="7.14"; c_ch="7.14"
+        if [ -n "$ROCM_OVERRIDE" ]; then
+          a_ch="$ROCM_OVERRIDE"; b_ch="$ROCM_OVERRIDE"; c_ch="$ROCM_OVERRIDE"
+        fi
+        A="{\"variant\":\"A\",\"ref\":\"\",\"rocm_channel\":\"$a_ch\",\"tag\":\"gfx11-rocm-nightly\"}"
+        B="{\"variant\":\"B\",\"ref\":\"master\",\"rocm_channel\":\"$b_ch\",\"tag\":\"master-rocm-714\"}"
+        C="{\"variant\":\"C\",\"ref\":\"gfx11\",\"rocm_channel\":\"$c_ch\",\"tag\":\"gfx11-rocm-714\"}"
+
+        if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+          case "$BUILD_SET" in
+            nightly) entries="$A" ;;
+            weekly)  entries="$B,$C" ;;
+            all)     entries="$A,$B,$C" ;;
+            *)       echo "Unknown build_set: $BUILD_SET" >&2; exit 1 ;;
+          esac
+        else
+          # push / pull_request: single leg, triggering ref (ref=""), latest ROCm.
+          entries="$A"
+        fi
+
+        matrix="{\"include\":[$entries]}"
+        echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+        echo "Build matrix: $matrix"
+
+  build-ubuntu:
+    needs: setup
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
+    # Single multiarch build per variant: one fat binary covering all current CI
+    # arches, sourced from TheRock's multiarch tarball (arch-neutral host +
+    # per-arch Tensile DBs). gfx1100-1103 (RDNA3 desktop + Hawk Point/Phoenix
+    # 760M/780M), gfx1150/1151/1153 (RDNA3.5 Strix APUs).
     env:
       GPU_TARGETS: gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1153
-    outputs:
-      rocm_version: ${{ steps.set-outputs.outputs.rocm_version }}
-      llamacpp_commit_hash: ${{ steps.set-outputs.outputs.llamacpp_commit_hash }}
+      ROCM_VERSION: ${{ matrix.rocm_channel }}
 
     steps:
     - name: Free disk space
@@ -56,6 +112,11 @@ jobs:
 
     - name: Checkout repository
       uses: actions/checkout@v4
+      with:
+        # Empty ref (variant A on push/PR) checks out the triggering ref; B/C
+        # pin master / gfx11 explicitly. Full history so rev-parse is meaningful.
+        ref: ${{ matrix.ref }}
+        fetch-depth: 0
 
     - name: Set up Node.js (for llama-ui build from source)
       uses: actions/setup-node@v6
@@ -88,13 +149,35 @@ jobs:
         rocm_version="${{ env.ROCM_VERSION }}"
         base_url="https://rocm.nightlies.amd.com/tarball-multi-arch"
 
+        # Channel resolution:
+        #   latest        -> highest multiarch tarball overall
+        #   X.Y (e.g 7.14) -> highest tarball on that minor line (frozen 7.14 ->
+        #                    deterministic). Matched on the "multiarch-X.Y." prefix.
+        #   X.Y.Z(a|rc)N  -> pinned full version, used verbatim (no detection)
+        detect=false
+        version_prefix=""
         if [ "$rocm_version" = "latest" ]; then
-          echo "Auto-detecting latest multiarch ROCm version"
+          detect=true
+        elif [[ "$rocm_version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+          detect=true
+          version_prefix="therock-dist-linux-multiarch-${rocm_version}."
+        fi
+
+        if [ "$detect" = true ]; then
+          echo "Auto-detecting multiarch ROCm version (channel: $rocm_version)"
           # The multiarch host serves an HTML index (not S3 XML); scrape the
-          # multiarch tarball names from it.
+          # multiarch tarball names, then (for a X.Y channel) keep only that line.
           files=$(curl -s "$base_url/" \
             | grep -oE 'therock-dist-linux-multiarch-[0-9]+\.[0-9]+\.[0-9]+(a|rc)[0-9]+\.tar\.gz' \
             | sort -u)
+          if [ -n "$version_prefix" ]; then
+            files=$(printf '%s\n' "$files" | grep -F "$version_prefix" || true)
+          fi
+
+          if [ -z "$files" ]; then
+            echo "No multiarch tarballs found for channel '$rocm_version'" >&2
+            exit 1
+          fi
 
           latest_file=""
           latest_major=0
@@ -219,7 +302,9 @@ jobs:
       # so PRs read but don't thrash the shared store.
       uses: ggml-org/ccache-action@v1.2.21
       with:
-        key: gfx11-rocm-multiarch
+        # Per-variant key: the three variants use different source refs and ROCm
+        # compilers, so a shared key would thrash. Keep each on its own store.
+        key: gfx11-rocm-multiarch-${{ matrix.variant }}
         evict-old-files: 7d
         save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/gfx11' }}
 
@@ -333,6 +418,23 @@ jobs:
           [ -f "$file" ] && [ ! -L "$file" ] && patchelf --set-rpath '$ORIGIN' "$file" 2>/dev/null || true
         done
 
+    - name: Write build metadata into artifact
+      run: |
+        # Per-variant provenance travels inside the artifact so downstream matrix
+        # jobs (test-gfx, create-release) read it without fragile matrix outputs.
+        rocm_version="${DETECTED_ROCM_VERSION:-${{ env.ROCM_VERSION }}}"
+        built_sha=$(git rev-parse HEAD)
+        {
+          echo "variant=${{ matrix.variant }}"
+          echo "ref=${{ matrix.ref }}"
+          echo "tag=${{ matrix.tag }}"
+          echo "rocm_channel=${{ matrix.rocm_channel }}"
+          echo "rocm_version=$rocm_version"
+          echo "llamacpp_commit_hash=${LLAMACPP_COMMIT_HASH}"
+          echo "llamacpp_commit_sha=$built_sha"
+        } > build/bin/build-meta.txt
+        echo "=== build-meta.txt ==="; cat build/bin/build-meta.txt
+
     - name: List build artifacts (including ROCm files)
       run: |
         cd build/bin
@@ -342,27 +444,22 @@ jobs:
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: llama-ubuntu-rocm-multiarch-x64
+        # Variant-suffixed so the three legs don't collide on one artifact name.
+        name: llama-ubuntu-rocm-multiarch-x64-${{ matrix.variant }}
         path: build/bin/
         retention-days: 30
 
-    - name: Set job outputs
-      id: set-outputs
-      run: |
-        rocm_version="${DETECTED_ROCM_VERSION:-${{ env.ROCM_VERSION }}}"
-        echo "rocm_version=$rocm_version" >> $GITHUB_OUTPUT
-        echo "llamacpp_commit_hash=${LLAMACPP_COMMIT_HASH}" >> $GITHUB_OUTPUT
-        echo "Final rocm_version: $rocm_version"
-        echo "Final llamacpp_commit_hash: ${LLAMACPP_COMMIT_HASH}"
-
   test-gfx:
-    needs: build-ubuntu
+    needs: [setup, build-ubuntu]
     # TEMPORARILY DISABLED: the linux-gfx1151-gpu-rocm self-hosted runner is
     # offline, so this job sits queued indefinitely and blocks create-release.
     # Re-enable by restoring `needs.build-ubuntu.result == 'success'` once the
     # runner is back online.
     if: false && needs.build-ubuntu.result == 'success'
-    # Single hardware test of the multiarch artifact on gfx1151. This is the
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
+    # Per-variant hardware test of the multiarch artifact on gfx1151. This is the
     # end-to-end safety net for the Tensile-only multiarch package: a real
     # llama-cli inference exercising the rocBLAS/hipBLASLt GEMM path on-device.
     runs-on: linux-gfx1151-gpu-rocm
@@ -374,7 +471,7 @@ jobs:
     - name: Download build artifacts
       uses: actions/download-artifact@v4
       with:
-        name: llama-ubuntu-rocm-multiarch-x64
+        name: llama-ubuntu-rocm-multiarch-x64-${{ matrix.variant }}
         path: llama-binaries
 
     - name: Download test model
@@ -503,16 +600,19 @@ jobs:
         fi
 
   create-release:
-    needs: [build-ubuntu]
+    needs: [setup, build-ubuntu]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
-    # Publish only on the nightly dispatch (external cron passes
-    # -f create_release=true). Push/PR and manual runs never release.
-    # Require the build to succeed. NOTE: the gfx1151 hardware-test gate
-    # (needs.test-gfx.result == 'success') is TEMPORARILY REMOVED while the
-    # self-hosted runner is offline and test-gfx is disabled above. Restore both
-    # the `test-gfx` entry in needs and the result check when the runner returns.
+    strategy:
+      fail-fast: false
+      # Each variant publishes to its own rolling tag independently.
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
+    # Publish only on cron/dispatch that sets create_release=true. Push/PR never
+    # release. Require the build to succeed. NOTE: the gfx1151 hardware-test gate
+    # (test-gfx in needs + needs.test-gfx.result == 'success') is TEMPORARILY
+    # REMOVED while the self-hosted runner is offline and test-gfx is disabled
+    # above. Restore both when the runner returns.
     if: |
       always() &&
       needs.build-ubuntu.result == 'success' &&
@@ -522,63 +622,65 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Download all build artifacts
+    - name: Download this variant's build artifact
       uses: actions/download-artifact@v4
       with:
-        path: ./all-artifacts
+        name: llama-ubuntu-rocm-multiarch-x64-${{ matrix.variant }}
+        path: ./artifact
 
-    - name: Generate dated release tag
-      id: generate-tag
-      env:
-        GITHUB_TOKEN: ${{ github.token }}
+    - name: Read build metadata
+      id: meta
       run: |
-        # Date tag mirrors the ROCm nightly scheme (e.g. b20260609 for the
-        # 7.14.0a20260609-era build). One release per UTC day.
-        TAG="b$(date -u '+%Y%m%d')"
-        echo "tag=${TAG}" >> $GITHUB_OUTPUT
-
-        if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-          echo "Release $TAG already exists; skipping creation."
-          echo "tag_exists=true" >> $GITHUB_OUTPUT
-        else
-          echo "Release $TAG does not exist; will create."
-          echo "tag_exists=false" >> $GITHUB_OUTPUT
-        fi
-        echo "Release tag: $TAG"
-
-    - name: Create multiarch archive
-      if: steps.generate-tag.outputs.tag_exists == 'false'
-      run: |
-        TAG="${{ steps.generate-tag.outputs.tag }}"
-        root="$PWD"
-        artifact_dir="./all-artifacts/llama-ubuntu-rocm-multiarch-x64"
-        archive="llama-${TAG}-ubuntu-rocm-multiarch-x64"
-        if [ -d "$artifact_dir" ]; then
-          echo "Creating ${archive}.tar.gz"
-          tar -czf "$root/${archive}.tar.gz" -C "$artifact_dir" .
-        else
-          echo "ERROR: artifact dir not found: $artifact_dir"
+        meta="./artifact/build-meta.txt"
+        if [ ! -f "$meta" ]; then
+          echo "ERROR: build-meta.txt missing from artifact" >&2
           exit 1
         fi
+        # Re-export the recorded provenance as step outputs.
+        while IFS='=' read -r k v; do
+          [ -n "$k" ] && echo "$k=$v" >> "$GITHUB_OUTPUT"
+        done < "$meta"
+        echo "=== build-meta.txt ==="; cat "$meta"
+
+    - name: Package rolling archive
+      run: |
+        TAG="${{ matrix.tag }}"
+        archive="llama-${TAG}-ubuntu-rocm-multiarch-x64"
+        # build-meta.txt is shipped inside the tarball as provenance; keep it.
+        echo "Creating ${archive}.tar.gz from ./artifact"
+        tar -czf "${archive}.tar.gz" -C ./artifact .
         ls -la *.tar.gz
 
-    - name: Create GitHub Release
-      if: steps.generate-tag.outputs.tag_exists == 'false'
+    - name: Publish / refresh rolling release
       env:
         GITHUB_TOKEN: ${{ github.token }}
+        TAG: ${{ matrix.tag }}
+        ROCM_VERSION: ${{ steps.meta.outputs.rocm_version }}
+        LLAMACPP_COMMIT_HASH: ${{ steps.meta.outputs.llamacpp_commit_hash }}
+        BUILT_SHA: ${{ steps.meta.outputs.llamacpp_commit_sha }}
+        SRC_REF: ${{ matrix.ref }}
       run: |
-        TAG="${{ steps.generate-tag.outputs.tag }}"
-        ROCM_VERSION="${{ needs.build-ubuntu.outputs.rocm_version }}"
-        LLAMACPP_COMMIT_HASH="${{ needs.build-ubuntu.outputs.llamacpp_commit_hash }}"
+        # Rolling tag: delete the old release + its git tag, then recreate at the
+        # exact commit this variant built, so the tag always points at the newest.
+        if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          echo "Deleting existing release/tag $TAG (rolling)"
+          gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+        fi
+
+        display_ref="${SRC_REF:-${GITHUB_REF_NAME}}"
+        archive="llama-${TAG}-ubuntu-rocm-multiarch-x64.tar.gz"
+
         gh release create "$TAG" \
           --repo "$GITHUB_REPOSITORY" \
+          --target "$BUILT_SHA" \
           --title "$TAG" \
-          --notes "**Build**: $TAG
+          --notes "**Rolling build**: $TAG (updated each run; always the newest)
         **OS**: ubuntu
         **GPU Target(s)**: gfx1100, gfx1101, gfx1102, gfx1103, gfx1150, gfx1151, gfx1153 (single multiarch binary)
+        **Source ref**: $display_ref
         **ROCm Version**: $ROCM_VERSION (multiarch)
-        **Llama.cpp Commit**: $LLAMACPP_COMMIT_HASH
+        **Llama.cpp Commit**: $LLAMACPP_COMMIT_HASH ($BUILT_SHA)
         **Build Date**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
 
         Prebuilt llama.cpp ROCm binaries — one multiarch package covering the RDNA3 gfx110X family incl. Hawk Point/Phoenix (Radeon 760M/780M) and the RDNA3.5 gfx115x APUs (gfx1150/gfx1151/gfx1153). Built from TheRock's multiarch ROCm runtime, pruned to the CI target arches (per-arch Tensile databases bundled)." \
-          *.tar.gz
+          "$archive"
