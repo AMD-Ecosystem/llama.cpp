@@ -80,6 +80,20 @@ struct dispatch {
     uint64_t duration_ns = 0;
 };
 
+// Per-invocation identity kept for graph reconstruction. The geometry record is shared by every
+// op of the same shape, so its ids cannot distinguish repeated layers; these are the ids of this
+// specific launch. Ids are storage ids (view_src root), so a consumer that reads a view/reshape of
+// a producer's output -- reshape/view/permute launch no kernel and have no row -- still resolves to
+// the producing op. out_storage_id is what the launch writes (the last node of a fused span, else
+// the node itself); in_storage_ids are the storages it reads from outside the span. The consumer
+// links each in_storage_id to the most recent prior launch whose out_storage_id matches (last
+// writer wins, which also resolves in-place ops whose output aliases an input).
+struct node_topology {
+    uint64_t              out_storage_id = 0;
+    std::vector<uint64_t> in_storage_ids;
+    std::string           name;
+};
+
 std::mutex                                           g_mutex;
 std::unordered_map<uint64_t, op_record>              g_records;      // geometry id -> geometry
 std::unordered_map<uint64_t, uint64_t>               g_invocations;  // invocation id -> geometry id
@@ -92,6 +106,7 @@ std::unordered_map<uint64_t, int64_t>                g_invocation_experts;  // i
 // (token, slot) routings that selected expert e; Σ = n_tokens*top_k). Emitted as tokens_per_expert
 // so the consumer can show the routing-load distribution (skew that drives MoE-GEMM padding).
 std::unordered_map<uint64_t, std::vector<int32_t>>   g_invocation_expert_hist;  // invocation id -> per-expert token counts
+std::unordered_map<uint64_t, node_topology>          g_invocation_topology;     // invocation id -> per-launch identity (edges)
 std::atomic<uint64_t>                                g_next_invocation{1};
 thread_local uint64_t                                g_current_invocation = 0;  // id pushed by the last begin_op on this thread
 
@@ -384,7 +399,20 @@ void write_report() {
         if (!first) out << ",\n";
         first = false;
 
-        out << "    {\"ggml_op\": \"" << rec.op << "\", ";
+        out << "    {\"ggml_op\": \"" << rec.op << "\", \"invocation\": " << invocation << ", ";
+        // Per-launch identity for graph reconstruction: sort rows by invocation for execution
+        // order, then link each in_tensor_id to the producing launch's out_tensor_id.
+        auto topo_it = g_invocation_topology.find(invocation);
+        if (topo_it != g_invocation_topology.end()) {
+            out << "\"name\": \"";
+            json_escape(out, topo_it->second.name);
+            out << "\", \"out_storage_id\": " << topo_it->second.out_storage_id << ", \"in_storage_ids\": [";
+            for (size_t j = 0; j < topo_it->second.in_storage_ids.size(); j++) {
+                if (j) out << ", ";
+                out << topo_it->second.in_storage_ids[j];
+            }
+            out << "], ";
+        }
         if (!rec.fused_nodes.empty()) {
             out << "\"fused_ops\": [";
             for (size_t k = 0; k < rec.fused_nodes.size(); k++) {
@@ -541,6 +569,7 @@ void ggml_cuda_roofline_reset(void) {
     g_invocations.clear();
     g_dispatches.clear();
     g_invocation_experts.clear();
+    g_invocation_topology.clear();
     // g_next_invocation stays monotonic so a late warmup record cannot collide with a
     // post-reset invocation id; g_kernel_names is kept (code objects do not reload).
 }
@@ -579,10 +608,20 @@ void ggml_cuda_roofline_begin_op(const struct ggml_tensor * node, void * stream)
         if (!hist.empty()) g_invocation_expert_hist[invocation] = std::move(hist);
     }
 
+    // Per-launch identity for graph edges (overridden by fuse_ops for a fused span). Resolve to
+    // storage roots so consumers of a view/reshape of this output still link back here.
+    node_topology topo;
+    topo.out_storage_id = (uint64_t) (uintptr_t) roofline_storage(node);
+    topo.name           = node->name;
+    for (int j = 0; j < GGML_MAX_SRC; j++) {
+        if (node->src[j]) topo.in_storage_ids.push_back((uint64_t) (uintptr_t) roofline_storage(node->src[j]));
+    }
+
     {
         std::lock_guard<std::mutex> lock(g_mutex);
         g_invocations.emplace(invocation, geometry_id);
         if (g_records.find(geometry_id) == g_records.end()) g_records.emplace(geometry_id, rec);
+        g_invocation_topology.emplace(invocation, std::move(topo));
     }
 
     // Tag the kernels launched until the next op with this invocation id. rocprofiler
@@ -632,10 +671,33 @@ void ggml_cuda_roofline_fuse_ops(const struct ggml_cgraph * cgraph, int node_idx
         for (int d = 0; d < 4; d++) geometry_id = hash_mix(geometry_id, (uint64_t) n->ne[d]);
     }
 
+    // Rebuild the launch identity for the whole span: the group produces the last node's output,
+    // and reads only storages not written within the span (internal tensors are elided). Storage
+    // roots so a src that views an internal output is recognised as internal.
+    std::unordered_set<uint64_t> internal;
+    for (int j = node_idx; j < node_idx + node_count; ++j) {
+        internal.insert((uint64_t) (uintptr_t) roofline_storage(cgraph->nodes[j]));
+    }
+    node_topology topo;
+    topo.out_storage_id = (uint64_t) (uintptr_t) roofline_storage(cgraph->nodes[node_idx + node_count - 1]);
+    topo.name           = head->name;
+    std::unordered_set<uint64_t> seen;
+    for (int j = node_idx; j < node_idx + node_count; ++j) {
+        const ggml_tensor * n = cgraph->nodes[j];
+        for (int s = 0; s < GGML_MAX_SRC; s++) {
+            if (!n->src[s]) continue;
+            const uint64_t sid = (uint64_t) (uintptr_t) roofline_storage(n->src[s]);
+            if (!internal.count(sid) && seen.insert(sid).second) {
+                topo.in_storage_ids.push_back(sid);
+            }
+        }
+    }
+
     // Re-point the current invocation at the fused record. The provisional head-only record
     // from begin_op stays in g_records; if no non-fused invocation references it, it is
     // simply never emitted (the report iterates g_invocations).
     std::lock_guard<std::mutex> lock(g_mutex);
     g_invocations[g_current_invocation] = geometry_id;
     if (g_records.find(geometry_id) == g_records.end()) g_records.emplace(geometry_id, std::move(rec));
+    g_invocation_topology[g_current_invocation] = std::move(topo);
 }
