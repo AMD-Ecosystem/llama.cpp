@@ -290,6 +290,12 @@ jobs:
         cp -v /opt/rocm/lib/librocsolver.so* "$build_bin_path/" 2>/dev/null || echo "librocsolver.so* not found"
         cp -v /opt/rocm/lib/libroctx64.so* "$build_bin_path/" 2>/dev/null || echo "libroctx64.so* not found"
         cp -v /opt/rocm/lib/libhipblaslt.so* "$build_bin_path/" 2>/dev/null || echo "libhipblaslt.so* not found"
+        # liborigami is a hard DT_NEEDED of libhipblaslt as of ROCm 7.15 (new
+        # hipBLASLt kernel-selection lib). Omitting it makes llama-bench/llama-server
+        # fail to load (liborigami.so.1: cannot open shared object file). The
+        # transitive-closure backstop below would also catch it, but keep the
+        # explicit copy so the intent is greppable alongside the other hipblaslt libs.
+        cp -v /opt/rocm/lib/liborigami.so* "$build_bin_path/" 2>/dev/null || echo "liborigami.so* not found"
         cp -v /opt/rocm/lib/rocm_sysdeps/lib/librocm_sysdeps_liblzma.so* "$build_bin_path/" 2>/dev/null || echo "librocm_sysdeps_liblzma.so* not found"
         cp -v /opt/rocm/lib/librocprofiler-register.so* "$build_bin_path/" 2>/dev/null || echo "librocprofiler-register.so* not found"
         # Roofline builds dlopen librocprofiler-sdk.so.1 at runtime (ggml-cuda-roofline.cpp);
@@ -322,6 +328,44 @@ jobs:
           || cp -v "$(gcc -print-file-name=libatomic.so.1)" "$build_bin_path/" 2>/dev/null \
           || echo "libatomic.so.1 not found"
 
+        # Transitive-closure backstop for the hand-maintained copy list above.
+        # A ROCm bump can add a new DT_NEEDED to a bundled lib (e.g. 7.15 added
+        # liborigami.so.1 to libhipblaslt); if it isn't in the list, the release
+        # ships broken. Here we ldd every bundled binary against the release dir
+        # and, for any "=> not found" dep that exists somewhere under
+        # /opt/rocm/lib, copy it in — repeating until no new libs are pulled in.
+        # Only ROCm-provided deps are auto-bundled; genuinely external libs
+        # (libc/libm/... provided by the runner) are left alone.
+        echo "Resolving remaining ROCm deps via ldd closure..."
+        rocm_lib_roots="/opt/rocm/lib /opt/rocm/lib/rocm_sysdeps/lib /opt/rocm/lib/llvm/lib"
+        for pass in 1 2 3 4 5; do
+          added=0
+          # Collect unresolved sonames across all bundled binaries in one sweep.
+          missing="$(cd "$build_bin_path" && \
+            for f in *.so* llama-*; do
+              [ -f "$f" ] && [ ! -L "$f" ] || continue
+              LD_LIBRARY_PATH=. ldd "$f" 2>/dev/null
+            done | awk '/=> not found/ {print $1}' | sort -u)"
+          [ -z "$missing" ] && { echo "  pass $pass: closure complete"; break; }
+          for soname in $missing; do
+            # Already bundled? (a previous pass may have added it)
+            [ -e "$build_bin_path/$soname" ] && continue
+            src=""
+            for root in $rocm_lib_roots; do
+              cand="$(find "$root" -maxdepth 1 -name "$soname" 2>/dev/null | head -1)"
+              [ -n "$cand" ] && { src="$cand"; break; }
+            done
+            if [ -n "$src" ]; then
+              # Copy the real file and recreate the soname symlink chain.
+              cp -vL "$src" "$build_bin_path/$soname"
+              added=1
+            else
+              echo "  pass $pass: $soname not found under /opt/rocm — leaving to system loader"
+            fi
+          done
+          [ "$added" -eq 0 ] && { echo "  pass $pass: no ROCm-resolvable deps left"; break; }
+        done
+
         echo "Finished copying required ROCm libraries"
 
     - name: Set RPATH for portable distribution
@@ -332,6 +376,35 @@ jobs:
         for file in *.so* llama-*; do
           [ -f "$file" ] && [ ! -L "$file" ] && patchelf --set-rpath '$ORIGIN' "$file" 2>/dev/null || true
         done
+
+    - name: Verify bundled binaries have no unresolved deps
+      run: |
+        # GPU-free packaging gate. With RPATH=$ORIGIN set, ldd resolves bundled
+        # libs from this dir and true system libs from default paths; anything
+        # still "not found" means the artifact would fail to load at runtime.
+        # This is exactly the failure that shipped in b20260724 (libhipblaslt
+        # gained NEEDED liborigami.so.1 which wasn't bundled) — llama-cli happened
+        # to load but llama-bench/llama-server did not. Fail the build here so a
+        # missing dep can never reach a release again.
+        cd build/bin
+        status=0
+        for f in *.so* llama-*; do
+          [ -f "$f" ] && [ ! -L "$f" ] || continue
+          missing="$(ldd "$f" 2>/dev/null | awk '/=> not found/ {print $1}')"
+          if [ -n "$missing" ]; then
+            status=1
+            echo "❌ $f has unresolved dependencies:"
+            echo "$missing" | sed 's/^/     /'
+          fi
+        done
+        if [ "$status" -ne 0 ]; then
+          echo ""
+          echo "One or more bundled binaries have unresolved shared-library deps."
+          echo "Add the missing lib(s) to the 'Copy ROCm core libs' step (or ensure"
+          echo "the ldd-closure backstop can find them under /opt/rocm/lib)."
+          exit 1
+        fi
+        echo "✅ All bundled binaries resolve their dependencies."
 
     - name: List build artifacts (including ROCm files)
       run: |
@@ -501,6 +574,39 @@ jobs:
           echo "❌ Test FAILED - Missing expected outputs"
           exit 1
         fi
+
+    - name: Run llama-bench load check
+      run: |
+        # llama-cli above links hipBLASLt lazily, so it can load even when a
+        # hipBLASLt dependency is missing from the bundle. llama-bench (and
+        # llama-server) load hipBLASLt eagerly — this is the exact split that
+        # let b20260724 pass the cli test but ship a broken bench/server. Run a
+        # tiny llama-bench so a missing hipBLASLt dep fails the HW test too, not
+        # just the GPU-free packaging gate in the build job.
+        llama_bench_path="./llama-binaries/llama-bench"
+        model_path="Qwen3-0.6B-Q4_0.gguf"
+        chmod +x "$llama_bench_path"
+        if [ ! -f "$llama_bench_path" ]; then
+          echo "llama-bench not found at: $llama_bench_path"
+          exit 1
+        fi
+        echo "Running minimal llama-bench (pp8/tg8, 1 rep) on gfx1151..."
+        set +e
+        timeout 180 "$llama_bench_path" -m "$model_path" -ngl 99 -p 8 -n 8 -r 1 > bench_output.txt 2>&1
+        exit_code=$?
+        set -e
+        echo "=== LLAMA-BENCH OUTPUT ==="
+        cat bench_output.txt || echo "(empty)"
+        echo "=== END OUTPUT ==="
+        if [ $exit_code -ne 0 ]; then
+          echo "❌ llama-bench exited with code $exit_code"
+          echo "Checking for missing library dependencies..."
+          ldd "$llama_bench_path" || echo "ldd command failed"
+          rm -f bench_output.txt
+          exit 1
+        fi
+        rm -f bench_output.txt
+        echo "✅ llama-bench loaded and ran (hipBLASLt dependency chain resolved)"
 
   create-release:
     needs: [build-ubuntu]
