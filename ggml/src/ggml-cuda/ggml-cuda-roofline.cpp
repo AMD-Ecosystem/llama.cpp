@@ -24,6 +24,7 @@
 #include <cxxabi.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -80,18 +81,25 @@ struct dispatch {
     uint64_t duration_ns = 0;
 };
 
-// Per-invocation identity kept for graph reconstruction. The geometry record is shared by every
-// op of the same shape, so its ids cannot distinguish repeated layers; these are the ids of this
-// specific launch. Ids are storage ids (view_src root), so a consumer that reads a view/reshape of
-// a producer's output -- reshape/view/permute launch no kernel and have no row -- still resolves to
-// the producing op. out_storage_id is what the launch writes (the last node of a fused span, else
-// the node itself); in_storage_ids are the storages it reads from outside the span. The consumer
-// links each in_storage_id to the most recent prior launch whose out_storage_id matches (last
-// writer wins, which also resolves in-place ops whose output aliases an input).
+// Per-launch identity for graph reconstruction: the geometry record is shared across ops of the
+// same shape, so only these ids distinguish repeated layers. Ids are storage ids at the view_src
+// root, so a read of a view/reshape (which launches no kernel and has no row) still resolves to the
+// producing op. The consumer links each in_storage_id to the last prior launch whose out_storage_id
+// matches (last writer wins, which also resolves in-place ops).
+// One entry per external source (aligned 1:1 with in_storage_ids). Holds each operand's own
+// name/type/shape so the consumer can label and classify it (weight vs dynamic input, by name) --
+// which a fused row's head-only geometry record can't supply.
+struct src_operand {
+    std::string name;
+    std::string type;             // ggml_type_name
+    int64_t     ne[4] = {0, 0, 0, 0};
+};
+
 struct node_topology {
-    uint64_t              out_storage_id = 0;
-    std::vector<uint64_t> in_storage_ids;
-    std::string           name;
+    uint64_t                  out_storage_id = 0;
+    std::vector<uint64_t>     in_storage_ids;
+    std::vector<src_operand>  in_operands;   // aligned with in_storage_ids
+    std::string               name;
 };
 
 std::mutex                                           g_mutex;
@@ -193,6 +201,18 @@ uint64_t hash_mix(uint64_t hash, uint64_t value) {
 const ggml_tensor * roofline_storage(const ggml_tensor * t) {
     while (t && t->view_src) t = t->view_src;
     return t;
+}
+
+// Capture one source operand's identity (name/type/shape) for the topology, so the consumer can
+// label and classify it directly. The name is taken from the storage root (a view of a model
+// weight keeps the weight's name), which is what makes weight-vs-input unambiguous.
+src_operand make_src_operand(const ggml_tensor * t) {
+    src_operand op;
+    const ggml_tensor * root = roofline_storage(t);
+    op.name = root && root->name[0] ? root->name : (t->name[0] ? t->name : "");
+    op.type = ggml_type_name(t->type);
+    for (int d = 0; d < 4; d++) op.ne[d] = t->ne[d];
+    return op;
 }
 
 // Fill a record's geometry and single-node HBM byte fields from one ggml node.
@@ -412,6 +432,27 @@ void write_report() {
                 out << topo_it->second.in_storage_ids[j];
             }
             out << "], ";
+            // Per-operand identity aligned 1:1 with in_storage_ids: the tensor name (unambiguous
+            // weight-vs-input), its dtype and its shape -- correct even for a fused span's non-head
+            // operands, which the shared geometry record's head-only src arrays do not describe.
+            const auto & ops = topo_it->second.in_operands;
+            out << "\"in_names\": [";
+            for (size_t j = 0; j < ops.size(); j++) {
+                if (j) out << ", ";
+                out << "\""; json_escape(out, ops[j].name); out << "\"";
+            }
+            out << "], \"in_types\": [";
+            for (size_t j = 0; j < ops.size(); j++) {
+                if (j) out << ", ";
+                out << "\"" << ops[j].type << "\"";
+            }
+            out << "], \"in_ne\": [";
+            for (size_t j = 0; j < ops.size(); j++) {
+                if (j) out << ", ";
+                out << "[" << ops[j].ne[0] << ", " << ops[j].ne[1] << ", "
+                    << ops[j].ne[2] << ", " << ops[j].ne[3] << "]";
+            }
+            out << "], ";
         }
         if (!rec.fused_nodes.empty()) {
             out << "\"fused_ops\": [";
@@ -614,7 +655,10 @@ void ggml_cuda_roofline_begin_op(const struct ggml_tensor * node, void * stream)
     topo.out_storage_id = (uint64_t) (uintptr_t) roofline_storage(node);
     topo.name           = node->name;
     for (int j = 0; j < GGML_MAX_SRC; j++) {
-        if (node->src[j]) topo.in_storage_ids.push_back((uint64_t) (uintptr_t) roofline_storage(node->src[j]));
+        if (node->src[j]) {
+            topo.in_storage_ids.push_back((uint64_t) (uintptr_t) roofline_storage(node->src[j]));
+            topo.in_operands.push_back(make_src_operand(node->src[j]));
+        }
     }
 
     {
@@ -689,6 +733,7 @@ void ggml_cuda_roofline_fuse_ops(const struct ggml_cgraph * cgraph, int node_idx
             const uint64_t sid = (uint64_t) (uintptr_t) roofline_storage(n->src[s]);
             if (!internal.count(sid) && seen.insert(sid).second) {
                 topo.in_storage_ids.push_back(sid);
+                topo.in_operands.push_back(make_src_operand(n->src[s]));
             }
         }
     }
