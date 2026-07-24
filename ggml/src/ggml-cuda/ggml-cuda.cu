@@ -663,10 +663,20 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
 
 // cuda buffer
 
+// A persistent f16 copy of a quantized dense weight, built once at load time (see
+// ggml_backend_cuda_buffer_set_tensor) and consumed by the prefill cuBLAS path instead of
+// dequantizing on the fly. `lda` is the row stride in f16 elements (K-padded when it avoids
+// cache-set aliasing). Owned by the buffer context so it frees with the model.
+struct ggml_cuda_f16_shadow {
+    half *  ptr = nullptr;
+    int64_t lda = 0;
+};
+
 struct ggml_backend_cuda_buffer_context {
     int device;
     void * dev_ptr = nullptr;
     std::string name;
+    std::vector<ggml_cuda_f16_shadow *> shadows;
 
     ggml_backend_cuda_buffer_context(int device, void * dev_ptr) :
         device(device), dev_ptr(dev_ptr),
@@ -674,6 +684,12 @@ struct ggml_backend_cuda_buffer_context {
     }
 
     ~ggml_backend_cuda_buffer_context() {
+        for (ggml_cuda_f16_shadow * s : shadows) {
+            if (s->ptr) {
+                CUDA_CHECK(cudaFree(s->ptr));
+            }
+            delete s;
+        }
         CUDA_CHECK(cudaFree(dev_ptr));
     }
 };
@@ -692,11 +708,57 @@ static void * ggml_backend_cuda_buffer_get_base(ggml_backend_buffer_t buffer) {
     return ctx->dev_ptr;
 }
 
+// One cache line, added to a weight's row stride when the packed row size is a multiple of
+// 2048 bytes to avoid cache-set aliasing in matmul. Enabled by default; disable with
+// GGML_CUDA_NO_PAD_WEIGHTS.
+#define GGML_CUDA_CACHE_LINE 128
+#define GGML_CUDA_ROW_ALIAS_STRIDE 2048
+
+static bool ggml_cuda_pad_weights_enabled() {
+    static const bool enabled = getenv("GGML_CUDA_NO_PAD_WEIGHTS") == nullptr;
+    return enabled;
+}
+
+// A float GEMM weight (tagged GGML_TENSOR_FLAG_PAD_ROWS by the loader) whose packed row size
+// aliases at GGML_CUDA_ROW_ALIAS_STRIDE and therefore benefits from a one-cache-line row-stride
+// pad. Quantized weights are excluded: a 128-byte pad is not a multiple of their block size and
+// would misalign the block-indexed matmul kernels.
+static bool ggml_cuda_should_pad_weight(const ggml_tensor * tensor) {
+    if (!ggml_cuda_pad_weights_enabled()) {
+        return false;
+    }
+    if (tensor->view_src != nullptr || !(tensor->flags & GGML_TENSOR_FLAG_PAD_ROWS)
+            || ggml_is_quantized(tensor->type) || tensor->ne[1] <= 1) {
+        return false;
+    }
+    return ggml_row_size(tensor->type, tensor->ne[0]) % GGML_CUDA_ROW_ALIAS_STRIDE == 0;
+}
+
+// Row stride (nb[1]) in bytes for a weight tensor: the packed row size, plus one cache line
+// when padding applies.
+static size_t ggml_cuda_padded_nb1(const ggml_tensor * tensor) {
+    const size_t packed = ggml_row_size(tensor->type, tensor->ne[0]);
+    return ggml_cuda_should_pad_weight(tensor) ? packed + GGML_CUDA_CACHE_LINE : packed;
+}
+
 static enum ggml_status ggml_backend_cuda_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
 
     if (tensor->view_src != NULL) {
         assert(tensor->view_src->buffer->buft == buffer->buft);
+        return GGML_STATUS_SUCCESS;
+    }
+
+    if (ggml_backend_buffer_get_usage(buffer) != GGML_BACKEND_BUFFER_USAGE_COMPUTE
+            && ggml_cuda_should_pad_weight(tensor)) {
+        tensor->nb[1] = ggml_cuda_padded_nb1(tensor);
+        tensor->nb[2] = tensor->nb[1] * tensor->ne[1];
+        tensor->nb[3] = tensor->nb[2] * tensor->ne[2];
+
+        // zero the allocation so the inter-row padding gaps hold no NaNs
+        ggml_cuda_set_device(ctx->device);
+        CUDA_CHECK(cudaMemset((char *) tensor->data, 0,
+            ggml_backend_buft_get_alloc_size(buffer->buft, tensor)));
         return GGML_STATUS_SUCCESS;
     }
 
@@ -721,12 +783,72 @@ static void ggml_backend_cuda_buffer_memset_tensor(ggml_backend_buffer_t buffer,
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
 }
 
+// Build a one-time f16 shadow of a freshly-uploaded quantized dense weight (opt-in via
+// GGML_PREFILL_DEQUANT). Runs after the quantized bytes are resident in VRAM, so the prefill
+// cuBLAS path (ggml_cuda_mul_mat_cublas_impl) can consume tensor->extra instead of
+// dequantizing on every call. Dense 2D weights only; MoE expert stacks (ne2>1) are excluded.
+static void ggml_cuda_maybe_build_f16_shadow(
+        ggml_backend_cuda_buffer_context * ctx, ggml_backend_buffer_t buffer,
+        ggml_tensor * tensor, size_t offset, size_t size) {
+    static const bool enabled = getenv("GGML_PREFILL_DEQUANT") != nullptr;
+    if (!enabled || tensor->extra != nullptr || tensor->view_src != nullptr) {
+        return;
+    }
+    if (ggml_backend_buffer_get_usage(buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE
+            || !ggml_is_quantized(tensor->type)
+            || tensor->ne[1] <= 1 || tensor->ne[2] != 1 || tensor->ne[3] != 1
+            || !ggml_is_contiguously_allocated(tensor)
+            || offset != 0 || size != ggml_nbytes(tensor)) {
+        return;
+    }
+    const int cc = ggml_cuda_info().devices[ctx->device].cc;
+    if (!fast_fp16_hardware_available(cc)) {
+        return;
+    }
+    const to_fp16_cuda_t to_fp16 = ggml_get_to_fp16_cuda(tensor->type);
+    if (to_fp16 == nullptr) {
+        return;
+    }
+
+    const int64_t ne00 = tensor->ne[0];
+    const int64_t ne01 = tensor->ne[1];
+    // pad the f16 row stride by one cache line only when the f16 row size aliases at 2048 B
+    const int64_t pad  = (ggml_row_size(GGML_TYPE_F16, ne00) % GGML_CUDA_ROW_ALIAS_STRIDE == 0)
+        ? (int64_t) (GGML_CUDA_CACHE_LINE / sizeof(half)) : 0;
+    const int64_t lda  = ne00 + pad;
+
+    ggml_cuda_set_device(ctx->device);
+    ggml_cuda_f16_shadow * sh = new ggml_cuda_f16_shadow();
+    sh->lda = lda;
+    CUDA_CHECK(cudaMalloc(&sh->ptr, (size_t) ne01 * lda * sizeof(half)));
+
+    if (pad == 0) {
+        to_fp16(tensor->data, sh->ptr, ggml_nelements(tensor), cudaStreamPerThread);
+    } else {
+        half * tmp = nullptr;
+        CUDA_CHECK(cudaMalloc(&tmp, (size_t) ne01 * ne00 * sizeof(half)));
+        to_fp16(tensor->data, tmp, ggml_nelements(tensor), cudaStreamPerThread);
+        CUDA_CHECK(cudaMemcpy2DAsync(sh->ptr, lda * sizeof(half),
+                                     tmp, ne00 * sizeof(half),
+                                     ne00 * sizeof(half), ne01,
+                                     cudaMemcpyDeviceToDevice, cudaStreamPerThread));
+        CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+        CUDA_CHECK(cudaFree(tmp));
+    }
+    CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+
+    tensor->extra = sh;
+    ctx->shadows.push_back(sh);
+}
+
 static void ggml_backend_cuda_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *) buffer->context;
 
     ggml_cuda_set_device(ctx->device);
     CUDA_CHECK(cudaMemcpyAsync((char *) tensor->data + offset, data, size, cudaMemcpyHostToDevice, cudaStreamPerThread));
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+
+    ggml_cuda_maybe_build_f16_shadow(ctx, buffer, tensor, offset, size);
 }
 
 static void ggml_backend_cuda_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
@@ -853,6 +975,16 @@ static size_t ggml_backend_cuda_buffer_type_get_alloc_size(ggml_backend_buffer_t
         if (ne0 % MATRIX_ROW_PADDING != 0) {
             GGML_ASSERT(tensor->nb[0] == ggml_element_size(tensor));
             size += ggml_row_size(tensor->type, MATRIX_ROW_PADDING - ne0 % MATRIX_ROW_PADDING);
+        }
+    }
+
+    // K-dimension cache-line padding: reserve the padded per-row stride for weight matrices.
+    if (ggml_cuda_should_pad_weight(tensor)) {
+        const size_t   padded_nb1 = ggml_cuda_padded_nb1(tensor);
+        const int64_t  nrows      = tensor->ne[1] * tensor->ne[2] * tensor->ne[3];
+        const size_t   padded_sz  = padded_nb1 * nrows;
+        if (padded_sz > size) {
+            size = padded_sz;
         }
     }
 
@@ -1370,7 +1502,25 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
     bool is_src0_cont_2 = ggml_is_contiguous_2(src0);
     bool is_src1_cont_2 = ggml_is_contiguous_2(src1);
 
-    if (src0->type == compute_type) {
+    bool src0_cached = false;
+    if constexpr (compute_type == GGML_TYPE_F16) {
+        // GGML_PREFILL_DEQUANT: consume the persistent f16 shadow built once at load time
+        // (ggml_cuda_maybe_build_f16_shadow), instead of dequantizing on every call. Dense 2D
+        // weights only; view_src != nullptr excludes mul_mat_id expert slices.
+        if (ggml_is_quantized(src0->type) && src0->view_src == nullptr
+                && src0->extra != nullptr && ne02 == 1 && ne03 == 1) {
+            const ggml_cuda_f16_shadow * sh = (const ggml_cuda_f16_shadow *) src0->extra;
+            src0_ptr = (const cuda_t *) sh->ptr;
+            s01 = sh->lda;
+            s02 = ne01*s01;
+            s03 = ne02*s02;
+            src0_cached = true;
+        }
+    }
+
+    if (src0_cached) {
+        // src0_ptr / strides already set from the load-time f16 shadow
+    } else if (src0->type == compute_type) {
         src0_ptr = (const cuda_t *) src0->data;
     } else {
         src0_alloc.alloc(ggml_nelements(src0));
@@ -1759,6 +1909,19 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     const int cc        = ggml_cuda_info().devices[ctx.device].cc;
     const int warp_size = ggml_cuda_info().devices[ctx.device].warp_size;
 
+    // GGML_PREFILL_DEQUANT=<min_tokens>: for large-batch (prefill) quantized GEMMs that have a
+    // load-time f16 shadow (ggml_cuda_maybe_build_f16_shadow), skip MMQ/MMVQ and fall through to
+    // the hipBLAS path, which consumes the shadow (see ggml_cuda_mul_mat_cublas_impl). Weights
+    // without a shadow (e.g. mul_mat_id expert slices) stay on MMQ.
+    static const int prefill_dequant_min = [] {
+        const char * env = getenv("GGML_PREFILL_DEQUANT");
+        if (env == nullptr) return 0;
+        const int v = atoi(env);
+        return v > 1 ? v : 32;
+    }();
+    const bool prefill_dequant = prefill_dequant_min > 0 && ggml_is_quantized(src0->type)
+        && ne11 >= prefill_dequant_min && src0->view_src == nullptr && src0->extra != nullptr;
+
     if (ggml_cuda_should_use_mmvf(src0->type, cc, src0->ne, src0->nb, ne11)) {
         // The custom F16 vector kernel can be used over batched cuBLAS GEMM.
         // But this is only faster for GPUs without tensor cores or with a thin src0 matrix (particularly KQV in attention)
@@ -1790,11 +1953,11 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         ggml_cuda_mul_mat_f(ctx, src0, src1, nullptr, dst);
         return;
     }
-    if (ggml_cuda_should_use_mmvq(src0->type, cc, ne11)) {
+    if (!prefill_dequant && ggml_cuda_should_use_mmvq(src0->type, cc, ne11)) {
         ggml_cuda_mul_mat_vec_q(ctx, src0, src1, nullptr, dst);
         return;
     }
-    if (ggml_cuda_should_use_mmq(src0->type, cc, ne11, /*n_experts =*/ 0)) {
+    if (!prefill_dequant && ggml_cuda_should_use_mmq(src0->type, cc, ne11, /*n_experts =*/ 0)) {
         ggml_cuda_mul_mat_q(ctx, src0, src1, nullptr, dst);
         return;
     }

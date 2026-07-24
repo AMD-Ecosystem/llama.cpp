@@ -177,6 +177,15 @@ static int ggml_cuda_highest_compiled_arch(const int arch) {
 
 #define GGML_CUDA_MAX_STREAMS 8
 
+// True when each row is internally contiguous and the higher dimensions are tightly nested,
+// while the row stride nb[1] may exceed the packed row size. Such a tensor can be fed to a
+// strided GEMM (leading dimension = nb[1] / type_size) without repacking to contiguous.
+static inline bool ggml_cuda_is_contiguous_rows(const ggml_tensor * t) {
+    return t->nb[0] == ggml_type_size(t->type)
+        && t->nb[2] == t->nb[1]*t->ne[1]
+        && t->nb[3] == t->nb[2]*t->ne[2];
+}
+
 [[noreturn]]
 void ggml_cuda_error(const char * stmt, const char * func, const char * file, int line, const char * msg);
 
