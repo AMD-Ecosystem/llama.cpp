@@ -11,7 +11,7 @@ llama.cpp on ROCm installation
 System requirements
 ====================================================================
 
-To use llama.cpp `b6652 <https://github.com/ROCm/llama.cpp/tree/release/b6652>`__, you need the following prerequisites:
+To use llama.cpp `b6652 <https://github.com/AMD-Ecosystem/llama.cpp/tree/release/b6652>`__, you need the following prerequisites:
 
 - **ROCm version:** `7.0.0 <https://rocm.docs.amd.com/en/docs-7.0.0/>`__
 - **Operating system:** Ubuntu 24.04, 22.04
@@ -273,11 +273,11 @@ Once inside the Docker container, run the following steps:
       apt-get update && apt-get install -y nano libcurl4-openssl-dev cmake git
       mkdir -p /workspace && cd /workspace
 
-4. Clone the `https://github.com/ROCm/llama.cpp <https://github.com/ROCm/llama.cpp>`__ repository:
+4. Clone the `https://github.com/AMD-Ecosystem/llama.cpp <https://github.com/AMD-Ecosystem/llama.cpp>`__ repository:
 
    .. code-block:: bash
 
-      git clone https://github.com/ROCm/llama.cpp
+      git clone https://github.com/AMD-Ecosystem/llama.cpp
       cd llama.cpp
 
 5. Set your ROCm architecture:
