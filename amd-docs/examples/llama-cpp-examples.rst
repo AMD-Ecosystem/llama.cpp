@@ -8,7 +8,7 @@
 Run a llama.cpp example
 ********************************************************************
 
-The `https://github.com/ROCm/llama.cpp <https://github.com/ROCm/llama.cpp>`__ repository provides the necessary examples that exercise the functionality of your
+The `https://github.com/AMD-Ecosystem/llama.cpp <https://github.com/AMD-Ecosystem/llama.cpp>`__ repository provides the necessary examples that exercise the functionality of your
 framework.
 
 You can also search for llama.cpp examples on the `AMD ROCm blog <https://rocm.blogs.amd.com/>`_, 
