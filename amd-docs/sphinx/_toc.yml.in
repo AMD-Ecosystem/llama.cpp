@@ -26,7 +26,7 @@ subtrees:
   entries:
   - url: https://rocm.blogs.amd.com/artificial-intelligence/coding-agent/README.html
     title: ROCm llama.cpp blog
-  - url: https://github.com/ROCm/llama.cpp/blob/master/CONTRIBUTING.md
+  - url: https://github.com/AMD-Ecosystem/llama.cpp/blob/master/CONTRIBUTING.md
     title: Contribute to llama.cpp
   - file: about/license.rst
     title: License

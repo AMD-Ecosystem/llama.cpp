@@ -22,10 +22,10 @@ to accelerate inference and reduce memory usage. Originally built as a CPU-first
 llama.cpp is easy to integrate with other programming environments and is widely 
 adopted across diverse platforms, including consumer devices.
 
-llama.cpp is part of the `ROCm-LLMExt toolkit
+llama.cpp is part of the `AMD LLM Extension toolkit
 <https://rocm.docs.amd.com/projects/rocm-llmext/en/docs-25.09/>`__.
 
-The llama.cpp public repository is located at `https://github.com/ROCm/llama.cpp <https://github.com/ROCm/llama.cpp>`__.
+The llama.cpp public repository is located at `https://github.com/AMD-Ecosystem/llama.cpp <https://github.com/AMD-Ecosystem/llama.cpp>`__.
 
 .. grid:: 2
   :gutter: 3
@@ -43,6 +43,6 @@ The llama.cpp public repository is located at `https://github.com/ROCm/llama.cpp
       * `API reference (upstream) <https://llama-cpp-python.readthedocs.io/en/latest/api-reference/>`__
 
 To contribute to the documentation, refer to
-`Contributing to ROCm <https://rocm.docs.amd.com/en/latest/contribute/contributing.html>`_.
+`Contributing to llama.cpp <https://github.com/AMD-Ecosystem/llama.cpp/blob/master/CONTRIBUTING.md>`__.
 
 You can find licensing information on the :doc:`Licensing <about/license>` page.
