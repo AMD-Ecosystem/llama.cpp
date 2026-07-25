@@ -239,8 +239,8 @@ static __global__ void mul_mat_vec_dq_q4_K(
 
 #pragma unroll
         for (int n = 0; n < num_rows; ++n) {
-            if (first_row + n >= nrows_x) break;
-            const block_q4_K * b = &x[(int64_t) (first_row + n) * nblocks + i];
+            const int row = min(first_row + n, nrows_x - 1);
+            const block_q4_K * b = &x[(int64_t) row * nblocks + i];
             sumf[n] += dq_dot_q4_K(b, g.q_offset, g.v_im, by10, by132, by20, by232, sum10, sum32, sum20, sum42);
         }
     }
@@ -285,8 +285,8 @@ static __global__ void mul_mat_vec_dq_glu_q4_K(
 
 #pragma unroll
         for (int n = 0; n < num_rows; ++n) {
-            if (first_row + n >= nrows_x) break;
-            const int64_t off = (int64_t) (first_row + n) * nblocks + i;
+            const int row = min(first_row + n, nrows_x - 1);
+            const int64_t off = (int64_t) row * nblocks + i;
             up[n]   += dq_dot_q4_K(&xu[off], g.q_offset, g.v_im, by10, by132, by20, by232, sum10, sum32, sum20, sum42);
             gate[n] += dq_dot_q4_K(&xg[off], g.q_offset, g.v_im, by10, by132, by20, by232, sum10, sum32, sum20, sum42);
         }
@@ -352,8 +352,8 @@ static __global__ void mul_mat_vec_dq_q5_K(
 
 #pragma unroll
         for (int n = 0; n < num_rows; ++n) {
-            if (first_row + n >= nrows_x) break;
-            const block_q5_K * b = &x[(int64_t) (first_row + n) * nblocks + i];
+            const int row = min(first_row + n, nrows_x - 1);
+            const block_q5_K * b = &x[(int64_t) row * nblocks + i];
             sumf[n] += dq_dot_q5_K(b, g.q_offset, g.l0, g.v_im, DQ_Q5_K_ARGS);
         }
     }
@@ -388,8 +388,8 @@ static __global__ void mul_mat_vec_dq_glu_q5_K(
 
 #pragma unroll
         for (int n = 0; n < num_rows; ++n) {
-            if (first_row + n >= nrows_x) break;
-            const int64_t off = (int64_t) (first_row + n) * nblocks + i;
+            const int row = min(first_row + n, nrows_x - 1);
+            const int64_t off = (int64_t) row * nblocks + i;
             up[n]   += dq_dot_q5_K(&xu[off], g.q_offset, g.l0, g.v_im, DQ_Q5_K_ARGS);
             gate[n] += dq_dot_q5_K(&xg[off], g.q_offset, g.l0, g.v_im, DQ_Q5_K_ARGS);
         }
@@ -441,8 +441,8 @@ static __global__ void mul_mat_vec_dq_q6_K(
 
 #pragma unroll
         for (int n = 0; n < num_rows; ++n) {
-            if (first_row + n >= nrows_x) break;
-            const block_q6_K * b = &x[(int64_t) (first_row + n) * nblocks + i];
+            const int row = min(first_row + n, nrows_x - 1);
+            const block_q6_K * b = &x[(int64_t) row * nblocks + i];
             sumf[n] += dq_dot_q6_K(b, g.ql_offset, g.qh_offset, g.s_offset, by0, by32, by64, by96);
         }
     }
@@ -480,8 +480,8 @@ static __global__ void mul_mat_vec_dq_glu_q6_K(
 
 #pragma unroll
         for (int n = 0; n < num_rows; ++n) {
-            if (first_row + n >= nrows_x) break;
-            const int64_t off = (int64_t) (first_row + n) * nblocks + i;
+            const int row = min(first_row + n, nrows_x - 1);
+            const int64_t off = (int64_t) row * nblocks + i;
             up[n]   += dq_dot_q6_K(&xu[off], g.ql_offset, g.qh_offset, g.s_offset, by0, by32, by64, by96);
             gate[n] += dq_dot_q6_K(&xg[off], g.ql_offset, g.qh_offset, g.s_offset, by0, by32, by64, by96);
         }
