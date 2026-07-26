@@ -267,6 +267,48 @@ static __global__ void mul_mat_vec_dq_glu_q4_K(
     const block_q4_K * xu = (const block_q4_K *) vx_up;
     const block_q4_K * xg = (const block_q4_K *) vx_gate;
 
+    if (num_rows >= 8) {
+        // Two-pass: one accumulator array at a time keeps register pressure at
+        // plain-kernel levels. up is reduced and stashed in dst, then pass 2
+        // computes gate and combines. Weights are still read once each; only the
+        // small activation vector y is re-read. Avoids the single-pass VGPR spill.
+        for (int pass = 0; pass < 2; ++pass) {
+            const block_q4_K * xw = pass == 0 ? xu : xg;
+            float acc[num_rows];
+#pragma unroll
+            for (int n = 0; n < num_rows; ++n) acc[n] = 0.0f;
+
+            for (int i = g.ix; i < nblocks; i += it_size) {
+                const float * yb = y + (int64_t) i * QK_K;
+                const float4 by10  = *(const float4 *) (yb + g.y_offset      );
+                const float4 by132 = *(const float4 *) (yb + g.y_offset +  32);
+                const float4 by20  = *(const float4 *) (yb + g.y_offset + 128);
+                const float4 by232 = *(const float4 *) (yb + g.y_offset + 160);
+
+                const float sum10 = by10.x  + by10.y  + by10.z  + by10.w;
+                const float sum32 = by132.x + by132.y + by132.z + by132.w;
+                const float sum20 = by20.x  + by20.y  + by20.z  + by20.w;
+                const float sum42 = by232.x + by232.y + by232.z + by232.w;
+
+#pragma unroll
+                for (int n = 0; n < num_rows; ++n) {
+                    const int row = min(first_row + n, nrows_x - 1);
+                    acc[n] += dq_dot_q4_K(&xw[(int64_t) row * nblocks + i], g.q_offset, g.v_im, by10, by132, by20, by232, sum10, sum32, sum20, sum42);
+                }
+            }
+
+#pragma unroll
+            for (int n = 0; n < num_rows; ++n) {
+                const float r = warp_reduce_sum<warp_size>(acc[n]);
+                if (threadIdx.x == 0 && first_row + n < nrows_x) {
+                    if (pass == 0) dst[first_row + n] = r;
+                    else           dst[first_row + n] = ggml_cuda_op_silu_single(r) * dst[first_row + n];
+                }
+            }
+        }
+        return;
+    }
+
     float up[num_rows], gate[num_rows];
 #pragma unroll
     for (int n = 0; n < num_rows; ++n) { up[n] = 0.0f; gate[n] = 0.0f; }
@@ -378,6 +420,40 @@ static __global__ void mul_mat_vec_dq_glu_q5_K(
     const block_q5_K * xu = (const block_q5_K *) vx_up;
     const block_q5_K * xg = (const block_q5_K *) vx_gate;
 
+    if (num_rows >= 8) {
+        // Two-pass: one accumulator array at a time keeps register pressure at
+        // plain-kernel levels. up is reduced and stashed in dst, then pass 2
+        // computes gate and combines. Weights are still read once each; only the
+        // small activation vector y is re-read. Avoids the single-pass VGPR spill.
+        for (int pass = 0; pass < 2; ++pass) {
+            const block_q5_K * xw = pass == 0 ? xu : xg;
+            float acc[num_rows];
+#pragma unroll
+            for (int n = 0; n < num_rows; ++n) acc[n] = 0.0f;
+
+            for (int i = g.ix; i < nblocks; i += it_size) {
+                const float * yb = y + (int64_t) i * QK_K;
+                DQ_Q5_K_LOAD_ACT();
+
+#pragma unroll
+                for (int n = 0; n < num_rows; ++n) {
+                    const int row = min(first_row + n, nrows_x - 1);
+                    acc[n] += dq_dot_q5_K(&xw[(int64_t) row * nblocks + i], g.q_offset, g.l0, g.v_im, DQ_Q5_K_ARGS);
+                }
+            }
+
+#pragma unroll
+            for (int n = 0; n < num_rows; ++n) {
+                const float r = warp_reduce_sum<warp_size>(acc[n]);
+                if (threadIdx.x == 0 && first_row + n < nrows_x) {
+                    if (pass == 0) dst[first_row + n] = r;
+                    else           dst[first_row + n] = ggml_cuda_op_silu_single(r) * dst[first_row + n];
+                }
+            }
+        }
+        return;
+    }
+
     float up[num_rows], gate[num_rows];
 #pragma unroll
     for (int n = 0; n < num_rows; ++n) { up[n] = 0.0f; gate[n] = 0.0f; }
@@ -466,6 +542,43 @@ static __global__ void mul_mat_vec_dq_glu_q6_K(
     const dq_geom_q6_K g = dq_setup_q6_K(threadIdx.x);
     const block_q6_K * xu = (const block_q6_K *) vx_up;
     const block_q6_K * xg = (const block_q6_K *) vx_gate;
+
+    if (num_rows >= 8) {
+        // Two-pass: one accumulator array at a time keeps register pressure at
+        // plain-kernel levels. up is reduced and stashed in dst, then pass 2
+        // computes gate and combines. Weights are still read once each; only the
+        // small activation vector y is re-read. Avoids the single-pass VGPR spill.
+        for (int pass = 0; pass < 2; ++pass) {
+            const block_q6_K * xw = pass == 0 ? xu : xg;
+            float acc[num_rows];
+#pragma unroll
+            for (int n = 0; n < num_rows; ++n) acc[n] = 0.0f;
+
+            for (int i = g.ix; i < nblocks; i += it_size) {
+                const float * yb = y + (int64_t) i * QK_K;
+                const float4 by0  = *(const float4 *) (yb + g.y_offset      );
+                const float4 by32 = *(const float4 *) (yb + g.y_offset +  32);
+                const float4 by64 = *(const float4 *) (yb + g.y_offset +  64);
+                const float4 by96 = *(const float4 *) (yb + g.y_offset +  96);
+
+#pragma unroll
+                for (int n = 0; n < num_rows; ++n) {
+                    const int row = min(first_row + n, nrows_x - 1);
+                    acc[n] += dq_dot_q6_K(&xw[(int64_t) row * nblocks + i], g.ql_offset, g.qh_offset, g.s_offset, by0, by32, by64, by96);
+                }
+            }
+
+#pragma unroll
+            for (int n = 0; n < num_rows; ++n) {
+                const float r = warp_reduce_sum<warp_size>(acc[n]);
+                if (threadIdx.x == 0 && first_row + n < nrows_x) {
+                    if (pass == 0) dst[first_row + n] = r;
+                    else           dst[first_row + n] = ggml_cuda_op_silu_single(r) * dst[first_row + n];
+                }
+            }
+        }
+        return;
+    }
 
     float up[num_rows], gate[num_rows];
 #pragma unroll
