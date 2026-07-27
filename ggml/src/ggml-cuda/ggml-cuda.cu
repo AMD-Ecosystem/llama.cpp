@@ -3884,6 +3884,16 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                 stream_ctx.concurrent_events.clear();
             }
 
+            // Node -> index in the final (post-restore) execution order. Used to cap the op-fusion
+            // horizon at a concurrent region's join node (see the try_fuse call below).
+            std::unordered_map<const ggml_tensor *, int> exec_node_idx;
+            if (should_launch_concurrent_events) {
+                exec_node_idx.reserve(cgraph->n_nodes);
+                for (int j = 0; j < cgraph->n_nodes; ++j) {
+                    exec_node_idx[cgraph->nodes[j]] = j;
+                }
+            }
+
             for (int i = 0; i < cgraph->n_nodes; i++) {
                 ggml_tensor * node = cgraph->nodes[i];
                 if (is_concurrent_event_active) {
@@ -3934,7 +3944,39 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                 ggml_cuda_roofline_begin_op(node, (void *) cuda_ctx->stream());
 #endif
 
+                // Op-fusion must not cross a concurrent region's join node. An add-family fusion
+                // (mul_mat+bias or multi-add) could otherwise absorb the join =
+                // ggml_add(ffn_moe_out, ffn_shexp) as a fused-in successor of an earlier op; the
+                // executor would then advance i past the join, the join handler above would never
+                // run, the forked aux stream would be left unjoined, and cudaStreamEndCapture would
+                // abort with "capturing stream has unjoined work".
+                //
+                // While a region is active, cap the fusion horizon at the join node's index by
+                // temporarily lowering cgraph->n_nodes: ggml_can_fuse's only use of n_nodes is a
+                // bounds check, so any candidate fusion reaching index >= join is rejected and the
+                // join stays standalone. use_counts are independent of n_nodes, so fusions that stay
+                // inside the region are unaffected. This is robust to new fusion patterns because
+                // they all gate on ggml_can_fuse.
+                int join_idx = -1;
+                if (is_concurrent_event_active) {
+                    auto it = exec_node_idx.find(concurrent_event->join_node);
+                    if (it != exec_node_idx.end()) {
+                        join_idx = it->second;
+                    }
+                }
+
+                const int saved_n_nodes = cgraph->n_nodes;
+                if (join_idx > i) {
+                    cgraph->n_nodes = join_idx;
+                }
                 int nodes_to_skip = ggml_cuda_try_fuse(cuda_ctx, cgraph, i);
+                cgraph->n_nodes = saved_n_nodes;
+
+                // Safety net: the cap above should make this impossible, but if a future fusion
+                // pattern ever bypasses ggml_can_fuse's bounds check and still crosses the join,
+                // fail loudly here instead of with a cryptic capture-time "unjoined work" abort.
+                GGML_ASSERT(!(join_idx > i && join_idx <= i + nodes_to_skip) &&
+                            "op-fusion crossed a concurrent-region join node");
 
                 if (nodes_to_skip != 0) {
 #ifdef GGML_HIP_ROOFLINE
