@@ -2508,7 +2508,7 @@ static bool ggml_backend_hrx_load_catalog_provider(
 
     hrx_executable_t executable = nullptr;
     if (!GGML_HRX_CHECK(hrx_executable_load_data(
-            device_context->device, entry->data, entry->data_size, entry->format, &executable))) {
+            device_context->device, entry->data, entry->data_size, "amdgpu", entry->gfx_target, &executable))) {
         GGML_LOG_WARN("%s: failed to load HRX catalog kernel %s for %s\n", __func__, entry->name, gfx_target);
         return false;
     }
