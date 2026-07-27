@@ -8019,6 +8019,7 @@ struct mmq_test_shape {
 };
 
 static constexpr ggml_type rdna35_mmq_types[] = {
+    GGML_TYPE_Q1_0,
     GGML_TYPE_Q4_0,
     GGML_TYPE_Q4_1,
     GGML_TYPE_Q5_0,
