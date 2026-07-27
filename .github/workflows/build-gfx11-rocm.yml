@@ -18,7 +18,7 @@ on:
         required: false
         default: ''
       create_release:
-        description: 'Publish/refresh the per-variant rolling GitHub Release. Set true only for cron dispatches.'
+        description: 'Publish a dated per-variant GitHub Release (<base>-YYYYMMDD). Set true only for cron dispatches.'
         required: false
         default: 'false'
       roofline:
@@ -26,10 +26,12 @@ on:
         required: false
         default: 'true'
 
-# Three build variants (see the `setup` job matrix):
-#   A  gfx11  + latest nightly ROCm  -> rolling tag gfx11-rocm-nightly  (nightly)
-#   B  master + 7.14 release ROCm    -> rolling tag master-rocm-714     (weekly)
-#   C  gfx11  + 7.14 release ROCm    -> rolling tag gfx11-rocm-714      (weekly)
+# Three build variants (see the `setup` job matrix). Each publishes a DATED,
+# persistent release tag (<base>-YYYYMMDD) so older builds stay downloadable for
+# issue repro; prune old releases manually if storage becomes a concern.
+#   A  gfx11  + latest nightly ROCm  -> gfx11-rocm-nightly-YYYYMMDD  (nightly)
+#   B  master + 7.14 release ROCm    -> master-rocm-714-YYYYMMDD     (weekly)
+#   C  gfx11  + 7.14 release ROCm    -> gfx11-rocm-714-YYYYMMDD      (weekly)
 #
 # ROCm channels resolve against TheRock's multiarch tarball host:
 #   latest -> highest therock-dist-linux-multiarch-*.tar.gz overall (7.15 nightly today)
@@ -67,13 +69,16 @@ jobs:
         # Variant definitions. ref="" means "the ref that triggered this run"
         # (used for push/PR so CI builds the pushed code, not gfx11 tip).
         # rocm_channel is overridden wholesale when ROCM_OVERRIDE is set.
+        # Each variant publishes a DATED, persistent release tag (<base>-YYYYMMDD)
+        # so older nightlies stay reproducible; prune manually if storage grows.
+        d="$(date -u +%Y%m%d)"
         a_ch="latest"; b_ch="7.14"; c_ch="7.14"
         if [ -n "$ROCM_OVERRIDE" ]; then
           a_ch="$ROCM_OVERRIDE"; b_ch="$ROCM_OVERRIDE"; c_ch="$ROCM_OVERRIDE"
         fi
-        A="{\"variant\":\"A\",\"ref\":\"\",\"rocm_channel\":\"$a_ch\",\"tag\":\"gfx11-rocm-nightly\"}"
-        B="{\"variant\":\"B\",\"ref\":\"master\",\"rocm_channel\":\"$b_ch\",\"tag\":\"master-rocm-714\"}"
-        C="{\"variant\":\"C\",\"ref\":\"gfx11\",\"rocm_channel\":\"$c_ch\",\"tag\":\"gfx11-rocm-714\"}"
+        A="{\"variant\":\"A\",\"ref\":\"\",\"rocm_channel\":\"$a_ch\",\"tag\":\"gfx11-rocm-nightly-$d\"}"
+        B="{\"variant\":\"B\",\"ref\":\"master\",\"rocm_channel\":\"$b_ch\",\"tag\":\"master-rocm-714-$d\"}"
+        C="{\"variant\":\"C\",\"ref\":\"gfx11\",\"rocm_channel\":\"$c_ch\",\"tag\":\"gfx11-rocm-714-$d\"}"
 
         if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
           case "$BUILD_SET" in
@@ -712,7 +717,7 @@ jobs:
       contents: write
     strategy:
       fail-fast: false
-      # Each variant publishes to its own rolling tag independently.
+      # Each variant publishes to its own dated tag independently.
       matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
     # Publish only on cron/dispatch that sets create_release=true. Push/PR never
     # release. Require the build to succeed. NOTE: the gfx1151 hardware-test gate
@@ -748,7 +753,7 @@ jobs:
         done < "$meta"
         echo "=== build-meta.txt ==="; cat "$meta"
 
-    - name: Package rolling archive
+    - name: Package release archive
       run: |
         TAG="${{ matrix.tag }}"
         archive="llama-${TAG}-ubuntu-rocm-multiarch-x64"
@@ -757,7 +762,7 @@ jobs:
         tar -czf "${archive}.tar.gz" -C ./artifact .
         ls -la *.tar.gz
 
-    - name: Publish / refresh rolling release
+    - name: Publish dated release
       env:
         GITHUB_TOKEN: ${{ github.token }}
         TAG: ${{ matrix.tag }}
@@ -766,10 +771,12 @@ jobs:
         BUILT_SHA: ${{ steps.meta.outputs.llamacpp_commit_sha }}
         SRC_REF: ${{ matrix.ref }}
       run: |
-        # Rolling tag: delete the old release + its git tag, then recreate at the
-        # exact commit this variant built, so the tag always points at the newest.
+        # Dated, persistent tag (<base>-YYYYMMDD): older builds stay downloadable
+        # for issue repro; prune manually if storage becomes a concern. If a same-
+        # day tag already exists (a re-run), replace it so the day reflects the
+        # latest build at the exact commit this variant built.
         if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-          echo "Deleting existing release/tag $TAG (rolling)"
+          echo "Deleting existing same-day release/tag $TAG (re-run)"
           gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
         fi
 
@@ -780,7 +787,7 @@ jobs:
           --repo "$GITHUB_REPOSITORY" \
           --target "$BUILT_SHA" \
           --title "$TAG" \
-          --notes "**Rolling build**: $TAG (updated each run; always the newest)
+          --notes "**Dated build**: $TAG (persistent; prune manually)
         **OS**: ubuntu
         **GPU Target(s)**: gfx1100, gfx1101, gfx1102, gfx1103, gfx1150, gfx1151, gfx1152, gfx1153 (single multiarch binary)
         **Source ref**: $display_ref
