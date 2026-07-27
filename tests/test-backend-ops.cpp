@@ -8012,28 +8012,73 @@ static const ggml_type other_types[] = {
     GGML_TYPE_BF16,
 };
 
-// RDNA3.5 MMQ prefill shapes (PR #32, gfx1151). Shared by eval (correctness) and perf suites.
-static void add_rdna35_mmq_prefill_cases(std::vector<std::unique_ptr<test_case>> & test_cases) {
-    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 12288, 128, 4096, {1, 1}, {1, 1}));
+struct mmq_test_shape {
+    int64_t m;
+    int64_t n;
+    int64_t k;
+};
+
+static constexpr ggml_type rdna35_mmq_types[] = {
+    GGML_TYPE_Q4_0,
+    GGML_TYPE_Q4_1,
+    GGML_TYPE_Q5_0,
+    GGML_TYPE_Q5_1,
+    GGML_TYPE_Q8_0,
+    GGML_TYPE_Q2_K,
+    GGML_TYPE_Q3_K,
+    GGML_TYPE_Q4_K,
+    GGML_TYPE_Q5_K,
+    GGML_TYPE_Q6_K,
+    GGML_TYPE_IQ1_S,
+    GGML_TYPE_IQ2_XXS,
+    GGML_TYPE_IQ2_XS,
+    GGML_TYPE_IQ2_S,
+    GGML_TYPE_IQ3_XXS,
+    GGML_TYPE_IQ3_S,
+    GGML_TYPE_IQ4_XS,
+    GGML_TYPE_IQ4_NL,
+    GGML_TYPE_MXFP4,
+    GGML_TYPE_NVFP4,
+};
+
+static constexpr mmq_test_shape rdna35_mmq_shapes[] = {
+    { 4096,   1,  4096 },
+    { 4096,   4,  4096 },
+    { 1024, 128,  4096 },
+    { 4096, 128,  4096 },
+    { 8192, 128,  4096 },
+    {12288, 128,  4096 },
+    { 4096,   1, 14336 },
+    { 4096,   2, 14336 },
+    { 4096,   3, 14336 },
+    { 4096,   4, 14336 },
+    { 4096,   5, 14336 },
+    { 4096,   8, 14336 },
+    { 4096, 512, 14336 },
+};
+
+// RDNA3.5 MMQ production shapes (gfx1151). Shared by eval (correctness) and perf suites.
+static void add_rdna35_mmq_cases(std::vector<std::unique_ptr<test_case>> & test_cases) {
+    for (const ggml_type type : rdna35_mmq_types) {
+        for (const mmq_test_shape & shape : rdna35_mmq_shapes) {
+            test_cases.emplace_back(
+                new test_mul_mat(type, GGML_TYPE_F32, shape.m, shape.n, shape.k, {1, 1}, {1, 1}));
+        }
+    }
+
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K, GGML_TYPE_F32, 4096, 128, 12288, {1, 1}, {1, 1}));
-    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 4096, 128, 4096, {1, 1}, {1, 1}));
-    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 8192, 128, 4096, {1, 1}, {1, 1}));
-    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K, GGML_TYPE_F32, 1024, 128, 4096, {1, 1}, {1, 1}));
-    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 1024, 128, 4096, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 32, 128, 4096, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 32, 128, 4096, {1, 1}, {1, 1}));
     for (int64_t gate_n : {8, 16, 64}) {
         test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, gate_n, 128, 4096, {1, 1}, {1, 1}));
         test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, gate_n, 128, 4096, {1, 1}, {1, 1}));
     }
-    for (int64_t m : {1, 4, 128}) {
-        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 4096, m, 4096, {1, 1}, {1, 1}));
-    }
-    for (int64_t n : {22, 32, 128}) {
+    for (int64_t n : {22, 32}) {
         test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 12288, n, 4096, {1, 1}, {1, 1}));
         test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 4096, n, 4096, {1, 1}, {1, 1}));
         test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 4096, n, 12288, {1, 1}, {1, 1}));
     }
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 4096, 128, 12288, {1, 1}, {1, 1}));
 }
 
 #ifdef _MSC_VER
@@ -8852,7 +8897,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 2880, 32, 2880, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_MXFP4, GGML_TYPE_F32, 2880, 32, 2880, {1, 1}, {1, 1}));
 
-    add_rdna35_mmq_prefill_cases(test_cases);
+    add_rdna35_mmq_cases(test_cases);
 
     // single-row f32 weight (m == 1) against a wide activation (n): the second column count sweeps
     // across MMVF_MAX_BATCH_SIZE (8) so both the direct mmvf path (n <= 8) and the CUDA/HIP
@@ -9872,7 +9917,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         }
     }
 
-    add_rdna35_mmq_prefill_cases(test_cases);
+    add_rdna35_mmq_cases(test_cases);
 
     // qwen3-30b-a3b MoE (PR #32 MUL_MAT_ID tile sizing) — Q4_K / Q6_K / Q8_0 already in type_a loop below
     for (int bs : {1, 4, 8, 32, 64, 128, 256, 512}) {
