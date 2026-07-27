@@ -681,13 +681,32 @@ static __device__ __forceinline__ float vec_dot_q1_0_q8_1(
     // Q8_1: 32 elements per block with individual scales
     // iqs selects which of the 4 chunks of 32 elements to process (0-3)
 
-    const float     d1 = bq1_0->d;
-    const int16_t * qs = (const int16_t *) bq1_0->qs + iqs * 2;
+    const float d1 = bq1_0->d;
 
     // Process only the chunk specified by iqs
     const block_q8_1 * bq8_1_chunk = bq8_1 + iqs;
 
     int sumi = 0;
+#if defined(GGML_USE_HIP)
+    const int offset = iqs * 4;
+    const int q = bq1_0->qs[offset + 0] | (bq1_0->qs[offset + 1] << 8) |
+                  (bq1_0->qs[offset + 2] << 16) | (bq1_0->qs[offset + 3] << 24);
+
+#pragma unroll
+    for (int j = 0; j < 8; ++j) {
+        const int shift = j * 4;
+        const int bits4 = (q >> shift) & 0x0F;
+        const int b0 = (bits4 & 0x01) ? 1 : -1;
+        const int b1 = (bits4 & 0x02) ? 1 : -1;
+        const int b2 = (bits4 & 0x04) ? 1 : -1;
+        const int b3 = (bits4 & 0x08) ? 1 : -1;
+        const int v = (b0 & 0xFF) | ((b1 & 0xFF) << 8) | ((b2 & 0xFF) << 16) | ((b3 & 0xFF) << 24);
+        const int u = get_int_b4(bq8_1_chunk->qs, j);
+        sumi = ggml_cuda_dp4a(v, u, sumi);
+    }
+#else
+    const int16_t * qs = (const int16_t *) bq1_0->qs + iqs * 2;
+
 #pragma unroll
     for (int j = 0; j < 2; ++j) {
         const int q  = qs[j];
@@ -716,6 +735,7 @@ static __device__ __forceinline__ float vec_dot_q1_0_q8_1(
         sumi = ggml_cuda_dp4a(v2, u2, sumi);
         sumi = ggml_cuda_dp4a(v3, u3, sumi);
     }
+#endif // defined(GGML_USE_HIP)
 
     // Apply Q1_0's single scale and this chunk's Q8_1 scale
     const float d8 = __low2float(bq8_1_chunk->ds);

@@ -39,9 +39,32 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
         }
 
         const block_q1_0 * bxi = (const block_q1_0 *) x + kbx0 + i*stride + kbx;
-        const int16_t    * qxi = (const int16_t *) bxi->qs + kqsx * 2;
-
         const int dst_offset = kbx*(scale_entries_per_block*QI8_0) + kqsx*QI8_0;
+
+#if defined(GGML_USE_HIP)
+        const int qs_offset = 4*kqsx;
+        const int q = bxi->qs[qs_offset + 0] | (bxi->qs[qs_offset + 1] << 8) |
+                      (bxi->qs[qs_offset + 2] << 16) | (bxi->qs[qs_offset + 3] << 24);
+
+#pragma unroll
+        for (int j = 0; j < 8; ++j) {
+            const int shift = j * 4;
+            const int bits4 = (q >> shift) & 0x0F;
+            const int b0 = (bits4 & 0x01) ? 1 : -1;
+            const int b1 = (bits4 & 0x02) ? 1 : -1;
+            const int b2 = (bits4 & 0x04) ? 1 : -1;
+            const int b3 = (bits4 & 0x08) ? 1 : -1;
+            const int v = (b0 & 0xFF) | ((b1 & 0xFF) << 8) | ((b2 & 0xFF) << 16) | ((b3 & 0xFF) << 24);
+
+#if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
+            x_qs[i*sram_stride + dst_offset + j] = v;
+#else
+            x_qs[i*(2*MMQ_TILE_NE_K + 1) + dst_offset + j] = v;
+#endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
+        }
+#else
+        const int16_t * qxi = (const int16_t *) bxi->qs + kqsx * 2;
+
 #pragma unroll
         for (int j = 0; j < 2; ++j) {
             const int q  = qxi[j];
@@ -72,6 +95,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
             x_qs[i*(2*MMQ_TILE_NE_K + 1) + dst_offset + j*4+3] = v3;
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
         }
+#endif // defined(GGML_USE_HIP)
     }
 
     const int ksx = threadIdx.x % scale_entries_per_row;
