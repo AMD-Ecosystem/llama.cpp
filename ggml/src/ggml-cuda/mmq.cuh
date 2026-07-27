@@ -180,7 +180,7 @@ struct ggml_cuda_mmq_config {
     constexpr __device__ int rows_per_warp() const {
 #if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
 #if defined(RDNA3_5)
-        return J >= 64 ? 32 : 16;
+        return J >= 64 && J % 32 == 0 ? 32 : 16;
 #else
         return 16;
 #endif // defined(RDNA3_5)
