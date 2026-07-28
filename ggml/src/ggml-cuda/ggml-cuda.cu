@@ -34,6 +34,7 @@
 #include "ggml-cuda/im2col.cuh"
 #include "ggml-cuda/mmf.cuh"
 #include "ggml-cuda/mmq.cuh"
+#include "ggml-cuda/mul_mat_f32_tall_skinny.cuh"
 #include "ggml-cuda/mmvf.cuh"
 #include "ggml-cuda/mmvq.cuh"
 #include "ggml-cuda/mmvdq.cuh"
@@ -1785,6 +1786,11 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         dst_vec.nb[2] = dst_vec.nb[1];           // higher dims are 1 -> same stride
         dst_vec.nb[3] = dst_vec.nb[1];
         ggml_cuda_mul_mat_vec_f(ctx, src1, src0, nullptr, &dst_vec);
+        return;
+    }
+    // f32 tall-skinny GEMM for gfx1151 (RDNA3.5): K=2048, N=32.
+    if (ggml_cuda_should_use_mul_mat_f32_tall_skinny(src0, src1, dst, cc)) {
+        ggml_cuda_mul_mat_f32_tall_skinny(ctx, src0, src1, dst);
         return;
     }
     if (ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, ne11, /*mul_mat_id =*/ false)) {
