@@ -1,4 +1,5 @@
 #include "gated_delta_net.cuh"
+#include "gated_delta_net_chunked.cuh"
 #include "ggml-cuda/common.cuh"
 
 template <int S_v, bool KDA, bool keep_rs_t>
@@ -292,6 +293,31 @@ static void ggml_cuda_op_gated_delta_net_impl(
     if (cache != nullptr) {
         state_d           = cache->data;
         state_slot_stride = cache->slot_stride;
+    }
+
+    if (ggml_cuda_gdn_chunked_supported(kda, keep_rs, S_v, n_tokens)) {
+        ggml_cuda_gdn_chunked_args args = {};
+        args.q         = q_d;
+        args.k         = k_d;
+        args.v         = v_d;
+        args.g         = g_d;
+        args.beta      = b_d;
+        args.state_in  = s_d;
+        args.dst       = dst_d;
+        args.state_out = state_d;
+        args.S_v       = S_v;
+        args.H         = H;
+        args.n_tokens  = n_tokens;
+        args.n_seqs    = n_seqs;
+        args.sq1 = sq1; args.sq2 = sq2; args.sq3 = sq3;
+        args.sv1 = sv1; args.sv2 = sv2; args.sv3 = sv3;
+        args.sb1 = sb1; args.sb2 = sb2; args.sb3 = sb3;
+        args.neqk1 = neqk1;
+        args.rq3   = rq3;
+        args.scale = scale;
+
+        ggml_cuda_gdn_chunked(ctx, args);
+        return;
     }
 
     if (kda) {

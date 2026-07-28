@@ -9415,6 +9415,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64,  64, 1, 1, false, true));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64,  33, 1, 1, false, true));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64, 100, 1, 1, false, true));
+    // head_size 128 multi-chunk, incl. GQA (v_repeat > 1), which nothing above covers.
+    // head_count=16 v_repeat=2 is the Qwen3.5 shape: H_k=16, H_v=32.
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32,  8, 128, 256, 1));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32,  8, 128, 520, 1));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 16, 128, 256, 1, 2));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 16, 128, 130, 1, 2));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32,  8, 128, 192, 3, 2, true));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32,  4, 128, 2080, 1, 2));
 
     // K > 1: output keeps the last min(n_tokens, K) per-token snapshots, ordered most-recent-first
     // (slot 0 = final state, slot s = state s tokens back).
