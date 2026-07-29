@@ -61,6 +61,11 @@ file(GLOB   GGML_HEADERS_ROCM "../ggml-cuda/*.cuh")
 list(APPEND GGML_HEADERS_ROCM "../../include/ggml-cuda.h")
 
 file(GLOB   GGML_SOURCES_ROCM "../ggml-cuda/*.cu")
+# The autotuning core instantiates launch_mul_mat_q for every mmq_x; keep it out of normal builds.
+list(FILTER GGML_SOURCES_ROCM EXCLUDE REGEX "mmq-tune\\.cu$")
+if (GGML_MMQ_TUNE)
+    list(APPEND GGML_SOURCES_ROCM ../ggml-cuda/mmq-tune.cu)
+endif()
 file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-tile*.cu")
 list(APPEND GGML_SOURCES_ROCM ${SRCS})
 file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-mma*.cu")
@@ -173,6 +178,18 @@ if (GGML_HIP_ROOFLINE)
     target_include_directories(ggml-hip PRIVATE ${ROCPROFILER_SDK_INCLUDE_DIR})
     target_compile_definitions(ggml-hip PRIVATE GGML_HIP_ROOFLINE)
     target_link_libraries(ggml-hip PRIVATE ${CMAKE_DL_LIBS})
+endif()
+
+if (GGML_MMQ_TUNE)
+    target_compile_definitions(ggml-hip PRIVATE GGML_MMQ_TUNE)
+endif()
+
+# MMQ tile hyperparameters for RDNA3.5, swept by tools/mmq-tune/sweep.py.
+if (GGML_HIP_MMQ_Y)
+    target_compile_definitions(ggml-hip PRIVATE GGML_CUDA_MMQ_Y_RDNA3_5=${GGML_HIP_MMQ_Y})
+endif()
+if (GGML_HIP_MMQ_NWARPS)
+    target_compile_definitions(ggml-hip PRIVATE GGML_CUDA_MMQ_NWARPS_RDNA3_5=${GGML_HIP_MMQ_NWARPS})
 endif()
 
 target_compile_options(ggml-hip PRIVATE "$<$<COMPILE_LANGUAGE:HIP>:-ffast-math;-fno-finite-math-only>")

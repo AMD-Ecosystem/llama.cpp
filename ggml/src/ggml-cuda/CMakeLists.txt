@@ -103,6 +103,11 @@ if (CUDAToolkit_FOUND)
     list(APPEND GGML_HEADERS_CUDA "../../include/ggml-cuda.h")
 
     file(GLOB   GGML_SOURCES_CUDA "*.cu")
+    # The autotuning core instantiates launch_mul_mat_q for every mmq_x; keep it out of normal builds.
+    list(FILTER GGML_SOURCES_CUDA EXCLUDE REGEX "mmq-tune\\.cu$")
+    if (GGML_MMQ_TUNE)
+        list(APPEND GGML_SOURCES_CUDA mmq-tune.cu)
+    endif()
     file(GLOB   SRCS "template-instances/fattn-tile*.cu")
     list(APPEND GGML_SOURCES_CUDA ${SRCS})
     file(GLOB   SRCS "template-instances/fattn-mma*.cu")
