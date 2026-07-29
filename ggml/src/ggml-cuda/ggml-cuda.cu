@@ -761,11 +761,49 @@ static void * ggml_backend_cuda_buffer_get_base(ggml_backend_buffer_t buffer) {
     return ctx->dev_ptr;
 }
 
+#define GGML_CUDA_ROW_ALIAS_STRIDE 2048 // rows of this size, or a multiple of it, map to the same cache sets
+#define GGML_CUDA_ROW_PAD           128 // one cache line, added to the row stride to break the aliasing
+
+// quantized weights are excluded: GGML_CUDA_ROW_PAD is not a multiple of their block size and would
+// misalign the block-indexed matmul kernels
+static bool ggml_cuda_should_pad_weight(const ggml_tensor * tensor, int device) {
+    static const bool padding_disabled = getenv("GGML_CUDA_NO_PAD_WEIGHTS") != nullptr;
+
+    if (padding_disabled || !(tensor->flags & GGML_TENSOR_FLAG_PAD_ROWS)) {
+        return false;
+    }
+
+    if (!GGML_CUDA_CC_IS_RDNA3_5(ggml_cuda_info().devices[device].cc)) {
+        return false;
+    }
+
+    if (tensor->view_src != nullptr || ggml_is_quantized(tensor->type) || tensor->ne[1] <= 1) {
+        return false;
+    }
+
+    return ggml_row_size(tensor->type, tensor->ne[0]) % GGML_CUDA_ROW_ALIAS_STRIDE == 0;
+}
+
+static size_t ggml_cuda_padded_row_size(const ggml_tensor * tensor) {
+    return ggml_row_size(tensor->type, tensor->ne[0]) + GGML_CUDA_ROW_PAD;
+}
+
 static enum ggml_status ggml_backend_cuda_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
 
     if (tensor->view_src != NULL) {
         assert(tensor->view_src->buffer->buft == buffer->buft);
+        return GGML_STATUS_SUCCESS;
+    }
+
+    if (ggml_cuda_should_pad_weight(tensor, ctx->device)) {
+        tensor->nb[1] = ggml_cuda_padded_row_size(tensor);
+        tensor->nb[2] = tensor->nb[1]*tensor->ne[1];
+        tensor->nb[3] = tensor->nb[2]*tensor->ne[2];
+
+        // the gaps between rows are never written, initialize them to 0 to avoid possible NaN values
+        ggml_cuda_set_device(ctx->device);
+        CUDA_CHECK(cudaMemset(tensor->data, 0, ggml_backend_buft_get_alloc_size(buffer->buft, tensor)));
         return GGML_STATUS_SUCCESS;
     }
 
@@ -927,6 +965,11 @@ static size_t ggml_backend_cuda_buffer_type_get_alloc_size(ggml_backend_buffer_t
             GGML_ASSERT(tensor->nb[0] == ggml_element_size(tensor));
             size += ggml_row_size(tensor->type, MATRIX_ROW_PADDING - ne0 % MATRIX_ROW_PADDING);
         }
+    }
+
+    // reserve room for the row stride that ggml_backend_cuda_buffer_init_tensor will assign
+    if (ggml_cuda_should_pad_weight(tensor, buft_ctx->device)) {
+        size = ggml_cuda_padded_row_size(tensor)*ggml_nrows(tensor);
     }
 
     return size;
