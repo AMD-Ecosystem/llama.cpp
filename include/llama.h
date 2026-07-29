@@ -38,6 +38,9 @@
 
 #define LLAMA_TOKEN_NULL -1
 
+// llama_context_params::n_ubatch - let the backend pick the physical batch size
+#define LLAMA_N_UBATCH_AUTO 0xFFFFFFFF
+
 #define LLAMA_FILE_MAGIC_GGLA 0x67676c61u // 'ggla'
 #define LLAMA_FILE_MAGIC_GGSN 0x6767736eu // 'ggsn'
 #define LLAMA_FILE_MAGIC_GGSQ 0x67677371u // 'ggsq'
@@ -340,7 +343,7 @@ extern "C" {
     struct llama_context_params {
         uint32_t n_ctx;             // text context, 0 = from model
         uint32_t n_batch;           // logical maximum batch size that can be submitted to llama_decode
-        uint32_t n_ubatch;          // physical maximum batch size
+        uint32_t n_ubatch;          // physical maximum batch size (LLAMA_N_UBATCH_AUTO = ask the backend)
         uint32_t n_seq_max;         // max number of sequences (i.e. distinct states for recurrent models)
         uint32_t n_rs_seq;          // number of recurrent-state snapshots per seq for rollback (0 = no rollback) [EXPERIMENTAL]
         uint32_t n_outputs_max;     // max outputs in a ubatch (0 = n_batch)

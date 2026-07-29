@@ -229,7 +229,31 @@ llama_context::llama_context(
     // with causal attention, the batch size is limited by the context size
     cparams.n_batch = cparams.causal_attn ? std::min(cparams.n_ctx, params.n_batch) : params.n_batch;
 
-    cparams.n_ubatch = std::min(cparams.n_batch, params.n_ubatch == 0 ? params.n_batch : params.n_ubatch);
+    // LLAMA_N_UBATCH_AUTO: let the devices state a preferred physical batch size. Devices that have
+    // no preference are ignored; if several disagree the smallest preference wins.
+    uint32_t n_ubatch_req = params.n_ubatch;
+    if (n_ubatch_req == LLAMA_N_UBATCH_AUTO) {
+        n_ubatch_req = 512;
+
+        bool have_hint = false;
+        for (const auto & dev : model.devices) {
+            auto * fn = (ggml_backend_get_optimal_ubatch_t) ggml_backend_reg_get_proc_address(
+                    ggml_backend_dev_backend_reg(dev.dev), "ggml_backend_get_optimal_ubatch");
+            if (fn == nullptr) {
+                continue;
+            }
+
+            const uint32_t hint = fn(dev.dev);
+            if (hint == 0) {
+                continue;
+            }
+
+            n_ubatch_req = have_hint ? std::min(n_ubatch_req, hint) : hint;
+            have_hint    = true;
+        }
+    }
+
+    cparams.n_ubatch = std::min(cparams.n_batch, n_ubatch_req == 0 ? params.n_batch : n_ubatch_req);
 
     cparams.n_outputs_max = params.n_outputs_max == 0 || llama_model_has_encoder(&model) ? cparams.n_batch : params.n_outputs_max;
 
@@ -3419,7 +3443,7 @@ llama_context_params llama_context_default_params() {
     llama_context_params result = {
         /*.n_ctx                       =*/ 512,
         /*.n_batch                     =*/ 2048,
-        /*.n_ubatch                    =*/ 512,
+        /*.n_ubatch                    =*/ LLAMA_N_UBATCH_AUTO,
         /*.n_seq_max                   =*/ 1,
         /*.n_rs_seq                    =*/ 0,
         /*.n_outputs_max               =*/ 0,
