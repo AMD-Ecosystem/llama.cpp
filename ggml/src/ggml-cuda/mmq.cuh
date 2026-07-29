@@ -4421,6 +4421,25 @@ static bool mmq_rdna35_dual_wg_eligible(const ggml_type type) {
             return false;
     }
 }
+
+// mmq_x values that measure faster on RDNA3.5 than the width the occupancy rule picks.
+//
+// mmq_x=64 is 6-7x slower than the neighbouring widths for q8_0; the other types stay within
+// 1.05x of their best there and keep it. For MoE the compacted per-expert grid already supplies
+// the parallelism that column tiling supplies for a dense GEMM, so anything above a 32-wide tile
+// only adds padding - q8_0 excepted, whose narrow tiles are slow.
+static int mmq_rdna35_tuned_mmq_x(const ggml_type type, const bool moe, const int mmq_x_occupancy) {
+    if (moe) {
+        if (type == GGML_TYPE_Q8_0) {
+            return mmq_x_occupancy > 32 ? 96 : mmq_x_occupancy;
+        }
+        return mmq_x_occupancy < 32 ? mmq_x_occupancy : 32;
+    }
+    if (mmq_x_occupancy == 64 && type == GGML_TYPE_Q8_0) {
+        return 96;
+    }
+    return mmq_x_occupancy;
+}
 #endif // GGML_USE_HIP
 
 template<ggml_type type>
@@ -4750,6 +4769,17 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
     }
 
     // Q6_K / K-quants narrow-N: dual-WG path (mmq_x=64, ntx=2) from smpbo/2 selection.
+
+    // Keep the occupancy choice whenever the tuned width cannot run this shape.
+    if (GGML_CUDA_CC_IS_RDNA3_5(cc) && mmq_x_best > 0) {
+        const int mmq_x_tuned = mmq_rdna35_tuned_mmq_x(type, args.expert_bounds != nullptr, mmq_x_best);
+
+        if (mmq_x_tuned <= mmq_x_max &&
+            mmq_x_tuned % mmq_get_granularity_host(mmq_x_tuned, cc) == 0 &&
+            mmq_get_nbytes_shared<type>(mmq_x_tuned, mmq_y, cc, warp_size, nwarps) <= smpbo) {
+            mmq_x_best = mmq_x_tuned;
+        }
+    }
 #endif // GGML_USE_HIP
 
     if (getenv("GGML_CUDA_MMQ_DEBUG")) {
