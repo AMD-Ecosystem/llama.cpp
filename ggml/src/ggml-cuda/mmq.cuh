@@ -3884,7 +3884,9 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 
         for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
             {
-                mmq_hip_tile_barrier<mmq_x>();
+                // load_tiles overwrites tile_x, which other warps of this block may still be
+                // reading in the previous iteration's vec_dot.
+                __syncthreads();
                 load_tiles(x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
                 mmq_hip_tile_barrier<mmq_x>();
             }
@@ -3936,7 +3938,9 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
     {
         for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
             {
-                mmq_hip_tile_barrier<mmq_x>();
+                // load_tiles overwrites tile_x, which other warps of this block may still be
+                // reading in the previous iteration's vec_dot.
+                __syncthreads();
                 load_tiles(x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
                 mmq_hip_tile_barrier<mmq_x>();
             }
