@@ -1024,9 +1024,13 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
         bool have_y0_prefetch = false;
 
         for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
-            mmq_hip_tile_barrier<J>();
-            load_tiles(x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
-            mmq_hip_tile_barrier<J>();
+            {
+                // load_tiles overwrites tile_x, which other warps of this block may still be
+                // reading in the previous iteration's vec_dot.
+                __syncthreads();
+                load_tiles(x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
+                mmq_hip_tile_barrier<mmq_x>();
+            }
 
             const int yk = kb0 * qk / ne_block;
             const int * by0 = y + ncols_y * yk * sz;
@@ -1061,9 +1065,13 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 #endif // defined(RDNA3_5)
     {
         for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
-            mmq_hip_tile_barrier<J>();
-            load_tiles(x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
-            mmq_hip_tile_barrier<J>();
+            {
+                // load_tiles overwrites tile_x, which other warps of this block may still be
+                // reading in the previous iteration's vec_dot.
+                __syncthreads();
+                load_tiles(x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
+                mmq_hip_tile_barrier<mmq_x>();
+            }
 
             const int yk = kb0 * qk / ne_block;
             const int * by0 = y + ncols_y * yk * sz;
@@ -1549,6 +1557,62 @@ struct mmq_args {
     int64_t ncols_max;
 };
 
+#if defined(GGML_USE_HIP)
+// RDNA3.5 dual-WG (mmq_x=64, nbytes <= smpbo/2) helps K-quants with large per-tile LDS
+// (Q6_K WMMA tuning). Block quants (Q5_0, Q8_0, Q4_0) and Q4_K prefill are faster at mmq_x=128 ntx=1.
+static bool mmq_rdna35_dual_wg_eligible(const ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// mmq_x values that measure faster on RDNA3.5 than the width the occupancy rule picks.
+//
+// mmq_x=64 is 6-7x slower than the neighbouring widths for q8_0; the other types stay within
+// 1.05x of their best there and keep it. For MoE the compacted per-expert grid already supplies
+// the parallelism that column tiling supplies for a dense GEMM, so anything above a 32-wide tile
+// only adds padding - q8_0 excepted, whose narrow tiles are slow.
+static int mmq_rdna35_tuned_mmq_x(const ggml_type type, const bool moe, const int mmq_x_occupancy) {
+    if (moe) {
+        if (type == GGML_TYPE_Q8_0) {
+            return mmq_x_occupancy > 32 ? 96 : mmq_x_occupancy;
+        }
+        return mmq_x_occupancy < 32 ? mmq_x_occupancy : 32;
+    }
+    if (mmq_x_occupancy == 64 && type == GGML_TYPE_Q8_0) {
+        return 96;
+    }
+    return mmq_x_occupancy;
+}
+#endif // GGML_USE_HIP
+
+template<ggml_type type>
+static size_t mmq_get_nbytes_shared(const int mmq_x, const int mmq_y, const int cc, const int warp_size, const int nwarps) {
+    const tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(type, mmq_y);
+    const int mmq_tile_x_k = mmq_get_mma_tile_x_k(type);
+    const size_t nbs_ids = mmq_x*sizeof(int);
+    const size_t nbs_x = (turing_mma_available(cc) || amd_mfma_available(cc) || amd_wmma_available(cc)) ? mmq_y*mmq_tile_x_k*sizeof(int) : txs.qs*sizeof(int) + txs.dm*sizeof(half2) + txs.sc*sizeof(int);
+    const size_t nbs_y = mmq_x * (sizeof(block_q8_1_mmq));
+#if defined(GGML_USE_HIP)
+    // Q4_K off RDNA3.5 (e.g. gfx11): upstream LDS sizing, not RDNA3.5 padded y-tile layout.
+    if (type == GGML_TYPE_Q4_K && !GGML_CUDA_CC_IS_RDNA3_5(cc)) {
+        return nbs_ids + nbs_x + GGML_PAD(nbs_y, nwarps*warp_size*sizeof(int));
+    }
+#endif
+    const int tile_y_k_padded = mmq_get_tile_y_k_padded_host(mmq_x, cc, warp_size, nwarps);
+    const size_t nbs_y_padded = std::max(nbs_y, (size_t) tile_y_k_padded*sizeof(int));
+    const int pad = GGML_CUDA_CC_IS_RDNA3_5(cc) ? 2*nwarps*warp_size : nwarps*warp_size;
+    size_t nbytes = nbs_ids + nbs_x + GGML_PAD(nbs_y_padded, pad*sizeof(int));
+    return nbytes;
+}
+
+// CUDA/HIP maximum grid.y dimension; bounds the compacted-MoE grid (falls back to the legacy grid above it).
 static constexpr int MMQ_MAX_GRIDDIM_Y = 65535;
 
 static __global__ void mmq_build_moe_block_map(
@@ -1777,6 +1841,30 @@ void mul_mat_q_switch_J(ggml_backend_cuda_context & ctx, const mmq_args & args, 
                 break;
             }
         }
+        if (mmq_x_tiny > 0) {
+            mmq_x_best = mmq_x_tiny;
+        }
+    }
+
+    // Q6_K / K-quants narrow-N: dual-WG path (mmq_x=64, ntx=2) from smpbo/2 selection.
+
+    // Keep the occupancy choice whenever the tuned width cannot run this shape.
+    if (GGML_CUDA_CC_IS_RDNA3_5(cc) && mmq_x_best > 0) {
+        const int mmq_x_tuned = mmq_rdna35_tuned_mmq_x(type, args.expert_bounds != nullptr, mmq_x_best);
+
+        if (mmq_x_tuned <= mmq_x_max &&
+            mmq_x_tuned % mmq_get_granularity_host(mmq_x_tuned, cc) == 0 &&
+            mmq_get_nbytes_shared<type>(mmq_x_tuned, mmq_y, cc, warp_size, nwarps) <= smpbo) {
+            mmq_x_best = mmq_x_tuned;
+        }
+    }
+#endif // GGML_USE_HIP
+
+    if (getenv("GGML_CUDA_MMQ_DEBUG")) {
+        const size_t nbytes_best = mmq_get_nbytes_shared<type>(mmq_x_best, mmq_y, cc, warp_size, nwarps);
+        fprintf(stderr, "MMQ_DEBUG type=%d m=%lld ncols_max=%lld mmq_x_best=%d nbytes=%zu smpbo=%zu ntiles_x=%d\n",
+                (int) type, (long long) args.nrows_x, (long long) args.ncols_max, mmq_x_best, nbytes_best, smpbo,
+                (int) ((args.ncols_max + mmq_x_best - 1) / mmq_x_best));
     }
 #endif
 
