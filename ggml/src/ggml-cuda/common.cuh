@@ -1126,6 +1126,15 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ3_S> {
 
 //////////////////////
 
+// Row-stride padding for matrix multiplication weights. A weight whose packed row size is a
+// multiple of alias_stride puts every row in the same cache sets, so pad bytes are added to the
+// row stride to break the aliasing. Both values follow from the cache geometry (line size times
+// number of sets), which neither CUDA nor HIP report, so they are tabulated per architecture.
+struct ggml_cuda_row_pad_params {
+    size_t alias_stride; // packed row sizes that are a multiple of this alias in the cache
+    size_t pad;          // bytes added to the row stride; 0 disables the padding
+};
+
 struct ggml_cuda_device_info {
     int device_count;           // number of (possibly virtual) devices exposed to the rest of ggml
     int physical_device_count;  // number of physical CUDA devices actually present
@@ -1144,6 +1153,7 @@ struct ggml_cuda_device_info {
         int     physical_device;                // backing physical CUDA device for this (virtual) device
         int     physical_share_count;           // number of (virtual) devices sharing this device's physical GPU
         int     virtual_index;                  // index of this (virtual) device among those sharing its physical GPU
+        ggml_cuda_row_pad_params row_pad;       // weight row-stride padding
     };
 
     cuda_device_info devices[GGML_CUDA_MAX_DEVICES] = {};

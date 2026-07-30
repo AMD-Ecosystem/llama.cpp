@@ -220,6 +220,71 @@ static int ggml_cuda_parse_id(char devName[]) {
 }
 #endif // defined(GGML_USE_HIP)
 
+// Weight row-stride padding per architecture. An architecture is opted in only once the padding
+// has been measured on it; every other one gets {0, 0} and keeps packed rows.
+static ggml_cuda_row_pad_params ggml_cuda_row_pad_params_for(int cc) {
+    if (GGML_CUDA_CC_IS_RDNA3_5(cc)) {
+        return { 2048, 128 }; // one cache line added to rows that alias every 2 KiB
+    }
+
+    return { 0, 0 };
+}
+
+// Returns the environment override for name, or -1 when it is unset or not a number.
+static int64_t ggml_cuda_row_pad_env(const char * name) {
+    const char * val = getenv(name);
+    if (!val || !val[0]) {
+        return -1;
+    }
+
+    char * end = nullptr;
+    const int64_t parsed = strtoll(val, &end, 0);
+    if (*end != '\0' || parsed < 0) {
+        GGML_LOG_WARN("%s: ignoring %s=%s, expected a non-negative integer\n", __func__, name, val);
+        return -1;
+    }
+
+    return parsed;
+}
+
+// Resolves the padding for one device: the architecture default, then the environment overrides,
+// then the sanity checks. Runs once per device so an invalid setting warns once, not per tensor.
+static ggml_cuda_row_pad_params ggml_cuda_resolve_row_pad(int cc) {
+    if (getenv("GGML_CUDA_NO_PAD_WEIGHTS")) {
+        return { 0, 0 };
+    }
+
+    ggml_cuda_row_pad_params params = ggml_cuda_row_pad_params_for(cc);
+
+    const int64_t alias_stride_override = ggml_cuda_row_pad_env("GGML_CUDA_ROW_ALIAS_STRIDE");
+    const int64_t pad_override          = ggml_cuda_row_pad_env("GGML_CUDA_ROW_PAD");
+    if (alias_stride_override >= 0) {
+        params.alias_stride = alias_stride_override;
+    }
+    if (pad_override >= 0) {
+        params.pad = pad_override;
+    }
+
+    if (params.pad == 0) {
+        return { 0, 0 };
+    }
+
+    if (params.alias_stride == 0 || (params.alias_stride & (params.alias_stride - 1)) != 0) {
+        GGML_LOG_WARN("%s: disabling weight row padding, alias stride %zu is not a power of two\n",
+                      __func__, params.alias_stride);
+        return { 0, 0 };
+    }
+
+    // a pad that is itself a multiple of the alias stride leaves the rows aliasing
+    if (params.pad % params.alias_stride == 0) {
+        GGML_LOG_WARN("%s: disabling weight row padding, pad %zu is a multiple of alias stride %zu\n",
+                      __func__, params.pad, params.alias_stride);
+        return { 0, 0 };
+    }
+
+    return params;
+}
+
 static ggml_cuda_device_info ggml_cuda_init() {
     ggml_cuda_device_info info = {};
 
@@ -376,6 +441,8 @@ static ggml_cuda_device_info ggml_cuda_init() {
         }
 
 #endif  // defined(GGML_USE_HIP)
+
+        info.devices[id].row_pad = ggml_cuda_resolve_row_pad(info.devices[id].cc);
     }
 
     if (ggml_cuda_highest_compiled_arch(GGML_CUDA_CC_TURING) >= GGML_CUDA_CC_TURING && !turing_devices_without_mma.empty()) {
@@ -761,11 +828,48 @@ static void * ggml_backend_cuda_buffer_get_base(ggml_backend_buffer_t buffer) {
     return ctx->dev_ptr;
 }
 
+// Quantized weights are excluded: the matmul kernels read the row stride as nb[1]/type_size, an
+// exact division that a pad which is not a multiple of the block size would break.
+static bool ggml_cuda_should_pad_weight(const ggml_tensor * tensor, int device) {
+    const ggml_cuda_row_pad_params & row_pad = ggml_cuda_info().devices[device].row_pad;
+
+    if (row_pad.pad == 0 || !(tensor->flags & GGML_TENSOR_FLAG_PAD_ROWS)) {
+        return false;
+    }
+
+    if (tensor->view_src != nullptr || ggml_is_quantized(tensor->type) || tensor->ne[1] <= 1) {
+        return false;
+    }
+
+    // ggml_cuda_should_use_mmf and ggml_cuda_should_use_mmvf reject a src0 whose strides are not a
+    // multiple of 2*type_size, so a pad that misses this would silently cost those kernels
+    if (row_pad.pad % (2*ggml_type_size(tensor->type)) != 0) {
+        return false;
+    }
+
+    return ggml_row_size(tensor->type, tensor->ne[0]) % row_pad.alias_stride == 0;
+}
+
+static size_t ggml_cuda_padded_row_size(const ggml_tensor * tensor, int device) {
+    return ggml_row_size(tensor->type, tensor->ne[0]) + ggml_cuda_info().devices[device].row_pad.pad;
+}
+
 static enum ggml_status ggml_backend_cuda_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
 
     if (tensor->view_src != NULL) {
         assert(tensor->view_src->buffer->buft == buffer->buft);
+        return GGML_STATUS_SUCCESS;
+    }
+
+    if (ggml_cuda_should_pad_weight(tensor, ctx->device)) {
+        tensor->nb[1] = ggml_cuda_padded_row_size(tensor, ctx->device);
+        tensor->nb[2] = tensor->nb[1]*tensor->ne[1];
+        tensor->nb[3] = tensor->nb[2]*tensor->ne[2];
+
+        // the gaps between rows are never written, initialize them to 0 to avoid possible NaN values
+        ggml_cuda_set_device(ctx->device);
+        CUDA_CHECK(cudaMemset(tensor->data, 0, ggml_backend_buft_get_alloc_size(buffer->buft, tensor)));
         return GGML_STATUS_SUCCESS;
     }
 
@@ -927,6 +1031,11 @@ static size_t ggml_backend_cuda_buffer_type_get_alloc_size(ggml_backend_buffer_t
             GGML_ASSERT(tensor->nb[0] == ggml_element_size(tensor));
             size += ggml_row_size(tensor->type, MATRIX_ROW_PADDING - ne0 % MATRIX_ROW_PADDING);
         }
+    }
+
+    // reserve room for the row stride that ggml_backend_cuda_buffer_init_tensor will assign
+    if (ggml_cuda_should_pad_weight(tensor, buft_ctx->device)) {
+        size = ggml_cuda_padded_row_size(tensor, buft_ctx->device)*ggml_nrows(tensor);
     }
 
     return size;
