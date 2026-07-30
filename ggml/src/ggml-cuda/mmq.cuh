@@ -15,6 +15,15 @@ using namespace ggml_cuda_mma;
 #define MMQ_ITER_K_FP4         512
 #define MMQ_NWARPS               8
 
+// Tile height and warp count for RDNA3.5. get_mmq_y_* and mmq_get_nwarps_* must return the same
+// values on the host and the device or the shared memory layout breaks, so both read these.
+#ifndef GGML_CUDA_MMQ_Y_RDNA3_5
+#define GGML_CUDA_MMQ_Y_RDNA3_5 64
+#endif
+#ifndef GGML_CUDA_MMQ_NWARPS_RDNA3_5
+#define GGML_CUDA_MMQ_NWARPS_RDNA3_5 4
+#endif
+
 typedef void (*load_tiles_mmq_t)(const char * __restrict__ x, int * x_tile, const int kbx0, const int i_max, const int stride);
 typedef void (*vec_dot_mmq_t)(const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00);
 typedef void (*mmq_write_back_t)(const float * __restrict__ sum, const int32_t * __restrict__ get_rows_to_sorted,
@@ -142,7 +151,7 @@ static constexpr __device__ int get_mmq_x_max_device() {
 
 static int get_mmq_y_host(const int cc) {
     if (GGML_CUDA_CC_IS_RDNA3_5(cc)) {
-        return 64;
+        return GGML_CUDA_MMQ_Y_RDNA3_5;
     }
     return GGML_CUDA_CC_IS_AMD(cc) ? (GGML_CUDA_CC_IS_RDNA1(cc) ? 64 : 128) :
         ((GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA) ? 128 : 64);
@@ -160,7 +169,7 @@ if (type == GGML_TYPE_NVFP4 || type == GGML_TYPE_MXFP4) {
 static constexpr __device__ int get_mmq_y_device() {
 #if defined(GGML_USE_HIP)
 #if defined(RDNA3_5)
-    return 64;
+    return GGML_CUDA_MMQ_Y_RDNA3_5;
 #elif defined(RDNA1)
     return 64;
 #else
@@ -325,7 +334,7 @@ static constexpr __device__ int mmq_get_granularity_device(const int /*mmq_x*/) 
 #if defined(GGML_USE_HIP)
 static int mmq_get_nwarps_host(const int cc, const int warp_size) {
     if (GGML_CUDA_CC_IS_RDNA3_5(cc)) {
-        return 4;
+        return GGML_CUDA_MMQ_NWARPS_RDNA3_5;
     }
     return amd_mfma_available(cc) ? 8 : 256/warp_size;
 }
@@ -337,7 +346,7 @@ static int mmq_get_nwarps_host(const int /*cc*/, const int warp_size) {
 
 static constexpr __device__ int mmq_get_nwarps_device() {
 #if defined(RDNA3_5)
-    return 4;
+    return GGML_CUDA_MMQ_NWARPS_RDNA3_5;
 #elif defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
     return 8;
 #else
