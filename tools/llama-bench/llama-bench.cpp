@@ -381,7 +381,7 @@ static const cmd_params cmd_params_defaults = {
     /* n_pg                 */ {},
     /* n_depth              */ { 0 },
     /* n_batch              */ { 2048 },
-    /* n_ubatch             */ { 512 },
+    /* n_ubatch             */ { -1 },
     /* type_k               */ { GGML_TYPE_F16 },
     /* type_v               */ { GGML_TYPE_F16 },
     /* n_threads            */ { common_cpu_get_num_math() },
@@ -453,7 +453,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -pg <pp,tg>                                 (default: %s)\n", join(transform_to_str(cmd_params_defaults.n_pg, pair_str), ",").c_str());
     printf("  -d, --n-depth <n>                           (default: %s)\n", join(cmd_params_defaults.n_depth, ",").c_str());
     printf("  -b, --batch-size <n>                        (default: %s)\n", join(cmd_params_defaults.n_batch, ",").c_str());
-    printf("  -ub, --ubatch-size <n>                      (default: %s)\n", join(cmd_params_defaults.n_ubatch, ",").c_str());
+    printf("  -ub, --ubatch-size <n>                      (default: auto)\n");
     printf("  -ctk, --cache-type-k <t>                    (default: %s)\n", join(transform_to_str(cmd_params_defaults.type_k, ggml_type_name), ",").c_str());
     printf("  -ctv, --cache-type-v <t>                    (default: %s)\n", join(transform_to_str(cmd_params_defaults.type_v, ggml_type_name), ",").c_str());
     printf("  -t, --threads <n>                           (default: %s)\n", join(cmd_params_defaults.n_threads, ",").c_str());
@@ -1253,7 +1253,7 @@ struct cmd_params_instance {
 
         cparams.n_ctx           = n_prompt + n_gen + n_depth;
         cparams.n_batch         = n_batch;
-        cparams.n_ubatch        = n_ubatch;
+        cparams.n_ubatch        = n_ubatch < 0 ? LLAMA_N_UBATCH_AUTO : n_ubatch;
         cparams.type_k          = type_k;
         cparams.type_v          = type_v;
         cparams.offload_kqv     = !no_kv_offload;
@@ -1463,7 +1463,8 @@ struct test {
         model_size     = llama_model_size(lmodel);
         model_n_params = llama_model_n_params(lmodel);
         n_batch        = inst.n_batch;
-        n_ubatch       = inst.n_ubatch;
+        // inst.n_ubatch may be -1 (auto), so report what the context actually resolved to
+        n_ubatch       = llama_n_ubatch(ctx);
         n_threads      = inst.n_threads;
         cpu_mask       = inst.cpu_mask;
         cpu_strict     = inst.cpu_strict;

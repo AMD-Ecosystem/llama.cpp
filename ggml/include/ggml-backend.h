@@ -215,6 +215,8 @@ extern "C" {
     typedef ggml_backend_buffer_type_t * (*ggml_backend_dev_get_extra_bufts_t)(ggml_backend_dev_t device);
     // Set the abort callback for the backend
     typedef void                         (*ggml_backend_set_abort_callback_t)(ggml_backend_t backend, ggml_abort_callback abort_callback, void * abort_callback_data);
+    // Physical batch size the device prefers for prompt processing, or 0 for "no preference"
+    typedef uint32_t                     (*ggml_backend_get_optimal_ubatch_t)(ggml_backend_dev_t device);
     // Get a list of feature flags supported by the backend (returns a NULL-terminated array)
     struct ggml_backend_feature {
         const char * name;

@@ -5400,8 +5400,21 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t 
     GGML_UNUSED(reg);
 }
 
+// RDNA3.5 (gfx1150/gfx1151) prefers a larger physical batch than the 512 default. Returns 0 on
+// every other architecture, meaning "no opinion, keep the caller's default".
+static uint32_t ggml_backend_cuda_get_optimal_ubatch(ggml_backend_dev_t dev) {
+    ggml_backend_cuda_device_context * ctx = (ggml_backend_cuda_device_context *)dev->context;
+
+    const int cc = ggml_cuda_info().devices[ctx->device].cc;
+
+    return GGML_CUDA_CC_IS_RDNA3_5(cc) ? 2048 : 0;
+}
+
 static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     GGML_UNUSED(reg);
+    if (strcmp(name, "ggml_backend_get_optimal_ubatch") == 0) {
+        return (void *)ggml_backend_cuda_get_optimal_ubatch;
+    }
     if (strcmp(name, "ggml_backend_comm_init") == 0) {
         return (void *)ggml_backend_cuda_comm_init;
     }
