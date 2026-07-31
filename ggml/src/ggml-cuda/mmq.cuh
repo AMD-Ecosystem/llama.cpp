@@ -180,6 +180,9 @@ struct ggml_cuda_mmq_config {
     constexpr __device__ int rows_per_warp() const {
 #if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
 #if defined(RDNA3_5)
+        if (type == GGML_TYPE_Q4_K && J == 128) {
+            return 16;
+        }
         return J >= 64 && J % 32 == 0 ? 32 : 16;
 #else
         return 16;
@@ -828,11 +831,7 @@ static constexpr __device__ ggml_cuda_mmq_util_funcs ggml_cuda_mmq_get_util_func
             return ggml_cuda_mmq_util_funcs(
                 -1,
                 ggml_cuda_mmq_load_tiles_q4_K<type, J, fallback>,
-#if defined(RDNA3_5) && defined(AMD_WMMA_AVAILABLE) && !defined(AMD_MFMA_AVAILABLE)
-                ggml_cuda_mmq_vec_dot_q4_K_q8_1_mma_rdna35<type, J, fallback>,
-#else
                 ggml_cuda_mmq_vec_dot_q8_1_q8_1_mma<type, J, fallback>,
-#endif
                 ggml_cuda_mmq_write_back_mma<type, J, fallback>);
         case GGML_TYPE_Q5_K:
             return ggml_cuda_mmq_util_funcs(
