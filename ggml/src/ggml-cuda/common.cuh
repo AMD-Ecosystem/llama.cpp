@@ -1542,6 +1542,10 @@ struct ggml_cuda_mm_fusion_args_host {
     const ggml_tensor * x_scale = nullptr;
     const ggml_tensor * gate_scale = nullptr;
     ggml_glu_op glu_op;
+    // non-gated unary activation applied to the matmul output; COUNT = none
+    ggml_unary_op activation = GGML_UNARY_OP_COUNT;
+    // optional per-row operand multiplied after the activation (matmul -> act -> mul)
+    const ggml_tensor * activation_mul = nullptr;
 };
 struct ggml_cuda_mm_fusion_args_device {
     const void * x_bias = nullptr;
@@ -1550,6 +1554,8 @@ struct ggml_cuda_mm_fusion_args_device {
     const void * x_scale = nullptr;
     const void * gate_scale = nullptr;
     ggml_glu_op glu_op;
+    ggml_unary_op activation = GGML_UNARY_OP_COUNT;
+    const void * activation_mul = nullptr;
 };
 
 struct ggml_cuda_kernel_launch_params {

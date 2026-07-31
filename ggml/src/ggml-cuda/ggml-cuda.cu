@@ -4000,6 +4000,159 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         return fused_node_count - 1;
     }
 
+    auto tensors_overlap = [](const ggml_tensor * a, const ggml_tensor * b) {
+        const int64_t a_start = (int64_t) a->data;
+        const int64_t a_end   = a_start + ggml_backend_buft_get_alloc_size(a->buffer->buft, a);
+        const int64_t b_start = (int64_t) b->data;
+        const int64_t b_end   = b_start + ggml_backend_buft_get_alloc_size(b->buffer->buft, b);
+        return (b_start <= a_start && a_start < b_end) || (a_start <= b_start && b_start < a_end);
+    };
+
+    // mul_mat + reshape + add: same as mul_mat + add but tolerating a view between the
+    // projection and the residual add (e.g. GDN layers reshape the attn output first).
+    if (ggml_can_fuse_subgraph(cgraph, i, { GGML_OP_MUL_MAT, GGML_OP_RESHAPE, GGML_OP_ADD }, { i + 2 })) {
+        ggml_tensor * mm_node      = cgraph->nodes[i];
+        ggml_tensor * reshape_node = cgraph->nodes[i + 1];
+        ggml_tensor * add_node     = cgraph->nodes[i + 2];
+
+        const ggml_tensor * bias_tensor = nullptr;
+        if (add_node->src[0] == reshape_node) {
+            bias_tensor = add_node->src[1];
+        } else if (add_node->src[1] == reshape_node) {
+            bias_tensor = add_node->src[0];
+        }
+
+        if (bias_tensor && reshape_node->src[0] == mm_node && bias_tensor->type == GGML_TYPE_F32 &&
+                bias_tensor->ne[0] == mm_node->ne[0] &&
+                ggml_is_contiguous(mm_node) && ggml_is_contiguous(add_node) &&
+                ggml_nelements(add_node) == ggml_nelements(mm_node) &&
+                ggml_are_same_shape(add_node->src[0], add_node->src[1])) {
+
+            const ggml_tensor * src0 = mm_node->src[0];
+            const ggml_tensor * src1 = mm_node->src[1];
+            const ggml_tensor * ids  = mm_node->src[2];
+
+            // dst may alias the residual (in-place add, same-index) but not the matmul inputs
+            if (!tensors_overlap(add_node, src0) && !tensors_overlap(add_node, src1)) {
+                ggml_cuda_mm_fusion_args_host fusion_data{};
+                fusion_data.x_bias = bias_tensor;
+
+                ggml_tensor dst_tensor = *mm_node;
+                dst_tensor.data   = add_node->data;
+                dst_tensor.buffer = add_node->buffer;
+
+                if (ggml_cuda_should_fuse_mul_mat_vec_f(mm_node)) {
+                    ggml_cuda_mul_mat_vec_f(*cuda_ctx, src0, src1, ids, &dst_tensor, &fusion_data);
+                    return 2;
+                }
+                if (ggml_cuda_should_fuse_mul_mat_vec_q(mm_node)) {
+                    ggml_cuda_mul_mat_vec_q(*cuda_ctx, src0, src1, ids, &dst_tensor, &fusion_data);
+                    return 2;
+                }
+            }
+        }
+    }
+
+    // mul_mat + optional reshape + non-gated unary activation (sigmoid/silu),
+    // optionally followed by an elementwise mul (act(mul_mat) * y). The variant that
+    // also folds the trailing mul is tried first so it wins over the plain unary_mul.
+    for (int with_mul = 1; with_mul >= 0; --with_mul) {
+        for (int with_reshape = 0; with_reshape < 2; ++with_reshape) {
+            const int unary_off = with_reshape ? 2 : 1;
+            const int mul_off   = unary_off + 1;
+            const int n_ops     = (with_mul ? mul_off : unary_off) + 1;
+
+            ggml_op ops[4];
+            int k = 0;
+            ops[k++] = GGML_OP_MUL_MAT;
+            if (with_reshape) {
+                ops[k++] = GGML_OP_RESHAPE;
+            }
+            ops[k++] = GGML_OP_UNARY;
+            if (with_mul) {
+                ops[k++] = GGML_OP_MUL;
+            }
+
+            const int out_nodes[] = { i + n_ops - 1 };
+            if (!ggml_can_fuse_subgraph(cgraph, i, n_ops, ops, out_nodes, 1)) {
+                continue;
+            }
+
+            ggml_tensor * mm_node    = cgraph->nodes[i];
+            ggml_tensor * unary_node = cgraph->nodes[i + unary_off];
+            ggml_tensor * out_node   = cgraph->nodes[i + n_ops - 1];
+
+            const ggml_unary_op uop = ggml_get_unary_op(unary_node);
+            if (uop != GGML_UNARY_OP_SIGMOID && uop != GGML_UNARY_OP_SILU) {
+                continue;
+            }
+
+            if (with_reshape) {
+                const ggml_tensor * reshape_node = cgraph->nodes[i + 1];
+                if (reshape_node->src[0] != mm_node || unary_node->src[0] != reshape_node) {
+                    continue;
+                }
+            } else if (unary_node->src[0] != mm_node) {
+                continue;
+            }
+
+            // matmul output and the fused output must be contiguous and hold the same
+            // number of elements, so writing the result in matmul order is correct
+            if (!ggml_is_contiguous(mm_node) || !ggml_is_contiguous(out_node) ||
+                    ggml_nelements(out_node) != ggml_nelements(mm_node)) {
+                continue;
+            }
+
+            const ggml_tensor * src0 = mm_node->src[0];
+            const ggml_tensor * src1 = mm_node->src[1];
+            const ggml_tensor * ids  = mm_node->src[2];
+
+            const ggml_tensor * act_mul = nullptr;
+            if (with_mul) {
+                if (out_node->src[0] == unary_node) {
+                    act_mul = out_node->src[1];
+                } else if (out_node->src[1] == unary_node) {
+                    act_mul = out_node->src[0];
+                } else {
+                    continue;
+                }
+                // no broadcast, and same per-row layout as the matmul output
+                if (!ggml_are_same_shape(out_node->src[0], out_node->src[1]) ||
+                        !ggml_is_contiguous(act_mul) || act_mul->type != GGML_TYPE_F32) {
+                    continue;
+                }
+                // The fused kernel writes out_node while reading the matmul inputs across
+                // the full reduction; out_node must not alias them. Aliasing act_mul is
+                // safe (elementwise, same-index read before write, e.g. an in-place mul).
+                if (tensors_overlap(out_node, src0) || tensors_overlap(out_node, src1)) {
+                    continue;
+                }
+            } else if (!ggml_cuda_check_fusion_memory_ranges(cgraph, i, n_ops, out_nodes, 1)) {
+                continue;
+            }
+
+            ggml_cuda_mm_fusion_args_host fusion_data{};
+            fusion_data.activation     = uop;
+            fusion_data.activation_mul = act_mul;
+
+            // use the matmul geometry but write into the fused output buffer; the
+            // intermediate reshape/activation/mul nodes are elided
+            ggml_tensor dst_tensor = *mm_node;
+            dst_tensor.data   = out_node->data;
+            dst_tensor.buffer = out_node->buffer;
+
+            if (ggml_cuda_should_fuse_mul_mat_vec_f(mm_node)) {
+                ggml_cuda_mul_mat_vec_f(*cuda_ctx, src0, src1, ids, &dst_tensor, &fusion_data);
+                return n_ops - 1;
+            }
+
+            if (ggml_cuda_should_fuse_mul_mat_vec_q(mm_node)) {
+                ggml_cuda_mul_mat_vec_q(*cuda_ctx, src0, src1, ids, &dst_tensor, &fusion_data);
+                return n_ops - 1;
+            }
+        }
+    }
+
     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ADD }, {})) {
         ggml_cuda_op_rms_norm_fused_add(*cuda_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 2]);
         return 2;

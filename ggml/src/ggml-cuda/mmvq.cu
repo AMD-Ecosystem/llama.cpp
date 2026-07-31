@@ -529,6 +529,9 @@ static __global__ void mul_mat_vec_q(
     const float * x_scale = nullptr;
     const float * gate_scale = nullptr;
     ggml_glu_op active_glu;
+    ggml_unary_op active_activation = GGML_UNARY_OP_COUNT;
+    bool use_act_mul = false;
+    const float * act_mul = nullptr;
 
     if constexpr (has_fusion) {
         use_gate      = fusion.gate      != nullptr;
@@ -538,6 +541,9 @@ static __global__ void mul_mat_vec_q(
         x_bias        = (const float *) fusion.x_bias;
         gate_bias     = (const float *) fusion.gate_bias;
         active_glu    = fusion.glu_op;
+        active_activation = fusion.activation;
+        use_act_mul   = fusion.activation_mul != nullptr;
+        act_mul       = (const float *) fusion.activation_mul;
         if constexpr (type == GGML_TYPE_NVFP4) {
             use_scale      = fusion.x_scale    != nullptr;
             use_gate_scale = fusion.gate_scale != nullptr && use_gate;
@@ -549,6 +555,7 @@ static __global__ void mul_mat_vec_q(
 
     [[maybe_unused]] float x_biases[ncols_dst]    = { 0.0f };
     [[maybe_unused]] float gate_biases[ncols_dst] = { 0.0f };
+    [[maybe_unused]] float act_muls[ncols_dst]    = { 0.0f };
     [[maybe_unused]] float x_scales = 1.0f;
     [[maybe_unused]] float gate_scales = 1.0f;
     if constexpr (has_fusion) {
@@ -562,6 +569,13 @@ static __global__ void mul_mat_vec_q(
 #pragma unroll
                 for (int j = 0; j < ncols_dst; ++j) {
                     x_biases[j] = x_bias[j * stride_col_dst + threadIdx.x];
+                }
+            }
+            if (use_act_mul) {
+                act_mul = act_mul + sample_dst * stride_sample_dst + channel_bias * stride_channel_dst + row0;
+#pragma unroll
+                for (int j = 0; j < ncols_dst; ++j) {
+                    act_muls[j] = act_mul[j * stride_col_dst + threadIdx.x];
                 }
             }
             if (use_gate_bias) {
@@ -683,6 +697,20 @@ static __global__ void mul_mat_vec_q(
                                 result = result * gate_value;
                                 break;
                         }
+                    } else {
+                        switch (active_activation) {
+                            case GGML_UNARY_OP_SIGMOID:
+                                result = ggml_cuda_op_sigmoid_single(result);
+                                break;
+                            case GGML_UNARY_OP_SILU:
+                                result = ggml_cuda_op_silu_single(result);
+                                break;
+                            default:
+                                break;
+                        }
+                        if (use_act_mul) {
+                            result *= act_muls[j];
+                        }
                     }
                 }
                 dst[j*stride_col_dst + i] = result;
@@ -691,7 +719,7 @@ static __global__ void mul_mat_vec_q(
     }
 
     if constexpr (!has_fusion) {
-        GGML_UNUSED_VARS(use_gate, use_bias, use_gate_bias, use_scale, use_gate_scale, active_glu, gate_bias, x_bias, x_scale, gate_scale, tmp_gate);
+        GGML_UNUSED_VARS(use_gate, use_bias, use_gate_bias, use_scale, use_gate_scale, active_glu, active_activation, use_act_mul, gate_bias, x_bias, x_scale, gate_scale, act_mul, act_muls, tmp_gate);
     }
     if constexpr (type != GGML_TYPE_NVFP4) {
         GGML_UNUSED_VARS(use_scale, use_gate_scale, x_scale, gate_scale, x_scales, gate_scales);
@@ -791,7 +819,8 @@ static void mul_mat_vec_q_switch_fusion(
         const uint32_t ids_stride, cudaStream_t stream) {
 
     const bool has_fusion = fusion.gate != nullptr || fusion.x_bias != nullptr || fusion.gate_bias != nullptr ||
-                            fusion.x_scale != nullptr || fusion.gate_scale != nullptr;
+                            fusion.x_scale != nullptr || fusion.gate_scale != nullptr ||
+                            fusion.activation != GGML_UNARY_OP_COUNT || fusion.activation_mul != nullptr;
     if constexpr (c_ncols_dst == 1) {
         if (has_fusion) {
             const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(block_nums, block_dims, nbytes_shared, stream);
@@ -1205,7 +1234,14 @@ void ggml_cuda_mul_mat_vec_q(
             GGML_ASSERT(ggml_nelements(fusion->gate_scale) == (ids ? src0->ne[2] : 1));
             fusion_local.gate_scale = fusion->gate_scale->data;
         }
+        if (fusion->activation_mul) {
+            GGML_ASSERT(fusion->activation_mul->type == GGML_TYPE_F32);
+            GGML_ASSERT(ggml_is_contiguous(fusion->activation_mul));
+            GGML_ASSERT(ggml_nelements(fusion->activation_mul) == ggml_nelements(dst));
+            fusion_local.activation_mul = fusion->activation_mul->data;
+        }
         fusion_local.glu_op = fusion->glu_op;
+        fusion_local.activation = fusion->activation;
     }
 
     // If src0 is a temporary compute buffer, clear any potential padding.
