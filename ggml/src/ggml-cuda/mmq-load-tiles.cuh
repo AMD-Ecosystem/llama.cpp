@@ -691,6 +691,84 @@ static __device__ __forceinline__ void ggml_cuda_mmq_load_tiles_q4_K_rdna35(
         row_qs[kqs+8] = (qs >> 4) & 0x0F0F0F0F;
     }
 }
+
+template <ggml_type type, int J, bool fallback>
+static __device__ __forceinline__ void ggml_cuda_mmq_prefetch_tiles_q4_K_rdna35(
+        const char * __restrict__ x, const int kbx0, const int i_max, const int stride,
+        int (&qs_cache)[ggml_cuda_mmq_get_I(type, J, fallback)/
+                       (ggml_cuda_mmq_get_nthreads(type, J, fallback)/ggml_cuda_get_physical_warp_size())],
+        int (&scales_cache)[3], half2 & dm_cache) {
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    constexpr int nthreads  = ggml_cuda_mmq_get_nthreads(type, J, fallback);
+    constexpr int nwarps    = nthreads / warp_size;
+    constexpr int I         = ggml_cuda_mmq_get_I(type, J, fallback);
+    static_assert(warp_size == 32 && nthreads == 128 && I == 64, "unexpected RDNA3.5 Q4_K MMQ configuration");
+
+#pragma unroll
+    for (int i0 = 0; i0 < I; i0 += nwarps) {
+        int i = i0 + threadIdx.y;
+        if constexpr (fallback) {
+            i = min(i, i_max);
+        }
+
+        const block_q4_K * bxi = (const block_q4_K *) x + kbx0 + i*stride;
+        qs_cache[i0/nwarps] = ((const int *) bxi->qs)[threadIdx.x];
+    }
+
+    int i = (threadIdx.y*warp_size + threadIdx.x)/2;
+    if constexpr (fallback) {
+        i = min(i, i_max);
+    }
+
+    const block_q4_K * bxi = (const block_q4_K *) x + kbx0 + i*stride;
+#pragma unroll
+    for (int l = 0; l < 3; ++l) {
+        scales_cache[l] = ((const int *) bxi->scales)[l];
+    }
+    dm_cache = bxi->dm;
+
+    asm volatile("" ::: "memory");
+}
+
+template <ggml_type type, int J, bool fallback>
+static __device__ __forceinline__ void ggml_cuda_mmq_store_tiles_q4_K_rdna35(
+        int * __restrict__ x_tile,
+        const int (&qs_cache)[ggml_cuda_mmq_get_I(type, J, fallback)/
+                              (ggml_cuda_mmq_get_nthreads(type, J, fallback)/ggml_cuda_get_physical_warp_size())],
+        const int (&scales_cache)[3], const half2 dm_cache) {
+    constexpr int warp_size   = ggml_cuda_get_physical_warp_size();
+    constexpr int nthreads    = ggml_cuda_mmq_get_nthreads(type, J, fallback);
+    constexpr int nwarps      = nthreads / warp_size;
+    constexpr int I           = ggml_cuda_mmq_get_I(type, J, fallback);
+    constexpr int sram_stride = ggml_cuda_mmq_get_sram_stride(type, J, fallback);
+    static_assert(warp_size == 32 && nthreads == 128 && I == 64, "unexpected RDNA3.5 Q4_K MMQ configuration");
+
+    int * x_qs = x_tile;
+#pragma unroll
+    for (int i0 = 0; i0 < I; i0 += nwarps) {
+        const int i = i0 + threadIdx.y;
+        const int qs = qs_cache[i0/nwarps];
+        int * row_qs = x_qs + i*sram_stride;
+        const int kqs = 16*(threadIdx.x/8) + threadIdx.x%8;
+        row_qs[kqs]   = qs & 0x0F0F0F0F;
+        row_qs[kqs+8] = (qs >> 4) & 0x0F0F0F0F;
+    }
+
+    half2 * x_dm = (half2 *) (x_qs + 2*MMQ_TILE_NE_K);
+    const int linear_tid = threadIdx.y*warp_size + threadIdx.x;
+    const int i = linear_tid/2;
+    const int ksc = linear_tid%2;
+    const int sc32 = unpack_scales_q45_K(scales_cache, ksc);
+    const int  m32 = unpack_scales_q45_K(scales_cache, ksc + 2);
+    const uint8_t * sc8 = (const uint8_t *) &sc32;
+    const uint8_t *  m8 = (const uint8_t *) &m32;
+    const half2 dm = dm_cache * make_half2(1.0f, -1.0f);
+
+#pragma unroll
+    for (int l = 0; l < int(sizeof(int)); ++l) {
+        x_dm[i*sram_stride + sizeof(int)*ksc + l] = dm*make_half2(sc8[l], m8[l]);
+    }
+}
 #endif
 
 template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_load_tiles_q4_K(
