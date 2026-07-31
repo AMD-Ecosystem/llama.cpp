@@ -1892,19 +1892,20 @@ void mul_mat_q_switch_J(ggml_backend_cuda_context & ctx, const mmq_args & args, 
     if constexpr (type == GGML_TYPE_Q4_K) {
         constexpr int q4_k_J_default     = 128;
         constexpr int q4_k_J_small       = 64;
-        constexpr int q4_k_m_small_max   = 4096;
+        constexpr int q4_k_m_small_max   = 1024;
         constexpr int q4_k_ncols_pipeline = 128;
         const char * q4_k_J_env = getenv("GGML_HIP_Q4K_MMQ_X");
-        const bool force_small =
-            q4_k_J_env != nullptr && q4_k_J_env[0] == '6' && q4_k_J_env[1] == '4' && q4_k_J_env[2] == '\0';
-        const bool use_small =
-            q4_k_J_env != nullptr ? force_small :
-            args.nrows_x <= q4_k_m_small_max && args.ncols_max == q4_k_ncols_pipeline;
-        const int q4_k_J = use_small ? q4_k_J_small : q4_k_J_default;
-        const ggml_cuda_mmq_config config = ggml_cuda_mmq_get_config(type, q4_k_J, fallback, cc);
-        if (GGML_CUDA_CC_IS_RDNA3_5(cc) &&
-            config.type != GGML_TYPE_COUNT && mmq_get_nbytes_shared(config, cc) <= smpbo) {
-            J_best = q4_k_J;
+        if (q4_k_J_env != nullptr || args.ncols_max == q4_k_ncols_pipeline) {
+            const bool force_small =
+                q4_k_J_env != nullptr && q4_k_J_env[0] == '6' && q4_k_J_env[1] == '4' && q4_k_J_env[2] == '\0';
+            const bool use_small =
+                q4_k_J_env != nullptr ? force_small : args.nrows_x <= q4_k_m_small_max;
+            const int q4_k_J = use_small ? q4_k_J_small : q4_k_J_default;
+            const ggml_cuda_mmq_config config = ggml_cuda_mmq_get_config(type, q4_k_J, fallback, cc);
+            if (GGML_CUDA_CC_IS_RDNA3_5(cc) &&
+                config.type != GGML_TYPE_COUNT && mmq_get_nbytes_shared(config, cc) <= smpbo) {
+                J_best = q4_k_J;
+            }
         }
     }
 #endif // GGML_USE_HIP

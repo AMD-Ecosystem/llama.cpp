@@ -977,7 +977,7 @@ template <ggml_type type, int J, bool fallback>
 static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q4_K_q8_1_mma_rdna35(
         const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
 #if defined(RDNA3_5) && defined(AMD_WMMA_AVAILABLE) && !defined(AMD_MFMA_AVAILABLE)
-    if constexpr (J == 64 || J == 128) {
+    if constexpr (J == 64) {
         constexpr data_layout input_layout = get_input_data_layout();
         typedef tile<16,  8, int, input_layout>        tile_A;
         typedef tile<16,  8, int, input_layout>        tile_B;
@@ -985,87 +985,90 @@ static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q4_K_q8_1_mma_rdna3
 
         constexpr int I             = ggml_cuda_mmq_get_I(type, J, fallback);
         constexpr int sram_stride   = ggml_cuda_mmq_get_sram_stride(type, J, fallback);
-        constexpr int rows_per_warp = 16;
+        constexpr int rows_per_warp = ggml_cuda_mmq_get_rows_per_warp(type, J, fallback);
         constexpr int ntx           = rows_per_warp/tile_C::I;
-        static_assert(I == 64 && ntx == 1, "unexpected RDNA3.5 Q4_K MMQ configuration");
+        static_assert(I == 64 && ntx == 2, "unexpected RDNA3.5 Q4_K MMQ configuration");
+
+        y += (threadIdx.y % ntx)*(tile_C::J*MMQ_TILE_Y_K);
 
         const int   * x_qs = (const int   *) x;
         const half2 * x_dm = (const half2 *) x_qs + 2*MMQ_TILE_NE_K;
         const int   * y_qs = (const int   *) y + 4;
         const half2 * y_dm = (const half2 *) y;
 
-        const int i0 = threadIdx.y*rows_per_warp;
+        const int i0 = (threadIdx.y / ntx)*rows_per_warp;
 
         for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QI8_1) {
             const int k0 = k00 + k01;
 
-            tile_A A;
-            load_ldmatrix(A, x_qs + i0*sram_stride + k0, sram_stride);
-
-            constexpr int ntiles = J/tile_C::J;
-            tile_B B[ntiles];
-            tile_C C[ntiles];
-
+            tile_A A[ntx];
 #pragma unroll
-            for (int jb = 0; jb < ntiles; ++jb) {
-                load_ldmatrix(B[jb], y_qs + jb*tile_C::J*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K);
-                ggml_cuda_mmq_mma_q4_K_rdna35_low(C[jb], A, B[jb]);
-            }
-
-            __builtin_amdgcn_sched_barrier(0);
-
-            half2 dmA_half[tile_C::ne];
-            half2 dsB_half[ntiles];
-#pragma unroll
-            for (int l = 0; l < tile_C::ne; ++l) {
-                const int i = i0 + tile_C::get_i(l);
-                dmA_half[l] = x_dm[i*sram_stride + k0/QI8_1];
-            }
-#pragma unroll
-            for (int jb = 0; jb < ntiles; ++jb) {
-                const int j = jb*tile_C::J + tile_C::get_j(0);
-                dsB_half[jb] = y_dm[j*MMQ_TILE_Y_K + k01/QI8_1];
-            }
-
-            __builtin_amdgcn_sched_barrier(0);
-
-            float dmA_scale[tile_C::ne];
-            float2 dsB[ntiles];
-#pragma unroll
-            for (int jb = 0; jb < ntiles; ++jb) {
-                dsB[jb] = __half22float2(dsB_half[jb]);
-                asm volatile("" : "+v"(dsB[jb].x), "+v"(dsB[jb].y));
+            for (int n = 0; n < ntx; ++n) {
+                load_ldmatrix(A[n], x_qs + (i0 + n*tile_A::I)*sram_stride + k0, sram_stride);
             }
 
 #pragma unroll
-            for (int l = 0; l < tile_C::ne; l += 2) {
-                float2 dm0 = __half22float2(dmA_half[l + 0]);
-                float2 dm1 = __half22float2(dmA_half[l + 1]);
-                asm volatile("" : "+v"(dm0.x), "+v"(dm0.y), "+v"(dm1.x), "+v"(dm1.y));
-                dmA_scale[l + 0] = dm0.x;
-                dmA_scale[l + 1] = dm1.x;
+            for (int j0 = 0; j0 < J; j0 += ntx*tile_C::J) {
+                tile_B B;
+                load_ldmatrix(B, y_qs + j0*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K);
+
+                tile_C C[ntx];
 #pragma unroll
-                for (int jb = 0; jb < ntiles; ++jb) {
-                    sum[jb*tile_C::ne + l + 0] += dm0.y*dsB[jb].y;
-                    sum[jb*tile_C::ne + l + 1] += dm1.y*dsB[jb].y;
+                for (int n = 0; n < ntx; ++n) {
+                    ggml_cuda_mmq_mma_q4_K_rdna35_low(C[n], A[n], B);
                 }
-            }
 
-            __builtin_amdgcn_sched_barrier(0);
+                __builtin_amdgcn_sched_barrier(0);
+
+                half2 dmA_half[ntx][tile_C::ne];
+#pragma unroll
+                for (int n = 0; n < ntx; ++n) {
+#pragma unroll
+                    for (int l = 0; l < tile_C::ne; ++l) {
+                        const int i = i0 + n*tile_A::I + tile_C::get_i(l);
+                        dmA_half[n][l] = x_dm[i*sram_stride + k0/QI8_1];
+                    }
+                }
+                const int j = j0 + tile_C::get_j(0);
+                const half2 dsB_half = y_dm[j*MMQ_TILE_Y_K + k01/QI8_1];
+
+                __builtin_amdgcn_sched_barrier(0);
+
+                float dmA_scale[ntx][tile_C::ne];
+                float2 dsB = __half22float2(dsB_half);
+                asm volatile("" : "+v"(dsB.x), "+v"(dsB.y));
 
 #pragma unroll
-            for (int jb = 0; jb < ntiles; ++jb) {
-                ggml_cuda_mmq_mma_q4_K_rdna35_high(C[jb], A, B[jb]);
-            }
+                for (int n = 0; n < ntx; ++n) {
+#pragma unroll
+                    for (int l = 0; l < tile_C::ne; l += 2) {
+                        float2 dm0 = __half22float2(dmA_half[n][l + 0]);
+                        float2 dm1 = __half22float2(dmA_half[n][l + 1]);
+                        asm volatile("" : "+v"(dm0.x), "+v"(dm0.y), "+v"(dm1.x), "+v"(dm1.y));
+                        dmA_scale[n][l + 0] = dm0.x;
+                        dmA_scale[n][l + 1] = dm1.x;
+                        const int si = (j0/tile_C::J + n)*tile_C::ne + l;
+                        sum[si + 0] += dm0.y*dsB.y;
+                        sum[si + 1] += dm1.y*dsB.y;
+                    }
+                }
 
-            __builtin_amdgcn_sched_barrier(0);
+                __builtin_amdgcn_sched_barrier(0);
 
 #pragma unroll
-            for (int jb = 0; jb < ntiles; ++jb) {
+                for (int n = 0; n < ntx; ++n) {
+                    ggml_cuda_mmq_mma_q4_K_rdna35_high(C[n], A[n], B);
+                }
+
+                __builtin_amdgcn_sched_barrier(0);
+
 #pragma unroll
-                for (int l = 0; l < tile_C::ne; ++l) {
-                    const int si = jb*tile_C::ne + l;
-                    sum[si] += dmA_scale[l]*dsB[jb].x*C[jb].x[l];
+                for (int n = 0; n < ntx; ++n) {
+#pragma unroll
+                    for (int l = 0; l < tile_C::ne; ++l) {
+                        const int si = (j0/tile_C::J + n)*tile_C::ne + l;
+                        sum[si] += dmA_scale[n][l]*dsB.x*C[n].x[l];
+                    }
                 }
             }
         }
