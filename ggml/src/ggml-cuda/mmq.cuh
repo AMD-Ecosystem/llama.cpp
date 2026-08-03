@@ -1893,14 +1893,10 @@ void mul_mat_q_switch_J(ggml_backend_cuda_context & ctx, const mmq_args & args, 
         constexpr int q4_k_J_small       = 64;
         constexpr int q4_k_m_small_max   = 1024;
         constexpr int q4_k_ncols_pipeline = 128;
-        const char * q4_k_J_env = getenv("GGML_HIP_Q4K_MMQ_X");
         const bool use_q4_k_pipeline =
             args.expert_bounds == nullptr && args.ncols_max == q4_k_ncols_pipeline;
-        if (q4_k_J_env != nullptr || use_q4_k_pipeline) {
-            const bool force_small =
-                q4_k_J_env != nullptr && q4_k_J_env[0] == '6' && q4_k_J_env[1] == '4' && q4_k_J_env[2] == '\0';
-            const bool use_small =
-                q4_k_J_env != nullptr ? force_small : args.nrows_x <= q4_k_m_small_max;
+        if (use_q4_k_pipeline) {
+            const bool use_small = args.nrows_x <= q4_k_m_small_max;
             const int q4_k_J = use_small ? q4_k_J_small : q4_k_J_default;
             const ggml_cuda_mmq_config config = ggml_cuda_mmq_get_config(type, q4_k_J, fallback, cc);
             if (GGML_CUDA_CC_IS_RDNA3_5(cc) &&
