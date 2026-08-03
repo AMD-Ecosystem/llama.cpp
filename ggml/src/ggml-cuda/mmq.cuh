@@ -1894,7 +1894,9 @@ void mul_mat_q_switch_J(ggml_backend_cuda_context & ctx, const mmq_args & args, 
         constexpr int q4_k_m_small_max   = 1024;
         constexpr int q4_k_ncols_pipeline = 128;
         const char * q4_k_J_env = getenv("GGML_HIP_Q4K_MMQ_X");
-        if (q4_k_J_env != nullptr || args.ncols_max == q4_k_ncols_pipeline) {
+        const bool use_q4_k_pipeline =
+            args.expert_bounds == nullptr && args.ncols_max == q4_k_ncols_pipeline;
+        if (q4_k_J_env != nullptr || use_q4_k_pipeline) {
             const bool force_small =
                 q4_k_J_env != nullptr && q4_k_J_env[0] == '6' && q4_k_J_env[1] == '4' && q4_k_J_env[2] == '\0';
             const bool use_small =
