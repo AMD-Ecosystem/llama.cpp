@@ -230,6 +230,19 @@ struct ggml_cuda_mmq_config {
 
 #undef CASE
 
+// RDNA3.5 (gfx1151) uses fork-specific MMQ kernels (ggml_cuda_mmq_load_tiles_q4_K_rdna35,
+// ggml_cuda_mmq_vec_dot_q6_K_q8_1_mma_rdna35) that static_assert nthreads == 128 && I == 64,
+// so its config must force that shape. Upstream's dedicated get_config_rdna3_5 (256/128 at
+// wide J) is incompatible with those kernels; keep the fork override for RDNA3.5 while the
+// other AMD arches use upstream's per-arch tables.
+static constexpr __host__ __device__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config_rdna35(
+        ggml_type type, int J, bool fallback) {
+    ggml_cuda_mmq_config config = ggml_cuda_mmq_get_config_rdna4(type, J, fallback);
+    config.nthreads = 128;
+    config.I = 64;
+    return config;
+}
+
 static __host__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(const ggml_type type, const int J, const bool fallback, const int cc) {
     if (GGML_CUDA_CC_IS_AMD(cc)) {
         if (GGML_CUDA_CC_IS_CDNA(cc)) {
@@ -239,7 +252,7 @@ static __host__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(const ggml_type ty
             return ggml_cuda_mmq_get_config_rdna4(type, J, fallback);
         }
         if (GGML_CUDA_CC_IS_RDNA3_5(cc)) {
-            return ggml_cuda_mmq_get_config_rdna3_5(type, J, fallback);
+            return ggml_cuda_mmq_get_config_rdna35(type, J, fallback);
         }
         if (GGML_CUDA_CC_IS_RDNA3(cc)) {  // covers RDNA 3.0
             return ggml_cuda_mmq_get_config_rdna3(type, J, fallback);
@@ -262,7 +275,7 @@ static constexpr __device__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(ggml_t
 #elif defined(RDNA4)
     return ggml_cuda_mmq_get_config_rdna4(type, J, fallback);
 #elif defined(RDNA3_5)
-    return ggml_cuda_mmq_get_config_rdna3_5(type, J, fallback);
+    return ggml_cuda_mmq_get_config_rdna35(type, J, fallback);
 #elif defined(RDNA3)
     return ggml_cuda_mmq_get_config_rdna3(type, J, fallback);
 #else
