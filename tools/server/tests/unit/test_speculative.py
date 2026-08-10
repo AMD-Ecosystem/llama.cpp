@@ -1,3 +1,4 @@
+import os
 import pytest
 from utils import *
 
@@ -138,6 +139,10 @@ MTP_MODEL_FILE_URL = "https://huggingface.co/unsloth/Qwen3.5-4B-MTP-GGUF/resolve
 
 
 @pytest.mark.slow
+@pytest.mark.skipif(
+    os.environ.get("GG_MTP_GREEDY") != "1",
+    reason="MTP greedy check runs only on the gpu-rocm CI job (set GG_MTP_GREEDY=1)",
+)
 def test_mtp_greedy_matches_baseline():
     # MTP speculative decoding is lossless: at temperature 0 its output must be
     # identical to the non-speculative baseline.

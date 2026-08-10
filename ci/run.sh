@@ -548,6 +548,7 @@ function gg_run_mtp_greedy {
     pip install -r tools/server/tests/requirements.txt --disable-pip-version-check
 
     (cd tools/server/tests && \
+        GG_MTP_GREEDY=1 \
         LLAMA_SERVER_BIN_PATH="$SRC/build-ci-release/bin/llama-server" \
         N_GPU_LAYERS=99 \
         python3 -m pytest -v -x unit/test_speculative.py::test_mtp_greedy_matches_baseline) \
