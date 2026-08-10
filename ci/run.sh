@@ -535,6 +535,35 @@ function gg_sum_qwen3_0_6b {
     gg_printf '- save-load-state: \n```\n%s\n```\n' "$(cat $OUT/${ci}-save-load-state.log)"
 }
 
+# mtp-greedy
+#
+# MTP speculative decoding is lossless: at temp 0 its output must match the
+# non-speculative baseline. Runs the gpu-rocm-only server test that guards it.
+
+function gg_run_mtp_greedy {
+    cd ${SRC}
+
+    set -e
+
+    pip install -r tools/server/tests/requirements.txt --disable-pip-version-check
+
+    (cd tools/server/tests && \
+        LLAMA_SERVER_BIN_PATH="$SRC/build-ci-release/bin/llama-server" \
+        N_GPU_LAYERS=99 \
+        python3 -m pytest -v -x unit/test_speculative.py::test_mtp_greedy_matches_baseline) \
+        2>&1 | tee -a $OUT/${ci}-pytest.log
+
+    set +e
+}
+
+function gg_sum_mtp_greedy {
+    gg_printf '### %s\n\n' "${ci}"
+
+    gg_printf 'MTP greedy determinism (baseline vs draft-mtp, temp 0):\n'
+    gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
+    gg_printf '```\n%s\n```\n' "$(cat $OUT/${ci}-pytest.log)"
+}
+
 # bge-small
 
 function gg_run_embd_bge_small {
@@ -764,6 +793,10 @@ if [ -z ${GG_BUILD_LOW_PERF} ]; then
     fi
 
     test $ret -eq 0 && gg_run qwen3_0_6b
+
+    if [ ! -z ${GG_BUILD_ROCM} ]; then
+        test $ret -eq 0 && gg_run mtp_greedy
+    fi
 
     test $ret -eq 0 && gg_run ctest_with_model_debug
     test $ret -eq 0 && gg_run ctest_with_model_release

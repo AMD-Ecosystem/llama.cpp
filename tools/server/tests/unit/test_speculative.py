@@ -131,3 +131,39 @@ def test_multi_requests_parallel(n_slots: int, n_requests: int):
     for res in results:
         assert res.status_code == 200
         assert match_regex("(wise|kind|owl|answer)+", res.body["content"])
+
+
+# Smallest model with a built-in NextN/MTP head; ~2.5GB, cached after first fetch.
+MTP_MODEL_FILE_URL = "https://huggingface.co/unsloth/Qwen3.5-4B-MTP-GGUF/resolve/main/Qwen3.5-4B-Q4_0.gguf"
+
+
+@pytest.mark.slow
+def test_mtp_greedy_matches_baseline():
+    # MTP speculative decoding is lossless: at temperature 0 its output must be
+    # identical to the non-speculative baseline.
+    model = download_file(MTP_MODEL_FILE_URL)
+    prompt = "Write a short paragraph explaining what speculative decoding is."
+    req = {"prompt": prompt, "temperature": 0.0, "top_k": 1, "n_predict": 200}
+
+    def run(spec_type):
+        server = ServerProcess()
+        server.model_hf_repo = None
+        server.model_hf_file = None
+        server.model_file = model
+        server.n_ctx = 4096
+        server.fa = "on"
+        server.spec_type = spec_type
+        if spec_type is not None:
+            server.spec_draft_n_max = 3
+        server.start(timeout_seconds=300)
+        res = server.make_request("POST", "/completion", data=req)
+        assert res.status_code == 200
+        content = res.body["content"]
+        draft_n = res.body["timings"].get("draft_n", 0)
+        server.stop()
+        return content, draft_n
+
+    baseline, _ = run(None)
+    mtp, draft_n = run("draft-mtp")
+    assert draft_n > 0
+    assert mtp == baseline
