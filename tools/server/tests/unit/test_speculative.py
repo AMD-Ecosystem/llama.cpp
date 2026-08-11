@@ -21,6 +21,10 @@ def create_server():
 
 @pytest.fixture(autouse=True)
 def fixture_create_server():
+    # the gpu-rocm MTP check builds its own server; skip the draft-model download
+    # of this fixture (it needs the binary's HTTPS, absent on that CI build).
+    if os.environ.get("GG_MTP_GREEDY") == "1":
+        return None
     return create_server()
 
 

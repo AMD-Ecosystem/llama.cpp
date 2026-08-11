@@ -547,6 +547,9 @@ function gg_run_mtp_greedy {
 
     pip install -r tools/server/tests/requirements.txt --disable-pip-version-check
 
+    # download_file() writes into ./tmp, which must exist
+    mkdir -p tools/server/tests/tmp
+
     (cd tools/server/tests && \
         GG_MTP_GREEDY=1 \
         LLAMA_SERVER_BIN_PATH="$SRC/build-ci-release/bin/llama-server" \
@@ -795,6 +798,8 @@ if [ -z ${GG_BUILD_LOW_PERF} ]; then
 
     test $ret -eq 0 && gg_run qwen3_0_6b
 
+    # MTP greedy determinism check: HIP-only (needs a GPU + the RDNA3.5 fast-math
+    # regression it guards against). Runs on the gpu-rocm self-hosted job.
     if [ ! -z ${GG_BUILD_ROCM} ]; then
         test $ret -eq 0 && gg_run mtp_greedy
     fi
