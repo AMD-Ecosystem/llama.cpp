@@ -175,5 +175,3 @@ if (GGML_HIP_ROOFLINE)
     target_compile_definitions(ggml-hip PRIVATE GGML_HIP_ROOFLINE)
     target_link_libraries(ggml-hip PRIVATE ${CMAKE_DL_LIBS})
 endif()
-
-target_compile_options(ggml-hip PRIVATE "$<$<COMPILE_LANGUAGE:HIP>:-ffast-math;-fno-finite-math-only>")
