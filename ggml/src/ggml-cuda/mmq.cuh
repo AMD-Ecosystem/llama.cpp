@@ -1019,7 +1019,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
     constexpr int sz = sizeof(block_q8_1_mmq) / sizeof(int);
 
 #if defined(RDNA3_5) && defined(AMD_WMMA_AVAILABLE) && !defined(AMD_MFMA_AVAILABLE)
-    if constexpr (type == GGML_TYPE_Q4_K && J == 64) {
+    if constexpr (type == GGML_TYPE_Q4_K && (J == 64 || J == 128)) {
         constexpr int qs_cache_size = I/nwarps;
 
         __syncthreads();
