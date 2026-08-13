@@ -371,6 +371,16 @@ static bool ggml_cuda_is_aligned(const ggml_tensor * tensor, const size_t alignm
            tensor->nb[3] % alignment == 0;
 }
 
+// q8_1 activations packed 4 blocks at a time, mirroring ggml-vulkan's block_q8_1_x4.
+// The scales are hoisted out of the per-block headers so that the quant bytes are
+// contiguous and 16 B aligned, which allows a 128-bit activation load. Same total size
+// and same byte offset for any 4-block-aligned index as an array of block_q8_1.
+struct block_q8_1_x4 {
+    half2  ds[4];    //  16 B
+    int8_t qs[128];  // 128 B: four blocks' quant arrays, concatenated
+};
+static_assert(sizeof(block_q8_1_x4) == 4*sizeof(block_q8_1), "block_q8_1_x4 must alias 4 q8_1 blocks");
+
 static constexpr __device__ int ggml_cuda_get_physical_warp_size() {
 #if defined(GGML_USE_HIP) && (defined(__GFX9__) || defined(__GFX8__))
     return 64;

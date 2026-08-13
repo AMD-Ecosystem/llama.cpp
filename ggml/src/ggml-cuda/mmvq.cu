@@ -349,7 +349,25 @@ static constexpr __device__ int get_mmvq_mmid_max_batch_for_device() {
 #endif
 }
 
+// Manually unroll the q4_K K-loop, mirroring ggml-vulkan's mul_mat_vecq.comp. The trip count
+// is runtime-dependent so the compiler will not unroll it on its own; doing it by hand puts
+// four iterations of loads+dots in straight-line code, raising memory-level parallelism.
+// The sched_group_barrier is not optional: unrolling without it is markedly slower than not
+// unrolling at all, because the whole unrolled body's live set is scheduled at once.
+#if defined(GGML_USE_HIP) && defined(RDNA3_5)
+#define GGML_MMVQ_Q4K_UNROLL 4
+#define GGML_MMVQ_Q4K_SCHED_GROUP_BARRIER()                    \
+    do {                                                       \
+        __builtin_amdgcn_sched_group_barrier(0x020, 2, 0);     \
+        __builtin_amdgcn_sched_group_barrier(0x002, 8, 0);     \
+    } while (0)
+#endif
+
 static constexpr __host__ __device__ int calc_nwarps(ggml_type type, int ncols_dst, mmvq_parameter_table_id table_id) {
+    if (table_id == MMVQ_PARAMETERS_RDNA2 && ncols_dst == 1 && type == GGML_TYPE_Q4_K) {
+        // one wave per output row leaves only 2 q4_K superblocks in flight; 2 measures faster
+        return 2;
+    }
     if (table_id == MMVQ_PARAMETERS_GENERIC) {
         switch (ncols_dst) {
             case 1:
@@ -589,11 +607,11 @@ static __global__ void mul_mat_vec_q(
     const block_q8_1 * y = ((const block_q8_1 *) vy) + sample_y*stride_sample_y + channel_y*stride_channel_y;
     const int kbx_offset = sample_x*stride_sample_x + channel_x*stride_channel_x + row0*stride_row_x;
 
-    for (int kbx = tid / (qi/vdr); kbx < blocks_per_row_x; kbx += blocks_per_iter) {
-        const int kby = kbx * (qk/QK8_1); // y block index that aligns with kbx
+    // x block quant index when casting the quants to int
+    const int kqs = vdr * (tid % (qi/vdr));
 
-        // x block quant index when casting the quants to int
-        const int kqs = vdr * (tid % (qi/vdr));
+    auto iter = [&](const int kbx) {
+        const int kby = kbx * (qk/QK8_1); // y block index that aligns with kbx
 
 #pragma unroll
         for (int j = 0; j < ncols_dst; ++j) {
@@ -608,6 +626,33 @@ static __global__ void mul_mat_vec_q(
                     }
                 }
             }
+        }
+    };
+
+#ifdef GGML_MMVQ_Q4K_UNROLL
+    if constexpr (type == GGML_TYPE_Q4_K) {
+        const int kbx0 = tid / (qi/vdr);
+        int kbx  = kbx0;
+        int n_it = kbx0 < blocks_per_row_x
+                 ? (blocks_per_row_x - kbx0 + blocks_per_iter - 1) / blocks_per_iter : 0;
+        while (n_it >= GGML_MMVQ_Q4K_UNROLL) {
+#pragma unroll
+            for (int u = 0; u < GGML_MMVQ_Q4K_UNROLL; ++u) {
+                iter(kbx);
+                kbx += blocks_per_iter;
+                GGML_MMVQ_Q4K_SCHED_GROUP_BARRIER();
+            }
+            n_it -= GGML_MMVQ_Q4K_UNROLL;
+        }
+        while (n_it-- > 0) {
+            iter(kbx);
+            kbx += blocks_per_iter;
+        }
+    } else
+#endif // GGML_MMVQ_Q4K_UNROLL
+    {
+        for (int kbx = tid / (qi/vdr); kbx < blocks_per_row_x; kbx += blocks_per_iter) {
+            iter(kbx);
         }
     }
 
