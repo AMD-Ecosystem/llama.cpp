@@ -16,7 +16,9 @@ on:
 
 jobs:
     update-ops-docs:
-        runs-on: [self-hosted, fast, ARM64]
+        # ROCm fork-local: upstream uses [self-hosted, fast, ARM64] runners that
+        # don't exist in this fork. DO NOT UPSTREAM this runner change.
+        runs-on: ubuntu-24.04
 
         steps:
         - name: Checkout repository

@@ -20,7 +20,9 @@ concurrency:
 
 jobs:
   python-check-requirements:
-    runs-on: [self-hosted, CPU, fast]
+    # ROCm fork-local: upstream uses [self-hosted, CPU, fast] runners that don't
+    # exist in this fork. DO NOT UPSTREAM this runner change.
+    runs-on: ubuntu-24.04
     name: check-requirements
     steps:
       - name: Check out source repository

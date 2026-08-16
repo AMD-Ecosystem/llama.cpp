@@ -42,11 +42,17 @@ concurrency:
 jobs:
   ui-build:
     name: Build static output
+    # ROCm fork-local: the called workflow runs on self-hosted runners absent in the
+    # fork; guard so it no-ops here but merges cleanly from upstream. DO NOT UPSTREAM.
+    if: ${{ github.repository == 'ggml-org/llama.cpp' }}
     uses: ./.github/workflows/ui-build-self-hosted.yml
 
   ui-checks:
     name: Checks
     needs: ui-build
+    # ROCm fork-local: this self-hosted runner does not exist in the fork; guard so
+    # the job no-ops here but merges cleanly from upstream. DO NOT UPSTREAM.
+    if: ${{ github.repository == 'ggml-org/llama.cpp' }}
     runs-on: [self-hosted, PLAYWRIGHT]
     continue-on-error: true
     steps:
@@ -90,6 +96,9 @@ jobs:
   e2e-tests:
     name: E2E Tests
     needs: ui-build
+    # ROCm fork-local: this self-hosted runner does not exist in the fork; guard so
+    # the job no-ops here but merges cleanly from upstream. DO NOT UPSTREAM.
+    if: ${{ github.repository == 'ggml-org/llama.cpp' }}
     runs-on: [self-hosted, PLAYWRIGHT]
     steps:
       - name: Checkout code

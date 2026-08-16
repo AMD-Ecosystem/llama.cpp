@@ -35,6 +35,9 @@ env:
 
 jobs:
   ubuntu-24-openvino:
+    # ROCm fork-local: this self-hosted runner does not exist in the fork; guard so
+    # the job no-ops here but merges cleanly from upstream. DO NOT UPSTREAM.
+    if: ${{ github.repository == 'ggml-org/llama.cpp' }}
     runs-on: [self-hosted, Linux, Intel, OpenVINO]
 
     env:

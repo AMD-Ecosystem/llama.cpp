@@ -37,7 +37,9 @@ concurrency:
 
 jobs:
   server:
-    runs-on: [self-hosted, CPU, Linux, llama-server]
+    # ROCm fork-local: upstream uses [self-hosted, CPU, Linux, llama-server] runners
+    # that don't exist in this fork. DO NOT UPSTREAM this runner change.
+    runs-on: ubuntu-24.04
 
     strategy:
       matrix:

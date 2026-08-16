@@ -12,7 +12,9 @@ on:
 
 jobs:
     pre-tokenizer-hashes:
-        runs-on: [self-hosted, fast]
+        # ROCm fork-local: upstream uses [self-hosted, fast] runners that don't
+        # exist in this fork. DO NOT UPSTREAM this runner change.
+        runs-on: ubuntu-24.04
 
         steps:
         - name: Checkout repository

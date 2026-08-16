@@ -28,7 +28,9 @@ env:
 
 jobs:
   ctest:
-    runs-on: [self-hosted, X64, CPU, Linux]
+    # ROCm fork-local: upstream uses [self-hosted, X64, CPU, Linux] runners that
+    # don't exist in this fork. DO NOT UPSTREAM this runner change.
+    runs-on: ubuntu-24.04
 
     continue-on-error: true
 
