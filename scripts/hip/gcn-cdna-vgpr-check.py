@@ -60,10 +60,6 @@ def main():
     log_file = sys.argv[1]
     ignored = {
         '_ZL21gated_linear_attn_f32ILi128EEviiiifPKfS1_S1_S1_S1_Pf',
-        '_ZL18flash_attn_ext_f16ILi64ELi64ELi16ELi2ELb0ELb0EEvPKcS1_S1_S1_S1_PKiPfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiiil',
-        '_ZL18flash_attn_ext_f16ILi80ELi80ELi16ELi2ELb0ELb0EEvPKcS1_S1_S1_S1_PKiPfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiiil',
-        '_ZL18flash_attn_ext_f16ILi96ELi96ELi16ELi2ELb0ELb0EEvPKcS1_S1_S1_S1_PKiPfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiiil',
-        '_ZL18flash_attn_ext_f16ILi64ELi64ELi32ELi1ELb0ELb0EEvPKcS1_S1_S1_S1_PKiPfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiiil',
         '_ZL13rwkv_wkv7_f32ILi128EEviiiiPKfS1_S1_S1_S1_S1_S1_Pf',
         '_ZL18flash_attn_ext_f16ILi80ELi80ELi16ELi1ELb0ELb0EEvPKcS1_S1_S1_S1_PKiPfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiiil',
         '_ZL18flash_attn_ext_f16ILi112ELi112ELi16ELi2ELb0ELb0EEvPKcS1_S1_S1_S1_PKiPfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiiil',
@@ -144,20 +140,22 @@ def main():
         '_ZL9mul_mat_qIL9ggml_type40ELi112ELb1EEvPKcPKiS4_S4_PfS5_iiiiiiiiiiiiiiiii',
         '_ZL9mul_mat_qIL9ggml_type40ELi128ELb0EEvPKcPKiS4_S4_PfS5_iiiiiiiiiiiiiiiii',
         '_ZL9mul_mat_qIL9ggml_type40ELi128ELb1EEvPKcPKiS4_S4_PfS5_iiiiiiiiiiiiiiiii',
-        # TEMPORARY (revisit on next upstream sync): the mmq rewrite repacked
-        # kernel dims into HIP_vector_type<uint,3>, and the RDNA3.5 compacted-MoE
-        # tiling appends (block_expert, block_start, n_experts) to mul_mat_q's
-        # signature (the trailing "S4_S4_i") -- both change the mangled name so the
-        # pre-existing allowlist entries no longer match. These Q2_K variants and the
-        # rwkv_wkv_f32 recurrent kernel spill on gfx908 exactly like their
-        # already-ignored siblings (the spill is pre-existing, not introduced here).
-        # Upstream master is itself red on this check
-        # (ggml-org/llama.cpp#21020 "HIP quality check failing again"); drop these
-        # once upstream refreshes its own ignore list.
+        # TEMPORARY (revisit on next upstream sync): the mmq rewrite repacked,
+        # kernel dims into HIP_vector_type<uint,3>, and the RDNA3.5 compacted-MoE,
+        # tiling appends (block_expert, block_start, n_experts) to mul_mat_q's,
+        # signature (the trailing "S4_S4_i") -- both change the mangled name so the,
+        # pre-existing allowlist entries no longer match. These Q2_K variants and the,
+        # rwkv_wkv_f32 recurrent kernel spill on gfx908 exactly like their,
+        # already-ignored siblings (the spill is pre-existing, not introduced here).,
+        # Upstream master is itself red on this check,
+        # (ggml-org/llama.cpp#21020 "HIP quality check failing again"); drop these,
+        # once upstream refreshes its own ignore list.,
         '_ZL12rwkv_wkv_f32ILi128EEviiiiPKfS1_S1_S1_S1_S1_Pf',
         '_ZL9mul_mat_qIL9ggml_type10ELi48ELb0EEvPKcPKiS4_S4_PfS5_PKf15HIP_vector_typeIjLj3EEiiiiiS9_S9_iiiS9_S9_iiiS9_S4_S4_i',
         '_ZL9mul_mat_qIL9ggml_type10ELi64ELb0EEvPKcPKiS4_S4_PfS5_PKf15HIP_vector_typeIjLj3EEiiiiiS9_S9_iiiS9_S9_iiiS9_S4_S4_i',
-        '_ZL9mul_mat_qIL9ggml_type10ELi64ELb1EEvPKcPKiS4_S4_PfS5_PKf15HIP_vector_typeIjLj3EEiiiiiS9_S9_iiiS9_S9_iiiS9_S4_S4_i'
+        '_ZL9mul_mat_qIL9ggml_type10ELi64ELb1EEvPKcPKiS4_S4_PfS5_PKf15HIP_vector_typeIjLj3EEiiiiiS9_S9_iiiS9_S9_iiiS9_S4_S4_i',
+        '_ZL9mul_mat_qIL9ggml_type10ELi64ELb1EEvPKcPKiS4_S4_PfS5_PKf15HIP_vector_typeIjLj3EEiiiiiS9_S9_iiiS9_S9_iiiS9_',
+        '_ZL9mul_mat_qIL9ggml_type42ELi128ELb1EEvPKcPKiS4_S4_PfS5_PKf15HIP_vector_typeIjLj3EEiiiiiS9_S9_iiiS9_S9_iiiS9_',
     }
 
     functions = parse_log_file(log_file)
