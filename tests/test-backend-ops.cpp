@@ -8207,6 +8207,13 @@ static void add_rdna35_mmq_cases(std::vector<std::unique_ptr<test_case>> & test_
 
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32,  512, 16, 2048, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 4096, 16, 4096, {1, 1}, {1, 1}));
+
+    // gemma-4-31B-it Q4_K_M decode: the FFN gate/up matvec, the largest single op in decode.
+    // In the model this op is fused (MUL_MAT + MUL_MAT + GLU), which a plain test_mul_mat does
+    // not reproduce; this case exists to time the mul_mat_vec_q kernel itself, for which the
+    // perf harness duplicates the MUL_MAT node directly.
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 21504, 1, 5376, {1, 1}, {1, 1}));
+
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K, GGML_TYPE_F32, 4096, 128, 12288, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 32, 128, 4096, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 32, 128, 4096, {1, 1}, {1, 1}));

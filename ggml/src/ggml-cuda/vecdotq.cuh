@@ -1000,6 +1000,72 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1(
 
     const block_q4_K * bq4_K = (const block_q4_K *) vbq + kbx;
 
+#if defined(RDNA3_5)
+    // Mirrors ggml-vulkan's mul_mat_vecq.comp: each thread takes one aligned 16-byte chunk
+    // of qs and one nibble half, giving a 128-bit weight load, plus 16 contiguous activation
+    // bytes for a 128-bit activation load (requires the block_q8_1_x4 layout). The two threads
+    // sharing a chunk read the same 16 bytes with different shifts, the same register-level
+    // redundancy RADV accepts in exchange for wide loads. Still 16 threads/superblock, so VDR
+    // stays 2 and the K-loop trip count is unchanged.
+    const int j = iqs >> 1;            // 0..15
+    const int c = j >> 1;              // 16-byte chunk of qs
+    const int h = j &  1;              // nibble half
+
+    // 16 contiguous weights starting at W, all inside one 32-weight sub-block
+    const int W  = 64*(c >> 1) + 16*(c & 1) + 32*h;
+    const int sb = W >> 5;             // sub-block / q8_1 block index, 0..7
+    const int wo = W & 31;             // byte offset inside that block, 0 or 16
+
+    // qs is at offset 16 in a 144-byte block, so qs + 16*c is always 16 B aligned
+    const uint4 wv = *(const uint4 *) __builtin_assume_aligned(bq4_K->qs + 16*c, 16);
+    const int sh = 4*h;
+    const int w0 = (wv.x >> sh) & 0x0F0F0F0F;
+    const int w1 = (wv.y >> sh) & 0x0F0F0F0F;
+    const int w2 = (wv.z >> sh) & 0x0F0F0F0F;
+    const int w3 = (wv.w >> sh) & 0x0F0F0F0F;
+
+    const block_q8_1_x4 * bq8x4 = (const block_q8_1_x4 *) bq8_1;
+    const int8_t * qs8 = bq8x4[sb >> 2].qs + (sb & 3)*QK8_1 + wo;
+    const uint4 uv = *(const uint4 *) __builtin_assume_aligned(qs8, 16);
+
+    const int u0 = uv.x, u1 = uv.y, u2 = uv.z, u3 = uv.w;
+
+    int sumi_d = 0;
+    sumi_d = ggml_cuda_dp4a(w0, u0, sumi_d);
+    sumi_d = ggml_cuda_dp4a(w1, u1, sumi_d);
+    sumi_d = ggml_cuda_dp4a(w2, u2, sumi_d);
+    sumi_d = ggml_cuda_dp4a(w3, u3, sumi_d);
+
+    // Branchless get_scale_min_k4 for sub-block sb. Only three distinct bytes are ever needed;
+    // load them unconditionally and select, which keeps this in VALU instead of emitting
+    // branches (or conditional loads) in the hot loop.
+    const uint8_t * sc8 = bq4_K->scales;
+    const int hi = sb >> 2;
+    const int A = sc8[sb];
+    const int B = sc8[sb + 4];
+    const int C = sc8[sb & 3];
+    const int s_a = hi ? B : A;
+    const int s_b = B;
+    const int s_c = hi ? C : A;
+    const int s_s = A;
+    const int sc_lo = s_s & 63;
+    const int mn_lo = s_b & 63;
+    const int sc_hi = (s_a & 0x0F) | ((s_c >> 6) << 4);
+    const int mn_hi = (s_a >>   4) | ((s_s >> 6) << 4);
+    // NOTE: keep these signed. sumi_d is a dot product of signed int8 and is frequently
+    // negative; an unsigned scale would make sumi_d*sc unsigned arithmetic.
+    const int sc = hi ? sc_hi : sc_lo;
+    const int mn = hi ? mn_hi : mn_lo;
+
+    // The min term needs sum(u) over this thread's 16 activations. q8_1 already carries the
+    // whole 32-element block sum in ds.y, so read it instead of recomputing it with 4 more
+    // dp4a. Per lane the ds.y*0.5 split is approximate, but the two threads sharing a q8_1
+    // block also share the sub-block scale, so it is exact after the cross-lane reduction.
+    const float2 ds8  = __half22float2(bq8x4[sb >> 2].ds[sb & 3]);
+    const float2 dm4f = __half22float2(bq4_K->dm);
+    return dm4f.x * (ds8.x * (sumi_d * sc)) - dm4f.y * (mn * ds8.y * 0.5f);
+#else
+
     int    v[2];
     int    u[2*QR4_K];
     float d8[QR4_K];
@@ -1039,6 +1105,7 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1(
     }
 
     return vec_dot_q4_K_q8_1_impl_vmmq(v, u, sc, m, bq4_K->dm, d8);
+#endif // defined(RDNA3_5)
 }
 
 static __device__ __forceinline__ float vec_dot_q5_K_q8_1(

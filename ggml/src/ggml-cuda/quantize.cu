@@ -50,6 +50,7 @@ static __device__ __forceinline__ float nvfp4_native_scale_error(
 #endif // CUDART_VERSION >= 12080
 #endif // defined(BLACKWELL_MMA_AVAILABLE)
 
+template <bool use_x4>
 __launch_bounds__(CUDA_QUANTIZE_BLOCK_SIZE, 1)
 static __global__ void quantize_q8_1(
         const float * x_ptr, void * vy_ptr,
@@ -91,13 +92,36 @@ static __global__ void quantize_q8_1(
     const float  d = amax / 127.0f;
     const int8_t q = amax == 0.0f ? 0 : roundf(xi / d);
 
-    y[ib].qs[iqs] = q;
+    if constexpr (use_x4) {
+        // Scales hoisted to the front of each 4-block group, quant bytes contiguous.
+        //
+        // ds.y holds d*sum(q), the DEQUANTIZED block sum, which is the convention
+        // ggml-vulkan's quantize_q8_1 uses and what the q4_K min term below consumes. The
+        // plain block_q8_1 layout stores sum(x) instead; the two differ by the quantization
+        // residual, and feeding sum(x) to that min term costs an order of magnitude of
+        // accuracy on long rows.
+        const float sumq = warp_reduce_sum<QK8_1>((float) q);
 
-    if (iqs > 0) {
-        return;
+        block_q8_1_x4 * y4 = (block_q8_1_x4 *) vy;
+        const int64_t outer = ib >> 2;
+        const int64_t inner = ib &  3;
+
+        y4[outer].qs[inner*QK8_1 + iqs] = q;
+
+        if (iqs > 0) {
+            return;
+        }
+
+        y4[outer].ds[inner] = make_half2(d, d*sumq);
+    } else {
+        y[ib].qs[iqs] = q;
+
+        if (iqs > 0) {
+            return;
+        }
+
+        y[ib].ds = make_half2(d, sum);
     }
-
-    y[ib].ds = make_half2(d, sum);
 }
 
 __device__ __forceinline__ uint8_t compute_e8m0_scale(float amax) {
@@ -568,8 +592,14 @@ void quantize_row_q8_1_cuda(
     const dim3 num_blocks(block_num_x, ne1, ne2*ne3);
     const dim3 block_size(CUDA_QUANTIZE_BLOCK_SIZE, 1, 1);
     const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(num_blocks, block_size, 0, stream);
-    ggml_cuda_kernel_launch(quantize_q8_1, launch_params, x, vy, ne00, s01, s02, s03, ne0, ne1, ne2_fastdiv);
-    GGML_UNUSED(type_src0);
+    // Only the RDNA3.5 q4_K vec_dot reads the x4 layout; every other type and arch keeps the
+    // plain block_q8_1 layout. The buffer is allocated per mul_mat, so the two can coexist.
+    const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+    if (type_src0 == GGML_TYPE_Q4_K && GGML_CUDA_CC_IS_RDNA3_5(cc)) {
+        ggml_cuda_kernel_launch(quantize_q8_1<true>,  launch_params, x, vy, ne00, s01, s02, s03, ne0, ne1, ne2_fastdiv);
+    } else {
+        ggml_cuda_kernel_launch(quantize_q8_1<false>, launch_params, x, vy, ne00, s01, s02, s03, ne0, ne1, ne2_fastdiv);
+    }
 }
 
 void quantize_mmq_q8_1_cuda(
