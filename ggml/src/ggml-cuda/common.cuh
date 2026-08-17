@@ -381,8 +381,15 @@ struct block_q8_1_x4 {
 };
 static_assert(sizeof(block_q8_1_x4) == 4*sizeof(block_q8_1), "block_q8_1_x4 must alias 4 q8_1 blocks");
 
+// Set by ggml-hip/CMakeLists.txt on the translation units built with -mwavefrontsize64.
+#ifndef GGML_CUDA_FORCE_WAVE64
+#define GGML_CUDA_FORCE_WAVE64 0
+#endif
+
 static constexpr __device__ int ggml_cuda_get_physical_warp_size() {
-#if defined(GGML_USE_HIP) && (defined(__GFX9__) || defined(__GFX8__))
+#if GGML_CUDA_FORCE_WAVE64
+    return 64;
+#elif defined(GGML_USE_HIP) && (defined(__GFX9__) || defined(__GFX8__))
     return 64;
 #else
     return 32;

@@ -898,7 +898,10 @@ static void mul_mat_vec_q_switch_ncols_dst(
 
     const int device = ggml_cuda_get_device();
     const int                     cc        = ggml_cuda_info().devices[device].cc;
-    const int warp_size = ggml_cuda_info().devices[device].warp_size;
+    // This TU is compiled -mwavefrontsize64 when GGML_HIP_MMVQ_WAVE64 is set, in which case its
+    // kernels have 64 lanes per wave regardless of what the device properties report (32 on
+    // RDNA), and the launch geometry has to match.
+    const int warp_size = GGML_CUDA_FORCE_WAVE64 ? 64 : ggml_cuda_info().devices[device].warp_size;
     const mmvq_parameter_table_id table_id  = get_device_table_id(cc);
 
     const bool has_ids = ids != nullptr;
