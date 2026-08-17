@@ -61,6 +61,15 @@ file(GLOB   GGML_HEADERS_ROCM "../ggml-cuda/*.cuh")
 list(APPEND GGML_HEADERS_ROCM "../../include/ggml-cuda.h")
 
 file(GLOB   GGML_SOURCES_ROCM "../ggml-cuda/*.cu")
+
+# Opt-in: build the quantized mat-vec kernels for wave64. RDNA selects the wave size per kernel,
+# but -mwavefrontsize64 is per translation unit, so this flips every kernel in mmvq.cu, not just
+# the q4_K one. Not applied target-wide: fattn-mma-f16.cuh static_asserts on wave32 tiling.
+if (GGML_HIP_MMVQ_WAVE64)
+    set_source_files_properties("../ggml-cuda/mmvq.cu" PROPERTIES
+        COMPILE_OPTIONS "-mwavefrontsize64;-DGGML_CUDA_FORCE_WAVE64=1")
+endif()
+
 file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-tile*.cu")
 list(APPEND GGML_SOURCES_ROCM ${SRCS})
 file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-mma*.cu")
