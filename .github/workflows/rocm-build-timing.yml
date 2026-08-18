@@ -1,0 +1,81 @@
+# TEMP eval workflow to measure ubuntu-22-rocm build time (cold vs warm
+# ccache) on stock GitHub runners. Runs ONLY the ROCm build, on manual dispatch.
+# Do NOT merge - remove before this PR lands.
+name: ROCm build timing (temp)
+
+on:
+  workflow_dispatch:
+
+env:
+  CMAKE_ARGS: "-DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON"
+
+jobs:
+  ubuntu-22-rocm-timing:
+    runs-on: ubuntu-22.04
+
+    strategy:
+      matrix:
+        include:
+          - ROCM_VERSION: "7.14.0"
+            gpu_targets: "gfx908;gfx90a;gfx942;gfx950;gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1152;gfx1200;gfx1201"
+            build: 'x64'
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v6
+
+      - name: Free up disk space
+        uses: ggml-org/free-disk-space@v1.3.1
+        with:
+          tool-cache: true
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: release-ubuntu-22.04-rocm-${{ matrix.ROCM_VERSION }}
+          max-size: "2G"
+
+      - name: Dependencies
+        run: |
+          sudo apt install -y build-essential git cmake wget
+
+      - name: Setup TheRock with Wheels
+        run: |
+          python3 -m venv .venv
+          source .venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install --index-url https://repo.amd.com/rocm/whl-multi-arch/ "rocm[libraries,devel]==${{ matrix.ROCM_VERSION }}"
+          ROCM_PATH=$(rocm-sdk path --root)
+          CMAKE_PATH=$(rocm-sdk path --cmake)
+          BIN_PATH=$(rocm-sdk path --bin)
+          echo "ROCM_PATH=$ROCM_PATH" >> $GITHUB_ENV
+          echo "CMAKE_PREFIX_PATH=$CMAKE_PATH" >> $GITHUB_ENV
+          echo "HIP_PATH=$ROCM_PATH" >> $GITHUB_ENV
+          echo "PATH=$BIN_PATH:${PATH}" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=$ROCM_PATH/lib:${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
+          echo "$(pwd)/.venv/bin" >> $GITHUB_PATH
+
+      - name: ccache stats (before build)
+        run: ccache -s
+
+      - name: Build with native CMake HIP support
+        run: |
+          start=$(date +%s)
+          cmake -B build -S . \
+            -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_NATIVE=OFF \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DGGML_CPU_ALL_VARIANTS=ON \
+            -DGPU_TARGETS="${{ matrix.gpu_targets }}" \
+            -DGGML_HIP=ON \
+            -DHIP_PLATFORM=amd \
+            ${{ env.CMAKE_ARGS }}
+          cmake --build build --config Release -j $(nproc)
+          end=$(date +%s)
+          echo "BUILD_SECONDS=$((end - start))" | tee -a $GITHUB_STEP_SUMMARY
+
+      - name: ccache stats (after build)
+        run: ccache -s | tee -a $GITHUB_STEP_SUMMARY
