@@ -5,6 +5,9 @@ name: ROCm build timing (temp)
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - jimwu.restore-ubuntu-rocm-release
 
 env:
   CMAKE_ARGS: "-DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON"
