@@ -38,6 +38,16 @@ jobs:
           key: release-ubuntu-22.04-rocm-${{ matrix.ROCM_VERSION }}
           max-size: "2G"
 
+      - name: Tune ccache for reinstalled ROCm toolchain
+        run: |
+          # The ROCm toolchain is pip-installed fresh each run, so the clang
+          # binary's mtime changes every time. With the default
+          # compiler_check=mtime that invalidates the whole cache. Hash the
+          # compiler contents instead so warm builds actually hit.
+          ccache --set-config=compiler_check=content
+          ccache --set-config=sloppiness=time_macros,include_file_mtime,include_file_ctime
+          ccache -p | grep -E "compiler_check|sloppiness"
+
       - name: Dependencies
         run: |
           sudo apt install -y build-essential git cmake wget
