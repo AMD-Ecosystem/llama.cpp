@@ -569,8 +569,37 @@ static __device__ __forceinline__ float vec_dot_q3_K_q8_1_impl_mmq(
     return d3*d8 * sumi;
 }
 
-#define VDR_Q4_K_Q8_1_MMVQ 8
+#if defined(RDNA3_5)
+#define VDR_Q4_K_Q8_1_MMVQ 8   // b128 wide-load path: one thread owns a full 32-byte group
+#else
+#define VDR_Q4_K_Q8_1_MMVQ 2   // upstream default on non-RDNA3.5 targets
+#endif
 #define VDR_Q4_K_Q8_1_MMQ  8
+
+// contiguous v/x values (VDR=2 fallback; used on non-RDNA3.5 targets)
+static __device__ __forceinline__ float vec_dot_q4_K_q8_1_impl_vmmq(
+    const int * __restrict__ v, const int * __restrict__ u, const uint8_t * __restrict__ sc,
+    const uint8_t * __restrict__ m, const half2 & dm4, const float * __restrict__ d8) {
+
+    float sumf_d = 0.0f;
+    float sumf_m = 0.0f;
+
+#pragma unroll
+    for (int i = 0; i < QR4_K; ++i) {
+        const int v0i = (v[0] >> (4*i)) & 0x0F0F0F0F;
+        const int v1i = (v[1] >> (4*i)) & 0x0F0F0F0F;
+
+        const int dot1 = ggml_cuda_dp4a(v1i, u[2*i+1], ggml_cuda_dp4a(v0i, u[2*i+0], 0)); // SIMD dot product
+        const int dot2 = ggml_cuda_dp4a(0x01010101, u[2*i+1], ggml_cuda_dp4a(0x01010101, u[2*i+0], 0)); // sum of u
+
+        sumf_d += d8[i] * (dot1 * sc[i]);
+        sumf_m += d8[i] * (dot2 * m[i]);  // multiply constant part of q4_K with sum of q8_1 values
+    }
+
+    const float2 dm4f = __half22float2(dm4);
+
+    return dm4f.x*sumf_d - dm4f.y*sumf_m;
+}
 
 // contiguous v/x values
 // VDR=8: one thread owns a full 32-byte Q4_K group (4 slots). vlo/vhi hold the two 16-byte
@@ -602,6 +631,67 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1_impl_vmmq8(
 
     return dm4f.x*sumf_d - dm4f.y*sumf_m;
 }
+
+#if defined(RDNA3_5)
+// Shared Q4_K b128 (VDR=8) decode helpers, used by both the single-column vec_dot function-
+// pointer target (vec_dot_q4_K_q8_1) and the multi-column weight-hoist (vec_dot_q4_K_q8_1_ncols).
+struct q4_K_weight_vmmq8 {
+    int     vlo[4];
+    int     vhi[4];
+    uint8_t sc[2];
+    uint8_t m[2];
+    half2   dm;
+    int     bq8_offset;
+};
+
+static __device__ __forceinline__ q4_K_weight_vmmq8 load_q4_K_weight_vmmq8(
+    const block_q4_K * __restrict__ bq4_K, const int iqs) {
+
+    q4_K_weight_vmmq8 w;
+    // iqs is in {0,8,16,24}; each thread owns one full 32-byte group.
+    w.bq8_offset = QR4_K * ((iqs/2) / (QI8_1/2)); // {0,2,4,6}; group = bq8_offset/2
+
+    // Weight: load the whole 32-byte group as two 16-byte int4 (-> global_load_b128).
+    // q4base is 16-byte aligned (qs at +16 in a 144-byte block; 16*bq8_offset is a mult. of 16).
+    const int * q4base = (const int *)(bq4_K->qs + 16 * w.bq8_offset);
+    *((int4 *) w.vlo) = *((const int4 *) (q4base + 0));
+    *((int4 *) w.vhi) = *((const int4 *) (q4base + 4));
+
+    const uint16_t * scales = (const uint16_t *)bq4_K->scales;
+    uint16_t aux[2];
+    const int j = w.bq8_offset/2;
+    if (j < 2) {
+        aux[0] = scales[j+0] & 0x3f3f;
+        aux[1] = scales[j+2] & 0x3f3f;
+    } else {
+        aux[0] = ((scales[j+2] >> 0) & 0x0f0f) | ((scales[j-2] & 0xc0c0) >> 2);
+        aux[1] = ((scales[j+2] >> 4) & 0x0f0f) | ((scales[j-0] & 0xc0c0) >> 2);
+    }
+    const uint8_t * sc = (const uint8_t *)aux;
+    w.sc[0] = sc[0]; w.sc[1] = sc[1];
+    w.m[0]  = sc[2]; w.m[1]  = sc[3];
+    w.dm = bq4_K->dm;
+    return w;
+}
+
+static __device__ __forceinline__ void load_q4_K_activation_vmmq8(
+    const block_q8_1 * __restrict__ bq8_1, const int bq8_offset,
+    int * __restrict__ ulo, int * __restrict__ uhi, float * __restrict__ d8) {
+
+    // q8_1 blocks are 36 bytes apart (qs 4-byte aligned), so these stay scalar b32.
+#pragma unroll
+    for (int i = 0; i < QR4_K; ++i) {
+        const block_q8_1 * bq8i = bq8_1 + bq8_offset + i;
+        d8[i] = __low2float(bq8i->ds);
+#pragma unroll
+        for (int s = 0; s < 4; ++s) {
+            ulo[i*4 + s] = get_int_b4(bq8i->qs, s);
+            uhi[i*4 + s] = get_int_b4(bq8i->qs, s + 4);
+        }
+    }
+}
+
+#endif // defined(RDNA3_5)
 
 // contiguous v/x + u/y values
 static __device__ __forceinline__ float vec_dot_q4_K_q8_1_impl_mmq(
@@ -1006,16 +1096,27 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1(
 
     const block_q4_K * bq4_K = (const block_q4_K *) vbq + kbx;
 
-    // VDR=8: iqs is in {0,8,16,24}; each thread owns one full 32-byte group.
-    const int bq8_offset = QR4_K * ((iqs/2) / (QI8_1/2)); // {0,2,4,6}; group = bq8_offset/2
+#if defined(RDNA3_5)
+    // VDR=8: decode the weight group + scales once, then load this column's activation.
+    const q4_K_weight_vmmq8 w = load_q4_K_weight_vmmq8(bq4_K, iqs);
 
-    // Weight: load the whole 32-byte group as two 16-byte int4 (-> global_load_b128).
-    // q4base is 16-byte aligned (qs at +16 in a 144-byte block; 16*bq8_offset is a mult. of 16).
-    const int * q4base = (const int *)(bq4_K->qs + 16 * bq8_offset);
-    int vlo[4]; // bytes  0..15 of the group (old v[0] across the 4 slots)
-    int vhi[4]; // bytes 16..31 of the group (old v[1] across the 4 slots)
-    *((int4 *) vlo) = *((const int4 *) (q4base + 0));
-    *((int4 *) vhi) = *((const int4 *) (q4base + 4));
+    int   ulo[QR4_K*4];
+    int   uhi[QR4_K*4];
+    float d8[QR4_K];
+    load_q4_K_activation_vmmq8(bq8_1, w.bq8_offset, ulo, uhi, d8);
+
+    return vec_dot_q4_K_q8_1_impl_vmmq8(w.vlo, w.vhi, ulo, uhi, w.sc, w.m, w.dm, d8);
+#else
+    int    v[2];
+    int    u[2*QR4_K];
+    float d8[QR4_K];
+
+    // iqs is in 0,2..30. bq8_offset = iqs/4 -> bq8_offset = 0, 2, 4, 6
+    const int bq8_offset = QR4_K * ((iqs/2) / (QI8_1/2));
+
+    const int * q4 = (const int *)(bq4_K->qs + 16 * bq8_offset + 4 * ((iqs/2)%4));
+    v[0] = q4[0];
+    v[1] = q4[4];
 
     const uint16_t * scales = (const uint16_t *)bq4_K->scales;
     uint16_t aux[2];
@@ -1030,23 +1131,42 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1(
     const uint8_t * sc = (const uint8_t *)aux;
     const uint8_t * m  = sc + 2;
 
-    // Activations: q8_1 blocks are 36 bytes apart (qs 4-byte aligned), so these stay scalar b32.
-    int   ulo[QR4_K*4];
-    int   uhi[QR4_K*4];
-    float d8[QR4_K];
-#pragma unroll
     for (int i = 0; i < QR4_K; ++i) {
         const block_q8_1 * bq8i = bq8_1 + bq8_offset + i;
         d8[i] = __low2float(bq8i->ds);
-#pragma unroll
-        for (int s = 0; s < 4; ++s) {
-            ulo[i*4 + s] = get_int_b4(bq8i->qs, s);
-            uhi[i*4 + s] = get_int_b4(bq8i->qs, s + 4);
-        }
+
+        const int * q8 = (const int *)bq8i->qs + ((iqs/2)%4);
+        u[2*i+0] = q8[0];
+        u[2*i+1] = q8[4];
     }
 
-    return vec_dot_q4_K_q8_1_impl_vmmq8(vlo, vhi, ulo, uhi, sc, m, bq4_K->dm, d8);
+    return vec_dot_q4_K_q8_1_impl_vmmq(v, u, sc, m, bq4_K->dm, d8);
+#endif // defined(RDNA3_5)
 }
+
+#if defined(RDNA3_5)
+template <int ncols_dst>
+static __device__ __forceinline__ void vec_dot_q4_K_q8_1_ncols(
+    const void * __restrict__ vbq, const int kbx,
+    const block_q8_1 * __restrict__ y, const int kby, const int stride_col_y,
+    const int iqs, float * __restrict__ acc) {
+
+    const block_q4_K * bq4_K = (const block_q4_K *) vbq + kbx;
+    const q4_K_weight_vmmq8 w = load_q4_K_weight_vmmq8(bq4_K, iqs);
+
+#pragma unroll
+    for (int j = 0; j < ncols_dst; ++j) {
+        const block_q8_1 * bq8_1 = &y[j*stride_col_y + kby];
+
+        int   ulo[QR4_K*4];
+        int   uhi[QR4_K*4];
+        float d8[QR4_K];
+        load_q4_K_activation_vmmq8(bq8_1, w.bq8_offset, ulo, uhi, d8);
+
+        acc[j] += vec_dot_q4_K_q8_1_impl_vmmq8(w.vlo, w.vhi, ulo, uhi, w.sc, w.m, w.dm, d8);
+    }
+}
+#endif // defined(RDNA3_5)
 
 static __device__ __forceinline__ float vec_dot_q5_K_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
