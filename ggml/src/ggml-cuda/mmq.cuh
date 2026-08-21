@@ -1936,11 +1936,6 @@ static int mmq_rdna35_tuned_J(const ggml_type type, const bool moe, const int J_
     if (J_occupancy == 64 && type == GGML_TYPE_Q8_0) {
         return 96;
     }
-#if defined(GGML_RDNA35_Q4K_ADAPTIVE_Q4_ACTIVATION)
-    if (type == GGML_TYPE_Q4_K && J_occupancy >= 128) {
-        return 64;
-    }
-#endif
     return J_occupancy;
 }
 #endif // GGML_USE_HIP
@@ -2261,11 +2256,7 @@ void mul_mat_q_switch_J(ggml_backend_cuda_context & ctx, const mmq_args & args, 
     }
 
     if constexpr (type == GGML_TYPE_Q4_K) {
-#if defined(GGML_RDNA35_Q4K_ADAPTIVE_Q4_ACTIVATION)
-        constexpr int q4_k_J_default     = 32;
-#else
         constexpr int q4_k_J_default     = 128;
-#endif
         constexpr int q4_k_J_small       = 64;
         constexpr int q4_k_m_small_max   = 1024;
         constexpr int q4_k_ncols_pipeline = 128;
