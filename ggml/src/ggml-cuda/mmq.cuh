@@ -1137,6 +1137,12 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 #endif
         {
             __syncthreads();
+#if defined(GGML_RDNA35_Q4K_ADAPTIVE_Q4_ACTIVATION)
+            if constexpr (pure_q4) {
+                ggml_cuda_mmq_load_tiles_q4_K_rdna35<type, J, fallback, true>(
+                    x, tile_x, offset_x + loop_kb0_start, tile_x_max_i, stride_row_x);
+            } else
+#endif
             load_tiles(x, tile_x, offset_x + loop_kb0_start, tile_x_max_i, stride_row_x);
             __syncthreads();
         }
@@ -1159,8 +1165,14 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
                 const int * by1_q4 = y_q4 ? y_q4 + ncols_y*(yk + 1)*q4_block_size_int : nullptr;
 
                 __syncthreads();
-                load_tiles(x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
                 if constexpr (pure_q4) {
+                    ggml_cuda_mmq_load_tiles_q4_K_rdna35<type, J, fallback, true>(
+                        x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
+                } else {
+                    load_tiles(x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
+                }
+                if constexpr (pure_q4) {
+#pragma unroll
                     for (int l0 = 0; l0 < J*MMQ_TILE_Y_Q4_K; l0 += nwarps*warp_size) {
                         const int l = l0 + threadIdx.y*warp_size + threadIdx.x;
                         tile_y_q4[l] = by0_q4[l];
@@ -1175,7 +1187,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
                 __syncthreads();
                 if constexpr (pure_q4) {
                     ggml_cuda_mmq_vec_dot_q4_K_q8_1_mma_rdna35<
-                        type, J, fallback, false, true>(
+                        type, J, fallback, true, true>(
                         tile_x, tile_y, tile_y_q4, nullptr, sum, 0);
                 } else {
                     vec_dot(tile_x, tile_y, sum, 0);
@@ -1183,6 +1195,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 
                 __syncthreads();
                 if constexpr (pure_q4) {
+#pragma unroll
                     for (int l0 = 0; l0 < J*MMQ_TILE_Y_Q4_K; l0 += nwarps*warp_size) {
                         const int l = l0 + threadIdx.y*warp_size + threadIdx.x;
                         tile_y_q4[l] = by1_q4[l];
@@ -1197,7 +1210,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
                 __syncthreads();
                 if constexpr (pure_q4) {
                     ggml_cuda_mmq_vec_dot_q4_K_q8_1_mma_rdna35<
-                        type, J, fallback, false, true>(
+                        type, J, fallback, true, true>(
                         tile_x, tile_y, tile_y_q4, nullptr, sum, MMQ_TILE_NE_K);
                 } else {
                     vec_dot(tile_x, tile_y, sum, MMQ_TILE_NE_K);
@@ -1224,6 +1237,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
             }
 #if defined(GGML_RDNA35_Q4K_ADAPTIVE_Q4_ACTIVATION)
             if constexpr (pure_q4) {
+#pragma unroll
                 for (int l0 = 0; l0 < J*MMQ_TILE_Y_Q4_K; l0 += nwarps*warp_size) {
                     const int l = l0 + threadIdx.y*warp_size + threadIdx.x;
                     tile_y_q4[l] = by0_q4[l];
@@ -1234,7 +1248,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 #if defined(GGML_RDNA35_Q4K_ADAPTIVE_Q4_ACTIVATION)
             if constexpr (pure_q4) {
                 ggml_cuda_mmq_vec_dot_q4_K_q8_1_mma_rdna35<
-                    type, J, fallback, false, true>(
+                    type, J, fallback, true, true>(
                     tile_x, tile_y, tile_y_q4, nullptr, sum, 0);
             } else
 #endif
@@ -1250,6 +1264,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
             }
 #if defined(GGML_RDNA35_Q4K_ADAPTIVE_Q4_ACTIVATION)
             if constexpr (pure_q4) {
+#pragma unroll
                 for (int l0 = 0; l0 < J*MMQ_TILE_Y_Q4_K; l0 += nwarps*warp_size) {
                     const int l = l0 + threadIdx.y*warp_size + threadIdx.x;
                     tile_y_q4[l] = by1_q4[l];
@@ -1271,7 +1286,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 #if defined(GGML_RDNA35_Q4K_ADAPTIVE_Q4_ACTIVATION)
             if constexpr (pure_q4) {
                 ggml_cuda_mmq_vec_dot_q4_K_q8_1_mma_rdna35<
-                    type, J, fallback, false, true>(
+                    type, J, fallback, true, true>(
                     tile_x, tile_y, tile_y_q4, nullptr, sum, MMQ_TILE_NE_K);
             } else
 #endif
@@ -1279,6 +1294,12 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
             __syncthreads();
 
             if (have_next) {
+#if defined(GGML_RDNA35_Q4K_ADAPTIVE_Q4_ACTIVATION)
+                if constexpr (pure_q4) {
+                    ggml_cuda_mmq_store_tiles_q4_K_rdna35<type, J, fallback, true>(
+                        tile_x, qs_cache, scales_cache, dm_cache);
+                } else
+#endif
                 ggml_cuda_mmq_store_tiles_q4_K_rdna35<type, J, fallback>(
                     tile_x, qs_cache, scales_cache, dm_cache);
             }
