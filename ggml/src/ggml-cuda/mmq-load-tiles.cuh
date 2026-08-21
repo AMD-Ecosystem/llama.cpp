@@ -644,17 +644,19 @@ static __device__ __forceinline__ int unpack_scales_q45_K(const int * scales, co
 }
 
 #if defined(RDNA3_5)
-template <ggml_type type, int J, bool fallback>
+template <ggml_type type, int J, bool fallback, bool packed = false>
 static __device__ __forceinline__ void ggml_cuda_mmq_load_tiles_q4_K_rdna35(
         const char * __restrict__ x, int * __restrict__ x_tile, const int kbx0, const int i_max, const int stride) {
     constexpr int warp_size   = ggml_cuda_get_physical_warp_size();
     constexpr int nthreads    = ggml_cuda_mmq_get_nthreads(type, J, fallback);
     constexpr int I           = ggml_cuda_mmq_get_I(type, J, fallback);
-    constexpr int sram_stride = ggml_cuda_mmq_get_sram_stride(type, J, fallback);
+    constexpr int sram_stride =
+        packed ? MMQ_TILE_NE_K + 2*MMQ_TILE_NE_K/QI8_1 + 4 :
+                 ggml_cuda_mmq_get_sram_stride(type, J, fallback);
     static_assert(warp_size == 32 && nthreads == 128 && I == 64, "unexpected RDNA3.5 Q4_K MMQ configuration");
 
     int   * x_qs = (int   *) x_tile;
-    half2 * x_dm = (half2 *) (x_qs + 2*MMQ_TILE_NE_K);
+    half2 * x_dm = (half2 *) (x_qs + (packed ? MMQ_TILE_NE_K : 2*MMQ_TILE_NE_K));
 
     const int linear_tid = threadIdx.y*warp_size + threadIdx.x;
     int i = linear_tid/2;
@@ -687,8 +689,14 @@ static __device__ __forceinline__ void ggml_cuda_mmq_load_tiles_q4_K_rdna35(
         const int qs = ((const int *) bxq->qs)[threadIdx.x];
         int * row_qs = x_qs + row*sram_stride;
         const int kqs = 16*(threadIdx.x/8) + threadIdx.x%8;
-        row_qs[kqs]   = qs & 0x0F0F0F0F;
-        row_qs[kqs+8] = (qs >> 4) & 0x0F0F0F0F;
+        if constexpr (packed) {
+            uint16_t * row_qs_packed = (uint16_t *) row_qs;
+            row_qs_packed[kqs]   = ggml_cuda_mmq_load_pack_u4x4_rdna35(qs);
+            row_qs_packed[kqs+8] = ggml_cuda_mmq_load_pack_u4x4_rdna35(uint32_t(qs) >> 4);
+        } else {
+            row_qs[kqs]   = qs & 0x0F0F0F0F;
+            row_qs[kqs+8] = (qs >> 4) & 0x0F0F0F0F;
+        }
     }
 }
 
@@ -730,7 +738,7 @@ static __device__ __forceinline__ void ggml_cuda_mmq_prefetch_tiles_q4_K_rdna35(
     asm volatile("" ::: "memory");
 }
 
-template <ggml_type type, int J, bool fallback>
+template <ggml_type type, int J, bool fallback, bool packed = false>
 static __device__ __forceinline__ void ggml_cuda_mmq_store_tiles_q4_K_rdna35(
         int * __restrict__ x_tile,
         const int (&qs_cache)[ggml_cuda_mmq_get_I(type, J, fallback)/
@@ -740,7 +748,9 @@ static __device__ __forceinline__ void ggml_cuda_mmq_store_tiles_q4_K_rdna35(
     constexpr int nthreads    = ggml_cuda_mmq_get_nthreads(type, J, fallback);
     constexpr int nwarps      = nthreads / warp_size;
     constexpr int I           = ggml_cuda_mmq_get_I(type, J, fallback);
-    constexpr int sram_stride = ggml_cuda_mmq_get_sram_stride(type, J, fallback);
+    constexpr int sram_stride =
+        packed ? MMQ_TILE_NE_K + 2*MMQ_TILE_NE_K/QI8_1 + 4 :
+                 ggml_cuda_mmq_get_sram_stride(type, J, fallback);
     static_assert(warp_size == 32 && nthreads == 128 && I == 64, "unexpected RDNA3.5 Q4_K MMQ configuration");
 
     int * x_qs = x_tile;
@@ -750,11 +760,17 @@ static __device__ __forceinline__ void ggml_cuda_mmq_store_tiles_q4_K_rdna35(
         const int qs = qs_cache[i0/nwarps];
         int * row_qs = x_qs + i*sram_stride;
         const int kqs = 16*(threadIdx.x/8) + threadIdx.x%8;
-        row_qs[kqs]   = qs & 0x0F0F0F0F;
-        row_qs[kqs+8] = (qs >> 4) & 0x0F0F0F0F;
+        if constexpr (packed) {
+            uint16_t * row_qs_packed = (uint16_t *) row_qs;
+            row_qs_packed[kqs]   = ggml_cuda_mmq_load_pack_u4x4_rdna35(qs);
+            row_qs_packed[kqs+8] = ggml_cuda_mmq_load_pack_u4x4_rdna35(uint32_t(qs) >> 4);
+        } else {
+            row_qs[kqs]   = qs & 0x0F0F0F0F;
+            row_qs[kqs+8] = (qs >> 4) & 0x0F0F0F0F;
+        }
     }
 
-    half2 * x_dm = (half2 *) (x_qs + 2*MMQ_TILE_NE_K);
+    half2 * x_dm = (half2 *) (x_qs + (packed ? MMQ_TILE_NE_K : 2*MMQ_TILE_NE_K));
     const int linear_tid = threadIdx.y*warp_size + threadIdx.x;
     const int i = linear_tid/2;
     const int ksc = linear_tid%2;
@@ -774,7 +790,11 @@ static __device__ __forceinline__ void ggml_cuda_mmq_store_tiles_q4_K_rdna35(
 template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_load_tiles_q4_K(
         const char * __restrict__ x, int * __restrict__ x_tile, const int kbx0, const int i_max, const int stride) {
 #if defined(RDNA3_5)
+#if defined(GGML_RDNA35_Q4K_Q4_ACTIVATION_BENCH)
+    ggml_cuda_mmq_load_tiles_q4_K_rdna35<type, J, fallback, true>(x, x_tile, kbx0, i_max, stride);
+#else
     ggml_cuda_mmq_load_tiles_q4_K_rdna35<type, J, fallback>(x, x_tile, kbx0, i_max, stride);
+#endif
     return;
 #endif
 
