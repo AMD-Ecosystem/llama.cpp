@@ -945,7 +945,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     }
 }
 
-#if defined(RDNA3_5) && defined(AMD_WMMA_AVAILABLE) && !defined(AMD_MFMA_AVAILABLE)
+#if defined(RDNA3_5)
 static __device__ __forceinline__ void ggml_cuda_mmq_mma_q4_K_rdna35_low(
         tile<16, 16, int, DATA_LAYOUT_J_MAJOR> & D,
         const tile<16, 8, int, DATA_LAYOUT_I_MAJOR_MIRRORED> & A,
@@ -971,12 +971,10 @@ static __device__ __forceinline__ void ggml_cuda_mmq_mma_q4_K_rdna35_high(
     const int32x4_t * b_vec = (const int32x4_t *) B.x;
     acc[0] = __builtin_amdgcn_wmma_i32_16x16x16_iu8_w32(true, a_vec[1], true, b_vec[1], acc[0], true);
 }
-#endif
 
 template <ggml_type type, int J, bool fallback>
 static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q4_K_q8_1_mma_rdna35(
         const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
-#if defined(RDNA3_5) && defined(AMD_WMMA_AVAILABLE) && !defined(AMD_MFMA_AVAILABLE)
     if constexpr (type == GGML_TYPE_Q4_K && J == 128) {
         constexpr data_layout input_layout = get_input_data_layout();
         typedef tile<16,  8, int, input_layout>        tile_A;
@@ -1070,9 +1068,9 @@ static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q4_K_q8_1_mma_rdna3
         }
         return;
     }
-#endif
     ggml_cuda_mmq_vec_dot_q8_1_q8_1_mma<type, J, fallback>(x, y, sum, k00);
 }
+#endif
 
 template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q5_K_q8_1_dp4a(
         const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
