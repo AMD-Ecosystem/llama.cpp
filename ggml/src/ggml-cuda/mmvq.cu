@@ -605,6 +605,15 @@ static __global__ void mul_mat_vec_q(
         // x block quant index when casting the quants to int
         const int kqs = vdr * (tid % (qi/vdr));
 
+#if defined(RDNA3_5)
+        // Approach A weight-hoist: Q4_K, ncols>1, no fusion, single row/block.
+        // Decode the weight group once and reuse it across the ncols activation columns.
+        if constexpr (type == GGML_TYPE_Q4_K && ncols_dst > 1 && !has_fusion && rows_per_cuda_block == 1) {
+            vec_dot_q4_K_q8_1_ncols<ncols_dst>(
+                vx, kbx_offset + kbx, y, kby, stride_col_y, kqs, &tmp[0][0]);
+        } else
+#endif // defined(RDNA3_5)
+        {
 #pragma unroll
         for (int j = 0; j < ncols_dst; ++j) {
 #pragma unroll
@@ -618,6 +627,7 @@ static __global__ void mul_mat_vec_q(
                     }
                 }
             }
+        }
         }
     }
 
