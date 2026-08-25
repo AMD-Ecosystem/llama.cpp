@@ -1070,6 +1070,80 @@ static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q4_K_q8_1_mma_rdna3
     }
     ggml_cuda_mmq_vec_dot_q8_1_q8_1_mma<type, J, fallback>(x, y, sum, k00);
 }
+
+template <ggml_type type, int J, bool fallback>
+static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q4_0_q8_1_mma_rdna35(
+        const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
+    if constexpr (type == GGML_TYPE_Q4_0 && J == 128) {
+        constexpr data_layout input_layout = get_input_data_layout();
+        typedef tile<16,  8, int, input_layout>        tile_A;
+        typedef tile<16,  8, int, input_layout>        tile_B;
+        typedef tile<16, 16, int, DATA_LAYOUT_J_MAJOR> tile_C;
+
+        constexpr int I             = ggml_cuda_mmq_get_I(type, J, fallback);
+        constexpr int sram_stride   = ggml_cuda_mmq_get_sram_stride(type, J, fallback);
+        constexpr int rows_per_warp = ggml_cuda_mmq_get_rows_per_warp(type, J, fallback);
+        constexpr int ntx           = rows_per_warp/tile_C::I;
+        constexpr int ntiles        = J/tile_C::J;
+        static_assert(I == 64 && ntx == 1, "unexpected RDNA3.5 Q4_0 J128 configuration");
+
+        const int   * x_qs = (const int   *) x;
+        const float * x_df = (const float *) x_qs + 2*MMQ_TILE_NE_K;
+        const int   * y_qs = (const int   *) y + 4;
+        const half2 * y_ds = (const half2 *) y;
+
+        const int i0 = threadIdx.y*rows_per_warp;
+
+        for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QI8_0) {
+            const int k0 = k00 + k01;
+
+            tile_A A;
+            load_ldmatrix(A, x_qs + i0*sram_stride + k0, sram_stride);
+
+            tile_B B[ntiles];
+            tile_C C[ntiles];
+#pragma unroll
+            for (int jb = 0; jb < ntiles; ++jb) {
+                load_ldmatrix(B[jb], y_qs + jb*tile_C::J*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K);
+                ggml_cuda_mmq_mma_q4_K_rdna35_low(C[jb], A, B[jb]);
+            }
+
+            __builtin_amdgcn_sched_barrier(0);
+
+            float dA[tile_C::ne];
+            float dB[ntiles];
+#pragma unroll
+            for (int l = 0; l < tile_C::ne; ++l) {
+                const int i = i0 + tile_C::get_i(l);
+                dA[l] = x_df[i*sram_stride + k0/QI8_0];
+            }
+#pragma unroll
+            for (int jb = 0; jb < ntiles; ++jb) {
+                const int j = jb*tile_C::J + tile_C::get_j(0);
+                dB[jb] = __low2float(y_ds[j*MMQ_TILE_Y_K + k01/QI8_1]);
+            }
+
+            __builtin_amdgcn_sched_barrier(0);
+
+#pragma unroll
+            for (int jb = 0; jb < ntiles; ++jb) {
+                ggml_cuda_mmq_mma_q4_K_rdna35_high(C[jb], A, B[jb]);
+            }
+
+            __builtin_amdgcn_sched_barrier(0);
+
+#pragma unroll
+            for (int jb = 0; jb < ntiles; ++jb) {
+#pragma unroll
+                for (int l = 0; l < tile_C::ne; ++l) {
+                    sum[jb*tile_C::ne + l] += C[jb].x[l]*dA[l]*dB[jb];
+                }
+            }
+        }
+        return;
+    }
+    ggml_cuda_mmq_vec_dot_q8_0_q8_1_mma<type, J, fallback, MMQ_Q8_1_DS_LAYOUT_DS4>(x, y, sum, k00);
+}
 #endif
 
 template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q5_K_q8_1_dp4a(
