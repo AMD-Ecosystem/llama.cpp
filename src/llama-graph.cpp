@@ -1621,6 +1621,62 @@ llm_graph_qkv llm_graph_context::build_qkv(
         Vcur = ggml_view_3d(ctx0, qkv, n_embd_head, n_head_kv, n_tokens,
             ggml_row_size(qkv->type, n_embd_head), qkv->nb[1],
             ggml_row_size(qkv->type, n_embd_q + n_embd_kv));
+    } else if (layer.wkv_concat && loras->empty() && !layer.wk_s && !layer.wv_s) {
+        Qcur = build_lora_mm(layer.wq, cur, layer.wq_s);
+        cb(Qcur, "Qcur", il);
+        if (layer.wq_b) {
+            Qcur = ggml_add(ctx0, Qcur, layer.wq_b);
+            cb(Qcur, "Qcur", il);
+        }
+        if (hparams.f_clamp_kqv > 0.0f) {
+            Qcur = ggml_clamp(ctx0, Qcur, -hparams.f_clamp_kqv, hparams.f_clamp_kqv);
+            cb(Qcur, "Qcur_clamped", il);
+        }
+
+        ggml_tensor * kv = ggml_mul_mat(ctx0, layer.wkv_concat, cur);
+        cb(kv, "kv_concat", il);
+
+        const bool has_kv_bias = layer.wk_b || layer.wv_b;
+        const bool has_clamp   = hparams.f_clamp_kqv > 0.0f;
+
+        if (has_kv_bias || has_clamp) {
+            Kcur = ggml_view_2d(ctx0, kv, n_embd_kv, n_tokens, kv->nb[1], 0);
+            cb(Kcur, "Kcur", il);
+            Vcur = ggml_view_2d(ctx0, kv, n_embd_kv, n_tokens, kv->nb[1],
+                                 ggml_row_size(kv->type, n_embd_kv));
+            cb(Vcur, "Vcur", il);
+
+            Kcur = ggml_cont(ctx0, Kcur);
+            Vcur = ggml_cont(ctx0, Vcur);
+
+            if (layer.wk_b) {
+                Kcur = ggml_add(ctx0, Kcur, layer.wk_b);
+                cb(Kcur, "Kcur", il);
+            }
+            if (layer.wv_b) {
+                Vcur = ggml_add(ctx0, Vcur, layer.wv_b);
+                cb(Vcur, "Vcur", il);
+            }
+            if (has_clamp) {
+                Kcur = ggml_clamp(ctx0, Kcur, -hparams.f_clamp_kqv, hparams.f_clamp_kqv);
+                cb(Kcur, "Kcur_clamped", il);
+                Vcur = ggml_clamp(ctx0, Vcur, -hparams.f_clamp_kqv, hparams.f_clamp_kqv);
+                cb(Vcur, "Vcur_clamped", il);
+            }
+
+            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
+            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+        } else {
+            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
+            Kcur = ggml_view_3d(ctx0, kv, n_embd_head, n_head_kv, n_tokens,
+                ggml_row_size(kv->type, n_embd_head), kv->nb[1], 0);
+            cb(Kcur, "Kcur", il);
+            Vcur = ggml_view_3d(ctx0, kv, n_embd_head, n_head_kv, n_tokens,
+                ggml_row_size(kv->type, n_embd_head), kv->nb[1],
+                ggml_row_size(kv->type, n_embd_kv));
+            cb(Vcur, "Vcur", il);
+        }
     } else {
         // separate Q/K/V path
         Qcur = build_lora_mm(layer.wq, cur, layer.wq_s);
