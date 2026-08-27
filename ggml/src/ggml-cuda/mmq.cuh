@@ -181,7 +181,7 @@ struct ggml_cuda_mmq_config {
     constexpr __device__ int rows_per_warp() const {
 #if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
 #if defined(RDNA3_5)
-        if ((type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q4_0) && J == 128) {
+        if ((type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q4_0 || type == GGML_TYPE_Q8_0) && J == 128) {
             return 16;
         }
         return J >= 64 && J % 32 == 0 ? 32 : 16;
@@ -842,7 +842,11 @@ static constexpr __device__ ggml_cuda_mmq_util_funcs ggml_cuda_mmq_get_util_func
             return ggml_cuda_mmq_util_funcs(
                 -1,
                 ggml_cuda_mmq_load_tiles_q8_0<type, J, fallback>,
+#if defined(RDNA3_5)
+                ggml_cuda_mmq_vec_dot_q8_0_q8_1_mma_rdna35<type, J, fallback>,
+#else
                 ggml_cuda_mmq_vec_dot_q8_0_q8_1_mma<type, J, fallback, MMQ_Q8_1_DS_LAYOUT_D4>,
+#endif
                 ggml_cuda_mmq_write_back_mma<type, J, fallback>);
 // ---------------------------------------------------------------------------------------------
         case GGML_TYPE_Q2_K:
@@ -1143,6 +1147,53 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 
             if (have_next) {
                 ggml_cuda_mmq_store_tiles_q4_0_rdna35<type, J, fallback>(
+                    tile_x, qs_cache, d_cache);
+            }
+            __syncthreads();
+        }
+    } else if constexpr (type == GGML_TYPE_Q8_0 && (J == 96 || J == 128)) {
+        constexpr int qs_cache_size = 2*(I/nwarps);
+        constexpr int d_cache_size  = 4;
+
+        __syncthreads();
+        load_tiles(x, tile_x, offset_x + kb0_start, tile_x_max_i, stride_row_x);
+        __syncthreads();
+
+        for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
+            const int yk = kb0*qk/ne_block;
+            const int * by0 = y + ncols_y*yk*sz;
+            const int * by1 = y + ncols_y*(yk + 1)*sz;
+
+#pragma unroll
+            for (int l0 = 0; l0 < J*MMQ_TILE_Y_K; l0 += nwarps*warp_size) {
+                const int l = l0 + threadIdx.y*warp_size + threadIdx.x;
+                tile_y[l] = by0[l];
+            }
+            __syncthreads();
+            vec_dot(tile_x, tile_y, sum, 0);
+
+            __syncthreads();
+#pragma unroll
+            for (int l0 = 0; l0 < J*MMQ_TILE_Y_K; l0 += nwarps*warp_size) {
+                const int l = l0 + threadIdx.y*warp_size + threadIdx.x;
+                tile_y[l] = by1[l];
+            }
+            __syncthreads();
+
+            int   qs_cache[qs_cache_size];
+            float d_cache[d_cache_size];
+            const int kb0_next = kb0 + blocks_per_iter;
+            const bool have_next = kb0_next < kb0_stop;
+            if (have_next) {
+                ggml_cuda_mmq_prefetch_tiles_q8_0_rdna35<type, J, fallback>(
+                    x, offset_x + kb0_next, tile_x_max_i, stride_row_x, qs_cache, d_cache);
+            }
+
+            vec_dot(tile_x, tile_y, sum, MMQ_TILE_NE_K);
+            __syncthreads();
+
+            if (have_next) {
+                ggml_cuda_mmq_store_tiles_q8_0_rdna35<type, J, fallback>(
                     tile_x, qs_cache, d_cache);
             }
             __syncthreads();
