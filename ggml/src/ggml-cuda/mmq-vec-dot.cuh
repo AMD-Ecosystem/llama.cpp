@@ -975,7 +975,7 @@ static __device__ __forceinline__ void ggml_cuda_mmq_mma_q4_K_rdna35_high(
 template <ggml_type type, int J, bool fallback>
 static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q4_K_q8_1_mma_rdna35(
         const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
-    if constexpr (type == GGML_TYPE_Q4_K && J == 128) {
+    if constexpr ((type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q5_K) && J == 128) {
         constexpr data_layout input_layout = get_input_data_layout();
         typedef tile<16,  8, int, input_layout>        tile_A;
         typedef tile<16,  8, int, input_layout>        tile_B;
@@ -986,7 +986,7 @@ static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q4_K_q8_1_mma_rdna3
         constexpr int rows_per_warp = ggml_cuda_mmq_get_rows_per_warp(type, J, fallback);
         constexpr int ntx           = rows_per_warp/tile_C::I;
         constexpr int ntiles        = J/tile_C::J;
-        static_assert(I == 64 && ntx == 1, "unexpected RDNA3.5 Q4_K J128 configuration");
+        static_assert(I == 64 && ntx == 1, "unexpected RDNA3.5 Q4_K/Q5_K ntx=1 configuration");
 
         const int   * x_qs = (const int   *) x;
         const half2 * x_dm = (const half2 *) x_qs + 2*MMQ_TILE_NE_K;

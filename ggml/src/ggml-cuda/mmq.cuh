@@ -181,7 +181,8 @@ struct ggml_cuda_mmq_config {
     constexpr __device__ int rows_per_warp() const {
 #if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
 #if defined(RDNA3_5)
-        if ((type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q4_0 || type == GGML_TYPE_Q8_0) && J == 128) {
+        if ((type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q4_0 || type == GGML_TYPE_Q8_0 ||
+             type == GGML_TYPE_Q5_K) && J == 128) {
             return 16;
         }
         return J >= 64 && J % 32 == 0 ? 32 : 16;
@@ -875,7 +876,11 @@ static constexpr __device__ ggml_cuda_mmq_util_funcs ggml_cuda_mmq_get_util_func
             return ggml_cuda_mmq_util_funcs(
                 -1,
                 ggml_cuda_mmq_load_tiles_q5_K<type, J, fallback>,
+#if defined(RDNA3_5)
+                ggml_cuda_mmq_vec_dot_q4_K_q8_1_mma_rdna35<type, J, fallback>,
+#else
                 ggml_cuda_mmq_vec_dot_q8_1_q8_1_mma<type, J, fallback>,
+#endif
                 ggml_cuda_mmq_write_back_mma<type, J, fallback>);
         case GGML_TYPE_Q6_K:
             return ggml_cuda_mmq_util_funcs(
@@ -1747,12 +1752,11 @@ struct mmq_args {
 
 #if defined(GGML_USE_HIP)
 // RDNA3.5 dual-WG (mmq_x=64, nbytes <= smpbo/2) helps K-quants with large per-tile LDS
-// (Q6_K WMMA tuning). Block quants (Q5_0, Q8_0, Q4_0) and Q4_K prefill are faster at mmq_x=128 ntx=1.
+// (Q6_K WMMA tuning). Block quants (Q5_0, Q8_0, Q4_0) and Q4_K/Q5_K prefill are faster at mmq_x=128 ntx=1.
 static bool mmq_rdna35_dual_wg_eligible(const ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
-        case GGML_TYPE_Q5_K:
         case GGML_TYPE_Q6_K:
             return true;
         default:
@@ -1975,10 +1979,7 @@ void mul_mat_q_switch_J(ggml_backend_cuda_context & ctx, const mmq_args & args, 
     }
 
 #if defined(GGML_USE_HIP)
-    const bool dual_wg_type =
-        type == GGML_TYPE_Q2_K || type == GGML_TYPE_Q3_K ||
-        type == GGML_TYPE_Q5_K || type == GGML_TYPE_Q6_K;
-    if (GGML_CUDA_CC_IS_RDNA3_5(cc) && J_best > 0 && dual_wg_type) {
+    if (GGML_CUDA_CC_IS_RDNA3_5(cc) && J_best > 0 && mmq_rdna35_dual_wg_eligible(type)) {
         const size_t lds_dual_wg = smpbo/2;
         if (mmq_get_nbytes_shared(ggml_cuda_mmq_get_config(type, J_best, fallback, cc), cc) > lds_dual_wg) {
             int J_dual = 0;
@@ -2020,20 +2021,20 @@ void mul_mat_q_switch_J(ggml_backend_cuda_context & ctx, const mmq_args & args, 
         }
     }
 
-    if constexpr (type == GGML_TYPE_Q4_K) {
-        constexpr int q4_k_J_default     = 128;
-        constexpr int q4_k_J_small       = 64;
-        constexpr int q4_k_m_small_max   = 1024;
-        constexpr int q4_k_ncols_pipeline = 128;
-        const bool use_q4_k_pipeline =
-            args.expert_bounds == nullptr && args.ncols_max == q4_k_ncols_pipeline;
-        if (use_q4_k_pipeline) {
-            const bool use_small = args.nrows_x <= q4_k_m_small_max;
-            const int q4_k_J = use_small ? q4_k_J_small : q4_k_J_default;
-            const ggml_cuda_mmq_config config = ggml_cuda_mmq_get_config(type, q4_k_J, fallback, cc);
+    if constexpr (type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q5_K) {
+        constexpr int qk_J_default      = 128;
+        constexpr int qk_J_small        = 64;
+        constexpr int qk_m_small_max    = 1024;
+        constexpr int qk_ncols_pipeline = 128;
+        const bool use_qk_pipeline =
+            args.expert_bounds == nullptr && args.ncols_max == qk_ncols_pipeline;
+        if (use_qk_pipeline) {
+            const bool use_small = args.nrows_x <= qk_m_small_max;
+            const int qk_J = use_small ? qk_J_small : qk_J_default;
+            const ggml_cuda_mmq_config config = ggml_cuda_mmq_get_config(type, qk_J, fallback, cc);
             if (GGML_CUDA_CC_IS_RDNA3_5(cc) &&
                 config.type != GGML_TYPE_COUNT && mmq_get_nbytes_shared(config, cc) <= smpbo) {
-                J_best = q4_k_J;
+                J_best = qk_J;
             }
         }
     }
