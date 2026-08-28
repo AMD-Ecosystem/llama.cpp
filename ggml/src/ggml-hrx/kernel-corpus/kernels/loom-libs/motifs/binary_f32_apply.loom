@@ -1,0 +1,44 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.binary_f32.apply(%op: index, %lhs: f32, %rhs: f32) -> (f32)
+
+template.def<@ggml.binary_f32.apply> device priority(1) @ggml_binary_f32_apply(%op: index, %lhs: f32, %rhs: f32) -> (f32) {
+  %c1_f32 = scalar.constant 1.0 : f32
+
+  // ADD (op 0): x + y.
+  %op_add = index.constant 0 : index
+  %sum = scalar.addf %lhs, %rhs : f32
+  %is_add = index.cmp eq, %op, %op_add : index
+  %add_selected = scf.select %is_add, %sum, %lhs : f32
+
+  // SUB (op 1): x - y.
+  %op_sub = index.constant 1 : index
+  %difference = scalar.subf %lhs, %rhs : f32
+  %is_sub = index.cmp eq, %op, %op_sub : index
+  %sub_selected = scf.select %is_sub, %difference, %add_selected : f32
+
+  // MUL (op 2): x * y.
+  %op_mul = index.constant 2 : index
+  %product = scalar.mulf %lhs, %rhs : f32
+  %is_mul = index.cmp eq, %op, %op_mul : index
+  %mul_selected = scf.select %is_mul, %product, %sub_selected : f32
+
+  // DIV (op 3): x / y.
+  %op_div = index.constant 3 : index
+  %quotient = scalar.divf %lhs, %rhs : f32
+  %is_div = index.cmp eq, %op, %op_div : index
+  %div_selected = scf.select %is_div, %quotient, %mul_selected : f32
+
+  // SWIGLU (op 4): silu(x) * y.
+  %op_swiglu = index.constant 4 : index
+  %silu_negative = scalar.negf %lhs : f32
+  %silu_exp = scalar.expf<afn> %silu_negative : f32
+  %silu_denominator = scalar.addf %c1_f32, %silu_exp : f32
+  %silu_sigmoid = scalar.divf %c1_f32, %silu_denominator : f32
+  %silu = scalar.mulf %lhs, %silu_sigmoid : f32
+  %swiglu = scalar.mulf %silu, %rhs : f32
+  %is_swiglu = index.cmp eq, %op, %op_swiglu : index
+  %result = scf.select %is_swiglu, %swiglu, %div_selected : f32
+  template.return %result : f32
+}

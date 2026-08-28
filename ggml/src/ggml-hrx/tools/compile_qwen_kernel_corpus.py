@@ -49,8 +49,9 @@ def main() -> int:
 
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
     revision = require_run(["git", "-C", str(args.hrx_source), "rev-parse", "HEAD"]).stdout.strip()
-    if revision != manifest["upstream_revision"]:
-        raise RuntimeError(f"HRX checkout {revision} does not match corpus {manifest['upstream_revision']}")
+    upstream_revision = manifest.get("upstream_revision", "local")
+    if upstream_revision != "local" and revision != upstream_revision:
+        raise RuntimeError(f"HRX checkout {revision} does not match corpus {upstream_revision}")
     if require_run(["git", "-C", str(args.hrx_source), "status", "--porcelain"]).stdout.strip():
         raise RuntimeError("refusing to compile against a dirty pinned HRX checkout")
     override = os.environ.get("HSA_OVERRIDE_GFX_VERSION")
@@ -232,8 +233,8 @@ def main() -> int:
         "target": args.target,
         "hsa_override_gfx_version": override,
         "hrx_revision": revision,
-        "corpus_digest": manifest["corpus_sha256"],
-        "recipe_digest": manifest["build_bazel_sha256"],
+        "corpus_digest": manifest.get("corpus_sha256", ""),
+        "recipe_digest": manifest.get("build_bazel_sha256", ""),
         "plan_case_count": len(manifest["plan_cases"]),
         "planned_invocation_count": planned_invocation_count,
         "resolved_invocation_count": resolved_invocation_count,

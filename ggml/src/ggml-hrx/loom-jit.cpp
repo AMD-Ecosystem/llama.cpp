@@ -749,15 +749,7 @@ hrx_status_t ggml_hrx_loom_jit_amdgpu_compile(ggml_hrx_loom_jit_amdgpu *        
         dependency_sources.push_back(dependency_source);
         loomc_link_index_source_options_t dependency_link_options = {};
         dependency_link_options.provider_name = loomc_make_cstring_view(dependency.source_identifier);
-        if (dependency.source_format == GGML_HRX_LOOM_JIT_SOURCE_FORMAT_BYTECODE) {
-            dependency_link_options.role = LOOMC_LINK_PROVIDER_ROLE_INPUT;
-        } else {
-            const std::string dependency_text(static_cast<const char *>(dependency.source_data),
-                                              dependency.source_size);
-            dependency_link_options.role = dependency_text.find("config.decl") != std::string::npos ?
-                                               LOOMC_LINK_PROVIDER_ROLE_INPUT :
-                                               LOOMC_LINK_PROVIDER_ROLE_LIBRARY;
-        }
+        dependency_link_options.role = LOOMC_LINK_PROVIDER_ROLE_INPUT;
         status = loomc_link_index_builder_add_source(link_index_builder.get(), dependency_source,
                                                      &dependency_link_options, nullptr);
         if (!loomc_status_is_ok(status)) {
@@ -874,25 +866,6 @@ hrx_status_t ggml_hrx_loom_jit_amdgpu_compile(ggml_hrx_loom_jit_amdgpu *        
         }
         result.reset();
     }
-    const loomc_string_view_t root_symbols[] = { loomc_make_cstring_view(options->root_symbol) };
-    loomc_link_options_t      link_options   = {};
-    link_options.type                        = LOOMC_STRUCTURE_TYPE_LINK_OPTIONS;
-    link_options.structure_size              = sizeof(link_options);
-    link_options.next                        = nullptr;
-    link_options.link_index                  = link_index.get();
-    link_options.module_name                 = loomc_make_cstring_view(options->module_name);
-    link_options.root_symbols                = root_symbols;
-    link_options.root_symbol_count           = 1;
-    link_options.flags                       = LOOMC_LINK_FLAG_STRIP_TEST_SYMBOLS;
-    status = loomc_link_module(linker.get(), workspace.get(), &link_options, module.out(), result.out());
-    if (!loomc_status_is_ok(status)) {
-        return ggml_hrx_loom_jit_status_from_loom(status, "link Loom root");
-    }
-    if (!loomc_result_succeeded(result.get())) {
-        return ggml_hrx_loom_jit_status_from_result(result.get(), "Loom root linking failed");
-    }
-    result.reset();
-
     const loomc_target_specialization_t specialization = {
         loomc_make_cstring_view(options->root_symbol),
         jit->target_profile,
@@ -902,6 +875,29 @@ hrx_status_t ggml_hrx_loom_jit_amdgpu_compile(ggml_hrx_loom_jit_amdgpu *        
     compile_target_options.structure_size                        = sizeof(compile_target_options);
     compile_target_options.specializations                       = &specialization;
     compile_target_options.specialization_count                  = 1;
+
+    const loomc_string_view_t root_symbols[] = { loomc_make_cstring_view(options->root_symbol) };
+    loomc_link_options_t      link_options   = {};
+    link_options.type                        = LOOMC_STRUCTURE_TYPE_LINK_OPTIONS;
+    link_options.structure_size              = sizeof(link_options);
+    link_options.next                        = &compile_target_options;
+    link_options.mode                        = LOOMC_LINK_MODE_LINK;
+    link_options.link_index                  = link_index.get();
+    link_options.module_name                 = loomc_make_cstring_view(options->module_name);
+    link_options.root_symbols                = root_symbols;
+    link_options.root_symbol_count           = 1;
+    link_options.flags                       = LOOMC_LINK_FLAG_STRIP_TEST_SYMBOLS;
+    link_options.config.bindings             = config_bindings.get();
+    link_options.config.binding_count        = options->config_binding_count;
+    status = loomc_link_module(linker.get(), workspace.get(), &link_options, module.out(), result.out());
+    if (!loomc_status_is_ok(status)) {
+        return ggml_hrx_loom_jit_status_from_loom(status, "link Loom root");
+    }
+    if (!loomc_result_succeeded(result.get())) {
+        return ggml_hrx_loom_jit_status_from_result(result.get(), "Loom root linking failed");
+    }
+    result.reset();
+
     loomc_compile_options_t compile_options                      = {};
     compile_options.type                                         = LOOMC_STRUCTURE_TYPE_COMPILE_OPTIONS;
     compile_options.structure_size                               = sizeof(compile_options);

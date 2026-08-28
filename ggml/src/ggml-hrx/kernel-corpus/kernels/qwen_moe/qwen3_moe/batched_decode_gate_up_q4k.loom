@@ -24,7 +24,7 @@ config.decl @qwen3_moe.workload.token_capacity : %value: index where [range(%val
 // launch replaces this upper bound with the producer's exact queue count.
 config.decl @qwen3_moe.batched_decode.rows2_descriptor_capacity : %value: index where [range(%value, 1, 512)]
 
-kernel.decl @ggml_quantize_q8_1_x4_f32(%token_count: index, %input_size: index) launch(%token_count: index, %input_size: index, %input: buffer, %output: buffer)
+kernel.decl @ggml_quantize_q8_1_x4_f32(%token_count$8: index, %input_size$9: index) launch(%token_count$10: index, %input_size$11: index, %input: buffer, %output: buffer)
 
 func.decl @qwen3_moe_q4k_chunk_pair_global(%weight: buffer, %row_byte_base: offset, %q4_block: index, %q4_group_pair: index, %q4_half: index, %header_words: vector<4xi32>) -> (vector<16xi8>, f32, f32, vector<16xi8>, f32, f32)
 
@@ -32,9 +32,9 @@ func.decl @qwen3_moe_q4k_q8_1_dot(%q4_values: vector<16xi8>, %d_scale: f32, %dmi
 
 func.decl @qwen3_moe_unpack_batched_decode_expert_descriptor(%descriptor: vector<4xi32>) -> (index, index, index)
 
-kernel.decl @qwen3_moe_build_batched_decode_expert_dispatch(%token_count: index, %route_count: index, %route_stride: index, %expert_count: index) launch(%token_count: index, %route_count: index, %route_stride: index, %expert_count: index, %route_ids: buffer, %assignment_ordinals: buffer, %queue_counts: buffer, %queue_descriptors: buffer)
+kernel.decl @qwen3_moe_build_batched_decode_expert_dispatch(%token_count$37: index, %route_count$38: index, %route_stride$39: index, %expert_count$40: index) launch(%token_count$41: index, %route_count$42: index, %route_stride$43: index, %expert_count$44: index, %route_ids: buffer, %assignment_ordinals: buffer, %queue_counts: buffer, %queue_descriptors: buffer)
 
-kernel.decl @qwen3_moe_routed_gate_up_swiglu_q4k_q8(%token_count: index, %route_count: index, %route_stride: index, %expert_count: index, %output_size: index) launch(%token_count: index, %route_count: index, %route_stride: index, %expert_count: index, %output_size: index, %q8_input: buffer, %route_ids: buffer, %gate_weight: buffer, %up_weight: buffer, %output: buffer)
+kernel.decl @qwen3_moe_routed_gate_up_swiglu_q4k_q8(%token_count$49: index, %route_count$50: index, %route_stride$51: index, %expert_count$52: index, %output_size$53: index) launch(%token_count$54: index, %route_count$55: index, %route_stride$56: index, %expert_count$57: index, %output_size$58: index, %q8_input: buffer, %route_ids: buffer, %gate_weight: buffer, %up_weight: buffer, %output: buffer)
 
 // Contracts one expert/channel Q4_K row against two independently quantized
 // activation rows. Splitting gate and up into separate contractions keeps each

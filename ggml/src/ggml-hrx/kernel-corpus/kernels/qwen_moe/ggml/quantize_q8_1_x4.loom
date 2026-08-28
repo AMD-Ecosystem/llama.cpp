@@ -6,6 +6,8 @@
 //     f16 ds[4][2];   // per-block (scale, quantized_sum * scale)
 //     i32 qs[4][8];   // four signed i8 values per packed word
 //   };
+template.decl @ggml.quantize_q8_1_x4.group_body(%publish_output: i1, %group_count0: index, %group0: index, %input: buffer, %output: buffer)
+
 config.decl @ggml.quantize_q8_1_x4.group_capacity : %value: index where [range(%value, 1, 524288)]
 
 // Loads one logical 32-element Q8_1 block from the four-way physical packing.
@@ -70,7 +72,7 @@ func.def inline @ggml_q8_1_x4_word(%q8_input: buffer, %row_byte_base: offset, %q
 // 32-lane wave executes after all 128 source values are visible. The uniform
 // publication predicate suppresses only destination writes so every lane still
 // reaches the workgroup barriers.
-func.template<ggml.quantize_q8_1_x4.group_body> device @ggml_quantize_q8_1_x4_group_body(%publish_output: i1, %group_count0: index, %group0: index, %input: buffer, %output: buffer) {
+template.def<@ggml.quantize_q8_1_x4.group_body> device @ggml_quantize_q8_1_x4_group_body(%publish_output: i1, %group_count0: index, %group0: index, %input: buffer, %output: buffer) {
   %group_count, %group = index.assume %group_count0, %group0 [range(%group_count0, 1, 524288), lt(%group0, %group_count0)] : index, index
   %lane = kernel.workitem.id<x> : index
   %c0 = index.constant 0 : index
@@ -156,7 +158,7 @@ func.template<ggml.quantize_q8_1_x4.group_body> device @ggml_quantize_q8_1_x4_gr
     %s_index = index.add %ds_index, %c1 : index
     view.store %s_f16, %group_ds[%s_index] : f16, view<8xf16>
   }
-  func.return
+  template.return
 }
 
 // A 32-lane workgroup owns one physical group. Each eight-lane cohort loads
@@ -180,7 +182,7 @@ kernel.def @ggml_quantize_q8_1_x4_f32(%token_count: index, %input_size: index) {
   %valid_group = index.cmp ult, %group0, %group_count : index
   %safe_group = scf.select %valid_group, %group0, %c0 : index
   %group = index.assume %safe_group [lt(%safe_group, %group_count)] : index
-  func.apply<ggml.quantize_q8_1_x4.group_body>(%valid_group, %group_count, %group, %input, %output) : (i1, index, index, buffer, buffer)
+  template.apply<@ggml.quantize_q8_1_x4.group_body>(%valid_group, %group_count, %group, %input, %output) : (i1, index, index, buffer, buffer)
   kernel.return
 }
 

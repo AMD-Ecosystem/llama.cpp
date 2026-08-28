@@ -8,9 +8,9 @@
 // issue the kernel again against the same storage.
 amdgpu.target<gfx11-generic> @qwen3_moe_expert_table_partition_gfx11_wave32 {subgroup_size = 32}
 
-kernel.decl @qwen3_moe_build_expert_table(%token_count: index, %route_count: index, %route_stride: index, %expert_count: index) launch(%token_count: index, %route_count: index, %route_stride: index, %expert_count: index, %route_ids: buffer, %expert_table: buffer)
+kernel.decl @qwen3_moe_build_expert_table(%token_count$0: index, %route_count$1: index, %route_stride$2: index, %expert_count$3: index) launch(%token_count$4: index, %route_count$5: index, %route_stride$6: index, %expert_count$7: index, %route_ids: buffer, %expert_table: buffer)
 
-kernel.decl @qwen3_moe_build_expert_partition_table(%token_count: index, %route_count: index, %expert_count: index) launch(%token_count: index, %route_count: index, %expert_count: index, %expert_table: buffer, %partition_table: buffer)
+kernel.decl @qwen3_moe_build_expert_partition_table(%token_count$10: index, %route_count$11: index, %expert_count$12: index) launch(%token_count$13: index, %route_count$14: index, %expert_count$15: index, %expert_table: buffer, %partition_table: buffer)
 
 kernel.def target(@qwen3_moe_expert_table_partition_gfx11_wave32) @qwen3_moe_build_expert_table_partition_prefill_512(%token_count: index, %route_count: index, %route_stride: index, %expert_count: index) {
   %c1 = index.constant 1 : index

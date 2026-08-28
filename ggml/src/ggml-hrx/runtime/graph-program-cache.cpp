@@ -1,5 +1,6 @@
 #include "graph-program-cache.h"
 
+#include "dispatch/command-program-dump.h"
 #include "dispatch/dispatch-scheduler.h"
 #include "ggml-impl.h"
 #include "ggml.h"
@@ -581,6 +582,10 @@ std::unique_ptr<GraphProgram> GraphProgramCache::build_program_from_imported(uin
     }
 
     std::string command_shape = command_program_shape_key(commands);
+    Status      dump_status   = dump_command_program_kernels_if_requested(commands, corpus, target, command_shape);
+    for (const std::string & error : dump_status.errors()) {
+        GGML_LOG_WARN("ggml_hrx: %s\n", error.c_str());
+    }
     return std::make_unique<GraphProgram>(uid, target, std::make_unique<Graph>(std::move(imported_graph)),
                                           std::make_unique<CommandProgram>(std::move(commands)),
                                           std::move(command_shape));

@@ -1,11 +1,15 @@
 // Test-only differentials for fused decode-attention Q8 publication. The
 // production kernels remain the actual providers; this module contributes only
 // reference packing, masked metadata setup, and comparison cases.
+template.decl @ggml.quantize_q8_1_x4.group_body(%arg0: i1, %arg1: index, %arg2: index, %arg3: buffer, %arg4: buffer)
+
+template.decl @qwen3_moe.attention.decode_split.pack_completed_q8(%arg0: index, %arg1: buffer, %arg2: buffer)
+
 target.decl @qwen3_moe_decode_split_gfx11_wave64
 
-kernel.decl target(@qwen3_moe_decode_split_gfx11_wave64) @qwen3_moe_flash_attention_decode_split_f32_f16_wmma(%key_value_token_count: index) launch(%key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %completion_counter: buffer, %output: buffer)
+kernel.decl target(@qwen3_moe_decode_split_gfx11_wave64) @qwen3_moe_flash_attention_decode_split_f32_f16_wmma(%key_value_token_count$8: index) launch(%key_value_token_count$9: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %completion_counter: buffer, %output: buffer)
 
-kernel.decl target(@qwen3_moe_decode_split_gfx11_wave64) @qwen3_moe_flash_attention_decode_split_f32_f16_wmma_next_q8(%key_value_token_count: index) launch(%key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %completion_counter: buffer, %output: buffer, %next_q8_output: buffer)
+kernel.decl target(@qwen3_moe_decode_split_gfx11_wave64) @qwen3_moe_flash_attention_decode_split_f32_f16_wmma_next_q8(%key_value_token_count$19: index) launch(%key_value_token_count$20: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %completion_counter: buffer, %output: buffer, %next_q8_output: buffer)
 
 // Publishes the canonical reference Q8_1 x4 layout for one 4096-element row.
 kernel.def @qwen3_moe_flash_attention_decode_split_quantize_reference_4096() {
@@ -16,7 +20,7 @@ kernel.def @qwen3_moe_flash_attention_decode_split_quantize_reference_4096() {
   %publish_output = scalar.constant true : i1
   %group_count = index.constant 32 : index
   %group = kernel.workgroup.id<x> : index
-  func.apply<ggml.quantize_q8_1_x4.group_body>(%publish_output, %group_count, %group, %input, %output) : (i1, index, index, buffer, buffer)
+  template.apply<@ggml.quantize_q8_1_x4.group_body>(%publish_output, %group_count, %group, %input, %output) : (i1, index, index, buffer, buffer)
   kernel.return
 }
 
@@ -29,7 +33,7 @@ kernel.def target(@qwen3_moe_decode_split_gfx11_wave64) @qwen3_moe_flash_attenti
   kernel.launch.config workgroups(%c1, %c4, %c1) workgroup_size(%c256, %c1, %c1) : index
 } launch(%input: buffer, %output: buffer) {
   %key_value_head = kernel.workgroup.id<y> : index
-  func.apply<qwen3_moe.attention.decode_split.pack_completed_q8>(%key_value_head, %input, %output) : (index, buffer, buffer)
+  template.apply<@qwen3_moe.attention.decode_split.pack_completed_q8>(%key_value_head, %input, %output) : (index, buffer, buffer)
   kernel.return
 }
 
@@ -62,10 +66,10 @@ kernel.def @qwen3_moe_flash_attention_decode_split_mask_513_of_576() {
 // reset and stale-publication failures observable.
 check.case public @qwen3_moe_flash_attention_decode_split_next_q8_capacity_576_differential_case {
   %key_value_token_count = check.literal value(576) : index
-  %query_seed = check.param.seed base(0x514d4f4551465138) count(1) : i64
-  %key_seed = check.param.seed base(0x514d4f454b465138) count(1) : i64
-  %value_seed0 = check.param.seed base(0x514d4f4556465130) count(1) : i64
-  %value_seed1 = check.param.seed base(0x514d4f4556465131) count(1) : i64
+  %query_seed = check.param.seed base(5858425849413783864) count(1) : i64
+  %key_seed = check.param.seed base(5858425849313120568) count(1) : i64
+  %value_seed0 = check.param.seed base(5858425849497669936) count(1) : i64
+  %value_seed1 = check.param.seed base(5858425849497669937) count(1) : i64
   %query = check.generate.random.uniform seed(%query_seed) range(-1.0 to 1.0) : tensor<32x128xf32>
   %key = check.generate.random.uniform seed(%key_seed) range(-1.0 to 1.0) : tensor<576x4x128xf16>
   %value0 = check.generate.random.uniform seed(%value_seed0) range(-1.0 to 1.0) : tensor<576x4x128xf16>
@@ -102,7 +106,7 @@ check.case public @qwen3_moe_flash_attention_decode_split_next_q8_capacity_576_d
 }
 
 check.case public @qwen3_moe_flash_attention_decode_split_pack_completed_q8_differential_case {
-  %input_seed = check.param.seed base(0x514d4f4550385138) count(1) : i64
+  %input_seed = check.param.seed base(5858425849396089144) count(1) : i64
   %input = check.generate.random.uniform seed(%input_seed) range(-1.0 to 1.0) : tensor<32x128xf32>
   %reference = check.generate.fill value(0) : tensor<4608xi8>
   %actual = check.generate.fill value(1) : tensor<4608xi8>

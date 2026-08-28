@@ -677,9 +677,9 @@ check.case public @qwen3_moe_flash_attention_f32_f16_wmma_multirow_differential_
   %row1 = check.literal value(1) : index
   %row2 = check.literal value(2) : index
   %row3 = check.literal value(3) : index
-  %query_seed = check.param.seed base(0x514d4f4551554552) count(1) : i64
-  %key_seed = check.param.seed base(0x514d4f454b455931) count(1) : i64
-  %value_seed = check.param.seed base(0x514d4f4556414c31) count(1) : i64
+  %query_seed = check.param.seed base(5858425849414763858) count(1) : i64
+  %key_seed = check.param.seed base(5858425849313057073) count(1) : i64
+  %value_seed = check.param.seed base(5858425849497340977) count(1) : i64
   %query = check.generate.random.uniform seed(%query_seed) range(-1.0 to 1.0) : tensor<14x32x128xf32>
   %key = check.generate.random.uniform seed(%key_seed) range(-1.0 to 1.0) : tensor<14x4x128xf16>
   %value = check.generate.random.uniform seed(%value_seed) range(-1.0 to 1.0) : tensor<14x4x128xf16>

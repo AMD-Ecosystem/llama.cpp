@@ -23,15 +23,15 @@ config.decl @qwen3_moe.routed_gate_up.expert_count : %value: index where [range(
 
 config.decl @qwen3_moe.routed_gate_up.output_size : %value: index where [range(%value, 1, 4096)]
 
-kernel.decl @ggml_quantize_q8_1_x4_f32(%token_count: index, %input_size: index) launch(%token_count: index, %input_size: index, %input: buffer, %output: buffer)
+kernel.decl @ggml_quantize_q8_1_x4_f32(%token_count$4: index, %input_size$5: index) launch(%token_count$6: index, %input_size$7: index, %input: buffer, %output: buffer)
 
-kernel.decl @qwen3_moe_build_expert_table(%token_count: index, %route_count: index, %route_stride: index, %expert_count: index) launch(%token_count: index, %route_count: index, %route_stride: index, %expert_count: index, %route_ids: buffer, %expert_table: buffer)
+kernel.decl @qwen3_moe_build_expert_table(%token_count$10: index, %route_count$11: index, %route_stride$12: index, %expert_count$13: index) launch(%token_count$14: index, %route_count$15: index, %route_stride$16: index, %expert_count$17: index, %route_ids: buffer, %expert_table: buffer)
 
-kernel.decl @qwen3_moe_build_expert_partition_table(%token_count: index, %route_count: index, %expert_count: index) launch(%token_count: index, %route_count: index, %expert_count: index, %expert_table: buffer, %partition_table: buffer)
+kernel.decl @qwen3_moe_build_expert_partition_table(%token_count$20: index, %route_count$21: index, %expert_count$22: index) launch(%token_count$23: index, %route_count$24: index, %expert_count$25: index, %expert_table: buffer, %partition_table: buffer)
 
 func.decl @qwen3_moe_unpack_expert_partition_descriptor(%descriptor: i32) -> (index, index, index)
 
-kernel.decl @qwen3_moe_routed_gate_up_swiglu_q4k_q8(%token_count: index, %route_count: index, %route_stride: index, %expert_count: index, %output_size: index) launch(%token_count: index, %route_count: index, %route_stride: index, %expert_count: index, %output_size: index, %q8_input: buffer, %route_ids: buffer, %gate_weight: buffer, %up_weight: buffer, %output: buffer)
+kernel.decl @qwen3_moe_routed_gate_up_swiglu_q4k_q8(%token_count$32: index, %route_count$33: index, %route_stride$34: index, %expert_count$35: index, %output_size$36: index) launch(%token_count$37: index, %route_count$38: index, %route_stride$39: index, %expert_count$40: index, %output_size$41: index, %q8_input: buffer, %route_ids: buffer, %gate_weight: buffer, %up_weight: buffer, %output: buffer)
 
 func.decl @qwen3_moe_q4k_scale_from_header(%scale0: i32, %scale1: i32, %scale2: i32, %q4_group: index) -> (i32, i32)
 

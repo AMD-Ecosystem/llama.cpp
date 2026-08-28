@@ -1,17 +1,12 @@
 #include "dispatch-registry.h"
 
-#include "dispatch-add.h"
-#include "dispatch-gather-add.h"
-#include "dispatch-llm-matmul.h"
-#include "dispatch-moe-router.h"
-#include "dispatch-qwen-attention-postprocess.h"
-#include "dispatch-qwen-flash-attention.h"
-#include "dispatch-qwen-matmul.h"
-#include "dispatch-qwen-preamble.h"
-#include "dispatch-rmsnorm.h"
-#include "dispatch-routed-ffn.h"
+#include "common/dispatch-common.h"
+#include "llm/dispatch-attention-qkv.h"
+#include "qwen/dispatch-qwen.h"
 
 #include <algorithm>
+#include <cstdlib>
+#include <cstring>
 #include <utility>
 
 namespace ggml::hrx {
@@ -31,22 +26,22 @@ static void sort_registrations(std::vector<DispatchRegistration> & registrations
         [](const DispatchRegistration & lhs, const DispatchRegistration & rhs) { return lhs.priority > rhs.priority; });
 }
 
-static void register_llm_dispatches(DispatchRegistryBuilder & builder) {
-    register_qwen_attention_postprocess_dispatches(builder);
-    register_qwen_flash_attention_dispatches(builder);
-    register_qwen_matmul_dispatches(builder);
-    register_llm_matmul_dispatches(builder);
-    register_routed_ffn_dispatches(builder);
-    register_qwen_preamble_dispatches(builder);
-    register_qwen_rmsnorm_dispatches(builder);
-    register_moe_router_dispatches(builder);
+static bool qwen_dispatch_disabled_from_environment() {
+    const char * value = std::getenv("GGML_HRX_DISABLE_QWEN_DISPATCH");
+    if (value == nullptr || value[0] == '\0') {
+        return false;
+    }
+    return std::strcmp(value, "0") != 0 && std::strcmp(value, "false") != 0 && std::strcmp(value, "FALSE") != 0 &&
+           std::strcmp(value, "off") != 0 && std::strcmp(value, "OFF") != 0;
 }
 
-static DispatchRegistry build_llm_registry() {
+static DispatchRegistry build_registry(bool include_qwen) {
     DispatchRegistryBuilder builder;
-    register_add_dispatch(builder);
-    register_gather_add_dispatch(builder);
-    register_llm_dispatches(builder);
+    register_common_dispatches(builder);
+    register_llm_attention_qkv_dispatches(builder);
+    if (include_qwen) {
+        register_qwen_dispatches(builder);
+    }
     return builder.build();
 }
 
@@ -142,14 +137,18 @@ DispatchRegistry DispatchRegistryBuilder::build() {
 }
 
 const DispatchRegistry * find_dispatch_registry(const DispatchTarget & target) {
-    static const DispatchRegistry gfx1100_registry = build_llm_registry();
-    static const DispatchRegistry gfx1151_registry = build_llm_registry();
+    static const DispatchRegistry gfx1100_registry              = build_registry(true);
+    static const DispatchRegistry gfx1100_generic_only_registry = build_registry(false);
+    static const DispatchRegistry gfx1151_registry              = build_registry(true);
+    static const DispatchRegistry gfx1151_generic_only_registry = build_registry(false);
+
+    const bool qwen_disabled = qwen_dispatch_disabled_from_environment();
 
     if (target.architecture == "gfx1100") {
-        return &gfx1100_registry;
+        return qwen_disabled ? &gfx1100_generic_only_registry : &gfx1100_registry;
     }
     if (target.architecture == "gfx1151") {
-        return &gfx1151_registry;
+        return qwen_disabled ? &gfx1151_generic_only_registry : &gfx1151_registry;
     }
     return nullptr;
 }

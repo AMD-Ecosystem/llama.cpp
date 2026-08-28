@@ -5,6 +5,8 @@
 // [token][5120] raw output so one uniform 80xN grid can reuse the canonical
 // dense WMMA body without buffer-valued control flow, completion counters, or
 // additional workgroup storage.
+template.decl @qwen3_moe.dense_quantized.body(%arg0: index, %arg1: index, %arg2: index, %arg3: index, %arg4: index, %arg5: index, %arg6: index, %arg7: buffer, %arg8: buffer, %arg9: buffer)
+
 amdgpu.target<gfx11-generic> @qwen3_moe_attention_qkv_same_format_prefill_gfx11_wave64 {subgroup_size = 64}
 
 config.decl @qwen3_moe.model.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
@@ -45,7 +47,7 @@ kernel.def target(@qwen3_moe_attention_qkv_same_format_prefill_gfx11_wave64) @qw
   %overwrite = index.constant 0 : index
   %key_value_output_size = index.mul %key_value_size, %c2 : index
   %combined_output_size = index.add %query_size, %key_value_output_size : index
-  func.apply<qwen3_moe.dense_quantized.body>(%q4, %token_count, %hidden_size, %combined_output_size, %overwrite, %channel_tile, %token_tile, %input, %combined_weight, %combined_output) : (index, index, index, index, index, index, index, buffer, buffer, buffer)
+  template.apply<@qwen3_moe.dense_quantized.body>(%q4, %token_count, %hidden_size, %combined_output_size, %overwrite, %channel_tile, %token_tile, %input, %combined_weight, %combined_output) : (index, index, index, index, index, index, index, buffer, buffer, buffer)
   kernel.return
 }
 
@@ -77,7 +79,7 @@ kernel.def target(@qwen3_moe_attention_qkv_same_format_prefill_gfx11_wave64) @qw
   %overwrite = index.constant 0 : index
   %key_value_output_size = index.mul %key_value_size, %c2 : index
   %combined_output_size = index.add %query_size, %key_value_output_size : index
-  func.apply<qwen3_moe.dense_quantized.body>(%q4, %token_count, %hidden_size, %combined_output_size, %overwrite, %channel_tile, %token_tile, %input, %combined_weight, %combined_output) : (index, index, index, index, index, index, index, buffer, buffer, buffer)
+  template.apply<@qwen3_moe.dense_quantized.body>(%q4, %token_count, %hidden_size, %combined_output_size, %overwrite, %channel_tile, %token_tile, %input, %combined_weight, %combined_output) : (index, index, index, index, index, index, index, buffer, buffer, buffer)
   kernel.return
 }
 
@@ -109,7 +111,7 @@ kernel.def target(@qwen3_moe_attention_qkv_same_format_prefill_gfx11_wave64) @qw
   %channel_tile = index.add %query_channel_tile_count, %local_channel_tile : index
   %key_value_output_size = index.mul %key_value_size, %c2 : index
   %combined_output_size = index.add %query_size, %key_value_output_size : index
-  func.apply<qwen3_moe.dense_quantized.body>(%q4, %token_count, %hidden_size, %combined_output_size, %overwrite, %channel_tile, %token_tile, %input, %combined_weight, %combined_output) : (index, index, index, index, index, index, index, buffer, buffer, buffer)
+  template.apply<@qwen3_moe.dense_quantized.body>(%q4, %token_count, %hidden_size, %combined_output_size, %overwrite, %channel_tile, %token_tile, %input, %combined_weight, %combined_output) : (index, index, index, index, index, index, index, buffer, buffer, buffer)
   kernel.return
 }
 
@@ -143,7 +145,7 @@ kernel.def target(@qwen3_moe_attention_qkv_same_format_prefill_gfx11_wave64) @qw
   %channel_tile = index.add %key_channel_tile_end, %local_channel_tile : index
   %key_value_output_size = index.mul %key_value_size, %c2 : index
   %combined_output_size = index.add %query_size, %key_value_output_size : index
-  func.apply<qwen3_moe.dense_quantized.body>(%q4, %token_count, %hidden_size, %combined_output_size, %overwrite, %channel_tile, %token_tile, %input, %combined_weight, %combined_output) : (index, index, index, index, index, index, index, buffer, buffer, buffer)
+  template.apply<@qwen3_moe.dense_quantized.body>(%q4, %token_count, %hidden_size, %combined_output_size, %overwrite, %channel_tile, %token_tile, %input, %combined_weight, %combined_output) : (index, index, index, index, index, index, index, buffer, buffer, buffer)
   kernel.return
 }
 

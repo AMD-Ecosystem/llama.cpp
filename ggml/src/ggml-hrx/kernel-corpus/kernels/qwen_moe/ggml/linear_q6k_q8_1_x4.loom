@@ -13,13 +13,15 @@
 // by dense and routed projections; prefill schedules can reuse the inline
 // packed-row primitive while staging weights across multiple activation rows.
 // The shared packer is linked beside this module.
+template.decl @ggml.linear_q6k_q8_1_x4.body(%publish_output: i1, %token_count: index, %token0: index, %input_size: index, %output_size: index, %q8_input: buffer, %weight: buffer) -> (f32, index, index, i1, index, index)
+
 amdgpu.target<gfx1151> @ggml_q6k_q8_gfx1151_wave64 {subgroup_size = 64}
 
 config.decl @ggml.linear_q6k_q8_1_x4.token_capacity : %value: index where [range(%value, 1, 2048)]
 
 config.decl @ggml.linear_q6k_q8_1_x4.output_capacity : %value: index where [range(%value, 1, 262144)]
 
-kernel.decl @ggml_quantize_q8_1_x4_f32(%token_count: index, %input_size: index) launch(%token_count: index, %input_size: index, %input: buffer, %output: buffer)
+kernel.decl @ggml_quantize_q8_1_x4_f32(%token_count$15: index, %input_size$16: index) launch(%token_count$17: index, %input_size$18: index, %input: buffer, %output: buffer)
 
 func.decl @ggml_q8_1_x4_word(%q8_input: buffer, %row_byte_base: offset, %q8_block: index, %word_in_block: index) -> (vector<4xi8>, f32)
 
@@ -252,7 +254,7 @@ func.def inline @ggml_q6k_q8_1_x4_row_lane_wave64_block4(%input_size: index, %we
 // Contracts one output channel for the calling Q6_K projection kernel. The
 // caller owns publication so the same canonical contraction can feed either a
 // dense logits tensor or an endpoint reduction.
-func.template<ggml.linear_q6k_q8_1_x4.body> device @ggml_linear_q6k_q8_1_x4_body(%publish_output: i1, %token_count: index, %token0: index, %input_size: index, %output_size: index, %q8_input: buffer, %weight: buffer) -> (f32, index, index, i1, index, index) {
+template.def<@ggml.linear_q6k_q8_1_x4.body> device @ggml_linear_q6k_q8_1_x4_body(%publish_output: i1, %token_count: index, %token0: index, %input_size: index, %output_size: index, %q8_input: buffer, %weight: buffer) -> (f32, index, index, i1, index, index) {
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
   %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
   %bounded_output_size = index.assume %output_size [range(%output_size, 1, 262144)] : index
@@ -290,7 +292,7 @@ func.template<ggml.linear_q6k_q8_1_x4.body> device @ggml_linear_q6k_q8_1_x4_body
     scf.yield %c0_f32 : f32
   }
   %dot = kernel.subgroup.reduce<addf> %lane_acc : f32
-  func.return %dot, %token, %channel, %valid_channel, %launch_token_count, %bounded_output_size : f32, index, index, i1, index, index
+  template.return %dot, %token, %channel, %valid_channel, %launch_token_count, %bounded_output_size : f32, index, index, i1, index, index
 }
 
 // Dense raw-layout baseline. A 256-thread workgroup carries eight independent
@@ -316,7 +318,7 @@ kernel.def export("ggml_linear_q6k_q8_1_x4") @ggml_linear_q6k_q8_1_x4(%token_cou
   %token0 = kernel.workgroup.id<y> : index
   %valid_token = index.cmp ult, %token0, %bounded_token_count : index
   %safe_token = scf.select %valid_token, %token0, %c0 : index
-  %dot, %token, %channel, %valid_channel, %launch_token_count, %output_bound = func.apply<ggml.linear_q6k_q8_1_x4.body>(%valid_token, %bounded_token_count, %safe_token, %input_size, %bounded_output_size, %q8_noalias, %weight_noalias) : (i1, index, index, index, index, buffer, buffer) -> (f32, index, index, i1, index, index)
+  %dot, %token, %channel, %valid_channel, %launch_token_count, %output_bound = template.apply<@ggml.linear_q6k_q8_1_x4.body>(%valid_token, %bounded_token_count, %safe_token, %input_size, %bounded_output_size, %q8_noalias, %weight_noalias) : (i1, index, index, index, index, buffer, buffer) -> (f32, index, index, i1, index, index)
   %c0_i32 = scalar.constant 0 : i32
   %c0_offset = index.constant 0 : offset
   %lane = kernel.subgroup.lane.id : index

@@ -9,7 +9,11 @@
 // This outer device template deliberately applies the RMSNorm/Q8 device
 // template. Keeping that composition authored here ensures the compiler
 // preserves the eventual kernel ancestor through nested template selection.
-func.template<qwen3_moe.routed_down.next_q8_completion> device @qwen3_moe_routed_down_next_q8_completion(%output_channels_per_workgroup0: index, %reduction_subgroup_count0: index, %token_count: index, %output_size: index, %output: buffer, %norm_weight: buffer, %completion_counter: buffer, %next_q8_output: buffer) {
+template.decl @qwen3_moe.rmsnorm_quantize_q8_1_x4.body(%arg0: i1, %arg1: index, %arg2: index, %arg3: index, %arg4: buffer, %arg5: buffer, %arg6: buffer, %arg7: buffer)
+
+template.decl @qwen3_moe.routed_down.next_q8_completion(%output_channels_per_workgroup0: index, %reduction_subgroup_count0: index, %token_count: index, %output_size: index, %output: buffer, %norm_weight: buffer, %completion_counter: buffer, %next_q8_output: buffer)
+
+template.def<@qwen3_moe.routed_down.next_q8_completion> device @qwen3_moe_routed_down_next_q8_completion(%output_channels_per_workgroup0: index, %reduction_subgroup_count0: index, %token_count: index, %output_size: index, %output: buffer, %norm_weight: buffer, %completion_counter: buffer, %next_q8_output: buffer) {
   %output_channels_per_workgroup = index.assume %output_channels_per_workgroup0 [range(%output_channels_per_workgroup0, 1, 8)] : index
   %reduction_subgroup_count = index.assume %reduction_subgroup_count0 [range(%reduction_subgroup_count0, 1, 8)] : index
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1)] : index
@@ -45,11 +49,11 @@ func.template<qwen3_moe.routed_down.next_q8_completion> device @qwen3_moe_routed
   scf.if %is_last_output_tile {
     kernel.barrier<global> scope(workgroup) ordering(acquire)
     %publish_normalized = scalar.constant false : i1
-    func.apply<qwen3_moe.rmsnorm_quantize_q8_1_x4.body>(%publish_normalized, %reduction_subgroup_count, %bounded_token_count, %token, %output_noalias, %norm_weight_noalias, %next_q8_output_noalias, %next_q8_output_noalias) : (i1, index, index, index, buffer, buffer, buffer, buffer)
+    template.apply<@qwen3_moe.rmsnorm_quantize_q8_1_x4.body>(%publish_normalized, %reduction_subgroup_count, %bounded_token_count, %token, %output_noalias, %norm_weight_noalias, %next_q8_output_noalias, %next_q8_output_noalias) : (i1, index, index, index, buffer, buffer, buffer, buffer)
     kernel.barrier<global> scope(workgroup) ordering(release)
     scf.if %is_arrival_workitem {
       view.atomic.reduce<addi> %negative_output_tile_count_i32, %completion_counter_view[%c0] {ordering = release, scope = device} : i32, view<1xi32>
     }
   }
-  func.return
+  template.return
 }

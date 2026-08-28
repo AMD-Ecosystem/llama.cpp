@@ -1,0 +1,20 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+func.def inline @ggml_rope_f32_pair_packet(%position: f32, %theta: vector<2xf32>, %freq_factors: vector<2xf32>, %x_values: vector<2xf32>, %y_values: vector<2xf32>) -> (vector<2xf32>, vector<2xf32>) {
+  %position_vector = vector.splat %position : vector<2xf32>
+  %inverse_two_pi = scalar.constant 0.15915494309189535 : f32
+  %inverse_two_pi_vector = vector.splat %inverse_two_pi : vector<2xf32>
+  %scaled_theta = vector.divf<reassoc|nnan|ninf|nsz|arcp> %theta, %freq_factors : vector<2xf32>
+  %angles = vector.mulf<reassoc|nnan|ninf|nsz|contract> %position_vector, %scaled_theta : vector<2xf32>
+  %turns = vector.mulf<reassoc|nnan|ninf|nsz|contract> %angles, %inverse_two_pi_vector : vector<2xf32>
+  %cosines = vector.costurnsf<afn> %turns : vector<2xf32>
+  %sines = vector.sinturnsf<afn> %turns : vector<2xf32>
+  %x_cosines = vector.mulf<reassoc|nnan|ninf|nsz|contract> %x_values, %cosines : vector<2xf32>
+  %y_sines = vector.mulf<reassoc|nnan|ninf|nsz|contract> %y_values, %sines : vector<2xf32>
+  %x_sines = vector.mulf<reassoc|nnan|ninf|nsz|contract> %x_values, %sines : vector<2xf32>
+  %y_cosines = vector.mulf<reassoc|nnan|ninf|nsz|contract> %y_values, %cosines : vector<2xf32>
+  %rotated_x = vector.subf<reassoc|nnan|ninf|nsz> %x_cosines, %y_sines : vector<2xf32>
+  %rotated_y = vector.addf<reassoc|nnan|ninf|nsz> %x_sines, %y_cosines : vector<2xf32>
+  func.return %rotated_x, %rotated_y : vector<2xf32>, vector<2xf32>
+}

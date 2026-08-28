@@ -12,6 +12,8 @@
 // On gfx11, direct F32 loads and software Q6_K decode can beat activation
 // quantization for decode-sized batches. Keeping both algorithms in the same
 // corpus lets JIT selection depend on the specialized shape and target.
+template.decl @ggml.linear_q6k_f32.body(%publish_output: i1, %token_count: index, %token0: index, %pair: index, %input_size: index, %output_size: index, %input: buffer, %weight: buffer, %output: buffer)
+
 amdgpu.target<gfx11-generic> @ggml_q6k_gfx11_wave64 {subgroup_size = 64}
 
 amdgpu.target<gfx11-generic> @ggml_q6k_gfx11_wave32 {subgroup_size = 32}
@@ -21,9 +23,9 @@ config.decl @ggml.linear_q6k_f32.token_capacity : %value: index where [range(%va
 config.decl @ggml.linear_q6k_f32.output_capacity : %value: index where [range(%value, 1, 262144)]
 
 // Q8_1 reference declarations used only by the differential case.
-kernel.decl @ggml_quantize_q8_1_x4_f32(%token_count: index, %input_size: index) launch(%token_count: index, %input_size: index, %input: buffer, %output: buffer)
+kernel.decl @ggml_quantize_q8_1_x4_f32(%token_count$11: index, %input_size$12: index) launch(%token_count$13: index, %input_size$14: index, %input: buffer, %output: buffer)
 
-kernel.decl @ggml_linear_q6k_q8_1_x4(%token_count: index, %input_size: index, %output_size: index) launch(%token_count: index, %input_size: index, %output_size: index, %q8_input: buffer, %weight: buffer, %output: buffer)
+kernel.decl @ggml_linear_q6k_q8_1_x4(%token_count$17: index, %input_size$18: index, %output_size$19: index) launch(%token_count$20: index, %input_size$21: index, %output_size$22: index, %q8_input: buffer, %weight: buffer, %output: buffer)
 
 // Computes an ordered four-element F32 dot product. The scalar recurrence
 // mirrors the GLSL oracle and gives target scheduling four independent dot
@@ -240,7 +242,7 @@ func.def inline @ggml_q6k_f32_block_row(%input_size: index, %row: index, %block:
 
 // Shared direct-F32 matrix-vector schedule. Target entry points below vary
 // subgroup width without duplicating the Q6_K decoding or memory schedule.
-func.template<ggml.linear_q6k_f32.body> device @ggml_linear_q6k_f32_body(%publish_output: i1, %token_count: index, %token0: index, %pair: index, %input_size: index, %output_size: index, %input: buffer, %weight: buffer, %output: buffer) {
+template.def<@ggml.linear_q6k_f32.body> device @ggml_linear_q6k_f32_body(%publish_output: i1, %token_count: index, %token0: index, %pair: index, %input_size: index, %output_size: index, %input: buffer, %weight: buffer, %output: buffer) {
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
   %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
   %bounded_output_size = index.assume %output_size [range(%output_size, 1, 262144)] : index
@@ -295,7 +297,7 @@ func.template<ggml.linear_q6k_f32.body> device @ggml_linear_q6k_f32_body(%publis
       }
     }
   }
-  func.return
+  template.return
 }
 
 // Wave64 provider matching the Vulkan oracle's subgroup schedule.
@@ -323,7 +325,7 @@ kernel.def target(@ggml_q6k_gfx11_wave64) @ggml_linear_q6k_f32_wave64(%token_cou
   %c0 = index.constant 0 : index
   %safe_token = scf.select %valid_token, %token, %c0 : index
   %safe_pair = scf.select %valid_row, %pair, %c0 : index
-  func.apply<ggml.linear_q6k_f32.body>(%publish_output, %bounded_token_count, %safe_token, %safe_pair, %input_size, %bounded_output_size, %input, %weight, %output) : (i1, index, index, index, index, index, buffer, buffer, buffer)
+  template.apply<@ggml.linear_q6k_f32.body>(%publish_output, %bounded_token_count, %safe_token, %safe_pair, %input_size, %bounded_output_size, %input, %weight, %output) : (i1, index, index, index, index, index, buffer, buffer, buffer)
   kernel.return
 }
 
@@ -353,7 +355,7 @@ kernel.def target(@ggml_q6k_gfx11_wave32) @ggml_linear_q6k_f32_wave32(%token_cou
   %c0 = index.constant 0 : index
   %safe_token = scf.select %valid_token, %token, %c0 : index
   %safe_pair = scf.select %valid_row, %pair, %c0 : index
-  func.apply<ggml.linear_q6k_f32.body>(%publish_output, %bounded_token_count, %safe_token, %safe_pair, %input_size, %bounded_output_size, %input, %weight, %output) : (i1, index, index, index, index, index, buffer, buffer, buffer)
+  template.apply<@ggml.linear_q6k_f32.body>(%publish_output, %bounded_token_count, %safe_token, %safe_pair, %input_size, %bounded_output_size, %input, %weight, %output) : (i1, index, index, index, index, index, buffer, buffer, buffer)
   kernel.return
 }
 

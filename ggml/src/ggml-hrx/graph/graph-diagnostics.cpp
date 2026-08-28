@@ -142,6 +142,16 @@ json op_params_json(const OpParams & params) {
                     { "kind", "glu"                      },
                     { "op",   static_cast<int>(value.op) }
                 };
+            } else if constexpr (std::is_same_v<T, BinaryParams>) {
+                return {
+                    { "kind", "binary"                   },
+                    { "op",   static_cast<int>(value.op) }
+                };
+            } else if constexpr (std::is_same_v<T, UnaryParams>) {
+                return {
+                    { "kind", "unary"                    },
+                    { "op",   static_cast<int>(value.op) }
+                };
             } else if constexpr (std::is_same_v<T, RopeParams>) {
                 return {
                     { "kind",        "rope"            },
@@ -188,6 +198,12 @@ OpParams parse_op_params(const json & item) {
     }
     if (kind == "glu") {
         return GluParams{ static_cast<ggml_glu_op>(item.value("op", static_cast<int>(GGML_GLU_OP_REGLU))) };
+    }
+    if (kind == "binary") {
+        return BinaryParams{ static_cast<BinaryKind>(item.value("op", static_cast<int>(BinaryKind::Add))) };
+    }
+    if (kind == "unary") {
+        return UnaryParams{ static_cast<UnaryKind>(item.value("op", static_cast<int>(UnaryKind::Abs))) };
     }
     if (kind == "rope") {
         return RopeParams{

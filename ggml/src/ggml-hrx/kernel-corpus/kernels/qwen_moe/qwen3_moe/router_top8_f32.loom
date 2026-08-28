@@ -16,6 +16,8 @@
 // Selection therefore operates directly on logits and only the selected
 // values reach the exponential. This preserves the model contract while
 // avoiding exponentials for experts that cannot contribute to the result.
+template.decl @qwen3_moe.router.top8.row(%valid_token: i1, %token: index, %token_count: index, %route_id_stride: index, %logits: buffer, %route_ids: buffer, %route_weights: buffer)
+
 amdgpu.target<gfx11-generic> @qwen3_moe_router_gfx11_wave64 {subgroup_size = 64}
 
 config.decl @qwen3_moe.router.expert_count : %value: index where [range(%value, 32, 512), mul(%value, 32)]
@@ -26,7 +28,7 @@ config.decl @qwen3_moe.router.route_count : %value: index where [range(%value, 1
 // subgroup to a safe physical row and tells the helper whether that row should
 // publish. Keeping row semantics independent of launch geometry lets fused
 // producers consume this exact tie-breaking and normalization contract.
-func.template<qwen3_moe.router.top8.row> device requires [#target.subgroup.size<64>] @qwen3_moe_router_top8_row_f32(%valid_token: i1, %token: index, %token_count: index, %route_id_stride: index, %logits: buffer, %route_ids: buffer, %route_weights: buffer) {
+template.def<@qwen3_moe.router.top8.row> device requires [#target.subgroup.size<64>] @qwen3_moe_router_top8_row_f32(%valid_token: i1, %token: index, %token_count: index, %route_id_stride: index, %logits: buffer, %route_ids: buffer, %route_weights: buffer) {
   %expert_count0 = config.get @qwen3_moe.router.expert_count : index
   %route_count0 = config.get @qwen3_moe.router.route_count : index
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
@@ -37,7 +39,7 @@ func.template<qwen3_moe.router.top8.row> device requires [#target.subgroup.size<
   %c0 = index.constant 0 : index
   %c1 = index.constant 1 : index
   %wave_size = target.subgroup.size : index
-  %negative_large = scalar.constant -3.4028234663852885e+38 : f32
+  %negative_large = scalar.constant -3.4028234663852886e+38 : f32
   %largest_i32 = scalar.constant 2147483647 : i32
   %c0_offset = index.constant 0 : offset
   %experts_per_lane0 = index.div %expert_count, %wave_size : index
@@ -111,7 +113,7 @@ func.template<qwen3_moe.router.top8.row> device requires [#target.subgroup.size<
     %route_weight_index = index.add %route_weight_token_base, %lane : index
     view.store %route_weight, %route_weights_view[%route_weight_index] : f32, view<[%route_weight_storage_count]xf32>
   }
-  func.return
+  template.return
 }
 
 kernel.def target(@qwen3_moe_router_gfx11_wave64) @qwen3_moe_router_top8_f32(%token_count: index, %route_id_stride: index) {
@@ -132,7 +134,7 @@ kernel.def target(@qwen3_moe_router_gfx11_wave64) @qwen3_moe_router_top8_f32(%to
   %token0 = index.add %token_base, %subgroup : index
   %valid_token = index.cmp ult, %token0, %token_count : index
   %safe_token = scf.select %valid_token, %token0, %c0 : index
-  func.apply<qwen3_moe.router.top8.row>(%valid_token, %safe_token, %token_count, %route_id_stride, %logits, %route_ids, %route_weights) : (i1, index, index, index, buffer, buffer, buffer)
+  template.apply<@qwen3_moe.router.top8.row>(%valid_token, %safe_token, %token_count, %route_id_stride, %logits, %route_ids, %route_weights) : (i1, index, index, index, buffer, buffer, buffer)
   kernel.return
 }
 

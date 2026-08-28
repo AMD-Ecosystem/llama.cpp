@@ -130,10 +130,12 @@ static const ggml::hrx::KernelDefinition * find_targeted_kernel(const char * nam
     return nullptr;
 }
 
-static ggml::hrx::Dispatch make_add_dispatch(const ggml::hrx::KernelDefinition & definition, int64_t element_count) {
+static ggml::hrx::Dispatch make_binary_add_dispatch(const ggml::hrx::KernelDefinition & definition,
+                                                    int64_t                             element_count) {
     ggml::hrx::Dispatch dispatch;
     dispatch.kernel.kernel_id = definition.id;
     dispatch.kernel.integer_parameters.emplace("element_count", element_count);
+    dispatch.kernel.compile_parameters.emplace("ggml.binary_f32.op", "0");
     dispatch.bindings.reserve(definition.bindings.size());
     for (size_t i = 0; i < definition.bindings.size(); ++i) {
         dispatch.bindings.push_back({
@@ -143,6 +145,44 @@ static ggml::hrx::Dispatch make_add_dispatch(const ggml::hrx::KernelDefinition &
         });
     }
     return dispatch;
+}
+
+static std::map<std::string, int64_t> binary_f32_exact_workload(int64_t element_count) {
+    return {
+        { "element_count", element_count },
+    };
+}
+
+static std::map<std::string, std::string> binary_f32_exact_config(const char * op) {
+    return {
+        { "ggml.binary_f32.op", op },
+    };
+}
+
+static std::map<std::string, int64_t> binary_bc_f32_workload() {
+    return {
+        { "element_count",      48 },
+        { "ne0",                16 },
+        { "ne1",                3  },
+        { "ne2",                1  },
+        { "ne3",                1  },
+        { "src0_element_count", 48 },
+        { "src1_element_count", 16 },
+    };
+}
+
+static std::map<std::string, std::string> binary_bc_f32_config(const char * op) {
+    return {
+        { "ggml.binary_bc_f32.op",                  op  },
+        { "ggml.binary_bc_f32.src0_broadcast_dim0", "0" },
+        { "ggml.binary_bc_f32.src0_broadcast_dim1", "0" },
+        { "ggml.binary_bc_f32.src0_broadcast_dim2", "0" },
+        { "ggml.binary_bc_f32.src0_broadcast_dim3", "0" },
+        { "ggml.binary_bc_f32.src1_broadcast_dim0", "0" },
+        { "ggml.binary_bc_f32.src1_broadcast_dim1", "1" },
+        { "ggml.binary_bc_f32.src1_broadcast_dim2", "0" },
+        { "ggml.binary_bc_f32.src1_broadcast_dim3", "0" },
+    };
 }
 
 static ggml::hrx::LoomKernelCompileRequest make_compile_request(
@@ -240,16 +280,16 @@ static int64_t elapsed_us(std::chrono::steady_clock::time_point begin, std::chro
 
 static void run_cache_materialize_case(HrxTestDevice &                     device,
                                        ggml::hrx::LoomJitMode              mode,
-                                       const ggml::hrx::KernelDefinition & add) {
+                                       const ggml::hrx::KernelDefinition & binary) {
     ggml::hrx::KernelExecutablePrepareContext context = {};
     context.device                                    = device.device;
     context.target                                    = device.architecture.c_str();
 
-    ggml::hrx::Dispatch              dispatch = make_add_dispatch(add, 64);
+    ggml::hrx::Dispatch              dispatch = make_binary_add_dispatch(binary, 64);
     std::vector<uint8_t>             constants;
     ggml::hrx::KernelExecutableCache cache(mode);
 
-    ggml::hrx::KernelExecutableRef ref = cache.get_or_compile(context, add, dispatch, constants);
+    ggml::hrx::KernelExecutableRef ref = cache.get_or_compile(context, binary, dispatch, constants);
     REQUIRE(ref.valid());
 
     std::shared_ptr<ggml::hrx::KernelExecutable> executable = cache.materialize(context, ref, constants);
@@ -265,11 +305,12 @@ static void run_cache_materialize_case(HrxTestDevice &                     devic
 
     std::vector<uint8_t>                         constants_for_prepare;
     std::shared_ptr<ggml::hrx::KernelExecutable> prepared =
-        cache.prepare(context, add, dispatch, constants_for_prepare);
+        cache.prepare(context, binary, dispatch, constants_for_prepare);
     REQUIRE(prepared == executable);
 
     const char * mode_name = mode == ggml::hrx::LoomJitMode::Async ? "async" : "sync";
-    std::printf("%s KernelExecutableCache materialized ggml_add_f32 for %s\n", mode_name, device.architecture.c_str());
+    std::printf("%s KernelExecutableCache materialized ggml_binary_f32 for %s\n", mode_name,
+                device.architecture.c_str());
 }
 
 static void run_targeted_export_materialize_case(HrxTestDevice & device) {
@@ -307,7 +348,8 @@ static void run_targeted_export_materialize_case(HrxTestDevice & device) {
 int main() {
     static constexpr const char * kTarget = "gfx1100";
 
-    const ggml::hrx::KernelDefinition & add             = find_kernel("ggml_add_f32");
+    const ggml::hrx::KernelDefinition & binary          = find_kernel("ggml_binary_f32");
+    const ggml::hrx::KernelDefinition & binary_bc       = find_kernel("ggml_binary_bc_f32");
     const ggml::hrx::KernelDefinition & gather_add      = find_kernel("ggml_gather_add_f32");
     const ggml::hrx::KernelDefinition & rmsnorm         = find_kernel("qwen3_moe_rmsnorm_f32");
     const ggml::hrx::KernelDefinition & router_top8     = find_kernel("qwen3_moe_router_top8_f32");
@@ -321,10 +363,8 @@ int main() {
     REQUIRE(!sync_jit->async_enabled());
 
     const auto                       sync_begin = std::chrono::steady_clock::now();
-    ggml::hrx::LoomCompiledKernelRef sync_ref   = compile_kernel(*sync_jit, "sync-add-64", add,
-                                                                 {
-                                                                   { "element_count", 64 }
-    });
+    ggml::hrx::LoomCompiledKernelRef sync_ref   = compile_kernel(
+        *sync_jit, "sync-binary-add-64", binary, binary_f32_exact_workload(64), binary_f32_exact_config("0"));
     require_compiled_kernel(sync_ref);
     const auto    sync_end        = std::chrono::steady_clock::now();
     const int64_t sync_compile_us = elapsed_us(sync_begin, sync_end);
@@ -337,24 +377,18 @@ int main() {
     REQUIRE(async_jit->async_enabled());
 
     std::vector<ggml::hrx::LoomCompiledKernelRef> refs;
-    refs.reserve(9);
+    refs.reserve(10);
     const auto enqueue_begin = std::chrono::steady_clock::now();
-    refs.push_back(compile_kernel(*async_jit, "async-add-64", add,
-                                  {
-                                      { "element_count", 64 }
-    }));
-    refs.push_back(compile_kernel(*async_jit, "async-add-128", add,
-                                  {
-                                      { "element_count", 128 }
-    }));
-    refs.push_back(compile_kernel(*async_jit, "async-add-256", add,
-                                  {
-                                      { "element_count", 256 }
-    }));
-    refs.push_back(compile_kernel(*async_jit, "async-add-512", add,
-                                  {
-                                      { "element_count", 512 }
-    }));
+    refs.push_back(compile_kernel(*async_jit, "async-binary-add-64", binary, binary_f32_exact_workload(64),
+                                  binary_f32_exact_config("0")));
+    refs.push_back(compile_kernel(*async_jit, "async-binary-add-128", binary, binary_f32_exact_workload(128),
+                                  binary_f32_exact_config("0")));
+    refs.push_back(compile_kernel(*async_jit, "async-binary-add-256", binary, binary_f32_exact_workload(256),
+                                  binary_f32_exact_config("0")));
+    refs.push_back(compile_kernel(*async_jit, "async-binary-add-512", binary, binary_f32_exact_workload(512),
+                                  binary_f32_exact_config("0")));
+    refs.push_back(compile_kernel(*async_jit, "async-binary-bc-mul-48", binary_bc, binary_bc_f32_workload(),
+                                  binary_bc_f32_config("2")));
     refs.push_back(compile_kernel(*async_jit, "async-rmsnorm-1", rmsnorm,
                                   {
                                       { "token_count", 1 }
@@ -420,8 +454,8 @@ int main() {
 
     HrxTestDevice device;
     if (device.open()) {
-        run_cache_materialize_case(device, ggml::hrx::LoomJitMode::Sync, add);
-        run_cache_materialize_case(device, ggml::hrx::LoomJitMode::Async, add);
+        run_cache_materialize_case(device, ggml::hrx::LoomJitMode::Sync, binary);
+        run_cache_materialize_case(device, ggml::hrx::LoomJitMode::Async, binary);
         run_targeted_export_materialize_case(device);
     } else {
         std::printf("skipping KernelExecutableCache materialization checks: no HRX device available\n");

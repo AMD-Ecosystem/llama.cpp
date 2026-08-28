@@ -1,0 +1,153 @@
+// Fused F32 ROPE followed by indexed cache publication.
+template.decl @ggml.rope_set_rows_f32.body(%token_count: index, %cache_row_count: index, %positions: buffer, %indices: buffer, %input: buffer, %theta: buffer, %freq_factors: buffer, %cache: buffer)
+
+template.decl @ggml.rope_set_rows_f32.store(%output_format: index, %publish: i1, %cache_row: index, %head: index, %channel: index, %cache_row_count: index, %head_count: index, %head_size: index, %values: vector<2xf32>, %cache: buffer)
+
+template.decl @ggml.rope_set_rows_f32.store4(%output_format: index, %publish: i1, %cache_row: index, %head: index, %channel: index, %cache_row_count: index, %head_count: index, %head_size: index, %values: vector<4xf32>, %cache: buffer)
+
+amdgpu.target<gfx11-generic> @ggml_rope_set_rows_f32_gfx11_wave32 {subgroup_size = 32}
+
+config.decl @ggml.rope_set_rows_f32.head_size : %value: index where [range(%value, 4, 1024), mul(%value, 4)]
+
+config.decl @ggml.rope_set_rows_f32.head_count : %value: index where [range(%value, 1, 64)]
+
+config.decl @ggml.rope_set_rows_f32.token_capacity : %value: index where [range(%value, 1, 2048)]
+
+config.decl @ggml.rope_set_rows_f32.output_format : %value: index where [range(%value, 16, 32)]
+
+config.decl @ggml.rope_set_rows_f32.mode : %value: index where [range(%value, 0, 2)]
+
+func.decl @ggml_rope_f32_pair_packet(%position: f32, %theta: vector<2xf32>, %freq_factors: vector<2xf32>, %x_values: vector<2xf32>, %y_values: vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
+
+template.def<@ggml.rope_set_rows_f32.store> device @ggml_rope_set_rows_f32_store(%output_format: index, %publish: i1, %cache_row: index, %head: index, %channel: index, %cache_row_count: index, %head_count: index, %head_size: index, %values: vector<2xf32>, %cache: buffer) {
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c0_offset = index.constant 0 : offset
+  %is_f16 = index.cmp eq, %output_format, %c16 : index
+  %is_f32 = index.cmp eq, %output_format, %c32 : index
+  %publish_f16 = scalar.andi %publish, %is_f16 : i1
+  %publish_f32 = scalar.andi %publish, %is_f32 : i1
+  scf.if %publish_f16 {
+    %cache_view = buffer.view %cache[%c0_offset] : buffer -> view<[%cache_row_count]x[%head_count]x[%head_size]xf16>
+    %truncated = vector.fptrunc %values : vector<2xf32> to vector<2xf16>
+    vector.store %truncated, %cache_view[%cache_row, %head, %channel] : vector<2xf16>, view<[%cache_row_count]x[%head_count]x[%head_size]xf16>
+  }
+  scf.if %publish_f32 {
+    %cache_view = buffer.view %cache[%c0_offset] : buffer -> view<[%cache_row_count]x[%head_count]x[%head_size]xf32>
+    vector.store %values, %cache_view[%cache_row, %head, %channel] : vector<2xf32>, view<[%cache_row_count]x[%head_count]x[%head_size]xf32>
+  }
+  template.return
+}
+
+template.def<@ggml.rope_set_rows_f32.store4> device @ggml_rope_set_rows_f32_store4(%output_format: index, %publish: i1, %cache_row: index, %head: index, %channel: index, %cache_row_count: index, %head_count: index, %head_size: index, %values: vector<4xf32>, %cache: buffer) {
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c0_offset = index.constant 0 : offset
+  %is_f16 = index.cmp eq, %output_format, %c16 : index
+  %is_f32 = index.cmp eq, %output_format, %c32 : index
+  %publish_f16 = scalar.andi %publish, %is_f16 : i1
+  %publish_f32 = scalar.andi %publish, %is_f32 : i1
+  scf.if %publish_f16 {
+    %cache_view = buffer.view %cache[%c0_offset] : buffer -> view<[%cache_row_count]x[%head_count]x[%head_size]xf16>
+    %truncated = vector.fptrunc %values : vector<4xf32> to vector<4xf16>
+    vector.store %truncated, %cache_view[%cache_row, %head, %channel] : vector<4xf16>, view<[%cache_row_count]x[%head_count]x[%head_size]xf16>
+  }
+  scf.if %publish_f32 {
+    %cache_view = buffer.view %cache[%c0_offset] : buffer -> view<[%cache_row_count]x[%head_count]x[%head_size]xf32>
+    vector.store %values, %cache_view[%cache_row, %head, %channel] : vector<4xf32>, view<[%cache_row_count]x[%head_count]x[%head_size]xf32>
+  }
+  template.return
+}
+
+template.def<@ggml.rope_set_rows_f32.body> device @ggml_rope_set_rows_f32_body(%token_count: index, %cache_row_count: index, %positions: buffer, %indices: buffer, %input: buffer, %theta: buffer, %freq_factors: buffer, %cache: buffer) {
+  %token_capacity = config.get @ggml.rope_set_rows_f32.token_capacity : index
+  %head_count0 = config.get @ggml.rope_set_rows_f32.head_count : index
+  %head_size0 = config.get @ggml.rope_set_rows_f32.head_size : index
+  %output_format = config.get @ggml.rope_set_rows_f32.output_format : index
+  %mode = config.get @ggml.rope_set_rows_f32.mode : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %token_capacity)] : index
+  %bounded_cache_row_count = index.assume %cache_row_count [range(%cache_row_count, 1, 1048576)] : index
+  %head_count, %head_size = index.assume %head_count0, %head_size0 [range(%head_count0, 1, 64), range(%head_size0, 4, 1024), mul(%head_size0, 4)] : index, index
+  %head = kernel.workgroup.id<x> : index
+  %token0 = kernel.workgroup.id<y> : index
+  %channel0 = kernel.workitem.id<x> : index
+  %c0 = index.constant 0 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %mode_neox = index.constant 2 : index
+  %c0_i64 = scalar.constant 0 : i64
+  %c1048575_i64 = scalar.constant 1048575 : i64
+  %c0_offset = index.constant 0 : offset
+  %half_head_size = index.div %head_size, %c2 : index
+  %pair_packet_count = index.div %head_size, %c4 : index
+  %valid_token = index.cmp ult, %token0, %bounded_token_count : index
+  %active_channel = index.cmp ult, %channel0, %pair_packet_count : index
+  %publish0 = scalar.andi %valid_token, %active_channel : i1
+  %token = scf.select %valid_token, %token0, %c0 : index
+  %is_neox = index.cmp eq, %mode, %mode_neox : index
+  %is_normal = index.cmp eq, %mode, %c0 : index
+  %positions_noalias, %indices_noalias, %input_noalias, %theta_noalias, %freq_factors_noalias, %cache_noalias = buffer.assume.noalias %positions, %indices, %input, %theta, %freq_factors, %cache : buffer, buffer, buffer, buffer, buffer, buffer
+  %positions_view = buffer.view %positions_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]xi32>
+  %indices_view = buffer.view %indices_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]xi64>
+  %input_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]x[%head_count]x[%head_size]xf32>
+  %theta_view = buffer.view %theta_noalias[%c0_offset] : buffer -> view<[%half_head_size]xf32>
+  %freq_factors_view = buffer.view %freq_factors_noalias[%c0_offset] : buffer -> view<[%half_head_size]xf32>
+  %index_raw = view.load %indices_view[%token] : view<[%bounded_token_count]xi64> -> i64
+  %index_nonnegative = scalar.cmpi sge, %index_raw, %c0_i64 : i64
+  %index_in_cast_range = scalar.cmpi sle, %index_raw, %c1048575_i64 : i64
+  %valid_index = scalar.andi %index_nonnegative, %index_in_cast_range : i1
+  %safe_index0_i64 = scf.select %valid_index, %index_raw, %c0_i64 : i64
+  %safe_index_i64 = scalar.assume %safe_index0_i64 [range(%safe_index0_i64, 0, 1048575)] : i64
+  %cache_row0 = index.cast %safe_index_i64 : i64 to index
+  %valid_row = index.cmp ult, %cache_row0, %bounded_cache_row_count : index
+  %publish1 = scalar.andi %publish0, %valid_index : i1
+  %publish = scalar.andi %publish1, %valid_row : i1
+  %cache_row = scf.select %valid_row, %cache_row0, %c0 : index
+  scf.if %publish {
+    %channel = index.assume %channel0 [lt(%channel0, %pair_packet_count)] : index
+    %pair_channel = index.mul %channel, %c2 : index
+    %normal_channel = index.mul %channel, %c4 : index
+    %position_i32 = view.load %positions_view[%token] : view<[%bounded_token_count]xi32> -> i32
+    %position = scalar.sitofp %position_i32 : i32 to f32
+    %theta_packet = vector.load %theta_view[%pair_channel] : view<[%half_head_size]xf32> -> vector<2xf32>
+    %freq_factors_packet = vector.load %freq_factors_view[%pair_channel] : view<[%half_head_size]xf32> -> vector<2xf32>
+    scf.if %is_neox {
+      %paired_channel = index.add %pair_channel, %half_head_size : index
+      %low_values = vector.load %input_view[%token, %head, %pair_channel] : view<[%bounded_token_count]x[%head_count]x[%head_size]xf32> -> vector<2xf32>
+      %high_values = vector.load %input_view[%token, %head, %paired_channel] : view<[%bounded_token_count]x[%head_count]x[%head_size]xf32> -> vector<2xf32>
+      %rotated_low, %rotated_high = func.call @ggml_rope_f32_pair_packet(%position, %theta_packet, %freq_factors_packet, %low_values, %high_values) : (f32, vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
+      template.apply<@ggml.rope_set_rows_f32.store>(%output_format, %publish, %cache_row, %head, %pair_channel, %bounded_cache_row_count, %head_count, %head_size, %rotated_low, %cache_noalias) : (index, i1, index, index, index, index, index, index, vector<2xf32>, buffer)
+      template.apply<@ggml.rope_set_rows_f32.store>(%output_format, %publish, %cache_row, %head, %paired_channel, %bounded_cache_row_count, %head_count, %head_size, %rotated_high, %cache_noalias) : (index, i1, index, index, index, index, index, index, vector<2xf32>, buffer)
+    }
+    scf.if %is_normal {
+      %values = vector.load %input_view[%token, %head, %normal_channel] : view<[%bounded_token_count]x[%head_count]x[%head_size]xf32> -> vector<4xf32>
+      %x0 = vector.extract %values[0] : vector<4xf32> -> f32
+      %y0 = vector.extract %values[1] : vector<4xf32> -> f32
+      %x1 = vector.extract %values[2] : vector<4xf32> -> f32
+      %y1 = vector.extract %values[3] : vector<4xf32> -> f32
+      %x_values = vector.from_elements %x0, %x1 : vector<2xf32>
+      %y_values = vector.from_elements %y0, %y1 : vector<2xf32>
+      %rotated_x, %rotated_y = func.call @ggml_rope_f32_pair_packet(%position, %theta_packet, %freq_factors_packet, %x_values, %y_values) : (f32, vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
+      %rotated_x0 = vector.extract %rotated_x[0] : vector<2xf32> -> f32
+      %rotated_x1 = vector.extract %rotated_x[1] : vector<2xf32> -> f32
+      %rotated_y0 = vector.extract %rotated_y[0] : vector<2xf32> -> f32
+      %rotated_y1 = vector.extract %rotated_y[1] : vector<2xf32> -> f32
+      %rotated = vector.from_elements %rotated_x0, %rotated_y0, %rotated_x1, %rotated_y1 : vector<4xf32>
+      template.apply<@ggml.rope_set_rows_f32.store4>(%output_format, %publish, %cache_row, %head, %normal_channel, %bounded_cache_row_count, %head_count, %head_size, %rotated, %cache_noalias) : (index, i1, index, index, index, index, index, index, vector<4xf32>, buffer)
+    }
+  }
+  template.return
+}
+
+kernel.def target(@ggml_rope_set_rows_f32_gfx11_wave32) @ggml_rope_set_rows_f32(%token_count: index, %cache_row_count: index) {
+  %token_capacity = config.get @ggml.rope_set_rows_f32.token_capacity : index
+  %head_count = config.get @ggml.rope_set_rows_f32.head_count : index
+  %head_size = config.get @ggml.rope_set_rows_f32.head_size : index
+  %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : index
+  %pair_packet_count = index.div %head_size, %c4 : index
+  kernel.launch.config workgroups(%head_count, %token_capacity, %c1) workgroup_size(%pair_packet_count, %c1, %c1) : index
+} launch(%token_count: index, %cache_row_count: index, %positions: buffer, %indices: buffer, %input: buffer, %theta: buffer, %freq_factors: buffer, %cache: buffer) where [range(%token_count, 1, 2048)] {
+  template.apply<@ggml.rope_set_rows_f32.body>(%token_count, %cache_row_count, %positions, %indices, %input, %theta, %freq_factors, %cache) : (index, index, buffer, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}

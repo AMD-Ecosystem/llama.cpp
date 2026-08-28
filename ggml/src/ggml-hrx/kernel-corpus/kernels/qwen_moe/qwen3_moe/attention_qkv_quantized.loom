@@ -10,6 +10,8 @@
 // F32 projections. The adjacent preparation producer owns RMSNorm and Q8_1
 // packing; the following attention postprocess owns per-head normalization,
 // RoPE, and K/V cache publication.
+template.decl @qwen3_moe.attention.qkv_quantized.body(%value_uses_q6_index: index, %publish_output: i1, %token_count: index, %token0: index, %q8_input: buffer, %query_weight: buffer, %key_weight: buffer, %value_weight: buffer, %query_output: buffer, %key_output: buffer, %value_output: buffer)
+
 amdgpu.target<gfx11-generic> @qwen3_moe_attention_qkv_gfx11_wave32 {subgroup_size = 32}
 
 config.decl @qwen3_moe.model.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
@@ -31,18 +33,18 @@ func.decl @qwen3_moe_q4k_q8_1_x4_paired_row_lane(%input_size: index, %weight: bu
 func.decl @ggml_q6k_q8_1_x4_row_lane(%input_size: index, %weight: buffer, %weight_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %lane: index) -> (f32)
 
 // Fused RMSNorm and Q8_1 x4 producer linked from attention preparation.
-kernel.decl @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4(%token_count: index) launch(%token_count: index, %input: buffer, %weight: buffer, %q8_output: buffer)
+kernel.decl @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4(%token_count$30: index) launch(%token_count$31: index, %input: buffer, %weight: buffer, %q8_output: buffer)
 
 // Reference entry points used only by differential cases.
-kernel.decl @ggml_quantize_q8_1_x4_f32(%token_count: index, %input_size: index) launch(%token_count: index, %input_size: index, %input: buffer, %output: buffer)
+kernel.decl @ggml_quantize_q8_1_x4_f32(%token_count$35: index, %input_size$36: index) launch(%token_count$37: index, %input_size$38: index, %input: buffer, %output: buffer)
 
-kernel.decl @qwen3_moe_dense_linear_q4k_q8_1_x4(%token_count: index) launch(%token_count: index, %q8_input: buffer, %weight: buffer, %output: buffer)
+kernel.decl @qwen3_moe_dense_linear_q4k_q8_1_x4(%token_count$41: index) launch(%token_count$42: index, %q8_input: buffer, %weight: buffer, %output: buffer)
 
-kernel.decl @ggml_linear_q6k_q8_1_x4(%token_count: index, %input_size: index, %output_size: index) launch(%token_count: index, %input_size: index, %output_size: index, %q8_input: buffer, %weight: buffer, %output: buffer)
+kernel.decl @ggml_linear_q6k_q8_1_x4(%token_count$46: index, %input_size$47: index, %output_size$48: index) launch(%token_count$49: index, %input_size$50: index, %output_size$51: index, %q8_input: buffer, %weight: buffer, %output: buffer)
 
 // Device body shared by the ordinary projection and completion-fused
 // postprocess exports. Each caller owns its boundary after the raw row stores.
-func.template<qwen3_moe.attention.qkv_quantized.body> device @qwen3_moe_attention_qkv_quantized_body(%value_uses_q6_index: index, %publish_output: i1, %token_count: index, %token0: index, %q8_input: buffer, %query_weight: buffer, %key_weight: buffer, %value_weight: buffer, %query_output: buffer, %key_output: buffer, %value_output: buffer) {
+template.def<@qwen3_moe.attention.qkv_quantized.body> device @qwen3_moe_attention_qkv_quantized_body(%value_uses_q6_index: index, %publish_output: i1, %token_count: index, %token0: index, %q8_input: buffer, %query_weight: buffer, %key_weight: buffer, %value_weight: buffer, %query_output: buffer, %key_output: buffer, %value_output: buffer) {
   %hidden_size0 = config.get @qwen3_moe.model.hidden_size : index
   %query_size0 = config.get @qwen3_moe.attention.query_size : index
   %key_value_size0 = config.get @qwen3_moe.attention.key_value_size : index
@@ -136,7 +138,7 @@ func.template<qwen3_moe.attention.qkv_quantized.body> device @qwen3_moe_attentio
       }
     }
   }
-  func.return
+  template.return
 }
 
 kernel.def target(@qwen3_moe_attention_qkv_gfx11_wave32) @qwen3_moe_attention_qkv_quantized(%token_count: index) {
@@ -161,7 +163,7 @@ kernel.def target(@qwen3_moe_attention_qkv_gfx11_wave32) @qwen3_moe_attention_qk
   %c0 = index.constant 0 : index
   %valid_token = index.cmp ult, %token0, %bounded_token_count : index
   %safe_token = scf.select %valid_token, %token0, %c0 : index
-  func.apply<qwen3_moe.attention.qkv_quantized.body>(%value_uses_q6_index, %valid_token, %bounded_token_count, %safe_token, %q8_input, %query_weight, %key_weight, %value_weight, %query_output, %key_output, %value_output) : (index, i1, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  template.apply<@qwen3_moe.attention.qkv_quantized.body>(%value_uses_q6_index, %valid_token, %bounded_token_count, %safe_token, %q8_input, %query_weight, %key_weight, %value_weight, %query_output, %key_output, %value_output) : (index, i1, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
   kernel.return
 }
 
@@ -173,7 +175,7 @@ check.case public @qwen3_moe_attention_qkv_q6_differential_case {
   %token_count = check.literal value(14) : index
   %hidden_size = check.literal value(512) : index
   %output_size = check.literal value(65) : index
-  %input_seed = check.param.seed base(0x514d4f45514b5636) count(1) : i64
+  %input_seed = check.param.seed base(5858425849414112822) count(1) : i64
   %input = check.generate.random.uniform seed(%input_seed) range(-1.0 to 1.0) : tensor<14x512xf32>
   %q8_input = check.generate.fill value(0) : tensor<14x576xi8>
   %query_weight = check.generate.fill value(34) : tensor<65x2x144xi8>
@@ -199,7 +201,7 @@ check.case public @qwen3_moe_attention_qkv_q6_differential_case {
 check.case public @qwen3_moe_attention_qkv_q4_differential_case {
   %token_count = check.literal value(14) : index
   %hidden_size = check.literal value(512) : index
-  %input_seed = check.param.seed base(0x514d4f45514b5634) count(1) : i64
+  %input_seed = check.param.seed base(5858425849414112820) count(1) : i64
   %input = check.generate.random.uniform seed(%input_seed) range(-1.0 to 1.0) : tensor<14x512xf32>
   %q8_input = check.generate.fill value(0) : tensor<14x576xi8>
   %query_weight = check.generate.fill value(34) : tensor<65x2x144xi8>

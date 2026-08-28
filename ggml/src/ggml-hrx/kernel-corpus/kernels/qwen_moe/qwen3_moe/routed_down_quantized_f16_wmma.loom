@@ -11,6 +11,8 @@
 // therefore contains at most token_count assignments per expert, while each
 // assignment ordinal still identifies the compact [token, route] activation
 // and route-weight row.
+template.decl @qwen3_moe.routed_down.quantized_prefill.body(%weight_format: index, %token_count: index, %input: buffer, %expert_table: buffer, %weight: buffer, %output: buffer)
+
 amdgpu.target<gfx11-generic> @qwen3_moe_routed_down_gfx11_wave64 {subgroup_size = 64}
 
 config.decl @qwen3_moe.routed_down.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 256)]
@@ -21,15 +23,15 @@ config.decl @qwen3_moe.routed_down.expert_count : %value: index where [range(%va
 
 config.decl @qwen3_moe.routed_down.output_size : %value: index where [range(%value, 1, 4096)]
 
-kernel.decl @ggml_quantize_q8_1_x4_f32(%token_count: index, %input_size: index) launch(%token_count: index, %input_size: index, %input: buffer, %output: buffer)
+kernel.decl @ggml_quantize_q8_1_x4_f32(%token_count$10: index, %input_size$11: index) launch(%token_count$12: index, %input_size$13: index, %input: buffer, %output: buffer)
 
-kernel.decl @qwen3_moe_build_expert_table(%token_count: index, %route_count: index, %route_stride: index, %expert_count: index) launch(%token_count: index, %route_count: index, %route_stride: index, %expert_count: index, %route_ids: buffer, %expert_table: buffer)
+kernel.decl @qwen3_moe_build_expert_table(%token_count$16: index, %route_count$17: index, %route_stride$18: index, %expert_count$19: index) launch(%token_count$20: index, %route_count$21: index, %route_stride$22: index, %expert_count$23: index, %route_ids: buffer, %expert_table: buffer)
 
-kernel.decl @qwen3_moe_build_expert_partition_table(%token_count: index, %route_count: index, %expert_count: index) launch(%token_count: index, %route_count: index, %expert_count: index, %expert_table: buffer, %partition_table: buffer)
+kernel.decl @qwen3_moe_build_expert_partition_table(%token_count$26: index, %route_count$27: index, %expert_count$28: index) launch(%token_count$29: index, %route_count$30: index, %expert_count$31: index, %expert_table: buffer, %partition_table: buffer)
 
-kernel.decl @qwen3_moe_routed_gate_up_swiglu_q4k_f16_wmma(%token_count: index) launch(%token_count: index, %input: buffer, %expert_table: buffer, %partition_table: buffer, %gate_weight: buffer, %up_weight: buffer, %output: buffer)
+kernel.decl @qwen3_moe_routed_gate_up_swiglu_q4k_f16_wmma(%token_count$34: index) launch(%token_count$35: index, %input: buffer, %expert_table: buffer, %partition_table: buffer, %gate_weight: buffer, %up_weight: buffer, %output: buffer)
 
-kernel.decl @qwen3_moe_routed_gate_up_swiglu_q4k_q8(%token_count: index, %route_count: index, %route_stride: index, %expert_count: index, %output_size: index) launch(%token_count: index, %route_count: index, %route_stride: index, %expert_count: index, %output_size: index, %q8_input: buffer, %route_ids: buffer, %gate_weight: buffer, %up_weight: buffer, %output: buffer)
+kernel.decl @qwen3_moe_routed_gate_up_swiglu_q4k_q8(%token_count$42: index, %route_count$43: index, %route_stride$44: index, %expert_count$45: index, %output_size$46: index) launch(%token_count$47: index, %route_count$48: index, %route_stride$49: index, %expert_count$50: index, %output_size$51: index, %q8_input: buffer, %route_ids: buffer, %gate_weight: buffer, %up_weight: buffer, %output: buffer)
 
 func.decl @qwen3_moe_q4k_wmma_vector4(%weight: buffer, %row_byte_base: offset, %q4_block: index, %q4_group: index, %packet: index) -> (vector<4xf16>)
 
@@ -41,9 +43,9 @@ func.decl @qwen3_moe_q4k_wmma_vector4_from_header_code(%q4_group: index, %header
 
 func.decl @ggml_q6k_f16_vector4(%weight: buffer, %weight_row_byte_base: offset, %q6_block: index, %q6_group: index, %packet: index) -> (vector<4xf16>)
 
-kernel.decl @qwen3_moe_routed_down_q4k_q8_1_x4(%token_count: index, %input_size: index, %route_count: index, %route_id_stride: index, %expert_count: index, %output_size: index) launch(%token_count: index, %input_size: index, %route_count: index, %route_id_stride: index, %expert_count: index, %output_size: index, %q8_input: buffer, %route_ids: buffer, %route_weights: buffer, %weight: buffer, %output: buffer)
+kernel.decl @qwen3_moe_routed_down_q4k_q8_1_x4(%token_count$83: index, %input_size$84: index, %route_count$85: index, %route_id_stride$86: index, %expert_count$87: index, %output_size$88: index) launch(%token_count$89: index, %input_size$90: index, %route_count$91: index, %route_id_stride$92: index, %expert_count$93: index, %output_size$94: index, %q8_input: buffer, %route_ids: buffer, %route_weights: buffer, %weight: buffer, %output: buffer)
 
-kernel.decl @qwen3_moe_routed_down_q6k_q8_1_x4(%token_count: index, %input_size: index, %route_count: index, %route_id_stride: index, %expert_count: index, %output_size: index) launch(%token_count: index, %input_size: index, %route_count: index, %route_id_stride: index, %expert_count: index, %output_size: index, %q8_input: buffer, %route_ids: buffer, %route_weights: buffer, %weight: buffer, %output: buffer)
+kernel.decl @qwen3_moe_routed_down_q6k_q8_1_x4(%token_count$100: index, %input_size$101: index, %route_count$102: index, %route_id_stride$103: index, %expert_count$104: index, %output_size$105: index) launch(%token_count$106: index, %input_size$107: index, %route_count$108: index, %route_id_stride$109: index, %expert_count$110: index, %output_size$111: index, %q8_input: buffer, %route_ids: buffer, %route_weights: buffer, %weight: buffer, %output: buffer)
 
 // Acquires the packed words shared by one four-group half of a Q6_K block.
 // Each QL word supplies two groups and the QH word supplies all four.
@@ -140,7 +142,7 @@ func.def inline @qwen3_moe_q6k_wmma_vector4_from_half_codes(%weight: buffer, %we
 
 // Shared raw-quantized matrix schedule. Entry points pass a literal weight
 // format so linking and JIT specialization erase the inactive packed decoder.
-func.template<qwen3_moe.routed_down.quantized_prefill.body> device @qwen3_moe_routed_down_quantized_f16_wmma_body(%weight_format: index, %token_count: index, %input: buffer, %expert_table: buffer, %weight: buffer, %output: buffer) {
+template.def<@qwen3_moe.routed_down.quantized_prefill.body> device @qwen3_moe_routed_down_quantized_f16_wmma_body(%weight_format: index, %token_count: index, %input: buffer, %expert_table: buffer, %weight: buffer, %output: buffer) {
   %input_size = config.get @qwen3_moe.routed_down.input_size : index
   %route_count = config.get @qwen3_moe.routed_down.route_count : index
   %expert_count = config.get @qwen3_moe.routed_down.expert_count : index
@@ -501,7 +503,7 @@ func.template<qwen3_moe.routed_down.quantized_prefill.body> device @qwen3_moe_ro
     // routing partition. All waves must finish publication before reuse.
     kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
   }
-  func.return
+  template.return
 }
 
 // Q4_K and Q6_K retain separate entry points while sharing the complete matrix
@@ -520,7 +522,7 @@ kernel.def target(@qwen3_moe_routed_down_gfx11_wave64) @qwen3_moe_routed_down_q4
   kernel.launch.config workgroups(%output_tiles, %route_tiles, %expert_count) workgroup_size(%c128, %c1, %c1) : index
 } launch(%token_count: index, %input: buffer, %expert_table: buffer, %weight: buffer, %output: buffer) where [range(%token_count, 1, 2048)] {
   %q4 = index.constant 4 : index
-  func.apply<qwen3_moe.routed_down.quantized_prefill.body>(%q4, %token_count, %input, %expert_table, %weight, %output) : (index, index, buffer, buffer, buffer, buffer)
+  template.apply<@qwen3_moe.routed_down.quantized_prefill.body>(%q4, %token_count, %input, %expert_table, %weight, %output) : (index, index, buffer, buffer, buffer, buffer)
   kernel.return
 }
 
@@ -538,7 +540,7 @@ kernel.def target(@qwen3_moe_routed_down_gfx11_wave64) @qwen3_moe_routed_down_q6
   kernel.launch.config workgroups(%output_tiles, %route_tiles, %expert_count) workgroup_size(%c128, %c1, %c1) : index
 } launch(%token_count: index, %input: buffer, %expert_table: buffer, %weight: buffer, %output: buffer) where [range(%token_count, 1, 2048)] {
   %q6 = index.constant 6 : index
-  func.apply<qwen3_moe.routed_down.quantized_prefill.body>(%q6, %token_count, %input, %expert_table, %weight, %output) : (index, index, buffer, buffer, buffer, buffer)
+  template.apply<@qwen3_moe.routed_down.quantized_prefill.body>(%q6, %token_count, %input, %expert_table, %weight, %output) : (index, index, buffer, buffer, buffer, buffer)
   kernel.return
 }
 

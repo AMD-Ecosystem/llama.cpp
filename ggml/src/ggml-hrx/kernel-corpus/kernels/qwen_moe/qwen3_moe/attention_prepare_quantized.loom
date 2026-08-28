@@ -15,6 +15,8 @@
 // Every workitem packs one four-value word per stripe; adjacent eight-lane
 // cohorts reduce the maximum and quantized sum for one logical Q8_1 block.
 // Scratch is fixed at 1152 bytes regardless of hidden size.
+template.decl @qwen3_moe.rmsnorm_quantize_q8_1_x4.body(%publish_normalized: i1, %reduction_subgroup_count0: index, %token_count: index, %token0: index, %input: buffer, %weight: buffer, %normalized_output: buffer, %q8_output: buffer)
+
 amdgpu.target<gfx11-generic> @qwen3_moe_attention_prepare_gfx11_wave32 {subgroup_size = 32}
 
 config.decl @qwen3_moe.model.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
@@ -22,7 +24,7 @@ config.decl @qwen3_moe.model.hidden_size : %value: index where [range(%value, 12
 config.decl @qwen3_moe.model.rms_epsilon : f32
 
 // Shared Q8_1 x4 packer used by the standalone differential path.
-kernel.decl @ggml_quantize_q8_1_x4_f32(%token_count: index, %input_size: index) launch(%token_count: index, %input_size: index, %input: buffer, %output: buffer)
+kernel.decl @ggml_quantize_q8_1_x4_f32(%token_count$10: index, %input_size$11: index) launch(%token_count$12: index, %input_size$13: index, %input: buffer, %output: buffer)
 
 // Materializes the ordinary Qwen RMSNorm boundary. This remains useful for
 // prefill schedules that reuse one normalized row across many output tiles;
@@ -106,7 +108,7 @@ kernel.def target(@qwen3_moe_attention_prepare_gfx11_wave32) @qwen3_moe_rmsnorm_
 // The attention export discards the ordinary F32 row, while feed-forward
 // publishes it for the router without rereading and requantizing the normalized
 // values.
-func.template<qwen3_moe.rmsnorm_quantize_q8_1_x4.body> device @qwen3_moe_rmsnorm_quantize_q8_1_x4_body(%publish_normalized: i1, %reduction_subgroup_count0: index, %token_count: index, %token0: index, %input: buffer, %weight: buffer, %normalized_output: buffer, %q8_output: buffer) {
+template.def<@qwen3_moe.rmsnorm_quantize_q8_1_x4.body> device @qwen3_moe_rmsnorm_quantize_q8_1_x4_body(%publish_normalized: i1, %reduction_subgroup_count0: index, %token_count: index, %token0: index, %input: buffer, %weight: buffer, %normalized_output: buffer, %q8_output: buffer) {
   %hidden_size0 = config.get @qwen3_moe.model.hidden_size : index
   %epsilon = config.get @qwen3_moe.model.rms_epsilon : f32
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
@@ -272,7 +274,7 @@ func.template<qwen3_moe.rmsnorm_quantize_q8_1_x4.body> device @qwen3_moe_rmsnorm
     }
     kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
   }
-  func.return
+  template.return
 }
 
 // Fuses attention RMSNorm directly into the Q8_1 x4 row consumed by decode
@@ -286,7 +288,7 @@ kernel.def target(@qwen3_moe_attention_prepare_gfx11_wave32) @qwen3_moe_attentio
   %reduction_subgroup_count = index.constant 8 : index
   %token = kernel.workgroup.id<x> : index
   %input_noalias, %weight_noalias, %output_noalias = buffer.assume.noalias %input, %weight, %output : buffer, buffer, buffer
-  func.apply<qwen3_moe.rmsnorm_quantize_q8_1_x4.body>(%publish_normalized, %reduction_subgroup_count, %token_count, %token, %input_noalias, %weight_noalias, %output_noalias, %output_noalias) : (i1, index, index, index, buffer, buffer, buffer, buffer)
+  template.apply<@qwen3_moe.rmsnorm_quantize_q8_1_x4.body>(%publish_normalized, %reduction_subgroup_count, %token_count, %token, %input_noalias, %weight_noalias, %output_noalias, %output_noalias) : (i1, index, index, index, buffer, buffer, buffer, buffer)
   kernel.return
 }
 
@@ -301,7 +303,7 @@ kernel.def target(@qwen3_moe_attention_prepare_gfx11_wave32) @qwen3_moe_rmsnorm_
   %reduction_subgroup_count = index.constant 8 : index
   %token = kernel.workgroup.id<x> : index
   %input_noalias, %weight_noalias, %normalized_output_noalias, %q8_output_noalias = buffer.assume.noalias %input, %weight, %normalized_output, %q8_output : buffer, buffer, buffer, buffer
-  func.apply<qwen3_moe.rmsnorm_quantize_q8_1_x4.body>(%publish_normalized, %reduction_subgroup_count, %token_count, %token, %input_noalias, %weight_noalias, %normalized_output_noalias, %q8_output_noalias) : (i1, index, index, index, buffer, buffer, buffer, buffer)
+  template.apply<@qwen3_moe.rmsnorm_quantize_q8_1_x4.body>(%publish_normalized, %reduction_subgroup_count, %token_count, %token, %input_noalias, %weight_noalias, %normalized_output_noalias, %q8_output_noalias) : (i1, index, index, index, buffer, buffer, buffer, buffer)
   kernel.return
 }
 
@@ -335,7 +337,7 @@ check.case public @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4_differential_cas
 check.case public @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4_multistripe_case {
   %token_count = check.literal value(14) : index
   %hidden_size = check.literal value(2048) : index
-  %input_seed = check.param.seed base(0x514d4f4550524550) count(1) : i64
+  %input_seed = check.param.seed base(5858425849397790032) count(1) : i64
   %input = check.generate.random.uniform seed(%input_seed) range(-1.0 to 1.0) : tensor<14x2048xf32>
   %weight = check.generate.iota offset(-1.0) step(0.0009765625) : tensor<2048xf32>
   %normalized = check.generate.fill value(0.0) : tensor<14x2048xf32>

@@ -76,11 +76,13 @@ bool CommandPlanMetadata::append_generated_resource(CommandPlanGeneratedResource
 
 bool CommandPlanMetadata::append_alternate_value(CommandPlanAlternateValue alternate, Status & status) {
     for (const CommandPlanAlternateValue & existing : alternate_values_) {
-        if (existing.graph_value == alternate.graph_value) {
+        if (existing.graph_value == alternate.graph_value && existing.type == alternate.type &&
+            existing.byte_count == alternate.byte_count) {
             if (alternate_value_matches(existing, alternate)) {
                 return true;
             }
-            status.log("conflicting alternate value for graph value %d", alternate.graph_value.value);
+            status.log("conflicting alternate value for graph value %d type %d byte_count %zu",
+                       alternate.graph_value.value, static_cast<int>(alternate.type), alternate.byte_count);
             return false;
         }
     }
@@ -124,11 +126,12 @@ const CommandPlanAlternateValue * CommandPlanMetadata::find_alternate_value(Valu
 const CommandPlanAlternateValue * CommandPlanMetadata::find_alternate_value(ValueId   graph_value,
                                                                             ggml_type type,
                                                                             size_t    byte_count) const {
-    const CommandPlanAlternateValue * alternate = find_alternate_value(graph_value);
-    if (alternate == nullptr || alternate->type != type || alternate->byte_count != byte_count) {
-        return nullptr;
+    for (const CommandPlanAlternateValue & alternate : alternate_values_) {
+        if (alternate.graph_value == graph_value && alternate.type == type && alternate.byte_count == byte_count) {
+            return &alternate;
+        }
     }
-    return alternate;
+    return nullptr;
 }
 
 const CommandPlanMoeRoutingBundle * CommandPlanMetadata::find_moe_routing_bundle(ValueId route_ids) const {

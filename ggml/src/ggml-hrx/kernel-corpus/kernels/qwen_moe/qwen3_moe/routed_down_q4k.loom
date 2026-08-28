@@ -13,6 +13,10 @@
 // registers. Four eight-lane cohorts contract four independent routes while
 // walking every Q4_K block. Qwen's eight-route, three-block decode shape uses
 // all 32 lanes across two route batches without addressing synthetic blocks.
+template.decl @qwen3_moe.routed_down.next_q8_completion(%arg0: index, %arg1: index, %arg2: index, %arg3: index, %arg4: buffer, %arg5: buffer, %arg6: buffer, %arg7: buffer)
+
+template.decl @qwen3_moe.routed_down.q4k_q8_1_x4.body(%publish_output: i1, %token_count: index, %token: index, %input_size: index, %route_count: index, %route_id_stride: index, %expert_count: index, %output_size: index, %q8_input: buffer, %route_ids: buffer, %route_weights: buffer, %weight: buffer, %output: buffer)
+
 target.decl @qwen3_moe_attention_prepare_gfx11_wave32
 
 config.decl @qwen3_moe.routed_down.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 256)]
@@ -25,15 +29,15 @@ config.decl @qwen3_moe.routed_down.output_size : %value: index where [range(%val
 
 config.decl @qwen3_moe.workload.token_capacity : %value: index where [range(%value, 1, 2048)]
 
-kernel.decl @ggml_quantize_q8_1_x4_f32(%token_count: index, %input_size: index) launch(%token_count: index, %input_size: index, %input: buffer, %output: buffer)
+kernel.decl @ggml_quantize_q8_1_x4_f32(%token_count$26: index, %input_size$27: index) launch(%token_count$28: index, %input_size$29: index, %input: buffer, %output: buffer)
 
 func.decl @qwen3_moe_q4k_q8_1_x4_cohort_row_lane(%input_size: index, %weight: buffer, %weight_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %cohort_lane: index) -> (f32)
 
-kernel.decl @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4(%token_count: index) launch(%token_count: index, %input: buffer, %weight: buffer, %q8_output: buffer)
+kernel.decl @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4(%token_count$39: index) launch(%token_count$40: index, %input: buffer, %weight: buffer, %q8_output: buffer)
 
 // Shared Q4_K contraction and residual publication. Each lane consumes both
 // nibbles of a packed code load before the subgroup reduces the row.
-func.template<qwen3_moe.routed_down.q4k_q8_1_x4.body> device @qwen3_moe_routed_down_q4k_q8_1_x4_body(%publish_output: i1, %token_count: index, %token: index, %input_size: index, %route_count: index, %route_id_stride: index, %expert_count: index, %output_size: index, %q8_input: buffer, %route_ids: buffer, %route_weights: buffer, %weight: buffer, %output: buffer) {
+template.def<@qwen3_moe.routed_down.q4k_q8_1_x4.body> device @qwen3_moe_routed_down_q4k_q8_1_x4_body(%publish_output: i1, %token_count: index, %token: index, %input_size: index, %route_count: index, %route_id_stride: index, %expert_count: index, %output_size: index, %q8_input: buffer, %route_ids: buffer, %route_weights: buffer, %weight: buffer, %output: buffer) {
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
   %bounded_token, %body_token_count = index.assume %token, %bounded_token_count [lt(%token, %bounded_token_count)] : index, index
   %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
@@ -134,7 +138,7 @@ func.template<qwen3_moe.routed_down.q4k_q8_1_x4.body> device @qwen3_moe_routed_d
     %result = scalar.addf %residual, %routed_sum : f32
     view.store %result, %output_view[%bounded_token, %bounded_channel] : f32, view<[%body_token_count]x[%bounded_output_size]xf32>
   }
-  func.return
+  template.return
 }
 
 kernel.def @qwen3_moe_routed_down_q4k_q8_1_x4(%token_count: index, %input_size: index, %route_count: index, %route_id_stride: index, %expert_count: index, %output_size: index) {
@@ -164,7 +168,7 @@ kernel.def @qwen3_moe_routed_down_q4k_q8_1_x4(%token_count: index, %input_size: 
   %valid_token = index.cmp ult, %token0, %bounded_token_count : index
   %safe_token0 = scf.select %valid_token, %token0, %c0 : index
   %safe_token, %body_token_count = index.assume %safe_token0, %bounded_token_count [lt(%safe_token0, %bounded_token_count)] : index, index
-  func.apply<qwen3_moe.routed_down.q4k_q8_1_x4.body>(%valid_token, %body_token_count, %safe_token, %configured_input_size, %configured_route_count, %bounded_route_id_stride, %configured_expert_count, %configured_output_size, %q8_input, %route_ids, %route_weights, %weight, %output) : (i1, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer)
+  template.apply<@qwen3_moe.routed_down.q4k_q8_1_x4.body>(%valid_token, %body_token_count, %safe_token, %configured_input_size, %configured_route_count, %bounded_route_id_stride, %configured_expert_count, %configured_output_size, %q8_input, %route_ids, %route_weights, %weight, %output) : (i1, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer)
   kernel.return
 }
 
@@ -193,8 +197,8 @@ kernel.def target(@qwen3_moe_attention_prepare_gfx11_wave32) @qwen3_moe_routed_d
   %c8 = index.constant 8 : index
   %publishes_output = scalar.constant true : i1
   %body_token = index.constant 0 : index
-  func.apply<qwen3_moe.routed_down.q4k_q8_1_x4.body>(%publishes_output, %bounded_token_count, %body_token, %configured_input_size, %configured_route_count, %bounded_route_id_stride, %configured_expert_count, %configured_output_size, %q8_input, %route_ids, %route_weights, %weight, %output) : (i1, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer)
-  func.apply<qwen3_moe.routed_down.next_q8_completion>(%c8, %c8, %bounded_token_count, %configured_output_size, %output, %norm_weight, %completion_counter, %next_q8_output) : (index, index, index, index, buffer, buffer, buffer, buffer)
+  template.apply<@qwen3_moe.routed_down.q4k_q8_1_x4.body>(%publishes_output, %bounded_token_count, %body_token, %configured_input_size, %configured_route_count, %bounded_route_id_stride, %configured_expert_count, %configured_output_size, %q8_input, %route_ids, %route_weights, %weight, %output) : (i1, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer)
+  template.apply<@qwen3_moe.routed_down.next_q8_completion>(%c8, %c8, %bounded_token_count, %configured_output_size, %output, %norm_weight, %completion_counter, %next_q8_output) : (index, index, index, index, buffer, buffer, buffer, buffer)
   kernel.return
 }
 
@@ -228,8 +232,8 @@ check.case public @qwen3_moe_routed_down_q4k_q8_1_x4_next_q8_differential_case {
   kernel.launch @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4[%token_count](%token_count, %expected_output, %norm_weight, %expected_q8) : [index](index, tensor<1x2048xf32>, tensor<2048xf32>, tensor<2304xi8>)
   kernel.launch @qwen3_moe_routed_down_q4k_q8_1_x4_next_q8[%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size](%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size, %q8_input, %route_ids, %route_weights, %weight, %actual_output0, %norm_weight, %completion_counter, %actual_q8_0) : [index, index, index, index, index, index](index, index, index, index, index, index, tensor<2x864xi8>, tensor<1x4xi32>, tensor<1x2xf32>, tensor<2x2048x3x144xi8>, tensor<1x2048xf32>, tensor<2048xf32>, tensor<1xi32>, tensor<2304xi8>)
   kernel.launch @qwen3_moe_routed_down_q4k_q8_1_x4_next_q8[%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size](%token_count, %input_size, %route_count, %route_id_stride, %expert_count, %output_size, %q8_input, %route_ids, %route_weights, %weight, %actual_output1, %norm_weight, %completion_counter, %actual_q8_1) : [index, index, index, index, index, index](index, index, index, index, index, index, tensor<2x864xi8>, tensor<1x4xi32>, tensor<1x2xf32>, tensor<2x2048x3x144xi8>, tensor<1x2048xf32>, tensor<2048xf32>, tensor<1xi32>, tensor<2304xi8>)
-  check.expect.close actual(%actual_output0) expected(%expected_output) atol(0.000001) rtol(0.000001) nan(same) : tensor<1x2048xf32>
-  check.expect.close actual(%actual_output1) expected(%expected_output) atol(0.000001) rtol(0.000001) nan(same) : tensor<1x2048xf32>
+  check.expect.close actual(%actual_output0) expected(%expected_output) atol(9.9999999999999995e-07) rtol(9.9999999999999995e-07) nan(same) : tensor<1x2048xf32>
+  check.expect.close actual(%actual_output1) expected(%expected_output) atol(9.9999999999999995e-07) rtol(9.9999999999999995e-07) nan(same) : tensor<1x2048xf32>
   check.expect.equal actual(%actual_q8_0) expected(%expected_q8) : tensor<2304xi8>
   check.expect.equal actual(%actual_q8_1) expected(%expected_q8) : tensor<2304xi8>
   check.expect.equal actual(%completion_counter) expected(%expected_counter) : tensor<1xi32>
