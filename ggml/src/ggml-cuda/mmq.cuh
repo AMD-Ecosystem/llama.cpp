@@ -1109,6 +1109,56 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
             }
             __syncthreads();
         }
+    } else if constexpr (type == GGML_TYPE_Q5_K && (J == 64 || J == 128)) {
+        constexpr int qs_cache_size = I/nwarps;
+        constexpr int qh_cache_size = I*(QI5_K/4)/(nwarps*warp_size);
+
+        __syncthreads();
+        load_tiles(x, tile_x, offset_x + kb0_start, tile_x_max_i, stride_row_x);
+        __syncthreads();
+
+        for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
+            const int yk = kb0*qk/ne_block;
+            const int * by0 = y + ncols_y*yk*sz;
+            const int * by1 = y + ncols_y*(yk + 1)*sz;
+
+#pragma unroll
+            for (int l0 = 0; l0 < J*MMQ_TILE_Y_K; l0 += nwarps*warp_size) {
+                const int l = l0 + threadIdx.y*warp_size + threadIdx.x;
+                tile_y[l] = by0[l];
+            }
+            __syncthreads();
+            vec_dot(tile_x, tile_y, sum, 0);
+
+            __syncthreads();
+#pragma unroll
+            for (int l0 = 0; l0 < J*MMQ_TILE_Y_K; l0 += nwarps*warp_size) {
+                const int l = l0 + threadIdx.y*warp_size + threadIdx.x;
+                tile_y[l] = by1[l];
+            }
+            __syncthreads();
+
+            int qs_cache[qs_cache_size];
+            int qh_cache[qh_cache_size];
+            int scales_cache[3];
+            half2 dm_cache;
+            const int kb0_next = kb0 + blocks_per_iter;
+            const bool have_next = kb0_next < kb0_stop;
+            if (have_next) {
+                ggml_cuda_mmq_prefetch_tiles_q5_K_rdna35<type, J, fallback>(
+                    x, offset_x + kb0_next, tile_x_max_i, stride_row_x,
+                    qs_cache, qh_cache, scales_cache, dm_cache);
+            }
+
+            vec_dot(tile_x, tile_y, sum, MMQ_TILE_NE_K);
+            __syncthreads();
+
+            if (have_next) {
+                ggml_cuda_mmq_store_tiles_q5_K_rdna35<type, J, fallback>(
+                    tile_x, qs_cache, qh_cache, scales_cache, dm_cache);
+            }
+            __syncthreads();
+        }
     } else if constexpr (type == GGML_TYPE_Q4_0 && (J == 64 || J == 128)) {
         constexpr int qs_cache_size = I/nwarps;
         constexpr int d_cache_size  = 4;
