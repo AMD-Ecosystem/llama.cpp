@@ -148,7 +148,7 @@ def convert_source_to_bytecode(source_path: pathlib.Path, loom_link: pathlib.Pat
         require_tool([
             str(loom_link),
             "--verify=false",
-            "--mode=archive",
+            "--mode=merge",
             "--strip-check",
             "--to=text",
             f"--output={stripped}",
@@ -165,7 +165,7 @@ def convert_source_to_bytecode(source_path: pathlib.Path, loom_link: pathlib.Pat
             require_tool([
                 str(loom_link),
                 "--verify=false",
-                "--mode=archive",
+                "--mode=merge",
                 "--strip-check",
                 "--to=bc",
                 f"--output={bytecode}",
