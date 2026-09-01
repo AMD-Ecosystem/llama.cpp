@@ -1822,19 +1822,20 @@ static bool mmq_rdna35_dual_wg_eligible(const ggml_type type) {
 
 // J values that measure faster on RDNA3.5 than the width the occupancy rule picks.
 //
-// J=64 is 6-7x slower than the neighbouring widths for q8_0; the other types stay within
-// 1.05x of their best there and keep it. For MoE the compacted per-expert grid already supplies
-// the parallelism that column tiling supplies for a dense GEMM, so anything above a 32-wide tile
-// only adds padding - q8_0 excepted, whose narrow tiles are slow.
+// Dense shapes now keep the width the occupancy rule picks: q8_0 used to be widened from
+// J=64 to J=96 because J=64 was several times slower, but that was the generic ntx=2
+// schedule, which rows_per_warp() no longer selects for block quants. Without the widening
+// q8_0 avoids padding 64 valid columns into a 96-wide tile and is 27% faster there.
+//
+// For MoE the compacted per-expert grid already supplies the parallelism that column tiling
+// supplies for a dense GEMM, so anything above a 32-wide tile only adds padding - q8_0
+// excepted, whose narrow tiles are slow.
 static int mmq_rdna35_tuned_J(const ggml_type type, const bool moe, const int J_occupancy) {
     if (moe) {
         if (type == GGML_TYPE_Q8_0) {
             return J_occupancy > 32 ? 96 : J_occupancy;
         }
         return J_occupancy < 32 ? J_occupancy : 32;
-    }
-    if (J_occupancy == 64 && type == GGML_TYPE_Q8_0) {
-        return 96;
     }
     return J_occupancy;
 }
