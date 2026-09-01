@@ -1206,7 +1206,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
             }
             __syncthreads();
         }
-    } else if constexpr (type == GGML_TYPE_Q8_0 && (J == 96 || J == 128)) {
+    } else if constexpr (type == GGML_TYPE_Q8_0 && J == 128) {
         constexpr int qs_cache_size = 2*(I/nwarps);
         constexpr int d_cache_size  = 4;
 
