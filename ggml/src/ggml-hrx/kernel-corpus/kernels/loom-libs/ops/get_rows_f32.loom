@@ -2,7 +2,7 @@
 //
 // One workitem publishes four adjacent output channels for one requested row.
 // Storage-format-specific row decoding is delegated to the common dequant
-// motif so Q4_K, Q6_K, Q8_0, Q8_1, F16, and F32 share the same gather shape.
+// motif so Q4_K, Q6_K, Q8_0, Q8_1, F16, BF16, and F32 share the same gather shape.
 template.decl @ggml.get_rows_f32.body(%token_count: index, %row_count: index, %hidden_size: index, %token_ids: buffer, %weight: buffer, %output: buffer)
 
 template.decl @ggml.get_rows_f32.launch(%hidden_capacity: index, %token_capacity: index) -> (index, index, index, index)

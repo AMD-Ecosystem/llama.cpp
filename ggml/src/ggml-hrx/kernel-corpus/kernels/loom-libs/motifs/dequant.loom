@@ -11,6 +11,8 @@ func.decl @ggml_q8_1_f16_vector4(%weight: buffer, %row_byte_base: offset, %q8_bl
 
 func.decl @ggml_f16_f16_vector4(%weight: buffer, %row_byte_base: offset, %input_size: index, %k: index) -> (vector<4xf16>)
 
+func.decl @ggml_bf16_f16_vector4(%weight: buffer, %row_byte_base: offset, %input_size: index, %k: index) -> (vector<4xf16>)
+
 func.decl @ggml_f32_f16_vector4(%weight: buffer, %row_byte_base: offset, %input_size: index, %k: index) -> (vector<4xf16>)
 
 // Decodes four adjacent Q4_K values to F32 without the FP16 staging round used
@@ -220,6 +222,14 @@ func.def inline @ggml_f16_f32_vector4(%weight: buffer, %row_byte_base: offset, %
   func.return %values : vector<4xf32>
 }
 
+func.def inline @ggml_bf16_f32_vector4(%weight: buffer, %row_byte_base: offset, %input_size: index, %k: index) -> (vector<4xf32>) {
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
+  %row_view = buffer.view %weight[%row_byte_base] : buffer -> view<[%bounded_input_size]xbf16>
+  %values_bf16 = vector.load %row_view[%k] : view<[%bounded_input_size]xbf16> -> vector<4xbf16>
+  %values = vector.extf %values_bf16 : vector<4xbf16> to vector<4xf32>
+  func.return %values : vector<4xf32>
+}
+
 func.def inline @ggml_f32_f32_vector4(%weight: buffer, %row_byte_base: offset, %input_size: index, %k: index) -> (vector<4xf32>) {
   %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
   %row_view = buffer.view %weight[%row_byte_base] : buffer -> view<[%bounded_input_size]xf32>
@@ -231,6 +241,7 @@ func.def inline @ggml_dequant_weight_tile_bytes(%weight_format: index) -> (offse
   %c4 = index.constant 4 : index
   %c6 = index.constant 6 : index
   %c16 = index.constant 16 : index
+  %c17 = index.constant 17 : index
   %c32 = index.constant 32 : index
   %q8_0_format = index.constant 80 : index
   %q8_1_format = index.constant 81 : index
@@ -240,19 +251,22 @@ func.def inline @ggml_dequant_weight_tile_bytes(%weight_format: index) -> (offse
   %q8_0_tile_bytes = index.constant 272 : offset
   %q8_1_tile_bytes = index.constant 288 : offset
   %f16_tile_bytes = index.constant 512 : offset
+  %bf16_tile_bytes = index.constant 512 : offset
   %f32_tile_bytes = index.constant 1024 : offset
   %is_q4 = index.cmp eq, %weight_format, %c4 : index
   %is_q6 = index.cmp eq, %weight_format, %c6 : index
   %is_q8_0 = index.cmp eq, %weight_format, %q8_0_format : index
   %is_q8_1 = index.cmp eq, %weight_format, %q8_1_format : index
   %is_f16 = index.cmp eq, %weight_format, %c16 : index
+  %is_bf16 = index.cmp eq, %weight_format, %c17 : index
   %is_f32 = index.cmp eq, %weight_format, %c32 : index
   %selected_q4 = scf.select %is_q4, %q4_tile_bytes, %zero_bytes : offset
   %selected_q6 = scf.select %is_q6, %q6_tile_bytes, %selected_q4 : offset
   %selected_q8_0 = scf.select %is_q8_0, %q8_0_tile_bytes, %selected_q6 : offset
   %selected_q8_1 = scf.select %is_q8_1, %q8_1_tile_bytes, %selected_q8_0 : offset
   %selected_f16 = scf.select %is_f16, %f16_tile_bytes, %selected_q8_1 : offset
-  %selected = scf.select %is_f32, %f32_tile_bytes, %selected_f16 : offset
+  %selected_bf16 = scf.select %is_bf16, %bf16_tile_bytes, %selected_f16 : offset
+  %selected = scf.select %is_f32, %f32_tile_bytes, %selected_bf16 : offset
   func.return %selected : offset
 }
 
@@ -263,6 +277,7 @@ func.def inline @ggml_dequant_f16_vector4(%weight_format: index, %weight: buffer
   %c6 = index.constant 6 : index
   %c8 = index.constant 8 : index
   %c16 = index.constant 16 : index
+  %c17 = index.constant 17 : index
   %c32 = index.constant 32 : index
   %q8_0_format = index.constant 80 : index
   %q8_1_format = index.constant 81 : index
@@ -272,6 +287,7 @@ func.def inline @ggml_dequant_f16_vector4(%weight_format: index, %weight: buffer
   %is_q8_0 = index.cmp eq, %weight_format, %q8_0_format : index
   %is_q8_1 = index.cmp eq, %weight_format, %q8_1_format : index
   %is_f16 = index.cmp eq, %weight_format, %c16 : index
+  %is_bf16 = index.cmp eq, %weight_format, %c17 : index
   %is_f32 = index.cmp eq, %weight_format, %c32 : index
   %q8_block_base = index.mul %quant_block, %c8 : index
   %q8_block = index.add %q8_block_base, %quant_group : index
@@ -305,6 +321,12 @@ func.def inline @ggml_dequant_f16_vector4(%weight_format: index, %weight: buffer
   } else {
     scf.yield %zero : vector<4xf16>
   }
+  %bf16_values = scf.if %is_bf16 -> (vector<4xf16>) {
+    %values = func.call @ggml_bf16_f16_vector4(%weight, %row_byte_base, %input_size, %k) : (buffer, offset, index, index) -> (vector<4xf16>)
+    scf.yield %values : vector<4xf16>
+  } else {
+    scf.yield %zero : vector<4xf16>
+  }
   %f32_values = scf.if %is_f32 -> (vector<4xf16>) {
     %values = func.call @ggml_f32_f16_vector4(%weight, %row_byte_base, %input_size, %k) : (buffer, offset, index, index) -> (vector<4xf16>)
     scf.yield %values : vector<4xf16>
@@ -316,7 +338,8 @@ func.def inline @ggml_dequant_f16_vector4(%weight_format: index, %weight: buffer
   %selected_q8_0 = scf.select %is_q8_0, %q8_0_values, %selected_q6 : vector<4xf16>
   %selected_q8_1 = scf.select %is_q8_1, %q8_1_values, %selected_q8_0 : vector<4xf16>
   %selected_f16 = scf.select %is_f16, %f16_values, %selected_q8_1 : vector<4xf16>
-  %selected = scf.select %is_f32, %f32_values, %selected_f16 : vector<4xf16>
+  %selected_bf16 = scf.select %is_bf16, %bf16_values, %selected_f16 : vector<4xf16>
+  %selected = scf.select %is_f32, %f32_values, %selected_bf16 : vector<4xf16>
   func.return %selected : vector<4xf16>
 }
 
@@ -326,6 +349,7 @@ func.def inline @ggml_dequant_f32_vector4(%weight_format: index, %weight: buffer
   %c6 = index.constant 6 : index
   %c8 = index.constant 8 : index
   %c16 = index.constant 16 : index
+  %c17 = index.constant 17 : index
   %c32 = index.constant 32 : index
   %q8_0_format = index.constant 80 : index
   %q8_1_format = index.constant 81 : index
@@ -335,6 +359,7 @@ func.def inline @ggml_dequant_f32_vector4(%weight_format: index, %weight: buffer
   %is_q8_0 = index.cmp eq, %weight_format, %q8_0_format : index
   %is_q8_1 = index.cmp eq, %weight_format, %q8_1_format : index
   %is_f16 = index.cmp eq, %weight_format, %c16 : index
+  %is_bf16 = index.cmp eq, %weight_format, %c17 : index
   %is_f32 = index.cmp eq, %weight_format, %c32 : index
   %q8_block_base = index.mul %quant_block, %c8 : index
   %q8_block = index.add %q8_block_base, %quant_group : index
@@ -368,6 +393,12 @@ func.def inline @ggml_dequant_f32_vector4(%weight_format: index, %weight: buffer
   } else {
     scf.yield %zero : vector<4xf32>
   }
+  %bf16_values = scf.if %is_bf16 -> (vector<4xf32>) {
+    %values = func.call @ggml_bf16_f32_vector4(%weight, %row_byte_base, %input_size, %k) : (buffer, offset, index, index) -> (vector<4xf32>)
+    scf.yield %values : vector<4xf32>
+  } else {
+    scf.yield %zero : vector<4xf32>
+  }
   %f32_values = scf.if %is_f32 -> (vector<4xf32>) {
     %values = func.call @ggml_f32_f32_vector4(%weight, %row_byte_base, %input_size, %k) : (buffer, offset, index, index) -> (vector<4xf32>)
     scf.yield %values : vector<4xf32>
@@ -379,6 +410,7 @@ func.def inline @ggml_dequant_f32_vector4(%weight_format: index, %weight: buffer
   %selected_q8_0 = scf.select %is_q8_0, %q8_0_values, %selected_q6 : vector<4xf32>
   %selected_q8_1 = scf.select %is_q8_1, %q8_1_values, %selected_q8_0 : vector<4xf32>
   %selected_f16 = scf.select %is_f16, %f16_values, %selected_q8_1 : vector<4xf32>
-  %selected = scf.select %is_f32, %f32_values, %selected_f16 : vector<4xf32>
+  %selected_bf16 = scf.select %is_bf16, %bf16_values, %selected_f16 : vector<4xf32>
+  %selected = scf.select %is_f32, %f32_values, %selected_bf16 : vector<4xf32>
   func.return %selected : vector<4xf32>
 }

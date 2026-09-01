@@ -576,6 +576,15 @@ static std::vector<uint8_t> make_matmul_weight_bytes(ggml_type type, int64_t row
         return bytes;
     }
 
+    if (type == GGML_TYPE_BF16) {
+        (void) seed;
+        const std::vector<ggml_bf16_t> weights(static_cast<size_t>(row_length * row_count),
+                                               ggml_fp32_to_bf16(0.25f));
+        std::vector<uint8_t>           bytes(weights.size() * sizeof(ggml_bf16_t));
+        std::memcpy(bytes.data(), weights.data(), bytes.size());
+        return bytes;
+    }
+
     return make_quantized_rows(type, row_length, row_count, seed);
 }
 
@@ -1964,11 +1973,14 @@ static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
     REQUIRE(cpu_buffer != nullptr);
     REQUIRE(hrx_buffer != nullptr);
 
-    const std::vector<uint8_t> weight = make_matmul_weight_bytes(weight_type, input_size, output_size, 6);
+    const std::vector<uint8_t> weight         = make_matmul_weight_bytes(weight_type, input_size, output_size, 6);
+    const bool                 weight_is_f16  = weight_type == GGML_TYPE_F16;
+    const bool                 weight_is_bf16 = weight_type == GGML_TYPE_BF16;
+    const bool                 weight_is_f32  = weight_type == GGML_TYPE_F32;
+    const bool                 weight_is_dense_float = weight_is_f16 || weight_is_bf16 || weight_is_f32;
     const std::vector<float>   input =
-        weight_type == GGML_TYPE_F16 || weight_type == GGML_TYPE_F32 ?
-              std::vector<float>(static_cast<size_t>(input_size * token_count), 0.00390625f) :
-              make_pattern_f32(input_size * token_count, 7, 0.01f);
+        weight_is_dense_float ? std::vector<float>(static_cast<size_t>(input_size * token_count), 0.00390625f) :
+                                make_pattern_f32(input_size * token_count, 7, 0.01f);
     set_tensor_pair_bytes(cpu_backend, cpu_weight, hrx_backend, hrx_weight, weight.data(), weight.size());
     set_tensor_pair_bytes(cpu_backend, cpu_input, hrx_backend, hrx_input, input.data(), input.size() * sizeof(float));
 
@@ -3030,6 +3042,7 @@ int main() {
     run_get_rows_f32_cpu_reference_case(GGML_TYPE_Q8_0);
     run_get_rows_q8_1_zero_weight_case();
     run_get_rows_f32_cpu_reference_case(GGML_TYPE_F16);
+    run_get_rows_f32_cpu_reference_case(GGML_TYPE_BF16);
     run_get_rows_f32_cpu_reference_case(GGML_TYPE_F32);
     run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128);
     run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1, 128);
@@ -3041,6 +3054,8 @@ int main() {
     run_dense_matmul_zero_weight_case(GGML_TYPE_Q8_1, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1);
     run_dense_matmul_cpu_reference_case(GGML_TYPE_F16, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128);
     run_dense_matmul_cpu_reference_case(GGML_TYPE_F16, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1, 128);
+    run_dense_matmul_cpu_reference_case(GGML_TYPE_BF16, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128);
+    run_dense_matmul_cpu_reference_case(GGML_TYPE_BF16, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1, 128);
     run_dense_matmul_cpu_reference_case(GGML_TYPE_F32, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 256);
     run_dense_matmul_cpu_reference_case(GGML_TYPE_F32, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1, 256);
     run_dense_matmul_unary_cpu_reference_case(GGML_TYPE_F32, "loom_libs:ggml_mul_mat_f32_f32_wmma", 2, 128);

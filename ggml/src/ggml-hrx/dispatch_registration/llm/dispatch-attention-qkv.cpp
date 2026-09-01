@@ -73,6 +73,7 @@ enum class AttentionWeightFormat {
     Q8_0,
     Q8_1,
     F16,
+    BF16,
     F32,
 };
 
@@ -92,6 +93,9 @@ static bool format_for_type(ggml_type type, AttentionWeightFormat & format) {
             return true;
         case GGML_TYPE_F16:
             format = AttentionWeightFormat::F16;
+            return true;
+        case GGML_TYPE_BF16:
+            format = AttentionWeightFormat::BF16;
             return true;
         case GGML_TYPE_F32:
             format = AttentionWeightFormat::F32;
@@ -113,6 +117,8 @@ static int64_t format_config_value(AttentionWeightFormat format) {
             return 81;
         case AttentionWeightFormat::F16:
             return 16;
+        case AttentionWeightFormat::BF16:
+            return 17;
         case AttentionWeightFormat::F32:
             return 32;
     }
@@ -120,7 +126,8 @@ static int64_t format_config_value(AttentionWeightFormat format) {
 }
 
 static bool is_dense_float_weight_format(AttentionWeightFormat format) {
-    return format == AttentionWeightFormat::F16 || format == AttentionWeightFormat::F32;
+    return format == AttentionWeightFormat::F16 || format == AttentionWeightFormat::BF16 ||
+           format == AttentionWeightFormat::F32;
 }
 
 static std::string to_config_value(int64_t value) {

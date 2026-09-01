@@ -12,6 +12,7 @@ enum class CommonMulMatWeightFormat {
     Q8_0,
     Q8_1,
     F16,
+    BF16,
     F32,
 };
 
@@ -31,6 +32,9 @@ inline bool common_mul_mat_format_for_type(ggml_type type, CommonMulMatWeightFor
             return true;
         case GGML_TYPE_F16:
             format = CommonMulMatWeightFormat::F16;
+            return true;
+        case GGML_TYPE_BF16:
+            format = CommonMulMatWeightFormat::BF16;
             return true;
         case GGML_TYPE_F32:
             format = CommonMulMatWeightFormat::F32;
@@ -52,6 +56,8 @@ inline int64_t common_mul_mat_format_config_value(CommonMulMatWeightFormat forma
             return 81;
         case CommonMulMatWeightFormat::F16:
             return 16;
+        case CommonMulMatWeightFormat::BF16:
+            return 17;
         case CommonMulMatWeightFormat::F32:
             return 32;
     }

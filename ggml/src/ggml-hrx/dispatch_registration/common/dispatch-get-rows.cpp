@@ -68,6 +68,9 @@ static bool format_config_for_type(ggml_type type, FormatConfig & config) {
         case GGML_TYPE_F16:
             config = { type, 16 };
             return true;
+        case GGML_TYPE_BF16:
+            config = { type, 17 };
+            return true;
         case GGML_TYPE_F32:
             config = { type, 32 };
             return true;

@@ -13,6 +13,7 @@
 //   Q8_0: [output channel][input size / 32][34 bytes]
 //   Q8_1: [output channel][input size / 32][36 bytes]
 //   F16:  [output channel][input size][2 bytes]
+//   BF16: [output channel][input size][2 bytes]
 //   F32:  [output channel][input size][4 bytes]
 // The configured weight format selects the storage reader before the shared
 // device template is instantiated, so inactive decode logic is absent from the
