@@ -389,12 +389,26 @@ hrx_status_t ggml_hrx_loom_jit_copy_artifact_bytes(const loomc_artifact_t * arti
     if (!artifact || !out_data || !out_size) {
         return hrx_ok_status();
     }
-    void * copy = ggml_hrx_loom_jit_malloc_copy(artifact->contents.data, artifact->contents.data_length, nul_terminate);
+
+    loomc_byte_span_t contents          = loomc_byte_span_empty();
+    const bool        contents_borrowed = loomc_byte_sequence_try_get_contiguous_span(artifact->contents, &contents);
+    if (!contents_borrowed) {
+        loomc_status_t status =
+            loomc_byte_sequence_clone(artifact->contents, loomc_allocator_system(), &contents);
+        if (!loomc_status_is_ok(status)) {
+            return ggml_hrx_loom_jit_status_from_loom(status, "copy Loom artifact");
+        }
+    }
+
+    void * copy = ggml_hrx_loom_jit_malloc_copy(contents.data, contents.data_length, nul_terminate);
+    if (!contents_borrowed) {
+        loomc_allocator_free(loomc_allocator_system(), const_cast<uint8_t *>(contents.data));
+    }
     if (!copy) {
         return ggml_hrx_loom_jit_make_status(HRX_STATUS_OUT_OF_MEMORY, "failed to copy Loom artifact");
     }
     *out_data = copy;
-    *out_size = artifact->contents.data_length;
+    *out_size = contents.data_length;
     return hrx_ok_status();
 }
 
@@ -412,7 +426,7 @@ hrx_status_t ggml_hrx_loom_jit_evaluate_launch_config(const loomc_artifact_t *  
 
     LoomLaunchConfigProgram program;
     loomc_status_t          status =
-        loomc_launch_config_program_load(artifact, nullptr, nullptr, loomc_allocator_system(), program.out());
+        loomc_launch_config_program_load(artifact, loomc_allocator_system(), program.out());
     if (!loomc_status_is_ok(status)) {
         return ggml_hrx_loom_jit_status_from_loom(status, "load Loom launch config program");
     }
