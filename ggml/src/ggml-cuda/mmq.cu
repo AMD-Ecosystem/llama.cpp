@@ -299,7 +299,7 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
             break;
         case GGML_TYPE_Q4_0_ROCMFP4:
         case GGML_TYPE_Q4_0_ROCMFP4_FAST:
-            // guard on RDNA3.5 (gfx1151) for now. 
+            // guard on RDNA3.5 (gfx1151) for now.
             mmq_supported = GGML_CUDA_CC_IS_RDNA3_5(cc);
             break;
         default:

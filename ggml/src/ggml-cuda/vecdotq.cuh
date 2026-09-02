@@ -403,10 +403,10 @@ static __device__ __forceinline__ int rocmfp4_get_qs_i32(const void * x, const i
 #endif
 }
 
-// AMD-specific fast path for expanding eight packed ROCmFP4 nibbles into two int32 DP4A operands. 
+// AMD-specific fast path for expanding eight packed ROCmFP4 nibbles into two int32 DP4A operands.
 // This encodes the Codebook10 table directly as four 32-bit constants:
 //   [0, 1, 2, 3], [4, 6, 8, 10], [0, -1, -2, -3], [-4, -6, -8, -10]
-// Avoiding the table pointer keeps the ROCm/HIP MMVQ/MMQ hot path fully local to this format. 
+// Avoiding the table pointer keeps the ROCm/HIP MMVQ/MMQ hot path fully local to this format.
 // Non-HIP builds still use llama.cpp's generic table expander.
 static __device__ __forceinline__ int2 rocmfp4_get_int_from_codebook_16(const int & q4, const int8_t * fallback_table) {
 #if defined(GGML_USE_HIP)
