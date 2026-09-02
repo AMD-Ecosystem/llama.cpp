@@ -4,8 +4,8 @@
 // of 16 lanes each process four 256-value weight blocks in parallel, while
 // each lane contracts four F32 activation packets from the 0, 32, 64, and 96
 // element quarters of its block. The storage-format-specific weight load is
-// delegated to the common dequant motif, so Q4_K, Q6_K, Q8_0, Q8_1, F16, and
-// F32 share the same skinny decode schedule.
+// delegated to the common dequant motif, so Q4_K, Q6_K, Q8_0, Q8_1, F16,
+// BF16, and F32 share the same skinny decode schedule.
 template.decl @ggml.mul_mat_f32_f32_decode.body(%weight_format: index, %publish_output: i1, %token_count: index, %token0: index, %pair: index, %input_size: index, %output_size: index, %input: buffer, %weight: buffer, %output: buffer)
 
 template.decl @ggml.mul_mat_f32_f32_decode.dispatch(%weight_format: index, %token_count: index, %input_size: index, %output_size: index, %input: buffer, %weight: buffer, %output: buffer)
