@@ -921,9 +921,7 @@ hrx_status_t ggml_hrx_loom_jit_amdgpu_compile(ggml_hrx_loom_jit_amdgpu *        
     if (options->evaluate_launch_config) {
         compile_options.artifact_flags |= LOOMC_COMPILE_ARTIFACT_FLAG_LAUNCH_CONFIG;
     }
-    compile_options.config.bindings      = config_bindings.get();
-    compile_options.config.binding_count = options->config_binding_count;
-    compile_options.config.flags         = LOOMC_CONFIG_POLICY_FLAG_REQUIRE_RESOLVED;
+    compile_options.config_flags = LOOMC_CONFIG_POLICY_FLAG_REQUIRE_RESOLVED;
     status = loomc_compile_module(jit->compiler, workspace.get(), jit->pass_program, module.get(), &compile_options,
                                   loomc_allocator_system(), result.out());
     if (!loomc_status_is_ok(status)) {
