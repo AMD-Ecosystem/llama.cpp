@@ -139,6 +139,37 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     }
 }
 
+#if defined(RDNA3_5)
+// One 16x16x16 IU8 WMMA over the low or high half of the A/B tiles. Splitting the two
+// halves lets a caller issue every tile's low half, load the scales, then issue the high
+// halves, so the MMAs are not serialised behind the scale loads.
+static __device__ __forceinline__ void ggml_cuda_mmq_mma_q4_K_rdna35_low(
+        tile<16, 16, int, DATA_LAYOUT_J_MAJOR> & D,
+        const tile<16, 8, int, DATA_LAYOUT_I_MAJOR_MIRRORED> & A,
+        const tile<16, 8, int, DATA_LAYOUT_I_MAJOR_MIRRORED> & B) {
+    using int32x4_t = __attribute__((__vector_size__(4 * sizeof(int)))) int;
+    using int32x8_t = __attribute__((__vector_size__(8 * sizeof(int)))) int;
+
+    int32x8_t * acc = (int32x8_t *) D.x;
+    const int32x4_t * a_vec = (const int32x4_t *) A.x;
+    const int32x4_t * b_vec = (const int32x4_t *) B.x;
+    acc[0] = __builtin_amdgcn_wmma_i32_16x16x16_iu8_w32(true, a_vec[0], true, b_vec[0], acc[0], true);
+}
+
+static __device__ __forceinline__ void ggml_cuda_mmq_mma_q4_K_rdna35_high(
+        tile<16, 16, int, DATA_LAYOUT_J_MAJOR> & D,
+        const tile<16, 8, int, DATA_LAYOUT_I_MAJOR_MIRRORED> & A,
+        const tile<16, 8, int, DATA_LAYOUT_I_MAJOR_MIRRORED> & B) {
+    using int32x4_t = __attribute__((__vector_size__(4 * sizeof(int)))) int;
+    using int32x8_t = __attribute__((__vector_size__(8 * sizeof(int)))) int;
+
+    int32x8_t * acc = (int32x8_t *) D.x;
+    const int32x4_t * a_vec = (const int32x4_t *) A.x;
+    const int32x4_t * b_vec = (const int32x4_t *) B.x;
+    acc[0] = __builtin_amdgcn_wmma_i32_16x16x16_iu8_w32(true, a_vec[1], true, b_vec[1], acc[0], true);
+}
+#endif // defined(RDNA3_5)
+
 template <ggml_type type, int J, bool fallback, mmq_q8_1_ds_layout ds_layout>
 static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q8_0_q8_1_mma(
     const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
@@ -162,6 +193,68 @@ static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q8_0_q8_1_mma(
     const half2 * y_ds = (const half2 *) y;
 
     const int i0 = (threadIdx.y / ntx) * rows_per_warp;
+
+#if defined(RDNA3_5)
+    // With a single x minitile per warp the generic schedule below stalls once per j-tile
+    // waiting for that tile's scales. Instead issue every tile's low WMMA half, load all
+    // the scales, then issue the high halves, so the MMA pipe stays busy across the loads.
+    if constexpr (J == 128 && ntx == 1) {
+        constexpr int ntiles = J/tile_C::J;
+        static_assert(I == 64, "unexpected RDNA3.5 J=128 tile height");
+
+        for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QI8_0) {
+            const int k0 = k00 + k01;
+
+            tile_A A;
+            load_ldmatrix(A, x_qs + i0*sram_stride + k0, sram_stride);
+
+            tile_B B[ntiles];
+            tile_C C[ntiles];
+#pragma unroll
+            for (int jb = 0; jb < ntiles; ++jb) {
+                load_ldmatrix(B[jb], y_qs + jb*tile_C::J*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K);
+                ggml_cuda_mmq_mma_q4_K_rdna35_low(C[jb], A, B[jb]);
+            }
+
+            __builtin_amdgcn_sched_barrier(0);
+
+            float dA[tile_C::ne];
+            float dB[ntiles];
+#pragma unroll
+            for (int l = 0; l < tile_C::ne; ++l) {
+                const int i = i0 + tile_C::get_i(l);
+                dA[l] = x_df[i*sram_stride + k0/QI8_0];
+            }
+#pragma unroll
+            for (int jb = 0; jb < ntiles; ++jb) {
+                const int j = jb*tile_C::J + tile_C::get_j(0);
+                if constexpr (ds_layout == MMQ_Q8_1_DS_LAYOUT_D4) {
+                    dB[jb] = y_df[j*MMQ_TILE_Y_K + k01/QI8_1];
+                } else {
+                    dB[jb] = __low2float(y_ds[j*MMQ_TILE_Y_K + k01/QI8_1]);
+                }
+            }
+
+            __builtin_amdgcn_sched_barrier(0);
+
+#pragma unroll
+            for (int jb = 0; jb < ntiles; ++jb) {
+                ggml_cuda_mmq_mma_q4_K_rdna35_high(C[jb], A, B[jb]);
+            }
+
+            __builtin_amdgcn_sched_barrier(0);
+
+#pragma unroll
+            for (int jb = 0; jb < ntiles; ++jb) {
+#pragma unroll
+                for (int l = 0; l < tile_C::ne; ++l) {
+                    sum[jb*tile_C::ne + l] += C[jb].x[l]*dA[l]*dB[jb];
+                }
+            }
+        }
+        return;
+    }
+#endif // defined(RDNA3_5)
 
     for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QI8_0) {
         const int k0 = k00 + k01;
@@ -946,36 +1039,10 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 }
 
 #if defined(RDNA3_5)
-static __device__ __forceinline__ void ggml_cuda_mmq_mma_q4_K_rdna35_low(
-        tile<16, 16, int, DATA_LAYOUT_J_MAJOR> & D,
-        const tile<16, 8, int, DATA_LAYOUT_I_MAJOR_MIRRORED> & A,
-        const tile<16, 8, int, DATA_LAYOUT_I_MAJOR_MIRRORED> & B) {
-    using int32x4_t = __attribute__((__vector_size__(4 * sizeof(int)))) int;
-    using int32x8_t = __attribute__((__vector_size__(8 * sizeof(int)))) int;
-
-    int32x8_t * acc = (int32x8_t *) D.x;
-    const int32x4_t * a_vec = (const int32x4_t *) A.x;
-    const int32x4_t * b_vec = (const int32x4_t *) B.x;
-    acc[0] = __builtin_amdgcn_wmma_i32_16x16x16_iu8_w32(true, a_vec[0], true, b_vec[0], acc[0], true);
-}
-
-static __device__ __forceinline__ void ggml_cuda_mmq_mma_q4_K_rdna35_high(
-        tile<16, 16, int, DATA_LAYOUT_J_MAJOR> & D,
-        const tile<16, 8, int, DATA_LAYOUT_I_MAJOR_MIRRORED> & A,
-        const tile<16, 8, int, DATA_LAYOUT_I_MAJOR_MIRRORED> & B) {
-    using int32x4_t = __attribute__((__vector_size__(4 * sizeof(int)))) int;
-    using int32x8_t = __attribute__((__vector_size__(8 * sizeof(int)))) int;
-
-    int32x8_t * acc = (int32x8_t *) D.x;
-    const int32x4_t * a_vec = (const int32x4_t *) A.x;
-    const int32x4_t * b_vec = (const int32x4_t *) B.x;
-    acc[0] = __builtin_amdgcn_wmma_i32_16x16x16_iu8_w32(true, a_vec[1], true, b_vec[1], acc[0], true);
-}
-
 template <ggml_type type, int J, bool fallback>
 static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q4_K_q8_1_mma_rdna35(
         const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
-    if constexpr (type == GGML_TYPE_Q4_K && J == 128) {
+    if constexpr ((type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q5_K) && J == 128) {
         constexpr data_layout input_layout = get_input_data_layout();
         typedef tile<16,  8, int, input_layout>        tile_A;
         typedef tile<16,  8, int, input_layout>        tile_B;
@@ -986,7 +1053,7 @@ static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q4_K_q8_1_mma_rdna3
         constexpr int rows_per_warp = ggml_cuda_mmq_get_rows_per_warp(type, J, fallback);
         constexpr int ntx           = rows_per_warp/tile_C::I;
         constexpr int ntiles        = J/tile_C::J;
-        static_assert(I == 64 && ntx == 1, "unexpected RDNA3.5 Q4_K J128 configuration");
+        static_assert(I == 64 && ntx == 1, "unexpected RDNA3.5 Q4_K/Q5_K ntx=1 configuration");
 
         const int   * x_qs = (const int   *) x;
         const half2 * x_dm = (const half2 *) x_qs + 2*MMQ_TILE_NE_K;
@@ -1070,6 +1137,7 @@ static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q4_K_q8_1_mma_rdna3
     }
     ggml_cuda_mmq_vec_dot_q8_1_q8_1_mma<type, J, fallback>(x, y, sum, k00);
 }
+
 #endif
 
 template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q5_K_q8_1_dp4a(
