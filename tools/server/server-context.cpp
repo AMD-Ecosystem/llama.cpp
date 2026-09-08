@@ -1771,7 +1771,7 @@ private:
         }
 
         if (!task.tokens.validate(ctx_tgt)) {
-            send_error(task, "Prompt contains invalid tokens", ERROR_TYPE_INVALID_REQUEST);
+            send_error(task, "Prompt contains invalid tokens", ERROR_TYPE_INVALID_PROMPT);
             return false;
         }
 
@@ -4341,7 +4341,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
 
         rd.post_tasks(std::move(tasks));
     } catch (const std::exception & e) {
-        res->error(format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
+        res->error(format_error_response(e.what(), ERROR_TYPE_INVALID_PROMPT));
         return res;
     }
 
