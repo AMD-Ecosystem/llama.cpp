@@ -1917,7 +1917,10 @@ private:
         }
 
         if (!task.tokens.validate(ctx_tgt)) {
-            send_error(task, "Prompt contains invalid tokens", ERROR_TYPE_INVALID_REQUEST);
+            error_type err_type = (task.type == SERVER_TASK_TYPE_COMPLETION)
+                ? ERROR_TYPE_INVALID_PROMPT
+                : ERROR_TYPE_INVALID_REQUEST;
+            send_error(task, "Invalid token IDs", err_type);
             return false;
         }
 
@@ -4798,9 +4801,10 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
 
     int32_t sse_ping_interval = params.sse_ping_interval;
 
-    try {
-        std::vector<server_task> tasks;
+    std::vector<server_task> tasks;
 
+    // Extract prompt
+    try {
         const auto & prompt = data.at("prompt");
         // TODO: this log can become very long, put it behind a flag or think about a more compact format
         //SRV_DBG("Prompt: %s\n", prompt.is_string() ? prompt.get<std::string>().c_str() : prompt.dump(2).c_str());
@@ -4814,10 +4818,16 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                 SRV_ERR("failed to create %s\n", file_path.string().c_str());
             }
         }
+    } catch (const std::exception & e) {
+        res->error(format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
 
-        // process prompt
-        std::vector<server_tokens> inputs;
+    // process prompt
+    std::vector<server_tokens> inputs;
 
+    try {
+        const auto & prompt = data.at("prompt");
         if (res_type != TASK_RESPONSE_TYPE_NONE && ctx_server.mctx != nullptr) {
             // This is the case used by OAI compatible chat path with MTMD. TODO It can be moved to the path below.
             inputs.push_back(process_mtmd_prompt(ctx_server.mctx, prompt.get<std::string>(), files, ctx_server.init_opt));
@@ -4825,9 +4835,14 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             // Everything else, including multimodal completions.
             inputs = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, prompt, true, true, ctx_server.init_opt);
         }
+    } catch (const std::invalid_argument & e) {
+        res->error(format_error_response(e.what(), ERROR_TYPE_INVALID_PROMPT));
+        return res;
+    }
 
-        // tasks.reserve(inputs.size()); // TODO: this is inaccurate due to child tasks
+    // tasks.reserve(inputs.size()); // TODO: this is inaccurate due to child tasks
 
+    try {
         for (size_t i = 0; i < inputs.size(); i++) {
             server_task task = server_task(type);
 
