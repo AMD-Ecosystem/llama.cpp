@@ -10,12 +10,12 @@ static int dq_env_override(const char * name) {
     return (v[0] == '0' && v[1] == '\0') ? 0 : 1;
 }
 
-bool ggml_cuda_dq_mmv_enabled(bool arch_default) {
+static bool ggml_cuda_dq_mmv_enabled(bool arch_default) {
     static const int ov = dq_env_override("GGML_CUDA_DQ_MMV");
     return ov < 0 ? arch_default : (bool) ov;
 }
 
-bool ggml_cuda_dq_q6k_enabled(bool arch_default) {
+static bool ggml_cuda_dq_q6k_enabled(bool arch_default) {
     static const int ov = dq_env_override("GGML_CUDA_DQ_Q6K");
     return ov < 0 ? arch_default : (bool) ov;
 }
@@ -658,7 +658,7 @@ static void launch_dq_glu_q6_K(const void * vx_up, const void * vx_gate, const f
         default: LAUNCH<1>(__VA_ARGS__); break;               \
     }
 
-void ggml_cuda_mul_mat_vec_dq_q4_K(
+static void ggml_cuda_mul_mat_vec_dq_q4_K(
         ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     const int ncols_x = src0->ne[0];
     const int nrows   = src0->ne[1];
@@ -670,7 +670,7 @@ void ggml_cuda_mul_mat_vec_dq_q4_K(
     DQ_DISPATCH_ROWS(launch_dq_q4_K, vx, y, d, ncols_x, nrows, warp_size, stream);
 }
 
-void ggml_cuda_mul_mat_vec_dq_q5_K(
+static void ggml_cuda_mul_mat_vec_dq_q5_K(
         ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     const int ncols_x = src0->ne[0];
     const int nrows   = src0->ne[1];
@@ -682,7 +682,7 @@ void ggml_cuda_mul_mat_vec_dq_q5_K(
     DQ_DISPATCH_ROWS(launch_dq_q5_K, vx, y, d, ncols_x, nrows, warp_size, stream);
 }
 
-void ggml_cuda_mul_mat_vec_dq_q6_K(
+static void ggml_cuda_mul_mat_vec_dq_q6_K(
         ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     const int ncols_x = src0->ne[0];
     const int nrows   = src0->ne[1];
@@ -694,7 +694,7 @@ void ggml_cuda_mul_mat_vec_dq_q6_K(
     DQ_DISPATCH_ROWS(launch_dq_q6_K, vx, y, d, ncols_x, nrows, warp_size, stream);
 }
 
-void ggml_cuda_mul_mat_vec_dq_glu(
+static void ggml_cuda_mul_mat_vec_dq_glu(
         ggml_backend_cuda_context & ctx, const ggml_tensor * up, const ggml_tensor * gate,
         const ggml_tensor * src1, ggml_tensor * dst) {
     const int ncols_x = up->ne[0];
@@ -708,6 +708,87 @@ void ggml_cuda_mul_mat_vec_dq_glu(
     switch (up->type) {
         case GGML_TYPE_Q4_K: DQ_DISPATCH_ROWS(launch_dq_glu_q4_K, vx_up, vx_gate, y, d, ncols_x, nrows, warp_size, stream); break;
         case GGML_TYPE_Q5_K: DQ_DISPATCH_ROWS(launch_dq_glu_q5_K, vx_up, vx_gate, y, d, ncols_x, nrows, warp_size, stream); break;
-        default:             DQ_DISPATCH_ROWS(launch_dq_glu_q6_K, vx_up, vx_gate, y, d, ncols_x, nrows, warp_size, stream); break;
+        case GGML_TYPE_Q6_K: DQ_DISPATCH_ROWS(launch_dq_glu_q6_K, vx_up, vx_gate, y, d, ncols_x, nrows, warp_size, stream); break;
+        default: GGML_ABORT("mul_mat_vec_dq_glu: unsupported type %s (should_use_mmv_dq must gate this)",
+                            ggml_type_name(up->type));
+    }
+}
+
+// ---- dispatch: dq as an internal variant of ggml_cuda_mul_mat_vec_q ----
+
+bool ggml_cuda_should_use_mmv_dq(
+        const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids,
+        const ggml_tensor * dst, int cc, const ggml_cuda_mm_fusion_args_host * fusion) {
+    const bool dq_default = GGML_CUDA_CC_IS_RDNA3_5(cc);
+    if (!ggml_cuda_dq_mmv_enabled(dq_default)) {
+        return false;
+    }
+
+    // MoE (ids) is not yet supported by the dq kernels.
+    if (ids != nullptr) {
+        return false;
+    }
+
+    const ggml_type type = src0->type;
+    if (!(type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q5_K
+            || (type == GGML_TYPE_Q6_K && ggml_cuda_dq_q6k_enabled(dq_default)))) {
+        return false;
+    }
+
+    if (src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    // Token batch (ncols_dst). Reserved seam for MTP: kernels are single-vector for
+    // now, so require exactly 1. Relaxing this is the Phase 2 kernel change.
+    if (src1->ne[1] != 1) {
+        return false;
+    }
+
+    if (src0->ne[0] % QK_K != 0) {
+        return false;
+    }
+    if (src0->ne[2] != 1 || src0->ne[3] != 1 || src1->ne[2] != 1 || src1->ne[3] != 1) {
+        return false;
+    }
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1) || !ggml_is_contiguous(dst)) {
+        return false;
+    }
+
+    // Fusion inspection: dq only implements SwiGLU gate fusion (up = src0,
+    // gate = fusion->gate, shared activation). Any bias/scale or other GLU op
+    // falls back to the q8_1 mmvq path.
+    if (fusion) {
+        if (fusion->glu_op != GGML_GLU_OP_SWIGLU || fusion->gate == nullptr) {
+            return false;
+        }
+        if (fusion->x_bias || fusion->gate_bias || fusion->x_scale || fusion->gate_scale) {
+            return false;
+        }
+        if (fusion->gate->type != type || !ggml_are_same_shape(src0, fusion->gate)
+                || !ggml_is_contiguous(fusion->gate)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+void ggml_cuda_mul_mat_vec_dq(
+        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
+        const ggml_tensor * ids, ggml_tensor * dst, const ggml_cuda_mm_fusion_args_host * fusion) {
+    GGML_UNUSED(ids); // MoE not supported yet; guaranteed nullptr by should_use_mmv_dq.
+
+    if (fusion && fusion->gate) {
+        ggml_cuda_mul_mat_vec_dq_glu(ctx, src0, fusion->gate, src1, dst);
+        return;
+    }
+
+    switch (src0->type) {
+        case GGML_TYPE_Q4_K: ggml_cuda_mul_mat_vec_dq_q4_K(ctx, src0, src1, dst); break;
+        case GGML_TYPE_Q5_K: ggml_cuda_mul_mat_vec_dq_q5_K(ctx, src0, src1, dst); break;
+        case GGML_TYPE_Q6_K: ggml_cuda_mul_mat_vec_dq_q6_K(ctx, src0, src1, dst); break;
+        default: GGML_ABORT("mul_mat_vec_dq: unsupported type %s (should_use_mmv_dq must gate this)",
+                            ggml_type_name(src0->type));
     }
 }
