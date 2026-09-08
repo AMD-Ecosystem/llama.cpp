@@ -57,3 +57,19 @@ def test_tokenize_with_pieces():
         assert token["id"] > 0
         assert "piece" in token
         assert len(token["piece"]) > 0
+
+
+@pytest.mark.parametrize("content", [
+    [1, "x", 2.5],
+    [1, True],
+    [False],
+    [1, "x", None],
+    [1, 4294967297],
+])
+def test_tokenize_invalid_token_ids(content):
+    """Invalid token IDs in mixed arrays should return 400."""
+    global server
+    server.start()
+    res = server.make_request("POST", "/tokenize", data={"content": content})
+    assert res.status_code == 400
+    assert res.body["error"]["type"] == "invalid_request_error"
