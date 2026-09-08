@@ -289,3 +289,34 @@ def test_embedding_openai_library_base64():
     # make sure the decoded data is the same as the original
     for x, y in zip(floats, vec0):
         assert abs(x - y) < EPSILON
+
+
+@pytest.mark.parametrize("input", [
+    [1, "x", 2.5],
+    [1, True],
+    [False],
+    [1, "x", None],
+    [1, 4294967297],
+])
+def test_embedding_invalid_token_ids(input):
+    """Invalid token IDs in input arrays should return 400."""
+    global server
+    server.pooling = 'last'
+    server.start()
+    res = server.make_request("POST", "/v1/embeddings", data={"input": input})
+    assert res.status_code == 400
+    assert res.body["error"]["type"] == "invalid_request_error"
+
+
+@pytest.mark.parametrize("input", [
+    [1, -5],
+    [1, 99999999],
+])
+def test_embedding_invalid_token_range(input):
+    """Negative and out-of-vocab tokens should return 400 invalid_request_error."""
+    global server
+    server.pooling = 'last'
+    server.start()
+    res = server.make_request("POST", "/v1/embeddings", data={"input": input})
+    assert res.status_code == 400
+    assert res.body["error"]["type"] == "invalid_request_error"
