@@ -189,6 +189,8 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/common/dispatch-binary.h
     dispatch_registration/common/dispatch-common.cpp
     dispatch_registration/common/dispatch-common.h
+    dispatch_registration/common/dispatch-copy.cpp
+    dispatch_registration/common/dispatch-copy.h
     dispatch_registration/common/dispatch-flash-attention.cpp
     dispatch_registration/common/dispatch-flash-attention.h
     dispatch_registration/common/dispatch-gated-mul-mat-id.cpp
@@ -199,6 +201,8 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/common/dispatch-gather-add.h
     dispatch_registration/common/dispatch-get-rows.cpp
     dispatch_registration/common/dispatch-get-rows.h
+    dispatch_registration/common/dispatch-glu.cpp
+    dispatch_registration/common/dispatch-glu.h
     dispatch_registration/common/dispatch-mul-mat-id.cpp
     dispatch_registration/common/dispatch-mul-mat-id-common.h
     dispatch_registration/common/dispatch-mul-mat-id.h
@@ -208,14 +212,21 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/common/dispatch-mul-mat.h
     dispatch_registration/common/dispatch-rope-set-rows.cpp
     dispatch_registration/common/dispatch-rope-set-rows.h
+    dispatch_registration/common/dispatch-rope-utils.h
     dispatch_registration/common/dispatch-rmsnorm.cpp
     dispatch_registration/common/dispatch-rmsnorm.h
+    dispatch_registration/common/dispatch-scale.cpp
+    dispatch_registration/common/dispatch-scale.h
     dispatch_registration/common/dispatch-unary.cpp
     dispatch_registration/common/dispatch-unary.h
     dispatch_registration/dispatch-registry.cpp
     dispatch_registration/dispatch-registry.h
     dispatch_registration/llm/dispatch-attention-qkv.cpp
     dispatch_registration/llm/dispatch-attention-qkv.h
+    dispatch_registration/llm/dispatch-gated-delta-net.cpp
+    dispatch_registration/llm/dispatch-gated-delta-net.h
+    dispatch_registration/llm/dispatch-ssm-conv.cpp
+    dispatch_registration/llm/dispatch-ssm-conv.h
     dispatch_registration/qwen/dispatch-llm-profiles.h
     dispatch_registration/qwen/dispatch-llm-shapes.h
     dispatch_registration/qwen/dispatch-moe-router.cpp

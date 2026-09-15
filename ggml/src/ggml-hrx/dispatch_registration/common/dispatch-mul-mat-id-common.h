@@ -50,8 +50,8 @@ inline bool common_mul_mat_id_same_shape(const Value & lhs, const Value & rhs) {
     return true;
 }
 
-inline bool common_mul_mat_id_supported_dense_input_size(int64_t input_size) {
-    return input_size >= 256 && input_size <= 32768 && input_size % 256 == 0;
+inline bool common_mul_mat_id_supported_dense_input_size(CommonMulMatWeightFormat format, int64_t input_size) {
+    return common_mul_mat_supported_dense_input_size(format, input_size);
 }
 
 inline bool common_mul_mat_id_supported_dense_output_size(int64_t output_size) {
@@ -219,7 +219,7 @@ inline CommonMulMatIdMatch common_match_mul_mat_id_any_format(const Graph &     
         !common_mul_mat_id_is_shape(*input, input_size, input_route_count, token_count, 1) ||
         !common_mul_mat_id_is_shape(*route_ids, route_count, token_count, 1, 1) ||
         !common_mul_mat_id_is_shape(*output, output_size, route_count, token_count, 1) ||
-        !common_mul_mat_id_supported_dense_input_size(input_size) ||
+        !common_mul_mat_id_supported_dense_input_size(format, input_size) ||
         !common_mul_mat_id_supported_dense_output_size(output_size) ||
         !common_mul_mat_id_supported_token_count(token_count) ||
         !common_mul_mat_id_supported_route_count(route_count) ||

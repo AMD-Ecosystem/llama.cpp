@@ -71,7 +71,7 @@ def main() -> int:
             return linked_paths[name]
         recipe = modules[name]
         output = linked_dir / f"{name}.loom"
-        command = [str(args.loom_link), "--mode=archive", f"--output={output}"]
+        command = [str(args.loom_link), "--mode=merge", f"--output={output}"]
         command.extend(str(args.corpus_dir / source) for source in recipe["srcs"])
         for library in recipe["libraries"]:
             path = link_module(library[1:]) if library.startswith(":") else args.corpus_dir / library

@@ -1,0 +1,276 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.unary_f32.apply(%op: index, %value: f32) -> (f32)
+
+template.decl @ggml.binary_f32.apply(%op: index, %lhs: f32, %rhs: f32) -> (f32)
+
+config.decl @llm.ssm_conv.generic.d_conv : %value: index where [range(%value, 1, 16)]
+
+config.decl @llm.ssm_conv.generic.d_inner : %value: index where [range(%value, 32, 65536), mul(%value, 32)]
+
+config.decl @llm.ssm_conv.generic.n_t : %value: index where [range(%value, 1, 512)]
+
+config.decl @llm.ssm_conv.generic.n_s : %value: index where [range(%value, 1, 4)]
+
+config.decl @llm.ssm_conv.generic.unary_op : %value: index where [range(%value, 0, 23)]
+
+config.decl @llm.ssm_conv.generic.binary_op : %value: index where [range(%value, 0, 8)]
+
+config.decl @llm.ssm_conv.generic.binary_lhs : %value: index where [range(%value, 0, 1)]
+
+config.decl @llm.ssm_conv.generic.workgroup_size : %value: index where [range(%value, 256, 256)]
+
+kernel.def export("llm_ssm_conv_f32") @llm_ssm_conv_f32() {
+  %c1 = index.constant 1 : index
+  %cneg1 = index.constant -1 : index
+  %d_inner = config.get @llm.ssm_conv.generic.d_inner : index
+  %n_t = config.get @llm.ssm_conv.generic.n_t : index
+  %n_s = config.get @llm.ssm_conv.generic.n_s : index
+  %wg = config.get @llm.ssm_conv.generic.workgroup_size : index
+  %tokens = index.mul %d_inner, %n_t : index
+  %total = index.mul %tokens, %n_s : index
+  %rounding = index.add %wg, %cneg1 : index
+  %rounded = index.add %total, %rounding : index
+  %groups = index.div %rounded, %wg : index
+  kernel.launch.config workgroups(%groups, %c1, %c1) workgroup_size(%wg, %c1, %c1) : index
+} launch(%window: buffer, %filter: buffer, %output: buffer) {
+  %base = index.constant 0 : offset
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c0_f32 = scalar.constant 0.0 : f32
+
+  %d_conv0 = config.get @llm.ssm_conv.generic.d_conv : index
+  %d_inner0 = config.get @llm.ssm_conv.generic.d_inner : index
+  %n_t0 = config.get @llm.ssm_conv.generic.n_t : index
+  %n_s0 = config.get @llm.ssm_conv.generic.n_s : index
+  %unary_op = config.get @llm.ssm_conv.generic.unary_op : index
+  %wg = config.get @llm.ssm_conv.generic.workgroup_size : index
+  %d_conv = index.assume %d_conv0 [range(%d_conv0, 1, 16)] : index
+  %d_inner = index.assume %d_inner0 [range(%d_inner0, 32, 65536), mul(%d_inner0, 32)] : index
+  %n_t = index.assume %n_t0 [range(%n_t0, 1, 512)] : index
+  %n_s = index.assume %n_s0 [range(%n_s0, 1, 4)] : index
+
+  %token_span0 = index.mul %d_inner, %n_t : index
+  %token_span = index.assume %token_span0 [range(%token_span0, 32, 33554432), mul(%token_span0, 32)] : index
+  %total0 = index.mul %token_span, %n_s : index
+  %total = index.assume %total0 [range(%total0, 32, 134217728), mul(%total0, 32)] : index
+
+  %group0 = kernel.workgroup.id<x> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %group = index.assume %group0 [range(%group0, 0, 524287)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
+  %base_idx0 = index.mul %group, %wg : index
+  %linear0 = index.add %base_idx0, %lane : index
+  %linear = index.assume %linear0 [range(%linear0, 0, 134217983)] : index
+  %in_bounds = index.cmp ult, %linear, %total : index
+
+  %window_g = buffer.assume.memory_space<global> %window : buffer
+  %filter_g = buffer.assume.memory_space<global> %filter : buffer
+  %output_g = buffer.assume.memory_space<global> %output : buffer
+  %window_na, %filter_na, %output_na = buffer.assume.noalias %window_g, %filter_g, %output_g : buffer, buffer, buffer
+  %window_v = buffer.view %window_na[%base] : buffer -> view<1073741824xf32>
+  %filter_v = buffer.view %filter_na[%base] : buffer -> view<1048576xf32>
+  %output_v = buffer.view %output_na[%base] : buffer -> view<134217728xf32>
+
+  scf.if %in_bounds {
+    %channel = index.rem %linear, %d_inner : index
+    %linear_div_inner = index.div %linear, %d_inner : index
+    %token = index.rem %linear_div_inner, %n_t : index
+    %sequence = index.div %linear_div_inner, %n_t : index
+
+    %window_rows0 = index.add %n_t, %d_conv : index
+    %window_rows = index.sub %window_rows0, %c1 : index
+    %window_sequence_span0 = index.mul %window_rows, %d_inner : index
+    %window_sequence_span = index.assume %window_sequence_span0 [range(%window_sequence_span0, 32, 34603008), mul(%window_sequence_span0, 32)] : index
+    %window_sequence_base = index.mul %sequence, %window_sequence_span : index
+    %window_channel_base0 = index.mul %channel, %window_rows : index
+    %window_channel_base = index.assume %window_channel_base0 [range(%window_channel_base0, 0, 34603008)] : index
+
+    %filter_channel_base0 = index.mul %channel, %d_conv : index
+    %filter_channel_base = index.assume %filter_channel_base0 [range(%filter_channel_base0, 0, 1048560)] : index
+
+    %acc = scf.for %tap = [%c0 to %d_conv step %c1](%running = %c0_f32 : f32) -> (f32) {
+      %window_row = index.add %token, %tap : index
+      %window_index0 = index.add %window_sequence_base, %window_channel_base : index
+      %window_index1 = index.add %window_index0, %window_row : index
+      %window_index = index.assume %window_index1 [range(%window_index1, 0, 1073741823)] : index
+      %filter_index0 = index.add %filter_channel_base, %tap : index
+      %filter_index = index.assume %filter_index0 [range(%filter_index0, 0, 1048575)] : index
+      %window_value = view.load %window_v[%window_index] : view<1073741824xf32> -> f32
+      %filter_value = view.load %filter_v[%filter_index] : view<1048576xf32> -> f32
+      %product = scalar.mulf %window_value, %filter_value : f32
+      %next = scalar.addf %running, %product : f32
+      scf.yield %next : f32
+    }
+    %activated = template.apply<@ggml.unary_f32.apply>(%unary_op, %acc) : (index, f32) -> (f32)
+    view.store %activated, %output_v[%linear] : f32, view<134217728xf32>
+  }
+  kernel.return
+}
+
+kernel.def export("llm_ssm_conv_binary_f32") @llm_ssm_conv_binary_f32() {
+  %c1 = index.constant 1 : index
+  %cneg1 = index.constant -1 : index
+  %d_inner = config.get @llm.ssm_conv.generic.d_inner : index
+  %n_t = config.get @llm.ssm_conv.generic.n_t : index
+  %n_s = config.get @llm.ssm_conv.generic.n_s : index
+  %wg = config.get @llm.ssm_conv.generic.workgroup_size : index
+  %tokens = index.mul %d_inner, %n_t : index
+  %total = index.mul %tokens, %n_s : index
+  %rounding = index.add %wg, %cneg1 : index
+  %rounded = index.add %total, %rounding : index
+  %groups = index.div %rounded, %wg : index
+  kernel.launch.config workgroups(%groups, %c1, %c1) workgroup_size(%wg, %c1, %c1) : index
+} launch(%window: buffer, %filter: buffer, %operand: buffer, %output: buffer) {
+  %base = index.constant 0 : offset
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c0_f32 = scalar.constant 0.0 : f32
+
+  %d_conv0 = config.get @llm.ssm_conv.generic.d_conv : index
+  %d_inner0 = config.get @llm.ssm_conv.generic.d_inner : index
+  %n_t0 = config.get @llm.ssm_conv.generic.n_t : index
+  %n_s0 = config.get @llm.ssm_conv.generic.n_s : index
+  %unary_op = config.get @llm.ssm_conv.generic.unary_op : index
+  %binary_op = config.get @llm.ssm_conv.generic.binary_op : index
+  %binary_lhs = config.get @llm.ssm_conv.generic.binary_lhs : index
+  %wg = config.get @llm.ssm_conv.generic.workgroup_size : index
+  %d_conv = index.assume %d_conv0 [range(%d_conv0, 1, 16)] : index
+  %d_inner = index.assume %d_inner0 [range(%d_inner0, 32, 65536), mul(%d_inner0, 32)] : index
+  %n_t = index.assume %n_t0 [range(%n_t0, 1, 512)] : index
+  %n_s = index.assume %n_s0 [range(%n_s0, 1, 4)] : index
+
+  %token_span0 = index.mul %d_inner, %n_t : index
+  %token_span = index.assume %token_span0 [range(%token_span0, 32, 33554432), mul(%token_span0, 32)] : index
+  %total0 = index.mul %token_span, %n_s : index
+  %total = index.assume %total0 [range(%total0, 32, 134217728), mul(%total0, 32)] : index
+
+  %group0 = kernel.workgroup.id<x> : index
+  %lane0 = kernel.workitem.id<x> : index
+  %group = index.assume %group0 [range(%group0, 0, 524287)] : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 255)] : index
+  %base_idx0 = index.mul %group, %wg : index
+  %linear0 = index.add %base_idx0, %lane : index
+  %linear = index.assume %linear0 [range(%linear0, 0, 134217983)] : index
+  %in_bounds = index.cmp ult, %linear, %total : index
+
+  %window_g = buffer.assume.memory_space<global> %window : buffer
+  %filter_g = buffer.assume.memory_space<global> %filter : buffer
+  %operand_g = buffer.assume.memory_space<global> %operand : buffer
+  %output_g = buffer.assume.memory_space<global> %output : buffer
+  %window_na, %filter_na, %operand_na, %output_na = buffer.assume.noalias %window_g, %filter_g, %operand_g, %output_g : buffer, buffer, buffer, buffer
+  %window_v = buffer.view %window_na[%base] : buffer -> view<1073741824xf32>
+  %filter_v = buffer.view %filter_na[%base] : buffer -> view<1048576xf32>
+  %operand_v = buffer.view %operand_na[%base] : buffer -> view<134217728xf32>
+  %output_v = buffer.view %output_na[%base] : buffer -> view<134217728xf32>
+
+  scf.if %in_bounds {
+    %channel = index.rem %linear, %d_inner : index
+    %linear_div_inner = index.div %linear, %d_inner : index
+    %token = index.rem %linear_div_inner, %n_t : index
+    %sequence = index.div %linear_div_inner, %n_t : index
+
+    %window_rows0 = index.add %n_t, %d_conv : index
+    %window_rows = index.sub %window_rows0, %c1 : index
+    %window_sequence_span0 = index.mul %window_rows, %d_inner : index
+    %window_sequence_span = index.assume %window_sequence_span0 [range(%window_sequence_span0, 32, 34603008), mul(%window_sequence_span0, 32)] : index
+    %window_sequence_base = index.mul %sequence, %window_sequence_span : index
+    %window_channel_base0 = index.mul %channel, %window_rows : index
+    %window_channel_base = index.assume %window_channel_base0 [range(%window_channel_base0, 0, 34603008)] : index
+
+    %filter_channel_base0 = index.mul %channel, %d_conv : index
+    %filter_channel_base = index.assume %filter_channel_base0 [range(%filter_channel_base0, 0, 1048560)] : index
+
+    %acc = scf.for %tap = [%c0 to %d_conv step %c1](%running = %c0_f32 : f32) -> (f32) {
+      %window_row = index.add %token, %tap : index
+      %window_index0 = index.add %window_sequence_base, %window_channel_base : index
+      %window_index1 = index.add %window_index0, %window_row : index
+      %window_index = index.assume %window_index1 [range(%window_index1, 0, 1073741823)] : index
+      %filter_index0 = index.add %filter_channel_base, %tap : index
+      %filter_index = index.assume %filter_index0 [range(%filter_index0, 0, 1048575)] : index
+      %window_value = view.load %window_v[%window_index] : view<1073741824xf32> -> f32
+      %filter_value = view.load %filter_v[%filter_index] : view<1048576xf32> -> f32
+      %product = scalar.mulf %window_value, %filter_value : f32
+      %next = scalar.addf %running, %product : f32
+      scf.yield %next : f32
+    }
+    %activated = template.apply<@ggml.unary_f32.apply>(%unary_op, %acc) : (index, f32) -> (f32)
+    %operand_value = view.load %operand_v[%linear] : view<134217728xf32> -> f32
+    %is_lhs = index.cmp eq, %binary_lhs, %c1 : index
+    %lhs = scf.select %is_lhs, %activated, %operand_value : f32
+    %rhs = scf.select %is_lhs, %operand_value, %activated : f32
+    %result = template.apply<@ggml.binary_f32.apply>(%binary_op, %lhs, %rhs) : (index, f32, f32) -> (f32)
+    view.store %result, %output_v[%linear] : f32, view<134217728xf32>
+  }
+  kernel.return
+}
+
+amdgpu.target<gfx11-generic> @llm_ssm_conv_prefill_finish_wave32 {subgroup_size = 32}
+
+kernel.def target(@llm_ssm_conv_prefill_finish_wave32) @llm_ssm_conv_dconv4_silu_prefill_finish_f32() {
+  %width = config.get @llm.ssm_conv.generic.d_inner : index
+  %one = index.constant 1 : index
+  %threads = index.constant 256 : index
+  %round = index.constant 255 : index
+  %rounded = index.add %width, %round : index
+  %groups = index.div %rounded, %threads : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%state: buffer, %filter: buffer, %edges: buffer, %output: buffer, %cache: buffer) {
+  %width = config.get @llm.ssm_conv.generic.d_inner : index
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %two = index.constant 2 : index
+  %three = index.constant 3 : index
+  %four = index.constant 4 : index
+  %five = index.constant 5 : index
+  %threads = index.constant 256 : index
+  %base = index.constant 0 : offset
+  %group = kernel.workgroup.id<x> : index
+  %lane = kernel.workitem.id<x> : index
+  %channel0 = index.madd %group, %threads, %lane : index
+  %valid = index.cmp ult, %channel0, %width : index
+  scf.if %valid {
+    %channel, %bounded_width = index.assume %channel0, %width [lt(%channel0, %width)] : index, index
+    %state_view = buffer.view %state[%base] : buffer -> view<[%bounded_width]x3xf32>
+    %filter_view = buffer.view %filter[%base] : buffer -> view<[%bounded_width]x4xf32>
+    %edge_view = buffer.view %edges[%base] : buffer -> view<[%bounded_width]x6xf32>
+    %output_view = buffer.view %output[%base] : buffer -> view<512x[%bounded_width]xf32>
+    %cache_view = buffer.view %cache[%base] : buffer -> view<[%bounded_width]x3xf32>
+    %s0 = view.load %state_view[%channel, %zero] : view<[%bounded_width]x3xf32> -> f32
+    %s1 = view.load %state_view[%channel, %one] : view<[%bounded_width]x3xf32> -> f32
+    %s2 = view.load %state_view[%channel, %two] : view<[%bounded_width]x3xf32> -> f32
+    %x0 = view.load %edge_view[%channel, %zero] : view<[%bounded_width]x6xf32> -> f32
+    %x1 = view.load %edge_view[%channel, %one] : view<[%bounded_width]x6xf32> -> f32
+    %x2 = view.load %edge_view[%channel, %two] : view<[%bounded_width]x6xf32> -> f32
+    %w0 = view.load %filter_view[%channel, %zero] : view<[%bounded_width]x4xf32> -> f32
+    %w1 = view.load %filter_view[%channel, %one] : view<[%bounded_width]x4xf32> -> f32
+    %w2 = view.load %filter_view[%channel, %two] : view<[%bounded_width]x4xf32> -> f32
+    %w3 = view.load %filter_view[%channel, %three] : view<[%bounded_width]x4xf32> -> f32
+    %a00 = scalar.mulf<nnan|ninf|nsz> %s0, %w0 : f32
+    %a01 = scalar.fmaf<nnan|ninf|nsz> %s1, %w1, %a00 : f32
+    %a02 = scalar.fmaf<nnan|ninf|nsz> %s2, %w2, %a01 : f32
+    %a03 = scalar.fmaf<nnan|ninf|nsz> %x0, %w3, %a02 : f32
+    %y0 = scalar.siluf<afn> %a03 : f32
+    %a10 = scalar.mulf<nnan|ninf|nsz> %s1, %w0 : f32
+    %a11 = scalar.fmaf<nnan|ninf|nsz> %s2, %w1, %a10 : f32
+    %a12 = scalar.fmaf<nnan|ninf|nsz> %x0, %w2, %a11 : f32
+    %a13 = scalar.fmaf<nnan|ninf|nsz> %x1, %w3, %a12 : f32
+    %y1 = scalar.siluf<afn> %a13 : f32
+    %a20 = scalar.mulf<nnan|ninf|nsz> %s2, %w0 : f32
+    %a21 = scalar.fmaf<nnan|ninf|nsz> %x0, %w1, %a20 : f32
+    %a22 = scalar.fmaf<nnan|ninf|nsz> %x1, %w2, %a21 : f32
+    %a23 = scalar.fmaf<nnan|ninf|nsz> %x2, %w3, %a22 : f32
+    %y2 = scalar.siluf<afn> %a23 : f32
+    view.store %y0, %output_view[%zero, %channel] : f32, view<512x[%bounded_width]xf32>
+    view.store %y1, %output_view[%one, %channel] : f32, view<512x[%bounded_width]xf32>
+    view.store %y2, %output_view[%two, %channel] : f32, view<512x[%bounded_width]xf32>
+    %tail0 = view.load %edge_view[%channel, %three] : view<[%bounded_width]x6xf32> -> f32
+    %tail1 = view.load %edge_view[%channel, %four] : view<[%bounded_width]x6xf32> -> f32
+    %tail2 = view.load %edge_view[%channel, %five] : view<[%bounded_width]x6xf32> -> f32
+    view.store %tail0, %cache_view[%channel, %zero] : f32, view<[%bounded_width]x3xf32>
+    view.store %tail1, %cache_view[%channel, %one] : f32, view<[%bounded_width]x3xf32>
+    view.store %tail2, %cache_view[%channel, %two] : f32, view<[%bounded_width]x3xf32>
+  }
+  kernel.return
+}

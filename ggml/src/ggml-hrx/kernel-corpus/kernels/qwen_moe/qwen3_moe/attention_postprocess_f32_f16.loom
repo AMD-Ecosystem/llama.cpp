@@ -25,11 +25,13 @@ config.decl @qwen3_moe.attention.query_size : %value: index where [range(%value,
 
 config.decl @qwen3_moe.attention.key_value_size : %value: index where [range(%value, 1, 262144)]
 
+config.decl @qwen3_moe.attention.rope_mscale : f32
+
 // Applies one RMSNorm and two adjacent NEOX pairs. NEOX pairs corresponding
 // channels from the low and high halves, while keeping each half contiguous.
 // A two-pair packet therefore gives both halves naturally coalesced loads and
 // stores without changing the model's pairing rule.
-func.def inline @qwen3_moe_rmsnorm_neox_packet(%row_sum: f32, %head_size: f32, %epsilon: f32, %position: f32, %inverse_frequencies: vector<2xf32>, %low_values: vector<2xf32>, %high_values: vector<2xf32>, %low_weights: vector<2xf32>, %high_weights: vector<2xf32>) -> (vector<2xf32>, vector<2xf32>) {
+func.def inline @qwen3_moe_rmsnorm_neox_packet(%row_sum: f32, %head_size: f32, %epsilon: f32, %position: f32, %rope_mscale: f32, %inverse_frequencies: vector<2xf32>, %low_values: vector<2xf32>, %high_values: vector<2xf32>, %low_weights: vector<2xf32>, %high_weights: vector<2xf32>) -> (vector<2xf32>, vector<2xf32>) {
   %mean = scalar.divf<reassoc|nnan|ninf|nsz|afn> %row_sum, %head_size : f32
   %biased_mean = scalar.addf<reassoc|nnan|ninf|nsz> %mean, %epsilon : f32
   %scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %biased_mean : f32
@@ -49,8 +51,11 @@ func.def inline @qwen3_moe_rmsnorm_neox_packet(%row_sum: f32, %head_size: f32, %
   %high_sines = vector.mulf<reassoc|nnan|ninf|nsz|contract> %scaled_high, %sines : vector<2xf32>
   %low_sines = vector.mulf<reassoc|nnan|ninf|nsz|contract> %scaled_low, %sines : vector<2xf32>
   %high_cosines = vector.mulf<reassoc|nnan|ninf|nsz|contract> %scaled_high, %cosines : vector<2xf32>
-  %rotated_low = vector.subf<reassoc|nnan|ninf|nsz> %low_cosines, %high_sines : vector<2xf32>
-  %rotated_high = vector.addf<reassoc|nnan|ninf|nsz> %low_sines, %high_cosines : vector<2xf32>
+  %rotated_low0 = vector.subf<reassoc|nnan|ninf|nsz> %low_cosines, %high_sines : vector<2xf32>
+  %rotated_high0 = vector.addf<reassoc|nnan|ninf|nsz> %low_sines, %high_cosines : vector<2xf32>
+  %rope_mscale_vector = vector.splat %rope_mscale : vector<2xf32>
+  %rotated_low = vector.mulf<reassoc|nnan|ninf|nsz|contract> %rotated_low0, %rope_mscale_vector : vector<2xf32>
+  %rotated_high = vector.mulf<reassoc|nnan|ninf|nsz|contract> %rotated_high0, %rope_mscale_vector : vector<2xf32>
   func.return %rotated_low, %rotated_high : vector<2xf32>, vector<2xf32>
 }
 
@@ -61,6 +66,7 @@ template.def<@qwen3_moe.attention.postprocess.head_body> device @qwen3_moe_atten
   %query_size0 = config.get @qwen3_moe.attention.query_size : index
   %key_value_size0 = config.get @qwen3_moe.attention.key_value_size : index
   %head_size0 = config.get @qwen3_moe.attention.head_size : index
+  %rope_mscale = config.get @qwen3_moe.attention.rope_mscale : f32
   %epsilon = config.get @qwen3_moe.model.rms_epsilon : f32
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
   %bounded_cache_row_count = index.assume %cache_row_count [range(%cache_row_count, 1, 1048576)] : index
@@ -141,7 +147,7 @@ template.def<@qwen3_moe.attention.postprocess.head_body> device @qwen3_moe_atten
         %inverse_frequencies_packet = vector.load %inverse_frequencies_view[%pair_channel] : view<[%half_head_size]xf32> -> vector<2xf32>
         %position_i32 = view.load %positions_view[%token] : view<[%launch_token_count]xi32> -> i32
         %position = scalar.sitofp %position_i32 : i32 to f32
-        %rotated_low, %rotated_high = func.call @qwen3_moe_rmsnorm_neox_packet(%row_sum, %head_size_f32, %epsilon, %position, %inverse_frequencies_packet, %low_values, %high_values, %low_weights, %high_weights) : (f32, f32, f32, f32, vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
+        %rotated_low, %rotated_high = func.call @qwen3_moe_rmsnorm_neox_packet(%row_sum, %head_size_f32, %epsilon, %position, %rope_mscale, %inverse_frequencies_packet, %low_values, %high_values, %low_weights, %high_weights) : (f32, f32, f32, f32, f32, vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
         vector.store %rotated_low, %query_output_view[%token, %head_domain, %pair_channel] : vector<2xf32>, view<[%launch_token_count]x[%query_head_count]x[%head_size]xf32>
         vector.store %rotated_high, %query_output_view[%token, %head_domain, %paired_channel] : vector<2xf32>, view<[%launch_token_count]x[%query_head_count]x[%head_size]xf32>
       } else {
@@ -157,7 +163,7 @@ template.def<@qwen3_moe.attention.postprocess.head_body> device @qwen3_moe_atten
           %cache_index_i64 = scalar.assume %cache_index_raw [range(%cache_index_raw, 0, 1048575)] : i64
           %cache_index0 = index.cast %cache_index_i64 : i64 to index
           %cache_index = index.assume %cache_index0 [lt(%cache_index0, %bounded_cache_row_count)] : index
-          %rotated_low, %rotated_high = func.call @qwen3_moe_rmsnorm_neox_packet(%row_sum, %head_size_f32, %epsilon, %position, %inverse_frequencies_packet, %low_values, %high_values, %low_weights, %high_weights) : (f32, f32, f32, f32, vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
+          %rotated_low, %rotated_high = func.call @qwen3_moe_rmsnorm_neox_packet(%row_sum, %head_size_f32, %epsilon, %position, %rope_mscale, %inverse_frequencies_packet, %low_values, %high_values, %low_weights, %high_weights) : (f32, f32, f32, f32, f32, vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
           %half_low = vector.fptrunc %rotated_low : vector<2xf32> to vector<2xf16>
           %half_high = vector.fptrunc %rotated_high : vector<2xf32> to vector<2xf16>
           %packed_low = vector.bitcast %half_low : vector<2xf16> to vector<1xi32>

@@ -3162,12 +3162,14 @@
       "bindings": [
         "route_weights",
         "routed_output",
+        "residual_input",
         "output"
       ],
       "binding_access": [
         "read",
         "read",
-        "read_write"
+        "read",
+        "write"
       ],
       "target_selector": "",
       "compile_recipe": {

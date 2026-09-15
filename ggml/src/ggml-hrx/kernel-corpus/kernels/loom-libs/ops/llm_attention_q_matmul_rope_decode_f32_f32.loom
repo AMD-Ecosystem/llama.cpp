@@ -1,0 +1,78 @@
+template.decl @ggml.mul_mat_f32_f32_decode.dispatch(%weight_format: index, %token_count: index, %input_size: index, %output_size: index, %input: buffer, %weight: buffer, %output: buffer, %aux0: buffer, %aux1: buffer, %aux2: buffer, %aux3: buffer)
+
+template.decl @ggml.mul_mat_f32_f32_decode.publish_pair2(%publish_pair: i1, %token0: index, %channel: index, %token_count0: index, %output_size0: index, %row1_valid: i1, %value0: f32, %value1: f32, %output: buffer, %positions: buffer, %theta: buffer, %freq_factors: buffer, %aux3: buffer)
+
+func.decl @ggml_rope_f32_pair_packet(%position: f32, %theta: vector<2xf32>, %freq_factors: vector<2xf32>, %x_values: vector<2xf32>, %y_values: vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
+
+amdgpu.target<gfx11-generic> @llm_attention_q_matmul_rope_decode_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @llm.attention_qkv.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 32)]
+
+config.decl @llm.attention_qkv.output_size : %value: index where [range(%value, 4, 32768), mul(%value, 4)]
+
+config.decl @llm.attention_qkv.weight_format : %value: index where [range(%value, 4, 81)]
+
+config.decl @llm.attention_qkv.head_size : %value: index where [range(%value, 4, 1024), mul(%value, 4)]
+
+config.decl @llm.attention_qkv.head_count : %value: index where [range(%value, 1, 64)]
+
+config.decl @ggml.workload.token_capacity : %value: index where [range(%value, 1, 2048)]
+
+template.def<@ggml.mul_mat_f32_f32_decode.publish_pair2> device priority(20) @llm_attention_q_matmul_rope_decode_publish_pair2(%publish_pair: i1, %token0: index, %channel: index, %token_count0: index, %output_size0: index, %row1_valid: i1, %value0: f32, %value1: f32, %output: buffer, %positions: buffer, %theta: buffer, %freq_factors: buffer, %aux3: buffer) {
+  %token_count = index.assume %token_count0 [range(%token_count0, 1, 2048)] : index
+  %output_size = index.assume %output_size0 [range(%output_size0, 4, 32768), mul(%output_size0, 4)] : index
+  %head_size0 = config.get @llm.attention_qkv.head_size : index
+  %head_count0 = config.get @llm.attention_qkv.head_count : index
+  %head_size, %head_count = index.assume %head_size0, %head_count0 [range(%head_size0, 4, 1024), mul(%head_size0, 4), range(%head_count0, 1, 64)] : index, index
+  %c0 = index.constant 0 : index
+  %c2 = index.constant 2 : index
+  %c0_offset = index.constant 0 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %publish = scalar.andi %publish_pair, %row1_valid : i1
+  %token, %launch_token_count = index.assume %token0, %token_count [lt(%token0, %token_count)] : index, index
+  %head = index.div %channel, %head_size : index
+  %head_channel = index.rem %channel, %head_size : index
+  %theta_channel = index.div %head_channel, %c2 : index
+  %half_head_size = index.div %head_size, %c2 : index
+  %positions_noalias, %theta_noalias, %freq_factors_noalias, %output_noalias = buffer.assume.noalias %positions, %theta, %freq_factors, %output : buffer, buffer, buffer, buffer
+  scf.if %publish {
+    %positions_view = buffer.view %positions_noalias[%c0_offset] : buffer -> view<[%launch_token_count]xi32>
+    %theta_view = buffer.view %theta_noalias[%c0_offset] : buffer -> view<[%half_head_size]xf32>
+    %freq_factors_view = buffer.view %freq_factors_noalias[%c0_offset] : buffer -> view<[%half_head_size]xf32>
+    %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%head_count]x[%head_size]xf32>
+    %position_i32 = view.load %positions_view[%token] : view<[%launch_token_count]xi32> -> i32
+    %position = scalar.sitofp %position_i32 : i32 to f32
+    %theta_scalar = view.load %theta_view[%theta_channel] : view<[%half_head_size]xf32> -> f32
+    %freq_factors_scalar = view.load %freq_factors_view[%theta_channel] : view<[%half_head_size]xf32> -> f32
+    %theta_packet = vector.splat %theta_scalar : vector<2xf32>
+    %freq_factors_packet = vector.splat %freq_factors_scalar : vector<2xf32>
+    %x_values = vector.from_elements %value0, %c0_f32 : vector<2xf32>
+    %y_values = vector.from_elements %value1, %c0_f32 : vector<2xf32>
+    %rotated_x, %rotated_y = func.call @ggml_rope_f32_pair_packet(%position, %theta_packet, %freq_factors_packet, %x_values, %y_values) : (f32, vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
+    %rx0 = vector.extract %rotated_x[0] : vector<2xf32> -> f32
+    %ry0 = vector.extract %rotated_y[0] : vector<2xf32> -> f32
+    %values = vector.from_elements %rx0, %ry0 : vector<2xf32>
+    vector.store %values, %output_view[%token, %head, %head_channel] : vector<2xf32>, view<[%launch_token_count]x[%head_count]x[%head_size]xf32>
+  }
+  template.return
+}
+
+kernel.def target(@llm_attention_q_matmul_rope_decode_gfx11_wave64) @llm_attention_q_matmul_rope_decode_f32_f32(%token_count: index) {
+  %token_capacity = config.get @ggml.workload.token_capacity : index
+  %output_capacity = config.get @llm.attention_qkv.output_size : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c63 = index.constant 63 : index
+  %c64 = index.constant 64 : index
+  %padded_output_size = index.add %output_capacity, %c1 : index
+  %output_pairs = index.div %padded_output_size, %c2 : index
+  %padded_token_count = index.add %token_capacity, %c63 : index
+  %launch_tokens = index.div %padded_token_count, %c64 : index
+  kernel.launch.config workgroups(%output_pairs, %launch_tokens, %c1) workgroup_size(%c64, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %weight: buffer, %positions: buffer, %theta: buffer, %freq_factors: buffer, %output: buffer) {
+  %input_size = config.get @llm.attention_qkv.input_size : index
+  %output_size = config.get @llm.attention_qkv.output_size : index
+  %weight_format = config.get @llm.attention_qkv.weight_format : index
+  template.apply<@ggml.mul_mat_f32_f32_decode.dispatch>(%weight_format, %token_count, %input_size, %output_size, %input, %weight, %output, %positions, %theta, %freq_factors, %output) : (index, index, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}

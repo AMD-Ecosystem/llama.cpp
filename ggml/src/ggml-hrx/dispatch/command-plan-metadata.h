@@ -16,6 +16,8 @@ namespace ggml::hrx {
 enum class GeneratedResourceRole {
     MoeExpertTable,
     MoePartitionTable,
+    F16K16Major,
+    Conv4Edges,
 };
 
 enum class CommandPlanResourceMetadataKind {

@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <sstream>
 #include <string>
 #include <utility>
 
@@ -16,9 +17,16 @@ static constexpr KernelCatalogRef kFlashAttentionF32F16WmmaKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_f32_f16_wmma");
 static constexpr KernelCatalogRef kFlashAttentionDecodeSplitNextQ8Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_decode_split_f32_f16_wmma_next_q8");
-static constexpr int64_t kDecodeHeadSize    = 128;
-static constexpr int64_t kDecodeRowCapacity = 16;
-static constexpr int64_t kDecodeKvTileSize  = 64;
+static constexpr KernelCatalogRef kCopyTransposeF16Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_copy_transpose_f16");
+static constexpr int64_t kDecodeRowCapacity         = 16;
+static constexpr int64_t kDecodeKvTileSize          = 64;
+static constexpr int64_t kPrefillQkHeadSizeBlock    = 16;
+static constexpr int64_t kPrefillValueHeadSizeBlock = 64;
+static constexpr int64_t kPrefillMinQkHeadSize      = kPrefillQkHeadSizeBlock;
+static constexpr int64_t kPrefillMinValueHeadSize   = kPrefillValueHeadSizeBlock;
+// Current cap keeps full-head Q/K staging within the kernel's fixed LDS budget.
+static constexpr int64_t kPrefillMaxHeadSize        = 512;
 
 static const Value * graph_value(const Graph & graph, ValueId id) {
     return graph.values().find(id);
@@ -48,8 +56,14 @@ static bool is_supported_head_count(int64_t head_count) {
     return head_count >= 1 && head_count <= 64;
 }
 
-static bool is_supported_head_size(int64_t head_size) {
-    return head_size == 64 || head_size == 128;
+static bool is_supported_qk_head_size(int64_t head_size) {
+    return head_size >= kPrefillMinQkHeadSize && head_size <= kPrefillMaxHeadSize &&
+           head_size % kPrefillQkHeadSizeBlock == 0;
+}
+
+static bool is_supported_value_head_size(int64_t head_size) {
+    return head_size >= kPrefillMinValueHeadSize && head_size <= kPrefillMaxHeadSize &&
+           head_size % kPrefillValueHeadSizeBlock == 0;
 }
 
 static bool has_query_layout(const Value & value, int64_t query_head_count, int64_t head_size) {
@@ -77,14 +91,12 @@ static bool has_output_layout(const Value & value, int64_t query_head_count, int
            value.nb[2] == static_cast<size_t>(query_head_count * head_size) * element_size;
 }
 
-static bool has_flash_attention_params(const GraphNode & node, int64_t head_size) {
+static bool has_flash_attention_params(const GraphNode & node) {
     const FlashAttnExtParams * params = op_params_as<FlashAttnExtParams>(node.params);
     if (params == nullptr) {
         return false;
     }
-    const float expected_scale = 1.0f / std::sqrt(static_cast<float>(head_size));
-    return nearly_equal(params->scale, expected_scale) && nearly_equal(params->max_bias, 0.0f) &&
-           nearly_equal(params->logit_softcap, 0.0f) &&
+    return nearly_equal(params->max_bias, 0.0f) && nearly_equal(params->logit_softcap, 0.0f) &&
            (params->prec == GGML_PREC_DEFAULT || params->prec == GGML_PREC_F32);
 }
 
@@ -103,7 +115,9 @@ static size_t q8_1_x4_byte_count(int64_t row_count, int64_t hidden_size) {
     if (row_count <= 0 || hidden_size <= 0) {
         return 0;
     }
-    return static_cast<size_t>(row_count) * ggml_row_size(GGML_TYPE_Q8_1, hidden_size);
+    // Packed Q8 stores four 32-element blocks in each physical group.
+    const int64_t padded_hidden_size = (hidden_size + 127) / 128 * 128;
+    return static_cast<size_t>(row_count) * ggml_row_size(GGML_TYPE_Q8_1, padded_hidden_size);
 }
 
 static int64_t ceil_div(int64_t value, int64_t divisor) {
@@ -128,7 +142,10 @@ struct FlashAttentionMatch {
     int64_t           key_value_token_count = 0;
     int64_t           query_head_count      = 0;
     int64_t           key_value_head_count  = 0;
-    int64_t           head_size             = 0;
+    int64_t           qk_head_size          = 0;
+    int64_t           value_head_size       = 0;
+    float             attention_scale       = 0.0f;
+
     bool matched() const {
         return query != nullptr && key != nullptr && value != nullptr && mask != nullptr && output != nullptr;
     }
@@ -146,6 +163,9 @@ struct DecodeSplitFlashAttentionMatch {
     int64_t           key_value_capacity    = 0;
     int64_t           query_head_count      = 0;
     int64_t           key_value_head_count  = 0;
+    int64_t           qk_head_size          = 0;
+    int64_t           value_head_size       = 0;
+    float             attention_scale       = 0.0f;
 
     bool matched() const {
         return query != nullptr && key != nullptr && value != nullptr && mask != nullptr && output != nullptr;
@@ -172,12 +192,13 @@ static FlashAttentionMatch match_flash_attention_f32_f16(const Graph &       gra
         mask->type != GGML_TYPE_F16 || output->type != GGML_TYPE_F32) {
         return {};
     }
-    const int64_t head_size = query->ne[0];
-    if (head_size != kDecodeHeadSize || !has_flash_attention_params(*node, kDecodeHeadSize)) {
+    const int64_t qk_head_size    = query->ne[0];
+    const int64_t value_head_size = value->ne[0];
+    if (!is_supported_qk_head_size(qk_head_size) || !is_supported_value_head_size(value_head_size) ||
+        !has_flash_attention_params(*node)) {
         return {};
     }
-    if (query->ne[0] != head_size || key->ne[0] != head_size || value->ne[0] != head_size ||
-        output->ne[0] != head_size) {
+    if (key->ne[0] != qk_head_size || output->ne[0] != value_head_size) {
         return {};
     }
     if (query->ne[3] != 1 || key->ne[3] != 1 || value->ne[3] != 1 || output->ne[3] != 1 || mask->ne[2] != 1 ||
@@ -200,17 +221,19 @@ static FlashAttentionMatch match_flash_attention_f32_f16(const Graph &       gra
         return {};
     }
 
-    int64_t      key_value_token_count = key_value_capacity;
-    ValueId      mask_binding_value    = mask->id;
-    size_t       mask_binding_bytes    = mask->byte_count;
-    const size_t compact_mask_bytes    = attention_mask_byte_count(query_token_count, query_token_count);
-    const auto * compact_mask          = find_alternate_value(plan, mask->id, GGML_TYPE_F16, compact_mask_bytes);
-    const bool   mask_is_compact       = mask->ne[0] == query_token_count;
-    const bool   mask_is_capacity      = mask->ne[0] == key_value_capacity;
+    int64_t      key_value_token_count     = key_value_capacity;
+    ValueId      mask_binding_value        = mask->id;
+    size_t       mask_binding_bytes        = mask->byte_count;
+    bool         mask_binding_is_alternate = false;
+    const size_t compact_mask_bytes        = attention_mask_byte_count(query_token_count, query_token_count);
+    const auto * compact_mask              = find_alternate_value(plan, mask->id, GGML_TYPE_F16, compact_mask_bytes);
+    const bool   mask_is_compact           = mask->ne[0] == query_token_count;
+    const bool   mask_is_capacity          = mask->ne[0] == key_value_capacity;
     if (compact_mask != nullptr && mask_is_capacity && mask->ne[0] > query_token_count) {
-        key_value_token_count = query_token_count;
-        mask_binding_value    = compact_mask->alternate_value;
-        mask_binding_bytes    = compact_mask->byte_count;
+        key_value_token_count     = query_token_count;
+        mask_binding_value        = compact_mask->alternate_value;
+        mask_binding_bytes        = compact_mask->byte_count;
+        mask_binding_is_alternate = true;
     } else if (!mask_is_compact && !mask_is_capacity) {
         return {};
     }
@@ -218,13 +241,13 @@ static FlashAttentionMatch match_flash_attention_f32_f16(const Graph &       gra
         return {};
     }
 
-    if (!has_query_layout(*query, query_head_count, head_size) ||
-        !has_key_value_layout(*key, key_value_head_count, head_size) ||
-        !has_key_value_layout(*value, key_value_head_count, head_size) ||
-        !has_output_layout(*output, query_head_count, head_size)) {
+    if (!has_query_layout(*query, query_head_count, qk_head_size) ||
+        !has_key_value_layout(*key, key_value_head_count, qk_head_size) ||
+        !has_key_value_layout(*value, key_value_head_count, value_head_size) ||
+        !has_output_layout(*output, query_head_count, value_head_size)) {
         return {};
     }
-    if (mask_binding_value == mask->id && !has_mask_layout(*mask, key_value_token_count)) {
+    if (!mask_binding_is_alternate && !has_mask_layout(*mask, key_value_token_count)) {
         return {};
     }
 
@@ -240,7 +263,9 @@ static FlashAttentionMatch match_flash_attention_f32_f16(const Graph &       gra
     match.key_value_token_count = key_value_token_count;
     match.query_head_count      = query_head_count;
     match.key_value_head_count  = key_value_head_count;
-    match.head_size             = head_size;
+    match.qk_head_size          = qk_head_size;
+    match.value_head_size       = value_head_size;
+    match.attention_scale       = op_params_as<FlashAttnExtParams>(node->params)->scale;
     return match;
 }
 
@@ -264,11 +289,13 @@ static DecodeSplitFlashAttentionMatch match_decode_split_flash_attention_f32_f16
         return {};
     }
 
-    const int64_t head_size = query->ne[0];
-    if (!is_supported_head_size(head_size) || !has_flash_attention_params(*node, head_size)) {
+    const int64_t qk_head_size    = query->ne[0];
+    const int64_t value_head_size = value->ne[0];
+    if (!is_supported_qk_head_size(qk_head_size) || !is_supported_value_head_size(value_head_size) ||
+        !has_flash_attention_params(*node)) {
         return {};
     }
-    if (key->ne[0] != head_size || value->ne[0] != head_size || output->ne[0] != head_size) {
+    if (key->ne[0] != qk_head_size || output->ne[0] != value_head_size) {
         return {};
     }
     if (query->ne[3] != 1 || key->ne[3] != 1 || value->ne[3] != 1 || output->ne[3] != 1 || mask->ne[2] != 1 ||
@@ -291,10 +318,11 @@ static DecodeSplitFlashAttentionMatch match_decode_split_flash_attention_f32_f16
         mask->ne[1] != query_token_count || output->ne[1] != query_head_count || output->ne[2] != query_token_count) {
         return {};
     }
-    if (!has_query_layout(*query, query_head_count, head_size) ||
-        !has_key_value_layout(*key, key_value_head_count, head_size) ||
-        !has_key_value_layout(*value, key_value_head_count, head_size) ||
-        !has_mask_layout(*mask, key_value_token_count) || !has_output_layout(*output, query_head_count, head_size)) {
+    if (!has_query_layout(*query, query_head_count, qk_head_size) ||
+        !has_key_value_layout(*key, key_value_head_count, qk_head_size) ||
+        !has_key_value_layout(*value, key_value_head_count, value_head_size) ||
+        !has_mask_layout(*mask, key_value_token_count) ||
+        !has_output_layout(*output, query_head_count, value_head_size)) {
         return {};
     }
 
@@ -309,25 +337,165 @@ static DecodeSplitFlashAttentionMatch match_decode_split_flash_attention_f32_f16
     match.key_value_capacity    = ceil_div(key_value_token_count, kDecodeKvTileSize) * kDecodeKvTileSize;
     match.query_head_count      = query_head_count;
     match.key_value_head_count  = key_value_head_count;
+    match.qk_head_size          = qk_head_size;
+    match.value_head_size       = value_head_size;
+    match.attention_scale       = op_params_as<FlashAttnExtParams>(node->params)->scale;
     return match;
+}
+
+static std::string to_config_value(float value) {
+    std::ostringstream out;
+    out.precision(9);
+    out << value;
+    return out.str();
 }
 
 static void add_flash_attention_decode_compile_parameters(KernelSpecialization & kernel,
                                                           int64_t                query_head_count,
-                                                          int64_t                key_value_head_count) {
+                                                          int64_t                key_value_head_count,
+                                                          int64_t                qk_head_size,
+                                                          int64_t                value_head_size,
+                                                          float                  attention_scale) {
     kernel.compile_parameters.emplace("ggml.flash_attention.query_head_count", to_config_value(query_head_count));
     kernel.compile_parameters.emplace("ggml.flash_attention.key_value_head_count",
                                       to_config_value(key_value_head_count));
+    kernel.compile_parameters.emplace("ggml.flash_attention.qk_head_size", to_config_value(qk_head_size));
+    kernel.compile_parameters.emplace("ggml.flash_attention.value_head_size", to_config_value(value_head_size));
+    kernel.compile_parameters.emplace("ggml.flash_attention.attention_scale", to_config_value(attention_scale));
 }
 
 static void add_flash_attention_compile_parameters(KernelSpecialization & kernel,
                                                    int64_t                query_head_count,
                                                    int64_t                key_value_head_count,
-                                                   int64_t                head_size) {
+                                                   int64_t                qk_head_size,
+                                                   int64_t                value_head_size,
+                                                   float                  attention_scale,
+                                                   bool                   apply_gate,
+                                                   int64_t                gate_stride_head,
+                                                   int64_t                gate_stride_token) {
     kernel.compile_parameters.emplace("ggml.flash_attention.query_head_count", to_config_value(query_head_count));
     kernel.compile_parameters.emplace("ggml.flash_attention.key_value_head_count",
                                       to_config_value(key_value_head_count));
-    kernel.compile_parameters.emplace("ggml.flash_attention.head_size", to_config_value(head_size));
+    kernel.compile_parameters.emplace("ggml.flash_attention.qk_head_size", to_config_value(qk_head_size));
+    kernel.compile_parameters.emplace("ggml.flash_attention.value_head_size", to_config_value(value_head_size));
+    kernel.compile_parameters.emplace("ggml.flash_attention.attention_scale", to_config_value(attention_scale));
+    kernel.compile_parameters.emplace("ggml.flash_attention.apply_gate", apply_gate ? "1" : "0");
+    kernel.compile_parameters.emplace("ggml.flash_attention.gate_stride_head", to_config_value(gate_stride_head));
+    kernel.compile_parameters.emplace("ggml.flash_attention.gate_stride_token", to_config_value(gate_stride_token));
+}
+
+static const GraphNode * single_consumer_with_op(const Graph & graph, ValueId value, ggml_op op) {
+    const std::vector<const GraphNode *> & consumers = graph.index().consumers(value);
+    return consumers.size() == 1 && consumers.front() != nullptr && consumers.front()->op == op ? consumers.front() :
+                                                                                                  nullptr;
+}
+
+static DispatchBinding prepare_flash_attention_value(const DispatchMatchContext & context,
+                                                     const FlashAttentionMatch & match,
+                                                     DispatchMatch & dispatch_match,
+                                                     KernelSpecialization & attention) {
+    if (match.query_token_count < 256 || match.key_value_token_count < 512 ||
+        match.key_value_token_count % 32 != 0) {
+        return { match.value->id, 0, match.value->byte_count };
+    }
+
+    const int64_t columns = match.key_value_head_count * match.value_head_size;
+    const size_t bytes = static_cast<size_t>(match.key_value_token_count * columns) * sizeof(ggml_fp16_t);
+    const ValueId transposed = match_value(context, dispatch_match, 0);
+    dispatch_match.transients.push_back({ transposed, "common.flash_attention.transposed_value", bytes, 256 });
+
+    Dispatch copy;
+    copy.kernel = make_kernel_specialization(kCopyTransposeF16Kernel);
+    copy.kernel.compile_parameters.emplace("ggml.copy_transpose_f16.row_count", to_config_value(match.key_value_token_count));
+    copy.kernel.compile_parameters.emplace("ggml.copy_transpose_f16.column_count", to_config_value(columns));
+    copy.bindings.push_back({ match.value->id, 0, bytes });
+    copy.bindings.push_back({ transposed, 0, bytes });
+    dispatch_match.dispatches.push_back(std::move(copy));
+    attention.compile_parameters.emplace("ggml.flash_attention.value_layout", "1");
+    return { transposed, 0, bytes };
+}
+
+static bool match_flash_attention_gate_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
+    const FlashAttentionMatch match = match_flash_attention_f32_f16(context.graph, context.plan, context.root_node);
+    if (!match.matched() || match.output_layout == nullptr || match.output_layout->op != GGML_OP_RESHAPE) {
+        return false;
+    }
+
+    const GraphNode * reshape  = match.output_layout;
+    const Value *     reshaped = graph_value(context.graph, reshape->output);
+    const GraphNode * mul =
+        reshaped != nullptr ? single_consumer_with_op(context.graph, reshaped->id, GGML_OP_MUL) : nullptr;
+    if (reshape->inputs.size() != 1 || reshaped == nullptr || mul == nullptr || mul->inputs.size() != 2 ||
+        reshaped->type != GGML_TYPE_F32 || !reshaped->contiguous ||
+        reshaped->ne[0] != match.value_head_size * match.query_head_count ||
+        reshaped->ne[1] != match.query_token_count || reshaped->ne[2] != 1 || reshaped->ne[3] != 1) {
+        return false;
+    }
+
+    ValueId gate_value_id;
+    if (mul->inputs[0] == reshape->output) {
+        gate_value_id = mul->inputs[1];
+    } else if (mul->inputs[1] == reshape->output) {
+        gate_value_id = mul->inputs[0];
+    } else {
+        return false;
+    }
+
+    const GraphNode *   sigmoid        = context.graph.index().producer(gate_value_id);
+    const UnaryParams * sigmoid_params = sigmoid != nullptr ? op_params_as<UnaryParams>(sigmoid->params) : nullptr;
+    if (sigmoid == nullptr || sigmoid->op != GGML_OP_UNARY || sigmoid->inputs.size() != 1 ||
+        sigmoid_params == nullptr || sigmoid_params->op != UnaryKind::Sigmoid ||
+        single_consumer_with_op(context.graph, sigmoid->output, GGML_OP_MUL) != mul) {
+        return false;
+    }
+
+    const GraphNode * cont = context.graph.index().producer(sigmoid->inputs[0]);
+    if (cont == nullptr || cont->op != GGML_OP_CONT || cont->inputs.size() != 1 ||
+        single_consumer_with_op(context.graph, cont->output, GGML_OP_UNARY) != sigmoid) {
+        return false;
+    }
+
+    const GraphNode * gate_view = context.graph.index().producer(cont->inputs[0]);
+    const Value *     raw_gate  = gate_view != nullptr ? graph_value(context.graph, gate_view->output) : nullptr;
+    const Value *     output    = graph_value(context.graph, mul->output);
+    if (gate_view == nullptr || gate_view->op != GGML_OP_VIEW || gate_view->inputs.size() != 1 || raw_gate == nullptr ||
+        output == nullptr || raw_gate->type != GGML_TYPE_F32 || output->type != GGML_TYPE_F32 ||
+        raw_gate->ne[0] != match.value_head_size || raw_gate->ne[1] != match.query_head_count ||
+        raw_gate->ne[2] != match.query_token_count || raw_gate->ne[3] != 1 || raw_gate->nb[0] != sizeof(float) ||
+        output->ne != reshaped->ne || !output->contiguous ||
+        single_consumer_with_op(context.graph, gate_view->output, GGML_OP_CONT) != cont) {
+        return false;
+    }
+    if (output->storage_root == match.query->storage_root || output->storage_root == match.key->storage_root ||
+        output->storage_root == match.value->storage_root || output->storage_root == match.mask->storage_root ||
+        output->storage_root == raw_gate->storage_root) {
+        return false;
+    }
+
+    dispatch_match.covered_nodes.push_back(context.root_index);
+    for (const GraphNode * covered : { reshape, gate_view, cont, sigmoid, mul }) {
+        if (!append_covered_node_index_once(context.graph, context.covered_nodes, covered,
+                                            dispatch_match.covered_nodes)) {
+            return false;
+        }
+    }
+
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(kFlashAttentionF32F16WmmaKernel);
+    dispatch.kernel.integer_parameters.emplace("query_token_count", match.query_token_count);
+    dispatch.kernel.integer_parameters.emplace("key_value_token_count", match.key_value_token_count);
+    add_flash_attention_compile_parameters(dispatch.kernel, match.query_head_count, match.key_value_head_count,
+                                           match.qk_head_size, match.value_head_size, match.attention_scale, true,
+                                           static_cast<int64_t>(raw_gate->nb[1] / sizeof(float)),
+                                           static_cast<int64_t>(raw_gate->nb[2] / sizeof(float)));
+    dispatch.bindings.push_back({ match.query->id, 0, match.query->byte_count });
+    dispatch.bindings.push_back({ match.key->id, 0, match.key->byte_count });
+    dispatch.bindings.push_back(prepare_flash_attention_value(context, match, dispatch_match, dispatch.kernel));
+    dispatch.bindings.push_back({ match.mask_binding_value, 0, match.mask_binding_bytes });
+    dispatch.bindings.push_back({ raw_gate->id, 0, raw_gate->byte_count });
+    dispatch.bindings.push_back({ output->id, 0, output->byte_count });
+    dispatch_match.dispatches.push_back(std::move(dispatch));
+    return true;
 }
 
 static bool match_flash_attention_f32_f16_dispatch(const DispatchMatchContext & context,
@@ -342,11 +510,13 @@ static bool match_flash_attention_f32_f16_dispatch(const DispatchMatchContext & 
     dispatch.kernel.integer_parameters.emplace("query_token_count", match.query_token_count);
     dispatch.kernel.integer_parameters.emplace("key_value_token_count", match.key_value_token_count);
     add_flash_attention_compile_parameters(dispatch.kernel, match.query_head_count, match.key_value_head_count,
-                                           match.head_size);
+                                           match.qk_head_size, match.value_head_size, match.attention_scale, false, 1,
+                                           1);
     dispatch.bindings.push_back({ match.query->id, 0, match.query->byte_count });
     dispatch.bindings.push_back({ match.key->id, 0, match.key->byte_count });
-    dispatch.bindings.push_back({ match.value->id, 0, match.value->byte_count });
+    dispatch.bindings.push_back(prepare_flash_attention_value(context, match, dispatch_match, dispatch.kernel));
     dispatch.bindings.push_back({ match.mask_binding_value, 0, match.mask_binding_bytes });
+    dispatch.bindings.push_back({ match.query->id, 0, match.query->byte_count });
     dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
 
     dispatch_match.covered_nodes.push_back(context.root_index);
@@ -372,12 +542,13 @@ static bool match_flash_attention_decode_split_next_q8_dispatch(const DispatchMa
     const size_t  partial_scalar_count  = static_cast<size_t>(match.key_value_head_count) *
                                         static_cast<size_t>(key_value_block_count) *
                                         static_cast<size_t>(kDecodeRowCapacity);
-    const size_t  partial_value_count  = partial_scalar_count * static_cast<size_t>(kDecodeHeadSize);
+    const size_t  partial_value_count  = partial_scalar_count * static_cast<size_t>(match.value_head_size);
     const size_t  partial_scalar_bytes = partial_scalar_count * sizeof(float);
     const size_t  partial_output_bytes = partial_value_count * sizeof(ggml_fp16_t);
-    const int64_t hidden_size          = match.query_head_count * kDecodeHeadSize;
-    const size_t  q8_row_bytes         = q8_1_x4_byte_count(1, hidden_size);
-    const size_t  q8_output_bytes      = q8_1_x4_byte_count(match.query_token_count, hidden_size);
+    const int64_t query_hidden_size    = match.query_head_count * match.qk_head_size;
+    const int64_t output_hidden_size   = match.query_head_count * match.value_head_size;
+    const size_t  q8_row_bytes         = q8_1_x4_byte_count(1, output_hidden_size);
+    const size_t  q8_output_bytes      = q8_1_x4_byte_count(match.query_token_count, output_hidden_size);
     if (partial_scalar_bytes == 0 || partial_output_bytes == 0 || q8_row_bytes == 0 || q8_output_bytes == 0) {
         return false;
     }
@@ -410,15 +581,16 @@ static bool match_flash_attention_decode_split_next_q8_dispatch(const DispatchMa
         return false;
     }
 
-    const size_t query_row_bytes  = static_cast<size_t>(hidden_size) * sizeof(float);
+    const size_t query_row_bytes  = static_cast<size_t>(query_hidden_size) * sizeof(float);
     const size_t mask_row_bytes   = static_cast<size_t>(match.key_value_token_count) * sizeof(ggml_fp16_t);
-    const size_t output_row_bytes = query_row_bytes;
+    const size_t output_row_bytes = static_cast<size_t>(output_hidden_size) * sizeof(float);
     for (int64_t row = 0; row < match.query_token_count; ++row) {
         Dispatch dispatch;
         dispatch.kernel = make_kernel_specialization(kFlashAttentionDecodeSplitNextQ8Kernel);
         dispatch.kernel.integer_parameters.emplace("key_value_token_count", match.key_value_token_count);
         add_flash_attention_decode_compile_parameters(dispatch.kernel, match.query_head_count,
-                                                      match.key_value_head_count);
+                                                      match.key_value_head_count, match.qk_head_size,
+                                                      match.value_head_size, match.attention_scale);
         dispatch.kernel.compile_parameters.emplace("ggml.flash_attention.decode.key_value_token_capacity",
                                                    to_config_value(match.key_value_capacity));
         dispatch.bindings.push_back(
@@ -450,6 +622,14 @@ static bool match_flash_attention_decode_split_next_q8_dispatch(const DispatchMa
 }  // namespace
 
 void register_flash_attention_dispatches(DispatchRegistryBuilder & registry) {
+    registry.add({
+        "common.flash_attention_f32_f16_gate",
+        GGML_OP_FLASH_ATTN_EXT,
+        DispatchMatchKind::Fused,
+        100,
+        DispatchSource::Common,
+        match_flash_attention_gate_dispatch,
+    });
     registry.add({
         "common.flash_attention_decode_split_next_q8",
         GGML_OP_FLASH_ATTN_EXT,

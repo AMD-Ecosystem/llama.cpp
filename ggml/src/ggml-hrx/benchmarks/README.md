@@ -56,6 +56,23 @@ GGML_HRX_DUMP_COMMAND_PROGRAM_DIR=/tmp/hrx-llama32-tg8-dumps \
   --n-depth 0
 ```
 
+For the Llama 3.2 1B Q4_K_XL decode benchmark, dump the tg32 command program with:
+
+```sh
+GGML_HRX_DUMP_COMMAND_PROGRAM_DIR=/tmp/hrx-llama32-1b-tg32-dumps \
+<build-dir>/bin/llama-bench \
+  --model /home/rsuderman/Downloads/gguf/lemonade/llamacpp-gguf-models/unsloth_Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct-UD-Q4_K_XL.gguf \
+  --device HRX0 \
+  --n-gpu-layers -1 \
+  --batch-size 512 \
+  --ubatch-size 512 \
+  --repetitions 1 \
+  --output jsonl \
+  --n-prompt 0 \
+  --n-gen 32 \
+  --n-depth 0
+```
+
 Then generate the shared model benchmark file and per-scenario sidecars:
 
 ```sh
@@ -64,6 +81,11 @@ ggml/src/ggml-hrx/tools/benchmarks/generate-model-benchmarks.py \
   --scenario-dump pp256=/tmp/hrx-llama32-pp256-dumps \
   --scenario-dump pp512=/tmp/hrx-llama32-pp512-dumps \
   --scenario-dump tg8=/tmp/hrx-llama32-tg8-dumps
+
+ggml/src/ggml-hrx/tools/benchmarks/generate-model-benchmarks.py \
+  --model llama32_1b_q4_k_xl \
+  --scenario tg32 \
+  --dump-dir /tmp/hrx-llama32-1b-tg32-dumps
 ```
 
 Review the generated invoked-kernel set with:
@@ -104,6 +126,19 @@ ggml/src/ggml-hrx/tools/benchmarks/summarize-model-benchmarks.py \
 ```
 
 The summary uses `operation_timing_ns.p50 * count` by default and writes `summary.json` plus `summary.md` next to the runner results.
+
+To map likely fusion opportunities from a command-program dump and the weighted benchmark summary:
+
+```sh
+ggml/src/ggml-hrx/tools/benchmarks/analyze-model-fusion-adjacency.py \
+  --dump-dir /tmp/hrx-llama32-tg8-dumps \
+  --scenario-manifest ggml/src/ggml-hrx/benchmarks/loom/llama32_3b_f16.tg8.json \
+  --summary-json /home/rsuderman/codex/project-workspaces/llama.cpp/gates/hrx-loom-benchmarks/llama32-tg8/summary.json \
+  --output-json /home/rsuderman/codex/project-workspaces/llama.cpp/gates/hrx-loom-benchmarks/llama32-tg8/fusion-adjacency.json \
+  --output-md /home/rsuderman/codex/project-workspaces/llama.cpp/gates/hrx-loom-benchmarks/llama32-tg8/fusion-adjacency.md
+```
+
+The adjacency report uses transient value producer-consumer edges for true data dependencies and sequential cache-update windows for side-effect patterns such as RoPE, SET_ROWS, and decode flash attention.
 
 ## Generating Qwen 30B Benchmarks
 

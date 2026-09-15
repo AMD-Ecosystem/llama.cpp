@@ -5,7 +5,7 @@ template.decl @ggml.binary_f32.apply(%arg0: index, %arg1: f32, %arg2: f32) -> (f
 
 template.decl @ggml.quantize_q8_1_x4.publish_vector4(%arg0: i1, %arg1: offset, %arg2: index, %arg3: vector<4xf32>, %arg4: view<256xf32>, %arg5: view<32xf32>, %arg6: buffer)
 
-template.decl @ggml.rmsnorm_f32.row_scale(%arg0: index, %arg1: index, %arg2: index, %arg3: f32, %arg4: buffer) -> (f32, index, index, i1)
+template.decl @ggml.rmsnorm_f32.row_scale(%arg0: index, %arg1: index, %arg2: index, %arg3: index, %arg4: f32, %arg5: buffer) -> (f32, index, index, i1)
 
 amdgpu.target<gfx11-generic> @ggml_rmsnorm_binary_q8_1_x4_gfx11_wave32 {subgroup_size = 32}
 
@@ -22,13 +22,22 @@ kernel.decl @ggml_quantize_q8_1_x4_f32(%token_count$28: index, %input_size$29: i
 kernel.def target(@ggml_rmsnorm_binary_q8_1_x4_gfx11_wave32) export("ggml_rmsnorm_binary_q8_1_x4") @ggml_rmsnorm_binary_q8_1_x4(%token_count: index) {
   %c1 = index.constant 1 : index
   %c256 = index.constant 256 : index
-  kernel.launch.config workgroups(%token_count, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
-} launch(%token_count: index, %input: buffer, %rhs: buffer, %output: buffer) where [range(%token_count, 1, 2048)] {
+  %hidden = config.get @ggml.rmsnorm_binary_q8_1_x4.hidden_size : index
+  %tile_width = index.constant 1024 : index
+  %tile_round = index.constant 1023 : index
+  %decode_limit = index.constant 6 : index
+  %rounded_hidden = index.add %hidden, %tile_round : index
+  %stripe_count = index.div %rounded_hidden, %tile_width : index
+  %is_decode = index.cmp ult, %token_count, %decode_limit : index
+  %groups_per_row = scf.select %is_decode, %stripe_count, %c1 : index
+  %groups = index.mul %token_count, %groups_per_row : index
+  kernel.launch.config workgroups(%groups, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %rhs: buffer, %output: buffer, %q8_output: buffer) where [range(%token_count, 1, 2048)] {
   %hidden_size0 = config.get @ggml.rmsnorm_binary_q8_1_x4.hidden_size : index
   %epsilon = config.get @ggml.rmsnorm_binary_q8_1_x4.rms_epsilon : f32
   %op = config.get @ggml.rmsnorm_binary_q8_1_x4.op : index
   %hidden_size = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), mul(%hidden_size0, 128)] : index
-  %token0 = kernel.workgroup.id<x> : index
+  %dispatch_group = kernel.workgroup.id<x> : index
   %workitem = kernel.workitem.id<x> : index
   %c0 = index.constant 0 : index
   %c1 = index.constant 1 : index
@@ -36,23 +45,34 @@ kernel.def target(@ggml_rmsnorm_binary_q8_1_x4_gfx11_wave32) export("ggml_rmsnor
   %c128 = index.constant 128 : index
   %c256 = index.constant 256 : index
   %c1024 = index.constant 1024 : index
+  %tile_round = index.constant 1023 : index
+  %decode_limit = index.constant 6 : index
+  %rounded_hidden = index.add %hidden_size, %tile_round : index
+  %stripe_count = index.div %rounded_hidden, %c1024 : index
+  %is_decode = index.cmp ult, %token_count, %decode_limit : index
+  %groups_per_row = scf.select %is_decode, %stripe_count, %c1 : index
+  %token0 = index.div %dispatch_group, %groups_per_row : index
+  %stripe_id = index.rem %dispatch_group, %groups_per_row : index
+  %stripe_start = index.mul %stripe_id, %c1024 : index
+  %stripe_step = index.mul %groups_per_row, %c1024 : index
   %group_bytes = index.constant 144 : offset
   %scratch_d_byte_add = index.constant 1024 : offset
   %scratch_bytes = index.constant 1152 : offset
   %c0_offset = index.constant 0 : offset
   %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
-  %input_noalias, %rhs_noalias, %output_noalias = buffer.assume.noalias %input, %rhs, %output : buffer, buffer, buffer
-  %row_scale, %token, %launch_token_count, %valid_token = template.apply<@ggml.rmsnorm_f32.row_scale>(%token_count, %token0, %hidden_size, %epsilon, %input_noalias) : (index, index, index, f32, buffer) -> (f32, index, index, i1)
+  %input_noalias, %rhs_noalias, %output_noalias, %q8_output_noalias = buffer.assume.noalias %input, %rhs, %output, %q8_output : buffer, buffer, buffer, buffer
+  %row_scale, %token, %launch_token_count, %valid_token = template.apply<@ggml.rmsnorm_f32.row_scale>(%token_count, %token0, %hidden_size, %hidden_size, %epsilon, %input_noalias) : (index, index, index, index, f32, buffer) -> (f32, index, index, i1)
   %row_scale_vector = vector.splat %row_scale : vector<4xf32>
   %physical_group_count = index.div %hidden_size, %c128 : index
   %row_bytes = index.scale %physical_group_count, %group_bytes : index, offset -> offset
   %token_output_byte_base = index.scale %token, %row_bytes : index, offset -> offset
   %input_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%hidden_size]xf32>
   %rhs_view = buffer.view %rhs_noalias[%c0_offset] : buffer -> view<[%hidden_size]xf32>
+  %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%hidden_size]xf32>
   %scratch = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
   %scratch_values = buffer.view %scratch[%c0_offset] : buffer -> view<256xf32>
   %scratch_d = buffer.view %scratch[%scratch_d_byte_add] : buffer -> view<32xf32>
-  scf.for %stripe_base = [%c0 to %hidden_size step %c1024] {
+  scf.for %stripe_base = [%stripe_start to %hidden_size step %stripe_step] {
     %word_element_add = index.mul %workitem, %c4 : index
     %channel = index.add %stripe_base, %word_element_add : index
     %valid_word0 = index.cmp ult, %channel, %hidden_size : index
@@ -77,7 +97,8 @@ kernel.def target(@ggml_rmsnorm_binary_q8_1_x4_gfx11_wave32) export("ggml_rmsnor
     %packed1 = vector.insert %binary1 into %packed0[1] : f32, vector<4xf32>
     %packed2 = vector.insert %binary2 into %packed1[2] : f32, vector<4xf32>
     %packed = vector.insert %binary3 into %packed2[3] : f32, vector<4xf32>
-    template.apply<@ggml.quantize_q8_1_x4.publish_vector4>(%valid_word, %token_output_byte_base, %channel, %packed, %scratch_values, %scratch_d, %output_noalias) : (i1, offset, index, vector<4xf32>, view<256xf32>, view<32xf32>, buffer)
+    vector.store.mask %packed, %output_view[%token, %channel], %mask : vector<4xf32>, view<[%launch_token_count]x[%hidden_size]xf32>, vector<4xi1>
+    template.apply<@ggml.quantize_q8_1_x4.publish_vector4>(%valid_word, %token_output_byte_base, %channel, %packed, %scratch_values, %scratch_d, %q8_output_noalias) : (i1, offset, index, vector<4xf32>, view<256xf32>, view<32xf32>, buffer)
   }
   kernel.return
 }
@@ -92,7 +113,9 @@ check.case public @ggml_rmsnorm_binary_q8_1_x4_mul_case {
   %actual = check.generate.fill value(1) : tensor<144xi8>
   kernel.launch @ggml_rmsnorm_binary_f32[%token_count](%token_count, %input, %rhs, %f32) : [index](index, tensor<128xf32>, tensor<128xf32>, tensor<128xf32>)
   kernel.launch @ggml_quantize_q8_1_x4_f32[%token_count, %hidden_size](%token_count, %hidden_size, %f32, %expected) : [index, index](index, index, tensor<128xf32>, tensor<144xi8>)
-  kernel.launch @ggml_rmsnorm_binary_q8_1_x4[%token_count](%token_count, %input, %rhs, %actual) : [index](index, tensor<128xf32>, tensor<128xf32>, tensor<144xi8>)
+  %actual_f32 = check.generate.fill value(0.0) : tensor<128xf32>
+  kernel.launch @ggml_rmsnorm_binary_q8_1_x4[%token_count](%token_count, %input, %rhs, %actual_f32, %actual) : [index](index, tensor<128xf32>, tensor<128xf32>, tensor<128xf32>, tensor<144xi8>)
+  check.expect.equal actual(%actual_f32) expected(%f32) : tensor<128xf32>
   check.expect.equal actual(%actual) expected(%expected) : tensor<144xi8>
   check.return
 }

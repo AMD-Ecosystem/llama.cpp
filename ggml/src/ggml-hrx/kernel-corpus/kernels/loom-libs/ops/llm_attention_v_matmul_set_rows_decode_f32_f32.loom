@@ -1,0 +1,94 @@
+template.decl @ggml.mul_mat_f32_f32_decode.dispatch(%weight_format: index, %token_count: index, %input_size: index, %output_size: index, %input: buffer, %weight: buffer, %output: buffer, %aux0: buffer, %aux1: buffer, %aux2: buffer, %aux3: buffer)
+
+template.decl @ggml.mul_mat_f32_f32_decode.publish_pair2(%publish_pair: i1, %token0: index, %channel: index, %token_count0: index, %output_size0: index, %row1_valid: i1, %value0: f32, %value1: f32, %cache: buffer, %indices: buffer, %aux1: buffer, %aux2: buffer, %aux3: buffer)
+
+amdgpu.target<gfx11-generic> @llm_attention_v_matmul_set_rows_decode_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @llm.attention_qkv.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 32)]
+
+config.decl @llm.attention_qkv.output_size : %value: index where [range(%value, 1, 32768)]
+
+config.decl @llm.attention_qkv.weight_format : %value: index where [range(%value, 4, 81)]
+
+config.decl @llm.attention_qkv.cache_row_count : %value: index where [range(%value, 1, 1048576)]
+
+config.decl @llm.attention_qkv.cache_output_format : %value: index where [range(%value, 16, 32)]
+
+config.decl @ggml.workload.token_capacity : %value: index where [range(%value, 1, 2048)]
+
+template.def<@ggml.mul_mat_f32_f32_decode.publish_pair2> device priority(20) @llm_attention_v_matmul_set_rows_decode_publish_pair2(%publish_pair: i1, %token0: index, %channel: index, %token_count0: index, %output_size0: index, %row1_valid: i1, %value0: f32, %value1: f32, %cache: buffer, %indices: buffer, %aux1: buffer, %aux2: buffer, %aux3: buffer) {
+  %token_count = index.assume %token_count0 [range(%token_count0, 1, 2048)] : index
+  %output_size = index.assume %output_size0 [range(%output_size0, 1, 32768)] : index
+  %cache_row_count0 = config.get @llm.attention_qkv.cache_row_count : index
+  %cache_row_count = index.assume %cache_row_count0 [range(%cache_row_count0, 1, 1048576)] : index
+  %cache_output_format = config.get @llm.attention_qkv.cache_output_format : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c0_i64 = scalar.constant 0 : i64
+  %c1048575_i64 = scalar.constant 1048575 : i64
+  %c0_offset = index.constant 0 : offset
+  %token, %launch_token_count = index.assume %token0, %token_count [lt(%token0, %token_count)] : index, index
+  %is_f16 = index.cmp eq, %cache_output_format, %c16 : index
+  %is_f32 = index.cmp eq, %cache_output_format, %c32 : index
+  %indices_noalias, %cache_noalias = buffer.assume.noalias %indices, %cache : buffer, buffer
+  %indices_view = buffer.view %indices_noalias[%c0_offset] : buffer -> view<[%launch_token_count]xi64>
+  %index_raw = view.load %indices_view[%token] : view<[%launch_token_count]xi64> -> i64
+  %index_nonnegative = scalar.cmpi sge, %index_raw, %c0_i64 : i64
+  %index_in_cast_range = scalar.cmpi sle, %index_raw, %c1048575_i64 : i64
+  %valid_index = scalar.andi %index_nonnegative, %index_in_cast_range : i1
+  %safe_index0_i64 = scf.select %valid_index, %index_raw, %c0_i64 : i64
+  %safe_index_i64 = scalar.assume %safe_index0_i64 [range(%safe_index0_i64, 0, 1048575)] : i64
+  %cache_row0 = index.cast %safe_index_i64 : i64 to index
+  %valid_row = index.cmp ult, %cache_row0, %cache_row_count : index
+  %cache_row = scf.select %valid_row, %cache_row0, %c0 : index
+  %publish0 = scalar.andi %publish_pair, %valid_index : i1
+  %publish1 = scalar.andi %publish0, %valid_row : i1
+  %publish_first_f16 = scalar.andi %publish1, %is_f16 : i1
+  %publish_first_f32 = scalar.andi %publish1, %is_f32 : i1
+  %publish_second = scalar.andi %publish1, %row1_valid : i1
+  %publish_second_f16 = scalar.andi %publish_second, %is_f16 : i1
+  %publish_second_f32 = scalar.andi %publish_second, %is_f32 : i1
+  scf.if %publish_first_f16 {
+    %cache_view = buffer.view %cache_noalias[%c0_offset] : buffer -> view<[%cache_row_count]x[%output_size]xf16>
+    %truncated = scalar.fptrunc %value0 : f32 to f16
+    view.store %truncated, %cache_view[%cache_row, %channel] : f16, view<[%cache_row_count]x[%output_size]xf16>
+  }
+  scf.if %publish_first_f32 {
+    %cache_view = buffer.view %cache_noalias[%c0_offset] : buffer -> view<[%cache_row_count]x[%output_size]xf32>
+    view.store %value0, %cache_view[%cache_row, %channel] : f32, view<[%cache_row_count]x[%output_size]xf32>
+  }
+  scf.if %publish_second_f16 {
+    %cache_view = buffer.view %cache_noalias[%c0_offset] : buffer -> view<[%cache_row_count]x[%output_size]xf16>
+    %channel1 = index.add %channel, %c1 : index
+    %truncated = scalar.fptrunc %value1 : f32 to f16
+    view.store %truncated, %cache_view[%cache_row, %channel1] : f16, view<[%cache_row_count]x[%output_size]xf16>
+  }
+  scf.if %publish_second_f32 {
+    %cache_view = buffer.view %cache_noalias[%c0_offset] : buffer -> view<[%cache_row_count]x[%output_size]xf32>
+    %channel1 = index.add %channel, %c1 : index
+    view.store %value1, %cache_view[%cache_row, %channel1] : f32, view<[%cache_row_count]x[%output_size]xf32>
+  }
+  template.return
+}
+
+kernel.def target(@llm_attention_v_matmul_set_rows_decode_gfx11_wave64) @llm_attention_v_matmul_set_rows_decode_f32_f32(%token_count: index) {
+  %token_capacity = config.get @ggml.workload.token_capacity : index
+  %output_capacity = config.get @llm.attention_qkv.output_size : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c63 = index.constant 63 : index
+  %c64 = index.constant 64 : index
+  %padded_output_size = index.add %output_capacity, %c1 : index
+  %output_pairs = index.div %padded_output_size, %c2 : index
+  %padded_token_count = index.add %token_capacity, %c63 : index
+  %launch_tokens = index.div %padded_token_count, %c64 : index
+  kernel.launch.config workgroups(%output_pairs, %launch_tokens, %c1) workgroup_size(%c64, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %weight: buffer, %indices: buffer, %cache: buffer) {
+  %input_size = config.get @llm.attention_qkv.input_size : index
+  %output_size = config.get @llm.attention_qkv.output_size : index
+  %weight_format = config.get @llm.attention_qkv.weight_format : index
+  template.apply<@ggml.mul_mat_f32_f32_decode.dispatch>(%weight_format, %token_count, %input_size, %output_size, %input, %weight, %cache, %indices, %cache, %cache, %cache) : (index, index, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}

@@ -99,6 +99,8 @@ def ceil_div(value: int, divisor: int) -> int:
 def tensor_type_for_format(format_value: int) -> str | None:
     if format_value == 16:
         return "f16"
+    if format_value == 30:
+        return "bf16"
     if format_value == 32:
         return "f32"
     return None
@@ -196,6 +198,35 @@ def case_mul_mat(symbol: str, command: dict[str, Any], kernel: str) -> str | Non
     )
 
 
+def case_mul_mat_add_decode(symbol: str, command: dict[str, Any], kernel: str) -> str | None:
+    token_count = int_param(command, "token_count")
+    input_size = int_param(command, "input_size")
+    output_size = int_param(command, "output_size")
+    weight_format = config_int(command, "ggml.mul_mat_f32_f32_decode.weight_format")
+    weight_type = tensor_type_for_format(weight_format)
+    if weight_type is None:
+        return None
+
+    shape_in = f"{token_count}x{input_size}"
+    shape_weight = f"{output_size}x{input_size}"
+    shape_out = f"{token_count}x{output_size}"
+    return "\n".join(
+        [
+            f"check.case public @{symbol}_case {{",
+            f"  %token_count = check.literal value({token_count}) : index",
+            f"  %input_size = check.literal value({input_size}) : index",
+            f"  %output_size = check.literal value({output_size}) : index",
+            fill_tensor("input", "1.0", shape_in, "f32"),
+            fill_tensor("weight", "1.0", shape_weight, weight_type),
+            fill_tensor("residual_input", "0.25", shape_out, "f32"),
+            fill_tensor("residual_output", "0.0", shape_out, "f32"),
+            f"  kernel.launch @{kernel}[%token_count, %input_size, %output_size](%token_count, %input_size, %output_size, %input, %weight, %residual_input, %residual_output) : [index, index, index](index, index, index, tensor<{shape_in}xf32>, tensor<{shape_weight}x{weight_type}>, tensor<{shape_out}xf32>, tensor<{shape_out}xf32>)",
+            "  check.return",
+            "}",
+        ]
+    )
+
+
 def case_mul_mat_postops(symbol: str, command: dict[str, Any], kernel: str) -> str | None:
     token_count = int_param(command, "token_count")
     input_size = config_int(command, "ggml.mul_mat_postops.input_size")
@@ -253,7 +284,7 @@ def case_mul_mat_postops(symbol: str, command: dict[str, Any], kernel: str) -> s
     )
 
 
-def case_swiglu(symbol: str, command: dict[str, Any]) -> str | None:
+def case_swiglu(symbol: str, command: dict[str, Any], kernel: str) -> str | None:
     token_count = int_param(command, "token_count")
     input_size = config_int(command, "ggml.mul_mat_swiglu.input_size")
     output_size = config_int(command, "ggml.mul_mat_swiglu.output_size")
@@ -274,14 +305,14 @@ def case_swiglu(symbol: str, command: dict[str, Any]) -> str | None:
             fill_tensor("gate_weight", "1.0", shape_weight, gate_type),
             fill_tensor("up_weight", "1.0", shape_weight, up_type),
             fill_tensor("output", "1.0", shape_out, "f32"),
-            f"  kernel.launch @ggml_mul_mat_swiglu_f32_f32_wmma[%token_count](%token_count, %input, %gate_weight, %up_weight, %output) : [index](index, tensor<{shape_in}xf32>, tensor<{shape_weight}x{gate_type}>, tensor<{shape_weight}x{up_type}>, tensor<{shape_out}xf32>)",
+            f"  kernel.launch @{kernel}[%token_count](%token_count, %input, %gate_weight, %up_weight, %output) : [index](index, tensor<{shape_in}xf32>, tensor<{shape_weight}x{gate_type}>, tensor<{shape_weight}x{up_type}>, tensor<{shape_out}xf32>)",
             "  check.return",
             "}",
         ]
     )
 
 
-def case_llm_attention_q_matmul_rope(symbol: str, command: dict[str, Any]) -> str | None:
+def case_llm_attention_q_matmul_rope(symbol: str, command: dict[str, Any], kernel: str) -> str | None:
     token_count = int_param(command, "token_count")
     input_size = config_int(command, "llm.attention_qkv.input_size")
     output_size = config_int(command, "llm.attention_qkv.output_size")
@@ -305,14 +336,14 @@ def case_llm_attention_q_matmul_rope(symbol: str, command: dict[str, Any]) -> st
             fill_tensor("theta", "0.0", f"{half_head_size}", "f32"),
             fill_tensor("freq_factors", "0.0", f"{half_head_size}", "f32"),
             fill_tensor("output", "0.0", shape_out, "f32"),
-            f"  kernel.launch @llm_attention_q_matmul_rope_f32_f32_wmma[%token_count](%token_count, %input, %weight, %positions, %theta, %freq_factors, %output) : [index](index, tensor<{shape_in}xf32>, tensor<{shape_weight}x{weight_type}>, tensor<{token_count}xi32>, tensor<{half_head_size}xf32>, tensor<{half_head_size}xf32>, tensor<{shape_out}xf32>)",
+            f"  kernel.launch @{kernel}[%token_count](%token_count, %input, %weight, %positions, %theta, %freq_factors, %output) : [index](index, tensor<{shape_in}xf32>, tensor<{shape_weight}x{weight_type}>, tensor<{token_count}xi32>, tensor<{half_head_size}xf32>, tensor<{half_head_size}xf32>, tensor<{shape_out}xf32>)",
             "  check.return",
             "}",
         ]
     )
 
 
-def case_llm_attention_k_matmul_rope_set_rows(symbol: str, command: dict[str, Any]) -> str | None:
+def case_llm_attention_k_matmul_rope_set_rows(symbol: str, command: dict[str, Any], kernel: str) -> str | None:
     token_count = int_param(command, "token_count")
     input_size = config_int(command, "llm.attention_qkv.input_size")
     output_size = config_int(command, "llm.attention_qkv.output_size")
@@ -340,14 +371,14 @@ def case_llm_attention_k_matmul_rope_set_rows(symbol: str, command: dict[str, An
             fill_tensor("theta", "0.0", f"{half_head_size}", "f32"),
             fill_tensor("freq_factors", "0.0", f"{half_head_size}", "f32"),
             fill_tensor("cache", "0.0", cache_shape, cache_type),
-            f"  kernel.launch @llm_attention_k_matmul_rope_set_rows_f32_f32_wmma[%token_count](%token_count, %input, %weight, %positions, %indices, %theta, %freq_factors, %cache) : [index](index, tensor<{shape_in}xf32>, tensor<{shape_weight}x{weight_type}>, tensor<{token_count}xi32>, tensor<{token_count}xi64>, tensor<{half_head_size}xf32>, tensor<{half_head_size}xf32>, tensor<{cache_shape}x{cache_type}>)",
+            f"  kernel.launch @{kernel}[%token_count](%token_count, %input, %weight, %positions, %indices, %theta, %freq_factors, %cache) : [index](index, tensor<{shape_in}xf32>, tensor<{shape_weight}x{weight_type}>, tensor<{token_count}xi32>, tensor<{token_count}xi64>, tensor<{half_head_size}xf32>, tensor<{half_head_size}xf32>, tensor<{cache_shape}x{cache_type}>)",
             "  check.return",
             "}",
         ]
     )
 
 
-def case_llm_attention_v_matmul_set_rows(symbol: str, command: dict[str, Any]) -> str | None:
+def case_llm_attention_v_matmul_set_rows(symbol: str, command: dict[str, Any], kernel: str) -> str | None:
     token_count = int_param(command, "token_count")
     input_size = config_int(command, "llm.attention_qkv.input_size")
     output_size = config_int(command, "llm.attention_qkv.output_size")
@@ -369,7 +400,7 @@ def case_llm_attention_v_matmul_set_rows(symbol: str, command: dict[str, Any]) -
             fill_tensor("weight", "1.0", shape_weight, weight_type),
             iota_tensor("indices", "0", "1", f"{token_count}", "i64", period=cache_rows),
             fill_tensor("cache", "0.0", cache_shape, cache_type),
-            f"  kernel.launch @llm_attention_v_matmul_set_rows_f32_f32_wmma[%token_count](%token_count, %input, %weight, %indices, %cache) : [index](index, tensor<{shape_in}xf32>, tensor<{shape_weight}x{weight_type}>, tensor<{token_count}xi64>, tensor<{cache_shape}x{cache_type}>)",
+            f"  kernel.launch @{kernel}[%token_count](%token_count, %input, %weight, %indices, %cache) : [index](index, tensor<{shape_in}xf32>, tensor<{shape_weight}x{weight_type}>, tensor<{token_count}xi64>, tensor<{cache_shape}x{cache_type}>)",
             "  check.return",
             "}",
         ]
@@ -382,25 +413,45 @@ def case_flash_attention(symbol: str, command: dict[str, Any], kernel: str, pref
     if prefix == "ggml":
         query_heads = config_int(command, "ggml.flash_attention.query_head_count")
         kv_heads = config_int(command, "ggml.flash_attention.key_value_head_count")
-        head_size = config_int(command, "ggml.flash_attention.head_size")
+        legacy_head_size = config_int(command, "ggml.flash_attention.head_size", 0)
+        qk_head_size = config_int(command, "ggml.flash_attention.qk_head_size", legacy_head_size)
+        value_head_size = config_int(command, "ggml.flash_attention.value_head_size", qk_head_size)
     else:
         query_heads = config_int(command, f"{prefix}.attention.query_head_count")
         kv_heads = config_int(command, f"{prefix}.attention.key_value_head_count")
-        head_size = 128
-    query_shape = f"{query_tokens}x{query_heads}x{head_size}"
-    kv_shape = f"{kv_tokens}x{kv_heads}x{head_size}"
+        qk_head_size = 128
+        value_head_size = 128
+    query_shape = f"{query_tokens}x{query_heads}x{qk_head_size}"
+    key_shape = f"{kv_tokens}x{kv_heads}x{qk_head_size}"
+    value_shape = f"{kv_tokens}x{kv_heads}x{value_head_size}"
+    output_shape = f"{query_tokens}x{query_heads}x{value_head_size}"
     mask_shape = f"{query_tokens}x{kv_tokens}"
+    if prefix == "ggml":
+        launch = (
+            f"  kernel.launch @{kernel}[%query_token_count, %key_value_token_count]"
+            f"(%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %query, %output)"
+            f" : [index, index](index, index, tensor<{query_shape}xf32>, tensor<{key_shape}xf16>, "
+            f"tensor<{value_shape}xf16>, tensor<{mask_shape}xf16>, tensor<{query_shape}xf32>, "
+            f"tensor<{output_shape}xf32>)"
+        )
+    else:
+        launch = (
+            f"  kernel.launch @{kernel}[%query_token_count, %key_value_token_count]"
+            f"(%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %output)"
+            f" : [index, index](index, index, tensor<{query_shape}xf32>, tensor<{key_shape}xf16>, "
+            f"tensor<{value_shape}xf16>, tensor<{mask_shape}xf16>, tensor<{output_shape}xf32>)"
+        )
     return "\n".join(
         [
             f"check.case public @{symbol}_case {{",
             f"  %query_token_count = check.literal value({query_tokens}) : index",
             f"  %key_value_token_count = check.literal value({kv_tokens}) : index",
             fill_tensor("query", "0.0", query_shape, "f32"),
-            fill_tensor("key", "0.0", kv_shape, "f16"),
-            fill_tensor("value", "0.0", kv_shape, "f16"),
+            fill_tensor("key", "0.0", key_shape, "f16"),
+            fill_tensor("value", "0.0", value_shape, "f16"),
             fill_tensor("mask", "0.0", mask_shape, "f16"),
-            fill_tensor("output", "1.0", query_shape, "f32"),
-            f"  kernel.launch @{kernel}[%query_token_count, %key_value_token_count](%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %output) : [index, index](index, index, tensor<{query_shape}xf32>, tensor<{kv_shape}xf16>, tensor<{kv_shape}xf16>, tensor<{mask_shape}xf16>, tensor<{query_shape}xf32>)",
+            fill_tensor("output", "1.0", output_shape, "f32"),
+            launch,
             "  check.return",
             "}",
         ]
@@ -412,19 +463,22 @@ def case_flash_attention_decode_split(symbol: str, command: dict[str, Any], kern
     kv_capacity = config_int(command, "ggml.flash_attention.decode.key_value_token_capacity")
     query_heads = config_int(command, "ggml.flash_attention.query_head_count")
     kv_heads = config_int(command, "ggml.flash_attention.key_value_head_count")
-    head_size = 128
+    legacy_head_size = config_int(command, "ggml.flash_attention.head_size", 0)
+    qk_head_size = config_int(command, "ggml.flash_attention.qk_head_size", legacy_head_size)
+    value_head_size = config_int(command, "ggml.flash_attention.value_head_size", qk_head_size)
     partial_blocks = ceil_div(kv_capacity, 64)
-    query_shape = f"{query_heads}x{head_size}"
-    kv_shape = f"{kv_tokens}x{kv_heads}x{head_size}"
+    query_shape = f"{query_heads}x{qk_head_size}"
+    key_shape = f"{kv_tokens}x{kv_heads}x{qk_head_size}"
+    value_shape = f"{kv_tokens}x{kv_heads}x{value_head_size}"
     mask_shape = f"{kv_tokens}"
     partial_shape = f"{kv_heads}x{partial_blocks}x16"
-    partial_output_shape = f"{kv_heads}x{partial_blocks}x16x{head_size}"
+    partial_output_shape = f"{kv_heads}x{partial_blocks}x16x{value_head_size}"
     completion_shape = f"{kv_heads}"
-    output_shape = query_shape
+    output_shape = f"{query_heads}x{value_head_size}"
     tensors = [
         fill_tensor("query", "0.0", query_shape, "f32"),
-        fill_tensor("key", "0.0", kv_shape, "f16"),
-        fill_tensor("value", "0.0", kv_shape, "f16"),
+        fill_tensor("key", "0.0", key_shape, "f16"),
+        fill_tensor("value", "0.0", value_shape, "f16"),
         fill_tensor("mask", "0.0", mask_shape, "f16"),
         fill_tensor("partial_max", "0.0", partial_shape, "f32"),
         fill_tensor("partial_sum", "0.0", partial_shape, "f32"),
@@ -447,8 +501,8 @@ def case_flash_attention_decode_split(symbol: str, command: dict[str, Any], kern
     launch_types = [
         "index",
         f"tensor<{query_shape}xf32>",
-        f"tensor<{kv_shape}xf16>",
-        f"tensor<{kv_shape}xf16>",
+        f"tensor<{key_shape}xf16>",
+        f"tensor<{value_shape}xf16>",
         f"tensor<{mask_shape}xf16>",
         f"tensor<{partial_shape}xf32>",
         f"tensor<{partial_shape}xf32>",
@@ -658,6 +712,8 @@ def render_case(symbol: str, command: dict[str, Any], export: dict[str, Any]) ->
         case = case_rmsnorm_binary(symbol, command)
     elif kernel in ("ggml_mul_mat_f32_f32_wmma", "ggml_mul_mat_f32_f32_decode_wave64"):
         case = case_mul_mat(symbol, command, kernel)
+    elif kernel == "ggml_mul_mat_add_f32_f32_decode_wave64":
+        case = case_mul_mat_add_decode(symbol, command, kernel)
     elif kernel in (
         "ggml_mul_mat_bias_f32_f32_wmma",
         "ggml_mul_mat_add_f32_f32_wmma",
@@ -666,14 +722,17 @@ def render_case(symbol: str, command: dict[str, Any], export: dict[str, Any]) ->
         "ggml_mul_mat_bias_add_next_rmsnorm_f32_f32_wmma",
     ):
         case = case_mul_mat_postops(symbol, command, kernel)
-    elif kernel == "ggml_mul_mat_swiglu_f32_f32_wmma":
-        case = case_swiglu(symbol, command)
-    elif kernel == "llm_attention_q_matmul_rope_f32_f32_wmma":
-        case = case_llm_attention_q_matmul_rope(symbol, command)
-    elif kernel == "llm_attention_k_matmul_rope_set_rows_f32_f32_wmma":
-        case = case_llm_attention_k_matmul_rope_set_rows(symbol, command)
-    elif kernel == "llm_attention_v_matmul_set_rows_f32_f32_wmma":
-        case = case_llm_attention_v_matmul_set_rows(symbol, command)
+    elif kernel in ("ggml_mul_mat_swiglu_f32_f32_wmma", "ggml_mul_mat_swiglu_f32_f32_decode_wave64"):
+        case = case_swiglu(symbol, command, kernel)
+    elif kernel in ("llm_attention_q_matmul_rope_f32_f32_wmma", "llm_attention_q_matmul_rope_decode_f32_f32"):
+        case = case_llm_attention_q_matmul_rope(symbol, command, kernel)
+    elif kernel in (
+        "llm_attention_k_matmul_rope_set_rows_f32_f32_wmma",
+        "llm_attention_k_matmul_rope_set_rows_decode_f32_f32",
+    ):
+        case = case_llm_attention_k_matmul_rope_set_rows(symbol, command, kernel)
+    elif kernel in ("llm_attention_v_matmul_set_rows_f32_f32_wmma", "llm_attention_v_matmul_set_rows_decode_f32_f32"):
+        case = case_llm_attention_v_matmul_set_rows(symbol, command, kernel)
     elif kernel == "qwen3_moe_flash_attention_f32_f16_wmma":
         case = case_flash_attention(symbol, command, kernel, "qwen3_moe")
     elif kernel == "ggml_flash_attention_f32_f16_wmma":

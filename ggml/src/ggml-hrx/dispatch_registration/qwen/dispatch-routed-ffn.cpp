@@ -1,6 +1,7 @@
 #include "dispatch-routed-ffn.h"
 
 #include "dispatch-llm-shapes.h"
+#include "dispatch_registration/common/dispatch-mul-mat-weight-format.h"
 #include "ggml.h"
 #include "graph/graph-matcher.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
@@ -14,8 +15,8 @@
 namespace ggml::hrx {
 namespace {
 
-static constexpr KernelCatalogRef kQwenRoutedGateUpSwiGLUQ4KF16WmmaKernel =
-    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_routed_gate_up_swiglu_q4k_f16_wmma");
+static constexpr KernelCatalogRef kCommonRoutedGateUpSwiGLUF16WmmaKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_swiglu_f16_f16_wmma");
 static constexpr KernelCatalogRef kQwenRoutedGateUpSwiGLUQ4KQ8Kernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_routed_gate_up_swiglu_q4k_q8");
 static constexpr KernelCatalogRef kQwenRoutedGateUpSwiGLUQ4KQ8NextQ8Kernel =
@@ -65,7 +66,15 @@ static bool is_profile_rms_norm_epsilon(float eps) {
 }
 
 static bool is_routed_ffn_gate_up_weight(const Value & value) {
-    return value.type == GGML_TYPE_Q4_K && value.contiguous &&
+    return (value.type == GGML_TYPE_Q4_K || value.type == GGML_TYPE_Q6_K) && value.contiguous &&
+           is_shape(value, kRoutedFfnInputSize, kRoutedFfnExpertHiddenSize, kRoutedFfnExpertCount, 1);
+}
+
+static bool is_fast_routed_ffn_gate_up_weight(const Value & value) {
+    const bool supported_type = value.type == GGML_TYPE_Q4_K || value.type == GGML_TYPE_Q6_K ||
+                                value.type == GGML_TYPE_Q8_0 || value.type == GGML_TYPE_Q8_1 ||
+                                value.type == GGML_TYPE_F16;
+    return supported_type && value.contiguous &&
            is_shape(value, kRoutedFfnInputSize, kRoutedFfnExpertHiddenSize, kRoutedFfnExpertCount, 1);
 }
 
@@ -327,6 +336,23 @@ static bool match_same_route_projection(const Graph &     graph,
            is_routed_ffn_projection_output(*output, token_count);
 }
 
+static bool match_same_fast_route_projection(const Graph &     graph,
+                                             const GraphNode & node,
+                                             ValueId           expected_input,
+                                             ValueId           expected_route_ids,
+                                             int64_t           token_count,
+                                             const Value *&    weight,
+                                             const Value *&    output) {
+    if (node.op != GGML_OP_MUL_MAT_ID || node.inputs.size() != 3 || node.inputs[1] != expected_input ||
+        node.inputs[2] != expected_route_ids) {
+        return false;
+    }
+    weight = graph_value(graph, node.inputs[0]);
+    output = graph_value(graph, node.output);
+    return weight != nullptr && output != nullptr && is_fast_routed_ffn_gate_up_weight(*weight) &&
+           is_routed_ffn_projection_output(*output, token_count);
+}
+
 static RoutedDownMatch match_routed_ffn_down_grouped(const DispatchMatchContext & context) {
     RoutedDownMatch   match;
     const GraphNode * root = context.root_node;
@@ -384,7 +410,7 @@ static RoutedGateUpMatch match_routed_ffn_gate_up_swiglu(const DispatchMatchCont
     const Value * route_ids   = graph_value(context.graph, root->inputs[2]);
     const Value * root_output = graph_value(context.graph, root->output);
     if (root_weight == nullptr || input == nullptr || route_ids == nullptr || root_output == nullptr ||
-        !is_routed_ffn_gate_up_weight(*root_weight) || input->type != GGML_TYPE_F32 || !input->contiguous ||
+        !is_fast_routed_ffn_gate_up_weight(*root_weight) || input->type != GGML_TYPE_F32 || !input->contiguous ||
         !is_shape(*input, kRoutedFfnInputSize, 1, input->ne[2], 1) || route_ids->type != GGML_TYPE_I32 ||
         !is_shape(*route_ids, kRoutedFfnRouteCount, input->ne[2], 1, 1)) {
         return {};
@@ -419,10 +445,10 @@ static RoutedGateUpMatch match_routed_ffn_gate_up_swiglu(const DispatchMatchCont
     const Value * gate_output = nullptr;
     const Value * up_weight   = nullptr;
     const Value * up_output   = nullptr;
-    if (!match_same_route_projection(context.graph, *gate_node, input->id, route_ids->id, token_count, gate_weight,
-                                     gate_output) ||
-        !match_same_route_projection(context.graph, *up_node, input->id, route_ids->id, token_count, up_weight,
-                                     up_output)) {
+    if (!match_same_fast_route_projection(context.graph, *gate_node, input->id, route_ids->id, token_count, gate_weight,
+                                          gate_output) ||
+        !match_same_fast_route_projection(context.graph, *up_node, input->id, route_ids->id, token_count, up_weight,
+                                          up_output)) {
         return {};
     }
     if (!same_shape(*gate_output, *up_output)) {
@@ -831,12 +857,22 @@ static WeightedReduceMatch match_routed_ffn_down_weighted_reduce(const DispatchM
     return match;
 }
 
-static bool match_routed_ffn_gate_up_swiglu_q4k_f16_wmma_dispatch(const DispatchMatchContext & context,
-                                                                  DispatchMatch &              dispatch_match) {
+static bool match_routed_ffn_gate_up_swiglu_f16_wmma_dispatch(const DispatchMatchContext & context,
+                                                              DispatchMatch &              dispatch_match) {
     const RoutedGateUpMatch match = match_routed_ffn_gate_up_swiglu(context);
     if (!match.matched()) {
         return false;
     }
+    if (match.gate_weight->type != match.up_weight->type) {
+        return false;
+    }
+
+    CommonMulMatWeightFormat weight_format;
+    if (!common_mul_mat_format_for_type(match.gate_weight->type, weight_format)) {
+        return false;
+    }
+    const std::string weight_format_config = to_config_value(common_mul_mat_format_config_value(weight_format));
+    const std::string config_prefix        = "ggml.mul_mat_id_swiglu_f16_f16";
 
     const ValueId f16_output(context.next_plan_value.value);
     const size_t  f16_output_bytes = f16_gate_up_output_size(match.token_count);
@@ -850,17 +886,18 @@ static bool match_routed_ffn_gate_up_swiglu_q4k_f16_wmma_dispatch(const Dispatch
     }
 
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(kQwenRoutedGateUpSwiGLUQ4KF16WmmaKernel);
+    dispatch.kernel = make_kernel_specialization(kCommonRoutedGateUpSwiGLUF16WmmaKernel);
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
-    dispatch.kernel.compile_parameters.emplace("qwen3_moe.routed_gate_up.input_size",
-                                               to_config_value(kRoutedFfnInputSize));
-    dispatch.kernel.compile_parameters.emplace("qwen3_moe.routed_gate_up.expert_count",
-                                               to_config_value(kRoutedFfnExpertCount));
-    dispatch.kernel.compile_parameters.emplace("qwen3_moe.routed_gate_up.route_count",
-                                               to_config_value(kRoutedFfnRouteCount));
-    dispatch.kernel.compile_parameters.emplace("qwen3_moe.routed_gate_up.output_size",
+    dispatch.kernel.compile_parameters.emplace(config_prefix + ".input_size", to_config_value(kRoutedFfnInputSize));
+    dispatch.kernel.compile_parameters.emplace(config_prefix + ".expert_count", to_config_value(kRoutedFfnExpertCount));
+    dispatch.kernel.compile_parameters.emplace(config_prefix + ".route_count", to_config_value(kRoutedFfnRouteCount));
+    dispatch.kernel.compile_parameters.emplace(config_prefix + ".output_size",
                                                to_config_value(kRoutedFfnExpertHiddenSize));
-    dispatch.kernel.compile_parameters.emplace("qwen3_moe.workload.token_capacity", to_config_value(match.token_count));
+    dispatch.kernel.compile_parameters.emplace(config_prefix + ".gate_weight_format", weight_format_config);
+    dispatch.kernel.compile_parameters.emplace(config_prefix + ".up_weight_format", weight_format_config);
+    dispatch.kernel.compile_parameters.emplace(config_prefix + ".descriptor_expert_mask", "127");
+    dispatch.kernel.compile_parameters.emplace(config_prefix + ".descriptor_partition_shift", "7");
+    dispatch.kernel.compile_parameters.emplace(config_prefix + ".descriptor_row_count_shift", "13");
 
     dispatch.bindings.push_back({ match.input->id, 0, match.input->byte_count });
     dispatch.bindings.push_back(
@@ -1153,6 +1190,7 @@ static bool match_routed_ffn_down_weighted_reduce_dispatch(const DispatchMatchCo
     } else {
         dispatch.bindings.push_back({ match.route_weights->id, 0, match.route_weights->byte_count });
         dispatch.bindings.push_back({ match.routed_alternate->alternate_value, 0, match.routed_alternate->byte_count });
+        dispatch.bindings.push_back({ match.residual_input->id, 0, match.residual_input->byte_count });
         dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
     }
 
@@ -1211,12 +1249,12 @@ void register_routed_ffn_dispatches(DispatchRegistryBuilder & registry) {
         match_decode_routed_ffn_down_next_q8_dispatch,
     });
     registry.add({
-        "llm.routed_ffn.gate_up_swiglu_q4k_f16_wmma",
+        "llm.routed_ffn.gate_up_swiglu_f16_wmma",
         GGML_OP_MUL_MAT_ID,
         DispatchMatchKind::Fused,
         1000,
         DispatchSource::Llm,
-        match_routed_ffn_gate_up_swiglu_q4k_f16_wmma_dispatch,
+        match_routed_ffn_gate_up_swiglu_f16_wmma_dispatch,
     });
     registry.add({
         "llm.routed_ffn.down_q4k_f16_wmma_grouped",

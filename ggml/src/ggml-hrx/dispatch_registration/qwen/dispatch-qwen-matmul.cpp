@@ -493,7 +493,7 @@ void register_qwen_matmul_dispatches(DispatchRegistryBuilder & registry) {
         "qwen.matmul.q6k_q8_1_x4",
         GGML_OP_MUL_MAT,
         DispatchMatchKind::Fused,
-        200,
+        305,
         DispatchSource::Qwen,
         match_qwen_q6k_q8_dispatch,
     });

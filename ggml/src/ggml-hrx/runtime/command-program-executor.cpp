@@ -8,6 +8,10 @@
 #include "runtime/transient-arena.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <limits>
+#include <map>
 #include <sstream>
 #include <unordered_map>
 #include <utility>
@@ -28,8 +32,8 @@ PreparedProgramConstantBuffer::PreparedProgramConstantBuffer(PreparedProgramCons
     other.size = 0;
 }
 
-PreparedProgramConstantBuffer &
-PreparedProgramConstantBuffer::operator=(PreparedProgramConstantBuffer && other) noexcept {
+PreparedProgramConstantBuffer & PreparedProgramConstantBuffer::operator=(
+    PreparedProgramConstantBuffer && other) noexcept {
     if (this != &other) {
         if (buffer != nullptr) {
             hrx_buffer_release(buffer);
@@ -50,11 +54,19 @@ RecordedCommandGraph::~RecordedCommandGraph() {
     if (graph != nullptr) {
         hrx_graph_release(graph);
     }
+    for (hrx_buffer_t buffer : retained_buffers) {
+        hrx_buffer_release(buffer);
+    }
+    for (hrx_executable_t executable : retained_executables) {
+        hrx_executable_release(executable);
+    }
 }
 
 RecordedCommandGraph::RecordedCommandGraph(RecordedCommandGraph && other) noexcept :
     graph(std::exchange(other.graph, nullptr)),
     exec(std::exchange(other.exec, nullptr)),
+    retained_buffers(std::move(other.retained_buffers)),
+    retained_executables(std::move(other.retained_executables)),
     bound_transient_arena_allocation_id(other.bound_transient_arena_allocation_id),
     dispatch_count(other.dispatch_count),
     status(std::move(other.status)) {
@@ -70,8 +82,16 @@ RecordedCommandGraph & RecordedCommandGraph::operator=(RecordedCommandGraph && o
         if (graph != nullptr) {
             hrx_graph_release(graph);
         }
+        for (hrx_buffer_t buffer : retained_buffers) {
+            hrx_buffer_release(buffer);
+        }
+        for (hrx_executable_t executable : retained_executables) {
+            hrx_executable_release(executable);
+        }
         graph                                = std::exchange(other.graph, nullptr);
         exec                                 = std::exchange(other.exec, nullptr);
+        retained_buffers                          = std::move(other.retained_buffers);
+        retained_executables                      = std::move(other.retained_executables);
         bound_transient_arena_allocation_id  = other.bound_transient_arena_allocation_id;
         dispatch_count                       = other.dispatch_count;
         status                               = std::move(other.status);
@@ -86,6 +106,150 @@ namespace {
 static const char * status_first_error(const Status & status) {
     return status.errors().empty() ? "" : status.errors().front().c_str();
 }
+
+static bool environment_flag_enabled(const char * name) {
+    const char * value = std::getenv(name);
+    return value != nullptr && value[0] != '\0' && !(value[0] == '0' && value[1] == '\0');
+}
+
+static size_t environment_size_value(const char * name, size_t fallback) {
+    const char * value = std::getenv(name);
+    if (value == nullptr || value[0] == '\0') {
+        return fallback;
+    }
+    return static_cast<size_t>(std::strtoull(value, nullptr, 0));
+}
+
+static void debug_serial_log(const char * event, const char * phase, const std::string & detail) {
+    std::fprintf(stderr, "hrx debug serial: %s phase=%s", event, phase);
+    if (!detail.empty()) {
+        std::fprintf(stderr, " %s", detail.c_str());
+    }
+    std::fprintf(stderr, "\n");
+    std::fflush(stderr);
+}
+
+class DebugSerialExecutionTrace {
+  public:
+    explicit DebugSerialExecutionTrace(const CommandProgramExecutionContext & context) :
+        context_(context),
+        enabled_(debug_serial_command_execution_enabled()) {}
+
+    DebugSerialExecutionTrace(const CommandProgramExecutionContext & context, const CommandProgram & commands) :
+        DebugSerialExecutionTrace(context) {
+        if (enabled_) {
+            std::ostringstream out;
+            out << "main_commands=" << commands.commands.size()
+                << " init_commands=" << commands.initialization_commands.size()
+                << " transient_arena=" << commands.transients.arena_size;
+            program_detail_ = out.str();
+        }
+    }
+
+    DebugSerialExecutionTrace(const CommandProgramExecutionContext & context,
+                              const PreparedCommandProgram &         commands) :
+        DebugSerialExecutionTrace(context) {
+        if (enabled_) {
+            std::ostringstream out;
+            out << "main_commands=" << commands.commands.size()
+                << " init_commands=" << commands.initialization_commands.size();
+            program_detail_ = out.str();
+        }
+    }
+
+    bool enabled() const {
+        return enabled_;
+    }
+
+    void log_program_begin() const {
+        log("begin", "command-program", program_detail_);
+    }
+
+    void log_program_end(bool success) const {
+        log(success ? "end" : "failed", "command-program", program_detail_);
+    }
+
+    bool sync_program_phase(const char * phase) const {
+        return sync(phase, program_detail_);
+    }
+
+    bool sync(const char * phase, const std::string & detail = {}) const {
+        if (!enabled_) {
+            return true;
+        }
+        log("sync-begin", phase, detail);
+        if (ErrorResult error = take_status(hrx_stream_synchronize(context_.stream))) {
+            GGML_LOG_ERROR("HRX debug serial sync failed phase=%s %s: %s\n", phase, detail.c_str(), error->c_str());
+            return false;
+        }
+        log("sync-end", phase, detail);
+        return true;
+    }
+
+    bool should_trace_program(size_t command_count) const {
+        const char * value = std::getenv("GGML_HRX_DEBUG_SERIAL_PROGRAM_COMMANDS");
+        return value == nullptr || value[0] == '\0' || command_count == std::strtoull(value, nullptr, 0);
+    }
+
+    bool should_trace_command(size_t program_command_count, size_t index) const {
+        if (!should_trace_program(program_command_count)) {
+            return false;
+        }
+        const size_t start = environment_size_value("GGML_HRX_DEBUG_SERIAL_START_COMMAND", 0);
+        const size_t end   = environment_size_value("GGML_HRX_DEBUG_SERIAL_END_COMMAND",
+                                                    std::numeric_limits<size_t>::max());
+        return index >= start && index <= end;
+    }
+
+    void log(const char * event, const char * phase, const std::string & detail = {}) const {
+        if (enabled_) {
+            debug_serial_log(event, phase, detail);
+        }
+    }
+
+    static std::string command_detail(const char *           list_kind,
+                                      size_t                 list_size,
+                                      size_t                 index,
+                                      const PreparedCommand & command) {
+        std::ostringstream out;
+        out << "list=" << list_kind
+            << " index=" << index
+            << " list_commands=" << list_size
+            << " ordinal=" << command.ordinal
+            << " kind=" << command_kind_name(command.kind);
+        if (command.kind == CommandKind::Kernel) {
+            out << " kernel_id=" << command.kernel.specialization.kernel_id
+                << " bindings=" << command.kernel.bindings.size();
+        }
+        return out.str();
+    }
+
+    static std::string list_detail(const char * list_kind, size_t list_size, size_t program_command_count) {
+        std::ostringstream out;
+        out << "list=" << list_kind
+            << " list_commands=" << list_size
+            << " main_commands=" << program_command_count;
+        return out.str();
+    }
+
+    static std::string host_staging_detail(const HostStagingBuffer & staging) {
+        std::ostringstream out;
+        out << "value=" << staging.value << " length=" << staging.length;
+        return out.str();
+    }
+
+  private:
+    const CommandProgramExecutionContext & context_;
+    bool                                   enabled_ = false;
+    std::string                            program_detail_;
+};
+
+#define HRX_DEBUG_SERIAL_SYNC(trace, phase) \
+    do {                                    \
+        if (!(trace).sync_program_phase(phase)) { \
+            return false;                   \
+        }                                   \
+    } while (0)
 
 static bool resource_access_writes(ResourceAccess access) {
     return access == ResourceAccess::Write || access == ResourceAccess::ReadWrite;
@@ -272,7 +436,16 @@ static Dispatch build_dispatch(const ResolvedCommand & command) {
     dispatch.kernel = command.kernel;
     dispatch.bindings.reserve(command.bindings.size());
     for (const ResolvedCommandBinding & binding : command.bindings) {
-        dispatch.bindings.push_back({ binding.binding.value, binding.binding.offset, binding.binding.length });
+        DispatchBinding dispatch_binding;
+        dispatch_binding.value         = binding.binding.value;
+        dispatch_binding.offset        = binding.binding.offset;
+        dispatch_binding.length        = binding.binding.length;
+        dispatch_binding.layout        = binding.binding.layout;
+        dispatch_binding.source_type   = binding.binding.source_type;
+        dispatch_binding.input_size    = binding.binding.input_size;
+        dispatch_binding.output_size   = binding.binding.output_size;
+        dispatch_binding.source_length = binding.binding.source_length;
+        dispatch.bindings.push_back(std::move(dispatch_binding));
     }
     return dispatch;
 }
@@ -280,6 +453,15 @@ static Dispatch build_dispatch(const ResolvedCommand & command) {
 struct GraphValueAccess {
     bool read  = false;
     bool write = false;
+    bool        native_read         = false;
+    bool        transformed_read    = false;
+    bool        layout_conflict     = false;
+    std::string layout              = kNativeWeightLayout;
+    ggml_type   source_type         = GGML_TYPE_COUNT;
+    int64_t     input_size          = 0;
+    int64_t     output_size         = 0;
+    size_t      source_length       = 0;
+    size_t      materialized_length = 0;
 };
 
 static std::unordered_map<int32_t, GraphValueAccess> collect_graph_value_access(const CommandProgram & commands) {
@@ -303,6 +485,38 @@ static std::unordered_map<int32_t, GraphValueAccess> collect_graph_value_access(
                         access.write = true;
                         break;
                 }
+                if (binding.access == ResourceAccess::Write) {
+                    continue;
+                }
+                if (binding.layout == kNativeWeightLayout) {
+                    access.native_read = true;
+                    if (access.transformed_read) {
+                        access.layout_conflict = true;
+                    }
+                    continue;
+                }
+                if (binding.offset != 0 || binding.source_length == 0 || binding.length == 0 ||
+                    binding.source_type == GGML_TYPE_COUNT || binding.input_size <= 0 || binding.output_size <= 0) {
+                    access.layout_conflict = true;
+                    continue;
+                }
+                if (!access.transformed_read) {
+                    access.transformed_read    = true;
+                    access.layout              = binding.layout;
+                    access.source_type         = binding.source_type;
+                    access.input_size          = binding.input_size;
+                    access.output_size         = binding.output_size;
+                    access.source_length       = binding.source_length;
+                    access.materialized_length = binding.length;
+                } else if (access.layout != binding.layout || access.source_type != binding.source_type ||
+                           access.input_size != binding.input_size || access.output_size != binding.output_size ||
+                           access.source_length != binding.source_length ||
+                           access.materialized_length != binding.length) {
+                    access.layout_conflict = true;
+                }
+                if (access.native_read) {
+                    access.layout_conflict = true;
+                }
             }
         }
     };
@@ -320,21 +534,40 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
     materialized.reserve(bindings.bindings().size());
     const std::unordered_map<int32_t, GraphValueAccess> access_by_value = collect_graph_value_access(commands);
     for (const CommandProgramBinding & binding : bindings.bindings()) {
-        if (!binding.requires_materialization()) {
-            materialized.push_back(binding);
-            continue;
-        }
         const auto             found_access = access_by_value.find(binding.value.value);
         const GraphValueAccess access =
             found_access != access_by_value.end() ? found_access->second : GraphValueAccess{};
-        if (binding.weight && access.read && !access.write) {
+        const bool materialize_weight = binding.weight && access.read && !access.write &&
+                                        (binding.requires_materialization() || access.transformed_read);
+        if (binding.length == 0 || (!binding.requires_materialization() && !materialize_weight)) {
+            materialized.push_back(binding);
+            continue;
+        }
+        if (materialize_weight) {
+            if (access.layout_conflict) {
+                status.log("weight value %d has conflicting resident layout requests", binding.value.value);
+                materialized.push_back(binding);
+                continue;
+            }
             HostWeightSource source;
             source.host_data  = binding.host_data;
+            source.device_buffer       = binding.host_data == nullptr ? binding.buffer : nullptr;
             source.identity   = binding.identity;
             source.generation = binding.generation;
             source.capacity   = binding.capacity;
             source.offset     = binding.offset;
-            source.length     = binding.length;
+            source.length              = access.transformed_read ? access.source_length : binding.length;
+            source.materialized_length = access.transformed_read ? access.materialized_length : binding.length;
+            source.layout              = access.layout;
+            source.source_type         = access.source_type;
+            source.input_size          = access.input_size;
+            source.output_size         = access.output_size;
+            if (source.length > binding.length) {
+                status.log("weight value %d layout source length %zu exceeds runtime length %zu", binding.value.value,
+                           source.length, binding.length);
+                materialized.push_back(binding);
+                continue;
+            }
             HostWeightAcquireResult resident =
                 context.host_weights->acquire(context.device, context.stream, *context.host_transfers, source);
             if (!resident.valid()) {
@@ -347,9 +580,15 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
             device_binding.buffer                = resident.lease.buffer();
             device_binding.host_data             = nullptr;
             device_binding.offset                = 0;
-            device_binding.capacity              = binding.length;
+            device_binding.length                = resident.lease.length();
+            device_binding.capacity              = resident.lease.length();
             materialized.push_back(device_binding);
             prepared.resident_host_weights.push_back(std::move(resident.lease));
+            continue;
+        }
+
+        if (binding.host_data == nullptr) {
+            materialized.push_back(binding);
             continue;
         }
 
@@ -365,6 +604,9 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
         staging.host_data                    = static_cast<uint8_t *>(binding.host_data) + binding.offset;
         staging.upload                       = access.read;
         staging.download                     = access.write;
+        if (staging.upload && context.host_buffers != nullptr) {
+            staging.source_host_buffer = context.host_buffers->find(staging.host_data, staging.length);
+        }
         CommandProgramBinding device_binding = binding;
         device_binding.buffer                = staging.buffer;
         device_binding.host_data             = nullptr;
@@ -415,8 +657,7 @@ static Status collect_program_constant_images(const CommandProgram & commands,
             image = &images[found->second];
         }
 
-        std::copy(initialization.data.begin(), initialization.data.end(),
-                  image->data.begin() + initialization.offset);
+        std::copy(initialization.data.begin(), initialization.data.end(), image->data.begin() + initialization.offset);
     }
     return status;
 }
@@ -438,7 +679,8 @@ static Status validate_program_constant_access(const CommandProgram &           
                 }
                 ProgramConstantImage & image = images[found->second];
                 if (resource_access_writes(binding.access)) {
-                    status.log("constant initialization %s is written by command %u; prepared constant buffer copy "
+                    status.log(
+                        "constant initialization %s is written by command %u; prepared constant buffer copy "
                                "support is required",
                                image.name.c_str(), command.ordinal);
                     continue;
@@ -464,8 +706,7 @@ static PreparedProgramConstantBuffer make_program_constant_buffer(ValueId      v
     return result;
 }
 
-static Status bind_prepared_command_list_program_constants(
-    const PreparedCommandProgram &              prepared,
+static Status bind_prepared_command_list_program_constants(const PreparedCommandProgram & prepared,
     std::vector<PreparedCommand> &              prepared_commands) {
     Status status;
     for (PreparedCommand & command : prepared_commands) {
@@ -526,9 +767,8 @@ static Status prepare_program_constant_buffers(const CommandProgramExecutionCont
             continue;
         }
         hrx_buffer_t buffer = nullptr;
-        if (ErrorResult error = take_status(
-                hrx_allocator_allocate_buffer(hrx_device_allocator(context.device), params, image.data.size(),
-                                              &buffer))) {
+        if (ErrorResult error = take_status(hrx_allocator_allocate_buffer(hrx_device_allocator(context.device), params,
+                                                                          image.data.size(), &buffer))) {
             status.log("allocate prepared constant %s: %s", image.name.c_str(), error->c_str());
             continue;
         }
@@ -557,7 +797,9 @@ static Status prepare_program_constant_buffers(const CommandProgramExecutionCont
     return status;
 }
 
-static Status rebind_prepared_host_staging(const CommandProgramBindings & bindings, PreparedCommandProgram & prepared) {
+static Status rebind_prepared_host_staging(const CommandProgramExecutionContext & context,
+                                           const CommandProgramBindings &         bindings,
+                                           PreparedCommandProgram &               prepared) {
     Status status;
     for (HostStagingBuffer & staging : prepared.host_staging) {
         const CommandProgramBinding * binding = bindings.find(ValueId(staging.value));
@@ -567,6 +809,10 @@ static Status rebind_prepared_host_staging(const CommandProgramBindings & bindin
             continue;
         }
         staging.host_data = static_cast<uint8_t *>(binding->host_data) + binding->offset;
+        staging.source_host_buffer = HostBufferRef{};
+        if (staging.upload && context.host_buffers != nullptr) {
+            staging.source_host_buffer = context.host_buffers->find(staging.host_data, staging.length);
+        }
     }
     return status;
 }
@@ -581,13 +827,33 @@ static Status upload_prepared_host_staging(const CommandProgramExecutionContext 
         status.log("missing HRX host transfer manager");
         return status;
     }
+    const DebugSerialExecutionTrace debug(context);
     for (const HostStagingBuffer & staging : prepared.host_staging) {
         if (!staging.upload) {
             continue;
         }
-        Status upload_status =
-            context.host_transfers->upload_async(context.stream, staging.host_data, staging.buffer, 0, staging.length);
+        const std::string detail = debug.enabled() ? DebugSerialExecutionTrace::host_staging_detail(staging) :
+                                                     std::string();
+        if (!debug.sync("host-staging-upload-buffer-pre", detail)) {
+            status.log("debug serial sync before host-staging upload failed for value %d", staging.value);
+            return status;
+        }
+        Status upload_status;
+        if (staging.source_host_buffer.valid()) {
+            if (ErrorResult error = take_status(hrx_stream_copy_buffer(context.stream, staging.source_host_buffer.buffer(),
+                                                                       staging.source_host_buffer.offset(),
+                                                                       staging.buffer, 0, staging.length))) {
+                upload_status.log("HRX host staging buffer copy failed: %s", error->c_str());
+            }
+        } else {
+            upload_status =
+                context.host_transfers->upload_async(context.stream, staging.host_data, staging.buffer, 0, staging.length);
+        }
         status.append(upload_status);
+        if (!debug.sync("host-staging-upload-buffer-post", detail)) {
+            status.log("debug serial sync after host-staging upload failed for value %d", staging.value);
+            return status;
+        }
     }
     return status;
 }
@@ -606,8 +872,8 @@ static Status download_prepared_host_staging(const CommandProgramExecutionContex
         if (!staging.download) {
             continue;
         }
-        Status download_status = context.host_transfers->download_synchronous(
-            context.stream, staging.buffer, 0, staging.host_data, staging.length);
+        Status download_status = context.host_transfers->download_synchronous(context.stream, staging.buffer, 0,
+                                                                              staging.host_data, staging.length);
         status.append(download_status);
     }
     return status;
@@ -759,26 +1025,179 @@ static bool bind_prepared_command_list_transients(const CommandProgram &        
     return true;
 }
 
-static bool execute_prepared_command_list(const CommandProgramExecutionContext & context,
-                                          const std::vector<PreparedCommand> &   commands) {
-    for (const PreparedCommand & command : commands) {
+static bool execute_prepared_command_list_serial(const CommandProgramExecutionContext & context,
+                                                 const std::vector<PreparedCommand> &   commands,
+                                                 const char *                           list_kind,
+                                                 size_t                                 program_command_count) {
+    const DebugSerialExecutionTrace debug(context);
+    const bool trace_list = debug.enabled() && debug.should_trace_program(program_command_count);
+    if (trace_list) {
+        debug.log("begin", "command-list",
+                  DebugSerialExecutionTrace::list_detail(list_kind, commands.size(), program_command_count));
+    }
+    for (size_t i = 0; i < commands.size(); ++i) {
+        const PreparedCommand & command         = commands[i];
+        const bool        trace_command  = debug.enabled() && debug.should_trace_command(program_command_count, i);
+        const std::string command_detail = trace_command ?
+                                               DebugSerialExecutionTrace::command_detail(list_kind, commands.size(), i,
+                                                                                        command) :
+                                               std::string();
+        if (!debug.sync("command-pre-dispatch", command_detail)) {
+            return false;
+        }
+        if (trace_command) {
+            debug.log("begin", "command-dispatch", command_detail);
+        }
         if (!execute_prepared_kernel_command(context, command)) {
             return false;
         }
+        if (trace_command) {
+            debug.log("end", "command-dispatch", command_detail);
+        }
+        if (!debug.sync("command-post-dispatch", command_detail)) {
+            return false;
+        }
+    }
+    if (trace_list) {
+        debug.log("end", "command-list",
+                  DebugSerialExecutionTrace::list_detail(list_kind, commands.size(), program_command_count));
     }
     return true;
 }
 
-struct GraphDependencyChain {
-    hrx_graph_node_t last = nullptr;
+static bool execute_prepared_command_list(const CommandProgramExecutionContext & context,
+                                          const std::vector<PreparedCommand> &   commands) {
+    return execute_prepared_command_list_serial(context, commands, "main", commands.size());
+}
 
-    const hrx_graph_node_t * deps() const { return last == nullptr ? nullptr : &last; }
-    size_t dep_count() const { return last == nullptr ? 0 : 1; }
-    void update(hrx_graph_node_t node) { last = node; }
+struct GraphResourceState {
+    size_t                        end         = 0;
+    hrx_graph_node_t              last_writer = nullptr;
+    std::vector<hrx_graph_node_t> readers;
+};
+
+class GraphDependencyPlanner {
+  public:
+    std::vector<hrx_graph_node_t> dependencies(const std::vector<PreparedCommandBinding> & bindings) const {
+        std::vector<hrx_graph_node_t> result;
+        for (const PreparedCommandBinding & binding : bindings) {
+            collect_dependencies(binding.ref.buffer, binding.ref.offset, binding.ref.length,
+                                 resource_access_writes(binding.binding.access), result);
+        }
+        return result;
+    }
+
+    void record(hrx_graph_node_t node, const std::vector<PreparedCommandBinding> & bindings) {
+        for (const PreparedCommandBinding & binding : bindings) {
+            update(node, binding.ref.buffer, binding.ref.offset, binding.ref.length,
+                   resource_access_writes(binding.binding.access));
+        }
+    }
+
+    void record(hrx_graph_node_t node, hrx_buffer_t buffer, size_t offset, size_t length, bool writes) {
+        update(node, buffer, offset, length, writes);
+    }
+
+  private:
+    using ResourceMap = std::map<size_t, GraphResourceState>;
+
+    static size_t range_end(size_t offset, size_t length) {
+        return length > std::numeric_limits<size_t>::max() - offset ? std::numeric_limits<size_t>::max() :
+                                                                      offset + length;
+    }
+
+    static void append_unique(std::vector<hrx_graph_node_t> & nodes, hrx_graph_node_t node) {
+        if (node != nullptr && std::find(nodes.begin(), nodes.end(), node) == nodes.end()) {
+            nodes.push_back(node);
+        }
+    }
+
+    static void split(ResourceMap & ranges, size_t offset) {
+        auto upper = ranges.upper_bound(offset);
+        if (upper == ranges.begin()) {
+            return;
+        }
+        auto current = std::prev(upper);
+        if (offset <= current->first || offset >= current->second.end) {
+            return;
+        }
+        GraphResourceState right = current->second;
+        current->second.end      = offset;
+        ranges.emplace(offset, std::move(right));
+    }
+
+    void collect_dependencies(hrx_buffer_t                    buffer,
+                              size_t                          offset,
+                              size_t                          length,
+                              bool                            writes,
+                              std::vector<hrx_graph_node_t> & result) const {
+        if (buffer == nullptr || length == 0) {
+            return;
+        }
+        const auto resource = resources_.find(buffer);
+        if (resource == resources_.end()) {
+            return;
+        }
+        const size_t end   = range_end(offset, length);
+        auto         range = resource->second.upper_bound(offset);
+        if (range != resource->second.begin()) {
+            --range;
+            if (range->second.end <= offset) {
+                ++range;
+            }
+        }
+        for (; range != resource->second.end() && range->first < end; ++range) {
+            append_unique(result, range->second.last_writer);
+            if (writes) {
+                for (hrx_graph_node_t reader : range->second.readers) {
+                    append_unique(result, reader);
+                }
+            }
+        }
+    }
+
+    void update(hrx_graph_node_t node, hrx_buffer_t buffer, size_t offset, size_t length, bool writes) {
+        if (buffer == nullptr || length == 0) {
+            return;
+        }
+        const size_t  end    = range_end(offset, length);
+        ResourceMap & ranges = resources_[buffer];
+        split(ranges, offset);
+        split(ranges, end);
+
+        size_t cursor = offset;
+        auto   range  = ranges.lower_bound(offset);
+        while (cursor < end) {
+            if (range == ranges.end() || range->first > cursor) {
+                const size_t       gap_end = range == ranges.end() ? end : std::min(end, range->first);
+                GraphResourceState state;
+                state.end = gap_end;
+                if (writes) {
+                    state.last_writer = node;
+                } else {
+                    state.readers.push_back(node);
+                }
+                ranges.emplace(cursor, std::move(state));
+                cursor = gap_end;
+                continue;
+            }
+
+            if (writes) {
+                range->second.last_writer = node;
+                range->second.readers.clear();
+            } else {
+                append_unique(range->second.readers, node);
+            }
+            cursor = range->second.end;
+            ++range;
+        }
+    }
+
+    std::unordered_map<hrx_buffer_t, ResourceMap> resources_;
 };
 
 static Status record_completion_counter_fill(hrx_graph_t                         graph,
-                                             GraphDependencyChain &              chain,
+                                             GraphDependencyPlanner &            dependencies,
                                              const CommandProgram &              commands,
                                              const TransientArenaAllocationRef & allocation) {
     Status status;
@@ -803,17 +1222,17 @@ static Status record_completion_counter_fill(hrx_graph_t                        
         sizeof(uint32_t),
     };
     hrx_graph_node_t node = nullptr;
-    if (ErrorResult error =
-            take_status(hrx_graph_add_fill_buffer_node(graph, chain.deps(), chain.dep_count(), &attrs, &node))) {
+    if (ErrorResult error = take_status(hrx_graph_add_fill_buffer_node(graph, nullptr, 0, &attrs, &node))) {
         status.log("record completion counter fill: %s", error->c_str());
         return status;
     }
-    chain.update(node);
+    dependencies.record(node, allocation.buffer, commands.completion_counters.arena_offset,
+                        commands.completion_counters.byte_count, true);
     return status;
 }
 
 static Status record_prepared_kernel_command(hrx_graph_t                  graph,
-                                             GraphDependencyChain &       chain,
+                                             GraphDependencyPlanner & dependencies,
                                              const PreparedCommand &      command) {
     Status status;
     const std::string command_context = format_prepared_command_context(command);
@@ -857,23 +1276,24 @@ static Status record_prepared_kernel_command(hrx_graph_t                  graph,
         refs.size(),
         0,
     };
+    const std::vector<hrx_graph_node_t> dependency_nodes = dependencies.dependencies(command.kernel.bindings);
     hrx_graph_node_t node = nullptr;
-    if (ErrorResult error =
-            take_status(hrx_graph_add_kernel_node(graph, chain.deps(), chain.dep_count(), &attrs, &node))) {
+    if (ErrorResult error = take_status(
+            hrx_graph_add_kernel_node(graph, dependency_nodes.data(), dependency_nodes.size(), &attrs, &node))) {
         status.log("record %s: %s", command_context.c_str(), error->c_str());
         return status;
     }
-    chain.update(node);
+    dependencies.record(node, command.kernel.bindings);
     return status;
 }
 
 static Status record_prepared_command_list(hrx_graph_t                        graph,
-                                           GraphDependencyChain &             chain,
+                                           GraphDependencyPlanner &             dependencies,
                                            const std::vector<PreparedCommand> & commands,
                                            size_t &                           dispatch_count) {
     Status status;
     for (const PreparedCommand & command : commands) {
-        Status command_status = record_prepared_kernel_command(graph, chain, command);
+        Status command_status = record_prepared_kernel_command(graph, dependencies, command);
         if (!command_status.success()) {
             status.append(command_status);
             return status;
@@ -881,6 +1301,40 @@ static Status record_prepared_command_list(hrx_graph_t                        gr
         ++dispatch_count;
     }
     return status;
+}
+
+static void retain_prepared_command_list_resources(const std::vector<PreparedCommand> &         commands,
+                                                   std::unordered_map<hrx_buffer_t, bool> &     retained_buffers,
+                                                   std::unordered_map<hrx_executable_t, bool> & retained_executables,
+                                                   RecordedCommandGraph &                       recorded) {
+    for (const PreparedCommand & command : commands) {
+        if (command.kernel.executable != nullptr && command.kernel.executable->executable != nullptr &&
+            retained_executables.emplace(command.kernel.executable->executable, true).second) {
+            hrx_executable_retain(command.kernel.executable->executable);
+            recorded.retained_executables.push_back(command.kernel.executable->executable);
+        }
+        for (const PreparedCommandBinding & binding : command.kernel.bindings) {
+            if (binding.ref.buffer != nullptr && retained_buffers.emplace(binding.ref.buffer, true).second) {
+                hrx_buffer_retain(binding.ref.buffer);
+                recorded.retained_buffers.push_back(binding.ref.buffer);
+            }
+        }
+    }
+}
+
+static void retain_prepared_command_graph_resources(const PreparedCommandProgram &      prepared,
+                                                    const TransientArenaAllocationRef & allocation,
+                                                    RecordedCommandGraph &              recorded) {
+    std::unordered_map<hrx_buffer_t, bool>     retained_buffers;
+    std::unordered_map<hrx_executable_t, bool> retained_executables;
+    if (allocation.buffer != nullptr) {
+        hrx_buffer_retain(allocation.buffer);
+        recorded.retained_buffers.push_back(allocation.buffer);
+        retained_buffers.emplace(allocation.buffer, true);
+    }
+    retain_prepared_command_list_resources(prepared.initialization_commands, retained_buffers, retained_executables,
+                                           recorded);
+    retain_prepared_command_list_resources(prepared.commands, retained_buffers, retained_executables, recorded);
 }
 
 static RecordedCommandGraph record_prepared_command_graph(const CommandProgramExecutionContext & context,
@@ -900,21 +1354,24 @@ static RecordedCommandGraph record_prepared_command_graph(const CommandProgramEx
     }
     recorded.graph = graph;
 
-    GraphDependencyChain chain;
-    recorded.status.append(record_completion_counter_fill(recorded.graph, chain, commands, allocation));
+    GraphDependencyPlanner dependencies;
+    recorded.status.append(record_completion_counter_fill(recorded.graph, dependencies, commands, allocation));
     if (!recorded.status.success()) {
         return recorded;
     }
-    recorded.status.append(record_prepared_command_list(recorded.graph, chain, prepared.initialization_commands,
+    recorded.status.append(record_prepared_command_list(recorded.graph, dependencies, prepared.initialization_commands,
                                                         recorded.dispatch_count));
     if (!recorded.status.success()) {
         return recorded;
     }
-    recorded.status.append(record_prepared_command_list(recorded.graph, chain, prepared.commands,
-                                                        recorded.dispatch_count));
+    recorded.status.append(
+        record_prepared_command_list(recorded.graph, dependencies, prepared.commands, recorded.dispatch_count));
     if (!recorded.status.success()) {
         return recorded;
     }
+
+    // Unretained HRX command buffers require graph-lifetime resources.
+    retain_prepared_command_graph_resources(prepared, allocation, recorded);
 
     hrx_graph_exec_t exec = nullptr;
     if (ErrorResult error = take_status(hrx_graph_instantiate(recorded.graph, 0, &exec))) {
@@ -926,7 +1383,82 @@ static RecordedCommandGraph record_prepared_command_graph(const CommandProgramEx
     return recorded;
 }
 
+static bool execute_prepared_kernel_command_via_graph(const CommandProgramExecutionContext & context,
+                                                      const PreparedCommand &                command) {
+    hrx_graph_t graph = nullptr;
+    if (take_status(hrx_graph_create(context.device, 0, &graph))) {
+        return false;
+    }
+    GraphDependencyPlanner dependencies;
+    Status                 status = record_prepared_kernel_command(graph, dependencies, command);
+    hrx_graph_exec_t       exec   = nullptr;
+    if (status.success()) {
+        if (ErrorResult error = take_status(hrx_graph_instantiate(graph, 0, &exec))) {
+            status.log("instantiate diagnostic graph: %s", error->c_str());
+        }
+    }
+    if (status.success()) {
+        if (ErrorResult error = take_status(hrx_graph_exec_launch(exec, context.stream))) {
+            status.log("launch diagnostic graph: %s", error->c_str());
+        }
+    }
+    if (status.success()) {
+        if (ErrorResult error = take_status(hrx_stream_synchronize(context.stream))) {
+            status.log("synchronize diagnostic graph: %s", error->c_str());
+        }
+    }
+    if (exec != nullptr) {
+        hrx_graph_exec_release(exec);
+    }
+    hrx_graph_release(graph);
+    return status.success();
+}
+
+static bool execute_prepared_command_prefix_via_graph(const CommandProgramExecutionContext & context,
+                                                      const std::vector<PreparedCommand> &   commands,
+                                                      size_t                                 prefix_count) {
+    if (prefix_count == 0 || prefix_count > commands.size()) {
+        return prefix_count == 0;
+    }
+
+    hrx_graph_t graph = nullptr;
+    if (take_status(hrx_graph_create(context.device, 0, &graph))) {
+        return false;
+    }
+    GraphDependencyPlanner dependencies;
+    Status                 status;
+    for (size_t i = 0; i < prefix_count && status.success(); ++i) {
+        status.append(record_prepared_kernel_command(graph, dependencies, commands[i]));
+    }
+
+    hrx_graph_exec_t exec = nullptr;
+    if (status.success()) {
+        if (ErrorResult error = take_status(hrx_graph_instantiate(graph, 0, &exec))) {
+            status.log("instantiate diagnostic prefix graph: %s", error->c_str());
+        }
+    }
+    if (status.success()) {
+        if (ErrorResult error = take_status(hrx_graph_exec_launch(exec, context.stream))) {
+            status.log("launch diagnostic prefix graph: %s", error->c_str());
+        }
+    }
+    if (status.success()) {
+        if (ErrorResult error = take_status(hrx_stream_synchronize(context.stream))) {
+            status.log("synchronize diagnostic prefix graph: %s", error->c_str());
+        }
+    }
+    if (exec != nullptr) {
+        hrx_graph_exec_release(exec);
+    }
+    hrx_graph_release(graph);
+    return status.success();
+}
+
 }  // namespace
+
+bool debug_serial_command_execution_enabled() {
+    return environment_flag_enabled("GGML_HRX_DEBUG_SERIAL_EXECUTION");
+}
 
 PreparedCommandProgram prepare_command_program(const CommandProgramExecutionContext & context,
                                                const CommandProgram &                 commands,
@@ -973,7 +1505,6 @@ PreparedCommandProgram prepare_command_program(const CommandProgramExecutionCont
         prepared.status.append(resolved.status);
         return prepared;
     }
-
     std::vector<KernelExecutableRef> initialization_executable_refs;
     std::vector<KernelExecutableRef> command_executable_refs;
     prepare_command_list(context, resolved.initialization_commands, prepared.initialization_commands,
@@ -1022,24 +1553,38 @@ bool bind_and_execute_prepared_command_program(const CommandProgramExecutionCont
     if (!prepared.valid()) {
         return execute_prepared_command_program(context, prepared);
     }
-    Status rebind_status = rebind_prepared_host_staging(bindings, prepared);
+    const DebugSerialExecutionTrace debug(context, commands);
+    debug.log_program_begin();
+    HRX_DEBUG_SERIAL_SYNC(debug, "host-staging-rebind-pre");
+    Status rebind_status = rebind_prepared_host_staging(context, bindings, prepared);
     if (!rebind_status.success()) {
         GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(rebind_status));
         return false;
     }
+    HRX_DEBUG_SERIAL_SYNC(debug, "host-staging-rebind-post");
     if (commands.transients.arena_size == 0) {
+        HRX_DEBUG_SERIAL_SYNC(debug, "constant-initialization-pre");
         Status status = initialize_command_program_constants(context, commands, {}, prepared);
         if (!status.success()) {
             GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(status));
             return false;
         }
+        HRX_DEBUG_SERIAL_SYNC(debug, "constant-initialization-post");
+        HRX_DEBUG_SERIAL_SYNC(debug, "completion-counter-initialization-pre");
         status = initialize_command_program_completion_counters(context, commands, {});
         if (!status.success()) {
             GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(status));
             return false;
         }
-        return bind_prepared_command_program_transients(commands, {}, prepared) &&
-               execute_prepared_command_program(context, prepared);
+        HRX_DEBUG_SERIAL_SYNC(debug, "completion-counter-initialization-post");
+        HRX_DEBUG_SERIAL_SYNC(debug, "transient-bind-pre");
+        if (!bind_prepared_command_program_transients(commands, {}, prepared)) {
+            return false;
+        }
+        HRX_DEBUG_SERIAL_SYNC(debug, "transient-bind-post");
+        const bool success = execute_prepared_command_program(context, prepared);
+        debug.log_program_end(success);
+        return success;
     }
 
     Status status = command_program_transient_context_valid(context, commands);
@@ -1048,26 +1593,36 @@ bool bind_and_execute_prepared_command_program(const CommandProgramExecutionCont
         return false;
     }
 
+    HRX_DEBUG_SERIAL_SYNC(debug, "transient-arena-acquire-pre");
     TransientArena::AllocationLease lease = context.transient_arena->acquire_allocation_lease();
     status = lease.ensure_capacity(context.device, context.stream, commands.transients.arena_size);
     if (!status.success()) {
         GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(status));
         return false;
     }
+    HRX_DEBUG_SERIAL_SYNC(debug, "transient-arena-acquire-post");
+    HRX_DEBUG_SERIAL_SYNC(debug, "transient-bind-pre");
     if (!bind_prepared_command_program_transients(commands, lease.current_allocation(), prepared)) {
         return false;
     }
+    HRX_DEBUG_SERIAL_SYNC(debug, "transient-bind-post");
+    HRX_DEBUG_SERIAL_SYNC(debug, "constant-initialization-pre");
     status = initialize_command_program_constants(context, commands, lease.current_allocation(), prepared);
     if (!status.success()) {
         GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(status));
         return false;
     }
+    HRX_DEBUG_SERIAL_SYNC(debug, "constant-initialization-post");
+    HRX_DEBUG_SERIAL_SYNC(debug, "completion-counter-initialization-pre");
     status = initialize_command_program_completion_counters(context, commands, lease.current_allocation());
     if (!status.success()) {
         GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(status));
         return false;
     }
-    return execute_prepared_command_program(context, prepared);
+    HRX_DEBUG_SERIAL_SYNC(debug, "completion-counter-initialization-post");
+    const bool success = execute_prepared_command_program(context, prepared);
+    debug.log_program_end(success);
+    return success;
 }
 
 RecordedCommandGraphExecutionResult bind_and_launch_recorded_command_graph(
@@ -1092,7 +1647,7 @@ RecordedCommandGraphExecutionResult bind_and_launch_recorded_command_graph(
         return result;
     }
 
-    Status rebind_status = rebind_prepared_host_staging(bindings, prepared);
+    Status rebind_status = rebind_prepared_host_staging(context, bindings, prepared);
     if (!rebind_status.success()) {
         result.status.append(rebind_status);
         result.event = HrxGraphReplayEvent::BuildFailed;
@@ -1130,11 +1685,79 @@ RecordedCommandGraphExecutionResult bind_and_launch_recorded_command_graph(
     }
 
     const bool had_recorded = recorded.valid();
+
+    const char * diagnostic_kernel = std::getenv("GGML_HRX_DIAGNOSTIC_GRAPH_KERNEL_ID");
+    if (diagnostic_kernel != nullptr && diagnostic_kernel[0] != '\0') {
+        const uint64_t diagnostic_graph_kernel_id = std::strtoull(diagnostic_kernel, nullptr, 0);
+        Status         diagnostic_upload_status   = upload_prepared_host_staging(context, prepared);
+        if (!diagnostic_upload_status.success()) {
+            result.status.append(diagnostic_upload_status);
+            result.event = HrxGraphReplayEvent::LaunchFailed;
+            return result;
+        }
+        auto execute_diagnostic_list = [&](const std::vector<PreparedCommand> & command_list) {
+            for (const PreparedCommand & command : command_list) {
+                const bool ok = (diagnostic_graph_kernel_id == 0 ||
+                                 command.kernel.specialization.kernel_id == diagnostic_graph_kernel_id) ?
+                                    execute_prepared_kernel_command_via_graph(context, command) :
+                                    execute_prepared_kernel_command(context, command);
+                if (!ok) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        if (!execute_diagnostic_list(prepared.initialization_commands) || !execute_diagnostic_list(prepared.commands)) {
+            result.status.log("diagnostic mixed graph execution failed");
+            result.event = HrxGraphReplayEvent::LaunchFailed;
+            return result;
+        }
+        result.success = true;
+        return result;
+    }
+
+    const char * diagnostic_program_size = std::getenv("GGML_HRX_DIAGNOSTIC_GRAPH_PROGRAM_COMMANDS");
+    const char * diagnostic_prefix       = std::getenv("GGML_HRX_DIAGNOSTIC_GRAPH_PREFIX_COMMANDS");
+    if (diagnostic_program_size != nullptr && diagnostic_program_size[0] != '\0' && diagnostic_prefix != nullptr &&
+        diagnostic_prefix[0] != '\0') {
+        const size_t target_size   = std::strtoull(diagnostic_program_size, nullptr, 0);
+        const size_t prefix_size   = std::strtoull(diagnostic_prefix, nullptr, 0);
+        Status       upload_status = upload_prepared_host_staging(context, prepared);
+        if (!upload_status.success()) {
+            result.status.append(upload_status);
+            result.event = HrxGraphReplayEvent::LaunchFailed;
+            return result;
+        }
+
+        bool ok = execute_prepared_command_list(context, prepared.initialization_commands);
+        if (ok && prepared.commands.size() == target_size) {
+            ok = execute_prepared_command_prefix_via_graph(context, prepared.commands, prefix_size);
+            for (size_t i = prefix_size; ok && i < prepared.commands.size(); ++i) {
+                ok = execute_prepared_kernel_command(context, prepared.commands[i]);
+            }
+        } else if (ok) {
+            ok = execute_prepared_command_list(context, prepared.commands);
+        }
+        if (!ok) {
+            result.status.log("diagnostic prefix graph execution failed");
+            result.event = HrxGraphReplayEvent::LaunchFailed;
+            return result;
+        }
+        Status download_status = download_prepared_host_staging(context, prepared);
+        if (!download_status.success()) {
+            result.status.append(download_status);
+            result.event = HrxGraphReplayEvent::LaunchFailed;
+            return result;
+        }
+        result.success = true;
+        return result;
+    }
+
     result.transient_allocation_changed =
         had_recorded && recorded.bound_transient_arena_allocation_id != prepared.bound_transient_arena_allocation_id;
     if (!had_recorded || result.transient_allocation_changed) {
-        result.event =
-            result.transient_allocation_changed ? HrxGraphReplayEvent::RebuildTransient : HrxGraphReplayEvent::MissBuild;
+        result.event = result.transient_allocation_changed ? HrxGraphReplayEvent::RebuildTransient :
+                                                             HrxGraphReplayEvent::MissBuild;
         const uint64_t build_start_ns = hrx_graph_replay_now_ns();
         RecordedCommandGraph rebuilt = record_prepared_command_graph(context, commands, prepared, transient_allocation);
         result.build_ns              = hrx_graph_replay_now_ns() - build_start_ns;
@@ -1162,6 +1785,18 @@ RecordedCommandGraphExecutionResult bind_and_launch_recorded_command_graph(
         result.event = HrxGraphReplayEvent::LaunchFailed;
         return result;
     }
+    const char * diagnostic_sync_size = std::getenv("GGML_HRX_DIAGNOSTIC_GRAPH_SYNC_PROGRAM_COMMANDS");
+    const bool   diagnostic_sync      = std::getenv("GGML_HRX_DIAGNOSTIC_GRAPH_SYNC") != nullptr ||
+                                 (diagnostic_sync_size != nullptr && diagnostic_sync_size[0] != '\0' &&
+                                  recorded.dispatch_count == std::strtoull(diagnostic_sync_size, nullptr, 0));
+    if (diagnostic_sync) {
+        if (ErrorResult error = take_status(hrx_stream_synchronize(context.stream))) {
+            result.launch_ns = hrx_graph_replay_now_ns() - launch_start_ns;
+            result.status.log("synchronize diagnostic graph replay: %s", error->c_str());
+            result.event = HrxGraphReplayEvent::LaunchFailed;
+            return result;
+        }
+    }
     Status download_status = download_prepared_host_staging(context, prepared);
     if (!download_status.success()) {
         result.launch_ns = hrx_graph_replay_now_ns() - launch_start_ns;
@@ -1184,20 +1819,25 @@ bool execute_prepared_command_program(const CommandProgramExecutionContext & con
     if (!prepared_execution_context_valid(context)) {
         return false;
     }
+    const DebugSerialExecutionTrace debug(context, commands);
+    HRX_DEBUG_SERIAL_SYNC(debug, "host-staging-upload-pre");
     Status upload_status = upload_prepared_host_staging(context, commands);
     if (!upload_status.success()) {
         GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(upload_status));
         return false;
     }
-    if (!execute_prepared_command_list(context, commands.initialization_commands) ||
-        !execute_prepared_command_list(context, commands.commands)) {
+    HRX_DEBUG_SERIAL_SYNC(debug, "host-staging-upload-post");
+    if (!execute_prepared_command_list_serial(context, commands.initialization_commands, "init", commands.commands.size()) ||
+        !execute_prepared_command_list_serial(context, commands.commands, "main", commands.commands.size())) {
         return false;
     }
+    HRX_DEBUG_SERIAL_SYNC(debug, "host-staging-download-pre");
     Status download_status = download_prepared_host_staging(context, commands);
     if (!download_status.success()) {
         GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(download_status));
         return false;
     }
+    HRX_DEBUG_SERIAL_SYNC(debug, "host-staging-download-post");
     return true;
 }
 

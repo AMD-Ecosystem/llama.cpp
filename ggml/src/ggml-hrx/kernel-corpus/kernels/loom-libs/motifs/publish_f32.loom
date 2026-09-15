@@ -13,7 +13,7 @@ template.decl @ggml.quantize_q8_1_x4.publish_vector4(%arg0: i1, %arg1: offset, %
 
 template.def<@ggml.publish_f32.f32_vector4> device @ggml_publish_f32_f32_vector4(%publish_word: i1, %token: index, %channel: index, %token_count: index, %hidden_size: index, %values: vector<4xf32>, %output: buffer) {
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
-  %bounded_hidden_size = index.assume %hidden_size [range(%hidden_size, 128, 32768), mul(%hidden_size, 128)] : index
+  %bounded_hidden_size = index.assume %hidden_size [range(%hidden_size, 128, 1073741824), mul(%hidden_size, 128)] : index
   %c0_offset = index.constant 0 : offset
   scf.if %publish_word {
     %output_view = buffer.view %output[%c0_offset] : buffer -> view<[%bounded_token_count]x[%bounded_hidden_size]xf32>

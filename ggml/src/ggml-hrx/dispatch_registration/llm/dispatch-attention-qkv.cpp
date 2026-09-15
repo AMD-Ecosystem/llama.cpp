@@ -1,5 +1,6 @@
 #include "dispatch-attention-qkv.h"
 
+#include "../common/dispatch-mul-mat-common.h"
 #include "ggml.h"
 #include "graph/graph-matcher.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
@@ -20,6 +21,12 @@ static constexpr KernelCatalogRef kAttentionKMatMulRopeSetRowsF32F32WmmaKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_k_matmul_rope_set_rows_f32_f32_wmma");
 static constexpr KernelCatalogRef kAttentionVMatMulSetRowsF32F32WmmaKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_v_matmul_set_rows_f32_f32_wmma");
+static constexpr KernelCatalogRef kAttentionQMatMulRopeF32F32DecodeKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_q_matmul_rope_decode_f32_f32");
+static constexpr KernelCatalogRef kAttentionKMatMulRopeSetRowsF32F32DecodeKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_k_matmul_rope_set_rows_decode_f32_f32");
+static constexpr KernelCatalogRef kAttentionVMatMulSetRowsF32F32DecodeKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_v_matmul_set_rows_decode_f32_f32");
 
 static const Value * graph_value(const Graph & graph, ValueId id) {
     return graph.values().find(id);
@@ -46,12 +53,38 @@ static bool is_supported_dense_input_size(int64_t input_size) {
     return input_size >= 256 && input_size <= 32768 && input_size % 256 == 0;
 }
 
+static bool is_supported_decode_input_size(int64_t input_size) {
+    return input_size >= 256 && input_size <= 32768 && input_size % 32 == 0;
+}
+
 static bool is_supported_dense_output_size(int64_t output_size) {
     return output_size >= 1 && output_size <= 262144;
 }
 
+static bool is_supported_decode_output_size(int64_t output_size) {
+    return output_size >= 1 && output_size <= 32768;
+}
+
 static bool is_supported_prefill_token_count(int64_t token_count) {
     return token_count > 1 && token_count <= 2048;
+}
+
+static bool is_supported_decode_token_count(int64_t token_count) {
+    return token_count == 1;
+}
+
+static bool is_supported_attention_token_count(int64_t token_count) {
+    return is_supported_decode_token_count(token_count) || is_supported_prefill_token_count(token_count);
+}
+
+static bool is_supported_attention_input_size(int64_t input_size, int64_t token_count) {
+    return is_supported_decode_token_count(token_count) ? is_supported_decode_input_size(input_size) :
+                                                          is_supported_dense_input_size(input_size);
+}
+
+static bool is_supported_attention_output_size(int64_t output_size, int64_t token_count) {
+    return is_supported_decode_token_count(token_count) ? is_supported_decode_output_size(output_size) :
+                                                          is_supported_dense_output_size(output_size);
 }
 
 static bool is_supported_attention_cache_row_count(int64_t row_count) {
@@ -65,69 +98,6 @@ static bool same_shape(const Value & lhs, const Value & rhs) {
         }
     }
     return true;
-}
-
-enum class AttentionWeightFormat {
-    Q4K,
-    Q6K,
-    Q8_0,
-    Q8_1,
-    F16,
-    BF16,
-    F32,
-};
-
-static bool format_for_type(ggml_type type, AttentionWeightFormat & format) {
-    switch (type) {
-        case GGML_TYPE_Q4_K:
-            format = AttentionWeightFormat::Q4K;
-            return true;
-        case GGML_TYPE_Q6_K:
-            format = AttentionWeightFormat::Q6K;
-            return true;
-        case GGML_TYPE_Q8_0:
-            format = AttentionWeightFormat::Q8_0;
-            return true;
-        case GGML_TYPE_Q8_1:
-            format = AttentionWeightFormat::Q8_1;
-            return true;
-        case GGML_TYPE_F16:
-            format = AttentionWeightFormat::F16;
-            return true;
-        case GGML_TYPE_BF16:
-            format = AttentionWeightFormat::BF16;
-            return true;
-        case GGML_TYPE_F32:
-            format = AttentionWeightFormat::F32;
-            return true;
-        default:
-            return false;
-    }
-}
-
-static int64_t format_config_value(AttentionWeightFormat format) {
-    switch (format) {
-        case AttentionWeightFormat::Q4K:
-            return 4;
-        case AttentionWeightFormat::Q6K:
-            return 6;
-        case AttentionWeightFormat::Q8_0:
-            return 80;
-        case AttentionWeightFormat::Q8_1:
-            return 81;
-        case AttentionWeightFormat::F16:
-            return 16;
-        case AttentionWeightFormat::BF16:
-            return 17;
-        case AttentionWeightFormat::F32:
-            return 32;
-    }
-    return 0;
-}
-
-static bool is_dense_float_weight_format(AttentionWeightFormat format) {
-    return format == AttentionWeightFormat::F16 || format == AttentionWeightFormat::BF16 ||
-           format == AttentionWeightFormat::F32;
 }
 
 static std::string to_config_value(int64_t value) {
@@ -229,13 +199,13 @@ static const GraphNode * find_only_consumer_after_layout_aliases(const DispatchM
 }
 
 struct AttentionMatMulMatch {
-    const Value *         input         = nullptr;
-    const Value *         weight        = nullptr;
-    const Value *         output        = nullptr;
-    int64_t               input_size    = 0;
-    int64_t               output_size   = 0;
-    int64_t               token_count   = 0;
-    AttentionWeightFormat weight_format = AttentionWeightFormat::Q4K;
+    const Value *            input         = nullptr;
+    const Value *            weight        = nullptr;
+    const Value *            output        = nullptr;
+    int64_t                  input_size    = 0;
+    int64_t                  output_size   = 0;
+    int64_t                  token_count   = 0;
+    CommonMulMatWeightFormat weight_format = CommonMulMatWeightFormat::Q4K;
 
     bool matched() const { return input != nullptr && weight != nullptr && output != nullptr; }
 };
@@ -302,8 +272,8 @@ static AttentionMatMulMatch match_attention_matmul_any_format(const Graph & grap
         return {};
     }
 
-    AttentionWeightFormat format = AttentionWeightFormat::Q4K;
-    if (!format_for_type(weight->type, format)) {
+    CommonMulMatWeightFormat format = CommonMulMatWeightFormat::Q4K;
+    if (!common_mul_mat_format_for_type(weight->type, format)) {
         return {};
     }
 
@@ -311,8 +281,9 @@ static AttentionMatMulMatch match_attention_matmul_any_format(const Graph & grap
     const int64_t output_size = weight->ne[1];
     const int64_t token_count = input->ne[1];
     if (input->ne[0] != input_size || output->ne[0] != output_size || output->ne[1] != token_count ||
-        !is_supported_prefill_token_count(token_count) || !is_supported_dense_input_size(input_size) ||
-        !is_supported_dense_output_size(output_size)) {
+        !is_supported_attention_token_count(token_count) ||
+        !is_supported_attention_input_size(input_size, token_count) ||
+        !is_supported_attention_output_size(output_size, token_count)) {
         return {};
     }
 
@@ -416,8 +387,9 @@ static AttentionSetRowsMatch match_attention_set_rows(const Graph &     graph,
     const int64_t token_count     = rows->ne[1];
     const int64_t cache_row_count = cache->ne[1];
     if (!is_2d_shape(*rows, output_size, token_count) || !is_1d_shape(*indices, token_count) ||
-        !is_2d_shape(*cache, output_size, cache_row_count) || !is_supported_dense_output_size(output_size) ||
-        !is_supported_prefill_token_count(token_count) || !is_supported_attention_cache_row_count(cache_row_count)) {
+        !is_2d_shape(*cache, output_size, cache_row_count) ||
+        !is_supported_attention_output_size(output_size, token_count) ||
+        !is_supported_attention_token_count(token_count) || !is_supported_attention_cache_row_count(cache_row_count)) {
         return {};
     }
 
@@ -465,19 +437,23 @@ static AttentionQkvMatch match_attention_qkv_projection(const DispatchMatchConte
             }
             match.layout_nodes.insert(match.layout_nodes.end(), set_rows_layouts.begin(), set_rows_layouts.end());
             match.root   = root;
-            match.kernel = kAttentionKMatMulRopeSetRowsF32F32WmmaKernel;
+            match.kernel = is_supported_decode_token_count(root.token_count) ?
+                               kAttentionKMatMulRopeSetRowsF32F32DecodeKernel :
+                               kAttentionKMatMulRopeSetRowsF32F32WmmaKernel;
             match.kind   = AttentionQkvProjectionKind::Key;
             return match;
         }
 
         match.root   = root;
-        match.kernel = kAttentionQMatMulRopeF32F32WmmaKernel;
+        match.kernel = is_supported_decode_token_count(root.token_count) ? kAttentionQMatMulRopeF32F32DecodeKernel :
+                                                                           kAttentionQMatMulRopeF32F32WmmaKernel;
         match.kind   = AttentionQkvProjectionKind::Query;
         return match;
     }
 
     if (consumer->op == GGML_OP_SET_ROWS) {
-        if (!is_dense_float_weight_format(root.weight_format)) {
+        if (!is_supported_decode_token_count(root.token_count) &&
+            !common_mul_mat_dense_float_format(root.weight_format)) {
             return {};
         }
         match.set_rows = match_attention_set_rows(context.graph, consumer, after_projection);
@@ -486,7 +462,15 @@ static AttentionQkvMatch match_attention_qkv_projection(const DispatchMatchConte
             return {};
         }
         match.root   = root;
-        match.kernel = kAttentionVMatMulSetRowsF32F32WmmaKernel;
+        match.kernel = is_supported_decode_token_count(root.token_count) ? kAttentionVMatMulSetRowsF32F32DecodeKernel :
+                                                                           kAttentionVMatMulSetRowsF32F32WmmaKernel;
+        if (is_supported_decode_token_count(root.token_count) && root.output_size % 64 == 0 &&
+            root.weight->alias_source.value < 0 &&
+            (root.weight_format == CommonMulMatWeightFormat::Q4K || root.weight_format == CommonMulMatWeightFormat::Q6K)) {
+            match.root.weight_format = root.weight_format == CommonMulMatWeightFormat::Q4K ?
+                                           CommonMulMatWeightFormat::Q4KRow64 : CommonMulMatWeightFormat::Q6KRow64;
+            match.kernel = kAttentionVMatMulSetRowsF32F32WmmaKernel;
+        }
         match.kind   = AttentionQkvProjectionKind::Value;
         return match;
     }
@@ -529,8 +513,15 @@ static void add_attention_qkv_compile_parameters(Dispatch & dispatch, const Atte
     dispatch.kernel.compile_parameters.emplace("llm.attention_qkv.input_size", to_config_value(match.root.input_size));
     dispatch.kernel.compile_parameters.emplace("llm.attention_qkv.output_size",
                                                to_config_value(match.root.output_size));
-    dispatch.kernel.compile_parameters.emplace("llm.attention_qkv.weight_format",
-                                               to_config_value(format_config_value(match.root.weight_format)));
+    if (is_supported_decode_token_count(match.root.token_count)) {
+        dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_f32_f32_decode.token_capacity",
+                                                   to_config_value(match.root.token_count));
+        dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_f32_f32_decode.output_capacity",
+                                                   to_config_value(match.root.output_size));
+    }
+    dispatch.kernel.compile_parameters.emplace(
+        "llm.attention_qkv.weight_format",
+        to_config_value(common_mul_mat_format_config_value(match.root.weight_format)));
     if (match.kind == AttentionQkvProjectionKind::Query || match.kind == AttentionQkvProjectionKind::Key) {
         dispatch.kernel.compile_parameters.emplace("llm.attention_qkv.head_size",
                                                    to_config_value(match.rope.head_size));
@@ -581,8 +572,25 @@ static bool match_attention_qkv_dispatch(const DispatchMatchContext & context, D
     dispatch.kernel = make_kernel_specialization(match.kernel);
     dispatch.kernel.integer_parameters.emplace("token_count", match.root.token_count);
     add_attention_qkv_compile_parameters(dispatch, match);
-    dispatch.bindings.push_back({ match.root.input->id, 0, match.root.input->byte_count });
-    dispatch.bindings.push_back({ match.root.weight->id, 0, match.root.weight->byte_count });
+    const bool pack_q4 = match.root.weight_format == CommonMulMatWeightFormat::Q4KRow64;
+    const bool pack_q6 = match.root.weight_format == CommonMulMatWeightFormat::Q6KRow64;
+    DispatchBinding activation = { match.root.input->id, 0, match.root.input->byte_count };
+    if (pack_q4 || pack_q6) {
+        if (!common_prepare_q8_1_x4_input(context, *match.root.input, match.root.input_size, match.root.token_count,
+                                         dispatch_match, activation)) {
+            return false;
+        }
+        dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.activation_format", std::to_string(GGML_TYPE_Q8_1));
+    }
+    dispatch.bindings.push_back(activation);
+    if (pack_q4 || pack_q6) {
+        const char * layout = pack_q4 ? kQ4KPackedK256Row64Layout : kQ6KPackedK256Row64ScaleRowLayout;
+        dispatch.bindings.push_back({ match.root.weight->id, 0, match.root.weight->byte_count, layout,
+                                      match.root.weight->type, match.root.input_size, match.root.output_size,
+                                      match.root.weight->byte_count });
+    } else {
+        dispatch.bindings.push_back({ match.root.weight->id, 0, match.root.weight->byte_count });
+    }
 
     if (match.kind == AttentionQkvProjectionKind::Query) {
         const auto [theta, freq_factors] = add_attention_rope_frequency_bindings(context, match.rope, dispatch_match);

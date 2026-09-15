@@ -2,6 +2,8 @@
 
 #include "common/dispatch-common.h"
 #include "llm/dispatch-attention-qkv.h"
+#include "llm/dispatch-gated-delta-net.h"
+#include "llm/dispatch-ssm-conv.h"
 #include "qwen/dispatch-qwen.h"
 
 #include <algorithm>
@@ -39,6 +41,8 @@ static DispatchRegistry build_registry(bool include_qwen) {
     DispatchRegistryBuilder builder;
     register_common_dispatches(builder);
     register_llm_attention_qkv_dispatches(builder);
+    register_llm_gated_delta_net_dispatch(builder);
+    register_llm_ssm_conv_dispatch(builder);
     if (include_qwen) {
         register_qwen_dispatches(builder);
     }

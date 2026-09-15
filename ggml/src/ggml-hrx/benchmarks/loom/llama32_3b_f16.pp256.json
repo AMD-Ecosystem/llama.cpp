@@ -340,6 +340,7 @@
       "compile_parameters": {
         "ggml.mul_mat_swiglu.gate_weight_format": "16",
         "ggml.mul_mat_swiglu.input_size": "3072",
+        "ggml.mul_mat_swiglu.op": "4",
         "ggml.mul_mat_swiglu.output_size": "8192",
         "ggml.mul_mat_swiglu.up_weight_format": "16",
         "ggml.workload.token_capacity": "64"

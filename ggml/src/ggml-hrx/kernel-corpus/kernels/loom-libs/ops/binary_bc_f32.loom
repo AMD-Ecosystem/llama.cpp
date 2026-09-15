@@ -5,7 +5,7 @@ template.decl @ggml.binary_f32.apply(%arg0: index, %arg1: f32, %arg2: f32) -> (f
 
 amdgpu.target<gfx11-generic> @ggml_binary_bc_f32_gfx11_wave64 {subgroup_size = 64}
 
-config.decl @ggml.binary_bc_f32.op : %value: index where [range(%value, 0, 4)]
+config.decl @ggml.binary_bc_f32.op : %value: index where [range(%value, 0, 8)]
 
 config.decl @ggml.binary_bc_f32.src0_broadcast_dim0 : %value: index where [range(%value, 0, 1)]
 
@@ -56,10 +56,9 @@ kernel.def target(@ggml_binary_bc_f32_gfx11_wave64) export("ggml_binary_bc_f32")
   %linear = index.assume %linear0 [range(%linear0, 0, 134217983)] : index
   %in_bounds = index.cmp ult, %linear, %count : index
   %zero_offset = index.constant 0 : offset
-  %lhs_noalias, %rhs_noalias, %output_noalias = buffer.assume.noalias %lhs, %rhs, %output : buffer, buffer, buffer
-  %lhs_view = buffer.view %lhs_noalias[%zero_offset] : buffer -> view<[%src0_count]xf32>
-  %rhs_view = buffer.view %rhs_noalias[%zero_offset] : buffer -> view<[%src1_count]xf32>
-  %output_view = buffer.view %output_noalias[%zero_offset] : buffer -> view<[%count]xf32>
+  %lhs_view = buffer.view %lhs[%zero_offset] : buffer -> view<[%src0_count]xf32>
+  %rhs_view = buffer.view %rhs[%zero_offset] : buffer -> view<[%src1_count]xf32>
+  %output_view = buffer.view %output[%zero_offset] : buffer -> view<[%count]xf32>
   scf.if %in_bounds {
     %coord0 = index.rem %linear, %n0 : index
     %linear_div_n0 = index.div %linear, %n0 : index

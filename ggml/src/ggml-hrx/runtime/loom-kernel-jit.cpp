@@ -26,6 +26,8 @@ class LoomAmdgpuJit {
         ggml_hrx_loom_jit_amdgpu_options options = {};
         options.processor                        = target;
         options.identifier                       = target;
+        options.sanitizer                        = std::getenv("GGML_HRX_LOOM_SANITIZER");
+        options.sanitizer_reporting              = std::getenv("GGML_HRX_LOOM_SANITIZER_REPORTING");
         if (ErrorResult error = take_status(ggml_hrx_loom_jit_amdgpu_create(&options, &jit_))) {
             error_message = "create Loom JIT: " + *error;
             GGML_LOG_ERROR("%s: %s\n", __func__, error_message.c_str());

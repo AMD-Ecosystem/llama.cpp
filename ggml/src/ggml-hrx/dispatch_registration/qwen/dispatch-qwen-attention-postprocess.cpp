@@ -1,5 +1,6 @@
 #include "dispatch-qwen-attention-postprocess.h"
 
+#include "../common/dispatch-rope-utils.h"
 #include "dispatch-llm-shapes.h"
 #include "ggml.h"
 #include "graph/graph-matcher.h"
@@ -60,22 +61,21 @@ static bool is_qwen_rms_norm_epsilon(float eps) {
 static bool is_qwen_implicit_rope_contract(const RopeParams & params) {
     return params.n_dims == kQwenAttentionHeadSize && params.mode == GGML_ROPE_TYPE_NEOX &&
            std::isfinite(params.freq_base) && params.freq_base > 0.0f && std::isfinite(params.freq_scale) &&
-           params.freq_scale > 0.0f && params.ext_factor == 0.0f && params.attn_factor == 1.0f;
+           params.freq_scale > 0.0f && std::isfinite(params.ext_factor) && std::isfinite(params.attn_factor);
 }
 
-static bool build_inverse_frequency_table(const GraphNode & rope, std::vector<uint8_t> & data) {
+static bool build_inverse_frequency_table(const GraphNode & rope, std::vector<uint8_t> & data, float & rope_mscale) {
     const RopeParams * params = op_params_as<RopeParams>(rope.params);
     if (params == nullptr || !is_qwen_implicit_rope_contract(*params)) {
         return false;
     }
 
-    data.resize(static_cast<size_t>(params->n_dims / 2) * sizeof(float));
-    const float theta_scale = std::pow(params->freq_base, -2.0f / static_cast<float>(params->n_dims));
-    float       theta       = params->freq_scale;
-    for (int i = 0; i < params->n_dims / 2; ++i) {
-        std::memcpy(data.data() + static_cast<size_t>(i) * sizeof(float), &theta, sizeof(theta));
-        theta *= theta_scale;
+    RopeFrequencyTable table;
+    if (!build_rope_frequency_table(*params, params->n_dims, table)) {
+        return false;
     }
+    data         = std::move(table.data);
+    rope_mscale = table.mscale;
     return true;
 }
 
@@ -209,6 +209,7 @@ struct NormRopeChain {
     const Value *        inverse_freqs            = nullptr;
     size_t               inverse_freqs_byte_count = 0;
     std::vector<uint8_t> inverse_freqs_data;
+    float                rope_mscale              = 1.0f;
     const Value *        output      = nullptr;
     int64_t              token_count = 0;
     int64_t              head_count  = 0;
@@ -284,9 +285,9 @@ struct AttentionPostprocessMatch {
 static bool matching_inverse_frequencies(const NormRopeChain & lhs, const NormRopeChain & rhs) {
     if (lhs.inverse_freqs != nullptr || rhs.inverse_freqs != nullptr) {
         return lhs.inverse_freqs != nullptr && rhs.inverse_freqs != nullptr &&
-               lhs.inverse_freqs->id == rhs.inverse_freqs->id;
+               lhs.inverse_freqs->id == rhs.inverse_freqs->id && lhs.rope_mscale == rhs.rope_mscale;
     }
-    return lhs.inverse_freqs_data == rhs.inverse_freqs_data;
+    return lhs.inverse_freqs_data == rhs.inverse_freqs_data && lhs.rope_mscale == rhs.rope_mscale;
 }
 
 static bool has_qwen_rope_params(const GraphNode & node) {
@@ -401,14 +402,27 @@ static bool match_norm_rope_chain_from_reshape(const Graph &       graph,
     size_t               inverse_freqs_byte_count = 0;
     const Value *        inverse_freqs            = nullptr;
     std::vector<uint8_t> inverse_freqs_data;
+    float                rope_mscale              = 1.0f;
     if (rope->inputs.size() == 3) {
         inverse_freqs = graph_value(graph, rope->inputs[2]);
         if (inverse_freqs == nullptr || !is_inverse_frequency_table(*inverse_freqs)) {
             log_attention_reject(status, graph, reshape, label + " explicit inverse-frequency table is incompatible");
             return false;
         }
+        const RopeParams * params = op_params_as<RopeParams>(rope->params);
+        if (params == nullptr || !is_qwen_implicit_rope_contract(*params)) {
+            log_attention_reject(status, graph, reshape,
+                                 label + " explicit inverse-frequency table has unsupported ROPE params=" +
+                                     rope_params_summary(*rope));
+            return false;
+        }
+        RopeFrequencyTable table;
+        if (!build_rope_frequency_table(*params, params->n_dims, table)) {
+            return false;
+        }
+        rope_mscale = table.mscale;
         inverse_freqs_byte_count = inverse_freqs->byte_count;
-    } else if (build_inverse_frequency_table(*rope, inverse_freqs_data)) {
+    } else if (build_inverse_frequency_table(*rope, inverse_freqs_data, rope_mscale)) {
         inverse_freqs_byte_count = inverse_freqs_data.size();
     } else {
         log_attention_reject(status, graph, reshape,
@@ -431,6 +445,7 @@ static bool match_norm_rope_chain_from_reshape(const Graph &       graph,
     chain.inverse_freqs            = inverse_freqs;
     chain.inverse_freqs_byte_count = inverse_freqs_byte_count;
     chain.inverse_freqs_data       = std::move(inverse_freqs_data);
+    chain.rope_mscale              = rope_mscale;
     chain.output                   = output;
     return true;
 }
@@ -744,6 +759,20 @@ static bool append_attention_metadata_initialization(const DispatchMatchContext 
     if (mask == nullptr || mask->type != GGML_TYPE_F16 || mask->ne[0] <= 0 || mask->ne[1] != match.query.token_count) {
         return false;
     }
+    int64_t context_capacity = mask->ne[0];
+    size_t  mask_byte_count  = mask->byte_count;
+    if (context_capacity > 32768 && match.query.token_count <= 32768) {
+        context_capacity = match.query.token_count;
+        mask_byte_count  = static_cast<size_t>(match.query.token_count) * static_cast<size_t>(match.query.token_count) *
+                          sizeof(ggml_fp16_t);
+        Status metadata_status;
+        if (!dispatch_match.metadata.append_alternate_value(
+                { mask->id, mask->id, GGML_TYPE_F16, mask_byte_count, "qwen.attention.compact_mask" },
+                metadata_status)) {
+            dispatch_match.status.append(metadata_status);
+            return false;
+        }
+    }
 
     const ValueId control = next_match_transient_value(context, dispatch_match);
     dispatch_match.transients.push_back({ control, "qwen.attention.control", sizeof(int32_t), 16 });
@@ -757,12 +786,12 @@ static bool append_attention_metadata_initialization(const DispatchMatchContext 
     Dispatch metadata;
     metadata.kernel = make_kernel_specialization(kQwenAttentionMetadataKernel);
     metadata.kernel.integer_parameters.emplace("token_count", match.query.token_count);
-    metadata.kernel.integer_parameters.emplace("context_capacity", mask->ne[0]);
+    metadata.kernel.integer_parameters.emplace("context_capacity", context_capacity);
     metadata.bindings.push_back({ control, 0, sizeof(int32_t) });
     metadata.bindings.push_back({ match.query.positions->id, 0, match.query.positions->byte_count });
     metadata.bindings.push_back({ match.key.cache_indices->id, 0, match.key.cache_indices->byte_count });
     metadata.bindings.push_back({ match.value.cache_indices->id, 0, match.value.cache_indices->byte_count });
-    metadata.bindings.push_back({ mask->id, 0, mask->byte_count });
+    metadata.bindings.push_back({ mask->id, 0, mask_byte_count });
     dispatch_match.initialization_dispatches.push_back(std::move(metadata));
     return true;
 }
@@ -871,6 +900,8 @@ static bool match_qwen_attention_qkv_postprocess_fused_decode_dispatch(const Dis
                                                value_weight->type == GGML_TYPE_Q6_K ? "1" : "0");
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.attention.head_size",
                                                to_config_value(kQwenAttentionHeadSize));
+    dispatch.kernel.compile_parameters.emplace("qwen3_moe.attention.rope_mscale",
+                                               rope_mscale_config_value(match.query.rope_mscale));
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.model.rms_epsilon", "0.000001");
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.workload.token_capacity",
                                                to_config_value(match.query.token_count));
@@ -932,6 +963,8 @@ static bool match_qwen_attention_postprocess_dispatch(const DispatchMatchContext
                                                to_config_value(match.query.head_count * kQwenAttentionHeadSize));
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.attention.key_value_size",
                                                to_config_value(match.key.key.head_count * kQwenAttentionHeadSize));
+    dispatch.kernel.compile_parameters.emplace("qwen3_moe.attention.rope_mscale",
+                                               rope_mscale_config_value(match.query.rope_mscale));
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.workload.token_capacity",
                                                to_config_value(match.query.token_count));
     dispatch.bindings.push_back({ match.query.positions->id, 0, match.query.positions->byte_count });

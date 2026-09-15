@@ -3,7 +3,7 @@ template.decl @ggml.set_rows.body(%token_count: index, %cache_row_count: index, 
 
 template.decl @ggml.set_rows.launch(%hidden_capacity: index, %token_capacity: index) -> (index, index, index, index)
 
-template.decl @ggml.set_rows.load_f32_vector4(%input_format: index, %token: index, %channel: index, %token_count: index, %hidden_size: index, %rows: buffer) -> (vector<4xf32>)
+template.decl @ggml.set_rows.load_f32_vector4(%input_format: index, %token: index, %channel: index, %token_count: index, %input_stride: index, %rows: buffer) -> (vector<4xf32>)
 
 template.decl @ggml.set_rows.store_f32_vector4(%output_format: index, %publish: i1, %cache_row: index, %channel: index, %cache_row_count: index, %hidden_size: index, %values: vector<4xf32>, %cache: buffer)
 
@@ -17,7 +17,9 @@ config.decl @ggml.set_rows.input_format : %value: index where [range(%value, 16,
 
 config.decl @ggml.set_rows.output_format : %value: index where [range(%value, 16, 32)]
 
-template.def<@ggml.set_rows.load_f32_vector4> device @ggml_set_rows_load_f32_vector4(%input_format: index, %token: index, %channel: index, %token_count: index, %hidden_size: index, %rows: buffer) -> (vector<4xf32>) {
+config.decl @ggml.set_rows.input_stride : %value: index where [range(%value, 4, 1048576)]
+
+template.def<@ggml.set_rows.load_f32_vector4> device @ggml_set_rows_load_f32_vector4(%input_format: index, %token: index, %channel: index, %token_count: index, %input_stride: index, %rows: buffer) -> (vector<4xf32>) {
   %c16 = index.constant 16 : index
   %c32 = index.constant 32 : index
   %c0_offset = index.constant 0 : offset
@@ -26,16 +28,16 @@ template.def<@ggml.set_rows.load_f32_vector4> device @ggml_set_rows_load_f32_vec
   %is_f16 = index.cmp eq, %input_format, %c16 : index
   %is_f32 = index.cmp eq, %input_format, %c32 : index
   %f16_values = scf.if %is_f16 -> (vector<4xf32>) {
-    %rows_view = buffer.view %rows[%c0_offset] : buffer -> view<[%token_count]x[%hidden_size]xf16>
-    %loaded = vector.load %rows_view[%token, %channel] : view<[%token_count]x[%hidden_size]xf16> -> vector<4xf16>
+    %rows_view = buffer.view %rows[%c0_offset] : buffer -> view<[%token_count]x[%input_stride]xf16>
+    %loaded = vector.load %rows_view[%token, %channel] : view<[%token_count]x[%input_stride]xf16> -> vector<4xf16>
     %widened = vector.extf %loaded : vector<4xf16> to vector<4xf32>
     scf.yield %widened : vector<4xf32>
   } else {
     scf.yield %zero : vector<4xf32>
   }
   %f32_values = scf.if %is_f32 -> (vector<4xf32>) {
-    %rows_view = buffer.view %rows[%c0_offset] : buffer -> view<[%token_count]x[%hidden_size]xf32>
-    %loaded = vector.load %rows_view[%token, %channel] : view<[%token_count]x[%hidden_size]xf32> -> vector<4xf32>
+    %rows_view = buffer.view %rows[%c0_offset] : buffer -> view<[%token_count]x[%input_stride]xf32>
+    %loaded = vector.load %rows_view[%token, %channel] : view<[%token_count]x[%input_stride]xf32> -> vector<4xf32>
     scf.yield %loaded : vector<4xf32>
   } else {
     scf.yield %zero : vector<4xf32>
@@ -69,6 +71,7 @@ template.def<@ggml.set_rows.body> device @ggml_set_rows_body(%token_count: index
   %hidden_capacity = config.get @ggml.set_rows.hidden_capacity : index
   %input_format = config.get @ggml.set_rows.input_format : index
   %output_format = config.get @ggml.set_rows.output_format : index
+  %input_stride = config.get @ggml.set_rows.input_stride : index
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %token_capacity)] : index
   %bounded_cache_row_count = index.assume %cache_row_count [range(%cache_row_count, 1, 1048576)] : index
   %bounded_hidden_size = index.assume %hidden_size [range(%hidden_size, 4, 32768), mul(%hidden_size, 4), le(%hidden_size, %hidden_capacity)] : index
@@ -103,7 +106,7 @@ template.def<@ggml.set_rows.body> device @ggml_set_rows_body(%token_count: index
   %publish1 = scalar.andi %publish0, %valid_index : i1
   %publish = scalar.andi %publish1, %valid_row : i1
   %cache_row = scf.select %valid_row, %cache_row0, %c0 : index
-  %values = template.apply<@ggml.set_rows.load_f32_vector4>(%input_format, %token, %channel, %bounded_token_count, %bounded_hidden_size, %rows_noalias) : (index, index, index, index, index, buffer) -> (vector<4xf32>)
+  %values = template.apply<@ggml.set_rows.load_f32_vector4>(%input_format, %token, %channel, %bounded_token_count, %input_stride, %rows_noalias) : (index, index, index, index, index, buffer) -> (vector<4xf32>)
   template.apply<@ggml.set_rows.store_f32_vector4>(%output_format, %publish, %cache_row, %channel, %bounded_cache_row_count, %bounded_hidden_size, %values, %cache_noalias) : (index, i1, index, index, index, index, vector<4xf32>, buffer)
   template.return
 }

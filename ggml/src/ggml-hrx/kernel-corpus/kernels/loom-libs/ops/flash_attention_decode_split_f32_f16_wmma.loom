@@ -17,11 +17,19 @@ template.decl @ggml.flash_attention.decode_split.reduce_completed.direct(%partia
 
 template.decl @ggml.flash_attention.decode_split.reduce_fused(%key_value_token_capacity: index, %partial_block_capacity0: index, %producer_block_count0: index, %publish_q8: i1, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %completion_counter: buffer, %output: buffer, %q8_output: buffer)
 
+template.decl @ggml.quantize_q8_1_x4.publish_vector4(%publish_word: i1, %token_output_byte_base: offset, %channel: index, %values: vector<4xf32>, %scratch_values: view<256xf32>, %scratch_d: view<32xf32>, %output: buffer)
+
 amdgpu.target<gfx11-generic> @ggml_flash_attention_decode_split_gfx11_wave64 {subgroup_size = 64}
 
 config.decl @ggml.flash_attention.query_head_count : %value: index where [range(%value, 1, 64)]
 
 config.decl @ggml.flash_attention.key_value_head_count : %value: index where [range(%value, 1, 64)]
+
+config.decl @ggml.flash_attention.qk_head_size : %value: index where [range(%value, 16, 512), mul(%value, 16)]
+
+config.decl @ggml.flash_attention.value_head_size : %value: index where [range(%value, 64, 512), mul(%value, 64)]
+
+config.decl @ggml.flash_attention.attention_scale : f32
 
 // Maximum K/V storage capacity available to the compiled kernel.
 config.decl @ggml.flash_attention.decode.key_value_token_capacity : %value: index where [range(%value, 64, 32768)]
@@ -38,6 +46,10 @@ template.def<@ggml.flash_attention.decode_split.produce_partials.active> device 
   %partial_block_capacity, %launched_block_count = index.assume %partial_block_capacity0, %launched_block_count0 [range(%partial_block_capacity0, 1, 512), range(%launched_block_count0, 1, 512), le(%launched_block_count0, %partial_block_capacity0)] : index, index
   %query_head_count = config.get @ggml.flash_attention.query_head_count : index
   %key_value_head_count = config.get @ggml.flash_attention.key_value_head_count : index
+  %qk_head_size0 = config.get @ggml.flash_attention.qk_head_size : index
+  %qk_head_size = index.assume %qk_head_size0 [range(%qk_head_size0, 16, 512), mul(%qk_head_size0, 16)] : index
+  %value_head_size0 = config.get @ggml.flash_attention.value_head_size : index
+  %value_head_size = index.assume %value_head_size0 [range(%value_head_size0, 64, 512), mul(%value_head_size0, 64)] : index
   %workgroup_x0 = kernel.workgroup.id<x> : index
   %workgroup_y0 = kernel.workgroup.id<y> : index
   %workgroup_x_in_launch = index.assume %workgroup_x0 [range(%workgroup_x0, 0, 511)] : index
@@ -56,21 +68,21 @@ template.def<@ggml.flash_attention.decode_split.produce_partials.active> device 
   %c32 = index.constant 32 : index
   %c63 = index.constant 63 : index
   %c64 = index.constant 64 : index
+  %c127 = index.constant 127 : index
   %c128 = index.constant 128 : index
   %c256 = index.constant 256 : index
   %c0_offset = index.constant 0 : offset
-  %query_stage_bytes = index.constant 4352 : offset
+  %f16_bytes = index.constant 2 : offset
   %score_stage_bytes = index.constant 6144 : offset
   %probability_stage_bytes = index.constant 3072 : offset
-  %product_stage_bytes = index.constant 4096 : offset
   %c0_f32 = scalar.constant 0.0 : f32
   %negative_large = scalar.constant -1e+30 : f32
   %c0_i32 = scalar.constant 0 : i32
   %c1_i32 = scalar.constant 1 : i32
-  %head_size_f32 = scalar.constant 128.0 : f32
-  %attention_scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %head_size_f32 : f32
+  %attention_scale = config.get @ggml.flash_attention.attention_scale : f32
   %c0_f16 = scalar.constant 0.0 : f16
   %c0_f16x8 = vector.constant 0.0 : vector<8xf16>
+  %c0_f16x16 = vector.constant 0.0 : vector<16xf16>
   %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
@@ -84,12 +96,24 @@ template.def<@ggml.flash_attention.decode_split.produce_partials.active> device 
   %block_ordinal = index.add %workgroup_x, %c0 : index
   %is_not_last_block = index.cmp ne, %block_ordinal, %last_block_ordinal : index
   %is_full_block = scalar.ori %has_no_tail, %is_not_last_block : i1
-  %key_value_head = index.add %workgroup_y, %c0 : index
+  %key_value_head, %launch_key_value_head_count = index.assume %workgroup_y, %key_value_head_count [lt(%workgroup_y, %key_value_head_count)] : index, index
   %query_heads_per_key_value_head0 = index.div %query_head_count, %key_value_head_count : index
   %query_heads_per_key_value_head = index.assume %query_heads_per_key_value_head0 [range(%query_heads_per_key_value_head0, 1, 16)] : index
   %query_head_base = index.mul %key_value_head, %query_heads_per_key_value_head : index
-  %key_value_width = index.mul %key_value_head_count, %c128 : index
-  %key_value_head_base = index.mul %key_value_head, %c128 : index
+  %key_width = index.mul %key_value_head_count, %qk_head_size : index
+  %value_width = index.mul %key_value_head_count, %value_head_size : index
+  %key_head_base = index.mul %key_value_head, %qk_head_size : index
+  %value_head_base = index.mul %key_value_head, %value_head_size : index
+  %padded_value_head_size = index.add %value_head_size, %c127 : index
+  %output_tile_count = index.div %padded_value_head_size, %c128 : index
+  %output_stage_size = index.mul %output_tile_count, %c128 : index
+  %query_stage_stride = index.add %qk_head_size, %c8 : index
+  %query_stage_element_count = index.mul %c16, %query_stage_stride : index
+  %query_stage_bytes = index.scale %query_stage_element_count, %f16_bytes : index, offset -> offset
+  %query_element_count = index.mul %c16, %qk_head_size : index
+  %query_load_iteration_count = index.div %query_element_count, %c256 : index
+  %product_stage_element_count = index.mul %c16, %output_stage_size : index
+  %product_stage_bytes = index.scale %product_stage_element_count, %f16_bytes : index, offset -> offset
   %key_origin = index.mul %block_ordinal, %c64 : index
   %subgroup_score_column = index.mul %subgroup, %c16 : index
   %subgroup_query_row = index.mul %subgroup, %c4 : index
@@ -106,12 +130,9 @@ template.def<@ggml.flash_attention.decode_split.produce_partials.active> device 
   %query_head_valid2 = index.cmp ult, %query_head2, %query_head_count : index
   %query_head_valid3 = index.cmp ult, %query_head3, %query_head_count : index
   %query_valid = vector.from_elements %query_head_valid0, %query_head_valid1, %query_head_valid2, %query_head_valid3 : vector<4xi1>
-  %subgroup_output_channel = index.mul %subgroup, %c32 : index
-  %subgroup_output_channel1 = index.add %subgroup_output_channel, %c16 : index
-  %lane_output_channel = index.mul %lane, %c4 : index
   %lane_has_output = index.cmp ult, %lane, %c32 : index
   %lane_is_zero = index.cmp eq, %lane, %c0 : index
-  %query_transposed_layout = encoding.layout.strided [1, 136] : encoding<layout>
+  %query_transposed_layout = encoding.layout.strided [1, %query_stage_stride] : encoding<layout>
   %probability_transposed_layout = encoding.layout.strided [1, 24] : encoding<layout>
   %query_noalias, %key_noalias, %value_noalias, %partial_max_noalias, %partial_sum_noalias, %partial_output_noalias = buffer.assume.noalias %query, %key, %value, %partial_max, %partial_sum, %partial_output : buffer, buffer, buffer, buffer, buffer, buffer
   %query_aligned = buffer.assume.alignment %query_noalias {minimum_alignment = 16} : buffer
@@ -120,53 +141,54 @@ template.def<@ggml.flash_attention.decode_split.produce_partials.active> device 
   %partial_max_aligned = buffer.assume.alignment %partial_max_noalias {minimum_alignment = 16} : buffer
   %partial_sum_aligned = buffer.assume.alignment %partial_sum_noalias {minimum_alignment = 16} : buffer
   %partial_output_aligned = buffer.assume.alignment %partial_output_noalias {minimum_alignment = 16} : buffer
-  %query_view = buffer.view %query_aligned[%c0_offset] : buffer -> view<[%query_head_count]x128xf32>
-  %key_view = buffer.view %key_aligned[%c0_offset] : buffer -> view<[%bounded_key_value_token_count]x[%key_value_width]xf16>
-  %value_view = buffer.view %value_aligned[%c0_offset] : buffer -> view<[%bounded_key_value_token_count]x[%key_value_width]xf16>
+  %query_view = buffer.view %query_aligned[%c0_offset] : buffer -> view<[%query_head_count]x[%qk_head_size]xf32>
+  %key_view = buffer.view %key_aligned[%c0_offset] : buffer -> view<[%bounded_key_value_token_count]x[%key_width]xf16>
+  %value_view = buffer.view %value_aligned[%c0_offset] : buffer -> view<[%bounded_key_value_token_count]x[%value_width]xf16>
   %partial_max_view = buffer.view %partial_max_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]x[%launch_partial_block_capacity]x16xf32>
   %partial_sum_view = buffer.view %partial_sum_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]x[%launch_partial_block_capacity]x16xf32>
-  %partial_output_view = buffer.view %partial_output_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]x[%launch_partial_block_capacity]x16x128xf16>
+  %partial_output_view = buffer.view %partial_output_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]x[%launch_partial_block_capacity]x16x[%value_head_size]xf16>
   %query_stage = buffer.alloca<workgroup> align(16) %query_stage_bytes : buffer
   %score_stage = buffer.alloca<workgroup> align(16) %score_stage_bytes : buffer
   %probability_stage = buffer.alloca<workgroup> align(16) %probability_stage_bytes : buffer
   %product_stage = buffer.alloca<workgroup> align(16) %product_stage_bytes : buffer
-  %query_stage_view = buffer.view %query_stage[%c0_offset] : buffer -> view<16x136xf16>
-  %query_transposed_view = buffer.view %query_stage[%c0_offset] : buffer -> view<128x16xf16, %query_transposed_layout>
+  %tail_value_stage = buffer.alloca<workgroup> align(16) %product_stage_bytes : buffer
+  %query_stage_view = buffer.view %query_stage[%c0_offset] : buffer -> view<16x[%query_stage_stride]xf16>
+  %query_transposed_view = buffer.view %query_stage[%c0_offset] : buffer -> view<[%qk_head_size]x16xf16, %query_transposed_layout>
   %score_stage_view = buffer.view %score_stage[%c0_offset] : buffer -> view<64x24xf32>
   %probability_stage_view = buffer.view %probability_stage[%c0_offset] : buffer -> view<16x64xf16, %probability_transposed_layout>
-  %product_stage_view = buffer.view %product_stage[%c0_offset] : buffer -> view<16x128xf16>
+  %product_stage_view = buffer.view %product_stage[%c0_offset] : buffer -> view<16x[%output_stage_size]xf16>
   %tail_key_stage_view = buffer.view %product_stage[%c0_offset] : buffer -> view<64x16xf16>
-  %tail_value_stage_view = buffer.view %score_stage[%c0_offset] : buffer -> view<16x128xf16>
-  scf.for %load_iteration = [%c0 to %c8 step %c1] unroll {
+  %tail_value_stage_view = buffer.view %tail_value_stage[%c0_offset] : buffer -> view<16x[%output_stage_size]xf16>
+  scf.for %load_iteration = [%c0 to %query_load_iteration_count step %c1] unroll {
     %linear = index.madd %load_iteration, %c256, %workitem : index
-    %local_query_row = index.div %linear, %c128 : index
-    %query_channel = index.rem %linear, %c128 : index
+    %local_query_row = index.div %linear, %qk_head_size : index
+    %query_channel = index.rem %linear, %qk_head_size : index
     %local_query_head = index.add %query_head_base, %local_query_row : index
     %local_query_head_valid = index.cmp ult, %local_query_head, %query_head_count : index
     %query_value = scf.if %local_query_head_valid -> (f16) {
-      %loaded = view.load %query_view[%local_query_head, %query_channel] : view<[%query_head_count]x128xf32> -> f32
+      %loaded = view.load %query_view[%local_query_head, %query_channel] : view<[%query_head_count]x[%qk_head_size]xf32> -> f32
       %scaled = scalar.mulf<reassoc|nnan|ninf|nsz|contract> %loaded, %attention_scale : f32
       %truncated = scalar.fptrunc %scaled : f32 to f16
       scf.yield %truncated : f16
     } else {
       scf.yield %c0_f16 : f16
     }
-    view.store %query_value, %query_stage_view[%local_query_row, %query_channel] : f16, view<16x136xf16>
+    view.store %query_value, %query_stage_view[%local_query_row, %query_channel] : f16, view<16x[%query_stage_stride]xf16>
   }
   kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
   %score_init_values = vector.constant 0.0 : vector<4xf32>
   %score_init = vector.fragment<init> %score_init_values shape [%m, %n] : vector<4xf32>
   %score_fragment = scf.if %is_full_block -> (vector<4xf32>) {
-    %full_score_fragment = scf.for %head_tile = [%c0 to %c128 step %c16](%score_accumulator = %score_init : vector<4xf32>) -> (vector<4xf32>) unroll {
+    %full_score_fragment = scf.for %head_tile = [%c0 to %qk_head_size step %c16](%score_accumulator = %score_init : vector<4xf32>) -> (vector<4xf32>) unroll {
       // Bound this view by the proven tile end so the full vector footprint is
       // visible without treating physical tail padding as logical storage.
       %score_key_origin0 = index.add %key_origin, %subgroup_score_column : index
       %score_key_end0 = index.add %score_key_origin0, %c16 : index
       %score_key_origin, %score_key_end = index.assume %score_key_origin0, %score_key_end0 [le(%score_key_end0, %bounded_key_value_token_count)] : index, index
-      %full_key_view = buffer.view %key_aligned[%c0_offset] : buffer -> view<[%score_key_end]x[%key_value_width]xf16>
-      %key_channel = index.add %key_value_head_base, %head_tile : index
-      %key_fragment = vector.fragment.load<lhs> %full_key_view[%score_key_origin, %key_channel] shape [%m, %k] : view<[%score_key_end]x[%key_value_width]xf16> -> vector<16xf16>
-      %query_fragment = vector.fragment.load<rhs> %query_transposed_view[%head_tile, %c0] shape [%k, %n] : view<128x16xf16, %query_transposed_layout> -> vector<16xf16>
+      %full_key_view = buffer.view %key_aligned[%c0_offset] : buffer -> view<[%score_key_end]x[%key_width]xf16>
+      %key_channel = index.add %key_head_base, %head_tile : index
+      %key_fragment = vector.fragment.load<lhs> %full_key_view[%score_key_origin, %key_channel] shape [%m, %k] : view<[%score_key_end]x[%key_width]xf16> -> vector<16xf16>
+      %query_fragment = vector.fragment.load<rhs> %query_transposed_view[%head_tile, %c0] shape [%k, %n] : view<[%qk_head_size]x16xf16, %query_transposed_layout> -> vector<16xf16>
       %next_score_accumulator = vector.mma %key_fragment, %query_fragment, %score_accumulator : vector<16xf16>, vector<16xf16>, vector<4xf32>
       scf.yield %next_score_accumulator : vector<4xf32>
     }
@@ -174,7 +196,7 @@ template.def<@ggml.flash_attention.decode_split.produce_partials.active> device 
   } else {
     // Stage one 64x16 K panel at a time. Every physical load is guarded, so
     // callers need no initialized padding beyond the logical KV length.
-    %tail_score_fragment = scf.for %head_tile = [%c0 to %c128 step %c16](%score_accumulator = %score_init : vector<4xf32>) -> (vector<4xf32>) unroll {
+    %tail_score_fragment = scf.for %head_tile = [%c0 to %qk_head_size step %c16](%score_accumulator = %score_init : vector<4xf32>) -> (vector<4xf32>) {
       scf.for %load_iteration = [%c0 to %c4 step %c1] unroll {
         %linear = index.madd %load_iteration, %c256, %workitem : index
         %key_row = index.div %linear, %c16 : index
@@ -183,8 +205,8 @@ template.def<@ggml.flash_attention.decode_split.produce_partials.active> device 
         %key_valid = index.cmp ult, %key_token, %bounded_key_value_token_count : index
         %key_value = scf.if %key_valid -> (f16) {
           %head_channel0 = index.add %head_tile, %head_channel : index
-          %key_channel = index.add %key_value_head_base, %head_channel0 : index
-          %loaded = view.load %key_view[%key_token, %key_channel] : view<[%bounded_key_value_token_count]x[%key_value_width]xf16> -> f16
+          %key_channel = index.add %key_head_base, %head_channel0 : index
+          %loaded = view.load %key_view[%key_token, %key_channel] : view<[%bounded_key_value_token_count]x[%key_width]xf16> -> f16
           scf.yield %loaded : f16
         } else {
           scf.yield %c0_f16 : f16
@@ -193,7 +215,7 @@ template.def<@ggml.flash_attention.decode_split.produce_partials.active> device 
       }
       kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
       %key_fragment = vector.fragment.load<lhs> %tail_key_stage_view[%subgroup_score_column, %c0] shape [%m, %k] : view<64x16xf16> -> vector<16xf16>
-      %query_fragment = vector.fragment.load<rhs> %query_transposed_view[%head_tile, %c0] shape [%k, %n] : view<128x16xf16, %query_transposed_layout> -> vector<16xf16>
+      %query_fragment = vector.fragment.load<rhs> %query_transposed_view[%head_tile, %c0] shape [%k, %n] : view<[%qk_head_size]x16xf16, %query_transposed_layout> -> vector<16xf16>
       %next_score_accumulator = vector.mma %key_fragment, %query_fragment, %score_accumulator : vector<16xf16>, vector<16xf16>, vector<4xf32>
       kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
       scf.yield %next_score_accumulator : vector<4xf32>
@@ -252,79 +274,112 @@ template.def<@ggml.flash_attention.decode_split.produce_partials.active> device 
   view.store %probability2, %probability_stage_view[%query_row2, %lane] : f16, view<16x64xf16, %probability_transposed_layout>
   view.store %probability3, %probability_stage_view[%query_row3, %lane] : f16, view<16x64xf16, %probability_transposed_layout>
   kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
-  // Keep both P*V halves live so the scheduler can interleave their independent
-  // matrix chains. F16 accumulation and exchange preserve the Vulkan CM1
-  // contract while halving the product LDS footprint.
-  %product_init0 = vector.fragment<init> %c0_f16x8 shape [%m, %n] : vector<8xf16>
-  %product_init1 = vector.fragment<init> %c0_f16x8 shape [%m, %n] : vector<8xf16>
-  %value_channel0 = index.add %key_value_head_base, %subgroup_output_channel : index
-  %value_channel1 = index.add %key_value_head_base, %subgroup_output_channel1 : index
-  %product_fragment0, %product_fragment1 = scf.if %is_full_block -> (vector<8xf16>, vector<8xf16>) {
-    %full_product_fragment0, %full_product_fragment1 = scf.for %key_tile = [%c0 to %c64 step %c16](%product_accumulator0 = %product_init0 : vector<8xf16>, %product_accumulator1 = %product_init1 : vector<8xf16>) -> (vector<8xf16>, vector<8xf16>) unroll {
-      // Retain the same logical-extent contract for the full P*V tile.
-      %value_token0 = index.add %key_origin, %key_tile : index
-      %value_token_end0 = index.add %value_token0, %c16 : index
-      %value_token, %value_token_end = index.assume %value_token0, %value_token_end0 [le(%value_token_end0, %bounded_key_value_token_count)] : index, index
-      %full_value_view = buffer.view %value_aligned[%c0_offset] : buffer -> view<[%value_token_end]x[%key_value_width]xf16>
-      %probability_fragment = vector.fragment.load<lhs> %probability_stage_view[%c0, %key_tile] shape [%m, %k] : view<16x64xf16, %probability_transposed_layout> -> vector<16xf16>
-      %value_fragment0 = vector.fragment.load<rhs> %full_value_view[%value_token, %value_channel0] shape [%k, %n] : view<[%value_token_end]x[%key_value_width]xf16> -> vector<16xf16>
-      %value_fragment1 = vector.fragment.load<rhs> %full_value_view[%value_token, %value_channel1] shape [%k, %n] : view<[%value_token_end]x[%key_value_width]xf16> -> vector<16xf16>
-      %next_product_accumulator0 = vector.mma %probability_fragment, %value_fragment0, %product_accumulator0 : vector<16xf16>, vector<16xf16>, vector<8xf16>
-      %next_product_accumulator1 = vector.mma %probability_fragment, %value_fragment1, %product_accumulator1 : vector<16xf16>, vector<16xf16>, vector<8xf16>
-      scf.yield %next_product_accumulator0, %next_product_accumulator1 : vector<8xf16>, vector<8xf16>
-    }
-    scf.yield %full_product_fragment0, %full_product_fragment1 : vector<8xf16>, vector<8xf16>
-  } else {
-    // Stage one 16x128 V panel at a time and zero every lane beyond the
-    // logical KV length before the panel participates in P*V.
-    %tail_product_fragment0, %tail_product_fragment1 = scf.for %key_tile = [%c0 to %c64 step %c16](%product_accumulator0 = %product_init0 : vector<8xf16>, %product_accumulator1 = %product_init1 : vector<8xf16>) -> (vector<8xf16>, vector<8xf16>) unroll {
-      scf.for %load_iteration = [%c0 to %c8 step %c1] unroll {
-        %linear = index.madd %load_iteration, %c256, %workitem : index
-        %key_row = index.div %linear, %c128 : index
-        %value_channel = index.rem %linear, %c128 : index
+  scf.for %output_tile = [%c0 to %output_tile_count step %c1] unroll {
+    %output_tile_channel = index.mul %output_tile, %c128 : index
+    %subgroup_output_base = index.mul %subgroup, %c32 : index
+    %subgroup_output_channel0 = index.add %output_tile_channel, %subgroup_output_base : index
+    %subgroup_output_channel = index.assume %subgroup_output_channel0 [range(%subgroup_output_channel0, 0, 480)] : index
+    %subgroup_output_channel1_0 = index.add %subgroup_output_channel, %c16 : index
+    %subgroup_output_channel1 = index.assume %subgroup_output_channel1_0 [range(%subgroup_output_channel1_0, 16, 496)] : index
+    %subgroup_output_channel_valid = index.cmp ult, %subgroup_output_channel, %value_head_size : index
+    %subgroup_output_channel1_valid = index.cmp ult, %subgroup_output_channel1, %value_head_size : index
+    %lane_output_base = index.mul %lane, %c4 : index
+    %lane_output_channel0 = index.add %output_tile_channel, %lane_output_base : index
+    %lane_output_channel = index.assume %lane_output_channel0 [range(%lane_output_channel0, 0, 636)] : index
+    %lane_output_channel_valid = index.cmp ult, %lane_output_channel, %value_head_size : index
+    %lane_publishes_output = scalar.andi %lane_has_output, %lane_output_channel_valid : i1
+    %safe_lane_output_channel0 = scf.select %lane_output_channel_valid, %lane_output_channel, %c0 : index
+    %safe_lane_output_channel_end0 = index.add %safe_lane_output_channel0, %c4 : index
+    %safe_lane_output_channel, %safe_lane_output_channel_end = index.assume %safe_lane_output_channel0, %safe_lane_output_channel_end0 [le(%safe_lane_output_channel_end0, %value_head_size), le(%safe_lane_output_channel_end0, %output_stage_size)] : index, index
+    %product_init0 = vector.fragment<init> %c0_f16x8 shape [%m, %n] : vector<8xf16>
+    %product_init1 = vector.fragment<init> %c0_f16x8 shape [%m, %n] : vector<8xf16>
+    %safe_subgroup_output_channel0 = scf.select %subgroup_output_channel_valid, %subgroup_output_channel, %c0 : index
+    %safe_subgroup_output_channel1_0 = scf.select %subgroup_output_channel1_valid, %subgroup_output_channel1, %c0 : index
+    %safe_subgroup_output_channel_end0 = index.add %safe_subgroup_output_channel0, %c16 : index
+    %safe_subgroup_output_channel1_end0 = index.add %safe_subgroup_output_channel1_0, %c16 : index
+    %safe_subgroup_output_channel, %safe_subgroup_output_channel_end = index.assume %safe_subgroup_output_channel0, %safe_subgroup_output_channel_end0 [le(%safe_subgroup_output_channel_end0, %value_head_size), le(%safe_subgroup_output_channel_end0, %output_stage_size)] : index, index
+    %safe_subgroup_output_channel1, %safe_subgroup_output_channel1_end = index.assume %safe_subgroup_output_channel1_0, %safe_subgroup_output_channel1_end0 [le(%safe_subgroup_output_channel1_end0, %value_head_size), le(%safe_subgroup_output_channel1_end0, %output_stage_size)] : index, index
+    %value_channel0 = index.add %value_head_base, %safe_subgroup_output_channel : index
+    %value_channel1 = index.add %value_head_base, %safe_subgroup_output_channel1 : index
+    %value_channel0_end0 = index.add %value_head_base, %safe_subgroup_output_channel_end : index
+    %value_channel1_end0 = index.add %value_head_base, %safe_subgroup_output_channel1_end : index
+    %safe_value_channel0, %safe_value_channel0_end = index.assume %value_channel0, %value_channel0_end0 [le(%value_channel0_end0, %value_width)] : index, index
+    %safe_value_channel1, %safe_value_channel1_end = index.assume %value_channel1, %value_channel1_end0 [le(%value_channel1_end0, %value_width)] : index, index
+    %last_value_fragment_channel = index.sub %value_width, %c16 : index
+    %clamped_value_channel0 = index.min %safe_value_channel0, %last_value_fragment_channel : index
+    %clamped_value_channel1 = index.min %safe_value_channel1, %last_value_fragment_channel : index
+    %last_stage_fragment_channel = index.sub %output_stage_size, %c16 : index
+    %clamped_stage_channel0 = index.min %safe_subgroup_output_channel, %last_stage_fragment_channel : index
+    %clamped_stage_channel1 = index.min %safe_subgroup_output_channel1, %last_stage_fragment_channel : index
+    %product_fragment0, %product_fragment1 = scf.if %is_full_block -> (vector<8xf16>, vector<8xf16>) {
+      %full_product_fragment0, %full_product_fragment1 = scf.for %key_tile = [%c0 to %c64 step %c16](%product_accumulator0 = %product_init0 : vector<8xf16>, %product_accumulator1 = %product_init1 : vector<8xf16>) -> (vector<8xf16>, vector<8xf16>) unroll {
         %value_token0 = index.add %key_origin, %key_tile : index
-        %value_token = index.add %value_token0, %key_row : index
-        %value_valid = index.cmp ult, %value_token, %bounded_key_value_token_count : index
-        %value_element = scf.if %value_valid -> (f16) {
-          %global_value_channel = index.add %key_value_head_base, %value_channel : index
-          %loaded = view.load %value_view[%value_token, %global_value_channel] : view<[%bounded_key_value_token_count]x[%key_value_width]xf16> -> f16
-          scf.yield %loaded : f16
-        } else {
-          scf.yield %c0_f16 : f16
-        }
-        view.store %value_element, %tail_value_stage_view[%key_row, %value_channel] : f16, view<16x128xf16>
+        %value_token_end0 = index.add %value_token0, %c16 : index
+        %value_token, %value_token_end = index.assume %value_token0, %value_token_end0 [le(%value_token_end0, %bounded_key_value_token_count)] : index, index
+        %full_value_view = buffer.view %value_aligned[%c0_offset] : buffer -> view<[%value_token_end]x[%value_width]xf16>
+        %probability_fragment = vector.fragment.load<lhs> %probability_stage_view[%c0, %key_tile] shape [%m, %k] : view<16x64xf16, %probability_transposed_layout> -> vector<16xf16>
+        %value_fragment0 = vector.fragment.load<rhs> %full_value_view[%value_token, %clamped_value_channel0] shape [%k, %n] : view<[%value_token_end]x[%value_width]xf16> -> vector<16xf16>
+        %value_fragment1 = vector.fragment.load<rhs> %full_value_view[%value_token, %clamped_value_channel1] shape [%k, %n] : view<[%value_token_end]x[%value_width]xf16> -> vector<16xf16>
+        %next_product_accumulator0 = vector.mma %probability_fragment, %value_fragment0, %product_accumulator0 : vector<16xf16>, vector<16xf16>, vector<8xf16>
+        %next_product_accumulator1 = vector.mma %probability_fragment, %value_fragment1, %product_accumulator1 : vector<16xf16>, vector<16xf16>, vector<8xf16>
+        scf.yield %next_product_accumulator0, %next_product_accumulator1 : vector<8xf16>, vector<8xf16>
       }
-      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
-      %probability_fragment = vector.fragment.load<lhs> %probability_stage_view[%c0, %key_tile] shape [%m, %k] : view<16x64xf16, %probability_transposed_layout> -> vector<16xf16>
-      %value_fragment0 = vector.fragment.load<rhs> %tail_value_stage_view[%c0, %subgroup_output_channel] shape [%k, %n] : view<16x128xf16> -> vector<16xf16>
-      %value_fragment1 = vector.fragment.load<rhs> %tail_value_stage_view[%c0, %subgroup_output_channel1] shape [%k, %n] : view<16x128xf16> -> vector<16xf16>
-      %next_product_accumulator0 = vector.mma %probability_fragment, %value_fragment0, %product_accumulator0 : vector<16xf16>, vector<16xf16>, vector<8xf16>
-      %next_product_accumulator1 = vector.mma %probability_fragment, %value_fragment1, %product_accumulator1 : vector<16xf16>, vector<16xf16>, vector<8xf16>
-      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
-      scf.yield %next_product_accumulator0, %next_product_accumulator1 : vector<8xf16>, vector<8xf16>
+      scf.yield %full_product_fragment0, %full_product_fragment1 : vector<8xf16>, vector<8xf16>
+    } else {
+      %tail_product_fragment0, %tail_product_fragment1 = scf.for %key_tile = [%c0 to %c64 step %c16](%product_accumulator0 = %product_init0 : vector<8xf16>, %product_accumulator1 = %product_init1 : vector<8xf16>) -> (vector<8xf16>, vector<8xf16>) unroll {
+        scf.for %load_iteration = [%c0 to %c8 step %c1] unroll {
+          %linear = index.madd %load_iteration, %c256, %workitem : index
+          %key_row = index.div %linear, %c128 : index
+          %tile_value_channel = index.rem %linear, %c128 : index
+          %value_channel = index.add %output_tile_channel, %tile_value_channel : index
+          %value_token0 = index.add %key_origin, %key_tile : index
+          %value_token = index.add %value_token0, %key_row : index
+          %value_token_valid = index.cmp ult, %value_token, %bounded_key_value_token_count : index
+          %value_channel_valid = index.cmp ult, %value_channel, %value_head_size : index
+          %value_valid = scalar.andi %value_token_valid, %value_channel_valid : i1
+          %value_element = scf.if %value_valid -> (f16) {
+            %global_value_channel = index.add %value_head_base, %value_channel : index
+            %loaded = view.load %value_view[%value_token, %global_value_channel] : view<[%bounded_key_value_token_count]x[%value_width]xf16> -> f16
+            scf.yield %loaded : f16
+          } else {
+            scf.yield %c0_f16 : f16
+          }
+          view.store %value_element, %tail_value_stage_view[%key_row, %value_channel] : f16, view<16x[%output_stage_size]xf16>
+        }
+        kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+        %probability_fragment = vector.fragment.load<lhs> %probability_stage_view[%c0, %key_tile] shape [%m, %k] : view<16x64xf16, %probability_transposed_layout> -> vector<16xf16>
+        // Bound each fragment without changing the physical LDS row stride.
+        %value_fragment0 = vector.fragment.load<rhs> %tail_value_stage_view[%c0, %clamped_stage_channel0] shape [%k, %n] : view<16x[%output_stage_size]xf16> -> vector<16xf16>
+        %value_fragment1 = vector.fragment.load<rhs> %tail_value_stage_view[%c0, %clamped_stage_channel1] shape [%k, %n] : view<16x[%output_stage_size]xf16> -> vector<16xf16>
+        %next_product_accumulator0 = vector.mma %probability_fragment, %value_fragment0, %product_accumulator0 : vector<16xf16>, vector<16xf16>, vector<8xf16>
+        %next_product_accumulator1 = vector.mma %probability_fragment, %value_fragment1, %product_accumulator1 : vector<16xf16>, vector<16xf16>, vector<8xf16>
+        kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+        scf.yield %next_product_accumulator0, %next_product_accumulator1 : vector<8xf16>, vector<8xf16>
+      }
+      scf.yield %tail_product_fragment0, %tail_product_fragment1 : vector<8xf16>, vector<8xf16>
     }
-    scf.yield %tail_product_fragment0, %tail_product_fragment1 : vector<8xf16>, vector<8xf16>
-  }
-  vector.fragment.store<result> %product_fragment0, %product_stage_view[%c0, %subgroup_output_channel] shape [%m, %n] : vector<8xf16>, view<16x128xf16>
-  vector.fragment.store<result> %product_fragment1, %product_stage_view[%c0, %subgroup_output_channel1] shape [%m, %n] : vector<8xf16>, view<16x128xf16>
-  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
-  scf.if %lane_has_output {
-    %block_output0 = vector.load %product_stage_view[%query_row0, %lane_output_channel] : view<16x128xf16> -> vector<4xf16>
-    %block_output1 = vector.load %product_stage_view[%query_row1, %lane_output_channel] : view<16x128xf16> -> vector<4xf16>
-    %block_output2 = vector.load %product_stage_view[%query_row2, %lane_output_channel] : view<16x128xf16> -> vector<4xf16>
-    %block_output3 = vector.load %product_stage_view[%query_row3, %lane_output_channel] : view<16x128xf16> -> vector<4xf16>
-    scf.if %query_head_valid0 {
-      vector.store %block_output0, %partial_output_view[%key_value_head, %block_ordinal, %query_row0, %lane_output_channel] : vector<4xf16>, view<[%key_value_head_count]x[%launch_partial_block_capacity]x16x128xf16>
+    vector.fragment.store<result> %product_fragment0, %product_stage_view[%c0, %subgroup_output_channel] shape [%m, %n] : vector<8xf16>, view<16x[%output_stage_size]xf16>
+    vector.fragment.store<result> %product_fragment1, %product_stage_view[%c0, %subgroup_output_channel1] shape [%m, %n] : vector<8xf16>, view<16x[%output_stage_size]xf16>
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    scf.if %lane_publishes_output {
+      %block_output0 = vector.load %product_stage_view[%query_row0, %safe_lane_output_channel] : view<16x[%output_stage_size]xf16> -> vector<4xf16>
+      %block_output1 = vector.load %product_stage_view[%query_row1, %safe_lane_output_channel] : view<16x[%output_stage_size]xf16> -> vector<4xf16>
+      %block_output2 = vector.load %product_stage_view[%query_row2, %safe_lane_output_channel] : view<16x[%output_stage_size]xf16> -> vector<4xf16>
+      %block_output3 = vector.load %product_stage_view[%query_row3, %safe_lane_output_channel] : view<16x[%output_stage_size]xf16> -> vector<4xf16>
+      scf.if %query_head_valid0 {
+        vector.store %block_output0, %partial_output_view[%key_value_head, %block_ordinal, %query_row0, %safe_lane_output_channel] : vector<4xf16>, view<[%key_value_head_count]x[%launch_partial_block_capacity]x16x[%value_head_size]xf16>
+      }
+      scf.if %query_head_valid1 {
+        vector.store %block_output1, %partial_output_view[%key_value_head, %block_ordinal, %query_row1, %safe_lane_output_channel] : vector<4xf16>, view<[%key_value_head_count]x[%launch_partial_block_capacity]x16x[%value_head_size]xf16>
+      }
+      scf.if %query_head_valid2 {
+        vector.store %block_output2, %partial_output_view[%key_value_head, %block_ordinal, %query_row2, %safe_lane_output_channel] : vector<4xf16>, view<[%key_value_head_count]x[%launch_partial_block_capacity]x16x[%value_head_size]xf16>
+      }
+      scf.if %query_head_valid3 {
+        vector.store %block_output3, %partial_output_view[%key_value_head, %block_ordinal, %query_row3, %safe_lane_output_channel] : vector<4xf16>, view<[%key_value_head_count]x[%launch_partial_block_capacity]x16x[%value_head_size]xf16>
+      }
     }
-    scf.if %query_head_valid1 {
-      vector.store %block_output1, %partial_output_view[%key_value_head, %block_ordinal, %query_row1, %lane_output_channel] : vector<4xf16>, view<[%key_value_head_count]x[%launch_partial_block_capacity]x16x128xf16>
-    }
-    scf.if %query_head_valid2 {
-      vector.store %block_output2, %partial_output_view[%key_value_head, %block_ordinal, %query_row2, %lane_output_channel] : vector<4xf16>, view<[%key_value_head_count]x[%launch_partial_block_capacity]x16x128xf16>
-    }
-    scf.if %query_head_valid3 {
-      vector.store %block_output3, %partial_output_view[%key_value_head, %block_ordinal, %query_row3, %lane_output_channel] : vector<4xf16>, view<[%key_value_head_count]x[%launch_partial_block_capacity]x16x128xf16>
-    }
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
   }
   scf.if %lane_is_zero {
     scf.if %query_head_valid0 {
@@ -363,6 +418,8 @@ template.def<@ggml.flash_attention.decode_split.produce_partials> device @ggml_f
   %bounded_key_value_token_count = index.assume %key_value_token_count [range(%key_value_token_count, 1, 32768)] : index
   %query_head_count = config.get @ggml.flash_attention.query_head_count : index
   %key_value_head_count = config.get @ggml.flash_attention.key_value_head_count : index
+  %value_head_size0 = config.get @ggml.flash_attention.value_head_size : index
+  %value_head_size = index.assume %value_head_size0 [range(%value_head_size0, 64, 512), mul(%value_head_size0, 64)] : index
   %workgroup_x0 = kernel.workgroup.id<x> : index
   %workgroup_y0 = kernel.workgroup.id<y> : index
   %workgroup_x_in_launch = index.assume %workgroup_x0 [range(%workgroup_x0, 0, 511)] : index
@@ -377,6 +434,8 @@ template.def<@ggml.flash_attention.decode_split.produce_partials> device @ggml_f
   %c4 = index.constant 4 : index
   %c32 = index.constant 32 : index
   %c64 = index.constant 64 : index
+  %c127 = index.constant 127 : index
+  %c128 = index.constant 128 : index
   %c0_offset = index.constant 0 : offset
   %c0_f32 = scalar.constant 0.0 : f32
   %negative_large = scalar.constant -1e+30 : f32
@@ -422,7 +481,9 @@ template.def<@ggml.flash_attention.decode_split.produce_partials> device @ggml_f
     %query_head_valid1 = index.cmp ult, %query_head1, %query_head_count : index
     %query_head_valid2 = index.cmp ult, %query_head2, %query_head_count : index
     %query_head_valid3 = index.cmp ult, %query_head3, %query_head_count : index
-    %lane_output_channel = index.mul %lane, %c4 : index
+    %padded_value_head_size = index.add %value_head_size, %c127 : index
+    %output_tile_count = index.div %padded_value_head_size, %c128 : index
+    %lane_output_base = index.mul %lane, %c4 : index
     %lane_has_output = index.cmp ult, %lane, %c32 : index
     %lane_is_zero = index.cmp eq, %lane, %c0 : index
     %partial_max_noalias, %partial_sum_noalias, %partial_output_noalias = buffer.assume.noalias %partial_max, %partial_sum, %partial_output : buffer, buffer, buffer
@@ -431,19 +492,25 @@ template.def<@ggml.flash_attention.decode_split.produce_partials> device @ggml_f
     %partial_output_aligned = buffer.assume.alignment %partial_output_noalias {minimum_alignment = 16} : buffer
     %partial_max_view = buffer.view %partial_max_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]x[%key_value_block_count]x16xf32>
     %partial_sum_view = buffer.view %partial_sum_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]x[%key_value_block_count]x16xf32>
-    %partial_output_view = buffer.view %partial_output_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]x[%key_value_block_count]x16x128xf16>
-    scf.if %lane_has_output {
-      scf.if %query_head_valid0 {
-        vector.store %c0_f16x4, %partial_output_view[%key_value_head, %block_ordinal, %query_row0, %lane_output_channel] : vector<4xf16>, view<[%key_value_head_count]x[%key_value_block_count]x16x128xf16>
-      }
-      scf.if %query_head_valid1 {
-        vector.store %c0_f16x4, %partial_output_view[%key_value_head, %block_ordinal, %query_row1, %lane_output_channel] : vector<4xf16>, view<[%key_value_head_count]x[%key_value_block_count]x16x128xf16>
-      }
-      scf.if %query_head_valid2 {
-        vector.store %c0_f16x4, %partial_output_view[%key_value_head, %block_ordinal, %query_row2, %lane_output_channel] : vector<4xf16>, view<[%key_value_head_count]x[%key_value_block_count]x16x128xf16>
-      }
-      scf.if %query_head_valid3 {
-        vector.store %c0_f16x4, %partial_output_view[%key_value_head, %block_ordinal, %query_row3, %lane_output_channel] : vector<4xf16>, view<[%key_value_head_count]x[%key_value_block_count]x16x128xf16>
+    %partial_output_view = buffer.view %partial_output_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]x[%key_value_block_count]x16x[%value_head_size]xf16>
+    scf.for %output_tile = [%c0 to %output_tile_count step %c1] unroll {
+      %output_tile_channel = index.mul %output_tile, %c128 : index
+      %lane_output_channel = index.add %output_tile_channel, %lane_output_base : index
+      %lane_output_channel_valid = index.cmp ult, %lane_output_channel, %value_head_size : index
+      %lane_publishes_output = scalar.andi %lane_has_output, %lane_output_channel_valid : i1
+      scf.if %lane_publishes_output {
+        scf.if %query_head_valid0 {
+          vector.store %c0_f16x4, %partial_output_view[%key_value_head, %block_ordinal, %query_row0, %lane_output_channel] : vector<4xf16>, view<[%key_value_head_count]x[%key_value_block_count]x16x[%value_head_size]xf16>
+        }
+        scf.if %query_head_valid1 {
+          vector.store %c0_f16x4, %partial_output_view[%key_value_head, %block_ordinal, %query_row1, %lane_output_channel] : vector<4xf16>, view<[%key_value_head_count]x[%key_value_block_count]x16x[%value_head_size]xf16>
+        }
+        scf.if %query_head_valid2 {
+          vector.store %c0_f16x4, %partial_output_view[%key_value_head, %block_ordinal, %query_row2, %lane_output_channel] : vector<4xf16>, view<[%key_value_head_count]x[%key_value_block_count]x16x[%value_head_size]xf16>
+        }
+        scf.if %query_head_valid3 {
+          vector.store %c0_f16x4, %partial_output_view[%key_value_head, %block_ordinal, %query_row3, %lane_output_channel] : vector<4xf16>, view<[%key_value_head_count]x[%key_value_block_count]x16x[%value_head_size]xf16>
+        }
       }
     }
     scf.if %lane_is_zero {
@@ -474,6 +541,8 @@ template.def<@ggml.flash_attention.decode_split.reduce_completed.direct> device 
   %partial_block_capacity, %active_block_count = index.assume %partial_block_capacity0, %active_block_count0 [range(%partial_block_capacity0, 1, 4), range(%active_block_count0, 1, 4), le(%active_block_count0, %partial_block_capacity0)] : index, index
   %query_head_count = config.get @ggml.flash_attention.query_head_count : index
   %key_value_head_count = config.get @ggml.flash_attention.key_value_head_count : index
+  %value_head_size0 = config.get @ggml.flash_attention.value_head_size : index
+  %value_head_size = index.assume %value_head_size0 [range(%value_head_size0, 64, 512), mul(%value_head_size0, 64)] : index
   %workgroup_y0 = kernel.workgroup.id<y> : index
   %key_value_head = index.assume %workgroup_y0 [range(%workgroup_y0, 0, 63)] : index
   %workitem = kernel.workitem.id<x> : index
@@ -493,12 +562,12 @@ template.def<@ggml.flash_attention.decode_split.reduce_completed.direct> device 
   %output_aligned = buffer.assume.alignment %output {minimum_alignment = 16} : buffer
   %partial_max_view = buffer.view %partial_max_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]x[%partial_block_capacity]x16xf32>
   %partial_sum_view = buffer.view %partial_sum_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]x[%partial_block_capacity]x16xf32>
-  %partial_output_view = buffer.view %partial_output_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]x[%partial_block_capacity]x16x128xf16>
-  %output_view = buffer.view %output_aligned[%c0_offset] : buffer -> view<[%query_head_count]x128xf32>
-  %partial_element_count = index.mul %query_heads_per_key_value_head, %c128 : index
+  %partial_output_view = buffer.view %partial_output_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]x[%partial_block_capacity]x16x[%value_head_size]xf16>
+  %output_view = buffer.view %output_aligned[%c0_offset] : buffer -> view<[%query_head_count]x[%value_head_size]xf32>
+  %partial_element_count = index.mul %query_heads_per_key_value_head, %value_head_size : index
   scf.for %linear = [%workitem to %partial_element_count step %c256] {
-    %query_row = index.div %linear, %c128 : index
-    %output_channel = index.rem %linear, %c128 : index
+    %query_row = index.div %linear, %value_head_size : index
+    %output_channel = index.rem %linear, %value_head_size : index
     %query_head = index.add %query_head_base, %query_row : index
     %query_head_valid = index.cmp ult, %query_head, %query_head_count : index
     scf.if %query_head_valid {
@@ -514,14 +583,14 @@ template.def<@ggml.flash_attention.decode_split.reduce_completed.direct> device 
         %block_sum = view.load %partial_sum_view[%key_value_head, %block, %query_row] : view<[%key_value_head_count]x[%partial_block_capacity]x16xf32> -> f32
         %scaled_sum = scalar.mulf<reassoc|nnan|ninf|nsz|contract> %block_sum, %scale : f32
         %next_sum = scalar.addf<reassoc|nnan|ninf|nsz> %running_sum, %scaled_sum : f32
-        %block_output_f16 = view.load %partial_output_view[%key_value_head, %block, %query_row, %output_channel] : view<[%key_value_head_count]x[%partial_block_capacity]x16x128xf16> -> f16
+        %block_output_f16 = view.load %partial_output_view[%key_value_head, %block, %query_row, %output_channel] : view<[%key_value_head_count]x[%partial_block_capacity]x16x[%value_head_size]xf16> -> f16
         %block_output = scalar.extf %block_output_f16 : f16 to f32
         %scaled_output = scalar.mulf<reassoc|nnan|ninf|nsz|contract> %block_output, %scale : f32
         %next_output = scalar.addf<reassoc|nnan|ninf|nsz> %running_output, %scaled_output : f32
         scf.yield %next_sum, %next_output : f32, f32
       }
       %normalized_output = scalar.divf<nnan|ninf|nsz|arcp> %unnormalized_output, %sum : f32
-      view.store %normalized_output, %output_view[%query_head, %output_channel] : f32, view<[%query_head_count]x128xf32>
+      view.store %normalized_output, %output_view[%query_head, %output_channel] : f32, view<[%query_head_count]x[%value_head_size]xf32>
     }
   }
   template.return
@@ -534,6 +603,8 @@ template.def<@ggml.flash_attention.decode_split.reduce_completed.cooperative> de
   %partial_block_capacity, %active_block_count = index.assume %partial_block_capacity0, %active_block_count0 [range(%partial_block_capacity0, 1, 32), range(%active_block_count0, 1, 32), le(%active_block_count0, %partial_block_capacity0)] : index, index
   %query_head_count = config.get @ggml.flash_attention.query_head_count : index
   %key_value_head_count = config.get @ggml.flash_attention.key_value_head_count : index
+  %value_head_size0 = config.get @ggml.flash_attention.value_head_size : index
+  %value_head_size = index.assume %value_head_size0 [range(%value_head_size0, 64, 512), mul(%value_head_size0, 64)] : index
   %workgroup_y0 = kernel.workgroup.id<y> : index
   %key_value_head = index.assume %workgroup_y0 [range(%workgroup_y0, 0, 63)] : index
   %subgroup0 = kernel.subgroup.id : index
@@ -545,16 +616,20 @@ template.def<@ggml.flash_attention.decode_split.reduce_completed.cooperative> de
   %c4 = index.constant 4 : index
   %c7 = index.constant 7 : index
   %c8 = index.constant 8 : index
+  %c127 = index.constant 127 : index
+  %c128 = index.constant 128 : index
   %c0_offset = index.constant 0 : offset
   %scale_stage_bytes = index.constant 1024 : offset
   %c0_f32 = scalar.constant 0.0 : f32
   %negative_large = scalar.constant -1e+30 : f32
+  %c0_f16x2 = vector.constant 0.0 : vector<2xf16>
   %c0_f32x2 = vector.constant 0.0 : vector<2xf32>
   %query_heads_per_key_value_head0 = index.div %query_head_count, %key_value_head_count : index
   %query_heads_per_key_value_head = index.assume %query_heads_per_key_value_head0 [range(%query_heads_per_key_value_head0, 1, 16)] : index
   %query_head_base = index.mul %key_value_head, %query_heads_per_key_value_head : index
-  %lane_output_channel0 = index.mul %lane, %c2 : index
-  %lane_output_channel = index.assume %lane_output_channel0 [range(%lane_output_channel0, 0, 126)] : index
+  %padded_value_head_size = index.add %value_head_size, %c127 : index
+  %output_tile_count = index.div %padded_value_head_size, %c128 : index
+  %lane_output_base = index.mul %lane, %c2 : index
   %lane_has_block = index.cmp ult, %lane, %active_block_count : index
   %partial_max_aligned = buffer.assume.alignment %partial_max {minimum_alignment = 16} : buffer
   %partial_sum_aligned = buffer.assume.alignment %partial_sum {minimum_alignment = 16} : buffer
@@ -562,8 +637,8 @@ template.def<@ggml.flash_attention.decode_split.reduce_completed.cooperative> de
   %output_aligned = buffer.assume.alignment %output {minimum_alignment = 16} : buffer
   %partial_max_view = buffer.view %partial_max_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]x[%partial_block_capacity]x16xf32>
   %partial_sum_view = buffer.view %partial_sum_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]x[%partial_block_capacity]x16xf32>
-  %partial_output_view = buffer.view %partial_output_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]x[%partial_block_capacity]x16x128xf16>
-  %output_view = buffer.view %output_aligned[%c0_offset] : buffer -> view<[%query_head_count]x128xf32>
+  %partial_output_view = buffer.view %partial_output_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]x[%partial_block_capacity]x16x[%value_head_size]xf16>
+  %output_view = buffer.view %output_aligned[%c0_offset] : buffer -> view<[%query_head_count]x[%value_head_size]xf32>
   %scale_stage = buffer.alloca<workgroup> align(16) %scale_stage_bytes : buffer
   %scale_stage_view = buffer.view %scale_stage[%c0_offset] : buffer -> view<4x32x2xf32>
   %padded_reduction_row_count = index.add %query_heads_per_key_value_head, %c7 : index
@@ -627,31 +702,39 @@ template.def<@ggml.flash_attention.decode_split.reduce_completed.cooperative> de
     %sum0 = vector.extract %sums[0] : vector<2xf32> -> f32
     %sum1 = vector.extract %sums[1] : vector<2xf32> -> f32
     kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
-    %unnormalized_output0, %unnormalized_output1 = scf.for %block = [%c0 to %active_block_count step %c1](%running_output0 = %c0_f32x2 : vector<2xf32>, %running_output1 = %c0_f32x2 : vector<2xf32>) -> (vector<2xf32>, vector<2xf32>) unroll(%c4) schedule(interleaved) {
-      %scales = vector.load %scale_stage_view[%subgroup, %block, %c0] : view<4x32x2xf32> -> vector<2xf32>
-      %scale0 = vector.extract %scales[0] : vector<2xf32> -> f32
-      %scale1 = vector.extract %scales[1] : vector<2xf32> -> f32
-      %block_output0_f16 = vector.load %partial_output_view[%key_value_head, %block, %safe_query_row0, %lane_output_channel] : view<[%key_value_head_count]x[%partial_block_capacity]x16x128xf16> -> vector<2xf16>
-      %block_output0 = vector.extf %block_output0_f16 : vector<2xf16> to vector<2xf32>
-      %scale_vector0 = vector.splat %scale0 : vector<2xf32>
-      %scaled_output0 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %block_output0, %scale_vector0 : vector<2xf32>
-      %next_output0 = vector.addf<reassoc|nnan|ninf|nsz> %running_output0, %scaled_output0 : vector<2xf32>
-      %block_output1_f16 = vector.load %partial_output_view[%key_value_head, %block, %safe_query_row1, %lane_output_channel] : view<[%key_value_head_count]x[%partial_block_capacity]x16x128xf16> -> vector<2xf16>
-      %block_output1 = vector.extf %block_output1_f16 : vector<2xf16> to vector<2xf32>
-      %scale_vector1 = vector.splat %scale1 : vector<2xf32>
-      %scaled_output1 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %block_output1, %scale_vector1 : vector<2xf32>
-      %next_output1 = vector.addf<reassoc|nnan|ninf|nsz> %running_output1, %scaled_output1 : vector<2xf32>
-      scf.yield %next_output0, %next_output1 : vector<2xf32>, vector<2xf32>
-    }
-    %sum_vector0 = vector.splat %sum0 : vector<2xf32>
-    %sum_vector1 = vector.splat %sum1 : vector<2xf32>
-    %normalized_output0 = vector.divf<nnan|ninf|nsz|arcp> %unnormalized_output0, %sum_vector0 : vector<2xf32>
-    %normalized_output1 = vector.divf<nnan|ninf|nsz|arcp> %unnormalized_output1, %sum_vector1 : vector<2xf32>
-    scf.if %query_head_valid0 {
-      vector.store %normalized_output0, %output_view[%query_head0, %lane_output_channel] : vector<2xf32>, view<[%query_head_count]x128xf32>
-    }
-    scf.if %query_head_valid1 {
-      vector.store %normalized_output1, %output_view[%query_head1, %lane_output_channel] : vector<2xf32>, view<[%query_head_count]x128xf32>
+    scf.for %output_tile = [%c0 to %output_tile_count step %c1] unroll {
+      %output_tile_channel = index.mul %output_tile, %c128 : index
+      %lane_output_channel = index.add %output_tile_channel, %lane_output_base : index
+      %lane_output_channel_valid = index.cmp ult, %lane_output_channel, %value_head_size : index
+      %safe_lane_output_channel = scf.select %lane_output_channel_valid, %lane_output_channel, %c0 : index
+      %unnormalized_output0, %unnormalized_output1 = scf.for %block = [%c0 to %active_block_count step %c1](%running_output0 = %c0_f32x2 : vector<2xf32>, %running_output1 = %c0_f32x2 : vector<2xf32>) -> (vector<2xf32>, vector<2xf32>) unroll(%c4) schedule(interleaved) {
+        %scales = vector.load %scale_stage_view[%subgroup, %block, %c0] : view<4x32x2xf32> -> vector<2xf32>
+        %scale0 = vector.extract %scales[0] : vector<2xf32> -> f32
+        %scale1 = vector.extract %scales[1] : vector<2xf32> -> f32
+        %block_output0_f16 = vector.load %partial_output_view[%key_value_head, %block, %safe_query_row0, %safe_lane_output_channel] : view<[%key_value_head_count]x[%partial_block_capacity]x16x[%value_head_size]xf16> -> vector<2xf16>
+        %block_output0 = vector.extf %block_output0_f16 : vector<2xf16> to vector<2xf32>
+        %scale_vector0 = vector.splat %scale0 : vector<2xf32>
+        %scaled_output0 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %block_output0, %scale_vector0 : vector<2xf32>
+        %next_output0 = vector.addf<reassoc|nnan|ninf|nsz> %running_output0, %scaled_output0 : vector<2xf32>
+        %block_output1_f16 = vector.load %partial_output_view[%key_value_head, %block, %safe_query_row1, %safe_lane_output_channel] : view<[%key_value_head_count]x[%partial_block_capacity]x16x[%value_head_size]xf16> -> vector<2xf16>
+        %block_output1 = vector.extf %block_output1_f16 : vector<2xf16> to vector<2xf32>
+        %scale_vector1 = vector.splat %scale1 : vector<2xf32>
+        %scaled_output1 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %block_output1, %scale_vector1 : vector<2xf32>
+        %next_output1 = vector.addf<reassoc|nnan|ninf|nsz> %running_output1, %scaled_output1 : vector<2xf32>
+        scf.yield %next_output0, %next_output1 : vector<2xf32>, vector<2xf32>
+      }
+      %sum_vector0 = vector.splat %sum0 : vector<2xf32>
+      %sum_vector1 = vector.splat %sum1 : vector<2xf32>
+      %normalized_output0 = vector.divf<nnan|ninf|nsz|arcp> %unnormalized_output0, %sum_vector0 : vector<2xf32>
+      %normalized_output1 = vector.divf<nnan|ninf|nsz|arcp> %unnormalized_output1, %sum_vector1 : vector<2xf32>
+      %publish_output0 = scalar.andi %query_head_valid0, %lane_output_channel_valid : i1
+      %publish_output1 = scalar.andi %query_head_valid1, %lane_output_channel_valid : i1
+      scf.if %publish_output0 {
+        vector.store %normalized_output0, %output_view[%query_head0, %lane_output_channel] : vector<2xf32>, view<[%query_head_count]x[%value_head_size]xf32>
+      }
+      scf.if %publish_output1 {
+        vector.store %normalized_output1, %output_view[%query_head1, %lane_output_channel] : vector<2xf32>, view<[%query_head_count]x[%value_head_size]xf32>
+      }
     }
   }
   template.return
@@ -665,33 +748,33 @@ template.def<@ggml.flash_attention.decode_split.reduce_completed.cooperative> de
 template.def<@ggml.flash_attention.decode_split.pack_completed_q8> device @ggml_flash_attention_decode_pack_completed_key_value_head_q8_1_x4(%key_value_head: index, %output: buffer, %q8_output: buffer) {
   %query_head_count = config.get @ggml.flash_attention.query_head_count : index
   %key_value_head_count = config.get @ggml.flash_attention.key_value_head_count : index
+  %value_head_size0 = config.get @ggml.flash_attention.value_head_size : index
+  %value_head_size = index.assume %value_head_size0 [range(%value_head_size0, 64, 512), mul(%value_head_size0, 64)] : index
   %query_heads_per_key_value_head0 = index.div %query_head_count, %key_value_head_count : index
   %query_heads_per_key_value_head = index.assume %query_heads_per_key_value_head0 [range(%query_heads_per_key_value_head0, 1, 16)] : index
   %workitem0 = kernel.workitem.id<x> : index
   %workitem = index.assume %workitem0 [range(%workitem0, 0, 255)] : index
   %c0 = index.constant 0 : index
   %c1 = index.constant 1 : index
-  %c2 = index.constant 2 : index
   %c4 = index.constant 4 : index
   %c7 = index.constant 7 : index
   %c8 = index.constant 8 : index
   %c32 = index.constant 32 : index
-  %group_bytes = index.constant 144 : offset
-  %payload_byte_add = index.constant 16 : offset
+  %c127 = index.constant 127 : index
+  %c128 = index.constant 128 : index
   %scratch_d_byte_add = index.constant 1024 : offset
   %scratch_bytes = index.constant 1152 : offset
   %c0_offset = index.constant 0 : offset
-  %c0_f32 = scalar.constant 0.0 : f32
-  %c1_f32 = scalar.constant 1.0 : f32
-  %c127 = scalar.constant 127.0 : f32
   %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
   %output_noalias, %q8_output_noalias = buffer.assume.noalias %output, %q8_output : buffer, buffer
   %output_aligned = buffer.assume.alignment %output_noalias {minimum_alignment = 16} : buffer
   %q8_output_aligned = buffer.assume.alignment %q8_output_noalias {minimum_alignment = 16} : buffer
-  %output_view = buffer.view %output_aligned[%c0_offset] : buffer -> view<[%query_head_count]x128xf32>
+  %output_view = buffer.view %output_aligned[%c0_offset] : buffer -> view<[%query_head_count]x[%value_head_size]xf32>
   %scratch = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
   %scratch_values = buffer.view %scratch[%c0_offset] : buffer -> view<256xf32>
   %scratch_d = buffer.view %scratch[%scratch_d_byte_add] : buffer -> view<32xf32>
+  %padded_value_head_size = index.add %value_head_size, %c127 : index
+  %head_tile_count = index.div %padded_value_head_size, %c128 : index
   %group_in_phase = index.div %workitem, %c32 : index
   %lane_in_group0 = index.rem %workitem, %c32 : index
   %lane_in_group = index.assume %lane_in_group0 [range(%lane_in_group0, 0, 31)] : index
@@ -708,77 +791,25 @@ template.def<@ggml.flash_attention.decode_split.pack_completed_q8> device @ggml_
     %key_value_query_head_base = index.mul %key_value_head, %query_heads_per_key_value_head : index
     %query_head0 = index.add %key_value_query_head_base, %group_in_key_value_head : index
     %safe_query_head = scf.select %valid_group, %query_head0, %c0 : index
-    %block_element_add = index.mul %block_in_group, %c32 : index
-    %word_element_add = index.mul %word_in_block, %c4 : index
-    %input_channel0 = index.add %block_element_add, %word_element_add : index
-    %input_channel = index.assume %input_channel0 [range(%input_channel0, 0, 124)] : index
-    %input_values = scf.if %valid_group -> (vector<4xf32>) {
-      %values = vector.load %output_view[%safe_query_head, %input_channel] : view<[%query_head_count]x128xf32> -> vector<4xf32>
-      scf.yield %values : vector<4xf32>
-    } else {
-      scf.yield %c0_f32x4 : vector<4xf32>
-    }
-    %absolute_values = vector.absf %input_values : vector<4xf32>
-    %thread_max = vector.reduce<maxnumf> %absolute_values, %c0_f32 : vector<4xf32>, f32
-    view.store %thread_max, %scratch_values[%workitem] : f32, view<256xf32>
-    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
-    %is_cohort_leader = index.cmp eq, %word_in_block, %c0 : index
-    %d_index0 = index.mul %group_in_phase, %c4 : index
-    %d_index1 = index.add %d_index0, %block_in_group : index
-    %d_index = index.assume %d_index1 [range(%d_index1, 0, 31)] : index
-    scf.if %is_cohort_leader {
-      %group_thread_base = index.mul %group_in_phase, %c32 : index
-      %block_thread_add = index.mul %block_in_group, %c8 : index
-      %cohort_base = index.add %group_thread_base, %block_thread_add : index
-      %cohort_maxima = vector.load %scratch_values[%cohort_base] : view<256xf32> -> vector<8xf32>
-      %amax = vector.reduce<maxnumf> %cohort_maxima, %c0_f32 : vector<8xf32>, f32
-      %d = scalar.divf %amax, %c127 : f32
-      view.store %d, %scratch_d[%d_index] : f32, view<32xf32>
-    }
-    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
-    %d = view.load %scratch_d[%d_index] : view<32xf32> -> f32
-    %d_nonzero = scalar.cmpf one, %d, %c0_f32 : f32
-    %d_inverse = scf.if %d_nonzero -> (f32) {
-      %inverse = scalar.divf %c1_f32, %d : f32
-      scf.yield %inverse : f32
-    } else {
-      scf.yield %c0_f32 : f32
-    }
-    %d_inverse_vector = vector.splat %d_inverse : vector<4xf32>
-    %scaled_values = vector.mulf %input_values, %d_inverse_vector : vector<4xf32>
-    %rounded_values = vector.roundf %scaled_values : vector<4xf32>
-    %quantized_values = vector.fptosi %rounded_values : vector<4xf32> to vector<4xi8>
-    %packed_word = vector.bitcast %quantized_values : vector<4xi8> to vector<1xi32>
-    %group_byte_offset = index.scale %safe_query_head, %group_bytes : index, offset -> offset
-    %payload_byte_offset = index.add %group_byte_offset, %payload_byte_add : offset
-    %group_ds = buffer.view %q8_output_aligned[%group_byte_offset] : buffer -> view<8xf16>
-    %group_qs = buffer.view %q8_output_aligned[%payload_byte_offset] : buffer -> view<32xi32>
-    %block_word_add = index.mul %block_in_group, %c8 : index
-    %packed_word_index0 = index.add %block_word_add, %word_in_block : index
-    %packed_word_index = index.assume %packed_word_index0 [range(%packed_word_index0, 0, 31)] : index
-    scf.if %valid_group {
-      vector.store %packed_word, %group_qs[%packed_word_index] : vector<1xi32>, view<32xi32>
-    }
-    %thread_sum = vector.reduce<addf> %rounded_values, %c0_f32 : vector<4xf32>, f32
-    view.store %thread_sum, %scratch_values[%workitem] : f32, view<256xf32>
-    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
-    scf.if %is_cohort_leader {
-      %group_thread_base = index.mul %group_in_phase, %c32 : index
-      %block_thread_add = index.mul %block_in_group, %c8 : index
-      %cohort_base = index.add %group_thread_base, %block_thread_add : index
-      %cohort_sums = vector.load %scratch_values[%cohort_base] : view<256xf32> -> vector<8xf32>
-      %quantized_sum = vector.reduce<addf> %cohort_sums, %c0_f32 : vector<8xf32>, f32
-      %s = scalar.mulf %quantized_sum, %d : f32
-      %d_f16 = scalar.fptrunc %d : f32 to f16
-      %s_f16 = scalar.fptrunc %s : f32 to f16
-      %ds_index = index.mul %block_in_group, %c2 : index
-      %s_index = index.add %ds_index, %c1 : index
-      scf.if %valid_group {
-        view.store %d_f16, %group_ds[%ds_index] : f16, view<8xf16>
-        view.store %s_f16, %group_ds[%s_index] : f16, view<8xf16>
+    scf.for %head_tile = [%c0 to %head_tile_count step %c1] unroll {
+      %head_tile_channel = index.mul %head_tile, %c128 : index
+      %block_element_add = index.mul %block_in_group, %c32 : index
+      %word_element_add = index.mul %word_in_block, %c4 : index
+      %input_channel_add = index.add %block_element_add, %word_element_add : index
+      %input_channel0 = index.add %head_tile_channel, %input_channel_add : index
+      %input_channel = index.assume %input_channel0 [range(%input_channel0, 0, 508)] : index
+      %valid_channel = index.cmp ult, %input_channel, %value_head_size : index
+      %publish_word = scalar.andi %valid_group, %valid_channel : i1
+      %input_values = scf.if %publish_word -> (vector<4xf32>) {
+        %values = vector.load %output_view[%safe_query_head, %input_channel] : view<[%query_head_count]x[%value_head_size]xf32> -> vector<4xf32>
+        scf.yield %values : vector<4xf32>
+      } else {
+        scf.yield %c0_f32x4 : vector<4xf32>
       }
+      %flattened_head_channel = index.mul %safe_query_head, %value_head_size : index
+      %flattened_channel = index.add %flattened_head_channel, %input_channel : index
+      template.apply<@ggml.quantize_q8_1_x4.publish_vector4>(%publish_word, %c0_offset, %flattened_channel, %input_values, %scratch_values, %scratch_d, %q8_output_aligned) : (i1, offset, index, vector<4xf32>, view<256xf32>, view<32xf32>, buffer)
     }
-    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
   }
   template.return
 }
@@ -962,12 +993,14 @@ kernel.def target(@ggml_flash_attention_decode_split_gfx11_wave64) @ggml_flash_a
 kernel.def target(@ggml_flash_attention_decode_split_gfx11_wave64) @ggml_flash_attention_decode_split_reduce_f32(%key_value_token_count: index) {
   %query_head_count = config.get @ggml.flash_attention.query_head_count : index
   %c1 = index.constant 1 : index
-  %c128 = index.constant 128 : index
-  kernel.launch.config workgroups(%c1, %query_head_count, %c1) workgroup_size(%c128, %c1, %c1) : index
+  %c256 = index.constant 256 : index
+  kernel.launch.config workgroups(%c1, %query_head_count, %c1) workgroup_size(%c256, %c1, %c1) : index
 } launch(%key_value_token_count: index, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %output: buffer) {
   %bounded_key_value_token_count = index.assume %key_value_token_count [range(%key_value_token_count, 1, 32768)] : index
   %query_head_count = config.get @ggml.flash_attention.query_head_count : index
   %key_value_head_count = config.get @ggml.flash_attention.key_value_head_count : index
+  %value_head_size0 = config.get @ggml.flash_attention.value_head_size : index
+  %value_head_size = index.assume %value_head_size0 [range(%value_head_size0, 64, 512), mul(%value_head_size0, 64)] : index
   %query_head0 = kernel.workgroup.id<y> : index
   %query_head = index.assume %query_head0 [range(%query_head0, 0, 63)] : index
   %workitem = kernel.workitem.id<x> : index
@@ -993,6 +1026,7 @@ kernel.def target(@ggml_flash_attention_decode_split_gfx11_wave64) @ggml_flash_a
   %is_first_subgroup = index.cmp eq, %subgroup, %c0 : index
   %workitem_is_zero = index.cmp eq, %workitem, %c0 : index
   %output_channel = index.add %workitem, %c0 : index
+  %output_channel_valid = index.cmp ult, %output_channel, %value_head_size : index
   %partial_max_noalias, %partial_sum_noalias, %partial_output_noalias, %output_noalias = buffer.assume.noalias %partial_max, %partial_sum, %partial_output, %output : buffer, buffer, buffer, buffer
   %partial_max_aligned = buffer.assume.alignment %partial_max_noalias {minimum_alignment = 16} : buffer
   %partial_sum_aligned = buffer.assume.alignment %partial_sum_noalias {minimum_alignment = 16} : buffer
@@ -1000,8 +1034,8 @@ kernel.def target(@ggml_flash_attention_decode_split_gfx11_wave64) @ggml_flash_a
   %output_aligned = buffer.assume.alignment %output_noalias {minimum_alignment = 16} : buffer
   %partial_max_view = buffer.view %partial_max_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]x[%key_value_block_count]x16xf32>
   %partial_sum_view = buffer.view %partial_sum_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]x[%key_value_block_count]x16xf32>
-  %partial_output_view = buffer.view %partial_output_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]x[%key_value_block_count]x16x128xf16>
-  %output_view = buffer.view %output_aligned[%c0_offset] : buffer -> view<[%query_head_count]x128xf32>
+  %partial_output_view = buffer.view %partial_output_aligned[%c0_offset] : buffer -> view<[%key_value_head_count]x[%key_value_block_count]x16x[%value_head_size]xf16>
+  %output_view = buffer.view %output_aligned[%c0_offset] : buffer -> view<[%query_head_count]x[%value_head_size]xf32>
   %reduction_stage = buffer.alloca<workgroup> align(8) %reduction_stage_bytes : buffer
   %reduction_stage_view = buffer.view %reduction_stage[%c0_offset] : buffer -> view<2xf32>
   %lane_maximum = scf.if %is_first_subgroup -> (f32) {
@@ -1041,16 +1075,18 @@ kernel.def target(@ggml_flash_attention_decode_split_gfx11_wave64) @ggml_flash_a
   }
   kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
   %sum = view.load %reduction_stage_view[%c1] : view<2xf32> -> f32
-  %unnormalized_output = scf.for %block = [%c0 to %key_value_block_count step %c1](%running_output = %c0_f32 : f32) -> (f32) unroll(%c4) schedule(interleaved) {
-    %scale = view.load %partial_max_view[%key_value_head, %block, %query_row] : view<[%key_value_head_count]x[%key_value_block_count]x16xf32> -> f32
-    %block_output_f16 = view.load %partial_output_view[%key_value_head, %block, %query_row, %output_channel] : view<[%key_value_head_count]x[%key_value_block_count]x16x128xf16> -> f16
-    %block_output = scalar.extf %block_output_f16 : f16 to f32
-    %scaled_output = scalar.mulf<reassoc|nnan|ninf|nsz|contract> %block_output, %scale : f32
-    %next_output = scalar.addf<reassoc|nnan|ninf|nsz> %running_output, %scaled_output : f32
-    scf.yield %next_output : f32
+  scf.if %output_channel_valid {
+    %unnormalized_output = scf.for %block = [%c0 to %key_value_block_count step %c1](%running_output = %c0_f32 : f32) -> (f32) unroll(%c4) schedule(interleaved) {
+      %scale = view.load %partial_max_view[%key_value_head, %block, %query_row] : view<[%key_value_head_count]x[%key_value_block_count]x16xf32> -> f32
+      %block_output_f16 = view.load %partial_output_view[%key_value_head, %block, %query_row, %output_channel] : view<[%key_value_head_count]x[%key_value_block_count]x16x[%value_head_size]xf16> -> f16
+      %block_output = scalar.extf %block_output_f16 : f16 to f32
+      %scaled_output = scalar.mulf<reassoc|nnan|ninf|nsz|contract> %block_output, %scale : f32
+      %next_output = scalar.addf<reassoc|nnan|ninf|nsz> %running_output, %scaled_output : f32
+      scf.yield %next_output : f32
+    }
+    %normalized_output = scalar.divf<nnan|ninf|nsz|arcp> %unnormalized_output, %sum : f32
+    view.store %normalized_output, %output_view[%query_head, %output_channel] : f32, view<[%query_head_count]x[%value_head_size]xf32>
   }
-  %normalized_output = scalar.divf<nnan|ninf|nsz|arcp> %unnormalized_output, %sum : f32
-  view.store %normalized_output, %output_view[%query_head, %output_channel] : f32, view<[%query_head_count]x128xf32>
   kernel.return
 }
 

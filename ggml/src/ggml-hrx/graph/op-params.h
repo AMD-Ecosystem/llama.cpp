@@ -2,6 +2,7 @@
 
 #include "ggml.h"
 
+#include <array>
 #include <cstdint>
 #include <variant>
 
@@ -36,14 +37,24 @@ struct ClampParams {
 
 struct GluParams {
     ggml_glu_op op = GGML_GLU_OP_REGLU;
+    bool        swapped = false;
+};
+
+struct ScaleParams {
+    float scale = 0.0f;
+    float bias  = 0.0f;
 };
 
 enum class BinaryKind : uint32_t {
-    Add    = 0,
-    Sub    = 1,
-    Mul    = 2,
-    Div    = 3,
-    SwiGLU = 4,
+    Add        = 0,
+    Sub        = 1,
+    Mul        = 2,
+    Div        = 3,
+    SwiGLU     = 4,
+    GeGLU      = 5,
+    RegLU      = 6,
+    GeGLUErf   = 7,
+    GeGLUQuick = 8,
 };
 
 struct BinaryParams {
@@ -97,6 +108,7 @@ struct RopeParams {
     float attn_factor = 0.0f;
     float beta_fast   = 0.0f;
     float beta_slow   = 0.0f;
+    std::array<int, GGML_MROPE_SECTIONS> sections    = {};
 };
 
 // clang-format off
@@ -108,6 +120,7 @@ using OpParams = std::variant<
     ArgsortParams,
     ClampParams,
     GluParams,
+    ScaleParams,
     BinaryParams,
     UnaryParams,
     RopeParams>;
