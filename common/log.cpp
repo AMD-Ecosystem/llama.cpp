@@ -1,6 +1,7 @@
 #include "common.h"
 #include "log.h"
-#include "json.h"
+
+#include "nlohmann/json.hpp"
 
 #include <chrono>
 #include <condition_variable>
@@ -107,13 +108,13 @@ struct common_log_entry {
         }
 
         if (jsonl) {
-            common_json obj = {
+            nlohmann::ordered_json obj = {
                 {"type",  "log"},
                 {"time",  timestamp},
                 {"level", level_str(level)},
                 {"msg",   msg.data()},
             };
-            fprintf(fcur, "%s\n", obj.dump_safe().c_str());
+            fprintf(fcur, "%s\n", obj.dump(-1, ' ', false, nlohmann::ordered_json::error_handler_t::replace).c_str());
             fflush(fcur);
             return;
         }
