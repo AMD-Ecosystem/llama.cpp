@@ -13,6 +13,13 @@ if(HRX_SOURCE_DIR)
     set(GGML_HRX_BUILD_DIR "${GGML_HRX_PREFIX}/src/ggml-hrx-deps-build")
     set(GGML_HRX_LIB "${GGML_HRX_BUILD_DIR}/libhrx/src/libhrx/${CMAKE_SHARED_LIBRARY_PREFIX}hrx${CMAKE_SHARED_LIBRARY_SUFFIX}")
     set(GGML_LOOMC_LIB "${GGML_HRX_BUILD_DIR}/loom/binding/c/${CMAKE_SHARED_LIBRARY_PREFIX}loomc${CMAKE_SHARED_LIBRARY_SUFFIX}")
+    if(WIN32)
+        # On Windows, linking against a DLL requires its companion import
+        # library (.lib), which CMake exposes as IMPORTED_IMPLIB. Both files
+        # are produced side-by-side with the DLL by the nested build.
+        set(GGML_HRX_LIB_IMPLIB "${GGML_HRX_BUILD_DIR}/libhrx/src/libhrx/${CMAKE_IMPORT_LIBRARY_PREFIX}hrx${CMAKE_IMPORT_LIBRARY_SUFFIX}")
+        set(GGML_LOOMC_LIB_IMPLIB "${GGML_HRX_BUILD_DIR}/loom/binding/c/${CMAKE_IMPORT_LIBRARY_PREFIX}loomc${CMAKE_IMPORT_LIBRARY_SUFFIX}")
+    endif()
     set(GGML_HRX_LOOM_LINK "${GGML_HRX_BUILD_DIR}/loom/src/loom/tools/loom-link/loom-link${CMAKE_EXECUTABLE_SUFFIX}")
     set(GGML_HRX_LOOM_FORMAT "${GGML_HRX_BUILD_DIR}/loom/src/loom/tools/loom-format/loom-format${CMAKE_EXECUTABLE_SUFFIX}")
     set(GGML_HRX_IREE_BENCHMARK_LOOM "${GGML_HRX_BUILD_DIR}/loom/src/loom/tools/iree-benchmark-loom/iree-benchmark-loom${CMAKE_EXECUTABLE_SUFFIX}")
@@ -34,6 +41,9 @@ if(HRX_SOURCE_DIR)
     if(IREE_ROCM_PATH)
         list(APPEND GGML_HRX_CMAKE_ARGS -DIREE_ROCM_PATH=${IREE_ROCM_PATH})
     endif()
+    if(IREE_ROCM_DEPENDENCY_MODE)
+        list(APPEND GGML_HRX_CMAKE_ARGS -DIREE_ROCM_DEPENDENCY_MODE=${IREE_ROCM_DEPENDENCY_MODE})
+    endif()
     if(FETCHCONTENT_BASE_DIR)
         list(APPEND GGML_HRX_CMAKE_ARGS -DFETCHCONTENT_BASE_DIR=${FETCHCONTENT_BASE_DIR})
     endif()
@@ -41,11 +51,12 @@ if(HRX_SOURCE_DIR)
     ExternalProject_Add(ggml-hrx-deps
         SOURCE_DIR "${HRX_SOURCE_DIR}"
         PREFIX "${GGML_HRX_PREFIX}"
+        BINARY_DIR "${GGML_HRX_BUILD_DIR}"
         CMAKE_ARGS ${GGML_HRX_CMAKE_ARGS}
         BUILD_ALWAYS TRUE
         BUILD_COMMAND ${CMAKE_COMMAND} --build . --target hrx loomc_shared loom_tools_loom-link_loom-link loom_tools_loom-format_loom-format loom_tools_iree-benchmark-loom_iree-benchmark-loom --config ${CMAKE_BUILD_TYPE}
         INSTALL_COMMAND ""
-        BUILD_BYPRODUCTS "${GGML_HRX_LIB}" "${GGML_LOOMC_LIB}" "${GGML_HRX_LOOM_LINK}" "${GGML_HRX_LOOM_FORMAT}" "${GGML_HRX_IREE_BENCHMARK_LOOM}"
+        BUILD_BYPRODUCTS "${GGML_HRX_LIB}" "${GGML_LOOMC_LIB}" "${GGML_HRX_LIB_IMPLIB}" "${GGML_LOOMC_LIB_IMPLIB}" "${GGML_HRX_LOOM_LINK}" "${GGML_HRX_LOOM_FORMAT}" "${GGML_HRX_IREE_BENCHMARK_LOOM}"
         UPDATE_COMMAND ""
     )
 
@@ -53,6 +64,9 @@ if(HRX_SOURCE_DIR)
     set_target_properties(hrx::hrx PROPERTIES
         IMPORTED_LOCATION "${GGML_HRX_LIB}"
         INTERFACE_INCLUDE_DIRECTORIES "${HRX_SOURCE_DIR}/libhrx/include")
+    if(WIN32)
+        set_target_properties(hrx::hrx PROPERTIES IMPORTED_IMPLIB "${GGML_HRX_LIB_IMPLIB}")
+    endif()
     add_dependencies(hrx::hrx ggml-hrx-deps)
 
     add_library(loomc::loomc SHARED IMPORTED GLOBAL)
@@ -60,7 +74,22 @@ if(HRX_SOURCE_DIR)
         IMPORTED_LOCATION "${GGML_LOOMC_LIB}"
         INTERFACE_INCLUDE_DIRECTORIES "${HRX_SOURCE_DIR}/loom/binding/c/include"
         INTERFACE_COMPILE_DEFINITIONS LOOMC_USING_SHARED_LIBRARY)
+    if(WIN32)
+        set_target_properties(loomc::loomc PROPERTIES IMPORTED_IMPLIB "${GGML_LOOMC_LIB_IMPLIB}")
+    endif()
     add_dependencies(loomc::loomc ggml-hrx-deps)
+
+    # hrx::hrx/loomc::loomc are IMPORTED targets pointing at the nested
+    # ExternalProject build, so `install(TARGETS ...)` can't be used for them
+    # (CMake doesn't support installing IMPORTED targets). Install the runtime
+    # libraries directly so `cmake --install` produces a working tree; on
+    # Linux/macOS this mirrors GGML_HRX_BUNDLE_RUNTIME_LIBS's minimum
+    # requirement but doesn't depend on that Linux-only opt-in feature.
+    if(WIN32)
+        install(FILES "${GGML_HRX_LIB}" "${GGML_LOOMC_LIB}" DESTINATION "${CMAKE_INSTALL_BINDIR}")
+    else()
+        install(FILES "${GGML_HRX_LIB}" "${GGML_LOOMC_LIB}" DESTINATION "${CMAKE_INSTALL_LIBDIR}")
+    endif()
 else()
     find_package(hrx CONFIG REQUIRED)
     find_package(loomc CONFIG REQUIRED)
@@ -278,6 +307,29 @@ ggml_add_backend_library(ggml-hrx
 target_link_libraries(ggml-hrx PRIVATE ggml-hrx-kernel-corpus hrx::hrx loomc::loomc)
 target_include_directories(ggml-hrx PRIVATE . "${CMAKE_CURRENT_BINARY_DIR}" ../../../vendor)
 target_compile_definitions(ggml-hrx PRIVATE GGML_USE_HRX)
+if(WIN32)
+    # Unlike ELF/Mach-O shared libraries, Windows DLLs export no symbols by
+    # default. ggml-hrx's internal C++ API (Graph, DispatchScheduler,
+    # build_command_program(), etc.) is consumed directly -- not just through
+    # the standard GGML_BACKEND_API registration entrypoint -- by the
+    # ggml-hrx-compile-kernel/ggml-hrx-analyze-graph tools and the HRX test
+    # executables. Auto-export every symbol so linking against ggml-hrx.dll
+    # on Windows behaves like linking against libggml-hrx.so elsewhere.
+    set_target_properties(ggml-hrx PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+
+    # Windows has no RPATH equivalent: hrx.dll/loomc.dll must sit next to
+    # whichever .exe/.dll loads them. Every ggml-hrx binary (the backend
+    # itself, the CLI tools, and the tests) shares one output directory, so a
+    # single copy alongside ggml-hrx's own output makes them all runnable
+    # without requiring `cmake --install` first.
+    add_custom_command(TARGET ggml-hrx POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "$<TARGET_FILE:hrx::hrx>"
+            "$<TARGET_FILE:loomc::loomc>"
+            "$<TARGET_FILE_DIR:ggml-hrx>"
+        COMMENT "Copying hrx/loomc runtime DLLs next to ggml-hrx"
+        VERBATIM)
+endif()
 
 if (GGML_HRX_BUNDLE_RUNTIME_LIBS)
     include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/BundleRuntime.cmake")

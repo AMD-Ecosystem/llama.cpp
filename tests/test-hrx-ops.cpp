@@ -21,6 +21,23 @@
 #include <utility>
 #include <vector>
 
+#ifdef _WIN32
+// MSVC's CRT doesn't provide the POSIX setenv()/unsetenv() functions used
+// throughout this file. Shim them on top of _putenv_s() with matching
+// semantics (setenv() with overwrite=0 only sets when unset; both return 0
+// on success).
+static int setenv(const char * name, const char * value, int overwrite) {
+    if (!overwrite && std::getenv(name) != nullptr) {
+        return 0;
+    }
+    return _putenv_s(name, value) == 0 ? 0 : -1;
+}
+
+static int unsetenv(const char * name) {
+    return _putenv_s(name, "") == 0 ? 0 : -1;
+}
+#endif  // _WIN32
+
 #define REQUIRE(condition)                                                                           \
     do {                                                                                             \
         if (!(condition)) {                                                                          \

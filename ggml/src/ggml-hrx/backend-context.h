@@ -66,10 +66,12 @@ struct ggml_backend_hrx_context {
     std::string                            name;
 };
 
+// Process-lifetime registry. Device and stream handles are not released here:
+// this object is destroyed from a DLL static destructor, which on process exit
+// runs after driver threads are already gone. Call hrx_gpu_shutdown() from
+// live application code if the process will continue without HRX.
 struct ggml_backend_hrx_reg_context {
     bool                                                          initialized = false;
     std::vector<std::unique_ptr<ggml_backend_hrx_device_context>> device_contexts;
     std::vector<ggml_backend_device>                              devices;
-
-    ~ggml_backend_hrx_reg_context();
 };
