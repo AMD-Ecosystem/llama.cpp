@@ -183,21 +183,7 @@ struct ggml_cuda_mmq_config {
 
     constexpr __device__ int rows_per_warp() const {
 #if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
-#if defined(RDNA3_5)
-        if ((type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q4_0 || type == GGML_TYPE_Q8_0 ||
-             type == GGML_TYPE_Q5_K) && J == 128) {
-            return 16;
-        }
-        // Block quants only have a batched WMMA vec_dot at J=128; at the other two widths
-        // that would take ntx=2 (J=64 and J=96, the only J>=64 multiples of 32) they fall
-        // back to the generic schedule, which is several times slower there. Keep ntx=1.
-        if ((type == GGML_TYPE_Q4_0 || type == GGML_TYPE_Q8_0) && (J == 64 || J == 96)) {
-            return 16;
-        }
-        return J >= 64 && J % 32 == 0 ? 32 : 16;
-#else
         return 16;
-#endif // defined(RDNA3_5)
 #else
         return J >= 48 && J % 16 == 0 ? 32 : 16;
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
