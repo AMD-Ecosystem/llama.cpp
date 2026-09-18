@@ -1,4 +1,5 @@
 #include "mmvdq.cuh"
+#include "vecdotdq.cuh"
 #include "unary.cuh"
 
 #include <cstdlib>
@@ -10,12 +11,12 @@ static int dq_env_override(const char * name) {
     return (v[0] == '0' && v[1] == '\0') ? 0 : 1;
 }
 
-bool ggml_cuda_dq_mmv_enabled(bool arch_default) {
+static bool ggml_cuda_dq_mmv_enabled(bool arch_default) {
     static const int ov = dq_env_override("GGML_CUDA_DQ_MMV");
     return ov < 0 ? arch_default : (bool) ov;
 }
 
-bool ggml_cuda_dq_q6k_enabled(bool arch_default) {
+static bool ggml_cuda_dq_q6k_enabled(bool arch_default) {
     static const int ov = dq_env_override("GGML_CUDA_DQ_Q6K");
     return ov < 0 ? arch_default : (bool) ov;
 }
@@ -34,162 +35,6 @@ static int dq_num_rows_init() {
 static int dq_num_rows() {
     static const int rows = dq_num_rows_init();
     return rows;
-}
-
-// Q4_K scale/min extraction, identical to get_scale_min_k4 in convert.cu.
-static __device__ __forceinline__ void dq_get_scale_min_k4(int j, const uint8_t * q, uint8_t & d, uint8_t & m) {
-    if (j < 4) {
-        d = q[j] & 63; m = q[j + 4] & 63;
-    } else {
-        d = (q[j+4] & 0xF) | ((q[j-4] >> 6) << 4);
-        m = (q[j+4] >>  4) | ((q[j-0] >> 6) << 4);
-    }
-}
-
-// Per-super-block dot for one Q4_K block against pre-loaded (float4) activation.
-// Shared by the plain and gate+up-fused kernels so the dequant math lives once.
-static __device__ __forceinline__ float dq_dot_q4_K(
-        const block_q4_K * b, int q_offset, int v_im,
-        const float4 & by10, const float4 & by132, const float4 & by20, const float4 & by232,
-        float sum10, float sum32, float sum20, float sum42) {
-    const float dall = __low2float(b->dm);
-    const float dmin = __high2float(b->dm);
-
-    uint8_t dx, mx, dy, my, dz, mz, dw, mw;
-    dq_get_scale_min_k4(2*v_im + 0, b->scales, dx, mx);
-    dq_get_scale_min_k4(2*v_im + 1, b->scales, dy, my);
-    dq_get_scale_min_k4(2*v_im + 4, b->scales, dz, mz);
-    dq_get_scale_min_k4(2*v_im + 5, b->scales, dw, mw);
-
-    const uint32_t * qs32 = (const uint32_t *) b->qs;
-    const uint32_t qs0  = qs32[q_offset/4     ];
-    const uint32_t qs64 = qs32[q_offset/4 + 16];
-
-    const float sx =
-        by10.x * (float) ((qs0 >>  0) & 0xF) + by10.y * (float) ((qs0 >>  8) & 0xF) +
-        by10.z * (float) ((qs0 >> 16) & 0xF) + by10.w * (float) ((qs0 >> 24) & 0xF);
-    const float sy =
-        by132.x * (float) ((qs0 >>  4) & 0xF) + by132.y * (float) ((qs0 >> 12) & 0xF) +
-        by132.z * (float) ((qs0 >> 20) & 0xF) + by132.w * (float) ((qs0 >> 28) & 0xF);
-    const float sz =
-        by20.x * (float) ((qs64 >>  0) & 0xF) + by20.y * (float) ((qs64 >>  8) & 0xF) +
-        by20.z * (float) ((qs64 >> 16) & 0xF) + by20.w * (float) ((qs64 >> 24) & 0xF);
-    const float sw =
-        by232.x * (float) ((qs64 >>  4) & 0xF) + by232.y * (float) ((qs64 >> 12) & 0xF) +
-        by232.z * (float) ((qs64 >> 20) & 0xF) + by232.w * (float) ((qs64 >> 28) & 0xF);
-
-    const float smin = sum10*mx + sum32*my + sum20*mz + sum42*mw;
-    return dall * (sx*dx + sy*dy + sz*dz + sw*dw) - dmin*smin;
-}
-
-// Per-super-block dot for one Q5_K block against pre-loaded (float2) activation.
-// Scale unpacking (s04l/s04h/s8) and the qh bit-plane merges mirror the canonical
-// vec_dot_q5_K_q8_1 in vecdotq.cuh — keep in sync if that changes.
-static __device__ __forceinline__ float dq_dot_q5_K(
-        const block_q5_K * b, int q_offset, int l0, int v_im,
-        const float2 & by10, const float2 & by116, const float2 & by132, const float2 & by148,
-        const float2 & by20, const float2 & by216, const float2 & by232, const float2 & by248,
-        float smin_x, float smin_y, float smin_z, float smin_w) {
-    const float dall = __low2float(b->dm);
-    const float dmin = __high2float(b->dm);
-
-    const uint16_t * sc16 = (const uint16_t *) b->scales;
-    const uint32_t scale0 = sc16[v_im    ];
-    const uint32_t scale4 = sc16[v_im + 2];
-    const uint32_t scale8 = sc16[v_im + 4];
-    const uint32_t s04l = (scale4 << 16) | scale0;
-    const uint32_t s04h = (s04l & 0xC0C0C0C0u) >> 2;
-    const uint32_t s04m = s04l & 0x3F3F3F3Fu;
-    const uint32_t s8   = (((scale8 << 12) | scale8) & 0x0F0F0F0Fu) | s04h;
-
-    const float sc0 = (float) ((s04m >>  0) & 0xFF);
-    const float sc1 = (float) ((s04m >>  8) & 0xFF);
-    const float sc2 = (float) ((s04m >> 16) & 0xFF);
-    const float sc3 = (float) ((s04m >> 24) & 0xFF);
-    const float sc4 = (float) ((s8   >>  0) & 0xFF);
-    const float sc5 = (float) ((s8   >>  8) & 0xFF);
-    const float sc6 = (float) ((s8   >> 16) & 0xFF);
-    const float sc7 = (float) ((s8   >> 24) & 0xFF);
-
-    const uint16_t * qs16 = (const uint16_t *) b->qs;
-    const uint32_t qs0  = (uint32_t) qs16[q_offset/2     ] | ((uint32_t) qs16[q_offset/2 +  8] << 16);
-    const uint32_t qs64 = (uint32_t) qs16[q_offset/2 + 32] | ((uint32_t) qs16[q_offset/2 + 40] << 16);
-
-    uint32_t qs0_lo  = qs0  & 0x0F0F0F0Fu;
-    uint32_t qs0_hi  = (qs0  >> 4) & 0x0F0F0F0Fu;
-    uint32_t qs64_lo = qs64 & 0x0F0F0F0Fu;
-    uint32_t qs64_hi = (qs64 >> 4) & 0x0F0F0F0Fu;
-
-    const uint16_t * qh16 = (const uint16_t *) b->qh;
-    const uint32_t qh = (uint32_t) qh16[l0/2] | ((uint32_t) qh16[l0/2 + 8] << 16);
-
-    qs0_lo  += ((qh >> (2*v_im)) & 0x01010101u) << 4;
-    qs0_hi  += ((qh >> (2*v_im)) & 0x02020202u) << 3;
-    qs64_lo += ((qh >> (2*v_im)) & 0x10101010u);
-    qs64_hi += ((qh >> (2*v_im)) & 0x20202020u) >> 1;
-
-    const float sx =
-        by10.x  * (float) ((qs0_lo  >>  0) & 0xFF) + by10.y  * (float) ((qs0_lo  >>  8) & 0xFF) +
-        by116.x * (float) ((qs0_lo  >> 16) & 0xFF) + by116.y * (float) ((qs0_lo  >> 24) & 0xFF);
-    const float sy =
-        by132.x * (float) ((qs0_hi  >>  0) & 0xFF) + by132.y * (float) ((qs0_hi  >>  8) & 0xFF) +
-        by148.x * (float) ((qs0_hi  >> 16) & 0xFF) + by148.y * (float) ((qs0_hi  >> 24) & 0xFF);
-    const float sz =
-        by20.x  * (float) ((qs64_lo >>  0) & 0xFF) + by20.y  * (float) ((qs64_lo >>  8) & 0xFF) +
-        by216.x * (float) ((qs64_lo >> 16) & 0xFF) + by216.y * (float) ((qs64_lo >> 24) & 0xFF);
-    const float sw =
-        by232.x * (float) ((qs64_hi >>  0) & 0xFF) + by232.y * (float) ((qs64_hi >>  8) & 0xFF) +
-        by248.x * (float) ((qs64_hi >> 16) & 0xFF) + by248.y * (float) ((qs64_hi >> 24) & 0xFF);
-
-    const float smin = smin_x*sc2 + smin_y*sc3 + smin_z*sc6 + smin_w*sc7;
-    return dall * (sx*sc0 + sy*sc1 + sz*sc4 + sw*sc5) - dmin*smin;
-}
-
-// Per-super-block dot for one Q6_K block against pre-loaded (float4) activation.
-// The ql/qh bit-plane merges (q0u..q3u) and the -32 bias mirror the canonical
-// vec_dot_q6_K_q8_1 in vecdotq.cuh — keep in sync if that changes.
-static __device__ __forceinline__ float dq_dot_q6_K(
-        const block_q6_K * b, int ql_offset, int qh_offset, int s_offset,
-        const float4 & by0, const float4 & by32, const float4 & by64, const float4 & by96) {
-    const float d = __half2float(b->d);
-
-    const uint16_t * ql16 = (const uint16_t *) b->ql;
-    const uint32_t ql0  = (uint32_t) ql16[ql_offset/2     ] | ((uint32_t) ql16[ql_offset/2 +  1] << 16);
-    const uint32_t ql32 = (uint32_t) ql16[ql_offset/2 + 16] | ((uint32_t) ql16[ql_offset/2 + 17] << 16);
-
-    const uint32_t ql0_lo  = ql0  & 0x0F0F0F0Fu;
-    const uint32_t ql0_hi  = (ql0  >> 4) & 0x0F0F0F0Fu;
-    const uint32_t ql32_lo = ql32 & 0x0F0F0F0Fu;
-    const uint32_t ql32_hi = (ql32 >> 4) & 0x0F0F0F0Fu;
-
-    const uint16_t * qh16 = (const uint16_t *) b->qh;
-    const uint32_t qh = (uint32_t) qh16[qh_offset/2] | ((uint32_t) qh16[qh_offset/2 + 1] << 16);
-
-    const uint32_t q0u = ql0_lo  | ((qh & 0x03030303u) << 4);
-    const uint32_t q1u = ql32_lo | ((qh & 0x0C0C0C0Cu) << 2);
-    const uint32_t q2u = ql0_hi  |  (qh & 0x30303030u);
-    const uint32_t q3u = ql32_hi | ((qh & 0xC0C0C0C0u) >> 2);
-
-    const int8_t * sc = b->scales + s_offset;
-    const float sc0 = (float) sc[0];
-    const float sc2 = (float) sc[2];
-    const float sc4 = (float) sc[4];
-    const float sc6 = (float) sc[6];
-
-    const float sum0 =
-        by0.x * (float) ((int) ((q0u >>  0) & 0xFF) - 32) + by0.y * (float) ((int) ((q0u >>  8) & 0xFF) - 32) +
-        by0.z * (float) ((int) ((q0u >> 16) & 0xFF) - 32) + by0.w * (float) ((int) ((q0u >> 24) & 0xFF) - 32);
-    const float sum1 =
-        by32.x * (float) ((int) ((q1u >>  0) & 0xFF) - 32) + by32.y * (float) ((int) ((q1u >>  8) & 0xFF) - 32) +
-        by32.z * (float) ((int) ((q1u >> 16) & 0xFF) - 32) + by32.w * (float) ((int) ((q1u >> 24) & 0xFF) - 32);
-    const float sum2 =
-        by64.x * (float) ((int) ((q2u >>  0) & 0xFF) - 32) + by64.y * (float) ((int) ((q2u >>  8) & 0xFF) - 32) +
-        by64.z * (float) ((int) ((q2u >> 16) & 0xFF) - 32) + by64.w * (float) ((int) ((q2u >> 24) & 0xFF) - 32);
-    const float sum3 =
-        by96.x * (float) ((int) ((q3u >>  0) & 0xFF) - 32) + by96.y * (float) ((int) ((q3u >>  8) & 0xFF) - 32) +
-        by96.z * (float) ((int) ((q3u >> 16) & 0xFF) - 32) + by96.w * (float) ((int) ((q3u >> 24) & 0xFF) - 32);
-
-    return d * (sum0*sc0 + sum1*sc2 + sum2*sc4 + sum3*sc6);
 }
 
 // ---- Q4_K geometry ----
@@ -213,20 +58,31 @@ static __device__ __forceinline__ dq_geom_q4_K dq_setup_q4_K(int tid) {
 template <int warp_size, int num_rows>
 static __global__ void mul_mat_vec_dq_q4_K(
         const void * __restrict__ vx, const float * __restrict__ y, float * __restrict__ dst,
-        const int ncols_x, const int nrows_x) {
+        const int ncols_x, const int nrows_x,
+        const int32_t * __restrict__ ids, const int64_t stride_channel_x, const int64_t stride_channel_dst,
+        const int64_t stride_channel_y, const int nchannels_y) {
     const int first_row = num_rows * blockIdx.x;
     const int nblocks   = ncols_x / QK_K;
     const int it_size   = warp_size / 16;
 
+    // MoE (ids): blockIdx.y selects the expert slot; ids maps slot -> expert matrix.
+    // channel_y picks this slot's activation column (per-expert ffn_down) or 0 when the
+    // activation is broadcast/shared (gate/up, dense). Non-ids launches use grid.y=1,
+    // ids=nullptr, nchannels_y=1 => every offset below collapses to 0.
+    const int channel   = blockIdx.y;
+    const int expert    = ids ? ids[channel] : 0;
+    const int channel_y = nchannels_y > 1 ? channel % nchannels_y : 0;
     const dq_geom_q4_K g = dq_setup_q4_K(threadIdx.x);
-    const block_q4_K * x = (const block_q4_K *) vx;
+    const block_q4_K * x = (const block_q4_K *) vx + expert * stride_channel_x;
+    const float * yc = y + (int64_t) channel_y * stride_channel_y;
+    float * dst_c = dst + channel * stride_channel_dst;
 
     float sumf[num_rows];
 #pragma unroll
     for (int n = 0; n < num_rows; ++n) sumf[n] = 0.0f;
 
     for (int i = g.ix; i < nblocks; i += it_size) {
-        const float * yb = y + (int64_t) i * QK_K;
+        const float * yb = yc + (int64_t) i * QK_K;
         const float4 by10  = *(const float4 *) (yb + g.y_offset      );
         const float4 by132 = *(const float4 *) (yb + g.y_offset +  32);
         const float4 by20  = *(const float4 *) (yb + g.y_offset + 128);
@@ -248,7 +104,7 @@ static __global__ void mul_mat_vec_dq_q4_K(
 #pragma unroll
     for (int n = 0; n < num_rows; ++n) {
         const float total = warp_reduce_sum<warp_size>(sumf[n]);
-        if (threadIdx.x == 0 && first_row + n < nrows_x) dst[first_row + n] = total;
+        if (threadIdx.x == 0 && first_row + n < nrows_x) dst_c[first_row + n] = total;
     }
 }
 
@@ -376,20 +232,27 @@ static __device__ __forceinline__ dq_geom_q5_K dq_setup_q5_K(int tid) {
 template <int warp_size, int num_rows>
 static __global__ void mul_mat_vec_dq_q5_K(
         const void * __restrict__ vx, const float * __restrict__ y, float * __restrict__ dst,
-        const int ncols_x, const int nrows_x) {
+        const int ncols_x, const int nrows_x,
+        const int32_t * __restrict__ ids, const int64_t stride_channel_x, const int64_t stride_channel_dst,
+        const int64_t stride_channel_y, const int nchannels_y) {
     const int first_row = num_rows * blockIdx.x;
     const int nblocks   = ncols_x / QK_K;
     const int it_size   = warp_size / 16;
 
+    const int channel   = blockIdx.y;
+    const int expert    = ids ? ids[channel] : 0;
+    const int channel_y = nchannels_y > 1 ? channel % nchannels_y : 0;
     const dq_geom_q5_K g = dq_setup_q5_K(threadIdx.x);
-    const block_q5_K * x = (const block_q5_K *) vx;
+    const block_q5_K * x = (const block_q5_K *) vx + expert * stride_channel_x;
+    const float * yc = y + (int64_t) channel_y * stride_channel_y;
+    float * dst_c = dst + channel * stride_channel_dst;
 
     float sumf[num_rows];
 #pragma unroll
     for (int n = 0; n < num_rows; ++n) sumf[n] = 0.0f;
 
     for (int i = g.ix; i < nblocks; i += it_size) {
-        const float * yb = y + (int64_t) i * QK_K;
+        const float * yb = yc + (int64_t) i * QK_K;
         DQ_Q5_K_LOAD_ACT();
 
 #pragma unroll
@@ -403,7 +266,7 @@ static __global__ void mul_mat_vec_dq_q5_K(
 #pragma unroll
     for (int n = 0; n < num_rows; ++n) {
         const float total = warp_reduce_sum<warp_size>(sumf[n]);
-        if (threadIdx.x == 0 && first_row + n < nrows_x) dst[first_row + n] = total;
+        if (threadIdx.x == 0 && first_row + n < nrows_x) dst_c[first_row + n] = total;
     }
 }
 
@@ -496,20 +359,27 @@ static __device__ __forceinline__ dq_geom_q6_K dq_setup_q6_K(int tid) {
 template <int warp_size, int num_rows>
 static __global__ void mul_mat_vec_dq_q6_K(
         const void * __restrict__ vx, const float * __restrict__ y, float * __restrict__ dst,
-        const int ncols_x, const int nrows_x) {
+        const int ncols_x, const int nrows_x,
+        const int32_t * __restrict__ ids, const int64_t stride_channel_x, const int64_t stride_channel_dst,
+        const int64_t stride_channel_y, const int nchannels_y) {
     const int first_row = num_rows * blockIdx.x;
     const int nblocks   = ncols_x / QK_K;
     const int it_size   = warp_size / 16;
 
+    const int channel   = blockIdx.y;
+    const int expert    = ids ? ids[channel] : 0;
+    const int channel_y = nchannels_y > 1 ? channel % nchannels_y : 0;
     const dq_geom_q6_K g = dq_setup_q6_K(threadIdx.x);
-    const block_q6_K * x = (const block_q6_K *) vx;
+    const block_q6_K * x = (const block_q6_K *) vx + expert * stride_channel_x;
+    const float * yc = y + (int64_t) channel_y * stride_channel_y;
+    float * dst_c = dst + channel * stride_channel_dst;
 
     float sumf[num_rows];
 #pragma unroll
     for (int n = 0; n < num_rows; ++n) sumf[n] = 0.0f;
 
     for (int i = g.ix; i < nblocks; i += it_size) {
-        const float * yb = y + (int64_t) i * QK_K;
+        const float * yb = yc + (int64_t) i * QK_K;
         const float4 by0  = *(const float4 *) (yb + g.y_offset      );
         const float4 by32 = *(const float4 *) (yb + g.y_offset +  32);
         const float4 by64 = *(const float4 *) (yb + g.y_offset +  64);
@@ -526,7 +396,7 @@ static __global__ void mul_mat_vec_dq_q6_K(
 #pragma unroll
     for (int n = 0; n < num_rows; ++n) {
         const float total = warp_reduce_sum<warp_size>(sumf[n]);
-        if (threadIdx.x == 0 && first_row + n < nrows_x) dst[first_row + n] = total;
+        if (threadIdx.x == 0 && first_row + n < nrows_x) dst_c[first_row + n] = total;
     }
 }
 
@@ -611,10 +481,10 @@ static __global__ void mul_mat_vec_dq_glu_q6_K(
 // ---- launchers ----
 #define DQ_LAUNCH_PLAIN(KERN, NR)                                                                 \
     do {                                                                                          \
-        const dim3 bn((nrows_x + (NR) - 1) / (NR), 1, 1);                                         \
+        const dim3 bn((nrows_x + (NR) - 1) / (NR), nchannels_dst, 1);                             \
         const dim3 bd(warp_size, 1, 1);                                                           \
-        if (warp_size == 64) KERN<64, NR><<<bn, bd, 0, stream>>>(vx, y, d, ncols_x, nrows_x);     \
-        else                 KERN<32, NR><<<bn, bd, 0, stream>>>(vx, y, d, ncols_x, nrows_x);     \
+        if (warp_size == 64) KERN<64, NR><<<bn, bd, 0, stream>>>(vx, y, d, ncols_x, nrows_x, ids, stride_channel_x, stride_channel_dst, stride_channel_y, nchannels_y); \
+        else                 KERN<32, NR><<<bn, bd, 0, stream>>>(vx, y, d, ncols_x, nrows_x, ids, stride_channel_x, stride_channel_dst, stride_channel_y, nchannels_y); \
     } while (0)
 
 #define DQ_LAUNCH_GLU(KERN, NR)                                                                         \
@@ -626,15 +496,21 @@ static __global__ void mul_mat_vec_dq_glu_q6_K(
     } while (0)
 
 template <int num_rows>
-static void launch_dq_q4_K(const void * vx, const float * y, float * d, int ncols_x, int nrows_x, int warp_size, cudaStream_t stream) {
+static void launch_dq_q4_K(const void * vx, const float * y, float * d, int ncols_x, int nrows_x,
+        const int32_t * ids, int64_t stride_channel_x, int64_t stride_channel_dst,
+        int64_t stride_channel_y, int nchannels_y, int nchannels_dst, int warp_size, cudaStream_t stream) {
     DQ_LAUNCH_PLAIN(mul_mat_vec_dq_q4_K, num_rows);
 }
 template <int num_rows>
-static void launch_dq_q5_K(const void * vx, const float * y, float * d, int ncols_x, int nrows_x, int warp_size, cudaStream_t stream) {
+static void launch_dq_q5_K(const void * vx, const float * y, float * d, int ncols_x, int nrows_x,
+        const int32_t * ids, int64_t stride_channel_x, int64_t stride_channel_dst,
+        int64_t stride_channel_y, int nchannels_y, int nchannels_dst, int warp_size, cudaStream_t stream) {
     DQ_LAUNCH_PLAIN(mul_mat_vec_dq_q5_K, num_rows);
 }
 template <int num_rows>
-static void launch_dq_q6_K(const void * vx, const float * y, float * d, int ncols_x, int nrows_x, int warp_size, cudaStream_t stream) {
+static void launch_dq_q6_K(const void * vx, const float * y, float * d, int ncols_x, int nrows_x,
+        const int32_t * ids, int64_t stride_channel_x, int64_t stride_channel_dst,
+        int64_t stride_channel_y, int nchannels_y, int nchannels_dst, int warp_size, cudaStream_t stream) {
     DQ_LAUNCH_PLAIN(mul_mat_vec_dq_q6_K, num_rows);
 }
 template <int num_rows>
@@ -658,8 +534,37 @@ static void launch_dq_glu_q6_K(const void * vx_up, const void * vx_gate, const f
         default: LAUNCH<1>(__VA_ARGS__); break;               \
     }
 
-void ggml_cuda_mul_mat_vec_dq_q4_K(
-        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+// MoE (ids) strides: src0 is [K, N, n_expert]; the expert-axis stride (in block
+// elements), the per-expert-slot dst column stride (in floats), and the activation
+// column stride+count mirror the q8_1 MUL_MAT_ID layout in ggml_cuda_mul_mat_vec_q.
+// nchannels_y = src1->ne[1]: ==1 when the activation is broadcast/shared (gate/up,
+// dense), ==nchannels_dst for per-expert activation (ffn_down). Non-ids callers pass
+// ids=nullptr, nchannels_dst=1, nchannels_y=1 => every extra axis collapses.
+struct dq_moe_dims {
+    const int32_t * ids;
+    int64_t stride_channel_x;
+    int64_t stride_channel_dst;
+    int64_t stride_channel_y;
+    int     nchannels_y;
+    int     nchannels_dst;
+};
+static dq_moe_dims dq_moe_setup(const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, const ggml_tensor * dst) {
+    if (!ids) {
+        return { nullptr, 0, 0, 0, 1, 1 };
+    }
+    return {
+        (const int32_t *) ids->data,
+        (int64_t) (src0->nb[2] / ggml_type_size(src0->type)),
+        (int64_t) (dst->nb[1]  / ggml_type_size(dst->type)),
+        (int64_t) (src1->nb[1] / ggml_type_size(src1->type)),
+        (int) src1->ne[1],
+        (int) dst->ne[1],
+    };
+}
+
+static void ggml_cuda_mul_mat_vec_dq_q4_K(
+        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
+        const ggml_tensor * ids_t, ggml_tensor * dst) {
     const int ncols_x = src0->ne[0];
     const int nrows   = src0->ne[1];
     cudaStream_t stream = ctx.stream();
@@ -667,11 +572,19 @@ void ggml_cuda_mul_mat_vec_dq_q4_K(
     const void  * vx = src0->data;
     const float * y  = (const float *) src1->data;
     float       * d  = (float *) dst->data;
-    DQ_DISPATCH_ROWS(launch_dq_q4_K, vx, y, d, ncols_x, nrows, warp_size, stream);
+    const dq_moe_dims m = dq_moe_setup(src0, src1, ids_t, dst);
+    const int32_t * ids = m.ids;
+    const int64_t stride_channel_x   = m.stride_channel_x;
+    const int64_t stride_channel_dst = m.stride_channel_dst;
+    const int64_t stride_channel_y   = m.stride_channel_y;
+    const int     nchannels_y        = m.nchannels_y;
+    const int     nchannels_dst      = m.nchannels_dst;
+    DQ_DISPATCH_ROWS(launch_dq_q4_K, vx, y, d, ncols_x, nrows, ids, stride_channel_x, stride_channel_dst, stride_channel_y, nchannels_y, nchannels_dst, warp_size, stream);
 }
 
-void ggml_cuda_mul_mat_vec_dq_q5_K(
-        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+static void ggml_cuda_mul_mat_vec_dq_q5_K(
+        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
+        const ggml_tensor * ids_t, ggml_tensor * dst) {
     const int ncols_x = src0->ne[0];
     const int nrows   = src0->ne[1];
     cudaStream_t stream = ctx.stream();
@@ -679,11 +592,19 @@ void ggml_cuda_mul_mat_vec_dq_q5_K(
     const void  * vx = src0->data;
     const float * y  = (const float *) src1->data;
     float       * d  = (float *) dst->data;
-    DQ_DISPATCH_ROWS(launch_dq_q5_K, vx, y, d, ncols_x, nrows, warp_size, stream);
+    const dq_moe_dims m = dq_moe_setup(src0, src1, ids_t, dst);
+    const int32_t * ids = m.ids;
+    const int64_t stride_channel_x   = m.stride_channel_x;
+    const int64_t stride_channel_dst = m.stride_channel_dst;
+    const int64_t stride_channel_y   = m.stride_channel_y;
+    const int     nchannels_y        = m.nchannels_y;
+    const int     nchannels_dst      = m.nchannels_dst;
+    DQ_DISPATCH_ROWS(launch_dq_q5_K, vx, y, d, ncols_x, nrows, ids, stride_channel_x, stride_channel_dst, stride_channel_y, nchannels_y, nchannels_dst, warp_size, stream);
 }
 
-void ggml_cuda_mul_mat_vec_dq_q6_K(
-        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+static void ggml_cuda_mul_mat_vec_dq_q6_K(
+        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
+        const ggml_tensor * ids_t, ggml_tensor * dst) {
     const int ncols_x = src0->ne[0];
     const int nrows   = src0->ne[1];
     cudaStream_t stream = ctx.stream();
@@ -691,10 +612,17 @@ void ggml_cuda_mul_mat_vec_dq_q6_K(
     const void  * vx = src0->data;
     const float * y  = (const float *) src1->data;
     float       * d  = (float *) dst->data;
-    DQ_DISPATCH_ROWS(launch_dq_q6_K, vx, y, d, ncols_x, nrows, warp_size, stream);
+    const dq_moe_dims m = dq_moe_setup(src0, src1, ids_t, dst);
+    const int32_t * ids = m.ids;
+    const int64_t stride_channel_x   = m.stride_channel_x;
+    const int64_t stride_channel_dst = m.stride_channel_dst;
+    const int64_t stride_channel_y   = m.stride_channel_y;
+    const int     nchannels_y        = m.nchannels_y;
+    const int     nchannels_dst      = m.nchannels_dst;
+    DQ_DISPATCH_ROWS(launch_dq_q6_K, vx, y, d, ncols_x, nrows, ids, stride_channel_x, stride_channel_dst, stride_channel_y, nchannels_y, nchannels_dst, warp_size, stream);
 }
 
-void ggml_cuda_mul_mat_vec_dq_glu(
+static void ggml_cuda_mul_mat_vec_dq_glu(
         ggml_backend_cuda_context & ctx, const ggml_tensor * up, const ggml_tensor * gate,
         const ggml_tensor * src1, ggml_tensor * dst) {
     const int ncols_x = up->ne[0];
@@ -708,6 +636,110 @@ void ggml_cuda_mul_mat_vec_dq_glu(
     switch (up->type) {
         case GGML_TYPE_Q4_K: DQ_DISPATCH_ROWS(launch_dq_glu_q4_K, vx_up, vx_gate, y, d, ncols_x, nrows, warp_size, stream); break;
         case GGML_TYPE_Q5_K: DQ_DISPATCH_ROWS(launch_dq_glu_q5_K, vx_up, vx_gate, y, d, ncols_x, nrows, warp_size, stream); break;
-        default:             DQ_DISPATCH_ROWS(launch_dq_glu_q6_K, vx_up, vx_gate, y, d, ncols_x, nrows, warp_size, stream); break;
+        case GGML_TYPE_Q6_K: DQ_DISPATCH_ROWS(launch_dq_glu_q6_K, vx_up, vx_gate, y, d, ncols_x, nrows, warp_size, stream); break;
+        default: GGML_ABORT("mul_mat_vec_dq_glu: unsupported type %s (should_use_mmv_dq must gate this)",
+                            ggml_type_name(up->type));
+    }
+}
+
+// ---- dispatch: dq as an internal variant of ggml_cuda_mul_mat_vec_q ----
+
+bool ggml_cuda_should_use_mmv_dq(
+        const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids,
+        const ggml_tensor * dst, int cc, const ggml_cuda_mm_fusion_args_host * fusion) {
+    const bool dq_default = GGML_CUDA_CC_IS_RDNA3_5(cc);
+    if (!ggml_cuda_dq_mmv_enabled(dq_default)) {
+        return false;
+    }
+
+    // MoE (ids): the plain (non-fused) per-expert matvec for a single decode token.
+    // src0 is [K, N, n_expert]; the expert axis is selected via ids and becomes the
+    // kernel's grid.y. The activation may be broadcast (gate/up: src1->ne[1]==1) or
+    // per-expert (ffn_down: src1->ne[1]==n_expert_used==dst->ne[1]) — both handled by
+    // channel_y in the kernel; the guard below is enforced further down. Fused GLU + ids
+    // and multi-token (dst->ne[2]>1) remain deferred.
+    if (ids != nullptr) {
+        if (ids->type != GGML_TYPE_I32) {
+            return false;
+        }
+        if (fusion != nullptr) {   // fused GLU + ids not implemented yet
+            return false;
+        }
+        if (dst->ne[2] != 1) {     // single decode token: ncols_dst == 1
+            return false;
+        }
+    }
+
+    const ggml_type type = src0->type;
+    if (!(type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q5_K
+            || (type == GGML_TYPE_Q6_K && ggml_cuda_dq_q6k_enabled(dq_default)))) {
+        return false;
+    }
+
+    if (src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    // Activation columns (src1->ne[1]). Non-ids: single-vector only (>1 is the Phase-2
+    // MTP token-batch seam). ids: either broadcast (==1, gate/up) or per-expert
+    // (==dst->ne[1]==n_expert_used, ffn_down); the kernel's channel_y handles both.
+    if (ids == nullptr) {
+        if (src1->ne[1] != 1) {
+            return false;
+        }
+    } else {
+        if (src1->ne[1] != 1 && src1->ne[1] != dst->ne[1]) {
+            return false;
+        }
+    }
+
+    if (src0->ne[0] % QK_K != 0) {
+        return false;
+    }
+    if (src0->ne[3] != 1 || src1->ne[2] != 1 || src1->ne[3] != 1) {
+        return false;
+    }
+    // Non-ids requires a single 2D weight matrix; for ids, src0->ne[2] is the expert axis.
+    if (ids == nullptr && src0->ne[2] != 1) {
+        return false;
+    }
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1) || !ggml_is_contiguous(dst)) {
+        return false;
+    }
+
+    // Fusion inspection: dq only implements SwiGLU gate fusion (up = src0,
+    // gate = fusion->gate, shared activation). Any bias/scale or other GLU op
+    // falls back to the q8_1 mmvq path.
+    if (fusion) {
+        if (fusion->glu_op != GGML_GLU_OP_SWIGLU || fusion->gate == nullptr) {
+            return false;
+        }
+        if (fusion->x_bias || fusion->gate_bias || fusion->x_scale || fusion->gate_scale) {
+            return false;
+        }
+        if (fusion->gate->type != type || !ggml_are_same_shape(src0, fusion->gate)
+                || !ggml_is_contiguous(fusion->gate)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+void ggml_cuda_mul_mat_vec_dq(
+        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
+        const ggml_tensor * ids, ggml_tensor * dst, const ggml_cuda_mm_fusion_args_host * fusion) {
+    if (fusion && fusion->gate) {
+        // Fused GLU + ids is not implemented; should_use_mmv_dq rejects fusion when ids is set.
+        ggml_cuda_mul_mat_vec_dq_glu(ctx, src0, fusion->gate, src1, dst);
+        return;
+    }
+
+    switch (src0->type) {
+        case GGML_TYPE_Q4_K: ggml_cuda_mul_mat_vec_dq_q4_K(ctx, src0, src1, ids, dst); break;
+        case GGML_TYPE_Q5_K: ggml_cuda_mul_mat_vec_dq_q5_K(ctx, src0, src1, ids, dst); break;
+        case GGML_TYPE_Q6_K: ggml_cuda_mul_mat_vec_dq_q6_K(ctx, src0, src1, ids, dst); break;
+        default: GGML_ABORT("mul_mat_vec_dq: unsupported type %s (should_use_mmv_dq must gate this)",
+                            ggml_type_name(src0->type));
     }
 }
