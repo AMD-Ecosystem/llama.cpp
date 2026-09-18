@@ -1574,6 +1574,32 @@ struct test_case {
             return false;
         }
 
+        // optional cache-flush scratch (GGML_TEST_FLUSH_CACHE): evict the op's working set
+        // between timed runs so each read comes cold from VRAM. This makes perf reflect the
+        // real (bandwidth-bound) decode regime instead of hot L2/MALL cache. When enabled we
+        // also force n_runs=1 (below) so the same op is not replayed hot within one graph.
+        const bool flush_cache = getenv("GGML_TEST_FLUSH_CACHE") != nullptr;
+        ggml_context_ptr        ctx_flush;
+        ggml_backend_buffer_ptr buf_flush;
+        ggml_cgraph *           gf_flush = nullptr;
+        if (flush_cache) {
+            // 64 MiB > 2x the gfx1151 MALL (32 MiB): a scale over it evicts the working set.
+            const int64_t flush_elems = (64 * 1024 * 1024) / (int64_t) sizeof(float);
+            ggml_init_params flush_params = {
+                /* .mem_size = */ ggml_tensor_overhead()*8 + ggml_graph_overhead(),
+                /* .mem_base = */ NULL,
+                /* .no_alloc = */ true,
+            };
+            ctx_flush.reset(ggml_init(flush_params));
+            GGML_ASSERT(ctx_flush);
+            ggml_tensor * flush_in  = ggml_new_tensor_1d(ctx_flush.get(), GGML_TYPE_F32, flush_elems);
+            ggml_tensor * flush_out = ggml_scale(ctx_flush.get(), flush_in, 1.0f);
+            buf_flush.reset(ggml_backend_alloc_ctx_tensors(ctx_flush.get(), backend));
+            GGML_ASSERT(buf_flush);
+            gf_flush = ggml_new_graph(ctx_flush.get());
+            ggml_build_forward_expand(gf_flush, flush_out);
+        }
+
         // determine number of runs
         int n_runs;
         bool is_cpu = ggml_backend_dev_type(ggml_backend_get_device(backend)) == GGML_BACKEND_DEVICE_TYPE_CPU;
@@ -1591,6 +1617,16 @@ struct test_case {
             const size_t target_size_gpu = 32 * GB;
             size_t target_size = is_cpu ? target_size_cpu : target_size_gpu;
             n_runs = (int)std::min<int64_t>(ggml_graph_size(gf) - ggml_graph_n_nodes(gf), target_size / op_size(out)) + 1;
+        }
+
+        // with cache flushing, run the op once per timed compute (cold weights each run)
+        int flush_iters = 100;
+        if (flush_cache) {
+            n_runs = 1;
+            if (const char * e = getenv("GGML_TEST_FLUSH_ITERS")) {
+                flush_iters = atoi(e);
+                if (flush_iters < 1) flush_iters = 1;
+            }
         }
 
         // duplicate the op
@@ -1622,6 +1658,10 @@ struct test_case {
         int64_t total_mem = 0;
         int total_runs = 0;
         do {
+            // evict the working set BEFORE the timed region so the run reads cold from VRAM
+            if (flush_cache) {
+                ggml_backend_graph_compute(backend, gf_flush);
+            }
             int64_t start_time = ggml_time_us();
             ggml_status status = ggml_backend_graph_compute(backend, gf);
             if (status != GGML_STATUS_SUCCESS) {
@@ -1633,6 +1673,11 @@ struct test_case {
             total_time_us += end_time - start_time;
             total_mem += mem;
             total_runs += n_runs;
+            // flush mode: a fixed cold-sample count (each iter = 1 flush + 1 op) instead of
+            // the 1-second hot-cache floor, which would replay ~10^4 flushes per shape.
+            if (flush_cache && total_runs >= flush_iters) {
+                break;
+            }
         } while (total_time_us < 1000*1000); // run for at least 1 second
 
         // Create test result
@@ -8208,6 +8253,22 @@ static void add_rdna35_mmq_cases(std::vector<std::unique_ptr<test_case>> & test_
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32,  512, 16, 2048, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 4096, 16, 4096, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 4096, 1024, 12288, {1, 1}, {1, 1}));
+
+    static constexpr mmq_test_shape q4k_decode_model_shapes[] = {
+        {21504, 1,  5376},
+        {15360, 1,  3840},
+        { 5376, 1, 21504},
+        { 5376, 1,  8192},
+    };
+    for (const mmq_test_shape & s : q4k_decode_model_shapes) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, s.m, s.n, s.k, {1, 1}, {1, 1}));
+    }
+
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32,  2048, 1,  2048, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32,  1024, 1,  4096, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32,  3584, 1, 18944, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32,  4096, 1, 12288, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32,  3584, 1,  3584, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K, GGML_TYPE_F32, 4096, 128, 12288, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 32, 128, 4096, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 32, 128, 4096, {1, 1}, {1, 1}));
