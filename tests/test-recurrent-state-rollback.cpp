@@ -134,6 +134,7 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
     float    diff_max  = 0.0f;
     uint32_t seq_first = 0;
     int32_t  pos_first = -1;
+    const bool dbg_perpos = getenv("DBG_PERPOS") != nullptr;
     for (uint32_t i = 0; i < n_seqs*n_replay; ++i) {
         const float * l_roll = llama_get_logits_ith(ctx_roll, i);
         const float * l_ref  = llama_get_logits_ith(ctx_ref,  i);
@@ -142,6 +143,7 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
             cleanup();
             return false;
         }
+        float diff_pos = 0.0f;
         for (int t = 0; t < n_vocab; ++t) {
             const float diff = std::fabs(l_roll[t] - l_ref[t]);
             if (diff > eps && pos_first < 0) {
@@ -149,6 +151,11 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
                 pos_first = p0 + (int32_t) (i%n_replay);
             }
             diff_max = std::max(diff_max, diff);
+            diff_pos = std::max(diff_pos, diff);
+        }
+        if (dbg_perpos) {
+            fprintf(stderr, "DBG_PERPOS seq=%u replay_idx=%u pos=%d diff=%g\n",
+                    i/n_replay, i%n_replay, p0 + (int32_t)(i%n_replay), (double) diff_pos);
         }
     }
 
