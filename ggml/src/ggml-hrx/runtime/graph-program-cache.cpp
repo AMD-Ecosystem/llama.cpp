@@ -54,6 +54,12 @@ static bool tensor_alias_matches(const ValueMap &                         values
     if (!tensor_alias) {
         return true;
     }
+    if (value.byte_count == 0 && ggml_nbytes(tensor) == 0) {
+        // An empty view touches no storage, so its offset carries no meaning. llama.cpp
+        // builds such views for a ubatch without outputs (e.g. f32[n_embd,0] at view_offs
+        // n_embd*4), and the offset check below rejects them against an empty source.
+        return true;
+    }
 
     const Value * source_value = values.find(value.alias_source);
     if (source_value == nullptr || value.alias_source.value < 0 ||
