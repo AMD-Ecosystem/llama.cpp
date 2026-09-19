@@ -4708,6 +4708,98 @@
       ]
     },
     {
+      "name": "ggml_flash_attention_decode_split_produce_partials_f32_f16_wmma",
+      "family": "loom_libs",
+      "symbol": "ggml_flash_attention_decode_split_produce_partials_f32_f16_wmma",
+      "source": "ops/flash_attention_decode_split_f32_f16_wmma.loom",
+      "workload_parameters": [
+        {
+          "name": "key_value_token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "key_value_token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "query",
+        "key",
+        "value",
+        "mask",
+        "partial_max",
+        "partial_sum",
+        "partial_output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write",
+        "read_write",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/flash_attention_decode_split_f32_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "motifs/quantize_q8_1_x4.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/quantize_q8_1_x4.loom"
+      ]
+    },
+    {
+      "name": "ggml_flash_attention_decode_split_reduce_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_flash_attention_decode_split_reduce_f32",
+      "source": "ops/flash_attention_decode_split_f32_f16_wmma.loom",
+      "workload_parameters": [
+        {
+          "name": "key_value_token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "key_value_token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "partial_max",
+        "partial_sum",
+        "partial_output",
+        "output"
+      ],
+      "binding_access": [
+        "read_write",
+        "read_write",
+        "read_write",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/flash_attention_decode_split_f32_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "motifs/quantize_q8_1_x4.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/quantize_q8_1_x4.loom"
+      ]
+    },
+    {
       "name": "ggml_get_rows_f32",
       "family": "loom_libs",
       "symbol": "ggml_get_rows_f32",

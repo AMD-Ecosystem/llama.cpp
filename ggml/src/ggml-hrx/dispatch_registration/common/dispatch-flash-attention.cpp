@@ -17,6 +17,11 @@ static constexpr KernelCatalogRef kFlashAttentionF32F16WmmaKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_f32_f16_wmma");
 static constexpr KernelCatalogRef kFlashAttentionDecodeSplitNextQ8Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_decode_split_f32_f16_wmma_next_q8");
+static constexpr KernelCatalogRef kFlashAttentionDecodeProducePartialsKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_decode_split_produce_partials_f32_f16_wmma");
+static constexpr KernelCatalogRef kFlashAttentionDecodeReduceKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_decode_split_reduce_f32");
+static constexpr KernelCatalogRef kQuantizeQ8_1X4Kernel = GGML_HRX_KERNEL_REF("qwen3_moe", "ggml_quantize_q8_1_x4_f32");
 static constexpr KernelCatalogRef kCopyTransposeF16Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_copy_transpose_f16");
 static constexpr int64_t kDecodeRowCapacity         = 16;
@@ -46,6 +51,12 @@ static bool is_supported_key_value_token_count(int64_t token_count) {
 
 static bool is_supported_decode_key_value_token_count(int64_t token_count) {
     return token_count >= 1 && token_count <= 2048;
+}
+
+// Past the fused decode kernel's 2048-token bound, decode runs as separate
+// producer, reducer and Q8 pack dispatches (the kernels' own limit is 32768).
+static bool is_supported_long_decode_key_value_token_count(int64_t token_count) {
+    return token_count > 2048 && token_count <= 32768;
 }
 
 static bool is_supported_decode_query_length(int64_t query_length) {
@@ -270,7 +281,8 @@ static FlashAttentionMatch match_flash_attention_f32_f16(const Graph &       gra
 }
 
 static DecodeSplitFlashAttentionMatch match_decode_split_flash_attention_f32_f16(const Graph &     graph,
-                                                                                 const GraphNode * node) {
+                                                                                 const GraphNode * node,
+                                                                                 bool              long_context) {
     DecodeSplitFlashAttentionMatch match;
     if (node == nullptr || node->op != GGML_OP_FLASH_ATTN_EXT || node->inputs.size() != 4) {
         return match;
@@ -309,7 +321,8 @@ static DecodeSplitFlashAttentionMatch match_decode_split_flash_attention_f32_f16
     const int64_t key_value_head_count  = key->ne[2];
     const int64_t key_value_token_count = mask->ne[0];
     if (!is_supported_decode_query_length(query_token_count) ||
-        !is_supported_decode_key_value_token_count(key_value_token_count) ||
+        !(long_context ? is_supported_long_decode_key_value_token_count(key_value_token_count) :
+                         is_supported_decode_key_value_token_count(key_value_token_count)) ||
         key_value_capacity < key_value_token_count || !is_supported_head_count(query_head_count) ||
         !is_supported_head_count(key_value_head_count) || query_head_count % key_value_head_count != 0) {
         return {};
@@ -533,7 +546,7 @@ static bool match_flash_attention_f32_f16_dispatch(const DispatchMatchContext & 
 static bool match_flash_attention_decode_split_next_q8_dispatch(const DispatchMatchContext & context,
                                                                 DispatchMatch &              dispatch_match) {
     const DecodeSplitFlashAttentionMatch match =
-        match_decode_split_flash_attention_f32_f16(context.graph, context.root_node);
+        match_decode_split_flash_attention_f32_f16(context.graph, context.root_node, false);
     if (!match.matched()) {
         return false;
     }
@@ -619,6 +632,110 @@ static bool match_flash_attention_decode_split_next_q8_dispatch(const DispatchMa
     return true;
 }
 
+static bool match_flash_attention_long_decode_next_q8_dispatch(const DispatchMatchContext & context,
+                                                               DispatchMatch &              dispatch_match) {
+    const DecodeSplitFlashAttentionMatch match =
+        match_decode_split_flash_attention_f32_f16(context.graph, context.root_node, true);
+    if (!match.matched()) {
+        return false;
+    }
+    const int64_t query_hidden_size  = match.query_head_count * match.qk_head_size;
+    const int64_t output_hidden_size = match.query_head_count * match.value_head_size;
+    if (output_hidden_size % 128 != 0 || output_hidden_size > 32768) {
+        return false;  // ggml_quantize_q8_1_x4_f32 bounds
+    }
+
+    const int64_t key_value_block_count = ceil_div(match.key_value_capacity, kDecodeKvTileSize);
+    const size_t  partial_scalar_count  = static_cast<size_t>(match.key_value_head_count) *
+                                        static_cast<size_t>(key_value_block_count) *
+                                        static_cast<size_t>(kDecodeRowCapacity);
+    const size_t partial_scalar_bytes = partial_scalar_count * sizeof(float);
+    const size_t partial_output_bytes =
+        partial_scalar_count * static_cast<size_t>(match.value_head_size) * sizeof(ggml_fp16_t);
+    const size_t q8_output_bytes = q8_1_x4_byte_count(match.query_token_count, output_hidden_size);
+    if (partial_scalar_bytes == 0 || partial_output_bytes == 0 || q8_output_bytes == 0) {
+        return false;
+    }
+
+    const ValueId partial_max    = match_value(context, dispatch_match, 0);
+    const ValueId partial_sum    = match_value(context, dispatch_match, 1);
+    const ValueId partial_output = match_value(context, dispatch_match, 2);
+    const ValueId q8_output      = match_value(context, dispatch_match, 3);
+    dispatch_match.transients.push_back(
+        { partial_max, "common.decode_long.flash_attention.partial_max", partial_scalar_bytes, 256 });
+    dispatch_match.transients.push_back(
+        { partial_sum, "common.decode_long.flash_attention.partial_sum", partial_scalar_bytes, 256 });
+    dispatch_match.transients.push_back(
+        { partial_output, "common.decode_long.flash_attention.partial_output", partial_output_bytes, 256 });
+    dispatch_match.transients.push_back(
+        { q8_output, "common.decode_long.flash_attention.next_q8_output", q8_output_bytes, 256 });
+
+    Status metadata_status;
+    if (!dispatch_match.metadata.append_alternate_value({ match.output->id, q8_output, GGML_TYPE_Q8_1, q8_output_bytes,
+                                                          "common.decode_long.flash_attention.next_q8_output" },
+                                                        metadata_status)) {
+        dispatch_match.status.append(metadata_status);
+        return false;
+    }
+
+    const auto add_decode_parameters = [&](Dispatch & dispatch) {
+        dispatch.kernel.integer_parameters.emplace("key_value_token_count", match.key_value_token_count);
+        add_flash_attention_decode_compile_parameters(dispatch.kernel, match.query_head_count,
+                                                      match.key_value_head_count, match.qk_head_size,
+                                                      match.value_head_size, match.attention_scale);
+        dispatch.kernel.compile_parameters.emplace("ggml.flash_attention.decode.key_value_token_capacity",
+                                                   to_config_value(match.key_value_capacity));
+    };
+    const size_t query_row_bytes  = static_cast<size_t>(query_hidden_size) * sizeof(float);
+    const size_t mask_row_bytes   = static_cast<size_t>(match.key_value_token_count) * sizeof(ggml_fp16_t);
+    const size_t output_row_bytes = static_cast<size_t>(output_hidden_size) * sizeof(float);
+    for (int64_t row = 0; row < match.query_token_count; ++row) {
+        Dispatch produce;
+        produce.kernel = make_kernel_specialization(kFlashAttentionDecodeProducePartialsKernel);
+        add_decode_parameters(produce);
+        produce.bindings.push_back(
+            { match.query->id, static_cast<size_t>(row) * match.query->nb[1], query_row_bytes });
+        produce.bindings.push_back({ match.key->id, 0, match.key->byte_count });
+        produce.bindings.push_back({ match.value->id, 0, match.value->byte_count });
+        produce.bindings.push_back({ match.mask->id, static_cast<size_t>(row) * match.mask->nb[1], mask_row_bytes });
+        produce.bindings.push_back({ partial_max, 0, partial_scalar_bytes });
+        produce.bindings.push_back({ partial_sum, 0, partial_scalar_bytes });
+        produce.bindings.push_back({ partial_output, 0, partial_output_bytes });
+        dispatch_match.dispatches.push_back(std::move(produce));
+
+        Dispatch reduce;
+        reduce.kernel = make_kernel_specialization(kFlashAttentionDecodeReduceKernel);
+        add_decode_parameters(reduce);
+        reduce.bindings.push_back({ partial_max, 0, partial_scalar_bytes });
+        reduce.bindings.push_back({ partial_sum, 0, partial_scalar_bytes });
+        reduce.bindings.push_back({ partial_output, 0, partial_output_bytes });
+        reduce.bindings.push_back(
+            { match.output->id, static_cast<size_t>(row) * match.output->nb[2], output_row_bytes });
+        dispatch_match.dispatches.push_back(std::move(reduce));
+    }
+
+    // The output projection consumes Q8_1; pack all rows at once.
+    Dispatch quantize;
+    quantize.kernel = make_kernel_specialization(kQuantizeQ8_1X4Kernel);
+    quantize.kernel.integer_parameters.emplace("token_count", match.query_token_count);
+    quantize.kernel.integer_parameters.emplace("input_size", output_hidden_size);
+    quantize.kernel.compile_parameters.emplace("ggml.quantize_q8_1_x4.group_capacity",
+                                               to_config_value(match.query_token_count * output_hidden_size / 128));
+    quantize.bindings.push_back(
+        { match.output->id, 0, static_cast<size_t>(match.query_token_count) * output_row_bytes });
+    quantize.bindings.push_back({ q8_output, 0, q8_output_bytes });
+    dispatch_match.dispatches.push_back(std::move(quantize));
+
+    dispatch_match.covered_nodes.push_back(context.root_index);
+    if (match.output_layout != nullptr) {
+        if (!append_covered_node_index_once(context.graph, context.covered_nodes, match.output_layout,
+                                            dispatch_match.covered_nodes)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
 void register_flash_attention_dispatches(DispatchRegistryBuilder & registry) {
@@ -637,6 +754,14 @@ void register_flash_attention_dispatches(DispatchRegistryBuilder & registry) {
         75,
         DispatchSource::Common,
         match_flash_attention_decode_split_next_q8_dispatch,
+    });
+    registry.add({
+        "common.flash_attention_decode_long_next_q8",
+        GGML_OP_FLASH_ATTN_EXT,
+        DispatchMatchKind::SingleOp,
+        70,
+        DispatchSource::Common,
+        match_flash_attention_long_decode_next_q8_dispatch,
     });
     registry.add({
         "common.flash_attention_f32_f16_wmma",
