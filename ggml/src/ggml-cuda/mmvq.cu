@@ -1,4 +1,5 @@
 #include "mmvq.cuh"
+#include "mmvdq.cuh"
 #include "quantize.cuh"
 #include "unary.cuh"
 #include "vecdotq.cuh"
@@ -1453,6 +1454,14 @@ void ggml_cuda_mul_mat_vec_q(
     GGML_ASSERT(!ids || ids->nb[0] == ggml_type_size(ids->type));
 
     GGML_ASSERT(!ids || ne12 <= MMVQ_MAX_BATCH_SIZE);
+
+    // dq variant: dequantize-to-float K-quant matvec that skips the q8_1 pass below.
+    // Selected here so it inherits the single mmvq dispatch and fusion-detection sites.
+    const int cc = ggml_cuda_info().devices[ctx.device].cc;
+    if (ggml_cuda_should_use_mmv_dq(src0, src1, ids, dst, cc, fusion)) {
+        ggml_cuda_mul_mat_vec_dq(ctx, src0, src1, ids, dst, fusion);
+        return;
+    }
 
     const float   * src1_d =       (const float   *) src1->data;
     const int32_t *  ids_d = ids ? (const int32_t *)  ids->data : nullptr;
