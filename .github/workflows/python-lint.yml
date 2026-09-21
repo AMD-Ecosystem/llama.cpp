@@ -22,9 +22,7 @@ concurrency:
 
 jobs:
   flake8-lint:
-    # ROCm fork-local: upstream uses [self-hosted, fast] runners that don't
-    # exist in this fork. DO NOT UPSTREAM this runner change.
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-slim
     name: Lint
     steps:
       - name: Check out source repository
