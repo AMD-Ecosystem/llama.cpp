@@ -297,7 +297,6 @@ static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q8_0_q8_1_mma(
     typedef tile< 8, 8, int> tile_B;
     typedef tile<16, 8, int> tile_C;
 
-    constexpr int I             = ggml_cuda_mmq_get_I(type, J, fallback);
     constexpr int sram_stride   = ggml_cuda_mmq_get_sram_stride(type, J, fallback);
     constexpr int rows_per_warp = ggml_cuda_mmq_get_rows_per_warp(type, J, fallback);
     constexpr int ntx           = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
@@ -413,7 +412,6 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     typedef tile<16,  8, int, input_layout>        tile_B;
     typedef tile<16, 16, int, DATA_LAYOUT_J_MAJOR> tile_C;
 
-    constexpr int I             = ggml_cuda_mmq_get_I(type, J, fallback);
     constexpr int sram_stride   = ggml_cuda_mmq_get_sram_stride(type, J, fallback);
     constexpr int rows_per_warp = ggml_cuda_mmq_get_rows_per_warp(type, J, fallback);
     constexpr int ntx           = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
@@ -464,7 +462,6 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     typedef tile< 8,  8, int> tile_B;
     typedef tile<16,  8, int> tile_C;
 
-    constexpr int I             = ggml_cuda_mmq_get_I(type, J, fallback);
     constexpr int sram_stride   = ggml_cuda_mmq_get_sram_stride(type, J, fallback);
     constexpr int rows_per_warp = ggml_cuda_mmq_get_rows_per_warp(type, J, fallback);
     constexpr int ntx           = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
@@ -579,7 +576,6 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     typedef tile<16,  4, int, input_layout>        tile_B;
     typedef tile<16, 16, int, DATA_LAYOUT_J_MAJOR> tile_C;
 
-    constexpr int I             = ggml_cuda_mmq_get_I(type, J, fallback);
     constexpr int sram_stride   = ggml_cuda_mmq_get_sram_stride(type, J, fallback);
     constexpr int rows_per_warp = ggml_cuda_mmq_get_rows_per_warp(type, J, fallback);
     constexpr int ntx           = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
@@ -630,7 +626,6 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     typedef tile< 8, 4, int> tile_B;
     typedef tile<16, 8, int> tile_C;
 
-    constexpr int I             = ggml_cuda_mmq_get_I(type, J, fallback);
     constexpr int sram_stride   = ggml_cuda_mmq_get_sram_stride(type, J, fallback);
     constexpr int rows_per_warp = ggml_cuda_mmq_get_rows_per_warp(type, J, fallback);
     constexpr int ntx           = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
@@ -779,7 +774,6 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     typedef tile<16,  4, int, input_layout>        tile_B;
     typedef tile<16, 16, int, DATA_LAYOUT_J_MAJOR> tile_C;
 
-    constexpr int I             = ggml_cuda_mmq_get_I(type, J, fallback);
     constexpr int sram_stride   = ggml_cuda_mmq_get_sram_stride(type, J, fallback);
     constexpr int rows_per_warp = ggml_cuda_mmq_get_rows_per_warp(type, J, fallback);
     constexpr int ntx           = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
@@ -849,7 +843,6 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     typedef tile< 8, 4, int> tile_B;
     typedef tile<16, 8, int> tile_C;
 
-    constexpr int I             = ggml_cuda_mmq_get_I(type, J, fallback);
     constexpr int sram_stride   = ggml_cuda_mmq_get_sram_stride(type, J, fallback);
     constexpr int rows_per_warp = ggml_cuda_mmq_get_rows_per_warp(type, J, fallback);
     constexpr int ntx           = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
@@ -1218,7 +1211,6 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     typedef tile<16,  4, int, input_layout>        tile_B;
     typedef tile<16, 16, int, DATA_LAYOUT_J_MAJOR> tile_C;
 
-    constexpr int I             = ggml_cuda_mmq_get_I(type, J, fallback);
     constexpr int sram_stride   = ggml_cuda_mmq_get_sram_stride(type, J, fallback);
     constexpr int rows_per_warp = ggml_cuda_mmq_get_rows_per_warp(type, J, fallback);
     constexpr int ntx           = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
@@ -1270,7 +1262,6 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     typedef tile< 8, 4, int> tile_B;
     typedef tile<16, 8, int> tile_C;
 
-    constexpr int I             = ggml_cuda_mmq_get_I(type, J, fallback);
     constexpr int sram_stride   = ggml_cuda_mmq_get_sram_stride(type, J, fallback);
     constexpr int rows_per_warp = ggml_cuda_mmq_get_rows_per_warp(type, J, fallback);
     constexpr int ntx           = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
@@ -1385,7 +1376,6 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     typedef tile<8,  8, int>   tile_B;
     typedef tile<16, 8, float> tile_C;
 
-    constexpr int I             = ggml_cuda_mmq_get_I(type, J, fallback);
     constexpr int sram_stride   = ggml_cuda_mmq_get_sram_stride(type, J, fallback);
     constexpr int rows_per_warp = ggml_cuda_mmq_get_rows_per_warp(type, J, fallback);
     constexpr int ntx           = rows_per_warp / tile_C::I;

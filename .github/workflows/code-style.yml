@@ -17,9 +17,7 @@ concurrency:
 
 jobs:
   model-naming:
-    # ROCm fork-local: upstream uses [self-hosted, fast] runners that don't
-    # exist in this fork. DO NOT UPSTREAM this runner change.
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@v6
       - name: Check model naming conventions
