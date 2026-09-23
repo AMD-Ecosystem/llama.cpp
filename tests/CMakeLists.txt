@@ -343,6 +343,11 @@ if (TARGET ggml-hrx)
     target_include_directories(test-hrx-buffer PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-buffer COMMAND test-hrx-buffer)
 
+    add_executable(test-hrx-moe-router test-hrx-moe-router.cpp)
+    target_link_libraries(test-hrx-moe-router PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
+    target_include_directories(test-hrx-moe-router PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    add_test(NAME test-hrx-moe-router COMMAND test-hrx-moe-router)
+
     add_executable(hrx-backend-test hrx-backend-test.cpp)
     target_link_libraries(hrx-backend-test PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
     target_include_directories(hrx-backend-test PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
