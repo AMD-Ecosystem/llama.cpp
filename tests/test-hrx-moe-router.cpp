@@ -8,20 +8,12 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <limits>
 #include <numeric>
 #include <string>
 #include <vector>
-
-#define REQUIRE(condition)                                                                            \
-    do {                                                                                              \
-        if (!(condition)) {                                                                           \
-            std::fprintf(stderr, "%s:%d: requirement failed: %s\n", __FILE__, __LINE__, #condition);    \
-            std::abort();                                                                             \
-        }                                                                                             \
-    } while (false)
 
 int main() {
     if (ggml_backend_hrx_get_device_count() == 0) {
@@ -32,9 +24,9 @@ int main() {
     constexpr int64_t expert_count = 128;
     constexpr int64_t route_count = 8;
     ggml_backend_t backend = ggml_backend_hrx_init(0);
-    REQUIRE(backend != nullptr);
+    GGML_ASSERT(backend != nullptr);
     ggml_context * ctx = ggml_init({ 1024 * 1024, nullptr, true });
-    REQUIRE(ctx != nullptr);
+    GGML_ASSERT(ctx != nullptr);
     ggml_tensor * input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, 1);
     ggml_tensor * weight = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, expert_count);
     ggml_tensor * logits = ggml_mul_mat(ctx, weight, input);
@@ -53,18 +45,18 @@ int main() {
     ggml_build_forward_expand(graph, output);
 
     auto imported = ggml::hrx::import_ggml_graph(*graph);
-    REQUIRE(imported.valid());
+    GGML_ASSERT(imported.valid());
     ggml::hrx::DispatchScheduler scheduler;
-    REQUIRE(scheduler.schedule_graph(imported.graph, { "gfx1151" }));
-    REQUIRE(scheduler.plan().dispatches.size() == 1);
+    GGML_ASSERT(scheduler.schedule_graph(imported.graph, { "gfx1151" }));
+    GGML_ASSERT(scheduler.plan().dispatches.size() == 1);
     const auto resolved = ggml::hrx::resolve_kernel_definition(ggml::hrx::get_qwen_kernel_corpus(), "gfx1151",
                                                              scheduler.plan().dispatches[0].kernel.kernel_id);
-    REQUIRE(resolved.found());
-    REQUIRE(ggml::hrx::kernel_definition_name(*resolved.definition) ==
+    GGML_ASSERT(resolved.found());
+    GGML_ASSERT(ggml::hrx::kernel_definition_name(*resolved.definition) ==
             std::string("qwen3_moe:qwen3_moe_router_projection_top8_fused_decode_f32"));
 
     ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
-    REQUIRE(buffer != nullptr);
+    GGML_ASSERT(buffer != nullptr);
     std::vector<float> weights(hidden_size * expert_count);
     for (int64_t expert = 0; expert < expert_count; ++expert) {
         for (int64_t channel = 0; channel < hidden_size; ++channel) {
@@ -74,8 +66,7 @@ int main() {
     }
     ggml_backend_tensor_set(weight, weights.data(), 0, weights.size() * sizeof(float));
 
-    // Change the input and poison all scores before each replay. Positive and
-    // negative inputs select experts from opposite halves of the projection.
+    // Poison every score and alternate input signs to exercise both halves of the router.
     for (int pass = 0; pass < 4; ++pass) {
         std::array<float, hidden_size> values;
         for (int64_t channel = 0; channel < hidden_size; ++channel) {
@@ -97,7 +88,7 @@ int main() {
         actual.fill(-1000.0f - pass);
         ggml_backend_tensor_set(input, values.data(), 0, sizeof(values));
         ggml_backend_tensor_set(logits, actual.data(), 0, sizeof(actual));
-        REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+        GGML_ASSERT(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
         ggml_backend_tensor_get(logits, actual.data(), 0, sizeof(actual));
         double maximum_error = 0.0;
         size_t bad_scores = 0;
@@ -117,12 +108,12 @@ int main() {
         std::printf("pass %d: bad_scores=%zu max_error=%.9g top_expert=%d expected=%d\n",
                     pass, bad_scores, maximum_error, actual_routes[0], order[0]);
         std::fflush(stdout);
-        REQUIRE(bad_scores == 0);
+        GGML_ASSERT(bad_scores == 0);
         for (int64_t route = 0; route < route_count; ++route) {
             const double expected_weight = std::exp(expected[order[route]] - expected[order[0]]) / total_weight;
-            REQUIRE(actual_routes[route] == order[route]);
-            REQUIRE(std::isfinite(actual_weights[route]));
-            REQUIRE(std::fabs(actual_weights[route] - expected_weight) < 1.0e-5);
+            GGML_ASSERT(actual_routes[route] == order[route]);
+            GGML_ASSERT(std::isfinite(actual_weights[route]));
+            GGML_ASSERT(std::fabs(actual_weights[route] - expected_weight) < 1.0e-5);
         }
     }
     ggml_backend_buffer_free(buffer);
