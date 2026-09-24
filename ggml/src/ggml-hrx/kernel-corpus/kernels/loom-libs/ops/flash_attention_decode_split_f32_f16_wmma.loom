@@ -650,8 +650,9 @@ template.def<@ggml.flash_attention.decode_split.reduce_completed.cooperative> de
     %query_row1 = index.add %query_row0, %c1 : index
     %query_head0 = index.add %query_head_base, %query_row0 : index
     %query_head1 = index.add %query_head0, %c1 : index
-    %query_head_valid0 = index.cmp ult, %query_head0, %query_head_count : index
-    %query_head_valid1 = index.cmp ult, %query_head1, %query_head_count : index
+    // Inactive rows must not write query heads owned by the next KV head.
+    %query_head_valid0 = index.cmp ult, %query_row0, %query_heads_per_key_value_head : index
+    %query_head_valid1 = index.cmp ult, %query_row1, %query_heads_per_key_value_head : index
     %safe_query_row0 = scf.select %query_head_valid0, %query_row0, %c0 : index
     %safe_query_row1 = scf.select %query_head_valid1, %query_row1, %c0 : index
     %reducer_active0 = scalar.andi %lane_has_block, %query_head_valid0 : i1

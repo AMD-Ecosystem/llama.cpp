@@ -841,10 +841,10 @@ static QwenFlashAttentionLayoutGraph build_qwen_flash_attention_layout_graph(
     int64_t        key_value_token_count,
     int64_t        qk_head_size    = kQwenFlashHeadSize,
     int64_t        value_head_size = kQwenFlashHeadSize,
-    float          scale           = 0.0f) {
+    float          scale           = 0.0f,
+    int64_t        query_head_count = 32,
+    int64_t        key_value_head_count = 4) {
     QwenFlashAttentionLayoutGraph graph;
-    constexpr int64_t             query_head_count     = 32;
-    constexpr int64_t             key_value_head_count = 4;
 
     ggml_tensor * query_storage =
         ggml_new_tensor_3d(ctx, GGML_TYPE_F32, qk_head_size, query_head_count, query_token_count);
@@ -2167,6 +2167,57 @@ static void run_common_flash_attention_cpu_reference_case(int64_t      head_size
     ggml_free(ctx);
     ggml_backend_free(backend);
     restore_environment_value(kDisableQwenDispatchEnv, had_original_env, original_env_value);
+}
+
+// Constant V within each KV head gives an exact oracle while distinct heads
+// expose writes beyond the query heads owned by a cooperative reducer.
+static void run_decode_flash_attention_head_ownership_case(int64_t key_value_token_count,
+                                                          int64_t key_value_head_count) {
+    constexpr int64_t query_head_count = 32;
+    constexpr int64_t head_size        = 128;
+    const int64_t    query_heads_per_key_value_head = query_head_count / key_value_head_count;
+    ggml_backend_t backend = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+
+    ggml_init_params params = {};
+    params.mem_size         = 4 * 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+    QwenFlashAttentionLayoutGraph attention = build_qwen_flash_attention_layout_graph(
+        ctx, 1, key_value_token_count, head_size, head_size, 0.0f, query_head_count, key_value_head_count);
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, attention.output);
+    require_kernel_subsequence(scheduled_kernel_sequence(graph),
+                               { "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8" });
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    REQUIRE(buffer != nullptr);
+
+    const std::vector<float> query = make_flash_query(query_head_count, head_size);
+    const std::vector<ggml_fp16_t> key =
+        make_flash_key_value(key_value_token_count * key_value_head_count, 3, head_size);
+    const std::vector<ggml_fp16_t> mask(key_value_token_count, ggml_fp32_to_fp16(0.0f));
+    std::vector<ggml_fp16_t> value(key.size());
+    for (size_t i = 0; i < value.size(); ++i) {
+        const int64_t kv_head = (i / head_size) % key_value_head_count;
+        value[i] = ggml_fp32_to_fp16(static_cast<float>(kv_head + 1));
+    }
+    std::vector<float> expected(query.size());
+    for (size_t i = 0; i < expected.size(); ++i) {
+        const int64_t query_head = i / head_size;
+        expected[i] = static_cast<float>(query_head / query_heads_per_key_value_head + 1);
+    }
+    set_tensor_bytes(backend, attention.query, query.data(), query.size() * sizeof(float));
+    set_tensor_bytes(backend, attention.key, key.data(), key.size() * sizeof(ggml_fp16_t));
+    set_tensor_bytes(backend, attention.value, value.data(), value.size() * sizeof(ggml_fp16_t));
+    set_tensor_bytes(backend, attention.mask, mask.data(), mask.size() * sizeof(ggml_fp16_t));
+    REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+    require_close(get_f32_tensor(backend, attention.output), expected, 2.0e-2f);
+
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+    ggml_backend_free(backend);
 }
 
 static void run_asymmetric_flash_attention_cpu_reference_case() {
@@ -4698,6 +4749,11 @@ int main() {
     run_router_projection_case(4);
     run_router_top8_case(4);
     run_qwen_flash_attention_case();
+    for (const int64_t kv_heads : { 4, 8 }) {
+        for (const int64_t kv_tokens : { 256, 512 }) {
+            run_decode_flash_attention_head_ownership_case(kv_tokens, kv_heads);
+        }
+    }
     for (int64_t head_size = 64; head_size <= 512; head_size += 64) {
         run_common_flash_attention_cpu_reference_case(head_size, 2, 65,
                                                       1.0f / std::sqrt(static_cast<float>(head_size)),
