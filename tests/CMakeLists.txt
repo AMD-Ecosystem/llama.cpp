@@ -329,6 +329,11 @@ if (NOT LLAMA_USE_SYSTEM_GGML)
 
     # Needs non-public ggml{,-backend}-impl.h
     llama_build_and_test(test-alloc.cpp)
+
+    if (GGML_CPU)
+        llama_build_and_test(test-backend-sched.cpp)
+        target_include_directories(test-backend-sched PRIVATE ../ggml/src)
+    endif()
 endif()
 
 llama_build(test-export-graph-ops.cpp)
@@ -357,4 +362,5 @@ if (TARGET ggml-hrx)
     target_link_libraries(test-hrx-ops PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
     target_include_directories(test-hrx-ops PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
     add_test(NAME test-hrx-ops COMMAND test-hrx-ops)
+    add_test(NAME test-hrx-moe-router COMMAND test-hrx-ops --router)
 endif()
