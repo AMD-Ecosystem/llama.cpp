@@ -6,11 +6,15 @@
 #include <array>
 #include <cstdio>
 #include <cstring>
-#include <functional>
 #include <vector>
 
 struct deferred_backend {
-    std::vector<std::function<void()>> pending;
+    struct operation {
+        const float * src;
+        float * dst;
+        float scale;
+    };
+    std::vector<operation> pending;
     std::vector<std::array<float, 4>> results;
 };
 
@@ -28,21 +32,19 @@ static ggml_status deferred_compute(ggml_backend_t backend, ggml_cgraph * graph)
         auto * dst = static_cast<float *>(node->data);
         float scale;
         std::memcpy(&scale, node->op_params, sizeof(scale));
-        state->pending.push_back([=]() {
-            std::array<float, 4> result;
-            for (size_t j = 0; j < result.size(); ++j) {
-                result[j] = dst[j] = src[j] * scale;
-            }
-            state->results.push_back(result);
-        });
+        state->pending.push_back({ src, dst, scale });
     }
     return GGML_STATUS_SUCCESS;
 }
 
 static void deferred_synchronize(ggml_backend_t backend) {
     auto * state = static_cast<deferred_backend *>(backend->context);
-    for (const auto & compute : state->pending) {
-        compute();
+    for (const auto & op : state->pending) {
+        std::array<float, 4> result;
+        for (size_t j = 0; j < result.size(); ++j) {
+            result[j] = op.dst[j] = op.src[j] * op.scale;
+        }
+        state->results.push_back(result);
     }
     state->pending.clear();
 }
@@ -55,6 +57,7 @@ static bool test_input_lifetime(int view_mode, bool parallel, bool shared_buffer
     ggml_backend_buffer_type buft = *ggml_backend_cpu_buffer_type();
     buft.iface.alloc_buffer = [](ggml_backend_buffer_type_t type, size_t size) {
         ggml_backend_buffer_t buffer = ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), size);
+        GGML_ASSERT(buffer);
         buffer->buft = type;
         return buffer;
     };

@@ -9,6 +9,7 @@
 #include "runtime/graph-executor.h"
 
 #include <algorithm>
+#include <array>
 #include <cinttypes>
 #include <cmath>
 #include <cstdio>
@@ -16,6 +17,7 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <numeric>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -317,14 +319,16 @@ static ggml_tensor * build_qwen_flash_attention_graph(ggml_context * ctx,
 
 static ggml_tensor * build_qwen_router_top8_graph(ggml_context * ctx,
                                                   ggml_tensor *  logits,
-                                                  ggml_tensor ** route_ids = nullptr) {
+                                                  ggml_tensor ** route_ids = nullptr,
+                                                  size_t         route_stride = 0) {
     ggml_tensor * probs = ggml_soft_max(ctx, logits);
     REQUIRE(probs != nullptr);
     ggml_tensor * probs_reshaped = ggml_reshape_3d(ctx, probs, 1, kQwenRouterExpertCount, logits->ne[1]);
     REQUIRE(probs_reshaped != nullptr);
     ggml_tensor * argsort = ggml_argsort(ctx, probs, GGML_SORT_ORDER_DESC);
     REQUIRE(argsort != nullptr);
-    ggml_tensor * topk = ggml_view_2d(ctx, argsort, kQwenRouterRouteCount, logits->ne[1], argsort->nb[1], 0);
+    ggml_tensor * topk = ggml_view_2d(ctx, argsort, kQwenRouterRouteCount, logits->ne[1],
+                                    route_stride ? route_stride : argsort->nb[1], 0);
     REQUIRE(topk != nullptr);
     if (route_ids != nullptr) {
         *route_ids = topk;
@@ -1916,6 +1920,94 @@ static void run_split_local_view_alias_import_case() {
     ggml_backend_buffer_free(buffer);
     ggml_free(ctx);
     ggml_backend_free(hrx_backend);
+}
+
+static void run_router_projection_top8_case() {
+    constexpr int64_t hidden_size = 2048;
+    constexpr int64_t expert_count = 128;
+    constexpr int64_t route_count = 8;
+    ggml_backend_t backend = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+    ggml_context * ctx = ggml_init({ 1024 * 1024, nullptr, true });
+    REQUIRE(ctx != nullptr);
+    ggml_tensor * input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, 1);
+    ggml_tensor * weight = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, expert_count);
+    ggml_tensor * logits = ggml_mul_mat(ctx, weight, input);
+    ggml_tensor * routes = nullptr;
+    ggml_tensor * output = build_qwen_router_top8_graph(ctx, logits, &routes, route_count * sizeof(int32_t));
+    ggml_set_output(logits);
+    ggml_set_output(routes);
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, output);
+
+    const auto kernels = scheduled_kernel_sequence(graph);
+    REQUIRE(kernels.size() == 1);
+    REQUIRE(kernels[0] == "qwen3_moe:qwen3_moe_router_projection_top8_fused_decode_f32");
+
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    REQUIRE(buffer != nullptr);
+    std::vector<float> weights(hidden_size * expert_count);
+    for (int64_t expert = 0; expert < expert_count; ++expert) {
+        for (int64_t channel = 0; channel < hidden_size; ++channel) {
+            weights[expert * hidden_size + channel] =
+                float(expert + 1) / 4096.0f + float((channel * 7 + expert * 3) % 19 - 9) / 1024.0f;
+        }
+    }
+    ggml_backend_tensor_set(weight, weights.data(), 0, weights.size() * sizeof(float));
+
+    // Poison every score and alternate input signs to exercise both halves of the router.
+    for (int pass = 0; pass < 4; ++pass) {
+        std::array<float, hidden_size> values;
+        for (int64_t channel = 0; channel < hidden_size; ++channel) {
+            values[channel] = (pass % 2 ? -1.0f : 1.0f) *
+                              (0.03125f + float((channel * 11 + pass) % 23) / 512.0f);
+        }
+        std::array<double, expert_count> expected;
+        for (int64_t expert = 0; expert < expert_count; ++expert) {
+            double sum = 0.0;
+            for (int64_t channel = 0; channel < hidden_size; ++channel) {
+                sum += double(values[channel]) * double(weights[expert * hidden_size + channel]);
+            }
+            expected[expert] = sum;
+        }
+        std::array<int32_t, expert_count> order;
+        std::iota(order.begin(), order.end(), 0);
+        std::stable_sort(order.begin(), order.end(), [&](int32_t a, int32_t b) { return expected[a] > expected[b]; });
+        std::array<float, expert_count> actual;
+        actual.fill(-1000.0f - pass);
+        ggml_backend_tensor_set(input, values.data(), 0, sizeof(values));
+        ggml_backend_tensor_set(logits, actual.data(), 0, sizeof(actual));
+        REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+        ggml_backend_tensor_get(logits, actual.data(), 0, sizeof(actual));
+        double maximum_error = 0.0;
+        size_t bad_scores = 0;
+        for (int64_t expert = 0; expert < expert_count; ++expert) {
+            const double error = std::fabs(actual[expert] - expected[expert]);
+            maximum_error = std::max(maximum_error, error);
+            bad_scores += !std::isfinite(actual[expert]) || error > 1.0e-5 + 1.0e-5 * std::fabs(expected[expert]);
+        }
+        std::array<int32_t, route_count> actual_routes;
+        std::array<float, route_count> actual_weights;
+        ggml_backend_tensor_get(routes, actual_routes.data(), 0, sizeof(actual_routes));
+        ggml_backend_tensor_get(output, actual_weights.data(), 0, sizeof(actual_weights));
+        double total_weight = 0.0;
+        for (int64_t route = 0; route < route_count; ++route) {
+            total_weight += std::exp(expected[order[route]] - expected[order[0]]);
+        }
+        std::printf("pass %d: bad_scores=%zu max_error=%.9g top_expert=%d expected=%d\n",
+                    pass, bad_scores, maximum_error, actual_routes[0], order[0]);
+        std::fflush(stdout);
+        REQUIRE(bad_scores == 0);
+        for (int64_t route = 0; route < route_count; ++route) {
+            const double expected_weight = std::exp(expected[order[route]] - expected[order[0]]) / total_weight;
+            REQUIRE(actual_routes[route] == order[route]);
+            REQUIRE(std::isfinite(actual_weights[route]));
+            REQUIRE(std::fabs(actual_weights[route] - expected_weight) < 1.0e-5);
+        }
+    }
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+    ggml_backend_free(backend);
 }
 
 static void run_router_projection_case(int64_t token_count) {
@@ -4469,12 +4561,23 @@ static void run_ssm_conv_prefill_recurrent_case(ggml_type type, bool gathered, b
     ggml_backend_free(backend);
 }
 
-int main() {
+int main(int argc, char ** argv) {
+    const bool router_only = argc == 2 && std::strcmp(argv[1], "--router") == 0;
+    if (argc != 1 && !router_only) {
+        std::fprintf(stderr, "usage: %s [--router]\n", argv[0]);
+        return 1;
+    }
+
     run_rmsnorm_support_checks();
     run_alternate_value_alias_lookup_checks();
 
     if (ggml_backend_hrx_get_device_count() == 0) {
         std::fprintf(stderr, "test skipped: no HRX devices available\n");
+        return 0;
+    }
+
+    run_router_projection_top8_case();
+    if (router_only) {
         return 0;
     }
 
