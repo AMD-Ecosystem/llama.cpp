@@ -874,8 +874,18 @@ static char causes[GGML_DEFAULT_GRAPH_SIZE*16 + GGML_SCHED_MAX_SPLITS_DEBUG*GGML
 #define GET_CAUSE(node) ""
 #endif
 
+static bool ggml_backend_sched_is_input(const struct ggml_tensor * tensor) {
+    return (tensor->flags & GGML_TENSOR_FLAG_INPUT) || (tensor->view_src && (tensor->view_src->flags & GGML_TENSOR_FLAG_INPUT));
+}
+
 // returns the backend that should be used for the node based on the current locations
 static int ggml_backend_sched_backend_id_from_cur(ggml_backend_sched_t sched, struct ggml_tensor * tensor) {
+    ggml_backend_buffer_t input_buffer = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+    if (ggml_backend_sched_is_input(tensor) && (!input_buffer || ggml_backend_buffer_is_host(input_buffer))) {
+        SET_CAUSE(tensor, "1.inp");
+        return sched->n_backends - 1; // last backend (assumed CPU)
+    }
+
     // assign pre-allocated nodes to their backend
     int cur_backend_id = ggml_backend_sched_backend_from_buffer(sched, tensor, tensor);
     if (cur_backend_id != -1) {
@@ -896,13 +906,6 @@ static int ggml_backend_sched_backend_id_from_cur(ggml_backend_sched_t sched, st
         // since the tensor is pre-allocated, it cannot be moved to another backend
         ggml_backend_buffer_t buffer = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
         GGML_ABORT("pre-allocated tensor (%s) in a buffer (%s) that cannot run the operation (%s)", tensor->name, ggml_backend_buffer_name(buffer), ggml_op_name(tensor->op));
-    }
-
-    // graph input
-    if (tensor->flags & GGML_TENSOR_FLAG_INPUT) {
-        cur_backend_id = sched->n_backends - 1; // last backend (assumed CPU)
-        SET_CAUSE(tensor, "1.inp");
-        return cur_backend_id;
     }
 
     // operations with weights are preferably run on the same backend as the weights
@@ -992,6 +995,12 @@ static void ggml_backend_sched_print_assignments(ggml_backend_sched_t sched, str
 }
 
 static bool ggml_backend_sched_buffer_supported(ggml_backend_sched_t sched, struct ggml_tensor * t, int backend_id) {
+    // Graph inputs need a private copy even when the backend can access their host buffer.
+    // The caller can overwrite them while the previous graph is still running.
+    if (sched->backends[backend_id]->iface.synchronize && ggml_backend_sched_is_input(t) && tensor_backend_id(t) != backend_id) {
+        return false;
+    }
+
     ggml_backend_buffer_t buf = t->view_src ? t->view_src->buffer : t->buffer;
     ggml_backend_buffer_type_t buft = NULL;
 
@@ -1336,7 +1345,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                 const int src_backend_id = sched->hv_tensor_backend_ids[src_id];
                 GGML_ASSERT(src_backend_id != -1); // all inputs should be assigned by now
 
-                if (src->flags & GGML_TENSOR_FLAG_INPUT && sched->n_copies > 1) {
+                if (ggml_backend_sched_is_input(src) && sched->n_copies > 1) {
                     if (tensor_id_copy(src_id, src_backend_id, 0) == NULL) {
                         ggml_backend_t backend = sched->backends[src_backend_id];
                         for (int c = 0; c < sched->n_copies; c++) {
@@ -1359,6 +1368,10 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                 }
 
                 if (src_backend_id != cur_backend_id && !ggml_backend_sched_buffer_supported(sched, src, cur_backend_id)) {
+                    if (ggml_backend_sched_is_input(src)) {
+                        // Keep the caller's storage separate from queued results when buffer types are shared.
+                        ggml_set_output(src->view_src ? src->view_src : src);
+                    }
                     // create a copy of the input in the split's backend
                     if (tensor_id_copy(src_id, cur_backend_id, 0) == NULL) {
                         ggml_backend_t backend = sched->backends[cur_backend_id];
@@ -1566,7 +1579,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
             struct ggml_tensor * input = split->inputs[input_id];
             struct ggml_tensor * input_cpy = tensor_copy(input, split_backend_id, sched->cur_copy);
 
-            if (input->flags & GGML_TENSOR_FLAG_INPUT) {
+            if (ggml_backend_sched_is_input(input)) {
                 // inputs from the user must be copied immediately to prevent the user overwriting the data before the copy is done
                 if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                     ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
