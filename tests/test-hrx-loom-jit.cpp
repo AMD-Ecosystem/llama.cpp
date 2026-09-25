@@ -3,6 +3,7 @@
 #include "kernel-corpus/kernel-corpus.h"
 #include "runtime/kernel-executable-cache.h"
 #include "runtime/loom-kernel-jit.h"
+#include "testing_suite.h"
 
 #include <algorithm>
 #include <atomic>
@@ -446,7 +447,7 @@ static void run_targeted_export_materialize_case(HrxTestDevice & device) {
 
 }  // namespace
 
-int main() {
+static void run_loom_jit_compile_checks() {
     static constexpr const char * kTarget = "gfx1100";
 
     const ggml::hrx::KernelDefinition & binary          = find_kernel("ggml_binary_f32");
@@ -1006,14 +1007,33 @@ int main() {
         compiled.reset();
     }
 
-    HrxTestDevice device;
-    if (device.open()) {
-        run_cache_materialize_case(device, ggml::hrx::LoomJitMode::Sync, binary);
-        run_cache_materialize_case(device, ggml::hrx::LoomJitMode::Async, binary);
-        run_targeted_export_materialize_case(device);
-    } else {
-        std::printf("skipping KernelExecutableCache materialization checks: no HRX device available\n");
-    }
+}
 
-    return 0;
+static void run_loom_jit_materialize_checks() {
+    const ggml::hrx::KernelDefinition & binary = find_kernel("ggml_binary_f32");
+
+    HrxTestDevice device;
+    REQUIRE(device.open());
+    run_cache_materialize_case(device, ggml::hrx::LoomJitMode::Sync, binary);
+    run_cache_materialize_case(device, ggml::hrx::LoomJitMode::Async, binary);
+    run_targeted_export_materialize_case(device);
+}
+
+static bool has_hrx_test_device() {
+    HrxTestDevice device;
+    return device.open();
+}
+
+static void register_hrx_loom_jit_cases(test_runner::Suite & suite) {
+    suite.host_case("compile", [] { run_loom_jit_compile_checks(); });
+    suite.device_case("materialize", [] { run_loom_jit_materialize_checks(); });
+}
+
+int main(int argc, char ** argv) {
+    test_runner::Suite suite(test_runner::Config::with_prefix(
+        "HRX Loom JIT test", "hrx-loom-jit", "GGML_HRX_LOOM_JIT_TEST", 2));
+    register_hrx_loom_jit_cases(suite);
+
+    const bool has_device = has_hrx_test_device();
+    return suite.run(argc, argv, has_device);
 }

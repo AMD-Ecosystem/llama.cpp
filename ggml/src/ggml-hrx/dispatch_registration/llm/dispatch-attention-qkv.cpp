@@ -15,18 +15,24 @@
 namespace ggml::hrx {
 namespace {
 
-static constexpr KernelCatalogRef kAttentionQMatMulRopeF32F32WmmaKernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_q_matmul_rope_f32_f32_wmma");
-static constexpr KernelCatalogRef kAttentionKMatMulRopeSetRowsF32F32WmmaKernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_k_matmul_rope_set_rows_f32_f32_wmma");
-static constexpr KernelCatalogRef kAttentionVMatMulSetRowsF32F32WmmaKernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_v_matmul_set_rows_f32_f32_wmma");
-static constexpr KernelCatalogRef kAttentionQMatMulRopeF32F32DecodeKernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_q_matmul_rope_decode_f32_f32");
-static constexpr KernelCatalogRef kAttentionKMatMulRopeSetRowsF32F32DecodeKernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_k_matmul_rope_set_rows_decode_f32_f32");
-static constexpr KernelCatalogRef kAttentionVMatMulSetRowsF32F32DecodeKernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_v_matmul_set_rows_decode_f32_f32");
+static constexpr KernelCatalogRef kAttentionQMatMulRopeTiledF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_q_matmul_rope_tiled_f32_f32");
+static constexpr KernelCatalogRef kAttentionKMatMulRopeSetRowsTiledF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_k_matmul_rope_set_rows_tiled_f32_f32");
+static constexpr KernelCatalogRef kAttentionVMatMulSetRowsTiledF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_v_matmul_set_rows_tiled_f32_f32");
+static constexpr KernelCatalogRef kAttentionQMatMulRopeVectorF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_q_matmul_rope_vector_f32_f32");
+static constexpr KernelCatalogRef kAttentionKMatMulRopeSetRowsVectorF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_k_matmul_rope_set_rows_vector_f32_f32");
+static constexpr KernelCatalogRef kAttentionVMatMulSetRowsVectorF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_v_matmul_set_rows_vector_f32_f32");
+static constexpr KernelCatalogRef kAttentionQMatMulRopeLegacyF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_q_matmul_rope_legacy_f32_f32");
+static constexpr KernelCatalogRef kAttentionKMatMulRopeSetRowsLegacyF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_k_matmul_rope_set_rows_legacy_f32_f32");
+static constexpr KernelCatalogRef kAttentionVMatMulSetRowsLegacyF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "llm_attention_v_matmul_set_rows_legacy_f32_f32");
 
 static const Value * graph_value(const Graph & graph, ValueId id) {
     return graph.values().find(id);
@@ -455,22 +461,22 @@ static AttentionQkvMatch match_attention_qkv_projection(const DispatchMatchConte
             match.layout_nodes.insert(match.layout_nodes.end(), set_rows_layouts.begin(), set_rows_layouts.end());
             match.root   = root;
             match.kernel = is_supported_decode_token_count(root.token_count) ?
-                               kAttentionKMatMulRopeSetRowsF32F32DecodeKernel :
-                               kAttentionKMatMulRopeSetRowsF32F32WmmaKernel;
+                               kAttentionKMatMulRopeSetRowsVectorF32F32Kernel :
+                               kAttentionKMatMulRopeSetRowsTiledF32F32Kernel;
             if (can_use_packed_lowtoken_attention_matmul(root)) {
                 match.root.weight_format = packed_attention_lowtoken_format(root.weight_format);
-                match.kernel = kAttentionKMatMulRopeSetRowsF32F32WmmaKernel;
+                match.kernel = kAttentionKMatMulRopeSetRowsLegacyF32F32Kernel;
             }
             match.kind   = AttentionQkvProjectionKind::Key;
             return match;
         }
 
         match.root   = root;
-        match.kernel = is_supported_decode_token_count(root.token_count) ? kAttentionQMatMulRopeF32F32DecodeKernel :
-                                                                           kAttentionQMatMulRopeF32F32WmmaKernel;
+        match.kernel = is_supported_decode_token_count(root.token_count) ? kAttentionQMatMulRopeVectorF32F32Kernel :
+                                                                           kAttentionQMatMulRopeTiledF32F32Kernel;
         if (can_use_packed_lowtoken_attention_matmul(root)) {
             match.root.weight_format = packed_attention_lowtoken_format(root.weight_format);
-            match.kernel = kAttentionQMatMulRopeF32F32WmmaKernel;
+            match.kernel = kAttentionQMatMulRopeLegacyF32F32Kernel;
         }
         match.kind   = AttentionQkvProjectionKind::Query;
         return match;
@@ -487,11 +493,11 @@ static AttentionQkvMatch match_attention_qkv_projection(const DispatchMatchConte
             return {};
         }
         match.root   = root;
-        match.kernel = is_supported_decode_token_count(root.token_count) ? kAttentionVMatMulSetRowsF32F32DecodeKernel :
-                                                                           kAttentionVMatMulSetRowsF32F32WmmaKernel;
+        match.kernel = is_supported_decode_token_count(root.token_count) ? kAttentionVMatMulSetRowsVectorF32F32Kernel :
+                                                                           kAttentionVMatMulSetRowsTiledF32F32Kernel;
         if (can_use_packed_lowtoken_attention_matmul(root)) {
             match.root.weight_format = packed_attention_lowtoken_format(root.weight_format);
-            match.kernel = kAttentionVMatMulSetRowsF32F32WmmaKernel;
+            match.kernel = kAttentionVMatMulSetRowsLegacyF32F32Kernel;
         }
         match.kind   = AttentionQkvProjectionKind::Value;
         return match;
@@ -535,12 +541,6 @@ static void add_attention_qkv_compile_parameters(Dispatch & dispatch, const Atte
     dispatch.kernel.compile_parameters.emplace("llm.attention_qkv.input_size", to_config_value(match.root.input_size));
     dispatch.kernel.compile_parameters.emplace("llm.attention_qkv.output_size",
                                                to_config_value(match.root.output_size));
-    if (is_supported_decode_token_count(match.root.token_count)) {
-        dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_f32_f32_decode.token_capacity",
-                                                   to_config_value(match.root.token_count));
-        dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_f32_f32_decode.output_capacity",
-                                                   to_config_value(match.root.output_size));
-    }
     dispatch.kernel.compile_parameters.emplace(
         "llm.attention_qkv.weight_format",
         to_config_value(common_mul_mat_format_config_value(match.root.weight_format)));
@@ -608,18 +608,22 @@ static bool match_attention_qkv_dispatch(const DispatchMatchContext & context, D
             match.root.weight_format = fallback_format;
             pack_q4 = false;
             pack_q6 = false;
-            if (is_supported_decode_token_count(match.root.token_count)) {
-                switch (match.kind) {
-                    case AttentionQkvProjectionKind::Query:
-                        match.kernel = kAttentionQMatMulRopeF32F32DecodeKernel;
-                        break;
-                    case AttentionQkvProjectionKind::Key:
-                        match.kernel = kAttentionKMatMulRopeSetRowsF32F32DecodeKernel;
-                        break;
-                    case AttentionQkvProjectionKind::Value:
-                        match.kernel = kAttentionVMatMulSetRowsF32F32DecodeKernel;
-                        break;
-                }
+            switch (match.kind) {
+                case AttentionQkvProjectionKind::Query:
+                    match.kernel = is_supported_decode_token_count(match.root.token_count) ?
+                                       kAttentionQMatMulRopeVectorF32F32Kernel :
+                                       kAttentionQMatMulRopeTiledF32F32Kernel;
+                    break;
+                case AttentionQkvProjectionKind::Key:
+                    match.kernel = is_supported_decode_token_count(match.root.token_count) ?
+                                       kAttentionKMatMulRopeSetRowsVectorF32F32Kernel :
+                                       kAttentionKMatMulRopeSetRowsTiledF32F32Kernel;
+                    break;
+                case AttentionQkvProjectionKind::Value:
+                    match.kernel = is_supported_decode_token_count(match.root.token_count) ?
+                                       kAttentionVMatMulSetRowsVectorF32F32Kernel :
+                                       kAttentionVMatMulSetRowsTiledF32F32Kernel;
+                    break;
             }
         }
     }
@@ -665,7 +669,7 @@ static bool match_attention_qkv_dispatch(const DispatchMatchContext & context, D
 
 void register_llm_attention_qkv_dispatches(DispatchRegistryBuilder & registry) {
     registry.add({
-        "llm.attention_qkv_matmul_postprocess.f32_f32_wmma",
+        "llm.attention_qkv_matmul_postprocess.tiled_vector_f32_f32",
         GGML_OP_MUL_MAT,
         DispatchMatchKind::Fused,
         210,

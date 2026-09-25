@@ -11,6 +11,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
 #include <limits>
 #include <map>
 #include <sstream>
@@ -148,6 +151,11 @@ static const char * status_first_error(const Status & status) {
 static bool environment_flag_enabled(const char * name) {
     const char * value = std::getenv(name);
     return value != nullptr && value[0] != '\0' && !(value[0] == '0' && value[1] == '\0');
+}
+
+static const char * environment_string_value(const char * name) {
+    const char * value = std::getenv(name);
+    return value != nullptr && value[0] != '\0' && !(value[0] == '0' && value[1] == '\0') ? value : nullptr;
 }
 
 static size_t environment_size_value(const char * name, size_t fallback) {
@@ -291,6 +299,208 @@ class DebugSerialExecutionTrace {
 
 static bool resource_access_writes(ResourceAccess access) {
     return access == ResourceAccess::Write || access == ResourceAccess::ReadWrite;
+}
+
+static bool resource_access_reads(ResourceAccess access) {
+    return access == ResourceAccess::Read || access == ResourceAccess::ReadWrite;
+}
+
+static bool dispatch_trace_enabled() {
+    return environment_string_value("GGML_HRX_TRACE_DISPATCH_DIR") != nullptr;
+}
+
+static bool dispatch_trace_blob_capture_enabled() {
+    return environment_flag_enabled("GGML_HRX_TRACE_BLOBS");
+}
+
+static bool dispatch_trace_should_trace_program(size_t program_command_count) {
+    const char * value = environment_string_value("GGML_HRX_TRACE_PROGRAM_COMMANDS");
+    return value == nullptr || program_command_count == std::strtoull(value, nullptr, 0);
+}
+
+static bool dispatch_trace_should_trace_command(size_t program_command_count, size_t command_index) {
+    if (!dispatch_trace_should_trace_program(program_command_count)) {
+        return false;
+    }
+    const size_t start = environment_size_value("GGML_HRX_TRACE_START_COMMAND", 0);
+    const size_t end =
+        environment_size_value("GGML_HRX_TRACE_END_COMMAND", std::numeric_limits<size_t>::max());
+    return command_index >= start && command_index <= end;
+}
+
+static uint64_t dispatch_trace_hash_bytes(const uint8_t * data, size_t size) {
+    uint64_t hash = UINT64_C(1469598103934665603);
+    for (size_t i = 0; i < size; ++i) {
+        hash ^= static_cast<uint64_t>(data[i]);
+        hash *= UINT64_C(1099511628211);
+    }
+    return hash;
+}
+
+static std::string dispatch_trace_hex(uint64_t value) {
+    std::ostringstream out;
+    out << std::hex << std::setw(16) << std::setfill('0') << value;
+    return out.str();
+}
+
+static std::string dispatch_trace_json_escape(const std::string & text) {
+    std::string escaped;
+    escaped.reserve(text.size());
+    for (const unsigned char c : text) {
+        switch (c) {
+            case '\\': escaped += "\\\\"; break;
+            case '"': escaped += "\\\""; break;
+            case '\b': escaped += "\\b"; break;
+            case '\f': escaped += "\\f"; break;
+            case '\n': escaped += "\\n"; break;
+            case '\r': escaped += "\\r"; break;
+            case '\t': escaped += "\\t"; break;
+            default:
+                if (c < 0x20) {
+                    static constexpr char kHex[] = "0123456789abcdef";
+                    escaped += "\\u00";
+                    escaped.push_back(kHex[c >> 4]);
+                    escaped.push_back(kHex[c & 0xf]);
+                } else {
+                    escaped.push_back(static_cast<char>(c));
+                }
+                break;
+        }
+    }
+    return escaped;
+}
+
+static std::string dispatch_trace_kernel_name(const CommandProgramExecutionContext & context,
+                                              const PreparedCommand &                command) {
+    if (context.corpus != nullptr && context.target != nullptr) {
+        const KernelResolveResult resolved =
+            resolve_kernel_definition(*context.corpus, context.target, command.kernel.specialization.kernel_id);
+        if (resolved.found()) {
+            return kernel_definition_name(*resolved.definition);
+        }
+    }
+    std::ostringstream out;
+    out << "kernel_id=" << command.kernel.specialization.kernel_id;
+    return out.str();
+}
+
+static Status dispatch_trace_download_binding(const CommandProgramExecutionContext & context,
+                                              const PreparedCommandBinding &         binding,
+                                              std::vector<uint8_t> &                 data) {
+    Status status;
+    data.resize(binding.ref.length);
+    if (binding.ref.length == 0) {
+        return status;
+    }
+    if (context.host_transfers == nullptr) {
+        status.log("missing HRX host transfer manager for dispatch trace");
+        return status;
+    }
+    status.append(context.host_transfers->download_synchronous(context.stream, binding.ref.buffer, binding.ref.offset,
+                                                               data.data(), binding.ref.length));
+    return status;
+}
+
+static Status dispatch_trace_write_blob(const std::filesystem::path & path, const std::vector<uint8_t> & data) {
+    Status status;
+    try {
+        std::filesystem::create_directories(path.parent_path());
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        if (!out) {
+            status.log("failed to create dispatch trace blob %s", path.string().c_str());
+            return status;
+        }
+        out.write(reinterpret_cast<const char *>(data.data()), static_cast<std::streamsize>(data.size()));
+    } catch (const std::exception & error) {
+        status.log("failed to write dispatch trace blob %s: %s", path.string().c_str(), error.what());
+    }
+    return status;
+}
+
+static Status dispatch_trace_command_bindings(const CommandProgramExecutionContext & context,
+                                              const PreparedCommand &                command,
+                                              const char *                           list_kind,
+                                              size_t                                 list_size,
+                                              size_t                                 command_index,
+                                              size_t                                 program_command_count,
+                                              const char *                           stage) {
+    Status status;
+    const char * directory_value = environment_string_value("GGML_HRX_TRACE_DISPATCH_DIR");
+    if (directory_value == nullptr || !dispatch_trace_should_trace_command(program_command_count, command_index)) {
+        return status;
+    }
+    const bool before_stage = std::strcmp(stage, "before") == 0;
+    const bool after_stage  = std::strcmp(stage, "after") == 0;
+    if (!before_stage && !after_stage) {
+        return status;
+    }
+    const bool capture_blobs = dispatch_trace_blob_capture_enabled();
+    if (before_stage && !capture_blobs) {
+        return status;
+    }
+    const std::filesystem::path root(directory_value);
+    const std::filesystem::path blobs = root / "blobs";
+    const std::filesystem::path trace_path = root / "trace.jsonl";
+    const std::string kernel_name = dispatch_trace_kernel_name(context, command);
+    for (size_t binding_index = 0; binding_index < command.kernel.bindings.size(); ++binding_index) {
+        const PreparedCommandBinding & binding = command.kernel.bindings[binding_index];
+        const bool should_capture = before_stage ? resource_access_reads(binding.binding.access) :
+                                                   resource_access_writes(binding.binding.access);
+        if (!should_capture) {
+            continue;
+        }
+        std::vector<uint8_t> data;
+        Status download_status = dispatch_trace_download_binding(context, binding, data);
+        if (!download_status.success()) {
+            status.append(download_status);
+            continue;
+        }
+        const uint64_t hash = dispatch_trace_hash_bytes(data.data(), data.size());
+        std::string blob_relative;
+        if (capture_blobs) {
+            std::ostringstream blob_name;
+            blob_name << stage << "-cmd" << command_index << "-ord" << command.ordinal << "-bind" << binding_index
+                      << "-value" << binding.binding.value.value << "-off" << binding.binding.offset << "-"
+                      << dispatch_trace_hex(hash) << ".bin";
+            const std::filesystem::path blob_path = blobs / blob_name.str();
+            status.append(dispatch_trace_write_blob(blob_path, data));
+            blob_relative = std::filesystem::relative(blob_path, root).string();
+        }
+        try {
+            std::filesystem::create_directories(root);
+            std::ofstream out(trace_path, std::ios::app);
+            if (!out) {
+                status.log("failed to open dispatch trace %s", trace_path.string().c_str());
+                continue;
+            }
+            out << "{"
+                << "\"stage\":\"" << stage << "\","
+                << "\"list_kind\":\"" << list_kind << "\","
+                << "\"list_size\":" << list_size << ','
+                << "\"program_command_count\":" << program_command_count << ','
+                << "\"command_index\":" << command_index << ','
+                << "\"ordinal\":" << command.ordinal << ','
+                << "\"kernel_id\":" << command.kernel.specialization.kernel_id << ','
+                << "\"kernel\":\"" << dispatch_trace_json_escape(kernel_name) << "\","
+                << "\"binding_index\":" << binding_index << ','
+                << "\"binding_name\":\"" << dispatch_trace_json_escape(binding.binding.name) << "\","
+                << "\"value\":" << binding.binding.value.value << ','
+                << "\"origin\":\"" << command_binding_origin_name(binding.binding.origin) << "\","
+                << "\"access\":\"" << resource_access_name(binding.binding.access) << "\","
+                << "\"offset\":" << binding.binding.offset << ','
+                << "\"length\":" << binding.binding.length << ','
+                << "\"ref_offset\":" << binding.ref.offset << ','
+                << "\"ref_length\":" << binding.ref.length << ','
+                << "\"hash\":\"" << dispatch_trace_hex(hash) << "\"";
+            if (!blob_relative.empty()) {
+                out << ",\"blob\":\"" << dispatch_trace_json_escape(blob_relative) << "\"";
+            }
+            out << "}\n";
+        } catch (const std::exception & error) {
+            status.log("failed to write dispatch trace %s: %s", trace_path.string().c_str(), error.what());
+        }
+    }
+    return status;
 }
 
 static Status command_program_metadata_context_valid(const CommandProgramExecutionContext & context) {
@@ -1139,6 +1349,13 @@ static bool execute_prepared_command_list_serial(const CommandProgramExecutionCo
         if (!debug.sync("command-pre-dispatch", command_detail)) {
             return false;
         }
+        Status trace_status =
+            dispatch_trace_command_bindings(context, command, list_kind, commands.size(), i, program_command_count,
+                                            "before");
+        if (!trace_status.success()) {
+            GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(trace_status));
+            return false;
+        }
         if (trace_command) {
             debug.log("begin", "command-dispatch", command_detail);
         }
@@ -1149,6 +1366,13 @@ static bool execute_prepared_command_list_serial(const CommandProgramExecutionCo
             debug.log("end", "command-dispatch", command_detail);
         }
         if (!debug.sync("command-post-dispatch", command_detail)) {
+            return false;
+        }
+        trace_status =
+            dispatch_trace_command_bindings(context, command, list_kind, commands.size(), i, program_command_count,
+                                            "after");
+        if (!trace_status.success()) {
+            GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(trace_status));
             return false;
         }
     }
@@ -1551,7 +1775,7 @@ static bool execute_prepared_command_prefix_via_graph(const CommandProgramExecut
 }  // namespace
 
 bool debug_serial_command_execution_enabled() {
-    return environment_flag_enabled("GGML_HRX_DEBUG_SERIAL_EXECUTION");
+    return environment_flag_enabled("GGML_HRX_DEBUG_SERIAL_EXECUTION") || dispatch_trace_enabled();
 }
 
 PreparedCommandProgram prepare_command_program(const CommandProgramExecutionContext & context,

@@ -265,12 +265,12 @@ struct SetRowsMatch {
 struct RopeSetRowsMatch {
     RopeMatch         rope;
     SetRowsMatch      set_rows;
-    const GraphNode * layout       = nullptr;
-    const Value *     cache_rows   = nullptr;
-    size_t            set_rows_idx = 0;
-    size_t            layout_idx   = 0;
+    const GraphNode * layout         = nullptr;
+    const Value *     published_rows = nullptr;
+    size_t            set_rows_idx   = 0;
+    size_t            layout_idx     = 0;
 
-    bool matched() const { return rope.matched() && set_rows.matched() && cache_rows != nullptr; }
+    bool matched() const { return rope.matched() && set_rows.matched() && published_rows != nullptr; }
 };
 
 static RopeMatch match_rope_f32(const Graph & graph, const GraphNode * node, Status * status = nullptr) {
@@ -417,15 +417,20 @@ static SetRowsMatch match_set_rows_2d(const Graph & graph, const GraphNode * nod
     return match;
 }
 
-static void add_rope_compile_parameters(Dispatch & dispatch, const RopeMatch & match) {
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.head_size", to_config_value(match.head_size));
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.n_dims", to_config_value(match.n_dims));
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.head_count", to_config_value(match.head_count));
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.token_capacity", to_config_value(match.token_count));
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.input_stride1", to_config_value(match.input_stride1));
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.input_stride2", to_config_value(match.input_stride2));
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.mscale", rope_mscale_config_value(match.rope_mscale));
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.mode", to_config_value(match.mode));
+static void add_rope_compile_parameters(Dispatch & dispatch, const RopeMatch & match, const char * prefix) {
+    dispatch.kernel.compile_parameters.emplace(std::string(prefix) + ".head_size", to_config_value(match.head_size));
+    dispatch.kernel.compile_parameters.emplace(std::string(prefix) + ".n_dims", to_config_value(match.n_dims));
+    dispatch.kernel.compile_parameters.emplace(std::string(prefix) + ".head_count", to_config_value(match.head_count));
+    dispatch.kernel.compile_parameters.emplace(std::string(prefix) + ".token_capacity",
+                                               to_config_value(match.token_count));
+    dispatch.kernel.compile_parameters.emplace(std::string(prefix) + ".input_stride1",
+                                               to_config_value(match.input_stride1));
+    dispatch.kernel.compile_parameters.emplace(std::string(prefix) + ".input_stride2",
+                                               to_config_value(match.input_stride2));
+    dispatch.kernel.compile_parameters.emplace(std::string(prefix) + ".input_span", to_config_value(match.input_span));
+    dispatch.kernel.compile_parameters.emplace(std::string(prefix) + ".mscale",
+                                               rope_mscale_config_value(match.rope_mscale));
+    dispatch.kernel.compile_parameters.emplace(std::string(prefix) + ".mode", to_config_value(match.mode));
 }
 
 static void add_set_rows_compile_parameters(Dispatch & dispatch, const SetRowsMatch & match) {
@@ -476,8 +481,7 @@ static Dispatch make_rope_dispatch(const DispatchMatchContext & context,
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(kRopeF32Kernel);
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
-    add_rope_compile_parameters(dispatch, match);
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.input_span", to_config_value(match.input_span));
+    add_rope_compile_parameters(dispatch, match, "ggml.rope_f32");
     dispatch.bindings.push_back({ match.positions->id, 0, match.positions->byte_count });
     dispatch.bindings.push_back({ match.input->storage_root, match.input->storage_offset, match.input_span_bytes });
     dispatch.bindings.push_back({ theta, 0, match.theta_bytes });
@@ -508,24 +512,9 @@ static Dispatch make_rope_set_rows_dispatch(const DispatchMatchContext & context
     dispatch.kernel = make_kernel_specialization(kRopeSetRowsF32Kernel);
     dispatch.kernel.integer_parameters.emplace("token_count", match.rope.token_count);
     dispatch.kernel.integer_parameters.emplace("cache_row_count", match.set_rows.cache_row_count);
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_set_rows_f32.head_size",
-                                               to_config_value(match.rope.head_size));
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_set_rows_f32.n_dims", to_config_value(match.rope.n_dims));
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_set_rows_f32.head_count",
-                                               to_config_value(match.rope.head_count));
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_set_rows_f32.token_capacity",
-                                               to_config_value(match.rope.token_count));
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_set_rows_f32.input_stride1",
-                                               to_config_value(match.rope.input_stride1));
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_set_rows_f32.input_stride2",
-                                               to_config_value(match.rope.input_stride2));
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_set_rows_f32.input_span",
-                                               to_config_value(match.rope.input_span));
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_set_rows_f32.mscale",
-                                               rope_mscale_config_value(match.rope.rope_mscale));
+    add_rope_compile_parameters(dispatch, match.rope, "ggml.rope_set_rows_f32");
     dispatch.kernel.compile_parameters.emplace("ggml.rope_set_rows_f32.output_format",
                                                to_config_value(match.set_rows.output_format));
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_set_rows_f32.mode", to_config_value(match.rope.mode));
     dispatch.bindings.push_back({ match.rope.positions->id, 0, match.rope.positions->byte_count });
     dispatch.bindings.push_back({ match.set_rows.indices->id, 0, match.set_rows.indices->byte_count });
     dispatch.bindings.push_back(
@@ -574,9 +563,9 @@ static RopeSetRowsMatch match_rope_set_rows_f32(const Graph & graph, const Graph
         return {};
     }
 
-    match.cache_rows = match.set_rows.rows;
+    match.published_rows = match.set_rows.rows;
     if (match.set_rows.row_format != 32 || match.set_rows.hidden_size != match.rope.head_size * match.rope.head_count ||
-        match.set_rows.token_count != match.rope.token_count || match.cache_rows->type != GGML_TYPE_F32) {
+        match.set_rows.token_count != match.rope.token_count || match.published_rows->type != GGML_TYPE_F32) {
         return {};
     }
     return match;

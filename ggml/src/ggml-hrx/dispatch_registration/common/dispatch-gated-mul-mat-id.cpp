@@ -12,8 +12,10 @@
 namespace ggml::hrx {
 namespace {
 
-static constexpr KernelCatalogRef kMulMatIdSwiGLUF32F32WmmaKernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_swiglu_f32_f32_wmma");
+static constexpr KernelCatalogRef kMulMatIdTiledSwiGLUF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_tiled_pair_input_f32_swiglu_publish_f32");
+static constexpr KernelCatalogRef kMulMatIdSkinnySwiGLUF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_skinny_pair_input_f32_swiglu_publish_f32");
 
 struct MulMatIdSwiGLUMatch {
     const Value *               input       = nullptr;
@@ -146,6 +148,10 @@ static CommonMulMatIdMatch routing_match_for_swiglu(const MulMatIdSwiGLUMatch & 
     return routed;
 }
 
+static KernelCatalogRef mul_mat_id_swiglu_f32_kernel(const MulMatIdSwiGLUMatch & match) {
+    return match.token_count <= 5 ? kMulMatIdSkinnySwiGLUF32F32Kernel : kMulMatIdTiledSwiGLUF32F32Kernel;
+}
+
 static bool match_mul_mat_id_swiglu_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     const MulMatIdSwiGLUMatch match = match_mul_mat_id_swiglu(context);
     if (!match.matched()) {
@@ -159,7 +165,7 @@ static bool match_mul_mat_id_swiglu_dispatch(const DispatchMatchContext & contex
     }
 
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(kMulMatIdSwiGLUF32F32WmmaKernel);
+    dispatch.kernel = make_kernel_specialization(mul_mat_id_swiglu_f32_kernel(match));
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
     dispatch.kernel.compile_parameters.emplace("ggml.workload.token_capacity",
                                                common_mul_mat_id_to_config_value(match.token_count));

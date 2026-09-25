@@ -6,6 +6,7 @@
 #include "ggml.h"
 #include "hrx-interop-utils.h"
 #include "runtime/host-memory.h"
+#include "testing_suite.h"
 
 #include <array>
 #include <cstdint>
@@ -352,22 +353,48 @@ static void run_host_weight_cache_checks(ggml_backend_hrx_context * context) {
     REQUIRE(weight_stats.resident_bytes == 0);
 }
 
-int main() {
-    if (ggml_backend_hrx_get_device_count() == 0) {
-        std::fprintf(stderr, "test skipped: no HRX devices available\n");
-        return 0;
-    }
-
+template <typename F>
+static void run_with_hrx_backend(F && f) {
     ggml_backend_t backend = ggml_backend_hrx_init(0);
     REQUIRE(backend != nullptr);
     ggml_backend_hrx_context * context = backend_context(backend);
-
-    run_backend_buffer_checks(backend);
-    run_host_buffer_checks(backend);
-    run_host_transfer_checks(context);
-    run_host_staging_checks(context);
-    run_host_weight_cache_checks(context);
-
+    f(backend, context);
     ggml_backend_free(backend);
-    return 0;
+}
+
+static void register_hrx_buffer_cases(test_runner::Suite & suite) {
+    suite.device_case("backend_buffer", [] {
+        run_with_hrx_backend([](ggml_backend_t backend, ggml_backend_hrx_context *) {
+            run_backend_buffer_checks(backend);
+        });
+    });
+    suite.device_case("host_buffer", [] {
+        run_with_hrx_backend([](ggml_backend_t backend, ggml_backend_hrx_context *) {
+            run_host_buffer_checks(backend);
+        });
+    });
+    suite.device_case("host_transfer", [] {
+        run_with_hrx_backend([](ggml_backend_t, ggml_backend_hrx_context * context) {
+            run_host_transfer_checks(context);
+        });
+    });
+    suite.device_case("host_staging", [] {
+        run_with_hrx_backend([](ggml_backend_t, ggml_backend_hrx_context * context) {
+            run_host_staging_checks(context);
+        });
+    });
+    suite.device_case("host_weight_cache", [] {
+        run_with_hrx_backend([](ggml_backend_t, ggml_backend_hrx_context * context) {
+            run_host_weight_cache_checks(context);
+        });
+    });
+}
+
+int main(int argc, char ** argv) {
+    test_runner::Suite suite(test_runner::Config::with_prefix(
+        "HRX buffer test", "hrx-buffer", "GGML_HRX_BUFFER_TEST", 1));
+    register_hrx_buffer_cases(suite);
+
+    const bool has_device = ggml_backend_hrx_get_device_count() != 0;
+    return suite.run(argc, argv, has_device);
 }

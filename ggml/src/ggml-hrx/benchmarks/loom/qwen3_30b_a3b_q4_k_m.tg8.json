@@ -75,10 +75,10 @@
         "motifs/f32_f16.loom"
       ],
       "primary_sources": [
-        "ops/get_rows_f32.loom"
+        "ops/rows/get_rows_f32.loom"
       ],
       "sources": [
-        "ops/get_rows_f32.loom",
+        "ops/rows/get_rows_f32.loom",
         "motifs/dequant.loom",
         "motifs/publish_f32.loom",
         "motifs/quantize_q8_1_x4.loom",

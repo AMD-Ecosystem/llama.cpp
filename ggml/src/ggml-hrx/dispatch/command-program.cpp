@@ -4,6 +4,7 @@
 #include "transient-allocator.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <string>
@@ -20,6 +21,11 @@ static bool string_equal(const char * lhs, const char * rhs) {
 
 static std::string string_value(const char * value) {
     return value != nullptr ? value : "";
+}
+
+static bool replay_seeded_transients_enabled() {
+    const char * value = std::getenv("GGML_HRX_REPLAY_SEEDED_TRANSIENTS");
+    return value != nullptr && value[0] != '\0' && !(value[0] == '0' && value[1] == '\0');
 }
 
 static CommandBindingOrigin command_binding_origin(const Graph & graph, const Value & value) {
@@ -202,7 +208,7 @@ static void verify_command_list(const std::vector<Command> & commands,
     for (size_t i = 0; i < commands.size(); ++i) {
         const Command &   command         = commands[i];
         const std::string command_context = format_command(command);
-        if (command.ordinal != i) {
+        if (command.ordinal != i && !replay_seeded_transients_enabled()) {
             status.log("%s has non-contiguous ordinal at index %zu", command_context.c_str(), i);
         }
         if (command.kind != CommandKind::Kernel) {
@@ -400,6 +406,10 @@ static int32_t find_later_transient_writer(const std::vector<Command> & commands
 }
 
 static void verify_transient_reads_are_defined(const CommandProgram & program, Status & status) {
+    if (replay_seeded_transients_enabled()) {
+        return;
+    }
+
     std::unordered_set<int32_t> defined;
     for (const Command & command : program.initialization_commands) {
         for (const CommandBinding & binding : command.bindings) {

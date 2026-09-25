@@ -715,11 +715,12 @@ def render_case(symbol: str, command: dict[str, Any], export: dict[str, Any]) ->
     elif kernel == "ggml_mul_mat_add_f32_f32_decode_wave64":
         case = case_mul_mat_add_decode(symbol, command, kernel)
     elif kernel in (
-        "ggml_mul_mat_bias_f32_f32_wmma",
-        "ggml_mul_mat_add_f32_f32_wmma",
-        "ggml_mul_mat_bias_add_f32_f32_wmma",
-        "ggml_mul_mat_add_next_rmsnorm_f32_f32_wmma",
-        "ggml_mul_mat_bias_add_next_rmsnorm_f32_f32_wmma",
+        "ggml_mul_mat_tiled_input_f32_bias_publish_f32",
+        "ggml_mul_mat_tiled_input_f32_residual_publish_f32",
+        "ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32",
+        "ggml_mul_mat_skinny_input_f32_bias_publish_f32",
+        "ggml_mul_mat_skinny_input_f32_residual_publish_f32",
+        "ggml_mul_mat_skinny_input_f32_bias_residual_publish_f32",
     ):
         case = case_mul_mat_postops(symbol, command, kernel)
     elif kernel in ("ggml_mul_mat_swiglu_f32_f32_wmma", "ggml_mul_mat_swiglu_f32_f32_decode_wave64"):

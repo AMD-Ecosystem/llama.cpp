@@ -1,0 +1,84 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.rmsnorm_f32.subgroup_row_scale(%token_count: index, %token: index, %hidden_size: index, %epsilon: f32, %input: buffer) -> (f32)
+template.decl @ggml.unary_f32.apply_vector4(%op: index, %values: vector<4xf32>) -> (vector<4xf32>)
+template.decl @ggml.quantize_q8_1_x4.publish_vector4_strict(%publish_word: i1, %token_output_byte_base: offset, %channel: index, %values: vector<4xf32>, %scratch_values: view<256xf32>, %scratch_d: view<32xf32>, %output: buffer)
+template.decl @ggml.rmsnorm_gate_f32.publish_body(%publish_q8: i1, %token_count: index, %input: buffer, %weight: buffer, %raw_gate: buffer, %output: buffer, %alternate_output: buffer)
+
+config.decl @ggml.rmsnorm_gate_f32.hidden_size : %value: index where [range(%value, 128, 1024), mul(%value, 128)]
+config.decl @ggml.rmsnorm_gate_f32.rms_epsilon : f32
+config.decl @ggml.rmsnorm_gate_f32.gate_op : %value: index where [range(%value, 0, 23)]
+config.decl @ggml.rmsnorm_gate_f32.f16_output_row_width : %value: index where [range(%value, 0, 32768), mul(%value, 128)]
+
+template.def<@ggml.rmsnorm_gate_f32.publish_body> device @ggml_rmsnorm_gate_f32_publish_body(%publish_q8: i1, %token_count: index, %input: buffer, %weight: buffer, %raw_gate: buffer, %output: buffer, %alternate_output: buffer) {
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1048576)] : index
+  %hidden0 = config.get @ggml.rmsnorm_gate_f32.hidden_size : index
+  %hidden = index.assume %hidden0 [range(%hidden0, 128, 1024), mul(%hidden0, 128)] : index
+  %epsilon = config.get @ggml.rmsnorm_gate_f32.rms_epsilon : f32
+  %gate_op = config.get @ggml.rmsnorm_gate_f32.gate_op : index
+  %row_width = config.get @ggml.rmsnorm_gate_f32.f16_output_row_width : index
+  %z = index.constant 0 : index
+  %zero_offset = index.constant 0 : offset
+  %four = index.constant 4 : index
+  %eight = index.constant 8 : index
+  %c128 = index.constant 128 : index
+  %wg = kernel.workgroup.id<x> : index
+  %wave = kernel.subgroup.id : index
+  %lane = kernel.subgroup.lane.id : index
+  %row0 = index.madd %wg, %eight, %wave : index
+  %valid = index.cmp ult, %row0, %bounded_token_count : index
+  %safe = scf.select %valid, %row0, %z : index
+  %row = index.assume %safe [lt(%safe, %bounded_token_count)] : index
+  %channel0 = index.mul %lane, %four : index
+  %input_n, %weight_n, %raw_gate_n, %output_n, %alternate_n = buffer.assume.noalias %input, %weight, %raw_gate, %output, %alternate_output : buffer, buffer, buffer, buffer, buffer
+  %iv = buffer.view %input_n[%zero_offset] : buffer -> view<[%bounded_token_count]x[%hidden]xf32>
+  %wv = buffer.view %weight_n[%zero_offset] : buffer -> view<[%hidden]xf32>
+  %gv = buffer.view %raw_gate_n[%zero_offset] : buffer -> view<[%bounded_token_count]x[%hidden]xf32>
+  %ov = buffer.view %output_n[%zero_offset] : buffer -> view<[%bounded_token_count]x[%hidden]xf32>
+  %scale = template.apply<@ggml.rmsnorm_f32.subgroup_row_scale>(%bounded_token_count, %row, %hidden, %epsilon, %input_n) : (index, index, index, f32, buffer) -> (f32)
+  %scale_v = vector.splat %scale : vector<4xf32>
+  %last_channel = index.sub %hidden, %four : index
+  scf.if %valid {
+    scf.for %channel = [%channel0 to %hidden step %c128] {
+      %bounded_channel = index.assume %channel [range(%channel, 0, 1020), mul(%channel, 4), le(%channel, %last_channel)] : index
+      %x = vector.load %iv[%row, %bounded_channel] : view<[%bounded_token_count]x[%hidden]xf32> -> vector<4xf32>
+      %w = vector.load %wv[%bounded_channel] : view<[%hidden]xf32> -> vector<4xf32>
+      %g = vector.load %gv[%row, %bounded_channel] : view<[%bounded_token_count]x[%hidden]xf32> -> vector<4xf32>
+      %norm = vector.mulf<reassoc|nnan|ninf|nsz> %x, %scale_v : vector<4xf32>
+      %side = vector.mulf %norm, %w : vector<4xf32>
+      %activated = template.apply<@ggml.unary_f32.apply_vector4>(%gate_op, %g) : (index, vector<4xf32>) -> (vector<4xf32>)
+      %out = vector.mulf %side, %activated : vector<4xf32>
+      vector.store %out, %ov[%row, %bounded_channel] : vector<4xf32>, view<[%bounded_token_count]x[%hidden]xf32>
+      scf.if %publish_q8 {
+        %scratch_bytes = index.constant 1152 : offset
+        %scratch_d_offset = index.constant 1024 : offset
+        %scratch = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
+        %scratch_values = buffer.view %scratch[%zero_offset] : buffer -> view<256xf32>
+        %scratch_d = buffer.view %scratch[%scratch_d_offset] : buffer -> view<32xf32>
+        %flat_channel = index.madd %row, %hidden, %bounded_channel : index
+        template.apply<@ggml.quantize_q8_1_x4.publish_vector4_strict>(%valid, %zero_offset, %flat_channel, %out, %scratch_values, %scratch_d, %alternate_n) : (i1, offset, index, vector<4xf32>, view<256xf32>, view<32xf32>, buffer)
+      } else {
+        %hv = buffer.view %alternate_n[%zero_offset] : buffer -> view<[%bounded_token_count]x[%hidden]xf16>
+        %out_half = vector.fptrunc %out : vector<4xf32> to vector<4xf16>
+        %packed = index.cmp ugt, %row_width, %z : index
+        scf.if %packed {
+          %c16 = index.constant 16 : index
+          %element_count = index.mul %bounded_token_count, %hidden : index
+          %packed_rows = index.div %element_count, %row_width : index
+          %packed_columns = index.div %row_width, %c16 : index
+          %packed_view = buffer.view %alternate_n[%zero_offset] : buffer -> view<[%packed_columns]x[%packed_rows]x16xf16>
+          %flat = index.madd %row, %hidden, %bounded_channel : index
+          %packed_row = index.div %flat, %row_width : index
+          %packed_channel = index.rem %flat, %row_width : index
+          %packed_column = index.div %packed_channel, %c16 : index
+          %packed_lane = index.rem %packed_channel, %c16 : index
+          vector.store %out_half, %packed_view[%packed_column, %packed_row, %packed_lane] : vector<4xf16>, view<[%packed_columns]x[%packed_rows]x16xf16>
+        } else {
+          vector.store %out_half, %hv[%row, %bounded_channel] : vector<4xf16>, view<[%bounded_token_count]x[%hidden]xf16>
+        }
+      }
+    }
+  }
+  template.return
+}

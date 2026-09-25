@@ -14,12 +14,18 @@
 namespace ggml::hrx {
 namespace {
 
-static constexpr KernelCatalogRef kMulMatIdF32F32WmmaKernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_f32_f32_wmma");
-static constexpr KernelCatalogRef kMulMatIdPostOpsF32F32WmmaKernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_postops_f32_f32_wmma");
-static constexpr KernelCatalogRef kMulMatIdPostOpsNextRmsNormF32F32WmmaKernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_postops_next_rmsnorm_f32_f32_wmma");
+static constexpr KernelCatalogRef kMulMatIdTiledF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_tiled_input_f32_publish_f32");
+static constexpr KernelCatalogRef kMulMatIdSkinnyF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_skinny_input_f32_publish_f32");
+static constexpr KernelCatalogRef kMulMatIdTiledPostOpsF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_tiled_input_f32_postops_publish_f32");
+static constexpr KernelCatalogRef kMulMatIdSkinnyPostOpsF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_skinny_input_f32_postops_publish_f32");
+static constexpr KernelCatalogRef kMulMatIdTiledPostOpsNextRmsNormF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_tiled_input_f32_postops_next_rmsnorm_publish_f32");
+static constexpr KernelCatalogRef kMulMatIdSkinnyPostOpsNextRmsNormF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_skinny_input_f32_postops_next_rmsnorm_publish_f32");
 
 struct MulMatIdPostOpsMatch {
     CommonMulMatIdMatch            root;
@@ -53,6 +59,23 @@ static bool is_bias_shape(const Value & value, int64_t output_size) {
         }
     }
     return true;
+}
+
+static bool common_mul_mat_id_is_skinny_route(const CommonMulMatIdMatch & match) {
+    return match.matched() && match.token_count <= 5;
+}
+
+static KernelCatalogRef common_mul_mat_id_f32_kernel(const CommonMulMatIdMatch & match) {
+    return common_mul_mat_id_is_skinny_route(match) ? kMulMatIdSkinnyF32F32Kernel : kMulMatIdTiledF32F32Kernel;
+}
+
+static KernelCatalogRef common_mul_mat_id_postops_f32_kernel(const CommonMulMatIdMatch & match, bool has_rmsnorm) {
+    if (has_rmsnorm) {
+        return common_mul_mat_id_is_skinny_route(match) ? kMulMatIdSkinnyPostOpsNextRmsNormF32F32Kernel :
+                                                          kMulMatIdTiledPostOpsNextRmsNormF32F32Kernel;
+    }
+    return common_mul_mat_id_is_skinny_route(match) ? kMulMatIdSkinnyPostOpsF32F32Kernel :
+                                                      kMulMatIdTiledPostOpsF32F32Kernel;
 }
 
 static MulMatIdPostOpsMatch match_mul_mat_id_postops(const DispatchMatchContext & context) {
@@ -150,7 +173,7 @@ static MulMatIdPostOpsMatch match_mul_mat_id_postops(const DispatchMatchContext 
     }
 
     match.root   = root;
-    match.kernel = match.has_rmsnorm ? kMulMatIdPostOpsNextRmsNormF32F32WmmaKernel : kMulMatIdPostOpsF32F32WmmaKernel;
+    match.kernel = common_mul_mat_id_postops_f32_kernel(root, match.has_rmsnorm);
     return match;
 }
 
@@ -169,7 +192,7 @@ static bool match_mul_mat_id_dispatch(const DispatchMatchContext & context, Disp
     }
 
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(kMulMatIdF32F32WmmaKernel);
+    dispatch.kernel = make_kernel_specialization(common_mul_mat_id_f32_kernel(match));
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
     dispatch.kernel.compile_parameters.emplace("ggml.workload.token_capacity",
                                                common_mul_mat_id_to_config_value(match.token_count));
