@@ -74,7 +74,7 @@ func.def inline @ggml_q5_plane_q4k_scale_from_header(%scale0: i32, %scale1: i32,
 }
 
 // Packs either nibble from four adjacent GGUF IQ4_XS bytes for the gfx11 table lookup.
-// The target V_PERM mapping reverses both source halves, so the table index uses XOR 12.
+// Preserve GGUF code indices for the logical table lookup.
 func.def inline @ggml_q5_plane_dense_iq4xs_wmma_table_codes4(%code_word: vector<1xi32>, %uses_high: i1) -> (vector<4xi8>) {
   %c4_i32 = scalar.constant 4 : i32
   %c8_i32 = scalar.constant 8 : i32
@@ -84,7 +84,6 @@ func.def inline @ggml_q5_plane_dense_iq4xs_wmma_table_codes4(%code_word: vector<
   %mask1_i32 = scalar.constant 240 : i32
   %mask2_i32 = scalar.constant 3840 : i32
   %mask3_i32 = scalar.constant 61440 : i32
-  %target_index_xor_i32 = scalar.constant 52428 : i32
   %word = vector.extract %code_word[0] : vector<1xi32> -> i32
   %word_shr4 = scalar.shrui %word, %c4_i32 : i32
   %word_shr8 = scalar.shrui %word, %c8_i32 : i32
@@ -105,10 +104,9 @@ func.def inline @ggml_q5_plane_dense_iq4xs_wmma_table_codes4(%code_word: vector<
   %high23 = scalar.ori %high2, %high3 : i32
   %high = scalar.ori %high01, %high23 : i32
   %selected = scf.select %uses_high, %high, %low : i32
-  %target_selected = scalar.xori %selected, %target_index_xor_i32 : i32
-  %target_selected_shr8 = scalar.shrui %target_selected, %c8_i32 : i32
-  %packed0 = scalar.trunci %target_selected : i32 to i8
-  %packed1 = scalar.trunci %target_selected_shr8 : i32 to i8
+  %selected_shr8 = scalar.shrui %selected, %c8_i32 : i32
+  %packed0 = scalar.trunci %selected : i32 to i8
+  %packed1 = scalar.trunci %selected_shr8 : i32 to i8
   %packed = vector.from_elements %packed0, %packed1 : vector<2xi8>
   %codes = vector.bitunpacku<4> %packed : vector<2xi8> -> vector<4xi8>
   func.return %codes : vector<4xi8>
