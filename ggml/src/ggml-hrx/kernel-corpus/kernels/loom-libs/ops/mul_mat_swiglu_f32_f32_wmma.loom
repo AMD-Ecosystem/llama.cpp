@@ -1,8 +1,10 @@
 // Dense GGML gate/up matmul fused with an ordered binary op for contiguous 2D F32 activations.
 func.decl @ggml_iq4xs_load_block_header(%weight: buffer, %row_base: offset, %block: index) -> (i32, i32)
+
 func.decl @ggml_iq4xs_preloaded_f32_vector4(%iq4nl_table: vector<16xi8>, %weight: buffer, %row_byte_base: offset, %iq4_block: index, %iq4_group: index, %packet: index, %header: i32, %scales_l: i32) -> (vector<4xf32>)
 
 func.decl @ggml_q5k_load_block_header(%weight: buffer, %row_base: offset, %block: index, %packet: index) -> (vector<2xf16>, vector<3xi32>, vector<4xi8>)
+
 func.decl @ggml_q5k_preloaded_f32_vector4(%weight: buffer, %row_byte_base: offset, %q5_block: index, %q5_group: index, %packet: index, %dm: vector<2xf16>, %scales: vector<3xi32>, %qh_bytes: vector<4xi8>) -> (vector<4xf32>)
 
 template.decl @ggml.mul_mat_swiglu.apply_vector4(%op: index, %lhs: vector<4xf32>, %rhs: vector<4xf32>) -> (vector<4xf32>)
