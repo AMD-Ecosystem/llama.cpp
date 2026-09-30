@@ -392,6 +392,14 @@ func.def inline @ggml_mul_mat_swiglu_lowtoken_dot(%op: index, %gate_format: inde
   %c4 = index.constant 4 : index
   %c8 = index.constant 8 : index
   %c256 = index.constant 256 : index
+  %q5_format = index.constant 5 : index
+  %iq4xs_format = index.constant 23 : index
+  %gate_is_q5 = index.cmp eq, %gate_format, %q5_format : index
+  %gate_is_iq4xs = index.cmp eq, %gate_format, %iq4xs_format : index
+  %supported_unroll_format = scalar.ori %gate_is_q5, %gate_is_iq4xs : i1
+  %same_weight_format = index.cmp eq, %gate_format, %up_format : index
+  %unroll_quant_block = scalar.andi %supported_unroll_format, %same_weight_format : i1
+  %unroll_factor = scf.select %unroll_quant_block, %c4, %c1 : index
   %base = index.constant 0 : offset
   %zero = vector.constant 0.0 : vector<4xf32>
   %zero_scalar = scalar.constant 0.0 : f32
@@ -424,7 +432,8 @@ func.def inline @ggml_mul_mat_swiglu_lowtoken_dot(%op: index, %gate_format: inde
   %av = buffer.view %a_na[%base] : buffer -> view<[%tokens]x[%k]xf32>
   %ov = buffer.view %o_na[%base] : buffer -> view<[%tokens]x[%n]xf32>
   scf.if %valid_row {
-    %total_g0, %total_u0, %total_g1, %total_u1, %total_g2, %total_u2, %total_g3, %total_u3, %total_g4, %total_u4 = scf.for %step = [%c0 to %steps step %c1](%acc_g0 = %zero : vector<4xf32>, %acc_u0 = %zero : vector<4xf32>, %acc_g1 = %zero : vector<4xf32>, %acc_u1 = %zero : vector<4xf32>, %acc_g2 = %zero : vector<4xf32>, %acc_u2 = %zero : vector<4xf32>, %acc_g3 = %zero : vector<4xf32>, %acc_u3 = %zero : vector<4xf32>, %acc_g4 = %zero : vector<4xf32>, %acc_u4 = %zero : vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
+    // Expose one quantization block at a time so its four quarters can share scales and address arithmetic.
+    %total_g0, %total_u0, %total_g1, %total_u1, %total_g2, %total_u2, %total_g3, %total_u3, %total_g4, %total_u4 = scf.for %step = [%c0 to %steps step %c1](%acc_g0 = %zero : vector<4xf32>, %acc_u0 = %zero : vector<4xf32>, %acc_g1 = %zero : vector<4xf32>, %acc_u1 = %zero : vector<4xf32>, %acc_g2 = %zero : vector<4xf32>, %acc_u2 = %zero : vector<4xf32>, %acc_g3 = %zero : vector<4xf32>, %acc_u3 = %zero : vector<4xf32>, %acc_g4 = %zero : vector<4xf32>, %acc_u4 = %zero : vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) unroll(%unroll_factor) {
       %block = index.div %step, %c4 : index
       %quarter = index.rem %step, %c4 : index
       %quarter_group = index.mul %quarter, %c2 : index
