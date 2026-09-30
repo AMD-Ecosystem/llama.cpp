@@ -114,14 +114,24 @@ template <int warp_size, int num_rows>
 static __global__ void mul_mat_vec_dq_glu_q4_K(
         const void * __restrict__ vx_up, const void * __restrict__ vx_gate,
         const float * __restrict__ y, float * __restrict__ dst,
-        const int ncols_x, const int nrows_x) {
+        const int ncols_x, const int nrows_x,
+        const int32_t * __restrict__ ids, const int64_t stride_channel_x, const int64_t stride_channel_dst,
+        const int64_t stride_channel_y, const int nchannels_y) {
     const int first_row = num_rows * blockIdx.x;
     const int nblocks   = ncols_x / QK_K;
     const int it_size   = warp_size / 16;
 
+    // MoE (ids): blockIdx.y selects the expert slot; ids maps slot -> expert matrix.
+    // up and gate share shape, so both stacks use the same expert stride. Non-ids
+    // launches use grid.y=1, ids=nullptr, nchannels_y=1 => every offset collapses to 0.
+    const int channel   = blockIdx.y;
+    const int expert    = ids ? ids[channel] : 0;
+    const int channel_y = nchannels_y > 1 ? channel % nchannels_y : 0;
     const dq_geom_q4_K g = dq_setup_q4_K(threadIdx.x);
-    const block_q4_K * xu = (const block_q4_K *) vx_up;
-    const block_q4_K * xg = (const block_q4_K *) vx_gate;
+    const block_q4_K * xu = (const block_q4_K *) vx_up   + expert * stride_channel_x;
+    const block_q4_K * xg = (const block_q4_K *) vx_gate + expert * stride_channel_x;
+    const float * yc = y + (int64_t) channel_y * stride_channel_y;
+    float * dst_c = dst + channel * stride_channel_dst;
 
     if (num_rows >= 8) {
         // Two-pass: one accumulator array at a time keeps register pressure at
@@ -135,7 +145,7 @@ static __global__ void mul_mat_vec_dq_glu_q4_K(
             for (int n = 0; n < num_rows; ++n) acc[n] = 0.0f;
 
             for (int i = g.ix; i < nblocks; i += it_size) {
-                const float * yb = y + (int64_t) i * QK_K;
+                const float * yb = yc + (int64_t) i * QK_K;
                 const float4 by10  = *(const float4 *) (yb + g.y_offset      );
                 const float4 by132 = *(const float4 *) (yb + g.y_offset +  32);
                 const float4 by20  = *(const float4 *) (yb + g.y_offset + 128);
@@ -157,8 +167,8 @@ static __global__ void mul_mat_vec_dq_glu_q4_K(
             for (int n = 0; n < num_rows; ++n) {
                 const float r = warp_reduce_sum<warp_size>(acc[n]);
                 if (threadIdx.x == 0 && first_row + n < nrows_x) {
-                    if (pass == 0) dst[first_row + n] = r;
-                    else           dst[first_row + n] = ggml_cuda_op_silu_single(r) * dst[first_row + n];
+                    if (pass == 0) dst_c[first_row + n] = r;
+                    else           dst_c[first_row + n] = ggml_cuda_op_silu_single(r) * dst_c[first_row + n];
                 }
             }
         }
@@ -170,7 +180,7 @@ static __global__ void mul_mat_vec_dq_glu_q4_K(
     for (int n = 0; n < num_rows; ++n) { up[n] = 0.0f; gate[n] = 0.0f; }
 
     for (int i = g.ix; i < nblocks; i += it_size) {
-        const float * yb = y + (int64_t) i * QK_K;
+        const float * yb = yc + (int64_t) i * QK_K;
         const float4 by10  = *(const float4 *) (yb + g.y_offset      );
         const float4 by132 = *(const float4 *) (yb + g.y_offset +  32);
         const float4 by20  = *(const float4 *) (yb + g.y_offset + 128);
@@ -194,7 +204,7 @@ static __global__ void mul_mat_vec_dq_glu_q4_K(
     for (int n = 0; n < num_rows; ++n) {
         const float u = warp_reduce_sum<warp_size>(up[n]);
         const float gt = warp_reduce_sum<warp_size>(gate[n]);
-        if (threadIdx.x == 0 && first_row + n < nrows_x) dst[first_row + n] = ggml_cuda_op_silu_single(gt) * u;
+        if (threadIdx.x == 0 && first_row + n < nrows_x) dst_c[first_row + n] = ggml_cuda_op_silu_single(gt) * u;
     }
 }
 
@@ -274,14 +284,21 @@ template <int warp_size, int num_rows>
 static __global__ void mul_mat_vec_dq_glu_q5_K(
         const void * __restrict__ vx_up, const void * __restrict__ vx_gate,
         const float * __restrict__ y, float * __restrict__ dst,
-        const int ncols_x, const int nrows_x) {
+        const int ncols_x, const int nrows_x,
+        const int32_t * __restrict__ ids, const int64_t stride_channel_x, const int64_t stride_channel_dst,
+        const int64_t stride_channel_y, const int nchannels_y) {
     const int first_row = num_rows * blockIdx.x;
     const int nblocks   = ncols_x / QK_K;
     const int it_size   = warp_size / 16;
 
+    const int channel   = blockIdx.y;
+    const int expert    = ids ? ids[channel] : 0;
+    const int channel_y = nchannels_y > 1 ? channel % nchannels_y : 0;
     const dq_geom_q5_K g = dq_setup_q5_K(threadIdx.x);
-    const block_q5_K * xu = (const block_q5_K *) vx_up;
-    const block_q5_K * xg = (const block_q5_K *) vx_gate;
+    const block_q5_K * xu = (const block_q5_K *) vx_up   + expert * stride_channel_x;
+    const block_q5_K * xg = (const block_q5_K *) vx_gate + expert * stride_channel_x;
+    const float * yc = y + (int64_t) channel_y * stride_channel_y;
+    float * dst_c = dst + channel * stride_channel_dst;
 
     if (num_rows >= 8) {
         // Two-pass: one accumulator array at a time keeps register pressure at
@@ -295,7 +312,7 @@ static __global__ void mul_mat_vec_dq_glu_q5_K(
             for (int n = 0; n < num_rows; ++n) acc[n] = 0.0f;
 
             for (int i = g.ix; i < nblocks; i += it_size) {
-                const float * yb = y + (int64_t) i * QK_K;
+                const float * yb = yc + (int64_t) i * QK_K;
                 DQ_Q5_K_LOAD_ACT();
 
 #pragma unroll
@@ -309,8 +326,8 @@ static __global__ void mul_mat_vec_dq_glu_q5_K(
             for (int n = 0; n < num_rows; ++n) {
                 const float r = warp_reduce_sum<warp_size>(acc[n]);
                 if (threadIdx.x == 0 && first_row + n < nrows_x) {
-                    if (pass == 0) dst[first_row + n] = r;
-                    else           dst[first_row + n] = ggml_cuda_op_silu_single(r) * dst[first_row + n];
+                    if (pass == 0) dst_c[first_row + n] = r;
+                    else           dst_c[first_row + n] = ggml_cuda_op_silu_single(r) * dst_c[first_row + n];
                 }
             }
         }
@@ -322,7 +339,7 @@ static __global__ void mul_mat_vec_dq_glu_q5_K(
     for (int n = 0; n < num_rows; ++n) { up[n] = 0.0f; gate[n] = 0.0f; }
 
     for (int i = g.ix; i < nblocks; i += it_size) {
-        const float * yb = y + (int64_t) i * QK_K;
+        const float * yb = yc + (int64_t) i * QK_K;
         DQ_Q5_K_LOAD_ACT();
 
 #pragma unroll
@@ -338,7 +355,7 @@ static __global__ void mul_mat_vec_dq_glu_q5_K(
     for (int n = 0; n < num_rows; ++n) {
         const float u = warp_reduce_sum<warp_size>(up[n]);
         const float gt = warp_reduce_sum<warp_size>(gate[n]);
-        if (threadIdx.x == 0 && first_row + n < nrows_x) dst[first_row + n] = ggml_cuda_op_silu_single(gt) * u;
+        if (threadIdx.x == 0 && first_row + n < nrows_x) dst_c[first_row + n] = ggml_cuda_op_silu_single(gt) * u;
     }
 }
 
@@ -404,14 +421,21 @@ template <int warp_size, int num_rows>
 static __global__ void mul_mat_vec_dq_glu_q6_K(
         const void * __restrict__ vx_up, const void * __restrict__ vx_gate,
         const float * __restrict__ y, float * __restrict__ dst,
-        const int ncols_x, const int nrows_x) {
+        const int ncols_x, const int nrows_x,
+        const int32_t * __restrict__ ids, const int64_t stride_channel_x, const int64_t stride_channel_dst,
+        const int64_t stride_channel_y, const int nchannels_y) {
     const int first_row = num_rows * blockIdx.x;
     const int nblocks   = ncols_x / QK_K;
     const int it_size   = warp_size / 16;
 
+    const int channel   = blockIdx.y;
+    const int expert    = ids ? ids[channel] : 0;
+    const int channel_y = nchannels_y > 1 ? channel % nchannels_y : 0;
     const dq_geom_q6_K g = dq_setup_q6_K(threadIdx.x);
-    const block_q6_K * xu = (const block_q6_K *) vx_up;
-    const block_q6_K * xg = (const block_q6_K *) vx_gate;
+    const block_q6_K * xu = (const block_q6_K *) vx_up   + expert * stride_channel_x;
+    const block_q6_K * xg = (const block_q6_K *) vx_gate + expert * stride_channel_x;
+    const float * yc = y + (int64_t) channel_y * stride_channel_y;
+    float * dst_c = dst + channel * stride_channel_dst;
 
     if (num_rows >= 8) {
         // Two-pass: one accumulator array at a time keeps register pressure at
@@ -425,7 +449,7 @@ static __global__ void mul_mat_vec_dq_glu_q6_K(
             for (int n = 0; n < num_rows; ++n) acc[n] = 0.0f;
 
             for (int i = g.ix; i < nblocks; i += it_size) {
-                const float * yb = y + (int64_t) i * QK_K;
+                const float * yb = yc + (int64_t) i * QK_K;
                 const float4 by0  = *(const float4 *) (yb + g.y_offset      );
                 const float4 by32 = *(const float4 *) (yb + g.y_offset +  32);
                 const float4 by64 = *(const float4 *) (yb + g.y_offset +  64);
@@ -442,8 +466,8 @@ static __global__ void mul_mat_vec_dq_glu_q6_K(
             for (int n = 0; n < num_rows; ++n) {
                 const float r = warp_reduce_sum<warp_size>(acc[n]);
                 if (threadIdx.x == 0 && first_row + n < nrows_x) {
-                    if (pass == 0) dst[first_row + n] = r;
-                    else           dst[first_row + n] = ggml_cuda_op_silu_single(r) * dst[first_row + n];
+                    if (pass == 0) dst_c[first_row + n] = r;
+                    else           dst_c[first_row + n] = ggml_cuda_op_silu_single(r) * dst_c[first_row + n];
                 }
             }
         }
@@ -455,7 +479,7 @@ static __global__ void mul_mat_vec_dq_glu_q6_K(
     for (int n = 0; n < num_rows; ++n) { up[n] = 0.0f; gate[n] = 0.0f; }
 
     for (int i = g.ix; i < nblocks; i += it_size) {
-        const float * yb = y + (int64_t) i * QK_K;
+        const float * yb = yc + (int64_t) i * QK_K;
         const float4 by0  = *(const float4 *) (yb + g.y_offset      );
         const float4 by32 = *(const float4 *) (yb + g.y_offset +  32);
         const float4 by64 = *(const float4 *) (yb + g.y_offset +  64);
@@ -474,7 +498,7 @@ static __global__ void mul_mat_vec_dq_glu_q6_K(
     for (int n = 0; n < num_rows; ++n) {
         const float u = warp_reduce_sum<warp_size>(up[n]);
         const float gt = warp_reduce_sum<warp_size>(gate[n]);
-        if (threadIdx.x == 0 && first_row + n < nrows_x) dst[first_row + n] = ggml_cuda_op_silu_single(gt) * u;
+        if (threadIdx.x == 0 && first_row + n < nrows_x) dst_c[first_row + n] = ggml_cuda_op_silu_single(gt) * u;
     }
 }
 
@@ -489,10 +513,10 @@ static __global__ void mul_mat_vec_dq_glu_q6_K(
 
 #define DQ_LAUNCH_GLU(KERN, NR)                                                                         \
     do {                                                                                                \
-        const dim3 bn((nrows_x + (NR) - 1) / (NR), 1, 1);                                               \
+        const dim3 bn((nrows_x + (NR) - 1) / (NR), nchannels_dst, 1);                                   \
         const dim3 bd(warp_size, 1, 1);                                                                 \
-        if (warp_size == 64) KERN<64, NR><<<bn, bd, 0, stream>>>(vx_up, vx_gate, y, d, ncols_x, nrows_x); \
-        else                 KERN<32, NR><<<bn, bd, 0, stream>>>(vx_up, vx_gate, y, d, ncols_x, nrows_x); \
+        if (warp_size == 64) KERN<64, NR><<<bn, bd, 0, stream>>>(vx_up, vx_gate, y, d, ncols_x, nrows_x, ids, stride_channel_x, stride_channel_dst, stride_channel_y, nchannels_y); \
+        else                 KERN<32, NR><<<bn, bd, 0, stream>>>(vx_up, vx_gate, y, d, ncols_x, nrows_x, ids, stride_channel_x, stride_channel_dst, stride_channel_y, nchannels_y); \
     } while (0)
 
 template <int num_rows>
@@ -514,15 +538,21 @@ static void launch_dq_q6_K(const void * vx, const float * y, float * d, int ncol
     DQ_LAUNCH_PLAIN(mul_mat_vec_dq_q6_K, num_rows);
 }
 template <int num_rows>
-static void launch_dq_glu_q4_K(const void * vx_up, const void * vx_gate, const float * y, float * d, int ncols_x, int nrows_x, int warp_size, cudaStream_t stream) {
+static void launch_dq_glu_q4_K(const void * vx_up, const void * vx_gate, const float * y, float * d, int ncols_x, int nrows_x,
+        const int32_t * ids, int64_t stride_channel_x, int64_t stride_channel_dst,
+        int64_t stride_channel_y, int nchannels_y, int nchannels_dst, int warp_size, cudaStream_t stream) {
     DQ_LAUNCH_GLU(mul_mat_vec_dq_glu_q4_K, num_rows);
 }
 template <int num_rows>
-static void launch_dq_glu_q5_K(const void * vx_up, const void * vx_gate, const float * y, float * d, int ncols_x, int nrows_x, int warp_size, cudaStream_t stream) {
+static void launch_dq_glu_q5_K(const void * vx_up, const void * vx_gate, const float * y, float * d, int ncols_x, int nrows_x,
+        const int32_t * ids, int64_t stride_channel_x, int64_t stride_channel_dst,
+        int64_t stride_channel_y, int nchannels_y, int nchannels_dst, int warp_size, cudaStream_t stream) {
     DQ_LAUNCH_GLU(mul_mat_vec_dq_glu_q5_K, num_rows);
 }
 template <int num_rows>
-static void launch_dq_glu_q6_K(const void * vx_up, const void * vx_gate, const float * y, float * d, int ncols_x, int nrows_x, int warp_size, cudaStream_t stream) {
+static void launch_dq_glu_q6_K(const void * vx_up, const void * vx_gate, const float * y, float * d, int ncols_x, int nrows_x,
+        const int32_t * ids, int64_t stride_channel_x, int64_t stride_channel_dst,
+        int64_t stride_channel_y, int nchannels_y, int nchannels_dst, int warp_size, cudaStream_t stream) {
     DQ_LAUNCH_GLU(mul_mat_vec_dq_glu_q6_K, num_rows);
 }
 
@@ -562,47 +592,36 @@ static dq_moe_dims dq_moe_setup(const ggml_tensor * src0, const ggml_tensor * sr
     };
 }
 
-static void ggml_cuda_mul_mat_vec_dq_q4_K(
-        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
-        const ggml_tensor * ids_t, ggml_tensor * dst) {
-    const int ncols_x = src0->ne[0];
-    const int nrows   = src0->ne[1];
-    cudaStream_t stream = ctx.stream();
-    const int warp_size = ggml_cuda_info().devices[ctx.device].warp_size;
-    const void  * vx = src0->data;
-    const float * y  = (const float *) src1->data;
-    float       * d  = (float *) dst->data;
-    const dq_moe_dims m = dq_moe_setup(src0, src1, ids_t, dst);
-    const int32_t * ids = m.ids;
-    const int64_t stride_channel_x   = m.stride_channel_x;
-    const int64_t stride_channel_dst = m.stride_channel_dst;
-    const int64_t stride_channel_y   = m.stride_channel_y;
-    const int     nchannels_y        = m.nchannels_y;
-    const int     nchannels_dst      = m.nchannels_dst;
-    DQ_DISPATCH_ROWS(launch_dq_q4_K, vx, y, d, ncols_x, nrows, ids, stride_channel_x, stride_channel_dst, stride_channel_y, nchannels_y, nchannels_dst, warp_size, stream);
+// Type-dispatched plain launcher: selects the per-type kernel launcher so the host
+// dispatcher body (identical across Q4_K/Q5_K/Q6_K) exists in exactly one place.
+template <int num_rows>
+static void launch_dq_plain(ggml_type type, const void * vx, const float * y, float * d, int ncols_x, int nrows_x,
+        const int32_t * ids, int64_t stride_channel_x, int64_t stride_channel_dst,
+        int64_t stride_channel_y, int nchannels_y, int nchannels_dst, int warp_size, cudaStream_t stream) {
+    switch (type) {
+        case GGML_TYPE_Q4_K: launch_dq_q4_K<num_rows>(vx, y, d, ncols_x, nrows_x, ids, stride_channel_x, stride_channel_dst, stride_channel_y, nchannels_y, nchannels_dst, warp_size, stream); break;
+        case GGML_TYPE_Q5_K: launch_dq_q5_K<num_rows>(vx, y, d, ncols_x, nrows_x, ids, stride_channel_x, stride_channel_dst, stride_channel_y, nchannels_y, nchannels_dst, warp_size, stream); break;
+        case GGML_TYPE_Q6_K: launch_dq_q6_K<num_rows>(vx, y, d, ncols_x, nrows_x, ids, stride_channel_x, stride_channel_dst, stride_channel_y, nchannels_y, nchannels_dst, warp_size, stream); break;
+        default: GGML_ABORT("mul_mat_vec_dq: unsupported type %s (should_use_mmv_dq must gate this)",
+                            ggml_type_name(type));
+    }
 }
 
-static void ggml_cuda_mul_mat_vec_dq_q5_K(
-        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
-        const ggml_tensor * ids_t, ggml_tensor * dst) {
-    const int ncols_x = src0->ne[0];
-    const int nrows   = src0->ne[1];
-    cudaStream_t stream = ctx.stream();
-    const int warp_size = ggml_cuda_info().devices[ctx.device].warp_size;
-    const void  * vx = src0->data;
-    const float * y  = (const float *) src1->data;
-    float       * d  = (float *) dst->data;
-    const dq_moe_dims m = dq_moe_setup(src0, src1, ids_t, dst);
-    const int32_t * ids = m.ids;
-    const int64_t stride_channel_x   = m.stride_channel_x;
-    const int64_t stride_channel_dst = m.stride_channel_dst;
-    const int64_t stride_channel_y   = m.stride_channel_y;
-    const int     nchannels_y        = m.nchannels_y;
-    const int     nchannels_dst      = m.nchannels_dst;
-    DQ_DISPATCH_ROWS(launch_dq_q5_K, vx, y, d, ncols_x, nrows, ids, stride_channel_x, stride_channel_dst, stride_channel_y, nchannels_y, nchannels_dst, warp_size, stream);
+// Type-dispatched GLU launcher: same pattern for the fused gate+up SwiGLU kernels.
+template <int num_rows>
+static void launch_dq_glu(ggml_type type, const void * vx_up, const void * vx_gate, const float * y, float * d, int ncols_x, int nrows_x,
+        const int32_t * ids, int64_t stride_channel_x, int64_t stride_channel_dst,
+        int64_t stride_channel_y, int nchannels_y, int nchannels_dst, int warp_size, cudaStream_t stream) {
+    switch (type) {
+        case GGML_TYPE_Q4_K: launch_dq_glu_q4_K<num_rows>(vx_up, vx_gate, y, d, ncols_x, nrows_x, ids, stride_channel_x, stride_channel_dst, stride_channel_y, nchannels_y, nchannels_dst, warp_size, stream); break;
+        case GGML_TYPE_Q5_K: launch_dq_glu_q5_K<num_rows>(vx_up, vx_gate, y, d, ncols_x, nrows_x, ids, stride_channel_x, stride_channel_dst, stride_channel_y, nchannels_y, nchannels_dst, warp_size, stream); break;
+        case GGML_TYPE_Q6_K: launch_dq_glu_q6_K<num_rows>(vx_up, vx_gate, y, d, ncols_x, nrows_x, ids, stride_channel_x, stride_channel_dst, stride_channel_y, nchannels_y, nchannels_dst, warp_size, stream); break;
+        default: GGML_ABORT("mul_mat_vec_dq_glu: unsupported type %s (should_use_mmv_dq must gate this)",
+                            ggml_type_name(type));
+    }
 }
 
-static void ggml_cuda_mul_mat_vec_dq_q6_K(
+static void ggml_cuda_mul_mat_vec_dq_plain(
         ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
         const ggml_tensor * ids_t, ggml_tensor * dst) {
     const int ncols_x = src0->ne[0];
@@ -619,12 +638,12 @@ static void ggml_cuda_mul_mat_vec_dq_q6_K(
     const int64_t stride_channel_y   = m.stride_channel_y;
     const int     nchannels_y        = m.nchannels_y;
     const int     nchannels_dst      = m.nchannels_dst;
-    DQ_DISPATCH_ROWS(launch_dq_q6_K, vx, y, d, ncols_x, nrows, ids, stride_channel_x, stride_channel_dst, stride_channel_y, nchannels_y, nchannels_dst, warp_size, stream);
+    DQ_DISPATCH_ROWS(launch_dq_plain, src0->type, vx, y, d, ncols_x, nrows, ids, stride_channel_x, stride_channel_dst, stride_channel_y, nchannels_y, nchannels_dst, warp_size, stream);
 }
 
 static void ggml_cuda_mul_mat_vec_dq_glu(
         ggml_backend_cuda_context & ctx, const ggml_tensor * up, const ggml_tensor * gate,
-        const ggml_tensor * src1, ggml_tensor * dst) {
+        const ggml_tensor * src1, const ggml_tensor * ids_t, ggml_tensor * dst) {
     const int ncols_x = up->ne[0];
     const int nrows   = up->ne[1];
     cudaStream_t stream = ctx.stream();
@@ -633,10 +652,20 @@ static void ggml_cuda_mul_mat_vec_dq_glu(
     const void  * vx_gate = gate->data;
     const float * y = (const float *) src1->data;
     float       * d = (float *) dst->data;
+    // up is src0 (the fused-out matmul weight); ids/strides mirror the plain path.
+    const dq_moe_dims m = dq_moe_setup(up, src1, ids_t, dst);
+    const int32_t * ids = m.ids;
+    const int64_t stride_channel_x   = m.stride_channel_x;
+    const int64_t stride_channel_dst = m.stride_channel_dst;
+    const int64_t stride_channel_y   = m.stride_channel_y;
+    const int     nchannels_y        = m.nchannels_y;
+    const int     nchannels_dst      = m.nchannels_dst;
     switch (up->type) {
-        case GGML_TYPE_Q4_K: DQ_DISPATCH_ROWS(launch_dq_glu_q4_K, vx_up, vx_gate, y, d, ncols_x, nrows, warp_size, stream); break;
-        case GGML_TYPE_Q5_K: DQ_DISPATCH_ROWS(launch_dq_glu_q5_K, vx_up, vx_gate, y, d, ncols_x, nrows, warp_size, stream); break;
-        case GGML_TYPE_Q6_K: DQ_DISPATCH_ROWS(launch_dq_glu_q6_K, vx_up, vx_gate, y, d, ncols_x, nrows, warp_size, stream); break;
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+            DQ_DISPATCH_ROWS(launch_dq_glu, up->type, vx_up, vx_gate, y, d, ncols_x, nrows, ids, stride_channel_x, stride_channel_dst, stride_channel_y, nchannels_y, nchannels_dst, warp_size, stream);
+            break;
         default: GGML_ABORT("mul_mat_vec_dq_glu: unsupported type %s (should_use_mmv_dq must gate this)",
                             ggml_type_name(up->type));
     }
@@ -652,17 +681,15 @@ bool ggml_cuda_should_use_mmv_dq(
         return false;
     }
 
-    // MoE (ids): the plain (non-fused) per-expert matvec for a single decode token.
-    // src0 is [K, N, n_expert]; the expert axis is selected via ids and becomes the
-    // kernel's grid.y. The activation may be broadcast (gate/up: src1->ne[1]==1) or
-    // per-expert (ffn_down: src1->ne[1]==n_expert_used==dst->ne[1]) — both handled by
-    // channel_y in the kernel; the guard below is enforced further down. Fused GLU + ids
-    // and multi-token (dst->ne[2]>1) remain deferred.
+    // MoE (ids): per-expert matvec for a single decode token, plain or fused
+    // gate+up SwiGLU. src0 is [K, N, n_expert]; the expert axis is selected via ids and
+    // becomes the kernel's grid.y. The activation may be broadcast (gate/up: src1->ne[1]==1)
+    // or per-expert (ffn_down: src1->ne[1]==n_expert_used==dst->ne[1]) — both handled by
+    // channel_y in the kernel; the guard below is enforced further down. The fusion block
+    // lower down validates SwiGLU/no-bias/same-shape and works for the 3D expert stacks.
+    // Multi-token (dst->ne[2]>1) remains deferred.
     if (ids != nullptr) {
         if (ids->type != GGML_TYPE_I32) {
-            return false;
-        }
-        if (fusion != nullptr) {   // fused GLU + ids not implemented yet
             return false;
         }
         if (dst->ne[2] != 1) {     // single decode token: ncols_dst == 1
@@ -730,16 +757,10 @@ void ggml_cuda_mul_mat_vec_dq(
         ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
         const ggml_tensor * ids, ggml_tensor * dst, const ggml_cuda_mm_fusion_args_host * fusion) {
     if (fusion && fusion->gate) {
-        // Fused GLU + ids is not implemented; should_use_mmv_dq rejects fusion when ids is set.
-        ggml_cuda_mul_mat_vec_dq_glu(ctx, src0, fusion->gate, src1, dst);
+        // Fused gate+up SwiGLU; ids (if present) selects the per-expert stack in the GLU kernel.
+        ggml_cuda_mul_mat_vec_dq_glu(ctx, src0, fusion->gate, src1, ids, dst);
         return;
     }
 
-    switch (src0->type) {
-        case GGML_TYPE_Q4_K: ggml_cuda_mul_mat_vec_dq_q4_K(ctx, src0, src1, ids, dst); break;
-        case GGML_TYPE_Q5_K: ggml_cuda_mul_mat_vec_dq_q5_K(ctx, src0, src1, ids, dst); break;
-        case GGML_TYPE_Q6_K: ggml_cuda_mul_mat_vec_dq_q6_K(ctx, src0, src1, ids, dst); break;
-        default: GGML_ABORT("mul_mat_vec_dq: unsupported type %s (should_use_mmv_dq must gate this)",
-                            ggml_type_name(src0->type));
-    }
+    ggml_cuda_mul_mat_vec_dq_plain(ctx, src0, src1, ids, dst);
 }

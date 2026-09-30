@@ -9006,21 +9006,60 @@ static void add_rdna35_mmq_cases(std::vector<std::unique_ptr<test_case>> & test_
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 4096, 16, 4096, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 4096, 1024, 12288, {1, 1}, {1, 1}));
 
+    // corpus (tools/model-parse/kernel-shape-weights/unique_kernel_shapes.tsv). n=1 exercises
+    // Array is {m=N (out rows), n=1, k=K (contraction)}.
     static constexpr mmq_test_shape q4k_decode_model_shapes[] = {
-        {21504, 1,  5376},
-        {15360, 1,  3840},
-        { 5376, 1, 21504},
-        { 5376, 1,  8192},
+        { 21504, 1,   5376},
+        { 15360, 1,   3840},
+        {  4096, 1,   4096},
+        {  5120, 1,  17408},
+        {  3584, 1,  18944},
+        { 10240, 1,   5120},
+        {248320, 1,   5120},
+        {  6144, 1,   5120},
+        { 10240, 1,   2560},
+        {  3584, 1,   3584},
+        {  5376, 1,  21504},
+        {  4096, 1,  12288},
+        {  2048, 1,   2048},
+        {  3840, 1,  15360},
+        { 12288, 1,   5120},
+        {  8192, 1,   5376},
+        {  5376, 1,   8192},
+        {  4096, 1,  11008},
+        {248320, 1,   4096},
+        {  4096, 1,  14336},
     };
     for (const mmq_test_shape & s : q4k_decode_model_shapes) {
         test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, s.m, s.n, s.k, {1, 1}, {1, 1}));
     }
 
-    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32,  2048, 1,  2048, {1, 1}, {1, 1}));
+    // test_mul_mat_vec_fusion arg order is (m=tokens, n=N out-feature, k=K) — OPPOSITE to
+    // test_mul_mat. m=1 => decode. use_id=false, with_gate=true => fused dense GLU.
+    test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q4_K, GGML_GLU_OP_SWIGLU, 1, 17408, 5120, false, 1, 1, false, false, true, false, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q4_K, GGML_GLU_OP_SWIGLU, 1, 18944, 3584, false, 1, 1, false, false, true, false, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q4_K, GGML_GLU_OP_SWIGLU, 1, 12288, 4096, false, 1, 1, false, false, true, false, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q4_K, GGML_GLU_OP_SWIGLU, 1, 11008, 4096, false, 1, 1, false, false, true, false, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q4_K, GGML_GLU_OP_SWIGLU, 1, 14336, 4096, false, 1, 1, false, false, true, false, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q4_K, GGML_GLU_OP_SWIGLU, 1,  9728, 2560, false, 1, 1, false, false, true, false, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q4_K, GGML_GLU_OP_SWIGLU, 1, 11008, 2048, false, 1, 1, false, false, true, false, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q4_K, GGML_GLU_OP_SWIGLU, 1,  9216, 2560, false, 1, 1, false, false, true, false, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q4_K, GGML_GLU_OP_SWIGLU, 1,  6144, 2048, false, 1, 1, false, false, true, false, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q4_K, GGML_GLU_OP_SWIGLU, 1,  8192, 2048, false, 1, 1, false, false, true, false, {1, 1}));
+
+    // use_id=true, n_mats=128 n_used=8 (canonical Qwen3-MoE decode; grid.y=n_used).
+    test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q4_K, GGML_GLU_OP_SWIGLU, 1, 768, 2048, true, 128, 8, true, false, true, false, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q4_K, GGML_GLU_OP_SWIGLU, 1, 512, 2048, true, 128, 8, true, false, true, false, {1, 1}));
+    // Q5_K/Q6_K siblings of the fused ids GLU path .
+    test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q5_K, GGML_GLU_OP_SWIGLU, 1, 768, 2048, true, 128, 8, true, false, true, false, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q6_K, GGML_GLU_OP_SWIGLU, 1, 768, 2048, true, 128, 8, true, false, true, false, {1, 1}));
+
+    // ffn_down_exps
+    // b=false because each expert consumes its OWN intermediate vector (per-expert activation), unlike gate/up broadcast.
+    test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q4_K, GGML_GLU_OP_SWIGLU, 1, 2048, 768, true, 128, 8, false, false, false, false, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q6_K, GGML_GLU_OP_SWIGLU, 1, 2048, 768, true, 128, 8, false, false, false, false, {1, 1}));
+
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32,  1024, 1,  4096, {1, 1}, {1, 1}));
-    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32,  3584, 1, 18944, {1, 1}, {1, 1}));
-    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32,  4096, 1, 12288, {1, 1}, {1, 1}));
-    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32,  3584, 1,  3584, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K, GGML_TYPE_F32, 4096, 128, 12288, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K, GGML_TYPE_F32, 2560, 128, 9216, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 8192, 128, 2560, {1, 1}, {1, 1}));
