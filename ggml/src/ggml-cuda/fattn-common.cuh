@@ -1183,7 +1183,7 @@ void launch_fattn(
         KV_max.alloc(ne_KV_max);
         ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num_KV_max, block_dim_KV_max, 0, main_stream);
         if (use_rdna_mask) {
-            ggml_cuda_kernel_launch(flash_attn_mask_to_KV_max_rdna<ncols1>, launch_params,
+            ggml_cuda_kernel_launch(flash_attn_mask_to_KV_max_rdna<8>, launch_params,
                 (const half2 *) mask->data, KV_max.ptr, iter_k, s31, s33);
         } else {
             ggml_cuda_kernel_launch(flash_attn_mask_to_KV_max<ncols1>, launch_params,
