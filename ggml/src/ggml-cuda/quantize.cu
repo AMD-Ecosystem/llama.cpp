@@ -454,16 +454,22 @@ static __global__ void quantize_mmq_mxfp4(const float * __restrict__ x,
 }
 
 // scatter: grid over tokens, quantize once, write to all the token's compact rows
-template <mmq_q8_1_ds_layout ds_layout, bool scatter>
+template <mmq_q8_1_ds_layout ds_layout, bool scatter, bool interleave_k = false>
 static __global__ void quantize_mmq_q8_1(
         const float * __restrict__ x, const int32_t * __restrict__ ids, void * __restrict__ vy,
         const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
         const int64_t ne0, const int ne1, const int ne2, const int n_expert_used) {
 
+    static_assert(!interleave_k || !scatter, "interleaved K does not support scatter");
+
+    // Keep the four feature chunks of a 2048-element row adjacent in the grid.
+    const int row = interleave_k ? blockIdx.x / 4 : blockIdx.x;
+    const int block_k = interleave_k ? blockIdx.x % 4 : blockIdx.y;
+
     constexpr int vals_per_scale = ds_layout == MMQ_Q8_1_DS_LAYOUT_D2S6 ? 64 : 32;
     constexpr int vals_per_sum   = ds_layout == MMQ_Q8_1_DS_LAYOUT_D2S6 ? 16 : 32;
 
-    const int64_t i0 = ((int64_t)blockDim.x*blockIdx.y + threadIdx.x)*4;
+    const int64_t i0 = ((int64_t)blockDim.x*block_k + threadIdx.x)*4;
 
     if (i0 >= ne0) {
         return;
@@ -478,7 +484,7 @@ static __global__ void quantize_mmq_q8_1(
     } else {
         const int64_t i2  = blockIdx.z % ne2;
         const int64_t i3  = blockIdx.z / ne2;
-        const int64_t i01 = ids ? ids[blockIdx.x] : blockIdx.x;
+        const int64_t i01 = ids ? ids[row] : row;
         base_idx = i3*s03 + i2*s02 + i01*s01;
     }
 
@@ -530,7 +536,7 @@ static __global__ void quantize_mmq_q8_1(
             ib = k_block*ne1 + i;
         } else {
             const int64_t ib0 = blockIdx.z*((int64_t)gridDim.x*gridDim.y*blockDim.x/QK8_1); // first block of channel
-            ib = ib0 + k_block*ne1 + blockIdx.x;
+            ib = ib0 + k_block*ne1 + row;
         }
 
         // Write back 4 int8 values as a single 32 bit value for better memory bandwidth:
@@ -583,6 +589,17 @@ void quantize_mmq_q8_1_cuda(
     const int64_t block_num_y = (ne0 + 4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ - 1) / (4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ);
     const dim3 num_blocks(ne1, block_num_y, ne2*ne3);
     const dim3 block_size(CUDA_QUANTIZE_BLOCK_SIZE_MMQ, 1, 1);
+#if defined(GGML_USE_HIP)
+    const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+    if (GGML_CUDA_CC_IS_RDNA3_5(cc) && type_src0 == GGML_TYPE_Q4_K && !ids &&
+            ne00 == 2048 && ne0 == 2048 && ne2 == 1 && ne3 == 1 && ne1 <= INT32_MAX / 4) {
+        const dim3 num_blocks_interleaved(4*ne1, 1, 1);
+        quantize_mmq_q8_1<MMQ_Q8_1_DS_LAYOUT_DS4, false, true>
+            <<<num_blocks_interleaved, block_size, 0, stream>>>(x, ids, vy, ne00, s01, s02, s03, ne0, ne1, ne2, /*n_expert_used=*/0);
+        return;
+    }
+#endif
+
     switch (mmq_get_q8_1_ds_layout(type_src0)) {
         case MMQ_Q8_1_DS_LAYOUT_D4:
             quantize_mmq_q8_1<MMQ_Q8_1_DS_LAYOUT_D4, false>
