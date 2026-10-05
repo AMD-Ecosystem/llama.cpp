@@ -462,9 +462,9 @@ static __global__ void quantize_mmq_q8_1(
 
     static_assert(!interleave_k || !scatter, "interleaved K does not support scatter");
 
-    // Keep the four feature chunks of a 2048-element row adjacent in the grid.
-    const int row = interleave_k ? blockIdx.x / 4 : blockIdx.x;
-    const int block_k = interleave_k ? blockIdx.x % 4 : blockIdx.y;
+    // Keep the feature chunks of each row adjacent in the grid.
+    const int row = interleave_k ? blockIdx.y : blockIdx.x;
+    const int block_k = interleave_k ? blockIdx.x : blockIdx.y;
 
     constexpr int vals_per_scale = ds_layout == MMQ_Q8_1_DS_LAYOUT_D2S6 ? 64 : 32;
     constexpr int vals_per_sum   = ds_layout == MMQ_Q8_1_DS_LAYOUT_D2S6 ? 16 : 32;
@@ -592,8 +592,8 @@ void quantize_mmq_q8_1_cuda(
 #if defined(GGML_USE_HIP)
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     if (GGML_CUDA_CC_IS_RDNA3_5(cc) && type_src0 == GGML_TYPE_Q4_K && !ids &&
-            ne00 == 2048 && ne0 == 2048 && ne2 == 1 && ne3 == 1 && ne1 <= INT32_MAX / 4) {
-        const dim3 num_blocks_interleaved(4*ne1, 1, 1);
+            block_num_y > 1 && s01 % 1024 == 0 && ne2 == 1 && ne3 == 1 && ne1 <= 65535) {
+        const dim3 num_blocks_interleaved(block_num_y, ne1, 1);
         quantize_mmq_q8_1<MMQ_Q8_1_DS_LAYOUT_DS4, false, true>
             <<<num_blocks_interleaved, block_size, 0, stream>>>(x, ids, vy, ne00, s01, s02, s03, ne0, ne1, ne2, /*n_expert_used=*/0);
         return;
