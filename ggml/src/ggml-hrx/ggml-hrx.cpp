@@ -74,27 +74,6 @@ static bool hrx_check(hrx_status_t status, const char * expression, const char *
 
 #define HRX_CHECK(expression) hrx_check((expression), #expression, __FILE__, __LINE__)
 
-}  // namespace
-
-ggml_backend_hrx_reg_context::~ggml_backend_hrx_reg_context() {
-    for (auto & context : device_contexts) {
-        if (context->buffer_stream != nullptr) {
-            hrx_stream_release(context->buffer_stream);
-        }
-        if (context->device != nullptr) {
-            hrx_device_release(context->device);
-        }
-    }
-    if (initialized) {
-        hrx_status_t status = hrx_gpu_shutdown();
-        if (!hrx_status_is_ok(status)) {
-            hrx_status_ignore(status);
-        }
-    }
-}
-
-namespace {
-
 static std::optional<std::string> device_string_property(hrx_device_t          device,
                                                          hrx_device_property_t property,
                                                          const char *          property_name) {
