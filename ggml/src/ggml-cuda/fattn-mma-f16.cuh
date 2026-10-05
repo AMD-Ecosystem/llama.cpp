@@ -1766,7 +1766,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
 template<int DKQ, int DV, int ncols1, int ncols2, int nwarps, bool use_logit_softcap, bool V_is_K_view, bool use_sparse, bool needs_fixup, bool is_fixup, typename... Args>
 static __device__ __forceinline__ void flash_attn_ext_f16_process_tile_mask(const int mask_prefix, Args... args) {
 #if defined(RDNA3_5)
-    if constexpr (DKQ == 128 && DV == 128 && ncols1 == 8 && ncols2 == 8) {
+    if constexpr (DKQ == 128 && DV == 128 && ((ncols1 == 8 && ncols2 == 8) || (ncols1 == 16 && ncols2 == 4))) {
         if (mask_prefix >= 0) {
             flash_attn_ext_f16_process_tile<DKQ, DV, ncols1, ncols2, nwarps, use_logit_softcap, V_is_K_view, use_sparse, needs_fixup, is_fixup, true>(args..., mask_prefix);
             return;
@@ -1915,7 +1915,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_impl(
         if (KV_max) {
             int limit = KV_max[sequence*iter_j + jt];
 #if defined(RDNA3_5)
-            if constexpr (DKQ == 128 && DV == 128 && ncols1 == 8 && ncols2 == 8) {
+            if constexpr (DKQ == 128 && DV == 128 && ((ncols1 == 8 && ncols2 == 8) || (ncols1 == 16 && ncols2 == 4))) {
                 if (limit < 0) {
                     mask_prefix = -limit - 1;
                     limit = (mask_prefix + ncols1 - 1 + nbatch_fa - 1)/nbatch_fa*nbatch_fa;
@@ -1972,7 +1972,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_impl(
     if (KV_max) {
         int limit = KV_max[sequence*iter_j + jt];
 #if defined(RDNA3_5)
-        if constexpr (DKQ == 128 && DV == 128 && ncols1 == 8 && ncols2 == 8) {
+        if constexpr (DKQ == 128 && DV == 128 && ((ncols1 == 8 && ncols2 == 8) || (ncols1 == 16 && ncols2 == 4))) {
             if (limit < 0) {
                 mask_prefix = -limit - 1;
                 limit = (mask_prefix + ncols1 - 1 + nbatch_fa - 1)/nbatch_fa*nbatch_fa;

@@ -1162,8 +1162,8 @@ void launch_fattn(
     }
 
     const bool use_rdna_mask = allow_mask_prefix && GGML_CUDA_CC_IS_RDNA3_5(cc) && !use_sparse &&
-        ncols1 == 8 && ncols2 == 8 && nbatch_fa == 64 && Q->ne[0] == 128 && DV == 128 &&
-        K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16 && Q->ne[2] / K->ne[2] == 8 &&
+        ((ncols1 == 8 && ncols2 == 8) || (ncols1 == 16 && ncols2 == 4)) && nbatch_fa == 64 && Q->ne[0] == 128 && DV == 128 &&
+        K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16 &&
         Q->ne[1] >= 512 && Q->ne[1] % ncols1 == 0 && K->ne[1] <= 4096 &&
         mask && mask->ne[2] == 1 && mask->ne[3] == Q->ne[3];
 
@@ -1183,7 +1183,8 @@ void launch_fattn(
         KV_max.alloc(ne_KV_max);
         ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num_KV_max, block_dim_KV_max, 0, main_stream);
         if (use_rdna_mask) {
-            ggml_cuda_kernel_launch(flash_attn_mask_to_KV_max_rdna<8>, launch_params,
+            constexpr int rdna_mask_ncols1 = ncols1 == 16 && ncols2 == 4 ? 16 : 8;
+            ggml_cuda_kernel_launch(flash_attn_mask_to_KV_max_rdna<rdna_mask_ncols1>, launch_params,
                 (const half2 *) mask->data, KV_max.ptr, iter_k, s31, s33);
         } else {
             ggml_cuda_kernel_launch(flash_attn_mask_to_KV_max<ncols1>, launch_params,
