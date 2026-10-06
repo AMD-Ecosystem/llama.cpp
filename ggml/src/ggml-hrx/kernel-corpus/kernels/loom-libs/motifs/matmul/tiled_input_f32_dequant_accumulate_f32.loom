@@ -1,3 +1,7 @@
+func.decl @ggml_metadata_load(%format: index, %weight: buffer, %row: offset, %block: index, %packet: index) -> (vector<4xi32>, vector<4xi8>)
+func.decl @ggml_metadata_f32_vector4(%iq4nl_table: vector<16xi8>, %iq3s_grid_low0: vector<32xf32>, %iq3s_grid_low1: vector<32xf32>, %iq3s_grid_low2: vector<32xf32>, %iq3s_grid_low3: vector<32xf32>, %iq3s_grid_low4: vector<32xf32>, %iq3s_grid_low5: vector<32xf32>, %iq3s_grid_low6: vector<32xf32>, %iq3s_grid_low7: vector<32xf32>, %iq3s_grid_low8: vector<32xf32>, %iq3s_grid_low9: vector<32xf32>, %iq3s_grid_low10: vector<32xf32>, %iq3s_grid_low11: vector<32xf32>, %iq3s_grid_low12: vector<32xf32>, %iq3s_grid_low13: vector<32xf32>, %iq3s_grid_low14: vector<32xf32>, %iq3s_grid_low15: vector<32xf32>, %iq3s_grid_high0: vector<32xf32>, %iq3s_grid_high1: vector<32xf32>, %iq3s_grid_high2: vector<32xf32>, %iq3s_grid_high3: vector<32xf32>, %iq3s_grid_high4: vector<32xf32>, %iq3s_grid_high5: vector<32xf32>, %iq3s_grid_high6: vector<32xf32>, %iq3s_grid_high7: vector<32xf32>, %iq3s_grid_high8: vector<32xf32>, %iq3s_grid_high9: vector<32xf32>, %iq3s_grid_high10: vector<32xf32>, %iq3s_grid_high11: vector<32xf32>, %iq3s_grid_high12: vector<32xf32>, %iq3s_grid_high13: vector<32xf32>, %iq3s_grid_high14: vector<32xf32>, %iq3s_grid_high15: vector<32xf32>, %weight_format: index, %weight: buffer, %row_byte_base: offset, %input_size: index, %quant_block: index, %quant_group: index, %packet: index, %k: index, %header: vector<4xi32>, %qh: vector<4xi8>) -> (vector<4xf32>)
+func.decl @ggml_metadata_f16_vector4(%iq4nl_table: vector<16xi8>, %iq3s_grid_low0: vector<32xf32>, %iq3s_grid_low1: vector<32xf32>, %iq3s_grid_low2: vector<32xf32>, %iq3s_grid_low3: vector<32xf32>, %iq3s_grid_low4: vector<32xf32>, %iq3s_grid_low5: vector<32xf32>, %iq3s_grid_low6: vector<32xf32>, %iq3s_grid_low7: vector<32xf32>, %iq3s_grid_low8: vector<32xf32>, %iq3s_grid_low9: vector<32xf32>, %iq3s_grid_low10: vector<32xf32>, %iq3s_grid_low11: vector<32xf32>, %iq3s_grid_low12: vector<32xf32>, %iq3s_grid_low13: vector<32xf32>, %iq3s_grid_low14: vector<32xf32>, %iq3s_grid_low15: vector<32xf32>, %iq3s_grid_high0: vector<32xf32>, %iq3s_grid_high1: vector<32xf32>, %iq3s_grid_high2: vector<32xf32>, %iq3s_grid_high3: vector<32xf32>, %iq3s_grid_high4: vector<32xf32>, %iq3s_grid_high5: vector<32xf32>, %iq3s_grid_high6: vector<32xf32>, %iq3s_grid_high7: vector<32xf32>, %iq3s_grid_high8: vector<32xf32>, %iq3s_grid_high9: vector<32xf32>, %iq3s_grid_high10: vector<32xf32>, %iq3s_grid_high11: vector<32xf32>, %iq3s_grid_high12: vector<32xf32>, %iq3s_grid_high13: vector<32xf32>, %iq3s_grid_high14: vector<32xf32>, %iq3s_grid_high15: vector<32xf32>, %weight_format: index, %weight: buffer, %row_byte_base: offset, %input_size: index, %quant_block: index, %quant_group: index, %packet: index, %k: index, %header: vector<4xi32>, %qh: vector<4xi8>) -> (vector<4xf16>)
+
 func.decl @ggml_q4k_scale_min_from_header(%scale0: i32, %scale1: i32, %scale2: i32, %q4_group: index) -> (i32, i32)
 
 func.decl @ggml_dot_u8_s8_vector8_f32(%weight: vector<2xi32>, %activation: vector<2xi32>) -> (f32)
@@ -106,6 +110,58 @@ func.def inline @ggml_matmul_tiled_input_f32_dequant_accumulate_f32(%full_token_
   %iq4nl_table = func.call @ggml_iq4nl_table_i8() : () -> (vector<16xi8>)
   %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15 = func.call @ggml_iq3s_grid_f32_halves() : () -> (vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>)
   %result00, %result01, %result10, %result11 = scf.for %quant_block = [%quant_block_begin to %quant_block_end step %c1](%block_acc00 = %init00 : vector<8xf16>, %block_acc01 = %init01 : vector<8xf16>, %block_acc10 = %init10 : vector<8xf16>, %block_acc11 = %init11 : vector<8xf16>) -> (vector<8xf16>, vector<8xf16>, vector<8xf16>, vector<8xf16>) {
+    %metadata0_0_offset = index.constant 0 : index
+    %metadata0_0_local = index.add %load_row, %metadata0_0_offset : index
+    %metadata0_0_channel = index.add %channel_tile_base, %metadata0_0_local : index
+    %metadata0_0_valid = index.cmp ult, %metadata0_0_channel, %bounded_output_size : index
+    %metadata0_0_header, %metadata0_0_qh = scf.if %metadata0_0_valid -> (vector<4xi32>, vector<4xi8>) {
+      %metadata0_0_row_add = index.scale %metadata0_0_channel, %weight_row_bytes : index, offset -> offset
+      %h, %q = func.call @ggml_metadata_load(%weight_format, %weight_noalias, %metadata0_0_row_add, %quant_block, %load_packet) : (index, buffer, offset, index, index) -> (vector<4xi32>, vector<4xi8>)
+      scf.yield %h, %q : vector<4xi32>, vector<4xi8>
+    } else {
+      %h = vector.constant 0 : vector<4xi32>
+      %q = vector.constant 0 : vector<4xi8>
+      scf.yield %h, %q : vector<4xi32>, vector<4xi8>
+    }
+    %metadata0_1_offset = index.constant 16 : index
+    %metadata0_1_local = index.add %load_row, %metadata0_1_offset : index
+    %metadata0_1_channel = index.add %channel_tile_base, %metadata0_1_local : index
+    %metadata0_1_valid = index.cmp ult, %metadata0_1_channel, %bounded_output_size : index
+    %metadata0_1_header, %metadata0_1_qh = scf.if %metadata0_1_valid -> (vector<4xi32>, vector<4xi8>) {
+      %metadata0_1_row_add = index.scale %metadata0_1_channel, %weight_row_bytes : index, offset -> offset
+      %h, %q = func.call @ggml_metadata_load(%weight_format, %weight_noalias, %metadata0_1_row_add, %quant_block, %load_packet) : (index, buffer, offset, index, index) -> (vector<4xi32>, vector<4xi8>)
+      scf.yield %h, %q : vector<4xi32>, vector<4xi8>
+    } else {
+      %h = vector.constant 0 : vector<4xi32>
+      %q = vector.constant 0 : vector<4xi8>
+      scf.yield %h, %q : vector<4xi32>, vector<4xi8>
+    }
+    %metadata0_2_offset = index.constant 32 : index
+    %metadata0_2_local = index.add %load_row, %metadata0_2_offset : index
+    %metadata0_2_channel = index.add %channel_tile_base, %metadata0_2_local : index
+    %metadata0_2_valid = index.cmp ult, %metadata0_2_channel, %bounded_output_size : index
+    %metadata0_2_header, %metadata0_2_qh = scf.if %metadata0_2_valid -> (vector<4xi32>, vector<4xi8>) {
+      %metadata0_2_row_add = index.scale %metadata0_2_channel, %weight_row_bytes : index, offset -> offset
+      %h, %q = func.call @ggml_metadata_load(%weight_format, %weight_noalias, %metadata0_2_row_add, %quant_block, %load_packet) : (index, buffer, offset, index, index) -> (vector<4xi32>, vector<4xi8>)
+      scf.yield %h, %q : vector<4xi32>, vector<4xi8>
+    } else {
+      %h = vector.constant 0 : vector<4xi32>
+      %q = vector.constant 0 : vector<4xi8>
+      scf.yield %h, %q : vector<4xi32>, vector<4xi8>
+    }
+    %metadata0_3_offset = index.constant 48 : index
+    %metadata0_3_local = index.add %load_row, %metadata0_3_offset : index
+    %metadata0_3_channel = index.add %channel_tile_base, %metadata0_3_local : index
+    %metadata0_3_valid = index.cmp ult, %metadata0_3_channel, %bounded_output_size : index
+    %metadata0_3_header, %metadata0_3_qh = scf.if %metadata0_3_valid -> (vector<4xi32>, vector<4xi8>) {
+      %metadata0_3_row_add = index.scale %metadata0_3_channel, %weight_row_bytes : index, offset -> offset
+      %h, %q = func.call @ggml_metadata_load(%weight_format, %weight_noalias, %metadata0_3_row_add, %quant_block, %load_packet) : (index, buffer, offset, index, index) -> (vector<4xi32>, vector<4xi8>)
+      scf.yield %h, %q : vector<4xi32>, vector<4xi8>
+    } else {
+      %h = vector.constant 0 : vector<4xi32>
+      %q = vector.constant 0 : vector<4xi8>
+      scf.yield %h, %q : vector<4xi32>, vector<4xi8>
+    }
     %block_result00, %block_result01, %block_result10, %block_result11 = scf.for %quant_group = [%c0 to %c8 step %c1](%acc00 = %block_acc00 : vector<8xf16>, %acc01 = %block_acc01 : vector<8xf16>, %acc10 = %block_acc10 : vector<8xf16>, %acc11 = %block_acc11 : vector<8xf16>) -> (vector<8xf16>, vector<8xf16>, vector<8xf16>, vector<8xf16>) {
       %block_k_base = index.mul %quant_block, %c256 : index
       %group_k_add = index.mul %quant_group, %c32 : index
@@ -120,7 +176,16 @@ func.def inline @ggml_matmul_tiled_input_f32_dequant_accumulate_f32(%full_token_
         %valid_weight = scalar.andi %valid_channel, %valid_k : i1
         %weight_values = scf.if %valid_weight -> (vector<4xf16>) {
           %row_byte_base = index.scale %channel, %weight_row_bytes : index, offset -> offset
-          %decoded = func.call @ggml_dequant_f16_vector4(%iq4nl_table, %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15, %weight_format, %weight_noalias, %row_byte_base, %bounded_input_size, %quant_block, %quant_group, %load_packet, %weight_k) : (vector<16xi8>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, index, buffer, offset, index, index, index, index, index) -> (vector<4xf16>)
+          %metadata0_is0 = index.cmp eq, %row_offset, %metadata0_0_offset : index
+          %metadata0_is1 = index.cmp eq, %row_offset, %metadata0_1_offset : index
+          %metadata0_is2 = index.cmp eq, %row_offset, %metadata0_2_offset : index
+          %metadata0_header2 = scf.select %metadata0_is2, %metadata0_2_header, %metadata0_3_header : vector<4xi32>
+          %metadata0_header1 = scf.select %metadata0_is1, %metadata0_1_header, %metadata0_header2 : vector<4xi32>
+          %metadata0_header0 = scf.select %metadata0_is0, %metadata0_0_header, %metadata0_header1 : vector<4xi32>
+          %metadata0_qh2 = scf.select %metadata0_is2, %metadata0_2_qh, %metadata0_3_qh : vector<4xi8>
+          %metadata0_qh1 = scf.select %metadata0_is1, %metadata0_1_qh, %metadata0_qh2 : vector<4xi8>
+          %metadata0_qh0 = scf.select %metadata0_is0, %metadata0_0_qh, %metadata0_qh1 : vector<4xi8>
+          %decoded = func.call @ggml_metadata_f16_vector4(%iq4nl_table, %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15, %weight_format, %weight_noalias, %row_byte_base, %bounded_input_size, %quant_block, %quant_group, %load_packet, %weight_k, %metadata0_header0, %metadata0_qh0) : (vector<16xi8>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, index, buffer, offset, index, index, index, index, index, vector<4xi32>, vector<4xi8>) -> (vector<4xf16>)
           scf.yield %decoded : vector<4xf16>
         } else {
           scf.yield %c0_f16x4 : vector<4xf16>
