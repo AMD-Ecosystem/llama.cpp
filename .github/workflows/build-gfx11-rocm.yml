@@ -8,13 +8,13 @@ on:
   workflow_dispatch:
     inputs:
       build_set:
-        description: 'Which variants to build: nightly (A: gfx11 + latest nightly), weekly (B+C: master + gfx11 on the frozen 7.14 release), or all.'
+        description: 'Which variants to build: nightly (A: gfx11 + latest nightly), weekly (C: gfx11 + pinned ROCm 10.0.0), or all.'
         required: false
         default: 'nightly'
         type: choice
         options: [nightly, weekly, all]
       rocm_version:
-        description: 'Override ROCm version for ALL built variants (e.g. 7.14.0a20260608). Empty = per-variant channel auto-detect.'
+        description: 'Override ROCm version for ALL built variants (e.g. 10.0.0a20260730). Empty = per-variant version.'
         required: false
         default: ''
       create_release:
@@ -26,26 +26,23 @@ on:
         required: false
         default: 'true'
 
-# Three build variants (see the `setup` job matrix). Each publishes a DATED,
+# Two build variants (see the `setup` job matrix). Each publishes a DATED,
 # persistent release tag (<base>-YYYYMMDD) so older builds stay downloadable for
 # issue repro; prune old releases manually if storage becomes a concern.
-#   A  gfx11  + latest nightly ROCm  -> gfx11-rocm-nightly-YYYYMMDD  (nightly)
-#   B  master + 7.14 release ROCm    -> master-rocm-714-YYYYMMDD     (weekly)
-#   C  gfx11  + 7.14 release ROCm    -> gfx11-rocm-714-YYYYMMDD      (weekly)
+#   A  gfx11 + latest nightly ROCm -> gfx11-rocm-nightly-YYYYMMDD  (nightly)
+#   C  gfx11 + pinned ROCm 10.0.0 -> gfx11-rocm-100-YYYYMMDD      (weekly)
 #
-# ROCm channels resolve against TheRock's multiarch tarball host:
-#   latest -> highest therock-dist-linux-multiarch-*.tar.gz overall (7.15 nightly today)
-#   7.14   -> highest therock-dist-linux-multiarch-7.14.0a*.tar.gz. The 7.14 line is
-#            FROZEN (last build 7.14.0a20260624, when 7.15 alphas began), so "7.14
-#            release" is that final alpha; only the llama.cpp source changes weekly.
-# An explicit rocm_version input overrides the channel for every variant.
+# ROCm versions resolve against TheRock's multiarch tarball host:
+#   latest              -> highest therock-dist-linux-multiarch-*.tar.gz overall
+#   10.0.0a20260730     -> final available TheRock build of ROCm 10.0.0, pinned
+# An explicit rocm_version input overrides the version for every variant.
 #
 # push/PR build only variant A's shape (triggering ref + latest) and never release.
-# The 7.14 variants build via external cron (GitHub cron only fires from the default
+# The pinned ROCm variant builds via external cron (GitHub cron only fires from the default
 # branch). On a host you control, with `gh` authenticated (token scope: repo + workflow):
 #   # nightly (variant A)
 #   7 13 * * *  gh workflow run build-gfx11-rocm.yml --repo AMD-Ecosystem/llama.cpp --ref gfx11 -f build_set=nightly -f create_release=true
-#   # weekly Thursday (variants B + C), ready ahead of weekend regressions
+#   # weekly Thursday (variant C), ready ahead of weekend regressions
 #   7  9 * * 4  gh workflow run build-gfx11-rocm.yml --repo AMD-Ecosystem/llama.cpp --ref gfx11 -f build_set=weekly  -f create_release=true
 
 env:
@@ -72,19 +69,18 @@ jobs:
         # Each variant publishes a DATED, persistent release tag (<base>-YYYYMMDD)
         # so older nightlies stay reproducible; prune manually if storage grows.
         d="$(date -u +%Y%m%d)"
-        a_ch="latest"; b_ch="7.14"; c_ch="7.14"
+        a_ch="latest"; c_ch="10.0.0a20260730"
         if [ -n "$ROCM_OVERRIDE" ]; then
-          a_ch="$ROCM_OVERRIDE"; b_ch="$ROCM_OVERRIDE"; c_ch="$ROCM_OVERRIDE"
+          a_ch="$ROCM_OVERRIDE"; c_ch="$ROCM_OVERRIDE"
         fi
         A="{\"variant\":\"A\",\"ref\":\"\",\"rocm_channel\":\"$a_ch\",\"tag\":\"gfx11-rocm-nightly-$d\"}"
-        B="{\"variant\":\"B\",\"ref\":\"master\",\"rocm_channel\":\"$b_ch\",\"tag\":\"master-rocm-714-$d\"}"
-        C="{\"variant\":\"C\",\"ref\":\"gfx11\",\"rocm_channel\":\"$c_ch\",\"tag\":\"gfx11-rocm-714-$d\"}"
+        C="{\"variant\":\"C\",\"ref\":\"gfx11\",\"rocm_channel\":\"$c_ch\",\"tag\":\"gfx11-rocm-100-$d\"}"
 
         if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
           case "$BUILD_SET" in
             nightly) entries="$A" ;;
-            weekly)  entries="$B,$C" ;;
-            all)     entries="$A,$B,$C" ;;
+            weekly)  entries="$C" ;;
+            all)     entries="$A,$C" ;;
             *)       echo "Unknown build_set: $BUILD_SET" >&2; exit 1 ;;
           esac
         else
@@ -118,8 +114,8 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
-        # Empty ref (variant A on push/PR) checks out the triggering ref; B/C
-        # pin master / gfx11 explicitly. Full history so rev-parse is meaningful.
+        # Empty ref (variant A on push/PR) checks out the triggering ref; variant C
+        # pins gfx11 explicitly. Full history so rev-parse is meaningful.
         ref: ${{ matrix.ref }}
         fetch-depth: 0
 
@@ -156,8 +152,8 @@ jobs:
 
         # Channel resolution:
         #   latest        -> highest multiarch tarball overall
-        #   X.Y (e.g 7.14) -> highest tarball on that minor line (frozen 7.14 ->
-        #                    deterministic). Matched on the "multiarch-X.Y." prefix.
+        #   X.Y             -> highest tarball on that minor line. Matched on the
+        #                      "multiarch-X.Y." prefix.
         #   X.Y.Z(a|rc)N  -> pinned full version, used verbatim (no detection)
         detect=false
         version_prefix=""
@@ -307,8 +303,8 @@ jobs:
       # so PRs read but don't thrash the shared store.
       uses: ggml-org/ccache-action@v1.2.21
       with:
-        # Per-variant key: the three variants use different source refs and ROCm
-        # compilers, so a shared key would thrash. Keep each on its own store.
+        # Per-variant key: the two variants use different ROCm compilers, so a
+        # shared key would thrash. Keep each on its own store.
         key: gfx11-rocm-multiarch-${{ matrix.variant }}
         evict-old-files: 7d
         save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/gfx11' }}
@@ -522,7 +518,7 @@ jobs:
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
-        # Variant-suffixed so the three legs don't collide on one artifact name.
+        # Variant-suffixed so the two legs don't collide on one artifact name.
         name: llama-ubuntu-rocm-multiarch-x64-${{ matrix.variant }}
         path: build/bin/
         retention-days: 30
