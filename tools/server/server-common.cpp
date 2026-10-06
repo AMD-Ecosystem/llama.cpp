@@ -69,6 +69,10 @@ json format_error_response(const std::string & message, const enum error_type ty
             type_str = "exceed_context_size_error";
             code = 400;
             break;
+        case ERROR_TYPE_INVALID_PROMPT:
+            type_str = "invalid_prompt";
+            code = 400;
+            break;
     }
     return json {
         {"code", code},
@@ -816,6 +820,17 @@ bool json_is_array_of_numbers(const json & data) {
     return false;
 }
 
+static llama_token json_get_token(const json & elem) {
+    if (!elem.is_number_integer()) {
+        throw std::runtime_error("Token ID must be an integer");
+    }
+    int64_t val = elem.get<int64_t>();
+    if (val < INT32_MIN || val > INT32_MAX) {
+        throw std::runtime_error("Token ID out of int32 range: " + std::to_string(val));
+    }
+    return static_cast<llama_token>(val);
+}
+
 bool json_is_array_of_mixed_numbers_strings(const json & data) {
     bool seen_string = false;
     bool seen_number = false;
@@ -889,7 +904,7 @@ llama_tokens tokenize_mixed(const llama_vocab * vocab, const json & json_prompt,
                     first = false;
                 }
 
-                prompt_tokens.push_back(p.template get<llama_token>());
+                prompt_tokens.push_back(json_get_token(p));
             }
         }
     } else {
@@ -987,8 +1002,11 @@ static server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_co
         llama_tokens tmp = tokenize_mixed(vocab, json_prompt, add_special, parse_special);
         return server_tokens(tmp, false);
     } else if (json_is_array_of_numbers(json_prompt)) {
-        // array of tokens
-        llama_tokens tmp = json_prompt.get<llama_tokens>();
+        llama_tokens tmp;
+        tmp.reserve(json_prompt.size());
+        for (const auto & elem : json_prompt) {
+            tmp.push_back(json_get_token(elem));
+        }
         return server_tokens(tmp, false);
     } else if (json_prompt.contains(JSON_STRING_PROMPT_KEY)) {
         // JSON object with prompt key.

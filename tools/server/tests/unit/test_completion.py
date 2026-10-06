@@ -666,3 +666,45 @@ def test_completion_prompt_cache():
         assert "prompt_n" in timings and timings["prompt_n"] + timings["cache_n"] == n_prompt
         assert "predicted_n" in timings and timings["predicted_n"] == n_predict
         assert "tokens" in res.body and isinstance(res.body["tokens"], list)
+
+
+@pytest.mark.parametrize("prompt,expected_status,expected_error_type", [
+    # Valid
+    ([1], 200, None),
+    ([1, 2, 3], 200, None),
+    ([1, "hello", 2], 200, None),
+    (["HeLlO 世界! 🎉, [Thi$ shou1d_be-\"valid\'..}"], 200, None),
+    # Invalid: negative (except -1)
+    ([1, -5], 400, "invalid_prompt"),
+    # Invalid: token ID out of vocabulary
+    ([99999999], 400, "invalid_prompt"),
+    # Invalid: LLAMA_TOKEN_NULL (-1) without media chunk
+    ([1, -1], 400, "invalid_prompt"),
+    # Invalid: float
+    ([2.5, 1], 400, "invalid_prompt"),
+    ([1, "x", 2.0], 400, "invalid_prompt"),
+    # Invalid: bool
+    ([False], 400, "invalid_prompt"),
+    ([1, "x", True], 400, "invalid_prompt"),
+    # Invalid: null
+    ([None], 400, "invalid_prompt"),
+    ([1, "x", None], 400, "invalid_prompt"),
+    # Invalid: int32 overflow
+    ([1, 4294967297], 400, "invalid_prompt"),
+])
+def test_token_validation(prompt, expected_status, expected_error_type):
+    """
+    RVT Spec 2.9: POST /v1/completions with integer-array prompt must reject
+    negative, out-of-vocabulary, or non-integer token IDs with HTTP 400 and
+    error.type "invalid_prompt".
+    """
+    global server
+    server.start()
+    res = server.make_request("POST", "/v1/completions", data={
+        "prompt": prompt,
+        "max_tokens": 1,
+    })
+    assert res.status_code == expected_status
+    if expected_error_type:
+        assert "error" in res.body
+        assert res.body["error"]["type"] == expected_error_type
