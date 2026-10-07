@@ -263,6 +263,21 @@ clip_graph::clip_graph(clip_ctx * ctx, const clip_image_f32 & img) :
         eps(hparams.eps),
         kq_scale(d_head > 0 ? 1.0f / sqrtf((float)d_head) : 0.0f),
         flash_attn_type(ctx->flash_attn_type) {
+    if (proj_type == PROJECTOR_TYPE_QWEN25VL && hparams.n_wa_pattern > 0 &&
+            flash_attn_type != CLIP_FLASH_ATTN_TYPE_DISABLED) {
+        const int window_size = hparams.attn_window_size > 0 ? hparams.attn_window_size : 112;
+        const int grid_window = window_size / patch_size / 2;
+        GGML_ASSERT(grid_window > 0);
+        // Each row of windows has at most two runs of equal-length windows.
+        const int max_runs = 2 * ((n_patches_y / 2 + grid_window - 1) / grid_window);
+        const int max_nodes = 8192 + n_layer * max_runs * 32;
+        if (max_nodes > ctx->max_nodes) {
+            ctx->max_nodes = max_nodes;
+            ctx->sched.reset(ggml_backend_sched_new(ctx->backend_ptrs.data(), ctx->backend_buft.data(),
+                ctx->backend_ptrs.size(), max_nodes, false, true));
+            ctx->buf_compute_meta.resize(max_nodes * ggml_tensor_overhead() + ggml_graph_overhead_custom(max_nodes, false));
+        }
+    }
     struct ggml_init_params params = {
         /*.mem_size   =*/ ctx->buf_compute_meta.size(),
         /*.mem_buffer =*/ ctx->buf_compute_meta.data(),
@@ -4903,7 +4918,8 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                     const int grid_window = attn_window_size / patch_size / merge_ratio;
                     int dst = 0;
                     // [num_vision_tokens, num_vision_tokens] attention mask tensor
-                    std::vector<float> mask(pow(ipw * iph, 2), std::numeric_limits<float>::lowest());
+                    const bool has_mask = ggml_graph_get_tensor(gf, "window_mask") != nullptr;
+                    std::vector<float> mask(has_mask ? size_t(ipw * iph) * (ipw * iph) : 0, std::numeric_limits<float>::lowest());
                     int mask_row = 0;
 
                     for (int y = 0; y < ph; y += grid_window) {
@@ -4923,7 +4939,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                                 }
                             }
 
-                            for (int r=0; r < win_h * win_w * merge_ratio * merge_ratio; r++) {
+                            for (int r=0; has_mask && r < win_h * win_w * merge_ratio * merge_ratio; r++) {
                                 int row_offset = mask_row * (ipw * iph);
                                 std::fill(
                                     mask.begin() + row_offset + (dst_0 * merge_ratio * merge_ratio),
@@ -4936,7 +4952,9 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
 
                     set_input_i32("window_idx",     idx);
                     set_input_i32("inv_window_idx", inv_idx);
-                    set_input_f32("window_mask",    mask);
+                    if (has_mask) {
+                        set_input_f32("window_mask", mask);
+                    }
                 } else {
                     for (int i = 0; i < ph * pw; i++) {
                         idx[i] = i;

@@ -1031,6 +1031,19 @@ static __global__ void flash_attn_combine_results(
     dst[tid] = VKQ_numerator / VKQ_denominator;
 }
 
+static __host__ bool ggml_cuda_fattn_should_use_stream_k(const int cc, const int ntiles_dst, const int max_blocks, const int DKQ) {
+    const int tiles_nwaves             = (ntiles_dst + max_blocks - 1) / max_blocks;
+    const int tiles_efficiency_percent = 100 * ntiles_dst / (max_blocks*tiles_nwaves);
+
+    if (GGML_CUDA_CC_IS_NVIDIA(cc) && cc >= GGML_CUDA_CC_ADA_LOVELACE) {
+        return true;
+    }
+    if (amd_wmma_available(cc) && DKQ == 64) {
+        return true; // TODO better configuration
+    }
+    return tiles_efficiency_percent < 75;
+}
+
 template <int DV, int ncols1, int ncols2>
 void launch_fattn(
     ggml_backend_cuda_context & ctx, ggml_tensor * dst, fattn_kernel_t fattn_kernel, const int nwarps, const size_t nbytes_shared,
@@ -1162,7 +1175,7 @@ void launch_fattn(
     }
 
     const bool use_rdna_mask = allow_mask_prefix && GGML_CUDA_CC_IS_RDNA3_5(cc) && !use_sparse &&
-        ((ncols1 == 8 && ncols2 == 8) || (ncols1 == 16 && ncols2 == 4)) && nbatch_fa == 64 && Q->ne[0] == 128 && DV == 128 &&
+        ((ncols1 == 8 && ncols2 == 8) || ((ncols1 == 16 || ncols1 == 32) && ncols2 == 4)) && nbatch_fa == 64 && Q->ne[0] == 128 && DV == 128 &&
         K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16 &&
         Q->ne[1] >= 512 && Q->ne[1] % ncols1 == 0 && K->ne[1] <= 4096 &&
         mask && mask->ne[2] == 1 && mask->ne[3] == Q->ne[3];
@@ -1183,7 +1196,7 @@ void launch_fattn(
         KV_max.alloc(ne_KV_max);
         ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num_KV_max, block_dim_KV_max, 0, main_stream);
         if (use_rdna_mask) {
-            constexpr int rdna_mask_ncols1 = ncols1 == 16 && ncols2 == 4 ? 16 : 8;
+            constexpr int rdna_mask_ncols1 = (ncols1 == 16 || ncols1 == 32) && ncols2 == 4 ? ncols1 : 8;
             ggml_cuda_kernel_launch(flash_attn_mask_to_KV_max_rdna<rdna_mask_ncols1>, launch_params,
                 (const half2 *) mask->data, KV_max.ptr, iter_k, s31, s33);
         } else {
@@ -1204,21 +1217,8 @@ void launch_fattn(
 
     dim3 blocks_num;
     if (stream_k) {
-        auto should_use_stream_k = [](const int cc, const int ntiles_dst, const int max_blocks, const int DKQ) {
-            const int tiles_nwaves             = (ntiles_dst + max_blocks - 1) / max_blocks;
-            const int tiles_efficiency_percent = 100 * ntiles_dst / (max_blocks*tiles_nwaves);
-
-            if (GGML_CUDA_CC_IS_NVIDIA(cc) && cc >= GGML_CUDA_CC_ADA_LOVELACE) {
-                return true;
-            }
-            if (amd_wmma_available(cc) && DKQ == 64) {
-                return true; // TODO better configuration
-            }
-            return tiles_efficiency_percent < 75;
-        };
-
         const int  max_blocks   = max_blocks_per_sm*nsm;
-        const bool use_stream_k = should_use_stream_k(cc, ntiles_dst, max_blocks, Q->ne[0]);
+        const bool use_stream_k = ggml_cuda_fattn_should_use_stream_k(cc, ntiles_dst, max_blocks, Q->ne[0]);
 
         blocks_num.x = ntiles_dst;
         blocks_num.y = 1;

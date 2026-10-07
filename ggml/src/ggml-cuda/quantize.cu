@@ -1,4 +1,5 @@
 #include "quantize.cuh"
+#include "unary.cuh"
 #include <cstdint>
 
 #if defined(BLACKWELL_MMA_AVAILABLE)
@@ -121,6 +122,78 @@ __device__ __forceinline__ uint8_t compute_e8m0_scale(float amax) {
     biased = min(biased, 254);
 
     return static_cast<uint8_t>(biased);
+}
+
+// Keep producer rounding before quantization without a memory round trip.
+static __device__ __forceinline__ float4 mmq_round_f32_input(float4 xi) {
+#if defined(GGML_USE_HIP)
+    asm volatile("" : "+v"(xi.x), "+v"(xi.y), "+v"(xi.z), "+v"(xi.w));
+#else
+    asm volatile("" : "+f"(xi.x), "+f"(xi.y), "+f"(xi.z), "+f"(xi.w));
+#endif
+    return xi;
+}
+
+struct mmq_q8_1_values {
+    char4 q;
+    float d;
+    float sum;
+};
+
+template <mmq_q8_1_ds_layout ds_layout>
+static __device__ __forceinline__ mmq_q8_1_values quantize_mmq_q8_1_values(const float4 xi) {
+    constexpr int vals_per_scale = ds_layout == MMQ_Q8_1_DS_LAYOUT_D2S6 ? 64 : 32;
+    constexpr int vals_per_sum   = ds_layout == MMQ_Q8_1_DS_LAYOUT_D2S6 ? 16 : 32;
+    float amax = fabsf(xi.x);
+    amax = fmaxf(amax, fabsf(xi.y));
+    amax = fmaxf(amax, fabsf(xi.z));
+    amax = fmaxf(amax, fabsf(xi.w));
+
+    // Exchange max. abs. value between vals_per_scale/4 threads.
+#pragma unroll
+    for (int offset = vals_per_scale/8; offset > 0; offset >>= 1) {
+        amax = fmaxf(amax, __shfl_xor_sync(0xFFFFFFFF, amax, offset, WARP_SIZE));
+    }
+
+    float sum = 0.0f;
+    if (ds_layout != MMQ_Q8_1_DS_LAYOUT_D4) {
+        sum = xi.x + xi.y + xi.z + xi.w;
+
+        // Calculate sums across vals_per_sum/4 threads.
+#pragma unroll
+        for (int offset = vals_per_sum/8; offset > 0; offset >>= 1) {
+            sum += __shfl_xor_sync(0xFFFFFFFF, sum, offset, WARP_SIZE);
+        }
+    }
+
+    const float d_inv = 127.0f / amax;
+    char4 q;
+    q.x = roundf(xi.x*d_inv);
+    q.y = roundf(xi.y*d_inv);
+    q.z = roundf(xi.z*d_inv);
+    q.w = roundf(xi.w*d_inv);
+    const float d = 1.0f / d_inv;
+
+    return { q, d, sum };
+}
+
+template <mmq_q8_1_ds_layout ds_layout>
+static __device__ __forceinline__ void store_mmq_q8_1_values(block_q8_1_mmq * y, int iqs, const mmq_q8_1_values v) {
+    ((char4 *) y->qs)[iqs/4] = v.q;
+    if constexpr (ds_layout == MMQ_Q8_1_DS_LAYOUT_D2S6) {
+        if (iqs % 16 == 0 && iqs < 96) {
+            y->d2s6[2 + iqs/16] = v.sum;
+            if (iqs % 64 == 0) {
+                y->d2s6[iqs/64] = v.d;
+            }
+        }
+    } else if (iqs % 32 == 0) {
+        if constexpr (ds_layout == MMQ_Q8_1_DS_LAYOUT_DS4) {
+            y->ds4[iqs/32] = make_half2(v.d, v.sum);
+        } else {
+            y->d4[iqs/32] = v.d;
+        }
+    }
 }
 
 // scatter: grid over tokens, quantize once, write to all the token's compact rows
@@ -466,9 +539,6 @@ static __global__ void quantize_mmq_q8_1(
     const int row = interleave_k ? blockIdx.y : blockIdx.x;
     const int block_k = interleave_k ? blockIdx.x : blockIdx.y;
 
-    constexpr int vals_per_scale = ds_layout == MMQ_Q8_1_DS_LAYOUT_D2S6 ? 64 : 32;
-    constexpr int vals_per_sum   = ds_layout == MMQ_Q8_1_DS_LAYOUT_D2S6 ? 16 : 32;
-
     const int64_t i0 = ((int64_t)blockDim.x*block_k + threadIdx.x)*4;
 
     if (i0 >= ne0) {
@@ -496,35 +566,7 @@ static __global__ void quantize_mmq_q8_1(
 
     // Load 4 floats per thread and calculate max. abs. value between them:
     const float4 xi = i0 < ne00 ? x4[(base_idx + i00)/4] : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-    float amax = fabsf(xi.x);
-    amax = fmaxf(amax, fabsf(xi.y));
-    amax = fmaxf(amax, fabsf(xi.z));
-    amax = fmaxf(amax, fabsf(xi.w));
-
-    // Exchange max. abs. value between vals_per_scale/4 threads.
-#pragma unroll
-    for (int offset = vals_per_scale/8; offset > 0; offset >>= 1) {
-        amax = fmaxf(amax, __shfl_xor_sync(0xFFFFFFFF, amax, offset, WARP_SIZE));
-    }
-
-    float sum;
-    if (ds_layout != MMQ_Q8_1_DS_LAYOUT_D4) {
-        sum = xi.x + xi.y + xi.z + xi.w;
-
-        // Calculate sums across vals_per_sum/4 threads.
-#pragma unroll
-        for (int offset = vals_per_sum/8; offset > 0; offset >>= 1) {
-            sum += __shfl_xor_sync(0xFFFFFFFF, sum, offset, WARP_SIZE);
-        }
-    }
-
-    const float d_inv = 127.0f / amax;
-    char4 q;
-    q.x = roundf(xi.x*d_inv);
-    q.y = roundf(xi.y*d_inv);
-    q.z = roundf(xi.z*d_inv);
-    q.w = roundf(xi.w*d_inv);
-    const float d = 1.0f / d_inv;
+    const auto values = quantize_mmq_q8_1_values<ds_layout>(xi);
 
     // write the block once (normal) or to each of the token's compact rows (scatter)
     const int nwrite = scatter ? n_expert_used : 1;
@@ -539,26 +581,74 @@ static __global__ void quantize_mmq_q8_1(
             ib = ib0 + k_block*ne1 + row;
         }
 
-        // Write back 4 int8 values as a single 32 bit value for better memory bandwidth:
-        char4 * yqs4 = (char4 *) y[ib].qs;
-        yqs4[iqs/4] = q;
-
-        if (ds_layout == MMQ_Q8_1_DS_LAYOUT_D2S6) {
-            if (iqs % 16 == 0 && iqs < 96) {
-                y[ib].d2s6[2 + iqs/16] = sum;
-                if (iqs % 64 == 0) {
-                    y[ib].d2s6[iqs/64] = d;
-                }
-            }
-        } else if (iqs % 32 == 0) {
-            if (ds_layout == MMQ_Q8_1_DS_LAYOUT_DS4) {
-                y[ib].ds4[iqs/32] = make_half2(d, sum);
-            } else {
-                y[ib].d4[iqs/32]  = d;
-            }
-        }
+        store_mmq_q8_1_values<ds_layout>(y + ib, iqs, values);
     }
     GGML_UNUSED(n_expert_used);
+}
+
+template <int block_size>
+static __global__ void rms_norm_mmq_q8_1(const float * x, const float * weight, block_q8_1_mmq * y,
+        int ncols, int nrows, float eps) {
+    const int row = blockIdx.x;
+    const int tid = threadIdx.x;
+    x += int64_t(row)*ncols;
+    float sum = 0.0f;
+    for (int col = tid; col < ncols; col += block_size) {
+        const float xi = x[col];
+        sum += xi*xi;
+    }
+    extern __shared__ float shared_sum[];
+    sum = block_reduce<block_reduce_method::SUM, block_size>(sum, shared_sum);
+    const float mean = sum/ncols;
+    const float scale = rsqrtf(mean + eps);
+    for (int col = 4*tid; col < ncols; col += 4*block_size) {
+        const float4 v = ((const float4 *) x)[col/4];
+        const float4 w = ((const float4 *) weight)[col/4];
+        float4 xi = make_float4(scale*v.x*w.x, scale*v.y*w.y, scale*v.z*w.z, scale*v.w*w.w);
+        xi = mmq_round_f32_input(xi);
+        const auto values = quantize_mmq_q8_1_values<MMQ_Q8_1_DS_LAYOUT_DS4>(xi);
+        store_mmq_q8_1_values<MMQ_Q8_1_DS_LAYOUT_DS4>(y + int64_t(col/QK8_1_MMQ)*nrows + row, col % QK8_1_MMQ, values);
+    }
+}
+
+void quantize_rms_norm_mmq_q8_1_cuda(const float * x, const float * weight, void * y,
+        int ncols, int nrows, float eps, cudaStream_t stream) {
+    GGML_ASSERT(ncols % MATRIX_ROW_PADDING == 0);
+    // Match the reduction order of rms_norm_f32_cuda.
+    if (ncols < 1024 || (ncols == 1536 && nrows >= 64)) {
+        rms_norm_mmq_q8_1<256><<<nrows, 256, 32*sizeof(float), stream>>>(x, weight, (block_q8_1_mmq *) y, ncols, nrows, eps);
+    } else {
+        rms_norm_mmq_q8_1<1024><<<nrows, 1024, 32*sizeof(float), stream>>>(x, weight, (block_q8_1_mmq *) y, ncols, nrows, eps);
+    }
+}
+
+template <mmq_q8_1_ds_layout ds_layout>
+static __global__ void geglu_mmq_q8_1(const float * x, const float * gate, block_q8_1_mmq * y, int ncols, int nrows) {
+    const int col = 4*(blockIdx.x*blockDim.x + threadIdx.x);
+    const int row = blockIdx.y;
+    if (col >= ncols) {
+        return;
+    }
+    const int64_t i = (int64_t(row)*ncols + col)/4;
+    const float4 a = ((const float4 *) x)[i];
+    const float4 b = ((const float4 *) gate)[i];
+    const float4 xi = mmq_round_f32_input(make_float4(
+        ggml_cuda_op_gelu_single(a.x)*b.x, ggml_cuda_op_gelu_single(a.y)*b.y,
+        ggml_cuda_op_gelu_single(a.z)*b.z, ggml_cuda_op_gelu_single(a.w)*b.w));
+    const auto values = quantize_mmq_q8_1_values<ds_layout>(xi);
+    store_mmq_q8_1_values<ds_layout>(y + int64_t(col/QK8_1_MMQ)*nrows + row, col % QK8_1_MMQ, values);
+}
+
+void quantize_geglu_mmq_q8_1_cuda(const float * x, const float * gate, void * y, int ncols, int nrows, cudaStream_t stream) {
+    GGML_ASSERT(ncols % MATRIX_ROW_PADDING == 0);
+    const dim3 blocks((ncols + 4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ - 1)/(4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ), nrows);
+    geglu_mmq_q8_1<MMQ_Q8_1_DS_LAYOUT_DS4><<<blocks, CUDA_QUANTIZE_BLOCK_SIZE_MMQ, 0, stream>>>(x, gate, (block_q8_1_mmq *) y, ncols, nrows);
+}
+
+void quantize_geglu_mmq_q8_1_d4_cuda(const float * x, const float * gate, void * y, int ncols, int nrows, cudaStream_t stream) {
+    GGML_ASSERT(ncols % MATRIX_ROW_PADDING == 0);
+    const dim3 blocks((ncols + 4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ - 1)/(4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ), nrows);
+    geglu_mmq_q8_1<MMQ_Q8_1_DS_LAYOUT_D4><<<blocks, CUDA_QUANTIZE_BLOCK_SIZE_MMQ, 0, stream>>>(x, gate, (block_q8_1_mmq *) y, ncols, nrows);
 }
 
 void quantize_row_q8_1_cuda(

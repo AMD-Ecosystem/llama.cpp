@@ -150,6 +150,8 @@ static constexpr __host__ __device__ fattn_mma_config ggml_cuda_fattn_mma_get_co
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(128, 128, 16,  64, 2,  32,  64,  64,  64, 1, true);
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(128, 128, 32, 128, 2,  64,  64,  64,  64, 1, true);
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(128, 128, 64, 128, 2,  64,  64,  64,  64, 1, true);
+    // RDNA3.5 GQA=4 prefill: share each KV tile across 32 query positions.
+    GGML_CUDA_FATTN_MMA_CONFIG_CASE(128, 128, 128, 256, 2,  64,  64,  64,  64, 1, true);
 
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(192, 128,  8,  64, 2,  32,  96,  64,  64, 1, true);
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(192, 128, 16,  64, 2,  32,  96,  64,  64, 1, true);
@@ -320,10 +322,18 @@ static constexpr __device__ int ggml_cuda_fattn_mma_get_nstages_target(const int
 }
 
 static __host__ bool ggml_cuda_fattn_mma_get_Q_in_reg(const int DKQ, const int DV, const int ncols, const int cc) {
+    if (GGML_CUDA_CC_IS_RDNA3_5(cc) && DKQ == 512 && DV == 512 && ncols == 32) {
+        return false;
+    }
     return ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols, cc).Q_in_reg;
 }
 
 static constexpr __device__ bool ggml_cuda_fattn_mma_get_Q_in_reg(const int DKQ, const int DV, const int ncols) {
+#if defined(RDNA3_5)
+    if (DKQ == 512 && DV == 512 && ncols == 32) {
+        return false;
+    }
+#endif
     return ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols).Q_in_reg;
 }
 
@@ -1766,7 +1776,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
 template<int DKQ, int DV, int ncols1, int ncols2, int nwarps, bool use_logit_softcap, bool V_is_K_view, bool use_sparse, bool needs_fixup, bool is_fixup, typename... Args>
 static __device__ __forceinline__ void flash_attn_ext_f16_process_tile_mask(const int mask_prefix, Args... args) {
 #if defined(RDNA3_5)
-    if constexpr (DKQ == 128 && DV == 128 && ((ncols1 == 8 && ncols2 == 8) || (ncols1 == 16 && ncols2 == 4))) {
+    if constexpr (DKQ == 128 && DV == 128 && ((ncols1 == 8 && ncols2 == 8) || ((ncols1 == 16 || ncols1 == 32) && ncols2 == 4))) {
         if (mask_prefix >= 0) {
             flash_attn_ext_f16_process_tile<DKQ, DV, ncols1, ncols2, nwarps, use_logit_softcap, V_is_K_view, use_sparse, needs_fixup, is_fixup, true>(args..., mask_prefix);
             return;
@@ -1846,7 +1856,14 @@ static __device__ __forceinline__ void flash_attn_ext_f16_impl(
 #endif // __CUDA_ARCH__ == GGML_CUDA_CC_TURING
 
 #if defined(AMD_WMMA_AVAILABLE)
-    if (ncols1*ncols2 < 16 || ncols2 == 1 || DKQ > 256) {
+#if defined(RDNA3_5)
+    constexpr bool vision_mha = (DKQ == 64 || DKQ == 80) && DV == DKQ && ncols1 == 64;
+    constexpr bool language_d512 = DKQ == 512 && DV == 512 && ncols1 == 4 && ncols2 == 8;
+#else
+    constexpr bool vision_mha = false;
+    constexpr bool language_d512 = false;
+#endif
+    if (ncols1*ncols2 < 16 || (ncols2 == 1 && !vision_mha) || (DKQ > 256 && !language_d512)) {
         NO_DEVICE_CODE;
         return;
     }
@@ -1915,7 +1932,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_impl(
         if (KV_max) {
             int limit = KV_max[sequence*iter_j + jt];
 #if defined(RDNA3_5)
-            if constexpr (DKQ == 128 && DV == 128 && ((ncols1 == 8 && ncols2 == 8) || (ncols1 == 16 && ncols2 == 4))) {
+            if constexpr (DKQ == 128 && DV == 128 && ((ncols1 == 8 && ncols2 == 8) || ((ncols1 == 16 || ncols1 == 32) && ncols2 == 4))) {
                 if (limit < 0) {
                     mask_prefix = -limit - 1;
                     limit = (mask_prefix + ncols1 - 1 + nbatch_fa - 1)/nbatch_fa*nbatch_fa;
@@ -1972,7 +1989,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_impl(
     if (KV_max) {
         int limit = KV_max[sequence*iter_j + jt];
 #if defined(RDNA3_5)
-        if constexpr (DKQ == 128 && DV == 128 && ((ncols1 == 8 && ncols2 == 8) || (ncols1 == 16 && ncols2 == 4))) {
+        if constexpr (DKQ == 128 && DV == 128 && ((ncols1 == 8 && ncols2 == 8) || ((ncols1 == 16 || ncols1 == 32) && ncols2 == 4))) {
             if (limit < 0) {
                 mask_prefix = -limit - 1;
                 limit = (mask_prefix + ncols1 - 1 + nbatch_fa - 1)/nbatch_fa*nbatch_fa;
@@ -2015,6 +2032,18 @@ __attribute__((amdgpu_num_vgpr(240)))
 #endif
 static __global__ void flash_attn_ext_f16_rdna35(Args... args) {
     flash_attn_ext_f16_impl<128, 128, 8, 8, false, false, false>(args...);
+}
+// Keep this specialization out of other device architectures: the 128-column
+// configuration is specific to the RDNA WMMA implementation.
+template<typename... Args>
+__launch_bounds__(256, 2)
+static __global__ void flash_attn_ext_f16_rdna35_gqa4_wide(Args... args) {
+#if defined(RDNA3_5)
+    flash_attn_ext_f16_impl<128, 128, 32, 4, false, false, false>(args...);
+#else
+    (void) sizeof...(args);
+    NO_DEVICE_CODE;
+#endif
 }
 #endif
 
@@ -2118,6 +2147,44 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
         }
 #endif // !defined(GGML_USE_MUSA)
     }
+
+#if defined(GGML_USE_HIP)
+    if constexpr (DKQ == 128 && DV == 128 && ncols1 == 16 && ncols2 == 4) {
+        const ggml_tensor * Q    = dst->src[0];
+        const ggml_tensor * K    = dst->src[1];
+        const ggml_tensor * V    = dst->src[2];
+        const ggml_tensor * mask = dst->src[3];
+        if (GGML_CUDA_CC_IS_RDNA3_5(cc) && logit_softcap == 0.0f &&
+                Q->ne[2] == 4*K->ne[2] && Q->ne[1] >= 512 && Q->ne[1] % 32 == 0 &&
+                K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16 &&
+                K->ne[1] <= 4096 && K->ne[1] % FATTN_KQ_STRIDE == 0 &&
+                mask && mask->ne[2] == 1 && mask->ne[3] == Q->ne[3]) {
+            constexpr int wide_ncols1 = 32;
+            constexpr int wide_ncols2 = 4;
+            constexpr auto wide_config = ggml_cuda_fattn_mma_get_config_rdna(128, 128, wide_ncols1*wide_ncols2);
+            // Q staging and the final output staging both dominate the KV + mask allocation.
+            constexpr size_t wide_shared = wide_ncols1*wide_ncols2*(128/2 + 4)*sizeof(half2);
+            fattn_kernel_t wide_kernel = flash_attn_ext_f16_rdna35_gqa4_wide;
+            int wide_blocks_per_sm = 0;
+            int base_blocks_per_sm = 0;
+            CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+                &wide_blocks_per_sm, wide_kernel, wide_config.nthreads, wide_shared));
+            CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+                &base_blocks_per_sm, fattn_kernel, nthreads, nbytes_shared_total));
+            const int nsm = ggml_cuda_info().devices[id].nsm;
+            const int wide_tiles = (Q->ne[1] / wide_ncols1)*K->ne[2]*Q->ne[3];
+            // Preserve the original reduction order when either tile size would need Stream-K.
+            if (wide_blocks_per_sm > 0 && base_blocks_per_sm > 0 &&
+                !ggml_cuda_fattn_should_use_stream_k(cc, wide_tiles, wide_blocks_per_sm*nsm, DKQ) &&
+                !ggml_cuda_fattn_should_use_stream_k(cc, 2*wide_tiles, base_blocks_per_sm*nsm, DKQ)) {
+                launch_fattn<128, wide_ncols1, wide_ncols2>(ctx, dst, wide_kernel,
+                    wide_config.nthreads / warp_size_host, wide_shared, wide_config.nbatch_fa,
+                    true, true, true, false, warp_size_host, true);
+                return;
+            }
+        }
+    }
+#endif
 
 #if defined(GGML_USE_HIP)
     if constexpr (DKQ == 128 && DV == 128 && ncols1 == 8 && ncols2 == 8) {

@@ -1523,7 +1523,7 @@ struct batched_mul_mat_traits<GGML_TYPE_F16> {
 };
 
 template<ggml_type compute_type>
-static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, const ggml_tensor * dst_clamp = nullptr, const ggml_tensor * src1_clamp = nullptr, const ggml_tensor * src1_glu = nullptr) {
     using traits = batched_mul_mat_traits<compute_type>;
     using cuda_t = typename traits::cuda_type;
 
@@ -1550,7 +1550,7 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
     int64_t s12 = nb12 / src1_ts;
     int64_t s13 = nb13 / src1_ts;
 
-    float * dst_ddf = (float *) dst->data;
+    float * dst_ddf = (float *) (dst_clamp ? dst_clamp->data : dst->data);
 
     const cuda_t * src0_ptr = nullptr;
     const cuda_t * src1_ptr = nullptr;
@@ -1594,7 +1594,19 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
         if (ggml_is_contiguously_allocated(src1)) {
             const auto convert_func = traits::convert(src1->type);
             GGML_ASSERT(convert_func != nullptr);
-            convert_func(src1->data, src1_alloc.get(), ggml_nelements(src1), main_stream);
+            if constexpr (compute_type == GGML_TYPE_F16) {
+                if (src1_clamp) {
+                    ggml_cuda_convert_clamp_f32_f16((const float *) src1_clamp->src[0]->data, (half *) src1_alloc.get(),
+                        ggml_nelements(src1), ggml_get_op_params_f32(src1_clamp, 0), ggml_get_op_params_f32(src1_clamp, 1), main_stream);
+                } else if (src1_glu) {
+                    ggml_cuda_geglu_f16((const float *) src1_glu->src[0]->data, (const float *) src1_glu->src[1]->data,
+                        (half *) src1_alloc.get(), ggml_nelements(src1), main_stream);
+                } else {
+                    convert_func(src1->data, src1_alloc.get(), ggml_nelements(src1), main_stream);
+                }
+            } else {
+                convert_func(src1->data, src1_alloc.get(), ggml_nelements(src1), main_stream);
+            }
             const size_t src1_bs = ggml_blck_size(src1->type);
             s11 *= src1_bs;
             s12 *= src1_bs;
@@ -1731,8 +1743,14 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
 
     // Convert output back to F32 if needed
     if (cu_data_type != CUDA_R_32F) {
-        const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(traits::ggml_type_val);
-        to_fp32_cuda(dst_temp.get(), dst_ddf, ne_dst, main_stream);
+        if (dst_clamp) {
+            GGML_ASSERT(compute_type == GGML_TYPE_F16);
+            ggml_cuda_convert_clamp_f16_f32((const half *) dst_temp.get(), dst_ddf, ne_dst,
+                ggml_get_op_params_f32(dst_clamp, 0), ggml_get_op_params_f32(dst_clamp, 1), main_stream);
+        } else {
+            const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(traits::ggml_type_val);
+            to_fp32_cuda(dst_temp.get(), dst_ddf, ne_dst, main_stream);
+        }
     }
 }
 
@@ -3568,6 +3586,51 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
 }
 
 // try and fuse nodes and return the number of nodes to skip
+static bool ggml_cuda_should_fuse_cublas_f16(ggml_backend_cuda_context & ctx, const ggml_tensor * mm, bool allow_q6 = false) {
+    const auto & device = ggml_cuda_info().devices[ctx.device];
+    const ggml_tensor * w = mm->src[0];
+    const ggml_tensor * x = mm->src[1];
+    return GGML_CUDA_CC_IS_RDNA3_5(device.cc) && (w->type == GGML_TYPE_F16 || (allow_q6 && w->type == GGML_TYPE_Q6_K)) && x->type == GGML_TYPE_F32 &&
+        mm->type == GGML_TYPE_F32 && ggml_is_contiguous(w) && ggml_is_contiguous(x) && ggml_is_contiguous(mm) &&
+        mm->ne[2] == 1 && mm->ne[3] == 1 && mm->ne[1] >= 32 &&
+        ggml_get_op_params_i32(mm, 0) == GGML_PREC_DEFAULT && ggml_get_op_params_i32(mm, 1) == 0 &&
+        getenv("GGML_CUDA_CUBLAS_COMPUTE_TYPE") == nullptr &&
+        (!ggml_is_quantized(w->type) || (!ggml_cuda_should_use_mmvq(w->type, device.cc, x->ne[1]) &&
+                                      !ggml_cuda_should_use_mmq(w->type, device.cc, x->ne[1], 0))) &&
+        !ggml_cuda_should_use_mmvf(w->type, device.cc, w->ne, w->nb, x->ne[1]) &&
+        !ggml_cuda_should_use_mmf(w->type, device.cc, device.warp_size, w->ne, w->nb, x->ne[1], false);
+}
+
+static bool ggml_cuda_can_use_packed_mmq(ggml_backend_cuda_context & ctx, const ggml_tensor * mm, bool allow_d4 = false) {
+    const ggml_tensor * w = mm->src[0];
+    const ggml_tensor * x = mm->src[1];
+    const int cc = ggml_cuda_info().devices[ctx.device].cc;
+    return GGML_CUDA_CC_IS_RDNA3_5(cc) && (w->type == GGML_TYPE_Q4_K || w->type == GGML_TYPE_Q5_K || (allow_d4 && w->type == GGML_TYPE_Q6_K)) &&
+        x->type == GGML_TYPE_F32 && mm->type == GGML_TYPE_F32 &&
+        ggml_is_contiguous(w) && ggml_is_contiguous(x) && ggml_is_contiguous(mm) &&
+        w->ne[2] == 1 && w->ne[3] == 1 && x->ne[2] == 1 && x->ne[3] == 1 && x->ne[1] >= 64 && x->ne[1] <= 65535 &&
+        ggml_get_op_params_i32(mm, 0) == GGML_PREC_DEFAULT && ggml_get_op_params_i32(mm, 1) == 0 &&
+        !ggml_cuda_should_use_mmvq(w->type, cc, x->ne[1]) &&
+        ggml_cuda_should_use_mmq(w->type, cc, x->ne[1], 0) &&
+        !(w->view_src && ggml_backend_buffer_get_usage(w->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE &&
+          ggml_nbytes(w) != ggml_backend_buffer_get_alloc_size(w->buffer, w));
+}
+
+static size_t ggml_cuda_packed_mmq_size(ggml_backend_cuda_context & ctx, const ggml_tensor * mm) {
+    const int cc = ggml_cuda_info().devices[ctx.device].cc;
+    return (ggml_nelements(mm->src[1])/QK8_1_MMQ +
+        ggml_cuda_mmq_get_J_max(mm->src[0]->type, mm->src[0]->ne[1] % 128 != 0, cc, mm->ne[1]))*sizeof(block_q8_1_mmq);
+}
+
+static bool ggml_cuda_safe_elementwise_alias(const ggml_tensor * src, const ggml_tensor * dst) {
+    const uintptr_t src_begin = (uintptr_t) src->data;
+    const uintptr_t dst_begin = (uintptr_t) dst->data;
+    if (src_begin + ggml_nbytes(src) <= dst_begin || dst_begin + ggml_nbytes(dst) <= src_begin) {
+        return true;
+    }
+    return src_begin == dst_begin && ggml_are_same_shape(src, dst) && ggml_is_contiguous(src);
+}
+
 static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
 
     static bool disable_fusion = getenv("GGML_CUDA_DISABLE_FUSION") != nullptr && std::atoi(getenv("GGML_CUDA_DISABLE_FUSION"));
@@ -3576,6 +3639,128 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     }
 
     ggml_tensor * node = cgraph->nodes[i];
+
+    if (node->op == GGML_OP_GLU && ggml_get_glu_op(node) == GGML_GLU_OP_GEGLU && node->src[1] &&
+            node->type == GGML_TYPE_F32 && node->src[0]->type == GGML_TYPE_F32 && node->src[1]->type == GGML_TYPE_F32 &&
+            ggml_is_contiguous(node->src[0]) && ggml_is_contiguous(node->src[1]) &&
+            ggml_cuda_is_aligned(node->src[0], 16) && ggml_cuda_is_aligned(node->src[1], 16) &&
+            ggml_are_same_shape(node, node->src[0]) && ggml_are_same_shape(node, node->src[1])) {
+        const ggml_op ops[] = { GGML_OP_GLU, GGML_OP_MUL_MAT };
+        const int output_idx = i + 1;
+        if (ggml_can_fuse_subgraph(cgraph, i, 2, ops, &output_idx, 1) &&
+                ggml_cuda_check_fusion_memory_ranges(cgraph, i, 2, &output_idx, 1)) {
+            ggml_tensor * mm = cgraph->nodes[output_idx];
+            if (mm->src[1] == node && node->ne[0] % MATRIX_ROW_PADDING == 0 &&
+                    ggml_cuda_can_use_packed_mmq(*cuda_ctx, mm, true)) {
+                ggml_cuda_pool_alloc<char> packed(cuda_ctx->pool(), ggml_cuda_packed_mmq_size(*cuda_ctx, mm));
+                const auto quantize = mm->src[0]->type == GGML_TYPE_Q6_K ? quantize_geglu_mmq_q8_1_d4_cuda : quantize_geglu_mmq_q8_1_cuda;
+                quantize((const float *) node->src[0]->data, (const float *) node->src[1]->data,
+                    packed.get(), node->ne[0], node->ne[1], cuda_ctx->stream());
+                ggml_cuda_mul_mat_q(*cuda_ctx, mm->src[0], node, nullptr, mm, packed.get());
+                return 1;
+            }
+            if (mm->src[1] == node && ggml_cuda_should_fuse_cublas_f16(*cuda_ctx, mm, true)) {
+                ggml_cuda_mul_mat_cublas_impl<GGML_TYPE_F16>(*cuda_ctx, mm->src[0], node, mm, nullptr, nullptr, node);
+                return 1;
+            }
+        }
+    }
+
+    if (node->op == GGML_OP_UNARY && ggml_get_unary_op(node) == GGML_UNARY_OP_GELU && node->type == GGML_TYPE_F32) {
+        int next = i + 1;
+        if (next < cgraph->n_nodes && cgraph->nodes[next]->op == GGML_OP_VIEW) {
+            ++next;
+        }
+        const int nodes[] = { i, next };
+        const ggml_op ops[] = { GGML_OP_UNARY, GGML_OP_MUL };
+        if (ggml_can_fuse_subgraph_ext(cgraph, nodes, 2, ops, &next, 1)) {
+            ggml_tensor * mul = cgraph->nodes[next];
+            const ggml_tensor * other = mul->src[mul->src[0] == node ? 1 : 0];
+            if ((mul->src[0] == node || mul->src[1] == node) && mul->type == GGML_TYPE_F32 && other->type == GGML_TYPE_F32 &&
+                    node->src[0]->type == GGML_TYPE_F32 && ggml_is_contiguous_1(node->src[0]) &&
+                    ggml_is_contiguous_1(other) && ggml_is_contiguous(mul) && ggml_are_same_shape(node, other) &&
+                    ggml_are_same_shape(node, mul) && ggml_cuda_safe_elementwise_alias(node->src[0], mul) &&
+                    ggml_cuda_safe_elementwise_alias(other, mul)) {
+                ggml_cuda_op_unary_mul(*cuda_ctx, node, mul);
+                return next - i;
+            }
+        }
+    }
+
+    if (node->op == GGML_OP_RMS_NORM &&
+            ggml_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ADD, GGML_OP_MUL }) &&
+            ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ADD }, {})) {
+        ggml_tensor * add = cgraph->nodes[i + 2];
+        ggml_tensor * mul = cgraph->nodes[i + 3];
+        const ggml_tensor * scale = mul->src[mul->src[0] == add ? 1 : 0];
+        const ggml_tensor * weight = cgraph->nodes[i + 1]->src[cgraph->nodes[i + 1]->src[0] == node ? 1 : 0];
+        const ggml_tensor * residual = add->src[add->src[0] == cgraph->nodes[i + 1] ? 1 : 0];
+        if ((mul->src[0] == add || mul->src[1] == add) && mul->type == GGML_TYPE_F32 &&
+                scale->type == GGML_TYPE_F32 && ggml_nelements(scale) == 1 && ggml_is_contiguous(mul) &&
+                ggml_cuda_safe_elementwise_alias(node->src[0], mul) && ggml_cuda_safe_elementwise_alias(weight, mul) &&
+                ggml_cuda_safe_elementwise_alias(residual, mul) && ggml_cuda_safe_elementwise_alias(scale, mul)) {
+            ggml_cuda_op_rms_norm_fused_add(*cuda_ctx, node, cgraph->nodes[i + 1], add, mul);
+            return 3;
+        }
+    }
+
+    if (node->op == GGML_OP_RMS_NORM) {
+        const ggml_op ops[] = { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_MUL_MAT, GGML_OP_MUL_MAT };
+        const int outputs[] = { i + 2, i + 3 };
+        if (ggml_can_fuse_subgraph(cgraph, i, 4, ops, outputs, 2)) {
+            ggml_tensor * mul = cgraph->nodes[i + 1];
+            ggml_tensor * mm0 = cgraph->nodes[i + 2];
+            ggml_tensor * mm1 = cgraph->nodes[i + 3];
+            const ggml_tensor * weight = mul->src[mul->src[0] == node ? 1 : 0];
+            if ((mul->src[0] == node || mul->src[1] == node) && mm0->src[1] == mul && mm1->src[1] == mul &&
+                    node->src[0]->type == GGML_TYPE_F32 && ggml_is_contiguous(node->src[0]) &&
+                    ggml_cuda_is_aligned(node->src[0], 16) && ggml_cuda_is_aligned(weight, 16) &&
+                    node->ne[0] % MATRIX_ROW_PADDING == 0 && node->ne[0] <= 4096 &&
+                    weight->type == GGML_TYPE_F32 && ggml_is_contiguous(weight) &&
+                    ggml_nelements(weight) == node->ne[0] && weight->ne[0] == node->ne[0] &&
+                    ggml_cuda_can_use_packed_mmq(*cuda_ctx, mm0) && ggml_cuda_can_use_packed_mmq(*cuda_ctx, mm1) &&
+                    ggml_cuda_check_fusion_memory_ranges(cgraph, i, 4, outputs, 2)) {
+                const size_t size = std::max(ggml_cuda_packed_mmq_size(*cuda_ctx, mm0), ggml_cuda_packed_mmq_size(*cuda_ctx, mm1));
+                ggml_cuda_pool_alloc<char> packed(cuda_ctx->pool(), size);
+                quantize_rms_norm_mmq_q8_1_cuda((const float *) node->src[0]->data, (const float *) weight->data,
+                    packed.get(), node->ne[0], node->ne[1], ggml_get_op_params_f32(node, 0), cuda_ctx->stream());
+                ggml_cuda_mul_mat_q(*cuda_ctx, mm0->src[0], mul, nullptr, mm0, packed.get());
+                ggml_cuda_mul_mat_q(*cuda_ctx, mm1->src[0], mul, nullptr, mm1, packed.get());
+                return 3;
+            }
+        }
+    }
+
+    if (node->op == GGML_OP_CLAMP && i + 1 < cgraph->n_nodes &&
+            node->type == GGML_TYPE_F32 && ggml_is_contiguous(node->src[0]) && ggml_is_contiguous(node)) {
+        ggml_tensor * mm = cgraph->nodes[i + 1];
+        if (mm->op == GGML_OP_MUL_MAT && mm->src[1] == node && ggml_cuda_should_fuse_cublas_f16(*cuda_ctx, mm)) {
+            const ggml_op ops[] = { GGML_OP_CLAMP, GGML_OP_MUL_MAT, GGML_OP_CLAMP };
+            for (int count : { 3, 2 }) {
+                const int output_idx = i + count - 1;
+                if (!ggml_can_fuse_subgraph(cgraph, i, count, ops, &output_idx, 1)) {
+                    continue;
+                }
+                ggml_tensor * out = cgraph->nodes[output_idx];
+                if (count == 3 && (out->src[0] != mm || out->type != GGML_TYPE_F32 || !ggml_is_contiguous(out))) {
+                    continue;
+                }
+                // BLAS consumes both inputs before the final conversion writes the output.
+                ggml_cuda_mul_mat_cublas_impl<GGML_TYPE_F16>(*cuda_ctx, mm->src[0], node, mm, count == 3 ? out : nullptr, node);
+                return count - 1;
+            }
+        }
+    }
+
+    if (node->op == GGML_OP_MUL_MAT && ggml_can_fuse(cgraph, i, { GGML_OP_MUL_MAT, GGML_OP_CLAMP }) &&
+            ggml_cuda_should_fuse_cublas_f16(*cuda_ctx, node)) {
+        ggml_tensor * clamp = cgraph->nodes[i + 1];
+        if (clamp->src[0] == node && clamp->type == GGML_TYPE_F32 && ggml_is_contiguous(clamp)) {
+            ggml_cuda_mul_mat_cublas_impl<GGML_TYPE_F16>(*cuda_ctx, node->src[0], node->src[1], node, clamp);
+            return 1;
+        }
+    }
+
 
     if (node->op == GGML_OP_MUL) {
         ggml_cuda_moe_weighted_reduction_match match;
