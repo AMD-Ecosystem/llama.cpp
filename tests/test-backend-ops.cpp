@@ -5018,6 +5018,76 @@ struct test_mul_mat : public test_case {
     }
 };
 
+struct test_geglu_mat : public test_mul_mat {
+    const bool extra_consumer;
+    const bool force_f32;
+    test_geglu_mat(ggml_type type, int64_t n, int64_t k = 512, bool extra_consumer = false, bool force_f32 = false)
+        : test_mul_mat(type, GGML_TYPE_F32, 256, n, k, {1, 1}, {1, 1}), extra_consumer(extra_consumer), force_f32(force_f32) {}
+    bool run_whole_graph() override { return true; }
+    std::string op_desc(ggml_tensor *) override { return "GEGLU_MAT"; }
+    std::string vars() override { return test_mul_mat::vars() + "," + VARS_TO_STR2(extra_consumer, force_f32); }
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * mm = test_mul_mat::build_graph(ctx);
+        ggml_tensor * gate = ggml_dup_tensor(ctx, mm->src[1]);
+        mm->src[1] = ggml_geglu_split(ctx, mm->src[1], gate);
+        if (force_f32) {
+            ggml_prec_set_acc(mm, GGML_PREC_F32);
+        }
+        return extra_consumer ? ggml_add(ctx, mm, ggml_mul_mat(ctx, mm->src[0], mm->src[1])) : mm;
+    }
+};
+
+struct test_rms_norm_mmq : public test_case {
+    const int64_t k, n;
+    const ggml_type type;
+    const bool extra_consumer;
+    test_rms_norm_mmq(int64_t k, int64_t n, ggml_type type = GGML_TYPE_Q4_K, bool extra_consumer = false)
+        : k(k), n(n), type(type), extra_consumer(extra_consumer) {}
+    bool run_whole_graph() override { return true; }
+    std::string op_desc(ggml_tensor *) override { return "RMS_NORM_MMQ"; }
+    std::string vars() override { return VARS_TO_STR4(k, n, type, extra_consumer); }
+    double max_nmse_err() override { return 5e-4; }
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, n);
+        ggml_tensor * weight = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, k);
+        ggml_tensor * norm = ggml_mul(ctx, ggml_rms_norm(ctx, x, 1e-6f), weight);
+        ggml_tensor * w0 = ggml_new_tensor_2d(ctx, type, k, 256);
+        ggml_tensor * w1 = ggml_new_tensor_2d(ctx, type, k, 256);
+        ggml_tensor * out = ggml_add(ctx, ggml_mul_mat(ctx, w0, norm), ggml_mul_mat(ctx, w1, norm));
+        return extra_consumer ? ggml_add(ctx, out, ggml_mul_mat(ctx, w0, norm)) : out;
+    }
+};
+
+struct test_mul_mat_clamp : public test_mul_mat {
+    bool input_clamp;
+    bool extra_consumer;
+    bool force_f32;
+
+    test_mul_mat_clamp(int64_t m, int64_t n, int64_t k, bool input_clamp = false, bool extra_consumer = false,
+                      bool force_f32 = false, int64_t k_v = 0)
+        : test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F32, m, n, k, {1, 1}, {1, 1}, {0, 1, 2, 3}, k_v),
+          input_clamp(input_clamp), extra_consumer(extra_consumer), force_f32(force_f32) {}
+
+    bool run_whole_graph() override { return true; }
+    std::string op_desc(ggml_tensor *) override { return "MUL_MAT_CLAMP"; }
+    std::string vars() override {
+        return test_mul_mat::vars() + "," + VARS_TO_STR3(input_clamp, extra_consumer, force_f32);
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * mm = test_mul_mat::build_graph(ctx);
+        if (input_clamp) {
+            ggml_tensor * x = ggml_is_contiguous(mm->src[1]) ? mm->src[1] : ggml_cont(ctx, mm->src[1]);
+            mm->src[1] = ggml_clamp(ctx, x, -0.12345f, 0.45678f);
+        }
+        if (force_f32) {
+            ggml_prec_set_acc(mm, GGML_PREC_F32);
+        }
+        ggml_tensor * out = ggml_clamp(ctx, mm, -0.34567f, 0.23456f);
+        return extra_consumer ? ggml_add(ctx, out, mm) : out;
+    }
+};
+
 // GGML_HINT_SRC0_IS_HADAMARD
 struct test_mul_mat_hadamard : public test_mul_mat {
     test_mul_mat_hadamard(ggml_type type_a = GGML_TYPE_F32, ggml_type type_b = GGML_TYPE_F32,
@@ -9091,6 +9161,28 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     std::vector<std::unique_ptr<test_case>> test_cases;
     std::default_random_engine rng(0);
 
+    for (int64_t n : { 1, 32, 64, 258 }) {
+        test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, {1536, n, 1, 1}, 1e-6f, false, false, true, false, true));
+    }
+
+    for (ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K, GGML_TYPE_F16 }) {
+        for (int64_t n : { 1, 63, 64, 258 }) {
+            test_cases.emplace_back(new test_geglu_mat(type, n));
+        }
+        test_cases.emplace_back(new test_geglu_mat(type, 258, 6144));
+        test_cases.emplace_back(new test_geglu_mat(type, 258, 512, true));
+    }
+    test_cases.emplace_back(new test_geglu_mat(GGML_TYPE_F16, 258, 512, false, true));
+    test_cases.emplace_back(new test_geglu_mat(GGML_TYPE_Q6_K, 252, 6144));
+
+    for (int64_t k : { 512, 1536, 2048 }) {
+        for (int64_t n : { 1, 63, 64, 258 }) {
+            test_cases.emplace_back(new test_rms_norm_mmq(k, n));
+        }
+    }
+    test_cases.emplace_back(new test_rms_norm_mmq(1536, 258, GGML_TYPE_Q5_K));
+    test_cases.emplace_back(new test_rms_norm_mmq(1536, 258, GGML_TYPE_Q4_K, true));
+
     // unary ops
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
         for (int v : {0, 1}) {
@@ -9853,6 +9945,23 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                 test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, { n, 5, 4, 3 }, v, eps));
             }
         }
+    }
+
+    for (int64_t rows : {1, 31, 32, 33, 63, 64, 65, 258, 517}) {
+        test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {1536, rows, 1, 1}));
+        test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {1536, rows, 1, 1}, false, 1e-6f, true));
+        test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, {1536, rows, 1, 1}, 1e-6f, false, false, false, false, true));
+    }
+    test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {3072, 516, 2, 2}, true));
+
+    for (bool input_clamp : {false, true}) {
+        for (int64_t rows : {1, 31, 32, 33, 65}) {
+            test_cases.emplace_back(new test_mul_mat_clamp(65, rows, 128, input_clamp));
+        }
+        test_cases.emplace_back(new test_mul_mat_clamp(768, 258, 768, input_clamp));
+        test_cases.emplace_back(new test_mul_mat_clamp(64, 33, 128, input_clamp, true));
+        test_cases.emplace_back(new test_mul_mat_clamp(64, 33, 128, input_clamp, false, true));
+        test_cases.emplace_back(new test_mul_mat_clamp(64, 33, 128, input_clamp, false, false, 132));
     }
 
     // in-place tests
@@ -10829,6 +10938,25 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {11, 22, 33, 44}, 1, 2, 3, 4, 5, 6, 7, 8, tfrm, circular));
         }
     }
+
+    for (int nb : {512, 517, 1024}) {
+        test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, {4, 1}, 1024, nb));
+    }
+
+    for (int hs : {64, 80}) {
+        for (int tokens : {63, 64, 65, 129}) {
+            test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 4, {1, 1}, tokens, tokens, false));
+        }
+    }
+
+    for (int nb : { 31, 32, 33, 252, 258, 517 }) {
+        test_cases.emplace_back(new test_flash_attn_ext(512, 512, 1, {8, 1}, 1024, nb));
+    }
+    test_cases.emplace_back(new test_flash_attn_ext(512, 512, 1, {8, 1}, 256, 33));
+    test_cases.emplace_back(new test_flash_attn_ext(512, 512, 1, {8, 1}, 512, 258, true, true));
+    test_cases.emplace_back(new test_flash_attn_ext(512, 512, 1, {8, 1}, 512, 258, true, false, 0, 0, GGML_PREC_F32,
+                GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}));
+    test_cases.emplace_back(new test_flash_attn_ext(512, 512, 1, {8, 1}, 512, 32, false));
 
     // prefill-shaped cases with long KV (nb >= 32, kv >= 1024): covers the
     // XMX/GEMM-accelerated SYCL FA path which only activates for these shapes.

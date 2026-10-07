@@ -499,8 +499,76 @@ static void convert_unary_cuda(const void * vx, dst_t * y,
         (vx, y, ne00, ne01, ne0203, ne02_fdv, s01, s02, s03);
 }
 
+template <typename T>
+struct alignas(2*sizeof(T)) convert_pair {
+    T v[2];
+};
+
+template <typename dst_t, bool clamp, typename src_t>
+static __device__ __forceinline__ dst_t convert_unary_value(src_t x, float min, float max) {
+    if constexpr (clamp) {
+        return ggml_cuda_cast<dst_t>(fminf(fmaxf(float(x), min), max));
+    }
+    return ggml_cuda_cast<dst_t>(x);
+}
+
+template <typename src_t, typename dst_t, bool clamp = false>
+static __global__ void convert_unary_packed(const src_t * __restrict__ x, dst_t * __restrict__ y, const int64_t k,
+        const float min = 0.0f, const float max = 0.0f) {
+    const int64_t i = 2*(int64_t(blockIdx.x)*blockDim.x + threadIdx.x);
+    if (i + 1 < k) {
+        const auto in = *reinterpret_cast<const convert_pair<src_t> *>(x + i);
+        const convert_pair<dst_t> out = {{convert_unary_value<dst_t, clamp>(in.v[0], min, max),
+                                         convert_unary_value<dst_t, clamp>(in.v[1], min, max)}};
+        *reinterpret_cast<convert_pair<dst_t> *>(y + i) = out;
+    } else if (i < k) {
+        y[i] = convert_unary_value<dst_t, clamp>(x[i], min, max);
+    }
+}
+
+template <typename src_t, typename dst_t>
+static __global__ void convert_unary_clamped(const src_t * x, dst_t * y, int64_t k, float min, float max) {
+    const int64_t i = int64_t(blockIdx.x)*blockDim.x + threadIdx.x;
+    if (i < k) {
+        y[i] = convert_unary_value<dst_t, true>(x[i], min, max);
+    }
+}
+
+template <typename src_t, typename dst_t>
+static void convert_unary_clamped_cuda(const src_t * x, dst_t * y, int64_t k, float min, float max, cudaStream_t stream) {
+    if (reinterpret_cast<uintptr_t>(x) % alignof(convert_pair<src_t>) == 0 &&
+            reinterpret_cast<uintptr_t>(y) % alignof(convert_pair<dst_t>) == 0) {
+        const int64_t blocks = (k + 2*CUDA_DEQUANTIZE_BLOCK_SIZE - 1)/(2*CUDA_DEQUANTIZE_BLOCK_SIZE);
+        convert_unary_packed<src_t, dst_t, true><<<blocks, CUDA_DEQUANTIZE_BLOCK_SIZE, 0, stream>>>(x, y, k, min, max);
+    } else {
+        const int64_t blocks = (k + CUDA_DEQUANTIZE_BLOCK_SIZE - 1)/CUDA_DEQUANTIZE_BLOCK_SIZE;
+        convert_unary_clamped<<<blocks, CUDA_DEQUANTIZE_BLOCK_SIZE, 0, stream>>>(x, y, k, min, max);
+    }
+}
+
+void ggml_cuda_convert_clamp_f16_f32(const half * x, float * y, int64_t k, float min, float max, cudaStream_t stream) {
+    convert_unary_clamped_cuda(x, y, k, min, max, stream);
+}
+
+void ggml_cuda_convert_clamp_f32_f16(const float * x, half * y, int64_t k, float min, float max, cudaStream_t stream) {
+    convert_unary_clamped_cuda(x, y, k, min, max, stream);
+}
+
 template <typename src_t, typename dst_t>
 static void convert_unary_cont_cuda(const void * vx, dst_t * y, const int64_t k, cudaStream_t stream) {
+#if defined(GGML_USE_HIP)
+    if constexpr ((std::is_same_v<src_t, float> && std::is_same_v<dst_t, half>) ||
+                  (std::is_same_v<src_t, half> && std::is_same_v<dst_t, float>)) {
+        const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+        if (GGML_CUDA_CC_IS_RDNA3_5(cc) && k >= CUDA_DEQUANTIZE_BLOCK_SIZE &&
+                reinterpret_cast<uintptr_t>(vx) % alignof(convert_pair<src_t>) == 0 &&
+                reinterpret_cast<uintptr_t>(y)  % alignof(convert_pair<dst_t>) == 0) {
+            const int64_t n_blocks = (k + 2*CUDA_DEQUANTIZE_BLOCK_SIZE - 1)/(2*CUDA_DEQUANTIZE_BLOCK_SIZE);
+            convert_unary_packed<<<n_blocks, CUDA_DEQUANTIZE_BLOCK_SIZE, 0, stream>>>(static_cast<const src_t *>(vx), y, k);
+            return;
+        }
+    }
+#endif
     convert_unary_cuda<src_t>(vx, y, k, 1, 1, 1, k, k, k, stream);
 }
 

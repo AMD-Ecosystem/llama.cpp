@@ -259,8 +259,8 @@ void ggml_cuda_op_softplus(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 }
 /* gated ops */
 
-template <float (*op)(float), typename T>
-static __global__ void unary_gated_op_kernel(const T * x, const T * g, T * dst, const int64_t k, const int64_t n, const int64_t o0, const int64_t o1) {
+template <float (*op)(float), typename T, typename dst_t = T>
+static __global__ void unary_gated_op_kernel(const T * x, const T * g, dst_t * dst, const int64_t k, const int64_t n, const int64_t o0, const int64_t o1) {
     ggml_cuda_pdl_lc();
     const int64_t i = int64_t(blockDim.x)*blockIdx.x + threadIdx.x;
 
@@ -273,14 +273,22 @@ static __global__ void unary_gated_op_kernel(const T * x, const T * g, T * dst, 
     const int64_t j1 = o0 == o1 ? j0 : (i / n) * o1 + (i % n);
 
     ggml_cuda_pdl_sync();
-    dst[i] = (T)(op((float)x[j0]) * (float)g[j1]);
+    float value = op((float)x[j0]) * (float)g[j1];
+    if constexpr (!std::is_same_v<T, dst_t>) {
+#if defined(GGML_USE_HIP)
+        asm volatile("" : "+v"(value));
+#else
+        asm volatile("" : "+f"(value));
+#endif
+    }
+    dst[i] = (dst_t) value;
 }
 
-template <float (*op)(float), typename T>
-static void unary_gated_cuda(const T * x, const T * g, T * dst, const int64_t k, const int64_t n, const int64_t o0, const int64_t o1, cudaStream_t stream) {
+template <float (*op)(float), typename T, typename dst_t = T>
+static void unary_gated_cuda(const T * x, const T * g, dst_t * dst, const int64_t k, const int64_t n, const int64_t o0, const int64_t o1, cudaStream_t stream) {
     const int64_t num_blocks = (k + CUDA_GLU_BLOCK_SIZE - 1) / CUDA_GLU_BLOCK_SIZE;
     const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params((dim3)num_blocks, CUDA_GLU_BLOCK_SIZE, 0, stream);
-    ggml_cuda_kernel_launch(unary_gated_op_kernel<op, T>, launch_params, x, g, dst, k, n, o0, o1);
+    ggml_cuda_kernel_launch(unary_gated_op_kernel<op, T, dst_t>, launch_params, x, g, dst, k, n, o0, o1);
 }
 
 template <float (*op)(float)>
@@ -339,6 +347,10 @@ void ggml_cuda_op_unary_gated(ggml_backend_cuda_context & ctx, ggml_tensor * dst
 
 void ggml_cuda_op_reglu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_op_unary_gated<op_relu>(ctx, dst);
+}
+
+void ggml_cuda_geglu_f16(const float * x, const float * gate, half * dst, int64_t n, cudaStream_t stream) {
+    unary_gated_cuda<op_gelu>(x, gate, dst, n, n, n, n, stream);
 }
 
 void ggml_cuda_op_geglu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
@@ -688,6 +700,10 @@ static void ggml_cuda_op_unary_mul_impl(ggml_backend_cuda_context & ctx, ggml_te
 
 void ggml_cuda_op_unary_mul(ggml_backend_cuda_context & ctx, ggml_tensor * unary_node, ggml_tensor * mul_node) {
     switch (ggml_get_unary_op(unary_node)) {
+        case GGML_UNARY_OP_GELU:
+            GGML_ASSERT(unary_node->type == GGML_TYPE_F32);
+            ggml_cuda_op_unary_mul_impl<op_gelu>(ctx, unary_node, mul_node);
+            break;
         case GGML_UNARY_OP_SILU:
             ggml_cuda_op_unary_mul_impl<op_silu>(ctx, unary_node, mul_node);
             break;
