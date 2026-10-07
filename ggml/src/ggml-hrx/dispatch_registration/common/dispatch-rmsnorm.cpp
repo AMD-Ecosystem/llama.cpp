@@ -21,6 +21,8 @@ namespace ggml::hrx {
 namespace {
 
 static constexpr KernelCatalogRef kRmsNormBinaryF32Kernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_rmsnorm_binary_f32");
+static constexpr KernelCatalogRef kRmsNormBinaryF32LowTokenStripedKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_rmsnorm_binary_f32_lowtoken_striped");
 static constexpr KernelCatalogRef kRmsNormBinaryStridedF32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_rmsnorm_binary_strided_f32");
 static constexpr KernelCatalogRef kRmsNormMulAddF32Kernel =
@@ -974,10 +976,14 @@ static bool match_rmsnorm_binary_f32_dispatch(const DispatchMatchContext & conte
                                publication_demand->format == CommonActivationPublicationFormat::F16K16Major;
     const bool f16_output    = publication_demand != nullptr &&
                                publication_demand->format == CommonActivationPublicationFormat::F16Row;
+    const bool lowtoken_striped = !strided_input && publication_demand == nullptr && rms_match.op == BinaryKind::Mul &&
+                                  rms_match.token_count < 6 && rms_match.hidden_size >= 2048 &&
+                                  rms_match.hidden_size <= 5120;
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(strided_input ? kRmsNormBinaryStridedF32Kernel :
                                                   packed_output ? kRmsNormBinaryF32K16Kernel :
                                                   f16_output ? kRmsNormBinaryF32F16Kernel :
+                                                  lowtoken_striped ? kRmsNormBinaryF32LowTokenStripedKernel :
                                                                kRmsNormBinaryF32Kernel);
     dispatch.kernel.integer_parameters.emplace("token_count", rms_match.token_count);
     dispatch.kernel.compile_parameters.emplace("ggml.rmsnorm_binary_f32.hidden_size",

@@ -25,6 +25,8 @@ config.decl @ggml.rmsnorm_binary_q8_1_x4.op : %value: index where [range(%value,
 
 template.decl @ggml.rmsnorm_binary_f32.body(%publish_f16: i1, %token_count: index, %input: buffer, %rhs: buffer, %output: buffer, %f16_output: buffer)
 
+template.decl @ggml.rmsnorm_binary_f32.lowtoken_striped_body(%token_count: index, %input: buffer, %rhs: buffer, %output: buffer)
+
 template.decl @ggml.rmsnorm_binary_strided_f32.body(%token_count: index, %input: buffer, %rhs: buffer, %output: buffer)
 
 template.def<@ggml.rmsnorm_binary_f32.body> device @ggml_rmsnorm_binary_f32_body(%publish_f16: i1, %token_count: index, %input: buffer, %rhs: buffer, %output: buffer, %f16_output: buffer) {
@@ -54,6 +56,43 @@ template.def<@ggml.rmsnorm_binary_f32.body> device @ggml_rmsnorm_binary_f32_body
         %half = scalar.fptrunc %result : f32 to f16
         view.store %half, %f16_output_view[%token, %channel] : f16, view<[%launch_token_count]x[%hidden_size]xf16>
       }
+    }
+  }
+  template.return
+}
+
+template.def<@ggml.rmsnorm_binary_f32.lowtoken_striped_body> device @ggml_rmsnorm_binary_f32_lowtoken_striped_body(%token_count: index, %input: buffer, %rhs: buffer, %output: buffer) {
+  %hidden_size0 = config.get @ggml.rmsnorm_binary_f32.hidden_size : index
+  %epsilon = config.get @ggml.rmsnorm_binary_f32.rms_epsilon : f32
+  %op = config.get @ggml.rmsnorm_binary_f32.op : index
+  %hidden_size = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), mul(%hidden_size0, 128)] : index
+  %group = kernel.workgroup.id<x> : index
+  %workitem = kernel.workitem.id<x> : index
+  %c1 = index.constant 1 : index
+  %c256 = index.constant 256 : index
+  %c1023 = index.constant 1023 : index
+  %c1024 = index.constant 1024 : index
+  %c0_offset = index.constant 0 : offset
+  %rounded_hidden = index.add %hidden_size, %c1023 : index
+  %stripe_count = index.div %rounded_hidden, %c1024 : index
+  %token0 = index.div %group, %stripe_count : index
+  %stripe = index.rem %group, %stripe_count : index
+  %stripe_base = index.mul %stripe, %c1024 : index
+  %stripe_limit0 = index.add %stripe_base, %c1024 : index
+  %stripe_limit = index.min %stripe_limit0, %hidden_size : index
+  %input_noalias, %rhs_noalias, %output_noalias = buffer.assume.noalias %input, %rhs, %output : buffer, buffer, buffer
+  %row_scale, %token, %launch_token_count, %valid_token = template.apply<@ggml.rmsnorm_f32.row_scale>(%token_count, %token0, %hidden_size, %hidden_size, %epsilon, %input_noalias) : (index, index, index, index, f32, buffer) -> (f32, index, index, i1)
+  %input_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%hidden_size]xf32>
+  %rhs_view = buffer.view %rhs_noalias[%c0_offset] : buffer -> view<[%hidden_size]xf32>
+  %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%hidden_size]xf32>
+  scf.if %valid_token {
+    %first_channel = index.add %stripe_base, %workitem : index
+    scf.for %channel = [%first_channel to %stripe_limit step %c256] {
+      %value = view.load %input_view[%token, %channel] : view<[%launch_token_count]x[%hidden_size]xf32> -> f32
+      %rhs_value = view.load %rhs_view[%channel] : view<[%hidden_size]xf32> -> f32
+      %normalized = template.apply<@ggml.rmsnorm_f32.apply>(%value, %row_scale) : (f32, f32) -> (f32)
+      %result = template.apply<@ggml.binary_f32.apply>(%op, %normalized, %rhs_value) : (index, f32, f32) -> (f32)
+      view.store %result, %output_view[%token, %channel] : f32, view<[%launch_token_count]x[%hidden_size]xf32>
     }
   }
   template.return

@@ -427,11 +427,33 @@ def case_flash_attention(symbol: str, command: dict[str, Any], kernel: str, pref
     output_shape = f"{query_tokens}x{query_heads}x{value_head_size}"
     mask_shape = f"{query_tokens}x{kv_tokens}"
     if prefix == "ggml":
+        gate_bytes = binding_length(command, "gate")
+        if gate_bytes % 4 != 0:
+            fail(
+                f"command {command.get('ordinal')} {command.get('kernel')} has "
+                f"non-f32 gate binding length {gate_bytes}"
+            )
+        gate_elements = gate_bytes // 4
+        apply_gate = config_int(command, "ggml.flash_attention.apply_gate", 0)
+        if apply_gate:
+            gate_stride_head = config_int(command, "ggml.flash_attention.gate_stride_head")
+            gate_stride_token = config_int(command, "ggml.flash_attention.gate_stride_token")
+            required_gate_elements = (
+                (query_tokens - 1) * gate_stride_token
+                + (query_heads - 1) * gate_stride_head
+                + value_head_size
+            )
+            if gate_elements < required_gate_elements:
+                fail(
+                    f"command {command.get('ordinal')} {command.get('kernel')} gate binding "
+                    f"has {gate_elements} f32 elements but the strided access requires "
+                    f"{required_gate_elements}"
+                )
         launch = (
             f"  kernel.launch @{kernel}[%query_token_count, %key_value_token_count]"
-            f"(%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %query, %output)"
+            f"(%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %gate, %output)"
             f" : [index, index](index, index, tensor<{query_shape}xf32>, tensor<{key_shape}xf16>, "
-            f"tensor<{value_shape}xf16>, tensor<{mask_shape}xf16>, tensor<{query_shape}xf32>, "
+            f"tensor<{value_shape}xf16>, tensor<{mask_shape}xf16>, tensor<{gate_elements}xf32>, "
             f"tensor<{output_shape}xf32>)"
         )
     else:
@@ -450,6 +472,7 @@ def case_flash_attention(symbol: str, command: dict[str, Any], kernel: str, pref
             fill_tensor("key", "0.0", key_shape, "f16"),
             fill_tensor("value", "0.0", value_shape, "f16"),
             fill_tensor("mask", "0.0", mask_shape, "f16"),
+            *([fill_tensor("gate", "0.0", f"{gate_elements}", "f32")] if prefix == "ggml" else []),
             fill_tensor("output", "1.0", output_shape, "f32"),
             launch,
             "  check.return",

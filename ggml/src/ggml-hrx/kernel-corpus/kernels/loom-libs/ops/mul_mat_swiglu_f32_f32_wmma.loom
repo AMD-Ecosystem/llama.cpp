@@ -413,12 +413,19 @@ func.def inline @ggml_mul_mat_swiglu_lowtoken_dot(%op: index, %gate_format: inde
   %c2 = index.constant 2 : index
   %c4 = index.constant 4 : index
   %c8 = index.constant 8 : index
+  %c10 = index.constant 10 : index
   %c256 = index.constant 256 : index
   %q5_format = index.constant 5 : index
   %iq4xs_format = index.constant 23 : index
+  %q8_0_format = index.constant 80 : index
   %gate_is_q5 = index.cmp eq, %gate_format, %q5_format : index
   %gate_is_iq4xs = index.cmp eq, %gate_format, %iq4xs_format : index
   %same_weight_format = index.cmp eq, %gate_format, %up_format : index
+  %gate_is_q8_0 = index.cmp eq, %gate_format, %q8_0_format : index
+  %q8_0_pair = scalar.andi %gate_is_q8_0, %same_weight_format : i1
+  %token_one = index.cmp eq, %token_count, %c1 : index
+  %q8_0_token_one = scalar.andi %q8_0_pair, %token_one : i1
+  %fallback_unroll = scf.select %q8_0_token_one, %c10, %c1 : index
   %base = index.constant 0 : offset
   %zero = vector.constant 0.0 : vector<4xf32>
   %zero_scalar = scalar.constant 0.0 : f32
@@ -512,7 +519,7 @@ func.def inline @ggml_mul_mat_swiglu_lowtoken_dot(%op: index, %gate_format: inde
         }
         scf.yield %iq4_total_g0, %iq4_total_u0, %iq4_total_g1, %iq4_total_u1, %iq4_total_g2, %iq4_total_u2, %iq4_total_g3, %iq4_total_u3, %iq4_total_g4, %iq4_total_u4 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
       } else {
-        %fallback_total_g0, %fallback_total_u0, %fallback_total_g1, %fallback_total_u1, %fallback_total_g2, %fallback_total_u2, %fallback_total_g3, %fallback_total_u3, %fallback_total_g4, %fallback_total_u4 = scf.for %step = [%c0 to %steps step %c1](%acc_g0 = %zero : vector<4xf32>, %acc_u0 = %zero : vector<4xf32>, %acc_g1 = %zero : vector<4xf32>, %acc_u1 = %zero : vector<4xf32>, %acc_g2 = %zero : vector<4xf32>, %acc_u2 = %zero : vector<4xf32>, %acc_g3 = %zero : vector<4xf32>, %acc_u3 = %zero : vector<4xf32>, %acc_g4 = %zero : vector<4xf32>, %acc_u4 = %zero : vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
+        %fallback_total_g0, %fallback_total_u0, %fallback_total_g1, %fallback_total_u1, %fallback_total_g2, %fallback_total_u2, %fallback_total_g3, %fallback_total_u3, %fallback_total_g4, %fallback_total_u4 = scf.for %step = [%c0 to %steps step %c1](%acc_g0 = %zero : vector<4xf32>, %acc_u0 = %zero : vector<4xf32>, %acc_g1 = %zero : vector<4xf32>, %acc_u1 = %zero : vector<4xf32>, %acc_g2 = %zero : vector<4xf32>, %acc_u2 = %zero : vector<4xf32>, %acc_g3 = %zero : vector<4xf32>, %acc_u3 = %zero : vector<4xf32>, %acc_g4 = %zero : vector<4xf32>, %acc_u4 = %zero : vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) unroll(%fallback_unroll) {
           %block = index.div %step, %c4 : index
           %quarter = index.rem %step, %c4 : index
           %quarter_group = index.mul %quarter, %c2 : index

@@ -72,6 +72,9 @@
       "path": "ops/normalization/rmsnorm_binary_f32.loom"
     },
     {
+      "path": "ops/normalization/rmsnorm_binary_f32_lowtoken_striped.loom"
+    },
+    {
       "path": "ops/normalization/rmsnorm_binary_strided_f32.loom"
     },
     {
@@ -1784,6 +1787,51 @@
         "mode": "direct",
         "primary_sources": [
           "ops/normalization/rmsnorm_binary_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/normalization/rmsnorm.loom",
+          "motifs/normalization/rmsnorm_binary.loom",
+          "motifs/elementwise/binary_apply.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/normalization/rmsnorm.loom",
+        "motifs/normalization/rmsnorm_binary.loom",
+        "motifs/elementwise/binary_apply.loom"
+      ]
+    },
+    {
+      "name": "ggml_rmsnorm_binary_f32_lowtoken_striped",
+      "family": "loom_libs",
+      "symbol": "ggml_rmsnorm_binary_f32_lowtoken_striped",
+      "source": "ops/normalization/rmsnorm_binary_f32_lowtoken_striped.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "rhs",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/normalization/rmsnorm_binary_f32_lowtoken_striped.loom"
         ],
         "library_sources": [
           "motifs/normalization/rmsnorm.loom",

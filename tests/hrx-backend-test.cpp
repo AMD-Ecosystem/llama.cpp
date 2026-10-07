@@ -1654,6 +1654,50 @@ static ggml_tensor * make_test_binary(ggml_context *        ctx,
     }
 }
 
+static const char * expected_plain_rmsnorm_binary_kernel(int64_t hidden_size, int64_t token_count) {
+    return token_count < 6 && hidden_size >= 2048 && hidden_size <= 5120 ?
+               "loom_libs:ggml_rmsnorm_binary_f32_lowtoken_striped" :
+               "loom_libs:ggml_rmsnorm_binary_f32";
+}
+
+static void run_rmsnorm_lowtoken_striped_dispatch_checks() {
+    const struct {
+        int64_t              hidden_size;
+        int64_t              token_count;
+        ggml::hrx::BinaryKind op;
+        const char *         expected_kernel;
+    } cases[] = {
+        { 1024, 1, ggml::hrx::BinaryKind::Mul, "loom_libs:ggml_rmsnorm_binary_f32"                  },
+        { 2048, 1, ggml::hrx::BinaryKind::Mul, "loom_libs:ggml_rmsnorm_binary_f32_lowtoken_striped" },
+        { 3072, 2, ggml::hrx::BinaryKind::Mul, "loom_libs:ggml_rmsnorm_binary_f32_lowtoken_striped" },
+        { 5120, 4, ggml::hrx::BinaryKind::Mul, "loom_libs:ggml_rmsnorm_binary_f32_lowtoken_striped" },
+        { 5120, 6, ggml::hrx::BinaryKind::Mul, "loom_libs:ggml_rmsnorm_binary_f32"                  },
+        { 2048, 1, ggml::hrx::BinaryKind::Add, "loom_libs:ggml_rmsnorm_binary_f32"                  },
+    };
+
+    for (const auto & test : cases) {
+        ggml_init_params params = {};
+        params.mem_size = static_cast<size_t>(test.hidden_size * test.token_count * sizeof(float) * 8 + 1024 * 1024);
+        params.no_alloc = true;
+        ggml_context * ctx = ggml_init(params);
+        REQUIRE(ctx != nullptr);
+        ggml_tensor * input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, test.hidden_size, test.token_count);
+        ggml_tensor * weight = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, test.hidden_size);
+        ggml_tensor * rms = ggml_rms_norm(ctx, input, 1.0e-6f);
+        ggml_tensor * output = make_test_binary(ctx, rms, weight, test.op);
+        REQUIRE(output != nullptr);
+
+        const ggml::hrx::Dispatch dispatch = schedule_single_dispatch_for_tensor(ctx, output);
+        REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) == test.expected_kernel);
+        REQUIRE(dispatch.bindings.size() == 3);
+        require_compile_parameter(dispatch, "ggml.rmsnorm_binary_f32.hidden_size",
+                                  std::to_string(test.hidden_size));
+        require_compile_parameter(dispatch, "ggml.rmsnorm_binary_f32.op",
+                                  std::to_string(ggml::hrx::binary_kind_config_value(test.op)));
+        ggml_free(ctx);
+    }
+}
+
 static void run_rmsnorm_two_binary_dispatch_checks() {
     const struct {
         ggml::hrx::BinaryKind normalized_op;
@@ -3706,7 +3750,8 @@ static void schedule_fused_matmul_postops_command(ggml_context *                
     REQUIRE(dispatch.kernel.compile_parameters.count("ggml.mul_mat_postops.rms_epsilon") == 0);
     if (expected_rmsnorm) {
         const ggml::hrx::Dispatch & rmsnorm_dispatch = scheduler.plan().dispatches[1];
-        REQUIRE(kernel_name_for_id(rmsnorm_dispatch.kernel.kernel_id) == "loom_libs:ggml_rmsnorm_binary_f32");
+        REQUIRE(kernel_name_for_id(rmsnorm_dispatch.kernel.kernel_id) ==
+                expected_plain_rmsnorm_binary_kernel(expected_output_size, expected_token_count));
     }
 
     const ggml::hrx::CommandProgram commands = ggml::hrx::build_command_program(
@@ -13710,6 +13755,7 @@ static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
     suite.host_case("scale_f32_dispatch", [] { run_scale_f32_dispatch_checks(); });
     suite.host_case("scale_add_f32_dispatch", [] { run_scale_add_f32_dispatch_checks(); });
     suite.host_case("rmsnorm_two_binary_dispatch", [] { run_rmsnorm_two_binary_dispatch_checks(); });
+    suite.host_case("rmsnorm_lowtoken_striped_dispatch", [] { run_rmsnorm_lowtoken_striped_dispatch_checks(); });
     suite.host_case("cont_f32_dispatch", [] { run_cont_f32_dispatch_checks(); });
     suite.host_case("binary_f32_broadcast_dispatch", [] { run_binary_f32_broadcast_dispatch_checks(); });
     suite.host_case("binary_q8_publication", [] { run_binary_q8_publication_checks(); });

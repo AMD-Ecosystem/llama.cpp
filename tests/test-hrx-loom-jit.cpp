@@ -1195,6 +1195,14 @@ static void run_prefill_fusion_compile_checks() {
                                                { "ggml.rmsnorm_binary_f32.op", "2" },
                                            }));
 
+    const auto & rmsnorm_lowtoken_striped = find_kernel("ggml_rmsnorm_binary_f32_lowtoken_striped");
+    require_compiled_kernel(compile_kernel(*jit, "rmsnorm-lowtoken-striped", rmsnorm_lowtoken_striped,
+                                           token_count_workload(1), {
+                                               { "ggml.rmsnorm_binary_f32.hidden_size", "5120" },
+                                               { "ggml.rmsnorm_binary_f32.rms_epsilon", "0.000001" },
+                                               { "ggml.rmsnorm_binary_f32.op", "2" },
+                                           }));
+
     const auto & rmsnorm_strided = find_kernel("ggml_rmsnorm_binary_strided_f32");
     require_compiled_kernel(compile_kernel(*jit, "prefill-rmsnorm-strided", rmsnorm_strided, token_count_workload(64),
                                            {

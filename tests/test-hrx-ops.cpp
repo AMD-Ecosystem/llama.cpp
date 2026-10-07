@@ -103,6 +103,12 @@ static std::vector<float> make_weight(int64_t hidden_size) {
     return data;
 }
 
+static const char * expected_plain_rmsnorm_binary_kernel(int64_t hidden_size, int64_t token_count) {
+    return token_count < 6 && hidden_size >= 2048 && hidden_size <= 5120 ?
+               "loom_libs:ggml_rmsnorm_binary_f32_lowtoken_striped" :
+               "loom_libs:ggml_rmsnorm_binary_f32";
+}
+
 static std::vector<float> make_router_input(int64_t hidden_size, int64_t token_count) {
     std::vector<float> data(hidden_size * token_count);
     for (int64_t i = 0; i < static_cast<int64_t>(data.size()); ++i) {
@@ -1637,7 +1643,8 @@ static void run_rmsnorm_mul_case(int64_t hidden_size, int64_t token_count) {
     REQUIRE(graph != nullptr);
     ggml_build_forward_expand(graph, output);
 
-    require_kernel_subsequence(scheduled_kernel_sequence(graph), { "loom_libs:ggml_rmsnorm_binary_f32" });
+    require_kernel_subsequence(scheduled_kernel_sequence(graph),
+                               { expected_plain_rmsnorm_binary_kernel(hidden_size, token_count) });
 
     ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
     REQUIRE(buffer != nullptr);
@@ -2217,7 +2224,10 @@ static void run_strided_cont_cpu_reference_case(int64_t token_count) {
     ggml_backend_free(hrx_backend);
 }
 
-static void run_rmsnorm_mul_cpu_reference_case(int64_t hidden_size, int64_t token_count, float epsilon) {
+static void run_rmsnorm_mul_cpu_reference_case(int64_t hidden_size,
+                                               int64_t token_count,
+                                               float   epsilon,
+                                               bool    adversarial = false) {
     ggml_backend_t cpu_backend = init_cpu_backend();
     ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
     REQUIRE(hrx_backend != nullptr);
@@ -2249,14 +2259,29 @@ static void run_rmsnorm_mul_cpu_reference_case(int64_t hidden_size, int64_t toke
     ggml_build_forward_expand(cpu_graph, cpu_output);
     ggml_build_forward_expand(hrx_graph, hrx_output);
 
-    require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph), { "loom_libs:ggml_rmsnorm_binary_f32" });
+    require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph),
+                               { expected_plain_rmsnorm_binary_kernel(hidden_size, token_count) });
 
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
     ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
     REQUIRE(cpu_buffer != nullptr);
     REQUIRE(hrx_buffer != nullptr);
 
-    const std::vector<float> input  = make_pattern_f32(hidden_size * token_count, 23, 0.02f);
+    std::vector<float> input = make_pattern_f32(hidden_size * token_count, 23, 0.02f);
+    if (adversarial) {
+        for (size_t i = 0; i < input.size(); ++i) {
+            switch (i % 8) {
+                case 0: input[i] = 0.0f; break;
+                case 1: input[i] = 1.0e-6f; break;
+                case 2: input[i] = -1.0e-6f; break;
+                case 3: input[i] = 8.0f; break;
+                case 4: input[i] = -8.0f; break;
+                case 5: input[i] = 0.125f; break;
+                case 6: input[i] = -0.25f; break;
+                default: input[i] = 1.5f; break;
+            }
+        }
+    }
     const std::vector<float> weight = make_weight(hidden_size);
     set_tensor_pair_bytes(cpu_backend, cpu_input, hrx_backend, hrx_input, input.data(), input.size() * sizeof(float));
     set_tensor_pair_bytes(cpu_backend, cpu_weight, hrx_backend, hrx_weight, weight.data(),
@@ -6389,6 +6414,21 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
     suite.device_case("rmsnorm_gate.silu.hidden128.tokens48.stride512",
                       [] { run_rmsnorm_gate_cpu_reference_case(128, 48, 512, GGML_UNARY_OP_SILU); });
     suite.device_case("rmsnorm_mul.hidden3840.tokens18", [] { run_rmsnorm_mul_cpu_reference_case(3840, 18, 1.0e-6f); });
+    for (const int64_t hidden_size : { 1024, 2048, 2560, 3072, 4096, 5120 }) {
+        suite.device_case("rmsnorm_mul.lowtoken.random.hidden" + std::to_string(hidden_size) + ".tokens1",
+                          [hidden_size] { run_rmsnorm_mul_cpu_reference_case(hidden_size, 1, 1.0e-6f); });
+        suite.device_case("rmsnorm_mul.lowtoken.adversarial.hidden" + std::to_string(hidden_size) + ".tokens1",
+                          [hidden_size] { run_rmsnorm_mul_cpu_reference_case(hidden_size, 1, 1.0e-5f, true); });
+    }
+    for (const int64_t hidden_size : { 2048, 5120 }) {
+        for (const int64_t token_count : { 2, 4 }) {
+            suite.device_case("rmsnorm_mul.lowtoken.random.hidden" + std::to_string(hidden_size) + ".tokens" +
+                                  std::to_string(token_count),
+                              [hidden_size, token_count] {
+                                  run_rmsnorm_mul_cpu_reference_case(hidden_size, token_count, 1.0e-6f);
+                              });
+        }
+    }
     suite.device_case("gemma_scaled_rmsnorm.cpu_reference", [] { run_gemma_scaled_rmsnorm_cpu_reference_case(); });
     suite.device_case("gemma_scaled_rmsnorm_mul.cpu_reference",
                       [] { run_gemma_scaled_rmsnorm_mul_cpu_reference_case(); });
