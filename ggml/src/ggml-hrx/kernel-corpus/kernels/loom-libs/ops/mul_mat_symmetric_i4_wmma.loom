@@ -1,6 +1,6 @@
 template.decl @ggml.quantize_symmetric_i4_k64.body(%plane_major: i1, %src: buffer, %qs: buffer, %ds: buffer, %sums: buffer)
 
-config.decl @ggml.quantize_symmetric_i4_k64.input_size : %value: index where [range(%value, 32, 65536), mul(%value, 32)]
+config.decl @ggml.quantize_symmetric_i4_k64.input_size : %value: index where [range(%value, 32, 65536), multiple_of(%value, 32)]
 
 config.decl @ggml.quantize_symmetric_i4_k64.token_count : %value: index where [range(%value, 1, 16384)]
 
@@ -69,7 +69,7 @@ kernel.def export("ggml_mul_mat_symmetric_i4_lowrow_adjacent_dual_direct_dot_c1"
   %k0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.input_size : index
   %rows0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.output_size : index
   %cols0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.token_count : index
-  %k = index.assume %k0 [range(%k0, 256, 32768), mul(%k0, 256)] : index
+  %k = index.assume %k0 [range(%k0, 256, 32768), multiple_of(%k0, 256)] : index
   %rows = index.assume %rows0 [range(%rows0, 1, 262144)] : index
   %cols = index.assume %cols0 [range(%cols0, 1, 1)] : index
   %base = index.constant 0 : offset
@@ -103,7 +103,7 @@ kernel.def export("ggml_mul_mat_symmetric_i4_lowrow_adjacent_dual_direct_dot_c1"
   %group_count = index.div %k, %c32 : index
   %row_group0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.row_group_size : index
   %rows_plus = index.add %rows, %c255 : index
-  %row_group = index.assume %row_group0 [range(%row_group0, 32, 262144), mul(%row_group0, 32)] : index
+  %row_group = index.assume %row_group0 [range(%row_group0, 32, 262144), multiple_of(%row_group0, 32)] : index
   %row_group_id = index.div %row, %row_group : index
   %row_lane = index.rem %row, %row_group : index
   %cohort_lane = index.div %row_lane, %c4 : index
@@ -191,7 +191,7 @@ kernel.def export("ggml_mul_mat_symmetric_i4_lowrow_adjacent_dual_direct_dot_c2"
   %k0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.input_size : index
   %rows0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.output_size : index
   %cols0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.token_count : index
-  %k = index.assume %k0 [range(%k0, 256, 32768), mul(%k0, 256)] : index
+  %k = index.assume %k0 [range(%k0, 256, 32768), multiple_of(%k0, 256)] : index
   %rows = index.assume %rows0 [range(%rows0, 1, 262144)] : index
   %cols = index.assume %cols0 [range(%cols0, 2, 2)] : index
   %base = index.constant 0 : offset
@@ -225,7 +225,7 @@ kernel.def export("ggml_mul_mat_symmetric_i4_lowrow_adjacent_dual_direct_dot_c2"
   %group_count = index.div %k, %c32 : index
   %row_group0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.row_group_size : index
   %rows_plus = index.add %rows, %c255 : index
-  %row_group = index.assume %row_group0 [range(%row_group0, 32, 262144), mul(%row_group0, 32)] : index
+  %row_group = index.assume %row_group0 [range(%row_group0, 32, 262144), multiple_of(%row_group0, 32)] : index
   %row_group_id = index.div %row, %row_group : index
   %row_lane = index.rem %row, %row_group : index
   %cohort_lane = index.div %row_lane, %c4 : index
@@ -320,7 +320,7 @@ kernel.def export("ggml_mul_mat_symmetric_i4_lowrow_adjacent_dual_direct_dot_c3"
   %k0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.input_size : index
   %rows0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.output_size : index
   %cols0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.token_count : index
-  %k = index.assume %k0 [range(%k0, 256, 32768), mul(%k0, 256)] : index
+  %k = index.assume %k0 [range(%k0, 256, 32768), multiple_of(%k0, 256)] : index
   %rows = index.assume %rows0 [range(%rows0, 1, 262144)] : index
   %cols = index.assume %cols0 [range(%cols0, 3, 3)] : index
   %base = index.constant 0 : offset
@@ -354,7 +354,7 @@ kernel.def export("ggml_mul_mat_symmetric_i4_lowrow_adjacent_dual_direct_dot_c3"
   %group_count = index.div %k, %c32 : index
   %row_group0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.row_group_size : index
   %rows_plus = index.add %rows, %c255 : index
-  %row_group = index.assume %row_group0 [range(%row_group0, 32, 262144), mul(%row_group0, 32)] : index
+  %row_group = index.assume %row_group0 [range(%row_group0, 32, 262144), multiple_of(%row_group0, 32)] : index
   %row_group_id = index.div %row, %row_group : index
   %row_lane = index.rem %row, %row_group : index
   %cohort_lane = index.div %row_lane, %c4 : index
@@ -456,7 +456,7 @@ kernel.def export("ggml_mul_mat_symmetric_i4_lowrow_adjacent_dual_direct_dot_c4"
   %k0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.input_size : index
   %rows0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.output_size : index
   %cols0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.token_count : index
-  %k = index.assume %k0 [range(%k0, 256, 32768), mul(%k0, 256)] : index
+  %k = index.assume %k0 [range(%k0, 256, 32768), multiple_of(%k0, 256)] : index
   %rows = index.assume %rows0 [range(%rows0, 1, 262144)] : index
   %cols = index.assume %cols0 [range(%cols0, 4, 4)] : index
   %base = index.constant 0 : offset
@@ -490,7 +490,7 @@ kernel.def export("ggml_mul_mat_symmetric_i4_lowrow_adjacent_dual_direct_dot_c4"
   %group_count = index.div %k, %c32 : index
   %row_group0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.row_group_size : index
   %rows_plus = index.add %rows, %c255 : index
-  %row_group = index.assume %row_group0 [range(%row_group0, 32, 262144), mul(%row_group0, 32)] : index
+  %row_group = index.assume %row_group0 [range(%row_group0, 32, 262144), multiple_of(%row_group0, 32)] : index
   %row_group_id = index.div %row, %row_group : index
   %row_lane = index.rem %row, %row_group : index
   %cohort_lane = index.div %row_lane, %c4 : index
@@ -599,7 +599,7 @@ kernel.def export("ggml_mul_mat_symmetric_i4_lowrow_adjacent_dual_direct_dot_c5"
   %k0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.input_size : index
   %rows0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.output_size : index
   %cols0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.token_count : index
-  %k = index.assume %k0 [range(%k0, 256, 32768), mul(%k0, 256)] : index
+  %k = index.assume %k0 [range(%k0, 256, 32768), multiple_of(%k0, 256)] : index
   %rows = index.assume %rows0 [range(%rows0, 1, 262144)] : index
   %cols = index.assume %cols0 [range(%cols0, 5, 5)] : index
   %base = index.constant 0 : offset
@@ -633,7 +633,7 @@ kernel.def export("ggml_mul_mat_symmetric_i4_lowrow_adjacent_dual_direct_dot_c5"
   %group_count = index.div %k, %c32 : index
   %row_group0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.row_group_size : index
   %rows_plus = index.add %rows, %c255 : index
-  %row_group = index.assume %row_group0 [range(%row_group0, 32, 262144), mul(%row_group0, 32)] : index
+  %row_group = index.assume %row_group0 [range(%row_group0, 32, 262144), multiple_of(%row_group0, 32)] : index
   %row_group_id = index.div %row, %row_group : index
   %row_lane = index.rem %row, %row_group : index
   %cohort_lane = index.div %row_lane, %c4 : index
@@ -903,7 +903,7 @@ template.def<@ggml.quantize_symmetric_i4_k64.body> device @ggml_quantize_symmetr
 
 template.decl @ggml.mul_mat.symmetric_i4.m128n128_wg256.body(%apply_swiglu: i1, %publish_f32: i1, %publish_f16: i1, %publish_u4: i1, %gate_na: buffer, %src0_na: buffer, %dst_na: buffer, %aq_na: buffer, %as_na: buffer, %asum_na: buffer, %qout_qs_na: buffer, %qout_ds_na: buffer, %qout_sums_na: buffer, %qout_scratch: buffer, %base: offset, %qact_scale_base: offset, %c0: index, %c1: index, %c2: index, %c4: index, %c8: index, %c16: index, %c32: index, %c17: index, %c34: index, %k_kc: index, %k_astride: index, %k_wstride: index, %k_m: index, %k_n: index, %k_blocks: index, %k_wave: index, %k_wm: index, %fzero: vector<8xf32>, %izero: vector<8xi32>, %k_b: index, %rows_b: index, %cols_b: index, %nchunks: index, %kblocks: index, %col_tile: index, %row_tile: index, %tid: index, %wave: index)
 
-config.decl @ggml.mul_mat.symmetric_i4.input_size : %value: index where [range(%value, 32, 32768), mul(%value, 32)]
+config.decl @ggml.mul_mat.symmetric_i4.input_size : %value: index where [range(%value, 32, 32768), multiple_of(%value, 32)]
 
 config.decl @ggml.mul_mat.symmetric_i4.output_size : %value: index where [range(%value, 1, 262144)]
 
@@ -1639,7 +1639,7 @@ template.def<@ggml.mul_mat.symmetric_i4.m128n128_wg256.body> device @ggml_mul_ma
         %f16_batch_base = index.mul %f16_batch, %f16_c512 : index
         %f16_thread_base = index.mul %tid, %f16_c4 : index
         %f16_linear0 = index.add %f16_batch_base, %f16_thread_base : index
-        %f16_linear = index.assume %f16_linear0 [range(%f16_linear0, 0, 4092), mul(%f16_linear0, 4)] : index
+        %f16_linear = index.assume %f16_linear0 [range(%f16_linear0, 0, 4092), multiple_of(%f16_linear0, 4)] : index
         %f16_token_local = index.div %f16_linear, %f16_c32 : index
         %f16_row_local = index.rem %f16_linear, %f16_c32 : index
         %f16_wide = vector.load %f16_tile[%f16_token_local, %f16_row_local] : view<128x32xf32> -> vector<4xf32>
@@ -1934,13 +1934,13 @@ template.decl @ggml.mul_mat.symmetric_i4.lowrow.m16n16.body(%scratch: buffer, %s
 
 // Capacity-neutral symmetric-I4 weights with shared K64 scales.
 // The dual-projection roots share one 128-token activation tile.
-config.decl @ggml.mul_mat.symmetric_i4.lowrow.input_size : %value: index where [range(%value, 64, 32768), mul(%value, 64)]
+config.decl @ggml.mul_mat.symmetric_i4.lowrow.input_size : %value: index where [range(%value, 64, 32768), multiple_of(%value, 64)]
 
 config.decl @ggml.mul_mat.symmetric_i4.lowrow.output_size : %value: index where [range(%value, 1, 262144)]
 
 config.decl @ggml.mul_mat.symmetric_i4.lowrow.token_count : %value: index where [range(%value, 1, 16)]
 
-config.decl @ggml.mul_mat.symmetric_i4.lowrow.row_group_size : %value: index where [range(%value, 32, 262144), mul(%value, 32)]
+config.decl @ggml.mul_mat.symmetric_i4.lowrow.row_group_size : %value: index where [range(%value, 32, 262144), multiple_of(%value, 32)]
 
 template.def<@ggml.mul_mat.symmetric_i4.lowrow.m16n16.body> device @ggml_mul_mat_symmetric_i4_lowrow_m16n16_body(%scratch: buffer, %src0_na: buffer, %dst_na: buffer, %aq_na: buffer, %as_na: buffer, %asum_na: buffer, %compact_q2: i1, %split_k: i1, %partial_na: buffer, %completion_counters_na: buffer, %base: offset, %qact_scale_base: offset, %c0: index, %c1: index, %c2: index, %c4: index, %c8: index, %c16: index, %c32: index, %c17: index, %c34: index, %k_kc: index, %k_astride: index, %k_wstride: index, %k_m: index, %k_n: index, %k_blocks: index, %k_wave: index, %k_wm: index, %fzero: vector<8xf32>, %izero: vector<8xi32>, %k_b: index, %rows_b: index, %cols_b: index, %nchunks: index, %kblocks: index, %col_tile: index, %row_tile: index, %tid: index, %wave: index, %partition: index, %chunk_begin: index, %chunk_end: index) {
   %src0_i8 = buffer.view %src0_na[%base] : buffer -> view<1073741824xi8>
@@ -2087,7 +2087,7 @@ template.def<@ggml.mul_mat.symmetric_i4.lowrow.m16n16.body> device @ggml_mul_mat
     %q4_row0 = index.add %n_out, %q4_weight_tid : index
     %q4_row = index.assume %q4_row0 [range(%q4_row0, 0, 262143)] : index
     %q4_row_group_size0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.row_group_size : index
-    %q4_row_group_size = index.assume %q4_row_group_size0 [range(%q4_row_group_size0, 32, 262144), mul(%q4_row_group_size0, 32)] : index
+    %q4_row_group_size = index.assume %q4_row_group_size0 [range(%q4_row_group_size0, 32, 262144), multiple_of(%q4_row_group_size0, 32)] : index
     %q4_scale_cohort_size = index.constant 4 : index
     %q4_field_bytes = index.constant 16 : index
     %q2_field_bytes = index.constant 8 : index
@@ -2592,7 +2592,7 @@ kernel.def export("ggml_mul_mat_symmetric_i4_lowrow_split_k2_direct_dot_c1") @gg
   %k0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.input_size : index
   %rows0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.output_size : index
   %cols0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.token_count : index
-  %k = index.assume %k0 [range(%k0, 256, 32768), mul(%k0, 256)] : index
+  %k = index.assume %k0 [range(%k0, 256, 32768), multiple_of(%k0, 256)] : index
   %rows = index.assume %rows0 [range(%rows0, 1, 262144)] : index
   %cols = index.assume %cols0 [range(%cols0, 1, 1)] : index
   %base = index.constant 0 : offset
@@ -2625,7 +2625,7 @@ kernel.def export("ggml_mul_mat_symmetric_i4_lowrow_split_k2_direct_dot_c1") @gg
   %group_end = index.add %group_begin, %groups_per_partition : index
   %row_group0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.row_group_size : index
   %rows_plus = index.add %rows, %c255 : index
-  %row_group = index.assume %row_group0 [range(%row_group0, 32, 262144), mul(%row_group0, 32)] : index
+  %row_group = index.assume %row_group0 [range(%row_group0, 32, 262144), multiple_of(%row_group0, 32)] : index
   %row_group_id = index.div %row, %row_group : index
   %row_lane = index.rem %row, %row_group : index
   %cohort_lane = index.div %row_lane, %c4 : index
@@ -2736,7 +2736,7 @@ kernel.def export("ggml_mul_mat_symmetric_i4_lowrow_split_k2_direct_dot_c2") @gg
   %k0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.input_size : index
   %rows0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.output_size : index
   %cols0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.token_count : index
-  %k = index.assume %k0 [range(%k0, 256, 32768), mul(%k0, 256)] : index
+  %k = index.assume %k0 [range(%k0, 256, 32768), multiple_of(%k0, 256)] : index
   %rows = index.assume %rows0 [range(%rows0, 1, 262144)] : index
   %cols = index.assume %cols0 [range(%cols0, 2, 2)] : index
   %base = index.constant 0 : offset
@@ -2769,7 +2769,7 @@ kernel.def export("ggml_mul_mat_symmetric_i4_lowrow_split_k2_direct_dot_c2") @gg
   %group_end = index.add %group_begin, %groups_per_partition : index
   %row_group0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.row_group_size : index
   %rows_plus = index.add %rows, %c255 : index
-  %row_group = index.assume %row_group0 [range(%row_group0, 32, 262144), mul(%row_group0, 32)] : index
+  %row_group = index.assume %row_group0 [range(%row_group0, 32, 262144), multiple_of(%row_group0, 32)] : index
   %row_group_id = index.div %row, %row_group : index
   %row_lane = index.rem %row, %row_group : index
   %cohort_lane = index.div %row_lane, %c4 : index
@@ -2887,7 +2887,7 @@ kernel.def export("ggml_mul_mat_symmetric_i4_lowrow_split_k2_direct_dot_c3") @gg
   %k0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.input_size : index
   %rows0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.output_size : index
   %cols0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.token_count : index
-  %k = index.assume %k0 [range(%k0, 256, 32768), mul(%k0, 256)] : index
+  %k = index.assume %k0 [range(%k0, 256, 32768), multiple_of(%k0, 256)] : index
   %rows = index.assume %rows0 [range(%rows0, 1, 262144)] : index
   %cols = index.assume %cols0 [range(%cols0, 3, 3)] : index
   %base = index.constant 0 : offset
@@ -2920,7 +2920,7 @@ kernel.def export("ggml_mul_mat_symmetric_i4_lowrow_split_k2_direct_dot_c3") @gg
   %group_end = index.add %group_begin, %groups_per_partition : index
   %row_group0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.row_group_size : index
   %rows_plus = index.add %rows, %c255 : index
-  %row_group = index.assume %row_group0 [range(%row_group0, 32, 262144), mul(%row_group0, 32)] : index
+  %row_group = index.assume %row_group0 [range(%row_group0, 32, 262144), multiple_of(%row_group0, 32)] : index
   %row_group_id = index.div %row, %row_group : index
   %row_lane = index.rem %row, %row_group : index
   %cohort_lane = index.div %row_lane, %c4 : index
@@ -3045,7 +3045,7 @@ kernel.def export("ggml_mul_mat_symmetric_i4_lowrow_split_k2_direct_dot_c4") @gg
   %k0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.input_size : index
   %rows0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.output_size : index
   %cols0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.token_count : index
-  %k = index.assume %k0 [range(%k0, 256, 32768), mul(%k0, 256)] : index
+  %k = index.assume %k0 [range(%k0, 256, 32768), multiple_of(%k0, 256)] : index
   %rows = index.assume %rows0 [range(%rows0, 1, 262144)] : index
   %cols = index.assume %cols0 [range(%cols0, 4, 4)] : index
   %base = index.constant 0 : offset
@@ -3078,7 +3078,7 @@ kernel.def export("ggml_mul_mat_symmetric_i4_lowrow_split_k2_direct_dot_c4") @gg
   %group_end = index.add %group_begin, %groups_per_partition : index
   %row_group0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.row_group_size : index
   %rows_plus = index.add %rows, %c255 : index
-  %row_group = index.assume %row_group0 [range(%row_group0, 32, 262144), mul(%row_group0, 32)] : index
+  %row_group = index.assume %row_group0 [range(%row_group0, 32, 262144), multiple_of(%row_group0, 32)] : index
   %row_group_id = index.div %row, %row_group : index
   %row_lane = index.rem %row, %row_group : index
   %cohort_lane = index.div %row_lane, %c4 : index
@@ -3210,7 +3210,7 @@ kernel.def export("ggml_mul_mat_symmetric_i4_lowrow_split_k2_direct_dot_c5") @gg
   %k0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.input_size : index
   %rows0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.output_size : index
   %cols0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.token_count : index
-  %k = index.assume %k0 [range(%k0, 256, 32768), mul(%k0, 256)] : index
+  %k = index.assume %k0 [range(%k0, 256, 32768), multiple_of(%k0, 256)] : index
   %rows = index.assume %rows0 [range(%rows0, 1, 262144)] : index
   %cols = index.assume %cols0 [range(%cols0, 5, 5)] : index
   %base = index.constant 0 : offset
@@ -3243,7 +3243,7 @@ kernel.def export("ggml_mul_mat_symmetric_i4_lowrow_split_k2_direct_dot_c5") @gg
   %group_end = index.add %group_begin, %groups_per_partition : index
   %row_group0 = config.get @ggml.mul_mat.symmetric_i4.lowrow.row_group_size : index
   %rows_plus = index.add %rows, %c255 : index
-  %row_group = index.assume %row_group0 [range(%row_group0, 32, 262144), mul(%row_group0, 32)] : index
+  %row_group = index.assume %row_group0 [range(%row_group0, 32, 262144), multiple_of(%row_group0, 32)] : index
   %row_group_id = index.div %row, %row_group : index
   %row_lane = index.rem %row, %row_group : index
   %cohort_lane = index.div %row_lane, %c4 : index

@@ -7,7 +7,7 @@ template.decl @ggml.normalization.publish_q8.binary_vector4(%publish_word: i1, %
 amdgpu.target<gfx11-generic> @ggml_get_rows_rmsnorm_gfx11_wave32 {subgroup_size = 32}
 
 config.decl @ggml.get_rows_f32.token_capacity : %value: index where [range(%value, 1, 2048)]
-config.decl @ggml.get_rows_f32.hidden_capacity : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+config.decl @ggml.get_rows_f32.hidden_capacity : %value: index where [range(%value, 128, 32768), multiple_of(%value, 128)]
 config.decl @ggml.get_rows_f32.weight_format : %value: index where [range(%value, 4, 81)]
 config.decl @ggml.get_rows_rmsnorm.rms_epsilon : f32
 
@@ -23,7 +23,7 @@ kernel.def target(@ggml_get_rows_rmsnorm_gfx11_wave32) export("ggml_get_rows_rms
   %epsilon = config.get @ggml.get_rows_rmsnorm.rms_epsilon : f32
   %bounded_token_count, %configured_token_capacity = index.assume %token_count, %token_capacity [range(%token_count, 1, 2048), eq(%token_count, %token_capacity)] : index, index
   %bounded_row_count = index.assume %row_count [range(%row_count, 1, 262208)] : index
-  %bounded_hidden_size, %configured_hidden_capacity = index.assume %hidden_size, %hidden_capacity [range(%hidden_size, 128, 32768), mul(%hidden_size, 128), eq(%hidden_size, %hidden_capacity)] : index, index
+  %bounded_hidden_size, %configured_hidden_capacity = index.assume %hidden_size, %hidden_capacity [range(%hidden_size, 128, 32768), multiple_of(%hidden_size, 128), eq(%hidden_size, %hidden_capacity)] : index, index
   %token0 = kernel.workgroup.id<x> : index
   %token = index.assume %token0 [lt(%token0, %bounded_token_count)] : index
   %workitem0 = kernel.workitem.id<x> : index

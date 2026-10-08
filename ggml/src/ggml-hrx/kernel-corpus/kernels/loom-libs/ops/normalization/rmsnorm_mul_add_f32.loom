@@ -8,7 +8,7 @@ template.decl @ggml.binary_f32.apply(%op: index, %lhs: f32, %rhs: f32) -> (f32)
 
 amdgpu.target<gfx11-generic> @ggml_rmsnorm_mul_add_gfx11_wave32 {subgroup_size = 32}
 
-config.decl @ggml.rmsnorm_mul_add_f32.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+config.decl @ggml.rmsnorm_mul_add_f32.hidden_size : %value: index where [range(%value, 128, 32768), multiple_of(%value, 128)]
 
 config.decl @ggml.rmsnorm_mul_add_f32.rms_epsilon : f32
 config.decl @ggml.rmsnorm_mul_add_f32.normalized_op : %value: index where [range(%value, 0, 3)]
@@ -21,7 +21,7 @@ kernel.def target(@ggml_rmsnorm_mul_add_gfx11_wave32) export("ggml_rmsnorm_mul_a
   kernel.launch.config workgroups(%token_count, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
 } launch(%token_count: index, %input: buffer, %weight: buffer, %residual: buffer, %output: buffer) where [range(%token_count, 1, 1048576)] {
   %hidden0 = config.get @ggml.rmsnorm_mul_add_f32.hidden_size : index
-  %hidden = index.assume %hidden0 [range(%hidden0, 128, 32768), mul(%hidden0, 128)] : index
+  %hidden = index.assume %hidden0 [range(%hidden0, 128, 32768), multiple_of(%hidden0, 128)] : index
   %epsilon = config.get @ggml.rmsnorm_mul_add_f32.rms_epsilon : f32
   %normalized_op = config.get @ggml.rmsnorm_mul_add_f32.normalized_op : index
   %output_op = config.get @ggml.rmsnorm_mul_add_f32.output_op : index

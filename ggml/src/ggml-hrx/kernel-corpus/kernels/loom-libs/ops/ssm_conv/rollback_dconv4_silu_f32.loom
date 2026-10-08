@@ -3,7 +3,7 @@
 
 template.decl @llm.ssm_conv.state_materialized_body(%d_inner0: index, %n_t0: index, %n_s0: index, %cache_count0: index, %state: buffer, %x: buffer, %filt: buffer, %dst: buffer, %cache0: buffer, %cache1: buffer, %cache2: buffer, %cache3: buffer, %cache4: buffer)
 
-config.decl @llm.ssm_conv.rollback.d_inner : %value: index where [range(%value, 32, 65536), mul(%value, 32)]
+config.decl @llm.ssm_conv.rollback.d_inner : %value: index where [range(%value, 32, 65536), multiple_of(%value, 32)]
 
 config.decl @llm.ssm_conv.rollback.n_t : %value: index where [range(%value, 1, 512)]
 

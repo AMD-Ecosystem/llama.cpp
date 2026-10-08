@@ -3,7 +3,7 @@
 
 template.decl @qwen3_moe.router.top8.row(%valid_token: i1, %token: index, %token_count: index, %route_id_stride: index, %logits: buffer, %route_ids: buffer, %route_weights: buffer)
 
-config.decl @qwen3_moe.router.expert_count : %value: index where [range(%value, 32, 512), mul(%value, 32)]
+config.decl @qwen3_moe.router.expert_count : %value: index where [range(%value, 32, 512), multiple_of(%value, 32)]
 
 config.decl @qwen3_moe.router.route_count : %value: index where [range(%value, 1, 32)]
 
@@ -16,7 +16,7 @@ template.def<@qwen3_moe.router.top8.row> device requires [#target.subgroup.size<
   %route_count0 = config.get @qwen3_moe.router.route_count : index
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
   %bounded_route_id_stride0 = index.assume %route_id_stride [range(%route_id_stride, 1, 512)] : index
-  %expert_count, %route_count, %bounded_route_id_stride = index.assume %expert_count0, %route_count0, %bounded_route_id_stride0 [range(%expert_count0, 32, 512), mul(%expert_count0, 32), range(%route_count0, 1, 32), le(%route_count0, %expert_count0), le(%route_count0, %bounded_route_id_stride0)] : index, index, index
+  %expert_count, %route_count, %bounded_route_id_stride = index.assume %expert_count0, %route_count0, %bounded_route_id_stride0 [range(%expert_count0, 32, 512), multiple_of(%expert_count0, 32), range(%route_count0, 1, 32), le(%route_count0, %expert_count0), le(%route_count0, %bounded_route_id_stride0)] : index, index, index
   %safe_token, %launch_token_count = index.assume %token, %bounded_token_count [lt(%token, %bounded_token_count)] : index, index
   %lane = kernel.subgroup.lane.id : index
   %c0 = index.constant 0 : index

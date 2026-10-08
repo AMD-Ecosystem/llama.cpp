@@ -34,15 +34,15 @@ kernel.def target(@llm_ssm_conv_lfm_dconv3_gfx11_wave32) export("llm_ssm_conv_lf
   %channel0 = index.add %channel_base, %lane : index
   %channel = index.assume %channel0 [range(%channel0, 0, 2047)] : index
   %token_elements0 = index.mul %n_t, %c2048 : index
-  %token_elements = index.assume %token_elements0 [range(%token_elements0, 2048, 131072), mul(%token_elements0, 2048)] : index
+  %token_elements = index.assume %token_elements0 [range(%token_elements0, 2048, 131072), multiple_of(%token_elements0, 2048)] : index
 
   %state_v = buffer.view %state[%base] : buffer -> view<4096xf32>
   %filter_v = buffer.view %filter[%base] : buffer -> view<6144xf32>
   %cache_v = buffer.view %cache[%base] : buffer -> view<4096xf32>
   %state_base0 = index.mul %channel, %c2 : index
-  %state_base = index.assume %state_base0 [range(%state_base0, 0, 4094), mul(%state_base0, 2)] : index
+  %state_base = index.assume %state_base0 [range(%state_base0, 0, 4094), multiple_of(%state_base0, 2)] : index
   %filter_base0 = index.mul %channel, %c3 : index
-  %filter_base = index.assume %filter_base0 [range(%filter_base0, 0, 6141), mul(%filter_base0, 3)] : index
+  %filter_base = index.assume %filter_base0 [range(%filter_base0, 0, 6141), multiple_of(%filter_base0, 3)] : index
   %filter_one0 = index.add %filter_base, %c1 : index
   %filter_one = index.assume %filter_one0 [range(%filter_one0, 1, 6142)] : index
   %filter_two0 = index.add %filter_base, %c2 : index

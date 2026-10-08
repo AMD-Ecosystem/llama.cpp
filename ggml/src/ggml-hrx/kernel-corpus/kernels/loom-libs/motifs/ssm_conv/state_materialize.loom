@@ -16,7 +16,7 @@ template.def<@llm.ssm_conv.state_materialized_body> device @llm_ssm_conv_state_m
   %c2 = index.constant 2 : index
   %c3 = index.constant 3 : index
   %c4 = index.constant 4 : index
-  %d_inner = index.assume %d_inner0 [range(%d_inner0, 32, 65536), mul(%d_inner0, 32)] : index
+  %d_inner = index.assume %d_inner0 [range(%d_inner0, 32, 65536), multiple_of(%d_inner0, 32)] : index
   %n_t = index.assume %n_t0 [range(%n_t0, 1, 512)] : index
   %n_s = index.assume %n_s0 [range(%n_s0, 1, 3)] : index
   %cache_count = index.assume %cache_count0 [range(%cache_count0, 1, 5)] : index
@@ -43,17 +43,17 @@ template.def<@llm.ssm_conv.state_materialized_body> device @llm_ssm_conv_state_m
   %dst_v = buffer.view %dst_g[%base] : buffer -> view<100663296xf32>
 
   %state_sequence_span0 = index.mul %d_inner, %c3 : index
-  %state_sequence_span = index.assume %state_sequence_span0 [range(%state_sequence_span0, 96, 196608), mul(%state_sequence_span0, 96)] : index
+  %state_sequence_span = index.assume %state_sequence_span0 [range(%state_sequence_span0, 96, 196608), multiple_of(%state_sequence_span0, 96)] : index
   %state_sequence_base0 = index.mul %sequence, %state_sequence_span : index
   %state_sequence_base = index.assume %state_sequence_base0 [range(%state_sequence_base0, 0, 393216)] : index
   %x_sequence_span0 = index.mul %n_t, %d_inner : index
-  %x_sequence_span = index.assume %x_sequence_span0 [range(%x_sequence_span0, 32, 33554432), mul(%x_sequence_span0, 32)] : index
+  %x_sequence_span = index.assume %x_sequence_span0 [range(%x_sequence_span0, 32, 33554432), multiple_of(%x_sequence_span0, 32)] : index
   %x_sequence_base0 = index.mul %sequence, %x_sequence_span : index
   %x_sequence_base = index.assume %x_sequence_base0 [range(%x_sequence_base0, 0, 67108864)] : index
 
   scf.if %in_bounds {
     %state_channel0 = index.mul %channel, %c3 : index
-    %state_channel = index.assume %state_channel0 [range(%state_channel0, 0, 196605), mul(%state_channel0, 3)] : index
+    %state_channel = index.assume %state_channel0 [range(%state_channel0, 0, 196605), multiple_of(%state_channel0, 3)] : index
     %state_row0 = index.add %state_sequence_base, %state_channel : index
     %state_row = index.assume %state_row0 [range(%state_row0, 0, 589821)] : index
     %state_row1_0 = index.add %state_row, %c1 : index
@@ -66,7 +66,7 @@ template.def<@llm.ssm_conv.state_materialized_body> device @llm_ssm_conv_state_m
     %old2 = view.load %state_v[%state_row2] : view<589824xf32> -> f32
 
     %filter_row0 = index.mul %channel, %c4 : index
-    %filter_row = index.assume %filter_row0 [range(%filter_row0, 0, 262140), mul(%filter_row0, 4)] : index
+    %filter_row = index.assume %filter_row0 [range(%filter_row0, 0, 262140), multiple_of(%filter_row0, 4)] : index
     %weights = vector.load %filt_v[%filter_row] : view<262144xf32> -> vector<4xf32>
     %w0 = vector.extract %weights[%c0] : vector<4xf32> -> f32
     %w1 = vector.extract %weights[%c1] : vector<4xf32> -> f32
@@ -88,7 +88,7 @@ template.def<@llm.ssm_conv.state_materialized_body> device @llm_ssm_conv_state_m
         %token = index.add %block, %phase : index
 
         %row_base0 = index.mul %token, %d_inner : index
-        %row_base = index.assume %row_base0 [range(%row_base0, 0, 33488896), mul(%row_base0, 32)] : index
+        %row_base = index.assume %row_base0 [range(%row_base0, 0, 33488896), multiple_of(%row_base0, 32)] : index
         %row_index0 = index.add %row_base, %channel : index
         %row_index = index.assume %row_index0 [range(%row_index0, 0, 33554431)] : index
         %index0 = index.add %x_sequence_base, %row_index : index
@@ -108,7 +108,7 @@ template.def<@llm.ssm_conv.state_materialized_body> device @llm_ssm_conv_state_m
     }
     %final0, %final1, %final2 = scf.for %token = [%full_token_count to %n_t step %c1](%prev0 = %trip0 : f32, %prev1 = %trip1 : f32, %prev2 = %trip2 : f32) -> (f32, f32, f32) unroll {
       %row_base0 = index.mul %token, %d_inner : index
-      %row_base = index.assume %row_base0 [range(%row_base0, 0, 33488896), mul(%row_base0, 32)] : index
+      %row_base = index.assume %row_base0 [range(%row_base0, 0, 33488896), multiple_of(%row_base0, 32)] : index
       %row_index0 = index.add %row_base, %channel : index
       %row_index = index.assume %row_index0 [range(%row_index0, 0, 33554431)] : index
       %index0 = index.add %x_sequence_base, %row_index : index

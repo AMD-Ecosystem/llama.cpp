@@ -3,7 +3,7 @@ template.decl @ggml.matmul_id.pair_f32_swiglu.body(%gate_weight_format: index, %
 
 amdgpu.target<gfx11-generic> @ggml_mul_mat_id_skinny_pair_input_f32_swiglu_publish_f32_gfx11_wave64 {subgroup_size = 64}
 
-config.decl @ggml.mul_mat_id_swiglu.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 32)]
+config.decl @ggml.mul_mat_id_swiglu.input_size : %value: index where [range(%value, 256, 32768), multiple_of(%value, 32)]
 
 config.decl @ggml.mul_mat_id_swiglu.output_size : %value: index where [range(%value, 1, 262144)]
 

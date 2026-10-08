@@ -5,13 +5,13 @@ template.decl @ggml.rmsnorm_gate_f32.publish_body(%publish_q8: i1, %token_count:
 
 amdgpu.target<gfx11-generic> @ggml_rmsnorm_binary_gfx11_wave32 {subgroup_size = 32}
 
-config.decl @ggml.rmsnorm_gate_f32.hidden_size : %value: index where [range(%value, 128, 1024), mul(%value, 128)]
+config.decl @ggml.rmsnorm_gate_f32.hidden_size : %value: index where [range(%value, 128, 1024), multiple_of(%value, 128)]
 
 config.decl @ggml.rmsnorm_gate_f32.rms_epsilon : f32
 
 config.decl @ggml.rmsnorm_gate_f32.gate_op : %value: index where [range(%value, 0, 23)]
 
-config.decl @ggml.rmsnorm_gate_f32.f16_output_row_width : %value: index where [range(%value, 0, 32768), mul(%value, 128)]
+config.decl @ggml.rmsnorm_gate_f32.f16_output_row_width : %value: index where [range(%value, 0, 32768), multiple_of(%value, 128)]
 
 config.decl @ggml.rmsnorm_gate_f32.publish_q8 : %value: index where [range(%value, 0, 1)]
 

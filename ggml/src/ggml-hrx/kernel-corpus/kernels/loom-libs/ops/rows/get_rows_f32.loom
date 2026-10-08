@@ -6,7 +6,7 @@ template.decl @ggml.get_rows_f32.body(%token_count: index, %row_count: index, %h
 amdgpu.target<gfx11-generic> @ggml_get_rows_f32_gfx11_wave64 {subgroup_size = 64}
 
 config.decl @ggml.get_rows_f32.token_capacity : %value: index where [range(%value, 1, 2048)]
-config.decl @ggml.get_rows_f32.hidden_capacity : %value: index where [range(%value, 4, 1073741824), mul(%value, 4)]
+config.decl @ggml.get_rows_f32.hidden_capacity : %value: index where [range(%value, 4, 1073741824), multiple_of(%value, 4)]
 config.decl @ggml.get_rows_f32.weight_format : %value: index where [range(%value, 4, 81)]
 
 kernel.def target(@ggml_get_rows_f32_gfx11_wave64) @ggml_get_rows_f32(%token_count: index, %row_count: index, %hidden_size: index) {

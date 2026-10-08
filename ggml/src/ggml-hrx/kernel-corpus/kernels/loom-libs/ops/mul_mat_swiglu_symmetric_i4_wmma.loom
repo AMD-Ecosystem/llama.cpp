@@ -7,7 +7,7 @@
 template.decl @ggml.quantize_symmetric_i4_k32.body(%plane_major: i1, %src: buffer, %qs: buffer, %ds: buffer, %sums: buffer)
 
 // Sixteen lanes quantize one K64 block; each packs four values while the two K32 halves share a scale and keep separate sums.
-config.decl @ggml.quantize_symmetric_i4_k32.input_size : %value: index where [range(%value, 32, 65536), mul(%value, 32)]
+config.decl @ggml.quantize_symmetric_i4_k32.input_size : %value: index where [range(%value, 32, 65536), multiple_of(%value, 32)]
 
 config.decl @ggml.quantize_symmetric_i4_k32.token_count : %value: index where [range(%value, 1, 16384)]
 
@@ -247,8 +247,8 @@ kernel.def export("ggml_mul_mat_swiglu_symmetric_i4_wmma_q8_plane") @ggml_mul_ma
   %rows = config.get @ggml.mul_mat_swiglu.symmetric_i4.output_size : index
   %cols = config.get @ggml.mul_mat_swiglu.symmetric_i4.token_count : index
   %k_b = index.assume %k [range(%k, 64, 32768)] : index
-  %rows_b = index.assume %rows [range(%rows, 64, 262144), mul(%rows, 64)] : index
-  %cols_b = index.assume %cols [range(%cols, 128, 32768), mul(%cols, 128)] : index
+  %rows_b = index.assume %rows [range(%rows, 64, 262144), multiple_of(%rows, 64)] : index
+  %cols_b = index.assume %cols [range(%cols, 128, 32768), multiple_of(%cols, 128)] : index
   %nchunks = index.div %k_b, %k_kc : index
   %kblocks = index.div %k_b, %c32 : index
   %col_tile0 = kernel.workgroup.id<x> : index
@@ -272,7 +272,7 @@ kernel.def export("ggml_mul_mat_swiglu_symmetric_i4_wmma_q8_plane") @ggml_mul_ma
   kernel.return
 }
 
-config.decl @ggml.mul_mat_swiglu.symmetric_i4.input_size : %value: index where [range(%value, 32, 32768), mul(%value, 32)]
+config.decl @ggml.mul_mat_swiglu.symmetric_i4.input_size : %value: index where [range(%value, 32, 32768), multiple_of(%value, 32)]
 
 config.decl @ggml.mul_mat_swiglu.symmetric_i4.output_size : %value: index where [range(%value, 1, 262144)]
 
@@ -1327,7 +1327,7 @@ template.def<@ggml.mul_mat_swiglu.symmetric_i4.m128n64_wg128.body> device @ggml_
       %f16_batch_base = index.mul %f16_batch, %f16_c512 : index
       %f16_thread_base = index.mul %tid, %f16_c4 : index
       %f16_linear0 = index.add %f16_batch_base, %f16_thread_base : index
-      %f16_linear = index.assume %f16_linear0 [range(%f16_linear0, 0, 4092), mul(%f16_linear0, 4)] : index
+      %f16_linear = index.assume %f16_linear0 [range(%f16_linear0, 0, 4092), multiple_of(%f16_linear0, 4)] : index
       %f16_token_local = index.div %f16_linear, %f16_c32 : index
       %f16_row_local = index.rem %f16_linear, %f16_c32 : index
       %f16_wide = vector.load %f16_tile[%f16_token_local, %f16_row_local] : view<128x32xf32> -> vector<4xf32>
@@ -1520,7 +1520,7 @@ template.def<@ggml.mul_mat_swiglu.symmetric_i4.m128n64_wg128.body> device @ggml_
       %q8_row_block = index.assume %q8_row_block0 [range(%q8_row_block0, 0, 1)] : index
       %q8_row_block_base = index.mul %q8_row_block, %q8_c32 : index
       %q8_lane_row0 = index.add %q8_row_block_base, %q8_lane_row_base : index
-      %q8_lane_row = index.assume %q8_lane_row0 [range(%q8_lane_row0, 0, 60), mul(%q8_lane_row0, 4)] : index
+      %q8_lane_row = index.assume %q8_lane_row0 [range(%q8_lane_row0, 0, 60), multiple_of(%q8_lane_row0, 4)] : index
       %q8_values = vector.load %q8_tile[%q8_token_local, %q8_lane_row] : view<64x64xf32> -> vector<4xf32>
       %q8_absolute_values = vector.absf %q8_values : vector<4xf32>
       %q8_lane_max = vector.reduce<maxnumf> %q8_absolute_values, %q8_zero_f32 : vector<4xf32>, f32
@@ -1588,7 +1588,7 @@ template.def<@ggml.mul_mat_swiglu.symmetric_i4.m128n64_wg128.body> device @ggml_
       %q8b_row_block = index.assume %q8b_row_block0 [range(%q8b_row_block0, 0, 1)] : index
       %q8b_row_block_base = index.mul %q8b_row_block, %q8_c32 : index
       %q8b_lane_row0 = index.add %q8b_row_block_base, %q8_lane_row_base : index
-      %q8b_lane_row = index.assume %q8b_lane_row0 [range(%q8b_lane_row0, 0, 60), mul(%q8b_lane_row0, 4)] : index
+      %q8b_lane_row = index.assume %q8b_lane_row0 [range(%q8b_lane_row0, 0, 60), multiple_of(%q8b_lane_row0, 4)] : index
       %q8b_values = vector.load %q8_tile[%q8b_token_local, %q8b_lane_row] : view<64x64xf32> -> vector<4xf32>
       %q8b_absolute_values = vector.absf %q8b_values : vector<4xf32>
       %q8b_lane_max = vector.reduce<maxnumf> %q8b_absolute_values, %q8_zero_f32 : vector<4xf32>, f32

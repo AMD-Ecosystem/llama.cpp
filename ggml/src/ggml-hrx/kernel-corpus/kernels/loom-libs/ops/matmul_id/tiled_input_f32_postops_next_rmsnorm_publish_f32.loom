@@ -14,9 +14,9 @@ template.decl @ggml.matmul_id.tiled_f32_f32.store_vector4(%arg0: index, %arg1: i
 
 amdgpu.target<gfx11-generic> @ggml_mul_mat_id_tiled_input_f32_postops_next_rmsnorm_publish_f32_gfx11_wave64 {subgroup_size = 64}
 
-config.decl @ggml.mul_mat_id_postops.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 256)]
+config.decl @ggml.mul_mat_id_postops.input_size : %value: index where [range(%value, 256, 32768), multiple_of(%value, 256)]
 
-config.decl @ggml.mul_mat_id_postops.output_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+config.decl @ggml.mul_mat_id_postops.output_size : %value: index where [range(%value, 128, 32768), multiple_of(%value, 128)]
 
 config.decl @ggml.mul_mat_id_postops.expert_count : %value: index where [range(%value, 1, 512)]
 

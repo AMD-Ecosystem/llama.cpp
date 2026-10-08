@@ -403,7 +403,7 @@ func.def inline @ggml_prefill_conv4_strip(%deferred_state: i1, %width: index, %c
   %local_column = index.mul %column_lane, %two : index
   %channel0 = index.add %channel_base, %local_column : index
   %channel_last = index.sub %width, %two : index
-  %channel = index.assume %channel0 [range(%channel0, 0, %channel_last), mul(%channel0, 2)] : index
+  %channel = index.assume %channel0 [range(%channel0, 0, %channel_last), multiple_of(%channel0, 2)] : index
   %channel1 = index.add %channel, %one : index
   %thread_row = index.div %tid, %eight : index
   %tile = buffer.view %stage[%base] : buffer -> view<512x16xf32>
@@ -540,7 +540,7 @@ func.def inline @ggml_mul_mat_quantized_f16_prefill_wave32_body(%weight_format: 
   %short_weight_packets = scalar.ori %default_short_packets, %pipeline_weights : i1
   %true = scalar.constant true : i1
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
-  %bounded_input_size = index.assume %input_size0 [range(%input_size0, 256, 32768), mul(%input_size0, 256)] : index
+  %bounded_input_size = index.assume %input_size0 [range(%input_size0, 256, 32768), multiple_of(%input_size0, 256)] : index
   %bounded_output_size = index.assume %output_size0 [range(%output_size0, 1, 262144)] : index
   %workitem = kernel.workitem.id<x> : index
   %subgroup0 = kernel.subgroup.id : index

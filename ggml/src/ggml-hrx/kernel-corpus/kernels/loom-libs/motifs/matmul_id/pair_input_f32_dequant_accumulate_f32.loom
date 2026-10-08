@@ -37,7 +37,7 @@ func.def inline @ggml_moe_unpack_expert_partition_descriptor(%descriptor: i32) -
 
 template.def<@ggml.matmul_id.pair_f32_swiglu.body> device @ggml_mul_mat_id_pair_f32_swiglu_f32_f32_wmma_body(%gate_weight_format: index, %up_weight_format: index, %token_count: index, %input_size: index, %output_size: index, %route_count: index, %input_route_count: index, %expert_count: index, %channel_tile: index, %partition_ordinal: index, %input: buffer, %expert_table: buffer, %partition_table: buffer, %gate_weight: buffer, %up_weight: buffer, %output: buffer) {
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
-  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 32)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), multiple_of(%input_size, 32)] : index
   %bounded_route_count = index.assume %route_count [range(%route_count, 1, 32)] : index
   %bounded_input_route_count = index.assume %input_route_count [range(%input_route_count, 1, 32), le(%input_route_count, %bounded_route_count)] : index
   %bounded_expert_count = index.assume %expert_count [range(%expert_count, 1, 512)] : index
