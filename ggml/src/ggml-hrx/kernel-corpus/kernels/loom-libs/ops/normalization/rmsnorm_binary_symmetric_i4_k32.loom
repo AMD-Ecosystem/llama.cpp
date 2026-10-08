@@ -5,7 +5,7 @@ template.decl @ggml.rmsnorm_binary_symmetric_i4_k32.body(%token_count: index, %i
 
 amdgpu.target<gfx11-generic> @ggml_rmsnorm_binary_gfx11_wave32 {subgroup_size = 32}
 
-config.decl @ggml.rmsnorm_binary_symmetric_i4.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+config.decl @ggml.rmsnorm_binary_symmetric_i4.hidden_size : %value: index where [range(%value, 128, 32768), multiple_of(%value, 128)]
 config.decl @ggml.rmsnorm_binary_symmetric_i4.rms_epsilon : f32
 
 kernel.def target(@ggml_rmsnorm_binary_gfx11_wave32) export("ggml_rmsnorm_binary_symmetric_i4_k32") @ggml_rmsnorm_binary_symmetric_i4_k32(%token_count: index) {

@@ -6,7 +6,7 @@ func.decl @ggml_matmul_id_q4k_q8_1_x4_cohort_row_lane(%input_size: index, %weigh
 template.def<@ggml.matmul_id.vector_weighted.q4k_q8.wave32_body> device @ggml_matmul_id_vector_weighted_q4k_q8_wave32_body(%publish_output: i1, %token_count: index, %token: index, %input_size: index, %route_count: index, %route_id_stride: index, %expert_count: index, %output_size: index, %q8_input: buffer, %route_ids: buffer, %route_weights: buffer, %weight: buffer, %output: buffer) {
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
   %bounded_token, %body_token_count = index.assume %token, %bounded_token_count [lt(%token, %bounded_token_count)] : index, index
-  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), multiple_of(%input_size, 256)] : index
   %bounded_route_count = index.assume %route_count [range(%route_count, 1, 8)] : index
   %bounded_route_id_stride = index.assume %route_id_stride [range(%route_id_stride, 1, 512)] : index
   %bounded_expert_count = index.assume %expert_count [range(%expert_count, 1, 512)] : index
@@ -119,7 +119,7 @@ func.decl @ggml_q6k_f32_block_row(%input_size: index, %row: index, %block: index
 template.def<@ggml.matmul_id.vector_weighted.q6k_f32.wave64_pair_body> device @ggml_matmul_id_vector_weighted_q6k_f32_wave64_pair_body(%token_count: index, %token: index, %input_size: index, %route_count: index, %route_id_stride: index, %expert_count: index, %output_size: index, %input: buffer, %route_ids: buffer, %route_weights: buffer, %weight: buffer, %output: buffer) {
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1)] : index
   %bounded_token, %body_token_count = index.assume %token, %bounded_token_count [lt(%token, %bounded_token_count)] : index, index
-  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), multiple_of(%input_size, 256)] : index
   %bounded_route_count = index.assume %route_count [range(%route_count, 1, 8)] : index
   %bounded_route_id_stride = index.assume %route_id_stride [range(%route_id_stride, 1, 512)] : index
   %bounded_expert_count = index.assume %expert_count [range(%expert_count, 1, 512)] : index
@@ -218,7 +218,7 @@ template.def<@ggml.matmul_id.vector_weighted.next_q8_completion> device @ggml_ma
   %output_channels_per_workgroup = index.assume %output_channels_per_workgroup0 [range(%output_channels_per_workgroup0, 1, 8)] : index
   %reduction_subgroup_count = index.assume %reduction_subgroup_count0 [range(%reduction_subgroup_count0, 1, 8)] : index
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1)] : index
-  %bounded_output_size = index.assume %output_size [range(%output_size, 128, 32768), mul(%output_size, 128)] : index
+  %bounded_output_size = index.assume %output_size [range(%output_size, 128, 32768), multiple_of(%output_size, 128)] : index
   %token0 = kernel.workgroup.id<y> : index
   %token = index.assume %token0 [lt(%token0, %bounded_token_count)] : index
   %c0 = index.constant 0 : index

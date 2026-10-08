@@ -7,7 +7,7 @@ template.decl @ggml.routing.weighted_reduce_next_rmsnorm_f32_publish_q8(%token_c
 
 template.decl @ggml.quantize_q8_1_x4.publish_vector4_strict(%publish_word: i1, %token_output_byte_base: offset, %channel: index, %values: vector<4xf32>, %scratch_values: view<256xf32>, %scratch_d: view<32xf32>, %output: buffer)
 
-config.decl @qwen3_moe.model.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+config.decl @qwen3_moe.model.hidden_size : %value: index where [range(%value, 128, 32768), multiple_of(%value, 128)]
 
 config.decl @qwen3_moe.model.rms_epsilon : f32
 

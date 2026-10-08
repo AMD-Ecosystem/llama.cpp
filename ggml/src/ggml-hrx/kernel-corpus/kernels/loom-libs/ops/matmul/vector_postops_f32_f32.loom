@@ -15,7 +15,7 @@ template.decl @ggml.matmul.vector_activation.publish_pair2(%publish_pair: i1, %t
 
 amdgpu.target<gfx11-generic> @ggml_matmul_vector_postops_gfx11_wave64 {subgroup_size = 64}
 
-config.decl @ggml.matmul.vector_postops.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 32)]
+config.decl @ggml.matmul.vector_postops.input_size : %value: index where [range(%value, 256, 32768), multiple_of(%value, 32)]
 
 config.decl @ggml.matmul.vector_postops.output_size : %value: index where [range(%value, 1, 524288)]
 

@@ -24,7 +24,7 @@ kernel.def target(@qwen_token_embedding_gfx11_wave64) export("qwen_token_embeddi
 } launch(%token_count: index, %vocabulary_count: index, %hidden_size: index, %token_ids: buffer, %weight: buffer, %output: buffer) {
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
   %bounded_vocabulary_count = index.assume %vocabulary_count [range(%vocabulary_count, 1, 262144)] : index
-  %bounded_hidden_size = index.assume %hidden_size [range(%hidden_size, 2048, 3072), mul(%hidden_size, 1024)] : index
+  %bounded_hidden_size = index.assume %hidden_size [range(%hidden_size, 2048, 3072), multiple_of(%hidden_size, 1024)] : index
   %workgroup = kernel.workgroup.id<x> : index
   %token0 = kernel.workgroup.id<y> : index
   %workitem = kernel.workitem.id<x> : index

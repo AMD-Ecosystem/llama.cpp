@@ -5,7 +5,7 @@ template.decl @ggml.rmsnorm_binary_strided_f32.body(%token_count: index, %input:
 
 amdgpu.target<gfx11-generic> @ggml_rmsnorm_binary_gfx11_wave32 {subgroup_size = 32}
 
-config.decl @ggml.rmsnorm_binary_f32.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+config.decl @ggml.rmsnorm_binary_f32.hidden_size : %value: index where [range(%value, 128, 32768), multiple_of(%value, 128)]
 
 config.decl @ggml.rmsnorm_binary_f32.input_stride : %value: index where [range(%value, 128, 1048576)]
 

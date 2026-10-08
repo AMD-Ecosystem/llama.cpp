@@ -6,7 +6,7 @@ template.decl @ggml.rope_token_scale_f32.body(%token_count: index, %positions: b
 
 amdgpu.target<gfx11-generic> @ggml_rope_scale_f32_gfx11_wave32 {subgroup_size = 32}
 
-config.decl @ggml.rope_f32.head_size : %value: index where [range(%value, 4, 1024), mul(%value, 4)]
+config.decl @ggml.rope_f32.head_size : %value: index where [range(%value, 4, 1024), multiple_of(%value, 4)]
 config.decl @ggml.rope_f32.head_count : %value: index where [range(%value, 1, 64)]
 config.decl @ggml.rope_f32.token_capacity : %value: index where [range(%value, 1, 2048)]
 

@@ -4,7 +4,7 @@ template.decl @ggml.mul_mat_id_swiglu_f16_f16.body(%arg0: index, %arg1: index, %
 
 amdgpu.target<gfx11-generic> @ggml_mul_mat_id_swiglu_f16_f16_gfx11_wave32 {subgroup_size = 32}
 
-config.decl @ggml.mul_mat_id_swiglu_f16_f16.input_size : %value: index where [range(%value, 512, 32768), mul(%value, 512)]
+config.decl @ggml.mul_mat_id_swiglu_f16_f16.input_size : %value: index where [range(%value, 512, 32768), multiple_of(%value, 512)]
 
 config.decl @ggml.mul_mat_id_swiglu_f16_f16.route_count : %value: index where [range(%value, 1, 8)]
 

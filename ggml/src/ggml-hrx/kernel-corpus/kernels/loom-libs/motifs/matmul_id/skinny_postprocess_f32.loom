@@ -54,7 +54,7 @@ template.def<@ggml.matmul_id.skinny_f32_f32.store_vector4> device @ggml_mul_mat_
 template.def<@ggml.matmul_id.skinny_f32_f32.finish_routed_rmsnorm_weight> device @ggml_mul_mat_id_skinny_f32_f32_finish_routed_rmsnorm_weight(%token_count0: index, %route_count0: index, %output_size0: index, %expert_count0: index, %output_tile_count0: index, %maximum_partition_count0: index, %epsilon: f32, %descriptor_ordinal0: index, %expert0: index, %route_tile_base0: index, %partition_row_count0: index, %expert_table: buffer, %source: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer) {
   %token_count = index.assume %token_count0 [range(%token_count0, 1, 2048)] : index
   %route_count = index.assume %route_count0 [range(%route_count0, 1, 32)] : index
-  %output_size = index.assume %output_size0 [range(%output_size0, 128, 32768), mul(%output_size0, 128)] : index
+  %output_size = index.assume %output_size0 [range(%output_size0, 128, 32768), multiple_of(%output_size0, 128)] : index
   %expert_count = index.assume %expert_count0 [range(%expert_count0, 1, 512)] : index
   %output_tile_count = index.assume %output_tile_count0 [range(%output_tile_count0, 1, 512)] : index
   %maximum_partition_count = index.assume %maximum_partition_count0 [range(%maximum_partition_count0, 1, 2560)] : index

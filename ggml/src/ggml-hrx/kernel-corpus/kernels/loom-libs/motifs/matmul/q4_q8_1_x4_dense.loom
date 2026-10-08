@@ -3,7 +3,7 @@
 
 template.decl @qwen3_moe.dense.q4k_q8_1_x4.body(%publish_output: i1, %token_count: index, %token0: index, %q8_input: buffer, %weight: buffer, %output: buffer)
 
-config.decl @qwen3_moe.dense_quantized.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 256)]
+config.decl @qwen3_moe.dense_quantized.input_size : %value: index where [range(%value, 256, 32768), multiple_of(%value, 256)]
 
 config.decl @qwen3_moe.dense_quantized.output_size : %value: index where [range(%value, 1, 262144)]
 
@@ -16,7 +16,7 @@ template.def<@qwen3_moe.dense.q4k_q8_1_x4.body> device @qwen3_moe_dense_linear_q
   %output_size = config.get @qwen3_moe.dense_quantized.output_size : index
   %output_accumulation = config.get @qwen3_moe.dense_quantized.output_accumulation : index
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
-  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), multiple_of(%input_size, 256)] : index
   %bounded_output_size = index.assume %output_size [range(%output_size, 1, 262144)] : index
   %channel_tile = kernel.workgroup.id<x> : index
   %subgroup0 = kernel.subgroup.id : index

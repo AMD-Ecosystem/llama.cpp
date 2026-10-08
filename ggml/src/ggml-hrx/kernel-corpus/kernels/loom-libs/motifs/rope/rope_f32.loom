@@ -53,9 +53,9 @@ template.decl @ggml.rows.cache_publish.f32_vector2(%arg0: index, %arg1: i1, %arg
 
 template.decl @ggml.rows.cache_publish.f32_vector4(%arg0: index, %arg1: i1, %arg2: index, %arg3: index, %arg4: index, %arg5: index, %arg6: vector<4xf32>, %arg7: buffer)
 
-config.decl @ggml.rope_f32.head_size : %value: index where [range(%value, 4, 1024), mul(%value, 4)]
+config.decl @ggml.rope_f32.head_size : %value: index where [range(%value, 4, 1024), multiple_of(%value, 4)]
 
-config.decl @ggml.rope_f32.n_dims : %value: index where [range(%value, 4, 1024), mul(%value, 4)]
+config.decl @ggml.rope_f32.n_dims : %value: index where [range(%value, 4, 1024), multiple_of(%value, 4)]
 
 config.decl @ggml.rope_f32.head_count : %value: index where [range(%value, 1, 64)]
 
@@ -73,9 +73,9 @@ config.decl @ggml.rope_f32.mode : %value: index where [range(%value, 0, 2)]
 
 config.decl @ggml.rope_scale_f32.scale : f32
 
-config.decl @ggml.rope_set_rows_f32.head_size : %value: index where [range(%value, 4, 1024), mul(%value, 4)]
+config.decl @ggml.rope_set_rows_f32.head_size : %value: index where [range(%value, 4, 1024), multiple_of(%value, 4)]
 
-config.decl @ggml.rope_set_rows_f32.n_dims : %value: index where [range(%value, 4, 1024), mul(%value, 4)]
+config.decl @ggml.rope_set_rows_f32.n_dims : %value: index where [range(%value, 4, 1024), multiple_of(%value, 4)]
 
 config.decl @ggml.rope_set_rows_f32.head_count : %value: index where [range(%value, 1, 64)]
 
@@ -162,7 +162,7 @@ template.def<@ggml.rope_f32.scaled_body> device @ggml_rope_f32_scaled_body(%toke
   %mode = config.get @ggml.rope_f32.mode : index
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %token_capacity)] : index
   %bounded_input_span = index.assume %input_span [range(%input_span, 1, 1073741824)] : index
-  %head_count, %head_size, %n_dims = index.assume %head_count0, %head_size0, %n_dims0 [range(%head_count0, 1, 64), range(%head_size0, 4, 1024), range(%n_dims0, 4, 1024), mul(%head_size0, 4), mul(%n_dims0, 4), le(%n_dims0, %head_size0)] : index, index, index
+  %head_count, %head_size, %n_dims = index.assume %head_count0, %head_size0, %n_dims0 [range(%head_count0, 1, 64), range(%head_size0, 4, 1024), range(%n_dims0, 4, 1024), multiple_of(%head_size0, 4), multiple_of(%n_dims0, 4), le(%n_dims0, %head_size0)] : index, index, index
   %input_stride1, %input_stride2 = index.assume %input_stride1_0, %input_stride2_0 [range(%input_stride1_0, 4, 1073741824), range(%input_stride2_0, 4, 1073741824)] : index, index
   %head = kernel.workgroup.id<x> : index
   %token0 = kernel.workgroup.id<y> : index
@@ -275,7 +275,7 @@ template.def<@ggml.rope_set_rows_f32.body> device @ggml_rope_set_rows_f32_body(%
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %token_capacity)] : index
   %bounded_cache_row_count = index.assume %cache_row_count [range(%cache_row_count, 1, 1048576)] : index
   %bounded_input_span = index.assume %input_span0 [range(%input_span0, 1, 1073741824)] : index
-  %head_count, %head_size, %n_dims = index.assume %head_count0, %head_size0, %n_dims0 [range(%head_count0, 1, 64), range(%head_size0, 4, 1024), range(%n_dims0, 4, 1024), mul(%head_size0, 4), mul(%n_dims0, 4), le(%n_dims0, %head_size0)] : index, index, index
+  %head_count, %head_size, %n_dims = index.assume %head_count0, %head_size0, %n_dims0 [range(%head_count0, 1, 64), range(%head_size0, 4, 1024), range(%n_dims0, 4, 1024), multiple_of(%head_size0, 4), multiple_of(%n_dims0, 4), le(%n_dims0, %head_size0)] : index, index, index
   %input_stride1, %input_stride2 = index.assume %input_stride1_0, %input_stride2_0 [range(%input_stride1_0, 4, 1073741824), range(%input_stride2_0, 4, 1073741824)] : index, index
   %head = kernel.workgroup.id<x> : index
   %token0 = kernel.workgroup.id<y> : index

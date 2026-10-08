@@ -26,7 +26,7 @@ template.def<@llm.attention_qkv.normal_rope_vector4> device @llm_attention_qkv_n
 
 template.def<@llm.attention_qkv.rope_vector4> device @llm_attention_qkv_rope_vector4(%token: index, %channel: index, %token_count0: index, %head_size0: index, %head_count0: index, %positions: buffer, %theta: buffer, %freq_factors: buffer, %values: vector<4xf32>) -> (vector<4xf32>) {
   %token_count = index.assume %token_count0 [range(%token_count0, 1, 2048)] : index
-  %head_size = index.assume %head_size0 [range(%head_size0, 4, 1024), mul(%head_size0, 4)] : index
+  %head_size = index.assume %head_size0 [range(%head_size0, 4, 1024), multiple_of(%head_size0, 4)] : index
   %head_count = index.assume %head_count0 [range(%head_count0, 1, 64)] : index
   %c2 = index.constant 2 : index
   %c4 = index.constant 4 : index
@@ -49,7 +49,7 @@ template.def<@llm.attention_qkv.rope_vector4> device @llm_attention_qkv_rope_vec
 
 template.def<@llm.attention_qkv.store_query_vector4> device @llm_attention_qkv_store_query_vector4(%token0: index, %channel: index, %token_count0: index, %head_size0: index, %head_count0: index, %values: vector<4xf32>, %output: buffer) {
   %token_count = index.assume %token_count0 [range(%token_count0, 1, 2048)] : index
-  %head_size = index.assume %head_size0 [range(%head_size0, 4, 1024), mul(%head_size0, 4)] : index
+  %head_size = index.assume %head_size0 [range(%head_size0, 4, 1024), multiple_of(%head_size0, 4)] : index
   %head_count = index.assume %head_count0 [range(%head_count0, 1, 64)] : index
   %c0_offset = index.constant 0 : offset
   %head = index.div %channel, %head_size : index
@@ -64,7 +64,7 @@ template.def<@llm.attention_qkv.store_query_vector4> device @llm_attention_qkv_s
 template.def<@llm.attention_qkv.store_cache_vector4> device @llm_attention_qkv_store_cache_vector4(%output_format: index, %token0: index, %channel: index, %token_count0: index, %cache_row_count0: index, %output_size0: index, %indices: buffer, %values: vector<4xf32>, %cache: buffer) {
   %token_count = index.assume %token_count0 [range(%token_count0, 1, 2048)] : index
   %cache_row_count = index.assume %cache_row_count0 [range(%cache_row_count0, 1, 1048576)] : index
-  %output_size = index.assume %output_size0 [range(%output_size0, 4, 32768), mul(%output_size0, 4)] : index
+  %output_size = index.assume %output_size0 [range(%output_size0, 4, 32768), multiple_of(%output_size0, 4)] : index
   %c0 = index.constant 0 : index
   %c16 = index.constant 16 : index
   %c32 = index.constant 32 : index

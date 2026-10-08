@@ -5,15 +5,15 @@ template.decl @llm.ssm_conv.prefill_window(%packet_width: index, %state: buffer,
 
 config.decl @llm.ssm_conv.prefill.d_conv : %value: index where [range(%value, 4, 4)]
 
-config.decl @llm.ssm_conv.prefill.d_inner : %value: index where [range(%value, 8192, 10240), mul(%value, 32)]
+config.decl @llm.ssm_conv.prefill.d_inner : %value: index where [range(%value, 8192, 10240), multiple_of(%value, 32)]
 
 config.decl @llm.ssm_conv.prefill.n_t : %value: index where [range(%value, 512, 512)]
 
 config.decl @llm.ssm_conv.prefill.n_s : %value: index where [range(%value, 1, 1)]
 
-config.decl @llm.ssm_conv.prefill.state_row_stride : %value: index where [range(%value, 8192, 10240), mul(%value, 32)]
+config.decl @llm.ssm_conv.prefill.state_row_stride : %value: index where [range(%value, 8192, 10240), multiple_of(%value, 32)]
 
-config.decl @llm.ssm_conv.prefill.x_row_stride : %value: index where [range(%value, 8192, 10240), mul(%value, 32)]
+config.decl @llm.ssm_conv.prefill.x_row_stride : %value: index where [range(%value, 8192, 10240), multiple_of(%value, 32)]
 
 func.def inline @llm_ssm_conv_prefill_channel_packet(%channels: index) -> (index) {
   %zero = index.constant 0 : index

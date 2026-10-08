@@ -2,7 +2,7 @@
 // Each wave64 computes the same row of two distinct weights. The original
 // public decoder retains F16 weight rounding, four strided K cohorts, dot4
 // contraction and reduction order. Both ordinary F32 outputs are published.
-config.decl @ggml.mul_mat_dual_q4_f32_c1.input_size : %value: index where [range(%value, 4096, 32768), mul(%value, 1024)]
+config.decl @ggml.mul_mat_dual_q4_f32_c1.input_size : %value: index where [range(%value, 4096, 32768), multiple_of(%value, 1024)]
 config.decl @ggml.mul_mat_dual_q4_f32_c1.output_size : %value: index where [range(%value, 24, 63)]
 
 amdgpu.target<gfx11-generic> @ggml_mul_mat_dual_q4_f32_decode_gfx11_wave64 {subgroup_size = 64}
@@ -17,7 +17,7 @@ func.decl @ggml_mul_mat_decode_f32_block_row(%iq4nl_table: vector<16xi8>, %iq3s_
 
 func.def inline @ggml_mul_mat_dual_q4_f32_decode_body(%weight_format: index, %publish_output: i1, %token_count: index, %token0: index, %pair: index, %input_size: index, %output_size: index, %input: buffer, %weight: buffer, %output: buffer, %aux0: buffer, %aux1: buffer, %aux2: buffer, %aux3: buffer) {
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
-  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 32)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), multiple_of(%input_size, 32)] : index
   %bounded_output_size = index.assume %output_size [range(%output_size, 1, 1048576)] : index
   %lane0 = kernel.workitem.id<x> : index
   %c0 = index.constant 0 : index

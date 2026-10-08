@@ -7,7 +7,7 @@ amdgpu.target<gfx11-generic> @qwen3_moe_dense_gfx11_wave32 {subgroup_size = 32}
 
 target.decl @qwen3_moe_attention_prepare_gfx11_wave32
 
-config.decl @qwen3_moe.dense_quantized.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 256)]
+config.decl @qwen3_moe.dense_quantized.input_size : %value: index where [range(%value, 256, 32768), multiple_of(%value, 256)]
 
 config.decl @qwen3_moe.dense_quantized.output_size : %value: index where [range(%value, 1, 262144)]
 

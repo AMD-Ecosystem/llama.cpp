@@ -41,7 +41,7 @@ template.decl @ggml.unary_f32.apply_vector4(%arg0: index, %arg1: vector<4xf32>) 
 amdgpu.target<gfx11-generic> @ggml_mul_mat_gfx11_wave64 {subgroup_size = 64}
 amdgpu.target<gfx11-generic> @ggml_mul_mat_gfx11_wave32 {subgroup_size = 32}
 
-config.decl @ggml.mul_mat.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 32)]
+config.decl @ggml.mul_mat.input_size : %value: index where [range(%value, 256, 32768), multiple_of(%value, 32)]
 
 config.decl @ggml.mul_mat.output_size : %value: index where [range(%value, 1, 262144)]
 
@@ -167,8 +167,8 @@ kernel.def target(@ggml_mul_mat_gfx11_wave32) @ggml_mul_mat_q4_k_f16_wmma_prefil
   %input_size = config.get @ggml.mul_mat.input_size : index
   %output_size = config.get @ggml.mul_mat.output_size : index
   %token_capacity = config.get @ggml.workload.token_capacity : index
-  %bounded_token_count = index.assume %token_count [range(%token_count, 256, 2048), mul(%token_count, 256), le(%token_count, %token_capacity)] : index
-  %bounded_output_size = index.assume %output_size [range(%output_size, 64, 262144), mul(%output_size, 64)] : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 256, 2048), multiple_of(%token_count, 256), le(%token_count, %token_capacity)] : index
+  %bounded_output_size = index.assume %output_size [range(%output_size, 64, 262144), multiple_of(%output_size, 64)] : index
   %channel_tile = kernel.workgroup.id<y> : index
   %token_tile = kernel.workgroup.id<x> : index
   %paired = scalar.constant false : i1

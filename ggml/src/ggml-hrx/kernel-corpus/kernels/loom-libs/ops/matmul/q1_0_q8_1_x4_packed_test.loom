@@ -13,7 +13,7 @@ func.decl @ggml_q1_0_q8_1_x4_pair_lane(%input_size: index, %gate: buffer, %gate_
 amdgpu.target<gfx11-generic> @ggml_q1_0_q8_1_x4_gfx11_wave32 {subgroup_size = 32}
 
 func.def inline @ggml_q1_0_q8_1_x4_generic_row_lane(%input_size: index, %weight: buffer, %weight_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %lane: index) -> (f32) {
-  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), mul(%input_size, 128)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), multiple_of(%input_size, 128)] : index
   %bounded_lane = index.assume %lane [range(%lane, 0, 31)] : index
   %c0 = index.constant 0 : index
   %c1 = index.constant 1 : index
@@ -48,7 +48,7 @@ kernel.def target(@ggml_q1_0_q8_1_x4_gfx11_wave32) @ggml_q1_0_q8_1_x4_generic_co
   %c32 = index.constant 32 : index
   kernel.launch.config workgroups(%output_size, %c1, %c1) workgroup_size(%c32, %c1, %c1) : index
 } launch(%input_size: index, %output_size: index, %q8_input: buffer, %weight: buffer, %output: buffer) {
-  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), mul(%input_size, 128)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), multiple_of(%input_size, 128)] : index
   %bounded_output_size = index.assume %output_size [range(%output_size, 1, 262144)] : index
   %row0 = kernel.workgroup.id<x> : index
   %row, %bounded_output_size2 = index.assume %row0, %bounded_output_size [lt(%row0, %bounded_output_size)] : index, index
@@ -75,7 +75,7 @@ kernel.def target(@ggml_q1_0_q8_1_x4_gfx11_wave32) @ggml_q1_0_q8_1_x4_packed(%in
   %c32 = index.constant 32 : index
   kernel.launch.config workgroups(%output_size, %c1, %c1) workgroup_size(%c32, %c1, %c1) : index
 } launch(%input_size: index, %output_size: index, %q8_input: buffer, %weight: buffer, %output: buffer) {
-  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), mul(%input_size, 128)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), multiple_of(%input_size, 128)] : index
   %bounded_output_size = index.assume %output_size [range(%output_size, 1, 262144)] : index
   %row0 = kernel.workgroup.id<x> : index
   %row, %bounded_output_size2 = index.assume %row0, %bounded_output_size [lt(%row0, %bounded_output_size)] : index, index
@@ -105,7 +105,7 @@ kernel.def target(@ggml_q1_0_q8_1_x4_gfx11_wave32) @ggml_q1_0_q8_1_x4_packed_row
   %groups = index.div %rounded, %c2 : index
   kernel.launch.config workgroups(%groups, %c1, %c1) workgroup_size(%c32, %c1, %c1) : index
 } launch(%input_size: index, %output_size: index, %q8_input: buffer, %weight: buffer, %output: buffer) {
-  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), mul(%input_size, 128)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), multiple_of(%input_size, 128)] : index
   %group = kernel.workgroup.id<x> : index
   %lane = kernel.subgroup.lane.id : index
   %c0 = index.constant 0 : index
@@ -150,7 +150,7 @@ kernel.def target(@ggml_q1_0_q8_1_x4_gfx11_wave32) @ggml_q1_0_q8_1_x4_packed_pai
   %c32 = index.constant 32 : index
   kernel.launch.config workgroups(%output_size, %c1, %c1) workgroup_size(%c32, %c1, %c1) : index
 } launch(%input_size: index, %output_size: index, %q8_input: buffer, %gate_weight: buffer, %up_weight: buffer, %gate_output: buffer, %up_output: buffer) {
-  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), mul(%input_size, 128)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), multiple_of(%input_size, 128)] : index
   %bounded_output_size = index.assume %output_size [range(%output_size, 1, 262144)] : index
   %row0 = kernel.workgroup.id<x> : index
   %row, %bounded_output_size2 = index.assume %row0, %bounded_output_size [lt(%row0, %bounded_output_size)] : index, index

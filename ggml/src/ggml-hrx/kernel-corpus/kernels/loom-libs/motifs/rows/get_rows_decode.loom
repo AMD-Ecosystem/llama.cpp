@@ -22,7 +22,7 @@ template.decl @ggml.publish_f32.next_vector4(%arg0: index, %arg1: i1, %arg2: ind
 
 config.decl @ggml.get_rows_f32.token_capacity : %value: index where [range(%value, 1, 2048)]
 
-config.decl @ggml.get_rows_f32.hidden_capacity : %value: index where [range(%value, 4, 1073741824), mul(%value, 4)]
+config.decl @ggml.get_rows_f32.hidden_capacity : %value: index where [range(%value, 4, 1073741824), multiple_of(%value, 4)]
 
 config.decl @ggml.get_rows_f32.weight_format : %value: index where [range(%value, 4, 81)]
 
@@ -75,7 +75,7 @@ template.def<@ggml.get_rows_f32.body> device @ggml_get_rows_f32_body(%token_coun
   %weight_format = config.get @ggml.get_rows_f32.weight_format : index
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %token_capacity)] : index
   %bounded_row_count = index.assume %row_count [range(%row_count, 1, 262208)] : index
-  %bounded_hidden_size = index.assume %hidden_size [range(%hidden_size, 4, 1073741824), mul(%hidden_size, 4), le(%hidden_size, %hidden_capacity)] : index
+  %bounded_hidden_size = index.assume %hidden_size [range(%hidden_size, 4, 1073741824), multiple_of(%hidden_size, 4), le(%hidden_size, %hidden_capacity)] : index
   %channel_tile = kernel.workgroup.id<x> : index
   %token0 = kernel.workgroup.id<y> : index
   %workitem0 = kernel.workitem.id<x> : index
@@ -119,7 +119,7 @@ template.def<@ggml.get_rows_f32.next_body> device @ggml_get_rows_f32_next_body(%
   %next_format = config.get @ggml.get_rows_f32.next_format : index
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %token_capacity)] : index
   %bounded_row_count = index.assume %row_count [range(%row_count, 1, 262208)] : index
-  %bounded_hidden_size = index.assume %hidden_size [range(%hidden_size, 256, 1073741824), mul(%hidden_size, 256), le(%hidden_size, %hidden_capacity)] : index
+  %bounded_hidden_size = index.assume %hidden_size [range(%hidden_size, 256, 1073741824), multiple_of(%hidden_size, 256), le(%hidden_size, %hidden_capacity)] : index
   %channel_tile = kernel.workgroup.id<x> : index
   %token0 = kernel.workgroup.id<y> : index
   %workitem0 = kernel.workitem.id<x> : index

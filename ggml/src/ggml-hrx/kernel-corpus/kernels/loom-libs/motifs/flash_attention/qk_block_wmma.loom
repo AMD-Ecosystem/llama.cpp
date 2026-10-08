@@ -2,9 +2,9 @@ config.decl @ggml.flash_attention.query_head_count : %value: index where [range(
 
 config.decl @ggml.flash_attention.key_value_head_count : %value: index where [range(%value, 1, 64)]
 
-config.decl @ggml.flash_attention.qk_head_size : %value: index where [range(%value, 16, 512), mul(%value, 16)]
+config.decl @ggml.flash_attention.qk_head_size : %value: index where [range(%value, 16, 512), multiple_of(%value, 16)]
 
-config.decl @ggml.flash_attention.value_head_size : %value: index where [range(%value, 64, 512), mul(%value, 64)]
+config.decl @ggml.flash_attention.value_head_size : %value: index where [range(%value, 64, 512), multiple_of(%value, 64)]
 
 config.decl @ggml.flash_attention.attention_scale : f32
 
@@ -89,9 +89,9 @@ template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_pr
   %query_head_count = config.get @ggml.flash_attention.query_head_count : index
   %key_value_head_count = config.get @ggml.flash_attention.key_value_head_count : index
   %qk_head_size0 = config.get @ggml.flash_attention.qk_head_size : index
-  %qk_head_size = index.assume %qk_head_size0 [range(%qk_head_size0, 16, 512), mul(%qk_head_size0, 16)] : index
+  %qk_head_size = index.assume %qk_head_size0 [range(%qk_head_size0, 16, 512), multiple_of(%qk_head_size0, 16)] : index
   %value_head_size0 = config.get @ggml.flash_attention.value_head_size : index
-  %value_head_size = index.assume %value_head_size0 [range(%value_head_size0, 64, 512), mul(%value_head_size0, 64)] : index
+  %value_head_size = index.assume %value_head_size0 [range(%value_head_size0, 64, 512), multiple_of(%value_head_size0, 64)] : index
   %query_tile = kernel.workgroup.id<x> : index
   %query_head0 = kernel.workgroup.id<y> : index
   %output_group0 = kernel.workgroup.id<z> : index
@@ -160,7 +160,7 @@ template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_pr
   %query_origin = index.mul %query_tile, %c16 : index
   %full_key_value_block_count = index.div %bounded_key_value_token_count, %c64 : index
   %full_key_value_token_count0 = index.mul %full_key_value_block_count, %c64 : index
-  %full_key_value_token_count = index.assume %full_key_value_token_count0 [range(%full_key_value_token_count0, 0, 32768), mul(%full_key_value_token_count0, 64)] : index
+  %full_key_value_token_count = index.assume %full_key_value_token_count0 [range(%full_key_value_token_count0, 0, 32768), multiple_of(%full_key_value_token_count0, 64)] : index
   %tail_key_value_token_count = index.sub %bounded_key_value_token_count, %full_key_value_token_count : index
   %has_key_value_tail = index.cmp ne, %tail_key_value_token_count, %c0 : index
   %tail_key_value_stage_bytes = scf.select %has_key_value_tail, %tail_key_value_stage_capacity, %c0_offset : offset

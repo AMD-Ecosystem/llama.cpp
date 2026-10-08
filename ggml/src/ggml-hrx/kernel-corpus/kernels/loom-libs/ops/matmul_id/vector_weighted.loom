@@ -9,7 +9,7 @@ amdgpu.target<gfx11-generic> @ggml_mul_mat_id_vector_weighted_wave32_publish_q8_
 
 amdgpu.target<gfx11-generic> @ggml_mul_mat_id_vector_weighted_wave64_publish_q8_gfx11 {subgroup_size = 64}
 
-config.decl @ggml.mul_mat_id.vector.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 256)]
+config.decl @ggml.mul_mat_id.vector.input_size : %value: index where [range(%value, 256, 32768), multiple_of(%value, 256)]
 
 config.decl @ggml.mul_mat_id.vector.route_count : %value: index where [range(%value, 1, 8)]
 
@@ -43,11 +43,11 @@ kernel.def target(@ggml_mul_mat_id_vector_weighted_wave32_publish_q8_gfx11) @ggm
   %input_format = config.get @ggml.mul_mat_id.vector.input_format : index
   %weight_format = config.get @ggml.mul_mat_id.vector.weight_format : index
   %publish_format = config.get @ggml.mul_mat_id.vector.publish_format : index
-  %bounded_input_size, %configured_input_size = index.assume %input_size, %configured_input_size0 [range(%input_size, 256, 32768), mul(%input_size, 256), eq(%input_size, %configured_input_size0)] : index, index
+  %bounded_input_size, %configured_input_size = index.assume %input_size, %configured_input_size0 [range(%input_size, 256, 32768), multiple_of(%input_size, 256), eq(%input_size, %configured_input_size0)] : index, index
   %bounded_route_count, %configured_route_count = index.assume %route_count, %configured_route_count0 [range(%route_count, 1, 8), eq(%route_count, %configured_route_count0)] : index, index
   %bounded_route_id_stride = index.assume %route_id_stride [range(%route_id_stride, 1, 512)] : index
   %bounded_expert_count, %configured_expert_count = index.assume %expert_count, %configured_expert_count0 [range(%expert_count, 1, 512), eq(%expert_count, %configured_expert_count0)] : index, index
-  %bounded_output_size, %configured_output_size = index.assume %output_size, %configured_output_size0 [range(%output_size, 128, 4096), mul(%output_size, 128), eq(%output_size, %configured_output_size0)] : index, index
+  %bounded_output_size, %configured_output_size = index.assume %output_size, %configured_output_size0 [range(%output_size, 128, 4096), multiple_of(%output_size, 128), eq(%output_size, %configured_output_size0)] : index, index
   %c8 = index.constant 8 : index
   %publishes_output = scalar.constant true : i1
   %body_token = index.constant 0 : index
@@ -74,11 +74,11 @@ kernel.def target(@ggml_mul_mat_id_vector_weighted_wave64_publish_q8_gfx11) @ggm
   %input_format = config.get @ggml.mul_mat_id.vector.input_format : index
   %weight_format = config.get @ggml.mul_mat_id.vector.weight_format : index
   %publish_format = config.get @ggml.mul_mat_id.vector.publish_format : index
-  %bounded_input_size, %configured_input_size = index.assume %input_size, %configured_input_size0 [range(%input_size, 256, 32768), mul(%input_size, 256), eq(%input_size, %configured_input_size0)] : index, index
+  %bounded_input_size, %configured_input_size = index.assume %input_size, %configured_input_size0 [range(%input_size, 256, 32768), multiple_of(%input_size, 256), eq(%input_size, %configured_input_size0)] : index, index
   %bounded_route_count, %configured_route_count = index.assume %route_count, %configured_route_count0 [range(%route_count, 1, 8), eq(%route_count, %configured_route_count0)] : index, index
   %bounded_route_id_stride = index.assume %route_id_stride [range(%route_id_stride, 1, 512)] : index
   %bounded_expert_count, %configured_expert_count = index.assume %expert_count, %configured_expert_count0 [range(%expert_count, 1, 512), eq(%expert_count, %configured_expert_count0)] : index, index
-  %bounded_output_size, %configured_output_size = index.assume %output_size, %configured_output_size0 [range(%output_size, 128, 4096), mul(%output_size, 128), eq(%output_size, %configured_output_size0)] : index, index
+  %bounded_output_size, %configured_output_size = index.assume %output_size, %configured_output_size0 [range(%output_size, 128, 4096), multiple_of(%output_size, 128), eq(%output_size, %configured_output_size0)] : index, index
   %c4 = index.constant 4 : index
   %c8 = index.constant 8 : index
   %body_token = index.constant 0 : index

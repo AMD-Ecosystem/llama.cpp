@@ -22,7 +22,7 @@ template.decl @ggml.unary_f32.apply_vector4(%op: index, %values: vector<4xf32>) 
 
 amdgpu.target<gfx11-generic> @ggml_matmul_tiled_input_f32_publish_f32_gfx11_wave64 {subgroup_size = 64}
 
-config.decl @ggml.mul_mat.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 32)]
+config.decl @ggml.mul_mat.input_size : %value: index where [range(%value, 256, 32768), multiple_of(%value, 32)]
 
 config.decl @ggml.mul_mat.output_size : %value: index where [range(%value, 1, 262144)]
 
@@ -34,7 +34,7 @@ config.decl @ggml.mul_mat.weight_format : %value: index where [range(%value, 4, 
 
 config.decl @ggml.mul_mat.activation_format : %value: index where [range(%value, 0, 16)]
 
-config.decl @ggml.mul_mat_postops.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 32)]
+config.decl @ggml.mul_mat_postops.input_size : %value: index where [range(%value, 256, 32768), multiple_of(%value, 32)]
 
 config.decl @ggml.mul_mat_postops.output_size : %value: index where [range(%value, 1, 262144)]
 
@@ -145,7 +145,7 @@ kernel.def target(@ggml_matmul_tiled_input_f32_publish_f32_gfx11_wave64) @ggml_m
 
 kernel.def target(@ggml_matmul_tiled_input_f32_publish_f32_gfx11_wave64) @ggml_mul_mat_tiled_input_f32_publish_f32_aligned(%token_count: index) {
   %output_size = config.get @ggml.mul_mat.output_size : index
-  %bounded_token_count = index.assume %token_count [range(%token_count, 32, 2048), mul(%token_count, 32)] : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 32, 2048), multiple_of(%token_count, 32)] : index
   %c1 = index.constant 1 : index
   %c32 = index.constant 32 : index
   %c63 = index.constant 63 : index
@@ -161,7 +161,7 @@ kernel.def target(@ggml_matmul_tiled_input_f32_publish_f32_gfx11_wave64) @ggml_m
   %output_accumulation = config.get @ggml.mul_mat.output_accumulation : index
   %output_unary_op = config.get @ggml.mul_mat.output_unary_op : index
   %weight_format = config.get @ggml.mul_mat.weight_format : index
-  %bounded_token_count = index.assume %token_count [range(%token_count, 32, 2048), mul(%token_count, 32)] : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 32, 2048), multiple_of(%token_count, 32)] : index
   %epilogue = index.constant 0 : index
   %full_token_tiles = scalar.constant true : i1
   %c0_f32 = scalar.constant 0.0 : f32
@@ -173,7 +173,7 @@ kernel.def target(@ggml_matmul_tiled_input_f32_publish_f32_gfx11_wave64) @ggml_m
 
 kernel.def target(@ggml_matmul_tiled_input_f32_publish_f32_gfx11_wave64) @ggml_mul_mat_tiled_input_f32_publish_f32_token64_aligned(%token_count: index) {
   %output_size = config.get @ggml.mul_mat.output_size : index
-  %bounded_token_count = index.assume %token_count [range(%token_count, 64, 2048), mul(%token_count, 64)] : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 64, 2048), multiple_of(%token_count, 64)] : index
   %c1 = index.constant 1 : index
   %c63 = index.constant 63 : index
   %c64 = index.constant 64 : index
@@ -188,7 +188,7 @@ kernel.def target(@ggml_matmul_tiled_input_f32_publish_f32_gfx11_wave64) @ggml_m
   %output_accumulation = config.get @ggml.mul_mat.output_accumulation : index
   %output_unary_op = config.get @ggml.mul_mat.output_unary_op : index
   %weight_format = config.get @ggml.mul_mat.weight_format : index
-  %bounded_token_count = index.assume %token_count [range(%token_count, 64, 2048), mul(%token_count, 64)] : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 64, 2048), multiple_of(%token_count, 64)] : index
   %epilogue = index.constant 0 : index
   %full_token_tiles = scalar.constant true : i1
   %c0_f32 = scalar.constant 0.0 : f32
@@ -262,7 +262,7 @@ kernel.def target(@ggml_matmul_tiled_input_f32_publish_f32_gfx11_wave64) @ggml_m
 
 kernel.def target(@ggml_matmul_tiled_input_f32_publish_f32_gfx11_wave64) @ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32_aligned(%token_count: index) {
   %output_size = config.get @ggml.mul_mat_postops.output_size : index
-  %bounded_token_count = index.assume %token_count [range(%token_count, 32, 2048), mul(%token_count, 32)] : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 32, 2048), multiple_of(%token_count, 32)] : index
   %c1 = index.constant 1 : index
   %c32 = index.constant 32 : index
   %c63 = index.constant 63 : index
@@ -276,7 +276,7 @@ kernel.def target(@ggml_matmul_tiled_input_f32_publish_f32_gfx11_wave64) @ggml_m
   %input_size = config.get @ggml.mul_mat_postops.input_size : index
   %output_size = config.get @ggml.mul_mat_postops.output_size : index
   %weight_format = config.get @ggml.mul_mat_postops.weight_format : index
-  %bounded_token_count = index.assume %token_count [range(%token_count, 32, 2048), mul(%token_count, 32)] : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 32, 2048), multiple_of(%token_count, 32)] : index
   %c0 = index.constant 0 : index
   %identity = index.constant 23 : index
   %epilogue = config.get @ggml.mul_mat_postops.epilogue : index

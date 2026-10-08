@@ -3,7 +3,7 @@
 
 template.decl @llm.ssm_conv.prefill_finish(%state: buffer, %filter: buffer, %edges: buffer, %output: buffer, %cache: buffer)
 
-config.decl @llm.ssm_conv.generic.d_inner : %value: index where [range(%value, 32, 65536), mul(%value, 32)]
+config.decl @llm.ssm_conv.generic.d_inner : %value: index where [range(%value, 32, 65536), multiple_of(%value, 32)]
 
 amdgpu.target<gfx11-generic> @llm_ssm_conv_prefill_finish_wave32 {subgroup_size = 32}
 
