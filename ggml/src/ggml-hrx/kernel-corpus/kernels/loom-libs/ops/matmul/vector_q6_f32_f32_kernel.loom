@@ -1,6 +1,6 @@
-config.decl @ggml.matmul.vector.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 256)]
+config.decl @ggml.matmul.vector.input_size : %value: index where [range(%value, 256, 32768), multiple_of(%value, 256)]
 
-config.decl @ggml.matmul.vector.output_size : %value: index where [range(%value, 64, 262144), mul(%value, 64)]
+config.decl @ggml.matmul.vector.output_size : %value: index where [range(%value, 64, 262144), multiple_of(%value, 64)]
 
 config.decl @ggml.matmul.vector.output_accumulation : %value: index where [range(%value, 0, 1)]
 

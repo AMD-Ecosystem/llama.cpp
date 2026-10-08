@@ -1,6 +1,6 @@
-config.decl @ggml.quantize_symmetric_i8_k256.token_count : %value: index where [range(%value, 256, 2048), mul(%value, 256)]
+config.decl @ggml.quantize_symmetric_i8_k256.token_count : %value: index where [range(%value, 256, 2048), multiple_of(%value, 256)]
 
-config.decl @ggml.quantize_symmetric_i8_k256.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 256)]
+config.decl @ggml.quantize_symmetric_i8_k256.input_size : %value: index where [range(%value, 256, 32768), multiple_of(%value, 256)]
 
 func.def inline @ggml_symmetric_i8_wmmai8_stage_values(%token256: i1, %scratch: buffer, %base: offset, %adbase: index, %ad1: index, %values0: vector<32xi8>, %values1: vector<32xi8>) {
   scf.if %token256 {
@@ -90,7 +90,7 @@ kernel.def target(@ggml_quantize_symmetric_i8_k256_gfx11_wave32) export("ggml_qu
 } launch(%token_count: index, %input_size_arg: index, %input: buffer, %output: buffer) {
   %token_capacity0 = config.get @ggml.quantize_symmetric_i8_k256.token_count : index
   %input_size0 = config.get @ggml.quantize_symmetric_i8_k256.input_size : index
-  %token_capacity, %input_size = index.assume %token_capacity0, %input_size0 [range(%token_capacity0, 1, 2048), range(%input_size0, 256, 32768), mul(%input_size0, 256)] : index, index
+  %token_capacity, %input_size = index.assume %token_capacity0, %input_size0 [range(%token_capacity0, 1, 2048), range(%input_size0, 256, 32768), multiple_of(%input_size0, 256)] : index, index
   %bounded_token_count, %bounded_input_size = index.assume %token_count, %input_size_arg [eq(%token_count, %token_capacity), eq(%input_size_arg, %input_size)] : index, index
   %c0 = index.constant 0 : index
   %c1 = index.constant 1 : index
@@ -270,9 +270,9 @@ kernel.def target(@ggml_symmetric_i8_gfx11_wave32) export("ggml_mul_mat_q5_k_sym
   %input_size0 = config.get @ggml.mul_mat.symmetric_i8.input_size : index
   %output_size0 = config.get @ggml.mul_mat.symmetric_i8.output_size : index
   %token_capacity = config.get @ggml.mul_mat.symmetric_i8.token_count : index
-  %input_size = index.assume %input_size0 [range(%input_size0, 256, 32768), mul(%input_size0, 256)] : index
-  %output_size = index.assume %output_size0 [range(%output_size0, 64, 262144), mul(%output_size0, 64)] : index
-  %bounded_token_count, %configured_token_capacity = index.assume %token_count, %token_capacity [range(%token_count, 256, 2048), mul(%token_count, 256), eq(%token_count, %token_capacity)] : index, index
+  %input_size = index.assume %input_size0 [range(%input_size0, 256, 32768), multiple_of(%input_size0, 256)] : index
+  %output_size = index.assume %output_size0 [range(%output_size0, 64, 262144), multiple_of(%output_size0, 64)] : index
+  %bounded_token_count, %configured_token_capacity = index.assume %token_count, %token_capacity [range(%token_count, 256, 2048), multiple_of(%token_count, 256), eq(%token_count, %token_capacity)] : index, index
   %nchunks = index.div %input_size, %k_kc : index
   %kblocks = index.div %input_size, %c32 : index
 
@@ -434,8 +434,8 @@ template.def<@ggml.mul_mat.symmetric_i8.wmmai8.body> device @ggml_mul_mat_symmet
       %i8_q8_token1_loop = index.add %i8_q8_token_base1_loop, %ascol_g : index
       %i8_q8_word00_loop = index.mul %i8_q8_token0_loop, %c8 : index
       %i8_q8_word10_loop = index.mul %i8_q8_token1_loop, %c8 : index
-      %i8_q8_word0_loop = index.assume %i8_q8_word00_loop [range(%i8_q8_word00_loop, 0, 268435448), mul(%i8_q8_word00_loop, 8)] : index
-      %i8_q8_word1_loop = index.assume %i8_q8_word10_loop [range(%i8_q8_word10_loop, 8, 268435448), mul(%i8_q8_word10_loop, 8)] : index
+      %i8_q8_word0_loop = index.assume %i8_q8_word00_loop [range(%i8_q8_word00_loop, 0, 268435448), multiple_of(%i8_q8_word00_loop, 8)] : index
+      %i8_q8_word1_loop = index.assume %i8_q8_word10_loop [range(%i8_q8_word10_loop, 8, 268435448), multiple_of(%i8_q8_word10_loop, 8)] : index
       %i8_q8_words0_loop = vector.load %i8_q8_payload[%i8_q8_word0_loop] : view<[%i8_payload_words]xi32> -> vector<8xi32>
       %i8_q8_words1_loop = vector.load %i8_q8_payload[%i8_q8_word1_loop] : view<[%i8_payload_words]xi32> -> vector<8xi32>
       %i8_q8_values0_loop = vector.bitcast %i8_q8_words0_loop : vector<8xi32> to vector<32xi8>
@@ -462,7 +462,7 @@ template.def<@ggml.mul_mat.symmetric_i8.wmmai8.body> device @ggml_mul_mat_symmet
       %i8_word0 = index.rem %tid, %c4 : index
       %i8_word = index.assume %i8_word0 [range(%i8_word0, 0, 3)] : index
       %i8_byte_position0 = index.mul %i8_word, %c16 : index
-      %i8_byte_position = index.assume %i8_byte_position0 [range(%i8_byte_position0, 0, 48), mul(%i8_byte_position0, 16)] : index
+      %i8_byte_position = index.assume %i8_byte_position0 [range(%i8_byte_position0, 0, 48), multiple_of(%i8_byte_position0, 16)] : index
       %i8_local_row0 = index.div %tid, %c4 : index
       %i8_local_row = index.assume %i8_local_row0 [range(%i8_local_row0, 0, 63)] : index
       %i8_weight_inner = index.add %i8_weight_inner_base, %inner : index
@@ -475,7 +475,7 @@ template.def<@ggml.mul_mat.symmetric_i8.wmmai8.body> device @ggml_mul_mat_symmet
       %i8_values = vector.load %i8_weight_view[%i8_address] : view<[%i8_weight_bytes]xi8> -> vector<16xi8>
       %i8_weight_row_base0 = index.mul %i8_local_row, %k_wstride : index
       %i8_weight_row_base = index.add %i8_weight_row_base0, %i8_byte_position : index
-      %i8_weight_destination = index.assume %i8_weight_row_base [range(%i8_weight_row_base, 0, 5104), mul(%i8_weight_row_base, 16)] : index
+      %i8_weight_destination = index.assume %i8_weight_row_base [range(%i8_weight_row_base, 0, 5104), multiple_of(%i8_weight_row_base, 16)] : index
       vector.store %i8_values, %wl_flat[%i8_weight_destination] : vector<16xi8>, view<5120xi8>
       kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
       %i8_lhs0_0_raw = func.call @ggml_symmetric_i8_wmmai8_load_lhs(%token256, %scratch, %base, %lm0, %c0, %c16) : (i1, buffer, offset, index, index, index) -> (vector<16xi8>)

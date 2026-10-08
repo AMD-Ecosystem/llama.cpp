@@ -3,7 +3,7 @@
 
 template.decl @qwen3_moe.rmsnorm_quantize_q8_1_x4.body(%publish_normalized: i1, %reduction_subgroup_count0: index, %token_count: index, %token0: index, %input: buffer, %weight: buffer, %normalized_output: buffer, %q8_output: buffer)
 
-config.decl @qwen3_moe.model.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+config.decl @qwen3_moe.model.hidden_size : %value: index where [range(%value, 128, 32768), multiple_of(%value, 128)]
 
 config.decl @qwen3_moe.model.rms_epsilon : f32
 
@@ -17,7 +17,7 @@ template.def<@qwen3_moe.rmsnorm_quantize_q8_1_x4.body> device @qwen3_moe_rmsnorm
   %epsilon = config.get @qwen3_moe.model.rms_epsilon : f32
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
   %reduction_subgroup_count = index.assume %reduction_subgroup_count0 [range(%reduction_subgroup_count0, 1, 8)] : index
-  %hidden_size = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), mul(%hidden_size0, 128)] : index
+  %hidden_size = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), multiple_of(%hidden_size0, 128)] : index
   %workitem = kernel.workitem.id<x> : index
   %subgroup0 = kernel.subgroup.id : index
   %subgroup = index.assume %subgroup0 [range(%subgroup0, 0, 7)] : index

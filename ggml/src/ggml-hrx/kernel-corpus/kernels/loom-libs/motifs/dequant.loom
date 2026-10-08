@@ -860,7 +860,7 @@ func.def inline @ggml_q3k_f32_vector4(%weight: buffer, %row_byte_base: offset, %
   %code_half_base = index.mul %half, %c32 : index
   %code_index0 = index.add %code_half_base, %packet_base : index
   %code_index = index.assume %code_index0 [range(%code_index0, 0, 63)] : index
-  %hmask_index = index.assume %packet_base [range(%packet_base, 0, 28), mul(%packet_base, 4)] : index
+  %hmask_index = index.assume %packet_base [range(%packet_base, 0, 28), multiple_of(%packet_base, 4)] : index
   %q_shift_index = index.mul %group_in_half, %c2 : index
   %q_shift = index.cast %q_shift_index : index to i32
   %hmask_bit_shift = index.cast %bounded_group : index to i32
@@ -2387,7 +2387,7 @@ func.def inline @ggml_iq4nl_f32_vector4(%iq4nl_table: vector<16xi8>, %weight: bu
   %d = scalar.extf %d_f16 : f16 to f32
   %packet_page = index.rem %bounded_packet, %c4 : index
   %code_index0 = index.mul %packet_page, %c4 : index
-  %code_index = index.assume %code_index0 [range(%code_index0, 0, 12), mul(%code_index0, 4)] : index
+  %code_index = index.assume %code_index0 [range(%code_index0, 0, 12), multiple_of(%code_index0, 4)] : index
   %uses_high = index.cmp uge, %bounded_packet, %c4 : index
   %q_bytes = vector.load %code_view[%code_index] : view<16xi8> -> vector<4xi8>
   %codes = func.call @ggml_iq4nl_table_codes4(%q_bytes, %uses_high) : (vector<4xi8>, i1) -> (vector<4xi8>)
@@ -2627,7 +2627,7 @@ func.def inline @ggml_q8_1_f32_vector4(%weight: buffer, %row_byte_base: offset, 
 }
 
 func.def inline @ggml_f16_f32_vector4(%weight: buffer, %row_byte_base: offset, %input_size: index, %k: index) -> (vector<4xf32>) {
-  %bounded_input_size = index.assume %input_size [range(%input_size, 4, 1073741824), mul(%input_size, 4)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 4, 1073741824), multiple_of(%input_size, 4)] : index
   %row_view = buffer.view %weight[%row_byte_base] : buffer -> view<[%bounded_input_size]xf16>
   %values_f16 = vector.load %row_view[%k] : view<[%bounded_input_size]xf16> -> vector<4xf16>
   %values = vector.extf %values_f16 : vector<4xf16> to vector<4xf32>
@@ -2635,7 +2635,7 @@ func.def inline @ggml_f16_f32_vector4(%weight: buffer, %row_byte_base: offset, %
 }
 
 func.def inline @ggml_bf16_f32_vector4(%weight: buffer, %row_byte_base: offset, %input_size: index, %k: index) -> (vector<4xf32>) {
-  %bounded_input_size = index.assume %input_size [range(%input_size, 4, 1073741824), mul(%input_size, 4)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 4, 1073741824), multiple_of(%input_size, 4)] : index
   %row_view = buffer.view %weight[%row_byte_base] : buffer -> view<[%bounded_input_size]xbf16>
   %values_bf16 = vector.load %row_view[%k] : view<[%bounded_input_size]xbf16> -> vector<4xbf16>
   %values = vector.extf %values_bf16 : vector<4xbf16> to vector<4xf32>
@@ -2643,7 +2643,7 @@ func.def inline @ggml_bf16_f32_vector4(%weight: buffer, %row_byte_base: offset, 
 }
 
 func.def inline @ggml_f32_f32_vector4(%weight: buffer, %row_byte_base: offset, %input_size: index, %k: index) -> (vector<4xf32>) {
-  %bounded_input_size = index.assume %input_size [range(%input_size, 4, 1073741824), mul(%input_size, 4)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 4, 1073741824), multiple_of(%input_size, 4)] : index
   %row_view = buffer.view %weight[%row_byte_base] : buffer -> view<[%bounded_input_size]xf32>
   %values = vector.load %row_view[%k] : view<[%bounded_input_size]xf32> -> vector<4xf32>
   func.return %values : vector<4xf32>

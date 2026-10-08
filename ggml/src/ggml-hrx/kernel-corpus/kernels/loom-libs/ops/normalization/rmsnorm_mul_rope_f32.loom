@@ -22,7 +22,7 @@ config.decl @ggml.rmsnorm_mul_rope.section1 : %value: index where [range(%value,
 config.decl @ggml.rmsnorm_mul_rope.section2 : %value: index where [range(%value, 0, 65536)]
 config.decl @ggml.rmsnorm_mul_rope.section3 : %value: index where [range(%value, 0, 65536)]
 config.decl @ggml.rmsnorm_mul_rope.mode : %value: index where [range(%value, 2, 40)]
-config.decl @ggml.rmsnorm_mul_rope.workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+config.decl @ggml.rmsnorm_mul_rope.workgroup_size : %value: index where [range(%value, 32, 1024), multiple_of(%value, 32)]
 config.decl @ggml.rmsnorm_mul_rope.epsilon : f32
 config.decl @ggml.rmsnorm_mul_rope.freq_base : f32
 config.decl @ggml.rmsnorm_mul_rope.freq_scale : f32

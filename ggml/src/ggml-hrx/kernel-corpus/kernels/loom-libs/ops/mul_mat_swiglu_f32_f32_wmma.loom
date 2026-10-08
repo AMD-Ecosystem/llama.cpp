@@ -25,7 +25,7 @@ template.decl @ggml.mul_mat_swiglu.launch(%token_capacity: index, %output_size: 
 
 amdgpu.target<gfx11-generic> @ggml_mul_mat_swiglu_gfx11_wave64 {subgroup_size = 64}
 
-config.decl @ggml.mul_mat_swiglu.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 32)]
+config.decl @ggml.mul_mat_swiglu.input_size : %value: index where [range(%value, 256, 32768), multiple_of(%value, 32)]
 
 config.decl @ggml.mul_mat_swiglu.output_size : %value: index where [range(%value, 1, 262144)]
 
@@ -131,7 +131,7 @@ template.def<@ggml.mul_mat_swiglu.apply_vector4> device @ggml_mul_mat_swiglu_app
 
 template.def<@ggml.mul_mat_swiglu.body> device @ggml_mul_mat_swiglu_f32_f32_wmma_body(%op: index, %gate_weight_format: index, %up_weight_format: index, %token_count: index, %input_size0: index, %output_size0: index, %channel_tile: index, %token_tile: index, %input: buffer, %gate_weight: buffer, %up_weight: buffer, %output: buffer) {
   %bounded_token_count = index.assume %token_count [range(%token_count, 2, 2048)] : index
-  %bounded_input_size = index.assume %input_size0 [range(%input_size0, 256, 32768), mul(%input_size0, 32)] : index
+  %bounded_input_size = index.assume %input_size0 [range(%input_size0, 256, 32768), multiple_of(%input_size0, 32)] : index
   %bounded_output_size = index.assume %output_size0 [range(%output_size0, 1, 262144)] : index
   %workitem = kernel.workitem.id<x> : index
   %subgroup0 = kernel.subgroup.id : index
@@ -430,7 +430,7 @@ func.def inline @ggml_mul_mat_swiglu_lowtoken_dot(%op: index, %gate_format: inde
   %zero = vector.constant 0.0 : vector<4xf32>
   %zero_scalar = scalar.constant 0.0 : f32
   %tokens = index.assume %token_count [range(%token_count, 1, 5)] : index
-  %k = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
+  %k = index.assume %input_size [range(%input_size, 256, 32768), multiple_of(%input_size, 256)] : index
   %n = index.assume %output_size [range(%output_size, 1, 262144)] : index
   %subgroup = kernel.subgroup.id : index
   %lane = kernel.subgroup.lane.id : index
@@ -933,9 +933,9 @@ kernel.def target(@ggml_mul_mat_swiglu_gfx11_wave64) @ggml_mul_mat_swiglu_q4_q8_
 
 kernel.def target(@ggml_mul_mat_swiglu_gfx11_wave64) @ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot_q8_output(%token_count: index) {
   %n0 = config.get @ggml.mul_mat_swiglu.output_size : index
-  %n = index.assume %n0 [range(%n0, 1, 262144), mul(%n0, 128)] : index
+  %n = index.assume %n0 [range(%n0, 1, 262144), multiple_of(%n0, 128)] : index
   %k0 = config.get @ggml.mul_mat_swiglu.input_size : index
-  %k = index.assume %k0 [range(%k0, 256, 32768), mul(%k0, 256)] : index
+  %k = index.assume %k0 [range(%k0, 256, 32768), multiple_of(%k0, 256)] : index
   %capacity0 = config.get @ggml.workload.token_capacity : index
   %capacity = index.assume %capacity0 [range(%capacity0, 1, 5)] : index
   %local_q8_c1 = index.constant 1 : index
@@ -980,7 +980,7 @@ template.def<@ggml.mul_mat_swiglu.q4_q8_lowtoken_body> device @ggml_mul_mat_swig
   %n0 = config.get @ggml.mul_mat_swiglu.output_size : index
   %capacity = config.get @ggml.workload.token_capacity : index
   %tokens = index.assume %token_count [range(%token_count, 1, 5), le(%token_count, %capacity)] : index
-  %k = index.assume %k0 [range(%k0, 256, 32768), mul(%k0, 256)] : index
+  %k = index.assume %k0 [range(%k0, 256, 32768), multiple_of(%k0, 256)] : index
   %n = index.assume %n0 [range(%n0, 1, 262144)] : index
   %c0 = index.constant 0 : index
   %c1 = index.constant 1 : index
@@ -1538,13 +1538,13 @@ kernel.def target(@ggml_mul_mat_swiglu_gfx11_wave32) export("ggml_mul_mat_swiglu
   %packed_input = func.call pure @ggml_swiglu_use_packed_f16(%token_capacity, %output_size) : (index, index) -> (i1)
   %bounded_token_count = scf.if %packed_input -> (index) {
     // The dispatch specializes and launches the same complete input extent.
-    %count, %capacity = index.assume %token_count, %token_capacity [range(%token_count, 512, 2048), mul(%token_count, 512), eq(%token_count, %token_capacity)] : index, index
+    %count, %capacity = index.assume %token_count, %token_capacity [range(%token_count, 512, 2048), multiple_of(%token_count, 512), eq(%token_count, %token_capacity)] : index, index
     scf.yield %count : index
   } else {
-    %count = index.assume %token_count [range(%token_count, 256, 2048), mul(%token_count, 256), le(%token_count, %token_capacity)] : index
+    %count = index.assume %token_count [range(%token_count, 256, 2048), multiple_of(%token_count, 256), le(%token_count, %token_capacity)] : index
     scf.yield %count : index
   }
-  %bounded_output_size = index.assume %output_size [range(%output_size, 64, 262144), mul(%output_size, 64)] : index
+  %bounded_output_size = index.assume %output_size [range(%output_size, 64, 262144), multiple_of(%output_size, 64)] : index
   %channel_tile = kernel.workgroup.id<y> : index
   %token_tile = kernel.workgroup.id<x> : index
   %paired = scalar.constant true : i1

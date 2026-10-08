@@ -5,7 +5,7 @@ template.decl @llm.ssm_conv.dconv4_silu(%x0: f32, %x1: f32, %x2: f32, %x3: f32, 
 
 template.decl @llm.ssm_conv.prefill_finish(%state: buffer, %filter: buffer, %edges: buffer, %output: buffer, %cache: buffer)
 
-config.decl @llm.ssm_conv.generic.d_inner : %value: index where [range(%value, 32, 65536), mul(%value, 32)]
+config.decl @llm.ssm_conv.generic.d_inner : %value: index where [range(%value, 32, 65536), multiple_of(%value, 32)]
 
 template.def<@llm.ssm_conv.prefill_finish> device @llm_ssm_conv_prefill_finish(%state: buffer, %filter: buffer, %edges: buffer, %output: buffer, %cache: buffer) {
   %width = config.get @llm.ssm_conv.generic.d_inner : index

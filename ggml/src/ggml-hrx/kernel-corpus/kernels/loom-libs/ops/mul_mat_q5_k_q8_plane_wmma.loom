@@ -8,17 +8,17 @@ template.decl @ggml.mul_mat_q5_k_q8_plane.wmmai8.body(%is_iq4xs: i1, %token256: 
 
 amdgpu.target<gfx11-generic> @ggml_q5_plane_dense_gfx11_wave32 {subgroup_size = 32}
 
-config.decl @ggml.mul_mat_q5_k_q8_plane.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 256)]
+config.decl @ggml.mul_mat_q5_k_q8_plane.input_size : %value: index where [range(%value, 256, 32768), multiple_of(%value, 256)]
 
 config.decl @ggml.mul_mat_q5_k_q8_plane.output_size : %value: index where [range(%value, 1, 262144)]
 
 config.decl @ggml.mul_mat_q5_k_q8_plane.token_capacity : %value: index where [range(%value, 1, 2048), range(%value, 1, 2048)]
 
-config.decl @ggml.mul_mat_q8_1_x4.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 256)]
+config.decl @ggml.mul_mat_q8_1_x4.input_size : %value: index where [range(%value, 256, 32768), multiple_of(%value, 256)]
 
-config.decl @ggml.mul_mat_q8_1_x4.output_size : %value: index where [range(%value, 64, 262144), mul(%value, 64)]
+config.decl @ggml.mul_mat_q8_1_x4.output_size : %value: index where [range(%value, 64, 262144), multiple_of(%value, 64)]
 
-config.decl @ggml.mul_mat_q8_1_x4.token_capacity : %value: index where [range(%value, 256, 2048), mul(%value, 256)]
+config.decl @ggml.mul_mat_q8_1_x4.token_capacity : %value: index where [range(%value, 256, 2048), multiple_of(%value, 256)]
 
 config.decl @ggml.mul_mat_q8_1_x4.weight_format : %value: index where [range(%value, 4, 44)]
 
@@ -410,8 +410,8 @@ template.def<@ggml.mul_mat_q5_k_q8_plane.wmmai8.body> device @ggml_mul_mat_q5_k_
         %q8_block1_token = index.assume %q8_block1_token0 [range(%q8_block1_token0, 1, 33554431)] : index
         %q8_payload_word0_0 = index.mul %q8_block0_token, %c8 : index
         %q8_payload_word1_0 = index.mul %q8_block1_token, %c8 : index
-        %q8_payload_word0 = index.assume %q8_payload_word0_0 [range(%q8_payload_word0_0, 0, 268435448), mul(%q8_payload_word0_0, 8)] : index
-        %q8_payload_word1 = index.assume %q8_payload_word1_0 [range(%q8_payload_word1_0, 8, 268435448), mul(%q8_payload_word1_0, 8)] : index
+        %q8_payload_word0 = index.assume %q8_payload_word0_0 [range(%q8_payload_word0_0, 0, 268435448), multiple_of(%q8_payload_word0_0, 8)] : index
+        %q8_payload_word1 = index.assume %q8_payload_word1_0 [range(%q8_payload_word1_0, 8, 268435448), multiple_of(%q8_payload_word1_0, 8)] : index
         %q8_plane_words0 = vector.load %q8_plane_payload[%q8_payload_word0] : view<[%q8_plane_payload_words]xi32> -> vector<8xi32>
         %q8_plane_words1 = vector.load %q8_plane_payload[%q8_payload_word1] : view<[%q8_plane_payload_words]xi32> -> vector<8xi32>
         %q8_meta0_word = view.load %q8_plane_metadata[%q8_block0_token] : view<[%q8_plane_metadata_count]xi32> -> i32
@@ -605,7 +605,7 @@ template.def<@ggml.mul_mat_q5_k_q8_plane.wmmai8.body> device @ggml_mul_mat_q5_k_
           // and stores one adjacent F16 scale pair for these two K32 groups.
           %q5_s5_header_view = buffer.view %src0_na[%q5_block_byte_base] : buffer -> view<16xi8>
           %q5_s5_scale_byte0 = index.mul %q5_group0, %c2 : index
-          %q5_s5_scale_byte = index.assume %q5_s5_scale_byte0 [range(%q5_s5_scale_byte0, 0, 12), mul(%q5_s5_scale_byte0, 4)] : index
+          %q5_s5_scale_byte = index.assume %q5_s5_scale_byte0 [range(%q5_s5_scale_byte0, 0, 12), multiple_of(%q5_s5_scale_byte0, 4)] : index
           %q5_s5_scale_raw = vector.load %q5_s5_header_view[%q5_s5_scale_byte] : view<16xi8> -> vector<4xi8>
           %q5_s5_scale_halves = vector.bitcast %q5_s5_scale_raw : vector<4xi8> to vector<2xf16>
           %q5_s5_scale0_f16 = vector.extract %q5_s5_scale_halves[0] : vector<2xf16> -> f16
@@ -1257,9 +1257,9 @@ kernel.def target(@ggml_q5_plane_dense_gfx11_wave32) @ggml_mul_mat_q5_k_q8_plane
   %input_size0 = config.get @ggml.mul_mat_q5_k_q8_plane.input_size : index
   %output_size0 = config.get @ggml.mul_mat_q5_k_q8_plane.output_size : index
   %token_capacity = config.get @ggml.mul_mat_q5_k_q8_plane.token_capacity : index
-  %input_size = index.assume %input_size0 [range(%input_size0, 256, 32768), mul(%input_size0, 256)] : index
-  %output_size = index.assume %output_size0 [range(%output_size0, 64, 262144), mul(%output_size0, 64)] : index
-  %bounded_token_count, %configured_token_capacity = index.assume %token_count, %token_capacity [range(%token_count, 256, 2048), mul(%token_count, 256), eq(%token_count, %token_capacity)] : index, index
+  %input_size = index.assume %input_size0 [range(%input_size0, 256, 32768), multiple_of(%input_size0, 256)] : index
+  %output_size = index.assume %output_size0 [range(%output_size0, 64, 262144), multiple_of(%output_size0, 64)] : index
+  %bounded_token_count, %configured_token_capacity = index.assume %token_count, %token_capacity [range(%token_count, 256, 2048), multiple_of(%token_count, 256), eq(%token_count, %token_capacity)] : index, index
   %nchunks = index.div %input_size, %k_kc : index
   %kblocks = index.div %input_size, %c32 : index
 
@@ -1339,9 +1339,9 @@ template.def<@ggml.mul_mat_q8_1_x4.entry> device @ggml_mul_mat_q8_1_x4_entry(%to
   %input_size0 = config.get @ggml.mul_mat_q8_1_x4.input_size : index
   %output_size0 = config.get @ggml.mul_mat_q8_1_x4.output_size : index
   %token_capacity = config.get @ggml.mul_mat_q8_1_x4.token_capacity : index
-  %input_size = index.assume %input_size0 [range(%input_size0, 256, 32768), mul(%input_size0, 256)] : index
-  %output_size = index.assume %output_size0 [range(%output_size0, 64, 262144), mul(%output_size0, 64)] : index
-  %bounded_token_count, %configured_token_capacity = index.assume %token_count, %token_capacity [range(%token_count, 256, 2048), mul(%token_count, 256), eq(%token_count, %token_capacity)] : index, index
+  %input_size = index.assume %input_size0 [range(%input_size0, 256, 32768), multiple_of(%input_size0, 256)] : index
+  %output_size = index.assume %output_size0 [range(%output_size0, 64, 262144), multiple_of(%output_size0, 64)] : index
+  %bounded_token_count, %configured_token_capacity = index.assume %token_count, %token_capacity [range(%token_count, 256, 2048), multiple_of(%token_count, 256), eq(%token_count, %token_capacity)] : index, index
   %nchunks = index.div %input_size, %k_kc : index
   %kblocks = index.div %input_size, %c32 : index
 

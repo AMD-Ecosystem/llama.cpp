@@ -5,7 +5,7 @@ template.decl @ggml.rmsnorm_binary_q8_1_x4.body(%publish_f16: i1, %token_count: 
 
 amdgpu.target<gfx11-generic> @ggml_rmsnorm_binary_q8_1_x4_gfx11_wave32 {subgroup_size = 32}
 
-config.decl @ggml.rmsnorm_binary_q8_1_x4.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+config.decl @ggml.rmsnorm_binary_q8_1_x4.hidden_size : %value: index where [range(%value, 128, 32768), multiple_of(%value, 128)]
 
 config.decl @ggml.rmsnorm_binary_q8_1_x4.rms_epsilon : f32
 

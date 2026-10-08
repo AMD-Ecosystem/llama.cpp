@@ -9,7 +9,7 @@ template.decl @ggml.rmsnorm_f32.row_scale(%token_count0: index, %token0: index, 
 
 template.def<@ggml.rmsnorm_f32.row_scale> device @ggml_rmsnorm_f32_row_scale(%token_count0: index, %token0: index, %hidden_size0: index, %input_stride0: index, %epsilon: f32, %input: buffer) -> (f32, index, index, i1) {
   %token_count = index.assume %token_count0 [range(%token_count0, 1, 1048576)] : index
-  %hidden_size1 = index.assume %hidden_size0 [range(%hidden_size0, 64, 32768), mul(%hidden_size0, 64)] : index
+  %hidden_size1 = index.assume %hidden_size0 [range(%hidden_size0, 64, 32768), multiple_of(%hidden_size0, 64)] : index
   %input_stride1 = index.assume %input_stride0 [range(%input_stride0, 64, 1048576)] : index
   %hidden_size, %input_stride = index.assume %hidden_size1, %input_stride1 [le(%hidden_size1, %input_stride1)] : index, index
   %workitem = kernel.workitem.id<x> : index
@@ -99,7 +99,7 @@ template.decl @ggml.rmsnorm_f32.subgroup_row_scale(%token_count: index, %token: 
 template.def<@ggml.rmsnorm_f32.subgroup_row_scale> device @ggml_rmsnorm_f32_subgroup_row_scale(%token_count0: index, %token0: index, %hidden0: index, %epsilon: f32, %input_n: buffer) -> (f32) {
   %bounded_token_count = index.assume %token_count0 [range(%token_count0, 1, 1048576)] : index
   %row = index.assume %token0 [lt(%token0, %bounded_token_count)] : index
-  %hidden = index.assume %hidden0 [range(%hidden0, 128, 1024), mul(%hidden0, 128)] : index
+  %hidden = index.assume %hidden0 [range(%hidden0, 128, 1024), multiple_of(%hidden0, 128)] : index
   %lane = kernel.subgroup.lane.id : index
   %four = index.constant 4 : index
   %c128 = index.constant 128 : index
@@ -110,7 +110,7 @@ template.def<@ggml.rmsnorm_f32.subgroup_row_scale> device @ggml_rmsnorm_f32_subg
   %iv = buffer.view %input_n[%zero_offset] : buffer -> view<[%bounded_token_count]x[%hidden]xf32>
   %last_channel = index.sub %hidden, %four : index
   %squares = scf.for %channel = [%channel0 to %hidden step %c128](%sum = %zero4 : vector<4xf32>) -> (vector<4xf32>) {
-    %bounded_channel = index.assume %channel [range(%channel, 0, 1020), mul(%channel, 4), le(%channel, %last_channel)] : index
+    %bounded_channel = index.assume %channel [range(%channel, 0, 1020), multiple_of(%channel, 4), le(%channel, %last_channel)] : index
     %x = vector.load %iv[%row, %bounded_channel] : view<[%bounded_token_count]x[%hidden]xf32> -> vector<4xf32>
     %xx = vector.mulf<reassoc|nnan|ninf|nsz> %x, %x : vector<4xf32>
     %next = vector.addf<reassoc|nnan|ninf|nsz> %sum, %xx : vector<4xf32>
@@ -132,7 +132,7 @@ template.def<@ggml.rmsnorm_f32.apply> device @ggml_rmsnorm_f32_apply(%value: f32
 }
 
 
-config.decl @ggml.rmsnorm_f32.hidden_size : %value: index where [range(%value, 64, 32768), mul(%value, 64)]
+config.decl @ggml.rmsnorm_f32.hidden_size : %value: index where [range(%value, 64, 32768), multiple_of(%value, 64)]
 config.decl @ggml.rmsnorm_f32.input_stride : %value: index where [range(%value, 64, 1048576)]
 config.decl @ggml.rmsnorm_f32.rms_epsilon : f32
 
@@ -142,7 +142,7 @@ template.def<@ggml.rmsnorm_f32.body> device @ggml_rmsnorm_f32_body(%token_count:
   %hidden_size0 = config.get @ggml.rmsnorm_f32.hidden_size : index
   %input_stride0 = config.get @ggml.rmsnorm_f32.input_stride : index
   %epsilon = config.get @ggml.rmsnorm_f32.rms_epsilon : f32
-  %hidden_size1 = index.assume %hidden_size0 [range(%hidden_size0, 64, 32768), mul(%hidden_size0, 64)] : index
+  %hidden_size1 = index.assume %hidden_size0 [range(%hidden_size0, 64, 32768), multiple_of(%hidden_size0, 64)] : index
   %input_stride1 = index.assume %input_stride0 [range(%input_stride0, 64, 1048576)] : index
   %hidden_size, %input_stride = index.assume %hidden_size1, %input_stride1 [le(%hidden_size1, %input_stride1)] : index, index
   %token0 = kernel.workgroup.id<x> : index
@@ -183,7 +183,7 @@ config.decl @ggml.rmsnorm_mul_rope.section1 : %value: index where [range(%value,
 config.decl @ggml.rmsnorm_mul_rope.section2 : %value: index where [range(%value, 0, 65536)]
 config.decl @ggml.rmsnorm_mul_rope.section3 : %value: index where [range(%value, 0, 65536)]
 config.decl @ggml.rmsnorm_mul_rope.mode : %value: index where [range(%value, 2, 40)]
-config.decl @ggml.rmsnorm_mul_rope.workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+config.decl @ggml.rmsnorm_mul_rope.workgroup_size : %value: index where [range(%value, 32, 1024), multiple_of(%value, 32)]
 config.decl @ggml.rmsnorm_mul_rope.epsilon : f32
 config.decl @ggml.rmsnorm_mul_rope.freq_base : f32
 config.decl @ggml.rmsnorm_mul_rope.freq_scale : f32

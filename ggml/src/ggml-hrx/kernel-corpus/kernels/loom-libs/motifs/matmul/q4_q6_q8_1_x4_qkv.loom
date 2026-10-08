@@ -3,7 +3,7 @@
 
 template.decl @qwen3_moe.attention.qkv_quantized.body(%value_uses_q6_index: index, %publish_output: i1, %token_count: index, %token0: index, %q8_input: buffer, %query_weight: buffer, %key_weight: buffer, %value_weight: buffer, %query_output: buffer, %key_output: buffer, %value_output: buffer)
 
-config.decl @qwen3_moe.model.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+config.decl @qwen3_moe.model.hidden_size : %value: index where [range(%value, 128, 32768), multiple_of(%value, 128)]
 
 config.decl @qwen3_moe.attention.query_size : %value: index where [range(%value, 1, 262144)]
 
@@ -20,8 +20,8 @@ template.def<@qwen3_moe.attention.qkv_quantized.body> device @qwen3_moe_attentio
   %query_size0 = config.get @qwen3_moe.attention.query_size : index
   %key_value_size0 = config.get @qwen3_moe.attention.key_value_size : index
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
-  %hidden_size = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), mul(%hidden_size0, 128)] : index
-  %query_size, %key_value_size = index.assume %query_size0, %key_value_size0 [range(%query_size0, 1, 262144), range(%key_value_size0, 1, 262144), mul(%query_size0, %key_value_size0)] : index, index
+  %hidden_size = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), multiple_of(%hidden_size0, 128)] : index
+  %query_size, %key_value_size = index.assume %query_size0, %key_value_size0 [range(%query_size0, 1, 262144), range(%key_value_size0, 1, 262144), multiple_of(%query_size0, %key_value_size0)] : index, index
   %channel_tile = kernel.workgroup.id<x> : index
   %subgroup0 = kernel.subgroup.id : index
   %lane = kernel.subgroup.lane.id : index

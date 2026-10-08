@@ -8,7 +8,7 @@ template.decl @ggml.quantize_q8_1_x4.publish_vector4(%publish_word: i1, %token_o
 amdgpu.target<gfx11-generic> @ggml_binary_publish_q8_gfx11_wave32 {subgroup_size = 32}
 
 config.decl @ggml.binary_f32.op : %value: index where [range(%value, 0, 8)]
-config.decl @ggml.binary_f32.ne0 : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+config.decl @ggml.binary_f32.ne0 : %value: index where [range(%value, 128, 32768), multiple_of(%value, 128)]
 config.decl @ggml.binary_f32.src0_stride1 : %value: index where [range(%value, 128, 1048576)]
 config.decl @ggml.binary_f32.src1_stride1 : %value: index where [range(%value, 128, 1048576)]
 config.decl @ggml.binary_f32.src0_span : %value: index where [range(%value, 128, 134217728)]
@@ -21,7 +21,7 @@ kernel.def target(@ggml_binary_publish_q8_gfx11_wave32) export("ggml_binary_f32_
 } launch(%token_count: index, %lhs: buffer, %rhs: buffer, %output: buffer, %q8_output: buffer) where [range(%token_count, 1, 5)] {
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 5)] : index
   %hidden_size0 = config.get @ggml.binary_f32.ne0 : index
-  %hidden_size = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), mul(%hidden_size0, 128)] : index
+  %hidden_size = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), multiple_of(%hidden_size0, 128)] : index
   %lhs_stride = config.get @ggml.binary_f32.src0_stride1 : index
   %rhs_stride = config.get @ggml.binary_f32.src1_stride1 : index
   %lhs_count = config.get @ggml.binary_f32.src0_span : index

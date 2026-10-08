@@ -9,9 +9,9 @@ template.decl @ggml.rope_f32.copy_packet(%input_base: index, %normal_channel: in
 
 amdgpu.target<gfx11-generic> @ggml_rope_concat_f32_gfx11_wave32 {subgroup_size = 32}
 
-config.decl @ggml.rope_concat_f32.prefix_size : %value: index where [range(%value, 4, 1024), mul(%value, 4)]
-config.decl @ggml.rope_concat_f32.rope_size : %value: index where [range(%value, 4, 1024), mul(%value, 4)]
-config.decl @ggml.rope_concat_f32.n_dims : %value: index where [range(%value, 4, 1024), mul(%value, 4)]
+config.decl @ggml.rope_concat_f32.prefix_size : %value: index where [range(%value, 4, 1024), multiple_of(%value, 4)]
+config.decl @ggml.rope_concat_f32.rope_size : %value: index where [range(%value, 4, 1024), multiple_of(%value, 4)]
+config.decl @ggml.rope_concat_f32.n_dims : %value: index where [range(%value, 4, 1024), multiple_of(%value, 4)]
 config.decl @ggml.rope_concat_f32.head_count : %value: index where [range(%value, 1, 64)]
 config.decl @ggml.rope_concat_f32.token_capacity : %value: index where [range(%value, 1, 2048)]
 config.decl @ggml.rope_concat_f32.input_stride1 : %value: index where [range(%value, 4, 1073741824)]
@@ -43,10 +43,10 @@ kernel.def target(@ggml_rope_concat_f32_gfx11_wave32) export("ggml_rope_concat_f
   %mode = config.get @ggml.rope_concat_f32.mode : index
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %token_capacity)] : index
   %bounded_input_span = index.assume %input_span0 [range(%input_span0, 1, 1073741824)] : index
-  %head_count, %prefix_size, %rope_size, %n_dims = index.assume %head_count0, %prefix_size0, %rope_size0, %n_dims0 [range(%head_count0, 1, 64), range(%prefix_size0, 4, 1024), range(%rope_size0, 4, 1024), range(%n_dims0, 4, 1024), mul(%prefix_size0, 4), mul(%rope_size0, 4), mul(%n_dims0, 4), le(%n_dims0, %rope_size0)] : index, index, index, index
+  %head_count, %prefix_size, %rope_size, %n_dims = index.assume %head_count0, %prefix_size0, %rope_size0, %n_dims0 [range(%head_count0, 1, 64), range(%prefix_size0, 4, 1024), range(%rope_size0, 4, 1024), range(%n_dims0, 4, 1024), multiple_of(%prefix_size0, 4), multiple_of(%rope_size0, 4), multiple_of(%n_dims0, 4), le(%n_dims0, %rope_size0)] : index, index, index, index
   %input_stride1, %input_stride2 = index.assume %input_stride1_0, %input_stride2_0 [range(%input_stride1_0, 4, 1073741824), range(%input_stride2_0, 4, 1073741824)] : index, index
   %output_size0 = index.add %prefix_size, %rope_size : index
-  %output_size = index.assume %output_size0 [range(%output_size0, 8, 1024), mul(%output_size0, 4)] : index
+  %output_size = index.assume %output_size0 [range(%output_size0, 8, 1024), multiple_of(%output_size0, 4)] : index
   %head = kernel.workgroup.id<x> : index
   %token0 = kernel.workgroup.id<y> : index
   %packet0 = kernel.workitem.id<x> : index
