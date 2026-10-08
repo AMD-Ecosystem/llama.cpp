@@ -35,8 +35,16 @@ static bool tensor_storage_relative_offset(const ggml_tensor * source, const ggm
         return false;
     }
     const size_t relative_offset = tensor_offset - source_offset;
-    if (relative_offset > ggml_nbytes(source) || ggml_nbytes(tensor) > ggml_nbytes(source) - relative_offset) {
-        return false;
+    // GGML permits empty views beyond the source extent: zero-token MoE
+    // expert views keep their expert offsets but never access those bytes.
+    if (!ggml_is_empty(tensor)) {
+        const size_t source_bytes = ggml_nbytes(source);
+        if (relative_offset > source_bytes) {
+            return false;
+        }
+        if (ggml_nbytes(tensor) > source_bytes - relative_offset) {
+            return false;
+        }
     }
     offset = relative_offset;
     return true;
