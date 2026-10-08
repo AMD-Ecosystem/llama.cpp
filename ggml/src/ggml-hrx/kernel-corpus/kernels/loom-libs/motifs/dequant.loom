@@ -3410,3 +3410,63 @@ func.def inline @ggml_iq4xs_preloaded_f32_vector4(%iq4nl_table: vector<16xi8>, %
   %result = vector.from_elements %value0, %value1, %value2, %value3 : vector<4xf32>
   func.return %result : vector<4xf32>
 }
+
+func.def inline @ggml_q5k_iq4xs_load_decode_state(%format: index, %weight: buffer, %row: offset, %block: index, %packet: index) -> (vector<4xi32>, vector<4xi8>) {
+  %q5 = index.constant 5 : index
+  %iq4 = index.constant 23 : index
+  %is_q5 = index.cmp eq, %format, %q5 : index
+  %is_iq4 = index.cmp eq, %format, %iq4 : index
+  %zero = scalar.constant 0 : i32
+  %zero_qh = vector.constant 0 : vector<4xi8>
+  %header, %qh = scf.if %is_q5 -> (vector<4xi32>, vector<4xi8>) {
+    %dm, %scales, %high = func.call @ggml_q5k_load_block_header(%weight, %row, %block, %packet) : (buffer, offset, index, index) -> (vector<2xf16>, vector<3xi32>, vector<4xi8>)
+    %dmv = vector.bitcast %dm : vector<2xf16> to vector<1xi32>
+    %d = vector.extract %dmv[0] : vector<1xi32> -> i32
+    %s0 = vector.extract %scales[0] : vector<3xi32> -> i32
+    %s1 = vector.extract %scales[1] : vector<3xi32> -> i32
+    %s2 = vector.extract %scales[2] : vector<3xi32> -> i32
+    %h = vector.from_elements %d, %s0, %s1, %s2 : vector<4xi32>
+    scf.yield %h, %high : vector<4xi32>, vector<4xi8>
+  } else {
+    %h = scf.if %is_iq4 -> (vector<4xi32>) {
+      %high, %low = func.call @ggml_iq4xs_load_block_header(%weight, %row, %block) : (buffer, offset, index) -> (i32, i32)
+      %v = vector.from_elements %high, %low, %zero, %zero : vector<4xi32>
+      scf.yield %v : vector<4xi32>
+    } else {
+      %v = vector.constant 0 : vector<4xi32>
+      scf.yield %v : vector<4xi32>
+    }
+    scf.yield %h, %zero_qh : vector<4xi32>, vector<4xi8>
+  }
+  func.return %header, %qh : vector<4xi32>, vector<4xi8>
+}
+
+func.def inline @ggml_q5k_iq4xs_preloaded_f16_vector4(%iq4nl_table: vector<16xi8>, %iq3s_grid_low0: vector<32xf32>, %iq3s_grid_low1: vector<32xf32>, %iq3s_grid_low2: vector<32xf32>, %iq3s_grid_low3: vector<32xf32>, %iq3s_grid_low4: vector<32xf32>, %iq3s_grid_low5: vector<32xf32>, %iq3s_grid_low6: vector<32xf32>, %iq3s_grid_low7: vector<32xf32>, %iq3s_grid_low8: vector<32xf32>, %iq3s_grid_low9: vector<32xf32>, %iq3s_grid_low10: vector<32xf32>, %iq3s_grid_low11: vector<32xf32>, %iq3s_grid_low12: vector<32xf32>, %iq3s_grid_low13: vector<32xf32>, %iq3s_grid_low14: vector<32xf32>, %iq3s_grid_low15: vector<32xf32>, %iq3s_grid_high0: vector<32xf32>, %iq3s_grid_high1: vector<32xf32>, %iq3s_grid_high2: vector<32xf32>, %iq3s_grid_high3: vector<32xf32>, %iq3s_grid_high4: vector<32xf32>, %iq3s_grid_high5: vector<32xf32>, %iq3s_grid_high6: vector<32xf32>, %iq3s_grid_high7: vector<32xf32>, %iq3s_grid_high8: vector<32xf32>, %iq3s_grid_high9: vector<32xf32>, %iq3s_grid_high10: vector<32xf32>, %iq3s_grid_high11: vector<32xf32>, %iq3s_grid_high12: vector<32xf32>, %iq3s_grid_high13: vector<32xf32>, %iq3s_grid_high14: vector<32xf32>, %iq3s_grid_high15: vector<32xf32>, %weight_format: index, %weight: buffer, %row_byte_base: offset, %input_size: index, %quant_block: index, %quant_group: index, %packet: index, %k: index, %header: vector<4xi32>, %qh: vector<4xi8>) -> (vector<4xf16>) {
+  %q5 = index.constant 5 : index
+  %iq4 = index.constant 23 : index
+  %is_q5 = index.cmp eq, %weight_format, %q5 : index
+  %is_iq4 = index.cmp eq, %weight_format, %iq4 : index
+  %h0 = vector.extract %header[0] : vector<4xi32> -> i32
+  %h1 = vector.extract %header[1] : vector<4xi32> -> i32
+  %h2 = vector.extract %header[2] : vector<4xi32> -> i32
+  %h3 = vector.extract %header[3] : vector<4xi32> -> i32
+  %result = scf.if %is_q5 -> (vector<4xf16>) {
+    %dmv = vector.from_elements %h0 : vector<1xi32>
+    %dm = vector.bitcast %dmv : vector<1xi32> to vector<2xf16>
+    %scales = vector.from_elements %h1, %h2, %h3 : vector<3xi32>
+    %v = func.call @ggml_q5k_preloaded_f32_vector4(%weight, %row_byte_base, %quant_block, %quant_group, %packet, %dm, %scales, %qh) : (buffer, offset, index, index, index, vector<2xf16>, vector<3xi32>, vector<4xi8>) -> (vector<4xf32>)
+    %narrow = vector.fptrunc %v : vector<4xf32> to vector<4xf16>
+    scf.yield %narrow : vector<4xf16>
+  } else {
+    %other = scf.if %is_iq4 -> (vector<4xf16>) {
+      %v = func.call @ggml_iq4xs_preloaded_f32_vector4(%iq4nl_table, %weight, %row_byte_base, %quant_block, %quant_group, %packet, %h0, %h1) : (vector<16xi8>, buffer, offset, index, index, index, i32, i32) -> (vector<4xf32>)
+      %narrow = vector.fptrunc %v : vector<4xf32> to vector<4xf16>
+      scf.yield %narrow : vector<4xf16>
+    } else {
+      %fallback = func.call @ggml_dequant_f16_vector4(%iq4nl_table, %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15, %weight_format, %weight, %row_byte_base, %input_size, %quant_block, %quant_group, %packet, %k) : (vector<16xi8>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, index, buffer, offset, index, index, index, index, index) -> (vector<4xf16>)
+      scf.yield %fallback : vector<4xf16>
+    }
+    scf.yield %other : vector<4xf16>
+  }
+  func.return %result : vector<4xf16>
+}

@@ -6004,6 +6004,16 @@ static void register_dense_matmul_cases(Suite & suite) {
             run_dense_matmul_cpu_reference_case(type, tiled_kernel, 64, 128, 2048);
         });
     }
+    for (const ggml_type gate : { GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS }) {
+        for (const ggml_type up : { GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS }) {
+            for (const int64_t input_size : { 256, 768 }) {
+                suite.device_case("dense_matmul.metadata_pair." + type_name(gate) + "." + type_name(up) + ".k" + std::to_string(input_size), [gate, up, input_size] {
+                    run_dense_matmul_swiglu_cpu_reference_case(gate, up, "loom_libs:ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32", 33, 65, GGML_GLU_OP_SWIGLU, input_size);
+                });
+            }
+        }
+    }
+
     for (const int64_t tokens : { 1, 3, 5 }) {
         for (const int64_t outputs : { 1, 4, 47, 48, 63 }) {
             suite.device_case(
