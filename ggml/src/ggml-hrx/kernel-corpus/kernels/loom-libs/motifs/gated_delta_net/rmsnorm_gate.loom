@@ -17,7 +17,7 @@ template.def<@llm.gated_delta_net.rmsnorm_gate.publish_head128> device @llm_gate
   %post_tokens = index.mul %n_tokens, %n_seqs : index
   %post_groups = index.mul %n_heads, %c8 : index
   %post_channel0 = index.mul %lane, %c4 : index
-  %post_channel = index.assume %post_channel0 [range(%post_channel0, 0, 124), mul(%post_channel0, 4)] : index
+  %post_channel = index.assume %post_channel0 [range(%post_channel0, 0, 124), multiple_of(%post_channel0, 4)] : index
   %post_attention = buffer.view %lds[%base] : buffer -> view<16x128xf32>
   %post_weights = buffer.view %rms_weight[%base] : buffer -> view<128xf32>
   %post_gates = buffer.view %raw_gate[%base] : buffer -> view<[%post_rows]x128xf32>

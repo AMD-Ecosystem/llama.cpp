@@ -31,7 +31,7 @@ template.def<@llm.ssm_conv.rollback_store_carried> device @llm_ssm_conv_rollback
         %old12 = scf.select %is_one, %old1, %old2 : f32
         %value = scf.select %is_zero, %old0, %old12 : f32
         %channel_base0 = index.mul %channel, %c3 : index
-        %channel_base = index.assume %channel_base0 [range(%channel_base0, 0, 196605), mul(%channel_base0, 3)] : index
+        %channel_base = index.assume %channel_base0 [range(%channel_base0, 0, 196605), multiple_of(%channel_base0, 3)] : index
         %cache_channel_index0 = index.add %channel_base, %row : index
         %cache_channel_index = index.assume %cache_channel_index0 [range(%cache_channel_index0, 0, 196607)] : index
         %cache_index0 = index.add %cache_sequence_base, %cache_channel_index : index
@@ -64,7 +64,7 @@ template.def<@llm.ssm_conv.rollback_store_x> device @llm_ssm_conv_rollback_store
     %row0 = index.sub %source_row, %start : index
     %row = index.assume %row0 [range(%row0, 0, 2)] : index
     %channel_base0 = index.mul %channel, %c3 : index
-    %channel_base = index.assume %channel_base0 [range(%channel_base0, 0, 196605), mul(%channel_base0, 3)] : index
+    %channel_base = index.assume %channel_base0 [range(%channel_base0, 0, 196605), multiple_of(%channel_base0, 3)] : index
     %cache_channel_index0 = index.add %channel_base, %row : index
     %cache_channel_index = index.assume %cache_channel_index0 [range(%cache_channel_index0, 0, 196607)] : index
     %cache_index0 = index.add %cache_sequence_base, %cache_channel_index : index

@@ -13,7 +13,7 @@ template.def<@llm.ssm_conv.generic_apply> device @llm_ssm_conv_generic_apply(%ch
   %window_rows0 = index.add %bounded_n_t, %d_conv : index
   %window_rows = index.sub %window_rows0, %c1 : index
   %window_sequence_span0 = index.mul %window_rows, %d_inner : index
-  %window_sequence_span = index.assume %window_sequence_span0 [range(%window_sequence_span0, 32, 34603008), mul(%window_sequence_span0, 32)] : index
+  %window_sequence_span = index.assume %window_sequence_span0 [range(%window_sequence_span0, 32, 34603008), multiple_of(%window_sequence_span0, 32)] : index
   %window_sequence_base = index.mul %sequence, %window_sequence_span : index
   %window_channel_base0 = index.mul %channel, %window_rows : index
   %window_channel_base = index.assume %window_channel_base0 [range(%window_channel_base0, 0, 34603008)] : index

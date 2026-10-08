@@ -85,8 +85,8 @@ func.def public inline @ggml_q6k_f16_pair(%half_packet: i1, %weight: buffer, %we
   %nibble_mask = vector.constant 252645135 : vector<4xi32>
   %high_mask = vector.constant 50529027 : vector<4xi32>
   %c32_f32v = vector.constant 32.0 : vector<16xf32>
-  %bounded_group = index.assume %q6_group [range(%q6_group, 0, 6), mul(%q6_group, 2)] : index
-  %bounded_packet = index.assume %packet [range(%packet, 0, 6), mul(%packet, 2)] : index
+  %bounded_group = index.assume %q6_group [range(%q6_group, 0, 6), multiple_of(%q6_group, 2)] : index
+  %bounded_packet = index.assume %packet [range(%packet, 0, 6), multiple_of(%packet, 2)] : index
   %block_byte_add = index.scale %q6_block, %block_bytes : index, offset -> offset
   %block_byte_base = index.add %weight_row_byte_base, %block_byte_add : offset
   %qh_byte_base = index.add %block_byte_base, %qh_byte_add : offset

@@ -5,7 +5,7 @@ template.decl @qwen3_moe.attention.postprocess.head_body(%publish_output: i1, %t
 
 config.decl @qwen3_moe.model.rms_epsilon : f32
 
-config.decl @qwen3_moe.attention.head_size : %value: index where [range(%value, 4, 1024), mul(%value, 4)]
+config.decl @qwen3_moe.attention.head_size : %value: index where [range(%value, 4, 1024), multiple_of(%value, 4)]
 
 config.decl @qwen3_moe.attention.query_size : %value: index where [range(%value, 1, 262144)]
 
@@ -51,7 +51,7 @@ template.def<@qwen3_moe.attention.postprocess.head_body> device @qwen3_moe_atten
   %epsilon = config.get @qwen3_moe.model.rms_epsilon : f32
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
   %bounded_cache_row_count = index.assume %cache_row_count [range(%cache_row_count, 1, 1048576)] : index
-  %query_size, %key_value_size, %head_size = index.assume %query_size0, %key_value_size0, %head_size0 [range(%query_size0, 1, 262144), range(%key_value_size0, 1, 262144), range(%head_size0, 4, 1024), mul(%head_size0, 4), mul(%query_size0, %head_size0), mul(%key_value_size0, %head_size0)] : index, index, index
+  %query_size, %key_value_size, %head_size = index.assume %query_size0, %key_value_size0, %head_size0 [range(%query_size0, 1, 262144), range(%key_value_size0, 1, 262144), range(%head_size0, 4, 1024), multiple_of(%head_size0, 4), multiple_of(%query_size0, %head_size0), multiple_of(%key_value_size0, %head_size0)] : index, index, index
   %channel0 = kernel.workitem.id<x> : index
   %c0 = index.constant 0 : index
   %c2 = index.constant 2 : index

@@ -19,9 +19,9 @@ kernel.def target(@ggml_binary_bc_publish_q8_gfx11_wave32) export("ggml_binary_b
   %c3 = index.constant 3 : index
   %c256 = index.constant 256 : index
   kernel.launch.config workgroups(%token_count, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
-} launch(%token_count: index, %hidden_size: index, %src0_element_count: index, %src1_element_count: index, %lhs: buffer, %rhs: buffer, %output: buffer, %q8_output: buffer) where [range(%token_count, 1, 5), range(%hidden_size, 128, 32768), mul(%hidden_size, 128), range(%src0_element_count, 1, 134217728), range(%src1_element_count, 1, 134217728)] {
+} launch(%token_count: index, %hidden_size: index, %src0_element_count: index, %src1_element_count: index, %lhs: buffer, %rhs: buffer, %output: buffer, %q8_output: buffer) where [range(%token_count, 1, 5), range(%hidden_size, 128, 32768), multiple_of(%hidden_size, 128), range(%src0_element_count, 1, 134217728), range(%src1_element_count, 1, 134217728)] {
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 5)] : index
-  %bounded_hidden_size = index.assume %hidden_size [range(%hidden_size, 128, 32768), mul(%hidden_size, 128)] : index
+  %bounded_hidden_size = index.assume %hidden_size [range(%hidden_size, 128, 32768), multiple_of(%hidden_size, 128)] : index
   %lhs_count = index.assume %src0_element_count [range(%src0_element_count, 1, 134217728)] : index
   %rhs_count = index.assume %src1_element_count [range(%src1_element_count, 1, 134217728)] : index
   %op = config.get @ggml.binary_bc_f32.op : index

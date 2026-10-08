@@ -1,7 +1,7 @@
 // Copyright 2026 The HRX Authors
 // SPDX-License-Identifier: Apache-2.0
 
-config.decl @ggml.binary_swiglu_symmetric_i4.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 64)]
+config.decl @ggml.binary_swiglu_symmetric_i4.input_size : %value: index where [range(%value, 256, 32768), multiple_of(%value, 64)]
 
 config.decl @ggml.binary_swiglu_symmetric_i4.token_count : %value: index where [range(%value, 1, 16)]
 
@@ -33,10 +33,10 @@ template.def<@ggml.binary_swiglu_symmetric_i4_k32.body> device @ggml_binary_swig
 
   %input_size0 = config.get @ggml.binary_swiglu_symmetric_i4.input_size : index
   %token_count0 = config.get @ggml.binary_swiglu_symmetric_i4.token_count : index
-  %input_size = index.assume %input_size0 [range(%input_size0, 256, 32768), mul(%input_size0, 64)] : index
+  %input_size = index.assume %input_size0 [range(%input_size0, 256, 32768), multiple_of(%input_size0, 64)] : index
   %token_count = index.assume %token_count0 [range(%token_count0, 1, 16)] : index
   %element_count0 = index.mul %input_size, %token_count : index
-  %element_count = index.assume %element_count0 [range(%element_count0, 256, 524288), mul(%element_count0, 64)] : index
+  %element_count = index.assume %element_count0 [range(%element_count0, 256, 524288), multiple_of(%element_count0, 64)] : index
   %groups32 = index.div %element_count, %c32 : index
   %groups64 = index.div %element_count, %c64 : index
   %qs_halfwords = index.div %element_count, %c4 : index
@@ -68,7 +68,7 @@ template.def<@ggml.binary_swiglu_symmetric_i4_k32.body> device @ggml_binary_swig
     %group_element_base = index.mul %group64, %c64 : index
     %lane_element_offset = index.mul %lane, %c2 : index
     %linear0 = index.add %group_element_base, %lane_element_offset : index
-    %linear = index.assume %linear0 [range(%linear0, 0, 524286), mul(%linear0, 2)] : index
+    %linear = index.assume %linear0 [range(%linear0, 0, 524286), multiple_of(%linear0, 2)] : index
     %lhs_values = vector.load %lhs_view[%linear] : view<[%element_count]xf32> -> vector<2xf32>
     %rhs_values = vector.load %rhs_view[%linear] : view<[%element_count]xf32> -> vector<2xf32>
     %activated = vector.siluf<afn> %lhs_values : vector<2xf32>

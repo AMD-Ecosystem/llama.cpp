@@ -1,7 +1,7 @@
 // Shared Q6-weight vector matmul reductions.
 config.decl @ggml.matmul.vector.output_accumulation : %value: index where [range(%value, 0, 1)]
 
-config.decl @ggml.matmul.vector.weight_offset : %value: index where [range(%value, 0, 2147483647), mul(%value, 256)]
+config.decl @ggml.matmul.vector.weight_offset : %value: index where [range(%value, 0, 2147483647), multiple_of(%value, 256)]
 
 template.decl @ggml.matmul.vector_q6_f32.store_fragment_outputs_wave32(%result: vector<16xf16>, %token_offset: index, %token_start: index, %bounded_token_count: index, %bounded_output_size: index, %channel_base: index, %subgroup_channel_add: index, %result_stage: buffer, %output_noalias: buffer, %output_accumulation: index)
 
@@ -158,8 +158,8 @@ template.def<@ggml.matmul.vector_q6_f32.store_dense_outputs_wave32> device @ggml
 template.def<@ggml.matmul.vector_q6_f32.body_packed_storage> device @ggml_matmul_vector_q6_f32_body_packed_storage(%token_count: index, %input_size0: index, %output_size0: index, %output_block: index, %scale_row_layout: index, %input: buffer, %weight: buffer, %output: buffer) {
   %output_accumulation = config.get @ggml.matmul.vector.output_accumulation : index
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1)] : index
-  %bounded_input_size = index.assume %input_size0 [range(%input_size0, 256, 32768), mul(%input_size0, 256)] : index
-  %bounded_output_size = index.assume %output_size0 [range(%output_size0, 64, 262144), mul(%output_size0, 64)] : index
+  %bounded_input_size = index.assume %input_size0 [range(%input_size0, 256, 32768), multiple_of(%input_size0, 256)] : index
+  %bounded_output_size = index.assume %output_size0 [range(%output_size0, 64, 262144), multiple_of(%output_size0, 64)] : index
   %workitem0 = kernel.workitem.id<x> : index
   %workitem = index.assume %workitem0 [range(%workitem0, 0, 127)] : index
   %subgroup0 = kernel.subgroup.id : index
@@ -382,8 +382,8 @@ template.def<@ggml.matmul.vector_q6_f32.body_packed_storage> device @ggml_matmul
 template.def<@ggml.matmul.vector_q6_f32.body_i8_storage> device @ggml_matmul_vector_q6_f32_body_i8_storage(%token_count: index, %input_size0: index, %output_size0: index, %output_block: index, %input: buffer, %weight: buffer, %output: buffer) {
   %output_accumulation = config.get @ggml.matmul.vector.output_accumulation : index
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1)] : index
-  %bounded_input_size = index.assume %input_size0 [range(%input_size0, 256, 32768), mul(%input_size0, 256)] : index
-  %bounded_output_size = index.assume %output_size0 [range(%output_size0, 64, 262144), mul(%output_size0, 64)] : index
+  %bounded_input_size = index.assume %input_size0 [range(%input_size0, 256, 32768), multiple_of(%input_size0, 256)] : index
+  %bounded_output_size = index.assume %output_size0 [range(%output_size0, 64, 262144), multiple_of(%output_size0, 64)] : index
   %workitem0 = kernel.workitem.id<x> : index
   %workitem = index.assume %workitem0 [range(%workitem0, 0, 127)] : index
   %subgroup0 = kernel.subgroup.id : index
@@ -524,8 +524,8 @@ template.def<@ggml.matmul.vector_q6_f32.body_selected_outputs> device @ggml_matm
   %weight_offset_index = config.get @ggml.matmul.vector.weight_offset : index
   %weight_offset = index.cast %weight_offset_index : index to offset
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1)] : index
-  %bounded_input_size = index.assume %input_size0 [range(%input_size0, 256, 32768), mul(%input_size0, 256)] : index
-  %bounded_output_size = index.assume %output_size0 [range(%output_size0, 64, 262144), mul(%output_size0, 64)] : index
+  %bounded_input_size = index.assume %input_size0 [range(%input_size0, 256, 32768), multiple_of(%input_size0, 256)] : index
+  %bounded_output_size = index.assume %output_size0 [range(%output_size0, 64, 262144), multiple_of(%output_size0, 64)] : index
   %bounded_selected_count = index.assume %selected_count0 [range(%selected_count0, 1, 64)] : index
   %workitem0 = kernel.workitem.id<x> : index
   %workitem = index.assume %workitem0 [range(%workitem0, 0, 127)] : index

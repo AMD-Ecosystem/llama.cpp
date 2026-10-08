@@ -11,13 +11,13 @@ template.decl @ggml.normalization.publish_f16.k16_vector4(%values: vector<4xf32>
 
 template.decl @ggml.normalization.publish_q8.binary_vector4(%publish_word: i1, %token_output_byte_base: offset, %channel: index, %values: vector<4xf32>, %scratch_values: view<256xf32>, %scratch_d: view<32xf32>, %output: buffer)
 
-config.decl @ggml.rmsnorm_binary_f32.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+config.decl @ggml.rmsnorm_binary_f32.hidden_size : %value: index where [range(%value, 128, 32768), multiple_of(%value, 128)]
 
 config.decl @ggml.rmsnorm_binary_f32.rms_epsilon : f32
 
 config.decl @ggml.rmsnorm_binary_f32.op : %value: index where [range(%value, 0, 3)]
 
-config.decl @ggml.rmsnorm_binary_q8_1_x4.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+config.decl @ggml.rmsnorm_binary_q8_1_x4.hidden_size : %value: index where [range(%value, 128, 32768), multiple_of(%value, 128)]
 
 config.decl @ggml.rmsnorm_binary_q8_1_x4.rms_epsilon : f32
 
@@ -33,7 +33,7 @@ template.def<@ggml.rmsnorm_binary_f32.body> device @ggml_rmsnorm_binary_f32_body
   %hidden_size0 = config.get @ggml.rmsnorm_binary_f32.hidden_size : index
   %epsilon = config.get @ggml.rmsnorm_binary_f32.rms_epsilon : f32
   %op = config.get @ggml.rmsnorm_binary_f32.op : index
-  %hidden_size = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), mul(%hidden_size0, 128)] : index
+  %hidden_size = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), multiple_of(%hidden_size0, 128)] : index
   %token0 = kernel.workgroup.id<x> : index
   %workitem = kernel.workitem.id<x> : index
   %c0 = index.constant 0 : index
@@ -65,7 +65,7 @@ template.def<@ggml.rmsnorm_binary_f32.lowtoken_striped_body> device @ggml_rmsnor
   %hidden_size0 = config.get @ggml.rmsnorm_binary_f32.hidden_size : index
   %epsilon = config.get @ggml.rmsnorm_binary_f32.rms_epsilon : f32
   %op = config.get @ggml.rmsnorm_binary_f32.op : index
-  %hidden_size = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), mul(%hidden_size0, 128)] : index
+  %hidden_size = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), multiple_of(%hidden_size0, 128)] : index
   %group = kernel.workgroup.id<x> : index
   %workitem = kernel.workitem.id<x> : index
   %c1 = index.constant 1 : index
@@ -105,7 +105,7 @@ template.def<@ggml.rmsnorm_binary_strided_f32.body> device @ggml_rmsnorm_binary_
   %input_stride0 = config.get @ggml.rmsnorm_binary_f32.input_stride : index
   %epsilon = config.get @ggml.rmsnorm_binary_f32.rms_epsilon : f32
   %op = config.get @ggml.rmsnorm_binary_f32.op : index
-  %hidden_size1 = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), mul(%hidden_size0, 128)] : index
+  %hidden_size1 = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), multiple_of(%hidden_size0, 128)] : index
   %input_stride1 = index.assume %input_stride0 [range(%input_stride0, 128, 1048576)] : index
   %hidden_size, %input_stride = index.assume %hidden_size1, %input_stride1 [le(%hidden_size1, %input_stride1)] : index, index
   %token0 = kernel.workgroup.id<x> : index
@@ -133,7 +133,7 @@ template.decl @ggml.rmsnorm_binary_f32_k16.body(%token_count: index, %input: buf
 
 template.def<@ggml.rmsnorm_binary_f32_k16.body> device @ggml_rmsnorm_binary_f32_k16_body(%token_count: index, %input: buffer, %rhs: buffer, %output: buffer, %f16_output: buffer) {
   %hidden0 = config.get @ggml.rmsnorm_binary_f32.hidden_size : index
-  %hidden = index.assume %hidden0 [range(%hidden0, 1024, 8192), mul(%hidden0, 1024)] : index
+  %hidden = index.assume %hidden0 [range(%hidden0, 1024, 8192), multiple_of(%hidden0, 1024)] : index
   %epsilon = config.get @ggml.rmsnorm_binary_f32.rms_epsilon : f32
   %op = config.get @ggml.rmsnorm_binary_f32.op : index
   %tid0 = kernel.workitem.id<x> : index
@@ -162,7 +162,7 @@ template.def<@ggml.rmsnorm_binary_f32_k16.body> device @ggml_rmsnorm_binary_f32_
   %stripe_count = index.div %hidden, %c256 : index
   %sum0, %sum1, %cache0, %cache1, %cache2, %cache3 = scf.for %stripe = [%c0 to %stripe_count step %c1](%running0 = %zero : f32, %running1 = %zero : f32, %values0 = %cache_zero : vector<32xf32>, %values1 = %cache_zero : vector<32xf32>, %values2 = %cache_zero : vector<32xf32>, %values3 = %cache_zero : vector<32xf32>) -> (f32, f32, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>) unroll {
     %channel0 = index.madd %stripe, %c256, %first_channel : index
-    %channel = index.assume %channel0 [range(%channel0, 0, 8190), mul(%channel0, 2), lt(%channel0, %hidden)] : index
+    %channel = index.assume %channel0 [range(%channel0, 0, 8190), multiple_of(%channel0, 2), lt(%channel0, %hidden)] : index
     %input2 = vector.load %input_view[%token, %channel] : view<[%token_count]x[%hidden]xf32> -> vector<2xf32>
     %cache_phase = index.div %stripe, %c16 : index
     %cache_stripe = index.rem %stripe, %c16 : index
@@ -270,7 +270,7 @@ template.def<@ggml.rmsnorm_binary_f32_k16.body> device @ggml_rmsnorm_binary_f32_
   %c512 = index.constant 512 : index
   scf.for %pair = [%c0 to %pair_count step %c1] unroll {
     %channel0 = index.madd %pair, %c512, %output_origin : index
-    %channel = index.assume %channel0 [range(%channel0, 0, 8188), mul(%channel0, 4), lt(%channel0, %hidden)] : index
+    %channel = index.assume %channel0 [range(%channel0, 0, 8188), multiple_of(%channel0, 4), lt(%channel0, %hidden)] : index
     %stripe = index.mul %pair, %c2 : index
     %phase = index.div %stripe, %c16 : index
     %phase0 = index.cmp eq, %phase, %c0 : index
@@ -327,7 +327,7 @@ template.def<@ggml.rmsnorm_binary_q8_1_x4.body> device @ggml_rmsnorm_binary_q8_1
   %hidden_size0 = config.get @ggml.rmsnorm_binary_q8_1_x4.hidden_size : index
   %epsilon = config.get @ggml.rmsnorm_binary_q8_1_x4.rms_epsilon : f32
   %op = config.get @ggml.rmsnorm_binary_q8_1_x4.op : index
-  %hidden_size = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), mul(%hidden_size0, 128)] : index
+  %hidden_size = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), multiple_of(%hidden_size0, 128)] : index
   %dispatch_group = kernel.workgroup.id<x> : index
   %workitem = kernel.workitem.id<x> : index
   %c0 = index.constant 0 : index

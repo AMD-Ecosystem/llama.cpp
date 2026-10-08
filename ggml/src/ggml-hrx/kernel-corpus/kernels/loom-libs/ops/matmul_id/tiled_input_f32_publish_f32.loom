@@ -11,7 +11,7 @@ template.decl @ggml.matmul_id.tiled_f32_f32.publish_vector4(%publish_word: i1, %
 
 amdgpu.target<gfx11-generic> @ggml_mul_mat_id_tiled_input_f32_publish_f32_gfx11_wave64 {subgroup_size = 64}
 
-config.decl @ggml.mul_mat_id.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 256)]
+config.decl @ggml.mul_mat_id.input_size : %value: index where [range(%value, 256, 32768), multiple_of(%value, 256)]
 
 config.decl @ggml.mul_mat_id.output_size : %value: index where [range(%value, 1, 262144)]
 

@@ -5,14 +5,14 @@ template.decl @ggml.copy.convert_f32_f16.body(%element_count: index, %source: bu
 template.decl @ggml.copy.convert_f32_f16.vector8(%values: vector<8xf32>) -> (vector<8xf16>)
 
 template.def<@ggml.copy.convert_f32_f16.body> device @ggml_copy_convert_f32_f16_body(%element_count: index, %source: buffer, %output: buffer) {
-  %count = index.assume %element_count [range(%element_count, 4, 1073741824), mul(%element_count, 4)] : index
+  %count = index.assume %element_count [range(%element_count, 4, 1073741824), multiple_of(%element_count, 4)] : index
   %group = kernel.workgroup.id<x> : index
   %thread = kernel.workitem.id<x> : index
   %threads = index.constant 256 : index
   %four = index.constant 4 : index
   %lane = index.madd %group, %threads, %thread : index
   %linear0 = index.mul %lane, %four : index
-  %linear = index.assume %linear0 [range(%linear0, 0, 1073742844), mul(%linear0, 4)] : index
+  %linear = index.assume %linear0 [range(%linear0, 0, 1073742844), multiple_of(%linear0, 4)] : index
   %end = index.add %linear, %four : index
   %valid = index.cmp ule, %end, %count : index
   %zero = index.constant 0 : offset

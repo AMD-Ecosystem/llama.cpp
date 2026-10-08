@@ -35,7 +35,7 @@ func.decl @ggml_dequant_f16_vector4(%iq4nl_table: vector<16xi8>, %iq3s_grid_low0
 
 func.def inline @ggml_mul_mat_f32_f32_wmma_tiled(%weight_format: index, %token_count: index, %input_size0: index, %output_size0: index, %output_accumulation: index, %output_unary_op: index, %epsilon: f32, %channel_tile: index, %token_tile: index, %input: buffer, %weight: buffer, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer) {
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
-  %bounded_input_size = index.assume %input_size0 [range(%input_size0, 256, 32768), mul(%input_size0, 32)] : index
+  %bounded_input_size = index.assume %input_size0 [range(%input_size0, 256, 32768), multiple_of(%input_size0, 32)] : index
   %bounded_output_size = index.assume %output_size0 [range(%output_size0, 1, 262144)] : index
   %workitem = kernel.workitem.id<x> : index
   %subgroup0 = kernel.subgroup.id : index
@@ -417,7 +417,7 @@ func.def inline @ggml_mul_mat_f32_f32_lowtoken_dot(%weight_format: index, %token
   %base = index.constant 0 : offset
   %zero = vector.constant 0.0 : vector<4xf32>
   %tokens = index.assume %token_count [range(%token_count, 1, 5)] : index
-  %k = index.assume %input_size0 [range(%input_size0, 256, 32768), mul(%input_size0, 256)] : index
+  %k = index.assume %input_size0 [range(%input_size0, 256, 32768), multiple_of(%input_size0, 256)] : index
   %n = index.assume %output_size0 [range(%output_size0, 1, 262144)] : index
   %workgroup_size = kernel.workgroup.size<x> : index
   %one_wave_per_row = index.cmp eq, %workgroup_size, %c256 : index
@@ -588,14 +588,14 @@ func.def inline @ggml_mul_mat_f32_f32_lowtoken_dot(%weight_format: index, %token
   scf.if %publishes {
     %safe_token, %safe_count = index.assume %publish_token, %tokens [lt(%publish_token, %tokens)] : index, index
     %stage_token = index.assume %safe_token [range(%safe_token, 0, 4)] : index
-    %stage_add = index.assume %publish_add [range(%publish_add, 0, 4), mul(%publish_add, 4)] : index
+    %stage_add = index.assume %publish_add [range(%publish_add, 0, 4), multiple_of(%publish_add, 4)] : index
     %stage_row_offset = index.mul %stage_token, %stage_width : index
     %stage_origin0 = index.add %stage_row_offset, %stage_add : index
     %stage_origin = scf.if %partitioned -> (index) {
-      %origin = index.assume %stage_origin0 [range(%stage_origin0, 0, 64), mul(%stage_origin0, 4)] : index
+      %origin = index.assume %stage_origin0 [range(%stage_origin0, 0, 64), multiple_of(%stage_origin0, 4)] : index
       scf.yield %origin : index
     } else {
-      %origin = index.assume %stage_origin0 [range(%stage_origin0, 0, 36), mul(%stage_origin0, 4)] : index
+      %origin = index.assume %stage_origin0 [range(%stage_origin0, 0, 36), multiple_of(%stage_origin0, 4)] : index
       scf.yield %origin : index
     }
     %flat_stage = buffer.view %stage[%base] : buffer -> view<[%stage_elements]xf32>
@@ -740,11 +740,11 @@ func.def inline @ggml_mul_mat_q8_lowtoken_publish(%tokens: index, %n: index, %ro
     %safe_token, %safe_count = index.assume %publish_token, %tokens [lt(%publish_token, %tokens)] : index, index
     %stage_token = index.assume %safe_token [range(%safe_token, 0, 4)] : index
     %row_limit = index.sub %row_tile, %c4 : index
-    %stage_add = index.assume %publish_add [range(%publish_add, 0, %row_limit), mul(%publish_add, 4)] : index
+    %stage_add = index.assume %publish_add [range(%publish_add, 0, %row_limit), multiple_of(%publish_add, 4)] : index
     %stage_row_offset = index.mul %stage_token, %row_tile : index
     %stage_origin0 = index.add %stage_row_offset, %stage_add : index
     %stage_limit = index.sub %stage_elements, %c4 : index
-    %stage_origin = index.assume %stage_origin0 [range(%stage_origin0, 0, %stage_limit), mul(%stage_origin0, 4)] : index
+    %stage_origin = index.assume %stage_origin0 [range(%stage_origin0, 0, %stage_limit), multiple_of(%stage_origin0, 4)] : index
     %flat_stage = buffer.view %stage[%base] : buffer -> view<[%stage_elements]xf32>
     %values = vector.load %flat_stage[%stage_origin] : view<[%stage_elements]xf32> -> vector<4xf32>
     template.apply<@ggml.mul_mat_f32_f32_wmma.publish_vector4>(%publishes, %safe_token, %publish_channel, %safe_count, %n, %output_accumulation, %output_unary_op, %values, %bias, %output, %residual_input, %residual_output, %norm_weight, %normalized_output, %completion_counters) : (i1, index, index, index, index, index, index, vector<4xf32>, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
@@ -862,8 +862,8 @@ func.def inline @ggml_mul_mat_q4_q8_1_x4_lowtoken_dot(%weight_format: index, %to
   %no_staged_rows = index.constant 0 : index
   %staged = index.cmp ugt, %staged_rows, %no_staged_rows : index
   %tokens = index.assume %token_count [range(%token_count, 1, 5), le(%token_count, %capacity)] : index
-  %k = index.assume %input_size0 [range(%input_size0, 256, 32768), mul(%input_size0, 256)] : index
-  %n = index.assume %output_size0 [range(%output_size0, 64, 262144), mul(%output_size0, 64)] : index
+  %k = index.assume %input_size0 [range(%input_size0, 256, 32768), multiple_of(%input_size0, 256)] : index
+  %n = index.assume %output_size0 [range(%output_size0, 64, 262144), multiple_of(%output_size0, 64)] : index
   %paired_tokens = func.call pure @ggml_q4_q8_lowtoken_token_pairs(%capacity, %tokens, %k, %n) : (index, index, index, index) -> (i1)
   %c0 = index.constant 0 : index
   %c1 = index.constant 1 : index
@@ -1424,8 +1424,8 @@ func.def inline @ggml_mul_mat_q6_q8_1_x4_lowtoken_dot(%weight_format: index, %to
   %no_staged_rows = index.constant 0 : index
   %staged = index.cmp ugt, %staged_rows, %no_staged_rows : index
   %tokens = index.assume %token_count [range(%token_count, 1, 5), le(%token_count, %capacity)] : index
-  %k = index.assume %input_size0 [range(%input_size0, 256, 32768), mul(%input_size0, 256)] : index
-  %n = index.assume %output_size0 [range(%output_size0, 64, 262144), mul(%output_size0, 64)] : index
+  %k = index.assume %input_size0 [range(%input_size0, 256, 32768), multiple_of(%input_size0, 256)] : index
+  %n = index.assume %output_size0 [range(%output_size0, 64, 262144), multiple_of(%output_size0, 64)] : index
   %c0 = index.constant 0 : index
   %c1 = index.constant 1 : index
   %c2 = index.constant 2 : index

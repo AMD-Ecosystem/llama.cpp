@@ -3,11 +3,11 @@
 
 template.decl @ggml.rmsnorm_f32.row_scale(%arg0: index, %arg1: index, %arg2: index, %arg3: index, %arg4: f32, %arg5: buffer) -> (f32, index, index, i1)
 
-config.decl @ggml.add_rmsnorm_binary_symmetric_i4.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+config.decl @ggml.add_rmsnorm_binary_symmetric_i4.hidden_size : %value: index where [range(%value, 128, 32768), multiple_of(%value, 128)]
 config.decl @ggml.add_rmsnorm_binary_symmetric_i4.rms_epsilon : f32
-config.decl @ggml.rmsnorm_binary_symmetric_i4.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+config.decl @ggml.rmsnorm_binary_symmetric_i4.hidden_size : %value: index where [range(%value, 128, 32768), multiple_of(%value, 128)]
 config.decl @ggml.rmsnorm_binary_symmetric_i4.rms_epsilon : f32
-config.decl @ggml.rmsnorm_gate_silu_mul_symmetric_i4.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+config.decl @ggml.rmsnorm_gate_silu_mul_symmetric_i4.hidden_size : %value: index where [range(%value, 128, 32768), multiple_of(%value, 128)]
 config.decl @ggml.rmsnorm_gate_silu_mul_symmetric_i4.rms_epsilon : f32
 
 template.decl @ggml.rmsnorm_binary_symmetric_i4_k32.body(%token_count: index, %input: buffer, %weight: buffer, %output: buffer, %i4_qs: buffer, %i4_ds: buffer, %i4_sums: buffer)
@@ -15,7 +15,7 @@ template.decl @ggml.rmsnorm_binary_symmetric_i4_k32.body(%token_count: index, %i
 template.def<@ggml.rmsnorm_binary_symmetric_i4_k32.body> device @ggml_rmsnorm_binary_symmetric_i4_k32_body(%token_count: index, %input: buffer, %weight: buffer, %output: buffer, %i4_qs: buffer, %i4_ds: buffer, %i4_sums: buffer) {
   %hidden_size0 = config.get @ggml.rmsnorm_binary_symmetric_i4.hidden_size : index
   %epsilon = config.get @ggml.rmsnorm_binary_symmetric_i4.rms_epsilon : f32
-  %hidden_size = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), mul(%hidden_size0, 128)] : index
+  %hidden_size = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), multiple_of(%hidden_size0, 128)] : index
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 16)] : index
   %token0 = kernel.workgroup.id<x> : index
   %workitem = kernel.workitem.id<x> : index
@@ -188,7 +188,7 @@ template.decl @ggml.add_rmsnorm_binary_symmetric_i4_k32.body(%token_count: index
 template.def<@ggml.add_rmsnorm_binary_symmetric_i4_k32.body> device @ggml_add_rmsnorm_binary_symmetric_i4_k32_body(%token_count: index, %lhs: buffer, %rhs: buffer, %residual_output: buffer, %weight: buffer, %output: buffer, %i4_qs: buffer, %i4_ds: buffer, %i4_sums: buffer) {
   %hidden_size0 = config.get @ggml.add_rmsnorm_binary_symmetric_i4.hidden_size : index
   %epsilon = config.get @ggml.add_rmsnorm_binary_symmetric_i4.rms_epsilon : f32
-  %hidden_size = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), mul(%hidden_size0, 128)] : index
+  %hidden_size = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), multiple_of(%hidden_size0, 128)] : index
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 16)] : index
   %token0 = kernel.workgroup.id<x> : index
   %workitem = kernel.workitem.id<x> : index
@@ -367,7 +367,7 @@ template.decl @ggml.rmsnorm_gate_silu_mul_symmetric_i4_k32.body(%token_count: in
 template.def<@ggml.rmsnorm_gate_silu_mul_symmetric_i4_k32.body> device @ggml_rmsnorm_gate_silu_mul_symmetric_i4_k32_body(%token_count: index, %input: buffer, %weight: buffer, %raw_gate: buffer, %output: buffer, %i4_qs: buffer, %i4_ds: buffer, %i4_sums: buffer) {
   %hidden_size0 = config.get @ggml.rmsnorm_gate_silu_mul_symmetric_i4.hidden_size : index
   %epsilon = config.get @ggml.rmsnorm_gate_silu_mul_symmetric_i4.rms_epsilon : f32
-  %hidden_size = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), mul(%hidden_size0, 128)] : index
+  %hidden_size = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), multiple_of(%hidden_size0, 128)] : index
   %token0 = kernel.workgroup.id<x> : index
   %workitem = kernel.workitem.id<x> : index
   %lane = kernel.subgroup.lane.id : index

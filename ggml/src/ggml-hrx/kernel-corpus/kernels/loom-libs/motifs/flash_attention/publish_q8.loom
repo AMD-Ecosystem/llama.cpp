@@ -2,7 +2,7 @@ config.decl @ggml.flash_attention.query_head_count : %value: index where [range(
 
 config.decl @ggml.flash_attention.key_value_head_count : %value: index where [range(%value, 1, 64)]
 
-config.decl @ggml.flash_attention.value_head_size : %value: index where [range(%value, 64, 512), mul(%value, 64)]
+config.decl @ggml.flash_attention.value_head_size : %value: index where [range(%value, 64, 512), multiple_of(%value, 64)]
 
 template.decl @ggml.flash_attention.decode_split.pack_completed_q8(%key_value_head: index, %output: buffer, %q8_output: buffer)
 
@@ -17,7 +17,7 @@ template.def<@ggml.flash_attention.decode_split.pack_completed_q8> device @ggml_
   %query_head_count = config.get @ggml.flash_attention.query_head_count : index
   %key_value_head_count = config.get @ggml.flash_attention.key_value_head_count : index
   %value_head_size0 = config.get @ggml.flash_attention.value_head_size : index
-  %value_head_size = index.assume %value_head_size0 [range(%value_head_size0, 64, 512), mul(%value_head_size0, 64)] : index
+  %value_head_size = index.assume %value_head_size0 [range(%value_head_size0, 64, 512), multiple_of(%value_head_size0, 64)] : index
   %query_heads_per_key_value_head0 = index.div %query_head_count, %key_value_head_count : index
   %query_heads_per_key_value_head = index.assume %query_heads_per_key_value_head0 [range(%query_heads_per_key_value_head0, 1, 16)] : index
   %workitem0 = kernel.workitem.id<x> : index

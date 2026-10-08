@@ -13,7 +13,7 @@ amdgpu.target<gfx11-generic> @ggml_set_rows_gfx11_wave64 {subgroup_size = 64}
 
 config.decl @ggml.set_rows.token_capacity : %value: index where [range(%value, 1, 2048)]
 
-config.decl @ggml.set_rows.hidden_capacity : %value: index where [range(%value, 4, 32768), mul(%value, 4)]
+config.decl @ggml.set_rows.hidden_capacity : %value: index where [range(%value, 4, 32768), multiple_of(%value, 4)]
 
 config.decl @ggml.set_rows.input_format : %value: index where [range(%value, 16, 32)]
 
@@ -56,7 +56,7 @@ template.def<@ggml.set_rows.body> device @ggml_set_rows_body(%token_count: index
   %input_stride = config.get @ggml.set_rows.input_stride : index
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %token_capacity)] : index
   %bounded_cache_row_count = index.assume %cache_row_count [range(%cache_row_count, 1, 1048576)] : index
-  %bounded_hidden_size = index.assume %hidden_size [range(%hidden_size, 4, 32768), mul(%hidden_size, 4), le(%hidden_size, %hidden_capacity)] : index
+  %bounded_hidden_size = index.assume %hidden_size [range(%hidden_size, 4, 32768), multiple_of(%hidden_size, 4), le(%hidden_size, %hidden_capacity)] : index
   %channel_tile = kernel.workgroup.id<x> : index
   %token0 = kernel.workgroup.id<y> : index
   %workitem0 = kernel.workitem.id<x> : index

@@ -233,7 +233,7 @@ template.def<@ggml.mul_mat_f32_f32_decode.publish_dual_pair2> device priority(1)
 
 template.def<@ggml.mul_mat_f32_f32_decode.body> device @ggml_mul_mat_f32_f32_decode_body(%weight_format: index, %publish_output: i1, %token_count: index, %token0: index, %pair: index, %input_size: index, %output_size: index, %input: buffer, %weight: buffer, %output: buffer, %aux0: buffer, %aux1: buffer, %aux2: buffer, %aux3: buffer) {
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
-  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 32)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), multiple_of(%input_size, 32)] : index
   %bounded_output_size = index.assume %output_size [range(%output_size, 1, 1048576)] : index
   %lane0 = kernel.workitem.id<x> : index
   %c0 = index.constant 0 : index
@@ -283,7 +283,7 @@ template.def<@ggml.mul_mat_f32_f32_decode.body> device @ggml_mul_mat_f32_f32_dec
 
 template.def<@ggml.mul_mat_f32_f32_decode.dual_body> device @ggml_mul_mat_f32_f32_decode_dual_body(%op: index, %lhs_weight_format: index, %rhs_weight_format: index, %publish_output: i1, %token_count: index, %token0: index, %pair: index, %input_size: index, %output_size: index, %input: buffer, %lhs_weight: buffer, %rhs_weight: buffer, %output: buffer) {
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
-  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 32)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), multiple_of(%input_size, 32)] : index
   %bounded_output_size = index.assume %output_size [range(%output_size, 1, 1048576)] : index
   %lane0 = kernel.workitem.id<x> : index
   %c0 = index.constant 0 : index

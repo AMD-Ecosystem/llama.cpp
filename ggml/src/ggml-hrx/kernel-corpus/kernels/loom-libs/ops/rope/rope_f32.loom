@@ -6,8 +6,8 @@ template.decl @ggml.rope_f32.body(%token_count: index, %input_span: index, %posi
 
 amdgpu.target<gfx11-generic> @ggml_rope_f32_gfx11_wave32 {subgroup_size = 32}
 
-config.decl @ggml.rope_f32.head_size : %value: index where [range(%value, 4, 1024), mul(%value, 4)]
-config.decl @ggml.rope_f32.n_dims : %value: index where [range(%value, 4, 1024), mul(%value, 4)]
+config.decl @ggml.rope_f32.head_size : %value: index where [range(%value, 4, 1024), multiple_of(%value, 4)]
+config.decl @ggml.rope_f32.n_dims : %value: index where [range(%value, 4, 1024), multiple_of(%value, 4)]
 config.decl @ggml.rope_f32.head_count : %value: index where [range(%value, 1, 64)]
 config.decl @ggml.rope_f32.token_capacity : %value: index where [range(%value, 1, 2048)]
 config.decl @ggml.rope_f32.input_stride1 : %value: index where [range(%value, 4, 1073741824)]

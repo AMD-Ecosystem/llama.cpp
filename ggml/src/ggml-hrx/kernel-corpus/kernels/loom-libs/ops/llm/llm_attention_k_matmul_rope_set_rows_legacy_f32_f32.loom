@@ -12,13 +12,13 @@ template.decl @llm.attention_qkv.store_cache_vector4(%arg0: index, %arg1: index,
 
 amdgpu.target<gfx11-generic> @llm_attention_k_matmul_rope_set_rows_legacy_gfx11_wave64 {subgroup_size = 64}
 
-config.decl @llm.attention_qkv.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 256)]
+config.decl @llm.attention_qkv.input_size : %value: index where [range(%value, 256, 32768), multiple_of(%value, 256)]
 
-config.decl @llm.attention_qkv.output_size : %value: index where [range(%value, 4, 32768), mul(%value, 4)]
+config.decl @llm.attention_qkv.output_size : %value: index where [range(%value, 4, 32768), multiple_of(%value, 4)]
 
 config.decl @llm.attention_qkv.weight_format : %value: index where [range(%value, 4, 81)]
 
-config.decl @llm.attention_qkv.head_size : %value: index where [range(%value, 4, 1024), mul(%value, 4)]
+config.decl @llm.attention_qkv.head_size : %value: index where [range(%value, 4, 1024), multiple_of(%value, 4)]
 
 config.decl @llm.attention_qkv.head_count : %value: index where [range(%value, 1, 64)]
 

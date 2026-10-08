@@ -2,7 +2,7 @@ func.decl @ggml_q1_0_q8_1_x4_pair_lane(%input_size: index, %gate: buffer, %gate_
 
 amdgpu.target<gfx11-generic> @ggml_q1_0_q8_1_x4_swiglu_gfx11_wave32 {subgroup_size = 32}
 
-config.decl @ggml.matmul.q1_0_q8_1_x4.input_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+config.decl @ggml.matmul.q1_0_q8_1_x4.input_size : %value: index where [range(%value, 128, 32768), multiple_of(%value, 128)]
 
 config.decl @ggml.matmul.q1_0_q8_1_x4.output_size : %value: index where [range(%value, 1, 524288)]
 
@@ -15,7 +15,7 @@ kernel.def target(@ggml_q1_0_q8_1_x4_swiglu_gfx11_wave32) @ggml_mul_mat_swiglu_q
   %input_size = config.get @ggml.matmul.q1_0_q8_1_x4.input_size : index
   %output_size = config.get @ggml.matmul.q1_0_q8_1_x4.output_size : index
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1)] : index
-  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), mul(%input_size, 128)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), multiple_of(%input_size, 128)] : index
   %row0 = kernel.workgroup.id<x> : index
   %row, %bounded_output_size = index.assume %row0, %output_size [lt(%row0, %output_size)] : index, index
   %lane = kernel.subgroup.lane.id : index

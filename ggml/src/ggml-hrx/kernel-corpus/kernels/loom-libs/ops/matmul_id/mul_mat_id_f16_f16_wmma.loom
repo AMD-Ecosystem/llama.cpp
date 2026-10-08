@@ -8,7 +8,7 @@ template.decl @ggml.mul_mat_id_f16_f16_wmma.publish_vector4(%publish_word: i1, %
 
 amdgpu.target<gfx11-generic> @ggml_mul_mat_id_f16_f16_gfx11_wave64 {subgroup_size = 64}
 
-config.decl @ggml.mul_mat_id_f16_f16.input_size : %value: index where [range(%value, 256, 32768), mul(%value, 256)]
+config.decl @ggml.mul_mat_id_f16_f16.input_size : %value: index where [range(%value, 256, 32768), multiple_of(%value, 256)]
 
 config.decl @ggml.mul_mat_id_f16_f16.route_count : %value: index where [range(%value, 1, 8)]
 

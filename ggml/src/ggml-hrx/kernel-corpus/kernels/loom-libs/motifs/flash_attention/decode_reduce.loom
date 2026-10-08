@@ -2,7 +2,7 @@ config.decl @ggml.flash_attention.query_head_count : %value: index where [range(
 
 config.decl @ggml.flash_attention.key_value_head_count : %value: index where [range(%value, 1, 64)]
 
-config.decl @ggml.flash_attention.value_head_size : %value: index where [range(%value, 64, 512), mul(%value, 64)]
+config.decl @ggml.flash_attention.value_head_size : %value: index where [range(%value, 64, 512), multiple_of(%value, 64)]
 
 template.decl @ggml.flash_attention.decode_split.reduce_completed.cooperative(%partial_block_capacity0: index, %active_block_count0: index, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %output: buffer)
 
@@ -19,7 +19,7 @@ template.def<@ggml.flash_attention.decode_split.reduce_completed.direct> device 
   %query_head_count = config.get @ggml.flash_attention.query_head_count : index
   %key_value_head_count = config.get @ggml.flash_attention.key_value_head_count : index
   %value_head_size0 = config.get @ggml.flash_attention.value_head_size : index
-  %value_head_size = index.assume %value_head_size0 [range(%value_head_size0, 64, 512), mul(%value_head_size0, 64)] : index
+  %value_head_size = index.assume %value_head_size0 [range(%value_head_size0, 64, 512), multiple_of(%value_head_size0, 64)] : index
   %workgroup_y0 = kernel.workgroup.id<y> : index
   %key_value_head = index.assume %workgroup_y0 [range(%workgroup_y0, 0, 63)] : index
   %workitem = kernel.workitem.id<x> : index
@@ -79,7 +79,7 @@ template.def<@ggml.flash_attention.decode_split.reduce_completed.cooperative> de
   %query_head_count = config.get @ggml.flash_attention.query_head_count : index
   %key_value_head_count = config.get @ggml.flash_attention.key_value_head_count : index
   %value_head_size0 = config.get @ggml.flash_attention.value_head_size : index
-  %value_head_size = index.assume %value_head_size0 [range(%value_head_size0, 64, 512), mul(%value_head_size0, 64)] : index
+  %value_head_size = index.assume %value_head_size0 [range(%value_head_size0, 64, 512), multiple_of(%value_head_size0, 64)] : index
   %workgroup_y0 = kernel.workgroup.id<y> : index
   %key_value_head = index.assume %workgroup_y0 [range(%workgroup_y0, 0, 63)] : index
   %subgroup0 = kernel.subgroup.id : index

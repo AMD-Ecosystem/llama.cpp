@@ -22,7 +22,7 @@ template.decl @qwen3_moe.attention.qkv_quantized.body(%arg0: index, %arg1: i1, %
 
 amdgpu.target<gfx11-generic> @qwen3_moe_attention_qkv_postprocess_gfx11_wave32 {subgroup_size = 32}
 
-config.decl @qwen3_moe.attention.head_size : %value: index where [range(%value, 4, 1024), mul(%value, 4)]
+config.decl @qwen3_moe.attention.head_size : %value: index where [range(%value, 4, 1024), multiple_of(%value, 4)]
 
 config.decl @qwen3_moe.attention.query_size : %value: index where [range(%value, 1, 262144)]
 

@@ -22,7 +22,7 @@ template.def<@qwen3_moe.attention.qkv_postprocess_fused_decode.body> device @qwe
   %key_value_size0 = config.get @qwen3_moe.attention.key_value_size : index
   %head_size0 = config.get @qwen3_moe.attention.head_size : index
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1)] : index
-  %query_size, %key_value_size, %head_size = index.assume %query_size0, %key_value_size0, %head_size0 [range(%query_size0, 128, 262144), range(%key_value_size0, 128, 262144), range(%head_size0, 128, 128), mul(%query_size0, %head_size0), mul(%key_value_size0, %head_size0)] : index, index, index
+  %query_size, %key_value_size, %head_size = index.assume %query_size0, %key_value_size0, %head_size0 [range(%query_size0, 128, 262144), range(%key_value_size0, 128, 262144), range(%head_size0, 128, 128), multiple_of(%query_size0, %head_size0), multiple_of(%key_value_size0, %head_size0)] : index, index, index
   %c0 = index.constant 0 : index
   %c1 = index.constant 1 : index
   %c2 = index.constant 2 : index

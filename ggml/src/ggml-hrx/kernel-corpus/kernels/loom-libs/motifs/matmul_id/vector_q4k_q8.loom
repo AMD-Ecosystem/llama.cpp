@@ -96,7 +96,7 @@ func.def inline @ggml_matmul_id_q4k_q8_1_dot(%q4_values: vector<16xi8>, %d_scale
 
 // Computes two adjacent Q4_K group contributions for one lane in a block.
 func.def inline @ggml_matmul_id_q4k_q8_1_x4_paired_block_lane(%input_size: index, %weight: buffer, %weight_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %q4_block: index, %block_lane: index) -> (f32) {
-  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), multiple_of(%input_size, 256)] : index
   %bounded_q4_block0 = index.assume %q4_block [range(%q4_block, 0, 127)] : index
   %bounded_block_lane = index.assume %block_lane [range(%block_lane, 0, 7)] : index
   %c1 = index.constant 1 : index
@@ -166,7 +166,7 @@ func.def inline @ggml_matmul_id_q4k_q8_1_x4_paired_block_lane(%input_size: index
 
 // An eight-lane cohort contracts one complete routed row.
 func.def inline @ggml_matmul_id_q4k_q8_1_x4_cohort_row_lane(%input_size: index, %weight: buffer, %weight_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %cohort_lane: index) -> (f32) {
-  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), mul(%input_size, 256)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), multiple_of(%input_size, 256)] : index
   %bounded_cohort_lane = index.assume %cohort_lane [range(%cohort_lane, 0, 7)] : index
   %c0 = index.constant 0 : index
   %c1 = index.constant 1 : index

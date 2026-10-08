@@ -44,7 +44,7 @@ config.decl @llm.gated_delta_net.sequence_count : %value: index where [range(%va
 
 config.decl @llm.gated_delta_net.qk_stride1 : %value: index where [range(%value, 0, 1073741823)]
 
-config.decl @llm.gated_delta_net.qk_stride2 : %value: index where [range(%value, 0, 1073741823), mul(%value, 8)]
+config.decl @llm.gated_delta_net.qk_stride2 : %value: index where [range(%value, 0, 1073741823), multiple_of(%value, 8)]
 
 config.decl @llm.gated_delta_net.qk_stride3 : %value: index where [range(%value, 0, 1073741823)]
 
@@ -68,7 +68,7 @@ config.decl @llm.gated_delta_net.snapshot_stride : %value: index where [range(%v
 
 config.decl @llm.gated_delta_net.l2_epsilon : f32
 
-config.decl @llm.gated_delta_net.workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+config.decl @llm.gated_delta_net.workgroup_size : %value: index where [range(%value, 32, 1024), multiple_of(%value, 32)]
 
 template.def<@llm.gated_delta_net.f32_wmma_head128.body> device @llm_gated_delta_net_f32_wmma_head128_body(%state_inplace: i1, %publish_snapshots: i1, %projection_epilogue: i1, %snapshot_stride: index, %scale: f32, %q: buffer, %k: buffer, %v: buffer, %g: buffer, %beta: buffer, %bias: buffer, %a_scale: buffer, %state_in: buffer, %dst: buffer, %snapshot_cache: buffer, %rmsnorm_gate: i1, %rms_epsilon: f32, %rms_gate_op: index, %rms_weight: buffer, %raw_gate: buffer, %norm_output: buffer, %half_output: buffer, %select_state: i1, %state_row_count: index, %state_ids: buffer, %publish_q8: i1) {
   %base = index.constant 0 : offset

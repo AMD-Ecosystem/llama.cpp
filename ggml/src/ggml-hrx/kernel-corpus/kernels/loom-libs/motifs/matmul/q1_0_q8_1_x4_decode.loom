@@ -60,7 +60,7 @@ func.def inline @ggml_q1_0_q8_1_x4_block_lane(%weight: buffer, %weight_row_byte_
 
 // Computes one wave32 lane's partial for a complete native Q1_0 row.
 func.def inline @ggml_q1_0_q8_1_x4_row_lane(%input_size: index, %weight: buffer, %weight_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %lane: index) -> (f32) {
-  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), mul(%input_size, 128)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), multiple_of(%input_size, 128)] : index
   %c0 = index.constant 0 : index
   %c1 = index.constant 1 : index
   %c128 = index.constant 128 : index
@@ -123,7 +123,7 @@ func.def inline @ggml_q1_0_q8_1_x4_block_rows2_lane(%weight: buffer, %row0_byte_
 }
 
 func.def inline @ggml_q1_0_q8_1_x4_rows2_lane(%input_size: index, %weight: buffer, %row0_byte_base: offset, %row1_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %lane: index) -> (f32, f32) {
-  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), mul(%input_size, 128)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), multiple_of(%input_size, 128)] : index
   %c0 = index.constant 0 : index
   %c1 = index.constant 1 : index
   %c4 = index.constant 4 : index
@@ -141,7 +141,7 @@ func.def inline @ggml_q1_0_q8_1_x4_rows2_lane(%input_size: index, %weight: buffe
 
 // Reuses each Q8_1 activation packet across the gate and up projection rows.
 func.def inline @ggml_q1_0_q8_1_x4_pair_lane(%input_size: index, %gate: buffer, %gate_row_byte_base: offset, %up: buffer, %up_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %lane: index) -> (f32, f32) {
-  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), mul(%input_size, 128)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), multiple_of(%input_size, 128)] : index
   %bounded_lane = index.assume %lane [range(%lane, 0, 31)] : index
   %c0 = index.constant 0 : index
   %c1 = index.constant 1 : index

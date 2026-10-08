@@ -5,7 +5,7 @@ template.decl @llm.gated_delta_net.projection_epilogue.standalone_body(%element_
 
 config.decl @llm.gated_delta_net.epilogue_head_count : %value: index where [range(%value, 1, 4096)]
 
-config.decl @llm.gated_delta_net.epilogue_workgroup_size : %value: index where [range(%value, 32, 1024), mul(%value, 32)]
+config.decl @llm.gated_delta_net.epilogue_workgroup_size : %value: index where [range(%value, 32, 1024), multiple_of(%value, 32)]
 
 kernel.def export("llm_gated_delta_net_projection_epilogue_f32") @llm_gated_delta_net_projection_epilogue_f32(%element_count: index) {
   %unit = index.constant 1 : index
