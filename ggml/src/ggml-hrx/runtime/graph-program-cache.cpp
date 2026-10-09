@@ -35,8 +35,36 @@ static bool tensor_storage_relative_offset(const ggml_tensor * source, const ggm
         return false;
     }
     const size_t relative_offset = tensor_offset - source_offset;
-    if (relative_offset > ggml_nbytes(source) || ggml_nbytes(tensor) > ggml_nbytes(source) - relative_offset) {
-        return false;
+    // Skip bounds checks when the tensor is empty as no bytes are accessed.
+    //
+    // Empty tensors can occur when a microbatch requests no output logits. For
+    // example, when Qwen3 prefill spans multiple microbatches, earlier
+    // microbatches update the KV cache but need no output logits when only the
+    // last prompt token requests them. Qwen3's graph still contains the
+    // final-layer tail, with zero token rows
+    // after output selection:
+    //   Attention (updates the KV cache)
+    //   Select the requested token rows (none)
+    //   Apply normalization
+    //   Apply MoE
+    //   Apply the output projection
+    // The MoE tensors are empty because there are no selected token rows to
+    // compute over.
+    //
+    // For Qwen3-30B-A3B, the expert-output source tensor in this case has shape:
+    //   [2048 features, 8 selected slots, 0 tokens]
+    //
+    // Each selected-slot view has shape [2048, 0] and retains its relative
+    // offset of slot * 2048 * sizeof(float): 8192 bytes for slot 1, for example.
+    // The zero token count makes the source and views empty without resetting
+    // these offsets.
+    if (!ggml_is_empty(tensor)) {
+        const size_t source_bytes = ggml_nbytes(source);
+        const bool starts_beyond_source = relative_offset > source_bytes;
+        const bool extends_beyond_source = ggml_nbytes(tensor) > source_bytes - relative_offset;
+        if (starts_beyond_source || extends_beyond_source) {
+            return false;
+        }
     }
     offset = relative_offset;
     return true;
