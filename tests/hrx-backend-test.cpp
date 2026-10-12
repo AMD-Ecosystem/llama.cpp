@@ -12140,6 +12140,51 @@ static void run_graph_program_cache_uid_mismatch_checks() {
     ggml_free(ctx);
 }
 
+static void run_graph_match_empty_expert_views_checks() {
+    ggml_context * ctx = ggml_init({ 512 * 1024, nullptr, true });
+    REQUIRE(ctx != nullptr);
+
+    // Simulate MoE output layout: 2048 features, 8 selected expert slots, and no requested token rows.
+    // Scale supplies a producer node without needing a model or actual expert computation.
+    ggml_tensor * input = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 2048, 8, 0);
+    ggml_tensor * experts = ggml_scale(ctx, input, 2.0f);
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    graph->uid = 3003;
+    ggml_build_forward_expand(graph, experts);
+
+    // Build empty views to verify that the graph is accepted with each slot's
+    // offset preserved (0, 8192, ..., 57344 bytes). Previous check rejected
+    // empty views with positive offsets (which admittedly is a little odd but
+    // that's how GGML represents this).
+    for (int expert = 0; expert < 8; ++expert) {
+        ggml_tensor * view = ggml_view_2d(ctx, experts, 2048, 0, experts->nb[2], expert * experts->nb[1]);
+        ggml_build_forward_expand(graph, view);
+    }
+
+    // Building and matching this graph must accept the empty views; an old bounds check rejected their positive offsets.
+    // gfx1151 selects a target configuration for this host test, not a GPU on which to execute it.
+    ggml::hrx::GraphProgramCache cache;
+    auto lookup = cache.get_or_build(*graph, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+    REQUIRE(lookup.valid());
+    REQUIRE(lookup.program->match_current_graph(*graph).valid());
+    // Empty operations require no numerical device work.
+    REQUIRE(lookup.program->commands().commands.empty());
+
+    // The same graph must also match when reusing the cached program.
+    lookup = cache.get_or_build(*graph, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+    REQUIRE(lookup.valid());
+    REQUIRE(cache.stats().hits == 1);
+
+    // Empty views still have to agree with the recorded alias offsets: changing 57344 to 57348 must fail.
+    // Restoring the offset must make the graph match again.
+    ggml_tensor * last_view = ggml_graph_node(graph, ggml_graph_n_nodes(graph) - 1);
+    last_view->view_offs += sizeof(float);
+    REQUIRE(!lookup.program->match_current_graph(*graph).valid());
+    last_view->view_offs -= sizeof(float);
+    REQUIRE(lookup.program->match_current_graph(*graph).valid());
+    ggml_free(ctx);
+}
+
 static void run_graph_match_hash_collision_checks() {
     ggml_context * ctx = ggml_init({ 2 * 1024 * 1024, nullptr, true });
     REQUIRE(ctx != nullptr);
@@ -13835,6 +13880,7 @@ static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
     suite.host_case("command_program_kernel_dump", [] { run_command_program_kernel_dump_checks(); });
     suite.host_case("command_shape_hash", [] { run_command_shape_hash_checks(); });
     suite.host_case("graph_program_cache_uid_mismatch", [] { run_graph_program_cache_uid_mismatch_checks(); });
+    suite.host_case("graph_match_empty_expert_views", [] { run_graph_match_empty_expert_views_checks(); });
     suite.host_case("graph_match_hash_collision", [] { run_graph_match_hash_collision_checks(); });
     suite.host_case("graph_match_bijection", [] { run_graph_match_bijection_checks(); });
     suite.host_case("validated_graph_uid_match", [] { run_validated_graph_uid_match_checks(); });
