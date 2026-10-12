@@ -35,14 +35,12 @@ static bool tensor_storage_relative_offset(const ggml_tensor * source, const ggm
         return false;
     }
     const size_t relative_offset = tensor_offset - source_offset;
-    // Skip bounds checks when the tensor is empty as no bytes are accessed.
+    // Skip bounds checks when the tensor is empty, as no bytes are accessed.
     //
     // Empty tensors can occur when a microbatch requests no output logits. For
     // example, when Qwen3 prefill spans multiple microbatches, earlier
-    // microbatches update the KV cache but need no output logits when only the
-    // last prompt token requests them. Qwen3's graph still contains the
-    // final-layer tail, with zero token rows
-    // after output selection:
+    // microbatches update the KV cache but don't request any output logits, as
+    // nothing consumes them:
     //   Attention (updates the KV cache)
     //   Select the requested token rows (none)
     //   Apply normalization
