@@ -1071,7 +1071,9 @@ template.def<@ggml.mul_mat_swiglu.q4_q8_lowtoken_body> device @ggml_mul_mat_swig
   %row_group_block = index.add %row_group_start, %partition_origin : index
   %row_offset = index.scale %row_lane, %row_field_bytes : index, offset -> offset
   %payload_field = index.div %word_index, %c4 : index
-  %payload_word = index.rem %word_index, %c4 : index
+  // Each payload packet has two words; an even offset modulo four is at most two.
+  %payload_word0 = index.rem %word_index, %c4 : index
+  %payload_word = index.assume %payload_word0 [range(%payload_word0, 0, 2), multiple_of(%payload_word0, 2)] : index
   %input_na, %gate_na, %up_na, %output_na = buffer.assume.noalias %input, %gate, %up, %output : buffer, buffer, buffer, buffer
   // One immutable Q8 activation record stream is shared by all row cohorts.
   %activation_rows = index.mul %capacity, %q8_groups : index

@@ -791,7 +791,9 @@ func.def inline @ggml_matmul_vector_q4_q8_1_x4_activation_dot(%weight_format: in
   %row_group_block = index.mul %row_group, %blocks : index
   %row_offset = index.scale %row_lane, %row_field_bytes : index, offset -> offset
   %payload_field = index.div %word_index, %c4 : index
-  %payload_word = index.rem %word_index, %c4 : index
+  // Each payload packet has two words; an even offset modulo four is at most two.
+  %payload_word0 = index.rem %word_index, %c4 : index
+  %payload_word = index.assume %payload_word0 [range(%payload_word0, 0, 2), multiple_of(%payload_word0, 2)] : index
   %input_na, %gate_na = buffer.assume.noalias %input, %weight : buffer, buffer
   %slab_blocks = index.constant 8 : index
   %full_stage_bytes = index.constant 11520 : offset

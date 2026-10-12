@@ -51,7 +51,10 @@ template.def<@ggml.matmul.vector_activation.publish_pair2> device @llm_attention
   %publish = scalar.andi %publish_pair, %row1_valid : i1
   %token, %launch_token_count = index.assume %token0, %token_count [lt(%token0, %token_count)] : index, index
   %head = index.div %channel, %head_size : index
-  %head_channel = index.rem %channel, %head_size : index
+  // Pair-aligned channels cannot straddle a head whose size is a multiple of four.
+  %head_channel0 = index.rem %channel, %head_size : index
+  %head_channel_limit = index.sub %head_size, %c2 : index
+  %head_channel = index.assume %head_channel0 [range(%head_channel0, 0, %head_channel_limit), multiple_of(%head_channel0, 2)] : index
   %theta_channel = index.div %head_channel, %c2 : index
   %half_head_size = index.div %head_size, %c2 : index
   %positions_noalias, %theta_noalias, %freq_factors_noalias, %output_noalias = buffer.assume.noalias %positions, %theta, %freq_factors, %output : buffer, buffer, buffer, buffer
