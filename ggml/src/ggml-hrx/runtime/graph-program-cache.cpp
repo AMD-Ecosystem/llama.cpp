@@ -54,8 +54,8 @@ static bool tensor_storage_relative_offset(const ggml_tensor * source, const ggm
     //
     // Each selected-slot view has shape [2048, 0] and retains its relative
     // offset of slot * 2048 * sizeof(float): 8192 bytes for slot 1, for example.
-    // The zero token count makes the source and views empty without resetting
-    // these offsets.
+    // GGML could create zero offests for zero sized tensors, but instead computes
+    // them as if the tensor had elements.
     if (!ggml_is_empty(tensor)) {
         const size_t source_bytes = ggml_nbytes(source);
         const bool starts_beyond_source = relative_offset > source_bytes;
