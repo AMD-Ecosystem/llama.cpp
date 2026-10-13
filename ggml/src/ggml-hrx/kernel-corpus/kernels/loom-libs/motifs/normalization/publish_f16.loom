@@ -11,7 +11,9 @@ template.def<@ggml.normalization.publish_f16.k16_vector4> device @ggml_normaliza
   %packed_columns = index.div %hidden_size, %c16 : index
   %packed_view = buffer.view %output[%base] : buffer -> view<[%packed_columns]x[%token_count]x16xf16>
   %packed_column = index.div %channel, %c16 : index
-  %packed_lane = index.rem %channel, %c16 : index
+  // Four-lane channel packets stay within their sixteen-lane packed column.
+  %packed_lane0 = index.rem %channel, %c16 : index
+  %packed_lane = index.assume %packed_lane0 [range(%packed_lane0, 0, 12), multiple_of(%packed_lane0, 4)] : index
   %half = vector.fptrunc %values : vector<4xf32> to vector<4xf16>
   vector.store %half, %packed_view[%packed_column, %token, %packed_lane] : vector<4xf16>, view<[%packed_columns]x[%token_count]x16xf16>
   %fence_pos = index.rem %packet, %c4 : index

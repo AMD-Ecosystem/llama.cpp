@@ -53,7 +53,11 @@ template.def<@llm.attention_qkv.store_query_vector4> device @llm_attention_qkv_s
   %head_count = index.assume %head_count0 [range(%head_count0, 1, 64)] : index
   %c0_offset = index.constant 0 : offset
   %head = index.div %channel, %head_size : index
-  %head_channel = index.rem %channel, %head_size : index
+  // Four-lane publication packets remain inside the current attention head.
+  %packet_width = index.constant 4 : index
+  %head_channel0 = index.rem %channel, %head_size : index
+  %head_channel_limit = index.sub %head_size, %packet_width : index
+  %head_channel = index.assume %head_channel0 [range(%head_channel0, 0, %head_channel_limit), multiple_of(%head_channel0, 4)] : index
   %token, %launch_token_count = index.assume %token0, %token_count [lt(%token0, %token_count)] : index, index
   %output_noalias = buffer.assume.noalias %output : buffer
   %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%token_count]x[%head_count]x[%head_size]xf32>

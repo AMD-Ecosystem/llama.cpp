@@ -166,11 +166,14 @@ template.def<@ggml.flash_attention.decode_split.publish_f32.vector2> device @ggm
   %normalized_output1 = vector.divf<nnan|ninf|nsz|arcp> %unnormalized_output1, %sum_vector1 : vector<2xf32>
   %publish_output0 = scalar.andi %query_head_valid0, %lane_output_channel_valid : i1
   %publish_output1 = scalar.andi %query_head_valid1, %lane_output_channel_valid : i1
+  // The per-KV-head row guards admit only query heads owned by this workgroup.
   scf.if %publish_output0 {
-    vector.store %normalized_output0, %output_view[%query_head0, %lane_output_channel] : vector<2xf32>, view<[%query_head_count]x[%value_head_size]xf32>
+    %bounded_query_head0 = index.assume %query_head0 [lt(%query_head0, %query_head_count)] : index
+    vector.store %normalized_output0, %output_view[%bounded_query_head0, %lane_output_channel] : vector<2xf32>, view<[%query_head_count]x[%value_head_size]xf32>
   }
   scf.if %publish_output1 {
-    vector.store %normalized_output1, %output_view[%query_head1, %lane_output_channel] : vector<2xf32>, view<[%query_head_count]x[%value_head_size]xf32>
+    %bounded_query_head1 = index.assume %query_head1 [lt(%query_head1, %query_head_count)] : index
+    vector.store %normalized_output1, %output_view[%bounded_query_head1, %lane_output_channel] : vector<2xf32>, view<[%query_head_count]x[%value_head_size]xf32>
   }
   template.return
 }
