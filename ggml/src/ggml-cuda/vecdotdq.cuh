@@ -159,3 +159,46 @@ static __device__ __forceinline__ float dq_dot_q6_K(
 
     return d * (sum0*sc0 + sum1*sc2 + sum2*sc4 + sum3*sc6);
 }
+
+struct dq_weight_q8_0 {
+    uint32_t qs0, qs4;
+    half d;
+};
+
+static __device__ __forceinline__ dq_weight_q8_0 dq_load_q8_0(const block_q8_0 * b, int q_offset) {
+    const uint16_t * qs16 = (const uint16_t *) (b->qs + q_offset);
+    return { (uint32_t) qs16[0] | ((uint32_t) qs16[1] << 16),
+             (uint32_t) qs16[2] | ((uint32_t) qs16[3] << 16), b->d };
+}
+
+static __device__ __forceinline__ dq_weight_q8_0 dq_load_q8_0_shared(const block_q8_0 * b, int q_offset) {
+    const uint16_t * qs16 = (const uint16_t *) (b->qs + q_offset);
+    uint32_t bits = 0;
+    if (q_offset == 0) {
+        bits = *(const uint16_t *) &b->d;
+    }
+    bits = __shfl_sync(0xFFFFFFFF, bits, 0, 4);
+    half d;
+    *(uint16_t *) &d = (uint16_t) bits;
+    return { (uint32_t) qs16[0] | ((uint32_t) qs16[1] << 16),
+             (uint32_t) qs16[2] | ((uint32_t) qs16[3] << 16), d };
+}
+
+static __device__ __forceinline__ float dq_dot_q8_0(
+        const dq_weight_q8_0 & w, const float4 & by0, const float4 & by4) {
+    const uint32_t qs0 = w.qs0;
+    const uint32_t qs4 = w.qs4;
+
+    const float sum =
+        by0.x * (float) (int8_t) (qs0 >>  0) + by0.y * (float) (int8_t) (qs0 >>  8) +
+        by0.z * (float) (int8_t) (qs0 >> 16) + by0.w * (float) (int8_t) (qs0 >> 24) +
+        by4.x * (float) (int8_t) (qs4 >>  0) + by4.y * (float) (int8_t) (qs4 >>  8) +
+        by4.z * (float) (int8_t) (qs4 >> 16) + by4.w * (float) (int8_t) (qs4 >> 24);
+
+    return __half2float(w.d) * sum;
+}
+
+static __device__ __forceinline__ float dq_dot_q8_0(
+        const block_q8_0 * b, int q_offset, const float4 & by0, const float4 & by4) {
+    return dq_dot_q8_0(dq_load_q8_0(b, q_offset), by0, by4);
+}
