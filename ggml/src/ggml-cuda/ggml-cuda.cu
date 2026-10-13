@@ -1599,8 +1599,8 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
                     ggml_cuda_convert_clamp_f32_f16((const float *) src1_clamp->src[0]->data, (half *) src1_alloc.get(),
                         ggml_nelements(src1), ggml_get_op_params_f32(src1_clamp, 0), ggml_get_op_params_f32(src1_clamp, 1), main_stream);
                 } else if (src1_glu) {
-                    ggml_cuda_geglu_f16((const float *) src1_glu->src[0]->data, (const float *) src1_glu->src[1]->data,
-                        (half *) src1_alloc.get(), ggml_nelements(src1), main_stream);
+                    ggml_cuda_glu_f16((const float *) src1_glu->src[0]->data, (const float *) src1_glu->src[1]->data,
+                        (half *) src1_alloc.get(), ggml_nelements(src1), ggml_get_glu_op(src1_glu), main_stream);
                 } else {
                     convert_func(src1->data, src1_alloc.get(), ggml_nelements(src1), main_stream);
                 }
@@ -3618,7 +3618,7 @@ static bool ggml_cuda_can_use_packed_mmq(ggml_backend_cuda_context & ctx, const 
 
 static size_t ggml_cuda_packed_mmq_size(ggml_backend_cuda_context & ctx, const ggml_tensor * mm) {
     const int cc = ggml_cuda_info().devices[ctx.device].cc;
-    return (ggml_nelements(mm->src[1])/QK8_1_MMQ +
+    return (GGML_PAD(mm->src[1]->ne[0], MATRIX_ROW_PADDING)*ggml_nrows(mm->src[1])/QK8_1_MMQ +
         ggml_cuda_mmq_get_J_max(mm->src[0]->type, mm->src[0]->ne[1] % 128 != 0, cc, mm->ne[1]))*sizeof(block_q8_1_mmq);
 }
 
@@ -3640,7 +3640,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
 
     ggml_tensor * node = cgraph->nodes[i];
 
-    if (node->op == GGML_OP_GLU && ggml_get_glu_op(node) == GGML_GLU_OP_GEGLU && node->src[1] &&
+    if (node->op == GGML_OP_GLU && (ggml_get_glu_op(node) == GGML_GLU_OP_GEGLU || ggml_get_glu_op(node) == GGML_GLU_OP_SWIGLU) && node->src[1] &&
             node->type == GGML_TYPE_F32 && node->src[0]->type == GGML_TYPE_F32 && node->src[1]->type == GGML_TYPE_F32 &&
             ggml_is_contiguous(node->src[0]) && ggml_is_contiguous(node->src[1]) &&
             ggml_cuda_is_aligned(node->src[0], 16) && ggml_cuda_is_aligned(node->src[1], 16) &&
@@ -3650,12 +3650,12 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         if (ggml_can_fuse_subgraph(cgraph, i, 2, ops, &output_idx, 1) &&
                 ggml_cuda_check_fusion_memory_ranges(cgraph, i, 2, &output_idx, 1)) {
             ggml_tensor * mm = cgraph->nodes[output_idx];
-            if (mm->src[1] == node && node->ne[0] % MATRIX_ROW_PADDING == 0 &&
+            if (mm->src[1] == node && node->ne[0] % 4 == 0 &&
                     ggml_cuda_can_use_packed_mmq(*cuda_ctx, mm, true)) {
                 ggml_cuda_pool_alloc<char> packed(cuda_ctx->pool(), ggml_cuda_packed_mmq_size(*cuda_ctx, mm));
-                const auto quantize = mm->src[0]->type == GGML_TYPE_Q6_K ? quantize_geglu_mmq_q8_1_d4_cuda : quantize_geglu_mmq_q8_1_cuda;
+                const auto quantize = mm->src[0]->type == GGML_TYPE_Q6_K ? quantize_glu_mmq_q8_1_d4_cuda : quantize_glu_mmq_q8_1_cuda;
                 quantize((const float *) node->src[0]->data, (const float *) node->src[1]->data,
-                    packed.get(), node->ne[0], node->ne[1], cuda_ctx->stream());
+                    packed.get(), node->ne[0], node->ne[1], ggml_get_glu_op(node), cuda_ctx->stream());
                 ggml_cuda_mul_mat_q(*cuda_ctx, mm->src[0], node, nullptr, mm, packed.get());
                 return 1;
             }

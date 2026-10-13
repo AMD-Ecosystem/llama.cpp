@@ -122,4 +122,4 @@ __device__ __forceinline__ float ggml_cuda_op_swiglu_clamp_single(float gate, fl
     return ggml_cuda_op_silu_single(gate) * up;
 }
 
-void ggml_cuda_geglu_f16(const float * x, const float * gate, half * dst, int64_t n, cudaStream_t stream);
+void ggml_cuda_glu_f16(const float * x, const float * gate, half * dst, int64_t n, ggml_glu_op op, cudaStream_t stream);

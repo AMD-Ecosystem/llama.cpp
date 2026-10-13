@@ -349,8 +349,17 @@ void ggml_cuda_op_reglu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_op_unary_gated<op_relu>(ctx, dst);
 }
 
-void ggml_cuda_geglu_f16(const float * x, const float * gate, half * dst, int64_t n, cudaStream_t stream) {
-    unary_gated_cuda<op_gelu>(x, gate, dst, n, n, n, n, stream);
+void ggml_cuda_glu_f16(const float * x, const float * gate, half * dst, int64_t n, ggml_glu_op op, cudaStream_t stream) {
+    switch (op) {
+        case GGML_GLU_OP_GEGLU:
+            unary_gated_cuda<op_gelu>(x, gate, dst, n, n, n, n, stream);
+            break;
+        case GGML_GLU_OP_SWIGLU:
+            unary_gated_cuda<op_silu>(x, gate, dst, n, n, n, n, stream);
+            break;
+        default:
+            GGML_ABORT("unsupported GLU conversion operation");
+    }
 }
 
 void ggml_cuda_op_geglu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {

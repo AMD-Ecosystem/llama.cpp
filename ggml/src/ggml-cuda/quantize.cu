@@ -622,33 +622,47 @@ void quantize_rms_norm_mmq_q8_1_cuda(const float * x, const float * weight, void
     }
 }
 
-template <mmq_q8_1_ds_layout ds_layout>
-static __global__ void geglu_mmq_q8_1(const float * x, const float * gate, block_q8_1_mmq * y, int ncols, int nrows) {
+template <mmq_q8_1_ds_layout ds_layout, float (*op)(float)>
+static __global__ void glu_mmq_q8_1(const float * x, const float * gate, block_q8_1_mmq * y, int ncols, int nrows, int ncols_padded) {
     const int col = 4*(blockIdx.x*blockDim.x + threadIdx.x);
     const int row = blockIdx.y;
-    if (col >= ncols) {
+    if (col >= ncols_padded) {
         return;
     }
-    const int64_t i = (int64_t(row)*ncols + col)/4;
-    const float4 a = ((const float4 *) x)[i];
-    const float4 b = ((const float4 *) gate)[i];
-    const float4 xi = mmq_round_f32_input(make_float4(
-        ggml_cuda_op_gelu_single(a.x)*b.x, ggml_cuda_op_gelu_single(a.y)*b.y,
-        ggml_cuda_op_gelu_single(a.z)*b.z, ggml_cuda_op_gelu_single(a.w)*b.w));
+    float4 xi = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+    if (col < ncols) {
+        const int64_t i = (int64_t(row)*ncols + col)/4;
+        const float4 a = ((const float4 *) x)[i];
+        const float4 b = ((const float4 *) gate)[i];
+        xi = mmq_round_f32_input(make_float4(op(a.x)*b.x, op(a.y)*b.y, op(a.z)*b.z, op(a.w)*b.w));
+    }
     const auto values = quantize_mmq_q8_1_values<ds_layout>(xi);
     store_mmq_q8_1_values<ds_layout>(y + int64_t(col/QK8_1_MMQ)*nrows + row, col % QK8_1_MMQ, values);
 }
 
-void quantize_geglu_mmq_q8_1_cuda(const float * x, const float * gate, void * y, int ncols, int nrows, cudaStream_t stream) {
-    GGML_ASSERT(ncols % MATRIX_ROW_PADDING == 0);
-    const dim3 blocks((ncols + 4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ - 1)/(4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ), nrows);
-    geglu_mmq_q8_1<MMQ_Q8_1_DS_LAYOUT_DS4><<<blocks, CUDA_QUANTIZE_BLOCK_SIZE_MMQ, 0, stream>>>(x, gate, (block_q8_1_mmq *) y, ncols, nrows);
+template <mmq_q8_1_ds_layout ds_layout>
+static void quantize_glu_mmq_q8_1_cuda_impl(const float * x, const float * gate, void * y, int ncols, int nrows, ggml_glu_op op, cudaStream_t stream) {
+    GGML_ASSERT(ncols % 4 == 0);
+    const int ncols_padded = GGML_PAD(ncols, MATRIX_ROW_PADDING);
+    const dim3 blocks((ncols_padded + 4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ - 1)/(4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ), nrows);
+    switch (op) {
+        case GGML_GLU_OP_GEGLU:
+            glu_mmq_q8_1<ds_layout, ggml_cuda_op_gelu_single><<<blocks, CUDA_QUANTIZE_BLOCK_SIZE_MMQ, 0, stream>>>(x, gate, (block_q8_1_mmq *) y, ncols, nrows, ncols_padded);
+            break;
+        case GGML_GLU_OP_SWIGLU:
+            glu_mmq_q8_1<ds_layout, ggml_cuda_op_silu_single><<<blocks, CUDA_QUANTIZE_BLOCK_SIZE_MMQ, 0, stream>>>(x, gate, (block_q8_1_mmq *) y, ncols, nrows, ncols_padded);
+            break;
+        default:
+            GGML_ABORT("unsupported GLU packing operation");
+    }
 }
 
-void quantize_geglu_mmq_q8_1_d4_cuda(const float * x, const float * gate, void * y, int ncols, int nrows, cudaStream_t stream) {
-    GGML_ASSERT(ncols % MATRIX_ROW_PADDING == 0);
-    const dim3 blocks((ncols + 4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ - 1)/(4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ), nrows);
-    geglu_mmq_q8_1<MMQ_Q8_1_DS_LAYOUT_D4><<<blocks, CUDA_QUANTIZE_BLOCK_SIZE_MMQ, 0, stream>>>(x, gate, (block_q8_1_mmq *) y, ncols, nrows);
+void quantize_glu_mmq_q8_1_cuda(const float * x, const float * gate, void * y, int ncols, int nrows, ggml_glu_op op, cudaStream_t stream) {
+    quantize_glu_mmq_q8_1_cuda_impl<MMQ_Q8_1_DS_LAYOUT_DS4>(x, gate, y, ncols, nrows, op, stream);
+}
+
+void quantize_glu_mmq_q8_1_d4_cuda(const float * x, const float * gate, void * y, int ncols, int nrows, ggml_glu_op op, cudaStream_t stream) {
+    quantize_glu_mmq_q8_1_cuda_impl<MMQ_Q8_1_DS_LAYOUT_D4>(x, gate, y, ncols, nrows, op, stream);
 }
 
 void quantize_row_q8_1_cuda(

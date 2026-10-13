@@ -5018,18 +5018,19 @@ struct test_mul_mat : public test_case {
     }
 };
 
-struct test_geglu_mat : public test_mul_mat {
+struct test_glu_mat : public test_mul_mat {
     const bool extra_consumer;
     const bool force_f32;
-    test_geglu_mat(ggml_type type, int64_t n, int64_t k = 512, bool extra_consumer = false, bool force_f32 = false)
-        : test_mul_mat(type, GGML_TYPE_F32, 256, n, k, {1, 1}, {1, 1}), extra_consumer(extra_consumer), force_f32(force_f32) {}
+    const ggml_glu_op glu_op;
+    test_glu_mat(ggml_type type, int64_t n, int64_t k = 512, bool extra_consumer = false, bool force_f32 = false, ggml_glu_op glu_op = GGML_GLU_OP_GEGLU)
+        : test_mul_mat(type, GGML_TYPE_F32, 256, n, k, {1, 1}, {1, 1}), extra_consumer(extra_consumer), force_f32(force_f32), glu_op(glu_op) {}
     bool run_whole_graph() override { return true; }
-    std::string op_desc(ggml_tensor *) override { return "GEGLU_MAT"; }
+    std::string op_desc(ggml_tensor *) override { return glu_op == GGML_GLU_OP_GEGLU ? "GEGLU_MAT" : "SWIGLU_MAT"; }
     std::string vars() override { return test_mul_mat::vars() + "," + VARS_TO_STR2(extra_consumer, force_f32); }
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * mm = test_mul_mat::build_graph(ctx);
         ggml_tensor * gate = ggml_dup_tensor(ctx, mm->src[1]);
-        mm->src[1] = ggml_geglu_split(ctx, mm->src[1], gate);
+        mm->src[1] = glu_op == GGML_GLU_OP_GEGLU ? ggml_geglu_split(ctx, mm->src[1], gate) : ggml_swiglu_split(ctx, mm->src[1], gate);
         if (force_f32) {
             ggml_prec_set_acc(mm, GGML_PREC_F32);
         }
@@ -9128,13 +9129,27 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     for (ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K, GGML_TYPE_F16 }) {
         for (int64_t n : { 1, 63, 64, 258 }) {
-            test_cases.emplace_back(new test_geglu_mat(type, n));
+            test_cases.emplace_back(new test_glu_mat(type, n));
         }
-        test_cases.emplace_back(new test_geglu_mat(type, 258, 6144));
-        test_cases.emplace_back(new test_geglu_mat(type, 258, 512, true));
+        test_cases.emplace_back(new test_glu_mat(type, 258, 6144));
+        test_cases.emplace_back(new test_glu_mat(type, 258, 512, true));
     }
-    test_cases.emplace_back(new test_geglu_mat(GGML_TYPE_F16, 258, 512, false, true));
-    test_cases.emplace_back(new test_geglu_mat(GGML_TYPE_Q6_K, 252, 6144));
+    test_cases.emplace_back(new test_glu_mat(GGML_TYPE_F16, 258, 512, false, true));
+    test_cases.emplace_back(new test_glu_mat(GGML_TYPE_Q6_K, 252, 6144));
+
+    for (ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_F16 }) {
+        for (int64_t n : { 1, 63, 64, 256, 257 }) {
+            test_cases.emplace_back(new test_glu_mat(type, n, 768, false, false, GGML_GLU_OP_SWIGLU));
+        }
+        test_cases.emplace_back(new test_glu_mat(type, 258, 512, true, false, GGML_GLU_OP_SWIGLU));
+        test_cases.emplace_back(new test_glu_mat(type, 258, 512, false, true, GGML_GLU_OP_SWIGLU));
+        test_cases.emplace_back(new test_glu_mat(type, 64, 768));
+    }
+    for (ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
+        for (int64_t k : { 9728, 11008 }) {
+            test_cases.emplace_back(new test_glu_mat(type, 258, k, false, false, GGML_GLU_OP_SWIGLU));
+        }
+    }
 
     for (int64_t k : { 512, 1536, 2048 }) {
         for (int64_t n : { 1, 63, 64, 258 }) {
@@ -9964,6 +9979,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, { 256, 4, 3, 2 }, 1e-6f, false, false, true, false, true));
     test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, { 1536, 1, 1, 1 }, 1e-6f, false, false, false, true));
     test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, { 256, 4, 1, 1 }, 1e-6f, false, false, false, true));
+
+    for (int64_t tokens : { 127, 128, 129 }) {
+        for (int mode : { GGML_ROPE_TYPE_NORMAL, GGML_ROPE_TYPE_NEOX }) {
+            test_cases.emplace_back(new test_rms_norm_mul_rope({128, 4, tokens, 1}, 1e-6f, false, false, true, mode));
+            for (ggml_type type : { GGML_TYPE_F32, GGML_TYPE_F16 }) {
+                test_cases.emplace_back(new test_rms_norm_mul_rope({128, 4, tokens, 1}, 1e-6f, false, true, true, mode, true, true, type));
+            }
+        }
+    }
+    test_cases.emplace_back(new test_rms_norm_mul_rope({128, 4, 128, 2}, 1e-6f, false, false, true, GGML_ROPE_TYPE_NEOX));
 
     test_cases.emplace_back(new test_rms_norm_mul_rope({128, 4, 7, 2}));
     test_cases.emplace_back(new test_rms_norm_mul_rope({128, 4, 7, 2}, 1e-6f, false, true));
