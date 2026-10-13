@@ -261,6 +261,65 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2(ggml_backend_cuda_con
     }
 }
 
+template <typename T, int Dsrc, int Ddst>
+static __global__ void flash_attn_pad_head(
+        const char * src, T * dst, const int64_t n, const uint3 ne1, const uint3 ne2,
+        const size_t nb1, const size_t nb2, const size_t nb3) {
+    const int64_t i = int64_t(blockIdx.x)*blockDim.x + threadIdx.x;
+    if (i >= n) {
+        return;
+    }
+    const int col = i % Ddst;
+    const int row = i / Ddst;
+    const int i1 = fastmodulo(row, ne1);
+    const int i23 = fastdiv(row, ne1);
+    const int i2 = fastmodulo(i23, ne2);
+    const int i3 = fastdiv(i23, ne2);
+    dst[i] = col < Dsrc ? ((const T *) (src + i1*nb1 + i2*nb2 + i3*nb3))[col] : T(0.0f);
+}
+
+template <typename T, int Dsrc, int Ddst>
+static void ggml_cuda_flash_attn_pad_head(const ggml_tensor * src, ggml_tensor * dst, cudaStream_t stream) {
+    const int64_t n = ggml_nelements(dst);
+    const ggml_cuda_kernel_launch_params params(dim3((n + 255)/256), dim3(256), 0, stream);
+    ggml_cuda_kernel_launch(flash_attn_pad_head<T, Dsrc, Ddst>, params,
+        (const char *) src->data, (T *) dst->data, n, init_fastdiv_values(src->ne[1]), init_fastdiv_values(src->ne[2]),
+        src->nb[1], src->nb[2], src->nb[3]);
+    CUDA_CHECK(cudaGetLastError());
+}
+
+static void ggml_cuda_flash_attn_ext_mma_f16_pad72(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    ggml_tensor q = *dst->src[0];
+    ggml_tensor k = *dst->src[1];
+    ggml_tensor v = *dst->src[2];
+    ggml_tensor out = *dst;
+    const int64_t rows = ggml_nelements(&q)/72;
+    ggml_cuda_pool_alloc<float> q_out(ctx.pool(), 2*80*rows);
+    ggml_cuda_pool_alloc<half> kv(ctx.pool(), 2*80*rows);
+    q.data = q_out.get();
+    k.data = kv.get();
+    v.data = kv.get() + 80*rows;
+    out.data = q_out.get() + 80*rows;
+    for (ggml_tensor * t : {&q, &k, &v, &out}) {
+        t->ne[0] = 80;
+        for (int d = 1; d < GGML_MAX_DIMS; ++d) {
+            t->nb[d] = t->nb[d - 1]*t->ne[d - 1];
+        }
+        t->view_src = nullptr;
+        t->view_offs = 0;
+    }
+    out.src[0] = &q;
+    out.src[1] = &k;
+    out.src[2] = &v;
+    const cudaStream_t stream = ctx.stream();
+    ggml_cuda_flash_attn_pad_head<float, 72, 80>(dst->src[0], &q, stream);
+    ggml_cuda_flash_attn_pad_head<half, 72, 80>(dst->src[1], &k, stream);
+    ggml_cuda_flash_attn_pad_head<half, 72, 80>(dst->src[2], &v, stream);
+    // Keep the original scale: padding changes the storage width, not the attention width.
+    ggml_cuda_flash_attn_ext_mma_f16_case<80, 80, 64, 1>(ctx, &out);
+    ggml_cuda_flash_attn_pad_head<float, 80, 72>(&out, dst, stream);
+}
+
 static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     const ggml_tensor * KQV  = dst;
@@ -270,6 +329,9 @@ static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, gg
     const ggml_tensor * mask = dst->src[3];
 
     switch (Q->ne[0]) {
+        case 72:
+            ggml_cuda_flash_attn_ext_mma_f16_pad72(ctx, dst);
+            break;
         case 64:
             GGML_ASSERT(V->ne[0] == 64);
             ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2< 64,  64>(ctx, dst);
@@ -671,6 +733,16 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
             gqa_ratio == 1 && !mask && max_bias == 0.0f && logit_softcap == 0.0f &&
             Q->ne[1] >= 64 && Q->ne[1] == K->ne[1] &&
             K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16) {
+        return BEST_FATTN_KERNEL_MMA_F16;
+    }
+
+    // Pad unmasked D72 self-attention to the existing D80 WMMA tile.
+    if (GGML_CUDA_CC_IS_RDNA3_5(cc) && amd_wmma_available(cc) && Q->ne[0] == 72 && V->ne[0] == 72 &&
+            gqa_ratio == 1 && !mask && !KQV->src[4] && max_bias == 0.0f && logit_softcap == 0.0f &&
+            Q->ne[1] >= 256 && Q->ne[1]*Q->ne[2]*Q->ne[3] >= 4096 && Q->ne[1] == K->ne[1] && K->ne[1] == V->ne[1] &&
+            Q->ne[2] == V->ne[2] && Q->ne[3] == K->ne[3] && Q->ne[3] == V->ne[3] &&
+            Q->type == GGML_TYPE_F32 && K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16 &&
+            Q->nb[0] == sizeof(float) && K->nb[0] == sizeof(half) && V->nb[0] == sizeof(half) && ggml_is_contiguous(KQV)) {
         return BEST_FATTN_KERNEL_MMA_F16;
     }
 

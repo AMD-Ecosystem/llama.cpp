@@ -10904,10 +10904,21 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, {4, 1}, 1024, nb));
     }
 
-    for (int hs : {64, 80}) {
+    for (int hs : {64, 72, 80}) {
         for (int tokens : {63, 64, 65, 129}) {
             test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 4, {1, 1}, tokens, tokens, false));
         }
+    }
+
+    for (int tokens : {255, 256, 257}) {
+        test_cases.emplace_back(new test_flash_attn_ext(72, 72, 16, {1, 1}, tokens, tokens, false));
+    }
+    test_cases.emplace_back(new test_flash_attn_ext(72, 72, 4, {1, 2}, 513, 513, false, false, 0, 0, GGML_PREC_F32,
+            GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}));
+    for (bool mask : {false, true}) {
+        test_cases.emplace_back(new test_flash_attn_ext(72, 72, 4, {1, 1}, 129, 129, mask, true));
+        test_cases.emplace_back(new test_flash_attn_ext(72, 72, 4, {1, 1}, 129, 129, mask, false, 0, 0, GGML_PREC_F32,
+                GGML_TYPE_F32, GGML_TYPE_F32));
     }
 
     for (int nb : { 31, 32, 33, 252, 258, 517 }) {
