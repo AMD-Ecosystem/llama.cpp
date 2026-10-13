@@ -53,7 +53,9 @@ template.def<@llm.gated_delta_net.rmsnorm_gate.publish_head128> device @llm_gate
         %post_half = vector.fptrunc %post_result : vector<4xf32> to vector<4xf16>
         %post_head_channel = index.madd %head, %c128, %post_channel : index
         %post_group = index.div %post_head_channel, %c16 : index
-        %post_group_lane = index.rem %post_head_channel, %c16 : index
+        // Head strides and post channels are multiples of the four-lane packet.
+        %post_group_lane0 = index.rem %post_head_channel, %c16 : index
+        %post_group_lane = index.assume %post_group_lane0 [range(%post_group_lane0, 0, 12), multiple_of(%post_group_lane0, 4)] : index
         vector.store %post_half, %post_f16[%post_group, %post_token, %post_group_lane] : vector<4xf16>, view<[%post_groups]x[%post_tokens]x16xf16>
       }
     }
