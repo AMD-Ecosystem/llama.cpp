@@ -34,7 +34,7 @@ kernel.def target(@qwen3_moe_router_fused_gfx11_wave64) @qwen3_moe_router_projec
   %expert_count = config.get @qwen3_moe.router.expert_count : index
   %c1 = index.constant 1 : index
   %wave_size = target.subgroup.size : index
-  %experts_per_wave = index.constant 4 : index
+  %experts_per_wave = template.apply<@qwen3_moe.router.fused.experts_per_wave>() pure : () -> (index)
   %expert_tiles = index.div %expert_count, %experts_per_wave : index
   kernel.launch.config workgroups(%expert_tiles, %c1, %c1) workgroup_size(%wave_size, %c1, %c1) : index
 } launch(%token_count: index, %route_id_stride: index, %input: buffer, %weight: buffer, %logits: buffer, %completion_counter: buffer, %route_ids: buffer, %route_weights: buffer) {

@@ -7,12 +7,12 @@ template.decl @qwen3_moe.router.fused.projection(%hidden_size: index, %expert_co
 
 amdgpu.target<gfx1151> @qwen3_moe_router_fused_gfx1151
 
-template.def<@qwen3_moe.router.fused.experts_per_wave> target(@qwen3_moe_router_fused_gfx1151) requires [#target.subgroup.size<64>] priority(20) @qwen3_moe_router_fused_two_experts_per_wave() -> (index) {
+template.def<@qwen3_moe.router.fused.experts_per_wave> pure target(@qwen3_moe_router_fused_gfx1151) requires [#target.subgroup.size<64>] priority(20) @qwen3_moe_router_fused_two_experts_per_wave() -> (index) {
   %c2 = index.constant 2 : index
   template.return %c2 : index
 }
 
-template.def<@qwen3_moe.router.fused.experts_per_wave> requires [#target.subgroup.size<64>] priority(1) @qwen3_moe_router_fused_four_experts_per_wave() -> (index) {
+template.def<@qwen3_moe.router.fused.experts_per_wave> pure requires [#target.subgroup.size<64>] priority(1) @qwen3_moe_router_fused_four_experts_per_wave() -> (index) {
   %c4 = index.constant 4 : index
   template.return %c4 : index
 }
