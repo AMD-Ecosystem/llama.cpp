@@ -101,6 +101,8 @@ struct task_params {
     json to_json(bool only_metrics = false) const;
 };
 
+struct completion_token_output; // defined below, used by task_result_state
+
 // struct for tracking the state of a task (e.g., for streaming)
 struct task_result_state {
     // tracking diffs for partial tool calls
@@ -110,6 +112,10 @@ struct task_result_state {
     std::string generated_text; // append new chunks of generated text here
     std::vector<std::string> generated_tool_call_ids;
     std::unordered_set<size_t> sent_tool_call_names;
+
+    // logprobs for tokens whose text hasn't produced a chat-msg diff yet (still
+    // being buffered by the parser); flushed onto the next chunk that does
+    std::vector<completion_token_output> pending_probs;
 
     // for OpenAI Responses and Anthropic streaming API:
     // track output item / content block state across chunks
@@ -337,6 +343,7 @@ struct server_task_result_cmpl_final : server_task_result {
 
     bool post_sampling_probs;
     std::vector<completion_token_output> probs_output;
+    std::vector<completion_token_output> probs_to_emit; // leftover pending_probs flushed by update()
     std::vector<std::string>  response_fields;
 
     task_params generation_params;
@@ -365,6 +372,12 @@ struct server_task_result_cmpl_final : server_task_result {
     virtual void update(task_result_state & state) override {
         is_updated = true;
         oaicompat_msg = state.update_chat_msg(content, false, oaicompat_msg_diffs);
+
+        // this is the last update for the request: flush whatever logprobs are still
+        // pending (tokens whose diff never resolved via a prior partial chunk) so they
+        // are not silently lost
+        probs_to_emit = std::move(state.pending_probs);
+        state.pending_probs.clear();
 
         oai_resp_id = state.oai_resp_id;
         oai_resp_reasoning_id = state.oai_resp_reasoning_id;
@@ -405,6 +418,7 @@ struct server_task_result_cmpl_partial : server_task_result {
     bool is_begin = false; // whether to send 200 status to HTTP client (begin of SSE stream)
                            // ref: https://github.com/ggml-org/llama.cpp/pull/23884
     completion_token_output prob_output;
+    std::vector<completion_token_output> probs_to_emit; // pending_probs flushed by update() for this chunk
     server_slot_stats stats;
     result_prompt_progress progress;
 
