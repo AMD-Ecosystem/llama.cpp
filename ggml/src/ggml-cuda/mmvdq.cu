@@ -78,6 +78,23 @@ static __device__ __forceinline__ float dq_block_reduce(float x) {
 // each supported type defines a specialization below (block_t/geom/act + setup/load/dot).
 template <ggml_type type> struct dq_traits;
 
+template <ggml_type type, int warp_size, bool has_gate>
+static __device__ __forceinline__ void dq_accumulate(
+        const typename dq_traits<type>::block_t * xu, const typename dq_traits<type>::block_t * xg,
+        const float * yc, int row, int nblocks, const typename dq_traits<type>::geom & g,
+        float & up, float & gate) {
+    using Traits = dq_traits<type>;
+    constexpr int it_size = warp_size / Traits::lanes_per_block;
+    const int64_t row_off = (int64_t) row * nblocks;
+    for (int i = g.ix; i < nblocks; i += it_size) {
+        const auto a = Traits::load(yc + (int64_t) i * Traits::qk, g);
+        up += Traits::dot(xu + row_off + i, g, a);
+        if constexpr (has_gate) {
+            gate += Traits::dot(xg + row_off + i, g, a);
+        }
+    }
+}
+
 // ncols_dst is the token-batch width (mmvq's kernel axis); dq pins it to 1 for now(single
 // decode token) and does not read it in the body — it labels the axis and keeps the
 // signature aligned with mmvq's mul_mat_vec_q<type, ncols_dst, ...>.
@@ -95,8 +112,7 @@ static __global__ void mul_mat_vec_dq(
     constexpr int warps_per_block = dq_calc_warps_per_block(dq_get_device_table_id());
 
     const int row     = blockIdx.x;   // one block per weight row
-    const int nblocks = ncols_x / QK_K;
-    const int it_size = warp_size / 16;
+    const int nblocks = ncols_x / Traits::qk;
 
     // MoE (ids): blockIdx.y selects the expert slot; ids maps slot -> expert matrix.
     // channel_y picks this slot's activation column (per-expert ffn_down) or 0 when the
@@ -114,12 +130,7 @@ static __global__ void mul_mat_vec_dq(
         const block_t * xg = (const block_t *) fusion.gate + expert * stride_channel_x;
 
         float up = 0.0f, gate = 0.0f;
-        for (int i = g.ix; i < nblocks; i += it_size) {
-            const typename Traits::act a = Traits::load(yc + (int64_t) i * QK_K, g);
-            const int64_t off = (int64_t) row * nblocks + i;
-            up   += Traits::dot(&xu[off], g, a);
-            gate += Traits::dot(&xg[off], g, a);
-        }
+        dq_accumulate<type, warp_size, true>(xu, xg, yc, row, nblocks, g, up, gate);
 
         const float u  = dq_block_reduce<warp_size, warps_per_block>(up);
         const float gt = dq_block_reduce<warp_size, warps_per_block>(gate);
@@ -142,10 +153,8 @@ static __global__ void mul_mat_vec_dq(
         }
     } else {
         float sumf = 0.0f;
-        for (int i = g.ix; i < nblocks; i += it_size) {
-            const typename Traits::act a = Traits::load(yc + (int64_t) i * QK_K, g);
-            sumf += Traits::dot(&xu[(int64_t) row * nblocks + i], g, a);
-        }
+        float gate = 0.0f;
+        dq_accumulate<type, warp_size, false>(xu, nullptr, yc, row, nblocks, g, sumf, gate);
 
         const float total = dq_block_reduce<warp_size, warps_per_block>(sumf);
         if (threadIdx.x == 0) {
@@ -169,10 +178,10 @@ static void launch_dq(const void * vx, const float * y, float * d, int ncols_x, 
     const dim3 bd(warp_size * warps_per_block, 1, 1);
     const ggml_cuda_kernel_launch_params params(bn, bd, 0, stream);
     if (warp_size == 64) {
-        ggml_cuda_kernel_launch(mul_mat_vec_dq<type, 64, ncols_dst, has_gate>, params,
+        ggml_cuda_kernel_launch(mul_mat_vec_dq<type, 64, ncols_dst, has_gate, false>, params,
             vx, y, d, ncols_x, nrows_x, ids, stride_channel_x, stride_channel_dst, stride_channel_y, nchannels_y, fusion);
     } else {
-        ggml_cuda_kernel_launch(mul_mat_vec_dq<type, 32, ncols_dst, has_gate>, params,
+        ggml_cuda_kernel_launch(mul_mat_vec_dq<type, 32, ncols_dst, has_gate, false>, params,
             vx, y, d, ncols_x, nrows_x, ids, stride_channel_x, stride_channel_dst, stride_channel_y, nchannels_y, fusion);
     }
 }
@@ -197,6 +206,8 @@ static __device__ __forceinline__ dq_geom_q4_K dq_setup_q4_K(int tid) {
 // No q8_1 activation pass (unlike mul_mat_vec_q).
 template <> struct dq_traits<GGML_TYPE_Q4_K> {
     using block_t = block_q4_K;
+    static constexpr int qk = QK_K;
+    static constexpr int lanes_per_block = 16;
     using geom    = dq_geom_q4_K;
     struct act { float4 by10, by132, by20, by232; float sum10, sum32, sum20, sum42; };
 
@@ -239,6 +250,8 @@ static __device__ __forceinline__ dq_geom_q5_K dq_setup_q5_K(int tid) {
 // their four smin lane-sums, reused across rows. Mirrors dq_traits<GGML_TYPE_Q4_K>.
 template <> struct dq_traits<GGML_TYPE_Q5_K> {
     using block_t = block_q5_K;
+    static constexpr int qk = QK_K;
+    static constexpr int lanes_per_block = 16;
     using geom    = dq_geom_q5_K;
     struct act {
         float2 by10, by116, by132, by148, by20, by216, by232, by248;
@@ -287,6 +300,8 @@ static __device__ __forceinline__ dq_geom_q6_K dq_setup_q6_K(int tid) {
 
 template <> struct dq_traits<GGML_TYPE_Q6_K> {
     using block_t = block_q6_K;
+    static constexpr int qk = QK_K;
+    static constexpr int lanes_per_block = 16;
     using geom    = dq_geom_q6_K;
     struct act { float4 by0, by32, by64, by96; };
     static __device__ __forceinline__ geom setup(int tid) { return dq_setup_q6_K(tid); }
@@ -300,6 +315,56 @@ template <> struct dq_traits<GGML_TYPE_Q6_K> {
     }
     static __device__ __forceinline__ float dot(const block_t * b, const geom & g, const act & a) {
         return dq_dot_q6_K(b, g.ql_offset, g.qh_offset, g.s_offset, a.by0, a.by32, a.by64, a.by96);
+    }
+};
+
+struct dq_geom_q8_0 {
+    int ix, q_offset;
+};
+
+template <> struct dq_traits<GGML_TYPE_Q8_0> {
+    using block_t = block_q8_0;
+    static constexpr int qk = QK8_0;
+    static constexpr int lanes_per_block = 2;
+    using geom = dq_geom_q8_0;
+    struct act { const float * y; };
+
+    static __device__ __forceinline__ geom setup(int tid) {
+        return { tid / lanes_per_block, 16 * (tid % lanes_per_block) };
+    }
+    static __device__ __forceinline__ act load(const float * yb, const geom & g) {
+        return { yb + g.q_offset };
+    }
+    static __device__ __forceinline__ float dot(const block_t * b, const geom & g, const act & a) {
+        const auto w0 = dq_load_q8_0(b, g.q_offset);
+        const auto w1 = dq_load_q8_0(b, g.q_offset + 8);
+        const float4 by0 = *(const float4 *) a.y;
+        const float4 by4 = *(const float4 *) (a.y + 4);
+        float sum0 =
+            by0.x * (float) (int8_t) (w0.qs0 >> 0) +
+            by0.y * (float) (int8_t) (w0.qs0 >> 8) +
+            by0.z * (float) (int8_t) (w0.qs0 >> 16) +
+            by0.w * (float) (int8_t) (w0.qs0 >> 24) +
+            by4.x * (float) (int8_t) (w0.qs4 >> 0) +
+            by4.y * (float) (int8_t) (w0.qs4 >> 8) +
+            by4.z * (float) (int8_t) (w0.qs4 >> 16) +
+            by4.w * (float) (int8_t) (w0.qs4 >> 24);
+#if defined(__AMDGCN__)
+        asm volatile("" : "+v"(sum0) : : "memory");
+        __builtin_amdgcn_sched_barrier(0);
+#endif
+        const float4 by8 = *(const float4 *) (a.y + 8);
+        const float4 by12 = *(const float4 *) (a.y + 12);
+        const float sum1 =
+            by8.x * (float) (int8_t) (w1.qs0 >> 0) +
+            by8.y * (float) (int8_t) (w1.qs0 >> 8) +
+            by8.z * (float) (int8_t) (w1.qs0 >> 16) +
+            by8.w * (float) (int8_t) (w1.qs0 >> 24) +
+            by12.x * (float) (int8_t) (w1.qs4 >> 0) +
+            by12.y * (float) (int8_t) (w1.qs4 >> 8) +
+            by12.z * (float) (int8_t) (w1.qs4 >> 16) +
+            by12.w * (float) (int8_t) (w1.qs4 >> 24);
+        return __half2float(w0.d) * (sum0 + sum1);
     }
 };
 
@@ -387,6 +452,7 @@ static void dq_switch_ncols_dst(const dq_launch_args & a, int ncols_dst) {
 // numerics live in dq_traits<type>; adding a type is a new case here plus a Traits.
 static void dq_switch_type(ggml_type type, const dq_launch_args & a, int ncols_dst) {
     switch (type) {
+        case GGML_TYPE_Q8_0: dq_switch_ncols_dst<GGML_TYPE_Q8_0>(a, ncols_dst); break;
         case GGML_TYPE_Q4_K: dq_switch_ncols_dst<GGML_TYPE_Q4_K>(a, ncols_dst); break;
         case GGML_TYPE_Q5_K: dq_switch_ncols_dst<GGML_TYPE_Q5_K>(a, ncols_dst); break;
         case GGML_TYPE_Q6_K: dq_switch_ncols_dst<GGML_TYPE_Q6_K>(a, ncols_dst); break;
@@ -422,7 +488,7 @@ bool ggml_cuda_should_use_mmv_dq(
     }
 
     const ggml_type type = src0->type;
-    if (!(type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q5_K || type == GGML_TYPE_Q6_K)) {
+    if (!(type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q5_K || type == GGML_TYPE_Q6_K)) {
         return false;
     }
 
@@ -443,7 +509,8 @@ bool ggml_cuda_should_use_mmv_dq(
         }
     }
 
-    if (src0->ne[0] % QK_K != 0) {
+    const int qk = type == GGML_TYPE_Q8_0 ? QK8_0 : QK_K;
+    if (src0->ne[0] % qk != 0) {
         return false;
     }
     if (src0->ne[3] != 1 || src1->ne[2] != 1 || src1->ne[3] != 1) {
