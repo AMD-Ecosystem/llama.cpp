@@ -231,7 +231,7 @@ using LoomWorkspace           = LoomHandle<loomc_workspace_t, loomc_workspace_re
 using LoomSource              = LoomHandle<loomc_source_t, loomc_source_release>;
 using LoomModule              = LoomHandle<loomc_module_t, loomc_module_release>;
 using LoomResult              = LoomHandle<loomc_result_t, loomc_result_release>;
-using LoomLinkIndexBuilder    = LoomHandle<loomc_link_index_builder_t, loomc_link_index_builder_release>;
+using LoomLinkIndexBuilder    = LoomHandle<loomc_link_index_builder_t, loomc_link_index_builder_free>;
 using LoomLinkIndex           = LoomHandle<loomc_link_index_t, loomc_link_index_release>;
 using LoomLinker              = LoomHandle<loomc_linker_t, loomc_linker_release>;
 
@@ -778,9 +778,9 @@ hrx_status_t ggml_hrx_loom_jit_amdgpu_compile(ggml_hrx_loom_jit_amdgpu *        
     }
 
     LoomLinkIndexBuilder link_index_builder;
-    status = loomc_link_index_builder_create(jit->context, nullptr, loomc_allocator_system(), link_index_builder.out());
+    status = loomc_link_index_builder_allocate(jit->context, nullptr, loomc_allocator_system(), link_index_builder.out());
     if (!loomc_status_is_ok(status)) {
-        return ggml_hrx_loom_jit_status_from_loom(status, "create Loom link index builder");
+        return ggml_hrx_loom_jit_status_from_loom(status, "allocate Loom link index builder");
     }
     loomc_link_index_source_options_t link_source_options = {};
     link_source_options.provider_name                     = loomc_make_cstring_view(options->source_identifier);
@@ -915,10 +915,10 @@ hrx_status_t ggml_hrx_loom_jit_amdgpu_compile(ggml_hrx_loom_jit_amdgpu *        
             archive_index_source = specialized_archive_source.get();
         }
         LoomLinkIndexBuilder archive_index_builder;
-        status = loomc_link_index_builder_create(jit->context, nullptr, loomc_allocator_system(),
-                                                 archive_index_builder.out());
+        status = loomc_link_index_builder_allocate(jit->context, nullptr, loomc_allocator_system(),
+                                                   archive_index_builder.out());
         if (!loomc_status_is_ok(status)) {
-            return ggml_hrx_loom_jit_status_from_loom(status, "create Loom kernel archive index");
+            return ggml_hrx_loom_jit_status_from_loom(status, "allocate Loom kernel archive index");
         }
         loomc_link_index_source_options_t archive_source_options = {};
         archive_source_options.provider_name                     = loomc_make_cstring_view(options->source_identifier);
