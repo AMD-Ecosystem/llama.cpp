@@ -23,7 +23,7 @@ llama.cpp is easy to integrate with other programming environments and is widely
 adopted across diverse platforms, including consumer devices. 
 
 llama.cpp is part of the `AMD LLM Extension toolkit
-<https://rocm.docs.amd.com/projects/llmextension/en/docs-25.08/>`__.
+<https://rocm.docs.amd.com/projects/rocm-llmext/en/docs-25.08/>`__.
 
 The llama.cpp public repository is located at `https://github.com/AMD-Ecosystem/llama.cpp <https://github.com/AMD-Ecosystem/llama.cpp>`__.
 
