@@ -718,6 +718,65 @@ static __global__ void flash_attn_mask_to_KV_max(
     KV_max[sequence*ne31 + jt] = KV_max_sj;
 }
 
+// Negative bounds encode a verified causal prefix; other masks keep a 64-key upper bound.
+template <int ncols1>
+__launch_bounds__(128, 1)
+static __global__ void flash_attn_mask_to_KV_max_rdna(
+        const half2 * mask_ptr, int * KV_max_ptr, const int ne30, const int64_t s31, const int64_t s33) {
+    const int lane = threadIdx.x % 32;
+    const int warp = threadIdx.x / 32;
+    const int jt = blockIdx.x;
+    const int sequence = blockIdx.y;
+    const uint32_t * mask = reinterpret_cast<const uint32_t *>(mask_ptr + sequence*s33 + jt*ncols1*s31);
+    const int nkeys = ne30*FATTN_KQ_STRIDE;
+    __shared__ int row_limits[ncols1];
+    __shared__ int row_prefix[ncols1];
+    ggml_cuda_pdl_sync();
+#pragma unroll
+    for (int j = warp; j < ncols1; j += 4) {
+        int row_limit = 0;
+        int first_masked = nkeys;
+        int binary = 1;
+        for (int k = lane; k < nkeys/2; k += 32) {
+            const uint32_t bits = mask[j*s31 + k];
+            const uint32_t lo = bits & 0xffffU;
+            const uint32_t hi = bits >> 16;
+            if (lo != 0xfc00U) {
+                row_limit = max(row_limit, 2*k + 1);
+            } else {
+                first_masked = min(first_masked, 2*k);
+            }
+            if (hi != 0xfc00U) {
+                row_limit = max(row_limit, 2*k + 2);
+            } else {
+                first_masked = min(first_masked, 2*k + 1);
+            }
+            binary &= (lo == 0 || lo == 0xfc00U) && (hi == 0 || hi == 0xfc00U);
+        }
+        row_limit = int(warp_reduce_max(float(row_limit)));
+        first_masked = -int(warp_reduce_max(float(-first_masked)));
+        binary = warp_reduce_all(binary);
+        if (lane == 0) {
+            row_limits[j] = row_limit;
+            row_prefix[j] = binary && row_limit <= first_masked;
+        }
+    }
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        const int prefix = row_limits[0];
+        int limit = 0;
+        bool causal = true;
+#pragma unroll
+        for (int j = 0; j < ncols1; ++j) {
+            causal = causal && row_prefix[j] && row_limits[j] == prefix + j;
+            limit = max(limit, row_limits[j]);
+        }
+        // Keep the partial mask in the final key tile; other layouts use the original mask.
+        causal = causal && prefix > 0 && (prefix - 1)%64 + ncols1 <= 64;
+        KV_max_ptr[sequence*gridDim.x + jt] = causal ? -prefix - 1 : (limit + 63)/64*64;
+    }
+}
+
 void ggml_cuda_flash_attn_ext_compact_mask(
         const ggml_tensor * mask, int32_t * indices, int32_t n_kv_max, cudaStream_t stream);
 
@@ -972,11 +1031,24 @@ static __global__ void flash_attn_combine_results(
     dst[tid] = VKQ_numerator / VKQ_denominator;
 }
 
+static __host__ bool ggml_cuda_fattn_should_use_stream_k(const int cc, const int ntiles_dst, const int max_blocks, const int DKQ) {
+    const int tiles_nwaves             = (ntiles_dst + max_blocks - 1) / max_blocks;
+    const int tiles_efficiency_percent = 100 * ntiles_dst / (max_blocks*tiles_nwaves);
+
+    if (GGML_CUDA_CC_IS_NVIDIA(cc) && cc >= GGML_CUDA_CC_ADA_LOVELACE) {
+        return true;
+    }
+    if (amd_wmma_available(cc) && DKQ == 64) {
+        return true; // TODO better configuration
+    }
+    return tiles_efficiency_percent < 75;
+}
+
 template <int DV, int ncols1, int ncols2>
 void launch_fattn(
     ggml_backend_cuda_context & ctx, ggml_tensor * dst, fattn_kernel_t fattn_kernel, const int nwarps, const size_t nbytes_shared,
     const int nbatch_fa, const bool need_f16_K, const bool need_f16_V, const bool stream_k, const bool use_sparse,
-    const int warp_size = WARP_SIZE
+    const int warp_size = WARP_SIZE, const bool allow_mask_prefix = false
 ) {
     constexpr int ncols = ncols1 * ncols2;
 
@@ -1102,10 +1174,16 @@ void launch_fattn(
         ggml_cuda_flash_attn_ext_compact_mask(mask, KV_max.ptr, n_kv_max, main_stream);
     }
 
+    const bool use_rdna_mask = allow_mask_prefix && GGML_CUDA_CC_IS_RDNA3_5(cc) && !use_sparse &&
+        ((ncols1 == 8 && ncols2 == 8) || ((ncols1 == 16 || ncols1 == 32) && ncols2 == 4)) && nbatch_fa == 64 && Q->ne[0] == 128 && DV == 128 &&
+        K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16 &&
+        Q->ne[1] >= 512 && Q->ne[1] % ncols1 == 0 && K->ne[1] <= 4096 &&
+        mask && mask->ne[2] == 1 && mask->ne[3] == Q->ne[3];
+
     // Optional optimization where the mask is scanned to determine whether part of the calculation can be skipped.
     // Only worth the overhead if there is at lease one FATTN_KQ_STRIDE x FATTN_KQ_STRIDE square to be skipped or
     //     multiple sequences of possibly different lengths.
-    if (!use_sparse && mask && K->ne[1] % FATTN_KQ_STRIDE == 0 && (Q->ne[1] >= 1024 || Q->ne[3] > 1)) {
+    if (!use_sparse && mask && K->ne[1] % FATTN_KQ_STRIDE == 0 && (Q->ne[1] >= 1024 || Q->ne[3] > 1 || use_rdna_mask)) {
         const int64_t s31 = mask->nb[1] / sizeof(half2);
         const int64_t s33 = mask->nb[3] / sizeof(half2);
 
@@ -1117,8 +1195,14 @@ void launch_fattn(
 
         KV_max.alloc(ne_KV_max);
         ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num_KV_max, block_dim_KV_max, 0, main_stream);
-        ggml_cuda_kernel_launch(flash_attn_mask_to_KV_max<ncols1>, launch_params,
-            (const half2 *) mask->data, KV_max.ptr, iter_k, s31, s33);
+        if (use_rdna_mask) {
+            constexpr int rdna_mask_ncols1 = (ncols1 == 16 || ncols1 == 32) && ncols2 == 4 ? ncols1 : 8;
+            ggml_cuda_kernel_launch(flash_attn_mask_to_KV_max_rdna<rdna_mask_ncols1>, launch_params,
+                (const half2 *) mask->data, KV_max.ptr, iter_k, s31, s33);
+        } else {
+            ggml_cuda_kernel_launch(flash_attn_mask_to_KV_max<ncols1>, launch_params,
+                (const half2 *) mask->data, KV_max.ptr, iter_k, s31, s33);
+        }
         CUDA_CHECK(cudaGetLastError());
     }
 
@@ -1133,21 +1217,8 @@ void launch_fattn(
 
     dim3 blocks_num;
     if (stream_k) {
-        auto should_use_stream_k = [](const int cc, const int ntiles_dst, const int max_blocks, const int DKQ) {
-            const int tiles_nwaves             = (ntiles_dst + max_blocks - 1) / max_blocks;
-            const int tiles_efficiency_percent = 100 * ntiles_dst / (max_blocks*tiles_nwaves);
-
-            if (GGML_CUDA_CC_IS_NVIDIA(cc) && cc >= GGML_CUDA_CC_ADA_LOVELACE) {
-                return true;
-            }
-            if (amd_wmma_available(cc) && DKQ == 64) {
-                return true; // TODO better configuration
-            }
-            return tiles_efficiency_percent < 75;
-        };
-
         const int  max_blocks   = max_blocks_per_sm*nsm;
-        const bool use_stream_k = should_use_stream_k(cc, ntiles_dst, max_blocks, Q->ne[0]);
+        const bool use_stream_k = ggml_cuda_fattn_should_use_stream_k(cc, ntiles_dst, max_blocks, Q->ne[0]);
 
         blocks_num.x = ntiles_dst;
         blocks_num.y = 1;
