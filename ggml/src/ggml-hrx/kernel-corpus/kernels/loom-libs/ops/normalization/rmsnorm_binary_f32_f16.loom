@@ -3,11 +3,215 @@
 
 template.decl @ggml.rmsnorm_binary_f32.body(%publish_f16: i1, %token_count: index, %input: buffer, %rhs: buffer, %output: buffer, %f16_output: buffer)
 
+template.decl @ggml.rmsnorm_binary_f32.retained_2048_body(%publish_f16: i1, %token_count: index, %input: buffer, %rhs: buffer, %output: buffer, %f16_output: buffer)
+
+template.decl @ggml.rmsnorm_f32.apply(%value: f32, %scale: f32) -> (f32)
+
+template.decl @ggml.binary_f32.apply(%op: index, %lhs: f32, %rhs: f32) -> (f32)
+
 amdgpu.target<gfx11-generic> @ggml_rmsnorm_binary_gfx11_wave32 {subgroup_size = 32}
 
 config.decl @ggml.rmsnorm_binary_f32.hidden_size : %value: index where [range(%value, 128, 32768), multiple_of(%value, 128)]
+
 config.decl @ggml.rmsnorm_binary_f32.rms_epsilon : f32
+
 config.decl @ggml.rmsnorm_binary_f32.op : %value: index where [range(%value, 0, 3)]
+
+func.def inline @ggml_rmsnorm_load_inputs_2048(%input_view: view<[%token_count]x[%input_stride]xf32>, %token_count: index, %input_stride: index, %token: index, %workitem: index) -> (f32, f32, f32, f32, f32, f32, f32, f32, f32) {
+  %rs_c0_f32 = scalar.constant 0.0 : f32
+  %rs_offset0 = index.constant 0 : index
+  %rs_channel0 = index.add %workitem, %rs_offset0 : index
+  %rs_saved0 = view.load %input_view[%token, %rs_channel0] : view<[%token_count]x[%input_stride]xf32> -> f32
+  %rs_square0 = scalar.mulf<reassoc|nnan|ninf|nsz> %rs_saved0, %rs_saved0 : f32
+  %rs_sum0 = scalar.addf<reassoc|nnan|ninf|nsz> %rs_c0_f32, %rs_square0 : f32
+  %rs_offset1 = index.constant 256 : index
+  %rs_channel1 = index.add %workitem, %rs_offset1 : index
+  %rs_saved1 = view.load %input_view[%token, %rs_channel1] : view<[%token_count]x[%input_stride]xf32> -> f32
+  %rs_square1 = scalar.mulf<reassoc|nnan|ninf|nsz> %rs_saved1, %rs_saved1 : f32
+  %rs_sum1 = scalar.addf<reassoc|nnan|ninf|nsz> %rs_sum0, %rs_square1 : f32
+  %rs_offset2 = index.constant 512 : index
+  %rs_channel2 = index.add %workitem, %rs_offset2 : index
+  %rs_saved2 = view.load %input_view[%token, %rs_channel2] : view<[%token_count]x[%input_stride]xf32> -> f32
+  %rs_square2 = scalar.mulf<reassoc|nnan|ninf|nsz> %rs_saved2, %rs_saved2 : f32
+  %rs_sum2 = scalar.addf<reassoc|nnan|ninf|nsz> %rs_sum1, %rs_square2 : f32
+  %rs_offset3 = index.constant 768 : index
+  %rs_channel3 = index.add %workitem, %rs_offset3 : index
+  %rs_saved3 = view.load %input_view[%token, %rs_channel3] : view<[%token_count]x[%input_stride]xf32> -> f32
+  %rs_square3 = scalar.mulf<reassoc|nnan|ninf|nsz> %rs_saved3, %rs_saved3 : f32
+  %rs_sum3 = scalar.addf<reassoc|nnan|ninf|nsz> %rs_sum2, %rs_square3 : f32
+  %rs_offset4 = index.constant 1024 : index
+  %rs_channel4 = index.add %workitem, %rs_offset4 : index
+  %rs_saved4 = view.load %input_view[%token, %rs_channel4] : view<[%token_count]x[%input_stride]xf32> -> f32
+  %rs_square4 = scalar.mulf<reassoc|nnan|ninf|nsz> %rs_saved4, %rs_saved4 : f32
+  %rs_sum4 = scalar.addf<reassoc|nnan|ninf|nsz> %rs_sum3, %rs_square4 : f32
+  %rs_offset5 = index.constant 1280 : index
+  %rs_channel5 = index.add %workitem, %rs_offset5 : index
+  %rs_saved5 = view.load %input_view[%token, %rs_channel5] : view<[%token_count]x[%input_stride]xf32> -> f32
+  %rs_square5 = scalar.mulf<reassoc|nnan|ninf|nsz> %rs_saved5, %rs_saved5 : f32
+  %rs_sum5 = scalar.addf<reassoc|nnan|ninf|nsz> %rs_sum4, %rs_square5 : f32
+  %rs_offset6 = index.constant 1536 : index
+  %rs_channel6 = index.add %workitem, %rs_offset6 : index
+  %rs_saved6 = view.load %input_view[%token, %rs_channel6] : view<[%token_count]x[%input_stride]xf32> -> f32
+  %rs_square6 = scalar.mulf<reassoc|nnan|ninf|nsz> %rs_saved6, %rs_saved6 : f32
+  %rs_sum6 = scalar.addf<reassoc|nnan|ninf|nsz> %rs_sum5, %rs_square6 : f32
+  %rs_offset7 = index.constant 1792 : index
+  %rs_channel7 = index.add %workitem, %rs_offset7 : index
+  %rs_saved7 = view.load %input_view[%token, %rs_channel7] : view<[%token_count]x[%input_stride]xf32> -> f32
+  %rs_square7 = scalar.mulf<reassoc|nnan|ninf|nsz> %rs_saved7, %rs_saved7 : f32
+  %rs_sum7 = scalar.addf<reassoc|nnan|ninf|nsz> %rs_sum6, %rs_square7 : f32
+  func.return %rs_saved0, %rs_saved1, %rs_saved2, %rs_saved3, %rs_saved4, %rs_saved5, %rs_saved6, %rs_saved7, %rs_sum7 : f32, f32, f32, f32, f32, f32, f32, f32, f32
+}
+
+func.def inline @ggml_rmsnorm_binary_apply_preloaded(%op: index, %value: f32, %scale: f32, %rhs: f32) -> (f32) {
+  %normalized = template.apply<@ggml.rmsnorm_f32.apply>(%value, %scale) : (f32, f32) -> (f32)
+  %result = template.apply<@ggml.binary_f32.apply>(%op, %normalized, %rhs) : (index, f32, f32) -> (f32)
+  func.return %result : f32
+}
+
+// Keep the eight lane-owned inputs live across the row reduction. This fixed
+// hidden-2048 schedule preserves the scalar accumulation order and publishes
+// both output types; other sizes and binary operations use the generic body.
+template.def<@ggml.rmsnorm_binary_f32.retained_2048_body> device @ggml_rmsnorm_binary_f32_retained_2048_body(%publish_f16: i1, %token_count: index, %input: buffer, %rhs: buffer, %output: buffer, %f16_output: buffer) {
+  %hidden_size0 = config.get @ggml.rmsnorm_binary_f32.hidden_size : index
+  %epsilon = config.get @ggml.rmsnorm_binary_f32.rms_epsilon : f32
+  %op = config.get @ggml.rmsnorm_binary_f32.op : index
+  %hidden_size = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), multiple_of(%hidden_size0, 128)] : index
+  %token0 = kernel.workgroup.id<x> : index
+  %workitem = kernel.workitem.id<x> : index
+  %c0 = index.constant 0 : index
+  %c256 = index.constant 256 : index
+  %c0_offset = index.constant 0 : offset
+  %input_noalias, %rhs_noalias, %output_noalias = buffer.assume.noalias %input, %rhs, %output : buffer, buffer, buffer
+
+  %rs_token_count = index.assume %token_count [range(%token_count, 1, 1048576)] : index
+  %rs_hidden_size1 = index.assume %hidden_size [range(%hidden_size, 64, 32768), multiple_of(%hidden_size, 64)] : index
+  %rs_input_stride1 = index.assume %hidden_size [range(%hidden_size, 64, 1048576)] : index
+  %rs_hidden_size, %rs_input_stride = index.assume %rs_hidden_size1, %rs_input_stride1 [le(%rs_hidden_size1, %rs_input_stride1)] : index, index
+  %rs_workitem = kernel.workitem.id<x> : index
+  %rs_subgroup0 = kernel.subgroup.id : index
+  %rs_subgroup = index.assume %rs_subgroup0 [range(%rs_subgroup0, 0, 7)] : index
+  %rs_lane = kernel.subgroup.lane.id : index
+  %rs_c0 = index.constant 0 : index
+  %rs_c1 = index.constant 1 : index
+  %rs_c8 = index.constant 8 : index
+  %rs_c256 = index.constant 256 : index
+  %rs_scratch_bytes = index.constant 1024 : offset
+  %rs_c0_offset = index.constant 0 : offset
+  %rs_c0_f32 = scalar.constant 0.0 : f32
+  %rs_valid_token = index.cmp ult, %token0, %rs_token_count : index
+  %rs_safe_token0 = scf.select %rs_valid_token, %token0, %rs_c0 : index
+  %rs_token = index.assume %rs_safe_token0 [lt(%rs_safe_token0, %rs_token_count)] : index
+  %rs_hidden_size_i32 = index.cast %rs_hidden_size : index to i32
+  %rs_hidden_size_f32 = scalar.sitofp %rs_hidden_size_i32 : i32 to f32
+  %rs_input_view = buffer.view %input_noalias[%rs_c0_offset] : buffer -> view<[%rs_token_count]x[%rs_input_stride]xf32>
+  %rs_saved0, %rs_saved1, %rs_saved2, %rs_saved3, %rs_saved4, %rs_saved5, %rs_saved6, %rs_saved7, %rs_sum7 = func.call @ggml_rmsnorm_load_inputs_2048(%rs_input_view, %rs_token_count, %rs_input_stride, %rs_token, %rs_workitem) : (view<[%rs_token_count]x[%rs_input_stride]xf32>, index, index, index, index) -> (f32, f32, f32, f32, f32, f32, f32, f32, f32)
+  %rs_offset0 = index.constant 0 : index
+  %rs_channel0 = index.add %rs_workitem, %rs_offset0 : index
+  %rs_offset1 = index.constant 256 : index
+  %rs_channel1 = index.add %rs_workitem, %rs_offset1 : index
+  %rs_offset2 = index.constant 512 : index
+  %rs_channel2 = index.add %rs_workitem, %rs_offset2 : index
+  %rs_offset3 = index.constant 768 : index
+  %rs_channel3 = index.add %rs_workitem, %rs_offset3 : index
+  %rs_offset4 = index.constant 1024 : index
+  %rs_channel4 = index.add %rs_workitem, %rs_offset4 : index
+  %rs_offset5 = index.constant 1280 : index
+  %rs_channel5 = index.add %rs_workitem, %rs_offset5 : index
+  %rs_offset6 = index.constant 1536 : index
+  %rs_channel6 = index.add %rs_workitem, %rs_offset6 : index
+  %rs_offset7 = index.constant 1792 : index
+  %rs_channel7 = index.add %rs_workitem, %rs_offset7 : index
+  %rs_subgroup_sum = kernel.subgroup.reduce<addf> %rs_sum7 : f32
+  %rs_scratch = buffer.alloca<workgroup> align(16) %rs_scratch_bytes : buffer
+  %rs_scratch_view = buffer.view %rs_scratch[%rs_c0_offset] : buffer -> view<256xf32>
+  %rs_is_subgroup_leader = index.cmp eq, %rs_lane, %rs_c0 : index
+  scf.if %rs_is_subgroup_leader {
+    view.store %rs_subgroup_sum, %rs_scratch_view[%rs_subgroup] : f32, view<256xf32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %rs_is_reduction_subgroup = index.cmp eq, %rs_subgroup, %rs_c0 : index
+  %rs_is_reduction_lane = index.cmp ult, %rs_lane, %rs_c8 : index
+  %rs_loads_subgroup_sum = scalar.andi %rs_is_reduction_subgroup, %rs_is_reduction_lane : i1
+  %rs_subgroup_partial = scf.if %rs_loads_subgroup_sum -> (f32) {
+    %rs_value = view.load %rs_scratch_view[%rs_lane] : view<256xf32> -> f32
+    scf.yield %rs_value : f32
+  } else {
+    scf.yield %rs_c0_f32 : f32
+  }
+  %rs_row_sum = kernel.subgroup.reduce<addf> %rs_subgroup_partial : f32
+  %rs_writes_scale = scalar.andi %rs_is_reduction_subgroup, %rs_is_subgroup_leader : i1
+  scf.if %rs_writes_scale {
+    %rs_mean = scalar.divf<reassoc|nnan|ninf|nsz|arcp> %rs_row_sum, %rs_hidden_size_f32 : f32
+    %rs_biased_mean = scalar.addf<reassoc|nnan|ninf|nsz> %rs_mean, %epsilon : f32
+    %rs_scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %rs_biased_mean : f32
+    view.store %rs_scale, %rs_scratch_view[%rs_c0] : f32, view<256xf32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %rs_scale = view.load %rs_scratch_view[%rs_c0] : view<256xf32> -> f32
+  %input_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%rs_token_count]x[%hidden_size]xf32>
+  %rhs_view = buffer.view %rhs_noalias[%c0_offset] : buffer -> view<[%hidden_size]xf32>
+  %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%rs_token_count]x[%hidden_size]xf32>
+  %f16_output_view = buffer.view %f16_output[%c0_offset] : buffer -> view<[%rs_token_count]x[%hidden_size]xf16>
+  scf.if %rs_valid_token {
+    %rhs_value_0 = view.load %rhs_view[%rs_channel0] : view<[%hidden_size]xf32> -> f32
+    %result_0 = func.call @ggml_rmsnorm_binary_apply_preloaded(%op, %rs_saved0, %rs_scale, %rhs_value_0) : (index, f32, f32, f32) -> (f32)
+    view.store %result_0, %output_view[%rs_token, %rs_channel0] : f32, view<[%rs_token_count]x[%hidden_size]xf32>
+    scf.if %publish_f16 {
+      %half_0 = scalar.fptrunc %result_0 : f32 to f16
+      view.store %half_0, %f16_output_view[%rs_token, %rs_channel0] : f16, view<[%rs_token_count]x[%hidden_size]xf16>
+    }
+    %rhs_value_1 = view.load %rhs_view[%rs_channel1] : view<[%hidden_size]xf32> -> f32
+    %result_1 = func.call @ggml_rmsnorm_binary_apply_preloaded(%op, %rs_saved1, %rs_scale, %rhs_value_1) : (index, f32, f32, f32) -> (f32)
+    view.store %result_1, %output_view[%rs_token, %rs_channel1] : f32, view<[%rs_token_count]x[%hidden_size]xf32>
+    scf.if %publish_f16 {
+      %half_1 = scalar.fptrunc %result_1 : f32 to f16
+      view.store %half_1, %f16_output_view[%rs_token, %rs_channel1] : f16, view<[%rs_token_count]x[%hidden_size]xf16>
+    }
+    %rhs_value_2 = view.load %rhs_view[%rs_channel2] : view<[%hidden_size]xf32> -> f32
+    %result_2 = func.call @ggml_rmsnorm_binary_apply_preloaded(%op, %rs_saved2, %rs_scale, %rhs_value_2) : (index, f32, f32, f32) -> (f32)
+    view.store %result_2, %output_view[%rs_token, %rs_channel2] : f32, view<[%rs_token_count]x[%hidden_size]xf32>
+    scf.if %publish_f16 {
+      %half_2 = scalar.fptrunc %result_2 : f32 to f16
+      view.store %half_2, %f16_output_view[%rs_token, %rs_channel2] : f16, view<[%rs_token_count]x[%hidden_size]xf16>
+    }
+    %rhs_value_3 = view.load %rhs_view[%rs_channel3] : view<[%hidden_size]xf32> -> f32
+    %result_3 = func.call @ggml_rmsnorm_binary_apply_preloaded(%op, %rs_saved3, %rs_scale, %rhs_value_3) : (index, f32, f32, f32) -> (f32)
+    view.store %result_3, %output_view[%rs_token, %rs_channel3] : f32, view<[%rs_token_count]x[%hidden_size]xf32>
+    scf.if %publish_f16 {
+      %half_3 = scalar.fptrunc %result_3 : f32 to f16
+      view.store %half_3, %f16_output_view[%rs_token, %rs_channel3] : f16, view<[%rs_token_count]x[%hidden_size]xf16>
+    }
+    %rhs_value_4 = view.load %rhs_view[%rs_channel4] : view<[%hidden_size]xf32> -> f32
+    %result_4 = func.call @ggml_rmsnorm_binary_apply_preloaded(%op, %rs_saved4, %rs_scale, %rhs_value_4) : (index, f32, f32, f32) -> (f32)
+    view.store %result_4, %output_view[%rs_token, %rs_channel4] : f32, view<[%rs_token_count]x[%hidden_size]xf32>
+    scf.if %publish_f16 {
+      %half_4 = scalar.fptrunc %result_4 : f32 to f16
+      view.store %half_4, %f16_output_view[%rs_token, %rs_channel4] : f16, view<[%rs_token_count]x[%hidden_size]xf16>
+    }
+    %rhs_value_5 = view.load %rhs_view[%rs_channel5] : view<[%hidden_size]xf32> -> f32
+    %result_5 = func.call @ggml_rmsnorm_binary_apply_preloaded(%op, %rs_saved5, %rs_scale, %rhs_value_5) : (index, f32, f32, f32) -> (f32)
+    view.store %result_5, %output_view[%rs_token, %rs_channel5] : f32, view<[%rs_token_count]x[%hidden_size]xf32>
+    scf.if %publish_f16 {
+      %half_5 = scalar.fptrunc %result_5 : f32 to f16
+      view.store %half_5, %f16_output_view[%rs_token, %rs_channel5] : f16, view<[%rs_token_count]x[%hidden_size]xf16>
+    }
+    %rhs_value_6 = view.load %rhs_view[%rs_channel6] : view<[%hidden_size]xf32> -> f32
+    %result_6 = func.call @ggml_rmsnorm_binary_apply_preloaded(%op, %rs_saved6, %rs_scale, %rhs_value_6) : (index, f32, f32, f32) -> (f32)
+    view.store %result_6, %output_view[%rs_token, %rs_channel6] : f32, view<[%rs_token_count]x[%hidden_size]xf32>
+    scf.if %publish_f16 {
+      %half_6 = scalar.fptrunc %result_6 : f32 to f16
+      view.store %half_6, %f16_output_view[%rs_token, %rs_channel6] : f16, view<[%rs_token_count]x[%hidden_size]xf16>
+    }
+    %rhs_value_7 = view.load %rhs_view[%rs_channel7] : view<[%hidden_size]xf32> -> f32
+    %result_7 = func.call @ggml_rmsnorm_binary_apply_preloaded(%op, %rs_saved7, %rs_scale, %rhs_value_7) : (index, f32, f32, f32) -> (f32)
+    view.store %result_7, %output_view[%rs_token, %rs_channel7] : f32, view<[%rs_token_count]x[%hidden_size]xf32>
+    scf.if %publish_f16 {
+      %half_7 = scalar.fptrunc %result_7 : f32 to f16
+      view.store %half_7, %f16_output_view[%rs_token, %rs_channel7] : f16, view<[%rs_token_count]x[%hidden_size]xf16>
+    }
+  }
+  template.return
+}
 
 kernel.def target(@ggml_rmsnorm_binary_gfx11_wave32) export("ggml_rmsnorm_binary_f32_f16") @ggml_rmsnorm_binary_f32_f16(%token_count: index) {
   %c1 = index.constant 1 : index
@@ -15,6 +219,17 @@ kernel.def target(@ggml_rmsnorm_binary_gfx11_wave32) export("ggml_rmsnorm_binary
   kernel.launch.config workgroups(%token_count, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
 } launch(%token_count: index, %input: buffer, %rhs: buffer, %output: buffer, %f16_output: buffer) where [range(%token_count, 1, 1048576)] {
   %publish_f16 = scalar.constant true : i1
-  template.apply<@ggml.rmsnorm_binary_f32.body>(%publish_f16, %token_count, %input, %rhs, %output, %f16_output) : (i1, index, buffer, buffer, buffer, buffer)
+  %hidden = config.get @ggml.rmsnorm_binary_f32.hidden_size : index
+  %op = config.get @ggml.rmsnorm_binary_f32.op : index
+  %c2048 = index.constant 2048 : index
+  %mul_op = index.constant 2 : index
+  %is_hidden2048 = index.cmp eq, %hidden, %c2048 : index
+  %is_multiply = index.cmp eq, %op, %mul_op : index
+  %use_retained_inputs = scalar.andi %is_hidden2048, %is_multiply : i1
+  scf.if %use_retained_inputs {
+    template.apply<@ggml.rmsnorm_binary_f32.retained_2048_body>(%publish_f16, %token_count, %input, %rhs, %output, %f16_output) : (i1, index, buffer, buffer, buffer, buffer)
+  } else {
+    template.apply<@ggml.rmsnorm_binary_f32.body>(%publish_f16, %token_count, %input, %rhs, %output, %f16_output) : (i1, index, buffer, buffer, buffer, buffer)
+  }
   kernel.return
 }
