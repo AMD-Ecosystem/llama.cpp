@@ -319,6 +319,72 @@ def test_completion_without_tool_call_fast(template_name: str, n_predict: int, t
 
 
 @pytest.mark.slow
+def test_logprobs_with_tools_stream():
+    # Regression: tools + stream + logprobs used to be rejected with a 400. It is now allowed and,
+    # matching the non-streaming path, emits per-token logprobs (including tool-call tokens) in the
+    # OpenAI-modern shape, retaining the integer token id. Per-token text can be split across
+    # `content` and `tool_calls` (or be parser-internal scaffolding with no visible text at all),
+    # so completeness is checked by count against the server's own `usage.completion_tokens`,
+    # rather than by reconstructing a single output string.
+    #
+    # This needs a real model: with `tool_choice: "required"`, the tiny test model used elsewhere
+    # in this file is not guaranteed to ever actually emit a tool call (see the disabled
+    # test_completion_with_required_tool_tiny_fast above, PR #22654), so it can't exercise the
+    # tool-call-argument buffering path this test is meant to catch.
+    global server
+    server.offline = False # not one of the ServerPreset models pre-fetched by load_all()
+    server.jinja = True
+    server.n_ctx = 8192
+    server.n_predict = 128
+    server.model_hf_repo = "bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M"
+    server.model_hf_file = None
+    server.chat_template_file = '../../../models/templates/meta-llama-Llama-3.2-3B-Instruct.jinja'
+    server.start(timeout_seconds=TIMEOUT_START_SLOW)
+
+    total_logprob_entries = 0
+    completion_tokens = None
+    for chunk in server.make_stream_request("POST", "/v1/chat/completions", data={
+        "max_tokens": 128,
+        "messages": [
+            {"role": "system", "content": "You are a coding assistant."},
+            {"role": "user", "content": "Write an example"},
+        ],
+        "tools": [TEST_TOOL],
+        "tool_choice": "required",
+        "parallel_tool_calls": False,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "logprobs": True,
+        "top_logprobs": 5,
+        "temperature": 0.0,
+        "top_k": 1,
+        "top_p": 1.0,
+    }):
+        if chunk.get("usage"):
+            completion_tokens = chunk["usage"]["completion_tokens"]
+        if not chunk["choices"]:
+            continue
+        logprobs = chunk["choices"][0].get("logprobs")
+        if not logprobs:
+            continue
+        for entry in logprobs["content"]:
+            total_logprob_entries += 1
+            assert "id" in entry and isinstance(entry["id"], int)
+            assert "token" in entry
+            assert entry["logprob"] <= 0.0
+            assert entry["bytes"] is not None
+            assert len(entry["top_logprobs"]) > 0
+            for top in entry["top_logprobs"]:
+                assert "id" in top and isinstance(top["id"], int)
+                assert "token" in top
+                assert top["logprob"] <= 0.0
+    assert completion_tokens is not None, "Expected a usage chunk reporting completion_tokens"
+    # the compatibility invariant: logprobs must cover every generated token, not just
+    # whichever ones happened to land on a chunk with visible delta content
+    assert total_logprob_entries == completion_tokens
+
+
+@pytest.mark.slow
 @pytest.mark.parametrize("stream", [CompletionMode.NORMAL, CompletionMode.STREAMED])
 @pytest.mark.parametrize("template_name,n_predict,tools,tool_choice", [
     ("meetkai-functionary-medium-v3.2",               256, [],            None),
