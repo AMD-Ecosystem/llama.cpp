@@ -5981,6 +5981,28 @@ static void register_basic_ops_cases(Suite & suite) {
 }
 
 static void register_dense_matmul_cases(Suite & suite) {
+    // Distinct gate/up weights cover cached metadata, multiple K blocks, and tile tails.
+    for (const ggml_type gate : { GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS }) {
+        for (const ggml_type up : { GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS }) {
+            for (const int64_t input_size : { 256, 768 }) {
+                suite.device_case("dense_matmul.metadata_pair." + type_name(gate) + "." + type_name(up) + ".k" + std::to_string(input_size), [gate, up, input_size] {
+                    run_dense_matmul_swiglu_cpu_reference_case(gate, up, "loom_libs:ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32", 33, 65, GGML_GLU_OP_SWIGLU, input_size);
+                });
+            }
+        }
+    }
+
+    // Multiple blocks and output tails check the prepared state lifetime and row guards.
+    for (const ggml_type type : { GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS }) {
+        for (const int64_t input_size : { 256, 768 }) {
+            suite.device_case("dense_metadata_reuse." + type_name(type) + ".input" + std::to_string(input_size), [type, input_size] {
+                run_dense_matmul_postops_cpu_reference_case(
+                    type, "loom_libs:ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32",
+                    33, 65, true, true, false, input_size);
+            });
+        }
+    }
+
     // K=384 exercises a partial 256-weight tile; N=65 exercises an unpaired output row.
     for (const int64_t input_size : { 256, 384, 768 }) {
         suite.device_case("dense_matmul.q1_0.vector_tail.k" + std::to_string(input_size), [input_size] {
