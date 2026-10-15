@@ -501,11 +501,8 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
         {"object",             "chat.completion.chunk"},
     });
 
-    // logprobs for tokens whose diff never resolved via a prior partial chunk (e.g. an
-    // unresolved tag that never closed before generation stopped). Attach them to the last
-    // diff chunk if there is one, so they travel with visible delta content; otherwise fall
-    // back to the finish-reason chunk, which already has the one empty-delta shape that is
-    // standard both here and in OpenAI's own streaming output.
+    // attach any leftover pending_probs to the last diff chunk, or the finish-reason
+    // chunk if there was no diff at all
     if (!probs_to_emit.empty()) {
         size_t target_idx = (last_diff_idx != SIZE_MAX) ? last_diff_idx : deltas.size() - 1;
         deltas[target_idx].at("choices").at(0)["logprobs"] = json {
@@ -1006,9 +1003,7 @@ void server_task_result_cmpl_partial::update(task_result_state & state) {
     }
     state.update_chat_msg(content, true, oaicompat_msg_diffs);
 
-    // The parser may still be buffering this token's text (e.g. an unresolved tool-call
-    // tag), producing no diff yet. Queue its logprobs rather than dropping them, and flush
-    // the queue once there is a chunk with visible delta content to attach them to.
+    // queue this token's logprobs, flush once a chunk has visible delta content to attach them to
     if (prob_output.probs.size() > 0) {
         state.pending_probs.push_back(prob_output);
     }

@@ -373,9 +373,7 @@ struct server_task_result_cmpl_final : server_task_result {
         is_updated = true;
         oaicompat_msg = state.update_chat_msg(content, false, oaicompat_msg_diffs);
 
-        // this is the last update for the request: flush whatever logprobs are still
-        // pending (tokens whose diff never resolved via a prior partial chunk) so they
-        // are not silently lost
+        // last update for the request: drain pending_probs unconditionally
         probs_to_emit = std::move(state.pending_probs);
         state.pending_probs.clear();
 
