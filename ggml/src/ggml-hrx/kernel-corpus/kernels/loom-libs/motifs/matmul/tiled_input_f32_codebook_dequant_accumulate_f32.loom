@@ -15,7 +15,100 @@ template.decl @ggml.matmul.tiled_input_f32_dequant_accumulate_f32.publish_vector
 
 func.decl @ggml_dequant_weight_row_bytes(%weight_format: index, %hidden_size: index) -> (offset)
 
+func.decl @ggml_iq3s_signed_value_f32(%packed: i32, %shift: i32, %signs: i32, %sign_bit: i32) -> (f32)
+
 func.decl @ggml_codebook_f16_vector4(%weight_format: index, %codebook: buffer, %weight: buffer, %row_byte_base: offset, %quant_block: index, %quant_group: index, %packet: index) -> (vector<4xf16>)
+
+func.def inline @ggml_iq3s_load_decode_state(%weight: buffer, %row_base: offset, %block: index) -> (f32, i32) {
+  %c0 = index.constant 0 : index
+  %block_bytes = index.constant 110 : offset
+  %scales_offset = index.constant 106 : offset
+  %block_add = index.scale %block, %block_bytes : index, offset -> offset
+  %base = index.add %row_base, %block_add : offset
+  %scales_base = index.add %base, %scales_offset : offset
+  %d_view = buffer.view %weight[%base] : buffer -> view<1xf16>
+  %scales_view = buffer.view %weight[%scales_base] : buffer -> view<4xi8>
+  %d16 = view.load %d_view[%c0] : view<1xf16> -> f16
+  %d32 = scalar.extf %d16 : f16 to f32
+  // IQ3_S metadata starts at byte 106 of a 110-byte block, so retain byte alignment.
+  %scale_bytes = vector.load %scales_view[%c0] : view<4xi8> -> vector<4xi8>
+  %scale_word = vector.bitcast %scale_bytes : vector<4xi8> to vector<1xi32>
+  %scales = vector.extract %scale_word[0] : vector<1xi32> -> i32
+  func.return %d32, %scales : f32, i32
+}
+
+func.def inline @ggml_iq3s_preloaded_f16_vector4(%codebook: buffer, %weight: buffer, %row_byte_base: offset, %quant_block: index, %quant_group: index, %packet: index, %d: f32, %scales: i32) -> (vector<4xf16>) {
+  %c0_offset = index.constant 0 : offset
+  %c0_i32 = scalar.constant 0 : i32
+  %c1_i32 = scalar.constant 1 : i32
+  %c2 = index.constant 2 : index
+  %c2_i32 = scalar.constant 2 : i32
+  %c4_i32 = scalar.constant 4 : i32
+  %c8 = index.constant 8 : index
+  %c8_i32 = scalar.constant 8 : i32
+  %c15_i32 = scalar.constant 15 : i32
+  %c16_i32 = scalar.constant 16 : i32
+  %c24_i32 = scalar.constant 24 : i32
+  %c256_i32 = scalar.constant 256 : i32
+  %block_bytes = index.constant 110 : offset
+  %qs_offset = index.constant 2 : offset
+  %qh_offset = index.constant 66 : offset
+  %signs_offset = index.constant 74 : offset
+  %bounded_group = index.assume %quant_group [range(%quant_group, 0, 7)] : index
+  %bounded_packet = index.assume %packet [range(%packet, 0, 7)] : index
+  %block_byte_add = index.scale %quant_block, %block_bytes : index, offset -> offset
+  %block_byte_base = index.add %row_byte_base, %block_byte_add : offset
+  %qs_byte_base = index.add %block_byte_base, %qs_offset : offset
+  %qh_byte_base = index.add %block_byte_base, %qh_offset : offset
+  %signs_byte_base = index.add %block_byte_base, %signs_offset : offset
+  %qs_view = buffer.view %weight[%qs_byte_base] : buffer -> view<64xi8>
+  %qh_view = buffer.view %weight[%qh_byte_base] : buffer -> view<8xi8>
+  %signs_view = buffer.view %weight[%signs_byte_base] : buffer -> view<32xi8>
+  %grid_view = buffer.view %codebook[%c0_offset] : buffer -> view<512xi32>
+  %iqs_group_base = index.mul %bounded_group, %c8 : index
+  %iqs0 = index.add %iqs_group_base, %bounded_packet : index
+  %iqs = index.assume %iqs0 [range(%iqs0, 0, 63)] : index
+  %signs_index0 = index.div %iqs, %c2 : index
+  %signs_index = index.assume %signs_index0 [range(%signs_index0, 0, 31)] : index
+  %iqs_mod8_index = index.rem %iqs, %c8 : index
+  %high_shift_index = index.sub %c8, %iqs_mod8_index : index
+  %high_shift = index.cast %high_shift_index : index to i32
+  %sign_shift_index = index.rem %bounded_packet, %c2 : index
+  %sign_shift_base = index.cast %sign_shift_index : index to i32
+  %sign_shift = scalar.muli %sign_shift_base, %c4_i32 : i32
+  %q_i8 = view.load %qs_view[%iqs] : view<64xi8> -> i8
+  %qh_i8 = view.load %qh_view[%bounded_group] : view<8xi8> -> i8
+  %signs_i8 = view.load %signs_view[%signs_index] : view<32xi8> -> i8
+  %q_i32 = scalar.extui %q_i8 : i8 to i32
+  %qh_i32 = scalar.extui %qh_i8 : i8 to i32
+  %signs_i32 = scalar.extui %signs_i8 : i8 to i32
+  %qh_shifted = scalar.shli %qh_i32, %high_shift : i32
+  %qh_high = scalar.andi %qh_shifted, %c256_i32 : i32
+  %grid_index_i32 = scalar.ori %q_i32, %qh_high : i32
+  %grid_index0 = index.cast %grid_index_i32 : i32 to index
+  %grid_index = index.assume %grid_index0 [range(%grid_index0, 0, 511)] : index
+  %grid_word = view.load %grid_view[%grid_index] : view<512xi32> -> i32
+  %retained_shift_base = index.cast %bounded_group : index to i32
+  %retained_shift = scalar.muli %retained_shift_base, %c4_i32 : i32
+  %scale_shifted = scalar.shrui %scales, %retained_shift : i32
+  %local_scale = scalar.andi %scale_shifted, %c15_i32 : i32
+  %local_scale2 = scalar.muli %local_scale, %c2_i32 : i32
+  %scale_code = scalar.addi %local_scale2, %c1_i32 : i32
+  %scale_f32 = scalar.uitofp %scale_code : i32 to f32
+  %db = scalar.mulf %d, %scale_f32 : f32
+  %shifted_signs = scalar.shrui %signs_i32, %sign_shift : i32
+  %v0_base = func.call @ggml_iq3s_signed_value_f32(%grid_word, %c0_i32, %shifted_signs, %c1_i32) : (i32, i32, i32, i32) -> (f32)
+  %v1_base = func.call @ggml_iq3s_signed_value_f32(%grid_word, %c8_i32, %shifted_signs, %c2_i32) : (i32, i32, i32, i32) -> (f32)
+  %v2_base = func.call @ggml_iq3s_signed_value_f32(%grid_word, %c16_i32, %shifted_signs, %c4_i32) : (i32, i32, i32, i32) -> (f32)
+  %v3_base = func.call @ggml_iq3s_signed_value_f32(%grid_word, %c24_i32, %shifted_signs, %c8_i32) : (i32, i32, i32, i32) -> (f32)
+  %v0 = scalar.mulf %db, %v0_base : f32
+  %v1 = scalar.mulf %db, %v1_base : f32
+  %v2 = scalar.mulf %db, %v2_base : f32
+  %v3 = scalar.mulf %db, %v3_base : f32
+  %result = vector.from_elements %v0, %v1, %v2, %v3 : vector<4xf32>
+  %iq3_decoded = vector.fptrunc %result : vector<4xf32> to vector<4xf16>
+  func.return %iq3_decoded : vector<4xf16>
+}
 
 func.def public inline @ggml_matmul_tiled_input_f32_codebook_dequant_accumulate_f32(%weight_format: index, %token_count: index, %input_size0: index, %output_size0: index, %output_accumulation: index, %output_unary_op: index, %epilogue: index, %epsilon: f32, %channel_tile: index, %token_tile: index, %input: buffer, %weight: buffer, %codebook: buffer, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer) {
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
@@ -85,11 +178,64 @@ func.def public inline @ggml_matmul_tiled_input_f32_codebook_dequant_accumulate_
   %load_row = index.assume %load_row0 [range(%load_row0, 0, 15)] : index
   %subgroup_channel_add = index.mul %subgroup, %c32 : index
   %subgroup_channel1 = index.add %subgroup_channel_add, %c16 : index
+  %iq3_s_format = index.constant 21 : index
+  %retains_iq3_s = index.cmp eq, %weight_format, %iq3_s_format : index
   %init00 = vector.fragment<init> %zero_accumulator shape [%m, %n] : vector<8xf16>
   %init01 = vector.fragment<init> %zero_accumulator shape [%m, %n] : vector<8xf16>
   %init10 = vector.fragment<init> %zero_accumulator shape [%m, %n] : vector<8xf16>
   %init11 = vector.fragment<init> %zero_accumulator shape [%m, %n] : vector<8xf16>
   %result00, %result01, %result10, %result11 = scf.for %quant_block = [%quant_block_begin to %quant_block_end step %c1](%block_acc00 = %init00 : vector<8xf16>, %block_acc01 = %init01 : vector<8xf16>, %block_acc10 = %init10 : vector<8xf16>, %block_acc11 = %init11 : vector<8xf16>) -> (vector<8xf16>, vector<8xf16>, vector<8xf16>, vector<8xf16>) {
+    // Keep each row's IQ3_S block metadata live across its eight quantization groups.
+    %meta_zero_f32 = scalar.constant 0.0 : f32
+    %meta_zero_i32 = scalar.constant 0 : i32
+    %meta_offset0 = index.constant 0 : index
+    %meta_row0 = index.add %load_row, %meta_offset0 : index
+    %meta_channel0 = index.add %channel_tile_base, %meta_row0 : index
+    %meta_valid_channel0 = index.cmp ult, %meta_channel0, %bounded_output_size : index
+    %meta_valid0 = scalar.andi %meta_valid_channel0, %retains_iq3_s : i1
+    %meta_d0, %meta_scales0 = scf.if %meta_valid0 -> (f32, i32) {
+      %base_row = index.scale %meta_channel0, %weight_row_bytes : index, offset -> offset
+      %d32, %scales = func.call @ggml_iq3s_load_decode_state(%weight_noalias, %base_row, %quant_block) : (buffer, offset, index) -> (f32, i32)
+      scf.yield %d32, %scales : f32, i32
+    } else {
+      scf.yield %meta_zero_f32, %meta_zero_i32 : f32, i32
+    }
+    %meta_offset1 = index.constant 16 : index
+    %meta_row1 = index.add %load_row, %meta_offset1 : index
+    %meta_channel1 = index.add %channel_tile_base, %meta_row1 : index
+    %meta_valid_channel1 = index.cmp ult, %meta_channel1, %bounded_output_size : index
+    %meta_valid1 = scalar.andi %meta_valid_channel1, %retains_iq3_s : i1
+    %meta_d1, %meta_scales1 = scf.if %meta_valid1 -> (f32, i32) {
+      %base_row = index.scale %meta_channel1, %weight_row_bytes : index, offset -> offset
+      %d32, %scales = func.call @ggml_iq3s_load_decode_state(%weight_noalias, %base_row, %quant_block) : (buffer, offset, index) -> (f32, i32)
+      scf.yield %d32, %scales : f32, i32
+    } else {
+      scf.yield %meta_zero_f32, %meta_zero_i32 : f32, i32
+    }
+    %meta_offset2 = index.constant 32 : index
+    %meta_row2 = index.add %load_row, %meta_offset2 : index
+    %meta_channel2 = index.add %channel_tile_base, %meta_row2 : index
+    %meta_valid_channel2 = index.cmp ult, %meta_channel2, %bounded_output_size : index
+    %meta_valid2 = scalar.andi %meta_valid_channel2, %retains_iq3_s : i1
+    %meta_d2, %meta_scales2 = scf.if %meta_valid2 -> (f32, i32) {
+      %base_row = index.scale %meta_channel2, %weight_row_bytes : index, offset -> offset
+      %d32, %scales = func.call @ggml_iq3s_load_decode_state(%weight_noalias, %base_row, %quant_block) : (buffer, offset, index) -> (f32, i32)
+      scf.yield %d32, %scales : f32, i32
+    } else {
+      scf.yield %meta_zero_f32, %meta_zero_i32 : f32, i32
+    }
+    %meta_offset3 = index.constant 48 : index
+    %meta_row3 = index.add %load_row, %meta_offset3 : index
+    %meta_channel3 = index.add %channel_tile_base, %meta_row3 : index
+    %meta_valid_channel3 = index.cmp ult, %meta_channel3, %bounded_output_size : index
+    %meta_valid3 = scalar.andi %meta_valid_channel3, %retains_iq3_s : i1
+    %meta_d3, %meta_scales3 = scf.if %meta_valid3 -> (f32, i32) {
+      %base_row = index.scale %meta_channel3, %weight_row_bytes : index, offset -> offset
+      %d32, %scales = func.call @ggml_iq3s_load_decode_state(%weight_noalias, %base_row, %quant_block) : (buffer, offset, index) -> (f32, i32)
+      scf.yield %d32, %scales : f32, i32
+    } else {
+      scf.yield %meta_zero_f32, %meta_zero_i32 : f32, i32
+    }
     %block_result00, %block_result01, %block_result10, %block_result11 = scf.for %quant_group = [%c0 to %c8 step %c1](%acc00 = %block_acc00 : vector<8xf16>, %acc01 = %block_acc01 : vector<8xf16>, %acc10 = %block_acc10 : vector<8xf16>, %acc11 = %block_acc11 : vector<8xf16>) -> (vector<8xf16>, vector<8xf16>, vector<8xf16>, vector<8xf16>) {
       %block_k_base = index.mul %quant_block, %c256 : index
       %group_k_add = index.mul %quant_group, %c32 : index
@@ -104,7 +250,22 @@ func.def public inline @ggml_matmul_tiled_input_f32_codebook_dequant_accumulate_
         %valid_weight = scalar.andi %valid_channel, %valid_k : i1
         %weight_values = scf.if %valid_weight -> (vector<4xf16>) {
           %row_byte_base = index.scale %channel, %weight_row_bytes : index, offset -> offset
-          %decoded = func.call @ggml_codebook_f16_vector4(%weight_format, %codebook, %weight_noalias, %row_byte_base, %quant_block, %quant_group, %load_packet) : (index, buffer, buffer, offset, index, index, index) -> (vector<4xf16>)
+          %decoded = scf.if %retains_iq3_s -> (vector<4xf16>) {
+            %choose1 = index.cmp eq, %row_offset, %meta_offset1 : index
+            %chosen_d1 = scf.select %choose1, %meta_d1, %meta_d0 : f32
+            %chosen_scales1 = scf.select %choose1, %meta_scales1, %meta_scales0 : i32
+            %choose2 = index.cmp eq, %row_offset, %meta_offset2 : index
+            %chosen_d2 = scf.select %choose2, %meta_d2, %chosen_d1 : f32
+            %chosen_scales2 = scf.select %choose2, %meta_scales2, %chosen_scales1 : i32
+            %choose3 = index.cmp eq, %row_offset, %meta_offset3 : index
+            %chosen_d3 = scf.select %choose3, %meta_d3, %chosen_d2 : f32
+            %chosen_scales3 = scf.select %choose3, %meta_scales3, %chosen_scales2 : i32
+            %iq3_decoded = func.call @ggml_iq3s_preloaded_f16_vector4(%codebook, %weight_noalias, %row_byte_base, %quant_block, %quant_group, %load_packet, %chosen_d3, %chosen_scales3) : (buffer, buffer, offset, index, index, index, f32, i32) -> (vector<4xf16>)
+            scf.yield %iq3_decoded : vector<4xf16>
+          } else {
+            %other_decoded = func.call @ggml_codebook_f16_vector4(%weight_format, %codebook, %weight_noalias, %row_byte_base, %quant_block, %quant_group, %load_packet) : (index, buffer, buffer, offset, index, index, index) -> (vector<4xf16>)
+            scf.yield %other_decoded : vector<4xf16>
+          }
           scf.yield %decoded : vector<4xf16>
         } else {
           scf.yield %c0_f16x4 : vector<4xf16>
@@ -207,7 +368,6 @@ func.def public inline @ggml_matmul_tiled_input_f32_codebook_dequant_accumulate_
   template.apply<@ggml.matmul.tiled_input_f32_dequant_accumulate_f32.finish_tile>(%bounded_token_count, %bounded_output_size, %output_tile_count, %token_tile_count, %output_accumulation, %output_unary_op, %epsilon, %channel_tile, %token_tile, %bias, %output, %residual_input, %residual_output, %norm_weight, %normalized_output, %completion_counters) : (index, index, index, index, index, index, f32, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
   func.return
 }
-
 
 template.def<@ggml.matmul.tiled_input_f32_codebook_dequant_accumulate_f32.core> device @ggml_matmul_tiled_input_f32_codebook_dequant_accumulate_f32_core(%weight_format: index, %token_count: index, %input_size0: index, %output_size0: index, %output_accumulation: index, %output_unary_op: index, %epilogue: index, %epsilon: f32, %channel_tile: index, %token_tile: index, %input: buffer, %weight: buffer, %codebook: buffer, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer) {
   func.call @ggml_matmul_tiled_input_f32_codebook_dequant_accumulate_f32(%weight_format, %token_count, %input_size0, %output_size0, %output_accumulation, %output_unary_op, %epilogue, %epsilon, %channel_tile, %token_tile, %input, %weight, %codebook, %bias, %output, %residual_input, %residual_output, %norm_weight, %normalized_output, %completion_counters) : (index, index, index, index, index, index, index, f32, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
