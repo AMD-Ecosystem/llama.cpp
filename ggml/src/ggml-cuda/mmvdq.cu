@@ -531,6 +531,9 @@ bool ggml_cuda_should_use_mmv_dq(
         if (fusion->x_scale || fusion->gate_scale) {
             return false;   // scale is NVFP4-only, dead for K-quants
         }
+        if (fusion->shared_up) {
+            return false;   // fused shared expert is mmvq-only
+        }
         if (fusion->gate && (fusion->gate->type != type || !ggml_are_same_shape(src0, fusion->gate)
                 || !ggml_is_contiguous(fusion->gate))) {
             return false;
