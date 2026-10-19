@@ -318,13 +318,92 @@ def test_completion_without_tool_call_fast(template_name: str, n_predict: int, t
     do_test_completion_without_tool_call(server, n_predict, tools, tool_choice, stream=stream == CompletionMode.STREAMED)
 
 
+def do_test_logprobs_with_tools(server: ServerProcess, stream: bool, top_logprobs: int):
+    def check_logprob_entries(entries: list[dict]):
+        for entry in entries:
+            assert "id" in entry and isinstance(entry["id"], int)
+            assert "token" in entry
+            assert entry["logprob"] <= 0.0
+            assert entry["bytes"] is not None
+            assert len(entry["top_logprobs"]) == top_logprobs
+            for top in entry["top_logprobs"]:
+                assert "id" in top and isinstance(top["id"], int)
+                assert "token" in top
+                assert top["logprob"] <= 0.0
+
+    body = {
+        "max_tokens": 128,
+        "messages": [
+            {"role": "system", "content": "You are a coding assistant."},
+            {"role": "user", "content": "Write an example"},
+        ],
+        "tools": [TEST_TOOL],
+        "tool_choice": "required",
+        "parallel_tool_calls": False,
+        "stream": stream,
+        "logprobs": True,
+        "top_logprobs": top_logprobs,
+        "temperature": 0.0,
+        "top_k": 1,
+        "top_p": 1.0,
+    }
+
+    if stream:
+        body["stream_options"] = {"include_usage": True}
+        tool_calls: list[dict] = []
+        finish_reason = None
+        total_logprob_entries = 0
+        completion_tokens = None
+        for chunk in server.make_stream_request("POST", "/v1/chat/completions", data=body):
+            if chunk.get("usage"):
+                completion_tokens = chunk["usage"]["completion_tokens"]
+            if not chunk["choices"]:
+                continue
+            choice = chunk["choices"][0]
+            if choice.get("finish_reason") is not None:
+                finish_reason = choice["finish_reason"]
+            for tc in choice["delta"].get("tool_calls", []):
+                if tc["index"] >= len(tool_calls):
+                    tool_calls.append(dict(function=dict(name="", arguments="")))
+                fct = tc["function"]
+                if fct.get("name") is not None:
+                    tool_calls[tc["index"]]["function"]["name"] += fct["name"]
+                if fct.get("arguments") is not None:
+                    tool_calls[tc["index"]]["function"]["arguments"] += fct["arguments"]
+            logprobs = choice.get("logprobs")
+            if logprobs:
+                total_logprob_entries += len(logprobs["content"])
+                check_logprob_entries(logprobs["content"])
+        assert completion_tokens is not None, "Expected a usage chunk reporting completion_tokens"
+        # token completeness: every generated token must carry logprobs, not just
+        # whichever ones happened to land on a chunk with visible delta content
+        assert total_logprob_entries == completion_tokens
+    else:
+        resp = server.make_any_request("POST", "/v1/chat/completions", data=body)
+        choice = resp["choices"][0]
+        finish_reason = choice["finish_reason"]
+        tool_calls = choice["message"].get("tool_calls") or []
+        logprobs = choice.get("logprobs")
+        assert logprobs and logprobs["content"], f'Expected logprobs in {choice}'
+        check_logprob_entries(logprobs["content"])
+
+    assert finish_reason == "tool_calls", f"Expected a tool call, got finish_reason={finish_reason}"
+    assert len(tool_calls) == 1, f"Expected exactly 1 tool call, got {tool_calls}"
+    tool_call = tool_calls[0]
+    assert tool_call["function"]["name"] == TEST_TOOL["function"]["name"]
+    actual_arguments = json.loads(tool_call["function"]["arguments"])
+    assert actual_arguments.get("success") is True, f"Unexpected arguments: {actual_arguments}"
+
+
 @pytest.mark.slow
-def test_logprobs_with_tools_stream():
+@pytest.mark.parametrize("top_logprobs", [5, 100])
+@pytest.mark.parametrize("stream", [CompletionMode.NORMAL, CompletionMode.STREAMED])
+def test_logprobs_with_tools(stream: CompletionMode, top_logprobs: int):
     # Regression: tools + stream + logprobs used to be rejected with a 400. It is now allowed and,
     # matching the non-streaming path, emits per-token logprobs (including tool-call tokens) in the
     # OpenAI-modern shape, retaining the integer token id. Per-token text can be split across
     # `content` and `tool_calls` (or be parser-internal scaffolding with no visible text at all),
-    # so completeness is checked by count against the server's own `usage.completion_tokens`,
+    # so stream completeness is checked by count against the server's own `usage.completion_tokens`,
     # rather than by reconstructing a single output string.
     #
     # This needs a real model: with `tool_choice: "required"`, the tiny test model used elsewhere
@@ -340,48 +419,7 @@ def test_logprobs_with_tools_stream():
     server.model_hf_file = None
     server.chat_template_file = '../../../models/templates/meta-llama-Llama-3.2-3B-Instruct.jinja'
     server.start(timeout_seconds=TIMEOUT_START_SLOW)
-
-    total_logprob_entries = 0
-    completion_tokens = None
-    for chunk in server.make_stream_request("POST", "/v1/chat/completions", data={
-        "max_tokens": 128,
-        "messages": [
-            {"role": "system", "content": "You are a coding assistant."},
-            {"role": "user", "content": "Write an example"},
-        ],
-        "tools": [TEST_TOOL],
-        "tool_choice": "required",
-        "parallel_tool_calls": False,
-        "stream": True,
-        "stream_options": {"include_usage": True},
-        "logprobs": True,
-        "top_logprobs": 5,
-        "temperature": 0.0,
-        "top_k": 1,
-        "top_p": 1.0,
-    }):
-        if chunk.get("usage"):
-            completion_tokens = chunk["usage"]["completion_tokens"]
-        if not chunk["choices"]:
-            continue
-        logprobs = chunk["choices"][0].get("logprobs")
-        if not logprobs:
-            continue
-        for entry in logprobs["content"]:
-            total_logprob_entries += 1
-            assert "id" in entry and isinstance(entry["id"], int)
-            assert "token" in entry
-            assert entry["logprob"] <= 0.0
-            assert entry["bytes"] is not None
-            assert len(entry["top_logprobs"]) > 0
-            for top in entry["top_logprobs"]:
-                assert "id" in top and isinstance(top["id"], int)
-                assert "token" in top
-                assert top["logprob"] <= 0.0
-    assert completion_tokens is not None, "Expected a usage chunk reporting completion_tokens"
-    # the compatibility invariant: logprobs must cover every generated token, not just
-    # whichever ones happened to land on a chunk with visible delta content
-    assert total_logprob_entries == completion_tokens
+    do_test_logprobs_with_tools(server, stream == CompletionMode.STREAMED, top_logprobs)
 
 
 @pytest.mark.slow
