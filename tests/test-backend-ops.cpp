@@ -1592,11 +1592,12 @@ struct test_case {
         ggml_cgraph * gf = ggml_new_graph_custom(ctx.get(), graph_nodes, false);
         ggml_build_forward_expand(gf, out);
 
-        // warmup run
-        ggml_status status = ggml_backend_graph_compute(backend, gf);
-        if (status != GGML_STATUS_SUCCESS) {
-            fprintf(stderr, "%s: ggml_backend_graph_compute failed. status=%s \n", __func__, ggml_status_to_string(status));
-            return false;
+        {
+            ggml_status status = ggml_backend_graph_compute(backend, gf);
+            if (status != GGML_STATUS_SUCCESS) {
+                fprintf(stderr, "%s: ggml_backend_graph_compute failed. status=%s \n", __func__, ggml_status_to_string(status));
+                return false;
+            }
         }
 
         // optional cache-flush scratch (GGML_TEST_FLUSH_CACHE): evict the op's working set
@@ -1706,7 +1707,7 @@ struct test_case {
             if (flush_cache && total_runs >= flush_iters) {
                 break;
             }
-        } while (total_time_us < 1000*1000); // run for at least 1 second
+        } while (total_time_us < 1000*1000);
 
         // Create test result
         double avg_time_us      = (double) total_time_us / total_runs;
@@ -8994,6 +8995,15 @@ static constexpr mmq_test_shape rdna35_mmq_shapes[] = {
 };
 
 // RDNA3.5 MMQ production shapes (gfx1151). Shared by eval (correctness) and perf suites.
+static void add_q8_0_decode_cases(std::vector<std::unique_ptr<test_case>> & test_cases) {
+    for (const auto & shape : {std::pair<int, int>{960, 1280}, {12288, 4096}, {6144, 8192}}) {
+        test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q8_0, GGML_GLU_OP_SWIGLU, 1, shape.first, shape.second, false, 1, 1, false, false, true, false, {1, 1}));
+    }
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 1024, 1, 4096, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 4096, 1, 12288, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 151936, 1, 4096, {1, 1}, {1, 1}));
+}
+
 static void add_rdna35_mmq_cases(std::vector<std::unique_ptr<test_case>> & test_cases) {
     for (const ggml_type type : rdna35_mmq_types) {
         for (const mmq_test_shape & shape : rdna35_mmq_shapes) {
@@ -9006,7 +9016,21 @@ static void add_rdna35_mmq_cases(std::vector<std::unique_ptr<test_case>> & test_
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 4096, 16, 4096, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 4096, 1024, 12288, {1, 1}, {1, 1}));
 
-    // corpus (tools/model-parse/kernel-shape-weights/unique_kernel_shapes.tsv). n=1 exercises
+    static constexpr mmq_test_shape q4_0_decode_model_shapes[] = {
+        {17408, 1,  5120},
+        { 5120, 1, 17408},
+        {12288, 1,  4096},
+    };
+    for (const mmq_test_shape & shape : q4_0_decode_model_shapes) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, shape.m, shape.n, shape.k, {1, 1}, {1, 1}));
+    }
+    for (ggml_glu_op glu_op : {GGML_GLU_OP_SWIGLU, GGML_GLU_OP_GEGLU}) {
+        test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q4_0, glu_op, 1, 17408, 5120,
+            false, 1, 1, false, false, true, false, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q4_0, glu_op, 1, 12288, 4096,
+            false, 1, 1, false, false, true, false, {1, 1}));
+    }
+
     // Array is {m=N (out rows), n=1, k=K (contraction)}.
     static constexpr mmq_test_shape q4k_decode_model_shapes[] = {
         { 21504, 1,   5376},
@@ -10045,6 +10069,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 2880, 32, 2880, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_MXFP4, GGML_TYPE_F32, 2880, 32, 2880, {1, 1}, {1, 1}));
 
+    add_q8_0_decode_cases(test_cases);
     add_rdna35_mmq_cases(test_cases);
 
     // m == 1, with n on both sides of MMVF_MAX_BATCH_SIZE (8): mmvf below, operand swap above
@@ -11366,25 +11391,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         }
     }
 
-    for (int k : {768, 960, 1024, 1280, 2048, 4096, 8192}) {
-        for (int n : {320, 960, 2560, 4096, 12288}) {
-            test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q8_0, GGML_GLU_OP_SWIGLU, 1, n, k, false, 1, 1, false, false, true, false, {1, 1}));
-        }
-    }
-    for (int k : {4096, 8192}) {
-        for (int n : {3072, 3584, 4608, 5120, 6144}) {
-            test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q8_0, GGML_GLU_OP_SWIGLU, 1, n, k, false, 1, 1, false, false, true, false, {1, 1}));
-        }
-    }
-    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 4096, 1, 12288, {1, 1}, {1, 1}));
-    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 1024, 1, 4096, {1, 1}, {1, 1}));
-    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 151936, 1, 896, {1, 1}, {1, 1}));
-    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 262144, 1, 1536, {1, 1}, {1, 1}));
-    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 262144, 1, 2560, {1, 1}, {1, 1}));
-    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 262144, 1, 2816, {1, 1}, {1, 1}));
-    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 49280, 1, 960, {1, 1}, {1, 1}));
-    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 248320, 1, 2048, {1, 1}, {1, 1}));
-    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 151936, 1, 4096, {1, 1}, {1, 1}));
+    add_q8_0_decode_cases(test_cases);
     add_rdna35_mmq_cases(test_cases);
 
     // Q4_K multi-column mat-vec

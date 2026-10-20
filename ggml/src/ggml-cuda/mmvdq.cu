@@ -186,6 +186,31 @@ static void launch_dq(const void * vx, const float * y, float * d, int ncols_x, 
     }
 }
 
+template <> struct dq_traits<GGML_TYPE_Q4_0> {
+    using block_t = block_q4_0;
+    static constexpr int qk = QK4_0;
+    static constexpr int lanes_per_block = 2;
+    struct geom { int ix, q_offset; };
+    struct act { float4 lo0, lo4, hi0, hi4; };
+
+    static __device__ __forceinline__ geom setup(int tid) {
+        return { tid / lanes_per_block, 8 * (tid % lanes_per_block) };
+    }
+
+    static __device__ __forceinline__ act load(const float * yb, const geom & g) {
+        const float * y = yb + g.q_offset;
+        return { *(const float4 *) y, *(const float4 *) (y + 4),
+                 *(const float4 *) (y + 16), *(const float4 *) (y + 20) };
+    }
+
+    static __device__ __forceinline__ float dot(const block_t * b, const geom & g, const act & a) {
+        const uint16_t * qs = (const uint16_t *) (b->qs + g.q_offset);
+        const uint32_t q0 = (uint32_t) qs[0] | ((uint32_t) qs[1] << 16);
+        const uint32_t q4 = (uint32_t) qs[2] | ((uint32_t) qs[3] << 16);
+        return __half2float(b->d) * (dq_dot_q4_0_packed(q0, a.lo0, a.hi0) + dq_dot_q4_0_packed(q4, a.lo4, a.hi4));
+    }
+};
+
 // ---- Q4_K geometry ----
 struct dq_geom_q4_K {
     int itid, ix, v_im, q_offset, y_offset;
@@ -452,6 +477,7 @@ static void dq_switch_ncols_dst(const dq_launch_args & a, int ncols_dst) {
 // numerics live in dq_traits<type>; adding a type is a new case here plus a Traits.
 static void dq_switch_type(ggml_type type, const dq_launch_args & a, int ncols_dst) {
     switch (type) {
+        case GGML_TYPE_Q4_0: dq_switch_ncols_dst<GGML_TYPE_Q4_0>(a, ncols_dst); break;
         case GGML_TYPE_Q8_0: dq_switch_ncols_dst<GGML_TYPE_Q8_0>(a, ncols_dst); break;
         case GGML_TYPE_Q4_K: dq_switch_ncols_dst<GGML_TYPE_Q4_K>(a, ncols_dst); break;
         case GGML_TYPE_Q5_K: dq_switch_ncols_dst<GGML_TYPE_Q5_K>(a, ncols_dst); break;
@@ -488,7 +514,7 @@ bool ggml_cuda_should_use_mmv_dq(
     }
 
     const ggml_type type = src0->type;
-    if (!(type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q5_K || type == GGML_TYPE_Q6_K)) {
+    if (!(type == GGML_TYPE_Q4_0 || type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q5_K || type == GGML_TYPE_Q6_K)) {
         return false;
     }
 
@@ -509,7 +535,7 @@ bool ggml_cuda_should_use_mmv_dq(
         }
     }
 
-    const int qk = type == GGML_TYPE_Q8_0 ? QK8_0 : QK_K;
+    const int qk = ggml_blck_size(type);
     if (src0->ne[0] % qk != 0) {
         return false;
     }
