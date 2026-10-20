@@ -282,12 +282,12 @@ json completion_token_output::to_json(bool post_sampling_probs) const {
 json completion_token_output::probs_vector_to_json(const std::vector<completion_token_output> & probs, bool post_sampling_probs) {
     json out = json::array();
     for (const auto & p : probs) {
-        std::string txt(p.text_to_send);
+        std::string txt(p.txt);
         txt.resize(validate_utf8(txt));
         out.push_back(json {
             {"id",           p.tok},
             {"token",        txt},
-            {"bytes",        str_to_bytes(p.text_to_send)},
+            {"bytes",        str_to_bytes(p.txt)},
             {
                 post_sampling_probs ? "prob" : "logprob",
                 post_sampling_probs ? p.prob : logarithm(p.prob)
