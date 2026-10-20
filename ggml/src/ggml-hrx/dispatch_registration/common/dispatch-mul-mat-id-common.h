@@ -257,9 +257,12 @@ inline void common_mul_mat_id_add_moe_routing_compile_parameters(Dispatch &     
                                                common_mul_mat_id_to_config_value(match.route_count));
     dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.expert_count",
                                                common_mul_mat_id_to_config_value(match.expert_count));
-    dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.descriptor_expert_mask", "511");
-    dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.descriptor_partition_shift", "9");
-    dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.descriptor_row_count_shift", "15");
+    dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.descriptor_expert_mask",
+                                               std::to_string(kMoePartitionExpertMask));
+    dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.descriptor_partition_shift",
+                                               std::to_string(kMoePartitionShift));
+    dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.descriptor_row_count_shift",
+                                               std::to_string(kMoePartitionRowCountShift));
     dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.partition_workgroup_size", "512");
 }
 

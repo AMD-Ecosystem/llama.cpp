@@ -24,8 +24,8 @@ kernel.def target(@qwen3_moe_expert_table_partition_gfx11_wave32) @qwen3_moe_bui
   %workgroup_size = index.constant 256 : index
   %c0_i32 = scalar.constant 0 : i32
   %c1_i32 = scalar.constant 1 : i32
-  %c7_i32 = scalar.constant 7 : i32
-  %c13_i32 = scalar.constant 13 : i32
+  %c9_i32 = scalar.constant 9 : i32
+  %c15_i32 = scalar.constant 15 : i32
   %c0_offset = index.constant 0 : offset
   %c4_bytes = index.constant 4 : offset
   %assignment_count = index.mul %bounded_token_count, %bounded_route_count : index
@@ -140,9 +140,9 @@ kernel.def target(@qwen3_moe_expert_table_partition_gfx11_wave32) @qwen3_moe_bui
         }
         %partition_i32 = index.cast %partition : index to i32
         %partition_row_count_i32 = index.cast %partition_row_count : index to i32
-        %packed_partition = scalar.shli %partition_i32, %c7_i32 : i32
+        %packed_partition = scalar.shli %partition_i32, %c9_i32 : i32
         %partition_row_count_minus_one = scalar.subi %partition_row_count_i32, %c1_i32 : i32
-        %packed_row_count = scalar.shli %partition_row_count_minus_one, %c13_i32 : i32
+        %packed_row_count = scalar.shli %partition_row_count_minus_one, %c15_i32 : i32
         %packed_expert_partition = scalar.ori %expert_i32, %packed_partition : i32
         %packed_descriptor = scalar.ori %packed_expert_partition, %packed_row_count : i32
         view.store %packed_descriptor, %partition_descriptor_view[%table_descriptor_ordinal] : i32, view<[%maximum_partition_count]xi32>
