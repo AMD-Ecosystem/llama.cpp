@@ -341,18 +341,24 @@ def test_completion_without_tool_call_fast(template_name: str, n_predict: int, t
 
 
 def do_test_logprobs_with_tools(server: ServerProcess, stream: bool, top_logprobs: int):
+    def assert_valid_bytes(d: dict):
+        # bytes can legitimately be [] for a special/control token that decodes to no
+        # text (e.g. id 128010 below) - only the container shape and element range matter
+        assert "bytes" in d and isinstance(d["bytes"], list)
+        assert all(isinstance(b, int) and 0 <= b <= 255 for b in d["bytes"])
+
     def check_logprob_entries(entries: list[dict]):
         for entry in entries:
             assert "id" in entry and isinstance(entry["id"], int)
             assert "token" in entry
             assert entry["logprob"] <= 0.0
-            assert entry["bytes"] is not None
+            assert_valid_bytes(entry)
             assert len(entry["top_logprobs"]) == top_logprobs
             for top in entry["top_logprobs"]:
                 assert "id" in top and isinstance(top["id"], int)
                 assert "token" in top
                 assert top["logprob"] <= 0.0
-                assert top["bytes"] is not None
+                assert_valid_bytes(top)
 
     body = {
         "max_tokens": 128,
