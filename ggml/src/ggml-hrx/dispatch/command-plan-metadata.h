@@ -25,6 +25,11 @@ enum class CommandPlanResourceMetadataKind {
     MoeRoutingResource,
 };
 
+// Shared partition ABI: 9 expert bits, 6 partition bits, 5 bits for row count minus one.
+constexpr int32_t kMoePartitionExpertMask = 511;
+constexpr int32_t kMoePartitionShift = 9;
+constexpr int32_t kMoePartitionRowCountShift = 15;
+
 struct MoeRoutingResourceMetadata {
     int64_t token_count  = 0;
     int64_t route_count  = 0;

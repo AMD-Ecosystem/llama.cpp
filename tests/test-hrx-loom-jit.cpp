@@ -208,9 +208,9 @@ static std::map<std::string, std::string> moe_routing_config() {
     return {
         { "ggml.moe_routing.route_count", "8" },
         { "ggml.moe_routing.expert_count", "128" },
-        { "ggml.moe_routing.descriptor_expert_mask", "127" },
-        { "ggml.moe_routing.descriptor_partition_shift", "7" },
-        { "ggml.moe_routing.descriptor_row_count_shift", "13" },
+        { "ggml.moe_routing.descriptor_expert_mask", "511" },
+        { "ggml.moe_routing.descriptor_partition_shift", "9" },
+        { "ggml.moe_routing.descriptor_row_count_shift", "15" },
         { "ggml.moe_routing.partition_workgroup_size", "128" },
         { "ggml.workload.token_capacity", "1" },
     };
@@ -293,9 +293,9 @@ static std::map<std::string, std::string> mul_mat_id_swiglu_f16_f16_config(const
         { "ggml.mul_mat_id_swiglu_f16_f16.route_count",                "8"         },
         { "ggml.mul_mat_id_swiglu_f16_f16.gate_weight_format",         gate_format },
         { "ggml.mul_mat_id_swiglu_f16_f16.up_weight_format",           up_format   },
-        { "ggml.mul_mat_id_swiglu_f16_f16.descriptor_expert_mask",     "127"       },
-        { "ggml.mul_mat_id_swiglu_f16_f16.descriptor_partition_shift", "7"         },
-        { "ggml.mul_mat_id_swiglu_f16_f16.descriptor_row_count_shift", "13"        },
+        { "ggml.mul_mat_id_swiglu_f16_f16.descriptor_expert_mask",     "511"       },
+        { "ggml.mul_mat_id_swiglu_f16_f16.descriptor_partition_shift", "9"         },
+        { "ggml.mul_mat_id_swiglu_f16_f16.descriptor_row_count_shift", "15"        },
     };
 }
 

@@ -1058,9 +1058,12 @@ static bool match_routed_ffn_gate_up_swiglu_f16_wmma_dispatch(const DispatchMatc
                                                to_config_value(kRoutedFfnExpertHiddenSize));
     dispatch.kernel.compile_parameters.emplace(config_prefix + ".gate_weight_format", weight_format_config);
     dispatch.kernel.compile_parameters.emplace(config_prefix + ".up_weight_format", weight_format_config);
-    dispatch.kernel.compile_parameters.emplace(config_prefix + ".descriptor_expert_mask", "127");
-    dispatch.kernel.compile_parameters.emplace(config_prefix + ".descriptor_partition_shift", "7");
-    dispatch.kernel.compile_parameters.emplace(config_prefix + ".descriptor_row_count_shift", "13");
+    dispatch.kernel.compile_parameters.emplace(config_prefix + ".descriptor_expert_mask",
+                                               std::to_string(kMoePartitionExpertMask));
+    dispatch.kernel.compile_parameters.emplace(config_prefix + ".descriptor_partition_shift",
+                                               std::to_string(kMoePartitionShift));
+    dispatch.kernel.compile_parameters.emplace(config_prefix + ".descriptor_row_count_shift",
+                                               std::to_string(kMoePartitionRowCountShift));
 
     dispatch.bindings.push_back({ match.input->id, 0, match.input->byte_count });
     dispatch.bindings.push_back(

@@ -368,10 +368,14 @@ static void add_moe_routing_compile_parameters(Dispatch & dispatch, const Router
                                                to_config_value(router_match.route_count));
     dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.expert_count",
                                                to_config_value(router_match.expert_count));
-    dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.descriptor_expert_mask", "127");
-    dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.descriptor_partition_shift", "7");
-    dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.descriptor_row_count_shift", "13");
-    dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.partition_workgroup_size", "128");
+    dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.descriptor_expert_mask",
+                                               std::to_string(kMoePartitionExpertMask));
+    dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.descriptor_partition_shift",
+                                               std::to_string(kMoePartitionShift));
+    dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.descriptor_row_count_shift",
+                                               std::to_string(kMoePartitionRowCountShift));
+    dispatch.kernel.compile_parameters.emplace("ggml.moe_routing.partition_workgroup_size",
+                                               to_config_value(router_match.expert_count));
 }
 
 struct RouterProjectionTop8Match {

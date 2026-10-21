@@ -364,7 +364,7 @@ static std::vector<int32_t> make_qwen_partition_table_reference(const std::vecto
             if (row_count > 32) {
                 row_count = 32;
             }
-            const int32_t descriptor = static_cast<int32_t>(expert) | (partition << 7) | ((row_count - 1) << 13);
+            const int32_t descriptor = static_cast<int32_t>(expert) | (partition << 9) | ((row_count - 1) << 15);
             partition_table[static_cast<size_t>(1 + partition_count)] = descriptor;
             ++partition_count;
         }
@@ -9313,10 +9313,11 @@ static void schedule_qwen_router_top8_command(ggml_context * ctx,
                                   std::to_string(expected_route_count));
         require_compile_parameter(partition_table_dispatch, "ggml.workload.token_capacity",
                                   std::to_string(token_count));
-        require_compile_parameter(partition_table_dispatch, "ggml.moe_routing.descriptor_expert_mask", "127");
-        require_compile_parameter(partition_table_dispatch, "ggml.moe_routing.descriptor_partition_shift", "7");
-        require_compile_parameter(partition_table_dispatch, "ggml.moe_routing.descriptor_row_count_shift", "13");
-        require_compile_parameter(partition_table_dispatch, "ggml.moe_routing.partition_workgroup_size", "128");
+        require_compile_parameter(partition_table_dispatch, "ggml.moe_routing.descriptor_expert_mask", "511");
+        require_compile_parameter(partition_table_dispatch, "ggml.moe_routing.descriptor_partition_shift", "9");
+        require_compile_parameter(partition_table_dispatch, "ggml.moe_routing.descriptor_row_count_shift", "15");
+        require_compile_parameter(partition_table_dispatch, "ggml.moe_routing.partition_workgroup_size",
+                                  std::to_string(expected_expert_count));
     }
 
     const ggml::hrx::CommandProgram commands = ggml::hrx::build_command_program(

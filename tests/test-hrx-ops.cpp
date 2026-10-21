@@ -331,7 +331,7 @@ static ggml_tensor * build_qwen_router_top8_graph(ggml_context * ctx,
                                                   ggml_tensor ** route_ids = nullptr) {
     ggml_tensor * probs = ggml_soft_max(ctx, logits);
     REQUIRE(probs != nullptr);
-    ggml_tensor * probs_reshaped = ggml_reshape_3d(ctx, probs, 1, kQwenRouterExpertCount, logits->ne[1]);
+    ggml_tensor * probs_reshaped = ggml_reshape_3d(ctx, probs, 1, logits->ne[0], logits->ne[1]);
     REQUIRE(probs_reshaped != nullptr);
     ggml_tensor * argsort = ggml_argsort(ctx, probs, GGML_SORT_ORDER_DESC);
     REQUIRE(argsort != nullptr);
@@ -2779,6 +2779,73 @@ static void run_router_top8_case(int64_t token_count) {
         REQUIRE(diff <= 1.0e-5f);
     }
 
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+    ggml_backend_free(backend);
+}
+
+// Repeated high-numbered experts exercise partition packing and complete expert coverage.
+static void run_router_common_matmul_case(int64_t expert_count, int64_t token_count) {
+    constexpr int64_t input_size = 256;
+    constexpr int64_t output_size = 128;
+    ggml_backend_t backend = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+    ggml_init_params params = {};
+    params.mem_size = 4 * 1024 * 1024;
+    params.no_alloc = true;
+    ggml_context * ctx = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
+    ggml_tensor * logits = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, expert_count, token_count);
+    ggml_tensor * ids = nullptr;
+    ggml_tensor * weights = build_qwen_router_top8_graph(ctx, logits, &ids);
+    ggml_tensor * input = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, input_size, 1, token_count);
+    ggml_tensor * experts = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, input_size, output_size, expert_count);
+    ggml_tensor * routed = ggml_mul_mat_id(ctx, experts, input, ids);
+    ggml_tensor * output = ggml_mul(ctx, routed, weights);
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, output);
+    const auto kernels = scheduled_kernel_sequence(graph);
+    require_kernel_subsequence(kernels, { "qwen3_moe:qwen3_moe_router_top8_f32",
+                                         "loom_libs:ggml_moe_build_expert_partition_table" });
+
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    REQUIRE(buffer != nullptr);
+    std::vector<float> logits_data(expert_count * token_count, -100.0f);
+    // A single nonzero input keeps FP16 accumulation exact; this test checks routing.
+    std::vector<float> input_data(input_size * token_count, 0.0f);
+    for (int64_t token = 0; token < token_count; ++token) {
+        input_data[token * input_size] = 1.0f;
+    }
+    std::vector<ggml_fp16_t> expert_data(input_size * output_size * expert_count);
+    for (int64_t expert = 0; expert < expert_count; ++expert) {
+        const float value = static_cast<float>(expert + 1) / expert_count;
+        std::fill_n(expert_data.data() + expert * input_size * output_size, input_size * output_size, ggml_fp32_to_fp16(value));
+    }
+    float total = 0.0f;
+    for (int64_t route = 0; route < kQwenRouterRouteCount; ++route) {
+        total += std::exp(-static_cast<float>(route));
+        for (int64_t token = 0; token < token_count; ++token) {
+            logits_data[token * expert_count + expert_count - 1 - route] = -static_cast<float>(route);
+        }
+    }
+    std::vector<float> expected(output_size * kQwenRouterRouteCount * token_count);
+    for (int64_t token = 0; token < token_count; ++token) {
+        for (int64_t route = 0; route < kQwenRouterRouteCount; ++route) {
+            const float expert = static_cast<float>(expert_count - route) / expert_count;
+            const float probability = std::exp(-static_cast<float>(route)) / total;
+            std::fill_n(expected.data() + (token * kQwenRouterRouteCount + route) * output_size,
+                        output_size, expert * probability);
+        }
+    }
+    ggml_backend_tensor_set(logits, logits_data.data(), 0, logits_data.size() * sizeof(float));
+    ggml_backend_tensor_set(input, input_data.data(), 0, input_data.size() * sizeof(float));
+    ggml_backend_tensor_set(experts, expert_data.data(), 0, expert_data.size() * sizeof(ggml_fp16_t));
+    for (int replay = 0; replay < 2; ++replay) {
+        REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+        ggml_backend_synchronize(backend);
+        require_close(get_f32_tensor(backend, output), expected, 1.0e-4f);
+    }
     ggml_backend_buffer_free(buffer);
     ggml_free(ctx);
     ggml_backend_free(backend);
@@ -6486,6 +6553,12 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
     suite.device_case("rmsnorm_mul.hidden2048.tokens1", [] { run_rmsnorm_mul_case(2048, 1); });
     suite.device_case("router_projection.tokens4", [] { run_router_projection_case(4); });
     suite.device_case("router_top8.tokens4", [] { run_router_top8_case(4); });
+    for (int64_t experts : { 128, 256, 512 }) {
+        for (int64_t tokens : { 1, 2, 512 }) {
+            suite.device_case("router_common_matmul.experts" + std::to_string(experts) + ".tokens" + std::to_string(tokens),
+                              [=] { run_router_common_matmul_case(experts, tokens); });
+        }
+    }
     suite.device_case("qwen_flash_attention", [] { run_qwen_flash_attention_case(); });
 }
 
