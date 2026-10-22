@@ -3448,6 +3448,111 @@ static void run_add_f32_cpu_reference_case() {
     ggml_backend_free(hrx_backend);
 }
 
+static void run_gdn_snapshot_cpu_reference_case(int64_t tokens) {
+    ggml_backend_t cpu = init_cpu_backend();
+    ggml_backend_t hrx = ggml_backend_hrx_init(0);
+    REQUIRE(hrx != nullptr);
+    constexpr int64_t width = 128;
+    constexpr int64_t heads = 2;
+    constexpr int64_t state_size = width * width * heads;
+    constexpr size_t state_bytes = state_size * sizeof(float);
+    struct fixture {
+        ggml_context * ctx;
+        ggml_cgraph * graph;
+        ggml_tensor * raw;
+        ggml_tensor * bias;
+        ggml_tensor * decay;
+        ggml_tensor * q;
+        ggml_tensor * k;
+        ggml_tensor * v;
+        ggml_tensor * g;
+        ggml_tensor * beta;
+        ggml_tensor * state;
+        ggml_tensor * cache;
+        ggml_tensor * attention;
+        ggml_backend_buffer_t buffer;
+    };
+    const auto build = [&](ggml_backend_t backend) {
+        fixture f{};
+        f.ctx = ggml_init({ 2 * 1024 * 1024, nullptr, true });
+        REQUIRE(f.ctx != nullptr);
+        constexpr int64_t hidden = 3 * width * heads;
+        f.raw = ggml_new_tensor_2d(f.ctx, GGML_TYPE_F32, hidden, tokens);
+        const auto view = [&](size_t offset) {
+            return ggml_view_4d(f.ctx, f.raw, width, heads, tokens, 1,
+                    width * sizeof(float), hidden * sizeof(float), hidden * tokens * sizeof(float), offset);
+        };
+        f.q = view(0);
+        f.k = view(width * heads * sizeof(float));
+        f.v = view(2 * width * heads * sizeof(float));
+        f.g = ggml_new_tensor_2d(f.ctx, GGML_TYPE_F32, heads, tokens);
+        f.beta = ggml_dup_tensor(f.ctx, f.g);
+        f.bias = ggml_new_tensor_1d(f.ctx, GGML_TYPE_F32, heads);
+        f.decay = ggml_dup_tensor(f.ctx, f.bias);
+        auto * gate = ggml_mul(f.ctx, ggml_softplus(f.ctx, ggml_add(f.ctx,
+                ggml_reshape_3d(f.ctx, f.g, heads, tokens, 1), f.bias)), f.decay);
+        gate = ggml_reshape_4d(f.ctx, gate, 1, heads, tokens, 1);
+        auto * beta = ggml_sigmoid(f.ctx, ggml_reshape_4d(f.ctx, f.beta, 1, heads, tokens, 1));
+        f.state = ggml_new_tensor_2d(f.ctx, GGML_TYPE_F32, state_size, 1);
+        auto * state = ggml_reshape_4d(f.ctx, f.state, width, width, heads, 1);
+        f.cache = ggml_new_tensor_2d(f.ctx, GGML_TYPE_F32, state_size, tokens);
+        auto * gdn = ggml_gated_delta_net(f.ctx, ggml_l2_norm(f.ctx, f.q, 1.e-6f),
+                ggml_l2_norm(f.ctx, f.k, 1.e-6f), f.v, gate, beta, state, tokens);
+        f.attention = ggml_view_4d(f.ctx, gdn, width, heads, tokens, 1,
+                width * sizeof(float), width * heads * sizeof(float), width * heads * tokens * sizeof(float), 0);
+        auto * snapshots = ggml_view_3d(f.ctx, gdn, state_size, 1, tokens,
+                state_bytes, state_bytes, width * heads * tokens * sizeof(float));
+        auto * target = ggml_view_3d(f.ctx, f.cache, state_size, 1, tokens, state_bytes, state_bytes, 0);
+        f.graph = ggml_new_graph(f.ctx);
+        ggml_build_forward_expand(f.graph, ggml_cpy(f.ctx, snapshots, target));
+        f.attention = ggml_scale(f.ctx, f.attention, 0.5f);
+        ggml_build_forward_expand(f.graph, f.attention);
+        f.buffer = ggml_backend_alloc_ctx_tensors(f.ctx, backend);
+        REQUIRE(f.buffer != nullptr);
+        return f;
+    };
+    fixture c = build(cpu);
+    fixture h = build(hrx);
+    require_kernel_subsequence(scheduled_kernel_sequence(h.graph),
+            { "loom_libs:llm_gated_delta_net_f32_wmma_head128_snapshot_projection_epilogue" });
+    const auto q = make_pattern_f32(width * heads * tokens, 31, 0.03125f);
+    const auto v = make_pattern_f32(q.size(), 17, 0.03125f);
+    const auto state = make_pattern_f32(state_size, 23, 0.015625f);
+    const std::vector<float> gate(heads * tokens, -0.1f);
+    const std::vector<float> beta(heads * tokens, 0.5f);
+    const auto set = [&](ggml_tensor * ct, ggml_tensor * ht, const std::vector<float> & values) {
+        set_tensor_pair_bytes(cpu, ct, hrx, ht, values.data(), values.size() * sizeof(float));
+    };
+    std::vector<float> raw(3 * q.size());
+    const size_t row_width = width * heads;
+    for (int64_t t = 0; t < tokens; ++t) {
+        std::copy_n(q.data() + t * row_width, row_width, raw.data() + 3 * t * row_width);
+        std::copy_n(q.data() + t * row_width, row_width, raw.data() + (3 * t + 1) * row_width);
+        std::copy_n(v.data() + t * row_width, row_width, raw.data() + (3 * t + 2) * row_width);
+    }
+    set(c.raw, h.raw, raw);
+    set(c.g, h.g, gate);
+    set(c.beta, h.beta, beta);
+    set(c.bias, h.bias, std::vector<float>(heads, 0.0f));
+    // The second head underflows cumulative decay, while the first retains ordinary decay.
+    set(c.decay, h.decay, { -1.0f, -200.0f });
+    set(c.state, h.state, state);
+    for (int replay = 0; replay < 2; ++replay) {
+        REQUIRE(ggml_backend_graph_compute(cpu, c.graph) == GGML_STATUS_SUCCESS);
+        REQUIRE(ggml_backend_graph_compute(hrx, h.graph) == GGML_STATUS_SUCCESS);
+        ggml_backend_synchronize(cpu);
+        ggml_backend_synchronize(hrx);
+        require_close(get_f32_tensor(hrx, h.attention), get_f32_tensor(cpu, c.attention), 5.0e-4f);
+        require_close(get_f32_tensor(hrx, h.cache), get_f32_tensor(cpu, c.cache), 5.0e-4f);
+    }
+    for (auto * f : { &c, &h }) {
+        ggml_backend_buffer_free(f->buffer);
+        ggml_free(f->ctx);
+    }
+    ggml_backend_free(cpu);
+    ggml_backend_free(hrx);
+}
+
 static void run_dynamic_generic_ops_cpu_reference_case() {
     ggml_backend_t cpu_backend = init_cpu_backend();
     ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
@@ -6006,6 +6111,10 @@ static void register_basic_ops_cases(Suite & suite) {
     suite.host_case("support.activation_publication_contract", [] { run_activation_publication_contract_checks(); });
     suite.device_case("add_f32.cpu_reference", [] { run_add_f32_cpu_reference_case(); });
     suite.device_case("dynamic_generic_ops.cpu_reference", [] { run_dynamic_generic_ops_cpu_reference_case(); });
+    for (int64_t tokens = 2; tokens <= 5; ++tokens) {
+        suite.device_case("gdn_snapshot.cpu_reference." + std::to_string(tokens),
+                          [tokens] { run_gdn_snapshot_cpu_reference_case(tokens); });
+    }
     for (const ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
         suite.device_case("ssm_conv_prefill_recurrent." + type_name(type) + ".plain",
                           [type] { run_ssm_conv_prefill_recurrent_case(type, false, false); });
