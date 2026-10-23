@@ -48,7 +48,8 @@ template.def<@ggml.flash_attention.decode_split.reduce_fused> device priority(20
     kernel.barrier<global> scope(workgroup) ordering(acquire)
     template.apply<@ggml.flash_attention.decode_split.reduce_completed.direct>(%partial_block_capacity, %producer_block_count, %partial_max_noalias, %partial_sum_noalias, %partial_output_noalias, %output_noalias) : (index, index, buffer, buffer, buffer, buffer)
     scf.if %publish_q8 {
-      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+      // The packer reads global output written by other reducer lanes.
+      kernel.barrier<global> scope(workgroup) ordering(acq_rel)
       template.apply<@ggml.flash_attention.decode_split.pack_completed_q8>(%key_value_head, %output_noalias, %q8_output) : (index, buffer, buffer)
     }
     // Do not expose the reset until every final F32 and Q8 store completes.
@@ -59,6 +60,7 @@ template.def<@ggml.flash_attention.decode_split.reduce_fused> device priority(20
   }
   template.return
 }
+
 // Contexts without a proven short bound use the cooperative completion path.
 template.def<@ggml.flash_attention.decode_split.reduce_fused> device priority(10) @ggml_flash_attention_decode_split_reduce_fused_cooperative_f32(%key_value_token_capacity: index, %partial_block_capacity0: index, %producer_block_count0: index, %publish_q8: i1, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %completion_counter: buffer, %output: buffer, %q8_output: buffer) where [range(%key_value_token_capacity, 257, 2048)] {
   %partial_block_capacity, %producer_block_count = index.assume %partial_block_capacity0, %producer_block_count0 [range(%partial_block_capacity0, 1, 32), range(%producer_block_count0, 1, 32), le(%producer_block_count0, %partial_block_capacity0)] : index, index
@@ -95,7 +97,8 @@ template.def<@ggml.flash_attention.decode_split.reduce_fused> device priority(10
     kernel.barrier<global> scope(workgroup) ordering(acquire)
     template.apply<@ggml.flash_attention.decode_split.reduce_completed.cooperative>(%partial_block_capacity, %producer_block_count, %partial_max_noalias, %partial_sum_noalias, %partial_output_noalias, %output_noalias) : (index, index, buffer, buffer, buffer, buffer)
     scf.if %publish_q8 {
-      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+      // The packer reads global output written by other reducer lanes.
+      kernel.barrier<global> scope(workgroup) ordering(acq_rel)
       template.apply<@ggml.flash_attention.decode_split.pack_completed_q8>(%key_value_head, %output_noalias, %q8_output) : (index, buffer, buffer)
     }
     // Do not expose the reset until every final F32 and Q8 store completes.
