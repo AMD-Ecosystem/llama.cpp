@@ -61,6 +61,28 @@ TEST_TOOL = ToolDefinition(
     ),
 )
 
+# forces (via grammar-constrained decoding, same trick as TEST_TOOL's boolean "const" above)
+# a tool argument containing a character that spans multiple tokens in UTF-8, regardless of
+# model quality - used to reproduce the dropped/misattributed logprobs bug for such characters
+MULTIBYTE_CHAR = "\U0001F9EA" # test tube emoji, 4 UTF-8 bytes, multiple BPE tokens
+TEST_TOOL_MULTIBYTE = ToolDefinition(
+    type = "function",
+    function = ToolFunction(
+        name = "test",
+        description = "",
+        parameters = ToolParameters(
+            type = "object",
+            properties = {
+                "note": {
+                    "type": "string",
+                    "const": f"ok {MULTIBYTE_CHAR} done",
+                },
+            },
+            required = ["note"],
+        ),
+    ),
+)
+
 PYTHON_TOOL = ToolDefinition(
     type = "function",
     function = ToolFunction(
@@ -316,6 +338,210 @@ def test_completion_without_tool_call_fast(template_name: str, n_predict: int, t
     server.chat_template_file = f'../../../models/templates/{template_name}.jinja'
     server.start()
     do_test_completion_without_tool_call(server, n_predict, tools, tool_choice, stream=stream == CompletionMode.STREAMED)
+
+
+def do_test_logprobs_with_tools(server: ServerProcess, stream: bool, top_logprobs: int):
+    def assert_valid_bytes(d: dict):
+        # bytes can legitimately be [] for a special/control token that decodes to no
+        # text (e.g. id 128010 below) - only the container shape and element range matter
+        assert "bytes" in d and isinstance(d["bytes"], list)
+        assert all(isinstance(b, int) and 0 <= b <= 255 for b in d["bytes"])
+
+    def check_logprob_entries(entries: list[dict]):
+        for entry in entries:
+            assert "id" in entry and isinstance(entry["id"], int)
+            assert "token" in entry
+            assert entry["logprob"] <= 0.0
+            assert_valid_bytes(entry)
+            assert len(entry["top_logprobs"]) == top_logprobs
+            for top in entry["top_logprobs"]:
+                assert "id" in top and isinstance(top["id"], int)
+                assert "token" in top
+                assert top["logprob"] <= 0.0
+                assert_valid_bytes(top)
+
+    body = {
+        "max_tokens": 128,
+        "messages": [
+            {"role": "system", "content": "You are a coding assistant."},
+            {"role": "user", "content": "Write an example"},
+        ],
+        "tools": [TEST_TOOL],
+        "tool_choice": "required",
+        "parallel_tool_calls": False,
+        "stream": stream,
+        "logprobs": True,
+        "top_logprobs": top_logprobs,
+        "temperature": 0.0,
+        "top_k": 1,
+        "top_p": 1.0,
+    }
+
+    if stream:
+        body["stream_options"] = {"include_usage": True}
+        tool_calls: list[dict] = []
+        finish_reason = None
+        total_logprob_entries = 0
+        completion_tokens = None
+        for chunk in server.make_stream_request("POST", "/v1/chat/completions", data=body):
+            if chunk.get("usage"):
+                completion_tokens = chunk["usage"]["completion_tokens"]
+            if not chunk["choices"]:
+                continue
+            choice = chunk["choices"][0]
+            if choice.get("finish_reason") is not None:
+                finish_reason = choice["finish_reason"]
+            for tc in choice["delta"].get("tool_calls", []):
+                if tc["index"] >= len(tool_calls):
+                    tool_calls.append(dict(function=dict(name="", arguments="")))
+                fct = tc["function"]
+                if fct.get("name") is not None:
+                    tool_calls[tc["index"]]["function"]["name"] += fct["name"]
+                if fct.get("arguments") is not None:
+                    tool_calls[tc["index"]]["function"]["arguments"] += fct["arguments"]
+            logprobs = choice.get("logprobs")
+            if logprobs:
+                total_logprob_entries += len(logprobs["content"])
+                check_logprob_entries(logprobs["content"])
+        assert completion_tokens is not None, "Expected a usage chunk reporting completion_tokens"
+        # token completeness: every generated token must carry logprobs, not just
+        # whichever ones happened to land on a chunk with visible delta content
+        assert total_logprob_entries == completion_tokens
+    else:
+        resp = server.make_any_request("POST", "/v1/chat/completions", data=body)
+        choice = resp["choices"][0]
+        finish_reason = choice["finish_reason"]
+        tool_calls = choice["message"].get("tool_calls") or []
+        logprobs = choice.get("logprobs")
+        assert logprobs and logprobs["content"], f'Expected logprobs in {choice}'
+        check_logprob_entries(logprobs["content"])
+
+    assert finish_reason == "tool_calls", f"Expected a tool call, got finish_reason={finish_reason}"
+    assert len(tool_calls) == 1, f"Expected exactly 1 tool call, got {tool_calls}"
+    tool_call = tool_calls[0]
+    assert tool_call["function"]["name"] == TEST_TOOL["function"]["name"]
+    actual_arguments = json.loads(tool_call["function"]["arguments"])
+    assert actual_arguments.get("success") is True, f"Unexpected arguments: {actual_arguments}"
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("top_logprobs", [5, 100])
+@pytest.mark.parametrize("stream", [CompletionMode.NORMAL, CompletionMode.STREAMED])
+def test_logprobs_with_tools(stream: CompletionMode, top_logprobs: int):
+    # Regression: tools + stream + logprobs used to be rejected with a 400. It is now allowed and,
+    # matching the non-streaming path, emits per-token logprobs (including tool-call tokens) in the
+    # OpenAI-modern shape, retaining the integer token id. Per-token text can be split across
+    # `content` and `tool_calls` (or be parser-internal scaffolding with no visible text at all),
+    # so stream completeness is checked by count against the server's own `usage.completion_tokens`,
+    # rather than by reconstructing a single output string.
+    #
+    # This needs a real model: with `tool_choice: "required"`, the tiny test model used elsewhere
+    # in this file is not guaranteed to ever actually emit a tool call (see the disabled
+    # test_completion_with_required_tool_tiny_fast above, PR #22654), so it can't exercise the
+    # tool-call-argument buffering path this test is meant to catch.
+    global server
+    server.offline = False # not one of the ServerPreset models pre-fetched by load_all()
+    server.jinja = True
+    server.n_ctx = 8192
+    server.n_predict = 128
+    server.model_hf_repo = "bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M"
+    server.model_hf_file = None
+    server.chat_template_file = '../../../models/templates/meta-llama-Llama-3.2-3B-Instruct.jinja'
+    server.start(timeout_seconds=TIMEOUT_START_SLOW)
+    do_test_logprobs_with_tools(server, stream == CompletionMode.STREAMED, top_logprobs)
+
+
+def do_test_logprobs_multibyte_char(server: ServerProcess, stream: bool):
+    body = {
+        "max_tokens": 128,
+        "messages": [
+            {"role": "system", "content": "You are a coding assistant."},
+            {"role": "user", "content": "Write an example"},
+        ],
+        "tools": [TEST_TOOL_MULTIBYTE],
+        "tool_choice": "required",
+        "parallel_tool_calls": False,
+        "stream": stream,
+        "logprobs": True,
+        "top_logprobs": 5,
+        "temperature": 0.0,
+        "top_k": 1,
+        "top_p": 1.0,
+    }
+
+    # bytes from every logprobs entry, in emission order - reconstructing the generated
+    # text from these (rather than content/tool_calls deltas) catches dropped or
+    # misattributed bytes for multi-token UTF-8 characters
+    all_bytes = bytearray()
+    tool_calls: list[dict] = []
+    finish_reason = None
+
+    if stream:
+        body["stream_options"] = {"include_usage": True}
+        total_logprob_entries = 0
+        completion_tokens = None
+        for chunk in server.make_stream_request("POST", "/v1/chat/completions", data=body):
+            if chunk.get("usage"):
+                completion_tokens = chunk["usage"]["completion_tokens"]
+            if not chunk["choices"]:
+                continue
+            choice = chunk["choices"][0]
+            if choice.get("finish_reason") is not None:
+                finish_reason = choice["finish_reason"]
+            for tc in choice["delta"].get("tool_calls", []):
+                if tc["index"] >= len(tool_calls):
+                    tool_calls.append(dict(function=dict(name="", arguments="")))
+                fct = tc["function"]
+                if fct.get("name") is not None:
+                    tool_calls[tc["index"]]["function"]["name"] += fct["name"]
+                if fct.get("arguments") is not None:
+                    tool_calls[tc["index"]]["function"]["arguments"] += fct["arguments"]
+            logprobs = choice.get("logprobs")
+            if logprobs:
+                total_logprob_entries += len(logprobs["content"])
+                for entry in logprobs["content"]:
+                    all_bytes.extend(entry["bytes"])
+        assert completion_tokens is not None, "Expected a usage chunk reporting completion_tokens"
+        assert total_logprob_entries == completion_tokens
+    else:
+        resp = server.make_any_request("POST", "/v1/chat/completions", data=body)
+        choice = resp["choices"][0]
+        finish_reason = choice["finish_reason"]
+        tool_calls = choice["message"].get("tool_calls") or []
+        logprobs = choice.get("logprobs")
+        assert logprobs and logprobs["content"], f'Expected logprobs in {choice}'
+        for entry in logprobs["content"]:
+            all_bytes.extend(entry["bytes"])
+        assert len(logprobs["content"]) == resp["usage"]["completion_tokens"]
+
+    assert finish_reason == "tool_calls", f"Expected a tool call, got finish_reason={finish_reason}"
+    assert len(tool_calls) == 1, f"Expected exactly 1 tool call, got {tool_calls}"
+    tool_call = tool_calls[0]
+    actual_arguments = json.loads(tool_call["function"]["arguments"])
+    assert actual_arguments.get("note") == f"ok {MULTIBYTE_CHAR} done", f"Unexpected arguments: {actual_arguments}"
+
+    # the logprobs bytes, reconstructed in order, must contain the multi-byte character
+    # exactly once, with no bytes lost (would fail to decode or omit the character) and
+    # none duplicated (would decode to more than one occurrence of the character)
+    reconstructed = bytes(all_bytes).decode("utf-8")
+    assert reconstructed.count(MULTIBYTE_CHAR) == 1, f"Expected exactly one occurrence of {MULTIBYTE_CHAR!r} in logprobs-reconstructed text, got: {reconstructed!r}"
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("stream", [CompletionMode.NORMAL, CompletionMode.STREAMED])
+def test_logprobs_multibyte_tool_arg(stream: CompletionMode):
+    # Regression: a multi-token UTF-8 character in a tool-call argument used to drop
+    # logprobs entries for its earlier token(s). Needs a real model, same as above.
+    global server
+    server.offline = False # not one of the ServerPreset models pre-fetched by load_all()
+    server.jinja = True
+    server.n_ctx = 8192
+    server.n_predict = 128
+    server.model_hf_repo = "bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M"
+    server.model_hf_file = None
+    server.chat_template_file = '../../../models/templates/meta-llama-Llama-3.2-3B-Instruct.jinja'
+    server.start(timeout_seconds=TIMEOUT_START_SLOW)
+    do_test_logprobs_multibyte_char(server, stream == CompletionMode.STREAMED)
 
 
 @pytest.mark.slow

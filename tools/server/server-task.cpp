@@ -274,12 +274,12 @@ json completion_token_output::to_json(bool post_sampling_probs) const {
 json completion_token_output::probs_vector_to_json(const std::vector<completion_token_output> & probs, bool post_sampling_probs) {
     json out = json::array();
     for (const auto & p : probs) {
-        std::string txt(p.text_to_send);
+        std::string txt(p.txt);
         txt.resize(validate_utf8(txt));
         out.push_back(json {
             {"id",           p.tok},
             {"token",        txt},
-            {"bytes",        str_to_bytes(p.text_to_send)},
+            {"bytes",        str_to_bytes(p.txt)},
             {
                 post_sampling_probs ? "prob" : "logprob",
                 post_sampling_probs ? p.prob : logarithm(p.prob)
@@ -475,6 +475,8 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
             {"object", "chat.completion.chunk"},
         });
     }
+    // index of the last diff chunk, if any, before the finish-reason chunk below is pushed
+    size_t last_diff_idx = deltas.empty() ? SIZE_MAX : deltas.size() - 1;
 
     deltas.push_back({
         {"choices", json::array({
@@ -490,6 +492,15 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
         {"system_fingerprint", std::string(llama_build_info())},
         {"object",             "chat.completion.chunk"},
     });
+
+    // attach any leftover pending_probs to the last diff chunk, or the finish-reason
+    // chunk if there was no diff at all
+    if (!probs_to_emit.empty()) {
+        size_t target_idx = (last_diff_idx != SIZE_MAX) ? last_diff_idx : deltas.size() - 1;
+        deltas[target_idx].at("choices").at(0)["logprobs"] = json {
+            {"content", completion_token_output::probs_vector_to_json(probs_to_emit, post_sampling_probs)},
+        };
+    }
 
     if (include_usage) {
         // OpenAI API spec for chat.completion.chunks specifies an empty `choices` array for the last chunk when including usage
@@ -984,6 +995,15 @@ void server_task_result_cmpl_partial::update(task_result_state & state) {
     }
     state.update_chat_msg(content, true, oaicompat_msg_diffs);
 
+    // queue this token's logprobs, flush once a chunk has visible delta content to attach them to
+    if (prob_output.probs.size() > 0) {
+        state.pending_probs.push_back(prob_output);
+    }
+    if (is_progress || n_decoded == 1 || !oaicompat_msg_diffs.empty()) {
+        probs_to_emit = std::move(state.pending_probs);
+        state.pending_probs.clear();
+    }
+
     // Copy current state for use in to_json_*() (reflects state BEFORE this chunk)
     thinking_block_started = state.thinking_block_started;
     text_block_started     = state.text_block_started;
@@ -1138,9 +1158,9 @@ json server_task_result_cmpl_partial::to_json_oaicompat_chat() {
         auto & last_json = deltas[deltas.size() - 1];
         GGML_ASSERT(last_json.at("choices").size() >= 1);
 
-        if (prob_output.probs.size() > 0) {
+        if (!probs_to_emit.empty()) {
             last_json.at("choices").at(0)["logprobs"] = json {
-                {"content", completion_token_output::probs_vector_to_json({prob_output}, post_sampling_probs)},
+                {"content", completion_token_output::probs_vector_to_json(probs_to_emit, post_sampling_probs)},
             };
         }
 

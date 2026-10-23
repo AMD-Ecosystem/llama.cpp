@@ -2013,13 +2013,22 @@ private:
                 slot.n_sent_text += result.text_to_send.size();
                 // add the token to slot queue and cache
             } else {
+                // stop sequence matched: exclude this token from both the content stream
+                // and its own logprobs entry, so neither leaks text past the stop boundary
                 result.text_to_send = "";
+                result.txt          = "";
             }
+        } else {
+            // withhold content until the char completes; result.txt keeps this token's
+            // own piece so its logprobs entry isn't dropped along with the content
+            result.text_to_send = "";
+        }
 
-            slot.add_token(result);
-            if (slot.task->params.stream) {
-                send_partial_response(slot, result, false);
-            }
+        // every sampled token gets its own logprobs entry (and, if streaming, its own
+        // partial chunk) regardless of whether its content is visible yet - see result.txt
+        slot.add_token(result);
+        if (slot.task->params.stream) {
+            send_partial_response(slot, result, false);
         }
 
         if (incomplete) {
@@ -4388,6 +4397,7 @@ private:
             completion_token_output result;
             result.tok          = id;
             result.text_to_send = common_token_to_piece(slot.ctx_tgt, result.tok, accept_special_token(slot, result.tok));
+            result.txt          = result.text_to_send;
             result.prob         = 1.0f; // TODO: set it here instead of doing inside populate_token_probs
 
             if (slot.task->params.sampling.n_probs > 0) {
@@ -4527,6 +4537,7 @@ private:
 
                 result.tok          = ids[i];
                 result.text_to_send = common_token_to_piece(slot.ctx_tgt, result.tok, accept_special_token(slot, result.tok));
+                result.txt          = result.text_to_send;
                 result.prob         = 1.0f; // set later
 
                 // TODO: set result.probs
