@@ -160,6 +160,17 @@ static __device__ __forceinline__ float dq_dot_q6_K(
     return d * (sum0*sc0 + sum1*sc2 + sum2*sc4 + sum3*sc6);
 }
 
+static __device__ __forceinline__ float dq_dot_q4_0_packed(uint32_t q, const float4 & lo, const float4 & hi) {
+    return lo.x * (float) ((int) ((q >>  0) & 0xF) - 8) +
+           lo.y * (float) ((int) ((q >>  8) & 0xF) - 8) +
+           lo.z * (float) ((int) ((q >> 16) & 0xF) - 8) +
+           lo.w * (float) ((int) ((q >> 24) & 0xF) - 8) +
+           hi.x * (float) ((int) ((q >>  4) & 0xF) - 8) +
+           hi.y * (float) ((int) ((q >> 12) & 0xF) - 8) +
+           hi.z * (float) ((int) ((q >> 20) & 0xF) - 8) +
+           hi.w * (float) ((int) ((q >> 28) & 0xF) - 8);
+}
+
 struct dq_weight_q8_0 {
     uint32_t qs0, qs4;
     half d;
