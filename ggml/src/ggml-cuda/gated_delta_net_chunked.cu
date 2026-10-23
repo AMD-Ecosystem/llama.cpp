@@ -109,23 +109,34 @@ bool ggml_cuda_gdn_chunked_supported(bool kda, bool keep_rs, int64_t S_v, int64_
 #define GDN_MIN_WAVES_PER_SIMD 1
 #endif
 
-__global__ void __launch_bounds__(GDN_BLOCK_SIZE, GDN_MIN_WAVES_PER_SIMD)
-gdn_chunked_f32(const float * __restrict__ q,
-                const float * __restrict__ k,
-                const float * __restrict__ v,
-                const float * __restrict__ g,
-                const float * __restrict__ beta,
-                const float * __restrict__ state_in,
-                float       * __restrict__ dst,
-                float       * __restrict__ state_out,
-                const int64_t n_tokens,
-                const int64_t n_heads,
-                const int64_t sq1, const int64_t sq2, const int64_t sq3,
-                const int64_t sv1, const int64_t sv2, const int64_t sv3,
-                const int64_t sb1, const int64_t sb2, const int64_t sb3,
-                const uint3   neqk1_magic,
-                const uint3   rq3_magic,
-                const float   scale) {
+// CU mode confines a block to one CU, which halves the LDS contention domain. It costs no residency:
+// a WGP holds floor(128 KB / 57.25 KB) = 2 of these blocks in WGP mode and 2*floor(64 KB / 57.25 KB)
+// = 2 in CU mode. It only pays once every CU has a block to run, hence the launch-time choice below.
+#if defined(GGML_USE_HIP) && defined(RDNA3_5)
+#define GDN_CU_MODE __attribute__((target("cumode")))
+#else
+#define GDN_CU_MODE
+#endif
+
+// The work-group processor mode is a function attribute, so it cannot be a template parameter: the
+// two entry points below share this body and differ only in that attribute.
+#define GDN_CHUNKED_PARAMS                                                       \
+    const float * __restrict__ q,        const float * __restrict__ k,           \
+    const float * __restrict__ v,        const float * __restrict__ g,           \
+    const float * __restrict__ beta,     const float * __restrict__ state_in,    \
+    float       * __restrict__ dst,      float       * __restrict__ state_out,   \
+    const int64_t n_tokens,              const int64_t n_heads,                  \
+    const int64_t sq1, const int64_t sq2, const int64_t sq3,                     \
+    const int64_t sv1, const int64_t sv2, const int64_t sv3,                     \
+    const int64_t sb1, const int64_t sb2, const int64_t sb3,                     \
+    const uint3   neqk1_magic,           const uint3   rq3_magic,                \
+    const float   scale
+
+#define GDN_CHUNKED_ARGS                                                         \
+    q, k, v, g, beta, state_in, dst, state_out, n_tokens, n_heads,               \
+    sq1, sq2, sq3, sv1, sv2, sv3, sb1, sb2, sb3, neqk1_magic, rq3_magic, scale
+
+static __device__ __forceinline__ void gdn_chunked_body(GDN_CHUNKED_PARAMS) {
     constexpr int CHUNK     = GDN_CHUNK;
     constexpr int HEAD_DIM  = GDN_HEAD_DIM;
     constexpr int COL_LANES = GDN_COL_LANES;
@@ -399,6 +410,16 @@ gdn_chunked_f32(const float * __restrict__ q,
     }
 }
 
+__global__ void __launch_bounds__(GDN_BLOCK_SIZE, GDN_MIN_WAVES_PER_SIMD)
+gdn_chunked_f32_wgp(GDN_CHUNKED_PARAMS) {
+    gdn_chunked_body(GDN_CHUNKED_ARGS);
+}
+
+__global__ void GDN_CU_MODE __launch_bounds__(GDN_BLOCK_SIZE, GDN_MIN_WAVES_PER_SIMD)
+gdn_chunked_f32_cu(GDN_CHUNKED_PARAMS) {
+    gdn_chunked_body(GDN_CHUNKED_ARGS);
+}
+
 void ggml_cuda_gdn_chunked(ggml_backend_cuda_context & ctx, const ggml_cuda_gdn_chunked_args & args) {
     GGML_ASSERT(args.S_v == GDN_HEAD_DIM);
 
@@ -410,7 +431,13 @@ void ggml_cuda_gdn_chunked(ggml_backend_cuda_context & ctx, const ggml_cuda_gdn_
 
     const ggml_cuda_kernel_launch_params launch_params(block_nums, block_dims, 0, ctx.stream());
 
-    ggml_cuda_kernel_launch(gdn_chunked_f32, launch_params,
+    // nsm counts WGPs on RDNA, and a block occupies one CU in CU mode but spreads over the whole WGP
+    // in WGP mode. Below one block per WGP, CU mode leaves the second CU of each WGP idle and costs
+    // about a quarter of the op; above it every CU is busy either way and CU mode is worth ~10%.
+    const bool cu_mode = args.H * args.n_seqs > ggml_cuda_info().devices[ggml_cuda_get_device()].nsm;
+    const auto kernel  = cu_mode ? gdn_chunked_f32_cu : gdn_chunked_f32_wgp;
+
+    ggml_cuda_kernel_launch(kernel, launch_params,
         args.q, args.k, args.v, args.g, args.beta, args.state_in, args.dst, args.state_out,
         args.n_tokens, args.H,
         args.sq1, args.sq2, args.sq3, args.sv1, args.sv2, args.sv3, args.sb1, args.sb2, args.sb3,
