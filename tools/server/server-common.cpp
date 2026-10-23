@@ -69,6 +69,10 @@ json format_error_response(const std::string & message, const enum error_type ty
             type_str = "exceed_context_size_error";
             code = 400;
             break;
+        case ERROR_TYPE_INVALID_PROMPT:
+            type_str = "invalid_prompt";
+            code = 400;
+            break;
     }
     return json {
         {"code", code},
@@ -862,6 +866,17 @@ bool json_is_array_of_numbers(const json & data) {
     return false;
 }
 
+static llama_token json_get_token(const json & elem) {
+    if (!elem.is_number_integer()) {
+        throw std::invalid_argument("Token ID must be an integer");
+    }
+    int64_t val = elem.get<int64_t>();
+    if (val < INT32_MIN || val > INT32_MAX) {
+        throw std::invalid_argument("Token ID out of int32 range: " + std::to_string(val));
+    }
+    return static_cast<llama_token>(val);
+}
+
 bool json_is_array_of_mixed_numbers_strings(const json & data) {
     bool seen_string = false;
     bool seen_number = false;
@@ -935,7 +950,7 @@ llama_tokens tokenize_mixed(const llama_vocab * vocab, const json & json_prompt,
                     first = false;
                 }
 
-                prompt_tokens.push_back(p.template get<llama_token>());
+                prompt_tokens.push_back(json_get_token(p));
             }
         }
     } else {
@@ -1033,14 +1048,17 @@ server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_context *
         llama_tokens tmp = tokenize_mixed(vocab, json_prompt, add_special, parse_special);
         return server_tokens(tmp, false);
     } else if (json_is_array_of_numbers(json_prompt)) {
-        // array of tokens
-        llama_tokens tmp = json_prompt.get<llama_tokens>();
+        llama_tokens tmp;
+        tmp.reserve(json_prompt.size());
+        for (const auto & elem : json_prompt) {
+            tmp.push_back(json_get_token(elem));
+        }
         return server_tokens(tmp, false);
     } else if (json_prompt.contains(JSON_STRING_PROMPT_KEY)) {
         // JSON object with prompt key.
         if (json_prompt.contains(JSON_MTMD_DATA_KEY)) {
             if (!has_mtmd)
-                throw std::runtime_error("Multimodal data provided, but model does not support multimodal requests.");
+                throw std::invalid_argument("Multimodal data provided, but model does not support multimodal requests.");
 
             // JSON object with prompt and multimodal key.
             std::vector<raw_buffer> files;
@@ -1050,7 +1068,11 @@ server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_context *
             return process_mtmd_prompt(mctx, json_prompt.at(JSON_STRING_PROMPT_KEY), files, init_opt);
         } else {
             // Not multimodal, but contains a subobject.
-            llama_tokens tmp = tokenize_mixed(vocab, json_prompt.at(JSON_STRING_PROMPT_KEY), add_special, parse_special);
+            const auto & prompt_str = json_prompt.at(JSON_STRING_PROMPT_KEY);
+            if (!prompt_str.is_string() && !prompt_str.is_array()) {
+                throw std::invalid_argument("\"prompt_string\" must be a string or array of tokens");
+            }
+            llama_tokens tmp = tokenize_mixed(vocab, prompt_str, add_special, parse_special);
             return server_tokens(tmp, false);
         }
    } else {
