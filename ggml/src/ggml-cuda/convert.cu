@@ -534,6 +534,23 @@ static __global__ void convert_unary_clamped(const src_t * x, dst_t * y, int64_t
     }
 }
 
+static __global__ void convert_bias_f16_f32(const half * x, const float * bias, float * y, int64_t ncols, int64_t nrows) {
+    const int64_t col = int64_t(blockIdx.x)*blockDim.x + threadIdx.x;
+    if (col >= ncols) {
+        return;
+    }
+    const float b = bias[col];
+    for (int64_t row = blockIdx.y; row < nrows; row += gridDim.y) {
+        const int64_t i = row*ncols + col;
+        y[i] = __half2float(x[i]) + b;
+    }
+}
+
+void ggml_cuda_convert_bias_f16_f32(const half * x, const float * bias, float * y, int64_t ncols, int64_t nrows, cudaStream_t stream) {
+    const dim3 blocks((ncols + CUDA_DEQUANTIZE_BLOCK_SIZE - 1)/CUDA_DEQUANTIZE_BLOCK_SIZE, std::min(nrows, int64_t(65535)));
+    convert_bias_f16_f32<<<blocks, CUDA_DEQUANTIZE_BLOCK_SIZE, 0, stream>>>(x, bias, y, ncols, nrows);
+}
+
 template <typename src_t, typename dst_t>
 static void convert_unary_clamped_cuda(const src_t * x, dst_t * y, int64_t k, float min, float max, cudaStream_t stream) {
     if (reinterpret_cast<uintptr_t>(x) % alignof(convert_pair<src_t>) == 0 &&

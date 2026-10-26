@@ -123,3 +123,5 @@ __device__ __forceinline__ float ggml_cuda_op_swiglu_clamp_single(float gate, fl
 }
 
 void ggml_cuda_glu_f16(const float * x, const float * gate, half * dst, int64_t n, ggml_glu_op op, cudaStream_t stream);
+void ggml_cuda_glu_bias_f16(const half * x, const half * gate, const float * x_bias, const float * gate_bias,
+        half * dst, int64_t ncols, int64_t nrows, ggml_glu_op op, cudaStream_t stream);

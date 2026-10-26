@@ -2,9 +2,33 @@
 
 The active implementation is `lichang.rdna35-prefill-quant-rope`. Qwen vision window batching, D64/D72/D80 vision attention, D128 language attention, D512 language attention, FP16/FP32 conversion, RMSNorm, activation quantization, and RoPE changes share this source tree. Earlier experimental worktrees are reference snapshots; changes should be developed and validated here.
 
+## Vision bias and gated FFN fusion (2026-10-26)
+
+This change is based on `e01951930c93189bd377d80e5da5688dfcad931a`. It extends the existing FP16 BLAS and producer-fusion paths. It removes FP32 intermediate memory traffic while retaining FP32 bias/activation arithmetic, existing GEMM shapes, and the prior FP16 rounding boundaries.
+
+A matrix-output conversion can now add a following FP32 vector bias before writing the final FP32 graph tensor. For a compatible biased gated FFN, the backend converts the common gate/up input once, retains both GEMM outputs in private FP16 buffers, performs both biases and SwiGLU/GEGLU in FP32 registers, writes the FP16 down-projection input directly, and optionally fuses the down-projection output conversion with bias. This does not change the language Q4_K MMQ kernels or globally switch graph activations to FP16.
+
+| Model / board | Baseline HTTP TTFT | With fusion | Saving | Samples per variant |
+| --- | ---: | ---: | ---: | ---: |
+| Qwen2.5-VL-7B / Halo40, rebuilt production library | 1405.47 ms | 1325.64 ms | 79.84 ms / 5.68% | 20 |
+| Qwen2.5-VL-7B / Halo05, isolated final candidate | 1346.87 ms | 1277.63 ms | 69.24 ms / 5.14% | 20 |
+| Gemma-3-4B / Halo40, isolated final candidate | 744.81 ms | 720.92 ms | 23.90 ms / 3.21% | 10 |
+
+The baseline is the already optimized branch before this change. Qwen uses two server processes per variant in ABBA/BAAB order; Gemma uses one paired run. Each process has five warmups and ten measured one-token requests. Tables use pooled medians, retaining timing outliers. Qwen's initial 92.89 ms gain was smaller in the repeat, so that initial sample set is not the headline result. No competing GPU context was detected during accepted requests; clocks and power were not locked. Results from different boards are not mixed.
+
+These tests retain `--ctx-checkpoints 32`, FP16 K/V, Q4_K_M language weights, F16 projectors, batch 2048, microbatch 512, context 4096 and `ROCBLAS_USE_HIPBLASLT=1`. Prompt reuse is disabled and every measured `cache_n` is zero. The saved October 15 request gives Qwen 4292 vision patches and 1606 language prompt positions, and Gemma-3 4096 patches and 779 prompt positions. The latter differs from the earlier 781-position D72 test. No new vLLM comparison was run.
+
+Matched Qwen profiles show vision GPU duration sums **447.21 -> 363.22 ms**, saving **84.00 ms / 18.78%**. The FFN group falls **197.08 -> 117.93 ms**, accounting for most of the improvement. All 32 vision layers match the full fusion. Another 130 standalone matrix-plus-bias groups match. Total launches fall **7368 -> 7046 per request**; the 228 vision GEMMs retain their shapes and approximately the same duration. Profile instrumentation affects timing; these sums are separate from unprofiled HTTP TTFT. Language kernel counts are unchanged.
+
+Dispatch targets RDNA3.5's existing default FP16 BLAS route, contiguous 2D F16-weight/FP32-activation matrices with at least 32 rows, compatible FP32 vector biases, and split SwiGLU/GEGLU for the full FFN. It respects precision/hint/environment overrides, excludes existing MMV/MMF routes, and checks consumers and concurrency boundaries. Input/output graph-buffer reuse is allowed because input reads complete through private scratch before the final write; overlap between the final bias and output is rejected. Unmatched structures retain existing paths. Gemma-3's plain-GELU SigLIP FFN does not match the gated fusion, but compatible projection biases benefit from the shorter fusion. There is no new Gemma-4 performance measurement here.
+
+The full Qwen FFN has about 105 MiB of simultaneous logical FP16 scratch for this image size, reused across layers. More scratch remains live to reduce memory traffic; the graph allocation is unchanged, and net process-memory savings are not claimed. The final candidate and ordinary rebuilt production library each pass 104 relevant backend cases and a direct 63-case check covering 3,905,604 values with bitwise agreement, including FP16 outputs and intact output canaries. All compared 32-token responses and returned chosen/top log probabilities match exactly for both tested models. This is targeted correctness validation, not a broad model-quality evaluation. The changed HIP units compile for gfx1100 and gfx942; runtime validation covers gfx1151.
+
+Evidence: `rdna35_vision_bias_fusion_20261026/REPORT.md`, `final_summary.json`, `profile_comparison.json`, the per-run requests/results and `production/` binary/source hashes. Sources are in `ggml/src/ggml-cuda/{ggml-cuda.cu,convert.cu,unary.cu}` with declarations and cases in the existing backend test suite.
+
 ## Commit-by-commit record
 
-This record covers all eight source-changing commits on `lichang.rdna35-prefill-quant-rope` after the inherited gfx11 base [`0363d99d3`](https://github.com/AMD-Ecosystem/llama.cpp/commit/0363d99d3b276a5cfb8d2ab2940cd1a9a7e1d46b). It excludes inherited upstream changes. The documentation-only update titled `docs: record RDNA3.5 optimization targets and measured gains` adds this audit and has no runtime performance effect.
+This record covers all nine source-changing commits on `lichang.rdna35-prefill-quant-rope` after the inherited gfx11 base [`0363d99d3`](https://github.com/AMD-Ecosystem/llama.cpp/commit/0363d99d3b276a5cfb8d2ab2940cd1a9a7e1d46b). It excludes inherited upstream changes. The documentation-only update titled `docs: record RDNA3.5 optimization targets and measured gains` adds this audit and has no runtime performance effect.
 
 Percentages below are latency reductions, `(before - after) / before`, not throughput increases. **Fresh prefill** measures `llama_decode` through GPU completion with fresh KV; it excludes HTTP, tokenization and image processing. **HTTP TTFT** measures request submission through the first content token, including image work for VLMs. GPU kernel sums are diagnostic measurements and are not interchangeable with either latency metric. Results from different baselines, boards, image budgets or microbatches must not be added together.
 
@@ -20,6 +44,7 @@ Unless stated otherwise, the measurements use Halo41 / gfx1151, Q4_K_M weights a
 | [`5aa5aee1e`](https://github.com/AMD-Ecosystem/llama.cpp/commit/5aa5aee1e64312b83a1b74c67a2ff4bdb5ef97ba) | Consolidate window attention, WMMA, wider D128 tiles, conversion, RMSNorm and graph fusions | Multiple experiments, detailed below. Original Qwen2.5-VL-3B vision package: 57.0% lower HTTP TTFT; final E2B fusion stage: another 6.35%. |
 | [`1ee95c533`](https://github.com/AMD-Ecosystem/llama.cpp/commit/1ee95c533fbe93930e62a6e148df1937e1ea255c) | Adapt D72 vision attention to the existing D80 WMMA kernel | Gemma-3-4B-IT: 371.76 ms / 32.57% lower HTTP TTFT. |
 | [`a68d7c3ed`](https://github.com/AMD-Ecosystem/llama.cpp/commit/a68d7c3ed306ff9ee4ed57dfcced87274f4eece5) | Extend producer fusion to SwiGLU and tune fused Q/K norm-RoPE | At 3968 tokens: Qwen2.5-3B saves 53.04 ms / 4.76%; Qwen3-4B saves 59.39 ms / 3.85% HTTP TTFT. |
+| [Vision bias and gated FFN fusion (2026-10-26)](#vision-bias-and-gated-ffn-fusion-2026-10-26) | Share gate/up input conversion and fuse FP16 GEMM output conversion, FP32 bias and gated activation | Qwen2.5-VL-7B saves 79.84 ms / 5.68% HTTP TTFT on Halo40 and 69.24 ms / 5.14% on Halo05; Gemma-3-4B saves 23.90 ms / 3.21%. |
 
 ### 9de63b7c5: Q8 quantization and standalone RoPE launches
 
