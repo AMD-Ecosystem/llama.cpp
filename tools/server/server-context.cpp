@@ -1869,10 +1869,9 @@ private:
                 slot.n_sent_text += result.text_to_send.size();
                 // add the token to slot queue and cache
             } else {
-                // stop sequence matched: exclude this token from both the content stream
-                // and its own logprobs entry, so neither leaks text past the stop boundary
+                // partial stop prefix: content is withheld until it's resolved, while
+                // result.txt keeps this token's own piece for its logprobs entry
                 result.text_to_send = "";
-                result.txt          = "";
             }
         } else {
             // withhold content until the char completes; result.txt keeps this token's

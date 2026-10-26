@@ -440,6 +440,52 @@ def test_logprobs_stream():
     assert aggregated_text == output_text
 
 
+@pytest.mark.parametrize("stream", [False, True])
+def test_logprobs_partial_stop_prefix(stream: bool):
+    # a token matching only a prefix of a stop string is held back, then emitted merged with
+    # the next token once generation diverges - its logprobs bytes must not be lost
+    global server
+    server.start()
+    body = {
+        "max_tokens": 8,
+        "temperature": 0.0,
+        "messages": [
+            {"role": "system", "content": "Book"},
+            {"role": "user", "content": "What is the best book"},
+        ],
+        "logprobs": True,
+        "top_logprobs": 1,
+    }
+    res = server.make_request("POST", "/chat/completions", data=body)
+    assert res.status_code == 200
+    entries = res.body["choices"][0]["logprobs"]["content"]
+    # stop on a mid-generation token followed by a char the model never emits, so that token
+    # only matches a prefix of the stop string and the next token diverges from it
+    prefix = next(e["token"] for e in entries[1:-1] if e["token"].strip())
+    body["stop"] = [prefix + "\x01"]
+
+    all_bytes = bytearray()
+    if stream:
+        content = ""
+        for data in server.make_stream_request("POST", "/chat/completions", data={**body, "stream": True}):
+            if not data["choices"]:
+                continue
+            choice = data["choices"][0]
+            content += choice["delta"].get("content") or ""
+            if choice.get("logprobs"):
+                for entry in choice["logprobs"]["content"]:
+                    all_bytes.extend(entry["bytes"])
+    else:
+        res = server.make_request("POST", "/chat/completions", data=body)
+        assert res.status_code == 200
+        content = res.body["choices"][0]["message"]["content"]
+        for entry in res.body["choices"][0]["logprobs"]["content"]:
+            all_bytes.extend(entry["bytes"])
+
+    assert prefix in content
+    assert bytes(all_bytes).decode("utf-8") == content
+
+
 def test_logit_bias():
     global server
     server.start()
