@@ -2532,7 +2532,11 @@ static void run_rope_set_rows_dispatch_checks() {
         require_compile_parameter(dispatch, "ggml.rope_f32.head_size", "8");
         require_compile_parameter(dispatch, "ggml.rope_f32.n_dims", "8");
         require_compile_parameter(dispatch, "ggml.rope_f32.head_count", "2");
-        require_compile_parameter(dispatch, "ggml.rope_f32.token_capacity", "3");
+        // Standalone RoPE shares a capacity class while keeping the actual shape dynamic.
+        require_compile_parameter(dispatch, "ggml.rope_f32.token_capacity", "4");
+        REQUIRE(dispatch.kernel.workload_specialization == ggml::hrx::WorkloadSpecialization::Dynamic);
+        REQUIRE(dispatch.kernel.compile_parameters.count("ggml.rope_f32.input_span") == 0);
+        REQUIRE(dispatch.kernel.integer_parameters.at("input_span") == hidden_size * token_count);
         require_compile_parameter(dispatch, "ggml.rope_f32.mode", "2");
         REQUIRE(dispatch.bindings.size() == 5);
 
@@ -2573,7 +2577,11 @@ static void run_rope_set_rows_dispatch_checks() {
         require_compile_parameter(dispatch, "ggml.rope_f32.head_size", "8");
         require_compile_parameter(dispatch, "ggml.rope_f32.n_dims", "8");
         require_compile_parameter(dispatch, "ggml.rope_f32.head_count", "2");
-        require_compile_parameter(dispatch, "ggml.rope_f32.token_capacity", "3");
+        // Standalone RoPE shares a capacity class while keeping the actual shape dynamic.
+        require_compile_parameter(dispatch, "ggml.rope_f32.token_capacity", "4");
+        REQUIRE(dispatch.kernel.workload_specialization == ggml::hrx::WorkloadSpecialization::Dynamic);
+        REQUIRE(dispatch.kernel.compile_parameters.count("ggml.rope_f32.input_span") == 0);
+        REQUIRE(dispatch.kernel.integer_parameters.at("input_span") == hidden_size * token_count);
         require_compile_parameter(dispatch, "ggml.rope_f32.mode", "0");
         REQUIRE(dispatch.bindings.size() == 5);
 
@@ -6135,9 +6143,10 @@ static void run_generic_swiglu_k16_publication_edge_checks() {
                 nullptr);
         const auto producer = std::find_if(plan.dispatches.begin(), plan.dispatches.end(), [](const auto & dispatch) {
             return kernel_name_for_id(dispatch.kernel.kernel_id) ==
-                   "loom_libs:ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32";
+                   "loom_libs:ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32_aligned";
         });
         REQUIRE(producer != plan.dispatches.end());
+        REQUIRE(producer->kernel.workload_specialization == ggml::hrx::WorkloadSpecialization::Dynamic);
         REQUIRE(producer->bindings.size() == 4);
         REQUIRE(producer->bindings.back().value == glu_value->id);
 
@@ -6191,9 +6200,10 @@ static void run_generic_swiglu_k16_publication_edge_checks() {
 
         const auto producer = std::find_if(plan.dispatches.begin(), plan.dispatches.end(), [](const auto & dispatch) {
             return kernel_name_for_id(dispatch.kernel.kernel_id) ==
-                   "loom_libs:ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32";
+                   "loom_libs:ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32_aligned";
         });
         REQUIRE(producer != plan.dispatches.end());
+        REQUIRE(producer->kernel.workload_specialization == ggml::hrx::WorkloadSpecialization::Dynamic);
         REQUIRE(producer->bindings.size() == 4);
         const auto copy = std::find_if(plan.dispatches.begin(), plan.dispatches.end(), [&](const auto & dispatch) {
             return kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_copy_f16_k16_major" &&
@@ -6227,7 +6237,7 @@ static void run_tiled_matmul_alternate_publish_checks() {
     const Case cases[] = {
         { GGML_TYPE_Q6_K, "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32_f16_alternate",
          "loom_libs:ggml_mul_mat_q6_k_f16_wmma_prefill_wave32",      GGML_TYPE_F16  },
-        { GGML_TYPE_Q5_K, "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32",
+        { GGML_TYPE_Q5_K, "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32_aligned",
          "loom_libs:ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256", GGML_TYPE_Q8_1 },
     };
 
@@ -6272,6 +6282,8 @@ static void run_tiled_matmul_alternate_publish_checks() {
             REQUIRE(producer->bindings.size() == 4);
             REQUIRE(producer->bindings[3].value == alternate->alternate_value);
         } else {
+            REQUIRE(producer->bindings.size() == 3);
+            REQUIRE(producer->kernel.workload_specialization == ggml::hrx::WorkloadSpecialization::Dynamic);
             const auto quantize =
                 std::find_if(plan.dispatches.begin(), plan.dispatches.end(), [&](const auto & dispatch) {
                 return kernel_name_for_id(dispatch.kernel.kernel_id) == "qwen3_moe:ggml_quantize_q8_1_x4_f32" &&
@@ -6340,11 +6352,12 @@ static void run_tiled_matmul_alternate_publish_checks() {
         REQUIRE(publication->requested_format == "q8-1-x4");
 
         const auto producer = std::find_if(plan.dispatches.begin(), plan.dispatches.end(), [&](const auto & dispatch) {
-            return kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32" &&
+            return kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32_aligned" &&
                    dispatch.bindings[2].value == projection_value->id;
         });
         REQUIRE(producer != plan.dispatches.end());
         REQUIRE(producer->bindings.size() == 3);
+        REQUIRE(producer->kernel.workload_specialization == ggml::hrx::WorkloadSpecialization::Dynamic);
 
         const auto q5_consumer =
             std::find_if(plan.dispatches.begin(), plan.dispatches.end(), [&](const auto & dispatch) {
@@ -6644,23 +6657,24 @@ static void run_rmsnorm_binary_k16_output_checks() {
         bool inplace;
         bool multiply;
         bool packed;
+        bool supported;
     } cases[] = {
-        { GGML_TYPE_Q4_K, 2048,  512, 1, false, false, false, true,  true  },
-        { GGML_TYPE_Q4_K, 3072,  512, 1, false, false, false, true,  true  },
-        { GGML_TYPE_Q4_K, 4096,  512, 1, false, false, false, true,  true  },
-        { GGML_TYPE_Q4_K, 5120,  512, 2, false, false, false, true,  true  },
-        { GGML_TYPE_Q6_K, 8192,  512, 2, true,  false, false, true,  true  },
-        { GGML_TYPE_Q6_K, 5120, 1024, 1, false, false, false, true,  true  },
-        { GGML_TYPE_Q4_K, 5120,  512, 2, true,  true,  false, true,  true  },
-        { GGML_TYPE_Q4_K, 6144,  512, 1, false, false, false, true,  true  },
-        { GGML_TYPE_Q4_K, 7168,  512, 1, false, false, false, true,  false },
-        { GGML_TYPE_Q4_K, 4096,  256, 1, false, false, false, true,  false },
-        { GGML_TYPE_Q4_K, 5120,    5, 1, false, false, false, true,  false },
-        { GGML_TYPE_Q4_K, 4096, 1024, 1, false, false, false, true,  false },
-        { GGML_TYPE_Q4_K, 5120,  512, 0, true,  true,  false, true,  false },
-        { GGML_TYPE_F32,  5120,  512, 1, true,  false, false, true,  false },
-        { GGML_TYPE_Q4_K, 5120,  512, 1, false, false, true,  true,  false },
-        { GGML_TYPE_Q4_K, 5120,  512, 1, false, false, false, false, false },
+        { GGML_TYPE_Q4_K, 2048,  512, 1, false, false, false, true,  true,  true  },
+        { GGML_TYPE_Q4_K, 3072,  512, 1, false, false, false, true,  true,  true  },
+        { GGML_TYPE_Q4_K, 4096,  512, 1, false, false, false, true,  true,  true  },
+        { GGML_TYPE_Q4_K, 5120,  512, 2, false, false, false, true,  true,  true  },
+        { GGML_TYPE_Q6_K, 8192,  512, 2, true,  false, false, true,  true,  true  },
+        { GGML_TYPE_Q6_K, 5120, 1024, 1, false, false, false, true,  true,  true  },
+        { GGML_TYPE_Q4_K, 5120,  512, 2, true,  true,  false, true,  true,  true  },
+        { GGML_TYPE_Q4_K, 6144,  512, 1, false, false, false, true,  true,  true  },
+        { GGML_TYPE_Q4_K, 7168,  512, 1, false, false, false, true,  false, true  },
+        { GGML_TYPE_Q4_K, 4096,  256, 1, false, false, false, true,  false, true  },
+        { GGML_TYPE_Q4_K, 5120,    5, 1, false, false, false, true,  false, true  },
+        { GGML_TYPE_Q4_K, 4096, 1024, 1, false, false, false, true,  false, true  },
+        { GGML_TYPE_Q4_K, 5120,  512, 0, true,  true,  false, true,  false, true  },
+        { GGML_TYPE_F32,  5120,  512, 1, true,  false, false, true,  false, true  },
+        { GGML_TYPE_Q4_K, 5120,  512, 1, false, false, true,  true,  false, false },
+        { GGML_TYPE_Q4_K, 5120,  512, 1, false, false, false, false, false, true  },
     };
 
     for (const auto & test : cases) {
@@ -6691,7 +6705,23 @@ static void run_rmsnorm_binary_k16_output_checks() {
         auto imported = ggml::hrx::import_ggml_graph(*graph);
         REQUIRE(imported.valid());
         ggml::hrx::DispatchScheduler scheduler;
-        REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+        ggml::hrx::DispatchScheduleDiagnostics diagnostics;
+        REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target(), &diagnostics) == test.supported);
+        if (!test.supported) {
+            // RMS kernels require distinct input and output storage, including the unpacked path.
+            REQUIRE(test.inplace);
+            REQUIRE(diagnostics.unsupported_node != nullptr);
+            REQUIRE(diagnostics.unsupported_node_index == 0);
+            REQUIRE(diagnostics.unsupported_node->op == GGML_OP_RMS_NORM);
+            REQUIRE(!ggml::hrx::DispatchScheduler::supports_node(
+                imported.graph, diagnostics.unsupported_node, test_dispatch_target()));
+            REQUIRE(!ggml::hrx::DispatchScheduler::can_schedule_graph(imported.graph, test_dispatch_target()));
+            REQUIRE(!scheduler.plan().valid());
+            REQUIRE(scheduler.plan().dispatches.empty());
+            REQUIRE(status_contains(scheduler.plan().status, "unsupported HRX node 0: RMS_NORM"));
+            ggml_free(ctx);
+            continue;
+        }
         const auto & plan = scheduler.plan();
         REQUIRE(plan.valid());
         const auto producer = std::find_if(plan.dispatches.begin(), plan.dispatches.end(), [](const auto & dispatch) {

@@ -1453,6 +1453,11 @@ static void run_loom_jit_materialize_checks() {
         { { "row_count", 7 }, { "lhs_span", 448 }, { "rhs_span", 224 } },
         { { "ggml.concat_dim0_f32.lhs_width", "64" }, { "ggml.concat_dim0_f32.rhs_width", "32" } });
     run_dynamic_export_reuse_case(
+        device, "ggml_concat_dim0_f32",
+        { { "row_count", 1 }, { "lhs_span", 2048 }, { "rhs_span", 2048 } },
+        { { "row_count", 128 }, { "lhs_span", 262144 }, { "rhs_span", 262144 } },
+        { { "ggml.concat_dim0_f32.lhs_width", "2048" }, { "ggml.concat_dim0_f32.rhs_width", "2048" } });
+    run_dynamic_export_reuse_case(
         device, "ggml_rmsnorm_f32", { { "token_count", 1 } }, { { "token_count", 4 } },
         { { "ggml.rmsnorm_f32.hidden_size", "256" }, { "ggml.rmsnorm_f32.input_stride", "256" },
           { "ggml.rmsnorm_f32.rms_epsilon", "1e-06" } });

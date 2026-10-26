@@ -1737,7 +1737,7 @@ static void run_rmsnorm_binary_add_cpu_reference_case() {
     ggml_backend_free(hrx_backend);
 }
 
-static void run_gemma_post_proj_cpu_reference_case(int64_t token_count) {
+static void run_gemma_post_proj_cpu_reference_case(int64_t token_count, bool normalized_add = false) {
     constexpr int64_t hidden_size = 640;
     constexpr float   epsilon     = 1.0e-6f;
     ggml_backend_t cpu_backend = init_cpu_backend();
@@ -1768,7 +1768,8 @@ static void run_gemma_post_proj_cpu_reference_case(int64_t token_count) {
         g.residual      = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, token_count);
         g.raw           = ggml_add(ctx, g.input, g.residual);
         ggml_tensor * normalized = ggml_rms_norm(ctx, g.raw, epsilon);
-        ggml_tensor * scaled     = ggml_mul(ctx, normalized, g.weight);
+        ggml_tensor * scaled     = normalized_add ? ggml_add(ctx, normalized, g.weight) :
+                                                   ggml_mul(ctx, normalized, g.weight);
         g.output        = ggml_add(ctx, scaled, g.residual);
         g.raw_side      = ggml_mul(ctx, g.raw, g.residual);
         REQUIRE(g.output != nullptr);
@@ -1855,7 +1856,22 @@ static void run_gemma_post_proj_matcher_negatives() {
             };
             REQUIRE(registry->match(context, match));
             REQUIRE(match.dispatches.size() == 1);
-            return kernel_name_for_id(match.dispatches[0].kernel.kernel_id);
+            const auto & specialization = match.dispatches[0].kernel;
+            const std::string name = kernel_name_for_id(specialization.kernel_id);
+            if (name == "loom_libs:ggml_rmsnorm_mul_add_f32") {
+                const auto normalized_op = variant == 4 ? ggml::hrx::BinaryKind::Add : ggml::hrx::BinaryKind::Mul;
+                REQUIRE(specialization.compile_parameters.at("ggml.rmsnorm_mul_add_f32.normalized_op") ==
+                        std::to_string(ggml::hrx::binary_kind_config_value(normalized_op)));
+                REQUIRE(specialization.compile_parameters.at("ggml.rmsnorm_mul_add_f32.output_op") ==
+                        std::to_string(ggml::hrx::binary_kind_config_value(ggml::hrx::BinaryKind::Add)));
+                REQUIRE(specialization.compile_parameters.at("ggml.rmsnorm_mul_add_f32.binary_lhs") == "1");
+                const std::vector<size_t> expected_covered = {
+                    rms_index, producer_index_for_tensor(imported.graph, scaled),
+                    producer_index_for_tensor(imported.graph, output),
+                };
+                REQUIRE(match.covered_nodes == expected_covered);
+            }
+            return name;
         };
         REQUIRE(kernel() == "loom_libs:ggml_rmsnorm_binary_f32");
         covered[raw_index] = true;
@@ -1872,8 +1888,11 @@ static void run_gemma_post_proj_matcher_negatives() {
             REQUIRE(residual_value != nullptr);
             REQUIRE(raw_value->storage_root == residual_value->storage_root);
         }
-        REQUIRE(kernel() == (variant == 0 || variant == 3 ? "loom_libs:ggml_rmsnorm_mul_add_f32" :
-                                                        "loom_libs:ggml_rmsnorm_binary_f32"));
+        const bool shared_scaled = variant == 1;
+        const bool aliases_input = variant == 2;
+        const bool blocks_fusion = shared_scaled || aliases_input;
+        REQUIRE(kernel() == (blocks_fusion ? "loom_libs:ggml_rmsnorm_binary_f32" :
+                                            "loom_libs:ggml_rmsnorm_mul_add_f32"));
         ggml_free(ctx);
     }
 }
@@ -4711,7 +4730,7 @@ static void run_dense_matmul_postops_cpu_reference_case(ggml_type    weight_type
     if (include_next_rmsnorm) {
         require_kernel_subsequence(
             scheduled_kernel_sequence(hrx_graph),
-            { expected_kernel, "loom_libs:ggml_rmsnorm_binary_f32", "loom_libs:ggml_binary_f32" });
+            { expected_kernel, expected_plain_rmsnorm_binary_kernel(output_size, token_count), "loom_libs:ggml_binary_f32" });
     } else {
         require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph), { expected_kernel });
     }
@@ -6198,12 +6217,14 @@ static void register_dense_matmul_cases(Suite & suite) {
     for (const ggml_type type :
          { GGML_TYPE_Q1_0, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, GGML_TYPE_IQ2_S,
            GGML_TYPE_Q6_K, GGML_TYPE_Q8_0, GGML_TYPE_IQ4_NL, GGML_TYPE_F16, GGML_TYPE_BF16 }) {
-        const char *  vector_kernel = type == GGML_TYPE_Q6_K ? "loom_libs:ggml_mul_mat_vector_q6_f32_f32" :
+        const char *  vector_kernel = type == GGML_TYPE_IQ2_S ? "loom_libs:ggml_mul_mat_vector_iq2_s_f32_f32" :
+                                     type == GGML_TYPE_Q6_K ? "loom_libs:ggml_mul_mat_vector_q6_f32_f32" :
                                                                "loom_libs:ggml_mul_mat_vector_f32_f32";
         const int64_t outputs       = type == GGML_TYPE_IQ2_S ? 640 : (type == GGML_TYPE_IQ4_NL ? 1024 : 128);
         const int64_t input         = type == GGML_TYPE_IQ4_NL ? 640 : kQwenHiddenSize;
         const char *  route         = type == GGML_TYPE_IQ4_NL ? "tiled" : "skinny";
-        const char *  kernel        = type == GGML_TYPE_IQ4_NL ? "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32" :
+        const char *  kernel        = type == GGML_TYPE_IQ2_S ? "loom_libs:ggml_mul_mat_tiled_input_f32_iq2_s_publish_f32" :
+                                     type == GGML_TYPE_IQ4_NL ? "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32" :
                                                                  "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32";
         suite.device_case(
             "dense_matmul." + type_name(type) + "." + route + ".tokens2.outputs" + std::to_string(outputs),
@@ -6483,6 +6504,8 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
         suite.device_case("gemma_post_proj.tokens" + std::to_string(token_count),
                           [token_count] { run_gemma_post_proj_cpu_reference_case(token_count); });
     }
+    suite.device_case("gemma_post_proj.normalized_add.tokens3",
+                      [] { run_gemma_post_proj_cpu_reference_case(3, true); });
     suite.device_case("rmsnorm.default", [] { run_rmsnorm_cpu_reference_case(); });
     suite.device_case("rmsnorm.hidden3840.tokens18", [] { run_rmsnorm_cpu_reference_case(3840, 18, 1.0e-6f); });
     for (const int64_t token_count : { 2, 23 }) {
