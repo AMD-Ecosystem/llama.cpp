@@ -870,6 +870,15 @@ static llama_token json_get_token(const json & elem) {
     if (!elem.is_number_integer()) {
         throw std::invalid_argument("Token ID must be an integer");
     }
+
+    // Check uint64 range first to prevent false validation due to int overflow
+    if (elem.is_number_unsigned()) {
+        uint64_t uval = elem.get<uint64_t>();
+        if (uval > static_cast<uint64_t>(INT32_MAX)) {
+            throw std::invalid_argument("Token ID out of int32 range: " + std::to_string(uval));
+        }
+    }
+
     int64_t val = elem.get<int64_t>();
     if (val < INT32_MIN || val > INT32_MAX) {
         throw std::invalid_argument("Token ID out of int32 range: " + std::to_string(val));

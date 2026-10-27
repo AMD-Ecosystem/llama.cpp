@@ -714,6 +714,8 @@ def test_completion_prompt_cache():
     ([1, "x", None], 400, "invalid_prompt"),
     # Invalid: int32 overflow
     ([1, 4294967297], 400, "invalid_prompt"),
+    # Invalid: uint64 max - must not overflow to -1 (valid)
+    ([18446744073709551615], 400, "invalid_prompt"),
 ])
 def test_token_validation(prompt, expected_status, expected_error_type):
     """
@@ -731,6 +733,10 @@ def test_token_validation(prompt, expected_status, expected_error_type):
     if expected_error_type:
         assert "error" in res.body
         assert res.body["error"]["type"] == expected_error_type
+        # uint64 max: verify error message to confirm proper bounds checking
+        # vs. silent wrap-around to -1 (LLAMA_TOKEN_NULL) which would trigger "Invalid token IDs"
+        if 18446744073709551615 in prompt:
+            assert "Token ID out of int32 range: 18446744073709551615" in res.body["error"]["message"]
 
 
 @pytest.mark.parametrize("data,expected_error_type", [

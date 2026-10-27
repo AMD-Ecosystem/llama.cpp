@@ -4838,6 +4838,10 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
     } catch (const std::invalid_argument & e) {
         res->error(format_error_response(e.what(), ERROR_TYPE_INVALID_PROMPT));
         return res;
+    } catch (const std::runtime_error & e) {
+        // Multimodal loading/tokenization failures
+        res->error(format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
+        return res;
     }
 
     // tasks.reserve(inputs.size()); // TODO: this is inaccurate due to child tasks
