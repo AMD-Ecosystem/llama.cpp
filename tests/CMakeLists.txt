@@ -402,23 +402,32 @@ if (TARGET gguf-model-data)
 endif()
 
 if (TARGET ggml-hrx)
-    add_executable(test-hrx-buffer test-hrx-buffer.cpp)
-    target_link_libraries(test-hrx-buffer PRIVATE ggml-hrx ggml hrx::hrx)
-    target_include_directories(test-hrx-buffer PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
-    add_test(NAME test-hrx-buffer COMMAND test-hrx-buffer)
+    add_executable(hrx-buffer-test hrx-buffer-test.cpp)
+    target_link_libraries(hrx-buffer-test PRIVATE ggml-hrx ggml hrx::hrx)
+    target_include_directories(hrx-buffer-test PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    add_test(NAME hrx-buffer-test COMMAND hrx-buffer-test
+        --hrx-buffer-test-jobs 1 --hrx-buffer-test-output all --hrx-buffer-test-filter ".*")
 
     add_executable(hrx-backend-test hrx-backend-test.cpp)
     target_link_libraries(hrx-backend-test PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
     target_include_directories(hrx-backend-test PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
-    add_test(NAME hrx-backend-test COMMAND hrx-backend-test)
+    add_test(NAME hrx-backend-test COMMAND hrx-backend-test
+        --hrx-backend-test-jobs 4 --hrx-backend-test-output all --hrx-backend-test-filter ".*")
 
-    add_executable(test-hrx-loom-jit test-hrx-loom-jit.cpp)
-    target_link_libraries(test-hrx-loom-jit PRIVATE ggml-hrx ggml-hrx-kernel-corpus hrx::hrx loomc::loomc)
-    target_include_directories(test-hrx-loom-jit PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
-    add_test(NAME test-hrx-loom-jit COMMAND test-hrx-loom-jit)
+    add_executable(hrx-loom-jit-test hrx-loom-jit-test.cpp)
+    target_link_libraries(hrx-loom-jit-test PRIVATE ggml-hrx ggml-hrx-kernel-corpus hrx::hrx loomc::loomc)
+    target_include_directories(hrx-loom-jit-test PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    add_test(NAME hrx-loom-jit-test COMMAND hrx-loom-jit-test
+        --hrx-loom-jit-test-jobs 2 --hrx-loom-jit-test-output all --hrx-loom-jit-test-filter ".*")
 
-    add_executable(test-hrx-ops test-hrx-ops.cpp)
-    target_link_libraries(test-hrx-ops PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
-    target_include_directories(test-hrx-ops PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
-    add_test(NAME test-hrx-ops COMMAND test-hrx-ops)
+    add_executable(hrx-ops-test hrx-ops-test.cpp)
+    target_link_libraries(hrx-ops-test PRIVATE ggml-hrx ggml hrx::hrx loomc::loomc)
+    target_include_directories(hrx-ops-test PRIVATE ../ggml/include ../ggml/src ../ggml/src/ggml-hrx)
+    add_test(NAME hrx-ops-test COMMAND hrx-ops-test
+        --hrx-test-jobs 4 --hrx-test-output all --hrx-test-filter ".*")
+
+    set_tests_properties(hrx-buffer-test hrx-backend-test hrx-loom-jit-test hrx-ops-test PROPERTIES
+        LABELS hrx
+        TIMEOUT 900
+        FAIL_REGULAR_EXPRESSION "test skipped: no device available")
 endif()

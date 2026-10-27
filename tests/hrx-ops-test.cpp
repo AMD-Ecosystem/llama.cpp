@@ -6652,7 +6652,7 @@ int main(int argc, char ** argv) {
 
     test_runner::Options options;
     if (!suite.parse_options(argc, argv, options)) {
-        suite.print_usage(argc > 0 ? argv[0] : "test-hrx-ops");
+        suite.print_usage(argc > 0 ? argv[0] : "hrx-ops-test");
         return 2;
     }
     if (options.help) {
