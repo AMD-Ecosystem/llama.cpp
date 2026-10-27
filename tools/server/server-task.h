@@ -307,8 +307,9 @@ struct completion_token_output {
     float prob;
     std::string text_to_send;
     // this token's own decoded piece, for logprobs attribution - independent of
-    // text_to_send, which can be withheld (incomplete UTF-8), merged with earlier
-    // tokens (completing a multi-token UTF-8 char), or blanked (matched stop word)
+    // text_to_send, which can be withheld (incomplete UTF-8, partial stop word) or
+    // merged with earlier tokens; cut to the part that reached content if a stop word
+    // matches
     std::string txt;
     struct prob_info {
         llama_token tok;

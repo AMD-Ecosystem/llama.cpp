@@ -486,6 +486,64 @@ def test_logprobs_partial_stop_prefix(stream: bool):
     assert bytes(all_bytes).decode("utf-8") == content
 
 
+@pytest.mark.parametrize("stream", [False, True])
+def test_logprobs_matched_stop(stream: bool):
+    # a stop string spanning two tokens: the first is held back as a partial match, then the
+    # second completes it - the logprobs bytes of both must stay out, just like the content
+    global server
+    server.start()
+    body = {
+        "max_tokens": 16,
+        "temperature": 0.0,
+        "messages": [
+            {"role": "system", "content": "Book"},
+            {"role": "user", "content": "What is the best book"},
+        ],
+        "logprobs": True,
+        "top_logprobs": 1,
+    }
+    res = server.make_request("POST", "/chat/completions", data=body)
+    assert res.status_code == 200
+    tokens = [e["token"] for e in res.body["choices"][0]["logprobs"]["content"]]
+    stop = next(
+        tokens[i] + tokens[i + 1] for i in range(1, len(tokens) - 2)
+        if tokens[i].strip() and tokens[i + 1].strip()
+        and tokens[i] + tokens[i + 1] not in "".join(tokens[:i + 1])
+    )
+    body["stop"] = [stop]
+
+    all_bytes = bytearray()
+    if stream:
+        content = ""
+        n_entries = 0
+        for data in server.make_stream_request("POST", "/chat/completions", data={**body, "stream": True, "stream_options": {"include_usage": True}}):
+            if data.get("usage"):
+                completion_tokens = data["usage"]["completion_tokens"]
+            if not data["choices"]:
+                continue
+            choice = data["choices"][0]
+            content += choice["delta"].get("content") or ""
+            if choice.get("finish_reason"):
+                finish_reason = choice["finish_reason"]
+            if choice.get("logprobs"):
+                for entry in choice["logprobs"]["content"]:
+                    all_bytes.extend(entry["bytes"])
+                    n_entries += 1
+        # the stop string's tokens keep their entries, just with no bytes
+        assert n_entries == completion_tokens
+    else:
+        res = server.make_request("POST", "/chat/completions", data=body)
+        assert res.status_code == 200
+        content = res.body["choices"][0]["message"]["content"]
+        finish_reason = res.body["choices"][0]["finish_reason"]
+        for entry in res.body["choices"][0]["logprobs"]["content"]:
+            all_bytes.extend(entry["bytes"])
+
+    assert finish_reason == "stop"
+    assert content and stop not in content
+    assert bytes(all_bytes).decode("utf-8") == content
+
+
 def test_logit_bias():
     global server
     server.start()
