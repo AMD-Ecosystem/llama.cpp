@@ -210,6 +210,11 @@ PreparedCommandProgramCacheStats PreparedCommandProgramCache::stats() const {
     return stats_;
 }
 
+size_t PreparedCommandProgramCache::size() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return programs_.size();
+}
+
 void PreparedCommandProgramCache::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     programs_.clear();

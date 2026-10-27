@@ -7,6 +7,11 @@ config.decl @qwen3_moe.router.expert_count : %value: index where [range(%value, 
 
 config.decl @qwen3_moe.router.route_count : %value: index where [range(%value, 1, 32)]
 
+config.def @qwen3_moe.router.input_probabilities = 0 : index
+config.def @qwen3_moe.router.clamp_min = 0.0 : f32
+
+// Probability mode selects already materialized sigmoid outputs, including
+// saturation ties, and normalizes with the graph's denominator clamp.
 // Selects and normalizes one logical router row. The caller owns mapping a
 // subgroup to a safe physical row and tells the helper whether that row should
 // publish. Keeping row semantics independent of launch geometry lets fused
@@ -28,7 +33,9 @@ template.def<@qwen3_moe.router.top8.row> device requires [#target.subgroup.size<
   %experts_per_lane0 = index.div %expert_count, %wave_size : index
   %experts_per_lane = index.assume %experts_per_lane0 [range(%experts_per_lane0, 1, 16)] : index
   %lane_expert_base = index.mul %lane, %experts_per_lane : index
-  %route_id_storage_count = index.mul %launch_token_count, %bounded_route_id_stride : index
+  %last_token = index.sub %launch_token_count, %c1 : index
+  %last_route_row = index.mul %last_token, %bounded_route_id_stride : index
+  %route_id_storage_count = index.add %last_route_row, %route_count : index
   %route_weight_storage_count = index.mul %launch_token_count, %route_count : index
   %logits_noalias, %route_ids_noalias, %route_weights_noalias = buffer.assume.noalias %logits, %route_ids, %route_weights : buffer, buffer, buffer
   %logits_view = buffer.view %logits_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%expert_count]xf32>
@@ -84,11 +91,25 @@ template.def<@qwen3_moe.router.top8.row> device requires [#target.subgroup.size<
     }
     scf.yield %next_remaining_logits, %next_lane_selected_logit : vector<[%experts_per_lane]xf32>, f32
   }
-  %selected_max = kernel.subgroup.reduce<maxnumf> %selected_logit : f32
-  %selected_delta = scalar.subf<reassoc|nnan|ninf|nsz> %selected_logit, %selected_max : f32
-  %unnormalized_weight = scalar.expf<afn> %selected_delta : f32
-  %selected_sum = kernel.subgroup.reduce<addf> %unnormalized_weight : f32
-  %route_weight = scalar.divf<reassoc|nnan|ninf|nsz|afn> %unnormalized_weight, %selected_sum : f32
+  %input_probabilities = config.get @qwen3_moe.router.input_probabilities : index
+  %use_probabilities = index.cmp ne, %input_probabilities, %c0 : index
+  %route_weight = scf.if %use_probabilities -> (f32) {
+    %zero = scalar.constant 0.0 : f32
+    %selected_lane = index.cmp ult, %lane, %route_count : index
+    %selected_probability = scf.select %selected_lane, %selected_logit, %zero : f32
+    %selected_sum = kernel.subgroup.reduce<addf> %selected_probability : f32
+    %clamp_min = config.get @qwen3_moe.router.clamp_min : f32
+    %denominator = scalar.maxnumf %selected_sum, %clamp_min : f32
+    %weight = scalar.divf %selected_probability, %denominator : f32
+    scf.yield %weight : f32
+  } else {
+    %selected_max = kernel.subgroup.reduce<maxnumf> %selected_logit : f32
+    %selected_delta = scalar.subf<reassoc|nnan|ninf|nsz> %selected_logit, %selected_max : f32
+    %unnormalized_weight = scalar.expf<afn> %selected_delta : f32
+    %selected_sum = kernel.subgroup.reduce<addf> %unnormalized_weight : f32
+    %weight = scalar.divf<reassoc|nnan|ninf|nsz|afn> %unnormalized_weight, %selected_sum : f32
+    scf.yield %weight : f32
+  }
   %lane_publishes_weight = index.cmp ult, %lane, %route_count : index
   %publishes_weight = scalar.andi %valid_token, %lane_publishes_weight : i1
   scf.if %publishes_weight {

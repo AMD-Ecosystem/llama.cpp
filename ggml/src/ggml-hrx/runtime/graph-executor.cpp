@@ -2,6 +2,7 @@
 
 #include "backend-buffer-binding.h"
 #include "ggml-impl.h"
+#include "hrx-interop-utils.h"
 #include "runtime/kernel-executable-cache.h"
 #include "runtime/prepared-command-program-cache.h"
 #include "runtime/transient-arena.h"
@@ -80,6 +81,18 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
     result.status = context_valid_for_execution();
     if (!result.status.success()) {
         return result;
+    }
+
+    const size_t cached_programs = context_.graph_programs.size() + context_.prepared_programs.size();
+    if (cached_programs >= kMaxCachedPrograms) {
+        // Cached shapes own device staging buffers and recorded graphs. Drain their work before retiring them.
+        if (ErrorResult error = take_status(hrx_stream_synchronize(context_.stream))) {
+            result.status.log("synchronize HRX program cache retirement: %s", error->c_str());
+            return result;
+        }
+        context_.graph_replay_state.mark_stream_synchronized();
+        context_.prepared_programs.clear();
+        context_.graph_programs.clear();
     }
 
     const KernelCorpus & corpus = get_qwen_kernel_corpus();

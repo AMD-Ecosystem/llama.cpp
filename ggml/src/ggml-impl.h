@@ -241,11 +241,11 @@ struct ggml_hash_set {
     struct ggml_tensor ** keys; // actual tensors in the set, keys[i] is only defined if ggml_bitset_get(used, i)
 };
 
-struct ggml_hash_set ggml_hash_set_new(size_t size);
-void                 ggml_hash_set_free(struct ggml_hash_set * hash_set);
+GGML_API struct ggml_hash_set ggml_hash_set_new(size_t size);
+GGML_API void                 ggml_hash_set_free(struct ggml_hash_set * hash_set);
 
 // returns the minimum size for a hash set that can hold min_sz elements
-size_t ggml_hash_size(size_t min_sz);
+GGML_API size_t ggml_hash_size(size_t min_sz);
 
 // remove all elements from the hash set
 void ggml_hash_set_reset(struct ggml_hash_set * hash_set);
@@ -361,7 +361,7 @@ struct ggml_cgraph {
 // returns a slice of cgraph with nodes [i0, i1)
 // the slice does not have leafs or gradients
 // if you need the gradients, get them from the original graph
-struct ggml_cgraph ggml_graph_view(struct ggml_cgraph * cgraph, int i0, int i1);
+GGML_API struct ggml_cgraph ggml_graph_view(struct ggml_cgraph * cgraph, int i0, int i1);
 
 // ggml-alloc.c: true if the operation can reuse memory from its sources
 GGML_API bool ggml_op_can_inplace(enum ggml_op op);

@@ -1,0 +1,59 @@
+// Scalar rows publish transposed non-flash value caches, with one lane per row.
+amdgpu.target<gfx11-generic> @ggml_set_rows_scalar_gfx11 {subgroup_size = 64}
+
+config.decl @ggml.set_rows_scalar.token_capacity : %value: index where [range(%value, 1, 1048576)]
+config.decl @ggml.set_rows_scalar.input_stride : %value: index where [range(%value, 1, 1048576)]
+config.decl @ggml.set_rows_scalar.output_format : %value: index where [range(%value, 16, 32)]
+
+kernel.def target(@ggml_set_rows_scalar_gfx11) @ggml_set_rows_scalar(%token_count: index, %cache_row_count: index) {
+  %capacity = config.get @ggml.set_rows_scalar.token_capacity : index
+  %c1 = index.constant 1 : index
+  %c255 = index.constant 255 : index
+  %c256 = index.constant 256 : index
+  %padded = index.add %capacity, %c255 : index
+  %groups = index.div %padded, %c256 : index
+  kernel.launch.config workgroups(%groups, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%token_count: index, %cache_row_count: index, %rows: buffer, %indices: buffer, %cache: buffer) where [range(%token_count, 1, 1048576)] {
+  %capacity = config.get @ggml.set_rows_scalar.token_capacity : index
+  %stride = config.get @ggml.set_rows_scalar.input_stride : index
+  %format = config.get @ggml.set_rows_scalar.output_format : index
+  %count = index.assume %token_count [range(%token_count, 1, 1048576), le(%token_count, %capacity)] : index
+  %cache_count = index.assume %cache_row_count [range(%cache_row_count, 1, 1048576)] : index
+  %c0 = index.constant 0 : index
+  %c16 = index.constant 16 : index
+  %c256 = index.constant 256 : index
+  %offset = index.constant 0 : offset
+  %zero_i64 = scalar.constant 0 : i64
+  %max_i64 = scalar.constant 1048575 : i64
+  %group = kernel.workgroup.id<x> : index
+  %lane = kernel.workitem.id<x> : index
+  %base = index.mul %group, %c256 : index
+  %token = index.add %base, %lane : index
+  %valid_token = index.cmp ult, %token, %count : index
+  scf.if %valid_token {
+    %ids = buffer.view %indices[%offset] : buffer -> view<[%count]xi64>
+    %raw = view.load %ids[%token] : view<[%count]xi64> -> i64
+    %nonnegative = scalar.cmpi sge, %raw, %zero_i64 : i64
+    %in_range = scalar.cmpi sle, %raw, %max_i64 : i64
+    %valid_index = scalar.andi %nonnegative, %in_range : i1
+    %safe_raw = scf.select %valid_index, %raw, %zero_i64 : i64
+    %bounded_raw = scalar.assume %safe_raw [range(%safe_raw, 0, 1048575)] : i64
+    %row = index.cast %bounded_raw : i64 to index
+    %valid_row = index.cmp ult, %row, %cache_count : index
+    %publish = scalar.andi %valid_index, %valid_row : i1
+    scf.if %publish {
+      %input = buffer.view %rows[%offset] : buffer -> view<[%count]x[%stride]xf32>
+      %value = view.load %input[%token, %c0] : view<[%count]x[%stride]xf32> -> f32
+      %is_f16 = index.cmp eq, %format, %c16 : index
+      scf.if %is_f16 {
+        %output = buffer.view %cache[%offset] : buffer -> view<[%cache_count]xf16>
+        %half = scalar.fptrunc %value : f32 to f16
+        view.store %half, %output[%row] : f16, view<[%cache_count]xf16>
+      } else {
+        %output = buffer.view %cache[%offset] : buffer -> view<[%cache_count]xf32>
+        view.store %value, %output[%row] : f32, view<[%cache_count]xf32>
+      }
+    }
+  }
+  kernel.return
+}

@@ -17,6 +17,8 @@ namespace {
 
 static constexpr KernelCatalogRef kFlashAttentionF32F16WmmaKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_f32_f16_wmma");
+static constexpr KernelCatalogRef kFlashAttentionF32F16WmmaSinksKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_f32_f16_wmma_sinks");
 static constexpr KernelCatalogRef kFlashAttentionF32F16WmmaPublishF16Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_f32_f16_wmma_publish_f16");
 static constexpr KernelCatalogRef kFlashAttentionDecodeSplitNextQ8Kernel =
@@ -138,6 +140,7 @@ static ValueId match_value(const DispatchMatchContext & context, const DispatchM
 }
 
 struct FlashAttentionMatch {
+    const Value *     sinks         = nullptr;
     const Value *     query         = nullptr;
     const Value *     key           = nullptr;
     const Value *     value         = nullptr;
@@ -184,7 +187,14 @@ static FlashAttentionMatch match_flash_attention_f32_f16(const Graph &       gra
                                                          const CommandPlan & plan,
                                                          const GraphNode *   node) {
     FlashAttentionMatch match;
-    if (node == nullptr || node->op != GGML_OP_FLASH_ATTN_EXT || node->inputs.size() != 4) {
+    if (node == nullptr) {
+        return match;
+    }
+    const bool is_flash        = node->op == GGML_OP_FLASH_ATTN_EXT;
+    const bool has_four_inputs = node->inputs.size() == 4;
+    const bool has_sinks       = node->inputs.size() == 5;
+    const bool supported_node  = is_flash && (has_four_inputs || has_sinks);
+    if (!supported_node) {
         return match;
     }
 
@@ -257,6 +267,20 @@ static FlashAttentionMatch match_flash_attention_f32_f16(const Graph &       gra
     }
     if (!mask_binding_is_alternate && !has_mask_layout(*mask, key_value_token_count)) {
         return {};
+    }
+
+    if (has_sinks) {
+        const Value * sinks = graph_value(graph, node->inputs[4]);
+        if (sinks == nullptr) {
+            return {};
+        }
+        const bool scalar_per_head = sinks->ne[0] == query_head_count && sinks->ne[1] == 1 &&
+                                     sinks->ne[2] == 1 && sinks->ne[3] == 1;
+        const bool supported_sinks = sinks->type == GGML_TYPE_F32 && sinks->contiguous && scalar_per_head;
+        if (!supported_sinks) {
+            return {};
+        }
+        match.sinks = sinks;
     }
 
     match.query                 = query;
@@ -490,7 +514,8 @@ static bool match_flash_attention_gate_dispatch(const DispatchMatchContext & con
     }
 
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(kFlashAttentionF32F16WmmaKernel);
+    dispatch.kernel = make_kernel_specialization(match.sinks != nullptr ? kFlashAttentionF32F16WmmaSinksKernel :
+                                                                        kFlashAttentionF32F16WmmaKernel);
     if (!use_exact_prefill_workload(match.query_token_count, match.key_value_token_count)) {
         dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
     }
@@ -506,6 +531,9 @@ static bool match_flash_attention_gate_dispatch(const DispatchMatchContext & con
     dispatch.bindings.push_back({ match.mask_binding_value, 0, match.mask_binding_bytes });
     dispatch.bindings.push_back({ raw_gate->id, 0, raw_gate->byte_count });
     dispatch.bindings.push_back({ output->id, 0, output->byte_count });
+    if (match.sinks != nullptr) {
+        dispatch.bindings.push_back({ match.sinks->id, 0, match.sinks->byte_count });
+    }
     dispatch_match.dispatches.push_back(std::move(dispatch));
     return true;
 }
@@ -525,10 +553,15 @@ static bool match_flash_attention_f32_f16_dispatch(const DispatchMatchContext & 
         common_select_activation_publication_plan(context, *match.output, capabilities);
     const CommonActivationPublicationDemand * demand =
         publication_plan.find(CommonActivationPublicationFormat::F16Row);
-    const bool publish_f16 = demand != nullptr;
+    const bool has_publication_demand = demand != nullptr;
+    const bool has_sinks              = match.sinks != nullptr;
+    const bool publish_f16            = has_publication_demand && !has_sinks;
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(publish_f16 ? kFlashAttentionF32F16WmmaPublishF16Kernel :
                                                                kFlashAttentionF32F16WmmaKernel);
+    if (has_sinks) {
+        dispatch.kernel = make_kernel_specialization(kFlashAttentionF32F16WmmaSinksKernel);
+    }
     if (!use_exact_prefill_workload(match.query_token_count, match.key_value_token_count)) {
         dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
     }
@@ -543,6 +576,9 @@ static bool match_flash_attention_f32_f16_dispatch(const DispatchMatchContext & 
     dispatch.bindings.push_back({ match.mask_binding_value, 0, match.mask_binding_bytes });
     dispatch.bindings.push_back({ match.query->id, 0, match.query->byte_count });
     dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
+    if (has_sinks) {
+        dispatch.bindings.push_back({ match.sinks->id, 0, match.sinks->byte_count });
+    }
 
     if (publish_f16) {
         constexpr const char * name = "common.flash_attention.f16";
