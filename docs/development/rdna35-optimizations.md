@@ -2,6 +2,31 @@
 
 The active implementation is `lichang.rdna35-prefill-quant-rope`. Qwen vision window batching, D64/D72/D80 vision attention, D128 language attention, D512 language attention, FP16/FP32 conversion, RMSNorm, activation quantization, and RoPE changes share this source tree. Earlier experimental worktrees are reference snapshots; changes should be developed and validated here.
 
+## BF16 fusion extension (2026-10-26)
+
+This extends commit `71d2d68e3199810e094529a3bd04134f9afd7921` in the same implementation. The conversion/bias, SwiGLU/GEGLU conversion, biased gated FFN, and GEMM input/output clamp fusions now accept BF16 as well as FP16. Buffers use the original weight/compute type; BF16 GEMMs retain FP32 accumulation and BF16 output. Bias, activation and clamp arithmetic remain FP32. The change removes intermediate FP32 memory traffic and kernel launches; it does not change weights or globally lower activation precision.
+
+| Model / board | Total prompt positions | Before HTTP TTFT | With BF16 fusion | Saving |
+| --- | ---: | ---: | ---: | ---: |
+| Qwen3-Omni-30B-A3B / Halo40 | 1322 | 1083.64 ms | 1055.22 ms | 28.42 ms / 2.62% |
+| Gemma-4-31B OpenNav / Halo05 | 473 | 1832.50 ms | 1815.22 ms | 17.28 ms / 0.94% |
+
+Both model profile comparisons run on Halo40. Each timing variant has 20 measured one-token requests across two server starts in ABBA order, with five warmups per start. The baseline already includes the preceding FP16 fusion and all earlier branch optimizations. Tests retain checkpoints (`--ctx-checkpoints 32`), F16 KV, Q4_K_M language weights, batch 2048, microbatch 512, context 4096, and `ROCBLAS_USE_HIPBLASLT=1`. Both projectors are BF16. Qwen uses the saved 1024x800 image (3200 vision patches); OpenNav uses its saved 640x480 image (1170 patches). Prompt positions include image embeddings. Prompt reuse is disabled and loading time is excluded. No new vLLM run or full VLM-suite sweep is implied.
+
+Qwen3-Omni's plain-GELU vision FFN benefits from projection conversion plus bias. It does not match the larger biased gated-FFN pattern. Gemma-4 OpenNav has no projection biases and benefits from BF16 clamp/conversion fusion. Other compatible BF16 SwiGLU/GEGLU and biased gated FFNs are covered by backend tests, without a separate model-level speedup claim.
+
+Eligibility remains structural: RDNA3.5, the existing default BLAS route, contiguous 2D tensors, at least 32 rows, and the existing precision, environment, consumer and alias checks. A longer gated FFN must have one common weight type across gate/up/down; mixed FP16/BF16 projections fall back. Scratch remains 16 bits per value, and full-FFN scratch has the same lifetime/size tradeoff as the FP16 implementation.
+
+Validation passes 169 focused backend cases across FP16 and BF16, including dispatch boundaries, strided inputs, extra consumers, forced FP32 precision and mixed weight types. A direct test compares against separate existing FP32 operations and conversion kernels: 756 cases / 46,867,248 values match bitwise (including the actual Gemma clamp bounds of +/-FLT_MAX), with no differing NaN payloads and intact output canaries. A BF16-only register compiler barrier before output clamping preserves signaling-NaN behavior across the removed memory boundary. All four 32-token generation checks per target model retain identical tokens/text. Qwen also retains identical chosen/top probability records. Gemma probability records vary within a server process for both baseline and candidate; all 24 checked Gemma responses retain the same 32 tokens. The baseline and production library match every returned probability record request-for-request in the ten-request repeat sequence, confirming pre-existing variation. See the repeated-generation analysis in the report; this is targeted validation, not a full model-quality evaluation. The changed HIP units compile for gfx1100 and gfx942; runtime validation is on gfx1151. NVIDIA compilation/runtime was not tested.
+
+Qwen3-Omni's diagnostic vision GPU duration sum changes from 322.02 to 296.02 ms; vision launches change from 952 to 842. Profile instrumentation affects these timings, so they are separate from HTTP TTFT.
+
+Gemma-4 OpenNav's diagnostic vision GPU duration sum changes from 329.11 to 274.24 ms; vision launches change from 1432 to 1052. Profile instrumentation affects these timings, so they are separate from HTTP TTFT.
+
+Evidence: `rdna35_bf16_fusion_20261026/REPORT.md`, `summary.json`, `profiles.json`, immutable libraries/source snapshots, and per-run requests/results. The ordinary `build-rdna35-gfx1151` build includes the extension.
+
+The subsequent full VLM refresh validates this build on 11 unique llama.cpp workloads covering 14 comparison rows: 220 timed requests, 22 server starts, and 22 passing image sanity checks, with checkpoints 32, zero prompt-cache reuse, and unchanged saved requests. The mean llama.cpp/gfx11-vLLM TTFT ratio is 1.373x, versus 1.443x in the October 16 report. This comparison includes all branch optimizations and retains the saved September 30 gfx11 vLLM baseline, board/date differences, and existing backend input/quantization differences; it does not isolate the BF16 gain above. Full results and validation are in `/proj/gdba/lichang/regression_results/rdna35_vlm_sweep_20261026/comparison.md`.
+
 ## Vision bias and gated FFN fusion (2026-10-26)
 
 This change is based on `e01951930c93189bd377d80e5da5688dfcad931a`. It extends the existing FP16 BLAS and producer-fusion paths. It removes FP32 intermediate memory traffic while retaining FP32 bias/activation arithmetic, existing GEMM shapes, and the prior FP16 rounding boundaries.

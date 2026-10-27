@@ -16,9 +16,12 @@ to_bf16_cuda_t ggml_get_to_bf16_cuda(ggml_type type);
 
 to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type);
 
-void ggml_cuda_convert_clamp_f16_f32(const half * x, float * y, int64_t k, float min, float max, cudaStream_t stream);
-void ggml_cuda_convert_clamp_f32_f16(const float * x, half * y, int64_t k, float min, float max, cudaStream_t stream);
-void ggml_cuda_convert_bias_f16_f32(const half * x, const float * bias, float * y, int64_t ncols, int64_t nrows, cudaStream_t stream);
+template <typename T>
+void ggml_cuda_convert_clamp_to_f32(const T * x, float * y, int64_t k, float min, float max, cudaStream_t stream);
+template <typename T>
+void ggml_cuda_convert_clamp_from_f32(const float * x, T * y, int64_t k, float min, float max, cudaStream_t stream);
+template <typename T>
+void ggml_cuda_convert_bias_to_f32(const T * x, const float * bias, float * y, int64_t ncols, int64_t nrows, cudaStream_t stream);
 
 // TODO more general support for non-contiguous inputs
 

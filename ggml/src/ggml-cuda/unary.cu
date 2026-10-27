@@ -349,7 +349,8 @@ void ggml_cuda_op_reglu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_op_unary_gated<op_relu>(ctx, dst);
 }
 
-void ggml_cuda_glu_f16(const float * x, const float * gate, half * dst, int64_t n, ggml_glu_op op, cudaStream_t stream) {
+template <typename T>
+void ggml_cuda_glu_to_16bit(const float * x, const float * gate, T * dst, int64_t n, ggml_glu_op op, cudaStream_t stream) {
     switch (op) {
         case GGML_GLU_OP_GEGLU:
             unary_gated_cuda<op_gelu>(x, gate, dst, n, n, n, n, stream);
@@ -362,9 +363,9 @@ void ggml_cuda_glu_f16(const float * x, const float * gate, half * dst, int64_t 
     }
 }
 
-template <float (*op)(float)>
-static __global__ void glu_bias_f16(const half * x, const half * gate, const float * x_bias, const float * gate_bias,
-        half * dst, int64_t ncols, int64_t nrows) {
+template <float (*op)(float), typename T>
+static __global__ void glu_bias_to_16bit(const T * x, const T * gate, const float * x_bias, const float * gate_bias,
+        T * dst, int64_t ncols, int64_t nrows) {
     const int64_t col = int64_t(blockIdx.x)*blockDim.x + threadIdx.x;
     if (col >= ncols) {
         return;
@@ -373,8 +374,8 @@ static __global__ void glu_bias_f16(const half * x, const half * gate, const flo
     const float bg = gate_bias[col];
     for (int64_t row = blockIdx.y; row < nrows; row += gridDim.y) {
         const int64_t i = row*ncols + col;
-        float a = __half2float(x[i]) + bx;
-        float b = __half2float(gate[i]) + bg;
+        float a = ggml_cuda_cast<float>(x[i]) + bx;
+        float b = ggml_cuda_cast<float>(gate[i]) + bg;
 #if defined(GGML_USE_HIP)
         // Retain the FP32 bias rounding before the activation.
         asm volatile("" : "+v"(a), "+v"(b));
@@ -387,24 +388,30 @@ static __global__ void glu_bias_f16(const half * x, const half * gate, const flo
 #else
         asm volatile("" : "+f"(v));
 #endif
-        dst[i] = ggml_cuda_cast<half>(v);
+        dst[i] = ggml_cuda_cast<T>(v);
     }
 }
 
-void ggml_cuda_glu_bias_f16(const half * x, const half * gate, const float * x_bias, const float * gate_bias,
-        half * dst, int64_t ncols, int64_t nrows, ggml_glu_op op, cudaStream_t stream) {
+template <typename T>
+void ggml_cuda_glu_bias_to_16bit(const T * x, const T * gate, const float * x_bias, const float * gate_bias,
+        T * dst, int64_t ncols, int64_t nrows, ggml_glu_op op, cudaStream_t stream) {
     const dim3 blocks((ncols + CUDA_GLU_BLOCK_SIZE - 1)/CUDA_GLU_BLOCK_SIZE, std::min(nrows, int64_t(65535)));
     switch (op) {
         case GGML_GLU_OP_GEGLU:
-            glu_bias_f16<op_gelu><<<blocks, CUDA_GLU_BLOCK_SIZE, 0, stream>>>(x, gate, x_bias, gate_bias, dst, ncols, nrows);
+            glu_bias_to_16bit<op_gelu><<<blocks, CUDA_GLU_BLOCK_SIZE, 0, stream>>>(x, gate, x_bias, gate_bias, dst, ncols, nrows);
             break;
         case GGML_GLU_OP_SWIGLU:
-            glu_bias_f16<op_silu><<<blocks, CUDA_GLU_BLOCK_SIZE, 0, stream>>>(x, gate, x_bias, gate_bias, dst, ncols, nrows);
+            glu_bias_to_16bit<op_silu><<<blocks, CUDA_GLU_BLOCK_SIZE, 0, stream>>>(x, gate, x_bias, gate_bias, dst, ncols, nrows);
             break;
         default:
             GGML_ABORT("unsupported GLU bias operation");
     }
 }
+
+template void ggml_cuda_glu_to_16bit<half>(const float *, const float *, half *, int64_t, ggml_glu_op, cudaStream_t);
+template void ggml_cuda_glu_bias_to_16bit<half>(const half *, const half *, const float *, const float *, half *, int64_t, int64_t, ggml_glu_op, cudaStream_t);
+template void ggml_cuda_glu_to_16bit<nv_bfloat16>(const float *, const float *, nv_bfloat16 *, int64_t, ggml_glu_op, cudaStream_t);
+template void ggml_cuda_glu_bias_to_16bit<nv_bfloat16>(const nv_bfloat16 *, const nv_bfloat16 *, const float *, const float *, nv_bfloat16 *, int64_t, int64_t, ggml_glu_op, cudaStream_t);
 
 void ggml_cuda_op_geglu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_op_unary_gated<op_gelu>(ctx, dst);
