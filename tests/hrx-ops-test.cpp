@@ -2950,6 +2950,62 @@ static void run_router_common_matmul_case(int64_t expert_count, int64_t token_co
     ggml_backend_free(backend);
 }
 
+// Exercise the generic expert decoder independently of dense codebook matmul.
+static void run_quant_expert_reference_case(ggml_type type, int64_t tokens, int64_t input_routes) {
+    constexpr int64_t k = 256, m = 128, expert_count = 8, routes = 6;
+    ggml_backend_t backend = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+    ggml_init_params params = {};
+    params.mem_size = 4 * 1024 * 1024;
+    params.no_alloc = true;
+    ggml_context * ctx = ggml_init(params);
+    ggml_tensor * ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, routes, tokens);
+    ggml_tensor * input = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, k, input_routes, tokens);
+    ggml_tensor * experts = ggml_new_tensor_3d(ctx, type, k, m, expert_count);
+    ggml_tensor * output = ggml_mul_mat_id(ctx, experts, input, ids);
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, output);
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    REQUIRE(buffer != nullptr);
+    const auto weights = make_quantized_rows(type, k, m * expert_count, 37);
+    // One-hot activations isolate decoding from FP16 accumulation error.
+    std::vector<float> inputs(k * input_routes * tokens, 0.0f);
+    for (int64_t token = 0; token < tokens; ++token) {
+        for (int64_t route = 0; route < input_routes; ++route) {
+            inputs[(token * input_routes + route) * k + (token * 13 + route * 17) % k] = 1.0f;
+        }
+    }
+    std::vector<int32_t> route_ids(routes * tokens);
+    std::vector<float> expected(m * routes * tokens);
+    std::vector<float> row(k);
+    const auto * traits = ggml_get_type_traits(type);
+    const size_t row_bytes = ggml_row_size(type, k);
+    for (int64_t token = 0; token < tokens; ++token) {
+        for (int64_t route = 0; route < routes; ++route) {
+            const int32_t expert = (token * 3 + route * 5) % expert_count;
+            route_ids[token * routes + route] = expert;
+            const float * activation = inputs.data() + (token * input_routes + route % input_routes) * k;
+            for (int64_t channel = 0; channel < m; ++channel) {
+                traits->to_float(weights.data() + (expert * m + channel) * row_bytes, row.data(), k);
+                float sum = 0.0f;
+                for (int64_t i = 0; i < k; ++i) {
+                    sum += row[i] * activation[i];
+                }
+                expected[(token * routes + route) * m + channel] = sum;
+            }
+        }
+    }
+    ggml_backend_tensor_set(ids, route_ids.data(), 0, route_ids.size() * sizeof(int32_t));
+    ggml_backend_tensor_set(input, inputs.data(), 0, inputs.size() * sizeof(float));
+    ggml_backend_tensor_set(experts, weights.data(), 0, weights.size());
+    REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(backend);
+    require_close(get_f32_tensor(backend, output), expected, 1.0e-4f, 1.0e-3f);
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+    ggml_backend_free(backend);
+}
+
 static void run_external_strided_ids_case(int64_t input_routes, size_t offset) {
     constexpr int64_t experts_count = 256, routes = 6, tokens = 5, k = 256, m = 128;
     ggml_backend_t backend = ggml_backend_hrx_init(0);
@@ -6412,7 +6468,7 @@ static void register_basic_ops_cases(Suite & suite) {
     suite.device_case("scale_add_f32.cpu_reference.packed", [] { run_scale_add_f32_cpu_reference_case(false); });
     suite.device_case("scale_add_f32.cpu_reference.strided", [] { run_scale_add_f32_cpu_reference_case(true); });
     for (const ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K, GGML_TYPE_Q8_0, GGML_TYPE_IQ4_XS, GGML_TYPE_F16,
-                                  GGML_TYPE_BF16, GGML_TYPE_F32 }) {
+                                  GGML_TYPE_BF16, GGML_TYPE_F32, GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ2_S, GGML_TYPE_IQ3_XXS }) {
         suite.device_case("get_rows_f32." + type_name(type), [type] { run_get_rows_f32_cpu_reference_case(type); });
     }
     suite.device_case("get_rows_f32.q1_0.rows2048", [] { run_get_rows_f32_cpu_reference_case(GGML_TYPE_Q1_0, 2048); });
@@ -6929,6 +6985,17 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
                           [token_count] { run_lfm_head_rope_cpu_reference_case(8, token_count, true); });
     }
     suite.device_case("attention_postprocess.cpu_reference", [] { run_attention_postprocess_cpu_reference_case(); });
+    for (const ggml_type type : { GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ2_S, GGML_TYPE_IQ3_XXS,
+                                  GGML_TYPE_IQ3_S, GGML_TYPE_IQ4_XS, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K,
+                                  GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_Q8_0 }) {
+        for (const int64_t tokens : { 1, 5, 64 }) {
+            for (const int64_t input_routes : { 1, 6 }) {
+                suite.device_case("quant_expert." + type_name(type) + ".tokens" + std::to_string(tokens) +
+                                      ".input_routes" + std::to_string(input_routes),
+                                  [type, tokens, input_routes] { run_quant_expert_reference_case(type, tokens, input_routes); });
+            }
+        }
+    }
     suite.device_case("routed_moe.q4_k.next_rmsnorm", [] { run_routed_moe_cpu_reference_case(GGML_TYPE_Q4_K, true); });
     suite.device_case("flash_attention.asymmetric", [] { run_asymmetric_flash_attention_cpu_reference_case(); });
     suite.device_case("routed_moe.q6_k", [] { run_routed_moe_cpu_reference_case(GGML_TYPE_Q6_K, false); });

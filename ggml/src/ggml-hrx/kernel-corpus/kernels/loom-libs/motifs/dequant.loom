@@ -1600,6 +1600,433 @@ func.def inline @ggml_iq2xs_global_f32_vector4(%grid: buffer, %weight: buffer, %
   func.return %result : vector<4xf32>
 }
 
+// Canonical iq2xxs_grid from ggml-common.h, split into exact FP32 halfwords.
+func.def inline @ggml_iq2xxs_grid_lookup_i32(%grid_index: i32, %word_index: i32) -> (i32) {
+  %c0_i32 = scalar.constant 0 : i32
+  %c1_i32 = scalar.constant 1 : i32
+  %c2_i32 = scalar.constant 2 : i32
+  %c3_i32 = scalar.constant 3 : i32
+  %c4_i32 = scalar.constant 4 : i32
+  %c5_i32 = scalar.constant 5 : i32
+  %c6_i32 = scalar.constant 6 : i32
+  %c7_i32 = scalar.constant 7 : i32
+  %c16_i32 = scalar.constant 16 : i32
+  %c31_i32 = scalar.constant 31 : i32
+  %chunk_i32 = scalar.shrui %grid_index, %c5_i32 : i32
+  %lane_i32 = scalar.andi %grid_index, %c31_i32 : i32
+  %codes = vector.from_elements %lane_i32 : vector<1xi32>
+  %is_chunk1 = scalar.cmpi eq, %chunk_i32, %c1_i32 : i32
+  %is_chunk2 = scalar.cmpi eq, %chunk_i32, %c2_i32 : i32
+  %is_chunk3 = scalar.cmpi eq, %chunk_i32, %c3_i32 : i32
+  %is_chunk4 = scalar.cmpi eq, %chunk_i32, %c4_i32 : i32
+  %is_chunk5 = scalar.cmpi eq, %chunk_i32, %c5_i32 : i32
+  %is_chunk6 = scalar.cmpi eq, %chunk_i32, %c6_i32 : i32
+  %is_chunk7 = scalar.cmpi eq, %chunk_i32, %c7_i32 : i32
+  %v2056 = scalar.constant 2056.0 : f32
+  %v2073 = scalar.constant 2073.0 : f32
+  %v2091 = scalar.constant 2091.0 : f32
+  %v6408 = scalar.constant 6408.0 : f32
+  %v6425 = scalar.constant 6425.0 : f32
+  %v6443 = scalar.constant 6443.0 : f32
+  %v11016 = scalar.constant 11016.0 : f32
+  %v11033 = scalar.constant 11033.0 : f32
+  %v11051 = scalar.constant 11051.0 : f32
+  %part0_0 = vector.from_elements %v2056, %v2091, %v6425, %v11016, %v11051, %v2073, %v6408, %v2056, %v2091, %v11016, %v11051, %v2073, %v6408, %v2056, %v11016, %v2073, %v6408, %v2056, %v2091, %v11051, %v2091, %v2073, %v6408, %v2056, %v6425, %v2056, %v6408, %v11016, %v2056, %v2091, %v2091, %v2091 : vector<32xf32>
+  %part0_1 = vector.from_elements %v2073, %v6408, %v2056, %v2073, %v6408, %v2056, %v2091, %v11016, %v2056, %v2073, %v6408, %v2056, %v6408, %v2056, %v2091, %v11016, %v2056, %v6443, %v11033, %v2056, %v2073, %v11033, %v2056, %v2056, %v6408, %v6408, %v2056, %v6425, %v11016, %v6408, %v11016, %v2073 : vector<32xf32>
+  %part0_2 = vector.from_elements %v6408, %v2056, %v2091, %v11016, %v6408, %v2056, %v2091, %v6408, %v2073, %v6408, %v2056, %v2073, %v2056, %v2056, %v6408, %v2056, %v6425, %v2056, %v11016, %v2056, %v2056, %v11051, %v2056, %v6408, %v6425, %v2056, %v11016, %v2056, %v6425, %v11033, %v2056, %v11016 : vector<32xf32>
+  %part0_3 = vector.from_elements %v2091, %v2056, %v6443, %v2073, %v6408, %v2056, %v2056, %v2073, %v2056, %v6425, %v2056, %v2073, %v2056, %v2091, %v11051, %v6408, %v2073, %v2056, %v2091, %v11033, %v11016, %v2056, %v2091, %v2073, %v6408, %v2056, %v2056, %v6443, %v2056, %v2073, %v6408, %v2056 : vector<32xf32>
+  %part0_4 = vector.from_elements %v11016, %v2056, %v6408, %v6408, %v2073, %v6408, %v2056, %v11016, %v2073, %v6408, %v2056, %v11016, %v6443, %v2056, %v2073, %v6408, %v2056, %v2056, %v2056, %v2073, %v2056, %v6425, %v2073, %v2056, %v11016, %v6443, %v11016, %v2056, %v11016, %v2056, %v2056, %v11033 : vector<32xf32>
+  %part0_5 = vector.from_elements %v2091, %v6408, %v2056, %v2073, %v6408, %v2056, %v2056, %v6425, %v2056, %v11016, %v2073, %v2091, %v6425, %v2056, %v2056, %v11016, %v2073, %v11033, %v2056, %v2056, %v11016, %v6408, %v2091, %v6408, %v2073, %v2056, %v2091, %v11051, %v2073, %v6408, %v2056, %v2073 : vector<32xf32>
+  %part0_6 = vector.from_elements %v11033, %v6408, %v2056, %v11016, %v6408, %v2056, %v2056, %v11016, %v2056, %v6425, %v11016, %v2056, %v2056, %v6425, %v2056, %v2091, %v6408, %v2091, %v2056, %v2091, %v11051, %v2073, %v2091, %v6408, %v11016, %v2056, %v2073, %v2073, %v6408, %v2056, %v6425, %v2056 : vector<32xf32>
+  %part0_7 = vector.from_elements %v2056, %v2056, %v6443, %v6408, %v11033, %v2056, %v2056, %v2091, %v6408, %v2073, %v6408, %v2056, %v6408, %v2056, %v2073, %v6443, %v2056, %v6425, %v2056, %v2091, %v6408, %v2073, %v2073, %v2056, %v2091, %v2056, %v6425, %v11033, %v2056, %v11016, %v2056, %v6408 : vector<32xf32>
+  %selected0_1 = scf.select %is_chunk1, %part0_1, %part0_0 : vector<32xf32>
+  %selected0_2 = scf.select %is_chunk2, %part0_2, %selected0_1 : vector<32xf32>
+  %selected0_3 = scf.select %is_chunk3, %part0_3, %selected0_2 : vector<32xf32>
+  %selected0_4 = scf.select %is_chunk4, %part0_4, %selected0_3 : vector<32xf32>
+  %selected0_5 = scf.select %is_chunk5, %part0_5, %selected0_4 : vector<32xf32>
+  %selected0_6 = scf.select %is_chunk6, %part0_6, %selected0_5 : vector<32xf32>
+  %selected0_7 = scf.select %is_chunk7, %part0_7, %selected0_6 : vector<32xf32>
+  %part1_0 = vector.from_elements %v2056, %v2056, %v2056, %v2056, %v2056, %v2073, %v2073, %v2091, %v2091, %v2091, %v2091, %v6408, %v6408, %v6425, %v6425, %v6443, %v6443, %v11016, %v11016, %v11016, %v11051, %v2056, %v2056, %v2073, %v2073, %v6408, %v11016, %v11033, %v2056, %v2056, %v2091, %v11016 : vector<32xf32>
+  %part1_1 = vector.from_elements %v2056, %v2056, %v2073, %v2091, %v2091, %v6408, %v6408, %v6408, %v6443, %v11016, %v11016, %v11033, %v11051, %v2056, %v2056, %v2056, %v2091, %v6408, %v6443, %v11016, %v11033, %v2056, %v2073, %v6408, %v11016, %v11051, %v2056, %v2056, %v2056, %v2073, %v2091, %v6408 : vector<32xf32>
+  %part1_2 = vector.from_elements %v6408, %v6425, %v6425, %v11016, %v2056, %v6408, %v2056, %v2073, %v2056, %v2056, %v2073, %v2091, %v6408, %v6443, %v11016, %v11033, %v11033, %v2056, %v2056, %v2091, %v6425, %v6425, %v11016, %v2091, %v6408, %v2056, %v2056, %v2091, %v2091, %v6408, %v11016, %v2073 : vector<32xf32>
+  %part1_3 = vector.from_elements %v6443, %v2056, %v2073, %v2056, %v2056, %v2073, %v6408, %v11016, %v2056, %v2056, %v11051, %v6425, %v2056, %v2056, %v2056, %v6408, %v6443, %v11016, %v11016, %v2091, %v6408, %v2056, %v2056, %v2056, %v2056, %v2073, %v6408, %v6425, %v2056, %v6408, %v6443, %v11033 : vector<32xf32>
+  %part1_4 = vector.from_elements %v2056, %v2091, %v11033, %v6408, %v2056, %v2056, %v2073, %v2073, %v2091, %v2091, %v6408, %v6408, %v6425, %v6443, %v11016, %v11016, %v11033, %v2056, %v2091, %v6443, %v11016, %v11016, %v2056, %v2073, %v6408, %v6425, %v6443, %v2056, %v2056, %v2091, %v11016, %v11033 : vector<32xf32>
+  %part1_5 = vector.from_elements %v2073, %v2091, %v2056, %v2056, %v2056, %v2073, %v6408, %v6408, %v2056, %v6425, %v6443, %v11016, %v6408, %v11033, %v2056, %v2056, %v2073, %v2073, %v2091, %v11016, %v11016, %v2056, %v6408, %v11051, %v11033, %v11033, %v11033, %v2056, %v2056, %v6425, %v2056, %v2073 : vector<32xf32>
+  %part1_6 = vector.from_elements %v2073, %v6443, %v6408, %v2056, %v2056, %v2073, %v6408, %v6443, %v2056, %v6425, %v2073, %v6443, %v2056, %v2056, %v2073, %v2073, %v11016, %v6408, %v2056, %v2056, %v2056, %v6408, %v11016, %v2056, %v2073, %v6408, %v2073, %v2056, %v2056, %v2073, %v2073, %v6408 : vector<32xf32>
+  %part1_7 = vector.from_elements %v6443, %v2056, %v6408, %v11033, %v2056, %v6408, %v6443, %v2056, %v2056, %v2073, %v2056, %v2073, %v2091, %v6408, %v11051, %v2073, %v11016, %v6408, %v2056, %v2091, %v6408, %v6425, %v11016, %v2091, %v2056, %v6425, %v11016, %v2056, %v2056, %v2073, %v6425, %v2056 : vector<32xf32>
+  %selected1_1 = scf.select %is_chunk1, %part1_1, %part1_0 : vector<32xf32>
+  %selected1_2 = scf.select %is_chunk2, %part1_2, %selected1_1 : vector<32xf32>
+  %selected1_3 = scf.select %is_chunk3, %part1_3, %selected1_2 : vector<32xf32>
+  %selected1_4 = scf.select %is_chunk4, %part1_4, %selected1_3 : vector<32xf32>
+  %selected1_5 = scf.select %is_chunk5, %part1_5, %selected1_4 : vector<32xf32>
+  %selected1_6 = scf.select %is_chunk6, %part1_6, %selected1_5 : vector<32xf32>
+  %selected1_7 = scf.select %is_chunk7, %part1_7, %selected1_6 : vector<32xf32>
+  %part2_0 = vector.from_elements %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2091, %v2091, %v2091, %v2091 : vector<32xf32>
+  %part2_1 = vector.from_elements %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6443, %v6443, %v6443, %v6443, %v6443, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016 : vector<32xf32>
+  %part2_2 = vector.from_elements %v11016, %v11016, %v11016, %v11016, %v11033, %v11033, %v11051, %v11051, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2091, %v2091, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6425 : vector<32xf32>
+  %part2_3 = vector.from_elements %v6425, %v6443, %v6443, %v11016, %v11016, %v11016, %v11016, %v11016, %v11033, %v11033, %v11033, %v11051, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2073, %v2073, %v2091, %v2091, %v6408, %v6408, %v6408, %v6408, %v6408, %v6425, %v6425, %v6425, %v6443 : vector<32xf32>
+  %part2_4 = vector.from_elements %v11016, %v11016, %v11016, %v11051, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2073, %v2073, %v2073, %v2073, %v2073, %v2091, %v2091, %v2091, %v2091, %v2091, %v6408, %v6408, %v6408, %v6408, %v6408 : vector<32xf32>
+  %part2_5 = vector.from_elements %v6425, %v6425, %v6443, %v11016, %v11016, %v11016, %v11016, %v11016, %v11033, %v11033, %v11033, %v11033, %v11051, %v11051, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2073, %v2073, %v2073, %v2091, %v6408, %v6408, %v6425, %v6443, %v6443, %v11016, %v11016 : vector<32xf32>
+  %part2_6 = vector.from_elements %v11016, %v11016, %v11033, %v11051, %v2056, %v2056, %v2056, %v2056, %v2073, %v2073, %v2091, %v2091, %v6408, %v6408, %v6425, %v6425, %v6425, %v11016, %v2056, %v2056, %v2056, %v2056, %v2056, %v2073, %v2073, %v2073, %v2091, %v6408, %v6408, %v6408, %v6408, %v6408 : vector<32xf32>
+  %part2_7 = vector.from_elements %v6408, %v6425, %v6425, %v6425, %v6443, %v6443, %v6443, %v11016, %v11033, %v11051, %v2056, %v2056, %v2056, %v2056, %v2056, %v2073, %v2073, %v2091, %v6408, %v6408, %v6408, %v6425, %v11016, %v11033, %v2056, %v2056, %v2056, %v2073, %v2091, %v6408, %v11016, %v11033 : vector<32xf32>
+  %selected2_1 = scf.select %is_chunk1, %part2_1, %part2_0 : vector<32xf32>
+  %selected2_2 = scf.select %is_chunk2, %part2_2, %selected2_1 : vector<32xf32>
+  %selected2_3 = scf.select %is_chunk3, %part2_3, %selected2_2 : vector<32xf32>
+  %selected2_4 = scf.select %is_chunk4, %part2_4, %selected2_3 : vector<32xf32>
+  %selected2_5 = scf.select %is_chunk5, %part2_5, %selected2_4 : vector<32xf32>
+  %selected2_6 = scf.select %is_chunk6, %part2_6, %selected2_5 : vector<32xf32>
+  %selected2_7 = scf.select %is_chunk7, %part2_7, %selected2_6 : vector<32xf32>
+  %part3_0 = vector.from_elements %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056 : vector<32xf32>
+  %part3_1 = vector.from_elements %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056 : vector<32xf32>
+  %part3_2 = vector.from_elements %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073 : vector<32xf32>
+  %part3_3 = vector.from_elements %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091 : vector<32xf32>
+  %part3_4 = vector.from_elements %v2091, %v2091, %v2091, %v2091, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408 : vector<32xf32>
+  %part3_5 = vector.from_elements %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425 : vector<32xf32>
+  %part3_6 = vector.from_elements %v6425, %v6425, %v6425, %v6425, %v6443, %v6443, %v6443, %v6443, %v6443, %v6443, %v6443, %v6443, %v6443, %v6443, %v6443, %v6443, %v6443, %v6443, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016 : vector<32xf32>
+  %part3_7 = vector.from_elements %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11033, %v11033, %v11033, %v11033, %v11033, %v11033, %v11033, %v11033, %v11033, %v11033, %v11033, %v11033, %v11033, %v11033, %v11051, %v11051, %v11051, %v11051, %v11051, %v11051, %v11051, %v11051 : vector<32xf32>
+  %selected3_1 = scf.select %is_chunk1, %part3_1, %part3_0 : vector<32xf32>
+  %selected3_2 = scf.select %is_chunk2, %part3_2, %selected3_1 : vector<32xf32>
+  %selected3_3 = scf.select %is_chunk3, %part3_3, %selected3_2 : vector<32xf32>
+  %selected3_4 = scf.select %is_chunk4, %part3_4, %selected3_3 : vector<32xf32>
+  %selected3_5 = scf.select %is_chunk5, %part3_5, %selected3_4 : vector<32xf32>
+  %selected3_6 = scf.select %is_chunk6, %part3_6, %selected3_5 : vector<32xf32>
+  %selected3_7 = scf.select %is_chunk7, %part3_7, %selected3_6 : vector<32xf32>
+  %use_word1 = scalar.cmpi eq, %word_index, %c1_i32 : i32
+  %selected_low = scf.select %use_word1, %selected2_7, %selected0_7 : vector<32xf32>
+  %selected_high = scf.select %use_word1, %selected3_7, %selected1_7 : vector<32xf32>
+  %low_values = vector.table.lookup %selected_low[%codes] : vector<32xf32>, vector<1xi32> -> vector<1xf32>
+  %low_f32 = vector.extract %low_values[0] : vector<1xf32> -> f32
+  %low = scalar.fptoui %low_f32 : f32 to i32
+  %high_values = vector.table.lookup %selected_high[%codes] : vector<32xf32>, vector<1xi32> -> vector<1xf32>
+  %high_f32 = vector.extract %high_values[0] : vector<1xf32> -> f32
+  %high = scalar.fptoui %high_f32 : f32 to i32
+  %high_shifted = scalar.shli %high, %c16_i32 : i32
+  %word = scalar.ori %low, %high_shifted : i32
+  func.return %word : i32
+}
+
+func.def inline @ggml_iq2xxs_f32_vector4(%weight: buffer, %row_byte_base: offset, %iq2_block: index, %iq2_group: index, %packet: index) -> (vector<4xf32>) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c0_i32 = scalar.constant 0 : i32
+  %c1_i32 = scalar.constant 1 : i32
+  %c2_i32 = scalar.constant 2 : i32
+  %c4_i32 = scalar.constant 4 : i32
+  %c7_i32 = scalar.constant 7 : i32
+  %c8_i32 = scalar.constant 8 : i32
+  %c16_i32 = scalar.constant 16 : i32
+  %c24_i32 = scalar.constant 24 : i32
+  %c28_i32 = scalar.constant 28 : i32
+  %c32_i32 = scalar.constant 32 : i32
+  %c64_i32 = scalar.constant 64 : i32
+  %c127_i32 = scalar.constant 127 : i32
+  %c128_i32 = scalar.constant 128 : i32
+  %c255_i32 = scalar.constant 255 : i32
+  %c05_f32 = scalar.constant 0.5 : f32
+  %c025_f32 = scalar.constant 0.25 : f32
+  %block_bytes = index.constant 66 : offset
+  %qs_offset = index.constant 2 : offset
+  %bounded_group = index.assume %iq2_group [range(%iq2_group, 0, 7)] : index
+  %c8 = index.constant 8 : index
+  %bounded_packet = index.rem %packet, %c8 : index
+  %block_byte_add = index.scale %iq2_block, %block_bytes : index, offset -> offset
+  %block_byte_base = index.add %row_byte_base, %block_byte_add : offset
+  %qs_byte_base = index.add %block_byte_base, %qs_offset : offset
+  %d_view = buffer.view %weight[%block_byte_base] : buffer -> view<1xf16>
+  %qs_view = buffer.view %weight[%qs_byte_base] : buffer -> view<16xi32>
+  %metadata_index0 = index.mul %bounded_group, %c2 : index
+  %metadata_index = index.add %metadata_index0, %c1 : index
+  %indices_word = view.load %qs_view[%metadata_index0] : view<16xi32> -> i32
+  %metadata_word = view.load %qs_view[%metadata_index] : view<16xi32> -> i32
+  %l = index.div %bounded_packet, %c2 : index
+  %word_index = index.rem %bounded_packet, %c2 : index
+  %l_i32 = index.cast %l : index to i32
+  %grid_shift = scalar.muli %l_i32, %c8_i32 : i32
+  %grid_shifted = scalar.shrui %indices_word, %grid_shift : i32
+  %grid_index_i32 = scalar.andi %grid_shifted, %c255_i32 : i32
+  %word_index_i32 = index.cast %word_index : index to i32
+  %grid_word = func.call @ggml_iq2xxs_grid_lookup_i32(%grid_index_i32, %word_index_i32) : (i32, i32) -> (i32)
+  %sign_shift = scalar.muli %l_i32, %c7_i32 : i32
+  %sign_shifted = scalar.shrui %metadata_word, %sign_shift : i32
+  %sign_code = scalar.andi %sign_shifted, %c127_i32 : i32
+  %signs = func.call @ggml_iq2xs_sign_mask(%sign_code) : (i32) -> (i32)
+  %scale_code = scalar.shrui %metadata_word, %c28_i32 : i32
+  %scale_base = scalar.uitofp %scale_code : i32 to f32
+  %scale_plus = scalar.addf %scale_base, %c05_f32 : f32
+  %d_f16 = view.load %d_view[%c0] : view<1xf16> -> f16
+  %d = scalar.extf %d_f16 : f16 to f32
+  %scale_mul = scalar.mulf %d, %scale_plus : f32
+  %scale = scalar.mulf %scale_mul, %c025_f32 : f32
+  %uses_word1 = index.cmp eq, %word_index, %c1 : index
+  %sign_bit0 = scf.select %uses_word1, %c16_i32, %c1_i32 : i32
+  %sign_bit1 = scf.select %uses_word1, %c32_i32, %c2_i32 : i32
+  %sign_bit2 = scf.select %uses_word1, %c64_i32, %c4_i32 : i32
+  %sign_bit3 = scf.select %uses_word1, %c128_i32, %c8_i32 : i32
+  %v0 = func.call @ggml_iq2s_value_f32(%grid_word, %c0_i32, %signs, %sign_bit0, %scale) : (i32, i32, i32, i32, f32) -> (f32)
+  %v1 = func.call @ggml_iq2s_value_f32(%grid_word, %c8_i32, %signs, %sign_bit1, %scale) : (i32, i32, i32, i32, f32) -> (f32)
+  %v2 = func.call @ggml_iq2s_value_f32(%grid_word, %c16_i32, %signs, %sign_bit2, %scale) : (i32, i32, i32, i32, f32) -> (f32)
+  %v3 = func.call @ggml_iq2s_value_f32(%grid_word, %c24_i32, %signs, %sign_bit3, %scale) : (i32, i32, i32, i32, f32) -> (f32)
+  %result = vector.from_elements %v0, %v1, %v2, %v3 : vector<4xf32>
+  func.return %result : vector<4xf32>
+}
+
+// Canonical iq2xs_grid from ggml-common.h, split into exact FP32 halfwords.
+func.def inline @ggml_iq2xs_grid_lookup_i32(%grid_index: i32, %word_index: i32) -> (i32) {
+  %c0_i32 = scalar.constant 0 : i32
+  %c1_i32 = scalar.constant 1 : i32
+  %c2_i32 = scalar.constant 2 : i32
+  %c3_i32 = scalar.constant 3 : i32
+  %c4_i32 = scalar.constant 4 : i32
+  %c5_i32 = scalar.constant 5 : i32
+  %c6_i32 = scalar.constant 6 : i32
+  %c7_i32 = scalar.constant 7 : i32
+  %c8_i32 = scalar.constant 8 : i32
+  %c9_i32 = scalar.constant 9 : i32
+  %c10_i32 = scalar.constant 10 : i32
+  %c11_i32 = scalar.constant 11 : i32
+  %c12_i32 = scalar.constant 12 : i32
+  %c13_i32 = scalar.constant 13 : i32
+  %c14_i32 = scalar.constant 14 : i32
+  %c15_i32 = scalar.constant 15 : i32
+  %c16_i32 = scalar.constant 16 : i32
+  %c31_i32 = scalar.constant 31 : i32
+  %chunk_i32 = scalar.shrui %grid_index, %c5_i32 : i32
+  %lane_i32 = scalar.andi %grid_index, %c31_i32 : i32
+  %codes = vector.from_elements %lane_i32 : vector<1xi32>
+  %is_chunk1 = scalar.cmpi eq, %chunk_i32, %c1_i32 : i32
+  %is_chunk2 = scalar.cmpi eq, %chunk_i32, %c2_i32 : i32
+  %is_chunk3 = scalar.cmpi eq, %chunk_i32, %c3_i32 : i32
+  %is_chunk4 = scalar.cmpi eq, %chunk_i32, %c4_i32 : i32
+  %is_chunk5 = scalar.cmpi eq, %chunk_i32, %c5_i32 : i32
+  %is_chunk6 = scalar.cmpi eq, %chunk_i32, %c6_i32 : i32
+  %is_chunk7 = scalar.cmpi eq, %chunk_i32, %c7_i32 : i32
+  %is_chunk8 = scalar.cmpi eq, %chunk_i32, %c8_i32 : i32
+  %is_chunk9 = scalar.cmpi eq, %chunk_i32, %c9_i32 : i32
+  %is_chunk10 = scalar.cmpi eq, %chunk_i32, %c10_i32 : i32
+  %is_chunk11 = scalar.cmpi eq, %chunk_i32, %c11_i32 : i32
+  %is_chunk12 = scalar.cmpi eq, %chunk_i32, %c12_i32 : i32
+  %is_chunk13 = scalar.cmpi eq, %chunk_i32, %c13_i32 : i32
+  %is_chunk14 = scalar.cmpi eq, %chunk_i32, %c14_i32 : i32
+  %is_chunk15 = scalar.cmpi eq, %chunk_i32, %c15_i32 : i32
+  %v2056 = scalar.constant 2056.0 : f32
+  %v2073 = scalar.constant 2073.0 : f32
+  %v2091 = scalar.constant 2091.0 : f32
+  %v6408 = scalar.constant 6408.0 : f32
+  %v6425 = scalar.constant 6425.0 : f32
+  %v6443 = scalar.constant 6443.0 : f32
+  %v11016 = scalar.constant 11016.0 : f32
+  %v11033 = scalar.constant 11033.0 : f32
+  %v11051 = scalar.constant 11051.0 : f32
+  %part0_0 = vector.from_elements %v2056, %v2091, %v6425, %v11016, %v11051, %v2073, %v6408, %v6443, %v11033, %v2056, %v2091, %v6425, %v11016, %v2073, %v6408, %v6443, %v11033, %v2056, %v2091, %v6425, %v11016, %v2073, %v6408, %v2056, %v2091, %v6425, %v11016, %v2073, %v6408, %v11033, %v2056, %v2073 : vector<32xf32>
+  %part0_1 = vector.from_elements %v6408, %v6443, %v11033, %v2056, %v2091, %v6425, %v11016, %v11051, %v2073, %v6408, %v2056, %v2091, %v6425, %v11016, %v2073, %v6408, %v2056, %v11016, %v2073, %v6408, %v2056, %v2056, %v2091, %v6425, %v11016, %v2073, %v6408, %v2056, %v2073, %v6408, %v2056, %v6425 : vector<32xf32>
+  %part0_2 = vector.from_elements %v2056, %v11051, %v2073, %v6408, %v6443, %v11033, %v2056, %v2091, %v6425, %v11016, %v2073, %v6408, %v2056, %v2091, %v6425, %v11016, %v2073, %v6408, %v6443, %v2056, %v2073, %v6408, %v2056, %v2056, %v2091, %v6425, %v11016, %v2073, %v6408, %v2056, %v2073, %v6408 : vector<32xf32>
+  %part0_3 = vector.from_elements %v2056, %v2073, %v2056, %v2073, %v6408, %v2056, %v6443, %v2056, %v2091, %v6408, %v2056, %v2091, %v6425, %v11016, %v11051, %v2073, %v6408, %v2056, %v6425, %v2073, %v6408, %v2056, %v11016, %v2056, %v2056, %v11051, %v2073, %v6408, %v2056, %v2056, %v2073, %v11033 : vector<32xf32>
+  %part0_4 = vector.from_elements %v2056, %v2056, %v11016, %v6443, %v2056, %v2073, %v6408, %v6443, %v11033, %v2056, %v2091, %v6425, %v11016, %v2073, %v6408, %v2056, %v2091, %v6425, %v11016, %v2073, %v6408, %v2056, %v11051, %v2073, %v6408, %v2056, %v2056, %v2091, %v6425, %v11016, %v2073, %v6408 : vector<32xf32>
+  %part0_5 = vector.from_elements %v2056, %v2073, %v6408, %v2056, %v2056, %v6408, %v6443, %v2073, %v6408, %v6443, %v2056, %v2056, %v2056, %v2056, %v2091, %v6425, %v11016, %v2073, %v6408, %v2056, %v2073, %v6408, %v11033, %v2056, %v6408, %v2056, %v2073, %v6408, %v2056, %v2056, %v2056, %v6408 : vector<32xf32>
+  %part0_6 = vector.from_elements %v11033, %v2073, %v6408, %v2056, %v2091, %v2056, %v6408, %v6443, %v2056, %v6425, %v6443, %v2073, %v11033, %v2056, %v2091, %v6425, %v11016, %v11051, %v2073, %v6408, %v2056, %v2073, %v6408, %v2056, %v2056, %v2056, %v2073, %v6408, %v2056, %v2056, %v11016, %v6425 : vector<32xf32>
+  %part0_7 = vector.from_elements %v2056, %v2091, %v2056, %v11016, %v2073, %v6408, %v2056, %v11033, %v2056, %v2056, %v2073, %v2091, %v11033, %v2073, %v11051, %v6443, %v2056, %v11016, %v11051, %v2056, %v6425, %v11016, %v2091, %v11016, %v2056, %v11016, %v2056, %v2091, %v11016, %v11051, %v2073, %v6408 : vector<32xf32>
+  %part0_8 = vector.from_elements %v6443, %v11033, %v2056, %v2091, %v6425, %v11016, %v2073, %v6408, %v2056, %v2091, %v6425, %v11016, %v11051, %v2073, %v6408, %v2056, %v6425, %v2073, %v6408, %v2056, %v2056, %v2091, %v6425, %v11016, %v2073, %v6408, %v2056, %v2073, %v6408, %v2056, %v2056, %v6425 : vector<32xf32>
+  %part0_9 = vector.from_elements %v2091, %v2073, %v6408, %v2056, %v2091, %v11033, %v2056, %v2056, %v2091, %v6425, %v11016, %v2073, %v6408, %v11033, %v2056, %v2073, %v6408, %v2056, %v2056, %v6408, %v2073, %v6408, %v2056, %v6408, %v2056, %v11051, %v2056, %v11051, %v6408, %v2056, %v2073, %v6408 : vector<32xf32>
+  %part0_10 = vector.from_elements %v2056, %v2056, %v6425, %v6408, %v2091, %v2056, %v2073, %v6408, %v2056, %v11033, %v6408, %v2056, %v2091, %v6425, %v11016, %v2073, %v6408, %v2056, %v11016, %v2073, %v6408, %v2056, %v2056, %v2073, %v6408, %v2056, %v6425, %v2056, %v2091, %v2056, %v6408, %v11051 : vector<32xf32>
+  %part0_11 = vector.from_elements %v2073, %v6408, %v2056, %v2073, %v2056, %v2056, %v2073, %v2073, %v2056, %v11016, %v2056, %v11016, %v2073, %v11016, %v2073, %v2056, %v6408, %v2073, %v2056, %v11033, %v11051, %v2056, %v2091, %v6425, %v2073, %v6408, %v2056, %v2056, %v6408, %v2091, %v6443, %v11033 : vector<32xf32>
+  %part0_12 = vector.from_elements %v2056, %v6408, %v11051, %v2091, %v2056, %v6443, %v2056, %v2056, %v6425, %v6408, %v2073, %v11051, %v6425, %v6443, %v6408, %v2091, %v2056, %v2091, %v6425, %v11016, %v2073, %v6408, %v2056, %v11051, %v2073, %v6408, %v2056, %v2056, %v2091, %v11016, %v11051, %v2073 : vector<32xf32>
+  %part0_13 = vector.from_elements %v6408, %v6443, %v2056, %v2056, %v2073, %v11033, %v2056, %v2056, %v2056, %v2091, %v2056, %v11016, %v2073, %v6408, %v2056, %v2091, %v6425, %v2056, %v2056, %v11033, %v2056, %v6408, %v6425, %v11016, %v11051, %v2056, %v11016, %v6425, %v11051, %v2056, %v2091, %v11016 : vector<32xf32>
+  %part0_14 = vector.from_elements %v6443, %v2091, %v2056, %v11016, %v6443, %v11016, %v2073, %v6408, %v2056, %v2056, %v6443, %v6408, %v2056, %v2091, %v6408, %v6443, %v11033, %v2056, %v6425, %v6408, %v2056, %v11016, %v11033, %v2056, %v2091, %v2073, %v2073, %v6443, %v11033, %v6425, %v2056, %v2056 : vector<32xf32>
+  %part0_15 = vector.from_elements %v2091, %v11016, %v11051, %v2056, %v11051, %v2056, %v2073, %v11033, %v6443, %v2056, %v2091, %v11016, %v11051, %v2056, %v2056, %v2056, %v6425, %v6425, %v11016, %v11051, %v2056, %v2091, %v11016, %v2056, %v11016, %v6408, %v6408, %v6443, %v11016, %v11051, %v2073, %v11051 : vector<32xf32>
+  %selected0_1 = scf.select %is_chunk1, %part0_1, %part0_0 : vector<32xf32>
+  %selected0_2 = scf.select %is_chunk2, %part0_2, %selected0_1 : vector<32xf32>
+  %selected0_3 = scf.select %is_chunk3, %part0_3, %selected0_2 : vector<32xf32>
+  %selected0_4 = scf.select %is_chunk4, %part0_4, %selected0_3 : vector<32xf32>
+  %selected0_5 = scf.select %is_chunk5, %part0_5, %selected0_4 : vector<32xf32>
+  %selected0_6 = scf.select %is_chunk6, %part0_6, %selected0_5 : vector<32xf32>
+  %selected0_7 = scf.select %is_chunk7, %part0_7, %selected0_6 : vector<32xf32>
+  %selected0_8 = scf.select %is_chunk8, %part0_8, %selected0_7 : vector<32xf32>
+  %selected0_9 = scf.select %is_chunk9, %part0_9, %selected0_8 : vector<32xf32>
+  %selected0_10 = scf.select %is_chunk10, %part0_10, %selected0_9 : vector<32xf32>
+  %selected0_11 = scf.select %is_chunk11, %part0_11, %selected0_10 : vector<32xf32>
+  %selected0_12 = scf.select %is_chunk12, %part0_12, %selected0_11 : vector<32xf32>
+  %selected0_13 = scf.select %is_chunk13, %part0_13, %selected0_12 : vector<32xf32>
+  %selected0_14 = scf.select %is_chunk14, %part0_14, %selected0_13 : vector<32xf32>
+  %selected0_15 = scf.select %is_chunk15, %part0_15, %selected0_14 : vector<32xf32>
+  %part1_0 = vector.from_elements %v2056, %v2056, %v2056, %v2056, %v2056, %v2073, %v2073, %v2073, %v2073, %v2091, %v2091, %v2091, %v2091, %v6408, %v6408, %v6408, %v6408, %v6425, %v6425, %v6425, %v6425, %v6443, %v6443, %v11016, %v11016, %v11016, %v11016, %v11033, %v11033, %v11033, %v11051, %v2056 : vector<32xf32>
+  %part1_1 = vector.from_elements %v2056, %v2056, %v2056, %v2073, %v2073, %v2073, %v2073, %v2073, %v2091, %v2091, %v6408, %v6408, %v6408, %v6408, %v6425, %v6425, %v6443, %v6443, %v11016, %v11016, %v11033, %v2056, %v2056, %v2056, %v2056, %v2073, %v2073, %v2091, %v6408, %v6408, %v6425, %v6425 : vector<32xf32>
+  %part1_2 = vector.from_elements %v11016, %v11016, %v2056, %v2056, %v2056, %v2056, %v2073, %v2073, %v2073, %v2073, %v2091, %v2091, %v6408, %v6408, %v6408, %v6408, %v6425, %v6425, %v6425, %v6443, %v11016, %v11016, %v11033, %v2056, %v2056, %v2056, %v2056, %v2073, %v2073, %v2091, %v6408, %v6408 : vector<32xf32>
+  %part1_3 = vector.from_elements %v6425, %v6443, %v11016, %v2056, %v2056, %v2073, %v2091, %v6408, %v6408, %v11016, %v2056, %v2056, %v2056, %v2056, %v2056, %v2073, %v2073, %v2091, %v2091, %v6408, %v6408, %v6425, %v6425, %v11016, %v11051, %v11051, %v2056, %v2056, %v2073, %v6408, %v11016, %v11016 : vector<32xf32>
+  %part1_4 = vector.from_elements %v2056, %v2091, %v2091, %v11033, %v11051, %v2056, %v2056, %v2056, %v2056, %v2073, %v2073, %v2073, %v2073, %v2091, %v2091, %v6408, %v6408, %v6408, %v6408, %v6425, %v6425, %v6443, %v6443, %v11016, %v11016, %v11033, %v2056, %v2056, %v2056, %v2056, %v2073, %v2073 : vector<32xf32>
+  %part1_5 = vector.from_elements %v2091, %v6408, %v6408, %v6425, %v11016, %v11033, %v11033, %v2056, %v2056, %v2056, %v2073, %v6408, %v6443, %v2056, %v2056, %v2056, %v2056, %v2073, %v2073, %v2091, %v6408, %v6408, %v6408, %v6425, %v6443, %v11016, %v2056, %v2056, %v2073, %v6408, %v2056, %v2073 : vector<32xf32>
+  %part1_6 = vector.from_elements %v6408, %v2056, %v2056, %v2073, %v2073, %v6408, %v6425, %v11016, %v2056, %v2056, %v6443, %v6425, %v11051, %v2056, %v2056, %v2056, %v2056, %v2056, %v2073, %v2073, %v2091, %v6408, %v6408, %v6425, %v11016, %v11051, %v2056, %v2056, %v2073, %v6408, %v6408, %v6443 : vector<32xf32>
+  %part1_7 = vector.from_elements %v2056, %v2091, %v11016, %v11051, %v2056, %v2056, %v2073, %v2091, %v6408, %v2056, %v6408, %v6425, %v11033, %v2056, %v2073, %v11051, %v2056, %v2056, %v2056, %v2091, %v6425, %v11016, %v11051, %v6443, %v11033, %v2056, %v2091, %v11016, %v11016, %v11016, %v2056, %v2056 : vector<32xf32>
+  %part1_8 = vector.from_elements %v2056, %v2056, %v2073, %v2073, %v2073, %v2073, %v2091, %v2091, %v6408, %v6408, %v6408, %v6408, %v6408, %v6425, %v6425, %v6443, %v6443, %v11016, %v11016, %v11033, %v2056, %v2056, %v2056, %v2056, %v2073, %v2073, %v2091, %v6408, %v6408, %v6425, %v11016, %v11016 : vector<32xf32>
+  %part1_9 = vector.from_elements %v11051, %v2056, %v2056, %v2073, %v2073, %v2091, %v6408, %v2056, %v2056, %v2056, %v2056, %v2073, %v2073, %v2073, %v2091, %v6408, %v6408, %v6425, %v11016, %v11033, %v2056, %v2056, %v2073, %v2091, %v6408, %v11033, %v2056, %v2056, %v6408, %v6425, %v2056, %v2056 : vector<32xf32>
+  %part1_10 = vector.from_elements %v2073, %v6408, %v6408, %v6425, %v6443, %v2056, %v2073, %v6408, %v6425, %v6443, %v2056, %v2056, %v2056, %v2056, %v2056, %v2073, %v2073, %v2091, %v2091, %v6408, %v6408, %v6425, %v11016, %v2056, %v2056, %v2073, %v2073, %v6408, %v6408, %v2056, %v6408, %v11051 : vector<32xf32>
+  %part1_11 = vector.from_elements %v2056, %v2056, %v2073, %v2091, %v6408, %v6443, %v11016, %v11051, %v2056, %v2056, %v11016, %v11016, %v2091, %v6443, %v11051, %v2056, %v2073, %v6408, %v6425, %v11033, %v2073, %v6408, %v6408, %v11016, %v2056, %v2056, %v2073, %v6408, %v6425, %v6443, %v11016, %v11051 : vector<32xf32>
+  %part1_12 = vector.from_elements %v2056, %v2091, %v6408, %v11033, %v2056, %v2073, %v2073, %v6408, %v6408, %v11051, %v2056, %v6443, %v2091, %v2056, %v6425, %v6443, %v2056, %v2056, %v2056, %v2056, %v2073, %v2073, %v2091, %v2091, %v6408, %v6408, %v6425, %v11016, %v11016, %v11051, %v11051, %v2056 : vector<32xf32>
+  %part1_13 = vector.from_elements %v2056, %v2056, %v2073, %v6408, %v6425, %v6425, %v2056, %v2091, %v11016, %v11016, %v11051, %v11051, %v2056, %v2056, %v2073, %v2073, %v2073, %v6408, %v6443, %v11016, %v2056, %v6408, %v11051, %v2073, %v6443, %v2056, %v2056, %v2091, %v6425, %v11016, %v11016, %v11051 : vector<32xf32>
+  %part1_14 = vector.from_elements %v2056, %v2091, %v11016, %v11016, %v11033, %v11051, %v2056, %v2056, %v2073, %v6408, %v6425, %v11016, %v2056, %v2091, %v6443, %v6425, %v11016, %v2056, %v2056, %v6408, %v6425, %v6425, %v2091, %v11033, %v11033, %v6408, %v6425, %v11051, %v6408, %v2073, %v6443, %v2056 : vector<32xf32>
+  %part1_15 = vector.from_elements %v2056, %v2056, %v2056, %v2091, %v2091, %v11051, %v6425, %v6425, %v11051, %v2056, %v2056, %v2056, %v2091, %v11016, %v11051, %v6408, %v11033, %v6443, %v11033, %v2056, %v2091, %v2091, %v2091, %v11051, %v11051, %v2056, %v11016, %v11016, %v2091, %v2091, %v11033, %v11051 : vector<32xf32>
+  %selected1_1 = scf.select %is_chunk1, %part1_1, %part1_0 : vector<32xf32>
+  %selected1_2 = scf.select %is_chunk2, %part1_2, %selected1_1 : vector<32xf32>
+  %selected1_3 = scf.select %is_chunk3, %part1_3, %selected1_2 : vector<32xf32>
+  %selected1_4 = scf.select %is_chunk4, %part1_4, %selected1_3 : vector<32xf32>
+  %selected1_5 = scf.select %is_chunk5, %part1_5, %selected1_4 : vector<32xf32>
+  %selected1_6 = scf.select %is_chunk6, %part1_6, %selected1_5 : vector<32xf32>
+  %selected1_7 = scf.select %is_chunk7, %part1_7, %selected1_6 : vector<32xf32>
+  %selected1_8 = scf.select %is_chunk8, %part1_8, %selected1_7 : vector<32xf32>
+  %selected1_9 = scf.select %is_chunk9, %part1_9, %selected1_8 : vector<32xf32>
+  %selected1_10 = scf.select %is_chunk10, %part1_10, %selected1_9 : vector<32xf32>
+  %selected1_11 = scf.select %is_chunk11, %part1_11, %selected1_10 : vector<32xf32>
+  %selected1_12 = scf.select %is_chunk12, %part1_12, %selected1_11 : vector<32xf32>
+  %selected1_13 = scf.select %is_chunk13, %part1_13, %selected1_12 : vector<32xf32>
+  %selected1_14 = scf.select %is_chunk14, %part1_14, %selected1_13 : vector<32xf32>
+  %selected1_15 = scf.select %is_chunk15, %part1_15, %selected1_14 : vector<32xf32>
+  %part2_0 = vector.from_elements %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2073 : vector<32xf32>
+  %part2_1 = vector.from_elements %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091 : vector<32xf32>
+  %part2_2 = vector.from_elements %v2091, %v2091, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425 : vector<32xf32>
+  %part2_3 = vector.from_elements %v6425, %v6425, %v6425, %v6443, %v6443, %v6443, %v6443, %v6443, %v6443, %v6443, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11033, %v11033, %v11033, %v11033, %v11033, %v11033 : vector<32xf32>
+  %part2_4 = vector.from_elements %v11051, %v11051, %v11051, %v11051, %v11051, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073 : vector<32xf32>
+  %part2_5 = vector.from_elements %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6425, %v6425, %v6425, %v6425, %v6443, %v6443 : vector<32xf32>
+  %part2_6 = vector.from_elements %v6443, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11033, %v11033, %v11033, %v11051, %v11051, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073 : vector<32xf32>
+  %part2_7 = vector.from_elements %v2091, %v2091, %v2091, %v2091, %v6408, %v6408, %v6408, %v6408, %v6408, %v6425, %v6425, %v6425, %v6425, %v6443, %v6443, %v6443, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11033, %v11033, %v11051, %v11051, %v11051, %v11051, %v11051, %v2056, %v2056 : vector<32xf32>
+  %part2_8 = vector.from_elements %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073 : vector<32xf32>
+  %part2_9 = vector.from_elements %v2073, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6443, %v6443, %v6443, %v6443, %v11016, %v11016 : vector<32xf32>
+  %part2_10 = vector.from_elements %v11016, %v11016, %v11016, %v11016, %v11016, %v11033, %v11033, %v11033, %v11033, %v11033, %v11051, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2091, %v2091, %v2091 : vector<32xf32>
+  %part2_11 = vector.from_elements %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6425, %v6425, %v6425, %v6425, %v6443, %v6443, %v6443, %v11016, %v11016, %v11016, %v11016, %v11016, %v11033, %v11033, %v11033, %v11051, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056 : vector<32xf32>
+  %part2_12 = vector.from_elements %v2073, %v2091, %v2091, %v2091, %v6408, %v6408, %v6425, %v6425, %v6425, %v6425, %v11016, %v11016, %v11033, %v11051, %v11051, %v11051, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2073 : vector<32xf32>
+  %part2_13 = vector.from_elements %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6425, %v6425, %v6425, %v6443, %v6443, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016 : vector<32xf32>
+  %part2_14 = vector.from_elements %v11033, %v11051, %v11051, %v11051, %v11051, %v11051, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2073, %v2073, %v2073, %v2091, %v2091, %v6408, %v6408, %v6408, %v6408, %v6408, %v6425, %v6425, %v6425, %v6443, %v11016, %v11016, %v11033, %v11051, %v11051, %v2056 : vector<32xf32>
+  %part2_15 = vector.from_elements %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2073, %v2073, %v2073, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v6408, %v6408, %v6443, %v6443, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11033, %v11033, %v11033, %v11051, %v11051, %v11051, %v11051 : vector<32xf32>
+  %selected2_1 = scf.select %is_chunk1, %part2_1, %part2_0 : vector<32xf32>
+  %selected2_2 = scf.select %is_chunk2, %part2_2, %selected2_1 : vector<32xf32>
+  %selected2_3 = scf.select %is_chunk3, %part2_3, %selected2_2 : vector<32xf32>
+  %selected2_4 = scf.select %is_chunk4, %part2_4, %selected2_3 : vector<32xf32>
+  %selected2_5 = scf.select %is_chunk5, %part2_5, %selected2_4 : vector<32xf32>
+  %selected2_6 = scf.select %is_chunk6, %part2_6, %selected2_5 : vector<32xf32>
+  %selected2_7 = scf.select %is_chunk7, %part2_7, %selected2_6 : vector<32xf32>
+  %selected2_8 = scf.select %is_chunk8, %part2_8, %selected2_7 : vector<32xf32>
+  %selected2_9 = scf.select %is_chunk9, %part2_9, %selected2_8 : vector<32xf32>
+  %selected2_10 = scf.select %is_chunk10, %part2_10, %selected2_9 : vector<32xf32>
+  %selected2_11 = scf.select %is_chunk11, %part2_11, %selected2_10 : vector<32xf32>
+  %selected2_12 = scf.select %is_chunk12, %part2_12, %selected2_11 : vector<32xf32>
+  %selected2_13 = scf.select %is_chunk13, %part2_13, %selected2_12 : vector<32xf32>
+  %selected2_14 = scf.select %is_chunk14, %part2_14, %selected2_13 : vector<32xf32>
+  %selected2_15 = scf.select %is_chunk15, %part2_15, %selected2_14 : vector<32xf32>
+  %part3_0 = vector.from_elements %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056 : vector<32xf32>
+  %part3_1 = vector.from_elements %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056 : vector<32xf32>
+  %part3_2 = vector.from_elements %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056 : vector<32xf32>
+  %part3_3 = vector.from_elements %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056, %v2056 : vector<32xf32>
+  %part3_4 = vector.from_elements %v2056, %v2056, %v2056, %v2056, %v2056, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073 : vector<32xf32>
+  %part3_5 = vector.from_elements %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073 : vector<32xf32>
+  %part3_6 = vector.from_elements %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2073, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091 : vector<32xf32>
+  %part3_7 = vector.from_elements %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v2091, %v6408, %v6408 : vector<32xf32>
+  %part3_8 = vector.from_elements %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408 : vector<32xf32>
+  %part3_9 = vector.from_elements %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408 : vector<32xf32>
+  %part3_10 = vector.from_elements %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6408, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425 : vector<32xf32>
+  %part3_11 = vector.from_elements %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6425, %v6443, %v6443, %v6443, %v6443, %v6443, %v6443, %v6443, %v6443 : vector<32xf32>
+  %part3_12 = vector.from_elements %v6443, %v6443, %v6443, %v6443, %v6443, %v6443, %v6443, %v6443, %v6443, %v6443, %v6443, %v6443, %v6443, %v6443, %v6443, %v6443, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016 : vector<32xf32>
+  %part3_13 = vector.from_elements %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11016 : vector<32xf32>
+  %part3_14 = vector.from_elements %v11016, %v11016, %v11016, %v11016, %v11016, %v11016, %v11033, %v11033, %v11033, %v11033, %v11033, %v11033, %v11033, %v11033, %v11033, %v11033, %v11033, %v11033, %v11033, %v11033, %v11033, %v11033, %v11033, %v11033, %v11033, %v11033, %v11033, %v11033, %v11033, %v11033, %v11033, %v11051 : vector<32xf32>
+  %part3_15 = vector.from_elements %v11051, %v11051, %v11051, %v11051, %v11051, %v11051, %v11051, %v11051, %v11051, %v11051, %v11051, %v11051, %v11051, %v11051, %v11051, %v11051, %v11051, %v11051, %v11051, %v11051, %v11051, %v11051, %v11051, %v11051, %v11051, %v11051, %v11051, %v11051, %v11051, %v11051, %v11051, %v11051 : vector<32xf32>
+  %selected3_1 = scf.select %is_chunk1, %part3_1, %part3_0 : vector<32xf32>
+  %selected3_2 = scf.select %is_chunk2, %part3_2, %selected3_1 : vector<32xf32>
+  %selected3_3 = scf.select %is_chunk3, %part3_3, %selected3_2 : vector<32xf32>
+  %selected3_4 = scf.select %is_chunk4, %part3_4, %selected3_3 : vector<32xf32>
+  %selected3_5 = scf.select %is_chunk5, %part3_5, %selected3_4 : vector<32xf32>
+  %selected3_6 = scf.select %is_chunk6, %part3_6, %selected3_5 : vector<32xf32>
+  %selected3_7 = scf.select %is_chunk7, %part3_7, %selected3_6 : vector<32xf32>
+  %selected3_8 = scf.select %is_chunk8, %part3_8, %selected3_7 : vector<32xf32>
+  %selected3_9 = scf.select %is_chunk9, %part3_9, %selected3_8 : vector<32xf32>
+  %selected3_10 = scf.select %is_chunk10, %part3_10, %selected3_9 : vector<32xf32>
+  %selected3_11 = scf.select %is_chunk11, %part3_11, %selected3_10 : vector<32xf32>
+  %selected3_12 = scf.select %is_chunk12, %part3_12, %selected3_11 : vector<32xf32>
+  %selected3_13 = scf.select %is_chunk13, %part3_13, %selected3_12 : vector<32xf32>
+  %selected3_14 = scf.select %is_chunk14, %part3_14, %selected3_13 : vector<32xf32>
+  %selected3_15 = scf.select %is_chunk15, %part3_15, %selected3_14 : vector<32xf32>
+  %use_word1 = scalar.cmpi eq, %word_index, %c1_i32 : i32
+  %selected_low = scf.select %use_word1, %selected2_15, %selected0_15 : vector<32xf32>
+  %selected_high = scf.select %use_word1, %selected3_15, %selected1_15 : vector<32xf32>
+  %low_values = vector.table.lookup %selected_low[%codes] : vector<32xf32>, vector<1xi32> -> vector<1xf32>
+  %low_f32 = vector.extract %low_values[0] : vector<1xf32> -> f32
+  %low = scalar.fptoui %low_f32 : f32 to i32
+  %high_values = vector.table.lookup %selected_high[%codes] : vector<32xf32>, vector<1xi32> -> vector<1xf32>
+  %high_f32 = vector.extract %high_values[0] : vector<1xf32> -> f32
+  %high = scalar.fptoui %high_f32 : f32 to i32
+  %high_shifted = scalar.shli %high, %c16_i32 : i32
+  %word = scalar.ori %low, %high_shifted : i32
+  func.return %word : i32
+}
+
+func.def inline @ggml_iq2xs_f32_vector4(%weight: buffer, %row_byte_base: offset, %iq2_block: index, %iq2_group: index, %packet: index) -> (vector<4xf32>) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c0_i32 = scalar.constant 0 : i32
+  %c1_i32 = scalar.constant 1 : i32
+  %c2_i32 = scalar.constant 2 : i32
+  %c4_i32 = scalar.constant 4 : i32
+  %c8_i32 = scalar.constant 8 : i32
+  %c9_i32 = scalar.constant 9 : i32
+  %c15_i32 = scalar.constant 15 : i32
+  %c16_i32 = scalar.constant 16 : i32
+  %c24_i32 = scalar.constant 24 : i32
+  %c32_i32 = scalar.constant 32 : i32
+  %c64_i32 = scalar.constant 64 : i32
+  %c128_i32 = scalar.constant 128 : i32
+  %c511_i32 = scalar.constant 511 : i32
+  %c05_f32 = scalar.constant 0.5 : f32
+  %c025_f32 = scalar.constant 0.25 : f32
+  %block_bytes = index.constant 74 : offset
+  %qs_offset = index.constant 2 : offset
+  %scales_offset = index.constant 66 : offset
+  %bounded_group = index.assume %iq2_group [range(%iq2_group, 0, 7)] : index
+  %c8 = index.constant 8 : index
+  %bounded_packet = index.rem %packet, %c8 : index
+  %block_byte_add = index.scale %iq2_block, %block_bytes : index, offset -> offset
+  %block_byte_base = index.add %row_byte_base, %block_byte_add : offset
+  %qs_byte_base = index.add %block_byte_base, %qs_offset : offset
+  %scales_byte_base = index.add %block_byte_base, %scales_offset : offset
+  %d_view = buffer.view %weight[%block_byte_base] : buffer -> view<1xf16>
+  %qs_view = buffer.view %weight[%qs_byte_base] : buffer -> view<32xi16>
+  %scales_view = buffer.view %weight[%scales_byte_base] : buffer -> view<8xi8>
+  %l = index.div %bounded_packet, %c2 : index
+  %word_index = index.rem %bounded_packet, %c2 : index
+  %group_qs_base = index.mul %bounded_group, %c4 : index
+  %qs_index0 = index.add %group_qs_base, %l : index
+  %qs_index = index.assume %qs_index0 [range(%qs_index0, 0, 31)] : index
+  %q_i16 = view.load %qs_view[%qs_index] : view<32xi16> -> i16
+  %q = scalar.extui %q_i16 : i16 to i32
+  %grid_index_i32 = scalar.andi %q, %c511_i32 : i32
+  %word_index_i32 = index.cast %word_index : index to i32
+  %grid_word = func.call @ggml_iq2xs_grid_lookup_i32(%grid_index_i32, %word_index_i32) : (i32, i32) -> (i32)
+  %sign_code = scalar.shrui %q, %c9_i32 : i32
+  %signs = func.call @ggml_iq2xs_sign_mask(%sign_code) : (i32) -> (i32)
+  %scale_i8 = view.load %scales_view[%bounded_group] : view<8xi8> -> i8
+  %scale_byte = scalar.extui %scale_i8 : i8 to i32
+  %scale_half = index.div %l, %c2 : index
+  %scale_half_i32 = index.cast %scale_half : index to i32
+  %scale_shift = scalar.muli %scale_half_i32, %c4_i32 : i32
+  %scale_shifted = scalar.shrui %scale_byte, %scale_shift : i32
+  %scale_code = scalar.andi %scale_shifted, %c15_i32 : i32
+  %scale_base = scalar.uitofp %scale_code : i32 to f32
+  %scale_plus = scalar.addf %scale_base, %c05_f32 : f32
+  %d_f16 = view.load %d_view[%c0] : view<1xf16> -> f16
+  %d = scalar.extf %d_f16 : f16 to f32
+  %scale_mul = scalar.mulf %d, %scale_plus : f32
+  %scale = scalar.mulf %scale_mul, %c025_f32 : f32
+  %uses_word1 = index.cmp eq, %word_index, %c1 : index
+  %sign_bit0 = scf.select %uses_word1, %c16_i32, %c1_i32 : i32
+  %sign_bit1 = scf.select %uses_word1, %c32_i32, %c2_i32 : i32
+  %sign_bit2 = scf.select %uses_word1, %c64_i32, %c4_i32 : i32
+  %sign_bit3 = scf.select %uses_word1, %c128_i32, %c8_i32 : i32
+  %v0 = func.call @ggml_iq2s_value_f32(%grid_word, %c0_i32, %signs, %sign_bit0, %scale) : (i32, i32, i32, i32, f32) -> (f32)
+  %v1 = func.call @ggml_iq2s_value_f32(%grid_word, %c8_i32, %signs, %sign_bit1, %scale) : (i32, i32, i32, i32, f32) -> (f32)
+  %v2 = func.call @ggml_iq2s_value_f32(%grid_word, %c16_i32, %signs, %sign_bit2, %scale) : (i32, i32, i32, i32, f32) -> (f32)
+  %v3 = func.call @ggml_iq2s_value_f32(%grid_word, %c24_i32, %signs, %sign_bit3, %scale) : (i32, i32, i32, i32, f32) -> (f32)
+  %result = vector.from_elements %v0, %v1, %v2, %v3 : vector<4xf32>
+  func.return %result : vector<4xf32>
+}
+
 // IQ3_XXS decoder backed by the canonical 256-entry packed grid.
 func.def inline @ggml_iq3xxs_global_f32_vector4(%grid: buffer, %weight: buffer, %row_byte_base: offset, %iq3_block: index, %iq3_group: index, %packet: index) -> (vector<4xf32>) {
   %c0 = index.constant 0 : index
@@ -1682,6 +2109,215 @@ func.def inline @ggml_iq3xxs_global_f32_vector4(%grid: buffer, %weight: buffer, 
   %parity = scalar.andi %parity_sum, %c1_i32 : i32
   %parity_bit = scalar.shli %parity, %c7_i32 : i32
   %signs = scalar.ori %sign_index, %parity_bit : i32
+  %half = index.rem %bounded_packet, %c2 : index
+  %half_i32 = index.cast %half : index to i32
+  %half_shift = scalar.muli %half_i32, %c4_i32 : i32
+  %shifted_signs = scalar.shrui %signs, %half_shift : i32
+  %scale0 = scalar.shrui %aux, %c28_i32 : i32
+  %scale2 = scalar.muli %scale0, %c2_i32 : i32
+  %scale_code = scalar.addi %scale2, %c1_i32 : i32
+  %scale_f32 = scalar.uitofp %scale_code : i32 to f32
+  %d_f16 = view.load %d_view[%c0] : view<1xf16> -> f16
+  %d = scalar.extf %d_f16 : f16 to f32
+  %d_quarter = scalar.mulf %d, %c025_f32 : f32
+  %db = scalar.mulf %d_quarter, %scale_f32 : f32
+  %v0_base = func.call @ggml_iq3s_signed_value_f32(%grid_word, %c0_i32, %shifted_signs, %c1_i32) : (i32, i32, i32, i32) -> (f32)
+  %v1_base = func.call @ggml_iq3s_signed_value_f32(%grid_word, %c8_i32, %shifted_signs, %c2_i32) : (i32, i32, i32, i32) -> (f32)
+  %v2_base = func.call @ggml_iq3s_signed_value_f32(%grid_word, %c16_i32, %shifted_signs, %c4_i32) : (i32, i32, i32, i32) -> (f32)
+  %v3_base = func.call @ggml_iq3s_signed_value_f32(%grid_word, %c24_i32, %shifted_signs, %c8_i32) : (i32, i32, i32, i32) -> (f32)
+  %v0 = scalar.mulf %db, %v0_base : f32
+  %v1 = scalar.mulf %db, %v1_base : f32
+  %v2 = scalar.mulf %db, %v2_base : f32
+  %v3 = scalar.mulf %db, %v3_base : f32
+  %result = vector.from_elements %v0, %v1, %v2, %v3 : vector<4xf32>
+  func.return %result : vector<4xf32>
+}
+
+// Canonical iq3xxs_grid from ggml-common.h, split into exact FP32 halfwords.
+func.def inline @ggml_iq3xxs_grid_lookup_i32(%grid_index: i32) -> (i32) {
+  %c1_i32 = scalar.constant 1 : i32
+  %c2_i32 = scalar.constant 2 : i32
+  %c3_i32 = scalar.constant 3 : i32
+  %c4_i32 = scalar.constant 4 : i32
+  %c5_i32 = scalar.constant 5 : i32
+  %c6_i32 = scalar.constant 6 : i32
+  %c7_i32 = scalar.constant 7 : i32
+  %c16_i32 = scalar.constant 16 : i32
+  %c31_i32 = scalar.constant 31 : i32
+  %chunk_i32 = scalar.shrui %grid_index, %c5_i32 : i32
+  %lane_i32 = scalar.andi %grid_index, %c31_i32 : i32
+  %codes = vector.from_elements %lane_i32 : vector<1xi32>
+  %is_chunk1 = scalar.cmpi eq, %chunk_i32, %c1_i32 : i32
+  %is_chunk2 = scalar.cmpi eq, %chunk_i32, %c2_i32 : i32
+  %is_chunk3 = scalar.cmpi eq, %chunk_i32, %c3_i32 : i32
+  %is_chunk4 = scalar.cmpi eq, %chunk_i32, %c4_i32 : i32
+  %is_chunk5 = scalar.cmpi eq, %chunk_i32, %c5_i32 : i32
+  %is_chunk6 = scalar.cmpi eq, %chunk_i32, %c6_i32 : i32
+  %is_chunk7 = scalar.cmpi eq, %chunk_i32, %c7_i32 : i32
+  %v1028 = scalar.constant 1028.0 : f32
+  %v1036 = scalar.constant 1036.0 : f32
+  %v1044 = scalar.constant 1044.0 : f32
+  %v1052 = scalar.constant 1052.0 : f32
+  %v1060 = scalar.constant 1060.0 : f32
+  %v1068 = scalar.constant 1068.0 : f32
+  %v1076 = scalar.constant 1076.0 : f32
+  %v1086 = scalar.constant 1086.0 : f32
+  %v3076 = scalar.constant 3076.0 : f32
+  %v3084 = scalar.constant 3084.0 : f32
+  %v3092 = scalar.constant 3092.0 : f32
+  %v3100 = scalar.constant 3100.0 : f32
+  %v3108 = scalar.constant 3108.0 : f32
+  %v3116 = scalar.constant 3116.0 : f32
+  %v3124 = scalar.constant 3124.0 : f32
+  %v3134 = scalar.constant 3134.0 : f32
+  %v5124 = scalar.constant 5124.0 : f32
+  %v5132 = scalar.constant 5132.0 : f32
+  %v5140 = scalar.constant 5140.0 : f32
+  %v5148 = scalar.constant 5148.0 : f32
+  %v5156 = scalar.constant 5156.0 : f32
+  %v5164 = scalar.constant 5164.0 : f32
+  %v5172 = scalar.constant 5172.0 : f32
+  %v5182 = scalar.constant 5182.0 : f32
+  %v7172 = scalar.constant 7172.0 : f32
+  %v7180 = scalar.constant 7180.0 : f32
+  %v7188 = scalar.constant 7188.0 : f32
+  %v7196 = scalar.constant 7196.0 : f32
+  %v7204 = scalar.constant 7204.0 : f32
+  %v7212 = scalar.constant 7212.0 : f32
+  %v7220 = scalar.constant 7220.0 : f32
+  %v7230 = scalar.constant 7230.0 : f32
+  %v9220 = scalar.constant 9220.0 : f32
+  %v9228 = scalar.constant 9228.0 : f32
+  %v9236 = scalar.constant 9236.0 : f32
+  %v9244 = scalar.constant 9244.0 : f32
+  %v9252 = scalar.constant 9252.0 : f32
+  %v9260 = scalar.constant 9260.0 : f32
+  %v9268 = scalar.constant 9268.0 : f32
+  %v9278 = scalar.constant 9278.0 : f32
+  %v11268 = scalar.constant 11268.0 : f32
+  %v11276 = scalar.constant 11276.0 : f32
+  %v11284 = scalar.constant 11284.0 : f32
+  %v11292 = scalar.constant 11292.0 : f32
+  %v11300 = scalar.constant 11300.0 : f32
+  %v11308 = scalar.constant 11308.0 : f32
+  %v11316 = scalar.constant 11316.0 : f32
+  %v11326 = scalar.constant 11326.0 : f32
+  %v13316 = scalar.constant 13316.0 : f32
+  %v13324 = scalar.constant 13324.0 : f32
+  %v13332 = scalar.constant 13332.0 : f32
+  %v13340 = scalar.constant 13340.0 : f32
+  %v13348 = scalar.constant 13348.0 : f32
+  %v13356 = scalar.constant 13356.0 : f32
+  %v13364 = scalar.constant 13364.0 : f32
+  %v13374 = scalar.constant 13374.0 : f32
+  %v15876 = scalar.constant 15876.0 : f32
+  %v15884 = scalar.constant 15884.0 : f32
+  %v15892 = scalar.constant 15892.0 : f32
+  %v15900 = scalar.constant 15900.0 : f32
+  %v15908 = scalar.constant 15908.0 : f32
+  %v15916 = scalar.constant 15916.0 : f32
+  %v15924 = scalar.constant 15924.0 : f32
+  %part0_0 = vector.from_elements %v1028, %v1044, %v1060, %v3084, %v3100, %v3134, %v5124, %v5140, %v7180, %v9236, %v15900, %v15916, %v1036, %v1052, %v3076, %v3092, %v5132, %v5164, %v7172, %v7188, %v9228, %v11300, %v15876, %v1028, %v1044, %v1060, %v3084, %v5124, %v5140, %v7180, %v7196, %v7230 : vector<32xf32>
+  %part0_1 = vector.from_elements %v11276, %v11326, %v15916, %v1036, %v1086, %v3076, %v3092, %v5164, %v15876, %v3100, %v7230, %v9252, %v11326, %v15900, %v15916, %v1036, %v1086, %v7188, %v11284, %v7212, %v13348, %v3076, %v3108, %v3124, %v9244, %v13324, %v1036, %v1052, %v3076, %v3092, %v5132, %v5148 : vector<32xf32>
+  %part0_2 = vector.from_elements %v7172, %v7188, %v7204, %v9278, %v11268, %v1028, %v1044, %v3084, %v5124, %v5140, %v1036, %v1052, %v3076, %v3092, %v5132, %v7172, %v15892, %v1028, %v1044, %v5124, %v7180, %v9268, %v13364, %v1036, %v1068, %v11268, %v5124, %v5156, %v9268, %v15884, %v1068, %v5140 : vector<32xf32>
+  %part0_3 = vector.from_elements %v9220, %v1028, %v1044, %v3084, %v3100, %v5124, %v5140, %v5172, %v7180, %v9236, %v1036, %v1052, %v1068, %v3076, %v3092, %v5132, %v7172, %v13340, %v13374, %v15876, %v1028, %v1044, %v3084, %v3134, %v5124, %v5140, %v7230, %v9220, %v11308, %v1036, %v3076, %v3108 : vector<32xf32>
+  %part0_4 = vector.from_elements %v15876, %v15908, %v7212, %v11292, %v1052, %v5182, %v9228, %v15908, %v1036, %v1052, %v3124, %v9260, %v1036, %v3076, %v3092, %v5132, %v5148, %v11268, %v13356, %v15892, %v1028, %v1044, %v5124, %v7180, %v9252, %v9268, %v1036, %v1052, %v3076, %v5164, %v11284, %v15892 : vector<32xf32>
+  %part0_5 = vector.from_elements %v3084, %v7196, %v7172, %v9278, %v15892, %v1028, %v1076, %v5140, %v11308, %v3108, %v7220, %v13340, %v7196, %v13316, %v1060, %v3134, %v7212, %v7230, %v11292, %v11326, %v15908, %v5124, %v7230, %v9220, %v13316, %v13364, %v1086, %v9260, %v1060, %v11276, %v13348, %v5164 : vector<32xf32>
+  %part0_6 = vector.from_elements %v9244, %v15876, %v1068, %v3076, %v3092, %v7172, %v3092, %v9228, %v15876, %v1028, %v1076, %v5172, %v11308, %v3108, %v7188, %v15892, %v1044, %v11292, %v3076, %v5148, %v5182, %v15892, %v1044, %v7180, %v11268, %v5156, %v9236, %v5156, %v9252, %v9268, %v13348, %v5132 : vector<32xf32>
+  %part0_7 = vector.from_elements %v13324, %v3134, %v13348, %v7172, %v7220, %v9252, %v1068, %v11284, %v7196, %v1052, %v5132, %v1052, %v1068, %v1086, %v3076, %v7188, %v11284, %v5172, %v9220, %v3092, %v9260, %v11284, %v1028, %v3116, %v7196, %v13316, %v5132, %v9228, %v1028, %v1044, %v5156, %v7172 : vector<32xf32>
+  %selected0_1 = scf.select %is_chunk1, %part0_1, %part0_0 : vector<32xf32>
+  %selected0_2 = scf.select %is_chunk2, %part0_2, %selected0_1 : vector<32xf32>
+  %selected0_3 = scf.select %is_chunk3, %part0_3, %selected0_2 : vector<32xf32>
+  %selected0_4 = scf.select %is_chunk4, %part0_4, %selected0_3 : vector<32xf32>
+  %selected0_5 = scf.select %is_chunk5, %part0_5, %selected0_4 : vector<32xf32>
+  %selected0_6 = scf.select %is_chunk6, %part0_6, %selected0_5 : vector<32xf32>
+  %selected0_7 = scf.select %is_chunk7, %part0_7, %selected0_6 : vector<32xf32>
+  %part1_0 = vector.from_elements %v1028, %v1028, %v1028, %v1028, %v1028, %v1028, %v1028, %v1028, %v1028, %v1028, %v1028, %v1028, %v1036, %v1036, %v1036, %v1036, %v1036, %v1036, %v1036, %v1036, %v1036, %v1036, %v1036, %v1044, %v1044, %v1044, %v1044, %v1044, %v1044, %v1044, %v1044, %v1044 : vector<32xf32>
+  %part1_1 = vector.from_elements %v1044, %v1044, %v1044, %v1052, %v1052, %v1052, %v1052, %v1052, %v1052, %v1060, %v1060, %v1060, %v1060, %v1060, %v1060, %v1068, %v1068, %v1068, %v1068, %v1076, %v1076, %v1086, %v1086, %v1086, %v1086, %v1086, %v3076, %v3076, %v3076, %v3076, %v3076, %v3076 : vector<32xf32>
+  %part1_2 = vector.from_elements %v3076, %v3076, %v3076, %v3076, %v3076, %v3084, %v3084, %v3084, %v3084, %v3084, %v3092, %v3092, %v3092, %v3092, %v3092, %v3092, %v3092, %v3100, %v3100, %v3100, %v3100, %v3100, %v3100, %v3108, %v3108, %v3108, %v3116, %v3116, %v3116, %v3116, %v3124, %v3134 : vector<32xf32>
+  %part1_3 = vector.from_elements %v3134, %v5124, %v5124, %v5124, %v5124, %v5124, %v5124, %v5124, %v5124, %v5124, %v5132, %v5132, %v5132, %v5132, %v5132, %v5132, %v5132, %v5132, %v5132, %v5132, %v5140, %v5140, %v5140, %v5140, %v5140, %v5140, %v5140, %v5140, %v5140, %v5148, %v5148, %v5148 : vector<32xf32>
+  %part1_4 = vector.from_elements %v5148, %v5148, %v5156, %v5156, %v5164, %v5164, %v5164, %v5164, %v5182, %v5182, %v5182, %v5182, %v7172, %v7172, %v7172, %v7172, %v7172, %v7172, %v7172, %v7172, %v7180, %v7180, %v7180, %v7180, %v7180, %v7180, %v7188, %v7188, %v7188, %v7188, %v7188, %v7188 : vector<32xf32>
+  %part1_5 = vector.from_elements %v7196, %v7196, %v7204, %v7204, %v7204, %v7212, %v7212, %v7212, %v7212, %v7220, %v7220, %v7220, %v7230, %v7230, %v9220, %v9220, %v9220, %v9220, %v9220, %v9220, %v9228, %v9236, %v9236, %v9236, %v9236, %v9236, %v9244, %v9244, %v9252, %v9252, %v9252, %v9260 : vector<32xf32>
+  %part1_6 = vector.from_elements %v9260, %v9260, %v9278, %v9278, %v9278, %v9278, %v11268, %v11268, %v11268, %v11276, %v11276, %v11276, %v11276, %v11284, %v11284, %v11284, %v11292, %v11292, %v11300, %v11300, %v11300, %v11300, %v11308, %v11308, %v11316, %v11326, %v11326, %v13316, %v13316, %v13316, %v13316, %v13324 : vector<32xf32>
+  %part1_7 = vector.from_elements %v13324, %v13332, %v13332, %v13340, %v13340, %v13348, %v13356, %v13356, %v13364, %v13374, %v13374, %v15876, %v15876, %v15876, %v15876, %v15876, %v15876, %v15884, %v15884, %v15892, %v15892, %v15892, %v15900, %v15900, %v15900, %v15900, %v15908, %v15908, %v15916, %v15916, %v15916, %v15924 : vector<32xf32>
+  %selected1_1 = scf.select %is_chunk1, %part1_1, %part1_0 : vector<32xf32>
+  %selected1_2 = scf.select %is_chunk2, %part1_2, %selected1_1 : vector<32xf32>
+  %selected1_3 = scf.select %is_chunk3, %part1_3, %selected1_2 : vector<32xf32>
+  %selected1_4 = scf.select %is_chunk4, %part1_4, %selected1_3 : vector<32xf32>
+  %selected1_5 = scf.select %is_chunk5, %part1_5, %selected1_4 : vector<32xf32>
+  %selected1_6 = scf.select %is_chunk6, %part1_6, %selected1_5 : vector<32xf32>
+  %selected1_7 = scf.select %is_chunk7, %part1_7, %selected1_6 : vector<32xf32>
+  %low_values = vector.table.lookup %selected0_7[%codes] : vector<32xf32>, vector<1xi32> -> vector<1xf32>
+  %low_f32 = vector.extract %low_values[0] : vector<1xf32> -> f32
+  %low = scalar.fptoui %low_f32 : f32 to i32
+  %high_values = vector.table.lookup %selected1_7[%codes] : vector<32xf32>, vector<1xi32> -> vector<1xf32>
+  %high_f32 = vector.extract %high_values[0] : vector<1xf32> -> f32
+  %high = scalar.fptoui %high_f32 : f32 to i32
+  %high_shifted = scalar.shli %high, %c16_i32 : i32
+  %word = scalar.ori %low, %high_shifted : i32
+  func.return %word : i32
+}
+
+func.def inline @ggml_iq3xxs_f32_vector4(%weight: buffer, %row_byte_base: offset, %iq3_block: index, %iq3_group: index, %packet: index) -> (vector<4xf32>) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c0_i32 = scalar.constant 0 : i32
+  %c1_i32 = scalar.constant 1 : i32
+  %c2_i32 = scalar.constant 2 : i32
+  %c4_i32 = scalar.constant 4 : i32
+  %c7_i32 = scalar.constant 7 : i32
+  %c8_i32 = scalar.constant 8 : i32
+  %c16_i32 = scalar.constant 16 : i32
+  %c24_i32 = scalar.constant 24 : i32
+  %c28_i32 = scalar.constant 28 : i32
+  %c127_i32 = scalar.constant 127 : i32
+  %c025_f32 = scalar.constant 0.25 : f32
+  %block_bytes = index.constant 98 : offset
+  %qs_offset = index.constant 2 : offset
+  %aux_offset = index.constant 66 : offset
+  %bounded_group = index.assume %iq3_group [range(%iq3_group, 0, 7)] : index
+  %bounded_packet = index.rem %packet, %c8 : index
+  %block_byte_add = index.scale %iq3_block, %block_bytes : index, offset -> offset
+  %block_byte_base = index.add %row_byte_base, %block_byte_add : offset
+  %qs_byte_base = index.add %block_byte_base, %qs_offset : offset
+  %aux_byte_base = index.add %block_byte_base, %aux_offset : offset
+  %d_view = buffer.view %weight[%block_byte_base] : buffer -> view<1xf16>
+  %qs_view = buffer.view %weight[%qs_byte_base] : buffer -> view<64xi8>
+  %aux_view = buffer.view %weight[%aux_byte_base] : buffer -> view<32xi8>
+  %iqs_base = index.mul %bounded_group, %c8 : index
+  %iqs0 = index.add %iqs_base, %bounded_packet : index
+  %iqs = index.assume %iqs0 [range(%iqs0, 0, 63)] : index
+  %grid_index_i8 = view.load %qs_view[%iqs] : view<64xi8> -> i8
+  %grid_index_i32 = scalar.extui %grid_index_i8 : i8 to i32
+  %grid_word = func.call @ggml_iq3xxs_grid_lookup_i32(%grid_index_i32) : (i32) -> (i32)
+  %aux_base = index.mul %bounded_group, %c4 : index
+  %aux1_index = index.add %aux_base, %c1 : index
+  %aux2_index = index.add %aux_base, %c2 : index
+  %aux3_index = index.add %aux_base, %c4 : index
+  %aux3_index0 = index.sub %aux3_index, %c1 : index
+  %aux0_i8 = view.load %aux_view[%aux_base] : view<32xi8> -> i8
+  %aux1_i8 = view.load %aux_view[%aux1_index] : view<32xi8> -> i8
+  %aux2_i8 = view.load %aux_view[%aux2_index] : view<32xi8> -> i8
+  %aux3_i8 = view.load %aux_view[%aux3_index0] : view<32xi8> -> i8
+  %aux0 = scalar.extui %aux0_i8 : i8 to i32
+  %aux1_0 = scalar.extui %aux1_i8 : i8 to i32
+  %aux2_0 = scalar.extui %aux2_i8 : i8 to i32
+  %aux3_0 = scalar.extui %aux3_i8 : i8 to i32
+  %aux1 = scalar.shli %aux1_0, %c8_i32 : i32
+  %aux2 = scalar.shli %aux2_0, %c16_i32 : i32
+  %aux3 = scalar.shli %aux3_0, %c24_i32 : i32
+  %aux01 = scalar.ori %aux0, %aux1 : i32
+  %aux23 = scalar.ori %aux2, %aux3 : i32
+  %aux = scalar.ori %aux01, %aux23 : i32
+  %pair = index.div %bounded_packet, %c2 : index
+  %pair_i32 = index.cast %pair : index to i32
+  %sign_shift = scalar.muli %pair_i32, %c7_i32 : i32
+  %sign_index0 = scalar.shrui %aux, %sign_shift : i32
+  %sign_index = scalar.andi %sign_index0, %c127_i32 : i32
+  %signs = func.call @ggml_iq2xs_sign_mask(%sign_index) : (i32) -> (i32)
   %half = index.rem %bounded_packet, %c2 : index
   %half_i32 = index.cast %half : index to i32
   %half_shift = scalar.muli %half_i32, %c4_i32 : i32
@@ -2857,7 +3493,7 @@ func.def public inline @ggml_dequant_weight_row_bytes(%weight_format: index, %hi
 //   10: Q1_0
 //   11/4/5/6: Q3_K/Q4_K/Q5_K/Q6_K
 //   40/41/50/51: Q4_0/Q4_1/Q5_0/Q5_1
-//   22/20/21/23/24/25: IQ2_S/IQ4_NL/IQ3_S/IQ4_XS/IQ2_XXS/IQ2_XS
+//   18/22/20/21/23/24/25: IQ3_XXS/IQ2_S/IQ4_NL/IQ3_S/IQ4_XS/IQ2_XXS/IQ2_XS
 //   80/81: Q8_0/Q8_1
 //   16/30/32: F16/BF16/F32
 func.def inline @ggml_dequant_f16_vector4(%iq4nl_table: vector<16xi8>, %iq3s_grid_low0: vector<32xf32>, %iq3s_grid_low1: vector<32xf32>, %iq3s_grid_low2: vector<32xf32>, %iq3s_grid_low3: vector<32xf32>, %iq3s_grid_low4: vector<32xf32>, %iq3s_grid_low5: vector<32xf32>, %iq3s_grid_low6: vector<32xf32>, %iq3s_grid_low7: vector<32xf32>, %iq3s_grid_low8: vector<32xf32>, %iq3s_grid_low9: vector<32xf32>, %iq3s_grid_low10: vector<32xf32>, %iq3s_grid_low11: vector<32xf32>, %iq3s_grid_low12: vector<32xf32>, %iq3s_grid_low13: vector<32xf32>, %iq3s_grid_low14: vector<32xf32>, %iq3s_grid_low15: vector<32xf32>, %iq3s_grid_high0: vector<32xf32>, %iq3s_grid_high1: vector<32xf32>, %iq3s_grid_high2: vector<32xf32>, %iq3s_grid_high3: vector<32xf32>, %iq3s_grid_high4: vector<32xf32>, %iq3s_grid_high5: vector<32xf32>, %iq3s_grid_high6: vector<32xf32>, %iq3s_grid_high7: vector<32xf32>, %iq3s_grid_high8: vector<32xf32>, %iq3s_grid_high9: vector<32xf32>, %iq3s_grid_high10: vector<32xf32>, %iq3s_grid_high11: vector<32xf32>, %iq3s_grid_high12: vector<32xf32>, %iq3s_grid_high13: vector<32xf32>, %iq3s_grid_high14: vector<32xf32>, %iq3s_grid_high15: vector<32xf32>, %weight_format: index, %weight: buffer, %row_byte_base: offset, %input_size: index, %quant_block: index, %quant_group: index, %packet: index, %k: index) -> (vector<4xf16>) {
@@ -2871,6 +3507,9 @@ func.def inline @ggml_dequant_f16_vector4(%iq4nl_table: vector<16xi8>, %iq3s_gri
   %c21 = index.constant 21 : index
   %c22 = index.constant 22 : index
   %c23 = index.constant 23 : index
+  %c24 = index.constant 24 : index
+  %c25 = index.constant 25 : index
+  %c18 = index.constant 18 : index
   %c16 = index.constant 16 : index
   %bf16_format = index.constant 30 : index
   %c32 = index.constant 32 : index
@@ -2891,6 +3530,9 @@ func.def inline @ggml_dequant_f16_vector4(%iq4nl_table: vector<16xi8>, %iq3s_gri
   %is_q4_1 = index.cmp eq, %weight_format, %q4_1_format : index
   %is_q5_0 = index.cmp eq, %weight_format, %q5_0_format : index
   %is_q5_1 = index.cmp eq, %weight_format, %q5_1_format : index
+  %is_iq3_xxs = index.cmp eq, %weight_format, %c18 : index
+  %is_iq2_xxs = index.cmp eq, %weight_format, %c24 : index
+  %is_iq2_xs = index.cmp eq, %weight_format, %c25 : index
   %is_iq2_s = index.cmp eq, %weight_format, %c22 : index
   %is_iq4_nl = index.cmp eq, %weight_format, %c20 : index
   %is_iq3_s = index.cmp eq, %weight_format, %c21 : index
@@ -2962,6 +3604,27 @@ func.def inline @ggml_dequant_f16_vector4(%iq4nl_table: vector<16xi8>, %iq3s_gri
     scf.yield %zero : vector<4xf16>
   }
   // IQ family.
+  %iq3_xxs_values = scf.if %is_iq3_xxs -> (vector<4xf16>) {
+    %decoded = func.call @ggml_iq3xxs_f32_vector4(%weight, %row_byte_base, %quant_block, %quant_group, %packet) : (buffer, offset, index, index, index) -> (vector<4xf32>)
+    %values = vector.fptrunc %decoded : vector<4xf32> to vector<4xf16>
+    scf.yield %values : vector<4xf16>
+  } else {
+    scf.yield %zero : vector<4xf16>
+  }
+  %iq2_xxs_values = scf.if %is_iq2_xxs -> (vector<4xf16>) {
+    %decoded = func.call @ggml_iq2xxs_f32_vector4(%weight, %row_byte_base, %quant_block, %quant_group, %packet) : (buffer, offset, index, index, index) -> (vector<4xf32>)
+    %values = vector.fptrunc %decoded : vector<4xf32> to vector<4xf16>
+    scf.yield %values : vector<4xf16>
+  } else {
+    scf.yield %zero : vector<4xf16>
+  }
+  %iq2_xs_values = scf.if %is_iq2_xs -> (vector<4xf16>) {
+    %decoded = func.call @ggml_iq2xs_f32_vector4(%weight, %row_byte_base, %quant_block, %quant_group, %packet) : (buffer, offset, index, index, index) -> (vector<4xf32>)
+    %values = vector.fptrunc %decoded : vector<4xf32> to vector<4xf16>
+    scf.yield %values : vector<4xf16>
+  } else {
+    scf.yield %zero : vector<4xf16>
+  }
   %iq2_s_values = scf.if %is_iq2_s -> (vector<4xf16>) {
     %values = func.call @ggml_iq2s_f16_vector4(%weight, %row_byte_base, %quant_block, %quant_group, %packet) : (buffer, offset, index, index, index) -> (vector<4xf16>)
     scf.yield %values : vector<4xf16>
@@ -3037,7 +3700,10 @@ func.def inline @ggml_dequant_f16_vector4(%iq4nl_table: vector<16xi8>, %iq3s_gri
   %selected_f16 = scf.select %is_f16, %f16_values, %selected_q8_1 : vector<4xf16>
   %selected_bf16 = scf.select %is_bf16, %bf16_values, %selected_f16 : vector<4xf16>
   %selected = scf.select %is_f32, %f32_values, %selected_bf16 : vector<4xf16>
-  func.return %selected : vector<4xf16>
+  %selected_iq2_xxs = scf.select %is_iq2_xxs, %iq2_xxs_values, %selected : vector<4xf16>
+  %selected_iq2_xs = scf.select %is_iq2_xs, %iq2_xs_values, %selected_iq2_xxs : vector<4xf16>
+  %selected_iq3_xxs = scf.select %is_iq3_xxs, %iq3_xxs_values, %selected_iq2_xs : vector<4xf16>
+  func.return %selected_iq3_xxs : vector<4xf16>
 }
 
 // Centralizes row-format decoding for F32 row-gather outputs.
@@ -3052,6 +3718,9 @@ func.def inline @ggml_dequant_f32_vector4(%iq4nl_table: vector<16xi8>, %iq3s_gri
   %c21 = index.constant 21 : index
   %c22 = index.constant 22 : index
   %c23 = index.constant 23 : index
+  %c24 = index.constant 24 : index
+  %c25 = index.constant 25 : index
+  %c18 = index.constant 18 : index
   %c16 = index.constant 16 : index
   %bf16_format = index.constant 30 : index
   %c32 = index.constant 32 : index
@@ -3071,6 +3740,9 @@ func.def inline @ggml_dequant_f32_vector4(%iq4nl_table: vector<16xi8>, %iq3s_gri
   %is_q4_1 = index.cmp eq, %weight_format, %q4_1_format : index
   %is_q5_0 = index.cmp eq, %weight_format, %q5_0_format : index
   %is_q5_1 = index.cmp eq, %weight_format, %q5_1_format : index
+  %is_iq3_xxs = index.cmp eq, %weight_format, %c18 : index
+  %is_iq2_xxs = index.cmp eq, %weight_format, %c24 : index
+  %is_iq2_xs = index.cmp eq, %weight_format, %c25 : index
   %is_iq2_s = index.cmp eq, %weight_format, %c22 : index
   %is_iq4_nl = index.cmp eq, %weight_format, %c20 : index
   %is_iq3_s = index.cmp eq, %weight_format, %c21 : index
@@ -3133,6 +3805,24 @@ func.def inline @ggml_dequant_f32_vector4(%iq4nl_table: vector<16xi8>, %iq3s_gri
   %q5_1_values = scf.if %is_q5_1 -> (vector<4xf32>) {
     %values = func.call @ggml_q5_1_f32_vector4(%weight, %row_byte_base, %k) : (buffer, offset, index) -> (vector<4xf32>)
     scf.yield %values : vector<4xf32>
+  } else {
+    scf.yield %zero : vector<4xf32>
+  }
+  %iq3_xxs_values = scf.if %is_iq3_xxs -> (vector<4xf32>) {
+    %decoded = func.call @ggml_iq3xxs_f32_vector4(%weight, %row_byte_base, %quant_block, %quant_group, %packet) : (buffer, offset, index, index, index) -> (vector<4xf32>)
+    scf.yield %decoded : vector<4xf32>
+  } else {
+    scf.yield %zero : vector<4xf32>
+  }
+  %iq2_xxs_values = scf.if %is_iq2_xxs -> (vector<4xf32>) {
+    %decoded = func.call @ggml_iq2xxs_f32_vector4(%weight, %row_byte_base, %quant_block, %quant_group, %packet) : (buffer, offset, index, index, index) -> (vector<4xf32>)
+    scf.yield %decoded : vector<4xf32>
+  } else {
+    scf.yield %zero : vector<4xf32>
+  }
+  %iq2_xs_values = scf.if %is_iq2_xs -> (vector<4xf32>) {
+    %decoded = func.call @ggml_iq2xs_f32_vector4(%weight, %row_byte_base, %quant_block, %quant_group, %packet) : (buffer, offset, index, index, index) -> (vector<4xf32>)
+    scf.yield %decoded : vector<4xf32>
   } else {
     scf.yield %zero : vector<4xf32>
   }
@@ -3208,7 +3898,10 @@ func.def inline @ggml_dequant_f32_vector4(%iq4nl_table: vector<16xi8>, %iq3s_gri
   %selected_f16 = scf.select %is_f16, %f16_values, %selected_q8_1 : vector<4xf32>
   %selected_bf16 = scf.select %is_bf16, %bf16_values, %selected_f16 : vector<4xf32>
   %selected = scf.select %is_f32, %f32_values, %selected_bf16 : vector<4xf32>
-  func.return %selected : vector<4xf32>
+  %selected_iq2_xxs = scf.select %is_iq2_xxs, %iq2_xxs_values, %selected : vector<4xf32>
+  %selected_iq2_xs = scf.select %is_iq2_xs, %iq2_xs_values, %selected_iq2_xxs : vector<4xf32>
+  %selected_iq3_xxs = scf.select %is_iq3_xxs, %iq3_xxs_values, %selected_iq2_xs : vector<4xf32>
+  func.return %selected_iq3_xxs : vector<4xf32>
 }
 
 // Reuse immutable Q5 metadata across all four 64-element quarters.
