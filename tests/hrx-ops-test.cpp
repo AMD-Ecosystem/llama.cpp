@@ -1145,7 +1145,33 @@ static std::vector<uint8_t> make_iq1_rows(ggml_type type, int64_t row_length, in
     return data;
 }
 
+// Raw blocks cover all scale/min nibbles and bit planes, including zero scales and negative values.
+static std::vector<uint8_t> make_q2k_rows(int64_t row_length, int64_t row_count, int seed) {
+    const int64_t blocks_per_row = row_length / QK_K;
+    std::vector<uint8_t> data(row_count * blocks_per_row * sizeof(block_q2_K));
+    for (int64_t row = 0; row < row_count; ++row) {
+        for (int64_t block = 0; block < blocks_per_row; ++block) {
+            block_q2_K value = {};
+            value.d = ggml_fp32_to_fp16((1 + (row + block) % 3) * 0.00390625f);
+            value.dmin = ggml_fp32_to_fp16((1 + block % 2) * 0.0078125f);
+            for (int group = 0; group < 16; ++group) {
+                const int scale = (group + row + seed) % 16;
+                const int min = (15 - group + block + seed) % 16;
+                value.scales[group] = static_cast<uint8_t>(scale | (min << 4));
+            }
+            for (int code = 0; code < 64; ++code) {
+                value.qs[code] = static_cast<uint8_t>((code * 37 + row * 13 + block * 71 + seed) & 255);
+            }
+            std::memcpy(data.data() + (row * blocks_per_row + block) * sizeof(value), &value, sizeof(value));
+        }
+    }
+    return data;
+}
+
 static std::vector<uint8_t> make_matmul_weight_bytes(ggml_type type, int64_t row_length, int64_t row_count, int seed) {
+    if (type == GGML_TYPE_Q2_K) {
+        return make_q2k_rows(row_length, row_count, seed);
+    }
     if (type == GGML_TYPE_IQ1_S || type == GGML_TYPE_IQ1_M) {
         return make_iq1_rows(type, row_length, row_count, seed);
     }
@@ -6479,7 +6505,80 @@ static void register_basic_ops_cases(Suite & suite) {
                       [] { run_get_rows_scale_f32_cpu_reference_case(GGML_TYPE_Q5_1, 640); });
 }
 
+// Compare GPU matrix paths against the reference block decoder and unquantized accumulation.
+static void run_q2k_matrix_case(int64_t tokens, bool routed) {
+    constexpr int64_t k = 768;
+    const int64_t outputs = routed ? 128 : 65;
+    const int64_t experts = routed ? 8 : 1;
+    const int64_t routes = routed ? 3 : 1;
+    ggml_backend_t backend = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+    ggml_init_params params = {};
+    params.mem_size = 4 * 1024 * 1024;
+    params.no_alloc = true;
+    ggml_context * ctx = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+    ggml_tensor * weight = ggml_new_tensor_3d(ctx, GGML_TYPE_Q2_K, k, outputs, experts);
+    ggml_tensor * input = routed ? ggml_new_tensor_3d(ctx, GGML_TYPE_F32, k, 1, tokens) :
+                                  ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, tokens);
+    ggml_tensor * ids = routed ? ggml_new_tensor_2d(ctx, GGML_TYPE_I32, routes, tokens) : nullptr;
+    ggml_tensor * output = routed ? ggml_mul_mat_id(ctx, weight, input, ids) : ggml_mul_mat(ctx, weight, input);
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, output);
+    REQUIRE(!scheduled_kernel_sequence(graph).empty());
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    REQUIRE(buffer != nullptr);
+    const auto packed = make_q2k_rows(k, outputs * experts, 5);
+    std::vector<float> decoded(k * outputs * experts);
+    ggml_get_type_traits(GGML_TYPE_Q2_K)->to_float(packed.data(), decoded.data(), decoded.size());
+    // Sparse binary inputs keep FP16 accumulation exact while exercising all three K blocks.
+    std::vector<float> inputs(k * tokens, 0.0f);
+    for (int64_t token = 0; token < tokens; ++token) {
+        for (int64_t block = 0; block < k / QK_K; ++block) {
+            const int64_t col = block * QK_K + (token * 37 + block * 17) % QK_K;
+            inputs[token * k + col] = block == 1 ? -0.5f : 0.25f;
+        }
+    }
+    std::vector<int32_t> selected(routes * tokens);
+    for (size_t i = 0; i < selected.size(); ++i) {
+        selected[i] = static_cast<int32_t>((i * 5 + i / routes) % experts);
+    }
+    std::vector<float> expected(outputs * routes * tokens);
+    for (int64_t token = 0; token < tokens; ++token) {
+        for (int64_t route = 0; route < routes; ++route) {
+            const int64_t expert = selected[token * routes + route];
+            for (int64_t row = 0; row < outputs; ++row) {
+                float sum = 0.0f;
+                for (int64_t col = 0; col < k; ++col) {
+                    sum += decoded[(expert * outputs + row) * k + col] * inputs[token * k + col];
+                }
+                expected[(token * routes + route) * outputs + row] = sum;
+            }
+        }
+    }
+    ggml_backend_tensor_set(weight, packed.data(), 0, packed.size());
+    ggml_backend_tensor_set(input, inputs.data(), 0, inputs.size() * sizeof(float));
+    if (routed) {
+        ggml_backend_tensor_set(ids, selected.data(), 0, selected.size() * sizeof(int32_t));
+    }
+    REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(backend);
+    require_close(get_f32_tensor(backend, output), expected, 2.0e-3f, 2.0e-3f);
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+    ggml_backend_free(backend);
+}
+
 static void register_dense_matmul_cases(Suite & suite) {
+    suite.device_case("get_rows_f32.q2_k.blocks3", [] {
+        run_get_rows_f32_cpu_reference_case(GGML_TYPE_Q2_K, 768);
+    });
+    for (const int64_t tokens : { 1, 4, 33, 128 }) {
+        for (const bool routed : { false, true }) {
+            suite.device_case("q2_k_matrix.tokens" + std::to_string(tokens) + ".routed" + std::to_string(routed),
+                              [tokens, routed] { run_q2k_matrix_case(tokens, routed); });
+        }
+    }
     // Distinct gate/up weights cover cached metadata, multiple K blocks, and tile tails.
     for (const ggml_type gate : { GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS }) {
         for (const ggml_type up : { GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS }) {

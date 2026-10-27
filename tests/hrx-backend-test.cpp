@@ -266,6 +266,8 @@ static int64_t matmul_weight_format_config(ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q1_0:
             return 10;
+        case GGML_TYPE_Q2_K:
+            return 12;
         case GGML_TYPE_Q3_K:
             return 11;
         case GGML_TYPE_Q4_K:
@@ -8208,6 +8210,7 @@ static void run_qwen_matmul_dispatch_checks() {
         };
 
         const FormatCase cases[] = {
+            { GGML_TYPE_Q2_K,   128 },
             { GGML_TYPE_Q3_K,   128 },
             { GGML_TYPE_Q4_K,   128 },
             { GGML_TYPE_Q6_K,   128 },
@@ -8543,6 +8546,24 @@ static void run_qwen_matmul_dispatch_checks() {
             schedule_single_matmul_command(ctx, legacy_decode_output, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1,
                                            2048, 128);
         }
+
+        ggml_tensor * q2_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_Q2_K, 2048, 128);
+        ggml_tensor * q2_input  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2048, 4);
+        REQUIRE(q2_weight != nullptr);
+        REQUIRE(q2_input != nullptr);
+        ggml_tensor * q2_output = ggml_mul_mat(ctx, q2_weight, q2_input);
+        REQUIRE(q2_output != nullptr);
+        schedule_single_matmul_command(ctx, q2_output, "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32", 4, 2048,
+                                       128);
+
+        ggml_tensor * q2_decode_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_Q2_K, 2048, 128);
+        ggml_tensor * q2_decode_input  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2048, 1);
+        REQUIRE(q2_decode_weight != nullptr);
+        REQUIRE(q2_decode_input != nullptr);
+        ggml_tensor * q2_decode_output = ggml_mul_mat(ctx, q2_decode_weight, q2_decode_input);
+        REQUIRE(q2_decode_output != nullptr);
+        schedule_single_matmul_command(ctx, q2_decode_output, "loom_libs:ggml_mul_mat_f32_f32_decode_wave64", 1, 2048,
+                                       128);
 
         ggml_tensor * q3_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_Q3_K, 2048, 128);
         ggml_tensor * q3_input  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2048, 4);
@@ -9793,6 +9814,8 @@ static void append_qwen_routed_down_for_graph(ggml::hrx::Graph &              gr
 
 static std::string common_mul_mat_weight_format(ggml_type type) {
     switch (type) {
+        case GGML_TYPE_Q2_K:
+            return "12";
         case GGML_TYPE_Q3_K:
             return "11";
         case GGML_TYPE_Q4_K:
@@ -10065,6 +10088,11 @@ static void run_common_mul_mat_id_swiglu_dispatch_checks() {
     {
         const CommonMulMatIdSwiGLUTensors tensors =
             build_common_mul_mat_id_swiglu_graph(ctx, GGML_TYPE_IQ4_XS, GGML_TYPE_IQ4_XS);
+        require_common_mul_mat_id_swiglu_match(ctx, tensors, tensors.gate);
+    }
+    {
+        const CommonMulMatIdSwiGLUTensors tensors =
+            build_common_mul_mat_id_swiglu_graph(ctx, GGML_TYPE_Q2_K, GGML_TYPE_Q2_K);
         require_common_mul_mat_id_swiglu_match(ctx, tensors, tensors.gate);
     }
     {
