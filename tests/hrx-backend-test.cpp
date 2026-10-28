@@ -12311,6 +12311,72 @@ static void run_graph_compute_mask_checks() {
     ggml_free(ctx);
 }
 
+static void run_initializer_host_input_ownership() {
+    ggml_backend_t backend = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+    auto * backend_context = static_cast<ggml_backend_hrx_context *>(backend->context);
+    ggml_context * ctx = ggml_init({ 1024 * 1024, nullptr, false });
+    REQUIRE(ctx != nullptr);
+    ggml::hrx::Graph graph;
+    std::array<ggml_tensor *, 3> tensors;
+    std::array<ggml::hrx::ValueId, 3> values;
+    for (size_t i = 0; i < tensors.size(); ++i) {
+        tensors[i] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 128);
+        values[i] = graph.values().get_or_add_tensor_value(tensors[i], ggml::hrx::ValueKind::External);
+        ggml::hrx::ValueBufferBinding binding;
+        binding.host_data = tensors[i]->data;
+        binding.length = binding.capacity = ggml_nbytes(tensors[i]);
+        binding.identity = i + 1;
+        REQUIRE(graph.values().bind_buffer(values[i], binding));
+    }
+    auto scale = [&](size_t input, size_t output, const char * factor) {
+        ggml::hrx::Dispatch dispatch;
+        dispatch.kernel = ggml::hrx::make_kernel_specialization(
+            ggml::hrx::kernel_catalog_ref("loom_libs", "ggml_scale_bias_f32"));
+        dispatch.kernel.integer_parameters.emplace("element_count", 128);
+        dispatch.kernel.compile_parameters.emplace("ggml.scale.scale", factor);
+        dispatch.kernel.compile_parameters.emplace("ggml.scale.bias", "0");
+        dispatch.bindings.push_back({ values[input], 0, ggml_nbytes(tensors[input]) });
+        dispatch.bindings.push_back({ values[output], 0, ggml_nbytes(tensors[output]) });
+        return dispatch;
+    };
+    ggml::hrx::CommandPlan plan;
+    plan.initialization_dispatches.push_back(scale(0, 0, "2"));
+    plan.dispatches.push_back(scale(0, 1, "3"));
+    plan.dispatches.push_back(scale(2, 2, "5"));
+    const auto & corpus = ggml::hrx::get_qwen_kernel_corpus();
+    const char * target = backend_context->device->architecture.c_str();
+    const auto commands = ggml::hrx::build_command_program(graph, plan, corpus, target);
+    REQUIRE(commands.valid());
+    const auto bindings = ggml::hrx::CommandProgramBindings::from_value_map(graph.values());
+    REQUIRE(bindings.valid());
+    const ggml::hrx::CommandProgramExecutionContext execution_context = {
+        backend_context->device->device, backend_context->stream, target, &corpus,
+        &backend_context->kernel_executables, &backend_context->transient_arena,
+        &backend_context->host_transfers, &backend_context->host_weights,
+        &backend_context->device->host_buffers, &backend_context->graph_replay_state,
+    };
+    for (float input : { 1.0f, 3.0f }) {
+        std::fill_n(static_cast<float *>(tensors[0]->data), 128, input);
+        std::fill_n(static_cast<float *>(tensors[1]->data), 128, 0.0f);
+        std::fill_n(static_cast<float *>(tensors[2]->data), 128, 2.0f);
+        REQUIRE(backend_context->prepared_programs.execute(
+            execution_context, 84001, "initializer-host-input-ownership", commands, bindings));
+        // A scheduler may replace the next batch's inputs before draining deferred host outputs.
+        std::fill_n(static_cast<float *>(tensors[0]->data), 128, 7.0f);
+        ggml_backend_synchronize(backend);
+        for (size_t i = 0; i < 128; ++i) {
+            REQUIRE(static_cast<float *>(tensors[0]->data)[i] == 7.0f);
+            REQUIRE(static_cast<float *>(tensors[1]->data)[i] == input * 6.0f);
+            REQUIRE(static_cast<float *>(tensors[2]->data)[i] == 10.0f);
+        }
+    }
+    REQUIRE(backend_context->prepared_programs.stats().builds == 1);
+    REQUIRE(backend_context->prepared_programs.stats().hits == 1);
+    ggml_backend_free(backend);
+    ggml_free(ctx);
+}
+
 static void run_inactive_set_rows_replay() {
     ggml_backend_t backend = ggml_backend_hrx_init(0);
     REQUIRE(backend != nullptr);
@@ -14302,6 +14368,7 @@ static void register_hrx_backend_device_cases(test_runner::Suite & suite) {
     suite.device_case("qwen_expert_table_partition_prefill_512_execution",
                       [] { run_qwen_expert_table_partition_prefill_512_execution(); });
     suite.device_case("inactive_set_rows_replay", [] { run_inactive_set_rows_replay(); });
+    suite.device_case("initializer_host_input_ownership", [] { run_initializer_host_input_ownership(); });
     suite.device_case("program_cache_retirement", [] { run_program_cache_retirement(); });
     suite.device_case("add_f32", [] { run_add_f32(); });
     suite.device_case("rope_scale_f32_numerics", [] { run_rope_scale_f32_numerics(); });
