@@ -681,7 +681,7 @@ static void run_activation_publication_contract_checks() {
     const size_t      f32_bytes = ggml_row_size(GGML_TYPE_F32, elements);
 
     auto make_activation = [&](ggml::hrx::ValueId id, ggml::hrx::ValueStorageId storage, ggml::hrx::ValueId root,
-                               ggml::hrx::ValueId alias, int64_t element_count = elements) {
+                               ggml::hrx::ValueId alias, int64_t element_count) {
         ggml::hrx::Value value = make_test_value(id, storage, root, alias, 0, f32_bytes, GGML_TYPE_F32, element_count);
         if (element_count == elements) {
             value.ne = { row_size, row_count, 1, 1 };
@@ -703,14 +703,14 @@ static void run_activation_publication_contract_checks() {
     status = graph.values().add_snapshot_storage({ ggml::hrx::ValueStorageId(0), root, f32_bytes });
     REQUIRE(status.success());
     status = graph.values().add_snapshot_value(
-        make_activation(root, ggml::hrx::ValueStorageId(0), root, ggml::hrx::ValueId()));
+        make_activation(root, ggml::hrx::ValueStorageId(0), root, ggml::hrx::ValueId(), elements));
     REQUIRE(status.success());
-    status = graph.values().add_snapshot_value(make_activation(reshaped, ggml::hrx::ValueStorageId(0), root, root));
+    status = graph.values().add_snapshot_value(make_activation(reshaped, ggml::hrx::ValueStorageId(0), root, root, elements));
     REQUIRE(status.success());
     status = graph.values().add_snapshot_value(
         make_activation(partial, ggml::hrx::ValueStorageId(0), root, root, elements / 2));
     REQUIRE(status.success());
-    ggml::hrx::Value reordered = make_activation(transposed, ggml::hrx::ValueStorageId(0), root, root);
+    ggml::hrx::Value reordered = make_activation(transposed, ggml::hrx::ValueStorageId(0), root, root, elements);
     reordered.contiguous       = false;
     status                     = graph.values().add_snapshot_value(std::move(reordered));
     REQUIRE(status.success());
@@ -720,10 +720,10 @@ static void run_activation_publication_contract_checks() {
         const ggml::hrx::ValueId        id(value);
         status = graph.values().add_snapshot_storage({ storage, id, f32_bytes });
         REQUIRE(status.success());
-        status = graph.values().add_snapshot_value(make_activation(id, storage, id, ggml::hrx::ValueId()));
+        status = graph.values().add_snapshot_value(make_activation(id, storage, id, ggml::hrx::ValueId(), elements));
         REQUIRE(status.success());
     }
-    ggml::hrx::Value different = make_activation(different_shape, ggml::hrx::ValueStorageId(0), root, root);
+    ggml::hrx::Value different = make_activation(different_shape, ggml::hrx::ValueStorageId(0), root, root, elements);
     different.ne               = { row_size / 2, row_count * 2, 1, 1 };
     different.nb = { sizeof(float), static_cast<size_t>(row_size / 2) * sizeof(float), f32_bytes, f32_bytes };
     status       = graph.values().add_snapshot_value(std::move(different));
@@ -731,9 +731,9 @@ static void run_activation_publication_contract_checks() {
     status = graph.values().add_snapshot_storage({ ggml::hrx::ValueStorageId(5), ggml::hrx::ValueId(9), f32_bytes });
     REQUIRE(status.success());
     status = graph.values().add_snapshot_value(make_activation(ggml::hrx::ValueId(9), ggml::hrx::ValueStorageId(5),
-                                                               ggml::hrx::ValueId(9), ggml::hrx::ValueId()));
+                                                               ggml::hrx::ValueId(9), ggml::hrx::ValueId(), elements));
     REQUIRE(status.success());
-    ggml::hrx::Value incompatible = make_activation(incompatible_q8_shape, ggml::hrx::ValueStorageId(0), root, root);
+    ggml::hrx::Value incompatible = make_activation(incompatible_q8_shape, ggml::hrx::ValueStorageId(0), root, root, elements);
     incompatible.ne               = { 64, elements / 64, 1, 1 };
     incompatible.nb               = { sizeof(float), 64 * sizeof(float), f32_bytes, f32_bytes };
     status                        = graph.values().add_snapshot_value(std::move(incompatible));
@@ -741,18 +741,18 @@ static void run_activation_publication_contract_checks() {
     status = graph.values().add_snapshot_storage({ ggml::hrx::ValueStorageId(6), ggml::hrx::ValueId(11), f32_bytes });
     REQUIRE(status.success());
     status = graph.values().add_snapshot_value(make_activation(ggml::hrx::ValueId(11), ggml::hrx::ValueStorageId(6),
-                                                               ggml::hrx::ValueId(11), ggml::hrx::ValueId()));
+                                                               ggml::hrx::ValueId(11), ggml::hrx::ValueId(), elements));
     REQUIRE(status.success());
     status = graph.values().add_snapshot_value(
-        make_activation(shape_back, ggml::hrx::ValueStorageId(0), root, different_shape));
+        make_activation(shape_back, ggml::hrx::ValueStorageId(0), root, different_shape, elements));
     REQUIRE(status.success());
     status = graph.values().add_snapshot_storage({ ggml::hrx::ValueStorageId(7), ggml::hrx::ValueId(13), f32_bytes });
     REQUIRE(status.success());
     status = graph.values().add_snapshot_value(make_activation(ggml::hrx::ValueId(13), ggml::hrx::ValueStorageId(7),
-                                                               ggml::hrx::ValueId(13), ggml::hrx::ValueId()));
+                                                               ggml::hrx::ValueId(13), ggml::hrx::ValueId(), elements));
     REQUIRE(status.success());
     ggml::hrx::Value mismatched = make_activation(
-        mismatched_alias_source, ggml::hrx::ValueStorageId(0), root, root);
+        mismatched_alias_source, ggml::hrx::ValueStorageId(0), root, root, elements);
     mismatched.ne = { row_size / 2, row_count * 2, 1, 1 };
     mismatched.nb = { sizeof(float), static_cast<size_t>(row_size / 2) * sizeof(float), f32_bytes, f32_bytes };
     status = graph.values().add_snapshot_value(std::move(mismatched));
@@ -760,7 +760,7 @@ static void run_activation_publication_contract_checks() {
     status = graph.values().add_snapshot_storage({ ggml::hrx::ValueStorageId(8), ggml::hrx::ValueId(15), f32_bytes });
     REQUIRE(status.success());
     status = graph.values().add_snapshot_value(make_activation(ggml::hrx::ValueId(15), ggml::hrx::ValueStorageId(8),
-                                                               ggml::hrx::ValueId(15), ggml::hrx::ValueId()));
+                                                               ggml::hrx::ValueId(15), ggml::hrx::ValueId(), elements));
     REQUIRE(status.success());
 
     graph.add_node(GGML_OP_RESHAPE, reshaped, { root });
