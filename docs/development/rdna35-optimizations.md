@@ -2,6 +2,59 @@
 
 The active implementation is `lichang.rdna35-prefill-quant-rope`. Qwen vision window batching, D64/D72/D80 vision attention, D128 language attention, D512 language attention, FP16/FP32 conversion, RMSNorm, activation quantization, and RoPE changes share this source tree. Earlier experimental worktrees are reference snapshots; changes should be developed and validated here.
 
+## Vision tensor traffic and output fusion (2026-10-27)
+
+The commit titled `hip: reduce RDNA3.5 vision tensor traffic` extends the existing implementation at `667af94f05375369079f549225067c315effe0b6`. It combines launch geometry, K/V conversion, normalized FFN input, residual conversion and window-output changes. The measured target is Qwen2.5-VL-7B; structural eligibility for other models is described below, without a new model-level performance claim for them.
+
+| Qwen2.5-VL-7B / Halo40 | Baseline HTTP TTFT | With changes | Saving | Ratio to saved gfx11 vLLM |
+| --- | ---: | ---: | ---: | ---: |
+| Checkpoints off, alternating A-B-B-A, 20 samples per variant | 1310.36 ms | 1247.40 ms | 62.96 ms / 4.80% | 1.435x -> 1.366x |
+| Checkpoints 32, 10 samples per variant | 1301.15 ms | 1246.46 ms | 54.69 ms / 4.20% | 1.425x -> 1.365x |
+| Rebuilt production server, checkpoints 32, separate 10-sample run | - | 1236.12 ms | No paired control | 1.354x |
+
+The saved gfx11 vLLM reference is 912.953 ms, from another date/board; vLLM was not rerun. A strict 1.35x result requires 1232.49 ms, so the alternating comparison is still 14.91 ms short. The faster standalone production run does not establish a repeatable 1.35x result. The baseline already includes the earlier FP16/BF16 and attention optimizations; their gains must not be added again.
+
+Tests use the same 1024x800 uniform green image, resized to 1036x812, giving 4292 vision patches and 1073 image embeddings. Language positions are 527 prefix + 1073 image + 6 trailing text = 1606. Weights are Q4_K_M with an F16 projector, KV is F16, flash attention is enabled, context is 4096, CPU threads are 8, and batch/microbatch are both 2048 with `ROCBLAS_USE_HIPBLASLT=1`. This microbatch differs from the earlier ub512 fusion measurements. Normal timing retains the original 128-output-token cap and EOS behavior, measuring time to first content token after five warmups per process. Every measured request has zero prompt-cache reuse and 1606 prompt positions. GPU contention checks passed. The two baseline process medians were 1299.31 and 1318.54 ms, versus 1245.22 and 1250.13 ms for the two candidate processes; the pooled comparison retains that variation.
+
+The changes target these structures:
+
+- RDNA3.5 multimodal/vision RoPE with head widths 80 or 128 uses 64 threads instead of 256. The existing 256-thread RMSNorm path also covers widths 1280 and 3584 when there are at least 64 rows. RoPE arithmetic stays the same; RMSNorm changes the floating-point reduction order.
+- The existing Qwen batched local-window graph converts each contiguous whole K/V tensor to F16 before taking window views. The shared attention builder accepts already-F16 K/V without redundant casts. This removes 784 copy launches for this input, with equivalent F16 rounding. Other attention structures do not acquire window batching from this change.
+- The existing RDNA3.5 F16/BF16 BLAS fusion can combine output conversion, FP32 vector bias and FP32 residual addition. It preserves the intermediate FP32 bias result and rejects residuals that depend on an elided node, incompatible aliasing and extra intermediate consumers.
+- A compatible biased gated FFN can consume its preceding RMSNorm and scale, performing normalization in FP32 and writing directly to its existing F16/BF16 scratch input. This removes an FP32 graph write and the following conversion. Existing BLAS, shape, precision, type, consumer and alias guards remain. Language MMQ outputs and the residual stream are not globally narrowed.
+- Qwen window outputs use disjoint writes into one final tensor instead of a balanced CONCAT tree. A RDNA3.5 `FLASH_ATTN_EXT -> RESHAPE -> SET` fusion then lets attention write directly into that tensor, removing 420 assembly copies. It requires exclusive intermediate consumers, contiguous F32 storage, dense destination row stride, valid bounds, 16-byte alignment, no overlap with attention inputs, and no extra attention storage appended to the output. Unmatched cases use the ordinary SET path.
+
+The changes retain text/image chunk boundaries and checkpoint support. Per-request launches fall from 4713 to 3441. The trace confirms 32 normalized-FFN fusions, 32 separate conversion/bias/residual fusions and 420 direct attention-output fusions. Language and vision GEMM counts and shapes are unchanged.
+
+Independent rocprof traces contain three requests per variant, with exact per-stream kernel-sequence matching to an operation trace. Vision and language prefix execution overlap. The following times count each elapsed interval once, assigning GEMM priority, then attention, then support work; they are not predictions of removable latency.
+
+| Profiled component | Baseline | With changes |
+| --- | ---: | ---: |
+| GEMM active | 1113.65 ms | 1103.95 ms |
+| Attention active, no GEMM | 77.28 ms | 71.34 ms |
+| Support only, no GEMM or attention | 203.75 ms | 146.23 ms |
+| No traced GPU kernel | 45.55 ms | 44.27 ms |
+
+The main change is 57.52 ms less exposed support work. Vision's mean span falls from 677.85 to 609.45 ms; image language prefill falls from 683.40 to 677.33 ms. The concurrent text prefix remains about 481 ms. Profiler overhead makes these timings higher than normal HTTP TTFT, and raw concurrent kernel sums must not be added to either table. Raw vision GEMM duration increases as more of its execution overlaps language, despite the shorter vision span; this is not an intrinsic GEMM regression measurement.
+
+Two probes were not retained. Hoisting K/V casts after permuting the full tensor removed launches but left inefficient strided conversion: raw copy time barely changed, from 35.98 to 34.11 ms, and TTFT did not improve. Casting in the original contiguous layout reduced copy time to 15.69 ms. Dense flat RoPE indexing with 256-thread blocks added indexing/bounds work and measured 1237.31 ms versus 1236.57 ms for the preceding 64-thread geometry candidate, so it was reverted. These exploratory results are single-process measurements, not additive savings.
+
+Remaining targets include sharing the three identical normalized-input conversions for vision Q/K/V (96 casts / 20.35 ms raw, only two of the three redundant), fusing K's RoPE with its required F16 store, and reducing FP32 gate/up output traffic before language GLU/packing (44.50 ms raw). Most language GLU output is already F16 or packed Q8. Narrowing MMQ outputs requires correct final rounding after stream-K accumulation; adding a standalone cast could erase the benefit. Language FFN gate/up GEMMs remain the largest workload at 578.75 ms raw with existing pipelining enabled. These raw times overlap and are not additive TTFT opportunities.
+
+Validation passes ROPE, RMS_NORM, RMS_NORM_MUL_ADD, MUL_MAT_BIAS, F16_FFN_BIAS, BF16_FFN_BIAS and FLASH_ATTN_EXT_SET backend groups, including extra consumers, residual dependencies, forced-F32 fallbacks, boundary dimensions and in-place/out-of-place assembly. The rebuilt production library also passes the affected FFN, matrix/bias and attention/SET groups. The ordinary server/test build passes, and changed HIP units compile for gfx1100 and gfx942; runtime testing is on gfx1151. NVIDIA was not compiled or tested.
+
+All 140 measured normal requests across the tested variants retain the same full generated text. Three image checks retain identical 32-token generations and finite embeddings, but the final embeddings are not bitwise equivalent:
+
+| Image | Embedding NMSE | Maximum absolute difference | Maximum chosen-token log-probability difference |
+| --- | ---: | ---: | ---: |
+| Uniform 1024x800 benchmark | 4.48e-4 | 4.5625 | 0.06292 |
+| Patterned 224x224 | 3.77e-6 | 0.0390625 | 0.02480 |
+| Patterned 1008x756 | 9.44e-6 | 0.238281 | 0.06244 |
+
+Repeating the baseline yields bit-identical embeddings. Geometry alone introduces differences consistent with the changed RMSNorm reduction order. Adding K/V hoisting to geometry is bit-identical on all three inputs, as is adding output assembly to the normalization/residual-fusion candidate. The additional difference is localized to the normalization/residual fusion bundle, without isolation of its individual operations. One repeat of that intermediate bundle changes log probabilities by at most 0.0115 while retaining identical tokens. The uniform image's approximately 2.1% relative RMS embedding difference is material: these checks do not establish zero accuracy loss. Broader image/task evaluation is required before treating the rounding changes as quality-neutral. There is no new Gemma or full VLM-suite speedup claim from this experiment.
+
+Evidence: `/proj/gdba/lichang/regression_results/qwen25vl7b_tensor_traffic_20261027/REPORT.md`, `paired_timing.json`, `verification.json`, `verification_isolation.json`, the baseline/candidate timeline analyses, source snapshots, binary hashes and per-run requests/results. External profiler shutdown required a timeout kill after CSV output was flushed; all three requests in each trace match the complete operation sequence and interval accounting. Normal timing/correctness servers shut down normally. The ordinary `build-rdna35-gfx1151` includes these changes.
+
 ## BF16 fusion extension (2026-10-26)
 
 This extends commit `71d2d68e3199810e094529a3bd04134f9afd7921` in the same implementation. The conversion/bias, SwiGLU/GEGLU conversion, biased gated FFN, and GEMM input/output clamp fusions now accept BF16 as well as FP16. Buffers use the original weight/compute type; BF16 GEMMs retain FP32 accumulation and BF16 output. Bias, activation and clamp arithmetic remain FP32. The change removes intermediate FP32 memory traffic and kernel launches; it does not change weights or globally lower activation precision.
@@ -53,7 +106,7 @@ Evidence: `rdna35_vision_bias_fusion_20261026/REPORT.md`, `final_summary.json`, 
 
 ## Commit-by-commit record
 
-This record covers all nine source-changing commits on `lichang.rdna35-prefill-quant-rope` after the inherited gfx11 base [`0363d99d3`](https://github.com/AMD-Ecosystem/llama.cpp/commit/0363d99d3b276a5cfb8d2ab2940cd1a9a7e1d46b). It excludes inherited upstream changes. The documentation-only update titled `docs: record RDNA3.5 optimization targets and measured gains` adds this audit and has no runtime performance effect.
+This record covers all eleven source-changing commits on `lichang.rdna35-prefill-quant-rope` after the inherited gfx11 base [`0363d99d3`](https://github.com/AMD-Ecosystem/llama.cpp/commit/0363d99d3b276a5cfb8d2ab2940cd1a9a7e1d46b). It excludes inherited upstream changes. The documentation-only update titled `docs: record RDNA3.5 optimization targets and measured gains` adds this audit and has no runtime performance effect.
 
 Percentages below are latency reductions, `(before - after) / before`, not throughput increases. **Fresh prefill** measures `llama_decode` through GPU completion with fresh KV; it excludes HTTP, tokenization and image processing. **HTTP TTFT** measures request submission through the first content token, including image work for VLMs. GPU kernel sums are diagnostic measurements and are not interchangeable with either latency metric. Results from different baselines, boards, image budgets or microbatches must not be added together.
 
@@ -69,7 +122,9 @@ Unless stated otherwise, the measurements use Halo41 / gfx1151, Q4_K_M weights a
 | [`5aa5aee1e`](https://github.com/AMD-Ecosystem/llama.cpp/commit/5aa5aee1e64312b83a1b74c67a2ff4bdb5ef97ba) | Consolidate window attention, WMMA, wider D128 tiles, conversion, RMSNorm and graph fusions | Multiple experiments, detailed below. Original Qwen2.5-VL-3B vision package: 57.0% lower HTTP TTFT; final E2B fusion stage: another 6.35%. |
 | [`1ee95c533`](https://github.com/AMD-Ecosystem/llama.cpp/commit/1ee95c533fbe93930e62a6e148df1937e1ea255c) | Adapt D72 vision attention to the existing D80 WMMA kernel | Gemma-3-4B-IT: 371.76 ms / 32.57% lower HTTP TTFT. |
 | [`a68d7c3ed`](https://github.com/AMD-Ecosystem/llama.cpp/commit/a68d7c3ed306ff9ee4ed57dfcced87274f4eece5) | Extend producer fusion to SwiGLU and tune fused Q/K norm-RoPE | At 3968 tokens: Qwen2.5-3B saves 53.04 ms / 4.76%; Qwen3-4B saves 59.39 ms / 3.85% HTTP TTFT. |
-| [Vision bias and gated FFN fusion (2026-10-26)](#vision-bias-and-gated-ffn-fusion-2026-10-26) | Share gate/up input conversion and fuse FP16 GEMM output conversion, FP32 bias and gated activation | Qwen2.5-VL-7B saves 79.84 ms / 5.68% HTTP TTFT on Halo40 and 69.24 ms / 5.14% on Halo05; Gemma-3-4B saves 23.90 ms / 3.21%. |
+| [`71d2d68e3`](https://github.com/ROCm/llama.cpp/commit/71d2d68e3199810e094529a3bd04134f9afd7921) | Share gate/up input conversion and fuse FP16 GEMM output conversion, FP32 bias and gated activation | Qwen2.5-VL-7B saves 79.84 ms / 5.68% HTTP TTFT on Halo40 and 69.24 ms / 5.14% on Halo05; Gemma-3-4B saves 23.90 ms / 3.21%. |
+| [`667af94f0`](https://github.com/ROCm/llama.cpp/commit/667af94f05375369079f549225067c315effe0b6) | Extend the same producer fusions to BF16 | Qwen3-Omni-30B-A3B saves 28.42 ms / 2.62%; Gemma-4-31B OpenNav saves 17.28 ms / 0.94% HTTP TTFT. |
+| [Vision tensor traffic and output fusion (2026-10-27)](#vision-tensor-traffic-and-output-fusion-2026-10-27) | Hoist window K/V conversion, write attention directly to final output, fuse normalized FFN input and residual conversion, tune RoPE/RMSNorm blocks | Qwen2.5-VL-7B saves 62.96 ms / 4.80% HTTP TTFT; checkpoints-on control saves 54.69 ms / 4.20%. |
 
 ### 9de63b7c5: Q8 quantization and standalone RoPE launches
 

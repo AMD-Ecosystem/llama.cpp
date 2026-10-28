@@ -1,4 +1,5 @@
 #include "norm.cuh"
+#include "convert.cuh"
 #include <cstdint>
 
 template <int block_size>
@@ -73,9 +74,9 @@ static __global__ void group_norm_f32(const float * x, float * dst, const int gr
     }
 }
 
-template <int block_size, bool do_multiply = false, bool do_add = false, bool do_scale = false>
+template <int block_size, bool do_multiply = false, bool do_add = false, bool do_scale = false, typename D = float>
 static __global__ void rms_norm_f32(const float * x,
-                                    float *       dst,
+                                    D *           dst,
                                     const int     ncols,
                                     const int64_t stride_row,
                                     const int64_t stride_channel,
@@ -145,12 +146,12 @@ static __global__ void rms_norm_f32(const float * x,
         if constexpr (do_multiply && do_add) {
             const int mul_col = fastmodulo(col, mul_ncols_packed);
             const int add_col = fastmodulo(col, add_ncols_packed);
-            dst[col]          = scale * x[col] * mul[mul_col] + add[add_col];
+            dst[col]          = ggml_cuda_cast<D>(scale * x[col] * mul[mul_col] + add[add_col]);
         } else if constexpr (do_multiply) {
             const int mul_col = fastmodulo(col, mul_ncols_packed);
-            dst[col]          = scale * x[col] * mul[mul_col];
+            dst[col]          = ggml_cuda_cast<D>(scale * x[col] * mul[mul_col]);
         } else {
-            dst[col] = scale * x[col];
+            dst[col] = ggml_cuda_cast<D>(scale * x[col]);
         }
         if constexpr (do_scale) {
             dst[col] *= post_scale[0];
@@ -307,7 +308,7 @@ static void group_norm_f32_cuda(
 
 static bool rms_norm_use_small_block(const int ncols, const int nrows) {
 #if defined(GGML_USE_HIP)
-    if (ncols != 1536 || nrows < 64) {
+    if ((ncols != 1280 && ncols != 1536 && ncols != 3584) || nrows < 64) {
         return false;
     }
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
@@ -317,6 +318,26 @@ static bool rms_norm_use_small_block(const int ncols, const int nrows) {
     return false;
 #endif
 }
+
+template <typename T>
+void ggml_cuda_rms_norm_mul_to_16bit(const float * x, const float * weight, T * dst,
+        int ncols, int nrows, float eps, cudaStream_t stream) {
+    const dim3 blocks(nrows, 1, 1);
+    const uint3 cols = init_fastdiv_values(ncols);
+    const uint3 one = init_fastdiv_values(1);
+    if (ncols < 1024 || rms_norm_use_small_block(ncols, nrows)) {
+        rms_norm_f32<256, true, false, false, T><<<blocks, 256, 32 * sizeof(float), stream>>>(
+            x, dst, ncols, ncols, int64_t(ncols) * nrows, int64_t(ncols) * nrows, eps,
+            weight, 0, 0, 0, cols, one, one, one);
+    } else {
+        rms_norm_f32<1024, true, false, false, T><<<blocks, 1024, 32 * sizeof(float), stream>>>(
+            x, dst, ncols, ncols, int64_t(ncols) * nrows, int64_t(ncols) * nrows, eps,
+            weight, 0, 0, 0, cols, one, one, one);
+    }
+}
+
+template void ggml_cuda_rms_norm_mul_to_16bit<half>(const float *, const float *, half *, int, int, float, cudaStream_t);
+template void ggml_cuda_rms_norm_mul_to_16bit<nv_bfloat16>(const float *, const float *, nv_bfloat16 *, int, int, float, cudaStream_t);
 
 static void rms_norm_f32_cuda(
         const float * x, float * dst, const int ncols, const int nrows, const int nchannels, const int nsamples,

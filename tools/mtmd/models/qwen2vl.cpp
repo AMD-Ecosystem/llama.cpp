@@ -158,6 +158,9 @@ ggml_cgraph * clip_graph_qwen2vl::build() {
             ggml_tensor * attn_mask = full_attn ? nullptr : window_mask;
 
             if (batch_windows && !full_attn) {
+                // Convert each full K/V tensor once before taking window views.
+                Kcur = ggml_cast(ctx0, Kcur, GGML_TYPE_F16);
+                Vcur = ggml_cast(ctx0, Vcur, GGML_TYPE_F16);
                 std::vector<ggml_tensor *> outputs;
                 int offset = 0;
                 for (const auto & run : window_runs) {
@@ -170,16 +173,17 @@ ggml_cgraph * clip_graph_qwen2vl::build() {
                     offset += run.first * run.second;
                 }
                 GGML_ASSERT(offset == n_patches);
-                // A balanced tree limits copies when the image has many window runs.
-                while (outputs.size() > 1) {
-                    std::vector<ggml_tensor *> joined;
-                    for (size_t i = 0; i < outputs.size(); i += 2) {
-                        joined.push_back(i + 1 < outputs.size()
-                            ? ggml_concat(ctx0, outputs[i], outputs[i + 1], 1) : outputs[i]);
+                ggml_tensor * joined = outputs.front();
+                if (outputs.size() > 1) {
+                    joined = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_patches);
+                    size_t offset_bytes = 0;
+                    for (ggml_tensor * output : outputs) {
+                        joined = ggml_set_2d_inplace(ctx0, joined, output, joined->nb[1], offset_bytes);
+                        offset_bytes += ggml_nbytes(output);
                     }
-                    outputs = std::move(joined);
+                    GGML_ASSERT(offset_bytes == ggml_nbytes(joined));
                 }
-                cur = build_mm(layer.o_w, outputs.front());
+                cur = build_mm(layer.o_w, joined);
                 if (layer.o_b) {
                     cur = ggml_add(ctx0, cur, layer.o_b);
                 }

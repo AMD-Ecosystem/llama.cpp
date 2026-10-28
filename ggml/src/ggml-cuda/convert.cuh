@@ -21,7 +21,7 @@ void ggml_cuda_convert_clamp_to_f32(const T * x, float * y, int64_t k, float min
 template <typename T>
 void ggml_cuda_convert_clamp_from_f32(const float * x, T * y, int64_t k, float min, float max, cudaStream_t stream);
 template <typename T>
-void ggml_cuda_convert_bias_to_f32(const T * x, const float * bias, float * y, int64_t ncols, int64_t nrows, cudaStream_t stream);
+void ggml_cuda_convert_bias_to_f32(const T * x, const float * bias, float * y, int64_t ncols, int64_t nrows, cudaStream_t stream, const float * residual = nullptr);
 
 // TODO more general support for non-contiguous inputs
 

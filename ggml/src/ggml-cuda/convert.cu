@@ -543,8 +543,8 @@ static __global__ void convert_unary_clamped(const src_t * x, dst_t * y, int64_t
     }
 }
 
-template <typename T>
-static __global__ void convert_bias_to_f32(const T * x, const float * bias, float * y, int64_t ncols, int64_t nrows) {
+template <typename T, bool add_residual>
+static __global__ void convert_bias_to_f32(const T * x, const float * bias, float * y, int64_t ncols, int64_t nrows, const float * residual) {
     const int64_t col = int64_t(blockIdx.x)*blockDim.x + threadIdx.x;
     if (col >= ncols) {
         return;
@@ -552,14 +552,27 @@ static __global__ void convert_bias_to_f32(const T * x, const float * bias, floa
     const float b = bias[col];
     for (int64_t row = blockIdx.y; row < nrows; row += gridDim.y) {
         const int64_t i = row*ncols + col;
-        y[i] = ggml_cuda_cast<float>(x[i]) + b;
+        float v = ggml_cuda_cast<float>(x[i]) + b;
+        if constexpr (add_residual) {
+#if defined(GGML_USE_HIP)
+            asm volatile("" : "+v"(v));
+#else
+            asm volatile("" : "+f"(v));
+#endif
+            v += residual[i];
+        }
+        y[i] = v;
     }
 }
 
 template <typename T>
-void ggml_cuda_convert_bias_to_f32(const T * x, const float * bias, float * y, int64_t ncols, int64_t nrows, cudaStream_t stream) {
+void ggml_cuda_convert_bias_to_f32(const T * x, const float * bias, float * y, int64_t ncols, int64_t nrows, cudaStream_t stream, const float * residual) {
     const dim3 blocks((ncols + CUDA_DEQUANTIZE_BLOCK_SIZE - 1)/CUDA_DEQUANTIZE_BLOCK_SIZE, std::min(nrows, int64_t(65535)));
-    convert_bias_to_f32<<<blocks, CUDA_DEQUANTIZE_BLOCK_SIZE, 0, stream>>>(x, bias, y, ncols, nrows);
+    if (residual) {
+        convert_bias_to_f32<T, true><<<blocks, CUDA_DEQUANTIZE_BLOCK_SIZE, 0, stream>>>(x, bias, y, ncols, nrows, residual);
+    } else {
+        convert_bias_to_f32<T, false><<<blocks, CUDA_DEQUANTIZE_BLOCK_SIZE, 0, stream>>>(x, bias, y, ncols, nrows, nullptr);
+    }
 }
 
 template <typename src_t, typename dst_t>
@@ -586,10 +599,10 @@ void ggml_cuda_convert_clamp_from_f32(const float * x, T * y, int64_t k, float m
 
 template void ggml_cuda_convert_clamp_to_f32<half>(const half *, float *, int64_t, float, float, cudaStream_t);
 template void ggml_cuda_convert_clamp_from_f32<half>(const float *, half *, int64_t, float, float, cudaStream_t);
-template void ggml_cuda_convert_bias_to_f32<half>(const half *, const float *, float *, int64_t, int64_t, cudaStream_t);
+template void ggml_cuda_convert_bias_to_f32<half>(const half *, const float *, float *, int64_t, int64_t, cudaStream_t, const float *);
 template void ggml_cuda_convert_clamp_to_f32<nv_bfloat16>(const nv_bfloat16 *, float *, int64_t, float, float, cudaStream_t);
 template void ggml_cuda_convert_clamp_from_f32<nv_bfloat16>(const float *, nv_bfloat16 *, int64_t, float, float, cudaStream_t);
-template void ggml_cuda_convert_bias_to_f32<nv_bfloat16>(const nv_bfloat16 *, const float *, float *, int64_t, int64_t, cudaStream_t);
+template void ggml_cuda_convert_bias_to_f32<nv_bfloat16>(const nv_bfloat16 *, const float *, float *, int64_t, int64_t, cudaStream_t, const float *);
 
 template <typename src_t, typename dst_t>
 static void convert_unary_cont_cuda(const void * vx, dst_t * y, const int64_t k, cudaStream_t stream) {
