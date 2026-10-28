@@ -17,6 +17,7 @@ struct ggml_tensor;
 namespace ggml::hrx {
 
 struct GraphNode {
+    bool                 compute = true;
     ggml_op              op;
     ValueId              output;
     std::vector<ValueId> inputs;
