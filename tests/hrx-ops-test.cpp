@@ -5641,7 +5641,9 @@ static void run_rope_set_rows_cpu_reference_case() {
         ggml_free(hrx_ctx);
     }
 
-    {
+    auto run_partial_rope_case = [&](int offset, int mode, int64_t partial_tokens,
+                                     int64_t partial_head_size = 128, int64_t partial_n_dims = 96,
+                                     int64_t partial_head_count = 3) {
         ggml_init_params params = {};
         params.mem_size         = 8 * 1024 * 1024;
         params.no_alloc         = true;
@@ -5650,22 +5652,20 @@ static void run_rope_set_rows_cpu_reference_case() {
         REQUIRE(cpu_ctx != nullptr);
         REQUIRE(hrx_ctx != nullptr);
 
-        constexpr int64_t partial_head_size  = 128;
-        constexpr int64_t partial_n_dims     = 96;
-        constexpr int64_t partial_head_count = 3;
-        constexpr int64_t partial_tokens     = 4;
         ggml_tensor *     cpu_input =
             ggml_new_tensor_3d(cpu_ctx, GGML_TYPE_F32, partial_head_size, partial_head_count, partial_tokens);
         ggml_tensor * cpu_pos  = ggml_new_tensor_1d(cpu_ctx, GGML_TYPE_I32, partial_tokens);
         ggml_tensor * cpu_freq = ggml_new_tensor_1d(cpu_ctx, GGML_TYPE_F32, partial_n_dims / 2);
         ggml_tensor * cpu_out  = ggml_rope_ext(cpu_ctx, cpu_input, cpu_pos, cpu_freq, partial_n_dims,
-                                               GGML_ROPE_TYPE_NEOX, 0, 10000.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+                                               mode, 0, 10000.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
         ggml_tensor * hrx_input =
             ggml_new_tensor_3d(hrx_ctx, GGML_TYPE_F32, partial_head_size, partial_head_count, partial_tokens);
         ggml_tensor * hrx_pos  = ggml_new_tensor_1d(hrx_ctx, GGML_TYPE_I32, partial_tokens);
         ggml_tensor * hrx_freq = ggml_new_tensor_1d(hrx_ctx, GGML_TYPE_F32, partial_n_dims / 2);
         ggml_tensor * hrx_out  = ggml_rope_ext(hrx_ctx, hrx_input, hrx_pos, hrx_freq, partial_n_dims,
-                                               GGML_ROPE_TYPE_NEOX, 0, 10000.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+                                               mode, 0, 10000.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+        ggml_rope_set_offset(cpu_out, offset);
+        ggml_rope_set_offset(hrx_out, offset);
         REQUIRE(cpu_out != nullptr);
         REQUIRE(hrx_out != nullptr);
 
@@ -5684,7 +5684,7 @@ static void run_rope_set_rows_cpu_reference_case() {
 
         const std::vector<float> input =
             make_pattern_f32(static_cast<size_t>(partial_head_size * partial_head_count * partial_tokens), 47, 0.01f);
-        const std::vector<int32_t> pos = { 0, 1, 13, 29 };
+        const std::vector<int32_t> pos(static_cast<size_t>(partial_tokens), 29);
         std::vector<float>         freq(static_cast<size_t>(partial_n_dims / 2));
         for (size_t i = 0; i < freq.size(); ++i) {
             freq[i] = 1.0f + 0.01f * static_cast<float>(i);
@@ -5704,7 +5704,17 @@ static void run_rope_set_rows_cpu_reference_case() {
         ggml_backend_buffer_free(hrx_buffer);
         ggml_free(cpu_ctx);
         ggml_free(hrx_ctx);
+    };
+    for (int mode : { GGML_ROPE_TYPE_NORMAL, GGML_ROPE_TYPE_NEOX }) {
+        for (int offset : { 0, 16, 32 }) {
+            run_partial_rope_case(offset, mode, 1);
+            run_partial_rope_case(offset, mode, 4);
+        }
     }
+
+    // MiniCPM3 rotates only the trailing 32 channels of each 96-channel query head.
+    run_partial_rope_case(64, GGML_ROPE_TYPE_NEOX, 1, 96, 32, 40);
+    run_partial_rope_case(64, GGML_ROPE_TYPE_NEOX, 512, 96, 32, 40);
 
     auto run_view_set_rows_case = [&](int64_t view_token_count) {
         ggml_init_params params = {};

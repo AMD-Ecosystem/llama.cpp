@@ -127,8 +127,12 @@ static bool is_supported_rope_input_layout(const Value & value, size_t & span_el
 }
 
 static bool is_supported_rope_params(const RopeParams & params, int64_t head_size) {
+    const bool nonnegative_offset = params.n_offs >= 0;
+    const bool aligned_offset = params.n_offs % 4 == 0;
+    const bool fits_head = params.n_offs + params.n_dims <= head_size;
+    const bool supported_offset = nonnegative_offset && aligned_offset && fits_head;
     const bool supported_mode = params.mode == GGML_ROPE_TYPE_NORMAL || params.mode == GGML_ROPE_TYPE_NEOX;
-    return params.n_dims >= 4 && params.n_dims <= head_size && params.n_dims % 4 == 0 && supported_mode &&
+    return supported_offset && params.n_dims >= 4 && params.n_dims <= head_size && params.n_dims % 4 == 0 && supported_mode &&
            std::isfinite(params.freq_base) && params.freq_base > 0.0f && std::isfinite(params.freq_scale) &&
            params.freq_scale > 0.0f && std::isfinite(params.ext_factor) && std::isfinite(params.attn_factor);
 }
@@ -245,6 +249,7 @@ struct RopeMatch {
     int64_t              head_count         = 0;
     int64_t              head_size          = 0;
     int64_t              n_dims             = 0;
+    int64_t              n_offs             = 0;
     int64_t              input_stride1      = 0;
     int64_t              input_stride2      = 0;
     size_t               input_span         = 0;
@@ -383,6 +388,7 @@ static RopeMatch match_rope_f32(const Graph & graph, const GraphNode * node, Sta
     match.head_count         = head_count;
     match.head_size          = head_size;
     match.n_dims             = n_dims;
+    match.n_offs             = params->n_offs;
     match.input_stride1      = static_cast<int64_t>(input->nb[1] / sizeof(float));
     match.input_stride2      = static_cast<int64_t>(input->nb[2] / sizeof(float));
     match.input_span         = input_span;
@@ -467,6 +473,9 @@ static void add_rope_compile_parameters(Dispatch & dispatch,
                                         const RopeMatch & match,
                                         const char *      prefix,
                                         bool              include_input_span = true) {
+    if (std::string(prefix) == "ggml.rope_f32") {
+        dispatch.kernel.compile_parameters.emplace(std::string(prefix) + ".n_offs", to_config_value(match.n_offs));
+    }
     dispatch.kernel.compile_parameters.emplace(std::string(prefix) + ".head_size", to_config_value(match.head_size));
     dispatch.kernel.compile_parameters.emplace(std::string(prefix) + ".n_dims", to_config_value(match.n_dims));
     dispatch.kernel.compile_parameters.emplace(std::string(prefix) + ".head_count", to_config_value(match.head_count));
@@ -651,6 +660,9 @@ static Dispatch make_rope_concat_dispatch(const DispatchMatchContext & context,
 static RopeConcatMatch match_rope_concat_f32(const Graph & graph, const GraphNode * node) {
     RopeConcatMatch match;
     match.rope = match_rope_f32(graph, node);
+    if (match.rope.n_offs != 0) {
+        return {};
+    }
     if (!match.rope.matched() || match.rope.mode != GGML_ROPE_TYPE_NEOX || !graph.has_index() ||
         !graph.index().has_single_consumer(node->output)) {
         return {};
@@ -740,6 +752,9 @@ static bool find_rope_set_rows_consumer(const Graph & graph, const GraphNode & r
 static RopeSetRowsMatch match_rope_set_rows_f32(const Graph & graph, const GraphNode * node) {
     RopeSetRowsMatch match;
     match.rope = match_rope_f32(graph, node);
+    if (match.rope.n_offs != 0) {
+        return {};
+    }
     if (!match.rope.matched() || !find_rope_set_rows_consumer(graph, *node, match)) {
         return {};
     }

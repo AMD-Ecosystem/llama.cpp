@@ -13082,7 +13082,7 @@ static void run_add_f32() {
     ggml_backend_free(backend);
 }
 
-static std::vector<float> run_rope_scale_numerical_case(ggml_backend_t backend, bool per_token, int mode) {
+static std::vector<float> run_rope_scale_numerical_case(ggml_backend_t backend, bool per_token, int mode, int offset) {
     ggml_init_params params = {};
     params.mem_size         = 512 * 1024;
     params.no_alloc         = true;
@@ -13100,6 +13100,7 @@ static std::vector<float> run_rope_scale_numerical_case(ggml_backend_t backend, 
     ggml_tensor * freqs  = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_dims / 2);
     ggml_tensor * rope =
         ggml_rope_ext(ctx, input, pos, freqs, n_dims, mode, 0, 10000.0f, 1.0f, 0.0f, 1.19024f, 32.0f, 1.0f);
+    ggml_rope_set_offset(rope, offset);
     ggml_tensor * scales = per_token ? ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, 1, token_count) : nullptr;
     ggml_tensor * output = per_token ? ggml_mul(ctx, rope, scales) : ggml_scale(ctx, rope, 0.0883883461f);
     REQUIRE(input != nullptr);
@@ -13149,12 +13150,14 @@ static void run_rope_scale_f32_numerics() {
 
     for (const bool per_token : { false, true }) {
         for (const int mode : { static_cast<int>(GGML_ROPE_TYPE_NORMAL), static_cast<int>(GGML_ROPE_TYPE_NEOX) }) {
-            const std::vector<float> expected = run_rope_scale_numerical_case(cpu, per_token, mode);
-            const std::vector<float> actual   = run_rope_scale_numerical_case(hrx, per_token, mode);
-            REQUIRE(actual.size() == expected.size());
-            for (size_t i = 0; i < actual.size(); ++i) {
-                const float tolerance = 2.0e-4f + 2.0e-4f * std::fabs(expected[i]);
-                REQUIRE(std::fabs(actual[i] - expected[i]) <= tolerance);
+            for (const int offset : { 0, 16, 32 }) {
+                const std::vector<float> expected = run_rope_scale_numerical_case(cpu, per_token, mode, offset);
+                const std::vector<float> actual   = run_rope_scale_numerical_case(hrx, per_token, mode, offset);
+                REQUIRE(actual.size() == expected.size());
+                for (size_t i = 0; i < actual.size(); ++i) {
+                    const float tolerance = 2.0e-4f + 2.0e-4f * std::fabs(expected[i]);
+                    REQUIRE(std::fabs(actual[i] - expected[i]) <= tolerance);
+                }
             }
         }
     }
