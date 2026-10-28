@@ -396,6 +396,19 @@ GraphProgramMatch GraphProgram::match_trusted_graph(const ggml_cgraph & current_
             return result;
         }
     }
+    // The scheduler can retain node slots while changing which select branch computes.
+    for (size_t i = 0; i < graph_->nodes().size(); ++i) {
+        const ggml_tensor * node = current_graph.nodes[i];
+        if (node == nullptr) {
+            result.status.log("current graph node %zu is null", i);
+            return result;
+        }
+        const bool compute = (node->flags & GGML_TENSOR_FLAG_COMPUTE) != 0;
+        if (compute != graph_->nodes()[i].compute) {
+            result.status.log("node %zu compute mask does not match cached HRX graph", i);
+            return result;
+        }
+    }
     if (!bind_external) {
         return result;
     }
@@ -446,6 +459,9 @@ Status GraphProgram::capture_external_slots(const ggml_cgraph & graph, const Gra
         for (int i = 0; i < graph.n_nodes && !found; ++i) {
             const ggml_tensor * node = graph.nodes[i];
             if (node == nullptr) {
+                continue;
+            }
+            if (!graph_->nodes()[static_cast<size_t>(i)].compute) {
                 continue;
             }
             if (node == binding.tensor) {
@@ -584,6 +600,14 @@ GraphProgramMatch GraphProgram::match_current_graph(const ggml_cgraph & current_
             result.status.log("node %zu cached op %s does not match current op %s", node_index,
                               ggml_op_name(cached_node.op), ggml_op_name(current_node->op));
             return result;
+        }
+        const bool compute = (current_node->flags & GGML_TENSOR_FLAG_COMPUTE) != 0;
+        if (compute != cached_node.compute) {
+            result.status.log("node %zu compute mask does not match cached HRX graph", node_index);
+            return result;
+        }
+        if (!compute) {
+            continue;
         }
         if (!graph_node_params_match(cached_node, current_node)) {
             result.status.log("node %zu cached op params do not match current graph", node_index);

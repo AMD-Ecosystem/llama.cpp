@@ -1335,6 +1335,7 @@ static void run_graph_import_mixed_backend_boundary_checks() {
 
     ggml_cgraph * cpu_to_hrx = ggml_new_graph(ctx);
     REQUIRE(cpu_to_hrx != nullptr);
+    hrx_norm->flags |= GGML_TENSOR_FLAG_COMPUTE;
     ggml_graph_add_node(cpu_to_hrx, hrx_norm);
 
     ggml::hrx::GraphImportResult imported_cpu_to_hrx = ggml::hrx::import_ggml_graph(*cpu_to_hrx);
@@ -1356,6 +1357,7 @@ static void run_graph_import_mixed_backend_boundary_checks() {
 
     ggml_cgraph * hrx_to_cpu = ggml_new_graph(ctx);
     REQUIRE(hrx_to_cpu != nullptr);
+    hrx_norm_for_cpu->flags |= GGML_TENSOR_FLAG_COMPUTE;
     ggml_graph_add_node(hrx_to_cpu, hrx_norm_for_cpu);
 
     ggml::hrx::GraphImportResult imported_hrx_to_cpu = ggml::hrx::import_ggml_graph(*hrx_to_cpu);
@@ -1379,7 +1381,9 @@ static void run_graph_import_mixed_backend_boundary_checks() {
 
     ggml_cgraph * cpu_view_to_hrx = ggml_new_graph(ctx);
     REQUIRE(cpu_view_to_hrx != nullptr);
+    cpu_sin_view->flags |= GGML_TENSOR_FLAG_COMPUTE;
     ggml_graph_add_node(cpu_view_to_hrx, cpu_sin_view);
+    hrx_norm_from_view->flags |= GGML_TENSOR_FLAG_COMPUTE;
     ggml_graph_add_node(cpu_view_to_hrx, hrx_norm_from_view);
 
     ggml::hrx::GraphImportResult imported_cpu_view_to_hrx = ggml::hrx::import_ggml_graph(*cpu_view_to_hrx);
@@ -2075,7 +2079,7 @@ static void run_graph_snapshot_diagnostics_checks() {
     REQUIRE(imported.valid());
 
     const std::string snapshot_json = ggml::hrx::serialize_graph_snapshot_json(imported.graph, "gfx1151", 42);
-    REQUIRE(string_contains(snapshot_json, "ggml-hrx-graph-snapshot-v1"));
+    REQUIRE(string_contains(snapshot_json, "ggml-hrx-graph-snapshot-v2"));
     REQUIRE(string_contains(snapshot_json, "ADD"));
 
     ggml::hrx::GraphSnapshotLoadResult loaded = ggml::hrx::load_graph_snapshot_json(snapshot_json);
@@ -12246,6 +12250,110 @@ static void run_command_shape_hash_checks() {
     REQUIRE(program.command_shape_hash() == ggml::hrx::command_program_shape_hash(program.command_shape()));
 }
 
+static void run_graph_compute_mask_checks() {
+    ggml_context * ctx = ggml_init({ 1024 * 1024, nullptr, true });
+    REQUIRE(ctx != nullptr);
+    ggml_tensor * input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 128, 1);
+    ggml_tensor * rows = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 128, 1);
+    ggml_tensor * ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I64, 1);
+    ggml_tensor * branches[] = { ggml_scale(ctx, input, 2.0f), ggml_set_rows(ctx, input, rows, ids),
+                                ggml_sin(ctx, input) };
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(ggml_build_forward_select(graph, branches, 3, 0) == branches[0]);
+    graph->uid = 81001;
+
+    const auto imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+    REQUIRE(imported.graph.nodes().size() == 3);
+    REQUIRE(imported.graph.values().find_tensor(rows) == nullptr);
+    REQUIRE(imported.graph.values().find_tensor(ids) == nullptr);
+    const auto * value = imported.graph.values().find_tensor(input);
+    REQUIRE(value != nullptr);
+    REQUIRE(imported.graph.index().consumers(value->id).size() == 1);
+    const auto snapshot = ggml::hrx::serialize_graph_snapshot_json(imported.graph, "gfx1151", graph->uid);
+    auto loaded = ggml::hrx::load_graph_snapshot_json(snapshot);
+    REQUIRE(loaded.valid());
+    ggml::hrx::DispatchScheduler scheduler;
+    REQUIRE(scheduler.schedule_graph(loaded.graph, { "gfx1151" }));
+    REQUIRE(scheduler.plan().dispatches.size() == 1);
+
+
+    ggml::hrx::GraphProgramCache cache;
+    const auto & corpus = ggml::hrx::get_qwen_kernel_corpus();
+    auto lookup = cache.get_or_build(*graph, corpus, "gfx1151");
+    REQUIRE(lookup.valid());
+    REQUIRE(lookup.program->commands().commands.size() == 1);
+    REQUIRE(lookup.program->match_trusted_graph(*graph).valid());
+    REQUIRE(lookup.program->match_current_graph(*graph).valid());
+
+    // A stable node array and UID must not reuse the formerly selected branch.
+    branches[0]->flags &= ~GGML_TENSOR_FLAG_COMPUTE;
+    branches[1]->flags |= GGML_TENSOR_FLAG_COMPUTE;
+    REQUIRE(!lookup.program->match_trusted_graph(*graph).valid());
+    REQUIRE(!lookup.program->match_current_graph(*graph).valid());
+    lookup = cache.get_or_build(*graph, corpus, "gfx1151");
+    REQUIRE(lookup.valid());
+    REQUIRE(cache.stats().builds == 2);
+    REQUIRE(lookup.program->commands().commands.size() == 1);
+    REQUIRE(kernel_name_for_id(lookup.program->commands().commands[0].kernel.kernel_id) ==
+            "loom_libs:ggml_set_rows");
+
+    graph->uid = 81002;
+    REQUIRE(cache.get_or_build(*graph, corpus, "gfx1151").valid());
+    REQUIRE(cache.stats().builds == 2);
+    branches[1]->flags &= ~GGML_TENSOR_FLAG_COMPUTE;
+    branches[2]->flags |= GGML_TENSOR_FLAG_COMPUTE;
+    REQUIRE(!cache.get_or_build(*graph, corpus, "gfx1151").valid());
+    branches[2]->flags &= ~GGML_TENSOR_FLAG_COMPUTE;
+    lookup = cache.get_or_build(*graph, corpus, "gfx1151");
+    REQUIRE(lookup.valid());
+    REQUIRE(lookup.program->commands().commands.empty());
+    ggml_free(ctx);
+}
+
+static void run_inactive_set_rows_replay() {
+    ggml_backend_t backend = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+    ggml_context * ctx = ggml_init({ 1024 * 1024, nullptr, true });
+    REQUIRE(ctx != nullptr);
+    ggml_tensor * input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 128, 1);
+    ggml_tensor * rows = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 128, 1);
+    ggml_tensor * ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I64, 1);
+    ggml_tensor * branches[] = { ggml_scale(ctx, input, 2.0f), ggml_set_rows(ctx, input, rows, ids) };
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    ggml_build_forward_select(graph, branches, 2, 0);
+    graph->uid = 82001;
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    REQUIRE(buffer != nullptr);
+    const std::vector<float> original(128, 1.0f);
+    const std::vector<float> replacement(128, 9.0f);
+    const int64_t row = 0;
+    ggml_backend_tensor_set(rows, replacement.data(), 0, replacement.size() * sizeof(float));
+    ggml_backend_tensor_set(ids, &row, 0, sizeof(row));
+
+    for (int selected : { 0, 1, -1, 0 }) {
+        branches[0]->flags &= ~GGML_TENSOR_FLAG_COMPUTE;
+        branches[1]->flags &= ~GGML_TENSOR_FLAG_COMPUTE;
+        if (selected >= 0) {
+            branches[selected]->flags |= GGML_TENSOR_FLAG_COMPUTE;
+        }
+        ggml_backend_tensor_set(input, original.data(), 0, original.size() * sizeof(float));
+        for (int replay = 0; replay < 2; ++replay) {
+            REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+            std::vector<float> actual(128);
+            ggml_backend_tensor_get(input, actual.data(), 0, actual.size() * sizeof(float));
+            REQUIRE(actual == (selected == 1 ? replacement : original));
+            if (selected == 0) {
+                ggml_backend_tensor_get(branches[0], actual.data(), 0, actual.size() * sizeof(float));
+                REQUIRE(actual == std::vector<float>(128, 2.0f));
+            }
+        }
+    }
+    ggml_backend_free(backend);
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+}
+
 static void run_graph_program_cache_uid_mismatch_checks() {
     ggml::hrx::GraphProgramCache    cache;
     const ggml::hrx::KernelCorpus & corpus = ggml::hrx::get_qwen_kernel_corpus();
@@ -14175,6 +14283,7 @@ static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
     suite.host_case("disjoint_transient_plan_packing", [] { run_disjoint_transient_plan_packing_checks(); });
     suite.host_case("command_program_kernel_dump", [] { run_command_program_kernel_dump_checks(); });
     suite.host_case("command_shape_hash", [] { run_command_shape_hash_checks(); });
+    suite.host_case("graph_compute_mask", [] { run_graph_compute_mask_checks(); });
     suite.host_case("graph_program_cache_uid_mismatch", [] { run_graph_program_cache_uid_mismatch_checks(); });
     suite.host_case("graph_match_empty_expert_views", [] { run_graph_match_empty_expert_views_checks(); });
     suite.host_case("graph_match_hash_collision", [] { run_graph_match_hash_collision_checks(); });
@@ -14192,6 +14301,7 @@ static void register_hrx_backend_device_cases(test_runner::Suite & suite) {
     suite.device_case("binary_q8_publication_numerics", [] { run_binary_q8_publication_numerics(); });
     suite.device_case("qwen_expert_table_partition_prefill_512_execution",
                       [] { run_qwen_expert_table_partition_prefill_512_execution(); });
+    suite.device_case("inactive_set_rows_replay", [] { run_inactive_set_rows_replay(); });
     suite.device_case("program_cache_retirement", [] { run_program_cache_retirement(); });
     suite.device_case("add_f32", [] { run_add_f32(); });
     suite.device_case("rope_scale_f32_numerics", [] { run_rope_scale_f32_numerics(); });
