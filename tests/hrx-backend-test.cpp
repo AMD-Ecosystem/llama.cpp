@@ -62,6 +62,18 @@ static hrx_graph_exec_t dummy_hrx_graph_exec(uintptr_t value) {
     return reinterpret_cast<hrx_graph_exec_t>(value);
 }
 
+static ggml_cgraph first_two_nodes_view(ggml_cgraph * graph) {
+    ggml_cgraph view = *graph;
+    view.size = 0;
+    view.n_nodes = 2;
+    view.n_leafs = 0;
+    view.grads = nullptr;
+    view.grad_accs = nullptr;
+    view.leafs = nullptr;
+    view.uid = 0;
+    return view;
+}
+
 static bool contains_value_id(const std::vector<ggml::hrx::ValueId> & ids, ggml::hrx::ValueId id) {
     for (const ggml::hrx::ValueId candidate : ids) {
         if (candidate == id) {
@@ -1447,7 +1459,7 @@ static void run_graph_view_external_use_checks() {
     REQUIRE(graph->nodes[0] == shared);
     REQUIRE(graph->nodes[1] == left);
 
-    ggml_cgraph                  graph_view = ggml_graph_view(graph, 0, 2);
+    ggml_cgraph                  graph_view = first_two_nodes_view(graph);
     ggml::hrx::GraphImportResult imported   = ggml::hrx::import_ggml_graph(graph_view);
     REQUIRE(imported.valid());
 
@@ -11670,7 +11682,7 @@ static void run_graph_view_preserves_shared_output_storage_checks() {
     REQUIRE(graph->nodes[2] == out1);
     REQUIRE(ggml_node_get_use_count(graph, 0) == 2);
 
-    ggml_cgraph                  graph_view = ggml_graph_view(graph, 0, 2);
+    ggml_cgraph                  graph_view = first_two_nodes_view(graph);
     ggml::hrx::GraphImportResult imported   = ggml::hrx::import_ggml_graph(graph_view);
     REQUIRE(imported.valid());
     REQUIRE(imported.graph.nodes().size() == 2);
@@ -12219,7 +12231,7 @@ static void run_graph_match_empty_expert_views_checks() {
 static void run_graph_match_hash_collision_checks() {
     ggml_context * ctx = ggml_init({ 2 * 1024 * 1024, nullptr, true });
     REQUIRE(ctx != nullptr);
-    const size_t buckets = ggml_hash_size(10);
+    const size_t buckets = 11;
     std::vector<ggml_tensor *> seen(buckets, nullptr);
     ggml_tensor * a = nullptr;
     ggml_tensor * b = nullptr;

@@ -31,7 +31,7 @@ if(HRX_SOURCE_DIR)
     set(GGML_LOOMC_LIB "${GGML_HRX_BUILD_DIR}/loom/binding/c/${CMAKE_SHARED_LIBRARY_PREFIX}loomc${CMAKE_SHARED_LIBRARY_SUFFIX}")
     set(GGML_HRX_LOOM_LINK "${GGML_HRX_BUILD_DIR}/loom/src/loom/tools/loom-link/loom-link${CMAKE_EXECUTABLE_SUFFIX}")
     set(GGML_HRX_LOOM_FORMAT "${GGML_HRX_BUILD_DIR}/loom/src/loom/tools/loom-format/loom-format${CMAKE_EXECUTABLE_SUFFIX}")
-    set(GGML_HRX_IREE_BENCHMARK_LOOM "${GGML_HRX_BUILD_DIR}/loom/src/loom/tools/iree-benchmark-loom/iree-benchmark-loom${CMAKE_EXECUTABLE_SUFFIX}")
+    set(GGML_HRX_LOOM_BENCHMARK "${GGML_HRX_BUILD_DIR}/loom/src/loom/tools/loom-benchmark/loom-benchmark${CMAKE_EXECUTABLE_SUFFIX}")
     set(GGML_HRX_DEPS_TARGET ggml-hrx-deps)
 
     set(GGML_HRX_CMAKE_ARGS
@@ -59,9 +59,9 @@ if(HRX_SOURCE_DIR)
         PREFIX "${GGML_HRX_PREFIX}"
         CMAKE_ARGS ${GGML_HRX_CMAKE_ARGS}
         BUILD_ALWAYS TRUE
-        BUILD_COMMAND ${CMAKE_COMMAND} --build . --target hrx loomc_shared loom_tools_loom-link_loom-link loom_tools_loom-format_loom-format loom_tools_iree-benchmark-loom_iree-benchmark-loom --config ${CMAKE_BUILD_TYPE}
+        BUILD_COMMAND ${CMAKE_COMMAND} --build . --target hrx loomc_shared loom_tools_loom-link_loom-link loom_tools_loom-format_loom-format loom_tools_loom-benchmark_loom-benchmark --config ${CMAKE_BUILD_TYPE}
         INSTALL_COMMAND ""
-        BUILD_BYPRODUCTS "${GGML_HRX_LIB}" "${GGML_LOOMC_LIB}" "${GGML_HRX_LOOM_LINK}" "${GGML_HRX_LOOM_FORMAT}" "${GGML_HRX_IREE_BENCHMARK_LOOM}"
+        BUILD_BYPRODUCTS "${GGML_HRX_LIB}" "${GGML_LOOMC_LIB}" "${GGML_HRX_LOOM_LINK}" "${GGML_HRX_LOOM_FORMAT}" "${GGML_HRX_LOOM_BENCHMARK}"
         UPDATE_COMMAND ""
     )
 
@@ -82,7 +82,7 @@ else()
     find_package(loomc CONFIG REQUIRED)
     find_program(GGML_HRX_LOOM_LINK NAMES loom-link)
     find_program(GGML_HRX_LOOM_FORMAT NAMES loom-format)
-    find_program(GGML_HRX_IREE_BENCHMARK_LOOM NAMES iree-benchmark-loom)
+    find_program(GGML_HRX_LOOM_BENCHMARK NAMES loom-benchmark)
 endif()
 
 set(GGML_HRX_KERNEL_CORPUS_SOURCE_FORMAT "binary" CACHE STRING "Embedded Loom corpus source format: text or binary")

@@ -11,19 +11,9 @@ namespace ggml::hrx {
 namespace {
 
 const std::vector<uint8_t> & iq1_grid_bytes() {
-    static_assert(sizeof(iq1s_grid_gpu) == 8192);
-    static const std::vector<uint8_t> data = [] {
-        std::vector<uint8_t> result;
-        result.reserve(16384);
-        for (uint32_t packed : iq1s_grid_gpu) {
-            for (int lane = 0; lane < 8; ++lane) {
-                const int shift = lane < 4 ? 8 * lane : 8 * (lane - 4) + 4;
-                const int8_t value = static_cast<int8_t>(((packed >> shift) & 0xf) - 1);
-                result.push_back(static_cast<uint8_t>(value));
-            }
-        }
-        return result;
-    }();
+    static_assert(sizeof(iq1s_grid) == 16384);
+    static const std::vector<uint8_t> data(reinterpret_cast<const uint8_t *>(iq1s_grid),
+                                           reinterpret_cast<const uint8_t *>(iq1s_grid) + sizeof(iq1s_grid));
     return data;
 }
 

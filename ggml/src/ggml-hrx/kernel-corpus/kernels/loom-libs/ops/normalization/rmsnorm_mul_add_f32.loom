@@ -62,7 +62,7 @@ check.case public @ggml_rmsnorm_mul_add_f32_case {
   %output = check.generate.fill value(0.0) : tensor<128xf32>
   %expected = check.generate.iota offset(3.25) step(0.01) : tensor<128xf32>
   kernel.launch @ggml_rmsnorm_mul_add_f32[%token_count](%token_count, %input, %weight, %residual, %output) : [index](index, tensor<128xf32>, tensor<128xf32>, tensor<128xf32>, tensor<128xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(9.9999999999999991e-06) rtol(9.9999999999999991e-06) nan(same) : tensor<128xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(9.9999999999999991e-06) rtol(9.9999999999999991e-06) nan(same) : tensor<128xf32>, tensor<128xf32>
   check.return
 }
 

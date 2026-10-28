@@ -106,8 +106,8 @@ check.case public @ggml_gather_add_rmsnorm_binary_f32_index_case {
   %expected_raw = check.generate.fill value(4.0) : tensor<3x128xf32>
   %expected_normalized = check.generate.fill value(2.0) : tensor<3x128xf32>
   kernel.launch @ggml_gather_add_rmsnorm_binary_f32[%source_count, %output_count](%source_count, %output_count, %attention, %residual, %ids, %raw, %weight, %normalized) : [index, index](index, index, tensor<3x128xf32>, tensor<3x128xf32>, tensor<3xi32>, tensor<3x128xf32>, tensor<128xf32>, tensor<3x128xf32>)
-  check.expect.close actual(%raw) expected(%expected_raw) atol(0.0) rtol(0.0) nan(same) : tensor<3x128xf32>
-  check.expect.close actual(%normalized) expected(%expected_normalized) atol(0.000001) rtol(0.000001) nan(same) : tensor<3x128xf32>
+  check.expect.approximate actual(%raw) expected(%expected_raw) atol(0.0) rtol(0.0) nan(same) : tensor<3x128xf32>, tensor<3x128xf32>
+  check.expect.approximate actual(%normalized) expected(%expected_normalized) atol(0.000001) rtol(0.000001) nan(same) : tensor<3x128xf32>, tensor<3x128xf32>
   check.return
 }
 
@@ -125,8 +125,8 @@ check.case public @ggml_gather_add_rmsnorm_binary_f32_repeated_index_case {
   %expected_raw = check.generate.fill value(4.0) : tensor<3x128xf32>
   %expected_normalized = check.generate.fill value(2.0) : tensor<3x128xf32>
   kernel.launch @ggml_gather_add_rmsnorm_binary_f32[%source_count, %output_count](%source_count, %output_count, %attention, %residual, %ids, %raw, %weight, %normalized) : [index, index](index, index, tensor<3x128xf32>, tensor<3x128xf32>, tensor<3xi32>, tensor<3x128xf32>, tensor<128xf32>, tensor<3x128xf32>)
-  check.expect.close actual(%raw) expected(%expected_raw) atol(0.0) rtol(0.0) nan(same) : tensor<3x128xf32>
-  check.expect.close actual(%normalized) expected(%expected_normalized) atol(0.000001) rtol(0.000001) nan(same) : tensor<3x128xf32>
+  check.expect.approximate actual(%raw) expected(%expected_raw) atol(0.0) rtol(0.0) nan(same) : tensor<3x128xf32>, tensor<3x128xf32>
+  check.expect.approximate actual(%normalized) expected(%expected_normalized) atol(0.000001) rtol(0.000001) nan(same) : tensor<3x128xf32>, tensor<3x128xf32>
   check.return
 }
 
