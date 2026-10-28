@@ -7545,12 +7545,20 @@ static void run_lfm_dconv3_dispatch_checks() {
     }
 }
 
-static void run_gdn_native_projection_pair_dispatch_checks() {
+static void run_gdn_native_projection_pair_dispatch_checks(bool rms_scale = false) {
     ggml_init_params params = {};
     params.mem_size = 8 * 1024 * 1024;
     params.no_alloc = true;
     ggml_context * ctx = ggml_init(params);
     REQUIRE(ctx != nullptr);
+
+    const auto normalize = [&](ggml_context * context, ggml_tensor * input, float epsilon) {
+        if (rms_scale) {
+            const float width = input->ne[0];
+            return ggml_scale(context, ggml_rms_norm(context, input, epsilon / width), 1.0f / std::sqrt(width));
+        }
+        return ggml_l2_norm(context, input, epsilon);
+    };
 
     const struct {
         int64_t tokens;
@@ -7606,8 +7614,8 @@ static void run_gdn_native_projection_pair_dispatch_checks() {
             return ggml_view_4d(ctx, raw, width, heads, test.tokens, 1, width * sizeof(float), hidden * sizeof(float),
                                    hidden * test.tokens * sizeof(float), offset);
         };
-        ggml_tensor * q = ggml_l2_norm(ctx, view(qheads, 0), 1.e-6f);
-        ggml_tensor * k = ggml_l2_norm(ctx, view(qheads, width * qheads * sizeof(float)), 1.e-6f);
+        ggml_tensor * q = normalize(ctx, view(qheads, 0), 1.e-6f);
+        ggml_tensor * k = normalize(ctx, view(qheads, width * qheads * sizeof(float)), 1.e-6f);
         ggml_tensor * v = view(test.heads, 2 * width * qheads * sizeof(float));
         ggml_tensor * cache = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, state_elements, 20);
         ggml_tensor * ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1);
@@ -7668,12 +7676,20 @@ static void run_gdn_native_projection_pair_dispatch_checks() {
     ggml_free(ctx);
 }
 
-static void run_gdn_selected_snapshot_dispatch_checks() {
+static void run_gdn_selected_snapshot_dispatch_checks(bool rms_scale = false) {
     ggml_init_params params = {};
     params.mem_size = 8 * 1024 * 1024;
     params.no_alloc = true;
     ggml_context * ctx = ggml_init(params);
     REQUIRE(ctx != nullptr);
+
+    const auto normalize = [&](ggml_context * context, ggml_tensor * input, float epsilon) {
+        if (rms_scale) {
+            const float width = input->ne[0];
+            return ggml_scale(context, ggml_rms_norm(context, input, epsilon / width), 1.0f / std::sqrt(width));
+        }
+        return ggml_l2_norm(context, input, epsilon);
+    };
 
     const struct {
         int64_t tokens;
@@ -7720,8 +7736,8 @@ static void run_gdn_selected_snapshot_dispatch_checks() {
             return ggml_view_4d(ctx, raw, width, nheads, test.tokens, test.sequences,
                                width*sizeof(float), hidden*sizeof(float), hidden*test.tokens*sizeof(float), offset);
         };
-        ggml_tensor * q=ggml_l2_norm(ctx, view(qheads,0), 1.e-6f);
-        ggml_tensor * k=ggml_l2_norm(ctx, view(qheads,width*qheads*sizeof(float)), 1.e-6f);
+        ggml_tensor * q=normalize(ctx, view(qheads,0), 1.e-6f);
+        ggml_tensor * k=normalize(ctx, view(qheads,width*qheads*sizeof(float)), 1.e-6f);
         ggml_tensor * v=view(heads,2*width*qheads*sizeof(float));
         ggml_tensor * gdn=ggml_gated_delta_net(ctx,q,k,v,gate,beta,state,5);
         const size_t attention_bytes=width*heads*test.tokens*test.sequences*sizeof(float);
@@ -13873,7 +13889,7 @@ static void run_lowtoken_bias_dispatch_checks() {
     ggml_free(ctx);
 }
 
-static void run_gdn_selected_rms_q8_dispatch_checks() {
+static void run_gdn_selected_rms_q8_dispatch_checks(bool rms_scale = false) {
     ggml_init_params params = {};
     params.mem_size = 32 * 1024 * 1024;
     params.no_alloc = true;
@@ -13894,6 +13910,14 @@ static void run_gdn_selected_rms_q8_dispatch_checks() {
         TanhGate          = 1024,
         AttentionReshape  = 2048,
         AttentionObserved = 4096,
+    };
+
+    const auto normalize = [&](ggml_context * context, ggml_tensor * input, float epsilon) {
+        if (rms_scale) {
+            const float width = input->ne[0];
+            return ggml_scale(context, ggml_rms_norm(context, input, epsilon / width), 1.0f / std::sqrt(width));
+        }
+        return ggml_l2_norm(context, input, epsilon);
     };
 
     const struct {
@@ -13956,8 +13980,8 @@ static void run_gdn_selected_rms_q8_dispatch_checks() {
             return ggml_view_4d(ctx, raw, width, nheads, test.tokens, test.sequences, width * sizeof(float),
                                     hidden * sizeof(float), hidden * test.tokens * sizeof(float), offset);
         };
-        ggml_tensor * q = ggml_l2_norm(ctx, view(qheads, 0), 1.e-6f);
-        ggml_tensor * k = ggml_l2_norm(ctx, view(qheads, width * qheads * sizeof(float)), 1.e-6f);
+        ggml_tensor * q = normalize(ctx, view(qheads, 0), 1.e-6f);
+        ggml_tensor * k = normalize(ctx, view(qheads, width * qheads * sizeof(float)), 1.e-6f);
         ggml_tensor * v = view(heads, 2 * width * qheads * sizeof(float));
         ggml_tensor * gdn = ggml_gated_delta_net(ctx, q, k, v, gate, beta, state, 5);
         if (test.flags & GdnObserved) {
@@ -14106,8 +14130,11 @@ static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
     suite.host_case("lfm_dconv3_dispatch", [] { run_lfm_dconv3_dispatch_checks(); });
     suite.host_case("gdn_rmsnorm_gate_dispatch", [] { run_gdn_rmsnorm_gate_dispatch_checks(); });
     suite.host_case("gdn_native_projection_pair_dispatch", [] { run_gdn_native_projection_pair_dispatch_checks(); });
+    suite.host_case("gdn_native_projection_pair_rms_scale_dispatch", [] { run_gdn_native_projection_pair_dispatch_checks(true); });
     suite.host_case("gdn_selected_snapshot_dispatch", [] { run_gdn_selected_snapshot_dispatch_checks(); });
+    suite.host_case("gdn_selected_snapshot_rms_scale_dispatch", [] { run_gdn_selected_snapshot_dispatch_checks(true); });
     suite.host_case("gdn_selected_rms_q8_dispatch", [] { run_gdn_selected_rms_q8_dispatch_checks(); });
+    suite.host_case("gdn_selected_rms_q8_rms_scale_dispatch", [] { run_gdn_selected_rms_q8_dispatch_checks(true); });
     suite.host_case("llama_attention_matmul_dispatch", [] { run_llama_attention_matmul_dispatch_checks(); });
     suite.host_case("quantized_value_projection_dispatch", [] { run_quantized_value_projection_dispatch_checks(); });
     suite.host_case("prefill_value_projection_cache_dispatch",

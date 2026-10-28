@@ -3700,6 +3700,113 @@ static void run_qwen_decode_attention_output_next_q8_scheduling_case(bool includ
     ggml_free(ctx);
 }
 
+// Compare the complete Q/K normalization, gate, recurrence, and cache write with CPU.
+static void run_gdn_norm_cpu_reference_case(int64_t tokens, bool rms_scale, bool small_inputs) {
+    constexpr int64_t width = 128;
+    constexpr int64_t heads = 2;
+    constexpr int64_t hidden = width * (2 + heads);
+    constexpr int64_t state_elements = width * width * heads;
+    constexpr float epsilon = 1.0e-3f;
+    struct GraphData {
+        ggml_context * ctx;
+        ggml_cgraph * graph;
+        ggml_tensor * raw;
+        ggml_tensor * alpha;
+        ggml_tensor * beta;
+        ggml_tensor * bias;
+        ggml_tensor * scale;
+        ggml_tensor * state;
+        ggml_tensor * cache;
+        ggml_tensor * attention;
+    };
+    const auto build = [&]() {
+        ggml_init_params params = {};
+        params.mem_size = 2 * 1024 * 1024;
+        params.no_alloc = true;
+        GraphData data = {};
+        data.ctx = ggml_init(params);
+        REQUIRE(data.ctx != nullptr);
+        auto * ctx = data.ctx;
+        data.raw = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden, tokens);
+        const auto view = [&](int64_t count, size_t offset) {
+            return ggml_view_4d(ctx, data.raw, width, count, tokens, 1, width * sizeof(float),
+                                hidden * sizeof(float), hidden * tokens * sizeof(float), offset);
+        };
+        const auto norm = [&](ggml_tensor * input) {
+            if (rms_scale) {
+                return ggml_scale(ctx, ggml_rms_norm(ctx, input, epsilon / width), 1.0f / std::sqrt(float(width)));
+            }
+            return ggml_l2_norm(ctx, input, epsilon);
+        };
+        auto * q = norm(view(1, 0));
+        auto * k = norm(view(1, width * sizeof(float)));
+        auto * v = view(heads, 2 * width * sizeof(float));
+        data.alpha = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, heads, tokens);
+        data.beta = ggml_dup_tensor(ctx, data.alpha);
+        data.bias = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, heads);
+        data.scale = ggml_dup_tensor(ctx, data.bias);
+        auto * gate = ggml_mul(ctx, ggml_softplus(ctx, ggml_add(ctx,
+            ggml_reshape_3d(ctx, data.alpha, heads, tokens, 1), data.bias)), data.scale);
+        gate = ggml_reshape_4d(ctx, gate, 1, heads, tokens, 1);
+        auto * beta = ggml_sigmoid(ctx, ggml_reshape_4d(ctx, data.beta, 1, heads, tokens, 1));
+        data.state = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, state_elements, 1);
+        auto * state = ggml_reshape_4d(ctx, data.state, width, width, heads, 1);
+        auto * gdn = ggml_gated_delta_net(ctx, q, k, v, gate, beta, state, 1);
+        const size_t attention_bytes = width * heads * tokens * sizeof(float);
+        data.attention = ggml_view_4d(ctx, gdn, width, heads, tokens, 1, width * sizeof(float),
+                                      width * heads * sizeof(float), attention_bytes, 0);
+        auto * new_state = ggml_view_4d(ctx, gdn, width, width, heads, 1, width * sizeof(float),
+                                       width * width * sizeof(float), state_elements * sizeof(float), attention_bytes);
+        data.cache = ggml_dup_tensor(ctx, data.state);
+        auto * cache = ggml_view_2d(ctx, data.cache, state_elements, 1, state_elements * sizeof(float), 0);
+        data.graph = ggml_new_graph(ctx);
+        ggml_build_forward_expand(data.graph, ggml_cpy(ctx, new_state, cache));
+        ggml_build_forward_expand(data.graph, data.attention);
+        return data;
+    };
+    auto cpu = build();
+    auto hrx = build();
+    ggml_backend_t cpu_backend = init_cpu_backend();
+    ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
+    REQUIRE(hrx_backend != nullptr);
+    const auto kernels = scheduled_kernel_sequence(hrx.graph);
+    REQUIRE(std::any_of(kernels.begin(), kernels.end(), [](const std::string & kernel) {
+        return kernel.find("llm_gated_delta_net_f32_wmma_head128") != std::string::npos;
+    }));
+    auto cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu.ctx, cpu_backend);
+    auto hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx.ctx, hrx_backend);
+    REQUIRE(cpu_buffer != nullptr);
+    REQUIRE(hrx_buffer != nullptr);
+    auto raw = make_pattern_f32(hidden * tokens, 3, 0.025f);
+    if (small_inputs) {
+        for (int64_t token = 0; token < tokens; ++token) {
+            for (int64_t i = 0; i < 2 * width; ++i) {
+                raw[token * hidden + i] *= 0.001f;
+            }
+        }
+    }
+    const auto set = [&](ggml_tensor * a, ggml_tensor * b, const std::vector<float> & values) {
+        set_tensor_pair_bytes(cpu_backend, a, hrx_backend, b, values.data(), values.size() * sizeof(float));
+    };
+    set(cpu.raw, hrx.raw, raw);
+    set(cpu.alpha, hrx.alpha, make_pattern_f32(heads * tokens, 1, 0.025f));
+    set(cpu.beta, hrx.beta, make_pattern_f32(heads * tokens, 2, 0.05f));
+    set(cpu.bias, hrx.bias, {0.1f, -0.1f});
+    set(cpu.scale, hrx.scale, {-0.5f, -1.0f});
+    set(cpu.state, hrx.state, make_pattern_f32(state_elements, 5, 0.0025f));
+    REQUIRE(ggml_backend_graph_compute(cpu_backend, cpu.graph) == GGML_STATUS_SUCCESS);
+    REQUIRE(ggml_backend_graph_compute(hrx_backend, hrx.graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(hrx_backend);
+    require_close(get_f32_tensor(hrx_backend, hrx.attention), get_f32_tensor(cpu_backend, cpu.attention), 2.0e-4f, 2.0e-3f);
+    require_close(get_f32_tensor(hrx_backend, hrx.cache), get_f32_tensor(cpu_backend, cpu.cache), 2.0e-4f, 2.0e-3f);
+    ggml_backend_buffer_free(cpu_buffer);
+    ggml_backend_buffer_free(hrx_buffer);
+    ggml_free(cpu.ctx);
+    ggml_free(hrx.ctx);
+    ggml_backend_free(cpu_backend);
+    ggml_backend_free(hrx_backend);
+}
+
 static void run_add_f32_cpu_reference_case() {
     ggml_backend_t cpu_backend = init_cpu_backend();
     ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
@@ -6451,6 +6558,15 @@ static void register_basic_ops_cases(Suite & suite) {
     suite.host_case("support.rmsnorm", [] { run_rmsnorm_support_checks(); });
     suite.host_case("support.alternate_value_alias_lookup", [] { run_alternate_value_alias_lookup_checks(); });
     suite.host_case("support.activation_publication_contract", [] { run_activation_publication_contract_checks(); });
+    for (int64_t tokens : {1, 17, 512}) {
+        for (bool rms_scale : {false, true}) {
+            for (bool small_inputs : {false, true}) {
+                const std::string name = "gdn_norm.tokens" + std::to_string(tokens) +
+                    (rms_scale ? ".rms_scale" : ".l2") + (small_inputs ? ".small" : ".normal");
+                suite.device_case(name, [=] { run_gdn_norm_cpu_reference_case(tokens, rms_scale, small_inputs); });
+            }
+        }
+    }
     suite.device_case("add_f32.cpu_reference", [] { run_add_f32_cpu_reference_case(); });
     suite.device_case("dynamic_generic_ops.cpu_reference", [] { run_dynamic_generic_ops_cpu_reference_case(); });
     for (const ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
