@@ -113,12 +113,12 @@ check.case public @qwen3_moe_router_projection_top8_fused_differential_case {
   kernel.launch @qwen3_moe_router_top8_f32_check_one(%expected_logits, %expected_route_ids, %expected_route_weights) : (tensor<1x128xf32>, tensor<1x8xi32>, tensor<1x8xf32>)
   kernel.launch @qwen3_moe_router_projection_top8_fused_decode_f32[%token_count, %route_id_stride](%token_count, %route_id_stride, %input, %weight, %actual_logits0, %completion_counter, %actual_route_ids0, %actual_route_weights0) : [index, index](index, index, tensor<1x2048xf32>, tensor<128x2048xf32>, tensor<1x128xf32>, tensor<1xi32>, tensor<1x8xi32>, tensor<1x8xf32>)
   kernel.launch @qwen3_moe_router_projection_top8_fused_decode_f32[%token_count, %route_id_stride](%token_count, %route_id_stride, %input, %weight, %actual_logits1, %completion_counter, %actual_route_ids1, %actual_route_weights1) : [index, index](index, index, tensor<1x2048xf32>, tensor<128x2048xf32>, tensor<1x128xf32>, tensor<1xi32>, tensor<1x8xi32>, tensor<1x8xf32>)
-  check.expect.close actual(%actual_logits0) expected(%expected_logits) atol(0.001) rtol(0.001) nan(same) : tensor<1x128xf32>
-  check.expect.close actual(%actual_logits1) expected(%expected_logits) atol(0.001) rtol(0.001) nan(same) : tensor<1x128xf32>
+  check.expect.approximate actual(%actual_logits0) expected(%expected_logits) atol(0.001) rtol(0.001) nan(same) : tensor<1x128xf32>, tensor<1x128xf32>
+  check.expect.approximate actual(%actual_logits1) expected(%expected_logits) atol(0.001) rtol(0.001) nan(same) : tensor<1x128xf32>, tensor<1x128xf32>
   check.expect.equal actual(%actual_route_ids0) expected(%expected_route_ids) : tensor<1x8xi32>
   check.expect.equal actual(%actual_route_ids1) expected(%expected_route_ids) : tensor<1x8xi32>
-  check.expect.close actual(%actual_route_weights0) expected(%expected_route_weights) atol(0.0001) rtol(0.0001) nan(same) : tensor<1x8xf32>
-  check.expect.close actual(%actual_route_weights1) expected(%expected_route_weights) atol(0.0001) rtol(0.0001) nan(same) : tensor<1x8xf32>
+  check.expect.approximate actual(%actual_route_weights0) expected(%expected_route_weights) atol(0.0001) rtol(0.0001) nan(same) : tensor<1x8xf32>, tensor<1x8xf32>
+  check.expect.approximate actual(%actual_route_weights1) expected(%expected_route_weights) atol(0.0001) rtol(0.0001) nan(same) : tensor<1x8xf32>, tensor<1x8xf32>
   check.expect.equal actual(%completion_counter) expected(%expected_counter) : tensor<1xi32>
   check.return
 }

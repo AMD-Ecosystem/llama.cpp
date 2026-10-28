@@ -139,9 +139,9 @@ check.case public @qwen3_moe_router_top8_f32_repeated_maxima_case {
   kernel.launch @qwen3_moe_router_top8_wide_stride_reference(%expected_wide_ids) : (tensor<2x16xi32>)
   kernel.launch @qwen3_moe_router_top8_f32_check_two_wide(%logits, %wide_route_ids, %wide_route_weights) : (tensor<2x128xf32>, tensor<2x16xi32>, tensor<2x8xf32>)
   check.expect.equal actual(%route_ids) expected(%expected_ids) : tensor<2x8xi32>
-  check.expect.close actual(%route_weights) expected(%expected_weights) atol(1.0000000000000001e-05) rtol(1.0000000000000001e-05) nan(same) : tensor<2x8xf32>
+  check.expect.approximate actual(%route_weights) expected(%expected_weights) atol(1.0000000000000001e-05) rtol(1.0000000000000001e-05) nan(same) : tensor<2x8xf32>, tensor<2x8xf32>
   check.expect.equal actual(%wide_route_ids) expected(%expected_wide_ids) : tensor<2x16xi32>
-  check.expect.close actual(%wide_route_weights) expected(%expected_weights) atol(1.0000000000000001e-05) rtol(1.0000000000000001e-05) nan(same) : tensor<2x8xf32>
+  check.expect.approximate actual(%wide_route_weights) expected(%expected_weights) atol(1.0000000000000001e-05) rtol(1.0000000000000001e-05) nan(same) : tensor<2x8xf32>, tensor<2x8xf32>
   check.return
 }
 
@@ -155,7 +155,7 @@ check.case public @qwen3_moe_router_top8_f32_benchmark_case {
   %expected_weights = check.generate.fill value(0.125) : tensor<[%token_count]x8xf32>
   kernel.launch @qwen3_moe_router_top8_f32[%token_count, %route_id_stride](%token_count, %route_id_stride, %logits, %route_ids, %route_weights) : [index, index](index, index, tensor<[%token_count]x128xf32>, tensor<[%token_count]x8xi32>, tensor<[%token_count]x8xf32>)
   check.expect.equal actual(%route_ids) expected(%expected_ids) : tensor<[%token_count]x8xi32>
-  check.expect.close actual(%route_weights) expected(%expected_weights) atol(1.0000000000000001e-05) rtol(1.0000000000000001e-05) nan(same) : tensor<[%token_count]x8xf32>
+  check.expect.approximate actual(%route_weights) expected(%expected_weights) atol(1.0000000000000001e-05) rtol(1.0000000000000001e-05) nan(same) : tensor<[%token_count]x8xf32>, tensor<[%token_count]x8xf32>
   check.return
 }
 

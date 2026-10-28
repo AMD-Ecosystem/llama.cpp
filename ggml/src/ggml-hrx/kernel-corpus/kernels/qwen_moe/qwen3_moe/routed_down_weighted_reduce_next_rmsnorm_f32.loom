@@ -57,8 +57,8 @@ check.case public @qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32_differ
   kernel.launch @qwen3_moe_routed_down_weighted_reduce_f16_f32[%token_count](%token_count, %route_weights, %routed_output, %expected_hidden_state, %expected_hidden_state) : [index](index, tensor<512x8xf32>, tensor<512x8x2048xf16>, tensor<512x2048xf32>, tensor<512x2048xf32>)
   kernel.launch @qwen3_moe_rmsnorm_f32[%token_count](%token_count, %expected_hidden_state, %next_norm_weight, %expected_next_projection_input) : [index](index, tensor<512x2048xf32>, tensor<2048xf32>, tensor<512x2048xf32>)
   kernel.launch @qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32[%token_count](%token_count, %route_weights, %routed_output, %actual_hidden_state, %next_norm_weight, %actual_next_projection_input) : [index](index, tensor<512x8xf32>, tensor<512x8x2048xf16>, tensor<512x2048xf32>, tensor<2048xf32>, tensor<512x2048xf32>)
-  check.expect.close actual(%actual_hidden_state) expected(%expected_hidden_state) atol(0.0001) rtol(0.0001) nan(same) : tensor<512x2048xf32>
-  check.expect.close actual(%actual_next_projection_input) expected(%expected_next_projection_input) atol(0.001) rtol(0.001) nan(same) : tensor<512x2048xf32>
+  check.expect.approximate actual(%actual_hidden_state) expected(%expected_hidden_state) atol(0.0001) rtol(0.0001) nan(same) : tensor<512x2048xf32>, tensor<512x2048xf32>
+  check.expect.approximate actual(%actual_next_projection_input) expected(%expected_next_projection_input) atol(0.001) rtol(0.001) nan(same) : tensor<512x2048xf32>, tensor<512x2048xf32>
   check.return
 }
 
@@ -77,8 +77,8 @@ check.case public @qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32_publis
   kernel.launch @qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32[%token_count](%token_count, %route_weights, %routed_output, %expected_hidden_state, %next_norm_weight, %expected_next_projection_input) : [index](index, tensor<2x8xf32>, tensor<2x8x2048xf16>, tensor<2x2048xf32>, tensor<2048xf32>, tensor<2x2048xf32>)
   kernel.launch @ggml_quantize_q8_1_x4_f32[%token_count, %hidden_size](%token_count, %hidden_size, %expected_next_projection_input, %expected_q8) : [index, index](index, index, tensor<2x2048xf32>, tensor<2x2304xi8>)
   kernel.launch @qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32_publish_q8[%token_count](%token_count, %route_weights, %routed_output, %actual_hidden_state, %next_norm_weight, %actual_next_projection_input, %actual_q8) : [index](index, tensor<2x8xf32>, tensor<2x8x2048xf16>, tensor<2x2048xf32>, tensor<2048xf32>, tensor<2x2048xf32>, tensor<2x2304xi8>)
-  check.expect.close actual(%actual_hidden_state) expected(%expected_hidden_state) atol(0.0001) rtol(0.0001) nan(same) : tensor<2x2048xf32>
-  check.expect.close actual(%actual_next_projection_input) expected(%expected_next_projection_input) atol(0.001) rtol(0.001) nan(same) : tensor<2x2048xf32>
+  check.expect.approximate actual(%actual_hidden_state) expected(%expected_hidden_state) atol(0.0001) rtol(0.0001) nan(same) : tensor<2x2048xf32>, tensor<2x2048xf32>
+  check.expect.approximate actual(%actual_next_projection_input) expected(%expected_next_projection_input) atol(0.001) rtol(0.001) nan(same) : tensor<2x2048xf32>, tensor<2x2048xf32>
   check.expect.equal actual(%actual_q8) expected(%expected_q8) : tensor<2x2304xi8>
   check.return
 }

@@ -25,6 +25,6 @@ check.case public @ggml_copy_f32_f16_small_case {
   %output = check.generate.fill value(0.0) : tensor<12xf16>
   %expected = check.generate.iota offset(-2.0) step(0.5) : tensor<12xf16>
   kernel.launch @ggml_copy_f32_f16[%count](%count, %source, %output) : [index](index, tensor<12xf32>, tensor<12xf16>)
-  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<12xf16>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<12xf16>, tensor<12xf16>
   check.return
 }

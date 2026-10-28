@@ -184,7 +184,7 @@ check.case public @ggml_q1_0_q8_1_x4_boundary_differential_case {
   %packed_output = check.generate.fill value(1.0) : tensor<3xf32>
   kernel.launch @ggml_q1_0_q8_1_x4_generic_control[%input_size, %output_size](%input_size, %output_size, %q8_input, %weight, %generic_output) : [index, index](index, index, tensor<144xi8>, tensor<3x18xi8>, tensor<3xf32>)
   kernel.launch @ggml_q1_0_q8_1_x4_packed[%input_size, %output_size](%input_size, %output_size, %q8_input, %weight, %packed_output) : [index, index](index, index, tensor<144xi8>, tensor<3x18xi8>, tensor<3xf32>)
-  check.expect.close actual(%packed_output) expected(%generic_output) atol(0.01) rtol(1.0000000000000001e-05) nan(same) : tensor<3xf32>
+  check.expect.approximate actual(%packed_output) expected(%generic_output) atol(0.01) rtol(1.0000000000000001e-05) nan(same) : tensor<3xf32>, tensor<3xf32>
   check.return
 }
 
@@ -199,8 +199,8 @@ check.case public @ggml_q1_0_q8_1_x4_bonsai_2560x4096_differential_case {
   kernel.launch @ggml_q1_0_q8_1_x4_generic_control[%input_size, %output_size](%input_size, %output_size, %q8_input, %weight, %generic_output) : [index, index](index, index, tensor<20x144xi8>, tensor<4096x20x18xi8>, tensor<4096xf32>)
   kernel.launch @ggml_q1_0_q8_1_x4_packed[%input_size, %output_size](%input_size, %output_size, %q8_input, %weight, %packed_output) : [index, index](index, index, tensor<20x144xi8>, tensor<4096x20x18xi8>, tensor<4096xf32>)
   kernel.launch @ggml_q1_0_q8_1_x4_packed_rows2[%input_size, %output_size](%input_size, %output_size, %q8_input, %weight, %rows2_output) : [index, index](index, index, tensor<20x144xi8>, tensor<4096x20x18xi8>, tensor<4096xf32>)
-  check.expect.close actual(%packed_output) expected(%generic_output) atol(0.050000000000000003) rtol(1.0000000000000001e-05) nan(same) : tensor<4096xf32>
-  check.expect.close actual(%rows2_output) expected(%generic_output) atol(0.050000000000000003) rtol(1.0000000000000001e-05) nan(same) : tensor<4096xf32>
+  check.expect.approximate actual(%packed_output) expected(%generic_output) atol(0.050000000000000003) rtol(1.0000000000000001e-05) nan(same) : tensor<4096xf32>, tensor<4096xf32>
+  check.expect.approximate actual(%rows2_output) expected(%generic_output) atol(0.050000000000000003) rtol(1.0000000000000001e-05) nan(same) : tensor<4096xf32>, tensor<4096xf32>
   check.return
 }
 
@@ -217,8 +217,8 @@ check.case public @ggml_q1_0_q8_1_x4_bonsai_2560x9728_pair_differential_case {
   kernel.launch @ggml_q1_0_q8_1_x4_generic_control[%input_size, %output_size](%input_size, %output_size, %q8_input, %gate_weight, %generic_gate) : [index, index](index, index, tensor<20x144xi8>, tensor<9728x20x18xi8>, tensor<9728xf32>)
   kernel.launch @ggml_q1_0_q8_1_x4_generic_control[%input_size, %output_size](%input_size, %output_size, %q8_input, %up_weight, %generic_up) : [index, index](index, index, tensor<20x144xi8>, tensor<9728x20x18xi8>, tensor<9728xf32>)
   kernel.launch @ggml_q1_0_q8_1_x4_packed_pair[%input_size, %output_size](%input_size, %output_size, %q8_input, %gate_weight, %up_weight, %paired_gate, %paired_up) : [index, index](index, index, tensor<20x144xi8>, tensor<9728x20x18xi8>, tensor<9728x20x18xi8>, tensor<9728xf32>, tensor<9728xf32>)
-  check.expect.close actual(%paired_gate) expected(%generic_gate) atol(0.050000000000000003) rtol(1.0000000000000001e-05) nan(same) : tensor<9728xf32>
-  check.expect.close actual(%paired_up) expected(%generic_up) atol(0.050000000000000003) rtol(1.0000000000000001e-05) nan(same) : tensor<9728xf32>
+  check.expect.approximate actual(%paired_gate) expected(%generic_gate) atol(0.050000000000000003) rtol(1.0000000000000001e-05) nan(same) : tensor<9728xf32>, tensor<9728xf32>
+  check.expect.approximate actual(%paired_up) expected(%generic_up) atol(0.050000000000000003) rtol(1.0000000000000001e-05) nan(same) : tensor<9728xf32>, tensor<9728xf32>
   check.return
 }
 
@@ -262,7 +262,7 @@ check.case public @ggml_q1_0_q8_1_x4_shape_differential_case {
   %rows2_output = check.generate.fill value(2.0) : tensor<[%output_size]xf32>
   kernel.launch @ggml_q1_0_q8_1_x4_packed[%input_size, %output_size](%input_size, %output_size, %q8_input, %weight, %packed_output) : [index, index](index, index, tensor<[%block_count]x144xi8>, tensor<[%output_size]x[%block_count]x18xi8>, tensor<[%output_size]xf32>)
   kernel.launch @ggml_q1_0_q8_1_x4_packed_rows2[%input_size, %output_size](%input_size, %output_size, %q8_input, %weight, %rows2_output) : [index, index](index, index, tensor<[%block_count]x144xi8>, tensor<[%output_size]x[%block_count]x18xi8>, tensor<[%output_size]xf32>)
-  check.expect.close actual(%rows2_output) expected(%packed_output) atol(0.050000000000000003) rtol(1.0000000000000001e-05) nan(same) : tensor<[%output_size]xf32>
+  check.expect.approximate actual(%rows2_output) expected(%packed_output) atol(0.050000000000000003) rtol(1.0000000000000001e-05) nan(same) : tensor<[%output_size]xf32>, tensor<[%output_size]xf32>
   check.return
 }
 
@@ -297,7 +297,7 @@ check.case public @ggml_q1_0_q8_1_x4_vocab_differential_case {
   %rows2_output = check.generate.fill value(2.0) : tensor<151669xf32>
   kernel.launch @ggml_q1_0_q8_1_x4_packed[%input_size, %output_size](%input_size, %output_size, %q8_input, %weight, %packed_output) : [index, index](index, index, tensor<20x144xi8>, tensor<151669x20x18xi8>, tensor<151669xf32>)
   kernel.launch @ggml_q1_0_q8_1_x4_packed_rows2[%input_size, %output_size](%input_size, %output_size, %q8_input, %weight, %rows2_output) : [index, index](index, index, tensor<20x144xi8>, tensor<151669x20x18xi8>, tensor<151669xf32>)
-  check.expect.close actual(%rows2_output) expected(%packed_output) atol(0.050000000000000003) rtol(1.0000000000000001e-05) nan(same) : tensor<151669xf32>
+  check.expect.approximate actual(%rows2_output) expected(%packed_output) atol(0.050000000000000003) rtol(1.0000000000000001e-05) nan(same) : tensor<151669xf32>, tensor<151669xf32>
   check.return
 }
 

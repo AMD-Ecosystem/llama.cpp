@@ -356,7 +356,7 @@ static size_t buffer_max_size(ggml_backend_buffer_type_t buft) {
 }
 
 static const ggml_backend_buffer_type_i buffer_type_i = {
-    buffer_type_name, buffer_alloc, buffer_alignment, buffer_max_size, nullptr, buffer_type_is_host,
+    buffer_type_name, buffer_alloc, nullptr, buffer_alignment, buffer_max_size, nullptr, nullptr, buffer_type_is_host,
 };
 
 static const char * backend_name(ggml_backend_t backend) {

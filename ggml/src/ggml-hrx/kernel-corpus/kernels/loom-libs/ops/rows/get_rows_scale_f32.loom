@@ -82,8 +82,8 @@ check.case public @ggml_get_rows_scale_f32_f32_case {
   %expected_raw = check.generate.fill value(2.0) : tensor<4x4xf32>
   %expected = check.generate.fill value(4.25) : tensor<4x4xf32>
   kernel.launch @ggml_get_rows_scale_f32[%token_count, %row_count, %hidden_size](%token_count, %row_count, %hidden_size, %token_ids, %weight, %raw_output, %output) : [index, index, index](index, index, index, tensor<4xi32>, tensor<4x4xf32>, tensor<4x4xf32>, tensor<4x4xf32>)
-  check.expect.close actual(%raw_output) expected(%expected_raw) atol(0.0) rtol(0.0) nan(same) : tensor<4x4xf32>
-  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<4x4xf32>
+  check.expect.approximate actual(%raw_output) expected(%expected_raw) atol(0.0) rtol(0.0) nan(same) : tensor<4x4xf32>, tensor<4x4xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<4x4xf32>, tensor<4x4xf32>
   check.return
 }
 

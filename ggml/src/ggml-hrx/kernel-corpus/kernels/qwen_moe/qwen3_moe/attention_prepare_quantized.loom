@@ -152,7 +152,7 @@ check.case public @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4_differential_cas
   kernel.launch @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4[%token_count](%token_count, %input, %weight, %actual) : [index](index, tensor<256xf32>, tensor<256xf32>, tensor<288xi8>)
   kernel.launch @qwen3_moe_rmsnorm_f32_quantize_q8_1_x4[%token_count](%token_count, %input, %weight, %dual_normalized, %dual_q8) : [index](index, tensor<256xf32>, tensor<256xf32>, tensor<256xf32>, tensor<288xi8>)
   check.expect.equal actual(%actual) expected(%expected) : tensor<288xi8>
-  check.expect.close actual(%dual_normalized) expected(%normalized) atol(0.0) rtol(0.0) nan(same) : tensor<256xf32>
+  check.expect.approximate actual(%dual_normalized) expected(%normalized) atol(0.0) rtol(0.0) nan(same) : tensor<256xf32>, tensor<256xf32>
   check.expect.equal actual(%dual_q8) expected(%expected) : tensor<288xi8>
   check.return
 }
@@ -176,7 +176,7 @@ check.case public @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4_multistripe_case
   kernel.launch @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4[%token_count](%token_count, %input, %weight, %actual) : [index](index, tensor<14x2048xf32>, tensor<2048xf32>, tensor<14x2304xi8>)
   kernel.launch @qwen3_moe_rmsnorm_f32_quantize_q8_1_x4[%token_count](%token_count, %input, %weight, %dual_normalized, %dual_q8) : [index](index, tensor<14x2048xf32>, tensor<2048xf32>, tensor<14x2048xf32>, tensor<14x2304xi8>)
   check.expect.equal actual(%actual) expected(%expected) : tensor<14x2304xi8>
-  check.expect.close actual(%dual_normalized) expected(%normalized) atol(0.0) rtol(0.0) nan(same) : tensor<14x2048xf32>
+  check.expect.approximate actual(%dual_normalized) expected(%normalized) atol(0.0) rtol(0.0) nan(same) : tensor<14x2048xf32>, tensor<14x2048xf32>
   check.expect.equal actual(%dual_q8) expected(%expected) : tensor<14x2304xi8>
   check.return
 }
@@ -188,7 +188,7 @@ check.case public @qwen3_moe_attention_rmsnorm_f32_benchmark_case {
   %output = check.generate.fill value(1.0) : tensor<[%token_count]x2048xf32>
   %expected = check.generate.fill value(0.0) : tensor<[%token_count]x2048xf32>
   kernel.launch @qwen3_moe_rmsnorm_f32[%token_count](%token_count, %input, %weight, %output) : [index](index, tensor<[%token_count]x2048xf32>, tensor<2048xf32>, tensor<[%token_count]x2048xf32>)
-  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x2048xf32>
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x2048xf32>, tensor<[%token_count]x2048xf32>
   check.return
 }
 
@@ -212,7 +212,7 @@ check.case public @qwen3_moe_rmsnorm_f32_quantize_q8_1_x4_benchmark_case {
   %expected_normalized = check.generate.fill value(0.0) : tensor<[%token_count]x2048xf32>
   %expected_q8 = check.generate.fill value(0) : tensor<[%token_count]x2304xi8>
   kernel.launch @qwen3_moe_rmsnorm_f32_quantize_q8_1_x4[%token_count](%token_count, %input, %weight, %normalized_output, %q8_output) : [index](index, tensor<[%token_count]x2048xf32>, tensor<2048xf32>, tensor<[%token_count]x2048xf32>, tensor<[%token_count]x2304xi8>)
-  check.expect.close actual(%normalized_output) expected(%expected_normalized) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x2048xf32>
+  check.expect.approximate actual(%normalized_output) expected(%expected_normalized) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x2048xf32>, tensor<[%token_count]x2048xf32>
   check.expect.equal actual(%q8_output) expected(%expected_q8) : tensor<[%token_count]x2304xi8>
   check.return
 }

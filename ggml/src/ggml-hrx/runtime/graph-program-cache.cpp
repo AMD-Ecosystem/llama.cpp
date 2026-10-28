@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <optional>
 #include <sstream>
+#include <unordered_map>
 #include <utility>
 
 namespace ggml::hrx {
@@ -204,38 +205,26 @@ static bool can_skip_external_binding(const Value & value,
 
 class TensorValueIndex {
   public:
-    explicit TensorValueIndex(size_t maximum_size) : maximum_size_(maximum_size) {}
-    ~TensorValueIndex() { ggml_hash_set_free(&tensors_); }
+    explicit TensorValueIndex(size_t maximum_size) { values_.reserve(maximum_size); }
 
     TensorValueIndex(const TensorValueIndex &) = delete;
     TensorValueIndex & operator=(const TensorValueIndex &) = delete;
 
     std::optional<int32_t> find(const ggml_tensor * tensor) const {
-        if (tensors_.size == 0) {
+        const auto entry = values_.find(tensor);
+        if (entry == values_.end()) {
             return std::nullopt;
         }
-        const size_t index = ggml_hash_find(&tensors_, tensor);
-        if (index == GGML_HASHSET_FULL || !ggml_bitset_get(tensors_.used, index)) {
-            return std::nullopt;
-        }
-        return values_[index];
+        return entry->second;
     }
 
     void emplace(const ggml_tensor * tensor, int32_t value) {
-        if (tensors_.size == 0) {
-            GGML_ASSERT(maximum_size_ <= SIZE_MAX / 2);
-            tensors_ = ggml_hash_set_new(2 * maximum_size_);
-            values_.resize(tensors_.size);
-        }
-        const size_t index = ggml_hash_insert(&tensors_, const_cast<ggml_tensor *>(tensor));
-        GGML_ASSERT(index != GGML_HASHSET_ALREADY_EXISTS);
-        values_[index] = value;
+        const bool inserted = values_.emplace(tensor, value).second;
+        GGML_ASSERT(inserted);
     }
 
   private:
-    size_t maximum_size_;
-    ggml_hash_set tensors_ = {};
-    std::vector<int32_t> values_;
+    std::unordered_map<const ggml_tensor *, int32_t> values_;
 };
 
 static Status bind_current_value(const ValueMap &                                   values,
