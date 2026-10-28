@@ -444,6 +444,9 @@
       "path": "ops/rope/rope_set_rows_f32.loom"
     },
     {
+      "path": "ops/rows/set_rows_scalar.loom"
+    },
+    {
       "path": "ops/rows/set_rows.loom"
     },
     {
@@ -652,6 +655,9 @@
     },
     {
       "path": "motifs/matmul/tiled_pair_postprocess_f32.loom"
+    },
+    {
+      "path": "ops/elementwise/clamp_f32.loom"
     }
   ],
   "exports": [
@@ -6402,6 +6408,69 @@
       ]
     },
     {
+      "name": "ggml_flash_attention_f32_f16_wmma_sinks",
+      "family": "loom_libs",
+      "symbol": "ggml_flash_attention_f32_f16_wmma_sinks",
+      "source": "ops/flash_attention/prefill_f32_f16_wmma.loom",
+      "workload_parameters": [
+        {
+          "name": "query_token_count",
+          "type": "index"
+        },
+        {
+          "name": "key_value_token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "query_token_count",
+          "type": "index"
+        },
+        {
+          "name": "key_value_token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "query",
+        "key",
+        "value",
+        "mask",
+        "gate",
+        "output",
+        "sinks"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write",
+        "read"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/flash_attention/prefill_f32_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "motifs/flash_attention/qk_block_wmma.loom",
+          "motifs/flash_attention/online_softmax.loom",
+          "motifs/flash_attention/pv_block_wmma.loom",
+          "motifs/flash_attention/publish_f32.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/flash_attention/qk_block_wmma.loom",
+        "motifs/flash_attention/online_softmax.loom",
+        "motifs/flash_attention/pv_block_wmma.loom",
+        "motifs/flash_attention/publish_f32.loom"
+      ]
+    },
+    {
       "name": "ggml_flash_attention_f32_f16_wmma_publish_f16",
       "family": "loom_libs",
       "symbol": "ggml_flash_attention_f32_f16_wmma_publish_f16",
@@ -7217,6 +7286,51 @@
       "compile_dependencies": [
         "motifs/rope/rope_f32.loom"
       ]
+    },
+    {
+      "name": "ggml_set_rows_scalar",
+      "family": "loom_libs",
+      "symbol": "ggml_set_rows_scalar",
+      "source": "ops/rows/set_rows_scalar.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "cache_row_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "cache_row_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "rows",
+        "indices",
+        "cache"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/rows/set_rows_scalar.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
     },
     {
       "name": "ggml_set_rows",
@@ -9578,6 +9692,41 @@
         "motifs/bf16_f16.loom",
         "motifs/f32_f16.loom"
       ]
+    },
+    {
+      "name": "ggml_clamp_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_clamp_f32",
+      "source": "ops/elementwise/clamp_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "element_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "element_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/elementwise/clamp_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
     }
   ],
   "link_modules": [

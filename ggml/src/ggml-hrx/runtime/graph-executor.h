@@ -26,6 +26,8 @@ struct GraphExecutionResult {
 
 class GraphExecutor {
   public:
+    static constexpr size_t kMaxCachedPrograms = 256;
+
     explicit GraphExecutor(ggml_backend_hrx_context & context);
 
     GraphSupportResult   can_execute(const ggml_cgraph & graph) const;

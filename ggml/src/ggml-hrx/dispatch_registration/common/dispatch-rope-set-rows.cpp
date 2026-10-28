@@ -23,6 +23,7 @@ static constexpr KernelCatalogRef kRopeConcatF32Kernel = GGML_HRX_KERNEL_REF("lo
 static constexpr KernelCatalogRef kRopeScaleF32Kernel  = GGML_HRX_KERNEL_REF("loom_libs", "ggml_rope_scale_f32");
 static constexpr KernelCatalogRef kRopeTokenScaleF32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_rope_token_scale_f32");
+static constexpr KernelCatalogRef kSetRowsScalarKernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_set_rows_scalar");
 static constexpr KernelCatalogRef kSetRowsKernel        = GGML_HRX_KERNEL_REF("loom_libs", "ggml_set_rows");
 static constexpr KernelCatalogRef kRopeSetRowsF32Kernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_rope_set_rows_f32");
 
@@ -126,8 +127,12 @@ static bool is_supported_rope_input_layout(const Value & value, size_t & span_el
 }
 
 static bool is_supported_rope_params(const RopeParams & params, int64_t head_size) {
+    const bool nonnegative_offset = params.n_offs >= 0;
+    const bool aligned_offset = params.n_offs % 4 == 0;
+    const bool fits_head = params.n_offs + params.n_dims <= head_size;
+    const bool supported_offset = nonnegative_offset && aligned_offset && fits_head;
     const bool supported_mode = params.mode == GGML_ROPE_TYPE_NORMAL || params.mode == GGML_ROPE_TYPE_NEOX;
-    return params.n_dims >= 4 && params.n_dims <= head_size && params.n_dims % 4 == 0 && supported_mode &&
+    return supported_offset && params.n_dims >= 4 && params.n_dims <= head_size && params.n_dims % 4 == 0 && supported_mode &&
            std::isfinite(params.freq_base) && params.freq_base > 0.0f && std::isfinite(params.freq_scale) &&
            params.freq_scale > 0.0f && std::isfinite(params.ext_factor) && std::isfinite(params.attn_factor);
 }
@@ -244,6 +249,7 @@ struct RopeMatch {
     int64_t              head_count         = 0;
     int64_t              head_size          = 0;
     int64_t              n_dims             = 0;
+    int64_t              n_offs             = 0;
     int64_t              input_stride1      = 0;
     int64_t              input_stride2      = 0;
     size_t               input_span         = 0;
@@ -382,6 +388,7 @@ static RopeMatch match_rope_f32(const Graph & graph, const GraphNode * node, Sta
     match.head_count         = head_count;
     match.head_size          = head_size;
     match.n_dims             = n_dims;
+    match.n_offs             = params->n_offs;
     match.input_stride1      = static_cast<int64_t>(input->nb[1] / sizeof(float));
     match.input_stride2      = static_cast<int64_t>(input->nb[2] / sizeof(float));
     match.input_span         = input_span;
@@ -395,7 +402,8 @@ static RopeMatch match_rope_f32(const Graph & graph, const GraphNode * node, Sta
     return match;
 }
 
-static SetRowsMatch match_set_rows_2d(const Graph & graph, const GraphNode * node, Status * status = nullptr) {
+static SetRowsMatch match_set_rows_2d(const Graph & graph, const GraphNode * node, Status * status = nullptr,
+                                       bool allow_scalar = false) {
     SetRowsMatch match;
     if (node == nullptr || node->op != GGML_OP_SET_ROWS || node->inputs.size() != 3) {
         log_set_rows_reject(status, "root is not a supported SET_ROWS arity", nullptr, nullptr, nullptr, nullptr);
@@ -429,10 +437,19 @@ static SetRowsMatch match_set_rows_2d(const Graph & graph, const GraphNode * nod
     const int64_t cache_row_count = cache->ne[1];
     int64_t       input_stride    = 0;
     size_t        rows_span_bytes = 0;
-    if (!supported_set_rows_input_layout(*rows, hidden_size, token_count, input_stride, rows_span_bytes) ||
-        !is_1d_shape(*indices, token_count) || !is_2d_shape(*cache, hidden_size, cache_row_count) ||
-        !supported_hidden_size(hidden_size) || !supported_token_count(token_count) ||
-        !supported_cache_row_count(cache_row_count)) {
+    const bool scalar_width = hidden_size == 1;
+    const bool scalar_input = rows->type == GGML_TYPE_F32;
+    const bool scalar_count = supported_cache_row_count(token_count);
+    const bool scalar_shape = allow_scalar && scalar_width && scalar_input && scalar_count;
+    const bool vector_shape = supported_hidden_size(hidden_size) && supported_token_count(token_count);
+    const bool supported_shape = scalar_shape || vector_shape;
+    const bool rows_layout = supported_set_rows_input_layout(
+        *rows, hidden_size, token_count, input_stride, rows_span_bytes);
+    const bool indices_shape = is_1d_shape(*indices, token_count);
+    const bool cache_shape = is_2d_shape(*cache, hidden_size, cache_row_count);
+    const bool cache_count = supported_cache_row_count(cache_row_count);
+    const bool supported = rows_layout && indices_shape && cache_shape && supported_shape && cache_count;
+    if (!supported) {
         log_set_rows_reject(status, "shape or rows layout is unsupported", rows, indices, cache, output);
         return {};
     }
@@ -456,6 +473,9 @@ static void add_rope_compile_parameters(Dispatch & dispatch,
                                         const RopeMatch & match,
                                         const char *      prefix,
                                         bool              include_input_span = true) {
+    if (std::string(prefix) == "ggml.rope_f32") {
+        dispatch.kernel.compile_parameters.emplace(std::string(prefix) + ".n_offs", to_config_value(match.n_offs));
+    }
     dispatch.kernel.compile_parameters.emplace(std::string(prefix) + ".head_size", to_config_value(match.head_size));
     dispatch.kernel.compile_parameters.emplace(std::string(prefix) + ".n_dims", to_config_value(match.n_dims));
     dispatch.kernel.compile_parameters.emplace(std::string(prefix) + ".head_count", to_config_value(match.head_count));
@@ -562,11 +582,18 @@ static Dispatch make_rope_scale_dispatch(const DispatchMatchContext & context,
 
 static Dispatch make_set_rows_dispatch(const SetRowsMatch & match) {
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(kSetRowsKernel);
+    const bool scalar = match.hidden_size == 1;
+    dispatch.kernel = make_kernel_specialization(scalar ? kSetRowsScalarKernel : kSetRowsKernel);
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
     dispatch.kernel.integer_parameters.emplace("cache_row_count", match.cache_row_count);
-    dispatch.kernel.integer_parameters.emplace("hidden_size", match.hidden_size);
-    add_set_rows_compile_parameters(dispatch, match);
+    if (scalar) {
+        dispatch.kernel.compile_parameters.emplace("ggml.set_rows_scalar.token_capacity", to_config_value(match.token_count));
+        dispatch.kernel.compile_parameters.emplace("ggml.set_rows_scalar.input_stride", to_config_value(match.input_stride));
+        dispatch.kernel.compile_parameters.emplace("ggml.set_rows_scalar.output_format", to_config_value(match.output_format));
+    } else {
+        dispatch.kernel.integer_parameters.emplace("hidden_size", match.hidden_size);
+        add_set_rows_compile_parameters(dispatch, match);
+    }
     dispatch.bindings.push_back({ match.rows->storage_root, match.rows->storage_offset, match.rows_span_bytes });
     dispatch.bindings.push_back({ match.indices->id, 0, match.indices->byte_count });
     dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
@@ -633,6 +660,9 @@ static Dispatch make_rope_concat_dispatch(const DispatchMatchContext & context,
 static RopeConcatMatch match_rope_concat_f32(const Graph & graph, const GraphNode * node) {
     RopeConcatMatch match;
     match.rope = match_rope_f32(graph, node);
+    if (match.rope.n_offs != 0) {
+        return {};
+    }
     if (!match.rope.matched() || match.rope.mode != GGML_ROPE_TYPE_NEOX || !graph.has_index() ||
         !graph.index().has_single_consumer(node->output)) {
         return {};
@@ -722,6 +752,9 @@ static bool find_rope_set_rows_consumer(const Graph & graph, const GraphNode & r
 static RopeSetRowsMatch match_rope_set_rows_f32(const Graph & graph, const GraphNode * node) {
     RopeSetRowsMatch match;
     match.rope = match_rope_f32(graph, node);
+    if (match.rope.n_offs != 0) {
+        return {};
+    }
     if (!match.rope.matched() || !find_rope_set_rows_consumer(graph, *node, match)) {
         return {};
     }
@@ -843,7 +876,7 @@ static bool match_rope_f32_dispatch(const DispatchMatchContext & context, Dispat
 }
 
 static bool match_set_rows_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
-    const SetRowsMatch match = match_set_rows_2d(context.graph, context.root_node, &dispatch_match.status);
+    const SetRowsMatch match = match_set_rows_2d(context.graph, context.root_node, &dispatch_match.status, true);
     if (!match.matched()) {
         return false;
     }

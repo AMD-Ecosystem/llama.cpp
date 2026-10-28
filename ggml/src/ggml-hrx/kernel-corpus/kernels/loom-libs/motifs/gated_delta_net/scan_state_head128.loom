@@ -67,6 +67,7 @@ config.decl @llm.gated_delta_net.query_sequence_ratio : %value: index where [ran
 config.decl @llm.gated_delta_net.snapshot_stride : %value: index where [range(%value, 1, 1073741823)]
 
 config.decl @llm.gated_delta_net.l2_epsilon : f32
+config.def @llm.gated_delta_net.additive_epsilon = 0 : index
 
 config.decl @llm.gated_delta_net.workgroup_size : %value: index where [range(%value, 32, 1024), multiple_of(%value, 32)]
 
@@ -447,6 +448,8 @@ template.def<@llm.gated_delta_net.f32_wmma_head128.body> device @llm_gated_delta
   %f1 = scalar.constant 1.0 : f32
   %f0 = scalar.constant 0.0 : f32
   %norm_eps = config.get @llm.gated_delta_net.l2_epsilon : f32
+  %norm_mode = config.get @llm.gated_delta_net.additive_epsilon : index
+  %norm_additive = index.cmp ne, %norm_mode, %c0 : index
   %norm_eps_sq = scalar.mulf<nnan|ninf|nsz> %norm_eps, %norm_eps : f32
   %fz8 = vector.constant 0.0 : vector<8xf32>
   %zv8 = vector.constant 0.0 : vector<8xf32>
@@ -673,7 +676,9 @@ template.def<@llm.gated_delta_net.f32_wmma_head128.body> device @llm_gated_delta
     %n0_k_hi57 = scalar.addf<nnan|ninf|nsz> %n0_k_w5, %n0_k_w7 : f32
     %n0_k_hi = scalar.addf<nnan|ninf|nsz> %n0_k_hi46, %n0_k_hi57 : f32
     %n0_k_sum = scf.select %lane_lo, %n0_k_lo, %n0_k_hi : f32
-    %n0_k_clamped = scalar.maxnumf %n0_k_sum, %norm_eps_sq : f32
+    %n0_k_max = scalar.maxnumf %n0_k_sum, %norm_eps_sq : f32
+    %n0_k_add = scalar.addf %n0_k_sum, %norm_eps : f32
+    %n0_k_clamped = scf.select %norm_additive, %n0_k_add, %n0_k_max : f32
     %n0_k_scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %n0_k_clamped : f32
     %n0_k_scale_v = vector.splat %n0_k_scale : vector<8xf32>
     %n0_kn = vector.mulf %n0_k_scale_v, %kvs0 : vector<8xf32>
@@ -756,7 +761,9 @@ template.def<@llm.gated_delta_net.f32_wmma_head128.body> device @llm_gated_delta
     %n0_q_hi57 = scalar.addf<nnan|ninf|nsz> %n0_q_w5, %n0_q_w7 : f32
     %n0_q_hi = scalar.addf<nnan|ninf|nsz> %n0_q_hi46, %n0_q_hi57 : f32
     %n0_q_sum = scf.select %lane_lo, %n0_q_lo, %n0_q_hi : f32
-    %n0_q_clamped = scalar.maxnumf %n0_q_sum, %norm_eps_sq : f32
+    %n0_q_max = scalar.maxnumf %n0_q_sum, %norm_eps_sq : f32
+    %n0_q_add = scalar.addf %n0_q_sum, %norm_eps : f32
+    %n0_q_clamped = scf.select %norm_additive, %n0_q_add, %n0_q_max : f32
     %n0_q_scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %n0_q_clamped : f32
     %n0_q_scale_v = vector.splat %n0_q_scale : vector<8xf32>
     %n0_qn = vector.mulf %n0_q_scale_v, %qvs0 : vector<8xf32>

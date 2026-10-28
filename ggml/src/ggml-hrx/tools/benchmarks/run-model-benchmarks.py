@@ -360,8 +360,8 @@ def main() -> None:
     parser.add_argument("--warmup-iterations", default="1")
     parser.add_argument("--continue-on-failure", action="store_true", help="Record failed benchmarks and continue running the rest.")
     parser.add_argument("--benchmark-timeout-sec", type=float, default=300.0, help="Timeout per benchmark tool invocation. Defaults to 300.")
-    parser.add_argument("--profile-final-batch", type=parse_bool, default=True, help="Pass --profile-final-batch to iree-benchmark-loom. Defaults to true.")
-    parser.add_argument("--input-ring-count", help="Optional --input-ring-count value for iree-benchmark-loom.")
+    parser.add_argument("--profile-final-batch", type=parse_bool, default=True, help="Pass --profile-final-batch to loom-benchmark. Defaults to true.")
+    parser.add_argument("--input-ring-count", help="Optional --input-ring-count value for loom-benchmark.")
     parser.add_argument("--benchmark-extra-arg", action="append", default=[], help="Additional argument to pass to benchmark invocations. May be repeated.")
     parser.add_argument("--runtime-specialization", action=argparse.BooleanOptionalAction, default=True, help="Specialize workload index parameters after loom-link. Defaults to enabled.")
     args = parser.parse_args()
@@ -387,7 +387,7 @@ def main() -> None:
         fail("--output-dir is required unless --list is used")
 
     loom_link = find_tool("LOOM_LINK", "loom-link", build_dir, "**/loom-link")
-    iree_benchmark_loom = find_tool("IREE_BENCHMARK_LOOM", "iree-benchmark-loom", build_dir, "**/iree-benchmark-loom")
+    loom_benchmark = find_tool("LOOM_BENCHMARK", "loom-benchmark", build_dir, "**/loom-benchmark")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     summary_path = args.output_dir / "results.jsonl"
     with summary_path.open("w", encoding="utf-8") as summary:
@@ -464,7 +464,7 @@ def main() -> None:
                 runtime_specialized = False
             if state == "ok":
                 dry_run = [
-                    str(iree_benchmark_loom),
+                    str(loom_benchmark),
                     str(benchmark_source),
                     f"--benchmark={benchmark}",
                     f"--device={args.device}",
@@ -480,7 +480,7 @@ def main() -> None:
                 error = dry_run_result.error
             if state == "ok" and not args.dry_run_only:
                 benchmark_command = [
-                    str(iree_benchmark_loom),
+                    str(loom_benchmark),
                     str(benchmark_source),
                     f"--benchmark={benchmark}",
                     f"--device={args.device}",

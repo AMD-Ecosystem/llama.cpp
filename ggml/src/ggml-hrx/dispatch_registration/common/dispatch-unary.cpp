@@ -81,6 +81,44 @@ static bool match_scale_bias_f32_dispatch(const DispatchMatchContext & context, 
     return true;
 }
 
+static bool match_clamp_f32_dispatch(const DispatchMatchContext & context, DispatchMatch & match) {
+    const GraphNode * node = context.root_node;
+    if (node == nullptr) {
+        return false;
+    }
+    if (node->inputs.size() != 1) {
+        return false;
+    }
+    const ClampParams * params = op_params_as<ClampParams>(node->params);
+    const Value * input = graph_value(context.graph, node->inputs[0]);
+    const Value * output = graph_value(context.graph, node->output);
+    const bool values_present = params != nullptr && input != nullptr && output != nullptr;
+    if (!values_present) {
+        return false;
+    }
+    const bool f32 = input->type == GGML_TYPE_F32 && output->type == GGML_TYPE_F32;
+    const bool packed = input->contiguous && output->contiguous;
+    const bool shape_matches = same_shape(*input, *output);
+    const bool storage_safe = scale_storage_is_safe(*input, *output);
+    const bool size_supported = output->element_count > 0 && output->element_count <= 134217728;
+    const bool supported = f32 && packed && shape_matches && storage_safe && size_supported;
+    if (!supported) {
+        return false;
+    }
+
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(GGML_HRX_KERNEL_REF("loom_libs", "ggml_clamp_f32"));
+    dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
+    dispatch.kernel.integer_parameters.emplace("element_count", output->element_count);
+    dispatch.kernel.compile_parameters.emplace("ggml.clamp.min", float_config_value(params->min));
+    dispatch.kernel.compile_parameters.emplace("ggml.clamp.max", float_config_value(params->max));
+    dispatch.bindings.push_back({ input->id, 0, input->byte_count });
+    dispatch.bindings.push_back({ output->id, 0, output->byte_count });
+    match.covered_nodes.push_back(context.root_index);
+    match.dispatches.push_back(std::move(dispatch));
+    return true;
+}
+
 static bool match_unary_f32_dispatch(const DispatchMatchContext & context, DispatchMatch & match) {
     const GraphNode * node = context.root_node;
     if (node == nullptr || node->inputs.size() != 1) {
@@ -132,6 +170,14 @@ static void register_unary_dispatch_for(DispatchRegistryBuilder & registry, ggml
 }  // namespace
 
 void register_unary_dispatch(DispatchRegistryBuilder & registry) {
+    registry.add({
+        "common.clamp_f32",
+        GGML_OP_CLAMP,
+        DispatchMatchKind::SingleOp,
+        0,
+        DispatchSource::Common,
+        match_clamp_f32_dispatch,
+    });
     registry.add({
         "common.scale_bias_f32",
         GGML_OP_SCALE,

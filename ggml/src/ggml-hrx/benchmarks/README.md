@@ -2,7 +2,7 @@
 
 This directory contains model-scoped Loom benchmarks for HRX kernels. Benchmark sources stay separate from the production kernel corpus: they declare the kernels they need with `kernel.decl`, and the runner links those declarations against the production `.loom` files before benchmarking.
 
-Use these benchmarks to measure production kernels with `iree-benchmark-loom` while keeping model-shaped benchmark cases out of the embedded kernel catalog. Each model has one `.loom` file under `loom/`, and each workload shape has a sidecar manifest next to it, for example `llama32_3b_f16.pp512.json`.
+Use these benchmarks to measure production kernels with `loom-benchmark` while keeping model-shaped benchmark cases out of the embedded kernel catalog. Each model has one `.loom` file under `loom/`, and each workload shape has a sidecar manifest next to it, for example `llama32_3b_f16.pp512.json`.
 
 Generated model benchmarks are deduplicated by kernel shape. The sidecar manifest keeps a compact `dispatches` list with the generated benchmark name, kernel, compile/runtime parameters, source files, and `count`, so benchmark results can be weighted back to the full model without materializing one check case for every duplicate dispatch.
 
@@ -110,7 +110,7 @@ ggml/src/ggml-hrx/tools/benchmarks/run-model-benchmarks.sh \
   --output-dir /home/rsuderman/codex/project-workspaces/llama.cpp/gates/hrx-loom-benchmarks/llama32-<scenario>
 ```
 
-Use `--dry-run-only` to stop after planning, `--list` to inspect the generated benchmark set, or `--benchmark @name` to run a single invocation. Set `LOOM_LINK` or `IREE_BENCHMARK_LOOM` to override tool discovery. Set `DEVICE` to override the default `amdgpu` HAL device.
+Use `--dry-run-only` to stop after planning, `--list` to inspect the generated benchmark set, or `--benchmark @name` to run a single invocation. Set `LOOM_LINK` or `LOOM_BENCHMARK` to override tool discovery. Set `DEVICE` to override the default `amdgpu` HAL device.
 
 The runner applies the same workload-argument specialization used by the HRX runtime after `loom-link`, and benchmarks the resulting `linked.runtime-specialized.loom` source by default. Use `--no-runtime-specialization` to benchmark the raw linked source.
 
@@ -118,7 +118,7 @@ The runner applies the same workload-argument specialization used by the HRX run
 
 Use `--continue-on-failure` to record failed or timed-out standalone cases and keep running the rest of the model benchmark set. Use `--benchmark-timeout-sec` to bound each link, dry-run, and benchmark command. Each benchmark directory keeps `loom-link`, dry-run, and benchmark command lines plus stdout/stderr so failures can be reproduced directly.
 
-Use `--profile-final-batch=false`, `--input-ring-count`, or repeated `--benchmark-extra-arg` flags when isolating `iree-benchmark-loom` behavior from production runtime behavior. After a run, summarize the weighted model time with:
+Use `--profile-final-batch=false`, `--input-ring-count`, or repeated `--benchmark-extra-arg` flags when isolating `loom-benchmark` behavior from production runtime behavior. After a run, summarize the weighted model time with:
 
 ```sh
 ggml/src/ggml-hrx/tools/benchmarks/summarize-model-benchmarks.py \

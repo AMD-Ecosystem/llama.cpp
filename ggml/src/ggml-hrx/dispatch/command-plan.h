@@ -33,6 +33,8 @@ struct CommandPlanCompletionCounterRequest {
 };
 
 struct CommandPlan {
+    // Initializers prepare device metadata; their writes alone do not mutate caller-owned host inputs.
+    // Caller-visible outputs and in-place updates belong in dispatches.
     std::vector<Dispatch>                            initialization_dispatches;
     std::vector<Dispatch>                            dispatches;
     std::vector<CommandPlanTransient>                transients;

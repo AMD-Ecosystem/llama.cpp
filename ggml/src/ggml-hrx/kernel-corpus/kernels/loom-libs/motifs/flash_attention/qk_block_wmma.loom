@@ -24,7 +24,7 @@ template.decl @ggml.flash_attention.pv_block_wmma.prefill_tail(%old_scale: vecto
 
 template.decl @ggml.flash_attention.prefill.publish_output(%publish_f16: i1, %query_token_count: index, %query_head_count: index, %value_head_size: index, %lane_has_output: i1, %query_valid0: i1, %query_valid1: i1, %query_valid2: i1, %query_valid3: i1, %query_token0: index, %query_token1: index, %query_token2: index, %query_token3: index, %query_head: index, %lane_output_channel: index, %final_sum: vector<4xf32>, %final_output0: vector<4xf16>, %final_output1: vector<4xf16>, %final_output2: vector<4xf16>, %final_output3: vector<4xf16>, %gate: buffer, %output: buffer, %f16_output: buffer)
 
-template.decl @ggml.flash_attention.prefill.body(%publish_f16: i1, %query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer, %f16_output: buffer)
+template.decl @ggml.flash_attention.prefill.body(%publish_f16: i1, %has_sinks: i1, %sinks: buffer, %query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer, %f16_output: buffer)
 
 template.def<@ggml.flash_attention.prefill.stage_query> device @ggml_flash_attention_prefill_stage_query(%query_token_count: index, %query_origin: index, %query_head: index, %query_load_iteration_count: index, %query_stage_stride: index, %qk_head_size: index, %attention_scale: f32, %query: buffer, %query_stage: buffer) {
   %query_head_count = config.get @ggml.flash_attention.query_head_count : index
@@ -83,7 +83,7 @@ template.def<@ggml.flash_attention.qk_block_wmma.prefill_full> device @ggml_flas
   template.return
 }
 
-template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_prefill_body(%publish_f16: i1, %query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer, %f16_output: buffer) {
+template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_prefill_body(%publish_f16: i1, %has_sinks: i1, %sinks: buffer, %query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer, %f16_output: buffer) {
   %bounded_query_token_count = index.assume %query_token_count [range(%query_token_count, 1, 2048)] : index
   %bounded_key_value_token_count = index.assume %key_value_token_count [range(%key_value_token_count, 1, 32768)] : index
   %query_head_count = config.get @ggml.flash_attention.query_head_count : index
@@ -221,7 +221,17 @@ template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_pr
   %tail_key_value_stage_view = buffer.view %tail_key_value_stage[%c0_offset] : buffer -> view<32x[%tail_stage_head_size]xf16>
   template.apply<@ggml.flash_attention.prefill.stage_query>(%bounded_query_token_count, %query_origin, %query_head, %query_load_iteration_count, %query_stage_stride, %qk_head_size, %attention_scale, %query_aligned, %query_stage) : (index, index, index, index, index, index, f32, buffer, buffer)
   kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
-  %full_max, %full_sum, %full_output0, %full_output1, %full_output2, %full_output3 = scf.for %key_origin = [%c0 to %full_key_value_token_count step %c64](%current_max = %negative_f32x4 : vector<4xf32>, %current_sum = %c0_f32x4 : vector<4xf32>, %current_output0 = %output_zero0 : vector<4xf16>, %current_output1 = %output_zero1 : vector<4xf16>, %current_output2 = %output_zero2 : vector<4xf16>, %current_output3 = %output_zero3 : vector<4xf16>) -> (vector<4xf32>, vector<4xf32>, vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) {
+  // A sink is one extra softmax logit with zero value contribution.
+  %initial_max, %initial_sum = scf.if %has_sinks -> (vector<4xf32>, vector<4xf32>) {
+    %sinks_view = buffer.view %sinks[%c0_offset] : buffer -> view<[%query_head_count]xf32>
+    %sink = view.load %sinks_view[%query_head] : view<[%query_head_count]xf32> -> f32
+    %sink_max = vector.splat %sink : vector<4xf32>
+    %sink_sum = vector.constant 1.0 : vector<4xf32>
+    scf.yield %sink_max, %sink_sum : vector<4xf32>, vector<4xf32>
+  } else {
+    scf.yield %negative_f32x4, %c0_f32x4 : vector<4xf32>, vector<4xf32>
+  }
+  %full_max, %full_sum, %full_output0, %full_output1, %full_output2, %full_output3 = scf.for %key_origin = [%c0 to %full_key_value_token_count step %c64](%current_max = %initial_max : vector<4xf32>, %current_sum = %initial_sum : vector<4xf32>, %current_output0 = %output_zero0 : vector<4xf16>, %current_output1 = %output_zero1 : vector<4xf16>, %current_output2 = %output_zero2 : vector<4xf16>, %current_output3 = %output_zero3 : vector<4xf16>) -> (vector<4xf32>, vector<4xf32>, vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) {
     // Cache the complete 16x64 mask tile before QK. Causal masks leave future
     // KV blocks entirely at negative infinity; reducing the cached tile lets
     // the workgroup skip QK, softmax, and P*V for those blocks. This mirrors

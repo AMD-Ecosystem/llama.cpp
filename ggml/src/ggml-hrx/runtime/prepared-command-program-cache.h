@@ -55,6 +55,8 @@ class PreparedCommandProgramCache {
 
     PreparedCommandProgramCacheStats stats() const;
 
+    size_t size() const;
+
     void clear();
 
   private:

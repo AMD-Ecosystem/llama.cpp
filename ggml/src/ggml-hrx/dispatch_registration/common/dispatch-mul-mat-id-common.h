@@ -204,6 +204,15 @@ inline CommonMulMatIdMatch common_match_mul_mat_id_any_format(const Graph &     
         return {};
     }
 
+    const bool packed_route_elements = route_ids->nb[0] == sizeof(int32_t);
+    const bool aligned_route_rows = route_ids->nb[1] % sizeof(int32_t) == 0;
+    const bool nonoverlapping_route_rows = route_ids->nb[1] / sizeof(int32_t) >= static_cast<size_t>(route_ids->ne[0]);
+    const bool bounded_route_stride = route_ids->nb[1] / sizeof(int32_t) <= 512;
+    const bool supported_route_layout = packed_route_elements && aligned_route_rows && nonoverlapping_route_rows && bounded_route_stride;
+    if (!supported_route_layout) {
+        return {};
+    }
+
     CommonMulMatWeightFormat format = CommonMulMatWeightFormat::Q4K;
     if (!common_mul_mat_format_for_type(weight->type, format)) {
         return {};
@@ -286,8 +295,8 @@ inline bool common_mul_mat_id_ensure_moe_routing_bundle(const DispatchMatchConte
     const size_t  expert_table_bytes = common_mul_mat_id_expert_table_size(match.token_count, match.expert_count);
     const size_t  partition_table_bytes =
         common_mul_mat_id_partition_table_size(match.token_count, match.route_count, match.expert_count);
-    const int64_t route_stride     = match.route_count;
-    const size_t  route_ids_length = static_cast<size_t>(match.token_count * route_stride) * sizeof(int32_t);
+    const int64_t route_stride     = static_cast<int64_t>(match.route_ids->nb[1] / sizeof(int32_t));
+    const size_t  route_ids_length = match.route_ids->byte_count;
 
     dispatch_match.transients.push_back(
         { expert_table_value, "common.moe_routing.expert_table", expert_table_bytes, 256 });

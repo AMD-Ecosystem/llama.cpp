@@ -44,7 +44,11 @@ kernel.def target(@ggml_moe_routing_gfx11_wave32) @ggml_moe_build_expert_table(%
   %assignment_count = index.mul %bounded_token_count, %bounded_route_count : index
   %expert, %table_expert_count = index.assume %expert0, %bounded_expert_count [lt(%expert0, %bounded_expert_count)] : index, index
   %assignment_table_byte_base = index.scale %table_expert_count, %c4_bytes : index, offset -> offset
-  %route_view = buffer.view %route_ids[%c0_offset] : buffer -> view<[%bounded_token_count]x[%bounded_route_stride]xi32>
+  %c1 = index.constant 1 : index
+  %last_token = index.sub %bounded_token_count, %c1 : index
+  %last_route_row = index.mul %last_token, %bounded_route_stride : index
+  %route_storage_count = index.add %last_route_row, %bounded_route_count : index
+  %route_view = buffer.view %route_ids[%c0_offset] : buffer -> view<[%route_storage_count]xi32>
   %count_view = buffer.view %expert_table[%c0_offset] : buffer -> view<[%table_expert_count]xi32>
   %assignment_view = buffer.view %expert_table[%assignment_table_byte_base] : buffer -> view<[%table_expert_count]x[%bounded_token_count]xi32>
   %expert_route_count = scf.for %block_base = [%c0 to %assignment_count step %workgroup_size](%matched_base = %c0_i32 : i32) -> (i32) {
@@ -54,8 +58,10 @@ kernel.def target(@ggml_moe_routing_gfx11_wave32) @ggml_moe_build_expert_table(%
       %token0 = index.div %assignment, %configured_route_count : index
       %route0 = index.rem %assignment, %configured_route_count : index
       %token, %route_token_count = index.assume %token0, %bounded_token_count [lt(%token0, %bounded_token_count)] : index, index
-      %route, %route_row_stride = index.assume %route0, %bounded_route_stride [lt(%route0, %bounded_route_stride)] : index, index
-      %loaded = view.load %route_view[%token, %route] : view<[%bounded_token_count]x[%bounded_route_stride]xi32> -> i32
+      %route, %route_row_count = index.assume %route0, %bounded_route_count [lt(%route0, %bounded_route_count)] : index, index
+      %route_token_base = index.mul %token, %bounded_route_stride : index
+      %route_index = index.add %route_token_base, %route : index
+      %loaded = view.load %route_view[%route_index] : view<[%route_storage_count]xi32> -> i32
       scf.yield %loaded : i32
     } else {
       scf.yield %cn1_i32 : i32

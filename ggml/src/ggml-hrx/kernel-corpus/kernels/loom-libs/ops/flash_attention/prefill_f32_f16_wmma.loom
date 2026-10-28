@@ -52,7 +52,7 @@ template.decl @ggml.flash_attention.pv_block_wmma.prefill_tail(%old_scale: vecto
 
 template.decl @ggml.flash_attention.prefill.publish_output(%publish_f16: i1, %query_token_count: index, %query_head_count: index, %value_head_size: index, %lane_has_output: i1, %query_valid0: i1, %query_valid1: i1, %query_valid2: i1, %query_valid3: i1, %query_token0: index, %query_token1: index, %query_token2: index, %query_token3: index, %query_head: index, %lane_output_channel: index, %final_sum: vector<4xf32>, %final_output0: vector<4xf16>, %final_output1: vector<4xf16>, %final_output2: vector<4xf16>, %final_output3: vector<4xf16>, %gate: buffer, %output: buffer, %f16_output: buffer)
 
-template.decl @ggml.flash_attention.prefill.body(%publish_f16: i1, %query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer, %f16_output: buffer)
+template.decl @ggml.flash_attention.prefill.body(%publish_f16: i1, %has_sinks: i1, %sinks: buffer, %query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer, %f16_output: buffer)
 
 kernel.def target(@ggml_flash_attention_gfx11_wave64) @ggml_flash_attention_f32_f16_wmma(%query_token_count: index, %key_value_token_count: index) {
   %query_head_count = config.get @ggml.flash_attention.query_head_count : index
@@ -73,7 +73,32 @@ kernel.def target(@ggml_flash_attention_gfx11_wave64) @ggml_flash_attention_f32_
   kernel.launch.config workgroups(%query_tile_count, %query_head_count, %output_group_count) workgroup_size(%c256, %c1, %c1) : index
 } launch(%query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer) where [range(%query_token_count, 1, 2048)] {
   %publish_f16 = scalar.constant false : i1
-  template.apply<@ggml.flash_attention.prefill.body>(%publish_f16, %query_token_count, %key_value_token_count, %query, %key, %value, %mask, %gate, %output, %output) : (i1, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  %has_sinks = scalar.constant false : i1
+  template.apply<@ggml.flash_attention.prefill.body>(%publish_f16, %has_sinks, %query, %query_token_count, %key_value_token_count, %query, %key, %value, %mask, %gate, %output, %output) : (i1, i1, buffer, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}
+
+kernel.def target(@ggml_flash_attention_gfx11_wave64) @ggml_flash_attention_f32_f16_wmma_sinks(%query_token_count: index, %key_value_token_count: index) {
+  %query_head_count = config.get @ggml.flash_attention.query_head_count : index
+  %value_head_size0 = config.get @ggml.flash_attention.value_head_size : index
+  %value_head_size = index.assume %value_head_size0 [range(%value_head_size0, 64, 512), multiple_of(%value_head_size0, 64)] : index
+  %c1 = index.constant 1 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c15 = index.constant 15 : index
+  %c16 = index.constant 16 : index
+  %c64 = index.constant 64 : index
+  %c256 = index.constant 256 : index
+  %padded_query_token_count = index.add %query_token_count, %c15 : index
+  %query_tile_count = index.div %padded_query_token_count, %c16 : index
+  %output_tile_count = index.div %value_head_size, %c64 : index
+  %padded_output_tile_count = index.add %output_tile_count, %c3 : index
+  %output_group_count = index.div %padded_output_tile_count, %c4 : index
+  kernel.launch.config workgroups(%query_tile_count, %query_head_count, %output_group_count) workgroup_size(%c256, %c1, %c1) : index
+} launch(%query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer, %sinks: buffer) where [range(%query_token_count, 1, 2048)] {
+  %publish_f16 = scalar.constant false : i1
+  %has_sinks = scalar.constant true : i1
+  template.apply<@ggml.flash_attention.prefill.body>(%publish_f16, %has_sinks, %sinks, %query_token_count, %key_value_token_count, %query, %key, %value, %mask, %gate, %output, %output) : (i1, i1, buffer, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
   kernel.return
 }
 

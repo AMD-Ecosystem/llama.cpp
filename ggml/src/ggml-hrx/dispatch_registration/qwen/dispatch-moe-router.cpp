@@ -7,6 +7,8 @@
 
 #include <cmath>
 #include <cstdint>
+#include <iomanip>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -100,6 +102,27 @@ static bool is_descending_argsort(const GraphNode & node) {
     return params != nullptr && params->order == GGML_SORT_ORDER_DESC;
 }
 
+static bool is_sigmoid_argsort(const Graph & graph, const GraphNode & node) {
+    const bool is_argsort = node.op == GGML_OP_ARGSORT;
+    const bool has_one_input = node.inputs.size() == 1;
+    const bool candidate = is_argsort && has_one_input;
+    if (!candidate) {
+        return false;
+    }
+    const GraphNode * producer = graph.index().producer(node.inputs[0]);
+    if (producer == nullptr) {
+        return false;
+    }
+    const UnaryParams * params = op_params_as<UnaryParams>(producer->params);
+    const bool is_unary = producer->op == GGML_OP_UNARY;
+    const bool is_sigmoid = params != nullptr && params->op == UnaryKind::Sigmoid;
+    return is_unary && is_sigmoid;
+}
+
+static ValueId router_probability_value(const GraphNode & node) {
+    return node.op == GGML_OP_ARGSORT ? node.inputs[0] : node.output;
+}
+
 static bool is_topk_normalization_clamp(const GraphNode & node) {
     const ClampParams * params = op_params_as<ClampParams>(node.params);
     return params != nullptr && params->min >= 0.0f && params->min <= 1.0e-4f && std::isinf(params->max) &&
@@ -163,6 +186,15 @@ static void log_router_reject(Status *            status,
 }
 
 static bool append_covered_node(const DispatchMatchContext & context, const GraphNode * node, DispatchMatch & match) {
+    if (node != nullptr) {
+        size_t index = 0;
+        const bool has_index = context.graph.index().node_index(node, index);
+        const bool is_alias = is_layout_alias_node(context.graph, *node);
+        const bool already_elided = has_index && is_alias && context.covered_nodes[index];
+        if (already_elided) {
+            return true;
+        }
+    }
     return append_covered_node_index_once(context.graph, context.covered_nodes, node, match.covered_nodes);
 }
 
@@ -174,6 +206,8 @@ struct RouterTop8Match {
     int64_t       expert_count  = 0;
     int64_t       route_count   = 0;
     int64_t       route_stride  = 0;
+    bool          input_probabilities = false;
+    float         clamp_min = 0.0f;
 
     bool matched() const {
         return logits != nullptr && route_ids != nullptr && route_weights != nullptr && token_count > 0 &&
@@ -190,33 +224,44 @@ static bool supports_fused_prefill_expert_table_partition(const RouterTop8Match 
            router_match.expert_count == kMoeRouterProfile.expert_count;
 }
 
-static RouterTop8Match match_moe_router_top8(const Graph & graph, const GraphNode * softmax_node, Status * status) {
+static RouterTop8Match match_moe_router_top8(const Graph & graph, const GraphNode * root, Status * status) {
     RouterTop8Match match;
-    if (softmax_node == nullptr || softmax_node->op != GGML_OP_SOFT_MAX || softmax_node->inputs.size() != 1 ||
-        !graph.has_index() || !is_default_scale_softmax(*softmax_node)) {
+    const bool has_root = root != nullptr;
+    const bool has_index = graph.has_index();
+    const bool can_match = has_root && has_index;
+    if (!can_match) {
+        return match;
+    }
+    const bool input_probabilities = is_sigmoid_argsort(graph, *root);
+    const bool is_softmax = root->op == GGML_OP_SOFT_MAX;
+    const bool has_one_input = root->inputs.size() == 1;
+    const bool default_softmax = is_default_scale_softmax(*root);
+    const bool supported_root = input_probabilities || (is_softmax && has_one_input && default_softmax);
+    if (!supported_root) {
         return match;
     }
 
-    const Value * logits = graph_value(graph, softmax_node->inputs[0]);
-    const Value * probs  = graph_value(graph, softmax_node->output);
+    const ValueId probability_value = router_probability_value(*root);
+    const Value * logits = graph_value(graph, root->inputs[0]);
+    const Value * probs  = graph_value(graph, probability_value);
     if (logits == nullptr || probs == nullptr || logits->type != GGML_TYPE_F32 || probs->type != GGML_TYPE_F32 ||
         !same_shape(*logits, *probs) || !logits->contiguous || !probs->contiguous) {
-        log_router_reject(status, graph, softmax_node, "logits/probs must be same contiguous F32 shape");
+        log_router_reject(status, graph, root, "logits/probs must be same contiguous F32 shape");
         return {};
     }
     const int64_t expert_count = logits->ne[0];
     const int64_t token_count  = logits->ne[1];
     if (!is_shape(*logits, expert_count, token_count, 1, 1) || !is_supported_expert_count(expert_count) ||
         !is_llm_supported_query_length(kMoeRouterProfile, token_count)) {
-        log_router_reject(status, graph, softmax_node, "unsupported logits expert/token shape");
+        log_router_reject(status, graph, root, "unsupported logits expert/token shape");
         return {};
     }
 
-    const GraphNode * probs_reshape = find_consumer_with_op(graph, softmax_node->output, GGML_OP_RESHAPE);
-    const GraphNode * argsort       = find_consumer_with_op(graph, softmax_node->output, GGML_OP_ARGSORT);
+    const GraphNode * probs_reshape = find_consumer_with_op(graph, probability_value, GGML_OP_RESHAPE);
+    const GraphNode * argsort = input_probabilities ? root : find_consumer_with_op(graph, probability_value, GGML_OP_ARGSORT);
     if (probs_reshape == nullptr || argsort == nullptr || argsort->inputs.size() != 1 ||
         !is_descending_argsort(*argsort)) {
-        log_router_reject(status, graph, softmax_node, "missing probability reshape or descending argsort");
+        log_router_reject(status, graph, root, "missing probability reshape or descending argsort");
         return {};
     }
 
@@ -225,7 +270,7 @@ static RouterTop8Match match_moe_router_top8(const Graph & graph, const GraphNod
     if (probs_reshaped == nullptr || argsort_output == nullptr || probs_reshaped->type != GGML_TYPE_F32 ||
         argsort_output->type != GGML_TYPE_I32 || !is_shape(*probs_reshaped, 1, expert_count, token_count, 1) ||
         !is_shape(*argsort_output, expert_count, token_count, 1, 1)) {
-        log_router_reject(status, graph, softmax_node, "probability reshape or argsort output shape is incompatible");
+        log_router_reject(status, graph, root, "probability reshape or argsort output shape is incompatible");
         return {};
     }
 
@@ -238,25 +283,25 @@ static RouterTop8Match match_moe_router_top8(const Graph & graph, const GraphNod
     if (route_ids == nullptr || route_ids->type != GGML_TYPE_I32 ||
         !is_shape(*route_ids, route_count, token_count, 1, 1) || !is_supported_route_count(route_count, expert_count) ||
         route_ids->nb[0] != sizeof(int32_t) || route_ids->nb[1] % sizeof(int32_t) != 0) {
-        log_router_reject(status, graph, softmax_node, "top-k route id view shape or stride is incompatible");
+        log_router_reject(status, graph, root, "top-k route id view shape or stride is incompatible");
         return {};
     }
     const int64_t route_stride = static_cast<int64_t>(route_ids->nb[1] / sizeof(int32_t));
     if (!is_supported_route_stride(route_stride, route_count, expert_count)) {
-        log_router_reject(status, graph, softmax_node, "top-k route id stride is outside supported bounds");
+        log_router_reject(status, graph, root, "top-k route id stride is outside supported bounds");
         return {};
     }
 
     const GraphNode * get_rows =
         find_consumer_with_op_and_input(graph, probs_reshape->output, GGML_OP_GET_ROWS, topk_view->output);
     if (get_rows == nullptr || get_rows->inputs.size() != 2) {
-        log_router_reject(status, graph, softmax_node, "missing GET_ROWS from reshaped probabilities and top-k ids");
+        log_router_reject(status, graph, root, "missing GET_ROWS from reshaped probabilities and top-k ids");
         return {};
     }
     const Value * selected_weights = graph_value(graph, get_rows->output);
     if (selected_weights == nullptr || selected_weights->type != GGML_TYPE_F32 ||
         !is_shape(*selected_weights, 1, route_count, token_count, 1)) {
-        log_router_reject(status, graph, softmax_node, "selected route weight shape is incompatible");
+        log_router_reject(status, graph, root, "selected route weight shape is incompatible");
         return {};
     }
 
@@ -264,14 +309,14 @@ static RouterTop8Match match_moe_router_top8(const Graph & graph, const GraphNod
     const Value *     weights_flat = weights_reshape == nullptr ? nullptr : graph_value(graph, weights_reshape->output);
     if (weights_flat == nullptr || weights_flat->type != GGML_TYPE_F32 ||
         !is_shape(*weights_flat, route_count, token_count, 1, 1)) {
-        log_router_reject(status, graph, softmax_node, "flattened route weight shape is incompatible");
+        log_router_reject(status, graph, root, "flattened route weight shape is incompatible");
         return {};
     }
 
     const GraphNode * sum_rows = find_consumer_with_op(graph, weights_reshape->output, GGML_OP_SUM_ROWS);
     const Value *     sum      = sum_rows == nullptr ? nullptr : graph_value(graph, sum_rows->output);
     if (sum == nullptr || sum->type != GGML_TYPE_F32 || !is_shape(*sum, 1, token_count, 1, 1)) {
-        log_router_reject(status, graph, softmax_node, "missing SUM_ROWS over selected route weights");
+        log_router_reject(status, graph, root, "missing SUM_ROWS over selected route weights");
         return {};
     }
 
@@ -279,7 +324,7 @@ static RouterTop8Match match_moe_router_top8(const Graph & graph, const GraphNod
     const Value *     clamped_sum = clamp == nullptr ? nullptr : graph_value(graph, clamp->output);
     if (clamped_sum == nullptr || clamped_sum->type != GGML_TYPE_F32 || !is_shape(*clamped_sum, 1, token_count, 1, 1) ||
         !is_topk_normalization_clamp(*clamp)) {
-        log_router_reject(status, graph, softmax_node, "missing supported CLAMP on selected route weight sum");
+        log_router_reject(status, graph, root, "missing supported CLAMP on selected route weight sum");
         return {};
     }
 
@@ -287,7 +332,7 @@ static RouterTop8Match match_moe_router_top8(const Graph & graph, const GraphNod
     const Value *     normalized = div == nullptr ? nullptr : graph_value(graph, div->output);
     if (normalized == nullptr || normalized->type != GGML_TYPE_F32 ||
         !is_shape(*normalized, route_count, token_count, 1, 1)) {
-        log_router_reject(status, graph, softmax_node, "missing DIV normalization for selected route weights");
+        log_router_reject(status, graph, root, "missing DIV normalization for selected route weights");
         return {};
     }
 
@@ -295,10 +340,18 @@ static RouterTop8Match match_moe_router_top8(const Graph & graph, const GraphNod
     const Value *     route_weights  = output_reshape == nullptr ? nullptr : graph_value(graph, output_reshape->output);
     if (route_weights == nullptr || route_weights->type != GGML_TYPE_F32 ||
         !is_shape(*route_weights, 1, route_count, token_count, 1) || !route_weights->contiguous) {
-        log_router_reject(status, graph, softmax_node, "route weight output shape is incompatible");
+        log_router_reject(status, graph, root, "route weight output shape is incompatible");
         return {};
     }
 
+    // Probability inputs must fill whole wave packets in the shared row kernel.
+    const bool has_full_packets = expert_count % 64 == 0;
+    const bool unsupported_packets = input_probabilities && !has_full_packets;
+    if (unsupported_packets) {
+        return {};
+    }
+    match.input_probabilities = input_probabilities;
+    match.clamp_min = op_params_as<ClampParams>(clamp->params)->min;
     match.logits        = logits;
     match.route_ids     = route_ids;
     match.route_weights = route_weights;
@@ -310,9 +363,11 @@ static RouterTop8Match match_moe_router_top8(const Graph & graph, const GraphNod
 }
 
 static bool append_moe_router_top8_coverage(const DispatchMatchContext & context, DispatchMatch & match) {
-    const GraphNode * softmax       = context.root_node;
-    const GraphNode * probs_reshape = find_consumer_with_op(context.graph, softmax->output, GGML_OP_RESHAPE);
-    const GraphNode * argsort       = find_consumer_with_op(context.graph, softmax->output, GGML_OP_ARGSORT);
+    const GraphNode * root = context.root_node;
+    const ValueId probability_value = router_probability_value(*root);
+    const GraphNode * probs_reshape = find_consumer_with_op(context.graph, probability_value, GGML_OP_RESHAPE);
+    const GraphNode * argsort = root->op == GGML_OP_ARGSORT ?
+                                   root : find_consumer_with_op(context.graph, probability_value, GGML_OP_ARGSORT);
     const GraphNode * topk_view =
         argsort == nullptr ? nullptr : find_consumer_with_op(context.graph, argsort->output, GGML_OP_VIEW);
     const GraphNode * get_rows =
@@ -333,7 +388,7 @@ static bool append_moe_router_top8_coverage(const DispatchMatchContext & context
     const GraphNode * output_reshape =
         div == nullptr ? nullptr : find_consumer_with_op(context.graph, div->output, GGML_OP_RESHAPE);
 
-    return append_covered_node(context, softmax, match) && append_covered_node(context, probs_reshape, match) &&
+    return append_covered_node(context, root, match) && append_covered_node(context, probs_reshape, match) &&
            append_covered_node(context, argsort, match) && append_covered_node(context, topk_view, match) &&
            append_covered_node(context, get_rows, match) && append_covered_node(context, weights_reshape, match) &&
            append_covered_node(context, sum_rows, match) && append_covered_node(context, clamp, match) &&
@@ -537,7 +592,7 @@ static bool match_moe_router_projection_top8_fused_decode_dispatch(const Dispatc
                                                to_config_value(match.top8.token_count));
 
     const size_t route_id_length =
-        static_cast<size_t>(match.top8.token_count * match.top8.route_stride) * sizeof(int32_t);
+        match.top8.route_ids->byte_count;
     dispatch.bindings.push_back({ match.input->id, 0, match.input->byte_count });
     dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
     dispatch.bindings.push_back({ match.logits->id, 0, match.logits->byte_count });
@@ -576,8 +631,15 @@ static bool match_moe_router_top8_dispatch(const DispatchMatchContext & context,
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.workload.token_capacity",
                                                to_config_value(router_match.token_count));
 
+    if (router_match.input_probabilities) {
+        dispatch.kernel.compile_parameters.emplace("qwen3_moe.router.input_probabilities", "1");
+        std::ostringstream clamp_min;
+        clamp_min << std::setprecision(std::numeric_limits<float>::max_digits10) << router_match.clamp_min;
+        dispatch.kernel.compile_parameters.emplace("qwen3_moe.router.clamp_min", clamp_min.str());
+    }
+
     const size_t route_id_length =
-        static_cast<size_t>(router_match.token_count * router_match.route_stride) * sizeof(int32_t);
+        router_match.route_ids->byte_count;
     dispatch.bindings.push_back({ router_match.logits->id, 0, router_match.logits->byte_count });
     dispatch.bindings.push_back({ router_match.route_ids->id, 0, route_id_length });
     dispatch.bindings.push_back({ router_match.route_weights->id, 0, router_match.route_weights->byte_count });
@@ -686,6 +748,14 @@ static bool match_moe_router_top8_dispatch(const DispatchMatchContext & context,
 }
 
 void register_moe_router_dispatches(DispatchRegistryBuilder & registry) {
+    registry.add({
+        "llm.moe_router.sigmoid_topk_f32",
+        GGML_OP_ARGSORT,
+        DispatchMatchKind::Fused,
+        1000,
+        DispatchSource::Llm,
+        match_moe_router_top8_dispatch,
+    });
     registry.add({
         "llm.moe_router.projection_top8_fused_decode",
         GGML_OP_MUL_MAT,

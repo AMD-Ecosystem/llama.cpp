@@ -12,7 +12,7 @@ config.decl @ggml.flash_attention.apply_gate : %value: index where [range(%value
 config.decl @ggml.flash_attention.gate_stride_head : %value: index where [range(%value, 1, 16777216)]
 config.decl @ggml.flash_attention.gate_stride_token : %value: index where [range(%value, 1, 16777216)]
 
-template.decl @ggml.flash_attention.prefill.body(%publish_f16: i1, %query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer, %f16_output: buffer)
+template.decl @ggml.flash_attention.prefill.body(%publish_f16: i1, %has_sinks: i1, %sinks: buffer, %query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer, %f16_output: buffer)
 
 kernel.def target(@ggml_flash_attention_gfx11_wave64) export("ggml_flash_attention_f32_f16_wmma_publish_f16") @ggml_flash_attention_f32_f16_wmma_publish_f16(%query_token_count: index, %key_value_token_count: index) {
   %query_head_count = config.get @ggml.flash_attention.query_head_count : index
@@ -33,6 +33,7 @@ kernel.def target(@ggml_flash_attention_gfx11_wave64) export("ggml_flash_attenti
   kernel.launch.config workgroups(%query_tile_count, %query_head_count, %output_group_count) workgroup_size(%c256, %c1, %c1) : index
 } launch(%query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer, %f16_output: buffer) where [range(%query_token_count, 1, 2048)] {
   %publish_f16 = scalar.constant true : i1
-  template.apply<@ggml.flash_attention.prefill.body>(%publish_f16, %query_token_count, %key_value_token_count, %query, %key, %value, %mask, %gate, %output, %f16_output) : (i1, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  %has_sinks = scalar.constant false : i1
+  template.apply<@ggml.flash_attention.prefill.body>(%publish_f16, %has_sinks, %query, %query_token_count, %key_value_token_count, %query, %key, %value, %mask, %gate, %output, %f16_output) : (i1, i1, buffer, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
   kernel.return
 }
