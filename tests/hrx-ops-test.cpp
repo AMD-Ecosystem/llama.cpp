@@ -2660,6 +2660,7 @@ static void run_external_view_input_rmsnorm_case() {
 
     ggml_cgraph * graph = ggml_new_graph(ctx);
     REQUIRE(graph != nullptr);
+    output->flags |= GGML_TENSOR_FLAG_COMPUTE;
     ggml_graph_add_node(graph, output);
 
     require_kernel_subsequence(scheduled_kernel_sequence(graph), { "loom_libs:ggml_rmsnorm_f32" });
@@ -2708,6 +2709,7 @@ static void run_split_local_view_alias_import_case() {
 
     ggml_cgraph * graph = ggml_new_graph(ctx);
     REQUIRE(graph != nullptr);
+    flattened->flags |= GGML_TENSOR_FLAG_COMPUTE;
     ggml_graph_add_node(graph, flattened);
 
     ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
