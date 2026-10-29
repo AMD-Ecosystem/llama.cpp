@@ -127,3 +127,10 @@ void ggml_cuda_glu_to_16bit(const float * x, const float * gate, T * dst, int64_
 template <typename T>
 void ggml_cuda_glu_bias_to_16bit(const T * x, const T * gate, const float * x_bias, const float * gate_bias,
         T * dst, int64_t ncols, int64_t nrows, ggml_glu_op op, cudaStream_t stream);
+
+template <typename T>
+void ggml_cuda_gelu_bias_to_16bit(const T * x, const float * bias, T * dst, int64_t ncols, int64_t nrows, cudaStream_t stream);
+
+template <typename T>
+void ggml_cuda_glu_clamp_to_16bit(const T * x, const T * gate, T * dst, int64_t ncols, int64_t nrows,
+        ggml_glu_op op, float2 x_bounds, float2 gate_bounds, float2 dst_bounds, cudaStream_t stream);

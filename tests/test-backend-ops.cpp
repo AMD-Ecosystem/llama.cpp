@@ -2739,6 +2739,7 @@ struct test_rms_norm_mul_rope : public test_case {
     const bool broadcast; // multiply by a 1D [ne0] weight, as model norm weights are
     const ggml_type set_rows_type;
     int mode;
+    const bool two_axis, extra_consumer;
 
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
@@ -2748,14 +2749,14 @@ struct test_rms_norm_mul_rope : public test_case {
     bool run_whole_graph() override { return true; }
 
     std::string vars() override {
-        return VARS_TO_STR9(ne, eps, multi_add, mul, rope, set_rows, broadcast, mode, set_rows_type);
+        return VARS_TO_STR9(ne, eps, multi_add, mul, rope, set_rows, broadcast, mode, set_rows_type) + "," + VARS_TO_STR2(two_axis, extra_consumer);
     }
 
     test_rms_norm_mul_rope(std::array<int64_t, 4> ne, float eps = 1e-6f, bool multi_add = false,
                            bool set_rows = false, bool broadcast = false, int mode = GGML_ROPE_TYPE_NORMAL,
-                           bool mul = true, bool rope = true, ggml_type set_rows_type = GGML_TYPE_F16)
+                           bool mul = true, bool rope = true, ggml_type set_rows_type = GGML_TYPE_F16, bool two_axis = false, bool extra_consumer = false)
         : ne(ne), eps(eps), multi_add(multi_add), mul(mul), rope(rope), set_rows(set_rows), broadcast(broadcast),
-          set_rows_type(set_rows_type), mode(mode) {}
+          set_rows_type(set_rows_type), mode(mode), two_axis(two_axis), extra_consumer(extra_consumer) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne[0], ne[1], ne[2], ne[3]);
@@ -2793,7 +2794,15 @@ struct test_rms_norm_mul_rope : public test_case {
                 int sections[4] = { n_dims/3, n_dims/3, n_dims/3, 0 };
                 a = ggml_rope_multi(ctx, a, pos, nullptr, n_dims, sections, mode, 0, 10000.0f, 1.0f, 0.0f, 1.0f, 32.0f, 1.0f);
             } else {
-                a = ggml_rope(ctx, a, pos, ne[0], mode);
+                a = ggml_rope(ctx, a, pos, two_axis ? ne[0]/2 : ne[0], mode);
+                if (two_axis) {
+                    ggml_tensor * first = a;
+                    ggml_tensor * pos_y = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, ne[2]);
+                    a = ggml_rope_set_offset(ggml_rope(ctx, a, pos_y, ne[0]/2, mode), ne[0]/2);
+                    if (extra_consumer) {
+                        a = ggml_add(ctx, a, first);
+                    }
+                }
             }
         }
 
@@ -3616,21 +3625,23 @@ struct test_norm_mul_add : public test_case {
     bool run_whole_graph() override { return true; }
 
     std::string vars() override {
-        return VARS_TO_STR4(type, ne, eps, broadcast);
+        return VARS_TO_STR4(type, ne, eps, broadcast) + "," + VARS_TO_STR2(vector_affine, extra_consumer);
     }
+
+    const bool vector_affine, extra_consumer;
 
     test_norm_mul_add(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = {128, 2, 1, 1},
             float eps = 1e-5f,
-            bool broadcast = false)
-        : type(type), ne(ne), eps(eps), broadcast(broadcast) {}
+            bool broadcast = false, bool vector_affine = false, bool extra_consumer = false)
+        : type(type), ne(ne), eps(eps), broadcast(broadcast), vector_affine(vector_affine), extra_consumer(extra_consumer) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         std::array<int64_t, 4> broadcast_dims = {ne[0], ne[1] * 2, ne[2] * 2, ne[3] * 2};
 
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, broadcast ? broadcast_dims.data() : ne.data());
-        ggml_tensor * w = ggml_new_tensor(ctx, type, 4, ne.data());
-        ggml_tensor * b = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_tensor * w = vector_affine ? ggml_new_tensor_1d(ctx, type, ne[0]) : ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_tensor * b = vector_affine ? ggml_new_tensor_1d(ctx, type, ne[0]) : ggml_new_tensor(ctx, type, 4, ne.data());
         ggml_set_param(a); ggml_set_param(w); ggml_set_param(b);
         ggml_set_name(a, "a"); ggml_set_name(w, "w"); ggml_set_name(b, "b");
 
@@ -3641,7 +3652,7 @@ struct test_norm_mul_add : public test_case {
         ggml_tensor * m = ggml_mul(ctx, n, w);
         ggml_tensor * out = ggml_add(ctx, m, b);
         ggml_set_name(out, "out");
-        return out;
+        return extra_consumer ? ggml_add(ctx, out, n) : out;
     }
 };
 // GGML_OP_RMS_NORM
@@ -5117,14 +5128,14 @@ struct test_16bit_ffn_bias : public test_case {
     const int64_t n, hidden;
     const ggml_glu_op op;
     const int extra_consumer;
-    const bool output_bias, force_f32, swapped, residual, normalized;
+    const bool output_bias, force_f32, swapped, residual, normalized, plain;
     test_16bit_ffn_bias(ggml_type type, int64_t n, int64_t hidden = 768, ggml_glu_op op = GGML_GLU_OP_SWIGLU,
-            int extra_consumer = 0, bool output_bias = true, bool force_f32 = false, bool swapped = false, bool mixed_weights = false, bool residual = false, bool normalized = false)
-        : type(type), mixed_weights(mixed_weights), n(n), hidden(hidden), op(op), extra_consumer(extra_consumer), output_bias(output_bias), force_f32(force_f32), swapped(swapped), residual(residual), normalized(normalized) {}
+            int extra_consumer = 0, bool output_bias = true, bool force_f32 = false, bool swapped = false, bool mixed_weights = false, bool residual = false, bool normalized = false, bool plain = false)
+        : type(type), mixed_weights(mixed_weights), n(n), hidden(hidden), op(op), extra_consumer(extra_consumer), output_bias(output_bias), force_f32(force_f32), swapped(swapped), residual(residual), normalized(normalized), plain(plain) {}
     bool run_whole_graph() override { return true; }
     std::string op_desc(ggml_tensor *) override { return type == GGML_TYPE_BF16 ? "BF16_FFN_BIAS" : "F16_FFN_BIAS"; }
     std::string vars() override {
-        return VARS_TO_STR2(type, mixed_weights) + "," + VARS_TO_STR3(n, hidden, extra_consumer) + "," + VARS_TO_STR5(output_bias, force_f32, swapped, residual, normalized) + ",op=" + std::to_string(op);
+        return VARS_TO_STR2(type, mixed_weights) + "," + VARS_TO_STR3(n, hidden, extra_consumer) + "," + VARS_TO_STR5(output_bias, force_f32, swapped, residual, normalized) + "," + VAR_TO_STR(plain) + ",op=" + std::to_string(op);
     }
     double max_nmse_err() override { return 5e-4; }
     ggml_tensor * build_graph(ggml_context * ctx) override {
@@ -5148,7 +5159,7 @@ struct test_16bit_ffn_bias : public test_case {
         ggml_tensor * a1 = ggml_add(ctx, mm1, b1);
         ggml_tensor * first = swapped ? a1 : a0;
         ggml_tensor * second = swapped ? a0 : a1;
-        ggml_tensor * glu = op == GGML_GLU_OP_SWIGLU ? ggml_swiglu_split(ctx, first, second) : ggml_geglu_split(ctx, first, second);
+        ggml_tensor * glu = plain ? ggml_gelu(ctx, a0) : op == GGML_GLU_OP_SWIGLU ? ggml_swiglu_split(ctx, first, second) : ggml_geglu_split(ctx, first, second);
         ggml_tensor * down = ggml_new_tensor_2d(ctx, type, hidden, 512);
         ggml_tensor * out = ggml_mul_mat(ctx, down, glu);
         if (output_bias) {
@@ -5160,6 +5171,40 @@ struct test_16bit_ffn_bias : public test_case {
         if (extra_consumer) {
             ggml_tensor * extra = extra_consumer == 1 ? a0 : glu;
             out = ggml_add(ctx, out, ggml_mul_mat(ctx, down, extra));
+        }
+        return out;
+    }
+};
+
+struct test_16bit_ffn_clamp : public test_case {
+    ggml_type type;
+    int64_t n;
+    int extra;
+    bool different_bounds, force_f32, swapped;
+    test_16bit_ffn_clamp(ggml_type type, int64_t n, int extra = 0, bool different_bounds = false, bool force_f32 = false, bool swapped = false)
+        : type(type), n(n), extra(extra), different_bounds(different_bounds), force_f32(force_f32), swapped(swapped) {}
+    bool run_whole_graph() override { return true; }
+    std::string op_desc(ggml_tensor *) override { return type == GGML_TYPE_F16 ? "F16_FFN_CLAMP" : "BF16_FFN_CLAMP"; }
+    std::string vars() override { return VARS_TO_STR6(type, n, extra, different_bounds, force_f32, swapped); }
+    double max_nmse_err() override { return 5e-4; }
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        const int64_t width = 512, hidden = 767;
+        ggml_tensor * x = ggml_scale(ctx, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, width, n), 0.125f);
+        ggml_tensor * c0 = ggml_clamp(ctx, x, -1.0f, 1.0f);
+        ggml_tensor * c1 = ggml_clamp(ctx, x, different_bounds ? -0.8f : -1.0f, different_bounds ? 0.7f : 1.0f);
+        ggml_tensor * m0 = ggml_mul_mat(ctx, ggml_new_tensor_2d(ctx, type, width, hidden), c0);
+        ggml_tensor * m1 = ggml_mul_mat(ctx, ggml_new_tensor_2d(ctx, type, width, hidden), c1);
+        if (force_f32) {
+            ggml_prec_set_acc(m0, GGML_PREC_F32);
+        }
+        ggml_tensor * a0 = ggml_clamp(ctx, m0, -2.0f, 2.0f);
+        ggml_tensor * a1 = ggml_clamp(ctx, m1, -3.0f, 3.0f);
+        ggml_tensor * glu = ggml_geglu_quick_split(ctx, swapped ? a1 : a0, swapped ? a0 : a1);
+        ggml_tensor * input = ggml_clamp(ctx, glu, -1.5f, 1.5f);
+        ggml_tensor * w = ggml_new_tensor_2d(ctx, type, hidden, width);
+        ggml_tensor * out = ggml_clamp(ctx, ggml_mul_mat(ctx, w, input), -4.0f, 4.0f);
+        if (extra) {
+            out = ggml_add(ctx, out, ggml_mul_mat(ctx, w, extra == 1 ? a0 : glu));
         }
         return out;
     }
@@ -9221,7 +9266,21 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_mul_mat_bias(type, 256, n));
             test_cases.emplace_back(new test_mul_mat_bias(type, 255, n));
             test_cases.emplace_back(new test_16bit_ffn_bias(type, n));
+            test_cases.emplace_back(new test_16bit_ffn_bias(type, n, 767, GGML_GLU_OP_GEGLU, 0, true, false, false, false, true, false, true));
         }
+        for (int64_t n : { 1, 31, 32, 65, 257 }) {
+            test_cases.emplace_back(new test_16bit_ffn_clamp(type, n));
+            test_cases.emplace_back(new test_16bit_ffn_clamp(type, n, 0, true));
+        }
+        test_cases.emplace_back(new test_16bit_ffn_clamp(type, 65, 1));
+        test_cases.emplace_back(new test_16bit_ffn_clamp(type, 65, 2));
+        test_cases.emplace_back(new test_16bit_ffn_clamp(type, 65, 0, false, true));
+        test_cases.emplace_back(new test_16bit_ffn_clamp(type, 65, 0, false, false, true));
+        for (int extra : { 0, 1, 2 }) {
+            test_cases.emplace_back(new test_16bit_ffn_bias(type, 65, 768, GGML_GLU_OP_GEGLU, extra, true, false, false, false, true, false, true));
+        }
+        test_cases.emplace_back(new test_16bit_ffn_bias(type, 65, 768, GGML_GLU_OP_GEGLU, 0, false, false, false, false, false, false, true));
+        test_cases.emplace_back(new test_16bit_ffn_bias(type, 65, 768, GGML_GLU_OP_GEGLU, 0, true, true, false, false, true, false, true));
         test_cases.emplace_back(new test_mul_mat_bias(type, 256, 64, true));
         test_cases.emplace_back(new test_mul_mat_bias(type, 256, 64, false, true));
         test_cases.emplace_back(new test_mul_mat_bias(type, 256, 64, false, false, 576));
@@ -9241,6 +9300,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_16bit_ffn_bias(type, 64, 768, op, 0, true, false, true));
         }
         test_cases.emplace_back(new test_16bit_ffn_bias(type, 64, 768, GGML_GLU_OP_SWIGLU, 0, true, false, false, true));
+    }
+
+    for (int64_t width : { 768, 1023, 1024, 1152, 1280 }) {
+        for (bool extra : { false, true }) {
+            test_cases.emplace_back(new test_norm_mul_add(GGML_TYPE_F32, { width, 65, 1, 1 }, 1e-5f, false, true, extra));
+        }
     }
 
     for (int64_t n : { 1, 32, 64, 258 }) {
@@ -10122,6 +10187,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             for (ggml_type type : { GGML_TYPE_F32, GGML_TYPE_F16 }) {
                 test_cases.emplace_back(new test_rms_norm_mul_rope({128, 4, tokens, 1}, 1e-6f, false, true, true, mode, true, true, type));
             }
+        }
+    }
+    for (int64_t width : { 64, 72, 80, 128 }) {
+        for (bool extra : { false, true }) {
+            test_cases.emplace_back(new test_rms_norm_mul_rope({width, 4, 257, 1}, 1e-6f, false, false, true, GGML_ROPE_TYPE_NEOX, true, true, GGML_TYPE_F16, true, extra));
         }
     }
     test_cases.emplace_back(new test_rms_norm_mul_rope({128, 4, 128, 2}, 1e-6f, false, false, true, GGML_ROPE_TYPE_NEOX));

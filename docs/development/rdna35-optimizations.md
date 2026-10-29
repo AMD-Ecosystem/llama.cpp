@@ -2,6 +2,57 @@
 
 The active implementation is `lichang.rdna35-prefill-quant-rope`. Qwen vision window batching, D64/D72/D80 vision attention, D128 language attention, D512 language attention, FP16/FP32 conversion, RMSNorm, activation quantization, and RoPE changes share this source tree. Earlier experimental worktrees are reference snapshots; changes should be developed and validated here.
 
+## Gemma-3-12B profiling follow-up (2026-10-28)
+
+The existing shared Gemma vision fusions also cover Gemma-3-12B Q4_K_M with an F16 projector. A Halo40 ABBA comparison (20 samples per variant, original response cap) reduces HTTP TTFT from 913.261 to 875.608 ms, saving 37.653 ms / 4.123%. Its 55 affine LayerNorms and 27 plain GELU vision FFNs remove 191 launches, 915 -> 724. Vision GPU duration sums fall 459.40 -> 406.33 ms; language graph signatures are unchanged. This is an increment over the optimized branch before the October 28 shared fusions.
+
+Input is the saved 640x480 image and 100-token text prompt, with 367 total llama.cpp positions. Vision processes 896x896, 4096 patches and 256 image embeddings. Checkpoints remain 32, context 4096, batch 2048, microbatch 512, F16 KV, no prompt-cache reuse and unchanged text/image boundaries. Both servers use the same image resolution; there is no Gemma-4 image-budget mismatch in this test.
+
+Fresh Halo05 production llama.cpp measures 824.042 ms with one output token and 830.717 ms with the original 128-token cap/EOS behavior. Fresh installed gfx11 vLLM measures 541.770 ms (three samples), giving approximately 1.52-1.53x. Its native framing produces 369 positions; it uses RedHatAI W4A16 weights, BF16 activations/KV, the gfx11 HybridW4A16 kernel and tuned Triton D72 vision attention. These are not identical-arithmetic runs. The same-board ABBA comparison above, not subtraction from older runs on other boards, establishes the fusion gain.
+
+Diagnostic raw GPU sums show language matrix work at 545.98 versus 325.66 ms, vision attention/preparation at 182.00 versus 76.12 ms, and vision support at 97.77 versus 15.96 ms. llama.cpp vision/text overlap and different profiler overhead mean these differences are not additive TTFT savings. The existing Q4_K pipelined MMQ remains active. Tiny language batches contribute 102.27 ms of matrix-vector work; vLLM processes one 369-position batch and combines Q/K/V and gate/up projections.
+
+Further probes do not justify another production change. Three supported attention tile/thread variants are slower or unchanged. Two-warps/64-query configurations violate the shared WMMA ownership mapping; vLLM's geometry cannot be copied as a configuration change. Wider D72 padding copies pass 909 backend cases and exact normal-server embedding/generation checks, but the final comparison with identical supporting libraries is 830.717 -> 833.855 ms, so the prototype is not retained. Earlier apparent copy gains used different supporting library builds and are superseded. A restricted Q6_K BLAS dispatch probe saves 5.416 ms / 0.625% on one workload, but substantially hurts the 104-position FFN if extended there; it remains outside production pending general shape and numerical validation. Serial vision costs 34.961 ms, earlier overlap costs 31.162 ms, and full semantic graph reuse saves only 5.244 ms. Current scheduling is retained.
+
+Shared-fusion checks have bitwise-identical vision embeddings on three images, but one small-image generation differs and selected-token probabilities vary within fixed builds. The report preserves these results and does not claim broad accuracy equivalence. All new prototypes remain under `/proj/gdba/lichang/regression_results/gemma3_12b_optimization_20261028`; no backend source change, commit or push is added by this follow-up. See that directory's `REPORT.md` for raw timings, workload/profiler limitations, numerical checks, failed probes and commands.
+
+## Gemma vision fusion follow-up (2026-10-28)
+
+The commit titled `hip: extend shared vision fusions for Gemma`, based on `d79fcf20777641b2b5b172a11ec342e26241e4a5`, extends the existing backend fusion implementation for Gemma-3 and Gemma-4. It retains checkpoint support, text/image chunk boundaries, the model graph's public activation types, and the language matrix kernels.
+
+| Model / board | Prompt positions | Baseline HTTP TTFT | With changes | Saving |
+| --- | ---: | ---: | ---: | ---: |
+| Gemma-3-4B, Q4_K_M/F16 / Halo40 | 779 | 727.32 ms | 689.11 ms | 38.21 ms / 5.25% |
+| Gemma-4-E2B, Q4_0/BF16 / Halo05 | 880 | 402.91 ms | 378.16 ms | 24.75 ms / 6.14% |
+| Gemma-4-26B-A4B, UD-Q4_K_M/F16 / Halo40 | 884 | 1002.42 ms | 946.84 ms | 55.58 ms / 5.54% |
+| Gemma-4-31B, Q4_K_M/F16 / Halo05 | 884 | 3135.20 ms | 3155.44 ms | No demonstrated gain; 0.65% slower pooled median |
+| Qwen2.5-VL-3B control / Halo40 | 1606 | 768.21 ms | 765.92 ms | 0.30%, within run variation |
+
+Each variant has 20 measured requests over two server starts in A-B-B-A order, with five warmups per start. The original full response and EOS are retained, up to 128 output tokens. Tests keep checkpoints 32, no prompt reuse, F16 KV, context 4096, batch 2048, eight CPU threads and flash attention. Gemma uses microbatch 512; Qwen's control uses its recent microbatch 2048. No GPU contention was detected. All raw outliers are retained. The 31B baseline start medians vary from 3125.46 to 3164.78 ms, compared with 3153.74 and 3162.40 ms for the candidate; no end-to-end benefit is established for that workload.
+
+These numbers measure an increment over the already optimized branch. The saved gfx11 vLLM references give Gemma-3 ratios of 1.560x -> 1.478x and Gemma-4-26B ratios of 1.601x -> 1.512x. vLLM was not rerun; the Gemma-4 comparison still has 779.3 vLLM positions versus 884 llama.cpp positions and different weight formats. E2B's default-image-budget Q4_0/BF16 test must not be compared directly with the earlier 775-position Q4_K_M/F16 test at an image-token limit of 280.
+
+| Extension | Target structure and retained behavior | Confirmed coverage |
+| --- | --- | --- |
+| LayerNorm + vector scale + bias | Extend the existing LayerNorm kernel, retaining reduction geometry and intermediate FP32 rounding. RDNA3.5, F32, compatible contiguous layout and safe aliases only. | 55 Gemma-3 vision sites, removing 110 launches. Structurally relevant to Gemma-4 unified vision's affine norms, without a measured unified-model claim. |
+| Plain GELU FFN | Extend the existing F16/BF16 FFN matcher for up GEMM, bias, GELU, down GEMM, optional output bias/residual. Keep the original narrow GEMM buffers; compute bias and GELU in FP32 and cast directly to the existing down input. | 27 Gemma-3 vision FFNs, removing 81 launches. The GEMMs themselves remain separate. |
+| Clamped gated FFN | Reuse existing BLAS and unary/conversion kernels for clamped gate/up/down projections and QuickGELU. Share the input conversion only if both learned clamp limits match bitwise; preserve separate conversions otherwise. | All 16 E2B and 27 Gemma-4-26B FFNs, removing 64 and 108 launches. E2B's finite clamp limits are preserved. FP16 and BF16 are covered. |
+| RMSNorm + scale + two rotary axes | Extend the existing norm/rotary kernel for compatible disjoint equal channel halves. Preserve the prior norm reduction geometry and FP32 store rounding. | 32 E2B and 54 Gemma-4-26B sites, removing one rotary launch per Q/K site. |
+
+Gemma-3's SigLIP uses plain GELU, affine LayerNorm and global vision attention. Gemma-4's transformer vision tower uses gated QuickGELU, clamps, RMSNorm and separate x/y rotary passes. Those structures differ from the original biased gated Qwen pattern. They do not become independent attention windows, so Qwen's window partitioning is inapplicable.
+
+The diagnostic vision kernel counts fall 915 -> 724 for Gemma-3, 584 -> 488 for E2B, and 1050 -> 888 for 26B. Vision GPU duration sums change 463.34 -> 412.58 ms, 149.95 -> 127.92 ms, and 377.69 -> 325.17 ms respectively. GEMM counts are unchanged. These are instrumented sums with vision/language overlap, not additive HTTP latency budgets. Remaining large work includes language matrix multiplication and global vision attention; fusion does not remove either computation.
+
+A D72/D80 attention staging probe moved Q into LDS. It reduced spills (92 -> 18) and private storage (224 -> 96 bytes/thread), but VGPR use stayed at 256 and isolated attention worsened from about 5.75 to 6.37 ms. The probe was reverted. This rejects that implementation, not all possible D72 kernel improvements.
+
+The ordinary production build passes 377 affected backend cases. A direct comparison against separate existing GPU operations passes 1176 cases / 72,904,608 values bitwise, including FP16/BF16, plain and gated activations, clamp bounds, misalignment, NaN payloads and canaries. Changed HIP units compile for gfx1100 and gfx942; runtime tests use gfx1151. NVIDIA was not compiled or tested.
+
+The production Gemma-3 check and repeated final candidate match all three checked image embeddings, 32 generated tokens and chosen-token log probabilities exactly. Final E2B and 26B checks also match. One earlier Gemma-3 diagnostic process produced small embedding differences (NMSE up to 1.38e-6, maximum absolute difference 0.0625), with identical tokens and a maximum chosen-token log-probability difference of 0.26904. Repeating the same immutable binary reproduced the baseline; the cause of that process-level difference remains unresolved and is retained in the report. The checks are not a broad model-quality evaluation. One 31B baseline timing request also generated a different description; all candidate timing responses matched the other 19 baseline responses.
+
+Gemma-4-31B's timestamped follow-up confirms that vision still accelerates: its span falls 750.62 -> 668.32 ms and its launches fall 1050 -> 888. Vision finishes at 1989.83 -> 1905.87 ms into the profiled request, before text-prefix GPU work finishes at 2067.37 -> 2030.33 ms. The shorter vision stage is therefore largely hidden behind language processing. Language GEMM/GEMV is approximately 2.75 seconds raw in the final profile and remains the main target. The instrumented run's modest improvement does not replace the normal ABBA result. All three 31B image embeddings and initial chosen-token probability records match across builds; repeated probability records vary within both builds.
+
+The ordinary `build-rdna35-gfx1151` includes the changes. Standalone production checks measured Gemma-3 at 690.25 ms and E2B at 387.89 ms on Halo40; the latter is not the Halo05 paired comparison. Exact requests, profiles, immutable binaries, source snapshots, numerical checks, rejected experiments and reproduction commands are in `/proj/gdba/lichang/regression_results/gemma_shared_fusion_20261028/REPORT.md`.
+
 ## Vision tensor traffic and output fusion (2026-10-27)
 
 The commit titled `hip: reduce RDNA3.5 vision tensor traffic` extends the existing implementation at `667af94f05375369079f549225067c315effe0b6`. It combines launch geometry, K/V conversion, normalized FFN input, residual conversion and window-output changes. The measured target is Qwen2.5-VL-7B; structural eligibility for other models is described below, without a new model-level performance claim for them.

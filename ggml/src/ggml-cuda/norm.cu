@@ -2,10 +2,10 @@
 #include "convert.cuh"
 #include <cstdint>
 
-template <int block_size>
+template <int block_size, bool affine = false>
 static __global__ void norm_f32(
         const float * x, float * dst, const int ncols, const int64_t stride_row, const int64_t stride_channel,
-        const int64_t stride_sample, const float eps) {
+        const int64_t stride_sample, const float eps, const float * weight = nullptr, const float * bias = nullptr) {
     const int nrows     = gridDim.x;
     const int nchannels = gridDim.y;
 
@@ -35,7 +35,22 @@ static __global__ void norm_f32(
     const float inv_std = rsqrtf(var + eps);
 
     for (int col = tid; col < ncols; col += block_size) {
-        dst[col] = (x[col] - mean) * inv_std;
+        float value = (x[col] - mean) * inv_std;
+        if constexpr (affine) {
+#if defined(GGML_USE_HIP)
+            asm volatile("" : "+v"(value));
+#else
+            asm volatile("" : "+f"(value));
+#endif
+            value *= weight[col];
+#if defined(GGML_USE_HIP)
+            asm volatile("" : "+v"(value));
+#else
+            asm volatile("" : "+f"(value));
+#endif
+            value += bias[col];
+        }
+        dst[col] = value;
     }
 }
 
@@ -494,6 +509,23 @@ void ggml_cuda_op_norm(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t s03 = nb03 / ts0;
 
     norm_f32_cuda(src0_d, dst_d, ne00, ne01, ne02, ne03, s01, s02, s03, eps, stream);
+}
+
+void ggml_cuda_op_norm_fused(ggml_backend_cuda_context & ctx, ggml_tensor * norm, ggml_tensor * mul, ggml_tensor * add) {
+    const ggml_tensor * x = norm->src[0];
+    const ggml_tensor * w = mul->src[mul->src[0] == norm ? 1 : 0];
+    const ggml_tensor * b = add->src[add->src[0] == mul ? 1 : 0];
+    const dim3 grid(x->ne[1], x->ne[2], x->ne[3]);
+    const float eps = ggml_get_op_params_f32(norm, 0);
+    if (x->ne[0] < 1024) {
+        norm_f32<WARP_SIZE, true><<<grid, WARP_SIZE, 0, ctx.stream()>>>((const float *) x->data, (float *) add->data,
+            x->ne[0], x->nb[1]/sizeof(float), x->nb[2]/sizeof(float), x->nb[3]/sizeof(float), eps,
+            (const float *) w->data, (const float *) b->data);
+    } else {
+        norm_f32<1024, true><<<grid, 1024, 32*sizeof(float2), ctx.stream()>>>((const float *) x->data, (float *) add->data,
+            x->ne[0], x->nb[1]/sizeof(float), x->nb[2]/sizeof(float), x->nb[3]/sizeof(float), eps,
+            (const float *) w->data, (const float *) b->data);
+    }
 }
 
 void ggml_cuda_op_group_norm(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
