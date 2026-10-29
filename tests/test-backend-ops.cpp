@@ -9931,6 +9931,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_cpy(type_src, type_dst, {256, 2, 3, 4}, {-1,-1,-1,-1}, {1, 0, 2, 3})); // cpy not-contiguous
         }
     }
+    // Permuted conversion: vector rows, partial blocks, and scalar fallbacks.
+    for (int64_t width : { 64, 70, 72, 80 }) {
+        test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F16, {width, 16, 257, 2}, {-1,-1,-1,-1}, {0, 2, 1, 3}));
+    }
+    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F16, {72, 16, 5, 1}, {-1,-1,-1,-1}, {0, 2, 1, 3}));
+    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F16, {72, 16, 257, 2}, {-1,-1,-1,-1}, {0, 3, 1, 2}));
+    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F16, {72, 16, 257, 2}, {144, 257, 16, 1}, {0, 2, 1, 3}));
+    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F16, {72, 16, 257, 2}, {72, 257, 16, 2}, {0, 2, 1, 3}, {0, 0, 0, 0}, false, {72, 260, 16, 2}));
+
     // quant block count not a multiple of the kernel block size
     test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_Q4_0, {96, 1, 1, 1}));
     test_cases.emplace_back(new test_cpy(GGML_TYPE_Q4_0, GGML_TYPE_F32, {96, 1, 1, 1}));

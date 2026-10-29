@@ -11,6 +11,29 @@ const int CUDA_CPY_TILE_DIM_2D = 32; // 2D tile dimension for transposed blocks
 const int CUDA_CPY_BLOCK_NM = 8;     // block size of 3rd dimension if available
 const int CUDA_CPY_BLOCK_ROWS = 8;   // block dimension for marching through rows
 
+static __global__ void cpy_f32_f16_vec8(
+        const char * src, uint4 * dst, const uint32_t n, const uint3 ne0, const uint3 ne1, const uint3 ne2,
+        const size_t nb1, const size_t nb2, const size_t nb3) {
+    ggml_cuda_pdl_lc();
+    const uint32_t i = blockIdx.x*blockDim.x + threadIdx.x;
+    if (i >= n) {
+        return;
+    }
+    const uint32_t c = fastmodulo(i, ne0);
+    const uint32_t row = fastdiv(i, ne0);
+    const uint32_t r1 = fastmodulo(row, ne1);
+    const uint32_t r23 = fastdiv(row, ne1);
+    const uint32_t r2 = fastmodulo(r23, ne2);
+    const uint32_t r3 = fastdiv(r23, ne2);
+    ggml_cuda_pdl_sync();
+    const float4 * ptr = (const float4 *) (src + 32*size_t(c) + nb1*r1 + nb2*r2 + nb3*r3);
+    const float4 a = ptr[0], b = ptr[1];
+    alignas(16) const half values[8] = {ggml_cuda_cast<half>(a.x), ggml_cuda_cast<half>(a.y),
+        ggml_cuda_cast<half>(a.z), ggml_cuda_cast<half>(a.w), ggml_cuda_cast<half>(b.x),
+        ggml_cuda_cast<half>(b.y), ggml_cuda_cast<half>(b.z), ggml_cuda_cast<half>(b.w)};
+    ggml_cuda_memcpy_1<16>(dst + i, values);
+}
+
 template <cpy_kernel_t cpy_1>
 static __global__ void cpy_scalar(const char * cx, char * cdst, const int64_t ne,
                                   const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t nb00, const int64_t nb01, const int64_t nb02,
@@ -493,7 +516,18 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
                 (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
         }
     } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F16) {
-        if (contiguous_srcs) {
+        if (GGML_CUDA_CC_IS_RDNA3_5(ggml_cuda_info().devices[ctx.device].cc) && !contiguous_srcs &&
+                ggml_is_contiguous(src1) && ggml_are_same_shape(src0, src1) && nb00 == sizeof(float) &&
+                ne00 % 8 == 0 && ne >= 8192 && ne/8 <= INT32_MAX &&
+                ne00/8 <= UINT32_MAX && ne01 <= UINT32_MAX && ne02 <= UINT32_MAX &&
+                (uintptr_t) src0_ddc % 16 == 0 && (uintptr_t) src1_ddc % 16 == 0 &&
+                nb01 % 16 == 0 && nb02 % 16 == 0 && nb03 % 16 == 0 &&
+                ((uintptr_t) src0_ddc <= (uintptr_t) src1_ddc ?
+                    (uintptr_t) src1_ddc - (uintptr_t) src0_ddc >= ggml_nbytes(src0) :
+                    (uintptr_t) src0_ddc - (uintptr_t) src1_ddc >= ggml_nbytes(src1))) {
+            cpy_f32_f16_vec8<<<(ne/8 + 255)/256, 256, 0, main_stream>>>(src0_ddc, (uint4 *) src1_ddc,
+                ne/8, init_fastdiv_values(ne00/8), init_fastdiv_values(ne01), init_fastdiv_values(ne02), nb01, nb02, nb03);
+        } else if (contiguous_srcs) {
             ggml_cpy_scalar_contiguous_cuda<float, half>
                 (src0_ddc, src1_ddc, ne, main_stream);
         } else {

@@ -2,6 +2,35 @@
 
 The active implementation is `lichang.rdna35-prefill-quant-rope`. Qwen vision window batching, D64/D72/D80 vision attention, D128 language attention, D512 language attention, FP16/FP32 conversion, RMSNorm, activation quantization, and RoPE changes share this source tree. Earlier experimental worktrees are reference snapshots; changes should be developed and validated here.
 
+## Gemma-3-12B vision kernel follow-up (2026-10-29)
+
+The commit titled `hip: tune RDNA3.5 vision attention, copies and normalization` adds three small backend changes for the two vision targets from the serial profile: D72 attention and conversion/LayerNorm overhead. It builds on the shared Gemma vision fusions below. Language Q4_K/Q6_K GEMM and the actual 1/104/256/2/4 batch boundaries are unchanged. Increasing the configured batch limit does not merge those boundaries.
+
+| Change added to the existing optimized baseline | Baseline HTTP TTFT | Candidate HTTP TTFT | Saving |
+| --- | ---: | ---: | ---: |
+| Full-tile D80 attention handling | 843.09 ms | 815.25 ms | 27.84 ms / 3.30% |
+| Vectorized permuted K/V conversion | 854.76 ms | 836.25 ms | 18.51 ms / 2.17% |
+| 128-thread affine LayerNorm | 837.46 ms | 829.00 ms | 8.46 ms / 1.01% |
+| Combined | 857.01 ms | 818.46 ms | 38.55 ms / 4.50% |
+
+These are separate Halo05 A-B-B-A comparisons, each with 20 samples per configuration across two starts and five warmups per start. The same server/supporting libraries are used on both sides. The combined baseline process medians are 883.10 and 846.35 ms; candidate medians are 819.17 and 814.85 ms. Heavy CPU/filesystem activity on the shared board makes the precise percentage uncertain; raw outliers are retained. No competing GPU process was detected. The separate-stage savings must not be added as an exact combined decomposition. A later repeat encountered a new external CPU-heavy job and a baseline step to about 1080 ms; it was stopped and is not used to enlarge the reported gain.
+
+The saved 640x480 image becomes 896x896, giving 4096 vision patches and 256 image embeddings. The saved 100-text-token prompt has 367 total llama.cpp positions. Tests retain Q4_K_M language weights, F16 projector and KV, context 4096, batch 2048, microbatch 512, eight CPU threads, one output token, checkpoints 32, HIP graphs, normal vision/language overlap, and no prompt-cache reuse. There is no image-budget change.
+
+- Attention reuses the existing D72-to-D80 adapter and shared WMMA kernel. On RDNA3.5, the dense D80 64-query/one-head-group path omits partial-tile bounds handling only for non-final KV tiles, which are known to be complete. Final tiles and sparse paths keep their checks. Global attention, the original D72 scale, precision, and tile geometry stay the same. Isolated call time falls from 5.56-5.58 to 4.73 ms. Compiler scratch falls from 224 to 192 bytes/thread and VGPR spill count from 92 to 83; VGPR allocation remains 256.
+- The existing FP32-to-FP16 CPY dispatch gains an eight-value path for aligned, same-shape, noncontiguous-source/contiguous-destination copies. It amortizes indexing, uses vector memory operations, and retains the existing casts. Guards check disjoint buffers, alignment, strides, shape, minimum size, and the fast-division index range; byte offsets use size_t. The isolated K/V copy falls from 0.267 to 0.051 ms. Separate D72 padding kernels remain.
+- The existing fused affine LayerNorm uses 128 threads for 1152-wide rows with at least 64 rows on RDNA3.5, instead of 1024. FP32 arithmetic/storage remain; reduction order changes. Isolated time falls from 0.275-0.278 to 0.168-0.169 ms. Other shapes and RMSNorm retain their previous choices.
+
+The final rocprof trace confirms 27 attention calls at 160.93 -> 133.74 ms summed duration, 54 K/V copies at 19.31 -> 10.91 ms, and 55 affine norms at 23.54 -> 10.98 ms. Total launches remain 6468. Counting overlap once, first-kernel-start to last-kernel-finish falls 871.21 -> 834.26 ms, while the union of kernel intervals falls 822.94 -> 784.82 ms. These profiled values corroborate the normal TTFT gain but are not interchangeable with it; other raw kernel-duration sums vary with concurrent execution and host activity.
+
+A 16-key attention tile cuts spills much further but is about 12% slower, so it is rejected. A compact-Q/shuffle variant reduces scratch and VGPR spills but has negligible speed benefit. Neither is retained. The 256-thread LayerNorm candidate is faster than the baseline but slower than 128 threads. Earlier Q-in-LDS and wider padding-copy failures remain documented; this result does not revive those prototypes.
+
+The final build passes 1025 D72/D80 attention cases, 11 FP32-to-FP16 copy cases, and 30 affine LayerNorm cases. Attention probes at 4096, 4095, and 257 positions and copy probes including special FP values match baseline output bits. LayerNorm's FP64-reference relative L2 error is approximately 5.17e-8, comparable to the baseline. All three normal-server 32-token image checks produce the same token strings and text as the baseline. The final image embeddings differ: NMSE 5.21e-6 to 1.08e-5, relative RMS difference 0.23-0.33%, maximum absolute difference 0.1875; selected-token log probabilities differ by at most 0.10434. This is targeted numerical/output validation, not a broad task-accuracy claim. The LayerNorm-only build matches the combined build's vision embeddings bitwise on all three images, attributing the measured embedding change to reduction order in this workload. Rebuilt production matches the combined candidate's embeddings and returned token/probability records exactly on all three images.
+
+The changed units compile for gfx1100 and gfx942; runtime validation is gfx1151 only. The final build preserves the baseline device code for Q4_K, Q6_K, MMVQ, and MMVDQ. NVIDIA was not compiled or tested. Other Gemma models with matching vision shapes are structurally eligible, but this round does not establish their end-to-end gains.
+
+The saved gfx11 vLLM reference remains 541.770 ms, with 369 native-framing positions and W4A16/BF16 arithmetic. It was not rerun; using that historical reference gives approximately 1.582x -> 1.511x for the paired llama.cpp numbers, with the host-load and representation limitations above. Raw data, source snapshots, build commands, numerical comparisons, rejected candidates, and reproduction instructions are in `/proj/gdba/lichang/regression_results/gemma3_12b_vision_20261029/REPORT.md`.
+
 ## Gemma-3-12B profiling follow-up (2026-10-28)
 
 The existing shared Gemma vision fusions also cover Gemma-3-12B Q4_K_M with an F16 projector. A Halo40 ABBA comparison (20 samples per variant, original response cap) reduces HTTP TTFT from 913.261 to 875.608 ms, saving 37.653 ms / 4.123%. Its 55 affine LayerNorms and 27 plain GELU vision FFNs remove 191 launches, 915 -> 724. Vision GPU duration sums fall 459.40 -> 406.33 ms; language graph signatures are unchanged. This is an increment over the optimized branch before the October 28 shared fusions.
