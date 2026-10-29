@@ -1973,10 +1973,14 @@ private:
 
         SLT_DBG(slot, "n_gen = %d, n_remaining = %d, next token: %5d '%s'\n", (int) slot.stats.n_gen, slot.n_remaining(), result.tok, token_str.c_str());
 
-        if (!slot.has_next_token) {
-            // generation ended with text still held: non-stream content includes it, while
-            // stream never sends it
-            release_held_tokens(slot, slot.task->params.stream ? 0 : std::string::npos);
+        if (!slot.has_next_token && !slot.held_tokens.empty()) {
+            // generation ended with text still held, which non-stream content includes, so the
+            // last chunk must send it too
+            const size_t pos = std::min(slot.n_sent_text, slot.generated_text.size());
+            auto & last = slot.held_tokens.back().out;
+            last.text_to_send = slot.generated_text.substr(pos);
+            slot.n_sent_text += last.text_to_send.size();
+            release_held_tokens(slot, last.text_to_send.size());
         }
 
         return slot.has_next_token; // continue
@@ -1987,12 +1991,20 @@ private:
     // token's logprobs text to its share of those
     void release_held_tokens(server_slot & slot, size_t n_visible) {
         for (auto & held : slot.held_tokens) {
+            const bool hidden = n_visible == 0 && !held.out.txt.empty();
+
             if (held.out.txt.size() > n_visible) {
                 held.out.txt.resize(n_visible);
             }
             n_visible -= held.out.txt.size();
 
-            slot.add_token(held.out);
+            if (hidden) {
+                // its chunk still goes out, as it can carry the content released before the
+                // stop word - empty probs keep the logprobs entry out of it
+                held.out.probs.clear();
+            } else {
+                slot.add_token(held.out);
+            }
             if (slot.task->params.stream) {
                 send_partial_response(slot, held.out, false, false, held.n_gen);
             }
@@ -2170,19 +2182,11 @@ private:
         res->oaicompat_cmpl_id = slot.task->params.oaicompat_cmpl_id;
 
         // populate res.probs_output
+        // the tokens of a matched stop word are already left out - see release_held_tokens()
         if (slot.task->params.sampling.n_probs > 0) {
-            if (!slot.task->params.stream && slot.stop == STOP_TYPE_WORD) {
-                const llama_tokens stop_word_toks = common_tokenize(ctx_tgt, slot.stopping_word, false);
-
-                size_t safe_offset = std::min(slot.generated_token_probs.size(), stop_word_toks.size());
-                res->probs_output = std::vector<completion_token_output>(
-                        slot.generated_token_probs.begin(),
-                        slot.generated_token_probs.end() - safe_offset);
-            } else {
-                res->probs_output = std::vector<completion_token_output>(
-                        slot.generated_token_probs.begin(),
-                        slot.generated_token_probs.end());
-            }
+            res->probs_output = std::vector<completion_token_output>(
+                    slot.generated_token_probs.begin(),
+                    slot.generated_token_probs.end());
         }
 
         res->generation_params = slot.task->params; // copy the parameters

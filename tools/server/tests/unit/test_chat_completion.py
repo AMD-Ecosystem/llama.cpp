@@ -487,9 +487,12 @@ def test_logprobs_partial_stop_prefix(stream: bool):
 
 
 @pytest.mark.parametrize("stream", [False, True])
-def test_logprobs_matched_stop(stream: bool):
-    # a stop string spanning two tokens: the first is held back as a partial match, then the
-    # second completes it - the logprobs bytes of both must stay out, just like the content
+@pytest.mark.parametrize("case", ["two_tokens", "mid_token", "limit_held"])
+def test_logprobs_matched_stop(stream: bool, case: str):
+    # the tokens of a matched stop string get no logprobs entries, just as their text is left
+    # out of the content - and a token the stop string starts in keeps only its visible part
+    # (limit_held: a partial match that never completes still reaches the content when
+    # generation ends on it)
     global server
     server.start()
     body = {
@@ -505,20 +508,35 @@ def test_logprobs_matched_stop(stream: bool):
     res = server.make_request("POST", "/chat/completions", data=body)
     assert res.status_code == 200
     tokens = [e["token"] for e in res.body["choices"][0]["logprobs"]["content"]]
-    stop = next(
-        tokens[i] + tokens[i + 1] for i in range(1, len(tokens) - 2)
-        if tokens[i].strip() and tokens[i + 1].strip()
-        and tokens[i] + tokens[i + 1] not in "".join(tokens[:i + 1])
-    )
+    if case == "two_tokens":
+        # the first token is held back as a partial match, then the second completes it
+        i = next(
+            i for i in range(1, len(tokens) - 2)
+            if tokens[i].strip() and tokens[i + 1].strip()
+            and tokens[i] + tokens[i + 1] not in "".join(tokens[:i + 1])
+        )
+        stop = tokens[i] + tokens[i + 1]
+        expected = tokens[:i]
+    elif case == "limit_held":
+        # the last token is held back as a partial match when max_tokens is reached
+        i = next(i for i in range(1, len(tokens)) if tokens[i].strip())
+        stop = tokens[i] + "\x01"
+        expected = tokens[:i + 1]
+        body["max_tokens"] = i + 1
+    else:
+        i = next(
+            i for i in range(1, len(tokens) - 1)
+            if len(tokens[i].strip()) >= 3 and tokens[i][:len(tokens[i]) // 2].strip()
+            and tokens[i][len(tokens[i]) // 2:] not in "".join(tokens[:i]) + tokens[i][:len(tokens[i]) // 2]
+        )
+        stop = tokens[i][len(tokens[i]) // 2:]
+        expected = tokens[:i] + [tokens[i][:len(tokens[i]) // 2]]
     body["stop"] = [stop]
 
-    all_bytes = bytearray()
+    entries = []
     if stream:
         content = ""
-        n_entries = 0
-        for data in server.make_stream_request("POST", "/chat/completions", data={**body, "stream": True, "stream_options": {"include_usage": True}}):
-            if data.get("usage"):
-                completion_tokens = data["usage"]["completion_tokens"]
+        for data in server.make_stream_request("POST", "/chat/completions", data={**body, "stream": True}):
             if not data["choices"]:
                 continue
             choice = data["choices"][0]
@@ -526,22 +544,18 @@ def test_logprobs_matched_stop(stream: bool):
             if choice.get("finish_reason"):
                 finish_reason = choice["finish_reason"]
             if choice.get("logprobs"):
-                for entry in choice["logprobs"]["content"]:
-                    all_bytes.extend(entry["bytes"])
-                    n_entries += 1
-        # the stop string's tokens keep their entries, just with no bytes
-        assert n_entries == completion_tokens
+                entries.extend(choice["logprobs"]["content"])
     else:
         res = server.make_request("POST", "/chat/completions", data=body)
         assert res.status_code == 200
         content = res.body["choices"][0]["message"]["content"]
         finish_reason = res.body["choices"][0]["finish_reason"]
-        for entry in res.body["choices"][0]["logprobs"]["content"]:
-            all_bytes.extend(entry["bytes"])
+        entries = res.body["choices"][0]["logprobs"]["content"]
 
-    assert finish_reason == "stop"
-    assert content and stop not in content
-    assert bytes(all_bytes).decode("utf-8") == content
+    assert finish_reason == ("length" if case == "limit_held" else "stop")
+    assert content == "".join(expected)
+    assert [e["token"] for e in entries] == expected
+    assert bytes(b for e in entries for b in e["bytes"]).decode("utf-8") == content
 
 
 def test_logit_bias():
