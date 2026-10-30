@@ -1032,6 +1032,23 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
     if (zero_output_elision_supported(op)) {
         return true;
     }
+    if (op->op == GGML_OP_DUP) {
+        const ggml_tensor * source = op->src[0];
+        if (source == nullptr) {
+            return false;
+        }
+        const bool source_f32 = source->type == GGML_TYPE_F32;
+        const bool output_f32 = op->type == GGML_TYPE_F32;
+        const bool source_contiguous = ggml_is_contiguous(source);
+        const bool output_contiguous = ggml_is_contiguous(op);
+        const bool same_shape = ggml_are_same_shape(source, op);
+        const bool separate_output = op->view_src == nullptr;
+        const int64_t elements = ggml_nelements(op);
+        const bool nonempty = elements > 0;
+        const bool bounded = elements <= (int64_t{ 1 } << 30);
+        return source_f32 && output_f32 && source_contiguous && output_contiguous && same_shape &&
+               separate_output && nonempty && bounded;
+    }
     const bool supported_binary = supported_binary_f32_tensor(op);
     if (supported_binary) {
         return true;
