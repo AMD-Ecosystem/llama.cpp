@@ -56,6 +56,9 @@ GraphIndex GraphIndex::build(const Graph & graph) {
     for (size_t i = 0; i < nodes.size(); ++i) {
         const GraphNode & node = nodes[i];
         index.node_indices_.emplace(&node, i);
+        if (!node.compute) {
+            continue;
+        }
         index.producers_.emplace(node.output.value, &node);
         for (ValueId input : node.inputs) {
             index.consumers_[input.value].push_back(&node);
@@ -157,6 +160,10 @@ GraphImportResult import_ggml_graph(const ggml_cgraph & graph) {
             result.status.log("ggml graph contains a null node");
             return result;
         }
+        const bool compute = (node->flags & GGML_TENSOR_FLAG_COMPUTE) != 0;
+        if (!compute) {
+            continue;
+        }
         graph_nodes.insert(node);
         for (const ggml_tensor * source : node->src) {
             if (source != nullptr) {
@@ -168,6 +175,13 @@ GraphImportResult import_ggml_graph(const ggml_cgraph & graph) {
     ValueMap & values = result.graph.values();
     for (int i = 0; i < graph.n_nodes; ++i) {
         const ggml_tensor *  node = graph.nodes[i];
+        const bool compute = (node->flags & GGML_TENSOR_FLAG_COMPUTE) != 0;
+        if (!compute) {
+            // Keep node slots aligned with ggml for cached external bindings, but do not import inactive branch storage.
+            GraphNode & inactive = result.graph.add_node(node->op, ValueId{}, {});
+            inactive.compute = false;
+            continue;
+        }
         std::vector<ValueId> inputs;
         for (const ggml_tensor * source : node->src) {
             if (source == nullptr) {
