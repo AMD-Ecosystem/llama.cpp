@@ -129,6 +129,7 @@ enum ggml_cuda_mmq_sram_layout {
     GGML_CUDA_MMQ_SRAM_LAYOUT_Q2_K,
     GGML_CUDA_MMQ_SRAM_LAYOUT_Q3_K,
     GGML_CUDA_MMQ_SRAM_LAYOUT_Q6_K,
+    GGML_CUDA_MMQ_SRAM_LAYOUT_Q6_K_SCALED,
     GGML_CUDA_MMQ_SRAM_LAYOUT_FP4,   // MXFP4 and NVFP4 on Blackwell.
     GGML_CUDA_MMQ_SRAM_LAYOUT_NVFP4, // Generic NVFP4
 };
@@ -145,6 +146,8 @@ static constexpr __host__ __device__ int ggml_cuda_mmq_get_sram_stride(ggml_cuda
             return 2*MMQ_TILE_NE_K + MMQ_TILE_NE_K/2       + 4;
         case GGML_CUDA_MMQ_SRAM_LAYOUT_Q6_K:
             return 2*MMQ_TILE_NE_K + MMQ_TILE_NE_K/QI6_K   + MMQ_TILE_NE_K/8 + 7;
+        case GGML_CUDA_MMQ_SRAM_LAYOUT_Q6_K_SCALED:
+            return 2*MMQ_TILE_NE_K + MMQ_TILE_NE_K/QI6_K   + MMQ_TILE_NE_K/2 + 3;
         case GGML_CUDA_MMQ_SRAM_LAYOUT_FP4:
             return 2*MMQ_TILE_NE_K + 8                     + 4;
         case GGML_CUDA_MMQ_SRAM_LAYOUT_NVFP4:
@@ -159,6 +162,7 @@ static_assert(ggml_cuda_mmq_get_sram_stride(GGML_CUDA_MMQ_SRAM_LAYOUT_Q8_1)  % 8
 static_assert(ggml_cuda_mmq_get_sram_stride(GGML_CUDA_MMQ_SRAM_LAYOUT_Q2_K)  % 8 == 4, "Wrong padding.");
 static_assert(ggml_cuda_mmq_get_sram_stride(GGML_CUDA_MMQ_SRAM_LAYOUT_Q3_K)  % 8 == 4, "Wrong padding.");
 static_assert(ggml_cuda_mmq_get_sram_stride(GGML_CUDA_MMQ_SRAM_LAYOUT_Q6_K)  % 8 == 4, "Wrong padding.");
+static_assert(ggml_cuda_mmq_get_sram_stride(GGML_CUDA_MMQ_SRAM_LAYOUT_Q6_K_SCALED) % 8 == 4, "Wrong padding.");
 static_assert(ggml_cuda_mmq_get_sram_stride(GGML_CUDA_MMQ_SRAM_LAYOUT_FP4)   % 8 == 4, "Wrong padding.");
 static_assert(ggml_cuda_mmq_get_sram_stride(GGML_CUDA_MMQ_SRAM_LAYOUT_NVFP4) % 8 == 4, "Wrong padding.");
 
@@ -251,6 +255,9 @@ static constexpr __host__ __device__ ggml_cuda_mmq_config ggml_cuda_mmq_get_conf
     ggml_cuda_mmq_config config = ggml_cuda_mmq_get_config_rdna3_5(type, J, fallback);
     config.nthreads = 128;
     config.I = 64;
+    if (type == GGML_TYPE_Q6_K && J == 64) {
+        config.sram_layout = GGML_CUDA_MMQ_SRAM_LAYOUT_Q6_K_SCALED;
+    }
     return config;
 }
 
@@ -524,9 +531,13 @@ static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q6_K_q8_1_mma_rdna3
 #pragma unroll
                 for (int l = 0; l < tile_C::ne; ++l) {
                     const int i = i0 + n*tile_C::I + tile_C::get_i(l);
-                    const int8_t * sc = (const int8_t *) (x_sc + i*sram_stride + k00/16);
-                    sum[(j0/tile_C::J + n)*tile_C::ne + l] +=
-                        C.x[l] * sc[k01/4] * x_df[i*sram_stride] * dB0;
+                    if constexpr (J == 64) {
+                        const float * sc = (const float *) x_sc + i*sram_stride + k00/4;
+                        sum[(j0/tile_C::J + n)*tile_C::ne + l] += (float) C.x[l] * sc[k01/4] * dB0;
+                    } else {
+                        const int8_t * sc = (const int8_t *) (x_sc + i*sram_stride + k00/16);
+                        sum[(j0/tile_C::J + n)*tile_C::ne + l] += C.x[l] * sc[k01/4] * x_df[i*sram_stride] * dB0;
+                    }
                 }
             }
 

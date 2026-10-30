@@ -2,6 +2,38 @@
 
 The active implementation is `lichang.rdna35-prefill-quant-rope`. Qwen vision window batching, D64/D72/D80 vision attention, D128 language attention, D512 language attention, FP16/FP32 conversion, RMSNorm, activation quantization, and RoPE changes share this source tree. Earlier experimental worktrees are reference snapshots; changes should be developed and validated here.
 
+## Q6_K scale reuse (2026-10-29)
+
+The commit titled `hip: reuse Q6_K scales in RDNA3.5 J64 tiles`, based on `257a47804282af464953f36ffc75d065abcc1fa5`, precomputes signed int8 subscale times FP16 block scale when loading a Q6_K weight tile. It stores the combined scales as FP32 in LDS and reuses them across output columns, reducing repeated arithmetic and loads in the integer-WMMA loop. Weights stay Q6_K, activations retain existing Q8 packing, and there is no full-matrix dequantization or language-precision change.
+
+Eligibility is RDNA3.5, Q6_K and tile width J=64, including partial output-row fallback. Gemma-3-12B's main attention-V and FFN-down projections select this tile for 104- and 256-position batches. Other models with matching Q6_K dispatch are eligible, but this round establishes model-level gain only for Gemma-3-12B. Other tile widths retain their original device code: the unrestricted prototype regressed M16 FFN down by about 19%. The separate J128 widening experiment remains unproven end to end and is not included.
+
+| Gemma-3-12B comparison | Baseline HTTP TTFT | Scale reuse | Saving |
+| --- | ---: | ---: | ---: |
+| Prior stable Halo05 ABBA, prototype with identical J64 code | 797.023 ms | 780.187 ms | 16.836 ms / 2.112% |
+| Fresh Halo41 ABBA, integrated production backend | 842.758 ms | 824.911 ms | 17.847 ms / 2.118% |
+
+Each comparison has 20 samples per configuration across two starts, five warmups per start, and identical supporting libraries. Halo41 process medians are 841.539 and 844.572 ms for baseline, versus 825.265 and 824.307 ms for the integrated backend. No GPU contention was detected during accepted server samples; all outliers are retained. An additional Halo05 repeat during compiler/filesystem activity gives only 795.588 -> 792.875 ms, 0.341%, with substantial process variation; it does not independently establish a gain. Absolute times from different boards/runs are not interchangeable.
+
+The original 640x480 image becomes 896x896, with 4096 vision patches and 256 image embeddings. The saved 100-text-token prompt has 367 total llama.cpp positions. Tests retain native 1/104/256/2/4 boundaries, Q4_K_M weights, F16 projector/KV, context 4096, batch 2048, microbatch 512, eight CPU threads, one output token, checkpoints 32, HIP graphs, normal vision/language overlap and zero prompt-cache reuse. vLLM was not rerun.
+
+| Isolated Q6_K shape, M tokens / N outputs / K reduction | Baseline | Scale reuse | Reduction |
+| --- | ---: | ---: | ---: |
+| 104 / 3840 / 15360, FFN down | 1.072294 ms | 0.887974 ms | 17.19% |
+| 256 / 3840 / 15360, FFN down | 1.925361 ms | 1.431817 ms | 25.63% |
+| 104 / 2048 / 3840, attention V | 0.153540 ms | 0.118010 ms | 23.14% |
+| 256 / 2048 / 3840, attention V | 0.299845 ms | 0.223957 ms | 25.31% |
+
+These are Halo41 cold-buffer matrix-kernel medians, 40 samples per shape/configuration across reversed orders; packing is separate and unchanged. The 14-shape sweep shows 13.85-25.63% reductions on ten eligible shapes, including partial rows; four unchanged J16/J32/J48 controls stay within 1%. All 56 full-output comparisons match bitwise. An initial sweep with an incorrectly resolved baseline library was superseded by explicit library preloads and loaded-map assertions; its timings are excluded.
+
+J64 dynamic LDS rises from 28,928 to 30,976 bytes, still below 32 KiB. Used VGPRs fall from 203 to 183, runtime allocation from 208 to 184, with zero spills/scratch in both versions. Prior M256-down counters show 36.5% fewer LDS instructions, 14.5% fewer vector instructions and 49.3% less LDS wait; external reads and occupancy are essentially unchanged.
+
+The restricted candidate and rebuilt production each pass 28 standard Q6_K matrix cases, 3 MoE cases and 26 extra edge cases. The generic test-file harness required isolated sentinel initialization, fixing baseline and candidate guard-tensor NaNs while retaining bounds checks; this unrelated harness fix is not included. Three image checks match baseline embeddings, up-to-32-token generation and chosen-token log probabilities exactly. The same within-build repeated-generation probability drift occurs in all builds and is preserved in the report. For finite valid scales, both the precomputed FP16-scale/int8-subscale product and the original integer partial-dot/subscale product are exact in FP32 before unchanged scaling and accumulation. These are targeted equivalence checks, not a broad task-accuracy evaluation.
+
+All 12 supported production Q6_K configurations match the tested candidate's instruction bytes; the ten outside J64 also match baseline. All 65 Q4_K kernel entry points and MMVQ/MMVDQ arithmetic are unchanged, preserving Q4 pipelining. An unused-template assertion's source-line constant explains the additional Q4 object difference. The exact changed source compiles for gfx1100 and gfx942; runtime validation is gfx1151 only. NVIDIA was not compiled or tested. The normal build includes the optimization without an experimental preload.
+
+Evidence: `/proj/gdba/lichang/regression_results/q6k_scale_reuse_validation_20261029/REPORT.md` and the preceding `gemma3_12b_language_followup_20261029/REPORT.md`. They preserve commands, source/library hashes, numerical checks, rejected variants, host-load variation and raw samples.
+
 ## Gemma-3-12B vision kernel follow-up (2026-10-29)
 
 The commit titled `hip: tune RDNA3.5 vision attention, copies and normalization` adds three small backend changes for the two vision targets from the serial profile: D72 attention and conversion/LayerNorm overhead. It builds on the shared Gemma vision fusions below. Language Q4_K/Q6_K GEMM and the actual 1/104/256/2/4 batch boundaries are unchanged. Increasing the configured batch limit does not merge those boundaries.
