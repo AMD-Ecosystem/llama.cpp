@@ -3639,6 +3639,8 @@ static void run_dynamic_generic_ops_cpu_reference_case() {
     ggml_tensor * hrx_copy_target = ggml_new_tensor_1d(hrx_ctx, GGML_TYPE_F32, element_count);
     ggml_tensor * cpu_copy = ggml_cpy(cpu_ctx, cpu_input, cpu_copy_target);
     ggml_tensor * hrx_copy = ggml_cpy(hrx_ctx, hrx_input, hrx_copy_target);
+    ggml_tensor * cpu_dup = ggml_dup(cpu_ctx, cpu_input);
+    ggml_tensor * hrx_dup = ggml_dup(hrx_ctx, hrx_input);
     ggml_tensor * cpu_concat_lhs = ggml_new_tensor_2d(cpu_ctx, GGML_TYPE_F32, 64, 7);
     ggml_tensor * cpu_concat_rhs = ggml_new_tensor_2d(cpu_ctx, GGML_TYPE_F32, 32, 7);
     ggml_tensor * hrx_concat_lhs = ggml_new_tensor_2d(hrx_ctx, GGML_TYPE_F32, 64, 7);
@@ -3647,6 +3649,9 @@ static void run_dynamic_generic_ops_cpu_reference_case() {
     ggml_tensor * hrx_concat = ggml_concat(hrx_ctx, hrx_concat_lhs, hrx_concat_rhs, 0);
     REQUIRE(cpu_unary != nullptr && hrx_unary != nullptr);
     REQUIRE(cpu_copy != nullptr && hrx_copy != nullptr);
+    REQUIRE(cpu_dup != nullptr);
+    REQUIRE(hrx_dup != nullptr);
+    REQUIRE(ggml_backend_supports_op(hrx_backend, hrx_dup));
     REQUIRE(cpu_concat != nullptr && hrx_concat != nullptr);
 
     ggml_cgraph * cpu_graph = ggml_new_graph(cpu_ctx);
@@ -3654,13 +3659,15 @@ static void run_dynamic_generic_ops_cpu_reference_case() {
     REQUIRE(cpu_graph != nullptr && hrx_graph != nullptr);
     ggml_build_forward_expand(cpu_graph, cpu_unary);
     ggml_build_forward_expand(cpu_graph, cpu_copy);
+    ggml_build_forward_expand(cpu_graph, cpu_dup);
     ggml_build_forward_expand(cpu_graph, cpu_concat);
     ggml_build_forward_expand(hrx_graph, hrx_unary);
     ggml_build_forward_expand(hrx_graph, hrx_copy);
+    ggml_build_forward_expand(hrx_graph, hrx_dup);
     ggml_build_forward_expand(hrx_graph, hrx_concat);
 
     require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph),
-                               { "loom_libs:ggml_unary_f32", "loom_libs:ggml_copy_f32",
+                               { "loom_libs:ggml_unary_f32", "loom_libs:ggml_copy_f32", "loom_libs:ggml_copy_f32",
                                  "loom_libs:ggml_concat_dim0_f32" });
     for (const char * kernel_name :
          { "loom_libs:ggml_unary_f32", "loom_libs:ggml_copy_f32", "loom_libs:ggml_concat_dim0_f32" }) {
@@ -3687,6 +3694,7 @@ static void run_dynamic_generic_ops_cpu_reference_case() {
     ggml_backend_synchronize(hrx_backend);
     require_close(get_f32_tensor(hrx_backend, hrx_unary), get_f32_tensor(cpu_backend, cpu_unary), 0.0f);
     require_close(get_f32_tensor(hrx_backend, hrx_copy), get_f32_tensor(cpu_backend, cpu_copy), 0.0f);
+    require_close(get_f32_tensor(hrx_backend, hrx_dup), get_f32_tensor(cpu_backend, cpu_dup), 0.0f);
     require_close(get_f32_tensor(hrx_backend, hrx_concat), get_f32_tensor(cpu_backend, cpu_concat), 0.0f);
 
     ggml_backend_buffer_free(cpu_buffer);
