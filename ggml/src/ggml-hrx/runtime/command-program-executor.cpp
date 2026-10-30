@@ -701,6 +701,7 @@ static Dispatch build_dispatch(const ResolvedCommand & command) {
 struct GraphValueAccess {
     bool read  = false;
     bool write = false;
+    bool main_write = false;
     bool        native_read         = false;
     bool        transformed_read    = false;
     bool        layout_conflict     = false;
@@ -714,13 +715,14 @@ struct GraphValueAccess {
 
 static std::unordered_map<int32_t, GraphValueAccess> collect_graph_value_access(const CommandProgram & commands) {
     std::unordered_map<int32_t, GraphValueAccess> access_by_value;
-    auto append_command_list_access = [&](const std::vector<Command> & command_list) {
+    auto append_command_list_access = [&](const std::vector<Command> & command_list, bool main_commands) {
         for (const Command & command : command_list) {
             for (const CommandBinding & binding : command.bindings) {
                 if (binding.origin != CommandBindingOrigin::GraphValue) {
                     continue;
                 }
                 GraphValueAccess & access = access_by_value[binding.value.value];
+                access.main_write |= main_commands && resource_access_writes(binding.access);
                 switch (binding.access) {
                     case ResourceAccess::Read:
                         access.read = true;
@@ -768,8 +770,8 @@ static std::unordered_map<int32_t, GraphValueAccess> collect_graph_value_access(
             }
         }
     };
-    append_command_list_access(commands.initialization_commands);
-    append_command_list_access(commands.commands);
+    append_command_list_access(commands.initialization_commands, false);
+    append_command_list_access(commands.commands, true);
     return access_by_value;
 }
 
@@ -851,7 +853,8 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
         staging.value                        = binding.value.value;
         staging.host_data                    = static_cast<uint8_t *>(binding.host_data) + binding.offset;
         staging.upload                       = access.read;
-        staging.download                     = access.write;
+        // Initializers may synthesize device metadata from caller inputs, but only main graph writes are observable.
+        staging.download                     = access.main_write;
         if (staging.upload && context.host_buffers != nullptr) {
             staging.source_host_buffer = context.host_buffers->find(staging.host_data, staging.length);
         }
