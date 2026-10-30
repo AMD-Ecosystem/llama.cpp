@@ -2120,9 +2120,9 @@ private:
         if (!slot.has_next_token && !slot.held_tokens.empty()) {
             // generation ended with text still held, which non-stream content includes, so the
             // last chunk must send it too
-            const size_t pos = std::min(slot.n_sent_text, slot.generated_text.size());
+            const size_t pos = std::min(slot.n_sent_text, slot.generated.text.size());
             auto & last = slot.held_tokens.back().out;
-            last.text_to_send = slot.generated_text.substr(pos);
+            last.text_to_send = slot.generated.text.substr(pos);
             slot.n_sent_text += last.text_to_send.size();
             release_held_tokens(slot, last.text_to_send.size());
         }
