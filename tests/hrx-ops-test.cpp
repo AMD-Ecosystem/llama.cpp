@@ -3467,7 +3467,7 @@ static void run_add_f32_cpu_reference_case() {
     ggml_backend_free(hrx_backend);
 }
 
-static void run_gdn_snapshot_cpu_reference_case(int64_t tokens) {
+static void run_gdn_snapshot_cpu_reference_case(int64_t tokens, bool rms_scale_norm = false) {
     ggml_backend_t cpu = init_cpu_backend();
     ggml_backend_t hrx = ggml_backend_hrx_init(0);
     REQUIRE(hrx != nullptr);
@@ -3515,8 +3515,13 @@ static void run_gdn_snapshot_cpu_reference_case(int64_t tokens) {
         f.state = ggml_new_tensor_2d(f.ctx, GGML_TYPE_F32, state_size, 1);
         auto * state = ggml_reshape_4d(f.ctx, f.state, width, width, heads, 1);
         f.cache = ggml_new_tensor_2d(f.ctx, GGML_TYPE_F32, state_size, tokens);
-        auto * gdn = ggml_gated_delta_net(f.ctx, ggml_l2_norm(f.ctx, f.q, 1.e-6f),
-                ggml_l2_norm(f.ctx, f.k, 1.e-6f), f.v, gate, beta, state, tokens);
+        const auto normalize = [&](ggml_tensor * input) {
+            if (rms_scale_norm) {
+                return ggml_scale(f.ctx, ggml_rms_norm(f.ctx, input, 1.e-6f / width), 1.0f / std::sqrt(float(width)));
+            }
+            return ggml_l2_norm(f.ctx, input, 1.e-6f);
+        };
+        auto * gdn = ggml_gated_delta_net(f.ctx, normalize(f.q), normalize(f.k), f.v, gate, beta, state, tokens);
         f.attention = ggml_view_4d(f.ctx, gdn, width, heads, tokens, 1,
                 width * sizeof(float), width * heads * sizeof(float), width * heads * tokens * sizeof(float), 0);
         auto * snapshots = ggml_view_3d(f.ctx, gdn, state_size, 1, tokens,
@@ -3589,6 +3594,17 @@ static void run_gdn_snapshot_cpu_reference_case(int64_t tokens) {
         const float * hrx_state = accepted == 0 ? state.data() : hrx_snapshots.data() + offset;
         ggml_backend_tensor_set(c.state, cpu_state, 0, state_bytes);
         ggml_backend_tensor_set(h.state, hrx_state, 0, state_bytes);
+        compute_and_compare();
+    }
+    if (rms_scale_norm) {
+        // Small Q/K rows distinguish additive epsilon from the old L2 clamp.
+        for (int64_t t = 0; t < tokens; ++t) {
+            for (size_t i = 0; i < 2 * row_width; ++i) {
+                raw[3 * t * row_width + i] *= t == 0 ? 0.0f : 1.e-4f;
+            }
+        }
+        set(c.raw, h.raw, raw);
+        set(c.state, h.state, state);
         compute_and_compare();
     }
     for (auto * f : { &c, &h }) {
@@ -6160,6 +6176,8 @@ static void register_basic_ops_cases(Suite & suite) {
     for (int64_t tokens = 2; tokens <= 5; ++tokens) {
         suite.device_case("gdn_snapshot.cpu_reference." + std::to_string(tokens),
                           [tokens] { run_gdn_snapshot_cpu_reference_case(tokens); });
+        suite.device_case("gdn_snapshot.rms_scale.cpu_reference." + std::to_string(tokens),
+                          [tokens] { run_gdn_snapshot_cpu_reference_case(tokens, true); });
     }
     for (const ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
         suite.device_case("ssm_conv_prefill_recurrent." + type_name(type) + ".plain",

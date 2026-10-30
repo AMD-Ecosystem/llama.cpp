@@ -78,6 +78,90 @@ static bool append_covered_node(const DispatchMatchContext & context, const Grap
     return append_covered_node_index_once(context.graph, context.covered_nodes, node, match.covered_nodes);
 }
 
+struct GatedDeltaNetNormMatch {
+    const GraphNode * scale   = nullptr;
+    const Value *     input   = nullptr;
+    const Value *     output  = nullptr;
+    float             epsilon = 0.0f;
+};
+
+static const GraphNode * gated_delta_net_norm_root(const Graph & graph, ValueId output) {
+    const GraphNode * node = graph.index().producer(output);
+    if (node == nullptr) {
+        return nullptr;
+    }
+    const bool is_scale = node->op == GGML_OP_SCALE;
+    const bool unary_input = node->inputs.size() == 1;
+    const bool scaled_norm = is_scale && unary_input;
+    return scaled_norm ? producer_with_op(graph, node->inputs[0], GGML_OP_RMS_NORM) : node;
+}
+
+static GatedDeltaNetNormMatch match_gated_delta_net_norm(const Graph & graph, const GraphNode * node) {
+    if (node == nullptr) {
+        return {};
+    }
+    const bool is_l2 = node->op == GGML_OP_L2_NORM;
+    const bool is_rms = node->op == GGML_OP_RMS_NORM;
+    const bool unary_input = node->inputs.size() == 1;
+    const bool supported_norm = (is_l2 || is_rms) && unary_input;
+    if (!supported_norm) {
+        return {};
+    }
+    const auto * params = op_params_as<RmsNormParams>(node->params);
+    if (params == nullptr) {
+        return {};
+    }
+    const bool finite_epsilon = std::isfinite(params->eps);
+    const bool positive_epsilon = params->eps > 0.0f;
+    const bool supported_epsilon = finite_epsilon && positive_epsilon;
+    if (!supported_epsilon) {
+        return {};
+    }
+    GatedDeltaNetNormMatch match;
+    match.input   = graph_value(graph, node->inputs[0]);
+    match.output  = graph_value(graph, node->output);
+    match.epsilon = params->eps;
+    const bool f32_input = is_f32(match.input);
+    const bool f32_output = is_f32(match.output);
+    const bool f32_norm = f32_input && f32_output;
+    if (!f32_norm) {
+        return {};
+    }
+    if (is_rms) {
+        if (match.output->kind != ValueKind::Transient) {
+            return {};
+        }
+        match.scale = common_find_only_consumer_with_op(graph, node->output, GGML_OP_SCALE);
+        if (match.scale == nullptr) {
+            return {};
+        }
+        const auto * scale_params = op_params_as<ScaleParams>(match.scale->params);
+        if (scale_params == nullptr) {
+            return {};
+        }
+        const float width = static_cast<float>(match.input->ne[0]);
+        const bool unit_l2_scale = scale_params->scale == 1.0f / std::sqrt(width);
+        const bool zero_bias = scale_params->bias == 0.0f;
+        const bool l2_normalization = unit_l2_scale && zero_bias;
+        if (!l2_normalization) {
+            return {};
+        }
+        // RMS(eps / width) / sqrt(width) uses sum(x*x) + eps, not the L2 clamp.
+        match.epsilon *= width;
+        match.output = graph_value(graph, match.scale->output);
+        if (!is_f32(match.output)) {
+            return {};
+        }
+        const bool internal_output = match.output->kind == ValueKind::Transient;
+        const bool single_consumer = graph.index().has_single_consumer(match.output->id);
+        const bool can_elide_output = internal_output && single_consumer;
+        if (!can_elide_output) {
+            return {};
+        }
+    }
+    return match;
+}
+
 struct GatedDeltaNetMatch {
     std::vector<const GraphNode *> covered;
     const Value *                  alpha_raw      = nullptr;
@@ -102,6 +186,7 @@ struct GatedDeltaNetMatch {
     int64_t                        sequence_count = 0;
     int64_t                        snapshot_count = 0;
     float                          l2_epsilon     = 0.0f;
+    bool                           additive_epsilon = false;
 
     bool matched() const {
         return !covered.empty() && gate != nullptr && beta != nullptr && raw_q != nullptr && raw_k != nullptr &&
@@ -136,12 +221,13 @@ struct GatedDeltaNetProjectionPairMatch {
 
 static GatedDeltaNetMatch match_gated_delta_net(const Graph & graph, const GraphNode * node) {
     GatedDeltaNetMatch match;
-    if (node == nullptr || node->op != GGML_OP_L2_NORM || node->inputs.size() != 1 || !graph.has_index()) {
+    if (!graph.has_index()) {
         return match;
     }
 
-    const Value * raw_q  = graph_value(graph, node->inputs[0]);
-    const Value * q_norm = graph_value(graph, node->output);
+    const auto q_normalization = match_gated_delta_net_norm(graph, node);
+    const Value * raw_q  = q_normalization.input;
+    const Value * q_norm = q_normalization.output;
     if (!is_f32(raw_q) || !is_f32(q_norm)) {
         return {};
     }
@@ -159,17 +245,17 @@ static GatedDeltaNetMatch match_gated_delta_net(const Graph & graph, const Graph
     const Value *     beta        = graph_value(graph, gdn->inputs[4]);
     const Value *     state       = graph_value(graph, gdn->inputs[5]);
     const Value *     gdn_output  = graph_value(graph, gdn->output);
-    const GraphNode * k_norm_node = k_norm != nullptr ? producer_with_op(graph, k_norm->id, GGML_OP_L2_NORM) : nullptr;
-    const Value *     raw_k       = k_norm_node != nullptr && k_norm_node->inputs.size() == 1 ?
-                                        graph_value(graph, k_norm_node->inputs[0]) :
-                                        nullptr;
+    const GraphNode * k_norm_node = gated_delta_net_norm_root(graph, gdn->inputs[1]);
+    const auto k_normalization = match_gated_delta_net_norm(graph, k_norm_node);
+    const Value * raw_k = k_normalization.input;
     if (!is_f32(k_norm) || !is_f32(raw_k) || !is_f32(v) || !is_f32(gate) || !is_f32(beta) || !is_f32(state) ||
         !is_f32(gdn_output)) {
         return {};
     }
-    const RmsNormParams * l2_params = op_params_as<RmsNormParams>(node->params);
-    if (l2_params == nullptr || !std::isfinite(l2_params->eps) || l2_params->eps <= 0.0f ||
-        !op_params_equivalent(GGML_OP_L2_NORM, node->params, k_norm_node->params)) {
+    const bool matching_norm_ops = node->op == k_norm_node->op;
+    const bool matching_epsilon = q_normalization.epsilon == k_normalization.epsilon;
+    const bool matching_norms = matching_norm_ops && matching_epsilon;
+    if (!matching_norms) {
         return {};
     }
 
@@ -349,6 +435,10 @@ static GatedDeltaNetMatch match_gated_delta_net(const Graph & graph, const Graph
     match.covered        = { alpha_reshape, add_bias,       softplus,   gate_mul,    gate_reshape,
                              beta_reshape,  sigmoid,        node,       k_norm_node, state_reshape,
                              gdn,           new_state_view, cache_view, cache_copy,  attention_view };
+    if (q_normalization.scale != nullptr) {
+        match.covered.push_back(q_normalization.scale);
+        match.covered.push_back(k_normalization.scale);
+    }
     match.alpha_raw      = alpha_raw;
     match.beta_raw       = beta_raw;
     match.bias           = bias;
@@ -370,7 +460,8 @@ static GatedDeltaNetMatch match_gated_delta_net(const Graph & graph, const Graph
     match.token_count    = token_count;
     match.sequence_count = sequence_count;
     match.snapshot_count = snapshot_count;
-    match.l2_epsilon     = l2_params->eps;
+    match.l2_epsilon     = q_normalization.epsilon;
+    match.additive_epsilon = q_normalization.scale != nullptr;
     return match;
 }
 
@@ -400,7 +491,7 @@ static GatedDeltaNetProjectionPairMatch match_gated_delta_net_projection_pair(co
         return {};
     }
 
-    const GraphNode *        q_norm    = producer_with_op(context.graph, gdn->inputs[0], GGML_OP_L2_NORM);
+    const GraphNode *        q_norm    = gated_delta_net_norm_root(context.graph, gdn->inputs[0]);
     const GatedDeltaNetMatch gdn_match = match_gated_delta_net(context.graph, q_norm);
     if (!gdn_match.matched() || !gdn_match.has_projection_epilogue() || gdn_match.alpha_raw->id != first_node->output) {
         return {};
@@ -664,6 +755,7 @@ static void configure_gated_delta_net_kernel(Dispatch &                 dispatch
     set_compile_parameter(dispatch.kernel, "llm.gated_delta_net.query_head_count", match.q_head_count);
     set_compile_parameter(dispatch.kernel, "llm.gated_delta_net.query_sequence_ratio", 1);
     set_float_compile_parameter(dispatch.kernel, "llm.gated_delta_net.l2_epsilon", match.l2_epsilon);
+    set_compile_parameter(dispatch.kernel, "llm.gated_delta_net.additive_epsilon", match.additive_epsilon ? 1 : 0);
     set_compile_parameter(dispatch.kernel, "llm.gated_delta_net.workgroup_size", 256);
 }
 
@@ -1058,7 +1150,7 @@ static bool match_selected_gated_delta_net_dispatch(const DispatchMatchContext &
         gdn->inputs[5] != reshape->output) {
         return false;
     }
-    const GraphNode * q_norm = producer_with_op(graph, gdn->inputs[0], GGML_OP_L2_NORM);
+    const GraphNode * q_norm = gated_delta_net_norm_root(graph, gdn->inputs[0]);
     const GatedDeltaNetMatch match = match_gated_delta_net(graph, q_norm);
     if (!match.matched() || !match.has_projection_epilogue() || match.sequence_count != 1 ||
         match.token_count < 1 || match.token_count > 5 || match.snapshot_count < match.token_count ||
@@ -1196,6 +1288,14 @@ static bool match_selected_gated_delta_net_dispatch(const DispatchMatchContext &
 }  // namespace
 
 void register_llm_gated_delta_net_dispatch(DispatchRegistryBuilder & registry) {
+    registry.add({
+        "llm.gated_delta_net.rms_scale.f32_wmma_head128",
+        GGML_OP_RMS_NORM,
+        DispatchMatchKind::Fused,
+        200,
+        DispatchSource::Llm,
+        match_gated_delta_net_dispatch,
+    });
     registry.add({
         "llm.gated_delta_net.selected_snapshot.f32_wmma_head128",
         GGML_OP_GET_ROWS,

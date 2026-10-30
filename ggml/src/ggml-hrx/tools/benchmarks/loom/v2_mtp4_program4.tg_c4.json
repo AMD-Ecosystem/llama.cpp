@@ -339,6 +339,7 @@
         "llm.gated_delta_net.head_count": "48",
         "llm.gated_delta_net.head_width": "128",
         "llm.gated_delta_net.l2_epsilon": "9.99999997e-07",
+        "llm.gated_delta_net.additive_epsilon": "0",
         "llm.gated_delta_net.qk_stride1": "128",
         "llm.gated_delta_net.qk_stride2": "10240",
         "llm.gated_delta_net.qk_stride3": "40960",
