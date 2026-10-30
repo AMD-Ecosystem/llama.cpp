@@ -1472,6 +1472,7 @@ static void run_loom_jit_materialize_checks() {
         device, "ggml_rope_f32", { { "token_count", 3 }, { "input_span", 768 } },
         { { "token_count", 7 }, { "input_span", 1792 } },
         { { "ggml.rope_f32.head_size", "64" }, { "ggml.rope_f32.n_dims", "64" },
+          { "ggml.rope_f32.n_offs", "0" },
           { "ggml.rope_f32.head_count", "4" }, { "ggml.rope_f32.token_capacity", "8" },
           { "ggml.rope_f32.input_stride1", "64" }, { "ggml.rope_f32.input_stride2", "256" },
           { "ggml.rope_f32.mscale", "1" }, { "ggml.rope_f32.mode", "0" } });

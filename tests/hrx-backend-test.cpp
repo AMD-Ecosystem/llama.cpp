@@ -12968,7 +12968,7 @@ static void run_add_f32() {
     ggml_backend_free(backend);
 }
 
-static std::vector<float> run_rope_scale_numerical_case(ggml_backend_t backend, bool per_token, int mode) {
+static std::vector<float> run_rope_scale_numerical_case(ggml_backend_t backend, bool per_token, int mode, int offset) {
     ggml_init_params params = {};
     params.mem_size         = 512 * 1024;
     params.no_alloc         = true;
@@ -12986,6 +12986,7 @@ static std::vector<float> run_rope_scale_numerical_case(ggml_backend_t backend, 
     ggml_tensor * freqs  = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_dims / 2);
     ggml_tensor * rope =
         ggml_rope_ext(ctx, input, pos, freqs, n_dims, mode, 0, 10000.0f, 1.0f, 0.0f, 1.19024f, 32.0f, 1.0f);
+    ggml_rope_set_offset(rope, offset);
     ggml_tensor * scales = per_token ? ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, 1, token_count) : nullptr;
     ggml_tensor * output = per_token ? ggml_mul(ctx, rope, scales) : ggml_scale(ctx, rope, 0.0883883461f);
     REQUIRE(input != nullptr);
@@ -13035,12 +13036,14 @@ static void run_rope_scale_f32_numerics() {
 
     for (const bool per_token : { false, true }) {
         for (const int mode : { static_cast<int>(GGML_ROPE_TYPE_NORMAL), static_cast<int>(GGML_ROPE_TYPE_NEOX) }) {
-            const std::vector<float> expected = run_rope_scale_numerical_case(cpu, per_token, mode);
-            const std::vector<float> actual   = run_rope_scale_numerical_case(hrx, per_token, mode);
-            REQUIRE(actual.size() == expected.size());
-            for (size_t i = 0; i < actual.size(); ++i) {
-                const float tolerance = 2.0e-4f + 2.0e-4f * std::fabs(expected[i]);
-                REQUIRE(std::fabs(actual[i] - expected[i]) <= tolerance);
+            for (const int offset : { 0, 16, 32 }) {
+                const std::vector<float> expected = run_rope_scale_numerical_case(cpu, per_token, mode, offset);
+                const std::vector<float> actual   = run_rope_scale_numerical_case(hrx, per_token, mode, offset);
+                REQUIRE(actual.size() == expected.size());
+                for (size_t i = 0; i < actual.size(); ++i) {
+                    const float tolerance = 2.0e-4f + 2.0e-4f * std::fabs(expected[i]);
+                    REQUIRE(std::fabs(actual[i] - expected[i]) <= tolerance);
+                }
             }
         }
     }
@@ -13884,11 +13887,60 @@ static void run_gdn_selected_rms_q8_dispatch_checks(bool rms_scale_norm = false)
     ggml_free(ctx);
 }
 
+static void run_rope_offset_import_checks() {
+    ggml_init_params params = {};
+    params.mem_size         = 256 * 1024;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
+    ggml_tensor * input  = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 96, 40, 1);
+    ggml_tensor * pos    = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1);
+    ggml_tensor * rope0  = ggml_rope(ctx, input, pos, 32, GGML_ROPE_TYPE_NEOX);
+    ggml_tensor * rope64 = ggml_rope(ctx, input, pos, 32, GGML_ROPE_TYPE_NEOX);
+    ggml_rope_set_offset(rope64, 64);
+
+    const ggml::hrx::OpParams imported0  = ggml::hrx::import_op_params(*rope0);
+    const ggml::hrx::OpParams imported64 = ggml::hrx::import_op_params(*rope64);
+    const auto * params0  = ggml::hrx::op_params_as<ggml::hrx::RopeParams>(imported0);
+    const auto * params64 = ggml::hrx::op_params_as<ggml::hrx::RopeParams>(imported64);
+    REQUIRE(params0 != nullptr);
+    REQUIRE(params64 != nullptr);
+    REQUIRE(params0->n_offs == 0);
+    REQUIRE(params64->n_offs == 64);
+    REQUIRE(ggml::hrx::op_params_equivalent(GGML_OP_ROPE, imported0, *rope0));
+    REQUIRE(!ggml::hrx::op_params_equivalent(GGML_OP_ROPE, imported0, imported64));
+    REQUIRE(!ggml::hrx::op_params_equivalent(GGML_OP_ROPE, imported0, *rope64));
+
+    ggml_tensor * rows   = ggml_reshape_2d(ctx, rope64, 96 * 40, 1);
+    ggml_tensor * cache  = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, 96 * 40, 8);
+    ggml_tensor * ids    = ggml_new_tensor_1d(ctx, GGML_TYPE_I64, 1);
+    ggml_tensor * output = ggml_set_rows(ctx, cache, rows, ids);
+    ggml_cgraph * graph  = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, output);
+    ggml::hrx::GraphImportResult imported_graph = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported_graph.valid());
+    ggml::hrx::DispatchScheduler scheduler;
+    REQUIRE(scheduler.schedule_graph(imported_graph.graph, test_dispatch_target()));
+    REQUIRE(scheduler.plan().valid());
+    const auto & dispatches = scheduler.plan().dispatches;
+    const auto rope_dispatch = std::find_if(dispatches.begin(), dispatches.end(), [](const auto & dispatch) {
+        return kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_rope_f32";
+    });
+    REQUIRE(rope_dispatch != dispatches.end());
+    require_compile_parameter(*rope_dispatch, "ggml.rope_f32.n_offs", "64");
+    for (const auto & dispatch : dispatches) {
+        REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) != "loom_libs:ggml_rope_set_rows_f32");
+    }
+
+    ggml_free(ctx);
+}
+
 static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
     suite.host_case("status", [] { run_status_checks(); });
     suite.host_case("command_plan_metadata", [] { run_command_plan_metadata_checks(); });
     suite.host_case("dispatch_registry", [] { run_dispatch_registry_checks(); });
     suite.host_case("graph_import", [] { run_graph_import_checks(); });
+    suite.host_case("rope_offset_import", [] { run_rope_offset_import_checks(); });
     suite.host_case("graph_import_mixed_backend_boundary", [] { run_graph_import_mixed_backend_boundary_checks(); });
     suite.host_case("graph_view_external_use", [] { run_graph_view_external_use_checks(); });
     suite.host_case("scale_f32_dispatch", [] { run_scale_f32_dispatch_checks(); });
