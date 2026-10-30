@@ -8,6 +8,7 @@
 #include "runtime/kernel-executable-cache.h"
 #include "runtime/prepared-command-program-cache.h"
 #include "runtime/transient-arena.h"
+#include "runtime/weight-submission-tracker.h"
 
 #include <atomic>
 #include <cstddef>
@@ -32,9 +33,25 @@ struct ggml_backend_hrx_buffer_context {
     hrx_buffer_t                      buffer;
     uint8_t *                         base;
     uint64_t                          identity;
-    uint64_t                          generation;
+    std::atomic<uint64_t>             generation;
     bool                              direct_host_binding;
+    bool                              imported;
+    size_t                            physical_offset = 0;
+    size_t                            physical_capacity = 0;
+    uint8_t *                         retained_base = nullptr;
+    std::shared_ptr<std::atomic<uint64_t>> shared_generation;
 };
+
+inline uint64_t ggml_backend_hrx_buffer_generation(const ggml_backend_hrx_buffer_context * context) {
+    return context->shared_generation ? context->shared_generation->load() : context->generation.load();
+}
+
+inline void ggml_backend_hrx_set_buffer_generation(ggml_backend_hrx_buffer_context * context, uint64_t generation) {
+    context->generation = generation;
+    if (context->shared_generation) {
+        *context->shared_generation = generation;
+    }
+}
 
 struct ggml_backend_hrx_device_context {
     hrx_device_t                                   device = nullptr;
@@ -63,6 +80,7 @@ struct ggml_backend_hrx_context {
     ggml::hrx::TransientArena              transient_arena;
     ggml::hrx::HostTransferManager         host_transfers;
     ggml::hrx::HostWeightCache             host_weights;
+    ggml::hrx::WeightSubmissionTracker     weight_submissions;
     ggml::hrx::GraphReplayStreamState      graph_replay_state;
     std::string                            name;
 };

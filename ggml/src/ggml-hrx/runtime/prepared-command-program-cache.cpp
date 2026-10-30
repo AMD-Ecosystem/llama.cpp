@@ -1,5 +1,6 @@
 #include "prepared-command-program-cache.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -98,12 +99,14 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
     if (graph_uid == 0 || !commands.valid() || !bindings.valid()) {
         result.graph_replay_event             = HrxGraphReplayEvent::Ineligible;
         result.graph_replay_ineligible_reason = "uncached_graph";
-        PreparedCommandProgram prepared       = prepare_command_program(context, commands, bindings);
-        if (!prepared.valid()) {
-            result.status.append(prepared.status);
+        auto resources = std::make_shared<CachedCommandProgramResources>();
+        resources->prepared = prepare_command_program(context, commands, bindings);
+        if (!resources->prepared.valid()) {
+            result.status.append(resources->prepared.status);
             return result;
         }
-        result.success = bind_and_execute_prepared_command_program(context, commands, bindings, prepared);
+        result.execution_resources = resources;
+        result.success = bind_and_execute_prepared_command_program(context, commands, bindings, resources->prepared);
         if (!result.success) {
             result.status.log("execute uncached HRX command program failed");
         }
@@ -112,33 +115,33 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
 
     const Key              key = cache_key(graph_uid, context, command_shape_hash, bindings);
     std::shared_ptr<Entry> entry;
-    bool                   created_entry = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         auto                        found = programs_.find(key);
         if (found == programs_.end()) {
             entry = std::make_shared<Entry>();
             programs_.emplace(key, entry);
-            created_entry = true;
         } else {
             entry = found->second;
         }
     }
 
     std::lock_guard<std::mutex> entry_lock(entry->mutex);
-    if (entry->has_program && entry->program.valid()) {
+    if (entry->resources != nullptr && entry->resources->prepared.valid()) {
+        auto & resources = *entry->resources;
+        result.execution_resources = entry->resources;
         record_hit();
         if (debug_serial_command_execution_enabled()) {
             result.graph_replay_event             = HrxGraphReplayEvent::Disabled;
             result.graph_replay_ineligible_reason = "debug_serial_execution";
-            result.success = bind_and_execute_prepared_command_program(context, commands, bindings, entry->program);
+            result.success = bind_and_execute_prepared_command_program(context, commands, bindings, resources.prepared);
             if (!result.success) {
                 result.status.log("execute cached HRX command program failed");
             }
             return result;
         }
         const RecordedCommandGraphExecutionResult replay =
-            bind_and_launch_recorded_command_graph(context, commands, bindings, entry->program, entry->recorded);
+            bind_and_launch_recorded_command_graph(context, commands, bindings, resources.prepared, resources.recorded);
         apply_graph_replay_result(result, replay);
         if (replay.success) {
             result.success = true;
@@ -151,33 +154,27 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
             }
             return result;
         }
-        result.success = bind_and_execute_prepared_command_program(context, commands, bindings, entry->program);
+        result.success = bind_and_execute_prepared_command_program(context, commands, bindings, resources.prepared);
         if (!result.success) {
             result.status.log("execute cached HRX command program failed");
         }
         return result;
     }
 
-    PreparedCommandProgram prepared = prepare_command_program(context, commands, bindings);
-    if (!prepared.valid()) {
-        if (created_entry) {
-            std::lock_guard<std::mutex> lock(mutex_);
-            const auto                  found = programs_.find(key);
-            if (found != programs_.end() && found->second == entry && !entry->has_program) {
-                programs_.erase(found);
-            }
-        }
-        result.status.append(prepared.status);
+    auto resources = std::make_shared<CachedCommandProgramResources>();
+    resources->prepared = prepare_command_program(context, commands, bindings);
+    if (!resources->prepared.valid()) {
+        result.status.append(resources->prepared.status);
         return result;
     }
-    entry->program     = std::move(prepared);
-    entry->has_program = true;
+    entry->resources = resources;
+    result.execution_resources = resources;
     record_build();
 
     if (debug_serial_command_execution_enabled()) {
         result.graph_replay_event             = HrxGraphReplayEvent::Disabled;
         result.graph_replay_ineligible_reason = "debug_serial_execution";
-        result.success = bind_and_execute_prepared_command_program(context, commands, bindings, entry->program);
+        result.success = bind_and_execute_prepared_command_program(context, commands, bindings, resources->prepared);
         if (!result.success) {
             result.status.log("execute prepared HRX command program failed");
         }
@@ -185,7 +182,7 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
     }
 
     const RecordedCommandGraphExecutionResult replay =
-        bind_and_launch_recorded_command_graph(context, commands, bindings, entry->program, entry->recorded);
+        bind_and_launch_recorded_command_graph(context, commands, bindings, resources->prepared, resources->recorded);
     apply_graph_replay_result(result, replay);
     if (replay.success) {
         result.success = true;
@@ -198,7 +195,7 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
         }
         return result;
     }
-    result.success = bind_and_execute_prepared_command_program(context, commands, bindings, entry->program);
+    result.success = bind_and_execute_prepared_command_program(context, commands, bindings, resources->prepared);
     if (!result.success) {
         result.status.log("execute prepared HRX command program failed");
     }
@@ -213,6 +210,32 @@ PreparedCommandProgramCacheStats PreparedCommandProgramCache::stats() const {
 void PreparedCommandProgramCache::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     programs_.clear();
+}
+
+void PreparedCommandProgramCache::invalidate_obsolete_weights(const std::vector<HostWeightSource> & current_demand) {
+    std::vector<std::shared_ptr<Entry>> entries;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        entries.reserve(programs_.size());
+        for (const auto & program : programs_) {
+            entries.push_back(program.second);
+        }
+    }
+    for (const auto & entry : entries) {
+        std::lock_guard<std::mutex> entry_lock(entry->mutex);
+        if (entry->resources == nullptr) {
+            continue;
+        }
+        bool obsolete = false;
+        for (const HostWeightLease & lease : entry->resources->prepared.resident_host_weights) {
+            const bool demanded = std::any_of(current_demand.begin(), current_demand.end(),
+                                              [&](const HostWeightSource & source) { return lease.matches(source); });
+            obsolete |= !demanded;
+        }
+        if (obsolete) {
+            entry->resources.reset();
+        }
+    }
 }
 
 void PreparedCommandProgramCache::record_build() {

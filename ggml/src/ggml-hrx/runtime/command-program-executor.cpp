@@ -59,6 +59,10 @@ void GraphReplayStreamState::add_host_writeback(void *       host_destination,
     pending_host_writebacks_.push_back({ host_destination, mapped_source, size, buffer });
 }
 
+bool GraphReplayStreamState::has_pending_host_writebacks() const {
+    return !pending_host_writebacks_.empty();
+}
+
 PreparedProgramConstantBuffer::~PreparedProgramConstantBuffer() {
     if (buffer != nullptr) {
         hrx_buffer_release(buffer);
@@ -107,6 +111,7 @@ RecordedCommandGraph::RecordedCommandGraph(RecordedCommandGraph && other) noexce
     graph(std::exchange(other.graph, nullptr)),
     exec(std::exchange(other.exec, nullptr)),
     retained_buffers(std::move(other.retained_buffers)),
+    resident_host_weights(std::move(other.resident_host_weights)),
     retained_executables(std::move(other.retained_executables)),
     bound_transient_arena_allocation_id(other.bound_transient_arena_allocation_id),
     dispatch_count(other.dispatch_count),
@@ -132,6 +137,7 @@ RecordedCommandGraph & RecordedCommandGraph::operator=(RecordedCommandGraph && o
         graph                                = std::exchange(other.graph, nullptr);
         exec                                 = std::exchange(other.exec, nullptr);
         retained_buffers                          = std::move(other.retained_buffers);
+        resident_host_weights                     = std::move(other.resident_host_weights);
         retained_executables                      = std::move(other.retained_executables);
         bound_transient_arena_allocation_id  = other.bound_transient_arena_allocation_id;
         dispatch_count                       = other.dispatch_count;
@@ -699,18 +705,9 @@ static Dispatch build_dispatch(const ResolvedCommand & command) {
 }
 
 struct GraphValueAccess {
-    bool read  = false;
-    bool write = false;
+    bool read       = false;
+    bool write      = false;
     bool main_write = false;
-    bool        native_read         = false;
-    bool        transformed_read    = false;
-    bool        layout_conflict     = false;
-    std::string layout              = kNativeWeightLayout;
-    ggml_type   source_type         = GGML_TYPE_COUNT;
-    int64_t     input_size          = 0;
-    int64_t     output_size         = 0;
-    size_t      source_length       = 0;
-    size_t      materialized_length = 0;
 };
 
 static std::unordered_map<int32_t, GraphValueAccess> collect_graph_value_access(const CommandProgram & commands) {
@@ -735,44 +732,56 @@ static std::unordered_map<int32_t, GraphValueAccess> collect_graph_value_access(
                         access.write = true;
                         break;
                 }
-                if (binding.access == ResourceAccess::Write) {
-                    continue;
-                }
-                if (binding.layout == kNativeWeightLayout) {
-                    access.native_read = true;
-                    if (access.transformed_read) {
-                        access.layout_conflict = true;
-                    }
-                    continue;
-                }
-                if (binding.offset != 0 || binding.source_length == 0 || binding.length == 0 ||
-                    binding.source_type == GGML_TYPE_COUNT || binding.input_size <= 0 || binding.output_size <= 0) {
-                    access.layout_conflict = true;
-                    continue;
-                }
-                if (!access.transformed_read) {
-                    access.transformed_read    = true;
-                    access.layout              = binding.layout;
-                    access.source_type         = binding.source_type;
-                    access.input_size          = binding.input_size;
-                    access.output_size         = binding.output_size;
-                    access.source_length       = binding.source_length;
-                    access.materialized_length = binding.length;
-                } else if (access.layout != binding.layout || access.source_type != binding.source_type ||
-                           access.input_size != binding.input_size || access.output_size != binding.output_size ||
-                           access.source_length != binding.source_length ||
-                           access.materialized_length != binding.length) {
-                    access.layout_conflict = true;
-                }
-                if (access.native_read) {
-                    access.layout_conflict = true;
-                }
             }
         }
     };
     append_command_list_access(commands.initialization_commands, false);
     append_command_list_access(commands.commands, true);
     return access_by_value;
+}
+
+static bool same_weight_request(const CommandBinding & lhs, const CommandBinding & rhs) {
+    const bool same_value = lhs.value == rhs.value;
+    const bool same_layout = lhs.layout == rhs.layout;
+    const bool native_layout = lhs.layout == kNativeWeightLayout;
+    const bool same_transformation = native_layout ||
+        (lhs.source_type == rhs.source_type && lhs.input_size == rhs.input_size &&
+         lhs.output_size == rhs.output_size && lhs.source_length == rhs.source_length && lhs.length == rhs.length);
+    return same_value && same_layout && same_transformation;
+}
+
+static void append_weight_requests(const std::vector<Command> & commands,
+                                   const std::unordered_map<int32_t, GraphValueAccess> & access_by_value,
+                                   std::unordered_map<int32_t, std::vector<size_t>> & groups_by_value,
+                                   CommandProgramWeightRequests & result) {
+    for (const Command & command : commands) {
+        for (const CommandBinding & request : command.bindings) {
+            const bool graph_value = request.origin == CommandBindingOrigin::GraphValue;
+            const bool reads = request.access != ResourceAccess::Write;
+            const bool eligible_access = graph_value && reads;
+            if (!eligible_access) {
+                continue;
+            }
+            const auto found_access = access_by_value.find(request.value.value);
+            const bool value_has_access = found_access != access_by_value.end();
+            const bool value_is_written = value_has_access && found_access->second.write;
+            if (value_is_written) {
+                continue;
+            }
+            auto & groups = groups_by_value[request.value.value];
+            const auto found_group = std::find_if(groups.begin(), groups.end(), [&](size_t index) {
+                return same_weight_request(result.requests[index].binding, request);
+            });
+            size_t group;
+            if (found_group == groups.end()) {
+                group = result.group_count++;
+                groups.push_back(result.requests.size());
+            } else {
+                group = result.requests[*found_group].group;
+            }
+            result.requests.push_back({ request, group });
+        }
+    }
 }
 
 static CommandProgramBindings materialize_host_bindings(const CommandProgramExecutionContext & context,
@@ -783,57 +792,52 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
     Status                             status;
     materialized.reserve(bindings.bindings().size());
     const std::unordered_map<int32_t, GraphValueAccess> access_by_value = collect_graph_value_access(commands);
+    const CommandProgramWeightDemands demands = collect_command_program_weight_demands(commands, bindings);
+    status.append(demands.status);
     for (const CommandProgramBinding & binding : bindings.bindings()) {
         const auto             found_access = access_by_value.find(binding.value.value);
         const GraphValueAccess access =
             found_access != access_by_value.end() ? found_access->second : GraphValueAccess{};
-        const bool materialize_weight = binding.weight && access.read && !access.write &&
-                                        (binding.requires_materialization() || access.transformed_read);
-        if (binding.length == 0 || (!binding.requires_materialization() && !materialize_weight)) {
+        const bool managed_weight = binding.weight && access.read && !access.write &&
+                                    binding.source_host_data != nullptr;
+        const bool empty_binding = binding.length == 0;
+        const bool directly_bindable = !binding.requires_materialization() && !managed_weight;
+        // Elided operations can leave external weights with no command users.
+        const bool unused_binding = !access.read && !access.write;
+        const bool use_existing_binding = empty_binding || directly_bindable || unused_binding;
+        if (use_existing_binding) {
             materialized.push_back(binding);
             continue;
         }
-        if (materialize_weight) {
-            if (access.layout_conflict) {
-                status.log("weight value %d has conflicting resident layout requests", binding.value.value);
-                materialized.push_back(binding);
-                continue;
+        if (managed_weight) {
+            for (const CommandProgramWeightDemand & demand : demands.weights) {
+                if (demand.request.value != binding.value) {
+                    continue;
+                }
+                CommandProgramBinding device_binding = binding;
+                device_binding.layout = demand.request.layout;
+                device_binding.layout_source_type = demand.request.source_type;
+                device_binding.input_size = demand.request.input_size;
+                device_binding.output_size = demand.request.output_size;
+                device_binding.source_length = demand.request.source_length;
+                if (demand.requires_materialization) {
+                    HostWeightAcquireResult resident = context.host_weights->acquire(
+                        context.device, context.stream, *context.host_transfers, demand.source);
+                    if (!resident.valid()) {
+                        status.log("materialize host weight value %d layout %s failed", binding.value.value,
+                                   demand.request.layout.c_str());
+                        status.append(resident.status);
+                        continue;
+                    }
+                    device_binding.buffer = resident.lease.buffer();
+                    device_binding.host_data = nullptr;
+                    device_binding.offset = 0;
+                    device_binding.length = resident.lease.length();
+                    device_binding.capacity = resident.lease.length();
+                    prepared.resident_host_weights.push_back(std::move(resident.lease));
+                }
+                materialized.push_back(std::move(device_binding));
             }
-            HostWeightSource source;
-            source.host_data  = binding.host_data;
-            source.device_buffer       = binding.host_data == nullptr ? binding.buffer : nullptr;
-            source.identity   = binding.identity;
-            source.generation = binding.generation;
-            source.capacity   = binding.capacity;
-            source.offset     = binding.offset;
-            source.length              = access.transformed_read ? access.source_length : binding.length;
-            source.materialized_length = access.transformed_read ? access.materialized_length : binding.length;
-            source.layout              = access.layout;
-            source.source_type         = access.source_type;
-            source.input_size          = access.input_size;
-            source.output_size         = access.output_size;
-            if (source.length > binding.length) {
-                status.log("weight value %d layout source length %zu exceeds runtime length %zu", binding.value.value,
-                           source.length, binding.length);
-                materialized.push_back(binding);
-                continue;
-            }
-            HostWeightAcquireResult resident =
-                context.host_weights->acquire(context.device, context.stream, *context.host_transfers, source);
-            if (!resident.valid()) {
-                status.log("materialize host weight value %d failed", binding.value.value);
-                status.append(resident.status);
-                materialized.push_back(binding);
-                continue;
-            }
-            CommandProgramBinding device_binding = binding;
-            device_binding.buffer                = resident.lease.buffer();
-            device_binding.host_data             = nullptr;
-            device_binding.offset                = 0;
-            device_binding.length                = resident.lease.length();
-            device_binding.capacity              = resident.lease.length();
-            materialized.push_back(device_binding);
-            prepared.resident_host_weights.push_back(std::move(resident.lease));
             continue;
         }
 
@@ -865,6 +869,11 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
         device_binding.capacity              = binding.length;
         materialized.push_back(device_binding);
         prepared.host_staging.push_back(std::move(staging));
+    }
+    const bool can_report_residency = status.success() && context.host_weights != nullptr;
+    if (can_report_residency) {
+        context.host_weights->report_coexisting_representations(prepared.resident_host_weights,
+                                                                "same command program");
     }
     return CommandProgramBindings::from_bindings(std::move(materialized), status);
 }
@@ -1647,6 +1656,8 @@ static void retain_prepared_command_list_resources(const std::vector<PreparedCom
 static void retain_prepared_command_graph_resources(const PreparedCommandProgram &      prepared,
                                                     const TransientArenaAllocationRef & allocation,
                                                     RecordedCommandGraph &              recorded) {
+    // The graph also retains raw handles, but accounting follows the representation lease until both owners retire.
+    recorded.resident_host_weights = prepared.resident_host_weights;
     std::unordered_map<hrx_buffer_t, bool>     retained_buffers;
     std::unordered_map<hrx_executable_t, bool> retained_executables;
     if (allocation.buffer != nullptr) {
@@ -1777,6 +1788,91 @@ static bool execute_prepared_command_prefix_via_graph(const CommandProgramExecut
 }
 
 }  // namespace
+
+CommandProgramWeightRequests build_command_program_weight_requests(const CommandProgram & commands) {
+    CommandProgramWeightRequests result;
+    std::unordered_map<int32_t, std::vector<size_t>> groups_by_value;
+    const auto access_by_value = collect_graph_value_access(commands);
+    append_weight_requests(commands.initialization_commands, access_by_value, groups_by_value, result);
+    append_weight_requests(commands.commands, access_by_value, groups_by_value, result);
+    return result;
+}
+
+CommandProgramWeightDemands bind_command_program_weight_demands(const CommandProgramWeightRequests & requests,
+                                                               const CommandProgramBindings & bindings) {
+    CommandProgramWeightDemands result;
+    std::unordered_map<int32_t, const CommandProgramBinding *> bindings_by_value;
+    bindings_by_value.reserve(bindings.bindings().size());
+    for (const CommandProgramBinding & binding : bindings.bindings()) {
+        bindings_by_value.try_emplace(binding.value.value, &binding);
+    }
+    std::vector<uint8_t> emitted_groups(requests.group_count, 0);
+    result.weights.reserve(requests.group_count);
+    for (const CommandProgramWeightRequest & entry : requests.requests) {
+        const CommandBinding & request = entry.binding;
+        const auto found_binding = bindings_by_value.find(request.value.value);
+        const CommandProgramBinding * binding =
+            found_binding != bindings_by_value.end() ? found_binding->second : nullptr;
+        const bool bound_weight = binding != nullptr && binding->weight;
+        if (!bound_weight) {
+            continue;
+        }
+        const bool transformed = request.layout != kNativeWeightLayout;
+        const bool retained_source = binding->source_host_data != nullptr;
+        const bool missing_transformed_source = transformed && !retained_source;
+        if (missing_transformed_source) {
+            result.status.log("weight value %d has no retained source for transformed layout %s",
+                              request.value.value, request.layout.c_str());
+            continue;
+        }
+        if (!retained_source) {
+            continue;
+        }
+        if (transformed) {
+            const bool valid_shape = request.source_type != GGML_TYPE_COUNT && request.input_size > 0 &&
+                                     request.output_size > 0;
+            const bool valid_range = request.offset == 0 && request.source_length != 0 &&
+                                     request.source_length <= binding->length && request.length != 0;
+            const bool valid_transformation = valid_shape && valid_range;
+            if (!valid_transformation) {
+                result.status.log("weight value %d has invalid transformed layout request %s",
+                                  request.value.value, request.layout.c_str());
+                continue;
+            }
+        }
+        // Validation precedes deduplication: an invalid duplicate must still report its error,
+        // and an invalid first occurrence must not suppress a later valid request.
+        if (emitted_groups[entry.group]) {
+            continue;
+        }
+        emitted_groups[entry.group] = 1;
+        CommandProgramWeightDemand demand;
+        demand.request = request;
+        demand.requires_materialization = binding->requires_materialization() || transformed;
+        demand.source.host_data = binding->source_host_data;
+        demand.source.identity = binding->identity;
+        demand.source.generation = binding->generation;
+        demand.source.capacity = binding->source_capacity;
+        demand.source.offset = binding->source_offset;
+        demand.source.length = transformed ? request.source_length : binding->length;
+        demand.source.region_length = binding->length;
+        demand.source.region_type = binding->source_type;
+        demand.source.materialized_length = transformed ? request.length : binding->length;
+        demand.source.layout = request.layout;
+        demand.source.source_type = transformed ? request.source_type : binding->source_type;
+        demand.source.input_size = request.input_size;
+        demand.source.output_size = request.output_size;
+        demand.source.source_ne = binding->source_ne;
+        demand.source.source_nb = binding->source_nb;
+        result.weights.push_back(std::move(demand));
+    }
+    return result;
+}
+
+CommandProgramWeightDemands collect_command_program_weight_demands(const CommandProgram & commands,
+                                                                  const CommandProgramBindings & bindings) {
+    return bind_command_program_weight_demands(build_command_program_weight_requests(commands), bindings);
+}
 
 bool debug_serial_command_execution_enabled() {
     return environment_flag_enabled("GGML_HRX_DEBUG_SERIAL_EXECUTION") || dispatch_trace_enabled();

@@ -23,7 +23,7 @@ static Status resolve_command_binding(const Command &                     comman
     switch (binding.origin) {
         case CommandBindingOrigin::GraphValue:
             {
-                const CommandProgramBinding * concrete = bindings.find(binding.value);
+                const CommandProgramBinding * concrete = bindings.find(binding);
                 if (concrete == nullptr) {
                     status.log("%s %s is not bound", command_context.c_str(), binding_context.c_str());
                     return status;

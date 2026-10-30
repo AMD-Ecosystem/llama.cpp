@@ -1,6 +1,7 @@
 #include "host-memory.h"
 
 #include "ggml-quants.h"
+#include "ggml-impl.h"
 #include "hrx-interop-utils.h"
 #include "hrx_runtime.h"
 
@@ -10,7 +11,9 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <limits>
+#include <map>
 #include <sstream>
 #include <thread>
 #include <utility>
@@ -21,6 +24,7 @@ namespace {
 
 static constexpr size_t kMaxInlineUploadBytes = 63 * 1024;
 static constexpr size_t kLargeHostUploadBytes = 1024 * 1024;
+static constexpr size_t kQ6PackScratchLimitBytes = 64 * 1024 * 1024;
 
 static bool mapped_download_staging_enabled() {
     static const bool enabled = [] {
@@ -1427,16 +1431,39 @@ void HostTransferManager::clear() {
     stats_ = {};
 }
 
+struct HostWeightAccounting {
+    std::mutex mutex;
+    size_t allocation_count = 0;
+    size_t resident_bytes = 0;
+    size_t peak_resident_bytes = 0;
+};
+
 struct HostWeightLease::Entry {
     ~Entry() {
         if (buffer != nullptr) {
             hrx_buffer_release(buffer);
+        }
+        if (accounting != nullptr) {
+            std::lock_guard<std::mutex> lock(accounting->mutex);
+            --accounting->allocation_count;
+            accounting->resident_bytes -= length;
         }
     }
 
     hrx_buffer_t buffer = nullptr;
     size_t       length = 0;
     std::string  layout;
+    uint64_t     source_identity = 0;
+    uint64_t     source_generation = 0;
+    size_t       source_capacity = 0;
+    size_t       source_offset = 0;
+    size_t       source_length = 0;
+    ggml_type    source_type = GGML_TYPE_COUNT;
+    int64_t      input_size = 0;
+    int64_t      output_size = 0;
+    std::array<int64_t, GGML_MAX_DIMS> source_ne = {};
+    std::array<size_t, GGML_MAX_DIMS> source_nb = {};
+    std::shared_ptr<HostWeightAccounting> accounting;
 };
 
 HostWeightLease::HostWeightLease(std::shared_ptr<Entry> entry) : entry_(std::move(entry)) {}
@@ -1457,6 +1484,22 @@ const std::string & HostWeightLease::layout() const {
     static const std::string empty;
     return entry_ != nullptr ? entry_->layout : empty;
 }
+
+bool HostWeightLease::matches(const HostWeightSource & source) const {
+    if (!valid()) {
+        return false;
+    }
+    const Entry & entry = *entry_;
+    const size_t materialized_length = source.layout == kNativeWeightLayout ? source.length : source.materialized_length;
+    return entry.source_identity == source.identity && entry.source_generation == source.generation &&
+           entry.source_capacity == source.capacity && entry.source_offset == source.offset &&
+           entry.source_length == source.length && entry.length == materialized_length &&
+           entry.layout == source.layout && entry.source_type == source.source_type &&
+           entry.input_size == source.input_size && entry.output_size == source.output_size &&
+           entry.source_ne == source.source_ne && entry.source_nb == source.source_nb;
+}
+
+HostWeightCache::HostWeightCache() : accounting_(std::make_shared<HostWeightAccounting>()) {}
 
 HostWeightCache::~HostWeightCache() {
     clear();
@@ -1480,6 +1523,10 @@ size_t HostWeightCache::SourceKeyHash::operator()(const SourceKey & key) const {
     mix(static_cast<uint64_t>(key.source_type));
     mix(static_cast<uint64_t>(key.input_size));
     mix(static_cast<uint64_t>(key.output_size));
+    for (size_t dimension = 0; dimension < GGML_MAX_DIMS; ++dimension) {
+        mix(static_cast<uint64_t>(key.source_ne[dimension]));
+        mix(static_cast<uint64_t>(key.source_nb[dimension]));
+    }
     return static_cast<size_t>(hash);
 }
 
@@ -1513,15 +1560,21 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
 
     const SourceKey key{ source.identity,   source.generation,   source.capacity, source.offset,
                          source.length,     materialized_length, source.layout,   source.source_type,
-                         source.input_size, source.output_size };
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        const auto                  found = entries_.find(key);
-        if (found != entries_.end()) {
-            ++stats_.hits;
-            result.lease = HostWeightLease(found->second);
-            return result;
-        }
+                         source.input_size, source.output_size, source.source_ne, source.source_nb };
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto found = entries_.find(key);
+    if (found != entries_.end()) {
+        ++stats_.hits;
+        result.lease = HostWeightLease(found->second);
+        return result;
+    }
+    if (fail_cold_after_ == 0) {
+        fail_cold_after_ = SIZE_MAX;
+        result.status.log("injected host weight acquisition failure");
+        return result;
+    }
+    if (fail_cold_after_ != SIZE_MAX) {
+        --fail_cold_after_;
     }
 
     HostWeightSource        materialization_source = source;
@@ -1553,10 +1606,25 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
         materialization_source.offset        = 0;
     }
 
+    const bool q6_packed = source.layout == kQ6KPackedK256Row64ScaleRowLayout;
+    const bool scratch_fits = materialized_length <= kQ6PackScratchLimitBytes;
+    auto scratch = q6_pack_scratch_.find(materialized_length);
+    const bool scratch_exists = scratch != q6_pack_scratch_.end();
+    const bool scratch_has_room = materialized_length <= kQ6PackScratchLimitBytes - q6_pack_scratch_bytes_;
+    const bool use_scratch = q6_packed && scratch_fits && (scratch_exists || scratch_has_room);
+    const bool create_scratch = use_scratch && !scratch_exists;
+    if (create_scratch) {
+        scratch = q6_pack_scratch_.emplace(materialized_length, std::vector<uint8_t>{}).first;
+        q6_pack_scratch_bytes_ += materialized_length;
+    }
+
     const void *         upload_data = nullptr;
     size_t               upload_size = 0;
     std::vector<uint8_t> transformed;
-    result.status = materialize_weight(materialization_source, upload_data, upload_size, transformed);
+    // Budget 64 MiB of host scratch across phase transitions. The Q6 packer
+    // writes every output byte, and the cache lock covers packing and upload.
+    std::vector<uint8_t> & output = use_scratch ? scratch->second : transformed;
+    result.status = materialize_weight(materialization_source, upload_data, upload_size, output);
     if (mapped_canonical.lock.owns_lock()) {
         mapped_canonical.lock.unlock();
     }
@@ -1572,40 +1640,148 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
     auto entry    = std::make_shared<HostWeightLease::Entry>();
     entry->length = materialized_length;
     entry->layout = source.layout;
+    entry->source_identity = source.identity;
+    entry->source_generation = source.generation;
+    entry->source_capacity = source.capacity;
+    entry->source_offset = source.offset;
+    entry->source_length = source.length;
+    entry->source_type = source.source_type;
+    entry->input_size = source.input_size;
+    entry->output_size = source.output_size;
+    entry->source_ne = source.source_ne;
+    entry->source_nb = source.source_nb;
     result.status = allocate_device_buffer(device, materialized_length, entry->buffer);
     if (!result.status.success()) {
         return result;
+    }
+    entry->accounting = accounting_;
+    {
+        std::lock_guard<std::mutex> accounting_lock(accounting_->mutex);
+        ++accounting_->allocation_count;
+        accounting_->resident_bytes += materialized_length;
+        accounting_->peak_resident_bytes = std::max(accounting_->peak_resident_bytes, accounting_->resident_bytes);
     }
     result.status = transfers.upload_synchronous(stream, upload_data, entry->buffer, 0, upload_size);
     if (!result.status.success()) {
         return result;
     }
 
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        const auto                  inserted = entries_.emplace(key, entry);
-        if (!inserted.second) {
-            ++stats_.hits;
-            result.lease = HostWeightLease(inserted.first->second);
-            return result;
-        }
-        ++stats_.misses;
-        stats_.allocation_count = entries_.size();
-        stats_.resident_bytes += materialized_length;
-    }
+    entries_.emplace(key, entry);
+    ++stats_.misses;
+    stats_.materialized_bytes += materialized_length;
     result.lease = HostWeightLease(std::move(entry));
     return result;
 }
 
 HostWeightCacheStats HostWeightCache::stats() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return stats_;
+    std::lock_guard<std::mutex> accounting_lock(accounting_->mutex);
+    HostWeightCacheStats result = stats_;
+    result.allocation_count = accounting_->allocation_count;
+    result.resident_bytes = accounting_->resident_bytes;
+    result.peak_resident_bytes = accounting_->peak_resident_bytes;
+    return result;
+}
+
+void HostWeightCache::report_coexisting_representations(const std::vector<HostWeightLease> & leases,
+                                                       const char * reason) {
+    struct Allocation {
+        hrx_buffer_t buffer = nullptr;
+        std::string layout;
+        size_t bytes = 0;
+        uint64_t generation = 0;
+    };
+    struct Region {
+        uint64_t identity = 0;
+        size_t offset = 0;
+        size_t length = 0;
+        std::vector<Allocation> allocations;
+    };
+    std::map<std::string, Region> regions;
+    for (const HostWeightLease & lease : leases) {
+        if (!lease.valid()) {
+            continue;
+        }
+        const HostWeightLease::Entry & entry = *lease.entry_;
+        std::ostringstream key;
+        key << entry.source_identity << ':' << entry.source_capacity << ':'
+            << entry.source_offset << ':' << entry.source_length << ':' << static_cast<int>(entry.source_type);
+        for (size_t dimension = 0; dimension < GGML_MAX_DIMS; ++dimension) {
+            key << ':' << entry.source_ne[dimension] << ':' << entry.source_nb[dimension];
+        }
+        Region & region = regions[key.str()];
+        region.identity = entry.source_identity;
+        region.offset = entry.source_offset;
+        region.length = entry.source_length;
+        const bool already_recorded = std::any_of(region.allocations.begin(), region.allocations.end(),
+            [&](const Allocation & allocation) { return allocation.buffer == entry.buffer; });
+        if (!already_recorded) {
+            region.allocations.push_back({ entry.buffer, entry.layout, entry.length, entry.source_generation });
+        }
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const auto & [key, region] : regions) {
+        if (region.allocations.size() < 2) {
+            continue;
+        }
+        std::vector<Allocation> sorted = region.allocations;
+        std::sort(sorted.begin(), sorted.end(), [](const Allocation & lhs, const Allocation & rhs) {
+            return std::less<hrx_buffer_t>{}(lhs.buffer, rhs.buffer);
+        });
+        std::ostringstream signature;
+        signature << key;
+        std::ostringstream details;
+        size_t total_bytes = 0;
+        for (const Allocation & allocation : sorted) {
+            signature << ':' << allocation.buffer << ':' << allocation.layout << ':' << allocation.bytes
+                      << ':' << allocation.generation;
+            details << (total_bytes == 0 ? "" : ", ") << allocation.layout << "@generation="
+                    << allocation.generation << "=" << allocation.bytes << "B";
+            total_bytes += allocation.bytes;
+        }
+        if (!reported_duplicate_signatures_.insert(signature.str()).second) {
+            continue;
+        }
+        ++stats_.duplicate_warnings;
+        GGML_LOG_WARN("HRX weight residency: source=%llu region=[%zu,%zu) layouts={%s} resident_bytes=%zu reason=%s\n",
+                      static_cast<unsigned long long>(region.identity),
+                      region.offset, region.offset + region.length, details.str().c_str(), total_bytes,
+                      reason == nullptr ? "unspecified" : reason);
+    }
+}
+
+void HostWeightCache::fail_cold_acquire_after_for_test(size_t successful_acquires) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    fail_cold_after_ = successful_acquires;
+}
+
+void HostWeightCache::evict_except(const std::vector<HostWeightSource> & current_demand,
+                                  const std::vector<HostWeightLease> & outstanding_leases) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto entry = entries_.begin(); entry != entries_.end();) {
+        const HostWeightLease resident(entry->second);
+        const bool current = std::any_of(current_demand.begin(), current_demand.end(),
+                                         [&](const HostWeightSource & source) {
+                                             return resident.matches(source);
+                                         });
+        const bool outstanding = std::any_of(outstanding_leases.begin(), outstanding_leases.end(),
+                                             [&](const HostWeightLease & lease) {
+                                                 return lease.entry_ == entry->second;
+                                             });
+        const bool retained = current || outstanding;
+        if (retained) {
+            ++entry;
+        } else {
+            entry = entries_.erase(entry);
+        }
+    }
 }
 
 void HostWeightCache::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     entries_.clear();
-    stats_ = {};
+    q6_pack_scratch_.clear();
+    q6_pack_scratch_bytes_ = 0;
 }
 
 HostStagingBuffer::~HostStagingBuffer() {
