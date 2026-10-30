@@ -269,6 +269,7 @@ json node_json(const GraphNode & node) {
         { "op",      static_cast<int>(node.op)   },
         { "op_name", ggml_op_name(node.op)       },
         { "output",  node.output.value           },
+        { "compute", node.compute                },
         { "inputs",  std::move(inputs)           },
         { "params",  op_params_json(node.params) },
     };
@@ -339,7 +340,7 @@ std::string serialize_graph_snapshot_json(const Graph & graph, const std::string
         nodes.push_back(node_json(node));
     }
     json root = {
-        { "schema",   "ggml-hrx-graph-snapshot-v1" },
+        { "schema",   "ggml-hrx-graph-snapshot-v2" },
         { "uid",      uid                          },
         { "target",   target                       },
         { "storages", std::move(storages)          },
@@ -351,13 +352,13 @@ std::string serialize_graph_snapshot_json(const Graph & graph, const std::string
 
 std::string format_graph_snapshot_text(const Graph & graph, const std::string & target, uint64_t uid) {
     std::ostringstream out;
-    out << "schema=ggml-hrx-graph-snapshot-v1\n";
+    out << "schema=ggml-hrx-graph-snapshot-v2\n";
     out << "uid=" << uid << "\ntarget=" << target << "\nvalues=" << graph.values().size()
         << "\nnodes=" << graph.nodes().size() << '\n';
     for (size_t i = 0; i < graph.nodes().size(); ++i) {
         const GraphNode & node = graph.nodes()[i];
         out << "node " << i << " " << ggml_op_name(node.op) << " output=" << value_summary(graph, node.output)
-            << " inputs=[";
+            << " compute=" << node.compute << " inputs=[";
         for (size_t j = 0; j < node.inputs.size(); ++j) {
             if (j > 0) {
                 out << ", ";
@@ -384,7 +385,7 @@ GraphSnapshotLoadResult load_graph_snapshot_json(const std::string & contents) {
     GraphSnapshotLoadResult result;
     try {
         const json root = json::parse(contents);
-        if (root.value("schema", "") != "ggml-hrx-graph-snapshot-v1") {
+        if (root.value("schema", "") != "ggml-hrx-graph-snapshot-v2") {
             result.status.log("unsupported graph snapshot schema");
             return result;
         }
@@ -448,6 +449,7 @@ GraphSnapshotLoadResult load_graph_snapshot_json(const std::string & contents) {
             }
             GraphNode & node = result.graph.add_node(static_cast<ggml_op>(item.at("op").get<int>()),
                                                      ValueId(item.at("output").get<int32_t>()), std::move(inputs));
+            node.compute     = item.at("compute").get<bool>();
             node.params      = parse_op_params(item.at("params"));
         }
         result.status.append(result.graph.build_index());

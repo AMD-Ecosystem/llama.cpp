@@ -2627,6 +2627,7 @@ static void run_external_view_input_rmsnorm_case() {
 
     ggml_cgraph * graph = ggml_new_graph(ctx);
     REQUIRE(graph != nullptr);
+    output->flags |= GGML_TENSOR_FLAG_COMPUTE;
     ggml_graph_add_node(graph, output);
 
     require_kernel_subsequence(scheduled_kernel_sequence(graph), { "loom_libs:ggml_rmsnorm_f32" });
@@ -2675,6 +2676,7 @@ static void run_split_local_view_alias_import_case() {
 
     ggml_cgraph * graph = ggml_new_graph(ctx);
     REQUIRE(graph != nullptr);
+    flattened->flags |= GGML_TENSOR_FLAG_COMPUTE;
     ggml_graph_add_node(graph, flattened);
 
     ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
@@ -3467,7 +3469,7 @@ static void run_add_f32_cpu_reference_case() {
     ggml_backend_free(hrx_backend);
 }
 
-static void run_gdn_snapshot_cpu_reference_case(int64_t tokens) {
+static void run_gdn_snapshot_cpu_reference_case(int64_t tokens, bool rms_scale_norm = false) {
     ggml_backend_t cpu = init_cpu_backend();
     ggml_backend_t hrx = ggml_backend_hrx_init(0);
     REQUIRE(hrx != nullptr);
@@ -3515,8 +3517,13 @@ static void run_gdn_snapshot_cpu_reference_case(int64_t tokens) {
         f.state = ggml_new_tensor_2d(f.ctx, GGML_TYPE_F32, state_size, 1);
         auto * state = ggml_reshape_4d(f.ctx, f.state, width, width, heads, 1);
         f.cache = ggml_new_tensor_2d(f.ctx, GGML_TYPE_F32, state_size, tokens);
-        auto * gdn = ggml_gated_delta_net(f.ctx, ggml_l2_norm(f.ctx, f.q, 1.e-6f),
-                ggml_l2_norm(f.ctx, f.k, 1.e-6f), f.v, gate, beta, state, tokens);
+        const auto normalize = [&](ggml_tensor * input) {
+            if (rms_scale_norm) {
+                return ggml_scale(f.ctx, ggml_rms_norm(f.ctx, input, 1.e-6f / width), 1.0f / std::sqrt(float(width)));
+            }
+            return ggml_l2_norm(f.ctx, input, 1.e-6f);
+        };
+        auto * gdn = ggml_gated_delta_net(f.ctx, normalize(f.q), normalize(f.k), f.v, gate, beta, state, tokens);
         f.attention = ggml_view_4d(f.ctx, gdn, width, heads, tokens, 1,
                 width * sizeof(float), width * heads * sizeof(float), width * heads * tokens * sizeof(float), 0);
         auto * snapshots = ggml_view_3d(f.ctx, gdn, state_size, 1, tokens,
@@ -3589,6 +3596,17 @@ static void run_gdn_snapshot_cpu_reference_case(int64_t tokens) {
         const float * hrx_state = accepted == 0 ? state.data() : hrx_snapshots.data() + offset;
         ggml_backend_tensor_set(c.state, cpu_state, 0, state_bytes);
         ggml_backend_tensor_set(h.state, hrx_state, 0, state_bytes);
+        compute_and_compare();
+    }
+    if (rms_scale_norm) {
+        // Small Q/K rows distinguish additive epsilon from the old L2 clamp.
+        for (int64_t t = 0; t < tokens; ++t) {
+            for (size_t i = 0; i < 2 * row_width; ++i) {
+                raw[3 * t * row_width + i] *= t == 0 ? 0.0f : 1.e-4f;
+            }
+        }
+        set(c.raw, h.raw, raw);
+        set(c.state, h.state, state);
         compute_and_compare();
     }
     for (auto * f : { &c, &h }) {
@@ -5240,7 +5258,9 @@ static void run_rope_set_rows_cpu_reference_case() {
         ggml_free(hrx_ctx);
     }
 
-    {
+    auto run_partial_rope_case = [&](int offset, int mode, int64_t partial_tokens,
+                                     int64_t partial_head_size = 128, int64_t partial_n_dims = 96,
+                                     int64_t partial_head_count = 3) {
         ggml_init_params params = {};
         params.mem_size         = 8 * 1024 * 1024;
         params.no_alloc         = true;
@@ -5249,22 +5269,20 @@ static void run_rope_set_rows_cpu_reference_case() {
         REQUIRE(cpu_ctx != nullptr);
         REQUIRE(hrx_ctx != nullptr);
 
-        constexpr int64_t partial_head_size  = 128;
-        constexpr int64_t partial_n_dims     = 96;
-        constexpr int64_t partial_head_count = 3;
-        constexpr int64_t partial_tokens     = 4;
         ggml_tensor *     cpu_input =
             ggml_new_tensor_3d(cpu_ctx, GGML_TYPE_F32, partial_head_size, partial_head_count, partial_tokens);
         ggml_tensor * cpu_pos  = ggml_new_tensor_1d(cpu_ctx, GGML_TYPE_I32, partial_tokens);
         ggml_tensor * cpu_freq = ggml_new_tensor_1d(cpu_ctx, GGML_TYPE_F32, partial_n_dims / 2);
         ggml_tensor * cpu_out  = ggml_rope_ext(cpu_ctx, cpu_input, cpu_pos, cpu_freq, partial_n_dims,
-                                               GGML_ROPE_TYPE_NEOX, 0, 10000.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+                                               mode, 0, 10000.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
         ggml_tensor * hrx_input =
             ggml_new_tensor_3d(hrx_ctx, GGML_TYPE_F32, partial_head_size, partial_head_count, partial_tokens);
         ggml_tensor * hrx_pos  = ggml_new_tensor_1d(hrx_ctx, GGML_TYPE_I32, partial_tokens);
         ggml_tensor * hrx_freq = ggml_new_tensor_1d(hrx_ctx, GGML_TYPE_F32, partial_n_dims / 2);
         ggml_tensor * hrx_out  = ggml_rope_ext(hrx_ctx, hrx_input, hrx_pos, hrx_freq, partial_n_dims,
-                                               GGML_ROPE_TYPE_NEOX, 0, 10000.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+                                               mode, 0, 10000.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+        ggml_rope_set_offset(cpu_out, offset);
+        ggml_rope_set_offset(hrx_out, offset);
         REQUIRE(cpu_out != nullptr);
         REQUIRE(hrx_out != nullptr);
 
@@ -5283,7 +5301,7 @@ static void run_rope_set_rows_cpu_reference_case() {
 
         const std::vector<float> input =
             make_pattern_f32(static_cast<size_t>(partial_head_size * partial_head_count * partial_tokens), 47, 0.01f);
-        const std::vector<int32_t> pos = { 0, 1, 13, 29 };
+        const std::vector<int32_t> pos(static_cast<size_t>(partial_tokens), 29);
         std::vector<float>         freq(static_cast<size_t>(partial_n_dims / 2));
         for (size_t i = 0; i < freq.size(); ++i) {
             freq[i] = 1.0f + 0.01f * static_cast<float>(i);
@@ -5303,7 +5321,17 @@ static void run_rope_set_rows_cpu_reference_case() {
         ggml_backend_buffer_free(hrx_buffer);
         ggml_free(cpu_ctx);
         ggml_free(hrx_ctx);
+    };
+    for (int mode : { GGML_ROPE_TYPE_NORMAL, GGML_ROPE_TYPE_NEOX }) {
+        for (int offset : { 0, 16, 32 }) {
+            run_partial_rope_case(offset, mode, 1);
+            run_partial_rope_case(offset, mode, 4);
+        }
     }
+
+    // MiniCPM3 rotates only the trailing 32 channels of each 96-channel query head.
+    run_partial_rope_case(64, GGML_ROPE_TYPE_NEOX, 1, 96, 32, 40);
+    run_partial_rope_case(64, GGML_ROPE_TYPE_NEOX, 512, 96, 32, 40);
 
     auto run_view_set_rows_case = [&](int64_t view_token_count) {
         ggml_init_params params = {};
@@ -6160,6 +6188,8 @@ static void register_basic_ops_cases(Suite & suite) {
     for (int64_t tokens = 2; tokens <= 5; ++tokens) {
         suite.device_case("gdn_snapshot.cpu_reference." + std::to_string(tokens),
                           [tokens] { run_gdn_snapshot_cpu_reference_case(tokens); });
+        suite.device_case("gdn_snapshot.rms_scale.cpu_reference." + std::to_string(tokens),
+                          [tokens] { run_gdn_snapshot_cpu_reference_case(tokens, true); });
     }
     for (const ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
         suite.device_case("ssm_conv_prefill_recurrent." + type_name(type) + ".plain",

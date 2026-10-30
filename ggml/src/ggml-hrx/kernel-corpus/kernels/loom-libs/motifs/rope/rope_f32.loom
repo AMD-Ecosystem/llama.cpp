@@ -55,6 +55,8 @@ template.decl @ggml.rows.cache_publish.f32_vector4(%arg0: index, %arg1: i1, %arg
 
 config.decl @ggml.rope_f32.head_size : %value: index where [range(%value, 4, 1024), multiple_of(%value, 4)]
 
+config.decl @ggml.rope_f32.n_offs : %value: index where [range(%value, 0, 1024), multiple_of(%value, 4)]
+
 config.decl @ggml.rope_f32.n_dims : %value: index where [range(%value, 4, 1024), multiple_of(%value, 4)]
 
 config.decl @ggml.rope_f32.head_count : %value: index where [range(%value, 1, 64)]
@@ -155,6 +157,7 @@ template.def<@ggml.rope_f32.scaled_body> device @ggml_rope_f32_scaled_body(%toke
   %token_capacity = config.get @ggml.rope_f32.token_capacity : index
   %head_count0 = config.get @ggml.rope_f32.head_count : index
   %head_size0 = config.get @ggml.rope_f32.head_size : index
+  %n_offs = config.get @ggml.rope_f32.n_offs : index
   %n_dims0 = config.get @ggml.rope_f32.n_dims : index
   %input_stride1_0 = config.get @ggml.rope_f32.input_stride1 : index
   %input_stride2_0 = config.get @ggml.rope_f32.input_stride2 : index
@@ -193,7 +196,8 @@ template.def<@ggml.rope_f32.scaled_body> device @ggml_rope_f32_scaled_body(%toke
   scf.if %publish_rotary {
     %channel = index.assume %channel0 [lt(%channel0, %pair_packet_count)] : index
     %pair_channel = index.mul %channel, %c2 : index
-    %normal_channel = index.mul %channel, %c4 : index
+    %normal_channel0 = index.mul %channel, %c4 : index
+    %normal_channel = index.add %normal_channel0, %n_offs : index
     %positions_view = buffer.view %positions_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]xi32>
     %theta_view = buffer.view %theta_noalias[%c0_offset] : buffer -> view<[%half_n_dims]xf32>
     %freq_factors_view = buffer.view %freq_factors_noalias[%c0_offset] : buffer -> view<[%half_n_dims]xf32>
@@ -206,11 +210,12 @@ template.def<@ggml.rope_f32.scaled_body> device @ggml_rope_f32_scaled_body(%toke
     %theta_packet = vector.load %theta_view[%pair_channel] : view<[%half_n_dims]xf32> -> vector<2xf32>
     %freq_factors_packet = vector.load %freq_factors_view[%pair_channel] : view<[%half_n_dims]xf32> -> vector<2xf32>
     scf.if %is_neox {
-      %paired_channel = index.add %pair_channel, %half_n_dims : index
-      %scaled_low, %scaled_high = template.apply<@ggml.rope_f32.rotate_neox_packet>(%position, %input_base, %pair_channel, %half_n_dims, %bounded_input_span, %mscale, %input_noalias, %theta_packet, %freq_factors_packet) : (f32, index, index, index, index, f32, buffer, vector<2xf32>, vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
+      %rotary_channel = index.add %pair_channel, %n_offs : index
+      %paired_channel = index.add %rotary_channel, %half_n_dims : index
+      %scaled_low, %scaled_high = template.apply<@ggml.rope_f32.rotate_neox_packet>(%position, %input_base, %rotary_channel, %half_n_dims, %bounded_input_span, %mscale, %input_noalias, %theta_packet, %freq_factors_packet) : (f32, index, index, index, index, f32, buffer, vector<2xf32>, vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
       %output_low = vector.mulf<reassoc|nnan|ninf|nsz|contract> %scaled_low, %output_scale2 : vector<2xf32>
       %output_high = vector.mulf<reassoc|nnan|ninf|nsz|contract> %scaled_high, %output_scale2 : vector<2xf32>
-      vector.store %output_low, %output_view[%token, %head, %pair_channel] : vector<2xf32>, view<[%bounded_token_count]x[%head_count]x[%head_size]xf32>
+      vector.store %output_low, %output_view[%token, %head, %rotary_channel] : vector<2xf32>, view<[%bounded_token_count]x[%head_count]x[%head_size]xf32>
       vector.store %output_high, %output_view[%token, %head, %paired_channel] : vector<2xf32>, view<[%bounded_token_count]x[%head_count]x[%head_size]xf32>
     }
     scf.if %is_normal {
@@ -221,7 +226,11 @@ template.def<@ggml.rope_f32.scaled_body> device @ggml_rope_f32_scaled_body(%toke
   }
   scf.if %publish_copy {
     %channel = index.assume %channel0 [lt(%channel0, %pair_packet_count)] : index
-    %normal_channel = index.mul %channel, %c4 : index
+    // Copy packets cover the unchanged prefix first, then the suffix after RoPE.
+    %copy_channel0 = index.mul %channel, %c4 : index
+    %prefix_channel = index.sub %copy_channel0, %n_dims : index
+    %is_prefix = index.cmp ult, %prefix_channel, %n_offs : index
+    %normal_channel = scf.select %is_prefix, %prefix_channel, %copy_channel0 : index
     %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]x[%head_count]x[%head_size]xf32>
     %input_token_offset = index.mul %token, %input_stride2 : index
     %input_head_offset = index.mul %head, %input_stride1 : index

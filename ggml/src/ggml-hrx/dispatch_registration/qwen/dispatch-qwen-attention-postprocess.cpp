@@ -59,6 +59,9 @@ static bool is_qwen_rms_norm_epsilon(float eps) {
 }
 
 static bool is_qwen_implicit_rope_contract(const RopeParams & params) {
+    if (params.n_offs != 0) {
+        return false;
+    }
     return params.n_dims == kQwenAttentionHeadSize && params.mode == GGML_ROPE_TYPE_NEOX &&
            std::isfinite(params.freq_base) && params.freq_base > 0.0f && std::isfinite(params.freq_scale) &&
            params.freq_scale > 0.0f && std::isfinite(params.ext_factor) && std::isfinite(params.attn_factor);

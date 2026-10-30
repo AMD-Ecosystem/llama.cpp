@@ -84,7 +84,8 @@ static bool rope_params_equivalent(const OpParams & lhs, const OpParams & rhs) {
            nearly_equal(lhs_params->ext_factor, rhs_params->ext_factor) &&
            nearly_equal(lhs_params->attn_factor, rhs_params->attn_factor) &&
            nearly_equal(lhs_params->beta_fast, rhs_params->beta_fast) &&
-           nearly_equal(lhs_params->beta_slow, rhs_params->beta_slow) && lhs_params->sections == rhs_params->sections;
+           nearly_equal(lhs_params->beta_slow, rhs_params->beta_slow) && lhs_params->sections == rhs_params->sections &&
+           lhs_params->n_offs == rhs_params->n_offs;
 }
 
 }  // namespace
@@ -302,6 +303,7 @@ OpParams import_op_params(const ggml_tensor & tensor) {
                                ggml_get_op_params_i32(&tensor, 13),
                                ggml_get_op_params_i32(&tensor, 14),
                                },
+                ggml_get_op_params_i32(&tensor, 15),
             };
         default:
             return std::monostate{};

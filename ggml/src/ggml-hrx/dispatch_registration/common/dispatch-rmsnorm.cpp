@@ -299,6 +299,10 @@ static RmsNormMulRopeMatch match_rmsnorm_mul_rope_f32(const Graph & graph, const
         }
     }
 
+    if (rope_params->n_offs != 0) {
+        return {};
+    }
+
     const bool sectioned_mode = rope_params->mode == GGML_ROPE_TYPE_MROPE || rope_params->mode == GGML_ROPE_TYPE_IMROPE;
     const bool lfm_neox_mode  = rope_params->mode == GGML_ROPE_TYPE_NEOX && input->ne[0] == 64 &&
                                rope_params->n_dims == 64 && !rope_has_set_rows_consumer(graph, *rope);

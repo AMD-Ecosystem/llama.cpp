@@ -112,6 +112,9 @@ static std::string to_config_value(int64_t value) {
 }
 
 static bool is_supported_attention_rope_params(const RopeParams & params, int64_t head_size) {
+    if (params.n_offs != 0) {
+        return false;
+    }
     return params.n_dims == head_size && params.mode == GGML_ROPE_TYPE_NORMAL && std::isfinite(params.freq_base) &&
            params.freq_base > 0.0f && std::isfinite(params.freq_scale) && params.freq_scale > 0.0f &&
            params.ext_factor == 0.0f && params.attn_factor == 1.0f;
