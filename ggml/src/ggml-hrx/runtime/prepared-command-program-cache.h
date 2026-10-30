@@ -11,6 +11,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace ggml::hrx {
 
@@ -31,6 +32,7 @@ struct PreparedCommandProgramCacheExecutionResult {
     uint64_t            graph_replay_total_ns                     = 0;
     size_t              graph_replay_dispatches                   = 0;
     bool                graph_replay_transient_allocation_changed = false;
+    std::shared_ptr<CachedCommandProgramResources> execution_resources;
 };
 
 class PreparedCommandProgramCache {
@@ -56,6 +58,7 @@ class PreparedCommandProgramCache {
     PreparedCommandProgramCacheStats stats() const;
 
     void clear();
+    void invalidate_obsolete_weights(const std::vector<HostWeightSource> & current_demand);
 
   private:
     struct Key {
@@ -81,9 +84,7 @@ class PreparedCommandProgramCache {
 
     struct Entry {
         std::mutex             mutex;
-        PreparedCommandProgram program;
-        RecordedCommandGraph   recorded;
-        bool                   has_program = false;
+        std::shared_ptr<CachedCommandProgramResources> resources;
     };
 
     void record_build();

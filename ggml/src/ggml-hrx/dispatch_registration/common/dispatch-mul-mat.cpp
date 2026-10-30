@@ -1034,8 +1034,11 @@ static bool match_packed_q8_1_x4_prefill_dispatch(const DispatchMatchContext & c
         }
     }
 
-    const bool use_f16 = match.weight->type == GGML_TYPE_Q4_K && match.weight->alias_source.value < 0 &&
-                         match.output_size >= match.input_size / 4;
+    const bool is_q4_weight = match.weight->type == GGML_TYPE_Q4_K;
+    const bool has_direct_weight = match.weight->alias_source.value < 0;
+    const bool has_wide_output = match.output_size >= match.input_size / 4;
+    const bool can_transform_weight = dispatch_weight_layout_eligible(*match.weight);
+    const bool use_f16 = is_q4_weight && has_direct_weight && has_wide_output && can_transform_weight;
     DispatchBinding activation;
     const bool      packed_input =
         use_f16 &&
@@ -1070,7 +1073,8 @@ static bool match_packed_q8_1_x4_prefill_dispatch(const DispatchMatchContext & c
     dispatch.kernel.compile_parameters.emplace(
         use_f16 ? "ggml.workload.token_capacity" : "ggml.mul_mat_q8_1_x4.token_capacity",
                                                common_to_config_value(match.token_count));
-    const bool pack_q4 = match.weight_format == CommonMulMatWeightFormat::Q4K && match.weight->alias_source.value < 0;
+    const bool pack_q4 = match.weight_format == CommonMulMatWeightFormat::Q4K &&
+                         has_direct_weight && can_transform_weight;
     if (use_f16) {
         dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.f16_input_layout", packed_input ? "1" : "0");
     } else {
@@ -1310,8 +1314,13 @@ static bool build_mul_mat_dispatch(
     dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.output_accumulation", "0");
     dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.output_unary_op",
                                                std::to_string(unary_kind_config_value(match.output_unary_op)));
-    const bool pack_rows = match.token_count <= 5 && common_mul_mat_has_skinny_reduction_shape(match.input_size) &&
-                           match.output_size % 64 == 0 && match.weight->alias_source.value < 0;
+    const bool has_few_tokens = match.token_count <= 5;
+    const bool has_skinny_reduction = common_mul_mat_has_skinny_reduction_shape(match.input_size);
+    const bool has_aligned_output = match.output_size % 64 == 0;
+    const bool has_direct_weight = match.weight->alias_source.value < 0;
+    const bool can_transform_weight = dispatch_weight_layout_eligible(*match.weight);
+    const bool pack_rows = has_few_tokens && has_skinny_reduction && has_aligned_output &&
+                           has_direct_weight && can_transform_weight;
     const bool can_pack_q4 = pack_rows && match.weight_format == CommonMulMatWeightFormat::Q4K;
     const bool can_pack_q6 = pack_rows && match.weight_format == CommonMulMatWeightFormat::Q6K;
     bool       pack_q4     = false;
@@ -1412,7 +1421,14 @@ static bool prepare_vector_activation_binding(const DispatchMatchContext &     c
     weight_layout        = nullptr;
     uses_q8_activation   = false;
 
-    if (token_count != 1 || input_size % 256 != 0 || weight.alias_source.value >= 0 || output_size % 64 != 0) {
+    const bool has_single_token = token_count == 1;
+    const bool has_aligned_input = input_size % 256 == 0;
+    const bool has_direct_weight = weight.alias_source.value < 0;
+    const bool has_aligned_output = output_size % 64 == 0;
+    const bool can_transform_weight = dispatch_weight_layout_eligible(weight);
+    const bool can_prepare_packed_vector = has_single_token && has_aligned_input && has_direct_weight &&
+                                           has_aligned_output && can_transform_weight;
+    if (!can_prepare_packed_vector) {
         return true;
     }
 
@@ -1806,8 +1822,13 @@ static bool build_mul_mat_postops_dispatch(const DispatchMatchContext & context,
                                                common_to_config_value(match.input_size));
     dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_postops.output_size",
                                                common_to_config_value(match.output_size));
-    const bool pack_rows = match.token_count <= 5 && common_mul_mat_has_skinny_reduction_shape(match.input_size) &&
-                           match.output_size % 64 == 0 && match.weight->alias_source.value < 0;
+    const bool has_few_tokens = match.token_count <= 5;
+    const bool has_skinny_reduction = common_mul_mat_has_skinny_reduction_shape(match.input_size);
+    const bool has_aligned_output = match.output_size % 64 == 0;
+    const bool has_direct_weight = match.weight->alias_source.value < 0;
+    const bool can_transform_weight = dispatch_weight_layout_eligible(*match.weight);
+    const bool pack_rows = has_few_tokens && has_skinny_reduction && has_aligned_output &&
+                           has_direct_weight && can_transform_weight;
     const bool can_pack_q4 = pack_rows && match.weight_format == CommonMulMatWeightFormat::Q4K;
     const bool can_pack_q6 = pack_rows && match.weight_format == CommonMulMatWeightFormat::Q6K;
     bool       pack_q4     = false;

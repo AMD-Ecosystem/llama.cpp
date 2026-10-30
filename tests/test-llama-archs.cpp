@@ -7,6 +7,10 @@
 #include "llama.h"
 #include "llama-cpp.h"
 #include "../src/llama-ext.h"
+#ifdef GGML_USE_HRX
+#include "ggml-hrx.h"
+#include "../src/llama-model.h"
+#endif
 
 #include <algorithm>
 #include <cinttypes>
@@ -156,6 +160,7 @@ static void usage(char ** argv) {
     LOG("  -o, --out <dir>          Save generated test models to <dir> instead of running backend tests\n");
     LOG("  -v <N>                   Set log verbosity level\n");
     LOG("  -b, --backend <backend>  Run only on the given backend device\n");
+    LOG("      --hrx-import         Test mmap-backed HRX weight import\n");
     LOG("  -h, --help               Show this help message\n\n");
     LOG("Examples:\n");
     LOG("  %s\n", argv[0]);
@@ -226,7 +231,7 @@ struct kv_writer {
     }
 };
 
-static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const bool hrx_compatible = false) {
     gguf_context_ptr ret(gguf_init_empty());
     kv_writer ms(arch, ret.get());
     const uint32_t n_ctx = 256;
@@ -236,6 +241,9 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     uint32_t n_head  = 2;
     uint32_t n_ff    = 384;
     uint32_t n_layer = 2;
+    if (hrx_compatible) {
+        n_ff = 256;
+    }
     if (arch == LLM_ARCH_LLAMA4) {
         n_layer = 4; // hparams.n_no_rope_layer_step is hard-coded to 4
     } else if (arch == LLM_ARCH_MAION_CODER) {
@@ -1368,6 +1376,97 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
     return all_ok ? 0 : 1;
 }
 
+static int test_hrx_mmap_import(const size_t seed, const float stdev) {
+#ifndef GGML_USE_HRX
+    GGML_UNUSED(seed);
+    GGML_UNUSED(stdev);
+    throw std::runtime_error("mmap import test requires an HRX build");
+#else
+    ggml_backend_load_all();
+    ggml_backend_dev_t hrx_device = nullptr;
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        ggml_backend_dev_t device = ggml_backend_dev_get(i);
+        if (std::strncmp(ggml_backend_dev_name(device), "HRX", 3) == 0) {
+            hrx_device = device;
+            break;
+        }
+    }
+    if (hrx_device == nullptr) {
+        throw std::runtime_error("HRX device unavailable for mmap import test");
+    }
+    ggml_backend_dev_props props = {};
+    ggml_backend_dev_get_props(hrx_device, &props);
+    if (!props.caps.buffer_from_host_ptr) {
+        throw std::runtime_error("HRX host-pointer import is not advertised");
+    }
+
+    gguf_context_ptr gguf_ctx = get_gguf_ctx(LLM_ARCH_LLAMA, false, true);
+    auto cpu_model = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, {});
+    const ggml_tensor * cpu_weight = cpu_model.first->get_tensor("blk.0.attn_q.weight");
+    if (cpu_weight == nullptr) {
+        throw std::runtime_error("tiny GGUF has no attention weight");
+    }
+    std::vector<uint8_t> expected(ggml_nbytes(cpu_weight));
+    ggml_backend_tensor_get(cpu_weight, expected.data(), 0, expected.size());
+
+    const std::filesystem::path path = std::filesystem::temp_directory_path() /
+        ("hrx-import-" + std::to_string(seed) + ".gguf");
+    struct RemoveFile {
+        std::filesystem::path path;
+        ~RemoveFile() { std::error_code ignored; std::filesystem::remove(path, ignored); }
+    } remove_file{ path };
+    llama_model_save_to_file(cpu_model.first.get(), path.string().c_str());
+
+    ggml_backend_dev_t devices[] = { hrx_device, nullptr };
+    llama_model_params model_params = llama_model_default_params();
+    model_params.devices = devices;
+    model_params.n_gpu_layers = 99;
+    model_params.load_mode = LLAMA_LOAD_MODE_MMAP;
+    llama_model_ptr imported(llama_model_load_from_file(path.string().c_str(), model_params));
+    if (!imported) {
+        throw std::runtime_error("failed to load mmap-backed HRX model");
+    }
+    // The loader retains the mapped bytes needed by imported buffers after the file is unlinked.
+    if (!std::filesystem::remove(path)) {
+        throw std::runtime_error("failed to unlink mmap-backed GGUF before readback");
+    }
+    llama_context_params context_params = llama_context_default_params();
+    context_params.n_ctx = 0;
+    context_params.n_ubatch = 64;
+    llama_context_ptr imported_context(llama_init_from_model(imported.get(), context_params));
+    if (!imported_context) {
+        throw std::runtime_error("failed to initialize mmap-backed HRX context");
+    }
+    const ggml_tensor * imported_weight = imported->get_tensor("blk.0.attn_q.weight");
+    if (imported_weight == nullptr) {
+        throw std::runtime_error("mmap-backed HRX attention weight is missing");
+    }
+    if (imported_weight->buffer == nullptr) {
+        throw std::runtime_error("mmap-backed HRX attention weight is unbound");
+    }
+    ggml_backend_dev_t weight_device = ggml_backend_buft_get_device(ggml_backend_buffer_get_type(imported_weight->buffer));
+    if (weight_device != hrx_device) {
+        throw std::runtime_error("tiny attention weight was not placed on HRX");
+    }
+    if (ggml_backend_buffer_is_host(imported_weight->buffer)) {
+        throw std::runtime_error("mmap-backed HRX attention weight was classified as host storage");
+    }
+    if (!ggml_backend_hrx_buffer_is_imported(imported_weight->buffer)) {
+        throw std::runtime_error("tiny attention weight was not imported from mmap");
+    }
+    std::vector<uint8_t> actual(expected.size());
+    ggml_backend_tensor_get(imported_weight, actual.data(), 0, actual.size());
+    if (actual != expected) {
+        throw std::runtime_error("mmap-backed HRX weight differs after loader cleanup");
+    }
+    const std::vector<float> logits = get_logits(imported.get(), imported_context.get(), {1});
+    if (logits.empty()) {
+        throw std::runtime_error("mmap-backed HRX model produced no logits");
+    }
+    return 0;
+#endif
+}
+
 int main(int argc, char ** argv) {
     // init the logger at max verbosity. filter with a custom callback respecting the user-configure verbosity
     common_log_set_verbosity_thold(LOG_LEVEL_DEBUG);
@@ -1381,6 +1480,7 @@ int main(int argc, char ** argv) {
     float stdev = 0.1f;
     std::string out;
     const char * target_backend = nullptr;
+    bool hrx_import = false;
 
     int verbosity = LOG_LEVEL_ERROR;
 
@@ -1448,6 +1548,8 @@ int main(int argc, char ** argv) {
                 usage(argv);
                 return 1;
             }
+        } else if (strcmp(argv[i], "--hrx-import") == 0) {
+            hrx_import = true;
         } else {
             LOG_ERR("%s: unknown argument: %s\n", __func__, argv[i]);
             usage(argv);
@@ -1463,6 +1565,9 @@ int main(int argc, char ** argv) {
     init_normal_pool(seed, stdev);
 
     try {
+        if (hrx_import) {
+            return test_hrx_mmap_import(seed, stdev);
+        }
         if (!out.empty()) {
             return save_models(arch_filter, seed, stdev, verbosity, out);
         }

@@ -184,6 +184,9 @@ std::optional<ValueBufferBinding> ValueMap::resolve_buffer_binding(ValueId id) c
         return std::nullopt;
     }
     binding.offset += value->storage_offset;
+    if (binding.source_host_data != nullptr) {
+        binding.source_offset += value->storage_offset;
+    }
     binding.length = value->byte_count;
     return binding;
 }

@@ -6,11 +6,14 @@
 #include "status.h"
 
 #include <cstddef>
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 typedef struct hrx_buffer_s * hrx_buffer_t;
 typedef struct hrx_device_s * hrx_device_t;
@@ -75,19 +78,29 @@ struct HostWeightSource {
     size_t       capacity   = 0;
     size_t       offset     = 0;
     size_t       length     = 0;
+    // Native extent and type identify the logical weight across its requested layouts.
+    size_t       region_length = 0;
+    ggml_type    region_type = GGML_TYPE_COUNT;
     size_t       materialized_length = 0;
     std::string  layout              = kNativeWeightLayout;
     ggml_type    source_type         = GGML_TYPE_COUNT;
     int64_t      input_size          = 0;
     int64_t      output_size         = 0;
+    std::array<int64_t, GGML_MAX_DIMS> source_ne = {};
+    std::array<size_t, GGML_MAX_DIMS>  source_nb = {};
 };
 
 struct HostWeightCacheStats {
     uint64_t hits             = 0;
     uint64_t misses           = 0;
+    size_t   materialized_bytes = 0;
     size_t   allocation_count = 0;
     size_t   resident_bytes   = 0;
+    size_t   peak_resident_bytes = 0;
+    uint64_t duplicate_warnings = 0;
 };
+
+struct HostWeightAccounting;
 
 class HostWeightLease {
   public:
@@ -97,6 +110,7 @@ class HostWeightLease {
     hrx_buffer_t        buffer() const;
     size_t              length() const;
     const std::string & layout() const;
+    bool                matches(const HostWeightSource & source) const;
 
   private:
     struct Entry;
@@ -115,7 +129,7 @@ struct HostWeightAcquireResult {
 
 class HostWeightCache {
   public:
-    HostWeightCache() = default;
+    HostWeightCache();
     ~HostWeightCache();
 
     HostWeightCache(const HostWeightCache &)             = delete;
@@ -126,6 +140,12 @@ class HostWeightCache {
                                     HostTransferManager &    transfers,
                                     const HostWeightSource & source);
     HostWeightCacheStats    stats() const;
+    // Report only distinct live device allocations for the same retained source region.
+    void report_coexisting_representations(const std::vector<HostWeightLease> & leases, const char * reason);
+    void evict_except(const std::vector<HostWeightSource> & current_demand,
+                      const std::vector<HostWeightLease> & outstanding_leases);
+    void fail_cold_acquire_after_for_test(size_t successful_acquires);
+    // Erases lookup ownership; leases and cumulative diagnostics outlive map entries.
     void                    clear();
 
   private:
@@ -140,13 +160,15 @@ class HostWeightCache {
         ggml_type   source_type = GGML_TYPE_COUNT;
         int64_t     input_size  = 0;
         int64_t     output_size = 0;
+        std::array<int64_t, GGML_MAX_DIMS> source_ne = {};
+        std::array<size_t, GGML_MAX_DIMS>  source_nb = {};
 
         bool operator==(const SourceKey & other) const {
             return identity == other.identity && generation == other.generation && capacity == other.capacity &&
                    offset == other.offset && length == other.length &&
                    materialized_length == other.materialized_length && layout == other.layout &&
                    source_type == other.source_type && input_size == other.input_size &&
-                   output_size == other.output_size;
+                   output_size == other.output_size && source_ne == other.source_ne && source_nb == other.source_nb;
         }
     };
 
@@ -156,7 +178,13 @@ class HostWeightCache {
 
     mutable std::mutex                                                                    mutex_;
     std::unordered_map<SourceKey, std::shared_ptr<HostWeightLease::Entry>, SourceKeyHash> entries_;
+    // Size-keyed scratch is overwritten on each use and is not a source-indexed representation cache.
+    std::unordered_map<size_t, std::vector<uint8_t>> q6_pack_scratch_;
+    size_t q6_pack_scratch_bytes_ = 0;
     HostWeightCacheStats                                                                  stats_;
+    std::shared_ptr<HostWeightAccounting> accounting_;
+    std::unordered_set<std::string> reported_duplicate_signatures_;
+    size_t fail_cold_after_ = SIZE_MAX;
 };
 
 struct HostStagingBuffer {

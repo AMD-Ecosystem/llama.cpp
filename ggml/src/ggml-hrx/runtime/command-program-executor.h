@@ -45,6 +45,7 @@ struct GraphReplayStreamState {
 
     void mark_stream_synchronized();
     void add_host_writeback(void * host_destination, const void * mapped_source, size_t size, hrx_buffer_t buffer);
+    bool has_pending_host_writebacks() const;
     void clear();
 
   private:
@@ -63,6 +64,38 @@ struct CommandProgramExecutionContext {
     HostBufferRegistry *    host_buffers       = nullptr;
     GraphReplayStreamState * graph_replay_state = nullptr;
 };
+
+// Requests contain command metadata only. Every occurrence remains available for validation before
+// its deduplication group is emitted, since same-layout requests can differ in validity.
+struct CommandProgramWeightRequest {
+    CommandBinding binding;
+    size_t         group = 0;
+};
+
+struct CommandProgramWeightRequests {
+    std::vector<CommandProgramWeightRequest> requests;
+    size_t                                  group_count = 0;
+};
+
+struct CommandProgramWeightDemand {
+    CommandBinding   request;
+    HostWeightSource source;
+    bool             requires_materialization = false;
+};
+
+struct CommandProgramWeightDemands {
+    std::vector<CommandProgramWeightDemand> weights;
+    Status                                  status;
+
+    bool valid() const { return status.success(); }
+};
+
+CommandProgramWeightRequests build_command_program_weight_requests(const CommandProgram & commands);
+CommandProgramWeightDemands bind_command_program_weight_demands(const CommandProgramWeightRequests & requests,
+                                                               const CommandProgramBindings & bindings);
+
+CommandProgramWeightDemands collect_command_program_weight_demands(const CommandProgram &         commands,
+                                                                  const CommandProgramBindings & bindings);
 
 struct PreparedCommandBinding {
     CommandBinding    binding;
@@ -115,6 +148,7 @@ struct RecordedCommandGraph {
     hrx_graph_t      graph                               = nullptr;
     hrx_graph_exec_t exec                                = nullptr;
     std::vector<hrx_buffer_t>     retained_buffers;
+    std::vector<HostWeightLease>  resident_host_weights;
     std::vector<hrx_executable_t> retained_executables;
     uint64_t         bound_transient_arena_allocation_id = kInvalidTransientArenaAllocationId;
     size_t           dispatch_count                      = 0;
@@ -130,6 +164,13 @@ struct RecordedCommandGraph {
     RecordedCommandGraph & operator=(const RecordedCommandGraph &) = delete;
 
     bool valid() const { return status.success() && exec != nullptr; }
+};
+
+// A submitted command may still use prepared bindings after its cache entry is retired.
+// The execution completion tracker retains this object until the stream reaches the submission.
+struct CachedCommandProgramResources {
+    PreparedCommandProgram prepared;
+    RecordedCommandGraph   recorded;
 };
 
 struct RecordedCommandGraphExecutionResult {

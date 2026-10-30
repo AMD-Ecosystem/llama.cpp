@@ -1028,13 +1028,18 @@ static void run_graph_import_checks() {
     REQUIRE(ggml::hrx::command_program_bindings_fingerprint(changed_identity_bindings).value !=
             runtime_fingerprint.value);
 
-    ggml::hrx::ValueMap changed_generation = imported.graph.values();
-    REQUIRE(changed_generation.bind_buffer(
-        a_value->id, { dummy_hrx_buffer(0x1000), 0, a_value->byte_count, 0, 1, a_value->byte_count }));
+    REQUIRE(!a_binding->weight);
+    std::vector<ggml::hrx::CommandProgramBinding> changed_generation_values = runtime_bindings.bindings();
+    auto changed_input = std::find_if(changed_generation_values.begin(), changed_generation_values.end(),
+                                     [&](const auto & binding) { return binding.value == a_value->id; });
+    REQUIRE(changed_input != changed_generation_values.end());
+    ++changed_input->generation;
     const ggml::hrx::CommandProgramBindings changed_generation_bindings =
-        ggml::hrx::CommandProgramBindings::from_value_map(changed_generation);
+        ggml::hrx::CommandProgramBindings::from_bindings(std::move(changed_generation_values));
     REQUIRE(changed_generation_bindings.valid());
-    REQUIRE(ggml::hrx::command_program_bindings_fingerprint(changed_generation_bindings).value !=
+    REQUIRE(ggml::hrx::command_program_bindings_hash(changed_generation_bindings).value ==
+            ggml::hrx::command_program_bindings_hash(runtime_bindings).value);
+    REQUIRE(ggml::hrx::command_program_bindings_fingerprint(changed_generation_bindings).value ==
             runtime_fingerprint.value);
 
     ggml::hrx::ValueMap changed_capacity = imported.graph.values();
@@ -1152,6 +1157,9 @@ static void run_graph_import_checks() {
     host_value_binding.generation   = 1;
     host_value_binding.capacity     = host_storage.size();
     host_value_binding.weight       = true;
+    host_value_binding.source_host_data = host_storage.data();
+    host_value_binding.source_offset = 16;
+    host_value_binding.source_capacity = host_storage.size();
     ggml::hrx::ValueMap host_values = imported.graph.values();
     REQUIRE(host_values.bind_buffer(a_value->id, host_value_binding));
     REQUIRE(host_values.bind_buffer(out_value->id, { dummy_hrx_buffer(0x5000), 0, out_value->byte_count }));
@@ -1165,7 +1173,28 @@ static void run_graph_import_checks() {
     REQUIRE(host_binding->offset == 16);
     REQUIRE(host_binding->length == a_value->byte_count);
     REQUIRE(host_binding->weight);
+    ggml::hrx::ValueBufferBinding staging_value_binding = host_value_binding;
+    staging_value_binding.source_host_data = nullptr;
+    REQUIRE(host_values.bind_buffer(a_value->id, staging_value_binding));
+    const auto staging_bindings = ggml::hrx::CommandProgramBindings::from_value_map(host_values);
+    REQUIRE(staging_bindings.valid());
+    const auto * staging_binding = staging_bindings.find(a_value->id);
+    REQUIRE(staging_binding != nullptr);
+    REQUIRE(staging_binding->host_data == host_storage.data());
+    REQUIRE(staging_binding->source_host_data == nullptr);
     REQUIRE(ggml::hrx::command_program_bindings_fingerprint(host_bindings).value != runtime_fingerprint.value);
+    std::vector<ggml::hrx::CommandProgramBinding> changed_weight_values = host_bindings.bindings();
+    auto changed_weight = std::find_if(changed_weight_values.begin(), changed_weight_values.end(),
+                                       [&](const auto & binding) { return binding.value == a_value->id; });
+    REQUIRE(changed_weight != changed_weight_values.end());
+    ++changed_weight->generation;
+    const auto changed_weight_bindings = ggml::hrx::CommandProgramBindings::from_bindings(
+        std::move(changed_weight_values));
+    REQUIRE(changed_weight_bindings.valid());
+    REQUIRE(ggml::hrx::command_program_bindings_hash(changed_weight_bindings).value !=
+            ggml::hrx::command_program_bindings_hash(host_bindings).value);
+    REQUIRE(ggml::hrx::command_program_bindings_fingerprint(changed_weight_bindings).value !=
+            ggml::hrx::command_program_bindings_fingerprint(host_bindings).value);
 
     resolved = ggml::hrx::resolve_command_program_bindings(commands, missing_bindings);
     REQUIRE(!resolved.valid());
@@ -6163,6 +6192,8 @@ static void run_generic_swiglu_k16_publication_edge_checks() {
         });
         REQUIRE(producer != plan.dispatches.end());
         REQUIRE(producer->kernel.workload_specialization == ggml::hrx::WorkloadSpecialization::Dynamic);
+        REQUIRE(producer->kernel.integer_parameters.at("token_count") == token_count);
+        REQUIRE(producer->kernel.compile_parameters.count("ggml.workload.token_capacity") == 0);
         REQUIRE(producer->bindings.size() == 4);
         REQUIRE(producer->bindings.back().value == glu_value->id);
 
@@ -6220,6 +6251,8 @@ static void run_generic_swiglu_k16_publication_edge_checks() {
         });
         REQUIRE(producer != plan.dispatches.end());
         REQUIRE(producer->kernel.workload_specialization == ggml::hrx::WorkloadSpecialization::Dynamic);
+        REQUIRE(producer->kernel.integer_parameters.at("token_count") == token_count);
+        REQUIRE(producer->kernel.compile_parameters.count("ggml.workload.token_capacity") == 0);
         REQUIRE(producer->bindings.size() == 4);
         const auto copy = std::find_if(plan.dispatches.begin(), plan.dispatches.end(), [&](const auto & dispatch) {
             return kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_copy_f16_k16_major" &&
@@ -6300,6 +6333,8 @@ static void run_tiled_matmul_alternate_publish_checks() {
         } else {
             REQUIRE(producer->bindings.size() == 3);
             REQUIRE(producer->kernel.workload_specialization == ggml::hrx::WorkloadSpecialization::Dynamic);
+            REQUIRE(producer->kernel.integer_parameters.at("token_count") == 256);
+            REQUIRE(producer->kernel.compile_parameters.count("ggml.workload.token_capacity") == 0);
             const auto quantize =
                 std::find_if(plan.dispatches.begin(), plan.dispatches.end(), [&](const auto & dispatch) {
                 return kernel_name_for_id(dispatch.kernel.kernel_id) == "qwen3_moe:ggml_quantize_q8_1_x4_f32" &&
@@ -6372,8 +6407,10 @@ static void run_tiled_matmul_alternate_publish_checks() {
                    dispatch.bindings[2].value == projection_value->id;
         });
         REQUIRE(producer != plan.dispatches.end());
-        REQUIRE(producer->bindings.size() == 3);
         REQUIRE(producer->kernel.workload_specialization == ggml::hrx::WorkloadSpecialization::Dynamic);
+        REQUIRE(producer->kernel.integer_parameters.at("token_count") == 256);
+        REQUIRE(producer->kernel.compile_parameters.count("ggml.workload.token_capacity") == 0);
+        REQUIRE(producer->bindings.size() == 3);
 
         const auto q5_consumer =
             std::find_if(plan.dispatches.begin(), plan.dispatches.end(), [&](const auto & dispatch) {
@@ -6729,6 +6766,7 @@ static void run_rmsnorm_binary_k16_output_checks() {
             REQUIRE(diagnostics.unsupported_node != nullptr);
             REQUIRE(diagnostics.unsupported_node_index == 0);
             REQUIRE(diagnostics.unsupported_node->op == GGML_OP_RMS_NORM);
+            REQUIRE(!diagnostics.match.attempts.empty());
             REQUIRE(!ggml::hrx::DispatchScheduler::supports_node(
                 imported.graph, diagnostics.unsupported_node, test_dispatch_target()));
             REQUIRE(!ggml::hrx::DispatchScheduler::can_schedule_graph(imported.graph, test_dispatch_target()));
@@ -11445,16 +11483,24 @@ static void run_zero_output_scheduler_elision_checks() {
         REQUIRE(ids_value != nullptr);
         ggml::hrx::Command referenced;
         referenced.bindings.push_back({ "ids", ids_value->id });
-        for (auto * list :
-             { &lookup.program->commands().initialization_commands, &lookup.program->commands().commands }) {
-            list->push_back(referenced);
-            const auto match = lookup.program->match_current_graph(*graph);
+        auto make_program = [&](ggml::hrx::CommandProgram commands) {
+            return std::make_unique<ggml::hrx::GraphProgram>(
+                lookup.program->uid(), lookup.program->target(),
+                std::make_unique<ggml::hrx::Graph>(lookup.program->graph()),
+                std::make_unique<ggml::hrx::CommandProgram>(std::move(commands)), std::string{});
+        };
+        for (const bool initialization : { true, false }) {
+            auto commands = copy_command_program_shape(lookup.program->commands());
+            auto & list = initialization ? commands.initialization_commands : commands.commands;
+            list.push_back(referenced);
+            const auto referenced_program = make_program(std::move(commands));
+            const auto match = referenced_program->match_current_graph(*graph);
             REQUIRE(match.valid());
             REQUIRE(match.external_bindings.size() == 2);
             REQUIRE(std::any_of(match.external_bindings.begin(), match.external_bindings.end(),
                                 [&](const auto & binding) { return binding.tensor == ids; }));
-            list->clear();
-            const auto unreferenced = lookup.program->match_current_graph(*graph);
+            const auto unreferenced_program = make_program(copy_command_program_shape(lookup.program->commands()));
+            const auto unreferenced = unreferenced_program->match_current_graph(*graph);
             REQUIRE(unreferenced.valid());
             REQUIRE(unreferenced.external_bindings.size() == 1);
             for (const auto origin :
@@ -11463,12 +11509,15 @@ static void run_zero_output_scheduler_elision_checks() {
                 unrelated.bindings.push_back({ "negative", ggml::hrx::ValueId(-1) });
                 unrelated.bindings.push_back({ "large", ggml::hrx::ValueId(INT32_MAX) });
                 unrelated.bindings.push_back({ "ids", ids_value->id, origin });
-                list->push_back(unrelated);
-                const auto ignored = lookup.program->match_current_graph(*graph);
+                auto unrelated_commands = copy_command_program_shape(lookup.program->commands());
+                auto & unrelated_list =
+                    initialization ? unrelated_commands.initialization_commands : unrelated_commands.commands;
+                unrelated_list.push_back(unrelated);
+                const auto unrelated_program = make_program(std::move(unrelated_commands));
+                const auto ignored = unrelated_program->match_current_graph(*graph);
                 REQUIRE(ignored.valid());
                 REQUIRE(ignored.external_bindings.size() == 1);
                 REQUIRE(ignored.external_bindings[0].tensor == input);
-                list->clear();
             }
         }
     }
@@ -11624,6 +11673,142 @@ static void run_zero_output_device_support_checks() {
 
     ggml_free(ctx);
     ggml_backend_free(backend);
+}
+
+static void run_zero_output_unused_weight_staging(bool direct_execution) {
+    EnvironmentVariableGuard replay_mode("GGML_HRX_DISABLE_GRAPH_REPLAY");
+    if (direct_execution) {
+        replay_mode.set("1");
+    } else {
+        replay_mode.unset();
+    }
+    ggml_backend_t backend = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+    auto * state = static_cast<ggml_backend_hrx_context *>(backend->context);
+    ggml_context * ctx = ggml_init({ 512 * 1024, nullptr, true });
+    REQUIRE(ctx != nullptr);
+
+    constexpr int64_t width = 256;
+    constexpr int64_t unused_rows = 4096;
+    ggml_tensor * weight = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, width, width);
+    ggml_tensor * unused_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, width, unused_rows);
+    ggml_tensor * input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, width, 1);
+    ggml_tensor * output = ggml_mul_mat(ctx, weight, input);
+    ggml_set_output(output);
+    ggml_tensor * ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 0);
+    ggml_tensor * empty_rows = ggml_get_rows(ctx, output, ids);
+    ggml_tensor * empty_logits = ggml_mul_mat(ctx, unused_weight, empty_rows);
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, empty_logits);
+    graph->uid = 3004;
+
+    std::vector<float> weights(width * (width + unused_rows), 0.0f);
+    for (int64_t i = 0; i < width; ++i) {
+        weights[i * width + i] = 1.0f;
+    }
+    const size_t weight_bytes = ggml_nbytes(weight);
+    ggml_backend_buffer_t imported = ggml_backend_dev_buffer_from_host_ptr(
+        ggml_backend_get_device(backend), weights.data(), weights.size() * sizeof(float), ggml_nbytes(unused_weight));
+    REQUIRE(imported != nullptr);
+    REQUIRE(ggml_backend_tensor_alloc(imported, weight, weights.data()) == GGML_STATUS_SUCCESS);
+    REQUIRE(ggml_backend_tensor_alloc(imported, unused_weight, weights.data() + width * width) == GGML_STATUS_SUCCESS);
+    ggml_backend_buffer_set_usage(imported, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    ggml_backend_buffer_t host = ggml_backend_alloc_ctx_tensors_from_buft(ctx, ggml_backend_cpu_buffer_type());
+    REQUIRE(host != nullptr);
+
+    ggml_backend_t cpu = ggml_backend_cpu_init();
+    REQUIRE(cpu != nullptr);
+    ggml_context * cpu_ctx = ggml_init({ 128 * 1024, nullptr, true });
+    REQUIRE(cpu_ctx != nullptr);
+    ggml_tensor * cpu_weight = ggml_new_tensor_2d(cpu_ctx, GGML_TYPE_F32, width, width);
+    ggml_tensor * cpu_input = ggml_new_tensor_2d(cpu_ctx, GGML_TYPE_F32, width, 1);
+    ggml_tensor * cpu_output = ggml_mul_mat(cpu_ctx, cpu_weight, cpu_input);
+    ggml_cgraph * cpu_graph = ggml_new_graph(cpu_ctx);
+    ggml_build_forward_expand(cpu_graph, cpu_output);
+    ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu);
+    REQUIRE(cpu_buffer != nullptr);
+    ggml_backend_tensor_set(cpu_weight, weights.data(), 0, weight_bytes);
+
+    const auto & corpus = ggml::hrx::get_qwen_kernel_corpus();
+    auto lookup = state->graph_programs.get_or_build(*graph, corpus, state->device->architecture);
+    for (const auto & error : lookup.status.errors()) {
+        std::fprintf(stderr, "%s\n", error.c_str());
+    }
+    for (const auto & error : lookup.match.status.errors()) {
+        std::fprintf(stderr, "%s\n", error.c_str());
+    }
+    REQUIRE(lookup.valid());
+    const auto * unused_value = lookup.program->graph().values().find_tensor(unused_weight);
+    REQUIRE(unused_value != nullptr);
+    std::vector<ggml::hrx::CommandProgramBinding> external_bindings;
+    for (const auto & external : lookup.match.external_bindings) {
+        ggml::hrx::ValueBufferBinding buffer;
+        REQUIRE(ggml_backend_hrx_resolve_value_buffer(external.tensor, buffer));
+        const auto * value = lookup.program->graph().values().find(external.value);
+        REQUIRE(value != nullptr);
+        external_bindings.push_back(ggml::hrx::make_command_program_binding(
+            external.value, buffer, value->type, value->ne, value->nb, value->byte_count == 0));
+    }
+    auto bindings = ggml::hrx::CommandProgramBindings::from_bindings(std::move(external_bindings));
+    REQUIRE(bindings.valid());
+    REQUIRE(bindings.find(unused_value->id) != nullptr);
+    const ggml::hrx::CommandProgramExecutionContext execution_context = {
+        state->device->device, state->stream, state->device->architecture.c_str(), &corpus,
+        &state->kernel_executables, &state->transient_arena, &state->host_transfers,
+        &state->host_weights, &state->device->host_buffers, &state->graph_replay_state,
+    };
+    for (int iteration = 0; iteration < 2; ++iteration) {
+        std::vector<float> values(width);
+        for (int64_t i = 0; i < width; ++i) {
+            values[i] = static_cast<float>(i + iteration) * 0.25f;
+        }
+        const std::vector<float> sentinel(width, -123.0f);
+        ggml_backend_tensor_set(output, sentinel.data(), 0, ggml_nbytes(output));
+        ggml_backend_tensor_set(input, values.data(), 0, ggml_nbytes(input));
+        ggml_backend_tensor_set(cpu_input, values.data(), 0, ggml_nbytes(cpu_input));
+        REQUIRE(ggml_backend_graph_compute(cpu, cpu_graph) == GGML_STATUS_SUCCESS);
+        std::vector<float> expected(width);
+        ggml_backend_tensor_get(cpu_output, expected.data(), 0, ggml_nbytes(cpu_output));
+        auto execution = lookup.program->execute_with_result(execution_context, bindings, true);
+        REQUIRE(execution.success);
+        ggml_backend_synchronize(backend);
+        const auto & prepared = execution.execution_resources->prepared;
+        REQUIRE(std::none_of(prepared.host_staging.begin(), prepared.host_staging.end(), [&](const auto & staging) {
+            return staging.value == unused_value->id.value;
+        }));
+        REQUIRE(prepared.host_staging.size() == 2);
+        REQUIRE(prepared.resident_host_weights.size() == 1);
+        REQUIRE(state->host_weights.stats().resident_bytes == weight_bytes);
+        REQUIRE(state->host_weights.stats().misses == 1);
+        // The vector matmul declares both host input and output as reads.
+        const size_t staging_upload_bytes = ggml_nbytes(input) + ggml_nbytes(output);
+        REQUIRE(state->host_transfers.stats().upload_bytes == weight_bytes + (iteration + 1) * staging_upload_bytes);
+        REQUIRE(lookup.program->prepared_stats().builds == 1);
+        REQUIRE(lookup.program->prepared_stats().hits == static_cast<uint64_t>(iteration));
+        const auto expected_event = direct_execution ? ggml::hrx::HrxGraphReplayEvent::Disabled :
+            (iteration == 0 ? ggml::hrx::HrxGraphReplayEvent::MissBuild : ggml::hrx::HrxGraphReplayEvent::Hit);
+        REQUIRE(execution.graph_replay_event == expected_event);
+        std::vector<float> actual(width);
+        ggml_backend_tensor_get(output, actual.data(), 0, ggml_nbytes(output));
+        REQUIRE(actual == expected);
+    }
+    // Initialization-only bindings need the same staging and weight access analysis.
+    auto initialization_only = copy_command_program_shape(lookup.program->commands());
+    initialization_only.initialization_commands = std::move(initialization_only.commands);
+    {
+        auto prepared = ggml::hrx::prepare_command_program(execution_context, initialization_only, bindings);
+        REQUIRE(prepared.valid());
+        REQUIRE(prepared.host_staging.size() == 2);
+        REQUIRE(prepared.resident_host_weights.size() == 1);
+        REQUIRE(state->host_weights.stats().misses == 1);
+    }
+    ggml_backend_buffer_free(cpu_buffer);
+    ggml_free(cpu_ctx);
+    ggml_backend_free(cpu);
+    ggml_backend_free(backend);
+    ggml_backend_buffer_free(host);
+    ggml_backend_buffer_free(imported);
+    ggml_free(ctx);
 }
 
 static void run_scale_f32_device_support_checks() {
@@ -12122,6 +12307,253 @@ static void run_disjoint_transient_plan_packing_checks() {
     ggml_free(ctx);
 }
 
+static void run_command_weight_request_checks() {
+    using namespace ggml::hrx;
+    std::array<uint8_t, 512> source = {};
+    CommandProgramBinding binding;
+    binding.value = ValueId(1);
+    binding.buffer = dummy_hrx_buffer(1);
+    binding.length = 64;
+    binding.identity = 10;
+    binding.generation = 20;
+    binding.weight = true;
+    binding.source_host_data = source.data();
+    binding.source_capacity = source.size();
+    binding.source_type = GGML_TYPE_F32;
+    binding.source_ne = { 8, 2, 1, 1 };
+    binding.source_nb = { 4, 32, 64, 64 };
+
+    CommandBinding native = { "first-native", ValueId(1) };
+    CommandBinding packed = native;
+    packed.name = "first-packed";
+    packed.layout = "test-packed";
+    packed.source_type = GGML_TYPE_F32;
+    packed.input_size = 8;
+    packed.output_size = 2;
+    packed.source_length = 64;
+    packed.length = 32;
+    CommandBinding distinct = packed;
+    distinct.name = "distinct-transform";
+    distinct.source_length = 32;
+    distinct.input_size = 4;
+    CommandBinding init_only = native;
+    init_only.value = ValueId(2);
+    CommandBinding read_then_write = native;
+    read_then_write.value = ValueId(3);
+    CommandBinding read_write = native;
+    read_write.value = ValueId(4);
+    CommandBinding write_then_read = native;
+    write_then_read.value = ValueId(5);
+    CommandBinding initial_write = write_then_read;
+    initial_write.access = ResourceAccess::Write;
+    Command init;
+    init.bindings = { native, packed, init_only, read_then_write, read_write, initial_write };
+    Command main;
+    CommandBinding native_duplicate = native;
+    native_duplicate.name = "later-native";
+    native_duplicate.offset = 8;
+    CommandBinding packed_duplicate = packed;
+    packed_duplicate.name = "later-packed";
+    read_then_write.access = ResourceAccess::Write;
+    read_write.access = ResourceAccess::ReadWrite;
+    CommandBinding transient_write = native;
+    transient_write.origin = CommandBindingOrigin::Transient;
+    transient_write.access = ResourceAccess::Write;
+    CommandBinding constant_read = packed;
+    constant_read.origin = CommandBindingOrigin::ProgramConstant;
+    main.bindings = { packed_duplicate, native_duplicate, distinct, read_then_write, read_write,
+                      write_then_read, transient_write, constant_read };
+    CommandProgram commands;
+    commands.initialization_commands.push_back(init);
+    commands.commands.push_back(main);
+    const auto requests = build_command_program_weight_requests(commands);
+    std::vector<CommandProgramBinding> current;
+    for (int32_t value = 1; value <= 5; ++value) {
+        auto next = binding;
+        next.value = ValueId(value);
+        current.push_back(next);
+    }
+    const auto bindings = CommandProgramBindings::from_bindings(current);
+    REQUIRE(bindings.valid());
+    const auto demands = bind_command_program_weight_demands(requests, bindings);
+    REQUIRE(demands.valid());
+    REQUIRE(demands.weights.size() == 4);
+    REQUIRE(demands.weights[0].request.name == "first-native");
+    REQUIRE(demands.weights[1].request.name == "first-packed");
+    REQUIRE(demands.weights[2].request.value == ValueId(2));
+    REQUIRE(demands.weights[3].request.name == "distinct-transform");
+    REQUIRE(!demands.weights[0].requires_materialization);
+    REQUIRE(demands.weights[1].requires_materialization);
+    REQUIRE(demands.weights[1].source.materialized_length == 32);
+    REQUIRE(demands.weights[1].source.length == 64);
+    REQUIRE(demands.weights[3].source.length == 32);
+    REQUIRE(demands.weights[3].source.input_size == 4);
+    const auto collected = collect_command_program_weight_demands(commands, bindings);
+    REQUIRE(collected.valid());
+    REQUIRE(collected.weights.size() == demands.weights.size());
+    REQUIRE(collected.weights[2].request.value == ValueId(2));
+
+    // Reuse the immutable plan with different live source metadata and allocation eligibility.
+    commands.initialization_commands.clear();
+    commands.commands.clear();
+    for (auto & next : current) {
+        next.buffer = nullptr;
+        next.host_data = source.data() + 32;
+        next.identity = 30;
+        next.generation = 40;
+        next.length = 128;
+        next.source_host_data = source.data() + 16;
+        next.source_offset = 32;
+        next.source_capacity = source.size() - 16;
+        next.source_type = GGML_TYPE_F16;
+        next.source_ne = { 16, 4, 1, 1 };
+        next.source_nb = { 2, 32, 128, 128 };
+    }
+    const auto rebound = bind_command_program_weight_demands(
+        requests, CommandProgramBindings::from_bindings(current));
+    REQUIRE(rebound.valid());
+    REQUIRE(rebound.weights.size() == 4);
+    for (const auto & demand : rebound.weights) {
+        REQUIRE(demand.source.host_data == source.data() + 16);
+        REQUIRE(demand.source.identity == 30);
+        REQUIRE(demand.source.generation == 40);
+        REQUIRE(demand.source.offset == 32);
+        REQUIRE(demand.source.capacity == source.size() - 16);
+        REQUIRE(demand.source.region_length == 128);
+        REQUIRE(demand.source.region_type == GGML_TYPE_F16);
+        REQUIRE(demand.source.source_ne == current[0].source_ne);
+        REQUIRE(demand.source.source_nb == current[0].source_nb);
+        REQUIRE(demand.requires_materialization);
+    }
+    REQUIRE(rebound.weights[0].source.length == 128);
+    REQUIRE(rebound.weights[0].source.materialized_length == 128);
+    REQUIRE(rebound.weights[0].source.source_type == GGML_TYPE_F16);
+    REQUIRE(rebound.weights[1].source.length == 64);
+    REQUIRE(rebound.weights[1].source.source_type == GGML_TYPE_F32);
+    for (auto & next : current) {
+        next.weight = false;
+        next.source_host_data = nullptr;
+    }
+    const auto nonweights = bind_command_program_weight_demands(
+        requests, CommandProgramBindings::from_bindings(current));
+    REQUIRE(nonweights.valid());
+    REQUIRE(nonweights.weights.empty());
+
+    CommandProgram native_program;
+    native_program.initialization_commands.push_back(Command{});
+    native_program.initialization_commands.back().bindings.push_back(native);
+    const auto native_requests = build_command_program_weight_requests(native_program);
+    auto uploaded = binding;
+    uploaded.source_host_data = nullptr;
+    const auto uploaded_demand = bind_command_program_weight_demands(
+        native_requests, CommandProgramBindings::from_bindings({ uploaded }));
+    REQUIRE(uploaded_demand.valid());
+    REQUIRE(uploaded_demand.weights.empty());
+    const auto restored = bind_command_program_weight_demands(native_requests, bindings);
+    REQUIRE(restored.valid());
+    REQUIRE(restored.weights.size() == 1);
+    REQUIRE(!restored.weights[0].requires_materialization);
+    auto later_binding = binding;
+    later_binding.identity = 99;
+    const auto first_binding = bind_command_program_weight_demands(
+        native_requests, CommandProgramBindings::from_bindings({ binding, later_binding }));
+    REQUIRE(first_binding.valid());
+    REQUIRE(first_binding.weights.size() == 1);
+    REQUIRE(first_binding.weights[0].source.identity == binding.identity);
+}
+
+static void run_command_weight_request_validation_checks() {
+    using namespace ggml::hrx;
+    std::array<uint8_t, 128> source = {};
+    CommandProgramBinding binding;
+    binding.value = ValueId(1);
+    binding.buffer = dummy_hrx_buffer(1);
+    binding.length = source.size();
+    binding.weight = true;
+    binding.source_host_data = source.data();
+    binding.source_capacity = source.size();
+    CommandBinding valid = { "valid", ValueId(1) };
+    valid.layout = "test-packed";
+    valid.source_type = GGML_TYPE_F32;
+    valid.input_size = 8;
+    valid.output_size = 2;
+    valid.source_length = 64;
+    valid.length = 32;
+    CommandBinding invalid_offset = valid;
+    invalid_offset.name = "invalid-offset";
+    invalid_offset.offset = 1;
+    for (const bool invalid_first : { false, true }) {
+        CommandProgram commands;
+        Command init;
+        init.bindings.push_back(invalid_first ? invalid_offset : valid);
+        commands.initialization_commands.push_back(init);
+        Command main;
+        main.bindings.push_back(invalid_first ? valid : invalid_offset);
+        commands.commands.push_back(main);
+        const auto requests = build_command_program_weight_requests(commands);
+        const auto demands = bind_command_program_weight_demands(
+            requests, CommandProgramBindings::from_bindings({ binding }));
+        REQUIRE(!demands.valid());
+        REQUIRE(demands.status.errors().size() == 1);
+        REQUIRE(demands.status.errors()[0].find("invalid transformed layout request") != std::string::npos);
+        REQUIRE(demands.weights.size() == 1);
+        REQUIRE(demands.weights[0].request.name == "valid");
+        REQUIRE(demands.weights[0].request.offset == 0);
+        auto missing = binding;
+        missing.source_host_data = nullptr;
+        const auto missing_source = bind_command_program_weight_demands(
+            requests, CommandProgramBindings::from_bindings({ missing }));
+        REQUIRE(!missing_source.valid());
+        REQUIRE(missing_source.weights.empty());
+        REQUIRE(missing_source.status.errors().size() == 2);
+        for (const auto & error : missing_source.status.errors()) {
+            REQUIRE(error.find("no retained source") != std::string::npos);
+        }
+        missing.weight = false;
+        const auto nonweight = bind_command_program_weight_demands(
+            requests, CommandProgramBindings::from_bindings({ missing }));
+        REQUIRE(nonweight.valid());
+        REQUIRE(nonweight.weights.empty());
+        const auto unbound = bind_command_program_weight_demands(requests, CommandProgramBindings{});
+        REQUIRE(unbound.valid());
+        REQUIRE(unbound.weights.empty());
+    }
+    std::vector<CommandBinding> invalid(6, valid);
+    invalid[0].source_type = GGML_TYPE_COUNT;
+    invalid[1].input_size = 0;
+    invalid[2].output_size = 0;
+    invalid[3].source_length = 0;
+    invalid[4].source_length = source.size() + 1;
+    invalid[5].length = 0;
+    for (const auto & request : invalid) {
+        CommandProgram commands;
+        Command init;
+        init.bindings.push_back(request);
+        commands.initialization_commands.push_back(init);
+        const auto demands = collect_command_program_weight_demands(
+            commands, CommandProgramBindings::from_bindings({ binding }));
+        REQUIRE(!demands.valid());
+        REQUIRE(demands.weights.empty());
+        REQUIRE(demands.status.errors().size() == 1);
+        REQUIRE(demands.status.errors()[0].find("invalid transformed layout request") != std::string::npos);
+    }
+    CommandProgram commands;
+    Command init;
+    init.bindings.push_back(valid);
+    commands.initialization_commands.push_back(init);
+    const auto requests = build_command_program_weight_requests(commands);
+    auto short_binding = binding;
+    short_binding.length = valid.source_length - 1;
+    const auto too_short = bind_command_program_weight_demands(
+        requests, CommandProgramBindings::from_bindings({ short_binding }));
+    REQUIRE(!too_short.valid());
+    REQUIRE(too_short.weights.empty());
+    const auto restored = bind_command_program_weight_demands(
+        requests, CommandProgramBindings::from_bindings({ binding }));
+    REQUIRE(restored.valid());
+    REQUIRE(restored.weights.size() == 1);
+}
+
 static void run_command_shape_hash_checks() {
     REQUIRE(ggml::hrx::command_program_shape_hash("") == UINT64_C(1469598103934665603));
     std::string bytes;
@@ -12130,7 +12562,8 @@ static void run_command_shape_hash_checks() {
     }
     bytes.append("\0key\xff", 5);
     REQUIRE(ggml::hrx::command_program_shape_hash(bytes) == UINT64_C(6643458358697029213));
-    ggml::hrx::GraphProgram program(1, "gfx1151", nullptr, nullptr, bytes);
+    ggml::hrx::GraphProgram program(1, "gfx1151", std::make_unique<ggml::hrx::Graph>(),
+                                    std::make_unique<ggml::hrx::CommandProgram>(), bytes);
     bytes.clear();
     REQUIRE(program.command_shape_hash() == UINT64_C(6643458358697029213));
     REQUIRE(program.command_shape_hash() == ggml::hrx::command_program_shape_hash(program.command_shape()));
@@ -14135,6 +14568,8 @@ static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
     suite.host_case("multiple_transient_plan", [] { run_multiple_transient_plan_checks(); });
     suite.host_case("disjoint_transient_plan_packing", [] { run_disjoint_transient_plan_packing_checks(); });
     suite.host_case("command_program_kernel_dump", [] { run_command_program_kernel_dump_checks(); });
+    suite.host_case("command_weight_requests", [] { run_command_weight_request_checks(); });
+    suite.host_case("command_weight_request_validation", [] { run_command_weight_request_validation_checks(); });
     suite.host_case("command_shape_hash", [] { run_command_shape_hash_checks(); });
     suite.host_case("graph_compute_mask", [] { run_graph_compute_mask_checks(); });
     suite.host_case("graph_program_cache_uid_mismatch", [] { run_graph_program_cache_uid_mismatch_checks(); });
@@ -14218,6 +14653,8 @@ static void register_hrx_backend_device_cases(test_runner::Suite & suite) {
     suite.device_case("initializer_host_input_ownership", [] { run_initializer_host_input_ownership(); });
 
     suite.device_case("zero_output_device_support", [] { run_zero_output_device_support_checks(); });
+    suite.device_case("zero_output_unused_weight_staging.recorded", [] { run_zero_output_unused_weight_staging(false); });
+    suite.device_case("zero_output_unused_weight_staging.direct", [] { run_zero_output_unused_weight_staging(true); });
     suite.device_case("scale_f32_device_support", [] { run_scale_f32_device_support_checks(); });
     suite.device_case("binary_q8_publication_numerics", [] { run_binary_q8_publication_numerics(); });
     suite.device_case("qwen_expert_table_partition_prefill_512_execution",
