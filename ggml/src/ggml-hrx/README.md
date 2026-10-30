@@ -1,7 +1,5 @@
 # HRX Backend
 
-HRX supports `DUP` for contiguous F32 inputs and distinct contiguous outputs, up to 2^30 elements, using its existing copy kernel. This keeps the mixed-embedding input branch on HRX when the scheduler assigns the graph.
-
 ## `hrx-system` backend compatibility
 
 `hrx-minimum-commit.txt` records the minimum required commit in ROCm/hrx-system. It contains one full Git commit SHA. The backend's C++ APIs, Loom syntax, and numerical behavior can all depend on that revision. When `GGML_HRX=ON` and `HRX_SOURCE_DIR` is set, CMake requires the HRX checkout's HEAD to equal or descend from the recorded commit.
