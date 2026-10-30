@@ -1126,6 +1126,7 @@ static void run_loom_jit_compile_checks() {
             { "llm.gated_delta_net.query_sequence_ratio", "1" },
             { "llm.gated_delta_net.snapshot_stride", "49216" },
             { "llm.gated_delta_net.l2_epsilon", "0.000001" },
+            { "llm.gated_delta_net.additive_epsilon", "0" },
             { "ggml.rmsnorm_gate_f32.rms_epsilon", "0.000001" },
             { "ggml.rmsnorm_gate_f32.gate_op", "15" },
         });

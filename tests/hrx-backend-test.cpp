@@ -7483,7 +7483,53 @@ static void run_lfm_dconv3_dispatch_checks() {
     }
 }
 
-static void run_gdn_native_projection_pair_dispatch_checks() {
+static ggml_tensor * build_gdn_norm(ggml_context * ctx, ggml_tensor * input, bool rms_scale_norm) {
+    if (rms_scale_norm) {
+        const float width = static_cast<float>(input->ne[0]);
+        return ggml_scale(ctx, ggml_rms_norm(ctx, input, 1.e-6f / width), 1.0f / std::sqrt(width));
+    }
+    return ggml_l2_norm(ctx, input, 1.e-6f);
+}
+
+static void require_gdn_rms_scale_match_constraints(ggml_cgraph * graph, ggml_tensor * q, ggml_tensor * k) {
+    const auto matches = [&] {
+        auto imported = ggml::hrx::import_ggml_graph(*graph);
+        REQUIRE(imported.valid());
+        const size_t root = producer_index_for_tensor(imported.graph, q->src[0]);
+        std::vector<bool> covered(imported.graph.nodes().size(), false);
+        std::fill(covered.begin(), covered.begin() + root, true);
+        ggml::hrx::CommandPlan plan;
+        ggml::hrx::DispatchMatch match;
+        const bool matched = match_dispatch_at_index(imported.graph, plan, covered, root, match);
+        if (matched) {
+            require_compile_parameter(match.dispatches.front(), "llm.gated_delta_net.additive_epsilon", "1");
+        }
+        return matched;
+    };
+    REQUIRE(matches());
+    const float scale = ggml_get_op_params_f32(q, 0);
+    ggml_set_op_params_f32(q, 0, scale * 0.5f);
+    REQUIRE(!matches());
+    ggml_set_op_params_f32(q, 0, scale);
+    ggml_set_op_params_f32(q, 1, 1.0f);
+    REQUIRE(!matches());
+    ggml_set_op_params_f32(q, 1, 0.0f);
+    const float epsilon = ggml_get_op_params_f32(k->src[0], 0);
+    ggml_set_op_params_f32(k->src[0], 0, epsilon * 2.0f);
+    REQUIRE(!matches());
+    ggml_set_op_params_f32(k->src[0], 0, epsilon);
+    const auto rms_flags = q->src[0]->flags;
+    ggml_set_output(q->src[0]);
+    REQUIRE(!matches());
+    q->src[0]->flags = rms_flags;
+    const auto scale_flags = k->flags;
+    ggml_set_output(k);
+    REQUIRE(!matches());
+    k->flags = scale_flags;
+    REQUIRE(matches());
+}
+
+static void run_gdn_native_projection_pair_dispatch_checks(bool rms_scale_norm = false) {
     ggml_init_params params = {};
     params.mem_size = 8 * 1024 * 1024;
     params.no_alloc = true;
@@ -7544,8 +7590,8 @@ static void run_gdn_native_projection_pair_dispatch_checks() {
             return ggml_view_4d(ctx, raw, width, heads, test.tokens, 1, width * sizeof(float), hidden * sizeof(float),
                                    hidden * test.tokens * sizeof(float), offset);
         };
-        ggml_tensor * q = ggml_l2_norm(ctx, view(qheads, 0), 1.e-6f);
-        ggml_tensor * k = ggml_l2_norm(ctx, view(qheads, width * qheads * sizeof(float)), 1.e-6f);
+        ggml_tensor * q = build_gdn_norm(ctx, view(qheads, 0), rms_scale_norm);
+        ggml_tensor * k = build_gdn_norm(ctx, view(qheads, width * qheads * sizeof(float)), rms_scale_norm);
         ggml_tensor * v = view(test.heads, 2 * width * qheads * sizeof(float));
         ggml_tensor * cache = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, state_elements, 20);
         ggml_tensor * ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1);
@@ -7606,7 +7652,7 @@ static void run_gdn_native_projection_pair_dispatch_checks() {
     ggml_free(ctx);
 }
 
-static void run_gdn_selected_snapshot_dispatch_checks() {
+static void run_gdn_selected_snapshot_dispatch_checks(bool rms_scale_norm = false) {
     ggml_init_params params = {};
     params.mem_size = 8 * 1024 * 1024;
     params.no_alloc = true;
@@ -7658,8 +7704,8 @@ static void run_gdn_selected_snapshot_dispatch_checks() {
             return ggml_view_4d(ctx, raw, width, nheads, test.tokens, test.sequences,
                                width*sizeof(float), hidden*sizeof(float), hidden*test.tokens*sizeof(float), offset);
         };
-        ggml_tensor * q=ggml_l2_norm(ctx, view(qheads,0), 1.e-6f);
-        ggml_tensor * k=ggml_l2_norm(ctx, view(qheads,width*qheads*sizeof(float)), 1.e-6f);
+        ggml_tensor * q=build_gdn_norm(ctx, view(qheads,0), rms_scale_norm);
+        ggml_tensor * k=build_gdn_norm(ctx, view(qheads,width*qheads*sizeof(float)), rms_scale_norm);
         ggml_tensor * v=view(heads,2*width*qheads*sizeof(float));
         ggml_tensor * gdn=ggml_gated_delta_net(ctx,q,k,v,gate,beta,state,5);
         const size_t attention_bytes=width*heads*test.tokens*test.sequences*sizeof(float);
@@ -7684,6 +7730,11 @@ static void run_gdn_selected_snapshot_dispatch_checks() {
         ggml_build_forward_expand(graph,ggml_scale(ctx,attention,0.5f));
         if (test.side_use) {
             ggml_build_forward_expand(graph,ggml_scale(ctx,gathered,0.5f));
+        }
+        const bool first_case = test.tokens == 2;
+        const bool check_norm_constraints = rms_scale_norm && first_case;
+        if (check_norm_constraints) {
+            require_gdn_rms_scale_match_constraints(graph, q, k);
         }
         auto imported=ggml::hrx::import_ggml_graph(*graph);
         REQUIRE(imported.valid());
@@ -13653,7 +13704,7 @@ static void run_lowtoken_bias_dispatch_checks() {
     ggml_free(ctx);
 }
 
-static void run_gdn_selected_rms_q8_dispatch_checks() {
+static void run_gdn_selected_rms_q8_dispatch_checks(bool rms_scale_norm = false) {
     ggml_init_params params = {};
     params.mem_size = 32 * 1024 * 1024;
     params.no_alloc = true;
@@ -13736,8 +13787,8 @@ static void run_gdn_selected_rms_q8_dispatch_checks() {
             return ggml_view_4d(ctx, raw, width, nheads, test.tokens, test.sequences, width * sizeof(float),
                                     hidden * sizeof(float), hidden * test.tokens * sizeof(float), offset);
         };
-        ggml_tensor * q = ggml_l2_norm(ctx, view(qheads, 0), 1.e-6f);
-        ggml_tensor * k = ggml_l2_norm(ctx, view(qheads, width * qheads * sizeof(float)), 1.e-6f);
+        ggml_tensor * q = build_gdn_norm(ctx, view(qheads, 0), rms_scale_norm);
+        ggml_tensor * k = build_gdn_norm(ctx, view(qheads, width * qheads * sizeof(float)), rms_scale_norm);
         ggml_tensor * v = view(heads, 2 * width * qheads * sizeof(float));
         ggml_tensor * gdn = ggml_gated_delta_net(ctx, q, k, v, gate, beta, state, 5);
         if (test.flags & GdnObserved) {
@@ -13886,6 +13937,9 @@ static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
     suite.host_case("gdn_native_projection_pair_dispatch", [] { run_gdn_native_projection_pair_dispatch_checks(); });
     suite.host_case("gdn_selected_snapshot_dispatch", [] { run_gdn_selected_snapshot_dispatch_checks(); });
     suite.host_case("gdn_selected_rms_q8_dispatch", [] { run_gdn_selected_rms_q8_dispatch_checks(); });
+    suite.host_case("gdn_native_projection_pair_dispatch.rms_scale", [] { run_gdn_native_projection_pair_dispatch_checks(true); });
+    suite.host_case("gdn_selected_snapshot_dispatch.rms_scale", [] { run_gdn_selected_snapshot_dispatch_checks(true); });
+    suite.host_case("gdn_selected_rms_q8_dispatch.rms_scale", [] { run_gdn_selected_rms_q8_dispatch_checks(true); });
     suite.host_case("llama_attention_matmul_dispatch", [] { run_llama_attention_matmul_dispatch_checks(); });
     suite.host_case("quantized_value_projection_dispatch", [] { run_quantized_value_projection_dispatch_checks(); });
     suite.host_case("prefill_value_projection_cache_dispatch",
