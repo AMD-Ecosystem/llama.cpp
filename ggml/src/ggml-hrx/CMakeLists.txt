@@ -279,6 +279,8 @@ ggml_add_backend_library(ggml-hrx
     graph/value-map.h
     runtime/command-program-executor.cpp
     runtime/command-program-executor.h
+    runtime/compile-trace.cpp
+    runtime/compile-trace.h
     runtime/graph-executor.cpp
     runtime/graph-executor.h
     runtime/graph-program-cache.cpp

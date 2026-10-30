@@ -134,6 +134,9 @@ class LoomSyncJit final : public LoomJit {
     static void compile_ref(LoomCompiledKernel & compiled_ref, ggml_hrx_loom_jit_amdgpu * jit) {
         ggml_hrx_loom_jit_compile_result compiled;
         std::string                      error_message;
+        if (compiled_ref.request().trace.compilation_id != 0) {
+            compiled_ref.trace_start_ns_ = trace_compile_begin(compiled_ref.request().trace);
+        }
         const bool success = compile_kernel(jit, compiled_ref.request(), compiled_ref.key(), compiled, error_message);
         compiled_ref.complete(std::move(compiled), success, std::move(error_message));
     }
@@ -236,6 +239,9 @@ class LoomAsyncJit final : public LoomJit {
     static void compile_ref(LoomCompiledKernel & compiled_ref, ggml_hrx_loom_jit_amdgpu * jit) {
         ggml_hrx_loom_jit_compile_result compiled;
         std::string                      error_message;
+        if (compiled_ref.request().trace.compilation_id != 0) {
+            compiled_ref.trace_start_ns_ = trace_compile_begin(compiled_ref.request().trace);
+        }
         const bool success = compile_kernel(jit, compiled_ref.request(), compiled_ref.key(), compiled, error_message);
         compiled_ref.complete(std::move(compiled), success, std::move(error_message));
     }
@@ -287,15 +293,23 @@ LoomCompiledKernel::LoomCompiledKernel(std::string key, LoomKernelCompileRequest
     key_(std::move(key)),
     request_(std::move(request)) {}
 
-bool LoomCompiledKernel::resolve() const {
+bool LoomCompiledKernel::resolve(uint64_t waiting_execution_id) const {
     const State current = state();
     if (current != State::Pending) {
         return current == State::Succeeded;
     }
 
-    std::unique_lock<std::mutex> lock(mutex_);
-    complete_.wait(lock, [&] { return state() != State::Pending; });
-    return state() == State::Succeeded;
+    const uint64_t start_ns = request_.trace.compilation_id != 0 ? compile_trace_now_ns() : 0;
+    bool success;
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        complete_.wait(lock, [&] { return state() != State::Pending; });
+        success = state() == State::Succeeded;
+    }
+    if (start_ns != 0) {
+        trace_compile_wait(request_.trace, waiting_execution_id, start_ns, success);
+    }
+    return success;
 }
 
 std::string LoomCompiledKernel::error_message() const {
@@ -309,6 +323,9 @@ ggml_hrx_loom_jit_compile_result LoomCompiledKernel::take_result() {
 }
 
 void LoomCompiledKernel::complete(ggml_hrx_loom_jit_compile_result compiled, bool success, std::string error) {
+    if (request_.trace.compilation_id != 0) {
+        trace_compile_end(request_.trace, trace_start_ns_, success, error);
+    }
     {
         std::lock_guard<std::mutex> lock(mutex_);
         compiled_ = std::move(compiled);

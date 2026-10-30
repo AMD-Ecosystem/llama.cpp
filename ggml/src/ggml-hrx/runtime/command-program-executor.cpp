@@ -1223,7 +1223,8 @@ static Status prepare_kernel_command(const CommandProgramExecutionContext & cont
 
     prepared       = make_prepared_command_shape(command);
     executable_ref =
-        context.kernel_executables->get_or_compile({ context.device, context.target }, *resolved.definition, dispatch);
+        context.kernel_executables->get_or_compile({ context.device, context.target, context.compile_trace },
+                                                   *resolved.definition, dispatch);
     if (!executable_ref.valid()) {
         status.log("failed to prepare %s", command_context.c_str());
         return status;
@@ -1293,7 +1294,7 @@ static void materialize_command_list_executables(const CommandProgramExecutionCo
     for (size_t i = 0; i < prepared_commands.size(); ++i) {
         PreparedCommand & command = prepared_commands[i];
         command.kernel.executable = context.kernel_executables->materialize(
-            { context.device, context.target }, executable_refs[i], command.kernel.specialization,
+            { context.device, context.target, context.compile_trace }, executable_refs[i], command.kernel.specialization,
             command.kernel.constants, command.kernel.launch);
         if (command.kernel.executable == nullptr) {
             status.log("failed to prepare %s", format_prepared_command_context(command).c_str());

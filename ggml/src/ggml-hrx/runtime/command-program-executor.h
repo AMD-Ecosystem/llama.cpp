@@ -25,6 +25,7 @@ struct ggml_hrx_loom_jit_amdgpu;
 namespace ggml::hrx {
 
 class KernelExecutableCache;
+struct CompileTraceExecution;
 struct KernelExecutable;
 class TransientArena;
 class HostBufferRegistry;
@@ -62,6 +63,7 @@ struct CommandProgramExecutionContext {
     HostWeightCache *       host_weights       = nullptr;
     HostBufferRegistry *    host_buffers       = nullptr;
     GraphReplayStreamState * graph_replay_state = nullptr;
+    CompileTraceExecution * compile_trace = nullptr;
 };
 
 struct PreparedCommandBinding {
