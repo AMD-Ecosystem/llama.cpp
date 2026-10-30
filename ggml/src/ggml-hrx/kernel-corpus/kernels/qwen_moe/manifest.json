@@ -961,10 +961,10 @@
       ],
       "binding_access": [
         "read",
-        "read_write",
-        "read_write",
-        "read_write",
-        "read_write"
+        "write",
+        "write",
+        "write",
+        "write"
       ],
       "target_selector": "",
       "compile_recipe": {

@@ -775,6 +775,50 @@ static std::unordered_map<int32_t, GraphValueAccess> collect_graph_value_access(
     return access_by_value;
 }
 
+static bool initializer_overwrites_qwen_metadata_value(const CommandProgramExecutionContext & context,
+                                                       const CommandProgram &                 commands,
+                                                       const CommandProgramBinding &          host_binding) {
+    const bool has_corpus = context.corpus != nullptr;
+    const bool has_target = context.target != nullptr;
+    const bool can_inspect_initializer = has_corpus && has_target;
+    if (!can_inspect_initializer) {
+        return false;
+    }
+    for (const Command & command : commands.initialization_commands) {
+        for (const CommandBinding & binding : command.bindings) {
+            const bool is_graph_value = binding.origin == CommandBindingOrigin::GraphValue;
+            const bool matches_value = binding.value == host_binding.value;
+            const bool accesses_host_binding = is_graph_value && matches_value;
+            if (!accesses_host_binding) {
+                continue;
+            }
+            // Earlier reads, including the context-base capture of positions, require the host upload.
+            if (resource_access_reads(binding.access)) {
+                return false;
+            }
+            const bool write_only = binding.access == ResourceAccess::Write;
+            const bool write_begins_at_zero = binding.offset == 0;
+            const bool write_covers_binding = binding.length == host_binding.length;
+            const bool full_range_write = write_only && write_begins_at_zero && write_covers_binding;
+            if (!full_range_write) {
+                return false;
+            }
+            const KernelResolveResult resolved =
+                resolve_kernel_definition(*context.corpus, context.target, command.kernel.kernel_id);
+            const bool is_qwen_family = resolved.found() && std::strcmp(resolved.definition->family, "qwen3_moe") == 0;
+            const bool is_metadata_name = resolved.found() &&
+                                          std::strcmp(resolved.definition->name, "qwen_attention_metadata") == 0;
+            const bool metadata_kernel = is_qwen_family && is_metadata_name;
+            const bool is_key_index = binding.name == "key_cache_indices";
+            const bool is_value_index = binding.name == "value_cache_indices";
+            const bool is_mask = binding.name == "attention_mask";
+            const bool metadata_output = is_key_index || is_value_index || is_mask;
+            return metadata_kernel && metadata_output;
+        }
+    }
+    return false;
+}
+
 static CommandProgramBindings materialize_host_bindings(const CommandProgramExecutionContext & context,
                                                         const CommandProgram &                 commands,
                                                         const CommandProgramBindings &         bindings,
@@ -852,7 +896,8 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
         }
         staging.value                        = binding.value.value;
         staging.host_data                    = static_cast<uint8_t *>(binding.host_data) + binding.offset;
-        staging.upload                       = access.read;
+        staging.upload                       = access.read &&
+                                               !initializer_overwrites_qwen_metadata_value(context, commands, binding);
         // Initializers may synthesize device metadata from caller inputs, but only main graph writes are observable.
         staging.download                     = access.main_write;
         if (staging.upload && context.host_buffers != nullptr) {
