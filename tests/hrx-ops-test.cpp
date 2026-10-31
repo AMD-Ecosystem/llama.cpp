@@ -2434,14 +2434,11 @@ static void run_f32_f16_cast_cpu_reference_case(bool permuted, int64_t packed_co
     ggml_backend_free(hrx_backend);
 }
 
-static void run_f16_transposed_cont_cpu_reference_case() {
+static void run_f16_transposed_cont_cpu_reference_case(int64_t width, int64_t height, int64_t heads) {
     ggml_backend_t cpu_backend = init_cpu_backend();
     ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
     REQUIRE(hrx_backend != nullptr);
 
-    constexpr int64_t width = 256;
-    constexpr int64_t height = 256;
-    constexpr int64_t heads = 4;
     const size_t element_count = static_cast<size_t>(width * height * heads);
 
     ggml_init_params params = {};
@@ -2458,9 +2455,9 @@ static void run_f16_transposed_cont_cpu_reference_case() {
     ggml_tensor * hrx_output = ggml_cont(hrx_ctx, ggml_transpose(hrx_ctx, hrx_input));
     REQUIRE(cpu_output != nullptr);
     REQUIRE(hrx_output != nullptr);
-    REQUIRE(hrx_output->ne[0] == 256);
-    REQUIRE(hrx_output->ne[1] == 256);
-    REQUIRE(hrx_output->ne[2] == 4);
+    REQUIRE(hrx_output->ne[0] == height);
+    REQUIRE(hrx_output->ne[1] == width);
+    REQUIRE(hrx_output->ne[2] == heads);
     REQUIRE(hrx_output->ne[3] == 1);
 
     ggml_cgraph * cpu_graph = ggml_new_graph(cpu_ctx);
@@ -6783,8 +6780,10 @@ static void register_basic_ops_cases(Suite & suite) {
     suite.device_case("cast_f32_f16.explicit_target.cpu_reference", [] {
         run_f32_f16_cast_cpu_reference_case(false, 16, true);
     });
+    suite.device_case("strided_cont.f16_transpose_3x5x2",
+                      [] { run_f16_transposed_cont_cpu_reference_case(3, 5, 2); });
     suite.device_case("strided_cont.f16_transpose_256x256x4",
-                      [] { run_f16_transposed_cont_cpu_reference_case(); });
+                      [] { run_f16_transposed_cont_cpu_reference_case(256, 256, 4); });
     for (const ggml_glu_op op :
          { GGML_GLU_OP_REGLU, GGML_GLU_OP_SWIGLU, GGML_GLU_OP_GEGLU, GGML_GLU_OP_GEGLU_ERF, GGML_GLU_OP_GEGLU_QUICK }) {
         suite.device_case(std::string("glu_split_f32.") + glu_op_name(op),

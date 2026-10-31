@@ -546,6 +546,9 @@
       "path": "motifs/copy/strided_source.loom"
     },
     {
+      "path": "motifs/copy/strided_source_index.loom"
+    },
+    {
       "path": "motifs/normalization/norm.loom"
     },
     {
@@ -1401,11 +1404,13 @@
           "ops/copy/strided_source_f32.loom"
         ],
         "library_sources": [
-          "motifs/copy/strided_source.loom"
+          "motifs/copy/strided_source.loom",
+          "motifs/copy/strided_source_index.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/copy/strided_source.loom"
+        "motifs/copy/strided_source.loom",
+        "motifs/copy/strided_source_index.loom"
       ]
     },
     {
@@ -1448,11 +1453,13 @@
           "ops/copy/strided_source_f32_f16.loom"
         ],
         "library_sources": [
-          "motifs/copy/strided_source.loom"
+          "motifs/copy/strided_source.loom",
+          "motifs/copy/strided_source_index.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/copy/strided_source.loom"
+        "motifs/copy/strided_source.loom",
+        "motifs/copy/strided_source_index.loom"
       ]
     },
     {
@@ -10325,11 +10332,13 @@
           "ops/copy/strided_source_f16.loom"
         ],
         "library_sources": [
-          "motifs/copy/strided_source_f16.loom"
+          "motifs/copy/strided_source_f16.loom",
+          "motifs/copy/strided_source_index.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/copy/strided_source_f16.loom"
+        "motifs/copy/strided_source_f16.loom",
+        "motifs/copy/strided_source_index.loom"
       ]
     },
     {
