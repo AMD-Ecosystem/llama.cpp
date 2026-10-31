@@ -1,0 +1,141 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+func.decl @ggml_im2col_gather_f32(%linear: index, %kernel_width: index, %kernel_height: index, %channels: index, %output_width: index, %output_height: index, %input_width: index, %input_height: index, %channel_stride: index, %batch_stride: index, %stride_x: index, %stride_y: index, %pad_x: index, %pad_y: index, %dilation_x: index, %dilation_y: index, %source_span: index, %source: buffer) -> (f32)
+
+amdgpu.target<gfx11-generic> @ggml_im2col_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @ggml.im2col.kernel_width : %value: index where [range(%value, 1, 65536)]
+
+config.decl @ggml.im2col.kernel_height : %value: index where [range(%value, 1, 65536)]
+
+config.decl @ggml.im2col.channels : %value: index where [range(%value, 1, 65536)]
+
+config.decl @ggml.im2col.output_width : %value: index where [range(%value, 1, 65536)]
+
+config.decl @ggml.im2col.output_height : %value: index where [range(%value, 1, 65536)]
+
+config.decl @ggml.im2col.input_width : %value: index where [range(%value, 1, 65536)]
+
+config.decl @ggml.im2col.input_height : %value: index where [range(%value, 1, 65536)]
+
+config.decl @ggml.im2col.channel_stride : %value: index where [range(%value, 1, 1073741824)]
+
+config.decl @ggml.im2col.batch_stride : %value: index where [range(%value, 1, 1073741824)]
+
+config.decl @ggml.im2col.stride_x : %value: index where [range(%value, 1, 65536)]
+
+config.decl @ggml.im2col.stride_y : %value: index where [range(%value, 1, 65536)]
+
+config.decl @ggml.im2col.pad_x : %value: index where [range(%value, 0, 65536)]
+
+config.decl @ggml.im2col.pad_y : %value: index where [range(%value, 0, 65536)]
+
+config.decl @ggml.im2col.dilation_x : %value: index where [range(%value, 1, 65536)]
+
+config.decl @ggml.im2col.dilation_y : %value: index where [range(%value, 1, 65536)]
+
+kernel.def target(@ggml_im2col_gfx11_wave64) export("ggml_im2col_f32_f16") @ggml_im2col_f32_f16(%element_count: index, %source_span: index) {
+  %one = index.constant 1 : index
+  %threads = index.constant 256 : index
+  %rounding = index.constant 255 : index
+  %rounded = index.add %element_count, %rounding : index
+  %groups = index.div %rounded, %threads : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%element_count: index, %source_span: index, %source: buffer, %output: buffer) {
+  %count = index.assume %element_count [range(%element_count, 1, 134217728)] : index
+  %span = index.assume %source_span [range(%source_span, 1, 1073741824)] : index
+  %kw = config.get @ggml.im2col.kernel_width : index
+  %kh = config.get @ggml.im2col.kernel_height : index
+  %channels = config.get @ggml.im2col.channels : index
+  %ow = config.get @ggml.im2col.output_width : index
+  %oh = config.get @ggml.im2col.output_height : index
+  %iw = config.get @ggml.im2col.input_width : index
+  %ih = config.get @ggml.im2col.input_height : index
+  %cs = config.get @ggml.im2col.channel_stride : index
+  %bs = config.get @ggml.im2col.batch_stride : index
+  %sx = config.get @ggml.im2col.stride_x : index
+  %sy = config.get @ggml.im2col.stride_y : index
+  %px = config.get @ggml.im2col.pad_x : index
+  %py = config.get @ggml.im2col.pad_y : index
+  %dx = config.get @ggml.im2col.dilation_x : index
+  %dy = config.get @ggml.im2col.dilation_y : index
+  %group = kernel.workgroup.id<x> : index
+  %thread = kernel.workitem.id<x> : index
+  %threads = index.constant 256 : index
+  %linear = index.madd %group, %threads, %thread : index
+  %valid = index.cmp ult, %linear, %count : index
+  %zero = index.constant 0 : offset
+  %source_noalias, %output_noalias = buffer.assume.noalias %source, %output : buffer, buffer
+  %output_view = buffer.view %output_noalias[%zero] : buffer -> view<[%count]xf16>
+  scf.if %valid {
+    %value = func.call @ggml_im2col_gather_f32(%linear, %kw, %kh, %channels, %ow, %oh, %iw, %ih, %cs, %bs, %sx, %sy, %px, %py, %dx, %dy, %span, %source_noalias) : (index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, buffer) -> (f32)
+    %half = scalar.fptrunc %value : f32 to f16
+    view.store %half, %output_view[%linear] : f16, view<[%count]xf16>
+  }
+  kernel.return
+}
+
+kernel.def target(@ggml_im2col_gfx11_wave64) export("ggml_im2col_f32_f32") @ggml_im2col_f32_f32(%element_count: index, %source_span: index) {
+  %one = index.constant 1 : index
+  %threads = index.constant 256 : index
+  %rounding = index.constant 255 : index
+  %rounded = index.add %element_count, %rounding : index
+  %groups = index.div %rounded, %threads : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%element_count: index, %source_span: index, %source: buffer, %output: buffer) {
+  %count = index.assume %element_count [range(%element_count, 1, 134217728)] : index
+  %span = index.assume %source_span [range(%source_span, 1, 1073741824)] : index
+  %kw = config.get @ggml.im2col.kernel_width : index
+  %kh = config.get @ggml.im2col.kernel_height : index
+  %channels = config.get @ggml.im2col.channels : index
+  %ow = config.get @ggml.im2col.output_width : index
+  %oh = config.get @ggml.im2col.output_height : index
+  %iw = config.get @ggml.im2col.input_width : index
+  %ih = config.get @ggml.im2col.input_height : index
+  %cs = config.get @ggml.im2col.channel_stride : index
+  %bs = config.get @ggml.im2col.batch_stride : index
+  %sx = config.get @ggml.im2col.stride_x : index
+  %sy = config.get @ggml.im2col.stride_y : index
+  %px = config.get @ggml.im2col.pad_x : index
+  %py = config.get @ggml.im2col.pad_y : index
+  %dx = config.get @ggml.im2col.dilation_x : index
+  %dy = config.get @ggml.im2col.dilation_y : index
+  %group = kernel.workgroup.id<x> : index
+  %thread = kernel.workitem.id<x> : index
+  %threads = index.constant 256 : index
+  %linear = index.madd %group, %threads, %thread : index
+  %valid = index.cmp ult, %linear, %count : index
+  %zero = index.constant 0 : offset
+  %source_noalias, %output_noalias = buffer.assume.noalias %source, %output : buffer, buffer
+  %output_view = buffer.view %output_noalias[%zero] : buffer -> view<[%count]xf32>
+  scf.if %valid {
+    %value = func.call @ggml_im2col_gather_f32(%linear, %kw, %kh, %channels, %ow, %oh, %iw, %ih, %cs, %bs, %sx, %sy, %px, %py, %dx, %dy, %span, %source_noalias) : (index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, buffer) -> (f32)
+    view.store %value, %output_view[%linear] : f32, view<[%count]xf32>
+  }
+  kernel.return
+}
+
+check.case public @ggml_im2col_f32_f16_small_case {
+  %count = check.literal value(4) : index
+  %source = check.generate.iota offset(1.0) step(1.0) : tensor<4xf32>
+  %output = check.generate.fill value(0.0) : tensor<4xf16>
+  %expected = check.generate.iota offset(1.0) step(1.0) : tensor<4xf16>
+  kernel.launch @ggml_im2col_f32_f16[%count, %count](%count, %count, %source, %output) : [index, index](index, index, tensor<4xf32>, tensor<4xf16>)
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<4xf16>, tensor<4xf16>
+  check.return
+}
+
+check.benchmark<@ggml_im2col_f32_f16_small_case> @ggml_im2col_f32_f16_small
+
+check.case public @ggml_im2col_f32_f32_small_case {
+  %count = check.literal value(4) : index
+  %source = check.generate.iota offset(1.0) step(1.0) : tensor<4xf32>
+  %output = check.generate.fill value(0.0) : tensor<4xf32>
+  %expected = check.generate.iota offset(1.0) step(1.0) : tensor<4xf32>
+  kernel.launch @ggml_im2col_f32_f32[%count, %count](%count, %count, %source, %output) : [index, index](index, index, tensor<4xf32>, tensor<4xf32>)
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<4xf32>, tensor<4xf32>
+  check.return
+}
+
+check.benchmark<@ggml_im2col_f32_f32_small_case> @ggml_im2col_f32_f32_small

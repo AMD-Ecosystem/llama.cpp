@@ -1,0 +1,84 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// GGML broadcasts the mask over heads and batches while retaining each
+// query row. One wave owns a row, so the two reductions need no scratch.
+template.decl @ggml.masked_soft_max_f32.mask_row(%row: index, %ne1: index, %ne2: index, %mask_ne1: index, %mask_ne2: index, %mask_ne3: index) -> (index)
+
+template.def<@ggml.masked_soft_max_f32.mask_row> device @ggml_masked_soft_max_f32_mask_row(%row: index, %ne1: index, %ne2: index, %mask_ne1: index, %mask_ne2: index, %mask_ne3: index) -> (index) {
+  %query = index.rem %row, %ne1 : index
+  %head_batch = index.div %row, %ne1 : index
+  %head = index.rem %head_batch, %ne2 : index
+  %batch = index.div %head_batch, %ne2 : index
+  %mask_head = index.rem %head, %mask_ne2 : index
+  %mask_batch = index.rem %batch, %mask_ne3 : index
+  %mask_batch_stride = index.mul %mask_ne1, %mask_ne2 : index
+  %head_base = index.mul %mask_head, %mask_ne1 : index
+  %batch_base = index.mul %mask_batch, %mask_batch_stride : index
+  %row01 = index.add %query, %head_base : index
+  %mask_row = index.add %row01, %batch_base : index
+  template.return %mask_row : index
+}
+
+template.decl @ggml.masked_soft_max_f32.score(%score: f32, %mask: f32, %scale: f32) -> (f32)
+
+template.def<@ggml.masked_soft_max_f32.score> device @ggml_masked_soft_max_f32_score(%score: f32, %mask: f32, %scale: f32) -> (f32) {
+  %scaled = scalar.mulf %score, %scale : f32
+  %masked = scalar.addf %scaled, %mask : f32
+  template.return %masked : f32
+}
+
+template.decl @ggml.masked_soft_max_f32.row(%row: index, %row_count: index, %width: index, %ne1: index, %ne2: index, %mask_ne1: index, %mask_ne2: index, %mask_ne3: index, %scale: f32, %scores: buffer, %mask: buffer, %output: buffer)
+
+template.def<@ggml.masked_soft_max_f32.row> device @ggml_masked_soft_max_f32_row(%row: index, %row_count: index, %width: index, %ne1: index, %ne2: index, %mask_ne1: index, %mask_ne2: index, %mask_ne3: index, %scale: f32, %scores: buffer, %mask: buffer, %output: buffer) {
+  %c0 = index.constant 0 : index
+  %c64 = index.constant 64 : index
+  %c0_offset = index.constant 0 : offset
+  %lane = kernel.workitem.id<x> : index
+  %score_base = index.mul %row, %width : index
+  %mask_row = template.apply<@ggml.masked_soft_max_f32.mask_row>(%row, %ne1, %ne2, %mask_ne1, %mask_ne2, %mask_ne3) : (index, index, index, index, index, index) -> (index)
+  %mask_base = index.mul %mask_row, %width : index
+  %mask_rows01 = index.mul %mask_ne1, %mask_ne2 : index
+  %mask_rows = index.mul %mask_rows01, %mask_ne3 : index
+  %score_count = index.mul %row_count, %width : index
+  %mask_count = index.mul %mask_rows, %width : index
+  %scores_view = buffer.view %scores[%c0_offset] : buffer -> view<[%score_count]xf32>
+  %mask_view = buffer.view %mask[%c0_offset] : buffer -> view<[%mask_count]xf32>
+  %output_view = buffer.view %output[%c0_offset] : buffer -> view<[%score_count]xf32>
+  %negative_large = scalar.constant -3.4028234663852886e+38 : f32
+  %zero = scalar.constant 0.0 : f32
+  %local_max = scf.for %col = [%lane to %width step %c64](%maximum = %negative_large : f32) -> (f32) {
+    %score_index = index.add %score_base, %col : index
+    %mask_index = index.add %mask_base, %col : index
+    %score = view.load %scores_view[%score_index] : view<[%score_count]xf32> -> f32
+    %mask_value = view.load %mask_view[%mask_index] : view<[%mask_count]xf32> -> f32
+    %masked = template.apply<@ggml.masked_soft_max_f32.score>(%score, %mask_value, %scale) : (f32, f32, f32) -> (f32)
+    %next = scalar.maxnumf %maximum, %masked : f32
+    scf.yield %next : f32
+  }
+  %row_max = kernel.subgroup.reduce<maxnumf> %local_max : f32
+  %local_sum = scf.for %col = [%lane to %width step %c64](%sum = %zero : f32) -> (f32) {
+    %score_index = index.add %score_base, %col : index
+    %mask_index = index.add %mask_base, %col : index
+    %score = view.load %scores_view[%score_index] : view<[%score_count]xf32> -> f32
+    %mask_value = view.load %mask_view[%mask_index] : view<[%mask_count]xf32> -> f32
+    %masked = template.apply<@ggml.masked_soft_max_f32.score>(%score, %mask_value, %scale) : (f32, f32, f32) -> (f32)
+    %delta = scalar.subf %masked, %row_max : f32
+    %exp = scalar.expf<afn> %delta : f32
+    %next = scalar.addf %sum, %exp : f32
+    scf.yield %next : f32
+  }
+  %row_sum = kernel.subgroup.reduce<addf> %local_sum : f32
+  scf.for %col = [%lane to %width step %c64] {
+    %score_index = index.add %score_base, %col : index
+    %mask_index = index.add %mask_base, %col : index
+    %score = view.load %scores_view[%score_index] : view<[%score_count]xf32> -> f32
+    %mask_value = view.load %mask_view[%mask_index] : view<[%mask_count]xf32> -> f32
+    %masked = template.apply<@ggml.masked_soft_max_f32.score>(%score, %mask_value, %scale) : (f32, f32, f32) -> (f32)
+    %delta = scalar.subf %masked, %row_max : f32
+    %exp = scalar.expf<afn> %delta : f32
+    %probability = scalar.divf<afn> %exp, %row_sum : f32
+    view.store %probability, %output_view[%score_index] : f32, view<[%score_count]xf32>
+  }
+  template.return
+}

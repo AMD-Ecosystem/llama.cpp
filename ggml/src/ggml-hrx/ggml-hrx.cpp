@@ -15,6 +15,7 @@
 #include "runtime/transient-arena.h"
 
 #include <atomic>
+#include <cmath>
 #include <cinttypes>
 #include <cstddef>
 #include <cstdint>
@@ -974,6 +975,41 @@ static bool supported_scale_f32_tensor(const ggml_tensor * op) {
            static_cast<uint64_t>(ggml_nelements(op)) <= std::numeric_limits<uint32_t>::max();
 }
 
+static bool supported_upscale_bilinear_f32_tensor(const ggml_tensor * op) {
+    const bool upscale = op != nullptr && op->op == GGML_OP_UPSCALE;
+    const bool has_source = op != nullptr && op->src[0] != nullptr;
+    if (!upscale || !has_source) {
+        return false;
+    }
+    const ggml_tensor * source = op->src[0];
+    const uint32_t mode = static_cast<uint32_t>(ggml_get_op_params_i32(op, 0));
+    const bool bilinear = (mode & 0xffu) == GGML_SCALE_MODE_BILINEAR;
+    const bool supported_flags = (mode & ~(0xffu | GGML_SCALE_FLAG_ALIGN_CORNERS)) == 0;
+    const bool f32_tensors = source->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
+    const bool positive_shapes = tensor_has_positive_shape(source) && tensor_has_positive_shape(op);
+    const bool packed_output = ggml_is_contiguous(op) && tensor_has_packed_f32_layout(op);
+    const bool bounded_output = static_cast<uint64_t>(ggml_nelements(op)) <= 134217728;
+    const bool separate_storage = tensor_storage_range(source).root != tensor_storage_range(op).root;
+    if (!bilinear || !supported_flags || !f32_tensors || !positive_shapes || !packed_output ||
+        !bounded_output || !separate_storage) {
+        return false;
+    }
+    constexpr size_t maximum_elements = 134217728;
+    const bool bounded_source = static_cast<uint64_t>(ggml_nelements(source)) <= maximum_elements;
+    const bool bounded_span = ggml_nbytes(source) <= maximum_elements * sizeof(float);
+    if (!bounded_source || !bounded_span) {
+        return false;
+    }
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+        const bool aligned_stride = source->nb[i] % sizeof(float) == 0;
+        const bool bounded_stride = source->nb[i] / sizeof(float) <= maximum_elements;
+        if (!aligned_stride || !bounded_stride) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool supported_qwen_attention_projection_get_rows_tensor(const ggml_tensor * op) {
     if (op == nullptr || op->op != GGML_OP_GET_ROWS || op->src[0] == nullptr || op->src[1] == nullptr ||
         op->src[0]->op != GGML_OP_MUL_MAT || op->type != GGML_TYPE_F32 || op->src[0]->type != GGML_TYPE_F32 ||
@@ -1049,12 +1085,38 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
         return source_f32 && output_f32 && source_contiguous && output_contiguous && same_shape &&
                separate_output && nonempty && bounded;
     }
+    if (op->op == GGML_OP_NORM) {
+        const ggml_tensor * source = op->src[0];
+        if (source == nullptr) {
+            return false;
+        }
+        const bool source_f32        = source->type == GGML_TYPE_F32;
+        const bool output_f32        = op->type == GGML_TYPE_F32;
+        const bool source_contiguous = ggml_is_contiguous(source);
+        const bool output_contiguous = ggml_is_contiguous(op);
+        const bool same_shape        = ggml_are_same_shape(source, op);
+        const bool separate_output   = op->view_src == nullptr;
+        const bool hidden_positive   = op->ne[0] >= 1;
+        const bool hidden_bounded    = op->ne[0] <= 32768;
+        const int64_t row_count       = ggml_nrows(op);
+        const bool rows_positive     = row_count >= 1;
+        const bool rows_bounded      = row_count <= 1048576;
+        const float epsilon          = ggml_get_op_params_f32(op, 0);
+        const bool finite_epsilon    = std::isfinite(epsilon);
+        const bool valid_epsilon     = epsilon >= 0.0f;
+        return source_f32 && output_f32 && source_contiguous && output_contiguous && same_shape &&
+               separate_output && hidden_positive && hidden_bounded && rows_positive && rows_bounded &&
+               finite_epsilon && valid_epsilon;
+    }
     const bool supported_binary = supported_binary_f32_tensor(op);
     if (supported_binary) {
         return true;
     }
     if (supported_scale_f32_tensor(op)) {
         return true;
+    }
+    if (op->op == GGML_OP_UPSCALE) {
+        return supported_upscale_bilinear_f32_tensor(op);
     }
     if (supported_qwen_attention_projection_get_rows_tensor(op)) {
         return true;
@@ -1078,7 +1140,9 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
 
 static bool device_supports_buffer_type(ggml_backend_dev_t device, ggml_backend_buffer_type_t buft) {
     auto * context = device_context(device);
-    return buft == &context->buft || buft == &context->host_buft || ggml_backend_buft_is_host(buft);
+    // Host buffers are copied into HRX splits when needed. Claiming them here makes the scheduler
+    // place CPU-weight operations on HRX and duplicate the host model in device memory.
+    return buft == &context->buft;
 }
 
 static const ggml_backend_device_i device_i = {

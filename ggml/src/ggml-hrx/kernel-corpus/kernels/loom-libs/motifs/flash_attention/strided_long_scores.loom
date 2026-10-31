@@ -1,0 +1,90 @@
+config.decl @ggml.flash_attention.strided.query_head_count : %value: index where [range(%value, 1, 64)]
+
+config.decl @ggml.flash_attention.strided.key_value_head_count : %value: index where [range(%value, 1, 64)]
+
+config.decl @ggml.flash_attention.strided.qk_head_size : %value: index where [range(%value, 1, 128)]
+
+config.decl @ggml.flash_attention.strided.value_head_size : %value: index where [range(%value, 1, 128)]
+
+config.decl @ggml.flash_attention.strided.query_token_stride : %value: index where [range(%value, 1, 1048576)]
+
+config.decl @ggml.flash_attention.strided.query_head_stride : %value: index where [range(%value, 1, 1048576)]
+
+config.decl @ggml.flash_attention.strided.key_token_stride : %value: index where [range(%value, 1, 1048576)]
+
+config.decl @ggml.flash_attention.strided.key_head_stride : %value: index where [range(%value, 1, 1048576)]
+
+config.decl @ggml.flash_attention.strided.value_token_stride : %value: index where [range(%value, 1, 1048576)]
+
+config.decl @ggml.flash_attention.strided.value_head_stride : %value: index where [range(%value, 1, 1048576)]
+
+config.decl @ggml.flash_attention.strided.query_span : %value: index where [range(%value, 1, 16777216)]
+
+config.decl @ggml.flash_attention.strided.key_span : %value: index where [range(%value, 1, 16777216)]
+
+config.decl @ggml.flash_attention.strided.value_span : %value: index where [range(%value, 1, 16777216)]
+
+config.decl @ggml.flash_attention.strided.has_mask : %value: index where [range(%value, 0, 1)]
+
+config.decl @ggml.flash_attention.strided.attention_scale : f32
+
+template.decl @ggml.flash_attention.strided.dot(%qk_head_size: index, %query_base: index, %key_base: index, %query_span: index, %key_span: index, %query: buffer, %key: buffer) -> (f32)
+
+template.decl @ggml.flash_attention.strided.long_scores(%query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %mask: buffer, %probability: buffer)
+
+template.def<@ggml.flash_attention.strided.long_scores> device @ggml_flash_attention_strided_long_scores(%query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %mask: buffer, %probability: buffer) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c0_offset = index.constant 0 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %query_head_count = config.get @ggml.flash_attention.strided.query_head_count : index
+  %key_value_head_count = config.get @ggml.flash_attention.strided.key_value_head_count : index
+  %qk_head_size = config.get @ggml.flash_attention.strided.qk_head_size : index
+  %query_token_stride = config.get @ggml.flash_attention.strided.query_token_stride : index
+  %query_head_stride = config.get @ggml.flash_attention.strided.query_head_stride : index
+  %key_token_stride = config.get @ggml.flash_attention.strided.key_token_stride : index
+  %key_head_stride = config.get @ggml.flash_attention.strided.key_head_stride : index
+  %query_span = config.get @ggml.flash_attention.strided.query_span : index
+  %key_span = config.get @ggml.flash_attention.strided.key_span : index
+  %has_mask = config.get @ggml.flash_attention.strided.has_mask : index
+  %mask_present = index.cmp eq, %has_mask, %c1 : index
+  %scale = config.get @ggml.flash_attention.strided.attention_scale : f32
+  %query_token = kernel.workgroup.id<x> : index
+  %query_head = kernel.workgroup.id<y> : index
+  %lane = kernel.workitem.id<x> : index
+  %lane_count = index.constant 256 : index
+  %heads_per_kv = index.div %query_head_count, %key_value_head_count : index
+  %key_head = index.div %query_head, %heads_per_kv : index
+  %query_base0 = index.mul %query_token, %query_token_stride : index
+  %query_base1 = index.mul %query_head, %query_head_stride : index
+  %query_base = index.add %query_base0, %query_base1 : index
+  %mask_span = index.mul %query_token_count, %key_value_token_count : index
+  %mask_view = buffer.view %mask[%c0_offset] : buffer -> view<[%mask_span]xf16>
+  %probability_span0 = index.mul %mask_span, %query_head_count : index
+  %probability_view = buffer.view %probability[%c0_offset] : buffer -> view<[%probability_span0]xf32>
+  scf.for %key_token = [%lane to %key_value_token_count step %lane_count] {
+    %key_base0 = index.mul %key_token, %key_token_stride : index
+    %key_base1 = index.mul %key_head, %key_head_stride : index
+    %key_base = index.add %key_base0, %key_base1 : index
+    %dot = template.apply<@ggml.flash_attention.strided.dot>(%qk_head_size, %query_base, %key_base, %query_span, %key_span, %query, %key) : (index, index, index, index, index, buffer, buffer) -> (f32)
+    %scaled = scalar.mulf %dot, %scale : f32
+    %mask_value = scf.if %mask_present -> (f32) {
+      %mask_base = index.mul %query_token, %key_value_token_count : index
+      %mask_index = index.add %mask_base, %key_token : index
+      %bounded_mask_index, %bounded_mask_span = index.assume %mask_index, %mask_span [lt(%mask_index, %mask_span)] : index, index
+      %mask_f16 = view.load %mask_view[%bounded_mask_index] : view<[%mask_span]xf16> -> f16
+      %mask_f32 = scalar.extf %mask_f16 : f16 to f32
+      scf.yield %mask_f32 : f32
+    } else {
+      scf.yield %c0_f32 : f32
+    }
+    %score = scalar.addf %scaled, %mask_value : f32
+    %row0 = index.mul %query_token, %query_head_count : index
+    %row1 = index.add %row0, %query_head : index
+    %row2 = index.mul %row1, %key_value_token_count : index
+    %probability_index = index.add %row2, %key_token : index
+    %bounded_probability_index, %bounded_probability_span = index.assume %probability_index, %probability_span0 [lt(%probability_index, %probability_span0)] : index, index
+    view.store %score, %probability_view[%bounded_probability_index] : f32, view<[%probability_span0]xf32>
+  }
+  template.return
+}

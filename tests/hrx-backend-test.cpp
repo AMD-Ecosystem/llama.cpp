@@ -11626,6 +11626,14 @@ static void run_zero_output_device_support_checks() {
     ggml_backend_free(backend);
 }
 
+static void run_device_buffer_type_placement_checks() {
+    ggml_backend_dev_t device = ggml_backend_reg_dev_get(ggml_backend_hrx_reg(), 0);
+    REQUIRE(device != nullptr);
+    REQUIRE(ggml_backend_dev_supports_buft(device, ggml_backend_dev_buffer_type(device)));
+    REQUIRE(!ggml_backend_dev_supports_buft(device, ggml_backend_dev_host_buffer_type(device)));
+    REQUIRE(!ggml_backend_dev_supports_buft(device, ggml_backend_cpu_buffer_type()));
+}
+
 static void run_scale_f32_device_support_checks() {
     ggml_backend_t backend = ggml_backend_hrx_init(0);
     REQUIRE(backend != nullptr);
@@ -13160,6 +13168,99 @@ static void run_rope_scale_f32_numerics() {
     ggml_backend_free(hrx);
 }
 
+static std::vector<float> run_vision_flash_attention_case(ggml_backend_t backend, bool check_dispatch, bool with_mask) {
+    constexpr int64_t head_size   = 72;
+    constexpr int64_t head_count  = 16;
+    constexpr int64_t token_count = 256;
+    ggml_context * ctx = ggml_init({ 1024 * 1024, nullptr, true });
+    REQUIRE(ctx != nullptr);
+
+    ggml_tensor * query_base = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, head_count, token_count);
+    ggml_tensor * query      = ggml_permute(ctx, query_base, 0, 2, 1, 3);
+    ggml_tensor * key        = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, head_size, token_count, head_count);
+    ggml_tensor * value      = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, head_size, token_count, head_count);
+    ggml_tensor * mask       = with_mask ? ggml_new_tensor_2d(ctx, GGML_TYPE_F16, token_count, token_count) : nullptr;
+    ggml_tensor * output     = ggml_flash_attn_ext(ctx, query, key, value, mask,
+                                                   1.0f / std::sqrt(static_cast<float>(head_size)), 0.0f, 0.0f);
+    REQUIRE(ggml_prec_set_acc(output, GGML_PREC_F32));
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, output);
+
+    if (check_dispatch) {
+        ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+        REQUIRE(imported.valid());
+        const auto & flash_node = imported.graph.nodes().back();
+        REQUIRE(flash_node.op == GGML_OP_FLASH_ATTN_EXT);
+        REQUIRE(flash_node.inputs.size() == (with_mask ? 4 : 3));
+        REQUIRE(query->ne[0] == 72 && query->ne[1] == 256 && query->ne[2] == 16);
+        REQUIRE(key->ne[0] == 72 && key->ne[1] == 256 && key->ne[2] == 16);
+        REQUIRE(value->ne[0] == 72 && value->ne[1] == 256 && value->ne[2] == 16);
+        REQUIRE(output->ne[0] == 72 && output->ne[1] == 16 && output->ne[2] == 256);
+        ggml::hrx::DispatchScheduler scheduler;
+        REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+        REQUIRE(scheduler.plan().dispatches.size() == 2);
+        REQUIRE(kernel_name_for_id(scheduler.plan().dispatches[0].kernel.kernel_id) ==
+                "loom_libs:ggml_flash_attention_f32_f16_strided_scores");
+        REQUIRE(kernel_name_for_id(scheduler.plan().dispatches[1].kernel.kernel_id) ==
+                "loom_libs:ggml_flash_attention_f32_f16_strided_values");
+    }
+
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    REQUIRE(buffer != nullptr);
+    std::vector<float> query_data(head_size * head_count * token_count);
+    std::vector<ggml_fp16_t> key_data(query_data.size());
+    std::vector<ggml_fp16_t> value_data(query_data.size());
+    std::vector<ggml_fp16_t> mask_data(token_count * token_count);
+    for (size_t i = 0; i < query_data.size(); ++i) {
+        query_data[i] = static_cast<float>(static_cast<int64_t>((i * 13) % 89) - 44) * 0.00625f;
+        key_data[i] = ggml_fp32_to_fp16(static_cast<float>(static_cast<int64_t>((i * 17) % 79) - 39) * 0.00625f);
+        value_data[i] = ggml_fp32_to_fp16(static_cast<float>(static_cast<int64_t>((i * 19) % 71) - 35) * 0.025f);
+    }
+    if (with_mask) {
+        for (int64_t row = 0; row < token_count; ++row) {
+            for (int64_t column = 0; column < token_count; ++column) {
+                const bool visible = row / 64 == column / 64;
+                const float bias = visible ? static_cast<float>((row + column) % 7) * -0.03125f :
+                                             -std::numeric_limits<float>::infinity();
+                mask_data[static_cast<size_t>(row * token_count + column)] = ggml_fp32_to_fp16(bias);
+            }
+        }
+    }
+    ggml_backend_tensor_set(query_base, query_data.data(), 0, query_data.size() * sizeof(float));
+    ggml_backend_tensor_set(key, key_data.data(), 0, key_data.size() * sizeof(ggml_fp16_t));
+    ggml_backend_tensor_set(value, value_data.data(), 0, value_data.size() * sizeof(ggml_fp16_t));
+    if (with_mask) {
+        ggml_backend_tensor_set(mask, mask_data.data(), 0, mask_data.size() * sizeof(ggml_fp16_t));
+    }
+
+    REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(backend);
+    std::vector<float> result(query_data.size());
+    ggml_backend_tensor_get(output, result.data(), 0, result.size() * sizeof(float));
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+    return result;
+}
+
+static void run_vision_flash_attention_numerics() {
+    ggml_backend_t cpu = ggml_backend_cpu_init();
+    ggml_backend_t hrx = ggml_backend_hrx_init(0);
+    REQUIRE(cpu != nullptr);
+    REQUIRE(hrx != nullptr);
+    for (const bool with_mask : { false, true }) {
+        const std::vector<float> expected = run_vision_flash_attention_case(cpu, false, with_mask);
+        const std::vector<float> actual   = run_vision_flash_attention_case(hrx, true, with_mask);
+        REQUIRE(actual.size() == expected.size());
+        for (size_t i = 0; i < actual.size(); ++i) {
+            const float tolerance = 2.0e-3f + 2.0e-3f * std::fabs(expected[i]);
+            REQUIRE(std::fabs(actual[i] - expected[i]) <= tolerance);
+        }
+    }
+    ggml_backend_free(hrx);
+    ggml_backend_free(cpu);
+}
+
 struct GatherAddRmsNormOutputs {
     std::vector<float> raw;
     std::vector<float> normalized;
@@ -14214,7 +14315,115 @@ static void run_initializer_host_input_ownership() {
     ggml_free(ctx);
 }
 
+static std::vector<float> run_long_vision_flash_attention_case(ggml_backend_t backend, int64_t query_tokens,
+                                                                int64_t key_value_tokens, bool with_mask,
+                                                                bool check_dispatch, bool schedule_only = false) {
+    constexpr int64_t head_size = 72;
+    constexpr int64_t head_count = 16;
+    ggml_context * ctx = ggml_init({ 1024 * 1024, nullptr, true });
+    REQUIRE(ctx != nullptr);
+
+    ggml_tensor * query_base = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, head_count, query_tokens);
+    ggml_tensor * query = ggml_permute(ctx, query_base, 0, 2, 1, 3);
+    ggml_tensor * key = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, head_size, key_value_tokens, head_count);
+    ggml_tensor * value = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, head_size, key_value_tokens, head_count);
+    ggml_tensor * mask = with_mask ? ggml_new_tensor_2d(ctx, GGML_TYPE_F16, key_value_tokens, query_tokens) : nullptr;
+    ggml_tensor * output = ggml_flash_attn_ext(ctx, query, key, value, mask,
+                                               1.0f / std::sqrt(static_cast<float>(head_size)), 0.0f, 0.0f);
+    REQUIRE(ggml_prec_set_acc(output, GGML_PREC_F32));
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, output);
+
+    if (check_dispatch) {
+        ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+        REQUIRE(imported.valid());
+        ggml::hrx::DispatchScheduler scheduler;
+        REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+        const auto & dispatches = scheduler.plan().dispatches;
+        const bool long_scores = query_tokens > 256 || key_value_tokens > 256;
+        REQUIRE(dispatches.size() == (long_scores ? 3 : 2));
+        REQUIRE(kernel_name_for_id(dispatches[0].kernel.kernel_id) ==
+                (long_scores ? (with_mask ? "loom_libs:ggml_flash_attention_f32_f16_strided_long_scores" :
+                                            "loom_libs:ggml_flash_attention_f32_f16_strided_long_unmasked_scores") :
+                               "loom_libs:ggml_flash_attention_f32_f16_strided_scores"));
+        if (long_scores) {
+            REQUIRE(kernel_name_for_id(dispatches[1].kernel.kernel_id) ==
+                    "loom_libs:ggml_flash_attention_f32_f16_strided_long_softmax");
+        }
+        REQUIRE(kernel_name_for_id(dispatches.back().kernel.kernel_id) ==
+                "loom_libs:ggml_flash_attention_f32_f16_strided_values");
+    }
+    if (schedule_only) {
+        ggml_free(ctx);
+        return {};
+    }
+
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    REQUIRE(buffer != nullptr);
+    std::vector<float> query_data(head_size * head_count * query_tokens);
+    std::vector<ggml_fp16_t> key_data(head_size * head_count * key_value_tokens);
+    std::vector<ggml_fp16_t> value_data(key_data.size());
+    std::vector<ggml_fp16_t> mask_data(with_mask ? query_tokens * key_value_tokens : 0);
+    for (size_t i = 0; i < query_data.size(); ++i) {
+        query_data[i] = static_cast<float>(static_cast<int64_t>((i * 13) % 89) - 44) * 0.00625f;
+    }
+    for (size_t i = 0; i < key_data.size(); ++i) {
+        key_data[i] = ggml_fp32_to_fp16(static_cast<float>(static_cast<int64_t>((i * 17) % 79) - 39) * 0.00625f);
+        value_data[i] = ggml_fp32_to_fp16(static_cast<float>(static_cast<int64_t>((i * 19) % 71) - 35) * 0.025f);
+    }
+    if (with_mask) {
+        for (int64_t row = 0; row < query_tokens; ++row) {
+            for (int64_t column = 0; column < key_value_tokens; ++column) {
+                const bool visible = row != 0 && column / 64 == (row - 1) / 64;
+                mask_data[static_cast<size_t>(row * key_value_tokens + column)] =
+                    ggml_fp32_to_fp16(visible ? -0.03125f * static_cast<float>(column % 7) :
+                                                 -std::numeric_limits<float>::infinity());
+            }
+        }
+    }
+    ggml_backend_tensor_set(query_base, query_data.data(), 0, query_data.size() * sizeof(float));
+    ggml_backend_tensor_set(key, key_data.data(), 0, key_data.size() * sizeof(ggml_fp16_t));
+    ggml_backend_tensor_set(value, value_data.data(), 0, value_data.size() * sizeof(ggml_fp16_t));
+    if (with_mask) {
+        ggml_backend_tensor_set(mask, mask_data.data(), 0, mask_data.size() * sizeof(ggml_fp16_t));
+    }
+    REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(backend);
+    std::vector<float> result(query_data.size());
+    ggml_backend_tensor_get(output, result.data(), 0, result.size() * sizeof(float));
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+    return result;
+}
+
+static void run_vision_flash_attention_long_numerics() {
+    ggml_backend_t cpu = ggml_backend_cpu_init();
+    ggml_backend_t hrx = ggml_backend_hrx_init(0);
+    REQUIRE(cpu != nullptr);
+    REQUIRE(hrx != nullptr);
+    for (const int64_t key_value_tokens : { int64_t(256), int64_t(936), int64_t(3888) }) {
+        for (const bool with_mask : { false, true }) {
+            const std::vector<float> expected =
+                run_long_vision_flash_attention_case(cpu, 4, key_value_tokens, with_mask, false);
+            const std::vector<float> actual =
+                run_long_vision_flash_attention_case(hrx, 4, key_value_tokens, with_mask, true);
+            REQUIRE(actual.size() == expected.size());
+            for (size_t i = 0; i < actual.size(); ++i) {
+                const float tolerance = 2.0e-3f + 2.0e-3f * std::fabs(expected[i]);
+                REQUIRE(std::fabs(actual[i] - expected[i]) <= tolerance);
+            }
+        }
+    }
+    run_long_vision_flash_attention_case(hrx, 257, 256, false, true, true);
+    run_long_vision_flash_attention_case(hrx, 936, 936, false, true, true);
+    run_long_vision_flash_attention_case(hrx, 3888, 3888, false, true, true);
+    ggml_backend_free(hrx);
+    ggml_backend_free(cpu);
+}
+
 static void register_hrx_backend_device_cases(test_runner::Suite & suite) {
+    suite.device_case("device_buffer_type_placement", [] { run_device_buffer_type_placement_checks(); });
     suite.device_case("initializer_host_input_ownership", [] { run_initializer_host_input_ownership(); });
 
     suite.device_case("zero_output_device_support", [] { run_zero_output_device_support_checks(); });
@@ -14225,6 +14434,8 @@ static void register_hrx_backend_device_cases(test_runner::Suite & suite) {
     suite.device_case("inactive_set_rows_replay", [] { run_inactive_set_rows_replay(); });
     suite.device_case("add_f32", [] { run_add_f32(); });
     suite.device_case("rope_scale_f32_numerics", [] { run_rope_scale_f32_numerics(); });
+    suite.device_case("vision_flash_attention_long_numerics", [] { run_vision_flash_attention_long_numerics(); });
+    suite.device_case("vision_flash_attention_numerics", [] { run_vision_flash_attention_numerics(); });
     suite.device_case("gather_add_rmsnorm_f32_numerics", [] { run_gather_add_rmsnorm_f32_numerics(); });
     suite.device_case("scale_f32", [] { run_scale_f32(); });
     suite.device_case("scale_f32_inplace", [] { run_scale_f32_inplace(); });

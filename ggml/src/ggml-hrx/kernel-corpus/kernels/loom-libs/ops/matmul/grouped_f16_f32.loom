@@ -1,0 +1,118 @@
+// GGML batched MUL_MAT with one KV head shared by a group of query heads.
+template.decl @ggml.matmul.grouped_f16_f32.dot(%input_size: index, %key_span: index, %query_span: index, %key_row: index, %query_row: index, %key_stride0: index, %query_stride0: index, %key: buffer, %query: buffer) -> (f32)
+
+amdgpu.target<gfx11-generic> @ggml_matmul_grouped_f16_f32_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @ggml.matmul.grouped_f16_f32.input_size : %value: index where [range(%value, 1, 4096)]
+config.decl @ggml.matmul.grouped_f16_f32.key_count : %value: index where [range(%value, 1, 65536)]
+config.decl @ggml.matmul.grouped_f16_f32.query_count : %value: index where [range(%value, 1, 4096)]
+config.decl @ggml.matmul.grouped_f16_f32.query_heads : %value: index where [range(%value, 1, 256)]
+config.decl @ggml.matmul.grouped_f16_f32.head_group_size : %value: index where [range(%value, 1, 256)]
+config.decl @ggml.matmul.grouped_f16_f32.key_span : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.matmul.grouped_f16_f32.query_span : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.matmul.grouped_f16_f32.key_stride0 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.matmul.grouped_f16_f32.key_stride1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.matmul.grouped_f16_f32.key_stride2 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.matmul.grouped_f16_f32.query_stride0 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.matmul.grouped_f16_f32.query_stride1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.matmul.grouped_f16_f32.query_stride2 : %value: index where [range(%value, 1, 1073741824)]
+
+kernel.def target(@ggml_matmul_grouped_f16_f32_gfx11_wave64) @ggml_mul_mat_grouped_f16_f32() {
+  %key_count = config.get @ggml.matmul.grouped_f16_f32.key_count : index
+  %query_count = config.get @ggml.matmul.grouped_f16_f32.query_count : index
+  %query_heads = config.get @ggml.matmul.grouped_f16_f32.query_heads : index
+  %c1 = index.constant 1 : index
+  %c63 = index.constant 63 : index
+  %c64 = index.constant 64 : index
+  %rounded = index.add %key_count, %c63 : index
+  %row_groups = index.div %rounded, %c64 : index
+  kernel.launch.config workgroups(%row_groups, %query_count, %query_heads) workgroup_size(%c64, %c1, %c1) : index
+} launch(%key: buffer, %query: buffer, %output: buffer) {
+  %input_size = config.get @ggml.matmul.grouped_f16_f32.input_size : index
+  %key_count = config.get @ggml.matmul.grouped_f16_f32.key_count : index
+  %query_count = config.get @ggml.matmul.grouped_f16_f32.query_count : index
+  %query_heads = config.get @ggml.matmul.grouped_f16_f32.query_heads : index
+  %head_group_size = config.get @ggml.matmul.grouped_f16_f32.head_group_size : index
+  %key_span = config.get @ggml.matmul.grouped_f16_f32.key_span : index
+  %query_span = config.get @ggml.matmul.grouped_f16_f32.query_span : index
+  %key_stride0 = config.get @ggml.matmul.grouped_f16_f32.key_stride0 : index
+  %key_stride1 = config.get @ggml.matmul.grouped_f16_f32.key_stride1 : index
+  %key_stride2 = config.get @ggml.matmul.grouped_f16_f32.key_stride2 : index
+  %query_stride0 = config.get @ggml.matmul.grouped_f16_f32.query_stride0 : index
+  %query_stride1 = config.get @ggml.matmul.grouped_f16_f32.query_stride1 : index
+  %query_stride2 = config.get @ggml.matmul.grouped_f16_f32.query_stride2 : index
+  %c0_offset = index.constant 0 : offset
+  %c64 = index.constant 64 : index
+  %row_group = kernel.workgroup.id<x> : index
+  %query_token = kernel.workgroup.id<y> : index
+  %query_head = kernel.workgroup.id<z> : index
+  %lane = kernel.workitem.id<x> : index
+  %row_base = index.mul %row_group, %c64 : index
+  %key_token = index.add %row_base, %lane : index
+  %valid = index.cmp ult, %key_token, %key_count : index
+  %key_head = index.div %query_head, %head_group_size : index
+  %key_head_base = index.mul %key_head, %key_stride2 : index
+  %key_token_base = index.mul %key_token, %key_stride1 : index
+  %key_row = index.add %key_head_base, %key_token_base : index
+  %query_head_base = index.mul %query_head, %query_stride2 : index
+  %query_token_base = index.mul %query_token, %query_stride1 : index
+  %query_row = index.add %query_head_base, %query_token_base : index
+  %output_head_base = index.mul %query_head, %query_count : index
+  %output_query_base = index.add %output_head_base, %query_token : index
+  %output_row_base = index.mul %output_query_base, %key_count : index
+  %output_index = index.add %output_row_base, %key_token : index
+  %output_elements = index.mul %query_heads, %query_count : index
+  %output_count = index.mul %output_elements, %key_count : index
+  %output_view = buffer.view %output[%c0_offset] : buffer -> view<[%output_count]xf32>
+  scf.if %valid {
+    %score = template.apply<@ggml.matmul.grouped_f16_f32.dot>(%input_size, %key_span, %query_span, %key_row, %query_row, %key_stride0, %query_stride0, %key, %query) : (index, index, index, index, index, index, index, buffer, buffer) -> (f32)
+    view.store %score, %output_view[%output_index] : f32, view<[%output_count]xf32>
+  }
+  kernel.return
+}
+
+check.case public @ggml_mul_mat_grouped_f16_f32_strided_case {
+  %key = check.generate.fill value(0.5) : tensor<24xf16>
+  %query = check.generate.fill value(0.3333) : tensor<60xf32>
+  %output = check.generate.fill value(-1.0) : tensor<24xf32>
+  %expected = check.generate.fill value(0.66650390625) : tensor<24xf32>
+  kernel.launch @ggml_mul_mat_grouped_f16_f32(%key, %query, %output) : (tensor<24xf16>, tensor<60xf32>, tensor<24xf32>)
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<24xf32>, tensor<24xf32>
+  check.return
+}
+
+check.benchmark<@ggml_mul_mat_grouped_f16_f32_strided_case> @ggml_mul_mat_grouped_f16_f32_strided
+
+check.case public @ggml_mul_mat_grouped_f16_f32_head_map_case {
+  %key = check.generate.iota offset(0.0) step(1.0) : tensor<16xf16>
+  %query = check.generate.iota offset(0.0) step(1.0) : tensor<16xf32>
+  %output = check.generate.fill value(-1.0) : tensor<8xf32>
+  %head0_expected = check.generate.iota offset(14.0) step(24.0) : tensor<2xf32>
+  %head1_expected = check.generate.iota offset(38.0) step(88.0) : tensor<2xf32>
+  %head2_expected = check.generate.iota offset(366.0) step(152.0) : tensor<2xf32>
+  %head3_expected = check.generate.iota offset(518.0) step(216.0) : tensor<2xf32>
+  kernel.launch @ggml_mul_mat_grouped_f16_f32(%key, %query, %output) : (tensor<16xf16>, tensor<16xf32>, tensor<8xf32>)
+  %head0 = check.tensor.view %output offset(0) : tensor<8xf32> -> tensor<2xf32>
+  %head1 = check.tensor.view %output offset(8) : tensor<8xf32> -> tensor<2xf32>
+  %head2 = check.tensor.view %output offset(16) : tensor<8xf32> -> tensor<2xf32>
+  %head3 = check.tensor.view %output offset(24) : tensor<8xf32> -> tensor<2xf32>
+  check.expect.approximate actual(%head0) expected(%head0_expected) atol(0.0) rtol(0.0) nan(same) : tensor<2xf32>, tensor<2xf32>
+  check.expect.approximate actual(%head1) expected(%head1_expected) atol(0.0) rtol(0.0) nan(same) : tensor<2xf32>, tensor<2xf32>
+  check.expect.approximate actual(%head2) expected(%head2_expected) atol(0.0) rtol(0.0) nan(same) : tensor<2xf32>, tensor<2xf32>
+  check.expect.approximate actual(%head3) expected(%head3_expected) atol(0.0) rtol(0.0) nan(same) : tensor<2xf32>, tensor<2xf32>
+  check.return
+}
+
+check.benchmark<@ggml_mul_mat_grouped_f16_f32_head_map_case> @ggml_mul_mat_grouped_f16_f32_head_map
+
+check.case public @ggml_mul_mat_grouped_f16_f32_qwen_text_case {
+  %key = check.generate.fill value(0.5) : tensor<262144xf16>
+  %query = check.generate.fill value(2.0) : tensor<12288xf32>
+  %output = check.generate.fill value(-1.0) : tensor<12288xf32>
+  %expected = check.generate.fill value(256.0) : tensor<12288xf32>
+  kernel.launch @ggml_mul_mat_grouped_f16_f32(%key, %query, %output) : (tensor<262144xf16>, tensor<12288xf32>, tensor<12288xf32>)
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<12288xf32>, tensor<12288xf32>
+  check.return
+}
+
+check.benchmark<@ggml_mul_mat_grouped_f16_f32_qwen_text_case> @ggml_mul_mat_grouped_f16_f32_qwen_text

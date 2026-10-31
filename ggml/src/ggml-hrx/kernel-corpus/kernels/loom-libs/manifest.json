@@ -3,6 +3,18 @@
   "upstream_revision": "local",
   "files": [
     {
+      "path": "motifs/flash_attention/strided_long_scores.loom"
+    },
+    {
+      "path": "motifs/flash_attention/strided_long_softmax.loom"
+    },
+    {
+      "path": "ops/normalization/masked_soft_max_f32.loom"
+    },
+    {
+      "path": "motifs/normalization/masked_soft_max.loom"
+    },
+    {
       "path": "ops/matmul/vector_codebook_f32_f32.loom"
     },
     {
@@ -33,6 +45,9 @@
       "path": "ops/elementwise/scale_f32.loom"
     },
     {
+      "path": "ops/interpolate/bilinear_f32.loom"
+    },
+    {
       "path": "ops/elementwise/scale_add_f32.loom"
     },
     {
@@ -54,6 +69,9 @@
       "path": "ops/copy/strided_source_f32.loom"
     },
     {
+      "path": "ops/copy/strided_source_f32_f16.loom"
+    },
+    {
       "path": "ops/copy/concat_dim0_f32.loom"
     },
     {
@@ -64,6 +82,9 @@
     },
     {
       "path": "ops/elementwise/binary_publish_q8_1_x4.loom"
+    },
+    {
+      "path": "ops/normalization/norm_f32.loom"
     },
     {
       "path": "ops/normalization/rmsnorm_f32.loom"
@@ -435,6 +456,12 @@
       "path": "ops/rope/rope_f32.loom"
     },
     {
+      "path": "ops/rope/rope_vision_f32.loom"
+    },
+    {
+      "path": "ops/rope/mrope_f32.loom"
+    },
+    {
       "path": "ops/rope/rope_concat_f32.loom"
     },
     {
@@ -495,6 +522,9 @@
       "path": "motifs/elementwise/scale_apply.loom"
     },
     {
+      "path": "motifs/interpolate/bilinear_f32.loom"
+    },
+    {
       "path": "motifs/elementwise/binary_apply.loom"
     },
     {
@@ -514,6 +544,9 @@
     },
     {
       "path": "motifs/copy/strided_source.loom"
+    },
+    {
+      "path": "motifs/normalization/norm.loom"
     },
     {
       "path": "motifs/normalization/rmsnorm.loom"
@@ -547,6 +580,12 @@
     },
     {
       "path": "motifs/rope/rope_f32.loom"
+    },
+    {
+      "path": "motifs/rope/rope_vision_f32.loom"
+    },
+    {
+      "path": "motifs/rope/mrope_f32.loom"
     },
     {
       "path": "motifs/rows/cache_publish.loom"
@@ -652,9 +691,249 @@
     },
     {
       "path": "motifs/matmul/tiled_pair_postprocess_f32.loom"
+    },
+    {
+      "path": "ops/convolution/im2col_f32.loom"
+    },
+    {
+      "path": "motifs/convolution/im2col_gather_f32.loom"
+    },
+    {
+      "path": "ops/copy/strided_source_f16.loom"
+    },
+    {
+      "path": "motifs/copy/strided_source_f16.loom"
+    },
+    {
+      "path": "ops/flash_attention/prefill_f32_f16_strided.loom"
+    },
+    {
+      "path": "motifs/flash_attention/strided_dot.loom"
+    },
+    {
+      "path": "motifs/flash_attention/strided_scores.loom"
+    },
+    {
+      "path": "motifs/flash_attention/strided_values.loom"
+    },
+    {
+      "path": "ops/matmul/grouped_f16_f32.loom"
+    },
+    {
+      "path": "motifs/matmul/grouped_f16_f32_dot.loom"
     }
   ],
   "exports": [
+    {
+      "name": "ggml_flash_attention_f32_f16_strided_long_scores",
+      "family": "loom_libs",
+      "symbol": "ggml_flash_attention_f32_f16_strided_long_scores",
+      "source": "ops/flash_attention/prefill_f32_f16_strided.loom",
+      "workload_parameters": [
+        {
+          "name": "query_token_count",
+          "type": "index"
+        },
+        {
+          "name": "key_value_token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "query_token_count",
+          "type": "index"
+        },
+        {
+          "name": "key_value_token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "query",
+        "key",
+        "mask",
+        "probability"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/flash_attention/prefill_f32_f16_strided.loom"
+        ],
+        "library_sources": [
+          "motifs/flash_attention/strided_scores.loom",
+          "motifs/flash_attention/strided_dot.loom",
+          "motifs/flash_attention/strided_values.loom",
+          "motifs/flash_attention/strided_long_scores.loom",
+          "motifs/flash_attention/strided_long_softmax.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/flash_attention/strided_scores.loom",
+        "motifs/flash_attention/strided_dot.loom",
+        "motifs/flash_attention/strided_values.loom",
+        "motifs/flash_attention/strided_long_scores.loom",
+        "motifs/flash_attention/strided_long_softmax.loom"
+      ]
+    },
+    {
+      "name": "ggml_flash_attention_f32_f16_strided_long_unmasked_scores",
+      "family": "loom_libs",
+      "symbol": "ggml_flash_attention_f32_f16_strided_long_unmasked_scores",
+      "source": "ops/flash_attention/prefill_f32_f16_strided.loom",
+      "workload_parameters": [
+        {
+          "name": "query_token_count",
+          "type": "index"
+        },
+        {
+          "name": "key_value_token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "query_token_count",
+          "type": "index"
+        },
+        {
+          "name": "key_value_token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "query",
+        "key",
+        "probability"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/flash_attention/prefill_f32_f16_strided.loom"
+        ],
+        "library_sources": [
+          "motifs/flash_attention/strided_scores.loom",
+          "motifs/flash_attention/strided_dot.loom",
+          "motifs/flash_attention/strided_values.loom",
+          "motifs/flash_attention/strided_long_scores.loom",
+          "motifs/flash_attention/strided_long_softmax.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/flash_attention/strided_scores.loom",
+        "motifs/flash_attention/strided_dot.loom",
+        "motifs/flash_attention/strided_values.loom",
+        "motifs/flash_attention/strided_long_scores.loom",
+        "motifs/flash_attention/strided_long_softmax.loom"
+      ]
+    },
+    {
+      "name": "ggml_flash_attention_f32_f16_strided_long_softmax",
+      "family": "loom_libs",
+      "symbol": "ggml_flash_attention_f32_f16_strided_long_softmax",
+      "source": "ops/flash_attention/prefill_f32_f16_strided.loom",
+      "workload_parameters": [
+        {
+          "name": "query_token_count",
+          "type": "index"
+        },
+        {
+          "name": "key_value_token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "query_token_count",
+          "type": "index"
+        },
+        {
+          "name": "key_value_token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "probability"
+      ],
+      "binding_access": [
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/flash_attention/prefill_f32_f16_strided.loom"
+        ],
+        "library_sources": [
+          "motifs/flash_attention/strided_scores.loom",
+          "motifs/flash_attention/strided_dot.loom",
+          "motifs/flash_attention/strided_values.loom",
+          "motifs/flash_attention/strided_long_scores.loom",
+          "motifs/flash_attention/strided_long_softmax.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/flash_attention/strided_scores.loom",
+        "motifs/flash_attention/strided_dot.loom",
+        "motifs/flash_attention/strided_values.loom",
+        "motifs/flash_attention/strided_long_scores.loom",
+        "motifs/flash_attention/strided_long_softmax.loom"
+      ]
+    },
+    {
+      "name": "ggml_masked_soft_max_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_masked_soft_max_f32",
+      "source": "ops/normalization/masked_soft_max_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "row_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "row_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "scores",
+        "mask",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/normalization/masked_soft_max_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/normalization/masked_soft_max.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/normalization/masked_soft_max.loom"
+      ]
+    },
     {
       "name": "ggml_mul_mat_vector_iq2_s_f32_f32",
       "family": "loom_libs",
@@ -1123,6 +1402,53 @@
         "mode": "direct",
         "primary_sources": [
           "ops/copy/strided_source_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/copy/strided_source.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/copy/strided_source.loom"
+      ]
+    },
+    {
+      "name": "ggml_copy_strided_source_f32_f16",
+      "family": "loom_libs",
+      "symbol": "ggml_copy_strided_source_f32_f16",
+      "source": "ops/copy/strided_source_f32_f16.loom",
+      "workload_parameters": [
+        {
+          "name": "element_count",
+          "type": "index"
+        },
+        {
+          "name": "source_span",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "element_count",
+          "type": "index"
+        },
+        {
+          "name": "source_span",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "source",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/copy/strided_source_f32_f16.loom"
         ],
         "library_sources": [
           "motifs/copy/strided_source.loom"
@@ -1679,6 +2005,45 @@
       "compile_dependencies": [
         "motifs/elementwise/binary_apply.loom",
         "motifs/quantize_q8_1_x4.loom"
+      ]
+    },
+    {
+      "name": "ggml_norm_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_norm_f32",
+      "source": "ops/normalization/norm_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "row_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "row_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/normalization/norm_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/normalization/norm.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/normalization/norm.loom"
       ]
     },
     {
@@ -6341,6 +6706,122 @@
       ]
     },
     {
+      "name": "ggml_flash_attention_f32_f16_strided_values",
+      "family": "loom_libs",
+      "symbol": "ggml_flash_attention_f32_f16_strided_values",
+      "source": "ops/flash_attention/prefill_f32_f16_strided.loom",
+      "workload_parameters": [
+        {
+          "name": "query_token_count",
+          "type": "index"
+        },
+        {
+          "name": "key_value_token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "query_token_count",
+          "type": "index"
+        },
+        {
+          "name": "key_value_token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "value",
+        "probability",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/flash_attention/prefill_f32_f16_strided.loom"
+        ],
+        "library_sources": [
+          "motifs/flash_attention/strided_scores.loom",
+          "motifs/flash_attention/strided_dot.loom",
+          "motifs/flash_attention/strided_values.loom",
+          "motifs/flash_attention/strided_long_scores.loom",
+          "motifs/flash_attention/strided_long_softmax.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/flash_attention/strided_scores.loom",
+        "motifs/flash_attention/strided_dot.loom",
+        "motifs/flash_attention/strided_values.loom",
+        "motifs/flash_attention/strided_long_scores.loom",
+        "motifs/flash_attention/strided_long_softmax.loom"
+      ]
+    },
+    {
+      "name": "ggml_flash_attention_f32_f16_strided_scores",
+      "family": "loom_libs",
+      "symbol": "ggml_flash_attention_f32_f16_strided_scores",
+      "source": "ops/flash_attention/prefill_f32_f16_strided.loom",
+      "workload_parameters": [
+        {
+          "name": "query_token_count",
+          "type": "index"
+        },
+        {
+          "name": "key_value_token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "query_token_count",
+          "type": "index"
+        },
+        {
+          "name": "key_value_token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "query",
+        "key",
+        "mask",
+        "probability"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/flash_attention/prefill_f32_f16_strided.loom"
+        ],
+        "library_sources": [
+          "motifs/flash_attention/strided_scores.loom",
+          "motifs/flash_attention/strided_dot.loom",
+          "motifs/flash_attention/strided_values.loom",
+          "motifs/flash_attention/strided_long_scores.loom",
+          "motifs/flash_attention/strided_long_softmax.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/flash_attention/strided_scores.loom",
+        "motifs/flash_attention/strided_dot.loom",
+        "motifs/flash_attention/strided_values.loom",
+        "motifs/flash_attention/strided_long_scores.loom",
+        "motifs/flash_attention/strided_long_softmax.loom"
+      ]
+    },
+    {
       "name": "ggml_flash_attention_f32_f16_wmma",
       "family": "loom_libs",
       "symbol": "ggml_flash_attention_f32_f16_wmma",
@@ -7029,6 +7510,61 @@
       ]
     },
     {
+      "name": "ggml_mrope_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mrope_f32",
+      "source": "ops/rope/mrope_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "input_span",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "input_span",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "positions",
+        "input",
+        "theta",
+        "freq_factors",
+        "selectors",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/rope/mrope_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/rope/mrope_f32.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/rope/mrope_f32.loom"
+      ]
+    },
+    {
       "name": "ggml_rope_f32",
       "family": "loom_libs",
       "symbol": "ggml_rope_f32",
@@ -7079,6 +7615,59 @@
       },
       "compile_dependencies": [
         "motifs/rope/rope_f32.loom"
+      ]
+    },
+    {
+      "name": "ggml_rope_vision_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_rope_vision_f32",
+      "source": "ops/rope/rope_vision_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "input_span",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "input_span",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "positions",
+        "input",
+        "theta",
+        "freq_factors",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/rope/rope_vision_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/rope/rope_vision_f32.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/rope/rope_vision_f32.loom"
       ]
     },
     {
@@ -9577,6 +10166,202 @@
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
         "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_im2col_f32_f16",
+      "family": "loom_libs",
+      "symbol": "ggml_im2col_f32_f16",
+      "source": "ops/convolution/im2col_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "element_count",
+          "type": "index"
+        },
+        {
+          "name": "source_span",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "element_count",
+          "type": "index"
+        },
+        {
+          "name": "source_span",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "source",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/convolution/im2col_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/convolution/im2col_gather_f32.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/convolution/im2col_gather_f32.loom"
+      ]
+    },
+    {
+      "name": "ggml_im2col_f32_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_im2col_f32_f32",
+      "source": "ops/convolution/im2col_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "element_count",
+          "type": "index"
+        },
+        {
+          "name": "source_span",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "element_count",
+          "type": "index"
+        },
+        {
+          "name": "source_span",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "source",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/convolution/im2col_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/convolution/im2col_gather_f32.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/convolution/im2col_gather_f32.loom"
+      ]
+
+    },
+    {
+      "name": "ggml_upscale_bilinear_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_upscale_bilinear_f32",
+      "source": "ops/interpolate/bilinear_f32.loom",
+      "workload_parameters": [
+        { "name": "element_count", "type": "index" },
+        { "name": "source_span", "type": "index" }
+      ],
+      "launch_parameters": [
+        { "name": "element_count", "type": "index" },
+        { "name": "source_span", "type": "index" }
+      ],
+      "bindings": [ "source", "output" ],
+      "binding_access": [ "read", "write" ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [ "ops/interpolate/bilinear_f32.loom" ],
+        "library_sources": [ "motifs/interpolate/bilinear_f32.loom" ]
+      },
+      "compile_dependencies": [ "motifs/interpolate/bilinear_f32.loom" ]
+    },
+    {
+      "name": "ggml_copy_strided_source_f16",
+      "family": "loom_libs",
+      "symbol": "ggml_copy_strided_source_f16",
+      "source": "ops/copy/strided_source_f16.loom",
+      "workload_parameters": [
+        {
+          "name": "element_count",
+          "type": "index"
+        },
+        {
+          "name": "source_span",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "element_count",
+          "type": "index"
+        },
+        {
+          "name": "source_span",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "source",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/copy/strided_source_f16.loom"
+        ],
+        "library_sources": [
+          "motifs/copy/strided_source_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/copy/strided_source_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_grouped_f16_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_grouped_f16_f32",
+      "source": "ops/matmul/grouped_f16_f32.loom",
+      "workload_parameters": [],
+      "launch_parameters": [],
+      "bindings": [
+        "key",
+        "query",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul/grouped_f16_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul/grouped_f16_f32_dot.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul/grouped_f16_f32_dot.loom"
       ]
     }
   ],

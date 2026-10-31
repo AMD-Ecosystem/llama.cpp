@@ -14,6 +14,10 @@ struct RmsNormParams {
     float eps = 0.0f;
 };
 
+struct NormParams {
+    float eps = 0.0f;
+};
+
 struct FlashAttnExtParams {
     float     scale         = 0.0f;
     float     max_bias      = 0.0f;
@@ -43,6 +47,20 @@ struct GluParams {
 struct ScaleParams {
     float scale = 0.0f;
     float bias  = 0.0f;
+};
+
+struct Im2ColParams {
+    int32_t stride_x   = 0;
+    int32_t stride_y   = 0;
+    int32_t pad_x      = 0;
+    int32_t pad_y      = 0;
+    int32_t dilation_x = 0;
+    int32_t dilation_y = 0;
+    bool    is_2d      = false;
+};
+
+struct UpscaleParams {
+    uint32_t mode = 0;
 };
 
 enum class BinaryKind : uint32_t {
@@ -115,6 +133,7 @@ struct RopeParams {
 // clang-format off
 using OpParams = std::variant<
     std::monostate,
+    NormParams,
     RmsNormParams,
     FlashAttnExtParams,
     SoftMaxParams,
@@ -122,6 +141,9 @@ using OpParams = std::variant<
     ClampParams,
     GluParams,
     ScaleParams,
+    Im2ColParams,
+
+    UpscaleParams,
     BinaryParams,
     UnaryParams,
     RopeParams>;

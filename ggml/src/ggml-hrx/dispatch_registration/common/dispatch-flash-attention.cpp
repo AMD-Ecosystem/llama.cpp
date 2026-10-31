@@ -21,6 +21,16 @@ static constexpr KernelCatalogRef kFlashAttentionF32F16WmmaPublishF16Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_f32_f16_wmma_publish_f16");
 static constexpr KernelCatalogRef kFlashAttentionDecodeSplitNextQ8Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_decode_split_f32_f16_wmma_next_q8");
+static constexpr KernelCatalogRef kFlashAttentionF32F16StridedScoresKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_f32_f16_strided_scores");
+static constexpr KernelCatalogRef kFlashAttentionF32F16StridedLongScoresKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_f32_f16_strided_long_scores");
+static constexpr KernelCatalogRef kFlashAttentionF32F16StridedLongUnmaskedScoresKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_f32_f16_strided_long_unmasked_scores");
+static constexpr KernelCatalogRef kFlashAttentionF32F16StridedLongSoftmaxKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_f32_f16_strided_long_softmax");
+static constexpr KernelCatalogRef kFlashAttentionF32F16StridedValuesKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_f32_f16_strided_values");
 static constexpr KernelCatalogRef kCopyTransposeF16Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_copy_transpose_f16");
 static constexpr int64_t kDecodeRowCapacity         = 16;
@@ -31,6 +41,8 @@ static constexpr int64_t kPrefillMinQkHeadSize      = kPrefillQkHeadSizeBlock;
 static constexpr int64_t kPrefillMinValueHeadSize   = kPrefillValueHeadSizeBlock;
 // Current cap keeps full-head Q/K staging within the kernel's fixed LDS budget.
 static constexpr int64_t kPrefillMaxHeadSize        = 512;
+static constexpr size_t kStridedMaxProbabilityBytes = size_t(1) << 30;
+static constexpr size_t kStridedMaxInputSpan        = 16777216;
 
 static const Value * graph_value(const Graph & graph, ValueId id) {
     return graph.values().find(id);
@@ -676,6 +688,161 @@ static bool match_flash_attention_decode_split_next_q8_dispatch(const DispatchMa
     return true;
 }
 
+static bool match_flash_attention_f32_f16_strided_dispatch(const DispatchMatchContext & context,
+                                                           DispatchMatch &              dispatch_match) {
+    const GraphNode * node = context.root_node;
+    const bool has_flash_op = node != nullptr && node->op == GGML_OP_FLASH_ATTN_EXT;
+    const bool has_supported_input_count = node != nullptr && (node->inputs.size() == 3 || node->inputs.size() == 4);
+    if (!has_flash_op || !has_supported_input_count) {
+        return false;
+    }
+    const bool has_mask = node->inputs.size() == 4;
+
+    const Value * query  = graph_value(context.graph, node->inputs[0]);
+    const Value * key    = graph_value(context.graph, node->inputs[1]);
+    const Value * value  = graph_value(context.graph, node->inputs[2]);
+    const Value * mask   = has_mask ? graph_value(context.graph, node->inputs[3]) : nullptr;
+    const Value * output = graph_value(context.graph, node->output);
+    const bool has_required_values = query != nullptr && key != nullptr && value != nullptr && output != nullptr;
+    const bool has_required_mask = !has_mask || mask != nullptr;
+    if (!has_required_values || !has_required_mask) {
+        return false;
+    }
+    const bool types_match = query->type == GGML_TYPE_F32 && key->type == GGML_TYPE_F16 &&
+                             value->type == GGML_TYPE_F16 && output->type == GGML_TYPE_F32;
+    const bool mask_type_matches = !has_mask || mask->type == GGML_TYPE_F16;
+    if (!types_match || !mask_type_matches || !has_flash_attention_params(*node)) {
+        return false;
+    }
+
+    const int64_t qk_head_size          = query->ne[0];
+    const int64_t value_head_size       = value->ne[0];
+    const int64_t query_token_count     = query->ne[1];
+    const int64_t key_value_token_count = key->ne[1];
+    const int64_t query_head_count      = query->ne[2];
+    const int64_t key_value_head_count  = key->ne[2];
+    const bool head_sizes_supported = qk_head_size >= 1 && qk_head_size <= 128 &&
+                                      value_head_size >= 1 && value_head_size <= 128;
+    const bool token_counts_supported = query_token_count >= 1 && query_token_count <= 3888 &&
+                                        key_value_token_count >= 1 && key_value_token_count <= 3888;
+    const bool head_counts_supported = is_supported_head_count(query_head_count) &&
+                                       is_supported_head_count(key_value_head_count) &&
+                                       query_head_count % key_value_head_count == 0;
+    if (!head_sizes_supported || !token_counts_supported || !head_counts_supported) {
+        return false;
+    }
+    const bool wmma_head_sizes_supported = is_supported_qk_head_size(qk_head_size) &&
+                                           is_supported_value_head_size(value_head_size);
+    const bool wmma_key_value_layout_supported = has_key_value_layout(*key, key_value_head_count, qk_head_size) &&
+                                                  has_key_value_layout(*value, key_value_head_count, value_head_size);
+    const bool needs_strided_fallback = !wmma_head_sizes_supported || !wmma_key_value_layout_supported;
+    if (!has_mask && !needs_strided_fallback) {
+        return false;
+    }
+    const bool dimensions_match = key->ne[0] == qk_head_size && value->ne[1] == key_value_token_count &&
+                                  value->ne[2] == key_value_head_count && output->ne[0] == value_head_size &&
+                                  output->ne[1] == query_head_count && output->ne[2] == query_token_count;
+    const bool batch_is_one = query->ne[3] == 1 && key->ne[3] == 1 && value->ne[3] == 1 && output->ne[3] == 1;
+    if (!dimensions_match || !batch_is_one || !has_output_layout(*output, query_head_count, value_head_size)) {
+        return false;
+    }
+    const bool mask_dimensions_match = !has_mask ||
+        (mask->ne[0] == key_value_token_count && mask->ne[1] == query_token_count &&
+         mask->ne[2] == 1 && mask->ne[3] == 1 && has_mask_layout(*mask, key_value_token_count));
+    const bool dense_channels = query->nb[0] == sizeof(float) && key->nb[0] == sizeof(ggml_fp16_t) &&
+                                value->nb[0] == sizeof(ggml_fp16_t);
+    if (!mask_dimensions_match || !dense_channels) {
+        return false;
+    }
+    const size_t probability_bytes = static_cast<size_t>(query_token_count * query_head_count *
+                                                          key_value_token_count) * sizeof(float);
+    const bool probability_fits = probability_bytes <= kStridedMaxProbabilityBytes;
+    const bool query_span_fits = query->byte_count / sizeof(float) <= kStridedMaxInputSpan;
+    const bool key_span_fits = key->byte_count / sizeof(ggml_fp16_t) <= kStridedMaxInputSpan;
+    const bool value_span_fits = value->byte_count / sizeof(ggml_fp16_t) <= kStridedMaxInputSpan;
+    const bool spans_fit = query_span_fits && key_span_fits && value_span_fits;
+    const bool allocation_supported = probability_fits && spans_fit;
+    if (!allocation_supported) {
+        return false;
+    }
+    const bool long_scores = query_token_count > 256 || key_value_token_count > 256;
+    const bool short_unmasked_query_covers_mask_view = query->byte_count >=
+        attention_mask_byte_count(query_token_count, key_value_token_count);
+    if (!has_mask && !long_scores && !short_unmasked_query_covers_mask_view) {
+        return false;
+    }
+    const ValueId probability = match_value(context, dispatch_match, 0);
+    dispatch_match.transients.push_back({ probability, "common.flash_attention.strided_probability",
+                                          probability_bytes, 256 });
+
+    const auto configure = [&](KernelSpecialization & kernel) {
+        kernel.workload_specialization = WorkloadSpecialization::Dynamic;
+        kernel.integer_parameters.emplace("query_token_count", query_token_count);
+        kernel.integer_parameters.emplace("key_value_token_count", key_value_token_count);
+        const auto add = [&](const char * name, int64_t setting) {
+            kernel.compile_parameters.emplace(std::string("ggml.flash_attention.strided.") + name,
+                                              to_config_value(setting));
+        };
+        add("query_head_count", query_head_count);
+        add("key_value_head_count", key_value_head_count);
+        add("qk_head_size", qk_head_size);
+        add("value_head_size", value_head_size);
+        add("query_token_stride", static_cast<int64_t>(query->nb[1] / sizeof(float)));
+        add("query_head_stride", static_cast<int64_t>(query->nb[2] / sizeof(float)));
+        add("key_token_stride", static_cast<int64_t>(key->nb[1] / sizeof(ggml_fp16_t)));
+        add("key_head_stride", static_cast<int64_t>(key->nb[2] / sizeof(ggml_fp16_t)));
+        add("value_token_stride", static_cast<int64_t>(value->nb[1] / sizeof(ggml_fp16_t)));
+        add("value_head_stride", static_cast<int64_t>(value->nb[2] / sizeof(ggml_fp16_t)));
+        add("query_span", static_cast<int64_t>(query->byte_count / sizeof(float)));
+        add("key_span", static_cast<int64_t>(key->byte_count / sizeof(ggml_fp16_t)));
+        add("value_span", static_cast<int64_t>(value->byte_count / sizeof(ggml_fp16_t)));
+        add("has_mask", has_mask ? 1 : 0);
+        kernel.compile_parameters.emplace("ggml.flash_attention.strided.attention_scale",
+                                          to_config_value(op_params_as<FlashAttnExtParams>(node->params)->scale));
+    };
+
+    Dispatch scores;
+    const KernelCatalogRef scores_ref = long_scores ?
+        (has_mask ? kFlashAttentionF32F16StridedLongScoresKernel :
+                    kFlashAttentionF32F16StridedLongUnmaskedScoresKernel) : kFlashAttentionF32F16StridedScoresKernel;
+    scores.kernel = make_kernel_specialization(scores_ref);
+    configure(scores.kernel);
+    scores.bindings.push_back({ query->id, 0, query->byte_count });
+    scores.bindings.push_back({ key->id, 0, key->byte_count });
+    if (has_mask) {
+        scores.bindings.push_back({ mask->id, 0, mask->byte_count });
+    } else if (!long_scores) {
+        scores.bindings.push_back({ query->id, 0, query->byte_count });
+    }
+    scores.bindings.push_back({ probability, 0, probability_bytes });
+    dispatch_match.dispatches.push_back(std::move(scores));
+
+    if (long_scores) {
+        Dispatch softmax;
+        softmax.kernel = make_kernel_specialization(kFlashAttentionF32F16StridedLongSoftmaxKernel);
+        configure(softmax.kernel);
+        softmax.bindings.push_back({ probability, 0, probability_bytes });
+        dispatch_match.dispatches.push_back(std::move(softmax));
+    }
+
+    Dispatch values;
+    values.kernel = make_kernel_specialization(kFlashAttentionF32F16StridedValuesKernel);
+    configure(values.kernel);
+    values.bindings.push_back({ value->id, 0, value->byte_count });
+    values.bindings.push_back({ probability, 0, probability_bytes });
+    values.bindings.push_back({ output->id, 0, output->byte_count });
+    dispatch_match.dispatches.push_back(std::move(values));
+
+    dispatch_match.covered_nodes.push_back(context.root_index);
+    const GraphNode * output_layout = find_single_layout_alias_consumer(context.graph, output->id);
+    if (output_layout != nullptr &&
+        !append_covered_node_index_once(context.graph, context.covered_nodes, output_layout,
+                                        dispatch_match.covered_nodes)) {
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 void register_flash_attention_dispatches(DispatchRegistryBuilder & registry) {
@@ -702,6 +869,14 @@ void register_flash_attention_dispatches(DispatchRegistryBuilder & registry) {
         50,
         DispatchSource::Common,
         match_flash_attention_f32_f16_dispatch,
+    });
+    registry.add({
+        "common.flash_attention_f32_f16_strided",
+        GGML_OP_FLASH_ATTN_EXT,
+        DispatchMatchKind::SingleOp,
+        40,
+        DispatchSource::Common,
+        match_flash_attention_f32_f16_strided_dispatch,
     });
 }
 

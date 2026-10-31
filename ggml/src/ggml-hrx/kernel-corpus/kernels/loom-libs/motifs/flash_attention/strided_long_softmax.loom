@@ -1,0 +1,59 @@
+config.decl @ggml.flash_attention.strided.query_head_count : %value: index where [range(%value, 1, 64)]
+
+template.decl @ggml.flash_attention.strided.long_softmax(%query_token_count: index, %key_value_token_count: index, %probability: buffer)
+
+template.def<@ggml.flash_attention.strided.long_softmax> device @ggml_flash_attention_strided_long_softmax(%query_token_count: index, %key_value_token_count: index, %probability: buffer) {
+  %c0_f32 = scalar.constant 0.0 : f32
+  %negative_large = scalar.constant -3.4028234660000002e+38 : f32
+  %c0_offset = index.constant 0 : offset
+  %lane_count = index.constant 256 : index
+  %query_head_count = config.get @ggml.flash_attention.strided.query_head_count : index
+  %query_token = kernel.workgroup.id<x> : index
+  %query_head = kernel.workgroup.id<y> : index
+  %lane = kernel.workitem.id<x> : index
+  %row0 = index.mul %query_token, %query_head_count : index
+  %row1 = index.add %row0, %query_head : index
+  %row_base = index.mul %row1, %key_value_token_count : index
+  %span0 = index.mul %query_token_count, %query_head_count : index
+  %span = index.mul %span0, %key_value_token_count : index
+  %scores = buffer.view %probability[%c0_offset] : buffer -> view<[%span]xf32>
+  %local_max = scf.for %key_token = [%lane to %key_value_token_count step %lane_count](%acc = %negative_large : f32) -> (f32) {
+    %index0 = index.add %row_base, %key_token : index
+    %index1, %bounded_span = index.assume %index0, %span [lt(%index0, %span)] : index, index
+    %score = view.load %scores[%index1] : view<[%span]xf32> -> f32
+    %next = scalar.maxnumf %acc, %score : f32
+    scf.yield %next : f32
+  }
+  %maximum = kernel.workgroup.reduce<maxnumf> %local_max : f32
+  %local_sum = scf.for %key_token = [%lane to %key_value_token_count step %lane_count](%acc = %c0_f32 : f32) -> (f32) {
+    %index0 = index.add %row_base, %key_token : index
+    %index1, %bounded_span = index.assume %index0, %span [lt(%index0, %span)] : index, index
+    %score = view.load %scores[%index1] : view<[%span]xf32> -> f32
+    %visible = scalar.cmpf ogt, %score, %negative_large : f32
+    %weight = scf.if %visible -> (f32) {
+      %delta = scalar.subf %score, %maximum : f32
+      %exponential = scalar.expf<afn> %delta : f32
+      scf.yield %exponential : f32
+    } else {
+      scf.yield %c0_f32 : f32
+    }
+    view.store %weight, %scores[%index1] : f32, view<[%span]xf32>
+    %next = scalar.addf %acc, %weight : f32
+    scf.yield %next : f32
+  }
+  %denominator = kernel.workgroup.reduce<addf> %local_sum : f32
+  %positive_sum = scalar.cmpf ogt, %denominator, %c0_f32 : f32
+  scf.for %key_token = [%lane to %key_value_token_count step %lane_count] {
+    %index0 = index.add %row_base, %key_token : index
+    %index1, %bounded_span = index.assume %index0, %span [lt(%index0, %span)] : index, index
+    %weight = view.load %scores[%index1] : view<[%span]xf32> -> f32
+    %normalized = scf.if %positive_sum -> (f32) {
+      %quotient = scalar.divf %weight, %denominator : f32
+      scf.yield %quotient : f32
+    } else {
+      scf.yield %c0_f32 : f32
+    }
+    view.store %normalized, %scores[%index1] : f32, view<[%span]xf32>
+  }
+  template.return
+}

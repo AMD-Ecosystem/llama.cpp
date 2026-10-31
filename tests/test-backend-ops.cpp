@@ -6464,18 +6464,25 @@ struct test_rope : public test_case {
     bool forward;
     bool inplace;
     int n_offs; // offset of the rotated dims window, set via ggml_rope_set_offset()
+    float freq_base;
+    int n_ctx_orig;
+    std::array<int, 4> sections;
 
     std::string vars() override {
         // forward can be inferred from the op, does not need to be printed
-        return VARS_TO_STR12(type, ne_a, n_dims, mode, n_ctx, fs, ef, af, ff, v, inplace, n_offs);
+        std::string result = VARS_TO_STR12(type, ne_a, n_dims, mode, n_ctx, fs, ef, af, ff, v, inplace, n_offs);
+        if (freq_base != 10000.0f || n_ctx_orig != 0 || sections[0] != 0) {
+            result += ",freq_base=" + std::to_string(freq_base) + ",n_ctx_orig=" + std::to_string(n_ctx_orig);
+        }
+        return result;
     }
 
     test_rope(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne_a = {10, 5, 3, 1},
             int n_dims = 10, int mode = GGML_ROPE_TYPE_NORMAL, int n_ctx = 512, float fs = 1.0f,
             float ef = 0.0f, float af = 0.0f, bool ff = false, int v = 0, bool forward = true, bool inplace = false,
-            int n_offs = 0)
-        : type(type), ne_a(ne_a), n_dims(n_dims), mode(mode), n_ctx(n_ctx), fs(fs), ef(ef), af(af), ff(ff), v(v), forward(forward), inplace(inplace), n_offs(n_offs) {}
+            int n_offs = 0, float freq_base = 10000.0f, int n_ctx_orig = 0, std::array<int, 4> sections = {})
+        : type(type), ne_a(ne_a), n_dims(n_dims), mode(mode), n_ctx(n_ctx), fs(fs), ef(ef), af(af), ff(ff), v(v), forward(forward), inplace(inplace), n_offs(n_offs), freq_base(freq_base), n_ctx_orig(n_ctx_orig), sections(sections) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a;
@@ -6549,14 +6556,17 @@ struct test_rope : public test_case {
             } else {
                 GGML_ASSERT(n_dims/3 > 0);
                 int rope_sections[4] = {n_dims/3, n_dims/3, n_dims/3, 0};
+                if (sections[0] != 0) {
+                    std::copy(sections.begin(), sections.end(), rope_sections);
+                }
                 if (forward) {
                     if (inplace) {
-                        out = ggml_rope_multi_inplace(ctx, a, pos, freq, n_dims, rope_sections, mode, 0, 10000.0f, fs, ef, af, 1.0f, 1.0f);
+                        out = ggml_rope_multi_inplace(ctx, a, pos, freq, n_dims, rope_sections, mode, n_ctx_orig, freq_base, fs, ef, af, 1.0f, 1.0f);
                     } else {
-                        out = ggml_rope_multi(ctx, a, pos, freq, n_dims, rope_sections, mode, 0, 10000.0f, fs, ef, af, 1.0f, 1.0f);
+                        out = ggml_rope_multi(ctx, a, pos, freq, n_dims, rope_sections, mode, n_ctx_orig, freq_base, fs, ef, af, 1.0f, 1.0f);
                     }
                 } else {
-                    out = ggml_rope_multi_back(ctx, a, pos, freq, n_dims, rope_sections, mode, 0, 10000.0f, fs, ef, af, 1.0f, 1.0f);
+                    out = ggml_rope_multi_back(ctx, a, pos, freq, n_dims, rope_sections, mode, n_ctx_orig, freq_base, fs, ef, af, 1.0f, 1.0f);
                 }
             }
         } else {
@@ -6601,6 +6611,11 @@ struct test_rope : public test_case {
 
     double max_maa_err() override {
         return 1e-3;
+    }
+
+    double max_nmse_err() override {
+        const bool long_context_qwen38 = freq_base == 10000000.0f && n_ctx == 262144;
+        return long_context_qwen38 ? 1e-5 : test_case::max_nmse_err();
     }
 
     bool grad_precise() override {
@@ -8197,20 +8212,27 @@ struct test_interpolate : public test_case {
     const std::array<int64_t, 4> ne;
     const std::array<int64_t, 4> ne_tgt;
     const ggml_scale_mode mode = GGML_SCALE_MODE_NEAREST;
+    const bool permuted_input;
 
     std::string vars() override {
-        return VARS_TO_STR4(type, ne, ne_tgt, mode);
+        return VARS_TO_STR5(type, ne, ne_tgt, mode, permuted_input);
     }
 
     test_interpolate(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne     = {2, 5,  7, 11},
             std::array<int64_t, 4> ne_tgt = {5, 7, 11, 13},
-            ggml_scale_mode mode = GGML_SCALE_MODE_NEAREST)
-        : type(type), ne(ne), ne_tgt(ne_tgt), mode(mode) {}
+            ggml_scale_mode mode = GGML_SCALE_MODE_NEAREST,
+            bool permuted_input = false)
+        : type(type), ne(ne), ne_tgt(ne_tgt), mode(mode), permuted_input(permuted_input) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_tensor * a = permuted_input ? ggml_new_tensor_4d(ctx, type, ne[2], ne[0], ne[1], ne[3]) :
+                                           ggml_new_tensor(ctx, type, 4, ne.data());
         ggml_set_name(a, "a");
+
+        if (permuted_input) {
+            a = ggml_permute(ctx, a, 2, 0, 1, 3);
+        }
 
         ggml_tensor * out = ggml_interpolate(ctx, a, ne_tgt[0], ne_tgt[1],ne_tgt[2], ne_tgt[3], mode);
         ggml_set_name(out, "out");
@@ -11854,6 +11876,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // Real-model RoPE: F32 forward, packed Q, 512-token prefill.
     test_cases.emplace_back(new test_rope(GGML_TYPE_F32, {256,  8, 512, 1},  64, GGML_ROPE_TYPE_IMROPE, 512, 1.0f, 0.0f, 1.0f, false, 0, true)); // qwen3.5 0.8B
     test_cases.emplace_back(new test_rope(GGML_TYPE_F32, {256, 16, 512, 1},  64, GGML_ROPE_TYPE_IMROPE, 512, 1.0f, 0.0f, 1.0f, false, 0, true)); // qwen3.5 4B
+    test_cases.emplace_back(new test_rope(GGML_TYPE_F32, {256, 24, 1, 1}, 64, GGML_ROPE_TYPE_IMROPE, 512, 1.0f, 0.0f, 1.0f, false, 0, true, false, 0, 10000000.0f, 262144, {11, 11, 10, 0})); // qwen3.8 27B text decode
+    test_cases.emplace_back(new test_rope(GGML_TYPE_F32, {256,  4, 1, 1}, 64, GGML_ROPE_TYPE_IMROPE, 512, 1.0f, 0.0f, 1.0f, false, 0, true, false, 0, 10000000.0f, 262144, {11, 11, 10, 0})); // qwen3.8 27B text key decode
+    test_cases.emplace_back(new test_rope(GGML_TYPE_F32, {256, 24, 1, 1}, 64, GGML_ROPE_TYPE_IMROPE, 262144, 1.0f, 0.0f, 1.0f, false, 0, true, false, 0, 10000000.0f, 262144, {11, 11, 10, 0})); // qwen3.8 27B long-context decode
+    test_cases.emplace_back(new test_rope(GGML_TYPE_F32, {256, 24, 8, 1}, 64, GGML_ROPE_TYPE_IMROPE, 512, 1.0f, 0.0f, 1.0f, false, 0, true, false, 0, 10000000.0f, 262144, {11, 11, 10, 0})); // qwen3.8 27B text prefill
     test_cases.emplace_back(new test_rope(GGML_TYPE_F32, {256,  8, 512, 1}, 256, GGML_ROPE_TYPE_NEOX,   512, 1.0f, 0.0f, 1.0f, false, 0, true)); // gemma4 E2B sliding
     test_cases.emplace_back(new test_rope(GGML_TYPE_F32, {512,  8, 512, 1}, 128, GGML_ROPE_TYPE_NEOX,   512, 1.0f, 0.0f, 1.0f, true,  0, true)); // gemma4 E4B global
 
@@ -11984,6 +12010,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_interpolate(GGML_TYPE_F32, {1, 4, 3, 2}, {2, 8, 3, 2}, (ggml_scale_mode)(mode | GGML_SCALE_FLAG_ALIGN_CORNERS)));
         test_cases.emplace_back(new test_interpolate(GGML_TYPE_F32, {4, 1, 3, 2}, {1, 1, 3, 2}, (ggml_scale_mode)(mode | GGML_SCALE_FLAG_ALIGN_CORNERS)));
     }
+    test_cases.emplace_back(new test_interpolate(GGML_TYPE_F32, {48, 48, 1152, 1}, {92, 92, 1152, 1},
+        (ggml_scale_mode)(GGML_SCALE_MODE_BILINEAR | GGML_SCALE_FLAG_ALIGN_CORNERS), true));
+    test_cases.emplace_back(new test_interpolate(GGML_TYPE_F32, {48, 48, 1152, 1}, {16, 24, 1152, 1},
+        (ggml_scale_mode)(GGML_SCALE_MODE_BILINEAR | GGML_SCALE_FLAG_ALIGN_CORNERS), true));
 
     test_cases.emplace_back(new test_sum());
     test_cases.emplace_back(new test_sum(GGML_TYPE_F32, {11, 5, 6, 3}, {0, 2, 1, 3}));  // row-contiguous but non-contiguous

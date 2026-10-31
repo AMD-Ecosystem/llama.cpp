@@ -1,0 +1,31 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.masked_soft_max_f32.row(%row: index, %row_count: index, %width: index, %ne1: index, %ne2: index, %mask_ne1: index, %mask_ne2: index, %mask_ne3: index, %scale: f32, %scores: buffer, %mask: buffer, %output: buffer)
+
+amdgpu.target<gfx11-generic> @ggml_masked_soft_max_f32_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @ggml.masked_soft_max_f32.width : %value: index where [range(%value, 64, 4096)]
+config.decl @ggml.masked_soft_max_f32.ne1 : %value: index where [range(%value, 1, 1048576)]
+config.decl @ggml.masked_soft_max_f32.ne2 : %value: index where [range(%value, 1, 1048576)]
+config.decl @ggml.masked_soft_max_f32.mask_ne1 : %value: index where [range(%value, 1, 1048576)]
+config.decl @ggml.masked_soft_max_f32.mask_ne2 : %value: index where [range(%value, 1, 1048576)]
+config.decl @ggml.masked_soft_max_f32.mask_ne3 : %value: index where [range(%value, 1, 1048576)]
+config.decl @ggml.masked_soft_max_f32.scale : f32
+
+kernel.def target(@ggml_masked_soft_max_f32_gfx11_wave64) export("ggml_masked_soft_max_f32") @ggml_masked_soft_max_f32(%row_count: index) {
+  %c1 = index.constant 1 : index
+  %c64 = index.constant 64 : index
+  kernel.launch.config workgroups(%row_count, %c1, %c1) workgroup_size(%c64, %c1, %c1) : index
+} launch(%row_count: index, %scores: buffer, %mask: buffer, %output: buffer) where [range(%row_count, 1, 1048576)] {
+  %row = kernel.workgroup.id<x> : index
+  %width = config.get @ggml.masked_soft_max_f32.width : index
+  %ne1 = config.get @ggml.masked_soft_max_f32.ne1 : index
+  %ne2 = config.get @ggml.masked_soft_max_f32.ne2 : index
+  %mask_ne1 = config.get @ggml.masked_soft_max_f32.mask_ne1 : index
+  %mask_ne2 = config.get @ggml.masked_soft_max_f32.mask_ne2 : index
+  %mask_ne3 = config.get @ggml.masked_soft_max_f32.mask_ne3 : index
+  %scale = config.get @ggml.masked_soft_max_f32.scale : f32
+  template.apply<@ggml.masked_soft_max_f32.row>(%row, %row_count, %width, %ne1, %ne2, %mask_ne1, %mask_ne2, %mask_ne3, %scale, %scores, %mask, %output) : (index, index, index, index, index, index, index, index, f32, buffer, buffer, buffer)
+  kernel.return
+}
