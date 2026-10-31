@@ -183,6 +183,7 @@ class common_json {
     bool is_boolean() const;
     bool is_number()  const;
     bool is_number_integer() const;
+    bool is_number_unsigned() const;
     bool is_number_float()   const;
 
     bool   empty() const;

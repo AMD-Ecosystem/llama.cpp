@@ -123,7 +123,6 @@ def test_embedding_content_text_same_as_string():
 @pytest.mark.parametrize(
     "input",
     [
-        [],
         {"content": "string"},
         {"content": [{"type": "unknown"}]},
         # model is not multimodal
@@ -332,7 +331,6 @@ def test_embedding_openai_library_base64():
 @pytest.mark.parametrize(
     "data",
     [
-        {"input": []},
         {"input": True},
         {"input": "hello", "encoding_format": 1},
     ]
@@ -344,4 +342,66 @@ def test_embedding_invalid_request(data):
     res = server.make_request("POST", "/v1/embeddings", data=data)
     assert res.status_code == 400
     assert "error" in res.body
+    assert res.body["error"]["type"] == "invalid_request_error"
+
+
+@pytest.mark.parametrize("input", [
+    [1, "x", 2.5],
+    [1, True],
+    [False],
+    [1, "x", None],
+    [1, 4294967297],
+])
+def test_embedding_invalid_token_ids(input):
+    """Invalid token IDs in input arrays should return 400."""
+    global server
+    server.pooling = 'last'
+    server.start()
+    res = server.make_request("POST", "/v1/embeddings", data={"input": input})
+    assert res.status_code == 400
+    assert res.body["error"]["type"] == "invalid_request_error"
+
+
+@pytest.mark.parametrize("input", [
+    [1, -5],
+    [1, 99999999],
+    [1, -1],  # Token -1 without media
+    [18446744073709551615],  # uint64 max - must not overflow to -1 (valid)
+])
+def test_embedding_invalid_token_range(input):
+    """Negative and out-of-vocab tokens should return 400 invalid_request_error."""
+    global server
+    server.pooling = 'last'
+    server.start()
+    res = server.make_request("POST", "/v1/embeddings", data={"input": input})
+    assert res.status_code == 400
+    assert res.body["error"]["type"] == "invalid_request_error"
+    # uint64 max: verify error message to confirm proper bounds checking
+    # vs. silent wrap-around to -1 (LLAMA_TOKEN_NULL) which would trigger "Invalid token IDs"
+    if 18446744073709551615 in input:
+        assert "Token ID out of int32 range: 18446744073709551615" in res.body["error"]["message"]
+
+
+@pytest.mark.parametrize("input", [
+    [],  # Empty array
+    {"prompt_string": 123},  # Non-string prompt_string
+    {"prompt_string": "test", "multimodal_data": []},  # Multimodal on non-multimodal model
+])
+def test_embedding_invalid_prompt_format(input):
+    """Invalid prompt formats should return 400 invalid_request_error."""
+    global server
+    server.pooling = 'last'
+    server.start()
+    res = server.make_request("POST", "/v1/embeddings", data={"input": input})
+    assert res.status_code == 400
+    assert res.body["error"]["type"] == "invalid_request_error"
+
+
+def test_embedding_missing_input():
+    """Missing input field should return 400 invalid_request_error."""
+    global server
+    server.pooling = 'last'
+    server.start()
+    res = server.make_request("POST", "/v1/embeddings", data={})
+    assert res.status_code == 400
     assert res.body["error"]["type"] == "invalid_request_error"
