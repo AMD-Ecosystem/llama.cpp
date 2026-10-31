@@ -585,9 +585,6 @@
       "path": "motifs/rope/rope_vision_f32.loom"
     },
     {
-      "path": "motifs/rope/mrope_f32.loom"
-    },
-    {
       "path": "motifs/rows/cache_publish.loom"
     },
     {
@@ -7557,11 +7554,11 @@
           "ops/rope/mrope_f32.loom"
         ],
         "library_sources": [
-          "motifs/rope/mrope_f32.loom"
+          "motifs/rope/rope_f32.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/rope/mrope_f32.loom"
+        "motifs/rope/rope_f32.loom"
       ]
     },
     {
@@ -7663,11 +7660,13 @@
           "ops/rope/rope_vision_f32.loom"
         ],
         "library_sources": [
-          "motifs/rope/rope_vision_f32.loom"
+          "motifs/rope/rope_vision_f32.loom",
+          "motifs/rope/rope_f32.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/rope/rope_vision_f32.loom"
+        "motifs/rope/rope_vision_f32.loom",
+        "motifs/rope/rope_f32.loom"
       ]
     },
     {

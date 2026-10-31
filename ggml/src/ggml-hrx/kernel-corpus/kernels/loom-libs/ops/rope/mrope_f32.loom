@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 template.decl @ggml.mrope_f32.body(%token_count: index, %input_span: index, %positions: buffer, %input: buffer, %theta: buffer, %freq_factors: buffer, %selectors: buffer, %output: buffer)
-func.decl @ggml_mrope_f32_pair_packet(%positions: vector<2xf32>, %theta: vector<2xf32>, %freq_factors: vector<2xf32>, %x_values: vector<2xf32>, %y_values: vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
+func.decl @ggml_rope_f32_pair_positions_packet(%positions: vector<2xf32>, %theta: vector<2xf32>, %freq_factors: vector<2xf32>, %x_values: vector<2xf32>, %y_values: vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
 
 amdgpu.target<gfx11-generic> @ggml_mrope_f32_gfx11_wave32 {subgroup_size = 32}
 
@@ -101,7 +101,7 @@ template.def<@ggml.mrope_f32.body> device @ggml_mrope_f32_body(%token_count: ind
     %position0 = scalar.sitofp %position_i32_0 : i32 to f32
     %position1 = scalar.sitofp %position_i32_1 : i32 to f32
     %position_packet = vector.from_elements %position0, %position1 : vector<2xf32>
-    %rotated_low, %rotated_high = func.call @ggml_mrope_f32_pair_packet(%position_packet, %theta_packet, %factors_packet, %low_values, %high_values) : (vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
+    %rotated_low, %rotated_high = func.call @ggml_rope_f32_pair_positions_packet(%position_packet, %theta_packet, %factors_packet, %low_values, %high_values) : (vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
     %mscale_packet = vector.splat %mscale : vector<2xf32>
     %scaled_low = vector.mulf<reassoc|nnan|ninf|nsz|contract> %rotated_low, %mscale_packet : vector<2xf32>
     %scaled_high = vector.mulf<reassoc|nnan|ninf|nsz|contract> %rotated_high, %mscale_packet : vector<2xf32>

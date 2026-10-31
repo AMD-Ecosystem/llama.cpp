@@ -11876,6 +11876,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // Real-model RoPE: F32 forward, packed Q, 512-token prefill.
     test_cases.emplace_back(new test_rope(GGML_TYPE_F32, {256,  8, 512, 1},  64, GGML_ROPE_TYPE_IMROPE, 512, 1.0f, 0.0f, 1.0f, false, 0, true)); // qwen3.5 0.8B
     test_cases.emplace_back(new test_rope(GGML_TYPE_F32, {256, 16, 512, 1},  64, GGML_ROPE_TYPE_IMROPE, 512, 1.0f, 0.0f, 1.0f, false, 0, true)); // qwen3.5 4B
+    test_cases.emplace_back(new test_rope(GGML_TYPE_F32, { 16, 16, 2048, 1},  16, GGML_ROPE_TYPE_IMROPE, 512, 1.0f, 0.0f, 1.0f, false, 0, true));
     test_cases.emplace_back(new test_rope(GGML_TYPE_F32, {256, 24, 1, 1}, 64, GGML_ROPE_TYPE_IMROPE, 512, 1.0f, 0.0f, 1.0f, false, 0, true, false, 0, 10000000.0f, 262144, {11, 11, 10, 0})); // qwen3.8 27B text decode
     test_cases.emplace_back(new test_rope(GGML_TYPE_F32, {256,  4, 1, 1}, 64, GGML_ROPE_TYPE_IMROPE, 512, 1.0f, 0.0f, 1.0f, false, 0, true, false, 0, 10000000.0f, 262144, {11, 11, 10, 0})); // qwen3.8 27B text key decode
     test_cases.emplace_back(new test_rope(GGML_TYPE_F32, {256, 24, 1, 1}, 64, GGML_ROPE_TYPE_IMROPE, 262144, 1.0f, 0.0f, 1.0f, false, 0, true, false, 0, 10000000.0f, 262144, {11, 11, 10, 0})); // qwen3.8 27B long-context decode
