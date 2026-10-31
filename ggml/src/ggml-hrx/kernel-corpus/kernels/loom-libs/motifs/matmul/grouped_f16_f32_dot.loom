@@ -1,0 +1,27 @@
+// One output score belongs to one query head and its corresponding KV head.
+// Strides are in elements so the same reduction accepts packed and permuted views.
+template.decl @ggml.matmul.grouped_f16_f32.dot(%input_size: index, %key_span: index, %query_span: index, %key_row: index, %query_row: index, %key_stride0: index, %query_stride0: index, %key: buffer, %query: buffer) -> (f32)
+
+template.def<@ggml.matmul.grouped_f16_f32.dot> device @ggml_matmul_grouped_f16_f32_dot(%input_size: index, %key_span: index, %query_span: index, %key_row: index, %query_row: index, %key_stride0: index, %query_stride0: index, %key: buffer, %query: buffer) -> (f32) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %zero = scalar.constant 0.0 : f32
+  %zero_offset = index.constant 0 : offset
+  %key_view = buffer.view %key[%zero_offset] : buffer -> view<[%key_span]xf16>
+  %query_view = buffer.view %query[%zero_offset] : buffer -> view<[%query_span]xf32>
+  %result = scf.for %k = [%c0 to %input_size step %c1](%acc = %zero : f32) -> (f32) {
+    %key_k = index.mul %k, %key_stride0 : index
+    %key_index = index.add %key_row, %key_k : index
+    %query_k = index.mul %k, %query_stride0 : index
+    %query_index = index.add %query_row, %query_k : index
+    %key_half = view.load %key_view[%key_index] : view<[%key_span]xf16> -> f16
+    %key_value = scalar.extf %key_half : f16 to f32
+    %query_value = view.load %query_view[%query_index] : view<[%query_span]xf32> -> f32
+    // GGML's F16 vec_dot packs an F32 rhs row to F16 before accumulation.
+    %query_half = scalar.fptrunc %query_value : f32 to f16
+    %rounded_query = scalar.extf %query_half : f16 to f32
+    %next = scalar.fmaf %key_value, %rounded_query, %acc : f32
+    scf.yield %next : f32
+  }
+  template.return %result : f32
+}

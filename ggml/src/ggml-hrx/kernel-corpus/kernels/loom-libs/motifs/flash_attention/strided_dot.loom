@@ -1,0 +1,23 @@
+template.decl @ggml.flash_attention.strided.dot(%qk_head_size: index, %query_base: index, %key_base: index, %query_span: index, %key_span: index, %query: buffer, %key: buffer) -> (f32)
+
+template.def<@ggml.flash_attention.strided.dot> device @ggml_flash_attention_strided_dot(%qk_head_size: index, %query_base: index, %key_base: index, %query_span: index, %key_span: index, %query: buffer, %key: buffer) -> (f32) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c0_offset = index.constant 0 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %query_view = buffer.view %query[%c0_offset] : buffer -> view<[%query_span]xf32>
+  %key_view = buffer.view %key[%c0_offset] : buffer -> view<[%key_span]xf16>
+  %dot = scf.for %channel = [%c0 to %qk_head_size step %c1](%acc = %c0_f32 : f32) -> (f32) {
+    %query_index = index.add %query_base, %channel : index
+    %key_index = index.add %key_base, %channel : index
+    %bounded_query_index, %bounded_query_span = index.assume %query_index, %query_span [lt(%query_index, %query_span)] : index, index
+    %bounded_key_index, %bounded_key_span = index.assume %key_index, %key_span [lt(%key_index, %key_span)] : index, index
+    %query_value = view.load %query_view[%bounded_query_index] : view<[%query_span]xf32> -> f32
+    %key_f16 = view.load %key_view[%bounded_key_index] : view<[%key_span]xf16> -> f16
+    %key_value = scalar.extf %key_f16 : f16 to f32
+    %product = scalar.mulf<contract> %query_value, %key_value : f32
+    %next = scalar.addf<contract> %acc, %product : f32
+    scf.yield %next : f32
+  }
+  template.return %dot : f32
+}

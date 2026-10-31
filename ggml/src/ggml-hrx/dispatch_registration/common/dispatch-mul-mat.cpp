@@ -8,6 +8,7 @@
 #include "iq-codebook-resource.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
@@ -47,6 +48,8 @@ static constexpr KernelCatalogRef kMulMatAddF32F32DecodeWave64Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_add_f32_f32_decode_wave64");
 static constexpr KernelCatalogRef kMulMatVectorF32F32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_vector_f32_f32");
+static constexpr KernelCatalogRef kMulMatGroupedF16F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_grouped_f16_f32");
 static constexpr KernelCatalogRef kMulMatVectorQ1_0Q8_1X4F32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_vector_q1_0_q8_1_x4_f32");
 static constexpr KernelCatalogRef kMulMatVectorQ1_0Q8_1X4Rows2F32Kernel =
@@ -1733,6 +1736,101 @@ static bool match_vector_mul_mat_dispatch(const DispatchMatchContext & context, 
     return build_vector_mul_mat_dispatch(context, match, dispatch_match);
 }
 
+static bool grouped_storage_span(const Value & value, size_t element_bytes, size_t & span) {
+    size_t last_offset = 0;
+    for (int dimension = 0; dimension < GGML_MAX_DIMS; ++dimension) {
+        const bool has_extent = value.ne[dimension] > 0;
+        const bool has_stride = value.nb[dimension] > 0;
+        const bool aligned_stride = value.nb[dimension] % element_bytes == 0;
+        if (!(has_extent && has_stride && aligned_stride)) {
+            return false;
+        }
+        const size_t extent = static_cast<size_t>(value.ne[dimension] - 1);
+        const bool has_nonzero_extent = extent != 0;
+        const bool offset_overflows = has_nonzero_extent &&
+                                      value.nb[dimension] > (std::numeric_limits<size_t>::max() - last_offset) / extent;
+        if (offset_overflows) {
+            return false;
+        }
+        last_offset += extent * value.nb[dimension];
+        if (value.nb[dimension] / element_bytes > 1073741824) {
+            return false;
+        }
+    }
+    if (last_offset > std::numeric_limits<size_t>::max() - element_bytes) {
+        return false;
+    }
+    span = last_offset + element_bytes;
+    const bool offset_fits = value.storage_offset <= value.storage_byte_count;
+    const bool span_fits = offset_fits && span <= value.storage_byte_count - value.storage_offset;
+    return span_fits && span / element_bytes <= 1073741824;
+}
+
+static bool match_grouped_f16_f32_mul_mat_dispatch(const DispatchMatchContext & context,
+                                                   DispatchMatch & dispatch_match) {
+    const GraphNode * node = context.root_node;
+    const bool has_node = node != nullptr;
+    const bool is_mul_mat = has_node && node->op == GGML_OP_MUL_MAT;
+    const bool has_two_inputs = has_node && node->inputs.size() == 2;
+    if (!(is_mul_mat && has_two_inputs)) {
+        return false;
+    }
+    const Value * key = context.graph.values().find(node->inputs[0]);
+    const Value * query = context.graph.values().find(node->inputs[1]);
+    const Value * output = context.graph.values().find(node->output);
+    const bool has_operands = key != nullptr && query != nullptr && output != nullptr;
+    if (!has_operands) {
+        return false;
+    }
+    const bool supported_types = key->type == GGML_TYPE_F16 && query->type == GGML_TYPE_F32 &&
+                                 output->type == GGML_TYPE_F32;
+    const bool batched = key->ne[2] > 1 && query->ne[2] > key->ne[2];
+    const bool single_outer_batch = key->ne[3] == 1 && query->ne[3] == 1 && output->ne[3] == 1;
+    const bool compatible_heads = batched && query->ne[2] % key->ne[2] == 0;
+    const bool compatible_shape = key->ne[0] == query->ne[0] && output->ne[0] == key->ne[1] &&
+                                  output->ne[1] == query->ne[1] && output->ne[2] == query->ne[2];
+    const bool bounded_shape = key->ne[0] >= 1 && key->ne[0] <= 4096 && key->ne[1] >= 1 &&
+                               key->ne[1] <= 65536 && query->ne[1] >= 1 && query->ne[1] <= 4096 &&
+                               query->ne[2] <= 256;
+    const bool supported_output = output->contiguous && output->nb[0] == sizeof(float);
+    const bool can_dispatch = supported_types && single_outer_batch && compatible_heads && compatible_shape &&
+                              bounded_shape && supported_output;
+    if (!can_dispatch) {
+        return false;
+    }
+    size_t key_span = 0;
+    size_t query_span = 0;
+    const bool key_span_supported = grouped_storage_span(*key, sizeof(ggml_fp16_t), key_span);
+    const bool query_span_supported = grouped_storage_span(*query, sizeof(float), query_span);
+    if (!(key_span_supported && query_span_supported)) {
+        return false;
+    }
+
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(kMulMatGroupedF16F32Kernel);
+    const std::string prefix = "ggml.matmul.grouped_f16_f32.";
+    auto set_parameter = [&](const char * name, int64_t value) {
+        dispatch.kernel.compile_parameters.emplace(prefix + name, std::to_string(value));
+    };
+    set_parameter("input_size", key->ne[0]);
+    set_parameter("key_count", key->ne[1]);
+    set_parameter("query_count", query->ne[1]);
+    set_parameter("query_heads", query->ne[2]);
+    set_parameter("head_group_size", query->ne[2] / key->ne[2]);
+    set_parameter("key_span", key_span / sizeof(ggml_fp16_t));
+    set_parameter("query_span", query_span / sizeof(float));
+    for (int dimension = 0; dimension < 3; ++dimension) {
+        set_parameter(("key_stride" + std::to_string(dimension)).c_str(), key->nb[dimension] / sizeof(ggml_fp16_t));
+        set_parameter(("query_stride" + std::to_string(dimension)).c_str(), query->nb[dimension] / sizeof(float));
+    }
+    dispatch.bindings.push_back({ key->storage_root, key->storage_offset, key_span });
+    dispatch.bindings.push_back({ query->storage_root, query->storage_offset, query_span });
+    dispatch.bindings.push_back({ output->id, 0, output->byte_count });
+    dispatch_match.covered_nodes.push_back(context.root_index);
+    dispatch_match.dispatches.push_back(std::move(dispatch));
+    return true;
+}
+
 static bool match_vector_mul_mat_unary_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     CommonMulMatMatch match =
         common_match_mul_mat_any_format(context.graph, context.root_node, kMulMatVectorF32F32Kernel, true);
@@ -2014,6 +2112,55 @@ static bool match_tiled_mul_mat_dispatch(const DispatchMatchContext & context, D
     return build_mul_mat_dispatch(context, match, dispatch_match);
 }
 
+// Reuse the bounded tiled kernel over consecutive rows when an image produces
+// more tokens than one launch can address. Each slice has its own buffer view,
+// so the kernel's local token indexing also writes the correct output rows.
+static bool match_long_bf16_mul_mat_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
+    constexpr int64_t kTokensPerDispatch = 2048;
+    const CommonMulMatMatch match = common_match_mul_mat_any_format(
+        context.graph, context.root_node, kMulMatTiledF32F32Kernel, false, true);
+    const bool has_match = match.matched();
+    const bool exceeds_single_launch = match.token_count > kTokensPerDispatch;
+    const bool is_long = has_match && exceeds_single_launch;
+    if (!is_long) {
+        return false;
+    }
+
+    const int64_t weight_format = common_mul_mat_format_config_value(match.weight_format);
+    for (int64_t first_token = 0; first_token < match.token_count; first_token += kTokensPerDispatch) {
+        const int64_t remaining_tokens = match.token_count - first_token;
+        const int64_t slice_tokens = std::min(remaining_tokens, kTokensPerDispatch);
+        const size_t input_offset = static_cast<size_t>(first_token * match.input_size) * sizeof(float);
+        const size_t input_bytes = static_cast<size_t>(slice_tokens * match.input_size) * sizeof(float);
+        const size_t output_offset = static_cast<size_t>(first_token * match.output_size) * sizeof(float);
+        const size_t output_bytes = static_cast<size_t>(slice_tokens * match.output_size) * sizeof(float);
+        const bool aligned_tokens = slice_tokens % 32 == 0;
+
+        Dispatch dispatch;
+        dispatch.kernel = make_kernel_specialization(
+            aligned_tokens ? kMulMatTiledAlignedF32F32Kernel : kMulMatTiledF32F32Kernel);
+        if (aligned_tokens) {
+            dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
+        } else {
+            dispatch.kernel.compile_parameters.emplace("ggml.workload.token_capacity",
+                                                       common_to_config_value(slice_tokens));
+        }
+        dispatch.kernel.integer_parameters.emplace("token_count", slice_tokens);
+        dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.input_size", common_to_config_value(match.input_size));
+        dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.output_size", common_to_config_value(match.output_size));
+        dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.weight_format", common_to_config_value(weight_format));
+        dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.output_accumulation", "0");
+        dispatch.kernel.compile_parameters.emplace(
+            "ggml.mul_mat.output_unary_op", std::to_string(unary_kind_config_value(UnaryKind::Identity)));
+        dispatch.bindings.push_back({ match.input->id, input_offset, input_bytes });
+        dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
+        dispatch.bindings.push_back({ match.output->id, output_offset, output_bytes });
+        dispatch_match.dispatches.push_back(std::move(dispatch));
+    }
+    dispatch_match.covered_nodes.push_back(context.root_index);
+    return true;
+}
+
 static bool match_skinny_mul_mat_unary_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     CommonMulMatMatch match =
         common_match_mul_mat_any_format(context.graph, context.root_node, kMulMatSkinnyF32F32Kernel, false);
@@ -2090,6 +2237,22 @@ static bool match_decode_mul_mat_add_dispatch(const DispatchMatchContext & conte
 }
 
 void register_mul_mat_dispatches(DispatchRegistryBuilder & registry) {
+    registry.add({
+        "common.mul_mat.grouped_f16_f32",
+        GGML_OP_MUL_MAT,
+        DispatchMatchKind::SingleOp,
+        100,
+        DispatchSource::Common,
+        match_grouped_f16_f32_mul_mat_dispatch,
+    });
+    registry.add({
+        "common.mul_mat.long_bf16_prefill",
+        GGML_OP_MUL_MAT,
+        DispatchMatchKind::SingleOp,
+        83,
+        DispatchSource::Common,
+        match_long_bf16_mul_mat_dispatch,
+    });
     registry.add_activation_consumer({
         "common.mul_mat.input.f16_row.factored_tiled",
         GGML_OP_MUL_MAT,

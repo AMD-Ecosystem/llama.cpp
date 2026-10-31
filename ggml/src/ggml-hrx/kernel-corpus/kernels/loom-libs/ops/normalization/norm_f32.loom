@@ -1,0 +1,15 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.norm_f32.body(%row_count: index, %input: buffer, %output: buffer)
+
+amdgpu.target<gfx11-generic> @ggml_norm_gfx11_wave32 {subgroup_size = 32}
+
+kernel.def target(@ggml_norm_gfx11_wave32) export("ggml_norm_f32") @ggml_norm_f32(%row_count: index) {
+  %c1 = index.constant 1 : index
+  %c256 = index.constant 256 : index
+  kernel.launch.config workgroups(%row_count, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%row_count: index, %input: buffer, %output: buffer) where [range(%row_count, 1, 1048576)] {
+  template.apply<@ggml.norm_f32.body>(%row_count, %input, %output) : (index, buffer, buffer)
+  kernel.return
+}

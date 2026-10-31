@@ -8,12 +8,17 @@
 #include "dispatch-gather-add.h"
 #include "dispatch-get-rows.h"
 #include "dispatch-glu.h"
+#include "dispatch-im2col.h"
 #include "dispatch-mul-mat-id.h"
 #include "dispatch-mul-mat.h"
+#include "dispatch-norm.h"
+#include "dispatch-mrope-text.h"
 #include "dispatch-rmsnorm.h"
 #include "dispatch-rope-set-rows.h"
 #include "dispatch-scale.h"
+#include "dispatch-soft-max.h"
 #include "dispatch-unary.h"
+#include "dispatch-upscale.h"
 
 namespace ggml::hrx {
 
@@ -26,11 +31,16 @@ void register_common_dispatches(DispatchRegistryBuilder & registry) {
     register_gather_add_dispatch(registry);
     register_get_rows_dispatches(registry);
     register_glu_dispatches(registry);
+    register_im2col_dispatch(registry);
     register_mul_mat_id_dispatches(registry);
     register_mul_mat_dispatches(registry);
+    register_norm_dispatch(registry);
+    register_mrope_text_dispatch(registry);
     register_rope_set_rows_dispatches(registry);
     register_scale_dispatch(registry);
+    register_soft_max_dispatch(registry);
     register_unary_dispatch(registry);
+    register_upscale_dispatch(registry);
     register_rmsnorm_dispatches(registry);
 }
 

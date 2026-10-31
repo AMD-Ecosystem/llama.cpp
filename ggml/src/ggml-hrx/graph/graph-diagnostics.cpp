@@ -107,6 +107,11 @@ json op_params_json(const OpParams & params) {
                 return {
                     { "kind", "none" }
                 };
+            } else if constexpr (std::is_same_v<T, NormParams>) {
+                return {
+                    { "kind", "norm" },
+                    { "eps",  value.eps }
+                };
             } else if constexpr (std::is_same_v<T, RmsNormParams>) {
                 return {
                     { "kind", "rms_norm" },
@@ -149,6 +154,19 @@ json op_params_json(const OpParams & params) {
                     { "scale", value.scale },
                     { "bias",  value.bias  }
                 };
+            } else if constexpr (std::is_same_v<T, Im2ColParams>) {
+                return {
+                    { "kind",       "im2col"          },
+                    { "stride_x",   value.stride_x    },
+                    { "stride_y",   value.stride_y    },
+                    { "pad_x",      value.pad_x       },
+                    { "pad_y",      value.pad_y       },
+                    { "dilation_x", value.dilation_x  },
+                    { "dilation_y", value.dilation_y  },
+                    { "is_2d",      value.is_2d       },
+                };
+            } else if constexpr (std::is_same_v<T, UpscaleParams>) {
+                return { { "kind", "upscale" }, { "mode", value.mode } };
             } else if constexpr (std::is_same_v<T, BinaryParams>) {
                 return {
                     { "kind", "binary"                   },
@@ -180,6 +198,9 @@ json op_params_json(const OpParams & params) {
 
 OpParams parse_op_params(const json & item) {
     const std::string kind = item.value("kind", "none");
+    if (kind == "norm") {
+        return NormParams{ item.value("eps", 0.0f) };
+    }
     if (kind == "rms_norm") {
         return RmsNormParams{ item.value("eps", 0.0f) };
     }
@@ -210,6 +231,16 @@ OpParams parse_op_params(const json & item) {
     }
     if (kind == "scale") {
         return ScaleParams{ item.value("scale", 0.0f), item.value("bias", 0.0f) };
+    }
+    if (kind == "im2col") {
+        return Im2ColParams{
+            item.value("stride_x", 0), item.value("stride_y", 0), item.value("pad_x", 0),
+            item.value("pad_y", 0), item.value("dilation_x", 0), item.value("dilation_y", 0),
+            item.value("is_2d", false),
+        };
+    }
+    if (kind == "upscale") {
+        return UpscaleParams{ item.value("mode", uint32_t(0)) };
     }
     if (kind == "binary") {
         return BinaryParams{ static_cast<BinaryKind>(item.value("op", static_cast<int>(BinaryKind::Add))) };

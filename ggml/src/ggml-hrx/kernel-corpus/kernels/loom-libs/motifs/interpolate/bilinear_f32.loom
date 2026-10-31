@@ -1,0 +1,75 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.interpolate.axis(%output_coordinate: index, %source_size: index, %scale: f32, %pixel_offset: f32) -> (index, index, f32)
+
+template.def<@ggml.interpolate.axis> device @ggml_interpolate_axis(%output_coordinate: index, %source_size: index, %scale: f32, %pixel_offset: f32) -> (index, index, f32) {
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %fzero = scalar.constant 0.0 : f32
+  %fone = scalar.constant 1.0 : f32
+  %coordinate_i32 = index.cast %output_coordinate : index to i32
+  %coordinate_f32 = scalar.sitofp %coordinate_i32 : i32 to f32
+  %shifted = scalar.addf %coordinate_f32, %pixel_offset : f32
+  %scaled = scalar.divf %shifted, %scale : f32
+  %position = scalar.subf %scaled, %pixel_offset : f32
+  %floor = scalar.floorf %position : f32
+  %floor_i32 = scalar.fptosi %floor : f32 to i32
+  %floor_index = index.cast %floor_i32 : i32 to index
+  %last = index.sub %source_size, %one : index
+  %lower0 = index.max %floor_index, %zero : index
+  %lower = index.min %lower0, %last : index
+  %next = index.add %floor_index, %one : index
+  %upper0 = index.max %next, %zero : index
+  %upper = index.min %upper0, %last : index
+  %lower_i32 = index.cast %lower : index to i32
+  %lower_f32 = scalar.sitofp %lower_i32 : i32 to f32
+  %fraction0 = scalar.subf %position, %lower_f32 : f32
+  %fraction1 = scalar.maxnumf %fraction0, %fzero : f32
+  %fraction = scalar.minnumf %fraction1, %fone : f32
+  template.return %lower, %upper, %fraction : index, index, f32
+}
+
+template.decl @ggml.interpolate.bilinear_f32(%source: buffer, %span: index, %x0: index, %x1: index, %y0: index, %y1: index, %z: index, %batch: index, %dx: f32, %dy: f32, %stride0: index, %stride1: index, %stride2: index, %stride3: index) -> (f32)
+
+template.def<@ggml.interpolate.bilinear_f32> device @ggml_interpolate_bilinear_f32(%source: buffer, %span: index, %x0: index, %x1: index, %y0: index, %y1: index, %z: index, %batch: index, %dx: f32, %dy: f32, %stride0: index, %stride1: index, %stride2: index, %stride3: index) -> (f32) {
+  %zero_offset = index.constant 0 : offset
+  %span_bounded = index.assume %span [range(%span, 1, 134217728)] : index
+  %source_view = buffer.view %source[%zero_offset] : buffer -> view<[%span_bounded]xf32>
+  %z_offset = index.mul %z, %stride2 : index
+  %batch_offset = index.mul %batch, %stride3 : index
+  %plane_offset = index.add %z_offset, %batch_offset : index
+  %x0_offset = index.mul %x0, %stride0 : index
+  %x1_offset = index.mul %x1, %stride0 : index
+  %y0_offset = index.mul %y0, %stride1 : index
+  %y1_offset = index.mul %y1, %stride1 : index
+  %row0 = index.add %plane_offset, %y0_offset : index
+  %row1 = index.add %plane_offset, %y1_offset : index
+  %a_offset0 = index.add %row0, %x0_offset : index
+  %b_offset0 = index.add %row0, %x1_offset : index
+  %c_offset0 = index.add %row1, %x0_offset : index
+  %d_offset0 = index.add %row1, %x1_offset : index
+  %a_offset = index.assume %a_offset0 [range(%a_offset0, 0, 134217727), lt(%a_offset0, %span_bounded)] : index
+  %b_offset = index.assume %b_offset0 [range(%b_offset0, 0, 134217727), lt(%b_offset0, %span_bounded)] : index
+  %c_offset = index.assume %c_offset0 [range(%c_offset0, 0, 134217727), lt(%c_offset0, %span_bounded)] : index
+  %d_offset = index.assume %d_offset0 [range(%d_offset0, 0, 134217727), lt(%d_offset0, %span_bounded)] : index
+  %a = view.load %source_view[%a_offset] : view<[%span_bounded]xf32> -> f32
+  %b = view.load %source_view[%b_offset] : view<[%span_bounded]xf32> -> f32
+  %c = view.load %source_view[%c_offset] : view<[%span_bounded]xf32> -> f32
+  %d = view.load %source_view[%d_offset] : view<[%span_bounded]xf32> -> f32
+  %one = scalar.constant 1.0 : f32
+  %rx = scalar.subf %one, %dx : f32
+  %ry = scalar.subf %one, %dy : f32
+  %a_x = scalar.mulf %a, %rx : f32
+  %a_xy = scalar.mulf %a_x, %ry : f32
+  %b_x = scalar.mulf %b, %dx : f32
+  %b_xy = scalar.mulf %b_x, %ry : f32
+  %c_x = scalar.mulf %c, %rx : f32
+  %c_xy = scalar.mulf %c_x, %dy : f32
+  %d_x = scalar.mulf %d, %dx : f32
+  %d_xy = scalar.mulf %d_x, %dy : f32
+  %ab = scalar.addf %a_xy, %b_xy : f32
+  %abc = scalar.addf %ab, %c_xy : f32
+  %result = scalar.addf %abc, %d_xy : f32
+  template.return %result : f32
+}

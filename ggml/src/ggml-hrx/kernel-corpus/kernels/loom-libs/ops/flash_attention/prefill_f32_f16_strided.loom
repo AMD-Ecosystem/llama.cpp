@@ -1,0 +1,92 @@
+// Mixed-precision attention for compact head dimensions and strided Q/K/V.
+// The score pass owns one query/head per workgroup; long rows score keys in lane-sized chunks.
+// The value pass owns one output channel per lane and consumes F32 probabilities.
+amdgpu.target<gfx11-generic> @ggml_flash_attention_strided_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @ggml.flash_attention.strided.query_head_count : %value: index where [range(%value, 1, 64)]
+
+config.decl @ggml.flash_attention.strided.key_value_head_count : %value: index where [range(%value, 1, 64)]
+
+config.decl @ggml.flash_attention.strided.qk_head_size : %value: index where [range(%value, 1, 128)]
+
+config.decl @ggml.flash_attention.strided.value_head_size : %value: index where [range(%value, 1, 128)]
+
+config.decl @ggml.flash_attention.strided.query_token_stride : %value: index where [range(%value, 1, 1048576)]
+
+config.decl @ggml.flash_attention.strided.query_head_stride : %value: index where [range(%value, 1, 1048576)]
+
+config.decl @ggml.flash_attention.strided.key_token_stride : %value: index where [range(%value, 1, 1048576)]
+
+config.decl @ggml.flash_attention.strided.key_head_stride : %value: index where [range(%value, 1, 1048576)]
+
+config.decl @ggml.flash_attention.strided.value_token_stride : %value: index where [range(%value, 1, 1048576)]
+
+config.decl @ggml.flash_attention.strided.value_head_stride : %value: index where [range(%value, 1, 1048576)]
+
+config.decl @ggml.flash_attention.strided.query_span : %value: index where [range(%value, 1, 16777216)]
+
+config.decl @ggml.flash_attention.strided.key_span : %value: index where [range(%value, 1, 16777216)]
+
+config.decl @ggml.flash_attention.strided.value_span : %value: index where [range(%value, 1, 16777216)]
+
+config.decl @ggml.flash_attention.strided.has_mask : %value: index where [range(%value, 0, 1)]
+
+config.decl @ggml.flash_attention.strided.attention_scale : f32
+
+template.decl @ggml.flash_attention.strided.scores(%query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %mask: buffer, %probability: buffer)
+
+template.decl @ggml.flash_attention.strided.long_scores(%query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %mask: buffer, %probability: buffer)
+
+template.decl @ggml.flash_attention.strided.long_softmax(%query_token_count: index, %key_value_token_count: index, %probability: buffer)
+
+template.decl @ggml.flash_attention.strided.values(%query_token_count: index, %key_value_token_count: index, %value: buffer, %probability: buffer, %output: buffer)
+
+kernel.def target(@ggml_flash_attention_strided_gfx11_wave64) export("ggml_flash_attention_f32_f16_strided_scores") @ggml_flash_attention_f32_f16_strided_scores(%query_token_count: index, %key_value_token_count: index) {
+  %one = index.constant 1 : index
+  %twofiftysix = index.constant 256 : index
+  %heads = config.get @ggml.flash_attention.strided.query_head_count : index
+  kernel.launch.config workgroups(%query_token_count, %heads, %one) workgroup_size(%twofiftysix, %one, %one) : index
+} launch(%query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %mask: buffer, %probability: buffer) where [range(%query_token_count, 1, 256), range(%key_value_token_count, 1, 256)] {
+  template.apply<@ggml.flash_attention.strided.scores>(%query_token_count, %key_value_token_count, %query, %key, %mask, %probability) : (index, index, buffer, buffer, buffer, buffer)
+  kernel.return
+}
+
+kernel.def target(@ggml_flash_attention_strided_gfx11_wave64) export("ggml_flash_attention_f32_f16_strided_values") @ggml_flash_attention_f32_f16_strided_values(%query_token_count: index, %key_value_token_count: index) {
+  %one = index.constant 1 : index
+  %twofiftysix = index.constant 256 : index
+  %heads = config.get @ggml.flash_attention.strided.query_head_count : index
+  kernel.launch.config workgroups(%query_token_count, %heads, %one) workgroup_size(%twofiftysix, %one, %one) : index
+} launch(%query_token_count: index, %key_value_token_count: index, %value: buffer, %probability: buffer, %output: buffer) where [range(%query_token_count, 1, 3888), range(%key_value_token_count, 1, 3888)] {
+  template.apply<@ggml.flash_attention.strided.values>(%query_token_count, %key_value_token_count, %value, %probability, %output) : (index, index, buffer, buffer, buffer)
+  kernel.return
+}
+
+kernel.def target(@ggml_flash_attention_strided_gfx11_wave64) export("ggml_flash_attention_f32_f16_strided_long_scores") @ggml_flash_attention_f32_f16_strided_long_scores(%query_token_count: index, %key_value_token_count: index) {
+  %one = index.constant 1 : index
+  %twofiftysix = index.constant 256 : index
+  %heads = config.get @ggml.flash_attention.strided.query_head_count : index
+  kernel.launch.config workgroups(%query_token_count, %heads, %one) workgroup_size(%twofiftysix, %one, %one) : index
+} launch(%query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %mask: buffer, %probability: buffer) where [range(%query_token_count, 1, 3888), range(%key_value_token_count, 1, 3888)] {
+  template.apply<@ggml.flash_attention.strided.long_scores>(%query_token_count, %key_value_token_count, %query, %key, %mask, %probability) : (index, index, buffer, buffer, buffer, buffer)
+  kernel.return
+}
+
+kernel.def target(@ggml_flash_attention_strided_gfx11_wave64) export("ggml_flash_attention_f32_f16_strided_long_softmax") @ggml_flash_attention_f32_f16_strided_long_softmax(%query_token_count: index, %key_value_token_count: index) {
+  %one = index.constant 1 : index
+  %twofiftysix = index.constant 256 : index
+  %heads = config.get @ggml.flash_attention.strided.query_head_count : index
+  kernel.launch.config workgroups(%query_token_count, %heads, %one) workgroup_size(%twofiftysix, %one, %one) : index
+} launch(%query_token_count: index, %key_value_token_count: index, %probability: buffer) where [range(%query_token_count, 1, 3888), range(%key_value_token_count, 1, 3888)] {
+  template.apply<@ggml.flash_attention.strided.long_softmax>(%query_token_count, %key_value_token_count, %probability) : (index, index, buffer)
+  kernel.return
+}
+
+kernel.def target(@ggml_flash_attention_strided_gfx11_wave64) export("ggml_flash_attention_f32_f16_strided_long_unmasked_scores") @ggml_flash_attention_f32_f16_strided_long_unmasked_scores(%query_token_count: index, %key_value_token_count: index) {
+  %one = index.constant 1 : index
+  %twofiftysix = index.constant 256 : index
+  %heads = config.get @ggml.flash_attention.strided.query_head_count : index
+  kernel.launch.config workgroups(%query_token_count, %heads, %one) workgroup_size(%twofiftysix, %one, %one) : index
+} launch(%query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %probability: buffer) where [range(%query_token_count, 1, 3888), range(%key_value_token_count, 1, 3888)] {
+  template.apply<@ggml.flash_attention.strided.long_scores>(%query_token_count, %key_value_token_count, %query, %key, %probability, %probability) : (index, index, buffer, buffer, buffer, buffer)
+  kernel.return
+}

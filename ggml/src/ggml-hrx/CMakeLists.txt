@@ -220,6 +220,8 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/common/dispatch-get-rows.h
     dispatch_registration/common/dispatch-glu.cpp
     dispatch_registration/common/dispatch-glu.h
+    dispatch_registration/common/dispatch-im2col.cpp
+    dispatch_registration/common/dispatch-im2col.h
     dispatch_registration/common/dispatch-mul-mat-id.cpp
     dispatch_registration/common/dispatch-mul-mat-id-common.h
     dispatch_registration/common/dispatch-mul-mat-id.h
@@ -227,6 +229,10 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/common/dispatch-mul-mat-common.h
     dispatch_registration/common/dispatch-mul-mat-weight-format.h
     dispatch_registration/common/dispatch-mul-mat.h
+    dispatch_registration/common/dispatch-norm.cpp
+    dispatch_registration/common/dispatch-norm.h
+    dispatch_registration/common/dispatch-mrope-text.cpp
+    dispatch_registration/common/dispatch-mrope-text.h
     dispatch_registration/common/dispatch-rope-set-rows.cpp
     dispatch_registration/common/dispatch-rope-set-rows.h
     dispatch_registration/common/dispatch-rope-utils.h
@@ -234,8 +240,12 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/common/dispatch-rmsnorm.h
     dispatch_registration/common/dispatch-scale.cpp
     dispatch_registration/common/dispatch-scale.h
+    dispatch_registration/common/dispatch-soft-max.cpp
+    dispatch_registration/common/dispatch-soft-max.h
     dispatch_registration/common/dispatch-unary.cpp
     dispatch_registration/common/dispatch-unary.h
+    dispatch_registration/common/dispatch-upscale.cpp
+    dispatch_registration/common/dispatch-upscale.h
     dispatch_registration/common/iq-codebook-resource.cpp
     dispatch_registration/common/iq-codebook-resource.h
     dispatch_registration/dispatch-registry.cpp

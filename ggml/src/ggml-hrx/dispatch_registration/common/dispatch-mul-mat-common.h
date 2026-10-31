@@ -374,7 +374,8 @@ inline bool common_is_swiglu_params(const OpParams & params) {
 inline CommonMulMatMatch common_match_mul_mat_any_format(const Graph &     graph,
                                                          const GraphNode * node,
                                                          KernelCatalogRef  kernel,
-                                                         bool              decode) {
+                                                         bool              decode,
+                                                         bool              long_bf16_prefill = false) {
     CommonMulMatMatch match;
     if (node == nullptr || node->op != GGML_OP_MUL_MAT || node->inputs.size() != 2) {
         return match;
@@ -413,8 +414,21 @@ inline CommonMulMatMatch common_match_mul_mat_any_format(const Graph &     graph
     const int64_t token_count           = input->ne[1];
     const bool    token_count_supported = decode ? common_is_supported_decode_token_count(token_count) :
                                                    common_is_supported_prefill_token_count(token_count);
+    const bool    standard_input_size = common_is_supported_dense_input_size(format, input_size);
+    // The tiled core masks its final K256 block and reads BF16 rows at their actual stride.
+    const bool    bf16_weight = format == CommonMulMatWeightFormat::BF16;
+    const bool    prefill = !decode;
+    const bool    width_at_least_256 = input_size >= 256;
+    const bool    width_at_most_32768 = input_size <= 32768;
+    const bool    width_aligned_to_16 = input_size % 16 == 0;
+    const bool    tiled_input_width = width_at_least_256 && width_at_most_32768 && width_aligned_to_16;
+    const bool    bf16_prefill_input_size = prefill && bf16_weight && tiled_input_width;
+    const bool    input_size_supported = standard_input_size || bf16_prefill_input_size;
+    const bool    supported_long_bf16 = long_bf16_prefill && bf16_prefill_input_size &&
+                                        token_count > 2048 && token_count <= 16384;
+    const bool    supported_tokens = token_count_supported || supported_long_bf16;
     if (input->ne[0] != input_size || output->ne[0] != output_size || output->ne[1] != token_count ||
-        !token_count_supported || !common_is_supported_dense_input_size(format, input_size) ||
+        !supported_tokens || !input_size_supported ||
         !(decode ? common_is_supported_dense_decode_output_size(format, input_size, output_size) :
                    common_is_supported_dense_output_size(output_size))) {
         return {};
