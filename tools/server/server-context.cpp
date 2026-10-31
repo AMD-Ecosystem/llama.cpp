@@ -18,6 +18,13 @@
 #include "mtmd.h"
 #include "mtmd-helper.h"
 
+// Optional per-op roofline profiler (HIP build with GGML_HIP_ROOFLINE). Used to
+// discard warmup so the report covers only measured inference. Compiled out
+// otherwise. See ggml/src/ggml-cuda/ggml-cuda-roofline.cpp.
+#ifdef GGML_HIP_ROOFLINE
+#include "ggml-cuda-roofline.h"
+#endif
+
 #include <algorithm>
 #include <cstddef>
 #include <cinttypes>
@@ -1535,6 +1542,12 @@ private:
 
         // propagate new defaults back to caller
         params = params_base;
+
+        // Discard warmup from the per-op roofline profiler so the report covers
+        // only measured inference. Compiled out unless GGML_HIP_ROOFLINE.
+#ifdef GGML_HIP_ROOFLINE
+        ggml_cuda_roofline_reset();
+#endif
 
         if (!is_resume) {
             return init();

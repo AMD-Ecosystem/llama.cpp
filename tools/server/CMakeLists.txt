@@ -35,6 +35,13 @@ target_include_directories(${TARGET} PRIVATE ../mtmd)
 target_include_directories(${TARGET} PRIVATE ${PROJECT_SOURCE_DIR})
 target_link_libraries(${TARGET} PUBLIC llama-common mtmd ${CMAKE_THREAD_LIBS_INIT})
 
+# Compile in the post-warmup roofline reset only when the HIP profiler is built
+# (ggml-cuda-roofline.cpp, linked via ggml-hip). No-op in every other build.
+if (GGML_HIP_ROOFLINE)
+    target_compile_definitions(${TARGET} PRIVATE GGML_HIP_ROOFLINE)
+    target_include_directories(${TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../ggml/src/ggml-cuda)
+endif()
+
 # llama-server-impl: server logic, reusable by app
 
 set(TARGET llama-server-impl)
