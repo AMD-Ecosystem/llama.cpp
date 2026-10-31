@@ -440,6 +440,124 @@ def test_logprobs_stream():
     assert aggregated_text == output_text
 
 
+@pytest.mark.parametrize("stream", [False, True])
+def test_logprobs_partial_stop_prefix(stream: bool):
+    # a token matching only a prefix of a stop string is held back, then emitted merged with
+    # the next token once generation diverges - its logprobs bytes must not be lost
+    global server
+    server.start()
+    body = {
+        "max_tokens": 8,
+        "temperature": 0.0,
+        "messages": [
+            {"role": "system", "content": "Book"},
+            {"role": "user", "content": "What is the best book"},
+        ],
+        "logprobs": True,
+        "top_logprobs": 1,
+    }
+    res = server.make_request("POST", "/chat/completions", data=body)
+    assert res.status_code == 200
+    entries = res.body["choices"][0]["logprobs"]["content"]
+    # stop on a mid-generation token followed by a char the model never emits, so that token
+    # only matches a prefix of the stop string and the next token diverges from it
+    prefix = next(e["token"] for e in entries[1:-1] if e["token"].strip())
+    body["stop"] = [prefix + "\x01"]
+
+    all_bytes = bytearray()
+    if stream:
+        content = ""
+        for data in server.make_stream_request("POST", "/chat/completions", data={**body, "stream": True}):
+            if not data["choices"]:
+                continue
+            choice = data["choices"][0]
+            content += choice["delta"].get("content") or ""
+            if choice.get("logprobs"):
+                for entry in choice["logprobs"]["content"]:
+                    all_bytes.extend(entry["bytes"])
+    else:
+        res = server.make_request("POST", "/chat/completions", data=body)
+        assert res.status_code == 200
+        content = res.body["choices"][0]["message"]["content"]
+        for entry in res.body["choices"][0]["logprobs"]["content"]:
+            all_bytes.extend(entry["bytes"])
+
+    assert prefix in content
+    assert bytes(all_bytes).decode("utf-8") == content
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("case", ["two_tokens", "mid_token", "limit_held"])
+def test_logprobs_matched_stop(stream: bool, case: str):
+    # the tokens of a matched stop string get no logprobs entries, just as their text is left
+    # out of the content - and a token the stop string starts in keeps only its visible part
+    # (limit_held: a partial match that never completes still reaches the content when
+    # generation ends on it)
+    global server
+    server.start()
+    body = {
+        "max_tokens": 16,
+        "temperature": 0.0,
+        "messages": [
+            {"role": "system", "content": "Book"},
+            {"role": "user", "content": "What is the best book"},
+        ],
+        "logprobs": True,
+        "top_logprobs": 1,
+    }
+    res = server.make_request("POST", "/chat/completions", data=body)
+    assert res.status_code == 200
+    tokens = [e["token"] for e in res.body["choices"][0]["logprobs"]["content"]]
+    if case == "two_tokens":
+        # the first token is held back as a partial match, then the second completes it
+        i = next(
+            i for i in range(1, len(tokens) - 2)
+            if tokens[i].strip() and tokens[i + 1].strip()
+            and tokens[i] + tokens[i + 1] not in "".join(tokens[:i + 1])
+        )
+        stop = tokens[i] + tokens[i + 1]
+        expected = tokens[:i]
+    elif case == "limit_held":
+        # the last token is held back as a partial match when max_tokens is reached
+        i = next(i for i in range(1, len(tokens)) if tokens[i].strip())
+        stop = tokens[i] + "\x01"
+        expected = tokens[:i + 1]
+        body["max_tokens"] = i + 1
+    else:
+        i = next(
+            i for i in range(1, len(tokens) - 1)
+            if len(tokens[i].strip()) >= 3 and tokens[i][:len(tokens[i]) // 2].strip()
+            and tokens[i][len(tokens[i]) // 2:] not in "".join(tokens[:i]) + tokens[i][:len(tokens[i]) // 2]
+        )
+        stop = tokens[i][len(tokens[i]) // 2:]
+        expected = tokens[:i] + [tokens[i][:len(tokens[i]) // 2]]
+    body["stop"] = [stop]
+
+    entries = []
+    if stream:
+        content = ""
+        for data in server.make_stream_request("POST", "/chat/completions", data={**body, "stream": True}):
+            if not data["choices"]:
+                continue
+            choice = data["choices"][0]
+            content += choice["delta"].get("content") or ""
+            if choice.get("finish_reason"):
+                finish_reason = choice["finish_reason"]
+            if choice.get("logprobs"):
+                entries.extend(choice["logprobs"]["content"])
+    else:
+        res = server.make_request("POST", "/chat/completions", data=body)
+        assert res.status_code == 200
+        content = res.body["choices"][0]["message"]["content"]
+        finish_reason = res.body["choices"][0]["finish_reason"]
+        entries = res.body["choices"][0]["logprobs"]["content"]
+
+    assert finish_reason == ("length" if case == "limit_held" else "stop")
+    assert content == "".join(expected)
+    assert [e["token"] for e in entries] == expected
+    assert bytes(b for e in entries for b in e["bytes"]).decode("utf-8") == content
+
+
 def test_logit_bias():
     global server
     server.start()

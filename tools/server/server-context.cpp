@@ -292,6 +292,14 @@ struct server_slot {
 
     std::vector<completion_token_output> generated_token_probs;
 
+    // tokens whose text is not sent yet (incomplete UTF-8 or partial stop word) - their
+    // logprobs wait with it, since the text may still turn out to be a stop word
+    struct held_token {
+        completion_token_output out;
+        uint64_t                n_gen; // n_decoded of its partial response
+    };
+    std::vector<held_token> held_tokens;
+
     bool has_next_token = true;
     bool has_new_line   = false;
     bool truncated      = false;
@@ -395,6 +403,7 @@ struct server_slot {
         }
         generated_tokens.clear();
         generated_token_probs.clear();
+        held_tokens.clear();
         json_schema = json();
 
         task_prev = std::move(task);
@@ -1990,6 +1999,8 @@ private:
         // check if there is incomplete UTF-8 character at the end
         bool incomplete = validate_utf8(slot.generated.text) < slot.generated.text.size();
 
+        bool resolved = false;
+
         // search stop word and delete it
         if (!incomplete) {
             size_t pos = std::min(slot.n_sent_text, slot.generated.text.size());
@@ -2011,15 +2022,19 @@ private:
                 // no send the stop word in the response
                 result.text_to_send = slot.generated.text.substr(pos, std::string::npos);
                 slot.n_sent_text += result.text_to_send.size();
-                // add the token to slot queue and cache
+                resolved = true;
             } else {
                 result.text_to_send = "";
             }
+        } else {
+            result.text_to_send = "";
+        }
 
-            slot.add_token(result);
-            if (slot.task->params.stream) {
-                send_partial_response(slot, result, false);
-            }
+        // every sampled token gets its own logprobs entry (and, if streaming, its own
+        // partial chunk), released once its text is either sent or cut as a stop word
+        slot.held_tokens.push_back({ result, slot.stats.n_gen });
+        if (resolved) {
+            release_held_tokens(slot, result.text_to_send.size());
         }
 
         if (incomplete) {
@@ -2102,7 +2117,43 @@ private:
 
         SLT_DBG(slot, "n_gen = %d, n_remaining = %d, next token: %5d '%s'\n", (int) slot.stats.n_gen, slot.n_remaining(), result.tok, token_str.c_str());
 
+        if (!slot.has_next_token && !slot.held_tokens.empty()) {
+            // generation ended with text still held, which non-stream content includes, so the
+            // last chunk must send it too
+            const size_t pos = std::min(slot.n_sent_text, slot.generated.text.size());
+            auto & last = slot.held_tokens.back().out;
+            last.text_to_send = slot.generated.text.substr(pos);
+            slot.n_sent_text += last.text_to_send.size();
+            release_held_tokens(slot, last.text_to_send.size());
+        }
+
         return slot.has_next_token; // continue
+    }
+
+    // the held tokens' pieces add up to the text not sent yet, of which only the first
+    // n_visible bytes reach content (the rest is a matched stop word), so cut each
+    // token's logprobs text to its share of those
+    void release_held_tokens(server_slot & slot, size_t n_visible) {
+        for (auto & held : slot.held_tokens) {
+            const bool hidden = n_visible == 0 && !held.out.txt.empty();
+
+            if (held.out.txt.size() > n_visible) {
+                held.out.txt.resize(n_visible);
+            }
+            n_visible -= held.out.txt.size();
+
+            if (hidden) {
+                // its chunk still goes out, as it can carry the content released before the
+                // stop word - empty probs keep the logprobs entry out of it
+                held.out.probs.clear();
+            } else {
+                slot.add_token(held.out);
+            }
+            if (slot.task->params.stream) {
+                send_partial_response(slot, held.out, false, false, held.n_gen);
+            }
+        }
+        slot.held_tokens.clear();
     }
 
     void populate_token_probs(const server_slot & slot, completion_token_output & result, bool post_sampling, bool special, int idx) const {
@@ -2187,7 +2238,7 @@ private:
         queue_results.send(std::move(res));
     }
 
-    void send_partial_response(server_slot & slot, const completion_token_output & tkn, bool is_progress, bool is_begin = false) {
+    void send_partial_response(server_slot & slot, const completion_token_output & tkn, bool is_progress, bool is_begin = false, uint64_t n_gen = 0) {
         auto res = std::make_unique<server_task_result_cmpl_partial>();
 
         res->id    = slot.task->id;
@@ -2207,7 +2258,9 @@ private:
             res->tokens.assign(1, tkn.tok);
         }
 
-        res->n_decoded             = slot.stats.n_gen;
+        // a held token's chunk goes out late, but must keep its own count (e.g. n_decoded == 1
+        // opens the stream)
+        res->n_decoded             = n_gen > 0 ? n_gen : slot.stats.n_gen;
         res->n_prompt_tokens       = slot.task->n_tokens();
         res->n_prompt_tokens_cache = slot.stats.n_prompt_cached;
         res->post_sampling_probs   = slot.task->params.post_sampling_probs;
@@ -2273,19 +2326,11 @@ private:
         res->oaicompat_cmpl_id = slot.task->params.oaicompat_cmpl_id;
 
         // populate res.probs_output
+        // the tokens of a matched stop word are already left out - see release_held_tokens()
         if (slot.task->params.sampling.n_probs > 0) {
-            if (!slot.task->params.stream && slot.stop == STOP_TYPE_WORD) {
-                const llama_tokens stop_word_toks = common_tokenize(ctx_tgt, slot.stopping_word, false);
-
-                size_t safe_offset = std::min(slot.generated_token_probs.size(), stop_word_toks.size());
-                res->probs_output = std::vector<completion_token_output>(
-                        slot.generated_token_probs.begin(),
-                        slot.generated_token_probs.end() - safe_offset);
-            } else {
-                res->probs_output = std::vector<completion_token_output>(
-                        slot.generated_token_probs.begin(),
-                        slot.generated_token_probs.end());
-            }
+            res->probs_output = std::vector<completion_token_output>(
+                    slot.generated_token_probs.begin(),
+                    slot.generated_token_probs.end());
         }
 
         res->generation_params = slot.task->params; // copy the parameters
@@ -4388,6 +4433,7 @@ private:
             completion_token_output result;
             result.tok          = id;
             result.text_to_send = common_token_to_piece(slot.ctx_tgt, result.tok, accept_special_token(slot, result.tok));
+            result.txt          = result.text_to_send;
             result.prob         = 1.0f; // TODO: set it here instead of doing inside populate_token_probs
 
             if (slot.task->params.sampling.n_probs > 0) {
@@ -4527,6 +4573,7 @@ private:
 
                 result.tok          = ids[i];
                 result.text_to_send = common_token_to_piece(slot.ctx_tgt, result.tok, accept_special_token(slot, result.tok));
+                result.txt          = result.text_to_send;
                 result.prob         = 1.0f; // set later
 
                 // TODO: set result.probs
