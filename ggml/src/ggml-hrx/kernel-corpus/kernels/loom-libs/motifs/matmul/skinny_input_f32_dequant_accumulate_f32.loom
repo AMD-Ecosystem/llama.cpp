@@ -221,7 +221,7 @@ func.def inline @ggml_mul_mat_f32_f32_lowtoken_dot(%weight_format: index, %token
   %c64 = index.constant 64 : index
   %c256 = index.constant 256 : index
   %base = index.constant 0 : offset
-  %zero = vector.constant 0.0 : vector<4xf32>
+  %zero = vector.splatf 0.0 : vector<4xf32>
   %tokens = index.assume %token_count [range(%token_count, 2, 5)] : index
   %k = index.assume %input_size0 [range(%input_size0, 256, 32768), multiple_of(%input_size0, 256)] : index
   %n = index.assume %output_size0 [range(%output_size0, 1, 262144)] : index
@@ -636,7 +636,7 @@ func.def inline @ggml_q4_q8_lowtoken_adjacent_scale_min(%scale0: i32, %scale1: i
 
 func.def inline @ggml_q4_q8_lowtoken_dot8(%paired_tokens: i1, %weight: vector<2xi32>, %activation: vector<2xi32>) -> (f32) {
   %value = scf.if %paired_tokens -> (f32) {
-    %zero = vector.constant 0 : vector<1xi32>
+    %zero = vector.splati 0 : vector<1xi32>
     %wi0 = vector.extract %weight[0] : vector<2xi32> -> i32
     %ai0 = vector.extract %activation[0] : vector<2xi32> -> i32
     %ww0 = vector.splat %wi0 : vector<1xi32>
@@ -751,8 +751,8 @@ func.def inline @ggml_mul_mat_q4_q8_1_x4_lowtoken_dot(%weight_format: index, %to
   %q8_stage_bytes = scf.select %staged, %full_stage_bytes, %base : offset
   %q8_stage = buffer.alloca<workgroup> align(16) %q8_stage_bytes : buffer
   %q8_input = scf.select %staged, %q8_stage, %input_na : buffer
-  %zero_header = vector.constant 0 : vector<4xi32>
-  %zero_raw = vector.constant 0 : vector<2xi32>
+  %zero_header = vector.splati 0 : vector<4xi32>
+  %zero_raw = vector.splati 0 : vector<2xi32>
   %prime_header, %prime_raw = scf.if %staged -> (vector<4xi32>, vector<2xi32>) {
     %header, %raw = func.call @ggml_q4_prefetch_native_words(%gate_na, %row_group_block, %c0, %row_lane, %payload_field, %payload_word) : (buffer, index, index, index, index, index) -> (vector<4xi32>, vector<2xi32>)
     scf.yield %header, %raw : vector<4xi32>, vector<2xi32>
@@ -824,8 +824,8 @@ func.def inline @ggml_mul_mat_q4_q8_1_x4_lowtoken_dot(%weight_format: index, %to
       %raw = vector.load %g_code_view[%payload_field, %row_lane, %payload_word] : view<8x64x4xi32> -> vector<2xi32>
       scf.yield %raw : vector<2xi32>
     }
-    %g_mask = vector.constant 252645135 : vector<2xi32>
-    %g_shift = vector.constant 4 : vector<2xi32>
+    %g_mask = vector.splati 252645135 : vector<2xi32>
+    %g_shift = vector.splati 4 : vector<2xi32>
     %g_lo = vector.andi %g_raw, %g_mask : vector<2xi32>
     %g_high = vector.shrui %g_raw, %g_shift : vector<2xi32>
     %g_hi = vector.andi %g_high, %g_mask : vector<2xi32>
@@ -1086,7 +1086,7 @@ func.def inline @ggml_q6_q8_lowtoken_activation_values(%pipelined: i1, %token: i
 
 func.def inline @ggml_q6_q8_lowtoken_dot16(%pipelined: i1, %w: vector<16xi8>, %a: vector<16xi8>) -> (i32) {
   %sum = scf.if %pipelined -> (i32) {
-    %di0 = vector.constant 0 : vector<1xi32>
+    %di0 = vector.splati 0 : vector<1xi32>
     %dw0 = vector.slice %w[0] : vector<16xi8> -> vector<4xi8>
     %da0 = vector.slice %a[0] : vector<16xi8> -> vector<4xi8>
     %di1 = vector.dot4i<s8s8> %dw0, %da0, %di0 : vector<4xi8>, vector<4xi8>, vector<1xi32>
@@ -1102,7 +1102,7 @@ func.def inline @ggml_q6_q8_lowtoken_dot16(%pipelined: i1, %w: vector<16xi8>, %a
     %chain_sum = vector.extract %di4[0] : vector<1xi32> -> i32
     scf.yield %chain_sum : i32
   } else {
-    %init = vector.constant 0 : vector<4xi32>
+    %init = vector.splati 0 : vector<4xi32>
     %dot = vector.dot4i<s8s8> %w, %a, %init : vector<16xi8>, vector<16xi8>, vector<4xi32>
     %seed = scalar.constant 0 : i32
     %direct_sum = vector.reduce<addi> %dot, %seed : vector<4xi32>, i32
@@ -1305,7 +1305,7 @@ func.def inline @ggml_mul_mat_q6_q8_1_x4_lowtoken_dot(%weight_format: index, %to
   %q8_input = scf.select %staged, %q8_stage, %input_na : buffer
   %zero_half = scalar.constant 0.0 : f16
   %zero_code = scalar.constant 0 : i8
-  %zero_words = vector.constant 0 : vector<4xi32>
+  %zero_words = vector.splati 0 : vector<4xi32>
   %prime_d, %prime_s, %prime_ql, %prime_qh = scf.if %staged -> (f16, i8, vector<4xi32>, vector<4xi32>) {
     %pd, %ps, %pql, %pqh = func.call @ggml_q6_prefetch_native_words(%weight_na, %row_group_block, %c0, %row_lane, %half16, %group, %half128, %ql_side, %packet) : (buffer, index, index, index, index, index, index, index, index) -> (f16, i8, vector<4xi32>, vector<4xi32>)
     scf.yield %pd, %ps, %pql, %pqh : f16, i8, vector<4xi32>, vector<4xi32>
@@ -1343,9 +1343,9 @@ func.def inline @ggml_mul_mat_q6_q8_1_x4_lowtoken_dot(%weight_format: index, %to
     %d = scalar.extf %current_d : f16 to f32
     %sf = scalar.sitofp %current_s : i8 to f32
     %ws = scalar.mulf %d, %sf : f32
-    %nibble_mask = vector.constant 252645135 : vector<4xi32>
-    %high_mask = vector.constant 50529027 : vector<4xi32>
-    %four = vector.constant 4 : vector<4xi32>
+    %nibble_mask = vector.splati 252645135 : vector<4xi32>
+    %high_mask = vector.splati 50529027 : vector<4xi32>
+    %four = vector.splati 4 : vector<4xi32>
     %ql_shifted = vector.shrui %current_ql, %nibble_shift : vector<4xi32>
     %low = vector.andi %ql_shifted, %nibble_mask : vector<4xi32>
     %qh_shifted = vector.shrui %current_qh, %high_shift : vector<4xi32>
@@ -1353,8 +1353,8 @@ func.def inline @ggml_mul_mat_q6_q8_1_x4_lowtoken_dot(%weight_format: index, %to
     %high = vector.shli %high0, %four : vector<4xi32>
     %code = vector.ori %low, %high : vector<4xi32>
     // Guard bits prevent subtraction from borrowing across packed bytes.
-    %guard_mask = vector.constant -2139062144 : vector<4xi32>
-    %center = vector.constant 538976288 : vector<4xi32>
+    %guard_mask = vector.splati -2139062144 : vector<4xi32>
+    %center = vector.splati 538976288 : vector<4xi32>
     %guarded = vector.ori %code, %guard_mask : vector<4xi32>
     %centered = vector.subi %guarded, %center : vector<4xi32>
     %signed_code = vector.xori %centered, %guard_mask : vector<4xi32>

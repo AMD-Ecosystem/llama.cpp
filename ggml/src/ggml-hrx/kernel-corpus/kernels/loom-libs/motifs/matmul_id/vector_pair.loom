@@ -171,7 +171,7 @@ template.def<@ggml.matmul_id.vector_pair.q8_1_x4.subgroup_body> device @ggml_mat
   %c0_f32 = scalar.constant 0.0 : f32
   %c1_f32 = scalar.constant 1.0 : f32
   %c127_f32 = scalar.constant 127.0 : f32
-  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %c0_f32x4 = vector.splatf 0.0 : vector<4xf32>
   %c0_offset = index.constant 0 : offset
   %launched_element_count = index.mul %group_count, %c128 : index
   %group_element_base = index.mul %group, %c128 : index

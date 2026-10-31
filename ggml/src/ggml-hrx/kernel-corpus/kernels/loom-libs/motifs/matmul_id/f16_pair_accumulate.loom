@@ -78,7 +78,7 @@ template.def<@ggml.mul_mat_id_swiglu_f16_f16.project_generic_vector16> device @g
   %c64 = index.constant 64 : index
   %c0_offset = index.constant 0 : offset
   %c0_i32 = scalar.constant 0 : i32
-  %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
+  %c0_f16x4 = vector.splatf 0.0 : vector<4xf16>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
   %k = index.constant 16 : index
@@ -173,8 +173,8 @@ template.def<@ggml.mul_mat_id_swiglu_f16_f16.accumulate_q4k_block> device @ggml_
   %c32 = index.constant 32 : index
   %c64 = index.constant 64 : index
   %c256 = index.constant 256 : index
-  %c0_i32x1 = vector.constant 0 : vector<1xi32>
-  %c0_i32x4 = vector.constant 0 : vector<4xi32>
+  %c0_i32x1 = vector.splati 0 : vector<1xi32>
+  %c0_i32x4 = vector.splati 0 : vector<4xi32>
   %true = scalar.constant true : i1
   %false = scalar.constant false : i1
   %gate_header0, %gate_header1, %up_header0, %up_header1 = scf.for %header_row_offset = [%c0 to %c64 step %c32](%prior_gate_header0 = %c0_i32x4 : vector<4xi32>, %prior_gate_header1 = %c0_i32x4 : vector<4xi32>, %prior_up_header0 = %c0_i32x4 : vector<4xi32>, %prior_up_header1 = %c0_i32x4 : vector<4xi32>) -> (vector<4xi32>, vector<4xi32>, vector<4xi32>, vector<4xi32>) unroll {
@@ -257,9 +257,9 @@ template.def<@ggml.mul_mat_id_swiglu_f16_f16.accumulate_q5k_block> device @ggml_
   %c32 = index.constant 32 : index
   %c64 = index.constant 64 : index
   %c256 = index.constant 256 : index
-  %c0_i32x1 = vector.constant 0 : vector<1xi32>
-  %c0_i32x4 = vector.constant 0 : vector<4xi32>
-  %c0_i8x4 = vector.constant 0 : vector<4xi8>
+  %c0_i32x1 = vector.splati 0 : vector<1xi32>
+  %c0_i32x4 = vector.splati 0 : vector<4xi32>
+  %c0_i8x4 = vector.splati 0 : vector<4xi8>
   %true = scalar.constant true : i1
   %false = scalar.constant false : i1
   %gate_header0, %gate_header1, %up_header0, %up_header1, %gate_qh_bytes0, %gate_qh_bytes1, %up_qh_bytes0, %up_qh_bytes1 = scf.for %header_row_offset = [%c0 to %c64 step %c32](%prior_gate_header0 = %c0_i32x4 : vector<4xi32>, %prior_gate_header1 = %c0_i32x4 : vector<4xi32>, %prior_up_header0 = %c0_i32x4 : vector<4xi32>, %prior_up_header1 = %c0_i32x4 : vector<4xi32>, %prior_gate_qh_bytes0 = %c0_i8x4 : vector<4xi8>, %prior_gate_qh_bytes1 = %c0_i8x4 : vector<4xi8>, %prior_up_qh_bytes0 = %c0_i8x4 : vector<4xi8>, %prior_up_qh_bytes1 = %c0_i8x4 : vector<4xi8>) -> (vector<4xi32>, vector<4xi32>, vector<4xi32>, vector<4xi32>, vector<4xi8>, vector<4xi8>, vector<4xi8>, vector<4xi8>) unroll {
@@ -344,7 +344,7 @@ template.def<@ggml.mul_mat_id_swiglu_f16_f16.accumulate_q6k_block> device @ggml_
   %c32 = index.constant 32 : index
   %c64 = index.constant 64 : index
   %c256 = index.constant 256 : index
-  %c0_i32x1 = vector.constant 0 : vector<1xi32>
+  %c0_i32x1 = vector.splati 0 : vector<1xi32>
   %true = scalar.constant true : i1
   %false = scalar.constant false : i1
   %next_block_gate, %next_block_up = scf.for %q6_half = [%c0 to %c2 step %c1](%half_gate_acc = %gate_accumulator : vector<16xf16>, %half_up_acc = %up_accumulator : vector<16xf16>) -> (vector<16xf16>, vector<16xf16>) {

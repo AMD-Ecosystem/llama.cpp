@@ -37,7 +37,7 @@ template.def<@ggml.routing.weighted_reduce_next_rmsnorm_f32> device requires [#t
   %scratch_bytes = index.constant 32 : offset
   %c0_offset = index.constant 0 : offset
   %c0_f32 = scalar.constant 0.0 : f32
-  %c0_f32x8 = vector.constant 0.0 : vector<8xf32>
+  %c0_f32x8 = vector.splatf 0.0 : vector<8xf32>
   %active_token = index.cmp ult, %token0, %token_count : index
   %safe_token0 = scf.select %active_token, %token0, %c0 : index
   %token, %launch_token_count = index.assume %safe_token0, %token_count [lt(%safe_token0, %token_count)] : index, index

@@ -17,7 +17,7 @@ func.def inline @ggml_matmul_vector_decode_pair_load_f32_block(%token_count: ind
   %c255 = index.constant 255 : index
   %c256 = index.constant 256 : index
   %c0_offset = index.constant 0 : offset
-  %zero = vector.constant 0.0 : vector<4xf32>
+  %zero = vector.splatf 0.0 : vector<4xf32>
   %bounded_lane = index.assume %lane [range(%lane, 0, 63)] : index
   %padded_input_size = index.add %input_size, %c255 : index
   %block_count = index.div %padded_input_size, %c256 : index
@@ -63,7 +63,7 @@ func.def inline @ggml_matmul_vector_decode_pair_block_row(%weight_format: index,
   %c128 = index.constant 128 : index
   %c255 = index.constant 255 : index
   %c256 = index.constant 256 : index
-  %zero = vector.constant 0.0 : vector<4xf32>
+  %zero = vector.splatf 0.0 : vector<4xf32>
   %zero_f32 = scalar.constant 0.0 : f32
   %bounded_lane = index.assume %lane [range(%lane, 0, 63)] : index
   %padded_input_size = index.add %input_size, %c255 : index
