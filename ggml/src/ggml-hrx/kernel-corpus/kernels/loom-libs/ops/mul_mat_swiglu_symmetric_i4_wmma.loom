@@ -53,7 +53,7 @@ template.def<@ggml.quantize_symmetric_i4_k32.body> device @ggml_quantize_f32_sym
   %shift8 = scalar.constant 8 : i32
   %shift12 = scalar.constant 12 : i32
   %shuffle_width = scalar.constant 32 : i32
-  %mask15 = vector.constant 15 : vector<4xi32>
+  %mask15 = vector.splati 15 : vector<4xi32>
 
   %k = config.get @ggml.quantize_symmetric_i4_k32.input_size : index
   %cols = config.get @ggml.quantize_symmetric_i4_k32.token_count : index
@@ -233,8 +233,8 @@ kernel.def export("ggml_mul_mat_swiglu_symmetric_i4_wmma_q8_plane") @ggml_mul_ma
   %k_blocks = index.constant 2 : index
   %k_wave = index.constant 32 : index
   %k_wm = index.constant 4 : index
-  %fzero = vector.constant 0.0 : vector<8xf32>
-  %izero = vector.constant 0 : vector<8xi32>
+  %fzero = vector.splatf 0.0 : vector<8xf32>
+  %izero = vector.splati 0 : vector<8xi32>
   %apply_swiglu = scalar.constant true : i1
   %publish_f32 = scalar.constant false : i1
   %publish_f16 = scalar.constant false : i1
@@ -1352,10 +1352,10 @@ template.def<@ggml.mul_mat_swiglu.symmetric_i4.m128n64_wg128.body> device @ggml_
     %u4_zero_i32 = scalar.constant 0 : i32
     %u4_eps = scalar.constant 1.0000000000000001e-30 : f32
     %u4_f15 = scalar.constant 15.0 : f32
-    %u4_vzero = vector.constant 0.0 : vector<4xf32>
-    %u4_v15 = vector.constant 15.0 : vector<4xf32>
-    %u4_bias_neg8 = vector.constant -8 : vector<4xi32>
-    %u4_nibble_mask = vector.constant 15 : vector<4xi32>
+    %u4_vzero = vector.splatf 0.0 : vector<4xf32>
+    %u4_v15 = vector.splatf 15.0 : vector<4xf32>
+    %u4_bias_neg8 = vector.splati -8 : vector<4xi32>
+    %u4_nibble_mask = vector.splati 15 : vector<4xi32>
     %u4_c8_i32 = scalar.constant 8 : i32
     %u4_xor1 = scalar.constant 1 : i32
     %u4_xor2 = scalar.constant 2 : i32

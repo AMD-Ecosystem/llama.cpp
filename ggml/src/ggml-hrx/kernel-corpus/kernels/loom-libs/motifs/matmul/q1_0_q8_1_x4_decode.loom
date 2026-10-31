@@ -31,7 +31,7 @@ func.def inline @ggml_q1_0_q8_1_x4_block_lane(%weight: buffer, %weight_row_byte_
   %c8 = index.constant 8 : index
   %block_bytes = index.constant 18 : offset
   %code_byte_add = index.constant 2 : offset
-  %c0_i32v = vector.constant 0 : vector<1xi32>
+  %c0_i32v = vector.splati 0 : vector<1xi32>
   %block_byte_add = index.scale %q1_block, %block_bytes : index, offset -> offset
   %block_byte_base = index.add %weight_row_byte_base, %block_byte_add : offset
   %code_byte_base = index.add %block_byte_base, %code_byte_add : offset
@@ -82,7 +82,7 @@ func.def inline @ggml_q1_0_q8_1_x4_block_rows2_lane(%weight: buffer, %row0_byte_
   %c8 = index.constant 8 : index
   %block_bytes = index.constant 18 : offset
   %code_byte_add = index.constant 2 : offset
-  %c0_i32v = vector.constant 0 : vector<1xi32>
+  %c0_i32v = vector.splati 0 : vector<1xi32>
   %block_byte_add = index.scale %q1_block, %block_bytes : index, offset -> offset
   %row0_block_base = index.add %row0_byte_base, %block_byte_add : offset
   %row1_block_base = index.add %row1_byte_base, %block_byte_add : offset
@@ -152,7 +152,7 @@ func.def inline @ggml_q1_0_q8_1_x4_pair_lane(%input_size: index, %gate: buffer, 
   %block_bytes = index.constant 18 : offset
   %code_byte_add = index.constant 2 : offset
   %c0_f32 = scalar.constant 0.0 : f32
-  %c0_i32v = vector.constant 0 : vector<1xi32>
+  %c0_i32v = vector.splati 0 : vector<1xi32>
   %block_count = index.div %bounded_input_size, %c128 : index
   %gate_result, %up_result = scf.for %block = [%c0 to %block_count step %c1](%gate_acc = %c0_f32 : f32, %up_acc = %c0_f32 : f32) -> (f32, f32) unroll(%c4) {
     %block_byte_add = index.scale %block, %block_bytes : index, offset -> offset

@@ -652,10 +652,10 @@ template.def<@ggml.mul_mat_q5_k_q8_plane.wmmai8.body> device @ggml_mul_mat_q5_k_
         %q5_group1_i32 = index.cast %q5_group1 : index to i32
         %q5_group0_shift = vector.splat %q5_group0_i32 : vector<4xi32>
         %q5_group1_shift = vector.splat %q5_group1_i32 : vector<4xi32>
-        %q5_nibble_mask = vector.constant 252645135 : vector<4xi32>
-        %q5_byte_ones = vector.constant 16843009 : vector<4xi32>
-        %q5_sign_extend = vector.constant 240 : vector<4xi32>
-        %q5_shift4 = vector.constant 4 : vector<4xi32>
+        %q5_nibble_mask = vector.splati 252645135 : vector<4xi32>
+        %q5_byte_ones = vector.splati 16843009 : vector<4xi32>
+        %q5_sign_extend = vector.splati 240 : vector<4xi32>
+        %q5_shift4 = vector.splati 4 : vector<4xi32>
         %q5_weight_row_base = index.mul %q5_weight_tid, %k_wstride : index
         %q5_w0 = index.assume %q5_weight_row_base [range(%q5_weight_row_base, 0, 10160)] : index
         %q5_payload16 = index.constant 16 : index
@@ -682,7 +682,7 @@ template.def<@ggml.mul_mat_q5_k_q8_plane.wmmai8.body> device @ggml_mul_mat_q5_k_
           scf.yield %words : vector<4xi32>
         }
         %q5_high_words0 = scf.if %is_q4 -> (vector<4xi32>) {
-          %zero = vector.constant 0 : vector<4xi32>
+          %zero = vector.splati 0 : vector<4xi32>
           scf.yield %zero : vector<4xi32>
         } else {
           %high = vector.load %q5_high_view[%c0] : view<8xi32> -> vector<4xi32>
@@ -726,7 +726,7 @@ template.def<@ggml.mul_mat_q5_k_q8_plane.wmmai8.body> device @ggml_mul_mat_q5_k_
           scf.yield %words : vector<4xi32>
         }
         %q5_high_words1 = scf.if %is_q4 -> (vector<4xi32>) {
-          %zero = vector.constant 0 : vector<4xi32>
+          %zero = vector.splati 0 : vector<4xi32>
           scf.yield %zero : vector<4xi32>
         } else {
           %high = vector.load %q5_high_view[%c4] : view<8xi32> -> vector<4xi32>
@@ -1244,8 +1244,8 @@ kernel.def target(@ggml_q5_plane_dense_gfx11_wave32) @ggml_mul_mat_q5_k_q8_plane
   %k_blocks = index.constant 2 : index
   %k_wave = index.constant 32 : index
   %k_wm = index.constant 8 : index
-  %fzero = vector.constant 0.0 : vector<8xf32>
-  %izero = vector.constant 0 : vector<8xi32>
+  %fzero = vector.splatf 0.0 : vector<8xf32>
+  %izero = vector.splati 0 : vector<8xi32>
   %is_iq4xs = scalar.constant false : i1
   %is_symi5 = scalar.constant true : i1
   %is_q4 = scalar.constant false : i1
@@ -1323,8 +1323,8 @@ template.def<@ggml.mul_mat_q8_1_x4.entry> device @ggml_mul_mat_q8_1_x4_entry(%to
   %k_blocks = index.constant 2 : index
   %k_wave = index.constant 32 : index
   %k_wm = index.constant 8 : index
-  %fzero = vector.constant 0.0 : vector<8xf32>
-  %izero = vector.constant 0 : vector<8xi32>
+  %fzero = vector.splatf 0.0 : vector<8xf32>
+  %izero = vector.splati 0 : vector<8xi32>
   %weight_format = config.get @ggml.mul_mat_q8_1_x4.weight_format : index
   %is_iq4xs = index.cmp eq, %weight_format, %c23 : index
   %true = scalar.constant true : i1

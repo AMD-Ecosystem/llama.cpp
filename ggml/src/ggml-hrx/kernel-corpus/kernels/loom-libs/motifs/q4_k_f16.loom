@@ -14,9 +14,9 @@ func.def inline @ggml_q4k_f16_vector4(%weight: buffer, %row_byte_base: offset, %
   %code_offset = index.constant 16 : offset
   %c2_i32 = scalar.constant 2 : i32
   %c4_i32 = scalar.constant 4 : i32
-  %c15 = vector.constant 15 : vector<1xi32>
-  %c48 = vector.constant 48 : vector<1xi32>
-  %q4_mask = vector.constant 252645135 : vector<1xi32>
+  %c15 = vector.splati 15 : vector<1xi32>
+  %c48 = vector.splati 48 : vector<1xi32>
+  %q4_mask = vector.splati 252645135 : vector<1xi32>
   %bounded_group = index.assume %q4_group [range(%q4_group, 0, 7)] : index
   %bounded_packet = index.assume %packet [range(%packet, 0, 7)] : index
   %block_byte_add = index.scale %q4_block, %block_bytes : index, offset -> offset

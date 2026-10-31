@@ -29,7 +29,7 @@ template.def<@ggml.binary_swiglu_symmetric_i4_k32.body> device @ggml_binary_swig
   %shuffle_width = scalar.constant 32 : i32
   %shift4 = scalar.constant 4 : i32
   %shift8 = scalar.constant 8 : i32
-  %mask15 = vector.constant 15 : vector<2xi32>
+  %mask15 = vector.splati 15 : vector<2xi32>
 
   %input_size0 = config.get @ggml.binary_swiglu_symmetric_i4.input_size : index
   %token_count0 = config.get @ggml.binary_swiglu_symmetric_i4.token_count : index

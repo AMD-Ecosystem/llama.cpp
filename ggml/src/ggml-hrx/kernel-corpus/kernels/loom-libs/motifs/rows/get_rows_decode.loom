@@ -42,7 +42,7 @@ template.def<@ggml.get_rows_f32.load_vector4> device @ggml_get_rows_f32_load_vec
   %c4 = index.constant 4 : index
   %c32 = index.constant 32 : index
   %c256 = index.constant 256 : index
-  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %c0_f32x4 = vector.splatf 0.0 : vector<4xf32>
   %token_id = index.assume %token [range(%token, 0, 262207)] : index
   %bounded_token_id, %bounded_row_count = index.assume %token_id, %row_count [lt(%token_id, %row_count)] : index, index
   %safe_values = scf.if %publish -> (vector<4xf32>) {

@@ -74,7 +74,7 @@ func.def inline @ggml_mul_mat_decode_load_f32_block(%token_count: index, %input_
   %c255 = index.constant 255 : index
   %c256 = index.constant 256 : index
   %c0_offset = index.constant 0 : offset
-  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %c0_f32x4 = vector.splatf 0.0 : vector<4xf32>
   %bounded_lane = index.assume %lane [range(%lane, 0, 63)] : index
   %padded_input_size = index.add %input_size, %c255 : index
   %block_count = index.div %padded_input_size, %c256 : index
@@ -123,7 +123,7 @@ func.def inline @ggml_mul_mat_decode_f32_block_row(%iq4nl_table: vector<16xi8>, 
   %c128 = index.constant 128 : index
   %c255 = index.constant 255 : index
   %c256 = index.constant 256 : index
-  %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
+  %c0_f16x4 = vector.splatf 0.0 : vector<4xf16>
   %c0_f32 = scalar.constant 0.0 : f32
   %bounded_lane = index.assume %lane [range(%lane, 0, 63)] : index
   %padded_input_size = index.add %input_size, %c255 : index
