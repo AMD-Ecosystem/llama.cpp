@@ -3783,6 +3783,117 @@ static void run_im2col_cpu_reference_case(ggml_type output_type,
     ggml_backend_free(hrx_backend);
 }
 
+static void run_im2col_support_checks() {
+    ggml_init_params params = {};
+    params.mem_size = 256 * 1024;
+    params.no_alloc = true;
+    ggml_context * ctx = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
+    ggml_tensor * weight = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 2, 2, 3, 4);
+    ggml_tensor * source = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 8, 8, 3, 1);
+    ggml_tensor * source_f16 = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 8, 8, 3, 1);
+    REQUIRE(weight != nullptr);
+    REQUIRE(source != nullptr);
+    REQUIRE(source_f16 != nullptr);
+
+    for (ggml_type output_type : { GGML_TYPE_F16, GGML_TYPE_F32 }) {
+        ggml_tensor * output = ggml_im2col(ctx, weight, source, 2, 2, 0, 0, 1, 1, true, output_type);
+        REQUIRE(ggml::hrx::can_execute_standalone_op_as_graph(output, "gfx1151"));
+    }
+
+    ggml_tensor * wrong_source = ggml_im2col(ctx, weight, source_f16, 2, 2, 0, 0, 1, 1, true, GGML_TYPE_F16);
+    ggml_tensor * wrong_output = ggml_im2col(ctx, weight, source, 2, 2, 0, 0, 1, 1, true, GGML_TYPE_BF16);
+    ggml_tensor * wrong_dilation = ggml_im2col(ctx, weight, source, 2, 2, 0, 0, 0, 1, true, GGML_TYPE_F16);
+    REQUIRE(!ggml::hrx::can_execute_standalone_op_as_graph(wrong_source, "gfx1151"));
+    REQUIRE(!ggml::hrx::can_execute_standalone_op_as_graph(wrong_output, "gfx1151"));
+    REQUIRE(!ggml::hrx::can_execute_standalone_op_as_graph(wrong_dilation, "gfx1151"));
+
+    ggml_tensor * transposed = ggml_transpose(ctx, source);
+    ggml_tensor * wrong_layout = ggml_im2col(ctx, weight, transposed, 2, 2, 0, 0, 1, 1, true, GGML_TYPE_F16);
+    REQUIRE(!ggml::hrx::can_execute_standalone_op_as_graph(wrong_layout, "gfx1151"));
+
+    ggml_tensor * weight_1d = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 2, 8, 4, 1);
+    ggml_tensor * wrong_rank = ggml_im2col(ctx, weight_1d, source, 2, 0, 0, 0, 1, 0, false, GGML_TYPE_F16);
+    REQUIRE(!ggml::hrx::can_execute_standalone_op_as_graph(wrong_rank, "gfx1151"));
+
+    ggml_free(ctx);
+}
+
+static void run_scheduled_im2col_case(int64_t image_width, int64_t kernel_count, ggml_type output_type) {
+    ggml_backend_t cpu_backend = init_cpu_backend();
+    ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
+    REQUIRE(hrx_backend != nullptr);
+    ggml_backend_t backends[] = { hrx_backend, cpu_backend };
+    ggml_backend_sched_t sched = ggml_backend_sched_new(backends, nullptr, 2, GGML_DEFAULT_GRAPH_SIZE, false, true);
+    REQUIRE(sched != nullptr);
+
+    ggml_init_params params = {};
+    params.mem_size = 256 * 1024;
+    params.no_alloc = true;
+    ggml_context * cpu_ctx = ggml_init(params);
+    ggml_context * hrx_ctx = ggml_init(params);
+    REQUIRE(cpu_ctx != nullptr);
+    REQUIRE(hrx_ctx != nullptr);
+
+    auto build = [&](ggml_context * ctx, ggml_tensor *& raw, ggml_tensor *& weight, ggml_tensor *& output) {
+        raw = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, image_width, image_width, 3, 1);
+        weight = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 16, 16, 3, kernel_count);
+        output = ggml_im2col(ctx, weight, raw, 16, 16, 0, 0, 1, 1, true, output_type);
+        ggml_cgraph * graph = ggml_new_graph(ctx);
+        ggml_build_forward_expand(graph, output);
+        return graph;
+    };
+
+    ggml_tensor * cpu_raw = nullptr;
+    ggml_tensor * cpu_weight = nullptr;
+    ggml_tensor * cpu_output = nullptr;
+    ggml_tensor * hrx_raw = nullptr;
+    ggml_tensor * hrx_weight = nullptr;
+    ggml_tensor * hrx_output = nullptr;
+    ggml_cgraph * cpu_graph = build(cpu_ctx, cpu_raw, cpu_weight, cpu_output);
+    ggml_cgraph * hrx_graph = build(hrx_ctx, hrx_raw, hrx_weight, hrx_output);
+    if (image_width == 32) {
+        ggml_tensor * source_f16 = ggml_new_tensor_4d(hrx_ctx, GGML_TYPE_F16, 32, 32, 3, 1);
+        ggml_tensor * wrong_source = ggml_im2col(hrx_ctx, hrx_weight, source_f16, 16, 16, 0, 0, 1, 1, true, GGML_TYPE_F16);
+        ggml_tensor * wrong_output = ggml_im2col(hrx_ctx, hrx_weight, hrx_raw, 16, 16, 0, 0, 1, 1, true, GGML_TYPE_BF16);
+        ggml_tensor * wrong_dilation = ggml_im2col(hrx_ctx, hrx_weight, hrx_raw, 16, 16, 0, 0, 0, 1, true, GGML_TYPE_F16);
+        REQUIRE(!ggml_backend_supports_op(hrx_backend, wrong_source));
+        REQUIRE(!ggml_backend_supports_op(hrx_backend, wrong_output));
+        REQUIRE(!ggml_backend_supports_op(hrx_backend, wrong_dilation));
+    }
+    ggml_backend_sched_set_tensor_backend(sched, hrx_raw, hrx_backend);
+    ggml_backend_sched_set_tensor_backend(sched, hrx_weight, hrx_backend);
+    REQUIRE(ggml_backend_supports_op(hrx_backend, hrx_output));
+    const char * expected_kernel = output_type == GGML_TYPE_F16 ?
+        "loom_libs:ggml_im2col_f32_f16" : "loom_libs:ggml_im2col_f32_f32";
+    require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph), { expected_kernel });
+
+    ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
+    REQUIRE(cpu_buffer != nullptr);
+    REQUIRE(ggml_backend_sched_alloc_graph(sched, hrx_graph));
+    REQUIRE(ggml_backend_sched_get_tensor_backend(sched, hrx_output) == hrx_backend);
+
+    const std::vector<float> image = make_pattern_f32(ggml_nelements(cpu_raw), 3, 0.03125f);
+    const std::vector<float> weight(ggml_nelements(cpu_weight), 0.0f);
+    ggml_backend_tensor_set(cpu_raw, image.data(), 0, image.size() * sizeof(float));
+    ggml_backend_tensor_set(hrx_raw, image.data(), 0, image.size() * sizeof(float));
+    ggml_backend_tensor_set(cpu_weight, weight.data(), 0, weight.size() * sizeof(float));
+    ggml_backend_tensor_set(hrx_weight, weight.data(), 0, weight.size() * sizeof(float));
+
+    REQUIRE(ggml_backend_graph_compute(cpu_backend, cpu_graph) == GGML_STATUS_SUCCESS);
+    REQUIRE(ggml_backend_sched_graph_compute(sched, hrx_graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_sched_synchronize(sched);
+    require_close(get_f32_tensor(hrx_backend, hrx_output), get_f32_tensor(cpu_backend, cpu_output), 0.0f);
+
+    ggml_backend_buffer_free(cpu_buffer);
+    ggml_free(cpu_ctx);
+    ggml_free(hrx_ctx);
+    ggml_backend_sched_free(sched);
+    ggml_backend_free(cpu_backend);
+    ggml_backend_free(hrx_backend);
+}
+
 static void run_gdn_snapshot_cpu_reference_case(int64_t tokens, bool rms_scale_norm = false) {
     ggml_backend_t cpu = init_cpu_backend();
     ggml_backend_t hrx = ggml_backend_hrx_init(0);
@@ -6721,6 +6832,7 @@ static void run_masked_soft_max_f32_cpu_reference_case(int64_t head_count, int64
 
 static void register_basic_ops_cases(Suite & suite) {
     suite.host_case("support.rmsnorm", [] { run_rmsnorm_support_checks(); });
+    suite.host_case("support.im2col", [] { run_im2col_support_checks(); });
     suite.host_case("support.alternate_value_alias_lookup", [] { run_alternate_value_alias_lookup_checks(); });
     suite.host_case("support.activation_publication_contract", [] { run_activation_publication_contract_checks(); });
     suite.device_case("add_f32.cpu_reference", [] { run_add_f32_cpu_reference_case(); });
@@ -6739,6 +6851,9 @@ static void register_basic_ops_cases(Suite & suite) {
     suite.device_case("im2col.second_frame_f16", [] {
         run_im2col_cpu_reference_case(GGML_TYPE_F16, { 8, 6, 3, 2 }, { 3, 2, 3, 4 }, 2, 1, 1, 0, 1, 1, true);
     });
+    suite.device_case("im2col.scheduled_patch_f16", [] { run_scheduled_im2col_case(32, 8, GGML_TYPE_F16); });
+    suite.device_case("im2col.scheduled_patch_f32", [] { run_scheduled_im2col_case(32, 8, GGML_TYPE_F32); });
+    suite.device_case("im2col.scheduled_qwen_92x92_f16", [] { run_scheduled_im2col_case(1472, 1152, GGML_TYPE_F16); });
     suite.device_case("masked_soft_max_f32.captured_heads24", [] {
         run_masked_soft_max_f32_cpu_reference_case(24, 1, 1, 1);
     });

@@ -1061,12 +1061,14 @@ static bool supported_unary_f32_tensor(const ggml_tensor * op) {
 }
 
 static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op) {
-    GGML_UNUSED(device);
     if (op == nullptr) {
         return false;
     }
     if (zero_output_elision_supported(op)) {
         return true;
+    }
+    if (op->op == GGML_OP_IM2COL) {
+        return ggml::hrx::can_execute_standalone_op_as_graph(op, device_context(device)->architecture);
     }
     if (op->op == GGML_OP_DUP) {
         const ggml_tensor * source = op->src[0];
