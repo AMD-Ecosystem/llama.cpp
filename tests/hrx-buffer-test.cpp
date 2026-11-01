@@ -592,7 +592,8 @@ static void run_host_weight_cache_checks(ggml_backend_hrx_context * context) {
     ggml::hrx::RecordedCommandGraph recorded;
     hrx_buffer_retain(first.lease.buffer());
     recorded.retained_buffers.push_back(first.lease.buffer());
-    recorded.resident_host_weights.push_back(first.lease);
+    recorded.resident_host_weights =
+        std::make_shared<const std::vector<ggml::hrx::HostWeightLease>>(std::initializer_list<ggml::hrx::HostWeightLease>{ first.lease });
     weights.clear();
     weight_stats = weights.stats();
     REQUIRE(weight_stats.hits == 1);

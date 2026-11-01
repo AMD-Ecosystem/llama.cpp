@@ -788,6 +788,9 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
                                                         const CommandProgram &                 commands,
                                                         const CommandProgramBindings &         bindings,
                                                         PreparedCommandProgram &               prepared) {
+    // Publish the owner before acquisition so partial preparation retains every acquired lease.
+    auto resident_weights = std::make_shared<std::vector<HostWeightLease>>();
+    prepared.resident_host_weights = resident_weights;
     std::vector<CommandProgramBinding> materialized;
     Status                             status;
     materialized.reserve(bindings.bindings().size());
@@ -834,7 +837,7 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
                     device_binding.offset = 0;
                     device_binding.length = resident.lease.length();
                     device_binding.capacity = resident.lease.length();
-                    prepared.resident_host_weights.push_back(std::move(resident.lease));
+                    resident_weights->push_back(std::move(resident.lease));
                 }
                 materialized.push_back(std::move(device_binding));
             }
@@ -872,7 +875,7 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
     }
     const bool can_report_residency = status.success() && context.host_weights != nullptr;
     if (can_report_residency) {
-        context.host_weights->report_coexisting_representations(prepared.resident_host_weights,
+        context.host_weights->report_coexisting_representations(*prepared.resident_host_weights,
                                                                 "same command program");
     }
     return CommandProgramBindings::from_bindings(std::move(materialized), status);
@@ -2264,6 +2267,18 @@ bool execute_prepared_command_program(const CommandProgramExecutionContext & con
         !execute_prepared_command_list_serial(context, commands.commands, "main", commands.commands.size())) {
         return false;
     }
+    // Registered host inputs can be overwritten as soon as graph_compute returns; finish their queued reads first.
+    Status flush_status = flush_stream_commands(context, "flush direct HRX command program");
+    if (!flush_status.success()) {
+        GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(flush_status));
+        return false;
+    }
+    Status wait_status = wait_stream_commands(context, "wait for direct HRX command program");
+    if (!wait_status.success()) {
+        GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(wait_status));
+        return false;
+    }
+    mark_graph_replay_synchronized(context);
     HRX_DEBUG_SERIAL_SYNC(debug, "host-staging-download-pre");
     Status download_status = download_prepared_host_staging(context, commands);
     if (!download_status.success()) {

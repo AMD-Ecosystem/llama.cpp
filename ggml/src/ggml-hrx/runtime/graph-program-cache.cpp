@@ -20,31 +20,6 @@
 namespace ggml::hrx {
 namespace {
 
-static bool same_weight_demand_binding(const CommandProgramBinding & left, const CommandProgramBinding & right) {
-    const bool same_value = left.value == right.value;
-    const bool same_weight_class = left.weight == right.weight;
-    const bool same_binding_class = same_value && same_weight_class;
-    if (!same_binding_class) {
-        return false;
-    }
-    if (!left.weight) {
-        // Mutable graph inputs can change each token without changing which weights are demanded.
-        return true;
-    }
-    const bool same_storage = left.buffer == right.buffer && left.host_data == right.host_data &&
-                              left.offset == right.offset && left.length == right.length &&
-                              left.capacity == right.capacity && left.empty_value == right.empty_value;
-    const bool same_source = left.identity == right.identity && left.generation == right.generation &&
-                             left.source_host_data == right.source_host_data &&
-                             left.source_offset == right.source_offset && left.source_capacity == right.source_capacity &&
-                             left.source_type == right.source_type && left.source_ne == right.source_ne &&
-                             left.source_nb == right.source_nb;
-    const bool same_layout = left.layout == right.layout && left.layout_source_type == right.layout_source_type &&
-                             left.input_size == right.input_size && left.output_size == right.output_size &&
-                             left.source_length == right.source_length;
-    return same_storage && same_source && same_layout;
-}
-
 static const ggml_tensor * tensor_storage_root(const ggml_tensor * tensor) {
     while (tensor != nullptr && tensor->view_src != nullptr) {
         tensor = tensor->view_src;
@@ -430,16 +405,6 @@ GraphProgramMatch GraphProgram::match_trusted_graph(const ggml_cgraph & current_
         }
     }
     if (!bind_external) {
-        for (const GraphProgramExternalSlot & slot : external_slots_) {
-            const ggml_tensor * tensor = resolve_external_slot(current_graph, slot, result.status);
-            if (tensor == nullptr) {
-                return result;
-            }
-            if (ggml_backend_hrx_weight_layout_eligible(tensor) != slot.weight_layout_eligible) {
-                result.status.log("external weight source class changed for value %d", slot.value.value);
-                return result;
-            }
-        }
         return result;
     }
     result.external_bindings.reserve(external_slots_.size());
@@ -480,39 +445,16 @@ GraphProgramMatch GraphProgram::match_host_staging_graph(const ggml_cgraph & cur
     return result;
 }
 
-GraphProgramMatch GraphProgram::match_weight_demand_graph(const ggml_cgraph & current_graph) const {
-    GraphProgramMatch result;
-    result.external_bindings.reserve(weight_demand_slots_.size());
-    for (const GraphProgramExternalSlot & slot : weight_demand_slots_) {
-        const ggml_tensor * tensor = resolve_external_slot(current_graph, slot, result.status);
-        if (tensor == nullptr) {
-            return result;
-        }
-        const bool source_class_current =
-            ggml_backend_hrx_weight_layout_eligible(tensor) == slot.weight_layout_eligible;
-        if (!source_class_current) {
-            result.status.log("external weight source class changed for value %d", slot.value.value);
-            return result;
-        }
-        result.external_bindings.push_back({ slot.value, tensor });
-    }
-    return result;
-}
-
 Status GraphProgram::capture_external_slots(const ggml_cgraph & graph, const GraphProgramMatch & match) {
     Status status;
     external_slots_.clear();
-    weight_demand_slots_.clear();
-    weight_demand_values_.clear();
-    weight_demand_bindings_.clear();
-    weight_demand_.reset();
-    weight_demand_resources_.reset();
-    imported_source_watches_.clear();
-    written_values_.clear();
+    admitted_resources_.reset();
+    mutable_source_watches_.clear();
+    written_slots_.clear();
+    std::unordered_set<int32_t> written_values;
     external_slot_by_value_.clear();
     fast_path_nodes_ = graph.nodes;
     external_slots_.reserve(match.external_bindings.size());
-    std::unordered_set<int32_t> read_values;
     auto collect_access = [&](const std::vector<Command> & commands) {
         for (const Command & command : commands) {
             for (const CommandBinding & binding : command.bindings) {
@@ -522,12 +464,7 @@ Status GraphProgram::capture_external_slots(const ggml_cgraph & graph, const Gra
                 const bool writes_value = writes_only || reads_and_writes;
                 const bool graph_write = graph_value && writes_value;
                 if (graph_write) {
-                    written_values_.insert(binding.value.value);
-                }
-                const bool reads_value = binding.access != ResourceAccess::Write;
-                const bool graph_read = graph_value && reads_value;
-                if (graph_read) {
-                    read_values.insert(binding.value.value);
+                    written_values.insert(binding.value.value);
                 }
             }
         }
@@ -538,13 +475,12 @@ Status GraphProgram::capture_external_slots(const ggml_cgraph & graph, const Gra
         ValueBufferBinding value_binding;
         const bool bound = ggml_backend_hrx_resolve_value_buffer(binding.tensor, value_binding);
         const bool weight = bound && value_binding.weight;
-        const bool host_source = bound && value_binding.source_host_data != nullptr;
-        const bool tracks_generation = weight && host_source;
         ggml_backend_hrx_imported_region region = {};
-        if (ggml_backend_hrx_get_retained_region(binding.tensor, region)) {
-            // Watch each physical region, including aliases in one buffer, but only weight contents.
-            imported_source_watches_.push_back({ binding.tensor, region.identity, region.generation,
-                                                 region.offset, region.length, tracks_generation });
+        const bool mutable_source = bound && !weight;
+        const bool retained_source = mutable_source && ggml_backend_hrx_get_retained_region(binding.tensor, region);
+        if (retained_source) {
+            // Mutable inputs may rebind under one graph UID; immutable weight bindings are trusted.
+            mutable_source_watches_.push_back({ binding.tensor, region.identity, region.offset, region.length });
         }
         GraphProgramExternalSlot slot;
         slot.value = binding.value;
@@ -580,14 +516,8 @@ Status GraphProgram::capture_external_slots(const ggml_cgraph & graph, const Gra
         }
         external_slot_by_value_[binding.value.value] = external_slots_.size();
         external_slots_.push_back(slot);
-    }
-    for (const GraphProgramExternalSlot & slot : external_slots_) {
-        const bool read_by_command = read_values.count(slot.value.value) != 0;
-        const bool written_by_command = written_values_.count(slot.value.value) != 0;
-        const bool candidate = read_by_command && !written_by_command;
-        if (candidate) {
-            weight_demand_slots_.push_back(slot);
-            weight_demand_values_.insert(slot.value.value);
+        if (written_values.count(slot.value.value) != 0) {
+            written_slots_.push_back(slot);
         }
     }
     return status;
@@ -600,12 +530,46 @@ bool GraphProgram::has_prepared_program() const {
 
 bool GraphProgram::can_use_prepared_fast_path(const ggml_cgraph & graph) const {
     // The UID prevents graph-arena address reuse from passing the fast path.
-    return graph.uid == uid_ && graph.nodes == fast_path_nodes_;
+    const bool allocated_graph = graph.uid != 0;
+    const bool same_uid = graph.uid == uid_;
+    const bool same_nodes = graph.nodes == fast_path_nodes_;
+    return allocated_graph && same_uid && same_nodes;
 }
 
-bool GraphProgram::imported_sources_current() const {
+bool GraphProgram::admitted_at(uint64_t revision) const {
     std::lock_guard<std::mutex> lock(prepared_mutex_);
-    for (const ImportedSourceWatch & watch : imported_source_watches_) {
+    const bool prepared = has_prepared_;
+    const bool same_owner = admitted_resources_.lock() == resources_;
+    const bool current_revision = admitted_revision_ == revision;
+    return prepared && same_owner && current_revision;
+}
+
+void GraphProgram::invalidate_admission() {
+    std::lock_guard<std::mutex> lock(prepared_mutex_);
+    admitted_resources_.reset();
+}
+
+void GraphProgram::admit(const std::shared_ptr<CachedCommandProgramResources> & resources,
+                         uint64_t revision, bool reused_demand) {
+    std::lock_guard<std::mutex> lock(prepared_mutex_);
+    const bool prepared = has_prepared_;
+    const bool same_owner = resources == resources_;
+    const bool current_owner = prepared && same_owner;
+    if (!current_owner) {
+        return;
+    }
+    admitted_resources_ = resources;
+    admitted_revision_ = revision;
+    if (reused_demand) {
+        ++weight_demand_hits_;
+    } else {
+        ++weight_demand_builds_;
+    }
+}
+
+bool GraphProgram::mutable_sources_current() const {
+    std::lock_guard<std::mutex> lock(prepared_mutex_);
+    for (const MutableSourceWatch & watch : mutable_source_watches_) {
         ggml_backend_hrx_imported_region region = {};
         if (!ggml_backend_hrx_get_retained_region(watch.tensor, region)) {
             return false;
@@ -613,12 +577,10 @@ bool GraphProgram::imported_sources_current() const {
         const bool same_identity   = region.identity == watch.identity;
         const bool same_offset = region.offset == watch.offset;
         const bool same_length = region.length == watch.length;
-        const bool same_generation = !watch.tracks_content_generation || region.generation == watch.generation;
         const bool identity_changed = !same_identity;
         const bool offset_changed = !same_offset;
         const bool length_changed = !same_length;
-        const bool generation_changed = !same_generation;
-        const bool source_changed = identity_changed || offset_changed || length_changed || generation_changed;
+        const bool source_changed = identity_changed || offset_changed || length_changed;
         if (source_changed) {
             return false;
         }
@@ -628,11 +590,7 @@ bool GraphProgram::imported_sources_current() const {
 
 void GraphProgram::mark_imported_writes(const ggml_cgraph & graph) const {
     std::unordered_set<uint64_t> marked_identities;
-    for (const GraphProgramExternalSlot & slot : external_slots_) {
-        const bool written_value = written_values_.count(slot.value.value) != 0;
-        if (!written_value) {
-            continue;
-        }
+    for (const GraphProgramExternalSlot & slot : written_slots_) {
         Status status;
         const ggml_tensor * tensor = resolve_external_slot(graph, slot, status);
         if (tensor == nullptr) {
@@ -654,56 +612,6 @@ PreparedCommandProgramCacheStats GraphProgram::prepared_stats() const {
     return prepared_stats_;
 }
 
-std::shared_ptr<const std::vector<HostWeightSource>> GraphProgram::cached_weight_demand_for(
-    const CommandProgramBindings & bindings) const {
-    std::lock_guard<std::mutex> lock(prepared_mutex_);
-    const bool prepared_current = has_prepared_ && resources_ != nullptr;
-    const bool cached_for_prepared = weight_demand_resources_.lock() == resources_;
-    const bool has_cached_demand = weight_demand_ != nullptr;
-    const bool reusable_demand = prepared_current && cached_for_prepared && has_cached_demand;
-    if (!reusable_demand) {
-        return nullptr;
-    }
-    size_t index = 0;
-    for (const CommandProgramBinding & binding : bindings.bindings()) {
-        if (weight_demand_values_.count(binding.value.value) == 0) {
-            continue;
-        }
-        const bool has_cached_binding = index < weight_demand_bindings_.size();
-        const bool same_binding = has_cached_binding &&
-            same_weight_demand_binding(binding, weight_demand_bindings_[index]);
-        if (!same_binding) {
-            return nullptr;
-        }
-        ++index;
-    }
-    if (index != weight_demand_bindings_.size()) {
-        return nullptr;
-    }
-    ++weight_demand_hits_;
-    return weight_demand_;
-}
-
-void GraphProgram::remember_weight_demand(const CommandProgramBindings & bindings,
-                                          const std::vector<HostWeightSource> & demand) {
-    std::vector<CommandProgramBinding> candidates;
-    candidates.reserve(weight_demand_slots_.size());
-    for (const CommandProgramBinding & binding : bindings.bindings()) {
-        if (weight_demand_values_.count(binding.value.value) != 0) {
-            candidates.push_back(binding);
-        }
-    }
-    std::lock_guard<std::mutex> lock(prepared_mutex_);
-    const bool prepared_current = has_prepared_ && resources_ != nullptr;
-    if (!prepared_current) {
-        return;
-    }
-    weight_demand_bindings_ = std::move(candidates);
-    weight_demand_ = std::make_shared<const std::vector<HostWeightSource>>(demand);
-    weight_demand_resources_ = resources_;
-    ++weight_demand_builds_;
-}
-
 std::pair<uint64_t, uint64_t> GraphProgram::weight_demand_stats() const {
     std::lock_guard<std::mutex> lock(prepared_mutex_);
     return { weight_demand_builds_, weight_demand_hits_ };
@@ -715,13 +623,14 @@ void GraphProgram::invalidate_obsolete_weights(const std::vector<HostWeightSourc
         return;
     }
     bool obsolete = false;
-    for (const HostWeightLease & lease : resources_->prepared.resident_host_weights) {
+    for (const HostWeightLease & lease : *resources_->prepared.resident_host_weights) {
         const bool demanded = std::any_of(current_demand.begin(), current_demand.end(),
                                           [&](const HostWeightSource & source) { return lease.matches(source); });
         obsolete |= !demanded;
     }
     if (obsolete) {
         resources_.reset();
+        admitted_resources_.reset();
         has_prepared_ = false;
         prepared_bindings_fingerprint_.clear();
     }
@@ -732,6 +641,8 @@ PreparedCommandProgramCacheExecutionResult GraphProgram::execute_with_result(
     const CommandProgramBindings &         bindings,
     bool                                   full_bindings) {
     PreparedCommandProgramCacheExecutionResult result;
+    std::lock_guard<std::mutex> lock(prepared_mutex_);
+    admitted_resources_.reset();
     if (commands_ == nullptr || !commands_->valid() || !bindings.valid()) {
         result.graph_replay_event             = HrxGraphReplayEvent::Ineligible;
         result.graph_replay_ineligible_reason = "invalid_graph_program";
@@ -742,7 +653,6 @@ PreparedCommandProgramCacheExecutionResult GraphProgram::execute_with_result(
         return result;
     }
 
-    std::lock_guard<std::mutex> lock(prepared_mutex_);
     const std::string bindings_fingerprint =
         full_bindings ? command_program_bindings_fingerprint(bindings).value : std::string{};
     const bool fingerprint_changed = prepared_bindings_fingerprint_ != bindings_fingerprint;
@@ -757,6 +667,7 @@ PreparedCommandProgramCacheExecutionResult GraphProgram::execute_with_result(
         }
         context.graph_replay_state->mark_stream_synchronized();
         resources_.reset();
+        admitted_resources_.reset();
         has_prepared_ = false;
     }
     if (!has_prepared_) {
@@ -769,11 +680,10 @@ PreparedCommandProgramCacheExecutionResult GraphProgram::execute_with_result(
         }
         has_prepared_ = true;
         prepared_bindings_fingerprint_ = bindings_fingerprint;
-        for (ImportedSourceWatch & watch : imported_source_watches_) {
+        for (MutableSourceWatch & watch : mutable_source_watches_) {
             ggml_backend_hrx_imported_region region = {};
             if (ggml_backend_hrx_get_retained_region(watch.tensor, region)) {
                 watch.identity   = region.identity;
-                watch.generation = region.generation;
                 watch.offset = region.offset;
                 watch.length = region.length;
             }
@@ -784,9 +694,12 @@ PreparedCommandProgramCacheExecutionResult GraphProgram::execute_with_result(
     }
     result.execution_resources = resources_;
 
-    if (environment_flag_enabled("GGML_HRX_DISABLE_GRAPH_REPLAY") || debug_serial_command_execution_enabled()) {
+    const bool replay_disabled = graph_replay_disabled_by_environment();
+    const bool serial_execution = debug_serial_command_execution_enabled();
+    const bool execute_directly = replay_disabled || serial_execution;
+    if (execute_directly) {
         result.graph_replay_event             = HrxGraphReplayEvent::Disabled;
-        result.graph_replay_ineligible_reason = debug_serial_command_execution_enabled() ?
+        result.graph_replay_ineligible_reason = serial_execution ?
                                                     "debug_serial_execution" :
                                                     "disabled_by_environment";
         result.success = bind_and_execute_prepared_command_program(context, *commands_, bindings, resources_->prepared);

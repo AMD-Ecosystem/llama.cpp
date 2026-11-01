@@ -11777,7 +11777,7 @@ static void run_zero_output_unused_weight_staging(bool direct_execution) {
             return staging.value == unused_value->id.value;
         }));
         REQUIRE(prepared.host_staging.size() == 2);
-        REQUIRE(prepared.resident_host_weights.size() == 1);
+        REQUIRE(prepared.resident_host_weights->size() == 1);
         REQUIRE(state->host_weights.stats().resident_bytes == weight_bytes);
         REQUIRE(state->host_weights.stats().misses == 1);
         // The vector matmul declares both host input and output as reads.
@@ -11799,7 +11799,7 @@ static void run_zero_output_unused_weight_staging(bool direct_execution) {
         auto prepared = ggml::hrx::prepare_command_program(execution_context, initialization_only, bindings);
         REQUIRE(prepared.valid());
         REQUIRE(prepared.host_staging.size() == 2);
-        REQUIRE(prepared.resident_host_weights.size() == 1);
+        REQUIRE(prepared.resident_host_weights->size() == 1);
         REQUIRE(state->host_weights.stats().misses == 1);
     }
     ggml_backend_buffer_free(cpu_buffer);
@@ -14649,7 +14649,68 @@ static void run_initializer_host_input_ownership() {
     ggml_free(ctx);
 }
 
+static void run_registered_host_input_reuse_waits_before_mutation() {
+    constexpr int64_t count = 128;
+    ggml_backend_t backend = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+    auto * state = static_cast<ggml_backend_hrx_context *>(backend->context);
+    ggml_context * ctx = ggml_init({ 256 * 1024, nullptr, true });
+    REQUIRE(ctx != nullptr);
+    ggml_tensor * input = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, count);
+    ggml_tensor * output_a = ggml_add(ctx, input, input);
+    ggml_tensor * output_b = ggml_add(ctx, input, input);
+    REQUIRE(output_a != nullptr);
+    REQUIRE(output_b != nullptr);
+    ggml_cgraph * graph_a = ggml_new_graph(ctx);
+    ggml_cgraph * graph_b = ggml_new_graph(ctx);
+    REQUIRE(graph_a != nullptr);
+    REQUIRE(graph_b != nullptr);
+    ggml_build_forward_expand(graph_a, output_a);
+    ggml_build_forward_expand(graph_b, output_b);
+    graph_a->uid = 84027;
+    graph_b->uid = 84028;
+
+    const bool direct_host_binding = state->device->use_direct_host_bindings;
+    state->device->use_direct_host_bindings = false;
+    ggml_backend_buffer_type_t host_type = ggml_backend_dev_host_buffer_type(ggml_backend_get_device(backend));
+    ggml_backend_buffer_t host = ggml_backend_alloc_ctx_tensors_from_buft(ctx, host_type);
+    state->device->use_direct_host_bindings = direct_host_binding;
+    REQUIRE(host != nullptr);
+    ggml::hrx::ValueBufferBinding resolved_input;
+    REQUIRE(ggml_backend_hrx_resolve_value_buffer(input, resolved_input));
+    REQUIRE(resolved_input.host_data != nullptr);
+    REQUIRE(resolved_input.buffer == nullptr);
+
+    ggml::hrx::GraphExecutor executor(*state);
+    auto * input_data = static_cast<float *>(input->data);
+    auto * first_output = static_cast<float *>(output_a->data);
+    auto * second_output = static_cast<float *>(output_b->data);
+    std::fill_n(input_data, count, 0.5f);
+    REQUIRE(executor.execute(*graph_a).success());
+    REQUIRE(executor.execute(*graph_b).success());
+    ggml_backend_synchronize(backend);
+
+    std::fill_n(first_output, count, -1000.0f);
+    std::fill_n(second_output, count, -1000.0f);
+    std::fill_n(input_data, count, 1.0f);
+    REQUIRE(executor.execute(*graph_a).success());
+    std::fill_n(input_data, count, 3.0f);
+    REQUIRE(executor.execute(*graph_b).success());
+    ggml_backend_synchronize(backend);
+    for (int64_t i = 0; i < count; ++i) {
+        REQUIRE(first_output[i] == 2.0f);
+        REQUIRE(second_output[i] == 6.0f);
+    }
+
+    ggml_backend_buffer_free(host);
+    ggml_free(ctx);
+    ggml_backend_free(backend);
+}
+
 static void register_hrx_backend_device_cases(test_runner::Suite & suite) {
+    suite.device_case("registered_host_input_reuse_waits_before_mutation", [] {
+        run_registered_host_input_reuse_waits_before_mutation();
+    });
     suite.device_case("initializer_host_input_ownership", [] { run_initializer_host_input_ownership(); });
 
     suite.device_case("zero_output_device_support", [] { run_zero_output_device_support_checks(); });

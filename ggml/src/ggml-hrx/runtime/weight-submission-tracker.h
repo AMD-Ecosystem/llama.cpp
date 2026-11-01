@@ -32,10 +32,14 @@ class WeightSubmissionTracker {
     void fail_completion_record_for_test() { fail_next_record_ = true; }
 
     const std::vector<HostWeightSource> & current_demand() const { return current_demand_; }
+    uint64_t revision() const { return revision_; }
     bool demand_matches(const std::vector<HostWeightSource> & demand) const;
     std::vector<HostWeightSource> merged_demand_for(const std::vector<HostWeightSource> & demand) const;
-    void release_current_leases() { current_leases_.clear(); }
-    const std::vector<HostWeightLease> & current_leases() const { return current_leases_; }
+    void release_current_leases() { current_leases_.reset(); }
+    const std::vector<HostWeightLease> & current_leases() const {
+        static const std::vector<HostWeightLease> empty;
+        return current_leases_ != nullptr ? *current_leases_ : empty;
+    }
     std::vector<HostWeightLease> outstanding_leases() const;
 
   private:
@@ -69,7 +73,8 @@ class WeightSubmissionTracker {
 
     std::vector<HostWeightSource> current_demand_;
     RegionDemands retained_regions_;
-    std::vector<HostWeightLease> current_leases_;
+    std::shared_ptr<const std::vector<HostWeightLease>> current_leases_;
+    uint64_t revision_ = 0;
     std::vector<Pending> pending_;
     bool fail_next_record_ = false;
 };

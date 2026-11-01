@@ -136,7 +136,8 @@ struct PreparedCommandProgram {
     std::vector<PreparedCommand>               initialization_commands;
     std::vector<PreparedCommand>               commands;
     std::vector<HostStagingBuffer>             host_staging;
-    std::vector<HostWeightLease>               resident_host_weights;
+    std::shared_ptr<const std::vector<HostWeightLease>> resident_host_weights =
+        std::make_shared<const std::vector<HostWeightLease>>();
     std::vector<PreparedProgramConstantBuffer> program_constants;
     Status                                     status;
     uint64_t                                   bound_transient_arena_allocation_id = kInvalidTransientArenaAllocationId;
@@ -148,7 +149,8 @@ struct RecordedCommandGraph {
     hrx_graph_t      graph                               = nullptr;
     hrx_graph_exec_t exec                                = nullptr;
     std::vector<hrx_buffer_t>     retained_buffers;
-    std::vector<HostWeightLease>  resident_host_weights;
+    std::shared_ptr<const std::vector<HostWeightLease>> resident_host_weights =
+        std::make_shared<const std::vector<HostWeightLease>>();
     std::vector<hrx_executable_t> retained_executables;
     uint64_t         bound_transient_arena_allocation_id = kInvalidTransientArenaAllocationId;
     size_t           dispatch_count                      = 0;

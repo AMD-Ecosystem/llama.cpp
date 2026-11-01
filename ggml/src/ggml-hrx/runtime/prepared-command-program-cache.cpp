@@ -127,13 +127,17 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
     }
 
     std::lock_guard<std::mutex> entry_lock(entry->mutex);
+    const bool replay_disabled = graph_replay_disabled_by_environment();
+    const bool serial_execution = debug_serial_command_execution_enabled();
+    const bool execute_directly = replay_disabled || serial_execution;
     if (entry->resources != nullptr && entry->resources->prepared.valid()) {
         auto & resources = *entry->resources;
         result.execution_resources = entry->resources;
         record_hit();
-        if (debug_serial_command_execution_enabled()) {
+        if (execute_directly) {
             result.graph_replay_event             = HrxGraphReplayEvent::Disabled;
-            result.graph_replay_ineligible_reason = "debug_serial_execution";
+            result.graph_replay_ineligible_reason = serial_execution ? "debug_serial_execution" :
+                                                                "disabled_by_environment";
             result.success = bind_and_execute_prepared_command_program(context, commands, bindings, resources.prepared);
             if (!result.success) {
                 result.status.log("execute cached HRX command program failed");
@@ -171,9 +175,10 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
     result.execution_resources = resources;
     record_build();
 
-    if (debug_serial_command_execution_enabled()) {
+    if (execute_directly) {
         result.graph_replay_event             = HrxGraphReplayEvent::Disabled;
-        result.graph_replay_ineligible_reason = "debug_serial_execution";
+        result.graph_replay_ineligible_reason = serial_execution ? "debug_serial_execution" :
+                                                                "disabled_by_environment";
         result.success = bind_and_execute_prepared_command_program(context, commands, bindings, resources->prepared);
         if (!result.success) {
             result.status.log("execute prepared HRX command program failed");
@@ -227,7 +232,7 @@ void PreparedCommandProgramCache::invalidate_obsolete_weights(const std::vector<
             continue;
         }
         bool obsolete = false;
-        for (const HostWeightLease & lease : entry->resources->prepared.resident_host_weights) {
+        for (const HostWeightLease & lease : *entry->resources->prepared.resident_host_weights) {
             const bool demanded = std::any_of(current_demand.begin(), current_demand.end(),
                                               [&](const HostWeightSource & source) { return lease.matches(source); });
             obsolete |= !demanded;

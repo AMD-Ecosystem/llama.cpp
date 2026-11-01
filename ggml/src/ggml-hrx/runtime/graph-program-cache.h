@@ -73,17 +73,16 @@ class GraphProgram {
     GraphProgramMatch match_current_graph(const ggml_cgraph & graph) const;
     GraphProgramMatch match_trusted_graph(const ggml_cgraph & graph, bool bind_external = true) const;
     GraphProgramMatch match_host_staging_graph(const ggml_cgraph & graph) const;
-    GraphProgramMatch match_weight_demand_graph(const ggml_cgraph & graph) const;
-    std::shared_ptr<const std::vector<HostWeightSource>> cached_weight_demand_for(
-        const CommandProgramBindings & bindings) const;
-    void remember_weight_demand(const CommandProgramBindings & bindings,
-                                const std::vector<HostWeightSource> & demand);
+    bool admitted_at(uint64_t revision) const;
+    void invalidate_admission();
+    void admit(const std::shared_ptr<CachedCommandProgramResources> & resources,
+               uint64_t revision, bool reused_demand);
 
     Status capture_external_slots(const ggml_cgraph & graph, const GraphProgramMatch & match);
 
     bool has_prepared_program() const;
     bool can_use_prepared_fast_path(const ggml_cgraph & graph) const;
-    bool imported_sources_current() const;
+    bool mutable_sources_current() const;
     void mark_imported_writes(const ggml_cgraph & graph) const;
 
     PreparedCommandProgramCacheStats prepared_stats() const;
@@ -110,27 +109,22 @@ class GraphProgram {
     uint64_t                        command_shape_hash_ = 0;
 
     std::vector<GraphProgramExternalSlot> external_slots_;
-    std::vector<GraphProgramExternalSlot> weight_demand_slots_;
-    std::unordered_set<int32_t>            weight_demand_values_;
-    struct ImportedSourceWatch {
+    struct MutableSourceWatch {
         const ggml_tensor * tensor;
         uint64_t            identity;
-        uint64_t            generation;
         size_t              offset;
         size_t              length;
-        bool                tracks_content_generation;
     };
-    std::vector<ImportedSourceWatch> imported_source_watches_;
-    std::unordered_set<int32_t> written_values_;
+    std::vector<MutableSourceWatch> mutable_source_watches_;
+    std::vector<GraphProgramExternalSlot> written_slots_;
     std::unordered_map<int32_t, size_t>   external_slot_by_value_;
     const ggml_tensor * const *           fast_path_nodes_ = nullptr;
     mutable std::mutex                    prepared_mutex_;
     std::shared_ptr<CachedCommandProgramResources> resources_;
     std::string                           prepared_bindings_fingerprint_;
     PreparedCommandProgramCacheStats      prepared_stats_;
-    std::vector<CommandProgramBinding> weight_demand_bindings_;
-    std::shared_ptr<const std::vector<HostWeightSource>> weight_demand_;
-    std::weak_ptr<CachedCommandProgramResources> weight_demand_resources_;
+    std::weak_ptr<CachedCommandProgramResources> admitted_resources_;
+    uint64_t admitted_revision_ = 0;
     mutable uint64_t weight_demand_builds_ = 0;
     mutable uint64_t weight_demand_hits_ = 0;
     bool                                  has_prepared_ = false;

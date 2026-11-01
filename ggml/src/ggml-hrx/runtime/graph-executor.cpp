@@ -9,7 +9,6 @@
 #include "runtime/transient-arena.h"
 
 #include <algorithm>
-#include <optional>
 #include <utility>
 #include <vector>
 
@@ -134,6 +133,7 @@ void WeightSubmissionTracker::publish_demand(const std::vector<HostWeightSource>
     for (const auto & [region, layouts] : retained_regions_) {
         current_demand_.insert(current_demand_.end(), layouts.begin(), layouts.end());
     }
+    ++revision_;
 }
 
 Status WeightSubmissionTracker::poll_completed(bool * completed) {
@@ -198,7 +198,7 @@ Status WeightSubmissionTracker::record(hrx_device_t device, hrx_stream_t stream,
             if (demand_changed) {
                 publish_demand(demand);
             }
-            current_leases_.clear();
+            release_current_leases();
         }
         return status;
     }
@@ -275,7 +275,7 @@ std::vector<HostWeightLease> WeightSubmissionTracker::outstanding_leases() const
         if (pending.resources == nullptr) {
             continue;
         }
-        const auto & resident = pending.resources->prepared.resident_host_weights;
+        const auto & resident = *pending.resources->prepared.resident_host_weights;
         leases.insert(leases.end(), resident.begin(), resident.end());
     }
     return leases;
@@ -362,16 +362,21 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
         return result;
     }
 
-    const bool        use_graph_prepared = lookup.program->can_use_prepared_fast_path(graph);
+    const bool use_graph_prepared = lookup.program->can_use_prepared_fast_path(graph);
+    const bool admitted_weights = use_graph_prepared &&
+        lookup.program->admitted_at(context_.weight_submissions.revision());
+    const bool reusable_owner = use_graph_prepared && admitted_weights;
+    const bool mutable_sources_current = reusable_owner && lookup.program->mutable_sources_current();
+    const bool trusted_weights = reusable_owner && mutable_sources_current;
+    if (use_graph_prepared) {
+        lookup.program->invalidate_admission();
+    }
     GraphProgramMatch binding_match = std::move(lookup.match);
     const bool has_prepared = lookup.program->has_prepared_program();
-    const bool may_use_partial_bindings = use_graph_prepared && has_prepared;
-    bool full_bindings = true;
-    if (may_use_partial_bindings) {
-        const bool imported_sources_current = lookup.program->imported_sources_current();
-        binding_match = imported_sources_current ? lookup.program->match_host_staging_graph(graph) :
-                                                   lookup.program->match_trusted_graph(graph, true);
-        full_bindings = !imported_sources_current;
+    const bool needs_prepared_match = use_graph_prepared && has_prepared;
+    if (needs_prepared_match) {
+        binding_match = trusted_weights ? lookup.program->match_host_staging_graph(graph) :
+                                          lookup.program->match_trusted_graph(graph, true);
     }
     if (!binding_match.valid()) {
         result.status.append(binding_match.status);
@@ -383,51 +388,19 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
         result.status.append(bindings.status);
         return result;
     }
-    std::shared_ptr<const std::vector<HostWeightSource>> cached_demand;
-    if (!full_bindings) {
-        const GraphProgramMatch candidate_match = lookup.program->match_weight_demand_graph(graph);
-        if (!candidate_match.valid()) {
-            result.status.append(candidate_match.status);
-            return result;
-        }
-        CommandProgramBindings candidate_bindings = bind_external_value_buffers(candidate_match);
-        if (!candidate_bindings.valid()) {
-            result.status.append(candidate_bindings.status);
-            return result;
-        }
-        cached_demand = lookup.program->cached_weight_demand_for(candidate_bindings);
-    }
-    std::optional<CommandProgramBindings> full_demand_bindings;
-    const CommandProgramBindings * demand_bindings = &bindings;
-    const bool needs_full_demand_bindings = !full_bindings && cached_demand == nullptr;
-    if (needs_full_demand_bindings) {
-        const GraphProgramMatch demand_match = lookup.program->match_trusted_graph(graph, true);
-        if (!demand_match.valid()) {
-            result.status.append(demand_match.status);
-            return result;
-        }
-        full_demand_bindings.emplace(bind_external_value_buffers(demand_match));
-        if (!full_demand_bindings->valid()) {
-            result.status.append(full_demand_bindings->status);
-            return result;
-        }
-        demand_bindings = &*full_demand_bindings;
-    }
-    std::vector<HostWeightSource> collected_demand;
-    if (cached_demand == nullptr) {
+    std::vector<HostWeightSource> current_demand;
+    if (!trusted_weights) {
         const CommandProgramWeightDemands weight_demands =
-            bind_command_program_weight_demands(lookup.program->weight_requests(), *demand_bindings);
+            bind_command_program_weight_demands(lookup.program->weight_requests(), bindings);
         if (!weight_demands.valid()) {
             result.status.append(weight_demands.status);
             return result;
         }
         for (const CommandProgramWeightDemand & demand : weight_demands.weights) {
-            collected_demand.push_back(demand.source);
+            current_demand.push_back(demand.source);
         }
     }
-    const std::vector<HostWeightSource> & current_demand =
-        cached_demand != nullptr ? *cached_demand : collected_demand;
-    const bool demand_changed = !context_.weight_submissions.demand_matches(current_demand);
+    const bool demand_changed = !trusted_weights && !context_.weight_submissions.demand_matches(current_demand);
     std::vector<HostWeightSource> merged_demand;
     if (demand_changed) {
         merged_demand = context_.weight_submissions.merged_demand_for(current_demand);
@@ -441,26 +414,6 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
         context_.weight_submissions.release_current_leases();
         context_.graph_programs.invalidate_obsolete_weights(merged_demand);
         context_.prepared_programs.invalidate_obsolete_weights(merged_demand);
-    }
-    const bool prepared_program_missing = !lookup.program->has_prepared_program();
-    const bool restore_full_bindings = use_graph_prepared && prepared_program_missing;
-    if (restore_full_bindings) {
-        if (full_demand_bindings) {
-            bindings = std::move(*full_demand_bindings);
-            full_bindings = true;
-        } else if (!full_bindings) {
-            const GraphProgramMatch full_match = lookup.program->match_trusted_graph(graph, true);
-            if (!full_match.valid()) {
-                result.status.append(full_match.status);
-                return result;
-            }
-            bindings = bind_external_value_buffers(full_match);
-            if (!bindings.valid()) {
-                result.status.append(bindings.status);
-                return result;
-            }
-            full_bindings = true;
-        }
     }
     const bool reconcile_before = demand_changed || completed_before;
     if (reconcile_before) {
@@ -480,7 +433,7 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
         &context_.graph_replay_state,
     };
     const PreparedCommandProgramCacheExecutionResult execution =
-        use_graph_prepared ? lookup.program->execute_with_result(execution_context, bindings, full_bindings) :
+        use_graph_prepared ? lookup.program->execute_with_result(execution_context, bindings, !trusted_weights) :
                              context_.prepared_programs.execute_with_result(execution_context, lookup.program->uid(),
                                                                             lookup.program->command_shape_hash(),
                                                                             lookup.program->commands(), bindings);
@@ -490,12 +443,9 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
         demand_changed);
     result.status.append(completion_status);
     const bool admitted = execution.success && completion_status.success();
-    const bool cache_needs_refresh = cached_demand == nullptr || restore_full_bindings;
-    const bool cache_can_refresh = admitted && use_graph_prepared && cache_needs_refresh;
-    if (cache_can_refresh) {
-        const CommandProgramBindings & cache_bindings =
-            full_bindings ? bindings : *full_demand_bindings;
-        lookup.program->remember_weight_demand(cache_bindings, current_demand);
+    const bool publish_admission = admitted && use_graph_prepared;
+    if (publish_admission) {
+        lookup.program->admit(execution.execution_resources, context_.weight_submissions.revision(), trusted_weights);
     }
     if (!admitted) {
         const auto & retained_demand = context_.weight_submissions.current_demand();
@@ -528,6 +478,9 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
         lookup.program->mark_imported_writes(graph);
     }
     if (!result.status.success()) {
+        if (use_graph_prepared) {
+            lookup.program->invalidate_admission();
+        }
         return result;
     }
     if (!execution.success) {

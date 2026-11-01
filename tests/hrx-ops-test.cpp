@@ -3205,6 +3205,7 @@ static void run_weight_reclamation_sequence_case() {
     };
     const auto native_first = execute(hrx_native, hrx_rows, expected_native);
     REQUIRE(native_first.weight_materializations == 1);
+    REQUIRE(state->weight_submissions.revision() == 1);
     const auto packed_first = execute(hrx_packed, hrx_matmul, expected_packed);
     REQUIRE(packed_first.weight_materializations == 2);
     REQUIRE(packed_first.weight_peak_bytes ==
@@ -3214,7 +3215,9 @@ static void run_weight_reclamation_sequence_case() {
     REQUIRE(native_second.weight_materializations == 3);
     const auto rebuilt_native_demand = state->graph_programs.stats();
     REQUIRE(rebuilt_native_demand.weight_demand_builds > before_native_rebuild.weight_demand_builds);
+    const uint64_t warm_revision = state->weight_submissions.revision();
     const auto native_unchanged = execute(hrx_native, hrx_rows, expected_native);
+    REQUIRE(state->weight_submissions.revision() == warm_revision);
     REQUIRE(native_unchanged.weight_materializations == native_second.weight_materializations);
     REQUIRE(native_unchanged.weight_uploaded_bytes == native_second.weight_uploaded_bytes);
     REQUIRE(native_unchanged.prepared_program_hits > native_second.prepared_program_hits);
@@ -3335,6 +3338,48 @@ static void run_weight_reclamation_sequence_case() {
     completion_fail_then_retry(hrx_two_weights, hrx_rows, hrx_third_rows);
     completion_fail_then_retry(hrx_two_weights_structural, hrx_two_first, hrx_two_second);
 
+    // Logical demand can survive a discarded prepared owner and its physical allocation.
+    execute(hrx_packed, hrx_matmul, expected_packed, 3);
+    const auto packed_lookup = state->graph_programs.get_or_build(
+        *hrx_packed, ggml::hrx::get_qwen_kernel_corpus(), state->device->architecture);
+    REQUIRE(packed_lookup.valid());
+    const uint64_t retained_revision = state->weight_submissions.revision();
+    REQUIRE(packed_lookup.program->admitted_at(retained_revision));
+    const auto before_owner_reset = state->host_weights.stats();
+    const auto retained_demand = state->weight_submissions.current_demand();
+    ggml_backend_synchronize(backend);
+    state->graph_programs.invalidate_obsolete_weights({});
+    state->prepared_programs.invalidate_obsolete_weights({});
+    state->weight_submissions.release_current_leases();
+    state->host_weights.evict_except({}, {});
+    REQUIRE(!packed_lookup.program->has_prepared_program());
+    REQUIRE(!packed_lookup.program->admitted_at(retained_revision));
+    REQUIRE(state->host_weights.stats().allocation_count == 0);
+    REQUIRE(state->weight_submissions.demand_matches(retained_demand));
+    REQUIRE(state->weight_submissions.revision() == retained_revision);
+    execute(hrx_packed, hrx_matmul, expected_packed, 1);
+    REQUIRE(state->host_weights.stats().misses == before_owner_reset.misses + 1);
+    REQUIRE(state->weight_submissions.revision() == retained_revision);
+    REQUIRE(packed_lookup.program->admitted_at(retained_revision));
+
+    // A failed capture of an otherwise warm execution cannot leave its admission reusable.
+    const auto before_capture_failure = state->graph_programs.stats();
+    const auto current_leases = state->weight_submissions.current_leases();
+    state->weight_submissions.fail_completion_record_for_test();
+    REQUIRE(ggml_backend_graph_compute(backend, hrx_packed) == GGML_STATUS_FAILED);
+    REQUIRE(!packed_lookup.program->admitted_at(retained_revision));
+    REQUIRE(state->weight_submissions.revision() == retained_revision);
+    REQUIRE(state->graph_programs.stats().weight_demand_builds == before_capture_failure.weight_demand_builds);
+    REQUIRE(state->graph_programs.stats().weight_demand_hits == before_capture_failure.weight_demand_hits);
+    REQUIRE(state->weight_submissions.current_leases().size() == current_leases.size());
+    for (size_t i = 0; i < current_leases.size(); ++i) {
+        REQUIRE(state->weight_submissions.current_leases()[i].buffer() == current_leases[i].buffer());
+    }
+    execute(hrx_packed, hrx_matmul, expected_packed, 1);
+    REQUIRE(state->weight_submissions.revision() == retained_revision);
+    REQUIRE(packed_lookup.program->admitted_at(retained_revision));
+    REQUIRE(state->graph_programs.stats().weight_demand_builds == before_capture_failure.weight_demand_builds + 1);
+
     ggml_backend_buffer_free(hrx_tensors);
     ggml_backend_buffer_free(cpu_tensors);
     ggml_backend_buffer_free(imported);
@@ -3351,7 +3396,7 @@ static void run_weight_reclamation_overlap_case() {
     const char * old_flag = std::getenv("GGML_HRX_DISABLE_GRAPH_REPLAY");
     const bool had_flag = old_flag != nullptr;
     const std::string old_flag_value = had_flag ? old_flag : "";
-    REQUIRE(setenv("GGML_HRX_DISABLE_GRAPH_REPLAY", "1", 1) == 0);
+    REQUIRE(setenv("GGML_HRX_DISABLE_GRAPH_REPLAY", "0", 1) == 0);
 
     ggml_backend_t cpu = init_cpu_backend();
     ggml_backend_t backend = ggml_backend_hrx_init(0);
@@ -3478,6 +3523,82 @@ static void run_weight_reclamation_overlap_case() {
     ggml_backend_hrx_cache_stats cross_before = {};
     REQUIRE(ggml_backend_hrx_get_cache_stats(backend, &cross_before));
     REQUIRE(cross_before.weight_duplicate_warnings == 0);
+    // The public executors finish their kernel reads before returning. Queue warmed recordings directly
+    // to exercise ownership of genuinely outstanding reads without weakening that completion boundary.
+    struct Submission {
+        std::shared_ptr<ggml::hrx::CachedCommandProgramResources> resources;
+        std::vector<ggml::hrx::HostWeightSource> demand;
+    };
+    auto prepare_submission = [&](ggml_cgraph * graph) {
+        auto lookup = state->graph_programs.get_or_build(
+            *graph, ggml::hrx::get_qwen_kernel_corpus(), state->device->architecture);
+        REQUIRE(lookup.valid());
+        auto match = lookup.program->match_trusted_graph(*graph, true);
+        REQUIRE(match.valid());
+        std::vector<ggml::hrx::CommandProgramBinding> external_bindings;
+        for (const auto & external : match.external_bindings) {
+            ggml::hrx::ValueBufferBinding buffer;
+            REQUIRE(ggml_backend_hrx_resolve_value_buffer(external.tensor, buffer));
+            std::array<int64_t, GGML_MAX_DIMS> ne = {};
+            std::array<size_t, GGML_MAX_DIMS> nb = {};
+            for (size_t dimension = 0; dimension < GGML_MAX_DIMS; ++dimension) {
+                ne[dimension] = external.tensor->ne[dimension];
+                nb[dimension] = external.tensor->nb[dimension];
+            }
+            external_bindings.push_back(ggml::hrx::make_command_program_binding(
+                external.value, buffer, external.tensor->type, ne, nb, ggml_nbytes(external.tensor) == 0));
+        }
+        auto bindings = ggml::hrx::CommandProgramBindings::from_bindings(std::move(external_bindings));
+        auto demands = ggml::hrx::collect_command_program_weight_demands(lookup.program->commands(), bindings);
+        REQUIRE(demands.valid());
+        const ggml::hrx::CommandProgramExecutionContext context = {
+            state->device->device, state->stream, state->device->architecture.c_str(),
+            &ggml::hrx::get_qwen_kernel_corpus(), &state->kernel_executables, &state->transient_arena,
+            &state->host_transfers, &state->host_weights, &state->device->host_buffers,
+            &state->graph_replay_state,
+        };
+        auto execution = lookup.program->execute_with_result(context, bindings, true);
+        REQUIRE(execution.success);
+        REQUIRE(execution.execution_resources->recorded.valid());
+        REQUIRE(execution.execution_resources->recorded.resident_host_weights ==
+                execution.execution_resources->prepared.resident_host_weights);
+        Submission submission;
+        submission.resources = std::move(execution.execution_resources);
+        for (const auto & demand : demands.weights) {
+            submission.demand.push_back(demand.source);
+        }
+        return submission;
+    };
+    auto queue_submission = [&](Submission & submission) {
+        const bool changed = !state->weight_submissions.demand_matches(submission.demand);
+        if (changed) {
+            state->weight_submissions.release_current_leases();
+        }
+        const auto launch = ggml::hrx::take_status(hrx_graph_exec_launch(
+            submission.resources->recorded.exec, state->stream));
+        if (launch) {
+            return false;
+        }
+        const auto * weight_list = submission.resources->prepared.resident_host_weights.get();
+        const auto capture = state->weight_submissions.record(
+            state->device->device, state->stream, submission.resources, submission.demand, true, changed);
+        const bool shares_weights = &state->weight_submissions.current_leases() == weight_list;
+        submission.resources.reset();
+        if (!capture.success()) {
+            return false;
+        }
+        const auto & retained = state->weight_submissions.current_demand();
+        state->graph_programs.invalidate_obsolete_weights(retained);
+        state->prepared_programs.invalidate_obsolete_weights(retained);
+        const auto outstanding = state->weight_submissions.outstanding_leases();
+        state->host_weights.evict_except(retained, outstanding);
+        state->host_weights.report_coexisting_representations(outstanding, "test outstanding submissions");
+        return shares_weights;
+    };
+    auto cross_native_submission = prepare_submission(hrx_native_graph);
+    auto cross_packed_submission = prepare_submission(hrx_packed_graph);
+    const std::vector<float> poisoned_packed(expected_packed.size(), 123.0f);
+    ggml_backend_tensor_set(hrx_packed, poisoned_packed.data(), 0, poisoned_packed.size() * sizeof(float));
     hrx_semaphore_t cross_gate = nullptr;
     REQUIRE(!ggml::hrx::take_status(hrx_semaphore_create(state->device->device, 0, &cross_gate)));
     REQUIRE(!ggml::hrx::take_status(hrx_stream_wait_on(state->stream, { cross_gate, 1 })));
@@ -3493,9 +3614,9 @@ static void run_weight_reclamation_overlap_case() {
             hrx_status_ignore(signal);
         }
     });
-    const bool cross_native = ggml_backend_graph_compute_async(backend, hrx_native_graph) == GGML_STATUS_SUCCESS;
+    const bool cross_native = queue_submission(cross_native_submission);
     const bool cross_packed = cross_native &&
-        ggml_backend_graph_compute_async(backend, hrx_packed_graph) == GGML_STATUS_SUCCESS;
+        queue_submission(cross_packed_submission);
     ggml_backend_hrx_cache_stats cross_queued = {};
     const bool cross_stats_ok = ggml_backend_hrx_get_cache_stats(backend, &cross_queued);
     bool cross_obsolete_completed = true;
@@ -3530,6 +3651,7 @@ static void run_weight_reclamation_overlap_case() {
     // A cold preparation failure must leave an already queued native reader's lease intact.
     REQUIRE(ggml_backend_graph_compute(backend, hrx_native_graph) == GGML_STATUS_SUCCESS);
     ggml_backend_synchronize(backend);
+    auto cold_native_submission = prepare_submission(hrx_native_graph);
     const std::vector<float> poisoned_native(expected_native.size(), 123.0f);
     ggml_backend_tensor_set(hrx_rows, poisoned_native.data(), 0,
                             poisoned_native.size() * sizeof(float));
@@ -3549,7 +3671,7 @@ static void run_weight_reclamation_overlap_case() {
         }
     });
     const bool native_before_failure =
-        ggml_backend_graph_compute_async(backend, hrx_native_graph) == GGML_STATUS_SUCCESS;
+        queue_submission(cold_native_submission);
     state->host_weights.fail_cold_acquire_after_for_test(0);
     const bool cold_failed =
         ggml_backend_graph_compute_async(backend, hrx_packed_graph) == GGML_STATUS_FAILED;
@@ -3572,6 +3694,12 @@ static void run_weight_reclamation_overlap_case() {
     REQUIRE(ggml_backend_hrx_get_cache_stats(backend, &warmed));
     REQUIRE(warmed.weight_live_allocations == 2);
 
+    auto mixed_submission = prepare_submission(hrx_mixed_graph);
+    auto native_submission = prepare_submission(hrx_native_graph);
+    auto packed_submission = prepare_submission(hrx_packed_graph);
+    const std::vector<float> poisoned_mixed(expected_mixed.size(), 123.0f);
+    ggml_backend_tensor_set(hrx_mixed, poisoned_mixed.data(), 0, poisoned_mixed.size() * sizeof(float));
+    ggml_backend_tensor_set(hrx_packed, poisoned_packed.data(), 0, poisoned_packed.size() * sizeof(float));
     hrx_semaphore_t gate = nullptr;
     REQUIRE(!ggml::hrx::take_status(hrx_semaphore_create(state->device->device, 0, &gate)));
     REQUIRE(!ggml::hrx::take_status(hrx_stream_wait_on(state->stream, { gate, 1 })));
@@ -3588,11 +3716,11 @@ static void run_weight_reclamation_overlap_case() {
             hrx_status_ignore(signal);
         }
     });
-    const bool mixed_queued = ggml_backend_graph_compute_async(backend, hrx_mixed_graph) == GGML_STATUS_SUCCESS;
+    const bool mixed_queued = queue_submission(mixed_submission);
     const bool native_queued = mixed_queued &&
-        ggml_backend_graph_compute_async(backend, hrx_native_graph) == GGML_STATUS_SUCCESS;
+        queue_submission(native_submission);
     const bool packed_queued = native_queued &&
-        ggml_backend_graph_compute_async(backend, hrx_packed_graph) == GGML_STATUS_SUCCESS;
+        queue_submission(packed_submission);
     bool stream_complete = true;
     const bool stream_query_ok = !ggml::hrx::take_status(hrx_stream_query(state->stream, &stream_complete));
     ggml_backend_hrx_cache_stats queued = {};
@@ -3674,7 +3802,7 @@ static void run_failed_submission_weight_lifetime_case() {
     const char * old_flag = std::getenv("GGML_HRX_DISABLE_GRAPH_REPLAY");
     const bool had_flag = old_flag != nullptr;
     const std::string old_flag_value = had_flag ? old_flag : "";
-    REQUIRE(setenv("GGML_HRX_DISABLE_GRAPH_REPLAY", "1", 1) == 0);
+    REQUIRE(setenv("GGML_HRX_DISABLE_GRAPH_REPLAY", "0", 1) == 0);
 
     ggml_backend_t cpu = init_cpu_backend();
     ggml_backend_t backend = ggml_backend_hrx_init(0);
@@ -3775,6 +3903,18 @@ static void run_failed_submission_weight_lifetime_case() {
     REQUIRE(preuploaded.valid());
     ggml_backend_synchronize(backend);
     preuploaded.lease = {};
+    const ggml::hrx::CommandProgramExecutionContext execution_context = {
+        state->device->device, state->stream, state->device->architecture.c_str(),
+        &ggml::hrx::get_qwen_kernel_corpus(), &state->kernel_executables, &state->transient_arena,
+        &state->host_transfers, &state->host_weights, &state->device->host_buffers, &state->graph_replay_state,
+    };
+    auto execution = packed_lookup.program->execute_with_result(execution_context, packed_bindings, true);
+    REQUIRE(execution.success);
+    REQUIRE(execution.execution_resources->recorded.valid());
+    ggml_backend_synchronize(backend);
+    ggml_backend_tensor_set(hrx_output, poisoned.data(), 0, poisoned.size() * sizeof(float));
+    // The invalid final command fails after the real weight reader is queued, before the completion boundary.
+    execution.execution_resources->prepared.commands.emplace_back();
     hrx_semaphore_t gate = nullptr;
     REQUIRE(!ggml::hrx::take_status(hrx_semaphore_create(state->device->device, 0, &gate)));
     REQUIRE(!ggml::hrx::take_status(hrx_stream_wait_on(state->stream, { gate, 1 })));
@@ -3790,13 +3930,8 @@ static void run_failed_submission_weight_lifetime_case() {
             hrx_status_ignore(signal);
         }
     });
-    const ggml::hrx::CommandProgramExecutionContext execution_context = {
-        state->device->device, state->stream, state->device->architecture.c_str(),
-        &ggml::hrx::get_qwen_kernel_corpus(), &state->kernel_executables, &state->transient_arena,
-        &state->host_transfers, &state->host_weights, &state->device->host_buffers, &state->graph_replay_state,
-    };
-    auto execution = packed_lookup.program->execute_with_result(execution_context, packed_bindings, true);
-    const bool command_queued = execution.success && execution.execution_resources != nullptr;
+    const bool execution_failed = !ggml::hrx::execute_prepared_command_program(
+        execution_context, execution.execution_resources->prepared);
     std::weak_ptr<ggml::hrx::CachedCommandProgramResources> sole_resource = execution.execution_resources;
     const bool has_execution_resources = execution.execution_resources != nullptr;
     const bool record_ok = has_execution_resources && tracker.record(state->device->device, state->stream,
@@ -3819,7 +3954,7 @@ static void run_failed_submission_weight_lifetime_case() {
     gate_cv.notify_one();
     const bool signal_ok = !ggml::hrx::take_status(hrx_semaphore_signal(gate, 1));
     watchdog.join();
-    REQUIRE(command_queued && record_ok && poll_ok && query_ok && signal_ok && !timed_out);
+    REQUIRE(execution_failed && record_ok && poll_ok && query_ok && signal_ok && !timed_out);
     REQUIRE(!completed && !stream_complete && demand_unchanged && tracker_only_owner && resource_retained);
     REQUIRE(pending_stats.allocation_count == 1);
     REQUIRE(pending_stats.resident_bytes == packed_source.materialized_length);
@@ -4060,7 +4195,7 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
         auto prepared = ggml::hrx::prepare_command_program(
             execution_context, lookup.program->commands(), bindings);
         REQUIRE(prepared.valid());
-        REQUIRE(prepared.resident_host_weights.size() == expected_materializations);
+        REQUIRE(prepared.resident_host_weights->size() == expected_materializations);
         const bool staged_weight = std::any_of(prepared.host_staging.begin(), prepared.host_staging.end(),
                                                [&](const auto & staging) { return staging.value == weight_value->id.value; });
         REQUIRE(!staged_weight);
@@ -4133,7 +4268,7 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
     auto lookup = backend_state->graph_programs.get_or_build(
         *hrx_decode, ggml::hrx::get_qwen_kernel_corpus(), backend_state->device->architecture);
     REQUIRE(lookup.valid());
-    REQUIRE(lookup.program->imported_sources_current());
+    REQUIRE(lookup.program->mutable_sources_current());
     auto bindings_for_match = [](const ggml::hrx::GraphProgramMatch & match) {
         std::vector<ggml::hrx::CommandProgramBinding> external;
         for (const auto & slot : match.external_bindings) {
@@ -4214,7 +4349,7 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
         auto prepared = ggml::hrx::prepare_command_program(
             execution_context, lookup.program->commands(), value_map_bindings);
         REQUIRE(prepared.valid());
-        REQUIRE(prepared.resident_host_weights.size() == 1);
+        REQUIRE(prepared.resident_host_weights->size() == 1);
         ggml::hrx::RecordedCommandGraph recorded;
         const auto launch = ggml::hrx::bind_and_launch_recorded_command_graph(
             execution_context, lookup.program->commands(), value_map_bindings, prepared, recorded);
@@ -4258,7 +4393,9 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
             replay_context, lookup.program->uid(), lookup.program->command_shape_hash(), lookup.program->commands(),
             full_bindings);
         REQUIRE(cache_replay.success);
-        REQUIRE(cache_replay.graph_replay_event == ggml::hrx::HrxGraphReplayEvent::Hit);
+        REQUIRE(cache_replay.graph_replay_event ==
+                (ggml::hrx::graph_replay_disabled_by_environment() ? ggml::hrx::HrxGraphReplayEvent::Disabled :
+                                                                  ggml::hrx::HrxGraphReplayEvent::Hit));
         ggml_backend_synchronize(hrx_backend);
     }
     std::vector<uint8_t> readback(source.size());
@@ -4287,7 +4424,7 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
     const std::vector<float> shifted_input = make_pattern_f32(kInputSize, 79, 0.06f);
     set_tensor_pair_bytes(cpu_backend, cpu_decode_input, hrx_backend, hrx_decode_input, shifted_input.data(),
                           shifted_input.size() * sizeof(float));
-    REQUIRE(!lookup.program->imported_sources_current());
+    REQUIRE(!lookup.program->mutable_sources_current());
     compute_and_compare(cpu_decode, hrx_decode, cpu_decode_output, hrx_decode_output);
     ggml_backend_hrx_cache_stats after_offset_change = {};
     REQUIRE(ggml_backend_hrx_get_cache_stats(hrx_backend, &after_offset_change));
@@ -4302,7 +4439,7 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
     const std::vector<float> rebound_input = make_pattern_f32(kInputSize, 83, 0.06f);
     set_tensor_pair_bytes(cpu_backend, cpu_decode_input, hrx_backend, hrx_decode_input, rebound_input.data(),
                           rebound_input.size() * sizeof(float));
-    REQUIRE(!lookup.program->imported_sources_current());
+    REQUIRE(!lookup.program->mutable_sources_current());
     ggml_backend_hrx_cache_stats before_rebind = {};
     REQUIRE(ggml_backend_hrx_get_cache_stats(hrx_backend, &before_rebind));
     compute_and_compare(cpu_decode, hrx_decode, cpu_decode_output, hrx_decode_output);
@@ -4349,7 +4486,7 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
         };
         auto prepared = ggml::hrx::prepare_command_program(execution_context, commands, bindings);
         REQUIRE(prepared.valid());
-        REQUIRE(prepared.resident_host_weights.size() == 1);
+        REQUIRE(prepared.resident_host_weights->size() == 1);
         ggml::hrx::RecordedCommandGraph recorded;
         const auto launch = ggml::hrx::bind_and_launch_recorded_command_graph(
             execution_context, commands, bindings, prepared, recorded);
@@ -4947,11 +5084,13 @@ static void run_q4_prefill_source_eligibility_case() {
     REQUIRE(structural_replay.graph_program_builds == cache.graph_program_builds);
     REQUIRE(structural_replay.prepared_program_hits > cache.prepared_program_hits);
 
-    // Keep the graph and node pointers fixed while changing only the live weight binding.
+    // Source rebinding starts a new graph identity; bindings within an allocated graph stay stable.
     Fixture & replay = fixtures[0];
     ggml_backend_buffer_t imported_buffer = replay.weight->buffer;
     void * imported_data = replay.weight->data;
+    uint64_t rebound_uid = 960010;
     for (const bool imported : { true, false, true }) {
+        replay.graph->uid = rebound_uid++;
         replay.weight->buffer = imported ? imported_buffer : fixtures[1].weight->buffer;
         replay.weight->data = imported ? imported_data : fixtures[1].weight->data;
         ggml_backend_hrx_cache_stats before = {};
