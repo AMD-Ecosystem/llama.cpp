@@ -3,12 +3,6 @@
   "upstream_revision": "local",
   "files": [
     {
-      "path": "ops/normalization/masked_soft_max_f32.loom"
-    },
-    {
-      "path": "motifs/normalization/masked_soft_max.loom"
-    },
-    {
       "path": "ops/matmul/vector_codebook_f32_f32.loom"
     },
     {
@@ -700,47 +694,6 @@
     }
   ],
   "exports": [
-    {
-      "name": "ggml_masked_soft_max_f32",
-      "family": "loom_libs",
-      "symbol": "ggml_masked_soft_max_f32",
-      "source": "ops/normalization/masked_soft_max_f32.loom",
-      "workload_parameters": [
-        {
-          "name": "row_count",
-          "type": "index"
-        }
-      ],
-      "launch_parameters": [
-        {
-          "name": "row_count",
-          "type": "index"
-        }
-      ],
-      "bindings": [
-        "scores",
-        "mask",
-        "output"
-      ],
-      "binding_access": [
-        "read",
-        "read",
-        "read_write"
-      ],
-      "target_selector": "",
-      "compile_recipe": {
-        "mode": "direct",
-        "primary_sources": [
-          "ops/normalization/masked_soft_max_f32.loom"
-        ],
-        "library_sources": [
-          "motifs/normalization/masked_soft_max.loom"
-        ]
-      },
-      "compile_dependencies": [
-        "motifs/normalization/masked_soft_max.loom"
-      ]
-    },
     {
       "name": "ggml_mul_mat_vector_iq2_s_f32_f32",
       "family": "loom_libs",

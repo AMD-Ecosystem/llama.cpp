@@ -16,7 +16,6 @@
 #include "dispatch-rmsnorm.h"
 #include "dispatch-rope-set-rows.h"
 #include "dispatch-scale.h"
-#include "dispatch-soft-max.h"
 #include "dispatch-unary.h"
 #include "dispatch-upscale.h"
 
@@ -38,7 +37,6 @@ void register_common_dispatches(DispatchRegistryBuilder & registry) {
     register_mrope_text_dispatch(registry);
     register_rope_set_rows_dispatches(registry);
     register_scale_dispatch(registry);
-    register_soft_max_dispatch(registry);
     register_unary_dispatch(registry);
     register_upscale_dispatch(registry);
     register_rmsnorm_dispatches(registry);

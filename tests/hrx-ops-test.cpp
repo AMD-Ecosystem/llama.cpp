@@ -6662,75 +6662,6 @@ static std::string type_name(ggml_type type) {
 
 using test_runner::Suite;
 
-static void run_masked_soft_max_f32_cpu_reference_case(int64_t head_count, int64_t mask_head_count,
-                                                       int64_t batch_count, int64_t mask_batch_count,
-                                                       int64_t width = 256) {
-    ggml_backend_t cpu_backend = init_cpu_backend();
-    ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
-    REQUIRE(hrx_backend != nullptr);
-
-    ggml_init_params params = {};
-    params.mem_size         = 512 * 1024;
-    params.no_alloc         = true;
-    ggml_context * cpu_ctx  = ggml_init(params);
-    ggml_context * hrx_ctx  = ggml_init(params);
-    REQUIRE(cpu_ctx != nullptr);
-    REQUIRE(hrx_ctx != nullptr);
-
-    constexpr int64_t queries = 2;
-    constexpr float scale = 0.125f;
-    ggml_tensor * cpu_scores = ggml_new_tensor_4d(cpu_ctx, GGML_TYPE_F32, width, queries, head_count, batch_count);
-    ggml_tensor * hrx_scores = ggml_new_tensor_4d(hrx_ctx, GGML_TYPE_F32, width, queries, head_count, batch_count);
-    ggml_tensor * cpu_mask = ggml_new_tensor_4d(cpu_ctx, GGML_TYPE_F32, width, queries, mask_head_count, mask_batch_count);
-    ggml_tensor * hrx_mask = ggml_new_tensor_4d(hrx_ctx, GGML_TYPE_F32, width, queries, mask_head_count, mask_batch_count);
-    ggml_tensor * cpu_output = ggml_soft_max_ext(cpu_ctx, cpu_scores, cpu_mask, scale, 0.0f);
-    ggml_tensor * hrx_output = ggml_soft_max_ext(hrx_ctx, hrx_scores, hrx_mask, scale, 0.0f);
-    REQUIRE(cpu_output != nullptr);
-    REQUIRE(hrx_output != nullptr);
-
-    ggml_cgraph * cpu_graph = ggml_new_graph(cpu_ctx);
-    ggml_cgraph * hrx_graph = ggml_new_graph(hrx_ctx);
-    REQUIRE(cpu_graph != nullptr);
-    REQUIRE(hrx_graph != nullptr);
-    ggml_build_forward_expand(cpu_graph, cpu_output);
-    ggml_build_forward_expand(hrx_graph, hrx_output);
-    require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph), { "loom_libs:ggml_masked_soft_max_f32" });
-
-    ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
-    ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
-    REQUIRE(cpu_buffer != nullptr);
-    REQUIRE(hrx_buffer != nullptr);
-
-    const size_t score_count = static_cast<size_t>(width * queries * head_count * batch_count);
-    const size_t mask_count = static_cast<size_t>(width * queries * mask_head_count * mask_batch_count);
-    std::vector<float> scores(score_count);
-    std::vector<float> mask(mask_count);
-    for (size_t i = 0; i < score_count; ++i) {
-        scores[i] = static_cast<float>(static_cast<int64_t>((i * 37) % 97) - 48) * 0.0625f;
-    }
-    for (size_t i = 0; i < mask_count; ++i) {
-        const int64_t column = static_cast<int64_t>(i % width);
-        const int64_t mask_row = static_cast<int64_t>(i / width);
-        mask[i] = column >= 192 + mask_row % 4 ? -std::numeric_limits<float>::infinity() :
-                  static_cast<float>((column + mask_row * 17) % 23) * -0.03125f;
-    }
-    set_tensor_pair_bytes(cpu_backend, cpu_scores, hrx_backend, hrx_scores, scores.data(), scores.size() * sizeof(float));
-    set_tensor_pair_bytes(cpu_backend, cpu_mask, hrx_backend, hrx_mask, mask.data(), mask.size() * sizeof(float));
-
-    REQUIRE(ggml_backend_graph_compute(cpu_backend, cpu_graph) == GGML_STATUS_SUCCESS);
-    REQUIRE(ggml_backend_graph_compute(hrx_backend, hrx_graph) == GGML_STATUS_SUCCESS);
-    ggml_backend_synchronize(cpu_backend);
-    ggml_backend_synchronize(hrx_backend);
-    require_close(get_f32_tensor(hrx_backend, hrx_output), get_f32_tensor(cpu_backend, cpu_output), 2.0e-5f);
-
-    ggml_backend_buffer_free(cpu_buffer);
-    ggml_backend_buffer_free(hrx_buffer);
-    ggml_free(cpu_ctx);
-    ggml_free(hrx_ctx);
-    ggml_backend_free(cpu_backend);
-    ggml_backend_free(hrx_backend);
-}
-
 static void register_basic_ops_cases(Suite & suite) {
     suite.host_case("support.rmsnorm", [] { run_rmsnorm_support_checks(); });
     suite.host_case("support.im2col", [] { run_im2col_support_checks(); });
@@ -6755,15 +6686,6 @@ static void register_basic_ops_cases(Suite & suite) {
     suite.device_case("im2col.scheduled_patch_f16", [] { run_scheduled_im2col_case(32, 8, GGML_TYPE_F16); });
     suite.device_case("im2col.scheduled_patch_f32", [] { run_scheduled_im2col_case(32, 8, GGML_TYPE_F32); });
     suite.device_case("im2col.scheduled_qwen_92x92_f16", [] { run_scheduled_im2col_case(1472, 1152, GGML_TYPE_F16); });
-    suite.device_case("masked_soft_max_f32.captured_heads24", [] {
-        run_masked_soft_max_f32_cpu_reference_case(24, 1, 1, 1);
-    });
-    suite.device_case("masked_soft_max_f32.broadcast_heads_batches", [] {
-        run_masked_soft_max_f32_cpu_reference_case(4, 2, 2, 1);
-    });
-    suite.device_case("masked_soft_max_f32.ragged_width257", [] {
-        run_masked_soft_max_f32_cpu_reference_case(4, 2, 2, 1, 257);
-    });
     suite.device_case("dynamic_generic_ops.cpu_reference", [] { run_dynamic_generic_ops_cpu_reference_case(); });
     for (int64_t tokens = 2; tokens <= 5; ++tokens) {
         suite.device_case("gdn_snapshot.cpu_reference." + std::to_string(tokens),

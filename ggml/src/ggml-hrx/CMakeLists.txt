@@ -240,8 +240,6 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/common/dispatch-rmsnorm.h
     dispatch_registration/common/dispatch-scale.cpp
     dispatch_registration/common/dispatch-scale.h
-    dispatch_registration/common/dispatch-soft-max.cpp
-    dispatch_registration/common/dispatch-soft-max.h
     dispatch_registration/common/dispatch-unary.cpp
     dispatch_registration/common/dispatch-unary.h
     dispatch_registration/common/dispatch-upscale.cpp

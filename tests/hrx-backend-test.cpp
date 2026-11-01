@@ -779,6 +779,8 @@ static void run_dispatch_registry_checks() {
     REQUIRE(has_dispatch_registration_kind(registry.registrations_for_root(GGML_OP_ROPE), "common.rope.f32",
                                            ggml::hrx::DispatchMatchKind::SingleOp));
     REQUIRE(has_dispatch_registration(registry.registrations_for_root(GGML_OP_SET_ROWS), "common.set_rows"));
+    REQUIRE(!has_dispatch_registration(registry.registrations_for_root(GGML_OP_SOFT_MAX),
+                                       "common.masked_soft_max_f32"));
     REQUIRE(has_dispatch_registration(registry.registrations_for_root(GGML_OP_SOFT_MAX), "llm.moe_router.top8_f32"));
     REQUIRE(has_dispatch_registration_kind(registry.registrations_for_root(GGML_OP_MUL_MAT_ID),
                                            "common.mul_mat_id_swiglu.f32_f32_wmma",
