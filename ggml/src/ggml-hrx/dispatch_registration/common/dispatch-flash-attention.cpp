@@ -524,6 +524,16 @@ static bool match_flash_attention_gate_dispatch(const DispatchMatchContext & con
     return true;
 }
 
+static bool flash_attention_has_bf16_projection(const DispatchMatchContext &              context,
+                                                const CommonActivationPublicationDemand * demand) {
+    const GraphNode * consumer = demand != nullptr ? demand->consumer : nullptr;
+    const bool consumer_is_projection = consumer != nullptr && consumer->op == GGML_OP_MUL_MAT &&
+                                        consumer->inputs.size() == 2;
+    const Value * projection_weight =
+        consumer_is_projection ? context.graph.values().find(consumer->inputs[0]) : nullptr;
+    return projection_weight != nullptr && projection_weight->type == GGML_TYPE_BF16;
+}
+
 static bool flash_attention_can_publish_f16_only(const DispatchMatchContext &              context,
                                                  const Value &                             output,
                                                  const CommonActivationPublicationDemand * demand) {
@@ -532,12 +542,7 @@ static bool flash_attention_can_publish_f16_only(const DispatchMatchContext &   
                                      storage_root->kind == ValueKind::Transient;
     const bool consumer_is_transient = demand != nullptr && demand->consumer_value->kind == ValueKind::Transient;
     const bool exclusive_f16_consumer = demand != nullptr && !demand->mixed_fanout;
-    const GraphNode * consumer = demand != nullptr ? demand->consumer : nullptr;
-    const bool consumer_is_projection = consumer != nullptr && consumer->op == GGML_OP_MUL_MAT &&
-                                        consumer->inputs.size() == 2;
-    const Value * projection_weight =
-        consumer_is_projection ? context.graph.values().find(consumer->inputs[0]) : nullptr;
-    const bool projection_weight_is_bf16 = projection_weight != nullptr && projection_weight->type == GGML_TYPE_BF16;
+    const bool projection_weight_is_bf16 = flash_attention_has_bf16_projection(context, demand);
     return output_is_transient && consumer_is_transient && exclusive_f16_consumer && projection_weight_is_bf16;
 }
 
@@ -553,8 +558,18 @@ static bool match_flash_attention_f32_f16_dispatch(const DispatchMatchContext & 
         DispatchActivationInputF16Row,
         DispatchActivationProducerRequirementFactoredTiledF16,
     };
-    const CommonActivationPublicationPlan publication_plan =
+    CommonActivationPublicationPlan publication_plan =
         common_select_activation_publication_plan(context, *match.output, capabilities);
+    const CommonActivationPublicationDemand * expanded_demand =
+        publication_plan.find(CommonActivationPublicationFormat::F16Row);
+    const bool expanded_projection_is_bf16 = flash_attention_has_bf16_projection(context, expanded_demand);
+    if (!expanded_projection_is_bf16) {
+        const CommonActivationPublicationCapabilities legacy_capabilities = {
+            capabilities.formats,
+            capabilities.alias_traversal_formats,
+        };
+        publication_plan = common_select_activation_publication_plan(context, *match.output, legacy_capabilities);
+    }
     const CommonActivationPublicationDemand * demand =
         publication_plan.find(CommonActivationPublicationFormat::F16Row);
     const bool publish_f16 = demand != nullptr;

@@ -5498,6 +5498,38 @@ static void run_qwen_flash_attention_dispatch_checks() {
         REQUIRE(setenv(kDisableQwenDispatchEnv, "1", 1) == 0);
         constexpr int64_t tokens = 512;
         constexpr int64_t hidden = 512;
+        ggml_tensor * attention = build_qwen_flash_attention_graph(ctx, tokens, tokens, 4, 2);
+        ggml_tensor * reshaped = ggml_reshape_2d(ctx, attention, hidden, tokens);
+        ggml_tensor * weight = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, hidden, hidden);
+        ggml_tensor * bias = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hidden);
+        ggml_tensor * residual = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden, tokens);
+        ggml_tensor * projected = ggml_mul_mat(ctx, weight, reshaped);
+        ggml_tensor * output = ggml_add(ctx, ggml_add(ctx, projected, bias), residual);
+        ggml_cgraph * graph = ggml_new_graph(ctx);
+        ggml_build_forward_expand(graph, output);
+
+        ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+        REQUIRE(imported.valid());
+        ggml::hrx::DispatchScheduler scheduler;
+        REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+        const auto & plan = scheduler.plan();
+        REQUIRE(plan.valid());
+        const auto producer = std::find_if(plan.dispatches.begin(), plan.dispatches.end(), [](const auto & dispatch) {
+            return kernel_name_for_id(dispatch.kernel.kernel_id) ==
+                   "loom_libs:ggml_flash_attention_f32_f16_wmma";
+        });
+        REQUIRE(producer != plan.dispatches.end());
+        REQUIRE(producer->bindings.size() == 6);
+        const ggml::hrx::Value * attention_value = imported.graph.values().find_tensor(attention);
+        REQUIRE(attention_value != nullptr);
+        REQUIRE(plan.metadata.find_alternate_value(attention_value->id, GGML_TYPE_F16,
+                                                   attention_value->byte_count / 2) == nullptr);
+        REQUIRE(unsetenv(kDisableQwenDispatchEnv) == 0);
+    }
+    {
+        REQUIRE(setenv(kDisableQwenDispatchEnv, "1", 1) == 0);
+        constexpr int64_t tokens = 512;
+        constexpr int64_t hidden = 512;
         ggml_tensor * output      = build_qwen_flash_attention_graph(ctx, tokens, tokens, 4, 2);
         ggml_tensor * reshaped    = ggml_reshape_2d(ctx, output, hidden, tokens);
         ggml_tensor * weight      = ggml_new_tensor_2d(ctx, GGML_TYPE_Q4_K, hidden, hidden);
