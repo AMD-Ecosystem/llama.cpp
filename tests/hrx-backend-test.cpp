@@ -5677,6 +5677,18 @@ static void run_qwen_flash_attention_dispatch_checks() {
                                              kQwenFlashHeadSize, 1.0f / std::sqrt(128.0f), -1, 1.0f);
         REQUIRE(!graph_is_supported(ctx, output));
     }
+    {
+        // The removed scalar path was the only prefill matcher for irregular V widths.
+        ggml_tensor * output = build_qwen_flash_attention_graph(ctx, 16, 16, 4, 2, GGML_TYPE_F32, GGML_TYPE_F16,
+                                                                true, false, 80, 1.0f / std::sqrt(80.0f), 72);
+        REQUIRE(!graph_is_supported(ctx, output));
+    }
+    {
+        // WMMA requires dense K/V token strides; the width-72 tiled path does not apply here.
+        ggml_tensor * output = build_qwen_flash_attention_graph(ctx, 16, 16, 4, 2);
+        output->src[1]->nb[1] += 16;
+        REQUIRE(!graph_is_supported(ctx, output));
+    }
 
     ggml_free(ctx);
     restore_environment_value(kDisableQwenDispatchEnv, had_original_env, original_env_value);
@@ -14549,7 +14561,7 @@ static void run_vision_flash_attention_long_numerics() {
     ggml_backend_free(cpu);
 }
 
-static void run_vision_flash_attention_misaligned_view_routing() {
+static void run_vision_flash_attention_misaligned_view_rejection() {
     constexpr int64_t token_count = 256;
     ggml_context * ctx = ggml_init({ 1024 * 1024, nullptr, true });
     REQUIRE(ctx != nullptr);
@@ -14571,14 +14583,7 @@ static void run_vision_flash_attention_misaligned_view_routing() {
     const ggml::hrx::Value * query_value = imported.graph.values().find_tensor(query);
     REQUIRE(query_value != nullptr);
     REQUIRE(query_value->storage_offset == sizeof(float));
-    ggml::hrx::DispatchScheduler scheduler;
-    REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
-    const auto & dispatches = scheduler.plan().dispatches;
-    REQUIRE(dispatches.size() == 2);
-    REQUIRE(kernel_name_for_id(dispatches.front().kernel.kernel_id) ==
-            "loom_libs:ggml_flash_attention_f32_f16_strided_scores");
-    REQUIRE(kernel_name_for_id(dispatches.back().kernel.kernel_id) ==
-            "loom_libs:ggml_flash_attention_f32_f16_strided_values");
+    REQUIRE(!ggml::hrx::DispatchScheduler::can_schedule_graph(imported.graph, test_dispatch_target()));
     ggml_free(ctx);
 }
 
@@ -14596,8 +14601,8 @@ static void register_hrx_backend_device_cases(test_runner::Suite & suite) {
     suite.device_case("rope_scale_f32_numerics", [] { run_rope_scale_f32_numerics(); });
     suite.device_case("vision_flash_attention_long_numerics", [] { run_vision_flash_attention_long_numerics(); });
     suite.device_case("vision_flash_attention_numerics", [] { run_vision_flash_attention_numerics(); });
-    suite.device_case("vision_flash_attention_misaligned_view_routing",
-                      [] { run_vision_flash_attention_misaligned_view_routing(); });
+    suite.host_case("vision_flash_attention_misaligned_view_rejection",
+                    [] { run_vision_flash_attention_misaligned_view_rejection(); });
     suite.device_case("gather_add_rmsnorm_f32_numerics", [] { run_gather_add_rmsnorm_f32_numerics(); });
     suite.device_case("scale_f32", [] { run_scale_f32(); });
     suite.device_case("scale_f32_inplace", [] { run_scale_f32_inplace(); });
