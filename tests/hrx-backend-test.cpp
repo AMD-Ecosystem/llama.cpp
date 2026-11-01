@@ -1479,6 +1479,121 @@ static void run_graph_view_external_use_checks() {
     ggml_free(ctx);
 }
 
+static void run_cast_dependency_checks() {
+    ggml::hrx::Graph reordered;
+    reordered.add_node(GGML_OP_SQR, ggml::hrx::ValueId(2), { ggml::hrx::ValueId(1) });
+    reordered.add_node(GGML_OP_CPY, ggml::hrx::ValueId(1),
+                       { ggml::hrx::ValueId(0), ggml::hrx::ValueId(1) });
+    REQUIRE(reordered.build_index().success());
+    REQUIRE(traversal_indices(reordered) == (std::vector<size_t>{ 1, 0 }));
+
+    ggml_init_params params = {};
+    params.mem_size         = 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
+    ggml_tensor * input = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 8);
+    ggml_tensor * terminal = ggml_cast(ctx, input, GGML_TYPE_F16);
+    ggml_cgraph * terminal_graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(terminal_graph, terminal);
+    ggml::hrx::GraphImportResult terminal_import = ggml::hrx::import_ggml_graph(*terminal_graph);
+    REQUIRE(terminal_import.valid());
+    REQUIRE(terminal_import.graph.nodes().size() == 1);
+    const ggml::hrx::GraphNode & terminal_node = terminal_import.graph.nodes()[0];
+    const ggml::hrx::Value * terminal_value = terminal_import.graph.values().find_tensor(terminal);
+    REQUIRE(terminal_value != nullptr);
+    REQUIRE(terminal_value->kind == ggml::hrx::ValueKind::External);
+    REQUIRE(terminal_node.inputs.size() == 2);
+    REQUIRE(terminal_node.inputs[1] == terminal_node.output);
+    REQUIRE(terminal_import.graph.index().consumers(terminal_node.output).empty());
+    REQUIRE(!ggml::hrx::node_has_input_or_alias(terminal_import.graph, terminal_node, terminal_node.output));
+    REQUIRE(traversal_indices(terminal_import.graph) == std::vector<size_t>{ 0 });
+
+    ggml_tensor * internal = ggml_cast(ctx, input, GGML_TYPE_F32);
+    ggml_tensor * consumer = ggml_sqr(ctx, internal);
+    ggml_cgraph * internal_graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(internal_graph, consumer);
+    ggml::hrx::GraphImportResult internal_import = ggml::hrx::import_ggml_graph(*internal_graph);
+    REQUIRE(internal_import.valid());
+    REQUIRE(internal_import.graph.nodes().size() == 2);
+    const ggml::hrx::GraphNode & internal_node = internal_import.graph.nodes()[0];
+    const ggml::hrx::Value * internal_value = internal_import.graph.values().find_tensor(internal);
+    REQUIRE(internal_value != nullptr);
+    REQUIRE(internal_value->kind == ggml::hrx::ValueKind::Transient);
+    REQUIRE(internal_node.inputs[1] == internal_node.output);
+    REQUIRE(internal_import.graph.index().consumers(internal_node.output).size() == 1);
+    REQUIRE(internal_import.graph.index().consumers(internal_node.output)[0] == &internal_import.graph.nodes()[1]);
+    REQUIRE(traversal_indices(internal_import.graph) == (std::vector<size_t>{ 0, 1 }));
+    ggml::hrx::DispatchScheduler internal_scheduler;
+    REQUIRE(internal_scheduler.schedule_graph(internal_import.graph, test_dispatch_target()));
+    ggml_cgraph unavailable_uses_graph = *internal_graph;
+    unavailable_uses_graph.use_counts = nullptr;
+    ggml::hrx::GraphImportResult unavailable_uses_import = ggml::hrx::import_ggml_graph(unavailable_uses_graph);
+    REQUIRE(unavailable_uses_import.valid());
+    const ggml::hrx::Value * unavailable_uses_value = unavailable_uses_import.graph.values().find_tensor(internal);
+    REQUIRE(unavailable_uses_value != nullptr);
+    REQUIRE(unavailable_uses_value->kind == ggml::hrx::ValueKind::Transient);
+
+    ggml_tensor * split_cast = ggml_cast(ctx, input, GGML_TYPE_F32);
+    ggml_tensor * left = ggml_sqr(ctx, split_cast);
+    ggml_tensor * right = ggml_neg(ctx, split_cast);
+    ggml_tensor * joined = ggml_add(ctx, left, right);
+    ggml_cgraph * split_graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(split_graph, joined);
+    REQUIRE(split_graph->n_nodes == 4);
+    REQUIRE(split_graph->nodes[0] == split_cast);
+    REQUIRE(split_graph->nodes[1] == left);
+    ggml_cgraph split_view = first_two_nodes_view(split_graph);
+    ggml::hrx::GraphImportResult split_import = ggml::hrx::import_ggml_graph(split_view);
+    REQUIRE(split_import.valid());
+    const ggml::hrx::Value * split_value = split_import.graph.values().find_tensor(split_cast);
+    REQUIRE(split_value != nullptr);
+    REQUIRE(split_value->kind == ggml::hrx::ValueKind::External);
+
+    ggml_tensor * flagged_cast = ggml_cast(ctx, input, GGML_TYPE_F32);
+    ggml_set_output(flagged_cast);
+    ggml_tensor * flagged_consumer = ggml_sqr(ctx, flagged_cast);
+    ggml_cgraph * flagged_graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(flagged_graph, flagged_consumer);
+    ggml::hrx::GraphImportResult flagged_import = ggml::hrx::import_ggml_graph(*flagged_graph);
+    REQUIRE(flagged_import.valid());
+    const ggml::hrx::Value * flagged_value = flagged_import.graph.values().find_tensor(flagged_cast);
+    REQUIRE(flagged_value != nullptr);
+    REQUIRE(flagged_value->kind == ggml::hrx::ValueKind::External);
+
+    ggml_tensor * target = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 8);
+    ggml_tensor * copy = ggml_cpy(ctx, input, target);
+    ggml_cgraph * copy_graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(copy_graph, copy);
+    ggml::hrx::GraphImportResult copy_import = ggml::hrx::import_ggml_graph(*copy_graph);
+    REQUIRE(copy_import.valid());
+    REQUIRE(copy_import.graph.nodes().size() == 1);
+    const ggml::hrx::GraphNode & copy_node = copy_import.graph.nodes()[0];
+    const ggml::hrx::Value * copy_value = copy_import.graph.values().find_tensor(copy);
+    const ggml::hrx::Value * target_value = copy_import.graph.values().find_tensor(target);
+    REQUIRE(copy_value != nullptr);
+    REQUIRE(target_value != nullptr);
+    REQUIRE(copy_node.inputs.size() == 2);
+    REQUIRE(copy_node.inputs[1] == target_value->id);
+    REQUIRE(copy_node.inputs[1] != copy_node.output);
+    REQUIRE(copy_import.graph.index().consumers(target_value->id).size() == 1);
+    REQUIRE(copy_import.graph.index().consumers(target_value->id)[0] == &copy_node);
+    REQUIRE(copy_value->kind == ggml::hrx::ValueKind::External);
+    REQUIRE(copy_import.graph.values().same_storage(copy_value->id, target_value->id));
+
+    ggml_tensor * empty_input = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 0);
+    ggml_tensor * empty_cast = ggml_cast(ctx, empty_input, GGML_TYPE_F16);
+    ggml_cgraph * empty_graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(empty_graph, empty_cast);
+    ggml::hrx::GraphImportResult empty_import = ggml::hrx::import_ggml_graph(*empty_graph);
+    REQUIRE(empty_import.valid());
+    ggml::hrx::DispatchScheduler empty_scheduler;
+    REQUIRE(empty_scheduler.schedule_graph(empty_import.graph, test_dispatch_target()));
+
+    ggml_free(ctx);
+}
+
 static ggml::hrx::Dispatch schedule_single_dispatch_for_tensor(ggml_context * ctx, ggml_tensor * output) {
     ggml_cgraph * graph = ggml_new_graph(ctx);
     REQUIRE(graph != nullptr);
@@ -14291,6 +14406,7 @@ static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
     suite.host_case("rope_offset_import", [] { run_rope_offset_import_checks(); });
     suite.host_case("graph_import_mixed_backend_boundary", [] { run_graph_import_mixed_backend_boundary_checks(); });
     suite.host_case("graph_view_external_use", [] { run_graph_view_external_use_checks(); });
+    suite.host_case("cast_dependencies", [] { run_cast_dependency_checks(); });
     suite.host_case("scale_f32_dispatch", [] { run_scale_f32_dispatch_checks(); });
     suite.host_case("scale_add_f32_dispatch", [] { run_scale_add_f32_dispatch_checks(); });
     suite.host_case("rmsnorm_two_binary_dispatch", [] { run_rmsnorm_two_binary_dispatch_checks(); });

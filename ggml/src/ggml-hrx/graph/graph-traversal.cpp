@@ -99,7 +99,11 @@ GraphTraversalOrder GraphTraversalOrder::build(const Graph & graph) {
 
     std::vector<int> pending_inputs(nodes.size(), 0);
     for (size_t i = 0; i < nodes.size(); ++i) {
-        for (ValueId input : nodes[i].inputs) {
+        for (size_t input_index = 0; input_index < nodes[i].inputs.size(); ++input_index) {
+            const ValueId input = nodes[i].inputs[input_index];
+            if (!is_input_dependency(nodes[i].op, input_index, input == nodes[i].output)) {
+                continue;
+            }
             if (graph.index().producer(input) != nullptr) {
                 ++pending_inputs[i];
             }

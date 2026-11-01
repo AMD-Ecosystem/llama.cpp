@@ -118,7 +118,11 @@ static bool can_elide_layout_alias_node(const Graph &             graph,
 static bool node_inputs_are_available(const Graph &             graph,
                                       const GraphNode &         node,
                                       const std::vector<bool> & covered_nodes) {
-    for (const ValueId input : node.inputs) {
+    for (size_t input_index = 0; input_index < node.inputs.size(); ++input_index) {
+        const ValueId input = node.inputs[input_index];
+        if (!is_input_dependency(node.op, input_index, input == node.output)) {
+            continue;
+        }
         if (!value_is_available(graph, input, covered_nodes)) {
             return false;
         }

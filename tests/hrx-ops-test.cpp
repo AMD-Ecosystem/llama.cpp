@@ -2372,7 +2372,8 @@ static void run_permuted_cont_cpu_reference_case(int64_t embedding_size, int64_t
     ggml_backend_free(hrx_backend);
 }
 
-static void run_f32_f16_cast_cpu_reference_case(bool permuted, int64_t packed_count = 0, bool explicit_target = false) {
+static void run_f32_f16_cast_cpu_reference_case(bool permuted, int64_t packed_count = 0,
+                                                 bool explicit_target = false, bool internal_consumer = false) {
     ggml_backend_t cpu_backend = init_cpu_backend();
     ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
     REQUIRE(hrx_backend != nullptr);
@@ -2391,14 +2392,16 @@ static void run_f32_f16_cast_cpu_reference_case(bool permuted, int64_t packed_co
                                          ggml_new_tensor_1d(hrx_ctx, GGML_TYPE_F32, packed_count);
     ggml_tensor * cpu_source = permuted ? ggml_permute(cpu_ctx, cpu_input, 1, 2, 0, 3) : cpu_input;
     ggml_tensor * hrx_source = permuted ? ggml_permute(hrx_ctx, hrx_input, 1, 2, 0, 3) : hrx_input;
-    ggml_tensor * cpu_output = explicit_target ?
-                                   ggml_cpy(cpu_ctx, cpu_source,
-                                            ggml_new_tensor(cpu_ctx, GGML_TYPE_F16, GGML_MAX_DIMS, cpu_source->ne)) :
-                                   ggml_cast(cpu_ctx, cpu_source, GGML_TYPE_F16);
-    ggml_tensor * hrx_output = explicit_target ?
-                                   ggml_cpy(hrx_ctx, hrx_source,
-                                            ggml_new_tensor(hrx_ctx, GGML_TYPE_F16, GGML_MAX_DIMS, hrx_source->ne)) :
-                                   ggml_cast(hrx_ctx, hrx_source, GGML_TYPE_F16);
+    ggml_tensor * cpu_cast = explicit_target ?
+                                 ggml_cpy(cpu_ctx, cpu_source,
+                                          ggml_new_tensor(cpu_ctx, GGML_TYPE_F16, GGML_MAX_DIMS, cpu_source->ne)) :
+                                 ggml_cast(cpu_ctx, cpu_source, GGML_TYPE_F16);
+    ggml_tensor * hrx_cast = explicit_target ?
+                                 ggml_cpy(hrx_ctx, hrx_source,
+                                          ggml_new_tensor(hrx_ctx, GGML_TYPE_F16, GGML_MAX_DIMS, hrx_source->ne)) :
+                                 ggml_cast(hrx_ctx, hrx_source, GGML_TYPE_F16);
+    ggml_tensor * cpu_output = internal_consumer ? ggml_cont(cpu_ctx, cpu_cast) : cpu_cast;
+    ggml_tensor * hrx_output = internal_consumer ? ggml_cont(hrx_ctx, hrx_cast) : hrx_cast;
     REQUIRE(cpu_output != nullptr);
     REQUIRE(hrx_output != nullptr);
 
@@ -2408,6 +2411,13 @@ static void run_f32_f16_cast_cpu_reference_case(bool permuted, int64_t packed_co
     REQUIRE(hrx_graph != nullptr);
     ggml_build_forward_expand(cpu_graph, cpu_output);
     ggml_build_forward_expand(hrx_graph, hrx_output);
+    if (internal_consumer) {
+        ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*hrx_graph);
+        REQUIRE(imported.valid());
+        const ggml::hrx::Value * cast_value = imported.graph.values().find_tensor(hrx_cast);
+        REQUIRE(cast_value != nullptr);
+        REQUIRE(cast_value->kind == ggml::hrx::ValueKind::Transient);
+    }
     const bool vector_copy = !permuted && packed_count % 4 == 0;
     const char * expected_kernel = vector_copy ? "loom_libs:ggml_copy_f32_f16" :
                                                  "loom_libs:ggml_copy_strided_source_f32_f16";
@@ -6714,6 +6724,9 @@ static void register_basic_ops_cases(Suite & suite) {
     });
     suite.device_case("cast_f32_f16.permuted.cpu_reference", [] { run_f32_f16_cast_cpu_reference_case(true); });
     suite.device_case("cast_f32_f16.packed16.cpu_reference", [] { run_f32_f16_cast_cpu_reference_case(false, 16); });
+    suite.device_case("cast_f32_f16.packed16.internal.cpu_reference", [] {
+        run_f32_f16_cast_cpu_reference_case(false, 16, false, true);
+    });
     suite.device_case("cast_f32_f16.packed13.cpu_reference", [] { run_f32_f16_cast_cpu_reference_case(false, 13); });
     suite.device_case("cast_f32_f16.explicit_target.cpu_reference", [] {
         run_f32_f16_cast_cpu_reference_case(false, 16, true);

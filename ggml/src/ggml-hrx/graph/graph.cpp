@@ -25,22 +25,20 @@ static int32_t graph_tensor_use_count(const ggml_cgraph & graph, const ggml_tens
     if (hash_pos == GGML_HASHSET_FULL || !ggml_bitset_get(graph.visited_hash_set.used, hash_pos)) {
         return -1;
     }
-    return graph.use_counts[hash_pos];
+    int32_t count = graph.use_counts[hash_pos];
+    const bool has_counted_use = count > 0;
+    const bool is_self_target = !is_input_dependency(tensor->op, 1, tensor->src[1] == tensor);
+    const bool normalize_count = has_counted_use && is_self_target;
+    if (normalize_count) {
+        --count;
+    }
+    return count;
 }
 
 static bool tensor_is_external(const ggml_tensor *                                  tensor,
                                const std::unordered_map<const ggml_tensor *, int> & use_counts,
                                const std::unordered_set<const ggml_tensor *> &      graph_nodes,
                                const ggml_cgraph &                                  graph) {
-    // ggml_cast uses its output as its copy target, so the result needs its ggml allocation.
-    if (tensor != nullptr) {
-        const bool is_copy = tensor->op == GGML_OP_CPY;
-        const bool is_self_target = tensor->src[1] == tensor;
-        const bool is_cast_output = is_copy && is_self_target;
-        if (is_cast_output) {
-            return true;
-        }
-    }
     const ggml_tensor * root = tensor_storage_root(tensor);
     if (root == nullptr || root->op == GGML_OP_NONE || graph_nodes.find(root) == graph_nodes.end()) {
         return true;
@@ -59,6 +57,13 @@ static bool tensor_is_external(const ggml_tensor *                              
 
 }  // namespace
 
+bool is_input_dependency(ggml_op op, size_t input_index, bool input_is_output) {
+    const bool is_copy = op == GGML_OP_CPY;
+    const bool is_target = input_index == 1;
+    const bool is_self_target = is_copy && is_target && input_is_output;
+    return !is_self_target;
+}
+
 GraphIndex GraphIndex::build(const Graph & graph) {
     GraphIndex                     index;
     const std::vector<GraphNode> & nodes = graph.nodes();
@@ -69,7 +74,11 @@ GraphIndex GraphIndex::build(const Graph & graph) {
             continue;
         }
         index.producers_.emplace(node.output.value, &node);
-        for (ValueId input : node.inputs) {
+        for (size_t input_index = 0; input_index < node.inputs.size(); ++input_index) {
+            const ValueId input = node.inputs[input_index];
+            if (!is_input_dependency(node.op, input_index, input == node.output)) {
+                continue;
+            }
             index.consumers_[input.value].push_back(&node);
         }
     }
@@ -174,8 +183,12 @@ GraphImportResult import_ggml_graph(const ggml_cgraph & graph) {
             continue;
         }
         graph_nodes.insert(node);
-        for (const ggml_tensor * source : node->src) {
-            if (source != nullptr) {
+        for (size_t source_index = 0; source_index < GGML_MAX_SRC; ++source_index) {
+            const ggml_tensor * source = node->src[source_index];
+            const bool has_source = source != nullptr;
+            const bool is_dependency = is_input_dependency(node->op, source_index, source == node);
+            const bool is_used_source = has_source && is_dependency;
+            if (is_used_source) {
                 ++use_counts[source];
             }
         }

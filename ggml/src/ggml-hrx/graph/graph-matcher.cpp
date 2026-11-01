@@ -80,7 +80,11 @@ const GraphNode * find_single_consumer_with_op_through_layout_aliases(const Grap
 
 bool node_has_input_or_alias(const Graph & graph, const GraphNode & node, ValueId input) {
     const Value * input_value = graph.values().find(input);
-    for (ValueId candidate : node.inputs) {
+    for (size_t input_index = 0; input_index < node.inputs.size(); ++input_index) {
+        const ValueId candidate = node.inputs[input_index];
+        if (!is_input_dependency(node.op, input_index, candidate == node.output)) {
+            continue;
+        }
         if (candidate == input) {
             return true;
         }
