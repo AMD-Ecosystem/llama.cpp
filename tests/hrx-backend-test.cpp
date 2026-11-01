@@ -39,6 +39,7 @@
 #include <limits>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -11640,6 +11641,56 @@ static void run_zero_output_device_support_checks() {
     ggml_backend_free(backend);
 }
 
+static void run_generic_hyper_connection_device_support_checks() {
+    ggml_backend_t backend = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+    ggml_context * ctx = ggml_init({ 1024 * 1024, nullptr, true });
+    REQUIRE(ctx != nullptr);
+    for (int64_t streams : { 1, 4, 65, 128, 129 }) {
+        auto * residual = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 31, streams, 3);
+        auto * weights  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, streams, 3);
+        auto * input    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 31, 3);
+        auto * mixing   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, streams, streams, 3);
+        auto * gate     = ggml_dup_tensor(ctx, residual);
+        REQUIRE(ggml_backend_supports_op(backend, ggml_dsv4_hc_pre(ctx, residual, weights)) == (streams <= 128));
+        REQUIRE(ggml_backend_supports_op(backend, ggml_dsv4_hc_pre_gated(ctx, residual, gate, 0.25f)) ==
+                (streams <= 128));
+        REQUIRE(ggml_backend_supports_op(backend, ggml_dsv4_hc_post(ctx, input, residual, weights, mixing)) ==
+                (streams <= 128));
+        REQUIRE(ggml_backend_supports_op(backend, ggml_dsv4_hc_post(ctx, input, residual, weights, nullptr)) ==
+                (streams <= 128));
+        auto * strided = ggml_view_3d(ctx, residual, 15, streams, 3, residual->nb[1], residual->nb[2], 0);
+        REQUIRE(!ggml_backend_supports_op(backend, ggml_dsv4_hc_pre(ctx, strided, weights)));
+    }
+    ggml_free(ctx);
+    ggml_backend_free(backend);
+}
+
+static void run_generic_indexer_device_support_checks() {
+    ggml_backend_t backend = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+    ggml_context * ctx = ggml_init({ 1024 * 1024, nullptr, true });
+    REQUIRE(ctx != nullptr);
+    for (auto [width, heads, supported] : {
+             std::tuple{ 16,  1,  true  },
+             { 48,  3,  true  },
+             { 128, 63, true  },
+             { 256, 32, true  },
+             { 15,  4,  false },
+             { 128, 65, false },
+             { 256, 33, false }
+    }) {
+        auto * query   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, width, heads, 3);
+        auto * key     = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, width, 1, 17);
+        auto * weights = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, heads, 3);
+        auto * mask    = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, 17, 3);
+        auto * output  = ggml_lightning_indexer(ctx, query, key, weights, mask);
+        REQUIRE(ggml_backend_supports_op(backend, output) == supported);
+    }
+    ggml_free(ctx);
+    ggml_backend_free(backend);
+}
+
 static void run_scale_f32_device_support_checks() {
     ggml_backend_t backend = ggml_backend_hrx_init(0);
     REQUIRE(backend != nullptr);
@@ -12545,6 +12596,35 @@ static void run_validated_graph_uid_match_checks() {
     REQUIRE(after_clear.valid());
     REQUIRE(after_clear.program->uid() == 4003);
     REQUIRE(cache.stats().builds == 5);
+    ggml_free(ctx);
+}
+
+static void run_hyper_connection_pre_cache_checks() {
+    ggml::hrx::GraphProgramCache cache;
+    const auto &                 corpus = ggml::hrx::get_qwen_kernel_corpus();
+    ggml_context *               ctx    = ggml_init({ 1024 * 1024, nullptr, true });
+    REQUIRE(ctx != nullptr);
+    auto * x          = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, 1, 1);
+    auto * w          = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, 1, 1);
+    auto   make_graph = [&](uint64_t uid, bool gated, float scale) {
+        auto *       output   = gated ? ggml_dsv4_hc_pre_gated(ctx, x, w, scale) : ggml_dsv4_hc_pre(ctx, x, w);
+        const auto   imported = ggml::hrx::import_op_params(*output);
+        const auto * params   = ggml::hrx::op_params_as<ggml::hrx::HyperConnectionPreParams>(imported);
+        REQUIRE(params != nullptr && params->gated == gated && params->scale == scale);
+        auto * graph = ggml_new_graph_custom(ctx, 16, false);
+        ggml_build_forward_expand(graph, output);
+        graph->uid = uid;
+        return graph;
+    };
+    auto plain    = cache.get_or_build(*make_graph(7101, false, 1.0f), corpus, "gfx1151");
+    auto gated    = cache.get_or_build(*make_graph(7102, true, 1.0f), corpus, "gfx1151");
+    auto scaled   = cache.get_or_build(*make_graph(7103, true, 0.5f), corpus, "gfx1151");
+    auto repeated = cache.get_or_build(*make_graph(7104, true, 1.0f), corpus, "gfx1151");
+    REQUIRE(plain.valid() && gated.valid() && scaled.valid() && repeated.valid());
+    REQUIRE(plain.program != gated.program);
+    REQUIRE(gated.program != scaled.program);
+    REQUIRE(gated.program == repeated.program);
+    REQUIRE(cache.stats().builds == 3);
     ggml_free(ctx);
 }
 
@@ -14322,6 +14402,7 @@ static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
     suite.host_case("graph_program_cache_uid_mismatch", [] { run_graph_program_cache_uid_mismatch_checks(); });
     suite.host_case("graph_program_cache_eviction", [] { run_graph_program_cache_eviction_checks(); });
     suite.host_case("swiglu_clamp_cache", [] { run_swiglu_clamp_cache_checks(); });
+    suite.host_case("hyper_connection_pre_cache", [] { run_hyper_connection_pre_cache_checks(); });
     suite.host_case("graph_match_empty_expert_views", [] { run_graph_match_empty_expert_views_checks(); });
     suite.host_case("graph_match_hash_collision", [] { run_graph_match_hash_collision_checks(); });
     suite.host_case("graph_match_bijection", [] { run_graph_match_bijection_checks(); });
@@ -14403,6 +14484,9 @@ static void register_hrx_backend_device_cases(test_runner::Suite & suite) {
     suite.device_case("transient_arena_growth", [] { run_transient_arena_growth(); });
     suite.device_case("zero_output_device_support", [] { run_zero_output_device_support_checks(); });
     suite.device_case("scale_f32_device_support", [] { run_scale_f32_device_support_checks(); });
+    suite.device_case("generic_hyper_connection_device_support",
+                      [] { run_generic_hyper_connection_device_support_checks(); });
+    suite.device_case("generic_indexer_device_support", [] { run_generic_indexer_device_support_checks(); });
     suite.device_case("binary_q8_publication_numerics", [] { run_binary_q8_publication_numerics(); });
     suite.device_case("qwen_expert_table_partition_prefill_512_execution",
                       [] { run_qwen_expert_table_partition_prefill_512_execution(); });

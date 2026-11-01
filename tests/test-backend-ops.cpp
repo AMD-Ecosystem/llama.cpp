@@ -4649,24 +4649,26 @@ struct test_dsv4_hc_comb : public test_dsv4_hc {
     const int64_t n_tokens;
     const int32_t n_iter;
     const float eps;
+    const int64_t n_scale;
 
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
         return "DSV4_HC_COMB";
     }
 
-    std::string vars() override {
-        return VARS_TO_STR3(n_tokens, n_iter, eps);
-    }
+    std::string vars() override { return VARS_TO_STR4(n_tokens, n_iter, eps, n_scale); }
 
-    test_dsv4_hc_comb(int64_t n_tokens = 17, int32_t n_iter = 4, float eps = 1e-6f)
-        : n_tokens(n_tokens), n_iter(n_iter), eps(eps) {}
+    test_dsv4_hc_comb(int64_t n_tokens = 17, int32_t n_iter = 4, float eps = 1e-6f, int64_t n_scale = 3) :
+        n_tokens(n_tokens),
+        n_iter(n_iter),
+        eps(eps),
+        n_scale(n_scale) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * mixes = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, (2 + hc)*hc, n_tokens);
         ggml_set_name(mixes, "mixes");
 
-        ggml_tensor * scale = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 3);
+        ggml_tensor * scale = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_scale);
         ggml_set_name(scale, "scale");
 
         ggml_tensor * base = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, (2 + hc)*hc);
@@ -4721,39 +4723,46 @@ struct test_dsv4_hc_post : public test_dsv4_hc {
     const int64_t n_tokens;
     const bool    identity;
     const bool    gated;
+    const int64_t n_hc;
 
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
         return "DSV4_HC_POST";
     }
 
-    std::string vars() override {
-        return VARS_TO_STR4(n_embd, n_tokens, identity, gated);
-    }
+    std::string vars() override { return VARS_TO_STR5(n_embd, n_tokens, identity, gated, n_hc); }
 
     // gated: post = 2*sigmoid(post/hc), as qwen4exp builds it, so backends can fuse the chain
     bool run_whole_graph() override { return gated; }
 
-    test_dsv4_hc_post(int64_t n_embd = 31, int64_t n_tokens = 17, bool identity = false, bool gated = false)
-        : n_embd(n_embd), n_tokens(n_tokens), identity(identity), gated(gated) {}
+    test_dsv4_hc_post(int64_t n_embd   = 31,
+                      int64_t n_tokens = 17,
+                      bool    identity = false,
+                      bool    gated    = false,
+                      int64_t n_hc     = 4) :
+        n_embd(n_embd),
+        n_tokens(n_tokens),
+        identity(identity),
+        gated(gated),
+        n_hc(n_hc) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, n_tokens);
         ggml_set_name(x, "x");
 
-        ggml_tensor * residual = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd, hc, n_tokens);
+        ggml_tensor * residual = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd, n_hc, n_tokens);
         ggml_set_name(residual, "residual");
 
-        ggml_tensor * post = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hc, n_tokens);
+        ggml_tensor * post = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_hc, n_tokens);
         ggml_set_name(post, "post");
 
         if (gated) {
-            post = ggml_scale(ctx, ggml_sigmoid(ctx, ggml_scale(ctx, post, 1.0f / (float) hc)), 2.0f);
+            post = ggml_scale(ctx, ggml_sigmoid(ctx, ggml_scale(ctx, post, 1.0f / (float) n_hc)), 2.0f);
         }
 
         ggml_tensor * comb = nullptr;
         if (!identity) {
-            comb = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, hc, hc, n_tokens);
+            comb = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_hc, n_hc, n_tokens);
             ggml_set_name(comb, "comb");
         }
 
@@ -10249,6 +10258,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_dsv4_hc_comb(17, 4));
     test_cases.emplace_back(new test_dsv4_hc_comb(257, 8));
     test_cases.emplace_back(new test_dsv4_hc_comb(17, 20));
+    test_cases.emplace_back(new test_dsv4_hc_comb(17, 4, 1e-6f, 7));
     // production n_iter (DeepSeek-V4 uses 20) across batch sizes that cross
     // subgroup and workgroup boundaries; 1 = single-token decode
     for (int64_t n_tokens : {1, 256, 336, 512, 513, 1024, 2048}) {
@@ -10261,7 +10271,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_dsv4_hc_pre(4096, 4, 21));
     test_cases.emplace_back(new test_dsv4_hc_pre(31, 4, 17, true));
     test_cases.emplace_back(new test_dsv4_hc_pre(4096, 4, 21, true));
-    for (int64_t n_hc : {1, 2, 3, 5, 8, 65}) {
+    for (int64_t n_hc : { 1, 2, 3, 5, 8, 65, 128 }) {
         test_cases.emplace_back(new test_dsv4_hc_pre(128, n_hc, 17));
         test_cases.emplace_back(new test_dsv4_hc_pre(128, n_hc, 17, true));
     }
@@ -10275,6 +10285,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_dsv4_hc_post(31, 17, true, true));
     test_cases.emplace_back(new test_dsv4_hc_post(2560, 21, true, true));
     test_cases.emplace_back(new test_dsv4_hc_post(31, 17, false, true));
+    for (int64_t n_hc : { 1, 3, 8, 65, 128 }) {
+        test_cases.emplace_back(new test_dsv4_hc_post(31, 17, false, false, n_hc));
+        test_cases.emplace_back(new test_dsv4_hc_post(31, 17, true, false, n_hc));
+    }
     for (int64_t tokens : { 1, 17, 512 }) {
         test_cases.emplace_back(new test_flash_attn_sink(tokens));
     }
@@ -12783,6 +12797,20 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_falcon(1));
     test_cases.emplace_back(new test_falcon(2));
 #endif
+
+    // Cover head tiles, width tiles, and partial key tiles independently.
+    for (auto [head_size, heads] : {
+             std::pair{ 16,  1  },
+             { 48,  3  },
+             { 64,  15 },
+             { 64,  16 },
+             { 128, 17 },
+             { 256, 32 },
+             { 128, 48 },
+             { 128, 63 }
+    }) {
+        test_cases.emplace_back(new test_lightning_indexer(head_size, heads, 17, 3));
+    }
 
     // lightning_indexer
     for (int kv : { 256 }) {

@@ -156,6 +156,12 @@ json op_params_json(const OpParams & params) {
                     { "eps",    value.eps    },
                     { "n_iter", value.n_iter }
                 };
+            } else if constexpr (std::is_same_v<T, HyperConnectionPreParams>) {
+                return {
+                    { "kind",  "hc_pre"    },
+                    { "scale", value.scale },
+                    { "gated", value.gated }
+                };
             } else if constexpr (std::is_same_v<T, GluParams>) {
                 return {
                     { "kind",    "glu"                       },
@@ -235,6 +241,9 @@ OpParams parse_op_params(const json & item) {
     }
     if (kind == "hc_comb") {
         return HyperConnectionCombParams{ item.value("eps", 0.0f), item.value("n_iter", 0) };
+    }
+    if (kind == "hc_pre") {
+        return HyperConnectionPreParams{ item.value("scale", 1.0f), item.value("gated", false) };
     }
     if (kind == "glu") {
         return GluParams{ static_cast<ggml_glu_op>(item.value("op", static_cast<int>(GGML_GLU_OP_REGLU))),

@@ -50,6 +50,11 @@ struct HyperConnectionCombParams {
     int32_t n_iter = 0;
 };
 
+struct HyperConnectionPreParams {
+    float scale = 1.0f;
+    bool  gated = false;
+};
+
 struct GluParams {
     ggml_glu_op op = GGML_GLU_OP_REGLU;
     bool        swapped = false;
@@ -139,6 +144,7 @@ using OpParams = std::variant<
     ClampParams,
     FillParams,
     HyperConnectionCombParams,
+    HyperConnectionPreParams,
     GluParams,
     ScaleParams,
     BinaryParams,

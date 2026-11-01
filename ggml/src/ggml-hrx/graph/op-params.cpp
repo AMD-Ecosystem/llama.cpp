@@ -68,6 +68,12 @@ static bool hyper_connection_comb_params_equivalent(const OpParams & lhs, const 
     return l != nullptr && r != nullptr && l->eps == r->eps && l->n_iter == r->n_iter;
 }
 
+static bool hyper_connection_pre_params_equivalent(const OpParams & lhs, const OpParams & rhs) {
+    const auto * l = op_params_as<HyperConnectionPreParams>(lhs);
+    const auto * r = op_params_as<HyperConnectionPreParams>(rhs);
+    return l != nullptr && r != nullptr && l->scale == r->scale && l->gated == r->gated;
+}
+
 static bool scale_params_equivalent(const OpParams & lhs, const OpParams & rhs) {
     const ScaleParams * lhs_params = op_params_as<ScaleParams>(lhs);
     const ScaleParams * rhs_params = op_params_as<ScaleParams>(rhs);
@@ -291,6 +297,9 @@ OpParams import_op_params(const ggml_tensor & tensor) {
             return ArgsortParams{ static_cast<ggml_sort_order>(ggml_get_op_params_i32(&tensor, 0)) };
         case GGML_OP_DSV4_HC_COMB:
             return HyperConnectionCombParams{ ggml_get_op_params_f32(&tensor, 0), ggml_get_op_params_i32(&tensor, 1) };
+        case GGML_OP_DSV4_HC_PRE:
+            return HyperConnectionPreParams{ ggml_get_op_params_f32(&tensor, 0),
+                                             ggml_get_op_params_i32(&tensor, 1) != 0 };
         case GGML_OP_FILL:
             return FillParams{ ggml_get_op_params_f32(&tensor, 0) };
         case GGML_OP_CLAMP:
@@ -349,6 +358,8 @@ bool op_params_equivalent(ggml_op op, const OpParams & lhs, const OpParams & rhs
             return argsort_params_equivalent(lhs, rhs);
         case GGML_OP_DSV4_HC_COMB:
             return hyper_connection_comb_params_equivalent(lhs, rhs);
+        case GGML_OP_DSV4_HC_PRE:
+            return hyper_connection_pre_params_equivalent(lhs, rhs);
         case GGML_OP_FILL:
             return fill_params_equivalent(lhs, rhs);
         case GGML_OP_CLAMP:
