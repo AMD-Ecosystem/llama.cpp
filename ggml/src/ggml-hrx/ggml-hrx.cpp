@@ -653,6 +653,7 @@ static void device_props(ggml_backend_dev_t device, ggml_backend_dev_props * pro
     props->type      = GGML_BACKEND_DEVICE_TYPE_GPU;
     props->device_id = nullptr;
     props->caps      = { true, true, true, false };
+    props->caps.mmap_support = true;
 }
 
 static ggml_backend_t device_init(ggml_backend_dev_t device, const char * parameters) {

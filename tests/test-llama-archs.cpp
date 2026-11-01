@@ -1421,7 +1421,10 @@ static int test_hrx_mmap_import(const size_t seed, const float stdev) {
     llama_model_params model_params = llama_model_default_params();
     model_params.devices = devices;
     model_params.n_gpu_layers = 99;
-    model_params.load_mode = LLAMA_LOAD_MODE_MMAP;
+    // Keep AUTO so advertised device capabilities must enable mmap import.
+    if (model_params.load_mode != LLAMA_LOAD_MODE_AUTO) {
+        throw std::runtime_error("mmap import test requires the default AUTO load mode");
+    }
     llama_model_ptr imported(llama_model_load_from_file(path.string().c_str(), model_params));
     if (!imported) {
         throw std::runtime_error("failed to load mmap-backed HRX model");
