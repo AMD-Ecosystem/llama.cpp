@@ -1,0 +1,80 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// One 256-workitem workgroup computes mean and variance for a row.
+// Callers own row mapping and can apply the returned statistics in fused kernels.
+template.decl @ggml.norm_f32.row_statistics(%row_count: index, %row: index, %hidden_size: index, %input_stride: index, %epsilon: f32, %input: buffer) -> (f32, f32)
+
+template.decl @ggml.norm_f32.apply(%value: f32, %mean: f32, %scale: f32) -> (f32)
+
+template.decl @ggml.norm_f32.body(%row_count: index, %input: buffer, %output: buffer)
+
+config.decl @ggml.norm_f32.hidden_size : %value: index where [range(%value, 1, 32768)]
+
+config.decl @ggml.norm_f32.input_stride : %value: index where [range(%value, 1, 32768)]
+
+config.decl @ggml.norm_f32.epsilon : f32
+
+template.def<@ggml.norm_f32.row_statistics> device @ggml_norm_f32_row_statistics(%row_count0: index, %row0: index, %hidden_size0: index, %input_stride0: index, %epsilon: f32, %input: buffer) -> (f32, f32) {
+  %row_count = index.assume %row_count0 [range(%row_count0, 1, 1048576)] : index
+  %row = index.assume %row0 [lt(%row0, %row_count)] : index
+  %hidden_size1 = index.assume %hidden_size0 [range(%hidden_size0, 1, 32768)] : index
+  %input_stride1 = index.assume %input_stride0 [range(%input_stride0, 1, 32768)] : index
+  %hidden_size, %input_stride = index.assume %hidden_size1, %input_stride1 [le(%hidden_size1, %input_stride1)] : index, index
+  %workitem = kernel.workitem.id<x> : index
+  %c0 = index.constant 0 : offset
+  %c256 = index.constant 256 : index
+  %zero = scalar.constant 0.0 : f32
+  %input_view = buffer.view %input[%c0] : buffer -> view<[%row_count]x[%input_stride]xf32>
+
+  %partial_sum = scf.for %channel = [%workitem to %hidden_size step %c256](%sum = %zero : f32) -> (f32) {
+    %value = view.load %input_view[%row, %channel] : view<[%row_count]x[%input_stride]xf32> -> f32
+    %next = scalar.addf<reassoc|nnan|ninf|nsz> %sum, %value : f32
+    scf.yield %next : f32
+  }
+  %sum = kernel.workgroup.reduce<addf> %partial_sum : f32
+  %hidden_i32 = index.cast %hidden_size : index to i32
+  %hidden_f32 = scalar.sitofp %hidden_i32 : i32 to f32
+  %mean = scalar.divf<arcp> %sum, %hidden_f32 : f32
+
+  %partial_variance = scf.for %channel = [%workitem to %hidden_size step %c256](%variance = %zero : f32) -> (f32) {
+    %value = view.load %input_view[%row, %channel] : view<[%row_count]x[%input_stride]xf32> -> f32
+    %centered = scalar.subf %value, %mean : f32
+    %square = scalar.mulf<reassoc|nnan|ninf|nsz> %centered, %centered : f32
+    %next = scalar.addf<reassoc|nnan|ninf|nsz> %variance, %square : f32
+    scf.yield %next : f32
+  }
+  %variance_sum = kernel.workgroup.reduce<addf> %partial_variance : f32
+  %variance = scalar.divf<arcp> %variance_sum, %hidden_f32 : f32
+  %biased = scalar.addf %variance, %epsilon : f32
+  %scale = scalar.rsqrtf<afn> %biased : f32
+  template.return %mean, %scale : f32, f32
+}
+
+template.def<@ggml.norm_f32.apply> device @ggml_norm_f32_apply(%value: f32, %mean: f32, %scale: f32) -> (f32) {
+  %centered = scalar.subf %value, %mean : f32
+  %normalized = scalar.mulf %centered, %scale : f32
+  template.return %normalized : f32
+}
+
+template.def<@ggml.norm_f32.body> device @ggml_norm_f32_body(%row_count: index, %input: buffer, %output: buffer) {
+  %bounded_row_count = index.assume %row_count [range(%row_count, 1, 1048576)] : index
+  %hidden_size = config.get @ggml.norm_f32.hidden_size : index
+  %input_stride = config.get @ggml.norm_f32.input_stride : index
+  %epsilon = config.get @ggml.norm_f32.epsilon : f32
+  %row0 = kernel.workgroup.id<x> : index
+  %row = index.assume %row0 [lt(%row0, %bounded_row_count)] : index
+  %workitem = kernel.workitem.id<x> : index
+  %c0 = index.constant 0 : offset
+  %c256 = index.constant 256 : index
+  %input_noalias, %output_noalias = buffer.assume.noalias %input, %output : buffer, buffer
+  %mean, %scale = template.apply<@ggml.norm_f32.row_statistics>(%bounded_row_count, %row, %hidden_size, %input_stride, %epsilon, %input_noalias) : (index, index, index, index, f32, buffer) -> (f32, f32)
+  %input_view = buffer.view %input_noalias[%c0] : buffer -> view<[%bounded_row_count]x[%input_stride]xf32>
+  %output_view = buffer.view %output_noalias[%c0] : buffer -> view<[%bounded_row_count]x[%hidden_size]xf32>
+  scf.for %channel = [%workitem to %hidden_size step %c256] {
+    %value = view.load %input_view[%row, %channel] : view<[%bounded_row_count]x[%input_stride]xf32> -> f32
+    %normalized = template.apply<@ggml.norm_f32.apply>(%value, %mean, %scale) : (f32, f32, f32) -> (f32)
+    view.store %normalized, %output_view[%row, %channel] : f32, view<[%bounded_row_count]x[%hidden_size]xf32>
+  }
+  template.return
+}

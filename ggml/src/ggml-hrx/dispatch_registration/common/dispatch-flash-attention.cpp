@@ -19,6 +19,8 @@ static constexpr KernelCatalogRef kFlashAttentionF32F16WmmaKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_f32_f16_wmma");
 static constexpr KernelCatalogRef kFlashAttentionF32F16WmmaPublishF16Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_f32_f16_wmma_publish_f16");
+static constexpr KernelCatalogRef kFlashAttentionF32F16WmmaF16OnlyKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_f32_f16_wmma_f16_only");
 static constexpr KernelCatalogRef kFlashAttentionDecodeSplitNextQ8Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_decode_split_f32_f16_wmma_next_q8");
 static constexpr KernelCatalogRef kCopyTransposeF16Kernel =
@@ -510,6 +512,28 @@ static bool match_flash_attention_gate_dispatch(const DispatchMatchContext & con
     return true;
 }
 
+static bool flash_attention_has_bf16_projection(const DispatchMatchContext &              context,
+                                                const CommonActivationPublicationDemand * demand) {
+    const GraphNode * consumer = demand != nullptr ? demand->consumer : nullptr;
+    const bool consumer_is_projection = consumer != nullptr && consumer->op == GGML_OP_MUL_MAT &&
+                                        consumer->inputs.size() == 2;
+    const Value * projection_weight =
+        consumer_is_projection ? context.graph.values().find(consumer->inputs[0]) : nullptr;
+    return projection_weight != nullptr && projection_weight->type == GGML_TYPE_BF16;
+}
+
+static bool flash_attention_can_publish_f16_only(const DispatchMatchContext &              context,
+                                                 const Value &                             output,
+                                                 const CommonActivationPublicationDemand * demand) {
+    const Value * storage_root = context.graph.values().find(output.storage_root);
+    const bool output_is_transient = output.kind == ValueKind::Transient && storage_root != nullptr &&
+                                     storage_root->kind == ValueKind::Transient;
+    const bool consumer_is_transient = demand != nullptr && demand->consumer_value->kind == ValueKind::Transient;
+    const bool exclusive_f16_consumer = demand != nullptr && !demand->mixed_fanout;
+    const bool projection_weight_is_bf16 = flash_attention_has_bf16_projection(context, demand);
+    return output_is_transient && consumer_is_transient && exclusive_f16_consumer && projection_weight_is_bf16;
+}
+
 static bool match_flash_attention_f32_f16_dispatch(const DispatchMatchContext & context,
                                                    DispatchMatch &              dispatch_match) {
     const FlashAttentionMatch match = match_flash_attention_f32_f16(context.graph, context.plan, context.root_node);
@@ -520,15 +544,28 @@ static bool match_flash_attention_f32_f16_dispatch(const DispatchMatchContext & 
     const CommonActivationPublicationCapabilities capabilities = {
         match.query_token_count >= 128 ? DispatchActivationInputF16Row : DispatchActivationInputNone,
         DispatchActivationInputF16Row,
+        DispatchActivationProducerRequirementFactoredTiledF16,
     };
-    const CommonActivationPublicationPlan publication_plan =
+    CommonActivationPublicationPlan publication_plan =
         common_select_activation_publication_plan(context, *match.output, capabilities);
+    const CommonActivationPublicationDemand * expanded_demand =
+        publication_plan.find(CommonActivationPublicationFormat::F16Row);
+    const bool expanded_projection_is_bf16 = flash_attention_has_bf16_projection(context, expanded_demand);
+    if (!expanded_projection_is_bf16) {
+        const CommonActivationPublicationCapabilities legacy_capabilities = {
+            capabilities.formats,
+            capabilities.alias_traversal_formats,
+        };
+        publication_plan = common_select_activation_publication_plan(context, *match.output, legacy_capabilities);
+    }
     const CommonActivationPublicationDemand * demand =
         publication_plan.find(CommonActivationPublicationFormat::F16Row);
     const bool publish_f16 = demand != nullptr;
+    const bool f16_only = flash_attention_can_publish_f16_only(context, *match.output, demand);
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(publish_f16 ? kFlashAttentionF32F16WmmaPublishF16Kernel :
-                                                               kFlashAttentionF32F16WmmaKernel);
+    dispatch.kernel = make_kernel_specialization(f16_only ? kFlashAttentionF32F16WmmaF16OnlyKernel :
+                                                  publish_f16 ? kFlashAttentionF32F16WmmaPublishF16Kernel :
+                                                                kFlashAttentionF32F16WmmaKernel);
     if (!use_exact_prefill_workload(match.query_token_count, match.key_value_token_count)) {
         dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
     }
@@ -542,7 +579,9 @@ static bool match_flash_attention_f32_f16_dispatch(const DispatchMatchContext & 
     dispatch.bindings.push_back(prepare_flash_attention_value(context, match, dispatch_match, dispatch.kernel));
     dispatch.bindings.push_back({ match.mask_binding_value, 0, match.mask_binding_bytes });
     dispatch.bindings.push_back({ match.query->id, 0, match.query->byte_count });
-    dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
+    if (!f16_only) {
+        dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
+    }
 
     if (publish_f16) {
         constexpr const char * name = "common.flash_attention.f16";
@@ -676,6 +715,164 @@ static bool match_flash_attention_decode_split_next_q8_dispatch(const DispatchMa
     return true;
 }
 
+static bool match_flash_attention_tiled_dispatch(const DispatchMatchContext & context,
+                                                 DispatchMatch &              dispatch_match) {
+    const GraphNode * node = context.root_node;
+    const bool has_flash_op = node != nullptr && node->op == GGML_OP_FLASH_ATTN_EXT;
+    const bool has_supported_input_count = node != nullptr && (node->inputs.size() == 3 || node->inputs.size() == 4);
+    const bool supported_node = has_flash_op && has_supported_input_count;
+    if (!supported_node) {
+        return false;
+    }
+    const bool has_mask = node->inputs.size() == 4;
+    const Value * query  = graph_value(context.graph, node->inputs[0]);
+    const Value * key    = graph_value(context.graph, node->inputs[1]);
+    const Value * value  = graph_value(context.graph, node->inputs[2]);
+    const Value * mask   = has_mask ? graph_value(context.graph, node->inputs[3]) : nullptr;
+    const Value * output = graph_value(context.graph, node->output);
+    const bool has_values = query != nullptr && key != nullptr && value != nullptr && output != nullptr;
+    const bool has_required_mask = !has_mask || mask != nullptr;
+    const bool required_values_present = has_values && has_required_mask;
+    if (!required_values_present) {
+        return false;
+    }
+    const bool types_match = query->type == GGML_TYPE_F32 && key->type == GGML_TYPE_F16 &&
+                             value->type == GGML_TYPE_F16 && output->type == GGML_TYPE_F32;
+    const bool mask_type_matches = !has_mask || mask->type == GGML_TYPE_F16;
+    const bool has_params = has_flash_attention_params(*node);
+    const bool supported_types_and_params = types_match && mask_type_matches && has_params;
+    if (!supported_types_and_params) {
+        return false;
+    }
+    const int64_t qk_head_size          = query->ne[0];
+    const int64_t value_head_size       = value->ne[0];
+    const int64_t query_token_count     = query->ne[1];
+    const int64_t key_value_token_count = key->ne[1];
+    const int64_t query_head_count      = query->ne[2];
+    const int64_t key_value_head_count  = key->ne[2];
+    const bool head_sizes_supported = qk_head_size == 72 && value_head_size == 72;
+    const bool token_counts_supported = query_token_count >= 1 && query_token_count <= 3888 &&
+                                        key_value_token_count >= 1 && key_value_token_count <= 3888;
+    const bool head_counts_supported = is_supported_head_count(query_head_count) &&
+                                       is_supported_head_count(key_value_head_count) &&
+                                       query_head_count % key_value_head_count == 0;
+    const bool supported_shape = head_sizes_supported && token_counts_supported && head_counts_supported;
+    if (!supported_shape) {
+        return false;
+    }
+    const bool dimensions_match = key->ne[0] == qk_head_size && value->ne[1] == key_value_token_count &&
+                                  value->ne[2] == key_value_head_count && output->ne[0] == value_head_size &&
+                                  output->ne[1] == query_head_count && output->ne[2] == query_token_count;
+    const bool batch_is_one = query->ne[3] == 1 && key->ne[3] == 1 && value->ne[3] == 1 && output->ne[3] == 1;
+    const bool dense_channels = query->nb[0] == sizeof(float) && key->nb[0] == sizeof(ggml_fp16_t) &&
+                                value->nb[0] == sizeof(ggml_fp16_t) && output->nb[0] == sizeof(float);
+    const bool mask_dimensions_match = !has_mask ||
+        (mask->ne[0] == key_value_token_count && mask->ne[1] == query_token_count &&
+         mask->ne[2] == 1 && mask->ne[3] == 1 && mask->nb[0] == sizeof(ggml_fp16_t));
+    const bool supported_layout = dimensions_match && batch_is_one && dense_channels && mask_dimensions_match;
+    if (!supported_layout) {
+        return false;
+    }
+    // The shared WMMA body assumes 16-byte aligned, disjoint input buffers.
+    // Value-map aliases may shift a view by an arbitrary byte offset.
+    const bool query_aligned = query->storage_offset % 16 == 0;
+    const bool key_aligned = key->storage_offset % 16 == 0;
+    const bool value_aligned = value->storage_offset % 16 == 0;
+    const bool output_aligned = output->storage_offset % 16 == 0;
+    const bool mask_aligned = !has_mask || mask->storage_offset % 16 == 0;
+    const bool aligned_offsets = query_aligned && key_aligned && value_aligned && output_aligned && mask_aligned;
+    const bool query_disjoint = query->storage != key->storage && query->storage != value->storage &&
+                                query->storage != output->storage;
+    const bool key_disjoint = key->storage != value->storage && key->storage != output->storage;
+    const bool value_disjoint = value->storage != output->storage;
+    const bool mask_disjoint = !has_mask ||
+        (mask->storage != query->storage && mask->storage != key->storage &&
+         mask->storage != value->storage && mask->storage != output->storage);
+    const bool disjoint_buffers = query_disjoint && key_disjoint && value_disjoint && mask_disjoint;
+    const bool supported_buffer_contract = aligned_offsets && disjoint_buffers;
+    if (!supported_buffer_contract) {
+        return false;
+    }
+    const int64_t padded_qk_head_size = ceil_div(qk_head_size, kPrefillQkHeadSizeBlock) * kPrefillQkHeadSizeBlock;
+    const int64_t padded_value_head_size = ceil_div(value_head_size, kPrefillValueHeadSizeBlock) *
+                                           kPrefillValueHeadSizeBlock;
+    const CommonActivationPublicationCapabilities capabilities = {
+        query_token_count >= 128 && query_token_count <= 2048 ? DispatchActivationInputF16Row :
+                                                               DispatchActivationInputNone,
+        DispatchActivationInputF16Row,
+        DispatchActivationProducerRequirementFactoredTiledF16,
+    };
+    const CommonActivationPublicationPlan publication_plan =
+        common_select_activation_publication_plan(context, *output, capabilities);
+    const CommonActivationPublicationDemand * demand =
+        publication_plan.find(CommonActivationPublicationFormat::F16Row);
+    const bool f16_only = flash_attention_can_publish_f16_only(context, *output, demand);
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(f16_only ? kFlashAttentionF32F16WmmaF16OnlyKernel :
+                                                           kFlashAttentionF32F16WmmaKernel);
+    dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
+    dispatch.kernel.integer_parameters.emplace("query_token_count", query_token_count);
+    dispatch.kernel.integer_parameters.emplace("key_value_token_count", key_value_token_count);
+    add_flash_attention_compile_parameters(dispatch.kernel, query_head_count, key_value_head_count,
+                                           padded_qk_head_size, padded_value_head_size,
+                                           op_params_as<FlashAttnExtParams>(node->params)->scale, false, 1, 1);
+    const auto add = [&](const char * name, int64_t setting) {
+        dispatch.kernel.compile_parameters.emplace(std::string("ggml.flash_attention.") + name,
+                                                   to_config_value(setting));
+    };
+    add("logical_qk_head_size", qk_head_size);
+    add("logical_value_head_size", value_head_size);
+    add("query_token_stride", static_cast<int64_t>(query->nb[1] / sizeof(float)));
+    add("query_head_stride", static_cast<int64_t>(query->nb[2] / sizeof(float)));
+    add("key_token_stride", static_cast<int64_t>(key->nb[1] / sizeof(ggml_fp16_t)));
+    add("key_head_stride", static_cast<int64_t>(key->nb[2] / sizeof(ggml_fp16_t)));
+    add("value_token_stride", static_cast<int64_t>(value->nb[1] / sizeof(ggml_fp16_t)));
+    add("value_head_stride", static_cast<int64_t>(value->nb[2] / sizeof(ggml_fp16_t)));
+    add("output_token_stride", static_cast<int64_t>(output->nb[2] / sizeof(float)));
+    add("output_head_stride", static_cast<int64_t>(output->nb[1] / sizeof(float)));
+    add("mask_token_stride", has_mask ? static_cast<int64_t>(mask->nb[1] / sizeof(ggml_fp16_t)) : 0);
+    add("has_mask", has_mask ? 1 : 0);
+    add("tiled_loaders", 1);
+    dispatch.bindings.push_back({ query->id, 0, query->byte_count });
+    dispatch.bindings.push_back({ key->id, 0, key->byte_count });
+    dispatch.bindings.push_back({ value->id, 0, value->byte_count });
+    if (has_mask) {
+        dispatch.bindings.push_back({ mask->id, 0, mask->byte_count });
+    } else {
+        // has_mask=0 removes every mask load at compile time. Keep its ABI
+        // binding disjoint so the shared body's noalias contract still holds.
+        const ValueId unused_mask = match_value(context, dispatch_match, 0);
+        dispatch_match.transients.push_back({ unused_mask, "common.flash_attention.unused_mask", 16, 16 });
+        dispatch_match.constant_initializations.push_back({
+            unused_mask, "common.flash_attention.unused_mask", 0, std::vector<uint8_t>(16, 0),
+        });
+        dispatch.bindings.push_back({ unused_mask, 0, 16 });
+    }
+    dispatch.bindings.push_back({ query->id, 0, query->byte_count });
+    if (f16_only) {
+        constexpr const char * name = "common.flash_attention.f16";
+        CommonActivationPublication publication;
+        if (!common_reserve_activation_publication(context, dispatch_match, *output, *demand, name, publication) ||
+            !common_append_activation_publication(dispatch_match, publication, name)) {
+            return false;
+        }
+        dispatch.bindings.push_back(publication.binding());
+    } else {
+        dispatch.bindings.push_back({ output->id, 0, output->byte_count });
+    }
+    dispatch_match.dispatches.push_back(std::move(dispatch));
+    dispatch_match.covered_nodes.push_back(context.root_index);
+    const GraphNode * output_layout = find_single_layout_alias_consumer(context.graph, output->id);
+    if (output_layout != nullptr) {
+        const bool covered_layout = append_covered_node_index_once(
+            context.graph, context.covered_nodes, output_layout, dispatch_match.covered_nodes);
+        if (!covered_layout) {
+            return false;
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
 void register_flash_attention_dispatches(DispatchRegistryBuilder & registry) {
@@ -702,6 +899,14 @@ void register_flash_attention_dispatches(DispatchRegistryBuilder & registry) {
         50,
         DispatchSource::Common,
         match_flash_attention_f32_f16_dispatch,
+    });
+    registry.add({
+        "common.flash_attention_f32_f16_tiled",
+        GGML_OP_FLASH_ATTN_EXT,
+        DispatchMatchKind::SingleOp,
+        45,
+        DispatchSource::Common,
+        match_flash_attention_tiled_dispatch,
     });
 }
 

@@ -1,0 +1,76 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.interpolate.axis(%output_coordinate: index, %source_size: index, %scale: f32, %pixel_offset: f32) -> (index, index, f32)
+template.decl @ggml.interpolate.bilinear_f32(%source: buffer, %span: index, %x0: index, %x1: index, %y0: index, %y1: index, %z: index, %batch: index, %dx: f32, %dy: f32, %stride0: index, %stride1: index, %stride2: index, %stride3: index) -> (f32)
+
+amdgpu.target<gfx11-generic> @ggml_upscale_bilinear_f32_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @ggml.upscale_bilinear_f32.src_ne0 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.upscale_bilinear_f32.src_ne1 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.upscale_bilinear_f32.src_ne2 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.upscale_bilinear_f32.src_ne3 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.upscale_bilinear_f32.dst_ne0 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.upscale_bilinear_f32.dst_ne1 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.upscale_bilinear_f32.dst_ne2 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.upscale_bilinear_f32.dst_ne3 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.upscale_bilinear_f32.stride0 : %value: index where [range(%value, 0, 134217728)]
+config.decl @ggml.upscale_bilinear_f32.stride1 : %value: index where [range(%value, 0, 134217728)]
+config.decl @ggml.upscale_bilinear_f32.stride2 : %value: index where [range(%value, 0, 134217728)]
+config.decl @ggml.upscale_bilinear_f32.stride3 : %value: index where [range(%value, 0, 134217728)]
+config.decl @ggml.upscale_bilinear_f32.scale0 : f32
+config.decl @ggml.upscale_bilinear_f32.scale1 : f32
+config.decl @ggml.upscale_bilinear_f32.pixel_offset : f32
+
+kernel.def target(@ggml_upscale_bilinear_f32_gfx11_wave64) export("ggml_upscale_bilinear_f32") @ggml_upscale_bilinear_f32(%element_count: index, %source_span: index) {
+  %one = index.constant 1 : index
+  %block = index.constant 256 : index
+  %rounding = index.constant 255 : index
+  %rounded = index.add %element_count, %rounding : index
+  %workgroups = index.div %rounded, %block : index
+  kernel.launch.config workgroups(%workgroups, %one, %one) workgroup_size(%block, %one, %one) : index
+} launch(%element_count: index, %source_span: index, %source: buffer, %output: buffer) {
+  %count = index.assume %element_count [range(%element_count, 1, 134217728)] : index
+  %src_ne0 = config.get @ggml.upscale_bilinear_f32.src_ne0 : index
+  %src_ne1 = config.get @ggml.upscale_bilinear_f32.src_ne1 : index
+  %src_ne2 = config.get @ggml.upscale_bilinear_f32.src_ne2 : index
+  %src_ne3 = config.get @ggml.upscale_bilinear_f32.src_ne3 : index
+  %dst_ne0 = config.get @ggml.upscale_bilinear_f32.dst_ne0 : index
+  %dst_ne1 = config.get @ggml.upscale_bilinear_f32.dst_ne1 : index
+  %dst_ne2 = config.get @ggml.upscale_bilinear_f32.dst_ne2 : index
+  %dst_ne3 = config.get @ggml.upscale_bilinear_f32.dst_ne3 : index
+  %stride0 = config.get @ggml.upscale_bilinear_f32.stride0 : index
+  %stride1 = config.get @ggml.upscale_bilinear_f32.stride1 : index
+  %stride2 = config.get @ggml.upscale_bilinear_f32.stride2 : index
+  %stride3 = config.get @ggml.upscale_bilinear_f32.stride3 : index
+  %scale0 = config.get @ggml.upscale_bilinear_f32.scale0 : f32
+  %scale1 = config.get @ggml.upscale_bilinear_f32.scale1 : f32
+  %pixel_offset = config.get @ggml.upscale_bilinear_f32.pixel_offset : f32
+  %workgroup = kernel.workgroup.id<x> : index
+  %workitem = kernel.workitem.id<x> : index
+  %block = index.constant 256 : index
+  %base = index.mul %workgroup, %block : index
+  %linear0 = index.add %base, %workitem : index
+  %linear = index.assume %linear0 [range(%linear0, 0, 134217983)] : index
+  %in_bounds = index.cmp ult, %linear, %count : index
+  %zero_offset = index.constant 0 : offset
+  %source_noalias, %output_noalias = buffer.assume.noalias %source, %output : buffer, buffer
+  %output_view = buffer.view %output_noalias[%zero_offset] : buffer -> view<[%count]xf32>
+  scf.if %in_bounds {
+    %i0 = index.rem %linear, %dst_ne0 : index
+    %rest0 = index.div %linear, %dst_ne0 : index
+    %i1 = index.rem %rest0, %dst_ne1 : index
+    %rest1 = index.div %rest0, %dst_ne1 : index
+    %i2 = index.rem %rest1, %dst_ne2 : index
+    %i3 = index.div %rest1, %dst_ne2 : index
+    %z_scaled = index.mul %i2, %src_ne2 : index
+    %batch_scaled = index.mul %i3, %src_ne3 : index
+    %z = index.div %z_scaled, %dst_ne2 : index
+    %batch = index.div %batch_scaled, %dst_ne3 : index
+    %x0, %x1, %dx = template.apply<@ggml.interpolate.axis>(%i0, %src_ne0, %scale0, %pixel_offset) : (index, index, f32, f32) -> (index, index, f32)
+    %y0, %y1, %dy = template.apply<@ggml.interpolate.axis>(%i1, %src_ne1, %scale1, %pixel_offset) : (index, index, f32, f32) -> (index, index, f32)
+    %value = template.apply<@ggml.interpolate.bilinear_f32>(%source_noalias, %source_span, %x0, %x1, %y0, %y1, %z, %batch, %dx, %dy, %stride0, %stride1, %stride2, %stride3) : (buffer, index, index, index, index, index, index, index, f32, f32, index, index, index, index) -> (f32)
+    view.store %value, %output_view[%linear] : f32, view<[%count]xf32>
+  }
+  kernel.return
+}

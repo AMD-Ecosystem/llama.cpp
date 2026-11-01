@@ -63,6 +63,60 @@ inline bool build_rope_frequency_table(const RopeParams & params, int64_t n_dims
     return true;
 }
 
+// Vision restarts theta at each section, but YaRN still uses the full-head pair index.
+inline bool build_vision_rope_frequency_table(const RopeParams & params, int64_t head_size, RopeFrequencyTable & table) {
+    const int64_t n_dims = params.n_dims;
+    const int64_t section_count = static_cast<int64_t>(params.sections[0]) + params.sections[1] + params.sections[2] + params.sections[3];
+    const bool has_position_section = params.sections[0] > 0 || params.sections[1] > 0 || params.sections[2] > 0;
+    const bool valid_dimensions = n_dims > 0 && n_dims == head_size / 2 && head_size % 4 == 0;
+    const bool valid_sections = has_position_section && section_count <= head_size;
+    const bool valid_frequency = params.freq_base > 0.0f && std::isfinite(params.freq_base) &&
+                                 params.freq_scale > 0.0f && std::isfinite(params.freq_scale);
+    const bool valid_scaling = std::isfinite(params.ext_factor) && std::isfinite(params.attn_factor);
+    const bool supported = valid_dimensions && valid_sections && valid_frequency && valid_scaling;
+    if (!supported) {
+        return false;
+    }
+    for (int section : params.sections) {
+        if (section < 0) {
+            return false;
+        }
+    }
+
+    float corr_dims[2] = { 0.0f, 0.0f };
+    rope_yarn_corr_dims(static_cast<int>(n_dims), params.n_ctx_orig, params.freq_base, params.beta_fast, params.beta_slow, corr_dims);
+    table.mscale = params.attn_factor;
+    if (params.ext_factor != 0.0f) {
+        table.mscale *= 1.0f + 0.1f * std::log(1.0f / params.freq_scale);
+    }
+
+    table.data.resize(static_cast<size_t>(head_size / 2) * sizeof(float));
+    const float theta_scale = std::pow(params.freq_base, -2.0f / static_cast<float>(n_dims));
+    int64_t section_end = params.sections[0];
+    int section = 0;
+    float theta = 1.0f;
+    for (int64_t pair = 0; pair < head_size / 2; ++pair) {
+        const int64_t sector = pair % section_count;
+        if (sector == 0) {
+            section = 0;
+            section_end = params.sections[0];
+            theta = 1.0f;
+        }
+        while (section < GGML_MROPE_SECTIONS - 1) {
+            if (sector < section_end) {
+                break;
+            }
+            section_end += params.sections[++section];
+            theta = 1.0f;
+        }
+        const float ramp_mix = rope_yarn_ramp(corr_dims[0], corr_dims[1], 2 * pair) * params.ext_factor;
+        const float frequency = params.freq_scale * theta * (1.0f - ramp_mix) + theta * ramp_mix;
+        std::memcpy(table.data.data() + static_cast<size_t>(pair) * sizeof(float), &frequency, sizeof(frequency));
+        theta *= theta_scale;
+    }
+    return true;
+}
+
 inline std::string rope_mscale_config_value(float value) {
     char buffer[64];
     std::snprintf(buffer, sizeof(buffer), "%.9g", static_cast<double>(value));

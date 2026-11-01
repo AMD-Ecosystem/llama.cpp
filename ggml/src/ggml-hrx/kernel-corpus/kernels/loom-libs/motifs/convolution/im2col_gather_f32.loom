@@ -1,0 +1,54 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+func.def inline @ggml_im2col_source_index(%linear: index, %kernel_width: index, %kernel_height: index, %channels: index, %output_width: index, %output_height: index, %input_width: index, %input_height: index, %channel_stride: index, %batch_stride: index, %stride_x: index, %stride_y: index, %pad_x: index, %pad_y: index, %dilation_x: index, %dilation_y: index) -> (index, i1) {
+  %kernel_area = index.mul %kernel_width, %kernel_height : index
+  %patch_width = index.mul %kernel_area, %channels : index
+  %patch = index.div %linear, %patch_width : index
+  %kernel_element = index.rem %linear, %patch_width : index
+  %kernel_x = index.rem %kernel_element, %kernel_width : index
+  %kernel_y0 = index.div %kernel_element, %kernel_width : index
+  %kernel_y = index.rem %kernel_y0, %kernel_height : index
+  %channel = index.div %kernel_element, %kernel_area : index
+  %output_area = index.mul %output_width, %output_height : index
+  %batch = index.div %patch, %output_area : index
+  %patch_in_batch = index.rem %patch, %output_area : index
+  %output_x = index.rem %patch_in_batch, %output_width : index
+  %output_y = index.div %patch_in_batch, %output_width : index
+  %dilated_x = index.mul %kernel_x, %dilation_x : index
+  %input_x1 = index.madd %output_x, %stride_x, %dilated_x : index
+  %dilated_y = index.mul %kernel_y, %dilation_y : index
+  %input_y2 = index.madd %output_y, %stride_y, %dilated_y : index
+  %input_x = index.sub %input_x1, %pad_x : index
+  %input_y = index.sub %input_y2, %pad_y : index
+  %zero = index.constant 0 : index
+  %x_nonnegative = index.cmp sge, %input_x, %zero : index
+  %y_nonnegative = index.cmp sge, %input_y, %zero : index
+  %x_in_range = index.cmp slt, %input_x, %input_width : index
+  %y_in_range = index.cmp slt, %input_y, %input_height : index
+  %valid_x = scalar.andi %x_nonnegative, %x_in_range : i1
+  %valid_y = scalar.andi %y_nonnegative, %y_in_range : i1
+  %valid = scalar.andi %valid_x, %valid_y : i1
+  %batch_base = index.mul %batch, %batch_stride : index
+  %channel_base = index.mul %channel, %channel_stride : index
+  %row_base = index.mul %input_y, %input_width : index
+  %base0 = index.add %batch_base, %channel_base : index
+  %base1 = index.add %base0, %row_base : index
+  %source_index = index.add %base1, %input_x : index
+  func.return %source_index, %valid : index, i1
+}
+
+func.def inline @ggml_im2col_gather_f32(%linear: index, %kernel_width: index, %kernel_height: index, %channels: index, %output_width: index, %output_height: index, %input_width: index, %input_height: index, %channel_stride: index, %batch_stride: index, %stride_x: index, %stride_y: index, %pad_x: index, %pad_y: index, %dilation_x: index, %dilation_y: index, %source_span: index, %source: buffer) -> (f32) {
+  %source_index, %valid = func.call pure @ggml_im2col_source_index(%linear, %kernel_width, %kernel_height, %channels, %output_width, %output_height, %input_width, %input_height, %channel_stride, %batch_stride, %stride_x, %stride_y, %pad_x, %pad_y, %dilation_x, %dilation_y) : (index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index) -> (index, i1)
+  %value = scf.if %valid -> (f32) {
+    %bounded_index, %bounded_span = index.assume %source_index, %source_span [range(%source_index, 0, 1073741823), lt(%source_index, %source_span)] : index, index
+    %zero = index.constant 0 : offset
+    %source_view = buffer.view %source[%zero] : buffer -> view<[%bounded_span]xf32>
+    %loaded = view.load %source_view[%bounded_index] : view<[%bounded_span]xf32> -> f32
+    scf.yield %loaded : f32
+  } else {
+    %zero = scalar.constant 0.0 : f32
+    scf.yield %zero : f32
+  }
+  func.return %value : f32
+}

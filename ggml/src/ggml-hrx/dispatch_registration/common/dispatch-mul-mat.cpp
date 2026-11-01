@@ -8,6 +8,7 @@
 #include "iq-codebook-resource.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
@@ -1828,6 +1829,23 @@ static bool build_mul_mat_postops_dispatch(const DispatchMatchContext & context,
     if (match.requires_q8_activation && !pack_q4 && !pack_q6) {
         return false;
     }
+    const bool tiled_postops = common_mul_mat_postops_is_tiled_route(match);
+    const bool unpacked_activation = !pack_q4 && !pack_q6;
+    if (tiled_postops && unpacked_activation) {
+        const size_t f16_activation_bytes =
+            static_cast<size_t>(match.token_count * match.input_size) * sizeof(ggml_fp16_t);
+        const CommandPlanAlternateValue * f16_activation =
+            find_alternate_value(context.graph, context.plan, match.input->id, GGML_TYPE_F16,
+                                 f16_activation_bytes);
+        const bool is_attention_publication =
+            f16_activation != nullptr && f16_activation->name == "common.flash_attention.f16";
+        const bool is_bf16_projection = match.weight->type == GGML_TYPE_BF16;
+        if (is_attention_publication && is_bf16_projection) {
+            activation = { f16_activation->alternate_value, 0, f16_activation_bytes };
+            dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.activation_format",
+                                                       std::to_string(GGML_TYPE_F16));
+        }
+    }
     const CommonMulMatWeightFormat format = pack_q4 ? CommonMulMatWeightFormat::Q4KRow64 :
                                             pack_q6 ? CommonMulMatWeightFormat::Q6KRow64 :
                                                       match.weight_format;
@@ -2014,6 +2032,55 @@ static bool match_tiled_mul_mat_dispatch(const DispatchMatchContext & context, D
     return build_mul_mat_dispatch(context, match, dispatch_match);
 }
 
+// Reuse the bounded tiled kernel over consecutive rows when an image produces
+// more tokens than one launch can address. Each slice has its own buffer view,
+// so the kernel's local token indexing also writes the correct output rows.
+static bool match_long_bf16_mul_mat_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
+    constexpr int64_t kTokensPerDispatch = 2048;
+    const CommonMulMatMatch match = common_match_mul_mat_any_format(
+        context.graph, context.root_node, kMulMatTiledF32F32Kernel, false, true);
+    const bool has_match = match.matched();
+    const bool exceeds_single_launch = match.token_count > kTokensPerDispatch;
+    const bool is_long = has_match && exceeds_single_launch;
+    if (!is_long) {
+        return false;
+    }
+
+    const int64_t weight_format = common_mul_mat_format_config_value(match.weight_format);
+    for (int64_t first_token = 0; first_token < match.token_count; first_token += kTokensPerDispatch) {
+        const int64_t remaining_tokens = match.token_count - first_token;
+        const int64_t slice_tokens = std::min(remaining_tokens, kTokensPerDispatch);
+        const size_t input_offset = static_cast<size_t>(first_token * match.input_size) * sizeof(float);
+        const size_t input_bytes = static_cast<size_t>(slice_tokens * match.input_size) * sizeof(float);
+        const size_t output_offset = static_cast<size_t>(first_token * match.output_size) * sizeof(float);
+        const size_t output_bytes = static_cast<size_t>(slice_tokens * match.output_size) * sizeof(float);
+        const bool aligned_tokens = slice_tokens % 32 == 0;
+
+        Dispatch dispatch;
+        dispatch.kernel = make_kernel_specialization(
+            aligned_tokens ? kMulMatTiledAlignedF32F32Kernel : kMulMatTiledF32F32Kernel);
+        if (aligned_tokens) {
+            dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
+        } else {
+            dispatch.kernel.compile_parameters.emplace("ggml.workload.token_capacity",
+                                                       common_to_config_value(slice_tokens));
+        }
+        dispatch.kernel.integer_parameters.emplace("token_count", slice_tokens);
+        dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.input_size", common_to_config_value(match.input_size));
+        dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.output_size", common_to_config_value(match.output_size));
+        dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.weight_format", common_to_config_value(weight_format));
+        dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.output_accumulation", "0");
+        dispatch.kernel.compile_parameters.emplace(
+            "ggml.mul_mat.output_unary_op", std::to_string(unary_kind_config_value(UnaryKind::Identity)));
+        dispatch.bindings.push_back({ match.input->id, input_offset, input_bytes });
+        dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
+        dispatch.bindings.push_back({ match.output->id, output_offset, output_bytes });
+        dispatch_match.dispatches.push_back(std::move(dispatch));
+    }
+    dispatch_match.covered_nodes.push_back(context.root_index);
+    return true;
+}
+
 static bool match_skinny_mul_mat_unary_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     CommonMulMatMatch match =
         common_match_mul_mat_any_format(context.graph, context.root_node, kMulMatSkinnyF32F32Kernel, false);
@@ -2090,6 +2157,14 @@ static bool match_decode_mul_mat_add_dispatch(const DispatchMatchContext & conte
 }
 
 void register_mul_mat_dispatches(DispatchRegistryBuilder & registry) {
+    registry.add({
+        "common.mul_mat.long_bf16_prefill",
+        GGML_OP_MUL_MAT,
+        DispatchMatchKind::SingleOp,
+        83,
+        DispatchSource::Common,
+        match_long_bf16_mul_mat_dispatch,
+    });
     registry.add_activation_consumer({
         "common.mul_mat.input.f16_row.factored_tiled",
         GGML_OP_MUL_MAT,

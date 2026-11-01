@@ -1,8 +1,87 @@
-template.decl @ggml.flash_attention.pv_block_wmma.prefill_full(%old_scale: vector<4xf32>, %current_output0: vector<4xf16>, %current_output1: vector<4xf16>, %current_output2: vector<4xf16>, %current_output3: vector<4xf16>, %group_output_tile_count: index, %output_group_tile_base: index, %output_tile_count: index, %value_head_base: index, %subgroup_product_channel: index, %lane_output_tile: index, %lane_product_channel: index, %query_row0: index, %query_row1: index, %query_row2: index, %query_row3: index, %key_origin: index, %last_full_key_tile_start: index, %bounded_key_value_token_count: index, %value_width: index, %value_row_stride: index, %value_column_stride: index, %value: buffer, %probability_stage: buffer, %product_stage: buffer) -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>)
+config.def @ggml.flash_attention.logical_value_head_size = 0 : index
+config.def @ggml.flash_attention.value_token_stride = 0 : index
+config.def @ggml.flash_attention.value_head_stride = 0 : index
+config.def @ggml.flash_attention.tiled_loaders = 0 : index
+config.decl @ggml.flash_attention.key_value_head_count : %value: index where [range(%value, 1, 64)]
+
+template.decl @ggml.flash_attention.prefill.stage_value(%key_origin: index, %key_head: index, %value_channel_origin: index, %key_token_count: index, %logical_head_size: index, %stage_head_size: index, %value: buffer, %value_stage: buffer)
+
+template.decl @ggml.flash_attention.pv_block_wmma.prefill_full(%old_scale: vector<4xf32>, %current_output0: vector<4xf16>, %current_output1: vector<4xf16>, %current_output2: vector<4xf16>, %current_output3: vector<4xf16>, %group_output_tile_count: index, %output_group_tile_base: index, %output_tile_count: index, %value_head_base: index, %subgroup_product_channel: index, %lane_output_tile: index, %lane_product_channel: index, %query_row0: index, %query_row1: index, %query_row2: index, %query_row3: index, %key_origin: index, %last_full_key_tile_start: index, %bounded_key_value_token_count: index, %value_width: index, %value_row_stride: index, %value_column_stride: index, %value: buffer, %probability_stage: buffer, %product_stage: buffer, %key_value_stage: buffer, %stage_head_size: index, %key_value_head: index, %logical_value_size: index) -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>)
 
 template.decl @ggml.flash_attention.pv_block_wmma.prefill_tail(%old_scale: vector<4xf32>, %current_output0: vector<4xf16>, %current_output1: vector<4xf16>, %current_output2: vector<4xf16>, %current_output3: vector<4xf16>, %group_output_tile_count: index, %subgroup_product_channel: index, %lane_output_tile: index, %lane_product_channel: index, %query_row0: index, %query_row1: index, %query_row2: index, %query_row3: index, %tail_stage_head_size: index, %tail_key_value_stage: buffer, %probability_stage: buffer, %product_stage: buffer) -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>)
 
-template.def<@ggml.flash_attention.pv_block_wmma.prefill_full> device @ggml_flash_attention_pv_block_wmma_prefill_full(%old_scale: vector<4xf32>, %current_output0: vector<4xf16>, %current_output1: vector<4xf16>, %current_output2: vector<4xf16>, %current_output3: vector<4xf16>, %group_output_tile_count: index, %output_group_tile_base: index, %output_tile_count: index, %value_head_base: index, %subgroup_product_channel: index, %lane_output_tile: index, %lane_product_channel: index, %query_row0: index, %query_row1: index, %query_row2: index, %query_row3: index, %key_origin: index, %last_full_key_tile_start: index, %bounded_key_value_token_count: index, %value_width: index, %value_row_stride: index, %value_column_stride: index, %value: buffer, %probability_stage: buffer, %product_stage: buffer) -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) {
+template.def<@ggml.flash_attention.prefill.stage_value> device @ggml_flash_attention_prefill_stage_value(%key_origin: index, %key_head: index, %value_channel_origin: index, %key_token_count: index, %logical_head_size: index, %stage_head_size: index, %value: buffer, %value_stage: buffer) {
+  %key_value_head_count = config.get @ggml.flash_attention.key_value_head_count : index
+  %token_stride0 = config.get @ggml.flash_attention.value_token_stride : index
+  %head_stride0 = config.get @ggml.flash_attention.value_head_stride : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c64 = index.constant 64 : index
+  %c256 = index.constant 256 : index
+  %c0_offset = index.constant 0 : offset
+  %c0_f16 = scalar.constant 0.0 : f16
+  %default_token_stride = index.mul %key_value_head_count, %logical_head_size : index
+  %has_token_stride = index.cmp ne, %token_stride0, %c0 : index
+  %has_head_stride = index.cmp ne, %head_stride0, %c0 : index
+  %token_stride = scf.select %has_token_stride, %token_stride0, %default_token_stride : index
+  %head_stride = scf.select %has_head_stride, %head_stride0, %logical_head_size : index
+  %layout = encoding.layout.strided [%token_stride, %head_stride, 1] : encoding<layout>
+  %value_view = buffer.view %value[%c0_offset] : buffer -> view<[%key_token_count]x[%key_value_head_count]x[%logical_head_size]xf16, %layout>
+  %stage_view = buffer.view %value_stage[%c0_offset] : buffer -> view<64x[%stage_head_size]xf16>
+  %workitem = kernel.workitem.id<x> : index
+  %element_count = index.mul %c64, %stage_head_size : index
+  %iteration_count = index.div %element_count, %c256 : index
+  scf.for %iteration = [%c0 to %iteration_count step %c1] unroll {
+    %linear = index.madd %iteration, %c256, %workitem : index
+    %row = index.div %linear, %stage_head_size : index
+    %channel = index.rem %linear, %stage_head_size : index
+    %token = index.add %key_origin, %row : index
+    %value_channel = index.add %value_channel_origin, %channel : index
+    %row_valid = index.cmp ult, %token, %key_token_count : index
+    %tile_channel_valid = index.cmp ult, %channel, %c64 : index
+    %value_channel_valid = index.cmp ult, %value_channel, %logical_head_size : index
+    %load_row_channel = scalar.andi %row_valid, %tile_channel_valid : i1
+    %load = scalar.andi %load_row_channel, %value_channel_valid : i1
+    %element = scf.if %load -> (f16) {
+      %loaded = view.load %value_view[%token, %key_head, %value_channel] : view<[%key_token_count]x[%key_value_head_count]x[%logical_head_size]xf16, %layout> -> f16
+      scf.yield %loaded : f16
+    } else {
+      scf.yield %c0_f16 : f16
+    }
+    view.store %element, %stage_view[%row, %channel] : f16, view<64x[%stage_head_size]xf16>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  template.return
+}
+
+template.decl @ggml.flash_attention.prefill.product_tile(%key_origin: index, %last_full_key_tile_start: index, %key_value_token_count: index, %value_width: index, %value_row_stride: index, %value_column_stride: index, %value_channel: index, %value: buffer, %probability_stage: buffer) -> (vector<8xf16>)
+
+template.def<@ggml.flash_attention.prefill.product_tile> device @ggml_flash_attention_prefill_product_tile(%key_origin: index, %last_full_key_tile_start: index, %key_value_token_count: index, %value_width: index, %value_row_stride: index, %value_column_stride: index, %value_channel: index, %value: buffer, %probability_stage: buffer) -> (vector<8xf16>) {
+  %c0 = index.constant 0 : index
+  %c16 = index.constant 16 : index
+  %c64 = index.constant 64 : index
+  %c0_offset = index.constant 0 : offset
+  %m = index.constant 16 : index
+  %n = index.constant 16 : index
+  %k = index.constant 16 : index
+  %zero = vector.constant 0.0 : vector<8xf16>
+  %probability_layout = encoding.layout.strided [72, 1] : encoding<layout>
+  %value_layout = encoding.layout.strided [%value_row_stride, %value_column_stride] : encoding<layout>
+  %probability_view = buffer.view %probability_stage[%c0_offset] : buffer -> view<16x64xf16, %probability_layout>
+  %value_view = buffer.view %value[%c0_offset] : buffer -> view<[%key_value_token_count]x[%value_width]xf16, %value_layout>
+  %init = vector.fragment<init> %zero shape [%m, %n] : vector<8xf16>
+  %product = scf.for %key_tile = [%c0 to %c64 step %c16](%accumulator = %init : vector<8xf16>) -> (vector<8xf16>) unroll schedule(recurrence) {
+    %token0 = index.add %key_origin, %key_tile : index
+    %token = index.assume %token0 [lt(%token0, %last_full_key_tile_start)] : index
+    %probability_fragment = vector.fragment.load<lhs> %probability_view[%c0, %key_tile] shape [%m, %k] : view<16x64xf16, %probability_layout> -> vector<16xf16>
+    %value_fragment = vector.fragment.load<rhs> %value_view[%token, %value_channel] shape [%k, %n] : view<[%key_value_token_count]x[%value_width]xf16, %value_layout> -> vector<16xf16>
+    %next = vector.mma %probability_fragment, %value_fragment, %accumulator : vector<16xf16>, vector<16xf16>, vector<8xf16>
+    scf.yield %next : vector<8xf16>
+  }
+  template.return %product : vector<8xf16>
+}
+
+template.def<@ggml.flash_attention.pv_block_wmma.prefill_full> device @ggml_flash_attention_pv_block_wmma_prefill_full(%old_scale: vector<4xf32>, %current_output0: vector<4xf16>, %current_output1: vector<4xf16>, %current_output2: vector<4xf16>, %current_output3: vector<4xf16>, %group_output_tile_count: index, %output_group_tile_base: index, %output_tile_count: index, %value_head_base: index, %subgroup_product_channel: index, %lane_output_tile: index, %lane_product_channel: index, %query_row0: index, %query_row1: index, %query_row2: index, %query_row3: index, %key_origin: index, %last_full_key_tile_start: index, %bounded_key_value_token_count: index, %value_width: index, %value_row_stride: index, %value_column_stride: index, %value: buffer, %probability_stage: buffer, %product_stage: buffer, %key_value_stage: buffer, %stage_head_size: index, %key_value_head: index, %logical_value_size: index) -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) {
   %c0 = index.constant 0 : index
   %c1 = index.constant 1 : index
   %c4 = index.constant 4 : index
@@ -14,6 +93,8 @@ template.def<@ggml.flash_attention.pv_block_wmma.prefill_full> device @ggml_flas
   %n = index.constant 16 : index
   %k = index.constant 16 : index
   %probability_layout = encoding.layout.strided [72, 1] : encoding<layout>
+  %tiled_loaders_index = config.get @ggml.flash_attention.tiled_loaders : index
+  %tiled_loaders = index.cmp ne, %tiled_loaders_index, %c0 : index
   %value_layout = encoding.layout.strided [%value_row_stride, %value_column_stride] : encoding<layout>
   %value_view = buffer.view %value[%c0_offset] : buffer -> view<[%bounded_key_value_token_count]x[%value_width]xf16, %value_layout>
   %probability_stage_view = buffer.view %probability_stage[%c0_offset] : buffer -> view<16x64xf16, %probability_layout>
@@ -39,14 +120,14 @@ template.def<@ggml.flash_attention.pv_block_wmma.prefill_full> device @ggml_flas
       %output_tile_channel = index.mul %global_output_tile, %c64 : index
       %value_channel0 = index.add %value_head_base, %output_tile_channel : index
       %value_channel = index.add %value_channel0, %subgroup_product_channel : index
-      %product_init = vector.fragment<init> %c0_f16x8 shape [%m, %n] : vector<8xf16>
-      %product_fragment = scf.for %key_tile = [%c0 to %c64 step %c16](%product_accumulator = %product_init : vector<8xf16>) -> (vector<8xf16>) unroll schedule(recurrence) {
-        %value_token0 = index.add %key_origin, %key_tile : index
-        %value_token = index.assume %value_token0 [lt(%value_token0, %last_full_key_tile_start)] : index
-        %probability_fragment = vector.fragment.load<lhs> %probability_stage_view[%c0, %key_tile] shape [%m, %k] : view<16x64xf16, %probability_layout> -> vector<16xf16>
-        %value_fragment = vector.fragment.load<rhs> %value_view[%value_token, %value_channel] shape [%k, %n] : view<[%bounded_key_value_token_count]x[%value_width]xf16, %value_layout> -> vector<16xf16>
-        %next_product_accumulator = vector.mma %probability_fragment, %value_fragment, %product_accumulator : vector<16xf16>, vector<16xf16>, vector<8xf16>
-        scf.yield %next_product_accumulator : vector<8xf16>
+      %product_fragment = scf.if %tiled_loaders -> (vector<8xf16>) {
+        template.apply<@ggml.flash_attention.prefill.stage_value>(%key_origin, %key_value_head, %output_tile_channel, %bounded_key_value_token_count, %logical_value_size, %stage_head_size, %value, %key_value_stage) : (index, index, index, index, index, index, buffer, buffer)
+        %stage_last_full_start = index.constant 49 : index
+        %staged_product = template.apply<@ggml.flash_attention.prefill.product_tile>(%c0, %stage_last_full_start, %c64, %stage_head_size, %stage_head_size, %c1, %subgroup_product_channel, %key_value_stage, %probability_stage) : (index, index, index, index, index, index, index, buffer, buffer) -> (vector<8xf16>)
+        scf.yield %staged_product : vector<8xf16>
+      } else {
+        %direct_product = template.apply<@ggml.flash_attention.prefill.product_tile>(%key_origin, %last_full_key_tile_start, %bounded_key_value_token_count, %value_width, %value_row_stride, %value_column_stride, %value_channel, %value, %probability_stage) : (index, index, index, index, index, index, index, buffer, buffer) -> (vector<8xf16>)
+        scf.yield %direct_product : vector<8xf16>
       }
       vector.fragment.store<result> %product_fragment, %product_stage_view[%c0, %subgroup_product_channel] shape [%m, %n] : vector<8xf16>, view<16x64xf16>
       kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)

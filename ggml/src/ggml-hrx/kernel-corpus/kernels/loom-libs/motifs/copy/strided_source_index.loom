@@ -1,0 +1,21 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.copy.strided_source.index(%linear: index, %n0: index, %n1: index, %n2: index, %s0: index, %s1: index, %s2: index, %s3: index) -> (index)
+
+template.def<@ggml.copy.strided_source.index> device @ggml_copy_strided_source_index(%linear: index, %n0: index, %n1: index, %n2: index, %s0: index, %s1: index, %s2: index, %s3: index) -> (index) {
+  %coord0 = index.rem %linear, %n0 : index
+  %remaining0 = index.div %linear, %n0 : index
+  %coord1 = index.rem %remaining0, %n1 : index
+  %remaining1 = index.div %remaining0, %n1 : index
+  %coord2 = index.rem %remaining1, %n2 : index
+  %coord3 = index.div %remaining1, %n2 : index
+  %offset0 = index.mul %coord0, %s0 : index
+  %offset1 = index.mul %coord1, %s1 : index
+  %offset2 = index.mul %coord2, %s2 : index
+  %offset3 = index.mul %coord3, %s3 : index
+  %offset01 = index.add %offset0, %offset1 : index
+  %offset23 = index.add %offset2, %offset3 : index
+  %source_index = index.add %offset01, %offset23 : index
+  template.return %source_index : index
+}

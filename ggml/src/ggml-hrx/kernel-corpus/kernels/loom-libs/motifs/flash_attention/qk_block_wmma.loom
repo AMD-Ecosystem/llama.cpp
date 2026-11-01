@@ -9,8 +9,21 @@ config.decl @ggml.flash_attention.value_head_size : %value: index where [range(%
 config.decl @ggml.flash_attention.attention_scale : f32
 
 config.def @ggml.flash_attention.value_layout = 0 : index
+config.def @ggml.flash_attention.logical_qk_head_size = 0 : index
+config.def @ggml.flash_attention.logical_value_head_size = 0 : index
+config.def @ggml.flash_attention.query_token_stride = 0 : index
+config.def @ggml.flash_attention.query_head_stride = 0 : index
+config.def @ggml.flash_attention.key_token_stride = 0 : index
+config.def @ggml.flash_attention.key_head_stride = 0 : index
+config.def @ggml.flash_attention.value_token_stride = 0 : index
+config.def @ggml.flash_attention.value_head_stride = 0 : index
+config.def @ggml.flash_attention.mask_token_stride = 0 : index
+config.def @ggml.flash_attention.has_mask = 1 : index
+config.def @ggml.flash_attention.tiled_loaders = 0 : index
 
 template.decl @ggml.flash_attention.prefill.stage_query(%query_token_count: index, %query_origin: index, %query_head: index, %query_load_iteration_count: index, %query_stage_stride: index, %qk_head_size: index, %attention_scale: f32, %query: buffer, %query_stage: buffer)
+
+template.decl @ggml.flash_attention.prefill.stage_key(%key_origin: index, %key_head: index, %key_token_count: index, %logical_head_size: index, %padded_head_size: index, %key: buffer, %key_stage: buffer)
 
 template.decl @ggml.flash_attention.qk_block_wmma.prefill_full(%bounded_key_value_token_count: index, %key_width: index, %qk_head_size: index, %query_stage_stride: index, %score_key_origin: index, %key_head_base: index, %subgroup_score_column: index, %key: buffer, %query_stage: buffer, %score_stage: buffer)
 
@@ -18,13 +31,13 @@ template.decl @ggml.flash_attention.qk_block_wmma.prefill_tail(%qk_head_size: in
 
 template.decl @ggml.flash_attention.online_softmax.prefill(%masked_scores: vector<4xf32>, %valid: vector<4xi1>, %current_max: vector<4xf32>, %current_sum: vector<4xf32>, %query_row0: index, %query_row1: index, %query_row2: index, %query_row3: index, %lane: index, %probability_stage: buffer) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>)
 
-template.decl @ggml.flash_attention.pv_block_wmma.prefill_full(%old_scale: vector<4xf32>, %current_output0: vector<4xf16>, %current_output1: vector<4xf16>, %current_output2: vector<4xf16>, %current_output3: vector<4xf16>, %group_output_tile_count: index, %output_group_tile_base: index, %output_tile_count: index, %value_head_base: index, %subgroup_product_channel: index, %lane_output_tile: index, %lane_product_channel: index, %query_row0: index, %query_row1: index, %query_row2: index, %query_row3: index, %key_origin: index, %last_full_key_tile_start: index, %bounded_key_value_token_count: index, %value_width: index, %value_row_stride: index, %value_column_stride: index, %value: buffer, %probability_stage: buffer, %product_stage: buffer) -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>)
+template.decl @ggml.flash_attention.pv_block_wmma.prefill_full(%old_scale: vector<4xf32>, %current_output0: vector<4xf16>, %current_output1: vector<4xf16>, %current_output2: vector<4xf16>, %current_output3: vector<4xf16>, %group_output_tile_count: index, %output_group_tile_base: index, %output_tile_count: index, %value_head_base: index, %subgroup_product_channel: index, %lane_output_tile: index, %lane_product_channel: index, %query_row0: index, %query_row1: index, %query_row2: index, %query_row3: index, %key_origin: index, %last_full_key_tile_start: index, %bounded_key_value_token_count: index, %value_width: index, %value_row_stride: index, %value_column_stride: index, %value: buffer, %probability_stage: buffer, %product_stage: buffer, %key_value_stage: buffer, %stage_head_size: index, %key_value_head: index, %logical_value_size: index) -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>)
 
 template.decl @ggml.flash_attention.pv_block_wmma.prefill_tail(%old_scale: vector<4xf32>, %current_output0: vector<4xf16>, %current_output1: vector<4xf16>, %current_output2: vector<4xf16>, %current_output3: vector<4xf16>, %group_output_tile_count: index, %subgroup_product_channel: index, %lane_output_tile: index, %lane_product_channel: index, %query_row0: index, %query_row1: index, %query_row2: index, %query_row3: index, %tail_stage_head_size: index, %tail_key_value_stage: buffer, %probability_stage: buffer, %product_stage: buffer) -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>)
 
-template.decl @ggml.flash_attention.prefill.publish_output(%publish_f16: i1, %query_token_count: index, %query_head_count: index, %value_head_size: index, %lane_has_output: i1, %query_valid0: i1, %query_valid1: i1, %query_valid2: i1, %query_valid3: i1, %query_token0: index, %query_token1: index, %query_token2: index, %query_token3: index, %query_head: index, %lane_output_channel: index, %final_sum: vector<4xf32>, %final_output0: vector<4xf16>, %final_output1: vector<4xf16>, %final_output2: vector<4xf16>, %final_output3: vector<4xf16>, %gate: buffer, %output: buffer, %f16_output: buffer)
+template.decl @ggml.flash_attention.prefill.publish_output(%publish_f16: i1, %publish_f32: i1, %query_token_count: index, %query_head_count: index, %value_head_size: index, %lane_has_output: i1, %query_valid0: i1, %query_valid1: i1, %query_valid2: i1, %query_valid3: i1, %query_token0: index, %query_token1: index, %query_token2: index, %query_token3: index, %query_head: index, %lane_output_channel: index, %final_sum: vector<4xf32>, %final_output0: vector<4xf16>, %final_output1: vector<4xf16>, %final_output2: vector<4xf16>, %final_output3: vector<4xf16>, %gate: buffer, %output: buffer, %f16_output: buffer)
 
-template.decl @ggml.flash_attention.prefill.body(%publish_f16: i1, %query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer, %f16_output: buffer)
+template.decl @ggml.flash_attention.prefill.body(%publish_f16: i1, %publish_f32: i1, %query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer, %f16_output: buffer)
 
 template.def<@ggml.flash_attention.prefill.stage_query> device @ggml_flash_attention_prefill_stage_query(%query_token_count: index, %query_origin: index, %query_head: index, %query_load_iteration_count: index, %query_stage_stride: index, %qk_head_size: index, %attention_scale: f32, %query: buffer, %query_stage: buffer) {
   %query_head_count = config.get @ggml.flash_attention.query_head_count : index
@@ -34,7 +47,18 @@ template.def<@ggml.flash_attention.prefill.stage_query> device @ggml_flash_atten
   %c256 = index.constant 256 : index
   %c0_offset = index.constant 0 : offset
   %c0_f16 = scalar.constant 0.0 : f16
-  %query_view = buffer.view %query[%c0_offset] : buffer -> view<[%query_token_count]x[%query_head_count]x[%qk_head_size]xf32>
+  %logical_head_size0 = config.get @ggml.flash_attention.logical_qk_head_size : index
+  %has_logical_head_size = index.cmp ne, %logical_head_size0, %c0 : index
+  %logical_head_size = scf.select %has_logical_head_size, %logical_head_size0, %qk_head_size : index
+  %query_token_stride0 = config.get @ggml.flash_attention.query_token_stride : index
+  %query_head_stride0 = config.get @ggml.flash_attention.query_head_stride : index
+  %default_query_token_stride = index.mul %query_head_count, %logical_head_size : index
+  %has_query_token_stride = index.cmp ne, %query_token_stride0, %c0 : index
+  %has_query_head_stride = index.cmp ne, %query_head_stride0, %c0 : index
+  %query_token_stride = scf.select %has_query_token_stride, %query_token_stride0, %default_query_token_stride : index
+  %query_head_stride = scf.select %has_query_head_stride, %query_head_stride0, %logical_head_size : index
+  %query_layout = encoding.layout.strided [%query_token_stride, %query_head_stride, 1] : encoding<layout>
+  %query_view = buffer.view %query[%c0_offset] : buffer -> view<[%query_token_count]x[%query_head_count]x[%logical_head_size]xf32, %query_layout>
   %query_stage_view = buffer.view %query_stage[%c0_offset] : buffer -> view<16x[%query_stage_stride]xf16>
   // Scale and truncate Q exactly once. The Vulkan reference does this before
   // entering its KV loop, making QK a native F16 WMMA while retaining F32
@@ -45,8 +69,10 @@ template.def<@ggml.flash_attention.prefill.stage_query> device @ggml_flash_atten
     %query_channel = index.rem %linear, %qk_head_size : index
     %query_token = index.add %query_origin, %local_query_row : index
     %query_valid_load = index.cmp ult, %query_token, %query_token_count : index
-    %query_value = scf.if %query_valid_load -> (f16) {
-      %loaded = view.load %query_view[%query_token, %query_head, %query_channel] : view<[%query_token_count]x[%query_head_count]x[%qk_head_size]xf32> -> f32
+    %query_channel_valid = index.cmp ult, %query_channel, %logical_head_size : index
+    %load_query = scalar.andi %query_valid_load, %query_channel_valid : i1
+    %query_value = scf.if %load_query -> (f16) {
+      %loaded = view.load %query_view[%query_token, %query_head, %query_channel] : view<[%query_token_count]x[%query_head_count]x[%logical_head_size]xf32, %query_layout> -> f32
       %scaled = scalar.mulf<reassoc|nnan|ninf|nsz|contract> %loaded, %attention_scale : f32
       %truncated = scalar.fptrunc %scaled : f32 to f16
       scf.yield %truncated : f16
@@ -55,6 +81,47 @@ template.def<@ggml.flash_attention.prefill.stage_query> device @ggml_flash_atten
     }
     view.store %query_value, %query_stage_view[%local_query_row, %query_channel] : f16, view<16x[%query_stage_stride]xf16>
   }
+  template.return
+}
+
+template.def<@ggml.flash_attention.prefill.stage_key> device @ggml_flash_attention_prefill_stage_key(%key_origin: index, %key_head: index, %key_token_count: index, %logical_head_size: index, %padded_head_size: index, %key: buffer, %key_stage: buffer) {
+  %key_value_head_count = config.get @ggml.flash_attention.key_value_head_count : index
+  %token_stride0 = config.get @ggml.flash_attention.key_token_stride : index
+  %head_stride0 = config.get @ggml.flash_attention.key_head_stride : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c64 = index.constant 64 : index
+  %c256 = index.constant 256 : index
+  %c0_offset = index.constant 0 : offset
+  %c0_f16 = scalar.constant 0.0 : f16
+  %default_token_stride = index.mul %key_value_head_count, %logical_head_size : index
+  %has_token_stride = index.cmp ne, %token_stride0, %c0 : index
+  %has_head_stride = index.cmp ne, %head_stride0, %c0 : index
+  %token_stride = scf.select %has_token_stride, %token_stride0, %default_token_stride : index
+  %head_stride = scf.select %has_head_stride, %head_stride0, %logical_head_size : index
+  %layout = encoding.layout.strided [%token_stride, %head_stride, 1] : encoding<layout>
+  %key_view = buffer.view %key[%c0_offset] : buffer -> view<[%key_token_count]x[%key_value_head_count]x[%logical_head_size]xf16, %layout>
+  %stage_view = buffer.view %key_stage[%c0_offset] : buffer -> view<64x[%padded_head_size]xf16>
+  %workitem = kernel.workitem.id<x> : index
+  %element_count = index.mul %c64, %padded_head_size : index
+  %iteration_count = index.div %element_count, %c256 : index
+  scf.for %iteration = [%c0 to %iteration_count step %c1] unroll {
+    %linear = index.madd %iteration, %c256, %workitem : index
+    %row = index.div %linear, %padded_head_size : index
+    %channel = index.rem %linear, %padded_head_size : index
+    %token = index.add %key_origin, %row : index
+    %row_valid = index.cmp ult, %token, %key_token_count : index
+    %channel_valid = index.cmp ult, %channel, %logical_head_size : index
+    %load = scalar.andi %row_valid, %channel_valid : i1
+    %value = scf.if %load -> (f16) {
+      %loaded = view.load %key_view[%token, %key_head, %channel] : view<[%key_token_count]x[%key_value_head_count]x[%logical_head_size]xf16, %layout> -> f16
+      scf.yield %loaded : f16
+    } else {
+      scf.yield %c0_f16 : f16
+    }
+    view.store %value, %stage_view[%row, %channel] : f16, view<64x[%padded_head_size]xf16>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
   template.return
 }
 
@@ -83,8 +150,8 @@ template.def<@ggml.flash_attention.qk_block_wmma.prefill_full> device @ggml_flas
   template.return
 }
 
-template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_prefill_body(%publish_f16: i1, %query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer, %f16_output: buffer) {
-  %bounded_query_token_count = index.assume %query_token_count [range(%query_token_count, 1, 2048)] : index
+template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_prefill_body(%publish_f16: i1, %publish_f32: i1, %query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer, %f16_output: buffer) {
+  %bounded_query_token_count = index.assume %query_token_count [range(%query_token_count, 1, 3888)] : index
   %bounded_key_value_token_count = index.assume %key_value_token_count [range(%key_value_token_count, 1, 32768)] : index
   %query_head_count = config.get @ggml.flash_attention.query_head_count : index
   %key_value_head_count = config.get @ggml.flash_attention.key_value_head_count : index
@@ -112,6 +179,20 @@ template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_pr
   %c64 = index.constant 64 : index
   %c256 = index.constant 256 : index
   %c0_offset = index.constant 0 : offset
+  %logical_qk_size0 = config.get @ggml.flash_attention.logical_qk_head_size : index
+  %logical_value_size0 = config.get @ggml.flash_attention.logical_value_head_size : index
+  %has_logical_qk_size = index.cmp ne, %logical_qk_size0, %c0 : index
+  %has_logical_value_size = index.cmp ne, %logical_value_size0, %c0 : index
+  %logical_qk_size = scf.select %has_logical_qk_size, %logical_qk_size0, %qk_head_size : index
+  %logical_value_size = scf.select %has_logical_value_size, %logical_value_size0, %value_head_size : index
+  %tiled_loaders_index = config.get @ggml.flash_attention.tiled_loaders : index
+  %tiled_loaders = index.cmp ne, %tiled_loaders_index, %c0 : index
+  %has_mask_index = config.get @ggml.flash_attention.has_mask : index
+  %has_mask = index.cmp ne, %has_mask_index, %c0 : index
+  %mask_stride0 = config.get @ggml.flash_attention.mask_token_stride : index
+  %has_mask_stride = index.cmp ne, %mask_stride0, %c0 : index
+  %mask_stride = scf.select %has_mask_stride, %mask_stride0, %bounded_key_value_token_count : index
+  %mask_layout = encoding.layout.strided [%mask_stride, 1] : encoding<layout>
   %f16_bytes = index.constant 2 : offset
   %score_stage_bytes = index.constant 5120 : offset
   %probability_stage_bytes = index.constant 2304 : offset
@@ -155,7 +236,8 @@ template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_pr
   %tail_value_stage_channel_count = index.min %value_head_size, %c256 : index
   %tail_value_element_count = index.mul %c32, %tail_value_stage_channel_count : index
   %tail_value_load_iteration_count = index.div %tail_value_element_count, %c256 : index
-  %tail_key_value_stage_element_count = index.mul %c32, %tail_stage_head_size : index
+  %tail_stage_row_count = scf.select %tiled_loaders, %c64, %c32 : index
+  %tail_key_value_stage_element_count = index.mul %tail_stage_row_count, %tail_stage_head_size : index
   %tail_key_value_stage_capacity = index.scale %tail_key_value_stage_element_count, %f16_bytes : index, offset -> offset
   %query_origin = index.mul %query_tile, %c16 : index
   %full_key_value_block_count = index.div %bounded_key_value_token_count, %c64 : index
@@ -163,7 +245,8 @@ template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_pr
   %full_key_value_token_count = index.assume %full_key_value_token_count0 [range(%full_key_value_token_count0, 0, 32768), multiple_of(%full_key_value_token_count0, 64)] : index
   %tail_key_value_token_count = index.sub %bounded_key_value_token_count, %full_key_value_token_count : index
   %has_key_value_tail = index.cmp ne, %tail_key_value_token_count, %c0 : index
-  %tail_key_value_stage_bytes = scf.select %has_key_value_tail, %tail_key_value_stage_capacity, %c0_offset : offset
+  %needs_tail_stage = scalar.ori %tiled_loaders, %has_key_value_tail : i1
+  %tail_key_value_stage_bytes = scf.select %needs_tail_stage, %tail_key_value_stage_capacity, %c0_offset : offset
   %subgroup_score_column = index.mul %subgroup, %c16 : index
   %subgroup_query_row = index.mul %subgroup, %c4 : index
   %query_row0 = index.add %subgroup_query_row, %c0 : index
@@ -187,7 +270,7 @@ template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_pr
   %lane_output_channel0 = index.mul %lane, %c4 : index
   %lane_output_channel = index.add %output_group_channel_base, %lane_output_channel0 : index
   %lane_output_end = index.add %lane_output_channel, %c4 : index
-  %lane_has_output = index.cmp ule, %lane_output_end, %value_head_size : index
+  %lane_has_output = index.cmp ule, %lane_output_end, %logical_value_size : index
   // Q and score rows retain padding for their ownership exchanges. Store
   // probabilities query-major with eight spare K columns so native LHS
   // fragments use aligned wide reads instead of scalar transposed loads.
@@ -199,14 +282,31 @@ template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_pr
   %value_aligned = buffer.assume.alignment %value_noalias {minimum_alignment = 16} : buffer
   %mask_aligned = buffer.assume.alignment %mask_noalias {minimum_alignment = 16} : buffer
   %output_aligned = buffer.assume.alignment %output_noalias {minimum_alignment = 16} : buffer
-  %key_view = buffer.view %key_aligned[%c0_offset] : buffer -> view<[%bounded_key_value_token_count]x[%key_width]xf16>
+  %key_token_stride0 = config.get @ggml.flash_attention.key_token_stride : index
+  %key_head_stride0 = config.get @ggml.flash_attention.key_head_stride : index
+  %default_key_token_stride = index.mul %key_value_head_count, %logical_qk_size : index
+  %has_key_token_stride = index.cmp ne, %key_token_stride0, %c0 : index
+  %has_key_head_stride = index.cmp ne, %key_head_stride0, %c0 : index
+  %key_token_stride = scf.select %has_key_token_stride, %key_token_stride0, %default_key_token_stride : index
+  %key_head_stride = scf.select %has_key_head_stride, %key_head_stride0, %logical_qk_size : index
+  %key_layout = encoding.layout.strided [%key_token_stride, %key_head_stride, 1] : encoding<layout>
+  %key_view = buffer.view %key_aligned[%c0_offset] : buffer -> view<[%bounded_key_value_token_count]x[%key_value_head_count]x[%logical_qk_size]xf16, %key_layout>
   %value_layout_tag = config.get @ggml.flash_attention.value_layout : index
   %transposed_value = index.cmp eq, %value_layout_tag, %c1 : index
   %value_row_stride = scf.select %transposed_value, %c1, %value_width : index
   %value_column_stride = scf.select %transposed_value, %bounded_key_value_token_count, %c1 : index
   %value_layout = encoding.layout.strided [%value_row_stride, %value_column_stride] : encoding<layout>
   %value_view = buffer.view %value_aligned[%c0_offset] : buffer -> view<[%bounded_key_value_token_count]x[%value_width]xf16, %value_layout>
-  %mask_view = buffer.view %mask_aligned[%c0_offset] : buffer -> view<[%bounded_query_token_count]x[%bounded_key_value_token_count]xf16>
+  %value_token_stride0 = config.get @ggml.flash_attention.value_token_stride : index
+  %value_head_stride0 = config.get @ggml.flash_attention.value_head_stride : index
+  %default_value_token_stride = index.mul %key_value_head_count, %logical_value_size : index
+  %has_value_token_stride = index.cmp ne, %value_token_stride0, %c0 : index
+  %has_value_head_stride = index.cmp ne, %value_head_stride0, %c0 : index
+  %value_token_stride = scf.select %has_value_token_stride, %value_token_stride0, %default_value_token_stride : index
+  %value_head_stride = scf.select %has_value_head_stride, %value_head_stride0, %logical_value_size : index
+  %input_value_layout = encoding.layout.strided [%value_token_stride, %value_head_stride, 1] : encoding<layout>
+  %input_value_view = buffer.view %value_aligned[%c0_offset] : buffer -> view<[%bounded_key_value_token_count]x[%key_value_head_count]x[%logical_value_size]xf16, %input_value_layout>
+  %mask_view = buffer.view %mask_aligned[%c0_offset] : buffer -> view<[%bounded_query_token_count]x[%bounded_key_value_token_count]xf16, %mask_layout>
   %query_stage = buffer.alloca<workgroup> align(16) %query_stage_bytes : buffer
   %score_stage = buffer.alloca<workgroup> align(16) %score_stage_bytes : buffer
   %probability_stage = buffer.alloca<workgroup> align(16) %probability_stage_bytes : buffer
@@ -228,26 +328,30 @@ template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_pr
     // the Vulkan oracle without requiring its auxiliary compact mask buffer.
     %key_token0 = index.add %key_origin, %lane : index
     %key_token = index.assume %key_token0 [lt(%key_token0, %bounded_key_value_token_count)] : index
-    %mask0 = scf.if %query_valid0 -> (f16) {
-      %value = view.load %mask_view[%query_token0, %key_token] : view<[%bounded_query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
+    %load_mask0 = scalar.andi %query_valid0, %has_mask : i1
+    %mask0 = scf.if %load_mask0 -> (f16) {
+      %value = view.load %mask_view[%query_token0, %key_token] : view<[%bounded_query_token_count]x[%bounded_key_value_token_count]xf16, %mask_layout> -> f16
       scf.yield %value : f16
     } else {
       scf.yield %c0_f16 : f16
     }
-    %mask1 = scf.if %query_valid1 -> (f16) {
-      %value = view.load %mask_view[%query_token1, %key_token] : view<[%bounded_query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
+    %load_mask1 = scalar.andi %query_valid1, %has_mask : i1
+    %mask1 = scf.if %load_mask1 -> (f16) {
+      %value = view.load %mask_view[%query_token1, %key_token] : view<[%bounded_query_token_count]x[%bounded_key_value_token_count]xf16, %mask_layout> -> f16
       scf.yield %value : f16
     } else {
       scf.yield %c0_f16 : f16
     }
-    %mask2 = scf.if %query_valid2 -> (f16) {
-      %value = view.load %mask_view[%query_token2, %key_token] : view<[%bounded_query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
+    %load_mask2 = scalar.andi %query_valid2, %has_mask : i1
+    %mask2 = scf.if %load_mask2 -> (f16) {
+      %value = view.load %mask_view[%query_token2, %key_token] : view<[%bounded_query_token_count]x[%bounded_key_value_token_count]xf16, %mask_layout> -> f16
       scf.yield %value : f16
     } else {
       scf.yield %c0_f16 : f16
     }
-    %mask3 = scf.if %query_valid3 -> (f16) {
-      %value = view.load %mask_view[%query_token3, %key_token] : view<[%bounded_query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
+    %load_mask3 = scalar.andi %query_valid3, %has_mask : i1
+    %mask3 = scf.if %load_mask3 -> (f16) {
+      %value = view.load %mask_view[%query_token3, %key_token] : view<[%bounded_query_token_count]x[%bounded_key_value_token_count]xf16, %mask_layout> -> f16
       scf.yield %value : f16
     } else {
       scf.yield %c0_f16 : f16
@@ -270,7 +374,13 @@ template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_pr
       %score_key_origin0 = index.add %key_origin, %subgroup_score_column : index
       %last_full_key_tile_start = index.sub %bounded_key_value_token_count, %c15 : index
       %score_key_origin = index.assume %score_key_origin0 [lt(%score_key_origin0, %last_full_key_tile_start)] : index
-      template.apply<@ggml.flash_attention.qk_block_wmma.prefill_full>(%bounded_key_value_token_count, %key_width, %qk_head_size, %query_stage_stride, %score_key_origin, %key_head_base, %subgroup_score_column, %key_aligned, %query_stage, %score_stage) : (index, index, index, index, index, index, index, buffer, buffer, buffer)
+      %qk_key, %qk_token_count, %qk_key_width, %qk_key_origin, %qk_head_base = scf.if %tiled_loaders -> (buffer, index, index, index, index) {
+        template.apply<@ggml.flash_attention.prefill.stage_key>(%key_origin, %key_value_head, %bounded_key_value_token_count, %logical_qk_size, %tail_stage_head_size, %key_aligned, %tail_key_value_stage) : (index, index, index, index, index, buffer, buffer)
+        scf.yield %tail_key_value_stage, %c64, %tail_stage_head_size, %subgroup_score_column, %c0 : buffer, index, index, index, index
+      } else {
+        scf.yield %key_aligned, %bounded_key_value_token_count, %key_width, %score_key_origin, %key_head_base : buffer, index, index, index, index
+      }
+      template.apply<@ggml.flash_attention.qk_block_wmma.prefill_full>(%qk_token_count, %qk_key_width, %qk_head_size, %query_stage_stride, %qk_key_origin, %qk_head_base, %subgroup_score_column, %qk_key, %query_stage, %score_stage) : (index, index, index, index, index, index, index, buffer, buffer, buffer)
       // LDS transposes ownership from one 16-column score slice per wave to
       // four complete query rows per wave. Every lane contributes one key
       // column to each of those rows.
@@ -286,7 +396,7 @@ template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_pr
       // Compute the 64-channel tiles in this output group sequentially. This
       // keeps one P*V accumulator live per wave and reuses a 2 KiB exchange
       // tile instead of retaining multiple output groups.
-      %next_output0, %next_output1, %next_output2, %next_output3 = template.apply<@ggml.flash_attention.pv_block_wmma.prefill_full>(%old_scale, %current_output0, %current_output1, %current_output2, %current_output3, %group_output_tile_count, %output_group_tile_base, %output_tile_count, %value_head_base, %subgroup_product_channel, %lane_output_tile, %lane_product_channel, %query_row0, %query_row1, %query_row2, %query_row3, %key_origin, %last_full_key_tile_start, %bounded_key_value_token_count, %value_width, %value_row_stride, %value_column_stride, %value_aligned, %probability_stage, %score_stage) : (vector<4xf32>, vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, buffer, buffer, buffer) -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>)
+      %next_output0, %next_output1, %next_output2, %next_output3 = template.apply<@ggml.flash_attention.pv_block_wmma.prefill_full>(%old_scale, %current_output0, %current_output1, %current_output2, %current_output3, %group_output_tile_count, %output_group_tile_base, %output_tile_count, %value_head_base, %subgroup_product_channel, %lane_output_tile, %lane_product_channel, %query_row0, %query_row1, %query_row2, %query_row3, %key_origin, %last_full_key_tile_start, %bounded_key_value_token_count, %value_width, %value_row_stride, %value_column_stride, %value_aligned, %probability_stage, %score_stage, %tail_key_value_stage, %tail_stage_head_size, %key_value_head, %logical_value_size) : (vector<4xf32>, vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, index, index, index) -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>)
       scf.yield %next_max, %next_sum, %next_output0, %next_output1, %next_output2, %next_output3 : vector<4xf32>, vector<4xf32>, vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
     } else {
       scf.yield %current_max, %current_sum, %current_output0, %current_output1, %current_output2, %current_output3 : vector<4xf32>, vector<4xf32>, vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
@@ -306,12 +416,13 @@ template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_pr
       %linear = index.madd %load_iteration, %c256, %workitem : index
       %tail_key_row = index.div %linear, %qk_head_size : index
       %tail_key_channel = index.rem %linear, %qk_head_size : index
-      %tail_key_valid = index.cmp ult, %tail_key_row, %tail_key_count : index
+      %tail_key_row_valid = index.cmp ult, %tail_key_row, %tail_key_count : index
+      %tail_key_channel_valid = index.cmp ult, %tail_key_channel, %logical_qk_size : index
+      %tail_key_valid = scalar.andi %tail_key_row_valid, %tail_key_channel_valid : i1
       %tail_key_value = scf.if %tail_key_valid -> (f16) {
         %tail_key_token0 = index.add %tail_key_origin, %tail_key_row : index
         %tail_key_token = index.assume %tail_key_token0 [lt(%tail_key_token0, %bounded_key_value_token_count)] : index
-        %global_key_channel = index.add %key_head_base, %tail_key_channel : index
-        %loaded = view.load %key_view[%tail_key_token, %global_key_channel] : view<[%bounded_key_value_token_count]x[%key_width]xf16> -> f16
+        %loaded = view.load %key_view[%tail_key_token, %key_value_head, %tail_key_channel] : view<[%bounded_key_value_token_count]x[%key_value_head_count]x[%logical_qk_size]xf16, %key_layout> -> f16
         scf.yield %loaded : f16
       } else {
         scf.yield %c0_f16 : f16
@@ -333,7 +444,12 @@ template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_pr
     %masked_score0 = scf.if %tail_valid0 -> (f32) {
       %tail_key_token = index.assume %tail_key_token0 [lt(%tail_key_token0, %bounded_key_value_token_count)] : index
       %raw_score = view.load %score_stage_view[%lane, %query_row0] : view<64x20xf32> -> f32
-      %mask_f16 = view.load %mask_view[%query_token0, %tail_key_token] : view<[%bounded_query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
+      %mask_f16 = scf.if %has_mask -> (f16) {
+        %loaded_mask = view.load %mask_view[%query_token0, %tail_key_token] : view<[%bounded_query_token_count]x[%bounded_key_value_token_count]xf16, %mask_layout> -> f16
+        scf.yield %loaded_mask : f16
+      } else {
+        scf.yield %c0_f16 : f16
+      }
       %mask_f32 = scalar.extf %mask_f16 : f16 to f32
       %score = scalar.addf<reassoc|nnan|nsz> %raw_score, %mask_f32 : f32
       scf.yield %score : f32
@@ -343,7 +459,12 @@ template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_pr
     %masked_score1 = scf.if %tail_valid1 -> (f32) {
       %tail_key_token = index.assume %tail_key_token0 [lt(%tail_key_token0, %bounded_key_value_token_count)] : index
       %raw_score = view.load %score_stage_view[%lane, %query_row1] : view<64x20xf32> -> f32
-      %mask_f16 = view.load %mask_view[%query_token1, %tail_key_token] : view<[%bounded_query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
+      %mask_f16 = scf.if %has_mask -> (f16) {
+        %loaded_mask = view.load %mask_view[%query_token1, %tail_key_token] : view<[%bounded_query_token_count]x[%bounded_key_value_token_count]xf16, %mask_layout> -> f16
+        scf.yield %loaded_mask : f16
+      } else {
+        scf.yield %c0_f16 : f16
+      }
       %mask_f32 = scalar.extf %mask_f16 : f16 to f32
       %score = scalar.addf<reassoc|nnan|nsz> %raw_score, %mask_f32 : f32
       scf.yield %score : f32
@@ -353,7 +474,12 @@ template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_pr
     %masked_score2 = scf.if %tail_valid2 -> (f32) {
       %tail_key_token = index.assume %tail_key_token0 [lt(%tail_key_token0, %bounded_key_value_token_count)] : index
       %raw_score = view.load %score_stage_view[%lane, %query_row2] : view<64x20xf32> -> f32
-      %mask_f16 = view.load %mask_view[%query_token2, %tail_key_token] : view<[%bounded_query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
+      %mask_f16 = scf.if %has_mask -> (f16) {
+        %loaded_mask = view.load %mask_view[%query_token2, %tail_key_token] : view<[%bounded_query_token_count]x[%bounded_key_value_token_count]xf16, %mask_layout> -> f16
+        scf.yield %loaded_mask : f16
+      } else {
+        scf.yield %c0_f16 : f16
+      }
       %mask_f32 = scalar.extf %mask_f16 : f16 to f32
       %score = scalar.addf<reassoc|nnan|nsz> %raw_score, %mask_f32 : f32
       scf.yield %score : f32
@@ -363,7 +489,12 @@ template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_pr
     %masked_score3 = scf.if %tail_valid3 -> (f32) {
       %tail_key_token = index.assume %tail_key_token0 [lt(%tail_key_token0, %bounded_key_value_token_count)] : index
       %raw_score = view.load %score_stage_view[%lane, %query_row3] : view<64x20xf32> -> f32
-      %mask_f16 = view.load %mask_view[%query_token3, %tail_key_token] : view<[%bounded_query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
+      %mask_f16 = scf.if %has_mask -> (f16) {
+        %loaded_mask = view.load %mask_view[%query_token3, %tail_key_token] : view<[%bounded_query_token_count]x[%bounded_key_value_token_count]xf16, %mask_layout> -> f16
+        scf.yield %loaded_mask : f16
+      } else {
+        scf.yield %c0_f16 : f16
+      }
       %mask_f32 = scalar.extf %mask_f16 : f16 to f32
       %score = scalar.addf<reassoc|nnan|nsz> %raw_score, %mask_f32 : f32
       scf.yield %score : f32
@@ -382,14 +513,22 @@ template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_pr
       %tail_value_channel = index.rem %linear, %tail_value_stage_channel_count : index
       %tail_value_row_valid = index.cmp ult, %tail_value_row, %tail_key_count : index
       %tail_value_channel_valid = index.cmp ult, %tail_value_channel, %group_output_channel_count : index
-      %tail_value_valid = scalar.andi %tail_value_row_valid, %tail_value_channel_valid : i1
       %output_value_channel = index.add %output_group_channel_base, %tail_value_channel : index
+      %tail_value_logical_valid = index.cmp ult, %output_value_channel, %logical_value_size : index
+      %tail_value_row_channel_valid = scalar.andi %tail_value_row_valid, %tail_value_channel_valid : i1
+      %tail_value_valid = scalar.andi %tail_value_row_channel_valid, %tail_value_logical_valid : i1
       %tail_value = scf.if %tail_value_valid -> (f16) {
         %tail_value_token0 = index.add %tail_key_origin, %tail_value_row : index
         %tail_value_token = index.assume %tail_value_token0 [lt(%tail_value_token0, %bounded_key_value_token_count)] : index
         %global_value_channel0 = index.add %value_head_base, %output_value_channel : index
         %global_value_channel = index.assume %global_value_channel0 [lt(%global_value_channel0, %value_width)] : index
-        %loaded = view.load %value_view[%tail_value_token, %global_value_channel] : view<[%bounded_key_value_token_count]x[%value_width]xf16, %value_layout> -> f16
+        %loaded = scf.if %tiled_loaders -> (f16) {
+          %strided = view.load %input_value_view[%tail_value_token, %key_value_head, %output_value_channel] : view<[%bounded_key_value_token_count]x[%key_value_head_count]x[%logical_value_size]xf16, %input_value_layout> -> f16
+          scf.yield %strided : f16
+        } else {
+          %contiguous = view.load %value_view[%tail_value_token, %global_value_channel] : view<[%bounded_key_value_token_count]x[%value_width]xf16, %value_layout> -> f16
+          scf.yield %contiguous : f16
+        }
         scf.yield %loaded : f16
       } else {
         scf.yield %c0_f16 : f16
@@ -402,7 +541,7 @@ template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_pr
     %next_output0, %next_output1, %next_output2, %next_output3 = template.apply<@ggml.flash_attention.pv_block_wmma.prefill_tail>(%old_scale, %current_output0, %current_output1, %current_output2, %current_output3, %group_output_tile_count, %subgroup_product_channel, %lane_output_tile, %lane_product_channel, %query_row0, %query_row1, %query_row2, %query_row3, %tail_stage_head_size, %tail_key_value_stage, %probability_stage, %score_stage) : (vector<4xf32>, vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>, index, index, index, index, index, index, index, index, index, buffer, buffer, buffer) -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>)
     scf.yield %next_max, %next_sum, %next_output0, %next_output1, %next_output2, %next_output3 : vector<4xf32>, vector<4xf32>, vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
   }
-  template.apply<@ggml.flash_attention.prefill.publish_output>(%publish_f16, %bounded_query_token_count, %query_head_count, %value_head_size, %lane_has_output, %query_valid0, %query_valid1, %query_valid2, %query_valid3, %query_token0, %query_token1, %query_token2, %query_token3, %query_head, %lane_output_channel, %final_sum, %final_output0, %final_output1, %final_output2, %final_output3, %gate, %output_aligned, %f16_output) : (i1, index, index, index, i1, i1, i1, i1, i1, index, index, index, index, index, index, vector<4xf32>, vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>, buffer, buffer, buffer)
+  template.apply<@ggml.flash_attention.prefill.publish_output>(%publish_f16, %publish_f32, %bounded_query_token_count, %query_head_count, %value_head_size, %lane_has_output, %query_valid0, %query_valid1, %query_valid2, %query_valid3, %query_token0, %query_token1, %query_token2, %query_token3, %query_head, %lane_output_channel, %final_sum, %final_output0, %final_output1, %final_output2, %final_output3, %gate, %output_aligned, %f16_output) : (i1, i1, index, index, index, i1, i1, i1, i1, i1, index, index, index, index, index, index, vector<4xf32>, vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>, buffer, buffer, buffer)
   template.return
 }
 

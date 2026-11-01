@@ -20,6 +20,12 @@ static bool rms_norm_params_equivalent(const OpParams & lhs, const OpParams & rh
     return lhs_params != nullptr && rhs_params != nullptr && nearly_equal(lhs_params->eps, rhs_params->eps);
 }
 
+static bool norm_params_equivalent(const OpParams & lhs, const OpParams & rhs) {
+    const NormParams * lhs_params = op_params_as<NormParams>(lhs);
+    const NormParams * rhs_params = op_params_as<NormParams>(rhs);
+    return lhs_params != nullptr && rhs_params != nullptr && nearly_equal(lhs_params->eps, rhs_params->eps);
+}
+
 static bool flash_attn_ext_params_equivalent(const OpParams & lhs, const OpParams & rhs) {
     const FlashAttnExtParams * lhs_params = op_params_as<FlashAttnExtParams>(lhs);
     const FlashAttnExtParams * rhs_params = op_params_as<FlashAttnExtParams>(rhs);
@@ -60,6 +66,21 @@ static bool scale_params_equivalent(const OpParams & lhs, const OpParams & rhs) 
     const ScaleParams * rhs_params = op_params_as<ScaleParams>(rhs);
     return lhs_params != nullptr && rhs_params != nullptr && nearly_equal(lhs_params->scale, rhs_params->scale) &&
            nearly_equal(lhs_params->bias, rhs_params->bias);
+}
+
+static bool im2col_params_equivalent(const OpParams & lhs, const OpParams & rhs) {
+    const Im2ColParams * lhs_params = op_params_as<Im2ColParams>(lhs);
+    const Im2ColParams * rhs_params = op_params_as<Im2ColParams>(rhs);
+    return lhs_params != nullptr && rhs_params != nullptr && lhs_params->stride_x == rhs_params->stride_x &&
+           lhs_params->stride_y == rhs_params->stride_y && lhs_params->pad_x == rhs_params->pad_x &&
+           lhs_params->pad_y == rhs_params->pad_y && lhs_params->dilation_x == rhs_params->dilation_x &&
+           lhs_params->dilation_y == rhs_params->dilation_y && lhs_params->is_2d == rhs_params->is_2d;
+}
+
+static bool upscale_params_equivalent(const OpParams & lhs, const OpParams & rhs) {
+    const UpscaleParams * lhs_params = op_params_as<UpscaleParams>(lhs);
+    const UpscaleParams * rhs_params = op_params_as<UpscaleParams>(rhs);
+    return lhs_params != nullptr && rhs_params != nullptr && lhs_params->mode == rhs_params->mode;
 }
 
 static bool binary_params_equivalent(const OpParams & lhs, const OpParams & rhs) {
@@ -257,6 +278,8 @@ OpParams import_op_params(const ggml_tensor & tensor) {
     }
 
     switch (tensor.op) {
+        case GGML_OP_NORM:
+            return NormParams{ ggml_get_op_params_f32(&tensor, 0) };
         case GGML_OP_RMS_NORM:
         case GGML_OP_L2_NORM:
             return RmsNormParams{ ggml_get_op_params_f32(&tensor, 0) };
@@ -286,6 +309,15 @@ OpParams import_op_params(const ggml_tensor & tensor) {
                 ggml_get_op_params_f32(&tensor, 0),
                 ggml_get_op_params_f32(&tensor, 1),
             };
+        case GGML_OP_IM2COL:
+            return Im2ColParams{
+                ggml_get_op_params_i32(&tensor, 0), ggml_get_op_params_i32(&tensor, 1),
+                ggml_get_op_params_i32(&tensor, 2), ggml_get_op_params_i32(&tensor, 3),
+                ggml_get_op_params_i32(&tensor, 4), ggml_get_op_params_i32(&tensor, 5),
+                ggml_get_op_params_i32(&tensor, 6) == 1,
+            };
+        case GGML_OP_UPSCALE:
+            return UpscaleParams{ static_cast<uint32_t>(ggml_get_op_params_i32(&tensor, 0)) };
         case GGML_OP_ROPE:
             return RopeParams{
                 ggml_get_op_params_i32(&tensor, 1),
@@ -312,6 +344,8 @@ OpParams import_op_params(const ggml_tensor & tensor) {
 
 bool op_params_equivalent(ggml_op op, const OpParams & lhs, const OpParams & rhs) {
     switch (op) {
+        case GGML_OP_NORM:
+            return norm_params_equivalent(lhs, rhs);
         case GGML_OP_RMS_NORM:
         case GGML_OP_L2_NORM:
             return rms_norm_params_equivalent(lhs, rhs);
@@ -327,6 +361,11 @@ bool op_params_equivalent(ggml_op op, const OpParams & lhs, const OpParams & rhs
             return binary_params_equivalent(lhs, rhs) || glu_params_equivalent(lhs, rhs);
         case GGML_OP_SCALE:
             return scale_params_equivalent(lhs, rhs);
+        case GGML_OP_IM2COL:
+            return im2col_params_equivalent(lhs, rhs);
+
+        case GGML_OP_UPSCALE:
+            return upscale_params_equivalent(lhs, rhs);
         case GGML_OP_ADD:
         case GGML_OP_SUB:
         case GGML_OP_MUL:

@@ -32,6 +32,15 @@ static bool tensor_is_external(const ggml_tensor *                              
                                const std::unordered_map<const ggml_tensor *, int> & use_counts,
                                const std::unordered_set<const ggml_tensor *> &      graph_nodes,
                                const ggml_cgraph &                                  graph) {
+    // ggml_cast uses its output as its copy target, so the result needs its ggml allocation.
+    if (tensor != nullptr) {
+        const bool is_copy = tensor->op == GGML_OP_CPY;
+        const bool is_self_target = tensor->src[1] == tensor;
+        const bool is_cast_output = is_copy && is_self_target;
+        if (is_cast_output) {
+            return true;
+        }
+    }
     const ggml_tensor * root = tensor_storage_root(tensor);
     if (root == nullptr || root->op == GGML_OP_NONE || graph_nodes.find(root) == graph_nodes.end()) {
         return true;

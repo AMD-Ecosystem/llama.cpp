@@ -1,5 +1,14 @@
 # HRX Backend
 
+## Flash attention prefill support
+
+Masked prefill with F32 queries and F16 keys and values uses WMMA for Q/K widths
+that are multiples of 16 from 16 through 512, value widths that are multiples
+of 64 from 64 through 512, and dense K/V layouts. The vision width-72 tiled
+path supports masked or unmasked attention with strided tensor views when their
+buffers are 16-byte aligned and disjoint. Other irregular widths, misaligned
+or aliased views, and K/V layouts outside these matchers are unsupported.
+
 ## `hrx-system` backend compatibility
 
 `hrx-minimum-commit.txt` records the minimum required commit in ROCm/hrx-system. It contains one full Git commit SHA. The backend's C++ APIs, Loom syntax, and numerical behavior can all depend on that revision. When `GGML_HRX=ON` and `HRX_SOURCE_DIR` is set, CMake requires the HRX checkout's HEAD to equal or descend from the recorded commit.
