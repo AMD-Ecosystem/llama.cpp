@@ -345,6 +345,14 @@ KernelExecutableRef KernelExecutableCache::get_or_compile(const KernelExecutable
             return ref;
         }
 
+        if (trace_id_ != 0) {
+            request.trace = { trace_id_, 0, compile_trace_next_id() };
+            if (context.trace != nullptr) {
+                request.trace.execution_id = context.trace->ids.execution_id;
+                ++context.trace->compilations;
+            }
+            trace_compile_request(key, definition, dispatch, request);
+        }
         compiled_ref = jit_->compile(key, std::move(request));
         auto entry   = std::make_shared<KernelExecutableCacheEntry>(key, definition, dispatch, compiled_ref);
         cache_.emplace(key, entry);
@@ -404,7 +412,10 @@ std::shared_ptr<KernelExecutable> KernelExecutableCache::materialize(const Kerne
     }
 
     std::string error_message;
-    if (compiled_ref == nullptr || !compiled_ref->resolve()) {
+    const uint64_t waiting_execution_id = context.trace != nullptr ? context.trace->ids.execution_id : 0;
+    const bool has_compilation = compiled_ref != nullptr;
+    const bool compilation_succeeded = has_compilation ? compiled_ref->resolve(waiting_execution_id) : false;
+    if (!compilation_succeeded) {
         error_message = compiled_ref ? compiled_ref->error_message() : "missing compiled kernel";
         GGML_LOG_ERROR("%s: %s\n", __func__, error_message.c_str());
 
@@ -474,6 +485,10 @@ void KernelExecutableCache::clear() {
     cache_.clear();
     jit_.reset();
     target_.clear();
+    if (trace_id_ != 0) {
+        trace_compile_cache_clear(trace_id_);
+        trace_id_ = compile_trace_next_id();
+    }
 }
 
 }  // namespace ggml::hrx
