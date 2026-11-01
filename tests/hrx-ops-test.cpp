@@ -6670,6 +6670,397 @@ static std::string type_name(ggml_type type) {
     return ggml_type_name(type);
 }
 
+struct VisionQkvF16Graph {
+    ggml_context * ctx = nullptr;
+    ggml_cgraph * graph = nullptr;
+    ggml_tensor * input = nullptr;
+    ggml_tensor * weight = nullptr;
+    ggml_tensor * bias = nullptr;
+    ggml_tensor * positions = nullptr;
+    ggml_tensor * projection_row_ids = nullptr;
+    ggml_tensor * rope_row_ids = nullptr;
+    ggml_tensor * projected = nullptr;
+    ggml_tensor * query_rope = nullptr;
+    ggml_tensor * key_rope = nullptr;
+    ggml_tensor * value_permute = nullptr;
+    ggml_tensor * attention_output = nullptr;
+    ggml_tensor * post_weight = nullptr;
+    ggml_tensor * post_bias = nullptr;
+    ggml_tensor * output = nullptr;
+};
+
+static VisionQkvF16Graph build_vision_qkv_f16_graph(int64_t token_count,
+                                                     bool expose_projected = false,
+                                                     bool expose_value_permute = false,
+                                                     bool explicit_value_copy = false,
+                                                     bool mixed_query_fanout = false,
+                                                     bool explicit_f16_roundtrips = false,
+                                                     bool post_attention_projection = false,
+                                                     bool staged_hrx_reference = false) {
+    constexpr int64_t head_size = 72;
+    constexpr int64_t head_count = 4;
+    constexpr int64_t hidden_size = head_size * head_count;
+    constexpr int64_t input_size = 1152;
+    ggml_init_params params = {};
+    params.mem_size = 8 * 1024 * 1024;
+    params.no_alloc = true;
+    VisionQkvF16Graph result;
+    result.ctx = ggml_init(params);
+    REQUIRE(result.ctx != nullptr);
+    result.input = ggml_new_tensor_2d(result.ctx, GGML_TYPE_F32, input_size, token_count);
+    const bool reference_f32_math = explicit_f16_roundtrips && !staged_hrx_reference;
+    result.weight = ggml_new_tensor_2d(result.ctx, reference_f32_math ? GGML_TYPE_F32 : GGML_TYPE_BF16,
+                                        input_size, 3 * hidden_size);
+    result.bias = ggml_new_tensor_1d(result.ctx, GGML_TYPE_F32, 3 * hidden_size);
+    result.positions = ggml_new_tensor_1d(result.ctx, GGML_TYPE_I32, 4 * token_count);
+    ggml_set_input(result.input);
+    ggml_set_input(result.weight);
+    ggml_set_input(result.bias);
+    ggml_set_input(result.positions);
+    ggml_tensor * projection_input = reference_f32_math ?
+        ggml_cast(result.ctx, ggml_cast(result.ctx, result.input, GGML_TYPE_F16), GGML_TYPE_F32) : result.input;
+    result.projected = ggml_add(result.ctx,
+                                ggml_mul_mat(result.ctx, result.weight, projection_input), result.bias);
+    ggml_tensor * section_source = result.projected;
+    if (staged_hrx_reference) {
+        result.projection_row_ids = ggml_new_tensor_1d(result.ctx, GGML_TYPE_I32, token_count);
+        ggml_set_input(result.projection_row_ids);
+        section_source = ggml_get_rows(result.ctx,
+                                       ggml_cast(result.ctx, result.projected, GGML_TYPE_F16),
+                                       result.projection_row_ids);
+    } else if (explicit_f16_roundtrips) {
+        section_source = ggml_cast(result.ctx,
+                                   ggml_cast(result.ctx, result.projected, GGML_TYPE_F16), GGML_TYPE_F32);
+    }
+    const size_t section_bytes = ggml_row_size(GGML_TYPE_F32, hidden_size);
+    ggml_tensor * sections[3] = {};
+    for (int i = 0; i < 3; ++i) {
+        sections[i] = ggml_view_3d(result.ctx, section_source, head_size, head_count, token_count,
+                                   ggml_row_size(GGML_TYPE_F32, head_size), section_source->nb[1],
+                                   static_cast<size_t>(i) * section_bytes);
+    }
+    int rope_sections[4] = { 18, 18, 18, 18 };
+    result.query_rope = ggml_rope_multi(result.ctx, sections[0], result.positions, nullptr, head_size / 2,
+                                        rope_sections, GGML_ROPE_TYPE_VISION, 32768, 10000.0f, 1.0f, 0.0f,
+                                        1.0f, 32.0f, 1.0f);
+    result.key_rope = ggml_rope_multi(result.ctx, sections[1], result.positions, nullptr, head_size / 2,
+                                      rope_sections, GGML_ROPE_TYPE_VISION, 32768, 10000.0f, 1.0f, 0.0f,
+                                      1.0f, 32.0f, 1.0f);
+    ggml_tensor * query_rope = result.query_rope;
+    if (staged_hrx_reference) {
+        result.rope_row_ids = ggml_new_tensor_1d(result.ctx, GGML_TYPE_I32, head_count * token_count);
+        ggml_set_input(result.rope_row_ids);
+        ggml_tensor * rope_f16 = ggml_cast(result.ctx, result.query_rope, GGML_TYPE_F16);
+        ggml_tensor * rope_flat = ggml_reshape_2d(result.ctx, rope_f16, head_size, head_count * token_count);
+        query_rope = ggml_reshape_3d(result.ctx,
+                                      ggml_get_rows(result.ctx, rope_flat, result.rope_row_ids),
+                                      head_size, head_count, token_count);
+    } else if (explicit_f16_roundtrips) {
+        query_rope = ggml_cast(result.ctx,
+                               ggml_cast(result.ctx, result.query_rope, GGML_TYPE_F16), GGML_TYPE_F32);
+    }
+    ggml_tensor * query = ggml_permute(result.ctx, query_rope, 0, 2, 1, 3);
+    ggml_tensor * key_permute = ggml_permute(result.ctx, result.key_rope, 0, 2, 1, 3);
+    result.value_permute = ggml_permute(result.ctx, sections[2], 0, 2, 1, 3);
+    ggml_tensor * key = ggml_cast(result.ctx, key_permute, GGML_TYPE_F16);
+    ggml_tensor * value = nullptr;
+    if (explicit_value_copy) {
+        ggml_tensor * target = ggml_new_tensor_3d(result.ctx, GGML_TYPE_F16, head_size, token_count, head_count);
+        value = ggml_cpy(result.ctx, result.value_permute, target);
+    } else {
+        value = ggml_cast(result.ctx, result.value_permute, GGML_TYPE_F16);
+    }
+    result.attention_output = ggml_flash_attn_ext(result.ctx, query, key, value, nullptr,
+                                                  1.0f / std::sqrt(static_cast<float>(head_size)), 0.0f, 0.0f);
+    ggml_prec_set_acc(result.attention_output, GGML_PREC_F32);
+    result.output = result.attention_output;
+    if (post_attention_projection) {
+        ggml_tensor * flat = ggml_reshape_2d(result.ctx, result.attention_output, hidden_size, token_count);
+        if (explicit_f16_roundtrips) {
+            flat = ggml_cast(result.ctx, ggml_cast(result.ctx, flat, GGML_TYPE_F16), GGML_TYPE_F32);
+        }
+        result.post_weight = ggml_new_tensor_2d(result.ctx,
+                                                reference_f32_math ? GGML_TYPE_F32 : GGML_TYPE_BF16,
+                                                hidden_size, hidden_size);
+        result.post_bias = ggml_new_tensor_1d(result.ctx, GGML_TYPE_F32, hidden_size);
+        ggml_set_input(result.post_weight);
+        ggml_set_input(result.post_bias);
+        result.output = ggml_add(result.ctx, ggml_mul_mat(result.ctx, result.post_weight, flat), result.post_bias);
+    }
+    if (expose_projected) {
+        ggml_set_output(result.projected);
+    }
+    if (expose_value_permute) {
+        ggml_set_output(result.value_permute);
+    }
+    ggml_set_output(result.output);
+    result.graph = ggml_new_graph(result.ctx);
+    REQUIRE(result.graph != nullptr);
+    ggml_build_forward_expand(result.graph, result.output);
+    if (mixed_query_fanout) {
+        ggml_tensor * query_side = ggml_scale(result.ctx, result.query_rope, 0.5f);
+        ggml_set_output(query_side);
+        ggml_build_forward_expand(result.graph, query_side);
+    }
+    return result;
+}
+
+static void run_vision_qkv_f16_schedule_case(int64_t token_count,
+                                              bool expose_projected = false,
+                                              bool expose_value_permute = false,
+                                              bool explicit_value_copy = false,
+                                              bool mixed_query_fanout = false) {
+    VisionQkvF16Graph test = build_vision_qkv_f16_graph(
+        token_count, expose_projected, expose_value_permute, explicit_value_copy, mixed_query_fanout);
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*test.graph);
+    REQUIRE(imported.valid());
+    ggml::hrx::DispatchScheduler scheduler;
+    ggml::hrx::DispatchScheduleDiagnostics diagnostics;
+    REQUIRE(scheduler.schedule_graph(imported.graph, { "gfx1151" }, &diagnostics));
+    const ggml::hrx::CommandPlan & plan = scheduler.plan();
+    REQUIRE(plan.valid());
+    const ggml::hrx::Value * projected = imported.graph.values().find_tensor(test.projected);
+    REQUIRE(projected != nullptr);
+    const bool internal_qkv = !expose_projected && !expose_value_permute && !explicit_value_copy;
+    const size_t f16_bytes = static_cast<size_t>(projected->element_count) * sizeof(ggml_fp16_t);
+    const ggml::hrx::CommandPlanAlternateValue * projected_f16 =
+        plan.metadata.find_alternate_value(projected->id, GGML_TYPE_F16, f16_bytes);
+    REQUIRE((projected_f16 != nullptr) == !explicit_value_copy);
+
+    const ggml::hrx::Dispatch * projection_dispatch = nullptr;
+    const ggml::hrx::Dispatch * attention_dispatch = nullptr;
+    size_t f16_rope_count = 0;
+    size_t dual_rope_count = 0;
+    size_t cast_dispatch_count = 0;
+    for (const ggml::hrx::Dispatch & dispatch : plan.dispatches) {
+        const std::string name = kernel_name_for_id(dispatch.kernel.kernel_id);
+        if (name == "loom_libs:ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32" ||
+            name == "loom_libs:ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32_aligned" ||
+            name == "loom_libs:ggml_mul_mat_tiled_input_f32_bias_residual_publish_vision_f16" ||
+            name == "loom_libs:ggml_mul_mat_tiled_input_f32_bias_residual_publish_vision_f16_aligned") {
+            projection_dispatch = &dispatch;
+        }
+        if (name == "loom_libs:ggml_flash_attention_f32_f16_wmma") {
+            attention_dispatch = &dispatch;
+        }
+        if (name == "loom_libs:ggml_rope_vision_f16_only") {
+            ++f16_rope_count;
+        }
+        if (name == "loom_libs:ggml_rope_vision_f16_dual") {
+            ++dual_rope_count;
+        }
+        if (name == "loom_libs:ggml_copy_strided_source_f32_f16" ||
+            name == "loom_libs:ggml_copy_f32_f16") {
+            ++cast_dispatch_count;
+        }
+    }
+    REQUIRE(projection_dispatch != nullptr);
+    REQUIRE(attention_dispatch != nullptr);
+    const std::string epilogue = projection_dispatch->kernel.compile_parameters.at("ggml.mul_mat_postops.epilogue");
+    REQUIRE(epilogue == (internal_qkv ? "5" : explicit_value_copy ? "1" : "6"));
+    const size_t expected_casts = explicit_value_copy ? 2 :
+        expose_projected || expose_value_permute ? 1 : 0;
+    REQUIRE(cast_dispatch_count == expected_casts);
+    if (internal_qkv) {
+        REQUIRE(f16_rope_count == (mixed_query_fanout ? 1 : 2));
+        REQUIRE(dual_rope_count == (mixed_query_fanout ? 1 : 0));
+        REQUIRE(projection_dispatch->bindings.back().value != projected->id);
+        REQUIRE(attention_dispatch->kernel.compile_parameters.at("ggml.flash_attention.query_format") == "16");
+        REQUIRE(attention_dispatch->kernel.compile_parameters.at("ggml.flash_attention.value_token_stride") == "864");
+        REQUIRE(attention_dispatch->bindings[2].offset == 2 * 288 * sizeof(ggml_fp16_t));
+        for (const ggml::hrx::Dispatch & dispatch : plan.dispatches) {
+            for (const ggml::hrx::DispatchBinding & binding : dispatch.bindings) {
+                REQUIRE(binding.value != projected->id);
+            }
+        }
+    }
+    ggml_free(test.ctx);
+}
+
+static void run_vision_qkv_f16_reference_case(int64_t token_count) {
+    constexpr int64_t input_size = 1152;
+    constexpr int64_t projected_size = 864;
+    constexpr int64_t hidden_size = 288;
+    const bool post_attention_projection = token_count >= 128;
+    ggml_backend_t cpu = init_cpu_backend();
+    ggml_backend_t hrx = ggml_backend_hrx_init(0);
+    REQUIRE(hrx != nullptr);
+    VisionQkvF16Graph reference = build_vision_qkv_f16_graph(
+        token_count, false, false, false, false, true, post_attention_projection);
+    VisionQkvF16Graph fused = build_vision_qkv_f16_graph(
+        token_count, false, false, false, false, false, post_attention_projection);
+    VisionQkvF16Graph staged;
+    if (!post_attention_projection) {
+        staged = build_vision_qkv_f16_graph(token_count, false, false, false, false, true, false, true);
+    }
+    ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(reference.ctx, cpu);
+    ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(fused.ctx, hrx);
+    ggml_backend_buffer_t staged_buffer = staged.ctx != nullptr ? ggml_backend_alloc_ctx_tensors(staged.ctx, hrx) : nullptr;
+    REQUIRE(cpu_buffer != nullptr && hrx_buffer != nullptr);
+    REQUIRE(staged.ctx == nullptr || staged_buffer != nullptr);
+
+    const std::vector<float> input = make_pattern_f32(input_size * token_count, 37, 0.005f);
+    const std::vector<float> weight_f32 = make_pattern_f32(input_size * projected_size, 43, 0.001f);
+    std::vector<ggml_bf16_t> weight(weight_f32.size());
+    for (size_t i = 0; i < weight.size(); ++i) {
+        weight[i] = ggml_fp32_to_bf16(weight_f32[i]);
+    }
+    const std::vector<float> bias = make_pattern_f32(projected_size, 47, 0.001f);
+    const std::vector<int32_t> positions = make_i32_mod_data(4 * token_count, 8);
+    set_tensor_pair_bytes(cpu, reference.input, hrx, fused.input, input.data(), input.size() * sizeof(float));
+    std::vector<float> weight_reference(weight.size());
+    for (size_t i = 0; i < weight.size(); ++i) {
+        weight_reference[i] = ggml_bf16_to_fp32(weight[i]);
+    }
+    set_tensor_bytes(cpu, reference.weight, weight_reference.data(), weight_reference.size() * sizeof(float));
+    set_tensor_bytes(hrx, fused.weight, weight.data(), weight.size() * sizeof(ggml_bf16_t));
+    if (staged.ctx != nullptr) {
+        const std::vector<int32_t> projection_row_ids = make_i32_mod_data(token_count, token_count);
+        const std::vector<int32_t> rope_row_ids = make_i32_mod_data(4 * token_count, 4 * token_count);
+        set_tensor_bytes(hrx, staged.input, input.data(), input.size() * sizeof(float));
+        set_tensor_bytes(hrx, staged.weight, weight.data(), weight.size() * sizeof(ggml_bf16_t));
+        set_tensor_bytes(hrx, staged.bias, bias.data(), bias.size() * sizeof(float));
+        set_tensor_bytes(hrx, staged.positions, positions.data(), positions.size() * sizeof(int32_t));
+        set_tensor_bytes(hrx, staged.projection_row_ids,
+                         projection_row_ids.data(), projection_row_ids.size() * sizeof(int32_t));
+        set_tensor_bytes(hrx, staged.rope_row_ids,
+                         rope_row_ids.data(), rope_row_ids.size() * sizeof(int32_t));
+    }
+    set_tensor_pair_bytes(cpu, reference.bias, hrx, fused.bias, bias.data(), bias.size() * sizeof(float));
+    set_tensor_pair_bytes(cpu, reference.positions, hrx, fused.positions, positions.data(), positions.size() * sizeof(int32_t));
+    if (post_attention_projection) {
+        const std::vector<float> post_weight_f32 = make_pattern_f32(hidden_size * hidden_size, 53, 0.001f);
+        std::vector<ggml_bf16_t> post_weight(post_weight_f32.size());
+        for (size_t i = 0; i < post_weight.size(); ++i) {
+            post_weight[i] = ggml_fp32_to_bf16(post_weight_f32[i]);
+        }
+        const std::vector<float> post_bias = make_pattern_f32(hidden_size, 59, 0.001f);
+        std::vector<float> post_weight_reference(post_weight.size());
+        for (size_t i = 0; i < post_weight.size(); ++i) {
+            post_weight_reference[i] = ggml_bf16_to_fp32(post_weight[i]);
+        }
+        set_tensor_bytes(cpu, reference.post_weight,
+                         post_weight_reference.data(), post_weight_reference.size() * sizeof(float));
+        set_tensor_bytes(hrx, fused.post_weight,
+                         post_weight.data(), post_weight.size() * sizeof(ggml_bf16_t));
+        set_tensor_pair_bytes(cpu, reference.post_bias, hrx, fused.post_bias,
+                              post_bias.data(), post_bias.size() * sizeof(float));
+        const std::vector<std::string> kernels = scheduled_kernel_sequence(fused.graph);
+        REQUIRE(std::find(kernels.begin(), kernels.end(),
+                          "loom_libs:ggml_flash_attention_f32_f16_wmma_f16_only") != kernels.end());
+        const ggml::hrx::KernelSpecialization post_projection = scheduled_kernel_specialization(
+            fused.graph, "loom_libs:ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32_aligned");
+        REQUIRE(post_projection.compile_parameters.at("ggml.mul_mat.activation_format") ==
+                std::to_string(GGML_TYPE_F16));
+    }
+
+    REQUIRE(ggml_backend_graph_compute(cpu, reference.graph) == GGML_STATUS_SUCCESS);
+    REQUIRE(ggml_backend_graph_compute(hrx, fused.graph) == GGML_STATUS_SUCCESS);
+    if (staged.ctx != nullptr) {
+        REQUIRE(ggml_backend_graph_compute(hrx, staged.graph) == GGML_STATUS_SUCCESS);
+    }
+    ggml_backend_synchronize(cpu);
+    ggml_backend_synchronize(hrx);
+    const std::vector<float> actual = get_f32_tensor(hrx, fused.output);
+    const std::vector<float> expected = get_f32_tensor(cpu, reference.output);
+    if (staged.ctx != nullptr) {
+        const std::vector<float> staged_output = get_f32_tensor(hrx, staged.output);
+        REQUIRE(actual.size() == staged_output.size());
+        double squared_stage_error = 0.0;
+        double squared_stage_reference = 0.0;
+        float max_stage_error = 0.0f;
+        for (size_t i = 0; i < actual.size(); ++i) {
+            const float difference = actual[i] - staged_output[i];
+            max_stage_error = std::max(max_stage_error, std::fabs(difference));
+            squared_stage_error += static_cast<double>(difference) * difference;
+            squared_stage_reference += static_cast<double>(staged_output[i]) * staged_output[i];
+        }
+        std::fprintf(stderr, "vision_qkv_f16 staged HRX tokens=%lld max_abs=%g relative_rms=%g\n",
+                     static_cast<long long>(token_count), max_stage_error,
+                     std::sqrt(squared_stage_error / squared_stage_reference));
+        require_close(actual, staged_output, 1.0e-4f);
+    }
+    REQUIRE(actual.size() == expected.size());
+    float max_abs_error = 0.0f;
+    float expected_min = std::numeric_limits<float>::infinity();
+    float expected_max = -std::numeric_limits<float>::infinity();
+    double squared_error = 0.0;
+    double squared_expected = 0.0;
+    for (size_t i = 0; i < actual.size(); ++i) {
+        const float difference = actual[i] - expected[i];
+        max_abs_error = std::max(max_abs_error, std::fabs(difference));
+        expected_min = std::min(expected_min, expected[i]);
+        expected_max = std::max(expected_max, expected[i]);
+        squared_error += static_cast<double>(difference) * difference;
+        squared_expected += static_cast<double>(expected[i]) * expected[i];
+    }
+    const double rms_error = std::sqrt(squared_error / static_cast<double>(actual.size()));
+    const double relative_rms_error = std::sqrt(squared_error / squared_expected);
+    std::fprintf(stderr, "vision_qkv_f16 reference tokens=%lld max_abs=%g rms=%g relative_rms=%g range=[%g,%g]\n",
+                 static_cast<long long>(token_count), max_abs_error, rms_error, relative_rms_error,
+                 expected_min, expected_max);
+    // The tiled flash-attention WMMA tests allow 0.05 for F16 QK arithmetic;
+    // the relative term covers larger full-chain outputs without loosening values near zero.
+    require_close(actual, expected, 0.05f, 0.01f);
+
+    ggml_backend_buffer_free(cpu_buffer);
+    ggml_backend_buffer_free(hrx_buffer);
+    if (staged_buffer != nullptr) {
+        ggml_backend_buffer_free(staged_buffer);
+    }
+    ggml_free(reference.ctx);
+    ggml_free(fused.ctx);
+    if (staged.ctx != nullptr) {
+        ggml_free(staged.ctx);
+    }
+    ggml_backend_free(cpu);
+    ggml_backend_free(hrx);
+}
+
+static void run_vision_qkv_f16_long_fallback_case() {
+    constexpr int64_t token_count = 2049;
+    VisionQkvF16Graph test = build_vision_qkv_f16_graph(token_count);
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*test.graph);
+    REQUIRE(imported.valid());
+    ggml::hrx::DispatchScheduler scheduler;
+    REQUIRE(scheduler.schedule_graph(imported.graph, { "gfx1151" }));
+    REQUIRE(scheduler.plan().valid());
+    const ggml::hrx::Value * projected = imported.graph.values().find_tensor(test.projected);
+    REQUIRE(projected != nullptr);
+    const size_t f16_bytes = static_cast<size_t>(projected->element_count) * sizeof(ggml_fp16_t);
+    REQUIRE(scheduler.plan().metadata.find_alternate_value(projected->id, GGML_TYPE_F16, f16_bytes) == nullptr);
+    ggml_free(test.ctx);
+}
+
+static void run_vision_qkv_f16_short_decode_fallback_case() {
+    VisionQkvF16Graph test = build_vision_qkv_f16_graph(4);
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*test.graph);
+    REQUIRE(imported.valid());
+    ggml::hrx::DispatchScheduler scheduler;
+    REQUIRE(scheduler.schedule_graph(imported.graph, { "gfx1151" }));
+    REQUIRE(scheduler.plan().valid());
+    const ggml::hrx::Value * projected = imported.graph.values().find_tensor(test.projected);
+    REQUIRE(projected != nullptr);
+    size_t cast_dispatch_count = 0;
+    for (const ggml::hrx::Dispatch & dispatch : scheduler.plan().dispatches) {
+        const std::string name = kernel_name_for_id(dispatch.kernel.kernel_id);
+        const bool f16_cast = name == "loom_libs:ggml_copy_strided_source_f32_f16" ||
+                              name == "loom_libs:ggml_copy_f32_f16";
+        if (f16_cast) {
+            ++cast_dispatch_count;
+        }
+    }
+    REQUIRE(cast_dispatch_count >= 2);
+    bool has_projected_binding = false;
+    for (const ggml::hrx::Dispatch & dispatch : scheduler.plan().dispatches) {
+        for (const ggml::hrx::DispatchBinding & binding : dispatch.bindings) {
+            has_projected_binding = has_projected_binding || binding.value == projected->id;
+        }
+    }
+    REQUIRE(has_projected_binding);
+    ggml_free(test.ctx);
+}
+
 using test_runner::Suite;
 
 static void register_basic_ops_cases(Suite & suite) {
@@ -6764,6 +7155,28 @@ static void register_basic_ops_cases(Suite & suite) {
 }
 
 static void register_dense_matmul_cases(Suite & suite) {
+    suite.host_case("vision_qkv_f16.schedule.tail17", [] { run_vision_qkv_f16_schedule_case(17); });
+    suite.host_case("vision_qkv_f16.schedule.aligned64", [] { run_vision_qkv_f16_schedule_case(64); });
+    suite.host_case("vision_qkv_f16.schedule.mixed_query_fanout", [] {
+        run_vision_qkv_f16_schedule_case(17, false, false, false, true);
+    });
+    suite.host_case("vision_qkv_f16.schedule.long_fallback2049", [] {
+        run_vision_qkv_f16_long_fallback_case();
+    });
+    suite.host_case("vision_qkv_f16.schedule.short_decode_fallback4", [] {
+        run_vision_qkv_f16_short_decode_fallback_case();
+    });
+    suite.device_case("vision_qkv_f16.reference.tail17", [] { run_vision_qkv_f16_reference_case(17); });
+    suite.device_case("vision_qkv_f16.reference.aligned128", [] { run_vision_qkv_f16_reference_case(128); });
+    suite.host_case("vision_qkv_f16.schedule.root_output", [] {
+        run_vision_qkv_f16_schedule_case(17, true);
+    });
+    suite.host_case("vision_qkv_f16.schedule.value_output", [] {
+        run_vision_qkv_f16_schedule_case(17, false, true);
+    });
+    suite.host_case("vision_qkv_f16.schedule.explicit_copy", [] {
+        run_vision_qkv_f16_schedule_case(17, false, false, true);
+    });
     suite.host_case("dense_matmul.bf16.projector.k1152.outputs3456.tokens3888.schedule",
                     [] { run_long_bf16_projector_schedule_case(); });
     suite.device_case("dense_matmul.bf16.projector.k1152.outputs64.tokens256", [] {

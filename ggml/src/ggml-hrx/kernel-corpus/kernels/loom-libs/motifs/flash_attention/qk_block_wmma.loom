@@ -20,6 +20,7 @@ config.def @ggml.flash_attention.value_head_stride = 0 : index
 config.def @ggml.flash_attention.mask_token_stride = 0 : index
 config.def @ggml.flash_attention.has_mask = 1 : index
 config.def @ggml.flash_attention.tiled_loaders = 0 : index
+config.def @ggml.flash_attention.query_format = 32 : index
 
 template.decl @ggml.flash_attention.prefill.stage_query(%query_token_count: index, %query_origin: index, %query_head: index, %query_load_iteration_count: index, %query_stage_stride: index, %qk_head_size: index, %attention_scale: f32, %query: buffer, %query_stage: buffer)
 
@@ -41,9 +42,11 @@ template.decl @ggml.flash_attention.prefill.body(%publish_f16: i1, %publish_f32:
 
 template.def<@ggml.flash_attention.prefill.stage_query> device @ggml_flash_attention_prefill_stage_query(%query_token_count: index, %query_origin: index, %query_head: index, %query_load_iteration_count: index, %query_stage_stride: index, %qk_head_size: index, %attention_scale: f32, %query: buffer, %query_stage: buffer) {
   %query_head_count = config.get @ggml.flash_attention.query_head_count : index
+  %query_format = config.get @ggml.flash_attention.query_format : index
   %workitem = kernel.workitem.id<x> : index
   %c0 = index.constant 0 : index
   %c1 = index.constant 1 : index
+  %c16 = index.constant 16 : index
   %c256 = index.constant 256 : index
   %c0_offset = index.constant 0 : offset
   %c0_f16 = scalar.constant 0.0 : f16
@@ -58,7 +61,6 @@ template.def<@ggml.flash_attention.prefill.stage_query> device @ggml_flash_atten
   %query_token_stride = scf.select %has_query_token_stride, %query_token_stride0, %default_query_token_stride : index
   %query_head_stride = scf.select %has_query_head_stride, %query_head_stride0, %logical_head_size : index
   %query_layout = encoding.layout.strided [%query_token_stride, %query_head_stride, 1] : encoding<layout>
-  %query_view = buffer.view %query[%c0_offset] : buffer -> view<[%query_token_count]x[%query_head_count]x[%logical_head_size]xf32, %query_layout>
   %query_stage_view = buffer.view %query_stage[%c0_offset] : buffer -> view<16x[%query_stage_stride]xf16>
   // Scale and truncate Q exactly once. The Vulkan reference does this before
   // entering its KV loop, making QK a native F16 WMMA while retaining F32
@@ -72,7 +74,17 @@ template.def<@ggml.flash_attention.prefill.stage_query> device @ggml_flash_atten
     %query_channel_valid = index.cmp ult, %query_channel, %logical_head_size : index
     %load_query = scalar.andi %query_valid_load, %query_channel_valid : i1
     %query_value = scf.if %load_query -> (f16) {
-      %loaded = view.load %query_view[%query_token, %query_head, %query_channel] : view<[%query_token_count]x[%query_head_count]x[%logical_head_size]xf32, %query_layout> -> f32
+      %is_f16 = index.cmp eq, %query_format, %c16 : index
+      %loaded = scf.if %is_f16 -> (f32) {
+        %query_view = buffer.view %query[%c0_offset] : buffer -> view<[%query_token_count]x[%query_head_count]x[%logical_head_size]xf16, %query_layout>
+        %half = view.load %query_view[%query_token, %query_head, %query_channel] : view<[%query_token_count]x[%query_head_count]x[%logical_head_size]xf16, %query_layout> -> f16
+        %float = scalar.extf %half : f16 to f32
+        scf.yield %float : f32
+      } else {
+        %query_view = buffer.view %query[%c0_offset] : buffer -> view<[%query_token_count]x[%query_head_count]x[%logical_head_size]xf32, %query_layout>
+        %float = view.load %query_view[%query_token, %query_head, %query_channel] : view<[%query_token_count]x[%query_head_count]x[%logical_head_size]xf32, %query_layout> -> f32
+        scf.yield %float : f32
+      }
       %scaled = scalar.mulf<reassoc|nnan|ninf|nsz|contract> %loaded, %attention_scale : f32
       %truncated = scalar.fptrunc %scaled : f32 to f16
       scf.yield %truncated : f16

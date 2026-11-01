@@ -1,8 +1,10 @@
 #pragma once
 
+#include "dispatch/command-plan.h"
 #include "ggml.h"
 #include "graph/value-map.h"
 
+#include <array>
 #include <cstddef>
 #include <limits>
 
@@ -85,6 +87,51 @@ inline bool strided_f16_storage_span_bytes(const Value & value, size_t & byte_co
         return false;
     }
     return value.storage_offset + byte_count <= value.storage_byte_count;
+}
+
+struct F16AlternateView {
+    DispatchBinding                       binding;
+    std::array<size_t, GGML_MAX_DIMS>     strides = {};
+};
+
+inline bool find_f16_alternate_view(const Graph & graph,
+                                    const CommandPlan & plan,
+                                    const Value & source,
+                                    F16AlternateView & view) {
+    const Value * root = graph.values().find(source.storage_root);
+    const bool packed_root = root != nullptr && root->type == GGML_TYPE_F32 && root->contiguous &&
+                             root->storage_root == root->id && root->storage_offset == 0 &&
+                             root->byte_count % sizeof(float) == 0;
+    const bool source_is_f32_view = source.type == GGML_TYPE_F32 && source.nb[0] == sizeof(float) &&
+                                    source.storage_offset % sizeof(float) == 0;
+    const bool compatible_storage = packed_root && source_is_f32_view;
+    if (!compatible_storage) {
+        return false;
+    }
+
+    size_t source_span = 0;
+    if (!strided_f32_storage_span_bytes(source, source_span)) {
+        return false;
+    }
+    const size_t alternate_bytes = root->byte_count / sizeof(float) * sizeof(ggml_fp16_t);
+    const CommandPlanAlternateValue * alternate =
+        find_alternate_value(plan, root->id, GGML_TYPE_F16, alternate_bytes);
+    if (alternate == nullptr) {
+        return false;
+    }
+    const size_t offset = source.storage_offset / sizeof(float) * sizeof(ggml_fp16_t);
+    const size_t span = source_span / sizeof(float) * sizeof(ggml_fp16_t);
+    const bool valid_offset = offset <= alternate_bytes;
+    const bool valid_span = valid_offset && span <= alternate_bytes - offset;
+    const bool in_bounds = valid_offset && valid_span;
+    if (!in_bounds) {
+        return false;
+    }
+    view.binding = { alternate->alternate_value, offset, span };
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+        view.strides[i] = source.nb[i] / sizeof(float);
+    }
+    return true;
 }
 
 }  // namespace ggml::hrx

@@ -40,7 +40,7 @@ config.decl @ggml.mul_mat_postops.output_size : %value: index where [range(%valu
 
 config.decl @ggml.mul_mat_postops.weight_format : %value: index where [range(%value, 4, 81)]
 
-config.decl @ggml.mul_mat_postops.epilogue : %value: index where [range(%value, 1, 3)]
+config.decl @ggml.mul_mat_postops.epilogue : %value: index where [range(%value, 1, 6)]
 
 config.decl @ggml.workload.token_capacity : %value: index where [range(%value, 1, 2048)]
 
@@ -51,6 +51,8 @@ template.def<@ggml.matmul.tiled_input_f32_dequant_accumulate_f32.publish_vector4
   %c2 = index.constant 2 : index
   %c3 = index.constant 3 : index
   %c4 = index.constant 4 : index
+  %c5 = index.constant 5 : index
+  %c6 = index.constant 6 : index
   %c16 = index.constant 16 : index
   %c32 = index.constant 32 : index
   %c0_offset = index.constant 0 : offset
@@ -61,8 +63,15 @@ template.def<@ggml.matmul.tiled_input_f32_dequant_accumulate_f32.publish_vector4
   %uses_bias_only = index.cmp eq, %epilogue, %c1 : index
   %uses_residual_only = index.cmp eq, %epilogue, %c2 : index
   %uses_bias_residual = index.cmp eq, %epilogue, %c3 : index
-  %publishes_f16_alternate = index.cmp eq, %epilogue, %c4 : index
-  %uses_bias = scalar.ori %uses_bias_only, %uses_bias_residual : i1
+  %publishes_f16_only = index.cmp eq, %epilogue, %c5 : index
+  %publishes_f16_dual = index.cmp eq, %epilogue, %c6 : index
+  %publishes_f32_f16 = index.cmp eq, %epilogue, %c4 : index
+  %publishes_f16_candidate = scalar.ori %publishes_f32_f16, %publishes_f16_only : i1
+  %publishes_f16_alternate = scalar.ori %publishes_f16_candidate, %publishes_f16_dual : i1
+  %publishes_f32_alternate = scalar.ori %publishes_f32_f16, %publishes_f16_dual : i1
+  %uses_bias_candidate = scalar.ori %uses_bias_only, %uses_bias_residual : i1
+  %uses_bias_f16_candidate = scalar.ori %uses_bias_candidate, %publishes_f16_only : i1
+  %uses_bias = scalar.ori %uses_bias_f16_candidate, %publishes_f16_dual : i1
   %uses_residual = scalar.ori %uses_residual_only, %uses_bias_residual : i1
   %output_noalias = buffer.assume.noalias %output : buffer
   %accumulates_output = index.cmp eq, %output_accumulation, %c1 : index
@@ -95,7 +104,9 @@ template.def<@ggml.matmul.tiled_input_f32_dequant_accumulate_f32.publish_vector4
       %scratch = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
       %scratch_values = buffer.view %scratch[%c0_offset] : buffer -> view<256xf32>
       %scratch_d = buffer.view %scratch[%scratch_d_byte_add] : buffer -> view<32xf32>
-      template.apply<@ggml.matmul.tiled_publish.store_vector4>(%c32, %publish_word, %token_count0, %output_size0, %token0, %channel, %published, %scratch_values, %scratch_d, %output) : (index, i1, index, index, index, index, vector<4xf32>, view<256xf32>, view<32xf32>, buffer)
+      scf.if %publishes_f32_alternate {
+        template.apply<@ggml.matmul.tiled_publish.store_vector4>(%c32, %publish_word, %token_count0, %output_size0, %token0, %channel, %published, %scratch_values, %scratch_d, %output) : (index, i1, index, index, index, index, vector<4xf32>, view<256xf32>, view<32xf32>, buffer)
+      }
       template.apply<@ggml.matmul.tiled_publish.store_vector4>(%c16, %publish_word, %token_count0, %output_size0, %token0, %channel, %published, %scratch_values, %scratch_d, %residual_input) : (index, i1, index, index, index, index, vector<4xf32>, view<256xf32>, view<32xf32>, buffer)
     } else {
       scf.if %uses_residual {
@@ -260,7 +271,66 @@ kernel.def target(@ggml_matmul_tiled_input_f32_publish_f32_gfx11_wave64) @ggml_m
   kernel.return
 }
 
+kernel.def target(@ggml_matmul_tiled_input_f32_publish_f32_gfx11_wave64) @ggml_mul_mat_tiled_input_f32_bias_residual_publish_vision_f16(%token_count: index) {
+  %output_size = config.get @ggml.mul_mat_postops.output_size : index
+  %token_capacity = config.get @ggml.workload.token_capacity : index
+  %c1 = index.constant 1 : index
+  %c31 = index.constant 31 : index
+  %c32 = index.constant 32 : index
+  %c63 = index.constant 63 : index
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %padded_output_size = index.add %output_size, %c63 : index
+  %output_tiles = index.div %padded_output_size, %c64 : index
+  %padded_token_count = index.add %token_capacity, %c31 : index
+  %token_tiles = index.div %padded_token_count, %c32 : index
+  kernel.launch.config workgroups(%output_tiles, %token_tiles, %c1) workgroup_size(%c128, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %weight: buffer, %bias: buffer, %residual_input: buffer, %residual_output: buffer) {
+  %input_size = config.get @ggml.mul_mat_postops.input_size : index
+  %output_size = config.get @ggml.mul_mat_postops.output_size : index
+  %token_capacity = config.get @ggml.workload.token_capacity : index
+  %weight_format = config.get @ggml.mul_mat_postops.weight_format : index
+  %c0 = index.constant 0 : index
+  %identity = index.constant 23 : index
+  %epilogue = config.get @ggml.mul_mat_postops.epilogue : index
+  %full_token_tiles = scalar.constant false : i1
+  %c0_f32 = scalar.constant 0.0 : f32
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %token_capacity)] : index
+  %channel_tile = kernel.workgroup.id<x> : index
+  %token_tile = kernel.workgroup.id<y> : index
+  template.apply<@ggml.matmul.tiled_input_f32_dequant_accumulate_f32.core>(%full_token_tiles, %weight_format, %bounded_token_count, %input_size, %output_size, %c0, %identity, %epilogue, %c0_f32, %channel_tile, %token_tile, %input, %weight, %bias, %residual_output, %residual_input, %residual_output, %residual_output, %residual_output, %residual_output) : (i1, index, index, index, index, index, index, index, f32, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}
+
 kernel.def target(@ggml_matmul_tiled_input_f32_publish_f32_gfx11_wave64) @ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32_aligned(%token_count: index) {
+  %output_size = config.get @ggml.mul_mat_postops.output_size : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 32, 2048), multiple_of(%token_count, 32)] : index
+  %c1 = index.constant 1 : index
+  %c32 = index.constant 32 : index
+  %c63 = index.constant 63 : index
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %padded_output_size = index.add %output_size, %c63 : index
+  %output_tiles = index.div %padded_output_size, %c64 : index
+  %token_tiles = index.div %bounded_token_count, %c32 : index
+  kernel.launch.config workgroups(%output_tiles, %token_tiles, %c1) workgroup_size(%c128, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %weight: buffer, %bias: buffer, %residual_input: buffer, %residual_output: buffer) {
+  %input_size = config.get @ggml.mul_mat_postops.input_size : index
+  %output_size = config.get @ggml.mul_mat_postops.output_size : index
+  %weight_format = config.get @ggml.mul_mat_postops.weight_format : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 32, 2048), multiple_of(%token_count, 32)] : index
+  %c0 = index.constant 0 : index
+  %identity = index.constant 23 : index
+  %epilogue = config.get @ggml.mul_mat_postops.epilogue : index
+  %full_token_tiles = scalar.constant true : i1
+  %c0_f32 = scalar.constant 0.0 : f32
+  %channel_tile = kernel.workgroup.id<x> : index
+  %token_tile = kernel.workgroup.id<y> : index
+  template.apply<@ggml.matmul.tiled_input_f32_dequant_accumulate_f32.core>(%full_token_tiles, %weight_format, %bounded_token_count, %input_size, %output_size, %c0, %identity, %epilogue, %c0_f32, %channel_tile, %token_tile, %input, %weight, %bias, %residual_output, %residual_input, %residual_output, %residual_output, %residual_output, %residual_output) : (i1, index, index, index, index, index, index, index, f32, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}
+
+kernel.def target(@ggml_matmul_tiled_input_f32_publish_f32_gfx11_wave64) @ggml_mul_mat_tiled_input_f32_bias_residual_publish_vision_f16_aligned(%token_count: index) {
   %output_size = config.get @ggml.mul_mat_postops.output_size : index
   %bounded_token_count = index.assume %token_count [range(%token_count, 32, 2048), multiple_of(%token_count, 32)] : index
   %c1 = index.constant 1 : index

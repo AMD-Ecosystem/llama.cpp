@@ -1,6 +1,7 @@
 #include "dispatch-flash-attention.h"
 
 #include "dispatch-activation-publication.h"
+#include "dispatch-layout-utils.h"
 #include "dispatch-mul-mat-common.h"
 #include "ggml.h"
 #include "graph/graph-matcher.h"
@@ -715,6 +716,20 @@ static bool match_flash_attention_decode_split_next_q8_dispatch(const DispatchMa
     return true;
 }
 
+static bool find_flash_cast_alternate(const DispatchMatchContext & context,
+                                      const Value & cast_output,
+                                      F16AlternateView & alternate) {
+    const GraphNode * cast = context.graph.index().producer(cast_output.id);
+    const bool f16_copy = cast != nullptr && cast->op == GGML_OP_CPY && cast->inputs.size() == 2 &&
+                          cast->inputs[1] == cast->output && cast_output.type == GGML_TYPE_F16;
+    if (!f16_copy) {
+        return false;
+    }
+    const Value * source = graph_value(context.graph, cast->inputs[0]);
+    const bool matching_shape = source != nullptr && source->ne == cast_output.ne;
+    return matching_shape && find_f16_alternate_view(context.graph, context.plan, *source, alternate);
+}
+
 static bool match_flash_attention_tiled_dispatch(const DispatchMatchContext & context,
                                                  DispatchMatch &              dispatch_match) {
     const GraphNode * node = context.root_node;
@@ -736,6 +751,12 @@ static bool match_flash_attention_tiled_dispatch(const DispatchMatchContext & co
     if (!required_values_present) {
         return false;
     }
+    F16AlternateView query_alternate;
+    F16AlternateView key_alternate;
+    F16AlternateView value_alternate;
+    const bool query_is_f16 = find_f16_alternate_view(context.graph, context.plan, *query, query_alternate);
+    const bool key_is_alternate = find_flash_cast_alternate(context, *key, key_alternate);
+    const bool value_is_alternate = find_flash_cast_alternate(context, *value, value_alternate);
     const bool types_match = query->type == GGML_TYPE_F32 && key->type == GGML_TYPE_F16 &&
                              value->type == GGML_TYPE_F16 && output->type == GGML_TYPE_F32;
     const bool mask_type_matches = !has_mask || mask->type == GGML_TYPE_F16;
@@ -775,9 +796,9 @@ static bool match_flash_attention_tiled_dispatch(const DispatchMatchContext & co
     }
     // The shared WMMA body assumes 16-byte aligned, disjoint input buffers.
     // Value-map aliases may shift a view by an arbitrary byte offset.
-    const bool query_aligned = query->storage_offset % 16 == 0;
-    const bool key_aligned = key->storage_offset % 16 == 0;
-    const bool value_aligned = value->storage_offset % 16 == 0;
+    const bool query_aligned = (query_is_f16 ? query_alternate.binding.offset : query->storage_offset) % 16 == 0;
+    const bool key_aligned = (key_is_alternate ? key_alternate.binding.offset : key->storage_offset) % 16 == 0;
+    const bool value_aligned = (value_is_alternate ? value_alternate.binding.offset : value->storage_offset) % 16 == 0;
     const bool output_aligned = output->storage_offset % 16 == 0;
     const bool mask_aligned = !has_mask || mask->storage_offset % 16 == 0;
     const bool aligned_offsets = query_aligned && key_aligned && value_aligned && output_aligned && mask_aligned;
@@ -789,7 +810,11 @@ static bool match_flash_attention_tiled_dispatch(const DispatchMatchContext & co
         (mask->storage != query->storage && mask->storage != key->storage &&
          mask->storage != value->storage && mask->storage != output->storage);
     const bool disjoint_buffers = query_disjoint && key_disjoint && value_disjoint && mask_disjoint;
-    const bool supported_buffer_contract = aligned_offsets && disjoint_buffers;
+    const bool alternate_buffers_disjoint =
+        (!query_is_f16 || !key_is_alternate || query_alternate.binding.value != key_alternate.binding.value) &&
+        (!query_is_f16 || !value_is_alternate || query_alternate.binding.value != value_alternate.binding.value) &&
+        (!key_is_alternate || !value_is_alternate || key_alternate.binding.value != value_alternate.binding.value);
+    const bool supported_buffer_contract = aligned_offsets && disjoint_buffers && alternate_buffers_disjoint;
     if (!supported_buffer_contract) {
         return false;
     }
@@ -822,20 +847,32 @@ static bool match_flash_attention_tiled_dispatch(const DispatchMatchContext & co
     };
     add("logical_qk_head_size", qk_head_size);
     add("logical_value_head_size", value_head_size);
-    add("query_token_stride", static_cast<int64_t>(query->nb[1] / sizeof(float)));
-    add("query_head_stride", static_cast<int64_t>(query->nb[2] / sizeof(float)));
-    add("key_token_stride", static_cast<int64_t>(key->nb[1] / sizeof(ggml_fp16_t)));
-    add("key_head_stride", static_cast<int64_t>(key->nb[2] / sizeof(ggml_fp16_t)));
-    add("value_token_stride", static_cast<int64_t>(value->nb[1] / sizeof(ggml_fp16_t)));
-    add("value_head_stride", static_cast<int64_t>(value->nb[2] / sizeof(ggml_fp16_t)));
+    add("query_token_stride", query_is_f16 ? static_cast<int64_t>(query_alternate.strides[1]) :
+                               static_cast<int64_t>(query->nb[1] / sizeof(float)));
+    add("query_head_stride", query_is_f16 ? static_cast<int64_t>(query_alternate.strides[2]) :
+                              static_cast<int64_t>(query->nb[2] / sizeof(float)));
+    add("key_token_stride", key_is_alternate ? static_cast<int64_t>(key_alternate.strides[1]) :
+                             static_cast<int64_t>(key->nb[1] / sizeof(ggml_fp16_t)));
+    add("key_head_stride", key_is_alternate ? static_cast<int64_t>(key_alternate.strides[2]) :
+                            static_cast<int64_t>(key->nb[2] / sizeof(ggml_fp16_t)));
+    add("value_token_stride", value_is_alternate ? static_cast<int64_t>(value_alternate.strides[1]) :
+                               static_cast<int64_t>(value->nb[1] / sizeof(ggml_fp16_t)));
+    add("value_head_stride", value_is_alternate ? static_cast<int64_t>(value_alternate.strides[2]) :
+                              static_cast<int64_t>(value->nb[2] / sizeof(ggml_fp16_t)));
     add("output_token_stride", static_cast<int64_t>(output->nb[2] / sizeof(float)));
     add("output_head_stride", static_cast<int64_t>(output->nb[1] / sizeof(float)));
     add("mask_token_stride", has_mask ? static_cast<int64_t>(mask->nb[1] / sizeof(ggml_fp16_t)) : 0);
     add("has_mask", has_mask ? 1 : 0);
     add("tiled_loaders", 1);
-    dispatch.bindings.push_back({ query->id, 0, query->byte_count });
-    dispatch.bindings.push_back({ key->id, 0, key->byte_count });
-    dispatch.bindings.push_back({ value->id, 0, value->byte_count });
+    if (query_is_f16) {
+        add("query_format", 16);
+    }
+    dispatch.bindings.push_back(query_is_f16 ? query_alternate.binding :
+                                DispatchBinding{ query->id, 0, query->byte_count });
+    dispatch.bindings.push_back(key_is_alternate ? key_alternate.binding :
+                                DispatchBinding{ key->id, 0, key->byte_count });
+    dispatch.bindings.push_back(value_is_alternate ? value_alternate.binding :
+                                DispatchBinding{ value->id, 0, value->byte_count });
     if (has_mask) {
         dispatch.bindings.push_back({ mask->id, 0, mask->byte_count });
     } else {
@@ -848,7 +885,16 @@ static bool match_flash_attention_tiled_dispatch(const DispatchMatchContext & co
         });
         dispatch.bindings.push_back({ unused_mask, 0, 16 });
     }
-    dispatch.bindings.push_back({ query->id, 0, query->byte_count });
+    if (query_is_f16) {
+        const ValueId unused_gate = match_value(context, dispatch_match, 0);
+        dispatch_match.transients.push_back({ unused_gate, "common.flash_attention.unused_gate", 16, 16 });
+        dispatch_match.constant_initializations.push_back({
+            unused_gate, "common.flash_attention.unused_gate", 0, std::vector<uint8_t>(16, 0),
+        });
+        dispatch.bindings.push_back({ unused_gate, 0, 16 });
+    } else {
+        dispatch.bindings.push_back({ query->id, 0, query->byte_count });
+    }
     if (f16_only) {
         constexpr const char * name = "common.flash_attention.f16";
         CommonActivationPublication publication;
@@ -874,6 +920,45 @@ static bool match_flash_attention_tiled_dispatch(const DispatchMatchContext & co
 }
 
 }  // namespace
+
+bool flash_attention_accepts_maskless_f16_handoff(const Graph & graph, const GraphNode & node) {
+    const bool flash_op = node.op == GGML_OP_FLASH_ATTN_EXT;
+    const bool maskless_inputs = node.inputs.size() == 3;
+    const bool supported_params = has_flash_attention_params(node);
+    const bool supported_node = flash_op && maskless_inputs && supported_params;
+    if (!supported_node) {
+        return false;
+    }
+    const Value * query = graph.values().find(node.inputs[0]);
+    const Value * key = graph.values().find(node.inputs[1]);
+    const Value * value = graph.values().find(node.inputs[2]);
+    const Value * output = graph.values().find(node.output);
+    const bool values_present = query != nullptr && key != nullptr && value != nullptr && output != nullptr;
+    if (!values_present) {
+        return false;
+    }
+    const bool supported_types = query->type == GGML_TYPE_F32 && key->type == GGML_TYPE_F16 &&
+                                 value->type == GGML_TYPE_F16 && output->type == GGML_TYPE_F32;
+    // Query lengths 1-4 may take a higher-priority decode route that reads the cast outputs.
+    const bool supported_tokens = query->ne[1] >= 5 && query->ne[1] <= 3888 &&
+                                  key->ne[1] >= 1 && key->ne[1] <= 3888;
+    const bool supported_heads = is_supported_head_count(query->ne[2]) &&
+                                 is_supported_head_count(key->ne[2]) && query->ne[2] % key->ne[2] == 0;
+    const bool supported_shape = query->ne[0] == 72 && key->ne[0] == 72 && value->ne[0] == 72 &&
+                                 value->ne[1] == key->ne[1] && value->ne[2] == key->ne[2] &&
+                                 output->ne[0] == 72 && output->ne[1] == query->ne[2] &&
+                                 output->ne[2] == query->ne[1] && query->ne[3] == 1 &&
+                                 key->ne[3] == 1 && value->ne[3] == 1 && output->ne[3] == 1;
+    const bool dense_channels = query->nb[0] == sizeof(float) && key->nb[0] == sizeof(ggml_fp16_t) &&
+                                value->nb[0] == sizeof(ggml_fp16_t) && output->nb[0] == sizeof(float);
+    const bool aligned_offsets = query->storage_offset % 16 == 0 && key->storage_offset % 16 == 0 &&
+                                 value->storage_offset % 16 == 0 && output->storage_offset % 16 == 0;
+    const bool disjoint_storage = query->storage != key->storage && query->storage != value->storage &&
+                                  query->storage != output->storage && key->storage != value->storage &&
+                                  key->storage != output->storage && value->storage != output->storage;
+    return supported_types && supported_tokens && supported_heads && supported_shape &&
+           dense_channels && aligned_offsets && disjoint_storage;
+}
 
 void register_flash_attention_dispatches(DispatchRegistryBuilder & registry) {
     registry.add({

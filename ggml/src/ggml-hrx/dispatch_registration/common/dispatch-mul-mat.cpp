@@ -1,6 +1,7 @@
 #include "dispatch-mul-mat.h"
 
 #include "dispatch-activation-publication.h"
+#include "dispatch-flash-attention.h"
 #include "dispatch-mul-mat-common.h"
 #include "dispatch_registration/immutable-program-resource.h"
 #include "ggml.h"
@@ -70,6 +71,10 @@ static constexpr KernelCatalogRef kMulMatTiledBiasAddF32F32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32");
 static constexpr KernelCatalogRef kMulMatTiledAlignedBiasAddF32F32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32_aligned");
+static constexpr KernelCatalogRef kMulMatTiledVisionF16Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_tiled_input_f32_bias_residual_publish_vision_f16");
+static constexpr KernelCatalogRef kMulMatTiledAlignedVisionF16Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_tiled_input_f32_bias_residual_publish_vision_f16_aligned");
 static constexpr KernelCatalogRef kQuantizeF32SymmetricI4K64PlaneKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_quantize_f32_symmetric_i4_k64_plane");
 static constexpr KernelCatalogRef kMulMatSymmetricI4WmmaKernel =
@@ -1777,6 +1782,119 @@ static bool match_q6_vector_final_projection_q8_dispatch(const DispatchMatchCont
     return build_q6_vector_dispatch(match, context.root_index, dispatch_match);
 }
 
+struct VisionQkvPublicationMatch {
+    bool matched = false;
+    bool exclusive = false;
+    const GraphNode * value_cast = nullptr;
+};
+
+static VisionQkvPublicationMatch match_vision_qkv_publication(const Graph & graph, const Value & output) {
+    const bool indexed_graph = graph.has_index();
+    const bool f32_contiguous_output = output.type == GGML_TYPE_F32 && output.contiguous;
+    const bool three_sections = output.ne[0] > 0 && output.ne[0] % 3 == 0;
+    const bool token_rows = output.ne[1] >= 1 && output.ne[2] == 1 && output.ne[3] == 1;
+    const bool supported_output = indexed_graph && f32_contiguous_output && three_sections && token_rows;
+    if (!supported_output) {
+        return {};
+    }
+
+    const size_t section_bytes = static_cast<size_t>(output.ne[0] / 3) * sizeof(float);
+    const int64_t section_width = output.ne[0] / 3;
+    const Value * views[3] = {};
+    bool exclusive = output.kind == ValueKind::Transient;
+    for (const GraphNode * consumer : graph.index().consumers(output.id)) {
+        const Value * view = consumer != nullptr ? graph.values().find(consumer->output) : nullptr;
+        const bool complete_head_rows = view != nullptr && view->ne[0] > 0 && view->ne[0] <= section_width &&
+                                        section_width % view->ne[0] == 0 &&
+                                        view->ne[1] == section_width / view->ne[0];
+        const bool is_section_view = consumer != nullptr && consumer->op == GGML_OP_VIEW &&
+            consumer->inputs.size() == 1 && view != nullptr && view->alias_source == output.id &&
+            view->storage_root == output.id && view->type == GGML_TYPE_F32 && complete_head_rows &&
+            view->ne[2] == output.ne[1] &&
+            view->ne[3] == 1 && view->nb[0] == sizeof(float) &&
+            view->nb[1] == static_cast<size_t>(view->ne[0]) * sizeof(float) &&
+            view->nb[2] == output.nb[1] && view->storage_offset % section_bytes == 0;
+        if (!is_section_view) {
+            exclusive = false;
+            continue;
+        }
+        const size_t section = view->storage_offset / section_bytes;
+        const bool valid_section = section < 3;
+        const bool repeated_section = valid_section && views[section] != nullptr;
+        const bool unique_section = valid_section && !repeated_section;
+        if (!unique_section) {
+            exclusive = false;
+            continue;
+        }
+        views[section] = view;
+        exclusive = exclusive && view->kind == ValueKind::Transient;
+    }
+    const bool all_views = views[0] != nullptr && views[1] != nullptr && views[2] != nullptr;
+    const bool matching_shapes = all_views && views[0]->ne == views[1]->ne && views[0]->ne == views[2]->ne;
+    if (!matching_shapes) {
+        return {};
+    }
+
+    for (int section = 0; section < 2; ++section) {
+        bool has_rope = false;
+        for (const GraphNode * consumer : graph.index().consumers(views[section]->id)) {
+            const RopeParams * params = consumer != nullptr ? op_params_as<RopeParams>(consumer->params) : nullptr;
+            const bool is_vision_rope = consumer != nullptr && consumer->op == GGML_OP_ROPE &&
+                !consumer->inputs.empty() && consumer->inputs[0] == views[section]->id &&
+                params != nullptr && params->mode == GGML_ROPE_TYPE_VISION;
+            has_rope = has_rope || is_vision_rope;
+            exclusive = exclusive && is_vision_rope;
+        }
+        if (!has_rope) {
+            return {};
+        }
+    }
+
+    bool has_value_cast = false;
+    const GraphNode * elidable_value_cast = nullptr;
+    for (const GraphNode * permute : graph.index().consumers(views[2]->id)) {
+        const Value * permuted = permute != nullptr ? graph.values().find(permute->output) : nullptr;
+        const bool is_permute = permute != nullptr && permute->op == GGML_OP_PERMUTE &&
+            permute->inputs.size() == 1 && permuted != nullptr && permuted->storage_root == output.id;
+        if (!is_permute) {
+            exclusive = false;
+            continue;
+        }
+        const bool internal_permute = permuted->kind == ValueKind::Transient;
+        exclusive = exclusive && internal_permute;
+        for (const GraphNode * cast : graph.index().consumers(permuted->id)) {
+            const Value * cast_output = cast != nullptr ? graph.values().find(cast->output) : nullptr;
+            const bool is_f16_cast = cast != nullptr && cast->op == GGML_OP_CPY &&
+                cast->inputs.size() == 2 && cast->inputs[0] == permuted->id &&
+                cast->inputs[1] == cast->output && cast_output != nullptr &&
+                cast_output->type == GGML_TYPE_F16;
+            has_value_cast = has_value_cast || is_f16_cast;
+            exclusive = exclusive && is_f16_cast && cast_output->kind == ValueKind::Transient;
+            if (is_f16_cast) {
+                const auto & cast_consumers = graph.index().consumers(cast_output->id);
+                const GraphNode * flash = cast_consumers.size() == 1 ? cast_consumers.front() : nullptr;
+                const bool internal_cast = cast_output->kind == ValueKind::Transient &&
+                                           cast_output->storage_root == cast_output->id;
+                const bool flash_consumes_value = flash != nullptr && flash->inputs.size() == 3 &&
+                    flash->inputs[2] == cast_output->id &&
+                    flash_attention_accepts_maskless_f16_handoff(graph, *flash);
+                const bool supported_head = views[0]->ne[0] == 72 && output.ne[1] <= 3888;
+                const bool can_elide_cast = internal_permute && internal_cast && flash_consumes_value &&
+                                            supported_head;
+                if (can_elide_cast) {
+                    elidable_value_cast = cast;
+                } else {
+                    exclusive = false;
+                }
+            }
+        }
+        exclusive = exclusive && graph.index().consumers(permuted->id).size() == 1;
+    }
+    exclusive = exclusive && graph.index().consumers(views[2]->id).size() == 1;
+    const bool can_skip_f32 = exclusive && elidable_value_cast != nullptr && views[0]->ne[0] == 72;
+    return { has_value_cast, can_skip_f32, elidable_value_cast };
+}
+
 static bool build_mul_mat_postops_dispatch(const DispatchMatchContext & context,
                                            const MulMatPostOpsMatch &   match,
                                            DispatchMatch &              dispatch_match) {
@@ -1851,9 +1969,39 @@ static bool build_mul_mat_postops_dispatch(const DispatchMatchContext & context,
                                                       match.weight_format;
     dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_postops.weight_format",
         common_to_config_value(common_mul_mat_format_config_value(format)));
-    dispatch.kernel.compile_parameters.emplace(
-        "ggml.mul_mat_postops.epilogue", common_to_config_value((match.has_bias ? int64_t{ 1 } : int64_t{ 0 }) |
-                                                                (match.has_residual ? int64_t{ 2 } : int64_t{ 0 })));
+    const bool can_publish_vision_qkv = tiled_postops && match.has_bias && !match.has_residual &&
+                                        match.weight->type == GGML_TYPE_BF16;
+    const VisionQkvPublicationMatch vision_qkv = can_publish_vision_qkv ?
+        match_vision_qkv_publication(context.graph, *match.residual_output) : VisionQkvPublicationMatch{};
+    const bool publish_f16 = vision_qkv.matched;
+    const bool f16_only = publish_f16 && vision_qkv.exclusive;
+    if (publish_f16) {
+        dispatch.kernel.kernel_id = use_aligned_dynamic ? kMulMatTiledAlignedVisionF16Kernel.id :
+                                                         kMulMatTiledVisionF16Kernel.id;
+    }
+    CommonActivationPublication f16_publication;
+    if (publish_f16) {
+        constexpr const char * name = "common.mul_mat_postops.vision_qkv_f16";
+        const bool reserved = common_reserve_private_activation_output(
+            context, dispatch_match, *match.residual_output,
+            CommonActivationPublicationFormat::F16Row, name, f16_publication);
+        const bool appended = reserved && common_append_activation_publication(
+            dispatch_match, f16_publication, name);
+        if (!appended) {
+            return false;
+        }
+    }
+    const int64_t epilogue = publish_f16 ? (f16_only ? 5 : 6) :
+        (match.has_bias ? int64_t{ 1 } : int64_t{ 0 }) |
+        (match.has_residual ? int64_t{ 2 } : int64_t{ 0 });
+    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_postops.epilogue", common_to_config_value(epilogue));
+    DispatchBinding residual_output_binding = { match.residual_output->id, 0, match.residual_output->byte_count };
+    if (f16_only) {
+        const ValueId unused_output(context.next_plan_value.value +
+            static_cast<int32_t>(dispatch_match.transients.size() + dispatch_match.completion_counter_requests.size()));
+        dispatch_match.transients.push_back({ unused_output, "common.mul_mat_postops.unused_output", 16, 16 });
+        residual_output_binding = { unused_output, 0, 16 };
+    }
     dispatch.bindings.push_back(activation);
     if (pack_q4 || pack_q6) {
         const char * layout = pack_q4 ? kQ4KPackedK256Row64Layout : kQ6KPackedK256Row64ScaleRowLayout;
@@ -1865,10 +2013,10 @@ static bool build_mul_mat_postops_dispatch(const DispatchMatchContext & context,
     const Value * placeholder = match.has_bias ? match.bias : match.residual_input;
     dispatch.bindings.push_back(match.has_bias ? DispatchBinding{ match.bias->id, 0, match.bias->byte_count } :
                                                  DispatchBinding{ placeholder->id, 0, placeholder->byte_count });
-    dispatch.bindings.push_back(match.has_residual ?
+    dispatch.bindings.push_back(publish_f16 ? f16_publication.binding() : match.has_residual ?
                                     DispatchBinding{ match.residual_input->id, 0, match.residual_input->byte_count } :
                                     DispatchBinding{ placeholder->id, 0, placeholder->byte_count });
-    dispatch.bindings.push_back({ match.residual_output->id, 0, match.residual_output->byte_count });
+    dispatch.bindings.push_back(residual_output_binding);
 
     if (!append_covered_node_index_once(context.graph, context.covered_nodes, context.root_node,
                                         dispatch_match.covered_nodes)) {
@@ -1882,6 +2030,13 @@ static bool build_mul_mat_postops_dispatch(const DispatchMatchContext & context,
     for (const GraphNode * add_node : match.add_nodes) {
         if (!append_covered_node_index_once(context.graph, context.covered_nodes, add_node,
                                             dispatch_match.covered_nodes)) {
+            return false;
+        }
+    }
+    if (vision_qkv.value_cast != nullptr) {
+        const bool covered_cast = append_covered_node_index_once(
+            context.graph, context.covered_nodes, vision_qkv.value_cast, dispatch_match.covered_nodes);
+        if (!covered_cast) {
             return false;
         }
     }

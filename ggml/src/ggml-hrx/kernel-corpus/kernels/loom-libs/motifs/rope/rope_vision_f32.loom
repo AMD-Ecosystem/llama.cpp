@@ -30,7 +30,7 @@ func.def inline @ggml_rope_section_position_f32(%token: index, %pair: index, %to
   func.return %position : f32
 }
 
-template.decl @ggml.rope_vision_f32.body(%token_count: index, %input_span: index, %positions: buffer, %input: buffer, %theta: buffer, %freq_factors: buffer, %output: buffer)
+template.decl @ggml.rope_vision_f32.body(%token_count: index, %input_span: index, %positions: buffer, %input: buffer, %theta: buffer, %freq_factors: buffer, %output: buffer, %f16_output: buffer)
 
 config.decl @ggml.rope_vision_f32.head_size : %value: index where [range(%value, 4, 1024), multiple_of(%value, 4)]
 config.decl @ggml.rope_vision_f32.head_count : %value: index where [range(%value, 1, 64)]
@@ -42,8 +42,10 @@ config.decl @ggml.rope_vision_f32.section0 : %value: index where [range(%value, 
 config.decl @ggml.rope_vision_f32.section1 : %value: index where [range(%value, 0, 1024)]
 config.decl @ggml.rope_vision_f32.section2 : %value: index where [range(%value, 0, 1024)]
 config.decl @ggml.rope_vision_f32.section3 : %value: index where [range(%value, 0, 1024)]
+config.def @ggml.rope_vision_f32.input_format = 32 : index
+config.def @ggml.rope_vision_f32.output_format = 32 : index
 
-template.def<@ggml.rope_vision_f32.body> device @ggml_rope_vision_f32_body(%token_count: index, %input_span: index, %positions: buffer, %input: buffer, %theta: buffer, %freq_factors: buffer, %output: buffer) {
+template.def<@ggml.rope_vision_f32.body> device @ggml_rope_vision_f32_body(%token_count: index, %input_span: index, %positions: buffer, %input: buffer, %theta: buffer, %freq_factors: buffer, %output: buffer, %f16_output: buffer) {
   %token_capacity = config.get @ggml.rope_vision_f32.token_capacity : index
   %head_size = config.get @ggml.rope_vision_f32.head_size : index
   %head_count = config.get @ggml.rope_vision_f32.head_count : index
@@ -54,6 +56,8 @@ template.def<@ggml.rope_vision_f32.body> device @ggml_rope_vision_f32_body(%toke
   %section1 = config.get @ggml.rope_vision_f32.section1 : index
   %section2 = config.get @ggml.rope_vision_f32.section2 : index
   %section3 = config.get @ggml.rope_vision_f32.section3 : index
+  %input_format = config.get @ggml.rope_vision_f32.input_format : index
+  %output_format = config.get @ggml.rope_vision_f32.output_format : index
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 16384), le(%token_count, %token_capacity)] : index
   %bounded_input_span = index.assume %input_span [range(%input_span, 1, 1073741824)] : index
   %head = kernel.workgroup.id<x> : index
@@ -63,6 +67,8 @@ template.def<@ggml.rope_vision_f32.body> device @ggml_rope_vision_f32_body(%toke
   %c1 = index.constant 1 : index
   %c2 = index.constant 2 : index
   %c4 = index.constant 4 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
   %c0_offset = index.constant 0 : offset
   %packet_count = index.div %head_size, %c4 : index
   %pair_count = index.div %head_size, %c2 : index
@@ -89,17 +95,40 @@ template.def<@ggml.rope_vision_f32.body> device @ggml_rope_vision_f32_body(%toke
     %high_end0 = index.add %high_index0, %c2 : index
     %low_index, %low_end = index.assume %low_index0, %low_end0 [le(%low_end0, %bounded_input_span)] : index, index
     %high_index, %high_end = index.assume %high_index0, %high_end0 [le(%high_end0, %bounded_input_span)] : index, index
-    %low_view = buffer.view %input[%c0_offset] : buffer -> view<[%low_end]xf32>
-    %high_view = buffer.view %input[%c0_offset] : buffer -> view<[%high_end]xf32>
-    %low_values = vector.load %low_view[%low_index] : view<[%low_end]xf32> -> vector<2xf32>
-    %high_values = vector.load %high_view[%high_index] : view<[%high_end]xf32> -> vector<2xf32>
+    %input_is_f16 = index.cmp eq, %input_format, %c16 : index
+    %low_values, %high_values = scf.if %input_is_f16 -> (vector<2xf32>, vector<2xf32>) {
+      %low_view = buffer.view %input[%c0_offset] : buffer -> view<[%low_end]xf16>
+      %high_view = buffer.view %input[%c0_offset] : buffer -> view<[%high_end]xf16>
+      %low_half = vector.load %low_view[%low_index] : view<[%low_end]xf16> -> vector<2xf16>
+      %high_half = vector.load %high_view[%high_index] : view<[%high_end]xf16> -> vector<2xf16>
+      %low_float = vector.extf %low_half : vector<2xf16> to vector<2xf32>
+      %high_float = vector.extf %high_half : vector<2xf16> to vector<2xf32>
+      scf.yield %low_float, %high_float : vector<2xf32>, vector<2xf32>
+    } else {
+      %low_view = buffer.view %input[%c0_offset] : buffer -> view<[%low_end]xf32>
+      %high_view = buffer.view %input[%c0_offset] : buffer -> view<[%high_end]xf32>
+      %low_float = vector.load %low_view[%low_index] : view<[%low_end]xf32> -> vector<2xf32>
+      %high_float = vector.load %high_view[%high_index] : view<[%high_end]xf32> -> vector<2xf32>
+      scf.yield %low_float, %high_float : vector<2xf32>, vector<2xf32>
+    }
     %rotated_low, %rotated_high = func.call @ggml_rope_f32_pair_positions_packet(%position_packet, %theta_packet, %freq_factors_packet, %low_values, %high_values) : (vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
     %mscale_packet = vector.splat %mscale : vector<2xf32>
     %scaled_low = vector.mulf<reassoc|nnan|ninf|nsz|contract> %rotated_low, %mscale_packet : vector<2xf32>
     %scaled_high = vector.mulf<reassoc|nnan|ninf|nsz|contract> %rotated_high, %mscale_packet : vector<2xf32>
-    %output_view = buffer.view %output[%c0_offset] : buffer -> view<[%bounded_token_count]x[%head_count]x[%head_size]xf32>
-    vector.store %scaled_low, %output_view[%token, %head, %pair0] : vector<2xf32>, view<[%bounded_token_count]x[%head_count]x[%head_size]xf32>
-    vector.store %scaled_high, %output_view[%token, %head, %high_channel] : vector<2xf32>, view<[%bounded_token_count]x[%head_count]x[%head_size]xf32>
+    %publish_f32 = index.cmp ne, %output_format, %c16 : index
+    scf.if %publish_f32 {
+      %output_view = buffer.view %output[%c0_offset] : buffer -> view<[%bounded_token_count]x[%head_count]x[%head_size]xf32>
+      vector.store %scaled_low, %output_view[%token, %head, %pair0] : vector<2xf32>, view<[%bounded_token_count]x[%head_count]x[%head_size]xf32>
+      vector.store %scaled_high, %output_view[%token, %head, %high_channel] : vector<2xf32>, view<[%bounded_token_count]x[%head_count]x[%head_size]xf32>
+    }
+    %publish_f16 = index.cmp ne, %output_format, %c32 : index
+    scf.if %publish_f16 {
+      %half_low = vector.fptrunc %scaled_low : vector<2xf32> to vector<2xf16>
+      %half_high = vector.fptrunc %scaled_high : vector<2xf32> to vector<2xf16>
+      %half_output_view = buffer.view %f16_output[%c0_offset] : buffer -> view<[%bounded_token_count]x[%head_count]x[%head_size]xf16>
+      vector.store %half_low, %half_output_view[%token, %head, %pair0] : vector<2xf16>, view<[%bounded_token_count]x[%head_count]x[%head_size]xf16>
+      vector.store %half_high, %half_output_view[%token, %head, %high_channel] : vector<2xf16>, view<[%bounded_token_count]x[%head_count]x[%head_size]xf16>
+    }
   }
   template.return
 }

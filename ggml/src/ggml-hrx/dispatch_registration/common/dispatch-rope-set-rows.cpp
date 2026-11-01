@@ -1,5 +1,7 @@
 #include "dispatch-rope-set-rows.h"
 
+#include "dispatch-activation-publication.h"
+#include "dispatch-flash-attention.h"
 #include "dispatch-layout-utils.h"
 #include "dispatch-rope-utils.h"
 #include "ggml.h"
@@ -20,6 +22,8 @@ namespace {
 
 static constexpr KernelCatalogRef kRopeF32Kernel       = GGML_HRX_KERNEL_REF("loom_libs", "ggml_rope_f32");
 static constexpr KernelCatalogRef kRopeVisionF32Kernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_rope_vision_f32");
+static constexpr KernelCatalogRef kRopeVisionF16DualKernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_rope_vision_f16_dual");
+static constexpr KernelCatalogRef kRopeVisionF16OnlyKernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_rope_vision_f16_only");
 static constexpr int64_t kVisionRopeMaxTokens = 16384;
 static constexpr KernelCatalogRef kRopeConcatF32Kernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_rope_concat_f32");
 static constexpr KernelCatalogRef kRopeScaleF32Kernel  = GGML_HRX_KERNEL_REF("loom_libs", "ggml_rope_scale_f32");
@@ -642,11 +646,15 @@ static Dispatch make_rope_dispatch(const DispatchMatchContext & context,
 
 static Dispatch make_rope_vision_dispatch(const DispatchMatchContext & context,
                                           const RopeMatch & match,
-                                          DispatchMatch & dispatch_match) {
+                                          DispatchMatch & dispatch_match,
+                                          const F16AlternateView * input_alternate = nullptr,
+                                          const CommonActivationPublication * output_publication = nullptr,
+                                          bool f16_only = false) {
     const auto [theta, freq_factors] = add_rope_frequency_bindings(context, match, dispatch_match, "common.rope_vision");
     const RopeParams & params = *op_params_as<RopeParams>(match.node->params);
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(kRopeVisionF32Kernel);
+    dispatch.kernel = make_kernel_specialization(output_publication == nullptr ? kRopeVisionF32Kernel :
+                                                f16_only ? kRopeVisionF16OnlyKernel : kRopeVisionF16DualKernel);
     dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
     dispatch.kernel.integer_parameters.emplace("input_span", match.input_span);
@@ -657,14 +665,26 @@ static Dispatch make_rope_vision_dispatch(const DispatchMatchContext & context,
     dispatch.kernel.compile_parameters.emplace(prefix + "input_stride1", to_config_value(match.input_stride1));
     dispatch.kernel.compile_parameters.emplace(prefix + "input_stride2", to_config_value(match.input_stride2));
     dispatch.kernel.compile_parameters.emplace(prefix + "mscale", rope_mscale_config_value(match.rope_mscale));
+    if (input_alternate != nullptr) {
+        dispatch.kernel.compile_parameters.emplace(prefix + "input_format", "16");
+    }
+    if (output_publication != nullptr) {
+        dispatch.kernel.compile_parameters.emplace(prefix + "output_format", f16_only ? "16" : "48");
+    }
     for (int i = 0; i < GGML_MROPE_SECTIONS; ++i) {
         dispatch.kernel.compile_parameters.emplace(prefix + "section" + std::to_string(i), to_config_value(params.sections[i]));
     }
     dispatch.bindings.push_back({ match.positions->id, 0, match.positions->byte_count });
-    dispatch.bindings.push_back({ match.input->storage_root, match.input->storage_offset, match.input_span_bytes });
+    dispatch.bindings.push_back(input_alternate != nullptr ? input_alternate->binding :
+                                DispatchBinding{ match.input->storage_root, match.input->storage_offset, match.input_span_bytes });
     dispatch.bindings.push_back({ theta, 0, match.theta_bytes });
     dispatch.bindings.push_back({ freq_factors, 0, match.freq_factors_bytes });
-    dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
+    if (!f16_only) {
+        dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
+    }
+    if (output_publication != nullptr) {
+        dispatch.bindings.push_back(output_publication->binding());
+    }
     return dispatch;
 }
 
@@ -981,13 +1001,92 @@ static bool match_rope_f32_dispatch(const DispatchMatchContext & context, Dispat
     return true;
 }
 
+struct VisionRopeF16Consumer {
+    bool exclusive = false;
+    const GraphNode * cast = nullptr;
+};
+
+static VisionRopeF16Consumer match_vision_rope_f16_consumer(const Graph & graph, const Value & output) {
+    const bool internal_output = output.kind == ValueKind::Transient && output.storage_root == output.id;
+    const bool supported_head = output.ne[0] == 72 && output.ne[2] <= 3888;
+    const bool eligible_output = internal_output && supported_head && graph.has_index();
+    if (!eligible_output) {
+        return {};
+    }
+    const auto & consumers = graph.index().consumers(output.id);
+    const bool sole_consumer = consumers.size() == 1 && consumers.front() != nullptr;
+    if (!sole_consumer) {
+        return {};
+    }
+    const GraphNode * permute = consumers.front();
+    const Value * permuted = graph.values().find(permute->output);
+    const bool internal_permute = permute->op == GGML_OP_PERMUTE && permute->inputs.size() == 1 &&
+                                  permuted != nullptr && permuted->kind == ValueKind::Transient &&
+                                  permuted->storage_root == output.id;
+    if (!internal_permute) {
+        return {};
+    }
+    const auto & next = graph.index().consumers(permuted->id);
+    const bool sole_next_consumer = next.size() == 1 && next.front() != nullptr;
+    if (!sole_next_consumer) {
+        return {};
+    }
+    const GraphNode * consumer = next.front();
+    const bool query_for_flash = consumer->op == GGML_OP_FLASH_ATTN_EXT &&
+                                 consumer->inputs.size() == 3 && consumer->inputs[0] == permuted->id &&
+                                 flash_attention_accepts_maskless_f16_handoff(graph, *consumer);
+    const Value * cast_output = graph.values().find(consumer->output);
+    const bool key_cast = consumer->op == GGML_OP_CPY && consumer->inputs.size() == 2 &&
+                          consumer->inputs[0] == permuted->id && consumer->inputs[1] == consumer->output &&
+                          cast_output != nullptr && cast_output->storage_root == cast_output->id &&
+                          cast_output->type == GGML_TYPE_F16 && cast_output->kind == ValueKind::Transient;
+    if (query_for_flash) {
+        return { true, nullptr };
+    }
+    if (!key_cast) {
+        return {};
+    }
+    const auto & cast_consumers = graph.index().consumers(cast_output->id);
+    const GraphNode * flash = cast_consumers.size() == 1 ? cast_consumers.front() : nullptr;
+    const bool flash_consumes_key = flash != nullptr && flash->inputs.size() == 3 &&
+        flash->inputs[1] == cast_output->id && flash_attention_accepts_maskless_f16_handoff(graph, *flash);
+    return flash_consumes_key ? VisionRopeF16Consumer{ true, consumer } : VisionRopeF16Consumer{};
+}
+
 static bool match_rope_vision_f32_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     const RopeMatch match = match_rope_vision_f32(context.graph, context.root_node, &dispatch_match.status);
     if (!match.matched()) {
         return false;
     }
+    F16AlternateView input_alternate;
+    const bool use_f16_input = find_f16_alternate_view(context.graph, context.plan, *match.input, input_alternate);
+    CommonActivationPublication output_publication;
+    bool f16_only = false;
+    VisionRopeF16Consumer f16_consumer;
+    if (use_f16_input) {
+        constexpr const char * name = "common.rope_vision.f16";
+        const bool reserved = common_reserve_private_activation_output(
+            context, dispatch_match, *match.output,
+            CommonActivationPublicationFormat::F16Row, name, output_publication);
+        const bool appended = reserved && common_append_activation_publication(
+            dispatch_match, output_publication, name);
+        if (!appended) {
+            return false;
+        }
+        f16_consumer = match_vision_rope_f16_consumer(context.graph, *match.output);
+        f16_only = f16_consumer.exclusive;
+    }
     dispatch_match.covered_nodes.push_back(context.root_index);
-    dispatch_match.dispatches.push_back(make_rope_vision_dispatch(context, match, dispatch_match));
+    if (f16_consumer.cast != nullptr) {
+        const bool covered_cast = append_covered_node_index_once(
+            context.graph, context.covered_nodes, f16_consumer.cast, dispatch_match.covered_nodes);
+        if (!covered_cast) {
+            return false;
+        }
+    }
+    dispatch_match.dispatches.push_back(make_rope_vision_dispatch(context, match, dispatch_match,
+        use_f16_input ? &input_alternate : nullptr,
+        use_f16_input ? &output_publication : nullptr, f16_only));
     return true;
 }
 
