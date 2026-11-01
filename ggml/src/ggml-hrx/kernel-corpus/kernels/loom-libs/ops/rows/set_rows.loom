@@ -1,3 +1,6 @@
+config.decl @ggml.set_rows.index_format : %value: index where [range(%value, 32, 64)]
+template.decl @ggml.rows.cache_publish.safe_i32_row(%token: index, %token_count: index, %cache_row_count: index, %indices: buffer) -> (i1, index)
+
 // Generic GGML SET_ROWS for contiguous 2D row caches.
 template.decl @ggml.set_rows.body(%token_count: index, %cache_row_count: index, %hidden_size: index, %rows: buffer, %indices: buffer, %cache: buffer)
 
@@ -73,7 +76,16 @@ template.def<@ggml.set_rows.body> device @ggml_set_rows_body(%token_count: index
   %packet = scf.select %valid_packet, %packet0, %c0 : index
   %channel = index.mul %packet, %c4 : index
   %rows_noalias, %indices_noalias, %cache_noalias = buffer.assume.noalias %rows, %indices, %cache : buffer, buffer, buffer
-  %valid_row, %cache_row = template.apply<@ggml.rows.cache_publish.safe_i64_row>(%token, %bounded_token_count, %bounded_cache_row_count, %indices_noalias) : (index, index, index, buffer) -> (i1, index)
+  %index_format = config.get @ggml.set_rows.index_format : index
+  %index32 = index.constant 32 : index
+  %uses_i32 = index.cmp eq, %index_format, %index32 : index
+  %valid_row, %cache_row = scf.if %uses_i32 -> (i1, index) {
+    %valid, %row = template.apply<@ggml.rows.cache_publish.safe_i32_row>(%token, %bounded_token_count, %bounded_cache_row_count, %indices_noalias) : (index, index, index, buffer) -> (i1, index)
+    scf.yield %valid, %row : i1, index
+  } else {
+    %valid, %row = template.apply<@ggml.rows.cache_publish.safe_i64_row>(%token, %bounded_token_count, %bounded_cache_row_count, %indices_noalias) : (index, index, index, buffer) -> (i1, index)
+    scf.yield %valid, %row : i1, index
+  }
   %publish = scalar.andi %publish0, %valid_row : i1
   %values = template.apply<@ggml.set_rows.load_f32_vector4>(%input_format, %token, %channel, %bounded_token_count, %input_stride, %rows_noalias) : (index, index, index, index, index, buffer) -> (vector<4xf32>)
   template.apply<@ggml.rows.cache_publish.f32_vector4>(%output_format, %publish, %cache_row, %channel, %bounded_cache_row_count, %bounded_hidden_size, %values, %cache_noalias) : (index, i1, index, index, index, index, vector<4xf32>, buffer)

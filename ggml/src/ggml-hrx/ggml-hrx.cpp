@@ -562,7 +562,7 @@ static void device_props(ggml_backend_dev_t device, ggml_backend_dev_props * pro
     device_memory(device, &props->memory_free, &props->memory_total);
     props->type      = GGML_BACKEND_DEVICE_TYPE_GPU;
     props->device_id = nullptr;
-    props->caps      = { true, true, false, false };
+    props->caps      = { true, true, false, false, false };
 }
 
 static ggml_backend_t device_init(ggml_backend_dev_t device, const char * parameters) {
@@ -953,12 +953,6 @@ static bool supported_binary_f32_tensor(const ggml_tensor * op) {
         return false;
     }
 
-    if ((!ggml_are_same_shape(op->src[0], op) || !ggml_are_same_shape(op->src[1], op)) &&
-        (!ggml_is_contiguous(op->src[0]) || !ggml_is_contiguous(op->src[1]) ||
-         !tensor_has_packed_f32_layout(op->src[0]) || !tensor_has_packed_f32_layout(op->src[1]))) {
-        return false;
-    }
-
     if (!binary_kind_allows_broadcast(binary_kind, op->src[0], op->src[1], op)) {
         return false;
     }
@@ -1025,7 +1019,6 @@ static bool supported_unary_f32_tensor(const ggml_tensor * op) {
 }
 
 static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op) {
-    GGML_UNUSED(device);
     if (op == nullptr) {
         return false;
     }
@@ -1048,6 +1041,14 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
         const bool bounded = elements <= (int64_t{ 1 } << 30);
         return source_f32 && output_f32 && source_contiguous && output_contiguous && same_shape &&
                separate_output && nonempty && bounded;
+    }
+    if (op->op == GGML_OP_DSV4_HC_COMB || op->op == GGML_OP_DSV4_HC_PRE || op->op == GGML_OP_DSV4_HC_POST ||
+        op->op == GGML_OP_CLAMP || op->op == GGML_OP_FILL || op->op == GGML_OP_SUM || op->op == GGML_OP_REPEAT ||
+        op->op == GGML_OP_ROPE_BACK || op->op == GGML_OP_TOP_K || op->op == GGML_OP_ARGSORT ||
+        op->op == GGML_OP_ARGMAX || op->op == GGML_OP_CONCAT || op->op == GGML_OP_LIGHTNING_INDEXER ||
+        op->op == GGML_OP_MUL_MAT || (op->op == GGML_OP_ADD && op->type == GGML_TYPE_F16) ||
+        (op->op == GGML_OP_GLU && ggml_get_glu_op(op) == GGML_GLU_OP_SWIGLU_CLAMP)) {
+        return ggml::hrx::can_execute_standalone_op_as_graph(op, device_context(device)->architecture);
     }
     const bool supported_binary = supported_binary_f32_tensor(op);
     if (supported_binary) {

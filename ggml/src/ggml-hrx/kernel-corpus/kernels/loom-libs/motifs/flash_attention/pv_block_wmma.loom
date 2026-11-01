@@ -1,23 +1,68 @@
-template.decl @ggml.flash_attention.pv_block_wmma.prefill_full(%old_scale: vector<4xf32>, %current_output0: vector<4xf16>, %current_output1: vector<4xf16>, %current_output2: vector<4xf16>, %current_output3: vector<4xf16>, %group_output_tile_count: index, %output_group_tile_base: index, %output_tile_count: index, %value_head_base: index, %subgroup_product_channel: index, %lane_output_tile: index, %lane_product_channel: index, %query_row0: index, %query_row1: index, %query_row2: index, %query_row3: index, %key_origin: index, %last_full_key_tile_start: index, %bounded_key_value_token_count: index, %value_width: index, %value_row_stride: index, %value_column_stride: index, %value: buffer, %probability_stage: buffer, %product_stage: buffer) -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>)
+config.decl @ggml.flash_attention.value_layout : index
+
+template.decl @ggml.flash_attention.pv_block_wmma.prefill_full(%old_scale: vector<4xf32>, %current_output0: vector<4xf16>, %current_output1: vector<4xf16>, %current_output2: vector<4xf16>, %current_output3: vector<4xf16>, %group_output_tile_count: index, %output_group_tile_base: index, %output_tile_count: index, %value_head_base: index, %subgroup_product_channel: index, %lane_output_tile: index, %lane_product_channel: index, %query_row0: index, %query_row1: index, %query_row2: index, %query_row3: index, %key_origin: index, %last_full_key_tile_start: index, %bounded_key_value_token_count: index, %value_width: index, %value_row_stride: index, %value_column_stride: index, %value: buffer, %probability_stage: buffer, %product_stage: buffer, %value_offset: offset) -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>)
 
 template.decl @ggml.flash_attention.pv_block_wmma.prefill_tail(%old_scale: vector<4xf32>, %current_output0: vector<4xf16>, %current_output1: vector<4xf16>, %current_output2: vector<4xf16>, %current_output3: vector<4xf16>, %group_output_tile_count: index, %subgroup_product_channel: index, %lane_output_tile: index, %lane_product_channel: index, %query_row0: index, %query_row1: index, %query_row2: index, %query_row3: index, %tail_stage_head_size: index, %tail_key_value_stage: buffer, %probability_stage: buffer, %product_stage: buffer) -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>)
 
-template.def<@ggml.flash_attention.pv_block_wmma.prefill_full> device @ggml_flash_attention_pv_block_wmma_prefill_full(%old_scale: vector<4xf32>, %current_output0: vector<4xf16>, %current_output1: vector<4xf16>, %current_output2: vector<4xf16>, %current_output3: vector<4xf16>, %group_output_tile_count: index, %output_group_tile_base: index, %output_tile_count: index, %value_head_base: index, %subgroup_product_channel: index, %lane_output_tile: index, %lane_product_channel: index, %query_row0: index, %query_row1: index, %query_row2: index, %query_row3: index, %key_origin: index, %last_full_key_tile_start: index, %bounded_key_value_token_count: index, %value_width: index, %value_row_stride: index, %value_column_stride: index, %value: buffer, %probability_stage: buffer, %product_stage: buffer) -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) {
+template.def<@ggml.flash_attention.pv_block_wmma.prefill_full> device @ggml_flash_attention_pv_block_wmma_prefill_full(%old_scale: vector<4xf32>, %current_output0: vector<4xf16>, %current_output1: vector<4xf16>, %current_output2: vector<4xf16>, %current_output3: vector<4xf16>, %group_output_tile_count: index, %output_group_tile_base: index, %output_tile_count: index, %value_head_base: index, %subgroup_product_channel: index, %lane_output_tile: index, %lane_product_channel: index, %query_row0: index, %query_row1: index, %query_row2: index, %query_row3: index, %key_origin: index, %last_full_key_tile_start: index, %bounded_key_value_token_count: index, %value_width: index, %value_row_stride: index, %value_column_stride: index, %value: buffer, %probability_stage: buffer, %product_stage: buffer, %value_offset: offset) -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) {
   %c0 = index.constant 0 : index
   %c1 = index.constant 1 : index
   %c4 = index.constant 4 : index
   %c16 = index.constant 16 : index
   %c64 = index.constant 64 : index
   %c0_offset = index.constant 0 : offset
-  %c0_f16x8 = vector.constant 0.0 : vector<8xf16>
+  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
   %k = index.constant 16 : index
   %probability_layout = encoding.layout.strided [72, 1] : encoding<layout>
   %value_layout = encoding.layout.strided [%value_row_stride, %value_column_stride] : encoding<layout>
-  %value_view = buffer.view %value[%c0_offset] : buffer -> view<[%bounded_key_value_token_count]x[%value_width]xf16, %value_layout>
+  %value_view = buffer.view %value[%value_offset] : buffer -> view<[%bounded_key_value_token_count]x[%value_width]xf16, %value_layout>
   %probability_stage_view = buffer.view %probability_stage[%c0_offset] : buffer -> view<16x64xf16, %probability_layout>
-  %product_stage_view = buffer.view %product_stage[%c0_offset] : buffer -> view<16x64xf16>
+  %product_stage_view = buffer.view %product_stage[%c0_offset] : buffer -> view<16x64xf32>
+  // Reuse score scratch after probability publication.
+  // Zero V when every query has zero probability to avoid signed-zero WMMA rounding.
+  %visibility_offset = index.constant 4096 : offset
+  %staged_value_offset = index.constant 2048 : offset
+  %visibility = buffer.view %product_stage[%visibility_offset] : buffer -> view<64x4xf16>
+  %staged_values = buffer.view %product_stage[%staged_value_offset] : buffer -> view<16x64xf16>
+  %zero_value = scalar.constant 0.0 : f16
+  %workitem = kernel.workitem.id<x> : index
+  %lane = kernel.subgroup.lane.id : index
+  %subgroup = kernel.subgroup.id : index
+  %c256 = index.constant 256 : index
+  %p0 = view.load %probability_stage_view[%query_row0, %lane] : view<16x64xf16, %probability_layout> -> f16
+  %p1 = view.load %probability_stage_view[%query_row1, %lane] : view<16x64xf16, %probability_layout> -> f16
+  %p2 = view.load %probability_stage_view[%query_row2, %lane] : view<16x64xf16, %probability_layout> -> f16
+  %p3 = view.load %probability_stage_view[%query_row3, %lane] : view<16x64xf16, %probability_layout> -> f16
+  %probabilities = vector.from_elements %p0, %p1, %p2, %p3 : vector<4xf16>
+  %maximum_probability = vector.reduce<maxnumf> %probabilities, %zero_value : vector<4xf16>, f16
+  view.store %maximum_probability, %visibility[%lane, %subgroup] : f16, view<64x4xf16>
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %value_layout_tag = config.get @ggml.flash_attention.value_layout : index
+  %direct_value_layout = index.cmp eq, %value_layout_tag, %c0 : index
+  %tile_visibility_offset = index.constant 4608 : offset
+  %tile_visibility = buffer.view %product_stage[%tile_visibility_offset] : buffer -> view<4xf32>
+  %zero_flag = scalar.constant 0.0 : f32
+  scf.if %direct_value_layout {
+    %lane_probabilities = vector.load %visibility[%lane, %c0] : view<64x4xf16> -> vector<4xf16>
+    %lane_probability = vector.reduce<maxnumf> %lane_probabilities, %zero_value : vector<4xf16>, f16
+    %lane_key_visible = scalar.cmpf ogt, %lane_probability, %zero_value : f16
+    %lane_key_tile = index.div %lane, %c16 : index
+    // Transposed direct fragments fail instrumented validation; retain staged loads.
+    %one_flag = scalar.constant 1.0 : f32
+    %is_first_workitem = index.cmp eq, %workitem, %c0 : index
+    scf.for %visibility_tile = [%c0 to %c4 step %c1] unroll {
+      %lane_outside_tile = index.cmp ne, %lane_key_tile, %visibility_tile : index
+      %lane_tile_visible = scalar.ori %lane_outside_tile, %lane_key_visible : i1
+      %tile_value = scf.select %lane_tile_visible, %one_flag, %zero_flag : f32
+      %subgroup_tile_visible = kernel.subgroup.reduce<minnumf> %tile_value : f32
+      scf.if %is_first_workitem {
+        view.store %subgroup_tile_visible, %tile_visibility[%visibility_tile] : f32, view<4xf32>
+      }
+    }
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  }
   %old_scale_f16 = vector.fptrunc %old_scale : vector<4xf32> to vector<4xf16>
   %old_scale0_scalar = vector.extract %old_scale_f16[0] : vector<4xf16> -> f16
   %old_scale1_scalar = vector.extract %old_scale_f16[1] : vector<4xf16> -> f16
@@ -38,24 +83,68 @@ template.def<@ggml.flash_attention.pv_block_wmma.prefill_full> device @ggml_flas
       %global_output_tile = index.assume %global_output_tile0 [lt(%global_output_tile0, %output_tile_count)] : index
       %output_tile_channel = index.mul %global_output_tile, %c64 : index
       %value_channel0 = index.add %value_head_base, %output_tile_channel : index
-      %value_channel = index.add %value_channel0, %subgroup_product_channel : index
-      %product_init = vector.fragment<init> %c0_f16x8 shape [%m, %n] : vector<8xf16>
-      %product_fragment = scf.for %key_tile = [%c0 to %c64 step %c16](%product_accumulator = %product_init : vector<8xf16>) -> (vector<8xf16>) unroll schedule(recurrence) {
-        %value_token0 = index.add %key_origin, %key_tile : index
-        %value_token = index.assume %value_token0 [lt(%value_token0, %last_full_key_tile_start)] : index
-        %probability_fragment = vector.fragment.load<lhs> %probability_stage_view[%c0, %key_tile] shape [%m, %k] : view<16x64xf16, %probability_layout> -> vector<16xf16>
-        %value_fragment = vector.fragment.load<rhs> %value_view[%value_token, %value_channel] shape [%k, %n] : view<[%bounded_key_value_token_count]x[%value_width]xf16, %value_layout> -> vector<16xf16>
-        %next_product_accumulator = vector.mma %probability_fragment, %value_fragment, %product_accumulator : vector<16xf16>, vector<16xf16>, vector<8xf16>
-        scf.yield %next_product_accumulator : vector<8xf16>
+      %product_init = vector.fragment<init> %c0_f32x4 shape [%m, %n] : vector<4xf32>
+      %product_fragment = scf.for %key_tile = [%c0 to %c64 step %c16](%product_accumulator = %product_init : vector<4xf32>) -> (vector<4xf32>) unroll schedule(recurrence) {
+        %key_tile_ordinal = index.div %key_tile, %c16 : index
+        %tile_all_visible = scf.if %direct_value_layout -> (i1) {
+          %tile_visibility_value = view.load %tile_visibility[%key_tile_ordinal] : view<4xf32> -> f32
+          %tile_has_no_hidden_keys = scalar.cmpf ogt, %tile_visibility_value, %zero_flag : f32
+          scf.yield %tile_has_no_hidden_keys : i1
+        } else {
+          %not_direct = scalar.constant false : i1
+          scf.yield %not_direct : i1
+        }
+        %next_product_accumulator = scf.if %tile_all_visible -> (vector<4xf32>) {
+          %value_token0 = index.add %key_origin, %key_tile : index
+          %value_token = index.assume %value_token0 [lt(%value_token0, %last_full_key_tile_start)] : index
+          %value_channel = index.add %value_channel0, %subgroup_product_channel : index
+          %probability_fragment = vector.fragment.load<lhs> %probability_stage_view[%c0, %key_tile] shape [%m, %k] : view<16x64xf16, %probability_layout> -> vector<16xf16>
+          %value_fragment = vector.fragment.load<rhs> %value_view[%value_token, %value_channel] shape [%k, %n] : view<[%bounded_key_value_token_count]x[%value_width]xf16, %value_layout> -> vector<16xf16>
+          %direct_product_accumulator = vector.mma %probability_fragment, %value_fragment, %product_accumulator : vector<16xf16>, vector<16xf16>, vector<4xf32>
+          scf.yield %direct_product_accumulator : vector<4xf32>
+        } else {
+          scf.for %load_iteration = [%c0 to %c4 step %c1] {
+            %linear = index.madd %load_iteration, %c256, %workitem : index
+            %staged_row = index.div %linear, %c64 : index
+            %staged_channel = index.rem %linear, %c64 : index
+            %block_key0 = index.add %key_tile, %staged_row : index
+            %block_key = index.assume %block_key0 [range(%block_key0, 0, 63)] : index
+            %key_probabilities = vector.load %visibility[%block_key, %c0] : view<64x4xf16> -> vector<4xf16>
+            %key_probability = vector.reduce<maxnumf> %key_probabilities, %zero_value : vector<4xf16>, f16
+            %key_visible = scalar.cmpf ogt, %key_probability, %zero_value : f16
+            %staged_value = scf.if %key_visible -> (f16) {
+              %source_token0 = index.add %key_origin, %block_key : index
+              %source_token = index.assume %source_token0 [lt(%source_token0, %bounded_key_value_token_count)] : index
+              %source_channel0 = index.add %value_channel0, %staged_channel : index
+              %source_channel = index.assume %source_channel0 [lt(%source_channel0, %value_width)] : index
+              %loaded = view.load %value_view[%source_token, %source_channel] : view<[%bounded_key_value_token_count]x[%value_width]xf16, %value_layout> -> f16
+              scf.yield %loaded : f16
+            } else {
+              scf.yield %zero_value : f16
+            }
+            view.store %staged_value, %staged_values[%staged_row, %staged_channel] : f16, view<16x64xf16>
+          }
+          kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+          %probability_fragment = vector.fragment.load<lhs> %probability_stage_view[%c0, %key_tile] shape [%m, %k] : view<16x64xf16, %probability_layout> -> vector<16xf16>
+          %value_fragment = vector.fragment.load<rhs> %staged_values[%c0, %subgroup_product_channel] shape [%k, %n] : view<16x64xf16> -> vector<16xf16>
+          %staged_product_accumulator = vector.mma %probability_fragment, %value_fragment, %product_accumulator : vector<16xf16>, vector<16xf16>, vector<4xf32>
+          kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+          scf.yield %staged_product_accumulator : vector<4xf32>
+        }
+        scf.yield %next_product_accumulator : vector<4xf32>
       }
-      vector.fragment.store<result> %product_fragment, %product_stage_view[%c0, %subgroup_product_channel] shape [%m, %n] : vector<8xf16>, view<16x64xf16>
+      vector.fragment.store<result> %product_fragment, %product_stage_view[%c0, %subgroup_product_channel] shape [%m, %n] : vector<4xf32>, view<16x64xf32>
       kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
       %owns_output_tile = index.cmp eq, %lane_output_tile, %output_tile : index
       %tile_updated_output0, %tile_updated_output1, %tile_updated_output2, %tile_updated_output3 = scf.if %owns_output_tile -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) {
-        %block_output0 = vector.load %product_stage_view[%query_row0, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
-        %block_output1 = vector.load %product_stage_view[%query_row1, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
-        %block_output2 = vector.load %product_stage_view[%query_row2, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
-        %block_output3 = vector.load %product_stage_view[%query_row3, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
+        %block_output0_f32 = vector.load %product_stage_view[%query_row0, %lane_product_channel] : view<16x64xf32> -> vector<4xf32>
+        %block_output0 = vector.fptrunc %block_output0_f32 : vector<4xf32> to vector<4xf16>
+        %block_output1_f32 = vector.load %product_stage_view[%query_row1, %lane_product_channel] : view<16x64xf32> -> vector<4xf32>
+        %block_output1 = vector.fptrunc %block_output1_f32 : vector<4xf32> to vector<4xf16>
+        %block_output2_f32 = vector.load %product_stage_view[%query_row2, %lane_product_channel] : view<16x64xf32> -> vector<4xf32>
+        %block_output2 = vector.fptrunc %block_output2_f32 : vector<4xf32> to vector<4xf16>
+        %block_output3_f32 = vector.load %product_stage_view[%query_row3, %lane_product_channel] : view<16x64xf32> -> vector<4xf32>
+        %block_output3 = vector.fptrunc %block_output3_f32 : vector<4xf32> to vector<4xf16>
         %updated_tile_output0 = vector.addf<reassoc|nnan|ninf|nsz> %tile_output0, %block_output0 : vector<4xf16>
         %updated_tile_output1 = vector.addf<reassoc|nnan|ninf|nsz> %tile_output1, %block_output1 : vector<4xf16>
         %updated_tile_output2 = vector.addf<reassoc|nnan|ninf|nsz> %tile_output2, %block_output2 : vector<4xf16>
@@ -83,14 +172,33 @@ template.def<@ggml.flash_attention.pv_block_wmma.prefill_tail> device @ggml_flas
   %c32 = index.constant 32 : index
   %c64 = index.constant 64 : index
   %c0_offset = index.constant 0 : offset
-  %c0_f16x8 = vector.constant 0.0 : vector<8xf16>
+  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
   %k = index.constant 16 : index
   %probability_layout = encoding.layout.strided [72, 1] : encoding<layout>
   %tail_key_value_stage_view = buffer.view %tail_key_value_stage[%c0_offset] : buffer -> view<32x[%tail_stage_head_size]xf16>
   %probability_stage_view = buffer.view %probability_stage[%c0_offset] : buffer -> view<16x64xf16, %probability_layout>
-  %product_stage_view = buffer.view %product_stage[%c0_offset] : buffer -> view<16x64xf16>
+  %product_stage_view = buffer.view %product_stage[%c0_offset] : buffer -> view<16x64xf32>
+  // Reuse score scratch after probability publication.
+  // Zero V when every query has zero probability to avoid signed-zero WMMA rounding.
+  %visibility_offset = index.constant 4096 : offset
+  %staged_value_offset = index.constant 2048 : offset
+  %visibility = buffer.view %product_stage[%visibility_offset] : buffer -> view<64x4xf16>
+  %staged_values = buffer.view %product_stage[%staged_value_offset] : buffer -> view<16x64xf16>
+  %zero_value = scalar.constant 0.0 : f16
+  %workitem = kernel.workitem.id<x> : index
+  %lane = kernel.subgroup.lane.id : index
+  %subgroup = kernel.subgroup.id : index
+  %c256 = index.constant 256 : index
+  %p0 = view.load %probability_stage_view[%query_row0, %lane] : view<16x64xf16, %probability_layout> -> f16
+  %p1 = view.load %probability_stage_view[%query_row1, %lane] : view<16x64xf16, %probability_layout> -> f16
+  %p2 = view.load %probability_stage_view[%query_row2, %lane] : view<16x64xf16, %probability_layout> -> f16
+  %p3 = view.load %probability_stage_view[%query_row3, %lane] : view<16x64xf16, %probability_layout> -> f16
+  %probabilities = vector.from_elements %p0, %p1, %p2, %p3 : vector<4xf16>
+  %maximum_probability = vector.reduce<maxnumf> %probabilities, %zero_value : vector<4xf16>, f16
+  view.store %maximum_probability, %visibility[%lane, %subgroup] : f16, view<64x4xf16>
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
   %old_scale_f16 = vector.fptrunc %old_scale : vector<4xf32> to vector<4xf16>
   %old_scale0_scalar = vector.extract %old_scale_f16[0] : vector<4xf16> -> f16
   %old_scale1_scalar = vector.extract %old_scale_f16[1] : vector<4xf16> -> f16
@@ -108,22 +216,46 @@ template.def<@ggml.flash_attention.pv_block_wmma.prefill_tail> device @ggml_flas
     %output_tile_valid = index.cmp ult, %output_tile, %group_output_tile_count : index
     %updated_output0, %updated_output1, %updated_output2, %updated_output3 = scf.if %output_tile_valid -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) {
       %output_tile_channel = index.mul %output_tile, %c64 : index
-      %value_channel = index.add %output_tile_channel, %subgroup_product_channel : index
-      %tail_product_init = vector.fragment<init> %c0_f16x8 shape [%m, %n] : vector<8xf16>
-      %tail_product_fragment = scf.for %key_tile = [%c0 to %c32 step %c16](%product_accumulator = %tail_product_init : vector<8xf16>) -> (vector<8xf16>) unroll {
+      %tail_product_init = vector.fragment<init> %c0_f32x4 shape [%m, %n] : vector<4xf32>
+      %tail_product_fragment = scf.for %key_tile = [%c0 to %c32 step %c16](%product_accumulator = %tail_product_init : vector<4xf32>) -> (vector<4xf32>) unroll {
+        scf.for %load_iteration = [%c0 to %c4 step %c1] {
+          %linear = index.madd %load_iteration, %c256, %workitem : index
+          %staged_row = index.div %linear, %c64 : index
+          %staged_channel = index.rem %linear, %c64 : index
+          %block_key0 = index.add %key_tile, %staged_row : index
+          %block_key = index.assume %block_key0 [range(%block_key0, 0, 63)] : index
+          %key_probabilities = vector.load %visibility[%block_key, %c0] : view<64x4xf16> -> vector<4xf16>
+          %key_probability = vector.reduce<maxnumf> %key_probabilities, %zero_value : vector<4xf16>, f16
+          %key_visible = scalar.cmpf ogt, %key_probability, %zero_value : f16
+          %staged_value = scf.if %key_visible -> (f16) {
+            %tail_key = index.assume %block_key [range(%block_key, 0, 31)] : index
+            %source_channel = index.add %output_tile_channel, %staged_channel : index
+            %loaded = view.load %tail_key_value_stage_view[%tail_key, %source_channel] : view<32x[%tail_stage_head_size]xf16> -> f16
+            scf.yield %loaded : f16
+          } else {
+            scf.yield %zero_value : f16
+          }
+          view.store %staged_value, %staged_values[%staged_row, %staged_channel] : f16, view<16x64xf16>
+        }
+        kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
         %probability_fragment = vector.fragment.load<lhs> %probability_stage_view[%c0, %key_tile] shape [%m, %k] : view<16x64xf16, %probability_layout> -> vector<16xf16>
-        %value_fragment = vector.fragment.load<rhs> %tail_key_value_stage_view[%key_tile, %value_channel] shape [%k, %n] : view<32x[%tail_stage_head_size]xf16> -> vector<16xf16>
-        %next_product_accumulator = vector.mma %probability_fragment, %value_fragment, %product_accumulator : vector<16xf16>, vector<16xf16>, vector<8xf16>
-        scf.yield %next_product_accumulator : vector<8xf16>
+        %value_fragment = vector.fragment.load<rhs> %staged_values[%c0, %subgroup_product_channel] shape [%k, %n] : view<16x64xf16> -> vector<16xf16>
+        %next_product_accumulator = vector.mma %probability_fragment, %value_fragment, %product_accumulator : vector<16xf16>, vector<16xf16>, vector<4xf32>
+        kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+        scf.yield %next_product_accumulator : vector<4xf32>
       }
-      vector.fragment.store<result> %tail_product_fragment, %product_stage_view[%c0, %subgroup_product_channel] shape [%m, %n] : vector<8xf16>, view<16x64xf16>
+      vector.fragment.store<result> %tail_product_fragment, %product_stage_view[%c0, %subgroup_product_channel] shape [%m, %n] : vector<4xf32>, view<16x64xf32>
       kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
       %owns_output_tile = index.cmp eq, %lane_output_tile, %output_tile : index
       %tile_updated_output0, %tile_updated_output1, %tile_updated_output2, %tile_updated_output3 = scf.if %owns_output_tile -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) {
-        %block_output0 = vector.load %product_stage_view[%query_row0, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
-        %block_output1 = vector.load %product_stage_view[%query_row1, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
-        %block_output2 = vector.load %product_stage_view[%query_row2, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
-        %block_output3 = vector.load %product_stage_view[%query_row3, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
+        %block_output0_f32 = vector.load %product_stage_view[%query_row0, %lane_product_channel] : view<16x64xf32> -> vector<4xf32>
+        %block_output0 = vector.fptrunc %block_output0_f32 : vector<4xf32> to vector<4xf16>
+        %block_output1_f32 = vector.load %product_stage_view[%query_row1, %lane_product_channel] : view<16x64xf32> -> vector<4xf32>
+        %block_output1 = vector.fptrunc %block_output1_f32 : vector<4xf32> to vector<4xf16>
+        %block_output2_f32 = vector.load %product_stage_view[%query_row2, %lane_product_channel] : view<16x64xf32> -> vector<4xf32>
+        %block_output2 = vector.fptrunc %block_output2_f32 : vector<4xf32> to vector<4xf16>
+        %block_output3_f32 = vector.load %product_stage_view[%query_row3, %lane_product_channel] : view<16x64xf32> -> vector<4xf32>
+        %block_output3 = vector.fptrunc %block_output3_f32 : vector<4xf32> to vector<4xf16>
         %updated_tile_output0 = vector.addf<reassoc|nnan|ninf|nsz> %tile_output0, %block_output0 : vector<4xf16>
         %updated_tile_output1 = vector.addf<reassoc|nnan|ninf|nsz> %tile_output1, %block_output1 : vector<4xf16>
         %updated_tile_output2 = vector.addf<reassoc|nnan|ninf|nsz> %tile_output2, %block_output2 : vector<4xf16>

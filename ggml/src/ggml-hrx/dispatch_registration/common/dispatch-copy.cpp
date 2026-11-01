@@ -61,7 +61,9 @@ static void add_concat_strided_source_parameters(KernelSpecialization & kernel, 
     }
 }
 
-static bool make_copy_f32_dispatch(const Value & source, const Value & output, Dispatch & dispatch) {
+}  // namespace
+
+bool make_copy_f32_dispatch(const Value & source, const Value & output, Dispatch & dispatch) {
     if (source.type != GGML_TYPE_F32 || output.type != GGML_TYPE_F32 || !output.contiguous ||
         !packed_f32_layout(output) || !f32_element_strides(source) || source.element_count <= 0 ||
         source.element_count != output.element_count ||
@@ -74,7 +76,7 @@ static bool make_copy_f32_dispatch(const Value & source, const Value & output, D
         dispatch.kernel = make_kernel_specialization(kCopyF32Kernel);
         dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
     } else {
-        if (!strided_f32_storage_span_bytes(source, source_span)) {
+        if (!strided_f32_storage_span_bytes(source, source_span, true)) {
             return false;
         }
         const size_t source_span_elements = source_span / sizeof(float);
@@ -94,6 +96,69 @@ static bool make_copy_f32_dispatch(const Value & source, const Value & output, D
     dispatch.kernel.integer_parameters.emplace("element_count", source.element_count);
     dispatch.bindings.push_back({ source.storage_root, source.storage_offset, source_span });
     dispatch.bindings.push_back({ output.id, 0, output.byte_count });
+    return true;
+}
+
+namespace {
+
+static bool make_copy_bits_dispatch(const Value & source,
+                                    const Value & output,
+                                    Dispatch &    dispatch,
+                                    bool          repeat = false) {
+    if (source.type != output.type ||
+        (source.type != GGML_TYPE_F16 && source.type != GGML_TYPE_I32 && source.type != GGML_TYPE_F32) ||
+        !output.contiguous || source.element_count < 1 || (!repeat && source.element_count != output.element_count) ||
+        output.element_count < 1 || output.element_count > static_cast<int64_t>(kMaximumCopyElements) ||
+        source.storage == output.storage) {
+        return false;
+    }
+    const size_t element_size = ggml_type_size(source.type);
+    if (source.byte_count / element_size > kMaximumCopyElements) {
+        return false;
+    }
+    for (int dim = 0; dim < GGML_MAX_DIMS; ++dim) {
+        if (source.ne[dim] < 1 || source.nb[dim] == 0 || source.nb[dim] % element_size != 0 ||
+            source.nb[dim] / element_size > kMaximumCopyElements) {
+            return false;
+        }
+    }
+    dispatch.kernel = make_kernel_specialization(GGML_HRX_KERNEL_REF("loom_libs", "ggml_copy_bits"));
+    dispatch.kernel.integer_parameters.emplace("element_count", output.element_count);
+    dispatch.kernel.integer_parameters.emplace("source_span", source.byte_count / element_size);
+    auto & config = dispatch.kernel.compile_parameters;
+    config.emplace("ggml.copy_bits.element_bits", std::to_string(element_size * 8));
+    for (int dim = 0; dim < GGML_MAX_DIMS; ++dim) {
+        if (repeat && (output.ne[dim] < 1 || output.ne[dim] % source.ne[dim] != 0)) {
+            return false;
+        }
+        if (dim < 3) {
+            config.emplace("ggml.copy_bits.ne" + std::to_string(dim),
+                           std::to_string(repeat ? output.ne[dim] : source.ne[dim]));
+        }
+        config.emplace("ggml.copy_bits.source_ne" + std::to_string(dim), std::to_string(source.ne[dim]));
+        config.emplace("ggml.copy_bits.stride" + std::to_string(dim), std::to_string(source.nb[dim] / element_size));
+    }
+    dispatch.bindings = {
+        { source.id, 0, source.byte_count },
+        { output.id, 0, output.byte_count }
+    };
+    return true;
+}
+
+static bool match_cont_bits_dispatch(const DispatchMatchContext & context, DispatchMatch & match) {
+    const GraphNode * node = context.root_node;
+    if (node == nullptr || (node->op != GGML_OP_CONT && node->op != GGML_OP_REPEAT) || node->inputs.size() != 1) {
+        return false;
+    }
+    const Value * source = graph_value(context.graph, node->inputs[0]);
+    const Value * output = graph_value(context.graph, node->output);
+    Dispatch      dispatch;
+    if (source == nullptr || output == nullptr ||
+        !make_copy_bits_dispatch(*source, *output, dispatch, node->op == GGML_OP_REPEAT)) {
+        return false;
+    }
+    match.dispatches.push_back(std::move(dispatch));
+    match.covered_nodes.push_back(context.root_index);
     return true;
 }
 
@@ -209,7 +274,69 @@ static bool match_concat_dim0_f32_dispatch(const DispatchMatchContext & context,
 
 }  // namespace
 
+static bool match_concat_packed(const DispatchMatchContext & context, DispatchMatch & match) {
+    const GraphNode * node = context.root_node;
+    if (node == nullptr || node->op != GGML_OP_CONCAT || node->inputs.size() != 2) {
+        return false;
+    }
+    const Value * lhs    = graph_value(context.graph, node->inputs[0]);
+    const Value * rhs    = graph_value(context.graph, node->inputs[1]);
+    const Value * output = graph_value(context.graph, node->output);
+    if (lhs == nullptr || rhs == nullptr || output == nullptr ||
+        (lhs->type != GGML_TYPE_F16 && lhs->type != GGML_TYPE_F32 && lhs->type != GGML_TYPE_I32) ||
+        rhs->type != lhs->type || output->type != lhs->type || !lhs->contiguous || !rhs->contiguous ||
+        !output->contiguous || output->element_count < 1 || output->element_count > 134217728 ||
+        lhs->storage == output->storage || rhs->storage == output->storage) {
+        return false;
+    }
+    int axis = -1;
+    for (int dim = 0; dim < GGML_MAX_DIMS; ++dim) {
+        if (lhs->ne[dim] < 1 || rhs->ne[dim] < 1) {
+            return false;
+        }
+        if (output->ne[dim] == lhs->ne[dim] + rhs->ne[dim]) {
+            if (axis >= 0) {
+                return false;
+            }
+            axis = dim;
+        } else if (lhs->ne[dim] != output->ne[dim] || rhs->ne[dim] != output->ne[dim]) {
+            return false;
+        }
+    }
+    if (axis < 0 || (axis == 0 && lhs->type == GGML_TYPE_F32)) {
+        return false;
+    }
+    int64_t lhs_chunk = 1, rhs_chunk = 1;
+    for (int dim = 0; dim <= axis; ++dim) {
+        lhs_chunk *= lhs->ne[dim];
+        rhs_chunk *= rhs->ne[dim];
+    }
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(GGML_HRX_KERNEL_REF("loom_libs", "ggml_concat_packed"));
+    dispatch.kernel.integer_parameters.emplace("element_count", output->element_count);
+    dispatch.kernel.compile_parameters.emplace("ggml.concat_packed.element_bits",
+                                               std::to_string(8 * ggml_type_size(lhs->type)));
+    dispatch.kernel.compile_parameters.emplace("ggml.concat_packed.lhs_chunk", std::to_string(lhs_chunk));
+    dispatch.kernel.compile_parameters.emplace("ggml.concat_packed.rhs_chunk", std::to_string(rhs_chunk));
+    dispatch.kernel.compile_parameters.emplace("ggml.concat_packed.lhs_span", std::to_string(lhs->element_count));
+    dispatch.kernel.compile_parameters.emplace("ggml.concat_packed.rhs_span", std::to_string(rhs->element_count));
+    dispatch.bindings = {
+        { lhs->id,    0, lhs->byte_count    },
+        { rhs->id,    0, rhs->byte_count    },
+        { output->id, 0, output->byte_count }
+    };
+    match.dispatches.push_back(std::move(dispatch));
+    match.covered_nodes.push_back(context.root_index);
+    return true;
+}
+
 void register_copy_dispatch(DispatchRegistryBuilder & registry) {
+    registry.add({ "common.repeat_bits", GGML_OP_REPEAT, DispatchMatchKind::SingleOp, 0, DispatchSource::Common,
+                   match_cont_bits_dispatch });
+    registry.add({ "common.concat_packed", GGML_OP_CONCAT, DispatchMatchKind::SingleOp, 10, DispatchSource::Common,
+                   match_concat_packed });
+    registry.add({ "common.cont_bits", GGML_OP_CONT, DispatchMatchKind::SingleOp, -10, DispatchSource::Common,
+                   match_cont_bits_dispatch });
     registry.add({
         "common.copy_f32",
         GGML_OP_CPY,

@@ -1,5 +1,6 @@
 #include "prepared-command-program-cache.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -117,12 +118,19 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
         std::lock_guard<std::mutex> lock(mutex_);
         auto                        found = programs_.find(key);
         if (found == programs_.end()) {
+            if (programs_.size() >= 32) {
+                const auto retired = std::min_element(
+                    programs_.begin(), programs_.end(),
+                    [](const auto & a, const auto & b) { return a.second->last_used < b.second->last_used; });
+                programs_.erase(retired);
+            }
             entry = std::make_shared<Entry>();
             programs_.emplace(key, entry);
             created_entry = true;
         } else {
             entry = found->second;
         }
+        entry->last_used = ++access_tick_;
     }
 
     std::lock_guard<std::mutex> entry_lock(entry->mutex);

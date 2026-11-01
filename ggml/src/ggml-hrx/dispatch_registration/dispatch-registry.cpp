@@ -1,6 +1,7 @@
 #include "dispatch-registry.h"
 
 #include "common/dispatch-common.h"
+#include "graph/graph-traversal.h"
 #include "llm/dispatch-attention-qkv.h"
 #include "llm/dispatch-gated-delta-net.h"
 #include "llm/dispatch-ssm-conv.h"
@@ -21,6 +22,33 @@ static const std::vector<DispatchActivationConsumerRegistration> kEmptyActivatio
 
 static bool valid_root_op(ggml_op op) {
     return op >= 0 && static_cast<size_t>(op) < kOpCount;
+}
+
+static bool match_inputs_are_available(const DispatchMatchContext & context, const DispatchMatch & match) {
+    for (size_t node_index : match.covered_nodes) {
+        if (node_index >= context.graph.nodes().size()) {
+            return false;
+        }
+        for (ValueId input : context.graph.nodes()[node_index].inputs) {
+            const GraphNode * producer = context.graph.index().producer(input);
+            while (producer != nullptr) {
+                size_t index;
+                if (!context.graph.index().node_index(producer, index)) {
+                    return false;
+                }
+                if ((index < context.covered_nodes.size() && context.covered_nodes[index]) ||
+                    std::find(match.covered_nodes.begin(), match.covered_nodes.end(), index) !=
+                        match.covered_nodes.end()) {
+                    break;
+                }
+                if (!is_layout_alias_node(context.graph, *producer)) {
+                    return false;
+                }
+                producer = context.graph.index().producer(producer->inputs[0]);
+            }
+        }
+    }
+    return true;
 }
 
 static void sort_registrations(std::vector<DispatchRegistration> & registrations) {
@@ -70,7 +98,8 @@ bool DispatchRegistry::match(const DispatchMatchContext & context,
         registrations_by_root_[static_cast<size_t>(context.root_node->op)].ordered;
     for (const DispatchRegistration & registration : registrations) {
         DispatchMatch candidate;
-        if (registration.matcher != nullptr && registration.matcher(context, candidate)) {
+        if (registration.matcher != nullptr && registration.matcher(context, candidate) &&
+            match_inputs_are_available(context, candidate)) {
             if (diagnostics != nullptr) {
                 diagnostics->attempts.push_back({
                     registration.name != nullptr ? registration.name : "",

@@ -1,0 +1,53 @@
+config.decl @ggml.sum_rows.width : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.sum_rows.ne1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.sum_rows.ne2 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.sum_rows.source_span : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.sum_rows.stride0 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.sum_rows.stride1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.sum_rows.stride2 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.sum_rows.stride3 : %value: index where [range(%value, 1, 1073741824)]
+
+kernel.def @ggml_sum_rows_f32(%row_count: index) {
+  %one = index.constant 1 : index
+  %group = index.constant 256 : index
+  kernel.launch.config workgroups(%row_count, %one, %one) workgroup_size(%group, %one, %one) : index
+} launch(%row_count: index, %input: buffer, %output: buffer) {
+  %count = index.assume %row_count [range(%row_count, 1, 1048576)] : index
+  %width = config.get @ggml.sum_rows.width : index
+  %ne1 = config.get @ggml.sum_rows.ne1 : index
+  %ne2 = config.get @ggml.sum_rows.ne2 : index
+  %source_span = config.get @ggml.sum_rows.source_span : index
+  %stride0 = config.get @ggml.sum_rows.stride0 : index
+  %stride1 = config.get @ggml.sum_rows.stride1 : index
+  %stride2 = config.get @ggml.sum_rows.stride2 : index
+  %stride3 = config.get @ggml.sum_rows.stride3 : index
+  %row0 = kernel.workgroup.id<x> : index
+  %row, %row_extent = index.assume %row0, %count [range(%row0, 0, 1048575), lt(%row0, %count)] : index, index
+  %lane = kernel.workitem.id<x> : index
+  %step = index.constant 256 : index
+  %c0 = index.constant 0 : index
+  %zero = index.constant 0 : offset
+  %zero_f32 = scalar.constant 0.0 : f32
+  %i1 = index.rem %row, %ne1 : index
+  %rest = index.div %row, %ne1 : index
+  %i2 = index.rem %rest, %ne2 : index
+  %i3 = index.div %rest, %ne2 : index
+  %offset1 = index.mul %i1, %stride1 : index
+  %offset2 = index.madd %i2, %stride2, %offset1 : index
+  %base = index.madd %i3, %stride3, %offset2 : index
+  %source = buffer.view %input[%zero] : buffer -> view<[%source_span]xf32>
+  %dest = buffer.view %output[%zero] : buffer -> view<[%count]xf32>
+  %partial = scf.for %column = [%lane to %width step %step](%acc = %zero_f32 : f32) -> (f32) {
+    %offset0 = index.madd %column, %stride0, %base : index
+    %offset, %extent = index.assume %offset0, %source_span [range(%offset0, 0, 1073741823), lt(%offset0, %source_span)] : index, index
+    %value = view.load %source[%offset] : view<[%source_span]xf32> -> f32
+    %next = scalar.addf %acc, %value : f32
+    scf.yield %next : f32
+  }
+  %sum = kernel.workgroup.reduce<addf> %partial : f32
+  %writes = index.cmp eq, %lane, %c0 : index
+  scf.if %writes {
+    view.store %sum, %dest[%row] : f32, view<[%count]xf32>
+  }
+  kernel.return
+}

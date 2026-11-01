@@ -1854,7 +1854,9 @@ static void run_gemma_post_proj_matcher_negatives() {
                 imported.graph, &imported.graph.nodes()[rms_index],    rms_index, covered,
                 plan,           next_plan_value(imported.graph, plan),
             };
-            REQUIRE(registry->match(context, match));
+            if (!registry->match(context, match)) {
+                return std::string();
+            }
             REQUIRE(match.dispatches.size() == 1);
             const auto & specialization = match.dispatches[0].kernel;
             const std::string name = kernel_name_for_id(specialization.kernel_id);
@@ -1873,7 +1875,7 @@ static void run_gemma_post_proj_matcher_negatives() {
             }
             return name;
         };
-        REQUIRE(kernel() == "loom_libs:ggml_rmsnorm_binary_f32");
+        REQUIRE(kernel().empty());
         covered[raw_index] = true;
         if (variant == 3) {
             REQUIRE(kernel() == "loom_libs:ggml_rmsnorm_binary_f32");
@@ -2962,12 +2964,14 @@ static void run_qwen_flash_attention_case() {
     ggml_backend_free(backend);
 }
 
-static void run_common_flash_attention_cpu_reference_case(int64_t      head_size,
-                                                          int64_t      query_token_count,
-                                                          int64_t      key_value_token_count,
-                                                          float        scale,
-                                                          const char * expected_kernel,
-                                                          int64_t      value_head_size = -1) {
+static void run_common_flash_attention_cpu_reference_case(
+    int64_t                           head_size,
+    int64_t                           query_token_count,
+    int64_t                           key_value_token_count,
+    float                             scale,
+    const char *                      expected_kernel,
+    int64_t                           value_head_size         = -1,
+    ggml::hrx::WorkloadSpecialization expected_specialization = ggml::hrx::WorkloadSpecialization::Dynamic) {
     if (value_head_size < 0) {
         value_head_size = head_size;
     }
@@ -3001,9 +3005,6 @@ static void run_common_flash_attention_cpu_reference_case(int64_t      head_size
     ggml_build_forward_expand(graph, output);
 
     require_kernel_subsequence(scheduled_kernel_sequence(graph), { expected_kernel });
-    const ggml::hrx::WorkloadSpecialization expected_specialization =
-        query_token_count == 256 && key_value_token_count == 256 ? ggml::hrx::WorkloadSpecialization::Exact :
-                                                                   ggml::hrx::WorkloadSpecialization::Dynamic;
     REQUIRE(scheduled_kernel_specialization(graph, expected_kernel).workload_specialization ==
             expected_specialization);
 
@@ -3037,6 +3038,105 @@ static void run_common_flash_attention_cpu_reference_case(int64_t      head_size
     ggml_free(ctx);
     ggml_backend_free(backend);
     restore_environment_value(kDisableQwenDispatchEnv, had_original_env, original_env_value);
+}
+
+static void run_flash_attention_masked_storage_case(int64_t query_count, int64_t key_count, int64_t visible_count) {
+    constexpr int64_t head_size  = 512;
+    const int64_t     head_count = query_count == 1 ? 64 : 4;
+    ggml_backend_t    backend    = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+    ggml_context * ctx = ggml_init({ 4 * 1024 * 1024, nullptr, true });
+    REQUIRE(ctx != nullptr);
+    ggml_tensor * query  = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, query_count, head_count);
+    query->nb[1]         = head_count * head_size * sizeof(float);
+    query->nb[2]         = head_size * sizeof(float);
+    ggml_tensor * key    = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, head_size, key_count, 1);
+    ggml_tensor * value  = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, head_size, key_count, 1);
+    ggml_tensor * mask   = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, key_count, query_count);
+    ggml_tensor * sink   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, head_count);
+    ggml_tensor * output = build_qwen_flash_attention_graph(ctx, query, key, value, mask, head_size);
+    ggml_flash_attn_ext_add_sinks(output, sink);
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, output);
+    require_kernel_subsequence(scheduled_kernel_sequence(graph),
+                               { "loom_libs:ggml_flash_attention_f32_f16_wmma_sink" });
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    REQUIRE(buffer != nullptr);
+
+    uint32_t random_state = 20261028;
+    auto     random_value = [&]() {
+        random_state ^= random_state << 13;
+        random_state ^= random_state >> 17;
+        random_state ^= random_state << 5;
+        return (static_cast<float>(random_state & 65535) / 65536.0f - 0.5f) * 8.0f;
+    };
+    std::vector<float>       query_data(query_count * head_count * head_size, 0.0f);
+    std::vector<float>       sink_data(head_count, 0.0f);
+    std::vector<ggml_fp16_t> key_data(key_count * head_size), value_data(key_count * head_size);
+    for (size_t i = 0; i < key_data.size(); ++i) {
+        key_data[i]   = ggml_fp32_to_fp16(random_value());
+        value_data[i] = ggml_fp32_to_fp16(random_value());
+    }
+    std::vector<ggml_fp16_t> mask_data(query_count * key_count,
+                                       ggml_fp32_to_fp16(-std::numeric_limits<float>::infinity()));
+    std::vector<float>       expected(query_data.size(), 0.0f);
+    for (int64_t row = 0; row < query_count; ++row) {
+        const int64_t visible = std::max<int64_t>(0, visible_count - query_count + 1 + row);
+        for (int64_t token = 0; token < visible; ++token) {
+            mask_data[row * key_count + token] = ggml_fp32_to_fp16(0.0f);
+        }
+        // Zero queries and sinks give uniform probabilities, including one sink entry.
+        for (int64_t channel = 0; channel < head_size; ++channel) {
+            double sum = 0.0;
+            for (int64_t token = 0; token < visible; ++token) {
+                sum += ggml_fp16_to_fp32(value_data[token * head_size + channel]);
+            }
+            for (int64_t head = 0; head < head_count; ++head) {
+                expected[(row * head_count + head) * head_size + channel] = sum / (visible + 1);
+            }
+        }
+    }
+    ggml_backend_tensor_set(query, query_data.data(), 0, ggml_nbytes(query));
+    ggml_backend_tensor_set(mask, mask_data.data(), 0, ggml_nbytes(mask));
+    ggml_backend_tensor_set(sink, sink_data.data(), 0, ggml_nbytes(sink));
+    std::vector<float> baseline(expected.size()), actual(expected.size());
+    for (int variant = 0; variant < 5; ++variant) {
+        auto changed_key   = key_data;
+        auto changed_value = value_data;
+        for (int64_t i = visible_count * head_size; i < key_count * head_size; ++i) {
+            for (auto * data : { &changed_key, &changed_value }) {
+                const float magnitude = std::fabs(ggml_fp16_to_fp32((*data)[i]));
+                if (variant > 0) {
+                    const float replacement = variant == 1 ? magnitude :
+                                              variant == 2 ? -magnitude :
+                                              variant == 3 ? 0.0f :
+                                                             -0.0f;
+                    (*data)[i]              = ggml_fp32_to_fp16(replacement);
+                }
+            }
+        }
+        ggml_backend_tensor_set(key, changed_key.data(), 0, ggml_nbytes(key));
+        ggml_backend_tensor_set(value, changed_value.data(), 0, ggml_nbytes(value));
+        REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+        ggml_backend_synchronize(backend);
+        ggml_backend_tensor_get(output, actual.data(), 0, ggml_nbytes(output));
+        double squared_error = 0.0, squared_reference = 0.0;
+        for (size_t i = 0; i < actual.size(); ++i) {
+            REQUIRE(std::isfinite(actual[i]));
+            const double error = static_cast<double>(actual[i]) - expected[i];
+            squared_error += error * error;
+            squared_reference += static_cast<double>(expected[i]) * expected[i];
+        }
+        REQUIRE(squared_error <= 1e-5 * squared_reference);
+        if (variant == 0) {
+            baseline = actual;
+        } else {
+            REQUIRE(std::memcmp(actual.data(), baseline.data(), actual.size() * sizeof(float)) == 0);
+        }
+    }
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+    ggml_backend_free(backend);
 }
 
 static void run_asymmetric_flash_attention_cpu_reference_case() {
@@ -3076,8 +3176,9 @@ static void run_asymmetric_flash_attention_cpu_reference_case() {
     ggml_build_forward_expand(graph, output);
 
     require_kernel_subsequence(scheduled_kernel_sequence(graph), { "loom_libs:ggml_flash_attention_f32_f16_wmma" });
-    REQUIRE(scheduled_kernel_specialization(graph, "loom_libs:ggml_flash_attention_f32_f16_wmma")
-                .workload_specialization == ggml::hrx::WorkloadSpecialization::Dynamic);
+    REQUIRE(
+        scheduled_kernel_specialization(graph, "loom_libs:ggml_flash_attention_f32_f16_wmma").workload_specialization ==
+        ggml::hrx::WorkloadSpecialization::Exact);
 
     ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
     REQUIRE(buffer != nullptr);
@@ -3143,6 +3244,12 @@ static void run_qwen_full_cache_prefill_flash_attention_scheduling_case(int64_t 
     std::vector<bool>        covered_nodes(imported.graph.nodes().size(), false);
     ggml::hrx::CommandPlan   plan;
     ggml::hrx::DispatchMatch postprocess_match;
+    // This fixture starts after the three input projections have completed.
+    for (size_t i = 0; i < imported.graph.nodes().size(); ++i) {
+        if (imported.graph.nodes()[i].op == GGML_OP_MUL_MAT) {
+            covered_nodes[i] = true;
+        }
+    }
     match_dispatch_at_index(imported.graph, *registry, plan, covered_nodes,
                             producer_index_for_tensor(imported.graph, attention.query_reshape), postprocess_match);
     ggml::hrx::DispatchMatch flash_match;
@@ -6171,6 +6278,8 @@ static const char * glu_op_name(ggml_glu_op op) {
             return "swiglu";
         case GGML_GLU_OP_SWIGLU_OAI:
             return "swiglu_oai";
+        case GGML_GLU_OP_SWIGLU_CLAMP:
+            return "swiglu_clamp";
         case GGML_GLU_OP_GEGLU_ERF:
             return "geglu_erf";
         case GGML_GLU_OP_GEGLU_QUICK:
@@ -6724,6 +6833,7 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
     suite.device_case("external_view_input_rmsnorm", [] { run_external_view_input_rmsnorm_case(); });
     suite.device_case("split_local_view_alias_import", [] { run_split_local_view_alias_import_case(); });
     suite.device_case("rope_set_rows.cpu_reference", [] { run_rope_set_rows_cpu_reference_case(); });
+
     for (const int64_t head_count : { 8, 32 }) {
         for (const int64_t token_count : { 1, 64 }) {
             suite.device_case(
@@ -6760,9 +6870,23 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
 }
 
 static void register_flash_attention_cases(Suite & suite) {
+    for (const auto & shape : std::vector<std::array<int64_t, 3>>{
+             { 1,  31,  23  },
+             { 1,  64,  7   },
+             { 1,  65,  63  },
+             { 1,  256, 7   },
+             { 17, 200, 197 },
+             { 4,  257, 253 },
+             { 1,  31,  0   }
+    }) {
+        const std::string name = "common_flash_attention.masked_storage.query" + std::to_string(shape[0]) + ".kv" +
+                                 std::to_string(shape[1]) + ".visible" + std::to_string(shape[2]);
+        suite.device_case(name, [shape] { run_flash_attention_masked_storage_case(shape[0], shape[1], shape[2]); });
+    }
     suite.device_case("common_flash_attention.prefill.head128.query256.kv256.exact", [] {
         run_common_flash_attention_cpu_reference_case(128, 256, 256, 1.0f / std::sqrt(128.0f),
-                                                      "loom_libs:ggml_flash_attention_f32_f16_wmma");
+                                                      "loom_libs:ggml_flash_attention_f32_f16_wmma", -1,
+                                                      ggml::hrx::WorkloadSpecialization::Exact);
     });
     for (int64_t head_size = 64; head_size <= 512; head_size += 64) {
         suite.device_case("common_flash_attention.decode.head" + std::to_string(head_size) + ".query2.kv65",
@@ -6773,9 +6897,9 @@ static void register_flash_attention_cases(Suite & suite) {
                           });
         suite.device_case(
             "common_flash_attention.prefill.head" + std::to_string(head_size) + ".query16.kv64", [head_size] {
-                run_common_flash_attention_cpu_reference_case(head_size, 16, 64,
-                                                              1.0f / std::sqrt(static_cast<float>(head_size)),
-                                                              "loom_libs:ggml_flash_attention_f32_f16_wmma");
+                run_common_flash_attention_cpu_reference_case(
+                    head_size, 16, 64, 1.0f / std::sqrt(static_cast<float>(head_size)),
+                    "loom_libs:ggml_flash_attention_f32_f16_wmma", -1, ggml::hrx::WorkloadSpecialization::Exact);
             });
         suite.device_case(
             "common_flash_attention.prefill.head" + std::to_string(head_size) + ".query17.kv65", [head_size] {

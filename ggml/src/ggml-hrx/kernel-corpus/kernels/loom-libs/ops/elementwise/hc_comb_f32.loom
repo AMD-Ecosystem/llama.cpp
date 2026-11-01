@@ -1,0 +1,120 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+amdgpu.target<gfx11-generic> @ggml_hc_comb_target {subgroup_size = 64}
+config.decl @ggml.hc.tokens : %value: index where [range(%value, 1, 32768)]
+config.decl @ggml.hc.n_iter : %value: index where [range(%value, 1, 128)]
+config.decl @ggml.hc.eps : f32
+
+func.def inline @hc_normalize_row(%row: vector<4xf32>, %eps: f32) -> (vector<4xf32>) {
+  %sum = vector.reduce<addf> %row, %eps : vector<4xf32>, f32
+  %one = scalar.constant 1.0 : f32
+  %inverse = scalar.divf %one, %sum : f32
+  %inverse_vector = vector.splat %inverse : vector<4xf32>
+  %normalized = vector.mulf %row, %inverse_vector : vector<4xf32>
+  func.return %normalized : vector<4xf32>
+}
+
+func.def inline @hc_normalize_cols(%r0: vector<4xf32>, %r1: vector<4xf32>, %r2: vector<4xf32>, %r3: vector<4xf32>, %eps: f32) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
+  %eps_vector = vector.splat %eps : vector<4xf32>
+  %s0 = vector.addf %eps_vector, %r0 : vector<4xf32>
+  %s1 = vector.addf %s0, %r1 : vector<4xf32>
+  %s2 = vector.addf %s1, %r2 : vector<4xf32>
+  %sum = vector.addf %s2, %r3 : vector<4xf32>
+  %ones = vector.constant 1.0 : vector<4xf32>
+  %inverse = vector.divf %ones, %sum : vector<4xf32>
+  %n0 = vector.mulf %r0, %inverse : vector<4xf32>
+  %n1 = vector.mulf %r1, %inverse : vector<4xf32>
+  %n2 = vector.mulf %r2, %inverse : vector<4xf32>
+  %n3 = vector.mulf %r3, %inverse : vector<4xf32>
+  func.return %n0, %n1, %n2, %n3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+}
+
+func.def inline @hc_softmax_row(%mix: vector<4xf32>, %scale: vector<4xf32>, %base: vector<4xf32>, %eps: f32) -> (vector<4xf32>) {
+  %scaled = vector.mulf %mix, %scale : vector<4xf32>
+  %affine = vector.addf %scaled, %base : vector<4xf32>
+  %negative_inf = scalar.constant -inf : f32
+  %maximum = vector.reduce<maxnumf> %affine, %negative_inf : vector<4xf32>, f32
+  %maximum_vector = vector.splat %maximum : vector<4xf32>
+  %shifted = vector.subf %affine, %maximum_vector : vector<4xf32>
+  %exponential = vector.expf<afn> %shifted : vector<4xf32>
+  %zero = scalar.constant 0.0 : f32
+  %probability = func.call @hc_normalize_row(%exponential, %zero) : (vector<4xf32>, f32) -> (vector<4xf32>)
+  %eps_vector = vector.splat %eps : vector<4xf32>
+  %result = vector.addf %probability, %eps_vector : vector<4xf32>
+  func.return %result : vector<4xf32>
+}
+
+kernel.def target(@ggml_hc_comb_target) export("ggml_hc_comb_f32") @ggml_hc_comb_f32() {
+  %one = index.constant 1 : index
+  %block = index.constant 64 : index
+  %rounding = index.constant 63 : index
+  %tokens = config.get @ggml.hc.tokens : index
+  %rounded = index.add %tokens, %rounding : index
+  %groups = index.div %rounded, %block : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%block, %one, %one) : index
+} launch(%mixes: buffer, %scale: buffer, %base: buffer, %output: buffer) {
+  %tokens = config.get @ggml.hc.tokens : index
+  %iterations = config.get @ggml.hc.n_iter : index
+  %eps = config.get @ggml.hc.eps : f32
+  %one = index.constant 1 : index
+  %two = index.constant 2 : index
+  %four = index.constant 4 : index
+  %eight = index.constant 8 : index
+  %twelve = index.constant 12 : index
+  %sixteen = index.constant 16 : index
+  %twenty = index.constant 20 : index
+  %twentyfour = index.constant 24 : index
+  %zero_offset = index.constant 0 : offset
+  %mix_count = index.mul %tokens, %twentyfour : index
+  %out_count = index.mul %tokens, %sixteen : index
+  %m = buffer.view %mixes[%zero_offset] : buffer -> view<[%mix_count]xf32>
+  %s = buffer.view %scale[%zero_offset] : buffer -> view<3xf32>
+  %b = buffer.view %base[%zero_offset] : buffer -> view<24xf32>
+  %y = buffer.view %output[%zero_offset] : buffer -> view<[%out_count]xf32>
+  %group = kernel.workgroup.id<x> : index
+  %thread = kernel.workitem.id<x> : index
+  %block = index.constant 64 : index
+  %group_base = index.mul %group, %block : index
+  %token = index.add %group_base, %thread : index
+  %valid = index.cmp ult, %token, %tokens : index
+  scf.if %valid {
+    %scale_value = view.load %s[%two] : view<3xf32> -> f32
+    %scale_vector = vector.splat %scale_value : vector<4xf32>
+    %mix_base = index.mul %token, %twentyfour : index
+    %m0i = index.add %mix_base, %eight : index
+    %m1i = index.add %mix_base, %twelve : index
+    %m2i = index.add %mix_base, %sixteen : index
+    %m3i = index.add %mix_base, %twenty : index
+    %m0 = vector.load %m[%m0i] : view<[%mix_count]xf32> -> vector<4xf32>
+    %m1 = vector.load %m[%m1i] : view<[%mix_count]xf32> -> vector<4xf32>
+    %m2 = vector.load %m[%m2i] : view<[%mix_count]xf32> -> vector<4xf32>
+    %m3 = vector.load %m[%m3i] : view<[%mix_count]xf32> -> vector<4xf32>
+    %b0 = vector.load %b[%eight] : view<24xf32> -> vector<4xf32>
+    %b1 = vector.load %b[%twelve] : view<24xf32> -> vector<4xf32>
+    %b2 = vector.load %b[%sixteen] : view<24xf32> -> vector<4xf32>
+    %b3 = vector.load %b[%twenty] : view<24xf32> -> vector<4xf32>
+    %r0 = func.call @hc_softmax_row(%m0, %scale_vector, %b0, %eps) : (vector<4xf32>, vector<4xf32>, vector<4xf32>, f32) -> (vector<4xf32>)
+    %r1 = func.call @hc_softmax_row(%m1, %scale_vector, %b1, %eps) : (vector<4xf32>, vector<4xf32>, vector<4xf32>, f32) -> (vector<4xf32>)
+    %r2 = func.call @hc_softmax_row(%m2, %scale_vector, %b2, %eps) : (vector<4xf32>, vector<4xf32>, vector<4xf32>, f32) -> (vector<4xf32>)
+    %r3 = func.call @hc_softmax_row(%m3, %scale_vector, %b3, %eps) : (vector<4xf32>, vector<4xf32>, vector<4xf32>, f32) -> (vector<4xf32>)
+    %c0, %c1, %c2, %c3 = func.call @hc_normalize_cols(%r0, %r1, %r2, %r3, %eps) : (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, f32) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>)
+    %result0, %result1, %result2, %result3 = scf.for %iter = [%one to %iterations step %one](%a0 = %c0 : vector<4xf32>, %a1 = %c1 : vector<4xf32>, %a2 = %c2 : vector<4xf32>, %a3 = %c3 : vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
+      %n0 = func.call @hc_normalize_row(%a0, %eps) : (vector<4xf32>, f32) -> (vector<4xf32>)
+      %n1 = func.call @hc_normalize_row(%a1, %eps) : (vector<4xf32>, f32) -> (vector<4xf32>)
+      %n2 = func.call @hc_normalize_row(%a2, %eps) : (vector<4xf32>, f32) -> (vector<4xf32>)
+      %n3 = func.call @hc_normalize_row(%a3, %eps) : (vector<4xf32>, f32) -> (vector<4xf32>)
+      %next0, %next1, %next2, %next3 = func.call @hc_normalize_cols(%n0, %n1, %n2, %n3, %eps) : (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, f32) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>)
+      scf.yield %next0, %next1, %next2, %next3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+    }
+    %y0i = index.mul %token, %sixteen : index
+    %y1i = index.add %y0i, %four : index
+    %y2i = index.add %y0i, %eight : index
+    %y3i = index.add %y0i, %twelve : index
+    vector.store %result0, %y[%y0i] : vector<4xf32>, view<[%out_count]xf32>
+    vector.store %result1, %y[%y1i] : vector<4xf32>, view<[%out_count]xf32>
+    vector.store %result2, %y[%y2i] : vector<4xf32>, view<[%out_count]xf32>
+    vector.store %result3, %y[%y3i] : vector<4xf32>, view<[%out_count]xf32>
+  }
+  kernel.return
+}

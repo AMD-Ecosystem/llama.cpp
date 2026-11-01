@@ -220,6 +220,8 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/common/dispatch-get-rows.h
     dispatch_registration/common/dispatch-glu.cpp
     dispatch_registration/common/dispatch-glu.h
+    dispatch_registration/common/dispatch-hyper-connection.cpp
+    dispatch_registration/common/dispatch-hyper-connection.h
     dispatch_registration/common/dispatch-mul-mat-id.cpp
     dispatch_registration/common/dispatch-mul-mat-id-common.h
     dispatch_registration/common/dispatch-mul-mat-id.h
@@ -235,6 +237,8 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/common/dispatch-scale.cpp
     dispatch_registration/common/dispatch-scale.h
     dispatch_registration/common/dispatch-unary.cpp
+    dispatch_registration/common/dispatch-reduction.cpp
+    dispatch_registration/common/dispatch-reduction.h
     dispatch_registration/common/dispatch-unary.h
     dispatch_registration/common/iq-codebook-resource.cpp
     dispatch_registration/common/iq-codebook-resource.h

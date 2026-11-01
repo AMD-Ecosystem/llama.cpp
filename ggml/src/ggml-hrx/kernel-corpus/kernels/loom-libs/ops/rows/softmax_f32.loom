@@ -1,0 +1,46 @@
+config.decl @ggml.softmax.width : %value: index where [range(%value, 1, 32768)]
+config.decl @ggml.softmax.scale : f32
+
+kernel.def @ggml_softmax_f32(%row_count: index) {
+  %one = index.constant 1 : index
+  %group = index.constant 256 : index
+  kernel.launch.config workgroups(%row_count, %one, %one) workgroup_size(%group, %one, %one) : index
+} launch(%row_count: index, %input: buffer, %output: buffer) {
+  %rows = index.assume %row_count [range(%row_count, 1, 134217728)] : index
+  %width = config.get @ggml.softmax.width : index
+  %scale = config.get @ggml.softmax.scale : f32
+  %row0 = kernel.workgroup.id<x> : index
+  %row, %extent = index.assume %row0, %rows [range(%row0, 0, 134217727), lt(%row0, %rows)] : index, index
+  %lane = kernel.workitem.id<x> : index
+  %step = index.constant 256 : index
+  %zero = index.constant 0 : offset
+  %zero_f32 = scalar.constant 0.0 : f32
+  %neg_inf = scalar.constant -inf : f32
+  %source = buffer.view %input[%zero] : buffer -> view<[%rows]x[%width]xf32>
+  %dest = buffer.view %output[%zero] : buffer -> view<[%rows]x[%width]xf32>
+  %partial_max = scf.for %column = [%lane to %width step %step](%acc = %neg_inf : f32) -> (f32) {
+    %value = view.load %source[%row, %column] : view<[%rows]x[%width]xf32> -> f32
+    %scaled = scalar.mulf %value, %scale : f32
+    %next = scalar.maxnumf %acc, %scaled : f32
+    scf.yield %next : f32
+  }
+  %maximum = kernel.workgroup.reduce<maxnumf> %partial_max : f32
+  %partial_sum = scf.for %column = [%lane to %width step %step](%acc = %zero_f32 : f32) -> (f32) {
+    %value = view.load %source[%row, %column] : view<[%rows]x[%width]xf32> -> f32
+    %scaled = scalar.mulf %value, %scale : f32
+    %shifted = scalar.subf %scaled, %maximum : f32
+    %exp = scalar.expf<afn> %shifted : f32
+    %next = scalar.addf %acc, %exp : f32
+    scf.yield %next : f32
+  }
+  %sum = kernel.workgroup.reduce<addf> %partial_sum : f32
+  scf.for %column = [%lane to %width step %step] {
+    %value = view.load %source[%row, %column] : view<[%rows]x[%width]xf32> -> f32
+    %scaled = scalar.mulf %value, %scale : f32
+    %shifted = scalar.subf %scaled, %maximum : f32
+    %exp = scalar.expf<afn> %shifted : f32
+    %result = scalar.divf %exp, %sum : f32
+    view.store %result, %dest[%row, %column] : f32, view<[%rows]x[%width]xf32>
+  }
+  kernel.return
+}

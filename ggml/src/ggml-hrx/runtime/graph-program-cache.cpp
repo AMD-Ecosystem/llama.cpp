@@ -5,6 +5,7 @@
 #include "ggml-impl.h"
 #include "ggml.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdlib>
 #include <optional>
@@ -703,18 +704,28 @@ GraphProgramLookup GraphProgramCache::build_from_imported(const ggml_cgraph &  g
     }
 
     if (graph.uid == 0) {
-        result.uncached_program = std::move(program);
-        result.program          = result.uncached_program.get();
+        result.program          = std::move(program);
         result.match            = std::move(match);
         return result;
     }
 
-    GraphProgram * cached_program = program.get();
+    std::shared_ptr<GraphProgram> cached_program = std::move(program);
     {
         std::lock_guard<std::mutex> lock(mutex_);
         validated_matches_.clear();
-        programs_[graph.uid] = std::move(program);
-        cached_program       = programs_[graph.uid].get();
+        auto retired = programs_.find(graph.uid);
+        if (retired == programs_.end() && programs_.size() >= 32) {
+            retired = std::min_element(programs_.begin(), programs_.end(), [](const auto & a, const auto & b) {
+                return a.second.last_used < b.second.last_used;
+            });
+        }
+        if (retired != programs_.end()) {
+            const auto prepared = retired->second.program->prepared_stats();
+            stats_.prepared_program_builds += prepared.builds;
+            stats_.prepared_program_hits += prepared.hits;
+            programs_.erase(retired);
+        }
+        programs_[graph.uid] = { cached_program, ++access_tick_ };
         last_program_        = cached_program;
         ++stats_.builds;
     }
@@ -731,7 +742,7 @@ GraphProgramLookup GraphProgramCache::get_or_build(const ggml_cgraph &  graph,
         const bool     disable_fast_path  = environment_flag_enabled("GGML_HRX_DISABLE_GRAPH_UID_FAST_PATH");
         const bool     validate_fast_path = environment_flag_enabled("GGML_HRX_VALIDATE_GRAPH_UID_CACHE");
         const bool     allow_structural_reuse = std::getenv("GGML_HRX_DUMP_COMMAND_PROGRAM_DIR") == nullptr;
-        GraphProgram * cached_program     = nullptr;
+        std::shared_ptr<GraphProgram> cached_program;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (!disable_fast_path && last_program_ != nullptr && last_program_->uid() == graph.uid &&
@@ -739,8 +750,8 @@ GraphProgramLookup GraphProgramCache::get_or_build(const ggml_cgraph &  graph,
                 cached_program = last_program_;
             } else {
                 const auto found = programs_.find(graph.uid);
-                if (found != programs_.end() && found->second->target() == target) {
-                    cached_program = found->second.get();
+                if (found != programs_.end() && found->second.program->target() == target) {
+                    cached_program = found->second.program;
                     last_program_  = cached_program;
                 }
                 if (cached_program == nullptr && !disable_fast_path && allow_structural_reuse) {
@@ -750,6 +761,9 @@ GraphProgramLookup GraphProgramCache::get_or_build(const ggml_cgraph &  graph,
                         cached_program = matched->second.program;
                     }
                 }
+            }
+            if (cached_program != nullptr) {
+                programs_.at(cached_program->uid()).last_used = ++access_tick_;
             }
         }
         if (cached_program != nullptr) {
@@ -785,8 +799,8 @@ GraphProgramLookup GraphProgramCache::get_or_build(const ggml_cgraph &  graph,
         // Physical bindings have a separate prepared-program cache key.
         if (allow_structural_reuse) {
             std::lock_guard<std::mutex> lock(mutex_);
-            for (const auto & entry : programs_) {
-                GraphProgram * candidate = entry.second.get();
+            for (auto & entry : programs_) {
+                const auto & candidate = entry.second.program;
                 if (candidate == cached_program || candidate->target() != target) {
                     continue;
                 }
@@ -795,6 +809,7 @@ GraphProgramLookup GraphProgramCache::get_or_build(const ggml_cgraph &  graph,
                     continue;
                 }
                 last_program_ = candidate;
+                entry.second.last_used = ++access_tick_;
                 if (!disable_fast_path) {
                     if (validated_matches_.size() >= 128) {
                         validated_matches_.clear();
@@ -821,7 +836,7 @@ GraphProgramCacheStats GraphProgramCache::stats() const {
     std::lock_guard<std::mutex> lock(mutex_);
     GraphProgramCacheStats      stats = stats_;
     for (const auto & entry : programs_) {
-        const PreparedCommandProgramCacheStats prepared = entry.second->prepared_stats();
+        const PreparedCommandProgramCacheStats prepared = entry.second.program->prepared_stats();
         stats.prepared_program_builds += prepared.builds;
         stats.prepared_program_hits += prepared.hits;
     }
@@ -831,6 +846,11 @@ GraphProgramCacheStats GraphProgramCache::stats() const {
 void GraphProgramCache::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     validated_matches_.clear();
+    for (const auto & entry : programs_) {
+        const auto prepared = entry.second.program->prepared_stats();
+        stats_.prepared_program_builds += prepared.builds;
+        stats_.prepared_program_hits += prepared.hits;
+    }
     programs_.clear();
     last_program_ = nullptr;
 }

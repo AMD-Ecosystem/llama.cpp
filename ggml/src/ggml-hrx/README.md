@@ -4,6 +4,8 @@
 
 `hrx-minimum-commit.txt` records the minimum required commit in ROCm/hrx-system. It contains one full Git commit SHA. The backend's C++ APIs, Loom syntax, and numerical behavior can all depend on that revision. When `GGML_HRX=ON` and `HRX_SOURCE_DIR` is set, CMake requires the HRX checkout's HEAD to equal or descend from the recorded commit.
 
+The corpus uses typed `check.expect.approximate` operations introduced in [HRX d03575e84](https://github.com/ROCm/hrx-system/commit/d03575e84f602d3e39b87895a30fae214f308558).
+
 For builds using installed packages, check the source revision used to produce both HRX and Loom against this floor before validating a repair. From the staging checkout:
 
 ```sh

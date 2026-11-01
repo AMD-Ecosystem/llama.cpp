@@ -1,0 +1,35 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+amdgpu.target<gfx11-generic> @ggml_clamp_f32_target {subgroup_size = 64}
+config.decl @ggml.clamp.min : f32
+config.decl @ggml.clamp.max : f32
+
+kernel.def target(@ggml_clamp_f32_target) export("ggml_clamp_f32") @ggml_clamp_f32(%element_count: index) {
+  %one = index.constant 1 : index
+  %block = index.constant 256 : index
+  %rounding = index.constant 255 : index
+  %rounded = index.add %element_count, %rounding : index
+  %groups = index.div %rounded, %block : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%block, %one, %one) : index
+} launch(%element_count: index, %input: buffer, %output: buffer) {
+  %count = index.assume %element_count [range(%element_count, 1, 134217728)] : index
+  %group = kernel.workgroup.id<x> : index
+  %thread = kernel.workitem.id<x> : index
+  %block = index.constant 256 : index
+  %base = index.mul %group, %block : index
+  %linear = index.add %base, %thread : index
+  %valid = index.cmp ult, %linear, %count : index
+  %lower = config.get @ggml.clamp.min : f32
+  %upper = config.get @ggml.clamp.max : f32
+  %zero = index.constant 0 : offset
+  %src = buffer.view %input[%zero] : buffer -> view<[%count]xf32>
+  %dst = buffer.view %output[%zero] : buffer -> view<[%count]xf32>
+  scf.if %valid {
+    %value = view.load %src[%linear] : view<[%count]xf32> -> f32
+    %bounded_lower = scalar.maxnumf %value, %lower : f32
+    %bounded = scalar.minnumf %bounded_lower, %upper : f32
+    view.store %bounded, %dst[%linear] : f32, view<[%count]xf32>
+  }
+  kernel.return
+}

@@ -1,0 +1,109 @@
+config.decl @ggml.set_rows_scalar.nr : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.set_rows_scalar.ne2 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.set_rows_scalar.in1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.set_rows_scalar.in2 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.set_rows_scalar.is0 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.set_rows_scalar.is1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.set_rows_scalar.is2 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.set_rows_scalar.rs1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.set_rows_scalar.rs2 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.set_rows_scalar.rs3 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.set_rows_scalar.cs1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.set_rows_scalar.cs2 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.set_rows_scalar.cs3 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.set_rows_scalar.index_bits : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.set_rows_scalar.element_bits : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.set_rows_scalar.index_span : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.set_rows_scalar.source_span : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.set_rows_scalar.cache_span : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.set_rows_scalar.cache_rows : %value: index where [range(%value, 1, 1073741824)]
+kernel.def @ggml_set_rows_scalar(%element_count: index) {
+  %one = index.constant 1 : index
+  %group = index.constant 256 : index
+  %pad = index.constant 255 : index
+  %padded = index.add %element_count, %pad : index
+  %groups = index.div %padded, %group : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%group, %one, %one) : index
+} launch(%element_count: index, %rows: buffer, %indices: buffer, %cache: buffer) {
+  %count = index.assume %element_count [range(%element_count, 1, 134217728)] : index
+  %nr = config.get @ggml.set_rows_scalar.nr : index
+  %ne2 = config.get @ggml.set_rows_scalar.ne2 : index
+  %in1 = config.get @ggml.set_rows_scalar.in1 : index
+  %in2 = config.get @ggml.set_rows_scalar.in2 : index
+  %is0 = config.get @ggml.set_rows_scalar.is0 : index
+  %is1 = config.get @ggml.set_rows_scalar.is1 : index
+  %is2 = config.get @ggml.set_rows_scalar.is2 : index
+  %rs1 = config.get @ggml.set_rows_scalar.rs1 : index
+  %rs2 = config.get @ggml.set_rows_scalar.rs2 : index
+  %rs3 = config.get @ggml.set_rows_scalar.rs3 : index
+  %cs1 = config.get @ggml.set_rows_scalar.cs1 : index
+  %cs2 = config.get @ggml.set_rows_scalar.cs2 : index
+  %cs3 = config.get @ggml.set_rows_scalar.cs3 : index
+  %index_bits = config.get @ggml.set_rows_scalar.index_bits : index
+  %element_bits = config.get @ggml.set_rows_scalar.element_bits : index
+  %index_span = config.get @ggml.set_rows_scalar.index_span : index
+  %source_span = config.get @ggml.set_rows_scalar.source_span : index
+  %cache_span = config.get @ggml.set_rows_scalar.cache_span : index
+  %cache_rows = config.get @ggml.set_rows_scalar.cache_rows : index
+  %group = kernel.workgroup.id<x> : index
+  %lane = kernel.workitem.id<x> : index
+  %group_size = index.constant 256 : index
+  %linear = index.madd %group, %group_size, %lane : index
+  %valid = index.cmp ult, %linear, %count : index
+  scf.if %valid {
+    %row = index.rem %linear, %nr : index
+    %rest = index.div %linear, %nr : index
+    %b2 = index.rem %rest, %ne2 : index
+    %b3 = index.div %rest, %ne2 : index
+    %ib1 = index.rem %b2, %in1 : index
+    %ib2 = index.rem %b3, %in2 : index
+    %ip0 = index.mul %row, %is0 : index
+    %ip1 = index.madd %ib1, %is1, %ip0 : index
+    %ip2 = index.madd %ib2, %is2, %ip1 : index
+    %ip, %ie = index.assume %ip2, %index_span [range(%ip2, 0, 1073741823), lt(%ip2, %index_span)] : index, index
+    %zero = index.constant 0 : offset
+    %bits32 = index.constant 32 : index
+    %is32 = index.cmp eq, %index_bits, %bits32 : index
+    %raw = scf.if %is32 -> (i64) {
+      %iv = buffer.view %indices[%zero] : buffer -> view<[%index_span]xi32>
+      %v = view.load %iv[%ip] : view<[%index_span]xi32> -> i32
+      %wide = scalar.extsi %v : i32 to i64
+      scf.yield %wide : i64
+    } else {
+      %iv = buffer.view %indices[%zero] : buffer -> view<[%index_span]xi64>
+      %v = view.load %iv[%ip] : view<[%index_span]xi64> -> i64
+      scf.yield %v : i64
+    }
+    %raw_zero = scalar.constant 0 : i64
+    %raw_limit = index.cast %cache_rows : index to i64
+    %nonnegative = scalar.cmpi sge, %raw, %raw_zero : i64
+    %below = scalar.cmpi slt, %raw, %raw_limit : i64
+    %valid_row = scalar.andi %nonnegative, %below : i1
+    scf.if %valid_row {
+      %cache_row0 = index.cast %raw : i64 to index
+      %cache_row, %cre = index.assume %cache_row0, %cache_rows [range(%cache_row0, 0, 1073741823), lt(%cache_row0, %cache_rows)] : index, index
+      %rp0 = index.mul %row, %rs1 : index
+      %rp1 = index.madd %b2, %rs2, %rp0 : index
+      %rp2 = index.madd %b3, %rs3, %rp1 : index
+      %rp, %re = index.assume %rp2, %source_span [range(%rp2, 0, 1073741823), lt(%rp2, %source_span)] : index, index
+      %cp0 = index.mul %cache_row, %cs1 : index
+      %cp1 = index.madd %b2, %cs2, %cp0 : index
+      %cp2 = index.madd %b3, %cs3, %cp1 : index
+      %cp, %ce = index.assume %cp2, %cache_span [range(%cp2, 0, 1073741823), lt(%cp2, %cache_span)] : index, index
+      %bits16 = index.constant 16 : index
+      %is16 = index.cmp eq, %element_bits, %bits16 : index
+      scf.if %is16 {
+        %src = buffer.view %rows[%zero] : buffer -> view<[%source_span]xi16>
+        %dst = buffer.view %cache[%zero] : buffer -> view<[%cache_span]xi16>
+        %value = view.load %src[%rp] : view<[%source_span]xi16> -> i16
+        view.store %value, %dst[%cp] : i16, view<[%cache_span]xi16>
+      } else {
+        %src = buffer.view %rows[%zero] : buffer -> view<[%source_span]xi32>
+        %dst = buffer.view %cache[%zero] : buffer -> view<[%cache_span]xi32>
+        %value = view.load %src[%rp] : view<[%source_span]xi32> -> i32
+        view.store %value, %dst[%cp] : i32, view<[%cache_span]xi32>
+      }
+    }
+  }
+  kernel.return
+}

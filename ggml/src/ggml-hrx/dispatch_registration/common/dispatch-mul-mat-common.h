@@ -166,6 +166,8 @@ inline bool common_mul_mat_uses_k16_major_f16(CommonMulMatWeightFormat format,
 
 inline ggml_type common_mul_mat_format_type(CommonMulMatWeightFormat format) {
     switch (format) {
+        case CommonMulMatWeightFormat::MXFP4:
+            return GGML_TYPE_MXFP4;
         case CommonMulMatWeightFormat::Q1_0:
             return GGML_TYPE_Q1_0;
         case CommonMulMatWeightFormat::Q3K:
@@ -638,7 +640,7 @@ inline bool common_prepare_q8_1_x4_input(const DispatchMatchContext & context,
 
     constexpr KernelCatalogRef kernel = GGML_HRX_KERNEL_REF("qwen3_moe", "ggml_quantize_q8_1_x4_f32");
     constexpr const char * name = "common.mul_mat.q8_1_x4";
-    const ValueId activation = context.next_plan_value;
+    const ValueId activation(context.next_plan_value.value + static_cast<int32_t>(match.transients.size()));
     match.transients.push_back({ activation, name, bytes, 256 });
     Dispatch quantize;
     quantize.kernel = make_kernel_specialization(kernel);

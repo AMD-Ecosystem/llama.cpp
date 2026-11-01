@@ -1,0 +1,143 @@
+amdgpu.target<gfx11-generic> @ggml_top_k_radix_wave64 {subgroup_size = 64}
+
+config.decl @ggml.top_k.width : %value: index where [range(%value, 1, 131072)]
+
+config.decl @ggml.top_k.count : %value: index where [range(%value, 1, 512)]
+
+func.def inline @ggml_top_k_float_key(%value: f32) -> (i32) {
+  %zero = scalar.constant 0 : i32
+  %ones = scalar.constant -1 : i32
+  %sign = scalar.constant -2147483648 : i32
+  %zero_float = scalar.constant 0.0 : f32
+  %bits = scalar.bitcast %value : f32 to i32
+  %negative = scalar.cmpi slt, %bits, %zero : i32
+  %flip = scf.select %negative, %ones, %sign : i32
+  %ordered = scalar.xori %bits, %flip : i32
+  %is_zero = scalar.cmpf oeq, %value, %zero_float : f32
+  %is_nan = scalar.cmpf uno, %value, %value : f32
+  %canonical = scf.select %is_zero, %sign, %ordered : i32
+  %key = scf.select %is_nan, %zero, %canonical : i32
+  func.return %key : i32
+}
+
+kernel.def target(@ggml_top_k_radix_wave64) @ggml_top_k_radix_f32(%row_count: index) {
+  %one = index.constant 1 : index
+  %threads = index.constant 256 : index
+  kernel.launch.config workgroups(%one, %row_count, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%row_count: index, %input: buffer, %output: buffer) {
+  %rows = index.assume %row_count [range(%row_count, 1, 2048)] : index
+  %width = config.get @ggml.top_k.width : index
+  %count = config.get @ggml.top_k.count : index
+  %row0 = kernel.workgroup.id<y> : index
+  %row = index.assume %row0 [lt(%row0, %rows)] : index
+  %thread = kernel.workitem.id<x> : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c24 = index.constant 24 : index
+  %c256 = index.constant 256 : index
+  %offset = index.constant 0 : offset
+  %hist_bytes = index.constant 1024 : offset
+  %state_bytes = index.constant 8 : offset
+  %hist_buffer = buffer.alloca<workgroup> align(16) %hist_bytes : buffer
+  %state_buffer = buffer.alloca<workgroup> align(8) %state_bytes : buffer
+  %hist = buffer.view %hist_buffer[%offset] : buffer -> view<256xi32>
+  %state = buffer.view %state_buffer[%offset] : buffer -> view<2xi32>
+  %source = buffer.view %input[%offset] : buffer -> view<[%rows]x[%width]xf32>
+  %target = buffer.view %output[%offset] : buffer -> view<[%rows]x[%count]xi32>
+  %zero_i32 = scalar.constant 0 : i32
+  %one_i32 = scalar.constant 1 : i32
+  %ones_i32 = scalar.constant -1 : i32
+  %byte_mask = scalar.constant 255 : i32
+  %count_i32 = index.cast %count : index to i32
+  %threshold, %ties_needed = scf.for %pass = [%c0 to %c4 step %c1](%prefix = %zero_i32 : i32, %desired = %count_i32 : i32) -> (i32, i32) unroll {
+    view.store %zero_i32, %hist[%thread] : i32, view<256xi32>
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    %bit = index.mul %pass, %c8 : index
+    %shift_index = index.sub %c24, %bit : index
+    %shift = index.cast %shift_index : index to i32
+    %first = index.cmp eq, %pass, %c0 : index
+    %high_mask = scf.if %first -> (i32) {
+      scf.yield %zero_i32 : i32
+    } else {
+      %high_shift_index = index.add %shift_index, %c8 : index
+      %high_shift = index.cast %high_shift_index : index to i32
+      %mask = scalar.shli %ones_i32, %high_shift : i32
+      scf.yield %mask : i32
+    }
+    scf.for %column = [%thread to %width step %c256] {
+      %value = view.load %source[%row, %column] : view<[%rows]x[%width]xf32> -> f32
+      %key = func.call @ggml_top_k_float_key(%value) : (f32) -> (i32)
+      %high = scalar.andi %key, %high_mask : i32
+      %candidate = scalar.cmpi eq, %high, %prefix : i32
+      scf.if %candidate {
+        %shifted = scalar.shrui %key, %shift : i32
+        %bucket_i32 = scalar.andi %shifted, %byte_mask : i32
+        %bucket0 = index.cast %bucket_i32 : i32 to index
+        %bucket = index.assume %bucket0 [range(%bucket0, 0, 255)] : index
+        view.atomic.reduce<addi> %one_i32, %hist[%bucket] {ordering = relaxed, scope = workgroup} : i32, view<256xi32>
+      }
+    }
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    %bucket_count = view.load %hist[%thread] : view<256xi32> -> i32
+    %above = kernel.workgroup.scan<addi> %bucket_count {direction = reverse, mode = exclusive} : i32
+    %end = scalar.addi %above, %bucket_count : i32
+    %starts_before = scalar.cmpi ult, %above, %desired : i32
+    %ends_after = scalar.cmpi uge, %end, %desired : i32
+    %selected = scalar.andi %starts_before, %ends_after : i1
+    scf.if %selected {
+      %bucket_i32 = index.cast %thread : index to i32
+      %bucket_bits = scalar.shli %bucket_i32, %shift : i32
+      %next_prefix = scalar.ori %prefix, %bucket_bits : i32
+      %next_desired = scalar.subi %desired, %above : i32
+      view.store %next_prefix, %state[0] : i32, view<2xi32>
+      view.store %next_desired, %state[1] : i32, view<2xi32>
+    }
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    %next_prefix = view.load %state[0] : view<2xi32> -> i32
+    %next_desired = view.load %state[1] : view<2xi32> -> i32
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    scf.yield %next_prefix, %next_desired : i32, i32
+  }
+  %above_total = scalar.subi %count_i32, %ties_needed : i32
+  %counts_zero = vector.constant 0 : vector<2xi32>
+  %final_counts = scf.for %base = [%c0 to %width step %c256](%counts = %counts_zero : vector<2xi32>) -> (vector<2xi32>) {
+    %position = index.add %base, %thread : index
+    %valid = index.cmp ult, %position, %width : index
+    %key = scf.if %valid -> (i32) {
+      %column = index.assume %position [lt(%position, %width)] : index
+      %value = view.load %source[%row, %column] : view<[%rows]x[%width]xf32> -> f32
+      %key = func.call @ggml_top_k_float_key(%value) : (f32) -> (i32)
+      scf.yield %key : i32
+    } else {
+      scf.yield %zero_i32 : i32
+    }
+    %greater0 = scalar.cmpi ugt, %key, %threshold : i32
+    %equal0 = scalar.cmpi eq, %key, %threshold : i32
+    %greater = scalar.andi %valid, %greater0 : i1
+    %equal = scalar.andi %valid, %equal0 : i1
+    %greater_count = scf.select %greater, %one_i32, %zero_i32 : i32
+    %equal_count = scf.select %equal, %one_i32, %zero_i32 : i32
+    %increments = vector.from_elements %greater_count, %equal_count : vector<2xi32>
+    %prefix = kernel.workgroup.scan<addi> %increments {direction = forward, mode = exclusive} : vector<2xi32>
+    %block_counts = kernel.workgroup.reduce<addi> %increments : vector<2xi32>
+    %ranks = vector.addi %counts, %prefix : vector<2xi32>
+    %greater_rank = vector.extract %ranks[0] : vector<2xi32> -> i32
+    %equal_rank = vector.extract %ranks[1] : vector<2xi32> -> i32
+    %tie_needed = scalar.cmpi ult, %equal_rank, %ties_needed : i32
+    %take_tie = scalar.andi %equal, %tie_needed : i1
+    %selected = scalar.ori %greater, %take_tie : i1
+    %tie_slot = scalar.addi %above_total, %equal_rank : i32
+    %slot_i32 = scf.select %greater, %greater_rank, %tie_slot : i32
+    scf.if %selected {
+      %slot0 = index.cast %slot_i32 : i32 to index
+      %slot = index.assume %slot0 [range(%slot0, 0, 511), lt(%slot0, %count)] : index
+      %id = index.cast %position : index to i32
+      view.store %id, %target[%row, %slot] : i32, view<[%rows]x[%count]xi32>
+    }
+    %next_counts = vector.addi %counts, %block_counts : vector<2xi32>
+    scf.yield %next_counts : vector<2xi32>
+  }
+  kernel.return
+}

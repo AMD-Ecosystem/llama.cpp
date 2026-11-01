@@ -1,5 +1,6 @@
 #include "dispatch-mul-mat-id.h"
 
+#include "dispatch-mul-mat-common.h"
 #include "dispatch-mul-mat-id-common.h"
 #include "ggml.h"
 #include "graph/graph-matcher.h"
@@ -18,6 +19,12 @@ static constexpr KernelCatalogRef kMulMatIdTiledF32F32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_tiled_input_f32_publish_f32");
 static constexpr KernelCatalogRef kMulMatIdSkinnyF32F32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_skinny_input_f32_publish_f32");
+static constexpr KernelCatalogRef kMulMatIdVectorMxfp4Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_vector_mxfp4_f32");
+static constexpr KernelCatalogRef kMulMatIdVectorMxfp4Q8Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_vector_mxfp4_q8");
+static constexpr KernelCatalogRef kMulMatIdMxfp4PrefillPrefetchKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_mxfp4_prefill_prefetch");
 static constexpr KernelCatalogRef kMulMatIdTiledPostOpsF32F32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_tiled_input_f32_postops_publish_f32");
 static constexpr KernelCatalogRef kMulMatIdSkinnyPostOpsF32F32Kernel =
@@ -179,6 +186,47 @@ static MulMatIdPostOpsMatch match_mul_mat_id_postops(const DispatchMatchContext 
 
 }  // namespace
 
+static bool match_mul_mat_id_vector_mxfp4(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
+    const CommonMulMatIdMatch match =
+        common_match_mul_mat_id_any_format(context.graph, context.root_node, context.plan);
+    if (!match.matched() || match.weight_format != CommonMulMatWeightFormat::MXFP4 || match.token_count > 5 ||
+        match.input_size % 256 != 0) {
+        return false;
+    }
+    Dispatch   dispatch;
+    const bool integer_dot = match.input_size % 512 == 0;
+    if (!integer_dot && match.token_count != 1) {
+        return false;
+    }
+    DispatchBinding activation{ match.input->id, 0, match.input->byte_count };
+    if (integer_dot && !common_prepare_q8_1_x4_input(context, *match.input, match.input_size,
+                                                     match.input_route_count * match.token_count, dispatch_match,
+                                                     activation, CommonQ8ActivationPolicy::AllowStandaloneQuantize)) {
+        return false;
+    }
+    dispatch.kernel =
+        make_kernel_specialization(integer_dot ? kMulMatIdVectorMxfp4Q8Kernel : kMulMatIdVectorMxfp4Kernel);
+    dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
+    for (const auto & parameter : std::vector<std::pair<const char *, int64_t>>{
+             { "input_size",        match.input_size                                               },
+             { "output_size",       match.output_size                                              },
+             { "route_count",       match.route_count                                              },
+             { "input_route_count", match.input_route_count                                        },
+             { "route_stride",      static_cast<int64_t>(match.route_ids->nb[1] / sizeof(int32_t)) },
+             { "expert_count",      match.expert_count                                             }
+    }) {
+        dispatch.kernel.compile_parameters.emplace(std::string("ggml.mxfp4_vector.") + parameter.first,
+                                                   std::to_string(parameter.second));
+    }
+    dispatch.bindings.push_back(activation);
+    dispatch.bindings.push_back({ match.route_ids->id, 0, match.route_ids->byte_count });
+    dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
+    dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
+    dispatch_match.covered_nodes.push_back(context.root_index);
+    dispatch_match.dispatches.push_back(std::move(dispatch));
+    return true;
+}
+
 static bool match_mul_mat_id_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     const CommonMulMatIdMatch match =
         common_match_mul_mat_id_any_format(context.graph, context.root_node, context.plan);
@@ -192,7 +240,16 @@ static bool match_mul_mat_id_dispatch(const DispatchMatchContext & context, Disp
     }
 
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(common_mul_mat_id_f32_kernel(match));
+    const bool mxfp4_prefetch = match.weight_format == CommonMulMatWeightFormat::MXFP4 && match.token_count >= 32 &&
+                                match.output_size % 64 == 0 && match.input_size * match.input_route_count <= 32768;
+    DispatchBinding activation{ match.input->id, 0, match.input->byte_count };
+    if (mxfp4_prefetch && !common_prepare_q8_1_x4_input(
+                              context, *match.input, match.input_size * match.input_route_count, match.token_count,
+                              dispatch_match, activation, CommonQ8ActivationPolicy::AllowStandaloneQuantize)) {
+        return false;
+    }
+    dispatch.kernel = make_kernel_specialization(mxfp4_prefetch ? kMulMatIdMxfp4PrefillPrefetchKernel :
+                                                                  common_mul_mat_id_f32_kernel(match));
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
     dispatch.kernel.compile_parameters.emplace("ggml.workload.token_capacity",
                                                common_mul_mat_id_to_config_value(match.token_count));
@@ -209,7 +266,7 @@ static bool match_mul_mat_id_dispatch(const DispatchMatchContext & context, Disp
     dispatch.kernel.compile_parameters.emplace(
         "ggml.mul_mat_id.weight_format",
         common_mul_mat_id_to_config_value(common_mul_mat_format_config_value(match.weight_format)));
-    dispatch.bindings.push_back({ match.input->id, 0, match.input->byte_count });
+    dispatch.bindings.push_back(activation);
     dispatch.bindings.push_back({ routing_bundle.expert_table, 0, routing_bundle.expert_table_byte_count });
     dispatch.bindings.push_back({ routing_bundle.partition_table, 0, routing_bundle.partition_table_byte_count });
     dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
@@ -312,6 +369,14 @@ static bool match_mul_mat_id_postops_dispatch(const DispatchMatchContext & conte
 }
 
 void register_mul_mat_id_dispatches(DispatchRegistryBuilder & registry) {
+    registry.add({
+        "common.mul_mat_id.vector_mxfp4",
+        GGML_OP_MUL_MAT_ID,
+        DispatchMatchKind::SingleOp,
+        125,
+        DispatchSource::Common,
+        match_mul_mat_id_vector_mxfp4,
+    });
     registry.add({
         "common.mul_mat_id_postops.f32_f32_wmma",
         GGML_OP_MUL_MAT_ID,

@@ -111,8 +111,7 @@ struct GraphProgramCacheStats {
 };
 
 struct GraphProgramLookup {
-    GraphProgram *                program = nullptr;
-    std::unique_ptr<GraphProgram> uncached_program;
+    std::shared_ptr<GraphProgram> program;
     GraphProgramMatch             match;
     Status                        status;
 
@@ -142,8 +141,13 @@ class GraphProgramCache {
 
   private:
     struct ValidatedGraphMatch {
-        GraphProgram *              program = nullptr;
+        std::shared_ptr<GraphProgram> program;
         const ggml_tensor * const * nodes   = nullptr;
+    };
+
+    struct Entry {
+        std::shared_ptr<GraphProgram> program;
+        uint64_t                      last_used = 0;
     };
 
     GraphProgramLookup build_from_imported(const ggml_cgraph &  graph,
@@ -158,9 +162,10 @@ class GraphProgramCache {
                                                               Status &             errors) const;
 
     mutable std::mutex                                          mutex_;
-    std::unordered_map<uint64_t, std::unique_ptr<GraphProgram>> programs_;
+    std::unordered_map<uint64_t, Entry>                         programs_;
     std::unordered_map<uint64_t, ValidatedGraphMatch>           validated_matches_;
-    GraphProgram *                                              last_program_ = nullptr;
+    std::shared_ptr<GraphProgram>                               last_program_;
+    uint64_t                                                    access_tick_ = 0;
     GraphProgramCacheStats                                      stats_;
 };
 

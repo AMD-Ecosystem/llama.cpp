@@ -4,6 +4,7 @@
 #include "ggml.h"
 
 #include <atomic>
+#include <cmath>
 #include <fstream>
 #include <limits>
 #include <nlohmann/json.hpp>
@@ -119,12 +120,19 @@ json op_params_json(const OpParams & params) {
                     { "max_bias",      value.max_bias               },
                     { "logit_softcap", value.logit_softcap          },
                     { "prec",          static_cast<int>(value.prec) },
+                    { "n_kv_max",      value.n_kv_max               },
                 };
             } else if constexpr (std::is_same_v<T, SoftMaxParams>) {
                 return {
                     { "kind",     "soft_max"     },
                     { "scale",    value.scale    },
                     { "max_bias", value.max_bias }
+                };
+            } else if constexpr (std::is_same_v<T, MulMatParams>) {
+                return {
+                    { "kind", "mul_mat"                    },
+                    { "prec", static_cast<int>(value.prec) },
+                    { "hint", static_cast<int>(value.hint) }
                 };
             } else if constexpr (std::is_same_v<T, ArgsortParams>) {
                 return {
@@ -137,11 +145,23 @@ json op_params_json(const OpParams & params) {
                     { "min",  value.min },
                     { "max",  value.max }
                 };
+            } else if constexpr (std::is_same_v<T, FillParams>) {
+                return {
+                    { "kind",  "fill"                                                                                  },
+                    { "value", std::isfinite(value.value) ? json(value.value) : json(value.value < 0 ? "-inf" : "inf") }
+                };
+            } else if constexpr (std::is_same_v<T, HyperConnectionCombParams>) {
+                return {
+                    { "kind",   "hc_comb"    },
+                    { "eps",    value.eps    },
+                    { "n_iter", value.n_iter }
+                };
             } else if constexpr (std::is_same_v<T, GluParams>) {
                 return {
                     { "kind",    "glu"                       },
                     { "op",      static_cast<int>(value.op)  },
-                    { "swapped", value.swapped               }
+                    { "swapped", value.swapped               },
+                    { "limit",   value.limit                 }
                 };
             } else if constexpr (std::is_same_v<T, ScaleParams>) {
                 return {
@@ -189,10 +209,15 @@ OpParams parse_op_params(const json & item) {
             item.value("max_bias", 0.0f),
             item.value("logit_softcap", 0.0f),
             static_cast<ggml_prec>(item.value("prec", static_cast<int>(GGML_PREC_DEFAULT))),
+            item.value("n_kv_max", 0),
         };
     }
     if (kind == "soft_max") {
         return SoftMaxParams{ item.value("scale", 0.0f), item.value("max_bias", 0.0f) };
+    }
+    if (kind == "mul_mat") {
+        return MulMatParams{ static_cast<ggml_prec>(item.value("prec", int(GGML_PREC_DEFAULT))),
+                             static_cast<ggml_op_hint>(item.value("hint", int(GGML_HINT_NONE))) };
     }
     if (kind == "argsort") {
         return ArgsortParams{ static_cast<ggml_sort_order>(
@@ -204,9 +229,16 @@ OpParams parse_op_params(const json & item) {
                                                                            std::numeric_limits<float>::infinity();
         return ClampParams{ min, max };
     }
+    if (kind == "fill") {
+        const auto & value = item.at("value");
+        return FillParams{ value.is_string() ? std::stof(value.get<std::string>()) : value.get<float>() };
+    }
+    if (kind == "hc_comb") {
+        return HyperConnectionCombParams{ item.value("eps", 0.0f), item.value("n_iter", 0) };
+    }
     if (kind == "glu") {
         return GluParams{ static_cast<ggml_glu_op>(item.value("op", static_cast<int>(GGML_GLU_OP_REGLU))),
-                          item.value("swapped", false) };
+                          item.value("swapped", false), item.value("limit", 0.0f) };
     }
     if (kind == "scale") {
         return ScaleParams{ item.value("scale", 0.0f), item.value("bias", 0.0f) };

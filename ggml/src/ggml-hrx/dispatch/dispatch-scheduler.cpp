@@ -135,7 +135,8 @@ static bool can_elide_zero_output_node(const Graph &             graph,
 }
 
 static bool can_elide_node(const Graph & graph, const GraphNode & node, const std::vector<bool> & covered_nodes) {
-    return can_elide_layout_alias_node(graph, node, covered_nodes) ||
+    return (node.op == GGML_OP_NONE && node.inputs.empty()) ||
+           can_elide_layout_alias_node(graph, node, covered_nodes) ||
            can_elide_zero_output_node(graph, node, covered_nodes);
 }
 
@@ -204,10 +205,10 @@ bool DispatchScheduler::schedule_graph(Graph &                       graph,
                 covered_nodes[i] = true;
                 continue;
             }
-            plan_.status.append(pending_diagnostics);
-            plan_.status.append(match.status);
             const std::string message = unsupported_node_message(graph, i, *node);
             plan_.status.log("%s", message.c_str());
+            plan_.status.append(match.status);
+            plan_.status.append(pending_diagnostics);
             if (diagnostics != nullptr) {
                 diagnostics->unsupported_node_index = i;
                 diagnostics->unsupported_node       = node;

@@ -17,12 +17,16 @@ namespace {
 
 static constexpr KernelCatalogRef kFlashAttentionF32F16WmmaKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_f32_f16_wmma");
+static constexpr KernelCatalogRef kFlashAttentionF32F16WmmaSinkKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_f32_f16_wmma_sink");
 static constexpr KernelCatalogRef kFlashAttentionF32F16WmmaPublishF16Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_f32_f16_wmma_publish_f16");
 static constexpr KernelCatalogRef kFlashAttentionDecodeSplitNextQ8Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_decode_split_f32_f16_wmma_next_q8");
 static constexpr KernelCatalogRef kCopyTransposeF16Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_copy_transpose_f16");
+static constexpr KernelCatalogRef kLightningIndexerKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_lightning_indexer_f32_f16");
 static constexpr int64_t kDecodeRowCapacity         = 16;
 static constexpr int64_t kDecodeKvTileSize          = 64;
 static constexpr int64_t kPrefillQkHeadSizeBlock    = 16;
@@ -36,13 +40,48 @@ static const Value * graph_value(const Graph & graph, ValueId id) {
     return graph.values().find(id);
 }
 
+static bool match_lightning_indexer(const DispatchMatchContext & context, DispatchMatch & match) {
+    const GraphNode * node = context.root_node;
+    if (node == nullptr || node->op != GGML_OP_LIGHTNING_INDEXER || node->inputs.size() != 4) {
+        return false;
+    }
+    const Value * q = graph_value(context.graph, node->inputs[0]);
+    const Value * k = graph_value(context.graph, node->inputs[1]);
+    const Value * w = graph_value(context.graph, node->inputs[2]);
+    const Value * m = graph_value(context.graph, node->inputs[3]);
+    const Value * y = graph_value(context.graph, node->output);
+    if (!q || !k || !w || !m || !y || !q->contiguous || !k->contiguous || !w->contiguous || !m->contiguous ||
+        !y->contiguous || q->type != GGML_TYPE_F32 || k->type != GGML_TYPE_F16 || w->type != GGML_TYPE_F32 ||
+        m->type != GGML_TYPE_F16 || y->type != GGML_TYPE_F32) {
+        return false;
+    }
+    const int64_t nq = q->ne[2];
+    const int64_t nk = k->ne[2];
+    if (nq < 1 || nq > 2048 || nk < 1 || nk > 131072 || q->ne != std::array<int64_t, 4>{ 128, 64, nq, 1 } ||
+        k->ne != std::array<int64_t, 4>{ 128, 1, nk, 1 } || w->ne != std::array<int64_t, 4>{ 64, nq, 1, 1 } ||
+        m->ne != std::array<int64_t, 4>{ nk, nq, 1, 1 } || y->ne != std::array<int64_t, 4>{ nk, nq, 1, 1 }) {
+        return false;
+    }
+    Dispatch dispatch;
+    dispatch.kernel                         = make_kernel_specialization(kLightningIndexerKernel);
+    dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
+    dispatch.kernel.integer_parameters.emplace("query_count", nq);
+    dispatch.kernel.integer_parameters.emplace("key_count", nk);
+    for (const Value * value : { q, k, w, m, y }) {
+        dispatch.bindings.push_back({ value->id, 0, value->byte_count });
+    }
+    match.covered_nodes.push_back(context.root_index);
+    match.dispatches.push_back(std::move(dispatch));
+    return true;
+}
+
 static bool nearly_equal(float lhs, float rhs) {
     return std::fabs(lhs - rhs) <= 1.0e-6f;
 }
 
 static bool use_exact_prefill_workload(int64_t query_token_count, int64_t key_value_token_count) {
-    // Preserve the measured hot prefill case; other supported totals share dynamic executables.
-    return query_token_count == 256 && key_value_token_count == 256;
+    // Aligned prefill has no partial KV tile; specialize away its scratch-using cleanup.
+    return query_token_count > 1 && key_value_token_count % kDecodeKvTileSize == 0;
 }
 
 static bool is_supported_token_count(int64_t token_count) {
@@ -143,6 +182,7 @@ struct FlashAttentionMatch {
     const Value *     value         = nullptr;
     const Value *     mask          = nullptr;
     const Value *     output        = nullptr;
+    const Value *     sink          = nullptr;
     const GraphNode * output_layout = nullptr;
     ValueId           mask_binding_value;
     size_t            mask_binding_bytes    = 0;
@@ -182,9 +222,11 @@ struct DecodeSplitFlashAttentionMatch {
 
 static FlashAttentionMatch match_flash_attention_f32_f16(const Graph &       graph,
                                                          const CommandPlan & plan,
-                                                         const GraphNode *   node) {
+                                                         const GraphNode *   node,
+                                                         bool                allow_sparse_long_context = false) {
     FlashAttentionMatch match;
-    if (node == nullptr || node->op != GGML_OP_FLASH_ATTN_EXT || node->inputs.size() != 4) {
+    if (node == nullptr || node->op != GGML_OP_FLASH_ATTN_EXT ||
+        (node->inputs.size() != 4 && node->inputs.size() != 5)) {
         return match;
     }
 
@@ -216,9 +258,16 @@ static FlashAttentionMatch match_flash_attention_f32_f16(const Graph &       gra
 
     const int64_t query_token_count    = query->ne[1];
     const int64_t query_head_count     = query->ne[2];
+    if (node->inputs.size() == 5) {
+        match.sink = graph_value(graph, node->inputs[4]);
+        if (match.sink == nullptr || match.sink->type != GGML_TYPE_F32 || !match.sink->contiguous ||
+            match.sink->element_count != query_head_count) {
+            return {};
+        }
+    }
     const int64_t key_value_capacity   = key->ne[1];
     const int64_t key_value_head_count = key->ne[2];
-    if (!is_supported_token_count(query_token_count) || key_value_capacity < query_token_count ||
+    if (!is_supported_token_count(query_token_count) || key_value_capacity < 1 ||
         !is_supported_head_count(query_head_count) || !is_supported_head_count(key_value_head_count) ||
         query_head_count % key_value_head_count != 0) {
         return {};
@@ -245,7 +294,9 @@ static FlashAttentionMatch match_flash_attention_f32_f16(const Graph &       gra
     } else if (!mask_is_compact && !mask_is_capacity) {
         return {};
     }
-    if (!is_supported_key_value_token_count(key_value_token_count)) {
+    const bool sparse_long_context = allow_sparse_long_context && key_value_head_count == 1 &&
+                                     key_value_token_count >= 1 && key_value_token_count <= 131072;
+    if (!sparse_long_context && !is_supported_key_value_token_count(key_value_token_count)) {
         return {};
     }
 
@@ -426,7 +477,8 @@ static DispatchBinding prepare_flash_attention_value(const DispatchMatchContext 
 
 static bool match_flash_attention_gate_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     const FlashAttentionMatch match = match_flash_attention_f32_f16(context.graph, context.plan, context.root_node);
-    if (!match.matched() || match.output_layout == nullptr || match.output_layout->op != GGML_OP_RESHAPE) {
+    if (!match.matched() || match.sink != nullptr || match.output_layout == nullptr ||
+        match.output_layout->op != GGML_OP_RESHAPE) {
         return false;
     }
 
@@ -510,6 +562,88 @@ static bool match_flash_attention_gate_dispatch(const DispatchMatchContext & con
     return true;
 }
 
+static bool match_sparse_attention(const DispatchMatchContext & context, DispatchMatch & result) {
+    const FlashAttentionMatch match =
+        match_flash_attention_f32_f16(context.graph, context.plan, context.root_node, true);
+    if (!match.matched() || match.sink == nullptr || match.query_head_count != 64 || match.key_value_head_count != 1 ||
+        match.qk_head_size != 512 || match.value_head_size != 512 || match.key->storage != match.value->storage ||
+        match.key->storage_offset != match.value->storage_offset || match.key->nb != match.value->nb) {
+        return false;
+    }
+    const bool   prefill = match.query_token_count > 1;
+    const auto * params  = op_params_as<FlashAttnExtParams>(context.root_node->params);
+    if (params == nullptr || params->n_kv_max <= 0 || params->n_kv_max > 2048) {
+        return false;
+    }
+    const int64_t capacity = ceil_div(params->n_kv_max, 64) * 64;
+    if (match.key_value_token_count < 2048 || match.key_value_token_count < 2 * capacity) {
+        return false;
+    }
+    const size_t  index_bytes = static_cast<size_t>(match.query_token_count * capacity) * sizeof(int32_t);
+    const size_t  mask_bytes  = static_cast<size_t>(match.query_token_count * capacity) * sizeof(ggml_fp16_t);
+    const size_t  key_bytes   = mask_bytes * match.qk_head_size;
+    const ValueId indices     = match_value(context, result, 0);
+    const ValueId mask        = match_value(context, result, 1);
+    const ValueId key         = match_value(context, result, 2);
+    result.transients.push_back({ indices, "common.sparse_attention.indices", index_bytes, 256 });
+    result.transients.push_back({ mask, "common.sparse_attention.mask", mask_bytes, 256 });
+    result.transients.push_back({ key, "common.sparse_attention.key", key_bytes, 256 });
+
+    Dispatch compact;
+    compact.kernel = make_kernel_specialization(GGML_HRX_KERNEL_REF("loom_libs", "ggml_compact_mask_f16"));
+    compact.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
+    compact.kernel.integer_parameters.emplace("query_count", match.query_token_count);
+    compact.kernel.integer_parameters.emplace("key_count", match.key_value_token_count);
+    compact.kernel.compile_parameters.emplace("ggml.sparse_attention.capacity", std::to_string(capacity));
+    compact.bindings = {
+        { match.mask_binding_value, 0, match.mask_binding_bytes },
+        { indices,                  0, index_bytes              },
+        { mask,                     0, mask_bytes               }
+    };
+    result.dispatches.push_back(std::move(compact));
+
+    Dispatch gather;
+    gather.kernel = make_kernel_specialization(GGML_HRX_KERNEL_REF("loom_libs", "ggml_gather_sparse_kv_f16"));
+    gather.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
+    gather.kernel.integer_parameters.emplace("query_count", match.query_token_count);
+    gather.kernel.integer_parameters.emplace("key_count", match.key_value_token_count);
+    gather.kernel.compile_parameters.emplace("ggml.sparse_attention.capacity", std::to_string(capacity));
+    gather.bindings = {
+        { indices,       0, index_bytes           },
+        { match.key->id, 0, match.key->byte_count },
+        { key,           0, key_bytes             }
+    };
+    result.dispatches.push_back(std::move(gather));
+
+    Dispatch attention;
+    attention.kernel =
+        make_kernel_specialization(prefill ? GGML_HRX_KERNEL_REF("loom_libs", "ggml_sparse_prefill_f32_f16") :
+                                             kFlashAttentionF32F16WmmaSinkKernel);
+    if (prefill) {
+        attention.kernel.integer_parameters.emplace("query_count", match.query_token_count);
+        attention.kernel.compile_parameters.emplace("ggml.sparse_attention.capacity", std::to_string(capacity));
+    } else {
+        attention.kernel.integer_parameters.emplace("query_token_count", 4);
+        attention.kernel.integer_parameters.emplace("key_value_token_count", capacity);
+    }
+    add_flash_attention_compile_parameters(attention.kernel, prefill ? 4 : 16, 1, 512, 512, match.attention_scale,
+                                           false, 1, 1);
+    attention.kernel.compile_parameters.emplace("ggml.flash_attention.decode_head_batch", "1");
+    attention.bindings = {
+        { match.query->id, 0, match.query->byte_count },
+        { key,             0, key_bytes               }
+    };
+    if (!prefill) {
+        attention.bindings.push_back({ key, 0, key_bytes });
+    }
+    attention.bindings.push_back({ mask, 0, mask_bytes });
+    attention.bindings.push_back({ match.sink->id, 0, match.sink->byte_count });
+    attention.bindings.push_back({ match.output->id, 0, match.output->byte_count });
+    result.dispatches.push_back(std::move(attention));
+    result.covered_nodes.push_back(context.root_index);
+    return true;
+}
+
 static bool match_flash_attention_f32_f16_dispatch(const DispatchMatchContext & context,
                                                    DispatchMatch &              dispatch_match) {
     const FlashAttentionMatch match = match_flash_attention_f32_f16(context.graph, context.plan, context.root_node);
@@ -518,7 +652,8 @@ static bool match_flash_attention_f32_f16_dispatch(const DispatchMatchContext & 
     }
 
     const CommonActivationPublicationCapabilities capabilities = {
-        match.query_token_count >= 128 ? DispatchActivationInputF16Row : DispatchActivationInputNone,
+        match.sink == nullptr && match.query_token_count >= 128 ? DispatchActivationInputF16Row :
+                                                                  DispatchActivationInputNone,
         DispatchActivationInputF16Row,
     };
     const CommonActivationPublicationPlan publication_plan =
@@ -526,22 +661,31 @@ static bool match_flash_attention_f32_f16_dispatch(const DispatchMatchContext & 
     const CommonActivationPublicationDemand * demand =
         publication_plan.find(CommonActivationPublicationFormat::F16Row);
     const bool publish_f16 = demand != nullptr;
+    const bool    batch_heads    = match.sink != nullptr && !publish_f16 && match.query_token_count == 1 &&
+                                   match.key_value_head_count == 1 && match.query_head_count % 4 == 0 &&
+                                   match.query_head_count >= 4 &&
+                                   match.query->nb[2] == static_cast<size_t>(match.qk_head_size) * sizeof(float);
+    const int64_t logical_tokens = batch_heads ? 4 : match.query_token_count;
+    const int64_t logical_heads  = batch_heads ? match.query_head_count / 4 : match.query_head_count;
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(publish_f16 ? kFlashAttentionF32F16WmmaPublishF16Kernel :
-                                                               kFlashAttentionF32F16WmmaKernel);
+    dispatch.kernel = make_kernel_specialization(match.sink != nullptr ? kFlashAttentionF32F16WmmaSinkKernel :
+                                                 publish_f16           ? kFlashAttentionF32F16WmmaPublishF16Kernel :
+                                                                         kFlashAttentionF32F16WmmaKernel);
     if (!use_exact_prefill_workload(match.query_token_count, match.key_value_token_count)) {
         dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
     }
-    dispatch.kernel.integer_parameters.emplace("query_token_count", match.query_token_count);
+    dispatch.kernel.integer_parameters.emplace("query_token_count", logical_tokens);
     dispatch.kernel.integer_parameters.emplace("key_value_token_count", match.key_value_token_count);
-    add_flash_attention_compile_parameters(dispatch.kernel, match.query_head_count, match.key_value_head_count,
+    add_flash_attention_compile_parameters(dispatch.kernel, logical_heads, match.key_value_head_count,
                                            match.qk_head_size, match.value_head_size, match.attention_scale, false, 1,
                                            1);
+    dispatch.kernel.compile_parameters.emplace("ggml.flash_attention.decode_head_batch", batch_heads ? "1" : "0");
     dispatch.bindings.push_back({ match.query->id, 0, match.query->byte_count });
     dispatch.bindings.push_back({ match.key->id, 0, match.key->byte_count });
     dispatch.bindings.push_back(prepare_flash_attention_value(context, match, dispatch_match, dispatch.kernel));
     dispatch.bindings.push_back({ match.mask_binding_value, 0, match.mask_binding_bytes });
-    dispatch.bindings.push_back({ match.query->id, 0, match.query->byte_count });
+    dispatch.bindings.push_back(match.sink ? DispatchBinding{ match.sink->id, 0, match.sink->byte_count } :
+                                             DispatchBinding{ match.query->id, 0, match.query->byte_count });
     dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
 
     if (publish_f16) {
@@ -679,6 +823,22 @@ static bool match_flash_attention_decode_split_next_q8_dispatch(const DispatchMa
 }  // namespace
 
 void register_flash_attention_dispatches(DispatchRegistryBuilder & registry) {
+    registry.add({
+        "common.flash_attention_sparse",
+        GGML_OP_FLASH_ATTN_EXT,
+        DispatchMatchKind::SingleOp,
+        90,
+        DispatchSource::Common,
+        match_sparse_attention,
+    });
+    registry.add({
+        "common.lightning_indexer_f32_f16",
+        GGML_OP_LIGHTNING_INDEXER,
+        DispatchMatchKind::SingleOp,
+        50,
+        DispatchSource::Common,
+        match_lightning_indexer,
+    });
     registry.add({
         "common.flash_attention_f32_f16_gate",
         GGML_OP_FLASH_ATTN_EXT,

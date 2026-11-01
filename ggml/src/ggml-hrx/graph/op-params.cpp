@@ -25,7 +25,8 @@ static bool flash_attn_ext_params_equivalent(const OpParams & lhs, const OpParam
     const FlashAttnExtParams * rhs_params = op_params_as<FlashAttnExtParams>(rhs);
     return lhs_params != nullptr && rhs_params != nullptr && nearly_equal(lhs_params->scale, rhs_params->scale) &&
            nearly_equal(lhs_params->max_bias, rhs_params->max_bias) &&
-           nearly_equal(lhs_params->logit_softcap, rhs_params->logit_softcap) && lhs_params->prec == rhs_params->prec;
+           nearly_equal(lhs_params->logit_softcap, rhs_params->logit_softcap) && lhs_params->prec == rhs_params->prec &&
+           lhs_params->n_kv_max == rhs_params->n_kv_max;
 }
 
 static bool soft_max_params_equivalent(const OpParams & lhs, const OpParams & rhs) {
@@ -48,11 +49,23 @@ static bool clamp_params_equivalent(const OpParams & lhs, const OpParams & rhs) 
            nearly_equal(lhs_params->max, rhs_params->max);
 }
 
+static bool fill_params_equivalent(const OpParams & lhs, const OpParams & rhs) {
+    const auto * l = op_params_as<FillParams>(lhs);
+    const auto * r = op_params_as<FillParams>(rhs);
+    return l != nullptr && r != nullptr && l->value == r->value;
+}
+
 static bool glu_params_equivalent(const OpParams & lhs, const OpParams & rhs) {
     const GluParams * lhs_params = op_params_as<GluParams>(lhs);
     const GluParams * rhs_params = op_params_as<GluParams>(rhs);
     return lhs_params != nullptr && rhs_params != nullptr && lhs_params->op == rhs_params->op &&
-           lhs_params->swapped == rhs_params->swapped;
+           lhs_params->swapped == rhs_params->swapped && lhs_params->limit == rhs_params->limit;
+}
+
+static bool hyper_connection_comb_params_equivalent(const OpParams & lhs, const OpParams & rhs) {
+    const auto * l = op_params_as<HyperConnectionCombParams>(lhs);
+    const auto * r = op_params_as<HyperConnectionCombParams>(rhs);
+    return l != nullptr && r != nullptr && l->eps == r->eps && l->n_iter == r->n_iter;
 }
 
 static bool scale_params_equivalent(const OpParams & lhs, const OpParams & rhs) {
@@ -257,6 +270,9 @@ OpParams import_op_params(const ggml_tensor & tensor) {
     }
 
     switch (tensor.op) {
+        case GGML_OP_MUL_MAT:
+            return MulMatParams{ static_cast<ggml_prec>(ggml_get_op_params_i32(&tensor, 0)),
+                                 static_cast<ggml_op_hint>(ggml_get_op_params_i32(&tensor, 1)) };
         case GGML_OP_RMS_NORM:
         case GGML_OP_L2_NORM:
             return RmsNormParams{ ggml_get_op_params_f32(&tensor, 0) };
@@ -267,26 +283,31 @@ OpParams import_op_params(const ggml_tensor & tensor) {
             };
         case GGML_OP_FLASH_ATTN_EXT:
             return FlashAttnExtParams{
-                ggml_get_op_params_f32(&tensor, 0),
-                ggml_get_op_params_f32(&tensor, 1),
-                ggml_get_op_params_f32(&tensor, 2),
-                ggml_flash_attn_ext_get_prec(&tensor),
+                ggml_get_op_params_f32(&tensor, 0), ggml_get_op_params_f32(&tensor, 1),
+                ggml_get_op_params_f32(&tensor, 2), ggml_flash_attn_ext_get_prec(&tensor),
+                ggml_get_op_params_i32(&tensor, 4),
             };
         case GGML_OP_ARGSORT:
             return ArgsortParams{ static_cast<ggml_sort_order>(ggml_get_op_params_i32(&tensor, 0)) };
+        case GGML_OP_DSV4_HC_COMB:
+            return HyperConnectionCombParams{ ggml_get_op_params_f32(&tensor, 0), ggml_get_op_params_i32(&tensor, 1) };
+        case GGML_OP_FILL:
+            return FillParams{ ggml_get_op_params_f32(&tensor, 0) };
         case GGML_OP_CLAMP:
             return ClampParams{
                 ggml_get_op_params_f32(&tensor, 0),
                 ggml_get_op_params_f32(&tensor, 1),
             };
         case GGML_OP_GLU:
-            return GluParams{ ggml_get_glu_op(&tensor), ggml_get_op_params_i32(&tensor, 1) != 0 };
+            return GluParams{ ggml_get_glu_op(&tensor), ggml_get_op_params_i32(&tensor, 1) != 0,
+                              ggml_get_op_params_f32(&tensor, 3) };
         case GGML_OP_SCALE:
             return ScaleParams{
                 ggml_get_op_params_f32(&tensor, 0),
                 ggml_get_op_params_f32(&tensor, 1),
             };
         case GGML_OP_ROPE:
+        case GGML_OP_ROPE_BACK:
             return RopeParams{
                 ggml_get_op_params_i32(&tensor, 1),
                 ggml_get_op_params_i32(&tensor, 2),
@@ -311,6 +332,11 @@ OpParams import_op_params(const ggml_tensor & tensor) {
 }
 
 bool op_params_equivalent(ggml_op op, const OpParams & lhs, const OpParams & rhs) {
+    if (op == GGML_OP_MUL_MAT) {
+        const auto * l = op_params_as<MulMatParams>(lhs);
+        const auto * r = op_params_as<MulMatParams>(rhs);
+        return l != nullptr && r != nullptr && l->prec == r->prec && l->hint == r->hint;
+    }
     switch (op) {
         case GGML_OP_RMS_NORM:
         case GGML_OP_L2_NORM:
@@ -321,6 +347,10 @@ bool op_params_equivalent(ggml_op op, const OpParams & lhs, const OpParams & rhs
             return flash_attn_ext_params_equivalent(lhs, rhs);
         case GGML_OP_ARGSORT:
             return argsort_params_equivalent(lhs, rhs);
+        case GGML_OP_DSV4_HC_COMB:
+            return hyper_connection_comb_params_equivalent(lhs, rhs);
+        case GGML_OP_FILL:
+            return fill_params_equivalent(lhs, rhs);
         case GGML_OP_CLAMP:
             return clamp_params_equivalent(lhs, rhs);
         case GGML_OP_GLU:
@@ -340,6 +370,7 @@ bool op_params_equivalent(ggml_op op, const OpParams & lhs, const OpParams & rhs
         case GGML_OP_COS:
             return unary_params_equivalent(lhs, rhs);
         case GGML_OP_ROPE:
+        case GGML_OP_ROPE_BACK:
             return rope_params_equivalent(lhs, rhs);
         default:
             return lhs.index() == rhs.index();

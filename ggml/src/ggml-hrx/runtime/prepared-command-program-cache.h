@@ -84,6 +84,7 @@ class PreparedCommandProgramCache {
         PreparedCommandProgram program;
         RecordedCommandGraph   recorded;
         bool                   has_program = false;
+        uint64_t               last_used   = 0;
     };
 
     void record_build();
@@ -92,6 +93,7 @@ class PreparedCommandProgramCache {
     mutable std::mutex                                       mutex_;
     std::unordered_map<Key, std::shared_ptr<Entry>, KeyHash> programs_;
     PreparedCommandProgramCacheStats                         stats_;
+    uint64_t                                                 access_tick_ = 0;
 };
 
 }  // namespace ggml::hrx
