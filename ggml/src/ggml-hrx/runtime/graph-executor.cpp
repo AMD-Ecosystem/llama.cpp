@@ -73,8 +73,10 @@ CommandProgramBindings GraphExecutor::bind_external_value_buffers(const GraphPro
 
 GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
     GraphExecutionResult result;
+    CompileTraceExecution trace(context_.kernel_executables.trace_id(), graph.uid);
     if (graph.n_nodes == 0) {
         result.code = GGML_STATUS_SUCCESS;
+        trace.success = true;
         return result;
     }
     result.status = context_valid_for_execution();
@@ -119,6 +121,7 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
         &context_.host_weights,
         &context_.device->host_buffers,
         &context_.graph_replay_state,
+        trace.ids.cache_id != 0 ? &trace : nullptr,
     };
     const PreparedCommandProgramCacheExecutionResult execution =
         use_graph_prepared ? lookup.program->execute_with_result(execution_context, bindings) :
@@ -134,6 +137,7 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
     }
 
     result.code = GGML_STATUS_SUCCESS;
+    trace.success = true;
     return result;
 }
 

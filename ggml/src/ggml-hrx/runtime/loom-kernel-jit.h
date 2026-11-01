@@ -1,6 +1,7 @@
 #pragma once
 
 #include "loom-jit.h"
+#include "compile-trace.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -15,6 +16,7 @@
 namespace ggml::hrx {
 
 struct LoomKernelCompileRequest {
+    CompileTraceIds                                  trace;
     const void *                                     source_data   = nullptr;
     size_t                                           source_size   = 0;
     ggml_hrx_loom_jit_source_format                  source_format = GGML_HRX_LOOM_JIT_SOURCE_FORMAT_TEXT;
@@ -36,7 +38,7 @@ class LoomCompiledKernel {
 
     const std::string & key() const { return key_; }
 
-    bool                             resolve() const;
+    bool                             resolve(uint64_t waiting_execution_id = 0) const;
     std::string                      error_message() const;
     ggml_hrx_loom_jit_compile_result take_result();
 
@@ -62,6 +64,7 @@ class LoomCompiledKernel {
     LoomKernelCompileRequest         request_;
     ggml_hrx_loom_jit_compile_result compiled_;
     std::string                      error_;
+    uint64_t                         trace_start_ns_ = 0;
     std::atomic<State>               state_ = State::Pending;
 };
 
