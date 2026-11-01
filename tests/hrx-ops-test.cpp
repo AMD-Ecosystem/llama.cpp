@@ -4634,105 +4634,6 @@ static auto allocate_test_weight(ggml_backend_t backend, ggml_tensor * weight) {
     return buffer;
 }
 
-static void run_grouped_attention_matmul_cpu_reference_case(bool value_projection) {
-    static constexpr int64_t kWidth        = 256;
-    static constexpr int64_t kKeyCount     = 256;
-    static constexpr int64_t kQueryCount   = 2;
-    static constexpr int64_t kKeyHeads     = 4;
-    static constexpr int64_t kQueryHeads   = 24;
-
-    ggml_backend_t cpu_backend = init_cpu_backend();
-    ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
-    REQUIRE(hrx_backend != nullptr);
-
-    ggml_init_params params = {};
-    params.mem_size = 16 * 1024 * 1024;
-    params.no_alloc = true;
-    ggml_context * cpu_ctx = ggml_init(params);
-    ggml_context * hrx_ctx = ggml_init(params);
-    REQUIRE(cpu_ctx != nullptr);
-    REQUIRE(hrx_ctx != nullptr);
-
-    auto make_graph = [&](ggml_context * ctx, ggml_tensor *& lhs_root, ggml_tensor *& rhs_root,
-                          ggml_tensor *& output) {
-        // K and Q enter attention as [width, heads, tokens] and are permuted.
-        // V and softmax probabilities enter the second matmul in packed order.
-        lhs_root = value_projection ? ggml_new_tensor_3d(ctx, GGML_TYPE_F16, kWidth, kWidth, kKeyHeads) :
-                                      ggml_new_tensor_3d(ctx, GGML_TYPE_F16, kWidth, kKeyHeads, kKeyCount);
-        rhs_root = value_projection ? ggml_new_tensor_3d(ctx, GGML_TYPE_F32, kKeyCount, kQueryCount, kQueryHeads) :
-                                      ggml_new_tensor_3d(ctx, GGML_TYPE_F32, kWidth, kQueryHeads, kQueryCount);
-        ggml_tensor * lhs = value_projection ? lhs_root : ggml_permute(ctx, lhs_root, 0, 2, 1, 3);
-        ggml_tensor * rhs = value_projection ? rhs_root : ggml_permute(ctx, rhs_root, 0, 2, 1, 3);
-        output = ggml_mul_mat(ctx, lhs, rhs);
-        REQUIRE(output != nullptr);
-        const bool expected_output_shape = output->ne[0] == kWidth && output->ne[1] == kQueryCount &&
-                                           output->ne[2] == kQueryHeads;
-        REQUIRE(expected_output_shape);
-        ggml_cgraph * graph = ggml_new_graph(ctx);
-        REQUIRE(graph != nullptr);
-        ggml_build_forward_expand(graph, output);
-        return graph;
-    };
-
-    ggml_tensor * cpu_lhs_root = nullptr;
-    ggml_tensor * cpu_rhs_root = nullptr;
-    ggml_tensor * cpu_output = nullptr;
-    ggml_tensor * hrx_lhs_root = nullptr;
-    ggml_tensor * hrx_rhs_root = nullptr;
-    ggml_tensor * hrx_output = nullptr;
-    ggml_cgraph * cpu_graph = make_graph(cpu_ctx, cpu_lhs_root, cpu_rhs_root, cpu_output);
-    ggml_cgraph * hrx_graph = make_graph(hrx_ctx, hrx_lhs_root, hrx_rhs_root, hrx_output);
-    REQUIRE(cpu_graph != nullptr);
-    REQUIRE(hrx_graph != nullptr);
-    require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph),
-                               { "loom_libs:ggml_mul_mat_grouped_f16_f32" });
-
-    ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
-    ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
-    REQUIRE(cpu_buffer != nullptr);
-    REQUIRE(hrx_buffer != nullptr);
-
-    std::vector<ggml_fp16_t> lhs_data(static_cast<size_t>(kWidth * kKeyCount * kKeyHeads));
-    for (int64_t row = 0; row < kKeyCount; ++row) {
-        for (int64_t head = 0; head < kKeyHeads; ++head) {
-            for (int64_t column = 0; column < kWidth; ++column) {
-                const size_t index = static_cast<size_t>((value_projection ? head * kKeyCount + row :
-                                                                              row * kKeyHeads + head) * kWidth + column);
-                const float value = (head + 1) * 0.125f + (row % 7 - 3) * 0.00390625f +
-                                    (column % 13) * 0.0009765625f;
-                lhs_data[index] = ggml_fp32_to_fp16(value);
-            }
-        }
-    }
-    std::vector<float> rhs_data(static_cast<size_t>(kWidth * kQueryCount * kQueryHeads));
-    for (int64_t token = 0; token < kQueryCount; ++token) {
-        for (int64_t head = 0; head < kQueryHeads; ++head) {
-            for (int64_t column = 0; column < kWidth; ++column) {
-                const size_t index = static_cast<size_t>((value_projection ? head * kQueryCount + token :
-                                                                              token * kQueryHeads + head) * kWidth + column);
-                rhs_data[index] = 0.07f + head * 0.001f + token * 0.009f + (column % 17) * 0.00037f;
-            }
-        }
-    }
-    set_tensor_pair_bytes(cpu_backend, cpu_lhs_root, hrx_backend, hrx_lhs_root, lhs_data.data(),
-                          lhs_data.size() * sizeof(ggml_fp16_t));
-    set_tensor_pair_bytes(cpu_backend, cpu_rhs_root, hrx_backend, hrx_rhs_root, rhs_data.data(),
-                          rhs_data.size() * sizeof(float));
-
-    REQUIRE(ggml_backend_graph_compute(cpu_backend, cpu_graph) == GGML_STATUS_SUCCESS);
-    REQUIRE(ggml_backend_graph_compute(hrx_backend, hrx_graph) == GGML_STATUS_SUCCESS);
-    ggml_backend_synchronize(cpu_backend);
-    ggml_backend_synchronize(hrx_backend);
-    require_close(get_f32_tensor(hrx_backend, hrx_output), get_f32_tensor(cpu_backend, cpu_output), 0.02f, 0.001f);
-
-    ggml_backend_buffer_free(cpu_buffer);
-    ggml_backend_buffer_free(hrx_buffer);
-    ggml_free(cpu_ctx);
-    ggml_free(hrx_ctx);
-    ggml_backend_free(cpu_backend);
-    ggml_backend_free(hrx_backend);
-}
-
 static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
                                                 const char * expected_kernel,
                                                 int64_t      token_count,
@@ -6942,10 +6843,6 @@ static void register_dense_matmul_cases(Suite & suite) {
         run_dense_matmul_cpu_reference_case(
             GGML_TYPE_BF16, "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32_aligned", 3888, 3456, 1152);
     });
-    suite.device_case("grouped_attention_matmul.kq.cpu_reference",
-                      [] { run_grouped_attention_matmul_cpu_reference_case(false); });
-    suite.device_case("grouped_attention_matmul.v_probabilities.cpu_reference",
-                      [] { run_grouped_attention_matmul_cpu_reference_case(true); });
     for (const auto & shape :
          { std::tuple<int64_t, int64_t, int64_t>{ 384, 65, 33 },
            std::tuple<int64_t, int64_t, int64_t>{ 1152, 3456, 256 },

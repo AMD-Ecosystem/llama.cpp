@@ -715,12 +715,6 @@
     },
     {
       "path": "motifs/flash_attention/strided_values.loom"
-    },
-    {
-      "path": "ops/matmul/grouped_f16_f32.loom"
-    },
-    {
-      "path": "motifs/matmul/grouped_f16_f32_dot.loom"
     }
   ],
   "exports": [
@@ -10339,37 +10333,6 @@
       "compile_dependencies": [
         "motifs/copy/strided_source_f16.loom",
         "motifs/copy/strided_source_index.loom"
-      ]
-    },
-    {
-      "name": "ggml_mul_mat_grouped_f16_f32",
-      "family": "loom_libs",
-      "symbol": "ggml_mul_mat_grouped_f16_f32",
-      "source": "ops/matmul/grouped_f16_f32.loom",
-      "workload_parameters": [],
-      "launch_parameters": [],
-      "bindings": [
-        "key",
-        "query",
-        "output"
-      ],
-      "binding_access": [
-        "read",
-        "read",
-        "write"
-      ],
-      "target_selector": "",
-      "compile_recipe": {
-        "mode": "direct",
-        "primary_sources": [
-          "ops/matmul/grouped_f16_f32.loom"
-        ],
-        "library_sources": [
-          "motifs/matmul/grouped_f16_f32_dot.loom"
-        ]
-      },
-      "compile_dependencies": [
-        "motifs/matmul/grouped_f16_f32_dot.loom"
       ]
     }
   ],
