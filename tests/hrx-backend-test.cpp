@@ -5533,6 +5533,94 @@ static void run_qwen_flash_attention_dispatch_checks() {
         REQUIRE(unsetenv(kDisableQwenDispatchEnv) == 0);
     }
     {
+        REQUIRE(setenv(kDisableQwenDispatchEnv, "1", 1) == 0);
+        constexpr int64_t tokens = 512;
+        constexpr int64_t hidden = 512;
+        ggml_tensor * attention = build_qwen_flash_attention_graph(ctx, tokens, tokens, 4, 2);
+        ggml_tensor * reshaped = ggml_reshape_2d(ctx, attention, hidden, tokens);
+        ggml_tensor * weight = ggml_new_tensor_2d(ctx, GGML_TYPE_BF16, hidden, hidden);
+        ggml_tensor * bias = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hidden);
+        ggml_tensor * residual = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden, tokens);
+        ggml_tensor * projected = ggml_mul_mat(ctx, weight, reshaped);
+        ggml_tensor * biased = ggml_add(ctx, projected, bias);
+        ggml_tensor * output = ggml_add(ctx, biased, residual);
+        ggml_cgraph * graph = ggml_new_graph(ctx);
+        ggml_build_forward_expand(graph, output);
+
+        ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+        REQUIRE(imported.valid());
+        ggml::hrx::DispatchScheduler scheduler;
+        REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+        const auto & plan = scheduler.plan();
+        REQUIRE(plan.valid());
+        const auto producer = std::find_if(plan.dispatches.begin(), plan.dispatches.end(), [](const auto & dispatch) {
+            return kernel_name_for_id(dispatch.kernel.kernel_id) ==
+                   "loom_libs:ggml_flash_attention_f32_f16_wmma_f16_only";
+        });
+        REQUIRE(producer != plan.dispatches.end());
+        REQUIRE(producer->bindings.size() == 6);
+        const ggml::hrx::Value * attention_value = imported.graph.values().find_tensor(attention);
+        REQUIRE(attention_value != nullptr);
+        const auto * alternate =
+            plan.metadata.find_alternate_value(attention_value->id, GGML_TYPE_F16, attention_value->byte_count / 2);
+        REQUIRE(alternate != nullptr);
+        REQUIRE(producer->bindings.back().value == alternate->alternate_value);
+        const auto consumer = std::next(producer);
+        REQUIRE(consumer != plan.dispatches.end());
+        REQUIRE(consumer->bindings.front().value == alternate->alternate_value);
+        REQUIRE(kernel_name_for_id(consumer->kernel.kernel_id) ==
+                "loom_libs:ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32_aligned");
+        const ggml::hrx::CommandProgram commands =
+            ggml::hrx::build_command_program(imported.graph, plan, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+        REQUIRE(commands.valid());
+        REQUIRE(command_program_verifies(commands));
+        const auto f32_allocation = std::find_if(commands.transients.allocations.begin(),
+                                                 commands.transients.allocations.end(),
+                                                 [attention_value](const auto & allocation) {
+                                                     return allocation.value == attention_value->storage_root;
+                                                 });
+        REQUIRE(f32_allocation == commands.transients.allocations.end());
+
+        const int saved_flags = attention->flags;
+        ggml_set_output(attention);
+        ggml::hrx::GraphImportResult output_imported = ggml::hrx::import_ggml_graph(*graph);
+        REQUIRE(output_imported.valid());
+        ggml::hrx::DispatchScheduler output_scheduler;
+        REQUIRE(output_scheduler.schedule_graph(output_imported.graph, test_dispatch_target()));
+        const auto & output_plan = output_scheduler.plan();
+        REQUIRE(output_plan.valid());
+        const auto output_producer =
+            std::find_if(output_plan.dispatches.begin(), output_plan.dispatches.end(), [](const auto & dispatch) {
+                return kernel_name_for_id(dispatch.kernel.kernel_id) ==
+                       "loom_libs:ggml_flash_attention_f32_f16_wmma_publish_f16";
+            });
+        REQUIRE(output_producer != output_plan.dispatches.end());
+        REQUIRE(output_producer->bindings.size() == 7);
+        attention->flags = saved_flags;
+
+        ggml_tensor * f32_branch = ggml_add(ctx, reshaped, residual);
+        ggml_build_forward_expand(graph, f32_branch);
+        ggml::hrx::GraphImportResult fanout_imported = ggml::hrx::import_ggml_graph(*graph);
+        REQUIRE(fanout_imported.valid());
+        ggml::hrx::DispatchScheduler fanout_scheduler;
+        REQUIRE(fanout_scheduler.schedule_graph(fanout_imported.graph, test_dispatch_target()));
+        const auto & fanout_plan = fanout_scheduler.plan();
+        REQUIRE(fanout_plan.valid());
+        const auto fanout_producer =
+            std::find_if(fanout_plan.dispatches.begin(), fanout_plan.dispatches.end(), [](const auto & dispatch) {
+                return kernel_name_for_id(dispatch.kernel.kernel_id) ==
+                       "loom_libs:ggml_flash_attention_f32_f16_wmma_publish_f16";
+            });
+        REQUIRE(fanout_producer != fanout_plan.dispatches.end());
+        REQUIRE(fanout_producer->bindings.size() == 7);
+        const ggml::hrx::CommandProgram fanout_commands =
+            ggml::hrx::build_command_program(fanout_imported.graph, fanout_plan,
+                                             ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+        REQUIRE(fanout_commands.valid());
+        REQUIRE(command_program_verifies(fanout_commands));
+        REQUIRE(unsetenv(kDisableQwenDispatchEnv) == 0);
+    }
+    {
         ggml_tensor * output = build_qwen_flash_attention_graph(ctx, 4, 8, 4, 2, GGML_TYPE_F32, GGML_TYPE_F32);
         REQUIRE(!graph_is_supported(ctx, output));
     }

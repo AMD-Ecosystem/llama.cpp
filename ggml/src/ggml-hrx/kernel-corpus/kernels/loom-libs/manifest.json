@@ -6881,6 +6881,67 @@
       ]
     },
     {
+      "name": "ggml_flash_attention_f32_f16_wmma_f16_only",
+      "family": "loom_libs",
+      "symbol": "ggml_flash_attention_f32_f16_wmma_f16_only",
+      "source": "ops/flash_attention/prefill_f32_f16_wmma_publish_f16.loom",
+      "workload_parameters": [
+        {
+          "name": "query_token_count",
+          "type": "index"
+        },
+        {
+          "name": "key_value_token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "query_token_count",
+          "type": "index"
+        },
+        {
+          "name": "key_value_token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "query",
+        "key",
+        "value",
+        "mask",
+        "gate",
+        "f16_output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/flash_attention/prefill_f32_f16_wmma_publish_f16.loom"
+        ],
+        "library_sources": [
+          "motifs/flash_attention/qk_block_wmma.loom",
+          "motifs/flash_attention/online_softmax.loom",
+          "motifs/flash_attention/pv_block_wmma.loom",
+          "motifs/flash_attention/publish_f32.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/flash_attention/qk_block_wmma.loom",
+        "motifs/flash_attention/online_softmax.loom",
+        "motifs/flash_attention/pv_block_wmma.loom",
+        "motifs/flash_attention/publish_f32.loom"
+      ]
+    },
+    {
       "name": "ggml_flash_attention_f32_f16_wmma_publish_f16",
       "family": "loom_libs",
       "symbol": "ggml_flash_attention_f32_f16_wmma_publish_f16",

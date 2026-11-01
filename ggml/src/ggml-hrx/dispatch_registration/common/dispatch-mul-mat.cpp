@@ -1829,6 +1829,23 @@ static bool build_mul_mat_postops_dispatch(const DispatchMatchContext & context,
     if (match.requires_q8_activation && !pack_q4 && !pack_q6) {
         return false;
     }
+    const bool tiled_postops = common_mul_mat_postops_is_tiled_route(match);
+    const bool unpacked_activation = !pack_q4 && !pack_q6;
+    if (tiled_postops && unpacked_activation) {
+        const size_t f16_activation_bytes =
+            static_cast<size_t>(match.token_count * match.input_size) * sizeof(ggml_fp16_t);
+        const CommandPlanAlternateValue * f16_activation =
+            find_alternate_value(context.graph, context.plan, match.input->id, GGML_TYPE_F16,
+                                 f16_activation_bytes);
+        const bool is_attention_publication =
+            f16_activation != nullptr && f16_activation->name == "common.flash_attention.f16";
+        const bool is_bf16_projection = match.weight->type == GGML_TYPE_BF16;
+        if (is_attention_publication && is_bf16_projection) {
+            activation = { f16_activation->alternate_value, 0, f16_activation_bytes };
+            dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.activation_format",
+                                                       std::to_string(GGML_TYPE_F16));
+        }
+    }
     const CommonMulMatWeightFormat format = pack_q4 ? CommonMulMatWeightFormat::Q4KRow64 :
                                             pack_q6 ? CommonMulMatWeightFormat::Q6KRow64 :
                                                       match.weight_format;

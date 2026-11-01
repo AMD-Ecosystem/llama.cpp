@@ -12,7 +12,7 @@ config.decl @ggml.flash_attention.apply_gate : %value: index where [range(%value
 config.decl @ggml.flash_attention.gate_stride_head : %value: index where [range(%value, 1, 16777216)]
 config.decl @ggml.flash_attention.gate_stride_token : %value: index where [range(%value, 1, 16777216)]
 
-template.decl @ggml.flash_attention.prefill.body(%publish_f16: i1, %query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer, %f16_output: buffer)
+template.decl @ggml.flash_attention.prefill.body(%publish_f16: i1, %publish_f32: i1, %query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer, %f16_output: buffer)
 
 kernel.def target(@ggml_flash_attention_gfx11_wave64) export("ggml_flash_attention_f32_f16_wmma_publish_f16") @ggml_flash_attention_f32_f16_wmma_publish_f16(%query_token_count: index, %key_value_token_count: index) {
   %query_head_count = config.get @ggml.flash_attention.query_head_count : index
@@ -33,7 +33,34 @@ kernel.def target(@ggml_flash_attention_gfx11_wave64) export("ggml_flash_attenti
   kernel.launch.config workgroups(%query_tile_count, %query_head_count, %output_group_count) workgroup_size(%c256, %c1, %c1) : index
 } launch(%query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer, %f16_output: buffer) where [range(%query_token_count, 1, 2048)] {
   %publish_f16 = scalar.constant true : i1
-  template.apply<@ggml.flash_attention.prefill.body>(%publish_f16, %query_token_count, %key_value_token_count, %query, %key, %value, %mask, %gate, %output, %f16_output) : (i1, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  %publish_f32 = scalar.constant true : i1
+  template.apply<@ggml.flash_attention.prefill.body>(%publish_f16, %publish_f32, %query_token_count, %key_value_token_count, %query, %key, %value, %mask, %gate, %output, %f16_output) : (i1, i1, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}
+
+// The F32 graph value is unused on this route. Both template output arguments
+// reference the F16 publication, and the F32 store is removed at specialization.
+kernel.def target(@ggml_flash_attention_gfx11_wave64) export("ggml_flash_attention_f32_f16_wmma_f16_only") @ggml_flash_attention_f32_f16_wmma_f16_only(%query_token_count: index, %key_value_token_count: index) {
+  %query_head_count = config.get @ggml.flash_attention.query_head_count : index
+  %value_head_size0 = config.get @ggml.flash_attention.value_head_size : index
+  %value_head_size = index.assume %value_head_size0 [range(%value_head_size0, 64, 512), multiple_of(%value_head_size0, 64)] : index
+  %c1 = index.constant 1 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c15 = index.constant 15 : index
+  %c16 = index.constant 16 : index
+  %c64 = index.constant 64 : index
+  %c256 = index.constant 256 : index
+  %padded_query_token_count = index.add %query_token_count, %c15 : index
+  %query_tile_count = index.div %padded_query_token_count, %c16 : index
+  %output_tile_count = index.div %value_head_size, %c64 : index
+  %padded_output_tile_count = index.add %output_tile_count, %c3 : index
+  %output_group_count = index.div %padded_output_tile_count, %c4 : index
+  kernel.launch.config workgroups(%query_tile_count, %query_head_count, %output_group_count) workgroup_size(%c256, %c1, %c1) : index
+} launch(%query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %f16_output: buffer) where [range(%query_token_count, 1, 2048)] {
+  %publish_f16 = scalar.constant true : i1
+  %publish_f32 = scalar.constant false : i1
+  template.apply<@ggml.flash_attention.prefill.body>(%publish_f16, %publish_f32, %query_token_count, %key_value_token_count, %query, %key, %value, %mask, %gate, %f16_output, %f16_output) : (i1, i1, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
   kernel.return
 }
 
@@ -55,3 +82,38 @@ check.case public @ggml_flash_attention_f32_f16_wmma_gated_dual_publish_case {
   check.return
 }
 check.benchmark<@ggml_flash_attention_f32_f16_wmma_gated_dual_publish_case> @ggml_flash_attention_f32_f16_wmma_gated_dual_publish
+
+check.case public @ggml_flash_attention_f16_only_matches_dual_case {
+  %query_token_count = check.literal value(1) : index
+  %key_value_token_count = check.literal value(64) : index
+  %query = check.generate.iota offset(0.0) step(0.125) : tensor<1x1x128xf32>
+  %key = check.generate.fill value(1.0) : tensor<64x1x128xf16>
+  %value = check.generate.iota offset(0.0) step(0.125) : tensor<64x1x128xf16>
+  %mask = check.generate.fill value(0.0) : tensor<1x64xf16>
+  %gate = check.generate.fill value(0.0) : tensor<1x1x128xf32>
+  %f32_output = check.generate.fill value(-1.0) : tensor<1x1x128xf32>
+  %dual_f16 = check.generate.fill value(-1.0) : tensor<1x1x128xf16>
+  %f16_only = check.generate.fill value(-1.0) : tensor<1x1x128xf16>
+  kernel.launch @ggml_flash_attention_f32_f16_wmma_publish_f16[%query_token_count, %key_value_token_count](%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %gate, %f32_output, %dual_f16) : [index, index](index, index, tensor<1x1x128xf32>, tensor<64x1x128xf16>, tensor<64x1x128xf16>, tensor<1x64xf16>, tensor<1x1x128xf32>, tensor<1x1x128xf32>, tensor<1x1x128xf16>)
+  kernel.launch @ggml_flash_attention_f32_f16_wmma_f16_only[%query_token_count, %key_value_token_count](%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %gate, %f16_only) : [index, index](index, index, tensor<1x1x128xf32>, tensor<64x1x128xf16>, tensor<64x1x128xf16>, tensor<1x64xf16>, tensor<1x1x128xf32>, tensor<1x1x128xf16>)
+  check.expect.equal actual(%f16_only) expected(%dual_f16) : tensor<1x1x128xf16>
+  check.return
+}
+check.benchmark<@ggml_flash_attention_f16_only_matches_dual_case> @ggml_flash_attention_f16_only_matches_dual
+
+check.case public @ggml_flash_attention_tiled_f16_only_matches_dual_case {
+  %query_token_count = check.literal value(4) : index
+  %key_value_token_count = check.literal value(70) : index
+  %query = check.generate.fill value(1.0) : tensor<4x1x80xf32>
+  %key = check.generate.fill value(1.0) : tensor<70x1x80xf16>
+  %value = check.generate.iota offset(0.0) step(0.125) period(80) : tensor<70x1x80xf16>
+  %mask = check.generate.iota offset(0.0) step(-10000.0) period(70) : tensor<4x70xf16>
+  %f32_output = check.generate.fill value(-1.0) : tensor<4x1x72xf32>
+  %dual_f16 = check.generate.fill value(-1.0) : tensor<4x1x72xf16>
+  %f16_only = check.generate.fill value(-1.0) : tensor<4x1x72xf16>
+  kernel.launch @ggml_flash_attention_f32_f16_wmma_publish_f16[%query_token_count, %key_value_token_count](%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %query, %f32_output, %dual_f16) : [index, index](index, index, tensor<4x1x80xf32>, tensor<70x1x80xf16>, tensor<70x1x80xf16>, tensor<4x70xf16>, tensor<4x1x80xf32>, tensor<4x1x72xf32>, tensor<4x1x72xf16>)
+  kernel.launch @ggml_flash_attention_f32_f16_wmma_f16_only[%query_token_count, %key_value_token_count](%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %query, %f16_only) : [index, index](index, index, tensor<4x1x80xf32>, tensor<70x1x80xf16>, tensor<70x1x80xf16>, tensor<4x70xf16>, tensor<4x1x80xf32>, tensor<4x1x72xf16>)
+  check.expect.equal actual(%f16_only) expected(%dual_f16) : tensor<4x1x72xf16>
+  check.return
+}
+check.benchmark<@ggml_flash_attention_tiled_f16_only_matches_dual_case> @ggml_flash_attention_tiled_f16_only_matches_dual
