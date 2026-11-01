@@ -132,6 +132,7 @@
       "library_sources": [
         "qwen3_moe/motifs/attention_qkv_postprocess_fused_decode.loom",
         "../loom-libs/motifs/attention/rmsnorm_neox_cache_f16.loom",
+        "../loom-libs/motifs/rope/rope_f32.loom",
         "qwen3_moe/model_config.loom",
         "../loom-libs/motifs/matmul/q4_q6_q8_1_x4_qkv.loom",
         "../loom-libs/motifs/matmul/q4_q8_1_x4_decode.loom",
@@ -145,6 +146,7 @@
         "qwen3_moe/attention_qkv_postprocess_fused.loom",
         "qwen3_moe/motifs/attention_qkv_postprocess_fused_decode.loom",
         "../loom-libs/motifs/attention/rmsnorm_neox_cache_f16.loom",
+        "../loom-libs/motifs/rope/rope_f32.loom",
         "qwen3_moe/model_config.loom",
         "../loom-libs/motifs/matmul/q4_q6_q8_1_x4_qkv.loom",
         "../loom-libs/motifs/matmul/q4_q8_1_x4_decode.loom",
@@ -445,6 +447,7 @@
       "library_sources": [
         "qwen3_moe/motifs/attention_qkv_postprocess_fused_decode.loom",
         "../loom-libs/motifs/attention/rmsnorm_neox_cache_f16.loom",
+        "../loom-libs/motifs/rope/rope_f32.loom",
         "qwen3_moe/model_config.loom",
         "../loom-libs/motifs/matmul/q4_q6_q8_1_x4_qkv.loom",
         "../loom-libs/motifs/matmul/q4_q8_1_x4_decode.loom",
@@ -458,6 +461,7 @@
         "qwen3_moe/attention_qkv_postprocess_fused.loom",
         "qwen3_moe/motifs/attention_qkv_postprocess_fused_decode.loom",
         "../loom-libs/motifs/attention/rmsnorm_neox_cache_f16.loom",
+        "../loom-libs/motifs/rope/rope_f32.loom",
         "qwen3_moe/model_config.loom",
         "../loom-libs/motifs/matmul/q4_q6_q8_1_x4_qkv.loom",
         "../loom-libs/motifs/matmul/q4_q8_1_x4_decode.loom",

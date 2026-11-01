@@ -1,6 +1,8 @@
 // Copyright 2026 The HRX Authors
 // SPDX-License-Identifier: Apache-2.0
 
+func.decl @ggml_rope_f32_pair_packet(%position: f32, %theta: vector<2xf32>, %freq_factors: vector<2xf32>, %x_values: vector<2xf32>, %y_values: vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
+
 template.decl @qwen3_moe.attention.postprocess.head_body(%publish_output: i1, %token_count: index, %cache_row_count: index, %head_domain0: index, %token0: index, %positions: buffer, %key_cache_indices: buffer, %value_cache_indices: buffer, %query_input: buffer, %key_input: buffer, %value_input: buffer, %query_norm_weight: buffer, %key_norm_weight: buffer, %inverse_frequencies: buffer, %query_output: buffer, %key_cache: buffer, %value_cache: buffer)
 
 config.decl @qwen3_moe.model.rms_epsilon : f32
@@ -18,23 +20,13 @@ func.def inline @qwen3_moe_rmsnorm_neox_packet(%row_sum: f32, %head_size: f32, %
   %biased_mean = scalar.addf<reassoc|nnan|ninf|nsz> %mean, %epsilon : f32
   %scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %biased_mean : f32
   %scale_vector = vector.splat %scale : vector<2xf32>
-  %position_vector = vector.splat %position : vector<2xf32>
-  %inverse_two_pi = scalar.constant 0.15915494309189535 : f32
-  %inverse_two_pi_vector = vector.splat %inverse_two_pi : vector<2xf32>
+  %one = scalar.constant 1.0 : f32
+  %unit_factors = vector.splat %one : vector<2xf32>
   %normalized_low = vector.mulf<reassoc|nnan|ninf|nsz|contract> %low_values, %scale_vector : vector<2xf32>
   %normalized_high = vector.mulf<reassoc|nnan|ninf|nsz|contract> %high_values, %scale_vector : vector<2xf32>
   %scaled_low = vector.mulf<reassoc|nnan|ninf|nsz|contract> %normalized_low, %low_weights : vector<2xf32>
   %scaled_high = vector.mulf<reassoc|nnan|ninf|nsz|contract> %normalized_high, %high_weights : vector<2xf32>
-  %angles = vector.mulf<reassoc|nnan|ninf|nsz|contract> %position_vector, %inverse_frequencies : vector<2xf32>
-  %turns = vector.mulf<reassoc|nnan|ninf|nsz|contract> %angles, %inverse_two_pi_vector : vector<2xf32>
-  %cosines = vector.costurnsf<afn> %turns : vector<2xf32>
-  %sines = vector.sinturnsf<afn> %turns : vector<2xf32>
-  %low_cosines = vector.mulf<reassoc|nnan|ninf|nsz|contract> %scaled_low, %cosines : vector<2xf32>
-  %high_sines = vector.mulf<reassoc|nnan|ninf|nsz|contract> %scaled_high, %sines : vector<2xf32>
-  %low_sines = vector.mulf<reassoc|nnan|ninf|nsz|contract> %scaled_low, %sines : vector<2xf32>
-  %high_cosines = vector.mulf<reassoc|nnan|ninf|nsz|contract> %scaled_high, %cosines : vector<2xf32>
-  %rotated_low0 = vector.subf<reassoc|nnan|ninf|nsz> %low_cosines, %high_sines : vector<2xf32>
-  %rotated_high0 = vector.addf<reassoc|nnan|ninf|nsz> %low_sines, %high_cosines : vector<2xf32>
+  %rotated_low0, %rotated_high0 = func.call @ggml_rope_f32_pair_packet(%position, %inverse_frequencies, %unit_factors, %scaled_low, %scaled_high) : (f32, vector<2xf32>, vector<2xf32>, vector<2xf32>, vector<2xf32>) -> (vector<2xf32>, vector<2xf32>)
   %rope_mscale_vector = vector.splat %rope_mscale : vector<2xf32>
   %rotated_low = vector.mulf<reassoc|nnan|ninf|nsz|contract> %rotated_low0, %rope_mscale_vector : vector<2xf32>
   %rotated_high = vector.mulf<reassoc|nnan|ninf|nsz|contract> %rotated_high0, %rope_mscale_vector : vector<2xf32>
