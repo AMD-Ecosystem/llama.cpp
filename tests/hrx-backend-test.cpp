@@ -13199,11 +13199,16 @@ static std::vector<float> run_vision_flash_attention_case(ggml_backend_t backend
         REQUIRE(output->ne[0] == 72 && output->ne[1] == 16 && output->ne[2] == 256);
         ggml::hrx::DispatchScheduler scheduler;
         REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
-        REQUIRE(scheduler.plan().dispatches.size() == 2);
-        REQUIRE(kernel_name_for_id(scheduler.plan().dispatches[0].kernel.kernel_id) ==
-                "loom_libs:ggml_flash_attention_f32_f16_strided_scores");
-        REQUIRE(kernel_name_for_id(scheduler.plan().dispatches[1].kernel.kernel_id) ==
-                "loom_libs:ggml_flash_attention_f32_f16_strided_values");
+        REQUIRE(scheduler.plan().dispatches.size() == 1);
+        const auto & attention = scheduler.plan().dispatches[0];
+        REQUIRE(kernel_name_for_id(attention.kernel.kernel_id) ==
+                "loom_libs:ggml_flash_attention_f32_f16_wmma");
+        REQUIRE(attention.kernel.compile_parameters.at("ggml.flash_attention.qk_head_size") == "80");
+        REQUIRE(attention.kernel.compile_parameters.at("ggml.flash_attention.value_head_size") == "128");
+        REQUIRE(attention.kernel.compile_parameters.at("ggml.flash_attention.logical_qk_head_size") == "72");
+        REQUIRE(attention.kernel.compile_parameters.at("ggml.flash_attention.logical_value_head_size") == "72");
+        REQUIRE(attention.kernel.compile_parameters.at("ggml.flash_attention.has_mask") ==
+                (with_mask ? "1" : "0"));
     }
 
     ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
@@ -14341,18 +14346,11 @@ static std::vector<float> run_long_vision_flash_attention_case(ggml_backend_t ba
         ggml::hrx::DispatchScheduler scheduler;
         REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
         const auto & dispatches = scheduler.plan().dispatches;
-        const bool long_scores = query_tokens > 256 || key_value_tokens > 256;
-        REQUIRE(dispatches.size() == (long_scores ? 3 : 2));
+        REQUIRE(dispatches.size() == 1);
         REQUIRE(kernel_name_for_id(dispatches[0].kernel.kernel_id) ==
-                (long_scores ? (with_mask ? "loom_libs:ggml_flash_attention_f32_f16_strided_long_scores" :
-                                            "loom_libs:ggml_flash_attention_f32_f16_strided_long_unmasked_scores") :
-                               "loom_libs:ggml_flash_attention_f32_f16_strided_scores"));
-        if (long_scores) {
-            REQUIRE(kernel_name_for_id(dispatches[1].kernel.kernel_id) ==
-                    "loom_libs:ggml_flash_attention_f32_f16_strided_long_softmax");
-        }
-        REQUIRE(kernel_name_for_id(dispatches.back().kernel.kernel_id) ==
-                "loom_libs:ggml_flash_attention_f32_f16_strided_values");
+                "loom_libs:ggml_flash_attention_f32_f16_wmma");
+        REQUIRE(dispatches[0].kernel.compile_parameters.at("ggml.flash_attention.has_mask") ==
+                (with_mask ? "1" : "0"));
     }
     if (schedule_only) {
         ggml_free(ctx);
@@ -14415,11 +14413,53 @@ static void run_vision_flash_attention_long_numerics() {
             }
         }
     }
+    const std::vector<float> long_query_expected =
+        run_long_vision_flash_attention_case(cpu, 3888, 64, false, false);
+    const std::vector<float> long_query_actual =
+        run_long_vision_flash_attention_case(hrx, 3888, 64, false, true);
+    REQUIRE(long_query_actual.size() == long_query_expected.size());
+    for (size_t i = 0; i < long_query_actual.size(); ++i) {
+        const float tolerance = 2.0e-3f + 2.0e-3f * std::fabs(long_query_expected[i]);
+        REQUIRE(std::fabs(long_query_actual[i] - long_query_expected[i]) <= tolerance);
+    }
     run_long_vision_flash_attention_case(hrx, 257, 256, false, true, true);
     run_long_vision_flash_attention_case(hrx, 936, 936, false, true, true);
     run_long_vision_flash_attention_case(hrx, 3888, 3888, false, true, true);
     ggml_backend_free(hrx);
     ggml_backend_free(cpu);
+}
+
+static void run_vision_flash_attention_misaligned_view_routing() {
+    constexpr int64_t token_count = 256;
+    ggml_context * ctx = ggml_init({ 1024 * 1024, nullptr, true });
+    REQUIRE(ctx != nullptr);
+    ggml_tensor * query_storage = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 73, 16, token_count);
+    ggml_tensor * query_view = ggml_view_3d(ctx, query_storage, 72, 16, token_count,
+                                            query_storage->nb[1], query_storage->nb[2], sizeof(float));
+    ggml_tensor * query = ggml_permute(ctx, query_view, 0, 2, 1, 3);
+    ggml_tensor * key = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, 72, token_count, 16);
+    ggml_tensor * value = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, 72, token_count, 16);
+    ggml_tensor * mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, token_count, token_count);
+    ggml_tensor * output = ggml_flash_attn_ext(ctx, query, key, value, mask, 1.0f / std::sqrt(72.0f), 0.0f, 0.0f);
+    REQUIRE(ggml_prec_set_acc(output, GGML_PREC_F32));
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, output);
+
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+    const ggml::hrx::Value * query_value = imported.graph.values().find_tensor(query);
+    REQUIRE(query_value != nullptr);
+    REQUIRE(query_value->storage_offset == sizeof(float));
+    ggml::hrx::DispatchScheduler scheduler;
+    REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+    const auto & dispatches = scheduler.plan().dispatches;
+    REQUIRE(dispatches.size() == 2);
+    REQUIRE(kernel_name_for_id(dispatches.front().kernel.kernel_id) ==
+            "loom_libs:ggml_flash_attention_f32_f16_strided_scores");
+    REQUIRE(kernel_name_for_id(dispatches.back().kernel.kernel_id) ==
+            "loom_libs:ggml_flash_attention_f32_f16_strided_values");
+    ggml_free(ctx);
 }
 
 static void register_hrx_backend_device_cases(test_runner::Suite & suite) {
@@ -14436,6 +14476,8 @@ static void register_hrx_backend_device_cases(test_runner::Suite & suite) {
     suite.device_case("rope_scale_f32_numerics", [] { run_rope_scale_f32_numerics(); });
     suite.device_case("vision_flash_attention_long_numerics", [] { run_vision_flash_attention_long_numerics(); });
     suite.device_case("vision_flash_attention_numerics", [] { run_vision_flash_attention_numerics(); });
+    suite.device_case("vision_flash_attention_misaligned_view_routing",
+                      [] { run_vision_flash_attention_misaligned_view_routing(); });
     suite.device_case("gather_add_rmsnorm_f32_numerics", [] { run_gather_add_rmsnorm_f32_numerics(); });
     suite.device_case("scale_f32", [] { run_scale_f32(); });
     suite.device_case("scale_f32_inplace", [] { run_scale_f32_inplace(); });

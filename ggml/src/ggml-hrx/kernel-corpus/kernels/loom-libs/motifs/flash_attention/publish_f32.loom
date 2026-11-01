@@ -4,6 +4,10 @@ config.decl @ggml.flash_attention.gate_stride_head : %value: index where [range(
 
 config.decl @ggml.flash_attention.gate_stride_token : %value: index where [range(%value, 1, 16777216)]
 
+config.def @ggml.flash_attention.logical_value_head_size = 0 : index
+config.def @ggml.flash_attention.output_token_stride = 0 : index
+config.def @ggml.flash_attention.output_head_stride = 0 : index
+
 template.decl @ggml.flash_attention.prefill.publish_output(%publish_f16: i1, %query_token_count: index, %query_head_count: index, %value_head_size: index, %lane_has_output: i1, %query_valid0: i1, %query_valid1: i1, %query_valid2: i1, %query_valid3: i1, %query_token0: index, %query_token1: index, %query_token2: index, %query_token3: index, %query_head: index, %lane_output_channel: index, %final_sum: vector<4xf32>, %final_output0: vector<4xf16>, %final_output1: vector<4xf16>, %final_output2: vector<4xf16>, %final_output3: vector<4xf16>, %gate: buffer, %output: buffer, %f16_output: buffer)
 
 template.decl @ggml.flash_attention.decode_split.publish_f32.scalar(%query_head_count: index, %value_head_size: index, %query_head: index, %output_channel: index, %sum: f32, %unnormalized_output: f32, %output: buffer)
@@ -13,6 +17,7 @@ template.decl @ggml.flash_attention.decode_split.publish_f32.vector2(%query_head
 template.def<@ggml.flash_attention.prefill.publish_output> device @ggml_flash_attention_prefill_publish_output(%publish_f16: i1, %query_token_count: index, %query_head_count: index, %value_head_size: index, %lane_has_output: i1, %query_valid0: i1, %query_valid1: i1, %query_valid2: i1, %query_valid3: i1, %query_token0: index, %query_token1: index, %query_token2: index, %query_token3: index, %query_head: index, %lane_output_channel: index, %final_sum: vector<4xf32>, %final_output0: vector<4xf16>, %final_output1: vector<4xf16>, %final_output2: vector<4xf16>, %final_output3: vector<4xf16>, %gate: buffer, %output: buffer, %f16_output: buffer) {
   %c0_offset = index.constant 0 : offset
   %c1 = index.constant 1 : index
+  %c0_f32 = scalar.constant 0.0 : f32
   %c1_f32 = scalar.constant 1.0 : f32
   %c1_f32x4 = vector.constant 1.0 : vector<4xf32>
   %apply_gate_index = config.get @ggml.flash_attention.apply_gate : index
@@ -21,22 +26,42 @@ template.def<@ggml.flash_attention.prefill.publish_output> device @ggml_flash_at
   %apply_gate = index.cmp eq, %apply_gate_index, %c1 : index
   %gate_aligned = buffer.assume.alignment %gate {minimum_alignment = 16} : buffer
   %gate_view = buffer.view %gate_aligned[%c0_offset] : buffer -> view<268435456xf32>
-  %output_view = buffer.view %output[%c0_offset] : buffer -> view<[%query_token_count]x[%query_head_count]x[%value_head_size]xf32>
+  %c0 = index.constant 0 : index
+  %logical_value_size0 = config.get @ggml.flash_attention.logical_value_head_size : index
+  %has_logical_size = index.cmp ne, %logical_value_size0, %c0 : index
+  %logical_value_size = scf.select %has_logical_size, %logical_value_size0, %value_head_size : index
+  %output_token_stride0 = config.get @ggml.flash_attention.output_token_stride : index
+  %output_head_stride0 = config.get @ggml.flash_attention.output_head_stride : index
+  %default_token_stride = index.mul %query_head_count, %logical_value_size : index
+  %has_token_stride = index.cmp ne, %output_token_stride0, %c0 : index
+  %has_head_stride = index.cmp ne, %output_head_stride0, %c0 : index
+  %output_token_stride = scf.select %has_token_stride, %output_token_stride0, %default_token_stride : index
+  %output_head_stride = scf.select %has_head_stride, %output_head_stride0, %logical_value_size : index
+  %output_layout = encoding.layout.strided [%output_token_stride, %output_head_stride, 1] : encoding<layout>
+  %output_view = buffer.view %output[%c0_offset] : buffer -> view<[%query_token_count]x[%query_head_count]x[%logical_value_size]xf32, %output_layout>
   %f16_output_view = buffer.view %f16_output[%c0_offset] : buffer -> view<[%query_token_count]x[%query_head_count]x[%value_head_size]xf16>
   // Normalize and publish the lane-owned packets. Query-tail rows never
   // participate in the output store.
   scf.if %lane_has_output {
     %c4 = index.constant 4 : index
     %lane_output_end0 = index.add %lane_output_channel, %c4 : index
-    %safe_lane_output_channel, %lane_output_end = index.assume %lane_output_channel, %lane_output_end0 [le(%lane_output_end0, %value_head_size)] : index, index
+    %safe_lane_output_channel, %lane_output_end = index.assume %lane_output_channel, %lane_output_end0 [le(%lane_output_end0, %logical_value_size)] : index, index
     %sum0_scalar = vector.extract %final_sum[0] : vector<4xf32> -> f32
     %sum1_scalar = vector.extract %final_sum[1] : vector<4xf32> -> f32
     %sum2_scalar = vector.extract %final_sum[2] : vector<4xf32> -> f32
     %sum3_scalar = vector.extract %final_sum[3] : vector<4xf32> -> f32
-    %inverse_sum0_f32 = scalar.divf<nnan|ninf|nsz|arcp> %c1_f32, %sum0_scalar : f32
-    %inverse_sum1_f32 = scalar.divf<nnan|ninf|nsz|arcp> %c1_f32, %sum1_scalar : f32
-    %inverse_sum2_f32 = scalar.divf<nnan|ninf|nsz|arcp> %c1_f32, %sum2_scalar : f32
-    %inverse_sum3_f32 = scalar.divf<nnan|ninf|nsz|arcp> %c1_f32, %sum3_scalar : f32
+    %sum0_is_zero = scalar.cmpf oeq, %sum0_scalar, %c0_f32 : f32
+    %safe_sum0 = scf.select %sum0_is_zero, %c1_f32, %sum0_scalar : f32
+    %inverse_sum0_f32 = scalar.divf<nnan|ninf|nsz|arcp> %c1_f32, %safe_sum0 : f32
+    %sum1_is_zero = scalar.cmpf oeq, %sum1_scalar, %c0_f32 : f32
+    %safe_sum1 = scf.select %sum1_is_zero, %c1_f32, %sum1_scalar : f32
+    %inverse_sum1_f32 = scalar.divf<nnan|ninf|nsz|arcp> %c1_f32, %safe_sum1 : f32
+    %sum2_is_zero = scalar.cmpf oeq, %sum2_scalar, %c0_f32 : f32
+    %safe_sum2 = scf.select %sum2_is_zero, %c1_f32, %sum2_scalar : f32
+    %inverse_sum2_f32 = scalar.divf<nnan|ninf|nsz|arcp> %c1_f32, %safe_sum2 : f32
+    %sum3_is_zero = scalar.cmpf oeq, %sum3_scalar, %c0_f32 : f32
+    %safe_sum3 = scf.select %sum3_is_zero, %c1_f32, %sum3_scalar : f32
+    %inverse_sum3_f32 = scalar.divf<nnan|ninf|nsz|arcp> %c1_f32, %safe_sum3 : f32
     %inverse_sum0_f16 = scalar.fptrunc %inverse_sum0_f32 : f32 to f16
     %inverse_sum1_f16 = scalar.fptrunc %inverse_sum1_f32 : f32 to f16
     %inverse_sum2_f16 = scalar.fptrunc %inverse_sum2_f32 : f32 to f16
@@ -70,7 +95,7 @@ template.def<@ggml.flash_attention.prefill.publish_output> device @ggml_flash_at
       } else {
         scf.yield %normalized0 : vector<4xf32>
       }
-      vector.store %published0, %output_view[%query_token0, %query_head, %safe_lane_output_channel] : vector<4xf32>, view<[%query_token_count]x[%query_head_count]x[%value_head_size]xf32>
+      vector.store %published0, %output_view[%query_token0, %query_head, %safe_lane_output_channel] : vector<4xf32>, view<[%query_token_count]x[%query_head_count]x[%logical_value_size]xf32, %output_layout>
       scf.if %publish_f16 {
         %half0 = vector.fptrunc %published0 : vector<4xf32> to vector<4xf16>
         vector.store %half0, %f16_output_view[%query_token0, %query_head, %safe_lane_output_channel] : vector<4xf16>, view<[%query_token_count]x[%query_head_count]x[%value_head_size]xf16>
@@ -93,7 +118,7 @@ template.def<@ggml.flash_attention.prefill.publish_output> device @ggml_flash_at
       } else {
         scf.yield %normalized1 : vector<4xf32>
       }
-      vector.store %published1, %output_view[%query_token1, %query_head, %safe_lane_output_channel] : vector<4xf32>, view<[%query_token_count]x[%query_head_count]x[%value_head_size]xf32>
+      vector.store %published1, %output_view[%query_token1, %query_head, %safe_lane_output_channel] : vector<4xf32>, view<[%query_token_count]x[%query_head_count]x[%logical_value_size]xf32, %output_layout>
       scf.if %publish_f16 {
         %half1 = vector.fptrunc %published1 : vector<4xf32> to vector<4xf16>
         vector.store %half1, %f16_output_view[%query_token1, %query_head, %safe_lane_output_channel] : vector<4xf16>, view<[%query_token_count]x[%query_head_count]x[%value_head_size]xf16>
@@ -116,7 +141,7 @@ template.def<@ggml.flash_attention.prefill.publish_output> device @ggml_flash_at
       } else {
         scf.yield %normalized2 : vector<4xf32>
       }
-      vector.store %published2, %output_view[%query_token2, %query_head, %safe_lane_output_channel] : vector<4xf32>, view<[%query_token_count]x[%query_head_count]x[%value_head_size]xf32>
+      vector.store %published2, %output_view[%query_token2, %query_head, %safe_lane_output_channel] : vector<4xf32>, view<[%query_token_count]x[%query_head_count]x[%logical_value_size]xf32, %output_layout>
       scf.if %publish_f16 {
         %half2 = vector.fptrunc %published2 : vector<4xf32> to vector<4xf16>
         vector.store %half2, %f16_output_view[%query_token2, %query_head, %safe_lane_output_channel] : vector<4xf16>, view<[%query_token_count]x[%query_head_count]x[%value_head_size]xf16>
@@ -139,7 +164,7 @@ template.def<@ggml.flash_attention.prefill.publish_output> device @ggml_flash_at
       } else {
         scf.yield %normalized3 : vector<4xf32>
       }
-      vector.store %published3, %output_view[%query_token3, %query_head, %safe_lane_output_channel] : vector<4xf32>, view<[%query_token_count]x[%query_head_count]x[%value_head_size]xf32>
+      vector.store %published3, %output_view[%query_token3, %query_head, %safe_lane_output_channel] : vector<4xf32>, view<[%query_token_count]x[%query_head_count]x[%logical_value_size]xf32, %output_layout>
       scf.if %publish_f16 {
         %half3 = vector.fptrunc %published3 : vector<4xf32> to vector<4xf16>
         vector.store %half3, %f16_output_view[%query_token3, %query_head, %safe_lane_output_channel] : vector<4xf16>, view<[%query_token_count]x[%query_head_count]x[%value_head_size]xf16>

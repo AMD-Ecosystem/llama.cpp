@@ -46,7 +46,7 @@ template.decl @ggml.flash_attention.qk_block_wmma.prefill_tail(%qk_head_size: in
 
 template.decl @ggml.flash_attention.online_softmax.prefill(%masked_scores: vector<4xf32>, %valid: vector<4xi1>, %current_max: vector<4xf32>, %current_sum: vector<4xf32>, %query_row0: index, %query_row1: index, %query_row2: index, %query_row3: index, %lane: index, %probability_stage: buffer) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>)
 
-template.decl @ggml.flash_attention.pv_block_wmma.prefill_full(%old_scale: vector<4xf32>, %current_output0: vector<4xf16>, %current_output1: vector<4xf16>, %current_output2: vector<4xf16>, %current_output3: vector<4xf16>, %group_output_tile_count: index, %output_group_tile_base: index, %output_tile_count: index, %value_head_base: index, %subgroup_product_channel: index, %lane_output_tile: index, %lane_product_channel: index, %query_row0: index, %query_row1: index, %query_row2: index, %query_row3: index, %key_origin: index, %last_full_key_tile_start: index, %bounded_key_value_token_count: index, %value_width: index, %value_row_stride: index, %value_column_stride: index, %value: buffer, %probability_stage: buffer, %product_stage: buffer) -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>)
+template.decl @ggml.flash_attention.pv_block_wmma.prefill_full(%old_scale: vector<4xf32>, %current_output0: vector<4xf16>, %current_output1: vector<4xf16>, %current_output2: vector<4xf16>, %current_output3: vector<4xf16>, %group_output_tile_count: index, %output_group_tile_base: index, %output_tile_count: index, %value_head_base: index, %subgroup_product_channel: index, %lane_output_tile: index, %lane_product_channel: index, %query_row0: index, %query_row1: index, %query_row2: index, %query_row3: index, %key_origin: index, %last_full_key_tile_start: index, %bounded_key_value_token_count: index, %value_width: index, %value_row_stride: index, %value_column_stride: index, %value: buffer, %probability_stage: buffer, %product_stage: buffer, %key_value_stage: buffer, %stage_head_size: index, %key_value_head: index, %logical_value_size: index) -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>)
 
 template.decl @ggml.flash_attention.pv_block_wmma.prefill_tail(%old_scale: vector<4xf32>, %current_output0: vector<4xf16>, %current_output1: vector<4xf16>, %current_output2: vector<4xf16>, %current_output3: vector<4xf16>, %group_output_tile_count: index, %subgroup_product_channel: index, %lane_output_tile: index, %lane_product_channel: index, %query_row0: index, %query_row1: index, %query_row2: index, %query_row3: index, %tail_stage_head_size: index, %tail_key_value_stage: buffer, %probability_stage: buffer, %product_stage: buffer) -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>)
 
@@ -71,7 +71,7 @@ kernel.def target(@ggml_flash_attention_gfx11_wave64) @ggml_flash_attention_f32_
   %padded_output_tile_count = index.add %output_tile_count, %c3 : index
   %output_group_count = index.div %padded_output_tile_count, %c4 : index
   kernel.launch.config workgroups(%query_tile_count, %query_head_count, %output_group_count) workgroup_size(%c256, %c1, %c1) : index
-} launch(%query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer) where [range(%query_token_count, 1, 2048)] {
+} launch(%query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer) where [range(%query_token_count, 1, 3888)] {
   %publish_f16 = scalar.constant false : i1
   template.apply<@ggml.flash_attention.prefill.body>(%publish_f16, %query_token_count, %key_value_token_count, %query, %key, %value, %mask, %gate, %output, %output) : (i1, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
   kernel.return
@@ -422,3 +422,36 @@ check.benchmark<@ggml_flash_attention_f32_f16_wmma_benchmark_case> @ggml_flash_a
 check.benchmark<@ggml_flash_attention_f32_f16_wmma_benchmark_case> @ggml_flash_attention_f32_f16_wmma_self_1792 {key_value_token_count = 1792, query_token_count = 1792}
 
 check.benchmark<@ggml_flash_attention_f32_f16_wmma_benchmark_case> @ggml_flash_attention_f32_f16_wmma_self_2048 {key_value_token_count = 2048, query_token_count = 2048}
+
+// Logical width 72 is staged as WMMA-compatible QK80 and V128 tiles.
+// The selected-row mask also checks that padded channels and keys are ignored.
+check.case public @ggml_flash_attention_f32_f16_wmma_tiled_head72_case {
+  %query_token_count = check.literal value(4) : index
+  %key_value_token_count = check.literal value(70) : index
+  %query = check.generate.fill value(1.0) : tensor<4x1x80xf32>
+  %key = check.generate.fill value(1.0) : tensor<70x1x80xf16>
+  %value = check.generate.iota offset(0.0) step(0.125) period(80) : tensor<70x1x80xf16>
+  %mask = check.generate.iota offset(0.0) step(-10000.0) period(70) : tensor<4x70xf16>
+  %output = check.generate.fill value(-1.0) : tensor<4x1x72xf32>
+  %expected = check.generate.iota offset(0.0) step(0.125) period(72) : tensor<4x1x72xf32>
+  kernel.launch @ggml_flash_attention_f32_f16_wmma[%query_token_count, %key_value_token_count](%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %query, %output) : [index, index](index, index, tensor<4x1x80xf32>, tensor<70x1x80xf16>, tensor<70x1x80xf16>, tensor<4x70xf16>, tensor<4x1x80xf32>, tensor<4x1x72xf32>)
+  check.expect.approximate actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<4x1x72xf32>, tensor<4x1x72xf32>
+  check.return
+}
+check.benchmark<@ggml_flash_attention_f32_f16_wmma_tiled_head72_case> @ggml_flash_attention_f32_f16_wmma_tiled_head72
+
+// A 65-row unmasked input exercises one full block and a single-row tail.
+// If a padded key enters softmax, the zero-padded V dilutes the unit result.
+check.case public @ggml_flash_attention_f32_f16_wmma_tiled_unmasked_tail_case {
+  %query_token_count = check.literal value(17) : index
+  %key_value_token_count = check.literal value(65) : index
+  %query = check.generate.fill value(1.0) : tensor<17x1x80xf32>
+  %key = check.generate.fill value(1.0) : tensor<65x1x80xf16>
+  %value = check.generate.fill value(1.0) : tensor<65x1x80xf16>
+  %output = check.generate.fill value(-1.0) : tensor<17x1x72xf32>
+  %expected = check.generate.fill value(1.0) : tensor<17x1x72xf32>
+  kernel.launch @ggml_flash_attention_f32_f16_wmma[%query_token_count, %key_value_token_count](%query_token_count, %key_value_token_count, %query, %key, %value, %query, %query, %output) : [index, index](index, index, tensor<17x1x80xf32>, tensor<65x1x80xf16>, tensor<65x1x80xf16>, tensor<17x1x80xf32>, tensor<17x1x80xf32>, tensor<17x1x72xf32>)
+  check.expect.approximate actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<17x1x72xf32>, tensor<17x1x72xf32>
+  check.return
+}
+check.benchmark<@ggml_flash_attention_f32_f16_wmma_tiled_unmasked_tail_case> @ggml_flash_attention_f32_f16_wmma_tiled_unmasked_tail
