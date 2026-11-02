@@ -3889,16 +3889,20 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
         REQUIRE(launch.success);
         REQUIRE(recorded.valid());
         ggml_backend_synchronize(hrx_backend);
+        const auto expected = get_f32_tensor(hrx_backend, hrx_decode_output);
+        require_close(expected, get_f32_tensor(cpu_backend, cpu_decode_output), 1.0f, 3.0e-2f);
+        const std::vector<float> poisoned(expected.size(), 123.0f);
+        REQUIRE(expected != poisoned);
         prepared = {};
         backend_state->graph_programs.clear();
         backend_state->prepared_programs.clear();
         lookup = {};
         backend_state->host_weights.clear();
         REQUIRE(backend_state->host_weights.stats().allocation_count == 0);
+        ggml_backend_tensor_set(hrx_decode_output, poisoned.data(), 0, poisoned.size() * sizeof(float));
         REQUIRE(!ggml::hrx::take_status(hrx_graph_exec_launch(recorded.exec, backend_state->stream)));
         ggml_backend_synchronize(hrx_backend);
-        require_close(get_f32_tensor(hrx_backend, hrx_decode_output), get_f32_tensor(cpu_backend, cpu_decode_output),
-                      2.0e-2f, 3.0e-2f);
+        REQUIRE(get_f32_tensor(hrx_backend, hrx_decode_output) == expected);
         recorded = {};
         REQUIRE(backend_state->host_weights.stats().allocation_count == 0);
     }

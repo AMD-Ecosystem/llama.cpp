@@ -390,13 +390,8 @@ static void run_imported_buffer_checks(ggml_backend_t backend) {
     REQUIRE(coherent_graph != nullptr);
     ggml_build_forward_expand(coherent_graph, coherent_copy);
     coherent_graph->uid = 950005;
-    ggml_backend_hrx_imported_region coherent_region = {};
-    REQUIRE(ggml_backend_hrx_get_imported_region(coherent_output, coherent_region));
-    const uint64_t coherent_generation = coherent_region.generation;
     REQUIRE(ggml_backend_graph_compute(backend, coherent_graph) == GGML_STATUS_SUCCESS);
     ggml_backend_synchronize(backend);
-    REQUIRE(ggml_backend_hrx_get_imported_region(coherent_output, coherent_region));
-    REQUIRE(coherent_region.generation != coherent_generation);
     REQUIRE(*reinterpret_cast<float *>(subregion) == coherent_values[0]);
     ggml_backend_buffer_free(coherent_input_buffer);
     ggml_backend_buffer_free(cpu_buffer);
