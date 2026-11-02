@@ -11747,7 +11747,7 @@ static void run_zero_output_unused_weight_staging(bool direct_execution) {
         const auto * value = lookup.program->graph().values().find(external.value);
         REQUIRE(value != nullptr);
         external_bindings.push_back(ggml::hrx::make_command_program_binding(
-            external.value, buffer, value->type, value->ne, value->nb, value->byte_count == 0));
+            external.value, buffer, value->byte_count == 0));
     }
     auto bindings = ggml::hrx::CommandProgramBindings::from_bindings(std::move(external_bindings));
     REQUIRE(bindings.valid());
@@ -12319,9 +12319,6 @@ static void run_command_weight_request_checks() {
     binding.weight = true;
     binding.source_host_data = source.data();
     binding.source_capacity = source.size();
-    binding.source_type = GGML_TYPE_F32;
-    binding.source_ne = { 8, 2, 1, 1 };
-    binding.source_nb = { 4, 32, 64, 64 };
 
     CommandBinding native = { "first-native", ValueId(1) };
     CommandBinding packed = native;
@@ -12405,9 +12402,6 @@ static void run_command_weight_request_checks() {
         next.source_host_data = source.data() + 16;
         next.source_offset = 32;
         next.source_capacity = source.size() - 16;
-        next.source_type = GGML_TYPE_F16;
-        next.source_ne = { 16, 4, 1, 1 };
-        next.source_nb = { 2, 32, 128, 128 };
     }
     const auto rebound = bind_command_program_weight_demands(
         requests, CommandProgramBindings::from_bindings(current));
@@ -12419,15 +12413,11 @@ static void run_command_weight_request_checks() {
         REQUIRE(demand.source.generation == 40);
         REQUIRE(demand.source.offset == 32);
         REQUIRE(demand.source.capacity == source.size() - 16);
-        REQUIRE(demand.source.region_length == 128);
-        REQUIRE(demand.source.region_type == GGML_TYPE_F16);
-        REQUIRE(demand.source.source_ne == current[0].source_ne);
-        REQUIRE(demand.source.source_nb == current[0].source_nb);
         REQUIRE(demand.requires_materialization);
     }
     REQUIRE(rebound.weights[0].source.length == 128);
     REQUIRE(rebound.weights[0].source.materialized_length == 128);
-    REQUIRE(rebound.weights[0].source.source_type == GGML_TYPE_F16);
+    REQUIRE(rebound.weights[0].source.source_type == GGML_TYPE_COUNT);
     REQUIRE(rebound.weights[1].source.length == 64);
     REQUIRE(rebound.weights[1].source.source_type == GGML_TYPE_F32);
     for (auto & next : current) {

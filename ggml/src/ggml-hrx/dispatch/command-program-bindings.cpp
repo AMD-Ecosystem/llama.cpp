@@ -14,18 +14,13 @@ static void mix_hash(uint64_t & hash, uint64_t value) {
 }  // namespace
 
 CommandProgramBinding make_command_program_binding(
-    ValueId value, const ValueBufferBinding & buffer, ggml_type type,
-    const std::array<int64_t, GGML_MAX_DIMS> & ne, const std::array<size_t, GGML_MAX_DIMS> & nb,
-    bool empty_value) {
+    ValueId value, const ValueBufferBinding & buffer, bool empty_value) {
     CommandProgramBinding binding = { value, buffer.buffer, buffer.offset, buffer.length, buffer.identity,
                                       buffer.generation, buffer.capacity, buffer.host_data, buffer.weight,
                                       empty_value };
     binding.source_host_data = buffer.source_host_data;
     binding.source_offset = buffer.source_offset;
     binding.source_capacity = buffer.source_capacity;
-    binding.source_type = type;
-    binding.source_ne = ne;
-    binding.source_nb = nb;
     return binding;
 }
 
@@ -43,9 +38,7 @@ CommandProgramBindings CommandProgramBindings::from_value_map(const ValueMap & v
             result.status.log("external value %d is not bound", id.value);
             continue;
         }
-        CommandProgramBinding binding = make_command_program_binding(
-            value->id, *buffer, value->type, value->ne, value->nb, value->byte_count == 0);
-        bindings.push_back(binding);
+        bindings.push_back(make_command_program_binding(value->id, *buffer, value->byte_count == 0));
     }
     return from_bindings(std::move(bindings), result.status);
 }
@@ -108,11 +101,6 @@ CommandProgramBindingsHash command_program_bindings_hash(const CommandProgramBin
         mix_hash(hash, binding.source_host_data != nullptr ? 1 : 0);
         mix_hash(hash, static_cast<uint64_t>(binding.source_offset));
         mix_hash(hash, static_cast<uint64_t>(binding.source_capacity));
-        mix_hash(hash, static_cast<uint64_t>(binding.source_type));
-        for (size_t dimension = 0; dimension < GGML_MAX_DIMS; ++dimension) {
-            mix_hash(hash, static_cast<uint64_t>(binding.source_ne[dimension]));
-            mix_hash(hash, static_cast<uint64_t>(binding.source_nb[dimension]));
-        }
     }
     mix_hash(hash, static_cast<uint64_t>(bindings.bindings().size()));
     return { hash };
@@ -128,11 +116,7 @@ CommandProgramBindingsFingerprint command_program_bindings_fingerprint(const Com
             << "|capacity=" << binding.capacity << "|offset=" << binding.offset << "|length=" << binding.length
             << "|weight=" << (binding.weight ? 1 : 0) << "|empty=" << (binding.empty_value ? 1 : 0)
             << "|source_host=" << (binding.source_host_data != nullptr ? 1 : 0)
-            << "|source_offset=" << binding.source_offset << "|source_capacity=" << binding.source_capacity
-            << "|source_type=" << static_cast<int>(binding.source_type);
-        for (size_t dimension = 0; dimension < GGML_MAX_DIMS; ++dimension) {
-            out << "|ne=" << binding.source_ne[dimension] << "|nb=" << binding.source_nb[dimension];
-        }
+            << "|source_offset=" << binding.source_offset << "|source_capacity=" << binding.source_capacity;
     }
     return { out.str() };
 }

@@ -53,21 +53,12 @@ CommandProgramBindings GraphExecutor::bind_external_value_buffers(const GraphPro
     bindings.reserve(match.external_bindings.size());
     for (const GraphProgramExternalBinding & external : match.external_bindings) {
         ValueBufferBinding    value_binding;
-        CommandProgramBinding binding;
-        binding.value = external.value;
         if (ggml_backend_hrx_resolve_value_buffer(external.tensor, value_binding)) {
-            std::array<int64_t, GGML_MAX_DIMS> ne = {};
-            std::array<size_t, GGML_MAX_DIMS> nb = {};
-            for (size_t dimension = 0; dimension < GGML_MAX_DIMS; ++dimension) {
-                ne[dimension] = external.tensor->ne[dimension];
-                nb[dimension] = external.tensor->nb[dimension];
-            }
-            binding = make_command_program_binding(external.value, value_binding, external.tensor->type, ne, nb,
-                                                   ggml_nbytes(external.tensor) == 0);
+            bindings.push_back(make_command_program_binding(external.value, value_binding,
+                                                            ggml_nbytes(external.tensor) == 0));
         } else {
             status.log("external value %d is not bound", external.value.value);
         }
-        bindings.push_back(binding);
     }
     return CommandProgramBindings::from_bindings(std::move(bindings), status);
 }

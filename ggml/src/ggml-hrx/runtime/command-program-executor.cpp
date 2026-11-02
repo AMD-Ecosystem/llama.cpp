@@ -1853,15 +1853,11 @@ CommandProgramWeightDemands bind_command_program_weight_demands(const CommandPro
         demand.source.capacity = binding->source_capacity;
         demand.source.offset = binding->source_offset;
         demand.source.length = transformed ? request.source_length : binding->length;
-        demand.source.region_length = binding->length;
-        demand.source.region_type = binding->source_type;
         demand.source.materialized_length = transformed ? request.length : binding->length;
         demand.source.layout = request.layout;
-        demand.source.source_type = transformed ? request.source_type : binding->source_type;
+        demand.source.source_type = transformed ? request.source_type : GGML_TYPE_COUNT;
         demand.source.input_size = request.input_size;
         demand.source.output_size = request.output_size;
-        demand.source.source_ne = binding->source_ne;
-        demand.source.source_nb = binding->source_nb;
         result.weights.push_back(std::move(demand));
     }
     return result;

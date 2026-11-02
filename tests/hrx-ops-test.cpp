@@ -2830,16 +2830,26 @@ static void run_imported_native_weight_case() {
     ggml_tensor * weight_alias = ggml_view_2d(ctx, weight, kInputSize, kOutputSize, weight->nb[1], 0);
     ggml_tensor * input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kInputSize, 1);
     ggml_tensor * output = ggml_mul_mat(ctx, weight_alias, input);
+    ggml_tensor * reshaped_weight = ggml_view_2d(
+        ctx, weight, kInputSize / 2, kOutputSize * 2, kInputSize / 2 * sizeof(float), 0);
+    ggml_tensor * reshaped_input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kInputSize / 2, 1);
+    ggml_tensor * reshaped_output = ggml_mul_mat(ctx, reshaped_weight, reshaped_input);
     REQUIRE(output != nullptr);
     ggml_cgraph * graph = ggml_new_graph(ctx);
     REQUIRE(graph != nullptr);
     ggml_build_forward_expand(graph, output);
     graph->uid = 950001;
+    ggml_cgraph * reshaped_graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(reshaped_graph, reshaped_output);
+    reshaped_graph->uid = 950002;
 
     std::vector<float> weight_data = make_router_weight(kInputSize, kOutputSize);
     const std::vector<float> input_data = make_router_input(kInputSize, 1);
     const std::vector<float> expected =
         router_projection_reference(input_data, weight_data, kInputSize, kOutputSize, 1);
+    const auto reshaped_input_data = make_router_input(kInputSize / 2, 1);
+    const auto reshaped_expected = router_projection_reference(
+        reshaped_input_data, weight_data, kInputSize / 2, kOutputSize * 2, 1);
     ggml_backend_buffer_t imported = ggml_backend_dev_buffer_from_host_ptr(
         ggml_backend_get_device(backend), weight_data.data(), weight_data.size() * sizeof(float),
         weight_data.size() * sizeof(float));
@@ -2849,6 +2859,7 @@ static void run_imported_native_weight_case() {
     ggml_backend_buffer_t transient = ggml_backend_alloc_ctx_tensors(ctx, backend);
     REQUIRE(transient != nullptr);
     ggml_backend_tensor_set(input, input_data.data(), 0, input_data.size() * sizeof(float));
+    ggml_backend_tensor_set(reshaped_input, reshaped_input_data.data(), 0, reshaped_input_data.size() * sizeof(float));
 
     ggml_backend_hrx_imported_region region = {};
     REQUIRE(ggml_backend_hrx_get_imported_region(weight, region));
@@ -2868,6 +2879,12 @@ static void run_imported_native_weight_case() {
         std::vector<float> actual(expected.size());
         ggml_backend_tensor_get(output, actual.data(), 0, actual.size() * sizeof(float));
         require_close(actual, expected, 1.0e-2f);
+    }
+    // Graph geometry changes how the same native bytes are interpreted, not their resident representation.
+    for (int run = 0; run < 2; ++run) {
+        REQUIRE(ggml_backend_graph_compute(backend, reshaped_graph) == GGML_STATUS_SUCCESS);
+        ggml_backend_synchronize(backend);
+        require_close(get_f32_tensor(backend, reshaped_output), reshaped_expected, 1.0e-2f);
     }
     const auto after = backend_state->host_weights.stats();
     REQUIRE(after.misses == before.misses + 1);
@@ -3319,14 +3336,8 @@ static void run_weight_persistence_overlap_case() {
     for (const auto & external : packed_match.external_bindings) {
         ggml::hrx::ValueBufferBinding buffer;
         REQUIRE(ggml_backend_hrx_resolve_value_buffer(external.tensor, buffer));
-        std::array<int64_t, GGML_MAX_DIMS> ne = {};
-        std::array<size_t, GGML_MAX_DIMS> nb = {};
-        for (size_t dimension = 0; dimension < GGML_MAX_DIMS; ++dimension) {
-            ne[dimension] = external.tensor->ne[dimension];
-            nb[dimension] = external.tensor->nb[dimension];
-        }
         packed_external.push_back(ggml::hrx::make_command_program_binding(
-            external.value, buffer, external.tensor->type, ne, nb, ggml_nbytes(external.tensor) == 0));
+            external.value, buffer, ggml_nbytes(external.tensor) == 0));
     }
     auto packed_bindings = ggml::hrx::CommandProgramBindings::from_bindings(std::move(packed_external));
     REQUIRE(packed_bindings.valid());
@@ -3355,14 +3366,8 @@ static void run_weight_persistence_overlap_case() {
         for (const auto & external : match.external_bindings) {
             ggml::hrx::ValueBufferBinding buffer;
             REQUIRE(ggml_backend_hrx_resolve_value_buffer(external.tensor, buffer));
-            std::array<int64_t, GGML_MAX_DIMS> ne = {};
-            std::array<size_t, GGML_MAX_DIMS> nb = {};
-            for (size_t dimension = 0; dimension < GGML_MAX_DIMS; ++dimension) {
-                ne[dimension] = external.tensor->ne[dimension];
-                nb[dimension] = external.tensor->nb[dimension];
-            }
             external_bindings.push_back(ggml::hrx::make_command_program_binding(
-                external.value, buffer, external.tensor->type, ne, nb, ggml_nbytes(external.tensor) == 0));
+                external.value, buffer, ggml_nbytes(external.tensor) == 0));
         }
         auto bindings = ggml::hrx::CommandProgramBindings::from_bindings(std::move(external_bindings));
         const ggml::hrx::CommandProgramExecutionContext context = {
@@ -3655,14 +3660,8 @@ static void run_failed_submission_weight_lifetime_case(bool uncached = false) {
         for (const auto & external : match.external_bindings) {
             ggml::hrx::ValueBufferBinding buffer;
             REQUIRE(ggml_backend_hrx_resolve_value_buffer(external.tensor, buffer));
-            std::array<int64_t, GGML_MAX_DIMS> ne = {};
-            std::array<size_t, GGML_MAX_DIMS> nb = {};
-            for (size_t dimension = 0; dimension < GGML_MAX_DIMS; ++dimension) {
-                ne[dimension] = external.tensor->ne[dimension];
-                nb[dimension] = external.tensor->nb[dimension];
-            }
             external_bindings.push_back(ggml::hrx::make_command_program_binding(
-                external.value, buffer, external.tensor->type, ne, nb, ggml_nbytes(external.tensor) == 0));
+                external.value, buffer, ggml_nbytes(external.tensor) == 0));
         }
         auto bindings = ggml::hrx::CommandProgramBindings::from_bindings(std::move(external_bindings));
         REQUIRE(bindings.valid());
@@ -3973,14 +3972,8 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
         for (const auto & slot : match.external_bindings) {
             ggml::hrx::ValueBufferBinding value;
             REQUIRE(ggml_backend_hrx_resolve_value_buffer(slot.tensor, value));
-            std::array<int64_t, GGML_MAX_DIMS> ne = {};
-            std::array<size_t, GGML_MAX_DIMS> nb = {};
-            for (size_t dimension = 0; dimension < GGML_MAX_DIMS; ++dimension) {
-                ne[dimension] = slot.tensor->ne[dimension];
-                nb[dimension] = slot.tensor->nb[dimension];
-            }
             external.push_back(ggml::hrx::make_command_program_binding(
-                slot.value, value, slot.tensor->type, ne, nb, ggml_nbytes(slot.tensor) == 0));
+                slot.value, value, ggml_nbytes(slot.tensor) == 0));
         }
         auto bindings = ggml::hrx::CommandProgramBindings::from_bindings(std::move(external));
         REQUIRE(bindings.valid());
@@ -4078,14 +4071,8 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
         for (const auto & slot : match.external_bindings) {
             ggml::hrx::ValueBufferBinding value = {};
             REQUIRE(ggml_backend_hrx_resolve_value_buffer(slot.tensor, value));
-            std::array<int64_t, GGML_MAX_DIMS> ne = {};
-            std::array<size_t, GGML_MAX_DIMS> nb = {};
-            for (size_t dimension = 0; dimension < GGML_MAX_DIMS; ++dimension) {
-                ne[dimension] = slot.tensor->ne[dimension];
-                nb[dimension] = slot.tensor->nb[dimension];
-            }
             external.push_back(ggml::hrx::make_command_program_binding(
-                slot.value, value, slot.tensor->type, ne, nb, ggml_nbytes(slot.tensor) == 0));
+                slot.value, value, ggml_nbytes(slot.tensor) == 0));
         }
         return ggml::hrx::CommandProgramBindings::from_bindings(std::move(external));
     };
@@ -4291,19 +4278,8 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
         for (const auto & external : full_match.external_bindings) {
             ggml::hrx::ValueBufferBinding value = {};
             REQUIRE(ggml_backend_hrx_resolve_value_buffer(external.tensor, value));
-            ggml::hrx::CommandProgramBinding binding = {
-                external.value, value.buffer, value.offset, value.length, value.identity, value.generation,
-                value.capacity, value.host_data, value.weight, ggml_nbytes(external.tensor) == 0,
-            };
-            binding.source_host_data = value.host_data;
-            binding.source_offset = value.offset;
-            binding.source_capacity = value.capacity;
-            binding.source_type = external.tensor->type;
-            for (size_t dimension = 0; dimension < GGML_MAX_DIMS; ++dimension) {
-                binding.source_ne[dimension] = external.tensor->ne[dimension];
-                binding.source_nb[dimension] = external.tensor->nb[dimension];
-            }
-            external_bindings.push_back(binding);
+            external_bindings.push_back(ggml::hrx::make_command_program_binding(
+                external.value, value, ggml_nbytes(external.tensor) == 0));
         }
         auto bindings = ggml::hrx::CommandProgramBindings::from_bindings(std::move(external_bindings));
         REQUIRE(bindings.valid());

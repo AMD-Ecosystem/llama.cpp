@@ -616,8 +616,6 @@ static void run_host_weight_cache_checks(ggml_backend_hrx_context * context) {
     source.generation = 3;
     source.offset = 16;
     source.source_type = GGML_TYPE_F32;
-    source.source_ne = { 8, 1, 1, 1 };
-    source.source_nb = { 4, 32, 32, 32 };
     auto region = weights.acquire(context->device->device, context->stream, transfers, source);
     auto alias = weights.acquire(context->device->device, context->stream, transfers, source);
     REQUIRE(region.valid() && alias.valid());
@@ -625,27 +623,28 @@ static void run_host_weight_cache_checks(ggml_backend_hrx_context * context) {
     source.source_type = GGML_TYPE_I32;
     auto other_type = weights.acquire(context->device->device, context->stream, transfers, source);
     REQUIRE(other_type.valid());
-    REQUIRE(other_type.lease.buffer() != region.lease.buffer());
-    source.source_type = GGML_TYPE_F32;
-    source.source_ne = { 4, 2, 1, 1 };
+    REQUIRE(other_type.lease.buffer() == region.lease.buffer());
+    // A native copy does not interpret element type or transformation dimensions.
+    source.input_size = 4;
+    source.output_size = 2;
     auto other_shape = weights.acquire(context->device->device, context->stream, transfers, source);
     REQUIRE(other_shape.valid());
-    REQUIRE(other_shape.lease.buffer() != region.lease.buffer());
-    source.source_ne = { 8, 1, 1, 1 };
-    source.source_nb = { 4, 64, 64, 64 };
-    auto other_stride = weights.acquire(context->device->device, context->stream, transfers, source);
-    REQUIRE(other_stride.valid());
-    REQUIRE(other_stride.lease.buffer() != region.lease.buffer());
-    source.source_nb = { 4, 32, 32, 32 };
+    REQUIRE(other_shape.lease.buffer() == region.lease.buffer());
+    std::array<uint8_t, 32> aliased_bytes = {};
+    require_hrx_status(hrx_synchronous_d2h(context->device->device, other_shape.lease.buffer(), 0,
+                                         aliased_bytes.data(), aliased_bytes.size()));
+    for (size_t i = 0; i < aliased_bytes.size(); ++i) {
+        REQUIRE(aliased_bytes[i] == host[source.offset + i]);
+    }
     source.offset = 32;
     auto other_slice = weights.acquire(context->device->device, context->stream, transfers, source);
     REQUIRE(other_slice.valid());
     REQUIRE(other_slice.lease.buffer() != region.lease.buffer());
     weight_stats = weights.stats();
-    REQUIRE(weight_stats.hits == 2);
-    REQUIRE(weight_stats.misses == 8);
-    REQUIRE(weight_stats.allocation_count == 5);
-    REQUIRE(weight_stats.peak_resident_bytes == 160);
+    REQUIRE(weight_stats.hits == 4);
+    REQUIRE(weight_stats.misses == 5);
+    REQUIRE(weight_stats.allocation_count == 2);
+    REQUIRE(weight_stats.peak_resident_bytes == 96);
 }
 
 static void run_q6_pack_scratch_checks(ggml_backend_hrx_context * context) {
@@ -660,8 +659,6 @@ static void run_q6_pack_scratch_checks(ggml_backend_hrx_context * context) {
     source.capacity = weight_bytes;
     source.length = weight_bytes;
     source.materialized_length = weight_bytes;
-    source.region_length = weight_bytes;
-    source.region_type = GGML_TYPE_Q6_K;
     source.layout = ggml::hrx::kQ6KPackedK256Row64ScaleRowLayout;
     source.source_type = GGML_TYPE_Q6_K;
     source.input_size = 256;
@@ -709,6 +706,67 @@ static void run_q6_pack_scratch_checks(ggml_backend_hrx_context * context) {
     REQUIRE(weights.stats().allocation_count == 5);
 }
 
+static void run_packed_weight_identity_checks(ggml_backend_hrx_context * context) {
+    constexpr size_t source_bytes = 128 * 210;
+    std::vector<uint8_t> host(source_bytes);
+    for (size_t i = 0; i < host.size(); ++i) {
+        host[i] = static_cast<uint8_t>((i / 210 + 5 * (i % 210)) % 251);
+    }
+    ggml::hrx::HostTransferManager transfers;
+    ggml::hrx::HostWeightCache weights;
+    ggml::hrx::HostWeightSource source;
+    source.host_data = host.data();
+    source.identity = 0x5679;
+    source.generation = 1;
+    source.capacity = source_bytes;
+    source.length = source_bytes;
+    source.materialized_length = source_bytes;
+    source.layout = ggml::hrx::kQ6KPackedK256Row64ScaleRowLayout;
+    source.source_type = GGML_TYPE_Q6_K;
+    source.input_size = 256;
+    source.output_size = 128;
+    auto first = weights.acquire(context->device->device, context->stream, transfers, source);
+    REQUIRE(first.valid());
+    std::vector<uint8_t> first_bytes(source_bytes);
+    require_hrx_status(hrx_synchronous_d2h(context->device->device, first.lease.buffer(), 0,
+                                         first_bytes.data(), first_bytes.size()));
+
+    // Equal source/output byte lengths can still require different packed byte orders.
+    source.input_size = 512;
+    source.output_size = 64;
+    auto reshaped = weights.acquire(context->device->device, context->stream, transfers, source);
+    REQUIRE(reshaped.valid());
+    REQUIRE(reshaped.lease.buffer() != first.lease.buffer());
+    std::vector<uint8_t> reshaped_bytes(source_bytes);
+    require_hrx_status(hrx_synchronous_d2h(context->device->device, reshaped.lease.buffer(), 0,
+                                         reshaped_bytes.data(), reshaped_bytes.size()));
+    REQUIRE(reshaped_bytes != first_bytes);
+    auto alias = weights.acquire(context->device->device, context->stream, transfers, source);
+    REQUIRE(alias.valid());
+    REQUIRE(alias.lease.buffer() == reshaped.lease.buffer());
+
+    auto reject = [&](const ggml::hrx::HostWeightSource & invalid) {
+        auto result = weights.acquire(context->device->device, context->stream, transfers, invalid);
+        REQUIRE(!result.valid());
+    };
+    auto invalid = source;
+    invalid.source_type = GGML_TYPE_Q5_K;
+    reject(invalid);
+    invalid = source;
+    ++invalid.input_size;
+    reject(invalid);
+    invalid = source;
+    --invalid.output_size;
+    reject(invalid);
+    invalid = source;
+    --invalid.length;
+    reject(invalid);
+    invalid = source;
+    --invalid.materialized_length;
+    reject(invalid);
+    REQUIRE(weights.stats().allocation_count == 2);
+}
+
 template <typename F>
 static void run_with_hrx_backend(F && f) {
     ggml_backend_t backend = ggml_backend_hrx_init(0);
@@ -752,6 +810,11 @@ static void register_hrx_buffer_cases(test_runner::Suite & suite) {
     suite.device_case("q6_pack_scratch", [] {
         run_with_hrx_backend([](ggml_backend_t, ggml_backend_hrx_context * context) {
             run_q6_pack_scratch_checks(context);
+        });
+    });
+    suite.device_case("packed_weight_identity", [] {
+        run_with_hrx_backend([](ggml_backend_t, ggml_backend_hrx_context * context) {
+            run_packed_weight_identity_checks(context);
         });
     });
 }

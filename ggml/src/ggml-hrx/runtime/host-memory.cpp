@@ -1452,8 +1452,6 @@ struct HostWeightLease::Entry {
     hrx_buffer_t buffer = nullptr;
     size_t       length = 0;
     std::string  layout;
-    size_t       region_length = 0;
-    ggml_type    region_type = GGML_TYPE_COUNT;
     std::shared_ptr<HostWeightAccounting> accounting;
 };
 
@@ -1500,10 +1498,6 @@ size_t HostWeightCache::SourceKeyHash::operator()(const SourceKey & key) const {
     mix(static_cast<uint64_t>(key.source_type));
     mix(static_cast<uint64_t>(key.input_size));
     mix(static_cast<uint64_t>(key.output_size));
-    for (size_t dimension = 0; dimension < GGML_MAX_DIMS; ++dimension) {
-        mix(static_cast<uint64_t>(key.source_ne[dimension]));
-        mix(static_cast<uint64_t>(key.source_nb[dimension]));
-    }
     return static_cast<size_t>(hash);
 }
 
@@ -1535,9 +1529,12 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
         return result;
     }
 
-    const SourceKey key{ source.identity,   source.generation,   source.capacity, source.offset,
-                         source.length,     materialized_length, source.layout,   source.source_type,
-                         source.input_size, source.output_size, source.source_ne, source.source_nb };
+    // Native residency copies this byte range verbatim. Only transformed layouts interpret its type and shape.
+    const bool native_layout = source.layout == kNativeWeightLayout;
+    const SourceKey key{ source.identity, source.generation, source.capacity, source.offset,
+                         source.length, materialized_length, source.layout,
+                         native_layout ? GGML_TYPE_COUNT : source.source_type,
+                         native_layout ? 0 : source.input_size, native_layout ? 0 : source.output_size };
     std::lock_guard<std::mutex> lock(mutex_);
     const auto found = entries_.find(key);
     if (found != entries_.end()) {
@@ -1617,8 +1614,6 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
     auto entry    = std::make_shared<HostWeightLease::Entry>();
     entry->length = materialized_length;
     entry->layout = source.layout;
-    entry->region_length = source.region_length;
-    entry->region_type = source.region_type;
     result.status = allocate_device_buffer(device, materialized_length, entry->buffer);
     if (!result.status.success()) {
         return result;
@@ -1654,6 +1649,7 @@ HostWeightCacheStats HostWeightCache::stats() const {
 }
 
 void HostWeightCache::report_new_representation(const SourceKey & key, const HostWeightLease::Entry & entry) {
+    // Report representations of the same source byte range; partially overlapping ranges are independent.
     bool distinct_layout = false;
     size_t total_bytes = 0;
     std::ostringstream details;
@@ -1662,12 +1658,9 @@ void HostWeightCache::report_new_representation(const SourceKey & key, const Hos
         const bool same_generation = resident_key.generation == key.generation;
         const bool same_capacity = resident_key.capacity == key.capacity;
         const bool same_offset = resident_key.offset == key.offset;
-        const bool same_length = resident->region_length == entry.region_length;
-        const bool same_type = resident->region_type == entry.region_type;
-        const bool same_shape = resident_key.source_ne == key.source_ne;
-        const bool same_strides = resident_key.source_nb == key.source_nb;
+        const bool same_length = resident_key.length == key.length;
         const bool same_region = same_identity && same_generation && same_capacity && same_offset &&
-                                 same_length && same_type && same_shape && same_strides;
+                                 same_length;
         if (!same_region) {
             continue;
         }
@@ -1682,7 +1675,7 @@ void HostWeightCache::report_new_representation(const SourceKey & key, const Hos
     GGML_LOG_WARN("HRX weight residency: source=%llu generation=%llu region=[%zu,%zu) layouts={%s}"
                   " new_layout=%s new_bytes=%zu resident_bytes=%zu\n",
                   static_cast<unsigned long long>(key.identity), static_cast<unsigned long long>(key.generation),
-                  key.offset, key.offset + entry.region_length, details.str().c_str(), key.layout.c_str(),
+                  key.offset, key.offset + key.length, details.str().c_str(), key.layout.c_str(),
                   entry.length, total_bytes);
 }
 

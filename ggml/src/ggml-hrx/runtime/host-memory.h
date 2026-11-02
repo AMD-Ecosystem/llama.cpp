@@ -6,7 +6,6 @@
 #include "status.h"
 
 #include <cstddef>
-#include <array>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -77,16 +76,11 @@ struct HostWeightSource {
     size_t       capacity   = 0;
     size_t       offset     = 0;
     size_t       length     = 0;
-    // Native extent and type identify the logical weight across its requested layouts.
-    size_t       region_length = 0;
-    ggml_type    region_type = GGML_TYPE_COUNT;
     size_t       materialized_length = 0;
     std::string  layout              = kNativeWeightLayout;
     ggml_type    source_type         = GGML_TYPE_COUNT;
     int64_t      input_size          = 0;
     int64_t      output_size         = 0;
-    std::array<int64_t, GGML_MAX_DIMS> source_ne = {};
-    std::array<size_t, GGML_MAX_DIMS>  source_nb = {};
 };
 
 struct HostWeightCacheStats {
@@ -155,15 +149,13 @@ class HostWeightCache {
         ggml_type   source_type = GGML_TYPE_COUNT;
         int64_t     input_size  = 0;
         int64_t     output_size = 0;
-        std::array<int64_t, GGML_MAX_DIMS> source_ne = {};
-        std::array<size_t, GGML_MAX_DIMS>  source_nb = {};
 
         bool operator==(const SourceKey & other) const {
             return identity == other.identity && generation == other.generation && capacity == other.capacity &&
                    offset == other.offset && length == other.length &&
                    materialized_length == other.materialized_length && layout == other.layout &&
                    source_type == other.source_type && input_size == other.input_size &&
-                   output_size == other.output_size && source_ne == other.source_ne && source_nb == other.source_nb;
+                   output_size == other.output_size;
         }
     };
 

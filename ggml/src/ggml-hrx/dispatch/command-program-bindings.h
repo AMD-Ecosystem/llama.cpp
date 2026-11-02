@@ -6,7 +6,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <array>
 #include <string>
 #include <vector>
 
@@ -29,9 +28,6 @@ struct CommandProgramBinding {
     const void * source_host_data = nullptr;
     size_t       source_offset    = 0;
     size_t       source_capacity  = 0;
-    ggml_type    source_type      = GGML_TYPE_COUNT;
-    std::array<int64_t, GGML_MAX_DIMS> source_ne = {};
-    std::array<size_t, GGML_MAX_DIMS>  source_nb = {};
     // Materialized bindings are selected by the requesting command, not just by ValueId.
     std::string  layout = kNativeWeightLayout;
     ggml_type    layout_source_type = GGML_TYPE_COUNT;
@@ -45,8 +41,7 @@ struct CommandProgramBinding {
 };
 
 CommandProgramBinding make_command_program_binding(
-    ValueId value, const ValueBufferBinding & buffer, ggml_type type,
-    const std::array<int64_t, GGML_MAX_DIMS> & ne, const std::array<size_t, GGML_MAX_DIMS> & nb, bool empty_value);
+    ValueId value, const ValueBufferBinding & buffer, bool empty_value);
 
 struct CommandProgramBindingsFingerprint {
     std::string value;
