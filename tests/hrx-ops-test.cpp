@@ -8547,7 +8547,11 @@ static void register_dense_matmul_cases(Suite & suite) {
                               [type, tokens] {
                 const char * vector_kernel = type == GGML_TYPE_Q6_K ?
                     "loom_libs:ggml_mul_mat_vector_q6_f32_f32" : "loom_libs:ggml_mul_mat_vector_f32_f32";
-                const char * kernel = tokens == 1 ? vector_kernel :
+                const bool q6_weight = type == GGML_TYPE_Q6_K;
+                const bool short_prompt = tokens == 127;
+                const bool short_q6 = q6_weight && short_prompt;
+                const char * kernel = short_q6 ? "loom_libs:ggml_mul_mat_q6_k_f32_wmma_prefill_wave32" :
+                    tokens == 1 ? vector_kernel :
                     tokens <= 5 ? "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32" :
                     tokens == 32 ? "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32_aligned" :
                                    "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32";
@@ -8559,6 +8563,17 @@ static void register_dense_matmul_cases(Suite & suite) {
             run_dense_matmul_postops_cpu_reference_case(type,
                 "loom_libs:ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32",
                 33, 128, true, true, false, 512, true);
+        });
+    }
+    for (const int64_t tokens : { 63, 64, 65, 66, 95, 127, 129 }) {
+        suite.device_case("imported_row64_q6_short.tokens" + std::to_string(tokens), [tokens] {
+            const bool minimum = tokens >= 64;
+            const bool maximum = tokens < 128;
+            const bool short_prefill = minimum && maximum;
+            const char * kernel = short_prefill ? "loom_libs:ggml_mul_mat_q6_k_f32_wmma_prefill_wave32" :
+                                                 "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32";
+            run_dense_matmul_cpu_reference_case(GGML_TYPE_Q6_K, kernel, tokens, 192, 768, false, false,
+                                                GGML_TYPE_COUNT, false, true);
         });
     }
     for (const int64_t tokens : { 128, 256 }) {
