@@ -12,17 +12,6 @@ static void mix_hash(uint64_t & hash, uint64_t value) {
 
 }  // namespace
 
-CommandProgramBinding make_command_program_binding(
-    ValueId value, const ValueBufferBinding & buffer, bool empty_value) {
-    CommandProgramBinding binding = { value, buffer.buffer, buffer.offset, buffer.length, buffer.identity,
-                                      buffer.generation, buffer.capacity, buffer.host_data, buffer.weight,
-                                      empty_value };
-    binding.source_host_data = buffer.source_host_data;
-    binding.source_offset = buffer.source_offset;
-    binding.source_capacity = buffer.source_capacity;
-    return binding;
-}
-
 CommandProgramBindings CommandProgramBindings::from_value_map(const ValueMap & values) {
     std::vector<CommandProgramBinding> bindings;
     CommandProgramBindings             result;
