@@ -28,6 +28,7 @@ struct KernelExecutable {
 struct KernelExecutablePrepareContext {
     hrx_device_t device = nullptr;
     const char * target = nullptr;
+    CompileTraceExecution * trace = nullptr;
 };
 
 struct KernelExecutableRef {
@@ -60,6 +61,8 @@ class KernelExecutableCache {
 
     void clear();
 
+    uint64_t trace_id() const { return trace_id_; }
+
   private:
     bool ensure_jit_locked(const char * target, std::string & error_message);
 
@@ -69,6 +72,7 @@ class KernelExecutableCache {
     std::string                                                                  target_;
     LoomJitMode                                                                  mode_           = LoomJitMode::Async;
     bool                                                                         mode_is_forced_ = false;
+    uint64_t trace_id_ = compile_trace_enabled() ? compile_trace_next_id() : 0;
 };
 
 }  // namespace ggml::hrx

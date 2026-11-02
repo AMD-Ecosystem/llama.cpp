@@ -122,9 +122,17 @@ static bool match_copy_f32_dispatch(const DispatchMatchContext & context, Dispat
     return true;
 }
 
-static bool match_cont_f32_dispatch(const DispatchMatchContext & context, DispatchMatch & match) {
+static bool match_cont_or_dup_f32_dispatch(const DispatchMatchContext & context, DispatchMatch & match) {
     const GraphNode * node = context.root_node;
-    if (node == nullptr || node->op != GGML_OP_CONT || node->inputs.size() != 1) {
+    if (node == nullptr) {
+        return false;
+    }
+    const bool is_cont = node->op == GGML_OP_CONT;
+    const bool is_dup = node->op == GGML_OP_DUP;
+    const bool is_copy = is_cont || is_dup;
+    const bool has_source = node->inputs.size() == 1;
+    const bool matches = is_copy && has_source;
+    if (!matches) {
         return false;
     }
 
@@ -216,7 +224,15 @@ void register_copy_dispatch(DispatchRegistryBuilder & registry) {
         DispatchMatchKind::SingleOp,
         0,
         DispatchSource::Common,
-        match_cont_f32_dispatch,
+        match_cont_or_dup_f32_dispatch,
+    });
+    registry.add({
+        "common.dup_f32",
+        GGML_OP_DUP,
+        DispatchMatchKind::SingleOp,
+        0,
+        DispatchSource::Common,
+        match_cont_or_dup_f32_dispatch,
     });
     registry.add({
         "common.concat_dim0_f32",
