@@ -5994,7 +5994,18 @@ static std::vector<float> row64_matmul_reference(ggml_type type, const std::vect
     return result;
 }
 
-static void require_row64_reference(const std::vector<float> & actual, const std::vector<float> & expected) {
+static void require_row64_reference(const std::vector<float> & actual, const std::vector<float> & expected,
+                                     const char * diagnostic_name = "single") {
+    const char * dump_prefix = std::getenv("HRX_ROW64_REFERENCE_DUMP");
+    if (dump_prefix != nullptr) {
+        const char * replay = std::getenv("GGML_HRX_DISABLE_GRAPH_REPLAY");
+        const std::string path = std::string(dump_prefix) + "." + diagnostic_name + ".replay-" +
+            (replay != nullptr ? replay : "unset") + ".bin";
+        FILE * file = std::fopen(path.c_str(), "wx");
+        REQUIRE(file != nullptr);
+        REQUIRE(std::fwrite(actual.data(), sizeof(float), actual.size(), file) == actual.size());
+        REQUIRE(std::fclose(file) == 0);
+    }
     double error = 0.0;
     double magnitude = 0.0;
     float maximum_error = 0.0f;
@@ -6429,7 +6440,9 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
                                                        ggml_glu_op  glu_op     = GGML_GLU_OP_SWIGLU,
                                                        int64_t      input_size = kQwenHiddenSize,
                                                        bool         verify_uploaded_native = false,
-                                                       bool         import_weights = false) {
+                                                       bool         import_weights = false,
+                                                       bool         scalar_reference = false,
+                                                       bool         varying_input = false) {
     ggml_backend_t cpu_backend = init_cpu_backend();
     ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
     REQUIRE(hrx_backend != nullptr);
@@ -6484,7 +6497,8 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
         require_packed_weight_bindings(hrx_graph, { hrx_gate_weight, hrx_up_weight });
     }
 
-    const std::vector<float>   input(static_cast<size_t>(input_size * token_count), 0.00390625f);
+    const std::vector<float> input = varying_input ? make_pattern_f32(input_size * token_count, 7, 0.01f) :
+        std::vector<float>(static_cast<size_t>(input_size * token_count), 0.00390625f);
     if (verify_uploaded_native) {
         ggml_backend_tensor_set(cpu_gate_weight, gate_weight.data(), 0, gate_weight.size());
         ggml_backend_tensor_set(cpu_up_weight, up_weight.data(), 0, up_weight.size());
@@ -6510,6 +6524,15 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
     REQUIRE(ggml_backend_graph_compute(hrx_backend, hrx_graph) == GGML_STATUS_SUCCESS);
     ggml_backend_synchronize(cpu_backend);
     ggml_backend_synchronize(hrx_backend);
+    if (scalar_reference) {
+        auto expected = row64_matmul_reference(gate_weight_type, gate_weight, input, input_size, output_size, token_count);
+        const auto up = row64_matmul_reference(up_weight_type, up_weight, input, input_size, output_size, token_count);
+        for (size_t i = 0; i < expected.size(); ++i) {
+            expected[i] = (expected[i] / (1.0f + std::exp(-expected[i]))) * up[i];
+        }
+        const auto actual = get_f32_tensor(hrx_backend, hrx_output);
+        require_row64_reference(actual, expected, varying_input ? "paired-varied" : "paired-constant");
+    }
     require_close(get_f32_tensor(hrx_backend, hrx_output), get_f32_tensor(cpu_backend, cpu_output), 1.0e-4f, 1.0e-3f);
     if (verify_uploaded_native) {
         const auto after = backend_state->host_weights.stats();
@@ -8677,6 +8700,21 @@ static void register_dense_matmul_cases(Suite & suite) {
                                                 GGML_TYPE_COUNT, false, true, true);
         });
     }
+    suite.device_case("imported_row64_q4_metadata.tokens66.input768.outputs192", [] {
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q4_K,
+            "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32", 66, 192, 768, false, false,
+            GGML_TYPE_COUNT, false, true, true);
+    });
+    suite.device_case("imported_row64_q4_metadata.gated_tokens66.input768.outputs192", [] {
+        run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_Q4_K, GGML_TYPE_Q4_K,
+            "loom_libs:ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32",
+            66, 192, GGML_GLU_OP_SWIGLU, 768, false, true, true);
+    });
+    suite.device_case("imported_row64_q4_metadata.gated_varied_tokens66.input768.outputs192", [] {
+        run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_Q4_K, GGML_TYPE_Q4_K,
+            "loom_libs:ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32",
+            66, 192, GGML_GLU_OP_SWIGLU, 768, false, true, true, true);
+    });
     for (const int64_t tokens : { 128, 256 }) {
         suite.device_case("imported_row64_q6_prefill.tokens" + std::to_string(tokens), [tokens] {
             run_dense_matmul_cpu_reference_case(GGML_TYPE_Q6_K,
