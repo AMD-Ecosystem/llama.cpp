@@ -6236,13 +6236,22 @@ static void run_prefill_value_cache_repeated_indices_case(bool import_weights = 
     REQUIRE(split_graph != nullptr);
     ggml_build_forward_expand(fused_graph, fused[6]);
     ggml_build_forward_expand(split_graph, split[6]);
-    require_kernel_subsequence(scheduled_kernel_sequence(fused_graph),
-        { "loom_libs:ggml_get_rows_rmsnorm_binary_q8_1_x4_f16",
-          "loom_libs:llm_attention_v_matmul_set_rows_tiled_f32_f32" });
+    if (import_weights) {
+        require_kernel_subsequence(scheduled_kernel_sequence(fused_graph),
+            { "loom_libs:ggml_get_rows_rmsnorm_binary_q8_1_x4_f16",
+              "loom_libs:ggml_mul_mat_q6_k_f32_wmma_prefill_wave32",
+              "loom_libs:ggml_set_rows" });
+    } else {
+        require_kernel_subsequence(scheduled_kernel_sequence(fused_graph),
+            { "loom_libs:ggml_get_rows_rmsnorm_binary_q8_1_x4_f16",
+              "loom_libs:llm_attention_v_matmul_set_rows_tiled_f32_f32" });
+    }
     REQUIRE(setenv(disable_env, "1", 1) == 0);
+    const char * split_projection = import_weights ? "loom_libs:ggml_mul_mat_q6_k_f32_wmma_prefill_wave32" :
+        "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32_aligned";
     require_kernel_subsequence(scheduled_kernel_sequence(split_graph),
                                { "loom_libs:ggml_get_rows_rmsnorm_binary_q8_1_x4_f16",
-                                 "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32_aligned",
+                                 split_projection,
                                  "loom_libs:ggml_set_rows" });
 
     ggml_backend_buffer_t fused_buffer = ggml_backend_alloc_ctx_tensors(fused_ctx, fused_backend);
