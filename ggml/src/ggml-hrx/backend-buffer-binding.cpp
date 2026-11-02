@@ -153,7 +153,10 @@ bool ggml_backend_hrx_weight_layout_eligible(const ggml_tensor * tensor) {
     }
     const ggml_tensor * root = tensor->view_src != nullptr ? tensor->view_src : tensor;
     ggml_backend_buffer_t buffer = root->buffer;
-    const bool is_weight = buffer != nullptr &&
-                           ggml_backend_buffer_get_usage(buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
-    return !is_weight || ggml_backend_hrx_weight_has_repackable_source(tensor);
+    if (buffer == nullptr) {
+        return true;
+    }
+    // Unbound graphs can select layouts, but execution only transforms retained model weights.
+    const bool is_weight = ggml_backend_buffer_get_usage(buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
+    return is_weight && ggml_backend_hrx_weight_has_repackable_source(tensor);
 }

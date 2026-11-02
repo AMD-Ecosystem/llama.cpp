@@ -311,22 +311,19 @@ static bool can_fuse_q6_f16_prefill_v_cache_cell(const DispatchMatchContext & co
            nullptr;
 }
 
-static bool can_use_packed_lowtoken_attention_matmul(const AttentionMatMulMatch & root) {
-    if (!dispatch_weight_layout_eligible(*root.weight)) {
-        return false;
-    }
-    if (root.token_count < 1 || root.token_count > 5 || root.output_size % 64 != 0 ||
-        root.weight->alias_source.value >= 0) {
-        return false;
-    }
-    if (root.weight_format != CommonMulMatWeightFormat::Q4K &&
-        root.weight_format != CommonMulMatWeightFormat::Q6K) {
-        return false;
-    }
-    return common_is_supported_dense_input_size(root.weight_format, root.input_size);
+static bool can_use_row64_attention_weight(const AttentionMatMulMatch & root) {
+    const bool can_transform_weight = dispatch_weight_layout_eligible(*root.weight);
+    const bool has_direct_weight = root.weight->alias_source.value < 0;
+    const bool has_aligned_output = root.output_size % 64 == 0;
+    const bool has_q4_weight = root.weight_format == CommonMulMatWeightFormat::Q4K;
+    const bool has_q6_weight = root.weight_format == CommonMulMatWeightFormat::Q6K;
+    const bool has_supported_weight = has_q4_weight || has_q6_weight;
+    const bool has_supported_input = common_is_supported_dense_input_size(root.weight_format, root.input_size);
+    return can_transform_weight && has_direct_weight && has_aligned_output && has_supported_weight &&
+           has_supported_input;
 }
 
-static CommonMulMatWeightFormat packed_attention_lowtoken_format(CommonMulMatWeightFormat format) {
+static CommonMulMatWeightFormat row64_attention_weight_format(CommonMulMatWeightFormat format) {
     return format == CommonMulMatWeightFormat::Q4K ? CommonMulMatWeightFormat::Q4KRow64 :
                                                      CommonMulMatWeightFormat::Q6KRow64;
 }
@@ -534,9 +531,8 @@ static AttentionQkvMatch match_attention_qkv_projection(const DispatchMatchConte
             match.kernel = is_supported_decode_token_count(root.token_count) ?
                                kAttentionKMatMulRopeSetRowsVectorF32F32Kernel :
                                kAttentionKMatMulRopeSetRowsTiledF32F32Kernel;
-            if (can_use_packed_lowtoken_attention_matmul(root)) {
-                match.root.weight_format = packed_attention_lowtoken_format(root.weight_format);
-                match.kernel = kAttentionKMatMulRopeSetRowsLegacyF32F32Kernel;
+            if (can_use_row64_attention_weight(root)) {
+                match.root.weight_format = row64_attention_weight_format(root.weight_format);
             }
             match.kind   = AttentionQkvProjectionKind::Key;
             return match;
@@ -545,9 +541,8 @@ static AttentionQkvMatch match_attention_qkv_projection(const DispatchMatchConte
         match.root   = root;
         match.kernel = is_supported_decode_token_count(root.token_count) ? kAttentionQMatMulRopeVectorF32F32Kernel :
                                                                            kAttentionQMatMulRopeTiledF32F32Kernel;
-        if (can_use_packed_lowtoken_attention_matmul(root)) {
-            match.root.weight_format = packed_attention_lowtoken_format(root.weight_format);
-            match.kernel = kAttentionQMatMulRopeLegacyF32F32Kernel;
+        if (can_use_row64_attention_weight(root)) {
+            match.root.weight_format = row64_attention_weight_format(root.weight_format);
         }
         match.kind   = AttentionQkvProjectionKind::Query;
         return match;
@@ -567,9 +562,8 @@ static AttentionQkvMatch match_attention_qkv_projection(const DispatchMatchConte
         match.root   = root;
         match.kernel = is_supported_decode_token_count(root.token_count) ? kAttentionVMatMulSetRowsVectorF32F32Kernel :
                                                                            kAttentionVMatMulSetRowsTiledF32F32Kernel;
-        if (can_use_packed_lowtoken_attention_matmul(root)) {
-            match.root.weight_format = packed_attention_lowtoken_format(root.weight_format);
-            match.kernel = kAttentionVMatMulSetRowsLegacyF32F32Kernel;
+        if (can_use_row64_attention_weight(root)) {
+            match.root.weight_format = row64_attention_weight_format(root.weight_format);
         }
         match.kind   = AttentionQkvProjectionKind::Value;
         match.use_f16_activation = quantized_prefill;
@@ -664,8 +658,9 @@ static bool match_attention_qkv_dispatch(const DispatchMatchContext & context, D
     }
 
     Dispatch dispatch;
-    bool pack_q4 = match.root.weight_format == CommonMulMatWeightFormat::Q4KRow64;
-    bool pack_q6 = match.root.weight_format == CommonMulMatWeightFormat::Q6KRow64;
+    const bool pack_q4 = match.root.weight_format == CommonMulMatWeightFormat::Q4KRow64;
+    const bool pack_q6 = match.root.weight_format == CommonMulMatWeightFormat::Q6KRow64;
+    const bool has_row64_weight = pack_q4 || pack_q6;
     bool use_q8_activation = false;
     DispatchBinding activation = { match.root.input->id, 0, match.root.input->byte_count };
     if (match.use_f16_activation) {
@@ -678,36 +673,24 @@ static bool match_attention_qkv_dispatch(const DispatchMatchContext & context, D
         }
         activation = { alternate->alternate_value, 0, activation_bytes };
     }
-    if (pack_q4 || pack_q6) {
-        if (common_prepare_q8_1_x4_input(context, *match.root.input, match.root.input_size, match.root.token_count,
-                                         dispatch_match, activation,
-                                         CommonQ8ActivationPolicy::ExistingAlternateOnly)) {
-            use_q8_activation = true;
-        } else {
-            CommonMulMatWeightFormat fallback_format = CommonMulMatWeightFormat::Q4K;
-            if (!common_mul_mat_format_for_type(match.root.weight->type, fallback_format)) {
-                return false;
-            }
-            match.root.weight_format = fallback_format;
-            pack_q4 = false;
-            pack_q6 = false;
-            switch (match.kind) {
-                case AttentionQkvProjectionKind::Query:
-                    match.kernel = is_supported_decode_token_count(match.root.token_count) ?
-                                       kAttentionQMatMulRopeVectorF32F32Kernel :
-                                       kAttentionQMatMulRopeTiledF32F32Kernel;
-                    break;
-                case AttentionQkvProjectionKind::Key:
-                    match.kernel = is_supported_decode_token_count(match.root.token_count) ?
-                                       kAttentionKMatMulRopeSetRowsVectorF32F32Kernel :
-                                       kAttentionKMatMulRopeSetRowsTiledF32F32Kernel;
-                    break;
-                case AttentionQkvProjectionKind::Value:
-                    match.kernel = is_supported_decode_token_count(match.root.token_count) ?
-                                       kAttentionVMatMulSetRowsVectorF32F32Kernel :
-                                       kAttentionVMatMulSetRowsTiledF32F32Kernel;
-                    break;
-            }
+    const bool has_few_tokens = match.root.token_count <= 5;
+    const bool can_use_q8_activation = has_row64_weight && has_few_tokens;
+    if (can_use_q8_activation) {
+        use_q8_activation = common_prepare_q8_1_x4_input(
+            context, *match.root.input, match.root.input_size, match.root.token_count, dispatch_match, activation,
+            CommonQ8ActivationPolicy::ExistingAlternateOnly);
+    }
+    if (use_q8_activation) {
+        switch (match.kind) {
+            case AttentionQkvProjectionKind::Query:
+                match.kernel = kAttentionQMatMulRopeLegacyF32F32Kernel;
+                break;
+            case AttentionQkvProjectionKind::Key:
+                match.kernel = kAttentionKMatMulRopeSetRowsLegacyF32F32Kernel;
+                break;
+            case AttentionQkvProjectionKind::Value:
+                match.kernel = kAttentionVMatMulSetRowsLegacyF32F32Kernel;
+                break;
         }
     }
     dispatch.kernel = make_kernel_specialization(match.kernel);
@@ -719,7 +702,7 @@ static bool match_attention_qkv_dispatch(const DispatchMatchContext & context, D
         dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.activation_format", std::to_string(GGML_TYPE_F16));
     }
     dispatch.bindings.push_back(activation);
-    if (pack_q4 || pack_q6) {
+    if (has_row64_weight) {
         const char * layout = pack_q4 ? kQ4KPackedK256Row64Layout : kQ6KPackedK256Row64ScaleRowLayout;
         dispatch.bindings.push_back({ match.root.weight->id, 0, match.root.weight->byte_count, layout,
                                       match.root.weight->type, match.root.input_size, match.root.output_size,
