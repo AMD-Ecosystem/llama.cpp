@@ -6294,6 +6294,53 @@ static void run_prefill_value_cache_repeated_indices_case(bool import_weights = 
     require_close(get_f32_tensor(fused_backend, fused[6]), get_f32_tensor(split_backend, split[6]), 0.0f);
 
     if (import_weights) {
+        // Both imported routes now select Q6 + SET_ROWS. Build the expected
+        // cache independently, and keep sentinel rows out of the error norm.
+        const auto * embedding_traits = ggml_get_type_traits(GGML_TYPE_Q4_K);
+        const size_t embedding_row_bytes = ggml_row_size(GGML_TYPE_Q4_K, input_size);
+        std::vector<float> normalized(static_cast<size_t>(input_size * token_count));
+        for (int64_t token = 0; token < token_count; ++token) {
+            float * row = normalized.data() + token * input_size;
+            embedding_traits->to_float(embedding.data() + tokens[token] * embedding_row_bytes, row, input_size);
+            double squares = 0.0;
+            for (int64_t k = 0; k < input_size; ++k) {
+                squares += static_cast<double>(row[k]) * row[k];
+            }
+            const float scale = static_cast<float>(1.0 / std::sqrt(squares / input_size + kQwenRmsNormEps));
+            for (int64_t k = 0; k < input_size; ++k) {
+                row[k] = row[k] * scale * norm[k];
+            }
+        }
+        const auto projected = row64_matmul_reference(GGML_TYPE_Q6_K, projection, normalized,
+                                                       input_size, output_size, token_count);
+        std::vector<float> expected(cache.size(), -2.5f);
+        std::vector<bool> touched(static_cast<size_t>(cache_row_count), false);
+        for (int64_t token = 0; token < token_count; ++token) {
+            const int64_t destination = indices[token];
+            touched[destination] = true;
+            for (int64_t channel = 0; channel < output_size; ++channel) {
+                expected[destination * output_size + channel] = ggml_fp16_to_fp32(
+                    ggml_fp32_to_fp16(projected[token * output_size + channel]));
+            }
+        }
+        REQUIRE(std::count(touched.begin(), touched.end(), true) == 31);
+        for (const auto & actual : { get_f32_tensor(fused_backend, fused[6]),
+                                    get_f32_tensor(split_backend, split[6]) }) {
+            std::vector<float> written_actual;
+            std::vector<float> written_expected;
+            for (int64_t row = 0; row < cache_row_count; ++row) {
+                for (int64_t channel = 0; channel < output_size; ++channel) {
+                    const size_t index = static_cast<size_t>(row * output_size + channel);
+                    if (touched[row]) {
+                        written_actual.push_back(actual[index]);
+                        written_expected.push_back(expected[index]);
+                    } else {
+                        REQUIRE(actual[index] == -2.5f);
+                    }
+                }
+            }
+            require_row64_reference(written_actual, written_expected);
+        }
         for (ggml_backend_t backend : { fused_backend, split_backend }) {
             ggml_backend_hrx_cache_stats stats = {};
             REQUIRE(ggml_backend_hrx_get_cache_stats(backend, &stats));
