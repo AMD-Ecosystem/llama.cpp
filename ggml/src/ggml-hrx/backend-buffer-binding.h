@@ -4,7 +4,6 @@
 #include "ggml-backend.h"
 #include "graph/value-map.h"
 
-#include <array>
 #include <cstddef>
 
 struct ggml_tensor;
@@ -16,9 +15,6 @@ struct ggml_backend_hrx_imported_region {
     uint64_t                          generation;
     size_t                            offset;
     size_t                            length;
-    ggml_type                         type;
-    std::array<int64_t, GGML_MAX_DIMS> ne;
-    std::array<size_t, GGML_MAX_DIMS>  nb;
 };
 
 ggml_backend_hrx_buffer_context * ggml_backend_hrx_buffer_context_from_buffer(ggml_backend_buffer_t buffer);
@@ -34,8 +30,3 @@ bool ggml_backend_hrx_get_imported_region(const ggml_tensor * tensor, ggml_backe
 bool ggml_backend_hrx_weight_has_repackable_source(const ggml_tensor * tensor);
 bool ggml_backend_hrx_weight_layout_eligible(const ggml_tensor * tensor);
 bool ggml_backend_hrx_get_retained_region(const ggml_tensor * tensor, ggml_backend_hrx_imported_region & region);
-void ggml_backend_hrx_mark_imported_region_written(const ggml_tensor * tensor);
-void ggml_backend_hrx_mark_retained_region_written(const ggml_tensor * tensor);
-void ggml_backend_hrx_mark_foreign_host_region_written(const ggml_tensor * tensor);
-void ggml_backend_hrx_foreign_host_backend_started();
-void ggml_backend_hrx_foreign_host_backend_stopped();

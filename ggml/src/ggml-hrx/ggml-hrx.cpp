@@ -422,7 +422,6 @@ static void backend_free(ggml_backend_t backend) {
     hrx_stream_release(context->stream);
     delete context;
     delete backend;
-    ggml_backend_hrx_foreign_host_backend_stopped();
 }
 
 static bool synchronous_upload_fallback(ggml_backend_hrx_context * backend,
@@ -668,7 +667,6 @@ static ggml_backend_t device_init(ggml_backend_dev_t device, const char * parame
         delete context;
         hrx_stream_release(stream);
     } else {
-        ggml_backend_hrx_foreign_host_backend_started();
     }
     return backend;
 }
@@ -1373,46 +1371,6 @@ ggml_backend_buffer_type_t ggml_backend_hrx_buffer_type(size_t device) {
     return device < ggml_backend_reg_dev_count(registry) ?
                ggml_backend_dev_buffer_type(ggml_backend_reg_dev_get(registry, device)) :
                nullptr;
-}
-
-bool ggml_backend_hrx_buffer_is_imported(ggml_backend_buffer_t buffer) {
-    if (buffer == nullptr) {
-        return false;
-    }
-    const auto * registry = static_cast<ggml_backend_hrx_reg_context *>(ggml_backend_hrx_reg()->context);
-    for (const auto & device : registry->device_contexts) {
-        const bool regular_type = buffer->buft == &device->buft;
-        const bool host_type = buffer->buft == &device->host_buft;
-        const bool hrx_type = regular_type || host_type;
-        if (hrx_type) {
-            return buffer_context(buffer)->imported;
-        }
-    }
-    return false;
-}
-
-void ggml_backend_hrx_mark_imported_region_written(const ggml_tensor * tensor) {
-    ggml_backend_hrx_buffer_context * context = nullptr;
-    size_t offset = 0;
-    if (ggml_backend_hrx_tensor_binding(tensor, &context, &offset)) {
-        if (context->imported) {
-            ggml_backend_hrx_set_buffer_generation(context, g_allocation_generation.fetch_add(1));
-        }
-    }
-}
-
-void ggml_backend_hrx_mark_retained_region_written(const ggml_tensor * tensor) {
-    ggml_backend_hrx_buffer_context * context = nullptr;
-    size_t offset = 0;
-    if (!ggml_backend_hrx_tensor_binding(tensor, &context, &offset)) {
-        ggml_backend_hrx_mark_foreign_host_region_written(tensor);
-        return;
-    }
-    ggml_backend_buffer_t buffer = tensor->view_src != nullptr ? tensor->view_src->buffer : tensor->buffer;
-    const bool retained = context->imported || ggml_backend_buffer_is_host(buffer);
-    if (retained) {
-        ggml_backend_hrx_set_buffer_generation(context, g_allocation_generation.fetch_add(1));
-    }
 }
 
 GGML_BACKEND_DL_IMPL(ggml_backend_hrx_reg)

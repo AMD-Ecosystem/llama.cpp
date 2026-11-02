@@ -130,10 +130,6 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
         context_.prepared_programs.execute_with_result(execution_context, 0, lookup.program->command_shape_hash(),
                                                        lookup.program->commands(), bindings);
     result.graph_replay_event = execution.graph_replay_event;
-    if (execution.execution_resources != nullptr) {
-        // A failed return can still follow queued writes.
-        lookup.program->mark_imported_writes(graph);
-    }
     if (!execution.success) {
         result.status.append(execution.status);
         if (result.status.success()) {

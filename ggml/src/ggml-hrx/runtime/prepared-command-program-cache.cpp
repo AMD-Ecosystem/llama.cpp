@@ -100,15 +100,13 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
     if (graph_uid == 0 || !commands.valid() || !bindings.valid()) {
         result.graph_replay_event             = HrxGraphReplayEvent::Ineligible;
         result.graph_replay_ineligible_reason = "uncached_graph";
-        auto resources = std::make_shared<CachedCommandProgramResources>();
-        resources->prepared = prepare_command_program(context, commands, bindings);
-        if (!resources->prepared.valid()) {
-            result.status.append(resources->prepared.status);
+        auto prepared = prepare_command_program(context, commands, bindings);
+        if (!prepared.valid()) {
+            result.status.append(prepared.status);
             return result;
         }
-        result.execution_resources = resources;
         // HRX command buffers retain queued buffers and executables even after this uncached owner is released.
-        result.success = bind_and_execute_prepared_command_program(context, commands, bindings, resources->prepared);
+        result.success = bind_and_execute_prepared_command_program(context, commands, bindings, prepared);
         if (!result.success) {
             result.status.log("execute uncached HRX command program failed");
         }
@@ -145,84 +143,44 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
     const bool replay_disabled = graph_replay_disabled_by_environment();
     const bool serial_execution = debug_serial_command_execution_enabled();
     const bool execute_directly = replay_disabled || serial_execution;
-    if (entry->resources != nullptr && entry->resources->prepared.valid()) {
-        auto & resources = *entry->resources;
-        result.execution_resources = entry->resources;
-        record_hit();
-        if (execute_directly) {
-            result.graph_replay_event             = HrxGraphReplayEvent::Disabled;
-            result.graph_replay_ineligible_reason = serial_execution ? "debug_serial_execution" :
-                                                                "disabled_by_environment";
-            result.success = bind_and_execute_prepared_command_program(context, commands, bindings, resources.prepared);
-            if (!result.success) {
-                result.status.log("execute cached HRX command program failed");
-            }
+    if (!entry->ready) {
+        auto prepared = prepare_command_program(context, commands, bindings);
+        if (!prepared.valid()) {
+            result.status.append(prepared.status);
             return result;
         }
+        entry->prepared = std::move(prepared);
+        entry->ready = true;
+        record_build();
+    } else {
+        record_hit();
+    }
+
+    if (execute_directly) {
+        result.graph_replay_event = HrxGraphReplayEvent::Disabled;
+        result.graph_replay_ineligible_reason = serial_execution ? "debug_serial_execution" :
+                                                                  "disabled_by_environment";
+        result.success = bind_and_execute_prepared_command_program(context, commands, bindings, entry->prepared);
+    } else {
         const char * rebuild_setting = std::getenv("GGML_HRX_REBUILD_GRAPH_REPLAY");
         const bool rebuild_requested = rebuild_setting != nullptr && rebuild_setting[0] != '\0';
         const bool rebuild_enabled = rebuild_requested && rebuild_setting[0] != '0';
         if (rebuild_enabled) {
-            resources.recorded = {};
+            entry->recorded = {};
         }
-        const RecordedCommandGraphExecutionResult replay =
-            bind_and_launch_recorded_command_graph(context, commands, bindings, resources.prepared, resources.recorded);
+        const auto replay = bind_and_launch_recorded_command_graph(
+            context, commands, bindings, entry->prepared, entry->recorded);
         apply_graph_replay_result(result, replay);
-        if (replay.success) {
-            result.success = true;
-            return result;
-        }
-        if (!graph_replay_should_fallback(replay.event)) {
+        result.success = replay.success;
+        const bool fallback = !replay.success && graph_replay_should_fallback(replay.event);
+        if (fallback) {
+            result.success = bind_and_execute_prepared_command_program(context, commands, bindings, entry->prepared);
+        } else if (!replay.success) {
             result.status.append(replay.status);
-            if (result.status.success()) {
-                result.status.log("execute cached HRX graph replay failed");
-            }
-            return result;
         }
-        result.success = bind_and_execute_prepared_command_program(context, commands, bindings, resources.prepared);
-        if (!result.success) {
-            result.status.log("execute cached HRX command program failed");
-        }
-        return result;
     }
-
-    auto resources = std::make_shared<CachedCommandProgramResources>();
-    resources->prepared = prepare_command_program(context, commands, bindings);
-    if (!resources->prepared.valid()) {
-        result.status.append(resources->prepared.status);
-        return result;
-    }
-    entry->resources = resources;
-    result.execution_resources = resources;
-    record_build();
-
-    if (execute_directly) {
-        result.graph_replay_event             = HrxGraphReplayEvent::Disabled;
-        result.graph_replay_ineligible_reason = serial_execution ? "debug_serial_execution" :
-                                                                "disabled_by_environment";
-        result.success = bind_and_execute_prepared_command_program(context, commands, bindings, resources->prepared);
-        if (!result.success) {
-            result.status.log("execute prepared HRX command program failed");
-        }
-        return result;
-    }
-
-    const RecordedCommandGraphExecutionResult replay =
-        bind_and_launch_recorded_command_graph(context, commands, bindings, resources->prepared, resources->recorded);
-    apply_graph_replay_result(result, replay);
-    if (replay.success) {
-        result.success = true;
-        return result;
-    }
-    if (!graph_replay_should_fallback(replay.event)) {
-        result.status.append(replay.status);
-        if (result.status.success()) {
-            result.status.log("execute prepared HRX graph replay failed");
-        }
-        return result;
-    }
-    result.success = bind_and_execute_prepared_command_program(context, commands, bindings, resources->prepared);
-    if (!result.success) {
+    const bool missing_error = !result.success && result.status.success();
+    if (missing_error) {
         result.status.log("execute prepared HRX command program failed");
     }
     return result;

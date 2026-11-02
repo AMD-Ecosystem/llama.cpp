@@ -25,14 +25,6 @@ static constexpr size_t kMaxInlineUploadBytes = 63 * 1024;
 static constexpr size_t kLargeHostUploadBytes = 1024 * 1024;
 static constexpr size_t kQ6PackScratchLimitBytes = 64 * 1024 * 1024;
 
-static bool mapped_download_staging_enabled() {
-    static const bool enabled = [] {
-        const char * mode = std::getenv("GGML_HRX_WEIGHT_DOWNLOAD_STAGING");
-        return mode == nullptr || mode[0] == '\0' || std::strcmp(mode, "mapped") == 0;
-    }();
-    return enabled;
-}
-
 struct SymmetricI4Block {
     std::array<ggml_fp16_t, 8>             scales   = {};
     std::array<std::array<uint8_t, 16>, 8> payloads = {};
@@ -1261,13 +1253,6 @@ Status allocate_mapped_host_staging_buffer(hrx_device_t device, size_t size, hrx
     return status;
 }
 
-HostTransferManager::~HostTransferManager() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (mapped_download_buffer_ != nullptr) {
-        hrx_buffer_release(mapped_download_buffer_);
-    }
-}
-
 Status HostTransferManager::upload_synchronous(hrx_stream_t stream,
                                                const void * host_source,
                                                hrx_buffer_t destination,
@@ -1371,55 +1356,6 @@ Status HostTransferManager::download_synchronous(hrx_stream_t stream,
     return status;
 }
 
-Status HostTransferManager::download_to_mapped_synchronous(hrx_device_t              device,
-                                                           hrx_stream_t              stream,
-                                                           hrx_buffer_t              source,
-                                                           size_t                    offset,
-                                                           size_t                    size,
-                                                           HostMappedDownloadLease & lease) {
-    Status status;
-    lease = {};
-    if (device == nullptr || stream == nullptr || source == nullptr || size == 0) {
-        status.log("invalid mapped HRX host download");
-        return status;
-    }
-    lease.lock = std::unique_lock<std::mutex>(mutex_);
-    if (mapped_download_capacity_ < size) {
-        size_t capacity = std::max<size_t>(mapped_download_capacity_, 1);
-        while (capacity < size && capacity <= std::numeric_limits<size_t>::max() / 2) {
-            capacity *= 2;
-        }
-        if (capacity < size) {
-            capacity = size;
-        }
-        hrx_buffer_t new_buffer = nullptr;
-        void *       new_data   = nullptr;
-        status = allocate_mapped_host_staging_buffer(device, capacity, new_buffer, new_data);
-        if (!status.success()) {
-            return status;
-        }
-        if (mapped_download_buffer_ != nullptr) {
-            hrx_buffer_release(mapped_download_buffer_);
-        }
-        mapped_download_buffer_   = new_buffer;
-        mapped_download_data_     = new_data;
-        mapped_download_capacity_ = capacity;
-    }
-    if (ErrorResult error =
-            take_status(hrx_stream_copy_buffer(stream, source, offset, mapped_download_buffer_, 0, size))) {
-        status.log("mapped host weight download failed: %s", error->c_str());
-        return status;
-    }
-    if (ErrorResult error = take_status(hrx_stream_synchronize(stream))) {
-        status.log("synchronize mapped host weight download failed: %s", error->c_str());
-        return status;
-    }
-    ++stats_.downloads;
-    stats_.download_bytes += size;
-    lease.host_data = mapped_download_data_;
-    return status;
-}
-
 HostTransferStats HostTransferManager::stats() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return stats_;
@@ -1430,29 +1366,16 @@ void HostTransferManager::clear() {
     stats_ = {};
 }
 
-struct HostWeightAccounting {
-    std::mutex mutex;
-    size_t allocation_count = 0;
-    size_t resident_bytes = 0;
-    size_t peak_resident_bytes = 0;
-};
-
 struct HostWeightLease::Entry {
     ~Entry() {
         if (buffer != nullptr) {
             hrx_buffer_release(buffer);
-        }
-        if (accounting != nullptr) {
-            std::lock_guard<std::mutex> lock(accounting->mutex);
-            --accounting->allocation_count;
-            accounting->resident_bytes -= length;
         }
     }
 
     hrx_buffer_t buffer = nullptr;
     size_t       length = 0;
     std::string  layout;
-    std::shared_ptr<HostWeightAccounting> accounting;
 };
 
 HostWeightLease::HostWeightLease(std::shared_ptr<Entry> entry) : entry_(std::move(entry)) {}
@@ -1473,8 +1396,6 @@ const std::string & HostWeightLease::layout() const {
     static const std::string empty;
     return entry_ != nullptr ? entry_->layout : empty;
 }
-
-HostWeightCache::HostWeightCache() : accounting_(std::make_shared<HostWeightAccounting>()) {}
 
 HostWeightCache::~HostWeightCache() {
     clear();
@@ -1510,10 +1431,14 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
         result.status.log("host weight residency requires an HRX stream");
         return result;
     }
-    const bool has_host_source   = source.host_data != nullptr;
-    const bool has_device_source = source.device_buffer != nullptr;
-    if (has_host_source == has_device_source || source.identity == 0 || source.generation == 0 || source.length == 0 ||
-        source.offset > source.capacity || source.length > source.capacity - source.offset) {
+    const bool has_host_source = source.host_data != nullptr;
+    const bool has_identity = source.identity != 0;
+    const bool has_generation = source.generation != 0;
+    const bool has_length = source.length != 0;
+    const bool offset_fits = source.offset <= source.capacity;
+    const bool length_fits = offset_fits && source.length <= source.capacity - source.offset;
+    const bool valid_source = has_host_source && has_identity && has_generation && has_length && length_fits;
+    if (!valid_source) {
         result.status.log("invalid host weight source");
         return result;
     }
@@ -1551,35 +1476,6 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
         --fail_cold_after_;
     }
 
-    HostWeightSource        materialization_source = source;
-    HostMappedDownloadLease mapped_canonical;
-    std::vector<uint8_t>    canonical;
-    if (has_device_source) {
-        if (source.layout == kNativeWeightLayout) {
-            result.status.log("native device weights do not require host materialization");
-            return result;
-        }
-        if (!mapped_download_staging_enabled()) {
-            canonical.resize(source.length);
-        }
-        void * canonical_data = canonical.data();
-        if (mapped_download_staging_enabled()) {
-            result.status = transfers.download_to_mapped_synchronous(
-                device, stream, source.device_buffer, source.offset, source.length, mapped_canonical);
-            canonical_data = mapped_canonical.host_data;
-        } else {
-            result.status = transfers.download_synchronous(stream, source.device_buffer, source.offset, canonical_data,
-                                                           source.length);
-        }
-        if (!result.status.success()) {
-            return result;
-        }
-        materialization_source.host_data     = canonical_data;
-        materialization_source.device_buffer = nullptr;
-        materialization_source.capacity      = source.length;
-        materialization_source.offset        = 0;
-    }
-
     const bool q6_packed = source.layout == kQ6KPackedK256Row64ScaleRowLayout;
     const bool scratch_fits = materialized_length <= kQ6PackScratchLimitBytes;
     auto scratch = q6_pack_scratch_.find(materialized_length);
@@ -1598,10 +1494,7 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
     // Budget 64 MiB of host scratch across first-use materializations. The Q6 packer
     // writes every output byte, and the cache lock covers packing and upload.
     std::vector<uint8_t> & output = use_scratch ? scratch->second : transformed;
-    result.status = materialize_weight(materialization_source, upload_data, upload_size, output);
-    if (mapped_canonical.lock.owns_lock()) {
-        mapped_canonical.lock.unlock();
-    }
+    result.status = materialize_weight(source, upload_data, upload_size, output);
     if (!result.status.success()) {
         return result;
     }
@@ -1618,19 +1511,15 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
     if (!result.status.success()) {
         return result;
     }
-    entry->accounting = accounting_;
-    {
-        std::lock_guard<std::mutex> accounting_lock(accounting_->mutex);
-        ++accounting_->allocation_count;
-        accounting_->resident_bytes += materialized_length;
-        accounting_->peak_resident_bytes = std::max(accounting_->peak_resident_bytes, accounting_->resident_bytes);
-    }
     result.status = transfers.upload_synchronous(stream, upload_data, entry->buffer, 0, upload_size);
     if (!result.status.success()) {
         return result;
     }
 
     entries_.emplace(key, entry);
+    ++stats_.allocation_count;
+    stats_.resident_bytes += materialized_length;
+    stats_.peak_resident_bytes = std::max(stats_.peak_resident_bytes, stats_.resident_bytes);
     report_new_representation(key, *entry);
     ++stats_.misses;
     stats_.materialized_bytes += materialized_length;
@@ -1640,12 +1529,7 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
 
 HostWeightCacheStats HostWeightCache::stats() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    std::lock_guard<std::mutex> accounting_lock(accounting_->mutex);
-    HostWeightCacheStats result = stats_;
-    result.allocation_count = accounting_->allocation_count;
-    result.resident_bytes = accounting_->resident_bytes;
-    result.peak_resident_bytes = accounting_->peak_resident_bytes;
-    return result;
+    return stats_;
 }
 
 void HostWeightCache::report_new_representation(const SourceKey & key, const HostWeightLease::Entry & entry) {
@@ -1687,6 +1571,8 @@ void HostWeightCache::fail_cold_acquire_after_for_test(size_t successful_acquire
 void HostWeightCache::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     entries_.clear();
+    stats_.allocation_count = 0;
+    stats_.resident_bytes = 0;
     q6_pack_scratch_.clear();
     q6_pack_scratch_bytes_ = 0;
 }

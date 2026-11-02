@@ -2863,9 +2863,6 @@ static void run_imported_native_weight_case() {
 
     ggml_backend_hrx_imported_region region = {};
     REQUIRE(ggml_backend_hrx_get_imported_region(weight, region));
-    REQUIRE(region.type == GGML_TYPE_F32);
-    REQUIRE(region.ne[0] == kInputSize);
-    REQUIRE(region.ne[1] == kOutputSize);
     REQUIRE(region.offset == 0);
     ggml_backend_hrx_imported_region alias_region = {};
     REQUIRE(ggml_backend_hrx_get_imported_region(weight_alias, alias_region));
@@ -3315,16 +3312,30 @@ static void run_failed_submission_weight_lifetime_case(bool uncached = false) {
         &ggml::hrx::get_qwen_kernel_corpus(), &state->kernel_executables, &state->transient_arena,
         &state->host_transfers, &state->host_weights, &state->device->host_buffers, &state->graph_replay_state,
     };
-    auto execution = state->prepared_programs.execute_with_result(
-        execution_context, uncached ? 0 : packed_lookup.program->uid(), packed_lookup.program->command_shape_hash(),
-        packed_lookup.program->commands(), packed_bindings);
-    REQUIRE(execution.success);
-    REQUIRE(!execution.execution_resources->prepared.host_staging.empty());
-    REQUIRE(execution.execution_resources->recorded.valid() == !uncached);
+    std::shared_ptr<ggml::hrx::PreparedCommandProgramCacheEntry> entry;
+    std::unique_ptr<ggml::hrx::PreparedCommandProgram> uncached_prepared;
+    ggml::hrx::PreparedCommandProgram * prepared = nullptr;
+    if (uncached) {
+        uncached_prepared = std::make_unique<ggml::hrx::PreparedCommandProgram>(
+            ggml::hrx::prepare_command_program(execution_context, packed_lookup.program->commands(), packed_bindings));
+        REQUIRE(uncached_prepared->valid());
+        REQUIRE(ggml::hrx::bind_and_execute_prepared_command_program(
+            execution_context, packed_lookup.program->commands(), packed_bindings, *uncached_prepared));
+        prepared = uncached_prepared.get();
+    } else {
+        entry = state->prepared_programs.get_or_create(
+            execution_context, packed_lookup.program->uid(), packed_lookup.program->command_shape_hash(), packed_bindings);
+        const auto execution = state->prepared_programs.execute_with_result(
+            execution_context, packed_lookup.program->commands(), packed_bindings, entry);
+        REQUIRE(execution.success);
+        REQUIRE(entry->recorded.valid());
+        prepared = &entry->prepared;
+    }
+    REQUIRE(!prepared->host_staging.empty());
     ggml_backend_synchronize(backend);
     ggml_backend_tensor_set(hrx_output, poisoned.data(), 0, poisoned.size() * sizeof(float));
     // The invalid final command fails after the real weight reader is queued, before the completion boundary.
-    execution.execution_resources->prepared.commands.emplace_back();
+    prepared->commands.emplace_back();
     hrx_semaphore_t gate = nullptr;
     REQUIRE(!ggml::hrx::take_status(hrx_semaphore_create(state->device->device, 0, &gate)));
     REQUIRE(!ggml::hrx::take_status(hrx_stream_wait_on(state->stream, { gate, 1 })));
@@ -3341,10 +3352,11 @@ static void run_failed_submission_weight_lifetime_case(bool uncached = false) {
         }
     });
     const bool execution_failed = !ggml::hrx::execute_prepared_command_program(
-        execution_context, execution.execution_resources->prepared);
-    std::weak_ptr<ggml::hrx::CachedCommandProgramResources> sole_resource = execution.execution_resources;
+        execution_context, *prepared);
+    std::weak_ptr<ggml::hrx::PreparedCommandProgramCacheEntry> sole_resource = entry;
     const bool flush_ok = !ggml::hrx::take_status(hrx_stream_flush(state->stream));
-    execution.execution_resources.reset();
+    entry.reset();
+    uncached_prepared.reset();
     if (uncached) {
         state->graph_programs.clear();
         state->kernel_executables.clear();
@@ -3611,7 +3623,7 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
         auto prepared = ggml::hrx::prepare_command_program(
             execution_context, lookup.program->commands(), bindings);
         REQUIRE(prepared.valid());
-        REQUIRE(prepared.resident_host_weights->size() == expected_materializations);
+        REQUIRE(prepared.resident_host_weights.size() == expected_materializations);
         const bool staged_weight = std::any_of(prepared.host_staging.begin(), prepared.host_staging.end(),
                                                [&](const auto & staging) { return staging.value == weight_value->id.value; });
         REQUIRE(!staged_weight);
@@ -3846,8 +3858,7 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
     REQUIRE(after_rebind.weight_materializations == before_rebind.weight_materializations);
 
     {
-        // Exercise production preparation and recording: physical residency must remain counted after both
-        // the graph-program owner and weight lookup entries are gone, for as long as recording retains it.
+        // A recording retains its buffers even after prepared bindings and cache ownership are gone.
         auto full_match = lookup.program->match_trusted_graph(*hrx_decode, true);
         REQUIRE(full_match.valid());
         const ggml::hrx::CommandProgram & commands = lookup.program->commands();
@@ -3871,7 +3882,7 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
         };
         auto prepared = ggml::hrx::prepare_command_program(execution_context, commands, bindings);
         REQUIRE(prepared.valid());
-        REQUIRE(prepared.resident_host_weights->size() == 1);
+        REQUIRE(prepared.resident_host_weights.size() == 1);
         ggml::hrx::RecordedCommandGraph recorded;
         const auto launch = ggml::hrx::bind_and_launch_recorded_command_graph(
             execution_context, commands, bindings, prepared, recorded);
@@ -3883,7 +3894,11 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
         backend_state->prepared_programs.clear();
         lookup = {};
         backend_state->host_weights.clear();
-        REQUIRE(backend_state->host_weights.stats().allocation_count == 1);
+        REQUIRE(backend_state->host_weights.stats().allocation_count == 0);
+        REQUIRE(!ggml::hrx::take_status(hrx_graph_exec_launch(recorded.exec, backend_state->stream)));
+        ggml_backend_synchronize(hrx_backend);
+        require_close(get_f32_tensor(hrx_backend, hrx_decode_output), get_f32_tensor(cpu_backend, cpu_decode_output),
+                      2.0e-2f, 3.0e-2f);
         recorded = {};
         REQUIRE(backend_state->host_weights.stats().allocation_count == 0);
     }

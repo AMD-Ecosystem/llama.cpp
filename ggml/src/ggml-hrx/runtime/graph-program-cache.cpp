@@ -10,7 +10,6 @@
 #include <cstddef>
 #include <cstdlib>
 #include <optional>
-#include <unordered_set>
 #include <sstream>
 #include <unordered_map>
 #include <utility>
@@ -412,7 +411,7 @@ GraphProgramMatch GraphProgram::match_host_staging_graph(const ggml_cgraph & cur
         return result;
     }
     std::lock_guard<std::mutex> entry_lock(prepared_entry_->mutex);
-    const auto & staging_buffers = prepared_entry_->resources->prepared.host_staging;
+    const auto & staging_buffers = prepared_entry_->prepared.host_staging;
     result.external_bindings.reserve(staging_buffers.size());
     for (const HostStagingBuffer & staging : staging_buffers) {
         const GraphProgramExternalSlot * slot = find_external_slot(ValueId(staging.value));
@@ -432,26 +431,8 @@ GraphProgramMatch GraphProgram::match_host_staging_graph(const ggml_cgraph & cur
 Status GraphProgram::capture_external_slots(const ggml_cgraph & graph, const GraphProgramMatch & match) {
     Status status;
     external_slots_.clear();
-    written_slots_.clear();
-    std::unordered_set<int32_t> written_values;
     external_slot_by_value_.clear();
     external_slots_.reserve(match.external_bindings.size());
-    auto collect_access = [&](const std::vector<Command> & commands) {
-        for (const Command & command : commands) {
-            for (const CommandBinding & binding : command.bindings) {
-                const bool graph_value = binding.origin == CommandBindingOrigin::GraphValue;
-                const bool writes_only = binding.access == ResourceAccess::Write;
-                const bool reads_and_writes = binding.access == ResourceAccess::ReadWrite;
-                const bool writes_value = writes_only || reads_and_writes;
-                const bool graph_write = graph_value && writes_value;
-                if (graph_write) {
-                    written_values.insert(binding.value.value);
-                }
-            }
-        }
-    };
-    collect_access(commands_->initialization_commands);
-    collect_access(commands_->commands);
     for (const GraphProgramExternalBinding & binding : match.external_bindings) {
         GraphProgramExternalSlot slot;
         slot.value = binding.value;
@@ -487,9 +468,6 @@ Status GraphProgram::capture_external_slots(const ggml_cgraph & graph, const Gra
         }
         external_slot_by_value_[binding.value.value] = external_slots_.size();
         external_slots_.push_back(slot);
-        if (written_values.count(slot.value.value) != 0) {
-            written_slots_.push_back(slot);
-        }
     }
     return status;
 }
@@ -550,25 +528,6 @@ bool GraphProgram::mutable_sources_current() const {
         }
     }
     return true;
-}
-
-void GraphProgram::mark_imported_writes(const ggml_cgraph & graph) const {
-    std::unordered_set<uint64_t> marked_identities;
-    for (const GraphProgramExternalSlot & slot : written_slots_) {
-        Status status;
-        const ggml_tensor * tensor = resolve_external_slot(graph, slot, status);
-        if (tensor == nullptr) {
-            continue;
-        }
-        ggml_backend_hrx_imported_region region = {};
-        if (!ggml_backend_hrx_get_retained_region(tensor, region)) {
-            continue;
-        }
-        const bool first_write = marked_identities.insert(region.identity).second;
-        if (first_write) {
-            ggml_backend_hrx_mark_retained_region_written(tensor);
-        }
-    }
 }
 
 GraphProgramMatch GraphProgram::match_current_graph(const ggml_cgraph & current_graph) const {

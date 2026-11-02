@@ -12,7 +12,6 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -75,7 +74,6 @@ class GraphProgram {
 
     bool can_use_prepared_fast_path(const ggml_cgraph & graph) const;
     bool mutable_sources_current() const;
-    void mark_imported_writes(const ggml_cgraph & graph) const;
     std::shared_ptr<PreparedCommandProgramCacheEntry> prepared_entry() const;
     void bind_prepared_graph(const ggml_cgraph & graph, const GraphProgramMatch & match,
                              const CommandProgramBindings & bindings,
@@ -102,7 +100,6 @@ class GraphProgram {
         size_t              length;
     };
     std::vector<MutableSourceWatch> mutable_source_watches_;
-    std::vector<GraphProgramExternalSlot> written_slots_;
     std::unordered_map<int32_t, size_t>   external_slot_by_value_;
     uint64_t                              fast_path_uid_ = 0;
     const ggml_tensor * const *           fast_path_nodes_ = nullptr;

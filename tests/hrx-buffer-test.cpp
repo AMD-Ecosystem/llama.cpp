@@ -266,9 +266,6 @@ static void run_imported_buffer_checks(ggml_backend_t backend) {
     REQUIRE(first_region.identity == second_region.identity);
     REQUIRE(first_region.offset == 0);
     REQUIRE(second_region.offset == 32 * sizeof(uint32_t));
-    REQUIRE(first_region.type == GGML_TYPE_I32);
-    REQUIRE(first_region.ne[0] == 32);
-    REQUIRE(first_region.nb[0] == sizeof(uint32_t));
 
     ggml_tensor * view = ggml_view_1d(ggml, second, 8, 4 * sizeof(uint32_t));
     REQUIRE(ggml_backend_view_init(view) == GGML_STATUS_SUCCESS);
@@ -277,7 +274,6 @@ static void run_imported_buffer_checks(ggml_backend_t backend) {
     REQUIRE(view_region.identity == second_region.identity);
     REQUIRE(view_region.offset == second_region.offset + 4 * sizeof(uint32_t));
     REQUIRE(view_region.length == 8 * sizeof(uint32_t));
-    REQUIRE(view_region.ne[0] == 8);
 
     ggml::hrx::ValueBufferBinding binding;
     REQUIRE(ggml_backend_hrx_resolve_value_buffer(second, binding));
@@ -592,25 +588,23 @@ static void run_host_weight_cache_checks(ggml_backend_hrx_context * context) {
     ggml::hrx::RecordedCommandGraph recorded;
     hrx_buffer_retain(first.lease.buffer());
     recorded.retained_buffers.push_back(first.lease.buffer());
-    recorded.resident_host_weights =
-        std::make_shared<const std::vector<ggml::hrx::HostWeightLease>>(std::initializer_list<ggml::hrx::HostWeightLease>{ first.lease });
     weights.clear();
     weight_stats = weights.stats();
     REQUIRE(weight_stats.hits == 1);
     REQUIRE(weight_stats.misses == 3);
-    REQUIRE(weight_stats.allocation_count == 3);
-    REQUIRE(weight_stats.resident_bytes == 96);
+    REQUIRE(weight_stats.allocation_count == 0);
+    REQUIRE(weight_stats.resident_bytes == 0);
+    REQUIRE(weight_stats.peak_resident_bytes == 96);
     first.lease = {};
     second.lease = {};
     slice.lease = {};
     next_generation.lease = {};
-    weight_stats = weights.stats();
-    REQUIRE(weight_stats.allocation_count == 1);
-    REQUIRE(weight_stats.resident_bytes == 32);
+    // Recording retention keeps the buffer valid independently of cache residency and weight leases.
+    std::array<uint8_t, 32> retained_bytes = {};
+    require_hrx_status(hrx_synchronous_d2h(context->device->device, recorded.retained_buffers.front(), 0,
+                                          retained_bytes.data(), retained_bytes.size()));
+    REQUIRE(retained_bytes == first_bytes);
     recorded = {};
-    weight_stats = weights.stats();
-    REQUIRE(weight_stats.allocation_count == 0);
-    REQUIRE(weight_stats.resident_bytes == 0);
 
     source.layout = ggml::hrx::kNativeWeightLayout;
     source.generation = 3;

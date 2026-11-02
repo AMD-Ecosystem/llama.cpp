@@ -11768,12 +11768,14 @@ static void run_zero_output_unused_weight_staging(bool direct_execution) {
             lookup.program->commands(), bindings);
         REQUIRE(execution.success);
         ggml_backend_synchronize(backend);
-        const auto & prepared = execution.execution_resources->prepared;
+        const auto entry = state->prepared_programs.get_or_create(
+            execution_context, lookup.program->uid(), lookup.program->command_shape_hash(), bindings);
+        const auto & prepared = entry->prepared;
         REQUIRE(std::none_of(prepared.host_staging.begin(), prepared.host_staging.end(), [&](const auto & staging) {
             return staging.value == unused_value->id.value;
         }));
         REQUIRE(prepared.host_staging.size() == 2);
-        REQUIRE(prepared.resident_host_weights->size() == 1);
+        REQUIRE(prepared.resident_host_weights.size() == 1);
         REQUIRE(state->host_weights.stats().resident_bytes == weight_bytes);
         REQUIRE(state->host_weights.stats().misses == 1);
         // The vector matmul declares both host input and output as reads.
@@ -11795,7 +11797,7 @@ static void run_zero_output_unused_weight_staging(bool direct_execution) {
         auto prepared = ggml::hrx::prepare_command_program(execution_context, initialization_only, bindings);
         REQUIRE(prepared.valid());
         REQUIRE(prepared.host_staging.size() == 2);
-        REQUIRE(prepared.resident_host_weights->size() == 1);
+        REQUIRE(prepared.resident_host_weights.size() == 1);
         REQUIRE(state->host_weights.stats().misses == 1);
     }
     ggml_backend_buffer_free(cpu_buffer);
@@ -12303,7 +12305,7 @@ static void run_disjoint_transient_plan_packing_checks() {
     ggml_free(ctx);
 }
 
-static void run_command_weight_request_checks() {
+static void run_command_weight_demand_checks() {
     using namespace ggml::hrx;
     std::array<uint8_t, 512> source = {};
     CommandProgramBinding binding;
@@ -12359,7 +12361,6 @@ static void run_command_weight_request_checks() {
     CommandProgram commands;
     commands.initialization_commands.push_back(init);
     commands.commands.push_back(main);
-    const auto requests = build_command_program_weight_requests(commands);
     std::vector<CommandProgramBinding> current;
     for (int32_t value = 1; value <= 5; ++value) {
         auto next = binding;
@@ -12368,7 +12369,7 @@ static void run_command_weight_request_checks() {
     }
     const auto bindings = CommandProgramBindings::from_bindings(current);
     REQUIRE(bindings.valid());
-    const auto demands = bind_command_program_weight_demands(requests, bindings);
+    const auto demands = collect_command_program_weight_demands(commands, bindings);
     REQUIRE(demands.valid());
     REQUIRE(demands.weights.size() == 4);
     REQUIRE(demands.weights[0].request.name == "first-native");
@@ -12381,14 +12382,7 @@ static void run_command_weight_request_checks() {
     REQUIRE(demands.weights[1].source.length == 64);
     REQUIRE(demands.weights[3].source.length == 32);
     REQUIRE(demands.weights[3].source.input_size == 4);
-    const auto collected = collect_command_program_weight_demands(commands, bindings);
-    REQUIRE(collected.valid());
-    REQUIRE(collected.weights.size() == demands.weights.size());
-    REQUIRE(collected.weights[2].request.value == ValueId(2));
-
-    // Reuse the immutable plan with different live source metadata and allocation eligibility.
-    commands.initialization_commands.clear();
-    commands.commands.clear();
+    // Collect demand against the current source metadata and allocation eligibility.
     for (auto & next : current) {
         next.buffer = nullptr;
         next.host_data = source.data() + 32;
@@ -12399,8 +12393,8 @@ static void run_command_weight_request_checks() {
         next.source_offset = 32;
         next.source_capacity = source.size() - 16;
     }
-    const auto rebound = bind_command_program_weight_demands(
-        requests, CommandProgramBindings::from_bindings(current));
+    const auto rebound = collect_command_program_weight_demands(
+        commands, CommandProgramBindings::from_bindings(current));
     REQUIRE(rebound.valid());
     REQUIRE(rebound.weights.size() == 4);
     for (const auto & demand : rebound.weights) {
@@ -12420,35 +12414,34 @@ static void run_command_weight_request_checks() {
         next.weight = false;
         next.source_host_data = nullptr;
     }
-    const auto nonweights = bind_command_program_weight_demands(
-        requests, CommandProgramBindings::from_bindings(current));
+    const auto nonweights = collect_command_program_weight_demands(
+        commands, CommandProgramBindings::from_bindings(current));
     REQUIRE(nonweights.valid());
     REQUIRE(nonweights.weights.empty());
 
     CommandProgram native_program;
     native_program.initialization_commands.push_back(Command{});
     native_program.initialization_commands.back().bindings.push_back(native);
-    const auto native_requests = build_command_program_weight_requests(native_program);
     auto uploaded = binding;
     uploaded.source_host_data = nullptr;
-    const auto uploaded_demand = bind_command_program_weight_demands(
-        native_requests, CommandProgramBindings::from_bindings({ uploaded }));
+    const auto uploaded_demand = collect_command_program_weight_demands(
+        native_program, CommandProgramBindings::from_bindings({ uploaded }));
     REQUIRE(uploaded_demand.valid());
     REQUIRE(uploaded_demand.weights.empty());
-    const auto restored = bind_command_program_weight_demands(native_requests, bindings);
+    const auto restored = collect_command_program_weight_demands(native_program, bindings);
     REQUIRE(restored.valid());
     REQUIRE(restored.weights.size() == 1);
     REQUIRE(!restored.weights[0].requires_materialization);
     auto later_binding = binding;
     later_binding.identity = 99;
-    const auto first_binding = bind_command_program_weight_demands(
-        native_requests, CommandProgramBindings::from_bindings({ binding, later_binding }));
+    const auto first_binding = collect_command_program_weight_demands(
+        native_program, CommandProgramBindings::from_bindings({ binding, later_binding }));
     REQUIRE(first_binding.valid());
     REQUIRE(first_binding.weights.size() == 1);
     REQUIRE(first_binding.weights[0].source.identity == binding.identity);
 }
 
-static void run_command_weight_request_validation_checks() {
+static void run_command_weight_demand_validation_checks() {
     using namespace ggml::hrx;
     std::array<uint8_t, 128> source = {};
     CommandProgramBinding binding;
@@ -12476,9 +12469,8 @@ static void run_command_weight_request_validation_checks() {
         Command main;
         main.bindings.push_back(invalid_first ? valid : invalid_offset);
         commands.commands.push_back(main);
-        const auto requests = build_command_program_weight_requests(commands);
-        const auto demands = bind_command_program_weight_demands(
-            requests, CommandProgramBindings::from_bindings({ binding }));
+        const auto demands = collect_command_program_weight_demands(
+            commands, CommandProgramBindings::from_bindings({ binding }));
         REQUIRE(!demands.valid());
         REQUIRE(demands.status.errors().size() == 1);
         REQUIRE(demands.status.errors()[0].find("invalid transformed layout request") != std::string::npos);
@@ -12487,8 +12479,8 @@ static void run_command_weight_request_validation_checks() {
         REQUIRE(demands.weights[0].request.offset == 0);
         auto missing = binding;
         missing.source_host_data = nullptr;
-        const auto missing_source = bind_command_program_weight_demands(
-            requests, CommandProgramBindings::from_bindings({ missing }));
+        const auto missing_source = collect_command_program_weight_demands(
+            commands, CommandProgramBindings::from_bindings({ missing }));
         REQUIRE(!missing_source.valid());
         REQUIRE(missing_source.weights.empty());
         REQUIRE(missing_source.status.errors().size() == 2);
@@ -12496,11 +12488,11 @@ static void run_command_weight_request_validation_checks() {
             REQUIRE(error.find("no retained source") != std::string::npos);
         }
         missing.weight = false;
-        const auto nonweight = bind_command_program_weight_demands(
-            requests, CommandProgramBindings::from_bindings({ missing }));
+        const auto nonweight = collect_command_program_weight_demands(
+            commands, CommandProgramBindings::from_bindings({ missing }));
         REQUIRE(nonweight.valid());
         REQUIRE(nonweight.weights.empty());
-        const auto unbound = bind_command_program_weight_demands(requests, CommandProgramBindings{});
+        const auto unbound = collect_command_program_weight_demands(commands, CommandProgramBindings{});
         REQUIRE(unbound.valid());
         REQUIRE(unbound.weights.empty());
     }
@@ -12527,15 +12519,14 @@ static void run_command_weight_request_validation_checks() {
     Command init;
     init.bindings.push_back(valid);
     commands.initialization_commands.push_back(init);
-    const auto requests = build_command_program_weight_requests(commands);
     auto short_binding = binding;
     short_binding.length = valid.source_length - 1;
-    const auto too_short = bind_command_program_weight_demands(
-        requests, CommandProgramBindings::from_bindings({ short_binding }));
+    const auto too_short = collect_command_program_weight_demands(
+        commands, CommandProgramBindings::from_bindings({ short_binding }));
     REQUIRE(!too_short.valid());
     REQUIRE(too_short.weights.empty());
-    const auto restored = bind_command_program_weight_demands(
-        requests, CommandProgramBindings::from_bindings({ binding }));
+    const auto restored = collect_command_program_weight_demands(
+        commands, CommandProgramBindings::from_bindings({ binding }));
     REQUIRE(restored.valid());
     REQUIRE(restored.weights.size() == 1);
 }
@@ -14667,8 +14658,8 @@ static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
     suite.host_case("multiple_transient_plan", [] { run_multiple_transient_plan_checks(); });
     suite.host_case("disjoint_transient_plan_packing", [] { run_disjoint_transient_plan_packing_checks(); });
     suite.host_case("command_program_kernel_dump", [] { run_command_program_kernel_dump_checks(); });
-    suite.host_case("command_weight_requests", [] { run_command_weight_request_checks(); });
-    suite.host_case("command_weight_request_validation", [] { run_command_weight_request_validation_checks(); });
+    suite.host_case("command_weight_demands", [] { run_command_weight_demand_checks(); });
+    suite.host_case("command_weight_demand_validation", [] { run_command_weight_demand_validation_checks(); });
     suite.host_case("command_shape_hash", [] { run_command_shape_hash_checks(); });
     suite.host_case("graph_compute_mask", [] { run_graph_compute_mask_checks(); });
     suite.host_case("graph_program_cache_uid_mismatch", [] { run_graph_program_cache_uid_mismatch_checks(); });

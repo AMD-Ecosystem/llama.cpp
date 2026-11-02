@@ -24,7 +24,10 @@ struct PreparedCommandProgramCacheStats {
 
 struct PreparedCommandProgramCacheEntry {
     std::mutex mutex;
-    std::shared_ptr<CachedCommandProgramResources> resources;
+    // Release recorded handles before the prepared bindings they reference.
+    PreparedCommandProgram prepared;
+    RecordedCommandGraph   recorded;
+    bool                   ready = false;
 };
 
 struct PreparedCommandProgramCacheExecutionResult {
@@ -37,7 +40,6 @@ struct PreparedCommandProgramCacheExecutionResult {
     uint64_t            graph_replay_total_ns                     = 0;
     size_t              graph_replay_dispatches                   = 0;
     bool                graph_replay_transient_allocation_changed = false;
-    std::shared_ptr<CachedCommandProgramResources> execution_resources;
 };
 
 class PreparedCommandProgramCache {

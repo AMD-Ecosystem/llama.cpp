@@ -3,39 +3,6 @@
 #include "ggml-backend-impl.h"
 #include "ggml.h"
 
-#include <mutex>
-#include <unordered_map>
-
-namespace {
-
-std::mutex foreign_host_generations_mutex;
-// GGML does not notify HRX when a foreign backend destroys a buffer. The source lifetime contract holds while an
-// HRX backend is alive, and the table is retired with the last such backend.
-std::unordered_map<uint64_t, uint64_t> foreign_host_generations;
-size_t active_hrx_backends = 0;
-
-uint64_t foreign_host_generation(uint64_t identity) {
-    std::lock_guard<std::mutex> lock(foreign_host_generations_mutex);
-    const auto found = foreign_host_generations.find(identity);
-    return found == foreign_host_generations.end() ? 1 : found->second;
-}
-
-}  // namespace
-
-void ggml_backend_hrx_foreign_host_backend_started() {
-    std::lock_guard<std::mutex> lock(foreign_host_generations_mutex);
-    ++active_hrx_backends;
-}
-
-void ggml_backend_hrx_foreign_host_backend_stopped() {
-    std::lock_guard<std::mutex> lock(foreign_host_generations_mutex);
-    GGML_ASSERT(active_hrx_backends > 0);
-    --active_hrx_backends;
-    if (active_hrx_backends == 0) {
-        foreign_host_generations.clear();
-    }
-}
-
 ggml_backend_hrx_buffer_context * ggml_backend_hrx_buffer_context_from_buffer(ggml_backend_buffer_t buffer) {
     return static_cast<ggml_backend_hrx_buffer_context *>(buffer->context);
 }
@@ -104,7 +71,7 @@ bool ggml_backend_hrx_resolve_value_buffer(const ggml_tensor * tensor, ggml::hrx
         binding.length                = ggml_nbytes(tensor);
         binding.identity =
             buffer_address ^ (base_address + 0x9e3779b97f4a7c15ull + (buffer_address << 6) + (buffer_address >> 2));
-        binding.generation = foreign_host_generation(binding.identity);
+        binding.generation = 1;
         binding.capacity   = capacity;
         binding.weight     = ggml_backend_buffer_get_usage(buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
         // Standard GGUF weights are immutable, so their native copy can use the shared weight cache.
@@ -164,22 +131,7 @@ bool ggml_backend_hrx_get_retained_region(const ggml_tensor * tensor, ggml_backe
         region.offset = binding.offset;
     }
     region.length     = ggml_nbytes(tensor);
-    region.type       = tensor->type;
-    for (size_t i = 0; i < GGML_MAX_DIMS; ++i) {
-        region.ne[i] = tensor->ne[i];
-        region.nb[i] = tensor->nb[i];
-    }
     return true;
-}
-
-void ggml_backend_hrx_mark_foreign_host_region_written(const ggml_tensor * tensor) {
-    ggml_backend_hrx_imported_region region = {};
-    if (!ggml_backend_hrx_get_retained_region(tensor, region)) {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(foreign_host_generations_mutex);
-    uint64_t & generation = foreign_host_generations[region.identity];
-    generation = generation == 0 ? 2 : generation + 1;
 }
 
 bool ggml_backend_hrx_get_imported_region(const ggml_tensor * tensor, ggml_backend_hrx_imported_region & region) {

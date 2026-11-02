@@ -67,18 +67,6 @@ struct CommandProgramExecutionContext {
     CompileTraceExecution * compile_trace = nullptr;
 };
 
-// Requests contain command metadata only. Every occurrence remains available for validation before
-// its deduplication group is emitted, since same-layout requests can differ in validity.
-struct CommandProgramWeightRequest {
-    CommandBinding binding;
-    size_t         group = 0;
-};
-
-struct CommandProgramWeightRequests {
-    std::vector<CommandProgramWeightRequest> requests;
-    size_t                                  group_count = 0;
-};
-
 struct CommandProgramWeightDemand {
     CommandBinding   request;
     HostWeightSource source;
@@ -91,10 +79,6 @@ struct CommandProgramWeightDemands {
 
     bool valid() const { return status.success(); }
 };
-
-CommandProgramWeightRequests build_command_program_weight_requests(const CommandProgram & commands);
-CommandProgramWeightDemands bind_command_program_weight_demands(const CommandProgramWeightRequests & requests,
-                                                               const CommandProgramBindings & bindings);
 
 CommandProgramWeightDemands collect_command_program_weight_demands(const CommandProgram &         commands,
                                                                   const CommandProgramBindings & bindings);
@@ -138,8 +122,7 @@ struct PreparedCommandProgram {
     std::vector<PreparedCommand>               initialization_commands;
     std::vector<PreparedCommand>               commands;
     std::vector<HostStagingBuffer>             host_staging;
-    std::shared_ptr<const std::vector<HostWeightLease>> resident_host_weights =
-        std::make_shared<const std::vector<HostWeightLease>>();
+    std::vector<HostWeightLease>               resident_host_weights;
     std::vector<PreparedProgramConstantBuffer> program_constants;
     Status                                     status;
     uint64_t                                   bound_transient_arena_allocation_id = kInvalidTransientArenaAllocationId;
@@ -151,8 +134,6 @@ struct RecordedCommandGraph {
     hrx_graph_t      graph                               = nullptr;
     hrx_graph_exec_t exec                                = nullptr;
     std::vector<hrx_buffer_t>     retained_buffers;
-    std::shared_ptr<const std::vector<HostWeightLease>> resident_host_weights =
-        std::make_shared<const std::vector<HostWeightLease>>();
     std::vector<hrx_executable_t> retained_executables;
     uint64_t         bound_transient_arena_allocation_id = kInvalidTransientArenaAllocationId;
     size_t           dispatch_count                      = 0;
@@ -168,12 +149,6 @@ struct RecordedCommandGraph {
     RecordedCommandGraph & operator=(const RecordedCommandGraph &) = delete;
 
     bool valid() const { return status.success() && exec != nullptr; }
-};
-
-// Cached programs own their bindings across submissions; recorded handles are released before prepared leases.
-struct CachedCommandProgramResources {
-    PreparedCommandProgram prepared;
-    RecordedCommandGraph   recorded;
 };
 
 struct RecordedCommandGraphExecutionResult {

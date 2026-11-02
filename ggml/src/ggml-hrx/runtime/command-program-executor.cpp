@@ -111,7 +111,6 @@ RecordedCommandGraph::RecordedCommandGraph(RecordedCommandGraph && other) noexce
     graph(std::exchange(other.graph, nullptr)),
     exec(std::exchange(other.exec, nullptr)),
     retained_buffers(std::move(other.retained_buffers)),
-    resident_host_weights(std::move(other.resident_host_weights)),
     retained_executables(std::move(other.retained_executables)),
     bound_transient_arena_allocation_id(other.bound_transient_arena_allocation_id),
     dispatch_count(other.dispatch_count),
@@ -137,7 +136,6 @@ RecordedCommandGraph & RecordedCommandGraph::operator=(RecordedCommandGraph && o
         graph                                = std::exchange(other.graph, nullptr);
         exec                                 = std::exchange(other.exec, nullptr);
         retained_buffers                          = std::move(other.retained_buffers);
-        resident_host_weights                     = std::move(other.resident_host_weights);
         retained_executables                      = std::move(other.retained_executables);
         bound_transient_arena_allocation_id  = other.bound_transient_arena_allocation_id;
         dispatch_count                       = other.dispatch_count;
@@ -750,52 +748,109 @@ static bool same_weight_request(const CommandBinding & lhs, const CommandBinding
     return same_value && same_layout && same_transformation;
 }
 
-static void append_weight_requests(const std::vector<Command> & commands,
-                                   const std::unordered_map<int32_t, GraphValueAccess> & access_by_value,
-                                   std::unordered_map<int32_t, std::vector<size_t>> & groups_by_value,
-                                   CommandProgramWeightRequests & result) {
-    for (const Command & command : commands) {
-        for (const CommandBinding & request : command.bindings) {
-            const bool graph_value = request.origin == CommandBindingOrigin::GraphValue;
-            const bool reads = request.access != ResourceAccess::Write;
-            const bool eligible_access = graph_value && reads;
-            if (!eligible_access) {
-                continue;
-            }
-            const auto found_access = access_by_value.find(request.value.value);
-            const bool value_has_access = found_access != access_by_value.end();
-            const bool value_is_written = value_has_access && found_access->second.write;
-            if (value_is_written) {
-                continue;
-            }
-            auto & groups = groups_by_value[request.value.value];
-            const auto found_group = std::find_if(groups.begin(), groups.end(), [&](size_t index) {
-                return same_weight_request(result.requests[index].binding, request);
-            });
-            size_t group;
-            if (found_group == groups.end()) {
-                group = result.group_count++;
-                groups.push_back(result.requests.size());
-            } else {
-                group = result.requests[*found_group].group;
-            }
-            result.requests.push_back({ request, group });
-        }
+static CommandProgramWeightDemands collect_weight_demands(
+    const CommandProgram & commands,
+    const CommandProgramBindings & bindings,
+    const std::unordered_map<int32_t, GraphValueAccess> & access_by_value) {
+    CommandProgramWeightDemands result;
+    std::unordered_map<int32_t, const CommandProgramBinding *> bindings_by_value;
+    bindings_by_value.reserve(bindings.bindings().size());
+    for (const CommandProgramBinding & binding : bindings.bindings()) {
+        bindings_by_value.try_emplace(binding.value.value, &binding);
     }
+    std::unordered_map<int32_t, std::vector<size_t>> demands_by_value;
+    auto collect = [&](const std::vector<Command> & command_list) {
+        for (const Command & command : command_list) {
+            for (const CommandBinding & request : command.bindings) {
+                const bool graph_value = request.origin == CommandBindingOrigin::GraphValue;
+                const bool reads = request.access != ResourceAccess::Write;
+                const bool eligible_access = graph_value && reads;
+                if (!eligible_access) {
+                    continue;
+                }
+                const auto found_access = access_by_value.find(request.value.value);
+                const bool value_has_access = found_access != access_by_value.end();
+                const bool value_is_written = value_has_access && found_access->second.write;
+                if (value_is_written) {
+                    continue;
+                }
+                const auto found_binding = bindings_by_value.find(request.value.value);
+                const CommandProgramBinding * binding =
+                    found_binding != bindings_by_value.end() ? found_binding->second : nullptr;
+                const bool bound_weight = binding != nullptr && binding->weight;
+                if (!bound_weight) {
+                    continue;
+                }
+                const bool transformed = request.layout != kNativeWeightLayout;
+                const bool retained_source = binding->source_host_data != nullptr;
+                const bool missing_transformed_source = transformed && !retained_source;
+                if (missing_transformed_source) {
+                    result.status.log("weight value %d has no retained source for transformed layout %s",
+                                      request.value.value, request.layout.c_str());
+                    continue;
+                }
+                if (!retained_source) {
+                    continue;
+                }
+                if (transformed) {
+                    const bool has_type = request.source_type != GGML_TYPE_COUNT;
+                    const bool has_input_size = request.input_size > 0;
+                    const bool has_output_size = request.output_size > 0;
+                    const bool valid_shape = has_type && has_input_size && has_output_size;
+                    const bool starts_at_source = request.offset == 0;
+                    const bool has_source_length = request.source_length != 0;
+                    const bool source_fits = request.source_length <= binding->length;
+                    const bool has_output_length = request.length != 0;
+                    const bool valid_range = starts_at_source && has_source_length && source_fits && has_output_length;
+                    const bool valid_transformation = valid_shape && valid_range;
+                    if (!valid_transformation) {
+                        result.status.log("weight value %d has invalid transformed layout request %s",
+                                          request.value.value, request.layout.c_str());
+                        continue;
+                    }
+                }
+
+                // Validate every occurrence before deduplication, including malformed duplicates.
+                auto & indices = demands_by_value[request.value.value];
+                const auto found = std::find_if(indices.begin(), indices.end(), [&](size_t index) {
+                    return same_weight_request(result.weights[index].request, request);
+                });
+                if (found != indices.end()) {
+                    continue;
+                }
+                CommandProgramWeightDemand demand;
+                demand.request = request;
+                demand.requires_materialization = binding->requires_materialization() || transformed;
+                demand.source.host_data = binding->source_host_data;
+                demand.source.identity = binding->identity;
+                demand.source.generation = binding->generation;
+                demand.source.capacity = binding->source_capacity;
+                demand.source.offset = binding->source_offset;
+                demand.source.length = transformed ? request.source_length : binding->length;
+                demand.source.materialized_length = transformed ? request.length : binding->length;
+                demand.source.layout = request.layout;
+                demand.source.source_type = transformed ? request.source_type : GGML_TYPE_COUNT;
+                demand.source.input_size = request.input_size;
+                demand.source.output_size = request.output_size;
+                indices.push_back(result.weights.size());
+                result.weights.push_back(std::move(demand));
+            }
+        }
+    };
+    collect(commands.initialization_commands);
+    collect(commands.commands);
+    return result;
 }
 
 static CommandProgramBindings materialize_host_bindings(const CommandProgramExecutionContext & context,
                                                         const CommandProgram &                 commands,
                                                         const CommandProgramBindings &         bindings,
                                                         PreparedCommandProgram &               prepared) {
-    // Publish the owner before acquisition so partial preparation retains every acquired lease.
-    auto resident_weights = std::make_shared<std::vector<HostWeightLease>>();
-    prepared.resident_host_weights = resident_weights;
     std::vector<CommandProgramBinding> materialized;
     Status                             status;
     materialized.reserve(bindings.bindings().size());
     const std::unordered_map<int32_t, GraphValueAccess> access_by_value = collect_graph_value_access(commands);
-    const CommandProgramWeightDemands demands = collect_command_program_weight_demands(commands, bindings);
+    const CommandProgramWeightDemands demands = collect_weight_demands(commands, bindings, access_by_value);
     status.append(demands.status);
     for (const CommandProgramBinding & binding : bindings.bindings()) {
         const auto             found_access = access_by_value.find(binding.value.value);
@@ -837,7 +892,7 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
                     device_binding.offset = 0;
                     device_binding.length = resident.lease.length();
                     device_binding.capacity = resident.lease.length();
-                    resident_weights->push_back(std::move(resident.lease));
+                    prepared.resident_host_weights.push_back(std::move(resident.lease));
                 }
                 materialized.push_back(std::move(device_binding));
             }
@@ -1655,8 +1710,6 @@ static void retain_prepared_command_list_resources(const std::vector<PreparedCom
 static void retain_prepared_command_graph_resources(const PreparedCommandProgram &      prepared,
                                                     const TransientArenaAllocationRef & allocation,
                                                     RecordedCommandGraph &              recorded) {
-    // The graph also retains raw handles, but accounting follows the representation lease until both owners retire.
-    recorded.resident_host_weights = prepared.resident_host_weights;
     std::unordered_map<hrx_buffer_t, bool>     retained_buffers;
     std::unordered_map<hrx_executable_t, bool> retained_executables;
     if (allocation.buffer != nullptr) {
@@ -1788,85 +1841,9 @@ static bool execute_prepared_command_prefix_via_graph(const CommandProgramExecut
 
 }  // namespace
 
-CommandProgramWeightRequests build_command_program_weight_requests(const CommandProgram & commands) {
-    CommandProgramWeightRequests result;
-    std::unordered_map<int32_t, std::vector<size_t>> groups_by_value;
-    const auto access_by_value = collect_graph_value_access(commands);
-    append_weight_requests(commands.initialization_commands, access_by_value, groups_by_value, result);
-    append_weight_requests(commands.commands, access_by_value, groups_by_value, result);
-    return result;
-}
-
-CommandProgramWeightDemands bind_command_program_weight_demands(const CommandProgramWeightRequests & requests,
-                                                               const CommandProgramBindings & bindings) {
-    CommandProgramWeightDemands result;
-    std::unordered_map<int32_t, const CommandProgramBinding *> bindings_by_value;
-    bindings_by_value.reserve(bindings.bindings().size());
-    for (const CommandProgramBinding & binding : bindings.bindings()) {
-        bindings_by_value.try_emplace(binding.value.value, &binding);
-    }
-    std::vector<uint8_t> emitted_groups(requests.group_count, 0);
-    result.weights.reserve(requests.group_count);
-    for (const CommandProgramWeightRequest & entry : requests.requests) {
-        const CommandBinding & request = entry.binding;
-        const auto found_binding = bindings_by_value.find(request.value.value);
-        const CommandProgramBinding * binding =
-            found_binding != bindings_by_value.end() ? found_binding->second : nullptr;
-        const bool bound_weight = binding != nullptr && binding->weight;
-        if (!bound_weight) {
-            continue;
-        }
-        const bool transformed = request.layout != kNativeWeightLayout;
-        const bool retained_source = binding->source_host_data != nullptr;
-        const bool missing_transformed_source = transformed && !retained_source;
-        if (missing_transformed_source) {
-            result.status.log("weight value %d has no retained source for transformed layout %s",
-                              request.value.value, request.layout.c_str());
-            continue;
-        }
-        if (!retained_source) {
-            continue;
-        }
-        if (transformed) {
-            const bool valid_shape = request.source_type != GGML_TYPE_COUNT && request.input_size > 0 &&
-                                     request.output_size > 0;
-            const bool valid_range = request.offset == 0 && request.source_length != 0 &&
-                                     request.source_length <= binding->length && request.length != 0;
-            const bool valid_transformation = valid_shape && valid_range;
-            if (!valid_transformation) {
-                result.status.log("weight value %d has invalid transformed layout request %s",
-                                  request.value.value, request.layout.c_str());
-                continue;
-            }
-        }
-        // Validation precedes deduplication: an invalid duplicate must still report its error,
-        // and an invalid first occurrence must not suppress a later valid request.
-        if (emitted_groups[entry.group]) {
-            continue;
-        }
-        emitted_groups[entry.group] = 1;
-        CommandProgramWeightDemand demand;
-        demand.request = request;
-        demand.requires_materialization = binding->requires_materialization() || transformed;
-        demand.source.host_data = binding->source_host_data;
-        demand.source.identity = binding->identity;
-        demand.source.generation = binding->generation;
-        demand.source.capacity = binding->source_capacity;
-        demand.source.offset = binding->source_offset;
-        demand.source.length = transformed ? request.source_length : binding->length;
-        demand.source.materialized_length = transformed ? request.length : binding->length;
-        demand.source.layout = request.layout;
-        demand.source.source_type = transformed ? request.source_type : GGML_TYPE_COUNT;
-        demand.source.input_size = request.input_size;
-        demand.source.output_size = request.output_size;
-        result.weights.push_back(std::move(demand));
-    }
-    return result;
-}
-
 CommandProgramWeightDemands collect_command_program_weight_demands(const CommandProgram & commands,
                                                                   const CommandProgramBindings & bindings) {
-    return bind_command_program_weight_demands(build_command_program_weight_requests(commands), bindings);
+    return collect_weight_demands(commands, bindings, collect_graph_value_access(commands));
 }
 
 bool debug_serial_command_execution_enabled() {
