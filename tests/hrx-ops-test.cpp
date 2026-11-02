@@ -3441,7 +3441,9 @@ static void run_weight_persistence_overlap_case() {
     REQUIRE(ggml_backend_hrx_get_cache_stats(backend, &warmed));
     REQUIRE(warmed.weight_live_allocations == 2);
     REQUIRE(warmed.weight_duplicate_warnings >= cross_queued.weight_duplicate_warnings);
-    REQUIRE(state->prepared_programs.stats().builds == 0);
+    // Graph execution and the direct submission helper share the warmed native entry.
+    REQUIRE(state->prepared_programs.stats().builds == 3);
+    REQUIRE(state->prepared_programs.stats().hits >= 1);
 
     // A cold preparation failure must leave an already queued native reader's lease intact.
     REQUIRE(ggml_backend_graph_compute(backend, hrx_native_graph) == GGML_STATUS_SUCCESS);
