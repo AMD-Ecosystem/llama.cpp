@@ -9249,7 +9249,7 @@ static void run_prefill_value_projection_cache_dispatch_checks() {
     auto check_case = [&](ggml_type weight_type, int64_t input_size, int64_t output_size, int64_t token_count,
                           ggml_type cache_type, int64_t cache_row_count, bool publish_f16_alternate,
                           bool set_rows_available, bool disable, bool expect_fusion, bool observe_projection = false,
-                          bool alias_weight = false) {
+                          bool alias_weight = false, bool native_weight = false) {
         ggml_init_params params = {};
         params.mem_size         = 4 * 1024 * 1024;
         params.no_alloc         = true;
@@ -9283,6 +9283,13 @@ static void run_prefill_value_projection_cache_dispatch_checks() {
         ggml_cgraph * graph = ggml_new_graph(ctx);
         REQUIRE(graph != nullptr);
         ggml_build_forward_expand(graph, output);
+        ggml_backend_buffer_t native_buffer = nullptr;
+        if (native_weight) {
+            native_buffer = ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), ggml_nbytes(weight_storage));
+            REQUIRE(native_buffer != nullptr);
+            REQUIRE(ggml_backend_tensor_alloc(native_buffer, weight_storage,
+                ggml_backend_buffer_get_base(native_buffer)) == GGML_STATUS_SUCCESS);
+        }
         ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
         REQUIRE(imported.valid());
 
@@ -9318,6 +9325,17 @@ static void run_prefill_value_projection_cache_dispatch_checks() {
         const bool                  fused =
             kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:llm_attention_v_matmul_set_rows_tiled_f32_f32";
         REQUIRE(fused == expect_fusion);
+        const bool q6_weight = weight_type == GGML_TYPE_Q6_K;
+        const bool short_prompt = token_count == 64;
+        const bool direct_weight = !alias_weight;
+        const bool row64_weight = !native_weight;
+        const bool expect_short_q6 = q6_weight && short_prompt && direct_weight && row64_weight;
+        if (expect_short_q6) {
+            REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) ==
+                "loom_libs:ggml_mul_mat_q6_k_f32_wmma_prefill_wave32");
+            REQUIRE(dispatch.bindings[1].layout == "q6k-packed-k256-row64-scalerow");
+            require_compile_parameter(dispatch, "ggml.mul_mat_q6_k_packed.token_capacity", "64");
+        }
         if (expect_fusion) {
             REQUIRE(match.dispatches.size() == 1);
             REQUIRE(match.covered_nodes.size() == 4);
@@ -9325,8 +9343,9 @@ static void run_prefill_value_projection_cache_dispatch_checks() {
             REQUIRE(dispatch.bindings[0].value == plan.transients.front().value);
             REQUIRE(dispatch.bindings[0].length == plan.transients.front().size);
             require_compile_parameter(dispatch, "ggml.mul_mat.activation_format", std::to_string(GGML_TYPE_F16));
-            require_compile_parameter(dispatch, "llm.attention_qkv.weight_format", "46");
-            REQUIRE(dispatch.bindings[1].layout == "q6k-packed-k256-row64-scalerow");
+            require_compile_parameter(dispatch, "llm.attention_qkv.weight_format", native_weight ? "6" : "46");
+            REQUIRE(dispatch.bindings[1].layout ==
+                (native_weight ? "ggml-native" : "q6k-packed-k256-row64-scalerow"));
             require_compile_parameter(dispatch, "llm.attention_qkv.input_size", "1536");
             require_compile_parameter(dispatch, "llm.attention_qkv.output_size", "256");
             require_compile_parameter(dispatch, "llm.attention_qkv.cache_row_count", "512");
@@ -9344,10 +9363,12 @@ static void run_prefill_value_projection_cache_dispatch_checks() {
             REQUIRE(commands.commands.front().bindings[2].name == "indices");
             REQUIRE(commands.commands.front().bindings[3].name == "cache");
         }
+        ggml_backend_buffer_free(native_buffer);
         ggml_free(ctx);
     };
 
-    check_case(GGML_TYPE_Q6_K, 1536, 256, 64, GGML_TYPE_F16, 512, true, true, false, true);
+    check_case(GGML_TYPE_Q6_K, 1536, 256, 64, GGML_TYPE_F16, 512, true, true, false, false);
+    check_case(GGML_TYPE_Q6_K, 1536, 256, 64, GGML_TYPE_F16, 512, true, true, false, true, false, false, true);
     check_case(GGML_TYPE_Q6_K, 1536, 256, 64, GGML_TYPE_F16, 512, true, true, true, false);
     check_case(GGML_TYPE_Q6_K, 1536, 256, 64, GGML_TYPE_F16, 512, false, true, false, false);
     check_case(GGML_TYPE_Q4_K, 1536, 256, 64, GGML_TYPE_F16, 512, true, true, false, false);
