@@ -3376,7 +3376,8 @@ static void run_weight_persistence_overlap_case() {
             &state->host_transfers, &state->host_weights, &state->device->host_buffers,
             &state->graph_replay_state,
         };
-        auto execution = lookup.program->execute_with_result(context, bindings, true);
+        auto execution = state->prepared_programs.execute_with_result(
+            context, lookup.program->uid(), lookup.program->command_shape_hash(), lookup.program->commands(), bindings);
         REQUIRE(execution.success);
         REQUIRE(execution.execution_resources->recorded.valid());
         REQUIRE(execution.execution_resources->recorded.resident_host_weights ==
@@ -3696,10 +3697,9 @@ static void run_failed_submission_weight_lifetime_case(bool uncached = false) {
         &ggml::hrx::get_qwen_kernel_corpus(), &state->kernel_executables, &state->transient_arena,
         &state->host_transfers, &state->host_weights, &state->device->host_buffers, &state->graph_replay_state,
     };
-    auto execution = uncached ?
-        state->prepared_programs.execute_with_result(execution_context, 0, packed_lookup.program->command_shape_hash(),
-                                                     packed_lookup.program->commands(), packed_bindings) :
-        packed_lookup.program->execute_with_result(execution_context, packed_bindings, true);
+    auto execution = state->prepared_programs.execute_with_result(
+        execution_context, uncached ? 0 : packed_lookup.program->uid(), packed_lookup.program->command_shape_hash(),
+        packed_lookup.program->commands(), packed_bindings);
     REQUIRE(execution.success);
     REQUIRE(!execution.execution_resources->prepared.host_staging.empty());
     REQUIRE(execution.execution_resources->recorded.valid() == !uncached);
@@ -3756,6 +3756,7 @@ static void run_failed_submission_weight_lifetime_case(bool uncached = false) {
     REQUIRE(completed.allocation_count == 1);
     REQUIRE(completed.resident_bytes == packed_source.materialized_length);
     state->graph_programs.clear();
+    state->prepared_programs.clear();
     REQUIRE(sole_resource.expired());
     REQUIRE(state->host_weights.stats().allocation_count == 1);
     state->host_weights.clear();
@@ -4088,7 +4089,8 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
     auto staging_bindings = bindings_for_match(staging_match);
     REQUIRE(staging_bindings.valid());
     {
-        const auto graph_replay = lookup.program->execute_with_result(replay_context, staging_bindings, false);
+        const auto graph_replay = backend_state->prepared_programs.execute_with_result(
+            replay_context, lookup.program->commands(), staging_bindings, lookup.program->prepared_entry());
         REQUIRE(graph_replay.success);
         const char * replay_setting = std::getenv("GGML_HRX_DISABLE_GRAPH_REPLAY");
         const bool replay_disabled = replay_setting != nullptr && replay_setting[0] != '\0' && replay_setting[0] != '0';
@@ -4446,9 +4448,9 @@ static void run_mixed_weight_layout_program_case(ggml_type weight_type) {
     const auto repeated = state->host_weights.stats();
     REQUIRE(repeated.misses == first.misses);
     REQUIRE(repeated.duplicate_warnings == first.duplicate_warnings);
-    const auto repeated_graph_stats = state->graph_programs.stats();
-    REQUIRE(repeated_graph_stats.prepared_program_hits > 0);
-    REQUIRE(repeated_graph_stats.prepared_program_builds >= 1);
+    const auto repeated_prepared_stats = state->prepared_programs.stats();
+    REQUIRE(repeated_prepared_stats.hits > 0);
+    REQUIRE(repeated_prepared_stats.builds >= 1);
     ggml_backend_hrx_cache_stats public_repeated = {};
     REQUIRE(ggml_backend_hrx_get_cache_stats(backend, &public_repeated));
     REQUIRE(public_repeated.weight_duplicate_warnings == public_first.weight_duplicate_warnings);

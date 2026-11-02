@@ -22,6 +22,11 @@ struct PreparedCommandProgramCacheStats {
     uint64_t hits   = 0;
 };
 
+struct PreparedCommandProgramCacheEntry {
+    std::mutex mutex;
+    std::shared_ptr<CachedCommandProgramResources> resources;
+};
+
 struct PreparedCommandProgramCacheExecutionResult {
     bool                success = false;
     Status              status;
@@ -37,6 +42,19 @@ struct PreparedCommandProgramCacheExecutionResult {
 
 class PreparedCommandProgramCache {
   public:
+    // Full physical bindings select the entry; a validated graph instance can retain it for warm execution.
+    std::shared_ptr<PreparedCommandProgramCacheEntry> get_or_create(
+        const CommandProgramExecutionContext & context,
+        uint64_t graph_uid,
+        uint64_t command_shape_hash,
+        const CommandProgramBindings & bindings);
+
+    PreparedCommandProgramCacheExecutionResult execute_with_result(
+        const CommandProgramExecutionContext & context,
+        const CommandProgram & commands,
+        const CommandProgramBindings & bindings,
+        const std::shared_ptr<PreparedCommandProgramCacheEntry> & entry);
+
     bool execute(const CommandProgramExecutionContext & context,
                  uint64_t                               graph_uid,
                  const std::string &                    command_shape,
@@ -81,16 +99,11 @@ class PreparedCommandProgramCache {
                   uint64_t                               command_shape_hash,
                   const CommandProgramBindings &         bindings) const;
 
-    struct Entry {
-        std::mutex             mutex;
-        std::shared_ptr<CachedCommandProgramResources> resources;
-    };
-
     void record_build();
     void record_hit();
 
     mutable std::mutex                                       mutex_;
-    std::unordered_map<Key, std::shared_ptr<Entry>, KeyHash> programs_;
+    std::unordered_map<Key, std::shared_ptr<PreparedCommandProgramCacheEntry>, KeyHash> programs_;
     PreparedCommandProgramCacheStats                         stats_;
 };
 

@@ -43,9 +43,7 @@ struct CommandProgramBinding {
 CommandProgramBinding make_command_program_binding(
     ValueId value, const ValueBufferBinding & buffer, bool empty_value);
 
-struct CommandProgramBindingsFingerprint {
-    std::string value;
-};
+
 
 struct CommandProgramBindingsHash {
     uint64_t value = 0;
@@ -71,6 +69,5 @@ class CommandProgramBindings {
 };
 
 CommandProgramBindingsHash        command_program_bindings_hash(const CommandProgramBindings & bindings);
-CommandProgramBindingsFingerprint command_program_bindings_fingerprint(const CommandProgramBindings & bindings);
 
 }  // namespace ggml::hrx

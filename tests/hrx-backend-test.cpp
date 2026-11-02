@@ -1015,9 +1015,7 @@ static void run_graph_import_checks() {
     REQUIRE(b_binding->length == b_value->byte_count);
     REQUIRE(runtime_bindings.find(ggml::hrx::ValueId(123456)) == nullptr);
 
-    const ggml::hrx::CommandProgramBindingsFingerprint runtime_fingerprint =
-        ggml::hrx::command_program_bindings_fingerprint(runtime_bindings);
-    REQUIRE(!runtime_fingerprint.value.empty());
+    const auto runtime_hash = ggml::hrx::command_program_bindings_hash(runtime_bindings);
 
     ggml::hrx::ValueMap changed_identity = imported.graph.values();
     REQUIRE(changed_identity.bind_buffer(
@@ -1025,8 +1023,8 @@ static void run_graph_import_checks() {
     const ggml::hrx::CommandProgramBindings changed_identity_bindings =
         ggml::hrx::CommandProgramBindings::from_value_map(changed_identity);
     REQUIRE(changed_identity_bindings.valid());
-    REQUIRE(ggml::hrx::command_program_bindings_fingerprint(changed_identity_bindings).value !=
-            runtime_fingerprint.value);
+    REQUIRE(ggml::hrx::command_program_bindings_hash(changed_identity_bindings).value !=
+            runtime_hash.value);
 
     REQUIRE(!a_binding->weight);
     std::vector<ggml::hrx::CommandProgramBinding> changed_generation_values = runtime_bindings.bindings();
@@ -1038,9 +1036,7 @@ static void run_graph_import_checks() {
         ggml::hrx::CommandProgramBindings::from_bindings(std::move(changed_generation_values));
     REQUIRE(changed_generation_bindings.valid());
     REQUIRE(ggml::hrx::command_program_bindings_hash(changed_generation_bindings).value ==
-            ggml::hrx::command_program_bindings_hash(runtime_bindings).value);
-    REQUIRE(ggml::hrx::command_program_bindings_fingerprint(changed_generation_bindings).value ==
-            runtime_fingerprint.value);
+            runtime_hash.value);
 
     ggml::hrx::ValueMap changed_capacity = imported.graph.values();
     REQUIRE(changed_capacity.bind_buffer(
@@ -1048,8 +1044,8 @@ static void run_graph_import_checks() {
     const ggml::hrx::CommandProgramBindings changed_capacity_bindings =
         ggml::hrx::CommandProgramBindings::from_value_map(changed_capacity);
     REQUIRE(changed_capacity_bindings.valid());
-    REQUIRE(ggml::hrx::command_program_bindings_fingerprint(changed_capacity_bindings).value !=
-            runtime_fingerprint.value);
+    REQUIRE(ggml::hrx::command_program_bindings_hash(changed_capacity_bindings).value !=
+            runtime_hash.value);
 
     const ggml::hrx::CommandProgram commands = ggml::hrx::build_command_program(
         imported.graph, scheduler.plan(), ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
@@ -1182,7 +1178,7 @@ static void run_graph_import_checks() {
     REQUIRE(staging_binding != nullptr);
     REQUIRE(staging_binding->host_data == host_storage.data());
     REQUIRE(staging_binding->source_host_data == nullptr);
-    REQUIRE(ggml::hrx::command_program_bindings_fingerprint(host_bindings).value != runtime_fingerprint.value);
+    REQUIRE(ggml::hrx::command_program_bindings_hash(host_bindings).value != runtime_hash.value);
     std::vector<ggml::hrx::CommandProgramBinding> changed_weight_values = host_bindings.bindings();
     auto changed_weight = std::find_if(changed_weight_values.begin(), changed_weight_values.end(),
                                        [&](const auto & binding) { return binding.value == a_value->id; });
@@ -1193,8 +1189,6 @@ static void run_graph_import_checks() {
     REQUIRE(changed_weight_bindings.valid());
     REQUIRE(ggml::hrx::command_program_bindings_hash(changed_weight_bindings).value !=
             ggml::hrx::command_program_bindings_hash(host_bindings).value);
-    REQUIRE(ggml::hrx::command_program_bindings_fingerprint(changed_weight_bindings).value !=
-            ggml::hrx::command_program_bindings_fingerprint(host_bindings).value);
 
     resolved = ggml::hrx::resolve_command_program_bindings(commands, missing_bindings);
     REQUIRE(!resolved.valid());
@@ -11769,7 +11763,9 @@ static void run_zero_output_unused_weight_staging(bool direct_execution) {
         REQUIRE(ggml_backend_graph_compute(cpu, cpu_graph) == GGML_STATUS_SUCCESS);
         std::vector<float> expected(width);
         ggml_backend_tensor_get(cpu_output, expected.data(), 0, ggml_nbytes(cpu_output));
-        auto execution = lookup.program->execute_with_result(execution_context, bindings, true);
+        auto execution = state->prepared_programs.execute_with_result(
+            execution_context, lookup.program->uid(), lookup.program->command_shape_hash(),
+            lookup.program->commands(), bindings);
         REQUIRE(execution.success);
         ggml_backend_synchronize(backend);
         const auto & prepared = execution.execution_resources->prepared;
@@ -11783,8 +11779,8 @@ static void run_zero_output_unused_weight_staging(bool direct_execution) {
         // The vector matmul declares both host input and output as reads.
         const size_t staging_upload_bytes = ggml_nbytes(input) + ggml_nbytes(output);
         REQUIRE(state->host_transfers.stats().upload_bytes == weight_bytes + (iteration + 1) * staging_upload_bytes);
-        REQUIRE(lookup.program->prepared_stats().builds == 1);
-        REQUIRE(lookup.program->prepared_stats().hits == static_cast<uint64_t>(iteration));
+        REQUIRE(state->prepared_programs.stats().builds == 1);
+        REQUIRE(state->prepared_programs.stats().hits == static_cast<uint64_t>(iteration));
         const auto expected_event = direct_execution ? ggml::hrx::HrxGraphReplayEvent::Disabled :
             (iteration == 0 ? ggml::hrx::HrxGraphReplayEvent::MissBuild : ggml::hrx::HrxGraphReplayEvent::Hit);
         REQUIRE(execution.graph_replay_event == expected_event);
@@ -12955,6 +12951,119 @@ static void run_validated_graph_uid_match_checks() {
     REQUIRE(after_clear.program->uid() == 4003);
     REQUIRE(cache.stats().builds == 5);
     ggml_free(ctx);
+}
+
+static void run_prepared_graph_instance_reuse() {
+    ggml_backend_t backend = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+    auto * state = static_cast<ggml_backend_hrx_context *>(backend->context);
+    const auto & corpus = ggml::hrx::get_qwen_kernel_corpus();
+    struct TestGraph {
+        ggml_context * context = nullptr;
+        ggml_backend_buffer_t buffer = nullptr;
+        ggml_tensor * left = nullptr;
+        ggml_tensor * right = nullptr;
+        ggml_tensor * output = nullptr;
+        ggml_cgraph * graph = nullptr;
+        std::array<float, 32> storage = {};
+        ~TestGraph() {
+            ggml_backend_buffer_free(buffer);
+            ggml_free(context);
+        }
+    };
+    auto make_graph = [&](uint64_t uid) {
+        auto item = std::make_unique<TestGraph>();
+        item->context = ggml_init({ 256 * 1024, nullptr, true });
+        REQUIRE(item->context != nullptr);
+        item->left = ggml_new_tensor_1d(item->context, GGML_TYPE_F32, 8);
+        item->right = ggml_new_tensor_1d(item->context, GGML_TYPE_F32, 8);
+        item->output = ggml_add(item->context, item->left, item->right);
+        ggml_set_output(item->output);
+        item->graph = ggml_new_graph(item->context);
+        ggml_build_forward_expand(item->graph, item->output);
+        item->graph->uid = uid;
+        item->buffer = ggml_backend_dev_buffer_from_host_ptr(ggml_backend_get_device(backend),
+            item->storage.data(), sizeof(item->storage), 8 * sizeof(float));
+        REQUIRE(item->buffer != nullptr);
+        REQUIRE(ggml_backend_tensor_alloc(item->buffer, item->left, item->storage.data()) == GGML_STATUS_SUCCESS);
+        REQUIRE(ggml_backend_tensor_alloc(item->buffer, item->right, item->storage.data() + 8) == GGML_STATUS_SUCCESS);
+        REQUIRE(ggml_backend_tensor_alloc(item->buffer, item->output, item->storage.data() + 16) == GGML_STATUS_SUCCESS);
+        return item;
+    };
+    auto compute = [&](TestGraph & item, float seed) {
+        std::array<float, 8> left, right, expected, actual;
+        for (size_t i = 0; i < left.size(); ++i) {
+            left[i] = seed + i;
+            right[i] = seed * 2 - i;
+            expected[i] = left[i] + right[i];
+        }
+        ggml_backend_tensor_set(item.left, left.data(), 0, sizeof(left));
+        ggml_backend_tensor_set(item.right, right.data(), 0, sizeof(right));
+        REQUIRE(ggml_backend_graph_compute(backend, item.graph) == GGML_STATUS_SUCCESS);
+        ggml_backend_tensor_get(item.output, actual.data(), 0, sizeof(actual));
+        REQUIRE(actual == expected);
+    };
+    auto first = make_graph(4301);
+    auto second = make_graph(4302);
+    auto lookup = state->graph_programs.get_or_build(*first->graph, corpus, state->device->architecture);
+    REQUIRE(lookup.valid());
+    auto * program = lookup.program;
+    REQUIRE(!program->can_use_prepared_fast_path(*first->graph));
+    compute(*first, 1);
+    REQUIRE(program->can_use_prepared_fast_path(*first->graph));
+    auto first_entry = program->prepared_entry();
+    compute(*first, 2);
+    REQUIRE(state->prepared_programs.stats().builds == 1);
+    REQUIRE(state->prepared_programs.stats().hits == 1);
+
+    compute(*second, 3);
+    REQUIRE(state->graph_programs.get_or_build(*second->graph, corpus, state->device->architecture).program == program);
+    REQUIRE(program->uid() == 4301);
+    REQUIRE(program->can_use_prepared_fast_path(*second->graph));
+    REQUIRE(!program->can_use_prepared_fast_path(*first->graph));
+    auto second_entry = program->prepared_entry();
+    REQUIRE(first_entry != second_entry);
+    compute(*second, 4);
+    REQUIRE(state->prepared_programs.stats().builds == 2);
+    compute(*first, 5);
+    REQUIRE(program->prepared_entry() == first_entry);
+    compute(*second, 6);
+    REQUIRE(program->prepared_entry() == second_entry);
+    REQUIRE(state->prepared_programs.stats().builds == 2);
+
+    // The current instance must own the watches even after the original graph arena is gone.
+    first.reset();
+    second->left->data = second->storage.data() + 24;
+    REQUIRE(!program->mutable_sources_current());
+    compute(*second, 7);
+    REQUIRE(program->mutable_sources_current());
+    REQUIRE(state->prepared_programs.stats().builds == 3);
+    compute(*second, 8);
+    REQUIRE(state->prepared_programs.stats().builds == 3);
+
+    std::array<float, 8> replacement = {};
+    ggml_backend_buffer_t rebound = ggml_backend_dev_buffer_from_host_ptr(ggml_backend_get_device(backend),
+        replacement.data(), sizeof(replacement), sizeof(replacement));
+    REQUIRE(rebound != nullptr);
+    second->left->buffer = rebound;
+    second->left->data = replacement.data();
+    REQUIRE(!program->mutable_sources_current());
+    compute(*second, 9);
+    REQUIRE(program->mutable_sources_current());
+    REQUIRE(state->prepared_programs.stats().builds == 4);
+
+    // Reusing the node-array address with a new UID must require a new binding check.
+    second->graph->uid = 4303;
+    REQUIRE(!program->can_use_prepared_fast_path(*second->graph));
+    compute(*second, 10);
+    REQUIRE(program->can_use_prepared_fast_path(*second->graph));
+    REQUIRE(state->prepared_programs.stats().builds == 4);
+    REQUIRE(state->graph_programs.stats().builds == 1);
+    first_entry.reset();
+    second_entry.reset();
+    second.reset();
+    ggml_backend_buffer_free(rebound);
+    ggml_backend_free(backend);
 }
 
 static void run_graph_executor_contract_checks() {
@@ -14706,6 +14815,7 @@ static void register_hrx_backend_device_cases(test_runner::Suite & suite) {
     suite.device_case("zero_output_device_support", [] { run_zero_output_device_support_checks(); });
     suite.device_case("zero_output_unused_weight_staging.recorded", [] { run_zero_output_unused_weight_staging(false); });
     suite.device_case("zero_output_unused_weight_staging.direct", [] { run_zero_output_unused_weight_staging(true); });
+    suite.device_case("prepared_graph_instance_reuse", [] { run_prepared_graph_instance_reuse(); });
     suite.device_case("scale_f32_device_support", [] { run_scale_f32_device_support_checks(); });
     suite.device_case("binary_q8_publication_numerics", [] { run_binary_q8_publication_numerics(); });
     suite.device_case("qwen_expert_table_partition_prefill_512_execution",

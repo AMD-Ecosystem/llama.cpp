@@ -1,6 +1,5 @@
 #include "command-program-bindings.h"
 
-#include <sstream>
 #include <utility>
 
 namespace ggml::hrx {
@@ -106,19 +105,5 @@ CommandProgramBindingsHash command_program_bindings_hash(const CommandProgramBin
     return { hash };
 }
 
-CommandProgramBindingsFingerprint command_program_bindings_fingerprint(const CommandProgramBindings & bindings) {
-    std::ostringstream out;
-    out << "hrx-bindings-v1";
-    for (const CommandProgramBinding & binding : bindings.bindings()) {
-        out << "|value=" << binding.value.value << "|kind=" << (binding.host_data != nullptr ? "host" : "device")
-            << "|identity=" << binding.identity << "|generation="
-            << (binding.tracks_content_generation() ? binding.generation : 0)
-            << "|capacity=" << binding.capacity << "|offset=" << binding.offset << "|length=" << binding.length
-            << "|weight=" << (binding.weight ? 1 : 0) << "|empty=" << (binding.empty_value ? 1 : 0)
-            << "|source_host=" << (binding.source_host_data != nullptr ? 1 : 0)
-            << "|source_offset=" << binding.source_offset << "|source_capacity=" << binding.source_capacity;
-    }
-    return { out.str() };
-}
 
 }  // namespace ggml::hrx

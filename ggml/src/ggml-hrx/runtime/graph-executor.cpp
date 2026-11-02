@@ -85,9 +85,7 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
         return result;
     }
 
-    const bool use_graph_prepared = lookup.program->can_use_prepared_fast_path(graph);
-    const bool has_prepared = lookup.program->has_prepared_program();
-    const bool reusable_owner = use_graph_prepared && has_prepared;
+    const bool reusable_owner = lookup.program->can_use_prepared_fast_path(graph);
     const bool mutable_sources_current = reusable_owner && lookup.program->mutable_sources_current();
     const bool trusted_weights = reusable_owner && mutable_sources_current;
     GraphProgramMatch binding_match = std::move(lookup.match);
@@ -117,11 +115,17 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
         &context_.device->host_buffers,
         &context_.graph_replay_state,
     };
-    const PreparedCommandProgramCacheExecutionResult execution =
-        use_graph_prepared ? lookup.program->execute_with_result(execution_context, bindings, !trusted_weights) :
-                             context_.prepared_programs.execute_with_result(execution_context, lookup.program->uid(),
-                                                                            lookup.program->command_shape_hash(),
-                                                                            lookup.program->commands(), bindings);
+    std::shared_ptr<PreparedCommandProgramCacheEntry> entry;
+    if (trusted_weights) {
+        entry = lookup.program->prepared_entry();
+    } else if (graph.uid != 0) {
+        entry = context_.prepared_programs.get_or_create(execution_context, lookup.program->uid(),
+                                                        lookup.program->command_shape_hash(), bindings);
+    }
+    const PreparedCommandProgramCacheExecutionResult execution = entry != nullptr ?
+        context_.prepared_programs.execute_with_result(execution_context, lookup.program->commands(), bindings, entry) :
+        context_.prepared_programs.execute_with_result(execution_context, 0, lookup.program->command_shape_hash(),
+                                                       lookup.program->commands(), bindings);
     result.graph_replay_event = execution.graph_replay_event;
     if (execution.execution_resources != nullptr) {
         // A failed return can still follow queued writes.
@@ -133,6 +137,11 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
             result.status.log("execute HRX command program failed");
         }
         return result;
+    }
+
+    const bool validated_entry = entry != nullptr && !trusted_weights;
+    if (validated_entry) {
+        lookup.program->bind_prepared_graph(graph, binding_match, std::move(entry));
     }
 
     result.code = GGML_STATUS_SUCCESS;

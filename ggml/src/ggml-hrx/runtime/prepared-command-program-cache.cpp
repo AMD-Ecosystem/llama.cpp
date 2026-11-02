@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <utility>
 
@@ -114,19 +115,32 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
         return result;
     }
 
-    const Key              key = cache_key(graph_uid, context, command_shape_hash, bindings);
-    std::shared_ptr<Entry> entry;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto                        found = programs_.find(key);
-        if (found == programs_.end()) {
-            entry = std::make_shared<Entry>();
-            programs_.emplace(key, entry);
-        } else {
-            entry = found->second;
-        }
-    }
+    return execute_with_result(context, commands, bindings,
+                               get_or_create(context, graph_uid, command_shape_hash, bindings));
+}
 
+std::shared_ptr<PreparedCommandProgramCacheEntry> PreparedCommandProgramCache::get_or_create(
+    const CommandProgramExecutionContext & context,
+    uint64_t graph_uid,
+    uint64_t command_shape_hash,
+    const CommandProgramBindings & bindings) {
+    const Key key = cache_key(graph_uid, context, command_shape_hash, bindings);
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto found = programs_.find(key);
+    if (found != programs_.end()) {
+        return found->second;
+    }
+    auto entry = std::make_shared<PreparedCommandProgramCacheEntry>();
+    programs_.emplace(key, entry);
+    return entry;
+}
+
+PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_with_result(
+    const CommandProgramExecutionContext & context,
+    const CommandProgram & commands,
+    const CommandProgramBindings & bindings,
+    const std::shared_ptr<PreparedCommandProgramCacheEntry> & entry) {
+    PreparedCommandProgramCacheExecutionResult result;
     std::lock_guard<std::mutex> entry_lock(entry->mutex);
     const bool replay_disabled = graph_replay_disabled_by_environment();
     const bool serial_execution = debug_serial_command_execution_enabled();
@@ -144,6 +158,12 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
                 result.status.log("execute cached HRX command program failed");
             }
             return result;
+        }
+        const char * rebuild_setting = std::getenv("GGML_HRX_REBUILD_GRAPH_REPLAY");
+        const bool rebuild_requested = rebuild_setting != nullptr && rebuild_setting[0] != '\0';
+        const bool rebuild_enabled = rebuild_requested && rebuild_setting[0] != '0';
+        if (rebuild_enabled) {
+            resources.recorded = {};
         }
         const RecordedCommandGraphExecutionResult replay =
             bind_and_launch_recorded_command_graph(context, commands, bindings, resources.prepared, resources.recorded);
