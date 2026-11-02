@@ -500,19 +500,20 @@ std::shared_ptr<PreparedCommandProgramCacheEntry> GraphProgram::prepared_entry()
 }
 
 void GraphProgram::bind_prepared_graph(const ggml_cgraph & graph, const GraphProgramMatch & match,
+                                       const CommandProgramBindings & bindings,
                                        std::shared_ptr<PreparedCommandProgramCacheEntry> entry) {
     std::lock_guard<std::mutex> lock(prepared_mutex_);
     mutable_source_watches_.clear();
-    for (const GraphProgramExternalBinding & binding : match.external_bindings) {
-        ValueBufferBinding value_binding;
-        const bool bound = ggml_backend_hrx_resolve_value_buffer(binding.tensor, value_binding);
-        const bool weight = bound && value_binding.weight;
-        ggml_backend_hrx_imported_region region = {};
-        const bool mutable_source = bound && !weight;
-        const bool retained_source = mutable_source && ggml_backend_hrx_get_retained_region(binding.tensor, region);
+    // Successful external binding preserves match order and already resolved every physical source.
+    for (size_t i = 0; i < match.external_bindings.size(); ++i) {
+        const CommandProgramBinding & binding = bindings.bindings()[i];
+        const bool mutable_source = !binding.weight;
+        const bool host_source = binding.source_host_data != nullptr;
+        const bool retained_source = mutable_source && host_source;
         if (retained_source) {
             // Mutable inputs may rebind under one graph UID; immutable weight bindings are trusted.
-            mutable_source_watches_.push_back({ binding.tensor, region.identity, region.offset, region.length });
+            mutable_source_watches_.push_back({ match.external_bindings[i].tensor, binding.identity,
+                                               binding.source_offset, binding.length });
         }
     }
     // The full binding lookup established this graph instance's physical resources.

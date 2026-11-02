@@ -144,7 +144,7 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
 
     const bool validated_entry = entry != nullptr && !trusted_weights;
     if (validated_entry) {
-        lookup.program->bind_prepared_graph(graph, binding_match, std::move(entry));
+        lookup.program->bind_prepared_graph(graph, binding_match, bindings, std::move(entry));
     }
 
     result.code = GGML_STATUS_SUCCESS;

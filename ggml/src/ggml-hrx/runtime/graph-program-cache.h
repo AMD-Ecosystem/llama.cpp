@@ -78,6 +78,7 @@ class GraphProgram {
     void mark_imported_writes(const ggml_cgraph & graph) const;
     std::shared_ptr<PreparedCommandProgramCacheEntry> prepared_entry() const;
     void bind_prepared_graph(const ggml_cgraph & graph, const GraphProgramMatch & match,
+                             const CommandProgramBindings & bindings,
                              std::shared_ptr<PreparedCommandProgramCacheEntry> entry);
 
   private:
