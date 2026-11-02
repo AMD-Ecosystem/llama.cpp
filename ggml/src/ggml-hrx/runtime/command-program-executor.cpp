@@ -873,11 +873,6 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
         materialized.push_back(device_binding);
         prepared.host_staging.push_back(std::move(staging));
     }
-    const bool can_report_residency = status.success() && context.host_weights != nullptr;
-    if (can_report_residency) {
-        context.host_weights->report_coexisting_representations(*prepared.resident_host_weights,
-                                                                "same command program");
-    }
     return CommandProgramBindings::from_bindings(std::move(materialized), status);
 }
 

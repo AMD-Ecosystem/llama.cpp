@@ -327,7 +327,6 @@ GraphProgram::GraphProgram(uint64_t                        uid,
     target_(std::move(target)),
     graph_(std::move(graph)),
     commands_(std::move(commands)),
-    weight_requests_(build_command_program_weight_requests(*commands_)),
     command_shape_(std::move(command_shape)),
     command_shape_hash_(command_program_shape_hash(command_shape_)) {}
 
@@ -448,7 +447,6 @@ GraphProgramMatch GraphProgram::match_host_staging_graph(const ggml_cgraph & cur
 Status GraphProgram::capture_external_slots(const ggml_cgraph & graph, const GraphProgramMatch & match) {
     Status status;
     external_slots_.clear();
-    admitted_resources_.reset();
     mutable_source_watches_.clear();
     written_slots_.clear();
     std::unordered_set<int32_t> written_values;
@@ -536,37 +534,6 @@ bool GraphProgram::can_use_prepared_fast_path(const ggml_cgraph & graph) const {
     return allocated_graph && same_uid && same_nodes;
 }
 
-bool GraphProgram::admitted_at(uint64_t revision) const {
-    std::lock_guard<std::mutex> lock(prepared_mutex_);
-    const bool prepared = has_prepared_;
-    const bool same_owner = admitted_resources_.lock() == resources_;
-    const bool current_revision = admitted_revision_ == revision;
-    return prepared && same_owner && current_revision;
-}
-
-void GraphProgram::invalidate_admission() {
-    std::lock_guard<std::mutex> lock(prepared_mutex_);
-    admitted_resources_.reset();
-}
-
-void GraphProgram::admit(const std::shared_ptr<CachedCommandProgramResources> & resources,
-                         uint64_t revision, bool reused_demand) {
-    std::lock_guard<std::mutex> lock(prepared_mutex_);
-    const bool prepared = has_prepared_;
-    const bool same_owner = resources == resources_;
-    const bool current_owner = prepared && same_owner;
-    if (!current_owner) {
-        return;
-    }
-    admitted_resources_ = resources;
-    admitted_revision_ = revision;
-    if (reused_demand) {
-        ++weight_demand_hits_;
-    } else {
-        ++weight_demand_builds_;
-    }
-}
-
 bool GraphProgram::mutable_sources_current() const {
     std::lock_guard<std::mutex> lock(prepared_mutex_);
     for (const MutableSourceWatch & watch : mutable_source_watches_) {
@@ -612,37 +579,12 @@ PreparedCommandProgramCacheStats GraphProgram::prepared_stats() const {
     return prepared_stats_;
 }
 
-std::pair<uint64_t, uint64_t> GraphProgram::weight_demand_stats() const {
-    std::lock_guard<std::mutex> lock(prepared_mutex_);
-    return { weight_demand_builds_, weight_demand_hits_ };
-}
-
-void GraphProgram::invalidate_obsolete_weights(const std::vector<HostWeightSource> & current_demand) {
-    std::lock_guard<std::mutex> lock(prepared_mutex_);
-    if (!has_prepared_) {
-        return;
-    }
-    bool obsolete = false;
-    for (const HostWeightLease & lease : *resources_->prepared.resident_host_weights) {
-        const bool demanded = std::any_of(current_demand.begin(), current_demand.end(),
-                                          [&](const HostWeightSource & source) { return lease.matches(source); });
-        obsolete |= !demanded;
-    }
-    if (obsolete) {
-        resources_.reset();
-        admitted_resources_.reset();
-        has_prepared_ = false;
-        prepared_bindings_fingerprint_.clear();
-    }
-}
-
 PreparedCommandProgramCacheExecutionResult GraphProgram::execute_with_result(
     const CommandProgramExecutionContext & context,
     const CommandProgramBindings &         bindings,
     bool                                   full_bindings) {
     PreparedCommandProgramCacheExecutionResult result;
     std::lock_guard<std::mutex> lock(prepared_mutex_);
-    admitted_resources_.reset();
     if (commands_ == nullptr || !commands_->valid() || !bindings.valid()) {
         result.graph_replay_event             = HrxGraphReplayEvent::Ineligible;
         result.graph_replay_ineligible_reason = "invalid_graph_program";
@@ -667,7 +609,6 @@ PreparedCommandProgramCacheExecutionResult GraphProgram::execute_with_result(
         }
         context.graph_replay_state->mark_stream_synchronized();
         resources_.reset();
-        admitted_resources_.reset();
         has_prepared_ = false;
     }
     if (!has_prepared_) {
@@ -1010,9 +951,6 @@ GraphProgramCacheStats GraphProgramCache::stats() const {
         const PreparedCommandProgramCacheStats prepared = entry.second->prepared_stats();
         stats.prepared_program_builds += prepared.builds;
         stats.prepared_program_hits += prepared.hits;
-        const auto [demand_builds, demand_hits] = entry.second->weight_demand_stats();
-        stats.weight_demand_builds += demand_builds;
-        stats.weight_demand_hits += demand_hits;
     }
     return stats;
 }
@@ -1022,13 +960,6 @@ void GraphProgramCache::clear() {
     validated_matches_.clear();
     programs_.clear();
     last_program_ = nullptr;
-}
-
-void GraphProgramCache::invalidate_obsolete_weights(const std::vector<HostWeightSource> & current_demand) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    for (auto & program : programs_) {
-        program.second->invalidate_obsolete_weights(current_demand);
-    }
 }
 
 std::unique_ptr<GraphProgram> GraphProgramCache::build_program_from_imported(uint64_t             uid,

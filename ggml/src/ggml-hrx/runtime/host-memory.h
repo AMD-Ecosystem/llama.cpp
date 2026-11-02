@@ -12,7 +12,6 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 typedef struct hrx_buffer_s * hrx_buffer_t;
@@ -110,7 +109,6 @@ class HostWeightLease {
     hrx_buffer_t        buffer() const;
     size_t              length() const;
     const std::string & layout() const;
-    bool                matches(const HostWeightSource & source) const;
 
   private:
     struct Entry;
@@ -127,6 +125,7 @@ struct HostWeightAcquireResult {
     bool valid() const { return lease.valid() && status.success(); }
 };
 
+// Owns each immutable source representation until explicit clearing or backend teardown.
 class HostWeightCache {
   public:
     HostWeightCache();
@@ -140,10 +139,6 @@ class HostWeightCache {
                                     HostTransferManager &    transfers,
                                     const HostWeightSource & source);
     HostWeightCacheStats    stats() const;
-    // Report only distinct live device allocations for the same retained source region.
-    void report_coexisting_representations(const std::vector<HostWeightLease> & leases, const char * reason);
-    void evict_except(const std::vector<HostWeightSource> & current_demand,
-                      const std::vector<HostWeightLease> & outstanding_leases);
     void fail_cold_acquire_after_for_test(size_t successful_acquires);
     // Erases lookup ownership; leases and cumulative diagnostics outlive map entries.
     void                    clear();
@@ -176,6 +171,8 @@ class HostWeightCache {
         size_t operator()(const SourceKey & key) const;
     };
 
+    void report_new_representation(const SourceKey & key, const HostWeightLease::Entry & entry);
+
     mutable std::mutex                                                                    mutex_;
     std::unordered_map<SourceKey, std::shared_ptr<HostWeightLease::Entry>, SourceKeyHash> entries_;
     // Size-keyed scratch is overwritten on each use and is not a source-indexed representation cache.
@@ -183,7 +180,6 @@ class HostWeightCache {
     size_t q6_pack_scratch_bytes_ = 0;
     HostWeightCacheStats                                                                  stats_;
     std::shared_ptr<HostWeightAccounting> accounting_;
-    std::unordered_set<std::string> reported_duplicate_signatures_;
     size_t fail_cold_after_ = SIZE_MAX;
 };
 

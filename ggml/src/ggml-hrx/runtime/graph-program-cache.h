@@ -68,16 +68,9 @@ class GraphProgram {
 
     const CommandProgram & commands() const { return *commands_; }
 
-    const CommandProgramWeightRequests & weight_requests() const { return weight_requests_; }
-
     GraphProgramMatch match_current_graph(const ggml_cgraph & graph) const;
     GraphProgramMatch match_trusted_graph(const ggml_cgraph & graph, bool bind_external = true) const;
     GraphProgramMatch match_host_staging_graph(const ggml_cgraph & graph) const;
-    bool admitted_at(uint64_t revision) const;
-    void invalidate_admission();
-    void admit(const std::shared_ptr<CachedCommandProgramResources> & resources,
-               uint64_t revision, bool reused_demand);
-
     Status capture_external_slots(const ggml_cgraph & graph, const GraphProgramMatch & match);
 
     bool has_prepared_program() const;
@@ -86,9 +79,6 @@ class GraphProgram {
     void mark_imported_writes(const ggml_cgraph & graph) const;
 
     PreparedCommandProgramCacheStats prepared_stats() const;
-    std::pair<uint64_t, uint64_t> weight_demand_stats() const;
-
-    void invalidate_obsolete_weights(const std::vector<HostWeightSource> & current_demand);
 
     PreparedCommandProgramCacheExecutionResult execute_with_result(const CommandProgramExecutionContext & context,
                                                                    const CommandProgramBindings &         bindings,
@@ -104,7 +94,6 @@ class GraphProgram {
     std::string                     target_;
     std::unique_ptr<Graph>          graph_;
     std::unique_ptr<const CommandProgram> commands_;
-    const CommandProgramWeightRequests weight_requests_;
     std::string                     command_shape_;
     uint64_t                        command_shape_hash_ = 0;
 
@@ -123,10 +112,6 @@ class GraphProgram {
     std::shared_ptr<CachedCommandProgramResources> resources_;
     std::string                           prepared_bindings_fingerprint_;
     PreparedCommandProgramCacheStats      prepared_stats_;
-    std::weak_ptr<CachedCommandProgramResources> admitted_resources_;
-    uint64_t admitted_revision_ = 0;
-    mutable uint64_t weight_demand_builds_ = 0;
-    mutable uint64_t weight_demand_hits_ = 0;
     bool                                  has_prepared_ = false;
 };
 
@@ -135,8 +120,6 @@ struct GraphProgramCacheStats {
     uint64_t hits                    = 0;
     uint64_t prepared_program_builds = 0;
     uint64_t prepared_program_hits   = 0;
-    uint64_t weight_demand_builds     = 0;
-    uint64_t weight_demand_hits       = 0;
 };
 
 struct GraphProgramLookup {
@@ -157,7 +140,6 @@ struct GraphProgramSupportResult {
 
 class GraphProgramCache {
   public:
-    void invalidate_obsolete_weights(const std::vector<HostWeightSource> & current_demand);
     bool can_execute(const ggml_cgraph & graph, const KernelCorpus & corpus, const std::string & target) const;
 
     GraphProgramSupportResult check_support(const ggml_cgraph &  graph,

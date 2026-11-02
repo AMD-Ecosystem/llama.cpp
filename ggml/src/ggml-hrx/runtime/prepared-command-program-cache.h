@@ -58,7 +58,6 @@ class PreparedCommandProgramCache {
     PreparedCommandProgramCacheStats stats() const;
 
     void clear();
-    void invalidate_obsolete_weights(const std::vector<HostWeightSource> & current_demand);
 
   private:
     struct Key {

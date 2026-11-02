@@ -13,7 +13,6 @@
 #include <cstring>
 #include <functional>
 #include <limits>
-#include <map>
 #include <sstream>
 #include <thread>
 #include <utility>
@@ -1453,16 +1452,8 @@ struct HostWeightLease::Entry {
     hrx_buffer_t buffer = nullptr;
     size_t       length = 0;
     std::string  layout;
-    uint64_t     source_identity = 0;
-    uint64_t     source_generation = 0;
-    size_t       source_capacity = 0;
-    size_t       source_offset = 0;
-    size_t       source_length = 0;
-    ggml_type    source_type = GGML_TYPE_COUNT;
-    int64_t      input_size = 0;
-    int64_t      output_size = 0;
-    std::array<int64_t, GGML_MAX_DIMS> source_ne = {};
-    std::array<size_t, GGML_MAX_DIMS> source_nb = {};
+    size_t       region_length = 0;
+    ggml_type    region_type = GGML_TYPE_COUNT;
     std::shared_ptr<HostWeightAccounting> accounting;
 };
 
@@ -1483,20 +1474,6 @@ size_t HostWeightLease::length() const {
 const std::string & HostWeightLease::layout() const {
     static const std::string empty;
     return entry_ != nullptr ? entry_->layout : empty;
-}
-
-bool HostWeightLease::matches(const HostWeightSource & source) const {
-    if (!valid()) {
-        return false;
-    }
-    const Entry & entry = *entry_;
-    const size_t materialized_length = source.layout == kNativeWeightLayout ? source.length : source.materialized_length;
-    return entry.source_identity == source.identity && entry.source_generation == source.generation &&
-           entry.source_capacity == source.capacity && entry.source_offset == source.offset &&
-           entry.source_length == source.length && entry.length == materialized_length &&
-           entry.layout == source.layout && entry.source_type == source.source_type &&
-           entry.input_size == source.input_size && entry.output_size == source.output_size &&
-           entry.source_ne == source.source_ne && entry.source_nb == source.source_nb;
 }
 
 HostWeightCache::HostWeightCache() : accounting_(std::make_shared<HostWeightAccounting>()) {}
@@ -1621,7 +1598,7 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
     const void *         upload_data = nullptr;
     size_t               upload_size = 0;
     std::vector<uint8_t> transformed;
-    // Budget 64 MiB of host scratch across phase transitions. The Q6 packer
+    // Budget 64 MiB of host scratch across first-use materializations. The Q6 packer
     // writes every output byte, and the cache lock covers packing and upload.
     std::vector<uint8_t> & output = use_scratch ? scratch->second : transformed;
     result.status = materialize_weight(materialization_source, upload_data, upload_size, output);
@@ -1640,16 +1617,8 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
     auto entry    = std::make_shared<HostWeightLease::Entry>();
     entry->length = materialized_length;
     entry->layout = source.layout;
-    entry->source_identity = source.identity;
-    entry->source_generation = source.generation;
-    entry->source_capacity = source.capacity;
-    entry->source_offset = source.offset;
-    entry->source_length = source.length;
-    entry->source_type = source.source_type;
-    entry->input_size = source.input_size;
-    entry->output_size = source.output_size;
-    entry->source_ne = source.source_ne;
-    entry->source_nb = source.source_nb;
+    entry->region_length = source.region_length;
+    entry->region_type = source.region_type;
     result.status = allocate_device_buffer(device, materialized_length, entry->buffer);
     if (!result.status.success()) {
         return result;
@@ -1667,6 +1636,7 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
     }
 
     entries_.emplace(key, entry);
+    report_new_representation(key, *entry);
     ++stats_.misses;
     stats_.materialized_bytes += materialized_length;
     result.lease = HostWeightLease(std::move(entry));
@@ -1683,98 +1653,42 @@ HostWeightCacheStats HostWeightCache::stats() const {
     return result;
 }
 
-void HostWeightCache::report_coexisting_representations(const std::vector<HostWeightLease> & leases,
-                                                       const char * reason) {
-    struct Allocation {
-        hrx_buffer_t buffer = nullptr;
-        std::string layout;
-        size_t bytes = 0;
-        uint64_t generation = 0;
-    };
-    struct Region {
-        uint64_t identity = 0;
-        size_t offset = 0;
-        size_t length = 0;
-        std::vector<Allocation> allocations;
-    };
-    std::map<std::string, Region> regions;
-    for (const HostWeightLease & lease : leases) {
-        if (!lease.valid()) {
+void HostWeightCache::report_new_representation(const SourceKey & key, const HostWeightLease::Entry & entry) {
+    bool distinct_layout = false;
+    size_t total_bytes = 0;
+    std::ostringstream details;
+    for (const auto & [resident_key, resident] : entries_) {
+        const bool same_identity = resident_key.identity == key.identity;
+        const bool same_generation = resident_key.generation == key.generation;
+        const bool same_capacity = resident_key.capacity == key.capacity;
+        const bool same_offset = resident_key.offset == key.offset;
+        const bool same_length = resident->region_length == entry.region_length;
+        const bool same_type = resident->region_type == entry.region_type;
+        const bool same_shape = resident_key.source_ne == key.source_ne;
+        const bool same_strides = resident_key.source_nb == key.source_nb;
+        const bool same_region = same_identity && same_generation && same_capacity && same_offset &&
+                                 same_length && same_type && same_shape && same_strides;
+        if (!same_region) {
             continue;
         }
-        const HostWeightLease::Entry & entry = *lease.entry_;
-        std::ostringstream key;
-        key << entry.source_identity << ':' << entry.source_capacity << ':'
-            << entry.source_offset << ':' << entry.source_length << ':' << static_cast<int>(entry.source_type);
-        for (size_t dimension = 0; dimension < GGML_MAX_DIMS; ++dimension) {
-            key << ':' << entry.source_ne[dimension] << ':' << entry.source_nb[dimension];
-        }
-        Region & region = regions[key.str()];
-        region.identity = entry.source_identity;
-        region.offset = entry.source_offset;
-        region.length = entry.source_length;
-        const bool already_recorded = std::any_of(region.allocations.begin(), region.allocations.end(),
-            [&](const Allocation & allocation) { return allocation.buffer == entry.buffer; });
-        if (!already_recorded) {
-            region.allocations.push_back({ entry.buffer, entry.layout, entry.length, entry.source_generation });
-        }
+        distinct_layout |= resident_key.layout != key.layout;
+        details << (total_bytes == 0 ? "" : ", ") << resident_key.layout << "=" << resident->length << "B";
+        total_bytes += resident->length;
     }
-    std::lock_guard<std::mutex> lock(mutex_);
-    for (const auto & [key, region] : regions) {
-        if (region.allocations.size() < 2) {
-            continue;
-        }
-        std::vector<Allocation> sorted = region.allocations;
-        std::sort(sorted.begin(), sorted.end(), [](const Allocation & lhs, const Allocation & rhs) {
-            return std::less<hrx_buffer_t>{}(lhs.buffer, rhs.buffer);
-        });
-        std::ostringstream signature;
-        signature << key;
-        std::ostringstream details;
-        size_t total_bytes = 0;
-        for (const Allocation & allocation : sorted) {
-            signature << ':' << allocation.buffer << ':' << allocation.layout << ':' << allocation.bytes
-                      << ':' << allocation.generation;
-            details << (total_bytes == 0 ? "" : ", ") << allocation.layout << "@generation="
-                    << allocation.generation << "=" << allocation.bytes << "B";
-            total_bytes += allocation.bytes;
-        }
-        if (!reported_duplicate_signatures_.insert(signature.str()).second) {
-            continue;
-        }
-        ++stats_.duplicate_warnings;
-        GGML_LOG_WARN("HRX weight residency: source=%llu region=[%zu,%zu) layouts={%s} resident_bytes=%zu reason=%s\n",
-                      static_cast<unsigned long long>(region.identity),
-                      region.offset, region.offset + region.length, details.str().c_str(), total_bytes,
-                      reason == nullptr ? "unspecified" : reason);
+    if (!distinct_layout) {
+        return;
     }
+    ++stats_.duplicate_warnings;
+    GGML_LOG_WARN("HRX weight residency: source=%llu generation=%llu region=[%zu,%zu) layouts={%s}"
+                  " new_layout=%s new_bytes=%zu resident_bytes=%zu\n",
+                  static_cast<unsigned long long>(key.identity), static_cast<unsigned long long>(key.generation),
+                  key.offset, key.offset + entry.region_length, details.str().c_str(), key.layout.c_str(),
+                  entry.length, total_bytes);
 }
 
 void HostWeightCache::fail_cold_acquire_after_for_test(size_t successful_acquires) {
     std::lock_guard<std::mutex> lock(mutex_);
     fail_cold_after_ = successful_acquires;
-}
-
-void HostWeightCache::evict_except(const std::vector<HostWeightSource> & current_demand,
-                                  const std::vector<HostWeightLease> & outstanding_leases) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    for (auto entry = entries_.begin(); entry != entries_.end();) {
-        const HostWeightLease resident(entry->second);
-        const bool current = std::any_of(current_demand.begin(), current_demand.end(),
-                                         [&](const HostWeightSource & source) {
-                                             return resident.matches(source);
-                                         });
-        const bool outstanding = std::any_of(outstanding_leases.begin(), outstanding_leases.end(),
-                                             [&](const HostWeightLease & lease) {
-                                                 return lease.entry_ == entry->second;
-                                             });
-        const bool retained = current || outstanding;
-        if (retained) {
-            ++entry;
-        } else {
-            entry = entries_.erase(entry);
-        }
-    }
 }
 
 void HostWeightCache::clear() {

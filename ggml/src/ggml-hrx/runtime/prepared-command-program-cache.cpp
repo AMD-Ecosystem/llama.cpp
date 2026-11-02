@@ -106,6 +106,7 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
             return result;
         }
         result.execution_resources = resources;
+        // HRX command buffers retain queued buffers and executables even after this uncached owner is released.
         result.success = bind_and_execute_prepared_command_program(context, commands, bindings, resources->prepared);
         if (!result.success) {
             result.status.log("execute uncached HRX command program failed");
@@ -215,32 +216,6 @@ PreparedCommandProgramCacheStats PreparedCommandProgramCache::stats() const {
 void PreparedCommandProgramCache::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     programs_.clear();
-}
-
-void PreparedCommandProgramCache::invalidate_obsolete_weights(const std::vector<HostWeightSource> & current_demand) {
-    std::vector<std::shared_ptr<Entry>> entries;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        entries.reserve(programs_.size());
-        for (const auto & program : programs_) {
-            entries.push_back(program.second);
-        }
-    }
-    for (const auto & entry : entries) {
-        std::lock_guard<std::mutex> entry_lock(entry->mutex);
-        if (entry->resources == nullptr) {
-            continue;
-        }
-        bool obsolete = false;
-        for (const HostWeightLease & lease : *entry->resources->prepared.resident_host_weights) {
-            const bool demanded = std::any_of(current_demand.begin(), current_demand.end(),
-                                              [&](const HostWeightSource & source) { return lease.matches(source); });
-            obsolete |= !demanded;
-        }
-        if (obsolete) {
-            entry->resources.reset();
-        }
-    }
 }
 
 void PreparedCommandProgramCache::record_build() {

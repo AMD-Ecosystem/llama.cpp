@@ -584,14 +584,6 @@ static void backend_synchronize(ggml_backend_t backend) {
     auto * context = static_cast<ggml_backend_hrx_context *>(backend->context);
     if (HRX_CHECK(hrx_stream_synchronize(context->stream))) {
         context->graph_replay_state.mark_stream_synchronized();
-        const bool obsolete_completed = context->weight_submissions.has_obsolete_pending();
-        context->weight_submissions.mark_stream_synchronized();
-        if (obsolete_completed) {
-            const auto & current_demand = context->weight_submissions.current_demand();
-            context->graph_programs.invalidate_obsolete_weights(current_demand);
-            context->prepared_programs.invalidate_obsolete_weights(current_demand);
-            context->host_weights.evict_except(current_demand, {});
-        }
     }
 }
 
@@ -1335,15 +1327,6 @@ bool ggml_backend_hrx_get_cache_stats(ggml_backend_t backend, ggml_backend_hrx_c
         return false;
     }
     auto * context = static_cast<ggml_backend_hrx_context *>(backend->context);
-    bool completed = false;
-    const ggml::hrx::Status retirement = context->weight_submissions.poll_completed(&completed);
-    if (!retirement.success()) {
-        return false;
-    }
-    if (completed) {
-        context->host_weights.evict_except(context->weight_submissions.current_demand(),
-                                           context->weight_submissions.outstanding_leases());
-    }
     const ggml::hrx::GraphProgramCacheStats graph_stats = context->graph_programs.stats();
     const ggml::hrx::PreparedCommandProgramCacheStats prepared_stats = context->prepared_programs.stats();
     const ggml::hrx::HostWeightCacheStats weight_stats = context->host_weights.stats();

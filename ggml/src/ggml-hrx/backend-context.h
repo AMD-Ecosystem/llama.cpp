@@ -8,7 +8,6 @@
 #include "runtime/kernel-executable-cache.h"
 #include "runtime/prepared-command-program-cache.h"
 #include "runtime/transient-arena.h"
-#include "runtime/weight-submission-tracker.h"
 
 #include <atomic>
 #include <cstddef>
@@ -80,7 +79,6 @@ struct ggml_backend_hrx_context {
     ggml::hrx::TransientArena              transient_arena;
     ggml::hrx::HostTransferManager         host_transfers;
     ggml::hrx::HostWeightCache             host_weights;
-    ggml::hrx::WeightSubmissionTracker     weight_submissions;
     ggml::hrx::GraphReplayStreamState      graph_replay_state;
     std::string                            name;
 };

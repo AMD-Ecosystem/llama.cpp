@@ -2939,7 +2939,6 @@ static void run_mutable_host_input_after_writeback_case(bool hrx_host) {
             // The recorded launch advances once; the queued host-download tail must advance again.
             REQUIRE(after_writer.value >= before_writer.value + 2);
         }
-        REQUIRE(backend_state->weight_submissions.poll_completed().success());
         REQUIRE(backend_state->graph_replay_state.has_pending_host_writebacks());
         // Finish reading registered host memory without draining the backend's deferred writebacks.
         REQUIRE(!ggml::hrx::take_status(hrx_stream_synchronize(backend_state->stream)));
@@ -2968,99 +2967,7 @@ static void run_mutable_host_input_after_writeback_case(bool hrx_host) {
 
 enum class PackedWeightSourceKind { Imported, CpuHost, HrxHost, CoherentSubregion };
 
-static void run_weight_demand_comparison_case() {
-    ggml::hrx::WeightSubmissionTracker tracker;
-    ggml::hrx::HostWeightSource native;
-    native.identity = 17;
-    native.generation = 3;
-    native.capacity = 65536;
-    native.offset = 4096;
-    native.length = 32768;
-    native.region_length = 32768;
-    native.region_type = GGML_TYPE_F16;
-    native.materialized_length = 32768;
-    native.source_type = GGML_TYPE_F16;
-    native.input_size = 256;
-    native.output_size = 64;
-    native.source_ne = { 256, 64, 1, 1 };
-    native.source_nb = { 2, 512, 32768, 32768 };
-    ggml::hrx::HostWeightSource packed = native;
-    packed.layout = "packed-test-layout";
-    packed.materialized_length = 49152;
-    ggml::hrx::HostWeightSource other = native;
-    other.offset = 36864;
-
-    REQUIRE(tracker.demand_matches({}));
-    REQUIRE(!tracker.demand_matches({ native }));
-    REQUIRE(tracker.record(nullptr, nullptr, nullptr, { native, other }, true, true).success());
-    REQUIRE(tracker.demand_matches({}));
-    REQUIRE(tracker.demand_matches({ native }));
-    int aliases[2] = {};
-    ggml::hrx::HostWeightSource alias = native;
-    alias.host_data = &aliases[1];
-    REQUIRE(tracker.demand_matches({ native, alias, native }));
-    REQUIRE(tracker.demand_matches({ other, other }));
-    REQUIRE(!tracker.demand_matches({ native, packed }));
-    REQUIRE(!tracker.demand_matches({ packed, native }));
-    REQUIRE(!tracker.demand_matches({ packed }));
-
-    auto expect_mismatch = [&](const ggml::hrx::HostWeightSource & changed) {
-        REQUIRE(!tracker.demand_matches({ changed }));
-    };
-    ggml::hrx::HostWeightSource changed = native;
-    changed.generation++;
-    expect_mismatch(changed);
-    changed = native;
-    changed.capacity++;
-    expect_mismatch(changed);
-    changed = native;
-    changed.length++;
-    expect_mismatch(changed);
-    changed = native;
-    changed.materialized_length++;
-    expect_mismatch(changed);
-    changed = native;
-    changed.source_type = GGML_TYPE_F32;
-    expect_mismatch(changed);
-    changed = native;
-    changed.input_size++;
-    expect_mismatch(changed);
-    changed = native;
-    changed.output_size++;
-    expect_mismatch(changed);
-    changed = native;
-    changed.identity++;
-    expect_mismatch(changed);
-    changed = native;
-    changed.offset++;
-    expect_mismatch(changed);
-    changed = native;
-    changed.region_length++;
-    expect_mismatch(changed);
-    changed = native;
-    changed.region_type = GGML_TYPE_F32;
-    expect_mismatch(changed);
-    changed = native;
-    changed.source_ne[0]++;
-    expect_mismatch(changed);
-    changed = native;
-    changed.source_nb[0]++;
-    expect_mismatch(changed);
-
-    REQUIRE(tracker.record(nullptr, nullptr, nullptr, { native, packed, other }, true, true).success());
-    REQUIRE(tracker.demand_matches({ packed, native, packed, native }));
-    REQUIRE(tracker.demand_matches({ other, native, packed }));
-    REQUIRE(!tracker.demand_matches({ native }));
-    ggml::hrx::HostWeightSource third = packed;
-    third.layout = "another-packed-layout";
-    REQUIRE(!tracker.demand_matches({ native, packed, third }));
-    ggml::hrx::HostWeightSource changed_other = other;
-    changed_other.generation++;
-    REQUIRE(!tracker.demand_matches({ changed_other, native, packed }));
-    REQUIRE(!tracker.demand_matches({ native, packed, changed_other }));
-}
-
-static void run_weight_reclamation_sequence_case() {
+static void run_weight_persistence_sequence_case() {
     constexpr int64_t input_size = 256;
     constexpr int64_t output_size = 64;
     ggml_backend_t cpu = init_cpu_backend();
@@ -3194,7 +3101,7 @@ static void run_weight_reclamation_sequence_case() {
                         [](float value) { return std::fabs(value) > 0.1f; }));
 
     auto execute = [&](ggml_cgraph * graph, ggml_tensor * output, const std::vector<float> & expected,
-                       size_t live_allocations = 1) {
+                       size_t live_allocations) {
         REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
         ggml_backend_synchronize(backend);
         require_close(get_f32_tensor(backend, output), expected, 2.0e-2f, 3.0e-2f);
@@ -3203,182 +3110,93 @@ static void run_weight_reclamation_sequence_case() {
         REQUIRE(stats.weight_live_allocations == live_allocations);
         return stats;
     };
-    const auto native_first = execute(hrx_native, hrx_rows, expected_native);
+    const auto native_first = execute(hrx_native, hrx_rows, expected_native, 1);
     REQUIRE(native_first.weight_materializations == 1);
-    REQUIRE(state->weight_submissions.revision() == 1);
-    const auto packed_first = execute(hrx_packed, hrx_matmul, expected_packed);
+    REQUIRE(native_first.weight_duplicate_warnings == 0);
+    const auto packed_first = execute(hrx_packed, hrx_matmul, expected_packed, 2);
     REQUIRE(packed_first.weight_materializations == 2);
-    REQUIRE(packed_first.weight_peak_bytes ==
-            std::max(native_first.weight_live_bytes, packed_first.weight_live_bytes));
-    const auto before_native_rebuild = state->graph_programs.stats();
-    const auto native_second = execute(hrx_native, hrx_rows, expected_native);
-    REQUIRE(native_second.weight_materializations == 3);
-    const auto rebuilt_native_demand = state->graph_programs.stats();
-    REQUIRE(rebuilt_native_demand.weight_demand_builds > before_native_rebuild.weight_demand_builds);
-    const uint64_t warm_revision = state->weight_submissions.revision();
-    const auto native_unchanged = execute(hrx_native, hrx_rows, expected_native);
-    REQUIRE(state->weight_submissions.revision() == warm_revision);
-    REQUIRE(native_unchanged.weight_materializations == native_second.weight_materializations);
-    REQUIRE(native_unchanged.weight_uploaded_bytes == native_second.weight_uploaded_bytes);
-    REQUIRE(native_unchanged.prepared_program_hits > native_second.prepared_program_hits);
-    REQUIRE(state->graph_programs.stats().weight_demand_hits > rebuilt_native_demand.weight_demand_hits);
-    hrx_timeline_point_t before_replay = {};
-    REQUIRE(!ggml::hrx::take_status(hrx_stream_get_timeline_position(state->stream, &before_replay)));
+    REQUIRE(packed_first.weight_live_bytes == 2 * weight.size());
+    REQUIRE(packed_first.weight_duplicate_warnings == 1);
+    for (int cycle = 0; cycle < 3; ++cycle) {
+        const auto native = execute(hrx_native, hrx_rows, expected_native, 2);
+        const auto packed = execute(hrx_packed, hrx_matmul, expected_packed, 2);
+        for (const auto & warm : { native, packed }) {
+            REQUIRE(warm.weight_materializations == packed_first.weight_materializations);
+            REQUIRE(warm.weight_uploaded_bytes == packed_first.weight_uploaded_bytes);
+            REQUIRE(warm.weight_peak_bytes == packed_first.weight_peak_bytes);
+            REQUIRE(warm.weight_duplicate_warnings == packed_first.weight_duplicate_warnings);
+            REQUIRE(warm.prepared_program_builds == packed_first.prepared_program_builds);
+            REQUIRE(warm.prepared_program_hits > packed_first.prepared_program_hits);
+        }
+    }
+    const bool replay_disabled = ggml::hrx::graph_replay_disabled_by_environment();
     const auto recorded_native = ggml::hrx::GraphExecutor(*state).execute(*hrx_native);
     REQUIRE(recorded_native.success());
-    hrx_timeline_point_t after_replay = {};
-    REQUIRE(!ggml::hrx::take_status(hrx_stream_get_timeline_position(state->stream, &after_replay)));
-    const char * replay_flag = std::getenv("GGML_HRX_DISABLE_GRAPH_REPLAY");
-    const bool replay_disabled = replay_flag != nullptr && std::string(replay_flag) == "1";
     REQUIRE(recorded_native.graph_replay_event == (replay_disabled ? ggml::hrx::HrxGraphReplayEvent::Disabled :
                                                      ggml::hrx::HrxGraphReplayEvent::Hit));
-    if (!replay_disabled) {
-        REQUIRE(after_replay.semaphore == before_replay.semaphore);
-        REQUIRE(after_replay.value == before_replay.value + 1);
-    }
-    ggml::hrx::WeightSubmissionTracker isolated_tracker;
-    auto isolated_resources = std::make_shared<ggml::hrx::CachedCommandProgramResources>();
-    REQUIRE(isolated_tracker.record(state->device->device, state->stream, isolated_resources, {}, true, false).success());
-    hrx_timeline_point_t after_tracker = {};
-    REQUIRE(!ggml::hrx::take_status(hrx_stream_get_timeline_position(state->stream, &after_tracker)));
-    REQUIRE(after_tracker.semaphore == after_replay.semaphore);
-    REQUIRE(after_tracker.value == after_replay.value);
     ggml_backend_synchronize(backend);
 
     const auto structural_before = state->prepared_programs.stats();
-    const auto structural_native = execute(hrx_native_structural, hrx_rows_structural, expected_native);
-    REQUIRE(structural_native.weight_materializations == native_second.weight_materializations);
-    const auto structural_packed = execute(hrx_packed_structural, hrx_matmul_structural, expected_packed);
-    REQUIRE(structural_packed.weight_materializations == native_second.weight_materializations + 1);
-    const auto structural_return = execute(hrx_native_structural, hrx_rows_structural, expected_native);
-    REQUIRE(structural_return.weight_materializations == native_second.weight_materializations + 2);
+    execute(hrx_native_structural, hrx_rows_structural, expected_native, 2);
+    execute(hrx_packed_structural, hrx_matmul_structural, expected_packed, 2);
+    const auto structural_return = execute(hrx_native_structural, hrx_rows_structural, expected_native, 2);
+    REQUIRE(structural_return.weight_materializations == packed_first.weight_materializations);
+    REQUIRE(structural_return.weight_uploaded_bytes == packed_first.weight_uploaded_bytes);
     REQUIRE(state->prepared_programs.stats().builds > structural_before.builds);
-    const auto distinct_second = execute(hrx_second_native, hrx_second_rows, expected_second, 2);
+    const auto distinct_second = execute(hrx_second_native, hrx_second_rows, expected_second, 3);
     REQUIRE(distinct_second.weight_materializations == structural_return.weight_materializations + 1);
+    REQUIRE(distinct_second.weight_duplicate_warnings == packed_first.weight_duplicate_warnings);
     REQUIRE(ggml_backend_graph_compute(backend, hrx_empty) == GGML_STATUS_SUCCESS);
-    ggml_backend_synchronize(backend);
     REQUIRE(hrx_no_weight->n_nodes > 0);
-    const auto no_weight = execute(hrx_no_weight, hrx_no_weight_output, expected_no_weight, 2);
+    const auto no_weight = execute(hrx_no_weight, hrx_no_weight_output, expected_no_weight, 3);
     REQUIRE(no_weight.weight_materializations == distinct_second.weight_materializations);
     REQUIRE(no_weight.weight_uploaded_bytes == distinct_second.weight_uploaded_bytes);
     REQUIRE(no_weight.weight_live_bytes == distinct_second.weight_live_bytes);
-    const auto reacquired_native = execute(hrx_native, hrx_rows, expected_native, 2);
-    REQUIRE(reacquired_native.weight_materializations == no_weight.weight_materializations);
-    REQUIRE(reacquired_native.weight_uploaded_bytes == no_weight.weight_uploaded_bytes);
-    const auto repeated_second = execute(hrx_second_native, hrx_second_rows, expected_second, 2);
-    REQUIRE(repeated_second.weight_materializations == reacquired_native.weight_materializations);
-    REQUIRE(repeated_second.weight_uploaded_bytes == reacquired_native.weight_uploaded_bytes);
-    const auto rerecorded_native = ggml::hrx::GraphExecutor(*state).execute(*hrx_native);
-    REQUIRE(rerecorded_native.success());
-    REQUIRE(rerecorded_native.graph_replay_event == (replay_disabled ? ggml::hrx::HrxGraphReplayEvent::Disabled :
-                                                       ggml::hrx::HrxGraphReplayEvent::Hit));
-    ggml_backend_synchronize(backend);
-    const auto packed_with_second = execute(hrx_packed, hrx_matmul, expected_packed, 2);
-    const auto second_between_packed = execute(hrx_second_native, hrx_second_rows, expected_second, 2);
-    const auto packed_reused = execute(hrx_packed, hrx_matmul, expected_packed, 2);
-    REQUIRE(second_between_packed.weight_materializations == packed_with_second.weight_materializations);
-    REQUIRE(packed_reused.weight_materializations == packed_with_second.weight_materializations);
-    REQUIRE(packed_reused.weight_uploaded_bytes == packed_with_second.weight_uploaded_bytes);
+    execute(hrx_native, hrx_rows, expected_native, 3);
+    execute(hrx_second_native, hrx_second_rows, expected_second, 3);
+    const auto packed_reused = execute(hrx_packed, hrx_matmul, expected_packed, 3);
+    REQUIRE(packed_reused.weight_materializations == no_weight.weight_materializations);
+    REQUIRE(packed_reused.weight_uploaded_bytes == no_weight.weight_uploaded_bytes);
+
     auto verify_two_weights = [&](ggml_cgraph * graph, ggml_tensor * first, ggml_tensor * second) {
         REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
         ggml_backend_synchronize(backend);
         require_close(get_f32_tensor(backend, first), expected_native, 2.0e-2f, 3.0e-2f);
         require_close(get_f32_tensor(backend, second), expected_third, 2.0e-2f, 3.0e-2f);
-        ggml_backend_hrx_cache_stats stats = {};
-        REQUIRE(ggml_backend_hrx_get_cache_stats(backend, &stats));
-        REQUIRE(stats.weight_live_allocations == 3);
+        REQUIRE(state->host_weights.stats().allocation_count == 3);
     };
-    auto fail_then_retry = [&](ggml_cgraph * two_weights, ggml_tensor * first, ggml_tensor * second,
-                               size_t warm_allocations) {
-        const auto before_cold_failure = execute(hrx_packed, hrx_matmul, expected_packed, warm_allocations);
+    auto fail_then_retry = [&](ggml_cgraph * two_weights, ggml_tensor * first, ggml_tensor * second) {
+        ggml_backend_synchronize(backend);
+        state->graph_programs.clear();
+        state->prepared_programs.clear();
+        state->host_weights.clear();
+        const auto before_failure = execute(hrx_second_native, hrx_second_rows, expected_second, 1);
+        const auto owner = state->graph_programs.get_or_build(
+            *hrx_two_weights, ggml::hrx::get_qwen_kernel_corpus(), state->device->architecture);
+        REQUIRE(owner.valid());
         state->host_weights.fail_cold_acquire_after_for_test(1);
-        const auto before_failure = state->graph_programs.stats();
-        const auto retained_before_failure = state->weight_submissions.current_demand();
         REQUIRE(ggml_backend_graph_compute(backend, two_weights) == GGML_STATUS_FAILED);
-        REQUIRE(state->graph_programs.stats().weight_demand_builds == before_failure.weight_demand_builds);
-        REQUIRE(state->weight_submissions.demand_matches(retained_before_failure));
         ggml_backend_synchronize(backend);
-        ggml_backend_hrx_cache_stats failed = {};
-        REQUIRE(ggml_backend_hrx_get_cache_stats(backend, &failed));
-        REQUIRE(failed.weight_live_allocations == 1);
-        REQUIRE(failed.weight_materializations == before_cold_failure.weight_materializations + 1);
-        const auto preserved_second = execute(hrx_second_native, hrx_second_rows, expected_second, 1);
-        REQUIRE(preserved_second.weight_materializations == failed.weight_materializations);
-        execute(hrx_packed, hrx_matmul, expected_packed, 2);
-        verify_two_weights(two_weights, first, second);
-    };
-    fail_then_retry(hrx_two_weights, hrx_rows, hrx_third_rows, 2);
-    // A layout transition makes the next native acquisition cold without changing the immutable source.
-    execute(hrx_third_packed, hrx_third_matmul, expected_third_packed, 3);
-    const auto structural_failure_before = state->prepared_programs.stats();
-    fail_then_retry(hrx_two_weights_structural, hrx_two_first, hrx_two_second, 3);
-    REQUIRE(state->prepared_programs.stats().builds > structural_failure_before.builds);
-    verify_two_weights(hrx_two_weights, hrx_rows, hrx_third_rows);
-
-    auto completion_fail_then_retry = [&](ggml_cgraph * two_weights, ggml_tensor * first, ggml_tensor * second) {
-        execute(hrx_packed, hrx_matmul, expected_packed, 3);
-        state->weight_submissions.fail_completion_record_for_test();
-        const auto before_failure = state->graph_programs.stats();
-        const auto retained_before_failure = state->weight_submissions.current_demand();
-        REQUIRE(ggml_backend_graph_compute(backend, two_weights) == GGML_STATUS_FAILED);
-        REQUIRE(state->graph_programs.stats().weight_demand_builds == before_failure.weight_demand_builds);
-        REQUIRE(state->weight_submissions.demand_matches(retained_before_failure));
-        // The fallback synchronization completed the submitted writes despite the error return.
-        ggml_backend_synchronize(backend);
-        require_close(get_f32_tensor(backend, first), expected_native, 2.0e-2f, 3.0e-2f);
-        require_close(get_f32_tensor(backend, second), expected_third, 2.0e-2f, 3.0e-2f);
         ggml_backend_hrx_cache_stats failed = {};
         REQUIRE(ggml_backend_hrx_get_cache_stats(backend, &failed));
         REQUIRE(failed.weight_live_allocations == 2);
+        REQUIRE(failed.weight_materializations == before_failure.weight_materializations + 1);
         const auto preserved_second = execute(hrx_second_native, hrx_second_rows, expected_second, 2);
         REQUIRE(preserved_second.weight_materializations == failed.weight_materializations);
-        execute(hrx_packed, hrx_matmul, expected_packed, 3);
         verify_two_weights(two_weights, first, second);
+        REQUIRE(state->host_weights.stats().misses == failed.weight_materializations + 1);
     };
-    completion_fail_then_retry(hrx_two_weights, hrx_rows, hrx_third_rows);
-    completion_fail_then_retry(hrx_two_weights_structural, hrx_two_first, hrx_two_second);
-
-    // Logical demand can survive a discarded prepared owner and its physical allocation.
-    execute(hrx_packed, hrx_matmul, expected_packed, 3);
-    const auto packed_lookup = state->graph_programs.get_or_build(
-        *hrx_packed, ggml::hrx::get_qwen_kernel_corpus(), state->device->architecture);
-    REQUIRE(packed_lookup.valid());
-    const uint64_t retained_revision = state->weight_submissions.revision();
-    REQUIRE(packed_lookup.program->admitted_at(retained_revision));
-    const auto before_owner_reset = state->host_weights.stats();
-    const auto retained_demand = state->weight_submissions.current_demand();
+    fail_then_retry(hrx_two_weights, hrx_rows, hrx_third_rows);
+    fail_then_retry(hrx_two_weights_structural, hrx_two_first, hrx_two_second);
+    execute(hrx_third_packed, hrx_third_matmul, expected_third_packed, 4);
+    const auto all_layouts = execute(hrx_packed, hrx_matmul, expected_packed, 5);
     ggml_backend_synchronize(backend);
-    state->graph_programs.invalidate_obsolete_weights({});
-    state->prepared_programs.invalidate_obsolete_weights({});
-    state->weight_submissions.release_current_leases();
-    state->host_weights.evict_except({}, {});
-    REQUIRE(!packed_lookup.program->has_prepared_program());
-    REQUIRE(!packed_lookup.program->admitted_at(retained_revision));
-    REQUIRE(state->host_weights.stats().allocation_count == 0);
-    REQUIRE(state->weight_submissions.demand_matches(retained_demand));
-    REQUIRE(state->weight_submissions.revision() == retained_revision);
-    execute(hrx_packed, hrx_matmul, expected_packed, 1);
-    REQUIRE(state->host_weights.stats().misses == before_owner_reset.misses + 1);
-    REQUIRE(state->weight_submissions.revision() == retained_revision);
-    REQUIRE(packed_lookup.program->admitted_at(retained_revision));
-
-    // A failed capture of an otherwise warm execution cannot leave its admission reusable.
-    const auto before_capture_failure = state->graph_programs.stats();
-    const auto current_leases = state->weight_submissions.current_leases();
-    state->weight_submissions.fail_completion_record_for_test();
-    REQUIRE(ggml_backend_graph_compute(backend, hrx_packed) == GGML_STATUS_FAILED);
-    REQUIRE(!packed_lookup.program->admitted_at(retained_revision));
-    REQUIRE(state->weight_submissions.revision() == retained_revision);
-    REQUIRE(state->graph_programs.stats().weight_demand_builds == before_capture_failure.weight_demand_builds);
-    REQUIRE(state->graph_programs.stats().weight_demand_hits == before_capture_failure.weight_demand_hits);
-    REQUIRE(state->weight_submissions.current_leases().size() == current_leases.size());
-    for (size_t i = 0; i < current_leases.size(); ++i) {
-        REQUIRE(state->weight_submissions.current_leases()[i].buffer() == current_leases[i].buffer());
-    }
-    execute(hrx_packed, hrx_matmul, expected_packed, 1);
-    REQUIRE(state->weight_submissions.revision() == retained_revision);
-    REQUIRE(packed_lookup.program->admitted_at(retained_revision));
-    REQUIRE(state->graph_programs.stats().weight_demand_builds == before_capture_failure.weight_demand_builds + 1);
+    state->graph_programs.clear();
+    state->prepared_programs.clear();
+    REQUIRE(state->host_weights.stats().allocation_count == 5);
+    const auto rebuilt = execute(hrx_packed, hrx_matmul, expected_packed, 5);
+    REQUIRE(rebuilt.weight_materializations == all_layouts.weight_materializations);
+    REQUIRE(rebuilt.weight_uploaded_bytes == all_layouts.weight_uploaded_bytes);
 
     ggml_backend_buffer_free(hrx_tensors);
     ggml_backend_buffer_free(cpu_tensors);
@@ -3390,7 +3208,7 @@ static void run_weight_reclamation_sequence_case() {
     ggml_backend_free(cpu);
 }
 
-static void run_weight_reclamation_overlap_case() {
+static void run_weight_persistence_overlap_case() {
     constexpr int64_t input_size = 256;
     constexpr int64_t output_size = 64;
     const char * old_flag = std::getenv("GGML_HRX_DISABLE_GRAPH_REPLAY");
@@ -3489,8 +3307,7 @@ static void run_weight_reclamation_overlap_case() {
     REQUIRE(w0_value != nullptr && w1_value != nullptr);
     REQUIRE(w0_value->id != w1_value->id);
 
-    // Preupload the packed layout before closing the gate. Its first coexistence with native
-    // then occurs across two real submissions, without a cold upload waiting on the gate.
+    // Materialize both layouts before gating real submissions; cold uploads wait on the stream.
     REQUIRE(ggml_backend_graph_compute(backend, hrx_native_graph) == GGML_STATUS_SUCCESS);
     ggml_backend_synchronize(backend);
     auto packed_lookup = state->graph_programs.get_or_build(
@@ -3522,12 +3339,11 @@ static void run_weight_reclamation_overlap_case() {
     REQUIRE(preuploaded.valid());
     ggml_backend_hrx_cache_stats cross_before = {};
     REQUIRE(ggml_backend_hrx_get_cache_stats(backend, &cross_before));
-    REQUIRE(cross_before.weight_duplicate_warnings == 0);
+    REQUIRE(cross_before.weight_duplicate_warnings == 1);
     // The public executors finish their kernel reads before returning. Queue warmed recordings directly
     // to exercise ownership of genuinely outstanding reads without weakening that completion boundary.
     struct Submission {
         std::shared_ptr<ggml::hrx::CachedCommandProgramResources> resources;
-        std::vector<ggml::hrx::HostWeightSource> demand;
     };
     auto prepare_submission = [&](ggml_cgraph * graph) {
         auto lookup = state->graph_programs.get_or_build(
@@ -3549,8 +3365,6 @@ static void run_weight_reclamation_overlap_case() {
                 external.value, buffer, external.tensor->type, ne, nb, ggml_nbytes(external.tensor) == 0));
         }
         auto bindings = ggml::hrx::CommandProgramBindings::from_bindings(std::move(external_bindings));
-        auto demands = ggml::hrx::collect_command_program_weight_demands(lookup.program->commands(), bindings);
-        REQUIRE(demands.valid());
         const ggml::hrx::CommandProgramExecutionContext context = {
             state->device->device, state->stream, state->device->architecture.c_str(),
             &ggml::hrx::get_qwen_kernel_corpus(), &state->kernel_executables, &state->transient_arena,
@@ -3564,36 +3378,16 @@ static void run_weight_reclamation_overlap_case() {
                 execution.execution_resources->prepared.resident_host_weights);
         Submission submission;
         submission.resources = std::move(execution.execution_resources);
-        for (const auto & demand : demands.weights) {
-            submission.demand.push_back(demand.source);
-        }
         return submission;
     };
     auto queue_submission = [&](Submission & submission) {
-        const bool changed = !state->weight_submissions.demand_matches(submission.demand);
-        if (changed) {
-            state->weight_submissions.release_current_leases();
-        }
         const auto launch = ggml::hrx::take_status(hrx_graph_exec_launch(
             submission.resources->recorded.exec, state->stream));
         if (launch) {
             return false;
         }
-        const auto * weight_list = submission.resources->prepared.resident_host_weights.get();
-        const auto capture = state->weight_submissions.record(
-            state->device->device, state->stream, submission.resources, submission.demand, true, changed);
-        const bool shares_weights = &state->weight_submissions.current_leases() == weight_list;
         submission.resources.reset();
-        if (!capture.success()) {
-            return false;
-        }
-        const auto & retained = state->weight_submissions.current_demand();
-        state->graph_programs.invalidate_obsolete_weights(retained);
-        state->prepared_programs.invalidate_obsolete_weights(retained);
-        const auto outstanding = state->weight_submissions.outstanding_leases();
-        state->host_weights.evict_except(retained, outstanding);
-        state->host_weights.report_coexisting_representations(outstanding, "test outstanding submissions");
-        return shares_weights;
+        return !ggml::hrx::take_status(hrx_stream_flush(state->stream));
     };
     auto cross_native_submission = prepare_submission(hrx_native_graph);
     auto cross_packed_submission = prepare_submission(hrx_packed_graph);
@@ -3619,9 +3413,6 @@ static void run_weight_reclamation_overlap_case() {
         queue_submission(cross_packed_submission);
     ggml_backend_hrx_cache_stats cross_queued = {};
     const bool cross_stats_ok = ggml_backend_hrx_get_cache_stats(backend, &cross_queued);
-    bool cross_obsolete_completed = true;
-    const bool cross_poll_ok = state->weight_submissions.poll_completed(&cross_obsolete_completed).success();
-    const bool cross_old_demand_pending = state->weight_submissions.has_obsolete_pending();
     {
         std::lock_guard<std::mutex> lock(cross_mutex);
         cross_finished = true;
@@ -3629,13 +3420,11 @@ static void run_weight_reclamation_overlap_case() {
     cross_cv.notify_one();
     const bool cross_release_ok = !ggml::hrx::take_status(hrx_semaphore_signal(cross_gate, 1));
     cross_watchdog.join();
-    REQUIRE(cross_native && cross_packed && cross_stats_ok && cross_poll_ok && cross_release_ok && !cross_timed_out);
-    REQUIRE(!cross_obsolete_completed && cross_old_demand_pending);
+    REQUIRE(cross_native && cross_packed && cross_stats_ok && cross_release_ok && !cross_timed_out);
     REQUIRE(cross_queued.weight_live_allocations == 2);
-    REQUIRE(cross_queued.weight_duplicate_warnings == cross_before.weight_duplicate_warnings + 1);
+    REQUIRE(cross_queued.weight_duplicate_warnings == cross_before.weight_duplicate_warnings);
     preuploaded.lease = {};
     ggml_backend_synchronize(backend);
-    REQUIRE(!state->weight_submissions.has_obsolete_pending());
     require_close(get_f32_tensor(backend, hrx_packed), expected_packed, 2.0e-2f, 3.0e-2f);
     hrx_semaphore_release(cross_gate);
 
@@ -3674,7 +3463,7 @@ static void run_weight_reclamation_overlap_case() {
         queue_submission(cold_native_submission);
     state->host_weights.fail_cold_acquire_after_for_test(0);
     const bool cold_failed =
-        ggml_backend_graph_compute_async(backend, hrx_packed_graph) == GGML_STATUS_FAILED;
+        ggml_backend_graph_compute_async(backend, hrx_disjoint_graph) == GGML_STATUS_FAILED;
     ggml_backend_hrx_cache_stats cold_pending = {};
     const bool cold_stats_ok = ggml_backend_hrx_get_cache_stats(backend, &cold_pending);
     {
@@ -3685,7 +3474,7 @@ static void run_weight_reclamation_overlap_case() {
     const bool cold_release_ok = !ggml::hrx::take_status(hrx_semaphore_signal(cold_gate, 1));
     cold_watchdog.join();
     REQUIRE(native_before_failure && cold_failed && cold_stats_ok && cold_release_ok && !cold_timed_out);
-    REQUIRE(cold_pending.weight_live_allocations == 1);
+    REQUIRE(cold_pending.weight_live_allocations == 2);
     ggml_backend_synchronize(backend);
     require_close(get_f32_tensor(backend, hrx_rows), expected_native, 2.0e-2f, 3.0e-2f);
     hrx_semaphore_release(cold_gate);
@@ -3743,18 +3532,18 @@ static void run_weight_reclamation_overlap_case() {
     ggml_backend_synchronize(backend);
     require_close(get_f32_tensor(backend, hrx_mixed), expected_mixed, 2.0e-2f, 3.0e-2f);
     require_close(get_f32_tensor(backend, hrx_packed), expected_packed, 2.0e-2f, 3.0e-2f);
-    ggml_backend_hrx_cache_stats retired = {};
-    REQUIRE(ggml_backend_hrx_get_cache_stats(backend, &retired));
-    REQUIRE(retired.weight_live_allocations == 1);
-    REQUIRE(retired.weight_live_bytes < queued.weight_live_bytes);
-    REQUIRE(retired.weight_duplicate_warnings == queued.weight_duplicate_warnings);
+    ggml_backend_hrx_cache_stats completed = {};
+    REQUIRE(ggml_backend_hrx_get_cache_stats(backend, &completed));
+    REQUIRE(completed.weight_live_allocations == 2);
+    REQUIRE(completed.weight_live_bytes == queued.weight_live_bytes);
+    REQUIRE(completed.weight_duplicate_warnings == queued.weight_duplicate_warnings);
     REQUIRE(ggml_backend_graph_compute(backend, hrx_native_graph) == GGML_STATUS_SUCCESS);
     ggml_backend_synchronize(backend);
     require_close(get_f32_tensor(backend, hrx_rows), expected_native, 2.0e-2f, 3.0e-2f);
-    ggml_backend_hrx_cache_stats reacquired = {};
-    REQUIRE(ggml_backend_hrx_get_cache_stats(backend, &reacquired));
-    REQUIRE(reacquired.weight_materializations == retired.weight_materializations + 1);
-    REQUIRE(reacquired.weight_live_allocations == 1);
+    ggml_backend_hrx_cache_stats reused = {};
+    REQUIRE(ggml_backend_hrx_get_cache_stats(backend, &reused));
+    REQUIRE(reused.weight_materializations == completed.weight_materializations);
+    REQUIRE(reused.weight_live_allocations == 2);
 
     REQUIRE(ggml_backend_graph_compute(backend, hrx_mixed_graph) == GGML_STATUS_SUCCESS);
     ggml_backend_synchronize(backend);
@@ -3773,16 +3562,16 @@ static void run_weight_reclamation_overlap_case() {
     REQUIRE(mixed_reused.weight_live_allocations == 3);
     REQUIRE(ggml_backend_graph_compute(backend, hrx_native_graph) == GGML_STATUS_SUCCESS);
     ggml_backend_synchronize(backend);
-    ggml_backend_hrx_cache_stats native_narrowed = {};
-    REQUIRE(ggml_backend_hrx_get_cache_stats(backend, &native_narrowed));
-    REQUIRE(native_narrowed.weight_live_allocations == 2);
+    ggml_backend_hrx_cache_stats native_reused = {};
+    REQUIRE(ggml_backend_hrx_get_cache_stats(backend, &native_reused));
+    REQUIRE(native_reused.weight_live_allocations == 3);
     REQUIRE(ggml_backend_graph_compute(backend, hrx_disjoint_graph) == GGML_STATUS_SUCCESS);
     ggml_backend_synchronize(backend);
     require_close(get_f32_tensor(backend, hrx_disjoint_rows), expected_disjoint, 2.0e-2f, 3.0e-2f);
     ggml_backend_hrx_cache_stats disjoint_reused = {};
     REQUIRE(ggml_backend_hrx_get_cache_stats(backend, &disjoint_reused));
-    REQUIRE(disjoint_reused.weight_materializations == native_narrowed.weight_materializations);
-    REQUIRE(disjoint_reused.weight_live_allocations == 2);
+    REQUIRE(disjoint_reused.weight_materializations == native_reused.weight_materializations);
+    REQUIRE(disjoint_reused.weight_live_allocations == 3);
 
     hrx_semaphore_release(gate);
     ggml_backend_buffer_free(hrx_tensors);
@@ -3796,7 +3585,7 @@ static void run_weight_reclamation_overlap_case() {
     restore_environment_value("GGML_HRX_DISABLE_GRAPH_REPLAY", had_flag, old_flag_value);
 }
 
-static void run_failed_submission_weight_lifetime_case() {
+static void run_failed_submission_weight_lifetime_case(bool uncached = false) {
     constexpr int64_t input_size = 256;
     constexpr int64_t output_size = 64;
     const char * old_flag = std::getenv("GGML_HRX_DISABLE_GRAPH_REPLAY");
@@ -3838,6 +3627,11 @@ static void run_failed_submission_weight_lifetime_case() {
     REQUIRE(imported != nullptr);
     REQUIRE(ggml_backend_tensor_alloc(imported, hrx_weight, weight.data()) == GGML_STATUS_SUCCESS);
     ggml_backend_buffer_set_usage(imported, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    ggml_backend_buffer_t input_host = ggml_backend_buft_alloc_buffer(
+        ggml_backend_cpu_buffer_type(), ggml_nbytes(hrx_input));
+    REQUIRE(input_host != nullptr);
+    REQUIRE(ggml_backend_tensor_alloc(input_host, hrx_input, ggml_backend_buffer_get_base(input_host)) ==
+            GGML_STATUS_SUCCESS);
     ggml_backend_buffer_t cpu_tensors = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu);
     ggml_backend_buffer_t hrx_tensors = ggml_backend_alloc_ctx_tensors(hrx_ctx, backend);
     REQUIRE(cpu_tensors != nullptr && hrx_tensors != nullptr);
@@ -3893,11 +3687,6 @@ static void run_failed_submission_weight_lifetime_case() {
     REQUIRE(native_source.layout == ggml::hrx::kNativeWeightLayout);
     REQUIRE(packed_source.layout != native_source.layout);
     REQUIRE(packed_source.materialized_length > 0);
-    ggml::hrx::WeightSubmissionTracker tracker;
-    REQUIRE(tracker.record(nullptr, nullptr, nullptr, { native_source }, true, true).success());
-    REQUIRE(tracker.demand_matches({ native_source }));
-    REQUIRE(!tracker.demand_matches({ packed_source }));
-
     auto preuploaded = state->host_weights.acquire(state->device->device, state->stream,
                                                    state->host_transfers, packed_source);
     REQUIRE(preuploaded.valid());
@@ -3908,9 +3697,13 @@ static void run_failed_submission_weight_lifetime_case() {
         &ggml::hrx::get_qwen_kernel_corpus(), &state->kernel_executables, &state->transient_arena,
         &state->host_transfers, &state->host_weights, &state->device->host_buffers, &state->graph_replay_state,
     };
-    auto execution = packed_lookup.program->execute_with_result(execution_context, packed_bindings, true);
+    auto execution = uncached ?
+        state->prepared_programs.execute_with_result(execution_context, 0, packed_lookup.program->command_shape_hash(),
+                                                     packed_lookup.program->commands(), packed_bindings) :
+        packed_lookup.program->execute_with_result(execution_context, packed_bindings, true);
     REQUIRE(execution.success);
-    REQUIRE(execution.execution_resources->recorded.valid());
+    REQUIRE(!execution.execution_resources->prepared.host_staging.empty());
+    REQUIRE(execution.execution_resources->recorded.valid() == !uncached);
     ggml_backend_synchronize(backend);
     ggml_backend_tensor_set(hrx_output, poisoned.data(), 0, poisoned.size() * sizeof(float));
     // The invalid final command fails after the real weight reader is queued, before the completion boundary.
@@ -3933,20 +3726,16 @@ static void run_failed_submission_weight_lifetime_case() {
     const bool execution_failed = !ggml::hrx::execute_prepared_command_program(
         execution_context, execution.execution_resources->prepared);
     std::weak_ptr<ggml::hrx::CachedCommandProgramResources> sole_resource = execution.execution_resources;
-    const bool has_execution_resources = execution.execution_resources != nullptr;
-    const bool record_ok = has_execution_resources && tracker.record(state->device->device, state->stream,
-        execution.execution_resources, { packed_source }, false, true).success();
-    state->graph_programs.invalidate_obsolete_weights(tracker.current_demand());
+    const bool flush_ok = !ggml::hrx::take_status(hrx_stream_flush(state->stream));
     execution.execution_resources.reset();
-    state->host_weights.evict_except(tracker.current_demand(), {});
+    if (uncached) {
+        state->graph_programs.clear();
+        state->kernel_executables.clear();
+    }
     const auto pending_stats = state->host_weights.stats();
-    bool completed = true;
-    const bool poll_ok = tracker.poll_completed(&completed).success();
     bool stream_complete = true;
     const bool query_ok = !ggml::hrx::take_status(hrx_stream_query(state->stream, &stream_complete));
-    const bool demand_unchanged = tracker.demand_matches({ native_source });
-    const bool tracker_only_owner = sole_resource.use_count() == 1;
-    const bool resource_retained = tracker.outstanding_leases().size() == 1;
+    const bool cache_only_owner = sole_resource.use_count() == 1;
     {
         std::lock_guard<std::mutex> lock(gate_mutex);
         finished = true;
@@ -3954,26 +3743,29 @@ static void run_failed_submission_weight_lifetime_case() {
     gate_cv.notify_one();
     const bool signal_ok = !ggml::hrx::take_status(hrx_semaphore_signal(gate, 1));
     watchdog.join();
-    REQUIRE(execution_failed && record_ok && poll_ok && query_ok && signal_ok && !timed_out);
-    REQUIRE(!completed && !stream_complete && demand_unchanged && tracker_only_owner && resource_retained);
+    REQUIRE(execution_failed && flush_ok && query_ok && signal_ok && !timed_out);
+    REQUIRE(!stream_complete);
+    REQUIRE(cache_only_owner == !uncached);
+    REQUIRE(sole_resource.expired() == uncached);
     REQUIRE(pending_stats.allocation_count == 1);
     REQUIRE(pending_stats.resident_bytes == packed_source.materialized_length);
 
     REQUIRE(!ggml::hrx::take_status(hrx_stream_synchronize(state->stream)));
     require_close(get_f32_tensor(backend, hrx_output), expected, 2.0e-2f, 3.0e-2f);
-    bool retired = false;
-    REQUIRE(tracker.poll_completed(&retired).success());
-    REQUIRE(retired);
-    state->host_weights.evict_except(tracker.current_demand(), tracker.outstanding_leases());
-    const auto reclaimed = state->host_weights.stats();
+    REQUIRE(sole_resource.expired() == uncached);
+    const auto completed = state->host_weights.stats();
+    REQUIRE(completed.allocation_count == 1);
+    REQUIRE(completed.resident_bytes == packed_source.materialized_length);
+    state->graph_programs.clear();
     REQUIRE(sole_resource.expired());
-    REQUIRE(tracker.demand_matches({ native_source }));
-    REQUIRE(reclaimed.allocation_count == 0);
-    REQUIRE(reclaimed.resident_bytes == 0);
+    REQUIRE(state->host_weights.stats().allocation_count == 1);
+    state->host_weights.clear();
+    REQUIRE(state->host_weights.stats().allocation_count == 0);
     hrx_semaphore_release(gate);
     ggml_backend_buffer_free(hrx_tensors);
     ggml_backend_buffer_free(cpu_tensors);
     ggml_backend_buffer_free(imported);
+    ggml_backend_buffer_free(input_host);
     ggml_free(hrx_ctx);
     ggml_free(cpu_ctx);
     ggml_backend_free(backend);
@@ -4006,6 +3798,15 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
     ggml_tensor * hrx_other_input = ggml_new_tensor_2d(hrx_ctx, GGML_TYPE_F32, kInputSize, 1);
     ggml_tensor * cpu_norm_weight = ggml_new_tensor_1d(cpu_ctx, GGML_TYPE_F32, kInputSize);
     ggml_tensor * hrx_norm_weight = ggml_new_tensor_1d(hrx_ctx, GGML_TYPE_F32, kInputSize);
+    ggml_tensor * cpu_prefill_input = ggml_new_tensor_2d(cpu_ctx, GGML_TYPE_F32, kInputSize, 32);
+    ggml_tensor * hrx_prefill_input = ggml_new_tensor_2d(hrx_ctx, GGML_TYPE_F32, kInputSize, 32);
+    ggml_tensor * cpu_prefill_output = ggml_mul_mat(cpu_ctx, cpu_weight, cpu_prefill_input);
+    ggml_tensor * hrx_prefill_output = ggml_mul_mat(hrx_ctx, hrx_weight, hrx_prefill_input);
+    ggml_cgraph * cpu_prefill = ggml_new_graph(cpu_ctx);
+    ggml_cgraph * hrx_prefill = ggml_new_graph(hrx_ctx);
+    ggml_build_forward_expand(cpu_prefill, cpu_prefill_output);
+    ggml_build_forward_expand(hrx_prefill, hrx_prefill_output);
+    hrx_prefill->uid = 951004;
     ggml_tensor * cpu_native_indices = ggml_new_tensor_1d(cpu_ctx, GGML_TYPE_I32, 3);
     ggml_tensor * hrx_native_indices = ggml_new_tensor_1d(hrx_ctx, GGML_TYPE_I32, 3);
     ggml_tensor * cpu_decode_rhs = build_rmsnorm_mul_graph(cpu_ctx, cpu_decode_input, cpu_norm_weight);
@@ -4092,6 +3893,9 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
     REQUIRE(hrx_buffer != nullptr && cpu_buffer != nullptr);
     ggml_backend_tensor_set(cpu_weight, source.data(), 0, source.size());
+    const std::vector<float> prefill_input = make_pattern_f32(kInputSize * 32, 89, 0.01f);
+    set_tensor_pair_bytes(cpu_backend, cpu_prefill_input, hrx_backend, hrx_prefill_input, prefill_input.data(),
+                          prefill_input.size() * sizeof(float));
     const std::vector<float> decode_input = make_pattern_f32(kInputSize, 7, 0.01f);
     const std::array<int32_t, 3> native_indices = { 1, 17, 63 };
     set_tensor_pair_bytes(cpu_backend, cpu_decode_input, hrx_backend, hrx_decode_input, decode_input.data(),
@@ -4406,16 +4210,44 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
     REQUIRE(ggml_backend_hrx_get_cache_stats(hrx_backend, &stats));
     const uint64_t native_materializations = coherent_subregion ? 1 : 2;
     REQUIRE(stats.weight_materializations == native_materializations);
-    REQUIRE(stats.weight_live_allocations == (coherent_subregion ? 0 : 1));
+    REQUIRE(stats.weight_live_allocations == native_materializations);
     const uint64_t uploaded_bytes = stats.weight_uploaded_bytes;
     compute_and_compare(cpu_decode, hrx_decode, cpu_decode_output, hrx_decode_output);
     compute_and_compare(cpu_native, hrx_native, cpu_native_output, hrx_native_output);
     REQUIRE(ggml_backend_hrx_get_cache_stats(hrx_backend, &stats));
-    REQUIRE(stats.weight_materializations == 2 * native_materializations);
-    REQUIRE(stats.weight_live_allocations == (coherent_subregion ? 0 : 1));
-    REQUIRE(stats.weight_uploaded_bytes == 2 * uploaded_bytes);
+    REQUIRE(stats.weight_materializations == native_materializations);
+    REQUIRE(stats.weight_live_allocations == native_materializations);
+    REQUIRE(stats.weight_uploaded_bytes == uploaded_bytes);
 
-    // The preceding native consumer may retire packed residency; restore packed demand before testing input rebinding.
+    const auto warmed_layouts = stats;
+    auto prefill_lookup = backend_state->graph_programs.get_or_build(
+        *hrx_prefill, ggml::hrx::get_qwen_kernel_corpus(), backend_state->device->architecture);
+    REQUIRE(prefill_lookup.valid());
+    const auto * prefill_weight = prefill_lookup.program->graph().values().find_tensor(hrx_weight);
+    REQUIRE(prefill_weight != nullptr);
+    bool native_prefill = false;
+    for (const auto & command : prefill_lookup.program->commands().commands) {
+        for (const auto & binding : command.bindings) {
+            if (binding.value == prefill_weight->id) {
+                REQUIRE(binding.layout == ggml::hrx::kNativeWeightLayout);
+                native_prefill = true;
+            }
+        }
+    }
+    REQUIRE(native_prefill);
+    for (int cycle = 0; cycle < 3; ++cycle) {
+        compute_and_compare(cpu_prefill, hrx_prefill, cpu_prefill_output, hrx_prefill_output);
+        compute_and_compare(cpu_decode, hrx_decode, cpu_decode_output, hrx_decode_output);
+        REQUIRE(ggml_backend_hrx_get_cache_stats(hrx_backend, &stats));
+        REQUIRE(stats.weight_materializations == warmed_layouts.weight_materializations);
+        REQUIRE(stats.weight_uploaded_bytes == warmed_layouts.weight_uploaded_bytes);
+        REQUIRE(stats.weight_live_allocations == warmed_layouts.weight_live_allocations);
+        REQUIRE(stats.weight_live_bytes == warmed_layouts.weight_live_bytes);
+        REQUIRE(stats.weight_peak_bytes == warmed_layouts.weight_peak_bytes);
+        REQUIRE(stats.weight_duplicate_warnings == warmed_layouts.weight_duplicate_warnings);
+    }
+    REQUIRE(stats.weight_duplicate_warnings == 1);
+
     compute_and_compare(cpu_decode, hrx_decode, cpu_decode_output, hrx_decode_output);
     ggml_backend_hrx_cache_stats before_offset_change = {};
     REQUIRE(ggml_backend_hrx_get_cache_stats(hrx_backend, &before_offset_change));
@@ -4497,7 +4329,6 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
         backend_state->graph_programs.clear();
         backend_state->prepared_programs.clear();
         lookup = {};
-        backend_state->weight_submissions.release_current_leases();
         backend_state->host_weights.clear();
         REQUIRE(backend_state->host_weights.stats().allocation_count == 1);
         recorded = {};
@@ -4641,8 +4472,7 @@ static void run_mixed_weight_layout_program_case(ggml_type weight_type) {
     REQUIRE(repeated.duplicate_warnings == first.duplicate_warnings);
     const auto repeated_graph_stats = state->graph_programs.stats();
     REQUIRE(repeated_graph_stats.prepared_program_hits > 0);
-    REQUIRE(repeated_graph_stats.weight_demand_builds >= 1);
-    REQUIRE(repeated_graph_stats.weight_demand_hits >= 1);
+    REQUIRE(repeated_graph_stats.prepared_program_builds >= 1);
     ggml_backend_hrx_cache_stats public_repeated = {};
     REQUIRE(ggml_backend_hrx_get_cache_stats(backend, &public_repeated));
     REQUIRE(public_repeated.weight_duplicate_warnings == public_first.weight_duplicate_warnings);
@@ -4931,11 +4761,11 @@ static void run_native_cpu_weight_during_import_layout_transition_case(ggml_type
     compute_and_compare(cpu_native, hrx_native, cpu_imported_rows, hrx_imported_rows);
     auto native = state->host_weights.stats();
     REQUIRE(native.misses == first.misses + 1);
-    REQUIRE(native.allocation_count == 2);
+    REQUIRE(native.allocation_count == 3);
     compute_and_compare(cpu_packed, hrx_packed, cpu_imported_matmul, hrx_imported_matmul);
     auto packed_again = state->host_weights.stats();
-    REQUIRE(packed_again.misses == native.misses + 1);
-    REQUIRE(packed_again.allocation_count == 2);
+    REQUIRE(packed_again.misses == native.misses);
+    REQUIRE(packed_again.allocation_count == 3);
 
     ggml_backend_buffer_free(hrx_tensors);
     ggml_backend_buffer_free(cpu_tensors);
@@ -9269,10 +9099,10 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
     suite.device_case("imported_native_weight", [] { run_imported_native_weight_case(); });
     suite.device_case("mutable_host_input_after_writeback.cpu", [] { run_mutable_host_input_after_writeback_case(false); });
     suite.device_case("mutable_host_input_after_writeback.hrx", [] { run_mutable_host_input_after_writeback_case(true); });
-    suite.host_case("weight_demand_comparison", [] { run_weight_demand_comparison_case(); });
-    suite.device_case("weight_reclamation_sequence", [] { run_weight_reclamation_sequence_case(); });
-    suite.device_case("weight_reclamation_overlap", [] { run_weight_reclamation_overlap_case(); });
+    suite.device_case("weight_persistence_sequence", [] { run_weight_persistence_sequence_case(); });
+    suite.device_case("weight_persistence_overlap", [] { run_weight_persistence_overlap_case(); });
     suite.device_case("failed_submission_weight_lifetime", [] { run_failed_submission_weight_lifetime_case(); });
+    suite.device_case("failed_submission_weight_lifetime.uncached", [] { run_failed_submission_weight_lifetime_case(true); });
     suite.device_case("imported_packed_weight.q4_k", [] { run_imported_packed_weight_case(GGML_TYPE_Q4_K); });
     suite.device_case("imported_packed_weight.q6_k", [] { run_imported_packed_weight_case(GGML_TYPE_Q6_K); });
     suite.device_case("mixed_weight_layout_program.q4_k", [] { run_mixed_weight_layout_program_case(GGML_TYPE_Q4_K); });

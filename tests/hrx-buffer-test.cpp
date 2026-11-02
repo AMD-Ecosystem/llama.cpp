@@ -660,6 +660,8 @@ static void run_q6_pack_scratch_checks(ggml_backend_hrx_context * context) {
     source.capacity = weight_bytes;
     source.length = weight_bytes;
     source.materialized_length = weight_bytes;
+    source.region_length = weight_bytes;
+    source.region_type = GGML_TYPE_Q6_K;
     source.layout = ggml::hrx::kQ6KPackedK256Row64ScaleRowLayout;
     source.source_type = GGML_TYPE_Q6_K;
     source.input_size = 256;
@@ -675,8 +677,7 @@ static void run_q6_pack_scratch_checks(ggml_backend_hrx_context * context) {
     }
 
     first.lease = {};
-    weights.evict_except({}, {});
-    REQUIRE(weights.stats().allocation_count == 0);
+    REQUIRE(weights.stats().allocation_count == 1);
     std::fill(host.begin(), host.end(), 0xa5);
     source.generation = 2;
     auto second = weights.acquire(context->device->device, context->stream, transfers, source);
@@ -686,7 +687,26 @@ static void run_q6_pack_scratch_checks(ggml_backend_hrx_context * context) {
     for (uint8_t byte : downloaded) {
         REQUIRE(byte == 0xa5);
     }
-    REQUIRE(weights.stats().peak_resident_bytes == weight_bytes);
+    REQUIRE(weights.stats().allocation_count == 2);
+    REQUIRE(weights.stats().peak_resident_bytes == 2 * weight_bytes);
+
+    source.layout = ggml::hrx::kNativeWeightLayout;
+    auto native = weights.acquire(context->device->device, context->stream, transfers, source);
+    REQUIRE(native.valid());
+    REQUIRE(weights.stats().duplicate_warnings == 1);
+    auto alias = weights.acquire(context->device->device, context->stream, transfers, source);
+    REQUIRE(alias.valid());
+    REQUIRE(alias.lease.buffer() == native.lease.buffer());
+    REQUIRE(weights.stats().duplicate_warnings == 1);
+    source.generation = 3;
+    auto changed_native = weights.acquire(context->device->device, context->stream, transfers, source);
+    REQUIRE(changed_native.valid());
+    REQUIRE(weights.stats().duplicate_warnings == 1);
+    source.layout = ggml::hrx::kQ6KPackedK256Row64ScaleRowLayout;
+    auto changed_packed = weights.acquire(context->device->device, context->stream, transfers, source);
+    REQUIRE(changed_packed.valid());
+    REQUIRE(weights.stats().duplicate_warnings == 2);
+    REQUIRE(weights.stats().allocation_count == 5);
 }
 
 template <typename F>

@@ -168,8 +168,7 @@ struct RecordedCommandGraph {
     bool valid() const { return status.success() && exec != nullptr; }
 };
 
-// A submitted command may still use prepared bindings after its cache entry is retired.
-// The execution completion tracker retains this object until the stream reaches the submission.
+// Cached programs own their bindings across submissions; recorded handles are released before prepared leases.
 struct CachedCommandProgramResources {
     PreparedCommandProgram prepared;
     RecordedCommandGraph   recorded;
