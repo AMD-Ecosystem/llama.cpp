@@ -20,14 +20,18 @@ func.def inline @ggml_top_k_float_key(%value: f32) -> (i32) {
   func.return %key : i32
 }
 
-kernel.def target(@ggml_top_k_radix_wave64) @ggml_top_k_radix_f32(%row_count: index) {
-  %one = index.constant 1 : index
-  %threads = index.constant 256 : index
-  kernel.launch.config workgroups(%one, %row_count, %one) workgroup_size(%threads, %one, %one) : index
-} launch(%row_count: index, %input: buffer, %output: buffer) {
+config.def @ggml.top_k.stage_width = 1 : index
+
+config.def @ggml.top_k.first_pass = 1 : index
+
+config.def @ggml.top_k.last_pass = 1 : index
+
+template.decl @ggml.top_k.radix(%partitioned: i1, %row_count: index, %input: buffer, %input_ids: buffer, %output: buffer)
+
+template.def<@ggml.top_k.radix> device @ggml_top_k_radix(%partitioned: i1, %row_count: index, %input: buffer, %input_ids: buffer, %output: buffer) {
   %rows = index.assume %row_count [range(%row_count, 1, 2048)] : index
-  %width = config.get @ggml.top_k.width : index
-  %count = config.get @ggml.top_k.count : index
+  %source_width = config.get @ggml.top_k.width : index
+  %requested_count = config.get @ggml.top_k.count : index
   %row0 = kernel.workgroup.id<y> : index
   %row = index.assume %row0 [lt(%row0, %rows)] : index
   %thread = kernel.workitem.id<x> : index
@@ -37,6 +41,31 @@ kernel.def target(@ggml_top_k_radix_wave64) @ggml_top_k_radix_f32(%row_count: in
   %c8 = index.constant 8 : index
   %c24 = index.constant 24 : index
   %c256 = index.constant 256 : index
+  %width, %input_width, %output_width, %partition_base, %output_base, %first_pass, %last_pass = scf.if %partitioned -> (index, index, index, index, index, i1, i1) {
+    %stage_width = config.get @ggml.top_k.stage_width : index
+    %first = config.get @ggml.top_k.first_pass : index
+    %last = config.get @ggml.top_k.last_pass : index
+    %is_first = index.cmp ne, %first, %c0 : index
+    %is_last = index.cmp ne, %last, %c0 : index
+    %padding = index.constant 255 : index
+    %padded_width = index.add %stage_width, %padding : index
+    %partition_count = index.div %padded_width, %c256 : index
+    %partition0 = kernel.workgroup.id<x> : index
+    %partition = index.assume %partition0 [lt(%partition0, %partition_count)] : index
+    %base = index.mul %partition, %c256 : index
+    %remaining = index.sub %stage_width, %base : index
+    %extent = index.min %remaining, %c256 : index
+    %full_partitions = index.div %stage_width, %c256 : index
+    %tail = index.rem %stage_width, %c256 : index
+    %tail_count = index.min %tail, %requested_count : index
+    %result_width = index.madd %full_partitions, %requested_count, %tail_count : index
+    %result_base = index.mul %partition, %requested_count : index
+    scf.yield %extent, %stage_width, %result_width, %base, %result_base, %is_first, %is_last : index, index, index, index, index, i1, i1
+  } else {
+    %yes = scalar.constant true : i1
+    scf.yield %source_width, %source_width, %requested_count, %c0, %c0, %yes, %yes : index, index, index, index, index, i1, i1
+  }
+  %count = index.min %requested_count, %width : index
   %offset = index.constant 0 : offset
   %hist_bytes = index.constant 1024 : offset
   %state_bytes = index.constant 8 : offset
@@ -44,8 +73,9 @@ kernel.def target(@ggml_top_k_radix_wave64) @ggml_top_k_radix_f32(%row_count: in
   %state_buffer = buffer.alloca<workgroup> align(8) %state_bytes : buffer
   %hist = buffer.view %hist_buffer[%offset] : buffer -> view<256xi32>
   %state = buffer.view %state_buffer[%offset] : buffer -> view<2xi32>
-  %source = buffer.view %input[%offset] : buffer -> view<[%rows]x[%width]xf32>
-  %target = buffer.view %output[%offset] : buffer -> view<[%rows]x[%count]xi32>
+  %source = buffer.view %input[%offset] : buffer -> view<[%rows]x[%source_width]xf32>
+  %target = buffer.view %output[%offset] : buffer -> view<[%rows]x[%output_width]xi32>
+  %indices = buffer.view %input_ids[%offset] : buffer -> view<[%rows]x[%input_width]xi32>
   %zero_i32 = scalar.constant 0 : i32
   %one_i32 = scalar.constant 1 : i32
   %ones_i32 = scalar.constant -1 : i32
@@ -67,7 +97,17 @@ kernel.def target(@ggml_top_k_radix_wave64) @ggml_top_k_radix_f32(%row_count: in
       scf.yield %mask : i32
     }
     scf.for %column = [%thread to %width step %c256] {
-      %value = view.load %source[%row, %column] : view<[%rows]x[%width]xf32> -> f32
+      %input_column0 = index.add %partition_base, %column : index
+      %input_column = index.assume %input_column0 [lt(%input_column0, %input_width)] : index
+      %source_column0 = scf.if %first_pass -> (index) {
+        scf.yield %input_column : index
+      } else {
+        %id = view.load %indices[%row, %input_column] : view<[%rows]x[%input_width]xi32> -> i32
+        %column = index.cast %id : i32 to index
+        scf.yield %column : index
+      }
+      %source_column = index.assume %source_column0 [range(%source_column0, 0, 131071), lt(%source_column0, %source_width)] : index
+      %value = view.load %source[%row, %source_column] : view<[%rows]x[%source_width]xf32> -> f32
       %key = func.call @ggml_top_k_float_key(%value) : (f32) -> (i32)
       %high = scalar.andi %key, %high_mask : i32
       %candidate = scalar.cmpi eq, %high, %prefix : i32
@@ -107,7 +147,17 @@ kernel.def target(@ggml_top_k_radix_wave64) @ggml_top_k_radix_f32(%row_count: in
     %valid = index.cmp ult, %position, %width : index
     %key = scf.if %valid -> (i32) {
       %column = index.assume %position [lt(%position, %width)] : index
-      %value = view.load %source[%row, %column] : view<[%rows]x[%width]xf32> -> f32
+      %input_column0 = index.add %partition_base, %column : index
+      %input_column = index.assume %input_column0 [lt(%input_column0, %input_width)] : index
+      %source_column0 = scf.if %first_pass -> (index) {
+        scf.yield %input_column : index
+      } else {
+        %id = view.load %indices[%row, %input_column] : view<[%rows]x[%input_width]xi32> -> i32
+        %column = index.cast %id : i32 to index
+        scf.yield %column : index
+      }
+      %source_column = index.assume %source_column0 [range(%source_column0, 0, 131071), lt(%source_column0, %source_width)] : index
+      %value = view.load %source[%row, %source_column] : view<[%rows]x[%source_width]xf32> -> f32
       %key = func.call @ggml_top_k_float_key(%value) : (f32) -> (i32)
       scf.yield %key : i32
     } else {
@@ -129,15 +179,53 @@ kernel.def target(@ggml_top_k_radix_wave64) @ggml_top_k_radix_f32(%row_count: in
     %take_tie = scalar.andi %equal, %tie_needed : i1
     %selected = scalar.ori %greater, %take_tie : i1
     %tie_slot = scalar.addi %above_total, %equal_rank : i32
-    %slot_i32 = scf.select %greater, %greater_rank, %tie_slot : i32
+    %final_slot = scf.select %greater, %greater_rank, %tie_slot : i32
+    // Keep intermediate IDs in source order so later partitions preserve tie ordering.
+    %prior_ties = scalar.minui %equal_rank, %ties_needed : i32
+    %stable_slot = scalar.addi %greater_rank, %prior_ties : i32
+    %slot_i32 = scf.select %last_pass, %final_slot, %stable_slot : i32
     scf.if %selected {
       %slot0 = index.cast %slot_i32 : i32 to index
       %slot = index.assume %slot0 [range(%slot0, 0, 511), lt(%slot0, %count)] : index
-      %id = index.cast %position : index to i32
-      view.store %id, %target[%row, %slot] : i32, view<[%rows]x[%count]xi32>
+      %input_column0 = index.add %partition_base, %position : index
+      %input_column = index.assume %input_column0 [lt(%input_column0, %input_width)] : index
+      %id = scf.if %first_pass -> (i32) {
+        %id = index.cast %input_column : index to i32
+        scf.yield %id : i32
+      } else {
+        %id = view.load %indices[%row, %input_column] : view<[%rows]x[%input_width]xi32> -> i32
+        scf.yield %id : i32
+      }
+      %result_column0 = index.add %output_base, %slot : index
+      %result_column = index.assume %result_column0 [lt(%result_column0, %output_width)] : index
+      view.store %id, %target[%row, %result_column] : i32, view<[%rows]x[%output_width]xi32>
     }
     %next_counts = vector.addi %counts, %block_counts : vector<2xi32>
     scf.yield %next_counts : vector<2xi32>
   }
+  template.return
+}
+
+kernel.def target(@ggml_top_k_radix_wave64) @ggml_top_k_radix_f32(%row_count: index) {
+  %one = index.constant 1 : index
+  %threads = index.constant 256 : index
+  kernel.launch.config workgroups(%one, %row_count, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%row_count: index, %input: buffer, %output: buffer) {
+  %partitioned = scalar.constant false : i1
+  template.apply<@ggml.top_k.radix>(%partitioned, %row_count, %input, %output, %output) : (i1, index, buffer, buffer, buffer)
+  kernel.return
+}
+
+kernel.def target(@ggml_top_k_radix_wave64) @ggml_top_k_radix_partitions_f32(%row_count: index) {
+  %one = index.constant 1 : index
+  %threads = index.constant 256 : index
+  %padding = index.constant 255 : index
+  %width = config.get @ggml.top_k.stage_width : index
+  %padded = index.add %width, %padding : index
+  %partitions = index.div %padded, %threads : index
+  kernel.launch.config workgroups(%partitions, %row_count, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%row_count: index, %input: buffer, %input_ids: buffer, %output: buffer) {
+  %partitioned = scalar.constant true : i1
+  template.apply<@ggml.top_k.radix>(%partitioned, %row_count, %input, %input_ids, %output) : (i1, index, buffer, buffer, buffer)
   kernel.return
 }

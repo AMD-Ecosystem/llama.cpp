@@ -8899,8 +8899,8 @@ struct test_flash_attn_ext_large_logits : public test_flash_attn_ext {
 };
 
 struct test_flash_attn_sink : public test_flash_attn_ext {
-    explicit test_flash_attn_sink(int64_t tokens) :
-        test_flash_attn_ext(512, 512, 1, { 64, 1 }, 256, tokens, true, true) {}
+    explicit test_flash_attn_sink(int64_t tokens, int64_t head_size = 512, int64_t heads = 64, int64_t keys = 256) :
+        test_flash_attn_ext(head_size, head_size, 1, { heads, 1 }, keys, tokens, true, true) {}
 
     std::string vars() override { return test_flash_attn_ext::vars() + ",model_layout=1"; }
 
@@ -10289,8 +10289,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_dsv4_hc_post(31, 17, false, false, n_hc));
         test_cases.emplace_back(new test_dsv4_hc_post(31, 17, true, false, n_hc));
     }
-    for (int64_t tokens : { 1, 17, 512 }) {
+    for (int64_t tokens : { 1, 2, 3, 4, 5, 17, 512 }) {
         test_cases.emplace_back(new test_flash_attn_sink(tokens));
+    }
+    for (int64_t tokens : { 1, 2, 3, 4 }) {
+        test_cases.emplace_back(new test_flash_attn_sink(tokens, 64, 4, 63));
+        test_cases.emplace_back(new test_flash_attn_sink(tokens, 128, 12, 97));
+        test_cases.emplace_back(new test_flash_attn_sink(tokens, 256, 32, 129));
     }
 
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
@@ -11734,6 +11739,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                 test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_MXFP4, GGML_TYPE_F32, 8, 6, broadcast, 65, n, k));
             }
         }
+        for (int n : { 1, 2, 3, 4, 5 }) {
+            test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_MXFP4, GGML_TYPE_F32, 8, 6, broadcast, 1025, n, 2048, 0, n == 3, n == 5));
+        }
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_MXFP4, GGML_TYPE_F32, 8, 6, broadcast, 2048, 4, 4096));
     }
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_0, GGML_TYPE_F32, 32, 2, false, 2880, 32, 2880));
 

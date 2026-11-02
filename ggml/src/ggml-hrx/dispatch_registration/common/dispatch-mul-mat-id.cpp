@@ -206,6 +206,12 @@ static bool match_mul_mat_id_vector_mxfp4(const DispatchMatchContext & context, 
     }
     dispatch.kernel =
         make_kernel_specialization(integer_dot ? kMulMatIdVectorMxfp4Q8Kernel : kMulMatIdVectorMxfp4Kernel);
+    const bool pair_tokens = integer_dot && match.token_count > 1 && match.route_count <= 8 &&
+                             match.input_size >= 2048 && match.output_size >= 1024;
+    if (pair_tokens) {
+        dispatch.kernel =
+            make_kernel_specialization(GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_paired_mxfp4_q8"));
+    }
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
     for (const auto & parameter : std::vector<std::pair<const char *, int64_t>>{
              { "input_size",        match.input_size                                               },
@@ -220,6 +226,21 @@ static bool match_mul_mat_id_vector_mxfp4(const DispatchMatchContext & context, 
     }
     dispatch.bindings.push_back(activation);
     dispatch.bindings.push_back({ match.route_ids->id, 0, match.route_ids->byte_count });
+    if (pair_tokens) {
+        const ValueId pairs(context.next_plan_value.value + static_cast<int32_t>(dispatch_match.transients.size()));
+        const size_t  bytes = static_cast<size_t>(match.token_count * match.route_count) * sizeof(int32_t);
+        dispatch_match.transients.push_back({ pairs, "common.mul_mat_id.pairs", bytes, 256 });
+        Dispatch prepare;
+        prepare.kernel = make_kernel_specialization(GGML_HRX_KERNEL_REF("loom_libs", "ggml_mxfp4_prepare_pairs"));
+        prepare.kernel.integer_parameters = dispatch.kernel.integer_parameters;
+        prepare.kernel.compile_parameters = dispatch.kernel.compile_parameters;
+        prepare.bindings                  = {
+            { match.route_ids->id, 0, match.route_ids->byte_count },
+            { pairs,               0, bytes                       }
+        };
+        dispatch_match.dispatches.push_back(std::move(prepare));
+        dispatch.bindings.push_back({ pairs, 0, bytes });
+    }
     dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
     dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
     dispatch_match.covered_nodes.push_back(context.root_index);

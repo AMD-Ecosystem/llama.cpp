@@ -3,6 +3,7 @@
 #include "ggml.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
 
+#include <algorithm>
 #include <cmath>
 #include <iomanip>
 #include <limits>
@@ -61,6 +62,43 @@ bool match_top_k_radix(const DispatchMatchContext & context, DispatchMatch & mat
     const int64_t rows = input->element_count / input->ne[0];
     if (rows < 1 || rows > 2048) {
         return false;
+    }
+    const int64_t count = output->ne[0];
+    if (rows <= 16 && input->ne[0] >= 4096 && count <= 32) {
+        int64_t width     = input->ne[0];
+        ValueId ids       = input->id;
+        size_t  ids_bytes = input->byte_count;
+        int     stage     = 0;
+        do {
+            const int64_t next_width = width / 256 * count + std::min(count, width % 256);
+            const bool    last       = next_width == count;
+            const size_t  bytes      = static_cast<size_t>(rows * next_width) * sizeof(int32_t);
+            const ValueId target     = last ? output->id : ValueId(context.next_plan_value.value + stage);
+            if (!last) {
+                match.transients.push_back({ target, "common.top_k.partitions", bytes, 256 });
+            }
+            Dispatch dispatch;
+            dispatch.kernel =
+                make_kernel_specialization(GGML_HRX_KERNEL_REF("loom_libs", "ggml_top_k_radix_partitions_f32"));
+            dispatch.kernel.integer_parameters.emplace("row_count", rows);
+            dispatch.kernel.compile_parameters.emplace("ggml.top_k.width", std::to_string(input->ne[0]));
+            dispatch.kernel.compile_parameters.emplace("ggml.top_k.count", std::to_string(count));
+            dispatch.kernel.compile_parameters.emplace("ggml.top_k.stage_width", std::to_string(width));
+            dispatch.kernel.compile_parameters.emplace("ggml.top_k.first_pass", stage == 0 ? "1" : "0");
+            dispatch.kernel.compile_parameters.emplace("ggml.top_k.last_pass", last ? "1" : "0");
+            dispatch.bindings = {
+                { input->id, 0, input->byte_count },
+                { ids,       0, ids_bytes         },
+                { target,    0, bytes             }
+            };
+            match.dispatches.push_back(std::move(dispatch));
+            ids       = target;
+            ids_bytes = bytes;
+            width     = next_width;
+            ++stage;
+        } while (width > count);
+        match.covered_nodes.push_back(context.root_index);
+        return true;
     }
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(GGML_HRX_KERNEL_REF("loom_libs", "ggml_top_k_radix_f32"));

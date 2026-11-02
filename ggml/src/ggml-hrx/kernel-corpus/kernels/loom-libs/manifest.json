@@ -10438,6 +10438,82 @@
       "compile_dependencies": []
     },
     {
+      "name": "ggml_mxfp4_prepare_pairs",
+      "family": "loom_libs",
+      "symbol": "ggml_mxfp4_prepare_pairs",
+      "source": "ops/matmul_id/vector_mxfp4_q8.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "ids",
+        "pairs"
+      ],
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul_id/vector_mxfp4_q8.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
+      "name": "ggml_mul_mat_id_paired_mxfp4_q8",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_id_paired_mxfp4_q8",
+      "source": "ops/matmul_id/vector_mxfp4_q8.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "ids",
+        "pairs",
+        "weight",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul_id/vector_mxfp4_q8.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
       "name": "ggml_lightning_indexer_f32_f16",
       "family": "loom_libs",
       "symbol": "ggml_lightning_indexer_f32_f16",
@@ -10721,6 +10797,43 @@
         "output"
       ],
       "binding_access": [
+        "read",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/rows/top_k_radix_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
+      "name": "ggml_top_k_radix_partitions_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_top_k_radix_partitions_f32",
+      "source": "ops/rows/top_k_radix_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "row_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "row_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "input_ids",
+        "output"
+      ],
+      "binding_access": [
+        "read",
         "read",
         "write"
       ],

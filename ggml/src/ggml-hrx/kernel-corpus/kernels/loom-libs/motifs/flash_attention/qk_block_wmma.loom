@@ -10,7 +10,7 @@ config.decl @ggml.flash_attention.attention_scale : f32
 
 config.def @ggml.flash_attention.value_layout = 0 : index
 
-config.def @ggml.flash_attention.decode_head_batch = 0 : index
+config.def @ggml.flash_attention.head_batch_size = 1 : index
 
 template.decl @ggml.flash_attention.prefill.stage_query(%query_token_count: index, %query_origin: index, %query_head: index, %query_load_iteration_count: index, %query_stage_stride: index, %qk_head_size: index, %attention_scale: f32, %query: buffer, %query_stage: buffer, %query_offset: offset)
 
@@ -86,7 +86,8 @@ template.def<@ggml.flash_attention.qk_block_wmma.prefill_full> device @ggml_flas
 }
 
 template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_prefill_body(%publish_f16: i1, %initial_max: f32, %initial_sum: f32, %query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer, %f16_output: buffer, %query_tile: index, %query_head0: index, %output_group0: index, %query_offset: offset, %key_offset: offset, %value_offset: offset, %mask_offset: offset, %output_offset: offset, %f16_output_offset: offset) {
-  %bounded_query_token_count = index.assume %query_token_count [range(%query_token_count, 1, 2048)] : index
+  %head_batch_size = config.get @ggml.flash_attention.head_batch_size : index
+  %bounded_query_token_count = index.assume %query_token_count [range(%query_token_count, 1, 2048), multiple_of(%query_token_count, %head_batch_size)] : index
   %bounded_key_value_token_count = index.assume %key_value_token_count [range(%key_value_token_count, 1, 32768)] : index
   %query_head_count = config.get @ggml.flash_attention.query_head_count : index
   %key_value_head_count = config.get @ggml.flash_attention.key_value_head_count : index
@@ -178,15 +179,18 @@ template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_pr
   %query_valid1 = index.cmp ult, %query_token1, %bounded_query_token_count : index
   %query_valid2 = index.cmp ult, %query_token2, %bounded_query_token_count : index
   %query_valid3 = index.cmp ult, %query_token3, %bounded_query_token_count : index
-  %decode_head_batch = config.get @ggml.flash_attention.decode_head_batch : index
-  %heads_as_queries = index.cmp ne, %decode_head_batch, %c0 : index
+  %heads_as_queries = index.cmp ne, %head_batch_size, %c1 : index
   %initial_max_vector = scf.if %heads_as_queries -> (vector<4xf32>) {
-    %sink_count = index.mul %bounded_query_token_count, %query_head_count : index
+    %sink_count = index.mul %head_batch_size, %query_head_count : index
     %sinks = buffer.view %gate[%c0_offset] : buffer -> view<[%sink_count]xf32>
-    %i0 = index.madd %query_token0, %query_head_count, %query_head : index
-    %i1 = index.madd %query_token1, %query_head_count, %query_head : index
-    %i2 = index.madd %query_token2, %query_head_count, %query_head : index
-    %i3 = index.madd %query_token3, %query_head_count, %query_head : index
+    %head_in_batch0 = index.rem %query_token0, %head_batch_size : index
+    %i0 = index.madd %head_in_batch0, %query_head_count, %query_head : index
+    %head_in_batch1 = index.rem %query_token1, %head_batch_size : index
+    %i1 = index.madd %head_in_batch1, %query_head_count, %query_head : index
+    %head_in_batch2 = index.rem %query_token2, %head_batch_size : index
+    %i2 = index.madd %head_in_batch2, %query_head_count, %query_head : index
+    %head_in_batch3 = index.rem %query_token3, %head_batch_size : index
+    %i3 = index.madd %head_in_batch3, %query_head_count, %query_head : index
     %s0 = scf.select %query_valid0, %i0, %c0 : index
     %s1 = scf.select %query_valid1, %i1, %c0 : index
     %s2 = scf.select %query_valid2, %i2, %c0 : index
@@ -233,11 +237,11 @@ template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_pr
   %value_column_stride = scf.select %transposed_value, %bounded_key_value_token_count, %c1 : index
   %value_layout = encoding.layout.strided [%value_row_stride, %value_column_stride] : encoding<layout>
   %value_view = buffer.view %value_aligned[%value_offset] : buffer -> view<[%bounded_key_value_token_count]x[%value_width]xf16, %value_layout>
-  %mask_query_count = scf.select %heads_as_queries, %c1, %bounded_query_token_count : index
-  %mask_query0 = scf.select %heads_as_queries, %c0, %query_token0 : index
-  %mask_query1 = scf.select %heads_as_queries, %c0, %query_token1 : index
-  %mask_query2 = scf.select %heads_as_queries, %c0, %query_token2 : index
-  %mask_query3 = scf.select %heads_as_queries, %c0, %query_token3 : index
+  %mask_query_count = index.div %bounded_query_token_count, %head_batch_size : index
+  %mask_query0 = index.div %query_token0, %head_batch_size : index
+  %mask_query1 = index.div %query_token1, %head_batch_size : index
+  %mask_query2 = index.div %query_token2, %head_batch_size : index
+  %mask_query3 = index.div %query_token3, %head_batch_size : index
   %mask_view = buffer.view %mask_aligned[%mask_offset] : buffer -> view<[%mask_query_count]x[%bounded_key_value_token_count]xf16>
   %query_stage = buffer.alloca<workgroup> align(16) %query_stage_bytes : buffer
   %score_stage = buffer.alloca<workgroup> align(16) %score_stage_bytes : buffer
