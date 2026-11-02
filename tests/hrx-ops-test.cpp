@@ -3225,374 +3225,6 @@ static void run_weight_persistence_sequence_case() {
     ggml_backend_free(cpu);
 }
 
-static void run_weight_persistence_overlap_case() {
-    constexpr int64_t input_size = 256;
-    constexpr int64_t output_size = 64;
-    const char * old_flag = std::getenv("GGML_HRX_DISABLE_GRAPH_REPLAY");
-    const bool had_flag = old_flag != nullptr;
-    const std::string old_flag_value = had_flag ? old_flag : "";
-    REQUIRE(setenv("GGML_HRX_DISABLE_GRAPH_REPLAY", "0", 1) == 0);
-
-    ggml_backend_t cpu = init_cpu_backend();
-    ggml_backend_t backend = ggml_backend_hrx_init(0);
-    REQUIRE(cpu != nullptr && backend != nullptr);
-    auto * state = static_cast<ggml_backend_hrx_context *>(backend->context);
-    ggml_init_params params = {};
-    params.mem_size = 1024 * 1024;
-    params.no_alloc = true;
-    ggml_context * cpu_ctx = ggml_init(params);
-    ggml_context * hrx_ctx = ggml_init(params);
-    REQUIRE(cpu_ctx != nullptr && hrx_ctx != nullptr);
-    ggml_tensor * cpu_w0 = ggml_new_tensor_2d(cpu_ctx, GGML_TYPE_Q4_K, input_size, output_size);
-    ggml_tensor * cpu_w1 = ggml_new_tensor_2d(cpu_ctx, GGML_TYPE_Q4_K, input_size, output_size);
-    ggml_tensor * cpu_disjoint_w = ggml_new_tensor_2d(cpu_ctx, GGML_TYPE_Q4_K, input_size, output_size);
-    ggml_tensor * hrx_w0 = ggml_new_tensor_2d(hrx_ctx, GGML_TYPE_Q4_K, input_size, output_size);
-    ggml_tensor * hrx_w1 = ggml_new_tensor_2d(hrx_ctx, GGML_TYPE_Q4_K, input_size, output_size);
-    ggml_tensor * hrx_disjoint_w = ggml_new_tensor_2d(hrx_ctx, GGML_TYPE_Q4_K, input_size, output_size);
-    ggml_tensor * cpu_ids = ggml_new_tensor_1d(cpu_ctx, GGML_TYPE_I32, 3);
-    ggml_tensor * hrx_ids = ggml_new_tensor_1d(hrx_ctx, GGML_TYPE_I32, 3);
-    ggml_tensor * cpu_input = ggml_new_tensor_2d(cpu_ctx, GGML_TYPE_F32, input_size, 3);
-    ggml_tensor * hrx_input = ggml_new_tensor_2d(hrx_ctx, GGML_TYPE_F32, input_size, 3);
-    ggml_tensor * cpu_rows = ggml_get_rows(cpu_ctx, cpu_w0, cpu_ids);
-    ggml_tensor * hrx_rows = ggml_get_rows(hrx_ctx, hrx_w0, hrx_ids);
-    ggml_tensor * cpu_disjoint_rows = ggml_get_rows(cpu_ctx, cpu_disjoint_w, cpu_ids);
-    ggml_tensor * hrx_disjoint_rows = ggml_get_rows(hrx_ctx, hrx_disjoint_w, hrx_ids);
-    ggml_tensor * cpu_mixed = ggml_mul_mat(cpu_ctx, cpu_w1, cpu_rows);
-    ggml_tensor * hrx_mixed = ggml_mul_mat(hrx_ctx, hrx_w1, hrx_rows);
-    ggml_tensor * cpu_packed = ggml_mul_mat(cpu_ctx, cpu_w1, cpu_input);
-    ggml_tensor * hrx_packed = ggml_mul_mat(hrx_ctx, hrx_w1, hrx_input);
-    ggml_cgraph * cpu_mixed_graph = ggml_new_graph(cpu_ctx);
-    ggml_cgraph * cpu_native_graph = ggml_new_graph(cpu_ctx);
-    ggml_cgraph * cpu_packed_graph = ggml_new_graph(cpu_ctx);
-    ggml_cgraph * cpu_disjoint_graph = ggml_new_graph(cpu_ctx);
-    ggml_cgraph * hrx_mixed_graph = ggml_new_graph(hrx_ctx);
-    ggml_cgraph * hrx_native_graph = ggml_new_graph(hrx_ctx);
-    ggml_cgraph * hrx_packed_graph = ggml_new_graph(hrx_ctx);
-    ggml_cgraph * hrx_disjoint_graph = ggml_new_graph(hrx_ctx);
-    ggml_build_forward_expand(cpu_mixed_graph, cpu_mixed);
-    ggml_build_forward_expand(cpu_native_graph, cpu_rows);
-    ggml_build_forward_expand(cpu_packed_graph, cpu_packed);
-    ggml_build_forward_expand(cpu_disjoint_graph, cpu_disjoint_rows);
-    ggml_build_forward_expand(hrx_mixed_graph, hrx_mixed);
-    ggml_build_forward_expand(hrx_native_graph, hrx_rows);
-    ggml_build_forward_expand(hrx_packed_graph, hrx_packed);
-    ggml_build_forward_expand(hrx_disjoint_graph, hrx_disjoint_rows);
-    hrx_mixed_graph->uid = 951071;
-    hrx_native_graph->uid = 951072;
-    hrx_packed_graph->uid = 951073;
-    hrx_disjoint_graph->uid = 951074;
-
-    std::vector<uint8_t> weight = make_matmul_weight_bytes(GGML_TYPE_Q4_K, input_size, output_size, 31);
-    ggml_backend_buffer_t imported = ggml_backend_dev_buffer_from_host_ptr(
-        ggml_backend_get_device(backend), weight.data(), weight.size(), weight.size());
-    REQUIRE(imported != nullptr);
-    REQUIRE(ggml_backend_tensor_alloc(imported, hrx_w0, weight.data()) == GGML_STATUS_SUCCESS);
-    REQUIRE(ggml_backend_tensor_alloc(imported, hrx_w1, weight.data()) == GGML_STATUS_SUCCESS);
-    std::vector<uint8_t> disjoint_weight = make_matmul_weight_bytes(GGML_TYPE_Q4_K, input_size, output_size, 43);
-    ggml_backend_buffer_t disjoint_imported = ggml_backend_dev_buffer_from_host_ptr(
-        ggml_backend_get_device(backend), disjoint_weight.data(), disjoint_weight.size(), disjoint_weight.size());
-    REQUIRE(disjoint_imported != nullptr);
-    REQUIRE(ggml_backend_tensor_alloc(disjoint_imported, hrx_disjoint_w, disjoint_weight.data()) == GGML_STATUS_SUCCESS);
-    ggml_backend_buffer_set_usage(imported, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-    ggml_backend_buffer_set_usage(disjoint_imported, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-    ggml_backend_buffer_t cpu_tensors = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu);
-    ggml_backend_buffer_t hrx_tensors = ggml_backend_alloc_ctx_tensors(hrx_ctx, backend);
-    REQUIRE(cpu_tensors != nullptr && hrx_tensors != nullptr);
-    ggml_backend_tensor_set(cpu_w0, weight.data(), 0, weight.size());
-    ggml_backend_tensor_set(cpu_w1, weight.data(), 0, weight.size());
-    ggml_backend_tensor_set(cpu_disjoint_w, disjoint_weight.data(), 0, disjoint_weight.size());
-    const std::array<int32_t, 3> ids = { 0, 1, 63 };
-    set_tensor_pair_bytes(cpu, cpu_ids, backend, hrx_ids, ids.data(), sizeof(ids));
-    const std::vector<float> input = make_pattern_f32(input_size * 3, 29, 0.01f);
-    set_tensor_pair_bytes(cpu, cpu_input, backend, hrx_input, input.data(), input.size() * sizeof(float));
-    REQUIRE(ggml_backend_graph_compute(cpu, cpu_mixed_graph) == GGML_STATUS_SUCCESS);
-    REQUIRE(ggml_backend_graph_compute(cpu, cpu_packed_graph) == GGML_STATUS_SUCCESS);
-    REQUIRE(ggml_backend_graph_compute(cpu, cpu_disjoint_graph) == GGML_STATUS_SUCCESS);
-    const std::vector<float> expected_mixed = get_f32_tensor(cpu, cpu_mixed);
-    const std::vector<float> expected_native = get_f32_tensor(cpu, cpu_rows);
-    const std::vector<float> expected_packed = get_f32_tensor(cpu, cpu_packed);
-    const std::vector<float> expected_disjoint = get_f32_tensor(cpu, cpu_disjoint_rows);
-    REQUIRE(std::any_of(expected_mixed.begin(), expected_mixed.end(),
-                        [](float value) { return std::fabs(value) > 0.1f; }));
-    REQUIRE(std::any_of(expected_packed.begin(), expected_packed.end(),
-                        [](float value) { return std::fabs(value) > 0.1f; }));
-
-    auto imported_graph = ggml::hrx::import_ggml_graph(*hrx_mixed_graph);
-    REQUIRE(imported_graph.valid());
-    const auto * w0_value = imported_graph.graph.values().find_tensor(hrx_w0);
-    const auto * w1_value = imported_graph.graph.values().find_tensor(hrx_w1);
-    REQUIRE(w0_value != nullptr && w1_value != nullptr);
-    REQUIRE(w0_value->id != w1_value->id);
-
-    // Materialize both layouts before gating real submissions; cold uploads wait on the stream.
-    REQUIRE(ggml_backend_graph_compute(backend, hrx_native_graph) == GGML_STATUS_SUCCESS);
-    ggml_backend_synchronize(backend);
-    auto packed_lookup = state->graph_programs.get_or_build(
-        *hrx_packed_graph, ggml::hrx::get_qwen_kernel_corpus(), state->device->architecture);
-    REQUIRE(packed_lookup.valid());
-    auto packed_match = packed_lookup.program->match_trusted_graph(*hrx_packed_graph, true);
-    REQUIRE(packed_match.valid());
-    std::vector<ggml::hrx::CommandProgramBinding> packed_external;
-    for (const auto & external : packed_match.external_bindings) {
-        ggml::hrx::ValueBufferBinding buffer;
-        REQUIRE(ggml_backend_hrx_resolve_value_buffer(external.tensor, buffer));
-        packed_external.push_back(ggml::hrx::make_command_program_binding(
-            external.value, buffer, ggml_nbytes(external.tensor) == 0));
-    }
-    auto packed_bindings = ggml::hrx::CommandProgramBindings::from_bindings(std::move(packed_external));
-    REQUIRE(packed_bindings.valid());
-    auto packed_demands = ggml::hrx::collect_command_program_weight_demands(
-        packed_lookup.program->commands(), packed_bindings);
-    REQUIRE(packed_demands.valid());
-    REQUIRE(packed_demands.weights.size() == 1 && packed_demands.weights.front().requires_materialization);
-    auto preuploaded = state->host_weights.acquire(state->device->device, state->stream,
-                                                   state->host_transfers, packed_demands.weights.front().source);
-    REQUIRE(preuploaded.valid());
-    ggml_backend_hrx_cache_stats cross_before = {};
-    REQUIRE(ggml_backend_hrx_get_cache_stats(backend, &cross_before));
-    REQUIRE(cross_before.weight_duplicate_warnings == 1);
-    // The public executors finish their kernel reads before returning. Queue warmed recordings directly
-    // to exercise ownership of genuinely outstanding reads without weakening that completion boundary.
-    struct Submission {
-        std::shared_ptr<ggml::hrx::CachedCommandProgramResources> resources;
-    };
-    auto prepare_submission = [&](ggml_cgraph * graph) {
-        auto lookup = state->graph_programs.get_or_build(
-            *graph, ggml::hrx::get_qwen_kernel_corpus(), state->device->architecture);
-        REQUIRE(lookup.valid());
-        auto match = lookup.program->match_trusted_graph(*graph, true);
-        REQUIRE(match.valid());
-        std::vector<ggml::hrx::CommandProgramBinding> external_bindings;
-        for (const auto & external : match.external_bindings) {
-            ggml::hrx::ValueBufferBinding buffer;
-            REQUIRE(ggml_backend_hrx_resolve_value_buffer(external.tensor, buffer));
-            external_bindings.push_back(ggml::hrx::make_command_program_binding(
-                external.value, buffer, ggml_nbytes(external.tensor) == 0));
-        }
-        auto bindings = ggml::hrx::CommandProgramBindings::from_bindings(std::move(external_bindings));
-        const ggml::hrx::CommandProgramExecutionContext context = {
-            state->device->device, state->stream, state->device->architecture.c_str(),
-            &ggml::hrx::get_qwen_kernel_corpus(), &state->kernel_executables, &state->transient_arena,
-            &state->host_transfers, &state->host_weights, &state->device->host_buffers,
-            &state->graph_replay_state,
-        };
-        auto execution = state->prepared_programs.execute_with_result(
-            context, lookup.program->uid(), lookup.program->command_shape_hash(), lookup.program->commands(), bindings);
-        REQUIRE(execution.success);
-        REQUIRE(execution.execution_resources->recorded.valid());
-        REQUIRE(execution.execution_resources->recorded.resident_host_weights ==
-                execution.execution_resources->prepared.resident_host_weights);
-        Submission submission;
-        submission.resources = std::move(execution.execution_resources);
-        return submission;
-    };
-    auto queue_submission = [&](Submission & submission) {
-        const auto launch = ggml::hrx::take_status(hrx_graph_exec_launch(
-            submission.resources->recorded.exec, state->stream));
-        if (launch) {
-            return false;
-        }
-        submission.resources.reset();
-        return !ggml::hrx::take_status(hrx_stream_flush(state->stream));
-    };
-    auto cross_native_submission = prepare_submission(hrx_native_graph);
-    auto cross_packed_submission = prepare_submission(hrx_packed_graph);
-    const std::vector<float> poisoned_packed(expected_packed.size(), 123.0f);
-    ggml_backend_tensor_set(hrx_packed, poisoned_packed.data(), 0, poisoned_packed.size() * sizeof(float));
-    hrx_semaphore_t cross_gate = nullptr;
-    REQUIRE(!ggml::hrx::take_status(hrx_semaphore_create(state->device->device, 0, &cross_gate)));
-    REQUIRE(!ggml::hrx::take_status(hrx_stream_wait_on(state->stream, { cross_gate, 1 })));
-    std::mutex cross_mutex;
-    std::condition_variable cross_cv;
-    bool cross_finished = false;
-    bool cross_timed_out = false;
-    std::thread cross_watchdog([&] {
-        std::unique_lock<std::mutex> lock(cross_mutex);
-        if (!cross_cv.wait_for(lock, std::chrono::seconds(5), [&] { return cross_finished; })) {
-            cross_timed_out = true;
-            hrx_status_t signal = hrx_semaphore_signal(cross_gate, 1);
-            hrx_status_ignore(signal);
-        }
-    });
-    const bool cross_native = queue_submission(cross_native_submission);
-    const bool cross_packed = cross_native &&
-        queue_submission(cross_packed_submission);
-    ggml_backend_hrx_cache_stats cross_queued = {};
-    const bool cross_stats_ok = ggml_backend_hrx_get_cache_stats(backend, &cross_queued);
-    {
-        std::lock_guard<std::mutex> lock(cross_mutex);
-        cross_finished = true;
-    }
-    cross_cv.notify_one();
-    const bool cross_release_ok = !ggml::hrx::take_status(hrx_semaphore_signal(cross_gate, 1));
-    cross_watchdog.join();
-    REQUIRE(cross_native && cross_packed && cross_stats_ok && cross_release_ok && !cross_timed_out);
-    REQUIRE(cross_queued.weight_live_allocations == 2);
-    REQUIRE(cross_queued.weight_duplicate_warnings == cross_before.weight_duplicate_warnings);
-    preuploaded.lease = {};
-    ggml_backend_synchronize(backend);
-    require_close(get_f32_tensor(backend, hrx_packed), expected_packed, 2.0e-2f, 3.0e-2f);
-    hrx_semaphore_release(cross_gate);
-
-    REQUIRE(ggml_backend_graph_compute(backend, hrx_mixed_graph) == GGML_STATUS_SUCCESS);
-    ggml_backend_synchronize(backend);
-    require_close(get_f32_tensor(backend, hrx_mixed), expected_mixed, 2.0e-2f, 3.0e-2f);
-    ggml_backend_hrx_cache_stats warmed = {};
-    REQUIRE(ggml_backend_hrx_get_cache_stats(backend, &warmed));
-    REQUIRE(warmed.weight_live_allocations == 2);
-    REQUIRE(warmed.weight_duplicate_warnings >= cross_queued.weight_duplicate_warnings);
-    // Graph execution and the direct submission helper share the warmed native entry.
-    REQUIRE(state->prepared_programs.stats().builds == 3);
-    REQUIRE(state->prepared_programs.stats().hits >= 1);
-
-    // A cold preparation failure must leave an already queued native reader's lease intact.
-    REQUIRE(ggml_backend_graph_compute(backend, hrx_native_graph) == GGML_STATUS_SUCCESS);
-    ggml_backend_synchronize(backend);
-    auto cold_native_submission = prepare_submission(hrx_native_graph);
-    const std::vector<float> poisoned_native(expected_native.size(), 123.0f);
-    ggml_backend_tensor_set(hrx_rows, poisoned_native.data(), 0,
-                            poisoned_native.size() * sizeof(float));
-    hrx_semaphore_t cold_gate = nullptr;
-    REQUIRE(!ggml::hrx::take_status(hrx_semaphore_create(state->device->device, 0, &cold_gate)));
-    REQUIRE(!ggml::hrx::take_status(hrx_stream_wait_on(state->stream, { cold_gate, 1 })));
-    std::mutex cold_mutex;
-    std::condition_variable cold_cv;
-    bool cold_finished = false;
-    bool cold_timed_out = false;
-    std::thread cold_watchdog([&] {
-        std::unique_lock<std::mutex> lock(cold_mutex);
-        if (!cold_cv.wait_for(lock, std::chrono::seconds(5), [&] { return cold_finished; })) {
-            cold_timed_out = true;
-            hrx_status_t signal = hrx_semaphore_signal(cold_gate, 1);
-            hrx_status_ignore(signal);
-        }
-    });
-    const bool native_before_failure =
-        queue_submission(cold_native_submission);
-    state->host_weights.fail_cold_acquire_after_for_test(0);
-    const bool cold_failed =
-        ggml_backend_graph_compute_async(backend, hrx_disjoint_graph) == GGML_STATUS_FAILED;
-    ggml_backend_hrx_cache_stats cold_pending = {};
-    const bool cold_stats_ok = ggml_backend_hrx_get_cache_stats(backend, &cold_pending);
-    {
-        std::lock_guard<std::mutex> lock(cold_mutex);
-        cold_finished = true;
-    }
-    cold_cv.notify_one();
-    const bool cold_release_ok = !ggml::hrx::take_status(hrx_semaphore_signal(cold_gate, 1));
-    cold_watchdog.join();
-    REQUIRE(native_before_failure && cold_failed && cold_stats_ok && cold_release_ok && !cold_timed_out);
-    REQUIRE(cold_pending.weight_live_allocations == 2);
-    ggml_backend_synchronize(backend);
-    require_close(get_f32_tensor(backend, hrx_rows), expected_native, 2.0e-2f, 3.0e-2f);
-    hrx_semaphore_release(cold_gate);
-    REQUIRE(ggml_backend_graph_compute(backend, hrx_mixed_graph) == GGML_STATUS_SUCCESS);
-    ggml_backend_synchronize(backend);
-    REQUIRE(ggml_backend_hrx_get_cache_stats(backend, &warmed));
-    REQUIRE(warmed.weight_live_allocations == 2);
-
-    auto mixed_submission = prepare_submission(hrx_mixed_graph);
-    auto native_submission = prepare_submission(hrx_native_graph);
-    auto packed_submission = prepare_submission(hrx_packed_graph);
-    const std::vector<float> poisoned_mixed(expected_mixed.size(), 123.0f);
-    ggml_backend_tensor_set(hrx_mixed, poisoned_mixed.data(), 0, poisoned_mixed.size() * sizeof(float));
-    ggml_backend_tensor_set(hrx_packed, poisoned_packed.data(), 0, poisoned_packed.size() * sizeof(float));
-    hrx_semaphore_t gate = nullptr;
-    REQUIRE(!ggml::hrx::take_status(hrx_semaphore_create(state->device->device, 0, &gate)));
-    REQUIRE(!ggml::hrx::take_status(hrx_stream_wait_on(state->stream, { gate, 1 })));
-    std::mutex gate_mutex;
-    std::condition_variable gate_cv;
-    bool finished = false;
-    bool timed_out = false;
-    std::thread watchdog([&] {
-        std::unique_lock<std::mutex> lock(gate_mutex);
-        const bool released = gate_cv.wait_for(lock, std::chrono::seconds(5), [&] { return finished; });
-        if (!released) {
-            timed_out = true;
-            hrx_status_t signal = hrx_semaphore_signal(gate, 1);
-            hrx_status_ignore(signal);
-        }
-    });
-    const bool mixed_queued = queue_submission(mixed_submission);
-    const bool native_queued = mixed_queued &&
-        queue_submission(native_submission);
-    const bool packed_queued = native_queued &&
-        queue_submission(packed_submission);
-    bool stream_complete = true;
-    const bool stream_query_ok = !ggml::hrx::take_status(hrx_stream_query(state->stream, &stream_complete));
-    ggml_backend_hrx_cache_stats queued = {};
-    const bool stats_ok = ggml_backend_hrx_get_cache_stats(backend, &queued);
-    {
-        std::lock_guard<std::mutex> lock(gate_mutex);
-        finished = true;
-    }
-    gate_cv.notify_one();
-    const bool signal_ok = !ggml::hrx::take_status(hrx_semaphore_signal(gate, 1));
-    watchdog.join();
-    REQUIRE(mixed_queued && native_queued && packed_queued);
-    REQUIRE(stream_query_ok && !stream_complete);
-    REQUIRE(stats_ok);
-    REQUIRE(queued.weight_live_allocations == 2);
-    REQUIRE(queued.weight_peak_bytes == warmed.weight_peak_bytes);
-    REQUIRE(queued.weight_duplicate_warnings == warmed.weight_duplicate_warnings);
-    REQUIRE(signal_ok);
-    REQUIRE(!timed_out);
-    ggml_backend_synchronize(backend);
-    require_close(get_f32_tensor(backend, hrx_mixed), expected_mixed, 2.0e-2f, 3.0e-2f);
-    require_close(get_f32_tensor(backend, hrx_packed), expected_packed, 2.0e-2f, 3.0e-2f);
-    ggml_backend_hrx_cache_stats completed = {};
-    REQUIRE(ggml_backend_hrx_get_cache_stats(backend, &completed));
-    REQUIRE(completed.weight_live_allocations == 2);
-    REQUIRE(completed.weight_live_bytes == queued.weight_live_bytes);
-    REQUIRE(completed.weight_duplicate_warnings == queued.weight_duplicate_warnings);
-    REQUIRE(ggml_backend_graph_compute(backend, hrx_native_graph) == GGML_STATUS_SUCCESS);
-    ggml_backend_synchronize(backend);
-    require_close(get_f32_tensor(backend, hrx_rows), expected_native, 2.0e-2f, 3.0e-2f);
-    ggml_backend_hrx_cache_stats reused = {};
-    REQUIRE(ggml_backend_hrx_get_cache_stats(backend, &reused));
-    REQUIRE(reused.weight_materializations == completed.weight_materializations);
-    REQUIRE(reused.weight_live_allocations == 2);
-
-    REQUIRE(ggml_backend_graph_compute(backend, hrx_mixed_graph) == GGML_STATUS_SUCCESS);
-    ggml_backend_synchronize(backend);
-    REQUIRE(ggml_backend_graph_compute(backend, hrx_disjoint_graph) == GGML_STATUS_SUCCESS);
-    ggml_backend_synchronize(backend);
-    require_close(get_f32_tensor(backend, hrx_disjoint_rows), expected_disjoint, 2.0e-2f, 3.0e-2f);
-    ggml_backend_hrx_cache_stats mixed_and_disjoint = {};
-    REQUIRE(ggml_backend_hrx_get_cache_stats(backend, &mixed_and_disjoint));
-    REQUIRE(mixed_and_disjoint.weight_live_allocations == 3);
-    REQUIRE(ggml_backend_graph_compute(backend, hrx_mixed_graph) == GGML_STATUS_SUCCESS);
-    ggml_backend_synchronize(backend);
-    require_close(get_f32_tensor(backend, hrx_mixed), expected_mixed, 2.0e-2f, 3.0e-2f);
-    ggml_backend_hrx_cache_stats mixed_reused = {};
-    REQUIRE(ggml_backend_hrx_get_cache_stats(backend, &mixed_reused));
-    REQUIRE(mixed_reused.weight_materializations == mixed_and_disjoint.weight_materializations);
-    REQUIRE(mixed_reused.weight_live_allocations == 3);
-    REQUIRE(ggml_backend_graph_compute(backend, hrx_native_graph) == GGML_STATUS_SUCCESS);
-    ggml_backend_synchronize(backend);
-    ggml_backend_hrx_cache_stats native_reused = {};
-    REQUIRE(ggml_backend_hrx_get_cache_stats(backend, &native_reused));
-    REQUIRE(native_reused.weight_live_allocations == 3);
-    REQUIRE(ggml_backend_graph_compute(backend, hrx_disjoint_graph) == GGML_STATUS_SUCCESS);
-    ggml_backend_synchronize(backend);
-    require_close(get_f32_tensor(backend, hrx_disjoint_rows), expected_disjoint, 2.0e-2f, 3.0e-2f);
-    ggml_backend_hrx_cache_stats disjoint_reused = {};
-    REQUIRE(ggml_backend_hrx_get_cache_stats(backend, &disjoint_reused));
-    REQUIRE(disjoint_reused.weight_materializations == native_reused.weight_materializations);
-    REQUIRE(disjoint_reused.weight_live_allocations == 3);
-
-    hrx_semaphore_release(gate);
-    ggml_backend_buffer_free(hrx_tensors);
-    ggml_backend_buffer_free(cpu_tensors);
-    ggml_backend_buffer_free(imported);
-    ggml_backend_buffer_free(disjoint_imported);
-    ggml_free(hrx_ctx);
-    ggml_free(cpu_ctx);
-    ggml_backend_free(backend);
-    ggml_backend_free(cpu);
-    restore_environment_value("GGML_HRX_DISABLE_GRAPH_REPLAY", had_flag, old_flag_value);
-}
-
 static void run_failed_submission_weight_lifetime_case(bool uncached = false) {
     constexpr int64_t input_size = 256;
     constexpr int64_t output_size = 64;
@@ -3613,21 +3245,15 @@ static void run_failed_submission_weight_lifetime_case(bool uncached = false) {
     REQUIRE(cpu_ctx != nullptr && hrx_ctx != nullptr);
     ggml_tensor * cpu_weight = ggml_new_tensor_2d(cpu_ctx, GGML_TYPE_Q4_K, input_size, output_size);
     ggml_tensor * hrx_weight = ggml_new_tensor_2d(hrx_ctx, GGML_TYPE_Q4_K, input_size, output_size);
-    ggml_tensor * cpu_ids = ggml_new_tensor_1d(cpu_ctx, GGML_TYPE_I32, 3);
-    ggml_tensor * hrx_ids = ggml_new_tensor_1d(hrx_ctx, GGML_TYPE_I32, 3);
     ggml_tensor * cpu_input = ggml_new_tensor_2d(cpu_ctx, GGML_TYPE_F32, input_size, 3);
     ggml_tensor * hrx_input = ggml_new_tensor_2d(hrx_ctx, GGML_TYPE_F32, input_size, 3);
     ggml_tensor * cpu_output = ggml_mul_mat(cpu_ctx, cpu_weight, cpu_input);
     ggml_tensor * hrx_output = ggml_mul_mat(hrx_ctx, hrx_weight, hrx_input);
-    ggml_tensor * hrx_native = ggml_get_rows(hrx_ctx, hrx_weight, hrx_ids);
     ggml_cgraph * cpu_graph = ggml_new_graph(cpu_ctx);
     ggml_cgraph * hrx_graph = ggml_new_graph(hrx_ctx);
-    ggml_cgraph * hrx_native_graph = ggml_new_graph(hrx_ctx);
     ggml_build_forward_expand(cpu_graph, cpu_output);
     ggml_build_forward_expand(hrx_graph, hrx_output);
-    ggml_build_forward_expand(hrx_native_graph, hrx_native);
     hrx_graph->uid = 951081;
-    hrx_native_graph->uid = 951082;
 
     std::vector<uint8_t> weight = make_matmul_weight_bytes(GGML_TYPE_Q4_K, input_size, output_size, 59);
     ggml_backend_buffer_t imported = ggml_backend_dev_buffer_from_host_ptr(
@@ -3644,8 +3270,6 @@ static void run_failed_submission_weight_lifetime_case(bool uncached = false) {
     ggml_backend_buffer_t hrx_tensors = ggml_backend_alloc_ctx_tensors(hrx_ctx, backend);
     REQUIRE(cpu_tensors != nullptr && hrx_tensors != nullptr);
     ggml_backend_tensor_set(cpu_weight, weight.data(), 0, weight.size());
-    const std::array<int32_t, 3> ids = { 0, 1, 63 };
-    ggml_backend_tensor_set(hrx_ids, ids.data(), 0, sizeof(ids));
     const std::vector<float> input = make_pattern_f32(input_size * 3, 41, 0.01f);
     set_tensor_pair_bytes(cpu, cpu_input, backend, hrx_input, input.data(), input.size() * sizeof(float));
     REQUIRE(ggml_backend_graph_compute(cpu, cpu_graph) == GGML_STATUS_SUCCESS);
@@ -3672,22 +3296,14 @@ static void run_failed_submission_weight_lifetime_case(bool uncached = false) {
     };
     auto packed_lookup = state->graph_programs.get_or_build(
         *hrx_graph, ggml::hrx::get_qwen_kernel_corpus(), state->device->architecture);
-    auto native_lookup = state->graph_programs.get_or_build(
-        *hrx_native_graph, ggml::hrx::get_qwen_kernel_corpus(), state->device->architecture);
-    REQUIRE(packed_lookup.valid() && native_lookup.valid());
+    REQUIRE(packed_lookup.valid());
     auto packed_bindings = bind(*packed_lookup.program, *hrx_graph);
-    auto native_bindings = bind(*native_lookup.program, *hrx_native_graph);
     auto packed_demands = ggml::hrx::collect_command_program_weight_demands(
         packed_lookup.program->commands(), packed_bindings);
-    auto native_demands = ggml::hrx::collect_command_program_weight_demands(
-        native_lookup.program->commands(), native_bindings);
-    REQUIRE(packed_demands.valid() && native_demands.valid());
+    REQUIRE(packed_demands.valid());
     REQUIRE(packed_demands.weights.size() == 1 && packed_demands.weights.front().requires_materialization);
-    REQUIRE(native_demands.weights.size() == 1);
     const auto packed_source = packed_demands.weights.front().source;
-    const auto native_source = native_demands.weights.front().source;
-    REQUIRE(native_source.layout == ggml::hrx::kNativeWeightLayout);
-    REQUIRE(packed_source.layout != native_source.layout);
+    REQUIRE(packed_source.layout != ggml::hrx::kNativeWeightLayout);
     REQUIRE(packed_source.materialized_length > 0);
     auto preuploaded = state->host_weights.acquire(state->device->device, state->stream,
                                                    state->host_transfers, packed_source);
@@ -4110,49 +3726,6 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
         }
     }
     REQUIRE(selected_row64);
-    if (coherent_subregion) {
-        // This internal factory must preserve the owner CPU address even when the import binds directly by handle.
-        auto graph_import = ggml::hrx::import_ggml_graph(*hrx_decode);
-        REQUIRE(graph_import.valid());
-        auto & values = graph_import.graph.values();
-        for (ggml::hrx::ValueId id : values.external_value_ids()) {
-            const ggml::hrx::Value * value = values.find(id);
-            REQUIRE(value != nullptr);
-            REQUIRE(value->tensor != nullptr);
-            ggml::hrx::ValueBufferBinding source_binding;
-            REQUIRE(ggml_backend_hrx_resolve_value_buffer(value->tensor, source_binding));
-            REQUIRE(values.bind_buffer(id, source_binding));
-        }
-        const auto * weight_value = values.find_tensor(hrx_weight);
-        REQUIRE(weight_value != nullptr);
-        auto value_map_bindings = ggml::hrx::CommandProgramBindings::from_value_map(values);
-        REQUIRE(value_map_bindings.valid());
-        const auto * weight_binding = value_map_bindings.find(weight_value->id);
-        REQUIRE(weight_binding != nullptr);
-        REQUIRE(weight_binding->buffer != nullptr);
-        REQUIRE(weight_binding->host_data == nullptr);
-        REQUIRE(weight_binding->source_host_data == coherent_owner_base);
-        REQUIRE(weight_binding->source_offset == 256);
-        REQUIRE(weight_binding->source_capacity == source.size() + 256);
-        const auto & corpus = ggml::hrx::get_qwen_kernel_corpus();
-        const ggml::hrx::CommandProgramExecutionContext execution_context = {
-            backend_state->device->device, backend_state->stream, backend_state->device->architecture.c_str(),
-            &corpus, &backend_state->kernel_executables, &backend_state->transient_arena,
-            &backend_state->host_transfers, &backend_state->host_weights, &backend_state->device->host_buffers,
-            &backend_state->graph_replay_state,
-        };
-        auto prepared = ggml::hrx::prepare_command_program(
-            execution_context, lookup.program->commands(), value_map_bindings);
-        REQUIRE(prepared.valid());
-        REQUIRE(prepared.resident_host_weights->size() == 1);
-        ggml::hrx::RecordedCommandGraph recorded;
-        const auto launch = ggml::hrx::bind_and_launch_recorded_command_graph(
-            execution_context, lookup.program->commands(), value_map_bindings, prepared, recorded);
-        REQUIRE(launch.success);
-        ggml_backend_synchronize(hrx_backend);
-        require_close(get_f32_tensor(hrx_backend, hrx_decode_output),
-                      get_f32_tensor(cpu_backend, cpu_decode_output), 1.0f, 3.0e-2f);
-    }
     compute_and_compare(cpu_other, hrx_other, cpu_other_output, hrx_other_output);
     REQUIRE(ggml_backend_hrx_get_cache_stats(hrx_backend, &stats));
     REQUIRE(stats.weight_materializations == 1);
@@ -4199,7 +3772,7 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
 
     compute_and_compare(cpu_native, hrx_native, cpu_native_output, hrx_native_output);
     REQUIRE(ggml_backend_hrx_get_cache_stats(hrx_backend, &stats));
-    const uint64_t native_materializations = coherent_subregion ? 1 : 2;
+    const uint64_t native_materializations = 2;
     REQUIRE(stats.weight_materializations == native_materializations);
     REQUIRE(stats.weight_live_allocations == native_materializations);
     const uint64_t uploaded_bytes = stats.weight_uploaded_bytes;
@@ -4272,7 +3845,7 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
     REQUIRE(after_rebind.prepared_program_builds == before_rebind.prepared_program_builds + 1);
     REQUIRE(after_rebind.weight_materializations == before_rebind.weight_materializations);
 
-    if (source_kind == PackedWeightSourceKind::Imported) {
+    {
         // Exercise production preparation and recording: physical residency must remain counted after both
         // the graph-program owner and weight lookup entries are gone, for as long as recording retains it.
         auto full_match = lookup.program->match_trusted_graph(*hrx_decode, true);
@@ -4321,9 +3894,6 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
     ggml_backend_buffer_free(decode_host);
     ggml_backend_buffer_free(rebound_host);
     ggml_backend_buffer_free(imported);
-    if (owner != nullptr) {
-        ggml_backend_buffer_free(owner);
-    }
     ggml_free(cpu_ctx);
     ggml_free(hrx_ctx);
     ggml_backend_free(cpu_backend);
@@ -4623,134 +4193,6 @@ static void run_mixed_weight_layout_program_case(ggml_type weight_type) {
     ggml_backend_buffer_free(hrx_tensors);
     ggml_backend_buffer_free(cpu_tensors);
     ggml_backend_buffer_free(imported);
-    ggml_free(hrx_ctx);
-    ggml_free(cpu_ctx);
-    ggml_backend_free(backend);
-    ggml_backend_free(cpu);
-}
-
-static void run_native_cpu_weight_during_import_layout_transition_case(ggml_type weight_type) {
-    constexpr int64_t input_size = 256;
-    constexpr int64_t output_size = 64;
-    ggml_backend_t cpu = init_cpu_backend();
-    ggml_backend_t backend = ggml_backend_hrx_init(0);
-    REQUIRE(cpu != nullptr && backend != nullptr);
-    auto * state = static_cast<ggml_backend_hrx_context *>(backend->context);
-
-    ggml_init_params params = {};
-    params.mem_size = 1024 * 1024;
-    params.no_alloc = true;
-    ggml_context * cpu_ctx = ggml_init(params);
-    ggml_context * hrx_ctx = ggml_init(params);
-    REQUIRE(cpu_ctx != nullptr && hrx_ctx != nullptr);
-
-    ggml_tensor * cpu_host_weight = ggml_new_tensor_2d(cpu_ctx, weight_type, input_size, output_size);
-    ggml_tensor * cpu_imported_weight = ggml_new_tensor_2d(cpu_ctx, weight_type, input_size, output_size);
-    ggml_tensor * cpu_ids = ggml_new_tensor_1d(cpu_ctx, GGML_TYPE_I32, 3);
-    ggml_tensor * cpu_input = ggml_new_tensor_2d(cpu_ctx, GGML_TYPE_F32, input_size, 3);
-    ggml_tensor * hrx_host_weight = ggml_new_tensor_2d(hrx_ctx, weight_type, input_size, output_size);
-    ggml_tensor * hrx_imported_weight = ggml_new_tensor_2d(hrx_ctx, weight_type, input_size, output_size);
-    ggml_tensor * hrx_ids = ggml_new_tensor_1d(hrx_ctx, GGML_TYPE_I32, 3);
-    ggml_tensor * hrx_input = ggml_new_tensor_2d(hrx_ctx, GGML_TYPE_F32, input_size, 3);
-    ggml_tensor * cpu_host_rows = ggml_get_rows(cpu_ctx, cpu_host_weight, cpu_ids);
-    ggml_tensor * hrx_host_rows = ggml_get_rows(hrx_ctx, hrx_host_weight, hrx_ids);
-    ggml_tensor * cpu_imported_rows = ggml_get_rows(cpu_ctx, cpu_imported_weight, cpu_ids);
-    ggml_tensor * hrx_imported_rows = ggml_get_rows(hrx_ctx, hrx_imported_weight, hrx_ids);
-    ggml_tensor * cpu_imported_matmul = ggml_mul_mat(cpu_ctx, cpu_imported_weight, cpu_input);
-    ggml_tensor * hrx_imported_matmul = ggml_mul_mat(hrx_ctx, hrx_imported_weight, hrx_input);
-    ggml_cgraph * cpu_packed = ggml_new_graph(cpu_ctx);
-    ggml_cgraph * hrx_packed = ggml_new_graph(hrx_ctx);
-    ggml_cgraph * cpu_native = ggml_new_graph(cpu_ctx);
-    ggml_cgraph * hrx_native = ggml_new_graph(hrx_ctx);
-    REQUIRE(cpu_packed != nullptr && hrx_packed != nullptr && cpu_native != nullptr && hrx_native != nullptr);
-    ggml_build_forward_expand(cpu_packed, cpu_host_rows);
-    ggml_build_forward_expand(cpu_packed, cpu_imported_matmul);
-    ggml_build_forward_expand(hrx_packed, hrx_host_rows);
-    ggml_build_forward_expand(hrx_packed, hrx_imported_matmul);
-    ggml_build_forward_expand(cpu_native, cpu_host_rows);
-    ggml_build_forward_expand(cpu_native, cpu_imported_rows);
-    ggml_build_forward_expand(hrx_native, hrx_host_rows);
-    ggml_build_forward_expand(hrx_native, hrx_imported_rows);
-    hrx_packed->uid = 951061;
-    hrx_native->uid = 951062;
-
-    std::vector<uint8_t> host_bytes = make_matmul_weight_bytes(weight_type, input_size, output_size, 6);
-    std::vector<uint8_t> imported_bytes = make_matmul_weight_bytes(weight_type, input_size, output_size, 11);
-    ggml_backend_buffer_t host_buffer = ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), host_bytes.size());
-    REQUIRE(host_buffer != nullptr);
-    REQUIRE(ggml_backend_tensor_alloc(host_buffer, hrx_host_weight, ggml_backend_buffer_get_base(host_buffer)) ==
-            GGML_STATUS_SUCCESS);
-    ggml_backend_buffer_set_usage(host_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-    ggml_backend_tensor_set(hrx_host_weight, host_bytes.data(), 0, host_bytes.size());
-    ggml_backend_buffer_t imported = ggml_backend_dev_buffer_from_host_ptr(
-        ggml_backend_get_device(backend), imported_bytes.data(), imported_bytes.size(), imported_bytes.size());
-    REQUIRE(imported != nullptr);
-    REQUIRE(ggml_backend_tensor_alloc(imported, hrx_imported_weight, imported_bytes.data()) == GGML_STATUS_SUCCESS);
-    ggml_backend_buffer_set_usage(imported, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-    ggml_backend_buffer_t hrx_tensors = ggml_backend_alloc_ctx_tensors(hrx_ctx, backend);
-    ggml_backend_buffer_t cpu_tensors = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu);
-    REQUIRE(hrx_tensors != nullptr && cpu_tensors != nullptr);
-    ggml_backend_tensor_set(cpu_host_weight, host_bytes.data(), 0, host_bytes.size());
-    ggml_backend_tensor_set(cpu_imported_weight, imported_bytes.data(), 0, imported_bytes.size());
-    const std::array<int32_t, 3> ids = { 1, 17, 63 };
-    const std::vector<float> input = make_pattern_f32(input_size * 3, 7, 0.01f);
-    set_tensor_pair_bytes(cpu, cpu_ids, backend, hrx_ids, ids.data(), sizeof(ids));
-    set_tensor_pair_bytes(cpu, cpu_input, backend, hrx_input, input.data(), input.size() * sizeof(float));
-
-    const std::string packed_layout = weight_type == GGML_TYPE_Q4_K ?
-        ggml::hrx::kQ4KPackedK256Row64Layout : ggml::hrx::kQ6KPackedK256Row64ScaleRowLayout;
-    auto check_layouts = [&](ggml_cgraph * graph, bool expect_packed) {
-        auto lookup = state->graph_programs.get_or_build(
-            *graph, ggml::hrx::get_qwen_kernel_corpus(), state->device->architecture);
-        REQUIRE(lookup.valid());
-        const auto * host_value = lookup.program->graph().values().find_tensor(hrx_host_weight);
-        const auto * imported_value = lookup.program->graph().values().find_tensor(hrx_imported_weight);
-        REQUIRE(host_value != nullptr && imported_value != nullptr);
-        bool host_native = false;
-        bool imported_selected = false;
-        for (const auto & command : lookup.program->commands().commands) {
-            for (const auto & binding : command.bindings) {
-                if (binding.value == host_value->id) {
-                    REQUIRE(binding.layout == ggml::hrx::kNativeWeightLayout);
-                    host_native = true;
-                }
-                if (binding.value == imported_value->id) {
-                    const std::string & expected = expect_packed ? packed_layout : ggml::hrx::kNativeWeightLayout;
-                    imported_selected = imported_selected || binding.layout == expected;
-                }
-            }
-        }
-        REQUIRE(host_native && imported_selected);
-    };
-    check_layouts(hrx_packed, true);
-    check_layouts(hrx_native, false);
-
-    auto compute_and_compare = [&](ggml_cgraph * cpu_graph, ggml_cgraph * hrx_graph,
-                                   ggml_tensor * cpu_imported_output, ggml_tensor * hrx_imported_output) {
-        REQUIRE(ggml_backend_graph_compute(cpu, cpu_graph) == GGML_STATUS_SUCCESS);
-        REQUIRE(ggml_backend_graph_compute(backend, hrx_graph) == GGML_STATUS_SUCCESS);
-        ggml_backend_synchronize(backend);
-        require_close(get_f32_tensor(backend, hrx_host_rows), get_f32_tensor(cpu, cpu_host_rows), 2.0e-3f);
-        require_close(get_f32_tensor(backend, hrx_imported_output),
-                      get_f32_tensor(cpu, cpu_imported_output), 1.0f, 3.0e-2f);
-    };
-    compute_and_compare(cpu_packed, hrx_packed, cpu_imported_matmul, hrx_imported_matmul);
-    auto first = state->host_weights.stats();
-    REQUIRE(first.misses == 2);
-    REQUIRE(first.allocation_count == 2);
-    compute_and_compare(cpu_native, hrx_native, cpu_imported_rows, hrx_imported_rows);
-    auto native = state->host_weights.stats();
-    REQUIRE(native.misses == first.misses + 1);
-    REQUIRE(native.allocation_count == 3);
-    compute_and_compare(cpu_packed, hrx_packed, cpu_imported_matmul, hrx_imported_matmul);
-    auto packed_again = state->host_weights.stats();
-    REQUIRE(packed_again.misses == native.misses);
-    REQUIRE(packed_again.allocation_count == 3);
-
-    ggml_backend_buffer_free(hrx_tensors);
-    ggml_backend_buffer_free(cpu_tensors);
-    ggml_backend_buffer_free(imported);
-    ggml_backend_buffer_free(host_buffer);
     ggml_free(hrx_ctx);
     ggml_free(cpu_ctx);
     ggml_backend_free(backend);
@@ -9088,7 +8530,6 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
     suite.device_case("mutable_host_input_after_writeback.cpu", [] { run_mutable_host_input_after_writeback_case(false); });
     suite.device_case("mutable_host_input_after_writeback.hrx", [] { run_mutable_host_input_after_writeback_case(true); });
     suite.device_case("weight_persistence_sequence", [] { run_weight_persistence_sequence_case(); });
-    suite.device_case("weight_persistence_overlap", [] { run_weight_persistence_overlap_case(); });
     suite.device_case("failed_submission_weight_lifetime", [] { run_failed_submission_weight_lifetime_case(); });
     suite.device_case("failed_submission_weight_lifetime.uncached", [] { run_failed_submission_weight_lifetime_case(true); });
     suite.device_case("imported_packed_weight.q4_k", [] { run_imported_packed_weight_case(GGML_TYPE_Q4_K); });
@@ -9107,12 +8548,6 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
     });
     suite.device_case("coherent_subregion_native_weight.q4_k", [] {
         run_imported_packed_weight_case(GGML_TYPE_Q4_K, PackedWeightSourceKind::CoherentSubregion);
-    });
-    suite.device_case("native_cpu_weight_import_transition.q4_k", [] {
-        run_native_cpu_weight_during_import_layout_transition_case(GGML_TYPE_Q4_K);
-    });
-    suite.device_case("native_cpu_weight_import_transition.q6_k", [] {
-        run_native_cpu_weight_during_import_layout_transition_case(GGML_TYPE_Q6_K);
     });
     suite.device_case("q4_prefill_source_eligibility", [] { run_q4_prefill_source_eligibility_case(); });
     suite.device_case("uploaded_native_q6_vector", [] {
