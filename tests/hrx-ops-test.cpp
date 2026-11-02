@@ -5973,6 +5973,45 @@ static void run_mutable_quantized_matmul_case(ggml_type weight_type, int64_t tok
     ggml_backend_free(hrx_backend);
 }
 
+// The scalar reference avoids the CPU backend's extra activation quantization.
+static std::vector<float> row64_matmul_reference(ggml_type type, const std::vector<uint8_t> & bytes,
+                                                const std::vector<float> & input,
+                                                int64_t inputs, int64_t outputs, int64_t tokens) {
+    const auto * traits = ggml_get_type_traits(type);
+    const size_t row_bytes = ggml_row_size(type, inputs);
+    std::vector<float> row(static_cast<size_t>(inputs));
+    std::vector<float> result(static_cast<size_t>(outputs * tokens));
+    for (int64_t output = 0; output < outputs; ++output) {
+        traits->to_float(bytes.data() + output * row_bytes, row.data(), inputs);
+        for (int64_t token = 0; token < tokens; ++token) {
+            double sum = 0.0;
+            for (int64_t k = 0; k < inputs; ++k) {
+                sum += static_cast<double>(row[k]) * input[token * inputs + k];
+            }
+            result[token * outputs + output] = static_cast<float>(sum);
+        }
+    }
+    return result;
+}
+
+static void require_row64_reference(const std::vector<float> & actual, const std::vector<float> & expected) {
+    double error = 0.0;
+    double magnitude = 0.0;
+    float maximum_error = 0.0f;
+    for (size_t i = 0; i < actual.size(); ++i) {
+        const double delta = static_cast<double>(actual[i]) - expected[i];
+        error += delta * delta;
+        magnitude += static_cast<double>(expected[i]) * expected[i];
+        maximum_error = std::max(maximum_error, static_cast<float>(std::fabs(delta)));
+    }
+    REQUIRE(magnitude > 0.0);
+    const double relative_l2 = std::sqrt(error / magnitude);
+    std::fprintf(stderr, "row64 scalar reference: relative_l2=%g max_abs=%g elements=%zu\n",
+                 relative_l2, maximum_error, actual.size());
+    REQUIRE(relative_l2 <= 0.01);
+    require_close(actual, expected, 0.02f, 0.02f);
+}
+
 static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
                                                 const char * expected_kernel,
                                                 int64_t      token_count,
@@ -5982,7 +6021,8 @@ static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
                                                 bool         square_output = false,
                                                 ggml_type    cache_type = GGML_TYPE_COUNT,
                                                 bool         verify_uploaded_native = false,
-                                                bool         import_weights = false) {
+                                                bool         import_weights = false,
+                                                bool         scalar_reference = false) {
     ggml_backend_t cpu_backend = init_cpu_backend();
     ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
     REQUIRE(hrx_backend != nullptr);
@@ -6110,6 +6150,10 @@ static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
     const float abs_tolerance = cache_type != GGML_TYPE_COUNT ? 2.0e-3f : 1.0f;
     require_close(get_f32_tensor(hrx_backend, hrx_output), get_f32_tensor(cpu_backend, cpu_output), abs_tolerance,
                   cache_type != GGML_TYPE_COUNT ? 1.0e-4f : 3.0e-2f);
+    if (scalar_reference) {
+        require_row64_reference(get_f32_tensor(hrx_backend, hrx_output),
+            row64_matmul_reference(weight_type, weight, input, input_size, output_size, token_count));
+    }
     if (verify_uploaded_native) {
         std::vector<uint8_t> readback(weight.size());
         ggml_backend_tensor_get(hrx_weight, readback.data(), 0, readback.size());
@@ -8574,7 +8618,7 @@ static void register_dense_matmul_cases(Suite & suite) {
                 tokens == 128 ? "loom_libs:ggml_mul_mat_q6_k_f16_wmma_prefill_wave32" :
                                 "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32";
             run_dense_matmul_cpu_reference_case(GGML_TYPE_Q6_K, kernel, tokens, 192, 768, false, false,
-                                                GGML_TYPE_COUNT, false, true);
+                                                GGML_TYPE_COUNT, false, true, true);
         });
     }
     for (const int64_t tokens : { 128, 256 }) {
