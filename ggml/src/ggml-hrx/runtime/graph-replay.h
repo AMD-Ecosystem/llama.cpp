@@ -2,6 +2,8 @@
 
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 
 namespace ggml::hrx {
 
@@ -33,6 +35,14 @@ inline const char * hrx_graph_replay_event_name(HrxGraphReplayEvent event) {
             return "launch_failed";
     }
     return "unknown";
+}
+
+inline bool graph_replay_disabled_by_environment() {
+    const char * value = std::getenv("GGML_HRX_DISABLE_GRAPH_REPLAY");
+    const bool set = value != nullptr;
+    const bool nonempty = set && value[0] != '\0';
+    const bool enabled = nonempty && std::strcmp(value, "0") != 0;
+    return enabled;
 }
 
 inline uint64_t hrx_graph_replay_now_ns() {

@@ -1,5 +1,11 @@
 # HRX Backend
 
+## Weight residency diagnostics
+
+HRX materializes imported host weights in the layout requested by the selected kernel and caches each result for the backend's lifetime. If one weight is materialized in two layouts, HRX warns about the duplicate allocations and their memory cost.
+
+To log residency totals, set `GGML_HRX_LOG_WEIGHT_STATS=1` and run `llama-bench -v`. HRX prints a `ggml_hrx: weight_stats` line when the backend is released, with materialization and reuse counts, cached allocations and bytes, and upload totals.
+
 ## Compilation diagnostics
 
 Set `GGML_HRX_TRACE_COMPILE=1` before starting an application using the ggml HRX backend to log compilation activity. Each record is a JSON object on stderr prefixed with `hrx compile: `. This output bypasses the application's log-level filter, so it also works with quiet benchmark runs. The setting is read once per process; unset or any value other than `1` disables it.

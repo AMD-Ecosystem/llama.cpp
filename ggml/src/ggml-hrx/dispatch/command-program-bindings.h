@@ -1,6 +1,7 @@
 #pragma once
 
 #include "graph/value-map.h"
+#include "command-program.h"
 #include "status.h"
 
 #include <cstddef>
@@ -23,13 +24,28 @@ struct CommandProgramBinding {
     void *       host_data  = nullptr;
     bool         weight     = false;
     bool         empty_value = false;
+    // Retained host bytes are separate from the address used to bind a command.
+    const void * source_host_data = nullptr;
+    // Materialized bindings are selected by the requesting command, not just by ValueId.
+    std::string  layout = kNativeWeightLayout;
+    ggml_type    layout_source_type = GGML_TYPE_COUNT;
+    int64_t      input_size = 0;
+    int64_t      output_size = 0;
+    size_t       source_length = 0;
 
     bool requires_materialization() const { return host_data != nullptr; }
 };
 
-struct CommandProgramBindingsFingerprint {
-    std::string value;
-};
+inline CommandProgramBinding make_command_program_binding(
+    ValueId value, const ValueBufferBinding & buffer, bool empty_value) {
+    CommandProgramBinding binding = { value, buffer.buffer, buffer.offset, buffer.length, buffer.identity,
+                                      buffer.generation, buffer.capacity, buffer.host_data, buffer.weight,
+                                      empty_value };
+    binding.source_host_data = buffer.source_host_data;
+    return binding;
+}
+
+
 
 struct CommandProgramBindingsHash {
     uint64_t value = 0;
@@ -41,7 +57,8 @@ class CommandProgramBindings {
     static CommandProgramBindings from_bindings(std::vector<CommandProgramBinding> bindings,
                                                 const Status &                     errors = {});
 
-    const CommandProgramBinding * find(ValueId value) const;
+    const CommandProgramBinding * find_by_value(ValueId value) const;
+    const CommandProgramBinding * find(const CommandBinding & request) const;
 
     const std::vector<CommandProgramBinding> & bindings() const { return bindings_; }
 
@@ -54,6 +71,5 @@ class CommandProgramBindings {
 };
 
 CommandProgramBindingsHash        command_program_bindings_hash(const CommandProgramBindings & bindings);
-CommandProgramBindingsFingerprint command_program_bindings_fingerprint(const CommandProgramBindings & bindings);
 
 }  // namespace ggml::hrx

@@ -3,6 +3,7 @@
 #include "dispatch/command-program.h"
 #include "graph/graph.h"
 #include "kernel-corpus/kernel-corpus.h"
+#include "runtime/command-program-executor.h"
 #include "runtime/prepared-command-program-cache.h"
 #include "status.h"
 
@@ -11,6 +12,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 struct ggml_cgraph;
@@ -33,6 +35,7 @@ struct GraphProgramExternalSlot {
     GraphProgramExternalSlotKind kind         = GraphProgramExternalSlotKind::Node;
     size_t                       node_index   = 0;
     int32_t                      source_index = -1;
+    bool                         weight_layout_eligible = true;
 };
 
 struct GraphProgramMatch {
@@ -64,21 +67,17 @@ class GraphProgram {
 
     const CommandProgram & commands() const { return *commands_; }
 
-    CommandProgram & commands() { return *commands_; }
-
     GraphProgramMatch match_current_graph(const ggml_cgraph & graph) const;
     GraphProgramMatch match_trusted_graph(const ggml_cgraph & graph, bool bind_external = true) const;
     GraphProgramMatch match_host_staging_graph(const ggml_cgraph & graph) const;
-
     Status capture_external_slots(const ggml_cgraph & graph, const GraphProgramMatch & match);
 
-    bool has_prepared_program() const;
     bool can_use_prepared_fast_path(const ggml_cgraph & graph) const;
-
-    PreparedCommandProgramCacheStats prepared_stats() const;
-
-    PreparedCommandProgramCacheExecutionResult execute_with_result(const CommandProgramExecutionContext & context,
-                                                                   const CommandProgramBindings &         bindings);
+    bool mutable_sources_current() const;
+    std::shared_ptr<PreparedCommandProgramCacheEntry> prepared_entry() const;
+    void bind_prepared_graph(const ggml_cgraph & graph, const GraphProgramMatch & match,
+                             const CommandProgramBindings & bindings,
+                             std::shared_ptr<PreparedCommandProgramCacheEntry> entry);
 
   private:
     const GraphProgramExternalSlot * find_external_slot(ValueId value) const;
@@ -89,25 +88,28 @@ class GraphProgram {
     uint64_t                        uid_ = 0;
     std::string                     target_;
     std::unique_ptr<Graph>          graph_;
-    std::unique_ptr<CommandProgram> commands_;
+    std::unique_ptr<const CommandProgram> commands_;
     std::string                     command_shape_;
     uint64_t                        command_shape_hash_ = 0;
 
     std::vector<GraphProgramExternalSlot> external_slots_;
+    struct MutableSourceWatch {
+        const ggml_tensor * tensor;
+        uint64_t            identity;
+        size_t              offset;
+        size_t              length;
+    };
+    std::vector<MutableSourceWatch> mutable_source_watches_;
     std::unordered_map<int32_t, size_t>   external_slot_by_value_;
+    uint64_t                              fast_path_uid_ = 0;
     const ggml_tensor * const *           fast_path_nodes_ = nullptr;
     mutable std::mutex                    prepared_mutex_;
-    PreparedCommandProgram                prepared_;
-    RecordedCommandGraph                  recorded_;
-    PreparedCommandProgramCacheStats      prepared_stats_;
-    bool                                  has_prepared_ = false;
+    std::shared_ptr<PreparedCommandProgramCacheEntry> prepared_entry_;
 };
 
 struct GraphProgramCacheStats {
     uint64_t builds                  = 0;
     uint64_t hits                    = 0;
-    uint64_t prepared_program_builds = 0;
-    uint64_t prepared_program_hits   = 0;
 };
 
 struct GraphProgramLookup {

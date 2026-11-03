@@ -34,6 +34,10 @@ struct ggml_backend_hrx_buffer_context {
     uint64_t                          identity;
     uint64_t                          generation;
     bool                              direct_host_binding;
+    bool                              imported;
+    size_t                            physical_offset = 0;
+    size_t                            physical_capacity = 0;
+    uint8_t *                         retained_base = nullptr;
 };
 
 struct ggml_backend_hrx_device_context {
