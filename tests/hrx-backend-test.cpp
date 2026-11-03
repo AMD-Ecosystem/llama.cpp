@@ -14053,11 +14053,17 @@ static RoutedKTailOutputs run_routed_k_tail_case(ggml_backend_t backend,
                 const int code = packet == 0 ? 127 : packet == 1 ? -127 : packet == 2 ? 0 :
                                  static_cast<int>((row * 3 + column + column / 32) % 31) - 15;
                 value = static_cast<float>(code) / 256.0f;
-            } else {
-                REQUIRE(weight_type == GGML_TYPE_Q5_1);
+            } else if (weight_type == GGML_TYPE_Q5_1) {
                 const int code = packet == 0 ? 0 : packet == 1 ? 31 : packet == 2 ? 0 :
                                  static_cast<int>((row * 3 + column + column / 32) % 32);
                 value = static_cast<float>(code) / 64.0f;
+            } else {
+                REQUIRE(weight_type == GGML_TYPE_Q1_0);
+                const float scale = static_cast<float>(1 + (row + column / 128) % 3) / 16.0f;
+                const bool is_anchor = packet < 2;
+                const bool positive_code = (row + column / 32 + column / 128) % 2 == 0;
+                const bool positive_weight = is_anchor || positive_code;
+                value = positive_weight ? scale : -scale;
             }
             weights[row * input_size + column] = value;
         }
@@ -14067,7 +14073,8 @@ static RoutedKTailOutputs run_routed_k_tail_case(ggml_backend_t backend,
                                output_size * expert_count, input_size, nullptr) == packed.size());
     ggml_backend_tensor_set(tensors.weight, packed.data(), 0, packed.size());
 
-    // Zero-weight anchors fix the CPU's activation quantization scale to an exact binary value.
+    // Anchors fix the CPU's activation quantization scale to an exact binary value. Q1_0 has
+    // no zero code, so its two anchors cancel against equal weights within each Q8_0 block.
     // The remaining sparse products and sums are also exact in F16 WMMA. Two contributions are
     // in the final partial block, and weight rows vary across channels and experts.
     std::vector<float> input(ggml_nelements(tensors.input), 0.0f);
@@ -14075,8 +14082,13 @@ static RoutedKTailOutputs run_routed_k_tail_case(ggml_backend_t backend,
     for (int64_t token = 0; token < token_count; ++token) {
         for (int64_t route = 0; route < route_count; ++route) {
             const int64_t assignment = token * route_count + route;
-            for (int64_t column = 2; column < input_size; column += 32) {
-                input[assignment * input_size + column] = 127.0f / 16.0f;
+            for (int64_t column = 0; column < input_size; column += 32) {
+                if (weight_type == GGML_TYPE_Q1_0) {
+                    input[assignment * input_size + column] = 127.0f / 16.0f;
+                    input[assignment * input_size + column + 1] = -127.0f / 16.0f;
+                } else {
+                    input[assignment * input_size + column + 2] = 127.0f / 16.0f;
+                }
             }
             input[assignment * input_size + 3] = static_cast<float>(route + 1) / 16.0f;
             input[assignment * input_size + input_size - 5] = static_cast<float>(token % 3 + 1) / 16.0f;
@@ -15162,7 +15174,8 @@ static void register_hrx_backend_device_cases(test_runner::Suite & suite) {
     suite.device_case("mellum_scaling_direct_numerics", [] { run_mellum_scaling_direct_numerics(); });
     for (const auto & shape : { std::pair<ggml_type, int64_t>{ GGML_TYPE_Q8_0, 896 },
                                { GGML_TYPE_Q8_0, 704 }, { GGML_TYPE_Q5_1, 704 },
-                               { GGML_TYPE_Q8_0, 1024 }, { GGML_TYPE_Q5_1, 768 } }) {
+                               { GGML_TYPE_Q8_0, 1024 }, { GGML_TYPE_Q5_1, 768 },
+                               { GGML_TYPE_Q1_0, 384 }, { GGML_TYPE_Q1_0, 512 } }) {
         for (int64_t tokens : { 1, 16 }) {
             for (int postops : { 0, 1, 2 }) {
                 const std::string name = "routed_k_tail." + std::string(ggml_type_name(shape.first)) +
