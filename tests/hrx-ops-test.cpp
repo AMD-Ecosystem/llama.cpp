@@ -8265,7 +8265,8 @@ static void register_dense_matmul_cases(Suite & suite) {
                               [op, outputs] {
                                   run_dense_matmul_swiglu_cpu_reference_case(
                                       GGML_TYPE_Q4_K, GGML_TYPE_Q4_K,
-                                      "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot", 4, outputs, op);
+                                      "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot", 4, outputs, op,
+                                      kQwenHiddenSize, false, true);
                               });
         }
         for (const int64_t tokens : { 256, 512 }) {
@@ -8275,7 +8276,8 @@ static void register_dense_matmul_cases(Suite & suite) {
                     [op] {
                         run_dense_matmul_swiglu_cpu_reference_case(
                             GGML_TYPE_Q4_K, GGML_TYPE_Q4_K,
-                            "loom_libs:ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256", 512, 4096, op);
+                            "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32", 512, 4096, op,
+                            kQwenHiddenSize, false, true);
                     });
             } else {
                 for (const int64_t outputs : { 128, 4096 }) {
@@ -8284,8 +8286,8 @@ static void register_dense_matmul_cases(Suite & suite) {
                                       [op, outputs] {
                                           run_dense_matmul_swiglu_cpu_reference_case(
                                               GGML_TYPE_Q4_K, GGML_TYPE_Q4_K,
-                                              "loom_libs:ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256", 256,
-                                              outputs, op);
+                                              "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32", 256,
+                                              outputs, op, kQwenHiddenSize, false, true);
                                       });
                 }
             }
@@ -8295,8 +8297,9 @@ static void register_dense_matmul_cases(Suite & suite) {
         suite.device_case(
             "dense_matmul_swiglu.q4_k.q4_k.lowtoken.tokens" + std::to_string(tokens) + ".outputs4160", [tokens] {
                 run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_Q4_K, GGML_TYPE_Q4_K,
-                                                           "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot",
-                                                           tokens, 4160);
+                                                           "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
+                                                           tokens, 4160, GGML_GLU_OP_SWIGLU, kQwenHiddenSize, false,
+                                                           true);
             });
     }
     for (const int64_t tokens : { 1, 2, 5 }) {
@@ -8304,50 +8307,34 @@ static void register_dense_matmul_cases(Suite & suite) {
             "dense_matmul_swiglu.q4_k.q4_k.swiglu.tokens" + std::to_string(tokens) + ".outputs16384.input4096",
             [tokens] {
                 run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_Q4_K, GGML_TYPE_Q4_K,
-                                                           "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot",
-                                                           tokens, 16384, GGML_GLU_OP_SWIGLU, 4096);
+                                                           "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
+                                                           tokens, 16384, GGML_GLU_OP_SWIGLU, 4096, false, true);
             });
     }
     suite.device_case("dense_matmul_swiglu.q4_k.q4_k.reglu.tokens3.outputs16384.input4352", [] {
         run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_Q4_K, GGML_TYPE_Q4_K,
-                                                   "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot", 3, 16384,
-                                                   GGML_GLU_OP_REGLU, 4352);
+                                                   "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot", 3,
+                                                   16384, GGML_GLU_OP_REGLU, 4352, false, true);
     });
     suite.device_case("dense_matmul_binary.q4_k.q4_k.lowtoken.tokens4.outputs128", [] {
         run_dense_matmul_binary_cpu_reference_case(GGML_TYPE_Q4_K, GGML_TYPE_Q4_K,
-                                                   "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot", 4, 128);
+                                                   "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot", 4, 128,
+                                                   true);
     });
     suite.device_case("dense_matmul_binary.q4_k.q4_k.prefill.tokens256.outputs128", [] {
         run_dense_matmul_binary_cpu_reference_case(
-            GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256", 256, 128);
+            GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32", 256,
+            128, true);
     });
     suite.device_case("dense_matmul_binary.q4_k.q4_k.prefill.tokens256.outputs4096", [] {
         run_dense_matmul_binary_cpu_reference_case(
-            GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256", 256, 4096);
+            GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32", 256,
+            4096, true);
     });
     suite.device_case("dense_matmul_binary.q4_k.q4_k.prefill.tokens1024.outputs2048", [] {
         run_dense_matmul_binary_cpu_reference_case(
-            GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256", 1024, 2048);
-    });
-    suite.device_case("imported_packed_gated_q4.lowtoken", [] {
-        run_dense_matmul_swiglu_cpu_reference_case(
-            GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
-            4, 128, GGML_GLU_OP_SWIGLU, kQwenHiddenSize, false, true);
-    });
-    suite.device_case("imported_packed_gated_q4.prefill", [] {
-        run_dense_matmul_swiglu_cpu_reference_case(
-            GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32",
-            256, 128, GGML_GLU_OP_SWIGLU, kQwenHiddenSize, false, true);
-    });
-    suite.device_case("imported_packed_binary_q4.lowtoken", [] {
-        run_dense_matmul_binary_cpu_reference_case(
-            GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_swiglu_q4_q8_1_x4_lowtoken_dot",
-            4, 128, true);
-    });
-    suite.device_case("imported_packed_binary_q4.prefill", [] {
-        run_dense_matmul_binary_cpu_reference_case(
-            GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32",
-            256, 128, true);
+            GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_swiglu_q4_k_f16_wmma_prefill_wave32", 1024,
+            2048, true);
     });
     suite.device_case("dense_matmul_postops.f16.bias.tokens33.outputs256", [] {
         run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_F16,
