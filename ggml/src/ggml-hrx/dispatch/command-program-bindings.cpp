@@ -1,6 +1,5 @@
 #include "command-program-bindings.h"
 
-#include <sstream>
 #include <utility>
 
 namespace ggml::hrx {
@@ -27,9 +26,7 @@ CommandProgramBindings CommandProgramBindings::from_value_map(const ValueMap & v
             result.status.log("external value %d is not bound", id.value);
             continue;
         }
-        bindings.push_back({ value->id, buffer->buffer, buffer->offset, buffer->length, buffer->identity,
-                             buffer->generation, buffer->capacity, buffer->host_data, buffer->weight,
-                             value->byte_count == 0 });
+        bindings.push_back(make_command_program_binding(value->id, *buffer, value->byte_count == 0));
     }
     return from_bindings(std::move(bindings), result.status);
 }
@@ -50,9 +47,26 @@ CommandProgramBindings CommandProgramBindings::from_bindings(std::vector<Command
     return result;
 }
 
-const CommandProgramBinding * CommandProgramBindings::find(ValueId value) const {
+const CommandProgramBinding * CommandProgramBindings::find_by_value(ValueId value) const {
     for (const CommandProgramBinding & binding : bindings_) {
         if (binding.value == value) {
+            return &binding;
+        }
+    }
+    return nullptr;
+}
+
+const CommandProgramBinding * CommandProgramBindings::find(const CommandBinding & request) const {
+    for (const CommandProgramBinding & binding : bindings_) {
+        const bool same_value = binding.value == request.value;
+        const bool same_layout = binding.layout == request.layout;
+        const bool native_layout = request.layout == kNativeWeightLayout;
+        const bool same_transformation = native_layout ||
+            (binding.layout_source_type == request.source_type && binding.input_size == request.input_size &&
+             binding.output_size == request.output_size && binding.source_length == request.source_length &&
+             binding.length == request.length);
+        const bool matches_request = same_value && same_layout && same_transformation;
+        if (matches_request) {
             return &binding;
         }
     }
@@ -66,27 +80,18 @@ CommandProgramBindingsHash command_program_bindings_hash(const CommandProgramBin
         mix_hash(hash, static_cast<uint64_t>(static_cast<int64_t>(binding.value.value)));
         mix_hash(hash, binding.host_data != nullptr ? 1 : 0);
         mix_hash(hash, binding.identity);
-        mix_hash(hash, binding.generation);
+        const bool retained_weight = binding.weight && binding.source_host_data != nullptr;
+        mix_hash(hash, retained_weight ? binding.generation : 0);
         mix_hash(hash, static_cast<uint64_t>(binding.capacity));
         mix_hash(hash, static_cast<uint64_t>(binding.offset));
         mix_hash(hash, static_cast<uint64_t>(binding.length));
         mix_hash(hash, binding.weight ? 1 : 0);
         mix_hash(hash, binding.empty_value ? 1 : 0);
+        mix_hash(hash, binding.source_host_data != nullptr ? 1 : 0);
     }
     mix_hash(hash, static_cast<uint64_t>(bindings.bindings().size()));
     return { hash };
 }
 
-CommandProgramBindingsFingerprint command_program_bindings_fingerprint(const CommandProgramBindings & bindings) {
-    std::ostringstream out;
-    out << "hrx-bindings-v1";
-    for (const CommandProgramBinding & binding : bindings.bindings()) {
-        out << "|value=" << binding.value.value << "|kind=" << (binding.host_data != nullptr ? "host" : "device")
-            << "|identity=" << binding.identity << "|generation=" << binding.generation
-            << "|capacity=" << binding.capacity << "|offset=" << binding.offset << "|length=" << binding.length
-            << "|weight=" << (binding.weight ? 1 : 0) << "|empty=" << (binding.empty_value ? 1 : 0);
-    }
-    return { out.str() };
-}
 
 }  // namespace ggml::hrx

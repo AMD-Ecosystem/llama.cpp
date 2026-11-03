@@ -312,6 +312,9 @@ static bool can_fuse_q6_f16_prefill_v_cache_cell(const DispatchMatchContext & co
 }
 
 static bool can_use_packed_lowtoken_attention_matmul(const AttentionMatMulMatch & root) {
+    if (!dispatch_weight_layout_eligible(*root.weight)) {
+        return false;
+    }
     if (root.token_count < 1 || root.token_count > 5 || root.output_size % 64 != 0 ||
         root.weight->alias_source.value >= 0) {
         return false;

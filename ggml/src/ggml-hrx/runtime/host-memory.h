@@ -25,15 +25,8 @@ struct HostTransferStats {
     size_t   download_bytes = 0;
 };
 
-struct HostMappedDownloadLease {
-    std::unique_lock<std::mutex> lock;
-    void *                       host_data = nullptr;
-};
-
 class HostTransferManager {
   public:
-    ~HostTransferManager();
-
     Status upload_synchronous(hrx_stream_t stream,
                               const void * host_source,
                               hrx_buffer_t destination,
@@ -49,27 +42,16 @@ class HostTransferManager {
                                 size_t       offset,
                                 void *       host_destination,
                                 size_t       size);
-    Status download_to_mapped_synchronous(hrx_device_t              device,
-                                          hrx_stream_t              stream,
-                                          hrx_buffer_t              source,
-                                          size_t                    offset,
-                                          size_t                    size,
-                                          HostMappedDownloadLease & lease);
-
     HostTransferStats stats() const;
     void              clear();
 
   private:
     mutable std::mutex mutex_;
     HostTransferStats  stats_;
-    hrx_buffer_t       mapped_download_buffer_   = nullptr;
-    void *             mapped_download_data_     = nullptr;
-    size_t             mapped_download_capacity_ = 0;
 };
 
 struct HostWeightSource {
     const void * host_data  = nullptr;
-    hrx_buffer_t device_buffer       = nullptr;
     uint64_t     identity   = 0;
     uint64_t     generation = 0;
     size_t       capacity   = 0;
@@ -82,11 +64,14 @@ struct HostWeightSource {
     int64_t      output_size         = 0;
 };
 
+// Residency counts cache-owned representations, not buffers retained after an explicit clear.
 struct HostWeightCacheStats {
     uint64_t hits             = 0;
     uint64_t misses           = 0;
+    size_t   materialized_bytes = 0;
     size_t   allocation_count = 0;
     size_t   resident_bytes   = 0;
+    uint64_t duplicate_warnings = 0;
 };
 
 class HostWeightLease {
@@ -113,6 +98,7 @@ struct HostWeightAcquireResult {
     bool valid() const { return lease.valid() && status.success(); }
 };
 
+// Owns each immutable source representation until explicit clearing or backend teardown.
 class HostWeightCache {
   public:
     HostWeightCache() = default;
@@ -126,6 +112,8 @@ class HostWeightCache {
                                     HostTransferManager &    transfers,
                                     const HostWeightSource & source);
     HostWeightCacheStats    stats() const;
+    void fail_cold_acquire_after_for_test(size_t successful_acquires);
+    // Clears cache residency; existing leases remain valid and cumulative diagnostics are preserved.
     void                    clear();
 
   private:
@@ -154,9 +142,12 @@ class HostWeightCache {
         size_t operator()(const SourceKey & key) const;
     };
 
+    void report_new_representation(const SourceKey & key, const HostWeightLease::Entry & entry);
+
     mutable std::mutex                                                                    mutex_;
     std::unordered_map<SourceKey, std::shared_ptr<HostWeightLease::Entry>, SourceKeyHash> entries_;
     HostWeightCacheStats                                                                  stats_;
+    size_t fail_cold_after_ = SIZE_MAX;
 };
 
 struct HostStagingBuffer {

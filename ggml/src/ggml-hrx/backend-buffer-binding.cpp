@@ -27,7 +27,13 @@ bool ggml_backend_hrx_tensor_binding(const ggml_tensor *                tensor,
     }
     auto *       context = ggml_backend_hrx_buffer_context_from_buffer(buffer);
     const size_t offset  = ggml_backend_hrx_tensor_offset(context, tensor);
-    if (context->buffer == nullptr || offset > buffer->size || ggml_nbytes(tensor) > buffer->size - offset) {
+    const bool has_device_buffer = context->buffer != nullptr;
+    const bool is_imported = context->imported;
+    const bool has_storage = has_device_buffer || is_imported;
+    const bool offset_fits = offset <= buffer->size;
+    const bool tensor_size_fits = offset_fits ? ggml_nbytes(tensor) <= buffer->size - offset : false;
+    const bool valid_binding = has_storage && offset_fits && tensor_size_fits;
+    if (!valid_binding) {
         return false;
     }
     *out_context = context;
@@ -68,19 +74,86 @@ bool ggml_backend_hrx_resolve_value_buffer(const ggml_tensor * tensor, ggml::hrx
         binding.generation = 1;
         binding.capacity   = capacity;
         binding.weight     = ggml_backend_buffer_get_usage(buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
+        // Standard GGUF weights are immutable, so their native copy can use the shared weight cache.
+        // Layout eligibility remains a separate import-only decision.
+        binding.source_host_data = base;
         return true;
     }
     ggml_backend_buffer_t buffer = tensor->view_src != nullptr ? tensor->view_src->buffer : tensor->buffer;
-    const bool directly_bindable = !ggml_backend_buffer_is_host(buffer) || context->direct_host_binding;
+    const bool is_imported = context->imported;
+    const bool is_host_buffer = ggml_backend_buffer_is_host(buffer);
+    const bool ordinary_device_buffer = !is_imported && !is_host_buffer;
+    const bool directly_bindable = ordinary_device_buffer || context->direct_host_binding;
     // Coherent HRX host allocations are directly device-addressable. Represent them with an HRX buffer handle so
     // command-program preparation bypasses host materialization. Noncoherent host allocations remain host data.
     binding.buffer               = directly_bindable ? context->buffer : nullptr;
-    binding.host_data            = directly_bindable ? nullptr : context->base;
-    binding.offset               = offset;
+    const bool shared_host_region = context->retained_base != nullptr;
+    binding.host_data            = directly_bindable ? nullptr :
+                                   (shared_host_region ? context->retained_base : context->base);
+    binding.offset               = shared_host_region ? context->physical_offset + offset : offset;
     binding.length               = ggml_nbytes(tensor);
     binding.identity             = context->identity;
     binding.generation           = context->generation;
-    binding.capacity             = buffer != nullptr ? buffer->size : 0;
+    binding.capacity             = shared_host_region ? context->physical_capacity : buffer->size;
     binding.weight = buffer != nullptr && ggml_backend_buffer_get_usage(buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
+    const bool retained_host_source = is_imported || is_host_buffer;
+    binding.source_host_data = retained_host_source ?
+        (shared_host_region ? context->retained_base : context->base) : nullptr;
     return true;
+}
+
+bool ggml_backend_hrx_get_retained_region(const ggml_tensor * tensor, ggml_backend_hrx_retained_region & region) {
+    ggml_backend_hrx_buffer_context * context = nullptr;
+    size_t                            offset  = 0;
+    const bool hrx_bound = ggml_backend_hrx_tensor_binding(tensor, &context, &offset);
+    if (hrx_bound) {
+        ggml_backend_buffer_t buffer = tensor->view_src != nullptr ? tensor->view_src->buffer : tensor->buffer;
+        const bool retained = context->imported || ggml_backend_buffer_is_host(buffer);
+        if (!retained) {
+            return false;
+        }
+        region.identity   = context->identity;
+        region.offset     = context->retained_base != nullptr ? context->physical_offset + offset : offset;
+    } else {
+        ggml::hrx::ValueBufferBinding binding;
+        const bool resolved = ggml_backend_hrx_resolve_value_buffer(tensor, binding);
+        const bool has_host_source = resolved && binding.host_data != nullptr;
+        if (!has_host_source) {
+            return false;
+        }
+        region.identity = binding.identity;
+        region.offset = binding.offset;
+    }
+    region.length     = ggml_nbytes(tensor);
+    return true;
+}
+
+bool ggml_backend_hrx_weight_has_repackable_source(const ggml_tensor * tensor) {
+    if (tensor == nullptr) {
+        return false;
+    }
+    const ggml_tensor * root = tensor->view_src != nullptr ? tensor->view_src : tensor;
+    ggml_backend_buffer_t buffer = root->buffer;
+    if (buffer == nullptr) {
+        return false;
+    }
+    if (buffer->iface.get_base == ggml_backend_hrx_buffer_base) {
+        const auto * context = ggml_backend_hrx_buffer_context_from_buffer(buffer);
+        const bool borrowed_import = context->imported;
+        const bool known_host_alias = context->retained_base != nullptr;
+        const bool repackable_source = borrowed_import && !known_host_alias;
+        return repackable_source;
+    }
+    return false;
+}
+
+bool ggml_backend_hrx_weight_layout_eligible(const ggml_tensor * tensor) {
+    if (tensor == nullptr) {
+        return true;
+    }
+    const ggml_tensor * root = tensor->view_src != nullptr ? tensor->view_src : tensor;
+    ggml_backend_buffer_t buffer = root->buffer;
+    const bool is_weight = buffer != nullptr &&
+                           ggml_backend_buffer_get_usage(buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
+    return !is_weight || ggml_backend_hrx_weight_has_repackable_source(tensor);
 }

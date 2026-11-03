@@ -1,5 +1,7 @@
 #include "dispatch-registry.h"
 
+#include "backend-buffer-binding.h"
+
 #include "common/dispatch-common.h"
 #include "llm/dispatch-attention-qkv.h"
 #include "llm/dispatch-gated-delta-net.h"
@@ -38,6 +40,27 @@ static bool qwen_dispatch_disabled_from_environment() {
            std::strcmp(value, "off") != 0 && std::strcmp(value, "OFF") != 0;
 }
 
+static bool dispatch_has_eligible_weight_layouts(const DispatchMatchContext & context, const DispatchMatch & match) {
+    auto eligible = [&](const std::vector<Dispatch> & dispatches) {
+        for (const Dispatch & dispatch : dispatches) {
+            for (const DispatchBinding & binding : dispatch.bindings) {
+                if (binding.layout == kNativeWeightLayout) {
+                    continue;
+                }
+                const Value * value = context.graph.values().find(binding.value);
+                const bool has_graph_value = value != nullptr;
+                const bool layout_is_eligible = !has_graph_value || dispatch_weight_layout_eligible(*value);
+                const bool has_ineligible_weight = has_graph_value && !layout_is_eligible;
+                if (has_ineligible_weight) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
+    return eligible(match.initialization_dispatches) && eligible(match.dispatches);
+}
+
 static DispatchRegistry build_registry(bool include_qwen) {
     DispatchRegistryBuilder builder;
     register_common_dispatches(builder);
@@ -51,6 +74,10 @@ static DispatchRegistry build_registry(bool include_qwen) {
 }
 
 }  // namespace
+
+bool dispatch_weight_layout_eligible(const Value & value) {
+    return ggml_backend_hrx_weight_layout_eligible(value.tensor);
+}
 
 bool DispatchRegistry::match(const DispatchMatchContext & context, DispatchMatch & match) const {
     return this->match(context, match, nullptr);
@@ -70,7 +97,9 @@ bool DispatchRegistry::match(const DispatchMatchContext & context,
         registrations_by_root_[static_cast<size_t>(context.root_node->op)].ordered;
     for (const DispatchRegistration & registration : registrations) {
         DispatchMatch candidate;
-        if (registration.matcher != nullptr && registration.matcher(context, candidate)) {
+        const bool matched = registration.matcher != nullptr && registration.matcher(context, candidate);
+        const bool eligible = matched && dispatch_has_eligible_weight_layouts(context, candidate);
+        if (eligible) {
             if (diagnostics != nullptr) {
                 diagnostics->attempts.push_back({
                     registration.name != nullptr ? registration.name : "",
