@@ -95,7 +95,7 @@ bool ggml_backend_hrx_resolve_value_buffer(const ggml_tensor * tensor, ggml::hrx
     binding.offset               = shared_host_region ? context->physical_offset + offset : offset;
     binding.length               = ggml_nbytes(tensor);
     binding.identity             = context->identity;
-    binding.generation           = ggml_backend_hrx_buffer_generation(context);
+    binding.generation           = context->generation;
     binding.capacity             = shared_host_region ? context->physical_capacity : buffer->size;
     binding.weight = buffer != nullptr && ggml_backend_buffer_get_usage(buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
     const bool retained_host_source = is_imported || is_host_buffer;
@@ -117,7 +117,7 @@ bool ggml_backend_hrx_get_retained_region(const ggml_tensor * tensor, ggml_backe
             return false;
         }
         region.identity   = context->identity;
-        region.generation = ggml_backend_hrx_buffer_generation(context);
+        region.generation = context->generation;
         region.offset     = context->retained_base != nullptr ? context->physical_offset + offset : offset;
     } else {
         ggml::hrx::ValueBufferBinding binding;

@@ -9,9 +9,9 @@ namespace ggml::hrx {
 
 HostBufferRef::HostBufferRef(hrx_buffer_t buffer, size_t offset, size_t capacity, bool direct_bindable,
                              uintptr_t base, uint64_t identity,
-                             std::shared_ptr<std::atomic<uint64_t>> generation) :
+                             uint64_t generation) :
     buffer_(buffer), offset_(offset), capacity_(capacity), direct_bindable_(direct_bindable),
-    base_(base), identity_(identity), generation_(std::move(generation)) {}
+    base_(base), identity_(identity), generation_(generation) {}
 
 HostBufferRef::~HostBufferRef() {
     if (buffer_ != nullptr) {
@@ -24,7 +24,7 @@ HostBufferRef::HostBufferRef(HostBufferRef && other) noexcept :
     offset_(other.offset_),
     capacity_(other.capacity_),
     direct_bindable_(other.direct_bindable_), base_(other.base_), identity_(other.identity_),
-    generation_(std::move(other.generation_)) {
+    generation_(other.generation_) {
     other.offset_ = 0;
     other.capacity_ = 0;
     other.direct_bindable_ = false;
@@ -41,7 +41,7 @@ HostBufferRef & HostBufferRef::operator=(HostBufferRef && other) noexcept {
         direct_bindable_ = other.direct_bindable_;
         base_ = other.base_;
         identity_ = other.identity_;
-        generation_ = std::move(other.generation_);
+        generation_ = other.generation_;
         other.offset_ = 0;
         other.capacity_ = 0;
         other.direct_bindable_ = false;
@@ -50,13 +50,13 @@ HostBufferRef & HostBufferRef::operator=(HostBufferRef && other) noexcept {
 }
 
 void HostBufferRegistry::add(hrx_buffer_t buffer, void * base, size_t size, bool direct_bindable,
-                             uint64_t identity, std::shared_ptr<std::atomic<uint64_t>> generation) {
+                             uint64_t identity, uint64_t generation) {
     if (buffer == nullptr || base == nullptr || size == 0) {
         return;
     }
     std::lock_guard<std::mutex> lock(mutex_);
     entries_.push_back({ buffer, reinterpret_cast<uintptr_t>(base), size, direct_bindable,
-                         identity, std::move(generation) });
+                         identity, generation });
 }
 
 void HostBufferRegistry::remove(hrx_buffer_t buffer) {

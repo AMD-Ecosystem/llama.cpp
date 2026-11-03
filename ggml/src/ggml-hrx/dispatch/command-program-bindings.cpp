@@ -80,7 +80,8 @@ CommandProgramBindingsHash command_program_bindings_hash(const CommandProgramBin
         mix_hash(hash, static_cast<uint64_t>(static_cast<int64_t>(binding.value.value)));
         mix_hash(hash, binding.host_data != nullptr ? 1 : 0);
         mix_hash(hash, binding.identity);
-        mix_hash(hash, binding.tracks_content_generation() ? binding.generation : 0);
+        const bool retained_weight = binding.weight && binding.source_host_data != nullptr;
+        mix_hash(hash, retained_weight ? binding.generation : 0);
         mix_hash(hash, static_cast<uint64_t>(binding.capacity));
         mix_hash(hash, static_cast<uint64_t>(binding.offset));
         mix_hash(hash, static_cast<uint64_t>(binding.length));

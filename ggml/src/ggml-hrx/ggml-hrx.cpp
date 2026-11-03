@@ -205,7 +205,6 @@ static void buffer_memset(ggml_backend_buffer_t buffer,
     GGML_ASSERT(destination_offset <= buffer->size && size <= buffer->size - destination_offset);
     if (context->base != reinterpret_cast<uint8_t *>(GGML_HRX_FAKE_PTR_BASE)) {
         std::memset(context->base + destination_offset, value, size);
-        ggml_backend_hrx_set_buffer_generation(context, g_allocation_generation.fetch_add(1));
         return;
     }
     FillBufferArgs args{ context->buffer, destination_offset, size, value };
@@ -227,7 +226,6 @@ static void buffer_set(ggml_backend_buffer_t buffer,
     GGML_ASSERT(destination_offset <= buffer->size && size <= buffer->size - destination_offset);
     if (context->base != reinterpret_cast<uint8_t *>(GGML_HRX_FAKE_PTR_BASE)) {
         std::memmove(context->base + destination_offset, data, size);
-        ggml_backend_hrx_set_buffer_generation(context, g_allocation_generation.fetch_add(1));
         return;
     }
     if (!HRX_CHECK(hrx_synchronous_h2d(context->device->device, data, context->buffer, destination_offset, size))) {
@@ -294,10 +292,6 @@ static bool buffer_copy(ggml_backend_buffer_t buffer, const ggml_tensor * source
             return false;
         }
     }
-    const bool destination_host = destination_context->base != reinterpret_cast<uint8_t *>(GGML_HRX_FAKE_PTR_BASE);
-    if (destination_host) {
-        ggml_backend_hrx_set_buffer_generation(destination_context, g_allocation_generation.fetch_add(1));
-    }
     return true;
 }
 
@@ -308,7 +302,6 @@ static void buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
     auto * context = buffer_context(buffer);
     if (context->base != reinterpret_cast<uint8_t *>(GGML_HRX_FAKE_PTR_BASE)) {
         std::memset(context->base, value, buffer->size);
-        ggml_backend_hrx_set_buffer_generation(context, g_allocation_generation.fetch_add(1));
         return;
     }
     FillBufferArgs args{ context->buffer, 0, buffer->size, value };
@@ -364,7 +357,7 @@ static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_
     const uint64_t generation = g_allocation_generation.fetch_add(1);
     auto *         context    = new (std::nothrow) ggml_backend_hrx_buffer_context{
         type_context->device, allocation, base, generation, generation, direct_host_binding, false,
-        0, 0, nullptr, {},
+        0, 0, nullptr,
     };
     if (context == nullptr) {
         if (allocation != nullptr) {
@@ -375,9 +368,8 @@ static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_
     if (host_visible && allocation != nullptr) {
         context->retained_base = base;
         context->physical_capacity = size;
-        context->shared_generation = std::make_shared<std::atomic<uint64_t>>(generation);
         type_context->device->host_buffers.add(allocation, base, size, direct_host_binding,
-                                               context->identity, context->shared_generation);
+                                               context->identity, context->generation);
     }
     return ggml_backend_buffer_init(buft, buffer_i, context, size);
 }
@@ -693,7 +685,7 @@ static ggml_backend_buffer_t device_buffer_from_host_ptr(ggml_backend_dev_t devi
     const uint64_t generation = g_allocation_generation.fetch_add(1);
     auto * context = new (std::nothrow) ggml_backend_hrx_buffer_context{
         device_context(device), nullptr, static_cast<uint8_t *>(ptr), generation, generation, false, true,
-        0, 0, nullptr, {},
+        0, 0, nullptr,
     };
     if (context == nullptr) {
         return nullptr;
@@ -704,7 +696,7 @@ static ggml_backend_buffer_t device_buffer_from_host_ptr(ggml_backend_dev_t devi
     const bool known_direct_host = known_host_region && coherent_host_region;
     if (known_host_region) {
         context->identity = known_host.identity();
-        context->shared_generation = known_host.generation();
+        context->generation = known_host.generation();
         context->retained_base = static_cast<uint8_t *>(known_host.base());
         context->physical_offset = known_host.offset();
         context->physical_capacity = known_host.capacity();

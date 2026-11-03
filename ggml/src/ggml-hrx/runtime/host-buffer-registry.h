@@ -1,9 +1,7 @@
 #pragma once
 
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <mutex>
 #include <vector>
 
@@ -31,7 +29,7 @@ class HostBufferRef {
     bool direct_bindable() const { return direct_bindable_; }
     void * base() const { return reinterpret_cast<void *>(base_); }
     uint64_t identity() const { return identity_; }
-    std::shared_ptr<std::atomic<uint64_t>> generation() const { return generation_; }
+    uint64_t generation() const { return generation_; }
 
   private:
     hrx_buffer_t buffer_ = nullptr;
@@ -40,10 +38,10 @@ class HostBufferRef {
     bool         direct_bindable_ = false;
     uintptr_t    base_ = 0;
     uint64_t     identity_ = 0;
-    std::shared_ptr<std::atomic<uint64_t>> generation_;
+    uint64_t     generation_ = 0;
 
     HostBufferRef(hrx_buffer_t buffer, size_t offset, size_t capacity, bool direct_bindable,
-                  uintptr_t base, uint64_t identity, std::shared_ptr<std::atomic<uint64_t>> generation);
+                  uintptr_t base, uint64_t identity, uint64_t generation);
     friend class HostBufferRegistry;
 };
 
@@ -51,7 +49,7 @@ class HostBufferRef {
 class HostBufferRegistry {
   public:
     void add(hrx_buffer_t buffer, void * base, size_t size, bool direct_bindable,
-             uint64_t identity, std::shared_ptr<std::atomic<uint64_t>> generation);
+             uint64_t identity, uint64_t generation);
     void remove(hrx_buffer_t buffer);
 
     HostBufferRef find(const void * data, size_t size) const;
@@ -63,7 +61,7 @@ class HostBufferRegistry {
         size_t       size   = 0;
         bool         direct_bindable = false;
         uint64_t     identity = 0;
-        std::shared_ptr<std::atomic<uint64_t>> generation;
+        uint64_t     generation = 0;
     };
 
     mutable std::mutex mutex_;

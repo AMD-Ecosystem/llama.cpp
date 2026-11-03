@@ -3664,9 +3664,6 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
     ggml_backend_hrx_cache_stats stats = {};
     REQUIRE(ggml_backend_hrx_get_cache_stats(hrx_backend, &stats));
     REQUIRE(stats.weight_live_allocations == 0);
-    ggml_backend_hrx_imported_region input_region = {};
-    REQUIRE(ggml_backend_hrx_get_retained_region(hrx_decode_input, input_region));
-    const uint64_t first_input_generation = input_region.generation;
     compute_and_compare(cpu_decode, hrx_decode, cpu_decode_output, hrx_decode_output);
     REQUIRE(ggml_backend_hrx_get_cache_stats(hrx_backend, &stats));
     REQUIRE(stats.weight_materializations == 1);
@@ -3677,8 +3674,6 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
     const std::vector<float> changed_input = make_pattern_f32(kInputSize, 41, 0.04f);
     set_tensor_pair_bytes(cpu_backend, cpu_decode_input, hrx_backend, hrx_decode_input, changed_input.data(),
                           changed_input.size() * sizeof(float));
-    REQUIRE(ggml_backend_hrx_get_retained_region(hrx_decode_input, input_region));
-    REQUIRE(input_region.generation != first_input_generation);
     compute_and_compare(cpu_decode, hrx_decode, cpu_decode_output, hrx_decode_output);
     const std::vector<float> changed_output = get_f32_tensor(cpu_backend, cpu_decode_output);
     bool output_changed = false;

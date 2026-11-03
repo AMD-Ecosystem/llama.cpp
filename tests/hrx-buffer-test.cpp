@@ -172,21 +172,15 @@ static void run_host_buffer_checks(ggml_backend_t backend) {
     ggml_backend_hrx_imported_region retained_region = {};
     REQUIRE(ggml_backend_hrx_get_retained_region(host_tensor, retained_region));
     REQUIRE(!ggml_backend_hrx_get_imported_region(host_tensor, retained_region));
-    const uint64_t before_host_set = retained_region.generation;
     const uint32_t host_replacement = 0xabcdef01;
     ggml_backend_tensor_set(host_tensor, &host_replacement, 0, sizeof(host_replacement));
-    REQUIRE(ggml_backend_hrx_get_retained_region(host_tensor, retained_region));
-    REQUIRE(retained_region.generation != before_host_set);
+    REQUIRE(*static_cast<uint32_t *>(host_tensor->data) == host_replacement);
     REQUIRE(ggml_backend_hrx_get_retained_region(direct_tensor, retained_region));
-    const uint64_t before_direct_set = retained_region.generation;
     ggml_backend_tensor_set_async(backend, direct_tensor, &host_replacement, 0, sizeof(host_replacement));
     ggml_backend_synchronize(backend);
-    REQUIRE(ggml_backend_hrx_get_retained_region(direct_tensor, retained_region));
-    REQUIRE(retained_region.generation != before_direct_set);
-    const uint64_t before_host_clear = retained_region.generation;
+    REQUIRE(*static_cast<uint32_t *>(direct_tensor->data) == host_replacement);
     ggml_backend_buffer_clear(direct_buffer, 0);
-    REQUIRE(ggml_backend_hrx_get_retained_region(direct_tensor, retained_region));
-    REQUIRE(retained_region.generation != before_host_clear);
+    REQUIRE(*static_cast<uint32_t *>(direct_tensor->data) == 0);
 
     ggml_tensor *         tensor = ggml_new_tensor_1d(ggml, GGML_TYPE_I32, 64);
     ggml_backend_buffer_t local  = ggml_backend_alloc_buffer(backend, 4096);
@@ -212,16 +206,11 @@ static void run_host_buffer_checks(ggml_backend_t backend) {
     REQUIRE(context->device->synchronous_upload_fallbacks.load(std::memory_order_relaxed) == upload_fallbacks);
     REQUIRE(context->device->synchronous_download_fallbacks.load(std::memory_order_relaxed) == download_fallbacks);
 
-    REQUIRE(ggml_backend_hrx_get_retained_region(direct_tensor, retained_region));
-    const uint64_t before_host_copy = retained_region.generation;
     ggml_backend_tensor_copy_async(backend, backend, tensor, direct_tensor);
     ggml_backend_synchronize(backend);
-    REQUIRE(ggml_backend_hrx_get_retained_region(direct_tensor, retained_region));
-    REQUIRE(retained_region.generation != before_host_copy);
-    const uint64_t before_host_memset = retained_region.generation;
+    REQUIRE(std::memcmp(direct_tensor->data, host_words, 64 * sizeof(uint32_t)) == 0);
     ggml_backend_tensor_memset(direct_tensor, 0x5a, 0, sizeof(uint32_t));
-    REQUIRE(ggml_backend_hrx_get_retained_region(direct_tensor, retained_region));
-    REQUIRE(retained_region.generation != before_host_memset);
+    REQUIRE(*static_cast<uint32_t *>(direct_tensor->data) == 0x5a5a5a5a);
 
     ggml_backend_buffer_free(local);
     ggml_backend_buffer_free(direct_buffer);
@@ -285,12 +274,9 @@ static void run_imported_buffer_checks(ggml_backend_t backend) {
     std::array<uint32_t, 32> readback = {};
     ggml_backend_tensor_get(second, readback.data(), 0, sizeof(readback));
     REQUIRE(readback[0] == source[32]);
-    const uint64_t old_generation = second_region.generation;
     const uint32_t replacement = 999;
     ggml_backend_tensor_set(second, &replacement, 0, sizeof(replacement));
     REQUIRE(source[32] == replacement);
-    REQUIRE(ggml_backend_hrx_get_imported_region(second, second_region));
-    REQUIRE(second_region.generation != old_generation);
 
     const uint32_t async_replacement = 1234;
     ggml_backend_tensor_set_async(backend, second, &async_replacement, 0, sizeof(async_replacement));
@@ -298,8 +284,6 @@ static void run_imported_buffer_checks(ggml_backend_t backend) {
     ggml_backend_tensor_get_async(backend, second, readback.data(), 0, sizeof(readback));
     ggml_backend_synchronize(backend);
     REQUIRE(readback[0] == async_replacement);
-    REQUIRE(ggml_backend_hrx_get_imported_region(second, second_region));
-    REQUIRE(second_region.generation != old_generation);
 
     ggml_backend_buffer_t owned = ggml_backend_alloc_buffer(backend, sizeof(readback));
     REQUIRE(owned != nullptr);
@@ -332,6 +316,8 @@ static void run_imported_buffer_checks(ggml_backend_t backend) {
     REQUIRE(imported_context->direct_host_binding);
     REQUIRE(imported_context->buffer == coherent_context->buffer);
     REQUIRE(imported_context->physical_offset == 256);
+    REQUIRE(imported_context->identity == coherent_context->identity);
+    REQUIRE(imported_context->generation == coherent_context->generation);
     ggml_init_params subparams = params;
     subparams.mem_size = 128 * 1024;
     ggml_context * subctx = ggml_init(subparams);

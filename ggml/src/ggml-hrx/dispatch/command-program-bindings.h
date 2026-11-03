@@ -36,8 +36,6 @@ struct CommandProgramBinding {
     size_t       source_length = 0;
 
     bool requires_materialization() const { return host_data != nullptr; }
-    // Mutable host staging refreshes at launch; retained weight content is prepared ahead of execution.
-    bool tracks_content_generation() const { return weight && source_host_data != nullptr; }
 };
 
 inline CommandProgramBinding make_command_program_binding(
