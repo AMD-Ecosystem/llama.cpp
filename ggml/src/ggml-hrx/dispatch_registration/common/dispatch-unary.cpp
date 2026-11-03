@@ -140,15 +140,15 @@ static bool match_clamp_f32_dispatch(const DispatchMatchContext & context, Dispa
         return false;
     }
 
-    const bool finite_limits = std::isfinite(params->min) && std::isfinite(params->max);
-    const bool ordered_limits = params->min <= params->max;
+    const bool mellum_amax_limits = params->min == 0.0f && params->max == 127.0f;
+    const bool scalar_per_row = input->ne[0] == 1 && output->ne[0] == 1;
     const bool f32_values = input->type == GGML_TYPE_F32 && output->type == GGML_TYPE_F32;
     const bool contiguous_values = input->contiguous && output->contiguous;
     const bool matching_shape = same_shape(*input, *output);
     const bool safe_storage = scale_storage_is_safe(*input, *output);
     const bool bounded = output->element_count > 0 &&
                          static_cast<uint64_t>(output->element_count) <= 134217728;
-    const bool supported = finite_limits && ordered_limits && f32_values && contiguous_values &&
+    const bool supported = mellum_amax_limits && scalar_per_row && f32_values && contiguous_values &&
                            matching_shape && safe_storage && bounded;
     if (!supported) {
         return false;

@@ -1592,6 +1592,12 @@ static void run_mellum_scaling_dispatch_checks() {
     require_compile_parameter(clamp_dispatch, "ggml.clamp_f32.min", expected_config_value(0.0f));
     require_compile_parameter(clamp_dispatch, "ggml.clamp_f32.max", expected_config_value(127.0f));
 
+    ggml_tensor * wide_clamp_input = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 8);
+    ggml_tensor * wide_clamp = ggml_clamp(ctx, wide_clamp_input, 0.0f, 127.0f);
+    ggml_tensor * other_bounds = ggml_clamp(ctx, clamp_input, 0.0f, 1.0f);
+    REQUIRE(!can_schedule_tensor(ctx, wide_clamp));
+    REQUIRE(!can_schedule_tensor(ctx, other_bounds));
+
     ggml_tensor * partial_pool = ggml_pool_1d(ctx, input, GGML_OP_POOL_MAX, 32, 32, 0);
     ggml_tensor * average_pool = ggml_pool_1d(ctx, input, GGML_OP_POOL_AVG, 896, 896, 0);
     REQUIRE(!can_schedule_tensor(ctx, partial_pool));
@@ -13903,6 +13909,99 @@ static void run_mellum_scaling_numerics() {
     ggml_backend_free(hrx);
 }
 
+static std::vector<float> run_full_max_pool_numerical_case(ggml_backend_t backend, int64_t row_width) {
+    ggml_context * ctx = ggml_init({ 1024 * 1024, nullptr, true });
+    REQUIRE(ctx != nullptr);
+    constexpr int64_t row_count = 8;
+    ggml_tensor * input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, row_width, row_count);
+    ggml_tensor * output = ggml_pool_1d(ctx, input, GGML_OP_POOL_MAX, row_width, row_width, 0);
+    REQUIRE(input != nullptr);
+    REQUIRE(output != nullptr);
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, output);
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    REQUIRE(buffer != nullptr);
+
+    std::vector<float> input_data(row_width * row_count, -4.0f);
+    for (int64_t column = 0; column < row_width; ++column) {
+        input_data[row_width + column] = 0.0f;
+        input_data[2 * row_width + column] = -0.000125f;
+    }
+    input_data[row_width - 1] = -1.0f;
+    input_data[2 * row_width + row_width / 2] = 0.000125f;
+    input_data[3 * row_width] = 100000.0f;
+    input_data[3 * row_width + row_width - 1] = -100000.0f;
+    ggml_backend_tensor_set(input, input_data.data(), 0, input_data.size() * sizeof(float));
+
+    REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(backend);
+    std::vector<float> result(row_count);
+    ggml_backend_tensor_get(output, result.data(), 0, result.size() * sizeof(float));
+
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+    return result;
+}
+
+static std::vector<float> run_clamp_numerical_case(ggml_backend_t backend, bool inplace) {
+    ggml_context * ctx = ggml_init({ 1024 * 1024, nullptr, true });
+    REQUIRE(ctx != nullptr);
+    ggml_tensor * input = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, 8, 1);
+    ggml_tensor * output = inplace ? ggml_clamp_inplace(ctx, input, 0.0f, 127.0f) :
+                                     ggml_clamp(ctx, input, 0.0f, 127.0f);
+    REQUIRE(input != nullptr);
+    REQUIRE(output != nullptr);
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, output);
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    REQUIRE(buffer != nullptr);
+
+    const std::array<float, 8> input_data = { -1000.0f, -1.0f, 0.0f, 0.000125f, 126.0f, 127.0f, 128.0f, 1000.0f };
+    ggml_backend_tensor_set(input, input_data.data(), 0, sizeof(input_data));
+    REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(backend);
+    std::vector<float> result(input_data.size());
+    ggml_backend_tensor_get(output, result.data(), 0, result.size() * sizeof(float));
+
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+    return result;
+}
+
+static void run_mellum_scaling_direct_numerics() {
+    ggml_backend_t hrx = ggml_backend_hrx_init(0);
+    ggml_backend_t cpu = ggml_backend_cpu_init();
+    REQUIRE(hrx != nullptr);
+    REQUIRE(cpu != nullptr);
+
+    for (int64_t row_width : { 64, 896 }) {
+        const std::vector<float> expected = run_full_max_pool_numerical_case(cpu, row_width);
+        const std::vector<float> actual = run_full_max_pool_numerical_case(hrx, row_width);
+        const std::vector<float> repeated = run_full_max_pool_numerical_case(hrx, row_width);
+        REQUIRE(expected[0] == -1.0f);
+        REQUIRE(expected[1] == 0.0f);
+        REQUIRE(expected[2] == 0.000125f);
+        REQUIRE(expected[3] == 100000.0f);
+        REQUIRE(actual == expected);
+        REQUIRE(repeated == actual);
+    }
+
+    for (bool inplace : { false, true }) {
+        const std::vector<float> expected = run_clamp_numerical_case(cpu, inplace);
+        const std::vector<float> actual = run_clamp_numerical_case(hrx, inplace);
+        const std::vector<float> repeated = run_clamp_numerical_case(hrx, inplace);
+        REQUIRE(actual == expected);
+        REQUIRE(repeated == actual);
+        REQUIRE(actual[0] == 0.0f);
+        REQUIRE(actual[7] == 127.0f);
+    }
+
+    ggml_backend_free(cpu);
+    ggml_backend_free(hrx);
+}
+
 static void run_scale_f32_inplace() {
     ggml_backend_t backend = ggml_backend_hrx_init(0);
     REQUIRE(backend != nullptr);
@@ -14921,6 +15020,7 @@ static void register_hrx_backend_device_cases(test_runner::Suite & suite) {
     suite.device_case("gather_add_rmsnorm_f32_numerics", [] { run_gather_add_rmsnorm_f32_numerics(); });
     suite.device_case("scale_f32", [] { run_scale_f32(); });
     suite.device_case("mellum_scaling_numerics", [] { run_mellum_scaling_numerics(); });
+    suite.device_case("mellum_scaling_direct_numerics", [] { run_mellum_scaling_direct_numerics(); });
     suite.device_case("scale_f32_inplace", [] { run_scale_f32_inplace(); });
     suite.device_case("two_independent_add_f32", [] { run_two_independent_add_f32(); });
     suite.device_case("chained_add_f32", [] { run_chained_add_f32(); });
