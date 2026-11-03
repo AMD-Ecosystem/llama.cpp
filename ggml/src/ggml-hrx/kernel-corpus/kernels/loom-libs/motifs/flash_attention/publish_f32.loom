@@ -14,7 +14,7 @@ template.def<@ggml.flash_attention.prefill.publish_output> device @ggml_flash_at
   %c0_offset = index.constant 0 : offset
   %c1 = index.constant 1 : index
   %c1_f32 = scalar.constant 1.0 : f32
-  %c1_f32x4 = vector.constant 1.0 : vector<4xf32>
+  %c1_f32x4 = vector.splatf 1.0 : vector<4xf32>
   %apply_gate_index = config.get @ggml.flash_attention.apply_gate : index
   %gate_stride_head = config.get @ggml.flash_attention.gate_stride_head : index
   %gate_stride_token = config.get @ggml.flash_attention.gate_stride_token : index

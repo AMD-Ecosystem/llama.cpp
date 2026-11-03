@@ -1,6 +1,6 @@
 func.def inline @ggml_paired_weight_words(%half_packet: i1, %paired: i1, %load_up: i1, %weight: buffer, %peer: buffer, %offset: offset) -> (vector<4xi32>) {
   %zero = index.constant 0 : index
-  %padding = vector.constant 0 : vector<2xi32>
+  %padding = vector.splati 0 : vector<2xi32>
   %weight_words = scf.if %half_packet -> (vector<4xi32>) {
     %view = buffer.view %weight[%offset] : buffer -> view<2xi32>
     %loaded = vector.load %view[%zero] : view<2xi32> -> vector<2xi32>
@@ -60,8 +60,8 @@ func.def public inline @ggml_q4k_native_row64_f16_pair(%half_packet: i1, %paired
   %packet_add = index.scale %packet_word, %word_bytes : index, offset -> offset
   %address = index.add %field_base, %packet_add : offset
   %codes = func.call @ggml_paired_weight_words(%half_packet, %paired, %is_up, %weight, %peer, %address) : (i1, i1, i1, buffer, buffer, offset) -> (vector<4xi32>)
-  %mask = vector.constant 252645135 : vector<4xi32>
-  %shift = vector.constant 4 : vector<4xi32>
+  %mask = vector.splati 252645135 : vector<4xi32>
+  %shift = vector.splati 4 : vector<4xi32>
   %high = vector.shrui %codes, %shift : vector<4xi32>
   %nibbles0 = vector.andi %codes, %mask : vector<4xi32>
   %bytes0 = vector.bitcast %nibbles0 : vector<4xi32> to vector<16xi8>
@@ -122,7 +122,7 @@ func.def inline @ggml_q4k_scale_min_from_header(%scale0: i32, %scale1: i32, %sca
 }
 
 func.def inline @ggml_dot_u8_s8_vector8_f32(%weight: vector<2xi32>, %activation: vector<2xi32>) -> (f32) {
-  %zero = vector.constant 0 : vector<2xi32>
+  %zero = vector.splati 0 : vector<2xi32>
   %seed = scalar.constant 0 : i32
   %w = vector.bitcast %weight : vector<2xi32> to vector<8xi8>
   %a = vector.bitcast %activation : vector<2xi32> to vector<8xi8>
@@ -251,8 +251,8 @@ func.def inline @ggml_q4_0_f32_vector4(%weight: buffer, %row_byte_base: offset, 
   %c4_i32 = scalar.constant 4 : i32
   %block_bytes = index.constant 18 : offset
   %code_offset = index.constant 2 : offset
-  %q4_mask = vector.constant 252645135 : vector<1xi32>
-  %zero_point = vector.constant 8.0 : vector<4xf32>
+  %q4_mask = vector.splati 252645135 : vector<1xi32>
+  %zero_point = vector.splatf 8.0 : vector<4xf32>
   %block = index.div %k, %c32 : index
   %k_in_block = index.rem %k, %c32 : index
   %packet = index.div %k_in_block, %c4 : index
@@ -294,7 +294,7 @@ func.def inline @ggml_q4_1_f32_vector4(%weight: buffer, %row_byte_base: offset, 
   %c4_i32 = scalar.constant 4 : i32
   %block_bytes = index.constant 20 : offset
   %code_offset = index.constant 4 : offset
-  %q4_mask = vector.constant 252645135 : vector<1xi32>
+  %q4_mask = vector.splati 252645135 : vector<1xi32>
   %block = index.div %k, %c32 : index
   %k_in_block = index.rem %k, %c32 : index
   %packet = index.div %k_in_block, %c4 : index
@@ -344,8 +344,8 @@ func.def inline @ggml_q5_0_f32_vector4(%weight: buffer, %row_byte_base: offset, 
   %block_bytes = index.constant 22 : offset
   %qh_offset = index.constant 2 : offset
   %code_offset = index.constant 6 : offset
-  %q4_mask = vector.constant 252645135 : vector<1xi32>
-  %zero_point = vector.constant 16.0 : vector<4xf32>
+  %q4_mask = vector.splati 252645135 : vector<1xi32>
+  %zero_point = vector.splatf 16.0 : vector<4xf32>
   %block = index.div %k, %c32 : index
   %k_in_block = index.rem %k, %c32 : index
   %packet = index.div %k_in_block, %c4 : index
@@ -409,7 +409,7 @@ func.def inline @ggml_q5_1_f32_vector4(%weight: buffer, %row_byte_base: offset, 
   %block_bytes = index.constant 24 : offset
   %qh_offset = index.constant 4 : offset
   %code_offset = index.constant 8 : offset
-  %q4_mask = vector.constant 252645135 : vector<1xi32>
+  %q4_mask = vector.splati 252645135 : vector<1xi32>
   %block = index.div %k, %c32 : index
   %k_in_block = index.rem %k, %c32 : index
   %packet = index.div %k_in_block, %c4 : index
@@ -476,9 +476,9 @@ func.def inline @ggml_q4k_f32_vector4(%weight: buffer, %row_byte_base: offset, %
   %code_offset = index.constant 16 : offset
   %c2_i32 = scalar.constant 2 : i32
   %c4_i32 = scalar.constant 4 : i32
-  %c15 = vector.constant 15 : vector<1xi32>
-  %c48 = vector.constant 48 : vector<1xi32>
-  %q4_mask = vector.constant 252645135 : vector<1xi32>
+  %c15 = vector.splati 15 : vector<1xi32>
+  %c48 = vector.splati 48 : vector<1xi32>
+  %q4_mask = vector.splati 252645135 : vector<1xi32>
   %bounded_group = index.assume %q4_group [range(%q4_group, 0, 7)] : index
   %bounded_packet = index.assume %packet [range(%packet, 0, 7)] : index
   %block_byte_add = index.scale %q4_block, %block_bytes : index, offset -> offset
@@ -569,9 +569,9 @@ func.def inline @ggml_q4k_native_row64_f32_vector4(%weight: buffer, %row: index,
   %code_offset = index.constant 16 : offset
   %c2_i32 = scalar.constant 2 : i32
   %c4_i32 = scalar.constant 4 : i32
-  %c15 = vector.constant 15 : vector<1xi32>
-  %c48 = vector.constant 48 : vector<1xi32>
-  %q4_mask = vector.constant 252645135 : vector<1xi32>
+  %c15 = vector.splati 15 : vector<1xi32>
+  %c48 = vector.splati 48 : vector<1xi32>
+  %q4_mask = vector.splati 252645135 : vector<1xi32>
   %bounded_group = index.assume %q4_group [range(%q4_group, 0, 7)] : index
   %bounded_packet = index.assume %packet [range(%packet, 0, 7)] : index
   %c64 = index.constant 64 : index
@@ -675,9 +675,9 @@ func.def inline @ggml_q5k_f32_vector4(%weight: buffer, %row_byte_base: offset, %
   %c1_i32 = scalar.constant 1 : i32
   %c2_i32 = scalar.constant 2 : i32
   %c4_i32 = scalar.constant 4 : i32
-  %c15 = vector.constant 15 : vector<1xi32>
-  %c48 = vector.constant 48 : vector<1xi32>
-  %q4_mask = vector.constant 252645135 : vector<1xi32>
+  %c15 = vector.splati 15 : vector<1xi32>
+  %c48 = vector.splati 48 : vector<1xi32>
+  %q4_mask = vector.splati 252645135 : vector<1xi32>
   %bounded_group = index.assume %q5_group [range(%q5_group, 0, 7)] : index
   %bounded_packet = index.assume %packet [range(%packet, 0, 7)] : index
   %block_byte_add = index.scale %q5_block, %block_bytes : index, offset -> offset
@@ -2529,10 +2529,10 @@ func.def inline @ggml_q6k_f32_vector4(%weight: buffer, %weight_row_byte_base: of
   %qh_byte_add = index.constant 128 : offset
   %scale_byte_add = index.constant 192 : offset
   %d_byte_add = index.constant 208 : offset
-  %c4_i32v = vector.constant 4 : vector<1xi32>
-  %nibble_mask = vector.constant 252645135 : vector<1xi32>
-  %high_mask = vector.constant 50529027 : vector<1xi32>
-  %c32_f32v = vector.constant 32.0 : vector<4xf32>
+  %c4_i32v = vector.splati 4 : vector<1xi32>
+  %nibble_mask = vector.splati 252645135 : vector<1xi32>
+  %high_mask = vector.splati 50529027 : vector<1xi32>
+  %c32_f32v = vector.splatf 32.0 : vector<4xf32>
   %bounded_group = index.assume %q6_group [range(%q6_group, 0, 7)] : index
   %bounded_packet = index.assume %packet [range(%packet, 0, 7)] : index
   %block_byte_add = index.scale %q6_block, %block_bytes : index, offset -> offset
@@ -2880,7 +2880,7 @@ func.def inline @ggml_dequant_f16_vector4(%iq4nl_table: vector<16xi8>, %iq3s_gri
   %q5_1_format = index.constant 51 : index
   %q8_0_format = index.constant 80 : index
   %q8_1_format = index.constant 81 : index
-  %zero = vector.constant 0.0 : vector<4xf16>
+  %zero = vector.splatf 0.0 : vector<4xf16>
   // Decode the compact integer format id into one predicate per layout.
   %is_q1_0 = index.cmp eq, %weight_format, %q1_0_format : index
   %is_q3 = index.cmp eq, %weight_format, %c3 : index
@@ -3061,7 +3061,7 @@ func.def inline @ggml_dequant_f32_vector4(%iq4nl_table: vector<16xi8>, %iq3s_gri
   %q5_1_format = index.constant 51 : index
   %q8_0_format = index.constant 80 : index
   %q8_1_format = index.constant 81 : index
-  %zero = vector.constant 0.0 : vector<4xf32>
+  %zero = vector.splatf 0.0 : vector<4xf32>
   %is_q1_0 = index.cmp eq, %weight_format, %q1_0_format : index
   %is_q3 = index.cmp eq, %weight_format, %c3 : index
   %is_q4 = index.cmp eq, %weight_format, %c4 : index
@@ -3244,9 +3244,9 @@ func.def inline @ggml_q5k_preloaded_f32_vector4(%weight: buffer, %row_byte_base:
   %c1_i32 = scalar.constant 1 : i32
   %c2_i32 = scalar.constant 2 : i32
   %c4_i32 = scalar.constant 4 : i32
-  %c15 = vector.constant 15 : vector<1xi32>
-  %c48 = vector.constant 48 : vector<1xi32>
-  %q4_mask = vector.constant 252645135 : vector<1xi32>
+  %c15 = vector.splati 15 : vector<1xi32>
+  %c48 = vector.splati 48 : vector<1xi32>
+  %q4_mask = vector.splati 252645135 : vector<1xi32>
   %bounded_group = index.assume %q5_group [range(%q5_group, 0, 7)] : index
   %bounded_packet = index.assume %packet [range(%packet, 0, 7)] : index
   %block_byte_add = index.scale %q5_block, %block_bytes : index, offset -> offset

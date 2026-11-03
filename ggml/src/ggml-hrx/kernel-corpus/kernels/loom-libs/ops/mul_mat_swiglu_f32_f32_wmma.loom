@@ -50,13 +50,13 @@ func.decl @ggml_iq3s_grid_f32_halves() -> (vector<32xf32>, vector<32xf32>, vecto
 func.decl @ggml_dequant_f16_vector4(%iq4nl_table: vector<16xi8>, %iq3s_grid_low0: vector<32xf32>, %iq3s_grid_low1: vector<32xf32>, %iq3s_grid_low2: vector<32xf32>, %iq3s_grid_low3: vector<32xf32>, %iq3s_grid_low4: vector<32xf32>, %iq3s_grid_low5: vector<32xf32>, %iq3s_grid_low6: vector<32xf32>, %iq3s_grid_low7: vector<32xf32>, %iq3s_grid_low8: vector<32xf32>, %iq3s_grid_low9: vector<32xf32>, %iq3s_grid_low10: vector<32xf32>, %iq3s_grid_low11: vector<32xf32>, %iq3s_grid_low12: vector<32xf32>, %iq3s_grid_low13: vector<32xf32>, %iq3s_grid_low14: vector<32xf32>, %iq3s_grid_low15: vector<32xf32>, %iq3s_grid_high0: vector<32xf32>, %iq3s_grid_high1: vector<32xf32>, %iq3s_grid_high2: vector<32xf32>, %iq3s_grid_high3: vector<32xf32>, %iq3s_grid_high4: vector<32xf32>, %iq3s_grid_high5: vector<32xf32>, %iq3s_grid_high6: vector<32xf32>, %iq3s_grid_high7: vector<32xf32>, %iq3s_grid_high8: vector<32xf32>, %iq3s_grid_high9: vector<32xf32>, %iq3s_grid_high10: vector<32xf32>, %iq3s_grid_high11: vector<32xf32>, %iq3s_grid_high12: vector<32xf32>, %iq3s_grid_high13: vector<32xf32>, %iq3s_grid_high14: vector<32xf32>, %iq3s_grid_high15: vector<32xf32>, %weight_format: index, %weight: buffer, %row_byte_base: offset, %input_size: index, %quant_block: index, %quant_group: index, %packet: index, %k: index) -> (vector<4xf16>)
 
 template.def<@ggml.mul_mat_swiglu.apply_vector4> device @ggml_mul_mat_swiglu_apply_vector4(%op: index, %lhs: vector<4xf32>, %rhs: vector<4xf32>) -> (vector<4xf32>) {
-  %c0_5_f32x4 = vector.constant 0.5 : vector<4xf32>
-  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
-  %c1_f32x4 = vector.constant 1.0 : vector<4xf32>
-  %c2_f32x4 = vector.constant 2.0 : vector<4xf32>
-  %cn2_f32x4 = vector.constant -2.0 : vector<4xf32>
-  %gelu_coef = vector.constant 0.044715 : vector<4xf32>
-  %sqrt_2_over_pi = vector.constant 0.79788456080286544 : vector<4xf32>
+  %c0_5_f32x4 = vector.splatf 0.5 : vector<4xf32>
+  %c0_f32x4 = vector.splatf 0.0 : vector<4xf32>
+  %c1_f32x4 = vector.splatf 1.0 : vector<4xf32>
+  %c2_f32x4 = vector.splatf 2.0 : vector<4xf32>
+  %cn2_f32x4 = vector.splatf -2.0 : vector<4xf32>
+  %gelu_coef = vector.splatf 0.044715 : vector<4xf32>
+  %sqrt_2_over_pi = vector.splatf 0.79788456080286544 : vector<4xf32>
 
   %op_add = index.constant 0 : index
   %sum = vector.addf %lhs, %rhs : vector<4xf32>
@@ -152,9 +152,9 @@ template.def<@ggml.mul_mat_swiglu.body> device @ggml_mul_mat_swiglu_f32_f32_wmma
   %activation_stage_bytes = index.constant 2560 : offset
   %wave_result_stage_bytes = index.constant 512 : offset
   %result_stage_bytes = index.constant 1024 : offset
-  %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
-  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
-  %zero_accumulator = vector.constant 0.0 : vector<8xf16>
+  %c0_f16x4 = vector.splatf 0.0 : vector<4xf16>
+  %c0_f32x4 = vector.splatf 0.0 : vector<4xf32>
+  %zero_accumulator = vector.splatf 0.0 : vector<8xf16>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
   %k = index.constant 16 : index
@@ -427,7 +427,7 @@ func.def inline @ggml_mul_mat_swiglu_lowtoken_dot(%op: index, %gate_format: inde
   %q8_0_token_one = scalar.andi %q8_0_pair, %token_one : i1
   %fallback_unroll = scf.select %q8_0_token_one, %c10, %c1 : index
   %base = index.constant 0 : offset
-  %zero = vector.constant 0.0 : vector<4xf32>
+  %zero = vector.splatf 0.0 : vector<4xf32>
   %zero_scalar = scalar.constant 0.0 : f32
   %tokens = index.assume %token_count [range(%token_count, 1, 5)] : index
   %k = index.assume %input_size [range(%input_size, 256, 32768), multiple_of(%input_size, 256)] : index
@@ -1122,8 +1122,8 @@ template.def<@ggml.mul_mat_swiglu.q4_q8_lowtoken_body> device @ggml_mul_mat_swig
       %gh, %uh, %gr, %ur = func.call @ggml_q4_paired_prefetch_words(%gate_na, %up_na, %row_group_block, %row_offset, %row_lane, %payload_field, %payload_word) : (buffer, buffer, index, offset, index, index, index) -> (vector<4xi32>, vector<4xi32>, vector<2xi32>, vector<2xi32>)
       scf.yield %gh, %uh, %gr, %ur : vector<4xi32>, vector<4xi32>, vector<2xi32>, vector<2xi32>
     } else {
-      %zero_header = vector.constant 0 : vector<4xi32>
-      %zero_payload = vector.constant 0 : vector<2xi32>
+      %zero_header = vector.splati 0 : vector<4xi32>
+      %zero_payload = vector.splati 0 : vector<2xi32>
       scf.yield %zero_header, %zero_header, %zero_payload, %zero_payload : vector<4xi32>, vector<4xi32>, vector<2xi32>, vector<2xi32>
     }
     %total_g0, %total_g1, %total_g2, %total_g3, %total_g4, %total_u0, %total_u1, %total_u2, %total_u3, %total_u4, %unused_g_headers, %unused_u_headers, %unused_g_raw, %unused_u_raw = scf.for %block_base = [%c0 to %partition_blocks step %c1](%acc_g0 = %zero : f32, %acc_g1 = %zero : f32, %acc_g2 = %zero : f32, %acc_g3 = %zero : f32, %acc_g4 = %zero : f32, %acc_u0 = %zero : f32, %acc_u1 = %zero : f32, %acc_u2 = %zero : f32, %acc_u3 = %zero : f32, %acc_u4 = %zero : f32, %current_g_headers = %initial_g_headers : vector<4xi32>, %current_u_headers = %initial_u_headers : vector<4xi32>, %current_g_raw = %initial_g_raw : vector<2xi32>, %current_u_raw = %initial_u_raw : vector<2xi32>) -> (f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, vector<4xi32>, vector<4xi32>, vector<2xi32>, vector<2xi32>) {
@@ -1168,8 +1168,8 @@ template.def<@ggml.mul_mat_swiglu.q4_q8_lowtoken_body> device @ggml_mul_mat_swig
         %loaded = vector.load %g_code_view[%payload_field, %row_lane, %payload_word] : view<8x64x4xi32> -> vector<2xi32>
         scf.yield %loaded : vector<2xi32>
       }
-      %g_mask = vector.constant 252645135 : vector<2xi32>
-      %g_shift = vector.constant 4 : vector<2xi32>
+      %g_mask = vector.splati 252645135 : vector<2xi32>
+      %g_shift = vector.splati 4 : vector<2xi32>
       %g_lo = vector.andi %g_raw, %g_mask : vector<2xi32>
       %g_high = vector.shrui %g_raw, %g_shift : vector<2xi32>
       %g_hi = vector.andi %g_high, %g_mask : vector<2xi32>
@@ -1207,8 +1207,8 @@ template.def<@ggml.mul_mat_swiglu.q4_q8_lowtoken_body> device @ggml_mul_mat_swig
         %loaded = vector.load %u_code_view[%payload_field, %row_lane, %payload_word] : view<8x64x4xi32> -> vector<2xi32>
         scf.yield %loaded : vector<2xi32>
       }
-      %u_mask = vector.constant 252645135 : vector<2xi32>
-      %u_shift = vector.constant 4 : vector<2xi32>
+      %u_mask = vector.splati 252645135 : vector<2xi32>
+      %u_shift = vector.splati 4 : vector<2xi32>
       %u_lo = vector.andi %u_raw, %u_mask : vector<2xi32>
       %u_high = vector.shrui %u_raw, %u_shift : vector<2xi32>
       %u_hi = vector.andi %u_high, %u_mask : vector<2xi32>
@@ -1227,8 +1227,8 @@ template.def<@ggml.mul_mat_swiglu.q4_q8_lowtoken_body> device @ggml_mul_mat_swig
         %gh, %uh, %gr, %ur = func.call @ggml_q4_paired_prefetch_words(%gate_na, %up_na, %next_group_block, %row_offset, %row_lane, %payload_field, %payload_word) : (buffer, buffer, index, offset, index, index, index) -> (vector<4xi32>, vector<4xi32>, vector<2xi32>, vector<2xi32>)
         scf.yield %gh, %uh, %gr, %ur : vector<4xi32>, vector<4xi32>, vector<2xi32>, vector<2xi32>
       } else {
-        %zero_header = vector.constant 0 : vector<4xi32>
-        %zero_payload = vector.constant 0 : vector<2xi32>
+        %zero_header = vector.splati 0 : vector<4xi32>
+        %zero_payload = vector.splati 0 : vector<2xi32>
         scf.yield %zero_header, %zero_header, %zero_payload, %zero_payload : vector<4xi32>, vector<4xi32>, vector<2xi32>, vector<2xi32>
       }
       %t0 = index.constant 0 : index

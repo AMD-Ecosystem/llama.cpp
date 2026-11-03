@@ -64,9 +64,9 @@ func.def inline @ggml_matmul_tiled_input_f32_dequant_accumulate_f32(%full_token_
   %activation_stage_bytes = index.constant 2560 : offset
   %wave_result_stage_bytes = index.constant 512 : offset
   %result_stage_bytes = index.constant 1024 : offset
-  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
-  %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
-  %zero_accumulator = vector.constant 0.0 : vector<8xf16>
+  %c0_f32x4 = vector.splatf 0.0 : vector<4xf32>
+  %c0_f16x4 = vector.splatf 0.0 : vector<4xf16>
+  %zero_accumulator = vector.splatf 0.0 : vector<8xf16>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
   %k = index.constant 16 : index
@@ -118,9 +118,9 @@ func.def inline @ggml_matmul_tiled_input_f32_dequant_accumulate_f32(%full_token_
   %result00, %result01, %result10, %result11 = scf.for %quant_block = [%quant_block_begin to %quant_block_end step %c1](%block_acc00 = %init00 : vector<8xf16>, %block_acc01 = %init01 : vector<8xf16>, %block_acc10 = %init10 : vector<8xf16>, %block_acc11 = %init11 : vector<8xf16>) -> (vector<8xf16>, vector<8xf16>, vector<8xf16>, vector<8xf16>) {
     // Retain weight Q5_K headers and packet high bits for all eight K32 groups; payloads are still loaded per group.
     %weight_dm, %weight_scales, %weight_qh = scf.if %weight_is_q5 -> (vector<4x2xf16>, vector<4x3xi32>, vector<4x4xi8>) {
-      %zero_dm = vector.constant 0.0 : vector<4x2xf16>
-      %zero_scales = vector.constant 0 : vector<4x3xi32>
-      %zero_qh = vector.constant 0 : vector<4x4xi8>
+      %zero_dm = vector.splatf 0.0 : vector<4x2xf16>
+      %zero_scales = vector.splati 0 : vector<4x3xi32>
+      %zero_qh = vector.splati 0 : vector<4x4xi8>
       %result_dm, %result_scales, %result_qh = scf.for %slot = [%c0 to %c4 step %c1](%bank_dm = %zero_dm : vector<4x2xf16>, %bank_scales = %zero_scales : vector<4x3xi32>, %bank_qh = %zero_qh : vector<4x4xi8>) -> (vector<4x2xf16>, vector<4x3xi32>, vector<4x4xi8>) unroll {
         %local_row = index.madd %slot, %c16, %load_row : index
         %row = index.add %channel_tile_base, %local_row : index
@@ -130,9 +130,9 @@ func.def inline @ggml_matmul_tiled_input_f32_dequant_accumulate_f32(%full_token_
           %d, %s, %q = func.call @ggml_q5k_load_decode_state(%weight_noalias, %row_base, %quant_block, %load_packet) : (buffer, offset, index, index) -> (vector<2xf16>, vector<3xi32>, vector<4xi8>)
           scf.yield %d, %s, %q : vector<2xf16>, vector<3xi32>, vector<4xi8>
         } else {
-          %empty_dm = vector.constant 0.0 : vector<2xf16>
-          %empty_scales = vector.constant 0 : vector<3xi32>
-          %empty_qh = vector.constant 0 : vector<4xi8>
+          %empty_dm = vector.splatf 0.0 : vector<2xf16>
+          %empty_scales = vector.splati 0 : vector<3xi32>
+          %empty_qh = vector.splati 0 : vector<4xi8>
           scf.yield %empty_dm, %empty_scales, %empty_qh : vector<2xf16>, vector<3xi32>, vector<4xi8>
         }
         %next_dm = vector.insert %dm into %bank_dm[%slot] : vector<2xf16>, vector<4x2xf16>
@@ -142,15 +142,15 @@ func.def inline @ggml_matmul_tiled_input_f32_dequant_accumulate_f32(%full_token_
       }
       scf.yield %result_dm, %result_scales, %result_qh : vector<4x2xf16>, vector<4x3xi32>, vector<4x4xi8>
     } else {
-      %empty_dm = vector.constant 0.0 : vector<4x2xf16>
-      %empty_scales = vector.constant 0 : vector<4x3xi32>
-      %empty_qh = vector.constant 0 : vector<4x4xi8>
+      %empty_dm = vector.splatf 0.0 : vector<4x2xf16>
+      %empty_scales = vector.splati 0 : vector<4x3xi32>
+      %empty_qh = vector.splati 0 : vector<4x4xi8>
       scf.yield %empty_dm, %empty_scales, %empty_qh : vector<4x2xf16>, vector<4x3xi32>, vector<4x4xi8>
     }
     // Retain weight IQ4_XS scale words for this K256 block. Invalid output rows perform no metadata reads.
     %weight_header, %weight_scales_l = scf.if %weight_is_iq4 -> (vector<4xi32>, vector<4xi32>) {
-      %zero_header = vector.constant 0 : vector<4xi32>
-      %zero_scales_l = vector.constant 0 : vector<4xi32>
+      %zero_header = vector.splati 0 : vector<4xi32>
+      %zero_scales_l = vector.splati 0 : vector<4xi32>
       %result_header, %result_scales_l = scf.for %slot = [%c0 to %c4 step %c1](%bank_header = %zero_header : vector<4xi32>, %bank_scales_l = %zero_scales_l : vector<4xi32>) -> (vector<4xi32>, vector<4xi32>) unroll {
         %local_row = index.madd %slot, %c16, %load_row : index
         %row = index.add %channel_tile_base, %local_row : index
@@ -170,8 +170,8 @@ func.def inline @ggml_matmul_tiled_input_f32_dequant_accumulate_f32(%full_token_
       }
       scf.yield %result_header, %result_scales_l : vector<4xi32>, vector<4xi32>
     } else {
-      %empty_header = vector.constant 0 : vector<4xi32>
-      %empty_scales_l = vector.constant 0 : vector<4xi32>
+      %empty_header = vector.splati 0 : vector<4xi32>
+      %empty_scales_l = vector.splati 0 : vector<4xi32>
       scf.yield %empty_header, %empty_scales_l : vector<4xi32>, vector<4xi32>
     }
     %block_result00, %block_result01, %block_result10, %block_result11 = scf.for %quant_group = [%c0 to %c8 step %c1](%acc00 = %block_acc00 : vector<8xf16>, %acc01 = %block_acc01 : vector<8xf16>, %acc10 = %block_acc10 : vector<8xf16>, %acc11 = %block_acc11 : vector<8xf16>) -> (vector<8xf16>, vector<8xf16>, vector<8xf16>, vector<8xf16>) {

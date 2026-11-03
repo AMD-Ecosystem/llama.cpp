@@ -56,9 +56,9 @@ func.def inline @ggml_q5k_pair_preloaded_f32_vector4(%group: index, %pair_q5k_dm
   %c1_i32 = scalar.constant 1 : i32
   %c2_i32 = scalar.constant 2 : i32
   %c4_i32 = scalar.constant 4 : i32
-  %c15 = vector.constant 15 : vector<1xi32>
-  %c48 = vector.constant 48 : vector<1xi32>
-  %q4_mask = vector.constant 252645135 : vector<1xi32>
+  %c15 = vector.splati 15 : vector<1xi32>
+  %c48 = vector.splati 48 : vector<1xi32>
+  %q4_mask = vector.splati 252645135 : vector<1xi32>
   %bounded_group = index.assume %group [range(%group, 0, 7)] : index
   %d_f16 = vector.extract %pair_q5k_dm[0] : vector<2xf16> -> f16
   %dmin_f16 = vector.extract %pair_q5k_dm[1] : vector<2xf16> -> f16
@@ -149,7 +149,7 @@ func.def inline @ggml_matmul_vector_decode_pair_load_f32_block(%token_count: ind
   %c255 = index.constant 255 : index
   %c256 = index.constant 256 : index
   %c0_offset = index.constant 0 : offset
-  %zero = vector.constant 0.0 : vector<4xf32>
+  %zero = vector.splatf 0.0 : vector<4xf32>
   %bounded_lane = index.assume %lane [range(%lane, 0, 63)] : index
   %padded_input_size = index.add %input_size, %c255 : index
   %block_count = index.div %padded_input_size, %c256 : index
@@ -196,7 +196,7 @@ func.def inline @ggml_matmul_vector_decode_pair_block_row(%iq4nl_table: vector<1
   %c128 = index.constant 128 : index
   %c255 = index.constant 255 : index
   %c256 = index.constant 256 : index
-  %zero = vector.constant 0.0 : vector<4xf32>
+  %zero = vector.splatf 0.0 : vector<4xf32>
   %zero_f32 = scalar.constant 0.0 : f32
   %bounded_lane = index.assume %lane [range(%lane, 0, 63)] : index
   %padded_input_size = index.add %input_size, %c255 : index
@@ -233,7 +233,7 @@ func.def inline @ggml_matmul_vector_decode_pair_block_row(%iq4nl_table: vector<1
     %cached0 = func.call @ggml_q1_0_load_decode_state(%weight, %row_base, %k0) : (buffer, offset, index) -> (vector<1xf16>)
     scf.yield %cached0 : vector<1xf16>
   } else {
-    %cached0 = vector.constant 0.0 : vector<1xf16>
+    %cached0 = vector.splatf 0.0 : vector<1xf16>
     scf.yield %cached0 : vector<1xf16>
   }
   %pair_q5_format = index.constant 5 : index

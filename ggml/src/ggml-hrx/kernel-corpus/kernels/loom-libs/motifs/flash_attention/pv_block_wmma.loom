@@ -9,7 +9,7 @@ template.def<@ggml.flash_attention.pv_block_wmma.prefill_full> device @ggml_flas
   %c16 = index.constant 16 : index
   %c64 = index.constant 64 : index
   %c0_offset = index.constant 0 : offset
-  %c0_f16x8 = vector.constant 0.0 : vector<8xf16>
+  %c0_f16x8 = vector.splatf 0.0 : vector<8xf16>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
   %k = index.constant 16 : index
@@ -83,7 +83,7 @@ template.def<@ggml.flash_attention.pv_block_wmma.prefill_tail> device @ggml_flas
   %c32 = index.constant 32 : index
   %c64 = index.constant 64 : index
   %c0_offset = index.constant 0 : offset
-  %c0_f16x8 = vector.constant 0.0 : vector<8xf16>
+  %c0_f16x8 = vector.splatf 0.0 : vector<8xf16>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
   %k = index.constant 16 : index
