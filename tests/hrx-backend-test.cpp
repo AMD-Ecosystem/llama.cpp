@@ -10158,14 +10158,15 @@ static CommonMulMatIdPostOpsTensors build_common_mul_mat_id_postops_graph(ggml_c
                                                                           bool           include_residual,
                                                                           bool           include_rmsnorm,
                                                                           ggml_type      weight_type  = GGML_TYPE_Q4_K,
-                                                                          int64_t        token_count  = 4) {
+                                                                          int64_t        token_count  = 4,
+                                                                          int64_t        input_size   = 256,
+                                                                          int64_t        input_routes = 1) {
     CommonMulMatIdPostOpsTensors tensors;
     constexpr int64_t            route_count  = 8;
-    constexpr int64_t            input_size   = 256;
     constexpr int64_t            output_size  = 128;
     constexpr int64_t            expert_count = 16;
     tensors.route_ids                         = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, route_count, token_count);
-    tensors.input                             = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, input_size, 1, token_count);
+    tensors.input = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, input_size, input_routes, token_count);
     tensors.weight = ggml_new_tensor_3d(ctx, weight_type, input_size, output_size, expert_count);
     REQUIRE(tensors.route_ids != nullptr);
     REQUIRE(tensors.input != nullptr);
@@ -14002,6 +14003,144 @@ static void run_mellum_scaling_direct_numerics() {
     ggml_backend_free(hrx);
 }
 
+struct RoutedKTailOutputs {
+    std::vector<float> raw;
+    std::vector<float> normalized;
+};
+
+static RoutedKTailOutputs run_routed_k_tail_case(ggml_backend_t backend,
+                                                ggml_type weight_type,
+                                                int64_t input_size,
+                                                int64_t token_count,
+                                                int postops) {
+    ggml_context * ctx = ggml_init({ 4 * 1024 * 1024, nullptr, true });
+    REQUIRE(ctx != nullptr);
+    const bool has_postops = postops != 0;
+    const bool has_rmsnorm = postops == 2;
+    const CommonMulMatIdPostOpsTensors tensors = build_common_mul_mat_id_postops_graph(
+        ctx, has_postops, has_postops, has_rmsnorm, weight_type, token_count, input_size, 8);
+    // HRX may keep internal values in private storage; both observed values must be external outputs.
+    ggml_set_output(tensors.residual_output);
+    ggml_set_output(tensors.normalized_output);
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, tensors.normalized_output);
+
+    // Require each of the six shared exports, so another dispatch cannot hide a missing tail path.
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+    std::vector<bool> covered(imported.graph.nodes().size(), false);
+    ggml::hrx::CommandPlan plan;
+    ggml::hrx::DispatchMatch match;
+    const size_t root = producer_index_for_tensor(imported.graph, tensors.projection);
+    REQUIRE(match_dispatch_at_index(imported.graph, plan, covered, root, match));
+    REQUIRE(match.dispatches.size() == 3);
+    const char * expected_kernel = has_postops ? common_mul_mat_id_postops_f32_kernel_name(token_count, has_rmsnorm) :
+                                               common_mul_mat_id_f32_kernel_name(token_count);
+    REQUIRE(kernel_name_for_id(match.dispatches.back().kernel.kernel_id) == expected_kernel);
+
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    REQUIRE(buffer != nullptr);
+    const int64_t output_size = tensors.weight->ne[1];
+    const int64_t expert_count = tensors.weight->ne[2];
+    const int64_t route_count = tensors.route_ids->ne[0];
+    std::vector<float> weights(ggml_nelements(tensors.weight));
+    for (int64_t row = 0; row < output_size * expert_count; ++row) {
+        for (int64_t column = 0; column < input_size; ++column) {
+            const int64_t packet = column % 32;
+            float value;
+            if (weight_type == GGML_TYPE_Q8_0) {
+                const int code = packet == 0 ? 127 : packet == 1 ? -127 : packet == 2 ? 0 :
+                                 static_cast<int>((row * 3 + column + column / 32) % 31) - 15;
+                value = static_cast<float>(code) / 256.0f;
+            } else {
+                REQUIRE(weight_type == GGML_TYPE_Q5_1);
+                const int code = packet == 0 ? 0 : packet == 1 ? 31 : packet == 2 ? 0 :
+                                 static_cast<int>((row * 3 + column + column / 32) % 32);
+                value = static_cast<float>(code) / 64.0f;
+            }
+            weights[row * input_size + column] = value;
+        }
+    }
+    std::vector<uint8_t> packed(ggml_nbytes(tensors.weight));
+    REQUIRE(ggml_quantize_chunk(weight_type, weights.data(), packed.data(), 0,
+                               output_size * expert_count, input_size, nullptr) == packed.size());
+    ggml_backend_tensor_set(tensors.weight, packed.data(), 0, packed.size());
+
+    // Zero-weight anchors fix the CPU's activation quantization scale to an exact binary value.
+    // The remaining sparse products and sums are also exact in F16 WMMA. Two contributions are
+    // in the final partial block, and weight rows vary across channels and experts.
+    std::vector<float> input(ggml_nelements(tensors.input), 0.0f);
+    std::vector<int32_t> ids(ggml_nelements(tensors.route_ids));
+    for (int64_t token = 0; token < token_count; ++token) {
+        for (int64_t route = 0; route < route_count; ++route) {
+            const int64_t assignment = token * route_count + route;
+            for (int64_t column = 2; column < input_size; column += 32) {
+                input[assignment * input_size + column] = 127.0f / 16.0f;
+            }
+            input[assignment * input_size + 3] = static_cast<float>(route + 1) / 16.0f;
+            input[assignment * input_size + input_size - 5] = static_cast<float>(token % 3 + 1) / 16.0f;
+            input[assignment * input_size + input_size - 37] = -1.0f / 16.0f;
+            ids[assignment] = static_cast<int32_t>((token * 3 + route) % expert_count);
+        }
+    }
+    ggml_backend_tensor_set(tensors.input, input.data(), 0, input.size() * sizeof(float));
+    ggml_backend_tensor_set(tensors.route_ids, ids.data(), 0, ids.size() * sizeof(int32_t));
+    if (has_postops) {
+        std::vector<float> bias(output_size);
+        std::vector<float> residual(ggml_nelements(tensors.residual_input));
+        for (size_t i = 0; i < bias.size(); ++i) {
+            bias[i] = static_cast<float>(static_cast<int>(i % 7) - 3) / 128.0f;
+        }
+        for (size_t i = 0; i < residual.size(); ++i) {
+            residual[i] = static_cast<float>(static_cast<int>(i % 13) - 6) / 256.0f;
+        }
+        ggml_backend_tensor_set(tensors.bias, bias.data(), 0, bias.size() * sizeof(float));
+        ggml_backend_tensor_set(tensors.residual_input, residual.data(), 0, residual.size() * sizeof(float));
+    }
+    if (has_rmsnorm) {
+        std::vector<float> norm_weight(output_size);
+        for (size_t i = 0; i < norm_weight.size(); ++i) {
+            norm_weight[i] = 0.5f + static_cast<float>(i % 5) / 8.0f;
+        }
+        ggml_backend_tensor_set(tensors.norm_weight, norm_weight.data(), 0, norm_weight.size() * sizeof(float));
+    }
+
+    REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(backend);
+    RoutedKTailOutputs result;
+    result.raw.resize(ggml_nelements(tensors.residual_output));
+    result.normalized.resize(ggml_nelements(tensors.normalized_output));
+    ggml_backend_tensor_get(tensors.residual_output, result.raw.data(), 0, result.raw.size() * sizeof(float));
+    ggml_backend_tensor_get(tensors.normalized_output, result.normalized.data(), 0,
+                            result.normalized.size() * sizeof(float));
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+    return result;
+}
+
+static void run_routed_k_tail_numerics(ggml_type type, int64_t input_size, int64_t token_count, int postops) {
+    ggml_backend_t hrx = ggml_backend_hrx_init(0);
+    ggml_backend_t cpu = ggml_backend_cpu_init();
+    REQUIRE(hrx != nullptr);
+    REQUIRE(cpu != nullptr);
+    ggml_backend_cpu_set_n_threads(cpu, 2);
+    const RoutedKTailOutputs expected = run_routed_k_tail_case(cpu, type, input_size, token_count, postops);
+    const RoutedKTailOutputs actual = run_routed_k_tail_case(hrx, type, input_size, token_count, postops);
+    const RoutedKTailOutputs repeated = run_routed_k_tail_case(hrx, type, input_size, token_count, postops);
+    REQUIRE(std::any_of(expected.raw.begin(), expected.raw.end(), [](float value) { return value != 0.0f; }));
+    REQUIRE(actual.raw == expected.raw);
+    REQUIRE(repeated.raw == actual.raw);
+    REQUIRE(repeated.normalized == actual.normalized);
+    for (size_t i = 0; i < actual.normalized.size(); ++i) {
+        REQUIRE(std::isfinite(actual.normalized[i]));
+        const float tolerance = 3.0e-5f + 3.0e-5f * std::fabs(expected.normalized[i]);
+        REQUIRE(std::fabs(actual.normalized[i] - expected.normalized[i]) <= tolerance);
+    }
+    ggml_backend_free(cpu);
+    ggml_backend_free(hrx);
+}
+
 static void run_scale_f32_inplace() {
     ggml_backend_t backend = ggml_backend_hrx_init(0);
     REQUIRE(backend != nullptr);
@@ -15021,6 +15160,20 @@ static void register_hrx_backend_device_cases(test_runner::Suite & suite) {
     suite.device_case("scale_f32", [] { run_scale_f32(); });
     suite.device_case("mellum_scaling_numerics", [] { run_mellum_scaling_numerics(); });
     suite.device_case("mellum_scaling_direct_numerics", [] { run_mellum_scaling_direct_numerics(); });
+    for (const auto & shape : { std::pair<ggml_type, int64_t>{ GGML_TYPE_Q8_0, 896 },
+                               { GGML_TYPE_Q8_0, 704 }, { GGML_TYPE_Q5_1, 704 },
+                               { GGML_TYPE_Q8_0, 1024 }, { GGML_TYPE_Q5_1, 768 } }) {
+        for (int64_t tokens : { 1, 16 }) {
+            for (int postops : { 0, 1, 2 }) {
+                const std::string name = "routed_k_tail." + std::string(ggml_type_name(shape.first)) +
+                                         ".k" + std::to_string(shape.second) + ".t" + std::to_string(tokens) +
+                                         ".postops" + std::to_string(postops);
+                suite.device_case(name, [shape, tokens, postops] {
+                    run_routed_k_tail_numerics(shape.first, shape.second, tokens, postops);
+                });
+            }
+        }
+    }
     suite.device_case("scale_f32_inplace", [] { run_scale_f32_inplace(); });
     suite.device_case("two_independent_add_f32", [] { run_two_independent_add_f32(); });
     suite.device_case("chained_add_f32", [] { run_chained_add_f32(); });

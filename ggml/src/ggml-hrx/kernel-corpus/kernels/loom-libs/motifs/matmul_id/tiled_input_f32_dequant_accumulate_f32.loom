@@ -9,7 +9,7 @@ template.decl @ggml.matmul_id.tiled_f32_f32.finish_tile(%arg0: index, %arg1: ind
 
 template.decl @ggml.matmul_id.tiled_f32_f32.publish_vector4(%arg0: i1, %arg1: index, %arg2: index, %arg3: index, %arg4: index, %arg5: index, %arg6: index, %arg7: index, %arg8: vector<4xf32>, %arg9: buffer, %arg10: buffer, %arg11: buffer, %arg12: buffer, %arg13: buffer, %arg14: buffer, %arg15: buffer)
 
-func.decl @ggml_dequant_weight_tile_bytes(%weight_format: index) -> (offset)
+func.decl @ggml_dequant_weight_row_bytes(%weight_format: index, %hidden_size: index) -> (offset)
 
 func.decl @ggml_iq4nl_table_i8() -> (vector<16xi8>)
 
@@ -44,6 +44,7 @@ func.def inline @ggml_moe_unpack_expert_partition_descriptor(%descriptor: i32) -
 }
 
 template.def<@ggml.matmul_id.tiled_f32_f32.core> device @ggml_mul_mat_id_tiled_f32_f32_core(%weight_format: index, %token_count: index, %input_size: index, %output_size: index, %route_count: index, %input_route_count: index, %expert_count: index, %epsilon: f32, %channel_tile: index, %partition_ordinal: index, %input: buffer, %expert_table: buffer, %partition_table: buffer, %weight: buffer, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer) {
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), multiple_of(%input_size, 32)] : index
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
   %bounded_route_count = index.assume %route_count [range(%route_count, 1, 32)] : index
   %bounded_input_route_count = index.assume %input_route_count [range(%input_route_count, 1, 32), le(%input_route_count, %bounded_route_count)] : index
@@ -63,6 +64,7 @@ template.def<@ggml.matmul_id.tiled_f32_f32.core> device @ggml_mul_mat_id_tiled_f
   %c40 = index.constant 40 : index
   %c63 = index.constant 63 : index
   %c64 = index.constant 64 : index
+  %c255 = index.constant 255 : index
   %c256 = index.constant 256 : index
   %c0_offset = index.constant 0 : offset
   %c4_bytes = index.constant 4 : offset
@@ -73,6 +75,7 @@ template.def<@ggml.matmul_id.tiled_f32_f32.core> device @ggml_mul_mat_id_tiled_f
   %result_stage_bytes = index.constant 1024 : offset
   %c0_i32 = scalar.constant 0 : i32
   %cn1_i32 = scalar.constant -1 : i32
+  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
   %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
   %zero_accumulator = vector.constant 0.0 : vector<8xf16>
   %m = index.constant 16 : index
@@ -87,12 +90,12 @@ template.def<@ggml.matmul_id.tiled_f32_f32.core> device @ggml_mul_mat_id_tiled_f
   %has_more_assignment_partitions = index.cmp ugt, %assignment_partition_count, %bounded_expert_count : index
   %launch_partition_count = scf.select %has_more_assignment_partitions, %assignment_partition_count, %bounded_expert_count : index
   %assignment_table_byte_base = index.scale %bounded_expert_count, %c4_bytes : index, offset -> offset
-  %weight_block_bytes = func.call @ggml_dequant_weight_tile_bytes(%weight_format) : (index) -> (offset)
-  %quant_block_count = index.div %input_size, %c256 : index
-  %weight_row_bytes = index.scale %quant_block_count, %weight_block_bytes : index, offset -> offset
+  %padded_input_size = index.add %bounded_input_size, %c255 : index
+  %quant_block_count = index.div %padded_input_size, %c256 : index
+  %weight_row_bytes = func.call @ggml_dequant_weight_row_bytes(%weight_format, %bounded_input_size) : (index, index) -> (offset)
   %weight_expert_bytes = index.scale %bounded_output_size, %weight_row_bytes : index, offset -> offset
   %input_noalias, %expert_table_noalias, %partition_table_noalias, %weight_noalias = buffer.assume.noalias %input, %expert_table, %partition_table, %weight : buffer, buffer, buffer, buffer
-  %input_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]x[%bounded_input_route_count]x[%input_size]xf32>
+  %input_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]x[%bounded_input_route_count]x[%bounded_input_size]xf32>
   %assignment_view = buffer.view %expert_table_noalias[%assignment_table_byte_base] : buffer -> view<[%bounded_expert_count]x[%bounded_token_count]xi32>
   %partition_count_view = buffer.view %partition_table_noalias[%c0_offset] : buffer -> view<1xi32>
   %partition_descriptor_view = buffer.view %partition_table_noalias[%c4_bytes] : buffer -> view<[%maximum_partition_count]xi32>
@@ -172,11 +175,13 @@ template.def<@ggml.matmul_id.tiled_f32_f32.core> device @ggml_mul_mat_id_tiled_f
           %local_row = index.assume %local_row0 [range(%local_row0, 0, 63)] : index
           %channel = index.add %channel_tile_base, %local_row : index
           %valid_channel = index.cmp ult, %channel, %bounded_output_size : index
-          %weight_values = scf.if %valid_channel -> (vector<4xf16>) {
+          %weight_k = index.add %k_origin, %load_k : index
+          %valid_k = index.cmp ult, %weight_k, %bounded_input_size : index
+          %valid_weight = scalar.andi %valid_channel, %valid_k : i1
+          %weight_values = scf.if %valid_weight -> (vector<4xf16>) {
             %channel_byte_add = index.scale %channel, %weight_row_bytes : index, offset -> offset
             %row_byte_base = index.add %expert_byte_base, %channel_byte_add : offset
-            %weight_k = index.add %k_origin, %load_k : index
-            %decoded = func.call @ggml_dequant_f16_vector4(%iq4nl_table, %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15, %weight_format, %weight_noalias, %row_byte_base, %input_size, %quant_block, %quant_group, %load_packet, %weight_k) : (vector<16xi8>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, index, buffer, offset, index, index, index, index, index) -> (vector<4xf16>)
+            %decoded = func.call @ggml_dequant_f16_vector4(%iq4nl_table, %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15, %weight_format, %weight_noalias, %row_byte_base, %bounded_input_size, %quant_block, %quant_group, %load_packet, %weight_k) : (vector<16xi8>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, index, buffer, offset, index, index, index, index, index) -> (vector<4xf16>)
             scf.yield %decoded : vector<4xf16>
           } else {
             scf.yield %c0_f16x4 : vector<4xf16>
@@ -187,7 +192,10 @@ template.def<@ggml.matmul_id.tiled_f32_f32.core> device @ggml_mul_mat_id_tiled_f
             %activation_row = index.assume %local_row [range(%local_row, 0, 31)] : index
             %assignment_i32 = view.load %route_stage_view[%activation_row] : view<32xi32> -> i32
             %valid_assignment = scalar.cmpi sge, %assignment_i32, %c0_i32 : i32
-            %activation_values = scf.if %valid_assignment -> (vector<4xf16>) {
+            %input_k = index.add %k_origin, %load_k : index
+            %valid_input = index.cmp ult, %input_k, %bounded_input_size : index
+            %valid_activation = scalar.andi %valid_assignment, %valid_input : i1
+            %activation_values = scf.if %valid_activation -> (vector<4xf16>) {
               %assignment0 = index.cast %assignment_i32 : i32 to index
               %assignment = index.assume %assignment0 [range(%assignment0, 0, 65535)] : index
               %bounded_assignment, %bounded_assignment_count = index.assume %assignment, %assignment_count [lt(%assignment, %assignment_count)] : index, index
@@ -196,8 +204,8 @@ template.def<@ggml.matmul_id.tiled_f32_f32.core> device @ggml_mul_mat_id_tiled_f
               %token, %input_token_count = index.assume %token0, %bounded_token_count [lt(%token0, %bounded_token_count)] : index, index
               %input_route0 = index.rem %route0, %bounded_input_route_count : index
               %input_route = index.assume %input_route0 [range(%input_route0, 0, 31), lt(%input_route0, %bounded_input_route_count)] : index
-              %input_k = index.add %k_origin, %load_k : index
-              %loaded = vector.load %input_view[%token, %input_route, %input_k] : view<[%bounded_token_count]x[%bounded_input_route_count]x[%input_size]xf32> -> vector<4xf32>
+              %mask = vector.mask.range [%input_k to %bounded_input_size step %c1] : index -> vector<4xi1>
+              %loaded = vector.load.mask %input_view[%token, %input_route, %input_k], %mask, %c0_f32x4 : view<[%bounded_token_count]x[%bounded_input_route_count]x[%bounded_input_size]xf32>, vector<4xi1>, vector<4xf32>
               %converted = vector.fptrunc %loaded : vector<4xf32> to vector<4xf16>
               scf.yield %converted : vector<4xf16>
             } else {
