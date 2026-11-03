@@ -1627,9 +1627,7 @@ static void run_routed_codebook_admission_checks() {
         return nullptr;
     };
 
-    const std::array<ggml_type, 5> unsupported = {
-        GGML_TYPE_IQ1_S, GGML_TYPE_IQ1_M, GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ3_XXS,
-    };
+    const std::array<ggml_type, 3> unsupported = { GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ3_XXS };
     for (const ggml_type format : unsupported) {
         ggml_init_params params = {};
         params.mem_size = 8 * 1024 * 1024;
@@ -7801,6 +7799,116 @@ static void run_routed_moe_cpu_reference_case(ggml_type down_weight_type, bool i
     ggml_backend_free(hrx_backend);
 }
 
+static void run_routed_pair_cpu_reference_case(ggml_type gate_type, ggml_type up_type, int64_t token_count) {
+    constexpr int64_t input_size = 256;
+    constexpr int64_t output_size = 128;
+    constexpr int64_t expert_count = 4;
+    constexpr int64_t route_count = 2;
+
+    ggml_backend_t cpu_backend = init_cpu_backend();
+    ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
+    REQUIRE(hrx_backend != nullptr);
+
+    ggml_init_params params = {};
+    params.mem_size = 8 * 1024 * 1024;
+    params.no_alloc = true;
+    ggml_context * cpu_ctx = ggml_init(params);
+    ggml_context * hrx_ctx = ggml_init(params);
+    REQUIRE(cpu_ctx != nullptr);
+    REQUIRE(hrx_ctx != nullptr);
+
+    struct RoutedPairGraph {
+        ggml_tensor * gate_weight;
+        ggml_tensor * up_weight;
+        ggml_tensor * input;
+        ggml_tensor * route_ids;
+        ggml_tensor * output;
+    };
+    auto build = [=](ggml_context * ctx) {
+        RoutedPairGraph graph = {};
+        graph.gate_weight = ggml_new_tensor_3d(ctx, gate_type, input_size, output_size, expert_count);
+        graph.up_weight = ggml_new_tensor_3d(ctx, up_type, input_size, output_size, expert_count);
+        graph.input = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, input_size, 1, token_count);
+        graph.route_ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, route_count, token_count);
+        REQUIRE(graph.gate_weight != nullptr);
+        REQUIRE(graph.up_weight != nullptr);
+        REQUIRE(graph.input != nullptr);
+        REQUIRE(graph.route_ids != nullptr);
+        ggml_tensor * gate = ggml_mul_mat_id(ctx, graph.gate_weight, graph.input, graph.route_ids);
+        ggml_tensor * up = ggml_mul_mat_id(ctx, graph.up_weight, graph.input, graph.route_ids);
+        REQUIRE(gate != nullptr);
+        REQUIRE(up != nullptr);
+        graph.output = ggml_glu_split(ctx, gate, up, GGML_GLU_OP_SWIGLU);
+        REQUIRE(graph.output != nullptr);
+        return graph;
+    };
+    const RoutedPairGraph cpu = build(cpu_ctx);
+    const RoutedPairGraph hrx = build(hrx_ctx);
+    auto hrx_gate_buffer = allocate_test_weight(hrx_backend, hrx.gate_weight);
+    auto hrx_up_buffer = allocate_test_weight(hrx_backend, hrx.up_weight);
+
+    ggml_cgraph * cpu_graph = ggml_new_graph(cpu_ctx);
+    ggml_cgraph * hrx_graph = ggml_new_graph(hrx_ctx);
+    REQUIRE(cpu_graph != nullptr);
+    REQUIRE(hrx_graph != nullptr);
+    ggml_build_forward_expand(cpu_graph, cpu.output);
+    ggml_build_forward_expand(hrx_graph, hrx.output);
+    const char * expected_kernel = token_count <= 5 ?
+                                       "loom_libs:ggml_mul_mat_id_skinny_pair_input_f32_swiglu_publish_f32" :
+                                       "loom_libs:ggml_mul_mat_id_tiled_pair_input_f32_swiglu_publish_f32";
+    require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph), { expected_kernel });
+
+    ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
+    ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
+    REQUIRE(cpu_buffer != nullptr);
+    REQUIRE(hrx_buffer != nullptr);
+
+    const int64_t row_count = output_size * expert_count;
+    const std::vector<uint8_t> gate_weight = make_matmul_weight_bytes(gate_type, input_size, row_count, 6);
+    const std::vector<uint8_t> up_weight = make_matmul_weight_bytes(up_type, input_size, row_count, 11);
+    const std::vector<float> input = make_pattern_f32(input_size * token_count, 7, 0.1f);
+    std::vector<int32_t> route_ids(static_cast<size_t>(route_count * token_count));
+    for (int64_t token = 0; token < token_count; ++token) {
+        route_ids[static_cast<size_t>(route_count * token)] = static_cast<int32_t>(token % expert_count);
+        route_ids[static_cast<size_t>(route_count * token + 1)] = static_cast<int32_t>((token + 1) % expert_count);
+    }
+    set_tensor_pair_bytes(cpu_backend, cpu.gate_weight, hrx_backend, hrx.gate_weight, gate_weight.data(),
+                          gate_weight.size());
+    set_tensor_pair_bytes(cpu_backend, cpu.up_weight, hrx_backend, hrx.up_weight, up_weight.data(), up_weight.size());
+    set_tensor_pair_bytes(cpu_backend, cpu.input, hrx_backend, hrx.input, input.data(), input.size() * sizeof(float));
+    set_tensor_pair_bytes(cpu_backend, cpu.route_ids, hrx_backend, hrx.route_ids, route_ids.data(),
+                          route_ids.size() * sizeof(int32_t));
+
+    REQUIRE(ggml_backend_graph_compute(cpu_backend, cpu_graph) == GGML_STATUS_SUCCESS);
+    REQUIRE(ggml_backend_graph_compute(hrx_backend, hrx_graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(cpu_backend);
+    ggml_backend_synchronize(hrx_backend);
+    const std::vector<float> expected = get_f32_tensor(cpu_backend, cpu.output);
+    const std::vector<float> actual = get_f32_tensor(hrx_backend, hrx.output);
+    REQUIRE(actual.size() == expected.size());
+    double squared_error_sum = 0.0;
+    double reference_energy = 0.0;
+    for (size_t i = 0; i < actual.size(); ++i) {
+        REQUIRE(std::isfinite(actual[i]));
+        REQUIRE(std::isfinite(expected[i]));
+        const double difference = static_cast<double>(actual[i]) - expected[i];
+        squared_error_sum += difference * difference;
+        reference_energy += static_cast<double>(expected[i]) * expected[i];
+    }
+    REQUIRE(reference_energy > 1.0e-6);
+    const double normalized_mean_squared_error = squared_error_sum / reference_energy;
+    std::fprintf(stderr, "routed pair gate=%s up=%s tokens=%" PRId64 " NMSE=%g\n", ggml_type_name(gate_type),
+                 ggml_type_name(up_type), token_count, normalized_mean_squared_error);
+    REQUIRE(normalized_mean_squared_error <= 5.0e-4);
+
+    ggml_backend_buffer_free(cpu_buffer);
+    ggml_backend_buffer_free(hrx_buffer);
+    ggml_free(cpu_ctx);
+    ggml_free(hrx_ctx);
+    ggml_backend_free(cpu_backend);
+    ggml_backend_free(hrx_backend);
+}
+
 static void run_decode_routed_moe_scheduling_case(ggml_type down_weight_type, bool alias_gate_input = false) {
     ggml_init_params params = {};
     params.mem_size         = 128 * 1024 * 1024;
@@ -8632,6 +8740,18 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
     suite.device_case("attention_postprocess.cpu_reference", [] { run_attention_postprocess_cpu_reference_case(); });
     suite.device_case("routed_moe.q4_k.next_rmsnorm", [] { run_routed_moe_cpu_reference_case(GGML_TYPE_Q4_K, true); });
     suite.host_case("routed_moe.codebook_admission", [] { run_routed_codebook_admission_checks(); });
+    suite.device_case("routed_pair.iq3_xxs.iq3_xxs.skinny.cpu_reference", [] {
+        run_routed_pair_cpu_reference_case(GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ3_XXS, 1);
+    });
+    suite.device_case("routed_pair.iq3_xxs.iq3_xxs.tiled.cpu_reference", [] {
+        run_routed_pair_cpu_reference_case(GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ3_XXS, 6);
+    });
+    suite.device_case("routed_pair.iq3_xxs.q4_k.skinny.cpu_reference", [] {
+        run_routed_pair_cpu_reference_case(GGML_TYPE_IQ3_XXS, GGML_TYPE_Q4_K, 1);
+    });
+    suite.device_case("routed_pair.q4_k.iq3_xxs.tiled.cpu_reference", [] {
+        run_routed_pair_cpu_reference_case(GGML_TYPE_Q4_K, GGML_TYPE_IQ3_XXS, 6);
+    });
     suite.device_case("flash_attention.asymmetric", [] { run_asymmetric_flash_attention_cpu_reference_case(); });
     suite.device_case("routed_moe.q6_k", [] { run_routed_moe_cpu_reference_case(GGML_TYPE_Q6_K, false); });
     suite.device_case("decode_attention_qkv.scheduling", [] { run_decode_attention_qkv_scheduling_case(); });
