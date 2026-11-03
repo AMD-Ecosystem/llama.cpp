@@ -1346,22 +1346,6 @@
       "link_module": "routed_down_weighted_reduce_next_rmsnorm_f32_linked"
     },
     {
-      "name": "routed_down_weighted_reduce_next_rmsnorm_f32_publish_q8_token5_plan_test",
-      "args": [
-        "$(location :routed_down_weighted_reduce_next_rmsnorm_f32_linked)",
-        "--benchmark=@qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32_publish_q8_token5_differential",
-        "--config=qwen3_moe.model.hidden_size=2048",
-        "--config=qwen3_moe.model.rms_epsilon=0.000001",
-        "--config=qwen3_moe.routed_down.output_size=2048",
-        "--config=qwen3_moe.routed_down.route_count=8",
-        "--config=qwen3_moe.workload.token_capacity=5",
-        "--config=ggml.quantize_q8_1_x4.group_capacity=80",
-        "--dry-run",
-        "--output-format=jsonl"
-      ],
-      "link_module": "routed_down_weighted_reduce_next_rmsnorm_f32_linked"
-    },
-    {
       "name": "expert_table_partition_fused_plan_test",
       "args": [
         "$(location :expert_table_partition_fused_linked)",

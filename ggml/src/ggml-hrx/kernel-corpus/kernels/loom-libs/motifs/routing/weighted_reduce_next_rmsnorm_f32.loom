@@ -1,7 +1,7 @@
 // Copyright 2026 The HRX Authors
 // SPDX-License-Identifier: Apache-2.0
 
-template.decl @ggml.routing.weighted_reduce_next_rmsnorm_f32(%token_count: index, %route_weights: buffer, %routed_output: buffer, %hidden_state: buffer, %next_norm_weight: buffer, %next_projection_input: buffer, %publish_q8: i1, %q8_scratch: buffer)
+template.decl @ggml.routing.weighted_reduce_next_rmsnorm_f32(%token_count: index, %route_weights: buffer, %routed_output: buffer, %hidden_state: buffer, %next_norm_weight: buffer, %next_projection_input: buffer)
 
 template.decl @ggml.routing.weighted_reduce_next_rmsnorm_f32_publish_q8(%token_count: index, %route_weights: buffer, %routed_output: buffer, %hidden_state: buffer, %next_norm_weight: buffer, %next_projection_input: buffer, %q8_output: buffer)
 
@@ -17,7 +17,7 @@ config.decl @qwen3_moe.routed_down.output_size : %value: index where [range(%val
 
 // Preserves the specialized route-order reduction, residual publication, and
 // row RMSNorm sequence. The caller owns launch geometry and the public ABI.
-template.def<@ggml.routing.weighted_reduce_next_rmsnorm_f32> device requires [#target.subgroup.size<32>] @ggml_routing_weighted_reduce_next_rmsnorm_f32(%token_count: index, %route_weights: buffer, %routed_output: buffer, %hidden_state: buffer, %next_norm_weight: buffer, %next_projection_input: buffer, %publish_q8: i1, %q8_scratch: buffer) {
+template.def<@ggml.routing.weighted_reduce_next_rmsnorm_f32> device requires [#target.subgroup.size<32>] @ggml_routing_weighted_reduce_next_rmsnorm_f32(%token_count: index, %route_weights: buffer, %routed_output: buffer, %hidden_state: buffer, %next_norm_weight: buffer, %next_projection_input: buffer) {
   %route_count0 = config.get @qwen3_moe.routed_down.route_count : index
   %output_size0 = config.get @qwen3_moe.routed_down.output_size : index
   %hidden_size0 = config.get @qwen3_moe.model.hidden_size : index
@@ -50,7 +50,6 @@ template.def<@ggml.routing.weighted_reduce_next_rmsnorm_f32> device requires [#t
   %hidden_state_view = buffer.view %hidden_state_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%hidden_size]xf32>
   %next_norm_weight_view = buffer.view %next_norm_weight_noalias[%c0_offset] : buffer -> view<[%hidden_size]xf32>
   %next_projection_input_view = buffer.view %next_projection_input_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%hidden_size]xf32>
-  %q8_scratch_view = buffer.view %q8_scratch[%c0_offset] : buffer -> view<2048xf32>
   %scratch = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
   %scratch_view = buffer.view %scratch[%c0_offset] : buffer -> view<8xf32>
 
@@ -104,22 +103,16 @@ template.def<@ggml.routing.weighted_reduce_next_rmsnorm_f32> device requires [#t
     %next_projection = vector.mulf<reassoc|nnan|ninf|nsz> %normalized, %learned_weight : vector<8xf32>
     vector.store %result, %hidden_state_view[%token, %channel] : vector<8xf32>, view<[%launch_token_count]x[%hidden_size]xf32>
     vector.store %next_projection, %next_projection_input_view[%token, %channel] : vector<8xf32>, view<[%launch_token_count]x[%hidden_size]xf32>
-    scf.if %publish_q8 {
-      vector.store %next_projection, %q8_scratch_view[%channel] : vector<8xf32>, view<2048xf32>
-    }
   }
   template.return
 }
 
 // Retains the F32 publication and packs the same normalized row for direct
-// Q8 consumers. Workgroup storage carries the computed row across workitems;
-// the global reload produced stale Q8 groups in the full model graph.
+// Q8 consumers. The reload keeps the legacy reduction and RMSNorm motif exact.
 template.def<@ggml.routing.weighted_reduce_next_rmsnorm_f32_publish_q8> device requires [#target.subgroup.size<32>] @ggml_routing_weighted_reduce_next_rmsnorm_f32_publish_q8(%token_count: index, %route_weights: buffer, %routed_output: buffer, %hidden_state: buffer, %next_norm_weight: buffer, %next_projection_input: buffer, %q8_output: buffer) {
-  %q8_scratch_bytes = index.constant 8192 : offset
-  %q8_scratch = buffer.alloca<workgroup> align(16) %q8_scratch_bytes : buffer
-  %publish_q8 = scalar.constant true : i1
-  template.apply<@ggml.routing.weighted_reduce_next_rmsnorm_f32>(%token_count, %route_weights, %routed_output, %hidden_state, %next_norm_weight, %next_projection_input, %publish_q8, %q8_scratch) : (index, buffer, buffer, buffer, buffer, buffer, i1, buffer)
-  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  template.apply<@ggml.routing.weighted_reduce_next_rmsnorm_f32>(%token_count, %route_weights, %routed_output, %hidden_state, %next_norm_weight, %next_projection_input) : (index, buffer, buffer, buffer, buffer, buffer)
+  // The packer reads global F32 output written by other workitems.
+  kernel.barrier<global> scope(workgroup) ordering(acq_rel)
 
   %workitem = kernel.workitem.id<x> : index
   %token0 = kernel.workgroup.id<x> : index
@@ -138,7 +131,8 @@ template.def<@ggml.routing.weighted_reduce_next_rmsnorm_f32_publish_q8> device r
   %safe_token0 = scf.select %active_token, %token0, %c0 : index
   %token = index.assume %safe_token0 [lt(%safe_token0, %bounded_token_count)] : index
   %token_output_byte_base = index.scale %token, %row_bytes : index, offset -> offset
-  %q8_scratch_view = buffer.view %q8_scratch[%c0_offset] : buffer -> view<2048xf32>
+  %next_projection_input_noalias, %q8_output_noalias = buffer.assume.noalias %next_projection_input, %q8_output : buffer, buffer
+  %next_projection_input_view = buffer.view %next_projection_input_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]x2048xf32>
   %scratch = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
   %scratch_values = buffer.view %scratch[%c0_offset] : buffer -> view<256xf32>
   %scratch_d = buffer.view %scratch[%scratch_d_byte_add] : buffer -> view<32xf32>
@@ -147,8 +141,8 @@ template.def<@ggml.routing.weighted_reduce_next_rmsnorm_f32_publish_q8> device r
   scf.if %active_token {
     scf.for %stripe = [%c0 to %c2 step %c1] unroll {
       %channel = index.madd %stripe, %c1024, %channel_base : index
-      %values = vector.load %q8_scratch_view[%channel] : view<2048xf32> -> vector<4xf32>
-      template.apply<@ggml.quantize_q8_1_x4.publish_vector4_strict>(%publish_word, %token_output_byte_base, %channel, %values, %scratch_values, %scratch_d, %q8_output) : (i1, offset, index, vector<4xf32>, view<256xf32>, view<32xf32>, buffer)
+      %values = vector.load %next_projection_input_view[%token, %channel] : view<[%bounded_token_count]x2048xf32> -> vector<4xf32>
+      template.apply<@ggml.quantize_q8_1_x4.publish_vector4_strict>(%publish_word, %token_output_byte_base, %channel, %values, %scratch_values, %scratch_d, %q8_output_noalias) : (i1, offset, index, vector<4xf32>, view<256xf32>, view<32xf32>, buffer)
     }
   }
   template.return
