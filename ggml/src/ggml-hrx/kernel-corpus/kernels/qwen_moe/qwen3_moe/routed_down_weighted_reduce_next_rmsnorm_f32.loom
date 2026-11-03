@@ -5,7 +5,7 @@
 // residual results across the workgroup RMS reduction, then publishes both
 // the updated hidden state and the learned-weight normalized input consumed
 // by the next layer.
-template.decl @ggml.routing.weighted_reduce_next_rmsnorm_f32(%token_count: index, %route_weights: buffer, %routed_output: buffer, %hidden_state: buffer, %next_norm_weight: buffer, %next_projection_input: buffer)
+template.decl @ggml.routing.weighted_reduce_next_rmsnorm_f32(%token_count: index, %route_weights: buffer, %routed_output: buffer, %hidden_state: buffer, %next_norm_weight: buffer, %next_projection_input: buffer, %publish_q8: i1, %q8_scratch: buffer)
 
 template.decl @ggml.routing.weighted_reduce_next_rmsnorm_f32_publish_q8(%token_count: index, %route_weights: buffer, %routed_output: buffer, %hidden_state: buffer, %next_norm_weight: buffer, %next_projection_input: buffer, %q8_output: buffer)
 
@@ -30,7 +30,10 @@ kernel.def target(@qwen3_moe_routed_down_next_norm_gfx11_wave32) @qwen3_moe_rout
   %c256 = index.constant 256 : index
   kernel.launch.config workgroups(%token_count, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
 } launch(%token_count: index, %route_weights: buffer, %routed_output: buffer, %hidden_state: buffer, %next_norm_weight: buffer, %next_projection_input: buffer) where [range(%token_count, 1, 2048)] {
-  template.apply<@ggml.routing.weighted_reduce_next_rmsnorm_f32>(%token_count, %route_weights, %routed_output, %hidden_state, %next_norm_weight, %next_projection_input) : (index, buffer, buffer, buffer, buffer, buffer)
+  %q8_scratch_bytes = index.constant 8192 : offset
+  %q8_scratch = buffer.alloca<workgroup> align(16) %q8_scratch_bytes : buffer
+  %publish_q8 = scalar.constant false : i1
+  template.apply<@ggml.routing.weighted_reduce_next_rmsnorm_f32>(%token_count, %route_weights, %routed_output, %hidden_state, %next_norm_weight, %next_projection_input, %publish_q8, %q8_scratch) : (index, buffer, buffer, buffer, buffer, buffer, i1, buffer)
   kernel.return
 }
 
@@ -80,6 +83,29 @@ check.case public @qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32_publis
   check.expect.approximate actual(%actual_hidden_state) expected(%expected_hidden_state) atol(0.0001) rtol(0.0001) nan(same) : tensor<2x2048xf32>, tensor<2x2048xf32>
   check.expect.approximate actual(%actual_next_projection_input) expected(%expected_next_projection_input) atol(0.001) rtol(0.001) nan(same) : tensor<2x2048xf32>, tensor<2x2048xf32>
   check.expect.equal actual(%actual_q8) expected(%expected_q8) : tensor<2x2304xi8>
+  check.return
+}
+
+check.case public @qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32_publish_q8_token5_differential_case {
+  %token_count = check.literal value(5) : index
+  %hidden_size = check.literal value(2048) : index
+  %route_weights = check.generate.iota offset(0.03125) step(0.015625) period(8) : tensor<5x8xf32>
+  %routed_output = check.generate.iota offset(-0.25) step(0.015625) period(31) : tensor<5x8x2048xf16>
+  %expected_hidden_state = check.generate.iota offset(-0.5) step(0.0078125) period(17) : tensor<5x2048xf32>
+  %actual_hidden_state = check.generate.iota offset(-0.5) step(0.0078125) period(17) : tensor<5x2048xf32>
+  %next_norm_weight = check.generate.iota offset(0.5) step(0.0078125) period(29) : tensor<2048xf32>
+  %expected_next_projection_input = check.generate.fill value(0.0) : tensor<5x2048xf32>
+  // Match the transient arena offsets observed in the five-token graph.
+  %actual_storage = check.generate.fill value(63) : tensor<112384xi8>
+  %actual_next_projection_input = check.tensor.view %actual_storage offset(54528) : tensor<112384xi8> -> tensor<5x2048xf32>
+  %expected_q8 = check.generate.fill value(0) : tensor<5x2304xi8>
+  %actual_q8 = check.tensor.view %actual_storage offset(100864) : tensor<112384xi8> -> tensor<5x2304xi8>
+  kernel.launch @qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32[%token_count](%token_count, %route_weights, %routed_output, %expected_hidden_state, %next_norm_weight, %expected_next_projection_input) : [index](index, tensor<5x8xf32>, tensor<5x8x2048xf16>, tensor<5x2048xf32>, tensor<2048xf32>, tensor<5x2048xf32>)
+  kernel.launch @ggml_quantize_q8_1_x4_f32[%token_count, %hidden_size](%token_count, %hidden_size, %expected_next_projection_input, %expected_q8) : [index, index](index, index, tensor<5x2048xf32>, tensor<5x2304xi8>)
+  kernel.launch @qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32_publish_q8[%token_count](%token_count, %route_weights, %routed_output, %actual_hidden_state, %next_norm_weight, %actual_next_projection_input, %actual_q8) : [index](index, tensor<5x8xf32>, tensor<5x8x2048xf16>, tensor<5x2048xf32>, tensor<2048xf32>, tensor<5x2048xf32>, tensor<5x2304xi8>)
+  check.expect.approximate actual(%actual_hidden_state) expected(%expected_hidden_state) atol(0.0001) rtol(0.0001) nan(same) : tensor<5x2048xf32>, tensor<5x2048xf32>
+  check.expect.approximate actual(%actual_next_projection_input) expected(%expected_next_projection_input) atol(0.001) rtol(0.001) nan(same) : tensor<5x2048xf32>, tensor<5x2048xf32>
+  check.expect.equal actual(%actual_q8) expected(%expected_q8) : tensor<5x2304xi8>
   check.return
 }
 
@@ -139,6 +165,8 @@ check.benchmark<@qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32_composed
 check.benchmark<@qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32_differential_case> @qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32_differential
 
 check.benchmark<@qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32_publish_q8_differential_case> @qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32_publish_q8_differential
+
+check.benchmark<@qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32_publish_q8_token5_differential_case> @qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32_publish_q8_token5_differential
 
 check.benchmark<@qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32_standalone_q8_benchmark_case> @qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_f32_standalone_q8_token2
 
