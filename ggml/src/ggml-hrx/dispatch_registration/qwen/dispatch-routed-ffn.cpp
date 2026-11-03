@@ -1030,6 +1030,16 @@ static bool match_routed_ffn_gate_up_swiglu_f16_wmma_dispatch(const DispatchMatc
     if (!common_mul_mat_format_for_type(match.gate_weight->type, weight_format)) {
         return false;
     }
+    switch (weight_format) {
+        case CommonMulMatWeightFormat::IQ1_S:
+        case CommonMulMatWeightFormat::IQ1_M:
+        case CommonMulMatWeightFormat::IQ2_XXS:
+        case CommonMulMatWeightFormat::IQ2_XS:
+        case CommonMulMatWeightFormat::IQ3_XXS:
+            return false;
+        default:
+            break;
+    }
     const std::string weight_format_config = to_config_value(common_mul_mat_format_config_value(weight_format));
     const std::string config_prefix        = "ggml.mul_mat_id_swiglu_f16_f16";
 
