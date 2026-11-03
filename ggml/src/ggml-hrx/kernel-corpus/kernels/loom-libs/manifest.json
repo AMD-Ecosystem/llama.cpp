@@ -21,6 +21,12 @@
       "path": "ops/elementwise/unary_f32.loom"
     },
     {
+      "path": "ops/elementwise/clamp_f32.loom"
+    },
+    {
+      "path": "ops/reduction/pool_1d_full_max_f32.loom"
+    },
+    {
       "path": "ops/elementwise/binary_swiglu_symmetric_i4_k32.loom"
     },
     {
@@ -1237,6 +1243,84 @@
       "compile_dependencies": [
         "motifs/copy/concat_dim0.loom"
       ]
+    },
+    {
+      "name": "ggml_clamp_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_clamp_f32",
+      "source": "ops/elementwise/clamp_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "element_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "element_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/elementwise/clamp_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
+      "name": "ggml_pool_1d_full_max_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_pool_1d_full_max_f32",
+      "source": "ops/reduction/pool_1d_full_max_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "row_count",
+          "type": "index"
+        },
+        {
+          "name": "row_width",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "row_count",
+          "type": "index"
+        },
+        {
+          "name": "row_width",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/reduction/pool_1d_full_max_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
     },
     {
       "name": "ggml_scale_bias_f32",

@@ -1139,6 +1139,33 @@ static bool supported_unary_f32_tensor(const ggml_tensor * op) {
     return ggml::hrx::unary_kind_supported(unary_kind);
 }
 
+static bool supported_full_max_pool_1d_f32_tensor(const ggml_tensor * op) {
+    if (op == nullptr) {
+        return false;
+    }
+    const bool pool_op = op->op == GGML_OP_POOL_1D;
+    const bool has_input = op->src[0] != nullptr;
+    const bool pool_with_input = pool_op && has_input;
+    if (!pool_with_input) {
+        return false;
+    }
+
+    const ggml_tensor * input = op->src[0];
+    const bool f32_values = input->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
+    const bool contiguous_values = ggml_is_contiguous(input) && ggml_is_contiguous(op);
+    const bool full_row = op->ne[0] == 1 && input->ne[0] == ggml_get_op_params_i32(op, 1);
+    const bool matching_rows = input->ne[1] == op->ne[1] && input->ne[2] == op->ne[2] &&
+                               input->ne[3] == op->ne[3];
+    const bool max_pool = ggml_get_op_params_i32(op, 0) == GGML_OP_POOL_MAX;
+    const bool exact_window = ggml_get_op_params_i32(op, 2) == input->ne[0] &&
+                              ggml_get_op_params_i32(op, 3) == 0;
+    const bool bounded_width = input->ne[0] > 0 && input->ne[0] <= 32768;
+    const bool bounded_rows = ggml_nelements(op) > 0 && ggml_nelements(op) <= 1048576;
+    const bool bounded_input = ggml_nelements(input) <= 134217728;
+    const bool bounded = bounded_width && bounded_rows && bounded_input;
+    return f32_values && contiguous_values && full_row && matching_rows && max_pool && exact_window && bounded;
+}
+
 static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op) {
     GGML_UNUSED(device);
     if (op == nullptr) {
@@ -1169,6 +1196,9 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
         return true;
     }
     if (supported_scale_f32_tensor(op)) {
+        return true;
+    }
+    if (supported_full_max_pool_1d_f32_tensor(op)) {
         return true;
     }
     if (supported_qwen_attention_projection_get_rows_tensor(op)) {

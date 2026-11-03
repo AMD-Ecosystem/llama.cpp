@@ -1565,6 +1565,41 @@ static void run_scale_f32_dispatch_checks() {
     ggml_free(ctx);
 }
 
+static void run_mellum_scaling_dispatch_checks() {
+    ggml_init_params params = {};
+    params.mem_size         = 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
+    ggml_tensor * input = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 896, 8, 16);
+    ggml_tensor * pooled = ggml_pool_1d(ctx, input, GGML_OP_POOL_MAX, 896, 896, 0);
+    ggml_tensor * clamp_input = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, 8, 16);
+    ggml_tensor * clamped = ggml_clamp(ctx, clamp_input, 0.0f, 127.0f);
+    REQUIRE(input != nullptr);
+    REQUIRE(pooled != nullptr);
+    REQUIRE(clamp_input != nullptr);
+    REQUIRE(clamped != nullptr);
+
+    const ggml::hrx::Dispatch pool_dispatch = schedule_single_dispatch_for_tensor(ctx, pooled);
+    REQUIRE(kernel_name_for_id(pool_dispatch.kernel.kernel_id) == "loom_libs:ggml_pool_1d_full_max_f32");
+    REQUIRE(pool_dispatch.kernel.integer_parameters.at("row_count") == 128);
+    REQUIRE(pool_dispatch.kernel.integer_parameters.at("row_width") == 896);
+
+    const ggml::hrx::Dispatch clamp_dispatch = schedule_single_dispatch_for_tensor(ctx, clamped);
+    REQUIRE(kernel_name_for_id(clamp_dispatch.kernel.kernel_id) == "loom_libs:ggml_clamp_f32");
+    REQUIRE(clamp_dispatch.kernel.integer_parameters.at("element_count") == 128);
+    require_compile_parameter(clamp_dispatch, "ggml.clamp_f32.min", expected_config_value(0.0f));
+    require_compile_parameter(clamp_dispatch, "ggml.clamp_f32.max", expected_config_value(127.0f));
+
+    ggml_tensor * partial_pool = ggml_pool_1d(ctx, input, GGML_OP_POOL_MAX, 32, 32, 0);
+    ggml_tensor * average_pool = ggml_pool_1d(ctx, input, GGML_OP_POOL_AVG, 896, 896, 0);
+    REQUIRE(!can_schedule_tensor(ctx, partial_pool));
+    REQUIRE(!can_schedule_tensor(ctx, average_pool));
+
+    ggml_free(ctx);
+}
+
 static void require_scale_add_dispatch(ggml_context * ctx,
                                        ggml_tensor *  input,
                                        ggml_tensor *  residual,
@@ -13796,6 +13831,78 @@ static void run_scale_f32() {
     ggml_backend_free(backend);
 }
 
+static std::vector<float> run_mellum_scaling_numerical_case(ggml_backend_t backend, int64_t token_count) {
+    ggml_init_params params = {};
+    params.mem_size         = 1024 * 1024;
+    params.no_alloc         = true;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
+    constexpr int64_t row_width = 896;
+    constexpr int64_t route_count = 8;
+    ggml_tensor * input = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, row_width, route_count, token_count);
+    ggml_tensor * absolute = ggml_abs(ctx, input);
+    ggml_tensor * pooled = ggml_pool_1d(ctx, absolute, GGML_OP_POOL_MAX, row_width, row_width, 0);
+    ggml_tensor * clamped = ggml_clamp(ctx, pooled, 0.0f, 127.0f);
+    REQUIRE(input != nullptr);
+    REQUIRE(absolute != nullptr);
+    REQUIRE(pooled != nullptr);
+    REQUIRE(clamped != nullptr);
+
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, clamped);
+
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    REQUIRE(buffer != nullptr);
+
+    std::vector<float> input_data(row_width * route_count * token_count);
+    for (size_t i = 0; i < input_data.size(); ++i) {
+        input_data[i] = static_cast<float>((i * 37) % 251) * 0.0625f - 7.5f;
+    }
+    input_data[0] = 0.0f;
+    input_data[row_width - 1] = -256.0f;
+    for (int64_t column = 0; column < row_width; ++column) {
+        input_data[row_width + column] = 0.0f;
+        input_data[2 * row_width + column] = 0.000125f;
+    }
+    input_data[2 * row_width - 1] = -0.000125f;
+    ggml_backend_tensor_set(input, input_data.data(), 0, input_data.size() * sizeof(float));
+
+    REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(backend);
+
+    std::vector<float> output(route_count * token_count);
+    ggml_backend_tensor_get(clamped, output.data(), 0, output.size() * sizeof(float));
+
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+    return output;
+}
+
+static void run_mellum_scaling_numerics() {
+    ggml_backend_t hrx = ggml_backend_hrx_init(0);
+    ggml_backend_t cpu = ggml_backend_cpu_init();
+    REQUIRE(hrx != nullptr);
+    REQUIRE(cpu != nullptr);
+
+    for (int64_t token_count : { 1, 16 }) {
+        const std::vector<float> expected = run_mellum_scaling_numerical_case(cpu, token_count);
+        const std::vector<float> actual = run_mellum_scaling_numerical_case(hrx, token_count);
+        const std::vector<float> repeated = run_mellum_scaling_numerical_case(hrx, token_count);
+        REQUIRE(actual.size() == expected.size());
+        REQUIRE(repeated.size() == expected.size());
+        for (size_t i = 0; i < expected.size(); ++i) {
+            REQUIRE(std::isfinite(actual[i]));
+            REQUIRE(actual[i] == expected[i]);
+            REQUIRE(repeated[i] == actual[i]);
+        }
+    }
+
+    ggml_backend_free(cpu);
+    ggml_backend_free(hrx);
+}
+
 static void run_scale_f32_inplace() {
     ggml_backend_t backend = ggml_backend_hrx_init(0);
     REQUIRE(backend != nullptr);
@@ -14641,6 +14748,7 @@ static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
         run_qwen_weighted_reduce_next_rmsnorm_q8_publication_checks();
     });
     suite.host_case("common_mul_mat_id_postops_dispatch", [] { run_common_mul_mat_id_postops_dispatch_checks(); });
+    suite.host_case("mellum_scaling_dispatch", [] { run_mellum_scaling_dispatch_checks(); });
     suite.host_case("alias_value_import", [] { run_alias_value_import_checks(); });
     suite.host_case("multi_dispatch", [] { run_multi_dispatch_checks(); });
     suite.host_case("layout_alias_scheduler_elision", [] { run_layout_alias_scheduler_elision_checks(); });
@@ -14812,6 +14920,7 @@ static void register_hrx_backend_device_cases(test_runner::Suite & suite) {
     suite.device_case("rope_scale_f32_numerics", [] { run_rope_scale_f32_numerics(); });
     suite.device_case("gather_add_rmsnorm_f32_numerics", [] { run_gather_add_rmsnorm_f32_numerics(); });
     suite.device_case("scale_f32", [] { run_scale_f32(); });
+    suite.device_case("mellum_scaling_numerics", [] { run_mellum_scaling_numerics(); });
     suite.device_case("scale_f32_inplace", [] { run_scale_f32_inplace(); });
     suite.device_case("two_independent_add_f32", [] { run_two_independent_add_f32(); });
     suite.device_case("chained_add_f32", [] { run_chained_add_f32(); });
