@@ -23,6 +23,7 @@ PROMPT = "The capital of France is"
 BEFORE_BINDINGS = {0: "route_weights", 1: "routed_output", 2: "hidden_state", 3: "next_norm_weight"}
 AFTER_BINDINGS = {2: "hidden_state", 4: "next_projection_input", 5: "q8_output"}
 WIDTH = 2048
+TOKENS = 5
 GROUP_WIDTH = 128
 Q8_GROUP_BYTES = 144
 
@@ -32,7 +33,7 @@ def trace_rows(run):
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
-def target_command(rows):
+def target_command(rows, validate_bindings=True):
     targets = [row for row in rows if row["kernel"] == KERNEL]
     if not targets:
         raise ValueError("target fused Q8 kernel absent from dispatch trace")
@@ -44,13 +45,14 @@ def target_command(rows):
     kernels = {row["kernel"] for row in selected}
     if kernels != {KERNEL}:
         raise ValueError(f"ambiguous command {index}: {kernels}")
-    for stage, expected in (("before", BEFORE_BINDINGS), ("after", AFTER_BINDINGS)):
-        stage_rows = [row for row in selected if row["stage"] == stage]
-        actual = {row["binding_index"]: row["binding_name"] for row in stage_rows}
-        if len(stage_rows) != len(actual):
-            raise ValueError(f"duplicate {stage} bindings for command {index}")
-        if actual != expected:
-            raise ValueError(f"unexpected {stage} bindings for command {index}: {actual}")
+    if validate_bindings:
+        for stage, expected in (("before", BEFORE_BINDINGS), ("after", AFTER_BINDINGS)):
+            stage_rows = [row for row in selected if row["stage"] == stage]
+            actual = {row["binding_index"]: row["binding_name"] for row in stage_rows}
+            if len(stage_rows) != len(actual):
+                raise ValueError(f"duplicate {stage} bindings for command {index}")
+            if actual != expected:
+                raise ValueError(f"unexpected {stage} bindings for command {index}: {actual}")
     return index, program_size, selected
 
 
@@ -73,8 +75,9 @@ def f32(value):
 
 def expected_q8(f32_bytes):
     row_bytes = WIDTH * 4
-    if len(f32_bytes) % row_bytes:
-        raise ValueError("F32 publication has incomplete rows")
+    expected_bytes = TOKENS * row_bytes
+    if len(f32_bytes) != expected_bytes:
+        raise ValueError(f"expected {TOKENS} complete F32 rows, got {len(f32_bytes)} bytes")
     values = struct.unpack(f"<{len(f32_bytes) // 4}f", f32_bytes)
     if not all(math.isfinite(value) for value in values):
         raise ValueError("nonfinite F32 publication")
@@ -102,6 +105,9 @@ def inspect_run(run):
     f32_bytes = blob_for(rows, run, "next_projection_input")
     q8_bytes = blob_for(rows, run, "q8_output")
     expected = expected_q8(f32_bytes)
+    expected_groups = TOKENS * WIDTH // GROUP_WIDTH
+    if len(expected) != expected_groups * Q8_GROUP_BYTES:
+        raise ValueError(f"expected {expected_groups} Q8 groups in {run}")
     if len(q8_bytes) != len(expected):
         raise ValueError(f"Q8 output length differs from F32 row in {run}")
     bad_groups = [group for group in range(len(expected) // Q8_GROUP_BYTES)
@@ -122,6 +128,9 @@ def run_debug(binary, model, output, name, command=None, program_size=None):
     run.mkdir(parents=True, exist_ok=False)
     logits = output / f"{name}-logits"
     env = os.environ.copy()
+    for key in ("GGML_HRX_TRACE_START_COMMAND", "GGML_HRX_TRACE_END_COMMAND",
+                "GGML_HRX_TRACE_PROGRAM_COMMANDS"):
+        env.pop(key, None)
     env["GGML_HRX_TRACE_DISPATCH_DIR"] = str(run)
     env["GGML_HRX_TRACE_BLOBS"] = "1" if command is not None else "0"
     if command is not None:
@@ -160,7 +169,8 @@ def main():
             parser.error(f"unexpected model SHA256: {model_hash}")
         args.output_dir.mkdir(parents=True, exist_ok=False)
         discovery = run_debug(args.binary, args.model, args.output_dir, "discovery")
-        command, program_size, _ = target_command(trace_rows(discovery))
+        # Hash-only discovery identifies the command; blob captures verify bindings.
+        command, program_size, _ = target_command(trace_rows(discovery), validate_bindings=False)
         for number in (1, 2):
             run_debug(args.binary, args.model, args.output_dir, f"run{number}", command, program_size)
         capture = args.output_dir
