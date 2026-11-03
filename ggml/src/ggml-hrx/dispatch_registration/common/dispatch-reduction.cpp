@@ -1,13 +1,11 @@
 #include "dispatch-reduction.h"
 
+#include "dispatch-common.h"
 #include "ggml.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
 
 #include <algorithm>
 #include <cmath>
-#include <iomanip>
-#include <limits>
-#include <sstream>
 #include <string>
 #include <utility>
 
@@ -165,13 +163,11 @@ bool match_softmax(const DispatchMatchContext & context, DispatchMatch & match) 
         (input->storage == output->storage && input->storage_offset != output->storage_offset)) {
         return false;
     }
-    std::ostringstream scale;
-    scale << std::setprecision(std::numeric_limits<float>::max_digits10) << params->scale;
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(kSoftMaxF32);
     dispatch.kernel.integer_parameters.emplace("row_count", input->element_count / input->ne[0]);
     dispatch.kernel.compile_parameters.emplace("ggml.softmax.width", std::to_string(input->ne[0]));
-    dispatch.kernel.compile_parameters.emplace("ggml.softmax.scale", scale.str());
+    dispatch.kernel.compile_parameters.emplace("ggml.softmax.scale", float_config_value(params->scale));
     dispatch.bindings.push_back({ input->id, 0, input->byte_count });
     dispatch.bindings.push_back({ output->id, 0, output->byte_count });
     match.dispatches.push_back(std::move(dispatch));

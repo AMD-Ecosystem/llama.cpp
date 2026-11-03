@@ -1,13 +1,12 @@
 #include "dispatch-unary.h"
 
+#include "dispatch-common.h"
 #include "ggml.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
 
 #include <cmath>
 #include <cstdint>
-#include <iomanip>
 #include <limits>
-#include <sstream>
 #include <string>
 #include <utility>
 
@@ -30,12 +29,6 @@ static bool same_shape(const Value & lhs, const Value & rhs) {
 
 static const Value * graph_value(const Graph & graph, ValueId id) {
     return graph.values().find(id);
-}
-
-static std::string float_config_value(float value) {
-    std::ostringstream stream;
-    stream << std::setprecision(std::numeric_limits<float>::max_digits10) << value;
-    return stream.str();
 }
 
 static bool scale_storage_is_safe(const Value & input, const Value & output) {
@@ -161,12 +154,10 @@ static bool match_fill(const DispatchMatchContext & context, DispatchMatch & mat
         output->element_count > 134217728) {
         return false;
     }
-    std::ostringstream value;
-    value << std::setprecision(std::numeric_limits<float>::max_digits10) << params->value;
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(GGML_HRX_KERNEL_REF("loom_libs", "ggml_fill"));
     dispatch.kernel.integer_parameters.emplace("element_count", output->element_count);
-    dispatch.kernel.compile_parameters.emplace("ggml.fill.value", value.str());
+    dispatch.kernel.compile_parameters.emplace("ggml.fill.value", float_config_value(params->value));
     dispatch.kernel.compile_parameters.emplace("ggml.fill.format", output->type == GGML_TYPE_F16 ? "16" : "32");
     dispatch.bindings = {
         { output->id, 0, output->byte_count }

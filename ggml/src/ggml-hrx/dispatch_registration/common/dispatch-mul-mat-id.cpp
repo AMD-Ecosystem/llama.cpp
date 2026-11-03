@@ -23,6 +23,8 @@ static constexpr KernelCatalogRef kMulMatIdVectorMxfp4Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_vector_mxfp4_f32");
 static constexpr KernelCatalogRef kMulMatIdVectorMxfp4Q8Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_vector_mxfp4_q8");
+static constexpr KernelCatalogRef kMulMatIdPairedMxfp4Q8Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_paired_mxfp4_q8");
 static constexpr KernelCatalogRef kMulMatIdMxfp4PrefillPrefetchKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_mxfp4_prefill_prefetch");
 static constexpr KernelCatalogRef kMulMatIdTiledPostOpsF32F32Kernel =
@@ -204,23 +206,21 @@ static bool match_mul_mat_id_vector_mxfp4(const DispatchMatchContext & context, 
                                                      activation, CommonQ8ActivationPolicy::AllowStandaloneQuantize)) {
         return false;
     }
-    dispatch.kernel =
-        make_kernel_specialization(integer_dot ? kMulMatIdVectorMxfp4Q8Kernel : kMulMatIdVectorMxfp4Kernel);
     const bool pair_tokens = integer_dot && match.token_count > 1 && match.route_count <= 8 &&
                              match.input_size >= 2048 && match.output_size >= 1024;
-    if (pair_tokens) {
-        dispatch.kernel =
-            make_kernel_specialization(GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_paired_mxfp4_q8"));
-    }
+    dispatch.kernel = make_kernel_specialization(pair_tokens ? kMulMatIdPairedMxfp4Q8Kernel :
+                                                 integer_dot ? kMulMatIdVectorMxfp4Q8Kernel :
+                                                               kMulMatIdVectorMxfp4Kernel);
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
-    for (const auto & parameter : std::vector<std::pair<const char *, int64_t>>{
-             { "input_size",        match.input_size                                               },
-             { "output_size",       match.output_size                                              },
-             { "route_count",       match.route_count                                              },
-             { "input_route_count", match.input_route_count                                        },
-             { "route_stride",      static_cast<int64_t>(match.route_ids->nb[1] / sizeof(int32_t)) },
-             { "expert_count",      match.expert_count                                             }
-    }) {
+    const std::pair<const char *, int64_t> parameters[] = {
+        { "input_size",        match.input_size                                               },
+        { "output_size",       match.output_size                                              },
+        { "route_count",       match.route_count                                              },
+        { "input_route_count", match.input_route_count                                        },
+        { "route_stride",      static_cast<int64_t>(match.route_ids->nb[1] / sizeof(int32_t)) },
+        { "expert_count",      match.expert_count                                             }
+    };
+    for (const auto & parameter : parameters) {
         dispatch.kernel.compile_parameters.emplace(std::string("ggml.mxfp4_vector.") + parameter.first,
                                                    std::to_string(parameter.second));
     }

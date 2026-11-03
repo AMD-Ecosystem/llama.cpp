@@ -17,7 +17,17 @@
 #include "dispatch-scale.h"
 #include "dispatch-unary.h"
 
+#include <limits>
+#include <sstream>
+
 namespace ggml::hrx {
+
+std::string float_config_value(float value) {
+    std::ostringstream out;
+    out.precision(std::numeric_limits<float>::max_digits10);
+    out << value;
+    return out.str();
+}
 
 void register_common_dispatches(DispatchRegistryBuilder & registry) {
     register_binary_dispatch(registry);

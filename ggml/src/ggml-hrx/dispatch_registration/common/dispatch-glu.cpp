@@ -1,5 +1,6 @@
 #include "dispatch-glu.h"
 
+#include "dispatch-common.h"
 #include "dispatch-layout-utils.h"
 #include "dispatch-mul-mat-common.h"
 #include "ggml.h"
@@ -7,9 +8,7 @@
 
 #include <cmath>
 #include <cstdint>
-#include <iomanip>
 #include <limits>
-#include <sstream>
 #include <string>
 #include <utility>
 
@@ -208,12 +207,10 @@ static bool match_swiglu_clamp_f32_dispatch(const DispatchMatchContext & context
         output->element_count > 134217728 || gate->storage == output->storage || up->storage == output->storage) {
         return false;
     }
-    std::ostringstream limit;
-    limit << std::setprecision(std::numeric_limits<float>::max_digits10) << params->limit;
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(GGML_HRX_KERNEL_REF("loom_libs", "ggml_swiglu_clamp_f32"));
     dispatch.kernel.integer_parameters.emplace("element_count", output->element_count);
-    dispatch.kernel.compile_parameters.emplace("ggml.swiglu_clamp.limit", limit.str());
+    dispatch.kernel.compile_parameters.emplace("ggml.swiglu_clamp.limit", float_config_value(params->limit));
     dispatch.bindings = {
         { gate->id,   0, gate->byte_count   },
         { up->id,     0, up->byte_count     },

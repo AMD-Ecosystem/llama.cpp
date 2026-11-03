@@ -3,9 +3,6 @@
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
 
 #include <cmath>
-#include <iomanip>
-#include <limits>
-#include <sstream>
 #include <utility>
 
 namespace ggml::hrx {
@@ -38,8 +35,8 @@ static bool match_hyper_connection(const DispatchMatchContext & context, Dispatc
             return false;
         }
     }
-    const int64_t tokens = comb ? inputs[0]->ne[1] : pre ? inputs[0]->ne[2] : inputs[0]->ne[1];
-    const int64_t embd   = comb ? 1 : inputs[0]->ne[0];
+    const int64_t tokens  = pre ? inputs[0]->ne[2] : inputs[0]->ne[1];
+    const int64_t embd    = comb ? 1 : inputs[0]->ne[0];
     const int64_t streams = comb ? 4 : pre ? inputs[0]->ne[1] : inputs[1]->ne[1];
     if (tokens < 1 || tokens > 32768 || embd < 1 || embd > 32768 || streams < 1 || streams > 128 ||
         tokens * embd > 134217728 / streams) {
@@ -73,17 +70,13 @@ static bool match_hyper_connection(const DispatchMatchContext & context, Dispatc
         if (!params || !std::isfinite(params->eps) || params->eps <= 0 || params->n_iter < 1 || params->n_iter > 128) {
             return false;
         }
-        std::ostringstream eps;
-        eps << std::setprecision(std::numeric_limits<float>::max_digits10) << params->eps;
-        dispatch.kernel.compile_parameters.emplace("ggml.hc.eps", eps.str());
+        dispatch.kernel.compile_parameters.emplace("ggml.hc.eps", float_config_value(params->eps));
         dispatch.kernel.compile_parameters.emplace("ggml.hc.n_iter", std::to_string(params->n_iter));
     } else {
         dispatch.kernel.compile_parameters.emplace("ggml.hc.embd", std::to_string(embd));
         dispatch.kernel.compile_parameters.emplace("ggml.hc.streams", std::to_string(streams));
         if (pre) {
-            std::ostringstream scale;
-            scale << std::setprecision(std::numeric_limits<float>::max_digits10) << pre_params->scale;
-            dispatch.kernel.compile_parameters.emplace("ggml.hc.scale", scale.str());
+            dispatch.kernel.compile_parameters.emplace("ggml.hc.scale", float_config_value(pre_params->scale));
             dispatch.kernel.compile_parameters.emplace("ggml.hc.gated", pre_params->gated ? "1" : "0");
         } else {
             dispatch.kernel.compile_parameters.emplace("ggml.hc.identity", identity ? "1" : "0");
