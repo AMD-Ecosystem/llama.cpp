@@ -48,6 +48,9 @@ struct DispatchMatchContext {
     const DispatchRegistry *  registry = nullptr;
 };
 
+// Non-native weight bindings require bytes that remain available after graph import.
+bool dispatch_weight_layout_eligible(const Value & value);
+
 enum DispatchActivationInputFormat : uint32_t {
     DispatchActivationInputNone           = 0,
     DispatchActivationInputF16Row         = 1u << 0,

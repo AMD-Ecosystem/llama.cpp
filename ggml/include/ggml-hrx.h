@@ -11,6 +11,13 @@ struct ggml_backend_hrx_cache_stats {
     uint64_t graph_program_hits;
     uint64_t prepared_program_builds;
     uint64_t prepared_program_hits;
+    uint64_t weight_materializations;
+    uint64_t weight_reuses;
+    uint64_t weight_uploaded_bytes;
+    // Current weight-cache residency.
+    uint64_t weight_live_allocations;
+    uint64_t weight_live_bytes;
+    uint64_t weight_duplicate_warnings;
 };
 
 GGML_BACKEND_API ggml_backend_t             ggml_backend_hrx_init(size_t device);

@@ -25,6 +25,7 @@ struct ggml_hrx_loom_jit_amdgpu;
 namespace ggml::hrx {
 
 class KernelExecutableCache;
+struct CompileTraceExecution;
 struct KernelExecutable;
 class TransientArena;
 class HostBufferRegistry;
@@ -45,6 +46,7 @@ struct GraphReplayStreamState {
 
     void mark_stream_synchronized();
     void add_host_writeback(void * host_destination, const void * mapped_source, size_t size, hrx_buffer_t buffer);
+    bool has_pending_host_writebacks() const;
     void clear();
 
   private:
@@ -62,7 +64,24 @@ struct CommandProgramExecutionContext {
     HostWeightCache *       host_weights       = nullptr;
     HostBufferRegistry *    host_buffers       = nullptr;
     GraphReplayStreamState * graph_replay_state = nullptr;
+    CompileTraceExecution * compile_trace = nullptr;
 };
+
+struct CommandProgramWeightDemand {
+    CommandBinding   request;
+    HostWeightSource source;
+    bool             requires_materialization = false;
+};
+
+struct CommandProgramWeightDemands {
+    std::vector<CommandProgramWeightDemand> weights;
+    Status                                  status;
+
+    bool valid() const { return status.success(); }
+};
+
+CommandProgramWeightDemands collect_command_program_weight_demands(const CommandProgram &         commands,
+                                                                  const CommandProgramBindings & bindings);
 
 struct PreparedCommandBinding {
     CommandBinding    binding;

@@ -723,10 +723,16 @@ static bool common_mul_mat_swiglu_is_generic_tiled_pair_route(const MulMatSwiGLU
         return false;
     }
 
-    const bool pack_q4 = match.token_count <= 5 && match.output_size % 64 == 0 &&
-                         match.gate_weight->alias_source.value < 0 && match.up_weight->alias_source.value < 0 &&
-                         match.gate_format == CommonMulMatWeightFormat::Q4K &&
-                         match.up_format == CommonMulMatWeightFormat::Q4K;
+    const bool has_few_tokens = match.token_count <= 5;
+    const bool has_aligned_output = match.output_size % 64 == 0;
+    const bool has_direct_gate = match.gate_weight->alias_source.value < 0;
+    const bool has_direct_up = match.up_weight->alias_source.value < 0;
+    const bool has_q4_gate = match.gate_format == CommonMulMatWeightFormat::Q4K;
+    const bool has_q4_up = match.up_format == CommonMulMatWeightFormat::Q4K;
+    const bool can_transform_gate = dispatch_weight_layout_eligible(*match.gate_weight);
+    const bool can_transform_up = dispatch_weight_layout_eligible(*match.up_weight);
+    const bool pack_q4 = has_few_tokens && has_aligned_output && has_direct_gate && has_direct_up &&
+                         has_q4_gate && has_q4_up && can_transform_gate && can_transform_up;
     const bool use_q8 = pack_q4;
     const bool use_direct_dot = match.token_count <= 5 && match.input_size % 256 == 0;
     return !use_q8 && !use_direct_dot && match.token_count >= 2;
@@ -958,10 +964,16 @@ static bool match_mul_mat_swiglu_dispatch(const DispatchMatchContext & context, 
         }
     }
 
-    const bool pack_q4 = match.token_count <= 5 && match.output_size % 64 == 0 &&
-                         match.gate_weight->alias_source.value < 0 && match.up_weight->alias_source.value < 0 &&
-                         match.gate_format == CommonMulMatWeightFormat::Q4K &&
-                         match.up_format == CommonMulMatWeightFormat::Q4K;
+    const bool has_few_tokens = match.token_count <= 5;
+    const bool has_aligned_output = match.output_size % 64 == 0;
+    const bool has_direct_gate = match.gate_weight->alias_source.value < 0;
+    const bool has_direct_up = match.up_weight->alias_source.value < 0;
+    const bool has_q4_gate = match.gate_format == CommonMulMatWeightFormat::Q4K;
+    const bool has_q4_up = match.up_format == CommonMulMatWeightFormat::Q4K;
+    const bool can_transform_gate = dispatch_weight_layout_eligible(*match.gate_weight);
+    const bool can_transform_up = dispatch_weight_layout_eligible(*match.up_weight);
+    const bool pack_q4 = has_few_tokens && has_aligned_output && has_direct_gate && has_direct_up &&
+                         has_q4_gate && has_q4_up && can_transform_gate && can_transform_up;
     const bool use_q8 = pack_q4;
     const CommonActivationPublicationDemand q8_demand =
         use_q8 ? select_swiglu_q8_publication(context, match) : CommonActivationPublicationDemand{};

@@ -20,6 +20,7 @@ struct GraphSupportResult {
 struct GraphExecutionResult {
     enum ggml_status code = GGML_STATUS_FAILED;
     Status           status;
+    HrxGraphReplayEvent graph_replay_event = HrxGraphReplayEvent::Disabled;
 
     bool success() const { return code == GGML_STATUS_SUCCESS && status.success(); }
 };
