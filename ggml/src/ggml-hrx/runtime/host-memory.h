@@ -11,7 +11,6 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
-#include <vector>
 
 typedef struct hrx_buffer_s * hrx_buffer_t;
 typedef struct hrx_device_s * hrx_device_t;
@@ -147,9 +146,6 @@ class HostWeightCache {
 
     mutable std::mutex                                                                    mutex_;
     std::unordered_map<SourceKey, std::shared_ptr<HostWeightLease::Entry>, SourceKeyHash> entries_;
-    // Size-keyed scratch is overwritten on each use and is not a source-indexed representation cache.
-    std::unordered_map<size_t, std::vector<uint8_t>> q6_pack_scratch_;
-    size_t q6_pack_scratch_bytes_ = 0;
     HostWeightCacheStats                                                                  stats_;
     size_t fail_cold_after_ = SIZE_MAX;
 };

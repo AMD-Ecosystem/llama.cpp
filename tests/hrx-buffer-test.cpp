@@ -605,7 +605,7 @@ static void run_host_weight_cache_checks(ggml_backend_hrx_context * context) {
     REQUIRE(weight_stats.allocation_count == 2);
 }
 
-static void run_q6_pack_scratch_checks(ggml_backend_hrx_context * context) {
+static void run_weight_layout_warning_checks(ggml_backend_hrx_context * context) {
     constexpr size_t weight_bytes = 64 * 210;
     std::vector<uint8_t> host(weight_bytes, 0x5a);
     ggml::hrx::HostTransferManager transfers;
@@ -624,26 +624,6 @@ static void run_q6_pack_scratch_checks(ggml_backend_hrx_context * context) {
 
     auto first = weights.acquire(context->device->device, context->stream, transfers, source);
     REQUIRE(first.valid());
-    std::vector<uint8_t> downloaded(weight_bytes);
-    require_hrx_status(hrx_synchronous_d2h(context->device->device, first.lease.buffer(), 0,
-                                           downloaded.data(), downloaded.size()));
-    for (uint8_t byte : downloaded) {
-        REQUIRE(byte == 0x5a);
-    }
-
-    first.lease = {};
-    REQUIRE(weights.stats().allocation_count == 1);
-    std::fill(host.begin(), host.end(), 0xa5);
-    source.generation = 2;
-    auto second = weights.acquire(context->device->device, context->stream, transfers, source);
-    REQUIRE(second.valid());
-    require_hrx_status(hrx_synchronous_d2h(context->device->device, second.lease.buffer(), 0,
-                                           downloaded.data(), downloaded.size()));
-    for (uint8_t byte : downloaded) {
-        REQUIRE(byte == 0xa5);
-    }
-    REQUIRE(weights.stats().allocation_count == 2);
-
     source.layout = ggml::hrx::kNativeWeightLayout;
     auto native = weights.acquire(context->device->device, context->stream, transfers, source);
     REQUIRE(native.valid());
@@ -652,7 +632,7 @@ static void run_q6_pack_scratch_checks(ggml_backend_hrx_context * context) {
     REQUIRE(alias.valid());
     REQUIRE(alias.lease.buffer() == native.lease.buffer());
     REQUIRE(weights.stats().duplicate_warnings == 1);
-    source.generation = 3;
+    source.generation = 2;
     auto changed_native = weights.acquire(context->device->device, context->stream, transfers, source);
     REQUIRE(changed_native.valid());
     REQUIRE(weights.stats().duplicate_warnings == 1);
@@ -660,7 +640,7 @@ static void run_q6_pack_scratch_checks(ggml_backend_hrx_context * context) {
     auto changed_packed = weights.acquire(context->device->device, context->stream, transfers, source);
     REQUIRE(changed_packed.valid());
     REQUIRE(weights.stats().duplicate_warnings == 2);
-    REQUIRE(weights.stats().allocation_count == 5);
+    REQUIRE(weights.stats().allocation_count == 4);
 }
 
 static void run_packed_weight_identity_checks(ggml_backend_hrx_context * context) {
@@ -764,9 +744,9 @@ static void register_hrx_buffer_cases(test_runner::Suite & suite) {
             run_host_weight_cache_checks(context);
         });
     });
-    suite.device_case("q6_pack_scratch", [] {
+    suite.device_case("weight_layout_warnings", [] {
         run_with_hrx_backend([](ggml_backend_t, ggml_backend_hrx_context * context) {
-            run_q6_pack_scratch_checks(context);
+            run_weight_layout_warning_checks(context);
         });
     });
     suite.device_case("packed_weight_identity", [] {

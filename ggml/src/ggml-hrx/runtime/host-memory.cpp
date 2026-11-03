@@ -23,7 +23,6 @@ namespace {
 
 static constexpr size_t kMaxInlineUploadBytes = 63 * 1024;
 static constexpr size_t kLargeHostUploadBytes = 1024 * 1024;
-static constexpr size_t kQ6PackScratchLimitBytes = 64 * 1024 * 1024;
 
 struct SymmetricI4Block {
     std::array<ggml_fp16_t, 8>             scales   = {};
@@ -1476,25 +1475,10 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
         --fail_cold_after_;
     }
 
-    const bool q6_packed = source.layout == kQ6KPackedK256Row64ScaleRowLayout;
-    const bool scratch_fits = materialized_length <= kQ6PackScratchLimitBytes;
-    auto scratch = q6_pack_scratch_.find(materialized_length);
-    const bool scratch_exists = scratch != q6_pack_scratch_.end();
-    const bool scratch_has_room = materialized_length <= kQ6PackScratchLimitBytes - q6_pack_scratch_bytes_;
-    const bool use_scratch = q6_packed && scratch_fits && (scratch_exists || scratch_has_room);
-    const bool create_scratch = use_scratch && !scratch_exists;
-    if (create_scratch) {
-        scratch = q6_pack_scratch_.emplace(materialized_length, std::vector<uint8_t>{}).first;
-        q6_pack_scratch_bytes_ += materialized_length;
-    }
-
     const void *         upload_data = nullptr;
     size_t               upload_size = 0;
     std::vector<uint8_t> transformed;
-    // Budget 64 MiB of host scratch across first-use materializations. The Q6 packer
-    // writes every output byte, and the cache lock covers packing and upload.
-    std::vector<uint8_t> & output = use_scratch ? scratch->second : transformed;
-    result.status = materialize_weight(source, upload_data, upload_size, output);
+    result.status = materialize_weight(source, upload_data, upload_size, transformed);
     if (!result.status.success()) {
         return result;
     }
@@ -1572,8 +1556,6 @@ void HostWeightCache::clear() {
     entries_.clear();
     stats_.allocation_count = 0;
     stats_.resident_bytes = 0;
-    q6_pack_scratch_.clear();
-    q6_pack_scratch_bytes_ = 0;
 }
 
 HostStagingBuffer::~HostStagingBuffer() {
