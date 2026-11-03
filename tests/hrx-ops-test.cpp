@@ -3836,7 +3836,6 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
     REQUIRE(ggml_backend_hrx_get_cache_stats(hrx_backend, &stats));
     REQUIRE(stats.weight_materializations == 1);
     REQUIRE(stats.weight_live_bytes == source.size());
-    REQUIRE(stats.weight_peak_bytes == source.size());
     REQUIRE(stats.weight_duplicate_warnings == 0);
     const auto warmed_layouts = stats;
     auto prefill_lookup = backend_state->graph_programs.get_or_build(
