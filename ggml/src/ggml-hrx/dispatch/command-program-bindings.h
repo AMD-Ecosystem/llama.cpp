@@ -57,7 +57,7 @@ class CommandProgramBindings {
     static CommandProgramBindings from_bindings(std::vector<CommandProgramBinding> bindings,
                                                 const Status &                     errors = {});
 
-    const CommandProgramBinding * find(ValueId value) const;
+    const CommandProgramBinding * find_by_value(ValueId value) const;
     const CommandProgramBinding * find(const CommandBinding & request) const;
 
     const std::vector<CommandProgramBinding> & bindings() const { return bindings_; }

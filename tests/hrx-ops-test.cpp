@@ -3607,7 +3607,7 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
         }
         auto bindings = ggml::hrx::CommandProgramBindings::from_bindings(std::move(external));
         REQUIRE(bindings.valid());
-        const auto * weight_binding = bindings.find(weight_value->id);
+        const auto * weight_binding = bindings.find_by_value(weight_value->id);
         REQUIRE(weight_binding != nullptr);
         REQUIRE(weight_binding->source_host_data == source_binding.source_host_data);
         REQUIRE(weight_binding->offset == source_binding.offset);
@@ -4096,7 +4096,7 @@ static void run_mixed_weight_layout_program_case(ggml_type weight_type) {
     REQUIRE(bindings.valid());
     const auto * ids_value = values.find_tensor(hrx_ids);
     REQUIRE(ids_value != nullptr);
-    const auto * ids_binding = bindings.find(ids_value->id);
+    const auto * ids_binding = bindings.find_by_value(ids_value->id);
     REQUIRE(ids_binding != nullptr && !ids_binding->weight);
     const auto & selected = lookup.program->commands();
     bool found_packed_weight_request = false;

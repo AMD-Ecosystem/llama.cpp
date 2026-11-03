@@ -1115,7 +1115,7 @@ static Status rebind_prepared_host_staging(const CommandProgramExecutionContext 
                                            PreparedCommandProgram &               prepared) {
     Status status;
     for (HostStagingBuffer & staging : prepared.host_staging) {
-        const CommandProgramBinding * binding = bindings.find(ValueId(staging.value));
+        const CommandProgramBinding * binding = bindings.find_by_value(ValueId(staging.value));
         if (binding == nullptr || binding->host_data == nullptr || binding->length != staging.length ||
             binding->offset > binding->capacity || binding->length > binding->capacity - binding->offset) {
             status.log("live host binding does not match prepared value %d", staging.value);

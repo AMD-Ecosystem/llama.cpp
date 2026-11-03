@@ -47,7 +47,7 @@ CommandProgramBindings CommandProgramBindings::from_bindings(std::vector<Command
     return result;
 }
 
-const CommandProgramBinding * CommandProgramBindings::find(ValueId value) const {
+const CommandProgramBinding * CommandProgramBindings::find_by_value(ValueId value) const {
     for (const CommandProgramBinding & binding : bindings_) {
         if (binding.value == value) {
             return &binding;

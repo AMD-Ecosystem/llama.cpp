@@ -1003,17 +1003,17 @@ static void run_graph_import_checks() {
         ggml::hrx::CommandProgramBindings::from_value_map(imported.graph.values());
     REQUIRE(runtime_bindings.valid());
     REQUIRE(runtime_bindings.bindings().size() == 3);
-    const ggml::hrx::CommandProgramBinding * a_binding = runtime_bindings.find(a_value->id);
+    const ggml::hrx::CommandProgramBinding * a_binding = runtime_bindings.find_by_value(a_value->id);
     REQUIRE(a_binding != nullptr);
     REQUIRE(a_binding->buffer == dummy_hrx_buffer(0x1000));
     REQUIRE(a_binding->offset == 0);
     REQUIRE(a_binding->length == a_value->byte_count);
-    const ggml::hrx::CommandProgramBinding * b_binding = runtime_bindings.find(b_value->id);
+    const ggml::hrx::CommandProgramBinding * b_binding = runtime_bindings.find_by_value(b_value->id);
     REQUIRE(b_binding != nullptr);
     REQUIRE(b_binding->buffer == dummy_hrx_buffer(0x1800));
     REQUIRE(b_binding->offset == 0);
     REQUIRE(b_binding->length == b_value->byte_count);
-    REQUIRE(runtime_bindings.find(ggml::hrx::ValueId(123456)) == nullptr);
+    REQUIRE(runtime_bindings.find_by_value(ggml::hrx::ValueId(123456)) == nullptr);
 
     const auto runtime_hash = ggml::hrx::command_program_bindings_hash(runtime_bindings);
 
@@ -1160,7 +1160,7 @@ static void run_graph_import_checks() {
     const ggml::hrx::CommandProgramBindings host_bindings =
         ggml::hrx::CommandProgramBindings::from_value_map(host_values);
     REQUIRE(host_bindings.valid());
-    const ggml::hrx::CommandProgramBinding * host_binding = host_bindings.find(a_value->id);
+    const ggml::hrx::CommandProgramBinding * host_binding = host_bindings.find_by_value(a_value->id);
     REQUIRE(host_binding != nullptr);
     REQUIRE(host_binding->buffer == nullptr);
     REQUIRE(host_binding->host_data == host_storage.data());
@@ -1172,7 +1172,7 @@ static void run_graph_import_checks() {
     REQUIRE(host_values.bind_buffer(a_value->id, staging_value_binding));
     const auto staging_bindings = ggml::hrx::CommandProgramBindings::from_value_map(host_values);
     REQUIRE(staging_bindings.valid());
-    const auto * staging_binding = staging_bindings.find(a_value->id);
+    const auto * staging_binding = staging_bindings.find_by_value(a_value->id);
     REQUIRE(staging_binding != nullptr);
     REQUIRE(staging_binding->host_data == host_storage.data());
     REQUIRE(staging_binding->source_host_data == nullptr);
@@ -11169,7 +11169,7 @@ static void run_alias_value_import_checks() {
     const ggml::hrx::CommandProgramBindings bindings =
         ggml::hrx::CommandProgramBindings::from_value_map(imported.graph.values());
     REQUIRE(bindings.valid());
-    const ggml::hrx::CommandProgramBinding * view_binding = bindings.find(view_value->id);
+    const ggml::hrx::CommandProgramBinding * view_binding = bindings.find_by_value(view_value->id);
     REQUIRE(view_binding != nullptr);
     REQUIRE(view_binding->buffer == dummy_hrx_buffer(0x4000));
     REQUIRE(view_binding->offset == 128 + 2 * sizeof(float));
@@ -11220,7 +11220,7 @@ static void run_alias_value_import_checks() {
     const ggml::hrx::CommandProgramBindings internal_bindings =
         ggml::hrx::CommandProgramBindings::from_value_map(internal_imported.graph.values());
     REQUIRE(internal_bindings.valid());
-    const ggml::hrx::CommandProgramBinding * internal_view_binding = internal_bindings.find(internal_view_value->id);
+    const ggml::hrx::CommandProgramBinding * internal_view_binding = internal_bindings.find_by_value(internal_view_value->id);
     REQUIRE(internal_view_binding != nullptr);
     REQUIRE(internal_view_binding->buffer == dummy_hrx_buffer(0x5000));
     REQUIRE(internal_view_binding->offset == 256 + internal_source->nb[1]);
@@ -11743,7 +11743,7 @@ static void run_zero_output_unused_weight_staging(bool direct_execution) {
     }
     auto bindings = ggml::hrx::CommandProgramBindings::from_bindings(std::move(external_bindings));
     REQUIRE(bindings.valid());
-    REQUIRE(bindings.find(unused_value->id) != nullptr);
+    REQUIRE(bindings.find_by_value(unused_value->id) != nullptr);
     const ggml::hrx::CommandProgramExecutionContext execution_context = {
         state->device->device, state->stream, state->device->architecture.c_str(), &corpus,
         &state->kernel_executables, &state->transient_arena, &state->host_transfers,
@@ -12019,7 +12019,7 @@ static void run_chained_dispatch_requires_transients() {
     const ggml::hrx::CommandProgramBindings bindings =
         ggml::hrx::CommandProgramBindings::from_value_map(imported.graph.values());
     REQUIRE(bindings.valid());
-    REQUIRE(bindings.find(sum_value->id) == nullptr);
+    REQUIRE(bindings.find_by_value(sum_value->id) == nullptr);
 
     const ggml::hrx::ResolvedCommandProgram resolved = ggml::hrx::resolve_command_program_bindings(commands, bindings);
     REQUIRE(!resolved.valid());
