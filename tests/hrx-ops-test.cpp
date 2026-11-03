@@ -2861,11 +2861,11 @@ static void run_imported_native_weight_case() {
     ggml_backend_tensor_set(input, input_data.data(), 0, input_data.size() * sizeof(float));
     ggml_backend_tensor_set(reshaped_input, reshaped_input_data.data(), 0, reshaped_input_data.size() * sizeof(float));
 
-    ggml_backend_hrx_imported_region region = {};
-    REQUIRE(ggml_backend_hrx_get_imported_region(weight, region));
+    ggml_backend_hrx_retained_region region = {};
+    REQUIRE(ggml_backend_hrx_get_retained_region(weight, region));
     REQUIRE(region.offset == 0);
-    ggml_backend_hrx_imported_region alias_region = {};
-    REQUIRE(ggml_backend_hrx_get_imported_region(weight_alias, alias_region));
+    ggml_backend_hrx_retained_region alias_region = {};
+    REQUIRE(ggml_backend_hrx_get_retained_region(weight_alias, alias_region));
     REQUIRE(alias_region.identity == region.identity);
     REQUIRE(alias_region.offset == region.offset);
     REQUIRE(alias_region.length == region.length);
@@ -3137,7 +3137,6 @@ static void run_weight_persistence_sequence_case() {
         for (const auto & warm : { native, packed }) {
             REQUIRE(warm.weight_materializations == packed_first.weight_materializations);
             REQUIRE(warm.weight_uploaded_bytes == packed_first.weight_uploaded_bytes);
-            REQUIRE(warm.weight_peak_bytes == packed_first.weight_peak_bytes);
             REQUIRE(warm.weight_duplicate_warnings == packed_first.weight_duplicate_warnings);
             REQUIRE(warm.prepared_program_builds == packed_first.prepared_program_builds);
             REQUIRE(warm.prepared_program_hits > packed_first.prepared_program_hits);
@@ -3552,13 +3551,13 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
         ggml::hrx::ValueBufferBinding source_binding;
         REQUIRE(ggml_backend_hrx_resolve_value_buffer(hrx_weight, source_binding));
         REQUIRE(source_binding.source_host_data != nullptr);
-        REQUIRE(source_binding.source_capacity >= source.size());
+        REQUIRE(source_binding.capacity >= source.size());
         REQUIRE((source_binding.buffer != nullptr) == coherent_subregion);
         REQUIRE((source_binding.host_data != nullptr) == !coherent_subregion);
         if (coherent_subregion) {
             REQUIRE(source_binding.source_host_data == coherent_owner_base);
-            REQUIRE(source_binding.source_offset == 256);
-            REQUIRE(source_binding.source_capacity == source.size() + 256);
+            REQUIRE(source_binding.offset == 256);
+            REQUIRE(source_binding.capacity == source.size() + 256);
         }
         ggml_backend_hrx_cache_stats before_stats = {};
         REQUIRE(ggml_backend_hrx_get_cache_stats(hrx_backend, &before_stats));
@@ -3611,8 +3610,8 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
         const auto * weight_binding = bindings.find(weight_value->id);
         REQUIRE(weight_binding != nullptr);
         REQUIRE(weight_binding->source_host_data == source_binding.source_host_data);
-        REQUIRE(weight_binding->source_offset == source_binding.source_offset);
-        REQUIRE(weight_binding->source_capacity == source_binding.source_capacity);
+        REQUIRE(weight_binding->offset == source_binding.offset);
+        REQUIRE(weight_binding->capacity == source_binding.capacity);
         const auto & corpus = ggml::hrx::get_qwen_kernel_corpus();
         const ggml::hrx::CommandProgramExecutionContext execution_context = {
             backend_state->device->device, backend_state->stream, backend_state->device->architecture.c_str(),
@@ -3814,7 +3813,6 @@ static void run_imported_packed_weight_case(ggml_type weight_type,
         REQUIRE(stats.weight_uploaded_bytes == warmed_layouts.weight_uploaded_bytes);
         REQUIRE(stats.weight_live_allocations == warmed_layouts.weight_live_allocations);
         REQUIRE(stats.weight_live_bytes == warmed_layouts.weight_live_bytes);
-        REQUIRE(stats.weight_peak_bytes == warmed_layouts.weight_peak_bytes);
         REQUIRE(stats.weight_duplicate_warnings == warmed_layouts.weight_duplicate_warnings);
     }
     REQUIRE(stats.weight_duplicate_warnings == 1);
@@ -4024,7 +4022,6 @@ static void run_mixed_weight_layout_program_case(ggml_type weight_type) {
     REQUIRE(first.duplicate_warnings == before.duplicate_warnings + 1);
     REQUIRE(first.allocation_count == 2);
     REQUIRE(first.resident_bytes == 2 * weight.size());
-    REQUIRE(first.peak_resident_bytes == first.resident_bytes);
     ggml_backend_hrx_cache_stats public_first = {};
     REQUIRE(ggml_backend_hrx_get_cache_stats(backend, &public_first));
     REQUIRE(public_first.weight_duplicate_warnings == first.duplicate_warnings);

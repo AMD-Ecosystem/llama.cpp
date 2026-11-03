@@ -824,8 +824,8 @@ static CommandProgramWeightDemands collect_weight_demands(
                 demand.source.host_data = binding->source_host_data;
                 demand.source.identity = binding->identity;
                 demand.source.generation = binding->generation;
-                demand.source.capacity = binding->source_capacity;
-                demand.source.offset = binding->source_offset;
+                demand.source.capacity = binding->capacity;
+                demand.source.offset = binding->offset;
                 demand.source.length = transformed ? request.source_length : binding->length;
                 demand.source.materialized_length = transformed ? request.length : binding->length;
                 demand.source.layout = request.layout;

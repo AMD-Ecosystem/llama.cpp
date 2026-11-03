@@ -491,7 +491,7 @@ void GraphProgram::bind_prepared_graph(const ggml_cgraph & graph, const GraphPro
         if (retained_source) {
             // Mutable inputs may rebind under one graph UID; immutable weight bindings are trusted.
             mutable_source_watches_.push_back({ match.external_bindings[i].tensor, binding.identity,
-                                               binding.source_offset, binding.length });
+                                               binding.offset, binding.length });
         }
     }
     // The full binding lookup established this graph instance's physical resources.
@@ -512,7 +512,7 @@ bool GraphProgram::can_use_prepared_fast_path(const ggml_cgraph & graph) const {
 bool GraphProgram::mutable_sources_current() const {
     std::lock_guard<std::mutex> lock(prepared_mutex_);
     for (const MutableSourceWatch & watch : mutable_source_watches_) {
-        ggml_backend_hrx_imported_region region = {};
+        ggml_backend_hrx_retained_region region = {};
         if (!ggml_backend_hrx_get_retained_region(watch.tensor, region)) {
             return false;
         }

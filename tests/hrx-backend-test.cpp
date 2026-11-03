@@ -1154,8 +1154,6 @@ static void run_graph_import_checks() {
     host_value_binding.capacity     = host_storage.size();
     host_value_binding.weight       = true;
     host_value_binding.source_host_data = host_storage.data();
-    host_value_binding.source_offset = 16;
-    host_value_binding.source_capacity = host_storage.size();
     ggml::hrx::ValueMap host_values = imported.graph.values();
     REQUIRE(host_values.bind_buffer(a_value->id, host_value_binding));
     REQUIRE(host_values.bind_buffer(out_value->id, { dummy_hrx_buffer(0x5000), 0, out_value->byte_count }));
@@ -12316,7 +12314,7 @@ static void run_command_weight_demand_checks() {
     binding.generation = 20;
     binding.weight = true;
     binding.source_host_data = source.data();
-    binding.source_capacity = source.size();
+    binding.capacity = source.size();
 
     CommandBinding native = { "first-native", ValueId(1) };
     CommandBinding packed = native;
@@ -12385,13 +12383,13 @@ static void run_command_weight_demand_checks() {
     // Collect demand against the current source metadata and allocation eligibility.
     for (auto & next : current) {
         next.buffer = nullptr;
-        next.host_data = source.data() + 32;
+        next.host_data = source.data() + 16;
         next.identity = 30;
         next.generation = 40;
         next.length = 128;
         next.source_host_data = source.data() + 16;
-        next.source_offset = 32;
-        next.source_capacity = source.size() - 16;
+        next.offset = 32;
+        next.capacity = source.size() - 16;
     }
     const auto rebound = collect_command_program_weight_demands(
         commands, CommandProgramBindings::from_bindings(current));
@@ -12450,7 +12448,7 @@ static void run_command_weight_demand_validation_checks() {
     binding.length = source.size();
     binding.weight = true;
     binding.source_host_data = source.data();
-    binding.source_capacity = source.size();
+    binding.capacity = source.size();
     CommandBinding valid = { "valid", ValueId(1) };
     valid.layout = "test-packed";
     valid.source_type = GGML_TYPE_F32;

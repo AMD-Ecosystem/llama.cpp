@@ -8,7 +8,6 @@
 #include "ggml.h"
 #include "hrx-interop-utils.h"
 #include "runtime/host-memory.h"
-#include "runtime/command-program-executor.h"
 #include "testing_suite.h"
 
 #include <algorithm>
@@ -169,9 +168,8 @@ static void run_host_buffer_checks(ggml_backend_t backend) {
     REQUIRE(direct_binding.host_data == nullptr);
     REQUIRE(direct_binding.offset == 0);
     REQUIRE(direct_binding.length == ggml_nbytes(direct_tensor));
-    ggml_backend_hrx_imported_region retained_region = {};
+    ggml_backend_hrx_retained_region retained_region = {};
     REQUIRE(ggml_backend_hrx_get_retained_region(host_tensor, retained_region));
-    REQUIRE(!ggml_backend_hrx_get_imported_region(host_tensor, retained_region));
     const uint32_t host_replacement = 0xabcdef01;
     ggml_backend_tensor_set(host_tensor, &host_replacement, 0, sizeof(host_replacement));
     REQUIRE(*static_cast<uint32_t *>(host_tensor->data) == host_replacement);
@@ -248,18 +246,18 @@ static void run_imported_buffer_checks(ggml_backend_t backend) {
     REQUIRE(ggml_backend_tensor_alloc(imported, second, source.data() + 32) == GGML_STATUS_SUCCESS);
     ggml_backend_buffer_set_usage(imported, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
 
-    ggml_backend_hrx_imported_region first_region = {};
-    ggml_backend_hrx_imported_region second_region = {};
-    REQUIRE(ggml_backend_hrx_get_imported_region(first, first_region));
-    REQUIRE(ggml_backend_hrx_get_imported_region(second, second_region));
+    ggml_backend_hrx_retained_region first_region = {};
+    ggml_backend_hrx_retained_region second_region = {};
+    REQUIRE(ggml_backend_hrx_get_retained_region(first, first_region));
+    REQUIRE(ggml_backend_hrx_get_retained_region(second, second_region));
     REQUIRE(first_region.identity == second_region.identity);
     REQUIRE(first_region.offset == 0);
     REQUIRE(second_region.offset == 32 * sizeof(uint32_t));
 
     ggml_tensor * view = ggml_view_1d(ggml, second, 8, 4 * sizeof(uint32_t));
     REQUIRE(ggml_backend_view_init(view) == GGML_STATUS_SUCCESS);
-    ggml_backend_hrx_imported_region view_region = {};
-    REQUIRE(ggml_backend_hrx_get_imported_region(view, view_region));
+    ggml_backend_hrx_retained_region view_region = {};
+    REQUIRE(ggml_backend_hrx_get_retained_region(view, view_region));
     REQUIRE(view_region.identity == second_region.identity);
     REQUIRE(view_region.offset == second_region.offset + 4 * sizeof(uint32_t));
     REQUIRE(view_region.length == 8 * sizeof(uint32_t));
@@ -566,26 +564,12 @@ static void run_host_weight_cache_checks(ggml_backend_hrx_context * context) {
     REQUIRE(transfer_stats.uploads == 3);
     REQUIRE(transfer_stats.upload_bytes == 96);
 
-    ggml::hrx::RecordedCommandGraph recorded;
-    hrx_buffer_retain(first.lease.buffer());
-    recorded.retained_buffers.push_back(first.lease.buffer());
     weights.clear();
     weight_stats = weights.stats();
     REQUIRE(weight_stats.hits == 1);
     REQUIRE(weight_stats.misses == 3);
     REQUIRE(weight_stats.allocation_count == 0);
     REQUIRE(weight_stats.resident_bytes == 0);
-    REQUIRE(weight_stats.peak_resident_bytes == 96);
-    first.lease = {};
-    second.lease = {};
-    slice.lease = {};
-    next_generation.lease = {};
-    // Recording retention keeps the buffer valid independently of cache residency and weight leases.
-    std::array<uint8_t, 32> retained_bytes = {};
-    require_hrx_status(hrx_synchronous_d2h(context->device->device, recorded.retained_buffers.front(), 0,
-                                          retained_bytes.data(), retained_bytes.size()));
-    REQUIRE(retained_bytes == first_bytes);
-    recorded = {};
 
     source.layout = ggml::hrx::kNativeWeightLayout;
     source.generation = 3;
@@ -619,7 +603,6 @@ static void run_host_weight_cache_checks(ggml_backend_hrx_context * context) {
     REQUIRE(weight_stats.hits == 4);
     REQUIRE(weight_stats.misses == 5);
     REQUIRE(weight_stats.allocation_count == 2);
-    REQUIRE(weight_stats.peak_resident_bytes == 96);
 }
 
 static void run_q6_pack_scratch_checks(ggml_backend_hrx_context * context) {
@@ -660,7 +643,6 @@ static void run_q6_pack_scratch_checks(ggml_backend_hrx_context * context) {
         REQUIRE(byte == 0xa5);
     }
     REQUIRE(weights.stats().allocation_count == 2);
-    REQUIRE(weights.stats().peak_resident_bytes == 2 * weight_bytes);
 
     source.layout = ggml::hrx::kNativeWeightLayout;
     auto native = weights.acquire(context->device->device, context->stream, transfers, source);

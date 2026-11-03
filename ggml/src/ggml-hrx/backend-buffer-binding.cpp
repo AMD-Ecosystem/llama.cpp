@@ -77,8 +77,6 @@ bool ggml_backend_hrx_resolve_value_buffer(const ggml_tensor * tensor, ggml::hrx
         // Standard GGUF weights are immutable, so their native copy can use the shared weight cache.
         // Layout eligibility remains a separate import-only decision.
         binding.source_host_data = base;
-        binding.source_offset = host_offset;
-        binding.source_capacity = capacity;
         return true;
     }
     ggml_backend_buffer_t buffer = tensor->view_src != nullptr ? tensor->view_src->buffer : tensor->buffer;
@@ -101,12 +99,10 @@ bool ggml_backend_hrx_resolve_value_buffer(const ggml_tensor * tensor, ggml::hrx
     const bool retained_host_source = is_imported || is_host_buffer;
     binding.source_host_data = retained_host_source ?
         (shared_host_region ? context->retained_base : context->base) : nullptr;
-    binding.source_offset = binding.offset;
-    binding.source_capacity = binding.capacity;
     return true;
 }
 
-bool ggml_backend_hrx_get_retained_region(const ggml_tensor * tensor, ggml_backend_hrx_imported_region & region) {
+bool ggml_backend_hrx_get_retained_region(const ggml_tensor * tensor, ggml_backend_hrx_retained_region & region) {
     ggml_backend_hrx_buffer_context * context = nullptr;
     size_t                            offset  = 0;
     const bool hrx_bound = ggml_backend_hrx_tensor_binding(tensor, &context, &offset);
@@ -117,7 +113,6 @@ bool ggml_backend_hrx_get_retained_region(const ggml_tensor * tensor, ggml_backe
             return false;
         }
         region.identity   = context->identity;
-        region.generation = context->generation;
         region.offset     = context->retained_base != nullptr ? context->physical_offset + offset : offset;
     } else {
         ggml::hrx::ValueBufferBinding binding;
@@ -127,18 +122,10 @@ bool ggml_backend_hrx_get_retained_region(const ggml_tensor * tensor, ggml_backe
             return false;
         }
         region.identity = binding.identity;
-        region.generation = binding.generation;
         region.offset = binding.offset;
     }
     region.length     = ggml_nbytes(tensor);
     return true;
-}
-
-bool ggml_backend_hrx_get_imported_region(const ggml_tensor * tensor, ggml_backend_hrx_imported_region & region) {
-    ggml_backend_hrx_buffer_context * context = nullptr;
-    size_t offset = 0;
-    const bool bound = ggml_backend_hrx_tensor_binding(tensor, &context, &offset);
-    return bound && context->imported && ggml_backend_hrx_get_retained_region(tensor, region);
 }
 
 bool ggml_backend_hrx_weight_has_repackable_source(const ggml_tensor * tensor) {

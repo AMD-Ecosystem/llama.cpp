@@ -72,7 +72,6 @@ struct HostWeightCacheStats {
     size_t   materialized_bytes = 0;
     size_t   allocation_count = 0;
     size_t   resident_bytes   = 0;
-    size_t   peak_resident_bytes = 0;
     uint64_t duplicate_warnings = 0;
 };
 

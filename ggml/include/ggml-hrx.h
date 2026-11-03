@@ -14,12 +14,9 @@ struct ggml_backend_hrx_cache_stats {
     uint64_t weight_materializations;
     uint64_t weight_reuses;
     uint64_t weight_uploaded_bytes;
-    // Current weight-cache residency; peak bytes and materializations are cumulative.
+    // Current weight-cache residency.
     uint64_t weight_live_allocations;
     uint64_t weight_live_bytes;
-    uint64_t weight_peak_bytes;
-    uint64_t host_uploads;
-    uint64_t host_upload_bytes;
     uint64_t weight_duplicate_warnings;
 };
 

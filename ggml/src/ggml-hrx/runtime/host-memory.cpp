@@ -1519,7 +1519,6 @@ HostWeightAcquireResult HostWeightCache::acquire(hrx_device_t             device
     entries_.emplace(key, entry);
     ++stats_.allocation_count;
     stats_.resident_bytes += materialized_length;
-    stats_.peak_resident_bytes = std::max(stats_.peak_resident_bytes, stats_.resident_bytes);
     report_new_representation(key, *entry);
     ++stats_.misses;
     stats_.materialized_bytes += materialized_length;

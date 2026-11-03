@@ -400,10 +400,10 @@ static void backend_free(ggml_backend_t backend) {
         const ggml::hrx::HostWeightCacheStats weights = context->host_weights.stats();
         const ggml::hrx::HostTransferStats transfers = context->host_transfers.stats();
         GGML_LOG_INFO("ggml_hrx: weight_stats materializations=%" PRIu64 " reused=%" PRIu64
-                      " uploaded_bytes=%zu live_allocations=%zu live_bytes=%zu peak_bytes=%zu"
+                      " uploaded_bytes=%zu live_allocations=%zu live_bytes=%zu"
                       " host_uploads=%" PRIu64 " host_upload_bytes=%zu\n",
                       weights.misses, weights.hits, weights.materialized_bytes, weights.allocation_count,
-                      weights.resident_bytes, weights.peak_resident_bytes, transfers.uploads, transfers.upload_bytes);
+                      weights.resident_bytes, transfers.uploads, transfers.upload_bytes);
     }
     context->prepared_programs.clear();
     context->graph_programs.clear();
@@ -1337,7 +1337,6 @@ bool ggml_backend_hrx_get_cache_stats(ggml_backend_t backend, ggml_backend_hrx_c
     const ggml::hrx::GraphProgramCacheStats graph_stats = context->graph_programs.stats();
     const ggml::hrx::PreparedCommandProgramCacheStats prepared_stats = context->prepared_programs.stats();
     const ggml::hrx::HostWeightCacheStats weight_stats = context->host_weights.stats();
-    const ggml::hrx::HostTransferStats transfer_stats = context->host_transfers.stats();
     stats->graph_program_builds                                      = graph_stats.builds;
     stats->graph_program_hits                                        = graph_stats.hits;
     stats->prepared_program_builds = prepared_stats.builds;
@@ -1347,9 +1346,6 @@ bool ggml_backend_hrx_get_cache_stats(ggml_backend_t backend, ggml_backend_hrx_c
     stats->weight_uploaded_bytes = weight_stats.materialized_bytes;
     stats->weight_live_allocations = weight_stats.allocation_count;
     stats->weight_live_bytes = weight_stats.resident_bytes;
-    stats->weight_peak_bytes = weight_stats.peak_resident_bytes;
-    stats->host_uploads = transfer_stats.uploads;
-    stats->host_upload_bytes = transfer_stats.upload_bytes;
     stats->weight_duplicate_warnings = weight_stats.duplicate_warnings;
     return true;
 }

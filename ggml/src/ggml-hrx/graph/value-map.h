@@ -65,8 +65,6 @@ struct ValueBufferBinding {
     bool         weight     = false;
     // Retained host bytes can back a cached native weight even when the binding is directly addressable.
     const void * source_host_data = nullptr;
-    size_t       source_offset = 0;
-    size_t       source_capacity = 0;
 
     bool requires_materialization() const { return host_data != nullptr; }
 };

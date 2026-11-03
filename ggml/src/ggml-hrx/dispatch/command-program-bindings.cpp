@@ -88,8 +88,6 @@ CommandProgramBindingsHash command_program_bindings_hash(const CommandProgramBin
         mix_hash(hash, binding.weight ? 1 : 0);
         mix_hash(hash, binding.empty_value ? 1 : 0);
         mix_hash(hash, binding.source_host_data != nullptr ? 1 : 0);
-        mix_hash(hash, static_cast<uint64_t>(binding.source_offset));
-        mix_hash(hash, static_cast<uint64_t>(binding.source_capacity));
     }
     mix_hash(hash, static_cast<uint64_t>(bindings.bindings().size()));
     return { hash };

@@ -4,7 +4,7 @@
 
 HRX materializes imported host weights in the layout requested by the selected kernel and caches each result for the backend's lifetime. If one weight is materialized in two layouts, HRX warns about the duplicate allocations and their memory cost.
 
-To log residency totals, set `GGML_HRX_LOG_WEIGHT_STATS=1` and run `llama-bench -v`. HRX prints a `ggml_hrx: weight_stats` line when the backend is released, with materialization and reuse counts, cached allocations and bytes, peak cached bytes, and upload totals.
+To log residency totals, set `GGML_HRX_LOG_WEIGHT_STATS=1` and run `llama-bench -v`. HRX prints a `ggml_hrx: weight_stats` line when the backend is released, with materialization and reuse counts, cached allocations and bytes, and upload totals.
 
 ## Compilation diagnostics
 

@@ -26,8 +26,6 @@ struct CommandProgramBinding {
     bool         empty_value = false;
     // Retained host bytes are separate from the address used to bind a command.
     const void * source_host_data = nullptr;
-    size_t       source_offset    = 0;
-    size_t       source_capacity  = 0;
     // Materialized bindings are selected by the requesting command, not just by ValueId.
     std::string  layout = kNativeWeightLayout;
     ggml_type    layout_source_type = GGML_TYPE_COUNT;
@@ -44,8 +42,6 @@ inline CommandProgramBinding make_command_program_binding(
                                       buffer.generation, buffer.capacity, buffer.host_data, buffer.weight,
                                       empty_value };
     binding.source_host_data = buffer.source_host_data;
-    binding.source_offset = buffer.source_offset;
-    binding.source_capacity = buffer.source_capacity;
     return binding;
 }
 
