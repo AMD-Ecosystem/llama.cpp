@@ -1,6 +1,8 @@
 #include "backend-context.h"
 #include "backend-buffer-binding.h"
 #include "dispatch/dispatch-scheduler.h"
+#include "dispatch_registration/common/dispatch-gated-mul-mat-id.h"
+#include "dispatch_registration/common/dispatch-mul-mat-id.h"
 #include "dispatch_registration/common/dispatch-activation-publication.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
@@ -1519,6 +1521,8 @@ struct RoutedMoeGraph {
     ggml_tensor * gate_weight  = nullptr;
     ggml_tensor * up_weight    = nullptr;
     ggml_tensor * down_weight  = nullptr;
+    ggml_tensor * gate_output  = nullptr;
+    ggml_tensor * down_output  = nullptr;
     ggml_tensor * hidden_state = nullptr;
     ggml_tensor * norm_weight  = nullptr;
     ggml_tensor * output       = nullptr;
@@ -1526,7 +1530,9 @@ struct RoutedMoeGraph {
 
 static RoutedMoeGraph build_routed_moe_graph(ggml_context * ctx,
                                              ggml_type      down_weight_type,
-                                             bool           include_next_rmsnorm) {
+                                             bool           include_next_rmsnorm,
+                                             ggml_type      gate_weight_type = GGML_TYPE_Q4_K,
+                                             ggml_type      up_weight_type = GGML_TYPE_Q4_K) {
     RoutedMoeGraph    graph;
     constexpr int64_t token_count = 1;
     graph.logits                  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kQwenRouterExpertCount, token_count);
@@ -1538,9 +1544,9 @@ static RoutedMoeGraph build_routed_moe_graph(ggml_context * ctx,
 
     graph.input = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, kQwenHiddenSize, 1, token_count);
     graph.gate_weight =
-        ggml_new_tensor_3d(ctx, GGML_TYPE_Q4_K, kQwenHiddenSize, kQwenMoeIntermediate, kQwenRouterExpertCount);
+        ggml_new_tensor_3d(ctx, gate_weight_type, kQwenHiddenSize, kQwenMoeIntermediate, kQwenRouterExpertCount);
     graph.up_weight =
-        ggml_new_tensor_3d(ctx, GGML_TYPE_Q4_K, kQwenHiddenSize, kQwenMoeIntermediate, kQwenRouterExpertCount);
+        ggml_new_tensor_3d(ctx, up_weight_type, kQwenHiddenSize, kQwenMoeIntermediate, kQwenRouterExpertCount);
     graph.down_weight =
         ggml_new_tensor_3d(ctx, down_weight_type, kQwenMoeIntermediate, kQwenHiddenSize, kQwenRouterExpertCount);
     graph.hidden_state = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kQwenHiddenSize, token_count);
@@ -1558,6 +1564,8 @@ static RoutedMoeGraph build_routed_moe_graph(ggml_context * ctx,
     REQUIRE(glu != nullptr);
     ggml_tensor * down = ggml_mul_mat_id(ctx, graph.down_weight, glu, route_ids);
     REQUIRE(down != nullptr);
+    graph.gate_output = gate;
+    graph.down_output = down;
     ggml_tensor * weighted = ggml_mul(ctx, down, route_weights);
     REQUIRE(weighted != nullptr);
 
@@ -1590,6 +1598,116 @@ static RoutedMoeGraph build_routed_moe_graph(ggml_context * ctx,
     }
 
     return graph;
+}
+
+static void run_routed_codebook_admission_checks() {
+    ggml::hrx::DispatchRegistryBuilder pair_builder;
+    ggml::hrx::register_gated_mul_mat_id_dispatches(pair_builder);
+    const ggml::hrx::DispatchRegistry pair_registry = pair_builder.build();
+    ggml::hrx::DispatchRegistryBuilder plain_builder;
+    ggml::hrx::register_mul_mat_id_dispatches(plain_builder);
+    const ggml::hrx::DispatchRegistry plain_registry = plain_builder.build();
+    auto match_root = [](const ggml::hrx::Graph & graph, const ggml_tensor * root,
+                         const ggml::hrx::DispatchRegistry & registry, ggml::hrx::DispatchMatch & match) {
+        const size_t root_index = producer_index_for_tensor(graph, root);
+        std::vector<bool> covered(graph.nodes().size(), false);
+        ggml::hrx::CommandPlan plan;
+        const ggml::hrx::DispatchMatchContext context = {
+            graph, &graph.nodes()[root_index], root_index, covered, plan, next_plan_value(graph, plan), &registry,
+        };
+        return registry.match(context, match);
+    };
+    auto find_pair = [](const ggml::hrx::DispatchMatch & match) -> const ggml::hrx::Dispatch * {
+        for (const ggml::hrx::Dispatch & dispatch : match.dispatches) {
+            const std::string name = kernel_name_for_id(dispatch.kernel.kernel_id);
+            if (name.find("pair_input") != std::string::npos) {
+                return &dispatch;
+            }
+        }
+        return nullptr;
+    };
+
+    const std::array<ggml_type, 5> unsupported = {
+        GGML_TYPE_IQ1_S, GGML_TYPE_IQ1_M, GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ3_XXS,
+    };
+    for (const ggml_type format : unsupported) {
+        ggml_init_params params = {};
+        params.mem_size = 8 * 1024 * 1024;
+        params.no_alloc = true;
+        ggml_context * ctx = ggml_init(params);
+        REQUIRE(ctx != nullptr);
+        RoutedMoeGraph routed = build_routed_moe_graph(ctx, format, true, format, format);
+        ggml_cgraph * graph = ggml_new_graph(ctx);
+        REQUIRE(graph != nullptr);
+        ggml_tensor * residual = ggml_dup_tensor(ctx, routed.down_output);
+        REQUIRE(residual != nullptr);
+        ggml_tensor * postops = ggml_add(ctx, routed.down_output, residual);
+        REQUIRE(postops != nullptr);
+        ggml_build_forward_expand(graph, postops);
+        const ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+        REQUIRE(imported.valid());
+        ggml::hrx::DispatchMatch match;
+        if (format == GGML_TYPE_IQ3_XXS) {
+            REQUIRE(match_root(imported.graph, routed.gate_output, pair_registry, match));
+            const ggml::hrx::Dispatch * pair = find_pair(match);
+            REQUIRE(pair != nullptr);
+            REQUIRE(pair->bindings.size() == 7);
+        } else {
+            REQUIRE(!match_root(imported.graph, routed.gate_output, pair_registry, match));
+        }
+        ggml::hrx::DispatchMatch plain_match;
+        REQUIRE(!match_root(imported.graph, routed.gate_output, plain_registry, plain_match));
+        ggml::hrx::DispatchMatch postops_match;
+        REQUIRE(!match_root(imported.graph, routed.down_output, plain_registry, postops_match));
+        ggml_free(ctx);
+    }
+
+    for (const bool iq3_is_gate : { false, true }) {
+        ggml_init_params params = {};
+        params.mem_size = 8 * 1024 * 1024;
+        params.no_alloc = true;
+        ggml_context * ctx = ggml_init(params);
+        REQUIRE(ctx != nullptr);
+        const ggml_type gate_type = iq3_is_gate ? GGML_TYPE_IQ3_XXS : GGML_TYPE_Q4_K;
+        const ggml_type up_type = iq3_is_gate ? GGML_TYPE_Q4_K : GGML_TYPE_IQ3_XXS;
+        RoutedMoeGraph routed = build_routed_moe_graph(ctx, GGML_TYPE_Q4_K, false, gate_type, up_type);
+        ggml_cgraph * graph = ggml_new_graph(ctx);
+        REQUIRE(graph != nullptr);
+        ggml_build_forward_expand(graph, routed.output);
+        const ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+        REQUIRE(imported.valid());
+        ggml::hrx::DispatchMatch pair_match;
+        REQUIRE(match_root(imported.graph, routed.gate_output, pair_registry, pair_match));
+        const ggml::hrx::Dispatch * pair = find_pair(pair_match);
+        REQUIRE(pair != nullptr);
+        REQUIRE(pair->bindings.size() == 7);
+        ggml_free(ctx);
+    }
+
+    ggml_init_params params = {};
+    params.mem_size = 8 * 1024 * 1024;
+    params.no_alloc = true;
+    ggml_context * ctx = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+    RoutedMoeGraph routed = build_routed_moe_graph(ctx, GGML_TYPE_Q4_K, true);
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_tensor * residual = ggml_dup_tensor(ctx, routed.down_output);
+    REQUIRE(residual != nullptr);
+    ggml_tensor * postops = ggml_add(ctx, routed.down_output, residual);
+    REQUIRE(postops != nullptr);
+    ggml_build_forward_expand(graph, postops);
+    const ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+    ggml::hrx::DispatchMatch postops_match;
+    REQUIRE(match_root(imported.graph, routed.down_output, plain_registry, postops_match));
+    bool found_postops = false;
+    for (const ggml::hrx::Dispatch & dispatch : postops_match.dispatches) {
+        const std::string name = kernel_name_for_id(dispatch.kernel.kernel_id);
+        found_postops |= name.find("postops") != std::string::npos;
+    }
+    REQUIRE(found_postops);
+    ggml_free(ctx);
 }
 
 static void run_rmsnorm_support_checks() {
@@ -8513,6 +8631,7 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
     }
     suite.device_case("attention_postprocess.cpu_reference", [] { run_attention_postprocess_cpu_reference_case(); });
     suite.device_case("routed_moe.q4_k.next_rmsnorm", [] { run_routed_moe_cpu_reference_case(GGML_TYPE_Q4_K, true); });
+    suite.host_case("routed_moe.codebook_admission", [] { run_routed_codebook_admission_checks(); });
     suite.device_case("flash_attention.asymmetric", [] { run_asymmetric_flash_attention_cpu_reference_case(); });
     suite.device_case("routed_moe.q6_k", [] { run_routed_moe_cpu_reference_case(GGML_TYPE_Q6_K, false); });
     suite.device_case("decode_attention_qkv.scheduling", [] { run_decode_attention_qkv_scheduling_case(); });
