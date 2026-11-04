@@ -51,11 +51,13 @@ class GraphProgram {
                  std::string                     target,
                  std::unique_ptr<Graph>          graph,
                  std::unique_ptr<CommandProgram> commands,
-                 std::string                     command_shape);
+                 std::string                     command_shape,
+                 bool                            qwen27_one_layout = false);
 
     uint64_t uid() const { return uid_; }
 
     const std::string & target() const { return target_; }
+    bool qwen27_one_layout() const { return qwen27_one_layout_; }
 
     const std::string & command_shape() const { return command_shape_; }
 
@@ -87,6 +89,7 @@ class GraphProgram {
 
     uint64_t                        uid_ = 0;
     std::string                     target_;
+    bool                            qwen27_one_layout_ = false;
     std::unique_ptr<Graph>          graph_;
     std::unique_ptr<const CommandProgram> commands_;
     std::string                     command_shape_;
@@ -130,13 +133,16 @@ struct GraphProgramSupportResult {
 
 class GraphProgramCache {
   public:
-    bool can_execute(const ggml_cgraph & graph, const KernelCorpus & corpus, const std::string & target) const;
+    bool can_execute(const ggml_cgraph & graph, const KernelCorpus & corpus, const std::string & target,
+                     bool qwen27_one_layout = false) const;
 
     GraphProgramSupportResult check_support(const ggml_cgraph &  graph,
                                             const KernelCorpus & corpus,
-                                            const std::string &  target) const;
+                                            const std::string &  target,
+                                            bool                 qwen27_one_layout = false) const;
 
-    GraphProgramLookup get_or_build(const ggml_cgraph & graph, const KernelCorpus & corpus, const std::string & target);
+    GraphProgramLookup get_or_build(const ggml_cgraph & graph, const KernelCorpus & corpus, const std::string & target,
+                                    bool qwen27_one_layout = false);
 
     GraphProgramCacheStats stats() const;
 
@@ -151,12 +157,14 @@ class GraphProgramCache {
     GraphProgramLookup build_from_imported(const ggml_cgraph &  graph,
                                            Graph &&             imported_graph,
                                            const KernelCorpus & corpus,
-                                           const std::string &  target);
+                                           const std::string &  target,
+                                           bool                 qwen27_one_layout);
 
     std::unique_ptr<GraphProgram> build_program_from_imported(uint64_t             uid,
                                                               Graph &&             imported_graph,
                                                               const KernelCorpus & corpus,
                                                               const std::string &  target,
+                                                              bool                 qwen27_one_layout,
                                                               Status &             errors) const;
 
     mutable std::mutex                                          mutex_;

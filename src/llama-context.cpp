@@ -433,6 +433,18 @@ llama_context::llama_context(
             if (backend == nullptr) {
                 throw std::runtime_error(format("failed to initialize %s backend", ggml_backend_dev_name(dev.dev)));
             }
+            const bool is_qwen35 = model.arch == LLM_ARCH_QWEN35;
+            const bool is_qwen27_name = model.name == "Qwen3.8 27B";
+            const bool qwen27_one_layout = is_qwen35 && is_qwen27_name;
+            if (qwen27_one_layout) {
+                ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev.dev);
+                using set_qwen27_one_layout_fn = bool (*)(ggml_backend_t, bool);
+                auto set_policy = reinterpret_cast<set_qwen27_one_layout_fn>(
+                    ggml_backend_reg_get_proc_address(reg, "ggml_backend_hrx_set_qwen27_one_layout"));
+                if (set_policy != nullptr && !set_policy(backend, true)) {
+                    throw std::runtime_error("failed to set Qwen3.8 27B HRX layout policy");
+                }
+            }
             backends.emplace_back(backend);
         }
 

@@ -69,6 +69,24 @@ struct ggml_backend_hrx_context {
     ggml::hrx::HostWeightCache             host_weights;
     ggml::hrx::GraphReplayStreamState      graph_replay_state;
     std::string                            name;
+    std::mutex                             layout_policy_mutex;
+    bool                                   qwen27_one_layout = false;
+    bool                                   layout_policy_locked = false;
+
+    bool set_qwen27_one_layout(bool enabled) {
+        std::lock_guard<std::mutex> lock(layout_policy_mutex);
+        if (layout_policy_locked) {
+            return false;
+        }
+        qwen27_one_layout = enabled;
+        return true;
+    }
+
+    bool lock_layout_policy() {
+        std::lock_guard<std::mutex> lock(layout_policy_mutex);
+        layout_policy_locked = true;
+        return qwen27_one_layout;
+    }
 };
 
 struct ggml_backend_hrx_reg_context {

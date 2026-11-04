@@ -3,8 +3,9 @@
 
 template.decl @ggml.binary_f32.apply_vector8(%op: index, %lhs: vector<8xf32>, %rhs: vector<8xf32>) -> (vector<8xf32>)
 
-func.decl @ggml_q4k_native_row64_f16_pair(%half_packet: i1, %paired: i1, %weight: buffer, %peer: buffer, %is_up: i1, %row_base: offset, %group0: index, %packet: index) -> (vector<16xf16>, vector<16xf16>)
+func.decl @ggml_q4k_f16_pair(%native_weight: i1, %half_packet: i1, %paired: i1, %weight: buffer, %peer: buffer, %is_up: i1, %row_base: offset, %group0: index, %packet: index) -> (vector<16xf16>, vector<16xf16>)
 func.decl @ggml_q6k_f16_pair(%half_packet: i1, %weight: buffer, %weight_row_byte_base: offset, %q6_block: index, %q6_group: index, %packet: index) -> (vector<16xf16>, vector<16xf16>)
+func.decl @ggml_q6k_native_row64_f16_pair(%half_packet: i1, %weight: buffer, %row: index, %input_size: index, %q6_block: index, %q6_group: index, %packet: index) -> (vector<16xf16>, vector<16xf16>)
 
 func.def inline @ggml_f16_prefill_load_pair(%input: buffer, %token_count: index, %input_size: index, %token_origin: index, %k_origin: index) -> (vector<8xf16>, vector<8xf16>) {
   %c0_offset = index.constant 0 : offset
@@ -265,8 +266,13 @@ func.def inline @ggml_f16_prefill_stage_mma(%paired: i1, %packed_input: i1, %bou
 
 
 func.def inline @ggml_f16_prefill_publish_weights(%weight_format: index, %paired: i1, %packed_input: i1, %short_weight_packets: i1, %active: i1, %bounded_input_size: index, %bounded_output_size: index, %channel_tile: index, %weight_epoch: index, %weight_noalias: buffer, %up_weight: buffer, %weight_stage: buffer, %stage_offset: offset) {
+  %q4_format = index.constant 4 : index
   %q6_format = index.constant 6 : index
-  %q6_weights = index.cmp eq, %weight_format, %q6_format : index
+  %q6_row64_format = index.constant 46 : index
+  %q4_native_weights = index.cmp eq, %weight_format, %q4_format : index
+  %q6_native_weights = index.cmp eq, %weight_format, %q6_format : index
+  %q6_row64_weights = index.cmp eq, %weight_format, %q6_row64_format : index
+  %q6_weights = scalar.ori %q6_native_weights, %q6_row64_weights : i1
   %layout_true = scalar.constant true : i1
   %staged_input = scalar.xori %packed_input, %layout_true : i1
   %workgroup_size = kernel.workgroup.size<x> : index
@@ -339,22 +345,33 @@ func.def inline @ggml_f16_prefill_publish_weights(%weight_format: index, %paired
     %valid_channel = index.cmp ult, %channel, %bounded_output_size : index
     %weight_values0, %weight_values1 = scf.if %valid_channel -> (vector<16xf16>, vector<16xf16>) {
       %decoded0, %decoded1 = scf.if %q6_weights -> (vector<16xf16>, vector<16xf16>) {
-        %native_block_bytes = index.constant 210 : offset
-        %native_row_bytes = index.scale %quant_block_count, %native_block_bytes : index, offset -> offset
-        %row_byte_base = index.scale %channel, %native_row_bytes : index, offset -> offset
-        %decoded0, %decoded1 = func.call @ggml_q6k_f16_pair(%short_weight_packets, %weight_noalias, %row_byte_base, %quant_block, %weight_group, %load_packet) : (i1, buffer, offset, index, index, index) -> (vector<16xf16>, vector<16xf16>)
+        %decoded0, %decoded1 = scf.if %q6_row64_weights -> (vector<16xf16>, vector<16xf16>) {
+          %row64_0, %row64_1 = func.call @ggml_q6k_native_row64_f16_pair(%short_weight_packets, %weight_noalias, %channel, %bounded_input_size, %quant_block, %weight_group, %load_packet) : (i1, buffer, index, index, index, index, index) -> (vector<16xf16>, vector<16xf16>)
+          scf.yield %row64_0, %row64_1 : vector<16xf16>, vector<16xf16>
+        } else {
+          %native_block_bytes = index.constant 210 : offset
+          %native_row_bytes = index.scale %quant_block_count, %native_block_bytes : index, offset -> offset
+          %row_byte_base = index.scale %channel, %native_row_bytes : index, offset -> offset
+          %native0, %native1 = func.call @ggml_q6k_f16_pair(%short_weight_packets, %weight_noalias, %row_byte_base, %quant_block, %weight_group, %load_packet) : (i1, buffer, offset, index, index, index) -> (vector<16xf16>, vector<16xf16>)
+          scf.yield %native0, %native1 : vector<16xf16>, vector<16xf16>
+        }
         scf.yield %decoded0, %decoded1 : vector<16xf16>, vector<16xf16>
       } else {
         %packed_record_bytes = index.constant 16 : offset
         %packed_block_bytes = index.constant 9216 : offset
+        %native_block_bytes = index.constant 144 : offset
         %packed_row_group = index.div %channel, %c64 : index
         %packed_row_lane = index.rem %channel, %c64 : index
         %packed_tile_block0 = index.mul %packed_row_group, %quant_block_count : index
         %packed_tile_block = index.add %packed_tile_block0, %quant_block : index
         %packed_tile_base = index.scale %packed_tile_block, %packed_block_bytes : index, offset -> offset
         %packed_row_add = index.scale %packed_row_lane, %packed_record_bytes : index, offset -> offset
-        %row_byte_base = index.add %packed_tile_base, %packed_row_add : offset
-        %decoded0, %decoded1 = func.call @ggml_q4k_native_row64_f16_pair(%short_weight_packets, %paired, %weight_noalias, %up_weight, %weight_is_up, %row_byte_base, %weight_group, %load_packet) : (i1, i1, buffer, buffer, i1, offset, index, index) -> (vector<16xf16>, vector<16xf16>)
+        %packed_row_base = index.add %packed_tile_base, %packed_row_add : offset
+        %native_row_block = index.mul %channel, %quant_block_count : index
+        %native_block = index.add %native_row_block, %quant_block : index
+        %native_block_base = index.scale %native_block, %native_block_bytes : index, offset -> offset
+        %row_byte_base = scf.select %q4_native_weights, %native_block_base, %packed_row_base : offset
+        %decoded0, %decoded1 = func.call @ggml_q4k_f16_pair(%q4_native_weights, %short_weight_packets, %paired, %weight_noalias, %up_weight, %weight_is_up, %row_byte_base, %weight_group, %load_packet) : (i1, i1, i1, buffer, buffer, i1, offset, index, index) -> (vector<16xf16>, vector<16xf16>)
         scf.yield %decoded0, %decoded1 : vector<16xf16>, vector<16xf16>
       }
       scf.yield %decoded0, %decoded1 : vector<16xf16>, vector<16xf16>
@@ -521,8 +538,6 @@ func.def inline @ggml_prefill_conv4_strip(%deferred_state: i1, %width: index, %c
 }
 
 func.def inline @ggml_mul_mat_quantized_f16_prefill_wave32_body(%weight_format: index, %binary_op: index, %paired: i1, %packed_input: i1, %packed_output: i1, %token_count: index, %input_size0: index, %output_size0: index, %channel_tile: index, %token_tile: index, %input: buffer, %weight: buffer, %up_weight: buffer, %output: buffer, %f16_output: buffer, %conv_epilogue: i1, %conv_state: buffer, %conv_filter: buffer, %conv_output: buffer, %conv_cache: buffer, %deferred_state: i1) {
-  %q6_format = index.constant 6 : index
-  %q6_weights = index.cmp eq, %weight_format, %q6_format : index
   %layout_true = scalar.constant true : i1
   %unpaired = scalar.xori %paired, %layout_true : i1
   %packed_single = scalar.andi %unpaired, %packed_input : i1
