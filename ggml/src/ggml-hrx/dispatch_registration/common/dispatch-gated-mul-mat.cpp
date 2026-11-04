@@ -749,7 +749,8 @@ static CommonActivationPublicationDemand select_swiglu_q8_publication(const Disp
     return publication_plan.matched() ? publication_plan.preferred() : CommonActivationPublicationDemand{};
 }
 
-static bool common_mul_mat_swiglu_is_generic_tiled_pair_route(const MulMatSwiGLUMatch & match) {
+static bool common_mul_mat_swiglu_is_generic_tiled_pair_route(const DispatchMatchContext & context,
+                                                              const MulMatSwiGLUMatch &   match) {
     if (!match.matched()) {
         return false;
     }
@@ -790,7 +791,7 @@ static CommonActivationPublicationDemand select_swiglu_k16_publication(const Dis
 static MulMatSwiGLUPostOpsMatch match_mul_mat_swiglu_postops(const DispatchMatchContext & context) {
     MulMatSwiGLUPostOpsMatch match;
     match.root = match_mul_mat_swiglu(context);
-    if (!common_mul_mat_swiglu_is_generic_tiled_pair_route(match.root) || !context.graph.has_index()) {
+    if (!common_mul_mat_swiglu_is_generic_tiled_pair_route(context, match.root) || !context.graph.has_index()) {
         return {};
     }
 
@@ -851,7 +852,7 @@ static bool build_tiled_pair_mul_mat_swiglu_dispatch(const DispatchMatchContext 
                                                      const MulMatSwiGLUPostOpsMatch * postops,
                                                      DispatchMatch &                  dispatch_match) {
     const MulMatSwiGLUMatch & match = postops != nullptr ? postops->root : match_mul_mat_swiglu(context);
-    if (!common_mul_mat_swiglu_is_generic_tiled_pair_route(match)) {
+    if (!common_mul_mat_swiglu_is_generic_tiled_pair_route(context, match)) {
         return false;
     }
 
@@ -965,7 +966,7 @@ static bool match_mul_mat_swiglu_dispatch(const DispatchMatchContext & context, 
     if (!match.matched()) {
         return false;
     }
-    if (common_mul_mat_swiglu_is_generic_tiled_pair_route(match)) {
+    if (common_mul_mat_swiglu_is_generic_tiled_pair_route(context, match)) {
         return false;
     }
 
