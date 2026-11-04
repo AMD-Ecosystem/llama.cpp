@@ -538,8 +538,6 @@ func.def inline @ggml_prefill_conv4_strip(%deferred_state: i1, %width: index, %c
 }
 
 func.def inline @ggml_mul_mat_quantized_f16_prefill_wave32_body(%weight_format: index, %binary_op: index, %paired: i1, %packed_input: i1, %packed_output: i1, %token_count: index, %input_size0: index, %output_size0: index, %channel_tile: index, %token_tile: index, %input: buffer, %weight: buffer, %up_weight: buffer, %output: buffer, %f16_output: buffer, %conv_epilogue: i1, %conv_state: buffer, %conv_filter: buffer, %conv_output: buffer, %conv_cache: buffer, %deferred_state: i1) {
-  %q6_format = index.constant 6 : index
-  %q6_weights = index.cmp eq, %weight_format, %q6_format : index
   %layout_true = scalar.constant true : i1
   %unpaired = scalar.xori %paired, %layout_true : i1
   %packed_single = scalar.andi %unpaired, %packed_input : i1

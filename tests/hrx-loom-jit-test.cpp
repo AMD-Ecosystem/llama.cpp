@@ -798,6 +798,7 @@ static void run_loom_jit_compile_checks() {
             { "ggml.mul_mat.output_size",     std::to_string(test.outputs) },
             { "ggml.workload.token_capacity", std::to_string(test.tokens) },
             { "ggml.mul_mat.f16_input_layout", std::to_string(test.input_layout) },
+            { "ggml.mul_mat.weight_format",    "44" },
         });
         REQUIRE(ref != nullptr);
         REQUIRE(resolve_with_timeout(ref, std::chrono::seconds(120)));
@@ -1028,7 +1029,7 @@ static void run_loom_jit_compile_checks() {
                               "ggml_mul_mat_quantized_f16_wmma_prefill_conv4_interior" }) {
         const auto & quantized_conv4 = find_kernel(name);
         REQUIRE(quantized_conv4.bindings.size() == (std::string(name).find("interior") != std::string::npos ? 5 : 6));
-        for (const int format : {4, 6}) {
+        for (const int format : {44, 6, 46}) {
             for (const int64_t channels : {2112, 8192, 10240}) {
                 auto ref = compile_kernel(*sync_jit, std::string(name) + "-" + std::to_string(format) + "-" +
                                           std::to_string(channels), quantized_conv4, token_count_workload(512), {

@@ -8221,10 +8221,10 @@ static void run_qwen27_matmul_policy_route_case(ggml_type type, int64_t tokens) 
     ggml_free(ctx);
 }
 
-static void run_gemma4_decode_native_route_case() {
+static void run_gemma4_decode_native_route_case(ggml_type type) {
     ggml_context * ctx = ggml_init({ 4 * 1024 * 1024, nullptr, true });
     REQUIRE(ctx != nullptr);
-    ggml_tensor * weight = ggml_new_tensor_2d(ctx, GGML_TYPE_Q6_K, 15360, 3840);
+    ggml_tensor * weight = ggml_new_tensor_2d(ctx, type, 15360, 3840);
     ggml_tensor * input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 15360, 1);
     ggml_tensor * output = ggml_mul_mat(ctx, weight, input);
     ggml_cgraph * graph = ggml_new_graph(ctx);
@@ -8244,6 +8244,9 @@ static void run_gemma4_decode_native_route_case() {
             REQUIRE(binding.layout == ggml::hrx::kNativeWeightLayout);
             REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) ==
                     "loom_libs:ggml_mul_mat_vector_f32_f32");
+            const auto format = dispatch.kernel.compile_parameters.find("ggml.matmul.vector.weight_format");
+            REQUIRE(format != dispatch.kernel.compile_parameters.end());
+            REQUIRE(format->second == (type == GGML_TYPE_Q4_K ? "4" : "6"));
             ++matched;
         }
     }
@@ -8804,7 +8807,10 @@ static void register_basic_ops_cases(Suite & suite) {
     suite.host_case("qwen17b_tied_embedding.layout_policy", [] {
         run_qwen17b_tied_embedding_layout_policy_case();
     });
-    suite.host_case("gemma4_decode.native_route", [] { run_gemma4_decode_native_route_case(); });
+    for (const ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
+        suite.host_case("gemma4_decode.native_route." + type_name(type),
+                        [type] { run_gemma4_decode_native_route_case(type); });
+    }
     for (const ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
         suite.host_case("qwen27.ssm_policy_route." + type_name(type) + ".plain",
                         [type] { run_qwen27_ssm_policy_route_case(type, false); });
