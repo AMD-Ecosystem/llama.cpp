@@ -6363,7 +6363,8 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
         ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*hrx_graph);
         REQUIRE(imported.valid());
         auto * backend_state = static_cast<ggml_backend_hrx_context *>(hrx_backend->context);
-        REQUIRE(backend_state != nullptr && backend_state->device != nullptr);
+        REQUIRE(backend_state != nullptr);
+        REQUIRE(backend_state->device != nullptr);
         const std::string architecture = backend_state->device->architecture;
         ggml::hrx::DispatchScheduler scheduler;
         REQUIRE(scheduler.schedule_graph(imported.graph, { architecture, true }));
@@ -8304,7 +8305,9 @@ static void run_qwen27_matmul_policy_route_case(ggml_type type, int64_t tokens) 
             for (const auto & binding : dispatch.bindings) {
                 if (binding.value == source->id) {
                     REQUIRE(binding.layout == expected);
-                    const bool short_q6 = type == GGML_TYPE_Q6_K && tokens == 66;
+                    const bool q6_weight = type == GGML_TYPE_Q6_K;
+                    const bool short_prompt = tokens == 66;
+                    const bool short_q6 = q6_weight && short_prompt;
                     if (short_q6) {
                         const char * expected_kernel = row64_weight_policy ?
                             "loom_libs:ggml_mul_mat_q6_k_f32_wmma_prefill_wave32" :
@@ -8471,7 +8474,9 @@ static void run_qwen27_dense_native_reference_case(ggml_type type, int64_t token
     const bool short_minimum = tokens >= 64;
     const bool short_maximum = tokens < 128;
     const bool short_q6 = q6_weight && short_minimum && short_maximum;
-    const bool aligned_prefill = tokens >= 128 && tokens % 128 == 0;
+    const bool prefill_minimum = tokens >= 128;
+    const bool prefill_aligned = tokens % 128 == 0;
+    const bool aligned_prefill = prefill_minimum && prefill_aligned;
     const bool aligned_q6_prefill = q6_weight && aligned_prefill;
     const char * expected_kernel = tokens == 1 ? "loom_libs:ggml_mul_mat_vector_f32_f32" :
         short_q6 ? "loom_libs:ggml_mul_mat_q6_k_f32_wmma_prefill_wave32" :
