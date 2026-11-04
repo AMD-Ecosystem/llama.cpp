@@ -1071,11 +1071,10 @@ static bool match_packed_q8_1_x4_prefill_dispatch(const DispatchMatchContext & c
     const bool has_wide_output = match.output_size >= match.input_size / 4;
     const bool can_transform_weight = dispatch_weight_layout_eligible(*match.weight);
     const bool native_packed_glu = qwen27_native_packed_glu_weight(context, *match.weight);
-    const bool eligible_f16_weight = can_transform_weight || native_packed_glu;
-    const bool use_f16 = is_q4_weight && has_direct_weight && has_wide_output && eligible_f16_weight;
-    if (native_packed_glu && !use_f16) {
+    if (native_packed_glu) {
         return false;
     }
+    const bool use_f16 = is_q4_weight && has_direct_weight && has_wide_output && can_transform_weight;
     DispatchBinding activation;
     const bool      packed_input =
         use_f16 &&
@@ -1111,12 +1110,9 @@ static bool match_packed_q8_1_x4_prefill_dispatch(const DispatchMatchContext & c
         use_f16 ? "ggml.workload.token_capacity" : "ggml.mul_mat_q8_1_x4.token_capacity",
                                                common_to_config_value(match.token_count));
     const bool pack_q4 = match.weight_format == CommonMulMatWeightFormat::Q4K &&
-                         has_direct_weight && can_transform_weight && !native_packed_glu;
+                         has_direct_weight && can_transform_weight;
     if (use_f16) {
         dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.f16_input_layout", packed_input ? "1" : "0");
-        if (native_packed_glu) {
-            dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.weight_format", "4");
-        }
     } else {
         dispatch.kernel.compile_parameters.emplace(
             "ggml.mul_mat_q8_1_x4.weight_format",

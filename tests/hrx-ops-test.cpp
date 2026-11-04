@@ -8203,19 +8203,36 @@ static void run_ssm_conv_prefill_recurrent_case(ggml_type type, bool gathered, b
             const auto projection = get_f32_tensor(backend, b.projection);
             const size_t row_bytes = ggml_row_size(type, k);
             std::vector<float> dequantized(static_cast<size_t>(k));
-            for (int64_t row : { int64_t{0}, int64_t{63}, int64_t{4095}, int64_t{8191} }) {
+            std::vector<float> observed_samples;
+            std::vector<float> reference_samples;
+            std::vector<int64_t> rows;
+            for (int64_t row = 0; row < 64; ++row) {
+                rows.push_back(row);
+            }
+            rows.push_back(4095);
+            rows.push_back(8191);
+            for (int64_t row : rows) {
                 traits->to_float(weights.data() + static_cast<size_t>(row) * row_bytes, dequantized.data(), k);
-                for (int64_t token : { int64_t{0}, int64_t{511} }) {
+                for (int64_t token : { int64_t{0}, int64_t{127}, int64_t{255}, int64_t{511} }) {
                     double reference = 0.0;
                     for (int64_t column = 0; column < k; ++column) {
                         reference += static_cast<double>(dequantized[static_cast<size_t>(column)]) *
                                      static_cast<double>(input[static_cast<size_t>(token * k + column)]);
                     }
-                    const float observed = projection[static_cast<size_t>(token * n + row)];
-                    REQUIRE(std::fabs(static_cast<double>(observed) - reference) <=
-                            0.05 + 0.03 * std::fabs(reference));
+                    observed_samples.push_back(projection[static_cast<size_t>(token * n + row)]);
+                    reference_samples.push_back(static_cast<float>(reference));
                 }
             }
+            double squared_error = 0.0;
+            double squared_reference = 0.0;
+            for (size_t i = 0; i < observed_samples.size(); ++i) {
+                const double difference = static_cast<double>(observed_samples[i]) - reference_samples[i];
+                squared_error += difference * difference;
+                squared_reference += static_cast<double>(reference_samples[i]) * reference_samples[i];
+            }
+            REQUIRE(squared_reference > 0.0);
+            REQUIRE(std::sqrt(squared_error / squared_reference) <= 0.01);
+            require_close(observed_samples, reference_samples, 0.02f, 0.02f);
         }
     }
     if (qwen27_one_layout) {
