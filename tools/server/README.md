@@ -857,9 +857,9 @@ Returns raw audio bytes (`audio/wav` by default) rather than JSON. For more info
 
 `lang`: Language code for the utterance (model-dependent, e.g. `en`, `zh`). Optional.
 
-`voice`: Voice for the utterance (model-dependent, e.g. `female` or `male` for LFM3-Audio). Optional.
+`voice`: Voice for the utterance, one of the `voices` listed by `GET /props` (model-dependent, e.g. `female` or `male` for LFM3-Audio). Optional: a model with predefined voices speaks with the first of them when neither `voice` nor `speaker_ref` is given. It rejects any other name, and a predefined voice cannot be combined with `speaker_ref`.
 
-`speaker_ref_b64`: Base64-encoded reference audio to clone the speaker's voice. Optional. Alternatively, upload the reference audio as a `speaker_ref` file field via `multipart/form-data` (see example below) - if both are provided, the uploaded file takes precedence.
+`speaker_ref_b64`: Base64-encoded reference audio to clone the speaker's voice. Optional. Alternatively, upload the reference audio as a `speaker_ref` file field via `multipart/form-data` (see example below) - if both are provided, the uploaded file takes precedence. Rejected when the model has no voice encoder (e.g. Pocket TTS without voice cloning).
 
 `top_k`, `top_p`: Sampling params for the acoustic code predictor. Optional, model-dependent defaults apply.
 
@@ -1017,6 +1017,7 @@ By default, it is read-only. To make POST request to change global properties, y
 
 - `default_generation_settings` - the default generation settings for the `/completion` endpoint, which has the same fields as the `generation_settings` response object from the `/completion` endpoint.
 - `total_slots` - the total number of slots for process requests (defined by `--parallel` option)
+- `voices` - the predefined voices of an audio generation model, to pass as `voice` to `/tts`. Only present when the model has some (e.g. LFM3-Audio, Pocket TTS without voice cloning)
 - `model_path` - the path to model file (same with `-m` argument)
 - `chat_template` - the model's original Jinja2 prompt template
 - `chat_template_caps` - capabilities of the chat template (see `common/jinja/caps.h` for more info), `reasoning_effort_levels` lists the `reasoning_effort` values the template renders distinctly, from lowest to highest
@@ -1465,6 +1466,7 @@ For multimodal input (typed content, `messages[i].content[j]`):
 - If `type == "input_video"`:
     - Either `input_video.data` or `input_video.url` can be specified, can be a remote URL, raw base64 or path to local file
     - Accepts formats supported by `ffmpeg`
+    - Models that hear their video (LFM3-Omni) also get its soundtrack, the audio of each group of frames follows them
 - Note: for local file, make sure to set `--media-path`. File path must be prefixed by `file://`
 
 *Examples:*
@@ -1623,11 +1625,11 @@ Models that answer after the audio, like LFM3-Audio and LFM3-Omni, hold a conver
 
 *Client events:*
 
-- `session.update`: `type`, `instructions` (the system prompt, before the first audio or message), `output_modalities`, `max_output_tokens` (an integer or `"inf"`, the default)
+- `session.update`: `type`, `instructions` (the system prompt, before the first audio or message), `output_modalities`, `max_output_tokens` (an integer or `"inf"`, the default), `tools` (functions with `name`, `description` and `parameters`, before the first audio or message) and `tool_choice` (`"auto"`, the default, `"none"` or `"required"`)
 - `input_audio_buffer.append`: `audio` holds base64 PCM16 samples
 - `input_audio_buffer.commit`: ends the audio of the user turn, in a transcription session the transcript follows
-- `conversation.item.create`: a user message with `input_text` content
-- `response.create`: ends the user turn and generates the response, `response.output_modalities` and `response.max_output_tokens` override the session
+- `conversation.item.create`: a user message with `input_text` content, or a `function_call_output` with the `call_id` and `output` of a tool call of the last response
+- `response.create`: ends the user turn and generates the response, `response.output_modalities`, `response.max_output_tokens` and `response.tool_choice` override the session
 - `response.cancel`: stops the response being generated
 
 LFM3-Omni is not trained to reason, run it with `--reasoning off` so that its turns open with an empty think block.
@@ -1639,8 +1641,11 @@ LFM3-Omni is not trained to reason, run it with `--reasoning off` so that its tu
 - `session.created` and `session.updated`: carry the `session` object
 - `input_audio_buffer.committed`, `conversation.item.added`, `conversation.item.done`: the user item
 - `response.created`, `response.output_item.added`, `response.content_part.added`, then `response.output_text.delta` and `response.output_audio.delta` (base64 PCM16) as they are generated, then the `.done` events and `response.done`
+- `response.output_item.added` with a `function_call` item, `response.function_call_arguments.delta` and `.done`: a tool call of the response, its arguments are a JSON string
 - `conversation.item.input_audio_transcription.delta` and `.completed`: in a transcription session
 - `error`: `error.message` describes the problem
+
+Tools go into the system prompt with the chat template, and the tool calls are parsed as in `/v1/chat/completions`. The client runs the calls of a response, sends their results as `function_call_output` items, then asks for the next response.
 
 See [examples/realtime_client.py](../../examples/realtime_client.py) for a client with the `openai` library.
 
@@ -1649,6 +1654,8 @@ See [examples/realtime_client.py](../../examples/realtime_client.py) for a clien
 *Options:*
 
 See [OpenAI Responses API documentation](https://platform.openai.com/docs/api-reference/responses).
+
+`extra_params`: llama.cpp parameters that the Responses API has no field for, such as `seed`, `min_p` or `repeat_penalty`, as an object (e.g. `{"seed": 42, "min_p": 0.05}`). Its keys are merged into the converted request and behave as on `/v1/chat/completions`.
 
 *Examples:*
 
@@ -1680,7 +1687,8 @@ curl http://localhost:9931/v1/responses \
 -d '{
 "model": "gpt-4.1",
 "instructions": "You are ChatGPT, an AI assistant. Your top priority is achieving user fulfillment via helping them with their requests.",
-"input": "Write a limerick about python exceptions"
+"input": "Write a limerick about python exceptions",
+"extra_params": {"seed": 42, "min_p": 0.05}
 }'
 ```
 
