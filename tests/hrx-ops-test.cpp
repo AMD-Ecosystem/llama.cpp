@@ -8248,7 +8248,7 @@ static void run_gemma4_decode_parent_f32_route_case(ggml_type type) {
                     continue;
                 }
                 REQUIRE(binding.layout == ggml::hrx::kNativeWeightLayout);
-                REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) ==
+                REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id, target) ==
                         "loom_libs:ggml_mul_mat_vector_f32_f32");
                 const auto format = dispatch.kernel.compile_parameters.find("ggml.matmul.vector.weight_format");
                 REQUIRE(format != dispatch.kernel.compile_parameters.end());
