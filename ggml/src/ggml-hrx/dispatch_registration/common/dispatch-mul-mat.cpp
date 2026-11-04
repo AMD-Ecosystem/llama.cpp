@@ -897,10 +897,36 @@ static bool build_q6_k_prefill_wave32_dispatch(const CommonMulMatMatch & match,
 static bool match_q6_k_prefill_wave32_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     const CommonMulMatMatch match =
         common_match_mul_mat_any_format(context.graph, context.root_node, kMulMatQ6KF32WmmaPrefillWave32Kernel, false);
-    if (!match.matched() || match.weight->type != GGML_TYPE_Q6_K || match.weight->alias_source.value >= 0 ||
-        match.token_count < 128 || match.token_count > 2048 || match.token_count % 128 != 0 ||
-        match.input_size % 256 != 0 || match.output_size % 64 != 0) {
+    if (!match.matched()) {
         return false;
+    }
+    const bool q6_weight = match.weight->type == GGML_TYPE_Q6_K;
+    const bool direct_weight = match.weight->alias_source.value < 0;
+    const bool aligned_input = match.input_size % 256 == 0;
+    const bool aligned_output = match.output_size % 64 == 0;
+    const bool supported_weight = q6_weight && direct_weight && aligned_input && aligned_output;
+    if (!supported_weight) {
+        return false;
+    }
+    const bool enough_tokens = match.token_count >= 64;
+    const bool short_prompt = match.token_count < 128;
+    const bool row64_weight = context.row64_weight_policy && dispatch_weight_layout_eligible_for_graph(
+        context.graph, *match.weight, context.row64_weight_policy);
+    const bool short_row64 = enough_tokens && short_prompt && row64_weight;
+    const bool ordinary_minimum = match.token_count >= 128;
+    const bool ordinary_maximum = match.token_count <= 2048;
+    const bool ordinary_aligned = match.token_count % 128 == 0;
+    const bool ordinary_prefill = ordinary_minimum && ordinary_maximum && ordinary_aligned;
+    const bool supported_tokens = short_row64 || ordinary_prefill;
+    if (!supported_tokens) {
+        return false;
+    }
+
+    // Short prompts use masked M128 tiles without a separate activation copy.
+    if (short_row64) {
+        return build_q6_k_prefill_wave32_dispatch(match, match.input->id, match.input->byte_count,
+                                                  kMulMatQ6KF32WmmaPrefillWave32Kernel, row64_weight,
+                                                  context.root_index, dispatch_match);
     }
 
     const bool packed_input =
@@ -914,8 +940,6 @@ static bool match_q6_k_prefill_wave32_dispatch(const DispatchMatchContext & cont
     if (!prepared) {
         return false;
     }
-    const bool row64_weight = context.row64_weight_policy && dispatch_weight_layout_eligible_for_graph(
-        context.graph, *match.weight, context.row64_weight_policy);
     return build_q6_k_prefill_wave32_dispatch(match, activation.value, activation.length,
                                               kMulMatQ6KF16WmmaPrefillWave32Kernel, row64_weight,
                                               context.root_index, dispatch_match);

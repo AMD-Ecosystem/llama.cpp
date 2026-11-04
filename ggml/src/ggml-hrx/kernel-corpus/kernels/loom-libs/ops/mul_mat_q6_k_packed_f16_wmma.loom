@@ -10,7 +10,7 @@ config.def @ggml.mul_mat_q6_k_packed.weight_format = 6 : index
 
 config.decl @ggml.mul_mat_q6_k_packed.weight_offset : %value: index where [range(%value, 0, 2147483647), multiple_of(%value, 256)]
 
-config.decl @ggml.mul_mat_q6_k_packed.token_capacity : %value: index where [range(%value, 128, 2048), multiple_of(%value, 128)]
+config.decl @ggml.mul_mat_q6_k_packed.token_capacity : %value: index where [range(%value, 64, 2048)]
 
 config.decl @ggml.mul_mat_q6_k_shortlist.input_size : %value: index where [range(%value, 256, 32768), multiple_of(%value, 256)]
 
@@ -1486,7 +1486,7 @@ kernel.def target(@ggml_mul_mat_q6_k_prefill_gfx11_wave32) export("ggml_mul_mat_
   %input_size = config.get @ggml.mul_mat_q6_k_packed.input_size : index
   %output_size = config.get @ggml.mul_mat_q6_k_packed.output_size : index
   %token_capacity = config.get @ggml.mul_mat_q6_k_packed.token_capacity : index
-  %bounded_token_count = index.assume %token_count [range(%token_count, 128, 2048), le(%token_count, %token_capacity)] : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 64, 2048), le(%token_count, %token_capacity)] : index
   %channel_tile = kernel.workgroup.id<y> : index
   %token_tile = kernel.workgroup.id<x> : index
   %input_is_f16 = scalar.constant false : i1
@@ -1573,7 +1573,7 @@ kernel.def target(@ggml_mul_mat_q6_k_prefill_gfx11_wave32) export("ggml_mul_mat_
   %token_capacity = config.get @ggml.mul_mat_q6_k_packed.token_capacity : index
   %output_accumulation = config.get @ggml.mul_mat_q6_k_packed.output_accumulation : index
   %packed_input, %packed_n_tile = func.call pure @ggml_q6k_prefill_packed_tile(%token_capacity, %input_size, %output_size, %output_accumulation) : (index, index, index, index) -> (i1, index)
-  %bounded_token_count = index.assume %token_count [range(%token_count, 128, 2048), le(%token_count, %token_capacity)] : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 64, 2048), le(%token_count, %token_capacity)] : index
   %channel_tile = kernel.workgroup.id<y> : index
   %token_tile = kernel.workgroup.id<x> : index
   %workgroup_size = kernel.workgroup.size<x> : index

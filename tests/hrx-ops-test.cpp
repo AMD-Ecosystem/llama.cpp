@@ -6259,6 +6259,46 @@ static void run_dense_matmul_unary_cpu_reference_case(ggml_type    weight_type,
     ggml_backend_free(hrx_backend);
 }
 
+// The scalar reference avoids the CPU backend's activation quantization.
+static std::vector<float> row64_matmul_reference(ggml_type type, const std::vector<uint8_t> & bytes,
+                                                 const std::vector<float> & input,
+                                                 int64_t inputs, int64_t outputs, int64_t tokens) {
+    const auto * traits = ggml_get_type_traits(type);
+    REQUIRE(traits != nullptr && traits->to_float != nullptr);
+    const size_t row_bytes = ggml_row_size(type, inputs);
+    std::vector<float> row(static_cast<size_t>(inputs));
+    std::vector<float> result(static_cast<size_t>(outputs * tokens));
+    for (int64_t output = 0; output < outputs; ++output) {
+        traits->to_float(bytes.data() + output * row_bytes, row.data(), inputs);
+        for (int64_t token = 0; token < tokens; ++token) {
+            double sum = 0.0;
+            for (int64_t k = 0; k < inputs; ++k) {
+                sum += static_cast<double>(row[k]) * input[token * inputs + k];
+            }
+            result[token * outputs + output] = static_cast<float>(sum);
+        }
+    }
+    return result;
+}
+
+static void require_row64_reference(const std::vector<float> & actual, const std::vector<float> & expected) {
+    double error = 0.0;
+    double magnitude = 0.0;
+    float maximum_error = 0.0f;
+    for (size_t i = 0; i < actual.size(); ++i) {
+        const double delta = static_cast<double>(actual[i]) - expected[i];
+        error += delta * delta;
+        magnitude += static_cast<double>(expected[i]) * expected[i];
+        maximum_error = std::max(maximum_error, static_cast<float>(std::fabs(delta)));
+    }
+    REQUIRE(magnitude > 0.0);
+    const double relative_l2 = std::sqrt(error / magnitude);
+    std::fprintf(stderr, "row64 scalar reference: relative_l2=%g max_abs=%g elements=%zu\n",
+                 relative_l2, maximum_error, actual.size());
+    REQUIRE(relative_l2 <= 0.01);
+    require_close(actual, expected, 0.02f, 0.02f);
+}
+
 static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_type,
                                                        ggml_type    up_weight_type,
                                                        const char * expected_kernel,
@@ -6267,10 +6307,20 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
                                                        ggml_glu_op  glu_op     = GGML_GLU_OP_SWIGLU,
                                                        int64_t      input_size = kQwenHiddenSize,
                                                        bool         verify_uploaded_native = false,
-                                                       bool         import_weights = false) {
+                                                       bool         import_weights = false,
+                                                       bool         row64_weight_policy = false,
+                                                       bool         varying_input = false) {
     ggml_backend_t cpu_backend = init_cpu_backend();
     ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
     REQUIRE(hrx_backend != nullptr);
+    if (row64_weight_policy) {
+        ggml_backend_reg_t registry = ggml_backend_dev_backend_reg(ggml_backend_get_device(hrx_backend));
+        using set_policy_fn = bool (*)(ggml_backend_t, bool);
+        auto set_policy = reinterpret_cast<set_policy_fn>(
+            ggml_backend_reg_get_proc_address(registry, "ggml_backend_hrx_set_row64_weight_policy"));
+        REQUIRE(set_policy != nullptr);
+        REQUIRE(set_policy(hrx_backend, true));
+    }
 
     ggml_init_params params = {};
     params.mem_size         = static_cast<size_t>(48 * 1024 * 1024);
@@ -6309,7 +6359,33 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
     ggml_build_forward_expand(cpu_graph, cpu_output);
     ggml_build_forward_expand(hrx_graph, hrx_output);
 
-    require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph), { expected_kernel });
+    if (row64_weight_policy) {
+        ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*hrx_graph);
+        REQUIRE(imported.valid());
+        auto * backend_state = static_cast<ggml_backend_hrx_context *>(hrx_backend->context);
+        REQUIRE(backend_state != nullptr && backend_state->device != nullptr);
+        const std::string architecture = backend_state->device->architecture;
+        ggml::hrx::DispatchScheduler scheduler;
+        REQUIRE(scheduler.schedule_graph(imported.graph, { architecture, true }));
+        for (ggml_tensor * weight : { hrx_gate_weight, hrx_up_weight }) {
+            const ggml::hrx::Value * source = imported.graph.values().find_tensor(weight);
+            REQUIRE(source != nullptr);
+            size_t matched = 0;
+            for (const auto & dispatch : scheduler.plan().dispatches) {
+                for (const auto & binding : dispatch.bindings) {
+                    if (binding.value != source->id) {
+                        continue;
+                    }
+                    REQUIRE(binding.layout == ggml::hrx::kQ4KPackedK256Row64Layout);
+                    REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id, architecture) == expected_kernel);
+                    ++matched;
+                }
+            }
+            REQUIRE(matched == 1);
+        }
+    } else {
+        require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph), { expected_kernel });
+    }
 
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
     ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
@@ -6318,11 +6394,13 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
     if (verify_uploaded_native) {
         require_native_weight_bindings(hrx_graph, { hrx_gate_weight, hrx_up_weight });
     }
-    if (import_weights) {
+    const bool validate_default_import = import_weights && !row64_weight_policy;
+    if (validate_default_import) {
         require_packed_weight_bindings(hrx_graph, { hrx_gate_weight, hrx_up_weight });
     }
 
-    const std::vector<float>   input(static_cast<size_t>(input_size * token_count), 0.00390625f);
+    const std::vector<float> input = varying_input ? make_pattern_f32(input_size * token_count, 7, 0.01f) :
+        std::vector<float>(static_cast<size_t>(input_size * token_count), 0.00390625f);
     if (verify_uploaded_native) {
         ggml_backend_tensor_set(cpu_gate_weight, gate_weight.data(), 0, gate_weight.size());
         ggml_backend_tensor_set(cpu_up_weight, up_weight.data(), 0, up_weight.size());
@@ -6348,7 +6426,21 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
     REQUIRE(ggml_backend_graph_compute(hrx_backend, hrx_graph) == GGML_STATUS_SUCCESS);
     ggml_backend_synchronize(cpu_backend);
     ggml_backend_synchronize(hrx_backend);
+    if (row64_weight_policy) {
+        auto expected = row64_matmul_reference(gate_weight_type, gate_weight, input, input_size, output_size, token_count);
+        const auto up = row64_matmul_reference(up_weight_type, up_weight, input, input_size, output_size, token_count);
+        for (size_t i = 0; i < expected.size(); ++i) {
+            expected[i] = (expected[i] / (1.0f + std::exp(-expected[i]))) * up[i];
+        }
+        require_row64_reference(get_f32_tensor(hrx_backend, hrx_output), expected);
+    }
     require_close(get_f32_tensor(hrx_backend, hrx_output), get_f32_tensor(cpu_backend, cpu_output), 1.0e-4f, 1.0e-3f);
+    if (row64_weight_policy) {
+        ggml_backend_hrx_cache_stats stats = {};
+        REQUIRE(ggml_backend_hrx_get_cache_stats(hrx_backend, &stats));
+        REQUIRE(stats.weight_duplicate_warnings == 0);
+        REQUIRE(stats.weight_materializations == 2);
+    }
     if (verify_uploaded_native) {
         const auto after = backend_state->host_weights.stats();
         REQUIRE(after.misses == before.misses);
@@ -8212,6 +8304,13 @@ static void run_qwen27_matmul_policy_route_case(ggml_type type, int64_t tokens) 
             for (const auto & binding : dispatch.bindings) {
                 if (binding.value == source->id) {
                     REQUIRE(binding.layout == expected);
+                    const bool short_q6 = type == GGML_TYPE_Q6_K && tokens == 66;
+                    if (short_q6) {
+                        const char * expected_kernel = row64_weight_policy ?
+                            "loom_libs:ggml_mul_mat_q6_k_f32_wmma_prefill_wave32" :
+                            "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32";
+                        REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id, "gfx1151") == expected_kernel);
+                    }
                     ++matched;
                 }
             }
@@ -8338,9 +8437,8 @@ static void require_qwen27_native_dot_reference(ggml_type type, const std::vecto
     require_close(observed_samples, reference_samples, 0.02f, 0.02f);
 }
 
-static void run_qwen27_dense_native_reference_case(ggml_type type, int64_t tokens) {
-    constexpr int64_t k = 512;
-    constexpr int64_t n = 128;
+static void run_qwen27_dense_native_reference_case(ggml_type type, int64_t tokens, int64_t k = 512,
+                                                   int64_t n = 128) {
     auto backend = ggml_backend_hrx_init(0);
     REQUIRE(backend != nullptr);
     ggml_backend_reg_t registry = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
@@ -8369,8 +8467,16 @@ static void run_qwen27_dense_native_reference_case(ggml_type type, int64_t token
     REQUIRE(source != nullptr);
     const char * expected_layout = type == GGML_TYPE_Q4_K ? ggml::hrx::kQ4KPackedK256Row64Layout :
                                                               ggml::hrx::kQ6KPackedK256Row64ScaleRowLayout;
+    const bool q6_weight = type == GGML_TYPE_Q6_K;
+    const bool short_minimum = tokens >= 64;
+    const bool short_maximum = tokens < 128;
+    const bool short_q6 = q6_weight && short_minimum && short_maximum;
+    const bool aligned_prefill = tokens >= 128 && tokens % 128 == 0;
+    const bool aligned_q6_prefill = q6_weight && aligned_prefill;
     const char * expected_kernel = tokens == 1 ? "loom_libs:ggml_mul_mat_vector_f32_f32" :
-                                                 "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32";
+        short_q6 ? "loom_libs:ggml_mul_mat_q6_k_f32_wmma_prefill_wave32" :
+        aligned_q6_prefill ? "loom_libs:ggml_mul_mat_q6_k_f16_wmma_prefill_wave32" :
+        "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32";
     size_t matched = 0;
     for (const auto & dispatch : scheduler.plan().dispatches) {
         for (const auto & binding : dispatch.bindings) {
@@ -8400,7 +8506,7 @@ static void run_qwen27_dense_native_reference_case(ggml_type type, int64_t token
     const std::vector<int64_t> sample_tokens = tokens == 1 ? std::vector<int64_t>{ 0 } :
                                                                std::vector<int64_t>{ 0, 21, 43, tokens - 1 };
     require_qwen27_native_dot_reference(type, weights, input, observed, k, n, rows, sample_tokens,
-                                        tokens == 1 ? "vector" : "tiled", true);
+                                        tokens == 1 ? "vector" : short_q6 ? "short-prefill" : "tiled", true);
     ggml_backend_hrx_cache_stats stats = {};
     REQUIRE(ggml_backend_hrx_get_cache_stats(backend, &stats));
     REQUIRE(stats.weight_duplicate_warnings == 0);
@@ -8870,6 +8976,9 @@ static void register_basic_ops_cases(Suite & suite) {
     suite.host_case("qwen27.q6_prefill512_policy_route", [] {
         run_qwen27_matmul_policy_route_case(GGML_TYPE_Q6_K, 512);
     });
+    suite.host_case("qwen27.q6_short66_policy_route", [] {
+        run_qwen27_matmul_policy_route_case(GGML_TYPE_Q6_K, 66);
+    });
     suite.host_case("support.rmsnorm", [] { run_rmsnorm_support_checks(); });
     suite.host_case("support.alternate_value_alias_lookup", [] { run_alternate_value_alias_lookup_checks(); });
     suite.host_case("support.activation_publication_contract", [] { run_activation_publication_contract_checks(); });
@@ -8903,6 +9012,22 @@ static void register_basic_ops_cases(Suite & suite) {
             run_qwen27_dense_native_reference_case(type, 66);
         });
     }
+    for (const int64_t tokens : { 63, 64, 127, 128, 129 }) {
+        suite.device_case("qwen27.q6_short_boundary.tokens" + std::to_string(tokens), [tokens] {
+            run_qwen27_dense_native_reference_case(GGML_TYPE_Q6_K, tokens);
+        });
+    }
+    for (const bool varying_input : { false, true }) {
+        suite.device_case("qwen27.q4_metadata_paired.tokens66." +
+                              std::string(varying_input ? "varied" : "constant"), [varying_input] {
+            run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_Q4_K, GGML_TYPE_Q4_K,
+                "loom_libs:ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32",
+                66, 192, GGML_GLU_OP_SWIGLU, 768, false, true, true, varying_input);
+        });
+    }
+    suite.device_case("qwen27.q4_metadata_single.tokens66.input768.outputs192", [] {
+        run_qwen27_dense_native_reference_case(GGML_TYPE_Q4_K, 66, 768, 192);
+    });
     suite.device_case("view_mul_f32.cpu_reference", [] { run_view_mul_f32_cpu_reference_case(); });
     for (const int64_t token_count : { 2, 23 }) {
         suite.device_case("strided_cont.tokens" + std::to_string(token_count),
