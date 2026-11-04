@@ -137,7 +137,7 @@ struct PackedMulMatGluMatch {
     }
 };
 
-static CommonMulMatWeightFormat qwen27_swiglu_format(const DispatchMatchContext & context,
+static CommonMulMatWeightFormat row64_swiglu_format(const DispatchMatchContext & context,
                                                      const Value & weight,
                                                      CommonMulMatWeightFormat format,
                                                      int64_t input_size,
@@ -148,15 +148,16 @@ static CommonMulMatWeightFormat qwen27_swiglu_format(const DispatchMatchContext 
     const bool q4_weight = format == CommonMulMatWeightFormat::Q4K;
     const bool q6_weight = format == CommonMulMatWeightFormat::Q6K;
     const bool supported_weight = q4_weight || q6_weight;
-    const bool use_row64 = context.qwen27_one_layout && direct_weight && aligned_input && aligned_output &&
-                           supported_weight && dispatch_weight_layout_eligible(weight);
+    const bool use_row64 = context.row64_weight_policy && direct_weight && aligned_input && aligned_output &&
+                           supported_weight && dispatch_weight_layout_eligible_for_graph(
+        context.graph, weight, context.row64_weight_policy);
     if (!use_row64) {
         return format;
     }
     return q4_weight ? CommonMulMatWeightFormat::Q4KRow64 : CommonMulMatWeightFormat::Q6KRow64;
 }
 
-static DispatchBinding qwen27_swiglu_binding(const Value & weight, CommonMulMatWeightFormat format,
+static DispatchBinding row64_swiglu_binding(const Value & weight, CommonMulMatWeightFormat format,
                                              int64_t input_size, int64_t output_size) {
     const bool q4_row64 = format == CommonMulMatWeightFormat::Q4KRow64;
     const bool q6_row64 = format == CommonMulMatWeightFormat::Q6KRow64;
@@ -759,8 +760,10 @@ static bool common_mul_mat_swiglu_is_generic_tiled_pair_route(const MulMatSwiGLU
     const bool has_direct_up = match.up_weight->alias_source.value < 0;
     const bool has_q4_gate = match.gate_format == CommonMulMatWeightFormat::Q4K;
     const bool has_q4_up = match.up_format == CommonMulMatWeightFormat::Q4K;
-    const bool can_transform_gate = dispatch_weight_layout_eligible(*match.gate_weight);
-    const bool can_transform_up = dispatch_weight_layout_eligible(*match.up_weight);
+    const bool can_transform_gate = dispatch_weight_layout_eligible_for_graph(
+        context.graph, *match.gate_weight, context.row64_weight_policy);
+    const bool can_transform_up = dispatch_weight_layout_eligible_for_graph(
+        context.graph, *match.up_weight, context.row64_weight_policy);
     const bool pack_q4 = has_few_tokens && has_aligned_output && has_direct_gate && has_direct_up &&
                          has_q4_gate && has_q4_up && can_transform_gate && can_transform_up;
     const bool use_q8 = pack_q4;
@@ -877,9 +880,9 @@ static bool build_tiled_pair_mul_mat_swiglu_dispatch(const DispatchMatchContext 
                                                common_to_config_value(match.input_size));
     dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_swiglu.output_size",
                                                common_to_config_value(match.output_size));
-    const CommonMulMatWeightFormat gate_format = qwen27_swiglu_format(
+    const CommonMulMatWeightFormat gate_format = row64_swiglu_format(
         context, *match.gate_weight, match.gate_format, match.input_size, match.output_size);
-    const CommonMulMatWeightFormat up_format = qwen27_swiglu_format(
+    const CommonMulMatWeightFormat up_format = row64_swiglu_format(
         context, *match.up_weight, match.up_format, match.input_size, match.output_size);
     dispatch.kernel.compile_parameters.emplace(
         "ggml.mul_mat_swiglu.gate_weight_format",
@@ -896,9 +899,9 @@ static bool build_tiled_pair_mul_mat_swiglu_dispatch(const DispatchMatchContext 
                                    (postops->has_residual ? int64_t{ 2 } : int64_t{ 0 })));
     }
     dispatch.bindings.push_back({ match.input->id, 0, match.input->byte_count });
-    dispatch.bindings.push_back(qwen27_swiglu_binding(*match.gate_weight, gate_format,
+    dispatch.bindings.push_back(row64_swiglu_binding(*match.gate_weight, gate_format,
                                                        match.input_size, match.output_size));
-    dispatch.bindings.push_back(qwen27_swiglu_binding(*match.up_weight, up_format,
+    dispatch.bindings.push_back(row64_swiglu_binding(*match.up_weight, up_format,
                                                        match.input_size, match.output_size));
     const Value * output = postops != nullptr ? postops->residual_output : match.output;
     if (postops != nullptr) {
@@ -1006,14 +1009,16 @@ static bool match_mul_mat_swiglu_dispatch(const DispatchMatchContext & context, 
     const bool has_direct_up = match.up_weight->alias_source.value < 0;
     const bool has_q4_gate = match.gate_format == CommonMulMatWeightFormat::Q4K;
     const bool has_q4_up = match.up_format == CommonMulMatWeightFormat::Q4K;
-    const bool can_transform_gate = dispatch_weight_layout_eligible(*match.gate_weight);
-    const bool can_transform_up = dispatch_weight_layout_eligible(*match.up_weight);
+    const bool can_transform_gate = dispatch_weight_layout_eligible_for_graph(
+        context.graph, *match.gate_weight, context.row64_weight_policy);
+    const bool can_transform_up = dispatch_weight_layout_eligible_for_graph(
+        context.graph, *match.up_weight, context.row64_weight_policy);
     const bool pack_q4 = has_few_tokens && has_aligned_output && has_direct_gate && has_direct_up &&
                          has_q4_gate && has_q4_up && can_transform_gate && can_transform_up;
     const CommonMulMatWeightFormat gate_format = pack_q4 ? CommonMulMatWeightFormat::Q4KRow64 :
-        qwen27_swiglu_format(context, *match.gate_weight, match.gate_format, match.input_size, match.output_size);
+        row64_swiglu_format(context, *match.gate_weight, match.gate_format, match.input_size, match.output_size);
     const CommonMulMatWeightFormat up_format = pack_q4 ? CommonMulMatWeightFormat::Q4KRow64 :
-        qwen27_swiglu_format(context, *match.up_weight, match.up_format, match.input_size, match.output_size);
+        row64_swiglu_format(context, *match.up_weight, match.up_format, match.input_size, match.output_size);
     const bool use_q8 = pack_q4;
     const CommonActivationPublicationDemand q8_demand =
         use_q8 ? select_swiglu_q8_publication(context, match) : CommonActivationPublicationDemand{};
@@ -1055,9 +1060,9 @@ static bool match_mul_mat_swiglu_dispatch(const DispatchMatchContext & context, 
                                           match.input_size, match.output_size, weight->byte_count });
         }
     } else {
-        dispatch.bindings.push_back(qwen27_swiglu_binding(*match.gate_weight, gate_format,
+        dispatch.bindings.push_back(row64_swiglu_binding(*match.gate_weight, gate_format,
                                                            match.input_size, match.output_size));
-        dispatch.bindings.push_back(qwen27_swiglu_binding(*match.up_weight, up_format,
+        dispatch.bindings.push_back(row64_swiglu_binding(*match.up_weight, up_format,
                                                            match.input_size, match.output_size));
     }
     dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
@@ -1092,9 +1097,9 @@ static bool match_decode_mul_mat_swiglu_dispatch(const DispatchMatchContext & co
     }
 
     Dispatch dispatch;
-    const CommonMulMatWeightFormat gate_format = qwen27_swiglu_format(
+    const CommonMulMatWeightFormat gate_format = row64_swiglu_format(
         context, *match.gate_weight, match.gate_format, match.input_size, match.output_size);
-    const CommonMulMatWeightFormat up_format = qwen27_swiglu_format(
+    const CommonMulMatWeightFormat up_format = row64_swiglu_format(
         context, *match.up_weight, match.up_format, match.input_size, match.output_size);
     dispatch.kernel = make_kernel_specialization(kMulMatSwiGLUF32F32DecodeWave64Kernel);
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
@@ -1113,9 +1118,9 @@ static bool match_decode_mul_mat_swiglu_dispatch(const DispatchMatchContext & co
     dispatch.kernel.compile_parameters.emplace(
         "ggml.mul_mat_swiglu.op", common_to_config_value(static_cast<int64_t>(binary_kind_config_value(match.op))));
     dispatch.bindings.push_back({ match.input->id, 0, match.input->byte_count });
-    dispatch.bindings.push_back(qwen27_swiglu_binding(*match.gate_weight, gate_format,
+    dispatch.bindings.push_back(row64_swiglu_binding(*match.gate_weight, gate_format,
                                                        match.input_size, match.output_size));
-    dispatch.bindings.push_back(qwen27_swiglu_binding(*match.up_weight, up_format,
+    dispatch.bindings.push_back(row64_swiglu_binding(*match.up_weight, up_format,
                                                        match.input_size, match.output_size));
     dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
 

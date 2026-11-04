@@ -14802,7 +14802,7 @@ static void register_hrx_backend_device_cases(test_runner::Suite & suite) {
         ggml_backend_reg_t registry = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
         using set_policy_fn = bool (*)(ggml_backend_t, bool);
         auto set_policy = reinterpret_cast<set_policy_fn>(
-            ggml_backend_reg_get_proc_address(registry, "ggml_backend_hrx_set_qwen27_one_layout"));
+            ggml_backend_reg_get_proc_address(registry, "ggml_backend_hrx_set_row64_weight_policy"));
         REQUIRE(set_policy != nullptr);
         REQUIRE(set_policy(backend, true));
         ggml_context * ctx = ggml_init({ 256 * 1024, nullptr, true });
@@ -14815,7 +14815,7 @@ static void register_hrx_backend_device_cases(test_runner::Suite & suite) {
         ggml::hrx::GraphExecutor executor(*state);
         REQUIRE(executor.can_execute(*graph).supported);
         REQUIRE(!set_policy(backend, false));
-        REQUIRE(state->qwen27_one_layout);
+        REQUIRE(state->row64_weight_policy);
         ggml_free(ctx);
         ggml_backend_free(backend);
     });

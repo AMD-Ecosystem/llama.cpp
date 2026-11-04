@@ -6,11 +6,13 @@
 #include "llm/dispatch-attention-qkv.h"
 #include "llm/dispatch-gated-delta-net.h"
 #include "llm/dispatch-ssm-conv.h"
+#include "qwen/dispatch-llm-profiles.h"
 #include "qwen/dispatch-qwen.h"
 
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <utility>
 
 namespace ggml::hrx {
@@ -40,6 +42,103 @@ static bool qwen_dispatch_disabled_from_environment() {
            std::strcmp(value, "off") != 0 && std::strcmp(value, "OFF") != 0;
 }
 
+static bool qwen30b_attention_needs_native_weight(const Graph & graph, const Value & value) {
+    if (qwen_dispatch_disabled_from_environment()) {
+        return false;
+    }
+    const ggml_tensor * tensor = value.tensor;
+    const bool has_tensor = tensor != nullptr;
+    const bool supported_type = value.type == GGML_TYPE_Q4_K || value.type == GGML_TYPE_Q6_K;
+    const bool matrix = value.ne[2] == 1 && value.ne[3] == 1;
+    const bool block_weight = has_tensor && std::strncmp(tensor->name, "blk.", 4) == 0;
+    const bool candidate = has_tensor && supported_type && matrix && block_weight;
+    if (!candidate) {
+        return false;
+    }
+
+    // These four projections have native consumers in the measured Qwen3-30B
+    // prefill/decode graph. Packing them also materializes a second native copy.
+    const char * layer_start = tensor->name + 4;
+    const bool starts_with_digit = *layer_start >= '0' && *layer_start <= '9';
+    if (!starts_with_digit) {
+        return false;
+    }
+    char * layer_end = nullptr;
+    const long layer = std::strtol(layer_start, &layer_end, 10);
+    const bool valid_layer = layer >= 0;
+    const bool valid_separator = layer_end != nullptr && *layer_end == '.';
+    const bool named_layer = valid_layer && valid_separator;
+    if (!named_layer) {
+        return false;
+    }
+
+    const char * role = layer_end + 1;
+    const int64_t hidden_size = kQwen30BMoeDispatchProfile.hidden_size;
+    const bool q4 = value.type == GGML_TYPE_Q4_K;
+    const bool query_role = std::strcmp(role, "attn_q.weight") == 0;
+    const bool key_role = std::strcmp(role, "attn_k.weight") == 0;
+    const bool value_role = std::strcmp(role, "attn_v.weight") == 0;
+    const bool output_role = std::strcmp(role, "attn_output.weight") == 0;
+    const bool query_shape = value.ne[0] == hidden_size && value.ne[1] == 4096;
+    const bool key_value_shape = value.ne[0] == hidden_size && value.ne[1] == 512;
+    const bool output_shape = value.ne[0] == 4096 && value.ne[1] == hidden_size;
+    const bool query = q4 && query_role && query_shape;
+    const bool key = q4 && key_role && key_value_shape;
+    const bool value_projection = value_role && key_value_shape;
+    const bool output = q4 && output_role && output_shape;
+    const bool attention_projection = query || key || value_projection || output;
+    if (!attention_projection) {
+        return false;
+    }
+
+    // K/V dimensions alone also occur in other models. Require this layer's
+    // complete attention quartet and its Qwen30B MoE expert profile.
+    const std::string prefix(tensor->name, static_cast<size_t>(layer_end - tensor->name + 1));
+    bool has_query = false;
+    bool has_key = false;
+    bool has_value = false;
+    bool has_output = false;
+    bool has_experts = false;
+    for (const Value & peer : graph.values().values()) {
+        const ggml_tensor * peer_tensor = peer.tensor;
+        const bool has_peer_tensor = peer_tensor != nullptr;
+        const bool same_layer = has_peer_tensor &&
+                                std::strncmp(peer_tensor->name, prefix.c_str(), prefix.size()) == 0;
+        if (!same_layer) {
+            continue;
+        }
+        const char * peer_role = peer_tensor->name + prefix.size();
+        const bool peer_matrix = peer.ne[2] == 1 && peer.ne[3] == 1;
+        const bool peer_q4 = peer.type == GGML_TYPE_Q4_K;
+        const bool peer_q6 = peer.type == GGML_TYPE_Q6_K;
+        const bool peer_hidden = peer.ne[0] == hidden_size;
+        const bool peer_kv = peer_matrix && peer_hidden && peer.ne[1] == 512;
+        const bool peer_query = peer_q4 && peer_matrix && peer_hidden && peer.ne[1] == 4096;
+        const bool peer_output = peer_q4 && peer_matrix && peer.ne[0] == 4096 && peer.ne[1] == hidden_size;
+        const bool peer_experts = peer_q4 && peer.ne[0] == hidden_size &&
+                                  peer.ne[1] == kQwen30BMoeDispatchProfile.expert_hidden_size &&
+                                  peer.ne[2] == kQwen30BMoeDispatchProfile.expert_count && peer.ne[3] == 1;
+        has_query = has_query || (peer_query && std::strcmp(peer_role, "attn_q.weight") == 0);
+        has_key = has_key || (peer_q4 && peer_kv && std::strcmp(peer_role, "attn_k.weight") == 0);
+        has_value = has_value || ((peer_q4 || peer_q6) && peer_kv &&
+                                  std::strcmp(peer_role, "attn_v.weight") == 0);
+        has_output = has_output || (peer_output && std::strcmp(peer_role, "attn_output.weight") == 0);
+        has_experts = has_experts || (peer_experts && std::strcmp(peer_role, "ffn_gate_exps.weight") == 0);
+    }
+    return has_query && has_key && has_value && has_output && has_experts;
+}
+
+static bool qwen17b_tied_token_embedding_needs_native_weight(const Value & value) {
+    const ggml_tensor * tensor = value.tensor;
+    const bool named_embedding = tensor != nullptr && std::strcmp(tensor->name, "token_embd.weight") == 0;
+    const bool q6_weight = value.type == GGML_TYPE_Q6_K;
+    const bool tied_source_shape = value.ne[0] == 2048 && value.ne[1] == kQwen3VocabularyCount &&
+                                   value.ne[2] == 1 && value.ne[3] == 1;
+    // The measured Qwen3-1.7B GGUF omits output.weight: this exact source
+    // feeds both embedding lookup and the native output projection.
+    return named_embedding && q6_weight && tied_source_shape;
+}
+
 static bool dispatch_has_eligible_weight_layouts(const DispatchMatchContext & context, const DispatchMatch & match) {
     auto eligible = [&](const std::vector<Dispatch> & dispatches) {
         for (const Dispatch & dispatch : dispatches) {
@@ -49,7 +148,9 @@ static bool dispatch_has_eligible_weight_layouts(const DispatchMatchContext & co
                 }
                 const Value * value = context.graph.values().find(binding.value);
                 const bool has_graph_value = value != nullptr;
-                const bool layout_is_eligible = !has_graph_value || dispatch_weight_layout_eligible(*value);
+                const bool layout_is_eligible =
+                    !has_graph_value ||
+                    dispatch_weight_layout_eligible_for_graph(context.graph, *value, context.row64_weight_policy);
                 const bool has_ineligible_weight = has_graph_value && !layout_is_eligible;
                 if (has_ineligible_weight) {
                     return false;
@@ -77,6 +178,19 @@ static DispatchRegistry build_registry(bool include_qwen) {
 
 bool dispatch_weight_layout_eligible(const Value & value) {
     return ggml_backend_hrx_weight_layout_eligible(value.tensor);
+}
+
+bool dispatch_weight_layout_eligible_for_graph(const Graph & graph, const Value & value, bool row64_weight_policy) {
+    if (!row64_weight_policy) {
+        return dispatch_weight_layout_eligible(value);
+    }
+    const bool needs_native_embedding = qwen17b_tied_token_embedding_needs_native_weight(value);
+    const bool needs_native_attention = qwen30b_attention_needs_native_weight(graph, value);
+    return !needs_native_embedding && !needs_native_attention && dispatch_weight_layout_eligible(value);
+}
+
+bool dispatch_weight_is_qwen30b_native_attention(const Graph & graph, const Value & value) {
+    return qwen30b_attention_needs_native_weight(graph, value);
 }
 
 bool DispatchRegistry::match(const DispatchMatchContext & context, DispatchMatch & match) const {

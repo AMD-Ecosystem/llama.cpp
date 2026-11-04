@@ -305,10 +305,10 @@ GraphProgram::GraphProgram(uint64_t                        uid,
                            std::unique_ptr<Graph>          graph,
                            std::unique_ptr<CommandProgram> commands,
                            std::string                     command_shape,
-                           bool                            qwen27_one_layout) :
+                           bool                            row64_weight_policy) :
     uid_(uid),
     target_(std::move(target)),
-    qwen27_one_layout_(qwen27_one_layout),
+    row64_weight_policy_(row64_weight_policy),
     graph_(std::move(graph)),
     commands_(std::move(commands)),
     command_shape_(std::move(command_shape)),
@@ -641,14 +641,14 @@ GraphProgramMatch GraphProgram::match_current_graph(const ggml_cgraph & current_
 bool GraphProgramCache::can_execute(const ggml_cgraph &  graph,
                                     const KernelCorpus & corpus,
                                     const std::string &  target,
-                                    bool                 qwen27_one_layout) const {
-    return check_support(graph, corpus, target, qwen27_one_layout).supported;
+                                    bool                 row64_weight_policy) const {
+    return check_support(graph, corpus, target, row64_weight_policy).supported;
 }
 
 GraphProgramSupportResult GraphProgramCache::check_support(const ggml_cgraph &  graph,
                                                            const KernelCorpus & corpus,
                                                            const std::string &  target,
-                                                           bool                 qwen27_one_layout) const {
+                                                           bool                 row64_weight_policy) const {
     GraphProgramSupportResult result;
     if (graph.n_nodes == 0) {
         result.supported = true;
@@ -660,7 +660,7 @@ GraphProgramSupportResult GraphProgramCache::check_support(const ggml_cgraph &  
         return result;
     }
     std::unique_ptr<GraphProgram> program =
-        build_program_from_imported(graph.uid, std::move(imported.graph), corpus, target, qwen27_one_layout, result.status);
+        build_program_from_imported(graph.uid, std::move(imported.graph), corpus, target, row64_weight_policy, result.status);
     result.supported = program != nullptr && result.status.success();
     return result;
 }
@@ -669,10 +669,10 @@ GraphProgramLookup GraphProgramCache::build_from_imported(const ggml_cgraph &  g
                                                           Graph &&             imported_graph,
                                                           const KernelCorpus & corpus,
                                                           const std::string &  target,
-                                                          bool                 qwen27_one_layout) {
+                                                          bool                 row64_weight_policy) {
     GraphProgramLookup            result;
     std::unique_ptr<GraphProgram> program =
-        build_program_from_imported(graph.uid, std::move(imported_graph), corpus, target, qwen27_one_layout, result.status);
+        build_program_from_imported(graph.uid, std::move(imported_graph), corpus, target, row64_weight_policy, result.status);
     if (program == nullptr) {
         return result;
     }
@@ -712,7 +712,7 @@ GraphProgramLookup GraphProgramCache::build_from_imported(const ggml_cgraph &  g
 GraphProgramLookup GraphProgramCache::get_or_build(const ggml_cgraph &  graph,
                                                    const KernelCorpus & corpus,
                                                    const std::string &  target,
-                                                   bool                 qwen27_one_layout) {
+                                                   bool                 row64_weight_policy) {
     GraphProgramLookup result;
     if (graph.uid != 0) {
         const bool     disable_fast_path  = environment_flag_enabled("GGML_HRX_DISABLE_GRAPH_UID_FAST_PATH");
@@ -722,12 +722,12 @@ GraphProgramLookup GraphProgramCache::get_or_build(const ggml_cgraph &  graph,
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (!disable_fast_path && last_program_ != nullptr && last_program_->uid() == graph.uid &&
-                last_program_->target() == target && last_program_->qwen27_one_layout() == qwen27_one_layout) {
+                last_program_->target() == target && last_program_->row64_weight_policy() == row64_weight_policy) {
                 cached_program = last_program_;
             } else {
                 const auto found = programs_.find(graph.uid);
                 if (found != programs_.end() && found->second->target() == target &&
-                    found->second->qwen27_one_layout() == qwen27_one_layout) {
+                    found->second->row64_weight_policy() == row64_weight_policy) {
                     cached_program = found->second.get();
                     last_program_  = cached_program;
                 }
@@ -735,7 +735,7 @@ GraphProgramLookup GraphProgramCache::get_or_build(const ggml_cgraph &  graph,
                     const auto matched = validated_matches_.find(graph.uid);
                     if (matched != validated_matches_.end() && matched->second.nodes == graph.nodes &&
                         matched->second.program->target() == target &&
-                        matched->second.program->qwen27_one_layout() == qwen27_one_layout) {
+                        matched->second.program->row64_weight_policy() == row64_weight_policy) {
                         cached_program = matched->second.program;
                     }
                 }
@@ -777,7 +777,7 @@ GraphProgramLookup GraphProgramCache::get_or_build(const ggml_cgraph &  graph,
             for (const auto & entry : programs_) {
                 GraphProgram * candidate = entry.second.get();
                 if (candidate == cached_program || candidate->target() != target ||
-                    candidate->qwen27_one_layout() != qwen27_one_layout) {
+                    candidate->row64_weight_policy() != row64_weight_policy) {
                     continue;
                 }
                 GraphProgramMatch match = candidate->match_current_graph(graph);
@@ -804,7 +804,7 @@ GraphProgramLookup GraphProgramCache::get_or_build(const ggml_cgraph &  graph,
         result.status.append(imported.status);
         return result;
     }
-    return build_from_imported(graph, std::move(imported.graph), corpus, target, qwen27_one_layout);
+    return build_from_imported(graph, std::move(imported.graph), corpus, target, row64_weight_policy);
 }
 
 GraphProgramCacheStats GraphProgramCache::stats() const {
@@ -823,10 +823,10 @@ std::unique_ptr<GraphProgram> GraphProgramCache::build_program_from_imported(uin
                                                                              Graph &&             imported_graph,
                                                                              const KernelCorpus & corpus,
                                                                              const std::string &  target,
-                                                                             bool                 qwen27_one_layout,
+                                                                             bool                 row64_weight_policy,
                                                                              Status &             errors) const {
     DispatchScheduler scheduler;
-    if (!scheduler.schedule_graph(imported_graph, { target, qwen27_one_layout })) {
+    if (!scheduler.schedule_graph(imported_graph, { target, row64_weight_policy })) {
         errors.append(scheduler.plan().status);
         return nullptr;
     }
@@ -844,7 +844,7 @@ std::unique_ptr<GraphProgram> GraphProgramCache::build_program_from_imported(uin
     }
     return std::make_unique<GraphProgram>(uid, target, std::make_unique<Graph>(std::move(imported_graph)),
                                           std::make_unique<CommandProgram>(std::move(commands)),
-                                          std::move(command_shape), qwen27_one_layout);
+                                          std::move(command_shape), row64_weight_policy);
 }
 
 bool can_execute_standalone_op_as_graph(const ggml_tensor * op, const std::string & target) {

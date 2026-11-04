@@ -1553,6 +1553,28 @@ static void run_binary_publication_compile_checks() {
                                            }));
 }
 
+static void run_native_q4_prefill_compile_checks() {
+    std::string error;
+    std::unique_ptr<ggml::hrx::LoomJit> jit =
+        ggml::hrx::create_loom_jit("gfx1100", ggml::hrx::LoomJitMode::Sync, error);
+    REQUIRE(jit != nullptr);
+    const auto & kernel = find_kernel("ggml_mul_mat_q4_k_f16_wmma_prefill_wave32");
+    for (const int64_t tokens : { int64_t{ 512 }, int64_t{ 1024 } }) {
+        for (const int64_t output_size : { int64_t{ 512 }, int64_t{ 4096 } }) {
+            const std::string key = "native-q4-prefill-" + std::to_string(tokens) + "-" +
+                                    std::to_string(output_size);
+            auto ref = compile_kernel(*jit, key, kernel, token_count_workload(tokens), {
+                { "ggml.mul_mat.input_size",       "2048" },
+                { "ggml.mul_mat.output_size",      std::to_string(output_size) },
+                { "ggml.workload.token_capacity",  std::to_string(tokens) },
+                { "ggml.mul_mat.f16_input_layout", "0" },
+                { "ggml.mul_mat.weight_format",    "4" },
+            });
+            require_compiled_kernel(ref);
+        }
+    }
+}
+
 static bool has_hrx_test_device() {
     HrxTestDevice device;
     return device.open();
@@ -1560,6 +1582,7 @@ static bool has_hrx_test_device() {
 
 static void register_hrx_loom_jit_cases(test_runner::Suite & suite) {
     suite.host_case("compile", [] { run_loom_jit_compile_checks(); });
+    suite.host_case("native-q4-prefill", [] { run_native_q4_prefill_compile_checks(); });
     suite.host_case("binary-publication", [] { run_binary_publication_compile_checks(); });
     suite.host_case("moe-routing", [] { run_moe_routing_compile_checks(); });
     suite.host_case("prefill-fusions", [] { run_prefill_fusion_compile_checks(); });

@@ -1223,12 +1223,12 @@ static size_t registry_device_count(ggml_backend_reg_t registry) {
     return static_cast<ggml_backend_hrx_reg_context *>(registry->context)->devices.size();
 }
 
-static bool backend_set_qwen27_one_layout(ggml_backend_t backend, bool enabled) {
+static bool backend_set_row64_weight_policy(ggml_backend_t backend, bool enabled) {
     if (!ggml_backend_is_hrx(backend)) {
         return false;
     }
     auto * context = static_cast<ggml_backend_hrx_context *>(backend->context);
-    return context->set_qwen27_one_layout(enabled);
+    return context->set_row64_weight_policy(enabled);
 }
 
 static ggml_backend_dev_t registry_device(ggml_backend_reg_t registry, size_t index) {
@@ -1239,8 +1239,8 @@ static ggml_backend_dev_t registry_device(ggml_backend_reg_t registry, size_t in
 
 static void * registry_proc(ggml_backend_reg_t registry, const char * name) {
     GGML_UNUSED(registry);
-    if (std::strcmp(name, "ggml_backend_hrx_set_qwen27_one_layout") == 0) {
-        return reinterpret_cast<void *>(backend_set_qwen27_one_layout);
+    if (std::strcmp(name, "ggml_backend_hrx_set_row64_weight_policy") == 0) {
+        return reinterpret_cast<void *>(backend_set_row64_weight_policy);
     }
     return nullptr;
 }

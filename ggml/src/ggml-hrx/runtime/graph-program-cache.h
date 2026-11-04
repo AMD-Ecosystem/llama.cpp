@@ -52,12 +52,12 @@ class GraphProgram {
                  std::unique_ptr<Graph>          graph,
                  std::unique_ptr<CommandProgram> commands,
                  std::string                     command_shape,
-                 bool                            qwen27_one_layout = false);
+                 bool                            row64_weight_policy = false);
 
     uint64_t uid() const { return uid_; }
 
     const std::string & target() const { return target_; }
-    bool qwen27_one_layout() const { return qwen27_one_layout_; }
+    bool row64_weight_policy() const { return row64_weight_policy_; }
 
     const std::string & command_shape() const { return command_shape_; }
 
@@ -89,7 +89,7 @@ class GraphProgram {
 
     uint64_t                        uid_ = 0;
     std::string                     target_;
-    bool                            qwen27_one_layout_ = false;
+    bool                            row64_weight_policy_ = false;
     std::unique_ptr<Graph>          graph_;
     std::unique_ptr<const CommandProgram> commands_;
     std::string                     command_shape_;
@@ -134,15 +134,15 @@ struct GraphProgramSupportResult {
 class GraphProgramCache {
   public:
     bool can_execute(const ggml_cgraph & graph, const KernelCorpus & corpus, const std::string & target,
-                     bool qwen27_one_layout = false) const;
+                     bool row64_weight_policy = false) const;
 
     GraphProgramSupportResult check_support(const ggml_cgraph &  graph,
                                             const KernelCorpus & corpus,
                                             const std::string &  target,
-                                            bool                 qwen27_one_layout = false) const;
+                                            bool                 row64_weight_policy = false) const;
 
     GraphProgramLookup get_or_build(const ggml_cgraph & graph, const KernelCorpus & corpus, const std::string & target,
-                                    bool qwen27_one_layout = false);
+                                    bool row64_weight_policy = false);
 
     GraphProgramCacheStats stats() const;
 
@@ -158,13 +158,13 @@ class GraphProgramCache {
                                            Graph &&             imported_graph,
                                            const KernelCorpus & corpus,
                                            const std::string &  target,
-                                           bool                 qwen27_one_layout);
+                                           bool                 row64_weight_policy);
 
     std::unique_ptr<GraphProgram> build_program_from_imported(uint64_t             uid,
                                                               Graph &&             imported_graph,
                                                               const KernelCorpus & corpus,
                                                               const std::string &  target,
-                                                              bool                 qwen27_one_layout,
+                                                              bool                 row64_weight_policy,
                                                               Status &             errors) const;
 
     mutable std::mutex                                          mutex_;

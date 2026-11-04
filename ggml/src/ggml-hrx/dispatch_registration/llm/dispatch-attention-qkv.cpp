@@ -311,8 +311,9 @@ static bool can_fuse_q6_f16_prefill_v_cache_cell(const DispatchMatchContext & co
            nullptr;
 }
 
-static bool can_use_packed_lowtoken_attention_matmul(const AttentionMatMulMatch & root) {
-    if (!dispatch_weight_layout_eligible(*root.weight)) {
+static bool can_use_packed_lowtoken_attention_matmul(const DispatchMatchContext & context, const AttentionMatMulMatch & root) {
+    if (!dispatch_weight_layout_eligible_for_graph(
+        context.graph, *root.weight, context.row64_weight_policy)) {
         return false;
     }
     if (root.token_count < 1 || root.token_count > 5 || root.output_size % 64 != 0 ||
@@ -326,10 +327,11 @@ static bool can_use_packed_lowtoken_attention_matmul(const AttentionMatMulMatch 
     return common_is_supported_dense_input_size(root.weight_format, root.input_size);
 }
 
-static bool can_use_qwen27_row64_attention(const DispatchMatchContext & context,
+static bool can_use_row64_attention(const DispatchMatchContext & context,
                                            const AttentionMatMulMatch & root) {
-    const bool has_target_policy = context.qwen27_one_layout;
-    const bool can_transform_weight = dispatch_weight_layout_eligible(*root.weight);
+    const bool has_target_policy = context.row64_weight_policy;
+    const bool can_transform_weight = dispatch_weight_layout_eligible_for_graph(
+        context.graph, *root.weight, context.row64_weight_policy);
     const bool has_direct_weight = root.weight->alias_source.value < 0;
     const bool has_aligned_output = root.output_size % 64 == 0;
     const bool has_q4_weight = root.weight_format == CommonMulMatWeightFormat::Q4K;
@@ -548,9 +550,9 @@ static AttentionQkvMatch match_attention_qkv_projection(const DispatchMatchConte
             match.kernel = is_supported_decode_token_count(root.token_count) ?
                                kAttentionKMatMulRopeSetRowsVectorF32F32Kernel :
                                kAttentionKMatMulRopeSetRowsTiledF32F32Kernel;
-            if (can_use_packed_lowtoken_attention_matmul(root) || can_use_qwen27_row64_attention(context, root)) {
+            if (can_use_packed_lowtoken_attention_matmul(context, root) || can_use_row64_attention(context, root)) {
                 match.root.weight_format = packed_attention_lowtoken_format(root.weight_format);
-                if (!context.qwen27_one_layout) {
+                if (!context.row64_weight_policy) {
                     match.kernel = kAttentionKMatMulRopeSetRowsLegacyF32F32Kernel;
                 }
             }
@@ -561,9 +563,9 @@ static AttentionQkvMatch match_attention_qkv_projection(const DispatchMatchConte
         match.root   = root;
         match.kernel = is_supported_decode_token_count(root.token_count) ? kAttentionQMatMulRopeVectorF32F32Kernel :
                                                                            kAttentionQMatMulRopeTiledF32F32Kernel;
-        if (can_use_packed_lowtoken_attention_matmul(root) || can_use_qwen27_row64_attention(context, root)) {
+        if (can_use_packed_lowtoken_attention_matmul(context, root) || can_use_row64_attention(context, root)) {
             match.root.weight_format = packed_attention_lowtoken_format(root.weight_format);
-            if (!context.qwen27_one_layout) {
+            if (!context.row64_weight_policy) {
                 match.kernel = kAttentionQMatMulRopeLegacyF32F32Kernel;
             }
         }
@@ -585,9 +587,9 @@ static AttentionQkvMatch match_attention_qkv_projection(const DispatchMatchConte
         match.root   = root;
         match.kernel = is_supported_decode_token_count(root.token_count) ? kAttentionVMatMulSetRowsVectorF32F32Kernel :
                                                                            kAttentionVMatMulSetRowsTiledF32F32Kernel;
-        if (can_use_packed_lowtoken_attention_matmul(root) || can_use_qwen27_row64_attention(context, root)) {
+        if (can_use_packed_lowtoken_attention_matmul(context, root) || can_use_row64_attention(context, root)) {
             match.root.weight_format = packed_attention_lowtoken_format(root.weight_format);
-            if (!context.qwen27_one_layout) {
+            if (!context.row64_weight_policy) {
                 match.kernel = kAttentionVMatMulSetRowsLegacyF32F32Kernel;
             }
         }
@@ -703,7 +705,7 @@ static bool match_attention_qkv_dispatch(const DispatchMatchContext & context, D
                                          dispatch_match, activation,
                                          CommonQ8ActivationPolicy::ExistingAlternateOnly)) {
             use_q8_activation = true;
-            if (context.qwen27_one_layout) {
+            if (context.row64_weight_policy) {
                 switch (match.kind) {
                     case AttentionQkvProjectionKind::Query:
                         match.kernel = kAttentionQMatMulRopeLegacyF32F32Kernel;
@@ -716,7 +718,7 @@ static bool match_attention_qkv_dispatch(const DispatchMatchContext & context, D
                         break;
                 }
             }
-        } else if (!context.qwen27_one_layout) {
+        } else if (!context.row64_weight_policy) {
             CommonMulMatWeightFormat fallback_format = CommonMulMatWeightFormat::Q4K;
             if (!common_mul_mat_format_for_type(match.root.weight->type, fallback_format)) {
                 return false;

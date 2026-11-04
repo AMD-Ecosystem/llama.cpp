@@ -272,12 +272,12 @@ static bool common_mul_mat_is_tiled_route(const CommonMulMatMatch & match) {
     return match.matched() && match.token_count > 1 && !common_mul_mat_is_skinny_route(match);
 }
 
-static bool qwen27_native_packed_glu_weight(const DispatchMatchContext & context, const Value & weight) {
+static bool native_packed_glu_weight(const DispatchMatchContext & context, const Value & weight) {
     const bool q4_weight = weight.type == GGML_TYPE_Q4_K;
     const bool direct_weight = weight.alias_source.value < 0;
     const bool has_graph_index = context.graph.has_index();
     const bool has_root = context.root_node != nullptr;
-    const bool inspect_consumer = context.qwen27_one_layout && q4_weight && direct_weight && has_graph_index && has_root;
+    const bool inspect_consumer = context.row64_weight_policy && q4_weight && direct_weight && has_graph_index && has_root;
     if (!inspect_consumer) {
         return false;
     }
@@ -914,7 +914,8 @@ static bool match_q6_k_prefill_wave32_dispatch(const DispatchMatchContext & cont
     if (!prepared) {
         return false;
     }
-    const bool row64_weight = context.qwen27_one_layout && dispatch_weight_layout_eligible(*match.weight);
+    const bool row64_weight = context.row64_weight_policy && dispatch_weight_layout_eligible_for_graph(
+        context.graph, *match.weight, context.row64_weight_policy);
     return build_q6_k_prefill_wave32_dispatch(match, activation.value, activation.length,
                                               kMulMatQ6KF16WmmaPrefillWave32Kernel, row64_weight,
                                               context.root_index, dispatch_match);
@@ -1069,12 +1070,17 @@ static bool match_packed_q8_1_x4_prefill_dispatch(const DispatchMatchContext & c
     const bool is_q4_weight = match.weight->type == GGML_TYPE_Q4_K;
     const bool has_direct_weight = match.weight->alias_source.value < 0;
     const bool has_wide_output = match.output_size >= match.input_size / 4;
-    const bool can_transform_weight = dispatch_weight_layout_eligible(*match.weight);
-    const bool native_packed_glu = qwen27_native_packed_glu_weight(context, *match.weight);
-    if (native_packed_glu) {
+    const bool can_transform_weight = dispatch_weight_layout_eligible_for_graph(
+        context.graph, *match.weight, context.row64_weight_policy);
+    const bool native_packed_glu = native_packed_glu_weight(context, *match.weight);
+    const bool native_qwen30_attention = context.row64_weight_policy &&
+        dispatch_weight_is_qwen30b_native_attention(context.graph, *match.weight);
+    const bool eligible_f16_weight = can_transform_weight || native_qwen30_attention;
+    const bool use_f16 = is_q4_weight && has_direct_weight && has_wide_output && eligible_f16_weight;
+    const bool unsupported_native_glu = native_packed_glu && !use_f16;
+    if (unsupported_native_glu) {
         return false;
     }
-    const bool use_f16 = is_q4_weight && has_direct_weight && has_wide_output && can_transform_weight;
     DispatchBinding activation;
     const bool      packed_input =
         use_f16 &&
@@ -1110,9 +1116,13 @@ static bool match_packed_q8_1_x4_prefill_dispatch(const DispatchMatchContext & c
         use_f16 ? "ggml.workload.token_capacity" : "ggml.mul_mat_q8_1_x4.token_capacity",
                                                common_to_config_value(match.token_count));
     const bool pack_q4 = match.weight_format == CommonMulMatWeightFormat::Q4K &&
-                         has_direct_weight && can_transform_weight;
+                         has_direct_weight && can_transform_weight && !native_packed_glu;
     if (use_f16) {
         dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.f16_input_layout", packed_input ? "1" : "0");
+        dispatch.kernel.compile_parameters.emplace(
+            "ggml.mul_mat.weight_format",
+            common_to_config_value(common_mul_mat_format_config_value(pack_q4 ? CommonMulMatWeightFormat::Q4KRow64 :
+                                                                               match.weight_format)));
     } else {
         dispatch.kernel.compile_parameters.emplace(
             "ggml.mul_mat_q8_1_x4.weight_format",
@@ -1355,12 +1365,13 @@ static bool build_mul_mat_dispatch(
     const bool has_aligned_input = match.input_size % 256 == 0;
     const bool has_aligned_output = match.output_size % 64 == 0;
     const bool has_direct_weight = match.weight->alias_source.value < 0;
-    const bool can_transform_weight = dispatch_weight_layout_eligible(*match.weight);
+    const bool can_transform_weight = dispatch_weight_layout_eligible_for_graph(
+        context.graph, *match.weight, context.row64_weight_policy);
+    const bool use_native_packed_glu = native_packed_glu_weight(context, *match.weight);
     const bool parent_pack_rows = has_few_tokens && has_skinny_reduction && has_aligned_output &&
-                                  has_direct_weight && can_transform_weight;
-    const bool target_pack_rows = context.qwen27_one_layout && has_aligned_input && has_aligned_output &&
-                                  has_direct_weight && can_transform_weight &&
-                                  !qwen27_native_packed_glu_weight(context, *match.weight);
+                                  has_direct_weight && can_transform_weight && !use_native_packed_glu;
+    const bool target_pack_rows = context.row64_weight_policy && has_aligned_input && has_aligned_output &&
+                                  has_direct_weight && can_transform_weight && !use_native_packed_glu;
     const bool pack_rows = parent_pack_rows || target_pack_rows;
     const bool can_pack_q4 = pack_rows && match.weight_format == CommonMulMatWeightFormat::Q4K;
     const bool can_pack_q6 = pack_rows && match.weight_format == CommonMulMatWeightFormat::Q6K;
@@ -1466,10 +1477,11 @@ static bool prepare_vector_activation_binding(const DispatchMatchContext &     c
     const bool has_aligned_input = input_size % 256 == 0;
     const bool has_direct_weight = weight.alias_source.value < 0;
     const bool has_aligned_output = output_size % 64 == 0;
-    const bool can_transform_weight = dispatch_weight_layout_eligible(weight);
+    const bool can_transform_weight = dispatch_weight_layout_eligible_for_graph(
+        context.graph, weight, context.row64_weight_policy);
     const bool can_prepare_packed_vector = has_single_token && has_aligned_input && has_direct_weight &&
                                            has_aligned_output && can_transform_weight &&
-                                           !qwen27_native_packed_glu_weight(context, weight);
+                                           !native_packed_glu_weight(context, weight);
     if (!can_prepare_packed_vector) {
         return true;
     }
@@ -1480,9 +1492,8 @@ static bool prepare_vector_activation_binding(const DispatchMatchContext &     c
         return true;
     }
 
-    // This model's prefill already retains these imported weights as row64.
-    // Choose the same source before checking for an optional Q8 activation.
-    if (context.qwen27_one_layout) {
+    // A row64 policy must choose the retained source before checking for an optional Q8 activation.
+    if (context.row64_weight_policy) {
         kernel_weight_format = can_pack_q4 ? CommonMulMatWeightFormat::Q4KRow64 : CommonMulMatWeightFormat::Q6KRow64;
         weight_layout = can_pack_q4 ? kQ4KPackedK256Row64Layout : kQ6KPackedK256Row64ScaleRowLayout;
     }
@@ -1494,7 +1505,7 @@ static bool prepare_vector_activation_binding(const DispatchMatchContext &     c
     }
 
     activation           = q8_activation;
-    if (!context.qwen27_one_layout) {
+    if (!context.row64_weight_policy) {
         kernel_weight_format = can_pack_q4 ? CommonMulMatWeightFormat::Q4KRow64 : CommonMulMatWeightFormat::Q6KRow64;
         weight_layout = can_pack_q4 ? kQ4KPackedK256Row64Layout : kQ6KPackedK256Row64ScaleRowLayout;
     }
@@ -1878,12 +1889,13 @@ static bool build_mul_mat_postops_dispatch(const DispatchMatchContext & context,
     const bool has_aligned_input = match.input_size % 256 == 0;
     const bool has_aligned_output = match.output_size % 64 == 0;
     const bool has_direct_weight = match.weight->alias_source.value < 0;
-    const bool can_transform_weight = dispatch_weight_layout_eligible(*match.weight);
+    const bool can_transform_weight = dispatch_weight_layout_eligible_for_graph(
+        context.graph, *match.weight, context.row64_weight_policy);
+    const bool use_native_packed_glu = native_packed_glu_weight(context, *match.weight);
     const bool parent_pack_rows = has_few_tokens && has_skinny_reduction && has_aligned_output &&
-                                  has_direct_weight && can_transform_weight;
-    const bool target_pack_rows = context.qwen27_one_layout && has_aligned_input && has_aligned_output &&
-                                  has_direct_weight && can_transform_weight &&
-                                  !qwen27_native_packed_glu_weight(context, *match.weight);
+                                  has_direct_weight && can_transform_weight && !use_native_packed_glu;
+    const bool target_pack_rows = context.row64_weight_policy && has_aligned_input && has_aligned_output &&
+                                  has_direct_weight && can_transform_weight && !use_native_packed_glu;
     const bool pack_rows = parent_pack_rows || target_pack_rows;
     const bool can_pack_q4 = pack_rows && match.weight_format == CommonMulMatWeightFormat::Q4K;
     const bool can_pack_q6 = pack_rows && match.weight_format == CommonMulMatWeightFormat::Q6K;
