@@ -365,9 +365,9 @@ static ggml_tensor * build_qwen_router_top8_graph(ggml_context * ctx,
     return output;
 }
 
-static std::string kernel_name_for_id(uint64_t kernel_id) {
+static std::string kernel_name_for_id(uint64_t kernel_id, const std::string & architecture = "gfx1151") {
     const ggml::hrx::KernelResolveResult resolved =
-        ggml::hrx::resolve_kernel_definition(ggml::hrx::get_qwen_kernel_corpus(), "gfx1151", kernel_id);
+        ggml::hrx::resolve_kernel_definition(ggml::hrx::get_qwen_kernel_corpus(), architecture, kernel_id);
     REQUIRE(resolved.found());
     return ggml::hrx::kernel_definition_name(*resolved.definition);
 }
@@ -8154,6 +8154,122 @@ static void run_qwen27_matmul_policy_route_case(ggml_type type, int64_t tokens) 
     ggml_free(ctx);
 }
 
+static void require_qwen27_native_dot_reference(ggml_type type, const std::vector<uint8_t> & weights,
+                                                const std::vector<float> & input, const std::vector<float> & observed,
+                                                int64_t k, int64_t n, const std::vector<int64_t> & rows,
+                                                const std::vector<int64_t> & tokens, const char * label,
+                                                bool silu_output = false) {
+    const ggml_type_traits * traits = ggml_get_type_traits(type);
+    REQUIRE(traits != nullptr && traits->to_float != nullptr);
+    const size_t row_bytes = ggml_row_size(type, k);
+    std::vector<float> dequantized(static_cast<size_t>(k));
+    std::vector<float> observed_samples;
+    std::vector<float> reference_samples;
+    for (int64_t row : rows) {
+        traits->to_float(weights.data() + static_cast<size_t>(row) * row_bytes, dequantized.data(), k);
+        for (int64_t token : tokens) {
+            double reference = 0.0;
+            for (int64_t column = 0; column < k; ++column) {
+                reference += static_cast<double>(dequantized[static_cast<size_t>(column)]) *
+                             static_cast<double>(input[static_cast<size_t>(token * k + column)]);
+            }
+            if (silu_output) {
+                reference = reference / (1.0 + std::exp(-reference));
+            }
+            observed_samples.push_back(observed[static_cast<size_t>(token * n + row)]);
+            reference_samples.push_back(static_cast<float>(reference));
+        }
+    }
+    double squared_error = 0.0;
+    double squared_reference = 0.0;
+    double maximum_error = 0.0;
+    for (size_t i = 0; i < observed_samples.size(); ++i) {
+        const double difference = static_cast<double>(observed_samples[i]) - reference_samples[i];
+        squared_error += difference * difference;
+        squared_reference += static_cast<double>(reference_samples[i]) * reference_samples[i];
+        maximum_error = std::max(maximum_error, std::fabs(difference));
+    }
+    REQUIRE(squared_reference > 0.0);
+    const double relative_l2 = std::sqrt(squared_error / squared_reference);
+    std::fprintf(stderr, "qwen27 %s %s native-dequant reference: relative_l2=%g max_abs=%g samples=%zu\n",
+                 label, ggml_type_name(type), relative_l2, maximum_error, observed_samples.size());
+    REQUIRE(relative_l2 <= 0.01);
+    require_close(observed_samples, reference_samples, 0.02f, 0.02f);
+}
+
+static void run_qwen27_dense_native_reference_case(ggml_type type, int64_t tokens) {
+    constexpr int64_t k = 512;
+    constexpr int64_t n = 128;
+    auto backend = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+    ggml_backend_reg_t registry = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
+    using set_policy_fn = bool (*)(ggml_backend_t, bool);
+    auto set_policy = reinterpret_cast<set_policy_fn>(
+        ggml_backend_reg_get_proc_address(registry, "ggml_backend_hrx_set_qwen27_one_layout"));
+    REQUIRE(set_policy != nullptr);
+    REQUIRE(set_policy(backend, true));
+    auto * backend_state = static_cast<ggml_backend_hrx_context *>(backend->context);
+    REQUIRE(backend_state != nullptr && backend_state->device != nullptr);
+    const std::string architecture = backend_state->device->architecture;
+
+    ggml_context * ctx = ggml_init({ 1024 * 1024, nullptr, true });
+    REQUIRE(ctx != nullptr);
+    ggml_tensor * weight = ggml_new_tensor_2d(ctx, type, k, n);
+    ggml_tensor * activation = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, tokens);
+    ggml_tensor * projection = ggml_mul_mat(ctx, weight, activation);
+    ggml_tensor * output = ggml_silu(ctx, projection);
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, output);
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+    ggml::hrx::DispatchScheduler scheduler;
+    REQUIRE(scheduler.schedule_graph(imported.graph, { architecture, true }));
+    const ggml::hrx::Value * source = imported.graph.values().find_tensor(weight);
+    REQUIRE(source != nullptr);
+    const char * expected_layout = type == GGML_TYPE_Q4_K ? ggml::hrx::kQ4KPackedK256Row64Layout :
+                                                              ggml::hrx::kQ6KPackedK256Row64ScaleRowLayout;
+    const char * expected_kernel = tokens == 1 ? "loom_libs:ggml_mul_mat_vector_f32_f32" :
+                                                 "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32";
+    size_t matched = 0;
+    for (const auto & dispatch : scheduler.plan().dispatches) {
+        for (const auto & binding : dispatch.bindings) {
+            if (binding.value != source->id) {
+                continue;
+            }
+            REQUIRE(binding.layout == expected_layout);
+            REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id, architecture) == expected_kernel);
+            ++matched;
+        }
+    }
+    REQUIRE(matched == 1);
+
+    std::vector<uint8_t> weights = make_matmul_weight_bytes(type, k, n, 6);
+    auto weight_buffer = import_test_weight(backend, weight, weights);
+    ggml_backend_buffer_t graph_buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    REQUIRE(graph_buffer != nullptr);
+    const std::vector<float> input = make_pattern_f32(k * tokens, 7, 0.0625f);
+    set_tensor_bytes(backend, activation, input.data(), input.size() * sizeof(float));
+    REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(backend);
+    const auto observed = get_f32_tensor(backend, output);
+    std::vector<int64_t> rows;
+    for (int64_t row = 0; row < n; ++row) {
+        rows.push_back(row);
+    }
+    const std::vector<int64_t> sample_tokens = tokens == 1 ? std::vector<int64_t>{ 0 } :
+                                                               std::vector<int64_t>{ 0, 21, 43, tokens - 1 };
+    require_qwen27_native_dot_reference(type, weights, input, observed, k, n, rows, sample_tokens,
+                                        tokens == 1 ? "vector" : "tiled", true);
+    ggml_backend_hrx_cache_stats stats = {};
+    REQUIRE(ggml_backend_hrx_get_cache_stats(backend, &stats));
+    REQUIRE(stats.weight_duplicate_warnings == 0);
+    REQUIRE(stats.weight_materializations == 1);
+    ggml_backend_buffer_free(graph_buffer);
+    weight_buffer.reset();
+    ggml_free(ctx);
+    ggml_backend_free(backend);
+}
+
 static void run_ssm_conv_prefill_recurrent_case(ggml_type type, bool gathered, bool clear_state,
                                                 bool qwen27_one_layout = false) {
     const int64_t k = qwen27_one_layout ? 512 : 256;
@@ -8200,46 +8316,15 @@ static void run_ssm_conv_prefill_recurrent_case(ggml_type type, bool gathered, b
         require_close(get_f32_tensor(backend, a.cache), get_f32_tensor(backend, b.cache), 0.0f, 0.0f);
         require_close(actual, expected, 0.0f, 0.0f);
         if (qwen27_one_layout && round == 0) {
-            const ggml_type_traits * traits = ggml_get_type_traits(type);
-            REQUIRE(traits != nullptr && traits->to_float != nullptr);
             const auto projection = get_f32_tensor(backend, b.projection);
-            const size_t row_bytes = ggml_row_size(type, k);
-            std::vector<float> dequantized(static_cast<size_t>(k));
-            std::vector<float> observed_samples;
-            std::vector<float> reference_samples;
             std::vector<int64_t> rows;
             for (int64_t row = 0; row < 64; ++row) {
                 rows.push_back(row);
             }
             rows.push_back(4095);
             rows.push_back(8191);
-            for (int64_t row : rows) {
-                traits->to_float(weights.data() + static_cast<size_t>(row) * row_bytes, dequantized.data(), k);
-                for (int64_t token : { int64_t{0}, int64_t{127}, int64_t{255}, int64_t{511} }) {
-                    double reference = 0.0;
-                    for (int64_t column = 0; column < k; ++column) {
-                        reference += static_cast<double>(dequantized[static_cast<size_t>(column)]) *
-                                     static_cast<double>(input[static_cast<size_t>(token * k + column)]);
-                    }
-                    observed_samples.push_back(projection[static_cast<size_t>(token * n + row)]);
-                    reference_samples.push_back(static_cast<float>(reference));
-                }
-            }
-            double squared_error = 0.0;
-            double squared_reference = 0.0;
-            double maximum_error = 0.0;
-            for (size_t i = 0; i < observed_samples.size(); ++i) {
-                const double difference = static_cast<double>(observed_samples[i]) - reference_samples[i];
-                squared_error += difference * difference;
-                squared_reference += static_cast<double>(reference_samples[i]) * reference_samples[i];
-                maximum_error = std::max(maximum_error, std::fabs(difference));
-            }
-            REQUIRE(squared_reference > 0.0);
-            const double relative_l2 = std::sqrt(squared_error / squared_reference);
-            std::fprintf(stderr, "qwen27 Q6 SSM native-dequant reference: relative_l2=%g max_abs=%g samples=%zu\n",
-                         relative_l2, maximum_error, observed_samples.size());
-            REQUIRE(relative_l2 <= 0.01);
-            require_close(observed_samples, reference_samples, 0.02f, 0.02f);
+            require_qwen27_native_dot_reference(type, weights, input, projection, k, n, rows,
+                                                { 0, 127, 255, 511 }, "SSM");
         }
     }
     if (qwen27_one_layout) {
@@ -8346,6 +8431,17 @@ static void register_basic_ops_cases(Suite & suite) {
     suite.device_case("qwen27.ssm_conv_q6_imported_numerics", [] {
         run_ssm_conv_prefill_recurrent_case(GGML_TYPE_Q6_K, false, false, true);
     });
+    suite.device_case("qwen27.ssm_conv_q4_interior_imported_numerics", [] {
+        run_ssm_conv_prefill_recurrent_case(GGML_TYPE_Q4_K, true, false, true);
+    });
+    for (const ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
+        suite.device_case("qwen27.native_dequant." + type_name(type) + ".vector", [type] {
+            run_qwen27_dense_native_reference_case(type, 1);
+        });
+        suite.device_case("qwen27.native_dequant." + type_name(type) + ".tiled", [type] {
+            run_qwen27_dense_native_reference_case(type, 66);
+        });
+    }
     suite.device_case("view_mul_f32.cpu_reference", [] { run_view_mul_f32_cpu_reference_case(); });
     for (const int64_t token_count : { 2, 23 }) {
         suite.device_case("strided_cont.tokens" + std::to_string(token_count),
