@@ -8091,8 +8091,8 @@ static SsmConvPrefillGraph make_ssm_conv_prefill_graph(ggml_type type,
     return c;
 }
 
-static void run_qwen27_ssm_q6_policy_route_case() {
-    auto graph = make_ssm_conv_prefill_graph(GGML_TYPE_Q6_K, 256, 8192, false, false, false);
+static void run_qwen27_ssm_policy_route_case(ggml_type type, bool gathered) {
+    auto graph = make_ssm_conv_prefill_graph(type, 256, 8192, false, gathered, false);
     for (bool qwen27_one_layout : { false, true }) {
         ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph.graph);
         REQUIRE(imported.valid());
@@ -8106,12 +8106,14 @@ static void run_qwen27_ssm_q6_policy_route_case() {
                 if (binding.value != weight->id) {
                     continue;
                 }
-                const char * expected_layout = qwen27_one_layout ?
-                    ggml::hrx::kQ6KPackedK256Row64ScaleRowLayout : ggml::hrx::kNativeWeightLayout;
+                const bool q4_weight = type == GGML_TYPE_Q4_K;
+                const bool q6_row64 = !q4_weight && qwen27_one_layout;
+                const char * expected_layout = q4_weight ? ggml::hrx::kQ4KPackedK256Row64Layout :
+                    q6_row64 ? ggml::hrx::kQ6KPackedK256Row64ScaleRowLayout : ggml::hrx::kNativeWeightLayout;
                 REQUIRE(binding.layout == expected_layout);
                 const auto format = dispatch.kernel.compile_parameters.find("ggml.mul_mat.weight_format");
                 REQUIRE(format != dispatch.kernel.compile_parameters.end());
-                REQUIRE(format->second == (qwen27_one_layout ? "46" : "6"));
+                REQUIRE(format->second == (q4_weight ? "4" : (q6_row64 ? "46" : "6")));
                 ++matched;
             }
         }
@@ -8154,7 +8156,7 @@ static void run_qwen27_matmul_policy_route_case(ggml_type type, int64_t tokens) 
 
 static void run_ssm_conv_prefill_recurrent_case(ggml_type type, bool gathered, bool clear_state,
                                                 bool qwen27_one_layout = false) {
-    const int64_t k = 256;
+    const int64_t k = qwen27_one_layout ? 512 : 256;
     const int64_t n = 8192;
     auto backend = ggml_backend_hrx_init(0);
     REQUIRE(backend != nullptr);
@@ -8225,13 +8227,18 @@ static void run_ssm_conv_prefill_recurrent_case(ggml_type type, bool gathered, b
             }
             double squared_error = 0.0;
             double squared_reference = 0.0;
+            double maximum_error = 0.0;
             for (size_t i = 0; i < observed_samples.size(); ++i) {
                 const double difference = static_cast<double>(observed_samples[i]) - reference_samples[i];
                 squared_error += difference * difference;
                 squared_reference += static_cast<double>(reference_samples[i]) * reference_samples[i];
+                maximum_error = std::max(maximum_error, std::fabs(difference));
             }
             REQUIRE(squared_reference > 0.0);
-            REQUIRE(std::sqrt(squared_error / squared_reference) <= 0.01);
+            const double relative_l2 = std::sqrt(squared_error / squared_reference);
+            std::fprintf(stderr, "qwen27 Q6 SSM native-dequant reference: relative_l2=%g max_abs=%g samples=%zu\n",
+                         relative_l2, maximum_error, observed_samples.size());
+            REQUIRE(relative_l2 <= 0.01);
             require_close(observed_samples, reference_samples, 0.02f, 0.02f);
         }
     }
@@ -8302,7 +8309,12 @@ static std::string type_name(ggml_type type) {
 using test_runner::Suite;
 
 static void register_basic_ops_cases(Suite & suite) {
-    suite.host_case("qwen27.ssm_q6_policy_route", [] { run_qwen27_ssm_q6_policy_route_case(); });
+    for (const ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
+        suite.host_case("qwen27.ssm_policy_route." + type_name(type) + ".plain",
+                        [type] { run_qwen27_ssm_policy_route_case(type, false); });
+        suite.host_case("qwen27.ssm_policy_route." + type_name(type) + ".interior",
+                        [type] { run_qwen27_ssm_policy_route_case(type, true); });
+    }
     suite.host_case("qwen27.q4_decode_policy_route", [] {
         run_qwen27_matmul_policy_route_case(GGML_TYPE_Q4_K, 1);
     });
