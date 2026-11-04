@@ -8221,14 +8221,55 @@ static void run_qwen27_matmul_policy_route_case(ggml_type type, int64_t tokens) 
     ggml_free(ctx);
 }
 
-static void run_gemma4_decode_native_route_case(ggml_type type) {
+static void run_gemma4_decode_parent_f32_route_case(ggml_type type) {
     ggml_context * ctx = ggml_init({ 4 * 1024 * 1024, nullptr, true });
     REQUIRE(ctx != nullptr);
     ggml_tensor * weight = ggml_new_tensor_2d(ctx, type, 15360, 3840);
     ggml_tensor * input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 15360, 1);
-    ggml_tensor * output = ggml_mul_mat(ctx, weight, input);
+    ggml_tensor * projection = ggml_mul_mat(ctx, weight, input);
+    ggml_tensor * output = ggml_scale(ctx, projection, 0.5f);
     ggml_cgraph * graph = ggml_new_graph(ctx);
     ggml_build_forward_expand(graph, output);
+    for (const char * target : { "gfx1100", "gfx1151" }) {
+        ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+        REQUIRE(imported.valid());
+        REQUIRE(imported.graph.has_index());
+        const ggml::hrx::Value * projection_value = imported.graph.values().find_tensor(projection);
+        const ggml::hrx::Value * source = imported.graph.values().find_tensor(weight);
+        REQUIRE(projection_value != nullptr);
+        REQUIRE(source != nullptr);
+        REQUIRE(!imported.graph.index().consumers(projection_value->id).empty());
+        ggml::hrx::DispatchScheduler scheduler;
+        REQUIRE(scheduler.schedule_graph(imported.graph, { target, false }));
+        size_t matched = 0;
+        for (const auto & dispatch : scheduler.plan().dispatches) {
+            for (const auto & binding : dispatch.bindings) {
+                if (binding.value != source->id) {
+                    continue;
+                }
+                REQUIRE(binding.layout == ggml::hrx::kNativeWeightLayout);
+                REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) ==
+                        "loom_libs:ggml_mul_mat_vector_f32_f32");
+                const auto format = dispatch.kernel.compile_parameters.find("ggml.matmul.vector.weight_format");
+                REQUIRE(format != dispatch.kernel.compile_parameters.end());
+                REQUIRE(format->second == (type == GGML_TYPE_Q4_K ? "4" : "6"));
+                REQUIRE(dispatch.kernel.compile_parameters.find("ggml.matmul.vector.activation_format") ==
+                        dispatch.kernel.compile_parameters.end());
+                ++matched;
+            }
+        }
+        REQUIRE(matched == 1);
+    }
+    ggml_free(ctx);
+}
+
+static void run_gemma4_decode_parent_terminal_q6_route_case() {
+    ggml_context * ctx = ggml_init({ 4 * 1024 * 1024, nullptr, true });
+    REQUIRE(ctx != nullptr);
+    ggml_tensor * weight = ggml_new_tensor_2d(ctx, GGML_TYPE_Q6_K, 15360, 3840);
+    ggml_tensor * input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 15360, 1);
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, ggml_mul_mat(ctx, weight, input));
     ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
     REQUIRE(imported.valid());
     ggml::hrx::DispatchScheduler scheduler;
@@ -8241,12 +8282,12 @@ static void run_gemma4_decode_native_route_case(ggml_type type) {
             if (binding.value != source->id) {
                 continue;
             }
-            REQUIRE(binding.layout == ggml::hrx::kNativeWeightLayout);
+            REQUIRE(binding.layout == ggml::hrx::kQ6KPackedK256Row64ScaleRowLayout);
             REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) ==
-                    "loom_libs:ggml_mul_mat_vector_f32_f32");
-            const auto format = dispatch.kernel.compile_parameters.find("ggml.matmul.vector.weight_format");
-            REQUIRE(format != dispatch.kernel.compile_parameters.end());
-            REQUIRE(format->second == (type == GGML_TYPE_Q4_K ? "4" : "6"));
+                    "loom_libs:ggml_mul_mat_vector_q6_f32_f32");
+            const auto storage = dispatch.kernel.compile_parameters.find("ggml.matmul.vector.q6_storage");
+            REQUIRE(storage != dispatch.kernel.compile_parameters.end());
+            REQUIRE(storage->second == "0");
             ++matched;
         }
     }
@@ -8808,9 +8849,12 @@ static void register_basic_ops_cases(Suite & suite) {
         run_qwen17b_tied_embedding_layout_policy_case();
     });
     for (const ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
-        suite.host_case("gemma4_decode.native_route." + type_name(type),
-                        [type] { run_gemma4_decode_native_route_case(type); });
+        suite.host_case("gemma4_decode.parent_f32_route." + type_name(type),
+                        [type] { run_gemma4_decode_parent_f32_route_case(type); });
     }
+    suite.host_case("gemma4_decode.parent_terminal_q6_route.gfx1151", [] {
+        run_gemma4_decode_parent_terminal_q6_route_case();
+    });
     for (const ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
         suite.host_case("qwen27.ssm_policy_route." + type_name(type) + ".plain",
                         [type] { run_qwen27_ssm_policy_route_case(type, false); });
@@ -9131,7 +9175,7 @@ static void register_dense_matmul_cases(Suite & suite) {
                 GGML_TYPE_Q4_K,
                 tokens >= 512 ? "loom_libs:ggml_mul_mat_q4_k_f16_wmma_prefill_wave32" :
                 tokens == 1 ? "loom_libs:ggml_mul_mat_vector_f32_f32" :
-                              "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32",
+                              "loom_libs:ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32",
                 tokens, 128, GGML_GLU_OP_SWIGLU, false, 512, true);
         });
     }
