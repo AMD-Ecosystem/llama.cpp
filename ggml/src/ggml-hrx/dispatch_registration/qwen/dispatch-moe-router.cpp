@@ -536,8 +536,7 @@ static bool match_moe_router_projection_top8_fused_decode_dispatch(const Dispatc
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.workload.token_capacity",
                                                to_config_value(match.top8.token_count));
 
-    const size_t route_id_length =
-        static_cast<size_t>(match.top8.token_count * match.top8.route_stride) * sizeof(int32_t);
+    const size_t route_id_length = match.top8.route_ids->byte_count;
     dispatch.bindings.push_back({ match.input->id, 0, match.input->byte_count });
     dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
     dispatch.bindings.push_back({ match.logits->id, 0, match.logits->byte_count });
@@ -576,8 +575,7 @@ static bool match_moe_router_top8_dispatch(const DispatchMatchContext & context,
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.workload.token_capacity",
                                                to_config_value(router_match.token_count));
 
-    const size_t route_id_length =
-        static_cast<size_t>(router_match.token_count * router_match.route_stride) * sizeof(int32_t);
+    const size_t route_id_length = router_match.route_ids->byte_count;
     dispatch.bindings.push_back({ router_match.logits->id, 0, router_match.logits->byte_count });
     dispatch.bindings.push_back({ router_match.route_ids->id, 0, route_id_length });
     dispatch.bindings.push_back({ router_match.route_weights->id, 0, router_match.route_weights->byte_count });
