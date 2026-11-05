@@ -21,10 +21,6 @@ static constexpr KernelCatalogRef kQwenAttentionPostprocessF32F16Kernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_attention_postprocess_f32_f16");
 static constexpr KernelCatalogRef kQwenAttentionQkvPostprocessFusedDecodeKernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_attention_qkv_postprocess_fused_decode");
-static constexpr KernelCatalogRef kQwenAttentionContextBaseCaptureKernel =
-    GGML_HRX_KERNEL_REF("qwen", "qwen_attention_context_base_capture");
-static constexpr KernelCatalogRef kQwenAttentionMetadataKernel =
-    GGML_HRX_KERNEL_REF("qwen3_moe", "qwen_attention_metadata");
 static constexpr int64_t kQwenAttentionHeadSize = 128;
 
 static const Value * graph_value(const Graph & graph, ValueId id) {
@@ -735,69 +731,9 @@ static bool append_postprocess_covered_nodes(const DispatchMatchContext &      c
     return true;
 }
 
-static bool has_attention_metadata_initialization(const CommandPlan & plan) {
-    for (const Dispatch & dispatch : plan.initialization_dispatches) {
-        if (dispatch.kernel.kernel_id == kQwenAttentionMetadataKernel.id) {
-            return true;
-        }
-    }
-    return false;
-}
-
 static ValueId next_match_transient_value(const DispatchMatchContext & context, const DispatchMatch & dispatch_match) {
     return ValueId(context.next_plan_value.value + static_cast<int32_t>(dispatch_match.transients.size()) +
                    static_cast<int32_t>(dispatch_match.completion_counter_requests.size()));
-}
-
-static bool append_attention_metadata_initialization(const DispatchMatchContext &      context,
-                                                     const AttentionPostprocessMatch & match,
-                                                     DispatchMatch &                   dispatch_match) {
-    if (has_attention_metadata_initialization(context.plan)) {
-        return true;
-    }
-    if (!match.flash_layouts.matched() || match.flash_layouts.flash->inputs.size() != 4) {
-        return true;
-    }
-
-    const Value * mask = graph_value(context.graph, match.flash_layouts.flash->inputs[3]);
-    if (mask == nullptr || mask->type != GGML_TYPE_F16 || mask->ne[0] <= 0 || mask->ne[1] != match.query.token_count) {
-        return false;
-    }
-    int64_t context_capacity = mask->ne[0];
-    size_t  mask_byte_count  = mask->byte_count;
-    if (context_capacity > 32768 && match.query.token_count <= 32768) {
-        context_capacity = match.query.token_count;
-        mask_byte_count  = static_cast<size_t>(match.query.token_count) * static_cast<size_t>(match.query.token_count) *
-                          sizeof(ggml_fp16_t);
-        Status metadata_status;
-        if (!dispatch_match.metadata.append_alternate_value(
-                { mask->id, mask->id, GGML_TYPE_F16, mask_byte_count, "qwen.attention.compact_mask" },
-                metadata_status)) {
-            dispatch_match.status.append(metadata_status);
-            return false;
-        }
-    }
-
-    const ValueId control = next_match_transient_value(context, dispatch_match);
-    dispatch_match.transients.push_back({ control, "qwen.attention.control", sizeof(int32_t), 16 });
-
-    Dispatch context_capture;
-    context_capture.kernel = make_kernel_specialization(kQwenAttentionContextBaseCaptureKernel);
-    context_capture.bindings.push_back({ match.query.positions->id, 0, match.query.positions->byte_count });
-    context_capture.bindings.push_back({ control, 0, sizeof(int32_t) });
-    dispatch_match.initialization_dispatches.push_back(std::move(context_capture));
-
-    Dispatch metadata;
-    metadata.kernel = make_kernel_specialization(kQwenAttentionMetadataKernel);
-    metadata.kernel.integer_parameters.emplace("token_count", match.query.token_count);
-    metadata.kernel.integer_parameters.emplace("context_capacity", context_capacity);
-    metadata.bindings.push_back({ control, 0, sizeof(int32_t) });
-    metadata.bindings.push_back({ match.query.positions->id, 0, match.query.positions->byte_count });
-    metadata.bindings.push_back({ match.key.cache_indices->id, 0, match.key.cache_indices->byte_count });
-    metadata.bindings.push_back({ match.value.cache_indices->id, 0, match.value.cache_indices->byte_count });
-    metadata.bindings.push_back({ mask->id, 0, mask_byte_count });
-    dispatch_match.initialization_dispatches.push_back(std::move(metadata));
-    return true;
 }
 
 static const Value * projection_weight(const Graph & graph, const GraphNode * projection) {
@@ -867,9 +803,6 @@ static bool match_qwen_attention_qkv_postprocess_fused_decode_dispatch(const Dis
                                  &dispatch_match.status) ||
         !append_postprocess_node(context, root, "value projection", match.value.projection_node, dispatch_match,
                                  &dispatch_match.status)) {
-        return false;
-    }
-    if (!append_attention_metadata_initialization(context, match, dispatch_match)) {
         return false;
     }
 
@@ -947,9 +880,6 @@ static bool match_qwen_attention_postprocess_dispatch(const DispatchMatchContext
         return false;
     }
     if (!append_postprocess_covered_nodes(context, match, dispatch_match, &dispatch_match.status)) {
-        return false;
-    }
-    if (!append_attention_metadata_initialization(context, match, dispatch_match)) {
         return false;
     }
 

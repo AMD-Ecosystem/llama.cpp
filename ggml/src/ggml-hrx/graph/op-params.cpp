@@ -48,6 +48,14 @@ static bool clamp_params_equivalent(const OpParams & lhs, const OpParams & rhs) 
            nearly_equal(lhs_params->max, rhs_params->max);
 }
 
+static bool pool_1d_params_equivalent(const OpParams & lhs, const OpParams & rhs) {
+    const Pool1DParams * lhs_params = op_params_as<Pool1DParams>(lhs);
+    const Pool1DParams * rhs_params = op_params_as<Pool1DParams>(rhs);
+    return lhs_params != nullptr && rhs_params != nullptr && lhs_params->op == rhs_params->op &&
+           lhs_params->kernel == rhs_params->kernel && lhs_params->stride == rhs_params->stride &&
+           lhs_params->padding == rhs_params->padding;
+}
+
 static bool glu_params_equivalent(const OpParams & lhs, const OpParams & rhs) {
     const GluParams * lhs_params = op_params_as<GluParams>(lhs);
     const GluParams * rhs_params = op_params_as<GluParams>(rhs);
@@ -279,6 +287,13 @@ OpParams import_op_params(const ggml_tensor & tensor) {
                 ggml_get_op_params_f32(&tensor, 0),
                 ggml_get_op_params_f32(&tensor, 1),
             };
+        case GGML_OP_POOL_1D:
+            return Pool1DParams{
+                static_cast<ggml_op_pool>(ggml_get_op_params_i32(&tensor, 0)),
+                ggml_get_op_params_i32(&tensor, 1),
+                ggml_get_op_params_i32(&tensor, 2),
+                ggml_get_op_params_i32(&tensor, 3),
+            };
         case GGML_OP_GLU:
             return GluParams{ ggml_get_glu_op(&tensor), ggml_get_op_params_i32(&tensor, 1) != 0 };
         case GGML_OP_SCALE:
@@ -323,6 +338,8 @@ bool op_params_equivalent(ggml_op op, const OpParams & lhs, const OpParams & rhs
             return argsort_params_equivalent(lhs, rhs);
         case GGML_OP_CLAMP:
             return clamp_params_equivalent(lhs, rhs);
+        case GGML_OP_POOL_1D:
+            return pool_1d_params_equivalent(lhs, rhs);
         case GGML_OP_GLU:
             return binary_params_equivalent(lhs, rhs) || glu_params_equivalent(lhs, rhs);
         case GGML_OP_SCALE:
