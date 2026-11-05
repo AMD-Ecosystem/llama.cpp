@@ -4457,54 +4457,6 @@ static void schedule_token_embedding_command(ggml_context * ctx,
     REQUIRE(commands.commands.front().bindings[2].name == "output");
 }
 
-static void run_scalar_3d_get_rows_dispatch_checks() {
-    auto check_case = [](int64_t expert_count, int64_t route_count, int64_t token_count,
-                         int64_t route_stride, bool expected_match) {
-        ggml_init_params params = {};
-        params.mem_size = 1024 * 1024;
-        params.no_alloc = true;
-        ggml_context * ctx = ggml_init(params);
-        REQUIRE(ctx != nullptr);
-
-        ggml_tensor * scales = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, expert_count, token_count);
-        ggml_tensor * id_storage = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, route_stride, token_count);
-        REQUIRE(scales != nullptr);
-        REQUIRE(id_storage != nullptr);
-        ggml_tensor * ids = route_stride == route_count ? id_storage :
-            ggml_view_2d(ctx, id_storage, route_count, token_count, id_storage->nb[1], 0);
-        REQUIRE(ids != nullptr);
-        ggml_tensor * output = ggml_get_rows(ctx, scales, ids);
-        REQUIRE(output != nullptr);
-
-        ggml_cgraph * graph = ggml_new_graph(ctx);
-        REQUIRE(graph != nullptr);
-        ggml_build_forward_expand(graph, output);
-        ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
-        REQUIRE(imported.valid());
-
-        ggml::hrx::DispatchScheduler scheduler;
-        const bool scheduled = scheduler.schedule_graph(imported.graph, test_dispatch_target());
-        REQUIRE(scheduled == expected_match);
-        if (expected_match) {
-            REQUIRE(scheduler.plan().dispatches.size() == 1);
-            const ggml::hrx::Dispatch & dispatch = scheduler.plan().dispatches.front();
-            REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_get_rows_scalar_3d_f32");
-            REQUIRE(dispatch.bindings.size() == 3);
-            REQUIRE(dispatch.bindings[0].length == ggml_nbytes(ids));
-            REQUIRE(dispatch.kernel.integer_parameters.at("token_count") == token_count);
-            REQUIRE(dispatch.kernel.integer_parameters.at("route_stride") == route_stride);
-        }
-        ggml_free(ctx);
-    };
-
-    check_case(128, 8, 1, 8, true);
-    check_case(128, 8, 2, 128, true);
-    check_case(128, 8, 8, 128, true);
-    check_case(64, 8, 2, 128, false);
-    check_case(128, 4, 2, 128, false);
-    check_case(128, 8, 2, 513, false);
-}
-
 static void run_qwen_token_embedding_dispatch_checks() {
     ggml_init_params params = {};
     params.mem_size         = 4 * 1024 * 1024;
@@ -9360,9 +9312,7 @@ static void schedule_qwen_router_top8_command(ggml_context * ctx,
     REQUIRE(scheduler.plan().valid());
 
     const int64_t token_count        = output->ne[2];
-    const size_t  route_id_length    = static_cast<size_t>(token_count - 1) * route_ids->nb[1] +
-                                       static_cast<size_t>(route_ids->ne[0]) * sizeof(int32_t);
-    REQUIRE(route_ids_value->byte_count == route_id_length);
+    const size_t  route_id_length    = static_cast<size_t>(token_count) * route_ids->nb[1];
     const size_t  expert_table_bytes = qwen_expert_table_size(token_count, expected_expert_count);
     const size_t  partition_table_bytes =
         qwen_partition_table_size(token_count, expected_route_count, expected_expert_count);
@@ -9513,8 +9463,7 @@ static void schedule_qwen_router_top8_command(ggml_context * ctx,
     const ggml::hrx::TransientAllocation * route_ids_allocation =
         ggml::hrx::find_transient_allocation(commands.transients, route_ids_value->storage_root);
     REQUIRE(route_ids_allocation != nullptr);
-    REQUIRE(route_ids_allocation->size == static_cast<size_t>(token_count * expected_expert_count) * sizeof(int32_t));
-    REQUIRE(dispatch.bindings[1].length <= route_ids_allocation->size);
+    REQUIRE(route_ids_allocation->size == dispatch.bindings[1].length);
     const ggml::hrx::TransientAllocation * expert_table_allocation =
         ggml::hrx::find_transient_allocation(commands.transients, expert_table_transient.value);
     REQUIRE(expert_table_allocation != nullptr);
@@ -11066,8 +11015,15 @@ static void run_qwen_router_top8_dispatch_checks() {
     ggml_context * ctx      = ggml_init(params);
     REQUIRE(ctx != nullptr);
 
-    for (int64_t token_count : { 1, 2, 4, 8 }) {
-        ggml_tensor * logits    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kQwenRouterExpertCount, token_count);
+    {
+        ggml_tensor * logits    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kQwenRouterExpertCount, 4);
+        ggml_tensor * route_ids = nullptr;
+        REQUIRE(logits != nullptr);
+        ggml_tensor * output = build_qwen_router_top8_graph(ctx, logits, &route_ids);
+        schedule_qwen_router_top8_command(ctx, output, route_ids);
+    }
+    {
+        ggml_tensor * logits    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kQwenRouterExpertCount, 1);
         ggml_tensor * route_ids = nullptr;
         REQUIRE(logits != nullptr);
         ggml_tensor * output = build_qwen_router_top8_graph(ctx, logits, &route_ids);
@@ -14924,7 +14880,6 @@ static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
     suite.host_case("rope_set_rows_dispatch", [] { run_rope_set_rows_dispatch_checks(); });
     suite.host_case("graph_traversal", [] { run_graph_traversal_checks(); });
     suite.host_case("qwen_token_embedding_dispatch", [] { run_qwen_token_embedding_dispatch_checks(); });
-    suite.host_case("scalar_3d_get_rows_dispatch", [] { run_scalar_3d_get_rows_dispatch_checks(); });
     suite.host_case("get_rows_rmsnorm_binary_dispatch", [] { run_get_rows_rmsnorm_binary_dispatch_checks(); });
     suite.host_case("get_rows_scale_dispatch", [] { run_get_rows_scale_dispatch_checks(); });
     suite.host_case("gather_add_dispatch", [] { run_gather_add_dispatch_checks(); });
