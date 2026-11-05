@@ -1,0 +1,55 @@
+config.decl @ggml.argsort.width : %value: index where [range(%value, 0, 2048)]
+config.decl @ggml.argsort.output_width : %value: index where [range(%value, 1, 2048)]
+config.decl @ggml.argsort.descending : %value: index where [range(%value, 0, 2048)]
+kernel.def @ggml_argsort_f32(%row_count: index) {
+  %width = config.get @ggml.argsort.width : index
+  %one = index.constant 1 : index
+  %group = index.constant 256 : index
+  %pad = index.constant 255 : index
+  %padded = index.add %width, %pad : index
+  %groups = index.div %padded, %group : index
+  kernel.launch.config workgroups(%groups, %row_count, %one) workgroup_size(%group, %one, %one) : index
+} launch(%row_count: index, %input: buffer, %output: buffer) {
+  %width0 = config.get @ggml.argsort.width : index
+  %width = index.assume %width0 [range(%width0, 1, 2048)] : index
+  %count = index.assume %row_count [range(%row_count, 1, 1048576)] : index
+  %desc = config.get @ggml.argsort.descending : index
+  %group = kernel.workgroup.id<x> : index
+  %lane = kernel.workitem.id<x> : index
+  %row0 = kernel.workgroup.id<y> : index
+  %row, %extent = index.assume %row0, %count [range(%row0, 0, 1048575), lt(%row0, %count)] : index, index
+  %group_size = index.constant 256 : index
+  %column0 = index.madd %group, %group_size, %lane : index
+  %valid = index.cmp ult, %column0, %width : index
+  scf.if %valid {
+    %column, %width_extent = index.assume %column0, %width [range(%column0, 0, 2047), lt(%column0, %width)] : index, index
+    %zero = index.constant 0 : index
+    %one = index.constant 1 : index
+    %offset = index.constant 0 : offset
+    %descending = index.cmp ne, %desc, %zero : index
+    %output_width = config.get @ggml.argsort.output_width : index
+    %x = buffer.view %input[%offset] : buffer -> view<[%count]x[%width]xf32>
+    %y = buffer.view %output[%offset] : buffer -> view<[%count]x[%output_width]xi32>
+    %value = view.load %x[%row, %column] : view<[%count]x[%width]xf32> -> f32
+    %rank0 = scf.for %j = [%zero to %width step %one](%rank = %zero : index) -> (index) {
+      %other = view.load %x[%row, %j] : view<[%count]x[%width]xf32> -> f32
+      %greater = scalar.cmpf ogt, %other, %value : f32
+      %less = scalar.cmpf olt, %other, %value : f32
+      %equal = scalar.cmpf oeq, %other, %value : f32
+      %before = index.cmp ult, %j, %column : index
+      %tie = scalar.andi %equal, %before : i1
+      %ordered = scf.select %descending, %greater, %less : i1
+      %precedes = scalar.ori %ordered, %tie : i1
+      %increment = scf.select %precedes, %one, %zero : index
+      %next = index.add %rank, %increment : index
+      scf.yield %next : index
+    }
+    %rank, %rank_extent = index.assume %rank0, %width [range(%rank0, 0, 2047), lt(%rank0, %width)] : index, index
+    %index = index.cast %column : index to i32
+    %selected = index.cmp ult, %rank, %output_width : index
+    scf.if %selected {
+      view.store %index, %y[%row, %rank] : i32, view<[%count]x[%output_width]xi32>
+    }
+  }
+  kernel.return
+}

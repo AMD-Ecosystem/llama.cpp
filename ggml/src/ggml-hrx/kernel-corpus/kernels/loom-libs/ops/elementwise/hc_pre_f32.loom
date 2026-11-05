@@ -1,0 +1,89 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+amdgpu.target<gfx11-generic> @ggml_hc_pre_target {subgroup_size = 64}
+
+config.decl @ggml.hc.tokens : %value: index where [range(%value, 1, 32768)]
+
+config.decl @ggml.hc.embd : %value: index where [range(%value, 1, 32768)]
+
+config.decl @ggml.hc.streams : %value: index where [range(%value, 1, 128)]
+
+config.decl @ggml.hc.gated : %value: index where [range(%value, 0, 1)]
+
+config.decl @ggml.hc.scale : f32
+
+kernel.def target(@ggml_hc_pre_target) export("ggml_hc_pre_f32") @ggml_hc_pre_f32() {
+  %one = index.constant 1 : index
+  %block = index.constant 256 : index
+  %rounding = index.constant 255 : index
+  %tokens = config.get @ggml.hc.tokens : index
+  %embd = config.get @ggml.hc.embd : index
+  %count = index.mul %tokens, %embd : index
+  %rounded = index.add %count, %rounding : index
+  %groups = index.div %rounded, %block : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%block, %one, %one) : index
+} launch(%input: buffer, %weights: buffer, %output: buffer) {
+  %tokens = config.get @ggml.hc.tokens : index
+  %embd = config.get @ggml.hc.embd : index
+  %one = index.constant 1 : index
+  %streams = config.get @ggml.hc.streams : index
+  %zero = index.constant 0 : index
+  %zero_offset = index.constant 0 : offset
+  %zero_f = scalar.constant 0.0 : f32
+  %count = index.mul %tokens, %embd : index
+  %input_count = index.mul %count, %streams : index
+  %gated_mode = config.get @ggml.hc.gated : index
+  %gated = index.cmp ne, %gated_mode, %zero : index
+  %weight_count = scf.if %gated -> (index) {
+    scf.yield %input_count : index
+  } else {
+    %weights = index.mul %tokens, %streams : index
+    scf.yield %weights : index
+  }
+  %x = buffer.view %input[%zero_offset] : buffer -> view<[%input_count]xf32>
+  %w = buffer.view %weights[%zero_offset] : buffer -> view<[%weight_count]xf32>
+  %y = buffer.view %output[%zero_offset] : buffer -> view<[%count]xf32>
+  %group = kernel.workgroup.id<x> : index
+  %thread = kernel.workitem.id<x> : index
+  %block = index.constant 256 : index
+  %base = index.mul %group, %block : index
+  %linear = index.add %base, %thread : index
+  %valid = index.cmp ult, %linear, %count : index
+  scf.if %valid {
+    %feature = index.rem %linear, %embd : index
+    %token = index.div %linear, %embd : index
+    %weight_base = index.mul %token, %streams : index
+    %input_base = index.mul %weight_base, %embd : index
+    %sum = scf.for %h = [%zero to %streams step %one](%acc = %zero_f : f32) -> (f32) unroll {
+      %h_offset = index.mul %h, %embd : index
+      %row = index.add %input_base, %h_offset : index
+      %x_index = index.add %row, %feature : index
+      %w_index = scf.if %gated -> (index) {
+        scf.yield %x_index : index
+      } else {
+        %index = index.add %weight_base, %h : index
+        scf.yield %index : index
+      }
+      %x_value = view.load %x[%x_index] : view<[%input_count]xf32> -> f32
+      %weight = view.load %w[%w_index] : view<[%weight_count]xf32> -> f32
+      %w_value = scf.if %gated -> (f32) {
+        %one_f = scalar.constant 1.0 : f32
+        %negative = scalar.negf %weight : f32
+        %exp = scalar.expf<afn> %negative : f32
+        %denominator = scalar.addf %one_f, %exp : f32
+        %sigmoid = scalar.divf %one_f, %denominator : f32
+        scf.yield %sigmoid : f32
+      } else {
+        scf.yield %weight : f32
+      }
+      %term = scalar.mulf %x_value, %w_value : f32
+      %next = scalar.addf %acc, %term : f32
+      scf.yield %next : f32
+    }
+    %scale = config.get @ggml.hc.scale : f32
+    %result = scalar.mulf %sum, %scale : f32
+    view.store %result, %y[%linear] : f32, view<[%count]xf32>
+  }
+  kernel.return
+}

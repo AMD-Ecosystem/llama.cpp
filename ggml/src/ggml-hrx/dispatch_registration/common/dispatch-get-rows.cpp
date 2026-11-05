@@ -19,6 +19,7 @@ namespace ggml::hrx {
 namespace {
 
 static constexpr KernelCatalogRef kGetRowsF32Kernel     = GGML_HRX_KERNEL_REF("loom_libs", "ggml_get_rows_f32");
+static constexpr KernelCatalogRef kGetRows32Kernel      = GGML_HRX_KERNEL_REF("loom_libs", "ggml_get_rows_32");
 static constexpr KernelCatalogRef kGetRowsScalar3dF32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_get_rows_scalar_3d_f32");
 static constexpr KernelCatalogRef kGetRowsF32NextKernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_get_rows_f32_next");
@@ -387,6 +388,61 @@ static Dispatch make_get_rows_next_dispatch(const GetRowsMatch &     match,
     return dispatch;
 }
 
+static bool match_get_rows_32_dispatch(const DispatchMatchContext & context, DispatchMatch & match) {
+    const GraphNode * node = context.root_node;
+    if (node == nullptr || node->op != GGML_OP_GET_ROWS || node->inputs.size() != 2) {
+        return false;
+    }
+    const Value * source = graph_value(context.graph, node->inputs[0]);
+    const Value * ids    = graph_value(context.graph, node->inputs[1]);
+    const Value * output = graph_value(context.graph, node->output);
+    if (source == nullptr || ids == nullptr || output == nullptr ||
+        (source->type != GGML_TYPE_F32 && source->type != GGML_TYPE_I32) || output->type != source->type ||
+        ids->type != GGML_TYPE_I32 || !output->contiguous || source->nb[0] != sizeof(int32_t) ||
+        ids->nb[0] != sizeof(int32_t) || source->ne[2] != ids->ne[1] || source->ne[3] != ids->ne[2] ||
+        ids->ne[3] != 1 || output->ne[0] != source->ne[0] || output->ne[1] != ids->ne[0] ||
+        output->ne[2] != ids->ne[1] || output->ne[3] != ids->ne[2] || output->element_count < 1 ||
+        output->element_count > 134217728 || source->storage == output->storage || ids->storage == output->storage) {
+        return false;
+    }
+    for (const Value * value : { source, ids }) {
+        if (value->byte_count == 0 || value->byte_count / sizeof(int32_t) > 1073741824 ||
+            value->byte_count % sizeof(int32_t) != 0) {
+            return false;
+        }
+        for (int dim = 0; dim < GGML_MAX_DIMS; ++dim) {
+            if (value->ne[dim] < 1 || value->ne[dim] > 1073741824 || value->nb[dim] % sizeof(int32_t) != 0 ||
+                value->nb[dim] / sizeof(int32_t) > 1073741824) {
+                return false;
+            }
+        }
+    }
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(kGetRows32Kernel);
+    dispatch.kernel.integer_parameters.emplace("element_count", output->element_count);
+    auto & config = dispatch.kernel.compile_parameters;
+    config.emplace("ggml.get_rows_32.width", std::to_string(source->ne[0]));
+    config.emplace("ggml.get_rows_32.rows", std::to_string(source->ne[1]));
+    config.emplace("ggml.get_rows_32.selected", std::to_string(ids->ne[0]));
+    config.emplace("ggml.get_rows_32.batch1", std::to_string(ids->ne[1]));
+    config.emplace("ggml.get_rows_32.source_span", std::to_string(source->byte_count / sizeof(int32_t)));
+    config.emplace("ggml.get_rows_32.ids_span", std::to_string(ids->byte_count / sizeof(int32_t)));
+    for (int dim = 1; dim < GGML_MAX_DIMS; ++dim) {
+        config.emplace("ggml.get_rows_32.source_stride" + std::to_string(dim),
+                       std::to_string(source->nb[dim] / sizeof(int32_t)));
+    }
+    for (int dim = 1; dim < 3; ++dim) {
+        config.emplace("ggml.get_rows_32.ids_stride" + std::to_string(dim),
+                       std::to_string(ids->nb[dim] / sizeof(int32_t)));
+    }
+    dispatch.bindings.push_back({ source->id, 0, source->byte_count });
+    dispatch.bindings.push_back({ ids->id, 0, ids->byte_count });
+    dispatch.bindings.push_back({ output->id, 0, output->byte_count });
+    match.dispatches.push_back(std::move(dispatch));
+    match.covered_nodes.push_back(context.root_index);
+    return true;
+}
+
 static bool match_get_rows_f32_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     const GetRowsMatch match = match_get_rows_f32(context.graph, context.root_node);
     if (!match.matched()) {
@@ -530,6 +586,14 @@ static bool match_get_rows_rmsnorm_binary_dispatch(const DispatchMatchContext & 
 }  // namespace
 
 void register_get_rows_dispatches(DispatchRegistryBuilder & registry) {
+    registry.add({
+        "common.get_rows.32",
+        GGML_OP_GET_ROWS,
+        DispatchMatchKind::SingleOp,
+        0,
+        DispatchSource::Common,
+        match_get_rows_32_dispatch,
+    });
     registry.add({
         "common.get_rows.scalar_3d_f32",
         GGML_OP_GET_ROWS,

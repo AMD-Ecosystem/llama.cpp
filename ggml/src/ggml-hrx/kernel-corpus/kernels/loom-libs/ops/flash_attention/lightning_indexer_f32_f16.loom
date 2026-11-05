@@ -1,0 +1,164 @@
+// Reuse each query across sixteen cache keys and each key across the query heads.
+amdgpu.target<gfx11-generic> @ggml_indexer_wave64 {subgroup_size = 64}
+
+config.decl @ggml.indexer.head_size : %value: index where [range(%value, 16, 256), multiple_of(%value, 16)]
+
+config.decl @ggml.indexer.head_count : %value: index where [range(%value, 1, 64)]
+
+kernel.def target(@ggml_indexer_wave64) @ggml_lightning_indexer_f32_f16(%query_count: index, %key_count: index) {
+  %one = index.constant 1 : index
+  %sixteen = index.constant 16 : index
+  %fifteen = index.constant 15 : index
+  %threads = index.constant 256 : index
+  %rounded = index.add %key_count, %fifteen : index
+  %groups = index.div %rounded, %sixteen : index
+  kernel.launch.config workgroups(%groups, %query_count, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%query_count: index, %key_count: index, %query: buffer, %key: buffer, %weight: buffer, %mask: buffer, %output: buffer) {
+  %nq = index.assume %query_count [range(%query_count, 1, 2048)] : index
+  %nk = index.assume %key_count [range(%key_count, 1, 131072)] : index
+  %query_id0 = kernel.workgroup.id<y> : index
+  %query_id = index.assume %query_id0 [lt(%query_id0, %nq)] : index
+  %group = kernel.workgroup.id<x> : index
+  %thread = kernel.workitem.id<x> : index
+  %subgroup0 = kernel.subgroup.id : index
+  %subgroup = index.assume %subgroup0 [range(%subgroup0, 0, 3)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %head_size = config.get @ggml.indexer.head_size : index
+  %head_count = config.get @ggml.indexer.head_count : index
+  %packets_per_head = index.div %head_size, %c4 : index
+  %c256 = index.constant 256 : index
+  %c15 = index.constant 15 : index
+  %rounded_heads = index.add %head_count, %c15 : index
+  %head_tiles = index.div %rounded_heads, %c16 : index
+  %padded_heads = index.mul %head_tiles, %c16 : index
+  %stride = index.add %head_size, %c8 : index
+  %query_elements = index.mul %padded_heads, %head_size : index
+  %key_elements = index.mul %c16, %head_size : index
+  %c1023 = index.constant 1023 : index
+  %query_rounded = index.add %query_elements, %c1023 : index
+  %key_rounded = index.add %key_elements, %c1023 : index
+  %c1024 = index.constant 1024 : index
+  %query_loads = index.div %query_rounded, %c1024 : index
+  %key_loads = index.div %key_rounded, %c1024 : index
+  %zero_offset = index.constant 0 : offset
+  %query_stage_elements = index.mul %padded_heads, %stride : index
+  %key_stage_elements = index.mul %c16, %stride : index
+  %score_stage_elements = index.mul %c16, %padded_heads : index
+  %query_size = index.mul %query_stage_elements, %c2 : index
+  %key_size = index.mul %key_stage_elements, %c2 : index
+  %score_size = index.mul %score_stage_elements, %c4 : index
+  %query_bytes = index.cast %query_size : index to offset
+  %key_bytes = index.cast %key_size : index to offset
+  %score_bytes = index.cast %score_size : index to offset
+  %zero = scalar.constant 0.0 : f32
+  %zero_half = vector.constant 0.0 : vector<4xf16>
+  %query_stage = buffer.alloca<workgroup> align(16) %query_bytes : buffer
+  %key_stage = buffer.alloca<workgroup> align(16) %key_bytes : buffer
+  %score_stage = buffer.alloca<workgroup> align(16) %score_bytes : buffer
+  %padded = encoding.layout.strided [%stride, 1] : encoding<layout>
+  %transposed = encoding.layout.strided [1, %stride] : encoding<layout>
+  %qv = buffer.view %query[%zero_offset] : buffer -> view<[%nq]x[%head_count]x[%head_size]xf32>
+  %kv = buffer.view %key[%zero_offset] : buffer -> view<[%nk]x[%head_size]xf16>
+  %wv = buffer.view %weight[%zero_offset] : buffer -> view<[%nq]x[%head_count]xf32>
+  %mv = buffer.view %mask[%zero_offset] : buffer -> view<[%nq]x[%nk]xf16>
+  %ov = buffer.view %output[%zero_offset] : buffer -> view<[%nq]x[%nk]xf32>
+  %qs = buffer.view %query_stage[%zero_offset] : buffer -> view<[%padded_heads]x[%head_size]xf16, %padded>
+  %qt = buffer.view %query_stage[%zero_offset] : buffer -> view<[%head_size]x[%padded_heads]xf16, %transposed>
+  %ks = buffer.view %key_stage[%zero_offset] : buffer -> view<16x[%head_size]xf16, %padded>
+  %scores = buffer.view %score_stage[%zero_offset] : buffer -> view<16x[%padded_heads]xf32>
+  %key_origin = index.mul %group, %c16 : index
+  scf.for %load = [%c0 to %query_loads step %c1] unroll {
+    %packet = index.madd %load, %c256, %thread : index
+    %head = index.div %packet, %packets_per_head : index
+    %in_tile = index.cmp ult, %head, %padded_heads : index
+    scf.if %in_tile {
+      %channel_packet = index.rem %packet, %packets_per_head : index
+      %channel = index.mul %channel_packet, %c4 : index
+      %valid_head = index.cmp ult, %head, %head_count : index
+      %half = scf.if %valid_head -> (vector<4xf16>) {
+        %q = vector.load %qv[%query_id, %head, %channel] : view<[%nq]x[%head_count]x[%head_size]xf32> -> vector<4xf32>
+        %value = vector.fptrunc %q : vector<4xf32> to vector<4xf16>
+        scf.yield %value : vector<4xf16>
+      } else {
+        scf.yield %zero_half : vector<4xf16>
+      }
+      vector.store %half, %qs[%head, %channel] : vector<4xf16>, view<[%padded_heads]x[%head_size]xf16, %padded>
+    }
+  }
+  scf.for %load = [%c0 to %key_loads step %c1] unroll {
+    %packet = index.madd %load, %c256, %thread : index
+    %row = index.div %packet, %packets_per_head : index
+    %in_tile = index.cmp ult, %row, %c16 : index
+    scf.if %in_tile {
+      %channel_packet = index.rem %packet, %packets_per_head : index
+      %channel = index.mul %channel_packet, %c4 : index
+      %key_id = index.add %key_origin, %row : index
+      %valid = index.cmp ult, %key_id, %nk : index
+      %k = scf.if %valid -> (vector<4xf16>) {
+        %bounded = index.assume %key_id [lt(%key_id, %nk)] : index
+        %value = vector.load %kv[%bounded, %channel] : view<[%nk]x[%head_size]xf16> -> vector<4xf16>
+        scf.yield %value : vector<4xf16>
+      } else {
+        scf.yield %zero_half : vector<4xf16>
+      }
+      vector.store %k, %ks[%row, %channel] : vector<4xf16>, view<16x[%head_size]xf16, %padded>
+    }
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %active_subgroup = index.cmp ult, %subgroup, %head_tiles : index
+  scf.if %active_subgroup {
+    %head_origin = index.mul %subgroup, %c16 : index
+    %init_values = vector.constant 0.0 : vector<4xf32>
+    %init = vector.fragment<init> %init_values shape [%c16, %c16] : vector<4xf32>
+    %product = scf.for %channel = [%c0 to %head_size step %c16](%acc = %init : vector<4xf32>) -> (vector<4xf32>) unroll schedule(recurrence) {
+      %k = vector.fragment.load<lhs> %ks[%c0, %channel] shape [%c16, %c16] : view<16x[%head_size]xf16, %padded> -> vector<16xf16>
+      %q = vector.fragment.load<rhs> %qt[%channel, %head_origin] shape [%c16, %c16] : view<[%head_size]x[%padded_heads]xf16, %transposed> -> vector<16xf16>
+      %next = vector.mma %k, %q, %acc : vector<16xf16>, vector<16xf16>, vector<4xf32>
+      scf.yield %next : vector<4xf32>
+    }
+    vector.fragment.store<result> %product, %scores[%c0, %head_origin] shape [%c16, %c16] : vector<4xf32>, view<16x[%padded_heads]xf32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %row = index.div %thread, %c16 : index
+  %head_lane = index.rem %thread, %c16 : index
+  %partial = scf.for %part = [%c0 to %head_tiles step %c1](%acc = %zero : f32) -> (f32) unroll {
+    %head = index.madd %part, %c16, %head_lane : index
+    %valid_head = index.cmp ult, %head, %head_count : index
+    %next = scf.if %valid_head -> (f32) {
+      %score = view.load %scores[%row, %head] : view<16x[%padded_heads]xf32> -> f32
+      %relu = scalar.maxnumf %score, %zero : f32
+      %w = view.load %wv[%query_id, %head] : view<[%nq]x[%head_count]xf32> -> f32
+      %value = scalar.fmaf %relu, %w, %acc : f32
+      scf.yield %value : f32
+    } else {
+      scf.yield %acc : f32
+    }
+    scf.yield %next : f32
+  }
+  %one_i32 = scalar.constant 1 : i32
+  %width = scalar.constant 16 : i32
+  %total = scf.for %stage = [%c0 to %c4 step %c1](%acc = %partial : f32) -> (f32) unroll {
+    %shift = index.cast %stage : index to i32
+    %distance = scalar.shli %one_i32, %shift : i32
+    %peer, %valid = kernel.subgroup.shuffle<xor> %acc, %distance, %width : f32, i32, i32
+    %next = scalar.addf %acc, %peer : f32
+    scf.yield %next : f32
+  }
+  %key_id = index.add %key_origin, %row : index
+  %leader = index.cmp eq, %head_lane, %c0 : index
+  %in_bounds = index.cmp ult, %key_id, %nk : index
+  %write = scalar.andi %leader, %in_bounds : i1
+  scf.if %write {
+    %bounded = index.assume %key_id [lt(%key_id, %nk)] : index
+    %mask_half = view.load %mv[%query_id, %bounded] : view<[%nq]x[%nk]xf16> -> f16
+    %mask_value = scalar.extf %mask_half : f16 to f32
+    %result = scalar.addf %total, %mask_value : f32
+    view.store %result, %ov[%query_id, %bounded] : f32, view<[%nq]x[%nk]xf32>
+  }
+  kernel.return
+}

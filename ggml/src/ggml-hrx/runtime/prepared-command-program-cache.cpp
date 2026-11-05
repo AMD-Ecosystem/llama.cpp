@@ -126,9 +126,17 @@ std::shared_ptr<PreparedCommandProgramCacheEntry> PreparedCommandProgramCache::g
     std::lock_guard<std::mutex> lock(mutex_);
     auto found = programs_.find(key);
     if (found != programs_.end()) {
+        found->second->last_used = ++access_tick_;
         return found->second;
     }
+    if (programs_.size() >= 32) {
+        const auto retired = std::min_element(
+            programs_.begin(), programs_.end(),
+            [](const auto & a, const auto & b) { return a.second->last_used < b.second->last_used; });
+        programs_.erase(retired);
+    }
     auto entry = std::make_shared<PreparedCommandProgramCacheEntry>();
+    entry->last_used = ++access_tick_;
     programs_.emplace(key, entry);
     return entry;
 }

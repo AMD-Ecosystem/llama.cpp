@@ -8,11 +8,13 @@
 
 namespace ggml::hrx {
 
-inline bool strided_f32_storage_span_bytes(const Value & value, size_t & byte_count) {
-    if (value.type != GGML_TYPE_F32 || value.nb[0] != sizeof(float)) {
+inline bool strided_f32_storage_span_bytes(const Value & value,
+                                           size_t &      byte_count,
+                                           bool          allow_strided_elements = false) {
+    if (value.type != GGML_TYPE_F32 || (!allow_strided_elements && value.nb[0] != sizeof(float))) {
         return false;
     }
-    for (int i = 1; i < GGML_MAX_DIMS; ++i) {
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
         if (value.nb[i] % sizeof(float) != 0) {
             return false;
         }

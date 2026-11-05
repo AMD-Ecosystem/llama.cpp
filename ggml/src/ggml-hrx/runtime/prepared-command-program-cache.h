@@ -28,6 +28,7 @@ struct PreparedCommandProgramCacheEntry {
     PreparedCommandProgram prepared;
     RecordedCommandGraph   recorded;
     bool                   ready = false;
+    uint64_t               last_used = 0;
 };
 
 struct PreparedCommandProgramCacheExecutionResult {
@@ -107,6 +108,7 @@ class PreparedCommandProgramCache {
     mutable std::mutex                                       mutex_;
     std::unordered_map<Key, std::shared_ptr<PreparedCommandProgramCacheEntry>, KeyHash> programs_;
     PreparedCommandProgramCacheStats                         stats_;
+    uint64_t                                                 access_tick_ = 0;
 };
 
 }  // namespace ggml::hrx

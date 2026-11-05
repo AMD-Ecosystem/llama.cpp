@@ -4,13 +4,13 @@ config.decl @ggml.flash_attention.gate_stride_head : %value: index where [range(
 
 config.decl @ggml.flash_attention.gate_stride_token : %value: index where [range(%value, 1, 16777216)]
 
-template.decl @ggml.flash_attention.prefill.publish_output(%publish_f16: i1, %query_token_count: index, %query_head_count: index, %value_head_size: index, %lane_has_output: i1, %query_valid0: i1, %query_valid1: i1, %query_valid2: i1, %query_valid3: i1, %query_token0: index, %query_token1: index, %query_token2: index, %query_token3: index, %query_head: index, %lane_output_channel: index, %final_sum: vector<4xf32>, %final_output0: vector<4xf16>, %final_output1: vector<4xf16>, %final_output2: vector<4xf16>, %final_output3: vector<4xf16>, %gate: buffer, %output: buffer, %f16_output: buffer)
+template.decl @ggml.flash_attention.prefill.publish_output(%publish_f16: i1, %query_token_count: index, %query_head_count: index, %value_head_size: index, %lane_has_output: i1, %query_valid0: i1, %query_valid1: i1, %query_valid2: i1, %query_valid3: i1, %query_token0: index, %query_token1: index, %query_token2: index, %query_token3: index, %query_head: index, %lane_output_channel: index, %final_sum: vector<4xf32>, %final_output0: vector<4xf16>, %final_output1: vector<4xf16>, %final_output2: vector<4xf16>, %final_output3: vector<4xf16>, %gate: buffer, %output: buffer, %f16_output: buffer, %output_offset: offset, %f16_output_offset: offset)
 
 template.decl @ggml.flash_attention.decode_split.publish_f32.scalar(%query_head_count: index, %value_head_size: index, %query_head: index, %output_channel: index, %sum: f32, %unnormalized_output: f32, %output: buffer)
 
 template.decl @ggml.flash_attention.decode_split.publish_f32.vector2(%query_head_count: index, %value_head_size: index, %query_head_valid0: i1, %query_head_valid1: i1, %lane_output_channel_valid: i1, %query_head0: index, %query_head1: index, %lane_output_channel: index, %sum0: f32, %sum1: f32, %unnormalized_output0: vector<2xf32>, %unnormalized_output1: vector<2xf32>, %output: buffer)
 
-template.def<@ggml.flash_attention.prefill.publish_output> device @ggml_flash_attention_prefill_publish_output(%publish_f16: i1, %query_token_count: index, %query_head_count: index, %value_head_size: index, %lane_has_output: i1, %query_valid0: i1, %query_valid1: i1, %query_valid2: i1, %query_valid3: i1, %query_token0: index, %query_token1: index, %query_token2: index, %query_token3: index, %query_head: index, %lane_output_channel: index, %final_sum: vector<4xf32>, %final_output0: vector<4xf16>, %final_output1: vector<4xf16>, %final_output2: vector<4xf16>, %final_output3: vector<4xf16>, %gate: buffer, %output: buffer, %f16_output: buffer) {
+template.def<@ggml.flash_attention.prefill.publish_output> device @ggml_flash_attention_prefill_publish_output(%publish_f16: i1, %query_token_count: index, %query_head_count: index, %value_head_size: index, %lane_has_output: i1, %query_valid0: i1, %query_valid1: i1, %query_valid2: i1, %query_valid3: i1, %query_token0: index, %query_token1: index, %query_token2: index, %query_token3: index, %query_head: index, %lane_output_channel: index, %final_sum: vector<4xf32>, %final_output0: vector<4xf16>, %final_output1: vector<4xf16>, %final_output2: vector<4xf16>, %final_output3: vector<4xf16>, %gate: buffer, %output: buffer, %f16_output: buffer, %output_offset: offset, %f16_output_offset: offset) {
   %c0_offset = index.constant 0 : offset
   %c1 = index.constant 1 : index
   %c1_f32 = scalar.constant 1.0 : f32
@@ -21,8 +21,8 @@ template.def<@ggml.flash_attention.prefill.publish_output> device @ggml_flash_at
   %apply_gate = index.cmp eq, %apply_gate_index, %c1 : index
   %gate_aligned = buffer.assume.alignment %gate {minimum_alignment = 16} : buffer
   %gate_view = buffer.view %gate_aligned[%c0_offset] : buffer -> view<268435456xf32>
-  %output_view = buffer.view %output[%c0_offset] : buffer -> view<[%query_token_count]x[%query_head_count]x[%value_head_size]xf32>
-  %f16_output_view = buffer.view %f16_output[%c0_offset] : buffer -> view<[%query_token_count]x[%query_head_count]x[%value_head_size]xf16>
+  %output_view = buffer.view %output[%output_offset] : buffer -> view<[%query_token_count]x[%query_head_count]x[%value_head_size]xf32>
+  %f16_output_view = buffer.view %f16_output[%f16_output_offset] : buffer -> view<[%query_token_count]x[%query_head_count]x[%value_head_size]xf16>
   // Normalize and publish the lane-owned packets. Query-tail rows never
   // participate in the output store.
   scf.if %lane_has_output {

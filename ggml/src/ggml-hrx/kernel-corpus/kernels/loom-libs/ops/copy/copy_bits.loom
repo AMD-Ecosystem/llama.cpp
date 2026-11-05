@@ -1,0 +1,73 @@
+config.decl @ggml.copy_bits.source_ne0 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.copy_bits.source_ne1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.copy_bits.source_ne2 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.copy_bits.source_ne3 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.copy_bits.ne0 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.copy_bits.ne1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.copy_bits.ne2 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.copy_bits.stride0 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.copy_bits.stride1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.copy_bits.stride2 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.copy_bits.stride3 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.copy_bits.element_bits : %value: index where [range(%value, 1, 1073741824)]
+kernel.def @ggml_copy_bits(%element_count: index, %source_span: index) {
+  %one = index.constant 1 : index
+  %group = index.constant 256 : index
+  %pad = index.constant 255 : index
+  %padded = index.add %element_count, %pad : index
+  %groups = index.div %padded, %group : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%group, %one, %one) : index
+} launch(%element_count: index, %source_span: index, %source: buffer, %output: buffer) {
+  %count = index.assume %element_count [range(%element_count, 1, 1073741824)] : index
+  %span = index.assume %source_span [range(%source_span, 1, 1073741824)] : index
+  %ne0 = config.get @ggml.copy_bits.ne0 : index
+  %ne1 = config.get @ggml.copy_bits.ne1 : index
+  %ne2 = config.get @ggml.copy_bits.ne2 : index
+  %stride0 = config.get @ggml.copy_bits.stride0 : index
+  %stride1 = config.get @ggml.copy_bits.stride1 : index
+  %stride2 = config.get @ggml.copy_bits.stride2 : index
+  %stride3 = config.get @ggml.copy_bits.stride3 : index
+  %element_bits = config.get @ggml.copy_bits.element_bits : index
+  %group = kernel.workgroup.id<x> : index
+  %lane = kernel.workitem.id<x> : index
+  %group_size = index.constant 256 : index
+  %linear0 = index.madd %group, %group_size, %lane : index
+  %valid = index.cmp ult, %linear0, %count : index
+  scf.if %valid {
+    %linear, %extent = index.assume %linear0, %count [range(%linear0, 0, 1073741823), lt(%linear0, %count)] : index, index
+    %i0 = index.rem %linear, %ne0 : index
+    %rest0 = index.div %linear, %ne0 : index
+    %i1 = index.rem %rest0, %ne1 : index
+    %rest1 = index.div %rest0, %ne1 : index
+    %i2 = index.rem %rest1, %ne2 : index
+    %i3 = index.div %rest1, %ne2 : index
+    %sn0 = config.get @ggml.copy_bits.source_ne0 : index
+    %si0 = index.rem %i0, %sn0 : index
+    %sn1 = config.get @ggml.copy_bits.source_ne1 : index
+    %si1 = index.rem %i1, %sn1 : index
+    %sn2 = config.get @ggml.copy_bits.source_ne2 : index
+    %si2 = index.rem %i2, %sn2 : index
+    %sn3 = config.get @ggml.copy_bits.source_ne3 : index
+    %si3 = index.rem %i3, %sn3 : index
+    %p0 = index.mul %si0, %stride0 : index
+    %p1 = index.madd %si1, %stride1, %p0 : index
+    %p2 = index.madd %si2, %stride2, %p1 : index
+    %p3 = index.madd %si3, %stride3, %p2 : index
+    %p, %source_extent = index.assume %p3, %span [range(%p3, 0, 1073741823), lt(%p3, %span)] : index, index
+    %zero = index.constant 0 : offset
+    %bits16 = index.constant 16 : index
+    %is16 = index.cmp eq, %element_bits, %bits16 : index
+    scf.if %is16 {
+      %src = buffer.view %source[%zero] : buffer -> view<[%span]xi16>
+      %dst = buffer.view %output[%zero] : buffer -> view<[%count]xi16>
+      %value = view.load %src[%p] : view<[%span]xi16> -> i16
+      view.store %value, %dst[%linear] : i16, view<[%count]xi16>
+    } else {
+      %src = buffer.view %source[%zero] : buffer -> view<[%span]xi32>
+      %dst = buffer.view %output[%zero] : buffer -> view<[%count]xi32>
+      %value = view.load %src[%p] : view<[%span]xi32> -> i32
+      view.store %value, %dst[%linear] : i32, view<[%count]xi32>
+    }
+  }
+  kernel.return
+}

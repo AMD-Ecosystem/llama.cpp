@@ -38,21 +38,21 @@ config.decl @ggml.flash_attention.gate_stride_token : %value: index where [range
 // Bounds the context copied by the test-only row-extraction kernel below.
 config.decl @ggml.flash_attention.test.context_capacity : %value: index where [range(%value, 1, 32768)]
 
-template.decl @ggml.flash_attention.prefill.stage_query(%query_token_count: index, %query_origin: index, %query_head: index, %query_load_iteration_count: index, %query_stage_stride: index, %qk_head_size: index, %attention_scale: f32, %query: buffer, %query_stage: buffer)
+template.decl @ggml.flash_attention.prefill.stage_query(%query_token_count: index, %query_origin: index, %query_head: index, %query_load_iteration_count: index, %query_stage_stride: index, %qk_head_size: index, %attention_scale: f32, %query: buffer, %query_stage: buffer, %query_offset: offset)
 
-template.decl @ggml.flash_attention.qk_block_wmma.prefill_full(%bounded_key_value_token_count: index, %key_width: index, %qk_head_size: index, %query_stage_stride: index, %score_key_origin: index, %key_head_base: index, %subgroup_score_column: index, %key: buffer, %query_stage: buffer, %score_stage: buffer)
+template.decl @ggml.flash_attention.qk_block_wmma.prefill_full(%bounded_key_value_token_count: index, %key_width: index, %qk_head_size: index, %query_stage_stride: index, %score_key_origin: index, %key_head_base: index, %subgroup_score_column: index, %key: buffer, %query_stage: buffer, %score_stage: buffer, %key_offset: offset)
 
 template.decl @ggml.flash_attention.qk_block_wmma.prefill_tail(%qk_head_size: index, %query_stage_stride: index, %tail_stage_head_size: index, %tail_score_wave: i1, %subgroup: index, %tail_key_value_stage: buffer, %query_stage: buffer, %score_stage: buffer)
 
 template.decl @ggml.flash_attention.online_softmax.prefill(%masked_scores: vector<4xf32>, %valid: vector<4xi1>, %current_max: vector<4xf32>, %current_sum: vector<4xf32>, %query_row0: index, %query_row1: index, %query_row2: index, %query_row3: index, %lane: index, %probability_stage: buffer) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>)
 
-template.decl @ggml.flash_attention.pv_block_wmma.prefill_full(%old_scale: vector<4xf32>, %current_output0: vector<4xf16>, %current_output1: vector<4xf16>, %current_output2: vector<4xf16>, %current_output3: vector<4xf16>, %group_output_tile_count: index, %output_group_tile_base: index, %output_tile_count: index, %value_head_base: index, %subgroup_product_channel: index, %lane_output_tile: index, %lane_product_channel: index, %query_row0: index, %query_row1: index, %query_row2: index, %query_row3: index, %key_origin: index, %last_full_key_tile_start: index, %bounded_key_value_token_count: index, %value_width: index, %value_row_stride: index, %value_column_stride: index, %value: buffer, %probability_stage: buffer, %product_stage: buffer) -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>)
+template.decl @ggml.flash_attention.pv_block_wmma.prefill_full(%old_scale: vector<4xf32>, %current_output0: vector<4xf16>, %current_output1: vector<4xf16>, %current_output2: vector<4xf16>, %current_output3: vector<4xf16>, %group_output_tile_count: index, %output_group_tile_base: index, %output_tile_count: index, %value_head_base: index, %subgroup_product_channel: index, %lane_output_tile: index, %lane_product_channel: index, %query_row0: index, %query_row1: index, %query_row2: index, %query_row3: index, %key_origin: index, %last_full_key_tile_start: index, %bounded_key_value_token_count: index, %value_width: index, %value_row_stride: index, %value_column_stride: index, %value: buffer, %probability_stage: buffer, %product_stage: buffer, %value_offset: offset) -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>)
 
 template.decl @ggml.flash_attention.pv_block_wmma.prefill_tail(%old_scale: vector<4xf32>, %current_output0: vector<4xf16>, %current_output1: vector<4xf16>, %current_output2: vector<4xf16>, %current_output3: vector<4xf16>, %group_output_tile_count: index, %subgroup_product_channel: index, %lane_output_tile: index, %lane_product_channel: index, %query_row0: index, %query_row1: index, %query_row2: index, %query_row3: index, %tail_stage_head_size: index, %tail_key_value_stage: buffer, %probability_stage: buffer, %product_stage: buffer) -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>)
 
-template.decl @ggml.flash_attention.prefill.publish_output(%publish_f16: i1, %query_token_count: index, %query_head_count: index, %value_head_size: index, %lane_has_output: i1, %query_valid0: i1, %query_valid1: i1, %query_valid2: i1, %query_valid3: i1, %query_token0: index, %query_token1: index, %query_token2: index, %query_token3: index, %query_head: index, %lane_output_channel: index, %final_sum: vector<4xf32>, %final_output0: vector<4xf16>, %final_output1: vector<4xf16>, %final_output2: vector<4xf16>, %final_output3: vector<4xf16>, %gate: buffer, %output: buffer, %f16_output: buffer)
+template.decl @ggml.flash_attention.prefill.publish_output(%publish_f16: i1, %query_token_count: index, %query_head_count: index, %value_head_size: index, %lane_has_output: i1, %query_valid0: i1, %query_valid1: i1, %query_valid2: i1, %query_valid3: i1, %query_token0: index, %query_token1: index, %query_token2: index, %query_token3: index, %query_head: index, %lane_output_channel: index, %final_sum: vector<4xf32>, %final_output0: vector<4xf16>, %final_output1: vector<4xf16>, %final_output2: vector<4xf16>, %final_output3: vector<4xf16>, %gate: buffer, %output: buffer, %f16_output: buffer, %output_offset: offset, %f16_output_offset: offset)
 
-template.decl @ggml.flash_attention.prefill.body(%publish_f16: i1, %query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer, %f16_output: buffer)
+template.decl @ggml.flash_attention.prefill.body(%publish_f16: i1, %initial_max: f32, %initial_sum: f32, %query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer, %f16_output: buffer, %query_tile: index, %query_head0: index, %output_group0: index, %query_offset: offset, %key_offset: offset, %value_offset: offset, %mask_offset: offset, %output_offset: offset, %f16_output_offset: offset)
 
 kernel.def target(@ggml_flash_attention_gfx11_wave64) @ggml_flash_attention_f32_f16_wmma(%query_token_count: index, %key_value_token_count: index) {
   %query_head_count = config.get @ggml.flash_attention.query_head_count : index
@@ -73,7 +73,57 @@ kernel.def target(@ggml_flash_attention_gfx11_wave64) @ggml_flash_attention_f32_
   kernel.launch.config workgroups(%query_tile_count, %query_head_count, %output_group_count) workgroup_size(%c256, %c1, %c1) : index
 } launch(%query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer) where [range(%query_token_count, 1, 2048)] {
   %publish_f16 = scalar.constant false : i1
-  template.apply<@ggml.flash_attention.prefill.body>(%publish_f16, %query_token_count, %key_value_token_count, %query, %key, %value, %mask, %gate, %output, %output) : (i1, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  %initial_max = scalar.constant -1e+30 : f32
+  %initial_sum = scalar.constant 0.0 : f32
+  %query_tile = kernel.workgroup.id<x> : index
+  %query_head0 = kernel.workgroup.id<y> : index
+  %output_group0 = kernel.workgroup.id<z> : index
+  %query_offset = index.constant 0 : offset
+  %key_offset = index.constant 0 : offset
+  %value_offset = index.constant 0 : offset
+  %mask_offset = index.constant 0 : offset
+  %output_offset = index.constant 0 : offset
+  %f16_output_offset = index.constant 0 : offset
+  template.apply<@ggml.flash_attention.prefill.body>(%publish_f16, %initial_max, %initial_sum, %query_token_count, %key_value_token_count, %query, %key, %value, %mask, %gate, %output, %output, %query_tile, %query_head0, %output_group0, %query_offset, %key_offset, %value_offset, %mask_offset, %output_offset, %f16_output_offset) : (i1, f32, f32, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer, index, index, index, offset, offset, offset, offset, offset, offset)
+  kernel.return
+}
+
+kernel.def target(@ggml_flash_attention_gfx11_wave64) @ggml_flash_attention_f32_f16_wmma_sink(%query_token_count: index, %key_value_token_count: index) {
+  %query_head_count = config.get @ggml.flash_attention.query_head_count : index
+  %value_head_size0 = config.get @ggml.flash_attention.value_head_size : index
+  %value_head_size = index.assume %value_head_size0 [range(%value_head_size0, 64, 512), multiple_of(%value_head_size0, 64)] : index
+  %c1 = index.constant 1 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c15 = index.constant 15 : index
+  %c16 = index.constant 16 : index
+  %c64 = index.constant 64 : index
+  %c256 = index.constant 256 : index
+  %padded_query_token_count = index.add %query_token_count, %c15 : index
+  %query_tile_count = index.div %padded_query_token_count, %c16 : index
+  %output_tile_count = index.div %value_head_size, %c64 : index
+  %padded_output_tile_count = index.add %output_tile_count, %c3 : index
+  %output_group_count = index.div %padded_output_tile_count, %c4 : index
+  kernel.launch.config workgroups(%query_tile_count, %query_head_count, %output_group_count) workgroup_size(%c256, %c1, %c1) : index
+} launch(%query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %sink: buffer, %output: buffer) where [range(%query_token_count, 1, 2048)] {
+  %publish_f16 = scalar.constant false : i1
+  %head_count = config.get @ggml.flash_attention.query_head_count : index
+  %head0 = kernel.workgroup.id<y> : index
+  %head, %bounded_head_count = index.assume %head0, %head_count [lt(%head0, %head_count)] : index, index
+  %zero_offset = index.constant 0 : offset
+  %sink_view = buffer.view %sink[%zero_offset] : buffer -> view<[%bounded_head_count]xf32>
+  %initial_max = view.load %sink_view[%head] : view<[%bounded_head_count]xf32> -> f32
+  %initial_sum = scalar.constant 1.0 : f32
+  %query_tile = kernel.workgroup.id<x> : index
+  %query_head0 = kernel.workgroup.id<y> : index
+  %output_group0 = kernel.workgroup.id<z> : index
+  %query_offset = index.constant 0 : offset
+  %key_offset = index.constant 0 : offset
+  %value_offset = index.constant 0 : offset
+  %mask_offset = index.constant 0 : offset
+  %output_offset = index.constant 0 : offset
+  %f16_output_offset = index.constant 0 : offset
+  template.apply<@ggml.flash_attention.prefill.body>(%publish_f16, %initial_max, %initial_sum, %query_token_count, %key_value_token_count, %query, %key, %value, %mask, %sink, %output, %output, %query_tile, %query_head0, %output_group0, %query_offset, %key_offset, %value_offset, %mask_offset, %output_offset, %f16_output_offset) : (i1, f32, f32, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer, index, index, index, offset, offset, offset, offset, offset, offset)
   kernel.return
 }
 

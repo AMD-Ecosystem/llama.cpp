@@ -3,7 +3,9 @@
 #include "hrx-interop-utils.h"
 #include "hrx_runtime.h"
 
+#include <algorithm>
 #include <cstdlib>
+#include <limits>
 #include <utility>
 
 namespace ggml::hrx {
@@ -79,15 +81,20 @@ Status TransientArena::ensure_capacity_locked(hrx_device_t device, hrx_stream_t 
         status.log("missing HRX stream for transient arena allocation");
         return status;
     }
+    size_t allocation_size = required_size;
+    if (!diagnostic_fresh && allocation_capacity_ <= std::numeric_limits<size_t>::max() / 2) {
+        // Recorded graphs retain old arenas. Reuse spare capacity across nearby shapes.
+        allocation_size = std::max(required_size, allocation_capacity_ * 2);
+    }
     if (buffer_ != nullptr) {
         if (diagnostic_fresh) {
             diagnostic_retired_buffers_.push_back(buffer_);
         } else {
-        if (ErrorResult error = take_status(hrx_stream_synchronize(stream))) {
-            status.log("synchronize before growing transient arena: %s", error->c_str());
-            return status;
-        }
-        hrx_buffer_release(buffer_);
+            if (ErrorResult error = take_status(hrx_stream_synchronize(stream))) {
+                status.log("synchronize before growing transient arena: %s", error->c_str());
+                return status;
+            }
+            hrx_buffer_release(buffer_);
         }
         buffer_              = nullptr;
         allocation_capacity_ = 0;
@@ -101,14 +108,20 @@ Status TransientArena::ensure_capacity_locked(hrx_device_t device, hrx_stream_t 
         0,
     };
     hrx_buffer_t allocation = nullptr;
-    if (ErrorResult error = take_status(
-            hrx_allocator_allocate_buffer(hrx_device_allocator(device), params, required_size, &allocation))) {
+    ErrorResult  error =
+        take_status(hrx_allocator_allocate_buffer(hrx_device_allocator(device), params, allocation_size, &allocation));
+    if (error && allocation_size != required_size) {
+        allocation_size = required_size;
+        error           = take_status(
+            hrx_allocator_allocate_buffer(hrx_device_allocator(device), params, allocation_size, &allocation));
+    }
+    if (error) {
         status.log("allocate transient arena: %s", error->c_str());
         return status;
     }
 
     buffer_              = allocation;
-    allocation_capacity_ = required_size;
+    allocation_capacity_ = allocation_size;
     allocation_id_       = next_allocation_id();
     return status;
 }
