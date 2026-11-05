@@ -36,6 +36,9 @@
       "path": "../loom-libs/motifs/attention/rmsnorm_neox_cache_f16.loom"
     },
     {
+      "path": "../loom-libs/motifs/rope/rope_f32.loom"
+    },
+    {
       "path": "../loom-libs/motifs/normalization/rmsnorm_q8_1_x4.loom"
     },
     {
@@ -324,12 +327,14 @@
         "value_input",
         "query_norm_weight",
         "key_norm_weight",
-        "inverse_frequencies",
+        "theta",
+        "freq_factors",
         "query_output",
         "key_cache",
         "value_cache"
       ],
       "binding_access": [
+        "read",
         "read",
         "read",
         "read",
@@ -352,12 +357,14 @@
         ],
         "library_sources": [
           "qwen3_moe/model_config.loom",
-          "../loom-libs/motifs/attention/rmsnorm_neox_cache_f16.loom"
+          "../loom-libs/motifs/attention/rmsnorm_neox_cache_f16.loom",
+          "../loom-libs/motifs/rope/rope_f32.loom"
         ]
       },
       "compile_dependencies": [
         "qwen3_moe/model_config.loom",
-        "../loom-libs/motifs/attention/rmsnorm_neox_cache_f16.loom"
+        "../loom-libs/motifs/attention/rmsnorm_neox_cache_f16.loom",
+        "../loom-libs/motifs/rope/rope_f32.loom"
       ]
     },
     {
@@ -397,7 +404,8 @@
         "value_output_raw",
         "query_norm_weight",
         "key_norm_weight",
-        "inverse_frequencies",
+        "theta",
+        "freq_factors",
         "query_output",
         "key_cache",
         "value_cache",
@@ -417,6 +425,7 @@
         "read",
         "read",
         "read",
+        "read",
         "read_write",
         "read_write",
         "read_write",
@@ -432,6 +441,7 @@
         "library_sources": [
           "qwen3_moe/motifs/attention_qkv_postprocess_fused_decode.loom",
           "../loom-libs/motifs/attention/rmsnorm_neox_cache_f16.loom",
+          "../loom-libs/motifs/rope/rope_f32.loom",
           "qwen3_moe/model_config.loom",
           "../loom-libs/motifs/matmul/q4_q6_q8_1_x4_qkv.loom",
           "../loom-libs/motifs/matmul/q4_q8_1_x4_decode.loom",
@@ -442,6 +452,7 @@
       "compile_dependencies": [
         "qwen3_moe/motifs/attention_qkv_postprocess_fused_decode.loom",
         "../loom-libs/motifs/attention/rmsnorm_neox_cache_f16.loom",
+        "../loom-libs/motifs/rope/rope_f32.loom",
         "qwen3_moe/model_config.loom",
         "../loom-libs/motifs/matmul/q4_q6_q8_1_x4_qkv.loom",
         "../loom-libs/motifs/matmul/q4_q8_1_x4_decode.loom",

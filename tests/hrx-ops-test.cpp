@@ -1288,13 +1288,15 @@ static ggml_backend_t init_cpu_backend() {
 
 struct AttentionPostprocessGraph {
     ggml_tensor * input               = nullptr;
+    ggml_tensor * hidden_state        = nullptr;
+    ggml_tensor * attention_weight    = nullptr;
     ggml_tensor * query_weight        = nullptr;
     ggml_tensor * key_weight          = nullptr;
     ggml_tensor * value_weight        = nullptr;
     ggml_tensor * query_norm_weight   = nullptr;
     ggml_tensor * key_norm_weight     = nullptr;
     ggml_tensor * positions           = nullptr;
-    ggml_tensor * inverse_frequencies = nullptr;
+    ggml_tensor * freq_factors        = nullptr;
     ggml_tensor * key_cache           = nullptr;
     ggml_tensor * value_cache         = nullptr;
     ggml_tensor * key_cache_indices   = nullptr;
@@ -1310,7 +1312,8 @@ static AttentionPostprocessGraph build_attention_postprocess_graph(ggml_context 
                                                                    int64_t        token_count,
                                                                    int64_t        query_head_count,
                                                                    int64_t        key_value_head_count,
-                                                                   int64_t        cache_row_count) {
+                                                                   int64_t        cache_row_count,
+                                                                   bool           explicit_factors = true) {
     AttentionPostprocessGraph graph;
     const int64_t             query_size     = query_head_count * kQwenFlashHeadSize;
     const int64_t             key_value_size = key_value_head_count * kQwenFlashHeadSize;
@@ -1343,17 +1346,18 @@ static AttentionPostprocessGraph build_attention_postprocess_graph(ggml_context 
     graph.query_norm_weight   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, kQwenFlashHeadSize);
     graph.key_norm_weight     = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, kQwenFlashHeadSize);
     graph.positions           = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, token_count);
-    graph.inverse_frequencies = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, kQwenFlashHeadSize / 2);
+    graph.freq_factors        = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, kQwenFlashHeadSize / 2);
     REQUIRE(graph.query_norm_weight != nullptr);
     REQUIRE(graph.key_norm_weight != nullptr);
     REQUIRE(graph.positions != nullptr);
-    REQUIRE(graph.inverse_frequencies != nullptr);
+    REQUIRE(graph.freq_factors != nullptr);
 
     ggml_tensor * query_norm = ggml_rms_norm(ctx, query_reshape, kQwenRmsNormEps);
     ggml_tensor * query_mul  = ggml_mul(ctx, query_norm, graph.query_norm_weight);
     REQUIRE(query_norm != nullptr);
     REQUIRE(query_mul != nullptr);
-    graph.query_output = ggml_rope_ext(ctx, query_mul, graph.positions, graph.inverse_frequencies, kQwenFlashHeadSize,
+    graph.query_output = ggml_rope_ext(ctx, query_mul, graph.positions,
+                                       explicit_factors ? graph.freq_factors : nullptr, kQwenFlashHeadSize,
                                        GGML_ROPE_TYPE_NEOX, 0, 10000.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
     REQUIRE(graph.query_output != nullptr);
 
@@ -1361,7 +1365,8 @@ static AttentionPostprocessGraph build_attention_postprocess_graph(ggml_context 
     ggml_tensor * key_mul  = ggml_mul(ctx, key_norm, graph.key_norm_weight);
     REQUIRE(key_norm != nullptr);
     REQUIRE(key_mul != nullptr);
-    ggml_tensor * key_rope = ggml_rope_ext(ctx, key_mul, graph.positions, graph.inverse_frequencies, kQwenFlashHeadSize,
+    ggml_tensor * key_rope = ggml_rope_ext(ctx, key_mul, graph.positions,
+                                           explicit_factors ? graph.freq_factors : nullptr, kQwenFlashHeadSize,
                                            GGML_ROPE_TYPE_NEOX, 0, 10000.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
     REQUIRE(key_rope != nullptr);
 
@@ -1463,13 +1468,13 @@ static AttentionPostprocessGraph build_decode_attention_qkv_graph(ggml_context *
     AttentionPostprocessGraph graph =
         build_attention_postprocess_graph(ctx, token_count, query_head_count, key_value_head_count, cache_row_count);
 
-    ggml_tensor * hidden_state     = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kQwenHiddenSize, token_count);
-    ggml_tensor * attention_weight = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, kQwenHiddenSize);
-    REQUIRE(hidden_state != nullptr);
-    REQUIRE(attention_weight != nullptr);
-    ggml_tensor * attention_rms = ggml_rms_norm(ctx, hidden_state, kQwenRmsNormEps);
+    graph.hidden_state     = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kQwenHiddenSize, token_count);
+    graph.attention_weight = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, kQwenHiddenSize);
+    REQUIRE(graph.hidden_state != nullptr);
+    REQUIRE(graph.attention_weight != nullptr);
+    ggml_tensor * attention_rms = ggml_rms_norm(ctx, graph.hidden_state, kQwenRmsNormEps);
     REQUIRE(attention_rms != nullptr);
-    graph.input = ggml_mul(ctx, attention_rms, attention_weight);
+    graph.input = ggml_mul(ctx, attention_rms, graph.attention_weight);
     REQUIRE(graph.input != nullptr);
 
     const int64_t key_value_size = key_value_head_count * kQwenFlashHeadSize;
@@ -1492,7 +1497,7 @@ static AttentionPostprocessGraph build_decode_attention_qkv_graph(ggml_context *
     ggml_tensor * query_mul  = ggml_mul(ctx, query_norm, graph.query_norm_weight);
     REQUIRE(query_norm != nullptr);
     REQUIRE(query_mul != nullptr);
-    graph.query_output = ggml_rope_ext(ctx, query_mul, graph.positions, graph.inverse_frequencies, kQwenFlashHeadSize,
+    graph.query_output = ggml_rope_ext(ctx, query_mul, graph.positions, graph.freq_factors, kQwenFlashHeadSize,
                                        GGML_ROPE_TYPE_NEOX, 0, 10000.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
     REQUIRE(graph.query_output != nullptr);
 
@@ -1500,7 +1505,7 @@ static AttentionPostprocessGraph build_decode_attention_qkv_graph(ggml_context *
     ggml_tensor * key_mul  = ggml_mul(ctx, key_norm, graph.key_norm_weight);
     REQUIRE(key_norm != nullptr);
     REQUIRE(key_mul != nullptr);
-    ggml_tensor * key_rope = ggml_rope_ext(ctx, key_mul, graph.positions, graph.inverse_frequencies, kQwenFlashHeadSize,
+    ggml_tensor * key_rope = ggml_rope_ext(ctx, key_mul, graph.positions, graph.freq_factors, kQwenFlashHeadSize,
                                            GGML_ROPE_TYPE_NEOX, 0, 10000.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
     REQUIRE(key_rope != nullptr);
 
@@ -7612,7 +7617,49 @@ static void run_rope_set_rows_cpu_reference_case() {
     ggml_backend_free(hrx_backend);
 }
 
-static void run_attention_postprocess_cpu_reference_case() {
+static void run_rope_unit_factors_cpu_reference_case() {
+    ggml_backend_t cpu_backend = init_cpu_backend();
+    ggml_init_params params = {};
+    params.mem_size = 1024 * 1024;
+    params.no_alloc = true;
+    ggml_context * ctx = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
+    ggml_tensor * implicit_input = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, kQwenFlashHeadSize, 1, 2);
+    ggml_tensor * explicit_input = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, kQwenFlashHeadSize, 1, 2);
+    ggml_tensor * positions = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 2);
+    ggml_tensor * factors = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, kQwenFlashHeadSize / 2);
+    ggml_tensor * implicit_output = ggml_rope_ext(ctx, implicit_input, positions, nullptr, kQwenFlashHeadSize,
+                                                  GGML_ROPE_TYPE_NEOX, 0, 10000.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+    ggml_tensor * explicit_output = ggml_rope_ext(ctx, explicit_input, positions, factors, kQwenFlashHeadSize,
+                                                  GGML_ROPE_TYPE_NEOX, 0, 10000.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+    REQUIRE(implicit_output != nullptr);
+    REQUIRE(explicit_output != nullptr);
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, implicit_output);
+    ggml_build_forward_expand(graph, explicit_output);
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, cpu_backend);
+    REQUIRE(buffer != nullptr);
+
+    const auto input = make_pattern_f32(2 * kQwenFlashHeadSize, 21, 0.5f);
+    const std::array<int32_t, 2> position_data = { 8, 9 };
+    const std::vector<float> unit_factors(kQwenFlashHeadSize / 2, 1.0f);
+    ggml_backend_tensor_set(implicit_input, input.data(), 0, input.size() * sizeof(float));
+    ggml_backend_tensor_set(explicit_input, input.data(), 0, input.size() * sizeof(float));
+    ggml_backend_tensor_set(positions, position_data.data(), 0, sizeof(position_data));
+    ggml_backend_tensor_set(factors, unit_factors.data(), 0, unit_factors.size() * sizeof(float));
+    REQUIRE(ggml_backend_graph_compute(cpu_backend, graph) == GGML_STATUS_SUCCESS);
+    require_close(get_f32_tensor(cpu_backend, explicit_output), get_f32_tensor(cpu_backend, implicit_output),
+                  0.0f, 0.0f);
+
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+    ggml_backend_free(cpu_backend);
+}
+
+static std::pair<std::vector<float>, std::vector<float>> run_attention_postprocess_cpu_reference_case(
+    bool check_decode = false, bool implicit_rope = false) {
     ggml_backend_t cpu_backend = init_cpu_backend();
     ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
     REQUIRE(hrx_backend != nullptr);
@@ -7625,16 +7672,23 @@ static void run_attention_postprocess_cpu_reference_case() {
     REQUIRE(cpu_ctx != nullptr);
     REQUIRE(hrx_ctx != nullptr);
 
-    constexpr int64_t         token_count          = 2;
-    constexpr int64_t         query_head_count     = 4;
-    constexpr int64_t         key_value_head_count = 2;
-    constexpr int64_t         cache_row_count      = 8;
-    const int64_t             query_size           = query_head_count * kQwenFlashHeadSize;
-    const int64_t             key_value_size       = key_value_head_count * kQwenFlashHeadSize;
-    AttentionPostprocessGraph cpu = build_attention_postprocess_graph(cpu_ctx, token_count, query_head_count,
-                                                                      key_value_head_count, cache_row_count);
-    AttentionPostprocessGraph hrx = build_attention_postprocess_graph(hrx_ctx, token_count, query_head_count,
-                                                                      key_value_head_count, cache_row_count);
+    const int64_t token_count          = check_decode ? 1 : 2;
+    const int64_t query_head_count     = check_decode ? 32 : 4;
+    const int64_t key_value_head_count = check_decode ? 4 : 2;
+    const int64_t cache_row_count      = check_decode ? 1024 : 8;
+    const int64_t query_size           = query_head_count * kQwenFlashHeadSize;
+    const int64_t key_value_size       = key_value_head_count * kQwenFlashHeadSize;
+    const bool    explicit_factors        = !implicit_rope;
+    AttentionPostprocessGraph cpu = check_decode ?
+        build_decode_attention_qkv_graph(cpu_ctx) :
+        build_attention_postprocess_graph(cpu_ctx, token_count, query_head_count,
+                                          key_value_head_count, cache_row_count, explicit_factors);
+    AttentionPostprocessGraph hrx = check_decode ?
+        build_decode_attention_qkv_graph(hrx_ctx) :
+        build_attention_postprocess_graph(hrx_ctx, token_count, query_head_count,
+                                          key_value_head_count, cache_row_count, explicit_factors);
+
+
 
     auto hrx_query_buffer = allocate_test_weight(hrx_backend, hrx.query_weight);
     auto hrx_key_buffer   = allocate_test_weight(hrx_backend, hrx.key_weight);
@@ -7644,6 +7698,8 @@ static void run_attention_postprocess_cpu_reference_case() {
     ggml_cgraph * hrx_graph = ggml_new_graph(hrx_ctx);
     REQUIRE(cpu_graph != nullptr);
     REQUIRE(hrx_graph != nullptr);
+    // A stable graph UID exercises the cached execution contract across changing inputs.
+    hrx_graph->uid = check_decode ? 4003 : 4002;
     ggml_build_forward_expand(cpu_graph, cpu.query_output);
     ggml_build_forward_expand(cpu_graph, cpu.key_output);
     ggml_build_forward_expand(cpu_graph, cpu.value_output);
@@ -7651,8 +7707,11 @@ static void run_attention_postprocess_cpu_reference_case() {
     ggml_build_forward_expand(hrx_graph, hrx.key_output);
     ggml_build_forward_expand(hrx_graph, hrx.value_output);
 
+
+
     require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph),
-                               { "qwen3_moe:qwen3_moe_attention_postprocess_f32_f16" });
+                               { check_decode ? "qwen3_moe:qwen3_moe_attention_qkv_postprocess_fused_decode" :
+                                                "qwen3_moe:qwen3_moe_attention_postprocess_f32_f16" });
 
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
     ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
@@ -7665,18 +7724,24 @@ static void run_attention_postprocess_cpu_reference_case() {
     const std::vector<uint8_t> value_w   = make_quantized_rows(GGML_TYPE_Q6_K, kQwenHiddenSize, key_value_size, 13);
     const std::vector<float>   query_nw  = make_weight(kQwenFlashHeadSize);
     const std::vector<float>   key_nw    = make_pattern_f32(kQwenFlashHeadSize, 14, 0.02f);
-    const std::vector<int32_t> positions = make_i32_mod_data(token_count, 1024);
-    std::vector<float>         inv_freq(static_cast<size_t>(kQwenFlashHeadSize / 2));
-    for (size_t i = 0; i < inv_freq.size(); ++i) {
-        inv_freq[i] = 1.0f / std::pow(10000.0f, static_cast<float>(2 * i) / static_cast<float>(kQwenFlashHeadSize));
-    }
+    std::vector<int32_t> positions = check_decode ? std::vector<int32_t>{ 8 } : std::vector<int32_t>{ 8, 9 };
+    std::vector<float> factors(static_cast<size_t>(kQwenFlashHeadSize / 2), 1.0f);
     const std::vector<ggml_fp16_t> key_cache(static_cast<size_t>(key_value_size * cache_row_count),
                                              ggml_fp32_to_fp16(0.0f));
     const std::vector<ggml_fp16_t> value_cache(static_cast<size_t>(key_value_size * cache_row_count),
                                                ggml_fp32_to_fp16(0.0f));
-    const std::vector<int64_t>     cache_indices = make_i64_mod_data(token_count, cache_row_count);
+    std::vector<int64_t>           cache_indices = make_i64_mod_data(token_count, cache_row_count);
 
-    set_tensor_pair_bytes(cpu_backend, cpu.input, hrx_backend, hrx.input, input.data(), input.size() * sizeof(float));
+    if (check_decode) {
+        const auto attention_weight = make_weight(kQwenHiddenSize);
+        set_tensor_pair_bytes(cpu_backend, cpu.hidden_state, hrx_backend, hrx.hidden_state,
+                              input.data(), input.size() * sizeof(float));
+        set_tensor_pair_bytes(cpu_backend, cpu.attention_weight, hrx_backend, hrx.attention_weight,
+                              attention_weight.data(), attention_weight.size() * sizeof(float));
+    } else {
+        set_tensor_pair_bytes(cpu_backend, cpu.input, hrx_backend, hrx.input,
+                              input.data(), input.size() * sizeof(float));
+    }
     set_tensor_pair_bytes(cpu_backend, cpu.query_weight, hrx_backend, hrx.query_weight, query_w.data(), query_w.size());
     set_tensor_pair_bytes(cpu_backend, cpu.key_weight, hrx_backend, hrx.key_weight, key_w.data(), key_w.size());
     set_tensor_pair_bytes(cpu_backend, cpu.value_weight, hrx_backend, hrx.value_weight, value_w.data(), value_w.size());
@@ -7686,8 +7751,8 @@ static void run_attention_postprocess_cpu_reference_case() {
                           key_nw.size() * sizeof(float));
     set_tensor_pair_bytes(cpu_backend, cpu.positions, hrx_backend, hrx.positions, positions.data(),
                           positions.size() * sizeof(int32_t));
-    set_tensor_pair_bytes(cpu_backend, cpu.inverse_frequencies, hrx_backend, hrx.inverse_frequencies, inv_freq.data(),
-                          inv_freq.size() * sizeof(float));
+    set_tensor_pair_bytes(cpu_backend, cpu.freq_factors, hrx_backend, hrx.freq_factors, factors.data(),
+                          factors.size() * sizeof(float));
     set_tensor_pair_bytes(cpu_backend, cpu.key_cache, hrx_backend, hrx.key_cache, key_cache.data(),
                           key_cache.size() * sizeof(ggml_fp16_t));
     set_tensor_pair_bytes(cpu_backend, cpu.value_cache, hrx_backend, hrx.value_cache, value_cache.data(),
@@ -7697,16 +7762,118 @@ static void run_attention_postprocess_cpu_reference_case() {
     set_tensor_pair_bytes(cpu_backend, cpu.value_cache_indices, hrx_backend, hrx.value_cache_indices,
                           cache_indices.data(), cache_indices.size() * sizeof(int64_t));
 
-    REQUIRE(ggml_backend_graph_compute(cpu_backend, cpu_graph) == GGML_STATUS_SUCCESS);
-    REQUIRE(ggml_backend_graph_compute(hrx_backend, hrx_graph) == GGML_STATUS_SUCCESS);
-    ggml_backend_synchronize(cpu_backend);
-    ggml_backend_synchronize(hrx_backend);
-    require_close(get_f32_tensor(hrx_backend, hrx.query_output), get_f32_tensor(cpu_backend, cpu.query_output), 2.0f,
-                  5.0e-2f);
-    require_close(get_f32_tensor(hrx_backend, hrx.key_output), get_f32_tensor(cpu_backend, cpu.key_output), 2.0f,
-                  5.0e-2f);
-    require_close(get_f32_tensor(hrx_backend, hrx.value_output), get_f32_tensor(cpu_backend, cpu.value_output), 2.0f,
-                  5.0e-2f);
+    ggml_backend_hrx_cache_stats first_stats = {};
+    const int rounds = implicit_rope ? 1 : 3;
+    std::vector<float> unit_query;
+    std::vector<float> unit_key_cache;
+    for (int round = 0; round < rounds; ++round) {
+        if (round == 1 && explicit_factors) {
+            for (size_t channel = 0; channel < factors.size(); ++channel) {
+                factors[channel] = channel % 3 == 0 ? 0.5f : channel % 3 == 1 ? 2.0f : 4.0f;
+            }
+            set_tensor_pair_bytes(cpu_backend, cpu.freq_factors, hrx_backend, hrx.freq_factors,
+                                  factors.data(), factors.size() * sizeof(float));
+        }
+        if (round == 2) {
+            for (int64_t token = 0; token < token_count; ++token) {
+                positions[token] += static_cast<int32_t>(cache_row_count);
+                cache_indices[token] = positions[token] % cache_row_count;
+            }
+            set_tensor_pair_bytes(cpu_backend, cpu.positions, hrx_backend, hrx.positions,
+                                  positions.data(), positions.size() * sizeof(int32_t));
+            set_tensor_pair_bytes(cpu_backend, cpu.key_cache_indices, hrx_backend, hrx.key_cache_indices,
+                                  cache_indices.data(), cache_indices.size() * sizeof(int64_t));
+            set_tensor_pair_bytes(cpu_backend, cpu.value_cache_indices, hrx_backend, hrx.value_cache_indices,
+                                  cache_indices.data(), cache_indices.size() * sizeof(int64_t));
+        }
+        REQUIRE(ggml_backend_graph_compute(cpu_backend, cpu_graph) == GGML_STATUS_SUCCESS);
+        REQUIRE(ggml_backend_graph_compute(hrx_backend, hrx_graph) == GGML_STATUS_SUCCESS);
+        ggml_backend_synchronize(cpu_backend);
+        ggml_backend_synchronize(hrx_backend);
+        require_close(get_f32_tensor(hrx_backend, hrx.query_output), get_f32_tensor(cpu_backend, cpu.query_output), 2.0f,
+                      5.0e-2f);
+        require_close(get_f32_tensor(hrx_backend, hrx.key_output), get_f32_tensor(cpu_backend, cpu.key_output), 2.0f,
+                      5.0e-2f);
+        require_close(get_f32_tensor(hrx_backend, hrx.value_output), get_f32_tensor(cpu_backend, cpu.value_output), 2.0f,
+                      5.0e-2f);
+
+        const auto actual_query = get_f32_tensor(hrx_backend, hrx.query_output);
+        const auto actual_key_cache = get_f32_tensor(hrx_backend, hrx.key_cache);
+        if (round == 0) {
+            unit_query = actual_query;
+            unit_key_cache = actual_key_cache;
+        } else if (round == 1) {
+            auto rotated = [](const std::vector<float> & base, int64_t row, int64_t head_count,
+                              int64_t position, const std::vector<float> & divisors) {
+                std::vector<float> expected = base;
+                const float theta_step = std::pow(10000.0f, -2.0f / static_cast<float>(kQwenFlashHeadSize));
+                for (int64_t head = 0; head < head_count; ++head) {
+                    float theta = 1.0f;
+                    for (int64_t channel = 0; channel < kQwenFlashHeadSize / 2; ++channel) {
+                        const size_t low = static_cast<size_t>(row * head_count * kQwenFlashHeadSize +
+                                                                head * kQwenFlashHeadSize + channel);
+                        const size_t high = low + kQwenFlashHeadSize / 2;
+                        const float angle = static_cast<float>(position) * theta *
+                                            (1.0f / divisors[channel] - 1.0f);
+                        expected[low] = base[low] * std::cos(angle) - base[high] * std::sin(angle);
+                        expected[high] = base[low] * std::sin(angle) + base[high] * std::cos(angle);
+                        theta *= theta_step;
+                    }
+                }
+                return expected;
+            };
+            std::vector<float> expected_query = unit_query;
+            std::vector<float> expected_key_cache = unit_key_cache;
+            for (int64_t token = 0; token < token_count; ++token) {
+                const auto query_row = rotated(unit_query, token, query_head_count, positions[token], factors);
+                const auto key_row = rotated(unit_key_cache, cache_indices[token], key_value_head_count,
+                                             positions[token], factors);
+                const size_t query_offset = static_cast<size_t>(token * query_size);
+                const size_t key_offset = static_cast<size_t>(cache_indices[token] * key_value_size);
+                std::copy_n(query_row.begin() + query_offset, query_size, expected_query.begin() + query_offset);
+                std::copy_n(key_row.begin() + key_offset, key_value_size,
+                            expected_key_cache.begin() + key_offset);
+            }
+            float maximum_rotation_change = 0.0f;
+            for (size_t i = 0; i < expected_query.size(); ++i) {
+                maximum_rotation_change = std::max(maximum_rotation_change,
+                                                   std::abs(expected_query[i] - unit_query[i]));
+            }
+            REQUIRE(maximum_rotation_change > 0.1f);
+            require_close(actual_query, expected_query, 5.0e-3f, 5.0e-3f);
+            require_close(actual_key_cache, expected_key_cache, 1.0e-2f, 1.0e-2f);
+        }
+
+        if (explicit_factors) {
+            std::vector<float> actual_factors(factors.size());
+            ggml_backend_tensor_get(hrx.freq_factors, actual_factors.data(), 0,
+                                    actual_factors.size() * sizeof(float));
+            REQUIRE(actual_factors == factors);
+        }
+        if (round == 2) {
+            std::vector<int32_t> actual_positions(positions.size());
+            std::vector<int64_t> actual_key_indices(cache_indices.size());
+            std::vector<int64_t> actual_value_indices(cache_indices.size());
+            ggml_backend_tensor_get(hrx.positions, actual_positions.data(), 0,
+                                    actual_positions.size() * sizeof(int32_t));
+            ggml_backend_tensor_get(hrx.key_cache_indices, actual_key_indices.data(), 0,
+                                    actual_key_indices.size() * sizeof(int64_t));
+            ggml_backend_tensor_get(hrx.value_cache_indices, actual_value_indices.data(), 0,
+                                    actual_value_indices.size() * sizeof(int64_t));
+            REQUIRE(actual_positions == positions);
+            REQUIRE(actual_key_indices == cache_indices);
+            REQUIRE(actual_value_indices == cache_indices);
+        }
+        ggml_backend_hrx_cache_stats stats = {};
+        REQUIRE(ggml_backend_hrx_get_cache_stats(hrx_backend, &stats));
+        if (round == 0) {
+            first_stats = stats;
+        } else {
+            REQUIRE(stats.prepared_program_builds == first_stats.prepared_program_builds);
+            REQUIRE(stats.graph_program_builds == first_stats.graph_program_builds);
+            REQUIRE(stats.graph_program_hits > first_stats.graph_program_hits);
+        }
+    }
 
     ggml_backend_buffer_free(cpu_buffer);
     ggml_backend_buffer_free(hrx_buffer);
@@ -7714,6 +7881,7 @@ static void run_attention_postprocess_cpu_reference_case() {
     ggml_free(hrx_ctx);
     ggml_backend_free(cpu_backend);
     ggml_backend_free(hrx_backend);
+    return { unit_query, unit_key_cache };
 }
 
 static void run_routed_moe_cpu_reference_case(ggml_type down_weight_type, bool include_next_rmsnorm) {
@@ -8737,7 +8905,14 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
         suite.device_case("lfm_head_rope.cache.heads8.tokens" + std::to_string(token_count),
                           [token_count] { run_lfm_head_rope_cpu_reference_case(8, token_count, true); });
     }
-    suite.device_case("attention_postprocess.cpu_reference", [] { run_attention_postprocess_cpu_reference_case(); });
+    suite.host_case("attention_postprocess.cpu_unit_factors", [] { run_rope_unit_factors_cpu_reference_case(); });
+    suite.device_case("attention_postprocess.cpu_reference", [] {
+        const auto explicit_unit = run_attention_postprocess_cpu_reference_case();
+        const auto implicit = run_attention_postprocess_cpu_reference_case(false, true);
+        require_close(explicit_unit.first, implicit.first, 1.0e-4f, 1.0e-4f);
+        require_close(explicit_unit.second, implicit.second, 1.0e-3f, 1.0e-3f);
+    });
+    suite.device_case("attention_postprocess.decode_factors", [] { run_attention_postprocess_cpu_reference_case(true); });
     suite.device_case("routed_moe.q4_k.next_rmsnorm", [] { run_routed_moe_cpu_reference_case(GGML_TYPE_Q4_K, true); });
     suite.host_case("routed_moe.codebook_admission", [] { run_routed_codebook_admission_checks(); });
     suite.device_case("routed_pair.iq3_xxs.iq3_xxs.skinny.cpu_reference", [] {
