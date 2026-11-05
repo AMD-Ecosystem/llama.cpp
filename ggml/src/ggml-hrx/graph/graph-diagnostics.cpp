@@ -162,6 +162,14 @@ json op_params_json(const OpParams & params) {
                     { "scale", value.scale },
                     { "gated", value.gated }
                 };
+            } else if constexpr (std::is_same_v<T, Pool1DParams>) {
+                return {
+                    { "kind",    "pool_1d"                  },
+                    { "op",      static_cast<int>(value.op) },
+                    { "kernel",  value.kernel               },
+                    { "stride",  value.stride               },
+                    { "padding", value.padding              }
+                };
             } else if constexpr (std::is_same_v<T, GluParams>) {
                 return {
                     { "kind",    "glu"                       },
@@ -244,6 +252,12 @@ OpParams parse_op_params(const json & item) {
     }
     if (kind == "hc_pre") {
         return HyperConnectionPreParams{ item.value("scale", 1.0f), item.value("gated", false) };
+    }
+    if (kind == "pool_1d") {
+        return Pool1DParams{
+            static_cast<ggml_op_pool>(item.value("op", static_cast<int>(GGML_OP_POOL_MAX))),
+            item.value("kernel", 0), item.value("stride", 0), item.value("padding", 0),
+        };
     }
     if (kind == "glu") {
         return GluParams{ static_cast<ggml_glu_op>(item.value("op", static_cast<int>(GGML_GLU_OP_REGLU))),

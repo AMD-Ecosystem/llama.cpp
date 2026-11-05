@@ -1,0 +1,60 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+template.decl @ggml.unary_f32.apply(%arg0: index, %arg1: f32) -> (f32)
+
+amdgpu.target<gfx11-generic> @ggml_amax_scale_f32_gfx11_wave64 {subgroup_size = 64}
+
+kernel.def target(@ggml_amax_scale_f32_gfx11_wave64) export("ggml_amax_scale_f32") @ggml_amax_scale_f32(%row_count: index, %row_width: index) {
+  %one = index.constant 1 : index
+  %twofiftysix = index.constant 256 : index
+  kernel.launch.config workgroups(%row_count, %one, %one) workgroup_size(%twofiftysix, %one, %one) : index
+} launch(%row_count: index, %row_width: index, %input: buffer, %output: buffer, %scale: buffer) where [range(%row_count, 1, 1048576), range(%row_width, 1, 32768)] {
+  %rows = index.assume %row_count [range(%row_count, 1, 1048576)] : index
+  %width = index.assume %row_width [range(%row_width, 1, 32768)] : index
+  %row = kernel.workgroup.id<x> : index
+  %lane = kernel.workitem.id<x> : index
+  %zero = index.constant 0 : index
+  %stride = index.constant 256 : index
+  %zero_f32 = scalar.constant 0.0 : f32
+  %abs_op = index.constant 1 : index
+  %log_op = index.constant 22 : index
+  %ceil_op = index.constant 7 : index
+  %exp_op = index.constant 18 : index
+  %element_count = index.mul %rows, %width : index
+  %row_base = index.mul %row, %width : index
+  %zero_offset = index.constant 0 : offset
+  %input_view = buffer.view %input[%zero_offset] : buffer -> view<[%element_count]xf32>
+  %output_view = buffer.view %output[%zero_offset] : buffer -> view<[%element_count]xf32>
+  %scale_view = buffer.view %scale[%zero_offset] : buffer -> view<[%rows]xf32>
+  %maximum = scf.for %column = [%lane to %width step %stride](%prior = %zero_f32 : f32) -> (f32) {
+    %offset = index.add %row_base, %column : index
+    %value = view.load %input_view[%offset] : view<[%element_count]xf32> -> f32
+    %absolute = template.apply<@ggml.unary_f32.apply>(%abs_op, %value) : (index, f32) -> (f32)
+    %next = scalar.maxnumf %absolute, %prior : f32
+    scf.yield %next : f32
+  }
+  %row_maximum = kernel.workgroup.reduce<maxnumf> %maximum : f32
+  %inverse_limit = scalar.constant 0.0009765625 : f32
+  %log2_e = scalar.constant 1.4426950408889634 : f32
+  %ln_2 = scalar.constant 0.6931471805599453 : f32
+  %max_exponent = scalar.constant 127.0 : f32
+  %relative = scalar.mulf %row_maximum, %inverse_limit : f32
+  %logarithm = template.apply<@ggml.unary_f32.apply>(%log_op, %relative) : (index, f32) -> (f32)
+  %log2 = scalar.mulf %logarithm, %log2_e : f32
+  %rounded = template.apply<@ggml.unary_f32.apply>(%ceil_op, %log2) : (index, f32) -> (f32)
+  %exponent = scalar.clampf<number> %rounded, %zero_f32, %max_exponent : f32
+  %natural_exponent = scalar.mulf %exponent, %ln_2 : f32
+  %factor = template.apply<@ggml.unary_f32.apply>(%exp_op, %natural_exponent) : (index, f32) -> (f32)
+  %is_first = index.cmp eq, %lane, %zero : index
+  scf.if %is_first {
+    view.store %factor, %scale_view[%row] : f32, view<[%rows]xf32>
+  }
+  scf.for %column = [%lane to %width step %stride] {
+    %offset = index.add %row_base, %column : index
+    %value = view.load %input_view[%offset] : view<[%element_count]xf32> -> f32
+    %normalized = scalar.divf %value, %factor : f32
+    view.store %normalized, %output_view[%offset] : f32, view<[%element_count]xf32>
+  }
+  kernel.return
+}

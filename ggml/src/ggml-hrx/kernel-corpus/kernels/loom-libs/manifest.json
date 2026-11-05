@@ -733,6 +733,9 @@
     },
     {
       "path": "ops/flash_attention/sparse_prefill_f32_f16.loom"
+    },
+    {
+      "path": "ops/reduction/amax_scale_f32.loom"
     }
   ],
   "exports": [
@@ -4056,7 +4059,8 @@
         "partition_table",
         "gate_weight",
         "up_weight",
-        "output"
+        "output",
+        "iq3_xxs_grid"
       ],
       "binding_access": [
         "read",
@@ -4064,7 +4068,8 @@
         "read",
         "read",
         "read",
-        "read_write"
+        "read_write",
+        "read"
       ],
       "target_selector": "",
       "compile_recipe": {
@@ -4121,7 +4126,8 @@
         "partition_table",
         "gate_weight",
         "up_weight",
-        "output"
+        "output",
+        "iq3_xxs_grid"
       ],
       "binding_access": [
         "read",
@@ -4129,7 +4135,8 @@
         "read",
         "read",
         "read",
-        "read_write"
+        "read_write",
+        "read"
       ],
       "target_selector": "",
       "compile_recipe": {
@@ -10896,6 +10903,55 @@
         "motifs/flash_attention/online_softmax.loom",
         "motifs/flash_attention/pv_block_wmma.loom",
         "motifs/flash_attention/publish_f32.loom"
+      ]
+    },
+    {
+      "name": "ggml_amax_scale_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_amax_scale_f32",
+      "source": "ops/reduction/amax_scale_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "row_count",
+          "type": "index"
+        },
+        {
+          "name": "row_width",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "row_count",
+          "type": "index"
+        },
+        {
+          "name": "row_width",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "output",
+        "scale"
+      ],
+      "binding_access": [
+        "read",
+        "write",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/reduction/amax_scale_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/elementwise/unary_apply.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/elementwise/unary_apply.loom"
       ]
     }
   ],

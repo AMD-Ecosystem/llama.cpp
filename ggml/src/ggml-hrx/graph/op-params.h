@@ -55,6 +55,13 @@ struct HyperConnectionPreParams {
     bool  gated = false;
 };
 
+struct Pool1DParams {
+    ggml_op_pool op = GGML_OP_POOL_MAX;
+    int32_t      kernel = 0;
+    int32_t      stride = 0;
+    int32_t      padding = 0;
+};
+
 struct GluParams {
     ggml_glu_op op = GGML_GLU_OP_REGLU;
     bool        swapped = false;
@@ -145,6 +152,7 @@ using OpParams = std::variant<
     FillParams,
     HyperConnectionCombParams,
     HyperConnectionPreParams,
+    Pool1DParams,
     GluParams,
     ScaleParams,
     BinaryParams,

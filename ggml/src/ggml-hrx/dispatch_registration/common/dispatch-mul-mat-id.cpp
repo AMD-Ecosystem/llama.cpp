@@ -36,6 +36,19 @@ static constexpr KernelCatalogRef kMulMatIdTiledPostOpsNextRmsNormF32F32Kernel =
 static constexpr KernelCatalogRef kMulMatIdSkinnyPostOpsNextRmsNormF32F32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_skinny_input_f32_postops_next_rmsnorm_publish_f32");
 
+static bool requires_unsupported_routed_codebook(CommonMulMatWeightFormat format) {
+    switch (format) {
+        case CommonMulMatWeightFormat::IQ1_S:
+        case CommonMulMatWeightFormat::IQ1_M:
+        case CommonMulMatWeightFormat::IQ2_XXS:
+        case CommonMulMatWeightFormat::IQ2_XS:
+        case CommonMulMatWeightFormat::IQ3_XXS:
+            return true;
+        default:
+            return false;
+    }
+}
+
 struct MulMatIdPostOpsMatch {
     CommonMulMatIdMatch            root;
     const Value *                  bias              = nullptr;
@@ -254,6 +267,9 @@ static bool match_mul_mat_id_dispatch(const DispatchMatchContext & context, Disp
     if (!match.matched()) {
         return false;
     }
+    if (requires_unsupported_routed_codebook(match.weight_format)) {
+        return false;
+    }
 
     CommandPlanMoeRoutingBundle routing_bundle;
     if (!common_mul_mat_id_ensure_moe_routing_bundle(context, match, dispatch_match, routing_bundle)) {
@@ -301,6 +317,9 @@ static bool match_mul_mat_id_dispatch(const DispatchMatchContext & context, Disp
 static bool match_mul_mat_id_postops_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     const MulMatIdPostOpsMatch match = match_mul_mat_id_postops(context);
     if (!match.matched()) {
+        return false;
+    }
+    if (requires_unsupported_routed_codebook(match.root.weight_format)) {
         return false;
     }
 
