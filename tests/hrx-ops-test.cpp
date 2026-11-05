@@ -231,8 +231,15 @@ static std::vector<float> router_projection_reference(const std::vector<float> &
     return output;
 }
 
-static std::vector<float> router_top8_weights_reference(const std::vector<float> & logits, int64_t token_count) {
-    std::vector<float> output(kQwenRouterRouteCount * token_count);
+struct RouterTop8Reference {
+    std::vector<int32_t> ids;
+    std::vector<float>   weights;
+};
+
+static RouterTop8Reference router_top8_reference(const std::vector<float> & logits, int64_t token_count) {
+    RouterTop8Reference reference;
+    reference.ids.resize(kQwenRouterRouteCount * token_count);
+    reference.weights.resize(kQwenRouterRouteCount * token_count);
     for (int64_t token = 0; token < token_count; ++token) {
         bool    used[kQwenRouterExpertCount]    = {};
         int64_t selected[kQwenRouterRouteCount] = {};
@@ -249,6 +256,7 @@ static std::vector<float> router_top8_weights_reference(const std::vector<float>
             }
             selected[route]   = best_expert;
             used[best_expert] = true;
+            reference.ids[token * kQwenRouterRouteCount + route] = static_cast<int32_t>(best_expert);
         }
 
         float max_selected = -std::numeric_limits<float>::infinity();
@@ -258,14 +266,14 @@ static std::vector<float> router_top8_weights_reference(const std::vector<float>
         float sum = 0.0f;
         for (int64_t route = 0; route < kQwenRouterRouteCount; ++route) {
             const float value = std::exp(logits[token * kQwenRouterExpertCount + selected[route]] - max_selected);
-            output[token * kQwenRouterRouteCount + route] = value;
+            reference.weights[token * kQwenRouterRouteCount + route] = value;
             sum += value;
         }
         for (int64_t route = 0; route < kQwenRouterRouteCount; ++route) {
-            output[token * kQwenRouterRouteCount + route] /= sum;
+            reference.weights[token * kQwenRouterRouteCount + route] /= sum;
         }
     }
-    return output;
+    return reference;
 }
 
 static std::vector<float> flash_attention_reference(const std::vector<float> &       query,
@@ -4500,6 +4508,72 @@ static void run_q4_prefill_source_eligibility_case() {
     ggml_backend_free(backend);
 }
 
+static void run_scalar_3d_get_rows_case(int64_t token_count, int64_t route_stride, bool include_invalid_ids = false) {
+    ggml_backend_t backend = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+
+    ggml_init_params params = {};
+    params.mem_size = 1024 * 1024;
+    params.no_alloc = true;
+    ggml_context * ctx = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
+    ggml_tensor * scales = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, 128, token_count);
+    ggml_tensor * ids_storage = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, route_stride, token_count);
+    REQUIRE(scales != nullptr);
+    REQUIRE(ids_storage != nullptr);
+    ggml_tensor * ids = route_stride == 8 ? ids_storage :
+        ggml_view_2d(ctx, ids_storage, 8, token_count, ids_storage->nb[1], 0);
+    REQUIRE(ids != nullptr);
+    ggml_tensor * output = ggml_get_rows(ctx, scales, ids);
+    REQUIRE(output != nullptr);
+    ggml_set_output(output);
+
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, output);
+    require_kernel_subsequence(scheduled_kernel_sequence(graph), { "loom_libs:ggml_get_rows_scalar_3d_f32" });
+
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    REQUIRE(buffer != nullptr);
+    std::vector<float> scales_data(128 * token_count);
+    std::vector<int32_t> ids_data(route_stride * token_count, -1);
+    std::vector<float> expected(8 * token_count);
+    for (int64_t token = 0; token < token_count; ++token) {
+        for (int64_t expert = 0; expert < 128; ++expert) {
+            scales_data[token * 128 + expert] = static_cast<float>(token * 1024) + expert * 0.25f;
+        }
+        for (int64_t route = 0; route < 8; ++route) {
+            int32_t expert = route == 0 ? 0 : route == 7 ? 127 :
+                             static_cast<int32_t>((token * 17 + route * 19) % 128);
+            if (include_invalid_ids) {
+                switch (route) {
+                    case 1: expert = -1; break;
+                    case 2: expert = 128; break;
+                    case 3: expert = std::numeric_limits<int32_t>::min(); break;
+                    case 4: expert = std::numeric_limits<int32_t>::max(); break;
+                }
+            }
+            ids_data[token * route_stride + route] = expert;
+            const bool valid_expert = expert >= 0 && expert < 128;
+            expected[token * 8 + route] = valid_expert ? scales_data[token * 128 + expert] : 0.0f;
+        }
+    }
+
+    ggml_backend_tensor_set(scales, scales_data.data(), 0, scales_data.size() * sizeof(float));
+    ggml_backend_tensor_set(ids_storage, ids_data.data(), 0, ids_data.size() * sizeof(int32_t));
+    REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(backend);
+
+    std::vector<float> actual(expected.size());
+    ggml_backend_tensor_get(output, actual.data(), 0, actual.size() * sizeof(float));
+    REQUIRE(actual == expected);
+
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+    ggml_backend_free(backend);
+}
+
 static void run_router_top8_case(int64_t token_count) {
     ggml_backend_t backend = ggml_backend_hrx_init(0);
     REQUIRE(backend != nullptr);
@@ -4512,7 +4586,9 @@ static void run_router_top8_case(int64_t token_count) {
 
     ggml_tensor * logits = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kQwenRouterExpertCount, token_count);
     REQUIRE(logits != nullptr);
-    ggml_tensor * output = build_qwen_router_top8_graph(ctx, logits);
+    ggml_tensor * route_ids = nullptr;
+    ggml_tensor * output = build_qwen_router_top8_graph(ctx, logits, &route_ids);
+    ggml_set_output(route_ids);
 
     ggml_cgraph * graph = ggml_new_graph(ctx);
     REQUIRE(graph != nullptr);
@@ -4524,18 +4600,34 @@ static void run_router_top8_case(int64_t token_count) {
     REQUIRE(buffer != nullptr);
 
     const std::vector<float> logits_data = make_router_logits(token_count);
-    const std::vector<float> expected    = router_top8_weights_reference(logits_data, token_count);
+    const RouterTop8Reference expected = router_top8_reference(logits_data, token_count);
 
     ggml_backend_tensor_set(logits, logits_data.data(), 0, logits_data.size() * sizeof(float));
 
     REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
     ggml_backend_synchronize(backend);
 
-    std::vector<float> actual(expected.size());
+    std::vector<float> actual(expected.weights.size());
     ggml_backend_tensor_get(output, actual.data(), 0, actual.size() * sizeof(float));
     for (size_t i = 0; i < actual.size(); ++i) {
-        const float diff = std::fabs(actual[i] - expected[i]);
+        const float diff = std::fabs(actual[i] - expected.weights[i]);
         REQUIRE(diff <= 1.0e-5f);
+    }
+
+    const size_t row_stride = route_ids->nb[1] / sizeof(int32_t);
+    const size_t span = (static_cast<size_t>(token_count) - 1) * row_stride + kQwenRouterRouteCount;
+    std::vector<int32_t> actual_ids(span);
+    ggml_backend_tensor_get(route_ids, actual_ids.data(), 0, span * sizeof(int32_t));
+    for (int64_t token = 0; token < token_count; ++token) {
+        for (int64_t route = 0; route < kQwenRouterRouteCount; ++route) {
+            const size_t output_index = token * kQwenRouterRouteCount + route;
+            const size_t storage_index = token * row_stride + route;
+            if (actual_ids[storage_index] != expected.ids[output_index]) {
+                std::fprintf(stderr, "router IDs token=%" PRId64 " route=%" PRId64 " stride=%zu actual=%d expected=%d\n",
+                             token, route, row_stride, actual_ids[storage_index], expected.ids[output_index]);
+            }
+            REQUIRE(actual_ids[storage_index] == expected.ids[output_index]);
+        }
     }
 
     ggml_backend_buffer_free(buffer);
@@ -9168,7 +9260,20 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
                                                    GGML_GLU_OP_SWIGLU, 2048, true);
     });
     suite.device_case("mixed_symmetric_source_eligibility", [] { run_mixed_symmetric_source_eligibility_case(); });
-    suite.device_case("router_top8.tokens4", [] { run_router_top8_case(4); });
+    for (int64_t tokens : { 1, 2, 8 }) {
+        for (int64_t stride : { 8, 128 }) {
+            suite.device_case("scalar_3d_get_rows.tokens" + std::to_string(tokens) + ".stride" +
+                                  std::to_string(stride),
+                              [=] { run_scalar_3d_get_rows_case(tokens, stride); });
+        }
+    }
+    for (int64_t stride : { 8, 128 }) {
+        suite.device_case("scalar_3d_get_rows.invalid_ids.stride" + std::to_string(stride),
+                          [=] { run_scalar_3d_get_rows_case(2, stride, true); });
+    }
+    for (int64_t tokens : { 1, 2, 4, 8 }) {
+        suite.device_case("router_top8.tokens" + std::to_string(tokens), [=] { run_router_top8_case(tokens); });
+    }
     for (int64_t experts : { 128, 256, 512 }) {
         for (int64_t tokens : { 1, 2, 512 }) {
             suite.device_case("router_common_matmul.experts" + std::to_string(experts) + ".tokens" + std::to_string(tokens),

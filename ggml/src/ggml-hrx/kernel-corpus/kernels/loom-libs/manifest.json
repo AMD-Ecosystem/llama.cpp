@@ -315,6 +315,9 @@
       "path": "ops/rows/get_rows_f32.loom"
     },
     {
+      "path": "ops/rows/get_rows_scalar_3d_f32.loom"
+    },
+    {
       "path": "ops/rows/get_rows_scale_f32.loom"
     },
     {
@@ -6740,6 +6743,51 @@
         "motifs/flash_attention/completion_counter_reduce.loom",
         "motifs/quantize_q8_1_x4.loom"
       ]
+    },
+    {
+      "name": "ggml_get_rows_scalar_3d_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_get_rows_scalar_3d_f32",
+      "source": "ops/rows/get_rows_scalar_3d_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "route_stride",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "route_stride",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "route_ids",
+        "scales",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/rows/get_rows_scalar_3d_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
     },
     {
       "name": "ggml_get_rows_f32",
