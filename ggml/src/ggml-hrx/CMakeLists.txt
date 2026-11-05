@@ -227,8 +227,8 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/common/dispatch-mul-mat-common.h
     dispatch_registration/common/dispatch-mul-mat-weight-format.h
     dispatch_registration/common/dispatch-mul-mat.h
-    dispatch_registration/common/dispatch-pool-1d.cpp
-    dispatch_registration/common/dispatch-pool-1d.h
+    dispatch_registration/common/dispatch-amax-scale.cpp
+    dispatch_registration/common/dispatch-amax-scale.h
     dispatch_registration/common/dispatch-rope-set-rows.cpp
     dispatch_registration/common/dispatch-rope-set-rows.h
     dispatch_registration/common/dispatch-rope-utils.h

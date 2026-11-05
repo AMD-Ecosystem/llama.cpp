@@ -4,6 +4,6 @@
 
 namespace ggml::hrx {
 
-void register_pool_1d_dispatch(DispatchRegistryBuilder & registry);
+void register_amax_scale_dispatch(DispatchRegistryBuilder & registry);
 
 }  // namespace ggml::hrx

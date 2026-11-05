@@ -10,7 +10,7 @@
 #include "dispatch-glu.h"
 #include "dispatch-mul-mat-id.h"
 #include "dispatch-mul-mat.h"
-#include "dispatch-pool-1d.h"
+#include "dispatch-amax-scale.h"
 #include "dispatch-rmsnorm.h"
 #include "dispatch-rope-set-rows.h"
 #include "dispatch-scale.h"
@@ -29,7 +29,7 @@ void register_common_dispatches(DispatchRegistryBuilder & registry) {
     register_glu_dispatches(registry);
     register_mul_mat_id_dispatches(registry);
     register_mul_mat_dispatches(registry);
-    register_pool_1d_dispatch(registry);
+    register_amax_scale_dispatch(registry);
     register_rope_set_rows_dispatches(registry);
     register_scale_dispatch(registry);
     register_unary_dispatch(registry);

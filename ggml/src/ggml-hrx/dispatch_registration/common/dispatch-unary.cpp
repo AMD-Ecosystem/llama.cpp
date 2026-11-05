@@ -16,7 +16,6 @@ namespace {
 
 static constexpr KernelCatalogRef kUnaryF32Kernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_unary_f32");
 static constexpr KernelCatalogRef kScaleBiasF32Kernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_scale_bias_f32");
-static constexpr KernelCatalogRef kClampF32Kernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_clamp_f32");
 
 static bool same_shape(const Value & lhs, const Value & rhs) {
     for (int i = 0; i < GGML_MAX_DIMS; ++i) {
@@ -119,54 +118,6 @@ static bool match_unary_f32_dispatch(const DispatchMatchContext & context, Dispa
     return true;
 }
 
-static bool match_clamp_f32_dispatch(const DispatchMatchContext & context, DispatchMatch & match) {
-    const GraphNode * node = context.root_node;
-    if (node == nullptr) {
-        return false;
-    }
-    const bool one_input = node->inputs.size() == 1;
-    if (!one_input) {
-        return false;
-    }
-
-    const ClampParams * params = op_params_as<ClampParams>(node->params);
-    const Value *       input  = graph_value(context.graph, node->inputs[0]);
-    const Value *       output = graph_value(context.graph, node->output);
-    const bool has_params = params != nullptr;
-    const bool has_input = input != nullptr;
-    const bool has_output = output != nullptr;
-    const bool all_present = has_params && has_input && has_output;
-    if (!all_present) {
-        return false;
-    }
-
-    const bool exponent_limits = params->min == 0.0f && params->max == 127.0f;
-    const bool scalar_per_row = input->ne[0] == 1 && output->ne[0] == 1;
-    const bool f32_values = input->type == GGML_TYPE_F32 && output->type == GGML_TYPE_F32;
-    const bool contiguous_values = input->contiguous && output->contiguous;
-    const bool matching_shape = same_shape(*input, *output);
-    const bool safe_storage = scale_storage_is_safe(*input, *output);
-    const bool bounded = output->element_count > 0 &&
-                         static_cast<uint64_t>(output->element_count) <= 134217728;
-    const bool supported = exponent_limits && scalar_per_row && f32_values && contiguous_values &&
-                           matching_shape && safe_storage && bounded;
-    if (!supported) {
-        return false;
-    }
-
-    Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(kClampF32Kernel);
-    dispatch.kernel.integer_parameters.emplace("element_count", output->element_count);
-    dispatch.kernel.compile_parameters.emplace("ggml.clamp_f32.min", float_config_value(params->min));
-    dispatch.kernel.compile_parameters.emplace("ggml.clamp_f32.max", float_config_value(params->max));
-    dispatch.bindings.push_back({ input->id, 0, input->byte_count });
-    dispatch.bindings.push_back({ output->id, 0, output->byte_count });
-
-    match.covered_nodes.push_back(context.root_index);
-    match.dispatches.push_back(std::move(dispatch));
-    return true;
-}
-
 static void register_unary_dispatch_for(DispatchRegistryBuilder & registry, ggml_op root_op) {
     registry.add({
         "common.unary_f32",
@@ -181,14 +132,6 @@ static void register_unary_dispatch_for(DispatchRegistryBuilder & registry, ggml
 }  // namespace
 
 void register_unary_dispatch(DispatchRegistryBuilder & registry) {
-    registry.add({
-        "common.clamp_f32",
-        GGML_OP_CLAMP,
-        DispatchMatchKind::SingleOp,
-        0,
-        DispatchSource::Common,
-        match_clamp_f32_dispatch,
-    });
     registry.add({
         "common.scale_bias_f32",
         GGML_OP_SCALE,

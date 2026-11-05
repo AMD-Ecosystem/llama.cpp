@@ -1198,6 +1198,7 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
     if (supported_scale_f32_tensor(op)) {
         return true;
     }
+    // Admit pooling for the amax-scale fusion; graph claim validates the complete chain.
     if (supported_full_max_pool_1d_f32_tensor(op)) {
         return true;
     }

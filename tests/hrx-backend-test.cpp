@@ -1565,47 +1565,6 @@ static void run_scale_f32_dispatch_checks() {
     ggml_free(ctx);
 }
 
-static void run_mellum_scaling_dispatch_checks() {
-    ggml_init_params params = {};
-    params.mem_size         = 1024 * 1024;
-    params.no_alloc         = true;
-    ggml_context * ctx      = ggml_init(params);
-    REQUIRE(ctx != nullptr);
-
-    ggml_tensor * input = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 896, 8, 16);
-    ggml_tensor * pooled = ggml_pool_1d(ctx, input, GGML_OP_POOL_MAX, 896, 896, 0);
-    ggml_tensor * clamp_input = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, 8, 16);
-    ggml_tensor * clamped = ggml_clamp(ctx, clamp_input, 0.0f, 127.0f);
-    REQUIRE(input != nullptr);
-    REQUIRE(pooled != nullptr);
-    REQUIRE(clamp_input != nullptr);
-    REQUIRE(clamped != nullptr);
-
-    const ggml::hrx::Dispatch pool_dispatch = schedule_single_dispatch_for_tensor(ctx, pooled);
-    REQUIRE(kernel_name_for_id(pool_dispatch.kernel.kernel_id) == "loom_libs:ggml_pool_1d_full_max_f32");
-    REQUIRE(pool_dispatch.kernel.integer_parameters.at("row_count") == 128);
-    REQUIRE(pool_dispatch.kernel.integer_parameters.at("row_width") == 896);
-
-    const ggml::hrx::Dispatch clamp_dispatch = schedule_single_dispatch_for_tensor(ctx, clamped);
-    REQUIRE(kernel_name_for_id(clamp_dispatch.kernel.kernel_id) == "loom_libs:ggml_clamp_f32");
-    REQUIRE(clamp_dispatch.kernel.integer_parameters.at("element_count") == 128);
-    require_compile_parameter(clamp_dispatch, "ggml.clamp_f32.min", expected_config_value(0.0f));
-    require_compile_parameter(clamp_dispatch, "ggml.clamp_f32.max", expected_config_value(127.0f));
-
-    ggml_tensor * wide_clamp_input = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 8);
-    ggml_tensor * wide_clamp = ggml_clamp(ctx, wide_clamp_input, 0.0f, 127.0f);
-    ggml_tensor * other_bounds = ggml_clamp(ctx, clamp_input, 0.0f, 1.0f);
-    REQUIRE(!can_schedule_tensor(ctx, wide_clamp));
-    REQUIRE(!can_schedule_tensor(ctx, other_bounds));
-
-    ggml_tensor * partial_pool = ggml_pool_1d(ctx, input, GGML_OP_POOL_MAX, 32, 32, 0);
-    ggml_tensor * average_pool = ggml_pool_1d(ctx, input, GGML_OP_POOL_AVG, 896, 896, 0);
-    REQUIRE(!can_schedule_tensor(ctx, partial_pool));
-    REQUIRE(!can_schedule_tensor(ctx, average_pool));
-
-    ggml_free(ctx);
-}
-
 static void require_scale_add_dispatch(ggml_context * ctx,
                                        ggml_tensor *  input,
                                        ggml_tensor *  residual,
@@ -13860,7 +13819,17 @@ static void run_amax_scale_fusion_dispatch_checks() {
         REQUIRE(imported.valid());
         ggml::hrx::DispatchScheduler scheduler;
         const bool scheduled = scheduler.schedule_graph(imported.graph, test_dispatch_target());
-        if (variant == 4) {
+        if (variant != 0) {
+            // Without standalone pool/clamp dispatches, these graphs must reject the fusion and the full claim.
+            std::vector<bool> covered(imported.graph.nodes().size(), false);
+            ggml::hrx::CommandPlan plan;
+            ggml::hrx::DispatchMatch match;
+            const size_t root = producer_index_for_tensor(imported.graph, tensors.absolute);
+            if (match_dispatch_at_index(imported.graph, plan, covered, root, match)) {
+                for (const auto & dispatch : match.dispatches) {
+                    REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) != "loom_libs:ggml_amax_scale_f32");
+                }
+            }
             REQUIRE(!scheduled);
             ggml_free(ctx);
             continue;
@@ -13875,22 +13844,17 @@ static void run_amax_scale_fusion_dispatch_checks() {
                 REQUIRE(dispatch.kernel.integer_parameters.at("row_count") == 128);
             }
         }
-        REQUIRE(fused_count == (variant == 0 ? 1 : 0));
-        if (variant == 0) {
-            REQUIRE(scheduler.plan().dispatches.size() == 2);
-        }
+        REQUIRE(fused_count == 1);
+        REQUIRE(scheduler.plan().dispatches.size() == 2);
         ggml_free(ctx);
     }
 }
 
 static std::vector<float> run_amax_scale_fusion_case(ggml_backend_t backend, int64_t width,
-                                                    int64_t tokens, bool expose_intermediate, bool nonfinite = false) {
+                                                    int64_t tokens, bool nonfinite = false) {
     ggml_context * ctx = ggml_init({ 1024 * 1024, nullptr, true });
     REQUIRE(ctx != nullptr);
     const auto tensors = build_amax_scale_test_graph(ctx, width, tokens);
-    if (expose_intermediate) {
-        ggml_set_output(tensors.absolute);
-    }
     ggml_set_output(tensors.scale);
     ggml_cgraph * graph = ggml_new_graph(ctx);
     ggml_build_forward_expand(graph, tensors.output);
@@ -13940,13 +13904,11 @@ static void run_amax_scale_fusion_numerics() {
     REQUIRE(hrx != nullptr);
     for (int64_t width : { 1, 64, 257, 896, 32768 }) {
         for (int64_t tokens : { 1, 16 }) {
-            const auto reference = run_amax_scale_fusion_case(cpu, width, tokens, false);
-            const auto unfused = run_amax_scale_fusion_case(hrx, width, tokens, true);
-            const auto fused = run_amax_scale_fusion_case(hrx, width, tokens, false);
+            const auto reference = run_amax_scale_fusion_case(cpu, width, tokens);
+            const auto fused = run_amax_scale_fusion_case(hrx, width, tokens);
             REQUIRE(fused.size() == reference.size());
             for (size_t i = 0; i < fused.size(); ++i) {
                 REQUIRE(std::isfinite(fused[i]));
-                REQUIRE(fused[i] == unfused[i]);
                 const bool close_to_cpu = std::fabs(fused[i] - reference[i]) <= 3.0e-6f * std::fabs(reference[i]) + 1.0e-7f;
                 if (!close_to_cpu) {
                     std::fprintf(stderr, "amax width=%lld tokens=%lld i=%zu cpu=%.9g hrx=%.9g\n",
@@ -13956,183 +13918,28 @@ static void run_amax_scale_fusion_numerics() {
             }
         }
     }
-    // CPU pooling and HRX maxnum reductions differ on NaN rows. Fusion must preserve the existing HRX results.
-    const auto unfused = run_amax_scale_fusion_case(hrx, 257, 1, true, true);
-    const auto fused = run_amax_scale_fusion_case(hrx, 257, 1, false, true);
-    for (size_t i = 0; i < fused.size(); ++i) {
-        if (std::isnan(unfused[i])) {
-            REQUIRE(std::isnan(fused[i]));
-        } else {
-            REQUIRE(fused[i] == unfused[i]);
-        }
+    // HRX maxnum ignores NaNs in the reduction. Division preserves each NaN input.
+    constexpr size_t width = 257;
+    constexpr size_t elements = width * 8;
+    const auto fused = run_amax_scale_fusion_case(hrx, width, 1, true);
+    for (size_t column = 0; column < width; ++column) {
+        REQUIRE(std::isnan(fused[column]));
     }
+    REQUIRE(fused[elements] == 1.0f);
+    REQUIRE(fused[elements + 3] == 1.0f);
+    REQUIRE(std::isnan(fused[4 * width - 1]));
+    REQUIRE(fused[3 * width + 1] == -std::nextafter(1024.0f, 0.0f) / 16.0f);
+    REQUIRE(fused[2 * width - 1] == std::numeric_limits<float>::infinity());
+    REQUIRE(fused[3 * width - 1] == -std::numeric_limits<float>::infinity());
+    // Infinite maxima saturate the exponent at 127; the resulting scale stays finite.
+    for (size_t row : { 1, 2 }) {
+        REQUIRE(std::isfinite(fused[elements + row]));
+        REQUIRE(std::fabs(fused[elements + row] / std::ldexp(1.0f, 127) - 1.0f) <= 3.0e-6f);
+    }
+    REQUIRE(std::isfinite(fused[5 * width - 1]));
+    REQUIRE(std::fabs(fused[5 * width - 1] - 1024.0f) <= 3.0e-6f * 1024.0f);
     ggml_backend_free(hrx);
     ggml_backend_free(cpu);
-}
-
-static std::vector<float> run_mellum_scaling_numerical_case(ggml_backend_t backend, int64_t token_count) {
-    ggml_init_params params = {};
-    params.mem_size         = 1024 * 1024;
-    params.no_alloc         = true;
-    ggml_context * ctx      = ggml_init(params);
-    REQUIRE(ctx != nullptr);
-
-    constexpr int64_t row_width = 896;
-    constexpr int64_t route_count = 8;
-    ggml_tensor * input = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, row_width, route_count, token_count);
-    ggml_tensor * absolute = ggml_abs(ctx, input);
-    ggml_tensor * pooled = ggml_pool_1d(ctx, absolute, GGML_OP_POOL_MAX, row_width, row_width, 0);
-    ggml_tensor * clamped = ggml_clamp(ctx, pooled, 0.0f, 127.0f);
-    REQUIRE(input != nullptr);
-    REQUIRE(absolute != nullptr);
-    REQUIRE(pooled != nullptr);
-    REQUIRE(clamped != nullptr);
-
-    ggml_cgraph * graph = ggml_new_graph(ctx);
-    REQUIRE(graph != nullptr);
-    ggml_build_forward_expand(graph, clamped);
-
-    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
-    REQUIRE(buffer != nullptr);
-
-    std::vector<float> input_data(row_width * route_count * token_count);
-    for (size_t i = 0; i < input_data.size(); ++i) {
-        input_data[i] = static_cast<float>((i * 37) % 251) * 0.0625f - 7.5f;
-    }
-    input_data[0] = 0.0f;
-    input_data[row_width - 1] = -256.0f;
-    for (int64_t column = 0; column < row_width; ++column) {
-        input_data[row_width + column] = 0.0f;
-        input_data[2 * row_width + column] = 0.000125f;
-    }
-    input_data[2 * row_width - 1] = -0.000125f;
-    ggml_backend_tensor_set(input, input_data.data(), 0, input_data.size() * sizeof(float));
-
-    REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
-    ggml_backend_synchronize(backend);
-
-    std::vector<float> output(route_count * token_count);
-    ggml_backend_tensor_get(clamped, output.data(), 0, output.size() * sizeof(float));
-
-    ggml_backend_buffer_free(buffer);
-    ggml_free(ctx);
-    return output;
-}
-
-static void run_mellum_scaling_numerics() {
-    ggml_backend_t hrx = ggml_backend_hrx_init(0);
-    ggml_backend_t cpu = ggml_backend_cpu_init();
-    REQUIRE(hrx != nullptr);
-    REQUIRE(cpu != nullptr);
-
-    for (int64_t token_count : { 1, 16 }) {
-        const std::vector<float> expected = run_mellum_scaling_numerical_case(cpu, token_count);
-        const std::vector<float> actual = run_mellum_scaling_numerical_case(hrx, token_count);
-        const std::vector<float> repeated = run_mellum_scaling_numerical_case(hrx, token_count);
-        REQUIRE(actual.size() == expected.size());
-        REQUIRE(repeated.size() == expected.size());
-        for (size_t i = 0; i < expected.size(); ++i) {
-            REQUIRE(std::isfinite(actual[i]));
-            REQUIRE(actual[i] == expected[i]);
-            REQUIRE(repeated[i] == actual[i]);
-        }
-    }
-
-    ggml_backend_free(cpu);
-    ggml_backend_free(hrx);
-}
-
-static std::vector<float> run_full_max_pool_numerical_case(ggml_backend_t backend, int64_t row_width) {
-    ggml_context * ctx = ggml_init({ 1024 * 1024, nullptr, true });
-    REQUIRE(ctx != nullptr);
-    constexpr int64_t row_count = 8;
-    ggml_tensor * input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, row_width, row_count);
-    ggml_tensor * output = ggml_pool_1d(ctx, input, GGML_OP_POOL_MAX, row_width, row_width, 0);
-    REQUIRE(input != nullptr);
-    REQUIRE(output != nullptr);
-    ggml_cgraph * graph = ggml_new_graph(ctx);
-    REQUIRE(graph != nullptr);
-    ggml_build_forward_expand(graph, output);
-    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
-    REQUIRE(buffer != nullptr);
-
-    std::vector<float> input_data(row_width * row_count, -4.0f);
-    for (int64_t column = 0; column < row_width; ++column) {
-        input_data[row_width + column] = 0.0f;
-        input_data[2 * row_width + column] = -0.000125f;
-    }
-    input_data[row_width - 1] = -1.0f;
-    input_data[2 * row_width + row_width / 2] = 0.000125f;
-    input_data[3 * row_width] = 100000.0f;
-    input_data[3 * row_width + row_width - 1] = -100000.0f;
-    ggml_backend_tensor_set(input, input_data.data(), 0, input_data.size() * sizeof(float));
-
-    REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
-    ggml_backend_synchronize(backend);
-    std::vector<float> result(row_count);
-    ggml_backend_tensor_get(output, result.data(), 0, result.size() * sizeof(float));
-
-    ggml_backend_buffer_free(buffer);
-    ggml_free(ctx);
-    return result;
-}
-
-static std::vector<float> run_clamp_numerical_case(ggml_backend_t backend, bool inplace) {
-    ggml_context * ctx = ggml_init({ 1024 * 1024, nullptr, true });
-    REQUIRE(ctx != nullptr);
-    ggml_tensor * input = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, 8, 1);
-    ggml_tensor * output = inplace ? ggml_clamp_inplace(ctx, input, 0.0f, 127.0f) :
-                                     ggml_clamp(ctx, input, 0.0f, 127.0f);
-    REQUIRE(input != nullptr);
-    REQUIRE(output != nullptr);
-    ggml_cgraph * graph = ggml_new_graph(ctx);
-    REQUIRE(graph != nullptr);
-    ggml_build_forward_expand(graph, output);
-    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
-    REQUIRE(buffer != nullptr);
-
-    const std::array<float, 8> input_data = { -1000.0f, -1.0f, 0.0f, 0.000125f, 126.0f, 127.0f, 128.0f, 1000.0f };
-    ggml_backend_tensor_set(input, input_data.data(), 0, sizeof(input_data));
-    REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
-    ggml_backend_synchronize(backend);
-    std::vector<float> result(input_data.size());
-    ggml_backend_tensor_get(output, result.data(), 0, result.size() * sizeof(float));
-
-    ggml_backend_buffer_free(buffer);
-    ggml_free(ctx);
-    return result;
-}
-
-static void run_mellum_scaling_direct_numerics() {
-    ggml_backend_t hrx = ggml_backend_hrx_init(0);
-    ggml_backend_t cpu = ggml_backend_cpu_init();
-    REQUIRE(hrx != nullptr);
-    REQUIRE(cpu != nullptr);
-
-    for (int64_t row_width : { 64, 896 }) {
-        const std::vector<float> expected = run_full_max_pool_numerical_case(cpu, row_width);
-        const std::vector<float> actual = run_full_max_pool_numerical_case(hrx, row_width);
-        const std::vector<float> repeated = run_full_max_pool_numerical_case(hrx, row_width);
-        REQUIRE(expected[0] == -1.0f);
-        REQUIRE(expected[1] == 0.0f);
-        REQUIRE(expected[2] == 0.000125f);
-        REQUIRE(expected[3] == 100000.0f);
-        REQUIRE(actual == expected);
-        REQUIRE(repeated == actual);
-    }
-
-    for (bool inplace : { false, true }) {
-        const std::vector<float> expected = run_clamp_numerical_case(cpu, inplace);
-        const std::vector<float> actual = run_clamp_numerical_case(hrx, inplace);
-        const std::vector<float> repeated = run_clamp_numerical_case(hrx, inplace);
-        REQUIRE(actual == expected);
-        REQUIRE(repeated == actual);
-        REQUIRE(actual[0] == 0.0f);
-        REQUIRE(actual[7] == 127.0f);
-    }
-
-    ggml_backend_free(cpu);
-    ggml_backend_free(hrx);
 }
 
 struct RoutedKTailOutputs {
@@ -15131,7 +14938,6 @@ static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
     });
     suite.host_case("common_mul_mat_id_postops_dispatch", [] { run_common_mul_mat_id_postops_dispatch_checks(); });
     suite.host_case("amax_scale_fusion_dispatch", [] { run_amax_scale_fusion_dispatch_checks(); });
-    suite.host_case("mellum_scaling_dispatch", [] { run_mellum_scaling_dispatch_checks(); });
     suite.host_case("alias_value_import", [] { run_alias_value_import_checks(); });
     suite.host_case("multi_dispatch", [] { run_multi_dispatch_checks(); });
     suite.host_case("layout_alias_scheduler_elision", [] { run_layout_alias_scheduler_elision_checks(); });
@@ -15304,8 +15110,6 @@ static void register_hrx_backend_device_cases(test_runner::Suite & suite) {
     suite.device_case("gather_add_rmsnorm_f32_numerics", [] { run_gather_add_rmsnorm_f32_numerics(); });
     suite.device_case("scale_f32", [] { run_scale_f32(); });
     suite.device_case("amax_scale_fusion_numerics", [] { run_amax_scale_fusion_numerics(); });
-    suite.device_case("mellum_scaling_numerics", [] { run_mellum_scaling_numerics(); });
-    suite.device_case("mellum_scaling_direct_numerics", [] { run_mellum_scaling_direct_numerics(); });
     for (const auto & shape : { std::pair<ggml_type, int64_t>{ GGML_TYPE_Q8_0, 896 },
                                { GGML_TYPE_Q8_0, 704 }, { GGML_TYPE_Q5_1, 704 },
                                { GGML_TYPE_Q8_0, 1024 }, { GGML_TYPE_Q5_1, 768 },
