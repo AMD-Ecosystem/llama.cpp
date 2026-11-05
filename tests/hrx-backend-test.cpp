@@ -13809,6 +13809,127 @@ static void run_scale_f32() {
     ggml_backend_free(backend);
 }
 
+struct AmaxScaleTestGraph {
+    ggml_tensor * input;
+    ggml_tensor * absolute;
+    ggml_tensor * scale;
+    ggml_tensor * output;
+};
+
+static AmaxScaleTestGraph build_amax_scale_test_graph(ggml_context * ctx, int64_t width, int64_t tokens,
+                                                     float limit_inverse = 1.0f / 1024.0f) {
+    ggml_tensor * input = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, width, 8, tokens);
+    ggml_tensor * absolute = ggml_abs(ctx, input);
+    ggml_tensor * pooled = ggml_pool_1d(ctx, absolute, GGML_OP_POOL_MAX, width, width, 0);
+    ggml_tensor * scale = ggml_scale(ctx, pooled, limit_inverse);
+    scale = ggml_log(ctx, scale);
+    scale = ggml_scale(ctx, scale, 1.4426950408889634f);
+    scale = ggml_ceil(ctx, scale);
+    scale = ggml_clamp(ctx, scale, 0.0f, 127.0f);
+    scale = ggml_scale(ctx, scale, 0.6931471805599453f);
+    scale = ggml_exp(ctx, scale);
+    return { input, absolute, scale, ggml_div(ctx, input, scale) };
+}
+
+static void run_amax_scale_fusion_dispatch_checks() {
+    for (int variant = 0; variant < 4; ++variant) {
+        ggml_context * ctx = ggml_init({ 1024 * 1024, nullptr, true });
+        REQUIRE(ctx != nullptr);
+        const float inverse = variant == 1 ? 1.0f / 512.0f : 1.0f / 1024.0f;
+        const auto tensors = build_amax_scale_test_graph(ctx, 896, 16, inverse);
+        if (variant == 2) {
+            ggml_set_output(tensors.absolute);
+        }
+        ggml_cgraph * graph = ggml_new_graph(ctx);
+        ggml_build_forward_expand(graph, tensors.output);
+        // The scale remains observable and feeds the eventual output rescaling.
+        ggml_set_output(tensors.scale);
+        ggml_build_forward_expand(graph, ggml_mul(ctx, tensors.output, tensors.scale));
+        if (variant == 3) {
+            ggml_build_forward_expand(graph, ggml_scale(ctx, tensors.absolute, 2.0f));
+        }
+        auto imported = ggml::hrx::import_ggml_graph(*graph);
+        REQUIRE(imported.valid());
+        ggml::hrx::DispatchScheduler scheduler;
+        REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+        size_t fused_count = 0;
+        for (const auto & dispatch : scheduler.plan().dispatches) {
+            if (kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_amax_scale_f32") {
+                ++fused_count;
+                REQUIRE(dispatch.bindings.size() == 3);
+                REQUIRE(dispatch.kernel.integer_parameters.at("row_width") == 896);
+                REQUIRE(dispatch.kernel.integer_parameters.at("row_count") == 128);
+            }
+        }
+        REQUIRE(fused_count == (variant == 0 ? 1 : 0));
+        if (variant == 0) {
+            REQUIRE(scheduler.plan().dispatches.size() == 2);
+        }
+        ggml_free(ctx);
+    }
+}
+
+static std::vector<float> run_amax_scale_fusion_case(ggml_backend_t backend, int64_t width,
+                                                    int64_t tokens, bool expose_intermediate) {
+    ggml_context * ctx = ggml_init({ 1024 * 1024, nullptr, true });
+    REQUIRE(ctx != nullptr);
+    const auto tensors = build_amax_scale_test_graph(ctx, width, tokens);
+    if (expose_intermediate) {
+        ggml_set_output(tensors.absolute);
+    }
+    ggml_set_output(tensors.scale);
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, tensors.output);
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    REQUIRE(buffer != nullptr);
+    const float amplitudes[] = { 0.0f, 0.000125f, 1024.0f, std::nextafter(1024.0f, 0.0f),
+                                 std::nextafter(1024.0f, 2048.0f), 65536.0f, 1.0e6f, 1.0e30f };
+    std::vector<float> input(width * 8 * tokens);
+    for (size_t i = 0; i < input.size(); ++i) {
+        const size_t row = i / width;
+        const size_t column = i % width;
+        const float fraction = static_cast<float>(column % 17) / 16.0f;
+        input[i] = amplitudes[row % 8] * fraction * (column % 2 ? -1.0f : 1.0f);
+    }
+    ggml_backend_tensor_set(tensors.input, input.data(), 0, input.size() * sizeof(float));
+    REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(backend);
+    const size_t rows = 8 * tokens;
+    std::vector<float> output(input.size() + rows);
+    ggml_backend_tensor_get(tensors.output, output.data(), 0, input.size() * sizeof(float));
+    ggml_backend_tensor_get(tensors.scale, output.data() + input.size(), 0, rows * sizeof(float));
+    for (size_t i = 0; i < input.size(); ++i) {
+        const float recovered = output[i] * output[input.size() + i / width];
+        REQUIRE(std::isfinite(output[i]));
+        REQUIRE(std::fabs(recovered - input[i]) <= 3.0e-6f * std::fabs(input[i]) + 1.0e-7f);
+    }
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+    return output;
+}
+
+static void run_amax_scale_fusion_numerics() {
+    ggml_backend_t cpu = ggml_backend_cpu_init();
+    ggml_backend_t hrx = ggml_backend_hrx_init(0);
+    REQUIRE(cpu != nullptr);
+    REQUIRE(hrx != nullptr);
+    for (int64_t width : { 64, 896 }) {
+        for (int64_t tokens : { 1, 16 }) {
+            const auto reference = run_amax_scale_fusion_case(cpu, width, tokens, false);
+            const auto unfused = run_amax_scale_fusion_case(hrx, width, tokens, true);
+            const auto fused = run_amax_scale_fusion_case(hrx, width, tokens, false);
+            REQUIRE(fused.size() == reference.size());
+            for (size_t i = 0; i < fused.size(); ++i) {
+                REQUIRE(std::isfinite(fused[i]));
+                REQUIRE(fused[i] == unfused[i]);
+                REQUIRE(std::fabs(fused[i] - reference[i]) <= 3.0e-6f * std::fabs(reference[i]) + 1.0e-7f);
+            }
+        }
+    }
+    ggml_backend_free(hrx);
+    ggml_backend_free(cpu);
+}
+
 static std::vector<float> run_mellum_scaling_numerical_case(ggml_backend_t backend, int64_t token_count) {
     ggml_init_params params = {};
     params.mem_size         = 1024 * 1024;
@@ -14969,6 +15090,7 @@ static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
         run_qwen_weighted_reduce_next_rmsnorm_q8_publication_checks();
     });
     suite.host_case("common_mul_mat_id_postops_dispatch", [] { run_common_mul_mat_id_postops_dispatch_checks(); });
+    suite.host_case("amax_scale_fusion_dispatch", [] { run_amax_scale_fusion_dispatch_checks(); });
     suite.host_case("mellum_scaling_dispatch", [] { run_mellum_scaling_dispatch_checks(); });
     suite.host_case("alias_value_import", [] { run_alias_value_import_checks(); });
     suite.host_case("multi_dispatch", [] { run_multi_dispatch_checks(); });
@@ -15141,6 +15263,7 @@ static void register_hrx_backend_device_cases(test_runner::Suite & suite) {
     suite.device_case("rope_scale_f32_numerics", [] { run_rope_scale_f32_numerics(); });
     suite.device_case("gather_add_rmsnorm_f32_numerics", [] { run_gather_add_rmsnorm_f32_numerics(); });
     suite.device_case("scale_f32", [] { run_scale_f32(); });
+    suite.device_case("amax_scale_fusion_numerics", [] { run_amax_scale_fusion_numerics(); });
     suite.device_case("mellum_scaling_numerics", [] { run_mellum_scaling_numerics(); });
     suite.device_case("mellum_scaling_direct_numerics", [] { run_mellum_scaling_direct_numerics(); });
     for (const auto & shape : { std::pair<ggml_type, int64_t>{ GGML_TYPE_Q8_0, 896 },

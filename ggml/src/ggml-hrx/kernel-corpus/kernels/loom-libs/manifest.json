@@ -658,6 +658,9 @@
     },
     {
       "path": "motifs/matmul/tiled_pair_postprocess_f32.loom"
+    },
+    {
+      "path": "ops/reduction/amax_scale_f32.loom"
     }
   ],
   "exports": [
@@ -9665,6 +9668,55 @@
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
         "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_amax_scale_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_amax_scale_f32",
+      "source": "ops/reduction/amax_scale_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "row_count",
+          "type": "index"
+        },
+        {
+          "name": "row_width",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "row_count",
+          "type": "index"
+        },
+        {
+          "name": "row_width",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "output",
+        "scale"
+      ],
+      "binding_access": [
+        "read",
+        "write",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/reduction/amax_scale_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/elementwise/unary_apply.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/elementwise/unary_apply.loom"
       ]
     }
   ],
