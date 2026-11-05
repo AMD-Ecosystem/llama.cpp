@@ -5608,7 +5608,7 @@ static QwenAttentionPostprocessTensors build_qwen_attention_postprocess_graph(gg
                                                                               int64_t        key_value_head_count,
                                                                               int64_t        cache_row_count,
                                                                               float          rms_epsilon = 0.000001f,
-                                                                              bool  include_inverse_frequencies = true,
+                                                                              bool  include_frequency_factors = true,
                                                                               int   rope_n_ctx_orig             = 0,
                                                                               float rope_freq_base  = 10000.0f,
                                                                               float rope_freq_scale = 1.0f,
@@ -5646,18 +5646,18 @@ static QwenAttentionPostprocessTensors build_qwen_attention_postprocess_graph(gg
     ggml_tensor * query_norm_weight = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, kQwenFlashHeadSize);
     ggml_tensor * key_norm_weight   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, kQwenFlashHeadSize);
     tensors.positions               = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, token_count);
-    ggml_tensor * inverse_frequencies =
-        include_inverse_frequencies ? ggml_new_tensor_1d(ctx, GGML_TYPE_F32, kQwenFlashHeadSize / 2) : nullptr;
+    ggml_tensor * frequency_factors =
+        include_frequency_factors ? ggml_new_tensor_1d(ctx, GGML_TYPE_F32, kQwenFlashHeadSize / 2) : nullptr;
     REQUIRE(query_norm_weight != nullptr);
     REQUIRE(key_norm_weight != nullptr);
     REQUIRE(tensors.positions != nullptr);
-    REQUIRE(include_inverse_frequencies == (inverse_frequencies != nullptr));
+    REQUIRE(include_frequency_factors == (frequency_factors != nullptr));
 
     ggml_tensor * query_norm = ggml_rms_norm(ctx, tensors.query_reshape, rms_epsilon);
     ggml_tensor * query_mul  = ggml_mul(ctx, query_norm, query_norm_weight);
     REQUIRE(query_norm != nullptr);
     REQUIRE(query_mul != nullptr);
-    tensors.query_output = ggml_rope_ext(ctx, query_mul, tensors.positions, inverse_frequencies, kQwenFlashHeadSize,
+    tensors.query_output = ggml_rope_ext(ctx, query_mul, tensors.positions, frequency_factors, kQwenFlashHeadSize,
                                          GGML_ROPE_TYPE_NEOX, rope_n_ctx_orig, rope_freq_base, rope_freq_scale,
                                          rope_ext_factor, 1.0f, rope_beta_fast, rope_beta_slow);
     REQUIRE(tensors.query_output != nullptr);
@@ -5666,7 +5666,7 @@ static QwenAttentionPostprocessTensors build_qwen_attention_postprocess_graph(gg
     ggml_tensor * key_mul  = ggml_mul(ctx, key_norm, key_norm_weight);
     REQUIRE(key_norm != nullptr);
     REQUIRE(key_mul != nullptr);
-    ggml_tensor * key_rope = ggml_rope_ext(ctx, key_mul, tensors.positions, inverse_frequencies, kQwenFlashHeadSize,
+    ggml_tensor * key_rope = ggml_rope_ext(ctx, key_mul, tensors.positions, frequency_factors, kQwenFlashHeadSize,
                                            GGML_ROPE_TYPE_NEOX, rope_n_ctx_orig, rope_freq_base, rope_freq_scale,
                                            rope_ext_factor, 1.0f, rope_beta_fast, rope_beta_slow);
     REQUIRE(key_rope != nullptr);
@@ -5744,7 +5744,7 @@ static void schedule_qwen_attention_postprocess_command(ggml_context *          
                                                         int64_t                                 query_head_count,
                                                         int64_t                                 key_value_head_count,
                                                         int64_t                                 cache_row_count,
-                                                        bool expect_synthetic_inverse_frequencies = false,
+                                                        bool expect_unit_frequency_factors = false,
                                                         const std::string & expected_rope_mscale  = "1") {
     ggml::hrx::GraphImportResult imported = import_qwen_attention_postprocess_graph(ctx, tensors);
 
@@ -5764,7 +5764,7 @@ static void schedule_qwen_attention_postprocess_command(ggml_context *          
     REQUIRE(kernel_name == "qwen3_moe:qwen3_moe_attention_postprocess_f32_f16");
     REQUIRE(dispatch.kernel.integer_parameters.at("token_count") == token_count);
     REQUIRE(dispatch.kernel.integer_parameters.at("cache_row_count") == cache_row_count);
-    REQUIRE(dispatch.bindings.size() == 12);
+    REQUIRE(dispatch.bindings.size() == 13);
     require_compile_parameter(dispatch, "qwen3_moe.model.rms_epsilon", "0.000001");
     require_compile_parameter(dispatch, "qwen3_moe.attention.head_size", std::to_string(kQwenFlashHeadSize));
     require_compile_parameter(dispatch, "qwen3_moe.attention.rope_mscale", expected_rope_mscale);
@@ -5798,19 +5798,16 @@ static void schedule_qwen_attention_postprocess_command(ggml_context *          
     REQUIRE(dispatch.bindings[3].value == query_raw_value->id);
     REQUIRE(dispatch.bindings[4].value == key_raw_value->id);
     REQUIRE(dispatch.bindings[5].value == value_raw_value->id);
-    REQUIRE(dispatch.bindings[9].value == query_output_value->id);
-    REQUIRE(dispatch.bindings[10].value == key_cache_value->id);
-    REQUIRE(dispatch.bindings[11].value == value_cache_value->id);
-    if (expect_synthetic_inverse_frequencies) {
-        REQUIRE(scheduler.plan().transients.size() == (q8_input ? 2 : 1));
-        REQUIRE(scheduler.plan().constant_initializations.size() == 1);
-        REQUIRE(dispatch.bindings[8].value == scheduler.plan().transients.back().value);
-        REQUIRE(scheduler.plan().constant_initializations[0].value == dispatch.bindings[8].value);
-        REQUIRE(scheduler.plan().constant_initializations[0].data.size() ==
-                static_cast<size_t>(kQwenFlashHeadSize / 2) * sizeof(float));
-    } else {
-        REQUIRE(scheduler.plan().transients.size() == (q8_input ? 1 : 0));
-        REQUIRE(scheduler.plan().constant_initializations.empty());
+    REQUIRE(dispatch.bindings[10].value == query_output_value->id);
+    REQUIRE(dispatch.bindings[11].value == key_cache_value->id);
+    REQUIRE(dispatch.bindings[12].value == value_cache_value->id);
+    const size_t expected_constants = expect_unit_frequency_factors ? 2 : 1;
+    REQUIRE(scheduler.plan().constant_initializations.size() == expected_constants);
+    REQUIRE(scheduler.plan().constant_initializations[0].value == dispatch.bindings[8].value);
+    REQUIRE(scheduler.plan().constant_initializations[0].data.size() ==
+            static_cast<size_t>(kQwenFlashHeadSize / 2) * sizeof(float));
+    if (expect_unit_frequency_factors) {
+        REQUIRE(scheduler.plan().constant_initializations[1].value == dispatch.bindings[9].value);
     }
 
     const ggml::hrx::CommandProgram commands = ggml::hrx::build_command_program(
@@ -5819,7 +5816,7 @@ static void schedule_qwen_attention_postprocess_command(ggml_context *          
     REQUIRE(commands.initialization_commands.empty());
     REQUIRE(commands.commands.size() == (q8_input ? 5 : 4));
     REQUIRE(command_program_verifies(commands));
-    REQUIRE(commands.commands.back().bindings.size() == 12);
+    REQUIRE(commands.commands.back().bindings.size() == 13);
     REQUIRE(commands.commands.back().bindings[0].name == "positions");
     REQUIRE(commands.commands.back().bindings[1].name == "key_cache_indices");
     REQUIRE(commands.commands.back().bindings[2].name == "value_cache_indices");
@@ -5828,11 +5825,12 @@ static void schedule_qwen_attention_postprocess_command(ggml_context *          
     REQUIRE(commands.commands.back().bindings[5].name == "value_input");
     REQUIRE(commands.commands.back().bindings[6].name == "query_norm_weight");
     REQUIRE(commands.commands.back().bindings[7].name == "key_norm_weight");
-    REQUIRE(commands.commands.back().bindings[8].name == "inverse_frequencies");
-    REQUIRE(commands.commands.back().bindings[9].name == "query_output");
-    REQUIRE(commands.commands.back().bindings[10].name == "key_cache");
-    REQUIRE(commands.commands.back().bindings[11].name == "value_cache");
-    REQUIRE(commands.constant_initializations.size() == (expect_synthetic_inverse_frequencies ? 1 : 0));
+    REQUIRE(commands.commands.back().bindings[8].name == "theta");
+    REQUIRE(commands.commands.back().bindings[9].name == "freq_factors");
+    REQUIRE(commands.commands.back().bindings[10].name == "query_output");
+    REQUIRE(commands.commands.back().bindings[11].name == "key_cache");
+    REQUIRE(commands.commands.back().bindings[12].name == "value_cache");
+    REQUIRE(commands.constant_initializations.size() == expected_constants);
 }
 
 static void run_qwen_attention_postprocess_dispatch_checks() {

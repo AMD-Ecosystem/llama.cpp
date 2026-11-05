@@ -58,7 +58,7 @@ static bool is_qwen_rms_norm_epsilon(float eps) {
     return eps >= 0.0000009f && eps <= 0.0000011f;
 }
 
-static bool is_qwen_implicit_rope_contract(const RopeParams & params) {
+static bool is_qwen_rope_contract(const RopeParams & params) {
     if (params.n_offs != 0) {
         return false;
     }
@@ -67,17 +67,12 @@ static bool is_qwen_implicit_rope_contract(const RopeParams & params) {
            params.freq_scale > 0.0f && std::isfinite(params.ext_factor) && std::isfinite(params.attn_factor);
 }
 
-static bool build_inverse_frequency_table(const GraphNode & rope, std::vector<uint8_t> & data, float & rope_mscale) {
-    const RopeParams * params = op_params_as<RopeParams>(rope.params);
-    if (params == nullptr || !is_qwen_implicit_rope_contract(*params)) {
-        return false;
-    }
-
+static bool build_rope_theta_table(const RopeParams & params, std::vector<uint8_t> & data, float & rope_mscale) {
     RopeFrequencyTable table;
-    if (!build_rope_frequency_table(*params, params->n_dims, table)) {
+    if (!build_rope_frequency_table(params, params.n_dims, table)) {
         return false;
     }
-    data         = std::move(table.data);
+    data        = std::move(table.data);
     rope_mscale = table.mscale;
     return true;
 }
@@ -209,9 +204,11 @@ struct NormRopeChain {
     const Value *        reshaped                 = nullptr;
     const Value *        norm_weight              = nullptr;
     const Value *        positions                = nullptr;
-    const Value *        inverse_freqs            = nullptr;
-    size_t               inverse_freqs_byte_count = 0;
-    std::vector<uint8_t> inverse_freqs_data;
+    const Value *        freq_factors            = nullptr;
+    size_t               theta_byte_count        = 0;
+    std::vector<uint8_t> theta_data;
+    size_t               freq_factors_byte_count = 0;
+    std::vector<uint8_t> unit_freq_factors_data;
     float                rope_mscale              = 1.0f;
     const Value *        output      = nullptr;
     int64_t              token_count = 0;
@@ -221,7 +218,7 @@ struct NormRopeChain {
         return projection_node != nullptr && reshape_node != nullptr && rms_node != nullptr && mul_node != nullptr &&
                rope_node != nullptr && projection_input != nullptr && raw_input != nullptr && reshaped != nullptr &&
                norm_weight != nullptr && positions != nullptr &&
-               (inverse_freqs != nullptr || !inverse_freqs_data.empty()) && inverse_freqs_byte_count > 0 &&
+               theta_byte_count > 0 && !theta_data.empty() && freq_factors_byte_count > 0 &&
                output != nullptr && token_count > 0 && head_count > 0;
     }
 };
@@ -285,12 +282,14 @@ struct AttentionPostprocessMatch {
     bool matched() const { return query.matched() && key.matched_key() && value.matched(); }
 };
 
-static bool matching_inverse_frequencies(const NormRopeChain & lhs, const NormRopeChain & rhs) {
-    if (lhs.inverse_freqs != nullptr || rhs.inverse_freqs != nullptr) {
-        return lhs.inverse_freqs != nullptr && rhs.inverse_freqs != nullptr &&
-               lhs.inverse_freqs->id == rhs.inverse_freqs->id && lhs.rope_mscale == rhs.rope_mscale;
-    }
-    return lhs.inverse_freqs_data == rhs.inverse_freqs_data && lhs.rope_mscale == rhs.rope_mscale;
+static bool matching_rope_frequencies(const NormRopeChain & lhs, const NormRopeChain & rhs) {
+    const bool lhs_has_factors     = lhs.freq_factors != nullptr;
+    const bool rhs_has_factors     = rhs.freq_factors != nullptr;
+    const bool both_have_factors   = lhs_has_factors && rhs_has_factors;
+    const bool neither_has_factors = !lhs_has_factors && !rhs_has_factors;
+    const bool same_factors        = both_have_factors ? lhs.freq_factors->id == rhs.freq_factors->id :
+                                     neither_has_factors && lhs.unit_freq_factors_data == rhs.unit_freq_factors_data;
+    return same_factors && lhs.theta_data == rhs.theta_data && lhs.rope_mscale == rhs.rope_mscale;
 }
 
 static bool has_qwen_rope_params(const GraphNode & node) {
@@ -307,8 +306,9 @@ static bool is_norm_weight(const Value & value) {
     return value.type == GGML_TYPE_F32 && is_shape(value, kQwenAttentionHeadSize, 1, 1, 1);
 }
 
-static bool is_inverse_frequency_table(const Value & value) {
-    return value.type == GGML_TYPE_F32 && is_shape(value, kQwenAttentionHeadSize / 2, 1, 1, 1);
+static bool is_frequency_factor_table(const Value & value) {
+    return value.type == GGML_TYPE_F32 && value.contiguous &&
+           is_shape(value, kQwenAttentionHeadSize / 2, 1, 1, 1);
 }
 
 static bool match_projection_reshape(const Graph &       graph,
@@ -402,36 +402,35 @@ static bool match_norm_rope_chain_from_reshape(const Graph &       graph,
     }
     const Value *        positions                = graph_value(graph, rope->inputs[1]);
     const Value *        output                   = graph_value(graph, rope->output);
-    size_t               inverse_freqs_byte_count = 0;
-    const Value *        inverse_freqs            = nullptr;
-    std::vector<uint8_t> inverse_freqs_data;
-    float                rope_mscale              = 1.0f;
-    if (rope->inputs.size() == 3) {
-        inverse_freqs = graph_value(graph, rope->inputs[2]);
-        if (inverse_freqs == nullptr || !is_inverse_frequency_table(*inverse_freqs)) {
-            log_attention_reject(status, graph, reshape, label + " explicit inverse-frequency table is incompatible");
-            return false;
-        }
-        const RopeParams * params = op_params_as<RopeParams>(rope->params);
-        if (params == nullptr || !is_qwen_implicit_rope_contract(*params)) {
-            log_attention_reject(status, graph, reshape,
-                                 label + " explicit inverse-frequency table has unsupported ROPE params=" +
-                                     rope_params_summary(*rope));
-            return false;
-        }
-        RopeFrequencyTable table;
-        if (!build_rope_frequency_table(*params, params->n_dims, table)) {
-            return false;
-        }
-        rope_mscale = table.mscale;
-        inverse_freqs_byte_count = inverse_freqs->byte_count;
-    } else if (build_inverse_frequency_table(*rope, inverse_freqs_data, rope_mscale)) {
-        inverse_freqs_byte_count = inverse_freqs_data.size();
-    } else {
+    const Value *        freq_factors            = nullptr;
+    size_t               freq_factors_byte_count = 0;
+    std::vector<uint8_t> unit_freq_factors_data;
+    std::vector<uint8_t> theta_data;
+    float                rope_mscale             = 1.0f;
+    const RopeParams *   params                  = op_params_as<RopeParams>(rope->params);
+    const bool           supported_rope_params   = params != nullptr && is_qwen_rope_contract(*params);
+    // YaRN blends linear frequencies, so dividing the derived table by runtime factors preserves its scaling.
+    const bool theta_available = supported_rope_params && build_rope_theta_table(*params, theta_data, rope_mscale);
+    if (!theta_available) {
         log_attention_reject(status, graph, reshape,
-                             label + " implicit inverse-frequency table cannot be derived from ROPE params=" +
-                                 rope_params_summary(*rope));
+                             label + " ROPE frequency table cannot be derived from params=" + rope_params_summary(*rope));
         return false;
+    }
+    if (rope->inputs.size() == 3) {
+        freq_factors = graph_value(graph, rope->inputs[2]);
+        const bool valid_factors = freq_factors != nullptr && is_frequency_factor_table(*freq_factors);
+        if (!valid_factors) {
+            log_attention_reject(status, graph, reshape, label + " explicit frequency-factor table is incompatible");
+            return false;
+        }
+        freq_factors_byte_count = freq_factors->byte_count;
+    } else {
+        unit_freq_factors_data.resize(theta_data.size());
+        const float one = 1.0f;
+        for (size_t i = 0; i < unit_freq_factors_data.size(); i += sizeof(float)) {
+            std::memcpy(unit_freq_factors_data.data() + i, &one, sizeof(one));
+        }
+        freq_factors_byte_count = unit_freq_factors_data.size();
     }
     if (positions == nullptr || output == nullptr || positions->type != GGML_TYPE_I32 ||
         !is_shape(*positions, chain.token_count, 1, 1, 1) || output->type != GGML_TYPE_F32 ||
@@ -445,9 +444,11 @@ static bool match_norm_rope_chain_from_reshape(const Graph &       graph,
     chain.rope_node                = rope;
     chain.norm_weight              = norm_weight;
     chain.positions                = positions;
-    chain.inverse_freqs            = inverse_freqs;
-    chain.inverse_freqs_byte_count = inverse_freqs_byte_count;
-    chain.inverse_freqs_data       = std::move(inverse_freqs_data);
+    chain.freq_factors            = freq_factors;
+    chain.theta_byte_count        = theta_data.size();
+    chain.theta_data              = std::move(theta_data);
+    chain.freq_factors_byte_count = freq_factors_byte_count;
+    chain.unit_freq_factors_data  = std::move(unit_freq_factors_data);
     chain.rope_mscale              = rope_mscale;
     chain.output                   = output;
     return true;
@@ -678,7 +679,7 @@ static AttentionPostprocessMatch match_qwen_attention_postprocess(const Graph & 
     if (match.query.token_count != match.key.key.token_count || match.query.token_count != match.value.token_count ||
         match.key.key.head_count != match.value.head_count ||
         match.query.positions->id != match.key.key.positions->id ||
-        !matching_inverse_frequencies(match.query, match.key.key) ||
+        !matching_rope_frequencies(match.query, match.key.key) ||
         match.key.cache_row_count != match.value.cache_row_count) {
         log_attention_reject(status, graph, root, "query/key/value postprocess invariants are incompatible");
         return {};
@@ -872,21 +873,22 @@ static bool match_qwen_attention_qkv_postprocess_fused_decode_dispatch(const Dis
         return false;
     }
 
-    const bool    synthetic_inverse_frequencies = match.query.inverse_freqs == nullptr;
-    const ValueId inverse_frequencies_value     = synthetic_inverse_frequencies ?
-                                                      next_match_transient_value(context, dispatch_match) :
-                                                      match.query.inverse_freqs->id;
-    const size_t  inverse_frequencies_size      = match.query.inverse_freqs_byte_count;
-    if (synthetic_inverse_frequencies) {
-        dispatch_match.transients.push_back({ inverse_frequencies_value,
-                                              "qwen.attention_qkv_decode.inverse_frequencies", inverse_frequencies_size,
-                                              256 });
-        dispatch_match.constant_initializations.push_back({
-            inverse_frequencies_value,
-            "qwen.attention_qkv_decode.inverse_frequencies",
-            0,
-            match.query.inverse_freqs_data,
-        });
+    const ValueId theta_value = next_match_transient_value(context, dispatch_match);
+    dispatch_match.transients.push_back({ theta_value, "qwen.attention_qkv_decode.theta",
+                                          match.query.theta_byte_count, 256 });
+    dispatch_match.constant_initializations.push_back({ theta_value, "qwen.attention_qkv_decode.theta",
+                                                        0, match.query.theta_data });
+    const bool synthetic_freq_factors = match.query.freq_factors == nullptr;
+    const ValueId freq_factors_value = synthetic_freq_factors ?
+                                           next_match_transient_value(context, dispatch_match) :
+                                           match.query.freq_factors->id;
+    const size_t freq_factors_size = match.query.freq_factors_byte_count;
+    if (synthetic_freq_factors) {
+        dispatch_match.transients.push_back({ freq_factors_value, "qwen.attention_qkv_decode.freq_factors",
+                                              freq_factors_size, 256 });
+        dispatch_match.constant_initializations.push_back({ freq_factors_value,
+                                                            "qwen.attention_qkv_decode.freq_factors", 0,
+                                                            match.query.unit_freq_factors_data });
     }
 
     const ValueId  completion_counters      = next_match_transient_value(context, dispatch_match);
@@ -921,7 +923,8 @@ static bool match_qwen_attention_qkv_postprocess_fused_decode_dispatch(const Dis
     dispatch.bindings.push_back({ match.value.raw_input->id, 0, match.value.raw_input->byte_count });
     dispatch.bindings.push_back({ match.query.norm_weight->id, 0, match.query.norm_weight->byte_count });
     dispatch.bindings.push_back({ match.key.key.norm_weight->id, 0, match.key.key.norm_weight->byte_count });
-    dispatch.bindings.push_back({ inverse_frequencies_value, 0, inverse_frequencies_size });
+    dispatch.bindings.push_back({ theta_value, 0, match.query.theta_byte_count });
+    dispatch.bindings.push_back({ freq_factors_value, 0, freq_factors_size });
     dispatch.bindings.push_back({ match.query.output->id, 0, match.query.output->byte_count });
     dispatch.bindings.push_back({ match.key.cache->id, 0, match.key.cache->byte_count });
     dispatch.bindings.push_back({ match.value.cache->id, 0, match.value.cache->byte_count });
@@ -951,11 +954,16 @@ static bool match_qwen_attention_postprocess_dispatch(const DispatchMatchContext
     }
 
     Dispatch      dispatch;
-    const bool    synthetic_inverse_frequencies = match.query.inverse_freqs == nullptr;
-    const ValueId inverse_frequencies_value     = synthetic_inverse_frequencies ?
-                                                      next_match_transient_value(context, dispatch_match) :
-                                                      match.query.inverse_freqs->id;
-    const size_t  inverse_frequencies_size      = match.query.inverse_freqs_byte_count;
+    const ValueId theta_value = next_match_transient_value(context, dispatch_match);
+    dispatch_match.transients.push_back({ theta_value, "qwen.attention_postprocess.theta",
+                                          match.query.theta_byte_count, 256 });
+    dispatch_match.constant_initializations.push_back({ theta_value, "qwen.attention_postprocess.theta",
+                                                        0, match.query.theta_data });
+    const bool synthetic_freq_factors = match.query.freq_factors == nullptr;
+    const ValueId freq_factors_value = synthetic_freq_factors ?
+                                           next_match_transient_value(context, dispatch_match) :
+                                           match.query.freq_factors->id;
+    const size_t freq_factors_size = match.query.freq_factors_byte_count;
     dispatch.kernel                             = make_kernel_specialization(kQwenAttentionPostprocessF32F16Kernel);
     dispatch.kernel.integer_parameters.emplace("token_count", match.query.token_count);
     dispatch.kernel.integer_parameters.emplace("cache_row_count", match.key.cache_row_count);
@@ -978,22 +986,19 @@ static bool match_qwen_attention_postprocess_dispatch(const DispatchMatchContext
     dispatch.bindings.push_back({ match.value.raw_input->id, 0, match.value.raw_input->byte_count });
     dispatch.bindings.push_back({ match.query.norm_weight->id, 0, match.query.norm_weight->byte_count });
     dispatch.bindings.push_back({ match.key.key.norm_weight->id, 0, match.key.key.norm_weight->byte_count });
-    dispatch.bindings.push_back({ inverse_frequencies_value, 0, inverse_frequencies_size });
+    dispatch.bindings.push_back({ theta_value, 0, match.query.theta_byte_count });
+    dispatch.bindings.push_back({ freq_factors_value, 0, freq_factors_size });
     dispatch.bindings.push_back({ match.query.output->id, 0, match.query.output->byte_count });
     dispatch.bindings.push_back({ match.key.cache->id, 0, match.key.cache->byte_count });
     dispatch.bindings.push_back({ match.value.cache->id, 0, match.value.cache->byte_count });
 
     dispatch_match.dispatches.push_back(std::move(dispatch));
-    if (synthetic_inverse_frequencies) {
-        dispatch_match.transients.push_back({ inverse_frequencies_value,
-                                              "qwen.attention_postprocess.inverse_frequencies",
-                                              inverse_frequencies_size, 256 });
-        dispatch_match.constant_initializations.push_back({
-            inverse_frequencies_value,
-            "qwen.attention_postprocess.inverse_frequencies",
-            0,
-            match.query.inverse_freqs_data,
-        });
+    if (synthetic_freq_factors) {
+        dispatch_match.transients.push_back({ freq_factors_value, "qwen.attention_postprocess.freq_factors",
+                                              freq_factors_size, 256 });
+        dispatch_match.constant_initializations.push_back({ freq_factors_value,
+                                                            "qwen.attention_postprocess.freq_factors", 0,
+                                                            match.query.unit_freq_factors_data });
     }
     return true;
 }
