@@ -41,7 +41,8 @@ GraphSupportResult GraphExecutor::can_execute(const ggml_cgraph & graph) const {
     }
     const KernelCorpus &            corpus = get_qwen_kernel_corpus();
     const GraphProgramSupportResult support =
-        context_.graph_programs.check_support(graph, corpus, context_.device->architecture);
+        context_.graph_programs.check_support(graph, corpus, context_.device->architecture,
+                                              context_.lock_layout_policy());
     result.supported = support.supported;
     result.status.append(support.status);
     return result;
@@ -77,7 +78,8 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
     }
 
     const KernelCorpus & corpus = get_qwen_kernel_corpus();
-    GraphProgramLookup   lookup = context_.graph_programs.get_or_build(graph, corpus, context_.device->architecture);
+    GraphProgramLookup   lookup = context_.graph_programs.get_or_build(graph, corpus, context_.device->architecture,
+                                                                        context_.lock_layout_policy());
     if (!lookup.valid()) {
         result.status.append(lookup.status);
         result.status.append(lookup.match.status);

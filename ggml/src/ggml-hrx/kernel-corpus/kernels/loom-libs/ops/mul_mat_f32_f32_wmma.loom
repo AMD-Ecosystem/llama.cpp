@@ -175,7 +175,7 @@ kernel.def target(@ggml_mul_mat_gfx11_wave32) @ggml_mul_mat_q4_k_f16_wmma_prefil
   %input_layout = config.get @ggml.mul_mat.f16_input_layout : index
   %packed_layout = index.constant 1 : index
   %packed_input = index.cmp eq, %input_layout, %packed_layout : index
-  %prefill_weight_format = index.constant 44 : index
+  %prefill_weight_format = config.get @ggml.mul_mat.weight_format : index
   %prefill_binary_op = index.constant 0 : index
   func.call @ggml_mul_mat_quantized_f16_prefill_wave32(%prefill_weight_format, %prefill_binary_op, %paired, %packed_input, %paired, %bounded_token_count, %input_size, %bounded_output_size, %channel_tile, %token_tile, %input, %weight, %weight, %output, %output) : (index, index, i1, i1, i1, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer)
   kernel.return

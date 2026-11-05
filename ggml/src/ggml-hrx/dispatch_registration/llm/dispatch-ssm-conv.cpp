@@ -807,11 +807,22 @@ static bool match_mul_mat_conv4_dispatch(const DispatchMatchContext & context, D
     dispatch.kernel.integer_parameters.emplace("token_count", mat.token_count);
     set_compile_parameter(dispatch.kernel, "ggml.mul_mat.input_size", mat.input_size);
     set_compile_parameter(dispatch.kernel, "ggml.mul_mat.output_size", mat.output_size);
-    set_compile_parameter(dispatch.kernel, "ggml.mul_mat.weight_format", mat.weight->type == GGML_TYPE_Q4_K ? 4 : 6);
+    const bool q4_weight = mat.weight->type == GGML_TYPE_Q4_K;
+    const bool q6_weight = mat.weight->type == GGML_TYPE_Q6_K;
+    const bool q6_row64 = context.row64_weight_policy && q6_weight &&
+                          dispatch_weight_layout_eligible_for_graph(
+        context.graph, *mat.weight, context.row64_weight_policy);
+    // Q4 conv4 binds row64 even when the model policy is off. Format 44 keeps
+    // that reader distinct from the native Q4 F16 prefill reader (format 4).
+    set_compile_parameter(dispatch.kernel, "ggml.mul_mat.weight_format", q4_weight ? 44 : (q6_row64 ? 46 : 6));
     dispatch.bindings.push_back(activation);
-    if (mat.weight->type == GGML_TYPE_Q4_K) {
+    if (q4_weight) {
         dispatch.bindings.push_back({mat.weight->id, 0, mat.weight->byte_count, kQ4KPackedK256Row64Layout,
                                      mat.weight->type, mat.input_size, mat.output_size, mat.weight->byte_count});
+    } else if (q6_row64) {
+        dispatch.bindings.push_back({mat.weight->id, 0, mat.weight->byte_count,
+                                     kQ6KPackedK256Row64ScaleRowLayout, mat.weight->type, mat.input_size,
+                                     mat.output_size, mat.weight->byte_count});
     } else {
         dispatch.bindings.push_back({mat.weight->id, 0, mat.weight->byte_count});
     }
