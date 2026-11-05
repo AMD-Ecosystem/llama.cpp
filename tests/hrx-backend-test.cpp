@@ -5989,46 +5989,17 @@ static void run_qwen_attention_postprocess_dispatch_checks() {
                                         producer_index_for_tensor(imported.graph, tensors.query_reshape), match));
         append_match_to_plan(plan, match, covered_nodes);
         REQUIRE(plan.valid());
-        REQUIRE(plan.initialization_dispatches.size() == 2);
-
-        const ggml::hrx::Dispatch & context_capture = plan.initialization_dispatches[0];
-        const ggml::hrx::Dispatch & metadata        = plan.initialization_dispatches[1];
-        REQUIRE(kernel_name_for_id(context_capture.kernel.kernel_id) == "qwen:qwen_attention_context_base_capture");
-        REQUIRE(kernel_name_for_id(metadata.kernel.kernel_id) == "qwen3_moe:qwen_attention_metadata");
-        REQUIRE(context_capture.bindings.size() == 2);
-        REQUIRE(metadata.bindings.size() == 5);
-        REQUIRE(context_capture.bindings[1].value == metadata.bindings[0].value);
-        REQUIRE(metadata.kernel.integer_parameters.at("token_count") == token_count);
-        REQUIRE(metadata.kernel.integer_parameters.at("context_capacity") == cache_row_count);
-
-        const ggml::hrx::Value * positions_value     = imported.graph.values().find_tensor(tensors.positions);
-        const ggml::hrx::Value * key_indices_value   = imported.graph.values().find_tensor(tensors.key_cache_indices);
-        const ggml::hrx::Value * value_indices_value = imported.graph.values().find_tensor(tensors.value_cache_indices);
-        const ggml::hrx::Value * mask_value          = imported.graph.values().find_tensor(tensors.mask);
-        REQUIRE(positions_value != nullptr);
-        REQUIRE(key_indices_value != nullptr);
-        REQUIRE(value_indices_value != nullptr);
-        REQUIRE(mask_value != nullptr);
-        REQUIRE(context_capture.bindings[0].value == positions_value->id);
-        REQUIRE(metadata.bindings[1].value == positions_value->id);
-        REQUIRE(metadata.bindings[2].value == key_indices_value->id);
-        REQUIRE(metadata.bindings[3].value == value_indices_value->id);
-        REQUIRE(metadata.bindings[4].value == mask_value->id);
+        REQUIRE(plan.initialization_dispatches.empty());
+        REQUIRE(plan.dispatches.size() == 1);
+        const ggml::hrx::Dispatch & postprocess = plan.dispatches.front();
+        REQUIRE(postprocess.bindings[0].value == imported.graph.values().find_tensor(tensors.positions)->id);
+        REQUIRE(postprocess.bindings[1].value == imported.graph.values().find_tensor(tensors.key_cache_indices)->id);
+        REQUIRE(postprocess.bindings[2].value == imported.graph.values().find_tensor(tensors.value_cache_indices)->id);
 
         const ggml::hrx::CommandProgram commands =
             ggml::hrx::build_command_program(imported.graph, plan, ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
         REQUIRE(commands.valid());
-        REQUIRE(commands.initialization_commands.size() == 2);
-        REQUIRE(commands.initialization_commands[0].bindings[0].name == "positions");
-        REQUIRE(commands.initialization_commands[0].bindings[1].name == "control");
-        REQUIRE(commands.initialization_commands[1].bindings[0].name == "control");
-        REQUIRE(commands.initialization_commands[1].bindings[4].name == "attention_mask");
-        REQUIRE(ggml::hrx::find_transient_allocation(commands.transients, context_capture.bindings[1].value) !=
-                nullptr);
-
-        ggml::hrx::CommandProgram initialization_commands = copy_command_program_shape(commands);
-        initialization_commands.commands.clear();
-        REQUIRE(command_program_verifies(initialization_commands));
+        REQUIRE(commands.initialization_commands.empty());
     }
 
     ggml_free(ctx);

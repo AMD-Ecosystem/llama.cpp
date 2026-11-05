@@ -4847,80 +4847,6 @@ static void run_asymmetric_flash_attention_cpu_reference_case() {
     restore_environment_value(kDisableQwenDispatchEnv, had_original_env, original_env_value);
 }
 
-static void run_qwen_full_cache_prefill_flash_attention_scheduling_case(int64_t token_count) {
-    constexpr int64_t kQueryHeadCount    = 32;
-    constexpr int64_t kKeyValueHeadCount = 4;
-    constexpr int64_t kFullCacheRowCount = 40960;
-    const size_t      active_mask_byte_count =
-        static_cast<size_t>(token_count) * static_cast<size_t>(token_count) * sizeof(ggml_fp16_t);
-
-    ggml_init_params params = {};
-    params.mem_size         = 128 * 1024 * 1024;
-    params.no_alloc         = true;
-    ggml_context * ctx      = ggml_init(params);
-    REQUIRE(ctx != nullptr);
-
-    AttentionPostprocessGraph attention =
-        build_attention_postprocess_graph(ctx, token_count, kQueryHeadCount, kKeyValueHeadCount, kFullCacheRowCount);
-    ggml_tensor * flash_output = append_qwen_full_cache_flash_attention_consumer(
-        ctx, attention, token_count, kQueryHeadCount, kKeyValueHeadCount, kFullCacheRowCount);
-
-    ggml_cgraph * graph = ggml_new_graph(ctx);
-    REQUIRE(graph != nullptr);
-    ggml_build_forward_expand(graph, attention.key_output);
-    ggml_build_forward_expand(graph, attention.value_output);
-    ggml_build_forward_expand(graph, flash_output);
-
-    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
-    REQUIRE(imported.valid());
-    const ggml::hrx::DispatchRegistry * registry = ggml::hrx::find_dispatch_registry({ "gfx1151" });
-    REQUIRE(registry != nullptr);
-
-    std::vector<bool>        covered_nodes(imported.graph.nodes().size(), false);
-    ggml::hrx::CommandPlan   plan;
-    ggml::hrx::DispatchMatch postprocess_match;
-    match_dispatch_at_index(imported.graph, *registry, plan, covered_nodes,
-                            producer_index_for_tensor(imported.graph, attention.query_reshape), postprocess_match);
-    ggml::hrx::DispatchMatch flash_match;
-    match_dispatch_at_index(imported.graph, *registry, plan, covered_nodes,
-                            producer_index_for_tensor(imported.graph, flash_output), flash_match);
-
-    const ggml::hrx::Value * mask_value = imported.graph.values().find_tensor(attention.attention_mask);
-    REQUIRE(mask_value != nullptr);
-    const ggml::hrx::CommandPlanAlternateValue * compact_mask =
-        ggml::hrx::find_alternate_value(plan, mask_value->id, GGML_TYPE_F16, active_mask_byte_count);
-    REQUIRE(compact_mask != nullptr);
-
-    const ggml::hrx::Dispatch * metadata_dispatch = nullptr;
-    for (const ggml::hrx::Dispatch & dispatch : plan.initialization_dispatches) {
-        if (kernel_name_for_id(dispatch.kernel.kernel_id) == "qwen3_moe:qwen_attention_metadata") {
-            metadata_dispatch = &dispatch;
-        }
-    }
-    REQUIRE(metadata_dispatch != nullptr);
-    REQUIRE(metadata_dispatch->kernel.integer_parameters.at("token_count") == token_count);
-    REQUIRE(metadata_dispatch->kernel.integer_parameters.at("context_capacity") == token_count);
-    REQUIRE(metadata_dispatch->bindings.size() == 5);
-    REQUIRE(metadata_dispatch->bindings[4].value == compact_mask->alternate_value);
-    REQUIRE(metadata_dispatch->bindings[4].length == active_mask_byte_count);
-
-    const ggml::hrx::Dispatch * flash_dispatch = nullptr;
-    for (const ggml::hrx::Dispatch & dispatch : plan.dispatches) {
-        if (kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_flash_attention_f32_f16_wmma") {
-            flash_dispatch = &dispatch;
-        }
-    }
-    REQUIRE(flash_dispatch != nullptr);
-    REQUIRE(flash_dispatch->kernel.integer_parameters.at("query_token_count") == token_count);
-    REQUIRE(flash_dispatch->kernel.integer_parameters.at("key_value_token_count") == token_count);
-    REQUIRE(flash_dispatch->bindings.size() == 6);
-    REQUIRE(flash_dispatch->kernel.compile_parameters.at("ggml.flash_attention.apply_gate") == "0");
-    REQUIRE(flash_dispatch->bindings[3].value == compact_mask->alternate_value);
-    REQUIRE(flash_dispatch->bindings[3].length == active_mask_byte_count);
-
-    ggml_free(ctx);
-}
-
 static void run_qwen_decode_split_flash_attention_scheduling_case(int64_t query_token_count,
                                                                   int64_t key_value_token_count,
                                                                   bool    use_common_dispatch = false,
@@ -7659,7 +7585,7 @@ static void run_rope_unit_factors_cpu_reference_case() {
 }
 
 static std::pair<std::vector<float>, std::vector<float>> run_attention_postprocess_cpu_reference_case(
-    bool check_decode = false, bool implicit_rope = false) {
+    bool check_decode = false, bool implicit_rope = false, bool check_metadata_reuse = false) {
     ggml_backend_t cpu_backend = init_cpu_backend();
     ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
     REQUIRE(hrx_backend != nullptr);
@@ -7688,7 +7614,16 @@ static std::pair<std::vector<float>, std::vector<float>> run_attention_postproce
         build_attention_postprocess_graph(hrx_ctx, token_count, query_head_count,
                                           key_value_head_count, cache_row_count, explicit_factors);
 
-
+    ggml_tensor * cpu_flash = nullptr;
+    ggml_tensor * hrx_flash = nullptr;
+    if (check_metadata_reuse) {
+        cpu_flash = append_qwen_full_cache_flash_attention_consumer(
+            cpu_ctx, cpu, token_count, query_head_count, key_value_head_count, cache_row_count);
+        hrx_flash = append_qwen_full_cache_flash_attention_consumer(
+            hrx_ctx, hrx, token_count, query_head_count, key_value_head_count, cache_row_count);
+        ggml_set_output(cpu.query_output);
+        ggml_set_output(hrx.query_output);
+    }
 
     auto hrx_query_buffer = allocate_test_weight(hrx_backend, hrx.query_weight);
     auto hrx_key_buffer   = allocate_test_weight(hrx_backend, hrx.key_weight);
@@ -7699,16 +7634,18 @@ static std::pair<std::vector<float>, std::vector<float>> run_attention_postproce
     REQUIRE(cpu_graph != nullptr);
     REQUIRE(hrx_graph != nullptr);
     // A stable graph UID exercises the cached execution contract across changing inputs.
-    hrx_graph->uid = check_decode ? 4003 : 4002;
+    hrx_graph->uid = check_metadata_reuse ? 4001 : check_decode ? 4003 : 4002;
     ggml_build_forward_expand(cpu_graph, cpu.query_output);
     ggml_build_forward_expand(cpu_graph, cpu.key_output);
     ggml_build_forward_expand(cpu_graph, cpu.value_output);
     ggml_build_forward_expand(hrx_graph, hrx.query_output);
     ggml_build_forward_expand(hrx_graph, hrx.key_output);
     ggml_build_forward_expand(hrx_graph, hrx.value_output);
-
-
-
+    if (check_metadata_reuse) {
+        ggml_build_forward_expand(cpu_graph, cpu_flash);
+        ggml_build_forward_expand(hrx_graph, hrx_flash);
+        REQUIRE(ggml_backend_supports_op(hrx_backend, hrx_flash));
+    }
     require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph),
                                { check_decode ? "qwen3_moe:qwen3_moe_attention_qkv_postprocess_fused_decode" :
                                                 "qwen3_moe:qwen3_moe_attention_postprocess_f32_f16" });
@@ -7767,18 +7704,33 @@ static std::pair<std::vector<float>, std::vector<float>> run_attention_postproce
     std::vector<float> unit_query;
     std::vector<float> unit_key_cache;
     for (int round = 0; round < rounds; ++round) {
-        if (round == 1 && explicit_factors) {
+        const bool update_factors = round == 1 && explicit_factors;
+        if (update_factors) {
             for (size_t channel = 0; channel < factors.size(); ++channel) {
                 factors[channel] = channel % 3 == 0 ? 0.5f : channel % 3 == 1 ? 2.0f : 4.0f;
             }
             set_tensor_pair_bytes(cpu_backend, cpu.freq_factors, hrx_backend, hrx.freq_factors,
                                   factors.data(), factors.size() * sizeof(float));
         }
-        if (round == 2) {
+        std::vector<ggml_fp16_t> supplied_mask;
+        if (check_metadata_reuse) {
+            supplied_mask.assign(token_count * cache_row_count, ggml_fp32_to_fp16(-INFINITY));
+            for (int64_t token = 0; token < token_count; ++token) {
+                positions[token] = static_cast<int32_t>(6 + round * token_count + token);
+                cache_indices[token] = positions[token] % cache_row_count;
+                // A window of one retains exactly the current physical row, including after wrap.
+                supplied_mask[token * cache_row_count + cache_indices[token]] = ggml_fp32_to_fp16(0.0f);
+            }
+            set_tensor_pair_bytes(cpu_backend, cpu.attention_mask, hrx_backend, hrx.attention_mask,
+                                  supplied_mask.data(), supplied_mask.size() * sizeof(ggml_fp16_t));
+        } else if (round == 2) {
             for (int64_t token = 0; token < token_count; ++token) {
                 positions[token] += static_cast<int32_t>(cache_row_count);
                 cache_indices[token] = positions[token] % cache_row_count;
             }
+        }
+        const bool update_metadata = check_metadata_reuse || round == 2;
+        if (update_metadata) {
             set_tensor_pair_bytes(cpu_backend, cpu.positions, hrx_backend, hrx.positions,
                                   positions.data(), positions.size() * sizeof(int32_t));
             set_tensor_pair_bytes(cpu_backend, cpu.key_cache_indices, hrx_backend, hrx.key_cache_indices,
@@ -7799,10 +7751,11 @@ static std::pair<std::vector<float>, std::vector<float>> run_attention_postproce
 
         const auto actual_query = get_f32_tensor(hrx_backend, hrx.query_output);
         const auto actual_key_cache = get_f32_tensor(hrx_backend, hrx.key_cache);
+        const bool check_factor_rotation = round == 1 && !check_metadata_reuse;
         if (round == 0) {
             unit_query = actual_query;
             unit_key_cache = actual_key_cache;
-        } else if (round == 1) {
+        } else if (check_factor_rotation) {
             auto rotated = [](const std::vector<float> & base, int64_t row, int64_t head_count,
                               int64_t position, const std::vector<float> & divisors) {
                 std::vector<float> expected = base;
@@ -7850,7 +7803,7 @@ static std::pair<std::vector<float>, std::vector<float>> run_attention_postproce
                                     actual_factors.size() * sizeof(float));
             REQUIRE(actual_factors == factors);
         }
-        if (round == 2) {
+        if (update_metadata) {
             std::vector<int32_t> actual_positions(positions.size());
             std::vector<int64_t> actual_key_indices(cache_indices.size());
             std::vector<int64_t> actual_value_indices(cache_indices.size());
@@ -7863,6 +7816,25 @@ static std::pair<std::vector<float>, std::vector<float>> run_attention_postproce
             REQUIRE(actual_positions == positions);
             REQUIRE(actual_key_indices == cache_indices);
             REQUIRE(actual_value_indices == cache_indices);
+        }
+        if (check_metadata_reuse) {
+            std::vector<ggml_fp16_t> actual_mask(supplied_mask.size());
+            ggml_backend_tensor_get(hrx.attention_mask, actual_mask.data(), 0,
+                                    actual_mask.size() * sizeof(ggml_fp16_t));
+            REQUIRE(actual_mask == supplied_mask);
+            const auto cached_values = get_f32_tensor(hrx_backend, hrx.value_cache);
+            std::vector<float> expected(token_count * query_size);
+            for (int64_t token = 0; token < token_count; ++token) {
+                for (int64_t head = 0; head < query_head_count; ++head) {
+                    const int64_t value_head = head / (query_head_count / key_value_head_count);
+                    for (int64_t channel = 0; channel < kQwenFlashHeadSize; ++channel) {
+                        expected[token * query_size + head * kQwenFlashHeadSize + channel] =
+                            cached_values[cache_indices[token] * key_value_size +
+                                          value_head * kQwenFlashHeadSize + channel];
+                    }
+                }
+            }
+            require_close(get_f32_tensor(hrx_backend, hrx_flash), expected, 2.0e-3f, 1.0e-3f);
         }
         ggml_backend_hrx_cache_stats stats = {};
         REQUIRE(ggml_backend_hrx_get_cache_stats(hrx_backend, &stats));
@@ -8179,15 +8151,22 @@ static void run_decode_attention_qkv_scheduling_case() {
     REQUIRE(ctx != nullptr);
 
     AttentionPostprocessGraph graph  = build_decode_attention_qkv_graph(ctx);
+    ggml_tensor * flash = append_qwen_full_cache_flash_attention_consumer(ctx, graph, 1, 32, 4, 1024);
     ggml_cgraph *             cgraph = ggml_new_graph(ctx);
     REQUIRE(cgraph != nullptr);
     ggml_build_forward_expand(cgraph, graph.query_output);
     ggml_build_forward_expand(cgraph, graph.key_output);
     ggml_build_forward_expand(cgraph, graph.value_output);
+    ggml_build_forward_expand(cgraph, flash);
 
     require_kernel_subsequence(scheduled_kernel_sequence(cgraph),
                                { "qwen3_moe:qwen3_moe_rmsnorm_f32_quantize_q8_1_x4",
                                  "qwen3_moe:qwen3_moe_attention_qkv_postprocess_fused_decode" });
+    auto imported = ggml::hrx::import_ggml_graph(*cgraph);
+    REQUIRE(imported.valid());
+    ggml::hrx::DispatchScheduler scheduler;
+    REQUIRE(scheduler.schedule_graph(imported.graph, { "gfx1151" }));
+    REQUIRE(scheduler.plan().initialization_dispatches.empty());
     ggml_free(ctx);
 }
 
@@ -8913,6 +8892,8 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
         require_close(explicit_unit.second, implicit.second, 1.0e-3f, 1.0e-3f);
     });
     suite.device_case("attention_postprocess.decode_factors", [] { run_attention_postprocess_cpu_reference_case(true); });
+    suite.device_case("attention_postprocess.metadata_reuse",
+                      [] { run_attention_postprocess_cpu_reference_case(false, false, true); });
     suite.device_case("routed_moe.q4_k.next_rmsnorm", [] { run_routed_moe_cpu_reference_case(GGML_TYPE_Q4_K, true); });
     suite.host_case("routed_moe.codebook_admission", [] { run_routed_codebook_admission_checks(); });
     suite.device_case("routed_pair.iq3_xxs.iq3_xxs.skinny.cpu_reference", [] {
@@ -9032,8 +9013,6 @@ static void register_flash_attention_cases(Suite & suite) {
                       [] { run_qwen_decode_attention_output_next_q8_scheduling_case(false); });
     suite.device_case("qwen_decode_attention_output_next_q8.selectors",
                       [] { run_qwen_decode_attention_output_next_q8_scheduling_case(true); });
-    suite.device_case("qwen_full_cache_prefill_flash_attention.tokens512",
-                      [] { run_qwen_full_cache_prefill_flash_attention_scheduling_case(512); });
 }
 
 static void register_hrx_ops_cases(Suite & suite) {

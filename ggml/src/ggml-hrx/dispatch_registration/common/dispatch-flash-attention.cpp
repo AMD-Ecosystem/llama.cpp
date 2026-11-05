@@ -109,13 +109,6 @@ static bool has_flash_attention_params(const GraphNode & node) {
            (params->prec == GGML_PREC_DEFAULT || params->prec == GGML_PREC_F32);
 }
 
-static size_t attention_mask_byte_count(int64_t query_token_count, int64_t key_value_token_count) {
-    if (query_token_count <= 0 || key_value_token_count <= 0) {
-        return 0;
-    }
-    return static_cast<size_t>(query_token_count) * static_cast<size_t>(key_value_token_count) * sizeof(ggml_fp16_t);
-}
-
 static std::string to_config_value(int64_t value) {
     return std::to_string(value);
 }
@@ -144,8 +137,6 @@ struct FlashAttentionMatch {
     const Value *     mask          = nullptr;
     const Value *     output        = nullptr;
     const GraphNode * output_layout = nullptr;
-    ValueId           mask_binding_value;
-    size_t            mask_binding_bytes    = 0;
     int64_t           query_token_count     = 0;
     int64_t           key_value_token_count = 0;
     int64_t           query_head_count      = 0;
@@ -181,7 +172,6 @@ struct DecodeSplitFlashAttentionMatch {
 };
 
 static FlashAttentionMatch match_flash_attention_f32_f16(const Graph &       graph,
-                                                         const CommandPlan & plan,
                                                          const GraphNode *   node) {
     FlashAttentionMatch match;
     if (node == nullptr || node->op != GGML_OP_FLASH_ATTN_EXT || node->inputs.size() != 4) {
@@ -229,20 +219,9 @@ static FlashAttentionMatch match_flash_attention_f32_f16(const Graph &       gra
         return {};
     }
 
-    int64_t      key_value_token_count     = key_value_capacity;
-    ValueId      mask_binding_value        = mask->id;
-    size_t       mask_binding_bytes        = mask->byte_count;
-    bool         mask_binding_is_alternate = false;
-    const size_t compact_mask_bytes        = attention_mask_byte_count(query_token_count, query_token_count);
-    const auto * compact_mask              = find_alternate_value(plan, mask->id, GGML_TYPE_F16, compact_mask_bytes);
-    const bool   mask_is_compact           = mask->ne[0] == query_token_count;
-    const bool   mask_is_capacity          = mask->ne[0] == key_value_capacity;
-    if (compact_mask != nullptr && mask_is_capacity && mask->ne[0] > query_token_count) {
-        key_value_token_count     = query_token_count;
-        mask_binding_value        = compact_mask->alternate_value;
-        mask_binding_bytes        = compact_mask->byte_count;
-        mask_binding_is_alternate = true;
-    } else if (!mask_is_compact && !mask_is_capacity) {
+    const int64_t key_value_token_count = key_value_capacity;
+    const bool mask_is_capacity = mask->ne[0] == key_value_capacity;
+    if (!mask_is_capacity) {
         return {};
     }
     if (!is_supported_key_value_token_count(key_value_token_count)) {
@@ -255,7 +234,7 @@ static FlashAttentionMatch match_flash_attention_f32_f16(const Graph &       gra
         !has_output_layout(*output, query_head_count, value_head_size)) {
         return {};
     }
-    if (!mask_binding_is_alternate && !has_mask_layout(*mask, key_value_token_count)) {
+    if (!has_mask_layout(*mask, key_value_token_count)) {
         return {};
     }
 
@@ -265,8 +244,6 @@ static FlashAttentionMatch match_flash_attention_f32_f16(const Graph &       gra
     match.mask                  = mask;
     match.output                = output;
     match.output_layout         = find_single_layout_alias_consumer(graph, output->id);
-    match.mask_binding_value    = mask_binding_value;
-    match.mask_binding_bytes    = mask_binding_bytes;
     match.query_token_count     = query_token_count;
     match.key_value_token_count = key_value_token_count;
     match.query_head_count      = query_head_count;
@@ -425,7 +402,7 @@ static DispatchBinding prepare_flash_attention_value(const DispatchMatchContext 
 }
 
 static bool match_flash_attention_gate_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
-    const FlashAttentionMatch match = match_flash_attention_f32_f16(context.graph, context.plan, context.root_node);
+    const FlashAttentionMatch match = match_flash_attention_f32_f16(context.graph, context.root_node);
     if (!match.matched() || match.output_layout == nullptr || match.output_layout->op != GGML_OP_RESHAPE) {
         return false;
     }
@@ -503,7 +480,7 @@ static bool match_flash_attention_gate_dispatch(const DispatchMatchContext & con
     dispatch.bindings.push_back({ match.query->id, 0, match.query->byte_count });
     dispatch.bindings.push_back({ match.key->id, 0, match.key->byte_count });
     dispatch.bindings.push_back(prepare_flash_attention_value(context, match, dispatch_match, dispatch.kernel));
-    dispatch.bindings.push_back({ match.mask_binding_value, 0, match.mask_binding_bytes });
+    dispatch.bindings.push_back({ match.mask->id, 0, match.mask->byte_count });
     dispatch.bindings.push_back({ raw_gate->id, 0, raw_gate->byte_count });
     dispatch.bindings.push_back({ output->id, 0, output->byte_count });
     dispatch_match.dispatches.push_back(std::move(dispatch));
@@ -512,7 +489,7 @@ static bool match_flash_attention_gate_dispatch(const DispatchMatchContext & con
 
 static bool match_flash_attention_f32_f16_dispatch(const DispatchMatchContext & context,
                                                    DispatchMatch &              dispatch_match) {
-    const FlashAttentionMatch match = match_flash_attention_f32_f16(context.graph, context.plan, context.root_node);
+    const FlashAttentionMatch match = match_flash_attention_f32_f16(context.graph, context.root_node);
     if (!match.matched()) {
         return false;
     }
@@ -540,7 +517,7 @@ static bool match_flash_attention_f32_f16_dispatch(const DispatchMatchContext & 
     dispatch.bindings.push_back({ match.query->id, 0, match.query->byte_count });
     dispatch.bindings.push_back({ match.key->id, 0, match.key->byte_count });
     dispatch.bindings.push_back(prepare_flash_attention_value(context, match, dispatch_match, dispatch.kernel));
-    dispatch.bindings.push_back({ match.mask_binding_value, 0, match.mask_binding_bytes });
+    dispatch.bindings.push_back({ match.mask->id, 0, match.mask->byte_count });
     dispatch.bindings.push_back({ match.query->id, 0, match.query->byte_count });
     dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
 
