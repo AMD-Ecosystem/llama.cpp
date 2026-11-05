@@ -28,9 +28,7 @@ template.def<@qwen3_moe.router.top8.row> device requires [#target.subgroup.size<
   %experts_per_lane0 = index.div %expert_count, %wave_size : index
   %experts_per_lane = index.assume %experts_per_lane0 [range(%experts_per_lane0, 1, 16)] : index
   %lane_expert_base = index.mul %lane, %experts_per_lane : index
-  %last_token = index.sub %launch_token_count, %c1 : index
-  %last_token_base = index.mul %last_token, %bounded_route_id_stride : index
-  %route_id_storage_count = index.add %last_token_base, %route_count : index
+  %route_id_storage_count = index.mul %launch_token_count, %bounded_route_id_stride : index
   %route_weight_storage_count = index.mul %launch_token_count, %route_count : index
   %logits_noalias, %route_ids_noalias, %route_weights_noalias = buffer.assume.noalias %logits, %route_ids, %route_weights : buffer, buffer, buffer
   %logits_view = buffer.view %logits_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%expert_count]xf32>
