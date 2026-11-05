@@ -13832,11 +13832,14 @@ static AmaxScaleTestGraph build_amax_scale_test_graph(ggml_context * ctx, int64_
 }
 
 static void run_amax_scale_fusion_dispatch_checks() {
-    for (int variant = 0; variant < 4; ++variant) {
+    for (int variant = 0; variant < 6; ++variant) {
         ggml_context * ctx = ggml_init({ 1024 * 1024, nullptr, true });
         REQUIRE(ctx != nullptr);
         const float inverse = variant == 1 ? 1.0f / 512.0f : 1.0f / 1024.0f;
-        const auto tensors = build_amax_scale_test_graph(ctx, 896, 16, inverse);
+        auto tensors = build_amax_scale_test_graph(ctx, 896, 16, inverse);
+        if (variant == 4) {
+            tensors.output = ggml_div_inplace(ctx, tensors.input, tensors.scale);
+        }
         if (variant == 2) {
             ggml_set_output(tensors.absolute);
         }
@@ -13848,10 +13851,21 @@ static void run_amax_scale_fusion_dispatch_checks() {
         if (variant == 3) {
             ggml_build_forward_expand(graph, ggml_scale(ctx, tensors.absolute, 2.0f));
         }
+        if (variant == 5) {
+            ggml_tensor * alias = ggml_view_1d(ctx, tensors.absolute, 896, 0);
+            ggml_set_output(alias);
+            ggml_build_forward_expand(graph, alias);
+        }
         auto imported = ggml::hrx::import_ggml_graph(*graph);
         REQUIRE(imported.valid());
         ggml::hrx::DispatchScheduler scheduler;
-        REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+        const bool scheduled = scheduler.schedule_graph(imported.graph, test_dispatch_target());
+        if (variant == 4) {
+            REQUIRE(!scheduled);
+            ggml_free(ctx);
+            continue;
+        }
+        REQUIRE(scheduled);
         size_t fused_count = 0;
         for (const auto & dispatch : scheduler.plan().dispatches) {
             if (kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_amax_scale_f32") {
@@ -13870,7 +13884,7 @@ static void run_amax_scale_fusion_dispatch_checks() {
 }
 
 static std::vector<float> run_amax_scale_fusion_case(ggml_backend_t backend, int64_t width,
-                                                    int64_t tokens, bool expose_intermediate) {
+                                                    int64_t tokens, bool expose_intermediate, bool nonfinite = false) {
     ggml_context * ctx = ggml_init({ 1024 * 1024, nullptr, true });
     REQUIRE(ctx != nullptr);
     const auto tensors = build_amax_scale_test_graph(ctx, width, tokens);
@@ -13891,6 +13905,16 @@ static std::vector<float> run_amax_scale_fusion_case(ggml_backend_t backend, int
         const float fraction = static_cast<float>(column % 17) / 16.0f;
         input[i] = amplitudes[row % 8] * fraction * (column % 2 ? -1.0f : 1.0f);
     }
+    for (size_t row = 0; row < static_cast<size_t>(8 * tokens); ++row) {
+        input[(row + 1) * width - 1] = -amplitudes[row % 8];
+    }
+    if (nonfinite) {
+        std::fill(input.begin(), input.begin() + width, std::numeric_limits<float>::quiet_NaN());
+        input[2 * width - 1] = std::numeric_limits<float>::infinity();
+        input[3 * width - 1] = -std::numeric_limits<float>::infinity();
+        input[4 * width - 1] = std::numeric_limits<float>::quiet_NaN();
+        input[5 * width - 1] = std::numeric_limits<float>::max();
+    }
     ggml_backend_tensor_set(tensors.input, input.data(), 0, input.size() * sizeof(float));
     REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
     ggml_backend_synchronize(backend);
@@ -13898,7 +13922,8 @@ static std::vector<float> run_amax_scale_fusion_case(ggml_backend_t backend, int
     std::vector<float> output(input.size() + rows);
     ggml_backend_tensor_get(tensors.output, output.data(), 0, input.size() * sizeof(float));
     ggml_backend_tensor_get(tensors.scale, output.data() + input.size(), 0, rows * sizeof(float));
-    for (size_t i = 0; i < input.size(); ++i) {
+    const size_t roundtrip_elements = nonfinite ? 0 : input.size();
+    for (size_t i = 0; i < roundtrip_elements; ++i) {
         const float recovered = output[i] * output[input.size() + i / width];
         REQUIRE(std::isfinite(output[i]));
         REQUIRE(std::fabs(recovered - input[i]) <= 3.0e-6f * std::fabs(input[i]) + 1.0e-7f);
@@ -13913,7 +13938,7 @@ static void run_amax_scale_fusion_numerics() {
     ggml_backend_t hrx = ggml_backend_hrx_init(0);
     REQUIRE(cpu != nullptr);
     REQUIRE(hrx != nullptr);
-    for (int64_t width : { 64, 896 }) {
+    for (int64_t width : { 1, 64, 257, 896, 32768 }) {
         for (int64_t tokens : { 1, 16 }) {
             const auto reference = run_amax_scale_fusion_case(cpu, width, tokens, false);
             const auto unfused = run_amax_scale_fusion_case(hrx, width, tokens, true);
@@ -13922,8 +13947,23 @@ static void run_amax_scale_fusion_numerics() {
             for (size_t i = 0; i < fused.size(); ++i) {
                 REQUIRE(std::isfinite(fused[i]));
                 REQUIRE(fused[i] == unfused[i]);
-                REQUIRE(std::fabs(fused[i] - reference[i]) <= 3.0e-6f * std::fabs(reference[i]) + 1.0e-7f);
+                const bool close_to_cpu = std::fabs(fused[i] - reference[i]) <= 3.0e-6f * std::fabs(reference[i]) + 1.0e-7f;
+                if (!close_to_cpu) {
+                    std::fprintf(stderr, "amax width=%lld tokens=%lld i=%zu cpu=%.9g hrx=%.9g\n",
+                                 (long long) width, (long long) tokens, i, reference[i], fused[i]);
+                }
+                REQUIRE(close_to_cpu);
             }
+        }
+    }
+    // CPU pooling and HRX maxnum reductions differ on NaN rows. Fusion must preserve the existing HRX results.
+    const auto unfused = run_amax_scale_fusion_case(hrx, 257, 1, true, true);
+    const auto fused = run_amax_scale_fusion_case(hrx, 257, 1, false, true);
+    for (size_t i = 0; i < fused.size(); ++i) {
+        if (std::isnan(unfused[i])) {
+            REQUIRE(std::isnan(fused[i]));
+        } else {
+            REQUIRE(fused[i] == unfused[i]);
         }
     }
     ggml_backend_free(hrx);
