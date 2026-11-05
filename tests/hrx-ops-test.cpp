@@ -4506,7 +4506,7 @@ static void run_q4_prefill_source_eligibility_case() {
     ggml_backend_free(backend);
 }
 
-static void run_scalar_3d_get_rows_case(int64_t token_count, int64_t route_stride) {
+static void run_scalar_3d_get_rows_case(int64_t token_count, int64_t route_stride, bool include_invalid_ids = false) {
     ggml_backend_t backend = ggml_backend_hrx_init(0);
     REQUIRE(backend != nullptr);
 
@@ -4542,10 +4542,19 @@ static void run_scalar_3d_get_rows_case(int64_t token_count, int64_t route_strid
             scales_data[token * 128 + expert] = static_cast<float>(token * 1024) + expert * 0.25f;
         }
         for (int64_t route = 0; route < 8; ++route) {
-            const int32_t expert = route == 0 ? 0 : route == 7 ? 127 :
-                                   static_cast<int32_t>((token * 17 + route * 19) % 128);
+            int32_t expert = route == 0 ? 0 : route == 7 ? 127 :
+                             static_cast<int32_t>((token * 17 + route * 19) % 128);
+            if (include_invalid_ids) {
+                switch (route) {
+                    case 1: expert = -1; break;
+                    case 2: expert = 128; break;
+                    case 3: expert = std::numeric_limits<int32_t>::min(); break;
+                    case 4: expert = std::numeric_limits<int32_t>::max(); break;
+                }
+            }
             ids_data[token * route_stride + route] = expert;
-            expected[token * 8 + route] = scales_data[token * 128 + expert];
+            const bool valid_expert = expert >= 0 && expert < 128;
+            expected[token * 8 + route] = valid_expert ? scales_data[token * 128 + expert] : 0.0f;
         }
     }
 
@@ -9153,6 +9162,10 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
                                   std::to_string(stride),
                               [=] { run_scalar_3d_get_rows_case(tokens, stride); });
         }
+    }
+    for (int64_t stride : { 8, 128 }) {
+        suite.device_case("scalar_3d_get_rows.invalid_ids.stride" + std::to_string(stride),
+                          [=] { run_scalar_3d_get_rows_case(2, stride, true); });
     }
     for (int64_t tokens : { 1, 2, 4, 8 }) {
         suite.device_case("router_top8.tokens" + std::to_string(tokens), [=] { run_router_top8_case(tokens); });

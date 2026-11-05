@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Gathers one F32 expert scale for each route and token. The IDs may be a
-// narrow view of wider argsort rows; only the final selected ID is in bounds.
+// narrow view of wider argsort rows; only the selected IDs are in bounds.
 amdgpu.target<gfx11-generic> @ggml_get_rows_scalar_3d_gfx11_wave64 {subgroup_size = 64}
 
 kernel.def target(@ggml_get_rows_scalar_3d_gfx11_wave64) @ggml_get_rows_scalar_3d_f32(%token_count: index, %route_stride: index) {
@@ -16,6 +16,9 @@ kernel.def target(@ggml_get_rows_scalar_3d_gfx11_wave64) @ggml_get_rows_scalar_3
   %route0 = kernel.workitem.id<x> : index
   %c1 = index.constant 1 : index
   %c8 = index.constant 8 : index
+  %c0_i32 = scalar.constant 0 : i32
+  %c128_i32 = scalar.constant 128 : i32
+  %c0_f32 = scalar.constant 0.0 : f32
   %c0_offset = index.constant 0 : offset
   %valid_token = index.cmp ult, %token0, %bounded_token_count : index
   %valid_route = index.cmp ult, %route0, %c8 : index
@@ -33,9 +36,18 @@ kernel.def target(@ggml_get_rows_scalar_3d_gfx11_wave64) @ggml_get_rows_scalar_3
     %id_index = index.add %row_base, %route : index
     %bounded_id_index = index.assume %id_index [lt(%id_index, %route_id_span)] : index
     %expert_i32 = view.load %ids_view[%bounded_id_index] : view<[%route_id_span]xi32> -> i32
-    %expert0 = index.cast %expert_i32 : i32 to index
-    %expert = index.assume %expert0 [range(%expert0, 0, 127)] : index
-    %scale = view.load %scales_view[%token, %expert] : view<[%bounded_token_count]x128xf32> -> f32
+    %expert_nonnegative = scalar.cmpi sge, %expert_i32, %c0_i32 : i32
+    %expert_below_limit = scalar.cmpi slt, %expert_i32, %c128_i32 : i32
+    %valid_expert = scalar.andi %expert_nonnegative, %expert_below_limit : i1
+    // Invalid IDs have no CPU GET_ROWS value; publish zero without reading a scale row.
+    %scale = scf.if %valid_expert -> (f32) {
+      %expert0 = index.cast %expert_i32 : i32 to index
+      %expert = index.assume %expert0 [range(%expert0, 0, 127)] : index
+      %selected_scale = view.load %scales_view[%token, %expert] : view<[%bounded_token_count]x128xf32> -> f32
+      scf.yield %selected_scale : f32
+    } else {
+      scf.yield %c0_f32 : f32
+    }
     view.store %scale, %output_view[%token, %route] : f32, view<[%bounded_token_count]x8xf32>
   }
   kernel.return
