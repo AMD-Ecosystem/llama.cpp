@@ -2,6 +2,72 @@
 
 The active implementation is `lichang.rdna35-prefill-quant-rope`. Qwen vision window batching, D64/D72/D80 vision attention, D128 language attention, D512 language attention, FP16/FP32 conversion, RMSNorm, activation quantization, and RoPE changes share this source tree. Earlier experimental worktrees are reference snapshots; changes should be developed and validated here.
 
+## Opt-in MMDQ prefill and SwiGLU fusion (2026-11-06)
+
+The commit titled `hip: integrate opt-in MMDQ prefill and SwiGLU fusion`, based on `226353cdbbbddb265301a4673e1d33c6f291c510`, ports Jim Wu's MMDQ kernels, feed-forward fusion and vectorized MoE reduction into this branch. The source is `jimwu.vlm-ttft-optimization` at `56d84c8d6d2761b14b19bc59ce85bb69bfe24623`, with the prototype in `30d0ee77fe38d0f926429f0c9f13a461f0b9bf9a`. Existing Q4_K pipelining, Q6_K scale reuse, vision optimizations and other compatible fusions remain in the same codebase. All new paths are off by default.
+
+MMDQ is an alternative to MMQ, not another optimization inside its integer matrix kernel. MMQ packs activations into Q8 and uses integer WMMA. MMDQ converts activations to FP16, dequantizes weight tiles to FP16 inside the kernel, and uses FP16 WMMA with FP32 accumulation. GGUF weights remain quantized; no full dequantized weight matrix is retained. Jim's prototype did not modify the existing MMQ implementation.
+
+| Change | Target structure and dispatch |
+| --- | --- |
+| Dense MMDQ | RDNA3/RDNA3.5, Q4_K/Q6_K weights, contiguous FP32 activations and FP32 outputs, eligible prefill shapes. Default minimum token counts are 64 for Q4_K and 32 for Q6_K; additional output-size and layout guards apply. Dense Q8_0 has a separate opt-in gate, minimum 576 tokens, and additional row-count guards. |
+| MoE MMDQ | Q4_K/Q5_K/Q6_K/Q5_1 expert matrices. Dequantized weight fragments stay in registers and activation tiles pass through LDS. Default selection requires at least 16 tokens and an average of 16 selected tokens per expert, or 32 for K-quant rows shorter than 2048. Unsupported layouts and sparse routing workloads retain the old path. |
+| SwiGLU feed-forward fusion | Compatible dense or MoE gate/up projections sharing an input, followed by SwiGLU and a supported down projection. Gate + up + SwiGLU share one matrix-kernel stage and write a private FP16 hidden buffer; a separate down kernel consumes it directly. This removes FP32 gate/up and hidden-buffer traffic and repeated packing/conversion. Gate and up weight types must match. |
+| Vectorized MoE reduction | Opt-in four-element loads/stores for four or eight selected experts, embedding width divisible by four, and 16-byte aligned input/output buffers. Other cases retain the generic reduction. No separate whole-model saving is attributed to this change. |
+
+The port uses this base's HIP/RDNA3 feature macros and selects MMDQ before MMQ. Existing activation-packing and FP16 BLAS producer fusions decline matrices selected for MMDQ so they do not override that choice. The feed-forward matcher preserves graph dependency and consumer checks. It permits input/final-output storage reuse because input conversion and MoE ID staging complete first on the same stream, gate/up writes a private hidden buffer, and down writes the final output afterward. Jim's optional standalone MMDQ bias/residual dispatch is not enabled by this integration.
+
+### Measured 3968-token language prefill
+
+These measurements use `llama-bench`, Q4_K_M files, 3968 input tokens, zero existing context, zero generated tokens and no server/checkpoints. Each cell is the median of 20 repetitions from two processes. Each model uses the same board across branches, with planned ours/Jim/combined/combined/Jim/ours order. One combined Llama-2 process overlapping a local file copy was excluded and replaced after the sequence. Model loading is excluded and each process has a full-prompt warmup.
+
+| Model / board | Our previous branch | Jim's branch | Combined | Time reduction vs ours | Time reduction vs Jim |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Qwen2.5-3B-Instruct / Halo06 | 1011.8 ms | 908.5 ms | 873.7 ms | 13.65% | 3.83% |
+| Qwen2.5-7B-Instruct / Halo41 | 2232.8 ms | 1946.6 ms | 1903.3 ms | 14.75% | 2.22% |
+| Llama-2-7B / Halo06 | 2754.2 ms | 2453.6 ms | 2465.7 ms | 10.48% | -0.49% |
+| Qwen3-30B-A3B-Instruct-2507 / Halo05 | 1946.3 ms | 1517.9 ms | 1399.0 ms | 28.12% | 7.83% |
+
+Jim and combined are effectively tied for Llama-2. Its two baseline process medians differ by 4.8%, so the exact percentage gain is less stable. No competing GPU contexts were detected in accepted runs. Synthetic benchmark tokens, especially MoE expert routing, do not establish the same gain for arbitrary real prompts or VLM requests.
+
+Direct ablation on our branch isolates the new matrix path from its feed-forward fusion:
+
+| Model | Ours | MMDQ without new SwiGLU fusion | MMDQ with new SwiGLU fusion | Matrix-path saving | Additional fusion saving |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Qwen2.5-3B-Instruct | 1011.8 ms | 1034.2 ms | 873.7 ms | -22.4 ms | 160.5 ms |
+| Qwen2.5-7B-Instruct | 2232.8 ms | 2068.9 ms | 1903.3 ms | 163.9 ms | 165.6 ms |
+
+MMDQ alone slightly loses on the 3B model; fusion produces the net improvement. The 7B model benefits from both steps. Matrix-path timings include activation conversion and the old packing fusions displaced by MMDQ. They are not isolated GEMM timings. Dispatch chooses either MMQ or MMDQ for a matrix, so their kernel speedups cannot be added together. The separate Jim-branch ablations are preserved in the experiment report.
+
+For orientation, saved September 30 gfx11 vLLM HTTP TTFTs are 844.09 ms and 1745.07 ms for Qwen2.5-3B and 7B at 3968. Dividing the combined prefill times by these values gives approximately 1.035x and 1.091x. These are historical comparisons with different timing methods, quantization, input content, boards and SDKs; they do not establish matched TTFT parity. vLLM was not rerun. The saved Llama-2 and Qwen3 MoE rows use other input lengths, so no 3968 ratio is inferred for them.
+
+### Enable and validate
+
+Re-run CMake configuration after adding the new source, since the HIP source glob is evaluated at configuration time. Build normally; an experimental library preload is not required. Enable the tested configuration before starting the process:
+
+```sh
+export GGML_CUDA_MMDQ=1
+export GGML_CUDA_MMDQ_MOE=1
+export GGML_CUDA_MMDQ_Q8_0=1
+export GGML_CUDA_MMDQ_GLU=1
+export GGML_CUDA_MOE_REDUCE_X4=1
+export ROCBLAS_USE_HIPBLASLT=1
+
+build-rdna35-gfx1151/bin/llama-bench -m MODEL -ngl 999 -t 8 -fa on \
+    -p 3968 -n 0 -d 0 -b 4096 -ub 2048 -ctk f16 -ctv f16 -r 10 -o json --progress
+
+build-rdna35-gfx1151/bin/test-backend-ops test -b ROCm0 \
+    -o FFN_SWIGLU,MOE_FFN_SWIGLU,MOE_WEIGHTED_REDUCTION
+build-rdna35-gfx1151/bin/test-backend-ops test -b ROCm0 -o MUL_MAT,MUL_MAT_ID \
+    -p 'type_a=q(4_K|6_K),type_b=f32,.*(n=64,|n=65,|n=100,|n=200,|n=300,|n=512,)'
+```
+
+The frozen combined backend and the normal CMake build both pass 26 CPU-reference cases: 12 dense FFNs, four MoE FFNs, six weighted reductions, two large Q4_K/Q6_K matrix cases and two small-row fallback cases. The FFN cases are ported into the existing `test-backend-ops` harness and cover mixed Q4_K/Q6_K weights, partial tiles and residual outputs, using NMSE tolerance `5e-4`. The normal build also passes the 22 FFN/reduction cases with all new gates unset. Loaded-library maps confirm the normal build is used without a preload; no GPU contention was recorded. Runtime validation is on gfx1151. Other GPUs and full-model perplexity/task quality have not been evaluated in this experiment. FP16 conversion and removal of Q8 activation quantization change rounding; this is not a bitwise-equivalent change or evidence of zero accuracy loss.
+
+The earlier wider Jim-branch comparison regressed on some small dense models and Gemma-2B. These four winning models do not justify globally enabling MMDQ or replacing existing MMQ dispatch. Leave the gates unset to retain previous behavior; unset `GGML_CUDA_MMDQ_GLU` separately for a matrix-only ablation.
+
+Evidence: `/proj/gdba/lichang/regression_results/jim_mmdq_attribution_20261106/REPORT.md`, `summary.json`, `combined_v3/combined.patch`, `combined_v3/sha256.json`, `combined_tests_v3/`, and `production_validation/`. These preserve source provenance, build commands, frozen libraries, loaded-library maps, correctness output, per-process medians, superseded attempts and raw benchmark samples.
+
 ## Q6_K scale reuse (2026-10-29)
 
 The commit titled `hip: reuse Q6_K scales in RDNA3.5 J64 tiles`, based on `257a47804282af464953f36ffc75d065abcc1fa5`, precomputes signed int8 subscale times FP16 block scale when loading a Q6_K weight tile. It stores the combined scales as FP32 in LDS and reuses them across output columns, reducing repeated arithmetic and loads in the integer-WMMA loop. Weights stay Q6_K, activations retain existing Q8 packing, and there is no full-matrix dequantization or language-precision change.

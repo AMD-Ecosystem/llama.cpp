@@ -33,6 +33,7 @@
 #include "ggml-cuda/getrows.cuh"
 #include "ggml-cuda/im2col.cuh"
 #include "ggml-cuda/mmf.cuh"
+#include "ggml-cuda/mmdq.cuh"
 #include "ggml-cuda/mmq.cuh"
 #include "ggml-cuda/mmvf.cuh"
 #include "ggml-cuda/mmvq.cuh"
@@ -2060,6 +2061,10 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         ggml_cuda_mul_mat_vec_q(ctx, src0, src1, nullptr, dst);
         return;
     }
+    if (ggml_cuda_should_use_mmdq(src0, src1, dst, cc)) {
+        ggml_cuda_mul_mat_dq(ctx, src0, src1, dst);
+        return;
+    }
     if (ggml_cuda_should_use_mmq(src0->type, cc, ne11, /*n_experts =*/ 0)) {
         ggml_cuda_mul_mat_q(ctx, src0, src1, nullptr, dst);
         return;
@@ -2126,6 +2131,11 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
                     return;
                 }
             }
+        }
+
+        if (ggml_cuda_should_use_mmdq_id(src0, src1, ids, dst, cc)) {
+            ggml_cuda_mul_mat_id_dq(ctx, src0, src1, ids, dst);
+            return;
         }
 
         if (ggml_cuda_should_use_mmq(src0->type, cc, ne12, /*n_experts=*/ne02)) {
@@ -3624,6 +3634,9 @@ static bool ggml_cuda_should_fuse_cublas_16bit(ggml_backend_cuda_context & ctx, 
     const auto & device = ggml_cuda_info().devices[ctx.device];
     const ggml_tensor * w = mm->src[0];
     const ggml_tensor * x = mm->src[1];
+    if (ggml_cuda_should_use_mmdq(w, x, mm, device.cc)) {
+        return false;
+    }
     return GGML_CUDA_CC_IS_RDNA3_5(device.cc) && (w->type == GGML_TYPE_F16 || w->type == GGML_TYPE_BF16 || (allow_q6 && w->type == GGML_TYPE_Q6_K)) && x->type == GGML_TYPE_F32 &&
         mm->type == GGML_TYPE_F32 && ggml_is_contiguous(w) && ggml_is_contiguous(x) && ggml_is_contiguous(mm) &&
         mm->ne[2] == 1 && mm->ne[3] == 1 && mm->ne[1] >= 32 &&
@@ -3864,6 +3877,9 @@ static bool ggml_cuda_can_use_packed_mmq(ggml_backend_cuda_context & ctx, const 
     const ggml_tensor * w = mm->src[0];
     const ggml_tensor * x = mm->src[1];
     const int cc = ggml_cuda_info().devices[ctx.device].cc;
+    if (ggml_cuda_should_use_mmdq(w, x, mm, cc)) {
+        return false;
+    }
     return GGML_CUDA_CC_IS_RDNA3_5(cc) && (w->type == GGML_TYPE_Q4_K || w->type == GGML_TYPE_Q5_K || (allow_d4 && w->type == GGML_TYPE_Q6_K)) &&
         x->type == GGML_TYPE_F32 && mm->type == GGML_TYPE_F32 &&
         ggml_is_contiguous(w) && ggml_is_contiguous(x) && ggml_is_contiguous(mm) &&
@@ -3889,6 +3905,22 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     }
 
     ggml_tensor * node = cgraph->nodes[i];
+
+    if ((node->op == GGML_OP_MUL_MAT || node->op == GGML_OP_MUL_MAT_ID) && i + 3 < cgraph->n_nodes) {
+        ggml_tensor * glu = cgraph->nodes[i + 2];
+        ggml_tensor * down = cgraph->nodes[i + 3];
+        const int cc = ggml_cuda_info().devices[cuda_ctx->device].cc;
+        const ggml_op ops[] = { node->op, node->op, GGML_OP_GLU, node->op };
+        const int output_idx = i + 3;
+        if (glu->op == GGML_OP_GLU && (glu->src[0] == node || glu->src[1] == node) &&
+                (glu->src[0] == cgraph->nodes[i + 1] || glu->src[1] == cgraph->nodes[i + 1]) &&
+                ggml_cuda_should_use_mmdq_glu(glu, down, cc) &&
+                ggml_can_fuse_subgraph(cgraph, i, 4, ops, &output_idx, 1)) {
+            // Input and IDs are staged before down writes dst; gate/up use a private FP16 buffer.
+            ggml_cuda_mul_mat_dq_glu(*cuda_ctx, glu, down, down);
+            return 3;
+        }
+    }
 
     if (node->op == GGML_OP_FLASH_ATTN_EXT && GGML_CUDA_CC_IS_RDNA3_5(ggml_cuda_info().devices[cuda_ctx->device].cc)) {
         const ggml_op ops[] = { GGML_OP_FLASH_ATTN_EXT, GGML_OP_RESHAPE, GGML_OP_SET };
