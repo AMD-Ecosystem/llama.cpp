@@ -1223,12 +1223,18 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
 
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
     constexpr int ncols = ncols1 * ncols2;
-    using     T_A_KQ    = typename mma_tile_sizes<DKQ, ncols>::T_A_KQ;
-    using     T_B_KQ    = typename mma_tile_sizes<DKQ, ncols>::T_B_KQ;
-    using     T_C_KQ    = typename mma_tile_sizes<DKQ, ncols>::T_C_KQ;
-    using     T_A_VKQ   = typename mma_tile_sizes<DKQ, ncols>::T_A_VKQ;
-    using     T_B_VKQ   = typename mma_tile_sizes<DKQ, ncols>::T_B_VKQ;
-    using     T_C_VKQ   = typename mma_tile_sizes<DKQ, ncols>::T_C_VKQ;
+#if defined(AMD_WMMA_AVAILABLE) && defined(RDNA3)
+    // ncols2 == 1 only runs with GGML_CUDA_FATTN_WMMA_NO_GQA; use the f32 VKQ accumulators of D=80 for D=64 there
+    using     tile_sizes = std::conditional_t<ncols2 == 1 && DKQ == 64, mma_tile_sizes<80, ncols>, mma_tile_sizes<DKQ, ncols>>;
+#else
+    using     tile_sizes = mma_tile_sizes<DKQ, ncols>;
+#endif // defined(AMD_WMMA_AVAILABLE) && defined(RDNA3)
+    using     T_A_KQ    = typename tile_sizes::T_A_KQ;
+    using     T_B_KQ    = typename tile_sizes::T_B_KQ;
+    using     T_C_KQ    = typename tile_sizes::T_C_KQ;
+    using     T_A_VKQ   = typename tile_sizes::T_A_VKQ;
+    using     T_B_VKQ   = typename tile_sizes::T_B_VKQ;
+    using     T_C_VKQ   = typename tile_sizes::T_C_VKQ;
 
     constexpr int  cols_per_warp   = T_B_KQ::I;
     constexpr int  cols_per_thread = get_cols_per_thread();
@@ -1262,7 +1268,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
 #if defined(TURING_MMA_AVAILABLE)
     T_C_VKQ VKQ_C[cols_per_warp == 8 ? DV/T_C_VKQ::I : DV/(2*T_C_VKQ::J)];
 #elif defined(AMD_WMMA_256B_AVAILABLE)
-    T_C_VKQ VKQ_C[DV % 32 != 0       ? DV/T_C_VKQ::J : DV/(2*T_C_VKQ::J)];
+    T_C_VKQ VKQ_C[std::is_same_v<decltype(T_C_VKQ::x), float[T_C_VKQ::ne]> ? DV/T_C_VKQ::J : DV/(2*T_C_VKQ::J)];
 #elif defined(AMD_MFMA_AVAILABLE)
     T_C_VKQ VKQ_C[                                     DV/T_C_VKQ::J];
 #elif defined(AMD_WMMA_AVAILABLE)
@@ -1866,7 +1872,7 @@ static __global__ void flash_attn_ext_f16(
 #endif // __CUDA_ARCH__ == GGML_CUDA_CC_TURING
 
 #if defined(AMD_WMMA_AVAILABLE)
-    if (ncols1*ncols2 < 16 || ncols2 == 1 || DKQ > 256) {
+    if (ncols1*ncols2 < 16 || (ncols2 == 1 && DKQ > 128) || DKQ > 256) {
         NO_DEVICE_CODE;
         return;
     }

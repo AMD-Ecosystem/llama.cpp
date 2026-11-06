@@ -38,6 +38,15 @@ ggml_cgraph * clip_graph_qwen2vl::build() {
     ggml_tensor * window_idx     = nullptr;
     ggml_tensor * inv_window_idx = nullptr;
 
+    // batched windows: each window is padded to wa_size rows and becomes one batch entry of the attention
+    const bool wa_batched = use_window_attn && hparams.wa_batched;
+    ggml_tensor * wa_pad_idx   = nullptr;
+    ggml_tensor * wa_unpad_idx = nullptr;
+    ggml_tensor * wa_mask      = nullptr;
+    int wa_size  = 0;
+    int wa_count = 0;
+    int wa_full  = 0; // wa_split: number of full windows, placed first
+
     ggml_tensor * positions = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, num_position_ids);
     ggml_set_name(positions, "positions");
     ggml_set_input(positions);
@@ -52,8 +61,38 @@ ggml_cgraph * clip_graph_qwen2vl::build() {
         inv_window_idx = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos / 4);
         ggml_set_name(inv_window_idx, "inv_window_idx");
         ggml_set_input(inv_window_idx);
-        // mask for window attention
-        window_mask = build_inp_attn_mask(n_pos, n_pos);
+        if (wa_batched) {
+            const int merge       = 2;
+            const int grid_window = (hparams.attn_window_size > 0 ? hparams.attn_window_size : 112) / patch_size / merge;
+            const int ph          = n_patches_y / merge;
+            const int pw          = n_patches_x / merge;
+            wa_size  = grid_window * grid_window * merge * merge;
+            wa_count = ((ph + grid_window - 1) / grid_window) * ((pw + grid_window - 1) / grid_window);
+            if (hparams.wa_split) {
+                wa_full   = (ph / grid_window) * (pw / grid_window);
+                wa_count -= wa_full;
+            }
+            const int n_pad_rows = n_pos - wa_full * wa_size;
+
+            if (wa_count > 0) {
+                wa_pad_idx = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, wa_size * wa_count);
+                ggml_set_name(wa_pad_idx, "wa_pad_idx");
+                ggml_set_input(wa_pad_idx);
+                wa_unpad_idx = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pad_rows);
+                ggml_set_name(wa_unpad_idx, "wa_unpad_idx");
+                ggml_set_input(wa_unpad_idx);
+            }
+            // only partial windows have padded keys to mask out
+            if (wa_size * wa_count != n_pad_rows) {
+                const ggml_type type = flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED ? GGML_TYPE_F16 : GGML_TYPE_F32;
+                wa_mask = ggml_new_tensor_4d(ctx0, type, wa_size, wa_size, 1, wa_count);
+                ggml_set_name(wa_mask, "wa_mask");
+                ggml_set_input(wa_mask);
+            }
+        } else {
+            // mask for window attention
+            window_mask = build_inp_attn_mask(n_pos, n_pos);
+        }
 
         // inpL shape: [n_embd, n_patches_x * n_patches_y, batch_size]
         GGML_ASSERT(batch_size == 1);
@@ -75,16 +114,28 @@ ggml_cgraph * clip_graph_qwen2vl::build() {
 
         // self-attention
         {
-            ggml_tensor * Qcur = ggml_add(ctx0,
-                build_mm(layer.q_w, cur), layer.q_b);
-            ggml_tensor * Kcur = ggml_add(ctx0,
-                build_mm(layer.k_w, cur), layer.k_b);
-            ggml_tensor * Vcur = ggml_add(ctx0,
-                build_mm(layer.v_w, cur), layer.v_b);
+            ggml_tensor * Qcur;
+            ggml_tensor * Kcur;
+            ggml_tensor * Vcur;
+            if (layer.fused_qkv_w) {
+                ggml_tensor * qkv = ggml_add(ctx0, build_mm(layer.fused_qkv_w, cur), layer.fused_qkv_b);
+                cb(qkv, "qkv", il);
+                const size_t es = ggml_element_size(qkv);
+                Qcur = ggml_view_3d(ctx0, qkv, d_head, n_head, n_patches, d_head*es, qkv->nb[1], 0);
+                Kcur = ggml_view_3d(ctx0, qkv, d_head, n_head, n_patches, d_head*es, qkv->nb[1], n_embd*es);
+                Vcur = ggml_view_3d(ctx0, qkv, d_head, n_head, n_patches, d_head*es, qkv->nb[1], 2*n_embd*es);
+            } else {
+                Qcur = ggml_add(ctx0,
+                    build_mm(layer.q_w, cur), layer.q_b);
+                Kcur = ggml_add(ctx0,
+                    build_mm(layer.k_w, cur), layer.k_b);
+                Vcur = ggml_add(ctx0,
+                    build_mm(layer.v_w, cur), layer.v_b);
 
-            Qcur = ggml_reshape_3d(ctx0, Qcur, d_head, n_head, n_patches);
-            Kcur = ggml_reshape_3d(ctx0, Kcur, d_head, n_head, n_patches);
-            Vcur = ggml_reshape_3d(ctx0, Vcur, d_head, n_head, n_patches);
+                Qcur = ggml_reshape_3d(ctx0, Qcur, d_head, n_head, n_patches);
+                Kcur = ggml_reshape_3d(ctx0, Kcur, d_head, n_head, n_patches);
+                Vcur = ggml_reshape_3d(ctx0, Vcur, d_head, n_head, n_patches);
+            }
 
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
@@ -101,10 +152,46 @@ ggml_cgraph * clip_graph_qwen2vl::build() {
             cb(Qcur, "Qcur_rope", il);
             cb(Kcur, "Kcur_rope", il);
 
-            ggml_tensor * attn_mask = full_attn ? nullptr : window_mask;
+            // the padded windows are gathered as f32, cast them after the gather
+            ggml_tensor * Kcur_f32 = Kcur;
+            ggml_tensor * Vcur_f32 = Vcur;
+            if (hparams.kv_cast_early && flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) {
+                Kcur = ggml_cast(ctx0, Kcur, GGML_TYPE_F16);
+                Vcur = ggml_cast(ctx0, Vcur, GGML_TYPE_F16);
+            }
 
-            cur = build_attn(layer.o_w, layer.o_b,
-                Qcur, Kcur, Vcur, attn_mask, kq_scale, il);
+            if (wa_batched && !full_attn) {
+                auto pad = [&](ggml_tensor * t) {
+                    const bool to_f16 = t->type == GGML_TYPE_F16;
+                    t = t == Kcur ? Kcur_f32 : (t == Vcur ? Vcur_f32 : t);
+                    t = ggml_view_2d(ctx0, t, d_head * n_head, n_pos, t->nb[2], 0);
+                    t = ggml_get_rows(ctx0, t, wa_pad_idx);
+                    t = ggml_reshape_4d(ctx0, t, d_head, n_head, wa_size, wa_count);
+                    return to_f16 ? ggml_cast(ctx0, t, GGML_TYPE_F16) : t;
+                };
+                // full windows are contiguous rows, use them in place
+                auto full = [&](ggml_tensor * t) {
+                    return ggml_view_4d(ctx0, t, d_head, n_head, wa_size, wa_full, t->nb[1], t->nb[2], wa_size*t->nb[2], 0);
+                };
+                ggml_tensor * cur_full = nullptr;
+                if (wa_full > 0) {
+                    cur_full = build_attn(nullptr, nullptr,
+                        full(Qcur), full(Kcur), full(Vcur), nullptr, kq_scale, il);
+                }
+                cur = nullptr;
+                if (wa_count > 0) {
+                    cur = build_attn(nullptr, nullptr,
+                        pad(Qcur), pad(Kcur), pad(Vcur), wa_mask, kq_scale, il);
+                    cur = ggml_get_rows(ctx0, cur, wa_unpad_idx);
+                }
+                cur = cur_full && cur ? ggml_concat(ctx0, cur_full, cur, 1) : (cur ? cur : cur_full);
+                cur = ggml_add(ctx0, build_mm(layer.o_w, cur), layer.o_b);
+            } else {
+                ggml_tensor * attn_mask = full_attn ? nullptr : window_mask;
+
+                cur = build_attn(layer.o_w, layer.o_b,
+                    Qcur, Kcur, Vcur, attn_mask, kq_scale, il);
+            }
             cb(cur, "attn_out", il);
         }
 
@@ -120,11 +207,19 @@ ggml_cgraph * clip_graph_qwen2vl::build() {
         cb(cur, "ffn_inp_normed", il);
 
         // ffn
-        cur = build_ffn(cur,
-            layer.ff_up_w, layer.ff_up_b,
-            layer.ff_gate_w, layer.ff_gate_b,
-            layer.ff_down_w, layer.ff_down_b,
-            hparams.ffn_op, il);
+        if (layer.fused_gate_up_w && layer.ff_down_b && hparams.ffn_op == FFN_SILU && hparams.swiglu_clamp <= 0.0f) {
+            cur = ggml_add(ctx0, build_mm(layer.fused_gate_up_w, cur), layer.fused_gate_up_b);
+            cb(cur, "ffn_gate_up", il);
+            cur = ggml_swiglu(ctx0, cur);
+            cb(cur, "ffn_swiglu", il);
+            cur = ggml_add(ctx0, build_mm(layer.ff_down_w, cur), layer.ff_down_b);
+        } else {
+            cur = build_ffn(cur,
+                layer.ff_up_w, layer.ff_up_b,
+                layer.ff_gate_w, layer.ff_gate_b,
+                layer.ff_down_w, layer.ff_down_b,
+                hparams.ffn_op, il);
+        }
 
         cb(cur, "ffn_out", il);
 

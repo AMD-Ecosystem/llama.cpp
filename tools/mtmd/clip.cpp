@@ -159,6 +159,9 @@ struct clip_ctx {
     ggml_backend_t backend_cpu = nullptr;
     ggml_backend_buffer_ptr buf;
 
+    ggml_context_ptr        ctx_fused;
+    ggml_backend_buffer_ptr buf_fused;
+
 
     int max_nodes = 8192;
     ggml_backend_sched_ptr sched;
@@ -810,11 +813,45 @@ ggml_tensor * clip_graph::build_attn(
 
     ggml_tensor * cur;
 
-    if (flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) {
-        ggml_tensor * v = ggml_permute(ctx0, v_cur, 0, 2, 1, 3);
-
+    // opt-in: pad head dim 72 -> 80 so FA can use the D=80 kernels, zero dims do not change KQ
+    static const bool fa_pad80 = []() {
+        const char * env = getenv("MTMD_VISION_FA_PAD80");
+        return env != nullptr && atoi(env) != 0;
+    }();
+    if (fa_pad80 && flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED && q_cur->ne[0] == 72 && k_cur->ne[0] == 72 && v_cur->ne[0] == 72) {
+        const int64_t d = q_cur->ne[0];
+        q = ggml_permute(ctx0, ggml_pad(ctx0, q_cur, 80 - d, 0, 0, 0), 0, 2, 1, 3);
+        k = ggml_permute(ctx0, ggml_pad(ctx0, k_cur, 80 - d, 0, 0, 0), 0, 2, 1, 3);
+        ggml_tensor * v = ggml_permute(ctx0, ggml_pad(ctx0, v_cur, 80 - d, 0, 0, 0), 0, 2, 1, 3);
         k = ggml_cast(ctx0, k, GGML_TYPE_F16);
         v = ggml_cast(ctx0, v, GGML_TYPE_F16);
+        GGML_ASSERT(!kq_mask || kq_mask->type == GGML_TYPE_F16);
+
+        cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask, kq_scale, 0.0f, 0.0f);
+        ggml_prec_set_acc(cur, GGML_PREC_F32);
+        if (sinks != nullptr) {
+            ggml_flash_attn_ext_add_sinks(cur, sinks);
+        }
+        cur = ggml_view_3d(ctx0, cur, d, cur->ne[1], cur->ne[2], cur->nb[1], cur->nb[2], 0);
+        cur = ggml_cont_2d(ctx0, cur, d*cur->ne[1], cur->ne[2]);
+    } else if (flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) {
+        ggml_tensor * v = ggml_permute(ctx0, v_cur, 0, 2, 1, 3);
+
+        // opt-in: cast K/V to f16 before the head permute, the copy then reads and writes in the same order
+        static const bool kv_cast_early = []() {
+            const char * env = getenv("MTMD_VISION_KV_CAST_EARLY");
+            return env != nullptr && atoi(env) != 0;
+        }();
+        if (kv_cast_early && k_cur->type != GGML_TYPE_F16 && v_cur->type != GGML_TYPE_F16) {
+            k = ggml_permute(ctx0, ggml_cast(ctx0, k_cur, GGML_TYPE_F16), 0, 2, 1, 3);
+            v = ggml_permute(ctx0, ggml_cast(ctx0, v_cur, GGML_TYPE_F16), 0, 2, 1, 3);
+        }
+        if (k->type != GGML_TYPE_F16) {
+            k = ggml_cast(ctx0, k, GGML_TYPE_F16);
+        }
+        if (v->type != GGML_TYPE_F16) {
+            v = ggml_cast(ctx0, v, GGML_TYPE_F16);
+        }
         // mask must be f16 here, use build_inp_attn_mask()
         GGML_ASSERT(!kq_mask || kq_mask->type == GGML_TYPE_F16);
 
@@ -1832,6 +1869,8 @@ struct clip_model_loader {
                         hparams.image_resize_algo = RESIZE_ALGO_BILINEAR;
                         // test model (tinygemma3) has a different value, we optionally read it
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
+                        const char * env = std::getenv("MTMD_VISION_FUSE_QKV");
+                        hparams.vision_fuse_qkv = env != nullptr && strcmp(env, "0") != 0;
                     } break;
 
                 case PROJECTOR_TYPE_GEMMA4V:
@@ -1872,6 +1911,21 @@ struct clip_model_loader {
                         hparams.image_round_half_even = true; // smart_resize uses Python round()
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
                         get_u32(KEY_WIN_ATTN_PATTERN, hparams.n_wa_pattern, model.proj_type == PROJECTOR_TYPE_QWEN25VL); // only 2.5 requires it
+                        if (model.proj_type == PROJECTOR_TYPE_QWEN25VL && hparams.n_wa_pattern > 0) {
+                            const char * env = std::getenv("MTMD_QWEN25VL_WINDOW_BATCH");
+                            hparams.wa_batched = env != nullptr && strcmp(env, "0") != 0;
+                            const char * env_kv = std::getenv("MTMD_QWEN25VL_KV_CAST_EARLY");
+                            hparams.kv_cast_early = env_kv != nullptr && strcmp(env_kv, "0") != 0;
+                            const char * env_split = std::getenv("MTMD_QWEN25VL_WINDOW_SPLIT");
+                            hparams.wa_split = hparams.wa_batched && env_split != nullptr && strcmp(env_split, "0") != 0;
+                            if (hparams.wa_batched) {
+                                LOG_INF("%s: qwen2.5vl batched window attention enabled\n", __func__);
+                            }
+                        }
+                        if (model.proj_type == PROJECTOR_TYPE_QWEN25VL) {
+                            const char * env = std::getenv("MTMD_QWEN25VL_FUSE_QKV_FFN");
+                            hparams.fuse_qkv_ffn = env != nullptr && strcmp(env, "0") != 0;
+                        }
                         // ref: https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/blob/main/preprocessor_config.json
                         hparams.set_limit_image_tokens(8, 4096);
                         // optional limits of the model, the custom values take precedence
@@ -4273,8 +4327,97 @@ struct clip_model_loader {
                 LOG_DBG("%s: no_alloc is set, skipping tensor data loading (%zu tensors)\n", __func__, tensors_to_load.size());
             }
             fin.close();
+
+            if (hparams.fuse_qkv_ffn || hparams.vision_fuse_qkv) {
+                build_fused_weights(ctx_clip, buft);
+            }
+            // opt-in: build_vit runs one q/k/v matmul on the concatenated weights
+            if (hparams.vision_fuse_qkv) {
+                for (auto & layer : ctx_clip.model.layers) {
+                    if (!layer.qkv_w && layer.fused_qkv_w && layer.fused_qkv_b && !layer.q_norm && !layer.k_norm) {
+                        layer.qkv_w = layer.fused_qkv_w;
+                        layer.qkv_b = layer.fused_qkv_b;
+                    }
+                }
+            }
         }
 
+    }
+
+    // concatenate q/k/v and gate/up of every layer into new tensors, the originals are kept
+    static void build_fused_weights(clip_ctx & ctx_clip, ggml_backend_buffer_type_t buft) {
+        auto & model = ctx_clip.model;
+
+        auto same = [](const std::vector<ggml_tensor *> & ts) {
+            for (const ggml_tensor * t : ts) {
+                if (!t || t->type != ts[0]->type || t->ne[0] != ts[0]->ne[0] || !ggml_is_contiguous(t) ||
+                        ggml_n_dims(t) != ggml_n_dims(ts[0]) || ggml_nrows(t) != t->ne[1]) {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        struct fuse_item {
+            ggml_tensor ** dst;
+            std::vector<ggml_tensor *> srcs;
+        };
+        std::vector<fuse_item> items;
+        for (auto & layer : model.layers) {
+            if (same({layer.q_w, layer.k_w, layer.v_w}) && same({layer.q_b, layer.k_b, layer.v_b}) &&
+                    ggml_n_dims(layer.q_w) == 2 && ggml_n_dims(layer.q_b) == 1) {
+                items.push_back({&layer.fused_qkv_w, {layer.q_w, layer.k_w, layer.v_w}});
+                items.push_back({&layer.fused_qkv_b, {layer.q_b, layer.k_b, layer.v_b}});
+            }
+            if (same({layer.ff_gate_w, layer.ff_up_w}) && same({layer.ff_gate_b, layer.ff_up_b}) &&
+                    ggml_n_dims(layer.ff_gate_w) == 2 && ggml_n_dims(layer.ff_gate_b) == 1 &&
+                    layer.ff_gate_w->ne[1] == layer.ff_up_w->ne[1]) {
+                items.push_back({&layer.fused_gate_up_w, {layer.ff_gate_w, layer.ff_up_w}});
+                items.push_back({&layer.fused_gate_up_b, {layer.ff_gate_b, layer.ff_up_b}});
+            }
+        }
+        if (items.empty()) {
+            return;
+        }
+
+        ggml_init_params params = {
+            /*.mem_size   =*/ items.size() * ggml_tensor_overhead(),
+            /*.mem_buffer =*/ nullptr,
+            /*.no_alloc   =*/ true,
+        };
+        ctx_clip.ctx_fused.reset(ggml_init(params));
+        for (auto & it : items) {
+            int64_t ne1 = 0;
+            for (const ggml_tensor * t : it.srcs) {
+                ne1 += ggml_n_dims(t) == 1 ? t->ne[0] : t->ne[1];
+            }
+            const ggml_tensor * t0 = it.srcs[0];
+            *it.dst = ggml_n_dims(t0) == 1
+                ? ggml_new_tensor_1d(ctx_clip.ctx_fused.get(), t0->type, ne1)
+                : ggml_new_tensor_2d(ctx_clip.ctx_fused.get(), t0->type, t0->ne[0], ne1);
+            ggml_format_name(*it.dst, "%s.fused", t0->name);
+        }
+        ctx_clip.buf_fused.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_fused.get(), buft));
+        if (!ctx_clip.buf_fused) {
+            throw std::runtime_error(string_format("%s: failed to allocate fused weights\n", __func__));
+        }
+        ggml_backend_buffer_set_usage(ctx_clip.buf_fused.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        ctx_clip.mem_usage[ggml_backend_get_device(ctx_clip.backend)] += ggml_backend_buffer_get_size(ctx_clip.buf_fused.get());
+
+        if (!ctx_clip.no_alloc) {
+            std::vector<uint8_t> tmp;
+            for (auto & it : items) {
+                size_t offs = 0;
+                for (ggml_tensor * t : it.srcs) {
+                    tmp.resize(ggml_nbytes(t));
+                    ggml_backend_tensor_get(t, tmp.data(), 0, tmp.size());
+                    ggml_backend_tensor_set(*it.dst, tmp.data(), offs, tmp.size());
+                    offs += tmp.size();
+                }
+            }
+        }
+        LOG_INF("%s: built %zu fused weight tensors (%.2f MiB)\n", __func__, items.size(),
+            ggml_backend_buffer_get_size(ctx_clip.buf_fused.get()) / 1024.0 / 1024.0);
     }
 
     struct support_info_op {
@@ -5310,8 +5453,8 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
     };
 
     // mask from build_inp_attn_mask(), f16 if flash attn is enabled
-    auto set_input_attn_mask = [&get_inp_tensor](const std::vector<float> & values, int idx = 0) {
-        ggml_tensor * cur = get_inp_tensor(get_attn_mask_name(idx).c_str());
+    auto set_input_mask = [&get_inp_tensor](const char * name, const std::vector<float> & values) {
+        ggml_tensor * cur = get_inp_tensor(name);
         GGML_ASSERT(ggml_nelements(cur) == (int64_t)values.size());
         if (cur->type == GGML_TYPE_F16) {
             std::vector<ggml_fp16_t> values_f16(values.size());
@@ -5321,6 +5464,9 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
             GGML_ASSERT(cur->type == GGML_TYPE_F32);
             ggml_backend_tensor_set(cur, values.data(), 0, ggml_nbytes(cur));
         }
+    };
+    auto set_input_attn_mask = [&set_input_mask](const std::vector<float> & values, int idx = 0) {
+        set_input_mask(get_attn_mask_name(idx).c_str(), values);
     };
 
     auto set_input_i32 = [&get_inp_tensor](const char * name, std::vector<int32_t> & values) {
@@ -5839,13 +5985,25 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                     const int grid_window = attn_window_size / patch_size / merge_ratio;
                     int dst = 0;
                     // [num_vision_tokens, num_vision_tokens] attention mask tensor
-                    std::vector<float> mask(pow(ipw * iph, 2), std::numeric_limits<float>::lowest());
+                    std::vector<float> mask(hparams.wa_batched ? 0 : pow(ipw * iph, 2), std::numeric_limits<float>::lowest());
                     int mask_row = 0;
 
+                    // batched windows, see clip_graph_qwen2vl::build()
+                    const int wa_size = grid_window * grid_window * merge_ratio * merge_ratio;
+                    std::vector<int32_t> wa_pad_idx;
+                    std::vector<int32_t> wa_unpad_idx(hparams.wa_batched ? ipw * iph : 0);
+                    std::vector<float>   wa_mask;
+                    int wa_full_rows = 0;
+
+                    // wa_split: pass 0 takes the full windows, pass 1 the partial ones
+                    for (int pass = 0; pass < (hparams.wa_split ? 2 : 1); pass++)
                     for (int y = 0; y < ph; y += grid_window) {
                         for (int x = 0; x < pw; x += grid_window) {
                             const int win_h = std::min(grid_window, ph - y);
                             const int win_w = std::min(grid_window, pw - x);
+                            if (hparams.wa_split && (win_h * win_w == grid_window * grid_window) != (pass == 0)) {
+                                continue;
+                            }
                             const int dst_0 = dst;
                             // group all tokens belong to the same window togather (to a continue range)
                             for (int dy = 0; dy < win_h; dy++) {
@@ -5857,6 +6015,29 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                                     inv_idx[dst] = src;
                                     dst++;
                                 }
+                            }
+
+                            if (hparams.wa_split && pass == 0) {
+                                wa_full_rows = dst * merge_ratio * merge_ratio;
+                                continue;
+                            }
+
+                            if (hparams.wa_batched) {
+                                const int o  = dst_0 * merge_ratio * merge_ratio;
+                                const int sz = (dst - dst_0) * merge_ratio * merge_ratio;
+                                std::vector<float> row(wa_size, std::numeric_limits<float>::lowest());
+                                for (int j = 0; j < wa_size; j++) {
+                                    if (j < sz) {
+                                        wa_unpad_idx[o + j - wa_full_rows] = (int32_t) wa_pad_idx.size();
+                                        row[j] = 0.0f;
+                                    }
+                                    // padded rows reuse a valid row, their keys are masked and their outputs dropped
+                                    wa_pad_idx.push_back(j < sz ? o + j : o);
+                                }
+                                for (int q = 0; q < wa_size; q++) {
+                                    wa_mask.insert(wa_mask.end(), row.begin(), row.end());
+                                }
+                                continue;
                             }
 
                             for (int r=0; r < win_h * win_w * merge_ratio * merge_ratio; r++) {
@@ -5872,7 +6053,18 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
 
                     set_input_i32("window_idx",     idx);
                     set_input_i32("inv_window_idx", inv_idx);
-                    set_input_attn_mask(mask);
+                    if (hparams.wa_batched) {
+                        wa_unpad_idx.resize(ipw * iph - wa_full_rows);
+                        if (!wa_pad_idx.empty()) {
+                            set_input_i32("wa_pad_idx",   wa_pad_idx);
+                            set_input_i32("wa_unpad_idx", wa_unpad_idx);
+                        }
+                        if ((int) wa_pad_idx.size() != ipw * iph - wa_full_rows) {
+                            set_input_mask("wa_mask", wa_mask);
+                        }
+                    } else {
+                        set_input_attn_mask(mask);
+                    }
                 } else {
                     for (int i = 0; i < ph * pw; i++) {
                         idx[i] = i;

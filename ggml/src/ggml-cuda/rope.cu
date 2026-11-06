@@ -482,8 +482,14 @@ static void rope_multi_cuda(const T *            x,
                             const bool           inplace,
                             cudaStream_t         stream) {
     GGML_ASSERT(ne00 % 2 == 0);
-    const dim3 block_dims(1, CUDA_ROPE_BLOCK_SIZE, 1);
-    const int  n_blocks_x = (ne00 + 2 * CUDA_ROPE_BLOCK_SIZE - 1) / (2 * CUDA_ROPE_BLOCK_SIZE);
+    // opt-in: smaller blocks for small head sizes, most threads of a 256 block have no work for ne00 < 512
+    static const int block_size = []() {
+        const char * env = getenv("GGML_CUDA_ROPE_MULTI_BLOCK");
+        const int bs = env ? atoi(env) : 0;
+        return bs >= 32 && bs <= CUDA_ROPE_BLOCK_SIZE ? bs : CUDA_ROPE_BLOCK_SIZE;
+    }();
+    const dim3 block_dims(1, block_size, 1);
+    const int  n_blocks_x = (ne00 + 2 * block_size - 1) / (2 * block_size);
     const dim3 block_nums(nr, n_blocks_x, 1);
 
     const float theta_scale = powf(freq_base, -2.0f / n_dims);
@@ -525,8 +531,14 @@ static void rope_vision_cuda(const T *            x,
                              const mrope_sections sections,
                              cudaStream_t         stream) {
     GGML_ASSERT(ne00 % 2 == 0);
-    const dim3 block_dims(1, CUDA_ROPE_BLOCK_SIZE, 1);
-    const int  n_blocks_x = (ne00 + 2 * CUDA_ROPE_BLOCK_SIZE - 1) / (2 * CUDA_ROPE_BLOCK_SIZE);
+    // opt-in: smaller blocks for small head sizes, most threads of a 256 block have no work for ne00 < 512
+    static const int block_size = []() {
+        const char * env = getenv("GGML_CUDA_ROPE_VISION_BLOCK");
+        const int bs = env ? atoi(env) : 0;
+        return bs >= 32 && bs <= CUDA_ROPE_BLOCK_SIZE ? bs : CUDA_ROPE_BLOCK_SIZE;
+    }();
+    const dim3 block_dims(1, block_size, 1);
+    const int  n_blocks_x = (ne00 + 2 * block_size - 1) / (2 * block_size);
     const dim3 block_nums(nr, n_blocks_x, 1);
     // break down (head_dim, heads, seq) into (CUDA_ROPE_BLOCK_SIZE, x, heads * seq)
     // where x ~= ceil(head_dim / CUDA_ROPE_BLOCK_SIZE);

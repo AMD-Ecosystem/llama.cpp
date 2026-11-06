@@ -1682,6 +1682,10 @@ struct args_set_input_attn_mask {
 
     // cell of each mask column per stream, nullptr if the columns are the cells
     const int32_t * rows;
+
+    // positions [bidir_lo, bidir_hi] attend to each other without the causal mask, empty if bidir_lo > bidir_hi
+    llama_pos bidir_lo;
+    llama_pos bidir_hi;
 };
 
 template<typename T, bool causal, bool swa, bool is_2d, bool alibi>
@@ -1804,7 +1808,7 @@ static void set_input_attn_mask_impl(const args_set_input_attn_mask & args, T * 
 
                 if (causal) {
                     // mask future tokens
-                    if (p0 > p1) {
+                    if (p0 > p1 && !(p1 >= args.bidir_lo && p0 <= args.bidir_hi)) {
                         goto skip;
                     }
 
@@ -1927,6 +1931,25 @@ void llama_kv_cache::set_input_attn_mask(const llm_attn_mask & attn_mask, const 
             causal_attn = swa_type != LLAMA_SWA_TYPE_NONE;
         }
 
+        // opt-in: in a mixed causal ubatch, the embeddings (one media chunk) attend to each other like a non-causal media batch
+        llama_pos bidir_lo = 1;
+        llama_pos bidir_hi = 0;
+        static const bool mixed_embd_bidir = [] {
+            const char * env = getenv("LLAMA_MIXED_EMBD_BIDIR");
+            return env != nullptr && atoi(env) != 0;
+        }();
+        if (mixed_embd_bidir && causal_attn && ubatch->is_mixed() && !ubatch->is_pos_2d() && n_stream == 1 &&
+                (hparams.non_causal_type == LLAMA_NON_CAUSAL_TYPE_ALL ||
+                 (hparams.non_causal_type == LLAMA_NON_CAUSAL_TYPE_SWA_ONLY   && swa_type != LLAMA_SWA_TYPE_NONE) ||
+                 (hparams.non_causal_type == LLAMA_NON_CAUSAL_TYPE_DENSE_ONLY && swa_type == LLAMA_SWA_TYPE_NONE))) {
+            for (uint32_t i = 0; i < n_tokens; ++i) {
+                if (ubatch->type[i] == 1) {
+                    bidir_lo = bidir_lo > bidir_hi ? ubatch->pos[i] : std::min(bidir_lo, ubatch->pos[i]);
+                    bidir_hi = std::max(bidir_hi, ubatch->pos[i]);
+                }
+            }
+        }
+
         //const int64_t t_start = ggml_time_us();
 
         const args_set_input_attn_mask args = {
@@ -1940,6 +1963,8 @@ void llama_kv_cache::set_input_attn_mask(const llm_attn_mask & attn_mask, const 
             /*.n_stream         =*/ n_stream,
             /*.n_tps            =*/ n_tps,
             /*.rows             =*/ rows,
+            /*.bidir_lo         =*/ bidir_lo,
+            /*.bidir_hi         =*/ bidir_hi,
         };
 
         if (dst->type == GGML_TYPE_F16) {

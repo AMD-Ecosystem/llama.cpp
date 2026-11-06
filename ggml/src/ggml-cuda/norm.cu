@@ -569,6 +569,51 @@ void ggml_cuda_op_norm(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     norm_f32_cuda(src0_d, dst_d, ne00, ne01, ne02, ne03, s01, s02, s03, eps, stream);
 }
 
+// layer norm with affine weight and bias: dst = (x - mean)/std * w + b, one block per row
+template <int block_size>
+static __global__ void norm_mul_add_f32(
+        const float * __restrict__ x, const float * __restrict__ w, const float * __restrict__ b, float * __restrict__ dst,
+        const int ncols, const int64_t stride_row, const float eps) {
+    const int64_t row = blockIdx.x;
+    const int tid = threadIdx.x;
+    __shared__ float2 s_sum2[32];
+
+    const float * xr = x + row*stride_row;
+    float * dr = dst + row*ncols;
+
+    float2 mean_var = make_float2(0.0f, 0.0f);
+    for (int col = tid; col < ncols; col += block_size) {
+        const float xi = xr[col];
+        mean_var.x += xi;
+        mean_var.y += xi * xi;
+    }
+    mean_var = block_reduce<block_reduce_method::SUM, block_size>(mean_var, s_sum2);
+
+    const float mean = mean_var.x / ncols;
+    const float var = mean_var.y / ncols - mean * mean;
+    const float inv_std = rsqrtf(var + eps);
+
+    for (int col = tid; col < ncols; col += block_size) {
+        dr[col] = (xr[col] - mean) * inv_std * w[col] + b[col];
+    }
+}
+
+void ggml_cuda_op_norm_mul_add_fused(ggml_backend_cuda_context & ctx, ggml_tensor * norm, ggml_tensor * mul, ggml_tensor * add) {
+    const ggml_tensor * src0 = norm->src[0];
+    const ggml_tensor * w = mul->src[0] == norm ? mul->src[1] : mul->src[0];
+    const ggml_tensor * b = add->src[0] == mul ? add->src[1] : add->src[0];
+
+    float eps;
+    memcpy(&eps, norm->op_params, sizeof(float));
+    GGML_ASSERT(eps >= 0.0f);
+
+    const int ncols = src0->ne[0];
+    const int64_t nrows = ggml_nrows(src0);
+    norm_mul_add_f32<256><<<nrows, 256, 0, ctx.stream()>>>(
+        (const float *) src0->data, (const float *) w->data, (const float *) b->data, (float *) add->data, ncols, src0->nb[1]/sizeof(float), eps);
+    CUDA_CHECK(cudaGetLastError());
+}
+
 void ggml_cuda_op_group_norm(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const float * src0_d = (const float *)src0->data;

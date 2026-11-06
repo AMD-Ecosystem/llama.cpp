@@ -4449,7 +4449,7 @@ private:
                             n_swa > 0);
 
                     // TODO: do the same for all models, then remove process_mtmd_chunk()
-                    if (use_mixed_batch() && !slot.can_split() && input_tokens.has_mtmd) {
+                    if (input_tokens.has_mtmd && ((use_mixed_batch() && !slot.can_split()) || can_add_prompt_mixed(slot, n_batch))) {
                         if (!add_prompt_mixed(slot)) {
                             return;
                         }
@@ -4644,6 +4644,70 @@ private:
     // TODO @ngxson : maybe remove this once we use "mixed" batch everywhere
     bool use_mixed_batch() const {
         return !llama_get_memory(ctx_tgt) || !llama_get_causal_attn(ctx_tgt);
+    }
+
+    // opt-in (LLAMA_SERVER_MTMD_MIXED=1, old name LLAMA_SERVER_MIXED_PROMPT=1): process a causal multimodal prompt as one
+    // mixed batch, so the text before and after the media does not need its own decode (and its own pass over the weights)
+    bool can_add_prompt_mixed(const server_slot & slot, int32_t n_batch) const {
+        static const bool enabled = [] {
+            for (const char * name : { "LLAMA_SERVER_MTMD_MIXED", "LLAMA_SERVER_MIXED_PROMPT" }) {
+                const char * env = getenv(name);
+                if (env != nullptr && atoi(env) != 0) {
+                    return true;
+                }
+            }
+            return false;
+        }();
+        if (!enabled || !slot.mctx || slot.spec || slot.task->type != SERVER_TASK_TYPE_COMPLETION ||
+                slot.task->n_tokens_shared > 0 || lora_all_alora(slot.lora) ||
+                !llama_get_memory(ctx_tgt) || !llama_get_causal_attn(ctx_tgt)) {
+            return false;
+        }
+        const auto & input_tokens = slot.task->tokens;
+        if (batch.size() + slot.task->n_tokens() - slot.prompt.n_tokens() > n_batch) {
+            return false;
+        }
+        // non-causal media (opt-in LLAMA_MIXED_EMBD_BIDIR=1): the KV mask lets the embeddings of a mixed ubatch see each other,
+        // so each such chunk must sit inside one ubatch with no other media
+        static const bool bidir = [] {
+            const char * env = getenv("LLAMA_MIXED_EMBD_BIDIR");
+            return env != nullptr && atoi(env) != 0;
+        }();
+        const int64_t n_ubatch = llama_n_ubatch(ctx_tgt);
+        const int64_t off      = (int64_t) batch.size() - (int64_t) slot.prompt.n_tokens();
+        bool has_non_causal = false;
+        std::vector<int64_t> ub_media; // first and last ubatch of each media chunk
+        for (size_t i = slot.prompt.n_tokens(); i < (size_t) slot.task->n_tokens(); ) {
+            if (input_tokens[i] != LLAMA_TOKEN_NULL) {
+                i++;
+                continue;
+            }
+            const auto & chunk = input_tokens.find_chunk(i);
+            const size_t n = mtmd_input_chunk_get_n_tokens(chunk.get());
+            ub_media.push_back((off + (int64_t) i)/n_ubatch);
+            ub_media.push_back((off + (int64_t) (i + n) - 1)/n_ubatch);
+            // a text token must precede the chunk in its ubatch, otherwise the ubatch may hold embeddings only and is not mixed
+            const bool starts_ubatch = (off + (int64_t) i) % n_ubatch == 0;
+            if (mtmd_decode_use_non_causal(slot.mctx, chunk.get())) {
+                has_non_causal = true;
+                if (starts_ubatch) {
+                    return false;
+                }
+            }
+            i += n;
+        }
+        if (has_non_causal) {
+            if (!bidir || mtmd_decode_use_mrope(slot.mctx)) {
+                return false;
+            }
+            for (size_t k = 0; k < ub_media.size(); k += 2) {
+                const bool shared = k >= 2 && ub_media[k] == ub_media[k - 1];
+                if (ub_media[k] != ub_media[k + 1] || shared) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     // add the rest of the prompt to the batch, the mtmd chunks are added as embeddings next to the text tokens

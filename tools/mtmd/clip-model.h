@@ -106,6 +106,11 @@ struct clip_hparams {
     std::vector<int32_t> feature_layers;
     int32_t attn_window_size = 0;
     int32_t n_wa_pattern = 0;
+    bool wa_batched = false; // qwen2.5vl: run window layers as a batch of padded windows instead of a dense mask
+    bool fuse_qkv_ffn = false; // qwen2.5vl: use concatenated qkv and gate/up weights
+    bool vision_fuse_qkv = false; // siglip/minicpmv build_vit: use concatenated q/k/v weights as qkv_w
+    bool kv_cast_early = false; // qwen2.5vl flash attn: cast K/V to f16 before the head permute (contiguous copy)
+    bool wa_split = false; // qwen2.5vl batched windows: full windows first as plain views, only partial windows are padded
     std::unordered_set<int32_t> wa_layer_indexes; // explicit layer indexes that use full attention (for irregular patterns like YoutuVL)
     std::vector<int32_t> wa_pattern_mode; // mimovl: per-layer window-attention mode
 
@@ -304,6 +309,12 @@ struct clip_layer {
     ggml_tensor * ff_gate_b = nullptr;
     ggml_tensor * ff_down_w = nullptr;
     ggml_tensor * ff_down_b = nullptr;
+
+    // concatenated copies of q/k/v and gate/up, built after loading (fuse_qkv_ffn)
+    ggml_tensor * fused_qkv_w     = nullptr;
+    ggml_tensor * fused_qkv_b     = nullptr;
+    ggml_tensor * fused_gate_up_w = nullptr;
+    ggml_tensor * fused_gate_up_b = nullptr;
 
     // MoE FFN (dots3note vision pyramid blocks)
     ggml_tensor * ff_gate_inp_w  = nullptr;

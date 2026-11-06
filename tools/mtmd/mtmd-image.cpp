@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <thread>
 #include <vector>
 
 void mtmd_image_preproc_out::append(const clip_hparams & hparams, const clip_image_u8 & img, bool normalized) {
@@ -383,6 +385,27 @@ private:
             return ksize;
         };
 
+        // opt-in (MTMD_IMAGE_THREADS=n): split the output rows of each pass over n threads, same result
+        static const int n_threads = [] {
+            const char * env = getenv("MTMD_IMAGE_THREADS");
+            return env ? std::max(1, std::min(64, atoi(env))) : 1;
+        }();
+        auto parallel_rows = [](int n_rows, const auto & fn) {
+            const int nt = std::min(n_threads, std::max(1, n_rows / 16));
+            if (nt <= 1) {
+                fn(0, n_rows);
+                return;
+            }
+            std::vector<std::thread> workers;
+            for (int t = 1; t < nt; t++) {
+                workers.emplace_back(fn, (int) ((int64_t) n_rows * t / nt), (int) ((int64_t) n_rows * (t + 1) / nt));
+            }
+            fn(0, n_rows / nt);
+            for (auto & w : workers) {
+                w.join();
+            }
+        };
+
         // Horizontal resampling pass
         // Resizes width from src to out_nx, preserving height
         auto resample_horizontal = [&](const uint8_t * src, int in_nx, int in_ny,
@@ -391,7 +414,8 @@ private:
             std::vector<uint8_t> out((size_t) out_nx * in_ny * 3);
 
             // Process each row independently
-            for (int yy = 0; yy < in_ny; yy++) {
+            parallel_rows(in_ny, [&](int y0, int y1) {
+            for (int yy = y0; yy < y1; yy++) {
                 const uint8_t * src_row = src + (size_t) yy * in_nx * 3;
                 uint8_t * dst_row = out.data() + (size_t) yy * out_nx * 3;
 
@@ -421,6 +445,7 @@ private:
                     dst_row[xx * 3 + 2] = clip8(ss2 >> PRECISION_BITS);
                 }
             }
+            });
 
             return out;
         };
@@ -433,10 +458,11 @@ private:
                                      int ksize, const std::vector<int> & bounds, const std::vector<int32_t> & weight) {
             const size_t row_elems = (size_t) in_nx * 3;
             std::vector<uint8_t> out(row_elems * out_ny);
-            std::vector<int32_t> acc(row_elems);
 
             // For each output row
-            for (int yy = 0; yy < out_ny; yy++) {
+            parallel_rows(out_ny, [&](int y0, int y1) {
+            std::vector<int32_t> acc(row_elems);
+            for (int yy = y0; yy < y1; yy++) {
                 const int ymin = bounds[yy * 2 + 0];  // First input row index
                 const int ycnt = bounds[yy * 2 + 1];  // Number of input rows
                 const int32_t * k = &weight[yy * ksize];
@@ -459,6 +485,7 @@ private:
                     dst_row[i] = clip8(acc[i] >> PRECISION_BITS);
                 }
             }
+            });
 
             return out;
         };
