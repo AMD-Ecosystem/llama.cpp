@@ -34,6 +34,7 @@
 #include "ggml-cuda/getrows.cuh"
 #include "ggml-cuda/im2col.cuh"
 #include "ggml-cuda/mmdq.cuh"
+#include "ggml-cuda/fattn-vision.cuh"
 #include "ggml-cuda/mmf.cuh"
 #include "ggml-cuda/mmq.cuh"
 #include "ggml-cuda/mmvf.cuh"
@@ -4998,8 +4999,9 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         }
     }
 
-    // opt-in (GGML_CUDA_MMDQ_FUSE_ADD): mmdq matmul + bias add and/or residual add
-    if (mmdq_fuse_add && node->op == GGML_OP_MUL_MAT &&
+    // opt-in (GGML_CUDA_MMDQ_FUSE_ADD): mmdq matmul + bias add and/or residual add; GGML_CUDA_MMDQ_FUSE_BIAS: bias add only
+    static const bool mmdq_fuse_bias = ggml_cuda_env_flag("GGML_CUDA_MMDQ_FUSE_BIAS");
+    if ((mmdq_fuse_add || mmdq_fuse_bias) && node->op == GGML_OP_MUL_MAT &&
             ggml_cuda_should_use_mmdq(node->src[0], node->src[1], node, ggml_cuda_info().devices[cuda_ctx->device].cc)) {
         for (const int n_ops : { 3, 2 }) {
             if (n_ops == 3 ? !ggml_can_fuse(cgraph, i, { GGML_OP_MUL_MAT, GGML_OP_ADD, GGML_OP_ADD }) :
@@ -5016,7 +5018,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
                 const ggml_tensor * r = b ? nullptr : ggml_cuda_mmdq_add_res(add, prev);
                 if (b && !bias) {
                     bias = (const float *) b->data;
-                } else if (r && !res) {
+                } else if (r && !res && mmdq_fuse_add) {
                     res = r;
                 } else {
                     ok = false;
@@ -5026,6 +5028,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
             if (!ok) {
                 continue;
             }
+            ggml_cuda_mmdq_src1_share(*cuda_ctx, cgraph, i);
             ggml_cuda_mul_mat_dq(*cuda_ctx, node->src[0], node->src[1], cgraph->nodes[i + n_ops - 1], bias, res);
             return n_ops - 1;
         }
@@ -5304,6 +5307,8 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         return 2;
     }
 
+    ggml_cuda_mmdq_src1_share(*cuda_ctx, cgraph, i);
+
     return 0;
 }
 
@@ -5556,6 +5561,10 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                }
             }
         }
+
+        // the shared src1 is allocated after the mask classes if both are held
+        ggml_cuda_mmdq_src1_release(*cuda_ctx);
+        ggml_cuda_flash_attn_ext_prefill_release(*cuda_ctx);
 
 #ifdef USE_CUDA_GRAPH
         if (use_cuda_graph && cuda_graph_update_required) { // End CUDA graph capture

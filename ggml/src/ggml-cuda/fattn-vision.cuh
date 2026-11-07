@@ -4,3 +4,11 @@
 bool ggml_cuda_flash_attn_ext_vision_supported(int cc, const ggml_tensor * dst);
 
 void ggml_cuda_flash_attn_ext_vision(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
+
+// opt-in (GGML_CUDA_FATTN_PREFILL=1): same kernel with an f16 mask and GQA for LLM prefill (D 64/128)
+bool ggml_cuda_flash_attn_ext_prefill_supported(int cc, const ggml_tensor * dst);
+
+void ggml_cuda_flash_attn_ext_prefill(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
+
+// drop the cached mask tile classes (end of the graph)
+void ggml_cuda_flash_attn_ext_prefill_release(ggml_backend_cuda_context & ctx);

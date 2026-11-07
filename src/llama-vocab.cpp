@@ -110,6 +110,10 @@ struct llm_tokenizer_spm_session {
     llm_tokenizer_spm_session(const llama_vocab & vocab) : vocab(vocab) {}
 
     void tokenize(const std::string & text, std::vector<llama_token> & output) {
+        if (fast_rev_merge) {
+            symbols.reserve(text.size());
+            rev_merge_fast.reserve(text.size());
+        }
         // split string into utf8 chars
         int index = 0;
         size_t offs = 0;
@@ -184,9 +188,16 @@ private:
                 continue;
             }
 
-            const auto p = rev_merge.find(text);
+            const std::pair<int, int> * merge = nullptr;
+            if (fast_rev_merge) {
+                const auto it = rev_merge_fast.find(text);
+                merge = it == rev_merge_fast.end() ? nullptr : &it->second;
+            } else {
+                const auto it = rev_merge.find(text);
+                merge = it == rev_merge.end() ? nullptr : &it->second;
+            }
 
-            if (p == rev_merge.end()) {
+            if (merge == nullptr) {
                 // output any symbols that did not form tokens as bytes.
                 output.reserve(output.size() + cur.n);
                 for (int j = 0; j < (int)cur.n; ++j) {
@@ -196,8 +207,8 @@ private:
                 continue;
             }
 
-            todo.push_back(&symbols[p->second.second]);
-            todo.push_back(&symbols[p->second.first]);
+            todo.push_back(&symbols[merge->second]);
+            todo.push_back(&symbols[merge->first]);
         }
     }
 
@@ -227,8 +238,19 @@ private:
         work_queue.push(bigram);
 
         // Do we need to support is_unused?
-        rev_merge[text] = std::make_pair(left, right);
+        if (fast_rev_merge) {
+            rev_merge_fast[text] = std::make_pair(left, right);
+        } else {
+            rev_merge[text] = std::make_pair(left, right);
+        }
     }
+
+    // opt-in (LLAMA_SPM_FAST_REV_MERGE): hash map instead of an ordered map for the merge history, same lookups and result
+    static bool fast_rev_merge_enabled() {
+        static const bool enabled = getenv("LLAMA_SPM_FAST_REV_MERGE") != nullptr && atoi(getenv("LLAMA_SPM_FAST_REV_MERGE")) != 0;
+        return enabled;
+    }
+    const bool fast_rev_merge = fast_rev_merge_enabled();
 
     const llama_vocab & vocab;
     // currently unused
@@ -237,6 +259,7 @@ private:
     std::vector<llm_symbol> symbols;
     llm_bigram_spm::queue work_queue;
     std::map<std::string, std::pair<int, int>> rev_merge;
+    std::unordered_map<std::string, std::pair<int, int>> rev_merge_fast;
 };
 
 //

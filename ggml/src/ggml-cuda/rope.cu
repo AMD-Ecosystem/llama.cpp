@@ -391,8 +391,14 @@ static void rope_norm_cuda(const T *            x,
                            const bool           inplace,
                            cudaStream_t         stream) {
     GGML_ASSERT(ne00 % 2 == 0);
-    const dim3 block_dims(1, CUDA_ROPE_BLOCK_SIZE, 1);
-    const int  n_blocks_x = (ne00 + 2 * CUDA_ROPE_BLOCK_SIZE - 1) / (2 * CUDA_ROPE_BLOCK_SIZE);
+    // opt-in (GGML_CUDA_ROPE_BLOCK): smaller blocks for short rows (head dim 64/128 leaves most of a 256-thread block idle)
+    static const int block_size = []() {
+        const char * env = getenv("GGML_CUDA_ROPE_BLOCK");
+        const int bs = env ? atoi(env) : 0;
+        return bs >= 32 && bs <= CUDA_ROPE_BLOCK_SIZE ? bs : CUDA_ROPE_BLOCK_SIZE;
+    }();
+    const dim3 block_dims(1, block_size, 1);
+    const int  n_blocks_x = (ne00 + 2 * block_size - 1) / (2 * block_size);
     const dim3 block_nums(nr, n_blocks_x, 1);
 
     const float theta_scale = powf(freq_base, -2.0f / n_dims);
@@ -435,8 +441,14 @@ static void rope_neox_cuda(const T *            x,
                            const bool           inplace,
                            cudaStream_t         stream) {
     GGML_ASSERT(ne00 % 2 == 0);
-    const dim3 block_dims(1, CUDA_ROPE_BLOCK_SIZE, 1);
-    const int  n_blocks_x = (ne00 + 2 * CUDA_ROPE_BLOCK_SIZE - 1) / (2 * CUDA_ROPE_BLOCK_SIZE);
+    // opt-in (GGML_CUDA_ROPE_BLOCK): smaller blocks for short rows (head dim 64/128 leaves most of a 256-thread block idle)
+    static const int block_size = []() {
+        const char * env = getenv("GGML_CUDA_ROPE_BLOCK");
+        const int bs = env ? atoi(env) : 0;
+        return bs >= 32 && bs <= CUDA_ROPE_BLOCK_SIZE ? bs : CUDA_ROPE_BLOCK_SIZE;
+    }();
+    const dim3 block_dims(1, block_size, 1);
+    const int  n_blocks_x = (ne00 + 2 * block_size - 1) / (2 * block_size);
     const dim3 block_nums(nr, n_blocks_x, 1);
 
     const float theta_scale = powf(freq_base, -2.0f / n_dims);
@@ -856,7 +868,28 @@ static void rms_norm_mul_rope_cuda(
     const uint3 mul_nchannels_packed = init_fastdiv_values(mul_nchannels);
     const uint3 mul_nsamples_packed  = init_fastdiv_values(mul_nsamples);
 
-    if (ncols < 1024) {
+    // opt-in (GGML_CUDA_NORM_ROPE_WARP): one wave per row for head-sized rows (a 256-thread block leaves 3/4 of the threads idle at 128)
+    static const bool norm_rope_warp = []() {
+        const char * env = getenv("GGML_CUDA_NORM_ROPE_WARP");
+        return env != nullptr && atoi(env) != 0;
+    }();
+    if (norm_rope_warp && ncols <= 256) {
+        const dim3 block_dims(WARP_SIZE, 1, 1);
+        const ggml_cuda_kernel_launch_params launch_params = {blocks_num, block_dims, 32*sizeof(float), stream};
+        if (freq_factors == nullptr) {
+            ggml_cuda_kernel_launch(rms_norm_mul_rope_f32<WARP_SIZE, false, D>, launch_params,
+                x, dst, ncols, nchannels, nsamples, s01, s02, s03, s1, s2, s3, eps, mul, mul_s01, mul_s02, mul_s03,
+                mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed,
+                n_dims, pos, freq_scale, ext_factor, attn_factor, corr_dims, theta_scale,
+                freq_factors, row_indices, set_rows_stride, is_neox);
+        } else {
+            ggml_cuda_kernel_launch(rms_norm_mul_rope_f32<WARP_SIZE, true, D>, launch_params,
+                x, dst, ncols, nchannels, nsamples, s01, s02, s03, s1, s2, s3, eps, mul, mul_s01, mul_s02, mul_s03,
+                mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed,
+                n_dims, pos, freq_scale, ext_factor, attn_factor, corr_dims, theta_scale,
+                freq_factors, row_indices, set_rows_stride, is_neox);
+        }
+    } else if (ncols < 1024) {
         const dim3 block_dims(256, 1, 1);
         const ggml_cuda_kernel_launch_params launch_params = {blocks_num, block_dims, 32*sizeof(float), stream};
         if (freq_factors == nullptr) {

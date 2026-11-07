@@ -910,6 +910,14 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
         ggml_cuda_flash_attn_ext_vision(ctx, dst);
         return;
     }
+    static const bool fattn_prefill = []() {
+        const char * env = getenv("GGML_CUDA_FATTN_PREFILL");
+        return env != nullptr && atoi(env) != 0;
+    }();
+    if (fattn_prefill && ggml_cuda_flash_attn_ext_prefill_supported(ggml_cuda_info().devices[ctx.device].cc, dst)) {
+        ggml_cuda_flash_attn_ext_prefill(ctx, dst);
+        return;
+    }
     switch (ggml_cuda_get_best_fattn_kernel(ggml_cuda_get_device(), dst)) {
         case BEST_FATTN_KERNEL_NONE:
             GGML_ABORT("fatal error");

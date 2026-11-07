@@ -1579,6 +1579,20 @@ struct ggml_backend_cuda_context {
 
     ggml_cuda_stream_context concurrent_stream_context;
 
+    // opt-in (GGML_CUDA_MMDQ_SHARE_SRC1): f16 copy of one src1 shared by the next mmdq matmuls that read it (attention Q/K/V)
+    struct {
+        const ggml_tensor * src1 = nullptr;
+        int remaining = 0;
+        std::unique_ptr<ggml_cuda_pool_alloc<half>> buf;
+    } mmdq_src1;
+
+    // GGML_CUDA_FATTN_PREFILL: mask tile classes, reused by the following FLASH_ATTN_EXT nodes with the same mask (until the end of the graph)
+    struct {
+        const void * mask = nullptr;
+        int64_t key[4] = {};
+        std::unique_ptr<ggml_cuda_pool_alloc<uint8_t>> buf;
+    } fattn_cls;
+
     // dedicated buffer for the branches of overlapped concurrent regions (attention QKV, MoE shared
     // expert), reused across layers so their scratch never aliases tensors read across the region
     ggml_backend_buffer_t concurrent_scratch      = nullptr;

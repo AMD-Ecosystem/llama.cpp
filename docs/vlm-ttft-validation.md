@@ -126,3 +126,8 @@ recommended Omni setting (without it) is expected to be equal or faster.
 - LLM: KL divergence vs an fp16 dequant + hipBLAS reference on wikitext should not increase.
 - Greedy text over 32 tokens should match gates OFF, apart from near-tie tokens that a `-ub`
   change alone also flips.
+
+## Long-prompt text LLMs
+
+The long-prompt text LLM prototypes (causal prefill attention, more GEMM formats, server flags) and
+their validation steps are in `docs/llm-long-prompt-ttft-validation.md`.

@@ -63,6 +63,13 @@ template <> struct mmdq_raw<GGML_TYPE_Q5_1> {
     uint4    qs; // one block of 32 values per thread
 };
 
+template <> struct mmdq_raw<GGML_TYPE_Q5_0> {
+    static constexpr int threads_per_row = 2;
+    half     d;
+    uint32_t qh;
+    uint4    qs; // one block of 32 values per thread
+};
+
 template <> struct mmdq_raw<GGML_TYPE_Q8_0> {
     static constexpr int threads_per_row = 2;
     int  qs[8]; // one block of 32 values per thread
@@ -106,6 +113,14 @@ static __device__ __forceinline__ void mmdq_load(mmdq_raw<GGML_TYPE_Q5_1> & raw,
     const uint2 q0 = qs[0];
     const uint2 q1 = qs[1];
     raw.qs = make_uint4(q0.x, q0.y, q1.x, q1.y);
+}
+
+// Q5_0 blocks are 22 bytes, read with 2 byte loads
+static __device__ __forceinline__ void mmdq_load(mmdq_raw<GGML_TYPE_Q5_0> & raw, const char * row, const int ib, const int kq, const int h) {
+    const block_q5_0 * b = (const block_q5_0 *) row + ib*(QK_K/QK5_0) + kq/QK5_0 + h;
+    raw.d  = b->d;
+    raw.qh = get_int_b2(b->qh, 0);
+    raw.qs = make_uint4(get_int_b2(b->qs, 0), get_int_b2(b->qs, 1), get_int_b2(b->qs, 2), get_int_b2(b->qs, 3));
 }
 
 static __device__ __forceinline__ void mmdq_load(mmdq_raw<GGML_TYPE_Q8_0> & raw, const char * row, const int ib, const int kq, const int h) {
@@ -209,6 +224,27 @@ static __device__ __forceinline__ void mmdq_dequant(const mmdq_raw<GGML_TYPE_Q5_
     }
 }
 
+// Q5_0: as Q5_1 with value = (q - 16)*d
+static __device__ __forceinline__ void mmdq_dequant(const mmdq_raw<GGML_TYPE_Q5_0> & raw, const int kq, const int h, uint32_t * v) {
+    GGML_UNUSED_VARS(kq, h);
+    const half2 d   = __half2half2(raw.d);
+    const half2 off = __float2half2_rn(1040.0f); // 1024 + 16
+    const uint32_t q[4] = {raw.qs.x, raw.qs.y, raw.qs.z, raw.qs.w};
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        const uint32_t hl = (raw.qh >> (4*i))      & 0xFu;
+        const uint32_t hh = (raw.qh >> (16 + 4*i)) & 0xFu;
+        const uint32_t bl = ((hl & 1u) << 4) | ((hl & 2u) << 11) | ((hl & 4u) << 18) | ((hl & 8u) << 25);
+        const uint32_t bh = ((hh & 1u) << 4) | ((hh & 2u) << 11) | ((hh & 4u) << 18) | ((hh & 8u) << 25);
+        const uint32_t ql = (q[i] & 0x0F0F0F0Fu) | bl;
+        const uint32_t qu = ((q[i] >> 4) & 0x0F0F0F0Fu) | bh;
+        v[2*i + 0] = mmdq_h2_as_u32(__hmul2(__hsub2(mmdq_bytes_lo(ql), off), d));
+        v[2*i + 1] = mmdq_h2_as_u32(__hmul2(__hsub2(mmdq_bytes_hi(ql), off), d));
+        v[2*i + 8] = mmdq_h2_as_u32(__hmul2(__hsub2(mmdq_bytes_lo(qu), off), d));
+        v[2*i + 9] = mmdq_h2_as_u32(__hmul2(__hsub2(mmdq_bytes_hi(qu), off), d));
+    }
+}
+
 // Q8_0: v[0..15] are the values 32h..32h+31 of the 64-step; the int8 values are biased by 128 to use the 0x6400 trick
 static __device__ __forceinline__ void mmdq_dequant(const mmdq_raw<GGML_TYPE_Q8_0> & raw, const int kq, const int h, uint32_t * v) {
     GGML_UNUSED_VARS(kq, h);
@@ -250,6 +286,12 @@ static __device__ __forceinline__ void mmdq_store(const mmdq_raw<GGML_TYPE_Q6_K>
     mmdq_store_v16(v, srow + 32*h, srow + 32*h + 16);
 }
 
+static __device__ __forceinline__ void mmdq_store(const mmdq_raw<GGML_TYPE_Q5_0> & raw, half * srow, const int kq, const int h) {
+    uint32_t v[16];
+    mmdq_dequant(raw, kq, h, v);
+    mmdq_store_v16(v, srow + 32*h, srow + 32*h + 16);
+}
+
 static __device__ __forceinline__ void mmdq_store(const mmdq_raw<GGML_TYPE_Q8_0> & raw, half * srow, const int kq, const int h) {
     uint32_t v[16];
     mmdq_dequant(raw, kq, h, v);
@@ -275,6 +317,8 @@ struct mmdq_epi_args {
     const float * bias;
     const float * res;
     int64_t       stride_col_res;
+    int           gelu;    // dense glu: gelu (tanh) instead of silu on the gate
+    int           swizzle; // dense: token tiles per block group, 0 = grid order
 };
 
 // dst[t][o] = sum_k y[t][k] * x[o][k]; t: token (src1 column), o: output row (src0 row)
@@ -307,9 +351,20 @@ static __global__ void mul_mat_dq(
     const int wave = tid / 32;
     const int wt   = wave / NWO;
     const int wo   = wave % NWO;
-    const int o0   = blockIdx.y*(glu ? BO/2 : BO);
+    // swizzle > 0 (dense): blocks run in groups of swizzle token tiles x all row tiles, so the activations of a group stay in cache
+    int bx = blockIdx.x;
+    int by = blockIdx.y;
+    if (!has_ids && epi.swizzle > 0) {
+        const int lin   = blockIdx.y*gridDim.x + blockIdx.x;
+        const int per_g = epi.swizzle*gridDim.y;
+        const int x0    = (lin / per_g)*epi.swizzle;
+        const int gx    = min(epi.swizzle, (int) gridDim.x - x0);
+        bx = x0 + (lin % per_g) % gx;
+        by = (lin % per_g) / gx;
+    }
+    const int o0   = by*(glu ? BO/2 : BO);
 
-    int t0    = blockIdx.x*BT;
+    int t0    = bx*BT;
     int t_end = ncols_y;
     if constexpr (has_ids) {
         const int b = blockIdx.x;
@@ -439,7 +494,8 @@ static __global__ void mul_mat_dq(
                 for (int l = 0; l < 8; ++l) {
                     const int t = t0 + wt*TT*16 + i*16 + 2*l + lane/16;
                     if (t < t_end) {
-                        epi.dst_h[(int64_t) t*stride_col_dst + o] = __float2half(ggml_cuda_op_silu_single(acc[i][j][l]) * acc[i][j + 1][l]);
+                        const float g = epi.gelu ? ggml_cuda_op_gelu_single(acc[i][j][l]) : ggml_cuda_op_silu_single(acc[i][j][l]);
+                        epi.dst_h[(int64_t) t*stride_col_dst + o] = __float2half(g * acc[i][j + 1][l]);
                     }
                 }
             }
@@ -744,10 +800,14 @@ static void mul_mat_dq_moe_launch(
 template <ggml_type type, bool has_ids, bool glu, int BT, int BO, int NWT, int NWO>
 static void mul_mat_dq_launch(
         const char * x, const half * y, float * dst, const int ncols_x, const int nrows_x, const int ncols_y,
-        const int64_t stride_row_x, const int64_t stride_col_dst, const mmdq_ids_args & ids, const mmdq_epi_args & epi, cudaStream_t stream) {
+        const int64_t stride_row_x, const int64_t stride_col_dst, const mmdq_ids_args & ids, const mmdq_epi_args & epi_in, cudaStream_t stream) {
     if constexpr (glu && (has_ids || (BO/(16*NWO)) % 2 != 0)) {
         GGML_ABORT("mmdq config not supported with glu");
     } else {
+        // opt-in (GGML_CUDA_MMDQ_SWIZZLE=n): group n token tiles, used when the activations (ncols_y x ncols_x f16) do not fit in 8 MiB
+        static const int swizzle = getenv("GGML_CUDA_MMDQ_SWIZZLE") ? atoi(getenv("GGML_CUDA_MMDQ_SWIZZLE")) : 0;
+        mmdq_epi_args epi = epi_in;
+        epi.swizzle = !has_ids && swizzle > 0 && int64_t(ncols_y)*ncols_x*2 > (8 << 20) ? swizzle : 0;
         int nblocks_t = (ncols_y + BT - 1)/BT;
         if constexpr (has_ids) {
             // ncols_y is the number of compact rows, each expert adds at most one partial block
@@ -828,6 +888,12 @@ static void mul_mat_dq_switch_type(
         case GGML_TYPE_Q6_K:
             mul_mat_dq_switch<GGML_TYPE_Q6_K, has_ids, glu>(x, y, dst, ncols_x, nrows_x, ncols_y, ncols_y_cfg, stride_row_x, stride_col_dst, ids, epi, stream);
             break;
+        case GGML_TYPE_Q5_0:
+            if constexpr (!has_ids) {
+                mul_mat_dq_switch<GGML_TYPE_Q5_0, false, glu>(x, y, dst, ncols_x, nrows_x, ncols_y, ncols_y_cfg, stride_row_x, stride_col_dst, ids, epi, stream);
+                break;
+            }
+            GGML_ABORT("unsupported type for mmdq: %s", ggml_type_name(type));
         case GGML_TYPE_Q5_K:
             if constexpr (!glu) {
                 mul_mat_dq_switch<GGML_TYPE_Q5_K, has_ids, false>(x, y, dst, ncols_x, nrows_x, ncols_y, ncols_y_cfg, stride_row_x, stride_col_dst, ids, epi, stream);
@@ -857,7 +923,7 @@ static bool mmdq_supported_shape(const ggml_tensor * src0, const ggml_tensor * s
         return false;
     }
     // Q4_K/Q5_K rows are read with 16 byte loads, Q6_K/Q8_0 rows with 2 byte loads (Q5_1 is checked by the caller)
-    if (src0->type != GGML_TYPE_Q6_K && src0->type != GGML_TYPE_Q8_0 && src0->type != GGML_TYPE_Q5_1 && ((uintptr_t) src0->data % 16 != 0 || src0->nb[1] % 16 != 0 || src0->nb[2] % 16 != 0)) {
+    if (src0->type != GGML_TYPE_Q6_K && src0->type != GGML_TYPE_Q8_0 && src0->type != GGML_TYPE_Q5_1 && src0->type != GGML_TYPE_Q5_0 && ((uintptr_t) src0->data % 16 != 0 || src0->nb[1] % 16 != 0 || src0->nb[2] % 16 != 0)) {
         return false;
     }
     return src0->ne[1] <= INT_MAX && src1->ne[1]*src1->ne[2] <= INT_MAX;
@@ -879,12 +945,15 @@ bool ggml_cuda_should_use_mmdq(const ggml_tensor * src0, const ggml_tensor * src
     if (!mmdq_supported(src0, src1, dst, cc)) {
         return false;
     }
+    static const bool q5_K           = mmdq_env_flag("GGML_CUDA_MMDQ_Q5_K");
+    static const bool q5_0           = mmdq_env_flag("GGML_CUDA_MMDQ_Q5_0");
     const bool is_q8_0 = src0->type == GGML_TYPE_Q8_0;
-    if (src0->type != GGML_TYPE_Q4_K && (src0->type != GGML_TYPE_Q6_K || no_q6k) && (!is_q8_0 || !q8_0)) {
+    const bool is_q5_0 = src0->type == GGML_TYPE_Q5_0;
+    if (src0->type != GGML_TYPE_Q4_K && (src0->type != GGML_TYPE_Q6_K || no_q6k) && (!is_q8_0 || !q8_0) && (src0->type != GGML_TYPE_Q5_K || !q5_K) && (!is_q5_0 || !q5_0)) {
         return false;
     }
-    // Q8_0 is read in steps of 64 values
-    if (is_q8_0 && src0->ne[0] % 64 != 0) {
+    // Q8_0/Q5_0 are read in steps of 64 values
+    if ((is_q8_0 || is_q5_0) && src0->ne[0] % 64 != 0) {
         return false;
     }
     const int min_batch = is_q8_0 ? min_batch_q8_0 : src0->type == GGML_TYPE_Q4_K ? min_batch_q4_K : min_batch_q6_K;
@@ -976,17 +1045,69 @@ void ggml_cuda_mul_mat_dq(ggml_backend_cuda_context & ctx, const ggml_tensor * s
 
     cudaStream_t stream = ctx.stream();
 
-    ggml_cuda_pool_alloc<half> src1_f16(ctx.pool(), ne10*ne11);
-    ggml_get_to_fp16_cuda(GGML_TYPE_F32)(src1->data, src1_f16.get(), ne10*ne11, stream);
+    auto & shared = ctx.mmdq_src1;
+    const bool use_shared = shared.src1 == src1 && ctx.curr_stream_no == 0;
+    ggml_cuda_pool_alloc<half> src1_f16(ctx.pool());
+    const half * y;
+    if (use_shared) {
+        if (!shared.buf) {
+            shared.buf = std::make_unique<ggml_cuda_pool_alloc<half>>(ctx.pool(), ne10*ne11);
+            ggml_get_to_fp16_cuda(GGML_TYPE_F32)(src1->data, shared.buf->get(), ne10*ne11, stream);
+        }
+        y = shared.buf->get();
+    } else {
+        src1_f16.alloc(ne10*ne11);
+        ggml_get_to_fp16_cuda(GGML_TYPE_F32)(src1->data, src1_f16.get(), ne10*ne11, stream);
+        y = src1_f16.get();
+    }
 
     const mmdq_epi_args epi = {nullptr, nullptr, bias, res ? (const float *) res->data : nullptr, res ? (int64_t) (res->nb[1]/sizeof(float)) : 0};
-    mul_mat_dq_switch_type<false>(src0->type, (const char *) src0->data, src1_f16.get(), (float *) dst->data, ne00, ne01, ne11, ne11,
+    mul_mat_dq_switch_type<false>(src0->type, (const char *) src0->data, y, (float *) dst->data, ne00, ne01, ne11, ne11,
         nb01, nb1/sizeof(float), mmdq_ids_args{}, stream, epi);
+
+    if (use_shared && --shared.remaining <= 0) {
+        ggml_cuda_mmdq_src1_release(ctx);
+    }
+}
+
+void ggml_cuda_mmdq_src1_release(ggml_backend_cuda_context & ctx) {
+    ctx.mmdq_src1.buf.reset();
+    ctx.mmdq_src1.src1      = nullptr;
+    ctx.mmdq_src1.remaining = 0;
+}
+
+void ggml_cuda_mmdq_src1_share(ggml_backend_cuda_context & ctx, const ggml_cgraph * cgraph, const int i) {
+    static const bool enabled = mmdq_env_flag("GGML_CUDA_MMDQ_SHARE_SRC1");
+    const ggml_tensor * node = cgraph->nodes[i];
+    if (!enabled || ctx.mmdq_src1.src1 != nullptr || ctx.curr_stream_no != 0 || node->op != GGML_OP_MUL_MAT) {
+        return;
+    }
+    const int cc = ggml_cuda_info().devices[ctx.device].cc;
+    if (!ggml_cuda_should_use_mmdq(node->src[0], node->src[1], node, cc)) {
+        return;
+    }
+    // users close by in the graph (attention Q/K/V with their norm/rope nodes in between)
+    int n = 0;
+    for (int j = i + 1; j < cgraph->n_nodes && j <= i + 32; ++j) {
+        const ggml_tensor * t = cgraph->nodes[j];
+        if (t->op == GGML_OP_MUL_MAT && t->src[1] == node->src[1] && ggml_cuda_should_use_mmdq(t->src[0], t->src[1], t, cc)) {
+            n++;
+        }
+    }
+    if (n > 0) {
+        ctx.mmdq_src1.src1      = node->src[1];
+        ctx.mmdq_src1.remaining = n + 1;
+    }
 }
 
 bool ggml_cuda_should_use_mmdq_glu(const ggml_tensor * glu, const ggml_tensor * down, int cc) {
     static const bool enabled = mmdq_env_flag("GGML_CUDA_MMDQ_GLU");
-    if (!enabled || glu->op != GGML_OP_GLU || ggml_get_glu_op(glu) != GGML_GLU_OP_SWIGLU || ggml_get_op_params_i32(glu, 1) != 0) {
+    static const bool geglu = mmdq_env_flag("GGML_CUDA_MMDQ_GEGLU");
+    if (!enabled || glu->op != GGML_OP_GLU || ggml_get_op_params_i32(glu, 1) != 0) {
+        return false;
+    }
+    const bool is_geglu = ggml_get_glu_op(glu) == GGML_GLU_OP_GEGLU;
+    if (ggml_get_glu_op(glu) != GGML_GLU_OP_SWIGLU && (!is_geglu || !geglu || glu->src[0]->op != GGML_OP_MUL_MAT)) {
         return false;
     }
     const ggml_tensor * gate = glu->src[0];
@@ -1005,7 +1126,7 @@ bool ggml_cuda_should_use_mmdq_glu(const ggml_tensor * glu, const ggml_tensor * 
         return false;
     }
     if (gate->op == GGML_OP_MUL_MAT) {
-        return (w_gate->type == GGML_TYPE_Q4_K || w_gate->type == GGML_TYPE_Q6_K) &&
+        return (w_gate->type == GGML_TYPE_Q4_K || w_gate->type == GGML_TYPE_Q6_K || w_gate->type == GGML_TYPE_Q5_0) &&
             ggml_cuda_should_use_mmdq(w_gate, gate->src[1], gate, cc) && ggml_cuda_should_use_mmdq(w_up, up->src[1], up, cc) &&
             ggml_cuda_should_use_mmdq(down->src[0], glu, down, cc);
     }
@@ -1076,8 +1197,12 @@ void ggml_cuda_mul_mat_dq_glu(ggml_backend_cuda_context & ctx, const ggml_tensor
     ggml_get_to_fp16_cuda(GGML_TYPE_F32)(x->data, x_f16.get(), ne10*ne11, stream);
 
     ggml_cuda_pool_alloc<half> h_f16(ctx.pool(), n_ff*ne11);
+    mmdq_epi_args epi_glu = {};
+    epi_glu.x_up  = (const char *) w_up->data;
+    epi_glu.dst_h = h_f16.get();
+    epi_glu.gelu  = ggml_get_glu_op(glu) == GGML_GLU_OP_GEGLU;
     mul_mat_dq_switch_type<false, true>(w_gate->type, (const char *) w_gate->data, x_f16.get(), nullptr, ne10, n_ff, ne11, ne11,
-        w_gate->nb[1], n_ff, mmdq_ids_args{}, stream, mmdq_epi_args{(const char *) w_up->data, h_f16.get()});
+        w_gate->nb[1], n_ff, mmdq_ids_args{}, stream, epi_glu);
 
     const mmdq_epi_args epi = {nullptr, nullptr, nullptr, res ? (const float *) res->data : nullptr, res ? (int64_t) (res->nb[1]/sizeof(float)) : 0};
     mul_mat_dq_switch_type<false>(w_down->type, (const char *) w_down->data, h_f16.get(), (float *) dst->data, n_ff, w_down->ne[1], ne11, ne11,
