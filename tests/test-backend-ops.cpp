@@ -8766,6 +8766,37 @@ struct test_flash_attn_ext : public test_case {
     }
 };
 
+// Uniform attention exposes overflow in the unnormalized P*V running sum.
+struct test_flash_attn_ext_hrx_uniform_value : public test_flash_attn_ext {
+    const float uniform_value;
+
+    test_flash_attn_ext_hrx_uniform_value(int64_t kv, int64_t nb, int64_t kv_heads, int64_t query_per_kv, float value = 1.0f)
+        : test_flash_attn_ext(256, 256, kv_heads, {query_per_kv, 1}, kv, nb, true, false, 0, 0,
+              GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}, false), uniform_value(value) {}
+
+    std::string vars() override {
+        return test_flash_attn_ext::vars() + ",hrx_uniform_value=" + std::to_string(uniform_value);
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            const float tensor_value = strcmp(t->name, "v") == 0 ? uniform_value : 0.0f;
+            init_tensor_uniform(t, tensor_value, tensor_value);
+        }
+    }
+};
+
+// Compare nonuniform scores and values against the corrected FP32 reference.
+struct test_flash_attn_ext_hrx_long_random : public test_flash_attn_ext {
+    test_flash_attn_ext_hrx_long_random(int64_t kv, int64_t nb)
+        : test_flash_attn_ext(256, 256, 2, {4, 1}, kv, nb, true, false, 0, 0,
+              GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}, false) {}
+
+    std::string vars() override {
+        return test_flash_attn_ext::vars() + ",hrx_long_random=1";
+    }
+};
+
 // large Q values, so the online softmax has to rescale the partial results
 struct test_flash_attn_ext_large_logits : public test_flash_attn_ext {
     static constexpr int q_range = 20;
@@ -12585,6 +12616,30 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // Both the 0.8B model geometry and the original 24/4 witness.
+    for (int64_t kv : {2048, 32768, 65536, 131072, 262144}) {
+        for (int64_t nb : {1, 16}) {
+            test_cases.emplace_back(new test_flash_attn_ext_hrx_uniform_value(kv, nb, 2, 4));
+            test_cases.emplace_back(new test_flash_attn_ext_hrx_uniform_value(kv, nb, 4, 6));
+        }
+    }
+
+    for (int64_t kv : {65536, 262144}) {
+        for (int64_t nb : {1, 16}) {
+            test_cases.emplace_back(new test_flash_attn_ext_hrx_long_random(kv, nb));
+        }
+    }
+
+    test_cases.emplace_back(new test_flash_attn_ext_hrx_long_random(32768, 512));
+
+    // One full prefill tile and a partial query tile exercise output ownership.
+    test_cases.emplace_back(new test_flash_attn_ext_hrx_uniform_value(32768, 512, 2, 4));
+    test_cases.emplace_back(new test_flash_attn_ext_hrx_uniform_value(65536, 17, 2, 4));
+
+    // A single 64-row P*V tile also exceeds F16 when V is large.
+    test_cases.emplace_back(new test_flash_attn_ext_hrx_uniform_value(2048, 16, 2, 4, 1024.0f));
+    test_cases.emplace_back(new test_flash_attn_ext_hrx_uniform_value(65536, 1, 2, 4, 1024.0f));
+
     return test_cases;
 }
 #ifdef _MSC_VER
@@ -13133,6 +13188,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         test_cases.emplace_back(new test_l2_norm_batch(GGML_TYPE_F32, { n, 16, 16, 1 }, 4, 1e-12f, true));
     }
 
+
+    for (int64_t nb : {1, 16}) {
+        test_cases.emplace_back(new test_flash_attn_ext_hrx_uniform_value(32768, nb, 2, 4));
+    }
 
     return test_cases;
 }

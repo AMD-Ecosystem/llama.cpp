@@ -8,15 +8,15 @@
 //   2. Each wave computes one 16x16 QK score slice.
 //   3. Scores cross LDS so each wave can normalize four complete query rows.
 //   4. F16 probabilities cross LDS for four P*V WMMA steps.
-//   5. Each active lane retains one four-channel F16 packet for each of its
+//   5. Each active lane retains one four-channel F32 packet for each of its
 //      four query rows across subsequent 64-row KV blocks.
 //
 // K and V remain in the row-major llama.cpp cache layout
 // [KV token][KV head][head_size]. K uses the QK head size; V uses the output
 // value head size. Their aligned F16 fragments load directly from global
 // memory; there is no expanded or repacked persistent allocation.
-// QK and the online-softmax statistics remain F32, while the P*V accumulation
-// and carried output match the Vulkan oracle's F16 policy.
+// QK, online-softmax statistics, and the carried P*V output use F32 so
+// long uniform contexts cannot overflow the running output.
 amdgpu.target<gfx11-generic> @ggml_flash_attention_gfx11_wave64 {subgroup_size = 64}
 
 config.decl @ggml.flash_attention.query_head_count : %value: index where [range(%value, 1, 64)]
@@ -46,11 +46,11 @@ template.decl @ggml.flash_attention.qk_block_wmma.prefill_tail(%qk_head_size: in
 
 template.decl @ggml.flash_attention.online_softmax.prefill(%masked_scores: vector<4xf32>, %valid: vector<4xi1>, %current_max: vector<4xf32>, %current_sum: vector<4xf32>, %query_row0: index, %query_row1: index, %query_row2: index, %query_row3: index, %lane: index, %probability_stage: buffer) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>)
 
-template.decl @ggml.flash_attention.pv_block_wmma.prefill_full(%old_scale: vector<4xf32>, %current_output0: vector<4xf16>, %current_output1: vector<4xf16>, %current_output2: vector<4xf16>, %current_output3: vector<4xf16>, %group_output_tile_count: index, %output_group_tile_base: index, %output_tile_count: index, %value_head_base: index, %subgroup_product_channel: index, %lane_output_tile: index, %lane_product_channel: index, %query_row0: index, %query_row1: index, %query_row2: index, %query_row3: index, %key_origin: index, %last_full_key_tile_start: index, %bounded_key_value_token_count: index, %value_width: index, %value_row_stride: index, %value_column_stride: index, %value: buffer, %probability_stage: buffer, %product_stage: buffer) -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>)
+template.decl @ggml.flash_attention.pv_block_wmma.prefill_full(%old_scale: vector<4xf32>, %current_output0: vector<4xf32>, %current_output1: vector<4xf32>, %current_output2: vector<4xf32>, %current_output3: vector<4xf32>, %group_output_tile_count: index, %output_group_tile_base: index, %output_tile_count: index, %value_head_base: index, %subgroup_product_channel: index, %lane_output_tile: index, %lane_product_channel: index, %query_row0: index, %query_row1: index, %query_row2: index, %query_row3: index, %key_origin: index, %last_full_key_tile_start: index, %bounded_key_value_token_count: index, %value_width: index, %value_row_stride: index, %value_column_stride: index, %value: buffer, %probability_stage: buffer, %product_stage: buffer) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>)
 
-template.decl @ggml.flash_attention.pv_block_wmma.prefill_tail(%old_scale: vector<4xf32>, %current_output0: vector<4xf16>, %current_output1: vector<4xf16>, %current_output2: vector<4xf16>, %current_output3: vector<4xf16>, %group_output_tile_count: index, %subgroup_product_channel: index, %lane_output_tile: index, %lane_product_channel: index, %query_row0: index, %query_row1: index, %query_row2: index, %query_row3: index, %tail_stage_head_size: index, %tail_key_value_stage: buffer, %probability_stage: buffer, %product_stage: buffer) -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>)
+template.decl @ggml.flash_attention.pv_block_wmma.prefill_tail(%old_scale: vector<4xf32>, %current_output0: vector<4xf32>, %current_output1: vector<4xf32>, %current_output2: vector<4xf32>, %current_output3: vector<4xf32>, %group_output_tile_count: index, %subgroup_product_channel: index, %lane_output_tile: index, %lane_product_channel: index, %query_row0: index, %query_row1: index, %query_row2: index, %query_row3: index, %tail_stage_head_size: index, %tail_key_value_stage: buffer, %probability_stage: buffer, %product_stage: buffer) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>)
 
-template.decl @ggml.flash_attention.prefill.publish_output(%publish_f16: i1, %query_token_count: index, %query_head_count: index, %value_head_size: index, %lane_has_output: i1, %query_valid0: i1, %query_valid1: i1, %query_valid2: i1, %query_valid3: i1, %query_token0: index, %query_token1: index, %query_token2: index, %query_token3: index, %query_head: index, %lane_output_channel: index, %final_sum: vector<4xf32>, %final_output0: vector<4xf16>, %final_output1: vector<4xf16>, %final_output2: vector<4xf16>, %final_output3: vector<4xf16>, %gate: buffer, %output: buffer, %f16_output: buffer)
+template.decl @ggml.flash_attention.prefill.publish_output(%publish_f16: i1, %query_token_count: index, %query_head_count: index, %value_head_size: index, %lane_has_output: i1, %query_valid0: i1, %query_valid1: i1, %query_valid2: i1, %query_valid3: i1, %query_token0: index, %query_token1: index, %query_token2: index, %query_token3: index, %query_head: index, %lane_output_channel: index, %final_sum: vector<4xf32>, %final_output0: vector<4xf32>, %final_output1: vector<4xf32>, %final_output2: vector<4xf32>, %final_output3: vector<4xf32>, %gate: buffer, %output: buffer, %f16_output: buffer)
 
 template.decl @ggml.flash_attention.prefill.body(%publish_f16: i1, %query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer, %f16_output: buffer)
 
