@@ -8778,6 +8778,13 @@ struct test_flash_attn_ext_hrx_uniform_value : public test_flash_attn_ext {
         return test_flash_attn_ext::vars() + ",hrx_uniform_value=" + std::to_string(uniform_value);
     }
 
+    bool run_whole_graph() override { return true; }
+
+    double err(const float * backend, const float * reference, size_t n) override {
+        std::vector<float> expected(n, uniform_value);
+        return std::max({nmse(backend, reference, n), nmse(backend, expected.data(), n), nmse(reference, expected.data(), n)});
+    }
+
     void initialize_tensors(ggml_context * ctx) override {
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
             const float tensor_value = strcmp(t->name, "v") == 0 ? uniform_value : 0.0f;
