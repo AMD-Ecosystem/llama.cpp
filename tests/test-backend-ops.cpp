@@ -8797,6 +8797,39 @@ struct test_flash_attn_ext_hrx_long_random : public test_flash_attn_ext {
     }
 };
 
+// Alternating masked blocks force the full-tile skip path to reuse its mask
+// summary scratch before a live one-token KV tail.
+struct test_flash_attn_ext_alternating_mask_tail : public test_flash_attn_ext {
+    using test_flash_attn_ext::test_flash_attn_ext;
+
+    std::string vars() override {
+        return test_flash_attn_ext::vars() + ",alternating_mask_tail=1";
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "m") == 0) {
+                continue;
+            }
+            init_tensor_uniform(t);
+        }
+
+        ggml_tensor * mask_tensor = ggml_get_tensor(ctx, "m");
+        const ggml_fp16_t zero = ggml_fp32_to_fp16(0.0f);
+        const ggml_fp16_t minus_inf = ggml_fp32_to_fp16(-INFINITY);
+        std::vector<ggml_fp16_t> mask_values(static_cast<size_t>(kv*nb), minus_inf);
+        for (int64_t row = 0; row < nb; ++row) {
+            for (int64_t block = 0; block < kv / 64; block += 2) {
+                for (int64_t col = 0; col < 64; ++col) {
+                    mask_values[static_cast<size_t>(row*kv + block*64 + col)] = zero;
+                }
+            }
+            mask_values[static_cast<size_t>(row*kv + kv - 1)] = zero;
+        }
+        ggml_backend_tensor_set(mask_tensor, mask_values.data(), 0, mask_values.size()*sizeof(ggml_fp16_t));
+    }
+};
+
 // large Q values, so the online softmax has to rescale the partial results
 struct test_flash_attn_ext_large_logits : public test_flash_attn_ext {
     static constexpr int q_range = 20;
@@ -12261,6 +12294,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_flash_attn_ext(128, 64, 4, {1, 1}, 128, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q2_0, GGML_TYPE_Q4_0));
     test_cases.emplace_back(new test_flash_attn_ext(64, 128, 4, {1, 1}, 128, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q2_0));
     test_cases.emplace_back(new test_flash_attn_ext(128, 64, 4, {1, 1}, 64, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q2_0, GGML_TYPE_F16));
+
+    test_cases.emplace_back(new test_flash_attn_ext_alternating_mask_tail(256, 256, 2, {4, 1}, 32769, 512,
+        true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}, false));
 
     // q8_0 KV cases: decode and prompt batches, KV pad, permuted KV, feature flags, and long context
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {16, 1},   113,   1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
