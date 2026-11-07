@@ -22,6 +22,15 @@ struct PreparedCommandProgramCacheStats {
     uint64_t hits   = 0;
 };
 
+struct PreparedCommandProgramCacheRetention {
+    size_t entries = 0;
+    size_t staging_bytes = 0;
+    size_t constant_bytes = 0;
+    size_t recorded_arena_bytes = 0;
+
+    size_t retained_bytes() const { return staging_bytes + constant_bytes + recorded_arena_bytes; }
+};
+
 struct PreparedCommandProgramCacheEntry {
     std::mutex mutex;
     // Release recorded handles before the prepared bindings they reference.
@@ -76,6 +85,9 @@ class PreparedCommandProgramCache {
                                                                    const CommandProgramBindings &         bindings);
 
     PreparedCommandProgramCacheStats stats() const;
+
+    // Call while graph execution is serialized, before freeing completed cached work.
+    PreparedCommandProgramCacheRetention retention() const;
 
     void clear();
 
