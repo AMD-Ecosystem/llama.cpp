@@ -265,6 +265,8 @@ template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_pr
     %subgroup_mask_maxima = vector.load %mask_summary_view[%c0] : view<4xf32> -> vector<4xf32>
     %workgroup_mask_maximum = vector.reduce<maxnumf> %subgroup_mask_maxima, %negative_large : vector<4xf32>, f32
     %block_has_attention = scalar.cmpf ogt, %workgroup_mask_maximum, %negative_large : f32
+    // Complete every summary read before the score/product scratch is reused.
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
     %next_block_max, %next_block_sum, %next_block_output0, %next_block_output1, %next_block_output2, %next_block_output3 = scf.if %block_has_attention -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
       // Four independent wave-level WMMAs produce a 16x64 score tile.
       %score_key_origin0 = index.add %key_origin, %subgroup_score_column : index
