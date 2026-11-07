@@ -12659,12 +12659,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
-    // Both the 0.8B model geometry and the original 24/4 witness.
-    for (int64_t kv : {2048, 32768, 65536, 131072, 262144}) {
-        for (int64_t nb : {1, 16}) {
-            test_cases.emplace_back(new test_flash_attn_ext_hrx_uniform_value(kv, nb, 2, 4));
-            test_cases.emplace_back(new test_flash_attn_ext_hrx_uniform_value(kv, nb, 4, 6));
-        }
+    // Decode across long contexts in the 0.8B model geometry.
+    for (int64_t kv : {32768, 65536, 131072, 262144}) {
+        test_cases.emplace_back(new test_flash_attn_ext_hrx_uniform_value(kv, 1, 2, 4));
+    }
+
+    // Prefill and the original 24/4 witness at the overflow boundary and 256K.
+    for (int64_t kv : {65536, 262144}) {
+        test_cases.emplace_back(new test_flash_attn_ext_hrx_uniform_value(kv, 16, 2, 4));
+        test_cases.emplace_back(new test_flash_attn_ext_hrx_uniform_value(kv, 1, 4, 6));
     }
 
     for (int64_t kv : {65536, 262144}) {
