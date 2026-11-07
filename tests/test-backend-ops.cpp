@@ -8781,6 +8781,14 @@ struct test_flash_attn_ext_hrx_uniform_value : public test_flash_attn_ext {
     bool run_whole_graph() override { return true; }
 
     double err(const float * backend, const float * reference, size_t n) override {
+        for (size_t i = 0; i < n; ++i) {
+            if (!std::isfinite(backend[i])) {
+                return INFINITY;
+            }
+            if (!std::isfinite(reference[i])) {
+                return INFINITY;
+            }
+        }
         std::vector<float> expected(n, uniform_value);
         return std::max({nmse(backend, reference, n), nmse(backend, expected.data(), n), nmse(reference, expected.data(), n)});
     }
