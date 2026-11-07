@@ -800,7 +800,9 @@ GraphProgramLookup GraphProgramCache::get_or_build(const ggml_cgraph &  graph,
 
 GraphProgramCacheStats GraphProgramCache::stats() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return stats_;
+    GraphProgramCacheStats result = stats_;
+    result.entries = programs_.size();
+    return result;
 }
 
 void GraphProgramCache::clear() {

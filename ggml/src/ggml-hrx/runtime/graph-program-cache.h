@@ -110,6 +110,7 @@ class GraphProgram {
 struct GraphProgramCacheStats {
     uint64_t builds                  = 0;
     uint64_t hits                    = 0;
+    size_t entries                   = 0;
 };
 
 struct GraphProgramLookup {

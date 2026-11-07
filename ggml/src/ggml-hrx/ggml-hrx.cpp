@@ -14,6 +14,7 @@
 #include "runtime/prepared-command-program-cache.h"
 #include "runtime/transient-arena.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cinttypes>
 #include <cstddef>
@@ -584,6 +585,36 @@ static const char * status_first_error(const ggml::hrx::Status & status) {
 
 static enum ggml_status graph_compute(ggml_backend_t backend, ggml_cgraph * graph) {
     auto *                                context  = static_cast<ggml_backend_hrx_context *>(backend->context);
+    std::lock_guard<std::mutex> graph_lock(context->graph_compute_mutex);
+    const ggml::hrx::PreparedCommandProgramCacheRetention prepared_stats = context->prepared_programs.retention();
+    const ggml::hrx::GraphProgramCacheStats graph_stats = context->graph_programs.stats();
+    // Distinct prefill shapes retain staging, constants, and graph references to old arena generations.
+    // Keep their combined footprint within a small fraction of device memory for model and KV growth.
+    // Evict before the next graph, after queued work has completed, so at most one new graph can exceed
+    // the budget. Unknown device memory uses the fixed maximum.
+    const size_t maximum_cache_budget = size_t(1) << 30;
+    const bool memory_size_known = context->device->memory_total != 0;
+    const size_t device_cache_budget = memory_size_known ? context->device->memory_total / 16 : maximum_cache_budget;
+    const size_t cache_budget = std::min(device_cache_budget, maximum_cache_budget);
+    const bool over_byte_budget = prepared_stats.retained_bytes() >= cache_budget;
+    // Even tiny graphs consume CPU-side program metadata, so bound their count too.
+    const bool over_prepared_limit = prepared_stats.entries >= 128;
+    const bool over_graph_limit = graph_stats.entries >= 128;
+    const bool over_entry_budget = over_prepared_limit || over_graph_limit;
+    const bool evict_cache = over_byte_budget || over_entry_budget;
+    if (evict_cache) {
+        if (!HRX_CHECK(hrx_stream_synchronize(context->stream))) {
+            return GGML_STATUS_FAILED;
+        }
+        context->graph_replay_state.mark_stream_synchronized();
+        if (environment_flag_enabled("GGML_HRX_LOG_CACHE_EVICTIONS")) {
+            GGML_LOG_INFO("ggml_hrx: evict graph cache programs=%zu prepared=%zu staging=%zu constants=%zu recorded_arenas=%zu budget=%zu\n",
+                          graph_stats.entries, prepared_stats.entries, prepared_stats.staging_bytes,
+                          prepared_stats.constant_bytes, prepared_stats.recorded_arena_bytes, cache_budget);
+        }
+        context->graph_programs.clear();
+        context->prepared_programs.clear();
+    }
     const ggml::hrx::GraphExecutor        executor = ggml::hrx::GraphExecutor(*context);
     const ggml::hrx::GraphExecutionResult result   = executor.execute(*graph);
     if (!result.success()) {

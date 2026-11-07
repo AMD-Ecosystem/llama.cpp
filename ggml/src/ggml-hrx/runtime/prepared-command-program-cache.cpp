@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
+#include <unordered_set>
 #include <utility>
 
 namespace ggml::hrx {
@@ -189,6 +190,31 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
 PreparedCommandProgramCacheStats PreparedCommandProgramCache::stats() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return stats_;
+}
+
+PreparedCommandProgramCacheRetention PreparedCommandProgramCache::retention() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    PreparedCommandProgramCacheRetention result;
+    result.entries = programs_.size();
+    std::unordered_set<uint64_t> recorded_arenas;
+    for (const auto & item : programs_) {
+        const PreparedCommandProgramCacheEntry & entry = *item.second;
+        for (const HostStagingBuffer & staging : entry.prepared.host_staging) {
+            result.staging_bytes += staging.length;
+        }
+        for (const PreparedProgramConstantBuffer & constant : entry.prepared.program_constants) {
+            result.constant_bytes += constant.size;
+        }
+        const RecordedCommandGraph & recorded = entry.recorded;
+        const bool has_arena = recorded.bound_transient_arena_allocation_id != kInvalidTransientArenaAllocationId;
+        const bool first_reference = has_arena ?
+            recorded_arenas.insert(recorded.bound_transient_arena_allocation_id).second : false;
+        const bool count_arena = recorded.valid() && has_arena && first_reference;
+        if (count_arena) {
+            result.recorded_arena_bytes += recorded.bound_transient_arena_capacity;
+        }
+    }
+    return result;
 }
 
 void PreparedCommandProgramCache::clear() {

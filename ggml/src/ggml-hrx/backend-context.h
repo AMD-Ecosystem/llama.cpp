@@ -68,6 +68,7 @@ struct ggml_backend_hrx_context {
     ggml::hrx::HostTransferManager         host_transfers;
     ggml::hrx::HostWeightCache             host_weights;
     ggml::hrx::GraphReplayStreamState      graph_replay_state;
+    std::mutex                             graph_compute_mutex;
     std::string                            name;
 };
 

@@ -113,9 +113,11 @@ RecordedCommandGraph::RecordedCommandGraph(RecordedCommandGraph && other) noexce
     retained_buffers(std::move(other.retained_buffers)),
     retained_executables(std::move(other.retained_executables)),
     bound_transient_arena_allocation_id(other.bound_transient_arena_allocation_id),
+    bound_transient_arena_capacity(other.bound_transient_arena_capacity),
     dispatch_count(other.dispatch_count),
     status(std::move(other.status)) {
     other.bound_transient_arena_allocation_id = kInvalidTransientArenaAllocationId;
+    other.bound_transient_arena_capacity      = 0;
     other.dispatch_count                      = 0;
 }
 
@@ -138,9 +140,11 @@ RecordedCommandGraph & RecordedCommandGraph::operator=(RecordedCommandGraph && o
         retained_buffers                          = std::move(other.retained_buffers);
         retained_executables                      = std::move(other.retained_executables);
         bound_transient_arena_allocation_id  = other.bound_transient_arena_allocation_id;
+        bound_transient_arena_capacity       = other.bound_transient_arena_capacity;
         dispatch_count                       = other.dispatch_count;
         status                               = std::move(other.status);
         other.bound_transient_arena_allocation_id = kInvalidTransientArenaAllocationId;
+        other.bound_transient_arena_capacity      = 0;
         other.dispatch_count                      = 0;
     }
     return *this;
@@ -907,7 +911,7 @@ static CommandProgramBindings materialize_host_bindings(const CommandProgramExec
         HostStagingBuffer staging;
         Status            allocation_status = allocate_host_staging_buffer(context.device, binding.length, staging);
         if (!allocation_status.success()) {
-            status.log("allocate host staging for value %d failed", binding.value.value);
+            status.log("allocate host staging for value %d (%zu bytes) failed", binding.value.value, binding.length);
             status.append(allocation_status);
             materialized.push_back(binding);
             continue;
@@ -1765,6 +1769,7 @@ static RecordedCommandGraph record_prepared_command_graph(const CommandProgramEx
     }
     recorded.exec = exec;
     recorded.bound_transient_arena_allocation_id = prepared.bound_transient_arena_allocation_id;
+    recorded.bound_transient_arena_capacity = allocation.capacity;
     return recorded;
 }
 
