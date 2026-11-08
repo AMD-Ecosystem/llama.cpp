@@ -1,0 +1,39 @@
+config.decl @ggml.argmax.width : %value: index where [range(%value, 1, 1048576)]
+
+// GGML chooses the last index when finite maxima tie.
+kernel.def @ggml_argmax_f32(%row_count: index) {
+  %one = index.constant 1 : index
+  %group = index.constant 256 : index
+  %bounded_rows = index.assume %row_count [range(%row_count, 1, 2048)] : index
+  kernel.launch.config workgroups(%bounded_rows, %one, %one) workgroup_size(%group, %one, %one) : index
+} launch(%row_count: index, %input: buffer, %output: buffer) {
+  %count = index.assume %row_count [range(%row_count, 1, 2048)] : index
+  %width = config.get @ggml.argmax.width : index
+  %row0 = kernel.workgroup.id<x> : index
+  %row, %row_extent = index.assume %row0, %count [range(%row0, 0, 2047), lt(%row0, %count)] : index, index
+  %lane = kernel.workitem.id<x> : index
+  %step = index.constant 256 : index
+  %c0 = index.constant 0 : index
+  %zero = index.constant 0 : offset
+  %zero_i32 = scalar.constant 0 : i32
+  %negative_inf = scalar.constant -inf : f32
+  %source = buffer.view %input[%zero] : buffer -> view<[%count]x[%width]xf32>
+  %dest = buffer.view %output[%zero] : buffer -> view<[%count]xi32>
+  %partial, %partial_index = scf.for %column = [%lane to %width step %step](%best = %negative_inf : f32, %best_index = %zero_i32 : i32) -> (f32, i32) {
+    %value = view.load %source[%row, %column] : view<[%count]x[%width]xf32> -> f32
+    %take = scalar.cmpf oge, %value, %best : f32
+    %column_i32 = index.cast %column : index to i32
+    %next = scf.select %take, %value, %best : f32
+    %next_index = scf.select %take, %column_i32, %best_index : i32
+    scf.yield %next, %next_index : f32, i32
+  }
+  %maximum = kernel.workgroup.reduce<maxnumf> %partial : f32
+  %matches = scalar.cmpf oeq, %partial, %maximum : f32
+  %candidate = scf.select %matches, %partial_index, %zero_i32 : i32
+  %winner = kernel.workgroup.reduce<maxui> %candidate : i32
+  %writes = index.cmp eq, %lane, %c0 : index
+  scf.if %writes {
+    view.store %winner, %dest[%row] : i32, view<[%count]xi32>
+  }
+  kernel.return
+}

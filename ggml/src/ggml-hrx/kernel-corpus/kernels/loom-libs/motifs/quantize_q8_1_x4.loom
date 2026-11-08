@@ -63,7 +63,8 @@ template.def<@ggml.quantize_q8_1_x4.publish_vector4.body> device @ggml_quantize_
       %precise = scalar.divf %c1_f32, %d : f32
       scf.yield %precise : f32
     } else {
-      %fast = scalar.divf<reassoc|nnan|ninf|nsz|arcp> %c1_f32, %d : f32
+      %inverse_max = scalar.divf<nnan|ninf|nsz|arcp> %c1_f32, %max4 : f32
+      %fast = scalar.mulf %c127, %inverse_max : f32
       scf.yield %fast : f32
     }
     scf.yield %inverse : f32
@@ -72,7 +73,13 @@ template.def<@ggml.quantize_q8_1_x4.publish_vector4.body> device @ggml_quantize_
   }
   %d_inverse_vector = vector.splat %d_inverse : vector<4xf32>
   %scaled_values = vector.mulf %values, %d_inverse_vector : vector<4xf32>
-  %rounded_values = vector.roundf %scaled_values : vector<4xf32>
+  %rounded_values = scf.if %strict_scaling -> (vector<4xf32>) {
+    %strict_rounded = vector.roundf %scaled_values : vector<4xf32>
+    scf.yield %strict_rounded : vector<4xf32>
+  } else {
+    %native_rounded = vector.roundevenf %scaled_values : vector<4xf32>
+    scf.yield %native_rounded : vector<4xf32>
+  }
   %quantized_values = vector.fptosi %rounded_values : vector<4xf32> to vector<4xi8>
   %packed_word = vector.bitcast %quantized_values : vector<4xi8> to vector<1xi32>
   scf.if %publish_word {

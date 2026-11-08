@@ -29,38 +29,31 @@ template.def<@ggml.rmsnorm_f32.row_scale> device @ggml_rmsnorm_f32_row_scale(%to
   %hidden_size_i32 = index.cast %hidden_size : index to i32
   %hidden_size_f32 = scalar.sitofp %hidden_size_i32 : i32 to f32
   %input_view = buffer.view %input[%c0_offset] : buffer -> view<[%token_count]x[%input_stride]xf32>
-  %c1024 = index.constant 1024 : index
-  %tail = index.rem %hidden_size, %c1024 : index
-  %unroll_limit = index.sub %hidden_size, %tail : index
-  %prefix_sum = scf.for %channel = [%workitem to %unroll_limit step %c1024](%running_sum = %c0_f32 : f32) -> (f32) {
-    %offset0 = index.constant 0 : index
-    %channel0 = index.add %channel, %offset0 : index
-    %value0 = view.load %input_view[%token, %channel0] : view<[%token_count]x[%input_stride]xf32> -> f32
-    %offset1 = index.constant 256 : index
-    %channel1 = index.add %channel, %offset1 : index
-    %value1 = view.load %input_view[%token, %channel1] : view<[%token_count]x[%input_stride]xf32> -> f32
-    %offset2 = index.constant 512 : index
-    %channel2 = index.add %channel, %offset2 : index
-    %value2 = view.load %input_view[%token, %channel2] : view<[%token_count]x[%input_stride]xf32> -> f32
-    %offset3 = index.constant 768 : index
-    %channel3 = index.add %channel, %offset3 : index
-    %value3 = view.load %input_view[%token, %channel3] : view<[%token_count]x[%input_stride]xf32> -> f32
-    %square0 = scalar.mulf<reassoc|nnan|ninf|nsz> %value0, %value0 : f32
-    %sum0 = scalar.addf<reassoc|nnan|ninf|nsz> %running_sum, %square0 : f32
-    %square1 = scalar.mulf<reassoc|nnan|ninf|nsz> %value1, %value1 : f32
-    %sum1 = scalar.addf<reassoc|nnan|ninf|nsz> %sum0, %square1 : f32
-    %square2 = scalar.mulf<reassoc|nnan|ninf|nsz> %value2, %value2 : f32
-    %sum2 = scalar.addf<reassoc|nnan|ninf|nsz> %sum1, %square2 : f32
-    %square3 = scalar.mulf<reassoc|nnan|ninf|nsz> %value3, %value3 : f32
-    %sum3 = scalar.addf<reassoc|nnan|ninf|nsz> %sum2, %square3 : f32
-    scf.yield %sum3 : f32
-  }
-  %tail_start = index.add %unroll_limit, %workitem : index
-  %thread_sum = scf.for %channel = [%tail_start to %hidden_size step %c256](%running_sum = %prefix_sum : f32) -> (f32) {
-    %value = view.load %input_view[%token, %channel] : view<[%token_count]x[%input_stride]xf32> -> f32
-    %square = scalar.mulf<reassoc|nnan|ninf|nsz> %value, %value : f32
-    %next_sum = scalar.addf<reassoc|nnan|ninf|nsz> %running_sum, %square : f32
-    scf.yield %next_sum : f32
+  %c2 = index.constant 2 : index
+  %c512 = index.constant 512 : index
+  %paired_rows = index.cmp uge, %hidden_size, %c512 : index
+  %thread_sum = scf.if %paired_rows -> (f32) {
+    %first_channel = index.mul %workitem, %c2 : index
+    %last_pair = index.sub %hidden_size, %c2 : index
+    %even, %odd = scf.for %channel = [%first_channel to %hidden_size step %c512](%sum_even = %c0_f32 : f32, %sum_odd = %c0_f32 : f32) -> (f32, f32) {
+      %bounded_channel = index.assume %channel [range(%channel, 0, 32766), multiple_of(%channel, 2), le(%channel, %last_pair)] : index
+      %next_channel = index.add %bounded_channel, %c1 : index
+      %x0 = view.load %input_view[%token, %bounded_channel] : view<[%token_count]x[%input_stride]xf32> -> f32
+      %x1 = view.load %input_view[%token, %next_channel] : view<[%token_count]x[%input_stride]xf32> -> f32
+      %next_even = scalar.fmaf %x0, %x0, %sum_even : f32
+      %next_odd = scalar.fmaf %x1, %x1, %sum_odd : f32
+      scf.yield %next_even, %next_odd : f32, f32
+    }
+    %pair_sum = scalar.addf %even, %odd : f32
+    scf.yield %pair_sum : f32
+  } else {
+    %small_thread_sum = scf.for %channel = [%workitem to %hidden_size step %c256](%running_sum = %c0_f32 : f32) -> (f32) {
+      %value = view.load %input_view[%token, %channel] : view<[%token_count]x[%input_stride]xf32> -> f32
+      %square = scalar.mulf<reassoc|nnan|ninf|nsz> %value, %value : f32
+      %next_sum = scalar.addf<reassoc|nnan|ninf|nsz> %running_sum, %square : f32
+      scf.yield %next_sum : f32
+    }
+    scf.yield %small_thread_sum : f32
   }
   %subgroup_sum = kernel.subgroup.reduce<addf> %thread_sum : f32
   %scratch = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer

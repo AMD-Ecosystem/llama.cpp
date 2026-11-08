@@ -142,6 +142,21 @@ inline bool common_is_supported_dense_output_size(int64_t output_size) {
     return output_size >= 1 && output_size <= 262144;
 }
 
+inline bool common_mul_mat_allows_q8_input(const GraphNode & node) {
+    const auto * params = op_params_as<MulMatParams>(node.params);
+    if (params == nullptr || params->prec != GGML_PREC_DEFAULT) {
+        return false;
+    }
+    switch (params->src1_prec) {
+        case GGML_PREC_UNDEFINED:
+        case GGML_PREC_Q8:
+        case GGML_PREC_Q4:
+            return true;
+        default:
+            return false;
+    }
+}
+
 // Select the packed prefill schedule. Long Q4 contractions only benefit when
 // their producer supplies the layout without a separate conversion pass.
 inline bool common_mul_mat_uses_k16_major_f16(CommonMulMatWeightFormat format,
@@ -166,6 +181,8 @@ inline bool common_mul_mat_uses_k16_major_f16(CommonMulMatWeightFormat format,
 
 inline ggml_type common_mul_mat_format_type(CommonMulMatWeightFormat format) {
     switch (format) {
+        case CommonMulMatWeightFormat::MXFP4:
+            return GGML_TYPE_MXFP4;
         case CommonMulMatWeightFormat::Q1_0:
             return GGML_TYPE_Q1_0;
         case CommonMulMatWeightFormat::Q3K:
@@ -638,7 +655,7 @@ inline bool common_prepare_q8_1_x4_input(const DispatchMatchContext & context,
 
     constexpr KernelCatalogRef kernel = GGML_HRX_KERNEL_REF("qwen3_moe", "ggml_quantize_q8_1_x4_f32");
     constexpr const char * name = "common.mul_mat.q8_1_x4";
-    const ValueId activation = context.next_plan_value;
+    const ValueId activation(context.next_plan_value.value + static_cast<int32_t>(match.transients.size()));
     match.transients.push_back({ activation, name, bytes, 256 });
     Dispatch quantize;
     quantize.kernel = make_kernel_specialization(kernel);

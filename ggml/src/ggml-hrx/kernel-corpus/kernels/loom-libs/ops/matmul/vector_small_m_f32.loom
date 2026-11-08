@@ -1,0 +1,62 @@
+// One workgroup per row keeps long reductions parallel for narrow projections.
+amdgpu.target<gfx11-generic> @ggml_small_m_wave32 {subgroup_size = 32}
+config.decl @ggml.small_m.k : %v: index where [range(%v, 4096, 32768), multiple_of(%v, 2048)]
+config.decl @ggml.small_m.m : %v: index where [range(%v, 1, 32)]
+
+kernel.def target(@ggml_small_m_wave32) @ggml_mul_mat_vector_small_m_f32() {
+  %m = config.get @ggml.small_m.m : index
+  %one = index.constant 1 : index
+  %threads = index.constant 256 : index
+  kernel.launch.config workgroups(%m, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%weight: buffer, %input: buffer, %output: buffer) {
+  %k = config.get @ggml.small_m.k : index
+  %m = config.get @ggml.small_m.m : index
+  %row0 = kernel.workgroup.id<x> : index
+  %row = index.assume %row0 [lt(%row0, %m)] : index
+  %thread = kernel.workitem.id<x> : index
+  %lane = kernel.subgroup.lane.id : index
+  %wave0 = kernel.subgroup.id : index
+  %wave = index.assume %wave0 [range(%wave0, 0, 7)] : index
+  %zero = index.constant 0 : index
+  %eight = index.constant 8 : index
+  %step = index.constant 2048 : index
+  %zero_offset = index.constant 0 : offset
+  %shared_bytes = index.constant 32 : offset
+  %partial = buffer.alloca<workgroup> align(16) %shared_bytes : buffer
+  %pv = buffer.view %partial[%zero_offset] : buffer -> view<8xf32>
+  %wv = buffer.view %weight[%zero_offset] : buffer -> view<[%m]x[%k]xf32>
+  %xv = buffer.view %input[%zero_offset] : buffer -> view<[%k]xf32>
+  %yv = buffer.view %output[%zero_offset] : buffer -> view<[%m]xf32>
+  %thread_k = index.mul %thread, %eight : index
+  %zeros = vector.constant 0.0 : vector<8xf32>
+  %acc = scf.for %base = [%zero to %k step %step](%sum = %zeros : vector<8xf32>) -> (vector<8xf32>) {
+    %col = index.add %base, %thread_k : index
+    %w = vector.load %wv[%row, %col] : view<[%m]x[%k]xf32> -> vector<8xf32>
+    %x = vector.load %xv[%col] : view<[%k]xf32> -> vector<8xf32>
+    %next = vector.fmaf %w, %x, %sum : vector<8xf32>
+    scf.yield %next : vector<8xf32>
+  }
+  %zero_float = scalar.constant 0.0 : f32
+  %local = vector.reduce<addf> %acc, %zero_float : vector<8xf32>, f32
+  %wave_sum = kernel.subgroup.reduce<addf> %local : f32
+  %leader = index.cmp eq, %lane, %zero : index
+  scf.if %leader {
+    view.store %wave_sum, %pv[%wave] : f32, view<8xf32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %first_wave = index.cmp eq, %wave, %zero : index
+  scf.if %first_wave {
+    %has_partial = index.cmp ult, %lane, %eight : index
+    %part = scf.if %has_partial -> (f32) {
+      %v = view.load %pv[%lane] : view<8xf32> -> f32
+      scf.yield %v : f32
+    } else {
+      scf.yield %zero_float : f32
+    }
+    %total = kernel.subgroup.reduce<addf> %part : f32
+    scf.if %leader {
+      view.store %total, %yv[%row] : f32, view<[%m]xf32>
+    }
+  }
+  kernel.return
+}

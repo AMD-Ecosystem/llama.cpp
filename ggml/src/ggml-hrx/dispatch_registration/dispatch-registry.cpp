@@ -3,6 +3,7 @@
 #include "backend-buffer-binding.h"
 
 #include "common/dispatch-common.h"
+#include "graph/graph-traversal.h"
 #include "llm/dispatch-attention-qkv.h"
 #include "llm/dispatch-gated-delta-net.h"
 #include "llm/dispatch-ssm-conv.h"
@@ -23,6 +24,33 @@ static const std::vector<DispatchActivationConsumerRegistration> kEmptyActivatio
 
 static bool valid_root_op(ggml_op op) {
     return op >= 0 && static_cast<size_t>(op) < kOpCount;
+}
+
+static bool match_inputs_are_available(const DispatchMatchContext & context, const DispatchMatch & match) {
+    for (size_t node_index : match.covered_nodes) {
+        if (node_index >= context.graph.nodes().size()) {
+            return false;
+        }
+        for (ValueId input : context.graph.nodes()[node_index].inputs) {
+            const GraphNode * producer = context.graph.index().producer(input);
+            while (producer != nullptr) {
+                size_t index;
+                if (!context.graph.index().node_index(producer, index)) {
+                    return false;
+                }
+                if ((index < context.covered_nodes.size() && context.covered_nodes[index]) ||
+                    std::find(match.covered_nodes.begin(), match.covered_nodes.end(), index) !=
+                        match.covered_nodes.end()) {
+                    break;
+                }
+                if (!is_layout_alias_node(context.graph, *producer)) {
+                    return false;
+                }
+                producer = context.graph.index().producer(producer->inputs[0]);
+            }
+        }
+    }
+    return true;
 }
 
 static void sort_registrations(std::vector<DispatchRegistration> & registrations) {
@@ -98,7 +126,8 @@ bool DispatchRegistry::match(const DispatchMatchContext & context,
     for (const DispatchRegistration & registration : registrations) {
         DispatchMatch candidate;
         const bool matched = registration.matcher != nullptr && registration.matcher(context, candidate);
-        const bool eligible = matched && dispatch_has_eligible_weight_layouts(context, candidate);
+        const bool eligible = matched && match_inputs_are_available(context, candidate) &&
+                              dispatch_has_eligible_weight_layouts(context, candidate);
         if (eligible) {
             if (diagnostics != nullptr) {
                 diagnostics->attempts.push_back({

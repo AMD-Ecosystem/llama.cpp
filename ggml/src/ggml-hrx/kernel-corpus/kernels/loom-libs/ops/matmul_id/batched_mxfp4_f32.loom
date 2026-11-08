@@ -1,0 +1,430 @@
+// Prepare two scaled FP16 input parts once; retain the MXFP4 scale in F32.
+// Four waves share a 64-output, 16-route, 64-input panel.
+amdgpu.target<gfx11-generic> @ggml_mxfp4_matrix_f32_wave32 {subgroup_size = 32}
+
+config.decl @ggml.mul_mat_id.input_size : %v: index where [range(%v, 256, 32768), multiple_of(%v, 256)]
+
+config.decl @ggml.mul_mat_id.output_size : %v: index where [range(%v, 1, 262144)]
+
+config.decl @ggml.mul_mat_id.expert_count : %v: index where [range(%v, 1, 512)]
+
+config.decl @ggml.mul_mat_id.route_count : %v: index where [range(%v, 1, 32)]
+
+config.decl @ggml.mul_mat_id.input_route_count : %v: index where [range(%v, 1, 32)]
+
+config.decl @ggml.workload.token_capacity : %v: index where [range(%v, 1, 2048)]
+
+func.def inline @ggml_f32_part(%value: f32) -> (f16, f32) {
+  %zero = scalar.constant 0.0 : f32
+  %zero_half = scalar.constant 0.0 : f16
+  %minimum = scalar.constant 6.103515625e-05 : f32
+  %amplify = scalar.constant 4096.0 : f32
+  %half = scalar.fptrunc %value : f32 to f16
+  %wide = scalar.extf %half : f16 to f32
+  %absolute = scalar.absf %wide : f32
+  %normal = scalar.cmpf uge, %absolute, %minimum : f32
+  %part = scf.select %normal, %half, %zero_half : f16
+  %safe = scf.select %normal, %wide, %zero : f32
+  %difference = scalar.subf %value, %safe : f32
+  %remaining = scalar.mulf %difference, %amplify : f32
+  func.return %part, %remaining : f16, f32
+}
+
+// Each 144-byte block holds a 16-byte scale header and two 32-value F16 parts.
+kernel.def target(@ggml_mxfp4_matrix_f32_wave32) @ggml_mul_mat_id_pack_f32(%token_count: index) {
+  %k = config.get @ggml.mul_mat_id.input_size : index
+  %routes = config.get @ggml.mul_mat_id.input_route_count : index
+  %c1 = index.constant 1 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c32 = index.constant 32 : index
+  %c128 = index.constant 128 : index
+  %blocks = index.div %k, %c32 : index
+  %rows = index.mul %token_count, %routes : index
+  %groups = index.mul %rows, %blocks : index
+  %rounded = index.add %groups, %c3 : index
+  %workgroups = index.div %rounded, %c4 : index
+  kernel.launch.config workgroups(%workgroups, %c1, %c1) workgroup_size(%c128, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %output: buffer) where [range(%token_count, 1, 2048)] {
+  %k = config.get @ggml.mul_mat_id.input_size : index
+  %routes = config.get @ggml.mul_mat_id.input_route_count : index
+  %capacity = config.get @ggml.workload.token_capacity : index
+  %tokens = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %capacity)] : index
+  %wg = kernel.workgroup.id<x> : index
+  %wave = kernel.subgroup.id : index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c32 = index.constant 32 : index
+  %zero_offset = index.constant 0 : offset
+  %header_bytes = index.constant 16 : offset
+  %block_bytes = index.constant 144 : offset
+  %blocks = index.div %k, %c32 : index
+  %rows = index.mul %tokens, %routes : index
+  %groups = index.mul %rows, %blocks : index
+  %group0 = index.madd %wg, %c4, %wave : index
+  %valid = index.cmp ult, %group0, %groups : index
+  scf.if %valid {
+    %group = index.assume %group0 [lt(%group0, %groups)] : index
+    %x = buffer.view %input[%zero_offset] : buffer -> view<[%groups]x32xf32>
+    %value = view.load %x[%group, %lane] : view<[%groups]x32xf32> -> f32
+    %absolute = scalar.absf %value : f32
+    %peak = kernel.subgroup.reduce<maxnumf> %absolute : f32
+    %zero = scalar.constant 0.0 : f32
+    %one = scalar.constant 1.0 : f32
+    %zero_i32 = scalar.constant 0 : i32
+    %one_i32 = scalar.constant 1 : i32
+    %eight = scalar.constant 8 : i32
+    %shift = scalar.constant 23 : i32
+    %exponent_mask = scalar.constant 2139095040 : i32
+    %one_exponent = scalar.constant 127 : i32
+    %peak_bits = scalar.bitcast %peak : f32 to i32
+    %exponent_bits = scalar.andi %peak_bits, %exponent_mask : i32
+    %exponent = scalar.shrui %exponent_bits, %shift : i32
+    %scale_exponent0 = scalar.subi %exponent, %eight : i32
+    %positive = scalar.cmpi sgt, %scale_exponent0, %zero_i32 : i32
+    %scale_exponent1 = scf.select %positive, %scale_exponent0, %one_i32 : i32
+    %peak_zero = scalar.cmpf oeq, %peak, %zero : f32
+    %scale_exponent = scf.select %peak_zero, %one_exponent, %scale_exponent1 : i32
+    %scale_bits = scalar.shli %scale_exponent, %shift : i32
+    %scale = scalar.bitcast %scale_bits : i32 to f32
+    %inverse = scalar.divf %one, %scale : f32
+    %normalized = scalar.mulf %value, %inverse : f32
+    %hi, %r1 = func.call @ggml_f32_part(%normalized) : (f32) -> (f16, f32)
+    %mid, %r2 = func.call @ggml_f32_part(%r1) : (f32) -> (f16, f32)
+    %block_offset = index.scale %group, %block_bytes : index, offset -> offset
+    %payload_offset = index.add %block_offset, %header_bytes : offset
+    %header = buffer.view %output[%block_offset] : buffer -> view<1xf32>
+    %parts = buffer.view %output[%payload_offset] : buffer -> view<2x32xf16>
+    %leader = index.cmp eq, %lane, %c0 : index
+    scf.if %leader {
+      view.store %scale, %header[%c0] : f32, view<1xf32>
+    }
+    view.store %hi, %parts[%c0, %lane] : f16, view<2x32xf16>
+    view.store %mid, %parts[%c1, %lane] : f16, view<2x32xf16>
+  }
+  kernel.return
+}
+
+kernel.def target(@ggml_mxfp4_matrix_f32_wave32) @ggml_mul_mat_id_batched_mxfp4_f32(%token_count: index) {
+  %m = config.get @ggml.mul_mat_id.output_size : index
+  %experts = config.get @ggml.mul_mat_id.expert_count : index
+  %routes = config.get @ggml.mul_mat_id.route_count : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c31 = index.constant 31 : index
+  %c32 = index.constant 32 : index
+  %c63 = index.constant 63 : index
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %padded = index.add %m, %c63 : index
+  %rows = index.div %padded, %c64 : index
+  %assignments = index.mul %token_count, %routes : index
+  %rounded = index.add %assignments, %c31 : index
+  %partitions = index.div %rounded, %c32 : index
+  %more = index.cmp ugt, %partitions, %experts : index
+  %launch_partitions = scf.select %more, %partitions, %experts : index
+  kernel.launch.config workgroups(%rows, %launch_partitions, %c2) workgroup_size(%c128, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %expert_table: buffer, %partition_table: buffer, %weight: buffer, %output: buffer) where [range(%token_count, 1, 2048)] {
+  %k = config.get @ggml.mul_mat_id.input_size : index
+  %m = config.get @ggml.mul_mat_id.output_size : index
+  %routes = config.get @ggml.mul_mat_id.route_count : index
+  %input_routes = config.get @ggml.mul_mat_id.input_route_count : index
+  %experts = config.get @ggml.mul_mat_id.expert_count : index
+  %capacity = config.get @ggml.workload.token_capacity : index
+  %tokens = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %capacity)] : index
+  %tile = kernel.workgroup.id<x> : index
+  %partition_start = kernel.workgroup.id<y> : index
+  %half = kernel.workgroup.id<z> : index
+  %wave = kernel.subgroup.id : index
+  %lane = kernel.subgroup.lane.id : index
+  %tid = kernel.workitem.id<x> : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c5 = index.constant 5 : index
+  %c6 = index.constant 6 : index
+  %c7 = index.constant 7 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c31 = index.constant 31 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %c72 = index.constant 72 : index
+  %zero_offset = index.constant 0 : offset
+  %one_byte = index.constant 1 : offset
+  %four_bytes = index.constant 4 : offset
+  %block_bytes = index.constant 17 : offset
+  %zero_float = scalar.constant 0.0 : f32
+  %one_float = scalar.constant 1.0 : f32
+  %zero_i32 = scalar.constant 0 : i32
+  %one_i32 = scalar.constant 1 : i32
+  %two_i32 = scalar.constant 2 : i32
+  %eight_i32 = scalar.constant 8 : i32
+  %minus_one_i32 = scalar.constant -1 : i32
+  %shuffle_width = scalar.constant 32 : i32
+  %shift5 = scalar.constant 5 : i32
+  %shift9 = scalar.constant 9 : i32
+  %shift15 = scalar.constant 15 : i32
+  %mask31 = scalar.constant 31 : i32
+  %mask63 = scalar.constant 63 : i32
+  %mask511 = scalar.constant 511 : i32
+  %scale_shift = scalar.constant 23 : i32
+  %scale_subnormal = scalar.constant 4194304 : i32
+  %scale_nan = scalar.constant 2143289344 : i32
+  %nan_exponent = scalar.constant 255 : i32
+  %exponent_mask = scalar.constant 2139095040 : i32
+  %normal_one_exponent = scalar.constant 127 : i32
+  %zero4 = vector.constant 0.0 : vector<4xf32>
+  %zero4h = vector.constant 0.0 : vector<4xf16>
+  %zero8 = vector.constant 0.0 : vector<8xf32>
+  %inverse_amplify = vector.constant 0.000244140625 : vector<8xf32>
+  %weight_bytes = index.constant 9216 : offset
+  %activation_bytes = index.constant 2304 : offset
+  %weight_scale_bytes = index.constant 512 : offset
+  %input_scale_bytes = index.constant 128 : offset
+  %route_bytes = index.constant 64 : offset
+  %wave_result_bytes = index.constant 1024 : offset
+  %weight_stage = buffer.alloca<workgroup> align(16) %weight_bytes : buffer
+  %input_hi_stage = buffer.alloca<workgroup> align(16) %activation_bytes : buffer
+  %input_mid_stage = buffer.alloca<workgroup> align(16) %activation_bytes : buffer
+  %weight_scales = buffer.alloca<workgroup> align(16) %weight_scale_bytes : buffer
+  %input_scales = buffer.alloca<workgroup> align(16) %input_scale_bytes : buffer
+  %route_stage = buffer.alloca<workgroup> align(16) %route_bytes : buffer
+  %ws = buffer.view %weight_stage[%zero_offset] : buffer -> view<64x72xf16>
+  %xh = buffer.view %input_hi_stage[%zero_offset] : buffer -> view<16x72xf16>
+  %xm = buffer.view %input_mid_stage[%zero_offset] : buffer -> view<16x72xf16>
+  %input_layout = encoding.layout.strided [1, %c72] : encoding<layout>
+  %xhf = buffer.view %input_hi_stage[%zero_offset] : buffer -> view<64x16xf16, %input_layout>
+  %xmf = buffer.view %input_mid_stage[%zero_offset] : buffer -> view<64x16xf16, %input_layout>
+  %wsc = buffer.view %weight_scales[%zero_offset] : buffer -> view<2x64xf32>
+  %xsc = buffer.view %input_scales[%zero_offset] : buffer -> view<2x16xf32>
+  %ids = buffer.view %route_stage[%zero_offset] : buffer -> view<16xi32>
+  %result_offset = index.scale %wave, %wave_result_bytes : index, offset -> offset
+  %result_layout = encoding.layout.strided [1, %c16] : encoding<layout>
+  // The result reuses weight staging after the final K-panel barrier.
+  %rf = buffer.view %weight_stage[%result_offset] : buffer -> view<16x16xf32, %result_layout>
+  %rp = buffer.view %weight_stage[%result_offset] : buffer -> view<16x16xf32>
+  %assignment_count = index.mul %tokens, %routes : index
+  %rounded = index.add %assignment_count, %c31 : index
+  %parts = index.div %rounded, %c32 : index
+  %max_parts = index.add %parts, %experts : index
+  %more = index.cmp ugt, %parts, %experts : index
+  %launch_parts = scf.select %more, %parts, %experts : index
+  %count_view = buffer.view %partition_table[%zero_offset] : buffer -> view<1xi32>
+  %part_view = buffer.view %partition_table[%four_bytes] : buffer -> view<[%max_parts]xi32>
+  %is_leader = index.cmp eq, %tid, %c0 : index
+  %lane_count = scf.if %is_leader -> (i32) {
+    %v = view.load %count_view[%c0] : view<1xi32> -> i32
+    scf.yield %v : i32
+  } else {
+    scf.yield %zero_i32 : i32
+  }
+  %reduced_count = kernel.workgroup.reduce<addi> %lane_count : i32
+  %count_i32 = kernel.subgroup.broadcast.first %reduced_count : i32
+  %count0 = index.cast %count_i32 : i32 to index
+  %count = index.assume %count0 [le(%count0, %max_parts)] : index
+  %table_offset = index.scale %experts, %four_bytes : index, offset -> offset
+  %table = buffer.view %expert_table[%table_offset] : buffer -> view<[%experts]x[%tokens]xi32>
+  %y = buffer.view %output[%zero_offset] : buffer -> view<[%assignment_count]x[%m]xf32>
+  %half_base = index.mul %half, %c16 : index
+  %load_row0 = index.div %tid, %c4 : index
+  %load_row = index.assume %load_row0 [range(%load_row0, 0, 31)] : index
+  %packet = index.rem %tid, %c4 : index
+  %packet_offset = index.mul %packet, %c4 : index
+  %packet_hi = index.add %packet_offset, %c16 : index
+  %scale_writer = index.cmp eq, %packet, %c0 : index
+  %input_loader = index.cmp ult, %load_row, %c16 : index
+  %weight_blocks = index.div %k, %c32 : index
+  %row_bytes = index.scale %weight_blocks, %block_bytes : index, offset -> offset
+  %tile_channel = index.mul %tile, %c64 : index
+  %wave_channel = index.mul %wave, %c16 : index
+  %lane_lo = index.rem %lane, %c16 : index
+  %lane_hi = index.div %lane, %c16 : index
+
+  scf.for %part = [%partition_start to %count step %launch_parts] {
+    %bounded_part = index.assume %part [lt(%part, %max_parts)] : index
+    %lane_descriptor = scf.if %is_leader -> (i32) {
+      %v = view.load %part_view[%bounded_part] : view<[%max_parts]xi32> -> i32
+      scf.yield %v : i32
+    } else {
+      scf.yield %zero_i32 : i32
+    }
+    %reduced_descriptor = kernel.workgroup.reduce<addi> %lane_descriptor : i32
+    %descriptor = kernel.subgroup.broadcast.first %reduced_descriptor : i32
+    %expert_i32 = scalar.andi %descriptor, %mask511 : i32
+    %expert0 = index.cast %expert_i32 : i32 to index
+    %expert = index.assume %expert0 [lt(%expert0, %experts)] : index
+    %partition_bits = scalar.shrui %descriptor, %shift9 : i32
+    %partition_i32 = scalar.andi %partition_bits, %mask63 : i32
+    %partition_base_i32 = scalar.shli %partition_i32, %shift5 : i32
+    %partition_base = index.cast %partition_base_i32 : i32 to index
+    %count_bits = scalar.shrui %descriptor, %shift15 : i32
+    %count_minus_one = scalar.andi %count_bits, %mask31 : i32
+    %row_count_i32 = scalar.addi %count_minus_one, %one_i32 : i32
+    %row_count = index.cast %row_count_i32 : i32 to index
+    %half_valid = index.cmp ult, %half_base, %row_count : index
+    scf.if %half_valid {
+      %remaining = index.sub %row_count, %half_base : index
+      %route_base = index.add %partition_base, %half_base : index
+      %loads_id = index.cmp ult, %tid, %c16 : index
+      scf.if %loads_id {
+        %slot = index.assume %tid [range(%tid, 0, 15)] : index
+        %valid = index.cmp ult, %slot, %remaining : index
+        %assignment = scf.if %valid -> (i32) {
+          %ordinal0 = index.add %route_base, %slot : index
+          %ordinal = index.assume %ordinal0 [lt(%ordinal0, %tokens)] : index
+          %v = view.load %table[%expert, %ordinal] : view<[%experts]x[%tokens]xi32> -> i32
+          scf.yield %v : i32
+        } else {
+          scf.yield %minus_one_i32 : i32
+        }
+        view.store %assignment, %ids[%slot] : i32, view<16xi32>
+      }
+      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+      %init = vector.fragment<init> %zero8 shape [%c16, %c16] : vector<8xf32>
+      %result = scf.for %base = [%c0 to %k step %c64](%acc = %init : vector<8xf32>) -> (vector<8xf32>) {
+        scf.for %ks = [%c0 to %c2 step %c1] unroll {
+          %stage_base = index.mul %ks, %c32 : index
+          %k_base = index.add %base, %stage_base : index
+          %block = index.div %k_base, %c32 : index
+          %stage_lo = index.add %stage_base, %packet_offset : index
+          %stage_hi = index.add %stage_base, %packet_hi : index
+          scf.for %slot = [%c0 to %c2 step %c1] unroll {
+            %local_row = index.madd %slot, %c32, %load_row : index
+            %row0 = index.add %tile_channel, %local_row : index
+            %row_valid = index.cmp ult, %row0, %m : index
+            %lo_half, %hi_half, %scale = scf.if %row_valid -> (vector<4xf16>, vector<4xf16>, f32) {
+              %row = index.assume %row0 [lt(%row0, %m)] : index
+              %flat_row = index.madd %expert, %m, %row : index
+              %row_base = index.scale %flat_row, %row_bytes : index, offset -> offset
+              %block_offset = index.scale %block, %block_bytes : index, offset -> offset
+              %scale_offset = index.add %row_base, %block_offset : offset
+              %payload_offset = index.add %scale_offset, %one_byte : offset
+              %scv = buffer.view %weight[%scale_offset] : buffer -> view<1xi8>
+              %wv = buffer.view %weight[%payload_offset] : buffer -> view<16xi8>
+              %scale_byte = view.load %scv[%c0] : view<1xi8> -> i8
+              %exponent = scalar.extui %scale_byte : i8 to i32
+              %normal_bits = scalar.shli %exponent, %scale_shift : i32
+              %is_zero = scalar.cmpi eq, %exponent, %zero_i32 : i32
+              %is_nan = scalar.cmpi eq, %exponent, %nan_exponent : i32
+              %finite_bits = scf.select %is_zero, %scale_subnormal, %normal_bits : i32
+              %scale_bits = scf.select %is_nan, %scale_nan, %finite_bits : i32
+              %scale_value = scalar.bitcast %scale_bits : i32 to f32
+              %packed_bytes = vector.load %wv[%packet_offset] : view<16xi8> -> vector<4xi8>
+              %packed = vector.bitcast %packed_bytes : vector<4xi8> to vector<1xi32>
+              %schema = encoding.define #encoding.f4e2m1<payload_elements=8, payload_packing=little_endian_nibbles, payload_registers=1> : encoding<schema>
+              %decoded = vector.decode %packed using %schema : vector<1xi32>, encoding<schema> -> vector<8xf16>
+              %w0 = vector.extract %decoded[%c0] : vector<8xf16> -> f16
+              %w1 = vector.extract %decoded[%c1] : vector<8xf16> -> f16
+              %w2 = vector.extract %decoded[%c2] : vector<8xf16> -> f16
+              %w3 = vector.extract %decoded[%c3] : vector<8xf16> -> f16
+              %w4 = vector.extract %decoded[%c4] : vector<8xf16> -> f16
+              %w5 = vector.extract %decoded[%c5] : vector<8xf16> -> f16
+              %w6 = vector.extract %decoded[%c6] : vector<8xf16> -> f16
+              %w7 = vector.extract %decoded[%c7] : vector<8xf16> -> f16
+              %lo = vector.from_elements %w0, %w2, %w4, %w6 : vector<4xf16>
+              %hi = vector.from_elements %w1, %w3, %w5, %w7 : vector<4xf16>
+              scf.yield %lo, %hi, %scale_value : vector<4xf16>, vector<4xf16>, f32
+            } else {
+              scf.yield %zero4h, %zero4h, %zero_float : vector<4xf16>, vector<4xf16>, f32
+            }
+            vector.store %lo_half, %ws[%local_row, %stage_lo] : vector<4xf16>, view<64x72xf16>
+            vector.store %hi_half, %ws[%local_row, %stage_hi] : vector<4xf16>, view<64x72xf16>
+            scf.if %scale_writer {
+              view.store %scale, %wsc[%ks, %local_row] : f32, view<2x64xf32>
+            }
+          }
+          scf.if %input_loader {
+            %input_row = index.assume %load_row [range(%load_row, 0, 15)] : index
+            %id = view.load %ids[%input_row] : view<16xi32> -> i32
+            %valid_id = scalar.cmpi sge, %id, %zero_i32 : i32
+            %hl, %hh, %ml, %mh, %scale = scf.if %valid_id -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>, f32) {
+              %assignment0 = index.cast %id : i32 to index
+              %assignment = index.assume %assignment0 [range(%assignment0, 0, 65535), lt(%assignment0, %assignment_count)] : index
+              %token0 = index.div %assignment, %routes : index
+              %token = index.assume %token0 [range(%token0, 0, 2047), lt(%token0, %tokens)] : index
+              %route = index.rem %assignment, %routes : index
+              %input_route = index.rem %route, %input_routes : index
+              %input_row0 = index.madd %token, %input_routes, %input_route : index
+              %input_block = index.madd %input_row0, %weight_blocks, %block : index
+              %packed_bytes = index.constant 144 : offset
+              %header_bytes = index.constant 16 : offset
+              %input_offset = index.scale %input_block, %packed_bytes : index, offset -> offset
+              %payload_offset = index.add %input_offset, %header_bytes : offset
+              %header = buffer.view %input[%input_offset] : buffer -> view<1xf32>
+              %parts = buffer.view %input[%payload_offset] : buffer -> view<2x32xf16>
+              %h0 = vector.load %parts[%c0, %packet_offset] : view<2x32xf16> -> vector<4xf16>
+              %h1 = vector.load %parts[%c0, %packet_hi] : view<2x32xf16> -> vector<4xf16>
+              %m0 = vector.load %parts[%c1, %packet_offset] : view<2x32xf16> -> vector<4xf16>
+              %m1 = vector.load %parts[%c1, %packet_hi] : view<2x32xf16> -> vector<4xf16>
+              %s = view.load %header[%c0] : view<1xf32> -> f32
+              scf.yield %h0, %h1, %m0, %m1, %s : vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>, f32
+            } else {
+              scf.yield %zero4h, %zero4h, %zero4h, %zero4h, %one_float : vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>, f32
+            }
+            vector.store %hl, %xh[%input_row, %stage_lo] : vector<4xf16>, view<16x72xf16>
+            vector.store %hh, %xh[%input_row, %stage_hi] : vector<4xf16>, view<16x72xf16>
+            vector.store %ml, %xm[%input_row, %stage_lo] : vector<4xf16>, view<16x72xf16>
+            vector.store %mh, %xm[%input_row, %stage_hi] : vector<4xf16>, view<16x72xf16>
+            scf.if %scale_writer {
+              view.store %scale, %xsc[%ks, %input_row] : f32, view<2x16xf32>
+            }
+          }
+        }
+        kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+        %next = scf.for %ks = [%c0 to %c2 step %c1](%current = %acc : vector<8xf32>) -> (vector<8xf32>) unroll {
+          %partial_init = vector.fragment<init> %zero8 shape [%c16, %c16] : vector<8xf32>
+          %high, %middle = scf.for %kh = [%c0 to %c32 step %c16](%ha = %partial_init : vector<8xf32>, %ma = %partial_init : vector<8xf32>) -> (vector<8xf32>, vector<8xf32>) unroll {
+            %stage_k = index.madd %ks, %c32, %kh : index
+            %w = vector.fragment.load<lhs> %ws[%wave_channel, %stage_k] shape [%c16, %c16] : view<64x72xf16> -> vector<16xf16>
+            %h = vector.fragment.load<rhs> %xhf[%stage_k, %c0] shape [%c16, %c16] : view<64x16xf16, %input_layout> -> vector<16xf16>
+            %mid = vector.fragment.load<rhs> %xmf[%stage_k, %c0] shape [%c16, %c16] : view<64x16xf16, %input_layout> -> vector<16xf16>
+            %hn = vector.mma %w, %h, %ha : vector<16xf16>, vector<16xf16>, vector<8xf32>
+            %mn = vector.mma %w, %mid, %ma : vector<16xf16>, vector<16xf16>, vector<8xf32>
+            scf.yield %hn, %mn : vector<8xf32>, vector<8xf32>
+          }
+          %partial = vector.fmaf %middle, %inverse_amplify, %high : vector<8xf32>
+          // F16-WMMA assigns even and odd output rows to the two lane halves.
+          %weight_scale = scf.for %reg = [%c0 to %c8 step %c1](%scales = %zero8 : vector<8xf32>) -> (vector<8xf32>) unroll {
+            %row_add = index.madd %reg, %c2, %lane_hi : index
+            %scale_index = index.add %wave_channel, %row_add : index
+            %scale_value = view.load %wsc[%ks, %scale_index] : view<2x64xf32> -> f32
+            %next_scales = vector.insert %scale_value into %scales[%reg] : f32, vector<8xf32>
+            scf.yield %next_scales : vector<8xf32>
+          }
+          %input_scale = view.load %xsc[%ks, %lane_lo] : view<2x16xf32> -> f32
+          %input_scale_vector = vector.splat %input_scale : vector<8xf32>
+          %combined_scale = vector.mulf %weight_scale, %input_scale_vector : vector<8xf32>
+          %updated = vector.fmaf %combined_scale, %partial, %current : vector<8xf32>
+          scf.yield %updated : vector<8xf32>
+        }
+        kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+        scf.yield %next : vector<8xf32>
+      }
+      vector.fragment.store<result> %result, %rf[%c0, %c0] shape [%c16, %c16] : vector<8xf32>, view<16x16xf32, %result_layout>
+      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+      %publish_row0 = index.div %lane, %c2 : index
+      %publish_row = index.assume %publish_row0 [range(%publish_row0, 0, 15)] : index
+      %publish_packet = index.rem %lane, %c2 : index
+      %publish_offset = index.mul %publish_packet, %c8 : index
+      %id = view.load %ids[%publish_row] : view<16xi32> -> i32
+      %valid = scalar.cmpi sge, %id, %zero_i32 : i32
+      scf.if %valid {
+        %assignment0 = index.cast %id : i32 to index
+        %assignment = index.assume %assignment0 [range(%assignment0, 0, 65535), lt(%assignment0, %assignment_count)] : index
+        %channel0 = index.add %tile_channel, %wave_channel : index
+        %channel = index.add %channel0, %publish_offset : index
+        %values = vector.load %rp[%publish_row, %publish_offset] : view<16x16xf32> -> vector<8xf32>
+        %mask = vector.mask.range [%channel to %m step %c1] : index -> vector<8xi1>
+        vector.store.mask %values, %y[%assignment, %channel], %mask : vector<8xf32>, view<[%assignment_count]x[%m]xf32>, vector<8xi1>
+      }
+      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    }
+  }
+  kernel.return
+}

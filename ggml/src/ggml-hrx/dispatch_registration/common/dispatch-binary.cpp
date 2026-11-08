@@ -193,18 +193,14 @@ static void add_binary_strided_parameters(Dispatch & dispatch,
     dispatch.kernel.compile_parameters.emplace("ggml.binary_f32.ne0", std::to_string(output.ne[0]));
     dispatch.kernel.compile_parameters.emplace("ggml.binary_f32.ne1", std::to_string(output.ne[1]));
     dispatch.kernel.compile_parameters.emplace("ggml.binary_f32.ne2", std::to_string(output.ne[2]));
-    dispatch.kernel.compile_parameters.emplace("ggml.binary_f32.src0_stride1",
-                                               std::to_string(lhs.nb[1] / sizeof(float)));
-    dispatch.kernel.compile_parameters.emplace("ggml.binary_f32.src0_stride2",
-                                               std::to_string(lhs.nb[2] / sizeof(float)));
-    dispatch.kernel.compile_parameters.emplace("ggml.binary_f32.src0_stride3",
-                                               std::to_string(lhs.nb[3] / sizeof(float)));
-    dispatch.kernel.compile_parameters.emplace("ggml.binary_f32.src1_stride1",
-                                               std::to_string(rhs.nb[1] / sizeof(float)));
-    dispatch.kernel.compile_parameters.emplace("ggml.binary_f32.src1_stride2",
-                                               std::to_string(rhs.nb[2] / sizeof(float)));
-    dispatch.kernel.compile_parameters.emplace("ggml.binary_f32.src1_stride3",
-                                               std::to_string(rhs.nb[3] / sizeof(float)));
+    for (int dim = 1; dim < GGML_MAX_DIMS; ++dim) {
+        dispatch.kernel.compile_parameters.emplace(
+            "ggml.binary_f32.src0_stride" + std::to_string(dim),
+            std::to_string(broadcast_dim_flag(lhs, output, dim) ? 0 : lhs.nb[dim] / sizeof(float)));
+        dispatch.kernel.compile_parameters.emplace(
+            "ggml.binary_f32.src1_stride" + std::to_string(dim),
+            std::to_string(broadcast_dim_flag(rhs, output, dim) ? 0 : rhs.nb[dim] / sizeof(float)));
+    }
     dispatch.kernel.compile_parameters.emplace("ggml.binary_f32.src0_span",
                                                std::to_string(lhs_byte_count / sizeof(float)));
     dispatch.kernel.compile_parameters.emplace("ggml.binary_f32.src1_span",
@@ -298,9 +294,14 @@ static bool match_binary_f32_dispatch(const DispatchMatchContext & context, Disp
     }
 
     const bool same_shape_inputs = same_shape(*lhs, *output) && same_shape(*rhs, *output);
+    const bool strided_broadcast = !same_shape_inputs && (!lhs->contiguous || !rhs->contiguous ||
+                                                          !packed_f32_layout(*lhs) || !packed_f32_layout(*rhs));
+    if (!binary_kind_allows_broadcast(params->op, *lhs, *rhs, *output)) {
+        return false;
+    }
     const CommonActivationPublicationCapabilities capabilities = {
-        binary_q8_publication_enabled(params->op, *output) ? DispatchActivationInputQ8_1X4 :
-                                                             DispatchActivationInputNone,
+        !strided_broadcast && binary_q8_publication_enabled(params->op, *output) ? DispatchActivationInputQ8_1X4 :
+                                                                                   DispatchActivationInputNone,
         DispatchActivationInputQ8_1X4,
     };
     const CommonActivationPublicationPlan publication_plan =
@@ -310,22 +311,21 @@ static bool match_binary_f32_dispatch(const DispatchMatchContext & context, Disp
     const bool publish_q8 = q8_demand != nullptr;
 
     Dispatch dispatch;
-    if (same_shape_inputs) {
+    if (same_shape_inputs || strided_broadcast) {
         dispatch.kernel = make_kernel_specialization(publish_q8 ? kBinaryF32PublishQ8_1X4Kernel : kBinaryF32Kernel);
         add_binary_strided_parameters(dispatch, *lhs, *rhs, *output, lhs_byte_count, rhs_byte_count);
         if (publish_q8) {
             dispatch.kernel.integer_parameters.erase("element_count");
             dispatch.kernel.integer_parameters.emplace("token_count", output->ne[1]);
+        } else {
+            dispatch.kernel.compile_parameters.emplace("ggml.binary_f32.src0_stride0",
+                                                       std::to_string(broadcast_dim_flag(*lhs, *output, 0) ? 0 : 1));
+            dispatch.kernel.compile_parameters.emplace("ggml.binary_f32.src1_stride0",
+                                                       std::to_string(broadcast_dim_flag(*rhs, *output, 0) ? 0 : 1));
         }
         dispatch.kernel.compile_parameters.emplace("ggml.binary_f32.op",
                                                    std::to_string(binary_kind_config_value(params->op)));
     } else {
-        if (!lhs->contiguous || !rhs->contiguous || !packed_f32_layout(*lhs) || !packed_f32_layout(*rhs)) {
-            return false;
-        }
-        if (!binary_kind_allows_broadcast(params->op, *lhs, *rhs, *output)) {
-            return false;
-        }
         dispatch.kernel = make_kernel_specialization(publish_q8 ? kBinaryBcF32PublishQ8_1X4Kernel : kBinaryBcF32Kernel);
         if (publish_q8) {
             dispatch.kernel.integer_parameters.emplace("token_count", output->ne[1]);
@@ -356,6 +356,33 @@ static bool match_binary_f32_dispatch(const DispatchMatchContext & context, Disp
     return match.status.success();
 }
 
+static bool match_add_f16(const DispatchMatchContext & context, DispatchMatch & match) {
+    const GraphNode * node = context.root_node;
+    if (node == nullptr || node->op != GGML_OP_ADD || node->inputs.size() != 2) {
+        return false;
+    }
+    const Value * lhs    = graph_value(context.graph, node->inputs[0]);
+    const Value * rhs    = graph_value(context.graph, node->inputs[1]);
+    const Value * output = graph_value(context.graph, node->output);
+    if (lhs == nullptr || rhs == nullptr || output == nullptr || lhs->type != GGML_TYPE_F16 ||
+        rhs->type != GGML_TYPE_F16 || output->type != GGML_TYPE_F16 || !lhs->contiguous || !rhs->contiguous ||
+        !output->contiguous || lhs->ne != output->ne || rhs->ne != output->ne || output->element_count < 1 ||
+        output->element_count > 134217728 || !binary_output_storage_is_safe(*lhs, *rhs, *output)) {
+        return false;
+    }
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(GGML_HRX_KERNEL_REF("loom_libs", "ggml_add_f16"));
+    dispatch.kernel.integer_parameters.emplace("element_count", output->element_count);
+    dispatch.bindings = {
+        { lhs->id,    0, lhs->byte_count    },
+        { rhs->id,    0, rhs->byte_count    },
+        { output->id, 0, output->byte_count }
+    };
+    match.dispatches.push_back(std::move(dispatch));
+    match.covered_nodes.push_back(context.root_index);
+    return true;
+}
+
 static void register_binary_dispatch_for(DispatchRegistryBuilder & registry, ggml_op root_op) {
     registry.add({
         "common.binary_f32",
@@ -370,6 +397,8 @@ static void register_binary_dispatch_for(DispatchRegistryBuilder & registry, ggm
 }  // namespace
 
 void register_binary_dispatch(DispatchRegistryBuilder & registry) {
+    registry.add(
+        { "common.add.f16", GGML_OP_ADD, DispatchMatchKind::SingleOp, 0, DispatchSource::Common, match_add_f16 });
     registry.add({
         "common.binary_swiglu_symmetric_i4_k32",
         GGML_OP_GLU,

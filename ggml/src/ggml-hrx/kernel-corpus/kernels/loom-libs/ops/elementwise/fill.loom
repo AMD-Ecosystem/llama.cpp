@@ -1,0 +1,34 @@
+config.decl @ggml.fill.value : f32
+config.decl @ggml.fill.format : %value: index where [range(%value, 16, 32)]
+kernel.def @ggml_fill(%element_count: index) {
+  %one = index.constant 1 : index
+  %group = index.constant 256 : index
+  %pad = index.constant 255 : index
+  %padded = index.add %element_count, %pad : index
+  %groups = index.div %padded, %group : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%group, %one, %one) : index
+} launch(%element_count: index, %output: buffer) {
+  %count = index.assume %element_count [range(%element_count, 1, 134217728)] : index
+  %group = kernel.workgroup.id<x> : index
+  %lane = kernel.workitem.id<x> : index
+  %group_size = index.constant 256 : index
+  %linear0 = index.madd %group, %group_size, %lane : index
+  %valid = index.cmp ult, %linear0, %count : index
+  scf.if %valid {
+    %linear, %extent = index.assume %linear0, %count [range(%linear0, 0, 134217727), lt(%linear0, %count)] : index, index
+    %zero = index.constant 0 : offset
+    %format = config.get @ggml.fill.format : index
+    %bits16 = index.constant 16 : index
+    %is16 = index.cmp eq, %format, %bits16 : index
+    %value = config.get @ggml.fill.value : f32
+    scf.if %is16 {
+      %v = scalar.fptrunc %value : f32 to f16
+      %out = buffer.view %output[%zero] : buffer -> view<[%count]xf16>
+      view.store %v, %out[%linear] : f16, view<[%count]xf16>
+    } else {
+      %out = buffer.view %output[%zero] : buffer -> view<[%count]xf32>
+      view.store %value, %out[%linear] : f32, view<[%count]xf32>
+    }
+  }
+  kernel.return
+}

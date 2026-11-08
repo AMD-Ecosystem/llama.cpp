@@ -315,7 +315,8 @@ struct RopeConcatMatch {
 
 static RopeMatch match_rope_f32(const Graph & graph, const GraphNode * node, Status * status = nullptr) {
     RopeMatch match;
-    if (node == nullptr || node->op != GGML_OP_ROPE || node->inputs.size() < 2 || node->inputs.size() > 3) {
+    if (node == nullptr || (node->op != GGML_OP_ROPE && node->op != GGML_OP_ROPE_BACK) || node->inputs.size() < 2 ||
+        node->inputs.size() > 3) {
         log_rope_reject(status, "root is not a supported ROPE arity", nullptr, nullptr, nullptr);
         return match;
     }
@@ -360,6 +361,14 @@ static RopeMatch match_rope_f32(const Graph & graph, const GraphNode * node, Sta
         log_rope_reject(status, "failed to build supported ROPE theta table", input, positions, output);
         return {};
     }
+    if (node->op == GGML_OP_ROPE_BACK) {
+        for (size_t offset = 0; offset < theta_data.size(); offset += sizeof(float)) {
+            float theta;
+            std::memcpy(&theta, theta_data.data() + offset, sizeof(theta));
+            theta = -theta;
+            std::memcpy(theta_data.data() + offset, &theta, sizeof(theta));
+        }
+    }
 
     const Value *        freq_factors       = nullptr;
     size_t               freq_factors_bytes = 0;
@@ -401,7 +410,10 @@ static RopeMatch match_rope_f32(const Graph & graph, const GraphNode * node, Sta
     return match;
 }
 
-static SetRowsMatch match_set_rows_2d(const Graph & graph, const GraphNode * node, Status * status = nullptr) {
+static SetRowsMatch match_set_rows_2d(const Graph &     graph,
+                                      const GraphNode * node,
+                                      Status *          status            = nullptr,
+                                      bool              allow_i32_indices = false) {
     SetRowsMatch match;
     if (node == nullptr || node->op != GGML_OP_SET_ROWS || node->inputs.size() != 3) {
         log_set_rows_reject(status, "root is not a supported SET_ROWS arity", nullptr, nullptr, nullptr, nullptr);
@@ -413,8 +425,10 @@ static SetRowsMatch match_set_rows_2d(const Graph & graph, const GraphNode * nod
     const Value * cache   = graph_value(graph, node->inputs[2]);
     const Value * output  = graph_value(graph, node->output);
     if (rows == nullptr || indices == nullptr || cache == nullptr || output == nullptr || !indices->contiguous ||
-        !cache->contiguous || indices->type != GGML_TYPE_I64 || output->type != cache->type ||
-        !same_shape(*cache, *output) || !graph.values().same_storage(cache->id, output->id)) {
+        !cache->contiguous ||
+        (indices->type != GGML_TYPE_I64 && !(allow_i32_indices && indices->type == GGML_TYPE_I32)) ||
+        output->type != cache->type || !same_shape(*cache, *output) ||
+        !graph.values().same_storage(cache->id, output->id)) {
         log_set_rows_reject(status, "input/output shape or storage is unsupported", rows, indices, cache, output);
         return {};
     }
@@ -489,6 +503,8 @@ static void add_set_rows_compile_parameters(Dispatch & dispatch, const SetRowsMa
     dispatch.kernel.compile_parameters.emplace("ggml.set_rows.input_format", to_config_value(match.row_format));
     dispatch.kernel.compile_parameters.emplace("ggml.set_rows.output_format", to_config_value(match.output_format));
     dispatch.kernel.compile_parameters.emplace("ggml.set_rows.input_stride", to_config_value(match.input_stride));
+    dispatch.kernel.compile_parameters.emplace("ggml.set_rows.index_format",
+                                               match.indices->type == GGML_TYPE_I32 ? "32" : "64");
 }
 
 static ValueId add_constant_binding(const DispatchMatchContext & context,
@@ -525,12 +541,25 @@ static std::pair<ValueId, ValueId> add_rope_frequency_bindings(const DispatchMat
 }
 
 static Dispatch make_rope_dispatch(const DispatchMatchContext & context,
-                                   const RopeMatch &            match,
+                                   const RopeMatch &            source_match,
                                    DispatchMatch &              dispatch_match) {
+    RopeMatch    match        = source_match;
+    const auto * params       = op_params_as<RopeParams>(match.node->params);
+    const bool   native_power = params->ext_factor == 0.0f && params->freq_scale == 1.0f;
+    if (native_power) {
+        float base = std::pow(params->freq_base, -2.0f / static_cast<float>(match.n_dims));
+        if (match.node->op == GGML_OP_ROPE_BACK) {
+            base = -base;
+        }
+        for (size_t offset = 0; offset < match.theta_data.size(); offset += sizeof(float)) {
+            std::memcpy(match.theta_data.data() + offset, &base, sizeof(float));
+        }
+    }
     const auto [theta, freq_factors] = add_rope_frequency_bindings(context, match, dispatch_match, "common.rope");
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(kRopeF32Kernel);
     dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
+    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.native_power", native_power ? "1" : "0");
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
     dispatch.kernel.integer_parameters.emplace("input_span", match.input_span);
     add_rope_compile_parameters(dispatch, match, "ggml.rope_f32", false);
@@ -858,7 +887,7 @@ static bool match_rope_f32_dispatch(const DispatchMatchContext & context, Dispat
 }
 
 static bool match_set_rows_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
-    const SetRowsMatch match = match_set_rows_2d(context.graph, context.root_node, &dispatch_match.status);
+    const SetRowsMatch match = match_set_rows_2d(context.graph, context.root_node, &dispatch_match.status, true);
     if (!match.matched()) {
         return false;
     }
@@ -870,7 +899,77 @@ static bool match_set_rows_dispatch(const DispatchMatchContext & context, Dispat
 
 }  // namespace
 
+static bool match_set_rows_scalar(const DispatchMatchContext & context, DispatchMatch & match) {
+    const GraphNode * node = context.root_node;
+    if (node == nullptr || node->op != GGML_OP_SET_ROWS || node->inputs.size() != 3) {
+        return false;
+    }
+    const Value * rows   = graph_value(context.graph, node->inputs[0]);
+    const Value * ids    = graph_value(context.graph, node->inputs[1]);
+    const Value * cache  = graph_value(context.graph, node->inputs[2]);
+    const Value * output = graph_value(context.graph, node->output);
+    if (rows == nullptr || ids == nullptr || cache == nullptr || output == nullptr ||
+        (rows->type != GGML_TYPE_F32 && rows->type != GGML_TYPE_F16) || rows->type != cache->type ||
+        cache->type != output->type || (ids->type != GGML_TYPE_I32 && ids->type != GGML_TYPE_I64) || rows->ne[0] != 1 ||
+        cache->ne[0] != 1 || ids->ne[0] != rows->ne[1] || ids->ne[3] != 1 || rows->ne[2] != cache->ne[2] ||
+        rows->ne[3] != cache->ne[3] || cache->ne != output->ne || rows->element_count < 1 ||
+        rows->element_count > 134217728 || cache->storage != output->storage ||
+        cache->storage_offset != output->storage_offset || rows->storage == output->storage ||
+        ids->storage == output->storage) {
+        return false;
+    }
+    for (const Value * value : { rows, ids, cache }) {
+        const size_t bytes = ggml_type_size(value->type);
+        if (value->byte_count / bytes > 1073741824) {
+            return false;
+        }
+        for (int dim = 0; dim < GGML_MAX_DIMS; ++dim) {
+            if (value->ne[dim] < 1 || value->nb[dim] == 0 || value->nb[dim] % bytes != 0 ||
+                value->nb[dim] / bytes > 1073741824) {
+                return false;
+            }
+        }
+    }
+    if (rows->ne[2] % ids->ne[1] != 0 || rows->ne[3] % ids->ne[2] != 0) {
+        return false;
+    }
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(GGML_HRX_KERNEL_REF("loom_libs", "ggml_set_rows_scalar"));
+    dispatch.kernel.integer_parameters.emplace("element_count", rows->element_count);
+    auto & config = dispatch.kernel.compile_parameters;
+    auto   set    = [&](const std::string & key, int64_t value) {
+        config.emplace("ggml.set_rows_scalar." + key, std::to_string(value));
+    };
+    set("nr", rows->ne[1]);
+    set("ne2", rows->ne[2]);
+    set("in1", ids->ne[1]);
+    set("in2", ids->ne[2]);
+    set("cache_rows", cache->ne[1]);
+    set("index_bits", ggml_type_size(ids->type) * 8);
+    set("element_bits", ggml_type_size(rows->type) * 8);
+    set("source_span", rows->byte_count / ggml_type_size(rows->type));
+    set("index_span", ids->byte_count / ggml_type_size(ids->type));
+    set("cache_span", cache->byte_count / ggml_type_size(cache->type));
+    for (int dim = 0; dim < 3; ++dim) {
+        set("is" + std::to_string(dim), ids->nb[dim] / ggml_type_size(ids->type));
+        set("rs" + std::to_string(dim + 1), rows->nb[dim + 1] / ggml_type_size(rows->type));
+        set("cs" + std::to_string(dim + 1), cache->nb[dim + 1] / ggml_type_size(cache->type));
+    }
+    dispatch.bindings = {
+        { rows->id,   0, rows->byte_count   },
+        { ids->id,    0, ids->byte_count    },
+        { output->id, 0, output->byte_count }
+    };
+    match.dispatches.push_back(std::move(dispatch));
+    match.covered_nodes.push_back(context.root_index);
+    return true;
+}
+
 void register_rope_set_rows_dispatches(DispatchRegistryBuilder & registry) {
+    registry.add({ "common.rope_back.f32", GGML_OP_ROPE_BACK, DispatchMatchKind::SingleOp, 100, DispatchSource::Common,
+                   match_rope_f32_dispatch });
+    registry.add({ "common.set_rows.scalar", GGML_OP_SET_ROWS, DispatchMatchKind::SingleOp, 0, DispatchSource::Common,
+                   match_set_rows_scalar });
     registry.add({
         "common.rope_scale.f32",
         GGML_OP_ROPE,

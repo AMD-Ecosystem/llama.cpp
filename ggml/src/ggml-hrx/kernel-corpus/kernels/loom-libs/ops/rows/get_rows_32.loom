@@ -1,0 +1,64 @@
+// Bit-preserving batched row gather for F32 and I32 tensors.
+config.decl @ggml.get_rows_32.width : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.get_rows_32.rows : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.get_rows_32.selected : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.get_rows_32.batch1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.get_rows_32.source_span : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.get_rows_32.ids_span : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.get_rows_32.source_stride1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.get_rows_32.source_stride2 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.get_rows_32.source_stride3 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.get_rows_32.ids_stride1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.get_rows_32.ids_stride2 : %value: index where [range(%value, 1, 1073741824)]
+
+kernel.def @ggml_get_rows_32(%element_count: index) {
+  %one = index.constant 1 : index
+  %group = index.constant 256 : index
+  %rounding = index.constant 255 : index
+  %rounded = index.add %element_count, %rounding : index
+  %groups = index.div %rounded, %group : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%group, %one, %one) : index
+} launch(%element_count: index, %source: buffer, %ids: buffer, %output: buffer) {
+  %count = index.assume %element_count [range(%element_count, 1, 134217728)] : index
+  %width = config.get @ggml.get_rows_32.width : index
+  %rows = config.get @ggml.get_rows_32.rows : index
+  %selected = config.get @ggml.get_rows_32.selected : index
+  %batch1 = config.get @ggml.get_rows_32.batch1 : index
+  %source_span = config.get @ggml.get_rows_32.source_span : index
+  %ids_span = config.get @ggml.get_rows_32.ids_span : index
+  %source_stride1 = config.get @ggml.get_rows_32.source_stride1 : index
+  %source_stride2 = config.get @ggml.get_rows_32.source_stride2 : index
+  %source_stride3 = config.get @ggml.get_rows_32.source_stride3 : index
+  %ids_stride1 = config.get @ggml.get_rows_32.ids_stride1 : index
+  %ids_stride2 = config.get @ggml.get_rows_32.ids_stride2 : index
+  %group = kernel.workgroup.id<x> : index
+  %lane = kernel.workitem.id<x> : index
+  %size = index.constant 256 : index
+  %linear = index.madd %group, %size, %lane : index
+  %valid = index.cmp ult, %linear, %count : index
+  %zero = index.constant 0 : offset
+  %source_view = buffer.view %source[%zero] : buffer -> view<[%source_span]xi32>
+  %ids_view = buffer.view %ids[%zero] : buffer -> view<[%ids_span]xi32>
+  %output_view = buffer.view %output[%zero] : buffer -> view<[%count]xi32>
+  scf.if %valid {
+    %column = index.rem %linear, %width : index
+    %row_flat = index.div %linear, %width : index
+    %selected_row = index.rem %row_flat, %selected : index
+    %batch_flat = index.div %row_flat, %selected : index
+    %batch_a = index.rem %batch_flat, %batch1 : index
+    %batch_b = index.div %batch_flat, %batch1 : index
+    %ids_index_a = index.madd %batch_a, %ids_stride1, %selected_row : index
+    %ids_index0 = index.madd %batch_b, %ids_stride2, %ids_index_a : index
+    %ids_index, %ids_extent = index.assume %ids_index0, %ids_span [range(%ids_index0, 0, 1073741823), lt(%ids_index0, %ids_span)] : index, index
+    %row_i32 = view.load %ids_view[%ids_index] : view<[%ids_span]xi32> -> i32
+    %row0 = index.cast %row_i32 : i32 to index
+    %row, %rows_extent = index.assume %row0, %rows [range(%row0, 0, 1073741823), lt(%row0, %rows)] : index, index
+    %source_row = index.madd %row, %source_stride1, %column : index
+    %source_batch_a = index.madd %batch_a, %source_stride2, %source_row : index
+    %source_index0 = index.madd %batch_b, %source_stride3, %source_batch_a : index
+    %source_index, %source_extent = index.assume %source_index0, %source_span [range(%source_index0, 0, 1073741823), lt(%source_index0, %source_span)] : index, index
+    %value = view.load %source_view[%source_index] : view<[%source_span]xi32> -> i32
+    view.store %value, %output_view[%linear] : i32, view<[%count]xi32>
+  }
+  kernel.return
+}

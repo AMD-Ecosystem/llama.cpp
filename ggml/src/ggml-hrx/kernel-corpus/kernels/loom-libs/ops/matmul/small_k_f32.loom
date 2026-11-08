@@ -1,0 +1,97 @@
+config.decl @ggml.small_matmul.k : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.small_matmul.m : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.small_matmul.n : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.small_matmul.ne2 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.small_matmul.repeat2 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.small_matmul.repeat3 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.small_matmul.weight_span : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.small_matmul.input_span : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.small_matmul.weight_format : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.small_matmul.ws0 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.small_matmul.ws1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.small_matmul.ws2 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.small_matmul.ws3 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.small_matmul.xs0 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.small_matmul.xs1 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.small_matmul.xs2 : %value: index where [range(%value, 1, 1073741824)]
+config.decl @ggml.small_matmul.xs3 : %value: index where [range(%value, 1, 1073741824)]
+
+kernel.def @ggml_mul_mat_small_k_f32(%element_count: index) {
+  %one = index.constant 1 : index
+  %group = index.constant 256 : index
+  %pad = index.constant 255 : index
+  %padded = index.add %element_count, %pad : index
+  %groups = index.div %padded, %group : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%group, %one, %one) : index
+} launch(%element_count: index, %weight: buffer, %input: buffer, %output: buffer) {
+  %count = index.assume %element_count [range(%element_count, 1, 134217728)] : index
+  %k = config.get @ggml.small_matmul.k : index
+  %m = config.get @ggml.small_matmul.m : index
+  %n = config.get @ggml.small_matmul.n : index
+  %ne2 = config.get @ggml.small_matmul.ne2 : index
+  %repeat2 = config.get @ggml.small_matmul.repeat2 : index
+  %repeat3 = config.get @ggml.small_matmul.repeat3 : index
+  %weight_span = config.get @ggml.small_matmul.weight_span : index
+  %input_span = config.get @ggml.small_matmul.input_span : index
+  %weight_format = config.get @ggml.small_matmul.weight_format : index
+  %ws0 = config.get @ggml.small_matmul.ws0 : index
+  %ws1 = config.get @ggml.small_matmul.ws1 : index
+  %ws2 = config.get @ggml.small_matmul.ws2 : index
+  %ws3 = config.get @ggml.small_matmul.ws3 : index
+  %xs0 = config.get @ggml.small_matmul.xs0 : index
+  %xs1 = config.get @ggml.small_matmul.xs1 : index
+  %xs2 = config.get @ggml.small_matmul.xs2 : index
+  %xs3 = config.get @ggml.small_matmul.xs3 : index
+  %group = kernel.workgroup.id<x> : index
+  %lane = kernel.workitem.id<x> : index
+  %group_size = index.constant 256 : index
+  %linear0 = index.madd %group, %group_size, %lane : index
+  %valid = index.cmp ult, %linear0, %count : index
+  scf.if %valid {
+    %linear, %extent = index.assume %linear0, %count [range(%linear0, 0, 134217727), lt(%linear0, %count)] : index, index
+    %row = index.rem %linear, %m : index
+    %rest0 = index.div %linear, %m : index
+    %column = index.rem %rest0, %n : index
+    %rest1 = index.div %rest0, %n : index
+    %batch2 = index.rem %rest1, %ne2 : index
+    %batch3 = index.div %rest1, %ne2 : index
+    %wb2 = index.div %batch2, %repeat2 : index
+    %wb3 = index.div %batch3, %repeat3 : index
+    %wbase0 = index.mul %row, %ws1 : index
+    %wbase1 = index.madd %wb2, %ws2, %wbase0 : index
+    %wbase = index.madd %wb3, %ws3, %wbase1 : index
+    %xbase0 = index.mul %column, %xs1 : index
+    %xbase1 = index.madd %batch2, %xs2, %xbase0 : index
+    %xbase = index.madd %batch3, %xs3, %xbase1 : index
+    %zero = index.constant 0 : index
+    %one = index.constant 1 : index
+    %zero_offset = index.constant 0 : offset
+    %zero_f32 = scalar.constant 0.0 : f32
+    %format16 = index.constant 16 : index
+    %is_f16 = index.cmp eq, %weight_format, %format16 : index
+    %wv16 = buffer.view %weight[%zero_offset] : buffer -> view<[%weight_span]xf16>
+    %wv32 = buffer.view %weight[%zero_offset] : buffer -> view<[%weight_span]xf32>
+    %xv = buffer.view %input[%zero_offset] : buffer -> view<[%input_span]xf32>
+    %yv = buffer.view %output[%zero_offset] : buffer -> view<[%count]xf32>
+    %sum = scf.for %column_k = [%zero to %k step %one](%acc = %zero_f32 : f32) -> (f32) {
+      %wi0 = index.madd %column_k, %ws0, %wbase : index
+      %xi0 = index.madd %column_k, %xs0, %xbase : index
+      %wi, %we = index.assume %wi0, %weight_span [range(%wi0, 0, 1073741823), lt(%wi0, %weight_span)] : index, index
+      %xi, %xe = index.assume %xi0, %input_span [range(%xi0, 0, 1073741823), lt(%xi0, %input_span)] : index, index
+      %w = scf.if %is_f16 -> (f32) {
+        %narrow = view.load %wv16[%wi] : view<[%weight_span]xf16> -> f16
+        %wide = scalar.extf %narrow : f16 to f32
+        scf.yield %wide : f32
+      } else {
+        %wide = view.load %wv32[%wi] : view<[%weight_span]xf32> -> f32
+        scf.yield %wide : f32
+      }
+      %x = view.load %xv[%xi] : view<[%input_span]xf32> -> f32
+      %product = scalar.mulf %w, %x : f32
+      %next = scalar.addf %acc, %product : f32
+      scf.yield %next : f32
+    }
+    view.store %sum, %yv[%linear] : f32, view<[%count]xf32>
+  }
+  kernel.return
+}

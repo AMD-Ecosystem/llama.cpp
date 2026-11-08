@@ -29,6 +29,7 @@ enum class CommonMulMatWeightFormat {
     IQ4_XS,
     Q8_0,
     Q8_1,
+    MXFP4,
     F16,
     BF16,
     F32,
@@ -90,6 +91,9 @@ inline bool common_mul_mat_format_for_type(ggml_type type, CommonMulMatWeightFor
         case GGML_TYPE_Q8_1:
             format = CommonMulMatWeightFormat::Q8_1;
             return true;
+        case GGML_TYPE_MXFP4:
+            format = CommonMulMatWeightFormat::MXFP4;
+            return true;
         case GGML_TYPE_F16:
             format = CommonMulMatWeightFormat::F16;
             return true;
@@ -150,6 +154,8 @@ inline int64_t common_mul_mat_format_config_value(CommonMulMatWeightFormat forma
             return 80;
         case CommonMulMatWeightFormat::Q8_1:
             return 81;
+        case CommonMulMatWeightFormat::MXFP4:
+            return 39;
         case CommonMulMatWeightFormat::F16:
             return 16;
         case CommonMulMatWeightFormat::BF16:
@@ -176,6 +182,7 @@ inline bool common_mul_mat_supported_dense_input_size(CommonMulMatWeightFormat f
         case CommonMulMatWeightFormat::IQ4_NL:
         case CommonMulMatWeightFormat::Q8_0:
         case CommonMulMatWeightFormat::Q8_1:
+        case CommonMulMatWeightFormat::MXFP4:
             return input_size >= 256 && input_size <= 32768 && input_size % 32 == 0;
         default:
             return input_size >= 256 && input_size <= 32768 && input_size % 256 == 0;

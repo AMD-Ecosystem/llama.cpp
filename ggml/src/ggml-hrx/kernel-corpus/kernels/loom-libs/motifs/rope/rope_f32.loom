@@ -1,6 +1,35 @@
 // Copyright 2026 The HRX Authors
 // SPDX-License-Identifier: Apache-2.0
 
+config.def @ggml.rope_f32.native_power = 0 : index
+
+func.def inline @ggml_rope_f32_frequency_packet(%values: vector<2xf32>, %first_pair: index) -> (vector<2xf32>) {
+  %mode = config.get @ggml.rope_f32.native_power : index
+  %zero = index.constant 0 : index
+  %native = index.cmp ne, %mode, %zero : index
+  %result = scf.if %native -> (vector<2xf32>) {
+    %one = index.constant 1 : index
+    %next_pair = index.add %first_pair, %one : index
+    %i0 = index.cast %first_pair : index to i32
+    %i1 = index.cast %next_pair : index to i32
+    %e0 = scalar.uitofp %i0 : i32 to f32
+    %e1 = scalar.uitofp %i1 : i32 to f32
+    %exponents = vector.from_elements %e0, %e1 : vector<2xf32>
+    %base = vector.absf %values : vector<2xf32>
+    %logarithms = vector.log2f<afn> %base : vector<2xf32>
+    %powers = vector.mulf %logarithms, %exponents : vector<2xf32>
+    %frequencies = vector.exp2f<afn> %powers : vector<2xf32>
+    %negative_frequencies = vector.negf %frequencies : vector<2xf32>
+    %zeros = vector.constant 0.0 : vector<2xf32>
+    %negative = vector.cmpf olt, %values, %zeros : vector<2xf32> -> vector<2xi1>
+    %signed_frequencies = vector.select %negative, %negative_frequencies, %frequencies : vector<2xf32>
+    scf.yield %signed_frequencies : vector<2xf32>
+  } else {
+    scf.yield %values : vector<2xf32>
+  }
+  func.return %result : vector<2xf32>
+}
+
 func.def inline @ggml_rope_f32_pair_packet(%position: f32, %theta: vector<2xf32>, %freq_factors: vector<2xf32>, %x_values: vector<2xf32>, %y_values: vector<2xf32>) -> (vector<2xf32>, vector<2xf32>) {
   %position_vector = vector.splat %position : vector<2xf32>
   %inverse_two_pi = scalar.constant 0.15915494309189535 : f32
@@ -10,12 +39,11 @@ func.def inline @ggml_rope_f32_pair_packet(%position: f32, %theta: vector<2xf32>
   %turns = vector.mulf<reassoc|nnan|ninf|nsz|contract> %angles, %inverse_two_pi_vector : vector<2xf32>
   %cosines = vector.costurnsf<afn> %turns : vector<2xf32>
   %sines = vector.sinturnsf<afn> %turns : vector<2xf32>
-  %x_cosines = vector.mulf<reassoc|nnan|ninf|nsz|contract> %x_values, %cosines : vector<2xf32>
-  %y_sines = vector.mulf<reassoc|nnan|ninf|nsz|contract> %y_values, %sines : vector<2xf32>
-  %x_sines = vector.mulf<reassoc|nnan|ninf|nsz|contract> %x_values, %sines : vector<2xf32>
-  %y_cosines = vector.mulf<reassoc|nnan|ninf|nsz|contract> %y_values, %cosines : vector<2xf32>
-  %rotated_x = vector.subf<reassoc|nnan|ninf|nsz> %x_cosines, %y_sines : vector<2xf32>
-  %rotated_y = vector.addf<reassoc|nnan|ninf|nsz> %x_sines, %y_cosines : vector<2xf32>
+  %x_cosines = vector.mulf<nnan|ninf|nsz> %x_values, %cosines : vector<2xf32>
+  %x_sines = vector.mulf<nnan|ninf|nsz> %x_values, %sines : vector<2xf32>
+  %negative_y = vector.negf %y_values : vector<2xf32>
+  %rotated_x = vector.fmaf<nnan|ninf|nsz> %negative_y, %sines, %x_cosines : vector<2xf32>
+  %rotated_y = vector.fmaf<nnan|ninf|nsz> %y_values, %cosines, %x_sines : vector<2xf32>
   func.return %rotated_x, %rotated_y : vector<2xf32>, vector<2xf32>
 }
 
@@ -207,7 +235,8 @@ template.def<@ggml.rope_f32.scaled_body> device @ggml_rope_f32_scaled_body(%toke
     %input_base = index.add %input_token_offset, %input_head_offset : index
     %position_i32 = view.load %positions_view[%token] : view<[%bounded_token_count]xi32> -> i32
     %position = scalar.sitofp %position_i32 : i32 to f32
-    %theta_packet = vector.load %theta_view[%pair_channel] : view<[%half_n_dims]xf32> -> vector<2xf32>
+    %theta_values = vector.load %theta_view[%pair_channel] : view<[%half_n_dims]xf32> -> vector<2xf32>
+    %theta_packet = func.call @ggml_rope_f32_frequency_packet(%theta_values, %pair_channel) : (vector<2xf32>, index) -> (vector<2xf32>)
     %freq_factors_packet = vector.load %freq_factors_view[%pair_channel] : view<[%half_n_dims]xf32> -> vector<2xf32>
     scf.if %is_neox {
       %rotary_channel = index.add %pair_channel, %n_offs : index

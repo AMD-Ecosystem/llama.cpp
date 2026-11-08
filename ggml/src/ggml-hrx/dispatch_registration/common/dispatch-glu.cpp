@@ -1,10 +1,12 @@
 #include "dispatch-glu.h"
 
+#include "dispatch-common.h"
 #include "dispatch-layout-utils.h"
 #include "dispatch-mul-mat-common.h"
 #include "ggml.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
 
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -108,12 +110,14 @@ static void add_packed_glu_parameters(Dispatch &    dispatch,
     dispatch.kernel.compile_parameters.emplace("ggml.binary_f32.ne0", std::to_string(output.ne[0]));
     dispatch.kernel.compile_parameters.emplace("ggml.binary_f32.ne1", std::to_string(output.ne[1]));
     dispatch.kernel.compile_parameters.emplace("ggml.binary_f32.ne2", std::to_string(output.ne[2]));
+    dispatch.kernel.compile_parameters.emplace("ggml.binary_f32.src0_stride0", "1");
     dispatch.kernel.compile_parameters.emplace("ggml.binary_f32.src0_stride1",
                                                std::to_string(input.nb[1] / sizeof(float)));
     dispatch.kernel.compile_parameters.emplace("ggml.binary_f32.src0_stride2",
                                                std::to_string(input.nb[2] / sizeof(float)));
     dispatch.kernel.compile_parameters.emplace("ggml.binary_f32.src0_stride3",
                                                std::to_string(input.nb[3] / sizeof(float)));
+    dispatch.kernel.compile_parameters.emplace("ggml.binary_f32.src1_stride0", "1");
     dispatch.kernel.compile_parameters.emplace("ggml.binary_f32.src1_stride1",
                                                std::to_string(input.nb[1] / sizeof(float)));
     dispatch.kernel.compile_parameters.emplace("ggml.binary_f32.src1_stride2",
@@ -184,9 +188,44 @@ static bool match_packed_glu_f32_dispatch(const DispatchMatchContext & context, 
     return true;
 }
 
+static bool match_swiglu_clamp_f32_dispatch(const DispatchMatchContext & context, DispatchMatch & match) {
+    const GraphNode * node = context.root_node;
+    if (node == nullptr || node->op != GGML_OP_GLU || node->inputs.size() != 2) {
+        return false;
+    }
+    const GluParams * params = op_params_as<GluParams>(node->params);
+    if (params == nullptr || params->op != GGML_GLU_OP_SWIGLU_CLAMP || params->swapped ||
+        !std::isfinite(params->limit) || params->limit < 0.0f) {
+        return false;
+    }
+    const Value * gate   = graph_value(context.graph, node->inputs[0]);
+    const Value * up     = graph_value(context.graph, node->inputs[1]);
+    const Value * output = graph_value(context.graph, node->output);
+    if (gate == nullptr || up == nullptr || output == nullptr || gate->type != GGML_TYPE_F32 ||
+        up->type != GGML_TYPE_F32 || output->type != GGML_TYPE_F32 || !gate->contiguous || !up->contiguous ||
+        !output->contiguous || gate->ne != output->ne || up->ne != output->ne || output->element_count < 1 ||
+        output->element_count > 134217728 || gate->storage == output->storage || up->storage == output->storage) {
+        return false;
+    }
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(GGML_HRX_KERNEL_REF("loom_libs", "ggml_swiglu_clamp_f32"));
+    dispatch.kernel.integer_parameters.emplace("element_count", output->element_count);
+    dispatch.kernel.compile_parameters.emplace("ggml.swiglu_clamp.limit", float_config_value(params->limit));
+    dispatch.bindings = {
+        { gate->id,   0, gate->byte_count   },
+        { up->id,     0, up->byte_count     },
+        { output->id, 0, output->byte_count }
+    };
+    match.covered_nodes.push_back(context.root_index);
+    match.dispatches.push_back(std::move(dispatch));
+    return true;
+}
+
 }  // namespace
 
 void register_glu_dispatches(DispatchRegistryBuilder & registry) {
+    registry.add({ "common.swiglu_clamp_f32", GGML_OP_GLU, DispatchMatchKind::SingleOp, 10, DispatchSource::Common,
+                   match_swiglu_clamp_f32_dispatch });
     registry.add({
         "common.packed_glu_f32",
         GGML_OP_GLU,

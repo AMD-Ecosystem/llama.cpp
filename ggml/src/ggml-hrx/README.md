@@ -1,5 +1,13 @@
 # HRX Backend
 
+## Activation precision
+
+For eligible shapes, Q8_0 matrix multiplication and MXFP4 expert matrix multiplication use Q8_1 activations. Small Q8_0 batches share weight loads across tokens; prefill uses matrix tiles. MXFP4 decode kernels can also share loads between tokens routed to the same expert. Dispatch uses tensor shapes, layouts, and precision requests, without model-specific settings.
+
+These routes require default accumulation precision and an activation precision request of undefined, Q8, or Q4. Explicit F32 accumulation or F32, F16, or BF16 activation requests retain the existing floating-point routes. Source precision is part of the imported graph parameters and graph-cache identity, so changing it requires a new dispatch plan.
+
+Small batched Q8_0 products can use F16 matrix accumulation with F32 reduction across contraction partitions under the same precision conditions. Explicit F32 accumulation retains the F32 path.
+
 ## Weight residency diagnostics
 
 HRX materializes imported host weights in the layout requested by the selected kernel and caches each result for the backend's lifetime. If one weight is materialized in two layouts, HRX warns about the duplicate allocations and their memory cost.
@@ -51,6 +59,8 @@ jq -c 'select(.event == "compile_request") | {cache_id, execution_id, kernel, in
 ## `hrx-system` backend compatibility
 
 `hrx-minimum-commit.txt` records the minimum required commit in ROCm/hrx-system. It contains one full Git commit SHA. The backend's C++ APIs, Loom syntax, and numerical behavior can all depend on that revision. When `GGML_HRX=ON` and `HRX_SOURCE_DIR` is set, CMake requires the HRX checkout's HEAD to equal or descend from the recorded commit.
+
+The corpus uses typed `check.expect.approximate` operations introduced in [HRX d03575e84](https://github.com/ROCm/hrx-system/commit/d03575e84f602d3e39b87895a30fae214f308558).
 
 For builds using installed packages, check the source revision used to produce both HRX and Loom against this floor before validating a repair. From the staging checkout:
 

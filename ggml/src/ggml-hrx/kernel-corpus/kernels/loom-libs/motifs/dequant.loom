@@ -2649,6 +2649,58 @@ func.def inline @ggml_f32_f32_vector4(%weight: buffer, %row_byte_base: offset, %
   func.return %values : vector<4xf32>
 }
 
+// GGUF stores sixteen low nibbles, then sixteen high nibbles, per scale byte.
+func.def inline @ggml_mxfp4_f32_vector4(%weight: buffer, %row_byte_base: offset, %k: index) -> (vector<4xf32>) {
+  %c0 = index.constant 0 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c6 = index.constant 6 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %block_bytes = index.constant 17 : offset
+  %one_byte = index.constant 1 : offset
+  %block = index.div %k, %c32 : index
+  %block_offset = index.scale %block, %block_bytes : index, offset -> offset
+  %scale_offset = index.add %row_byte_base, %block_offset : offset
+  %payload_offset = index.add %scale_offset, %one_byte : offset
+  %byte_index = index.rem %k, %c16 : index
+  %within_block = index.rem %k, %c32 : index
+  %half = index.div %within_block, %c16 : index
+  %shift_index = index.mul %half, %c4 : index
+  %shift = index.cast %shift_index : index to i32
+  %scale_view = buffer.view %weight[%scale_offset] : buffer -> view<1xi8>
+  %payload_view = buffer.view %weight[%payload_offset] : buffer -> view<16xi8>
+  %scale_byte = view.load %scale_view[%c0] : view<1xi8> -> i8
+  %scale_word = scalar.extui %scale_byte : i8 to i32
+  %bytes = vector.load %payload_view[%byte_index] : view<16xi8> -> vector<4xi8>
+  %bits = vector.bitcast %bytes : vector<4xi8> to vector<1xi32>
+  %word = vector.extract %bits[%c0] : vector<1xi32> -> i32
+  %selected = scalar.shrui %word, %shift : i32
+  %payload = vector.splat %selected : vector<1xi32>
+  %schema = encoding.define #encoding.f4e2m1<payload_elements=8, payload_packing=little_endian_nibbles, payload_registers=1> : encoding<schema>
+  %decoded = vector.decode %payload using %schema : vector<1xi32>, encoding<schema> -> vector<8xf16>
+  %v0 = vector.extract %decoded[%c0] : vector<8xf16> -> f16
+  %v1 = vector.extract %decoded[%c2] : vector<8xf16> -> f16
+  %v2 = vector.extract %decoded[%c4] : vector<8xf16> -> f16
+  %v3 = vector.extract %decoded[%c6] : vector<8xf16> -> f16
+  %values_half = vector.from_elements %v0, %v1, %v2, %v3 : vector<4xf16>
+  %values = vector.extf %values_half : vector<4xf16> to vector<4xf32>
+  %zero = scalar.constant 0 : i32
+  %nan_exponent = scalar.constant 255 : i32
+  %exponent_shift = scalar.constant 23 : i32
+  %subnormal_bits = scalar.constant 4194304 : i32
+  %nan_bits = scalar.constant 2143289344 : i32
+  %normal_bits = scalar.shli %scale_word, %exponent_shift : i32
+  %is_zero = scalar.cmpi eq, %scale_word, %zero : i32
+  %is_nan = scalar.cmpi eq, %scale_word, %nan_exponent : i32
+  %finite_bits = scf.select %is_zero, %subnormal_bits, %normal_bits : i32
+  %scale_bits = scf.select %is_nan, %nan_bits, %finite_bits : i32
+  %scale = scalar.bitcast %scale_bits : i32 to f32
+  %scales = vector.splat %scale : vector<4xf32>
+  %result = vector.mulf %values, %scales : vector<4xf32>
+  func.return %result : vector<4xf32>
+}
+
 func.def inline @ggml_dequant_weight_tile_bytes(%weight_format: index) -> (offset) {
   %q1_0_format = index.constant 10 : index
   %iq1_s_format = index.constant 19 : index
@@ -2673,6 +2725,7 @@ func.def inline @ggml_dequant_weight_tile_bytes(%weight_format: index) -> (offse
   %q5_1_format = index.constant 51 : index
   %q8_0_format = index.constant 80 : index
   %q8_1_format = index.constant 81 : index
+  %mxfp4_format = index.constant 39 : index
   %zero_bytes = index.constant 0 : offset
   %q1_0_tile_bytes = index.constant 36 : offset
   %q3_tile_bytes = index.constant 110 : offset
@@ -2717,6 +2770,7 @@ func.def inline @ggml_dequant_weight_tile_bytes(%weight_format: index) -> (offse
   %is_iq2_xs = index.cmp eq, %weight_format, %c25 : index
   %is_q8_0 = index.cmp eq, %weight_format, %q8_0_format : index
   %is_q8_1 = index.cmp eq, %weight_format, %q8_1_format : index
+  %is_mxfp4 = index.cmp eq, %weight_format, %mxfp4_format : index
   %is_f16 = index.cmp eq, %weight_format, %c16 : index
   %is_bf16 = index.cmp eq, %weight_format, %bf16_format : index
   %is_f32 = index.cmp eq, %weight_format, %c32 : index
@@ -2743,7 +2797,9 @@ func.def inline @ggml_dequant_weight_tile_bytes(%weight_format: index) -> (offse
   %selected_f16 = scf.select %is_f16, %f16_tile_bytes, %selected_q8_1 : offset
   %selected_bf16 = scf.select %is_bf16, %bf16_tile_bytes, %selected_f16 : offset
   %selected = scf.select %is_f32, %f32_tile_bytes, %selected_bf16 : offset
-  func.return %selected : offset
+  %mxfp4_bytes = index.constant 136 : offset
+  %result = scf.select %is_mxfp4, %mxfp4_bytes, %selected : offset
+  func.return %result : offset
 }
 
 func.def public inline @ggml_dequant_weight_row_bytes(%weight_format: index, %hidden_size: index) -> (offset) {
@@ -2770,6 +2826,7 @@ func.def public inline @ggml_dequant_weight_row_bytes(%weight_format: index, %hi
   %q5_1_format = index.constant 51 : index
   %q8_0_format = index.constant 80 : index
   %q8_1_format = index.constant 81 : index
+  %mxfp4_format = index.constant 39 : index
   %c32 = index.constant 32 : index
   %c128 = index.constant 128 : index
   %c256 = index.constant 256 : index
@@ -2820,6 +2877,7 @@ func.def public inline @ggml_dequant_weight_row_bytes(%weight_format: index, %hi
   %is_iq4_nl = index.cmp eq, %weight_format, %c20 : index
   %is_q8_0 = index.cmp eq, %weight_format, %q8_0_format : index
   %is_q8_1 = index.cmp eq, %weight_format, %q8_1_format : index
+  %is_mxfp4 = index.cmp eq, %weight_format, %mxfp4_format : index
   %is_f16 = index.cmp eq, %weight_format, %c16 : index
   %is_bf16 = index.cmp eq, %weight_format, %bf16_format : index
   %is_f32 = index.cmp eq, %weight_format, %c32_format : index
@@ -2847,7 +2905,10 @@ func.def public inline @ggml_dequant_weight_row_bytes(%weight_format: index, %hi
   %selected_f16 = scf.select %is_f16, %f16_row_bytes, %selected_q8_1 : offset
   %selected_bf16 = scf.select %is_bf16, %f16_row_bytes, %selected_f16 : offset
   %selected = scf.select %is_f32, %f32_row_bytes, %selected_bf16 : offset
-  func.return %selected : offset
+  %mxfp4_block_bytes = index.constant 17 : offset
+  %mxfp4_row_bytes = index.scale %legacy_block_count, %mxfp4_block_bytes : index, offset -> offset
+  %result = scf.select %is_mxfp4, %mxfp4_row_bytes, %selected : offset
+  func.return %result : offset
 }
 
 // Centralizes row-format decoding for FP16 WMMA staging. Each format path is
@@ -2880,6 +2941,7 @@ func.def inline @ggml_dequant_f16_vector4(%iq4nl_table: vector<16xi8>, %iq3s_gri
   %q5_1_format = index.constant 51 : index
   %q8_0_format = index.constant 80 : index
   %q8_1_format = index.constant 81 : index
+  %mxfp4_format = index.constant 39 : index
   %zero = vector.constant 0.0 : vector<4xf16>
   // Decode the compact integer format id into one predicate per layout.
   %is_q1_0 = index.cmp eq, %weight_format, %q1_0_format : index
@@ -2897,6 +2959,7 @@ func.def inline @ggml_dequant_f16_vector4(%iq4nl_table: vector<16xi8>, %iq3s_gri
   %is_iq4_xs = index.cmp eq, %weight_format, %c23 : index
   %is_q8_0 = index.cmp eq, %weight_format, %q8_0_format : index
   %is_q8_1 = index.cmp eq, %weight_format, %q8_1_format : index
+  %is_mxfp4 = index.cmp eq, %weight_format, %mxfp4_format : index
   %is_f16 = index.cmp eq, %weight_format, %c16 : index
   %is_bf16 = index.cmp eq, %weight_format, %bf16_format : index
   %is_f32 = index.cmp eq, %weight_format, %c32 : index
@@ -3037,7 +3100,15 @@ func.def inline @ggml_dequant_f16_vector4(%iq4nl_table: vector<16xi8>, %iq3s_gri
   %selected_f16 = scf.select %is_f16, %f16_values, %selected_q8_1 : vector<4xf16>
   %selected_bf16 = scf.select %is_bf16, %bf16_values, %selected_f16 : vector<4xf16>
   %selected = scf.select %is_f32, %f32_values, %selected_bf16 : vector<4xf16>
-  func.return %selected : vector<4xf16>
+  %mxfp4_values = scf.if %is_mxfp4 -> (vector<4xf16>) {
+    %decoded = func.call @ggml_mxfp4_f32_vector4(%weight, %row_byte_base, %k) : (buffer, offset, index) -> (vector<4xf32>)
+    %values = vector.fptrunc %decoded : vector<4xf32> to vector<4xf16>
+    scf.yield %values : vector<4xf16>
+  } else {
+    scf.yield %zero : vector<4xf16>
+  }
+  %result = scf.select %is_mxfp4, %mxfp4_values, %selected : vector<4xf16>
+  func.return %result : vector<4xf16>
 }
 
 // Centralizes row-format decoding for F32 row-gather outputs.
@@ -3061,6 +3132,7 @@ func.def inline @ggml_dequant_f32_vector4(%iq4nl_table: vector<16xi8>, %iq3s_gri
   %q5_1_format = index.constant 51 : index
   %q8_0_format = index.constant 80 : index
   %q8_1_format = index.constant 81 : index
+  %mxfp4_format = index.constant 39 : index
   %zero = vector.constant 0.0 : vector<4xf32>
   %is_q1_0 = index.cmp eq, %weight_format, %q1_0_format : index
   %is_q3 = index.cmp eq, %weight_format, %c3 : index
@@ -3077,6 +3149,7 @@ func.def inline @ggml_dequant_f32_vector4(%iq4nl_table: vector<16xi8>, %iq3s_gri
   %is_iq4_xs = index.cmp eq, %weight_format, %c23 : index
   %is_q8_0 = index.cmp eq, %weight_format, %q8_0_format : index
   %is_q8_1 = index.cmp eq, %weight_format, %q8_1_format : index
+  %is_mxfp4 = index.cmp eq, %weight_format, %mxfp4_format : index
   %is_f16 = index.cmp eq, %weight_format, %c16 : index
   %is_bf16 = index.cmp eq, %weight_format, %bf16_format : index
   %is_f32 = index.cmp eq, %weight_format, %c32 : index
@@ -3208,7 +3281,14 @@ func.def inline @ggml_dequant_f32_vector4(%iq4nl_table: vector<16xi8>, %iq3s_gri
   %selected_f16 = scf.select %is_f16, %f16_values, %selected_q8_1 : vector<4xf32>
   %selected_bf16 = scf.select %is_bf16, %bf16_values, %selected_f16 : vector<4xf32>
   %selected = scf.select %is_f32, %f32_values, %selected_bf16 : vector<4xf32>
-  func.return %selected : vector<4xf32>
+  %mxfp4_values = scf.if %is_mxfp4 -> (vector<4xf32>) {
+    %decoded = func.call @ggml_mxfp4_f32_vector4(%weight, %row_byte_base, %k) : (buffer, offset, index) -> (vector<4xf32>)
+    scf.yield %decoded : vector<4xf32>
+  } else {
+    scf.yield %zero : vector<4xf32>
+  }
+  %result = scf.select %is_mxfp4, %mxfp4_values, %selected : vector<4xf32>
+  func.return %result : vector<4xf32>
 }
 
 // Reuse immutable Q5 metadata across all four 64-element quarters.

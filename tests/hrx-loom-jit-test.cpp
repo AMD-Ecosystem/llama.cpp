@@ -134,18 +134,20 @@ static const ggml::hrx::KernelDefinition * find_targeted_kernel(const char * nam
 static std::map<std::string, std::string> binary_f32_exact_config(const char * op, int64_t element_count) {
     const std::string count = std::to_string(element_count);
     return {
-        { "ggml.binary_f32.op", op },
-        { "ggml.binary_f32.ne0", count },
-        { "ggml.binary_f32.ne1", "1" },
-        { "ggml.binary_f32.ne2", "1" },
+        { "ggml.binary_f32.op",           op    },
+        { "ggml.binary_f32.ne0",          count },
+        { "ggml.binary_f32.ne1",          "1"   },
+        { "ggml.binary_f32.ne2",          "1"   },
+        { "ggml.binary_f32.src0_stride0", "1"   },
         { "ggml.binary_f32.src0_stride1", count },
         { "ggml.binary_f32.src0_stride2", count },
         { "ggml.binary_f32.src0_stride3", count },
+        { "ggml.binary_f32.src1_stride0", "1"   },
         { "ggml.binary_f32.src1_stride1", count },
         { "ggml.binary_f32.src1_stride2", count },
         { "ggml.binary_f32.src1_stride3", count },
-        { "ggml.binary_f32.src0_span", count },
-        { "ggml.binary_f32.src1_span", count },
+        { "ggml.binary_f32.src0_span",    count },
+        { "ggml.binary_f32.src1_span",    count },
     };
 }
 
