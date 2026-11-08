@@ -589,12 +589,13 @@ static enum ggml_status graph_compute(ggml_backend_t backend, ggml_cgraph * grap
     const ggml::hrx::PreparedCommandProgramCacheRetention prepared_stats = context->prepared_programs.retention();
     const ggml::hrx::GraphProgramCacheStats graph_stats = context->graph_programs.stats();
     // Distinct prefill shapes retain staging, constants, and graph references to old arena generations.
-    // Keep their combined footprint within a small fraction of device memory for model and KV growth.
+    // Admit reusable short-context graphs while keeping their combined footprint bounded for model and KV growth.
     // Evict before the next graph, after queued work has completed, so at most one new graph can exceed
-    // the budget. Unknown device memory uses the fixed maximum.
-    const size_t maximum_cache_budget = size_t(1) << 30;
+    // the budget. Unknown device memory uses the conservative original budget.
+    const size_t maximum_cache_budget = size_t(3) << 30;
+    const size_t unknown_memory_budget = size_t(1) << 30;
     const bool memory_size_known = context->device->memory_total != 0;
-    const size_t device_cache_budget = memory_size_known ? context->device->memory_total / 16 : maximum_cache_budget;
+    const size_t device_cache_budget = memory_size_known ? context->device->memory_total / 8 : unknown_memory_budget;
     const size_t cache_budget = std::min(device_cache_budget, maximum_cache_budget);
     const bool over_byte_budget = prepared_stats.retained_bytes() >= cache_budget;
     // Even tiny graphs consume CPU-side program metadata, so bound their count too.
