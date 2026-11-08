@@ -4505,6 +4505,59 @@ static void run_scalar_3d_get_rows_dispatch_checks() {
     check_case(128, 8, 2, 513, false);
 }
 
+static void run_repeat_get_rows_scalar_3d_dispatch_checks() {
+    auto check_case = [](int64_t token_count, int64_t route_stride, bool expose_repeat,
+                         bool ids_ready_before_repeat = true) {
+        ggml_init_params params = {};
+        params.mem_size = 1024 * 1024;
+        params.no_alloc = true;
+        ggml_context * ctx = ggml_init(params);
+        REQUIRE(ctx != nullptr);
+
+        ggml_tensor * scales = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 128);
+        ggml_tensor * ids_storage = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, route_stride, token_count);
+        ggml_tensor * ids = route_stride == 8 ? ids_storage :
+            ggml_view_2d(ctx, ids_storage, 8, token_count, ids_storage->nb[1], 0);
+        ggml_tensor * reshaped = ggml_reshape_3d(ctx, scales, 1, 128, 1);
+        ggml_tensor * repeated = ggml_repeat_4d(ctx, reshaped, 1, 128, token_count, 1);
+        ggml_tensor * output = ggml_get_rows(ctx, repeated, ids);
+        REQUIRE(output != nullptr);
+        if (expose_repeat) {
+            ggml_set_output(repeated);
+        }
+        ggml_set_output(output);
+
+        ggml_cgraph * graph = ggml_new_graph(ctx);
+        REQUIRE(graph != nullptr);
+        if (ids_ready_before_repeat) {
+            ggml_build_forward_expand(graph, ids);
+        }
+        ggml_build_forward_expand(graph, output);
+        ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+        REQUIRE(imported.valid());
+
+        ggml::hrx::DispatchScheduler scheduler;
+        REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+        const auto & dispatches = scheduler.plan().dispatches;
+        const bool expect_fusion = !expose_repeat && ids_ready_before_repeat;
+        REQUIRE(dispatches.size() == (expect_fusion ? 1 : 2));
+        if (!expect_fusion) {
+            REQUIRE(kernel_name_for_id(dispatches[0].kernel.kernel_id) == "loom_libs:ggml_repeat_scalar_3d_f32");
+        }
+        const ggml::hrx::Dispatch & gather = dispatches.back();
+        REQUIRE(kernel_name_for_id(gather.kernel.kernel_id) == "loom_libs:ggml_get_rows_scalar_3d_f32");
+        REQUIRE(gather.kernel.integer_parameters.at("scale_token_stride") == (expect_fusion ? 0 : 128));
+        REQUIRE(gather.bindings[1].length == (expect_fusion ? ggml_nbytes(scales) : ggml_nbytes(repeated)));
+        ggml_free(ctx);
+    };
+
+    check_case(1, 8, false);
+    check_case(2, 128, false);
+    check_case(128, 8, false);
+    check_case(2, 128, true);
+    check_case(2, 128, false, false);
+}
+
 static void run_qwen_token_embedding_dispatch_checks() {
     ggml_init_params params = {};
     params.mem_size         = 4 * 1024 * 1024;
@@ -14925,6 +14978,7 @@ static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
     suite.host_case("graph_traversal", [] { run_graph_traversal_checks(); });
     suite.host_case("qwen_token_embedding_dispatch", [] { run_qwen_token_embedding_dispatch_checks(); });
     suite.host_case("scalar_3d_get_rows_dispatch", [] { run_scalar_3d_get_rows_dispatch_checks(); });
+    suite.host_case("repeat_get_rows_scalar_3d_dispatch", [] { run_repeat_get_rows_scalar_3d_dispatch_checks(); });
     suite.host_case("get_rows_rmsnorm_binary_dispatch", [] { run_get_rows_rmsnorm_binary_dispatch_checks(); });
     suite.host_case("get_rows_scale_dispatch", [] { run_get_rows_scale_dispatch_checks(); });
     suite.host_case("gather_add_dispatch", [] { run_gather_add_dispatch_checks(); });

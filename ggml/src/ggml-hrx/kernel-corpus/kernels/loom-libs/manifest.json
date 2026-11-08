@@ -318,6 +318,9 @@
       "path": "ops/rows/get_rows_scalar_3d_f32.loom"
     },
     {
+      "path": "ops/rows/repeat_scalar_3d_f32.loom"
+    },
+    {
       "path": "ops/rows/get_rows_scale_f32.loom"
     },
     {
@@ -6676,6 +6679,10 @@
         {
           "name": "route_stride",
           "type": "index"
+        },
+        {
+          "name": "scale_token_stride",
+          "type": "index"
         }
       ],
       "launch_parameters": [
@@ -6685,6 +6692,10 @@
         },
         {
           "name": "route_stride",
+          "type": "index"
+        },
+        {
+          "name": "scale_token_stride",
           "type": "index"
         }
       ],
@@ -6703,6 +6714,41 @@
         "mode": "direct",
         "primary_sources": [
           "ops/rows/get_rows_scalar_3d_f32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
+      "name": "ggml_repeat_scalar_3d_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_repeat_scalar_3d_f32",
+      "source": "ops/rows/repeat_scalar_3d_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "scales",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/rows/repeat_scalar_3d_f32.loom"
         ],
         "library_sources": []
       },

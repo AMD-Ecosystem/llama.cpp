@@ -4506,7 +4506,8 @@ static void run_q4_prefill_source_eligibility_case() {
     ggml_backend_free(backend);
 }
 
-static void run_scalar_3d_get_rows_case(int64_t token_count, int64_t route_stride, bool include_invalid_ids = false) {
+static void run_scalar_3d_get_rows_case(int64_t token_count, int64_t route_stride, bool include_invalid_ids = false,
+                                        bool broadcast_scales = false, bool expose_repeat = false) {
     ggml_backend_t backend = ggml_backend_hrx_init(0);
     REQUIRE(backend != nullptr);
 
@@ -4516,30 +4517,52 @@ static void run_scalar_3d_get_rows_case(int64_t token_count, int64_t route_strid
     ggml_context * ctx = ggml_init(params);
     REQUIRE(ctx != nullptr);
 
-    ggml_tensor * scales = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, 128, token_count);
+    ggml_tensor * scales = broadcast_scales ? ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 128) :
+        ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, 128, token_count);
     ggml_tensor * ids_storage = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, route_stride, token_count);
     REQUIRE(scales != nullptr);
     REQUIRE(ids_storage != nullptr);
     ggml_tensor * ids = route_stride == 8 ? ids_storage :
         ggml_view_2d(ctx, ids_storage, 8, token_count, ids_storage->nb[1], 0);
     REQUIRE(ids != nullptr);
-    ggml_tensor * output = ggml_get_rows(ctx, scales, ids);
+    ggml_tensor * repeated = nullptr;
+    ggml_tensor * gather_scales = scales;
+    if (broadcast_scales) {
+        ggml_tensor * reshaped = ggml_reshape_3d(ctx, scales, 1, 128, 1);
+        repeated = ggml_repeat_4d(ctx, reshaped, 1, 128, token_count, 1);
+        gather_scales = repeated;
+        if (expose_repeat) {
+            ggml_set_output(repeated);
+        }
+    }
+    ggml_tensor * output = ggml_get_rows(ctx, gather_scales, ids);
     REQUIRE(output != nullptr);
     ggml_set_output(output);
 
     ggml_cgraph * graph = ggml_new_graph(ctx);
     REQUIRE(graph != nullptr);
+    if (broadcast_scales) {
+        ggml_build_forward_expand(graph, ids);
+    }
     ggml_build_forward_expand(graph, output);
-    require_kernel_subsequence(scheduled_kernel_sequence(graph), { "loom_libs:ggml_get_rows_scalar_3d_f32" });
+    if (expose_repeat) {
+        require_kernel_subsequence(scheduled_kernel_sequence(graph),
+                                   { "loom_libs:ggml_repeat_scalar_3d_f32", "loom_libs:ggml_get_rows_scalar_3d_f32" });
+    } else {
+        require_kernel_subsequence(scheduled_kernel_sequence(graph), { "loom_libs:ggml_get_rows_scalar_3d_f32" });
+    }
 
     ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
     REQUIRE(buffer != nullptr);
-    std::vector<float> scales_data(128 * token_count);
+    std::vector<float> scales_data(broadcast_scales ? 128 : 128 * token_count);
     std::vector<int32_t> ids_data(route_stride * token_count, -1);
     std::vector<float> expected(8 * token_count);
     for (int64_t token = 0; token < token_count; ++token) {
         for (int64_t expert = 0; expert < 128; ++expert) {
-            scales_data[token * 128 + expert] = static_cast<float>(token * 1024) + expert * 0.25f;
+            if (!broadcast_scales || token == 0) {
+                const size_t scale_index = static_cast<size_t>(broadcast_scales ? expert : token * 128 + expert);
+                scales_data[scale_index] = static_cast<float>(broadcast_scales ? 0 : token * 1024) + expert * 0.25f;
+            }
         }
         for (int64_t route = 0; route < 8; ++route) {
             int32_t expert = route == 0 ? 0 : route == 7 ? 127 :
@@ -4554,7 +4577,8 @@ static void run_scalar_3d_get_rows_case(int64_t token_count, int64_t route_strid
             }
             ids_data[token * route_stride + route] = expert;
             const bool valid_expert = expert >= 0 && expert < 128;
-            expected[token * 8 + route] = valid_expert ? scales_data[token * 128 + expert] : 0.0f;
+            const size_t scale_index = static_cast<size_t>((broadcast_scales ? 0 : token * 128) + expert);
+            expected[token * 8 + route] = valid_expert ? scales_data[scale_index] : 0.0f;
         }
     }
 
@@ -4566,6 +4590,15 @@ static void run_scalar_3d_get_rows_case(int64_t token_count, int64_t route_strid
     std::vector<float> actual(expected.size());
     ggml_backend_tensor_get(output, actual.data(), 0, actual.size() * sizeof(float));
     REQUIRE(actual == expected);
+    if (expose_repeat) {
+        std::vector<float> repeated_data(128 * token_count);
+        ggml_backend_tensor_get(repeated, repeated_data.data(), 0, repeated_data.size() * sizeof(float));
+        for (int64_t token = 0; token < token_count; ++token) {
+            for (int64_t expert = 0; expert < 128; ++expert) {
+                REQUIRE(repeated_data[token * 128 + expert] == scales_data[expert]);
+            }
+        }
+    }
 
     ggml_backend_buffer_free(buffer);
     ggml_free(ctx);
@@ -9167,6 +9200,19 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
         suite.device_case("scalar_3d_get_rows.invalid_ids.stride" + std::to_string(stride),
                           [=] { run_scalar_3d_get_rows_case(2, stride, true); });
     }
+    for (int64_t tokens : { 1, 2, 8, 128 }) {
+        for (int64_t stride : { 8, 128 }) {
+            suite.device_case("repeat_get_rows_scalar_3d.tokens" + std::to_string(tokens) + ".stride" +
+                                  std::to_string(stride),
+                              [=] { run_scalar_3d_get_rows_case(tokens, stride, false, true); });
+        }
+    }
+    suite.device_case("repeat_get_rows_scalar_3d.invalid_ids", [] {
+        run_scalar_3d_get_rows_case(2, 128, true, true);
+    });
+    suite.device_case("repeat_get_rows_scalar_3d.exposed_repeat", [] {
+        run_scalar_3d_get_rows_case(2, 128, false, true, true);
+    });
     for (int64_t tokens : { 1, 2, 4, 8 }) {
         suite.device_case("router_top8.tokens" + std::to_string(tokens), [=] { run_router_top8_case(tokens); });
     }

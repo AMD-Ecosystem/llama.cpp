@@ -1,0 +1,23 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// Materialize the exact 128-scale token broadcast when a consumer needs the repeat itself.
+amdgpu.target<gfx11-generic> @ggml_repeat_scalar_3d_gfx11_wave64 {subgroup_size = 64}
+
+kernel.def target(@ggml_repeat_scalar_3d_gfx11_wave64) @ggml_repeat_scalar_3d_f32(%token_count: index) {
+  %c1 = index.constant 1 : index
+  %c128 = index.constant 128 : index
+  kernel.launch.config workgroups(%token_count, %c1, %c1) workgroup_size(%c128, %c1, %c1) : index
+} launch(%token_count: index, %scales: buffer, %output: buffer) where [range(%token_count, 1, 2048)] {
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
+  %token0 = kernel.workgroup.id<x> : index
+  %expert0 = kernel.workitem.id<x> : index
+  %token = index.assume %token0 [lt(%token0, %bounded_token_count)] : index
+  %expert = index.assume %expert0 [range(%expert0, 0, 127)] : index
+  %c0_offset = index.constant 0 : offset
+  %scales_view = buffer.view %scales[%c0_offset] : buffer -> view<128xf32>
+  %output_view = buffer.view %output[%c0_offset] : buffer -> view<[%bounded_token_count]x128xf32>
+  %scale = view.load %scales_view[%expert] : view<128xf32> -> f32
+  view.store %scale, %output_view[%token, %expert] : f32, view<[%bounded_token_count]x128xf32>
+  kernel.return
+}
