@@ -15,8 +15,9 @@ struct RmsNormParams {
 };
 
 struct MulMatParams {
-    ggml_prec    prec = GGML_PREC_DEFAULT;
-    ggml_op_hint hint = GGML_HINT_NONE;
+    ggml_prec    prec      = GGML_PREC_DEFAULT;
+    ggml_op_hint hint      = GGML_HINT_NONE;
+    ggml_prec    src1_prec = GGML_PREC_UNDEFINED;
 };
 
 struct FlashAttnExtParams {

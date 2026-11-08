@@ -96,14 +96,33 @@ kernel.def target(@ggml_mxfp4_vector_wave32) @ggml_mul_mat_id_vector_mxfp4_f32(%
       %w5 = vector.extract %decoded[%c5] : vector<8xf16> -> f16
       %w6 = vector.extract %decoded[%c6] : vector<8xf16> -> f16
       %w7 = vector.extract %decoded[%c7] : vector<8xf16> -> f16
-      %lo_half = vector.from_elements %w0, %w2, %w4, %w6 : vector<4xf16>
-      %hi_half = vector.from_elements %w1, %w3, %w5, %w7 : vector<4xf16>
-      %lo = vector.extf %lo_half : vector<4xf16> to vector<4xf32>
-      %hi = vector.extf %hi_half : vector<4xf16> to vector<4xf32>
       %xlo = vector.load %x[%input_route, %klo] : view<[%input_routes]x[%k]xf32> -> vector<4xf32>
       %xhi = vector.load %x[%input_route, %khi] : view<[%input_routes]x[%k]xf32> -> vector<4xf32>
-      %dlo = vector.dotf %lo, %xlo, %zero_float : vector<4xf32>, vector<4xf32>, f32
-      %dot = vector.dotf %hi, %xhi, %dlo : vector<4xf32>, vector<4xf32>, f32
+      // Keep the dot order while exposing F16 weights to mixed F32 FMAs.
+      %weight0 = scalar.extf %w0 : f16 to f32
+      %input0 = vector.extract %xlo[%c0] : vector<4xf32> -> f32
+      %dot0 = scalar.fmaf %weight0, %input0, %zero_float : f32
+      %weight2 = scalar.extf %w2 : f16 to f32
+      %input1 = vector.extract %xlo[%c1] : vector<4xf32> -> f32
+      %dot1 = scalar.fmaf %weight2, %input1, %dot0 : f32
+      %weight4 = scalar.extf %w4 : f16 to f32
+      %input2 = vector.extract %xlo[%c2] : vector<4xf32> -> f32
+      %dot2 = scalar.fmaf %weight4, %input2, %dot1 : f32
+      %weight6 = scalar.extf %w6 : f16 to f32
+      %input3 = vector.extract %xlo[%c3] : vector<4xf32> -> f32
+      %dot3 = scalar.fmaf %weight6, %input3, %dot2 : f32
+      %weight1 = scalar.extf %w1 : f16 to f32
+      %input4 = vector.extract %xhi[%c0] : vector<4xf32> -> f32
+      %dot4 = scalar.fmaf %weight1, %input4, %dot3 : f32
+      %weight3 = scalar.extf %w3 : f16 to f32
+      %input5 = vector.extract %xhi[%c1] : vector<4xf32> -> f32
+      %dot5 = scalar.fmaf %weight3, %input5, %dot4 : f32
+      %weight5 = scalar.extf %w5 : f16 to f32
+      %input6 = vector.extract %xhi[%c2] : vector<4xf32> -> f32
+      %dot6 = scalar.fmaf %weight5, %input6, %dot5 : f32
+      %weight7 = scalar.extf %w7 : f16 to f32
+      %input7 = vector.extract %xhi[%c3] : vector<4xf32> -> f32
+      %dot = scalar.fmaf %weight7, %input7, %dot6 : f32
       %next = scalar.fmaf %scale, %dot, %acc : f32
       scf.yield %next : f32
     }

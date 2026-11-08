@@ -75,8 +75,7 @@ kernel.def target(@ggml_hc_post_target) export("ggml_hc_post_f32") @ggml_hc_post
         %c_index = index.add %c_dst, %c_offset : index
         %r_value = view.load %r[%r_index] : view<[%count]xf32> -> f32
         %c_value = view.load %c[%c_index] : view<[%comb_count]xf32> -> f32
-        %term = scalar.mulf %r_value, %c_value : f32
-        %next = scalar.addf %acc, %term : f32
+        %next = scalar.fmaf %r_value, %c_value, %acc : f32
         scf.yield %next : f32
       }
       scf.yield %mixed : f32

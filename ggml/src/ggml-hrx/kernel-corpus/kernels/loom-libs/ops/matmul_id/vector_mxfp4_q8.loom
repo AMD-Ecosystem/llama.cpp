@@ -140,7 +140,7 @@ kernel.def target(@ggml_mxfp4_dot_wave32) @ggml_mul_mat_id_vector_mxfp4_q8(%toke
   %routes = config.get @ggml.mxfp4_vector.route_count : index
   %one = index.constant 1 : index
   %wave = index.constant 32 : index
-  %tokens = index.assume %token_count [range(%token_count, 1, 5)] : index
+  %tokens = index.assume %token_count [range(%token_count, 1, 8)] : index
   kernel.launch.config workgroups(%m, %routes, %tokens) workgroup_size(%wave, %one, %one) : index
 } launch(%token_count: index, %input: buffer, %ids: buffer, %weight: buffer, %output: buffer) {
   %k = config.get @ggml.mxfp4_vector.input_size : index
@@ -152,7 +152,7 @@ kernel.def target(@ggml_mxfp4_dot_wave32) @ggml_mul_mat_id_vector_mxfp4_q8(%toke
   %row0 = kernel.workgroup.id<x> : index
   %route0 = kernel.workgroup.id<y> : index
   %token0 = kernel.workgroup.id<z> : index
-  %tokens0 = index.assume %token_count [range(%token_count, 1, 5)] : index
+  %tokens0 = index.assume %token_count [range(%token_count, 1, 8)] : index
   %token, %tokens = index.assume %token0, %tokens0 [lt(%token0, %tokens0)] : index, index
   %row, %rows = index.assume %row0, %m [lt(%row0, %m)] : index, index
   %route, %route_extent = index.assume %route0, %routes [lt(%route0, %routes)] : index, index
@@ -208,7 +208,7 @@ kernel.def target(@ggml_mxfp4_dot_wave32) @ggml_mxfp4_prepare_pairs(%token_count
   %groups = index.div %padded, %group : index
   kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%group, %one, %one) : index
 } launch(%token_count: index, %ids: buffer, %pairs: buffer) {
-  %tokens = index.assume %token_count [range(%token_count, 1, 5)] : index
+  %tokens = index.assume %token_count [range(%token_count, 1, 8)] : index
   %routes = config.get @ggml.mxfp4_vector.route_count : index
   %stride = config.get @ggml.mxfp4_vector.route_stride : index
   %experts = config.get @ggml.mxfp4_vector.expert_count : index
@@ -222,7 +222,7 @@ kernel.def target(@ggml_mxfp4_dot_wave32) @ggml_mxfp4_prepare_pairs(%token_count
   %slot0 = index.madd %group, %size, %lane : index
   %valid = index.cmp ult, %slot0, %slots : index
   scf.if %valid {
-    %slot = index.assume %slot0 [range(%slot0, 0, 159), lt(%slot0, %slots)] : index
+    %slot = index.assume %slot0 [range(%slot0, 0, 255), lt(%slot0, %slots)] : index
     %token = index.div %slot, %routes : index
     %route = index.rem %slot, %routes : index
     %four_bytes = index.constant 4 : offset
@@ -252,8 +252,8 @@ kernel.def target(@ggml_mxfp4_dot_wave32) @ggml_mxfp4_prepare_pairs(%token_count
         %new_next = index.min %candidate, %next_slot : index
         scf.yield %new_prior, %new_next : index, index
       }
-      %prior_count = index.assume %prior_count0 [range(%prior_count0, 0, 159), lt(%prior_count0, %slots)] : index
-      %next = index.assume %next0 [range(%next0, 0, 160)] : index
+      %prior_count = index.assume %prior_count0 [range(%prior_count0, 0, 255), lt(%prior_count0, %slots)] : index
+      %next = index.assume %next0 [range(%next0, 0, 256)] : index
       %parity = index.rem %prior_count, %two : index
       %is_owned = index.cmp ne, %parity, %zero : index
       %has_next = index.cmp ult, %next, %slots : index
@@ -276,7 +276,7 @@ kernel.def target(@ggml_mxfp4_dot_wave32) @ggml_mul_mat_id_paired_mxfp4_q8(%toke
   %routes = config.get @ggml.mxfp4_vector.route_count : index
   %one = index.constant 1 : index
   %wave = index.constant 32 : index
-  %tokens = index.assume %token_count [range(%token_count, 1, 5)] : index
+  %tokens = index.assume %token_count [range(%token_count, 1, 8)] : index
   kernel.launch.config workgroups(%m, %routes, %tokens) workgroup_size(%wave, %one, %one) : index
 } launch(%token_count: index, %input: buffer, %ids: buffer, %pairs: buffer, %weight: buffer, %output: buffer) {
   %k = config.get @ggml.mxfp4_vector.input_size : index
@@ -288,7 +288,7 @@ kernel.def target(@ggml_mxfp4_dot_wave32) @ggml_mul_mat_id_paired_mxfp4_q8(%toke
   %row0 = kernel.workgroup.id<x> : index
   %route0 = kernel.workgroup.id<y> : index
   %token0 = kernel.workgroup.id<z> : index
-  %tokens0 = index.assume %token_count [range(%token_count, 1, 5)] : index
+  %tokens0 = index.assume %token_count [range(%token_count, 1, 8)] : index
   %token, %tokens = index.assume %token0, %tokens0 [lt(%token0, %tokens0)] : index, index
   %row, %rows = index.assume %row0, %m [lt(%row0, %m)] : index, index
   %route, %route_extent = index.assume %route0, %routes [lt(%route0, %routes)] : index, index
@@ -328,7 +328,7 @@ kernel.def target(@ggml_mxfp4_dot_wave32) @ggml_mul_mat_id_paired_mxfp4_q8(%toke
       %route_bytes = index.scale %groups_per_route, %group_bytes : index, offset -> offset
       %input_base = index.scale %input_row, %route_bytes : index, offset -> offset
       %lane_sum, %lane_peer_sum = scf.if %has_peer -> (f32, f32) {
-        %peer = index.assume %peer0 [range(%peer0, 0, 159), lt(%peer0, %slots)] : index
+        %peer = index.assume %peer0 [range(%peer0, 0, 255), lt(%peer0, %slots)] : index
         %peer_token = index.div %peer, %route_extent : index
         %peer_route = index.rem %peer, %route_extent : index
         %peer_input_route = index.rem %peer_route, %input_routes : index
@@ -353,7 +353,7 @@ kernel.def target(@ggml_mxfp4_dot_wave32) @ggml_mul_mat_id_paired_mxfp4_q8(%toke
       %y = buffer.view %output[%zero_offset] : buffer -> view<[%tokens]x[%route_extent]x[%rows]xf32>
       view.store %total, %y[%token, %route, %row] : f32, view<[%tokens]x[%route_extent]x[%rows]xf32>
       scf.if %has_peer {
-        %peer = index.assume %peer0 [range(%peer0, 0, 159), lt(%peer0, %slots)] : index
+        %peer = index.assume %peer0 [range(%peer0, 0, 255), lt(%peer0, %slots)] : index
         %peer_token = index.div %peer, %route_extent : index
         %peer_route = index.rem %peer, %route_extent : index
         view.store %peer_total, %y[%peer_token, %peer_route, %row] : f32, view<[%tokens]x[%route_extent]x[%rows]xf32>

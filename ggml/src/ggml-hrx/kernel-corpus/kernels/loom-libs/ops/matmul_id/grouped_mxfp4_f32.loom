@@ -1,0 +1,466 @@
+// Two output rows share inputs; up to four expert occurrences share weights.
+amdgpu.target<gfx11-generic> @ggml_mxfp4_vector_wave32 {subgroup_size = 32}
+
+config.decl @ggml.mxfp4_vector.input_size : %v: index where [range(%v, 256, 32768), multiple_of(%v, 256)]
+
+config.decl @ggml.mxfp4_vector.output_size : %v: index where [range(%v, 1, 262144)]
+
+config.decl @ggml.mxfp4_vector.route_count : %v: index where [range(%v, 1, 32)]
+
+config.decl @ggml.mxfp4_vector.input_route_count : %v: index where [range(%v, 1, 32)]
+
+config.decl @ggml.mxfp4_vector.expert_count : %v: index where [range(%v, 1, 512)]
+
+config.decl @ggml.mxfp4_vector.route_stride : %v: index where [range(%v, 1, 512)]
+
+template.decl @ggml.mxfp4_f32_group.update(%klo: index, %khi: index, %input_base: offset, %decoded: vector<8xf16>, %scale: f32, %acc: f32, %decoded1: vector<8xf16>, %scale1: f32, %acc1: f32, %input: buffer) -> (f32, f32)
+
+template.decl @ggml.mxfp4_f32_group.lane_sum(%p1: i1, %p2: i1, %p3: i1, %row_base: offset, %row_base1: offset, %b0: offset, %b1: offset, %b2: offset, %b3: offset, %input: buffer, %weight: buffer) -> (f32, f32, f32, f32, f32, f32, f32, f32)
+
+template.def<@ggml.mxfp4_f32_group.update> device @ggml_mxfp4_f32_group_update(%klo: index, %khi: index, %input_base: offset, %decoded: vector<8xf16>, %scale: f32, %acc: f32, %decoded1: vector<8xf16>, %scale1: f32, %acc1: f32, %input: buffer) -> (f32, f32) {
+  %k = config.get @ggml.mxfp4_vector.input_size : index
+  %zero_float = scalar.constant 0.0 : f32
+  %x = buffer.view %input[%input_base] : buffer -> view<[%k]xf32>
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c5 = index.constant 5 : index
+  %c6 = index.constant 6 : index
+  %c7 = index.constant 7 : index
+  %xlo = vector.load %x[%klo] : view<[%k]xf32> -> vector<4xf32>
+  %xhi = vector.load %x[%khi] : view<[%k]xf32> -> vector<4xf32>
+  %w0 = vector.extract %decoded[%c0] : vector<8xf16> -> f16
+  %w1 = vector.extract %decoded[%c1] : vector<8xf16> -> f16
+  %w2 = vector.extract %decoded[%c2] : vector<8xf16> -> f16
+  %w3 = vector.extract %decoded[%c3] : vector<8xf16> -> f16
+  %w4 = vector.extract %decoded[%c4] : vector<8xf16> -> f16
+  %w5 = vector.extract %decoded[%c5] : vector<8xf16> -> f16
+  %w6 = vector.extract %decoded[%c6] : vector<8xf16> -> f16
+  %w7 = vector.extract %decoded[%c7] : vector<8xf16> -> f16
+  // Keep the dot order while exposing F16 weights to mixed F32 FMAs.
+  %weight0 = scalar.extf %w0 : f16 to f32
+  %input0 = vector.extract %xlo[%c0] : vector<4xf32> -> f32
+  %dot0 = scalar.fmaf %weight0, %input0, %zero_float : f32
+  %weight2 = scalar.extf %w2 : f16 to f32
+  %input1 = vector.extract %xlo[%c1] : vector<4xf32> -> f32
+  %dot1 = scalar.fmaf %weight2, %input1, %dot0 : f32
+  %weight4 = scalar.extf %w4 : f16 to f32
+  %input2 = vector.extract %xlo[%c2] : vector<4xf32> -> f32
+  %dot2 = scalar.fmaf %weight4, %input2, %dot1 : f32
+  %weight6 = scalar.extf %w6 : f16 to f32
+  %input3 = vector.extract %xlo[%c3] : vector<4xf32> -> f32
+  %dot3 = scalar.fmaf %weight6, %input3, %dot2 : f32
+  %weight1 = scalar.extf %w1 : f16 to f32
+  %input4 = vector.extract %xhi[%c0] : vector<4xf32> -> f32
+  %dot4 = scalar.fmaf %weight1, %input4, %dot3 : f32
+  %weight3 = scalar.extf %w3 : f16 to f32
+  %input5 = vector.extract %xhi[%c1] : vector<4xf32> -> f32
+  %dot5 = scalar.fmaf %weight3, %input5, %dot4 : f32
+  %weight5 = scalar.extf %w5 : f16 to f32
+  %input6 = vector.extract %xhi[%c2] : vector<4xf32> -> f32
+  %dot6 = scalar.fmaf %weight5, %input6, %dot5 : f32
+  %weight7 = scalar.extf %w7 : f16 to f32
+  %input7 = vector.extract %xhi[%c3] : vector<4xf32> -> f32
+  %dot = scalar.fmaf %weight7, %input7, %dot6 : f32
+  %next = scalar.fmaf %scale, %dot, %acc : f32
+  %w0_r1 = vector.extract %decoded1[%c0] : vector<8xf16> -> f16
+  %w1_r1 = vector.extract %decoded1[%c1] : vector<8xf16> -> f16
+  %w2_r1 = vector.extract %decoded1[%c2] : vector<8xf16> -> f16
+  %w3_r1 = vector.extract %decoded1[%c3] : vector<8xf16> -> f16
+  %w4_r1 = vector.extract %decoded1[%c4] : vector<8xf16> -> f16
+  %w5_r1 = vector.extract %decoded1[%c5] : vector<8xf16> -> f16
+  %w6_r1 = vector.extract %decoded1[%c6] : vector<8xf16> -> f16
+  %w7_r1 = vector.extract %decoded1[%c7] : vector<8xf16> -> f16
+  // Keep the dot order while exposing F16 weights to mixed F32 FMAs.
+  %weight0_r1 = scalar.extf %w0_r1 : f16 to f32
+  %input0_r1 = vector.extract %xlo[%c0] : vector<4xf32> -> f32
+  %dot0_r1 = scalar.fmaf %weight0_r1, %input0_r1, %zero_float : f32
+  %weight2_r1 = scalar.extf %w2_r1 : f16 to f32
+  %input1_r1 = vector.extract %xlo[%c1] : vector<4xf32> -> f32
+  %dot1_r1 = scalar.fmaf %weight2_r1, %input1_r1, %dot0_r1 : f32
+  %weight4_r1 = scalar.extf %w4_r1 : f16 to f32
+  %input2_r1 = vector.extract %xlo[%c2] : vector<4xf32> -> f32
+  %dot2_r1 = scalar.fmaf %weight4_r1, %input2_r1, %dot1_r1 : f32
+  %weight6_r1 = scalar.extf %w6_r1 : f16 to f32
+  %input3_r1 = vector.extract %xlo[%c3] : vector<4xf32> -> f32
+  %dot3_r1 = scalar.fmaf %weight6_r1, %input3_r1, %dot2_r1 : f32
+  %weight1_r1 = scalar.extf %w1_r1 : f16 to f32
+  %input4_r1 = vector.extract %xhi[%c0] : vector<4xf32> -> f32
+  %dot4_r1 = scalar.fmaf %weight1_r1, %input4_r1, %dot3_r1 : f32
+  %weight3_r1 = scalar.extf %w3_r1 : f16 to f32
+  %input5_r1 = vector.extract %xhi[%c1] : vector<4xf32> -> f32
+  %dot5_r1 = scalar.fmaf %weight3_r1, %input5_r1, %dot4_r1 : f32
+  %weight5_r1 = scalar.extf %w5_r1 : f16 to f32
+  %input6_r1 = vector.extract %xhi[%c2] : vector<4xf32> -> f32
+  %dot6_r1 = scalar.fmaf %weight5_r1, %input6_r1, %dot5_r1 : f32
+  %weight7_r1 = scalar.extf %w7_r1 : f16 to f32
+  %input7_r1 = vector.extract %xhi[%c3] : vector<4xf32> -> f32
+  %dot_r1 = scalar.fmaf %weight7_r1, %input7_r1, %dot6_r1 : f32
+  %next_r1 = scalar.fmaf %scale1, %dot_r1, %acc1 : f32
+  template.return %next, %next_r1 : f32, f32
+}
+
+template.def<@ggml.mxfp4_f32_group.lane_sum> device @ggml_mxfp4_f32_group_lane_sum(%p1: i1, %p2: i1, %p3: i1, %row_base: offset, %row_base1: offset, %b0: offset, %b1: offset, %b2: offset, %b3: offset, %input: buffer, %weight: buffer) -> (f32, f32, f32, f32, f32, f32, f32, f32) {
+  %k = config.get @ggml.mxfp4_vector.input_size : index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c5 = index.constant 5 : index
+  %c6 = index.constant 6 : index
+  %c7 = index.constant 7 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c256 = index.constant 256 : index
+  %zero_offset = index.constant 0 : offset
+  %one_byte = index.constant 1 : offset
+  %block_bytes = index.constant 17 : offset
+  %zero_float = scalar.constant 0.0 : f32
+  %zero_i32 = scalar.constant 0 : i32
+  %scale_shift = scalar.constant 23 : i32
+  %scale_subnormal = scalar.constant 4194304 : i32
+  %scale_nan = scalar.constant 2143289344 : i32
+  %nan_exponent = scalar.constant 255 : i32
+  %lane_block = index.div %lane, %c4 : index
+  %lane_packet = index.rem %lane, %c4 : index
+  %packet_offset = index.mul %lane_packet, %c4 : index
+  %lane_k = index.madd %lane_block, %c32, %packet_offset : index
+  %s0, %s1, %s2, %s3, %s4, %s5, %s6, %s7 = scf.for %base = [%c0 to %k step %c256](%a0 = %zero_float : f32, %a1 = %zero_float : f32, %a2 = %zero_float : f32, %a3 = %zero_float : f32, %a4 = %zero_float : f32, %a5 = %zero_float : f32, %a6 = %zero_float : f32, %a7 = %zero_float : f32) -> (f32, f32, f32, f32, f32, f32, f32, f32) {
+    %klo0 = index.add %base, %lane_k : index
+    %khi0 = index.add %klo0, %c16 : index
+    %klo = index.assume %klo0 [lt(%klo0, %k), multiple_of(%klo0, 4)] : index
+    %khi = index.assume %khi0 [lt(%khi0, %k), multiple_of(%khi0, 4)] : index
+    %block = index.div %klo, %c32 : index
+    %block_offset = index.scale %block, %block_bytes : index, offset -> offset
+    %scale_offset = index.add %row_base, %block_offset : offset
+    %payload_offset = index.add %scale_offset, %one_byte : offset
+    %scv = buffer.view %weight[%scale_offset] : buffer -> view<1xi8>
+    %wv = buffer.view %weight[%payload_offset] : buffer -> view<16xi8>
+    %scale_byte = view.load %scv[%c0] : view<1xi8> -> i8
+    %exponent = scalar.extui %scale_byte : i8 to i32
+    %normal_bits = scalar.shli %exponent, %scale_shift : i32
+    %is_zero = scalar.cmpi eq, %exponent, %zero_i32 : i32
+    %is_nan = scalar.cmpi eq, %exponent, %nan_exponent : i32
+    %finite_bits = scf.select %is_zero, %scale_subnormal, %normal_bits : i32
+    %scale_bits = scf.select %is_nan, %scale_nan, %finite_bits : i32
+    %scale = scalar.bitcast %scale_bits : i32 to f32
+    %packed_bytes = vector.load %wv[%packet_offset] : view<16xi8> -> vector<4xi8>
+    %packed = vector.bitcast %packed_bytes : vector<4xi8> to vector<1xi32>
+    %schema = encoding.define #encoding.f4e2m1<payload_elements=8, payload_packing=little_endian_nibbles, payload_registers=1> : encoding<schema>
+    %decoded = vector.decode %packed using %schema : vector<1xi32>, encoding<schema> -> vector<8xf16>
+    %scale_offset_r1 = index.add %row_base1, %block_offset : offset
+    %payload_offset_r1 = index.add %scale_offset_r1, %one_byte : offset
+    %scv_r1 = buffer.view %weight[%scale_offset_r1] : buffer -> view<1xi8>
+    %wv_r1 = buffer.view %weight[%payload_offset_r1] : buffer -> view<16xi8>
+    %scale_byte_r1 = view.load %scv_r1[%c0] : view<1xi8> -> i8
+    %exponent_r1 = scalar.extui %scale_byte_r1 : i8 to i32
+    %normal_bits_r1 = scalar.shli %exponent_r1, %scale_shift : i32
+    %is_zero_r1 = scalar.cmpi eq, %exponent_r1, %zero_i32 : i32
+    %is_nan_r1 = scalar.cmpi eq, %exponent_r1, %nan_exponent : i32
+    %finite_bits_r1 = scf.select %is_zero_r1, %scale_subnormal, %normal_bits_r1 : i32
+    %scale_bits_r1 = scf.select %is_nan_r1, %scale_nan, %finite_bits_r1 : i32
+    %scale_r1 = scalar.bitcast %scale_bits_r1 : i32 to f32
+    %packed_bytes_r1 = vector.load %wv_r1[%packet_offset] : view<16xi8> -> vector<4xi8>
+    %packed_r1 = vector.bitcast %packed_bytes_r1 : vector<4xi8> to vector<1xi32>
+    %schema_r1 = encoding.define #encoding.f4e2m1<payload_elements=8, payload_packing=little_endian_nibbles, payload_registers=1> : encoding<schema>
+    %decoded_r1 = vector.decode %packed_r1 using %schema_r1 : vector<1xi32>, encoding<schema> -> vector<8xf16>
+    %n0, %n4 = template.apply<@ggml.mxfp4_f32_group.update>(%klo, %khi, %b0, %decoded, %scale, %a0, %decoded_r1, %scale_r1, %a4, %input) : (index, index, offset, vector<8xf16>, f32, f32, vector<8xf16>, f32, f32, buffer) -> (f32, f32)
+    %n1, %n5 = scf.if %p1 -> (f32, f32) {
+      %v0, %v1 = template.apply<@ggml.mxfp4_f32_group.update>(%klo, %khi, %b1, %decoded, %scale, %a1, %decoded_r1, %scale_r1, %a5, %input) : (index, index, offset, vector<8xf16>, f32, f32, vector<8xf16>, f32, f32, buffer) -> (f32, f32)
+      scf.yield %v0, %v1 : f32, f32
+    } else {
+      scf.yield %a1, %a5 : f32, f32
+    }
+    %n2, %n6 = scf.if %p2 -> (f32, f32) {
+      %v0, %v1 = template.apply<@ggml.mxfp4_f32_group.update>(%klo, %khi, %b2, %decoded, %scale, %a2, %decoded_r1, %scale_r1, %a6, %input) : (index, index, offset, vector<8xf16>, f32, f32, vector<8xf16>, f32, f32, buffer) -> (f32, f32)
+      scf.yield %v0, %v1 : f32, f32
+    } else {
+      scf.yield %a2, %a6 : f32, f32
+    }
+    %n3, %n7 = scf.if %p3 -> (f32, f32) {
+      %v0, %v1 = template.apply<@ggml.mxfp4_f32_group.update>(%klo, %khi, %b3, %decoded, %scale, %a3, %decoded_r1, %scale_r1, %a7, %input) : (index, index, offset, vector<8xf16>, f32, f32, vector<8xf16>, f32, f32, buffer) -> (f32, f32)
+      scf.yield %v0, %v1 : f32, f32
+    } else {
+      scf.yield %a3, %a7 : f32, f32
+    }
+    scf.yield %n0, %n1, %n2, %n3, %n4, %n5, %n6, %n7 : f32, f32, f32, f32, f32, f32, f32, f32
+  }
+  template.return %s0, %s1, %s2, %s3, %s4, %s5, %s6, %s7 : f32, f32, f32, f32, f32, f32, f32, f32
+}
+
+kernel.def target(@ggml_mxfp4_vector_wave32) @ggml_mxfp4_prepare_groups(%token_count: index) {
+  %routes = config.get @ggml.mxfp4_vector.route_count : index
+  %one = index.constant 1 : index
+  %group = index.constant 64 : index
+  %pad = index.constant 63 : index
+  %slots = index.mul %token_count, %routes : index
+  %padded = index.add %slots, %pad : index
+  %groups = index.div %padded, %group : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%group, %one, %one) : index
+} launch(%token_count: index, %ids: buffer, %groups: buffer) {
+  %tokens = index.assume %token_count [range(%token_count, 1, 8)] : index
+  %routes = config.get @ggml.mxfp4_vector.route_count : index
+  %stride = config.get @ggml.mxfp4_vector.route_stride : index
+  %experts = config.get @ggml.mxfp4_vector.expert_count : index
+  %slots = index.mul %tokens, %routes : index
+  %group = kernel.workgroup.id<x> : index
+  %lane = kernel.workitem.id<x> : index
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %two = index.constant 2 : index
+  %three = index.constant 3 : index
+  %four = index.constant 4 : index
+  %size = index.constant 64 : index
+  %slot0 = index.madd %group, %size, %lane : index
+  %valid = index.cmp ult, %slot0, %slots : index
+  scf.if %valid {
+    %slot = index.assume %slot0 [range(%slot0, 0, 255), lt(%slot0, %slots)] : index
+    %token = index.div %slot, %routes : index
+    %route = index.rem %slot, %routes : index
+    %four_bytes = index.constant 4 : offset
+    %row_bytes = index.scale %stride, %four_bytes : index, offset -> offset
+    %row_base = index.scale %token, %row_bytes : index, offset -> offset
+    %row = buffer.view %ids[%row_base] : buffer -> view<[%routes]xi32>
+    %expert = view.load %row[%route] : view<[%routes]xi32> -> i32
+    %expert_index = index.cast %expert : i32 to index
+    %expert_valid = index.cmp ult, %expert_index, %experts : index
+    %no_peer = scalar.constant -1 : i32
+    %owned = scalar.constant -2 : i32
+    %slot_i32 = index.cast %slot : index to i32
+    %owner, %peer1, %peer2, %peer3 = scf.if %expert_valid -> (i32, i32, i32, i32) {
+      %prior_count0, %unused, %next1, %next2, %next3 = scf.for %other = [%zero to %slots step %one](%prior = %zero : index, %seen = %zero : index, %p1 = %slots : index, %p2 = %slots : index, %p3 = %slots : index) -> (index, index, index, index, index) {
+        %other_token = index.div %other, %routes : index
+        %other_route = index.rem %other, %routes : index
+        %other_base = index.scale %other_token, %row_bytes : index, offset -> offset
+        %other_row = buffer.view %ids[%other_base] : buffer -> view<[%routes]xi32>
+        %other_expert = view.load %other_row[%other_route] : view<[%routes]xi32> -> i32
+        %equal = scalar.cmpi eq, %expert, %other_expert : i32
+        %before = index.cmp ult, %other, %slot : index
+        %after = index.cmp ugt, %other, %slot : index
+        %matching_before = scalar.andi %equal, %before : i1
+        %matching_after = scalar.andi %equal, %after : i1
+        %increment = scf.select %matching_before, %one, %zero : index
+        %new_prior = index.add %prior, %increment : index
+        %increment_after = scf.select %matching_after, %one, %zero : index
+        %new_seen = index.add %seen, %increment_after : index
+        %first = index.cmp eq, %seen, %zero : index
+        %second = index.cmp eq, %seen, %one : index
+        %third = index.cmp eq, %seen, %two : index
+        %take1 = scalar.andi %matching_after, %first : i1
+        %take2 = scalar.andi %matching_after, %second : i1
+        %take3 = scalar.andi %matching_after, %third : i1
+        %n1 = scf.select %take1, %other, %p1 : index
+        %n2 = scf.select %take2, %other, %p2 : index
+        %n3 = scf.select %take3, %other, %p3 : index
+        scf.yield %new_prior, %new_seen, %n1, %n2, %n3 : index, index, index, index, index
+      }
+      %prior_count = index.assume %prior_count0 [range(%prior_count0, 0, 255), lt(%prior_count0, %slots)] : index
+      %position = index.rem %prior_count, %four : index
+      %is_owned = index.cmp ne, %position, %zero : index
+      %owner_value = scf.select %is_owned, %owned, %slot_i32 : i32
+      %has1 = index.cmp ult, %next1, %slots : index
+      %next_i32_1 = index.cast %next1 : index to i32
+      %value1 = scf.select %has1, %next_i32_1, %no_peer : i32
+      %has2 = index.cmp ult, %next2, %slots : index
+      %next_i32_2 = index.cast %next2 : index to i32
+      %value2 = scf.select %has2, %next_i32_2, %no_peer : i32
+      %has3 = index.cmp ult, %next3, %slots : index
+      %next_i32_3 = index.cast %next3 : index to i32
+      %value3 = scf.select %has3, %next_i32_3, %no_peer : i32
+      scf.yield %owner_value, %value1, %value2, %value3 : i32, i32, i32, i32
+    } else {
+      scf.yield %slot_i32, %no_peer, %no_peer, %no_peer : i32, i32, i32, i32
+    }
+    %zero_offset = index.constant 0 : offset
+    %output = buffer.view %groups[%zero_offset] : buffer -> view<[%slots]x4xi32>
+    view.store %owner, %output[%slot, %zero] : i32, view<[%slots]x4xi32>
+    view.store %peer1, %output[%slot, %one] : i32, view<[%slots]x4xi32>
+    view.store %peer2, %output[%slot, %two] : i32, view<[%slots]x4xi32>
+    view.store %peer3, %output[%slot, %three] : i32, view<[%slots]x4xi32>
+  }
+  kernel.return
+}
+
+kernel.def target(@ggml_mxfp4_vector_wave32) @ggml_mul_mat_id_grouped_mxfp4_f32(%token_count: index) {
+  %m = config.get @ggml.mxfp4_vector.output_size : index
+  %routes = config.get @ggml.mxfp4_vector.route_count : index
+  %one = index.constant 1 : index
+  %wave = index.constant 32 : index
+  %tokens = index.assume %token_count [range(%token_count, 1, 8)] : index
+  %two = index.constant 2 : index
+  %rounded = index.add %m, %one : index
+  %row_groups = index.div %rounded, %two : index
+  kernel.launch.config workgroups(%row_groups, %routes, %tokens) workgroup_size(%wave, %one, %one) : index
+} launch(%token_count: index, %input: buffer, %ids: buffer, %groups: buffer, %weight: buffer, %output: buffer) {
+  %k = config.get @ggml.mxfp4_vector.input_size : index
+  %m = config.get @ggml.mxfp4_vector.output_size : index
+  %routes = config.get @ggml.mxfp4_vector.route_count : index
+  %input_routes = config.get @ggml.mxfp4_vector.input_route_count : index
+  %route_stride = config.get @ggml.mxfp4_vector.route_stride : index
+  %experts = config.get @ggml.mxfp4_vector.expert_count : index
+  %row_group = kernel.workgroup.id<x> : index
+  %two = index.constant 2 : index
+  %row0 = index.mul %row_group, %two : index
+  %route0 = kernel.workgroup.id<y> : index
+  %token0 = kernel.workgroup.id<z> : index
+  %tokens0 = index.assume %token_count [range(%token_count, 1, 8)] : index
+  %token, %tokens = index.assume %token0, %tokens0 [lt(%token0, %tokens0)] : index, index
+  %row, %rows = index.assume %row0, %m [lt(%row0, %m)] : index, index
+  %route, %route_extent = index.assume %route0, %routes [lt(%route0, %routes)] : index, index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c32 = index.constant 32 : index
+  %zero_offset = index.constant 0 : offset
+  %block_bytes = index.constant 17 : offset
+  %element_bytes = index.constant 4 : offset
+  %zero_float = scalar.constant 0.0 : f32
+  %id_bytes = index.constant 4 : offset
+  %id_row_bytes = index.scale %route_stride, %id_bytes : index, offset -> offset
+  %id_offset = index.scale %token, %id_row_bytes : index, offset -> offset
+  %id_view = buffer.view %ids[%id_offset] : buffer -> view<[%route_extent]xi32>
+  %expert_i32 = view.load %id_view[%route] : view<[%route_extent]xi32> -> i32
+  %expert0 = index.cast %expert_i32 : i32 to index
+  %valid = index.cmp ult, %expert0, %experts : index
+  %slots = index.mul %tokens, %route_extent : index
+  %slot = index.madd %token, %route_extent, %route : index
+  %row_next = index.add %row, %c1 : index
+  %second_valid = index.cmp ult, %row_next, %rows : index
+  %row1_0 = scf.select %second_valid, %row_next, %row : index
+  %row1 = index.assume %row1_0 [lt(%row1_0, %rows)] : index
+  %group_view = buffer.view %groups[%zero_offset] : buffer -> view<[%slots]x4xi32>
+  %owner = view.load %group_view[%slot, %c0] : view<[%slots]x4xi32> -> i32
+  %owned = scalar.constant -2 : i32
+  %active = scalar.cmpi ne, %owner, %owned : i32
+  scf.if %active {
+    %peer_i32_1 = view.load %group_view[%slot, %c1] : view<[%slots]x4xi32> -> i32
+    %peer0_1 = index.cast %peer_i32_1 : i32 to index
+    %has1 = index.cmp ult, %peer0_1, %slots : index
+    %peer_i32_2 = view.load %group_view[%slot, %c2] : view<[%slots]x4xi32> -> i32
+    %peer0_2 = index.cast %peer_i32_2 : i32 to index
+    %has2 = index.cmp ult, %peer0_2, %slots : index
+    %peer_i32_3 = view.load %group_view[%slot, %c3] : view<[%slots]x4xi32> -> i32
+    %peer0_3 = index.cast %peer_i32_3 : i32 to index
+    %has3 = index.cmp ult, %peer0_3, %slots : index
+    %s0, %s1, %s2, %s3, %s4, %s5, %s6, %s7 = scf.if %valid -> (f32, f32, f32, f32, f32, f32, f32, f32) {
+      %expert, %expert_extent = index.assume %expert0, %experts [lt(%expert0, %experts)] : index, index
+      %weight_blocks = index.div %k, %c32 : index
+      %row_bytes = index.scale %weight_blocks, %block_bytes : index, offset -> offset
+      %flat_row = index.madd %expert, %rows, %row : index
+      %row_base = index.scale %flat_row, %row_bytes : index, offset -> offset
+      %flat_row1 = index.madd %expert, %rows, %row1 : index
+      %row_base1 = index.scale %flat_row1, %row_bytes : index, offset -> offset
+      %input_route = index.rem %route, %input_routes : index
+      %input_row = index.madd %token, %input_routes, %input_route : index
+      %route_bytes = index.scale %k, %element_bytes : index, offset -> offset
+      %b0 = index.scale %input_row, %route_bytes : index, offset -> offset
+      %b1 = scf.if %has1 -> (offset) {
+        %peer = index.assume %peer0_1 [range(%peer0_1, 0, 255), lt(%peer0_1, %slots)] : index
+        %peer_token = index.div %peer, %route_extent : index
+        %peer_route = index.rem %peer, %route_extent : index
+        %peer_input_route = index.rem %peer_route, %input_routes : index
+        %peer_input_row = index.madd %peer_token, %input_routes, %peer_input_route : index
+        %peer_base = index.scale %peer_input_row, %route_bytes : index, offset -> offset
+        scf.yield %peer_base : offset
+      } else {
+        scf.yield %b0 : offset
+      }
+      %b2 = scf.if %has2 -> (offset) {
+        %peer = index.assume %peer0_2 [range(%peer0_2, 0, 255), lt(%peer0_2, %slots)] : index
+        %peer_token = index.div %peer, %route_extent : index
+        %peer_route = index.rem %peer, %route_extent : index
+        %peer_input_route = index.rem %peer_route, %input_routes : index
+        %peer_input_row = index.madd %peer_token, %input_routes, %peer_input_route : index
+        %peer_base = index.scale %peer_input_row, %route_bytes : index, offset -> offset
+        scf.yield %peer_base : offset
+      } else {
+        scf.yield %b0 : offset
+      }
+      %b3 = scf.if %has3 -> (offset) {
+        %peer = index.assume %peer0_3 [range(%peer0_3, 0, 255), lt(%peer0_3, %slots)] : index
+        %peer_token = index.div %peer, %route_extent : index
+        %peer_route = index.rem %peer, %route_extent : index
+        %peer_input_route = index.rem %peer_route, %input_routes : index
+        %peer_input_row = index.madd %peer_token, %input_routes, %peer_input_route : index
+        %peer_base = index.scale %peer_input_row, %route_bytes : index, offset -> offset
+        scf.yield %peer_base : offset
+      } else {
+        scf.yield %b0 : offset
+      }
+      %yes = scalar.constant true : i1
+      %no = scalar.constant false : i1
+      %a0, %a1, %a2, %a3, %a4, %a5, %a6, %a7 = scf.if %has3 -> (f32, f32, f32, f32, f32, f32, f32, f32) {
+        %v0, %v1, %v2, %v3, %v4, %v5, %v6, %v7 = template.apply<@ggml.mxfp4_f32_group.lane_sum>(%yes, %yes, %yes, %row_base, %row_base1, %b0, %b1, %b2, %b3, %input, %weight) : (i1, i1, i1, offset, offset, offset, offset, offset, offset, buffer, buffer) -> (f32, f32, f32, f32, f32, f32, f32, f32)
+        scf.yield %v0, %v1, %v2, %v3, %v4, %v5, %v6, %v7 : f32, f32, f32, f32, f32, f32, f32, f32
+      } else {
+        %q0, %q1, %q2, %q3, %q4, %q5, %q6, %q7 = scf.if %has2 -> (f32, f32, f32, f32, f32, f32, f32, f32) {
+          %v0, %v1, %v2, %v3, %v4, %v5, %v6, %v7 = template.apply<@ggml.mxfp4_f32_group.lane_sum>(%yes, %yes, %no, %row_base, %row_base1, %b0, %b1, %b2, %b3, %input, %weight) : (i1, i1, i1, offset, offset, offset, offset, offset, offset, buffer, buffer) -> (f32, f32, f32, f32, f32, f32, f32, f32)
+          scf.yield %v0, %v1, %v2, %v3, %v4, %v5, %v6, %v7 : f32, f32, f32, f32, f32, f32, f32, f32
+        } else {
+          %r0, %r1, %r2, %r3, %r4, %r5, %r6, %r7 = scf.if %has1 -> (f32, f32, f32, f32, f32, f32, f32, f32) {
+            %v0, %v1, %v2, %v3, %v4, %v5, %v6, %v7 = template.apply<@ggml.mxfp4_f32_group.lane_sum>(%yes, %no, %no, %row_base, %row_base1, %b0, %b1, %b2, %b3, %input, %weight) : (i1, i1, i1, offset, offset, offset, offset, offset, offset, buffer, buffer) -> (f32, f32, f32, f32, f32, f32, f32, f32)
+            scf.yield %v0, %v1, %v2, %v3, %v4, %v5, %v6, %v7 : f32, f32, f32, f32, f32, f32, f32, f32
+          } else {
+            %v0, %v1, %v2, %v3, %v4, %v5, %v6, %v7 = template.apply<@ggml.mxfp4_f32_group.lane_sum>(%no, %no, %no, %row_base, %row_base1, %b0, %b1, %b2, %b3, %input, %weight) : (i1, i1, i1, offset, offset, offset, offset, offset, offset, buffer, buffer) -> (f32, f32, f32, f32, f32, f32, f32, f32)
+            scf.yield %v0, %v1, %v2, %v3, %v4, %v5, %v6, %v7 : f32, f32, f32, f32, f32, f32, f32, f32
+          }
+          scf.yield %r0, %r1, %r2, %r3, %r4, %r5, %r6, %r7 : f32, f32, f32, f32, f32, f32, f32, f32
+        }
+        scf.yield %q0, %q1, %q2, %q3, %q4, %q5, %q6, %q7 : f32, f32, f32, f32, f32, f32, f32, f32
+      }
+      scf.yield %a0, %a1, %a2, %a3, %a4, %a5, %a6, %a7 : f32, f32, f32, f32, f32, f32, f32, f32
+    } else {
+      scf.yield %zero_float, %zero_float, %zero_float, %zero_float, %zero_float, %zero_float, %zero_float, %zero_float : f32, f32, f32, f32, f32, f32, f32, f32
+    }
+    %total0 = kernel.subgroup.reduce<addf> %s0 : f32
+    %total1 = kernel.subgroup.reduce<addf> %s1 : f32
+    %total2 = kernel.subgroup.reduce<addf> %s2 : f32
+    %total3 = kernel.subgroup.reduce<addf> %s3 : f32
+    %total4 = kernel.subgroup.reduce<addf> %s4 : f32
+    %total5 = kernel.subgroup.reduce<addf> %s5 : f32
+    %total6 = kernel.subgroup.reduce<addf> %s6 : f32
+    %total7 = kernel.subgroup.reduce<addf> %s7 : f32
+    %leader = index.cmp eq, %lane, %c0 : index
+    scf.if %leader {
+      %y = buffer.view %output[%zero_offset] : buffer -> view<[%tokens]x[%route_extent]x[%rows]xf32>
+      view.store %total0, %y[%token, %route, %row] : f32, view<[%tokens]x[%route_extent]x[%rows]xf32>
+      scf.if %second_valid {
+        view.store %total4, %y[%token, %route, %row1] : f32, view<[%tokens]x[%route_extent]x[%rows]xf32>
+      }
+      scf.if %has1 {
+        %peer = index.assume %peer0_1 [range(%peer0_1, 0, 255), lt(%peer0_1, %slots)] : index
+        %peer_token = index.div %peer, %route_extent : index
+        %peer_route = index.rem %peer, %route_extent : index
+        view.store %total1, %y[%peer_token, %peer_route, %row] : f32, view<[%tokens]x[%route_extent]x[%rows]xf32>
+        scf.if %second_valid {
+          view.store %total5, %y[%peer_token, %peer_route, %row1] : f32, view<[%tokens]x[%route_extent]x[%rows]xf32>
+        }
+      }
+      scf.if %has2 {
+        %peer = index.assume %peer0_2 [range(%peer0_2, 0, 255), lt(%peer0_2, %slots)] : index
+        %peer_token = index.div %peer, %route_extent : index
+        %peer_route = index.rem %peer, %route_extent : index
+        view.store %total2, %y[%peer_token, %peer_route, %row] : f32, view<[%tokens]x[%route_extent]x[%rows]xf32>
+        scf.if %second_valid {
+          view.store %total6, %y[%peer_token, %peer_route, %row1] : f32, view<[%tokens]x[%route_extent]x[%rows]xf32>
+        }
+      }
+      scf.if %has3 {
+        %peer = index.assume %peer0_3 [range(%peer0_3, 0, 255), lt(%peer0_3, %slots)] : index
+        %peer_token = index.div %peer, %route_extent : index
+        %peer_route = index.rem %peer, %route_extent : index
+        view.store %total3, %y[%peer_token, %peer_route, %row] : f32, view<[%tokens]x[%route_extent]x[%rows]xf32>
+        scf.if %second_valid {
+          view.store %total7, %y[%peer_token, %peer_route, %row1] : f32, view<[%tokens]x[%route_extent]x[%rows]xf32>
+        }
+      }
+    }
+  }
+  kernel.return
+}

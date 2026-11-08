@@ -77,8 +77,7 @@ kernel.def target(@ggml_hc_pre_target) export("ggml_hc_pre_f32") @ggml_hc_pre_f3
       } else {
         scf.yield %weight : f32
       }
-      %term = scalar.mulf %x_value, %w_value : f32
-      %next = scalar.addf %acc, %term : f32
+      %next = scalar.fmaf %x_value, %w_value, %acc : f32
       scf.yield %next : f32
     }
     %scale = config.get @ggml.hc.scale : f32

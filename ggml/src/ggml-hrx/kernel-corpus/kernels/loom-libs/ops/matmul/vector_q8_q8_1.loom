@@ -1,5 +1,5 @@
-// One wave per output row. Shared Q8_1_x4 activations are produced once
-// and reused across rows/projections; raw Q8_0 weights stay resident.
+// One wave shares a raw Q8_0 weight row across up to eight tokens.
+// Q8_1_x4 activations are produced once and reused across rows/projections.
 amdgpu.target<gfx11-generic> @ggml_q8_dot_wave32 {subgroup_size = 32}
 
 config.decl @ggml.matmul.vector.input_size : %v: index where [range(%v, 256, 32768), multiple_of(%v, 256)]
@@ -7,6 +7,8 @@ config.decl @ggml.matmul.vector.input_size : %v: index where [range(%v, 256, 327
 config.decl @ggml.matmul.vector.output_size : %v: index where [range(%v, 1, 524288)]
 
 config.def @ggml.matmul.vector.batch_count = 1 : index
+
+config.def @ggml.matmul.vector.input_interleaved = 0 : index
 
 kernel.def target(@ggml_q8_dot_wave32) @ggml_mul_mat_vector_q8_q8_1(%token_count: index) {
   %m = config.get @ggml.matmul.vector.output_size : index
@@ -17,6 +19,8 @@ kernel.def target(@ggml_q8_dot_wave32) @ggml_mul_mat_vector_q8_q8_1(%token_count
 } launch(%token_count: index, %input: buffer, %weight: buffer, %output: buffer, %next_output: buffer) {
   %k = config.get @ggml.matmul.vector.input_size : index
   %m = config.get @ggml.matmul.vector.output_size : index
+  %tokens = index.assume %token_count [range(%token_count, 1, 8)] : index
+  %input_interleaved = config.get @ggml.matmul.vector.input_interleaved : index
   %batch_count = config.get @ggml.matmul.vector.batch_count : index
   %batches = index.assume %batch_count [range(%batch_count, 1, 512)] : index
   %batch0 = kernel.workgroup.id<y> : index
@@ -25,8 +29,10 @@ kernel.def target(@ggml_q8_dot_wave32) @ggml_mul_mat_vector_q8_q8_1(%token_count
   %row, %rows = index.assume %row0, %m [lt(%row0, %m)] : index, index
   %lane = kernel.subgroup.lane.id : index
   %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
   %c4 = index.constant 4 : index
   %c2 = index.constant 2 : index
+  %c8 = index.constant 8 : index
   %c16 = index.constant 16 : index
   %c128 = index.constant 128 : index
   %c32 = index.constant 32 : index
@@ -38,21 +44,21 @@ kernel.def target(@ggml_q8_dot_wave32) @ggml_mul_mat_vector_q8_q8_1(%token_count
   %activation_header_bytes = index.constant 16 : offset
   %integer_zero = vector.constant 0 : vector<4xi32>
   %scalar_zero = scalar.constant 0 : i32
-  %zero_float = scalar.constant 0.0 : f32
+  %initial = vector.constant 0.0 : vector<8xf32>
   %weight_blocks = index.div %k, %c32 : index
   %row_bytes = index.scale %weight_blocks, %block_bytes : index, offset -> offset
   %flat_row = index.madd %batch, %rows, %row : index
-  %flat_rows = index.mul %batches, %rows : index
   %row_base = index.scale %flat_row, %row_bytes : index, offset -> offset
   %activation_groups = index.div %k, %c128 : index
   %activation_row_bytes = index.scale %activation_groups, %activation_group_bytes : index, offset -> offset
-  %activation_row_base = index.scale %batch, %activation_row_bytes : index, offset -> offset
+  %batch_row = index.mul %batch, %tokens : index
+  %interleaved = index.cmp ne, %input_interleaved, %c0 : index
   %lane_k = index.mul %lane, %c16 : index
   %packet = index.rem %lane_k, %c32 : index
-  %lane_sum = scf.for %base = [%c0 to %k step %c512](%acc = %zero_float : f32) -> (f32) {
+  %lane_sum = scf.for %base = [%c0 to %k step %c512](%acc = %initial : vector<8xf32>) -> (vector<8xf32>) {
     %ki0 = index.add %base, %lane_k : index
     %active = index.cmp ult, %ki0, %k : index
-    %next = scf.if %active -> (f32) {
+    %next = scf.if %active -> (vector<8xf32>) {
       %ki = index.assume %ki0 [lt(%ki0, %k), multiple_of(%ki0, 16)] : index
       %block = index.div %ki, %c32 : index
       %block_offset = index.scale %block, %block_bytes : index, offset -> offset
@@ -65,32 +71,55 @@ kernel.def target(@ggml_q8_dot_wave32) @ggml_mul_mat_vector_q8_q8_1(%token_count
       %packed = vector.load %wv[%packet] : view<32xi8> -> vector<16xi8>
       %activation_group = index.div %ki, %c128 : index
       %activation_group_base = index.scale %activation_group, %activation_group_bytes : index, offset -> offset
-      %activation_base = index.add %activation_row_base, %activation_group_base : offset
-      %activation_payload = index.add %activation_base, %activation_header_bytes : offset
       %activation_index = index.rem %ki, %c128 : index
       %activation_block = index.rem %block, %c4 : index
       %ds_index = index.mul %activation_block, %c2 : index
-      %xv = buffer.view %input[%activation_payload] : buffer -> view<128xi8>
-      %ds = buffer.view %input[%activation_base] : buffer -> view<8xf16>
-      %a = vector.load %xv[%activation_index] : view<128xi8> -> vector<16xi8>
-      %input_half_scale = view.load %ds[%ds_index] : view<8xf16> -> f16
-      %input_scale = scalar.extf %input_half_scale : f16 to f32
-      %dot_pair = vector.dot4i<s8s8> %packed, %a, %integer_zero : vector<16xi8>, vector<16xi8>, vector<4xi32>
-      %dot_integer = vector.reduce<addi> %dot_pair, %scalar_zero : vector<4xi32>, i32
-      %dot = scalar.sitofp %dot_integer : i32 to f32
-      %product_scale = scalar.mulf %scale, %input_scale : f32
-      %value = scalar.fmaf %product_scale, %dot, %acc : f32
-      scf.yield %value : f32
+      %sums = scf.for %slot = [%c0 to %c8 step %c1](%partial = %acc : vector<8xf32>) -> (vector<8xf32>) unroll schedule(linear) {
+        %valid = index.cmp ult, %slot, %tokens : index
+        %updated = scf.if %valid -> (vector<8xf32>) {
+          %token = index.assume %slot [lt(%slot, %tokens)] : index
+          %contiguous_row = index.add %batch_row, %token : index
+          %interleaved_row = index.madd %token, %batches, %batch : index
+          %activation_row = scf.select %interleaved, %interleaved_row, %contiguous_row : index
+          %activation_row_base = index.scale %activation_row, %activation_row_bytes : index, offset -> offset
+          %activation_base = index.add %activation_row_base, %activation_group_base : offset
+          %activation_payload = index.add %activation_base, %activation_header_bytes : offset
+          %xv = buffer.view %input[%activation_payload] : buffer -> view<128xi8>
+          %ds = buffer.view %input[%activation_base] : buffer -> view<8xf16>
+          %a = vector.load %xv[%activation_index] : view<128xi8> -> vector<16xi8>
+          %input_half_scale = view.load %ds[%ds_index] : view<8xf16> -> f16
+          %input_scale = scalar.extf %input_half_scale : f16 to f32
+          %dot_pair = vector.dot4i<s8s8> %packed, %a, %integer_zero : vector<16xi8>, vector<16xi8>, vector<4xi32>
+          %dot_integer = vector.reduce<addi> %dot_pair, %scalar_zero : vector<4xi32>, i32
+          %dot = scalar.sitofp %dot_integer : i32 to f32
+          %product_scale = scalar.mulf %scale, %input_scale : f32
+          %old = vector.extract %partial[%slot] : vector<8xf32> -> f32
+          %value = scalar.fmaf %product_scale, %dot, %old : f32
+          %inserted = vector.insert %value into %partial[%slot] : f32, vector<8xf32>
+          scf.yield %inserted : vector<8xf32>
+        } else {
+          scf.yield %partial : vector<8xf32>
+        }
+        scf.yield %updated : vector<8xf32>
+      }
+      scf.yield %sums : vector<8xf32>
     } else {
-      scf.yield %acc : f32
+      scf.yield %acc : vector<8xf32>
     }
-    scf.yield %next : f32
+    scf.yield %next : vector<8xf32>
   }
-  %total = kernel.subgroup.reduce<addf> %lane_sum : f32
   %leader = index.cmp eq, %lane, %c0 : index
-  scf.if %leader {
-    %y = buffer.view %output[%zero_offset] : buffer -> view<[%flat_rows]xf32>
-    view.store %total, %y[%flat_row] : f32, view<[%flat_rows]xf32>
+  %y = buffer.view %output[%zero_offset] : buffer -> view<[%batches]x[%tokens]x[%rows]xf32>
+  scf.for %slot = [%c0 to %c8 step %c1] unroll schedule(linear) {
+    %valid = index.cmp ult, %slot, %tokens : index
+    scf.if %valid {
+      %token = index.assume %slot [lt(%slot, %tokens)] : index
+      %sum = vector.extract %lane_sum[%slot] : vector<8xf32> -> f32
+      %total = kernel.subgroup.reduce<addf> %sum : f32
+      scf.if %leader {
+        view.store %total, %y[%batch, %token, %row] : f32, view<[%batches]x[%tokens]x[%rows]xf32>
+      }
+    }
   }
   kernel.return
 }

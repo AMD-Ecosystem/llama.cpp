@@ -142,6 +142,21 @@ inline bool common_is_supported_dense_output_size(int64_t output_size) {
     return output_size >= 1 && output_size <= 262144;
 }
 
+inline bool common_mul_mat_allows_q8_input(const GraphNode & node) {
+    const auto * params = op_params_as<MulMatParams>(node.params);
+    if (params == nullptr || params->prec != GGML_PREC_DEFAULT) {
+        return false;
+    }
+    switch (params->src1_prec) {
+        case GGML_PREC_UNDEFINED:
+        case GGML_PREC_Q8:
+        case GGML_PREC_Q4:
+            return true;
+        default:
+            return false;
+    }
+}
+
 // Select the packed prefill schedule. Long Q4 contractions only benefit when
 // their producer supplies the layout without a separate conversion pass.
 inline bool common_mul_mat_uses_k16_major_f16(CommonMulMatWeightFormat format,

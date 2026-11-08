@@ -4,13 +4,13 @@ config.decl @ggml.flash_attention.gate_stride_head : %value: index where [range(
 
 config.decl @ggml.flash_attention.gate_stride_token : %value: index where [range(%value, 1, 16777216)]
 
-template.decl @ggml.flash_attention.prefill.publish_output(%publish_f16: i1, %query_token_count: index, %query_head_count: index, %value_head_size: index, %lane_has_output: i1, %query_valid0: i1, %query_valid1: i1, %query_valid2: i1, %query_valid3: i1, %query_token0: index, %query_token1: index, %query_token2: index, %query_token3: index, %query_head: index, %lane_output_channel: index, %final_sum: vector<4xf32>, %final_output0: vector<4xf16>, %final_output1: vector<4xf16>, %final_output2: vector<4xf16>, %final_output3: vector<4xf16>, %gate: buffer, %output: buffer, %f16_output: buffer, %output_offset: offset, %f16_output_offset: offset)
+template.decl @ggml.flash_attention.prefill.publish_output(%publish_f16: i1, %query_token_count: index, %query_head_count: index, %value_head_size: index, %lane_has_output: i1, %query_valid0: i1, %query_valid1: i1, %query_valid2: i1, %query_valid3: i1, %query_token0: index, %query_token1: index, %query_token2: index, %query_token3: index, %query_head: index, %lane_output_channel: index, %final_sum: vector<4xf32>, %final_output0: vector<4xf32>, %final_output1: vector<4xf32>, %final_output2: vector<4xf32>, %final_output3: vector<4xf32>, %gate: buffer, %output: buffer, %f16_output: buffer, %output_offset: offset, %f16_output_offset: offset)
 
 template.decl @ggml.flash_attention.decode_split.publish_f32.scalar(%query_head_count: index, %value_head_size: index, %query_head: index, %output_channel: index, %sum: f32, %unnormalized_output: f32, %output: buffer)
 
 template.decl @ggml.flash_attention.decode_split.publish_f32.vector2(%query_head_count: index, %value_head_size: index, %query_head_valid0: i1, %query_head_valid1: i1, %lane_output_channel_valid: i1, %query_head0: index, %query_head1: index, %lane_output_channel: index, %sum0: f32, %sum1: f32, %unnormalized_output0: vector<2xf32>, %unnormalized_output1: vector<2xf32>, %output: buffer)
 
-template.def<@ggml.flash_attention.prefill.publish_output> device @ggml_flash_attention_prefill_publish_output(%publish_f16: i1, %query_token_count: index, %query_head_count: index, %value_head_size: index, %lane_has_output: i1, %query_valid0: i1, %query_valid1: i1, %query_valid2: i1, %query_valid3: i1, %query_token0: index, %query_token1: index, %query_token2: index, %query_token3: index, %query_head: index, %lane_output_channel: index, %final_sum: vector<4xf32>, %final_output0: vector<4xf16>, %final_output1: vector<4xf16>, %final_output2: vector<4xf16>, %final_output3: vector<4xf16>, %gate: buffer, %output: buffer, %f16_output: buffer, %output_offset: offset, %f16_output_offset: offset) {
+template.def<@ggml.flash_attention.prefill.publish_output> device @ggml_flash_attention_prefill_publish_output(%publish_f16: i1, %query_token_count: index, %query_head_count: index, %value_head_size: index, %lane_has_output: i1, %query_valid0: i1, %query_valid1: i1, %query_valid2: i1, %query_valid3: i1, %query_token0: index, %query_token1: index, %query_token2: index, %query_token3: index, %query_head: index, %lane_output_channel: index, %final_sum: vector<4xf32>, %final_output0: vector<4xf32>, %final_output1: vector<4xf32>, %final_output2: vector<4xf32>, %final_output3: vector<4xf32>, %gate: buffer, %output: buffer, %f16_output: buffer, %output_offset: offset, %f16_output_offset: offset) {
   %c0_offset = index.constant 0 : offset
   %c1 = index.constant 1 : index
   %c1_f32 = scalar.constant 1.0 : f32
@@ -37,22 +37,14 @@ template.def<@ggml.flash_attention.prefill.publish_output> device @ggml_flash_at
     %inverse_sum1_f32 = scalar.divf<nnan|ninf|nsz|arcp> %c1_f32, %sum1_scalar : f32
     %inverse_sum2_f32 = scalar.divf<nnan|ninf|nsz|arcp> %c1_f32, %sum2_scalar : f32
     %inverse_sum3_f32 = scalar.divf<nnan|ninf|nsz|arcp> %c1_f32, %sum3_scalar : f32
-    %inverse_sum0_f16 = scalar.fptrunc %inverse_sum0_f32 : f32 to f16
-    %inverse_sum1_f16 = scalar.fptrunc %inverse_sum1_f32 : f32 to f16
-    %inverse_sum2_f16 = scalar.fptrunc %inverse_sum2_f32 : f32 to f16
-    %inverse_sum3_f16 = scalar.fptrunc %inverse_sum3_f32 : f32 to f16
-    %inverse_sum0 = vector.splat %inverse_sum0_f16 : vector<4xf16>
-    %inverse_sum1 = vector.splat %inverse_sum1_f16 : vector<4xf16>
-    %inverse_sum2 = vector.splat %inverse_sum2_f16 : vector<4xf16>
-    %inverse_sum3 = vector.splat %inverse_sum3_f16 : vector<4xf16>
-    %normalized0_f16 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %final_output0, %inverse_sum0 : vector<4xf16>
-    %normalized1_f16 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %final_output1, %inverse_sum1 : vector<4xf16>
-    %normalized2_f16 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %final_output2, %inverse_sum2 : vector<4xf16>
-    %normalized3_f16 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %final_output3, %inverse_sum3 : vector<4xf16>
-    %normalized0 = vector.extf %normalized0_f16 : vector<4xf16> to vector<4xf32>
-    %normalized1 = vector.extf %normalized1_f16 : vector<4xf16> to vector<4xf32>
-    %normalized2 = vector.extf %normalized2_f16 : vector<4xf16> to vector<4xf32>
-    %normalized3 = vector.extf %normalized3_f16 : vector<4xf16> to vector<4xf32>
+    %inverse_sum0 = vector.splat %inverse_sum0_f32 : vector<4xf32>
+    %inverse_sum1 = vector.splat %inverse_sum1_f32 : vector<4xf32>
+    %inverse_sum2 = vector.splat %inverse_sum2_f32 : vector<4xf32>
+    %inverse_sum3 = vector.splat %inverse_sum3_f32 : vector<4xf32>
+    %normalized0 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %final_output0, %inverse_sum0 : vector<4xf32>
+    %normalized1 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %final_output1, %inverse_sum1 : vector<4xf32>
+    %normalized2 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %final_output2, %inverse_sum2 : vector<4xf32>
+    %normalized3 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %final_output3, %inverse_sum3 : vector<4xf32>
     scf.if %query_valid0 {
       %published0 = scf.if %apply_gate -> (vector<4xf32>) {
         %gate_token_offset0 = index.mul %query_token0, %gate_stride_token : index

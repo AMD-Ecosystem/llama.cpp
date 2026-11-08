@@ -79,7 +79,7 @@ template.def<@ggml.quantize_q8_1_x4.group_body> device @ggml_quantize_q8_1_x4_gr
   %c128 = index.constant 128 : index
   %group_bytes = index.constant 144 : offset
   %payload_byte_add = index.constant 16 : offset
-  %scratch_d_byte_add = index.constant 128 : offset
+  %scratch_max_byte_add = index.constant 128 : offset
   %scratch_bytes = index.constant 144 : offset
   %c0_f32 = scalar.constant 0.0 : f32
   %c1_f32 = scalar.constant 1.0 : f32
@@ -103,7 +103,7 @@ template.def<@ggml.quantize_q8_1_x4.group_body> device @ggml_quantize_q8_1_x4_gr
   %thread_max = vector.reduce<maxnumf> %absolute_values, %c0_f32 : vector<4xf32>, f32
   %scratch = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
   %scratch_values = buffer.view %scratch[%c0_offset] : buffer -> view<32xf32>
-  %scratch_d = buffer.view %scratch[%scratch_d_byte_add] : buffer -> view<4xf32>
+  %scratch_max = buffer.view %scratch[%scratch_max_byte_add] : buffer -> view<4xf32>
   view.store %thread_max, %scratch_values[%lane] : f32, view<32xf32>
   kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
   %is_cohort_leader = index.cmp eq, %word_in_block, %c0 : index
@@ -111,21 +111,22 @@ template.def<@ggml.quantize_q8_1_x4.group_body> device @ggml_quantize_q8_1_x4_gr
     %cohort_base = index.mul %block_in_group, %c8 : index
     %cohort_maxima = vector.load %scratch_values[%cohort_base] : view<32xf32> -> vector<8xf32>
     %amax = vector.reduce<maxnumf> %cohort_maxima, %c0_f32 : vector<8xf32>, f32
-    %d = scalar.divf %amax, %c127 : f32
-    view.store %d, %scratch_d[%block_in_group] : f32, view<4xf32>
+    view.store %amax, %scratch_max[%block_in_group] : f32, view<4xf32>
   }
   kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
-  %d = view.load %scratch_d[%block_in_group] : view<4xf32> -> f32
+  %amax = view.load %scratch_max[%block_in_group] : view<4xf32> -> f32
+  %d = scalar.divf<reassoc|nnan|ninf|nsz|arcp> %amax, %c127 : f32
   %d_nonzero = scalar.cmpf one, %d, %c0_f32 : f32
   %d_inverse = scf.if %d_nonzero -> (f32) {
-    %inverse = scalar.divf %c1_f32, %d : f32
+    %inverse_max = scalar.divf<nnan|ninf|nsz|arcp> %c1_f32, %amax : f32
+    %inverse = scalar.mulf %c127, %inverse_max : f32
     scf.yield %inverse : f32
   } else {
     scf.yield %c0_f32 : f32
   }
   %d_inverse_vector = vector.splat %d_inverse : vector<4xf32>
   %scaled_values = vector.mulf %input_values, %d_inverse_vector : vector<4xf32>
-  %rounded_values = vector.roundf %scaled_values : vector<4xf32>
+  %rounded_values = vector.roundevenf %scaled_values : vector<4xf32>
   %quantized_values = vector.fptosi %rounded_values : vector<4xf32> to vector<4xi8>
   %packed_word = vector.bitcast %quantized_values : vector<4xi8> to vector<1xi32>
   %group_byte_offset = index.scale %group, %group_bytes : index, offset -> offset

@@ -4776,9 +4776,23 @@ static void run_common_flash_attention_cpu_reference_case(
     restore_environment_value(kDisableQwenDispatchEnv, had_original_env, original_env_value);
 }
 
-static void run_flash_attention_masked_storage_case(int64_t query_count, int64_t key_count, int64_t visible_count) {
-    constexpr int64_t head_size  = 512;
-    const int64_t     head_count = query_count == 1 ? 64 : 4;
+static void run_flash_attention_masked_storage_case(int64_t query_count,
+                                                    int64_t key_count,
+                                                    int64_t visible_count,
+                                                    int64_t head_count                = 0,
+                                                    int64_t protected_query_count     = 0,
+                                                    bool    accumulation_cancellation = false,
+                                                    bool    full_precision            = false) {
+    constexpr int64_t head_size = 512;
+    if (head_count == 0) {
+        head_count = query_count == 1 ? 64 : 4;
+    }
+    if (protected_query_count == 0) {
+        protected_query_count = query_count;
+    }
+    REQUIRE(protected_query_count > 0 && protected_query_count <= query_count);
+    const size_t      protected_values  = static_cast<size_t>(protected_query_count * head_count * head_size);
+    const int64_t     protected_visible = std::max<int64_t>(0, visible_count - query_count + protected_query_count);
     ggml_backend_t    backend    = ggml_backend_hrx_init(0);
     REQUIRE(backend != nullptr);
     ggml_context * ctx = ggml_init({ 4 * 1024 * 1024, nullptr, true });
@@ -4792,6 +4806,9 @@ static void run_flash_attention_masked_storage_case(int64_t query_count, int64_t
     ggml_tensor * sink   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, head_count);
     ggml_tensor * output = build_qwen_flash_attention_graph(ctx, query, key, value, mask, head_size);
     ggml_flash_attn_ext_add_sinks(output, sink);
+    if (full_precision) {
+        ggml_prec_set_acc(output, GGML_PREC_F32);
+    }
     ggml_cgraph * graph = ggml_new_graph(ctx);
     ggml_build_forward_expand(graph, output);
     require_kernel_subsequence(scheduled_kernel_sequence(graph),
@@ -4813,33 +4830,67 @@ static void run_flash_attention_masked_storage_case(int64_t query_count, int64_t
         key_data[i]   = ggml_fp32_to_fp16(random_value());
         value_data[i] = ggml_fp32_to_fp16(random_value());
     }
+    if (accumulation_cancellation) {
+        // Small blocks between opposite large blocks require F32 running totals.
+        REQUIRE(key_count >= 192 && visible_count == key_count);
+        for (int64_t token = 0; token < key_count; ++token) {
+            const float value = token < 64 ? 1.0f : token >= key_count - 64 ? -1.0f : 1.0f / 8192.0f;
+            std::fill_n(value_data.begin() + token * head_size, head_size, ggml_fp32_to_fp16(value));
+        }
+    }
+    // Nonzero queries also exercise softmax rounding when only later queries see changed values.
+    if (protected_query_count < query_count) {
+        for (float & value : query_data) {
+            value = random_value() * 0.25f;
+        }
+    }
     std::vector<ggml_fp16_t> mask_data(query_count * key_count,
                                        ggml_fp32_to_fp16(-std::numeric_limits<float>::infinity()));
-    std::vector<float>       expected(query_data.size(), 0.0f);
+    std::vector<float>       expected(protected_values, 0.0f);
+    const double             scale = 1.0 / std::sqrt(static_cast<double>(head_size));
     for (int64_t row = 0; row < query_count; ++row) {
         const int64_t visible = std::max<int64_t>(0, visible_count - query_count + 1 + row);
         for (int64_t token = 0; token < visible; ++token) {
             mask_data[row * key_count + token] = ggml_fp32_to_fp16(0.0f);
         }
-        // Zero queries and sinks give uniform probabilities, including one sink entry.
-        for (int64_t channel = 0; channel < head_size; ++channel) {
-            double sum = 0.0;
+        if (row >= protected_query_count) {
+            continue;
+        }
+        for (int64_t head = 0; head < head_count; ++head) {
+            const size_t        base = static_cast<size_t>((row * head_count + head) * head_size);
+            std::vector<double> probabilities(visible, 0.0);
+            double              maximum = 0.0;  // The sink logit is zero.
             for (int64_t token = 0; token < visible; ++token) {
-                sum += ggml_fp16_to_fp32(value_data[token * head_size + channel]);
+                double dot = 0.0;
+                for (int64_t channel = 0; channel < head_size; ++channel) {
+                    dot += static_cast<double>(query_data[base + channel]) *
+                           ggml_fp16_to_fp32(key_data[token * head_size + channel]);
+                }
+                probabilities[token] = dot * scale;
+                maximum              = std::max(maximum, probabilities[token]);
             }
-            for (int64_t head = 0; head < head_count; ++head) {
-                expected[(row * head_count + head) * head_size + channel] = sum / (visible + 1);
+            double denominator = std::exp(-maximum);
+            for (double & probability : probabilities) {
+                probability = std::exp(probability - maximum);
+                denominator += probability;
+            }
+            for (int64_t channel = 0; channel < head_size; ++channel) {
+                double sum = 0.0;
+                for (int64_t token = 0; token < visible; ++token) {
+                    sum += probabilities[token] * ggml_fp16_to_fp32(value_data[token * head_size + channel]);
+                }
+                expected[base + channel] = static_cast<float>(sum / denominator);
             }
         }
     }
     ggml_backend_tensor_set(query, query_data.data(), 0, ggml_nbytes(query));
     ggml_backend_tensor_set(mask, mask_data.data(), 0, ggml_nbytes(mask));
     ggml_backend_tensor_set(sink, sink_data.data(), 0, ggml_nbytes(sink));
-    std::vector<float> baseline(expected.size()), actual(expected.size());
+    std::vector<float> baseline(query_data.size()), actual(query_data.size());
     for (int variant = 0; variant < 5; ++variant) {
         auto changed_key   = key_data;
         auto changed_value = value_data;
-        for (int64_t i = visible_count * head_size; i < key_count * head_size; ++i) {
+        for (int64_t i = protected_visible * head_size; i < key_count * head_size; ++i) {
             for (auto * data : { &changed_key, &changed_value }) {
                 const float magnitude = std::fabs(ggml_fp16_to_fp32((*data)[i]));
                 if (variant > 0) {
@@ -4856,9 +4907,11 @@ static void run_flash_attention_masked_storage_case(int64_t query_count, int64_t
         REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
         ggml_backend_synchronize(backend);
         ggml_backend_tensor_get(output, actual.data(), 0, ggml_nbytes(output));
+        for (float value : actual) {
+            REQUIRE(std::isfinite(value));
+        }
         double squared_error = 0.0, squared_reference = 0.0;
-        for (size_t i = 0; i < actual.size(); ++i) {
-            REQUIRE(std::isfinite(actual[i]));
+        for (size_t i = 0; i < protected_values; ++i) {
             const double error = static_cast<double>(actual[i]) - expected[i];
             squared_error += error * error;
             squared_reference += static_cast<double>(expected[i]) * expected[i];
@@ -4867,7 +4920,7 @@ static void run_flash_attention_masked_storage_case(int64_t query_count, int64_t
         if (variant == 0) {
             baseline = actual;
         } else {
-            REQUIRE(std::memcmp(actual.data(), baseline.data(), actual.size() * sizeof(float)) == 0);
+            REQUIRE(std::memcmp(actual.data(), baseline.data(), protected_values * sizeof(float)) == 0);
         }
     }
     ggml_backend_buffer_free(buffer);
@@ -5980,6 +6033,192 @@ static auto import_test_weight(ggml_backend_t backend, ggml_tensor * weight, std
     REQUIRE(ggml_backend_tensor_alloc(buffer.get(), weight, bytes.data()) == GGML_STATUS_SUCCESS);
     ggml_backend_buffer_set_usage(buffer.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
     return buffer;
+}
+
+static void run_batched_q8_matmul_reference_case(int64_t      tokens,
+                                                 int64_t      k,
+                                                 bool         strided,
+                                                 bool         full_precision            = false,
+                                                 bool         padded                    = false,
+                                                 int64_t      batches                   = 3,
+                                                 bool         quantized_input           = false,
+                                                 int64_t      m                         = 513,
+                                                 const char * expected_quantized_kernel = nullptr) {
+    auto backend = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+    ggml_init_params params = { 1024 * 1024, nullptr, true };
+    auto *           ctx    = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+    auto *        weight          = ggml_new_tensor_3d(ctx, GGML_TYPE_Q8_0, k, m, batches);
+    const int64_t storage_batches = batches + (padded ? 1 : 0);
+    REQUIRE(!padded || strided);
+    auto * storage = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, k, strided ? storage_batches : tokens,
+                                        strided ? tokens : storage_batches);
+    auto * view  = padded ? ggml_view_3d(ctx, storage, k, batches, tokens, storage->nb[1], storage->nb[2], 0) : storage;
+    auto * input = strided ? ggml_permute(ctx, view, 0, 2, 1, 3) : view;
+    auto * product = ggml_mul_mat(ctx, weight, input);
+    if (!quantized_input) {
+        REQUIRE(ggml_prec_set_src(product, GGML_PREC_F32, 1));
+    }
+    if (full_precision) {
+        REQUIRE(ggml_prec_set_acc(product, GGML_PREC_F32));
+    }
+    auto * output = ggml_cont(ctx, ggml_permute(ctx, product, 0, 2, 1, 3));
+    auto * graph  = ggml_new_graph_custom(ctx, 32, false);
+    ggml_build_forward_expand(graph, output);
+    const auto sequence    = scheduled_kernel_sequence(graph);
+    const bool small_batch = tokens >= 1 && tokens <= 8 && k % 128 == 0;
+    if (quantized_input) {
+        const char * expected_kernel = expected_quantized_kernel ? expected_quantized_kernel :
+                                       batches == 1              ? "loom_libs:ggml_mul_mat_vector_q8_q8_1" :
+                                       (tokens == 1 || full_precision) ?
+                                                      "loom_libs:ggml_mul_mat_small_batch_q8_f32" :
+                                                      "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f16acc_f32";
+        require_kernel_subsequence(sequence, { expected_kernel });
+    } else {
+        REQUIRE((std::find(sequence.begin(), sequence.end(), "loom_libs:ggml_mul_mat_small_batch_q8_f32") !=
+                 sequence.end()) == small_batch);
+    }
+    auto buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    REQUIRE(buffer != nullptr);
+    const auto         bytes = make_matmul_weight_bytes(GGML_TYPE_Q8_0, k, m * batches, 19);
+    std::vector<float> decoded(k * m * batches);
+    dequantize_row_q8_0(reinterpret_cast<const block_q8_0 *>(bytes.data()), decoded.data(), decoded.size());
+    set_tensor_bytes(backend, weight, bytes.data(), bytes.size());
+    for (int round = 0; round < 2; ++round) {
+        const auto values = make_pattern_f32(k * tokens * storage_batches, 7 + round, 0.03125f);
+        set_tensor_bytes(backend, storage, values.data(), values.size() * sizeof(float));
+        REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+        ggml_backend_synchronize(backend);
+        const auto actual = get_f32_tensor(backend, output);
+        double     error  = 0.0;
+        double     signal = 0.0;
+        for (int64_t token = 0; token < tokens; ++token) {
+            for (int64_t batch = 0; batch < batches; ++batch) {
+                const int64_t input_row = strided ? token * storage_batches + batch : batch * tokens + token;
+                for (int64_t row = 0; row < m; ++row) {
+                    double expected = 0.0;
+                    for (int64_t channel = 0; channel < k; ++channel) {
+                        expected += double(decoded[(batch * m + row) * k + channel]) * values[input_row * k + channel];
+                    }
+                    const float value = actual[(token * batches + batch) * m + row];
+                    REQUIRE(std::isfinite(value));
+                    error += (value - expected) * (value - expected);
+                    signal += expected * expected;
+                }
+            }
+        }
+        REQUIRE(signal > 0.0);
+        REQUIRE(error / signal <= (full_precision ? 1e-10 : quantized_input ? 2e-4 : small_batch ? 1e-10 : 1e-5));
+    }
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+    ggml_backend_free(backend);
+}
+
+static void run_mxfp4_expert_reference_case(int64_t tokens,
+                                            int64_t input_routes,
+                                            int64_t k           = 512,
+                                            int64_t m           = 127,
+                                            bool    invalid_ids = false) {
+    constexpr int64_t experts    = 13;
+    constexpr int64_t routes     = 6;
+    constexpr int64_t ids_stride = routes + 2;
+    const int64_t     blocks     = k / 32;
+    constexpr double  codebook[] = { 0, .5, 1, 1.5, 2, 3, 4, 6, 0, -.5, -1, -1.5, -2, -3, -4, -6 };
+    auto              backend    = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+    ggml_init_params params = { 1024 * 1024, nullptr, true };
+    auto *           ctx    = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+    auto * weight      = ggml_new_tensor_3d(ctx, GGML_TYPE_MXFP4, k, m, experts);
+    auto * input       = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, k, input_routes, tokens);
+    auto * ids_storage = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, ids_stride, tokens);
+    auto * ids         = ggml_view_2d(ctx, ids_storage, routes, tokens, ids_storage->nb[1], 0);
+    auto * output      = ggml_mul_mat_id(ctx, weight, input, ids);
+    REQUIRE(ggml_prec_set_src(output, GGML_PREC_F32, 1));
+    auto * graph = ggml_new_graph_custom(ctx, 32, false);
+    ggml_build_forward_expand(graph, output);
+    const auto sequence = scheduled_kernel_sequence(graph);
+    if (tokens > 1 && tokens <= 8 && k >= 2048 && m >= 1024) {
+        require_kernel_subsequence(
+            sequence, { "loom_libs:ggml_mxfp4_prepare_groups", "loom_libs:ggml_mul_mat_id_grouped_mxfp4_f32" });
+
+    } else if (tokens <= 8) {
+        require_kernel_subsequence(sequence, { "loom_libs:ggml_mul_mat_id_vector_mxfp4_f32" });
+    } else {
+        require_kernel_subsequence(
+            sequence, { "loom_libs:ggml_mul_mat_id_pack_f32", "loom_libs:ggml_mul_mat_id_batched_mxfp4_f32" });
+    }
+    auto buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    REQUIRE(buffer != nullptr);
+    REQUIRE(ggml_type_size(GGML_TYPE_MXFP4) == 17);
+    std::vector<uint8_t> packed(experts * m * blocks * 17);
+    std::vector<double>  decoded(experts * m * k);
+    // Build canonical GGUF blocks without sharing the backend's weight decoder.
+    for (int64_t row = 0; row < experts * m; ++row) {
+        for (int64_t block = 0; block < blocks; ++block) {
+            auto * bytes       = packed.data() + (row * blocks + block) * 17;
+            bytes[0]           = static_cast<uint8_t>(121 + (row + block * 3) % 9);
+            const double scale = std::ldexp(1.0, int(bytes[0]) - 127);
+            for (int64_t lane = 0; lane < 16; ++lane) {
+                const int lo                              = (row * 7 + block * 3 + lane) % 16;
+                const int hi                              = (row * 3 + block * 5 + lane * 7 + 1) % 16;
+                bytes[1 + lane]                           = static_cast<uint8_t>(lo | (hi << 4));
+                decoded[row * k + block * 32 + lane]      = codebook[lo] * scale;
+                decoded[row * k + block * 32 + lane + 16] = codebook[hi] * scale;
+            }
+        }
+    }
+    set_tensor_bytes(backend, weight, packed.data(), packed.size());
+    for (int round = 0; round < 2; ++round) {
+        const auto           values = make_pattern_f32(k * input_routes * tokens, 23 + round, 0.173f);
+        std::vector<int32_t> selected(ids_stride * tokens, -1);
+        for (int64_t token = 0; token < tokens; ++token) {
+            for (int64_t route = 0; route < routes; ++route) {
+                selected[token * ids_stride + route] =
+                    invalid_ids && round == 0 ? token / 3 : (token * 3 + route + round * 5) % experts;
+            }
+        }
+        if (invalid_ids) {
+            selected[0]                                      = -1;
+            selected[routes - 1]                             = std::numeric_limits<int32_t>::max();
+            selected[(tokens - 1) * ids_stride + routes - 2] = experts;
+        }
+        set_tensor_bytes(backend, input, values.data(), values.size() * sizeof(float));
+        set_tensor_bytes(backend, ids_storage, selected.data(), selected.size() * sizeof(int32_t));
+        REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+        ggml_backend_synchronize(backend);
+        const auto actual = get_f32_tensor(backend, output);
+        double     error  = 0.0;
+        double     signal = 0.0;
+        for (int64_t token = 0; token < tokens; ++token) {
+            for (int64_t route = 0; route < routes; ++route) {
+                const int64_t expert    = selected[token * ids_stride + route];
+                const int64_t input_row = token * input_routes + route % input_routes;
+                for (int64_t row = 0; row < m; ++row) {
+                    double expected = 0.0;
+                    if (expert >= 0 && expert < experts) {
+                        for (int64_t channel = 0; channel < k; ++channel) {
+                            expected += decoded[(expert * m + row) * k + channel] * values[input_row * k + channel];
+                        }
+                    }
+                    const float value = actual[(token * routes + route) * m + row];
+                    REQUIRE(std::isfinite(value));
+                    if (expert < 0 || expert >= experts) {
+                        REQUIRE(value == 0.0f);
+                    }
+                    error += (value - expected) * (value - expected);
+                    signal += expected * expected;
+                }
+            }
+        }
+        REQUIRE(signal > 0.0);
+        REQUIRE(error / signal <= 1e-10);
+    }
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+    ggml_backend_free(backend);
 }
 
 static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
@@ -8596,6 +8835,109 @@ static void register_basic_ops_cases(Suite & suite) {
 }
 
 static void register_dense_matmul_cases(Suite & suite) {
+    struct PrefillCase {
+        int64_t      k;
+        int64_t      m;
+        int64_t      tokens;
+        const char * kernel;
+    };
+
+    const PrefillCase prefill_cases[] = {
+        { 2048, 512,  256, "loom_libs:ggml_mul_mat_q8_1_x4_wmma_split_k2"             },
+        { 4096, 576,  256, "loom_libs:ggml_mul_mat_q8_1_x4_wmma_split_k2"             },
+        { 512,  512,  256, "loom_libs:ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256" },
+        { 4096, 1024, 512, "loom_libs:ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256" },
+        { 2048, 513,  256, "loom_libs:ggml_mul_mat_vector_q8_q8_1"                    },
+        { 2048, 512,  257, "loom_libs:ggml_mul_mat_vector_q8_q8_1"                    },
+    };
+    for (const auto & test : prefill_cases) {
+        suite.device_case("unbatched_q8_matmul.prefill.k" + std::to_string(test.k) + ".m" + std::to_string(test.m) +
+                              ".tokens" + std::to_string(test.tokens),
+                          [test] {
+                              run_batched_q8_matmul_reference_case(test.tokens, test.k, false, false, false, 1, true,
+                                                                   test.m, test.kernel);
+                          });
+    }
+
+    struct BatchedCase {
+        int64_t      tokens;
+        int64_t      batches;
+        const char * kernel;
+    };
+
+    const BatchedCase batched_cases[] = {
+        { 9,  3, "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f16acc_f32" },
+        { 32, 8, "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f16acc_f32" },
+        { 32, 9, "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32"        },
+        { 33, 3, "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32"        },
+    };
+    for (const auto & test : batched_cases) {
+        suite.device_case("batched_q8_matmul.dispatch_boundary.tokens" + std::to_string(test.tokens) + ".batches" +
+                              std::to_string(test.batches),
+                          [test] {
+                              run_batched_q8_matmul_reference_case(test.tokens, 2048, false, false, false, test.batches,
+                                                                   true, 513, test.kernel);
+                          });
+    }
+    for (const int64_t tokens : { 1, 2, 3, 4, 5, 6, 8 }) {
+        for (const int64_t k : { 2048, 4096 }) {
+            for (const bool strided : { false, true }) {
+                for (const int mode : { 0, 1, 2 }) {
+                    suite.device_case(
+                        "batched_q8_matmul.default_q8.mode" + std::to_string(mode) + ".tokens" +
+                            std::to_string(tokens) + ".k" + std::to_string(k) + (strided ? ".strided" : ".contiguous"),
+                        [=] {
+                            run_batched_q8_matmul_reference_case(tokens, k, strided, mode == 2, false, 3, mode != 1);
+                        });
+                }
+            }
+        }
+    }
+
+    for (const int64_t tokens : { 2, 5, 8 }) {
+        for (const int64_t k : { 256, 512 }) {
+            suite.device_case(
+                "unbatched_q8_matmul.default_q8.tokens" + std::to_string(tokens) + ".k" + std::to_string(k),
+                [=] { run_batched_q8_matmul_reference_case(tokens, k, false, false, false, 1, true); });
+        }
+    }
+    for (const int64_t tokens : { 1, 2, 3, 4, 5, 6, 7, 8 }) {
+        for (const int64_t k : { 384, 512 }) {
+            suite.device_case("unbatched_q8_matmul.tokens" + std::to_string(tokens) + ".k" + std::to_string(k),
+                              [=] { run_batched_q8_matmul_reference_case(tokens, k, false, false, false, 1); });
+        }
+    }
+    for (int64_t tokens : { 1, 2, 3, 4, 5, 6, 7, 8, 32, 33, 65, 512 }) {
+        for (int64_t input_routes : { 1, 2, 6 }) {
+            const std::string name = "common_mul_mat_id.mxfp4_f32.tokens" + std::to_string(tokens) + ".input_routes" +
+                                     std::to_string(input_routes);
+            suite.device_case(name, [=] { run_mxfp4_expert_reference_case(tokens, input_routes); });
+        }
+    }
+    for (int64_t tokens : { 1, 2, 3, 4, 5, 6, 7, 8 }) {
+        for (int64_t input_routes : { 1, 2, 6 }) {
+            const std::string name = "common_mul_mat_id.mxfp4_grouped_f32.tokens" + std::to_string(tokens) +
+                                     ".input_routes" + std::to_string(input_routes);
+            suite.device_case(name, [=] { run_mxfp4_expert_reference_case(tokens, input_routes, 2048, 1025, true); });
+        }
+    }
+    suite.device_case("common_mul_mat_id.mxfp4_grouped_f32.single_row_invalid",
+                      [] { run_mxfp4_expert_reference_case(3, 2, 256, 1, true); });
+    suite.device_case("common_mul_mat_id.mxfp4_grouped_f32.three_rows_invalid",
+                      [] { run_mxfp4_expert_reference_case(5, 6, 2048, 3, true); });
+    suite.device_case("batched_q8_matmul.precision_f32",
+                      [] { run_batched_q8_matmul_reference_case(6, 512, true, true); });
+    suite.device_case("batched_q8_matmul.padded",
+                      [] { run_batched_q8_matmul_reference_case(6, 512, true, false, true); });
+    for (const int64_t tokens : { 1, 2, 5, 6, 8, 9 }) {
+        for (const int64_t k : { 384, 512 }) {
+            for (const bool strided : { false, true }) {
+                suite.device_case("batched_q8_matmul.tokens" + std::to_string(tokens) + ".k" + std::to_string(k) +
+                                      (strided ? ".strided" : ".contiguous"),
+                                  [=] { run_batched_q8_matmul_reference_case(tokens, k, strided); });
+            }
+        }
+    }
     // Distinct gate/up weights cover cached metadata, multiple K blocks, and tile tails.
     for (const ggml_type gate : { GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS }) {
         for (const ggml_type up : { GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS }) {
@@ -8657,7 +8999,11 @@ static void register_dense_matmul_cases(Suite & suite) {
     for (const ggml_type type :
          { GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_Q8_0, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_F32 }) {
         suite.device_case("dense_matmul." + type_name(type) + ".tokens3.outputs47", [type] {
-            run_dense_matmul_cpu_reference_case(type, "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32", 3, 47);
+            run_dense_matmul_cpu_reference_case(type,
+                                                type == GGML_TYPE_Q8_0 ?
+                                                    "loom_libs:ggml_mul_mat_small_batch_q8_f32" :
+                                                    "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32",
+                                                3, 47);
         });
     }
     for (const ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
@@ -8746,14 +9092,16 @@ static void register_dense_matmul_cases(Suite & suite) {
     for (const ggml_type type :
          { GGML_TYPE_Q1_0, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, GGML_TYPE_IQ2_S,
            GGML_TYPE_Q6_K, GGML_TYPE_Q8_0, GGML_TYPE_IQ4_NL, GGML_TYPE_F16, GGML_TYPE_BF16 }) {
-        const char * vector_kernel = type == GGML_TYPE_IQ2_S ? "loom_libs:ggml_mul_mat_vector_iq2_s_f32_f32" :
-                                                              "loom_libs:ggml_mul_mat_vector_f32_f32";
+        const char *  vector_kernel = type == GGML_TYPE_Q8_0  ? "loom_libs:ggml_mul_mat_small_batch_q8_f32" :
+                                      type == GGML_TYPE_IQ2_S ? "loom_libs:ggml_mul_mat_vector_iq2_s_f32_f32" :
+                                                                "loom_libs:ggml_mul_mat_vector_f32_f32";
         const int64_t outputs       = type == GGML_TYPE_IQ2_S ? 640 : (type == GGML_TYPE_IQ4_NL ? 1024 : 128);
         const int64_t input         = type == GGML_TYPE_IQ4_NL ? 640 : kQwenHiddenSize;
         const bool    tiled_route   = type == GGML_TYPE_IQ2_S || type == GGML_TYPE_IQ4_NL;
         const char *  route         = tiled_route ? "tiled" : "skinny";
-        const char * kernel = type == GGML_TYPE_IQ2_S ? "loom_libs:ggml_mul_mat_tiled_input_f32_iq2_s_publish_f32" :
-                              type == GGML_TYPE_IQ4_NL ? "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32" :
+        const char *  kernel = type == GGML_TYPE_Q8_0   ? "loom_libs:ggml_mul_mat_small_batch_q8_f32" :
+                               type == GGML_TYPE_IQ2_S  ? "loom_libs:ggml_mul_mat_tiled_input_f32_iq2_s_publish_f32" :
+                               type == GGML_TYPE_IQ4_NL ? "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32" :
                                                           "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32";
         suite.device_case(
             "dense_matmul." + type_name(type) + "." + route + ".tokens2.outputs" + std::to_string(outputs),
@@ -9043,6 +9391,10 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
     suite.device_case("gemma_post_proj.normalized_add.tokens3",
                       [] { run_gemma_post_proj_cpu_reference_case(3, true); });
     suite.device_case("rmsnorm.default", [] { run_rmsnorm_cpu_reference_case(); });
+    for (const int64_t hidden_size : { 64, 192, 448, 512, 576, 1024 }) {
+        suite.device_case("rmsnorm.reduction_boundary.hidden" + std::to_string(hidden_size),
+                          [hidden_size] { run_rmsnorm_cpu_reference_case(hidden_size, 3); });
+    }
     suite.device_case("rmsnorm.hidden3840.tokens18", [] { run_rmsnorm_cpu_reference_case(3840, 18, 1.0e-6f); });
     for (const int64_t token_count : { 2, 23 }) {
         suite.device_case("strided_rmsnorm.tokens" + std::to_string(token_count),
@@ -9192,6 +9544,31 @@ static void register_flash_attention_cases(Suite & suite) {
                                  std::to_string(shape[1]) + ".visible" + std::to_string(shape[2]);
         suite.device_case(name, [shape] { run_flash_attention_masked_storage_case(shape[0], shape[1], shape[2]); });
     }
+    for (const auto & shape : std::vector<std::array<int64_t, 5>>{
+             { 3,    1024, 257,  64, 1 },
+             { 6,    1055, 264,  32, 3 },
+             { 8,    512,  260,  16, 4 },
+             { 16,   1055, 264,  16, 3 },
+             { 17,   257,  253,  64, 4 },
+             { 128,  257,  253,  16, 1 },
+             { 129,  257,  253,  16, 1 },
+             { 512,  1024, 768,  16, 1 },
+             { 2048, 2111, 2111, 16, 1 }
+    }) {
+        const std::string name =
+            "common_flash_attention.query_mask.query" + std::to_string(shape[0]) + ".heads" + std::to_string(shape[3]);
+        suite.device_case(name, [shape] {
+            run_flash_attention_masked_storage_case(shape[0], shape[1], shape[2], shape[3], shape[4]);
+        });
+    }
+    suite.device_case("common_flash_attention.precision.running_total",
+                      [] { run_flash_attention_masked_storage_case(1, 4096, 4096, 4, 1, true); });
+    suite.device_case("common_flash_attention.precision.f32.query3",
+                      [] { run_flash_attention_masked_storage_case(3, 1024, 257, 64, 1, false, true); });
+    suite.device_case("common_flash_attention.precision.f32.query6",
+                      [] { run_flash_attention_masked_storage_case(6, 1055, 264, 32, 3, false, true); });
+    suite.device_case("common_flash_attention.precision.f32.query512",
+                      [] { run_flash_attention_masked_storage_case(512, 1024, 768, 16, 1, false, true); });
     suite.device_case("common_flash_attention.prefill.head128.query256.kv256.exact", [] {
         run_common_flash_attention_cpu_reference_case(128, 256, 256, 1.0f / std::sqrt(128.0f),
                                                       "loom_libs:ggml_flash_attention_f32_f16_wmma", -1,

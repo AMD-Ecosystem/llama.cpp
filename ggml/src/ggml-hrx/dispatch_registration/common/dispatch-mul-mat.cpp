@@ -2065,7 +2065,7 @@ static bool match_batched_mul_mat_dispatch(const DispatchMatchContext & context,
     if (weight == nullptr || input == nullptr || output == nullptr || !weight->contiguous || !output->contiguous ||
         input->type != GGML_TYPE_F32 || output->type != GGML_TYPE_F32 ||
         (weight->type != GGML_TYPE_Q8_0 && weight->type != GGML_TYPE_F16 && weight->type != GGML_TYPE_F32) ||
-        weight->ne[2] <= 1 || weight->ne[2] > 512 || weight->ne[3] != 1 || input->ne[3] != 1 || output->ne[3] != 1 ||
+        weight->ne[2] < 1 || weight->ne[2] > 512 || weight->ne[3] != 1 || input->ne[3] != 1 || output->ne[3] != 1 ||
         weight->ne[2] != input->ne[2] || output->ne[2] != input->ne[2] || weight->storage == output->storage ||
         input->storage == output->storage) {
         return false;
@@ -2081,8 +2081,116 @@ static bool match_batched_mul_mat_dispatch(const DispatchMatchContext & context,
         return false;
     }
 
+    constexpr uint64_t max_buffer_bytes = uint64_t{ 1 } << 32;
+    const bool         buffers_fit = weight->byte_count <= max_buffer_bytes && input->byte_count <= max_buffer_bytes &&
+                                     output->byte_count <= max_buffer_bytes;
+    const bool         grouped = token_count > 1 && token_count <= 32 && weight->ne[2] > 1 &&
+                                 weight->ne[2] * token_count <= 256 && output->element_count <= 134217728 &&
+                                 input_size % 2048 == 0 && format == CommonMulMatWeightFormat::Q8_0 && buffers_fit &&
+                                 common_mul_mat_allows_q8_input(*node);
+    const bool         q8_small_batch = token_count <= 8 && format == CommonMulMatWeightFormat::Q8_0 && !grouped &&
+                                        input_size % 128 == 0 && buffers_fit;
+    const bool q8_prefill = token_count > 8 && format == CommonMulMatWeightFormat::Q8_0 && input_size % 256 == 0 &&
+                            output_size >= 512 && input->contiguous && buffers_fit &&
+                            common_mul_mat_allows_q8_input(*node);
+    if (weight->ne[2] == 1 && !q8_small_batch && !q8_prefill) {
+        return false;
+    }
+    if ((q8_small_batch || q8_prefill) && token_count > 1 && weight->ne[2] == 1 && input->contiguous &&
+        input_size % 256 == 0 && output_size >= 512 && common_mul_mat_allows_q8_input(*node)) {
+        DispatchBinding quantized;
+        if (!common_prepare_q8_1_x4_input(context, *input, input_size, token_count, dispatch_match, quantized,
+                                          CommonQ8ActivationPolicy::AllowStandaloneQuantize)) {
+            return false;
+        }
+        if (token_count % 256 == 0 && output_size % 64 == 0) {
+            const int64_t tile_count = (token_count / 256) * (output_size / 64);
+            const bool    split_k    = input_size >= 2048 && tile_count <= 16;
+            const ValueId partial =
+                split_k ?
+                    ValueId(context.next_plan_value.value + static_cast<int32_t>(dispatch_match.transients.size())) :
+                    output->id;
+            const size_t partial_bytes = output->byte_count * (split_k ? 2 : 1);
+            if (split_k) {
+                dispatch_match.transients.push_back({ partial, "common.mul_mat.q8.split_k2", partial_bytes, 256 });
+            }
+            Dispatch dispatch;
+            dispatch.kernel = make_kernel_specialization(
+                split_k ? GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_q8_1_x4_wmma_split_k2") :
+                          kMulMatQ5KIQ4XSQ8_1X4WmmaToken256Kernel);
+            dispatch.kernel.integer_parameters.emplace("token_count", token_count);
+            dispatch.kernel.compile_parameters = {
+                { "ggml.mul_mat_q8_1_x4.input_size",     std::to_string(input_size)  },
+                { "ggml.mul_mat_q8_1_x4.output_size",    std::to_string(output_size) },
+                { "ggml.mul_mat_q8_1_x4.token_capacity", std::to_string(token_count) },
+                { "ggml.mul_mat_q8_1_x4.weight_format",  "80"                        }
+            };
+            dispatch.bindings = {
+                quantized, { weight->id, 0, weight->byte_count },
+                 { partial,    0, partial_bytes      }
+            };
+            dispatch_match.dispatches.push_back(std::move(dispatch));
+            if (split_k) {
+                Dispatch reduce;
+                reduce.kernel = make_kernel_specialization(GGML_HRX_KERNEL_REF("loom_libs", "ggml_binary_f32"));
+                reduce.kernel.integer_parameters.emplace("element_count", output->element_count);
+                reduce.kernel.compile_parameters = {
+                    { "ggml.binary_f32.op",        "0"                                   },
+                    { "ggml.binary_f32.ne0",       std::to_string(output->element_count) },
+                    { "ggml.binary_f32.ne1",       "1"                                   },
+                    { "ggml.binary_f32.ne2",       "1"                                   },
+                    { "ggml.binary_f32.src0_span", std::to_string(output->element_count) },
+                    { "ggml.binary_f32.src1_span", std::to_string(output->element_count) }
+                };
+                for (const char * source : { "src0", "src1" }) {
+                    reduce.kernel.compile_parameters.emplace(std::string("ggml.binary_f32.") + source + "_stride0",
+                                                             "1");
+                    for (int dim = 1; dim < GGML_MAX_DIMS; ++dim) {
+                        reduce.kernel.compile_parameters.emplace(
+                            std::string("ggml.binary_f32.") + source + "_stride" + std::to_string(dim),
+                            std::to_string(output->element_count));
+                    }
+                }
+                reduce.bindings = {
+                    { partial,    0,                  output->byte_count },
+                    { partial,    output->byte_count, output->byte_count },
+                    { output->id, 0,                  output->byte_count }
+                };
+                dispatch_match.dispatches.push_back(std::move(reduce));
+            }
+            dispatch_match.covered_nodes.push_back(context.root_index);
+            return true;
+        }
+        const size_t input_row_bytes  = ggml_row_size(GGML_TYPE_Q8_1, input_size);
+        const size_t output_row_bytes = output_size * sizeof(float);
+        for (int64_t token = 0; token < token_count; token += 8) {
+            const int64_t chunk = std::min<int64_t>(8, token_count - token);
+            Dispatch      dispatch;
+            dispatch.kernel = make_kernel_specialization(kMulMatVectorQ8Q8Kernel);
+            dispatch.kernel.integer_parameters.emplace("token_count", chunk);
+            dispatch.kernel.compile_parameters = {
+                { "ggml.matmul.vector.input_size",  std::to_string(input_size)  },
+                { "ggml.matmul.vector.output_size", std::to_string(output_size) }
+            };
+            DispatchBinding input_slice = quantized;
+            input_slice.offset += token * input_row_bytes;
+            input_slice.length = chunk * input_row_bytes;
+            dispatch.bindings  = {
+                input_slice,
+                { weight->id, 0,                        weight->byte_count       },
+                { output->id, token * output_row_bytes, chunk * output_row_bytes },
+                { output->id, token * output_row_bytes, chunk * output_row_bytes }
+            };
+            dispatch_match.dispatches.push_back(std::move(dispatch));
+        }
+        dispatch_match.covered_nodes.push_back(context.root_index);
+        return true;
+    }
+    const bool interleaved = q8_small_batch && input->nb[0] == sizeof(float) &&
+                             input->nb[1] == input_size * weight->ne[2] * sizeof(float) &&
+                             input->nb[2] == input_size * sizeof(float);
     ValueId input_value = input->id;
-    if (!input->contiguous) {
+    if (!input->contiguous && !interleaved) {
         Value packed      = *input;
         packed.id         = context.next_plan_value;
         packed.storage    = ValueStorageId();
@@ -2102,45 +2210,49 @@ static bool match_batched_mul_mat_dispatch(const DispatchMatchContext & context,
         input_value = packed.id;
     }
 
-    const size_t    input_bytes  = input_size * token_count * sizeof(float);
-    const size_t    output_bytes = output_size * token_count * sizeof(float);
-    const size_t    weight_bytes = weight->nb[2];
-    const bool      vector       = token_count == 1;
-    const auto *    precision    = op_params_as<MulMatParams>(node->params);
-    const bool      q8_vector    = vector && format == CommonMulMatWeightFormat::Q8_0 && input_size % 256 == 0 &&
-                                   output_size >= 512 && (precision == nullptr || precision->prec == GGML_PREC_DEFAULT);
-    DispatchBinding quantized;
-    if (q8_vector) {
-        Value packed      = *input;
-        packed.id         = input_value;
-        packed.contiguous = true;
-        if (!common_prepare_q8_1_x4_input(context, packed, input_size, weight->ne[2], dispatch_match, quantized,
-                                          CommonQ8ActivationPolicy::AllowStandaloneQuantize)) {
-            return false;
-        }
+    if (q8_small_batch) {
         Dispatch dispatch;
-        dispatch.kernel = make_kernel_specialization(kMulMatVectorQ8Q8Kernel);
-        dispatch.kernel.integer_parameters.emplace("token_count", 1);
-        dispatch.kernel.compile_parameters.emplace("ggml.matmul.vector.input_size", std::to_string(input_size));
-        dispatch.kernel.compile_parameters.emplace("ggml.matmul.vector.output_size", std::to_string(output_size));
-        dispatch.kernel.compile_parameters.emplace("ggml.matmul.vector.batch_count", std::to_string(weight->ne[2]));
+        dispatch.kernel =
+            make_kernel_specialization(GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_small_batch_q8_f32"));
+        dispatch.kernel.compile_parameters = {
+            { "ggml.q8_small_batch.input_size",        std::to_string(input_size)    },
+            { "ggml.q8_small_batch.output_size",       std::to_string(output_size)   },
+            { "ggml.q8_small_batch.tokens",            std::to_string(token_count)   },
+            { "ggml.q8_small_batch.batches",           std::to_string(weight->ne[2]) },
+            { "ggml.q8_small_batch.input_interleaved", interleaved ? "1" : "0"       }
+        };
         dispatch.bindings = {
-            quantized,
-            { weight->id, 0, weight->byte_count },
-            { output->id, 0, output->byte_count },
-            { output->id, 0, output->byte_count }
+            { input_value, 0, input->element_count * sizeof(float) },
+            { weight->id,  0, weight->byte_count                   },
+            { output->id,  0, output->byte_count                   }
         };
         dispatch_match.dispatches.push_back(std::move(dispatch));
         dispatch_match.covered_nodes.push_back(context.root_index);
         return true;
     }
+    const size_t      input_bytes  = input_size * token_count * sizeof(float);
+    const size_t      output_bytes = output_size * token_count * sizeof(float);
+    const size_t      weight_bytes = weight->nb[2];
+    const bool        vector       = token_count == 1;
     const bool        q8_token64 = !vector && token_count % 64 == 0 && format == CommonMulMatWeightFormat::Q8_0;
     const std::string prefix     = vector ? "ggml.matmul.vector." : "ggml.mul_mat.";
-    for (int64_t batch = 0; batch < weight->ne[2]; ++batch) {
+    const int64_t     split_count  = grouped ? 8 : 1;
+    const ValueId     partial =
+        split_count > 1 ?
+            ValueId(context.next_plan_value.value + static_cast<int32_t>(dispatch_match.transients.size())) :
+            output->id;
+    const size_t partial_bytes = output->byte_count * split_count;
+    if (split_count > 1) {
+        dispatch_match.transients.push_back({ partial, "common.mul_mat.batched_split", partial_bytes, 256 });
+    }
+    const int64_t launches = grouped ? 1 : weight->ne[2];
+    for (int64_t batch = 0; batch < launches; ++batch) {
         Dispatch dispatch;
-        dispatch.kernel = make_kernel_specialization(vector     ? kMulMatVectorF32F32Kernel :
-                                                     q8_token64 ? kMulMatTiledToken64AlignedF32F32Kernel :
-                                                                  kMulMatTiledF32F32Kernel);
+        dispatch.kernel = make_kernel_specialization(
+            vector     ? kMulMatVectorF32F32Kernel :
+            q8_token64 ? kMulMatTiledToken64AlignedF32F32Kernel :
+            grouped    ? GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_tiled_input_f32_publish_f16acc_f32") :
+                         kMulMatTiledF32F32Kernel);
         dispatch.kernel.integer_parameters.emplace("token_count", token_count);
         dispatch.kernel.compile_parameters.emplace("ggml.workload.token_capacity", std::to_string(token_count));
         dispatch.kernel.compile_parameters.emplace(prefix + "input_size", std::to_string(input_size));
@@ -2150,16 +2262,48 @@ static bool match_batched_mul_mat_dispatch(const DispatchMatchContext & context,
         dispatch.kernel.compile_parameters.emplace(prefix + "output_accumulation", "0");
         dispatch.kernel.compile_parameters.emplace(prefix + "output_unary_op", "23");
         dispatch.kernel.compile_parameters.emplace(prefix + "activation_format", "0");
-        dispatch.bindings.push_back({ input_value, batch * input_bytes, input_bytes });
-        dispatch.bindings.push_back({ weight->id, batch * weight_bytes, weight_bytes });
-        dispatch.bindings.push_back({ output->id, batch * output_bytes, output_bytes });
+        if (grouped) {
+            dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.batch_count", std::to_string(weight->ne[2]));
+            dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.split_count", std::to_string(split_count));
+        }
+        dispatch.bindings.push_back(
+            { input_value, batch * input_bytes, grouped ? input->element_count * sizeof(float) : input_bytes });
+        dispatch.bindings.push_back({ weight->id, batch * weight_bytes, grouped ? weight->byte_count : weight_bytes });
+        dispatch.bindings.push_back({ partial, batch * output_bytes, grouped ? partial_bytes : output_bytes });
         if (vector) {
-            dispatch.bindings.push_back({ output->id, batch * output_bytes, output_bytes });
+            dispatch.bindings.push_back(
+                { output->id, batch * output_bytes, grouped ? output->byte_count : output_bytes });
         }
         dispatch_match.dispatches.push_back(std::move(dispatch));
     }
+    if (split_count > 1) {
+        Dispatch reduce;
+        reduce.kernel = make_kernel_specialization(GGML_HRX_KERNEL_REF("loom_libs", "ggml_sum_planes_f32"));
+        reduce.kernel.integer_parameters.emplace("element_count", output->element_count);
+        reduce.kernel.compile_parameters.emplace("ggml.sum_planes.count", std::to_string(split_count));
+        reduce.bindings = {
+            { partial,    0, partial_bytes      },
+            { output->id, 0, output->byte_count }
+        };
+        dispatch_match.dispatches.push_back(std::move(reduce));
+    }
     dispatch_match.covered_nodes.push_back(context.root_index);
     return true;
+}
+
+static bool match_unbatched_small_q8_mul_mat_dispatch(const DispatchMatchContext & context,
+                                                      DispatchMatch &              dispatch_match) {
+    const GraphNode * node = context.root_node;
+    if (node == nullptr || node->op != GGML_OP_MUL_MAT || node->inputs.size() != 2) {
+        return false;
+    }
+    const Value * weight = common_graph_value(context.graph, node->inputs[0]);
+    const Value * input  = common_graph_value(context.graph, node->inputs[1]);
+    if (weight == nullptr || input == nullptr || weight->type != GGML_TYPE_Q8_0 || weight->ne[2] != 1 ||
+        input->ne[1] < 1 || input->ne[1] > 8) {
+        return false;
+    }
+    return match_batched_mul_mat_dispatch(context, dispatch_match);
 }
 
 static bool match_small_m_vector(const DispatchMatchContext & context, DispatchMatch & match) {
@@ -2364,7 +2508,23 @@ static bool match_decode_mul_mat_add_dispatch(const DispatchMatchContext & conte
     return build_decode_mul_mat_add_dispatch(match, context, dispatch_match);
 }
 
+static bool match_q8_prefill_dispatch(const DispatchMatchContext & context, DispatchMatch & match) {
+    const GraphNode * node = context.root_node;
+    if (node == nullptr || node->inputs.size() != 2) {
+        return false;
+    }
+    const Value * weight = common_graph_value(context.graph, node->inputs[0]);
+    const Value * input  = common_graph_value(context.graph, node->inputs[1]);
+    if (weight == nullptr || input == nullptr || weight->type != GGML_TYPE_Q8_0 || weight->ne[2] != 1 ||
+        input->ne[1] <= 8) {
+        return false;
+    }
+    return match_batched_mul_mat_dispatch(context, match);
+}
+
 void register_mul_mat_dispatches(DispatchRegistryBuilder & registry) {
+    registry.add({ "common.mul_mat.q8_prefill", GGML_OP_MUL_MAT, DispatchMatchKind::Fused, 321, DispatchSource::Common,
+                   match_q8_prefill_dispatch });
     registry.add({ "common.mul_mat.hadamard128", GGML_OP_MUL_MAT, DispatchMatchKind::SingleOp, 350,
                    DispatchSource::Common, match_hadamard_dispatch });
     registry.add({ "common.mul_mat.small_k", GGML_OP_MUL_MAT, DispatchMatchKind::SingleOp, -10, DispatchSource::Common,
@@ -2563,6 +2723,14 @@ void register_mul_mat_dispatches(DispatchRegistryBuilder & registry) {
         292,
         DispatchSource::Common,
         match_skinny_mul_mat_unary_dispatch,
+    });
+    registry.add({
+        "common.mul_mat.small_batch_q8_f32",
+        GGML_OP_MUL_MAT,
+        DispatchMatchKind::Fused,
+        191,
+        DispatchSource::Common,
+        match_unbatched_small_q8_mul_mat_dispatch,
     });
     registry.add({
         "common.mul_mat.vector",

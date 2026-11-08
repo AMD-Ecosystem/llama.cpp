@@ -285,8 +285,10 @@ OpParams import_op_params(const ggml_tensor & tensor) {
 
     switch (tensor.op) {
         case GGML_OP_MUL_MAT:
-            return MulMatParams{ static_cast<ggml_prec>(ggml_get_op_params_i32(&tensor, 0)),
-                                 static_cast<ggml_op_hint>(ggml_get_op_params_i32(&tensor, 1)) };
+        case GGML_OP_MUL_MAT_ID:
+            return MulMatParams{ ggml_prec_get_acc(&tensor),
+                                 static_cast<ggml_op_hint>(ggml_get_op_params_i32(&tensor, 1)),
+                                 ggml_prec_get_src(&tensor, 1) };
         case GGML_OP_RMS_NORM:
         case GGML_OP_L2_NORM:
             return RmsNormParams{ ggml_get_op_params_f32(&tensor, 0) };
@@ -356,10 +358,10 @@ OpParams import_op_params(const ggml_tensor & tensor) {
 }
 
 bool op_params_equivalent(ggml_op op, const OpParams & lhs, const OpParams & rhs) {
-    if (op == GGML_OP_MUL_MAT) {
+    if (op == GGML_OP_MUL_MAT || op == GGML_OP_MUL_MAT_ID) {
         const auto * l = op_params_as<MulMatParams>(lhs);
         const auto * r = op_params_as<MulMatParams>(rhs);
-        return l != nullptr && r != nullptr && l->prec == r->prec && l->hint == r->hint;
+        return l != nullptr && r != nullptr && l->prec == r->prec && l->hint == r->hint && l->src1_prec == r->src1_prec;
     }
     switch (op) {
         case GGML_OP_RMS_NORM:

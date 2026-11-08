@@ -650,12 +650,14 @@ static bool match_flash_attention_f32_f16_dispatch(const DispatchMatchContext & 
     const CommonActivationPublicationDemand * demand =
         publication_plan.find(CommonActivationPublicationFormat::F16Row);
     const bool    publish_f16    = demand != nullptr;
-    const bool    batch_heads    = match.sink != nullptr && !publish_f16 && match.query_token_count <= 4 &&
-                                   match.key_value_head_count == 1 && match.query_head_count % 4 == 0 &&
-                                   match.query_head_count >= 4 &&
-                                   match.query->nb[2] == static_cast<size_t>(match.qk_head_size) * sizeof(float);
-    const int64_t logical_tokens = batch_heads ? 4 * match.query_token_count : match.query_token_count;
-    const int64_t logical_heads  = batch_heads ? match.query_head_count / 4 : match.query_head_count;
+    // Keep each query mask in its own 16-head WMMA tile.
+    const int64_t head_batch_size = match.query_token_count == 1 ? 4 : 16;
+    const bool    batch_heads     = match.sink != nullptr && !publish_f16 && match.key_value_head_count == 1 &&
+                                    match.query_head_count % head_batch_size == 0 &&
+                                    match.query_head_count >= head_batch_size &&
+                                    match.query->nb[2] == static_cast<size_t>(match.qk_head_size) * sizeof(float);
+    const int64_t logical_tokens  = batch_heads ? head_batch_size * match.query_token_count : match.query_token_count;
+    const int64_t logical_heads   = batch_heads ? match.query_head_count / head_batch_size : match.query_head_count;
     Dispatch      dispatch;
     dispatch.kernel = make_kernel_specialization(match.sink != nullptr ? kFlashAttentionF32F16WmmaSinkKernel :
                                                  publish_f16           ? kFlashAttentionF32F16WmmaPublishF16Kernel :
@@ -668,7 +670,8 @@ static bool match_flash_attention_f32_f16_dispatch(const DispatchMatchContext & 
     add_flash_attention_compile_parameters(dispatch.kernel, logical_heads, match.key_value_head_count,
                                            match.qk_head_size, match.value_head_size, match.attention_scale, false, 1,
                                            1);
-    dispatch.kernel.compile_parameters.emplace("ggml.flash_attention.head_batch_size", batch_heads ? "4" : "1");
+    dispatch.kernel.compile_parameters.emplace("ggml.flash_attention.head_batch_size",
+                                               std::to_string(batch_heads ? head_batch_size : 1));
     dispatch.bindings.push_back({ match.query->id, 0, match.query->byte_count });
     dispatch.bindings.push_back({ match.key->id, 0, match.key->byte_count });
     dispatch.bindings.push_back(prepare_flash_attention_value(context, match, dispatch_match, dispatch.kernel));

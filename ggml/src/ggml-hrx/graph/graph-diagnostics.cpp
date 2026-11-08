@@ -130,9 +130,10 @@ json op_params_json(const OpParams & params) {
                 };
             } else if constexpr (std::is_same_v<T, MulMatParams>) {
                 return {
-                    { "kind", "mul_mat"                    },
-                    { "prec", static_cast<int>(value.prec) },
-                    { "hint", static_cast<int>(value.hint) }
+                    { "kind",      "mul_mat"                         },
+                    { "prec",      static_cast<int>(value.prec)      },
+                    { "hint",      static_cast<int>(value.hint)      },
+                    { "src1_prec", static_cast<int>(value.src1_prec) }
                 };
             } else if constexpr (std::is_same_v<T, ArgsortParams>) {
                 return {
@@ -231,7 +232,8 @@ OpParams parse_op_params(const json & item) {
     }
     if (kind == "mul_mat") {
         return MulMatParams{ static_cast<ggml_prec>(item.value("prec", int(GGML_PREC_DEFAULT))),
-                             static_cast<ggml_op_hint>(item.value("hint", int(GGML_HINT_NONE))) };
+                             static_cast<ggml_op_hint>(item.value("hint", int(GGML_HINT_NONE))),
+                             static_cast<ggml_prec>(item.value("src1_prec", int(GGML_PREC_UNDEFINED))) };
     }
     if (kind == "argsort") {
         return ArgsortParams{ static_cast<ggml_sort_order>(

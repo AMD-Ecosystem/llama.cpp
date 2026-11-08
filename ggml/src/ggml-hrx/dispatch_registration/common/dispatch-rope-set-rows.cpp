@@ -541,12 +541,25 @@ static std::pair<ValueId, ValueId> add_rope_frequency_bindings(const DispatchMat
 }
 
 static Dispatch make_rope_dispatch(const DispatchMatchContext & context,
-                                   const RopeMatch &            match,
+                                   const RopeMatch &            source_match,
                                    DispatchMatch &              dispatch_match) {
+    RopeMatch    match        = source_match;
+    const auto * params       = op_params_as<RopeParams>(match.node->params);
+    const bool   native_power = params->ext_factor == 0.0f && params->freq_scale == 1.0f;
+    if (native_power) {
+        float base = std::pow(params->freq_base, -2.0f / static_cast<float>(match.n_dims));
+        if (match.node->op == GGML_OP_ROPE_BACK) {
+            base = -base;
+        }
+        for (size_t offset = 0; offset < match.theta_data.size(); offset += sizeof(float)) {
+            std::memcpy(match.theta_data.data() + offset, &base, sizeof(float));
+        }
+    }
     const auto [theta, freq_factors] = add_rope_frequency_bindings(context, match, dispatch_match, "common.rope");
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(kRopeF32Kernel);
     dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
+    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.native_power", native_power ? "1" : "0");
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
     dispatch.kernel.integer_parameters.emplace("input_span", match.input_span);
     add_rope_compile_parameters(dispatch, match, "ggml.rope_f32", false);
