@@ -4505,7 +4505,7 @@ static void run_scalar_3d_get_rows_dispatch_checks() {
     check_case(128, 8, 2, 513, false);
 }
 
-static void run_repeat_get_rows_scalar_3d_dispatch_checks() {
+static void run_standalone_repeat_get_rows_scalar_3d_dispatch_checks() {
     auto check_case = [](int64_t token_count, int64_t route_stride, bool expose_repeat,
                          bool ids_ready_before_repeat = true) {
         ggml_init_params params = {};
@@ -4539,15 +4539,11 @@ static void run_repeat_get_rows_scalar_3d_dispatch_checks() {
         ggml::hrx::DispatchScheduler scheduler;
         REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
         const auto & dispatches = scheduler.plan().dispatches;
-        const bool expect_fusion = !expose_repeat && ids_ready_before_repeat;
-        REQUIRE(dispatches.size() == (expect_fusion ? 1 : 2));
-        if (!expect_fusion) {
-            REQUIRE(kernel_name_for_id(dispatches[0].kernel.kernel_id) == "loom_libs:ggml_repeat_scalar_3d_f32");
-        }
+        REQUIRE(dispatches.size() == 2);
+        REQUIRE(kernel_name_for_id(dispatches[0].kernel.kernel_id) == "loom_libs:ggml_repeat_scalar_3d_f32");
         const ggml::hrx::Dispatch & gather = dispatches.back();
         REQUIRE(kernel_name_for_id(gather.kernel.kernel_id) == "loom_libs:ggml_get_rows_scalar_3d_f32");
-        REQUIRE(gather.kernel.integer_parameters.at("scale_token_stride") == (expect_fusion ? 0 : 128));
-        REQUIRE(gather.bindings[1].length == (expect_fusion ? ggml_nbytes(scales) : ggml_nbytes(repeated)));
+        REQUIRE(gather.bindings[1].length == ggml_nbytes(repeated));
         ggml_free(ctx);
     };
 
@@ -14978,7 +14974,9 @@ static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
     suite.host_case("graph_traversal", [] { run_graph_traversal_checks(); });
     suite.host_case("qwen_token_embedding_dispatch", [] { run_qwen_token_embedding_dispatch_checks(); });
     suite.host_case("scalar_3d_get_rows_dispatch", [] { run_scalar_3d_get_rows_dispatch_checks(); });
-    suite.host_case("repeat_get_rows_scalar_3d_dispatch", [] { run_repeat_get_rows_scalar_3d_dispatch_checks(); });
+    suite.host_case("standalone_repeat_get_rows_scalar_3d_dispatch", [] {
+        run_standalone_repeat_get_rows_scalar_3d_dispatch_checks();
+    });
     suite.host_case("get_rows_rmsnorm_binary_dispatch", [] { run_get_rows_rmsnorm_binary_dispatch_checks(); });
     suite.host_case("get_rows_scale_dispatch", [] { run_get_rows_scale_dispatch_checks(); });
     suite.host_case("gather_add_dispatch", [] { run_gather_add_dispatch_checks(); });

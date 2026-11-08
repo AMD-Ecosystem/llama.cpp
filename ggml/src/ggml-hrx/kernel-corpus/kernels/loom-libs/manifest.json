@@ -165,7 +165,13 @@
       "path": "ops/matmul_id/tiled_input_f32_publish_f32.loom"
     },
     {
+      "path": "ops/matmul_id/tiled_input_f32_scaled_publish_f32.loom"
+    },
+    {
       "path": "ops/matmul_id/skinny_input_f32_publish_f32.loom"
+    },
+    {
+      "path": "ops/matmul_id/skinny_input_f32_scaled_publish_f32.loom"
     },
     {
       "path": "ops/matmul_id/tiled_input_f32_postops_publish_f32.loom"
@@ -3621,6 +3627,71 @@
       ]
     },
     {
+      "name": "ggml_mul_mat_id_tiled_input_f32_scaled_publish_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_id_tiled_input_f32_scaled_publish_f32",
+      "source": "ops/matmul_id/tiled_input_f32_scaled_publish_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "expert_table",
+        "partition_table",
+        "weight",
+        "scales",
+        "route_ids",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul_id/tiled_input_f32_scaled_publish_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul_id/tiled_input_f32_dequant_accumulate_f32.loom",
+          "motifs/dequant.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul_id/tiled_input_f32_dequant_accumulate_f32.loom",
+        "motifs/dequant.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
       "name": "ggml_mul_mat_id_skinny_input_f32_publish_f32",
       "family": "loom_libs",
       "symbol": "ggml_mul_mat_id_skinny_input_f32_publish_f32",
@@ -3656,6 +3727,71 @@
         "mode": "direct",
         "primary_sources": [
           "ops/matmul_id/skinny_input_f32_publish_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul_id/skinny_input_f32_dequant_accumulate_f32.loom",
+          "motifs/dequant.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul_id/skinny_input_f32_dequant_accumulate_f32.loom",
+        "motifs/dequant.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_id_skinny_input_f32_scaled_publish_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_id_skinny_input_f32_scaled_publish_f32",
+      "source": "ops/matmul_id/skinny_input_f32_scaled_publish_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "expert_table",
+        "partition_table",
+        "weight",
+        "scales",
+        "route_ids",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul_id/skinny_input_f32_scaled_publish_f32.loom"
         ],
         "library_sources": [
           "motifs/matmul_id/skinny_input_f32_dequant_accumulate_f32.loom",
@@ -6679,10 +6815,6 @@
         {
           "name": "route_stride",
           "type": "index"
-        },
-        {
-          "name": "scale_token_stride",
-          "type": "index"
         }
       ],
       "launch_parameters": [
@@ -6692,10 +6824,6 @@
         },
         {
           "name": "route_stride",
-          "type": "index"
-        },
-        {
-          "name": "scale_token_stride",
           "type": "index"
         }
       ],

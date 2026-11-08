@@ -200,92 +200,6 @@ static bool match_repeat_scalar_3d_f32_dispatch(const DispatchMatchContext & con
     return true;
 }
 
-static bool match_repeat_get_rows_scalar_3d_f32_dispatch(const DispatchMatchContext & context, DispatchMatch & match) {
-    const Value * source = nullptr;
-    const Value * repeated = nullptr;
-    if (!match_repeat_scalar_3d_f32_input(context.graph, context.root_node, source, repeated)) {
-        return false;
-    }
-    if (repeated->kind != ValueKind::Transient) {
-        return false;
-    }
-
-    const std::vector<const GraphNode *> & consumers = context.graph.index().consumers(repeated->id);
-    const bool has_one_consumer = consumers.size() == 1;
-    if (!has_one_consumer) {
-        return false;
-    }
-    const GraphNode * rows = consumers.front();
-    const bool is_get_rows = rows != nullptr && rows->op == GGML_OP_GET_ROWS;
-    const bool has_two_inputs = rows != nullptr && rows->inputs.size() == 2;
-    if (!is_get_rows || !has_two_inputs) {
-        return false;
-    }
-    const bool has_repeat_input = rows->inputs[0] == repeated->id;
-    if (!has_repeat_input) {
-        return false;
-    }
-
-    const Value * ids = graph_value(context.graph, rows->inputs[1]);
-    const Value * output = graph_value(context.graph, rows->output);
-    const bool has_values = ids != nullptr && output != nullptr;
-    if (!has_values) {
-        return false;
-    }
-    const GraphNode * ids_producer = context.graph.index().producer(ids->id);
-    size_t ids_producer_index = 0;
-    const bool has_producer_index = ids_producer != nullptr &&
-                                    context.graph.index().node_index(ids_producer, ids_producer_index);
-    const bool ids_ready = ids_producer == nullptr ||
-                           (has_producer_index && ids_producer_index < context.covered_nodes.size() &&
-                            context.covered_nodes[ids_producer_index]);
-    if (!ids_ready) {
-        return false;
-    }
-    const int64_t token_count = repeated->ne[2];
-    const bool has_id_shape = ids->ne[0] == 8 && ids->ne[1] == token_count &&
-                              ids->ne[2] == 1 && ids->ne[3] == 1;
-    const bool has_output_shape = output->ne[0] == 1 && output->ne[1] == 8 &&
-                                  output->ne[2] == token_count && output->ne[3] == 1;
-    const bool has_types = ids->type == GGML_TYPE_I32 && output->type == GGML_TYPE_F32;
-    const bool has_layout = output->contiguous && ids->nb[0] == sizeof(int32_t) &&
-                            ids->nb[1] % sizeof(int32_t) == 0;
-    if (!(has_id_shape && has_output_shape && has_types && has_layout)) {
-        return false;
-    }
-
-    const size_t route_stride = ids->nb[1] / sizeof(int32_t);
-    const bool has_supported_stride = route_stride >= 8 && route_stride <= 512;
-    const size_t expected_id_bytes = (static_cast<size_t>(token_count) - 1) * ids->nb[1] + 8 * sizeof(int32_t);
-    const bool has_exact_id_span = ids->byte_count == expected_id_bytes;
-    if (!has_supported_stride || !has_exact_id_span) {
-        return false;
-    }
-
-    size_t rows_index = 0;
-    const bool has_rows_index = context.graph.index().node_index(rows, rows_index);
-    const bool rows_available = has_rows_index && rows_index < context.covered_nodes.size() &&
-                                !context.covered_nodes[rows_index];
-    if (!rows_available) {
-        return false;
-    }
-
-    Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(kGetRowsScalar3dF32Kernel);
-    dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
-    dispatch.kernel.integer_parameters.emplace("token_count", token_count);
-    dispatch.kernel.integer_parameters.emplace("route_stride", static_cast<int64_t>(route_stride));
-    dispatch.kernel.integer_parameters.emplace("scale_token_stride", 0);
-    dispatch.bindings.push_back({ ids->id, 0, ids->byte_count });
-    dispatch.bindings.push_back({ source->id, 0, source->byte_count });
-    dispatch.bindings.push_back({ output->id, 0, output->byte_count });
-
-    match.covered_nodes.push_back(context.root_index);
-    match.covered_nodes.push_back(rows_index);
-    match.dispatches.push_back(std::move(dispatch));
-    return true;
-}
-
 static bool match_get_rows_scalar_3d_f32_dispatch(const DispatchMatchContext & context, DispatchMatch & match) {
     const GraphNode * node = context.root_node;
     const bool is_get_rows = node != nullptr && node->op == GGML_OP_GET_ROWS;
@@ -333,7 +247,6 @@ static bool match_get_rows_scalar_3d_f32_dispatch(const DispatchMatchContext & c
     dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
     dispatch.kernel.integer_parameters.emplace("token_count", token_count);
     dispatch.kernel.integer_parameters.emplace("route_stride", static_cast<int64_t>(route_stride));
-    dispatch.kernel.integer_parameters.emplace("scale_token_stride", 128);
     dispatch.bindings.push_back({ ids->id, 0, ids->byte_count });
     dispatch.bindings.push_back({ scales->id, 0, scales->byte_count });
     dispatch.bindings.push_back({ output->id, 0, output->byte_count });
@@ -662,14 +575,6 @@ static bool match_get_rows_rmsnorm_binary_dispatch(const DispatchMatchContext & 
 }  // namespace
 
 void register_get_rows_dispatches(DispatchRegistryBuilder & registry) {
-    registry.add({
-        "common.repeat_get_rows.scalar_3d_f32",
-        GGML_OP_REPEAT,
-        DispatchMatchKind::Fused,
-        300,
-        DispatchSource::Common,
-        match_repeat_get_rows_scalar_3d_f32_dispatch,
-    });
     registry.add({
         "common.repeat.scalar_3d_f32",
         GGML_OP_REPEAT,
