@@ -433,9 +433,8 @@ llama_context::llama_context(
             if (backend == nullptr) {
                 throw std::runtime_error(format("failed to initialize %s backend", ggml_backend_dev_name(dev.dev)));
             }
-            const bool is_gemma4 = model.arch == LLM_ARCH_GEMMA4;
-            const bool row64_weight_policy = !is_gemma4;
-            if (row64_weight_policy) {
+            const bool prefer_row64_weights = llm_arch_prefers_hrx_row64_weights(model.arch);
+            if (prefer_row64_weights) {
                 ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev.dev);
                 using set_row64_weight_policy_fn = bool (*)(ggml_backend_t, bool);
                 auto set_policy = reinterpret_cast<set_row64_weight_policy_fn>(

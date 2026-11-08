@@ -16,6 +16,7 @@
 #include "kernel-corpus/kernel-corpus.h"
 #include "runtime/graph-executor.h"
 #include "testing_suite.h"
+#include "../src/llama-arch.h"
 
 #include <algorithm>
 #include <array>
@@ -8251,13 +8252,30 @@ static SsmConvPrefillGraph make_ssm_conv_prefill_graph(ggml_type type,
     return c;
 }
 
+struct ArchitectureRow64Case {
+    llm_arch arch;
+    bool prefer_row64;
+};
+
+static constexpr ArchitectureRow64Case kArchitectureRow64Cases[] = {
+    { LLM_ARCH_QWEN35, true },
+    { LLM_ARCH_QWEN35MOE, false },
+    { LLM_ARCH_QWEN3, false },
+    { LLM_ARCH_PHI3, false },
+    { LLM_ARCH_GEMMA4, false },
+    { LLM_ARCH_LLAMA, false },
+    { LLM_ARCH_UNKNOWN, false },
+};
+
 static void run_qwen27_ssm_policy_route_case(ggml_type type, bool gathered) {
     auto graph = make_ssm_conv_prefill_graph(type, 256, 8192, false, gathered, false);
-    for (bool row64_weight_policy : { false, true }) {
+    for (const auto & policy : kArchitectureRow64Cases) {
+        const bool prefer_row64 = llm_arch_prefers_hrx_row64_weights(policy.arch);
+        REQUIRE(prefer_row64 == policy.prefer_row64);
         ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph.graph);
         REQUIRE(imported.valid());
         ggml::hrx::DispatchScheduler scheduler;
-        REQUIRE(scheduler.schedule_graph(imported.graph, { "gfx1151", row64_weight_policy }));
+        REQUIRE(scheduler.schedule_graph(imported.graph, { "gfx1151", prefer_row64 }));
         const ggml::hrx::Value * weight = imported.graph.values().find_tensor(graph.weight);
         REQUIRE(weight != nullptr);
         size_t matched = 0;
@@ -8267,7 +8285,7 @@ static void run_qwen27_ssm_policy_route_case(ggml_type type, bool gathered) {
                     continue;
                 }
                 const bool q4_weight = type == GGML_TYPE_Q4_K;
-                const bool q6_row64 = !q4_weight && row64_weight_policy;
+                const bool q6_row64 = !q4_weight && policy.prefer_row64;
                 const char * expected_layout = q4_weight ? ggml::hrx::kQ4KPackedK256Row64Layout :
                     q6_row64 ? ggml::hrx::kQ6KPackedK256Row64ScaleRowLayout : ggml::hrx::kNativeWeightLayout;
                 REQUIRE(binding.layout == expected_layout);
@@ -8290,16 +8308,18 @@ static void run_qwen27_matmul_policy_route_case(ggml_type type, int64_t tokens) 
     ggml_tensor * output = ggml_silu(ctx, ggml_mul_mat(ctx, weight, input));
     ggml_cgraph * graph = ggml_new_graph(ctx);
     ggml_build_forward_expand(graph, output);
-    for (bool row64_weight_policy : { false, true }) {
+    for (const auto & policy : kArchitectureRow64Cases) {
+        const bool prefer_row64 = llm_arch_prefers_hrx_row64_weights(policy.arch);
+        REQUIRE(prefer_row64 == policy.prefer_row64);
         ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
         REQUIRE(imported.valid());
         ggml::hrx::DispatchScheduler scheduler;
-        REQUIRE(scheduler.schedule_graph(imported.graph, { "gfx1151", row64_weight_policy }));
+        REQUIRE(scheduler.schedule_graph(imported.graph, { "gfx1151", prefer_row64 }));
         const ggml::hrx::Value * source = imported.graph.values().find_tensor(weight);
         REQUIRE(source != nullptr);
         const char * row64 = type == GGML_TYPE_Q4_K ? ggml::hrx::kQ4KPackedK256Row64Layout :
                                                    ggml::hrx::kQ6KPackedK256Row64ScaleRowLayout;
-        const char * expected = row64_weight_policy ? row64 : ggml::hrx::kNativeWeightLayout;
+        const char * expected = policy.prefer_row64 ? row64 : ggml::hrx::kNativeWeightLayout;
         size_t matched = 0;
         for (const auto & dispatch : scheduler.plan().dispatches) {
             for (const auto & binding : dispatch.bindings) {
@@ -8309,7 +8329,7 @@ static void run_qwen27_matmul_policy_route_case(ggml_type type, int64_t tokens) 
                     const bool short_prompt = tokens == 66;
                     const bool short_q6 = q6_weight && short_prompt;
                     if (short_q6) {
-                        const char * expected_kernel = row64_weight_policy ?
+                        const char * expected_kernel = policy.prefer_row64 ?
                             "loom_libs:ggml_mul_mat_q6_k_f32_wmma_prefill_wave32" :
                             "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32";
                         REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id, "gfx1151") == expected_kernel);
@@ -8323,11 +8343,11 @@ static void run_qwen27_matmul_policy_route_case(ggml_type type, int64_t tokens) 
     ggml_free(ctx);
 }
 
-static void run_gemma4_decode_parent_f32_route_case(ggml_type type) {
+static void run_arch_decode_native_f32_route_case(llm_arch arch, ggml_type type, int64_t k, int64_t n) {
     ggml_context * ctx = ggml_init({ 4 * 1024 * 1024, nullptr, true });
     REQUIRE(ctx != nullptr);
-    ggml_tensor * weight = ggml_new_tensor_2d(ctx, type, 15360, 3840);
-    ggml_tensor * input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 15360, 1);
+    ggml_tensor * weight = ggml_new_tensor_2d(ctx, type, k, n);
+    ggml_tensor * input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, 1);
     ggml_tensor * projection = ggml_mul_mat(ctx, weight, input);
     ggml_tensor * output = ggml_scale(ctx, projection, 0.5f);
     ggml_cgraph * graph = ggml_new_graph(ctx);
@@ -8342,7 +8362,7 @@ static void run_gemma4_decode_parent_f32_route_case(ggml_type type) {
         REQUIRE(source != nullptr);
         REQUIRE(!imported.graph.index().consumers(projection_value->id).empty());
         ggml::hrx::DispatchScheduler scheduler;
-        REQUIRE(scheduler.schedule_graph(imported.graph, { target, false }));
+        REQUIRE(scheduler.schedule_graph(imported.graph, { target, llm_arch_prefers_hrx_row64_weights(arch) }));
         size_t matched = 0;
         for (const auto & dispatch : scheduler.plan().dispatches) {
             for (const auto & binding : dispatch.bindings) {
@@ -8375,7 +8395,7 @@ static void run_gemma4_decode_parent_terminal_q6_route_case() {
     ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
     REQUIRE(imported.valid());
     ggml::hrx::DispatchScheduler scheduler;
-    REQUIRE(scheduler.schedule_graph(imported.graph, { "gfx1151", false }));
+    REQUIRE(scheduler.schedule_graph(imported.graph, { "gfx1151", llm_arch_prefers_hrx_row64_weights(LLM_ARCH_GEMMA4) }));
     const ggml::hrx::Value * source = imported.graph.values().find_tensor(weight);
     REQUIRE(source != nullptr);
     size_t matched = 0;
@@ -8961,7 +8981,9 @@ static void register_basic_ops_cases(Suite & suite) {
     });
     for (const ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
         suite.host_case("gemma4_decode.parent_f32_route." + type_name(type),
-                        [type] { run_gemma4_decode_parent_f32_route_case(type); });
+                        [type] { run_arch_decode_native_f32_route_case(LLM_ARCH_GEMMA4, type, 15360, 3840); });
+        suite.host_case("phi_decode.native_f32_route." + type_name(type),
+                        [type] { run_arch_decode_native_f32_route_case(LLM_ARCH_PHI3, type, 8192, 3072); });
     }
     suite.host_case("gemma4_decode.parent_terminal_q6_route.gfx1151", [] {
         run_gemma4_decode_parent_terminal_q6_route_case();
@@ -8984,6 +9006,11 @@ static void register_basic_ops_cases(Suite & suite) {
     suite.host_case("qwen27.q6_short66_policy_route", [] {
         run_qwen27_matmul_policy_route_case(GGML_TYPE_Q6_K, 66);
     });
+    for (const ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
+        suite.host_case("qwen27.prefill128_policy_route." + type_name(type), [type] {
+            run_qwen27_matmul_policy_route_case(type, 128);
+        });
+    }
     suite.host_case("support.rmsnorm", [] { run_rmsnorm_support_checks(); });
     suite.host_case("support.alternate_value_alias_lookup", [] { run_alternate_value_alias_lookup_checks(); });
     suite.host_case("support.activation_publication_contract", [] { run_activation_publication_contract_checks(); });

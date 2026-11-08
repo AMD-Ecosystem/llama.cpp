@@ -70,6 +70,7 @@ struct ggml_backend_hrx_context {
     ggml::hrx::GraphReplayStreamState      graph_replay_state;
     std::string                            name;
     std::mutex                             layout_policy_mutex;
+    // False preserves the existing matchers, including their row64 routes.
     bool                                   row64_weight_policy = false;
     bool                                   layout_policy_locked = false;
 
