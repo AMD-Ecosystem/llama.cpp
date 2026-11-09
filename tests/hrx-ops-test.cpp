@@ -6863,10 +6863,21 @@ static void run_dense_matmul_postops_cpu_reference_case(ggml_type    weight_type
                                                         bool         include_bias,
                                                         bool         include_residual,
                                                         bool         include_next_rmsnorm,
-                                                        int64_t      input_size = kQwenHiddenSize) {
+                                                        int64_t      input_size = kQwenHiddenSize,
+                                                        bool         row64_policy = false,
+                                                        bool         nonzero_weight = false,
+                                                        bool         prefill_before_decode = false) {
     ggml_backend_t cpu_backend = init_cpu_backend();
     ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
     REQUIRE(hrx_backend != nullptr);
+    if (row64_policy) {
+        ggml_backend_reg_t registry = ggml_backend_dev_backend_reg(ggml_backend_get_device(hrx_backend));
+        using set_policy_fn = bool (*)(ggml_backend_t, bool);
+        auto set_policy = reinterpret_cast<set_policy_fn>(
+            ggml_backend_reg_get_proc_address(registry, "ggml_backend_hrx_set_row64_weight_policy"));
+        REQUIRE(set_policy != nullptr);
+        REQUIRE(set_policy(hrx_backend, true));
+    }
 
     ggml_init_params params = {};
     params.mem_size         = static_cast<size_t>(96 * 1024 * 1024);
@@ -6928,6 +6939,15 @@ static void run_dense_matmul_postops_cpu_reference_case(ggml_type    weight_type
     REQUIRE(hrx_graph != nullptr);
     ggml_build_forward_expand(cpu_graph, cpu_output);
     ggml_build_forward_expand(hrx_graph, hrx_output);
+    ggml_tensor * hrx_prefill_input = nullptr;
+    ggml_cgraph * hrx_prefill_graph = nullptr;
+    if (prefill_before_decode) {
+        hrx_prefill_input = ggml_new_tensor_2d(hrx_ctx, GGML_TYPE_F32, input_size, 29);
+        ggml_tensor * prefill_output = ggml_mul_mat(hrx_ctx, hrx_weight, hrx_prefill_input);
+        hrx_prefill_graph = ggml_new_graph(hrx_ctx);
+        REQUIRE(hrx_prefill_graph != nullptr);
+        ggml_build_forward_expand(hrx_prefill_graph, prefill_output);
+    }
 
     if (include_next_rmsnorm) {
         require_kernel_subsequence(
@@ -6938,18 +6958,38 @@ static void run_dense_matmul_postops_cpu_reference_case(ggml_type    weight_type
         require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph), { expected_kernel });
     }
 
+    std::vector<uint8_t> weight = nonzero_weight ?
+        make_matmul_weight_bytes(weight_type, input_size, output_size, 31) :
+        std::vector<uint8_t>(ggml_nbytes(cpu_weight), 0);
+    ggml_backend_buffer_t imported_weight_buffer = nullptr;
+    if (nonzero_weight) {
+        imported_weight_buffer = ggml_backend_dev_buffer_from_host_ptr(
+            ggml_backend_get_device(hrx_backend), weight.data(), weight.size(), weight.size());
+        REQUIRE(imported_weight_buffer != nullptr);
+        REQUIRE(ggml_backend_tensor_alloc(imported_weight_buffer, hrx_weight, weight.data()) == GGML_STATUS_SUCCESS);
+        ggml_backend_buffer_set_usage(imported_weight_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    }
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
     ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
     REQUIRE(cpu_buffer != nullptr);
     REQUIRE(hrx_buffer != nullptr);
 
-    const std::vector<uint8_t> weight(ggml_nbytes(cpu_weight), 0);
-    const std::vector<float>   input(static_cast<size_t>(input_size * token_count), 0.00390625f);
+    const std::vector<float> input = nonzero_weight ?
+        make_pattern_f32(static_cast<size_t>(input_size * token_count), 37, 0.02f) :
+        std::vector<float>(static_cast<size_t>(input_size * token_count), 0.00390625f);
     const std::vector<float>   bias     = make_pattern_f32(static_cast<size_t>(output_size), 13, 0.02f);
     const std::vector<float>   residual = make_pattern_f32(static_cast<size_t>(output_size * token_count), 23, 0.02f);
     const std::vector<float>   norm_weight = make_weight(output_size);
-    set_tensor_pair_bytes(cpu_backend, cpu_weight, hrx_backend, hrx_weight, weight.data(), weight.size());
+    if (nonzero_weight) {
+        ggml_backend_tensor_set(cpu_weight, weight.data(), 0, weight.size());
+    } else {
+        set_tensor_pair_bytes(cpu_backend, cpu_weight, hrx_backend, hrx_weight, weight.data(), weight.size());
+    }
     set_tensor_pair_bytes(cpu_backend, cpu_input, hrx_backend, hrx_input, input.data(), input.size() * sizeof(float));
+    if (prefill_before_decode) {
+        const std::vector<float> prefill_input = make_pattern_f32(static_cast<size_t>(input_size * 29), 41, 0.01f);
+        ggml_backend_tensor_set(hrx_prefill_input, prefill_input.data(), 0, prefill_input.size() * sizeof(float));
+    }
     if (include_bias) {
         set_tensor_pair_bytes(cpu_backend, cpu_bias, hrx_backend, hrx_bias, bias.data(), bias.size() * sizeof(float));
     }
@@ -6963,6 +7003,9 @@ static void run_dense_matmul_postops_cpu_reference_case(ggml_type    weight_type
     }
 
     REQUIRE(ggml_backend_graph_compute(cpu_backend, cpu_graph) == GGML_STATUS_SUCCESS);
+    if (prefill_before_decode) {
+        REQUIRE(ggml_backend_graph_compute(hrx_backend, hrx_prefill_graph) == GGML_STATUS_SUCCESS);
+    }
     REQUIRE(ggml_backend_graph_compute(hrx_backend, hrx_graph) == GGML_STATUS_SUCCESS);
     ggml_backend_synchronize(cpu_backend);
     ggml_backend_synchronize(hrx_backend);
@@ -6971,9 +7014,27 @@ static void run_dense_matmul_postops_cpu_reference_case(ggml_type    weight_type
                       3.0e-2f);
     }
     require_close(get_f32_tensor(hrx_backend, hrx_output), get_f32_tensor(cpu_backend, cpu_output), 1.0f, 5.0e-2f);
+    if (nonzero_weight) {
+        std::vector<float> expected = row64_matmul_reference(weight_type, weight, input, input_size,
+                                                               output_size, token_count);
+        if (include_residual) {
+            for (size_t i = 0; i < expected.size(); ++i) {
+                expected[i] += residual[i];
+            }
+        }
+        require_row64_reference(get_f32_tensor(hrx_backend, hrx_postops), expected);
+        ggml_backend_hrx_cache_stats stats = {};
+        REQUIRE(ggml_backend_hrx_get_cache_stats(hrx_backend, &stats));
+        REQUIRE(stats.weight_materializations == 1);
+        REQUIRE(stats.weight_live_allocations == 1);
+        REQUIRE(stats.weight_duplicate_warnings == 0);
+    }
 
     ggml_backend_buffer_free(cpu_buffer);
     ggml_backend_buffer_free(hrx_buffer);
+    if (imported_weight_buffer != nullptr) {
+        ggml_backend_buffer_free(imported_weight_buffer);
+    }
     ggml_free(cpu_ctx);
     ggml_free(hrx_ctx);
     ggml_backend_free(cpu_backend);
@@ -9520,6 +9581,21 @@ static void register_dense_matmul_cases(Suite & suite) {
         run_dense_matmul_postops_cpu_reference_case(GGML_TYPE_Q6_K,
                                                     "loom_libs:ggml_mul_mat_skinny_input_f32_bias_residual_publish_f32",
                                                     5, 4224, false, true, true, 16640);
+    });
+    for (const auto & shape : { std::pair<int64_t, int64_t>{ 12288, 4096 }, { 12544, 4160 } }) {
+        const int64_t input_size = shape.first;
+        const int64_t output_size = shape.second;
+        suite.device_case("qwen9.q6_row64_f32_residual.k" + std::to_string(input_size),
+                          [input_size, output_size] {
+            run_dense_matmul_postops_cpu_reference_case(
+                GGML_TYPE_Q6_K, "loom_libs:ggml_mul_mat_vector_bias_residual_f32_f32",
+                1, output_size, false, true, false, input_size, true, true, input_size == 12288);
+        });
+    }
+    suite.device_case("qwen9.q4_row64_f32_residual.k4096", [] {
+        run_dense_matmul_postops_cpu_reference_case(
+            GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_vector_bias_residual_f32_f32",
+            1, 4096, false, true, false, 4096, true, true);
     });
     for (const int64_t tokens : { 1, 3, 5 }) {
         suite.device_case(
