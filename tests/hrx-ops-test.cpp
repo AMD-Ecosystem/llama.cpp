@@ -4616,8 +4616,22 @@ static void run_mul_mat_id_expert_scale_case(ggml_type weight_type, int64_t toke
     ggml_backend_free(backend);
 }
 
-static void run_scalar_3d_get_rows_case(int64_t token_count, int64_t route_stride, bool include_invalid_ids = false,
-                                        bool broadcast_scales = false, bool expose_repeat = false) {
+enum class ScalarGetRowsScenario {
+    Expanded,
+    ExpandedInvalidIds,
+    Repeated,
+    RepeatedInvalidIds,
+    RepeatedExposed,
+};
+
+static void run_scalar_3d_get_rows_case(int64_t token_count, int64_t route_stride,
+                                        ScalarGetRowsScenario scenario) {
+    const bool include_invalid_ids = scenario == ScalarGetRowsScenario::ExpandedInvalidIds ||
+                                     scenario == ScalarGetRowsScenario::RepeatedInvalidIds;
+    const bool repeat_scales = scenario == ScalarGetRowsScenario::Repeated ||
+                               scenario == ScalarGetRowsScenario::RepeatedInvalidIds ||
+                               scenario == ScalarGetRowsScenario::RepeatedExposed;
+    const bool expose_repeat = scenario == ScalarGetRowsScenario::RepeatedExposed;
     ggml_backend_t backend = ggml_backend_hrx_init(0);
     REQUIRE(backend != nullptr);
 
@@ -4627,7 +4641,7 @@ static void run_scalar_3d_get_rows_case(int64_t token_count, int64_t route_strid
     ggml_context * ctx = ggml_init(params);
     REQUIRE(ctx != nullptr);
 
-    ggml_tensor * scales = broadcast_scales ? ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 128) :
+    ggml_tensor * scales = repeat_scales ? ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 128) :
         ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, 128, token_count);
     ggml_tensor * ids_storage = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, route_stride, token_count);
     REQUIRE(scales != nullptr);
@@ -4637,7 +4651,7 @@ static void run_scalar_3d_get_rows_case(int64_t token_count, int64_t route_strid
     REQUIRE(ids != nullptr);
     ggml_tensor * repeated = nullptr;
     ggml_tensor * gather_scales = scales;
-    if (broadcast_scales) {
+    if (repeat_scales) {
         ggml_tensor * reshaped = ggml_reshape_3d(ctx, scales, 1, 128, 1);
         repeated = ggml_repeat_4d(ctx, reshaped, 1, 128, token_count, 1);
         gather_scales = repeated;
@@ -4651,11 +4665,11 @@ static void run_scalar_3d_get_rows_case(int64_t token_count, int64_t route_strid
 
     ggml_cgraph * graph = ggml_new_graph(ctx);
     REQUIRE(graph != nullptr);
-    if (broadcast_scales) {
+    if (repeat_scales) {
         ggml_build_forward_expand(graph, ids);
     }
     ggml_build_forward_expand(graph, output);
-    if (broadcast_scales) {
+    if (repeat_scales) {
         require_kernel_subsequence(scheduled_kernel_sequence(graph),
                                    { "loom_libs:ggml_repeat_scalar_3d_f32", "loom_libs:ggml_get_rows_scalar_3d_f32" });
     } else {
@@ -4664,14 +4678,15 @@ static void run_scalar_3d_get_rows_case(int64_t token_count, int64_t route_strid
 
     ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
     REQUIRE(buffer != nullptr);
-    std::vector<float> scales_data(broadcast_scales ? 128 : 128 * token_count);
+    std::vector<float> scales_data(repeat_scales ? 128 : 128 * token_count);
     std::vector<int32_t> ids_data(route_stride * token_count, -1);
     std::vector<float> expected(8 * token_count);
     for (int64_t token = 0; token < token_count; ++token) {
         for (int64_t expert = 0; expert < 128; ++expert) {
-            if (!broadcast_scales || token == 0) {
-                const size_t scale_index = static_cast<size_t>(broadcast_scales ? expert : token * 128 + expert);
-                scales_data[scale_index] = static_cast<float>(broadcast_scales ? 0 : token * 1024) + expert * 0.25f;
+            const bool initialize_scales = !repeat_scales || token == 0;
+            if (initialize_scales) {
+                const size_t scale_index = static_cast<size_t>(repeat_scales ? expert : token * 128 + expert);
+                scales_data[scale_index] = static_cast<float>(repeat_scales ? 0 : token * 1024) + expert * 0.25f;
             }
         }
         for (int64_t route = 0; route < 8; ++route) {
@@ -4687,7 +4702,7 @@ static void run_scalar_3d_get_rows_case(int64_t token_count, int64_t route_strid
             }
             ids_data[token * route_stride + route] = expert;
             const bool valid_expert = expert >= 0 && expert < 128;
-            const size_t scale_index = static_cast<size_t>((broadcast_scales ? 0 : token * 128) + expert);
+            const size_t scale_index = static_cast<size_t>((repeat_scales ? 0 : token * 128) + expert);
             expected[token * 8 + route] = valid_expert ? scales_data[scale_index] : 0.0f;
         }
     }
@@ -9303,25 +9318,25 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
         for (int64_t stride : { 8, 128 }) {
             suite.device_case("scalar_3d_get_rows.tokens" + std::to_string(tokens) + ".stride" +
                                   std::to_string(stride),
-                              [=] { run_scalar_3d_get_rows_case(tokens, stride); });
+                              [=] { run_scalar_3d_get_rows_case(tokens, stride, ScalarGetRowsScenario::Expanded); });
         }
     }
     for (int64_t stride : { 8, 128 }) {
         suite.device_case("scalar_3d_get_rows.invalid_ids.stride" + std::to_string(stride),
-                          [=] { run_scalar_3d_get_rows_case(2, stride, true); });
+                          [=] { run_scalar_3d_get_rows_case(2, stride, ScalarGetRowsScenario::ExpandedInvalidIds); });
     }
     for (int64_t tokens : { 1, 2, 8, 128 }) {
         for (int64_t stride : { 8, 128 }) {
             suite.device_case("standalone_repeat_get_rows_scalar_3d.tokens" + std::to_string(tokens) + ".stride" +
                                   std::to_string(stride),
-                              [=] { run_scalar_3d_get_rows_case(tokens, stride, false, true); });
+                              [=] { run_scalar_3d_get_rows_case(tokens, stride, ScalarGetRowsScenario::Repeated); });
         }
     }
     suite.device_case("standalone_repeat_get_rows_scalar_3d.invalid_ids", [] {
-        run_scalar_3d_get_rows_case(2, 128, true, true);
+        run_scalar_3d_get_rows_case(2, 128, ScalarGetRowsScenario::RepeatedInvalidIds);
     });
     suite.device_case("standalone_repeat_get_rows_scalar_3d.exposed_repeat", [] {
-        run_scalar_3d_get_rows_case(2, 128, false, true, true);
+        run_scalar_3d_get_rows_case(2, 128, ScalarGetRowsScenario::RepeatedExposed);
     });
     for (ggml_type weight_type : { GGML_TYPE_Q5_1, GGML_TYPE_Q8_0, GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
         for (int64_t token_count : { 2, 8 }) {
