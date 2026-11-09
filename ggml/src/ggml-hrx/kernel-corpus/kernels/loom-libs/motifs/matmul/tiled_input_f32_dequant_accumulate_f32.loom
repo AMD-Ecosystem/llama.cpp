@@ -232,7 +232,9 @@ func.def inline @ggml_matmul_tiled_input_f32_dequant_accumulate_f32(%full_token_
                 scf.yield %half : vector<4xf16>
               } else {
                 %q6_or_generic = scf.if %weight_is_q6_row64 -> (vector<4xf16>) {
-                  %wide = func.call @ggml_q6k_row64_tile_lane_f32_vector4(%weight_noalias, %row64_tile, %local_row, %quant_group, %load_packet) : (buffer, index, index, index, index) -> (vector<4xf32>)
+                  // Keep this hint local to prefill to preserve vector decode code generation.
+                  %row_lane = index.assume %local_row [range(%local_row, 0, 63)] : index
+                  %wide = func.call @ggml_q6k_row64_tile_lane_f32_vector4(%weight_noalias, %row64_tile, %row_lane, %quant_group, %load_packet) : (buffer, index, index, index, index) -> (vector<4xf32>)
                   %half = vector.fptrunc %wide : vector<4xf32> to vector<4xf16>
                   scf.yield %half : vector<4xf16>
                 } else {

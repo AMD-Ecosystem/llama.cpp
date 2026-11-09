@@ -2719,7 +2719,7 @@ func.def inline @ggml_q6k_f32_vector4(%weight: buffer, %weight_row_byte_base: of
   func.return %values : vector<4xf32>
 }
 
-func.def inline @ggml_q6k_row64_tile_lane_f32_vector4(%weight: buffer, %tile: index, %row_lane0: index, %q6_group: index, %packet: index) -> (vector<4xf32>) {
+func.def inline @ggml_q6k_row64_tile_lane_f32_vector4(%weight: buffer, %tile: index, %row_lane: index, %q6_group: index, %packet: index) -> (vector<4xf32>) {
   %c2 = index.constant 2 : index
   %c4 = index.constant 4 : index
   %tile_bytes = index.constant 13440 : offset
@@ -2731,7 +2731,6 @@ func.def inline @ggml_q6k_row64_tile_lane_f32_vector4(%weight: buffer, %tile: in
   %c32_f32v = vector.constant 32.0 : vector<4xf32>
   %bounded_group = index.assume %q6_group [range(%q6_group, 0, 7)] : index
   %bounded_packet = index.assume %packet [range(%packet, 0, 7)] : index
-  %row_lane = index.assume %row_lane0 [range(%row_lane0, 0, 63)] : index
   %tile_base = index.scale %tile, %tile_bytes : index, offset -> offset
   %scale_byte_base = index.add %tile_base, %scale_byte_add : offset
   %raw_byte_base = index.add %tile_base, %raw_byte_add : offset
