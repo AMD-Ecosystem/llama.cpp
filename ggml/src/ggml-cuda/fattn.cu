@@ -4,6 +4,7 @@
 #include "fattn-tile.cuh"
 #include "fattn-vec.cuh"
 #include "fattn.cuh"
+#include "fattn-vision.cuh"
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 __launch_bounds__(256, 1)
@@ -814,6 +815,22 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
 
 void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_set_device(ctx.device);
+    static const bool fattn_vision = []() {
+        const char * env = getenv("GGML_CUDA_FATTN_VISION");
+        return env != nullptr && atoi(env) != 0;
+    }();
+    if (fattn_vision && ggml_cuda_flash_attn_ext_vision_supported(ggml_cuda_info().devices[ctx.device].cc, dst)) {
+        ggml_cuda_flash_attn_ext_vision(ctx, dst);
+        return;
+    }
+    static const bool fattn_prefill = []() {
+        const char * env = getenv("GGML_CUDA_FATTN_PREFILL");
+        return env != nullptr && atoi(env) != 0;
+    }();
+    if (fattn_prefill && ggml_cuda_flash_attn_ext_prefill_supported(ggml_cuda_info().devices[ctx.device].cc, dst)) {
+        ggml_cuda_flash_attn_ext_prefill(ctx, dst);
+        return;
+    }
     switch (ggml_cuda_get_best_fattn_kernel(ggml_cuda_get_device(), dst)) {
         case BEST_FATTN_KERNEL_NONE:
             GGML_ABORT("fatal error");

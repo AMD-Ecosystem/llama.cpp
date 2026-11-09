@@ -1351,14 +1351,18 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
                 // reading in the previous iteration's vec_dot.
                 __syncthreads();
                 load_tiles(x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
-                mmq_hip_tile_barrier<J>();
+                if constexpr (type != GGML_TYPE_Q8_0 || J != 112) {
+                    mmq_hip_tile_barrier<J>();
+                }
             }
 
             const int yk = kb0 * qk / ne_block;
             const int * by0 = y + ncols_y * yk * sz;
             const int * by1 = y + ncols_y * (yk + 1) * sz;
 
-            mmq_hip_tile_barrier<J>();
+            if constexpr (type != GGML_TYPE_Q8_0 || J != 112) {
+                mmq_hip_tile_barrier<J>();
+            }
 #pragma unroll
             for (int l0 = 0; l0 < J*MMQ_TILE_Y_K; l0 += nwarps*warp_size) {
                 const int l = l0 + threadIdx.y*warp_size + threadIdx.x;
@@ -1375,7 +1379,9 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
             __syncthreads();
             vec_dot(tile_x, tile_y, sum, MMQ_TILE_NE_K);
 
-            mmq_hip_tile_barrier<J>();
+            if constexpr (type != GGML_TYPE_Q8_0 || J != 112) {
+                mmq_hip_tile_barrier<J>();
+            }
         }
     }
 #if defined(RDNA3_5)

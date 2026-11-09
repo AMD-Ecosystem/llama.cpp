@@ -2,6 +2,140 @@
 
 The active implementation is `lichang.rdna35-prefill-quant-rope`. Qwen vision window batching, D64/D72/D80 vision attention, D128 language attention, D512 language attention, FP16/FP32 conversion, RMSNorm, activation quantization, and RoPE changes share this source tree. Earlier experimental worktrees are reference snapshots; changes should be developed and validated here.
 
+## Combined long-prompt LLM paths (2026-11-09)
+
+This integration extends the existing implementation with Jim Wu's long-prompt commit `75e205b0e0400359fa113d41eac0b00b6f3d31ad`. The reference is this branch at `8d94c810762c95b0829aa86ddecefba763accf46` plus the accepted November 6 local VLM changes. The actual reference sources and binaries are frozen in the experiment directory; the comparison is not against stock upstream. The existing VLM settings, checkpoint policy, MMQ pipelining, Q6_K scale reuse, GEGLU and normalized-input fusion remain available.
+
+| Change | Target and behavior | Tradeoff |
+| --- | --- | --- |
+| Causal/GQA prefill attention | Extend the shared vision WMMA implementation to D64/D128/D256 language attention. Classify mask tiles once per graph and skip fully blocked tiles; reuse classifications across compatible layers. Schedule longer causal query blocks first. | Opt-in; type, layout, head and mask guards preserve fallback. Arithmetic order changes. This extends coverage beyond our earlier D128/GQA shortcuts. |
+| D256 split-head attention | Two waves cooperate on each 16-query group. Optional SXH exchanges partial scores in F16 and removes one barrier. | SXH is a separate numerical change. For eight groups, compiled resources are 204 VGPRs/53,760 LDS bytes versus 208/53,248 without SXH, both with zero scratch. It reduces exchange traffic, not total LDS or proven occupancy. |
+| Q5 MMDQ support | Add dense Q5_0 and Q5_K to the existing F16 dequantizing matrix path. Q5_0 also supports fused gate/up/SwiGLU. | Q5_K does not enter dense GLU fusion. Weight data are unchanged, but the arithmetic differs from Q8 activation packing and integer matrix multiplication. |
+| Shared Q/K/V activation conversion and bias epilogue | Reuse one F16 input for nearby eligible projections; fuse eligible bias adds into the existing MMDQ epilogue. | Stream, graph lifetime, shape and alias checks restrict reuse. Output stays F32. The previously losing residual-add matcher is excluded. |
+| Matrix tile ordering and RoPE launches | Optional token-tile swizzle improves locality for activation buffers over 8 MiB; small RoPE and wave-sized norm/RoPE launches extend existing choices. | Settings are screened per model. Preserve existing special and multi-axis RoPE paths; no universal speedup is assumed. |
+| Tokenizer merge-history lookup | Use an optional hash lookup while preserving recursive SentencePiece resegmentation. | Same checked token IDs. It cannot improve llama-bench prefill because llama-bench already supplies token IDs. |
+| Dense Qwen35 final-row crop | Extend the existing MoE crop condition to the dense graph, before the last FFN when only selected output rows are needed. | Preserve full rows for unmasked next-token embedding extraction. Attention and recurrent cache updates happen before the crop. This is a graph optimization, not a kernel precision reduction. |
+
+### Matched 3968-token prefill (10/10 models accepted)
+
+All rows use llama-bench with exactly 3968 prompt tokens, zero existing context and zero generated tokens, batch 4096, eight threads, GPU offload 999, F16 KV and flash attention on. Each final cell is the median of 20 samples across two starts in forward/reverse order, with a full-prompt warmup per start. Loading is excluded. All three branches share the same board and verified GGUF within each model. Previous gates and microbatches are screened so gains are measured against the best previous configuration tested. Differences below 1% are treated as matching.
+
+| Model | Board | Previous ms | Jim ms | Combined ms | Lower vs previous | Lower vs Jim | Microbatch previous / Jim / combined |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| Qwen2.5-0.5B-Instruct | halo05 | 258.06 | 137.75 | 136.51 | 47.10% | 0.90% | 2048 / 2048 / 2048 |
+| Qwen2.5-3B-Instruct | halo05 | 851.30 | 852.38 | 815.81 | 4.17% | 4.29% | 2048 / 2048 / 2048 |
+| Qwen2.5-7B-Instruct | halo05 | 1723.30 | 1698.59 | 1652.93 | 4.08% | 2.69% | 1024 / 1024 / 1024 |
+| Qwen3-1.7B | halo05 | 609.70 | 532.05 | 522.58 | 14.29% | 1.78% | 2048 / 2048 / 2048 |
+| Qwen3-4B | halo05 | 1241.51 | 1197.80 | 1163.65 | 6.27% | 2.85% | 1024 / 1024 / 1024 |
+| Qwen3-8B | halo05 | 2120.49 | 2079.33 | 2052.69 | 3.20% | 1.28% | 1024 / 1024 / 1024 |
+| Llama-2-7B | halo05 | 2457.83 | 1967.61 | 1940.17 | 21.06% | 1.39% | 2048 / 1024 / 1024 |
+| Gemma-2B | halo05 | 666.22 | 617.24 | 608.88 | 8.61% | 1.35% | 1024 / 1024 / 1024 |
+| Qwen3.6-27B | halo41 | 7803.74 | 7577.23 | 7477.80 | 4.18% | 1.31% | 1024 / 2048 / 2048 |
+| Gemma-3-12B-IT | halo41 | 3430.25 | 3187.04 | 3149.87 | 8.17% | 1.17% | 1024 / 1024 / 1024 |
+
+Qwen2.5-0.5B has 132 Q5_0 language matrices despite its Q4_K_M filename. A separate Jim ablation measured 136.21 ms with all paths, 191.24 ms without new attention, 215.94 ms without Q5_0 MMDQ and 269.09 ms without either. The roughly 55 ms and 80 ms differences interact and must not be added as an exact decomposition. Most other tested models already use our supported Q4_K/Q6_K paths. Qwen3.6-27B adds 48 Q5_K recurrent output projections (`ssm_out.weight`, shape [6144,5120]).
+
+### Configuration and validation
+
+The new language paths are opt-in. Start with the documented MMDQ/GLU setup and enable `GGML_CUDA_FATTN_PREFILL`, `GGML_CUDA_MMDQ_SHARE_SRC1`, `GGML_CUDA_MMDQ_Q5_0`, `GGML_CUDA_MMDQ_Q5_K` and `GGML_CUDA_NORM_ROPE_WARP` as needed. D256 SXH uses `GGML_CUDA_FATTN_PREFILL_D256_SXH=1`. Qwen2.5 also enables `GGML_CUDA_MMDQ_FUSE_BIAS=1`. Exact selected settings, including normalized-input fusion, tile swizzle and RoPE block sizes, are in `selections/<model>.json` and each run metadata file. Do not apply the long-prompt flag set to VLMs without measurement.
+
+Targeted enabled CPU-reference tests pass 356 cases, plus 32 shared-input/bias graph cases on and 32 off. Tokenizer fixtures pass 368 executions over two vocabularies, both builds and both gate states. One uncontrolled random gates-off FFN check narrowly exceeded the existing tolerance; fixed-input checks passed 48/48 cases on both builds with identical output and reference-error hashes, without relaxing the tolerance. Each accepted model has equal input token IDs, finite full next-token logits and repeat-bitwise stability on one real-text prompt. These checks do not establish broad model quality or zero accuracy loss. SXH explicitly introduces additional F16 rounding.
+
+Jim's reported HTTP ratios span 0.74-1.09x vLLM, with six rows at 3968 tokens and four at 1920/8000/4096 tokens. His report also includes disabled unused host KV copies/checkpoints and a newer nightly vLLM reference. Those server effects are absent from llama-bench. No vLLM build or inference was performed here, and these fresh branch comparisons do not independently verify HTTP parity.
+
+Evidence: `/proj/gdba/lichang/regression_results/jim_llm_combination_20261109/REPORT.md`, `comparison.csv`, `ATTRIBUTION.md`, `SOURCE_REVIEW.md`, `candidate_delta.patch`, `candidate_sources.json`, `selections/`, `reviews/`, `runs/`, `captures/`, `tests/` and `resources/attention.json`. The incremental patch is relative to the preserved pre-task sources, so the earlier VLM work remains distinguishable.
+
+
+
+### Existing VLM compatibility
+
+3/3 limited checks passed using the previously accepted VLM settings, checkpoint limit 32, the same saved requests and a 32-token output cap. These checks do not enable the new long-prompt flag set. Each comparison uses one board, two warmups per start and five timed requests per start; a reverse-order pair is added if the first pair is more than 1% slower. This is a compatibility check, not a new VLM speedup or broad quality claim.
+
+| Model | Board | Previous ms | Combined ms | Ratio | Samples per configuration | Same returned text |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| Gemma-3-4B-IT VLM | halo41 | 572.60 | 573.82 | 1.0021x | 5 | True |
+| Gemma-4-26B-A4B-IT VLM | halo41 | 876.78 | 879.00 | 1.0025x | 5 | True |
+| Qwen2.5-VL-3B | halo41 | 675.87 | 675.94 | 1.0001x | 5 | True |
+
+Prompt position counts, identical request hashes, flags and run tags are recorded in `/proj/gdba/lichang/regression_results/jim_llm_combination_20261109/vlm_compat/results.json`. The compared outputs are returned text for these requests; no broad multimodal-quality conclusion is implied.
+## Combined VLM vision and fusion paths (2026-11-06)
+
+This follow-up combines selected changes from Jim Wu's `jimwu.vlm-ttft-optimization` at `56d84c8d6d2761b14b19bc59ce85bb69bfe24623` with this branch at `8d94c810762c95b0829aa86ddecefba763accf46`. It extends the already committed MMDQ/SwiGLU integration below. Existing Q4_K MMQ pipelining, Q6_K scale reuse, window batching and FP16/BF16 vision fusions remain available in the same tree. The imported paths are selected by hardware, tensor shape and graph structure; unsupported operations keep their existing implementations.
+
+| Change | Target and behavior | Main tradeoff / qualification |
+| --- | --- | --- |
+| Dedicated vision attention | Import Jim's unmasked, equal-head D64/D72/D80 attention with shared-memory tiles, register prefetch and FP32 accumulation/output. D72 is padded inside the kernel. | Opt-in. Masks, GQA, unsupported layouts and short queries retain the original attention. Floating-point order changes; it is not bitwise equivalent. |
+| Vision QKV concatenation | Join compatible Gemma-3 Q/K/V weights once at loading, then use one projection GEMM. No Q/K normalization may intervene. | Opt-in. Original weights remain allocated, costing about 205.39 MiB extra for the tested Gemma-3 vision tower. |
+| Early K/V conversion | Cast contiguous vision K/V before constructing head views, improving the conversion/layout path. | Opt-in. Attention already received F16 K/V before this change. This does not replace every FP32 activation by FP16. |
+| Parallel image resize | Partition output rows among a bounded number of CPU threads using the same resampling arithmetic. | Select with `MTMD_IMAGE_THREADS`; tested at eight threads. Existing 162 resize cases match byte for byte. |
+| Dense GEGLU fusion | Extend the existing MMDQ gate/up/activation/down chain to dense GEGLU, reusing its FP16 private hidden buffer. Applies to eligible Gemma dense FFNs with supported Q4_K/Q6_K weights. | Opt-in; MoE GEGLU is excluded. Arithmetic changes from Q8 activation packing to the existing MMDQ FP16 path. |
+| Normalized MMDQ input | Fuse an exclusively consumed RMSNorm/scale input into the existing dense SwiGLU/GEGLU chain, writing FP16 directly. | Opt-in; shape, type, consumer and memory-alias guards apply. Saves an FP32 write and conversion. Does not help every model. |
+| Vector RMSNorm and RMSNorm+SCALE | Adapt upstream `623c16393` and `1ab7e5ad2`, also in Jim: retain values in registers with vector loads, and fuse eligible scalar scaling. Keep our F16/BF16 output helper and device post-scale. | Vector path is guarded for RDNA3.5, alignment and compatible broadcasts. FP32 arithmetic remains; summation order changes. |
+| MoE routing allocation dependencies | Keep routing logits and optional bias alive until the fused weights output, enabling the existing top-k kernel while retaining its alias-safety check. | Qwen3.5 diagnostic removes 390 launches and adds 0.50 MiB to its language compute buffer. The larger lifetime-extension experiment had no demonstrated extra benefit. |
+| GDN scheduling and final-row crop | Use Jim/upstream's CU scheduling for eligible chunked GDN and upstream `f0c41e016` final-layer row cropping for Qwen3.5. Preserve the existing recurrent path and unmasked next-token embedding extraction. | Architecture-specific graph/scheduling changes. The alternate recurrent-column experiment did not improve end-to-end performance. |
+| Paired bias/conversion/GELU | Process F16/BF16 values in pairs and use Jim's flattened bias mapping. Preserve FP32 arithmetic and existing rounding barriers. | RDNA3.5 and alignment guards. These helpers do not reduce accumulator precision. |
+| D72 RoPE and Q8 barriers | Extend the existing 64-thread vision RoPE mapping to D72; remove three redundant barriers only in the Q8_0 J112 loop while keeping tile overwrite/use barriers. | Q8 tail shapes pass CPU references. Its individual end-to-end saving is too small to quantify reliably; the tile-table probe was ineffective and excluded. |
+
+Gemma-4 also receives upstream GELU-selection fix `5ba3b9fd3` (#30882). Explicit `MTMD_GEMMA4_PAD_MODE=none` and `MTMD_QWEN25VL_PAD_MODE=none` settings match direct resizing in Jim's newer base for the tested images. Performance controls apply the same correctness/preprocessing fixes to the previous implementation. The direct-resize override is not a complete port of all later smart-resize rules, including half-even rounding. Previous padded and corrected direct-resize images must not be treated as identical merely because token counts match.
+
+### VLM end-to-end results
+
+| Model | Previous enabled ms | Jim ms | Combined ms | Reduction vs previous | Reduction vs Jim |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Gemma-3-4B-IT_VLM | 599.45 | 529.26 | 513.81 | 14.29% | 2.92% |
+| Gemma-3-12B-IT_Q4_K_M_GGUF_VLM | 743.47 | 669.08 | 652.94 | 12.18% | 2.41% |
+| Gemma-4-26B-A4B-IT_VLM | 847.60 | 893.33 | 773.51 | 8.74% | 13.41% |
+| Gemma-4-31B-IT_VLM | 2987.04 | 3052.40 | 2836.96 | 5.02% | 7.06% |
+| Gemma-4-31B-IT_VLM_OpenNav | 1777.78 | 1770.64 | 1724.26 | 3.01% | 2.62% |
+| Qwen3-Omni-30B-A3B-Instruct_VLM | 828.97 | 837.34 | 767.74 | 7.39% | 8.31% |
+| Qwen2.5-VL-3B-Instruct_VLM | 652.09 | 645.77 | 633.32 | 2.88% | 1.93% |
+| Qwen2.5-VL-7B-Instruct_VLM | 1020.14 | 1018.32 | 997.69 | 2.20% | 2.03% |
+| Qwen3-VL-4B-Instruct_VLM | 707.78 | 673.18 | 645.58 | 8.79% | 4.10% |
+| Qwen3.5-35B-A3B_VLM | 388.11 | 367.98 | 367.85 | 5.22% | 0.04% |
+| MiniCPM-o-2_6_VLM | 1073.44 | 1005.83 | 1001.61 | 6.69% | 0.42% |
+
+Each model is gated separately: the selected configuration must beat the previous enabled configuration and match or beat Jim before advancing. Final cells use two starts, five warmups and ten measured requests per start, in forward/reverse order, on the same board within each model. All non-contended outliers remain. Results concern median HTTP time to first nonempty content, not tail latency. Differences below 1% should be read as approximately matching performance unless more evidence establishes an advantage.
+
+The runs preserve saved requests, model/projector files, native image/text order, checkpoint limit 32, context 4096, logical batch 2048, F16 KV, eight CPU threads, one slot, normal HIP graphs and 32 output tokens. Qwen2.5 uses microbatch 2048; others use 512. Gemma-4 image budget remains 1120. Prompt reuse is disabled. A configured checkpoint limit does not mean every architecture creates snapshots; actual checkpoint positions are audited separately. Jim's mixed embedding batching is disabled throughout the primary comparison.
+
+### Selecting the combined paths
+
+Use the normal CMake build after reconfiguration. The common measured configuration is:
+
+```sh
+export ROCBLAS_USE_HIPBLASLT=1
+export GGML_CUDA_MMDQ=1
+export GGML_CUDA_MMDQ_MOE=1
+export GGML_CUDA_MMDQ_Q8_0=1
+export GGML_CUDA_MMDQ_GLU=1
+export GGML_CUDA_MOE_REDUCE_X4=1
+export GGML_CUDA_FATTN_VISION=1
+export MTMD_VISION_FUSE_QKV=1
+export MTMD_VISION_KV_CAST_EARLY=1
+export MTMD_IMAGE_THREADS=8
+```
+
+| Model | Additional settings |
+| --- | --- |
+| Gemma-3-4B-IT_VLM | `GGML_CUDA_MMDQ_GEGLU=1` |
+| Gemma-3-12B-IT_Q4_K_M_GGUF_VLM | `GGML_CUDA_MMDQ_GEGLU=1` |
+| Gemma-4-26B-A4B-IT_VLM | `MTMD_GEMMA4_PAD_MODE=none` |
+| Gemma-4-31B-IT_VLM | `MTMD_GEMMA4_PAD_MODE=none`, `GGML_CUDA_MMDQ_GEGLU=1` |
+| Gemma-4-31B-IT_VLM_OpenNav | `MTMD_GEMMA4_PAD_MODE=none`, `GGML_CUDA_MMDQ_GEGLU=1` |
+| Qwen3-Omni-30B-A3B-Instruct_VLM | None |
+| Qwen2.5-VL-3B-Instruct_VLM | `MTMD_QWEN25VL_PAD_MODE=none` |
+| Qwen2.5-VL-7B-Instruct_VLM | `GGML_CUDA_MMDQ_FUSE_NORM=1`, `MTMD_QWEN25VL_PAD_MODE=none` |
+| Qwen3-VL-4B-Instruct_VLM | `GGML_CUDA_MMDQ_FUSE_NORM=1` |
+| Qwen3.5-35B-A3B_VLM | None |
+| MiniCPM-o-2_6_VLM | None |
+
+The new vector RMSNorm, RMSNorm+SCALE, top-k allocation-dependency and paired-helper paths default on where eligible. For ablation, set the respective variable to zero: `GGML_CUDA_RMS_NORM_VEC`, `GGML_CUDA_FUSE_RMS_SCALE`, `GGML_CUDA_TOPK_ALLOC`, `GGML_CUDA_BIAS_VEC`, `GGML_CUDA_GELU_BIAS_VEC`. MMDQ, GEGLU, normalized MMDQ input, dedicated attention and vision QKV/early-cast paths remain opt-in. The environment settings enable consideration of a path; actual tensor shapes and graph structure determine dispatch. For example, the tested Qwen3.5 request does not launch MMDQ despite those gates being enabled.
+
+The normal build passes 610 targeted CPU-reference cases covering attention, FFNs, normalized input, routing, vision bias/fusion, GDN and Q8 tails; earlier experimental checks additionally cover vector RMSNorm, RMSNorm+SCALE and byte-exact threaded resizing. Repeated image embeddings and checked generation are recorded per model. Some outputs and log probabilities differ; this work does not establish zero accuracy loss, broad multimodal quality or perplexity parity. Diagnostic GPU profiles disable graphs because rocprof stalls on some graph traces; those latencies are excluded from the acceptance table. Summed overlapping kernel durations are not additive wall-time savings.
+
+Evidence: `/proj/gdba/lichang/regression_results/jim_vlm_combination_20261106/REPORT.md`, `CONCLUSIONS.md`, `consolidated/combined.patch`, `acceptance/`, `production_acceptance/`, `production_validation/`, and per-model `runs/`. These retain exact source hashes, commands, configurations, controls, rejected experiments and individual samples. The report's gfx11 vLLM ratios use historical September 30 measurements and are orientation only; vLLM was not rebuilt or rerun for this comparison.
+
+
 ## Opt-in MMDQ prefill and SwiGLU fusion (2026-11-06)
 
 The commit titled `hip: integrate opt-in MMDQ prefill and SwiGLU fusion`, based on `226353cdbbbddb265301a4673e1d33c6f291c510`, ports Jim Wu's MMDQ kernels, feed-forward fusion and vectorized MoE reduction into this branch. The source is `jimwu.vlm-ttft-optimization` at `56d84c8d6d2761b14b19bc59ce85bb69bfe24623`, with the prototype in `30d0ee77fe38d0f926429f0c9f13a461f0b9bf9a`. Existing Q4_K pipelining, Q6_K scale reuse, vision optimizations and other compatible fusions remain in the same codebase. All new paths are off by default.

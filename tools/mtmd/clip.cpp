@@ -158,6 +158,8 @@ struct clip_ctx {
     ggml_backend_t backend = nullptr;
     ggml_backend_t backend_cpu = nullptr;
     ggml_backend_buffer_ptr buf;
+    ggml_context_ptr ctx_fused;
+    ggml_backend_buffer_ptr buf_fused;
 
 
     int max_nodes = 8192;
@@ -787,6 +789,15 @@ ggml_tensor * clip_graph::build_attn(
 
     if (flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) {
         ggml_tensor * v = ggml_permute(ctx0, v_cur, 0, 2, 1, 3);
+
+        static const bool kv_cast_early = []() {
+            const char * env = getenv("MTMD_VISION_KV_CAST_EARLY");
+            return env != nullptr && strcmp(env, "0") != 0;
+        }();
+        if (kv_cast_early && k_cur->type == GGML_TYPE_F32 && v_cur->type == GGML_TYPE_F32) {
+            k = ggml_permute(ctx0, ggml_cast(ctx0, k_cur, GGML_TYPE_F16), 0, 2, 1, 3);
+            v = ggml_permute(ctx0, ggml_cast(ctx0, v_cur, GGML_TYPE_F16), 0, 2, 1, 3);
+        }
 
         if (k->type != GGML_TYPE_F16) {
             k = ggml_cast(ctx0, k, GGML_TYPE_F16);
@@ -1647,8 +1658,15 @@ struct clip_model_loader {
                 case PROJECTOR_TYPE_GEMMA4UV:
                     {
                         hparams.rope_theta = 100.0f;
+                        hparams.ffn_op = FFN_GELU;
+                        log_ffn_op = "gelu";
                         hparams.n_merge = 3; // pooling_kernel_size
                         hparams.image_resize_algo = RESIZE_ALGO_BICUBIC;
+                        const char * gemma_pad = std::getenv("MTMD_GEMMA4_PAD_MODE");
+                        if (gemma_pad) {
+                            if (strcmp(gemma_pad, "none") == 0) hparams.image_resize_pad = PAD_NONE;
+                            if (strcmp(gemma_pad, "legacy") == 0) hparams.image_resize_pad = PAD_CEIL;
+                        }
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
                         if (model.proj_type == PROJECTOR_TYPE_GEMMA4UV) {
                             // for "unified" variant, we directly use a bigger patch size, because the "token merging" is done directly on conv layer
@@ -1673,6 +1691,11 @@ struct clip_model_loader {
                     {
                         hparams.n_merge = 2; // default value for Qwen 2 and 2.5
                         hparams.image_resize_algo = RESIZE_ALGO_BICUBIC;
+                        const char * pad_mode = std::getenv("MTMD_QWEN25VL_PAD_MODE");
+                        if (model.proj_type == PROJECTOR_TYPE_QWEN25VL && pad_mode) {
+                            if (strcmp(pad_mode, "none") == 0) hparams.image_resize_pad = PAD_NONE;
+                            if (strcmp(pad_mode, "legacy") == 0) hparams.image_resize_pad = PAD_CEIL;
+                        }
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
                         get_u32(KEY_WIN_ATTN_PATTERN, hparams.n_wa_pattern, model.proj_type == PROJECTOR_TYPE_QWEN25VL); // only 2.5 requires it
                         // ref: https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/blob/main/preprocessor_config.json
@@ -3655,8 +3678,83 @@ struct clip_model_loader {
                 LOG_DBG("%s: no_alloc is set, skipping tensor data loading (%zu tensors)\n", __func__, tensors_to_load.size());
             }
             fin.close();
+            const char * fuse_qkv = std::getenv("MTMD_VISION_FUSE_QKV");
+            if (model.proj_type == PROJECTOR_TYPE_GEMMA3 && fuse_qkv && strcmp(fuse_qkv, "0") != 0) {
+                build_fused_qkv(ctx_clip, buft);
+            }
         }
 
+    }
+
+    // Concatenate Q/K/V weights; keep the original tensors.
+    static void build_fused_qkv(clip_ctx & ctx_clip, ggml_backend_buffer_type_t buft) {
+        auto & model = ctx_clip.model;
+
+        auto same = [](const std::vector<ggml_tensor *> & ts) {
+            for (const ggml_tensor * t : ts) {
+                if (!t || t->type != ts[0]->type || !ggml_are_same_shape(t, ts[0]) || !ggml_is_contiguous(t) ||
+                        ggml_n_dims(t) != ggml_n_dims(ts[0]) || ggml_nrows(t) != t->ne[1]) {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        struct fuse_item {
+            ggml_tensor ** dst;
+            std::vector<ggml_tensor *> srcs;
+        };
+        std::vector<fuse_item> items;
+        for (auto & layer : model.layers) {
+            if (!layer.qkv_w && !layer.q_norm && !layer.k_norm && same({layer.q_w, layer.k_w, layer.v_w}) && same({layer.q_b, layer.k_b, layer.v_b}) &&
+                    ggml_n_dims(layer.q_w) == 2 && ggml_n_dims(layer.q_b) == 1) {
+                items.push_back({&layer.qkv_w, {layer.q_w, layer.k_w, layer.v_w}});
+                items.push_back({&layer.qkv_b, {layer.q_b, layer.k_b, layer.v_b}});
+            }
+
+        }
+        if (items.empty()) {
+            return;
+        }
+
+        ggml_init_params params = {
+            /*.mem_size   =*/ items.size() * ggml_tensor_overhead(),
+            /*.mem_buffer =*/ nullptr,
+            /*.no_alloc   =*/ true,
+        };
+        ctx_clip.ctx_fused.reset(ggml_init(params));
+        for (auto & it : items) {
+            int64_t ne1 = 0;
+            for (const ggml_tensor * t : it.srcs) {
+                ne1 += ggml_n_dims(t) == 1 ? t->ne[0] : t->ne[1];
+            }
+            const ggml_tensor * t0 = it.srcs[0];
+            *it.dst = ggml_n_dims(t0) == 1
+                ? ggml_new_tensor_1d(ctx_clip.ctx_fused.get(), t0->type, ne1)
+                : ggml_new_tensor_2d(ctx_clip.ctx_fused.get(), t0->type, t0->ne[0], ne1);
+            ggml_format_name(*it.dst, "%s.fused", t0->name);
+        }
+        ctx_clip.buf_fused.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_fused.get(), buft));
+        if (!ctx_clip.buf_fused) {
+            throw std::runtime_error(string_format("%s: failed to allocate fused weights\n", __func__));
+        }
+        ggml_backend_buffer_set_usage(ctx_clip.buf_fused.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        ctx_clip.mem_usage[ggml_backend_get_device(ctx_clip.backend)] += ggml_backend_buffer_get_size(ctx_clip.buf_fused.get());
+
+        if (!ctx_clip.no_alloc) {
+            std::vector<uint8_t> tmp;
+            for (auto & it : items) {
+                size_t offs = 0;
+                for (ggml_tensor * t : it.srcs) {
+                    tmp.resize(ggml_nbytes(t));
+                    ggml_backend_tensor_get(t, tmp.data(), 0, tmp.size());
+                    ggml_backend_tensor_set(*it.dst, tmp.data(), offs, tmp.size());
+                    offs += tmp.size();
+                }
+            }
+        }
+        LOG_INF("%s: built %zu fused weight tensors (%.2f MiB)\n", __func__, items.size(),
+            ggml_backend_buffer_get_size(ctx_clip.buf_fused.get()) / 1024.0 / 1024.0);
     }
 
     struct support_info_op {

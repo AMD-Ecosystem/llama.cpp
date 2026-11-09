@@ -444,8 +444,57 @@ void ggml_cuda_glu_bias_to_16bit(const T * x, const T * gate, const float * x_bi
     }
 }
 
+
+template <typename T>
+struct alignas(2*sizeof(T)) glu_pair {
+    T v[2];
+};
+
+template <typename T>
+static __global__ void gelu_bias_to_16bit_vec2(const glu_pair<T> * x, const float2 * bias, glu_pair<T> * dst,
+        int64_t ncols, int64_t nrows) {
+    const int64_t col = int64_t(blockIdx.x)*blockDim.x + threadIdx.x;
+    if (col >= ncols) {
+        return;
+    }
+    const float2 b = bias[col];
+    for (int64_t row = blockIdx.y; row < nrows; row += gridDim.y) {
+        const int64_t i = row*ncols + col;
+        const auto in = x[i];
+        float a0 = ggml_cuda_cast<float>(in.v[0]) + b.x;
+        float a1 = ggml_cuda_cast<float>(in.v[1]) + b.y;
+#if defined(GGML_USE_HIP)
+        asm volatile("" : "+v"(a0), "+v"(a1));
+#else
+        asm volatile("" : "+f"(a0), "+f"(a1));
+#endif
+        float v0 = op_gelu(a0);
+        float v1 = op_gelu(a1);
+#if defined(GGML_USE_HIP)
+        asm volatile("" : "+v"(v0), "+v"(v1));
+#else
+        asm volatile("" : "+f"(v0), "+f"(v1));
+#endif
+        dst[i] = {{ggml_cuda_cast<T>(v0), ggml_cuda_cast<T>(v1)}};
+    }
+}
+
 template <typename T>
 void ggml_cuda_gelu_bias_to_16bit(const T * x, const float * bias, T * dst, int64_t ncols, int64_t nrows, cudaStream_t stream) {
+#if defined(GGML_USE_HIP)
+    static const bool enabled = [] { const char * v = getenv("GGML_CUDA_GELU_BIAS_VEC"); return !v || atoi(v) != 0; }();
+    const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+    if (enabled && GGML_CUDA_CC_IS_RDNA3_5(cc) && ncols % 2 == 0 &&
+        reinterpret_cast<uintptr_t>(x) % alignof(glu_pair<T>) == 0 &&
+        reinterpret_cast<uintptr_t>(bias) % alignof(float2) == 0 &&
+        reinterpret_cast<uintptr_t>(dst) % alignof(glu_pair<T>) == 0) {
+        const dim3 blocks((ncols/2 + CUDA_GLU_BLOCK_SIZE - 1)/CUDA_GLU_BLOCK_SIZE, std::min(nrows, int64_t(65535)));
+        gelu_bias_to_16bit_vec2<T><<<blocks, CUDA_GLU_BLOCK_SIZE, 0, stream>>>(
+            reinterpret_cast<const glu_pair<T> *>(x), reinterpret_cast<const float2 *>(bias),
+            reinterpret_cast<glu_pair<T> *>(dst), ncols/2, nrows);
+        return;
+    }
+#endif
     const dim3 blocks((ncols + CUDA_GLU_BLOCK_SIZE - 1)/CUDA_GLU_BLOCK_SIZE, std::min(nrows, int64_t(65535)));
     glu_bias_to_16bit<op_gelu, T, false><<<blocks, CUDA_GLU_BLOCK_SIZE, 0, stream>>>(x, nullptr, bias, nullptr, dst, ncols, nrows);
 }

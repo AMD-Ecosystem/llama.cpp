@@ -565,8 +565,55 @@ static __global__ void convert_bias_to_f32(const T * x, const float * bias, floa
     }
 }
 
+
+template <typename T, bool add_residual>
+static __global__ void convert_bias_to_f32_vec2(const convert_pair<T> * x, const float2 * bias, float2 * y,
+        int64_t ncols, int64_t nrows, const float2 * residual) {
+    const int64_t i = int64_t(blockIdx.x)*blockDim.x + threadIdx.x;
+    if (i >= ncols*nrows) {
+        return;
+    }
+    const float2 b = bias[i % ncols];
+    {
+        const auto in = x[i];
+        float2 v = make_float2(ggml_cuda_cast<float>(in.v[0]) + b.x, ggml_cuda_cast<float>(in.v[1]) + b.y);
+        if constexpr (add_residual) {
+#if defined(GGML_USE_HIP)
+            asm volatile("" : "+v"(v.x), "+v"(v.y));
+#else
+            asm volatile("" : "+f"(v.x), "+f"(v.y));
+#endif
+            const float2 r = residual[i];
+            v.x += r.x;
+            v.y += r.y;
+        }
+        y[i] = v;
+    }
+}
+
 template <typename T>
 void ggml_cuda_convert_bias_to_f32(const T * x, const float * bias, float * y, int64_t ncols, int64_t nrows, cudaStream_t stream, const float * residual) {
+#if defined(GGML_USE_HIP)
+    static const bool enabled = [] { const char * v = getenv("GGML_CUDA_BIAS_VEC"); return !v || atoi(v) != 0; }();
+    const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+    if (enabled && GGML_CUDA_CC_IS_RDNA3_5(cc) && ncols % 2 == 0 &&
+        reinterpret_cast<uintptr_t>(x) % alignof(convert_pair<T>) == 0 &&
+        reinterpret_cast<uintptr_t>(bias) % alignof(float2) == 0 &&
+        reinterpret_cast<uintptr_t>(y) % alignof(float2) == 0 &&
+        (!residual || reinterpret_cast<uintptr_t>(residual) % alignof(float2) == 0)) {
+        const dim3 blocks((ncols*nrows/2 + CUDA_DEQUANTIZE_BLOCK_SIZE - 1)/CUDA_DEQUANTIZE_BLOCK_SIZE);
+        if (residual) {
+            convert_bias_to_f32_vec2<T, true><<<blocks, CUDA_DEQUANTIZE_BLOCK_SIZE, 0, stream>>>(
+                reinterpret_cast<const convert_pair<T> *>(x), reinterpret_cast<const float2 *>(bias),
+                reinterpret_cast<float2 *>(y), ncols/2, nrows, reinterpret_cast<const float2 *>(residual));
+        } else {
+            convert_bias_to_f32_vec2<T, false><<<blocks, CUDA_DEQUANTIZE_BLOCK_SIZE, 0, stream>>>(
+                reinterpret_cast<const convert_pair<T> *>(x), reinterpret_cast<const float2 *>(bias),
+                reinterpret_cast<float2 *>(y), ncols/2, nrows, nullptr);
+        }
+        return;
+    }
+#endif
     const dim3 blocks((ncols + CUDA_DEQUANTIZE_BLOCK_SIZE - 1)/CUDA_DEQUANTIZE_BLOCK_SIZE, std::min(nrows, int64_t(65535)));
     if (residual) {
         convert_bias_to_f32<T, true><<<blocks, CUDA_DEQUANTIZE_BLOCK_SIZE, 0, stream>>>(x, bias, y, ncols, nrows, residual);
