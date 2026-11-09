@@ -10149,7 +10149,7 @@ static void require_common_mul_mat_id_swiglu_match(ggml_context *               
     REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) ==
             common_mul_mat_id_swiglu_f32_kernel_name(tensors.output->ne[2]));
     REQUIRE(dispatch.kernel.integer_parameters.at("token_count") == tensors.output->ne[2]);
-    REQUIRE(dispatch.bindings.size() == 6);
+    REQUIRE(dispatch.bindings.size() == 7);
     require_compile_parameter(dispatch, "ggml.mul_mat_id_swiglu.input_size",
                               std::to_string(tensors.gate_weight->ne[0]));
     require_compile_parameter(dispatch, "ggml.mul_mat_id_swiglu.output_size",
@@ -10185,6 +10185,10 @@ static void require_common_mul_mat_id_swiglu_match(ggml_context *               
     REQUIRE(dispatch.bindings[3].value == gate_weight_value->id);
     REQUIRE(dispatch.bindings[4].value == up_weight_value->id);
     REQUIRE(dispatch.bindings[5].value == output_value->id);
+    // These formats bind the input buffer to the unused IQ3_XXS codebook slot.
+    REQUIRE(dispatch.bindings[6].value == input_value->id);
+    REQUIRE(dispatch.bindings[6].offset == 0);
+    REQUIRE(dispatch.bindings[6].length == input_value->byte_count);
 
     append_match_to_plan(plan, match, covered_nodes, &imported.graph);
     const ggml::hrx::CommandProgram commands =
@@ -10192,13 +10196,14 @@ static void require_common_mul_mat_id_swiglu_match(ggml_context *               
     REQUIRE(commands.valid());
     REQUIRE(commands.commands.size() == 3);
     REQUIRE(command_program_verifies(commands));
-    REQUIRE(commands.commands[2].bindings.size() == 6);
+    REQUIRE(commands.commands[2].bindings.size() == 7);
     REQUIRE(commands.commands[2].bindings[0].name == "input");
     REQUIRE(commands.commands[2].bindings[1].name == "expert_table");
     REQUIRE(commands.commands[2].bindings[2].name == "partition_table");
     REQUIRE(commands.commands[2].bindings[3].name == "gate_weight");
     REQUIRE(commands.commands[2].bindings[4].name == "up_weight");
     REQUIRE(commands.commands[2].bindings[5].name == "output");
+    REQUIRE(commands.commands[2].bindings[6].name == "iq3_xxs_grid");
 }
 
 static void run_common_mul_mat_id_swiglu_dispatch_checks() {
@@ -11047,7 +11052,7 @@ static void run_qwen_routed_gate_up_dispatch_checks() {
                 "loom_libs:ggml_moe_build_expert_partition_table");
         REQUIRE(kernel_name_for_id(gate_up_match.dispatches[2].kernel.kernel_id) ==
                 common_mul_mat_id_swiglu_f32_kernel_name(tensors.output->ne[2]));
-        REQUIRE(gate_up_match.dispatches[2].bindings.size() == 6);
+        REQUIRE(gate_up_match.dispatches[2].bindings.size() == 7);
         REQUIRE(gate_up_match.dispatches[2].bindings[1].value == gate_up_match.transients[0].value);
         REQUIRE(gate_up_match.dispatches[2].bindings[2].value == gate_up_match.transients[1].value);
         REQUIRE(gate_up_match.metadata.generated_resources().size() == 2);
@@ -11079,7 +11084,7 @@ static void run_qwen_routed_gate_up_dispatch_checks() {
         REQUIRE(gate_up_match.dispatches.size() == 1);
         REQUIRE(kernel_name_for_id(gate_up_match.dispatches[0].kernel.kernel_id) ==
                 common_mul_mat_id_swiglu_f32_kernel_name(tensors.output->ne[2]));
-        REQUIRE(gate_up_match.dispatches[0].bindings.size() == 6);
+        REQUIRE(gate_up_match.dispatches[0].bindings.size() == 7);
     }
 
     {
@@ -11094,7 +11099,7 @@ static void run_qwen_routed_gate_up_dispatch_checks() {
         REQUIRE(gate_up_match.dispatches.size() == 1);
         REQUIRE(kernel_name_for_id(gate_up_match.dispatches[0].kernel.kernel_id) ==
                 common_mul_mat_id_swiglu_f32_kernel_name(tensors.output->ne[2]));
-        REQUIRE(gate_up_match.dispatches[0].bindings.size() == 6);
+        REQUIRE(gate_up_match.dispatches[0].bindings.size() == 7);
     }
 
     {
