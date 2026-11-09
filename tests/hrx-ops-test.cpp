@@ -9592,6 +9592,11 @@ static void register_dense_matmul_cases(Suite & suite) {
                 1, output_size, false, true, false, input_size, true, true, input_size == 12288);
         });
     }
+    suite.device_case("qwen35.q6_row64_tiled_residual.tokens29", [] {
+        run_dense_matmul_postops_cpu_reference_case(
+            GGML_TYPE_Q6_K, "loom_libs:ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32",
+            29, 1024, false, true, false, 3584, true, true);
+    });
     suite.device_case("qwen9.q4_row64_f32_residual.k4096", [] {
         run_dense_matmul_postops_cpu_reference_case(
             GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_vector_bias_residual_f32_f32",

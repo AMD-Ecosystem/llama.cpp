@@ -14,6 +14,7 @@ func.decl @ggml_dot_u8_s8_vector8_f32(%weight: vector<2xi32>, %activation: vecto
 config.def @ggml.mul_mat.activation_format = 0 : index
 
 func.decl @ggml_q4k_native_row64_f32_vector4(%weight: buffer, %row: index, %input_size: index, %q4_block: index, %q4_group: index, %packet: index) -> (vector<4xf32>)
+func.decl @ggml_q6k_native_row64_f32_vector4(%weight: buffer, %row: index, %input_size: index, %q6_block: index, %q6_group: index, %packet: index) -> (vector<4xf32>)
 
 func.decl @ggml_dequant_f32_vector4(%iq4nl_table: vector<16xi8>, %iq3s_grid_low0: vector<32xf32>, %iq3s_grid_low1: vector<32xf32>, %iq3s_grid_low2: vector<32xf32>, %iq3s_grid_low3: vector<32xf32>, %iq3s_grid_low4: vector<32xf32>, %iq3s_grid_low5: vector<32xf32>, %iq3s_grid_low6: vector<32xf32>, %iq3s_grid_low7: vector<32xf32>, %iq3s_grid_low8: vector<32xf32>, %iq3s_grid_low9: vector<32xf32>, %iq3s_grid_low10: vector<32xf32>, %iq3s_grid_low11: vector<32xf32>, %iq3s_grid_low12: vector<32xf32>, %iq3s_grid_low13: vector<32xf32>, %iq3s_grid_low14: vector<32xf32>, %iq3s_grid_low15: vector<32xf32>, %iq3s_grid_high0: vector<32xf32>, %iq3s_grid_high1: vector<32xf32>, %iq3s_grid_high2: vector<32xf32>, %iq3s_grid_high3: vector<32xf32>, %iq3s_grid_high4: vector<32xf32>, %iq3s_grid_high5: vector<32xf32>, %iq3s_grid_high6: vector<32xf32>, %iq3s_grid_high7: vector<32xf32>, %iq3s_grid_high8: vector<32xf32>, %iq3s_grid_high9: vector<32xf32>, %iq3s_grid_high10: vector<32xf32>, %iq3s_grid_high11: vector<32xf32>, %iq3s_grid_high12: vector<32xf32>, %iq3s_grid_high13: vector<32xf32>, %iq3s_grid_high14: vector<32xf32>, %iq3s_grid_high15: vector<32xf32>, %weight_format: index, %weight: buffer, %row_byte_base: offset, %row: index, %input_size: index, %quant_block: index, %quant_group: index, %packet: index, %k: index) -> (vector<4xf32>)
 
@@ -119,6 +120,8 @@ func.def inline @ggml_matmul_tiled_input_f32_dequant_accumulate_f32(%full_token_
   %weight_is_q5 = index.cmp eq, %weight_format, %reuse_q5_k : index
   %weight_q4_row64_format = index.constant 44 : index
   %weight_is_q4_row64 = index.cmp eq, %weight_format, %weight_q4_row64_format : index
+  %weight_q6_row64_format = index.constant 46 : index
+  %weight_is_q6_row64 = index.cmp eq, %weight_format, %weight_q6_row64_format : index
   %weight_reuses_header = scalar.ori %weight_is_q5, %weight_is_q4_row64 : i1
   %weight_is_iq4 = index.cmp eq, %weight_format, %reuse_iq4_xs : index
   %result00, %result01, %result10, %result11 = scf.for %quant_block = [%quant_block_begin to %quant_block_end step %c1](%block_acc00 = %init00 : vector<8xf16>, %block_acc01 = %init01 : vector<8xf16>, %block_acc10 = %init10 : vector<8xf16>, %block_acc11 = %init11 : vector<8xf16>) -> (vector<8xf16>, vector<8xf16>, vector<8xf16>, vector<8xf16>) {
@@ -225,8 +228,15 @@ func.def inline @ggml_matmul_tiled_input_f32_dequant_accumulate_f32(%full_token_
                 %half = vector.fptrunc %wide : vector<4xf32> to vector<4xf16>
                 scf.yield %half : vector<4xf16>
               } else {
-                %generic = func.call @ggml_dequant_f16_vector4(%iq4nl_table, %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15, %weight_format, %weight_noalias, %row_byte_base, %bounded_input_size, %quant_block, %quant_group, %load_packet, %weight_k) : (vector<16xi8>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, index, buffer, offset, index, index, index, index, index) -> (vector<4xf16>)
-                scf.yield %generic : vector<4xf16>
+                %q6_or_generic = scf.if %weight_is_q6_row64 -> (vector<4xf16>) {
+                  %wide = func.call @ggml_q6k_native_row64_f32_vector4(%weight_noalias, %channel, %bounded_input_size, %quant_block, %quant_group, %load_packet) : (buffer, index, index, index, index, index) -> (vector<4xf32>)
+                  %half = vector.fptrunc %wide : vector<4xf32> to vector<4xf16>
+                  scf.yield %half : vector<4xf16>
+                } else {
+                  %generic = func.call @ggml_dequant_f16_vector4(%iq4nl_table, %iq3s_grid_low0, %iq3s_grid_low1, %iq3s_grid_low2, %iq3s_grid_low3, %iq3s_grid_low4, %iq3s_grid_low5, %iq3s_grid_low6, %iq3s_grid_low7, %iq3s_grid_low8, %iq3s_grid_low9, %iq3s_grid_low10, %iq3s_grid_low11, %iq3s_grid_low12, %iq3s_grid_low13, %iq3s_grid_low14, %iq3s_grid_low15, %iq3s_grid_high0, %iq3s_grid_high1, %iq3s_grid_high2, %iq3s_grid_high3, %iq3s_grid_high4, %iq3s_grid_high5, %iq3s_grid_high6, %iq3s_grid_high7, %iq3s_grid_high8, %iq3s_grid_high9, %iq3s_grid_high10, %iq3s_grid_high11, %iq3s_grid_high12, %iq3s_grid_high13, %iq3s_grid_high14, %iq3s_grid_high15, %weight_format, %weight_noalias, %row_byte_base, %bounded_input_size, %quant_block, %quant_group, %load_packet, %weight_k) : (vector<16xi8>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, index, buffer, offset, index, index, index, index, index) -> (vector<4xf16>)
+                  scf.yield %generic : vector<4xf16>
+                }
+                scf.yield %q6_or_generic : vector<4xf16>
               }
               scf.yield %fallback : vector<4xf16>
             }
