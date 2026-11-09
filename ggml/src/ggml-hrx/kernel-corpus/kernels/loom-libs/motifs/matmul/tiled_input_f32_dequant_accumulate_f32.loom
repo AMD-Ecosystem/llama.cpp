@@ -1,5 +1,5 @@
-func.decl @ggml_q4k_row64_load_decode_state(%weight: buffer, %row: index, %input_size: index, %block: index) -> (vector<2xf16>, vector<3xi32>)
-func.decl @ggml_q4k_row64_preloaded_f32_vector4(%weight: buffer, %row: index, %input_size: index, %block: index, %group: index, %packet: index, %dm: vector<2xf16>, %scales: vector<3xi32>) -> (vector<4xf32>)
+func.decl @ggml_q4k_row64_tile_lane_load_decode_state(%weight: buffer, %tile: index, %row_lane: index) -> (vector<2xf16>, vector<3xi32>)
+func.decl @ggml_q4k_row64_tile_lane_preloaded_f32_vector4(%weight: buffer, %tile: index, %row_lane: index, %group: index, %packet: index, %dm: vector<2xf16>, %scales: vector<3xi32>) -> (vector<4xf32>)
 
 func.decl @ggml_q5k_load_decode_state(%weight: buffer, %row_base: offset, %block: index, %packet: index) -> (vector<2xf16>, vector<3xi32>, vector<4xi8>)
 func.decl @ggml_q5k_preloaded_f32_vector4(%weight: buffer, %row_byte_base: offset, %q5_block: index, %q5_group: index, %packet: index, %dm: vector<2xf16>, %scales: vector<3xi32>, %qh_bytes: vector<4xi8>) -> (vector<4xf32>)
@@ -102,7 +102,7 @@ func.def inline @ggml_matmul_tiled_input_f32_dequant_accumulate_f32(%full_token_
   %result_fragment_view = buffer.view %result_stage[%wave_result_stage_offset] : buffer -> view<16x16xf16, %result_fragment_layout>
   %result_physical_view = buffer.view %result_stage[%wave_result_stage_offset] : buffer -> view<16x16xf16>
   %channel_tile_base = index.mul %channel_tile, %c64 : index
-  %q6_blocks_per_row_group = index.div %bounded_input_size, %c256 : index
+  %row64_blocks_per_group = index.div %bounded_input_size, %c256 : index
   %token_tile_base = index.mul %token_tile, %c32 : index
   %load_packet = index.rem %workitem, %c8 : index
   %load_k = index.mul %load_packet, %c4 : index
@@ -127,7 +127,7 @@ func.def inline @ggml_matmul_tiled_input_f32_dequant_accumulate_f32(%full_token_
   %weight_is_iq4 = index.cmp eq, %weight_format, %reuse_iq4_xs : index
   %result00, %result01, %result10, %result11 = scf.for %quant_block = [%quant_block_begin to %quant_block_end step %c1](%block_acc00 = %init00 : vector<8xf16>, %block_acc01 = %init01 : vector<8xf16>, %block_acc10 = %init10 : vector<8xf16>, %block_acc11 = %init11 : vector<8xf16>) -> (vector<8xf16>, vector<8xf16>, vector<8xf16>, vector<8xf16>) {
     // All rows in this output tile share the same row64 weight tile.
-    %q6_tile = index.madd %channel_tile, %q6_blocks_per_row_group, %quant_block : index
+    %row64_tile = index.madd %channel_tile, %row64_blocks_per_group, %quant_block : index
     // Retain Q4 row64 or Q5_K headers and Q5 packet high bits for all eight K32 groups; payloads are still loaded per group.
     %weight_dm, %weight_scales, %weight_qh = scf.if %weight_reuses_header -> (vector<4x2xf16>, vector<4x3xi32>, vector<4x4xi8>) {
       %zero_dm = vector.constant 0.0 : vector<4x2xf16>
@@ -140,7 +140,7 @@ func.def inline @ggml_matmul_tiled_input_f32_dequant_accumulate_f32(%full_token_
         %dm, %scales, %qh = scf.if %valid -> (vector<2xf16>, vector<3xi32>, vector<4xi8>) {
           %row_base = index.scale %row, %weight_row_bytes : index, offset -> offset
           %d, %s, %q = scf.if %weight_is_q4_row64 -> (vector<2xf16>, vector<3xi32>, vector<4xi8>) {
-            %d4, %s4 = func.call @ggml_q4k_row64_load_decode_state(%weight_noalias, %row, %bounded_input_size, %quant_block) : (buffer, index, index, index) -> (vector<2xf16>, vector<3xi32>)
+            %d4, %s4 = func.call @ggml_q4k_row64_tile_lane_load_decode_state(%weight_noalias, %row64_tile, %local_row) : (buffer, index, index) -> (vector<2xf16>, vector<3xi32>)
             %empty_qh = vector.constant 0 : vector<4xi8>
             scf.yield %d4, %s4, %empty_qh : vector<2xf16>, vector<3xi32>, vector<4xi8>
           } else {
@@ -227,12 +227,12 @@ func.def inline @ggml_matmul_tiled_input_f32_dequant_accumulate_f32(%full_token_
               %fallback = scf.if %weight_is_q4_row64 -> (vector<4xf16>) {
                 %dm = vector.extract %weight_dm[%slot] : vector<4x2xf16> -> vector<2xf16>
                 %scales = vector.extract %weight_scales[%slot] : vector<4x3xi32> -> vector<3xi32>
-                %wide = func.call @ggml_q4k_row64_preloaded_f32_vector4(%weight_noalias, %channel, %bounded_input_size, %quant_block, %quant_group, %load_packet, %dm, %scales) : (buffer, index, index, index, index, index, vector<2xf16>, vector<3xi32>) -> (vector<4xf32>)
+                %wide = func.call @ggml_q4k_row64_tile_lane_preloaded_f32_vector4(%weight_noalias, %row64_tile, %local_row, %quant_group, %load_packet, %dm, %scales) : (buffer, index, index, index, index, vector<2xf16>, vector<3xi32>) -> (vector<4xf32>)
                 %half = vector.fptrunc %wide : vector<4xf32> to vector<4xf16>
                 scf.yield %half : vector<4xf16>
               } else {
                 %q6_or_generic = scf.if %weight_is_q6_row64 -> (vector<4xf16>) {
-                  %wide = func.call @ggml_q6k_row64_tile_lane_f32_vector4(%weight_noalias, %q6_tile, %local_row, %quant_group, %load_packet) : (buffer, index, index, index, index) -> (vector<4xf32>)
+                  %wide = func.call @ggml_q6k_row64_tile_lane_f32_vector4(%weight_noalias, %row64_tile, %local_row, %quant_group, %load_packet) : (buffer, index, index, index, index) -> (vector<4xf32>)
                   %half = vector.fptrunc %wide : vector<4xf32> to vector<4xf16>
                   scf.yield %half : vector<4xf16>
                 } else {

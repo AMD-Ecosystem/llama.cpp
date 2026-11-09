@@ -672,17 +672,12 @@ func.def inline @ggml_q4k_native_row64_f32_vector4(%weight: buffer, %row: index,
 }
 
 // Keep the K256 header in registers across the eight K32 contractions.
-func.def inline @ggml_q4k_row64_load_decode_state(%weight: buffer, %row: index, %input_size: index, %block: index) -> (vector<2xf16>, vector<3xi32>) {
+func.def inline @ggml_q4k_row64_tile_lane_load_decode_state(%weight: buffer, %tile: index, %row_lane0: index) -> (vector<2xf16>, vector<3xi32>) {
   %c0 = index.constant 0 : index
-  %c64 = index.constant 64 : index
-  %c256 = index.constant 256 : index
   %record_bytes = index.constant 9216 : offset
   %row_bytes = index.constant 16 : offset
   %scale_offset = index.constant 4 : offset
-  %blocks = index.div %input_size, %c256 : index
-  %row_group = index.div %row, %c64 : index
-  %row_lane = index.rem %row, %c64 : index
-  %tile = index.madd %row_group, %blocks, %block : index
+  %row_lane = index.assume %row_lane0 [range(%row_lane0, 0, 63)] : index
   %tile_base = index.scale %tile, %record_bytes : index, offset -> offset
   %row_add = index.scale %row_lane, %row_bytes : index, offset -> offset
   %header_base = index.add %tile_base, %row_add : offset
@@ -694,7 +689,18 @@ func.def inline @ggml_q4k_row64_load_decode_state(%weight: buffer, %row: index, 
   func.return %dm, %scales : vector<2xf16>, vector<3xi32>
 }
 
-func.def inline @ggml_q4k_row64_preloaded_f32_vector4(%weight: buffer, %row: index, %input_size: index, %q4_block: index, %q4_group: index, %packet: index, %dm: vector<2xf16>, %scales: vector<3xi32>) -> (vector<4xf32>) {
+func.def inline @ggml_q4k_row64_load_decode_state(%weight: buffer, %row: index, %input_size: index, %block: index) -> (vector<2xf16>, vector<3xi32>) {
+  %c64 = index.constant 64 : index
+  %c256 = index.constant 256 : index
+  %blocks = index.div %input_size, %c256 : index
+  %row_group = index.div %row, %c64 : index
+  %row_lane = index.rem %row, %c64 : index
+  %tile = index.madd %row_group, %blocks, %block : index
+  %dm, %scales = func.call @ggml_q4k_row64_tile_lane_load_decode_state(%weight, %tile, %row_lane) : (buffer, index, index) -> (vector<2xf16>, vector<3xi32>)
+  func.return %dm, %scales : vector<2xf16>, vector<3xi32>
+}
+
+func.def inline @ggml_q4k_row64_tile_lane_preloaded_f32_vector4(%weight: buffer, %tile: index, %row_lane0: index, %q4_group: index, %packet: index, %dm: vector<2xf16>, %scales: vector<3xi32>) -> (vector<4xf32>) {
   %c2 = index.constant 2 : index
   %c4 = index.constant 4 : index
   %c8 = index.constant 8 : index
@@ -705,15 +711,10 @@ func.def inline @ggml_q4k_row64_preloaded_f32_vector4(%weight: buffer, %row: ind
   %q4_mask = vector.constant 252645135 : vector<1xi32>
   %bounded_group = index.assume %q4_group [range(%q4_group, 0, 7)] : index
   %bounded_packet = index.assume %packet [range(%packet, 0, 7)] : index
-  %c64 = index.constant 64 : index
-  %c256 = index.constant 256 : index
   %record_bytes = index.constant 9216 : offset
   %payload_offset = index.constant 1024 : offset
-  %blocks = index.div %input_size, %c256 : index
-  %row_group = index.div %row, %c64 : index
-  %row_lane = index.rem %row, %c64 : index
-  %group_block = index.madd %row_group, %blocks, %q4_block : index
-  %group_base = index.scale %group_block, %record_bytes : index, offset -> offset
+  %row_lane = index.assume %row_lane0 [range(%row_lane0, 0, 63)] : index
+  %group_base = index.scale %tile, %record_bytes : index, offset -> offset
   %code_byte_base = index.add %group_base, %payload_offset : offset
   %code_view = buffer.view %weight[%code_byte_base] : buffer -> view<8x64x4xi32>
   %d_f16 = vector.extract %dm[0] : vector<2xf16> -> f16
@@ -782,6 +783,17 @@ func.def inline @ggml_q4k_row64_preloaded_f32_vector4(%weight: buffer, %row: ind
   %value2 = scalar.fmaf %q2, %d_scale, %negative_minimum_scale : f32
   %value3 = scalar.fmaf %q3, %d_scale, %negative_minimum_scale : f32
   %result = vector.from_elements %value0, %value1, %value2, %value3 : vector<4xf32>
+  func.return %result : vector<4xf32>
+}
+
+func.def inline @ggml_q4k_row64_preloaded_f32_vector4(%weight: buffer, %row: index, %input_size: index, %q4_block: index, %q4_group: index, %packet: index, %dm: vector<2xf16>, %scales: vector<3xi32>) -> (vector<4xf32>) {
+  %c64 = index.constant 64 : index
+  %c256 = index.constant 256 : index
+  %blocks = index.div %input_size, %c256 : index
+  %row_group = index.div %row, %c64 : index
+  %row_lane = index.rem %row, %c64 : index
+  %tile = index.madd %row_group, %blocks, %q4_block : index
+  %result = func.call @ggml_q4k_row64_tile_lane_preloaded_f32_vector4(%weight, %tile, %row_lane, %q4_group, %packet, %dm, %scales) : (buffer, index, index, index, index, vector<2xf16>, vector<3xi32>) -> (vector<4xf32>)
   func.return %result : vector<4xf32>
 }
 
