@@ -1089,6 +1089,23 @@ static bool supported_scale_f32_tensor(const ggml_tensor * op) {
            static_cast<uint64_t>(ggml_nelements(op)) <= std::numeric_limits<uint32_t>::max();
 }
 
+static bool supported_repeat_scalar_3d_f32_tensor(const ggml_tensor * op) {
+    const bool is_repeat = op != nullptr && op->op == GGML_OP_REPEAT;
+    const bool has_source = is_repeat && op->src[0] != nullptr;
+    if (!has_source) {
+        return false;
+    }
+
+    const ggml_tensor * source = op->src[0];
+    const bool has_types = source->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
+    const bool has_source_shape = source->ne[0] == 1 && source->ne[1] == 128 &&
+                                  source->ne[2] == 1 && source->ne[3] == 1;
+    const bool has_repeat_shape = op->ne[0] == 1 && op->ne[1] == 128 && op->ne[2] >= 1 &&
+                                  op->ne[2] <= 2048 && op->ne[3] == 1;
+    const bool has_layout = ggml_is_contiguous(source) && ggml_is_contiguous(op);
+    return has_types && has_source_shape && has_repeat_shape && has_layout;
+}
+
 static bool supported_qwen_attention_projection_get_rows_tensor(const ggml_tensor * op) {
     if (op == nullptr || op->op != GGML_OP_GET_ROWS || op->src[0] == nullptr || op->src[1] == nullptr ||
         op->src[0]->op != GGML_OP_MUL_MAT || op->type != GGML_TYPE_F32 || op->src[0]->type != GGML_TYPE_F32 ||
@@ -1196,6 +1213,9 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
         return true;
     }
     if (supported_scale_f32_tensor(op)) {
+        return true;
+    }
+    if (supported_repeat_scalar_3d_f32_tensor(op)) {
         return true;
     }
     // Admit pooling for the amax-scale fusion; graph claim validates the complete chain.
