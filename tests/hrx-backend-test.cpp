@@ -4554,6 +4554,109 @@ static void run_standalone_repeat_get_rows_scalar_3d_dispatch_checks() {
     check_case(2, 128, false, false);
 }
 
+enum class ExpertScaleDispatchScenario {
+    Fused,
+    ExposedMatmul,
+    DifferentGatherIds,
+};
+
+static void run_mul_mat_id_expert_scale_dispatch_checks() {
+    auto check_case = [](ggml_type weight_type, int64_t token_count, int64_t route_stride,
+                         ExpertScaleDispatchScenario scenario) {
+        constexpr int64_t input_size = 256;
+        constexpr int64_t output_size = 64;
+        constexpr int64_t expert_count = 128;
+        constexpr int64_t route_count = 8;
+        ggml_init_params params = {};
+        params.mem_size = 1024 * 1024;
+        params.no_alloc = true;
+        ggml_context * ctx = ggml_init(params);
+        REQUIRE(ctx != nullptr);
+
+        ggml_tensor * weight = ggml_new_tensor_3d(ctx, weight_type, input_size, output_size, expert_count);
+        ggml_tensor * input = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, input_size, 1, token_count);
+        ggml_tensor * ids_storage = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, route_stride, token_count);
+        ggml_tensor * ids = route_stride == route_count ? ids_storage :
+            ggml_view_2d(ctx, ids_storage, route_count, token_count, ids_storage->nb[1], 0);
+        ggml_tensor * scales = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, expert_count);
+        REQUIRE(weight != nullptr);
+        REQUIRE(input != nullptr);
+        REQUIRE(ids != nullptr);
+        REQUIRE(scales != nullptr);
+
+        ggml_tensor * gather_ids = ids;
+        if (scenario == ExpertScaleDispatchScenario::DifferentGatherIds) {
+            gather_ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, route_count, token_count);
+            REQUIRE(gather_ids != nullptr);
+        }
+        ggml_tensor * matmul = ggml_mul_mat_id(ctx, weight, input, ids);
+        ggml_tensor * scale_rows = ggml_reshape_3d(ctx, scales, 1, expert_count, 1);
+        ggml_tensor * repeated = ggml_repeat_4d(ctx, scale_rows, 1, expert_count, token_count, 1);
+        ggml_tensor * selected = ggml_get_rows(ctx, repeated, gather_ids);
+        ggml_tensor * output = ggml_mul(ctx, matmul, selected);
+        REQUIRE(output != nullptr);
+        if (scenario == ExpertScaleDispatchScenario::ExposedMatmul) {
+            ggml_set_output(matmul);
+        }
+
+        ggml_cgraph * graph = ggml_new_graph(ctx);
+        REQUIRE(graph != nullptr);
+        ggml_build_forward_expand(graph, output);
+        ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+        REQUIRE(imported.valid());
+        ggml::hrx::DispatchScheduler scheduler;
+        REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+        const auto & dispatches = scheduler.plan().dispatches;
+        auto find_kernel = [&](const char * name) -> const ggml::hrx::Dispatch * {
+            for (const ggml::hrx::Dispatch & dispatch : dispatches) {
+                if (kernel_name_for_id(dispatch.kernel.kernel_id) == name) {
+                    return &dispatch;
+                }
+            }
+            return nullptr;
+        };
+
+        const char * scaled_kernel = token_count <= 5 ?
+            "loom_libs:ggml_mul_mat_id_skinny_input_f32_scaled_publish_f32" :
+            "loom_libs:ggml_mul_mat_id_tiled_input_f32_scaled_publish_f32";
+        if (scenario == ExpertScaleDispatchScenario::Fused) {
+            const ggml::hrx::Dispatch * dispatch = find_kernel(scaled_kernel);
+            REQUIRE(dispatch != nullptr);
+            REQUIRE(dispatch->bindings.size() == 7);
+            const ggml::hrx::Value * scale_value = imported.graph.values().find_tensor(scale_rows);
+            const ggml::hrx::Value * ids_value = imported.graph.values().find_tensor(ids);
+            const ggml::hrx::Value * output_value = imported.graph.values().find_tensor(output);
+            REQUIRE(scale_value != nullptr);
+            REQUIRE(ids_value != nullptr);
+            REQUIRE(output_value != nullptr);
+            REQUIRE(dispatch->bindings[4].value == scale_value->id);
+            REQUIRE(dispatch->bindings[4].length == ggml_nbytes(scale_rows));
+            REQUIRE(dispatch->bindings[5].value == ids_value->id);
+            REQUIRE(dispatch->bindings[5].length == ggml_nbytes(ids));
+            REQUIRE(dispatch->bindings[6].value == output_value->id);
+            require_compile_parameter(*dispatch, "ggml.mul_mat_id.scale.route_stride", std::to_string(route_stride));
+            REQUIRE(find_kernel("loom_libs:ggml_repeat_scalar_3d_f32") == nullptr);
+            REQUIRE(find_kernel("loom_libs:ggml_get_rows_scalar_3d_f32") == nullptr);
+            REQUIRE(find_kernel("loom_libs:ggml_binary_bc_f32") == nullptr);
+        } else {
+            const char * ordinary_kernel = token_count <= 5 ?
+                "loom_libs:ggml_mul_mat_id_skinny_input_f32_publish_f32" :
+                "loom_libs:ggml_mul_mat_id_tiled_input_f32_publish_f32";
+            REQUIRE(find_kernel(scaled_kernel) == nullptr);
+            REQUIRE(find_kernel(ordinary_kernel) != nullptr);
+            REQUIRE(find_kernel("loom_libs:ggml_repeat_scalar_3d_f32") != nullptr);
+            REQUIRE(find_kernel("loom_libs:ggml_get_rows_scalar_3d_f32") != nullptr);
+            REQUIRE(find_kernel("loom_libs:ggml_binary_bc_f32") != nullptr);
+        }
+        ggml_free(ctx);
+    };
+
+    check_case(GGML_TYPE_Q5_1, 2, 8, ExpertScaleDispatchScenario::Fused);
+    check_case(GGML_TYPE_Q8_0, 8, 128, ExpertScaleDispatchScenario::Fused);
+    check_case(GGML_TYPE_Q5_1, 2, 128, ExpertScaleDispatchScenario::ExposedMatmul);
+    check_case(GGML_TYPE_Q5_1, 2, 128, ExpertScaleDispatchScenario::DifferentGatherIds);
+}
+
 static void run_qwen_token_embedding_dispatch_checks() {
     ggml_init_params params = {};
     params.mem_size         = 4 * 1024 * 1024;
@@ -14977,6 +15080,7 @@ static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
     suite.host_case("standalone_repeat_get_rows_scalar_3d_dispatch", [] {
         run_standalone_repeat_get_rows_scalar_3d_dispatch_checks();
     });
+    suite.host_case("mul_mat_id_expert_scale_dispatch", [] { run_mul_mat_id_expert_scale_dispatch_checks(); });
     suite.host_case("get_rows_rmsnorm_binary_dispatch", [] { run_get_rows_rmsnorm_binary_dispatch_checks(); });
     suite.host_case("get_rows_scale_dispatch", [] { run_get_rows_scale_dispatch_checks(); });
     suite.host_case("gather_add_dispatch", [] { run_gather_add_dispatch_checks(); });
