@@ -28,7 +28,7 @@ kernel.def target(@ggml_small_m_wave32) @ggml_mul_mat_vector_small_m_f32() {
   %xv = buffer.view %input[%zero_offset] : buffer -> view<[%k]xf32>
   %yv = buffer.view %output[%zero_offset] : buffer -> view<[%m]xf32>
   %thread_k = index.mul %thread, %eight : index
-  %zeros = vector.constant 0.0 : vector<8xf32>
+  %zeros = vector.splatf 0.0 : vector<8xf32>
   %acc = scf.for %base = [%zero to %k step %step](%sum = %zeros : vector<8xf32>) -> (vector<8xf32>) {
     %col = index.add %base, %thread_k : index
     %w = vector.load %wv[%row, %col] : view<[%m]x[%k]xf32> -> vector<8xf32>

@@ -58,7 +58,7 @@ template.def<@llm.ssm_conv.prefill_window> device @llm_ssm_conv_prefill_window(%
   %packet_bytes = index.mul %packet_width, %c16 : index
   %filter_last = index.sub %filter_limit, %packet_bytes : index
   %flat_last = index.sub %flat_limit, %packet_width : index
-  %c0_f32 = vector.constant 0.0 : vector<[%packet_width]xf32>
+  %c0_f32 = vector.splatf 0.0 : vector<[%packet_width]xf32>
 
   %d_inner0 = config.get @llm.ssm_conv.prefill.d_inner : index
   %n_t0 = config.get @llm.ssm_conv.prefill.n_t : index

@@ -135,9 +135,9 @@ func.def public inline @ggml_matmul_tiled_input_f32_codebook_dequant_accumulate_
   %activation_stage_bytes = index.constant 2560 : offset
   %wave_result_stage_bytes = index.constant 512 : offset
   %result_stage_bytes = index.constant 1024 : offset
-  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
-  %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
-  %zero_accumulator = vector.constant 0.0 : vector<8xf16>
+  %c0_f32x4 = vector.splatf 0.0 : vector<4xf32>
+  %c0_f16x4 = vector.splatf 0.0 : vector<4xf16>
+  %zero_accumulator = vector.splatf 0.0 : vector<8xf16>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
   %k = index.constant 16 : index

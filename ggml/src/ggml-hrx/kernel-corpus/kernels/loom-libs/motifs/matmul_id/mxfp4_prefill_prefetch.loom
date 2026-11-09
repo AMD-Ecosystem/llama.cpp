@@ -14,12 +14,12 @@ func.def inline @ggml_mxfp4_prefetch_panel(%weight_noalias: buffer, %input_noali
   %zh = scalar.constant 0 : i32
   %zi32 = scalar.constant 0 : i32
   %z4 = scalar.constant 0 : i32
-  %z8 = vector.constant 0 : vector<2xi32>
+  %z8 = vector.splati 0 : vector<2xi32>
   %route_view = buffer.view %route_stage[%zero_offset] : buffer -> view<32xi32>
-  %zero_wp = vector.constant 0 : vector<2x4xi32>
-  %zero_we = vector.constant 0 : vector<2x4xi32>
-  %zero_ap = vector.constant 0 : vector<2x2x2xi32>
-  %zero_ad = vector.constant 0 : vector<2x2xi32>
+  %zero_wp = vector.splati 0 : vector<2x4xi32>
+  %zero_we = vector.splati 0 : vector<2x4xi32>
+  %zero_ap = vector.splati 0 : vector<2x2x2xi32>
+  %zero_ad = vector.splati 0 : vector<2x2xi32>
   %out_wp, %out_we, %out_ap, %out_ad = scf.for %ks = [%c0 to %c2 step %c1](%bank_wp = %zero_wp : vector<2x4xi32>, %bank_we = %zero_we : vector<2x4xi32>, %bank_ap = %zero_ap : vector<2x2x2xi32>, %bank_ad = %zero_ad : vector<2x2xi32>) -> (vector<2x4xi32>, vector<2x4xi32>, vector<2x2x2xi32>, vector<2x2xi32>) unroll {
     %block = index.add %block_base, %ks : index
     %bo = index.scale %block, %c17_bytes : index, offset -> offset
@@ -127,8 +127,8 @@ func.def inline @ggml_mxfp4_decode_packet(%p: vector<4xi8>, %scale_byte: i8) -> 
   %half = scalar.constant 0.5 : f32
   %scale = scalar.mulf %scale_raw, %half : f32
   %pw = vector.bitcast %p : vector<4xi8> to vector<1xi32>
-  %s4 = vector.constant 4 : vector<1xi32>
-  %mask = vector.constant 15 : vector<4xi8>
+  %s4 = vector.splati 4 : vector<1xi32>
+  %mask = vector.splati 15 : vector<4xi8>
   %hiw = vector.shrui %pw, %s4 : vector<1xi32>
   %hib = vector.bitcast %hiw : vector<1xi32> to vector<4xi8>
   %li = vector.andi %p, %mask : vector<4xi8>
@@ -242,13 +242,13 @@ template.def<@ggml.matmul_id.mxfp4_prefetch.core> device @ggml_mul_mat_id_mxfp4_
   %input_scales = buffer.alloca<workgroup> align(16) %scale_a_bytes : buffer
   %ws = buffer.view %weight_scales[%c0_offset] : buffer -> view<2x64xf32>
   %xs = buffer.view %input_scales[%c0_offset] : buffer -> view<2x32xf32>
-  %zero_i8x4 = vector.constant 0 : vector<4xi8>
-  %zero_i8x8 = vector.constant 0 : vector<8xi8>
+  %zero_i8x4 = vector.splati 0 : vector<4xi8>
+  %zero_i8x8 = vector.splati 0 : vector<8xi8>
   %zero_float = scalar.constant 0.0 : f32
-  %zero_integer = vector.constant 0 : vector<8xi32>
+  %zero_integer = vector.splati 0 : vector<8xi32>
   %i8_schema = encoding.define #encoding.operand<element_format=i8, payload_elements=16, payload_registers=4> : encoding<schema>
-  %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
-  %zero_accumulator = vector.constant 0.0 : vector<8xf32>
+  %c0_f16x4 = vector.splatf 0.0 : vector<4xf16>
+  %zero_accumulator = vector.splatf 0.0 : vector<8xf32>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
   %k = index.constant 16 : index
@@ -341,7 +341,7 @@ template.def<@ggml.matmul_id.mxfp4_prefetch.core> device @ggml_mul_mat_id_mxfp4_
     %bank_c3 = index.constant 3 : index
     %initial_wp00, %initial_wp01, %initial_wp02, %initial_wp03, %initial_wp10, %initial_wp11, %initial_wp12, %initial_wp13, %initial_we00, %initial_we01, %initial_we02, %initial_we03, %initial_we10, %initial_we11, %initial_we12, %initial_we13, %initial_ap000, %initial_ap001, %initial_ap010, %initial_ap011, %initial_ap100, %initial_ap101, %initial_ap110, %initial_ap111, %initial_ad00, %initial_ad01, %initial_ad10, %initial_ad11 = func.call @ggml_mxfp4_prefetch_panel(%weight_noalias, %input_noalias, %route_stage, %expert_byte_base, %weight_row_bytes, %channel_tile_base, %bounded_output_size, %quant_groups, %load_row, %load_k, %weight_klo, %bounded_route_count, %bounded_input_route_count, %c0) : (buffer, buffer, buffer, offset, offset, index, index, index, index, index, index, index, index, index) -> (i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)
     %result00, %result01, %result10, %result11, %unused_wp00, %unused_wp01, %unused_wp02, %unused_wp03, %unused_wp10, %unused_wp11, %unused_wp12, %unused_wp13, %unused_we00, %unused_we01, %unused_we02, %unused_we03, %unused_we10, %unused_we11, %unused_we12, %unused_we13, %unused_ap000, %unused_ap001, %unused_ap010, %unused_ap011, %unused_ap100, %unused_ap101, %unused_ap110, %unused_ap111, %unused_ad00, %unused_ad01, %unused_ad10, %unused_ad11 = scf.for %block_base = [%c0 to %quant_groups step %c2](%acc00 = %init : vector<8xf32>, %acc01 = %init : vector<8xf32>, %acc10 = %init : vector<8xf32>, %acc11 = %init : vector<8xf32>, %carry_wp00 = %initial_wp00 : i32, %carry_wp01 = %initial_wp01 : i32, %carry_wp02 = %initial_wp02 : i32, %carry_wp03 = %initial_wp03 : i32, %carry_wp10 = %initial_wp10 : i32, %carry_wp11 = %initial_wp11 : i32, %carry_wp12 = %initial_wp12 : i32, %carry_wp13 = %initial_wp13 : i32, %carry_we00 = %initial_we00 : i32, %carry_we01 = %initial_we01 : i32, %carry_we02 = %initial_we02 : i32, %carry_we03 = %initial_we03 : i32, %carry_we10 = %initial_we10 : i32, %carry_we11 = %initial_we11 : i32, %carry_we12 = %initial_we12 : i32, %carry_we13 = %initial_we13 : i32, %carry_ap000 = %initial_ap000 : i32, %carry_ap001 = %initial_ap001 : i32, %carry_ap010 = %initial_ap010 : i32, %carry_ap011 = %initial_ap011 : i32, %carry_ap100 = %initial_ap100 : i32, %carry_ap101 = %initial_ap101 : i32, %carry_ap110 = %initial_ap110 : i32, %carry_ap111 = %initial_ap111 : i32, %carry_ad00 = %initial_ad00 : i32, %carry_ad01 = %initial_ad01 : i32, %carry_ad10 = %initial_ad10 : i32, %carry_ad11 = %initial_ad11 : i32) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32) {
-      %zero_bank_wp = vector.constant 0 : vector<2x4xi32>
+      %zero_bank_wp = vector.splati 0 : vector<2x4xi32>
       %built_wp00 = vector.insert %carry_wp00 into %zero_bank_wp[%c0, %c0] : i32, vector<2x4xi32>
       %built_wp01 = vector.insert %carry_wp01 into %built_wp00[%c0, %c1] : i32, vector<2x4xi32>
       %built_wp02 = vector.insert %carry_wp02 into %built_wp01[%c0, %c2] : i32, vector<2x4xi32>
@@ -350,7 +350,7 @@ template.def<@ggml.matmul_id.mxfp4_prefetch.core> device @ggml_mul_mat_id_mxfp4_
       %built_wp11 = vector.insert %carry_wp11 into %built_wp10[%c1, %c1] : i32, vector<2x4xi32>
       %built_wp12 = vector.insert %carry_wp12 into %built_wp11[%c1, %c2] : i32, vector<2x4xi32>
       %bank_wp = vector.insert %carry_wp13 into %built_wp12[%c1, %bank_c3] : i32, vector<2x4xi32>
-      %zero_bank_we = vector.constant 0 : vector<2x4xi32>
+      %zero_bank_we = vector.splati 0 : vector<2x4xi32>
       %built_we00 = vector.insert %carry_we00 into %zero_bank_we[%c0, %c0] : i32, vector<2x4xi32>
       %built_we01 = vector.insert %carry_we01 into %built_we00[%c0, %c1] : i32, vector<2x4xi32>
       %built_we02 = vector.insert %carry_we02 into %built_we01[%c0, %c2] : i32, vector<2x4xi32>
@@ -359,7 +359,7 @@ template.def<@ggml.matmul_id.mxfp4_prefetch.core> device @ggml_mul_mat_id_mxfp4_
       %built_we11 = vector.insert %carry_we11 into %built_we10[%c1, %c1] : i32, vector<2x4xi32>
       %built_we12 = vector.insert %carry_we12 into %built_we11[%c1, %c2] : i32, vector<2x4xi32>
       %bank_we = vector.insert %carry_we13 into %built_we12[%c1, %bank_c3] : i32, vector<2x4xi32>
-      %zero_bank_ap = vector.constant 0 : vector<2x2x2xi32>
+      %zero_bank_ap = vector.splati 0 : vector<2x2x2xi32>
       %built_ap000 = vector.insert %carry_ap000 into %zero_bank_ap[%c0, %c0, %c0] : i32, vector<2x2x2xi32>
       %built_ap001 = vector.insert %carry_ap001 into %built_ap000[%c0, %c0, %c1] : i32, vector<2x2x2xi32>
       %built_ap010 = vector.insert %carry_ap010 into %built_ap001[%c0, %c1, %c0] : i32, vector<2x2x2xi32>
@@ -368,7 +368,7 @@ template.def<@ggml.matmul_id.mxfp4_prefetch.core> device @ggml_mul_mat_id_mxfp4_
       %built_ap101 = vector.insert %carry_ap101 into %built_ap100[%c1, %c0, %c1] : i32, vector<2x2x2xi32>
       %built_ap110 = vector.insert %carry_ap110 into %built_ap101[%c1, %c1, %c0] : i32, vector<2x2x2xi32>
       %bank_ap = vector.insert %carry_ap111 into %built_ap110[%c1, %c1, %c1] : i32, vector<2x2x2xi32>
-      %zero_bank_ad = vector.constant 0 : vector<2x2xi32>
+      %zero_bank_ad = vector.splati 0 : vector<2x2xi32>
       %built_ad00 = vector.insert %carry_ad00 into %zero_bank_ad[%c0, %c0] : i32, vector<2x2xi32>
       %built_ad01 = vector.insert %carry_ad01 into %built_ad00[%c0, %c1] : i32, vector<2x2xi32>
       %built_ad10 = vector.insert %carry_ad10 into %built_ad01[%c1, %c0] : i32, vector<2x2xi32>

@@ -20,7 +20,7 @@ func.def inline @ggml_rope_f32_frequency_packet(%values: vector<2xf32>, %first_p
     %powers = vector.mulf %logarithms, %exponents : vector<2xf32>
     %frequencies = vector.exp2f<afn> %powers : vector<2xf32>
     %negative_frequencies = vector.negf %frequencies : vector<2xf32>
-    %zeros = vector.constant 0.0 : vector<2xf32>
+    %zeros = vector.splatf 0.0 : vector<2xf32>
     %negative = vector.cmpf olt, %values, %zeros : vector<2xf32> -> vector<2xi1>
     %signed_frequencies = vector.select %negative, %negative_frequencies, %frequencies : vector<2xf32>
     scf.yield %signed_frequencies : vector<2xf32>

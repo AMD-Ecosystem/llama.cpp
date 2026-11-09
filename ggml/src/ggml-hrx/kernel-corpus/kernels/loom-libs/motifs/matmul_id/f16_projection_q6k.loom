@@ -35,10 +35,10 @@ func.def inline @ggml_q6k_split_wmma_load_half_codes(%weight: buffer, %weight_ro
 func.def inline @ggml_q6k_split_wmma_vector4_from_scale_codes(%q6_group: index, %scale_i8: i8, %d_f16: f16, %ql_word: vector<1xi32>, %qh_word: vector<1xi32>) -> (vector<4xf16>) {
   %c2 = index.constant 2 : index
   %c4 = index.constant 4 : index
-  %c4_i32v = vector.constant 4 : vector<1xi32>
-  %nibble_mask = vector.constant 252645135 : vector<1xi32>
-  %high_mask = vector.constant 50529027 : vector<1xi32>
-  %c32_f32v = vector.constant 32.0 : vector<4xf32>
+  %c4_i32v = vector.splati 4 : vector<1xi32>
+  %nibble_mask = vector.splati 252645135 : vector<1xi32>
+  %high_mask = vector.splati 50529027 : vector<1xi32>
+  %c32_f32v = vector.splatf 32.0 : vector<4xf32>
   %bounded_group = index.assume %q6_group [range(%q6_group, 0, 7)] : index
   %group_in_half = index.rem %bounded_group, %c4 : index
   %nibble = index.div %group_in_half, %c2 : index
@@ -108,7 +108,7 @@ template.def<@ggml.mul_mat_id_q6k_f16_wmma.project_vector16> device @ggml_mul_ma
   %c64 = index.constant 64 : index
   %c0_offset = index.constant 0 : offset
   %c0_i32 = scalar.constant 0 : i32
-  %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
+  %c0_f16x4 = vector.splatf 0.0 : vector<4xf16>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
   %k = index.constant 16 : index

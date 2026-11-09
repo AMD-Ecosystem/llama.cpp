@@ -578,16 +578,14 @@ static void backend_synchronize(ggml_backend_t backend) {
     }
 }
 
-static const char * status_first_error(const ggml::hrx::Status & status) {
-    return status.errors().empty() ? "" : status.errors().front().c_str();
-}
-
 static enum ggml_status graph_compute(ggml_backend_t backend, ggml_cgraph * graph) {
     auto *                                context  = static_cast<ggml_backend_hrx_context *>(backend->context);
     const ggml::hrx::GraphExecutor        executor = ggml::hrx::GraphExecutor(*context);
     const ggml::hrx::GraphExecutionResult result   = executor.execute(*graph);
     if (!result.success()) {
-        GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(result.status));
+        for (const std::string & error : result.status.errors()) {
+            GGML_LOG_ERROR("%s: %s\n", __func__, error.c_str());
+        }
     }
     return result.code;
 }

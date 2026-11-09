@@ -141,7 +141,7 @@ template.def<@ggml.top_k.radix> device @ggml_top_k_radix(%partitioned: i1, %row_
     scf.yield %next_prefix, %next_desired : i32, i32
   }
   %above_total = scalar.subi %count_i32, %ties_needed : i32
-  %counts_zero = vector.constant 0 : vector<2xi32>
+  %counts_zero = vector.splati 0 : vector<2xi32>
   %final_counts = scf.for %base = [%c0 to %width step %c256](%counts = %counts_zero : vector<2xi32>) -> (vector<2xi32>) {
     %position = index.add %base, %thread : index
     %valid = index.cmp ult, %position, %width : index

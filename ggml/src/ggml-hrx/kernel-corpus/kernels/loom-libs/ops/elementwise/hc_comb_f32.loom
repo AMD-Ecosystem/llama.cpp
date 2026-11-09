@@ -21,7 +21,7 @@ func.def inline @hc_normalize_cols(%r0: vector<4xf32>, %r1: vector<4xf32>, %r2: 
   %s1 = vector.addf %s0, %r1 : vector<4xf32>
   %s2 = vector.addf %s1, %r2 : vector<4xf32>
   %sum = vector.addf %s2, %r3 : vector<4xf32>
-  %ones = vector.constant 1.0 : vector<4xf32>
+  %ones = vector.splatf 1.0 : vector<4xf32>
   %inverse = vector.divf %ones, %sum : vector<4xf32>
   %n0 = vector.mulf %r0, %inverse : vector<4xf32>
   %n1 = vector.mulf %r1, %inverse : vector<4xf32>

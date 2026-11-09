@@ -13,10 +13,10 @@ func.def inline @ggml_q6k_f16_vector4(%weight: buffer, %weight_row_byte_base: of
   %qh_byte_add = index.constant 128 : offset
   %scale_byte_add = index.constant 192 : offset
   %d_byte_add = index.constant 208 : offset
-  %c4_i32v = vector.constant 4 : vector<1xi32>
-  %nibble_mask = vector.constant 252645135 : vector<1xi32>
-  %high_mask = vector.constant 50529027 : vector<1xi32>
-  %c32_f32v = vector.constant 32.0 : vector<4xf32>
+  %c4_i32v = vector.splati 4 : vector<1xi32>
+  %nibble_mask = vector.splati 252645135 : vector<1xi32>
+  %high_mask = vector.splati 50529027 : vector<1xi32>
+  %c32_f32v = vector.splatf 32.0 : vector<4xf32>
   %bounded_group = index.assume %q6_group [range(%q6_group, 0, 7)] : index
   %bounded_packet = index.assume %packet [range(%packet, 0, 7)] : index
   %block_byte_add = index.scale %q6_block, %block_bytes : index, offset -> offset
@@ -71,7 +71,7 @@ func.def inline @ggml_q6k_f16_vector4(%weight: buffer, %weight_row_byte_base: of
 
 // Decode adjacent K32 groups using their shared high bits and scales.
 func.def public inline @ggml_q6k_f16_pair(%half_packet: i1, %weight: buffer, %weight_row_byte_base: offset, %q6_block: index, %q6_group: index, %packet: index) -> (vector<16xf16>, vector<16xf16>) {
-  %padding = vector.constant 0 : vector<2xi32>
+  %padding = vector.splati 0 : vector<2xi32>
   %c0 = index.constant 0 : index
   %c2 = index.constant 2 : index
   %c4 = index.constant 4 : index
@@ -81,10 +81,10 @@ func.def public inline @ggml_q6k_f16_pair(%half_packet: i1, %weight: buffer, %we
   %qh_byte_add = index.constant 128 : offset
   %scale_byte_add = index.constant 192 : offset
   %d_byte_add = index.constant 208 : offset
-  %c4_i32v = vector.constant 4 : vector<4xi32>
-  %nibble_mask = vector.constant 252645135 : vector<4xi32>
-  %high_mask = vector.constant 50529027 : vector<4xi32>
-  %c32_f32v = vector.constant 32.0 : vector<16xf32>
+  %c4_i32v = vector.splati 4 : vector<4xi32>
+  %nibble_mask = vector.splati 252645135 : vector<4xi32>
+  %high_mask = vector.splati 50529027 : vector<4xi32>
+  %c32_f32v = vector.splatf 32.0 : vector<16xf32>
   %bounded_group = index.assume %q6_group [range(%q6_group, 0, 6), multiple_of(%q6_group, 2)] : index
   %bounded_packet = index.assume %packet [range(%packet, 0, 6), multiple_of(%packet, 2)] : index
   %block_byte_add = index.scale %q6_block, %block_bytes : index, offset -> offset

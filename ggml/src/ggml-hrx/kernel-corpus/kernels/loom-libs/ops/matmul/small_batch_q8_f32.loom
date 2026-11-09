@@ -38,7 +38,7 @@ kernel.def target(@ggml_q8_small_batch_wave32) @ggml_mul_mat_small_batch_q8_f32(
   %two_bytes = index.constant 2 : offset
   %block_bytes = index.constant 34 : offset
   %zero = scalar.constant 0.0 : f32
-  %initial = vector.constant 0.0 : vector<8x4xf32>
+  %initial = vector.splatf 0.0 : vector<8x4xf32>
   %blocks = index.div %k, %c32 : index
   %row_bytes = index.scale %blocks, %block_bytes : index, offset -> offset
   %flat_row = index.madd %batch, %rows, %row : index

@@ -27,7 +27,7 @@ func.def inline @ggml_f16_prefill_load_pair(%input: buffer, %token_count: index,
   %input_k1 = index.add %input_k0, %c8 : index
   %view = buffer.view %input[%c0_offset] : buffer -> view<[%token_count]x[%input_size]xf16>
   %valid = index.cmp ult, %token, %token_count : index
-  %zero = vector.constant 0.0 : vector<8xf16>
+  %zero = vector.splatf 0.0 : vector<8xf16>
   %lo, %hi = scf.if %valid -> (vector<8xf16>, vector<8xf16>) {
     %bounded_token, %bounded_count = index.assume %token, %token_count [lt(%token, %token_count)] : index, index
     %v0 = vector.load %view[%bounded_token, %input_k0] : view<[%token_count]x[%input_size]xf16> -> vector<8xf16>
@@ -82,7 +82,7 @@ func.def inline @ggml_f16_prefill_stage_mma(%paired: i1, %packed_input: i1, %bou
   %k = index.constant 16 : index
   %true = scalar.constant true : i1
   %not_wide_tile = scalar.xori %wide_tile, %true : i1
-  %zero_f16 = vector.constant 0.0 : vector<16xf16>
+  %zero_f16 = vector.splatf 0.0 : vector<16xf16>
   %weight_stride = scf.select %wide_tile, %c72, %c136 : index
   %ordinary_weight_rows = scf.select %wide_tile, %c128, %c64 : index
   %staged_weight_rows = scf.select %larger_tile, %c256, %ordinary_weight_rows : index
@@ -185,7 +185,7 @@ func.def inline @ggml_f16_prefill_stage_mma(%paired: i1, %packed_input: i1, %bou
     %a0, %a1 = func.call @ggml_f16_prefill_load_pair(%input_noalias, %bounded_token_count, %bounded_input_size, %token_tile_origin, %next_input_k) : (buffer, index, index, index, index) -> (vector<8xf16>, vector<8xf16>)
     scf.yield %a0, %a1 : vector<8xf16>, vector<8xf16>
   } else {
-    %zero = vector.constant 0.0 : vector<8xf16>
+    %zero = vector.splatf 0.0 : vector<8xf16>
     scf.yield %zero, %zero : vector<8xf16>, vector<8xf16>
   }
   %serial_rhs = scalar.ori %larger_tile, %packed_input : i1
@@ -294,7 +294,7 @@ func.def inline @ggml_f16_prefill_publish_weights(%weight_format: index, %paired
   %staged_weight_rows = scf.select %larger_tile, %c256, %ordinary_weight_rows : index
   %packed_weight_rows = scf.select %wg1024, %c128, %c64 : index
   %weight_rows = scf.select %packed_input, %packed_weight_rows, %staged_weight_rows : index
-  %zero_weight_values = vector.constant 0.0 : vector<16xf16>
+  %zero_weight_values = vector.splatf 0.0 : vector<16xf16>
   %quant_block_count = index.div %bounded_input_size, %c256 : index
   %epochs_per_block = scf.select %wide_tile, %c4, %c2 : index
   %weight_stage_view = buffer.view %weight_stage[%stage_offset] : buffer -> view<[%weight_rows]x[%weight_stride]xf16>
@@ -383,7 +383,7 @@ func.def inline @ggml_prefill_conv4_strip(%deferred_state: i1, %width: index, %c
   %two = index.constant 2 : index
   %three = index.constant 3 : index
   %six = index.constant 6 : index
-  %zero_values = vector.constant 0.0 : vector<2xf32>
+  %zero_values = vector.splatf 0.0 : vector<2xf32>
   %cache_rows = scf.select %deferred_state, %six, %three : index
   %eight = index.constant 8 : index
   %sixteen = index.constant 16 : index
@@ -574,8 +574,8 @@ func.def inline @ggml_mul_mat_quantized_f16_prefill_wave32_body(%weight_format: 
   %element_bytes = index.constant 2 : offset
   %weight_stage_bytes = index.scale %weight_elements, %element_bytes : index, offset -> offset
   %activation_stage_bytes = index.constant 20480 : offset
-  %zero_weight_values = vector.constant 0.0 : vector<16xf16>
-  %zero_accumulator = vector.constant 0.0 : vector<8xf32>
+  %zero_weight_values = vector.splatf 0.0 : vector<16xf16>
+  %zero_accumulator = vector.splatf 0.0 : vector<8xf32>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
   %quant_block_count = index.div %bounded_input_size, %c256 : index
@@ -603,7 +603,7 @@ func.def inline @ggml_mul_mat_quantized_f16_prefill_wave32_body(%weight_format: 
   %init11 = vector.fragment<init> %zero_accumulator shape [%m, %n] : vector<8xf32>
   %init12 = vector.fragment<init> %zero_accumulator shape [%m, %n] : vector<8xf32>
   %init13 = vector.fragment<init> %zero_accumulator shape [%m, %n] : vector<8xf32>
-  %zero_prefetch = vector.constant 0.0 : vector<8xf16>
+  %zero_prefetch = vector.splatf 0.0 : vector<8xf16>
   %initial_a0, %initial_a1 = scf.if %prefetch_a -> (vector<8xf16>, vector<8xf16>) {
     %a0, %a1 = func.call @ggml_f16_prefill_load_pair(%input_noalias, %bounded_token_count, %bounded_input_size, %token_tile_origin, %c0) : (buffer, index, index, index, index) -> (vector<8xf16>, vector<8xf16>)
     scf.yield %a0, %a1 : vector<8xf16>, vector<8xf16>

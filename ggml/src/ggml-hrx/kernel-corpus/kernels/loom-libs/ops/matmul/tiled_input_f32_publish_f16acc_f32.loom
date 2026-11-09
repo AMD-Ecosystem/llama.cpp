@@ -61,7 +61,7 @@ template.def<@ggml.matmul.tiled_input_f32_dequant_accumulate_f16.publish_vector4
   %f32_element_bytes = index.constant 4 : offset
   %scratch_d_byte_add = index.constant 1024 : offset
   %scratch_bytes = index.constant 1152 : offset
-  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %c0_f32x4 = vector.splatf 0.0 : vector<4xf32>
   %uses_bias_only = index.cmp eq, %epilogue, %c1 : index
   %uses_residual_only = index.cmp eq, %epilogue, %c2 : index
   %uses_bias_residual = index.cmp eq, %epilogue, %c3 : index
@@ -179,7 +179,7 @@ kernel.def @ggml_sum_planes_f32(%element_count: index) {
     %source = buffer.view %input[%zero] : buffer -> view<[%source_count]xf32>
     %dest = buffer.view %output[%zero] : buffer -> view<[%count]xf32>
     %mask = vector.mask.range [%base to %count step %c1] : index -> vector<4xi1>
-    %zeros = vector.constant 0.0 : vector<4xf32>
+    %zeros = vector.splatf 0.0 : vector<4xf32>
     %sum = scf.for %plane = [%c0 to %planes step %c1](%acc = %zeros : vector<4xf32>) -> (vector<4xf32>) {
       %offset = index.madd %plane, %count, %base : index
       %values = vector.load.mask %source[%offset], %mask, %zeros : view<[%source_count]xf32>, vector<4xi1>, vector<4xf32>

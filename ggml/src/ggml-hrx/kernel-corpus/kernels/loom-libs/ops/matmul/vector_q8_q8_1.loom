@@ -42,9 +42,9 @@ kernel.def target(@ggml_q8_dot_wave32) @ggml_mul_mat_vector_q8_q8_1(%token_count
   %block_bytes = index.constant 34 : offset
   %activation_group_bytes = index.constant 144 : offset
   %activation_header_bytes = index.constant 16 : offset
-  %integer_zero = vector.constant 0 : vector<4xi32>
+  %integer_zero = vector.splati 0 : vector<4xi32>
   %scalar_zero = scalar.constant 0 : i32
-  %initial = vector.constant 0.0 : vector<8xf32>
+  %initial = vector.splatf 0.0 : vector<8xf32>
   %weight_blocks = index.div %k, %c32 : index
   %row_bytes = index.scale %weight_blocks, %block_bytes : index, offset -> offset
   %flat_row = index.madd %batch, %rows, %row : index

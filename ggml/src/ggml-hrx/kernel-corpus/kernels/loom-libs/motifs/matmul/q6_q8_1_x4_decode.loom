@@ -8,11 +8,11 @@ func.decl @ggml_q8_1_x4_word(%q8_input: buffer, %row_byte_base: offset, %q8_bloc
 func.decl @ggml_q6k_f16_vector4(%weight: buffer, %weight_row_byte_base: offset, %q6_block: index, %q6_group: index, %packet: index) -> (vector<4xf16>)
 
 func.def inline @ggml_q6k_sign_extend_dot4(%code: vector<1xi32>) -> (vector<4xi8>) {
-  %c1_i32v = vector.constant 1 : vector<1xi32>
-  %c2_i32v = vector.constant 2 : vector<1xi32>
-  %low5_mask = vector.constant 522133279 : vector<1xi32>
-  %bit5_mask = vector.constant 538976288 : vector<1xi32>
-  %sign_mask = vector.constant -522133280 : vector<1xi32>
+  %c1_i32v = vector.splati 1 : vector<1xi32>
+  %c2_i32v = vector.splati 2 : vector<1xi32>
+  %low5_mask = vector.splati 522133279 : vector<1xi32>
+  %bit5_mask = vector.splati 538976288 : vector<1xi32>
+  %sign_mask = vector.splati -522133280 : vector<1xi32>
   %low5 = vector.andi %code, %low5_mask : vector<1xi32>
   %bit5 = vector.andi %code, %bit5_mask : vector<1xi32>
   %bit6 = vector.shli %bit5, %c1_i32v : vector<1xi32>
@@ -36,10 +36,10 @@ func.def inline @ggml_q6k_q8_1_x4_block_lane(%weight: buffer, %weight_row_byte_b
   %qh_byte_add = index.constant 128 : offset
   %scale_byte_add = index.constant 192 : offset
   %d_byte_add = index.constant 208 : offset
-  %c4_i32v = vector.constant 4 : vector<1xi32>
-  %c0_i32v = vector.constant 0 : vector<1xi32>
-  %nibble_mask = vector.constant 252645135 : vector<1xi32>
-  %high_mask = vector.constant 808464432 : vector<1xi32>
+  %c4_i32v = vector.splati 4 : vector<1xi32>
+  %c0_i32v = vector.splati 0 : vector<1xi32>
+  %nibble_mask = vector.splati 252645135 : vector<1xi32>
+  %high_mask = vector.splati 808464432 : vector<1xi32>
   %c0_f32 = scalar.constant 0.0 : f32
   %bounded_lane = index.assume %lane [range(%lane, 0, 31)] : index
   %block_byte_add = index.scale %q6_block, %block_bytes : index, offset -> offset

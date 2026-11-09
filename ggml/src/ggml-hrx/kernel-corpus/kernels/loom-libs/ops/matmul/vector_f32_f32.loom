@@ -34,7 +34,7 @@ template.def<@ggml.matmul.vector_activation.publish_vector4> device @ggml_matmul
   %c0 = index.constant 0 : index
   %c1 = index.constant 1 : index
   %c0_offset = index.constant 0 : offset
-  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %c0_f32x4 = vector.splatf 0.0 : vector<4xf32>
   %output_noalias = buffer.assume.noalias %output : buffer
   %partition = kernel.workgroup.id<z> : index
   %element_bytes = index.constant 4 : offset

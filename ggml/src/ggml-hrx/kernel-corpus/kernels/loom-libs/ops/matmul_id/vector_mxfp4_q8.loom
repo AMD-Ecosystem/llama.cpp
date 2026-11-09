@@ -27,7 +27,7 @@ template.def<@ggml.mxfp4_vector.update> device @ggml_mxfp4_vector_update(%klo: i
   %group_bytes = index.constant 144 : offset
   %header_bytes = index.constant 16 : offset
   %half_float = scalar.constant 0.5 : f32
-  %dot_zero = vector.constant 0 : vector<2xi32>
+  %dot_zero = vector.splati 0 : vector<2xi32>
   %zero_i32 = scalar.constant 0 : i32
   %agroup = index.div %klo, %c128 : index
   %aoffset = index.scale %agroup, %group_bytes : index, offset -> offset
@@ -67,8 +67,8 @@ template.def<@ggml.mxfp4_vector.lane_sum> device @ggml_mxfp4_vector_lane_sum(%pa
   %c32 = index.constant 32 : index
   %one_byte = index.constant 1 : offset
   %block_bytes = index.constant 17 : offset
-  %mask4 = vector.constant 15 : vector<8xi8>
-  %shift4 = vector.constant 4 : vector<2xi32>
+  %mask4 = vector.splati 15 : vector<8xi8>
+  %shift4 = vector.splati 4 : vector<2xi32>
   %zero_float = scalar.constant 0.0 : f32
   %zero_i32 = scalar.constant 0 : i32
   %scale_shift = scalar.constant 23 : i32
