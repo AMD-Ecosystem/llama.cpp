@@ -1,0 +1,60 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// Gathers one F32 expert scale for each route and token. The IDs may be a
+// narrow view of wider argsort rows; only the selected IDs are in bounds.
+amdgpu.target<gfx11-generic> @ggml_get_rows_scalar_3d_gfx11_wave64 {subgroup_size = 64}
+
+kernel.def target(@ggml_get_rows_scalar_3d_gfx11_wave64) @ggml_get_rows_scalar_3d_f32(%token_count: index, %route_stride: index) {
+  %c1 = index.constant 1 : index
+  %c64 = index.constant 64 : index
+  kernel.launch.config workgroups(%token_count, %c1, %c1) workgroup_size(%c64, %c1, %c1) : index
+} launch(%token_count: index, %route_stride: index, %route_ids: buffer, %scales: buffer, %output: buffer) where [range(%token_count, 1, 2048), range(%route_stride, 8, 512)] {
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
+  %bounded_route_stride = index.assume %route_stride [range(%route_stride, 8, 512)] : index
+  %token0 = kernel.workgroup.id<x> : index
+  %route0 = kernel.workitem.id<x> : index
+  %c1 = index.constant 1 : index
+  %c8 = index.constant 8 : index
+  %c128 = index.constant 128 : index
+  %c0_i32 = scalar.constant 0 : i32
+  %c128_i32 = scalar.constant 128 : i32
+  %c0_f32 = scalar.constant 0.0 : f32
+  %c0_offset = index.constant 0 : offset
+  %valid_token = index.cmp ult, %token0, %bounded_token_count : index
+  %valid_route = index.cmp ult, %route0, %c8 : index
+  %publish = scalar.andi %valid_token, %valid_route : i1
+  %last_token = index.sub %bounded_token_count, %c1 : index
+  %last_row_base = index.mul %last_token, %bounded_route_stride : index
+  %route_id_span = index.add %last_row_base, %c8 : index
+  %ids_view = buffer.view %route_ids[%c0_offset] : buffer -> view<[%route_id_span]xi32>
+  %last_scale_row = index.mul %last_token, %c128 : index
+  %scale_span = index.add %last_scale_row, %c128 : index
+  %scales_view = buffer.view %scales[%c0_offset] : buffer -> view<[%scale_span]xf32>
+  %output_view = buffer.view %output[%c0_offset] : buffer -> view<[%bounded_token_count]x8xf32>
+  scf.if %publish {
+    %token = index.assume %token0 [lt(%token0, %bounded_token_count)] : index
+    %route = index.assume %route0 [range(%route0, 0, 7)] : index
+    %row_base = index.mul %token, %bounded_route_stride : index
+    %id_index = index.add %row_base, %route : index
+    %bounded_id_index = index.assume %id_index [lt(%id_index, %route_id_span)] : index
+    %expert_i32 = view.load %ids_view[%bounded_id_index] : view<[%route_id_span]xi32> -> i32
+    %expert_nonnegative = scalar.cmpi sge, %expert_i32, %c0_i32 : i32
+    %expert_below_limit = scalar.cmpi slt, %expert_i32, %c128_i32 : i32
+    %valid_expert = scalar.andi %expert_nonnegative, %expert_below_limit : i1
+    // Invalid IDs have no CPU GET_ROWS value; publish zero without reading a scale row.
+    %scale = scf.if %valid_expert -> (f32) {
+      %expert0 = index.cast %expert_i32 : i32 to index
+      %expert = index.assume %expert0 [range(%expert0, 0, 127)] : index
+      %scale_row = index.mul %token, %c128 : index
+      %scale_index = index.add %scale_row, %expert : index
+      %bounded_scale_index = index.assume %scale_index [lt(%scale_index, %scale_span)] : index
+      %selected_scale = view.load %scales_view[%bounded_scale_index] : view<[%scale_span]xf32> -> f32
+      scf.yield %selected_scale : f32
+    } else {
+      scf.yield %c0_f32 : f32
+    }
+    view.store %scale, %output_view[%token, %route] : f32, view<[%bounded_token_count]x8xf32>
+  }
+  kernel.return
+}

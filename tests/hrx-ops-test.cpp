@@ -231,8 +231,15 @@ static std::vector<float> router_projection_reference(const std::vector<float> &
     return output;
 }
 
-static std::vector<float> router_top8_weights_reference(const std::vector<float> & logits, int64_t token_count) {
-    std::vector<float> output(kQwenRouterRouteCount * token_count);
+struct RouterTop8Reference {
+    std::vector<int32_t> ids;
+    std::vector<float>   weights;
+};
+
+static RouterTop8Reference router_top8_reference(const std::vector<float> & logits, int64_t token_count) {
+    RouterTop8Reference reference;
+    reference.ids.resize(kQwenRouterRouteCount * token_count);
+    reference.weights.resize(kQwenRouterRouteCount * token_count);
     for (int64_t token = 0; token < token_count; ++token) {
         bool    used[kQwenRouterExpertCount]    = {};
         int64_t selected[kQwenRouterRouteCount] = {};
@@ -249,6 +256,7 @@ static std::vector<float> router_top8_weights_reference(const std::vector<float>
             }
             selected[route]   = best_expert;
             used[best_expert] = true;
+            reference.ids[token * kQwenRouterRouteCount + route] = static_cast<int32_t>(best_expert);
         }
 
         float max_selected = -std::numeric_limits<float>::infinity();
@@ -258,14 +266,14 @@ static std::vector<float> router_top8_weights_reference(const std::vector<float>
         float sum = 0.0f;
         for (int64_t route = 0; route < kQwenRouterRouteCount; ++route) {
             const float value = std::exp(logits[token * kQwenRouterExpertCount + selected[route]] - max_selected);
-            output[token * kQwenRouterRouteCount + route] = value;
+            reference.weights[token * kQwenRouterRouteCount + route] = value;
             sum += value;
         }
         for (int64_t route = 0; route < kQwenRouterRouteCount; ++route) {
-            output[token * kQwenRouterRouteCount + route] /= sum;
+            reference.weights[token * kQwenRouterRouteCount + route] /= sum;
         }
     }
-    return output;
+    return reference;
 }
 
 static std::vector<float> flash_attention_reference(const std::vector<float> &       query,
@@ -4498,6 +4506,230 @@ static void run_q4_prefill_source_eligibility_case() {
     ggml_backend_free(backend);
 }
 
+static void run_mul_mat_id_expert_scale_case(ggml_type weight_type, int64_t token_count, int64_t route_stride,
+                                             bool include_invalid_ids = false, bool expose_matmul = false) {
+    constexpr int64_t input_size = 256;
+    constexpr int64_t output_size = 64;
+    constexpr int64_t expert_count = 128;
+    constexpr int64_t route_count = 8;
+    ggml_backend_t backend = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+
+    ggml_init_params params = {};
+    params.mem_size = 4 * 1024 * 1024;
+    params.no_alloc = true;
+    ggml_context * ctx = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
+    ggml_tensor * weight = ggml_new_tensor_3d(ctx, weight_type, input_size, output_size, expert_count);
+    ggml_tensor * input = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, input_size, 1, token_count);
+    ggml_tensor * ids_storage = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, route_stride, token_count);
+    ggml_tensor * ids = route_stride == route_count ? ids_storage :
+        ggml_view_2d(ctx, ids_storage, route_count, token_count, ids_storage->nb[1], 0);
+    ggml_tensor * scales = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, expert_count);
+    ggml_tensor * matmul = ggml_mul_mat_id(ctx, weight, input, ids);
+    ggml_tensor * scale_rows = ggml_reshape_3d(ctx, scales, 1, expert_count, 1);
+    ggml_tensor * repeated = ggml_repeat_4d(ctx, scale_rows, 1, expert_count, token_count, 1);
+    ggml_tensor * selected = ggml_get_rows(ctx, repeated, ids);
+    ggml_tensor * output = ggml_mul(ctx, matmul, selected);
+    if (expose_matmul) {
+        ggml_set_output(matmul);
+    }
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, output);
+
+    const std::vector<std::string> kernels = scheduled_kernel_sequence(graph);
+    const char * expected_kernel = expose_matmul ?
+        "loom_libs:ggml_mul_mat_id_skinny_input_f32_publish_f32" :
+        token_count <= 5 ? "loom_libs:ggml_mul_mat_id_skinny_input_f32_scaled_publish_f32" :
+                           "loom_libs:ggml_mul_mat_id_tiled_input_f32_scaled_publish_f32";
+    require_kernel_subsequence(kernels, { expected_kernel });
+    if (!expose_matmul) {
+        REQUIRE(std::find(kernels.begin(), kernels.end(), "loom_libs:ggml_get_rows_scalar_3d_f32") == kernels.end());
+        REQUIRE(std::find(kernels.begin(), kernels.end(), "loom_libs:ggml_binary_bc_f32") == kernels.end());
+    } else {
+        require_kernel_subsequence(kernels, {
+            "loom_libs:ggml_repeat_scalar_3d_f32", "loom_libs:ggml_get_rows_scalar_3d_f32"
+        });
+    }
+
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    REQUIRE(buffer != nullptr);
+    const std::vector<uint8_t> weight_data =
+        make_quantized_rows(weight_type, input_size, output_size * expert_count, 57);
+    const std::vector<float> input_data = make_pattern_f32(input_size * token_count, 11, 0.01f);
+    std::vector<int32_t> ids_data(route_stride * token_count, -1);
+    std::vector<float> scales_data(expert_count);
+    for (int64_t expert = 0; expert < expert_count; ++expert) {
+        scales_data[expert] = 0.25f + 0.01f * expert;
+    }
+    for (int64_t token = 0; token < token_count; ++token) {
+        for (int64_t route = 0; route < route_count; ++route) {
+            int32_t expert = static_cast<int32_t>((token * 17 + route * 19) % expert_count);
+            const bool use_invalid_ids = include_invalid_ids && token == 0;
+            if (use_invalid_ids) {
+                if (route == 1) expert = -1;
+                if (route == 2) expert = expert_count;
+                if (route == 3) expert = std::numeric_limits<int32_t>::min();
+                if (route == 4) expert = std::numeric_limits<int32_t>::max();
+            }
+            ids_data[token * route_stride + route] = expert;
+        }
+    }
+    ggml_backend_tensor_set(weight, weight_data.data(), 0, weight_data.size());
+    ggml_backend_tensor_set(input, input_data.data(), 0, input_data.size() * sizeof(float));
+    ggml_backend_tensor_set(ids_storage, ids_data.data(), 0, ids_data.size() * sizeof(int32_t));
+    ggml_backend_tensor_set(scales, scales_data.data(), 0, scales_data.size() * sizeof(float));
+
+    REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(backend);
+
+    const ggml_type_traits * traits = ggml_get_type_traits(weight_type);
+    REQUIRE(traits != nullptr);
+    REQUIRE(traits->to_float != nullptr);
+    const size_t row_size = ggml_row_size(weight_type, input_size);
+    std::vector<float> dequantized(input_size);
+    std::vector<float> expected(output_size * route_count * token_count, 0.0f);
+    for (int64_t token = 0; token < token_count; ++token) {
+        for (int64_t route = 0; route < route_count; ++route) {
+            const int32_t expert = ids_data[token * route_stride + route];
+            const bool valid_expert = expert >= 0 && expert < expert_count;
+            if (!valid_expert) {
+                continue;
+            }
+            for (int64_t channel = 0; channel < output_size; ++channel) {
+                const size_t row = static_cast<size_t>(expert * output_size + channel);
+                traits->to_float(weight_data.data() + row * row_size, dequantized.data(), input_size);
+                float dot = 0.0f;
+                for (int64_t index = 0; index < input_size; ++index) {
+                    dot += dequantized[index] * input_data[token * input_size + index];
+                }
+                expected[(token * route_count + route) * output_size + channel] = dot * scales_data[expert];
+            }
+        }
+    }
+    require_close(get_f32_tensor(backend, output), expected, 3.0e-2f, 3.0e-2f);
+
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+    ggml_backend_free(backend);
+}
+
+enum class ScalarGetRowsScenario {
+    Expanded,
+    ExpandedInvalidIds,
+    Repeated,
+    RepeatedInvalidIds,
+    RepeatedExposed,
+};
+
+static void run_scalar_3d_get_rows_case(int64_t token_count, int64_t route_stride,
+                                        ScalarGetRowsScenario scenario) {
+    const bool include_invalid_ids = scenario == ScalarGetRowsScenario::ExpandedInvalidIds ||
+                                     scenario == ScalarGetRowsScenario::RepeatedInvalidIds;
+    const bool repeat_scales = scenario == ScalarGetRowsScenario::Repeated ||
+                               scenario == ScalarGetRowsScenario::RepeatedInvalidIds ||
+                               scenario == ScalarGetRowsScenario::RepeatedExposed;
+    const bool expose_repeat = scenario == ScalarGetRowsScenario::RepeatedExposed;
+    ggml_backend_t backend = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+
+    ggml_init_params params = {};
+    params.mem_size = 1024 * 1024;
+    params.no_alloc = true;
+    ggml_context * ctx = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
+    ggml_tensor * scales = repeat_scales ? ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 128) :
+        ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, 128, token_count);
+    ggml_tensor * ids_storage = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, route_stride, token_count);
+    REQUIRE(scales != nullptr);
+    REQUIRE(ids_storage != nullptr);
+    ggml_tensor * ids = route_stride == 8 ? ids_storage :
+        ggml_view_2d(ctx, ids_storage, 8, token_count, ids_storage->nb[1], 0);
+    REQUIRE(ids != nullptr);
+    ggml_tensor * repeated = nullptr;
+    ggml_tensor * gather_scales = scales;
+    if (repeat_scales) {
+        ggml_tensor * reshaped = ggml_reshape_3d(ctx, scales, 1, 128, 1);
+        repeated = ggml_repeat_4d(ctx, reshaped, 1, 128, token_count, 1);
+        gather_scales = repeated;
+        if (expose_repeat) {
+            ggml_set_output(repeated);
+        }
+    }
+    ggml_tensor * output = ggml_get_rows(ctx, gather_scales, ids);
+    REQUIRE(output != nullptr);
+    ggml_set_output(output);
+
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    if (repeat_scales) {
+        ggml_build_forward_expand(graph, ids);
+    }
+    ggml_build_forward_expand(graph, output);
+    if (repeat_scales) {
+        require_kernel_subsequence(scheduled_kernel_sequence(graph),
+                                   { "loom_libs:ggml_repeat_scalar_3d_f32", "loom_libs:ggml_get_rows_scalar_3d_f32" });
+    } else {
+        require_kernel_subsequence(scheduled_kernel_sequence(graph), { "loom_libs:ggml_get_rows_scalar_3d_f32" });
+    }
+
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    REQUIRE(buffer != nullptr);
+    std::vector<float> scales_data(repeat_scales ? 128 : 128 * token_count);
+    std::vector<int32_t> ids_data(route_stride * token_count, -1);
+    std::vector<float> expected(8 * token_count);
+    for (int64_t token = 0; token < token_count; ++token) {
+        for (int64_t expert = 0; expert < 128; ++expert) {
+            const bool initialize_scales = !repeat_scales || token == 0;
+            if (initialize_scales) {
+                const size_t scale_index = static_cast<size_t>(repeat_scales ? expert : token * 128 + expert);
+                scales_data[scale_index] = static_cast<float>(repeat_scales ? 0 : token * 1024) + expert * 0.25f;
+            }
+        }
+        for (int64_t route = 0; route < 8; ++route) {
+            int32_t expert = route == 0 ? 0 : route == 7 ? 127 :
+                             static_cast<int32_t>((token * 17 + route * 19) % 128);
+            if (include_invalid_ids) {
+                switch (route) {
+                    case 1: expert = -1; break;
+                    case 2: expert = 128; break;
+                    case 3: expert = std::numeric_limits<int32_t>::min(); break;
+                    case 4: expert = std::numeric_limits<int32_t>::max(); break;
+                }
+            }
+            ids_data[token * route_stride + route] = expert;
+            const bool valid_expert = expert >= 0 && expert < 128;
+            const size_t scale_index = static_cast<size_t>((repeat_scales ? 0 : token * 128) + expert);
+            expected[token * 8 + route] = valid_expert ? scales_data[scale_index] : 0.0f;
+        }
+    }
+
+    ggml_backend_tensor_set(scales, scales_data.data(), 0, scales_data.size() * sizeof(float));
+    ggml_backend_tensor_set(ids_storage, ids_data.data(), 0, ids_data.size() * sizeof(int32_t));
+    REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(backend);
+
+    std::vector<float> actual(expected.size());
+    ggml_backend_tensor_get(output, actual.data(), 0, actual.size() * sizeof(float));
+    REQUIRE(actual == expected);
+    if (expose_repeat) {
+        std::vector<float> repeated_data(128 * token_count);
+        ggml_backend_tensor_get(repeated, repeated_data.data(), 0, repeated_data.size() * sizeof(float));
+        for (int64_t token = 0; token < token_count; ++token) {
+            for (int64_t expert = 0; expert < 128; ++expert) {
+                REQUIRE(repeated_data[token * 128 + expert] == scales_data[expert]);
+            }
+        }
+    }
+
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+    ggml_backend_free(backend);
+}
+
 static void run_router_top8_case(int64_t token_count) {
     ggml_backend_t backend = ggml_backend_hrx_init(0);
     REQUIRE(backend != nullptr);
@@ -4510,7 +4742,9 @@ static void run_router_top8_case(int64_t token_count) {
 
     ggml_tensor * logits = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kQwenRouterExpertCount, token_count);
     REQUIRE(logits != nullptr);
-    ggml_tensor * output = build_qwen_router_top8_graph(ctx, logits);
+    ggml_tensor * route_ids = nullptr;
+    ggml_tensor * output = build_qwen_router_top8_graph(ctx, logits, &route_ids);
+    ggml_set_output(route_ids);
 
     ggml_cgraph * graph = ggml_new_graph(ctx);
     REQUIRE(graph != nullptr);
@@ -4522,18 +4756,34 @@ static void run_router_top8_case(int64_t token_count) {
     REQUIRE(buffer != nullptr);
 
     const std::vector<float> logits_data = make_router_logits(token_count);
-    const std::vector<float> expected    = router_top8_weights_reference(logits_data, token_count);
+    const RouterTop8Reference expected = router_top8_reference(logits_data, token_count);
 
     ggml_backend_tensor_set(logits, logits_data.data(), 0, logits_data.size() * sizeof(float));
 
     REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
     ggml_backend_synchronize(backend);
 
-    std::vector<float> actual(expected.size());
+    std::vector<float> actual(expected.weights.size());
     ggml_backend_tensor_get(output, actual.data(), 0, actual.size() * sizeof(float));
     for (size_t i = 0; i < actual.size(); ++i) {
-        const float diff = std::fabs(actual[i] - expected[i]);
+        const float diff = std::fabs(actual[i] - expected.weights[i]);
         REQUIRE(diff <= 1.0e-5f);
+    }
+
+    const size_t row_stride = route_ids->nb[1] / sizeof(int32_t);
+    const size_t span = (static_cast<size_t>(token_count) - 1) * row_stride + kQwenRouterRouteCount;
+    std::vector<int32_t> actual_ids(span);
+    ggml_backend_tensor_get(route_ids, actual_ids.data(), 0, span * sizeof(int32_t));
+    for (int64_t token = 0; token < token_count; ++token) {
+        for (int64_t route = 0; route < kQwenRouterRouteCount; ++route) {
+            const size_t output_index = token * kQwenRouterRouteCount + route;
+            const size_t storage_index = token * row_stride + route;
+            if (actual_ids[storage_index] != expected.ids[output_index]) {
+                std::fprintf(stderr, "router IDs token=%" PRId64 " route=%" PRId64 " stride=%zu actual=%d expected=%d\n",
+                             token, route, row_stride, actual_ids[storage_index], expected.ids[output_index]);
+            }
+            REQUIRE(actual_ids[storage_index] == expected.ids[output_index]);
+        }
     }
 
     ggml_backend_buffer_free(buffer);
@@ -9064,7 +9314,46 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
                                                    GGML_GLU_OP_SWIGLU, 2048, true);
     });
     suite.device_case("mixed_symmetric_source_eligibility", [] { run_mixed_symmetric_source_eligibility_case(); });
-    suite.device_case("router_top8.tokens4", [] { run_router_top8_case(4); });
+    for (int64_t tokens : { 1, 2, 8 }) {
+        for (int64_t stride : { 8, 128 }) {
+            suite.device_case("scalar_3d_get_rows.tokens" + std::to_string(tokens) + ".stride" +
+                                  std::to_string(stride),
+                              [=] { run_scalar_3d_get_rows_case(tokens, stride, ScalarGetRowsScenario::Expanded); });
+        }
+    }
+    for (int64_t stride : { 8, 128 }) {
+        suite.device_case("scalar_3d_get_rows.invalid_ids.stride" + std::to_string(stride),
+                          [=] { run_scalar_3d_get_rows_case(2, stride, ScalarGetRowsScenario::ExpandedInvalidIds); });
+    }
+    for (int64_t tokens : { 1, 2, 8, 128 }) {
+        for (int64_t stride : { 8, 128 }) {
+            suite.device_case("standalone_repeat_get_rows_scalar_3d.tokens" + std::to_string(tokens) + ".stride" +
+                                  std::to_string(stride),
+                              [=] { run_scalar_3d_get_rows_case(tokens, stride, ScalarGetRowsScenario::Repeated); });
+        }
+    }
+    suite.device_case("standalone_repeat_get_rows_scalar_3d.invalid_ids", [] {
+        run_scalar_3d_get_rows_case(2, 128, ScalarGetRowsScenario::RepeatedInvalidIds);
+    });
+    suite.device_case("standalone_repeat_get_rows_scalar_3d.exposed_repeat", [] {
+        run_scalar_3d_get_rows_case(2, 128, ScalarGetRowsScenario::RepeatedExposed);
+    });
+    for (ggml_type weight_type : { GGML_TYPE_Q5_1, GGML_TYPE_Q8_0, GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
+        for (int64_t token_count : { 2, 8 }) {
+            suite.device_case("mul_mat_id_expert_scale." + std::string(ggml_type_name(weight_type)) + ".tokens" +
+                                  std::to_string(token_count),
+                              [=] { run_mul_mat_id_expert_scale_case(weight_type, token_count, 8); });
+        }
+    }
+    suite.device_case("mul_mat_id_expert_scale.invalid_ids.compact", [] {
+        run_mul_mat_id_expert_scale_case(GGML_TYPE_Q5_1, 2, 8, true);
+    });
+    suite.device_case("mul_mat_id_expert_scale.exposed_matmul", [] {
+        run_mul_mat_id_expert_scale_case(GGML_TYPE_Q5_1, 2, 8, false, true);
+    });
+    for (int64_t tokens : { 1, 2, 4, 8 }) {
+        suite.device_case("router_top8.tokens" + std::to_string(tokens), [=] { run_router_top8_case(tokens); });
+    }
     for (int64_t experts : { 128, 256, 512 }) {
         for (int64_t tokens : { 1, 2, 512 }) {
             suite.device_case("router_common_matmul.experts" + std::to_string(experts) + ".tokens" + std::to_string(tokens),
