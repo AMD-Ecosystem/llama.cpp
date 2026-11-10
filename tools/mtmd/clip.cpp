@@ -162,6 +162,8 @@ struct clip_ctx {
 
     int max_nodes = 8192;
     ggml_backend_sched_ptr sched;
+    ggml_backend_sched_eval_callback cb_eval;
+    void * cb_eval_user_data;
     clip_flash_attn_type flash_attn_type = CLIP_FLASH_ATTN_TYPE_AUTO;
     bool is_allocated = false;
 
@@ -174,7 +176,8 @@ struct clip_ctx {
 
     bool support_batch = false;
 
-    clip_ctx(clip_context_params & ctx_params) {
+    clip_ctx(clip_context_params & ctx_params) :
+            cb_eval(ctx_params.cb_eval), cb_eval_user_data(ctx_params.cb_eval_user_data) {
         flash_attn_type = ctx_params.flash_attn_type;
         no_alloc = ctx_params.no_alloc;
         backend_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
@@ -259,6 +262,31 @@ clip_graph::clip_graph(clip_ctx * ctx, const clip_image_f32 & img) :
         eps(hparams.eps),
         kq_scale(d_head > 0 ? 1.0f / sqrtf((float)d_head) : 0.0f),
         flash_attn_type(ctx->flash_attn_type) {
+    static const bool window_batch = [] {
+        const char * value = std::getenv("MTMD_QWEN25VL_WINDOW_BATCH");
+        return value == nullptr || std::atoi(value) != 0;
+    }();
+    if (window_batch && proj_type == PROJECTOR_TYPE_QWEN25VL && hparams.n_wa_pattern > 0 &&
+            flash_attn_type != CLIP_FLASH_ATTN_TYPE_DISABLED) {
+        const int window_size = hparams.attn_window_size > 0 ? hparams.attn_window_size : 112;
+        const int grid_window = window_size / patch_size / 2;
+        GGML_ASSERT(grid_window > 0);
+        // Each row of windows has at most two runs of equal-length windows.
+        const int64_t max_runs = 2 * ((int64_t(n_patches_y) / 2 + grid_window - 1) / grid_window);
+        const int64_t max_nodes = 8192 + int64_t(n_layer) * max_runs * 32;
+        if (max_nodes > std::numeric_limits<int>::max()) {
+            throw std::runtime_error("Qwen2.5-VL window graph is too large");
+        }
+        if (max_nodes > ctx->max_nodes) {
+            ctx->max_nodes = int(max_nodes);
+            ctx->sched.reset(ggml_backend_sched_new(ctx->backend_ptrs.data(), ctx->backend_buft.data(),
+                ctx->backend_ptrs.size(), ctx->max_nodes, false, true));
+            if (ctx->cb_eval != nullptr) {
+                ggml_backend_sched_set_eval_callback(ctx->sched.get(), ctx->cb_eval, ctx->cb_eval_user_data);
+            }
+            ctx->buf_compute_meta.resize(ctx->max_nodes * ggml_tensor_overhead() + ggml_graph_overhead_custom(ctx->max_nodes, false));
+        }
+    }
     struct ggml_init_params params = {
         /*.mem_size   =*/ ctx->buf_compute_meta.size(),
         /*.mem_buffer =*/ ctx->buf_compute_meta.data(),
@@ -813,8 +841,12 @@ ggml_tensor * clip_graph::build_attn(
     if (flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) {
         ggml_tensor * v = ggml_permute(ctx0, v_cur, 0, 2, 1, 3);
 
-        k = ggml_cast(ctx0, k, GGML_TYPE_F16);
-        v = ggml_cast(ctx0, v, GGML_TYPE_F16);
+        if (k->type != GGML_TYPE_F16) {
+            k = ggml_cast(ctx0, k, GGML_TYPE_F16);
+        }
+        if (v->type != GGML_TYPE_F16) {
+            v = ggml_cast(ctx0, v, GGML_TYPE_F16);
+        }
         // mask must be f16 here, use build_inp_attn_mask()
         GGML_ASSERT(!kq_mask || kq_mask->type == GGML_TYPE_F16);
 
@@ -5839,7 +5871,8 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                     const int grid_window = attn_window_size / patch_size / merge_ratio;
                     int dst = 0;
                     // [num_vision_tokens, num_vision_tokens] attention mask tensor
-                    std::vector<float> mask(pow(ipw * iph, 2), std::numeric_limits<float>::lowest());
+                    const bool has_mask = ggml_graph_get_tensor(gf, get_attn_mask_name(0).c_str()) != nullptr;
+                    std::vector<float> mask(has_mask ? size_t(ipw * iph) * (ipw * iph) : 0, std::numeric_limits<float>::lowest());
                     int mask_row = 0;
 
                     for (int y = 0; y < ph; y += grid_window) {
@@ -5859,7 +5892,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                                 }
                             }
 
-                            for (int r=0; r < win_h * win_w * merge_ratio * merge_ratio; r++) {
+                            for (int r=0; has_mask && r < win_h * win_w * merge_ratio * merge_ratio; r++) {
                                 int row_offset = mask_row * (ipw * iph);
                                 std::fill(
                                     mask.begin() + row_offset + (dst_0 * merge_ratio * merge_ratio),
@@ -5872,7 +5905,9 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
 
                     set_input_i32("window_idx",     idx);
                     set_input_i32("inv_window_idx", inv_idx);
-                    set_input_attn_mask(mask);
+                    if (has_mask) {
+                        set_input_attn_mask(mask);
+                    }
                 } else {
                     for (int i = 0; i < ph * pw; i++) {
                         idx[i] = i;
