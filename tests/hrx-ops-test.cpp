@@ -6293,7 +6293,8 @@ static std::vector<float> f32_matmul_reference(ggml_type type, const std::vector
     return result;
 }
 
-static void require_row64_reference(const std::vector<float> & actual, const std::vector<float> & expected) {
+static void require_row64_reference(const std::vector<float> & actual, const std::vector<float> & expected,
+                                    float absolute_tolerance = 0.0f) {
     double error = 0.0;
     double magnitude = 0.0;
     float maximum_error = 0.0f;
@@ -6307,7 +6308,10 @@ static void require_row64_reference(const std::vector<float> & actual, const std
     const double relative_l2 = std::sqrt(error / magnitude);
     std::fprintf(stderr, "row64 scalar reference: relative_l2=%g max_abs=%g elements=%zu\n",
                  relative_l2, maximum_error, actual.size());
-    REQUIRE(relative_l2 <= 0.01);
+    const bool relative_close = relative_l2 <= 0.01;
+    const bool absolute_close = maximum_error <= absolute_tolerance;
+    const bool within_tolerance = relative_close || absolute_close;
+    REQUIRE(within_tolerance);
     require_close(actual, expected, 0.02f, 0.02f);
 }
 
@@ -6440,7 +6444,11 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
         for (size_t i = 0; i < expected.size(); ++i) {
             expected[i] = (expected[i] / (1.0f + std::exp(-expected[i]))) * up[i];
         }
-        require_row64_reference(get_f32_tensor(hrx_backend, hrx_output), expected);
+        // Constant inputs cancel the signed projections, leaving SwiGLU outputs around 1e-6.
+        // Use a 1e-7 absolute-error floor for F16 arithmetic in this fixture; varied inputs
+        // and other row64 cases retain the 1% relative-L2 bound without an absolute allowance.
+        const float absolute_tolerance = varying_input ? 0.0f : 1.0e-7f;
+        require_row64_reference(get_f32_tensor(hrx_backend, hrx_output), expected, absolute_tolerance);
     }
     if (!row64_weight_policy) {
         // Row64 cases use the scalar reference above: CPU Q8 activation quantization and
