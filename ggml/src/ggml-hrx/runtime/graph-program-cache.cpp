@@ -268,9 +268,9 @@ static Status bind_current_value(const ValueMap &                               
 
 static bool canonicalize_q512_cross_shape_program(const Graph & graph, const CommandPlan & plan,
                                                    CommandProgram & commands) {
-    constexpr int64_t kFirstKv = 29184;
-    constexpr int64_t kCapacityKv = 29696;
-    constexpr size_t kKvBytes = static_cast<size_t>(kCapacityKv) * 512 * sizeof(uint16_t);
+    constexpr int64_t kFirstKv = 1024;
+    constexpr int64_t kLastKv = 32768;
+    constexpr int64_t kFamilyQuantum = 4096;
     constexpr uint64_t kTranspose = kernel_catalog_id("loom_libs", "ggml_copy_transpose_f16");
     constexpr uint64_t kAttention = kernel_catalog_id("loom_libs", "ggml_flash_attention_f32_f16_wmma");
     constexpr uint64_t kIndirectTranspose = kernel_catalog_id("loom_libs", "ggml_copy_transpose_f16_indirect");
@@ -298,7 +298,9 @@ static bool canonicalize_q512_cross_shape_program(const Graph & graph, const Com
         if (!has_parameters || query->second != 512) {
             return false;
         }
-        const bool supported_kv = kv->second == kFirstKv || kv->second == kCapacityKv;
+        const bool supported_range = kv->second >= kFirstKv && kv->second <= kLastKv;
+        const bool full_microbatch = kv->second % 512 == 0;
+        const bool supported_kv = supported_range && full_microbatch;
         const bool inconsistent_kv = active_kv != 0 && active_kv != kv->second;
         if (!supported_kv || inconsistent_kv) {
             return false;
@@ -311,6 +313,8 @@ static bool canonicalize_q512_cross_shape_program(const Graph & graph, const Com
     if (!expected_routes || active_kv == 0) {
         return false;
     }
+    const int64_t capacity_kv = ((active_kv + kFamilyQuantum - 1) / kFamilyQuantum) * kFamilyQuantum;
+    const size_t capacity_kv_bytes = static_cast<size_t>(capacity_kv) * 512 * sizeof(uint16_t);
     constexpr uint32_t kTransposeOrdinals[] = { 61, 131, 197, 265, 334, 401 };
     constexpr uint32_t kAttentionOrdinals[] = { 62, 132, 198, 266, 335, 402 };
     for (size_t layer = 0; layer < 6; ++layer) {
@@ -338,18 +342,6 @@ static bool canonicalize_q512_cross_shape_program(const Graph & graph, const Com
             return false;
         }
     }
-    for (const Command & command : commands.commands) {
-        const bool dynamic_route = command.kernel.kernel_id == kTranspose || command.kernel.kernel_id == kAttention;
-        if (dynamic_route) {
-            continue;
-        }
-        for (const auto & parameter : command.kernel.integer_parameters) {
-            if (parameter.second == active_kv) {
-                return false;
-            }
-        }
-    }
-
     int32_t max_value = -1;
     for (const Value & value : graph.values().values()) {
         max_value = std::max(max_value, value.id.value);
@@ -375,20 +367,20 @@ static bool canonicalize_q512_cross_shape_program(const Graph & graph, const Com
         args.access = ResourceAccess::Read;
         command.bindings.insert(command.bindings.begin(), std::move(args));
         for (CommandBinding & binding : command.bindings) {
-            if (binding.name != "args" && binding.length < kKvBytes) {
+            if (binding.name != "args" && binding.length < capacity_kv_bytes) {
                 const bool transpose_data = transpose && (binding.name == "input" || binding.name == "output");
                 const bool attention_data = attention && (binding.name == "key" || binding.name == "value" ||
                                                             binding.name == "mask");
                 const bool kv_data = transpose_data || attention_data;
                 if (kv_data) {
-                    binding.length = kKvBytes;
+                    binding.length = capacity_kv_bytes;
                 }
             }
         }
         if (transpose) {
             command.kernel.kernel_id = kIndirectTranspose;
             command.kernel.integer_parameters.erase("row_count");
-            command.kernel.integer_parameters["row_capacity"] = kCapacityKv;
+            command.kernel.integer_parameters["row_capacity"] = capacity_kv;
         } else {
             command.kernel.kernel_id = kIndirectAttention;
             command.kernel.integer_parameters.erase("key_value_token_count");

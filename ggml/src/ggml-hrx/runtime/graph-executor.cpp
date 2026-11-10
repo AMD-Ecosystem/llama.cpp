@@ -35,19 +35,36 @@ static CommandProgramBindings canonical_cross_shape_bindings(const CommandProgra
 
     Status status;
     std::vector<CommandProgramBinding> normalized = physical.bindings();
+    struct ReservedDeviceSpan {
+        hrx_buffer_t buffer;
+        uint64_t identity;
+        size_t offset;
+        size_t length;
+    };
+    std::vector<ReservedDeviceSpan> reserved_device_spans;
+    for (const CommandProgramBinding & binding : normalized) {
+        const auto found = required_bytes.find(binding.value.value);
+        const bool has_requirement = found != required_bytes.end();
+        const bool device_value = binding.buffer != nullptr && !binding.weight;
+        const bool needs_reservation = has_requirement && found->second > binding.length;
+        if (device_value && needs_reservation) {
+            reserved_device_spans.push_back({ binding.buffer, binding.identity, binding.offset, found->second });
+        }
+    }
     for (CommandProgramBinding & binding : normalized) {
         const auto found = required_bytes.find(binding.value.value);
         if (binding.weight) {
             continue;
         }
-        // The GGML KV cache exposes both a storage root and views. The views
-        // occur in command bindings; their roots share the physical address
-        // and must carry the same reserved span in the family cache key.
-        constexpr size_t kSmallKvBytes = 29184 * 512 * sizeof(uint16_t);
-        constexpr size_t kLargeKvBytes = 29696 * 512 * sizeof(uint16_t);
-        const bool small_kv_root = binding.buffer != nullptr && binding.length == kSmallKvBytes;
         const size_t requested = found == required_bytes.end() ? 0 : found->second;
-        const size_t required = small_kv_root ? std::max(requested, kLargeKvBytes) : requested;
+        size_t required = requested;
+        for (const ReservedDeviceSpan & span : reserved_device_spans) {
+            const bool same_storage = binding.buffer == span.buffer && binding.identity == span.identity;
+            const bool same_offset = binding.offset == span.offset;
+            if (same_storage && same_offset) {
+                required = std::max(required, span.length);
+            }
+        }
         if (required <= binding.length) {
             continue;
         }
