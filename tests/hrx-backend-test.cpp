@@ -11614,6 +11614,7 @@ static void run_zero_output_scheduler_elision_checks() {
         ggml_cgraph * graph = ggml_new_graph(ctx);
         REQUIRE(graph != nullptr);
         ggml_build_forward_expand(graph, rows);
+        graph->uid = 99991;
 
         ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
         REQUIRE(imported.valid());
@@ -11683,6 +11684,10 @@ static void run_zero_output_scheduler_elision_checks() {
                 REQUIRE(ignored.external_bindings[0].tensor == input);
             }
         }
+        auto retired = cache.take_oldest(0);
+        REQUIRE(retired.second == lookup.program);
+        REQUIRE(cache.stats().entries == 0);
+        REQUIRE(lookup.program->match_current_graph(*graph).valid());
     }
 
     {
@@ -12819,6 +12824,51 @@ static void run_inactive_set_rows_replay() {
     ggml_free(ctx);
 }
 
+static void run_graph_program_cache_lru_checks() {
+    ggml::hrx::GraphProgramCache cache;
+    const auto & corpus = ggml::hrx::get_qwen_kernel_corpus();
+    ggml_context * ctx = ggml_init({ 512 * 1024, nullptr, true });
+    REQUIRE(ctx != nullptr);
+    ggml_cgraph * graphs[3];
+    std::weak_ptr<ggml::hrx::GraphProgram> cold_program;
+    for (int i = 0; i < 3; ++i) {
+        ggml_tensor * a = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 8 * (i + 1));
+        ggml_tensor * b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 8 * (i + 1));
+        graphs[i] = ggml_new_graph(ctx);
+        ggml_build_forward_expand(graphs[i], ggml_add(ctx, a, b));
+        graphs[i]->uid = 3100 + i;
+        auto lookup = cache.get_or_build(*graphs[i], corpus, "gfx1151");
+        REQUIRE(lookup.valid());
+        if (i == 1) {
+            cold_program = lookup.program;
+        }
+    }
+    REQUIRE(cache.stats().entries == 3);
+    // A structural alias must refresh its owner's recency, not create an entry.
+    graphs[0]->uid = 3103;
+    auto hot = cache.get_or_build(*graphs[0], corpus, "gfx1151");
+    REQUIRE(hot.valid());
+    REQUIRE(hot.program->uid() == 3100);
+    REQUIRE(cache.stats().entries == 3);
+    auto victim = cache.take_oldest(2);
+    REQUIRE(victim.first == 3101);
+    REQUIRE(cache.stats().entries == 2);
+    REQUIRE(!cold_program.expired());
+    victim.second.reset();
+    REQUIRE(cold_program.expired());
+    REQUIRE(cache.take_oldest(2).second == nullptr);
+    REQUIRE(cache.get_or_build(*graphs[0], corpus, "gfx1151").program == hot.program);
+    // Clearing lookup ownership must not invalidate an executing user's owner.
+    cache.clear();
+    REQUIRE(cache.stats().entries == 0);
+    REQUIRE(hot.program->match_current_graph(*graphs[0]).valid());
+    hot.program.reset();
+    auto rebuilt = cache.get_or_build(*graphs[0], corpus, "gfx1151");
+    REQUIRE(rebuilt.valid());
+    REQUIRE(rebuilt.program->uid() == 3103);
+    ggml_free(ctx);
+}
+
 static void run_graph_program_cache_uid_mismatch_checks() {
     ggml::hrx::GraphProgramCache    cache;
     const ggml::hrx::KernelCorpus & corpus = ggml::hrx::get_qwen_kernel_corpus();
@@ -13167,7 +13217,7 @@ static void run_prepared_graph_instance_reuse() {
     auto second = make_graph(4302);
     auto lookup = state->graph_programs.get_or_build(*first->graph, corpus, state->device->architecture);
     REQUIRE(lookup.valid());
-    auto * program = lookup.program;
+    auto * program = lookup.program.get();
     REQUIRE(!program->can_use_prepared_fast_path(*first->graph));
     compute(*first, 1);
     REQUIRE(program->can_use_prepared_fast_path(*first->graph));
@@ -13177,7 +13227,7 @@ static void run_prepared_graph_instance_reuse() {
     REQUIRE(state->prepared_programs.stats().hits == 1);
 
     compute(*second, 3);
-    REQUIRE(state->graph_programs.get_or_build(*second->graph, corpus, state->device->architecture).program == program);
+    REQUIRE(state->graph_programs.get_or_build(*second->graph, corpus, state->device->architecture).program.get() == program);
     REQUIRE(program->uid() == 4301);
     REQUIRE(program->can_use_prepared_fast_path(*second->graph));
     REQUIRE(!program->can_use_prepared_fast_path(*first->graph));
@@ -15162,6 +15212,7 @@ static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
     suite.host_case("command_shape_hash", [] { run_command_shape_hash_checks(); });
     suite.host_case("graph_compute_mask", [] { run_graph_compute_mask_checks(); });
     suite.host_case("graph_program_cache_uid_mismatch", [] { run_graph_program_cache_uid_mismatch_checks(); });
+    suite.host_case("graph_program_cache_lru", [] { run_graph_program_cache_lru_checks(); });
     suite.host_case("graph_match_empty_expert_views", [] { run_graph_match_empty_expert_views_checks(); });
     suite.host_case("graph_match_hash_collision", [] { run_graph_match_hash_collision_checks(); });
     suite.host_case("graph_match_bijection", [] { run_graph_match_bijection_checks(); });

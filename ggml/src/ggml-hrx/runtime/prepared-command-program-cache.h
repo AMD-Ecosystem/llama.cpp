@@ -76,6 +76,9 @@ class PreparedCommandProgramCache {
                                                                    const CommandProgramBindings &         bindings);
 
     PreparedCommandProgramCacheStats stats() const;
+    size_t entries() const;
+
+    std::vector<std::shared_ptr<PreparedCommandProgramCacheEntry>> take_uid(uint64_t uid);
 
     void clear();
 
