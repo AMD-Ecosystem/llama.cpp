@@ -1002,7 +1002,7 @@ std::unique_ptr<GraphProgram> GraphProgramCache::build_program_from_imported(uin
         return nullptr;
     }
 
-    if (allow_cross_shape) {
+    if (allow_cross_shape && uid != 0) {
         canonicalize_q512_cross_shape_program(imported_graph, scheduler.plan(), commands);
     }
     if (!commands.valid()) {
