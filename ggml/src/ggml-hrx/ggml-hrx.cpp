@@ -591,13 +591,13 @@ static enum ggml_status graph_compute(ggml_backend_t backend, ggml_cgraph * grap
         return result.code;
     }
     constexpr size_t graph_cache_limit = 8;
-    for (;;) {
-        const size_t prepared_entries = context->prepared_programs.entries();
-        const size_t graph_limit = prepared_entries > graph_cache_limit ? 0 : graph_cache_limit;
-        auto retired = context->graph_programs.take_oldest(graph_limit);
-        if (retired.second == nullptr) {
-            break;
-        }
+    const auto cache_over_limit = [&] {
+        const bool graph_over_limit = context->graph_programs.stats().entries > graph_cache_limit;
+        const bool prepared_over_limit = context->prepared_programs.entries() > graph_cache_limit;
+        return graph_over_limit || prepared_over_limit;
+    };
+    while (cache_over_limit()) {
+        auto retired = context->graph_programs.take_oldest(0);
         auto prepared = context->prepared_programs.take_uid(retired.first);
         if (environment_flag_enabled("GGML_HRX_LOG_CACHE_EVICTIONS")) {
             GGML_LOG_INFO("ggml_hrx: evict graph uid=%" PRIu64 " prepared=%zu\n", retired.first,
