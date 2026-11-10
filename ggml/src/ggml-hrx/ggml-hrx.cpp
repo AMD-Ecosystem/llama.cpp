@@ -590,19 +590,18 @@ static enum ggml_status graph_compute(ggml_backend_t backend, ggml_cgraph * grap
         GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(result.status));
         return result.code;
     }
-    constexpr size_t graph_cache_limit = 8;
-    const auto cache_over_limit = [&] {
-        const bool graph_over_limit = context->graph_programs.stats().entries > graph_cache_limit;
-        const bool prepared_over_limit = context->prepared_programs.entries() > graph_cache_limit;
-        return graph_over_limit || prepared_over_limit;
-    };
-    while (cache_over_limit()) {
-        auto retired = context->graph_programs.take_oldest(0);
-        auto prepared = context->prepared_programs.take_uid(retired.first);
-        if (environment_flag_enabled("GGML_HRX_LOG_CACHE_EVICTIONS")) {
-            GGML_LOG_INFO("ggml_hrx: evict graph uid=%" PRIu64 " prepared=%zu\n", retired.first,
-                          prepared.size());
+    if (context->cache_trim_pending) {
+        constexpr size_t graph_cache_limit = 8;
+        while (context->graph_programs.stats().entries > graph_cache_limit ||
+               context->prepared_programs.entries() > graph_cache_limit) {
+            auto retired = context->graph_programs.take_oldest(0);
+            auto prepared = context->prepared_programs.take_uid(retired.first);
+            if (environment_flag_enabled("GGML_HRX_LOG_CACHE_EVICTIONS")) {
+                GGML_LOG_INFO("ggml_hrx: evict graph uid=%" PRIu64 " prepared=%zu\n", retired.first,
+                              prepared.size());
+            }
         }
+        context->cache_trim_pending = false;
     }
     return result.code;
 }

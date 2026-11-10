@@ -93,6 +93,10 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
     const bool reusable_owner = lookup.program->can_use_prepared_fast_path(graph);
     const bool mutable_sources_current = reusable_owner && lookup.program->mutable_sources_current();
     const bool trusted_weights = reusable_owner && mutable_sources_current;
+    // This path may add cache entries; keep the check pending if execution fails.
+    if (!trusted_weights && graph.uid != 0) {
+        context_.cache_trim_pending = true;
+    }
     GraphProgramMatch binding_match = std::move(lookup.match);
     if (reusable_owner) {
         binding_match = trusted_weights ? lookup.program->match_host_staging_graph(graph) :

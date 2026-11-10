@@ -719,22 +719,14 @@ GraphProgramLookup GraphProgramCache::get_or_build(const ggml_cgraph &  graph,
         {
             std::lock_guard<std::mutex> lock(mutex_);
             const auto found = programs_.find(graph.uid);
-            const bool found_uid = found != programs_.end();
-            const bool target_matches = found_uid && found->second->target() == target;
-            if (target_matches) {
+            if (found != programs_.end() && found->second->target() == target) {
                 cached_program = found->second;
             }
-            const bool missing_program = cached_program == nullptr;
-            const bool try_validated_alias = missing_program && !disable_fast_path && allow_structural_reuse;
-            if (try_validated_alias) {
+            if (cached_program == nullptr && !disable_fast_path && allow_structural_reuse) {
                 const auto matched = validated_matches_.find(graph.uid);
-                const bool found_alias = matched != validated_matches_.end();
-                const bool same_nodes = found_alias && matched->second.nodes == graph.nodes;
-                if (same_nodes) {
+                if (matched != validated_matches_.end() && matched->second.nodes == graph.nodes) {
                     const auto owner = programs_.find(matched->second.program_uid);
-                    const bool found_owner = owner != programs_.end();
-                    const bool owner_target_matches = found_owner && owner->second->target() == target;
-                    if (owner_target_matches) {
+                    if (owner != programs_.end() && owner->second->target() == target) {
                         cached_program = owner->second;
                     }
                 }
