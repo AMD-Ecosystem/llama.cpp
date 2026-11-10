@@ -638,15 +638,13 @@ GraphProgramMatch GraphProgram::match_current_graph(const ggml_cgraph & current_
 
 bool GraphProgramCache::can_execute(const ggml_cgraph &  graph,
                                     const KernelCorpus & corpus,
-                                    const std::string &  target,
-                                    bool                 row64_weight_policy) const {
-    return check_support(graph, corpus, target, row64_weight_policy).supported;
+                                    const std::string &  target) const {
+    return check_support(graph, corpus, target).supported;
 }
 
 GraphProgramSupportResult GraphProgramCache::check_support(const ggml_cgraph &  graph,
                                                            const KernelCorpus & corpus,
-                                                           const std::string &  target,
-                                                           bool                 row64_weight_policy) const {
+                                                           const std::string &  target) const {
     GraphProgramSupportResult result;
     if (graph.n_nodes == 0) {
         result.supported = true;
@@ -658,7 +656,7 @@ GraphProgramSupportResult GraphProgramCache::check_support(const ggml_cgraph &  
         return result;
     }
     std::unique_ptr<GraphProgram> program =
-        build_program_from_imported(graph.uid, std::move(imported.graph), corpus, target, row64_weight_policy, result.status);
+        build_program_from_imported(graph.uid, std::move(imported.graph), corpus, target, result.status);
     result.supported = program != nullptr && result.status.success();
     return result;
 }
@@ -666,11 +664,10 @@ GraphProgramSupportResult GraphProgramCache::check_support(const ggml_cgraph &  
 GraphProgramLookup GraphProgramCache::build_from_imported(const ggml_cgraph &  graph,
                                                           Graph &&             imported_graph,
                                                           const KernelCorpus & corpus,
-                                                          const std::string &  target,
-                                                          bool                 row64_weight_policy) {
+                                                          const std::string &  target) {
     GraphProgramLookup            result;
     std::unique_ptr<GraphProgram> program =
-        build_program_from_imported(graph.uid, std::move(imported_graph), corpus, target, row64_weight_policy, result.status);
+        build_program_from_imported(graph.uid, std::move(imported_graph), corpus, target, result.status);
     if (program == nullptr) {
         return result;
     }
@@ -709,8 +706,7 @@ GraphProgramLookup GraphProgramCache::build_from_imported(const ggml_cgraph &  g
 
 GraphProgramLookup GraphProgramCache::get_or_build(const ggml_cgraph &  graph,
                                                    const KernelCorpus & corpus,
-                                                   const std::string &  target,
-                                                   bool                 row64_weight_policy) {
+                                                   const std::string &  target) {
     GraphProgramLookup result;
     if (graph.uid != 0) {
         const bool     disable_fast_path  = environment_flag_enabled("GGML_HRX_DISABLE_GRAPH_UID_FAST_PATH");
@@ -799,7 +795,7 @@ GraphProgramLookup GraphProgramCache::get_or_build(const ggml_cgraph &  graph,
         result.status.append(imported.status);
         return result;
     }
-    return build_from_imported(graph, std::move(imported.graph), corpus, target, row64_weight_policy);
+    return build_from_imported(graph, std::move(imported.graph), corpus, target);
 }
 
 GraphProgramCacheStats GraphProgramCache::stats() const {
@@ -818,10 +814,9 @@ std::unique_ptr<GraphProgram> GraphProgramCache::build_program_from_imported(uin
                                                                              Graph &&             imported_graph,
                                                                              const KernelCorpus & corpus,
                                                                              const std::string &  target,
-                                                                             bool                 row64_weight_policy,
                                                                              Status &             errors) const {
     DispatchScheduler scheduler;
-    if (!scheduler.schedule_graph(imported_graph, { target, row64_weight_policy })) {
+    if (!scheduler.schedule_graph(imported_graph, { target, row64_weight_policy_ })) {
         errors.append(scheduler.plan().status);
         return nullptr;
     }

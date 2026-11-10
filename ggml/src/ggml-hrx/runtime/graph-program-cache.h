@@ -128,19 +128,20 @@ struct GraphProgramSupportResult {
     bool valid() const { return supported && status.success(); }
 };
 
-// All lookups in a cache use the same row64 preference, configured at backend initialization.
 class GraphProgramCache {
   public:
-    bool can_execute(const ggml_cgraph & graph, const KernelCorpus & corpus, const std::string & target,
-                     bool row64_weight_policy = false) const;
+    /// Configure before support checks or execution; keep fixed for this cache's lifetime.
+    void set_row64_weight_policy(bool enabled) { row64_weight_policy_ = enabled; }
+
+    bool row64_weight_policy() const { return row64_weight_policy_; }
+
+    bool can_execute(const ggml_cgraph & graph, const KernelCorpus & corpus, const std::string & target) const;
 
     GraphProgramSupportResult check_support(const ggml_cgraph &  graph,
                                             const KernelCorpus & corpus,
-                                            const std::string &  target,
-                                            bool                 row64_weight_policy = false) const;
+                                            const std::string &  target) const;
 
-    GraphProgramLookup get_or_build(const ggml_cgraph & graph, const KernelCorpus & corpus, const std::string & target,
-                                    bool row64_weight_policy = false);
+    GraphProgramLookup get_or_build(const ggml_cgraph & graph, const KernelCorpus & corpus, const std::string & target);
 
     GraphProgramCacheStats stats() const;
 
@@ -155,16 +156,16 @@ class GraphProgramCache {
     GraphProgramLookup build_from_imported(const ggml_cgraph &  graph,
                                            Graph &&             imported_graph,
                                            const KernelCorpus & corpus,
-                                           const std::string &  target,
-                                           bool                 row64_weight_policy);
+                                           const std::string &  target);
 
     std::unique_ptr<GraphProgram> build_program_from_imported(uint64_t             uid,
                                                               Graph &&             imported_graph,
                                                               const KernelCorpus & corpus,
                                                               const std::string &  target,
-                                                              bool                 row64_weight_policy,
                                                               Status &             errors) const;
 
+    // False preserves the existing matchers, including their row64 routes.
+    bool                                                       row64_weight_policy_ = false;
     mutable std::mutex                                          mutex_;
     std::unordered_map<uint64_t, std::unique_ptr<GraphProgram>> programs_;
     std::unordered_map<uint64_t, ValidatedGraphMatch>           validated_matches_;

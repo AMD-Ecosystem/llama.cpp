@@ -5941,7 +5941,7 @@ static void set_test_row64_policy(ggml_backend_t backend, bool prefer_row64) {
 
 static ggml::hrx::DispatchTarget test_dispatch_target(ggml_backend_t backend) {
     const auto * state = static_cast<const ggml_backend_hrx_context *>(backend->context);
-    return { state->device->architecture, state->row64_weight_policy };
+    return { state->device->architecture, state->graph_programs.row64_weight_policy() };
 }
 
 static auto allocate_test_weight(ggml_backend_t backend, ggml_tensor * weight) {

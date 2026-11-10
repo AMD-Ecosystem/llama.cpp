@@ -69,8 +69,6 @@ struct ggml_backend_hrx_context {
     ggml::hrx::HostWeightCache             host_weights;
     ggml::hrx::GraphReplayStreamState      graph_replay_state;
     std::string                            name;
-    // False preserves the existing matchers, including their row64 routes.
-    bool                                   row64_weight_policy = false;
 };
 
 struct ggml_backend_hrx_reg_context {

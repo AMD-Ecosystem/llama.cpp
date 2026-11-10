@@ -1230,7 +1230,7 @@ static bool backend_set_row64_weight_policy(ggml_backend_t backend, bool enabled
         return false;
     }
     auto * context = static_cast<ggml_backend_hrx_context *>(backend->context);
-    context->row64_weight_policy = enabled;
+    context->graph_programs.set_row64_weight_policy(enabled);
     return true;
 }
 
