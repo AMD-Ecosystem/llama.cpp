@@ -6299,7 +6299,7 @@ static void run_dense_matmul_unary_cpu_reference_case(ggml_type    weight_type,
     ggml_backend_free(hrx_backend);
 }
 
-// Decode native GGUF rows independently of the GPU's weight layout.
+// Dequantize original GGUF weight rows independently of the GPU's weight layout.
 // Scalar dot products avoid the CPU backend's activation quantization.
 static std::vector<float> f32_matmul_reference(ggml_type type, const std::vector<uint8_t> & bytes,
                                                const std::vector<float> & input,
@@ -8367,6 +8367,8 @@ static void run_qwen27_matmul_policy_route_case(ggml_type type, int64_t tokens) 
     ggml_free(ctx);
 }
 
+// Policy-off dispatch preservation: shared matcher changes must retain these
+// decode routes for model families that have not opted in to row64 preference.
 static void run_arch_decode_native_f32_route_case(llm_arch arch, ggml_type type, int64_t k, int64_t n) {
     ggml_context * ctx = ggml_init({ 4 * 1024 * 1024, nullptr, true });
     REQUIRE(ctx != nullptr);
@@ -8409,6 +8411,8 @@ static void run_arch_decode_native_f32_route_case(llm_arch arch, ggml_type type,
     ggml_free(ctx);
 }
 
+// Policy off preserves existing row64 choices too: this terminal projection
+// already selected the specialized Q6 row64 kernel before the preference was added.
 static void run_gemma4_decode_parent_terminal_q6_route_case() {
     ggml_context * ctx = ggml_init({ 4 * 1024 * 1024, nullptr, true });
     REQUIRE(ctx != nullptr);
@@ -8441,11 +8445,13 @@ static void run_gemma4_decode_parent_terminal_q6_route_case() {
     ggml_free(ctx);
 }
 
-static void require_qwen27_native_dot_reference(ggml_type type, const std::vector<uint8_t> & weights,
-                                                const std::vector<float> & input, const std::vector<float> & observed,
-                                                int64_t k, int64_t n, const std::vector<int64_t> & rows,
-                                                const std::vector<int64_t> & tokens, const char * label,
-                                                bool silu_output = false, float absolute_tolerance = 0.02f) {
+// Dequantize original GGUF weight rows and check sampled scalar dot products
+// without activation quantization, independently of the GPU's weight layout.
+static void require_f32_dot_reference(ggml_type type, const std::vector<uint8_t> & weights,
+                                      const std::vector<float> & input, const std::vector<float> & observed,
+                                      int64_t k, int64_t n, const std::vector<int64_t> & rows,
+                                      const std::vector<int64_t> & tokens, const char * label,
+                                      bool silu_output = false, float absolute_tolerance = 0.02f) {
     const ggml_type_traits * traits = ggml_get_type_traits(type);
     REQUIRE(traits != nullptr && traits->to_float != nullptr);
     const size_t row_bytes = ggml_row_size(type, k);
@@ -8478,14 +8484,14 @@ static void require_qwen27_native_dot_reference(ggml_type type, const std::vecto
     }
     REQUIRE(squared_reference > 0.0);
     const double relative_l2 = std::sqrt(squared_error / squared_reference);
-    std::fprintf(stderr, "qwen27 %s %s native-dequant reference: relative_l2=%g max_abs=%g samples=%zu\n",
+    std::fprintf(stderr, "%s %s F32 dot reference: relative_l2=%g max_abs=%g samples=%zu\n",
                  label, ggml_type_name(type), relative_l2, maximum_error, observed_samples.size());
     REQUIRE(relative_l2 <= 0.01);
     require_close(observed_samples, reference_samples, absolute_tolerance, 0.02f);
 }
 
-static void run_qwen27_dense_native_reference_case(ggml_type type, int64_t tokens, int64_t k = 512,
-                                                   int64_t n = 128) {
+static void run_dense_matmul_f32_reference_case(ggml_type type, int64_t tokens, int64_t k = 512,
+                                                int64_t n = 128) {
     auto backend = ggml_backend_hrx_init(0);
     REQUIRE(backend != nullptr);
     set_test_row64_policy(backend, true);
@@ -8549,8 +8555,8 @@ static void run_qwen27_dense_native_reference_case(ggml_type type, int64_t token
     }
     const std::vector<int64_t> sample_tokens = tokens == 1 ? std::vector<int64_t>{ 0 } :
                                                                std::vector<int64_t>{ 0, 21, 43, tokens - 1 };
-    require_qwen27_native_dot_reference(type, weights, input, observed, k, n, rows, sample_tokens,
-                                        tokens == 1 ? "vector" : short_q6 ? "short-prefill" : "tiled", true);
+    require_f32_dot_reference(type, weights, input, observed, k, n, rows, sample_tokens,
+                              tokens == 1 ? "vector" : short_q6 ? "short-prefill" : "tiled", true);
     ggml_backend_hrx_cache_stats stats = {};
     REQUIRE(ggml_backend_hrx_get_cache_stats(backend, &stats));
     REQUIRE(stats.weight_duplicate_warnings == 0);
@@ -8613,8 +8619,8 @@ static void run_ssm_conv_prefill_recurrent_case(ggml_type type, bool gathered, b
             rows.push_back(8191);
             // The native Q4 fallback quantizes activations to Q8. Allow absolute
             // error near cancellation for every source, retaining the 1% L2 bound.
-            require_qwen27_native_dot_reference(type, weights, input, projection, k, n, rows,
-                                                { 0, 127, 255, 511 }, "SSM", false, 0.03f);
+            require_f32_dot_reference(type, weights, input, projection, k, n, rows,
+                                      { 0, 127, 255, 511 }, "SSM", false, 0.03f);
         }
     }
     require_weight_cache_stats(backend, weight_source, 2);
@@ -8749,16 +8755,16 @@ static void register_basic_ops_cases(Suite & suite) {
         run_ssm_conv_prefill_recurrent_case(GGML_TYPE_Q4_K, true, true, 256, TestWeightSource::Imported, false);
     });
     for (const ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
-        suite.device_case("qwen27.native_dequant." + type_name(type) + ".vector", [type] {
-            run_qwen27_dense_native_reference_case(type, 1);
+        suite.device_case("qwen27.f32_reference." + type_name(type) + ".vector", [type] {
+            run_dense_matmul_f32_reference_case(type, 1);
         });
-        suite.device_case("qwen27.native_dequant." + type_name(type) + ".tiled", [type] {
-            run_qwen27_dense_native_reference_case(type, 66);
+        suite.device_case("qwen27.f32_reference." + type_name(type) + ".tiled", [type] {
+            run_dense_matmul_f32_reference_case(type, 66);
         });
     }
     for (const int64_t tokens : { 63, 64, 127, 128, 129 }) {
         suite.device_case("qwen27.q6_short_boundary.tokens" + std::to_string(tokens), [tokens] {
-            run_qwen27_dense_native_reference_case(GGML_TYPE_Q6_K, tokens);
+            run_dense_matmul_f32_reference_case(GGML_TYPE_Q6_K, tokens);
         });
     }
     for (const bool varying_input : { false, true }) {
@@ -8773,7 +8779,7 @@ static void register_basic_ops_cases(Suite & suite) {
         });
     }
     suite.device_case("qwen27.q4_metadata_single.tokens66.input768.outputs192", [] {
-        run_qwen27_dense_native_reference_case(GGML_TYPE_Q4_K, 66, 768, 192);
+        run_dense_matmul_f32_reference_case(GGML_TYPE_Q4_K, 66, 768, 192);
     });
     suite.device_case("view_mul_f32.cpu_reference", [] { run_view_mul_f32_cpu_reference_case(); });
     for (const int64_t token_count : { 2, 23 }) {
