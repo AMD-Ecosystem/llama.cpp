@@ -64,6 +64,7 @@ struct ggml_backend_hrx_context {
     ggml::hrx::KernelExecutableCache       kernel_executables;
     ggml::hrx::GraphProgramCache           graph_programs;
     ggml::hrx::PreparedCommandProgramCache prepared_programs;
+    bool                                  cache_trim_pending = false;
     ggml::hrx::TransientArena              transient_arena;
     ggml::hrx::HostTransferManager         host_transfers;
     ggml::hrx::HostWeightCache             host_weights;
