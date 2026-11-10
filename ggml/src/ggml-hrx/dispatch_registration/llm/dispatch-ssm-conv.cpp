@@ -811,8 +811,7 @@ static bool match_mul_mat_conv4_dispatch(const DispatchMatchContext & context, D
     const bool q6_weight = mat.weight->type == GGML_TYPE_Q6_K;
     const bool q6_row64 = context.row64_weight_policy && q6_weight &&
                           dispatch_weight_layout_eligible(*mat.weight);
-    // Q4 conv4 binds row64 even when the model policy is off. Format 44 keeps
-    // that reader distinct from the native Q4 F16 prefill reader (format 4).
+    // Q4 conv4 already binds row64 even when the model policy is off.
     set_compile_parameter(dispatch.kernel, "ggml.mul_mat.weight_format", q4_weight ? 44 : (q6_row64 ? 46 : 6));
     dispatch.bindings.push_back(activation);
     if (q4_weight) {

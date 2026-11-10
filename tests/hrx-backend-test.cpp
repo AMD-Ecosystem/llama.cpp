@@ -14796,7 +14796,7 @@ static void run_registered_host_input_reuse_waits_before_mutation() {
 }
 
 static void register_hrx_backend_device_cases(test_runner::Suite & suite) {
-    suite.device_case("qwen27_policy_lifetime", [] {
+    suite.device_case("row64_policy_lifetime", [] {
         ggml_backend_t backend = ggml_backend_hrx_init(0);
         REQUIRE(backend != nullptr);
         ggml_backend_reg_t registry = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));

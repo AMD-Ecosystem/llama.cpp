@@ -1113,10 +1113,6 @@ static bool match_packed_q8_1_x4_prefill_dispatch(const DispatchMatchContext & c
                          has_direct_weight && can_transform_weight;
     if (use_f16) {
         dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.f16_input_layout", packed_input ? "1" : "0");
-        dispatch.kernel.compile_parameters.emplace(
-            "ggml.mul_mat.weight_format",
-            common_to_config_value(common_mul_mat_format_config_value(pack_q4 ? CommonMulMatWeightFormat::Q4KRow64 :
-                                                                               match.weight_format)));
     } else {
         dispatch.kernel.compile_parameters.emplace(
             "ggml.mul_mat_q8_1_x4.weight_format",

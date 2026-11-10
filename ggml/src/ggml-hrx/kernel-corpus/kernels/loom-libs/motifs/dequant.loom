@@ -30,7 +30,7 @@ func.def inline @ggml_paired_weight_words(%half_packet: i1, %paired: i1, %load_u
   func.return %words : vector<4xi32>
 }
 
-func.def public inline @ggml_q4k_f16_pair(%native_weight: i1, %half_packet: i1, %paired: i1, %weight: buffer, %peer: buffer, %is_up: i1, %row_base: offset, %group0: index, %packet: index) -> (vector<16xf16>, vector<16xf16>) {
+func.def public inline @ggml_q4k_native_row64_f16_pair(%half_packet: i1, %paired: i1, %weight: buffer, %peer: buffer, %is_up: i1, %row_base: offset, %group0: index, %packet: index) -> (vector<16xf16>, vector<16xf16>) {
   %c1 = index.constant 1 : index
   %c2 = index.constant 2 : index
   %c4 = index.constant 4 : index
@@ -58,16 +58,7 @@ func.def public inline @ggml_q4k_f16_pair(%native_weight: i1, %half_packet: i1, 
   %word_bytes = index.constant 4 : offset
   %packet_word = index.rem %packet, %c4 : index
   %packet_add = index.scale %packet_word, %word_bytes : index, offset -> offset
-  %row64_address = index.add %field_base, %packet_add : offset
-  // Native Q4_K keeps the same header and stores each group pair in 32 code bytes.
-  %native_code_bytes = index.constant 16 : offset
-  %native_pair_bytes = index.constant 32 : offset
-  %native_code_base = index.add %row_base, %native_code_bytes : offset
-  %native_pair_add = index.scale %pair, %native_pair_bytes : index, offset -> offset
-  %native_packet_add = index.scale %packet, %word_bytes : index, offset -> offset
-  %native_pair_base = index.add %native_code_base, %native_pair_add : offset
-  %native_address = index.add %native_pair_base, %native_packet_add : offset
-  %address = scf.select %native_weight, %native_address, %row64_address : offset
+  %address = index.add %field_base, %packet_add : offset
   %codes = func.call @ggml_paired_weight_words(%half_packet, %paired, %is_up, %weight, %peer, %address) : (i1, i1, i1, buffer, buffer, offset) -> (vector<4xi32>)
   %mask = vector.constant 252645135 : vector<4xi32>
   %shift = vector.constant 4 : vector<4xi32>

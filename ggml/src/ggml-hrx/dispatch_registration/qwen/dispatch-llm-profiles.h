@@ -20,7 +20,6 @@ constexpr LlmMoeDispatchProfile kLlmMoeQwen30BDispatchProfile = {
 
 static constexpr const LlmMoeDispatchProfile & kActiveLlmMoeDispatchProfile = kLlmMoeQwen30BDispatchProfile;
 static constexpr const LlmMoeDispatchProfile & kQwen30BMoeDispatchProfile   = kLlmMoeQwen30BDispatchProfile;
-static constexpr int64_t kQwen3VocabularyCount = 151936;
 
 constexpr bool is_llm_supported_query_length(const LlmMoeDispatchProfile & profile, int64_t query_length) {
     return query_length >= 1 && query_length <= profile.max_token_count;

@@ -409,9 +409,10 @@ static std::vector<std::string> scheduled_kernel_sequence(
     return names;
 }
 
-/// Check the selected layout for every use of each weight, and require at least one use.
+/// Check every weight use, optionally requiring a specific kernel and exact binding count.
 static void require_weight_layout(ggml_cgraph * graph, const std::vector<ggml_tensor *> & weights,
-                                  const std::string & expected_layout, const ggml::hrx::DispatchTarget & target) {
+                                  const std::string & expected_layout, const ggml::hrx::DispatchTarget & target,
+                                  const char * expected_kernel = nullptr, size_t expected_binding_count = 0) {
     ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
     REQUIRE(imported.valid());
     ggml::hrx::DispatchScheduler scheduler;
@@ -424,11 +425,17 @@ static void require_weight_layout(ggml_cgraph * graph, const std::vector<ggml_te
             for (const auto & binding : dispatch.bindings) {
                 if (binding.value == value->id) {
                     REQUIRE(binding.layout == expected_layout);
+                    if (expected_kernel != nullptr) {
+                        REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id, target.architecture) == expected_kernel);
+                    }
                     ++binding_count;
                 }
             }
         }
         REQUIRE(binding_count > 0);
+        if (expected_binding_count != 0) {
+            REQUIRE(binding_count == expected_binding_count);
+        }
     }
 }
 
@@ -6392,25 +6399,10 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
     ggml_build_forward_expand(hrx_graph, hrx_output);
 
     if (row64_weight_policy) {
-        ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*hrx_graph);
-        REQUIRE(imported.valid());
-        ggml::hrx::DispatchScheduler scheduler;
-        REQUIRE(scheduler.schedule_graph(imported.graph, target));
         for (ggml_tensor * weight : { hrx_gate_weight, hrx_up_weight }) {
-            const ggml::hrx::Value * source = imported.graph.values().find_tensor(weight);
-            REQUIRE(source != nullptr);
-            size_t matched = 0;
-            for (const auto & dispatch : scheduler.plan().dispatches) {
-                for (const auto & binding : dispatch.bindings) {
-                    if (binding.value != source->id) {
-                        continue;
-                    }
-                    REQUIRE(binding.layout == ggml::hrx::kQ4KPackedK256Row64Layout);
-                    REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id, target.architecture) == expected_kernel);
-                    ++matched;
-                }
-            }
-            REQUIRE(matched == 1);
+            const char * layout = weight->type == GGML_TYPE_Q4_K ? ggml::hrx::kQ4KPackedK256Row64Layout :
+                                                                 ggml::hrx::kQ6KPackedK256Row64ScaleRowLayout;
+            require_weight_layout(hrx_graph, { weight }, layout, target, expected_kernel, 1);
         }
     } else {
         require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph, target), { expected_kernel });
