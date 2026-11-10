@@ -6270,10 +6270,11 @@ static void run_dense_matmul_unary_cpu_reference_case(ggml_type    weight_type,
     ggml_backend_free(hrx_backend);
 }
 
-// The scalar reference avoids the CPU backend's activation quantization.
-static std::vector<float> row64_matmul_reference(ggml_type type, const std::vector<uint8_t> & bytes,
-                                                 const std::vector<float> & input,
-                                                 int64_t inputs, int64_t outputs, int64_t tokens) {
+// Decode native GGUF rows independently of the GPU's weight layout.
+// Scalar dot products avoid the CPU backend's activation quantization.
+static std::vector<float> f32_matmul_reference(ggml_type type, const std::vector<uint8_t> & bytes,
+                                               const std::vector<float> & input,
+                                               int64_t inputs, int64_t outputs, int64_t tokens) {
     const auto * traits = ggml_get_type_traits(type);
     REQUIRE(traits != nullptr && traits->to_float != nullptr);
     const size_t row_bytes = ggml_row_size(type, inputs);
@@ -6434,14 +6435,18 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
     ggml_backend_synchronize(cpu_backend);
     ggml_backend_synchronize(hrx_backend);
     if (row64_weight_policy) {
-        auto expected = row64_matmul_reference(gate_weight_type, gate_weight, input, input_size, output_size, token_count);
-        const auto up = row64_matmul_reference(up_weight_type, up_weight, input, input_size, output_size, token_count);
+        auto expected = f32_matmul_reference(gate_weight_type, gate_weight, input, input_size, output_size, token_count);
+        const auto up = f32_matmul_reference(up_weight_type, up_weight, input, input_size, output_size, token_count);
         for (size_t i = 0; i < expected.size(); ++i) {
             expected[i] = (expected[i] / (1.0f + std::exp(-expected[i]))) * up[i];
         }
         require_row64_reference(get_f32_tensor(hrx_backend, hrx_output), expected);
     }
-    require_close(get_f32_tensor(hrx_backend, hrx_output), get_f32_tensor(cpu_backend, cpu_output), 1.0e-4f, 1.0e-3f);
+    if (!row64_weight_policy) {
+        // Row64 cases use the scalar reference above: CPU Q8 activation quantization and
+        // the paired kernel's F16 arithmetic introduce different rounding errors.
+        require_close(get_f32_tensor(hrx_backend, hrx_output), get_f32_tensor(cpu_backend, cpu_output), 1.0e-4f, 1.0e-3f);
+    }
     if (row64_weight_policy) {
         ggml_backend_hrx_cache_stats stats = {};
         REQUIRE(ggml_backend_hrx_get_cache_stats(hrx_backend, &stats));
@@ -7010,8 +7015,8 @@ static void run_dense_matmul_postops_cpu_reference_case(ggml_type    weight_type
     }
     require_close(get_f32_tensor(hrx_backend, hrx_output), get_f32_tensor(cpu_backend, cpu_output), 1.0f, 5.0e-2f);
     if (nonzero_weight) {
-        std::vector<float> expected = row64_matmul_reference(weight_type, weight, input, input_size,
-                                                               output_size, token_count);
+        std::vector<float> expected = f32_matmul_reference(weight_type, weight, input, input_size,
+                                                          output_size, token_count);
         if (include_residual) {
             for (size_t i = 0; i < expected.size(); ++i) {
                 expected[i] += residual[i];
