@@ -668,11 +668,12 @@ static void fattn_vision_launch(ggml_backend_cuda_context & ctx, ggml_tensor * d
     uint8_t * cls = nullptr;
     auto & cache = ctx.fattn_cls;
     const int64_t key[7] = {nq, nkv, bq, bk, nbm, mask_nb1_key(mask), mask ? int64_t(mask->nb[3]) : 0};
-    if (mask && cache.buf && cache.mask == mask->data && memcmp(cache.key, key, sizeof(key)) == 0) {
+    const bool reuse_mask = GGML_CUDA_OPT_ENABLED(GGML_CUDA_FATTN_PREFILL_MASK_CACHE, true);
+    if (reuse_mask && mask && cache.buf && cache.mask == mask->data && memcmp(cache.key, key, sizeof(key)) == 0) {
         cls = cache.buf->get();
     } else if (mask) {
         // the cache is a pool allocation kept until the end of the graph: only (re)allocate it on top of the pool stack
-        if (ctx.curr_stream_no == 0 && !ctx.mmdq_src1.buf) {
+        if (reuse_mask && ctx.curr_stream_no == 0 && !ctx.mmdq_src1.buf) {
             cache.buf.reset();
             cache.buf = std::make_unique<ggml_cuda_pool_alloc<uint8_t>>(ctx.pool(), size_t(nbm)*nqb*ntk);
             cache.mask = mask->data;

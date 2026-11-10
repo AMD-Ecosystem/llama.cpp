@@ -730,7 +730,8 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     // Unmasked D64/D80 self-attention uses one head per WMMA tile.
     float logit_softcap = 0.0f;
     memcpy(&logit_softcap, (const float *) KQV->op_params + 2, sizeof(float));
-    if (GGML_CUDA_CC_IS_RDNA3_5(cc) && amd_wmma_available(cc) && (Q->ne[0] == 64 || Q->ne[0] == 80) && V->ne[0] == Q->ne[0] &&
+    if (GGML_CUDA_OPT_ENABLED(GGML_CUDA_FATTN_WMMA_NO_GQA, true) &&
+            GGML_CUDA_CC_IS_RDNA3_5(cc) && amd_wmma_available(cc) && (Q->ne[0] == 64 || Q->ne[0] == 80) && V->ne[0] == Q->ne[0] &&
             gqa_ratio == 1 && !mask && max_bias == 0.0f && logit_softcap == 0.0f &&
             Q->ne[1] >= 64 && Q->ne[1] == K->ne[1] &&
             K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16) {
@@ -738,7 +739,8 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     }
 
     // Pad unmasked D72 self-attention to the existing D80 WMMA tile.
-    if (GGML_CUDA_CC_IS_RDNA3_5(cc) && amd_wmma_available(cc) && Q->ne[0] == 72 && V->ne[0] == 72 &&
+    if (GGML_CUDA_OPT_ENABLED(GGML_CUDA_FATTN_WMMA_D72, true) &&
+            GGML_CUDA_CC_IS_RDNA3_5(cc) && amd_wmma_available(cc) && Q->ne[0] == 72 && V->ne[0] == 72 &&
             gqa_ratio == 1 && !mask && !KQV->src[4] && max_bias == 0.0f && logit_softcap == 0.0f &&
             Q->ne[1] >= 256 && Q->ne[1]*Q->ne[2]*Q->ne[3] >= 4096 && Q->ne[1] == K->ne[1] && K->ne[1] == V->ne[1] &&
             Q->ne[2] == V->ne[2] && Q->ne[3] == K->ne[3] && Q->ne[3] == V->ne[3] &&
@@ -748,7 +750,8 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     }
 
     // D512 uses the existing 4 x 8 tile, which fits RDNA shared memory.
-    if (GGML_CUDA_CC_IS_RDNA3_5(cc) && amd_wmma_available(cc) && gqa_opt_applies &&
+    if (GGML_CUDA_OPT_ENABLED(GGML_CUDA_FATTN_WMMA_D512, true) &&
+            GGML_CUDA_CC_IS_RDNA3_5(cc) && amd_wmma_available(cc) && gqa_opt_applies &&
             Q->ne[0] == 512 && V->ne[0] == 512 && gqa_ratio == 8 && Q->ne[1] >= 32 &&
             logit_softcap == 0.0f && K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16) {
         return BEST_FATTN_KERNEL_MMA_F16;

@@ -125,6 +125,10 @@ static constexpr __host__ __device__ fattn_mma_config ggml_cuda_fattn_mma_get_co
     return ggml_cuda_fattn_mma_get_config_ampere(DKQ, DV, ncols);
 }
 
+#ifndef GGML_CUDA_FATTN_D80_FULL_TILE
+#define GGML_CUDA_FATTN_D80_FULL_TILE 1
+#endif
+
 static constexpr __host__ __device__ fattn_mma_config ggml_cuda_fattn_mma_get_config_rdna(const int DKQ, const int DV, const int ncols) {
     GGML_CUDA_FATTN_MMA_CONFIG_CASE( 64,  64,  8, 128, 2,  64,  32,  32,  32, 1, true);
     GGML_CUDA_FATTN_MMA_CONFIG_CASE( 64,  64, 16, 128, 2,  64,  32,  32,  32, 1, true);
@@ -1335,7 +1339,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
     // kb0_start is always < kb0_stop so the last iter can be executed unconditionally.
     if constexpr (ncols2 == 1 || use_sparse) {
         constexpr bool oob_check = true;
-#if defined(RDNA3_5)
+#if defined(RDNA3_5) && GGML_CUDA_FATTN_D80_FULL_TILE
         // Only the last dense KV tile can be partial.
         constexpr bool full_tile_oob_check = !(DKQ == 80 && DV == 80 && ncols1 == 64 && ncols2 == 1 && !use_sparse);
 #else
@@ -2160,7 +2164,7 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
         const ggml_tensor * K    = dst->src[1];
         const ggml_tensor * V    = dst->src[2];
         const ggml_tensor * mask = dst->src[3];
-        if (GGML_CUDA_CC_IS_RDNA3_5(cc) && logit_softcap == 0.0f &&
+        if (GGML_CUDA_OPT_ENABLED(GGML_CUDA_FATTN_GQA4_WIDE, true) && GGML_CUDA_CC_IS_RDNA3_5(cc) && logit_softcap == 0.0f &&
                 Q->ne[2] == 4*K->ne[2] && Q->ne[1] >= 512 && Q->ne[1] % 32 == 0 &&
                 K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16 &&
                 K->ne[1] <= 4096 && K->ne[1] % FATTN_KQ_STRIDE == 0 &&
@@ -2194,7 +2198,7 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
 
 #if defined(GGML_USE_HIP)
     if constexpr (DKQ == 128 && DV == 128 && ncols1 == 8 && ncols2 == 8) {
-        if (GGML_CUDA_CC_IS_RDNA3_5(cc) && logit_softcap == 0.0f) {
+        if (GGML_CUDA_OPT_ENABLED(GGML_CUDA_FATTN_GQA8_VGPR, true) && GGML_CUDA_CC_IS_RDNA3_5(cc) && logit_softcap == 0.0f) {
             fattn_kernel = flash_attn_ext_f16_rdna35;
         }
     }

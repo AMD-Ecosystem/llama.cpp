@@ -434,7 +434,7 @@ static void rope_neox_cuda(const T *            x,
     int block_size = CUDA_ROPE_BLOCK_SIZE;
 #if defined(GGML_USE_HIP)
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
-    if (GGML_CUDA_CC_IS_RDNA3_5(cc) && ne00 == 128) {
+    if (GGML_CUDA_OPT_ENABLED(GGML_CUDA_ROPE_SMALL_BLOCK, true) && GGML_CUDA_CC_IS_RDNA3_5(cc) && ne00 == 128) {
         block_size = 64;
     }
 #endif
@@ -494,7 +494,7 @@ static void rope_multi_cuda(const T *            x,
     int block_size = CUDA_ROPE_BLOCK_SIZE;
 #if defined(GGML_USE_HIP)
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
-    if (GGML_CUDA_CC_IS_RDNA3_5(cc) && (ne00 == 72 || ne00 == 80 || ne00 == 128)) {
+    if (GGML_CUDA_OPT_ENABLED(GGML_CUDA_ROPE_SMALL_BLOCK, true) && GGML_CUDA_CC_IS_RDNA3_5(cc) && (ne00 == 72 || ne00 == 80 || ne00 == 128)) {
         block_size = 64;
     }
 #endif
@@ -544,7 +544,7 @@ static void rope_vision_cuda(const T *            x,
     int block_size = CUDA_ROPE_BLOCK_SIZE;
 #if defined(GGML_USE_HIP)
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
-    if (GGML_CUDA_CC_IS_RDNA3_5(cc) && (ne00 == 72 || ne00 == 80 || ne00 == 128)) {
+    if (GGML_CUDA_OPT_ENABLED(GGML_CUDA_ROPE_SMALL_BLOCK, true) && GGML_CUDA_CC_IS_RDNA3_5(cc) && (ne00 == 72 || ne00 == 80 || ne00 == 128)) {
         block_size = 64;
     }
 #endif
@@ -868,7 +868,7 @@ static void rms_norm_mul_rope_cuda(
     if (pos_second != nullptr) {
         GGML_ASSERT(ncols < 1024 && ncols == 2*n_dims && is_neox && !freq_factors && !set_rows_stride);
         const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
-        const bool small_block = GGML_CUDA_CC_IS_RDNA3_5(cc) && ncols == 128 && nchannels >= 128;
+        const bool small_block = GGML_CUDA_OPT_ENABLED(GGML_CUDA_NORM_ROPE_SMALL_BLOCK, true) && GGML_CUDA_CC_IS_RDNA3_5(cc) && ncols == 128 && nchannels >= 128;
         const ggml_cuda_kernel_launch_params params = {blocks_num, dim3(small_block ? 128 : 256), 32*sizeof(float), stream};
         const auto kernel = small_block ? rms_norm_mul_rope_f32<128, false, D, true> : rms_norm_mul_rope_f32<256, false, D, true>;
         ggml_cuda_kernel_launch(kernel, params,
@@ -881,7 +881,7 @@ static void rms_norm_mul_rope_cuda(
 
     if (ncols < 1024) {
         const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
-        const bool small_block = GGML_CUDA_CC_IS_RDNA3_5(cc) && ncols == 128 && nchannels >= 128;
+        const bool small_block = GGML_CUDA_OPT_ENABLED(GGML_CUDA_NORM_ROPE_SMALL_BLOCK, true) && GGML_CUDA_CC_IS_RDNA3_5(cc) && ncols == 128 && nchannels >= 128;
         const bool one_warp = norm_rope_warp && ncols <= 256;
         const dim3 block_dims(one_warp ? WARP_SIZE : (small_block ? 128 : 256), 1, 1);
         const ggml_cuda_kernel_launch_params launch_params = {blocks_num, block_dims, 32*sizeof(float), stream};

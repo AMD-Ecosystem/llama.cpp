@@ -624,7 +624,8 @@ void ggml_cuda_convert_bias_to_f32(const T * x, const float * bias, float * y, i
 
 template <typename src_t, typename dst_t>
 static void convert_unary_clamped_cuda(const src_t * x, dst_t * y, int64_t k, float min, float max, cudaStream_t stream) {
-    if (reinterpret_cast<uintptr_t>(x) % alignof(convert_pair<src_t>) == 0 &&
+    if (GGML_CUDA_OPT_ENABLED(GGML_CUDA_CONVERT_CLAMP_VEC2, true) &&
+            reinterpret_cast<uintptr_t>(x) % alignof(convert_pair<src_t>) == 0 &&
             reinterpret_cast<uintptr_t>(y) % alignof(convert_pair<dst_t>) == 0) {
         const int64_t blocks = (k + 2*CUDA_DEQUANTIZE_BLOCK_SIZE - 1)/(2*CUDA_DEQUANTIZE_BLOCK_SIZE);
         convert_unary_packed<src_t, dst_t, true><<<blocks, CUDA_DEQUANTIZE_BLOCK_SIZE, 0, stream>>>(x, y, k, min, max);
@@ -657,7 +658,8 @@ static void convert_unary_cont_cuda(const void * vx, dst_t * y, const int64_t k,
     if constexpr ((std::is_same_v<src_t, float> && std::is_same_v<dst_t, half>) ||
                   (std::is_same_v<src_t, half> && std::is_same_v<dst_t, float>)) {
         const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
-        if (GGML_CUDA_CC_IS_RDNA3_5(cc) && k >= CUDA_DEQUANTIZE_BLOCK_SIZE &&
+        if (GGML_CUDA_OPT_ENABLED(GGML_CUDA_CONVERT_FP16_VEC2, true) &&
+                GGML_CUDA_CC_IS_RDNA3_5(cc) && k >= CUDA_DEQUANTIZE_BLOCK_SIZE &&
                 reinterpret_cast<uintptr_t>(vx) % alignof(convert_pair<src_t>) == 0 &&
                 reinterpret_cast<uintptr_t>(y)  % alignof(convert_pair<dst_t>) == 0) {
             const int64_t n_blocks = (k + 2*CUDA_DEQUANTIZE_BLOCK_SIZE - 1)/(2*CUDA_DEQUANTIZE_BLOCK_SIZE);

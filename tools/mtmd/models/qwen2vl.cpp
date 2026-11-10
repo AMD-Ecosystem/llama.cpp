@@ -1,5 +1,7 @@
 #include "models.h"
 
+#include <cstdlib>
+
 ggml_tensor * clip_graph_qwen2vl::build_inp_with_temporal_merge() {
     ggml_tensor * inp_raw = build_inp_raw();
 
@@ -35,7 +37,9 @@ ggml_cgraph * clip_graph_qwen2vl::build() {
 
     const int batch_size       = 1;
     const bool use_window_attn = hparams.n_wa_pattern > 0;
-    const bool batch_windows   = use_window_attn && flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED;
+    static const bool window_batch = [] { const char * v = std::getenv("MTMD_QWEN25VL_WINDOW_BATCH"); return !v || std::atoi(v) != 0; }();
+    static const bool window_cast = [] { const char * v = std::getenv("MTMD_QWEN25VL_KV_CAST_EARLY"); return !v || std::atoi(v) != 0; }();
+    const bool batch_windows   = window_batch && use_window_attn && flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED;
     const int n_wa_pattern     = hparams.n_wa_pattern;
     const int n_pos            = n_patches;
     const int num_position_ids = n_pos * 4; // m-rope requires 4 dim per position
@@ -107,6 +111,9 @@ ggml_cgraph * clip_graph_qwen2vl::build() {
             window_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_pos, n_pos);
             ggml_set_name(window_mask, "window_mask");
             ggml_set_input(window_mask);
+            if (flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) {
+                window_mask = ggml_cast(ctx0, window_mask, GGML_TYPE_F16);
+            }
         }
 
         // inpL shape: [n_embd, n_patches_x * n_patches_y, batch_size]
@@ -159,8 +166,10 @@ ggml_cgraph * clip_graph_qwen2vl::build() {
 
             if (batch_windows && !full_attn) {
                 // Convert each full K/V tensor once before taking window views.
-                Kcur = ggml_cast(ctx0, Kcur, GGML_TYPE_F16);
-                Vcur = ggml_cast(ctx0, Vcur, GGML_TYPE_F16);
+                if (window_cast) {
+                    Kcur = ggml_cast(ctx0, Kcur, GGML_TYPE_F16);
+                    Vcur = ggml_cast(ctx0, Vcur, GGML_TYPE_F16);
+                }
                 std::vector<ggml_tensor *> outputs;
                 int offset = 0;
                 for (const auto & run : window_runs) {

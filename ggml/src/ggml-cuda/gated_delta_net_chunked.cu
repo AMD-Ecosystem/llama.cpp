@@ -434,7 +434,7 @@ void ggml_cuda_gdn_chunked(ggml_backend_cuda_context & ctx, const ggml_cuda_gdn_
     // nsm counts WGPs on RDNA, and a block occupies one CU in CU mode but spreads over the whole WGP
     // in WGP mode. Below one block per WGP, CU mode leaves the second CU of each WGP idle and costs
     // about a quarter of the op; above it every CU is busy either way and CU mode is worth ~10%.
-    const bool cu_mode = args.H * args.n_seqs > ggml_cuda_info().devices[ggml_cuda_get_device()].nsm;
+    const bool cu_mode = GGML_CUDA_OPT_ENABLED(GGML_CUDA_GDN_CU_MODE, true) && args.H * args.n_seqs > ggml_cuda_info().devices[ggml_cuda_get_device()].nsm;
     const auto kernel  = cu_mode ? gdn_chunked_f32_cu : gdn_chunked_f32_wgp;
 
     ggml_cuda_kernel_launch(kernel, launch_params,

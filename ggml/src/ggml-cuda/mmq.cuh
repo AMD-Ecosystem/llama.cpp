@@ -123,6 +123,13 @@ struct tile_x_sizes {
 #define MMQ_TILE_Y_K     (MMQ_TILE_NE_K + MMQ_TILE_NE_K / QI8_1)
 #define MMQ_TILE_Y_FP4_K MMQ_TILE_Y_K
 
+#ifndef GGML_CUDA_MMQ_Q6_K_SCALE_REUSE
+#define GGML_CUDA_MMQ_Q6_K_SCALE_REUSE 1
+#endif
+#ifndef GGML_CUDA_MMQ_Q8_0_J112_BARRIERS
+#define GGML_CUDA_MMQ_Q8_0_J112_BARRIERS 1
+#endif
+
 enum ggml_cuda_mmq_sram_layout {
     GGML_CUDA_MMQ_SRAM_LAYOUT_Q8_0,
     GGML_CUDA_MMQ_SRAM_LAYOUT_Q8_1,
@@ -255,7 +262,7 @@ static constexpr __host__ __device__ ggml_cuda_mmq_config ggml_cuda_mmq_get_conf
     ggml_cuda_mmq_config config = ggml_cuda_mmq_get_config_rdna3_5(type, J, fallback);
     config.nthreads = 128;
     config.I = 64;
-    if (type == GGML_TYPE_Q6_K && J == 64) {
+    if (GGML_CUDA_MMQ_Q6_K_SCALE_REUSE && type == GGML_TYPE_Q6_K && J == 64) {
         config.sram_layout = GGML_CUDA_MMQ_SRAM_LAYOUT_Q6_K_SCALED;
     }
     return config;
@@ -531,7 +538,7 @@ static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q6_K_q8_1_mma_rdna3
 #pragma unroll
                 for (int l = 0; l < tile_C::ne; ++l) {
                     const int i = i0 + n*tile_C::I + tile_C::get_i(l);
-                    if constexpr (J == 64) {
+                    if constexpr (GGML_CUDA_MMQ_Q6_K_SCALE_REUSE && J == 64) {
                         const float * sc = (const float *) x_sc + i*sram_stride + k00/4;
                         sum[(j0/tile_C::J + n)*tile_C::ne + l] += (float) C.x[l] * sc[k01/4] * dB0;
                     } else {
@@ -1351,7 +1358,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
                 // reading in the previous iteration's vec_dot.
                 __syncthreads();
                 load_tiles(x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
-                if constexpr (type != GGML_TYPE_Q8_0 || J != 112) {
+                if constexpr (!GGML_CUDA_MMQ_Q8_0_J112_BARRIERS || type != GGML_TYPE_Q8_0 || J != 112) {
                     mmq_hip_tile_barrier<J>();
                 }
             }
@@ -1360,7 +1367,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
             const int * by0 = y + ncols_y * yk * sz;
             const int * by1 = y + ncols_y * (yk + 1) * sz;
 
-            if constexpr (type != GGML_TYPE_Q8_0 || J != 112) {
+            if constexpr (!GGML_CUDA_MMQ_Q8_0_J112_BARRIERS || type != GGML_TYPE_Q8_0 || J != 112) {
                 mmq_hip_tile_barrier<J>();
             }
 #pragma unroll
@@ -1379,7 +1386,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
             __syncthreads();
             vec_dot(tile_x, tile_y, sum, MMQ_TILE_NE_K);
 
-            if constexpr (type != GGML_TYPE_Q8_0 || J != 112) {
+            if constexpr (!GGML_CUDA_MMQ_Q8_0_J112_BARRIERS || type != GGML_TYPE_Q8_0 || J != 112) {
                 mmq_hip_tile_barrier<J>();
             }
         }

@@ -43,6 +43,16 @@
 #define STRINGIZE_IMPL(...) #__VA_ARGS__
 #define STRINGIZE(...) STRINGIZE_IMPL(__VA_ARGS__)
 
+// Cache each runtime switch once; explicit 0 restores the fallback.
+#define GGML_CUDA_OPT_ENABLED(name, default_value) \
+    ([] { \
+        static const bool enabled = [] { \
+            const char * value = std::getenv(#name); \
+            return value ? std::atoi(value) != 0 : (default_value); \
+        }(); \
+        return enabled; \
+    }())
+
 #define WARP_SIZE 32
 #define CUDART_HMAX   11070 // CUDA 11.7, min. ver. for which __hmax and __hmax2 are known to work (may be higher than needed)
 #define CUDART_HMASK  12000 // CUDA 12.0, min. ver. for half2 -> uint mask comparisons

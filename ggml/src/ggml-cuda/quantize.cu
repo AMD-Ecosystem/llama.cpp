@@ -615,7 +615,7 @@ void quantize_rms_norm_mmq_q8_1_cuda(const float * x, const float * weight, void
         int ncols, int nrows, float eps, cudaStream_t stream) {
     GGML_ASSERT(ncols % MATRIX_ROW_PADDING == 0);
     // Match the reduction order of rms_norm_f32_cuda.
-    if (ncols < 1024 || (ncols == 1536 && nrows >= 64)) {
+    if (ncols < 1024 || (GGML_CUDA_OPT_ENABLED(GGML_CUDA_NORM_SMALL_BLOCK, true) && ncols == 1536 && nrows >= 64)) {
         rms_norm_mmq_q8_1<256><<<nrows, 256, 32*sizeof(float), stream>>>(x, weight, (block_q8_1_mmq *) y, ncols, nrows, eps);
     } else {
         rms_norm_mmq_q8_1<1024><<<nrows, 1024, 32*sizeof(float), stream>>>(x, weight, (block_q8_1_mmq *) y, ncols, nrows, eps);
@@ -695,7 +695,7 @@ void quantize_mmq_q8_1_cuda(
     const dim3 block_size(CUDA_QUANTIZE_BLOCK_SIZE_MMQ, 1, 1);
 #if defined(GGML_USE_HIP)
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
-    if (GGML_CUDA_CC_IS_RDNA3_5(cc) && type_src0 == GGML_TYPE_Q4_K && !ids &&
+    if (GGML_CUDA_OPT_ENABLED(GGML_CUDA_QUANTIZE_K_INTERLEAVE, true) && GGML_CUDA_CC_IS_RDNA3_5(cc) && type_src0 == GGML_TYPE_Q4_K && !ids &&
             block_num_y > 1 && s01 % 1024 == 0 && ne2 == 1 && ne3 == 1 && ne1 <= 65535) {
         const dim3 num_blocks_interleaved(block_num_y, ne1, 1);
         quantize_mmq_q8_1<MMQ_Q8_1_DS_LAYOUT_DS4, false, true>

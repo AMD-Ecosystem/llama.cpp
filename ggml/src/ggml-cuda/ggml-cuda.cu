@@ -3651,6 +3651,11 @@ static bool ggml_cuda_should_fuse_cublas_16bit(ggml_backend_cuda_context & ctx, 
     if (ggml_cuda_should_use_mmdq(w, x, mm, device.cc)) {
         return false;
     }
+    if (!GGML_CUDA_OPT_ENABLED(GGML_CUDA_FUSE_CUBLAS_16BIT, true) ||
+            (w->type == GGML_TYPE_F16 && !GGML_CUDA_OPT_ENABLED(GGML_CUDA_FUSE_CUBLAS_FP16, true)) ||
+            (w->type == GGML_TYPE_BF16 && !GGML_CUDA_OPT_ENABLED(GGML_CUDA_FUSE_CUBLAS_BF16, true))) {
+        return false;
+    }
     return GGML_CUDA_CC_IS_RDNA3_5(device.cc) && (w->type == GGML_TYPE_F16 || w->type == GGML_TYPE_BF16 || (allow_q6 && w->type == GGML_TYPE_Q6_K)) && x->type == GGML_TYPE_F32 &&
         mm->type == GGML_TYPE_F32 && ggml_is_contiguous(w) && ggml_is_contiguous(x) && ggml_is_contiguous(mm) &&
         mm->ne[2] == 1 && mm->ne[3] == 1 && mm->ne[1] >= 32 &&
@@ -3686,7 +3691,8 @@ static bool ggml_cuda_can_fuse_cublas_bias(const ggml_tensor * mm, const ggml_te
 }
 
 static bool ggml_cuda_can_fuse_cublas_residual(const ggml_tensor * bias, const ggml_tensor * add) {
-    if (add->op != GGML_OP_ADD || (add->src[0] != bias && add->src[1] != bias)) {
+    if (!GGML_CUDA_OPT_ENABLED(GGML_CUDA_FUSE_CUBLAS_RESIDUAL, true) ||
+            add->op != GGML_OP_ADD || (add->src[0] != bias && add->src[1] != bias)) {
         return false;
     }
     const ggml_tensor * residual = add->src[add->src[0] == bias ? 1 : 0];
@@ -3701,7 +3707,14 @@ template <ggml_type compute_type>
 static int ggml_cuda_try_fuse_16bit_ffn(ggml_backend_cuda_context & ctx, ggml_cgraph * cgraph, int i, int norm_idx = -1) {
     using traits = batched_mul_mat_traits<compute_type>;
     using cuda_t = typename traits::cuda_type;
+    if (!GGML_CUDA_OPT_ENABLED(GGML_CUDA_FUSE_CUBLAS_FFN, true) ||
+            (norm_idx >= 0 && !GGML_CUDA_OPT_ENABLED(GGML_CUDA_FUSE_CUBLAS_FFN_NORM, true))) {
+        return 0;
+    }
     if (cgraph->nodes[i]->op == GGML_OP_CLAMP) {
+        if (!GGML_CUDA_OPT_ENABLED(GGML_CUDA_FUSE_CUBLAS_CLAMP, true)) {
+            return 0;
+        }
         const ggml_op ops[] = { GGML_OP_CLAMP, GGML_OP_MUL_MAT, GGML_OP_CLAMP, GGML_OP_CLAMP, GGML_OP_MUL_MAT,
                                GGML_OP_CLAMP, GGML_OP_GLU, GGML_OP_CLAMP, GGML_OP_MUL_MAT, GGML_OP_CLAMP };
         const int output_idx = i + 9;
@@ -3781,7 +3794,7 @@ static int ggml_cuda_try_fuse_16bit_ffn(ggml_backend_cuda_context & ctx, ggml_cg
             return 0;
         }
     }
-    if (!norm) {
+    if (!norm && GGML_CUDA_OPT_ENABLED(GGML_CUDA_FUSE_CUBLAS_FFN_ACT, true)) {
         const ggml_op plain_ops[] = { GGML_OP_MUL_MAT, GGML_OP_ADD, GGML_OP_UNARY, GGML_OP_MUL_MAT, GGML_OP_ADD, GGML_OP_ADD };
         for (int count : { 6, 5, 4 }) {
             const int output_idx = i + count - 1;
@@ -3999,7 +4012,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         }
     }
 
-    if (node->op == GGML_OP_FLASH_ATTN_EXT && GGML_CUDA_CC_IS_RDNA3_5(ggml_cuda_info().devices[cuda_ctx->device].cc)) {
+    if (GGML_CUDA_OPT_ENABLED(GGML_CUDA_FUSE_ATTN_SET, true) && node->op == GGML_OP_FLASH_ATTN_EXT && GGML_CUDA_CC_IS_RDNA3_5(ggml_cuda_info().devices[cuda_ctx->device].cc)) {
         const ggml_op ops[] = { GGML_OP_FLASH_ATTN_EXT, GGML_OP_RESHAPE, GGML_OP_SET };
         const int output_idx = i + 2;
         if (ggml_can_fuse_subgraph(cgraph, i, 3, ops, &output_idx, 1)) {
@@ -4034,7 +4047,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         }
     }
 
-    if (node->op == GGML_OP_RMS_NORM && GGML_CUDA_CC_IS_RDNA3_5(ggml_cuda_info().devices[cuda_ctx->device].cc)) {
+    if (GGML_CUDA_OPT_ENABLED(GGML_CUDA_FUSE_NORM_ROPE_2AXIS, true) && node->op == GGML_OP_RMS_NORM && GGML_CUDA_CC_IS_RDNA3_5(ggml_cuda_info().devices[cuda_ctx->device].cc)) {
         const ggml_op ops[] = { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ROPE, GGML_OP_ROPE };
         const int output_idx = i + 3;
         if (ggml_can_fuse_subgraph(cgraph, i, 4, ops, &output_idx, 1)) {
@@ -4058,7 +4071,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         }
     }
 
-    if (node->op == GGML_OP_NORM && GGML_CUDA_CC_IS_RDNA3_5(ggml_cuda_info().devices[cuda_ctx->device].cc)) {
+    if (GGML_CUDA_OPT_ENABLED(GGML_CUDA_FUSE_NORM_MUL_ADD, true) && node->op == GGML_OP_NORM && GGML_CUDA_CC_IS_RDNA3_5(ggml_cuda_info().devices[cuda_ctx->device].cc)) {
         const ggml_op ops[] = { GGML_OP_NORM, GGML_OP_MUL, GGML_OP_ADD };
         const int output_idx = i + 2;
         if (ggml_can_fuse_subgraph(cgraph, i, 3, ops, &output_idx, 1)) {
@@ -4103,7 +4116,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         const ggml_op ops[] = { GGML_OP_MUL_MAT, GGML_OP_ADD, GGML_OP_ADD };
         for (int count : { 3, 2 }) {
             const int output_idx = i + count - 1;
-            if (ggml_can_fuse_subgraph(cgraph, i, count, ops, &output_idx, 1) &&
+            if (GGML_CUDA_OPT_ENABLED(GGML_CUDA_FUSE_CUBLAS_BIAS, true) && ggml_can_fuse_subgraph(cgraph, i, count, ops, &output_idx, 1) &&
                     ggml_cuda_can_fuse_cublas_bias(node, cgraph->nodes[i + 1]) &&
                     (count == 2 || ggml_cuda_can_fuse_cublas_residual(cgraph->nodes[i + 1], cgraph->nodes[output_idx])) &&
                     ggml_cuda_check_fusion_memory_ranges(cgraph, i, count, &output_idx, 1)) {
@@ -4125,7 +4138,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         if (ggml_can_fuse_subgraph(cgraph, i, 2, ops, &output_idx, 1) &&
                 ggml_cuda_check_fusion_memory_ranges(cgraph, i, 2, &output_idx, 1)) {
             ggml_tensor * mm = cgraph->nodes[output_idx];
-            if (mm->src[1] == node && node->ne[0] % 4 == 0 &&
+            if (GGML_CUDA_OPT_ENABLED(GGML_CUDA_FUSE_GLU_PACK, true) && mm->src[1] == node && node->ne[0] % 4 == 0 &&
                     ggml_cuda_can_use_packed_mmq(*cuda_ctx, mm, true)) {
                 ggml_cuda_pool_alloc<char> packed(cuda_ctx->pool(), ggml_cuda_packed_mmq_size(*cuda_ctx, mm));
                 const auto quantize = mm->src[0]->type == GGML_TYPE_Q6_K ? quantize_glu_mmq_q8_1_d4_cuda : quantize_glu_mmq_q8_1_cuda;
@@ -4134,14 +4147,14 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
                 ggml_cuda_mul_mat_q(*cuda_ctx, mm->src[0], node, nullptr, mm, packed.get());
                 return 1;
             }
-            if (mm->src[1] == node && ggml_cuda_should_fuse_cublas_16bit(*cuda_ctx, mm, true)) {
+            if (GGML_CUDA_OPT_ENABLED(GGML_CUDA_FUSE_GLU_16BIT, true) && mm->src[1] == node && ggml_cuda_should_fuse_cublas_16bit(*cuda_ctx, mm, true)) {
                 ggml_cuda_mul_mat_cublas_fused(*cuda_ctx, mm->src[0], node, mm, nullptr, nullptr, node);
                 return 1;
             }
         }
     }
 
-    if (node->op == GGML_OP_UNARY && ggml_get_unary_op(node) == GGML_UNARY_OP_GELU && node->type == GGML_TYPE_F32) {
+    if (GGML_CUDA_OPT_ENABLED(GGML_CUDA_FUSE_GELU_MUL, true) && node->op == GGML_OP_UNARY && ggml_get_unary_op(node) == GGML_UNARY_OP_GELU && node->type == GGML_TYPE_F32) {
         int next = i + 1;
         if (next < cgraph->n_nodes && cgraph->nodes[next]->op == GGML_OP_VIEW) {
             ++next;
@@ -4162,7 +4175,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         }
     }
 
-    if (node->op == GGML_OP_RMS_NORM &&
+    if (GGML_CUDA_OPT_ENABLED(GGML_CUDA_FUSE_RMS_POST_SCALE, true) && node->op == GGML_OP_RMS_NORM &&
             ggml_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ADD, GGML_OP_MUL }) &&
             ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ADD }, {})) {
         ggml_tensor * add = cgraph->nodes[i + 2];
@@ -4179,7 +4192,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         }
     }
 
-    if (node->op == GGML_OP_RMS_NORM) {
+    if (GGML_CUDA_OPT_ENABLED(GGML_CUDA_FUSE_NORM_PACK, true) && node->op == GGML_OP_RMS_NORM) {
         const ggml_op ops[] = { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_MUL_MAT, GGML_OP_MUL_MAT };
         const int outputs[] = { i + 2, i + 3 };
         if (ggml_can_fuse_subgraph(cgraph, i, 4, ops, outputs, 2)) {
@@ -4206,7 +4219,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         }
     }
 
-    if (node->op == GGML_OP_CLAMP && i + 1 < cgraph->n_nodes &&
+    if (GGML_CUDA_OPT_ENABLED(GGML_CUDA_FUSE_CUBLAS_CLAMP, true) && node->op == GGML_OP_CLAMP && i + 1 < cgraph->n_nodes &&
             node->type == GGML_TYPE_F32 && ggml_is_contiguous(node->src[0]) && ggml_is_contiguous(node)) {
         ggml_tensor * mm = cgraph->nodes[i + 1];
         if (mm->op == GGML_OP_MUL_MAT && mm->src[1] == node && ggml_cuda_should_fuse_cublas_16bit(*cuda_ctx, mm)) {
@@ -4233,7 +4246,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         }
     }
 
-    if (node->op == GGML_OP_MUL_MAT && ggml_can_fuse(cgraph, i, { GGML_OP_MUL_MAT, GGML_OP_CLAMP }) &&
+    if (GGML_CUDA_OPT_ENABLED(GGML_CUDA_FUSE_CUBLAS_CLAMP, true) && node->op == GGML_OP_MUL_MAT && ggml_can_fuse(cgraph, i, { GGML_OP_MUL_MAT, GGML_OP_CLAMP }) &&
             ggml_cuda_should_fuse_cublas_16bit(*cuda_ctx, node)) {
         ggml_tensor * clamp = cgraph->nodes[i + 1];
         if (clamp->src[0] == node && clamp->type == GGML_TYPE_F32 && ggml_is_contiguous(clamp)) {

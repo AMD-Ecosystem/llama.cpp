@@ -380,7 +380,7 @@ static bool rms_norm_use_small_block(const int ncols, const int nrows) {
         return false;
     }
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
-    return GGML_CUDA_CC_IS_RDNA3_5(cc);
+    return GGML_CUDA_OPT_ENABLED(GGML_CUDA_NORM_SMALL_BLOCK, true) && GGML_CUDA_CC_IS_RDNA3_5(cc);
 #else
     GGML_UNUSED_VARS(ncols, nrows);
     return false;
@@ -651,7 +651,8 @@ void ggml_cuda_op_norm_fused(ggml_backend_cuda_context & ctx, ggml_tensor * norm
     const ggml_tensor * b = add->src[add->src[0] == mul ? 1 : 0];
     const dim3 grid(x->ne[1], x->ne[2], x->ne[3]);
     const float eps = ggml_get_op_params_f32(norm, 0);
-    if (GGML_CUDA_CC_IS_RDNA3_5(ggml_cuda_info().devices[ctx.device].cc) && x->ne[0] == 1152 && x->ne[1] >= 64) {
+    if (GGML_CUDA_OPT_ENABLED(GGML_CUDA_NORM_SMALL_BLOCK, true) &&
+            GGML_CUDA_CC_IS_RDNA3_5(ggml_cuda_info().devices[ctx.device].cc) && x->ne[0] == 1152 && x->ne[1] >= 64) {
         norm_f32<128, true><<<grid, 128, 32*sizeof(float2), ctx.stream()>>>((const float *) x->data, (float *) add->data,
             x->ne[0], x->nb[1]/sizeof(float), x->nb[2]/sizeof(float), x->nb[3]/sizeof(float), eps,
             (const float *) w->data, (const float *) b->data);

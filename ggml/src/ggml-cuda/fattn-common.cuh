@@ -1174,7 +1174,7 @@ void launch_fattn(
         ggml_cuda_flash_attn_ext_compact_mask(mask, KV_max.ptr, n_kv_max, main_stream);
     }
 
-    const bool use_rdna_mask = allow_mask_prefix && GGML_CUDA_CC_IS_RDNA3_5(cc) && !use_sparse &&
+    const bool use_rdna_mask = GGML_CUDA_OPT_ENABLED(GGML_CUDA_FATTN_MASK_PREFIX, true) && allow_mask_prefix && GGML_CUDA_CC_IS_RDNA3_5(cc) && !use_sparse &&
         ((ncols1 == 8 && ncols2 == 8) || ((ncols1 == 16 || ncols1 == 32) && ncols2 == 4)) && nbatch_fa == 64 && Q->ne[0] == 128 && DV == 128 &&
         K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16 &&
         Q->ne[1] >= 512 && Q->ne[1] % ncols1 == 0 && K->ne[1] <= 4096 &&

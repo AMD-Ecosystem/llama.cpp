@@ -1514,7 +1514,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
 #if defined(RDNA3_5)
-        if constexpr (J == 64) {
+        if constexpr (GGML_CUDA_MMQ_Q6_K_SCALE_REUSE && J == 64) {
             // The FP16 block scale times an int8 subscale is exact in FP32.
             const int scales = get_int_b2(bxi->scales, threadIdx.x % (MMQ_TILE_NE_K/8));
 #pragma unroll

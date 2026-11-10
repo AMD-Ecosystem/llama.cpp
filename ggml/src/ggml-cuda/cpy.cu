@@ -516,7 +516,8 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
                 (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
         }
     } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F16) {
-        if (GGML_CUDA_CC_IS_RDNA3_5(ggml_cuda_info().devices[ctx.device].cc) && !contiguous_srcs &&
+        if (GGML_CUDA_OPT_ENABLED(GGML_CUDA_CPY_F32_F16_VEC8, true) &&
+                GGML_CUDA_CC_IS_RDNA3_5(ggml_cuda_info().devices[ctx.device].cc) && !contiguous_srcs &&
                 ggml_is_contiguous(src1) && ggml_are_same_shape(src0, src1) && nb00 == sizeof(float) &&
                 ne00 % 8 == 0 && ne >= 8192 && ne/8 <= INT32_MAX &&
                 ne00/8 <= UINT32_MAX && ne01 <= UINT32_MAX && ne02 <= UINT32_MAX &&
