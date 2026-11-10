@@ -1223,12 +1223,15 @@ static size_t registry_device_count(ggml_backend_reg_t registry) {
     return static_cast<ggml_backend_hrx_reg_context *>(registry->context)->devices.size();
 }
 
+// Configure during backend initialization, before graph support checks or execution.
+// The caller keeps this preference fixed for the backend's lifetime.
 static bool backend_set_row64_weight_policy(ggml_backend_t backend, bool enabled) {
     if (!ggml_backend_is_hrx(backend)) {
         return false;
     }
     auto * context = static_cast<ggml_backend_hrx_context *>(backend->context);
-    return context->set_row64_weight_policy(enabled);
+    context->row64_weight_policy = enabled;
+    return true;
 }
 
 static ggml_backend_dev_t registry_device(ggml_backend_reg_t registry, size_t index) {

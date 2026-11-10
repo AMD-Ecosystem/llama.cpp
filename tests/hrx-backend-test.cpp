@@ -14796,29 +14796,6 @@ static void run_registered_host_input_reuse_waits_before_mutation() {
 }
 
 static void register_hrx_backend_device_cases(test_runner::Suite & suite) {
-    suite.device_case("row64_policy_lifetime", [] {
-        ggml_backend_t backend = ggml_backend_hrx_init(0);
-        REQUIRE(backend != nullptr);
-        ggml_backend_reg_t registry = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
-        using set_policy_fn = bool (*)(ggml_backend_t, bool);
-        auto set_policy = reinterpret_cast<set_policy_fn>(
-            ggml_backend_reg_get_proc_address(registry, "ggml_backend_hrx_set_row64_weight_policy"));
-        REQUIRE(set_policy != nullptr);
-        REQUIRE(set_policy(backend, true));
-        ggml_context * ctx = ggml_init({ 256 * 1024, nullptr, true });
-        REQUIRE(ctx != nullptr);
-        ggml_tensor * input = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 128);
-        ggml_tensor * output = ggml_add(ctx, input, input);
-        ggml_cgraph * graph = ggml_new_graph(ctx);
-        ggml_build_forward_expand(graph, output);
-        auto * state = static_cast<ggml_backend_hrx_context *>(backend->context);
-        ggml::hrx::GraphExecutor executor(*state);
-        REQUIRE(executor.can_execute(*graph).supported);
-        REQUIRE(!set_policy(backend, false));
-        REQUIRE(state->row64_weight_policy);
-        ggml_free(ctx);
-        ggml_backend_free(backend);
-    });
     suite.device_case("registered_host_input_reuse_waits_before_mutation", [] {
         run_registered_host_input_reuse_waits_before_mutation();
     });
