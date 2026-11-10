@@ -27,7 +27,6 @@ GraphReplayStreamState::~GraphReplayStreamState() {
 }
 
 void GraphReplayStreamState::clear() {
-    std::lock_guard<std::mutex> lock(mutex_);
     for (PendingHostWriteback & writeback : pending_host_writebacks_) {
         if (writeback.retained_buffer != nullptr) {
             hrx_buffer_release(writeback.retained_buffer);
@@ -38,7 +37,6 @@ void GraphReplayStreamState::clear() {
 }
 
 void GraphReplayStreamState::mark_stream_synchronized() {
-    std::lock_guard<std::mutex> lock(mutex_);
     for (PendingHostWriteback & writeback : pending_host_writebacks_) {
         if (writeback.host_destination != nullptr && writeback.mapped_source != nullptr && writeback.size > 0) {
             std::memcpy(writeback.host_destination, writeback.mapped_source, writeback.size);
@@ -58,12 +56,10 @@ void GraphReplayStreamState::add_host_writeback(void *       host_destination,
     if (buffer != nullptr) {
         hrx_buffer_retain(buffer);
     }
-    std::lock_guard<std::mutex> lock(mutex_);
     pending_host_writebacks_.push_back({ host_destination, mapped_source, size, buffer });
 }
 
 bool GraphReplayStreamState::has_pending_host_writebacks() const {
-    std::lock_guard<std::mutex> lock(mutex_);
     return !pending_host_writebacks_.empty();
 }
 
