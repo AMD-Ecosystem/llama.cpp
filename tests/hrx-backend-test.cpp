@@ -11609,6 +11609,7 @@ static void run_zero_output_scheduler_elision_checks() {
         ggml_cgraph * graph = ggml_new_graph(ctx);
         REQUIRE(graph != nullptr);
         ggml_build_forward_expand(graph, rows);
+        graph->uid = 99991;
 
         ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
         REQUIRE(imported.valid());
@@ -11678,6 +11679,11 @@ static void run_zero_output_scheduler_elision_checks() {
                 REQUIRE(ignored.external_bindings[0].tensor == input);
             }
         }
+        auto retired = cache.take_oldest(0);
+        REQUIRE(retired.second == lookup.program);
+        REQUIRE(lookup.program->retired());
+        REQUIRE(cache.stats().entries == 0);
+        REQUIRE(lookup.program->match_current_graph(*graph).valid());
     }
 
     {
@@ -13162,7 +13168,7 @@ static void run_prepared_graph_instance_reuse() {
     auto second = make_graph(4302);
     auto lookup = state->graph_programs.get_or_build(*first->graph, corpus, state->device->architecture);
     REQUIRE(lookup.valid());
-    auto * program = lookup.program;
+    auto * program = lookup.program.get();
     REQUIRE(!program->can_use_prepared_fast_path(*first->graph));
     compute(*first, 1);
     REQUIRE(program->can_use_prepared_fast_path(*first->graph));
@@ -13172,7 +13178,7 @@ static void run_prepared_graph_instance_reuse() {
     REQUIRE(state->prepared_programs.stats().hits == 1);
 
     compute(*second, 3);
-    REQUIRE(state->graph_programs.get_or_build(*second->graph, corpus, state->device->architecture).program == program);
+    REQUIRE(state->graph_programs.get_or_build(*second->graph, corpus, state->device->architecture).program.get() == program);
     REQUIRE(program->uid() == 4301);
     REQUIRE(program->can_use_prepared_fast_path(*second->graph));
     REQUIRE(!program->can_use_prepared_fast_path(*first->graph));

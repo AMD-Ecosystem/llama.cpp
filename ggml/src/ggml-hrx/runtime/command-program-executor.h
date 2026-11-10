@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -50,6 +51,7 @@ struct GraphReplayStreamState {
     void clear();
 
   private:
+    mutable std::mutex mutex_;
     std::vector<PendingHostWriteback> pending_host_writebacks_;
 };
 

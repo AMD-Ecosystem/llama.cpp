@@ -86,6 +86,9 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
         }
         return result;
     }
+    if (lookup.replaced_cached_program) {
+        context_.prepared_programs.take_uid(lookup.program->uid());
+    }
 
     const bool reusable_owner = lookup.program->can_use_prepared_fast_path(graph);
     const bool mutable_sources_current = reusable_owner && lookup.program->mutable_sources_current();
@@ -123,7 +126,8 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
         entry = lookup.program->prepared_entry();
     } else if (graph.uid != 0) {
         entry = context_.prepared_programs.get_or_create(execution_context, lookup.program->uid(),
-                                                        lookup.program->command_shape_hash(), bindings);
+                                                        lookup.program->command_shape_hash(), bindings,
+                                                        lookup.program.get());
     }
     const PreparedCommandProgramCacheExecutionResult execution = entry != nullptr ?
         context_.prepared_programs.execute_with_result(execution_context, lookup.program->commands(), bindings, entry) :
