@@ -6286,8 +6286,13 @@ static std::vector<float> f32_matmul_reference(ggml_type type, const std::vector
     return result;
 }
 
-static void require_row64_reference(const std::vector<float> & actual, const std::vector<float> & expected,
+static void require_reference_close(const std::vector<float> & actual, const std::vector<float> & expected,
                                     float absolute_tolerance = 0.0f) {
+    // Cancellation fixtures use an absolute bound because their expected outputs are near zero.
+    if (absolute_tolerance > 0.0f) {
+        require_close(actual, expected, absolute_tolerance);
+        return;
+    }
     double error = 0.0;
     double magnitude = 0.0;
     float maximum_error = 0.0f;
@@ -6299,12 +6304,9 @@ static void require_row64_reference(const std::vector<float> & actual, const std
     }
     REQUIRE(magnitude > 0.0);
     const double relative_l2 = std::sqrt(error / magnitude);
-    std::fprintf(stderr, "row64 scalar reference: relative_l2=%g max_abs=%g elements=%zu\n",
+    std::fprintf(stderr, "scalar reference: relative_l2=%g max_abs=%g elements=%zu\n",
                  relative_l2, maximum_error, actual.size());
-    const bool relative_close = relative_l2 <= 0.01;
-    const bool absolute_close = maximum_error <= absolute_tolerance;
-    const bool within_tolerance = relative_close || absolute_close;
-    REQUIRE(within_tolerance);
+    REQUIRE(relative_l2 <= 0.01);
     require_close(actual, expected, 0.02f, 0.02f);
 }
 
@@ -6318,7 +6320,8 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
                                                        bool         verify_uploaded_native = false,
                                                        bool         import_weights = false,
                                                        bool         row64_weight_policy = false,
-                                                       bool         varying_input = false) {
+                                                       bool         varying_input = false,
+                                                       float        reference_absolute_tolerance = 1.0e-4f) {
     ggml_backend_t cpu_backend = init_cpu_backend();
     ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
     REQUIRE(hrx_backend != nullptr);
@@ -6334,11 +6337,8 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
     REQUIRE(cpu_ctx != nullptr);
     REQUIRE(hrx_ctx != nullptr);
 
-    ggml_tensor * cpu_gate_weight = ggml_new_tensor_2d(cpu_ctx, gate_weight_type, input_size, output_size);
-    ggml_tensor * cpu_up_weight   = ggml_new_tensor_2d(cpu_ctx, up_weight_type, input_size, output_size);
-    ggml_tensor * cpu_input       = ggml_new_tensor_2d(cpu_ctx, GGML_TYPE_F32, input_size, token_count);
-    ggml_tensor * cpu_gate        = ggml_mul_mat(cpu_ctx, cpu_gate_weight, cpu_input);
-    ggml_tensor * cpu_up          = ggml_mul_mat(cpu_ctx, cpu_up_weight, cpu_input);
+    ggml_tensor * cpu_gate        = ggml_new_tensor_2d(cpu_ctx, GGML_TYPE_F32, output_size, token_count);
+    ggml_tensor * cpu_up          = ggml_new_tensor_2d(cpu_ctx, GGML_TYPE_F32, output_size, token_count);
     ggml_tensor * cpu_output      = ggml_glu_split(cpu_ctx, cpu_gate, cpu_up, glu_op);
     ggml_tensor * hrx_gate_weight = ggml_new_tensor_2d(hrx_ctx, gate_weight_type, input_size, output_size);
     ggml_tensor * hrx_up_weight   = ggml_new_tensor_2d(hrx_ctx, up_weight_type, input_size, output_size);
@@ -6407,23 +6407,26 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
     const std::vector<float> input = varying_input ? make_pattern_f32(input_size * token_count, 7, 0.01f) :
         std::vector<float>(static_cast<size_t>(input_size * token_count), 0.00390625f);
     if (verify_uploaded_native) {
-        ggml_backend_tensor_set(cpu_gate_weight, gate_weight.data(), 0, gate_weight.size());
-        ggml_backend_tensor_set(cpu_up_weight, up_weight.data(), 0, up_weight.size());
         std::vector<uint8_t> gate_staging = gate_weight;
         std::vector<uint8_t> up_staging = up_weight;
         ggml_backend_tensor_set(hrx_gate_weight, gate_staging.data(), 0, gate_staging.size());
         ggml_backend_tensor_set(hrx_up_weight, up_staging.data(), 0, up_staging.size());
         std::fill(gate_staging.begin(), gate_staging.end(), 0);
         std::fill(up_staging.begin(), up_staging.end(), 0);
-    } else if (import_weights) {
-        ggml_backend_tensor_set(cpu_gate_weight, gate_weight.data(), 0, gate_weight.size());
-        ggml_backend_tensor_set(cpu_up_weight, up_weight.data(), 0, up_weight.size());
-    } else {
-        set_tensor_pair_bytes(cpu_backend, cpu_gate_weight, hrx_backend, hrx_gate_weight, gate_weight.data(),
-                              gate_weight.size());
-        set_tensor_pair_bytes(cpu_backend, cpu_up_weight, hrx_backend, hrx_up_weight, up_weight.data(), up_weight.size());
+    } else if (!import_weights) {
+        ggml_backend_tensor_set(hrx_gate_weight, gate_weight.data(), 0, gate_weight.size());
+        ggml_backend_tensor_set(hrx_up_weight, up_weight.data(), 0, up_weight.size());
     }
-    set_tensor_pair_bytes(cpu_backend, cpu_input, hrx_backend, hrx_input, input.data(), input.size() * sizeof(float));
+    ggml_backend_tensor_set(hrx_input, input.data(), 0, input.size() * sizeof(float));
+
+    // Use the same scalar projections for every weight layout. The CPU graph applies
+    // only the selected GLU operation, avoiding CPU matmul activation quantization.
+    const auto gate_reference = f32_matmul_reference(gate_weight_type, gate_weight, input,
+                                                     input_size, output_size, token_count);
+    const auto up_reference = f32_matmul_reference(up_weight_type, up_weight, input,
+                                                   input_size, output_size, token_count);
+    ggml_backend_tensor_set(cpu_gate, gate_reference.data(), 0, gate_reference.size() * sizeof(float));
+    ggml_backend_tensor_set(cpu_up, up_reference.data(), 0, up_reference.size() * sizeof(float));
 
     REQUIRE(ggml_backend_graph_compute(cpu_backend, cpu_graph) == GGML_STATUS_SUCCESS);
     auto * backend_state = static_cast<ggml_backend_hrx_context *>(hrx_backend->context);
@@ -6431,23 +6434,10 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
     REQUIRE(ggml_backend_graph_compute(hrx_backend, hrx_graph) == GGML_STATUS_SUCCESS);
     ggml_backend_synchronize(cpu_backend);
     ggml_backend_synchronize(hrx_backend);
-    if (row64_weight_policy) {
-        auto expected = f32_matmul_reference(gate_weight_type, gate_weight, input, input_size, output_size, token_count);
-        const auto up = f32_matmul_reference(up_weight_type, up_weight, input, input_size, output_size, token_count);
-        for (size_t i = 0; i < expected.size(); ++i) {
-            expected[i] = (expected[i] / (1.0f + std::exp(-expected[i]))) * up[i];
-        }
-        // Constant inputs cancel the signed projections, leaving SwiGLU outputs around 1e-6.
-        // Use a 1e-7 absolute-error floor for F16 arithmetic in this fixture; varied inputs
-        // and other row64 cases retain the 1% relative-L2 bound without an absolute allowance.
-        const float absolute_tolerance = varying_input ? 0.0f : 1.0e-7f;
-        require_row64_reference(get_f32_tensor(hrx_backend, hrx_output), expected, absolute_tolerance);
-    }
-    if (!row64_weight_policy) {
-        // Row64 cases use the scalar reference above: CPU Q8 activation quantization and
-        // the paired kernel's F16 arithmetic introduce different rounding errors.
-        require_close(get_f32_tensor(hrx_backend, hrx_output), get_f32_tensor(cpu_backend, cpu_output), 1.0e-4f, 1.0e-3f);
-    }
+    // Keep the legacy absolute bound for constant-input fixtures; varied fixtures select
+    // relative checking explicitly so their accuracy does not depend on weight layout.
+    require_reference_close(get_f32_tensor(hrx_backend, hrx_output), get_f32_tensor(cpu_backend, cpu_output),
+                            reference_absolute_tolerance);
     if (row64_weight_policy) {
         ggml_backend_hrx_cache_stats stats = {};
         REQUIRE(ggml_backend_hrx_get_cache_stats(hrx_backend, &stats));
@@ -7008,7 +6998,7 @@ static void run_dense_matmul_postops_cpu_reference_case(ggml_type    weight_type
                 expected[i] += residual[i];
             }
         }
-        require_row64_reference(get_f32_tensor(hrx_backend, hrx_postops), expected);
+        require_reference_close(get_f32_tensor(hrx_backend, hrx_postops), expected);
         ggml_backend_hrx_cache_stats stats = {};
         REQUIRE(ggml_backend_hrx_get_cache_stats(hrx_backend, &stats));
         REQUIRE(stats.weight_materializations == 1);
@@ -9084,9 +9074,12 @@ static void register_basic_ops_cases(Suite & suite) {
     for (const bool varying_input : { false, true }) {
         suite.device_case("qwen27.q4_metadata_paired.tokens66." +
                               std::string(varying_input ? "varied" : "constant"), [varying_input] {
+            // Constant inputs cancel the signed projections, leaving outputs around 1e-6.
+            // Allow 1e-7 absolute error for F16 arithmetic; varied inputs keep the 1% relative bound.
             run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_Q4_K, GGML_TYPE_Q4_K,
                 "loom_libs:ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32",
-                66, 192, GGML_GLU_OP_SWIGLU, 768, false, true, true, varying_input);
+                66, 192, GGML_GLU_OP_SWIGLU, 768, false, true, true, varying_input,
+                varying_input ? 0.0f : 1.0e-7f);
         });
     }
     suite.device_case("qwen27.q4_metadata_single.tokens66.input768.outputs192", [] {
