@@ -970,6 +970,29 @@
       ]
     },
     {
+      "name": "ggml_copy_transpose_f16_indirect",
+      "family": "loom_libs",
+      "symbol": "ggml_copy_transpose_f16_indirect",
+      "source": "ops/copy/transpose_f16.loom",
+      "workload_parameters": [
+        { "name": "row_capacity", "type": "index" },
+        { "name": "column_count", "type": "index" }
+      ],
+      "launch_parameters": [
+        { "name": "row_capacity", "type": "index" },
+        { "name": "column_count", "type": "index" }
+      ],
+      "bindings": ["args", "input", "output"],
+      "binding_access": ["read", "read", "write"],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": ["ops/copy/transpose_f16.loom"],
+        "library_sources": ["motifs/copy/transpose_tile.loom"]
+      },
+      "compile_dependencies": ["motifs/copy/transpose_tile.loom"]
+    },
+    {
       "name": "ggml_copy_f16_k16_major",
       "family": "loom_libs",
       "symbol": "ggml_copy_f16_k16_major",
@@ -6394,6 +6417,37 @@
         "primary_sources": [
           "ops/flash_attention/prefill_f32_f16_wmma.loom"
         ],
+        "library_sources": [
+          "motifs/flash_attention/qk_block_wmma.loom",
+          "motifs/flash_attention/online_softmax.loom",
+          "motifs/flash_attention/pv_block_wmma.loom",
+          "motifs/flash_attention/publish_f32.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/flash_attention/qk_block_wmma.loom",
+        "motifs/flash_attention/online_softmax.loom",
+        "motifs/flash_attention/pv_block_wmma.loom",
+        "motifs/flash_attention/publish_f32.loom"
+      ]
+    },
+    {
+      "name": "ggml_flash_attention_f32_f16_wmma_indirect",
+      "family": "loom_libs",
+      "symbol": "ggml_flash_attention_f32_f16_wmma_indirect",
+      "source": "ops/flash_attention/prefill_f32_f16_wmma.loom",
+      "workload_parameters": [
+        { "name": "query_token_count", "type": "index" }
+      ],
+      "launch_parameters": [
+        { "name": "query_token_count", "type": "index" }
+      ],
+      "bindings": ["args", "query", "key", "value", "mask", "gate", "output"],
+      "binding_access": ["read", "read", "read", "read", "read", "read", "read_write"],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": ["ops/flash_attention/prefill_f32_f16_wmma.loom"],
         "library_sources": [
           "motifs/flash_attention/qk_block_wmma.loom",
           "motifs/flash_attention/online_softmax.loom",

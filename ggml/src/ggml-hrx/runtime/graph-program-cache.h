@@ -67,6 +67,8 @@ class GraphProgram {
 
     const CommandProgram & commands() const { return *commands_; }
 
+    bool cross_shape_family() const { return commands_->cross_shape_kv_count != 0; }
+
     GraphProgramMatch match_current_graph(const ggml_cgraph & graph) const;
     GraphProgramMatch match_trusted_graph(const ggml_cgraph & graph, bool bind_external = true) const;
     GraphProgramMatch match_host_staging_graph(const ggml_cgraph & graph) const;
@@ -138,6 +140,8 @@ class GraphProgramCache {
                                             const std::string &  target) const;
 
     GraphProgramLookup get_or_build(const ggml_cgraph & graph, const KernelCorpus & corpus, const std::string & target);
+    GraphProgramLookup build_exact_uncached(const ggml_cgraph & graph, const KernelCorpus & corpus,
+                                             const std::string & target) const;
 
     GraphProgramCacheStats stats() const;
 
@@ -158,7 +162,8 @@ class GraphProgramCache {
                                                               Graph &&             imported_graph,
                                                               const KernelCorpus & corpus,
                                                               const std::string &  target,
-                                                              Status &             errors) const;
+                                                              Status &             errors,
+                                                              bool                 allow_cross_shape = true) const;
 
     mutable std::mutex                                          mutex_;
     std::unordered_map<uint64_t, std::unique_ptr<GraphProgram>> programs_;

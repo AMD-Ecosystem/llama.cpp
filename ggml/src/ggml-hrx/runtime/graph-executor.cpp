@@ -10,10 +10,59 @@
 
 #include <utility>
 #include <vector>
+#include <cstdio>
+#include <cstdlib>
+#include <algorithm>
+#include <unordered_map>
 
 namespace ggml::hrx {
 
 GraphExecutor::GraphExecutor(ggml_backend_hrx_context & context) : context_(context) {}
+
+static CommandProgramBindings canonical_cross_shape_bindings(const CommandProgram & commands,
+                                                               const CommandProgramBindings & physical) {
+    std::unordered_map<int32_t, size_t> required_bytes;
+    for (const Command & command : commands.commands) {
+        for (const CommandBinding & binding : command.bindings) {
+            if (binding.origin != CommandBindingOrigin::GraphValue) {
+                continue;
+            }
+            const size_t extent = binding.offset + binding.length;
+            size_t & required = required_bytes[binding.value.value];
+            required = std::max(required, extent);
+        }
+    }
+
+    Status status;
+    std::vector<CommandProgramBinding> normalized = physical.bindings();
+    for (CommandProgramBinding & binding : normalized) {
+        const auto found = required_bytes.find(binding.value.value);
+        if (binding.weight) {
+            continue;
+        }
+        // The GGML KV cache exposes both a storage root and views. The views
+        // occur in command bindings; their roots share the physical address
+        // and must carry the same reserved span in the family cache key.
+        constexpr size_t kSmallKvBytes = 29184 * 512 * sizeof(uint16_t);
+        constexpr size_t kLargeKvBytes = 29696 * 512 * sizeof(uint16_t);
+        const bool small_kv_root = binding.buffer != nullptr && binding.length == kSmallKvBytes;
+        const size_t requested = found == required_bytes.end() ? 0 : found->second;
+        const size_t required = small_kv_root ? std::max(requested, kLargeKvBytes) : requested;
+        if (required <= binding.length) {
+            continue;
+        }
+        const bool valid_offset = binding.offset <= binding.capacity;
+        const bool sufficient_capacity = valid_offset && required <= binding.capacity - binding.offset;
+        if (!sufficient_capacity) {
+            status.log("cross-shape binding value %d requires %zu bytes but has %zu bytes capacity",
+                       binding.value.value, required,
+                       valid_offset ? binding.capacity - binding.offset : 0);
+            continue;
+        }
+        binding.length = required;
+    }
+    return CommandProgramBindings::from_bindings(std::move(normalized), status);
+}
 
 Status GraphExecutor::context_valid_for_graph_programs() const {
     Status status;
@@ -87,9 +136,10 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
         return result;
     }
 
-    const bool reusable_owner = lookup.program->can_use_prepared_fast_path(graph);
+    bool family = lookup.program->cross_shape_family();
+    const bool reusable_owner = !family && lookup.program->can_use_prepared_fast_path(graph);
     const bool mutable_sources_current = reusable_owner && lookup.program->mutable_sources_current();
-    const bool trusted_weights = reusable_owner && mutable_sources_current;
+    bool trusted_weights = reusable_owner && mutable_sources_current;
     GraphProgramMatch binding_match = std::move(lookup.match);
     if (reusable_owner) {
         binding_match = trusted_weights ? lookup.program->match_host_staging_graph(graph) :
@@ -100,10 +150,48 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
         return result;
     }
 
-    CommandProgramBindings bindings = bind_external_value_buffers(binding_match);
-    if (!bindings.valid()) {
-        result.status.append(bindings.status);
+    CommandProgramBindings physical_bindings = bind_external_value_buffers(binding_match);
+    if (!physical_bindings.valid()) {
+        result.status.append(physical_bindings.status);
         return result;
+    }
+    CommandProgramBindings bindings = family ?
+        canonical_cross_shape_bindings(lookup.program->commands(), physical_bindings) :
+        std::move(physical_bindings);
+    auto use_exact_fallback = [&]() {
+        lookup = context_.graph_programs.build_exact_uncached(graph, corpus, context_.device->architecture);
+        if (!lookup.valid()) {
+            result.status.append(lookup.status);
+            result.status.append(lookup.match.status);
+            return false;
+        }
+        family = false;
+        trusted_weights = false;
+        binding_match = std::move(lookup.match);
+        bindings = bind_external_value_buffers(binding_match);
+        if (!bindings.valid()) {
+            result.status.append(bindings.status);
+            return false;
+        }
+        return true;
+    };
+    const bool force_exact = family && std::getenv("GGML_HRX_CROSS_SHAPE_FORCE_EXACT") != nullptr;
+    const bool use_fallback = !bindings.valid() || force_exact;
+    if (use_fallback) {
+        if (!family) {
+            result.status.append(bindings.status);
+            return result;
+        }
+        if (!use_exact_fallback()) {
+            return result;
+        }
+    }
+    if (family && std::getenv("GGML_HRX_CROSS_SHAPE_TRACE") != nullptr) {
+        std::fprintf(stderr, "HRX_CROSS_SHAPE_KEY kv=%d shape=%llu bindings=%llu count=%zu\n",
+                     lookup.program->commands().cross_shape_kv_count,
+                     static_cast<unsigned long long>(lookup.program->command_shape_hash()),
+                     static_cast<unsigned long long>(command_program_bindings_hash(bindings).value),
+                     bindings.bindings().size());
     }
     const CommandProgramExecutionContext execution_context = {
         context_.device->device,
@@ -121,9 +209,16 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
     std::shared_ptr<PreparedCommandProgramCacheEntry> entry;
     if (trusted_weights) {
         entry = lookup.program->prepared_entry();
-    } else if (graph.uid != 0) {
-        entry = context_.prepared_programs.get_or_create(execution_context, lookup.program->uid(),
-                                                        lookup.program->command_shape_hash(), bindings);
+    } else if (graph.uid != 0 && lookup.uncached_program == nullptr) {
+        const uint64_t cache_uid = family ? UINT64_C(0x71753132352d6373) : lookup.program->uid();
+        entry = family ?
+            context_.prepared_programs.get_or_create_family(execution_context, cache_uid,
+                                                            lookup.program->command_shape(), bindings) :
+            context_.prepared_programs.get_or_create(execution_context, cache_uid,
+                                                     lookup.program->command_shape_hash(), bindings);
+        if (entry == nullptr && !use_exact_fallback()) {
+            return result;
+        }
     }
     const PreparedCommandProgramCacheExecutionResult execution = entry != nullptr ?
         context_.prepared_programs.execute_with_result(execution_context, lookup.program->commands(), bindings, entry) :
@@ -141,6 +236,14 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
     const bool validated_entry = entry != nullptr && !trusted_weights;
     if (validated_entry) {
         lookup.program->bind_prepared_graph(graph, binding_match, bindings, std::move(entry));
+    }
+
+    if (family && std::getenv("GGML_HRX_CROSS_SHAPE_TRACE") != nullptr) {
+        const PreparedCommandProgramCacheRetention retained = context_.prepared_programs.retention();
+        std::fprintf(stderr,
+                     "HRX_CROSS_SHAPE_MEMORY kv=%d entries=%zu staging=%zu constants=%zu recorded_arenas=%zu\n",
+                     lookup.program->commands().cross_shape_kv_count, retained.entries,
+                     retained.staging_bytes, retained.constant_bytes, retained.recorded_arena_bytes);
     }
 
     result.code = GGML_STATUS_SUCCESS;

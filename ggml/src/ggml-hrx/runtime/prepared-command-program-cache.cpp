@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cstdio>
 #include <memory>
 #include <unordered_set>
 #include <utility>
@@ -41,6 +42,33 @@ static void apply_graph_replay_result(PreparedCommandProgramCacheExecutionResult
 
 static bool graph_replay_should_fallback(HrxGraphReplayEvent event) {
     return event == HrxGraphReplayEvent::Ineligible || event == HrxGraphReplayEvent::BuildFailed;
+}
+
+static bool family_binding_matches(const CommandProgramBinding & lhs, const CommandProgramBinding & rhs) {
+    const bool same_value = lhs.value == rhs.value;
+    const bool same_storage = lhs.buffer == rhs.buffer && lhs.host_data == rhs.host_data &&
+                              lhs.source_host_data == rhs.source_host_data;
+    const bool same_region = lhs.offset == rhs.offset && lhs.length == rhs.length &&
+                             lhs.capacity == rhs.capacity;
+    const bool same_identity = lhs.identity == rhs.identity && lhs.generation == rhs.generation;
+    const bool same_kind = lhs.weight == rhs.weight && lhs.empty_value == rhs.empty_value;
+    const bool same_layout = lhs.layout == rhs.layout && lhs.layout_source_type == rhs.layout_source_type &&
+                             lhs.input_size == rhs.input_size && lhs.output_size == rhs.output_size &&
+                             lhs.source_length == rhs.source_length;
+    return same_value && same_storage && same_region && same_identity && same_kind && same_layout;
+}
+
+static bool family_bindings_match(const std::vector<CommandProgramBinding> & cached,
+                                  const CommandProgramBindings & current) {
+    if (cached.size() != current.bindings().size()) {
+        return false;
+    }
+    for (size_t i = 0; i < cached.size(); ++i) {
+        if (!family_binding_matches(cached[i], current.bindings()[i])) {
+            return false;
+        }
+    }
+    return true;
 }
 
 }  // namespace
@@ -134,6 +162,28 @@ std::shared_ptr<PreparedCommandProgramCacheEntry> PreparedCommandProgramCache::g
     return entry;
 }
 
+std::shared_ptr<PreparedCommandProgramCacheEntry> PreparedCommandProgramCache::get_or_create_family(
+    const CommandProgramExecutionContext & context,
+    uint64_t graph_uid,
+    const std::string & command_shape,
+    const CommandProgramBindings & bindings) {
+    const Key key = cache_key(graph_uid, context, command_program_shape_hash(command_shape), bindings);
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto found = programs_.find(key);
+    if (found != programs_.end()) {
+        const PreparedCommandProgramCacheEntry & entry = *found->second;
+        const bool same_shape = entry.family_signature_set && entry.family_command_shape == command_shape;
+        const bool same_bindings = same_shape && family_bindings_match(entry.family_bindings, bindings);
+        return same_bindings ? found->second : nullptr;
+    }
+    auto entry = std::make_shared<PreparedCommandProgramCacheEntry>();
+    entry->family_command_shape = command_shape;
+    entry->family_bindings = bindings.bindings();
+    entry->family_signature_set = true;
+    programs_.emplace(key, entry);
+    return entry;
+}
+
 PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_with_result(
     const CommandProgramExecutionContext & context,
     const CommandProgram & commands,
@@ -157,6 +207,24 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
         record_hit();
     }
 
+    if (commands.cross_shape_kv_count != 0) {
+        const auto argument = std::find_if(entry->prepared.program_constants.begin(),
+                                           entry->prepared.program_constants.end(),
+                                           [](const PreparedProgramConstantBuffer & constant) {
+                                               return constant.name == "cross_shape_kv_count";
+                                           });
+        if (argument == entry->prepared.program_constants.end()) {
+            result.status.log("missing cross-shape KV argument buffer");
+            return result;
+        }
+        const int32_t active_kv = commands.cross_shape_kv_count;
+        result.status.append(context.host_transfers->upload_async(context.stream, &active_kv,
+                                                                   argument->buffer, 0, sizeof(active_kv)));
+        if (!result.status.success()) {
+            return result;
+        }
+    }
+
     if (execute_directly) {
         result.graph_replay_event = HrxGraphReplayEvent::Disabled;
         result.graph_replay_ineligible_reason = serial_execution ? "debug_serial_execution" :
@@ -172,6 +240,16 @@ PreparedCommandProgramCacheExecutionResult PreparedCommandProgramCache::execute_
         const auto replay = bind_and_launch_recorded_command_graph(
             context, commands, bindings, entry->prepared, entry->recorded);
         apply_graph_replay_result(result, replay);
+        if (commands.cross_shape_kv_count != 0 && std::getenv("GGML_HRX_CROSS_SHAPE_TRACE") != nullptr) {
+            std::fprintf(stderr,
+                         "HRX_CROSS_SHAPE_REPLAY kv=%d entry=%p exec=%p event=%d build_ns=%llu launch_ns=%llu arena=%llu bytes=%zu\n",
+                         commands.cross_shape_kv_count, static_cast<void *>(entry.get()),
+                         static_cast<void *>(entry->recorded.exec), static_cast<int>(replay.event),
+                         static_cast<unsigned long long>(replay.build_ns),
+                         static_cast<unsigned long long>(replay.launch_ns),
+                         static_cast<unsigned long long>(entry->recorded.bound_transient_arena_allocation_id),
+                         entry->recorded.bound_transient_arena_capacity);
+        }
         result.success = replay.success;
         const bool fallback = !replay.success && graph_replay_should_fallback(replay.event);
         if (fallback) {

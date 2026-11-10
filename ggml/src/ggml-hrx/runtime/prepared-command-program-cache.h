@@ -33,6 +33,9 @@ struct PreparedCommandProgramCacheRetention {
 
 struct PreparedCommandProgramCacheEntry {
     std::mutex mutex;
+    std::string family_command_shape;
+    std::vector<CommandProgramBinding> family_bindings;
+    bool family_signature_set = false;
     // Release recorded handles before the prepared bindings they reference.
     PreparedCommandProgram prepared;
     RecordedCommandGraph   recorded;
@@ -58,6 +61,14 @@ class PreparedCommandProgramCache {
         const CommandProgramExecutionContext & context,
         uint64_t graph_uid,
         uint64_t command_shape_hash,
+        const CommandProgramBindings & bindings);
+
+    // An exact family signature protects the recorded graph from hash collisions
+    // and from physical binding changes that the ordinary cache key omits.
+    std::shared_ptr<PreparedCommandProgramCacheEntry> get_or_create_family(
+        const CommandProgramExecutionContext & context,
+        uint64_t graph_uid,
+        const std::string & command_shape,
         const CommandProgramBindings & bindings);
 
     PreparedCommandProgramCacheExecutionResult execute_with_result(

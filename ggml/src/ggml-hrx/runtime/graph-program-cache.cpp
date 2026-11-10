@@ -3,12 +3,14 @@
 #include "backend-buffer-binding.h"
 #include "dispatch/command-program-dump.h"
 #include "dispatch/dispatch-scheduler.h"
+#include "dispatch/transient-allocator.h"
 #include "ggml-impl.h"
 #include "ggml.h"
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdlib>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <unordered_map>
@@ -262,6 +264,154 @@ static Status bind_current_value(const ValueMap &                               
         value_by_tensor.emplace(tensor, expected.value);
     }
     return status;
+}
+
+static bool canonicalize_q512_cross_shape_program(const Graph & graph, const CommandPlan & plan,
+                                                   CommandProgram & commands) {
+    constexpr int64_t kFirstKv = 29184;
+    constexpr int64_t kCapacityKv = 29696;
+    constexpr size_t kKvBytes = static_cast<size_t>(kCapacityKv) * 512 * sizeof(uint16_t);
+    constexpr uint64_t kTranspose = kernel_catalog_id("loom_libs", "ggml_copy_transpose_f16");
+    constexpr uint64_t kAttention = kernel_catalog_id("loom_libs", "ggml_flash_attention_f32_f16_wmma");
+    constexpr uint64_t kIndirectTranspose = kernel_catalog_id("loom_libs", "ggml_copy_transpose_f16_indirect");
+    constexpr uint64_t kIndirectAttention = kernel_catalog_id("loom_libs", "ggml_flash_attention_f32_f16_wmma_indirect");
+
+    const bool enabled = environment_flag_enabled("GGML_HRX_CROSS_SHAPE_PROTOTYPE");
+    const bool expected_command_count = commands.commands.size() == 405;
+    if (!enabled || !expected_command_count) {
+        return false;
+    }
+    size_t transpose_count = 0;
+    size_t attention_count = 0;
+    int64_t active_kv = 0;
+    for (const Command & command : commands.commands) {
+        const bool transpose = command.kernel.kernel_id == kTranspose;
+        const bool attention = command.kernel.kernel_id == kAttention;
+        if (!transpose && !attention) {
+            continue;
+        }
+        const char * parameter_name = transpose ? "row_count" : "key_value_token_count";
+        const auto kv = command.kernel.integer_parameters.find(parameter_name);
+        const auto query = command.kernel.integer_parameters.find(transpose ? "column_count" : "query_token_count");
+        const bool has_parameters = kv != command.kernel.integer_parameters.end() &&
+                                    query != command.kernel.integer_parameters.end();
+        if (!has_parameters || query->second != 512) {
+            return false;
+        }
+        const bool supported_kv = kv->second == kFirstKv || kv->second == kCapacityKv;
+        const bool inconsistent_kv = active_kv != 0 && active_kv != kv->second;
+        if (!supported_kv || inconsistent_kv) {
+            return false;
+        }
+        active_kv = kv->second;
+        transpose_count += transpose;
+        attention_count += attention;
+    }
+    const bool expected_routes = transpose_count == 6 && attention_count == 6;
+    if (!expected_routes || active_kv == 0) {
+        return false;
+    }
+    constexpr uint32_t kTransposeOrdinals[] = { 61, 131, 197, 265, 334, 401 };
+    constexpr uint32_t kAttentionOrdinals[] = { 62, 132, 198, 266, 335, 402 };
+    for (size_t layer = 0; layer < 6; ++layer) {
+        const Command & transpose = commands.commands[kTransposeOrdinals[layer]];
+        const Command & attention = commands.commands[kAttentionOrdinals[layer]];
+        const bool expected_transpose = transpose.kernel.kernel_id == kTranspose &&
+                                        transpose.bindings.size() == 2 &&
+                                        transpose.bindings[0].name == "input" &&
+                                        transpose.bindings[1].name == "output";
+        const bool expected_attention = attention.kernel.kernel_id == kAttention &&
+                                        attention.bindings.size() == 6 &&
+                                        attention.bindings[1].name == "key" &&
+                                        attention.bindings[2].name == "value" &&
+                                        attention.bindings[3].name == "mask";
+        if (!expected_transpose || !expected_attention) {
+            return false;
+        }
+        const size_t current_kv_bytes = static_cast<size_t>(active_kv) * 512 * sizeof(uint16_t);
+        const bool transpose_spans_match = transpose.bindings[0].length == current_kv_bytes &&
+                                           transpose.bindings[1].length == current_kv_bytes;
+        const bool attention_spans_match = attention.bindings[1].length == current_kv_bytes &&
+                                           attention.bindings[2].length == current_kv_bytes &&
+                                           attention.bindings[3].length == current_kv_bytes;
+        if (!transpose_spans_match || !attention_spans_match) {
+            return false;
+        }
+    }
+    for (const Command & command : commands.commands) {
+        const bool dynamic_route = command.kernel.kernel_id == kTranspose || command.kernel.kernel_id == kAttention;
+        if (dynamic_route) {
+            continue;
+        }
+        for (const auto & parameter : command.kernel.integer_parameters) {
+            if (parameter.second == active_kv) {
+                return false;
+            }
+        }
+    }
+
+    int32_t max_value = -1;
+    for (const Value & value : graph.values().values()) {
+        max_value = std::max(max_value, value.id.value);
+    }
+    for (const CommandPlanTransient & transient : plan.transients) {
+        max_value = std::max(max_value, transient.value.value);
+    }
+    if (max_value == std::numeric_limits<int32_t>::max()) {
+        return false;
+    }
+    const ValueId args_value(max_value + 1);
+    for (Command & command : commands.commands) {
+        const bool transpose = command.kernel.kernel_id == kTranspose;
+        const bool attention = command.kernel.kernel_id == kAttention;
+        if (!transpose && !attention) {
+            continue;
+        }
+        CommandBinding args;
+        args.name = "args";
+        args.value = args_value;
+        args.origin = CommandBindingOrigin::Transient;
+        args.length = sizeof(int32_t);
+        args.access = ResourceAccess::Read;
+        command.bindings.insert(command.bindings.begin(), std::move(args));
+        for (CommandBinding & binding : command.bindings) {
+            if (binding.name != "args" && binding.length < kKvBytes) {
+                const bool transpose_data = transpose && (binding.name == "input" || binding.name == "output");
+                const bool attention_data = attention && (binding.name == "key" || binding.name == "value" ||
+                                                            binding.name == "mask");
+                const bool kv_data = transpose_data || attention_data;
+                if (kv_data) {
+                    binding.length = kKvBytes;
+                }
+            }
+        }
+        if (transpose) {
+            command.kernel.kernel_id = kIndirectTranspose;
+            command.kernel.integer_parameters.erase("row_count");
+            command.kernel.integer_parameters["row_capacity"] = kCapacityKv;
+        } else {
+            command.kernel.kernel_id = kIndirectAttention;
+            command.kernel.integer_parameters.erase("key_value_token_count");
+        }
+    }
+
+    std::vector<Command> allocation_commands = commands.commands;
+    for (Command & command : allocation_commands) {
+        const bool indirect = command.kernel.kernel_id == kIndirectTranspose ||
+                              command.kernel.kernel_id == kIndirectAttention;
+        if (indirect) {
+            command.bindings.erase(command.bindings.begin());
+        }
+    }
+    commands.transients = TransientAllocator::allocate(graph, plan, commands.initialization_commands,
+                                                        allocation_commands, commands.completion_counters,
+                                                        commands.status);
+    const size_t args_offset = (commands.transients.arena_size + 255) & ~size_t(255);
+    commands.transients.allocations.push_back({ args_value, sizeof(int32_t), 256, args_offset });
+    commands.transients.arena_size = args_offset + 256;
+    commands.constant_initializations.push_back({ args_value, "cross_shape_kv_count", 0, { 0, 0, 0, 0 } });
+    commands.cross_shape_kv_count = static_cast<int32_t>(active_kv);
+    return commands.valid();
 }
 
 static std::string command_program_shape_key(const CommandProgram & commands) {
@@ -798,6 +948,28 @@ GraphProgramLookup GraphProgramCache::get_or_build(const ggml_cgraph &  graph,
     return build_from_imported(graph, std::move(imported.graph), corpus, target);
 }
 
+GraphProgramLookup GraphProgramCache::build_exact_uncached(const ggml_cgraph & graph,
+                                                            const KernelCorpus & corpus,
+                                                            const std::string & target) const {
+    GraphProgramLookup result;
+    GraphImportResult imported = import_ggml_graph(graph);
+    if (!imported.valid()) {
+        result.status.append(imported.status);
+        return result;
+    }
+    result.uncached_program = build_program_from_imported(graph.uid, std::move(imported.graph), corpus,
+                                                           target, result.status, false);
+    if (result.uncached_program == nullptr) {
+        return result;
+    }
+    result.program = result.uncached_program.get();
+    result.match = result.program->match_current_graph(graph);
+    if (result.match.valid()) {
+        result.status.append(result.program->capture_external_slots(graph, result.match));
+    }
+    return result;
+}
+
 GraphProgramCacheStats GraphProgramCache::stats() const {
     std::lock_guard<std::mutex> lock(mutex_);
     GraphProgramCacheStats result = stats_;
@@ -816,7 +988,8 @@ std::unique_ptr<GraphProgram> GraphProgramCache::build_program_from_imported(uin
                                                                              Graph &&             imported_graph,
                                                                              const KernelCorpus & corpus,
                                                                              const std::string &  target,
-                                                                             Status &             errors) const {
+                                                                             Status &             errors,
+                                                                             bool                 allow_cross_shape) const {
     DispatchScheduler scheduler;
     if (!scheduler.schedule_graph(imported_graph, { target })) {
         errors.append(scheduler.plan().status);
@@ -827,6 +1000,17 @@ std::unique_ptr<GraphProgram> GraphProgramCache::build_program_from_imported(uin
     if (!commands.valid()) {
         errors.append(commands.status);
         return nullptr;
+    }
+
+    if (allow_cross_shape) {
+        canonicalize_q512_cross_shape_program(imported_graph, scheduler.plan(), commands);
+    }
+    if (!commands.valid()) {
+        commands = build_command_program(imported_graph, scheduler.plan(), corpus, target);
+        if (!commands.valid()) {
+            errors.append(commands.status);
+            return nullptr;
+        }
     }
 
     std::string command_shape = command_program_shape_key(commands);

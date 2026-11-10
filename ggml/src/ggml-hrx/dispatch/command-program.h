@@ -80,6 +80,9 @@ struct CommandProgram {
     std::vector<ConstantInitialization> constant_initializations;
     std::vector<CommandPlanActivationPublicationDiagnostic> activation_publication_diagnostics;
     Status                              status;
+    // Zero for ordinary programs; a nonzero value is refreshed in the family
+    // argument buffer before every recorded launch.
+    int32_t                             cross_shape_kv_count = 0;
 
     bool valid() const { return status.success(); }
 };

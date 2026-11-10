@@ -20,3 +20,32 @@ kernel.def target(@ggml_copy_f32_gfx11_wave64) export("ggml_copy_transpose_f16")
   template.apply<@ggml.copy.transpose_tile.f16_body>(%rows, %columns, %input, %output) : (index, index, buffer, buffer)
   kernel.return
 }
+
+// The graph family records the larger grid and supplies the active row count
+// through a stable device buffer before each launch.
+kernel.def target(@ggml_copy_f32_gfx11_wave64) export("ggml_copy_transpose_f16_indirect") @ggml_copy_transpose_f16_indirect(%row_capacity: index, %column_count: index) {
+  %rows = index.assume %row_capacity [range(%row_capacity, 32, 262144), multiple_of(%row_capacity, 32)] : index
+  %columns = index.assume %column_count [range(%column_count, 32, 32768), multiple_of(%column_count, 32)] : index
+  %tile_size = index.constant 32 : index
+  %one = index.constant 1 : index
+  %x = index.div %columns, %tile_size : index
+  %gy = index.div %rows, %tile_size : index
+  %y = index.constant 256 : index
+  kernel.launch.config workgroups(%x, %gy, %one) workgroup_size(%y, %one, %one) : index
+} launch(%row_capacity: index, %column_count: index, %args: buffer, %input: buffer, %output: buffer) {
+  %columns = index.assume %column_count [range(%column_count, 32, 32768), multiple_of(%column_count, 32)] : index
+  %zero = index.constant 0 : index
+  %zero_offset = index.constant 0 : offset
+  %tile_size = index.constant 32 : index
+  %args_view = buffer.view %args[%zero_offset] : buffer -> view<1xi32>
+  %row_count_i32 = view.load %args_view[%zero] : view<1xi32> -> i32
+  %row_count0 = index.cast %row_count_i32 : i32 to index
+  %row_count = index.assume %row_count0 [range(%row_count0, 32, 262144), multiple_of(%row_count0, 32), le(%row_count0, %row_capacity)] : index
+  %workgroup = kernel.workgroup.id<y> : index
+  %row_origin = index.mul %workgroup, %tile_size : index
+  %active = index.cmp ult, %row_origin, %row_count : index
+  scf.if %active {
+    template.apply<@ggml.copy.transpose_tile.f16_body>(%row_count, %columns, %input, %output) : (index, index, buffer, buffer)
+  }
+  kernel.return
+}
