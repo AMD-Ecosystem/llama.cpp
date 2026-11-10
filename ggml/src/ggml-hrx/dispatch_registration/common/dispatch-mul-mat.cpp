@@ -272,26 +272,6 @@ static bool common_mul_mat_is_tiled_route(const CommonMulMatMatch & match) {
     return match.matched() && match.token_count > 1 && !common_mul_mat_is_skinny_route(match);
 }
 
-static bool native_packed_glu_weight(const DispatchMatchContext & context, const Value & weight) {
-    const bool q4_weight = weight.type == GGML_TYPE_Q4_K;
-    const bool direct_weight = weight.alias_source.value < 0;
-    const bool has_graph_index = context.graph.has_index();
-    const bool has_root = context.root_node != nullptr;
-    const bool inspect_consumer = context.row64_weight_policy && q4_weight && direct_weight && has_graph_index && has_root;
-    if (!inspect_consumer) {
-        return false;
-    }
-    const std::vector<const GraphNode *> & consumers = context.graph.index().consumers(context.root_node->output);
-    if (consumers.size() != 1 || consumers.front() == nullptr) {
-        return false;
-    }
-    const GraphNode * consumer = consumers.front();
-    const bool glu = consumer->op == GGML_OP_GLU;
-    const bool one_input = consumer->inputs.size() == 1;
-    const bool reads_projection = one_input && consumer->inputs[0] == context.root_node->output;
-    return glu && reads_projection;
-}
-
 static bool common_mul_mat_postops_is_skinny_route(const MulMatPostOpsMatch & match) {
     return match.matched() && common_mul_mat_is_low_token_batch(match.token_count) &&
            common_mul_mat_has_skinny_reduction_shape(match.input_size);
@@ -910,8 +890,7 @@ static bool match_q6_k_prefill_wave32_dispatch(const DispatchMatchContext & cont
     }
     const bool enough_tokens = match.token_count >= 64;
     const bool short_prompt = match.token_count < 128;
-    const bool row64_weight = context.row64_weight_policy && dispatch_weight_layout_eligible_for_graph(
-        context.graph, *match.weight, context.row64_weight_policy);
+    const bool row64_weight = context.row64_weight_policy && dispatch_weight_layout_eligible(*match.weight);
     const bool short_row64 = enough_tokens && short_prompt && row64_weight;
     const bool ordinary_minimum = match.token_count >= 128;
     const bool ordinary_maximum = match.token_count <= 2048;
@@ -1094,17 +1073,8 @@ static bool match_packed_q8_1_x4_prefill_dispatch(const DispatchMatchContext & c
     const bool is_q4_weight = match.weight->type == GGML_TYPE_Q4_K;
     const bool has_direct_weight = match.weight->alias_source.value < 0;
     const bool has_wide_output = match.output_size >= match.input_size / 4;
-    const bool can_transform_weight = dispatch_weight_layout_eligible_for_graph(
-        context.graph, *match.weight, context.row64_weight_policy);
-    const bool native_packed_glu = native_packed_glu_weight(context, *match.weight);
-    const bool native_qwen30_attention = context.row64_weight_policy &&
-        dispatch_weight_is_qwen30b_native_attention(context.graph, *match.weight);
-    const bool eligible_f16_weight = can_transform_weight || native_qwen30_attention;
-    const bool use_f16 = is_q4_weight && has_direct_weight && has_wide_output && eligible_f16_weight;
-    const bool unsupported_native_glu = native_packed_glu && !use_f16;
-    if (unsupported_native_glu) {
-        return false;
-    }
+    const bool can_transform_weight = dispatch_weight_layout_eligible(*match.weight);
+    const bool use_f16 = is_q4_weight && has_direct_weight && has_wide_output && can_transform_weight;
     DispatchBinding activation;
     const bool      packed_input =
         use_f16 &&
@@ -1140,7 +1110,7 @@ static bool match_packed_q8_1_x4_prefill_dispatch(const DispatchMatchContext & c
         use_f16 ? "ggml.workload.token_capacity" : "ggml.mul_mat_q8_1_x4.token_capacity",
                                                common_to_config_value(match.token_count));
     const bool pack_q4 = match.weight_format == CommonMulMatWeightFormat::Q4K &&
-                         has_direct_weight && can_transform_weight && !native_packed_glu;
+                         has_direct_weight && can_transform_weight;
     if (use_f16) {
         dispatch.kernel.compile_parameters.emplace("ggml.mul_mat.f16_input_layout", packed_input ? "1" : "0");
         dispatch.kernel.compile_parameters.emplace(
@@ -1389,13 +1359,11 @@ static bool build_mul_mat_dispatch(
     const bool has_aligned_input = match.input_size % 256 == 0;
     const bool has_aligned_output = match.output_size % 64 == 0;
     const bool has_direct_weight = match.weight->alias_source.value < 0;
-    const bool can_transform_weight = dispatch_weight_layout_eligible_for_graph(
-        context.graph, *match.weight, context.row64_weight_policy);
-    const bool use_native_packed_glu = native_packed_glu_weight(context, *match.weight);
+    const bool can_transform_weight = dispatch_weight_layout_eligible(*match.weight);
     const bool parent_pack_rows = has_few_tokens && has_skinny_reduction && has_aligned_output &&
-                                  has_direct_weight && can_transform_weight && !use_native_packed_glu;
+                                  has_direct_weight && can_transform_weight;
     const bool target_pack_rows = context.row64_weight_policy && has_aligned_input && has_aligned_output &&
-                                  has_direct_weight && can_transform_weight && !use_native_packed_glu;
+                                  has_direct_weight && can_transform_weight;
     const bool pack_rows = parent_pack_rows || target_pack_rows;
     const bool can_pack_q4 = pack_rows && match.weight_format == CommonMulMatWeightFormat::Q4K;
     const bool can_pack_q6 = pack_rows && match.weight_format == CommonMulMatWeightFormat::Q6K;
@@ -1501,11 +1469,9 @@ static bool prepare_vector_activation_binding(const DispatchMatchContext &     c
     const bool has_aligned_input = input_size % 256 == 0;
     const bool has_direct_weight = weight.alias_source.value < 0;
     const bool has_aligned_output = output_size % 64 == 0;
-    const bool can_transform_weight = dispatch_weight_layout_eligible_for_graph(
-        context.graph, weight, context.row64_weight_policy);
+    const bool can_transform_weight = dispatch_weight_layout_eligible(weight);
     const bool can_prepare_packed_vector = has_single_token && has_aligned_input && has_direct_weight &&
-                                           has_aligned_output && can_transform_weight &&
-                                           !native_packed_glu_weight(context, weight);
+                                           has_aligned_output && can_transform_weight;
     if (!can_prepare_packed_vector) {
         return true;
     }
@@ -1913,13 +1879,11 @@ static bool build_mul_mat_postops_dispatch(const DispatchMatchContext & context,
     const bool has_aligned_input = match.input_size % 256 == 0;
     const bool has_aligned_output = match.output_size % 64 == 0;
     const bool has_direct_weight = match.weight->alias_source.value < 0;
-    const bool can_transform_weight = dispatch_weight_layout_eligible_for_graph(
-        context.graph, *match.weight, context.row64_weight_policy);
-    const bool use_native_packed_glu = native_packed_glu_weight(context, *match.weight);
+    const bool can_transform_weight = dispatch_weight_layout_eligible(*match.weight);
     const bool parent_pack_rows = has_few_tokens && has_skinny_reduction && has_aligned_output &&
-                                  has_direct_weight && can_transform_weight && !use_native_packed_glu;
+                                  has_direct_weight && can_transform_weight;
     const bool target_pack_rows = context.row64_weight_policy && has_aligned_input && has_aligned_output &&
-                                  has_direct_weight && can_transform_weight && !use_native_packed_glu;
+                                  has_direct_weight && can_transform_weight;
     const bool pack_rows = parent_pack_rows || target_pack_rows;
     const bool can_pack_q4 = pack_rows && match.weight_format == CommonMulMatWeightFormat::Q4K;
     const bool can_pack_q6 = pack_rows && match.weight_format == CommonMulMatWeightFormat::Q6K;

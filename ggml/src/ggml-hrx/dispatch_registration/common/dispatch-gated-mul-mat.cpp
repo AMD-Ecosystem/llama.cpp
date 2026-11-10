@@ -149,8 +149,7 @@ static CommonMulMatWeightFormat row64_swiglu_format(const DispatchMatchContext &
     const bool q6_weight = format == CommonMulMatWeightFormat::Q6K;
     const bool supported_weight = q4_weight || q6_weight;
     const bool use_row64 = context.row64_weight_policy && direct_weight && aligned_input && aligned_output &&
-                           supported_weight && dispatch_weight_layout_eligible_for_graph(
-        context.graph, weight, context.row64_weight_policy);
+                           supported_weight && dispatch_weight_layout_eligible(weight);
     if (!use_row64) {
         return format;
     }
@@ -749,8 +748,7 @@ static CommonActivationPublicationDemand select_swiglu_q8_publication(const Disp
     return publication_plan.matched() ? publication_plan.preferred() : CommonActivationPublicationDemand{};
 }
 
-static bool common_mul_mat_swiglu_is_generic_tiled_pair_route(const DispatchMatchContext & context,
-                                                              const MulMatSwiGLUMatch &   match) {
+static bool common_mul_mat_swiglu_is_generic_tiled_pair_route(const MulMatSwiGLUMatch & match) {
     if (!match.matched()) {
         return false;
     }
@@ -761,10 +759,8 @@ static bool common_mul_mat_swiglu_is_generic_tiled_pair_route(const DispatchMatc
     const bool has_direct_up = match.up_weight->alias_source.value < 0;
     const bool has_q4_gate = match.gate_format == CommonMulMatWeightFormat::Q4K;
     const bool has_q4_up = match.up_format == CommonMulMatWeightFormat::Q4K;
-    const bool can_transform_gate = dispatch_weight_layout_eligible_for_graph(
-        context.graph, *match.gate_weight, context.row64_weight_policy);
-    const bool can_transform_up = dispatch_weight_layout_eligible_for_graph(
-        context.graph, *match.up_weight, context.row64_weight_policy);
+    const bool can_transform_gate = dispatch_weight_layout_eligible(*match.gate_weight);
+    const bool can_transform_up = dispatch_weight_layout_eligible(*match.up_weight);
     const bool pack_q4 = has_few_tokens && has_aligned_output && has_direct_gate && has_direct_up &&
                          has_q4_gate && has_q4_up && can_transform_gate && can_transform_up;
     const bool use_q8 = pack_q4;
@@ -791,7 +787,7 @@ static CommonActivationPublicationDemand select_swiglu_k16_publication(const Dis
 static MulMatSwiGLUPostOpsMatch match_mul_mat_swiglu_postops(const DispatchMatchContext & context) {
     MulMatSwiGLUPostOpsMatch match;
     match.root = match_mul_mat_swiglu(context);
-    if (!common_mul_mat_swiglu_is_generic_tiled_pair_route(context, match.root) || !context.graph.has_index()) {
+    if (!common_mul_mat_swiglu_is_generic_tiled_pair_route(match.root) || !context.graph.has_index()) {
         return {};
     }
 
@@ -852,7 +848,7 @@ static bool build_tiled_pair_mul_mat_swiglu_dispatch(const DispatchMatchContext 
                                                      const MulMatSwiGLUPostOpsMatch * postops,
                                                      DispatchMatch &                  dispatch_match) {
     const MulMatSwiGLUMatch & match = postops != nullptr ? postops->root : match_mul_mat_swiglu(context);
-    if (!common_mul_mat_swiglu_is_generic_tiled_pair_route(context, match)) {
+    if (!common_mul_mat_swiglu_is_generic_tiled_pair_route(match)) {
         return false;
     }
 
@@ -966,7 +962,7 @@ static bool match_mul_mat_swiglu_dispatch(const DispatchMatchContext & context, 
     if (!match.matched()) {
         return false;
     }
-    if (common_mul_mat_swiglu_is_generic_tiled_pair_route(context, match)) {
+    if (common_mul_mat_swiglu_is_generic_tiled_pair_route(match)) {
         return false;
     }
 
@@ -1010,10 +1006,8 @@ static bool match_mul_mat_swiglu_dispatch(const DispatchMatchContext & context, 
     const bool has_direct_up = match.up_weight->alias_source.value < 0;
     const bool has_q4_gate = match.gate_format == CommonMulMatWeightFormat::Q4K;
     const bool has_q4_up = match.up_format == CommonMulMatWeightFormat::Q4K;
-    const bool can_transform_gate = dispatch_weight_layout_eligible_for_graph(
-        context.graph, *match.gate_weight, context.row64_weight_policy);
-    const bool can_transform_up = dispatch_weight_layout_eligible_for_graph(
-        context.graph, *match.up_weight, context.row64_weight_policy);
+    const bool can_transform_gate = dispatch_weight_layout_eligible(*match.gate_weight);
+    const bool can_transform_up = dispatch_weight_layout_eligible(*match.up_weight);
     const bool pack_q4 = has_few_tokens && has_aligned_output && has_direct_gate && has_direct_up &&
                          has_q4_gate && has_q4_up && can_transform_gate && can_transform_up;
     const CommonMulMatWeightFormat gate_format = pack_q4 ? CommonMulMatWeightFormat::Q4KRow64 :
