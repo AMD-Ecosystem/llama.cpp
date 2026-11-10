@@ -408,20 +408,21 @@ static std::vector<std::string> scheduled_kernel_sequence(ggml_cgraph * graph) {
     return names;
 }
 
-static void require_native_weight_bindings(ggml_cgraph * graph, const std::vector<ggml_tensor *> & weights) {
+/// Check the selected layout for every use of each weight, and require at least one use.
+static void require_weight_layout(ggml_cgraph * graph, const std::vector<ggml_tensor *> & weights,
+                                  const std::string & expected_layout, const ggml::hrx::DispatchTarget & target) {
     ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
     REQUIRE(imported.valid());
     ggml::hrx::DispatchScheduler scheduler;
-    REQUIRE(scheduler.schedule_graph(imported.graph, { "gfx1151" }));
+    REQUIRE(scheduler.schedule_graph(imported.graph, target));
     for (ggml_tensor * weight : weights) {
-        REQUIRE(!ggml_backend_hrx_weight_has_repackable_source(weight));
         const ggml::hrx::Value * value = imported.graph.values().find_tensor(weight);
         REQUIRE(value != nullptr);
         size_t binding_count = 0;
         for (const auto & dispatch : scheduler.plan().dispatches) {
             for (const auto & binding : dispatch.bindings) {
                 if (binding.value == value->id) {
-                    REQUIRE(binding.layout == ggml::hrx::kNativeWeightLayout);
+                    REQUIRE(binding.layout == expected_layout);
                     ++binding_count;
                 }
             }
@@ -430,26 +431,18 @@ static void require_native_weight_bindings(ggml_cgraph * graph, const std::vecto
     }
 }
 
+static void require_native_weight_bindings(ggml_cgraph * graph, const std::vector<ggml_tensor *> & weights) {
+    for (ggml_tensor * weight : weights) {
+        REQUIRE(!ggml_backend_hrx_weight_has_repackable_source(weight));
+    }
+    require_weight_layout(graph, weights, ggml::hrx::kNativeWeightLayout, { "gfx1151" });
+}
+
 static void require_packed_weight_bindings(ggml_cgraph * graph, const std::vector<ggml_tensor *> & weights) {
-    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
-    REQUIRE(imported.valid());
-    ggml::hrx::DispatchScheduler scheduler;
-    REQUIRE(scheduler.schedule_graph(imported.graph, { "gfx1151" }));
     for (ggml_tensor * weight : weights) {
         REQUIRE(ggml_backend_hrx_weight_has_repackable_source(weight));
-        const ggml::hrx::Value * value = imported.graph.values().find_tensor(weight);
-        REQUIRE(value != nullptr);
-        size_t binding_count = 0;
-        for (const auto & dispatch : scheduler.plan().dispatches) {
-            for (const auto & binding : dispatch.bindings) {
-                if (binding.value == value->id) {
-                    REQUIRE(binding.layout == ggml::hrx::kQ4KPackedK256Row64Layout);
-                    ++binding_count;
-                }
-            }
-        }
-        REQUIRE(binding_count > 0);
     }
+    require_weight_layout(graph, weights, ggml::hrx::kQ4KPackedK256Row64Layout, { "gfx1151" });
 }
 
 static ggml::hrx::KernelSpecialization scheduled_kernel_specialization(ggml_cgraph * graph,
@@ -6603,22 +6596,7 @@ static void run_dense_matmul_packed_glu_cpu_reference_case(ggml_type    weight_t
 
     if (import_weight) {
         REQUIRE(ggml_backend_hrx_weight_has_repackable_source(hrx_weight));
-        ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*hrx_graph);
-        REQUIRE(imported.valid());
-        ggml::hrx::DispatchScheduler scheduler;
-        REQUIRE(scheduler.schedule_graph(imported.graph, { "gfx1151", true }));
-        const ggml::hrx::Value * value = imported.graph.values().find_tensor(hrx_weight);
-        REQUIRE(value != nullptr);
-        size_t weight_bindings = 0;
-        for (const auto & dispatch : scheduler.plan().dispatches) {
-            for (const auto & binding : dispatch.bindings) {
-                if (binding.value == value->id) {
-                    REQUIRE(binding.layout == ggml::hrx::kNativeWeightLayout);
-                    ++weight_bindings;
-                }
-            }
-        }
-        REQUIRE(weight_bindings > 0);
+        require_weight_layout(hrx_graph, { hrx_weight }, ggml::hrx::kNativeWeightLayout, { "gfx1151", true });
     }
 
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
