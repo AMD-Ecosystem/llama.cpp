@@ -5928,6 +5928,16 @@ static void run_get_rows_scale_f32_cpu_reference_case(ggml_type weight_type = GG
     ggml_backend_free(hrx_backend);
 }
 
+/// Set the HRX row64 weight preference for operator tests that bypass model loading.
+static void set_test_row64_policy(ggml_backend_t backend, bool prefer_row64) {
+    ggml_backend_reg_t registry = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
+    using set_policy_fn = bool (*)(ggml_backend_t, bool);
+    auto set_policy = reinterpret_cast<set_policy_fn>(
+        ggml_backend_reg_get_proc_address(registry, "ggml_backend_hrx_set_row64_weight_policy"));
+    REQUIRE(set_policy != nullptr);
+    REQUIRE(set_policy(backend, prefer_row64));
+}
+
 static auto allocate_test_weight(ggml_backend_t backend, ggml_tensor * weight) {
     const auto buft = ggml_backend_get_default_buffer_type(backend);
     const size_t alignment = ggml_backend_buft_get_alignment(buft);
@@ -6315,12 +6325,7 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
     ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
     REQUIRE(hrx_backend != nullptr);
     if (row64_weight_policy) {
-        ggml_backend_reg_t registry = ggml_backend_dev_backend_reg(ggml_backend_get_device(hrx_backend));
-        using set_policy_fn = bool (*)(ggml_backend_t, bool);
-        auto set_policy = reinterpret_cast<set_policy_fn>(
-            ggml_backend_reg_get_proc_address(registry, "ggml_backend_hrx_set_row64_weight_policy"));
-        REQUIRE(set_policy != nullptr);
-        REQUIRE(set_policy(hrx_backend, true));
+        set_test_row64_policy(hrx_backend, true);
     }
 
     ggml_init_params params = {};
@@ -6542,12 +6547,7 @@ static void run_dense_matmul_packed_glu_cpu_reference_case(ggml_type    weight_t
     ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
     REQUIRE(hrx_backend != nullptr);
     if (import_weight) {
-        ggml_backend_reg_t registry = ggml_backend_dev_backend_reg(ggml_backend_get_device(hrx_backend));
-        using set_policy_fn = bool (*)(ggml_backend_t, bool);
-        auto set_policy = reinterpret_cast<set_policy_fn>(
-            ggml_backend_reg_get_proc_address(registry, "ggml_backend_hrx_set_row64_weight_policy"));
-        REQUIRE(set_policy != nullptr);
-        REQUIRE(set_policy(hrx_backend, true));
+        set_test_row64_policy(hrx_backend, true);
     }
 
     ggml_init_params params = {};
@@ -6871,12 +6871,7 @@ static void run_dense_matmul_postops_cpu_reference_case(ggml_type    weight_type
     ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
     REQUIRE(hrx_backend != nullptr);
     if (row64_policy) {
-        ggml_backend_reg_t registry = ggml_backend_dev_backend_reg(ggml_backend_get_device(hrx_backend));
-        using set_policy_fn = bool (*)(ggml_backend_t, bool);
-        auto set_policy = reinterpret_cast<set_policy_fn>(
-            ggml_backend_reg_get_proc_address(registry, "ggml_backend_hrx_set_row64_weight_policy"));
-        REQUIRE(set_policy != nullptr);
-        REQUIRE(set_policy(hrx_backend, true));
+        set_test_row64_policy(hrx_backend, true);
     }
 
     ggml_init_params params = {};
@@ -8525,12 +8520,7 @@ static void run_qwen27_dense_native_reference_case(ggml_type type, int64_t token
                                                    int64_t n = 128) {
     auto backend = ggml_backend_hrx_init(0);
     REQUIRE(backend != nullptr);
-    ggml_backend_reg_t registry = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
-    using set_policy_fn = bool (*)(ggml_backend_t, bool);
-    auto set_policy = reinterpret_cast<set_policy_fn>(
-        ggml_backend_reg_get_proc_address(registry, "ggml_backend_hrx_set_row64_weight_policy"));
-    REQUIRE(set_policy != nullptr);
-    REQUIRE(set_policy(backend, true));
+    set_test_row64_policy(backend, true);
     auto * backend_state = static_cast<ggml_backend_hrx_context *>(backend->context);
     REQUIRE(backend_state != nullptr && backend_state->device != nullptr);
     const std::string architecture = backend_state->device->architecture;
@@ -8610,12 +8600,7 @@ static void run_ssm_conv_prefill_recurrent_case(ggml_type type, bool gathered, b
     auto backend = ggml_backend_hrx_init(0);
     REQUIRE(backend != nullptr);
     if (row64_weight_policy) {
-        ggml_backend_reg_t registry = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
-        using set_policy_fn = bool (*)(ggml_backend_t, bool);
-        auto set_policy = reinterpret_cast<set_policy_fn>(
-            ggml_backend_reg_get_proc_address(registry, "ggml_backend_hrx_set_row64_weight_policy"));
-        REQUIRE(set_policy != nullptr);
-        REQUIRE(set_policy(backend, true));
+        set_test_row64_policy(backend, true);
     }
     auto a = make_ssm_conv_prefill_graph(type, k, n, false, gathered, clear_state);
     auto b = make_ssm_conv_prefill_graph(type, k, n, true, gathered, clear_state);
@@ -8943,12 +8928,7 @@ static void run_qwen30b_native_q4_prefill_reference_case_for(const char * role,
 
     ggml_backend_t backend = ggml_backend_hrx_init(0);
     REQUIRE(backend != nullptr);
-    ggml_backend_reg_t registry = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
-    using set_policy_fn = bool (*)(ggml_backend_t, bool);
-    auto set_policy = reinterpret_cast<set_policy_fn>(
-        ggml_backend_reg_get_proc_address(registry, "ggml_backend_hrx_set_row64_weight_policy"));
-    REQUIRE(set_policy != nullptr);
-    REQUIRE(set_policy(backend, true));
+    set_test_row64_policy(backend, true);
     ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
     REQUIRE(buffer != nullptr);
     ggml_backend_tensor_set(weight, weight_bytes.data(), 0, weight_bytes.size());
