@@ -51,13 +51,11 @@ class GraphProgram {
                  std::string                     target,
                  std::unique_ptr<Graph>          graph,
                  std::unique_ptr<CommandProgram> commands,
-                 std::string                     command_shape,
-                 bool                            row64_weight_policy = false);
+                 std::string                     command_shape);
 
     uint64_t uid() const { return uid_; }
 
     const std::string & target() const { return target_; }
-    bool row64_weight_policy() const { return row64_weight_policy_; }
 
     const std::string & command_shape() const { return command_shape_; }
 
@@ -89,7 +87,6 @@ class GraphProgram {
 
     uint64_t                        uid_ = 0;
     std::string                     target_;
-    bool                            row64_weight_policy_ = false;
     std::unique_ptr<Graph>          graph_;
     std::unique_ptr<const CommandProgram> commands_;
     std::string                     command_shape_;
@@ -131,6 +128,7 @@ struct GraphProgramSupportResult {
     bool valid() const { return supported && status.success(); }
 };
 
+// All lookups in a cache use the same row64 preference, configured at backend initialization.
 class GraphProgramCache {
   public:
     bool can_execute(const ggml_cgraph & graph, const KernelCorpus & corpus, const std::string & target,

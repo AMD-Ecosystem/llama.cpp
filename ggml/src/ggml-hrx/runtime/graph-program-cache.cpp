@@ -304,11 +304,9 @@ GraphProgram::GraphProgram(uint64_t                        uid,
                            std::string                     target,
                            std::unique_ptr<Graph>          graph,
                            std::unique_ptr<CommandProgram> commands,
-                           std::string                     command_shape,
-                           bool                            row64_weight_policy) :
+                           std::string                     command_shape) :
     uid_(uid),
     target_(std::move(target)),
-    row64_weight_policy_(row64_weight_policy),
     graph_(std::move(graph)),
     commands_(std::move(commands)),
     command_shape_(std::move(command_shape)),
@@ -722,20 +720,18 @@ GraphProgramLookup GraphProgramCache::get_or_build(const ggml_cgraph &  graph,
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (!disable_fast_path && last_program_ != nullptr && last_program_->uid() == graph.uid &&
-                last_program_->target() == target && last_program_->row64_weight_policy() == row64_weight_policy) {
+                last_program_->target() == target) {
                 cached_program = last_program_;
             } else {
                 const auto found = programs_.find(graph.uid);
-                if (found != programs_.end() && found->second->target() == target &&
-                    found->second->row64_weight_policy() == row64_weight_policy) {
+                if (found != programs_.end() && found->second->target() == target) {
                     cached_program = found->second.get();
                     last_program_  = cached_program;
                 }
                 if (cached_program == nullptr && !disable_fast_path && allow_structural_reuse) {
                     const auto matched = validated_matches_.find(graph.uid);
                     if (matched != validated_matches_.end() && matched->second.nodes == graph.nodes &&
-                        matched->second.program->target() == target &&
-                        matched->second.program->row64_weight_policy() == row64_weight_policy) {
+                        matched->second.program->target() == target) {
                         cached_program = matched->second.program;
                     }
                 }
@@ -776,8 +772,7 @@ GraphProgramLookup GraphProgramCache::get_or_build(const ggml_cgraph &  graph,
             std::lock_guard<std::mutex> lock(mutex_);
             for (const auto & entry : programs_) {
                 GraphProgram * candidate = entry.second.get();
-                if (candidate == cached_program || candidate->target() != target ||
-                    candidate->row64_weight_policy() != row64_weight_policy) {
+                if (candidate == cached_program || candidate->target() != target) {
                     continue;
                 }
                 GraphProgramMatch match = candidate->match_current_graph(graph);
@@ -844,7 +839,7 @@ std::unique_ptr<GraphProgram> GraphProgramCache::build_program_from_imported(uin
     }
     return std::make_unique<GraphProgram>(uid, target, std::make_unique<Graph>(std::move(imported_graph)),
                                           std::make_unique<CommandProgram>(std::move(commands)),
-                                          std::move(command_shape), row64_weight_policy);
+                                          std::move(command_shape));
 }
 
 bool can_execute_standalone_op_as_graph(const ggml_tensor * op, const std::string & target) {
