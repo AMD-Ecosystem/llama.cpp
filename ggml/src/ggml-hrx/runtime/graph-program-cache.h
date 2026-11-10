@@ -8,7 +8,6 @@
 #include "status.h"
 
 #include <cstdint>
-#include <atomic>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -55,8 +54,6 @@ class GraphProgram {
                  std::string                     command_shape);
 
     uint64_t uid() const { return uid_; }
-    bool retired() const { return retired_.load(std::memory_order_acquire); }
-    void retire() { retired_.store(true, std::memory_order_release); }
 
     const std::string & target() const { return target_; }
 
@@ -89,7 +86,6 @@ class GraphProgram {
                                                            Status &                         status) const;
 
     uint64_t                        uid_ = 0;
-    std::atomic<bool>               retired_{ false };
     std::string                     target_;
     std::unique_ptr<Graph>          graph_;
     std::unique_ptr<const CommandProgram> commands_;

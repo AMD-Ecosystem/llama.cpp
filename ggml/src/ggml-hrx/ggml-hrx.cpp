@@ -14,7 +14,6 @@
 #include "runtime/prepared-command-program-cache.h"
 #include "runtime/transient-arena.h"
 
-#include <algorithm>
 #include <atomic>
 #include <cinttypes>
 #include <cstddef>
@@ -591,38 +590,19 @@ static enum ggml_status graph_compute(ggml_backend_t backend, ggml_cgraph * grap
         GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(result.status));
         return result.code;
     }
-    if (environment_flag_enabled("GGML_HRX_LOG_CACHE_RETENTION")) {
-        const auto graph_stats = context->graph_programs.stats();
-        const auto prepared_stats = context->prepared_programs.retention();
-        GGML_LOG_INFO("ggml_hrx: cache_before programs=%zu prepared=%zu arenas=%zu arena_bytes=%zu staging=%zu constants=%zu\n",
-                      graph_stats.entries, prepared_stats.entries, prepared_stats.recorded_arenas,
-                      prepared_stats.recorded_arena_bytes, prepared_stats.staging_bytes,
-                      prepared_stats.constant_bytes);
-    }
-    if (!environment_flag_enabled("GGML_HRX_DISABLE_CACHE_EVICTION")) {
-        constexpr size_t graph_cache_limit = 8;
-        for (;;) {
-            const size_t prepared_entries = context->prepared_programs.entries();
-            const size_t graph_limit = prepared_entries > graph_cache_limit ? 0 : graph_cache_limit;
-            auto retired = context->graph_programs.take_oldest(graph_limit);
-            if (retired.second == nullptr) {
-                break;
-            }
-            auto prepared = context->prepared_programs.take_uid(retired.first);
-            if (environment_flag_enabled("GGML_HRX_LOG_CACHE_EVICTIONS")) {
-                GGML_LOG_INFO("ggml_hrx: evict graph uid=%" PRIu64 " prepared=%zu\n", retired.first,
-                              prepared.size());
-            }
+    constexpr size_t graph_cache_limit = 8;
+    for (;;) {
+        const size_t prepared_entries = context->prepared_programs.entries();
+        const size_t graph_limit = prepared_entries > graph_cache_limit ? 0 : graph_cache_limit;
+        auto retired = context->graph_programs.take_oldest(graph_limit);
+        if (retired.second == nullptr) {
+            break;
         }
-    }
-    if (environment_flag_enabled("GGML_HRX_LOG_CACHE_RETENTION")) {
-        const auto graph_stats = context->graph_programs.stats();
-        const auto prepared_stats = context->prepared_programs.retention();
-        GGML_LOG_INFO("ggml_hrx: graph uid=%" PRIu64 " replay=%s builds=%" PRIu64 " hits=%" PRIu64 " programs=%zu prepared=%zu arenas=%zu arena_bytes=%zu staging=%zu constants=%zu\n",
-                      graph->uid, ggml::hrx::hrx_graph_replay_event_name(result.graph_replay_event),
-                      graph_stats.builds, graph_stats.hits, graph_stats.entries, prepared_stats.entries,
-                      prepared_stats.recorded_arenas, prepared_stats.recorded_arena_bytes, prepared_stats.staging_bytes,
-                      prepared_stats.constant_bytes);
+        auto prepared = context->prepared_programs.take_uid(retired.first);
+        if (environment_flag_enabled("GGML_HRX_LOG_CACHE_EVICTIONS")) {
+            GGML_LOG_INFO("ggml_hrx: evict graph uid=%" PRIu64 " prepared=%zu\n", retired.first,
+                          prepared.size());
+        }
     }
     return result.code;
 }

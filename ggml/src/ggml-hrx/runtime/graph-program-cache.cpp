@@ -696,7 +696,6 @@ GraphProgramLookup GraphProgramCache::build_from_imported(const ggml_cgraph &  g
         validated_matches_.clear();
         replaced = std::move(programs_[graph.uid]);
         if (replaced != nullptr) {
-            replaced->retire();
             result.replaced_cached_program = true;
         }
         programs_[graph.uid] = cached_program;
@@ -821,9 +820,6 @@ void GraphProgramCache::clear() {
     std::unordered_map<uint64_t, std::shared_ptr<GraphProgram>> retired;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        for (auto & entry : programs_) {
-            entry.second->retire();
-        }
         validated_matches_.clear();
         last_use_.clear();
         retired.swap(programs_);
@@ -840,7 +836,6 @@ std::pair<uint64_t, std::shared_ptr<GraphProgram>> GraphProgramCache::take_oldes
     const uint64_t uid = oldest->first;
     auto found = programs_.find(uid);
     std::shared_ptr<GraphProgram> program = std::move(found->second);
-    program->retire();
     programs_.erase(found);
     last_use_.erase(uid);
     for (auto match = validated_matches_.begin(); match != validated_matches_.end();) {

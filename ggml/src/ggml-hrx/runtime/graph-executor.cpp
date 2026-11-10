@@ -126,8 +126,7 @@ GraphExecutionResult GraphExecutor::execute(const ggml_cgraph & graph) const {
         entry = lookup.program->prepared_entry();
     } else if (graph.uid != 0) {
         entry = context_.prepared_programs.get_or_create(execution_context, lookup.program->uid(),
-                                                        lookup.program->command_shape_hash(), bindings,
-                                                        lookup.program.get());
+                                                        lookup.program->command_shape_hash(), bindings);
     }
     const PreparedCommandProgramCacheExecutionResult execution = entry != nullptr ?
         context_.prepared_programs.execute_with_result(execution_context, lookup.program->commands(), bindings, entry) :

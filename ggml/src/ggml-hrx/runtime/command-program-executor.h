@@ -136,7 +136,6 @@ struct RecordedCommandGraph {
     std::vector<hrx_buffer_t>     retained_buffers;
     std::vector<hrx_executable_t> retained_executables;
     uint64_t         bound_transient_arena_allocation_id = kInvalidTransientArenaAllocationId;
-    size_t           bound_transient_arena_capacity      = 0;
     size_t           dispatch_count                      = 0;
     Status           status;
 

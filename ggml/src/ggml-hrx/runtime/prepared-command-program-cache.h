@@ -15,23 +15,11 @@
 
 namespace ggml::hrx {
 
-class GraphProgram;
-
 uint64_t command_program_shape_hash(const std::string & command_shape);
 
 struct PreparedCommandProgramCacheStats {
     uint64_t builds = 0;
     uint64_t hits   = 0;
-};
-
-struct PreparedCommandProgramCacheRetention {
-    size_t entries = 0;
-    size_t recorded_arenas = 0;
-    size_t staging_bytes = 0;
-    size_t constant_bytes = 0;
-    size_t recorded_arena_bytes = 0;
-
-    size_t retained_bytes() const { return staging_bytes + constant_bytes + recorded_arena_bytes; }
 };
 
 struct PreparedCommandProgramCacheEntry {
@@ -61,8 +49,7 @@ class PreparedCommandProgramCache {
         const CommandProgramExecutionContext & context,
         uint64_t graph_uid,
         uint64_t command_shape_hash,
-        const CommandProgramBindings & bindings,
-        const GraphProgram * owner = nullptr);
+        const CommandProgramBindings & bindings);
 
     PreparedCommandProgramCacheExecutionResult execute_with_result(
         const CommandProgramExecutionContext & context,
@@ -90,9 +77,6 @@ class PreparedCommandProgramCache {
 
     PreparedCommandProgramCacheStats stats() const;
     size_t entries() const;
-
-    // Call while graph execution is serialized, before freeing completed cached work.
-    PreparedCommandProgramCacheRetention retention() const;
 
     std::vector<std::shared_ptr<PreparedCommandProgramCacheEntry>> take_uid(uint64_t uid);
 

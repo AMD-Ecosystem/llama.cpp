@@ -1,12 +1,10 @@
 #include "prepared-command-program-cache.h"
-#include "graph-program-cache.h"
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
-#include <unordered_set>
 #include <utility>
 
 namespace ggml::hrx {
@@ -123,15 +121,9 @@ std::shared_ptr<PreparedCommandProgramCacheEntry> PreparedCommandProgramCache::g
     const CommandProgramExecutionContext & context,
     uint64_t graph_uid,
     uint64_t command_shape_hash,
-    const CommandProgramBindings & bindings,
-    const GraphProgram * owner) {
+    const CommandProgramBindings & bindings) {
     const Key key = cache_key(graph_uid, context, command_shape_hash, bindings);
     std::lock_guard<std::mutex> lock(mutex_);
-    const bool has_owner = owner != nullptr;
-    const bool owner_retired = has_owner && owner->retired();
-    if (owner_retired) {
-        return std::make_shared<PreparedCommandProgramCacheEntry>();
-    }
     auto found = programs_.find(key);
     if (found != programs_.end()) {
         return found->second;
@@ -202,50 +194,6 @@ PreparedCommandProgramCacheStats PreparedCommandProgramCache::stats() const {
 size_t PreparedCommandProgramCache::entries() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return programs_.size();
-}
-
-PreparedCommandProgramCacheRetention PreparedCommandProgramCache::retention() const {
-    std::vector<std::shared_ptr<PreparedCommandProgramCacheEntry>> entries;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        entries.reserve(programs_.size());
-        for (const auto & item : programs_) {
-            entries.push_back(item.second);
-        }
-    }
-    PreparedCommandProgramCacheRetention result;
-    result.entries = entries.size();
-    std::unordered_set<uint64_t> recorded_arenas;
-    std::unordered_set<hrx_buffer_t> staging_buffers;
-    std::unordered_set<hrx_buffer_t> constant_buffers;
-    for (const auto & item : entries) {
-        std::lock_guard<std::mutex> entry_lock(item->mutex);
-        const PreparedCommandProgramCacheEntry & entry = *item;
-        for (const HostStagingBuffer & staging : entry.prepared.host_staging) {
-            const bool has_buffer = staging.buffer != nullptr;
-            const bool first_reference = has_buffer && staging_buffers.insert(staging.buffer).second;
-            if (first_reference) {
-                result.staging_bytes += staging.length;
-            }
-        }
-        for (const PreparedProgramConstantBuffer & constant : entry.prepared.program_constants) {
-            const bool has_buffer = constant.buffer != nullptr;
-            const bool first_reference = has_buffer && constant_buffers.insert(constant.buffer).second;
-            if (first_reference) {
-                result.constant_bytes += constant.size;
-            }
-        }
-        const RecordedCommandGraph & recorded = entry.recorded;
-        const bool has_arena = recorded.bound_transient_arena_allocation_id != kInvalidTransientArenaAllocationId;
-        const bool first_reference = has_arena ?
-            recorded_arenas.insert(recorded.bound_transient_arena_allocation_id).second : false;
-        const bool count_arena = recorded.valid() && has_arena && first_reference;
-        if (count_arena) {
-            ++result.recorded_arenas;
-            result.recorded_arena_bytes += recorded.bound_transient_arena_capacity;
-        }
-    }
-    return result;
 }
 
 std::vector<std::shared_ptr<PreparedCommandProgramCacheEntry>> PreparedCommandProgramCache::take_uid(uint64_t uid) {

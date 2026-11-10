@@ -11681,7 +11681,6 @@ static void run_zero_output_scheduler_elision_checks() {
         }
         auto retired = cache.take_oldest(0);
         REQUIRE(retired.second == lookup.program);
-        REQUIRE(lookup.program->retired());
         REQUIRE(cache.stats().entries == 0);
         REQUIRE(lookup.program->match_current_graph(*graph).valid());
     }
@@ -12817,6 +12816,51 @@ static void run_inactive_set_rows_replay() {
     }
     ggml_backend_free(backend);
     ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+}
+
+static void run_graph_program_cache_lru_checks() {
+    ggml::hrx::GraphProgramCache cache;
+    const auto & corpus = ggml::hrx::get_qwen_kernel_corpus();
+    ggml_context * ctx = ggml_init({ 512 * 1024, nullptr, true });
+    REQUIRE(ctx != nullptr);
+    ggml_cgraph * graphs[3];
+    std::weak_ptr<ggml::hrx::GraphProgram> cold_program;
+    for (int i = 0; i < 3; ++i) {
+        ggml_tensor * a = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 8 * (i + 1));
+        ggml_tensor * b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 8 * (i + 1));
+        graphs[i] = ggml_new_graph(ctx);
+        ggml_build_forward_expand(graphs[i], ggml_add(ctx, a, b));
+        graphs[i]->uid = 3100 + i;
+        auto lookup = cache.get_or_build(*graphs[i], corpus, "gfx1151");
+        REQUIRE(lookup.valid());
+        if (i == 1) {
+            cold_program = lookup.program;
+        }
+    }
+    REQUIRE(cache.stats().entries == 3);
+    // A structural alias must refresh its owner's recency, not create an entry.
+    graphs[0]->uid = 3103;
+    auto hot = cache.get_or_build(*graphs[0], corpus, "gfx1151");
+    REQUIRE(hot.valid());
+    REQUIRE(hot.program->uid() == 3100);
+    REQUIRE(cache.stats().entries == 3);
+    auto victim = cache.take_oldest(2);
+    REQUIRE(victim.first == 3101);
+    REQUIRE(cache.stats().entries == 2);
+    REQUIRE(!cold_program.expired());
+    victim.second.reset();
+    REQUIRE(cold_program.expired());
+    REQUIRE(cache.take_oldest(2).second == nullptr);
+    REQUIRE(cache.get_or_build(*graphs[0], corpus, "gfx1151").program == hot.program);
+    // Clearing lookup ownership must not invalidate an executing user's owner.
+    cache.clear();
+    REQUIRE(cache.stats().entries == 0);
+    REQUIRE(hot.program->match_current_graph(*graphs[0]).valid());
+    hot.program.reset();
+    auto rebuilt = cache.get_or_build(*graphs[0], corpus, "gfx1151");
+    REQUIRE(rebuilt.valid());
+    REQUIRE(rebuilt.program->uid() == 3103);
     ggml_free(ctx);
 }
 
@@ -15163,6 +15207,7 @@ static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
     suite.host_case("command_shape_hash", [] { run_command_shape_hash_checks(); });
     suite.host_case("graph_compute_mask", [] { run_graph_compute_mask_checks(); });
     suite.host_case("graph_program_cache_uid_mismatch", [] { run_graph_program_cache_uid_mismatch_checks(); });
+    suite.host_case("graph_program_cache_lru", [] { run_graph_program_cache_lru_checks(); });
     suite.host_case("graph_match_empty_expert_views", [] { run_graph_match_empty_expert_views_checks(); });
     suite.host_case("graph_match_hash_collision", [] { run_graph_match_hash_collision_checks(); });
     suite.host_case("graph_match_bijection", [] { run_graph_match_bijection_checks(); });
