@@ -196,14 +196,24 @@ PreparedCommandProgramCacheRetention PreparedCommandProgramCache::retention() co
     std::lock_guard<std::mutex> lock(mutex_);
     PreparedCommandProgramCacheRetention result;
     result.entries = programs_.size();
+    std::unordered_set<hrx_buffer_t> staging_buffers;
+    std::unordered_set<hrx_buffer_t> constant_buffers;
     std::unordered_set<uint64_t> recorded_arenas;
     for (const auto & item : programs_) {
         const PreparedCommandProgramCacheEntry & entry = *item.second;
         for (const HostStagingBuffer & staging : entry.prepared.host_staging) {
-            result.staging_bytes += staging.length;
+            const bool has_buffer = staging.buffer != nullptr;
+            const bool first_reference = has_buffer ? staging_buffers.insert(staging.buffer).second : false;
+            if (first_reference) {
+                result.staging_bytes += staging.length;
+            }
         }
         for (const PreparedProgramConstantBuffer & constant : entry.prepared.program_constants) {
-            result.constant_bytes += constant.size;
+            const bool has_buffer = constant.buffer != nullptr;
+            const bool first_reference = has_buffer ? constant_buffers.insert(constant.buffer).second : false;
+            if (first_reference) {
+                result.constant_bytes += constant.size;
+            }
         }
         const RecordedCommandGraph & recorded = entry.recorded;
         const bool has_arena = recorded.bound_transient_arena_allocation_id != kInvalidTransientArenaAllocationId;

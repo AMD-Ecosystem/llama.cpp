@@ -19,6 +19,7 @@
 #include <cinttypes>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -603,7 +604,9 @@ static enum ggml_status graph_compute(ggml_backend_t backend, ggml_cgraph * grap
     const bool over_graph_limit = graph_stats.entries >= 128;
     const bool over_entry_budget = over_prepared_limit || over_graph_limit;
     const bool evict_cache = over_byte_budget || over_entry_budget;
-    if (evict_cache) {
+    const bool eviction_disabled_for_trace = environment_flag_enabled("GGML_HRX_ARENA_TRACE_NO_EVICTION");
+    const bool should_evict = evict_cache && !eviction_disabled_for_trace;
+    if (should_evict) {
         if (!HRX_CHECK(hrx_stream_synchronize(context->stream))) {
             return GGML_STATUS_FAILED;
         }
@@ -618,6 +621,29 @@ static enum ggml_status graph_compute(ggml_backend_t backend, ggml_cgraph * grap
     }
     const ggml::hrx::GraphExecutor        executor = ggml::hrx::GraphExecutor(*context);
     const ggml::hrx::GraphExecutionResult result   = executor.execute(*graph);
+    const bool trace_prefill_bucket = environment_flag_enabled("GGML_HRX_PREFILL_BUCKET_TRACE");
+    const bool trace_successful_graph = trace_prefill_bucket && result.success();
+    if (trace_successful_graph) {
+        int64_t query_tokens = 0;
+        int64_t padded_kv = 0;
+        for (int i = 0; i < graph->n_nodes; ++i) {
+            const ggml_tensor * node = graph->nodes[i];
+            if (node->op == GGML_OP_FLASH_ATTN_EXT) {
+                query_tokens = node->src[0]->ne[1];
+                padded_kv = node->src[1]->ne[1];
+            }
+        }
+        const auto programs = context->graph_programs.stats();
+        const auto prepared = context->prepared_programs.stats();
+        const auto retained = context->prepared_programs.retention();
+        std::fprintf(stderr, "PREFILL_BUCKET_TRACE uid=%llu q=%lld kv=%lld replay=%s graph_builds=%llu graph_hits=%llu prepared_builds=%llu prepared_hits=%llu graph_entries=%zu prepared_entries=%zu staging_bytes=%zu constant_bytes=%zu recorded_arena_bytes=%zu manager_arena_bytes=%zu\n",
+                     static_cast<unsigned long long>(graph->uid), static_cast<long long>(query_tokens),
+                     static_cast<long long>(padded_kv), ggml::hrx::hrx_graph_replay_event_name(result.graph_replay_event),
+                     static_cast<unsigned long long>(programs.builds), static_cast<unsigned long long>(programs.hits),
+                     static_cast<unsigned long long>(prepared.builds), static_cast<unsigned long long>(prepared.hits),
+                     programs.entries, retained.entries, retained.staging_bytes, retained.constant_bytes,
+                     retained.recorded_arena_bytes, context->transient_arena.capacity());
+    }
     if (!result.success()) {
         GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(result.status));
     }

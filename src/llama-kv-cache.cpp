@@ -1252,12 +1252,16 @@ uint32_t llama_kv_cache::get_stream(llama_seq_id seq_id) const {
     return seq_to_stream[seq_id];
 }
 
-uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
+uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo, uint32_t n_tokens) const {
     uint32_t result = 0;
 
     // pad the n_kv value so that the graph remains constant across batches and can be reused
     // note: this also helps some backends with performance (f.ex https://github.com/ggml-org/llama.cpp/pull/16812#issuecomment-3455112220)
-    const uint32_t n_pad = 256;
+    const char * prefill_bucket = getenv("LLAMA_HRX_PREFILL_KV_BUCKET_4096");
+    const bool bucket_enabled = prefill_bucket != nullptr && strcmp(prefill_bucket, "1") == 0;
+    const bool full_prefill_batch = n_tokens == 512;
+    const bool use_prefill_bucket = bucket_enabled && full_prefill_batch;
+    const uint32_t n_pad = use_prefill_bucket ? 4096 : 256;
 
     for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
         const auto & cells = v_cells[sinfo.strm[s]];
@@ -2846,7 +2850,7 @@ bool llama_kv_cache_context::apply() {
     }
 
     kv->apply_ubatch(sinfos[i_cur], ubatches[i_cur]);
-    n_kv = kv->get_n_kv(sinfos[i_cur]);
+    n_kv = kv->get_n_kv(sinfos[i_cur], ubatches[i_cur].n_tokens);
 
     return true;
 }
