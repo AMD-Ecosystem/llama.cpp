@@ -5027,6 +5027,101 @@ static void run_common_flash_attention_cpu_reference_case(int64_t      head_size
     restore_environment_value(kDisableQwenDispatchEnv, had_original_env, original_env_value);
 }
 
+enum class LongFlashAttentionPattern {
+    Uniform,
+    ChannelValues,
+    AlternatingBlocksTail,
+};
+
+static void run_long_flash_attention_analytic_case(LongFlashAttentionPattern pattern) {
+    constexpr int64_t head_size = 128;
+    const bool channel_values = pattern == LongFlashAttentionPattern::ChannelValues;
+    const bool alternating_blocks_tail = pattern == LongFlashAttentionPattern::AlternatingBlocksTail;
+    const int64_t query_token_count = alternating_blocks_tail ? 17 : 1;
+    const int64_t key_value_token_count = channel_values ? 262144 : alternating_blocks_tail ? 65537 : 65536;
+
+    static constexpr const char * kDisableQwenDispatchEnv = "GGML_HRX_DISABLE_QWEN_DISPATCH";
+    const char * original_env = std::getenv(kDisableQwenDispatchEnv);
+    const bool had_original_env = original_env != nullptr;
+    const std::string original_env_value = had_original_env ? original_env : "";
+    REQUIRE(setenv(kDisableQwenDispatchEnv, "1", 1) == 0);
+
+    ggml_backend_t backend = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+    ggml_init_params params = {};
+    params.mem_size = 4 * 1024 * 1024;
+    params.no_alloc = true;
+    ggml_context * ctx = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
+    ggml_tensor * query = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, query_token_count, 1);
+    ggml_tensor * key = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, head_size, key_value_token_count, 1);
+    ggml_tensor * value = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, head_size, key_value_token_count, 1);
+    ggml_tensor * mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, key_value_token_count, query_token_count);
+    REQUIRE(query != nullptr);
+    REQUIRE(key != nullptr);
+    REQUIRE(value != nullptr);
+    REQUIRE(mask != nullptr);
+    ggml_tensor * output = build_qwen_flash_attention_graph(ctx, query, key, value, mask);
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, output);
+    require_kernel_subsequence(scheduled_kernel_sequence(graph), { "loom_libs:ggml_flash_attention_f32_f16_wmma" });
+
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    REQUIRE(buffer != nullptr);
+    const size_t value_element_count = static_cast<size_t>(key_value_token_count * head_size);
+    std::vector<float> query_data(static_cast<size_t>(query_token_count * head_size), 0.0f);
+    std::vector<ggml_fp16_t> key_data(value_element_count, ggml_fp32_to_fp16(0.0f));
+    std::vector<ggml_fp16_t> value_data(value_element_count, ggml_fp32_to_fp16(1.0f));
+    std::vector<ggml_fp16_t> mask_data(static_cast<size_t>(query_token_count * key_value_token_count),
+                                      ggml_fp32_to_fp16(0.0f));
+    std::vector<float> expected(static_cast<size_t>(query_token_count * head_size), 1.0f);
+
+    if (channel_values) {
+        const ggml_fp16_t two = ggml_fp32_to_fp16(2.0f);
+        const ggml_fp16_t three = ggml_fp32_to_fp16(3.0f);
+        for (size_t i = 0; i < value_data.size(); ++i) {
+            value_data[i] = i % 2 == 0 ? two : three;
+        }
+        for (size_t i = 0; i < expected.size(); ++i) {
+            expected[i] = i % 2 == 0 ? 2.0f : 3.0f;
+        }
+    }
+
+    if (alternating_blocks_tail) {
+        // Whole 64-row blocks alternate between visible and -Inf-masked. The
+        // last one-row block is visible with a distinct V, so omitting it
+        // changes the result across a full and a partial query workgroup.
+        const ggml_fp16_t two = ggml_fp32_to_fp16(2.0f);
+        const ggml_fp16_t negative_infinity = ggml_fp32_to_fp16(-std::numeric_limits<float>::infinity());
+        std::fill(value_data.begin(), value_data.end(), two);
+        std::fill(value_data.end() - head_size, value_data.end(), ggml_fp32_to_fp16(1024.0f));
+        for (int64_t query_row = 0; query_row < query_token_count; ++query_row) {
+            for (int64_t key_row = 0; key_row < key_value_token_count; ++key_row) {
+                const bool masked_block = (key_row / 64) % 2 == 1;
+                if (masked_block) {
+                    mask_data[static_cast<size_t>(query_row * key_value_token_count + key_row)] = negative_infinity;
+                }
+            }
+        }
+        std::fill(expected.begin(), expected.end(), 2.0f + 1022.0f / 32769.0f);
+    }
+
+    ggml_backend_tensor_set(query, query_data.data(), 0, query_data.size() * sizeof(float));
+    ggml_backend_tensor_set(key, key_data.data(), 0, key_data.size() * sizeof(ggml_fp16_t));
+    ggml_backend_tensor_set(value, value_data.data(), 0, value_data.size() * sizeof(ggml_fp16_t));
+    ggml_backend_tensor_set(mask, mask_data.data(), 0, mask_data.size() * sizeof(ggml_fp16_t));
+    REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(backend);
+    require_close(get_f32_tensor(backend, output), expected, 1.0e-3f, 1.0e-3f);
+
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+    ggml_backend_free(backend);
+    restore_environment_value(kDisableQwenDispatchEnv, had_original_env, original_env_value);
+}
+
 static void run_asymmetric_flash_attention_cpu_reference_case() {
     static constexpr const char * kDisableQwenDispatchEnv = "GGML_HRX_DISABLE_QWEN_DISPATCH";
     const char *                  original_env            = std::getenv(kDisableQwenDispatchEnv);
@@ -10006,6 +10101,15 @@ static void register_flash_attention_cases(Suite & suite) {
     suite.device_case("common_flash_attention.prefill.head128.query256.kv256.exact", [] {
         run_common_flash_attention_cpu_reference_case(128, 256, 256, 1.0f / std::sqrt(128.0f),
                                                       "loom_libs:ggml_flash_attention_f32_f16_wmma");
+    });
+    suite.device_case("common_flash_attention.long_uniform.kv65536", [] {
+        run_long_flash_attention_analytic_case(LongFlashAttentionPattern::Uniform);
+    });
+    suite.device_case("common_flash_attention.long_values.kv262144", [] {
+        run_long_flash_attention_analytic_case(LongFlashAttentionPattern::ChannelValues);
+    });
+    suite.device_case("common_flash_attention.long_mask_tail.query17.kv65537", [] {
+        run_long_flash_attention_analytic_case(LongFlashAttentionPattern::AlternatingBlocksTail);
     });
     for (int64_t head_size = 64; head_size <= 512; head_size += 64) {
         suite.device_case("common_flash_attention.decode.head" + std::to_string(head_size) + ".query2.kv65",
