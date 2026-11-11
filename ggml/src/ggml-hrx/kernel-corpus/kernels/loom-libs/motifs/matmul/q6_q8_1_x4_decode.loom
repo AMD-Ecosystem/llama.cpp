@@ -7,6 +7,45 @@ func.decl @ggml_q8_1_x4_word(%q8_input: buffer, %row_byte_base: offset, %q8_bloc
 
 func.decl @ggml_q6k_f16_vector4(%weight: buffer, %weight_row_byte_base: offset, %q6_block: index, %q6_group: index, %packet: index) -> (vector<4xf16>)
 
+func.decl @ggml_q6k_row64_tile_lane_i8_scale(%weight: buffer, %tile: index, %row_lane: index, %q6_group: index, %packet: index) -> (vector<4xi8>, f32)
+
+func.def inline @ggml_q6k_q8_1_x4_row64_row_lane(%input_size: index, %row: index, %weight: buffer, %q8_input: buffer, %q8_row_byte_base: offset, %lane: index) -> (f32) {
+  %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), multiple_of(%input_size, 256)] : index
+  %bounded_lane = index.assume %lane [range(%lane, 0, 31)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c64 = index.constant 64 : index
+  %c256 = index.constant 256 : index
+  %zero = scalar.constant 0.0 : f32
+  %zero_i32v = vector.constant 0 : vector<1xi32>
+  %block_count = index.div %bounded_input_size, %c256 : index
+  %row_group = index.div %row, %c64 : index
+  %row_lane = index.rem %row, %c64 : index
+  %group_low = index.div %bounded_lane, %c8 : index
+  %packet = index.rem %bounded_lane, %c8 : index
+  %sum = scf.for %block = [%c0 to %block_count step %c1](%block_acc = %zero : f32) -> (f32) {
+    %block_q8_base = index.mul %block, %c8 : index
+    %tile = index.madd %row_group, %block_count, %block : index
+    %partial = scf.for %half = [%c0 to %c8 step %c4](%half_acc = %block_acc : f32) -> (f32) {
+      %group = index.add %group_low, %half : index
+      %weight_values, %weight_scale = func.call @ggml_q6k_row64_tile_lane_i8_scale(%weight, %tile, %row_lane, %group, %packet) : (buffer, index, index, index, index) -> (vector<4xi8>, f32)
+      %q8_block = index.add %block_q8_base, %group : index
+      %q8_values, %q8_d = func.call @ggml_q8_1_x4_word(%q8_input, %q8_row_byte_base, %q8_block, %packet) : (buffer, offset, index, index) -> (vector<4xi8>, f32)
+      %dot_i32v = vector.dot4i<s8s8> %weight_values, %q8_values, %zero_i32v : vector<4xi8>, vector<4xi8>, vector<1xi32>
+      %dot_i32 = vector.extract %dot_i32v[0] : vector<1xi32> -> i32
+      %dot = scalar.sitofp %dot_i32 : i32 to f32
+      %scaled_weight = scalar.mulf<reassoc|nnan|ninf|nsz> %dot, %weight_scale : f32
+      %scaled = scalar.mulf<reassoc|nnan|ninf|nsz> %scaled_weight, %q8_d : f32
+      %next = scalar.addf<reassoc|nnan|ninf|nsz> %half_acc, %scaled : f32
+      scf.yield %next : f32
+    }
+    scf.yield %partial : f32
+  }
+  func.return %sum : f32
+}
+
 func.def inline @ggml_q6k_sign_extend_dot4(%code: vector<1xi32>) -> (vector<4xi8>) {
   %c1_i32v = vector.constant 1 : vector<1xi32>
   %c2_i32v = vector.constant 2 : vector<1xi32>

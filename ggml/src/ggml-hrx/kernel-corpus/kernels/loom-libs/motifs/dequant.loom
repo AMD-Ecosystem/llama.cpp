@@ -2710,7 +2710,7 @@ func.def inline @ggml_q6k_f32_vector4(%weight: buffer, %weight_row_byte_base: of
   func.return %values : vector<4xf32>
 }
 
-func.def inline @ggml_q6k_row64_tile_lane_f32_vector4(%weight: buffer, %tile: index, %row_lane: index, %q6_group: index, %packet: index) -> (vector<4xf32>) {
+func.def inline @ggml_q6k_row64_tile_lane_i8_scale(%weight: buffer, %tile: index, %row_lane: index, %q6_group: index, %packet: index) -> (vector<4xi8>, f32) {
   %c2 = index.constant 2 : index
   %c4 = index.constant 4 : index
   %tile_bytes = index.constant 13440 : offset
@@ -2719,7 +2719,7 @@ func.def inline @ggml_q6k_row64_tile_lane_f32_vector4(%weight: buffer, %tile: in
   %c4_i32v = vector.constant 4 : vector<1xi32>
   %nibble_mask = vector.constant 252645135 : vector<1xi32>
   %high_mask = vector.constant 50529027 : vector<1xi32>
-  %c32_f32v = vector.constant 32.0 : vector<4xf32>
+  %c32_i8v = vector.constant 32 : vector<4xi8>
   %bounded_group = index.assume %q6_group [range(%q6_group, 0, 7)] : index
   %bounded_packet = index.assume %packet [range(%packet, 0, 7)] : index
   %tile_base = index.scale %tile, %tile_bytes : index, offset -> offset
@@ -2748,15 +2748,20 @@ func.def inline @ggml_q6k_row64_tile_lane_f32_vector4(%weight: buffer, %tile: in
   %qh = vector.shli %qh_low, %c4_i32v : vector<1xi32>
   %code = vector.ori %ql, %qh : vector<1xi32>
   %code_i8 = vector.bitcast %code : vector<1xi32> to vector<4xi8>
-  %code_f32 = vector.uitofp %code_i8 : vector<4xi8> to vector<4xf32>
-  %centered = vector.subf %code_f32, %c32_f32v : vector<4xf32>
+  %centered = vector.subi %code_i8, %c32_i8v : vector<4xi8>
   %scale_i8 = view.load %scale_view[%row_lane, %scale_packet_half, %bounded_group] : view<64x2x8xi8> -> i8
   %d_f16 = view.load %d_view[%row_lane] : view<64xf16> -> f16
   %scale = scalar.sitofp %scale_i8 : i8 to f32
   %d = scalar.extf %d_f16 : f16 to f32
   %combined_scale = scalar.mulf %scale, %d : f32
+  func.return %centered, %combined_scale : vector<4xi8>, f32
+}
+
+func.def inline @ggml_q6k_row64_tile_lane_f32_vector4(%weight: buffer, %tile: index, %row_lane: index, %q6_group: index, %packet: index) -> (vector<4xf32>) {
+  %centered, %combined_scale = func.call @ggml_q6k_row64_tile_lane_i8_scale(%weight, %tile, %row_lane, %q6_group, %packet) : (buffer, index, index, index, index) -> (vector<4xi8>, f32)
+  %centered_f32 = vector.sitofp %centered : vector<4xi8> to vector<4xf32>
   %combined_scale_vector = vector.splat %combined_scale : vector<4xf32>
-  %values = vector.mulf %centered, %combined_scale_vector : vector<4xf32>
+  %values = vector.mulf %centered_f32, %combined_scale_vector : vector<4xf32>
   func.return %values : vector<4xf32>
 }
 
