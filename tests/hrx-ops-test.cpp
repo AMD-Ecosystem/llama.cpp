@@ -1156,6 +1156,27 @@ static std::vector<uint8_t> make_quantized_rows(ggml_type type, int64_t row_leng
     return data;
 }
 
+static std::vector<uint8_t> make_q2_k_pattern_rows(int64_t row_length, int64_t row_count) {
+    REQUIRE(row_length % QK_K == 0);
+    std::vector<block_q2_K> blocks(static_cast<size_t>(row_length * row_count / QK_K));
+    for (size_t block_index = 0; block_index < blocks.size(); ++block_index) {
+        block_q2_K & block = blocks[block_index];
+        for (int scale = 0; scale < QK_K / 16; ++scale) {
+            const uint8_t d = static_cast<uint8_t>(1 + (block_index * 3 + scale * 5) % 15);
+            const uint8_t m = static_cast<uint8_t>((block_index * 7 + scale * 11) % 16);
+            block.scales[scale] = static_cast<uint8_t>(d | (m << 4));
+        }
+        for (int code = 0; code < QK_K / 4; ++code) {
+            block.qs[code] = static_cast<uint8_t>(block_index * 29 + code * 37);
+        }
+        block.d    = ggml_fp32_to_fp16(0.0078125f);
+        block.dmin = ggml_fp32_to_fp16(0.00390625f);
+    }
+    std::vector<uint8_t> bytes(blocks.size() * sizeof(block_q2_K));
+    std::memcpy(bytes.data(), blocks.data(), bytes.size());
+    return bytes;
+}
+
 static std::vector<uint8_t> make_iq1_rows(ggml_type type, int64_t row_length, int64_t row_count, int seed) {
     REQUIRE(type == GGML_TYPE_IQ1_S || type == GGML_TYPE_IQ1_M);
     REQUIRE(row_length % 256 == 0);
@@ -5981,7 +6002,9 @@ static void run_get_rows_f32_cpu_reference_case(ggml_type weight_type,
     REQUIRE(cpu_buffer != nullptr);
     REQUIRE(hrx_buffer != nullptr);
 
-    const std::vector<uint8_t> weight = make_matmul_weight_bytes(weight_type, hidden_size, vocabulary_count, 5);
+    const std::vector<uint8_t> weight = weight_type == GGML_TYPE_Q2_K ?
+        make_q2_k_pattern_rows(hidden_size, vocabulary_count) :
+        make_matmul_weight_bytes(weight_type, hidden_size, vocabulary_count, 5);
     std::vector<int32_t>       ids(static_cast<size_t>(token_count));
     for (int64_t i = 0; i < token_count; ++i) {
         ids[static_cast<size_t>(i)] = static_cast<int32_t>((i * 17 + 3) % vocabulary_count);
@@ -6538,7 +6561,8 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
                                                        bool         import_weights = false,
                                                        bool         row64_weight_policy = false,
                                                        bool         varying_input = false,
-                                                       float        reference_absolute_tolerance = 1.0e-4f) {
+                                                       float        reference_absolute_tolerance = 1.0e-4f,
+                                                       bool         repeat_execution = false) {
     ggml_backend_t cpu_backend = init_cpu_backend();
     ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
     REQUIRE(hrx_backend != nullptr);
@@ -6598,7 +6622,12 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
     }
     const bool validate_default_import = import_weights && !row64_weight_policy;
     if (validate_default_import) {
-        require_packed_weight_bindings(hrx_graph, { hrx_gate_weight, hrx_up_weight });
+        if (gate_weight_type == GGML_TYPE_Q2_K && up_weight_type == GGML_TYPE_Q2_K) {
+            require_weight_layout(hrx_graph, { hrx_gate_weight, hrx_up_weight },
+                                  ggml::hrx::kNativeWeightLayout, target, expected_kernel, 1);
+        } else {
+            require_packed_weight_bindings(hrx_graph, { hrx_gate_weight, hrx_up_weight });
+        }
     }
 
     const std::vector<float> input = varying_input ? make_pattern_f32(input_size * token_count, 7, 0.01f) :
@@ -6628,13 +6657,15 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
     REQUIRE(ggml_backend_graph_compute(cpu_backend, cpu_graph) == GGML_STATUS_SUCCESS);
     auto * backend_state = static_cast<ggml_backend_hrx_context *>(hrx_backend->context);
     const auto before = backend_state->host_weights.stats();
-    REQUIRE(ggml_backend_graph_compute(hrx_backend, hrx_graph) == GGML_STATUS_SUCCESS);
     ggml_backend_synchronize(cpu_backend);
-    ggml_backend_synchronize(hrx_backend);
-    // Keep the legacy absolute bound for constant-input fixtures; varied fixtures select
-    // relative checking explicitly so their accuracy does not depend on weight layout.
-    require_reference_close(get_f32_tensor(hrx_backend, hrx_output), get_f32_tensor(cpu_backend, cpu_output),
-                            reference_absolute_tolerance);
+    for (int execution = 0; execution < (repeat_execution ? 2 : 1); ++execution) {
+        REQUIRE(ggml_backend_graph_compute(hrx_backend, hrx_graph) == GGML_STATUS_SUCCESS);
+        ggml_backend_synchronize(hrx_backend);
+        // Keep the legacy absolute bound for constant-input fixtures; varied fixtures select
+        // relative checking explicitly so their accuracy does not depend on weight layout.
+        require_reference_close(get_f32_tensor(hrx_backend, hrx_output), get_f32_tensor(cpu_backend, cpu_output),
+                                reference_absolute_tolerance);
+    }
     require_weight_cache_stats(hrx_backend,
                                import_weights ? TestWeightSource::Imported : TestWeightSource::Uploaded, 2);
     if (verify_uploaded_native) {
@@ -9310,10 +9341,11 @@ static void register_basic_ops_cases(Suite & suite) {
     suite.device_case("gather_add_f32.cpu_reference", [] { run_gather_add_f32_cpu_reference_case(); });
     suite.device_case("scale_add_f32.cpu_reference.packed", [] { run_scale_add_f32_cpu_reference_case(false); });
     suite.device_case("scale_add_f32.cpu_reference.strided", [] { run_scale_add_f32_cpu_reference_case(true); });
-    for (const ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K, GGML_TYPE_Q8_0, GGML_TYPE_IQ4_XS, GGML_TYPE_F16,
+    for (const ggml_type type : { GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q6_K, GGML_TYPE_Q8_0, GGML_TYPE_IQ4_XS, GGML_TYPE_F16,
                                   GGML_TYPE_BF16, GGML_TYPE_F32 }) {
         suite.device_case("get_rows_f32." + type_name(type), [type] { run_get_rows_f32_cpu_reference_case(type); });
     }
+    suite.device_case("get_rows_f32.q2_k.llama_width4096", [] { run_get_rows_f32_cpu_reference_case(GGML_TYPE_Q2_K, 4096); });
     suite.device_case("get_rows_f32.q1_0.rows2048", [] { run_get_rows_f32_cpu_reference_case(GGML_TYPE_Q1_0, 2048); });
     suite.device_case("get_rows_f32.q5_1.rows640", [] { run_get_rows_f32_cpu_reference_case(GGML_TYPE_Q5_1, 640); });
     suite.device_case("get_rows_q8_1.zero_weight", [] { run_get_rows_q8_1_zero_weight_case(); });
@@ -9323,6 +9355,27 @@ static void register_basic_ops_cases(Suite & suite) {
 }
 
 static void register_dense_matmul_cases(Suite & suite) {
+    suite.device_case("dense_matmul.q2_k.vector.llama_key", [] {
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q2_K, "loom_libs:ggml_mul_mat_vector_f32_f32", 1, 1024, 4096);
+    });
+    suite.device_case("dense_matmul.q2_k.skinny.llama_query", [] {
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q2_K, "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32", 3, 4096, 4096);
+    });
+    suite.device_case("dense_matmul.q2_k.tiled.tokens512", [] {
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q2_K, "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32_aligned", 512, 128, 512);
+    });
+    suite.device_case("dense_matmul_swiglu.q2_k.llama_gate_up", [] {
+        run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_Q2_K, GGML_TYPE_Q2_K,
+            "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot", 1, 14336, GGML_GLU_OP_SWIGLU, 4096);
+    });
+    suite.device_case("dense_matmul_swiglu.q2_k.imported_repeat", [] {
+        run_dense_matmul_swiglu_cpu_reference_case(GGML_TYPE_Q2_K, GGML_TYPE_Q2_K,
+            "loom_libs:ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32", 33, 65,
+            GGML_GLU_OP_SWIGLU, 768, false, true, false, true, 0.0f, true);
+    });
+    suite.device_case("dense_matmul.q3_k.llama_down_control", [] {
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q3_K, "loom_libs:ggml_mul_mat_vector_f32_f32", 1, 4096, 14336);
+    });
     // Distinct gate/up weights cover cached metadata, multiple K blocks, and tile tails.
     for (const ggml_type gate : { GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS }) {
         for (const ggml_type up : { GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS }) {
