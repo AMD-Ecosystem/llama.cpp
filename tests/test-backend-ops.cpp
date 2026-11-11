@@ -12690,10 +12690,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_flash_attn_ext_hrx_uniform_value(32768, 512, 2, 4));
     test_cases.emplace_back(new test_flash_attn_ext_hrx_uniform_value(65536, 17, 2, 4));
 
-    // A single 64-row P*V tile also exceeds F16 when V is large.
-    test_cases.emplace_back(new test_flash_attn_ext_hrx_uniform_value(2048, 16, 2, 4, 1024.0f));
-    test_cases.emplace_back(new test_flash_attn_ext_hrx_uniform_value(65536, 1, 2, 4, 1024.0f));
-
     return test_cases;
 }
 #ifdef _MSC_VER

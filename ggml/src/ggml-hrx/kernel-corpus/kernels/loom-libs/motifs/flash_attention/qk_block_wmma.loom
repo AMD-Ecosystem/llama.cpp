@@ -217,7 +217,7 @@ template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_pr
   %probability_stage_view = buffer.view %probability_stage[%c0_offset] : buffer -> view<16x64xf16, %probability_layout>
   // Score reads retire at probability publication. Product reads retire
   // before the next mask/score phase, so the two exchanges share storage.
-  %product_stage_view = buffer.view %score_stage[%c0_offset] : buffer -> view<16x64xf32>
+  %product_stage_view = buffer.view %score_stage[%c0_offset] : buffer -> view<16x64xf16>
   %tail_key_value_stage_view = buffer.view %tail_key_value_stage[%c0_offset] : buffer -> view<32x[%tail_stage_head_size]xf16>
   template.apply<@ggml.flash_attention.prefill.stage_query>(%bounded_query_token_count, %query_origin, %query_head, %query_load_iteration_count, %query_stage_stride, %qk_head_size, %attention_scale, %query_aligned, %query_stage) : (index, index, index, index, index, index, f32, buffer, buffer)
   kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
