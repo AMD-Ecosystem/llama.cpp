@@ -85,7 +85,7 @@ template.def<@ggml.flash_attention.qk_block_wmma.prefill_full> device @ggml_flas
 
 template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_prefill_body(%publish_f16: i1, %query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer, %f16_output: buffer) {
   %bounded_query_token_count = index.assume %query_token_count [range(%query_token_count, 1, 2048)] : index
-  %bounded_key_value_token_count = index.assume %key_value_token_count [range(%key_value_token_count, 1, 32768)] : index
+  %bounded_key_value_token_count = index.assume %key_value_token_count [range(%key_value_token_count, 1, 262144)] : index
   %query_head_count = config.get @ggml.flash_attention.query_head_count : index
   %key_value_head_count = config.get @ggml.flash_attention.key_value_head_count : index
   %qk_head_size0 = config.get @ggml.flash_attention.qk_head_size : index
@@ -160,7 +160,7 @@ template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_pr
   %query_origin = index.mul %query_tile, %c16 : index
   %full_key_value_block_count = index.div %bounded_key_value_token_count, %c64 : index
   %full_key_value_token_count0 = index.mul %full_key_value_block_count, %c64 : index
-  %full_key_value_token_count = index.assume %full_key_value_token_count0 [range(%full_key_value_token_count0, 0, 32768), multiple_of(%full_key_value_token_count0, 64)] : index
+  %full_key_value_token_count = index.assume %full_key_value_token_count0 [range(%full_key_value_token_count0, 0, 262144), multiple_of(%full_key_value_token_count0, 64)] : index
   %tail_key_value_token_count = index.sub %bounded_key_value_token_count, %full_key_value_token_count : index
   %has_key_value_tail = index.cmp ne, %tail_key_value_token_count, %c0 : index
   %tail_key_value_stage_bytes = scf.select %has_key_value_tail, %tail_key_value_stage_capacity, %c0_offset : offset

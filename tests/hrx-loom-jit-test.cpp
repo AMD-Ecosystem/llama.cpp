@@ -1307,6 +1307,32 @@ static void run_prefill_fusion_compile_checks() {
     }
 }
 
+static void run_long_context_attention_compile_checks() {
+    std::string error;
+    std::unique_ptr<ggml::hrx::LoomJit> jit =
+        ggml::hrx::create_loom_jit("gfx1100", ggml::hrx::LoomJitMode::Sync, error);
+    REQUIRE(jit != nullptr);
+
+    const auto & flash_prefill = find_kernel("ggml_flash_attention_f32_f16_wmma");
+    const auto & transpose_f16 = find_kernel("ggml_copy_transpose_f16");
+    const auto config = flash_attention_config("8", "2", "256", "0.0625");
+
+    for (int64_t key_value_token_count : { 32768, 32769, 33280, 262144 }) {
+        const std::string suffix = std::to_string(key_value_token_count);
+        require_compiled_kernel(compile_kernel(*jit, "long-context-flash-" + suffix, flash_prefill,
+                                               flash_attention_workload(512, key_value_token_count), config));
+    }
+
+    for (int64_t key_value_token_count : { 32768, 33280, 262144 }) {
+        const std::string suffix = std::to_string(key_value_token_count);
+        require_compiled_kernel(compile_kernel(*jit, "long-context-transpose-" + suffix, transpose_f16,
+                                               {
+                                                   { "row_count",    key_value_token_count },
+                                                   { "column_count", 256                   },
+                                               }));
+    }
+}
+
 static void run_binary_fusion_compile_checks() {
     std::string                         error;
     std::unique_ptr<ggml::hrx::LoomJit> jit =
@@ -1563,6 +1589,7 @@ static void register_hrx_loom_jit_cases(test_runner::Suite & suite) {
     suite.host_case("binary-publication", [] { run_binary_publication_compile_checks(); });
     suite.host_case("moe-routing", [] { run_moe_routing_compile_checks(); });
     suite.host_case("prefill-fusions", [] { run_prefill_fusion_compile_checks(); });
+    suite.host_case("long-context-attention", [] { run_long_context_attention_compile_checks(); });
     suite.host_case("binary-fusions", [] { run_binary_fusion_compile_checks(); });
     suite.device_case("materialize", [] { run_loom_jit_materialize_checks(); });
 }
