@@ -6132,6 +6132,53 @@
       ]
     },
     {
+      "name": "ggml_mul_mat_q6_k_f32_wmma_prefill_m64_wave32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_q6_k_f32_wmma_prefill_m64_wave32",
+      "source": "ops/mul_mat_q6_k_packed_f16_wmma.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/mul_mat_q6_k_packed_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "motifs/q6_k_f16.loom",
+          "motifs/dequant.loom",
+          "motifs/mul_mat_quantized_f16_prefill.loom",
+          "motifs/elementwise/binary_apply.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/q6_k_f16.loom",
+        "motifs/dequant.loom",
+        "motifs/mul_mat_quantized_f16_prefill.loom",
+        "motifs/elementwise/binary_apply.loom"
+      ]
+    },
+    {
       "name": "ggml_mul_mat_q6_k_f16_wmma_prefill_wave32",
       "family": "loom_libs",
       "symbol": "ggml_mul_mat_q6_k_f16_wmma_prefill_wave32",
