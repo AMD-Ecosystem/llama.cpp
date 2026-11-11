@@ -9358,6 +9358,9 @@ static void register_dense_matmul_cases(Suite & suite) {
     suite.device_case("dense_matmul.q2_k.vector.llama_key", [] {
         run_dense_matmul_cpu_reference_case(GGML_TYPE_Q2_K, "loom_libs:ggml_mul_mat_vector_f32_f32", 1, 1024, 4096);
     });
+    suite.device_case("dense_matmul.q2_k.vector.tail", [] {
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_Q2_K, "loom_libs:ggml_mul_mat_vector_f32_f32", 1, 65, 768);
+    });
     suite.device_case("dense_matmul.q2_k.skinny.llama_query", [] {
         run_dense_matmul_cpu_reference_case(GGML_TYPE_Q2_K, "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32", 3, 4096, 4096);
     });
@@ -9377,8 +9380,8 @@ static void register_dense_matmul_cases(Suite & suite) {
         run_dense_matmul_cpu_reference_case(GGML_TYPE_Q3_K, "loom_libs:ggml_mul_mat_vector_f32_f32", 1, 4096, 14336);
     });
     // Distinct gate/up weights cover cached metadata, multiple K blocks, and tile tails.
-    for (const ggml_type gate : { GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS }) {
-        for (const ggml_type up : { GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS }) {
+    for (const ggml_type gate : { GGML_TYPE_Q2_K, GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS }) {
+        for (const ggml_type up : { GGML_TYPE_Q2_K, GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS }) {
             for (const int64_t input_size : { 256, 768 }) {
                 suite.device_case("dense_matmul.metadata_pair." + type_name(gate) + "." + type_name(up) + ".k" + std::to_string(input_size), [gate, up, input_size] {
                     run_dense_matmul_swiglu_cpu_reference_case(gate, up, "loom_libs:ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32", 33, 65, GGML_GLU_OP_SWIGLU, input_size);
@@ -9388,7 +9391,7 @@ static void register_dense_matmul_cases(Suite & suite) {
     }
 
     // Multiple blocks and output tails check the prepared state lifetime and row guards.
-    for (const ggml_type type : { GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS }) {
+    for (const ggml_type type : { GGML_TYPE_Q2_K, GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS }) {
         for (const int64_t input_size : { 256, 768 }) {
             suite.device_case("dense_metadata_reuse." + type_name(type) + ".input" + std::to_string(input_size), [type, input_size] {
                 run_dense_matmul_postops_cpu_reference_case(
