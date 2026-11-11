@@ -10015,6 +10015,14 @@ static void register_dense_matmul_cases(Suite & suite) {
             GGML_TYPE_Q6_K, "loom_libs:ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32",
             29, 1024, false, true, false, 3584, row64_postops);
     });
+    for (const int64_t tokens : { 64, 66, 127 }) {
+        suite.device_case("qwen3.q6_row64_short_residual.k3072.tokens" + std::to_string(tokens),
+                          [tokens, row64_postops] {
+            run_dense_matmul_postops_cpu_reference_case(
+                GGML_TYPE_Q6_K, "loom_libs:ggml_mul_mat_q6_k_f32_wmma_prefill_wave32",
+                tokens, 1024, false, true, false, 3072, row64_postops);
+        });
+    }
     suite.device_case("minicpmv46.q4_row64_tiled_residual.tokens46", [row64_postops] {
         run_dense_matmul_postops_cpu_reference_case(
             GGML_TYPE_Q4_K, "loom_libs:ggml_mul_mat_tiled_input_f32_bias_residual_publish_f32",
