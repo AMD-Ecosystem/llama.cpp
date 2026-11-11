@@ -108,6 +108,66 @@ kernel.def target(@ggml_flash_attention_gfx11_wave64) @ggml_flash_attention_test
   kernel.return
 }
 
+// Keep whole 64-row KV blocks alternately visible and masked across two query
+// workgroups. The final one-row block is visible and has a distinct value so an
+// omitted tail changes the answer. Selective linking drops this test helper.
+kernel.def target(@ggml_flash_attention_gfx11_wave64) @ggml_flash_attention_test_make_long_block_mask(%query_token_count: index, %key_value_token_count: index) {
+  %c1 = index.constant 1 : index
+  %c128 = index.constant 128 : index
+  %c255 = index.constant 255 : index
+  %c256 = index.constant 256 : index
+  %mask_element_count = index.mul %query_token_count, %key_value_token_count : index
+  %element_count = index.add %mask_element_count, %c128 : index
+  %padded_element_count = index.add %element_count, %c255 : index
+  %workgroup_count = index.div %padded_element_count, %c256 : index
+  kernel.launch.config workgroups(%workgroup_count, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%query_token_count: index, %key_value_token_count: index, %mask: buffer, %value: buffer) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %c256 = index.constant 256 : index
+  %c0_offset = index.constant 0 : offset
+  %c0_f16 = scalar.constant 0.0 : f16
+  // This out-of-range F16 literal becomes -Inf, which makes a whole masked
+  // block fail the production > -1e30 summary predicate and take its skip path.
+  %negative_f16 = scalar.constant -1e+30 : f16
+  %tail_f16 = scalar.constant 1024.0 : f16
+  %bounded_query_token_count = index.assume %query_token_count [range(%query_token_count, 1, 2048)] : index
+  %bounded_key_value_token_count = index.assume %key_value_token_count [range(%key_value_token_count, 1, 262144)] : index
+  %mask_element_count = index.mul %query_token_count, %key_value_token_count : index
+  %element_count = index.add %mask_element_count, %c128 : index
+  %workgroup = kernel.workgroup.id<x> : index
+  %workitem = kernel.workitem.id<x> : index
+  %linear = index.madd %workgroup, %c256, %workitem : index
+  %in_bounds = index.cmp ult, %linear, %element_count : index
+  %mask_noalias, %value_noalias = buffer.assume.noalias %mask, %value : buffer, buffer
+  %mask_view = buffer.view %mask_noalias[%c0_offset] : buffer -> view<[%query_token_count]x[%key_value_token_count]xf16>
+  %value_view = buffer.view %value_noalias[%c0_offset] : buffer -> view<[%key_value_token_count]x1x128xf16>
+  scf.if %in_bounds {
+    %is_mask = index.cmp ult, %linear, %mask_element_count : index
+    scf.if %is_mask {
+      %query_row0 = index.div %linear, %bounded_key_value_token_count : index
+      %query_row = index.assume %query_row0 [range(%query_row0, 0, 2047), lt(%query_row0, %bounded_query_token_count)] : index
+      %key_row0 = index.rem %linear, %bounded_key_value_token_count : index
+      %key_row = index.assume %key_row0 [range(%key_row0, 0, 262143), lt(%key_row0, %bounded_key_value_token_count)] : index
+      %key_block = index.div %key_row, %c64 : index
+      %block_parity = index.rem %key_block, %c2 : index
+      %visible = index.cmp eq, %block_parity, %c0 : index
+      %mask_value = scf.select %visible, %c0_f16, %negative_f16 : f16
+      view.store %mask_value, %mask_view[%query_row, %key_row] : f16, view<[%query_token_count]x[%key_value_token_count]xf16>
+    } else {
+      %channel0 = index.sub %linear, %mask_element_count : index
+      %channel = index.assume %channel0 [range(%channel0, 0, 127)] : index
+      %last_key_row0 = index.sub %bounded_key_value_token_count, %c1 : index
+      %last_key_row = index.assume %last_key_row0 [range(%last_key_row0, 0, 262143), lt(%last_key_row0, %bounded_key_value_token_count)] : index
+      view.store %tail_f16, %value_view[%last_key_row, %c0, %channel] : f16, view<[%key_value_token_count]x1x128xf16>
+    }
+  }
+  kernel.return
+}
+
 // Test-only row extraction for comparing one multirow attention dispatch with
 // independent one-row dispatches over identical data. Selective linking drops
 // this helper from production roots.
@@ -318,6 +378,56 @@ check.case public @ggml_flash_attention_f32_f16_wmma_pruned_block_case {
   %expected = check.generate.iota offset(0.0) step(0.125) : tensor<1x1x128xf32>
   kernel.launch @ggml_flash_attention_f32_f16_wmma[%query_token_count, %key_value_token_count](%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %query, %output) : [index, index](index, index, tensor<1x1x128xf32>, tensor<128x1x128xf16>, tensor<128x1x128xf16>, tensor<1x128xf16>, tensor<1x1x128xf32>, tensor<1x1x128xf32>)
   check.expect.approximate actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<1x1x128xf32>, tensor<1x1x128xf32>
+  check.return
+}
+
+// Equal scores and unit values give an exact unit answer. The 65536 carried
+// P*V contributions overflow F16, while each 64-row tile remains finite.
+check.case public @ggml_flash_attention_f32_f16_wmma_long_uniform_case {
+  %query_token_count = check.literal value(1) : index
+  %key_value_token_count = check.literal value(65536) : index
+  %query = check.generate.fill value(0.0) : tensor<1x1x128xf32>
+  %key = check.generate.fill value(0.0) : tensor<65536x1x128xf16>
+  %value = check.generate.fill value(1.0) : tensor<65536x1x128xf16>
+  %mask = check.generate.fill value(0.0) : tensor<1x65536xf16>
+  %output = check.generate.fill value(-1.0) : tensor<1x1x128xf32>
+  %expected = check.generate.fill value(1.0) : tensor<1x1x128xf32>
+  kernel.launch @ggml_flash_attention_f32_f16_wmma[%query_token_count, %key_value_token_count](%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %query, %output) : [index, index](index, index, tensor<1x1x128xf32>, tensor<65536x1x128xf16>, tensor<65536x1x128xf16>, tensor<1x65536xf16>, tensor<1x1x128xf32>, tensor<1x1x128xf32>)
+  check.expect.approximate actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<1x1x128xf32>, tensor<1x1x128xf32>
+  check.return
+}
+
+// Alternating channel values stay finite within each tile yet require a
+// carried P*V sum much larger than F16 can represent at 262144 KV rows.
+check.case public @ggml_flash_attention_f32_f16_wmma_long_values_case {
+  %query_token_count = check.literal value(1) : index
+  %key_value_token_count = check.literal value(262144) : index
+  %query = check.generate.fill value(0.0) : tensor<1x1x128xf32>
+  %key = check.generate.fill value(0.0) : tensor<262144x1x128xf16>
+  %value = check.generate.iota offset(2.0) step(1.0) period(2) : tensor<262144x1x128xf16>
+  %mask = check.generate.fill value(0.0) : tensor<1x262144xf16>
+  %output = check.generate.fill value(-1.0) : tensor<1x1x128xf32>
+  %expected = check.generate.iota offset(2.0) step(1.0) period(2) : tensor<1x1x128xf32>
+  kernel.launch @ggml_flash_attention_f32_f16_wmma[%query_token_count, %key_value_token_count](%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %query, %output) : [index, index](index, index, tensor<1x1x128xf32>, tensor<262144x1x128xf16>, tensor<262144x1x128xf16>, tensor<1x262144xf16>, tensor<1x1x128xf32>, tensor<1x1x128xf32>)
+  check.expect.approximate actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<1x1x128xf32>, tensor<1x1x128xf32>
+  check.return
+}
+
+// Even 64-row blocks are visible, odd blocks are masked, and the final row
+// belongs to a visible tail block. Its distinct V makes tail omission visible
+// across two query workgroups; 32768 other selected rows overflow F16 at V=2.
+check.case public @ggml_flash_attention_f32_f16_wmma_long_mask_tail_case {
+  %query_token_count = check.literal value(17) : index
+  %key_value_token_count = check.literal value(65537) : index
+  %query = check.generate.fill value(0.0) : tensor<17x1x128xf32>
+  %key = check.generate.fill value(0.0) : tensor<65537x1x128xf16>
+  %value = check.generate.fill value(2.0) : tensor<65537x1x128xf16>
+  %mask = check.generate.fill value(-1.0) : tensor<17x65537xf16>
+  %output = check.generate.fill value(-1.0) : tensor<17x1x128xf32>
+  %expected = check.generate.fill value(2.031188013061125) : tensor<17x1x128xf32>
+  kernel.launch @ggml_flash_attention_test_make_long_block_mask[%query_token_count, %key_value_token_count](%query_token_count, %key_value_token_count, %mask, %value) : [index, index](index, index, tensor<17x65537xf16>, tensor<65537x1x128xf16>)
+  kernel.launch @ggml_flash_attention_f32_f16_wmma[%query_token_count, %key_value_token_count](%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %query, %output) : [index, index](index, index, tensor<17x1x128xf32>, tensor<65537x1x128xf16>, tensor<65537x1x128xf16>, tensor<17x65537xf16>, tensor<17x1x128xf32>, tensor<17x1x128xf32>)
+  check.expect.approximate actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<17x1x128xf32>, tensor<17x1x128xf32>
   check.return
 }
 
