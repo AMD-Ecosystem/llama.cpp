@@ -286,7 +286,7 @@ template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_pr
       %masked_scores = vector.select %query_valid, %masked_scores0, %negative_f32x4 : vector<4xf32>
       %next_max, %next_sum, %old_scale = template.apply<@ggml.flash_attention.online_softmax.prefill>(%masked_scores, %query_valid, %current_max, %current_sum, %query_row0, %query_row1, %query_row2, %query_row3, %lane, %probability_stage) : (vector<4xf32>, vector<4xi1>, vector<4xf32>, vector<4xf32>, index, index, index, index, index, buffer) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>)
       // Compute the 64-channel tiles in this output group sequentially. This
-      // keeps one P*V accumulator live per wave and reuses a 4 KiB exchange
+      // keeps one P*V accumulator live per wave and reuses a 2 KiB exchange
       // tile instead of retaining multiple output groups.
       %next_output0, %next_output1, %next_output2, %next_output3 = template.apply<@ggml.flash_attention.pv_block_wmma.prefill_full>(%old_scale, %current_output0, %current_output1, %current_output2, %current_output3, %group_output_tile_count, %output_group_tile_base, %output_tile_count, %value_head_base, %subgroup_product_channel, %lane_output_tile, %lane_product_channel, %query_row0, %query_row1, %query_row2, %query_row3, %key_origin, %last_full_key_tile_start, %bounded_key_value_token_count, %value_width, %value_row_stride, %value_column_stride, %value_aligned, %probability_stage, %score_stage) : (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, buffer, buffer, buffer) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>)
       scf.yield %next_max, %next_sum, %next_output0, %next_output1, %next_output2, %next_output3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
@@ -399,7 +399,7 @@ template.def<@ggml.flash_attention.prefill.body> device @ggml_flash_attention_pr
       view.store %tail_value, %tail_key_value_stage_view[%tail_value_row, %tail_value_channel] : f16, view<32x[%tail_stage_head_size]xf16>
     }
     kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
-    // Keep tail V staging separate from the 4 KiB product exchange, then use
+    // Keep tail V staging separate from the 2 KiB product exchange, then use
     // the same grouped 64-channel phases as the aligned path.
     %next_output0, %next_output1, %next_output2, %next_output3 = template.apply<@ggml.flash_attention.pv_block_wmma.prefill_tail>(%old_scale, %current_output0, %current_output1, %current_output2, %current_output3, %group_output_tile_count, %subgroup_product_channel, %lane_output_tile, %lane_product_channel, %query_row0, %query_row1, %query_row2, %query_row3, %tail_stage_head_size, %tail_key_value_stage, %probability_stage, %score_stage) : (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, index, index, index, index, index, index, index, index, index, buffer, buffer, buffer) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>)
     scf.yield %next_max, %next_sum, %next_output0, %next_output1, %next_output2, %next_output3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
