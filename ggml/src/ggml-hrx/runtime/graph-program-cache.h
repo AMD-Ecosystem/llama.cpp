@@ -130,6 +130,8 @@ struct GraphProgramSupportResult {
 
 class GraphProgramCache {
   public:
+    /// The backend setter supplies the model architecture's preference in production;
+    /// operator tests use the same setter with an explicit value.
     /// Configure before support checks or execution; keep fixed for this cache's lifetime.
     void set_row64_weight_policy(bool enabled) { row64_weight_policy_ = enabled; }
 
