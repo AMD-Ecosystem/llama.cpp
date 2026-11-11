@@ -846,7 +846,7 @@ std::unique_ptr<GraphProgram> GraphProgramCache::build_program_from_imported(uin
                                                                              const std::string &  target,
                                                                              Status &             errors) const {
     DispatchScheduler scheduler;
-    if (!scheduler.schedule_graph(imported_graph, { target })) {
+    if (!scheduler.schedule_graph(imported_graph, { target, row64_weight_policy_ })) {
         errors.append(scheduler.plan().status);
         return nullptr;
     }

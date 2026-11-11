@@ -180,3 +180,115 @@ func.def public inline @ggml_q6k_f16_pair(%half_packet: i1, %weight: buffer, %we
   %values1 = vector.fptrunc %values_f32_1 : vector<16xf32> to vector<16xf16>
   func.return %values0, %values1 : vector<16xf16>, vector<16xf16>
 }
+
+// Row64 stores each raw field contiguously per row and transposes the scale pairs.
+func.def public inline @ggml_q6k_native_row64_f16_pair(%half_packet: i1, %weight: buffer, %row: index, %input_size: index, %q6_block: index, %q6_group: index, %packet: index) -> (vector<16xf16>, vector<16xf16>) {
+  %padding = vector.constant 0 : vector<2xi32>
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c64 = index.constant 64 : index
+  %c256 = index.constant 256 : index
+  %tile_bytes = index.constant 13440 : offset
+  %raw_field_bytes = index.constant 2048 : offset
+  %raw_row_bytes = index.constant 32 : offset
+  %scale_byte_add = index.constant 128 : offset
+  %raw_byte_add = index.constant 1152 : offset
+  %c4_i32v = vector.constant 4 : vector<4xi32>
+  %nibble_mask = vector.constant 252645135 : vector<4xi32>
+  %high_mask = vector.constant 50529027 : vector<4xi32>
+  %c32_f32v = vector.constant 32.0 : vector<16xf32>
+  %bounded_group = index.assume %q6_group [range(%q6_group, 0, 6), multiple_of(%q6_group, 2)] : index
+  %bounded_packet = index.assume %packet [range(%packet, 0, 6), multiple_of(%packet, 2)] : index
+  %blocks = index.div %input_size, %c256 : index
+  %row_group = index.div %row, %c64 : index
+  %row_lane = index.rem %row, %c64 : index
+  %tile = index.madd %row_group, %blocks, %q6_block : index
+  %tile_base = index.scale %tile, %tile_bytes : index, offset -> offset
+  %scale_byte_base = index.add %tile_base, %scale_byte_add : offset
+  %raw_byte_base = index.add %tile_base, %raw_byte_add : offset
+  %group_in_half = index.rem %bounded_group, %c4 : index
+  %half = index.div %bounded_group, %c4 : index
+  %ql_field = index.mul %half, %c3 : index
+  %ql_field_add = index.scale %ql_field, %raw_field_bytes : index, offset -> offset
+  %ql_row_add = index.scale %row_lane, %raw_row_bytes : index, offset -> offset
+  %ql_field_base = index.add %raw_byte_base, %ql_field_add : offset
+  %ql_base0 = index.add %ql_field_base, %ql_row_add : offset
+  %ql_base1 = index.add %ql_base0, %raw_field_bytes : offset
+  %qh_base = index.add %ql_base1, %raw_field_bytes : offset
+  %ql_view0 = buffer.view %weight[%ql_base0] : buffer -> view<8xi32>
+  %ql_view1 = buffer.view %weight[%ql_base1] : buffer -> view<8xi32>
+  %qh_view = buffer.view %weight[%qh_base] : buffer -> view<8xi32>
+  %scale_view = buffer.view %weight[%scale_byte_base] : buffer -> view<64x2x8xi8>
+  %d_view = buffer.view %weight[%tile_base] : buffer -> view<64xf16>
+  %nibble = index.div %group_in_half, %c2 : index
+  %nibble_shift_index = index.mul %nibble, %c4 : index
+  %nibble_shift_i32 = index.cast %nibble_shift_index : index to i32
+  %nibble_shift = vector.splat %nibble_shift_i32 : vector<4xi32>
+  %qh_shift_index0 = index.mul %group_in_half, %c2 : index
+  %qh_shift_index1 = index.add %qh_shift_index0, %c2 : index
+  %qh_shift_i32_0 = index.cast %qh_shift_index0 : index to i32
+  %qh_shift_i32_1 = index.cast %qh_shift_index1 : index to i32
+  %qh_shift0 = vector.splat %qh_shift_i32_0 : vector<4xi32>
+  %qh_shift1 = vector.splat %qh_shift_i32_1 : vector<4xi32>
+  %scale_packet_half = index.div %bounded_packet, %c4 : index
+  %second_group = index.add %bounded_group, %c1 : index
+  %ql_word0 = scf.if %half_packet -> (vector<4xi32>) {
+    %words = vector.load %ql_view0[%bounded_packet] : view<8xi32> -> vector<2xi32>
+    %padded = vector.concat<0> %words, %padding : vector<2xi32>, vector<2xi32> -> vector<4xi32>
+    scf.yield %padded : vector<4xi32>
+  } else {
+    %words = vector.load %ql_view0[%bounded_packet] : view<8xi32> -> vector<4xi32>
+    scf.yield %words : vector<4xi32>
+  }
+  %ql_word1 = scf.if %half_packet -> (vector<4xi32>) {
+    %words = vector.load %ql_view1[%bounded_packet] : view<8xi32> -> vector<2xi32>
+    %padded = vector.concat<0> %words, %padding : vector<2xi32>, vector<2xi32> -> vector<4xi32>
+    scf.yield %padded : vector<4xi32>
+  } else {
+    %words = vector.load %ql_view1[%bounded_packet] : view<8xi32> -> vector<4xi32>
+    scf.yield %words : vector<4xi32>
+  }
+  %qh_word = scf.if %half_packet -> (vector<4xi32>) {
+    %words = vector.load %qh_view[%bounded_packet] : view<8xi32> -> vector<2xi32>
+    %padded = vector.concat<0> %words, %padding : vector<2xi32>, vector<2xi32> -> vector<4xi32>
+    scf.yield %padded : vector<4xi32>
+  } else {
+    %words = vector.load %qh_view[%bounded_packet] : view<8xi32> -> vector<4xi32>
+    scf.yield %words : vector<4xi32>
+  }
+  %d_f16 = view.load %d_view[%row_lane] : view<64xf16> -> f16
+  %d = scalar.extf %d_f16 : f16 to f32
+  %ql_shifted0 = vector.shrui %ql_word0, %nibble_shift : vector<4xi32>
+  %ql0 = vector.andi %ql_shifted0, %nibble_mask : vector<4xi32>
+  %qh_shifted0 = vector.shrui %qh_word, %qh_shift0 : vector<4xi32>
+  %qh_low0 = vector.andi %qh_shifted0, %high_mask : vector<4xi32>
+  %qh0 = vector.shli %qh_low0, %c4_i32v : vector<4xi32>
+  %code0 = vector.ori %ql0, %qh0 : vector<4xi32>
+  %code_i8_0 = vector.bitcast %code0 : vector<4xi32> to vector<16xi8>
+  %code_f32_0 = vector.uitofp %code_i8_0 : vector<16xi8> to vector<16xf32>
+  %centered0 = vector.subf %code_f32_0, %c32_f32v : vector<16xf32>
+  %scale_i8_0 = view.load %scale_view[%row_lane, %scale_packet_half, %bounded_group] : view<64x2x8xi8> -> i8
+  %scale0 = scalar.sitofp %scale_i8_0 : i8 to f32
+  %combined_scale0 = scalar.mulf %scale0, %d : f32
+  %combined_scale_vector0 = vector.splat %combined_scale0 : vector<16xf32>
+  %values_f32_0 = vector.mulf %centered0, %combined_scale_vector0 : vector<16xf32>
+  %values0 = vector.fptrunc %values_f32_0 : vector<16xf32> to vector<16xf16>
+  %ql_shifted1 = vector.shrui %ql_word1, %nibble_shift : vector<4xi32>
+  %ql1 = vector.andi %ql_shifted1, %nibble_mask : vector<4xi32>
+  %qh_shifted1 = vector.shrui %qh_word, %qh_shift1 : vector<4xi32>
+  %qh_low1 = vector.andi %qh_shifted1, %high_mask : vector<4xi32>
+  %qh1 = vector.shli %qh_low1, %c4_i32v : vector<4xi32>
+  %code1 = vector.ori %ql1, %qh1 : vector<4xi32>
+  %code_i8_1 = vector.bitcast %code1 : vector<4xi32> to vector<16xi8>
+  %code_f32_1 = vector.uitofp %code_i8_1 : vector<16xi8> to vector<16xf32>
+  %centered1 = vector.subf %code_f32_1, %c32_f32v : vector<16xf32>
+  %scale_i8_1 = view.load %scale_view[%row_lane, %scale_packet_half, %second_group] : view<64x2x8xi8> -> i8
+  %scale1 = scalar.sitofp %scale_i8_1 : i8 to f32
+  %combined_scale1 = scalar.mulf %scale1, %d : f32
+  %combined_scale_vector1 = vector.splat %combined_scale1 : vector<16xf32>
+  %values_f32_1 = vector.mulf %centered1, %combined_scale_vector1 : vector<16xf32>
+  %values1 = vector.fptrunc %values_f32_1 : vector<16xf32> to vector<16xf16>
+  func.return %values0, %values1 : vector<16xf16>, vector<16xf16>
+}

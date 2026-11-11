@@ -326,6 +326,20 @@ static bool can_use_packed_lowtoken_attention_matmul(const AttentionMatMulMatch 
     return common_is_supported_dense_input_size(root.weight_format, root.input_size);
 }
 
+static bool can_use_row64_attention(const DispatchMatchContext & context,
+                                           const AttentionMatMulMatch & root) {
+    const bool has_target_policy = context.row64_weight_policy;
+    const bool can_transform_weight = dispatch_weight_layout_eligible(*root.weight);
+    const bool has_direct_weight = root.weight->alias_source.value < 0;
+    const bool has_aligned_output = root.output_size % 64 == 0;
+    const bool has_q4_weight = root.weight_format == CommonMulMatWeightFormat::Q4K;
+    const bool has_q6_weight = root.weight_format == CommonMulMatWeightFormat::Q6K;
+    const bool has_supported_weight = has_q4_weight || has_q6_weight;
+    const bool has_supported_input = common_is_supported_dense_input_size(root.weight_format, root.input_size);
+    return has_target_policy && can_transform_weight && has_direct_weight && has_aligned_output &&
+           has_supported_weight && has_supported_input;
+}
+
 static CommonMulMatWeightFormat packed_attention_lowtoken_format(CommonMulMatWeightFormat format) {
     return format == CommonMulMatWeightFormat::Q4K ? CommonMulMatWeightFormat::Q4KRow64 :
                                                      CommonMulMatWeightFormat::Q6KRow64;
@@ -534,9 +548,11 @@ static AttentionQkvMatch match_attention_qkv_projection(const DispatchMatchConte
             match.kernel = is_supported_decode_token_count(root.token_count) ?
                                kAttentionKMatMulRopeSetRowsVectorF32F32Kernel :
                                kAttentionKMatMulRopeSetRowsTiledF32F32Kernel;
-            if (can_use_packed_lowtoken_attention_matmul(root)) {
+            if (can_use_packed_lowtoken_attention_matmul(root) || can_use_row64_attention(context, root)) {
                 match.root.weight_format = packed_attention_lowtoken_format(root.weight_format);
-                match.kernel = kAttentionKMatMulRopeSetRowsLegacyF32F32Kernel;
+                if (!context.row64_weight_policy) {
+                    match.kernel = kAttentionKMatMulRopeSetRowsLegacyF32F32Kernel;
+                }
             }
             match.kind   = AttentionQkvProjectionKind::Key;
             return match;
@@ -545,9 +561,11 @@ static AttentionQkvMatch match_attention_qkv_projection(const DispatchMatchConte
         match.root   = root;
         match.kernel = is_supported_decode_token_count(root.token_count) ? kAttentionQMatMulRopeVectorF32F32Kernel :
                                                                            kAttentionQMatMulRopeTiledF32F32Kernel;
-        if (can_use_packed_lowtoken_attention_matmul(root)) {
+        if (can_use_packed_lowtoken_attention_matmul(root) || can_use_row64_attention(context, root)) {
             match.root.weight_format = packed_attention_lowtoken_format(root.weight_format);
-            match.kernel = kAttentionQMatMulRopeLegacyF32F32Kernel;
+            if (!context.row64_weight_policy) {
+                match.kernel = kAttentionQMatMulRopeLegacyF32F32Kernel;
+            }
         }
         match.kind   = AttentionQkvProjectionKind::Query;
         return match;
@@ -567,9 +585,11 @@ static AttentionQkvMatch match_attention_qkv_projection(const DispatchMatchConte
         match.root   = root;
         match.kernel = is_supported_decode_token_count(root.token_count) ? kAttentionVMatMulSetRowsVectorF32F32Kernel :
                                                                            kAttentionVMatMulSetRowsTiledF32F32Kernel;
-        if (can_use_packed_lowtoken_attention_matmul(root)) {
+        if (can_use_packed_lowtoken_attention_matmul(root) || can_use_row64_attention(context, root)) {
             match.root.weight_format = packed_attention_lowtoken_format(root.weight_format);
-            match.kernel = kAttentionVMatMulSetRowsLegacyF32F32Kernel;
+            if (!context.row64_weight_policy) {
+                match.kernel = kAttentionVMatMulSetRowsLegacyF32F32Kernel;
+            }
         }
         match.kind   = AttentionQkvProjectionKind::Value;
         match.use_f16_activation = quantized_prefill;
@@ -683,7 +703,20 @@ static bool match_attention_qkv_dispatch(const DispatchMatchContext & context, D
                                          dispatch_match, activation,
                                          CommonQ8ActivationPolicy::ExistingAlternateOnly)) {
             use_q8_activation = true;
-        } else {
+            if (context.row64_weight_policy) {
+                switch (match.kind) {
+                    case AttentionQkvProjectionKind::Query:
+                        match.kernel = kAttentionQMatMulRopeLegacyF32F32Kernel;
+                        break;
+                    case AttentionQkvProjectionKind::Key:
+                        match.kernel = kAttentionKMatMulRopeSetRowsLegacyF32F32Kernel;
+                        break;
+                    case AttentionQkvProjectionKind::Value:
+                        match.kernel = kAttentionVMatMulSetRowsLegacyF32F32Kernel;
+                        break;
+                }
+            }
+        } else if (!context.row64_weight_policy) {
             CommonMulMatWeightFormat fallback_format = CommonMulMatWeightFormat::Q4K;
             if (!common_mul_mat_format_for_type(match.root.weight->type, fallback_format)) {
                 return false;

@@ -433,6 +433,16 @@ llama_context::llama_context(
             if (backend == nullptr) {
                 throw std::runtime_error(format("failed to initialize %s backend", ggml_backend_dev_name(dev.dev)));
             }
+            const bool prefer_row64_weights = llm_arch_prefers_hrx_row64_weights(model.arch);
+            if (prefer_row64_weights) {
+                ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev.dev);
+                using set_row64_weight_policy_fn = bool (*)(ggml_backend_t, bool);
+                auto set_policy = reinterpret_cast<set_row64_weight_policy_fn>(
+                    ggml_backend_reg_get_proc_address(reg, "ggml_backend_hrx_set_row64_weight_policy"));
+                if (set_policy != nullptr && !set_policy(backend, true)) {
+                    throw std::runtime_error("failed to set HRX row64 weight policy");
+                }
+            }
             backends.emplace_back(backend);
         }
 
