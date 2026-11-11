@@ -103,11 +103,20 @@ struct GetRowsMatch {
     int64_t       token_count         = 0;
     int64_t       row_count           = 0;
     int64_t       hidden_size         = 0;
+    std::string   weight_layout       = kNativeWeightLayout;
 
     bool matched() const {
         return ids != nullptr && weight != nullptr && output != nullptr && weight_format_value >= 0;
     }
 };
+
+static DispatchBinding get_rows_weight_binding(const GetRowsMatch & match) {
+    if (match.weight_layout == kNativeWeightLayout) {
+        return { match.weight->id, 0, match.weight->byte_count };
+    }
+    return { match.weight->id, 0, match.weight->byte_count, match.weight_layout, match.weight->type,
+             match.hidden_size, match.row_count, match.weight->byte_count };
+}
 
 struct GetRowsRmsNormMatch {
     GetRowsMatch      rows;
@@ -153,7 +162,7 @@ static void add_common_integer_parameters(Dispatch & dispatch, const GetRowsMatc
 
 static void add_primary_bindings(Dispatch & dispatch, const GetRowsMatch & match) {
     dispatch.bindings.push_back({ match.ids->id, 0, match.ids->byte_count });
-    dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
+    dispatch.bindings.push_back(get_rows_weight_binding(match));
     dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
 }
 
@@ -256,8 +265,10 @@ static bool match_get_rows_scalar_3d_f32_dispatch(const DispatchMatchContext & c
     return true;
 }
 
-static GetRowsMatch match_get_rows_f32(const Graph & graph, const GraphNode * node) {
+static GetRowsMatch match_get_rows_f32(const DispatchMatchContext & context) {
     GetRowsMatch match;
+    const Graph & graph = context.graph;
+    const GraphNode * node = context.root_node;
     if (node == nullptr || node->op != GGML_OP_GET_ROWS || node->inputs.size() != 2) {
         return match;
     }
@@ -293,12 +304,23 @@ static GetRowsMatch match_get_rows_f32(const Graph & graph, const GraphNode * no
     match.token_count         = token_count;
     match.row_count           = row_count;
     match.hidden_size         = hidden_size;
+    if (context.row64_weight_policy && weight->alias_source.value < 0 && row_count % 64 == 0 &&
+        hidden_size % 256 == 0 &&
+        dispatch_weight_layout_eligible(*weight)) {
+        if (weight->type == GGML_TYPE_Q4_K) {
+            match.weight_format_value = common_mul_mat_format_config_value(CommonMulMatWeightFormat::Q4KRow64);
+            match.weight_layout = kQ4KPackedK256Row64Layout;
+        } else if (weight->type == GGML_TYPE_Q6_K) {
+            match.weight_format_value = common_mul_mat_format_config_value(CommonMulMatWeightFormat::Q6KRow64);
+            match.weight_layout = kQ6KPackedK256Row64ScaleRowLayout;
+        }
+    }
     return match;
 }
 
 static GetRowsScaleMatch match_get_rows_scale_f32(const DispatchMatchContext & context) {
     GetRowsScaleMatch match;
-    match.rows = match_get_rows_f32(context.graph, context.root_node);
+    match.rows = match_get_rows_f32(context);
     if (!match.rows.matched() || !context.graph.has_index()) {
         return {};
     }
@@ -345,7 +367,7 @@ static GetRowsScaleMatch match_get_rows_scale_f32(const DispatchMatchContext & c
 
 static GetRowsRmsNormMatch match_get_rows_rmsnorm_binary(const DispatchMatchContext & context) {
     GetRowsRmsNormMatch match;
-    match.rows = match_get_rows_f32(context.graph, context.root_node);
+    match.rows = match_get_rows_f32(context);
     if (!match.rows.matched() || !context.graph.has_index() || match.rows.hidden_size < 128 ||
         match.rows.hidden_size > 32768 || match.rows.hidden_size % 128 != 0) {
         return {};
@@ -433,7 +455,7 @@ static Dispatch make_get_rows_next_dispatch(const GetRowsMatch &     match,
 }
 
 static bool match_get_rows_f32_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
-    const GetRowsMatch match = match_get_rows_f32(context.graph, context.root_node);
+    const GetRowsMatch match = match_get_rows_f32(context);
     if (!match.matched()) {
         return false;
     }
@@ -458,7 +480,7 @@ static bool match_get_rows_scale_f32_dispatch(const DispatchMatchContext & conte
     dispatch.kernel.compile_parameters.emplace("ggml.get_rows_scale_f32.scale", to_config_value(match.scale));
     dispatch.kernel.compile_parameters.emplace("ggml.get_rows_scale_f32.bias", to_config_value(match.bias));
     dispatch.bindings.push_back({ match.rows.ids->id, 0, match.rows.ids->byte_count });
-    dispatch.bindings.push_back({ match.rows.weight->id, 0, match.rows.weight->byte_count });
+    dispatch.bindings.push_back(get_rows_weight_binding(match.rows));
     dispatch.bindings.push_back({ match.rows.output->id, 0, match.rows.output->byte_count });
     dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
 
@@ -469,7 +491,7 @@ static bool match_get_rows_scale_f32_dispatch(const DispatchMatchContext & conte
 }
 
 static bool match_get_rows_f32_next_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
-    const GetRowsMatch match = match_get_rows_f32(context.graph, context.root_node);
+    const GetRowsMatch match = match_get_rows_f32(context);
     if (!match.matched()) {
         return false;
     }
@@ -558,7 +580,7 @@ static bool match_get_rows_rmsnorm_binary_dispatch(const DispatchMatchContext & 
     add_common_compile_parameters(dispatch, match.rows);
     dispatch.kernel.compile_parameters.emplace("ggml.get_rows_rmsnorm.rms_epsilon", to_config_value(match.epsilon));
     dispatch.bindings.push_back({ match.rows.ids->id, 0, match.rows.ids->byte_count });
-    dispatch.bindings.push_back({ match.rows.weight->id, 0, match.rows.weight->byte_count });
+    dispatch.bindings.push_back(get_rows_weight_binding(match.rows));
     dispatch.bindings.push_back({ match.norm_weight->id, 0, match.norm_weight->byte_count });
     dispatch.bindings.push_back({ match.rows.output->id, 0, match.rows.output->byte_count });
     dispatch.bindings.push_back({ match.normalized_output->id, 0, match.normalized_output->byte_count });

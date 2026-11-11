@@ -3,6 +3,9 @@
   "upstream_revision": "local",
   "files": [
     {
+      "path": "../loom-libs/motifs/dequant.loom"
+    },
+    {
       "path": "../loom-libs/motifs/q6_k_f16.loom"
     },
     {
@@ -175,14 +178,146 @@
           "../loom-libs/motifs/matmul/q6_q8_1_x4_decode.loom",
           "../loom-libs/motifs/q6_k_f16.loom",
           "ggml/quantize_q8_1_x4.loom",
-          "../loom-libs/motifs/quantize_q8_1_x4_group.loom"
+          "../loom-libs/motifs/quantize_q8_1_x4_group.loom",
+          "../loom-libs/motifs/dequant.loom"
         ]
       },
       "compile_dependencies": [
         "../loom-libs/motifs/matmul/q6_q8_1_x4_decode.loom",
         "../loom-libs/motifs/q6_k_f16.loom",
         "ggml/quantize_q8_1_x4.loom",
-        "../loom-libs/motifs/quantize_q8_1_x4_group.loom"
+        "../loom-libs/motifs/quantize_q8_1_x4_group.loom",
+        "../loom-libs/motifs/dequant.loom"
+      ]
+    },
+    {
+      "name": "ggml_linear_q6k_q8_1_x4_row64",
+      "symbol": "ggml_linear_q6k_q8_1_x4_row64",
+      "source": "ggml/linear_q6k_q8_1_x4.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "input_size",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "input_size",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "q8_input",
+        "weight",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "linear_q6k_q8_1_x4_linked",
+        "primary_sources": [
+          "ggml/linear_q6k_q8_1_x4.loom"
+        ],
+        "library_sources": [
+          "../loom-libs/motifs/matmul/q6_q8_1_x4_decode.loom",
+          "../loom-libs/motifs/q6_k_f16.loom",
+          "ggml/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4_group.loom",
+          "../loom-libs/motifs/dequant.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "../loom-libs/motifs/matmul/q6_q8_1_x4_decode.loom",
+        "../loom-libs/motifs/q6_k_f16.loom",
+        "ggml/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4_group.loom",
+        "../loom-libs/motifs/dequant.loom"
+      ]
+    },
+    {
+      "name": "ggml_linear_q6k_q8_1_x4_row64",
+      "symbol": "ggml_linear_q6k_q8_1_x4_row64_wave64",
+      "source": "ggml/linear_q6k_q8_1_x4.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "input_size",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "input_size",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "q8_input",
+        "weight",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "gfx1100",
+      "compile_recipe": {
+        "mode": "archive",
+        "link_module": "linear_q6k_q8_1_x4_linked",
+        "primary_sources": [
+          "ggml/linear_q6k_q8_1_x4.loom"
+        ],
+        "library_sources": [
+          "../loom-libs/motifs/matmul/q6_q8_1_x4_decode.loom",
+          "../loom-libs/motifs/q6_k_f16.loom",
+          "ggml/quantize_q8_1_x4.loom",
+          "../loom-libs/motifs/quantize_q8_1_x4_group.loom",
+          "../loom-libs/motifs/dequant.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "../loom-libs/motifs/matmul/q6_q8_1_x4_decode.loom",
+        "../loom-libs/motifs/q6_k_f16.loom",
+        "ggml/quantize_q8_1_x4.loom",
+        "../loom-libs/motifs/quantize_q8_1_x4_group.loom",
+        "../loom-libs/motifs/dequant.loom"
       ]
     },
     {
@@ -238,14 +373,16 @@
           "../loom-libs/motifs/matmul/q6_q8_1_x4_decode.loom",
           "../loom-libs/motifs/q6_k_f16.loom",
           "ggml/quantize_q8_1_x4.loom",
-          "../loom-libs/motifs/quantize_q8_1_x4_group.loom"
+          "../loom-libs/motifs/quantize_q8_1_x4_group.loom",
+          "../loom-libs/motifs/dequant.loom"
         ]
       },
       "compile_dependencies": [
         "../loom-libs/motifs/matmul/q6_q8_1_x4_decode.loom",
         "../loom-libs/motifs/q6_k_f16.loom",
         "ggml/quantize_q8_1_x4.loom",
-        "../loom-libs/motifs/quantize_q8_1_x4_group.loom"
+        "../loom-libs/motifs/quantize_q8_1_x4_group.loom",
+        "../loom-libs/motifs/dequant.loom"
       ]
     },
     {
