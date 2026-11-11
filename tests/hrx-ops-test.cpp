@@ -9021,11 +9021,13 @@ static void run_qwen27_matmul_policy_route_case(ggml_type type, int64_t tokens,
                 if (binding.value == source->id) {
                     REQUIRE(binding.layout == expected);
                     const bool q6_weight = type == GGML_TYPE_Q6_K;
-                    const bool short_prompt = tokens == 66;
+                    const bool short_prompt = tokens >= 64 && tokens < 128;
                     const bool short_q6 = q6_weight && short_prompt;
-                    if (short_q6) {
+                    if (short_q6 && (policy.prefer_row64 || tokens == 66)) {
+                        const bool use_m64 = n == 1024 && (k == 1024 || k == 3072);
                         const char * expected_kernel = policy.prefer_row64 ?
-                            "loom_libs:ggml_mul_mat_q6_k_f32_wmma_prefill_wave32" :
+                            (use_m64 ? "loom_libs:ggml_mul_mat_q6_k_f32_wmma_prefill_m64_wave32" :
+                                       "loom_libs:ggml_mul_mat_q6_k_f32_wmma_prefill_wave32") :
                             "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32";
                         REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id, target) == expected_kernel);
                     }
@@ -9196,7 +9198,9 @@ static std::vector<float> run_dense_matmul_f32_reference_case(ggml_type type, in
     const bool prefill_aligned = tokens % 128 == 0;
     const bool aligned_prefill = prefill_minimum && prefill_aligned;
     const bool aligned_q6_prefill = q6_weight && aligned_prefill;
+    const bool short_m64 = short_q6 && n == 1024 && (k == 1024 || k == 3072);
     const char * expected_kernel = tokens == 1 ? "loom_libs:ggml_mul_mat_vector_f32_f32" :
+        short_m64 ? "loom_libs:ggml_mul_mat_q6_k_f32_wmma_prefill_m64_wave32" :
         short_q6 ? "loom_libs:ggml_mul_mat_q6_k_f32_wmma_prefill_wave32" :
         aligned_q6_prefill ? "loom_libs:ggml_mul_mat_q6_k_f16_wmma_prefill_wave32" :
         tokens % 32 == 0 ? "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32_aligned" :
@@ -9389,6 +9393,12 @@ static void register_basic_ops_cases(Suite & suite) {
                 }
             }
         }
+        for (const int64_t tokens : { 64, 66, 127 }) {
+            suite.host_case("qwen3.matmul_policy_route." + std::string(target) + ".q6_K.k3072.tokens" +
+                                std::to_string(tokens), [target, tokens] {
+                run_qwen27_matmul_policy_route_case(GGML_TYPE_Q6_K, tokens, 3072, 1024, target);
+            });
+        }
     }
     suite.host_case("qwen27.q4_decode_policy_route", [] {
         run_qwen27_matmul_policy_route_case(GGML_TYPE_Q4_K, 1);
@@ -9466,6 +9476,11 @@ static void register_basic_ops_cases(Suite & suite) {
                 });
             }
         }
+    }
+    for (const int64_t tokens : { 64, 127 }) {
+        suite.device_case("qwen3.q6_K.k1024.m64_boundary.tokens" + std::to_string(tokens), [tokens] {
+            run_dense_matmul_f32_reference_case(GGML_TYPE_Q6_K, tokens, 1024, 1024);
+        });
     }
     for (const int64_t tokens : { 66, 128 }) {
         suite.device_case("qwen3.q4_K.k2560.native_row64_equivalence.tokens" + std::to_string(tokens), [tokens] {
@@ -10019,7 +10034,7 @@ static void register_dense_matmul_cases(Suite & suite) {
         suite.device_case("qwen3.q6_row64_short_residual.k3072.tokens" + std::to_string(tokens),
                           [tokens, row64_postops] {
             run_dense_matmul_postops_cpu_reference_case(
-                GGML_TYPE_Q6_K, "loom_libs:ggml_mul_mat_q6_k_f32_wmma_prefill_wave32",
+                GGML_TYPE_Q6_K, "loom_libs:ggml_mul_mat_q6_k_f32_wmma_prefill_m64_wave32",
                 tokens, 1024, false, true, false, 3072, row64_postops);
         });
     }

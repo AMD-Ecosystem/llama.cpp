@@ -101,6 +101,8 @@ static constexpr int64_t          kMulMatVectorPackedMaxOutputSize          = 26
 static constexpr int64_t          kMulMatVectorSelectedOutputsMaxOutputSize = 262144;
 static constexpr KernelCatalogRef kMulMatQ6KF32WmmaPrefillWave32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_q6_k_f32_wmma_prefill_wave32");
+static constexpr KernelCatalogRef kMulMatQ6KF32WmmaPrefillM64Wave32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_q6_k_f32_wmma_prefill_m64_wave32");
 static constexpr KernelCatalogRef kMulMatQ6KF16WmmaPrefillWave32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_q6_k_f16_wmma_prefill_wave32");
 static constexpr KernelCatalogRef kSelectSymmetricI4K32GroupsKernel =
@@ -901,10 +903,13 @@ static bool match_q6_k_prefill_wave32_dispatch(const DispatchMatchContext & cont
         return false;
     }
 
-    // Short prompts use masked M128 tiles without a separate activation copy.
+    // Short prompts use masked WMMA tiles without a separate activation copy.
     if (short_row64) {
+        // M64 halves reduce register pressure at these measured short shapes.
+        const bool use_m64 = match.output_size == 1024 && (match.input_size == 1024 || match.input_size == 3072);
         return build_q6_k_prefill_wave32_dispatch(match, match.input->id, match.input->byte_count,
-                                                  kMulMatQ6KF32WmmaPrefillWave32Kernel, row64_weight,
+                                                  use_m64 ? kMulMatQ6KF32WmmaPrefillM64Wave32Kernel :
+                                                            kMulMatQ6KF32WmmaPrefillWave32Kernel, row64_weight,
                                                   context.root_index, dispatch_match);
     }
 
