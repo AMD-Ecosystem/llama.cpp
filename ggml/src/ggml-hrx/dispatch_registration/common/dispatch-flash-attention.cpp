@@ -50,7 +50,7 @@ static bool is_supported_token_count(int64_t token_count) {
 }
 
 static bool is_supported_key_value_token_count(int64_t token_count) {
-    return token_count >= 1 && token_count <= 32768;
+    return token_count >= 1 && token_count <= 262144;
 }
 
 static bool is_supported_decode_key_value_token_count(int64_t token_count) {
