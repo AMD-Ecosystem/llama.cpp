@@ -9477,6 +9477,9 @@ static void register_basic_ops_cases(Suite & suite) {
             }
         }
     }
+    suite.device_case("qwen3.q6_K.row64.vocabulary151936.f32_reference", [] {
+        run_dense_matmul_f32_reference_case(GGML_TYPE_Q6_K, 1, 1024, 151936);
+    });
     for (const int64_t tokens : { 64, 127 }) {
         suite.device_case("qwen3.q6_K.k1024.m64_boundary.tokens" + std::to_string(tokens), [tokens] {
             run_dense_matmul_f32_reference_case(GGML_TYPE_Q6_K, tokens, 1024, 1024);
