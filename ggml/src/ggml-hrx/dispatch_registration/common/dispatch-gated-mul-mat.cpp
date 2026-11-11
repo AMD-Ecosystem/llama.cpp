@@ -28,8 +28,6 @@ static constexpr KernelCatalogRef kMulMatTiledPairF32BinaryBiasAddPublishF32Kern
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_tiled_pair_input_f32_binary_bias_residual_publish_f32");
 static constexpr KernelCatalogRef kMulMatTiledPairAlignedF32BinaryBiasAddPublishF32Kernel = GGML_HRX_KERNEL_REF(
     "loom_libs", "ggml_mul_mat_tiled_pair_input_f32_binary_bias_residual_publish_f32_aligned");
-static constexpr KernelCatalogRef kMulMatSwiGLUF32F32DecodeWave64Kernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_swiglu_f32_f32_decode_wave64");
 static constexpr KernelCatalogRef kMulMatSwiGLUF32F32LowTokenDotKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_swiglu_f32_f32_lowtoken_dot");
 static constexpr KernelCatalogRef kMulMatSwiGLUQ1_0Q8_1X4Kernel =
@@ -80,8 +78,6 @@ struct MulMatSwiGLUMatch {
     }
 
     bool matched() const { return topology_matched() && token_count >= 1; }
-
-    bool decode_matched() const { return topology_matched() && token_count == 1; }
 };
 
 struct MulMatSwiGLUPostOpsMatch {
@@ -1072,52 +1068,6 @@ static bool match_mul_mat_swiglu_dispatch(const DispatchMatchContext & context, 
         }
         dispatch.bindings.push_back(publication.binding());
     }
-
-    if (!append_covered_node_index_once(context.graph, context.covered_nodes, match.gate_node,
-                                        dispatch_match.covered_nodes) ||
-        !append_covered_node_index_once(context.graph, context.covered_nodes, match.up_node,
-                                        dispatch_match.covered_nodes) ||
-        !append_covered_node_index_once(context.graph, context.covered_nodes, match.glu_node,
-                                        dispatch_match.covered_nodes)) {
-        return false;
-    }
-    dispatch_match.dispatches.push_back(std::move(dispatch));
-    return true;
-}
-
-static bool match_decode_mul_mat_swiglu_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
-    const MulMatSwiGLUMatch match = match_mul_mat_swiglu(context);
-    if (!match.decode_matched()) {
-        return false;
-    }
-
-    Dispatch dispatch;
-    const CommonMulMatWeightFormat gate_format = row64_swiglu_format(
-        context, *match.gate_weight, match.gate_format, match.input_size, match.output_size);
-    const CommonMulMatWeightFormat up_format = row64_swiglu_format(
-        context, *match.up_weight, match.up_format, match.input_size, match.output_size);
-    dispatch.kernel = make_kernel_specialization(kMulMatSwiGLUF32F32DecodeWave64Kernel);
-    dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
-    dispatch.kernel.compile_parameters.emplace("ggml.workload.token_capacity",
-                                               common_to_config_value(match.token_count));
-    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_swiglu.input_size",
-                                               common_to_config_value(match.input_size));
-    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_swiglu.output_size",
-                                               common_to_config_value(match.output_size));
-    dispatch.kernel.compile_parameters.emplace(
-        "ggml.mul_mat_swiglu.gate_weight_format",
-        common_to_config_value(common_mul_mat_format_config_value(gate_format)));
-    dispatch.kernel.compile_parameters.emplace(
-        "ggml.mul_mat_swiglu.up_weight_format",
-        common_to_config_value(common_mul_mat_format_config_value(up_format)));
-    dispatch.kernel.compile_parameters.emplace(
-        "ggml.mul_mat_swiglu.op", common_to_config_value(static_cast<int64_t>(binary_kind_config_value(match.op))));
-    dispatch.bindings.push_back({ match.input->id, 0, match.input->byte_count });
-    dispatch.bindings.push_back(row64_swiglu_binding(*match.gate_weight, gate_format,
-                                                       match.input_size, match.output_size));
-    dispatch.bindings.push_back(row64_swiglu_binding(*match.up_weight, up_format,
-                                                       match.input_size, match.output_size));
-    dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
 
     if (!append_covered_node_index_once(context.graph, context.covered_nodes, match.gate_node,
                                         dispatch_match.covered_nodes) ||
