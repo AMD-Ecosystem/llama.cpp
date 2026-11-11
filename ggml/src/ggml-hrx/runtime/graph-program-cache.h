@@ -131,6 +131,13 @@ struct GraphProgramSupportResult {
 
 class GraphProgramCache {
   public:
+    /// The backend setter supplies the model architecture's preference in production;
+    /// operator tests use the same setter with an explicit value.
+    /// Configure before support checks or execution; keep fixed for this cache's lifetime.
+    void set_row64_weight_policy(bool enabled) { row64_weight_policy_ = enabled; }
+
+    bool row64_weight_policy() const { return row64_weight_policy_; }
+
     bool can_execute(const ggml_cgraph & graph, const KernelCorpus & corpus, const std::string & target) const;
 
     GraphProgramSupportResult check_support(const ggml_cgraph &  graph,
@@ -161,6 +168,8 @@ class GraphProgramCache {
                                                               const std::string &  target,
                                                               Status &             errors) const;
 
+    // False preserves the existing matchers, including their row64 routes.
+    bool                                                       row64_weight_policy_ = false;
     mutable std::mutex                                          mutex_;
     std::unordered_map<uint64_t, std::shared_ptr<GraphProgram>> programs_;
     std::unordered_map<uint64_t, ValidatedGraphMatch>           validated_matches_;

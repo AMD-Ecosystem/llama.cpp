@@ -16,6 +16,7 @@ class DispatchRegistry;
 
 struct DispatchTarget {
     std::string architecture;
+    bool row64_weight_policy = false;
 };
 
 enum class DispatchMatchKind {
@@ -46,6 +47,7 @@ struct DispatchMatchContext {
     const CommandPlan &       plan;
     ValueId                   next_plan_value;
     const DispatchRegistry *  registry = nullptr;
+    bool                      row64_weight_policy = false;
 };
 
 // Non-native weight bindings require bytes that remain available after graph import.
