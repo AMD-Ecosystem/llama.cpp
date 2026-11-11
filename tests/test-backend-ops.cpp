@@ -12702,6 +12702,21 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_flash_attn_ext(512, 512, 4, { 4, 1}, 512, 75, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_BF16, GGML_TYPE_BF16));
     test_cases.emplace_back(new test_flash_attn_ext(576, 512, 4, { 4, 1}, 512, 75, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_BF16, GGML_TYPE_BF16, {0, 1, 2, 3}, true, true));
 
+    // D72 padding dispatch boundaries, strided batches, and feature fallbacks.
+    for (int tokens : {255, 256, 257}) {
+        test_cases.emplace_back(new test_flash_attn_ext(72, 72, 16, {1, 1}, tokens, tokens, false));
+    }
+    test_cases.emplace_back(new test_flash_attn_ext(72, 72, 15, {1, 1}, 256, 256, false));
+    test_cases.emplace_back(new test_flash_attn_ext(72, 72, 4, {1, 2}, 513, 513, false, false, 0, 0, GGML_PREC_F32,
+            GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}));
+    test_cases.emplace_back(new test_flash_attn_ext(72, 72, 16, {1, 1}, 257, 257, true));
+    test_cases.emplace_back(new test_flash_attn_ext(72, 72, 16, {1, 1}, 257, 257, false, true));
+    test_cases.emplace_back(new test_flash_attn_ext(72, 72, 16, {1, 1}, 257, 257, true, false, 8.0f));
+    test_cases.emplace_back(new test_flash_attn_ext(72, 72, 16, {1, 1}, 257, 257, false, false, 0, 0, GGML_PREC_F32,
+            GGML_TYPE_F32, GGML_TYPE_F32));
+    test_cases.emplace_back(new test_flash_attn_ext(72, 72, 8, {2, 1}, 257, 257, false));
+    test_cases.emplace_back(new test_flash_attn_ext(72, 72, 16, {1, 1}, 513, 257, false));
+
     // FLASH_ATTN_EXT: large logits
     test_cases.emplace_back(new test_flash_attn_ext_large_logits( 64,  64, 16, {4, 1}, 1024, 75, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext_large_logits(128, 128,  8, {4, 1}, 1024, 75, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
@@ -13241,6 +13256,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
             }
         }
     }
+
+    // Gemma-3 vision attention, including the D72 padding and output copy.
+    test_cases.emplace_back(new test_flash_attn_ext(72, 72, 16, {1, 1}, 4096, 4096, false, false, 0, 0, GGML_PREC_F32,
+            GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}, false));
 
     // Qwen3-VL-8B https://github.com/ggml-org/llama.cpp/issues/17012
     test_cases.emplace_back(new test_flash_attn_ext(72, 72, 16, {1, 1}, 5776, 5776, false, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));

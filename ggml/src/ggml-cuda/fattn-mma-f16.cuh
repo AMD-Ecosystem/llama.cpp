@@ -1866,7 +1866,12 @@ static __global__ void flash_attn_ext_f16(
 #endif // __CUDA_ARCH__ == GGML_CUDA_CC_TURING
 
 #if defined(AMD_WMMA_AVAILABLE)
-    if (ncols1*ncols2 < 16 || ncols2 == 1 || DKQ > 256) {
+#if defined(RDNA3_5)
+    constexpr bool vision_d80 = DKQ == 80 && DV == 80 && ncols1 == 64;
+#else
+    constexpr bool vision_d80 = false;
+#endif
+    if (ncols1*ncols2 < 16 || (ncols2 == 1 && !vision_d80) || DKQ > 256) {
         NO_DEVICE_CODE;
         return;
     }
