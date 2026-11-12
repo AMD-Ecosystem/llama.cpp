@@ -528,6 +528,158 @@ static void convert_unary_cuda(const void * vx, dst_t * y,
         (vx, y, ne00, ne01, ne0203, ne02_fdv, s01, s02, s03);
 }
 
+template <typename T>
+struct alignas(2*sizeof(T)) convert_pair {
+    T v[2];
+};
+
+template <typename dst_t, bool clamp, typename src_t>
+static __device__ __forceinline__ dst_t convert_unary_value(src_t x, float min, float max) {
+    if constexpr (clamp) {
+        float value = ggml_cuda_cast<float>(x);
+        if constexpr (std::is_same_v<src_t, nv_bfloat16>) {
+            // Preserve the separate conversion's NaN behavior before the clamp.
+#if defined(GGML_USE_HIP)
+            asm volatile("" : "+v"(value));
+#else
+            asm volatile("" : "+f"(value));
+#endif
+        }
+        return ggml_cuda_cast<dst_t>(fminf(fmaxf(value, min), max));
+    }
+    return ggml_cuda_cast<dst_t>(x);
+}
+
+template <typename src_t, typename dst_t, bool clamp = false>
+static __global__ void convert_unary_packed(const src_t * __restrict__ x, dst_t * __restrict__ y, const int64_t k,
+        const float min = 0.0f, const float max = 0.0f) {
+    const int64_t i = 2*(int64_t(blockIdx.x)*blockDim.x + threadIdx.x);
+    if (i + 1 < k) {
+        const auto in = *reinterpret_cast<const convert_pair<src_t> *>(x + i);
+        const convert_pair<dst_t> out = {{convert_unary_value<dst_t, clamp>(in.v[0], min, max),
+                                         convert_unary_value<dst_t, clamp>(in.v[1], min, max)}};
+        *reinterpret_cast<convert_pair<dst_t> *>(y + i) = out;
+    } else if (i < k) {
+        y[i] = convert_unary_value<dst_t, clamp>(x[i], min, max);
+    }
+}
+
+template <typename src_t, typename dst_t>
+static __global__ void convert_unary_clamped(const src_t * x, dst_t * y, int64_t k, float min, float max) {
+    const int64_t i = int64_t(blockIdx.x)*blockDim.x + threadIdx.x;
+    if (i < k) {
+        y[i] = convert_unary_value<dst_t, true>(x[i], min, max);
+    }
+}
+
+template <typename T, bool add_residual>
+static __global__ void convert_bias_to_f32(const T * x, const float * bias, float * y, int64_t ncols, int64_t nrows, const float * residual) {
+    const int64_t col = int64_t(blockIdx.x)*blockDim.x + threadIdx.x;
+    if (col >= ncols) {
+        return;
+    }
+    const float b = bias[col];
+    for (int64_t row = blockIdx.y; row < nrows; row += gridDim.y) {
+        const int64_t i = row*ncols + col;
+        float v = ggml_cuda_cast<float>(x[i]) + b;
+        if constexpr (add_residual) {
+#if defined(GGML_USE_HIP)
+            asm volatile("" : "+v"(v));
+#else
+            asm volatile("" : "+f"(v));
+#endif
+            v += residual[i];
+        }
+        y[i] = v;
+    }
+}
+
+
+template <typename T, bool add_residual>
+static __global__ void convert_bias_to_f32_vec2(const convert_pair<T> * x, const float2 * bias, float2 * y,
+        int64_t ncols, int64_t nrows, const float2 * residual) {
+    const int64_t i = int64_t(blockIdx.x)*blockDim.x + threadIdx.x;
+    if (i >= ncols*nrows) {
+        return;
+    }
+    const float2 b = bias[i % ncols];
+    {
+        const auto in = x[i];
+        float2 v = make_float2(ggml_cuda_cast<float>(in.v[0]) + b.x, ggml_cuda_cast<float>(in.v[1]) + b.y);
+        if constexpr (add_residual) {
+#if defined(GGML_USE_HIP)
+            asm volatile("" : "+v"(v.x), "+v"(v.y));
+#else
+            asm volatile("" : "+f"(v.x), "+f"(v.y));
+#endif
+            const float2 r = residual[i];
+            v.x += r.x;
+            v.y += r.y;
+        }
+        y[i] = v;
+    }
+}
+
+template <typename T>
+void ggml_cuda_convert_bias_to_f32(const T * x, const float * bias, float * y, int64_t ncols, int64_t nrows, cudaStream_t stream, const float * residual) {
+#if defined(GGML_USE_HIP)
+    const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+    if (GGML_CUDA_OPT_ENABLED(GGML_CUDA_BIAS_VEC, true) && GGML_CUDA_CC_IS_RDNA3_5(cc) && ncols % 2 == 0 &&
+        reinterpret_cast<uintptr_t>(x) % alignof(convert_pair<T>) == 0 &&
+        reinterpret_cast<uintptr_t>(bias) % alignof(float2) == 0 &&
+        reinterpret_cast<uintptr_t>(y) % alignof(float2) == 0 &&
+        (!residual || reinterpret_cast<uintptr_t>(residual) % alignof(float2) == 0)) {
+        const dim3 blocks((ncols*nrows/2 + CUDA_DEQUANTIZE_BLOCK_SIZE - 1)/CUDA_DEQUANTIZE_BLOCK_SIZE);
+        if (residual) {
+            convert_bias_to_f32_vec2<T, true><<<blocks, CUDA_DEQUANTIZE_BLOCK_SIZE, 0, stream>>>(
+                reinterpret_cast<const convert_pair<T> *>(x), reinterpret_cast<const float2 *>(bias),
+                reinterpret_cast<float2 *>(y), ncols/2, nrows, reinterpret_cast<const float2 *>(residual));
+        } else {
+            convert_bias_to_f32_vec2<T, false><<<blocks, CUDA_DEQUANTIZE_BLOCK_SIZE, 0, stream>>>(
+                reinterpret_cast<const convert_pair<T> *>(x), reinterpret_cast<const float2 *>(bias),
+                reinterpret_cast<float2 *>(y), ncols/2, nrows, nullptr);
+        }
+        return;
+    }
+#endif
+    const dim3 blocks((ncols + CUDA_DEQUANTIZE_BLOCK_SIZE - 1)/CUDA_DEQUANTIZE_BLOCK_SIZE, std::min(nrows, int64_t(65535)));
+    if (residual) {
+        convert_bias_to_f32<T, true><<<blocks, CUDA_DEQUANTIZE_BLOCK_SIZE, 0, stream>>>(x, bias, y, ncols, nrows, residual);
+    } else {
+        convert_bias_to_f32<T, false><<<blocks, CUDA_DEQUANTIZE_BLOCK_SIZE, 0, stream>>>(x, bias, y, ncols, nrows, nullptr);
+    }
+}
+
+template <typename src_t, typename dst_t>
+static void convert_unary_clamped_cuda(const src_t * x, dst_t * y, int64_t k, float min, float max, cudaStream_t stream) {
+    if (GGML_CUDA_OPT_ENABLED(GGML_CUDA_CONVERT_CLAMP_VEC2, true) &&
+            reinterpret_cast<uintptr_t>(x) % alignof(convert_pair<src_t>) == 0 &&
+            reinterpret_cast<uintptr_t>(y) % alignof(convert_pair<dst_t>) == 0) {
+        const int64_t blocks = (k + 2*CUDA_DEQUANTIZE_BLOCK_SIZE - 1)/(2*CUDA_DEQUANTIZE_BLOCK_SIZE);
+        convert_unary_packed<src_t, dst_t, true><<<blocks, CUDA_DEQUANTIZE_BLOCK_SIZE, 0, stream>>>(x, y, k, min, max);
+    } else {
+        const int64_t blocks = (k + CUDA_DEQUANTIZE_BLOCK_SIZE - 1)/CUDA_DEQUANTIZE_BLOCK_SIZE;
+        convert_unary_clamped<<<blocks, CUDA_DEQUANTIZE_BLOCK_SIZE, 0, stream>>>(x, y, k, min, max);
+    }
+}
+
+template <typename T>
+void ggml_cuda_convert_clamp_to_f32(const T * x, float * y, int64_t k, float min, float max, cudaStream_t stream) {
+    convert_unary_clamped_cuda(x, y, k, min, max, stream);
+}
+
+template <typename T>
+void ggml_cuda_convert_clamp_from_f32(const float * x, T * y, int64_t k, float min, float max, cudaStream_t stream) {
+    convert_unary_clamped_cuda(x, y, k, min, max, stream);
+}
+
+template void ggml_cuda_convert_clamp_to_f32<half>(const half *, float *, int64_t, float, float, cudaStream_t);
+template void ggml_cuda_convert_clamp_from_f32<half>(const float *, half *, int64_t, float, float, cudaStream_t);
+template void ggml_cuda_convert_bias_to_f32<half>(const half *, const float *, float *, int64_t, int64_t, cudaStream_t, const float *);
+template void ggml_cuda_convert_clamp_to_f32<nv_bfloat16>(const nv_bfloat16 *, float *, int64_t, float, float, cudaStream_t);
+template void ggml_cuda_convert_clamp_from_f32<nv_bfloat16>(const float *, nv_bfloat16 *, int64_t, float, float, cudaStream_t);
+template void ggml_cuda_convert_bias_to_f32<nv_bfloat16>(const nv_bfloat16 *, const float *, float *, int64_t, int64_t, cudaStream_t, const float *);
+
 template <typename src_t, typename dst_t>
 static void convert_unary_cont_cuda(const void * vx, dst_t * y, const int64_t k, cudaStream_t stream) {
     if (k % 4 == 0 &&
