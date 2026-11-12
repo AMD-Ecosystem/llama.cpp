@@ -39,6 +39,8 @@ static constexpr KernelCatalogRef kMulMatTiledF32F16AlternateKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_tiled_input_f32_publish_f32_f16_alternate");
 static constexpr KernelCatalogRef kMulMatSkinnyF32F32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_skinny_input_f32_publish_f32");
+static constexpr KernelCatalogRef kMulMatSkinnyIQ3XXSF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_skinny_input_f32_iq3_xxs_publish_f32");
 static constexpr KernelCatalogRef kMulMatSkinnyBiasAddF32F32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_skinny_input_f32_bias_residual_publish_f32");
 static constexpr KernelCatalogRef kMulMatF32F32DecodeWave64Kernel =
@@ -1322,9 +1324,16 @@ static bool build_mul_mat_dispatch(
     if ((match.weight_format == CommonMulMatWeightFormat::IQ1_S ||
          match.weight_format == CommonMulMatWeightFormat::IQ1_M ||
          match.weight_format == CommonMulMatWeightFormat::IQ3_XXS) &&
-        (!use_iq_codebook || common_mul_mat_is_skinny_route(match))) {
+        !use_iq_codebook) {
         return false;
     }
+    if ((match.weight_format == CommonMulMatWeightFormat::IQ1_S ||
+         match.weight_format == CommonMulMatWeightFormat::IQ1_M) &&
+        common_mul_mat_is_skinny_route(match)) {
+        return false;
+    }
+    const bool use_skinny_iq3_xxs = use_iq_codebook && match.weight_format == CommonMulMatWeightFormat::IQ3_XXS &&
+                                    common_mul_mat_is_skinny_route(match);
     const bool use_aligned_dynamic = match.token_count % 32 == 0 &&
                                      match.kernel.id == kMulMatTiledF32F32Kernel.id && !publish_f16_alternate &&
                                      !use_iq_codebook;
@@ -1333,6 +1342,7 @@ static bool build_mul_mat_dispatch(
                                 std::getenv("GGML_HRX_DISABLE_Q1_TOKEN64_MATMUL") == nullptr;
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(
+        use_skinny_iq3_xxs ? kMulMatSkinnyIQ3XXSF32F32Kernel :
         use_iq_codebook ? tiled_iq_codebook_kernel(match.weight_format) :
         use_q1_token64 ? kMulMatTiledToken64AlignedF32F32Kernel :
         use_aligned_dynamic ? kMulMatTiledAlignedF32F32Kernel :
