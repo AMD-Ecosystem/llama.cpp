@@ -12702,6 +12702,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_flash_attn_ext(512, 512, 4, { 4, 1}, 512, 75, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_BF16, GGML_TYPE_BF16));
     test_cases.emplace_back(new test_flash_attn_ext(576, 512, 4, { 4, 1}, 512, 75, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_BF16, GGML_TYPE_BF16, {0, 1, 2, 3}, true, true));
 
+    // Vision WMMA dispatch boundaries, partial KV tiles, and strided batches.
+    for (int head_size : {64, 80}) {
+        for (int tokens : {63, 64, 65, 257}) {
+            test_cases.emplace_back(new test_flash_attn_ext(head_size, head_size, 4, {1, 1}, tokens, tokens, false));
+        }
+        test_cases.emplace_back(new test_flash_attn_ext(head_size, head_size, 4, {1, 2}, 129, 129, false, false, 0, 0,
+                GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}));
+    }
+
     // D72 padding dispatch boundaries, strided batches, and feature fallbacks.
     for (int tokens : {255, 256, 257}) {
         test_cases.emplace_back(new test_flash_attn_ext(72, 72, 16, {1, 1}, tokens, tokens, false));

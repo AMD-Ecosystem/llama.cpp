@@ -3,6 +3,12 @@
 #include "mma.cuh"
 #include "fattn-common.cuh"
 
+#ifndef GGML_CUDA_FATTN_WMMA_NO_GQA
+#define GGML_CUDA_FATTN_WMMA_NO_GQA 1
+#endif
+#ifndef GGML_CUDA_FATTN_D64_FULL_TILE
+#define GGML_CUDA_FATTN_D64_FULL_TILE 1
+#endif
 #ifndef GGML_CUDA_FATTN_D80_FULL_TILE
 #define GGML_CUDA_FATTN_D80_FULL_TILE 1
 #endif
@@ -1359,9 +1365,11 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
     // kb0_start is always < kb0_stop so the last iter can be executed unconditionally.
     if constexpr (ncols2 == 1 || use_sparse) {
         constexpr bool oob_check = true;
-#if defined(RDNA3_5) && GGML_CUDA_FATTN_D80_FULL_TILE
+#if defined(RDNA3_5)
         // Only the last dense KV tile can be partial.
-        constexpr bool full_tile_oob_check = !(DKQ == 80 && DV == 80 && ncols1 == 64 && ncols2 == 1 && !use_sparse);
+        constexpr bool full_tile_oob_check = !(((DKQ == 80 && GGML_CUDA_FATTN_D80_FULL_TILE) ||
+                                               (DKQ == 64 && GGML_CUDA_FATTN_D64_FULL_TILE)) &&
+                                              DV == DKQ && ncols1 == 64 && ncols2 == 1 && !use_sparse);
 #else
         constexpr bool full_tile_oob_check = true;
 #endif
@@ -1877,11 +1885,11 @@ static __global__ void flash_attn_ext_f16(
 
 #if defined(AMD_WMMA_AVAILABLE)
 #if defined(RDNA3_5)
-    constexpr bool vision_d80 = DKQ == 80 && DV == 80 && ncols1 == 64;
+    constexpr bool vision_mha = (DKQ == 80 || (DKQ == 64 && GGML_CUDA_FATTN_WMMA_NO_GQA)) && DV == DKQ && ncols1 == 64;
 #else
-    constexpr bool vision_d80 = false;
+    constexpr bool vision_mha = false;
 #endif
-    if (ncols1*ncols2 < 16 || (ncols2 == 1 && !vision_d80) || DKQ > 256) {
+    if (ncols1*ncols2 < 16 || (ncols2 == 1 && !vision_mha) || DKQ > 256) {
         NO_DEVICE_CODE;
         return;
     }
