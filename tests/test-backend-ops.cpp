@@ -5574,6 +5574,166 @@ struct test_mul_mat : public test_case {
     }
 };
 
+struct test_glu_mat : public test_mul_mat {
+    const bool extra_consumer;
+    const bool force_f32;
+    const ggml_glu_op glu_op;
+    test_glu_mat(ggml_type type, int64_t n, int64_t k = 512, bool extra_consumer = false, bool force_f32 = false, ggml_glu_op glu_op = GGML_GLU_OP_GEGLU)
+        : test_mul_mat(type, GGML_TYPE_F32, 256, n, k, {1, 1}, {1, 1}), extra_consumer(extra_consumer), force_f32(force_f32), glu_op(glu_op) {}
+    bool run_whole_graph() override { return true; }
+    std::string op_desc(ggml_tensor *) override { return glu_op == GGML_GLU_OP_GEGLU ? "GEGLU_MAT" : "SWIGLU_MAT"; }
+    std::string vars() override { return test_mul_mat::vars() + "," + VARS_TO_STR2(extra_consumer, force_f32); }
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * mm = test_mul_mat::build_graph(ctx);
+        ggml_tensor * gate = ggml_dup_tensor(ctx, mm->src[1]);
+        mm->src[1] = glu_op == GGML_GLU_OP_GEGLU ? ggml_geglu_split(ctx, mm->src[1], gate) : ggml_swiglu_split(ctx, mm->src[1], gate);
+        if (force_f32) {
+            ggml_prec_set_acc(mm, GGML_PREC_F32);
+        }
+        return extra_consumer ? ggml_add(ctx, mm, ggml_mul_mat(ctx, mm->src[0], mm->src[1])) : mm;
+    }
+};
+
+struct test_mul_mat_clamp : public test_mul_mat {
+    bool input_clamp;
+    bool extra_consumer;
+    bool force_f32;
+
+    test_mul_mat_clamp(ggml_type type, int64_t m, int64_t n, int64_t k, bool input_clamp = false, bool extra_consumer = false,
+                      bool force_f32 = false, int64_t k_v = 0)
+        : test_mul_mat(type, GGML_TYPE_F32, m, n, k, {1, 1}, {1, 1}, {0, 1, 2, 3}, k_v),
+          input_clamp(input_clamp), extra_consumer(extra_consumer), force_f32(force_f32) {}
+
+    bool run_whole_graph() override { return true; }
+    std::string op_desc(ggml_tensor *) override { return "MUL_MAT_CLAMP"; }
+    std::string vars() override {
+        return test_mul_mat::vars() + "," + VARS_TO_STR3(input_clamp, extra_consumer, force_f32);
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * mm = test_mul_mat::build_graph(ctx);
+        if (input_clamp) {
+            ggml_tensor * x = ggml_is_contiguous(mm->src[1]) ? mm->src[1] : ggml_cont(ctx, mm->src[1]);
+            mm->src[1] = ggml_clamp(ctx, x, -0.12345f, 0.45678f);
+        }
+        if (force_f32) {
+            ggml_prec_set_acc(mm, GGML_PREC_F32);
+        }
+        ggml_tensor * out = ggml_clamp(ctx, mm, -0.34567f, 0.23456f);
+        return extra_consumer ? ggml_add(ctx, out, mm) : out;
+    }
+};
+
+struct test_mul_mat_bias : public test_mul_mat {
+    const bool extra_consumer, force_f32, residual;
+    test_mul_mat_bias(ggml_type type, int64_t m, int64_t n, bool extra_consumer = false, bool force_f32 = false, int64_t k_v = 0, bool residual = false)
+        : test_mul_mat(type, GGML_TYPE_F32, m, n, 512, {1, 1}, {1, 1}, {0, 1, 2, 3}, k_v),
+          extra_consumer(extra_consumer), force_f32(force_f32), residual(residual) {}
+    bool run_whole_graph() override { return true; }
+    std::string op_desc(ggml_tensor *) override { return "MUL_MAT_BIAS"; }
+    std::string vars() override { return test_mul_mat::vars() + "," + VARS_TO_STR3(extra_consumer, force_f32, residual); }
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * mm = test_mul_mat::build_graph(ctx);
+        if (force_f32) {
+            ggml_prec_set_acc(mm, GGML_PREC_F32);
+        }
+        ggml_tensor * bias = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, mm->ne[0]);
+        ggml_tensor * out = ggml_add(ctx, mm, bias);
+        if (residual) {
+            out = ggml_add(ctx, out, ggml_dup_tensor(ctx, mm));
+        }
+        return extra_consumer ? ggml_add(ctx, out, mm) : out;
+    }
+};
+
+struct test_16bit_ffn_bias : public test_case {
+    const ggml_type type;
+    const bool mixed_weights;
+    const int64_t n, hidden, width;
+    const ggml_glu_op op;
+    const int extra_consumer;
+    const bool output_bias, force_f32, swapped, residual, normalized, plain;
+    test_16bit_ffn_bias(ggml_type type, int64_t n, int64_t hidden = 768, ggml_glu_op op = GGML_GLU_OP_SWIGLU,
+            int extra_consumer = 0, bool output_bias = true, bool force_f32 = false, bool swapped = false, bool mixed_weights = false, bool residual = false, bool normalized = false, bool plain = false, int64_t width = 512)
+        : type(type), mixed_weights(mixed_weights), n(n), hidden(hidden), width(width), op(op), extra_consumer(extra_consumer), output_bias(output_bias), force_f32(force_f32), swapped(swapped), residual(residual), normalized(normalized), plain(plain) {}
+    bool run_whole_graph() override { return true; }
+    std::string op_desc(ggml_tensor *) override { return type == GGML_TYPE_BF16 ? "BF16_FFN_BIAS" : "F16_FFN_BIAS"; }
+    std::string vars() override {
+        return VARS_TO_STR2(type, mixed_weights) + "," + VARS_TO_STR4(n, hidden, width, extra_consumer) + "," + VARS_TO_STR5(output_bias, force_f32, swapped, residual, normalized) + "," + VAR_TO_STR(plain) + ",op=" + std::to_string(op);
+    }
+    double max_nmse_err() override { return 5e-4; }
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, width, n);
+        x = ggml_scale(ctx, x, 0.125f);
+        ggml_tensor * residual_input = x;
+        if (normalized) {
+            x = ggml_mul(ctx, ggml_rms_norm(ctx, x, 1e-6f), ggml_new_tensor_1d(ctx, GGML_TYPE_F32, width));
+        }
+        ggml_tensor * w0 = ggml_new_tensor_2d(ctx, type, width, hidden);
+        ggml_type other = type == GGML_TYPE_F16 ? GGML_TYPE_BF16 : GGML_TYPE_F16;
+        ggml_tensor * w1 = ggml_new_tensor_2d(ctx, mixed_weights ? other : type, width, hidden);
+        ggml_tensor * b0 = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hidden);
+        ggml_tensor * b1 = ggml_dup_tensor(ctx, b0);
+        ggml_tensor * mm0 = ggml_mul_mat(ctx, w0, x);
+        ggml_tensor * mm1 = ggml_mul_mat(ctx, w1, x);
+        if (force_f32) {
+            ggml_prec_set_acc(mm0, GGML_PREC_F32);
+        }
+        ggml_tensor * a0 = ggml_add(ctx, mm0, b0);
+        ggml_tensor * a1 = ggml_add(ctx, mm1, b1);
+        ggml_tensor * first = swapped ? a1 : a0;
+        ggml_tensor * second = swapped ? a0 : a1;
+        ggml_tensor * glu = plain ? ggml_gelu(ctx, a0) : op == GGML_GLU_OP_SWIGLU ? ggml_swiglu_split(ctx, first, second) : ggml_geglu_split(ctx, first, second);
+        ggml_tensor * down = ggml_new_tensor_2d(ctx, type, hidden, width);
+        ggml_tensor * out = ggml_mul_mat(ctx, down, glu);
+        if (output_bias) {
+            out = ggml_add(ctx, out, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, width));
+        }
+        if (residual) {
+            out = ggml_add(ctx, out, residual_input);
+        }
+        if (extra_consumer) {
+            ggml_tensor * extra = extra_consumer == 1 ? a0 : glu;
+            out = ggml_add(ctx, out, ggml_mul_mat(ctx, down, extra));
+        }
+        return out;
+    }
+};
+
+struct test_16bit_ffn_clamp : public test_case {
+    ggml_type type;
+    int64_t n;
+    int extra;
+    bool different_bounds, force_f32, swapped;
+    test_16bit_ffn_clamp(ggml_type type, int64_t n, int extra = 0, bool different_bounds = false, bool force_f32 = false, bool swapped = false)
+        : type(type), n(n), extra(extra), different_bounds(different_bounds), force_f32(force_f32), swapped(swapped) {}
+    bool run_whole_graph() override { return true; }
+    std::string op_desc(ggml_tensor *) override { return type == GGML_TYPE_F16 ? "F16_FFN_CLAMP" : "BF16_FFN_CLAMP"; }
+    std::string vars() override { return VARS_TO_STR6(type, n, extra, different_bounds, force_f32, swapped); }
+    double max_nmse_err() override { return 5e-4; }
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        const int64_t width = 512, hidden = 767;
+        ggml_tensor * x = ggml_scale(ctx, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, width, n), 0.125f);
+        ggml_tensor * c0 = ggml_clamp(ctx, x, -1.0f, 1.0f);
+        ggml_tensor * c1 = ggml_clamp(ctx, x, different_bounds ? -0.8f : -1.0f, different_bounds ? 0.7f : 1.0f);
+        ggml_tensor * m0 = ggml_mul_mat(ctx, ggml_new_tensor_2d(ctx, type, width, hidden), c0);
+        ggml_tensor * m1 = ggml_mul_mat(ctx, ggml_new_tensor_2d(ctx, type, width, hidden), c1);
+        if (force_f32) {
+            ggml_prec_set_acc(m0, GGML_PREC_F32);
+        }
+        ggml_tensor * a0 = ggml_clamp(ctx, m0, -2.0f, 2.0f);
+        ggml_tensor * a1 = ggml_clamp(ctx, m1, -3.0f, 3.0f);
+        ggml_tensor * glu = ggml_geglu_quick_split(ctx, swapped ? a1 : a0, swapped ? a0 : a1);
+        ggml_tensor * input = ggml_clamp(ctx, glu, -1.5f, 1.5f);
+        ggml_tensor * w = ggml_new_tensor_2d(ctx, type, hidden, width);
+        ggml_tensor * out = ggml_clamp(ctx, ggml_mul_mat(ctx, w, input), -4.0f, 4.0f);
+        if (extra) {
+            out = ggml_add(ctx, out, ggml_mul_mat(ctx, w, extra == 1 ? a0 : glu));
+        }
+        return out;
+    }
+};
+
 // GGML_HINT_SRC0_IS_HADAMARD
 struct test_mul_mat_hadamard : public test_mul_mat {
     test_mul_mat_hadamard(ggml_type type_a = GGML_TYPE_F32, ggml_type type_b = GGML_TYPE_F32,
@@ -10355,6 +10515,64 @@ static void add_rdna35_mmq_cases(std::vector<std::unique_ptr<test_case>> & test_
 static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     std::vector<std::unique_ptr<test_case>> test_cases;
     std::default_random_engine rng(0);
+
+    for (ggml_type type : { GGML_TYPE_F16, GGML_TYPE_BF16 }) {
+        for (int64_t n : { 1, 31, 32, 64, 257 }) {
+            test_cases.emplace_back(new test_mul_mat_bias(type, 256, n));
+            test_cases.emplace_back(new test_mul_mat_bias(type, 255, n));
+            test_cases.emplace_back(new test_16bit_ffn_bias(type, n));
+            test_cases.emplace_back(new test_16bit_ffn_bias(type, n, 767, GGML_GLU_OP_GEGLU, 0, true, false, false, false, true, false, true));
+        }
+        for (int64_t n : { 1, 31, 32, 65, 257 }) {
+            test_cases.emplace_back(new test_16bit_ffn_clamp(type, n));
+            test_cases.emplace_back(new test_16bit_ffn_clamp(type, n, 0, true));
+        }
+        test_cases.emplace_back(new test_16bit_ffn_clamp(type, 65, 1));
+        test_cases.emplace_back(new test_16bit_ffn_clamp(type, 65, 2));
+        test_cases.emplace_back(new test_16bit_ffn_clamp(type, 65, 0, false, true));
+        test_cases.emplace_back(new test_16bit_ffn_clamp(type, 65, 0, false, false, true));
+        for (int extra : { 0, 1, 2 }) {
+            test_cases.emplace_back(new test_16bit_ffn_bias(type, 65, 768, GGML_GLU_OP_GEGLU, extra, true, false, false, false, true, false, true));
+        }
+        test_cases.emplace_back(new test_16bit_ffn_bias(type, 65, 768, GGML_GLU_OP_GEGLU, 0, false, false, false, false, false, false, true));
+        test_cases.emplace_back(new test_16bit_ffn_bias(type, 65, 768, GGML_GLU_OP_GEGLU, 0, true, true, false, false, true, false, true));
+        test_cases.emplace_back(new test_mul_mat_bias(type, 256, 64, true));
+        test_cases.emplace_back(new test_mul_mat_bias(type, 256, 64, false, true));
+        test_cases.emplace_back(new test_mul_mat_bias(type, 256, 64, false, false, 576));
+        for (int64_t rows : {31, 32, 65}) {
+            test_cases.emplace_back(new test_mul_mat_bias(type, 255, rows, false, false, 0, true));
+            test_cases.emplace_back(new test_16bit_ffn_bias(type, rows, 768, GGML_GLU_OP_SWIGLU, 0, true, false, false, false, true));
+            test_cases.emplace_back(new test_16bit_ffn_bias(type, rows, 768, GGML_GLU_OP_SWIGLU, 0, true, false, false, false, true, true));
+        }
+        test_cases.emplace_back(new test_mul_mat_bias(type, 256, 64, true, false, 0, true));
+        test_cases.emplace_back(new test_16bit_ffn_bias(type, 65, 768, GGML_GLU_OP_GEGLU, 1, true, false, true, false, true));
+        for (ggml_glu_op op : { GGML_GLU_OP_SWIGLU, GGML_GLU_OP_GEGLU }) {
+            test_cases.emplace_back(new test_16bit_ffn_bias(type, 64, 767, op));
+            test_cases.emplace_back(new test_16bit_ffn_bias(type, 64, 768, op, 0, false));
+            test_cases.emplace_back(new test_16bit_ffn_bias(type, 64, 768, op, 1));
+            test_cases.emplace_back(new test_16bit_ffn_bias(type, 64, 768, op, 2));
+            test_cases.emplace_back(new test_16bit_ffn_bias(type, 64, 768, op, 0, true, true));
+            test_cases.emplace_back(new test_16bit_ffn_bias(type, 64, 768, op, 0, true, false, true));
+        }
+        test_cases.emplace_back(new test_16bit_ffn_bias(type, 64, 768, GGML_GLU_OP_SWIGLU, 0, true, false, false, true));
+    }
+
+    for (ggml_type type : { GGML_TYPE_F16, GGML_TYPE_BF16 }) {
+        for (int64_t n : { 31, 32, 65 }) {
+            test_cases.emplace_back(new test_glu_mat(type, n));
+            test_cases.emplace_back(new test_glu_mat(type, n, 512, false, false, GGML_GLU_OP_SWIGLU));
+            test_cases.emplace_back(new test_mul_mat_clamp(type, 255, n, 512, true));
+        }
+        for (int64_t width : { 511, 1152, 1280 }) {
+            test_cases.emplace_back(new test_16bit_ffn_bias(type, 65, 768, GGML_GLU_OP_SWIGLU, 0, true, false, false, false, true, true, false, width));
+        }
+        test_cases.emplace_back(new test_glu_mat(type, 65, 512, true));
+        test_cases.emplace_back(new test_glu_mat(type, 65, 512, false, true));
+        test_cases.emplace_back(new test_mul_mat_clamp(type, 256, 65, 512, false));
+        test_cases.emplace_back(new test_mul_mat_clamp(type, 256, 65, 512, true, true));
+        test_cases.emplace_back(new test_mul_mat_clamp(type, 256, 65, 512, true, false, true));
+    }
+
 
     // unary ops
     // TODO: add GGML_UNARY_OP_SOFTPLUS test that is sensitive to using `log1p(exp(x))` vs `log(exp(x) + 1)`
