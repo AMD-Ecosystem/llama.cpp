@@ -11195,6 +11195,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, m, 2, 1024, { 1, 1 }, { 1, 1 }));
     }
 
+    // Qwen3 MoE dense projections, including the two-token warmup and tile tails.
+    for (int bs : {1, 2, 3, 4, 5, 6, 32, 33, 64}) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_IQ3_XXS, GGML_TYPE_F32, 4096, bs, 2048, {1, 1}, {1, 1}));
+    }
+
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 2880, 32, 2880, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 2880, 32, 2880, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_MXFP4, GGML_TYPE_F32, 2880, 32, 2880, {1, 1}, {1, 1}));
