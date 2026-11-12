@@ -1322,7 +1322,8 @@ static bool build_mul_mat_dispatch(
     if ((match.weight_format == CommonMulMatWeightFormat::IQ1_S ||
          match.weight_format == CommonMulMatWeightFormat::IQ1_M ||
          match.weight_format == CommonMulMatWeightFormat::IQ3_XXS) &&
-        (!use_iq_codebook || common_mul_mat_is_skinny_route(match))) {
+        (!use_iq_codebook || (common_mul_mat_is_skinny_route(match) &&
+                              match.weight_format != CommonMulMatWeightFormat::IQ3_XXS))) {
         return false;
     }
     const bool use_aligned_dynamic = match.token_count % 32 == 0 &&
