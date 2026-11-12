@@ -803,19 +803,40 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         }
     }
 
+#if GGML_CUDA_FATTN_WMMA_D72 || GGML_CUDA_FATTN_WMMA_NO_GQA
+    float logit_softcap = 0.0f;
+    memcpy(&logit_softcap, (const float *) KQV->op_params + 2, sizeof(float));
+#endif
+
 #if GGML_CUDA_FATTN_WMMA_D72
     static const bool wmma_d72 = []() {
         const char * env = getenv("GGML_CUDA_FATTN_WMMA_D72");
         return env == nullptr || atoi(env) != 0;
     }();
-    float logit_softcap = 0.0f;
-    memcpy(&logit_softcap, (const float *) KQV->op_params + 2, sizeof(float));
     // Pad sufficiently large unmasked D72 self-attention to the existing D80 WMMA tile.
     if (wmma_d72 && GGML_CUDA_CC_IS_RDNA3_5(cc) && amd_wmma_available(cc) && Q->ne[0] == 72 && V->ne[0] == 72 &&
             gqa_ratio == 1 && !mask && !KQV->src[4] && max_bias == 0.0f && logit_softcap == 0.0f &&
             Q->ne[1] >= 256 && ggml_nrows(Q) >= 4096 && ggml_nrows(Q) <= INT_MAX/80 &&
             Q->ne[1] == K->ne[1] && K->ne[1] == V->ne[1] && Q->ne[2] == K->ne[2] && Q->ne[2] == V->ne[2] &&
             Q->ne[3] == K->ne[3] && Q->ne[3] == V->ne[3] &&
+            Q->type == GGML_TYPE_F32 && K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16 &&
+            Q->nb[0] == sizeof(float) && K->nb[0] == sizeof(half) && V->nb[0] == sizeof(half) &&
+            KQV->type == GGML_TYPE_F32 && ggml_is_contiguous(KQV)) {
+        return BEST_FATTN_KERNEL_MMA_F16;
+    }
+#endif
+
+#if GGML_CUDA_FATTN_WMMA_NO_GQA
+    static const bool wmma_no_gqa = []() {
+        const char * env = getenv("GGML_CUDA_FATTN_WMMA_NO_GQA");
+        return env == nullptr || atoi(env) != 0;
+    }();
+    // Unmasked D64/D80 self-attention uses one head per WMMA tile.
+    if (wmma_no_gqa && GGML_CUDA_CC_IS_RDNA3_5(cc) && amd_wmma_available(cc) &&
+            (Q->ne[0] == 64 || Q->ne[0] == 80) && V->ne[0] == Q->ne[0] &&
+            gqa_ratio == 1 && !mask && !KQV->src[4] && !KQV->src[5] && max_bias == 0.0f && logit_softcap == 0.0f &&
+            Q->ne[1] >= 64 && Q->ne[1] == K->ne[1] && K->ne[1] == V->ne[1] &&
+            Q->ne[2] == K->ne[2] && K->ne[2] == V->ne[2] && Q->ne[3] == K->ne[3] && K->ne[3] == V->ne[3] &&
             Q->type == GGML_TYPE_F32 && K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16 &&
             Q->nb[0] == sizeof(float) && K->nb[0] == sizeof(half) && V->nb[0] == sizeof(half) &&
             KQV->type == GGML_TYPE_F32 && ggml_is_contiguous(KQV)) {
