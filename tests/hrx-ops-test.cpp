@@ -4626,6 +4626,53 @@ enum class ScalarGetRowsScenario {
     RepeatedExposed,
 };
 
+static void run_repeat_copy_bits_case(int64_t source_rows) {
+    constexpr int64_t width = 32;
+    constexpr int64_t repeat_count = 40;
+    ggml_backend_t backend = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+
+    ggml_init_params params = {};
+    params.mem_size = 1024 * 1024;
+    params.no_alloc = true;
+    ggml_context * ctx = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
+    ggml_tensor * source = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, width, 1, source_rows);
+    ggml_tensor * repeated = ggml_repeat_4d(ctx, source, width, repeat_count, source_rows, 1);
+    REQUIRE(source != nullptr);
+    REQUIRE(repeated != nullptr);
+    ggml_set_output(repeated);
+
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, repeated);
+    require_kernel_subsequence(scheduled_kernel_sequence(graph), { "loom_libs:ggml_copy_bits" });
+
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    REQUIRE(buffer != nullptr);
+    const std::vector<float> source_data = make_pattern_f32(width * source_rows, 83, 0.03125f);
+    ggml_backend_tensor_set(source, source_data.data(), 0, source_data.size() * sizeof(float));
+    REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(backend);
+
+    std::vector<float> expected(static_cast<size_t>(width * repeat_count * source_rows));
+    for (int64_t row = 0; row < source_rows; ++row) {
+        for (int64_t repeat = 0; repeat < repeat_count; ++repeat) {
+            for (int64_t column = 0; column < width; ++column) {
+                const size_t source_index = static_cast<size_t>(row * width + column);
+                const size_t output_index = static_cast<size_t>((row * repeat_count + repeat) * width + column);
+                expected[output_index] = source_data[source_index];
+            }
+        }
+    }
+    REQUIRE(get_f32_tensor(backend, repeated) == expected);
+
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+    ggml_backend_free(backend);
+}
+
 static void run_scalar_3d_get_rows_case(int64_t token_count, int64_t route_stride,
                                         ScalarGetRowsScenario scenario) {
     const bool include_invalid_ids = scenario == ScalarGetRowsScenario::ExpandedInvalidIds ||
@@ -6274,7 +6321,9 @@ static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
                                                 bool         normalize_input = false,
                                                 bool         square_output = false,
                                                 ggml_type    cache_type = GGML_TYPE_COUNT,
-                                                bool         verify_uploaded_native = false) {
+                                                bool         verify_uploaded_native = false,
+                                                ggml_prec    requested_accumulation = GGML_PREC_DEFAULT,
+                                                ggml_prec    requested_source1 = GGML_PREC_UNDEFINED) {
     ggml_backend_t cpu_backend = init_cpu_backend();
     ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
     REQUIRE(hrx_backend != nullptr);
@@ -6297,6 +6346,14 @@ static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
     ggml_tensor *     hrx_rhs    = normalize_input ? build_rmsnorm_mul_graph(hrx_ctx, hrx_input, hrx_norm_w) : hrx_input;
     ggml_tensor *     cpu_output = ggml_mul_mat(cpu_ctx, cpu_weight, cpu_rhs);
     ggml_tensor *     hrx_output = ggml_mul_mat(hrx_ctx, hrx_weight, hrx_rhs);
+    if (requested_accumulation != GGML_PREC_DEFAULT) {
+        REQUIRE(ggml_prec_set_acc(cpu_output, requested_accumulation));
+        REQUIRE(ggml_prec_set_acc(hrx_output, requested_accumulation));
+    }
+    if (requested_source1 != GGML_PREC_UNDEFINED) {
+        REQUIRE(ggml_prec_set_src(cpu_output, requested_source1, 1));
+        REQUIRE(ggml_prec_set_src(hrx_output, requested_source1, 1));
+    }
     if (square_output) {
         cpu_output = ggml_sqr(cpu_ctx, cpu_output);
         hrx_output = ggml_sqr(hrx_ctx, hrx_output);
@@ -6330,6 +6387,7 @@ static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
     require_kernel_subsequence(sequence, { expected_kernel });
     const bool packed_q4_input = weight_type == GGML_TYPE_Q4_K;
     const bool iq4_xs_weight = weight_type == GGML_TYPE_IQ4_XS;
+    const bool q8_0_prefill_input = weight_type == GGML_TYPE_Q8_0 && token_count >= 256;
     const bool prefill_tokens = token_count >= 256;
     const bool packed_iq4_xs_input = iq4_xs_weight && prefill_tokens;
     const bool packed_input = packed_q4_input || packed_iq4_xs_input || square_output;
@@ -6339,6 +6397,18 @@ static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
         REQUIRE(std::find(sequence.begin(), sequence.end(), "qwen3_moe:ggml_quantize_q8_1_x4_f32") == sequence.end());
     } else if (normalize_input) {
         REQUIRE(std::find(sequence.begin(), sequence.end(), "loom_libs:ggml_rmsnorm_binary_q8_1_x4_publish") == sequence.end());
+    }
+    const bool q8_0_precision_supported = requested_accumulation == GGML_PREC_DEFAULT &&
+                                           (requested_source1 == GGML_PREC_UNDEFINED ||
+                                            requested_source1 == GGML_PREC_Q8 ||
+                                            requested_source1 == GGML_PREC_Q4);
+    if (q8_0_prefill_input && q8_0_precision_supported) {
+        require_kernel_subsequence(sequence, { "qwen3_moe:ggml_quantize_q8_1_x4_f32", expected_kernel });
+    }
+    if (q8_0_prefill_input && !q8_0_precision_supported) {
+        REQUIRE(std::find(sequence.begin(), sequence.end(),
+                          "loom_libs:ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256") == sequence.end());
+        REQUIRE(std::find(sequence.begin(), sequence.end(), "qwen3_moe:ggml_quantize_q8_1_x4_f32") == sequence.end());
     }
 
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
@@ -9553,6 +9623,25 @@ static void register_dense_matmul_cases(Suite & suite) {
         run_dense_matmul_cpu_reference_case(
             GGML_TYPE_IQ4_XS, "loom_libs:ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256", 512, 64, 3072, true);
     });
+    suite.device_case("dense_matmul.q8_0.prefill.tokens512.outputs2048", [] {
+        run_dense_matmul_cpu_reference_case(
+            GGML_TYPE_Q8_0, "loom_libs:ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256", 512, 2048, 4096);
+    });
+    suite.device_case("dense_matmul.q8_0.prefill.explicit_f32_accumulation", [] {
+        run_dense_matmul_cpu_reference_case(
+            GGML_TYPE_Q8_0, "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32_aligned", 512, 2048, 4096,
+            false, false, GGML_TYPE_COUNT, false, GGML_PREC_F32);
+    });
+    suite.device_case("dense_matmul.q8_0.prefill.explicit_f32_source1", [] {
+        run_dense_matmul_cpu_reference_case(
+            GGML_TYPE_Q8_0, "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32_aligned", 512, 2048, 4096,
+            false, false, GGML_TYPE_COUNT, false, GGML_PREC_DEFAULT, GGML_PREC_F32);
+    });
+    suite.device_case("dense_matmul.q8_0.prefill.explicit_f16_source1", [] {
+        run_dense_matmul_cpu_reference_case(
+            GGML_TYPE_Q8_0, "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32_aligned", 512, 2048, 4096,
+            false, false, GGML_TYPE_COUNT, false, GGML_PREC_DEFAULT, GGML_PREC_F16);
+    });
     for (const ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
         for (const ggml_type cache_type : { GGML_TYPE_F16, GGML_TYPE_F32 }) {
             suite.device_case(
@@ -10072,6 +10161,8 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
     suite.device_case("standalone_repeat_get_rows_scalar_3d.exposed_repeat", [] {
         run_scalar_3d_get_rows_case(2, 128, ScalarGetRowsScenario::RepeatedExposed);
     });
+    suite.device_case("standalone_repeat_copy_bits.rows1", [] { run_repeat_copy_bits_case(1); });
+    suite.device_case("standalone_repeat_copy_bits.rows512", [] { run_repeat_copy_bits_case(512); });
     for (ggml_type weight_type : { GGML_TYPE_Q5_1, GGML_TYPE_Q8_0, GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
         for (int64_t token_count : { 2, 8 }) {
             suite.device_case("mul_mat_id_expert_scale." + std::string(ggml_type_name(weight_type)) + ".tokens" +

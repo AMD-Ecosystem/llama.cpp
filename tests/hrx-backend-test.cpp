@@ -2133,6 +2133,79 @@ static void run_graph_snapshot_diagnostics_checks() {
     ggml_free(ctx);
 }
 
+static void run_graph_snapshot_mul_mat_precision_roundtrip_checks() {
+    ggml_init_params init_params = {};
+    init_params.mem_size = 2 * 1024 * 1024;
+    init_params.no_alloc = true;
+    ggml_context * ctx   = ggml_init(init_params);
+    REQUIRE(ctx != nullptr);
+
+    ggml_tensor * weight = ggml_new_tensor_2d(ctx, GGML_TYPE_Q8_0, 256, 64);
+    ggml_tensor * input  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 256, 8);
+    ggml_tensor * matmul = ggml_mul_mat(ctx, weight, input);
+    REQUIRE(weight != nullptr && input != nullptr && matmul != nullptr);
+    REQUIRE(ggml_prec_set_acc(matmul, GGML_PREC_F32));
+    ggml_mul_mat_set_hint(matmul, GGML_HINT_SRC0_IS_HADAMARD);
+    REQUIRE(ggml_prec_set_src(matmul, GGML_PREC_Q8, 1));
+
+    ggml_tensor * expert_weights = ggml_new_tensor_3d(ctx, GGML_TYPE_Q8_0, 256, 64, 2);
+    ggml_tensor * expert_input   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 256, 1, 2);
+    ggml_tensor * expert_ids     = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, 1, 2);
+    ggml_tensor * matmul_id      = ggml_mul_mat_id(ctx, expert_weights, expert_input, expert_ids);
+    REQUIRE(expert_weights != nullptr && expert_input != nullptr && expert_ids != nullptr && matmul_id != nullptr);
+    REQUIRE(ggml_prec_set_acc(matmul_id, GGML_PREC_BF16));
+    REQUIRE(ggml_prec_set_src(matmul_id, GGML_PREC_Q4, 1));
+
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, matmul);
+    ggml_build_forward_expand(graph, matmul_id);
+    const ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+
+    const std::string snapshot =
+        ggml::hrx::serialize_graph_snapshot_json(imported.graph, "gfx1151", 73);
+    REQUIRE(string_contains(snapshot, "\"kind\": \"mul_mat\""));
+
+    const ggml::hrx::GraphSnapshotLoadResult loaded = ggml::hrx::load_graph_snapshot_json(snapshot);
+    REQUIRE(loaded.valid());
+    REQUIRE(loaded.uid == 73);
+    REQUIRE(loaded.graph.nodes().size() == imported.graph.nodes().size());
+
+    for (const ggml_op op : { GGML_OP_MUL_MAT, GGML_OP_MUL_MAT_ID }) {
+        const auto original = std::find_if(imported.graph.nodes().begin(), imported.graph.nodes().end(),
+                                           [op](const auto & node) { return node.op == op; });
+        const auto restored = std::find_if(loaded.graph.nodes().begin(), loaded.graph.nodes().end(),
+                                           [op](const auto & node) { return node.op == op; });
+        REQUIRE(original != imported.graph.nodes().end());
+        REQUIRE(restored != loaded.graph.nodes().end());
+        const ggml::hrx::MulMatParams * original_params =
+            ggml::hrx::op_params_as<ggml::hrx::MulMatParams>(original->params);
+        const ggml::hrx::MulMatParams * restored_params =
+            ggml::hrx::op_params_as<ggml::hrx::MulMatParams>(restored->params);
+        REQUIRE(original_params != nullptr && restored_params != nullptr);
+        REQUIRE(restored_params->prec == original_params->prec);
+        REQUIRE(restored_params->hint == original_params->hint);
+        REQUIRE(restored_params->src1_prec == original_params->src1_prec);
+        REQUIRE(ggml::hrx::op_params_equivalent(op, original->params, restored->params));
+
+        ggml::hrx::MulMatParams changed = *original_params;
+        changed.prec = changed.prec == GGML_PREC_F32 ? GGML_PREC_F16 : GGML_PREC_F32;
+        REQUIRE(!ggml::hrx::op_params_equivalent(
+            op, restored->params, ggml::hrx::OpParams{ changed }));
+        changed = *original_params;
+        changed.hint = changed.hint == GGML_HINT_NONE ? GGML_HINT_SRC0_IS_HADAMARD : GGML_HINT_NONE;
+        REQUIRE(!ggml::hrx::op_params_equivalent(
+            op, restored->params, ggml::hrx::OpParams{ changed }));
+        changed = *original_params;
+        changed.src1_prec = changed.src1_prec == GGML_PREC_Q8 ? GGML_PREC_Q4 : GGML_PREC_Q8;
+        REQUIRE(!ggml::hrx::op_params_equivalent(
+            op, restored->params, ggml::hrx::OpParams{ changed }));
+    }
+
+    ggml_free(ctx);
+}
+
 static void run_unmatched_graph_diagnostics_checks() {
     ggml_init_params params = {};
     params.mem_size         = 512 * 1024;
@@ -15109,12 +15182,44 @@ static void run_rope_offset_import_checks() {
     ggml_free(ctx);
 }
 
+static void run_mul_mat_precision_import_checks() {
+    ggml_init_params params = {};
+    params.mem_size         = 1024 * 1024;
+    ggml_context * ctx      = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
+    ggml_tensor * weight = ggml_new_tensor_2d(ctx, GGML_TYPE_Q8_0, 256, 64);
+    ggml_tensor * input  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 256, 256);
+    ggml_tensor * normal = ggml_mul_mat(ctx, weight, input);
+    ggml_tensor * accum_f32 = ggml_mul_mat(ctx, weight, input);
+    ggml_tensor * source_f16 = ggml_mul_mat(ctx, weight, input);
+    REQUIRE(ggml_prec_set_acc(accum_f32, GGML_PREC_F32));
+    REQUIRE(ggml_prec_set_src(source_f16, GGML_PREC_F16, 1));
+
+    const ggml::hrx::OpParams normal_params = ggml::hrx::import_op_params(*normal);
+    const ggml::hrx::OpParams accum_params = ggml::hrx::import_op_params(*accum_f32);
+    const ggml::hrx::OpParams source_params = ggml::hrx::import_op_params(*source_f16);
+    const auto * normal_mul = ggml::hrx::op_params_as<ggml::hrx::MulMatParams>(normal_params);
+    const auto * accum_mul = ggml::hrx::op_params_as<ggml::hrx::MulMatParams>(accum_params);
+    const auto * source_mul = ggml::hrx::op_params_as<ggml::hrx::MulMatParams>(source_params);
+    REQUIRE(normal_mul != nullptr && accum_mul != nullptr && source_mul != nullptr);
+    REQUIRE(normal_mul->prec == GGML_PREC_DEFAULT);
+    REQUIRE(accum_mul->prec == GGML_PREC_F32);
+    REQUIRE(source_mul->src1_prec == GGML_PREC_F16);
+    REQUIRE(ggml::hrx::op_params_equivalent(GGML_OP_MUL_MAT, normal_params, *normal));
+    REQUIRE(!ggml::hrx::op_params_equivalent(GGML_OP_MUL_MAT, normal_params, *accum_f32));
+    REQUIRE(!ggml::hrx::op_params_equivalent(GGML_OP_MUL_MAT, normal_params, *source_f16));
+
+    ggml_free(ctx);
+}
+
 static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
     suite.host_case("status", [] { run_status_checks(); });
     suite.host_case("command_plan_metadata", [] { run_command_plan_metadata_checks(); });
     suite.host_case("dispatch_registry", [] { run_dispatch_registry_checks(); });
     suite.host_case("graph_import", [] { run_graph_import_checks(); });
     suite.host_case("rope_offset_import", [] { run_rope_offset_import_checks(); });
+    suite.host_case("mul_mat_precision_import", [] { run_mul_mat_precision_import_checks(); });
     suite.host_case("graph_import_mixed_backend_boundary", [] { run_graph_import_mixed_backend_boundary_checks(); });
     suite.host_case("graph_view_external_use", [] { run_graph_view_external_use_checks(); });
     suite.host_case("scale_f32_dispatch", [] { run_scale_f32_dispatch_checks(); });
@@ -15125,6 +15230,8 @@ static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
     suite.host_case("binary_f32_broadcast_dispatch", [] { run_binary_f32_broadcast_dispatch_checks(); });
     suite.host_case("binary_q8_publication", [] { run_binary_q8_publication_checks(); });
     suite.host_case("graph_snapshot_diagnostics", [] { run_graph_snapshot_diagnostics_checks(); });
+    suite.host_case("graph_snapshot_mul_mat_precision_roundtrip",
+                    [] { run_graph_snapshot_mul_mat_precision_roundtrip_checks(); });
     suite.host_case("unmatched_graph_diagnostics", [] { run_unmatched_graph_diagnostics_checks(); });
     suite.host_case("completion_counter_plan", [] { run_completion_counter_plan_checks(); });
     suite.host_case("graph_index", [] { run_graph_index_checks(); });

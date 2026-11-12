@@ -14,6 +14,12 @@ struct RmsNormParams {
     float eps = 0.0f;
 };
 
+struct MulMatParams {
+    ggml_prec    prec      = GGML_PREC_DEFAULT;
+    ggml_op_hint hint      = GGML_HINT_NONE;
+    ggml_prec    src1_prec = GGML_PREC_UNDEFINED;
+};
+
 struct FlashAttnExtParams {
     float     scale         = 0.0f;
     float     max_bias      = 0.0f;
@@ -122,6 +128,7 @@ struct RopeParams {
 // clang-format off
 using OpParams = std::variant<
     std::monostate,
+    MulMatParams,
     RmsNormParams,
     FlashAttnExtParams,
     SoftMaxParams,
