@@ -3,8 +3,7 @@ template.decl @ggml.mul_mat_q8_1_x4.entry(%token_count: index, %paired_weights: 
 // Generic Q5_K projection consuming the Q8_1 plane published by the fused
 // gate/up path. Weights use the backend-resident symmetric-I5/K32 carrier;
 // input, output, and token dimensions are all JIT configuration values.
-
-template.decl @ggml.mul_mat_q5_k_q8_plane.wmmai8.body(%is_iq4xs: i1, %token256: i1, %q8_plane: i1, %paired_weights: i1, %peer_weight: buffer, %src0_na: buffer, %dst_na: buffer, %q8_na: buffer, %base: offset, %lds_bytes: offset, %w_off: offset, %as_off: offset, %ws_off: offset, %asum_off: offset, %wc_off: offset, %c0: index, %c1: index, %c2: index, %c4: index, %c8: index, %c16: index, %c32: index, %c17: index, %c34: index, %k_kc: index, %k_astride: index, %k_wstride: index, %k_m: index, %k_n: index, %k_blocks: index, %k_wave: index, %k_wm: index, %fzero: vector<8xf32>, %izero: vector<8xi32>, %k_b: index, %rows_b: index, %cols_b: index, %nchunks: index, %kblocks: index, %col_tile: index, %row_tile: index, %tid: index, %wave: index, %is_symi5: i1, %is_q4: i1, %is_q4_packed: i1)
+template.decl @ggml.mul_mat_q5_k_q8_plane.wmmai8.body(%is_iq4xs: i1, %token256: i1, %q8_plane: i1, %paired_weights: i1, %peer_weight: buffer, %src0_na: buffer, %dst_na: buffer, %q8_na: buffer, %base: offset, %lds_bytes: offset, %w_off: offset, %as_off: offset, %ws_off: offset, %asum_off: offset, %wc_off: offset, %c0: index, %c1: index, %c2: index, %c4: index, %c8: index, %c16: index, %c32: index, %c17: index, %c34: index, %k_kc: index, %k_astride: index, %k_wstride: index, %k_m: index, %k_n: index, %k_blocks: index, %k_wave: index, %k_wm: index, %fzero: vector<8xf32>, %izero: vector<8xi32>, %k_b: index, %rows_b: index, %cols_b: index, %nchunks: index, %kblocks: index, %col_tile: index, %row_tile: index, %tid: index, %wave: index, %is_q8: i1, %is_symi5: i1, %is_q4: i1, %is_q4_packed: i1)
 
 amdgpu.target<gfx11-generic> @ggml_q5_plane_dense_gfx11_wave32 {subgroup_size = 32}
 
@@ -20,7 +19,7 @@ config.decl @ggml.mul_mat_q8_1_x4.output_size : %value: index where [range(%valu
 
 config.decl @ggml.mul_mat_q8_1_x4.token_capacity : %value: index where [range(%value, 256, 2048), multiple_of(%value, 256)]
 
-config.decl @ggml.mul_mat_q8_1_x4.weight_format : %value: index where [range(%value, 4, 44)]
+config.decl @ggml.mul_mat_q8_1_x4.weight_format : %value: index where [range(%value, 4, 80)]
 
 // Paired projections share a tile without persisting gate/up intermediates.
 // Select loaded words rather than opaque buffer identities in device code.
@@ -303,7 +302,7 @@ func.def inline @ggml_q8_1_x4_affine_rhs_tile(%scratch: buffer, %weight_offset: 
   func.return %result : vector<8xf32>
 }
 
-template.def<@ggml.mul_mat_q5_k_q8_plane.wmmai8.body> device @ggml_mul_mat_q5_k_q8_plane_wmmai8_body(%is_iq4xs: i1, %token256: i1, %q8_plane: i1, %paired_weights: i1, %peer_weight: buffer, %src0_na: buffer, %dst_na: buffer, %q8_na: buffer, %base: offset, %lds_bytes: offset, %w_off: offset, %as_off: offset, %ws_off: offset, %asum_off: offset, %wc_off: offset, %c0: index, %c1: index, %c2: index, %c4: index, %c8: index, %c16: index, %c32: index, %c17: index, %c34: index, %k_kc: index, %k_astride: index, %k_wstride: index, %k_m: index, %k_n: index, %k_blocks: index, %k_wave: index, %k_wm: index, %fzero: vector<8xf32>, %izero: vector<8xi32>, %k_b: index, %rows_b: index, %cols_b: index, %nchunks: index, %kblocks: index, %col_tile: index, %row_tile: index, %tid: index, %wave: index, %is_symi5: i1, %is_q4: i1, %is_q4_packed: i1) {
+template.def<@ggml.mul_mat_q5_k_q8_plane.wmmai8.body> device @ggml_mul_mat_q5_k_q8_plane_wmmai8_body(%is_iq4xs: i1, %token256: i1, %q8_plane: i1, %paired_weights: i1, %peer_weight: buffer, %src0_na: buffer, %dst_na: buffer, %q8_na: buffer, %base: offset, %lds_bytes: offset, %w_off: offset, %as_off: offset, %ws_off: offset, %asum_off: offset, %wc_off: offset, %c0: index, %c1: index, %c2: index, %c4: index, %c8: index, %c16: index, %c32: index, %c17: index, %c34: index, %k_kc: index, %k_astride: index, %k_wstride: index, %k_m: index, %k_n: index, %k_blocks: index, %k_wave: index, %k_wm: index, %fzero: vector<8xf32>, %izero: vector<8xi32>, %k_b: index, %rows_b: index, %cols_b: index, %nchunks: index, %kblocks: index, %col_tile: index, %row_tile: index, %tid: index, %wave: index, %is_q8: i1, %is_symi5: i1, %is_q4: i1, %is_q4_packed: i1) {
   %c64_wide = index.constant 64 : index
   %weight_elements = index.mul %k_n, %k_wstride : index
   %weight_metadata = index.mul %k_n, %c2 : index
@@ -327,7 +326,8 @@ template.def<@ggml.mul_mat_q5_k_q8_plane.wmmai8.body> device @ggml_mul_mat_q5_k_
   // Compile-time formats select unsigned Q5_K or signed IQ4_XS/I5 operands.
   %signed_rhs_schema = encoding.define #encoding.operand<element_format=i8, payload_elements=16, payload_registers=4> : encoding<schema>
   %unsigned_rhs_schema = encoding.define #encoding.operand<element_format=u8, payload_elements=16, payload_registers=4> : encoding<schema>
-  %is_signed_rhs = scalar.ori %is_iq4xs, %is_symi5 : i1
+  %is_signed_other = scalar.ori %is_iq4xs, %is_symi5 : i1
+  %is_signed_rhs = scalar.ori %is_signed_other, %is_q8 : i1
   %u8_schema = scf.select %is_signed_rhs, %signed_rhs_schema, %unsigned_rhs_schema : encoding<schema>
   %rhs_layout = encoding.layout.strided [1, 80] : encoding<layout>
   %wl_view = buffer.view %scratch[%w_off] : buffer -> view<64x[%k_n]xi8, %rhs_layout>
@@ -470,287 +470,320 @@ template.def<@ggml.mul_mat_q5_k_q8_plane.wmmai8.body> device @ggml_mul_mat_q5_k_
       %q8_scaled_sum1 = scalar.extf %q8_s1_f16 : f16 to f32
       func.call @ggml_q5_plane_dense_q8_wmmai8_stage_metadata(%token256, %scratch, %as_off, %asum_off, %q8_scale_dst0_0, %q8_scale_dst1_0, %q8_d0, %q8_d1, %q8_scaled_sum0, %q8_scaled_sum1) : (i1, buffer, offset, offset, index, index, f32, f32, f32, f32)
     }
-    // One lane decodes two adjacent Q5_K groups; each selects its bits from the shared 32-byte fifth-bit plane.
+    // One lane stages two adjacent K32 weight blocks.
     %q5_weight_lane_count = index.add %k_n, %c0 : index
     %q5_weight_lane_active = index.cmp ult, %tid, %q5_weight_lane_count : index
     scf.if %q5_weight_lane_active {
-      scf.if %is_iq4xs {
-        %iq4_block_bytes = index.constant 136 : offset
-        %iq4_code_offset = index.constant 8 : offset
-        %iq4_weight_tid0 = index.rem %tid, %q5_weight_lane_count : index
-        %iq4_weight_tid = index.assume %iq4_weight_tid0 [range(%iq4_weight_tid0, 0, 63)] : index
-        %iq4_block_count = index.div %k_b, %q4_k_block : index
-        %iq4_block = index.div %chunk, %c4 : index
-        %iq4_pair = index.rem %chunk, %c4 : index
-        %iq4_group0 = index.mul %iq4_pair, %c2 : index
-        %iq4_group1 = index.add %iq4_group0, %c1 : index
-        %iq4_row0 = index.add %row_base, %iq4_weight_tid : index
-        %iq4_row = index.assume %iq4_row0 [range(%iq4_row0, 0, 262143)] : index
-        %iq4_row_bytes = index.scale %iq4_block_count, %iq4_block_bytes : index, offset -> offset
-        %iq4_row_byte_base = index.scale %iq4_row, %iq4_row_bytes : index, offset -> offset
-        %iq4_block_byte_add = index.scale %iq4_block, %iq4_block_bytes : index, offset -> offset
-        %iq4_block_byte_base = index.add %iq4_row_byte_base, %iq4_block_byte_add : offset
-        %iq4_code_byte_base = index.add %iq4_block_byte_base, %iq4_code_offset : offset
-        %iq4_code_view = buffer.view %src0_na[%iq4_code_byte_base] : buffer -> view<32xi32>
-        %iq4_scale0 = func.call @ggml_q5_plane_dense_iq4xs_wmma_scale(%src0_na, %iq4_row_byte_base, %iq4_block, %iq4_group0) : (buffer, offset, index, index) -> (f32)
-        %iq4_scale1 = func.call @ggml_q5_plane_dense_iq4xs_wmma_scale(%src0_na, %iq4_row_byte_base, %iq4_block, %iq4_group1) : (buffer, offset, index, index) -> (f32)
-        %iq4_meta0_0 = index.mul %iq4_weight_tid, %c2 : index
-        %iq4_meta0 = index.assume %iq4_meta0_0 [range(%iq4_meta0_0, 0, 126)] : index
-        %iq4_meta1_0 = index.add %iq4_meta0, %c1 : index
-        %iq4_meta1 = index.assume %iq4_meta1_0 [range(%iq4_meta1_0, 1, 127)] : index
-        %iq4_bias = scalar.constant -128.0 : f32
-        %iq4_correction0 = scalar.mulf %iq4_scale0, %iq4_bias : f32
-        %iq4_correction1 = scalar.mulf %iq4_scale1, %iq4_bias : f32
-        view.store %iq4_scale0, %wsl_view[%iq4_meta0] : f32, view<[%weight_metadata]xf32>
-        view.store %iq4_scale1, %wsl_view[%iq4_meta1] : f32, view<[%weight_metadata]xf32>
-        view.store %iq4_correction0, %wcl_view[%iq4_meta0] : f32, view<[%weight_metadata]xf32>
-        view.store %iq4_correction1, %wcl_view[%iq4_meta1] : f32, view<[%weight_metadata]xf32>
-
-        %iq4_group0_word_base0 = index.mul %iq4_group0, %c4 : index
-        %iq4_group0_word_base = index.assume %iq4_group0_word_base0 [range(%iq4_group0_word_base0, 0, 28)] : index
-        %iq4_group1_word_base0 = index.mul %iq4_group1, %c4 : index
-        %iq4_group1_word_base = index.assume %iq4_group1_word_base0 [range(%iq4_group1_word_base0, 4, 28)] : index
-        %iq4_weight_row_base = index.mul %iq4_weight_tid, %k_wstride : index
-        %iq4_w0 = index.assume %iq4_weight_row_base [range(%iq4_weight_row_base, 0, 5040)] : index
-        %iq4_payload16 = index.constant 16 : index
-        %iq4_payload48 = index.constant 48 : index
-        %iq4_w0_hi0 = index.add %iq4_weight_row_base, %iq4_payload16 : index
-        %iq4_w0_hi = index.assume %iq4_w0_hi0 [range(%iq4_w0_hi0, 16, 5056)] : index
-        %iq4_w1_0 = index.add %iq4_weight_row_base, %c32 : index
-        %iq4_w1 = index.assume %iq4_w1_0 [range(%iq4_w1_0, 32, 5072)] : index
-        %iq4_w1_hi0 = index.add %iq4_weight_row_base, %iq4_payload48 : index
-        %iq4_w1_hi = index.assume %iq4_w1_hi0 [range(%iq4_w1_hi0, 48, 5088)] : index
-        %iq4_false = scalar.constant false : i1
-        %iq4_true = scalar.constant true : i1
-
-        %iq4_words0 = vector.load %iq4_code_view[%iq4_group0_word_base] : view<32xi32> -> vector<4xi32>
-        %iq4_values00, %iq4_values01, %iq4_values02, %iq4_values03 = func.call @ggml_q5_plane_dense_iq4xs_wmmai8_signed_values16(%iq4_words0, %iq4_false) : (vector<4xi32>, i1) -> (vector<4xi8>, vector<4xi8>, vector<4xi8>, vector<4xi8>)
-        vector.store %iq4_values00, %wl_flat[%iq4_w0] : vector<4xi8>, view<[%weight_elements]xi8>
-        %iq4_w0_4_0 = index.add %iq4_w0, %c4 : index
-        %iq4_w0_4 = index.assume %iq4_w0_4_0 [range(%iq4_w0_4_0, 4, 5044)] : index
-        vector.store %iq4_values01, %wl_flat[%iq4_w0_4] : vector<4xi8>, view<[%weight_elements]xi8>
-        %iq4_w0_8_0 = index.add %iq4_w0, %c8 : index
-        %iq4_w0_8 = index.assume %iq4_w0_8_0 [range(%iq4_w0_8_0, 8, 5048)] : index
-        vector.store %iq4_values02, %wl_flat[%iq4_w0_8] : vector<4xi8>, view<[%weight_elements]xi8>
-        %iq4_w0_12_0 = index.add %iq4_w0_8, %c4 : index
-        %iq4_w0_12 = index.assume %iq4_w0_12_0 [range(%iq4_w0_12_0, 12, 5052)] : index
-        vector.store %iq4_values03, %wl_flat[%iq4_w0_12] : vector<4xi8>, view<[%weight_elements]xi8>
-        %iq4_values04, %iq4_values05, %iq4_values06, %iq4_values07 = func.call @ggml_q5_plane_dense_iq4xs_wmmai8_signed_values16(%iq4_words0, %iq4_true) : (vector<4xi32>, i1) -> (vector<4xi8>, vector<4xi8>, vector<4xi8>, vector<4xi8>)
-        vector.store %iq4_values04, %wl_flat[%iq4_w0_hi] : vector<4xi8>, view<[%weight_elements]xi8>
-        %iq4_w0_hi4_0 = index.add %iq4_w0_hi, %c4 : index
-        %iq4_w0_hi4 = index.assume %iq4_w0_hi4_0 [range(%iq4_w0_hi4_0, 20, 5060)] : index
-        vector.store %iq4_values05, %wl_flat[%iq4_w0_hi4] : vector<4xi8>, view<[%weight_elements]xi8>
-        %iq4_w0_hi8_0 = index.add %iq4_w0_hi, %c8 : index
-        %iq4_w0_hi8 = index.assume %iq4_w0_hi8_0 [range(%iq4_w0_hi8_0, 24, 5064)] : index
-        vector.store %iq4_values06, %wl_flat[%iq4_w0_hi8] : vector<4xi8>, view<[%weight_elements]xi8>
-        %iq4_w0_hi12_0 = index.add %iq4_w0_hi8, %c4 : index
-        %iq4_w0_hi12 = index.assume %iq4_w0_hi12_0 [range(%iq4_w0_hi12_0, 28, 5068)] : index
-        vector.store %iq4_values07, %wl_flat[%iq4_w0_hi12] : vector<4xi8>, view<[%weight_elements]xi8>
-
-        %iq4_words1 = vector.load %iq4_code_view[%iq4_group1_word_base] : view<32xi32> -> vector<4xi32>
-        %iq4_values10, %iq4_values11, %iq4_values12, %iq4_values13 = func.call @ggml_q5_plane_dense_iq4xs_wmmai8_signed_values16(%iq4_words1, %iq4_false) : (vector<4xi32>, i1) -> (vector<4xi8>, vector<4xi8>, vector<4xi8>, vector<4xi8>)
-        vector.store %iq4_values10, %wl_flat[%iq4_w1] : vector<4xi8>, view<[%weight_elements]xi8>
-        %iq4_w1_4_0 = index.add %iq4_w1, %c4 : index
-        %iq4_w1_4 = index.assume %iq4_w1_4_0 [range(%iq4_w1_4_0, 36, 5076)] : index
-        vector.store %iq4_values11, %wl_flat[%iq4_w1_4] : vector<4xi8>, view<[%weight_elements]xi8>
-        %iq4_w1_8_0 = index.add %iq4_w1, %c8 : index
-        %iq4_w1_8 = index.assume %iq4_w1_8_0 [range(%iq4_w1_8_0, 40, 5080)] : index
-        vector.store %iq4_values12, %wl_flat[%iq4_w1_8] : vector<4xi8>, view<[%weight_elements]xi8>
-        %iq4_w1_12_0 = index.add %iq4_w1_8, %c4 : index
-        %iq4_w1_12 = index.assume %iq4_w1_12_0 [range(%iq4_w1_12_0, 44, 5084)] : index
-        vector.store %iq4_values13, %wl_flat[%iq4_w1_12] : vector<4xi8>, view<[%weight_elements]xi8>
-        %iq4_values14, %iq4_values15, %iq4_values16, %iq4_values17 = func.call @ggml_q5_plane_dense_iq4xs_wmmai8_signed_values16(%iq4_words1, %iq4_true) : (vector<4xi32>, i1) -> (vector<4xi8>, vector<4xi8>, vector<4xi8>, vector<4xi8>)
-        vector.store %iq4_values14, %wl_flat[%iq4_w1_hi] : vector<4xi8>, view<[%weight_elements]xi8>
-        %iq4_w1_hi4_0 = index.add %iq4_w1_hi, %c4 : index
-        %iq4_w1_hi4 = index.assume %iq4_w1_hi4_0 [range(%iq4_w1_hi4_0, 52, 5092)] : index
-        vector.store %iq4_values15, %wl_flat[%iq4_w1_hi4] : vector<4xi8>, view<[%weight_elements]xi8>
-        %iq4_w1_hi8_0 = index.add %iq4_w1_hi, %c8 : index
-        %iq4_w1_hi8 = index.assume %iq4_w1_hi8_0 [range(%iq4_w1_hi8_0, 56, 5096)] : index
-        vector.store %iq4_values16, %wl_flat[%iq4_w1_hi8] : vector<4xi8>, view<[%weight_elements]xi8>
-        %iq4_w1_hi12_0 = index.add %iq4_w1_hi8, %c4 : index
-        %iq4_w1_hi12 = index.assume %iq4_w1_hi12_0 [range(%iq4_w1_hi12_0, 60, 5100)] : index
-        vector.store %iq4_values17, %wl_flat[%iq4_w1_hi12] : vector<4xi8>, view<[%weight_elements]xi8>
+      scf.if %is_q8 {
+        %q8_weight_tid = index.assume %tid [range(%tid, 0, 63)] : index
+        %q8_weight_row = index.add %row_base, %q8_weight_tid : index
+        %q8_block_bytes = index.constant 34 : offset
+        %q8_scale_bytes = index.constant 2 : offset
+        %q8_weight_blocks = index.div %k_b, %c32 : index
+        %q8_weight_row_bytes = index.scale %q8_weight_blocks, %q8_block_bytes : index, offset -> offset
+        %q8_weight_row_base = index.scale %q8_weight_row, %q8_weight_row_bytes : index, offset -> offset
+        %q8_first_block = index.mul %chunk, %c2 : index
+        %q8_zero = scalar.constant 0.0 : f32
+        scf.for %q8_half = [%c0 to %c2 step %c1] unroll {
+          %q8_weight_block = index.add %q8_first_block, %q8_half : index
+          %q8_weight_block_add = index.scale %q8_weight_block, %q8_block_bytes : index, offset -> offset
+          %q8_weight_block_base = index.add %q8_weight_row_base, %q8_weight_block_add : offset
+          %q8_weight_payload = index.add %q8_weight_block_base, %q8_scale_bytes : offset
+          %q8_weight_scale_view = buffer.view %src0_na[%q8_weight_block_base] : buffer -> view<1xf16>
+          %q8_weight_data_view = buffer.view %src0_na[%q8_weight_payload] : buffer -> view<32xi8>
+          %q8_weight_scale_half = view.load %q8_weight_scale_view[%c0] : view<1xf16> -> f16
+          %q8_weight_scale = scalar.extf %q8_weight_scale_half : f16 to f32
+          %q8_weight_values = vector.load %q8_weight_data_view[%c0] : view<32xi8> -> vector<32xi8>
+          %q8_lds_row = index.mul %q8_weight_tid, %k_wstride : index
+          %q8_lds_column = index.mul %q8_half, %c32 : index
+          %q8_lds_index0 = index.add %q8_lds_row, %q8_lds_column : index
+          %q8_lds_index = index.assume %q8_lds_index0 [range(%q8_lds_index0, 0, 5072)] : index
+          vector.store %q8_weight_values, %wl_flat[%q8_lds_index] : vector<32xi8>, view<[%weight_elements]xi8>
+          %q8_meta_row = index.mul %q8_weight_tid, %c2 : index
+          %q8_meta_index0 = index.add %q8_meta_row, %q8_half : index
+          %q8_meta_index = index.assume %q8_meta_index0 [range(%q8_meta_index0, 0, 127)] : index
+          view.store %q8_weight_scale, %wsl_view[%q8_meta_index] : f32, view<[%weight_metadata]xf32>
+          view.store %q8_zero, %wcl_view[%q8_meta_index] : f32, view<[%weight_metadata]xf32>
+        }
       } else {
-        %q5_weight_tid0 = index.rem %tid, %q5_weight_lane_count : index
-        %q5_weight_tid = index.assume %q5_weight_tid0 [range(%q5_weight_tid0, 0, 127)] : index
-        %q5_block_count = index.div %k_b, %q4_k_block : index
-        %q5_block = index.div %chunk, %c4 : index
-        %q5_pair = index.rem %chunk, %c4 : index
-        %q5_group0 = index.mul %q5_pair, %c2 : index
-        %q5_group1 = index.add %q5_group0, %c1 : index
-        %paired_row_lane = index.rem %q5_weight_tid, %c64_wide : index
-        %weight_row_lane = scf.select %paired_weights, %paired_row_lane, %q5_weight_tid : index
-        %q5_row0 = index.add %row_base, %weight_row_lane : index
-        %q5_row = index.assume %q5_row0 [range(%q5_row0, 0, 262143)] : index
-        %q5_row_bytes = index.scale %q5_block_count, %q5_block_bytes : index, offset -> offset
-        %q5_row_byte_base = index.scale %q5_row, %q5_row_bytes : index, offset -> offset
-        %q5_block_byte_add = index.scale %q5_block, %q5_block_bytes : index, offset -> offset
-        %q5_native_block_byte_base = index.add %q5_row_byte_base, %q5_block_byte_add : offset
-        %q4_row64 = index.constant 64 : index
-        %q4_field_bytes = index.constant 16 : offset
-        %q4_group_bytes = index.constant 9216 : offset
-        %q4_row_group = index.div %q5_row, %q4_row64 : index
-        %q4_record = index.madd %q4_row_group, %q5_block_count, %q5_block : index
-        %q4_record_base = index.scale %q4_record, %q4_group_bytes : index, offset -> offset
-        %packed_row_lane = index.rem %q5_row, %q4_row64 : index
-        %q4_row_offset = index.scale %packed_row_lane, %q4_field_bytes : index, offset -> offset
-        %q4_packed_block_byte_base = index.add %q4_record_base, %q4_row_offset : offset
-        %q5_block_byte_base = scf.select %is_q4_packed, %q4_packed_block_byte_base, %q5_native_block_byte_base : offset
-        %q5_high_byte_base = index.add %q5_block_byte_base, %q5_high_offset : offset
-        %q5_code_byte_base = index.add %q5_block_byte_base, %q5_code_offset : offset
-        %q5_high_view = buffer.view %src0_na[%q5_high_byte_base] : buffer -> view<8xi32>
-        %q5_code_view = buffer.view %src0_na[%q5_code_byte_base] : buffer -> view<32xi32>
-        %q5_d0, %q5_d1, %q5_correction0, %q5_correction1 = scf.if %is_symi5 -> (f32, f32, f32, f32) {
-          // The capacity-neutral signed-I5 carrier reuses the Q5 bit planes
-          // and stores one adjacent F16 scale pair for these two K32 groups.
-          %q5_s5_header_view = buffer.view %src0_na[%q5_block_byte_base] : buffer -> view<16xi8>
-          %q5_s5_scale_byte0 = index.mul %q5_group0, %c2 : index
-          %q5_s5_scale_byte = index.assume %q5_s5_scale_byte0 [range(%q5_s5_scale_byte0, 0, 12), multiple_of(%q5_s5_scale_byte0, 4)] : index
-          %q5_s5_scale_raw = vector.load %q5_s5_header_view[%q5_s5_scale_byte] : view<16xi8> -> vector<4xi8>
-          %q5_s5_scale_halves = vector.bitcast %q5_s5_scale_raw : vector<4xi8> to vector<2xf16>
-          %q5_s5_scale0_f16 = vector.extract %q5_s5_scale_halves[0] : vector<2xf16> -> f16
-          %q5_s5_scale1_f16 = vector.extract %q5_s5_scale_halves[1] : vector<2xf16> -> f16
-          %q5_s5_scale0 = scalar.extf %q5_s5_scale0_f16 : f16 to f32
-          %q5_s5_scale1 = scalar.extf %q5_s5_scale1_f16 : f16 to f32
-          %q5_s5_zero = scalar.constant 0.0 : f32
-          scf.yield %q5_s5_scale0, %q5_s5_scale1, %q5_s5_zero, %q5_s5_zero : f32, f32, f32, f32
-        } else {
-          %q5_header = func.call @ggml_q8_1_x4_paired_weight_words(%paired_weights, %load_up, %src0_na, %peer_weight, %q5_block_byte_base) : (i1, i1, buffer, buffer, offset) -> (vector<4xi32>)
-          %q5_header_halves = vector.bitcast %q5_header : vector<4xi32> to vector<8xf16>
-          %q5_d_f16 = vector.extract %q5_header_halves[0] : vector<8xf16> -> f16
-          %q5_dmin_f16 = vector.extract %q5_header_halves[1] : vector<8xf16> -> f16
-          %q5_scale0 = vector.extract %q5_header[1] : vector<4xi32> -> i32
-          %q5_scale1 = vector.extract %q5_header[2] : vector<4xi32> -> i32
-          %q5_scale2 = vector.extract %q5_header[3] : vector<4xi32> -> i32
-          %q5_d = scalar.extf %q5_d_f16 : f16 to f32
-          %q5_dmin = scalar.extf %q5_dmin_f16 : f16 to f32
-          %q5_scale_group0, %q5_min_group0 = func.call @ggml_q5_plane_q4k_scale_from_header(%q5_scale0, %q5_scale1, %q5_scale2, %q5_group0) : (i32, i32, i32, index) -> (i32, i32)
-          %q5_scale_group1, %q5_min_group1 = func.call @ggml_q5_plane_q4k_scale_from_header(%q5_scale0, %q5_scale1, %q5_scale2, %q5_group1) : (i32, i32, i32, index) -> (i32, i32)
-          %q5_scale_group0_f32 = scalar.uitofp %q5_scale_group0 : i32 to f32
-          %q5_scale_group1_f32 = scalar.uitofp %q5_scale_group1 : i32 to f32
-          %q5_min_group0_f32 = scalar.uitofp %q5_min_group0 : i32 to f32
-          %q5_min_group1_f32 = scalar.uitofp %q5_min_group1 : i32 to f32
-          %q5_exact_d0 = scalar.mulf %q5_d, %q5_scale_group0_f32 : f32
-          %q5_exact_d1 = scalar.mulf %q5_d, %q5_scale_group1_f32 : f32
-          %q5_m0 = scalar.mulf %q5_dmin, %q5_min_group0_f32 : f32
-          %q5_m1 = scalar.mulf %q5_dmin, %q5_min_group1_f32 : f32
-          %q5_neg_m0 = scalar.negf %q5_m0 : f32
-          %q5_neg_m1 = scalar.negf %q5_m1 : f32
-          scf.yield %q5_exact_d0, %q5_exact_d1, %q5_neg_m0, %q5_neg_m1 : f32, f32, f32, f32
-        }
-        %q5_meta0_0 = index.mul %q5_weight_tid, %c2 : index
-        %q5_meta0 = index.assume %q5_meta0_0 [range(%q5_meta0_0, 0, 254)] : index
-        %q5_meta1_0 = index.add %q5_meta0, %c1 : index
-        %q5_meta1 = index.assume %q5_meta1_0 [range(%q5_meta1_0, 1, 255)] : index
-        view.store %q5_d0, %wsl_view[%q5_meta0] : f32, view<[%weight_metadata]xf32>
-        view.store %q5_d1, %wsl_view[%q5_meta1] : f32, view<[%weight_metadata]xf32>
-        view.store %q5_correction0, %wcl_view[%q5_meta0] : f32, view<[%weight_metadata]xf32>
-        view.store %q5_correction1, %wcl_view[%q5_meta1] : f32, view<[%weight_metadata]xf32>
+        scf.if %is_iq4xs {
+          %iq4_block_bytes = index.constant 136 : offset
+          %iq4_code_offset = index.constant 8 : offset
+          %iq4_weight_tid0 = index.rem %tid, %q5_weight_lane_count : index
+          %iq4_weight_tid = index.assume %iq4_weight_tid0 [range(%iq4_weight_tid0, 0, 63)] : index
+          %iq4_block_count = index.div %k_b, %q4_k_block : index
+          %iq4_block = index.div %chunk, %c4 : index
+          %iq4_pair = index.rem %chunk, %c4 : index
+          %iq4_group0 = index.mul %iq4_pair, %c2 : index
+          %iq4_group1 = index.add %iq4_group0, %c1 : index
+          %iq4_row0 = index.add %row_base, %iq4_weight_tid : index
+          %iq4_row = index.assume %iq4_row0 [range(%iq4_row0, 0, 262143)] : index
+          %iq4_row_bytes = index.scale %iq4_block_count, %iq4_block_bytes : index, offset -> offset
+          %iq4_row_byte_base = index.scale %iq4_row, %iq4_row_bytes : index, offset -> offset
+          %iq4_block_byte_add = index.scale %iq4_block, %iq4_block_bytes : index, offset -> offset
+          %iq4_block_byte_base = index.add %iq4_row_byte_base, %iq4_block_byte_add : offset
+          %iq4_code_byte_base = index.add %iq4_block_byte_base, %iq4_code_offset : offset
+          %iq4_code_view = buffer.view %src0_na[%iq4_code_byte_base] : buffer -> view<32xi32>
+          %iq4_scale0 = func.call @ggml_q5_plane_dense_iq4xs_wmma_scale(%src0_na, %iq4_row_byte_base, %iq4_block, %iq4_group0) : (buffer, offset, index, index) -> (f32)
+          %iq4_scale1 = func.call @ggml_q5_plane_dense_iq4xs_wmma_scale(%src0_na, %iq4_row_byte_base, %iq4_block, %iq4_group1) : (buffer, offset, index, index) -> (f32)
+          %iq4_meta0_0 = index.mul %iq4_weight_tid, %c2 : index
+          %iq4_meta0 = index.assume %iq4_meta0_0 [range(%iq4_meta0_0, 0, 126)] : index
+          %iq4_meta1_0 = index.add %iq4_meta0, %c1 : index
+          %iq4_meta1 = index.assume %iq4_meta1_0 [range(%iq4_meta1_0, 1, 127)] : index
+          %iq4_bias = scalar.constant -128.0 : f32
+          %iq4_correction0 = scalar.mulf %iq4_scale0, %iq4_bias : f32
+          %iq4_correction1 = scalar.mulf %iq4_scale1, %iq4_bias : f32
+          view.store %iq4_scale0, %wsl_view[%iq4_meta0] : f32, view<[%weight_metadata]xf32>
+          view.store %iq4_scale1, %wsl_view[%iq4_meta1] : f32, view<[%weight_metadata]xf32>
+          view.store %iq4_correction0, %wcl_view[%iq4_meta0] : f32, view<[%weight_metadata]xf32>
+          view.store %iq4_correction1, %wcl_view[%iq4_meta1] : f32, view<[%weight_metadata]xf32>
 
-        %q5_pair_word_base = index.mul %q5_pair, %c8 : index
-        %q5_group0_i32 = index.cast %q5_group0 : index to i32
-        %q5_group1_i32 = index.cast %q5_group1 : index to i32
-        %q5_group0_shift = vector.splat %q5_group0_i32 : vector<4xi32>
-        %q5_group1_shift = vector.splat %q5_group1_i32 : vector<4xi32>
-        %q5_nibble_mask = vector.constant 252645135 : vector<4xi32>
-        %q5_byte_ones = vector.constant 16843009 : vector<4xi32>
-        %q5_sign_extend = vector.constant 240 : vector<4xi32>
-        %q5_shift4 = vector.constant 4 : vector<4xi32>
-        %q5_weight_row_base = index.mul %q5_weight_tid, %k_wstride : index
-        %q5_w0 = index.assume %q5_weight_row_base [range(%q5_weight_row_base, 0, 10160)] : index
-        %q5_payload16 = index.constant 16 : index
-        %q5_payload48 = index.constant 48 : index
-        %q5_w0_hi0 = index.add %q5_weight_row_base, %q5_payload16 : index
-        %q5_w0_hi = index.assume %q5_w0_hi0 [range(%q5_w0_hi0, 16, 10176)] : index
-        %q5_w1_0 = index.add %q5_weight_row_base, %c32 : index
-        %q5_w1 = index.assume %q5_w1_0 [range(%q5_w1_0, 32, 10192)] : index
-        %q5_w1_hi0 = index.add %q5_weight_row_base, %q5_payload48 : index
-        %q5_w1_hi = index.assume %q5_w1_hi0 [range(%q5_w1_hi0, 48, 10208)] : index
+          %iq4_group0_word_base0 = index.mul %iq4_group0, %c4 : index
+          %iq4_group0_word_base = index.assume %iq4_group0_word_base0 [range(%iq4_group0_word_base0, 0, 28)] : index
+          %iq4_group1_word_base0 = index.mul %iq4_group1, %c4 : index
+          %iq4_group1_word_base = index.assume %iq4_group1_word_base0 [range(%iq4_group1_word_base0, 4, 28)] : index
+          %iq4_weight_row_base = index.mul %iq4_weight_tid, %k_wstride : index
+          %iq4_w0 = index.assume %iq4_weight_row_base [range(%iq4_weight_row_base, 0, 5040)] : index
+          %iq4_payload16 = index.constant 16 : index
+          %iq4_payload48 = index.constant 48 : index
+          %iq4_w0_hi0 = index.add %iq4_weight_row_base, %iq4_payload16 : index
+          %iq4_w0_hi = index.assume %iq4_w0_hi0 [range(%iq4_w0_hi0, 16, 5056)] : index
+          %iq4_w1_0 = index.add %iq4_weight_row_base, %c32 : index
+          %iq4_w1 = index.assume %iq4_w1_0 [range(%iq4_w1_0, 32, 5072)] : index
+          %iq4_w1_hi0 = index.add %iq4_weight_row_base, %iq4_payload48 : index
+          %iq4_w1_hi = index.assume %iq4_w1_hi0 [range(%iq4_w1_hi0, 48, 5088)] : index
+          %iq4_false = scalar.constant false : i1
+          %iq4_true = scalar.constant true : i1
 
-        // First 16-byte payload half.
-        %q5_code_words0 = scf.if %is_q4_packed -> (vector<4xi32>) {
-          %field_add = index.constant 1 : index
-          %field_bytes = index.constant 1024 : offset
-          %field_pair = index.mul %q5_pair, %c2 : index
-          %field = index.add %field_pair, %field_add : index
-          %field_offset = index.scale %field, %field_bytes : index, offset -> offset
-          %payload_base = index.add %q5_block_byte_base, %field_offset : offset
-          %words = func.call @ggml_q8_1_x4_paired_weight_words(%paired_weights, %load_up, %src0_na, %peer_weight, %payload_base) : (i1, i1, buffer, buffer, offset) -> (vector<4xi32>)
-          scf.yield %words : vector<4xi32>
-        } else {
-          %words = vector.load %q5_code_view[%q5_pair_word_base] : view<32xi32> -> vector<4xi32>
-          scf.yield %words : vector<4xi32>
-        }
-        %q5_high_words0 = scf.if %is_q4 -> (vector<4xi32>) {
-          %zero = vector.constant 0 : vector<4xi32>
-          scf.yield %zero : vector<4xi32>
-        } else {
-          %high = vector.load %q5_high_view[%c0] : view<8xi32> -> vector<4xi32>
-          scf.yield %high : vector<4xi32>
-        }
-        %q5_low_codes0 = vector.andi %q5_code_words0, %q5_nibble_mask : vector<4xi32>
-        %q5_fifth00_shifted = vector.shrui %q5_high_words0, %q5_group0_shift : vector<4xi32>
-        %q5_fifth00_bits = vector.andi %q5_fifth00_shifted, %q5_byte_ones : vector<4xi32>
-        %q5_fifth00_unsigned = vector.shli %q5_fifth00_bits, %q5_shift4 : vector<4xi32>
-        %q5_fifth00_signed = vector.muli %q5_fifth00_bits, %q5_sign_extend : vector<4xi32>
-        %q5_fifth00 = scf.select %is_symi5, %q5_fifth00_signed, %q5_fifth00_unsigned : vector<4xi32>
-        %q5_values00_words = vector.ori %q5_low_codes0, %q5_fifth00 : vector<4xi32>
-        %q5_values00 = vector.bitcast %q5_values00_words : vector<4xi32> to vector<16xi8>
-        vector.store %q5_values00, %wl_flat[%q5_w0] : vector<16xi8>, view<[%weight_elements]xi8>
-        %q5_high_codes00 = vector.shrui %q5_code_words0, %q5_shift4 : vector<4xi32>
-        %q5_high_codes0 = vector.andi %q5_high_codes00, %q5_nibble_mask : vector<4xi32>
-        %q5_fifth10_shifted = vector.shrui %q5_high_words0, %q5_group1_shift : vector<4xi32>
-        %q5_fifth10_bits = vector.andi %q5_fifth10_shifted, %q5_byte_ones : vector<4xi32>
-        %q5_fifth10_unsigned = vector.shli %q5_fifth10_bits, %q5_shift4 : vector<4xi32>
-        %q5_fifth10_signed = vector.muli %q5_fifth10_bits, %q5_sign_extend : vector<4xi32>
-        %q5_fifth10 = scf.select %is_symi5, %q5_fifth10_signed, %q5_fifth10_unsigned : vector<4xi32>
-        %q5_values10_words = vector.ori %q5_high_codes0, %q5_fifth10 : vector<4xi32>
-        %q5_values10 = vector.bitcast %q5_values10_words : vector<4xi32> to vector<16xi8>
-        vector.store %q5_values10, %wl_flat[%q5_w1] : vector<16xi8>, view<[%weight_elements]xi8>
+          %iq4_words0 = vector.load %iq4_code_view[%iq4_group0_word_base] : view<32xi32> -> vector<4xi32>
+          %iq4_values00, %iq4_values01, %iq4_values02, %iq4_values03 = func.call @ggml_q5_plane_dense_iq4xs_wmmai8_signed_values16(%iq4_words0, %iq4_false) : (vector<4xi32>, i1) -> (vector<4xi8>, vector<4xi8>, vector<4xi8>, vector<4xi8>)
+          vector.store %iq4_values00, %wl_flat[%iq4_w0] : vector<4xi8>, view<[%weight_elements]xi8>
+          %iq4_w0_4_0 = index.add %iq4_w0, %c4 : index
+          %iq4_w0_4 = index.assume %iq4_w0_4_0 [range(%iq4_w0_4_0, 4, 5044)] : index
+          vector.store %iq4_values01, %wl_flat[%iq4_w0_4] : vector<4xi8>, view<[%weight_elements]xi8>
+          %iq4_w0_8_0 = index.add %iq4_w0, %c8 : index
+          %iq4_w0_8 = index.assume %iq4_w0_8_0 [range(%iq4_w0_8_0, 8, 5048)] : index
+          vector.store %iq4_values02, %wl_flat[%iq4_w0_8] : vector<4xi8>, view<[%weight_elements]xi8>
+          %iq4_w0_12_0 = index.add %iq4_w0_8, %c4 : index
+          %iq4_w0_12 = index.assume %iq4_w0_12_0 [range(%iq4_w0_12_0, 12, 5052)] : index
+          vector.store %iq4_values03, %wl_flat[%iq4_w0_12] : vector<4xi8>, view<[%weight_elements]xi8>
+          %iq4_values04, %iq4_values05, %iq4_values06, %iq4_values07 = func.call @ggml_q5_plane_dense_iq4xs_wmmai8_signed_values16(%iq4_words0, %iq4_true) : (vector<4xi32>, i1) -> (vector<4xi8>, vector<4xi8>, vector<4xi8>, vector<4xi8>)
+          vector.store %iq4_values04, %wl_flat[%iq4_w0_hi] : vector<4xi8>, view<[%weight_elements]xi8>
+          %iq4_w0_hi4_0 = index.add %iq4_w0_hi, %c4 : index
+          %iq4_w0_hi4 = index.assume %iq4_w0_hi4_0 [range(%iq4_w0_hi4_0, 20, 5060)] : index
+          vector.store %iq4_values05, %wl_flat[%iq4_w0_hi4] : vector<4xi8>, view<[%weight_elements]xi8>
+          %iq4_w0_hi8_0 = index.add %iq4_w0_hi, %c8 : index
+          %iq4_w0_hi8 = index.assume %iq4_w0_hi8_0 [range(%iq4_w0_hi8_0, 24, 5064)] : index
+          vector.store %iq4_values06, %wl_flat[%iq4_w0_hi8] : vector<4xi8>, view<[%weight_elements]xi8>
+          %iq4_w0_hi12_0 = index.add %iq4_w0_hi8, %c4 : index
+          %iq4_w0_hi12 = index.assume %iq4_w0_hi12_0 [range(%iq4_w0_hi12_0, 28, 5068)] : index
+          vector.store %iq4_values07, %wl_flat[%iq4_w0_hi12] : vector<4xi8>, view<[%weight_elements]xi8>
 
-        // Second 16-byte payload half. Recompute its addresses after the first
-        // stores so only one half's decode payload remains live at a time.
-        %q5_pair_word_hi0 = index.add %q5_pair_word_base, %c4 : index
-        %q5_pair_word_hi = index.assume %q5_pair_word_hi0 [range(%q5_pair_word_hi0, 4, 28)] : index
-        %q5_code_words1 = scf.if %is_q4_packed -> (vector<4xi32>) {
-          %field_add = index.constant 2 : index
-          %field_bytes = index.constant 1024 : offset
-          %field_pair = index.mul %q5_pair, %c2 : index
-          %field = index.add %field_pair, %field_add : index
-          %field_offset = index.scale %field, %field_bytes : index, offset -> offset
-          %payload_base = index.add %q5_block_byte_base, %field_offset : offset
-          %words = func.call @ggml_q8_1_x4_paired_weight_words(%paired_weights, %load_up, %src0_na, %peer_weight, %payload_base) : (i1, i1, buffer, buffer, offset) -> (vector<4xi32>)
-          scf.yield %words : vector<4xi32>
+          %iq4_words1 = vector.load %iq4_code_view[%iq4_group1_word_base] : view<32xi32> -> vector<4xi32>
+          %iq4_values10, %iq4_values11, %iq4_values12, %iq4_values13 = func.call @ggml_q5_plane_dense_iq4xs_wmmai8_signed_values16(%iq4_words1, %iq4_false) : (vector<4xi32>, i1) -> (vector<4xi8>, vector<4xi8>, vector<4xi8>, vector<4xi8>)
+          vector.store %iq4_values10, %wl_flat[%iq4_w1] : vector<4xi8>, view<[%weight_elements]xi8>
+          %iq4_w1_4_0 = index.add %iq4_w1, %c4 : index
+          %iq4_w1_4 = index.assume %iq4_w1_4_0 [range(%iq4_w1_4_0, 36, 5076)] : index
+          vector.store %iq4_values11, %wl_flat[%iq4_w1_4] : vector<4xi8>, view<[%weight_elements]xi8>
+          %iq4_w1_8_0 = index.add %iq4_w1, %c8 : index
+          %iq4_w1_8 = index.assume %iq4_w1_8_0 [range(%iq4_w1_8_0, 40, 5080)] : index
+          vector.store %iq4_values12, %wl_flat[%iq4_w1_8] : vector<4xi8>, view<[%weight_elements]xi8>
+          %iq4_w1_12_0 = index.add %iq4_w1_8, %c4 : index
+          %iq4_w1_12 = index.assume %iq4_w1_12_0 [range(%iq4_w1_12_0, 44, 5084)] : index
+          vector.store %iq4_values13, %wl_flat[%iq4_w1_12] : vector<4xi8>, view<[%weight_elements]xi8>
+          %iq4_values14, %iq4_values15, %iq4_values16, %iq4_values17 = func.call @ggml_q5_plane_dense_iq4xs_wmmai8_signed_values16(%iq4_words1, %iq4_true) : (vector<4xi32>, i1) -> (vector<4xi8>, vector<4xi8>, vector<4xi8>, vector<4xi8>)
+          vector.store %iq4_values14, %wl_flat[%iq4_w1_hi] : vector<4xi8>, view<[%weight_elements]xi8>
+          %iq4_w1_hi4_0 = index.add %iq4_w1_hi, %c4 : index
+          %iq4_w1_hi4 = index.assume %iq4_w1_hi4_0 [range(%iq4_w1_hi4_0, 52, 5092)] : index
+          vector.store %iq4_values15, %wl_flat[%iq4_w1_hi4] : vector<4xi8>, view<[%weight_elements]xi8>
+          %iq4_w1_hi8_0 = index.add %iq4_w1_hi, %c8 : index
+          %iq4_w1_hi8 = index.assume %iq4_w1_hi8_0 [range(%iq4_w1_hi8_0, 56, 5096)] : index
+          vector.store %iq4_values16, %wl_flat[%iq4_w1_hi8] : vector<4xi8>, view<[%weight_elements]xi8>
+          %iq4_w1_hi12_0 = index.add %iq4_w1_hi8, %c4 : index
+          %iq4_w1_hi12 = index.assume %iq4_w1_hi12_0 [range(%iq4_w1_hi12_0, 60, 5100)] : index
+          vector.store %iq4_values17, %wl_flat[%iq4_w1_hi12] : vector<4xi8>, view<[%weight_elements]xi8>
         } else {
-          %words = vector.load %q5_code_view[%q5_pair_word_hi] : view<32xi32> -> vector<4xi32>
-          scf.yield %words : vector<4xi32>
+          %q5_weight_tid0 = index.rem %tid, %q5_weight_lane_count : index
+          %q5_weight_tid = index.assume %q5_weight_tid0 [range(%q5_weight_tid0, 0, 127)] : index
+          %q5_block_count = index.div %k_b, %q4_k_block : index
+          %q5_block = index.div %chunk, %c4 : index
+          %q5_pair = index.rem %chunk, %c4 : index
+          %q5_group0 = index.mul %q5_pair, %c2 : index
+          %q5_group1 = index.add %q5_group0, %c1 : index
+          %paired_row_lane = index.rem %q5_weight_tid, %c64_wide : index
+          %weight_row_lane = scf.select %paired_weights, %paired_row_lane, %q5_weight_tid : index
+          %q5_row0 = index.add %row_base, %weight_row_lane : index
+          %q5_row = index.assume %q5_row0 [range(%q5_row0, 0, 262143)] : index
+          %q5_row_bytes = index.scale %q5_block_count, %q5_block_bytes : index, offset -> offset
+          %q5_row_byte_base = index.scale %q5_row, %q5_row_bytes : index, offset -> offset
+          %q5_block_byte_add = index.scale %q5_block, %q5_block_bytes : index, offset -> offset
+          %q5_native_block_byte_base = index.add %q5_row_byte_base, %q5_block_byte_add : offset
+          %q4_row64 = index.constant 64 : index
+          %q4_field_bytes = index.constant 16 : offset
+          %q4_group_bytes = index.constant 9216 : offset
+          %q4_row_group = index.div %q5_row, %q4_row64 : index
+          %q4_record = index.madd %q4_row_group, %q5_block_count, %q5_block : index
+          %q4_record_base = index.scale %q4_record, %q4_group_bytes : index, offset -> offset
+          %packed_row_lane = index.rem %q5_row, %q4_row64 : index
+          %q4_row_offset = index.scale %packed_row_lane, %q4_field_bytes : index, offset -> offset
+          %q4_packed_block_byte_base = index.add %q4_record_base, %q4_row_offset : offset
+          %q5_block_byte_base = scf.select %is_q4_packed, %q4_packed_block_byte_base, %q5_native_block_byte_base : offset
+          %q5_high_byte_base = index.add %q5_block_byte_base, %q5_high_offset : offset
+          %q5_code_byte_base = index.add %q5_block_byte_base, %q5_code_offset : offset
+          %q5_high_view = buffer.view %src0_na[%q5_high_byte_base] : buffer -> view<8xi32>
+          %q5_code_view = buffer.view %src0_na[%q5_code_byte_base] : buffer -> view<32xi32>
+          %q5_d0, %q5_d1, %q5_correction0, %q5_correction1 = scf.if %is_symi5 -> (f32, f32, f32, f32) {
+            // The capacity-neutral signed-I5 carrier reuses the Q5 bit planes
+            // and stores one adjacent F16 scale pair for these two K32 groups.
+            %q5_s5_header_view = buffer.view %src0_na[%q5_block_byte_base] : buffer -> view<16xi8>
+            %q5_s5_scale_byte0 = index.mul %q5_group0, %c2 : index
+            %q5_s5_scale_byte = index.assume %q5_s5_scale_byte0 [range(%q5_s5_scale_byte0, 0, 12), multiple_of(%q5_s5_scale_byte0, 4)] : index
+            %q5_s5_scale_raw = vector.load %q5_s5_header_view[%q5_s5_scale_byte] : view<16xi8> -> vector<4xi8>
+            %q5_s5_scale_halves = vector.bitcast %q5_s5_scale_raw : vector<4xi8> to vector<2xf16>
+            %q5_s5_scale0_f16 = vector.extract %q5_s5_scale_halves[0] : vector<2xf16> -> f16
+            %q5_s5_scale1_f16 = vector.extract %q5_s5_scale_halves[1] : vector<2xf16> -> f16
+            %q5_s5_scale0 = scalar.extf %q5_s5_scale0_f16 : f16 to f32
+            %q5_s5_scale1 = scalar.extf %q5_s5_scale1_f16 : f16 to f32
+            %q5_s5_zero = scalar.constant 0.0 : f32
+            scf.yield %q5_s5_scale0, %q5_s5_scale1, %q5_s5_zero, %q5_s5_zero : f32, f32, f32, f32
+          } else {
+            %q5_header = func.call @ggml_q8_1_x4_paired_weight_words(%paired_weights, %load_up, %src0_na, %peer_weight, %q5_block_byte_base) : (i1, i1, buffer, buffer, offset) -> (vector<4xi32>)
+            %q5_header_halves = vector.bitcast %q5_header : vector<4xi32> to vector<8xf16>
+            %q5_d_f16 = vector.extract %q5_header_halves[0] : vector<8xf16> -> f16
+            %q5_dmin_f16 = vector.extract %q5_header_halves[1] : vector<8xf16> -> f16
+            %q5_scale0 = vector.extract %q5_header[1] : vector<4xi32> -> i32
+            %q5_scale1 = vector.extract %q5_header[2] : vector<4xi32> -> i32
+            %q5_scale2 = vector.extract %q5_header[3] : vector<4xi32> -> i32
+            %q5_d = scalar.extf %q5_d_f16 : f16 to f32
+            %q5_dmin = scalar.extf %q5_dmin_f16 : f16 to f32
+            %q5_scale_group0, %q5_min_group0 = func.call @ggml_q5_plane_q4k_scale_from_header(%q5_scale0, %q5_scale1, %q5_scale2, %q5_group0) : (i32, i32, i32, index) -> (i32, i32)
+            %q5_scale_group1, %q5_min_group1 = func.call @ggml_q5_plane_q4k_scale_from_header(%q5_scale0, %q5_scale1, %q5_scale2, %q5_group1) : (i32, i32, i32, index) -> (i32, i32)
+            %q5_scale_group0_f32 = scalar.uitofp %q5_scale_group0 : i32 to f32
+            %q5_scale_group1_f32 = scalar.uitofp %q5_scale_group1 : i32 to f32
+            %q5_min_group0_f32 = scalar.uitofp %q5_min_group0 : i32 to f32
+            %q5_min_group1_f32 = scalar.uitofp %q5_min_group1 : i32 to f32
+            %q5_exact_d0 = scalar.mulf %q5_d, %q5_scale_group0_f32 : f32
+            %q5_exact_d1 = scalar.mulf %q5_d, %q5_scale_group1_f32 : f32
+            %q5_m0 = scalar.mulf %q5_dmin, %q5_min_group0_f32 : f32
+            %q5_m1 = scalar.mulf %q5_dmin, %q5_min_group1_f32 : f32
+            %q5_neg_m0 = scalar.negf %q5_m0 : f32
+            %q5_neg_m1 = scalar.negf %q5_m1 : f32
+            scf.yield %q5_exact_d0, %q5_exact_d1, %q5_neg_m0, %q5_neg_m1 : f32, f32, f32, f32
+          }
+          %q5_meta0_0 = index.mul %q5_weight_tid, %c2 : index
+          %q5_meta0 = index.assume %q5_meta0_0 [range(%q5_meta0_0, 0, 254)] : index
+          %q5_meta1_0 = index.add %q5_meta0, %c1 : index
+          %q5_meta1 = index.assume %q5_meta1_0 [range(%q5_meta1_0, 1, 255)] : index
+          view.store %q5_d0, %wsl_view[%q5_meta0] : f32, view<[%weight_metadata]xf32>
+          view.store %q5_d1, %wsl_view[%q5_meta1] : f32, view<[%weight_metadata]xf32>
+          view.store %q5_correction0, %wcl_view[%q5_meta0] : f32, view<[%weight_metadata]xf32>
+          view.store %q5_correction1, %wcl_view[%q5_meta1] : f32, view<[%weight_metadata]xf32>
+
+          %q5_pair_word_base = index.mul %q5_pair, %c8 : index
+          %q5_group0_i32 = index.cast %q5_group0 : index to i32
+          %q5_group1_i32 = index.cast %q5_group1 : index to i32
+          %q5_group0_shift = vector.splat %q5_group0_i32 : vector<4xi32>
+          %q5_group1_shift = vector.splat %q5_group1_i32 : vector<4xi32>
+          %q5_nibble_mask = vector.constant 252645135 : vector<4xi32>
+          %q5_byte_ones = vector.constant 16843009 : vector<4xi32>
+          %q5_sign_extend = vector.constant 240 : vector<4xi32>
+          %q5_shift4 = vector.constant 4 : vector<4xi32>
+          %q5_weight_row_base = index.mul %q5_weight_tid, %k_wstride : index
+          %q5_w0 = index.assume %q5_weight_row_base [range(%q5_weight_row_base, 0, 10160)] : index
+          %q5_payload16 = index.constant 16 : index
+          %q5_payload48 = index.constant 48 : index
+          %q5_w0_hi0 = index.add %q5_weight_row_base, %q5_payload16 : index
+          %q5_w0_hi = index.assume %q5_w0_hi0 [range(%q5_w0_hi0, 16, 10176)] : index
+          %q5_w1_0 = index.add %q5_weight_row_base, %c32 : index
+          %q5_w1 = index.assume %q5_w1_0 [range(%q5_w1_0, 32, 10192)] : index
+          %q5_w1_hi0 = index.add %q5_weight_row_base, %q5_payload48 : index
+          %q5_w1_hi = index.assume %q5_w1_hi0 [range(%q5_w1_hi0, 48, 10208)] : index
+
+          // First 16-byte payload half.
+          %q5_code_words0 = scf.if %is_q4_packed -> (vector<4xi32>) {
+            %field_add = index.constant 1 : index
+            %field_bytes = index.constant 1024 : offset
+            %field_pair = index.mul %q5_pair, %c2 : index
+            %field = index.add %field_pair, %field_add : index
+            %field_offset = index.scale %field, %field_bytes : index, offset -> offset
+            %payload_base = index.add %q5_block_byte_base, %field_offset : offset
+            %words = func.call @ggml_q8_1_x4_paired_weight_words(%paired_weights, %load_up, %src0_na, %peer_weight, %payload_base) : (i1, i1, buffer, buffer, offset) -> (vector<4xi32>)
+            scf.yield %words : vector<4xi32>
+          } else {
+            %words = vector.load %q5_code_view[%q5_pair_word_base] : view<32xi32> -> vector<4xi32>
+            scf.yield %words : vector<4xi32>
+          }
+          %q5_high_words0 = scf.if %is_q4 -> (vector<4xi32>) {
+            %zero = vector.constant 0 : vector<4xi32>
+            scf.yield %zero : vector<4xi32>
+          } else {
+            %high = vector.load %q5_high_view[%c0] : view<8xi32> -> vector<4xi32>
+            scf.yield %high : vector<4xi32>
+          }
+          %q5_low_codes0 = vector.andi %q5_code_words0, %q5_nibble_mask : vector<4xi32>
+          %q5_fifth00_shifted = vector.shrui %q5_high_words0, %q5_group0_shift : vector<4xi32>
+          %q5_fifth00_bits = vector.andi %q5_fifth00_shifted, %q5_byte_ones : vector<4xi32>
+          %q5_fifth00_unsigned = vector.shli %q5_fifth00_bits, %q5_shift4 : vector<4xi32>
+          %q5_fifth00_signed = vector.muli %q5_fifth00_bits, %q5_sign_extend : vector<4xi32>
+          %q5_fifth00 = scf.select %is_symi5, %q5_fifth00_signed, %q5_fifth00_unsigned : vector<4xi32>
+          %q5_values00_words = vector.ori %q5_low_codes0, %q5_fifth00 : vector<4xi32>
+          %q5_values00 = vector.bitcast %q5_values00_words : vector<4xi32> to vector<16xi8>
+          vector.store %q5_values00, %wl_flat[%q5_w0] : vector<16xi8>, view<[%weight_elements]xi8>
+          %q5_high_codes00 = vector.shrui %q5_code_words0, %q5_shift4 : vector<4xi32>
+          %q5_high_codes0 = vector.andi %q5_high_codes00, %q5_nibble_mask : vector<4xi32>
+          %q5_fifth10_shifted = vector.shrui %q5_high_words0, %q5_group1_shift : vector<4xi32>
+          %q5_fifth10_bits = vector.andi %q5_fifth10_shifted, %q5_byte_ones : vector<4xi32>
+          %q5_fifth10_unsigned = vector.shli %q5_fifth10_bits, %q5_shift4 : vector<4xi32>
+          %q5_fifth10_signed = vector.muli %q5_fifth10_bits, %q5_sign_extend : vector<4xi32>
+          %q5_fifth10 = scf.select %is_symi5, %q5_fifth10_signed, %q5_fifth10_unsigned : vector<4xi32>
+          %q5_values10_words = vector.ori %q5_high_codes0, %q5_fifth10 : vector<4xi32>
+          %q5_values10 = vector.bitcast %q5_values10_words : vector<4xi32> to vector<16xi8>
+          vector.store %q5_values10, %wl_flat[%q5_w1] : vector<16xi8>, view<[%weight_elements]xi8>
+
+          // Second 16-byte payload half. Recompute its addresses after the first
+          // stores so only one half's decode payload remains live at a time.
+          %q5_pair_word_hi0 = index.add %q5_pair_word_base, %c4 : index
+          %q5_pair_word_hi = index.assume %q5_pair_word_hi0 [range(%q5_pair_word_hi0, 4, 28)] : index
+          %q5_code_words1 = scf.if %is_q4_packed -> (vector<4xi32>) {
+            %field_add = index.constant 2 : index
+            %field_bytes = index.constant 1024 : offset
+            %field_pair = index.mul %q5_pair, %c2 : index
+            %field = index.add %field_pair, %field_add : index
+            %field_offset = index.scale %field, %field_bytes : index, offset -> offset
+            %payload_base = index.add %q5_block_byte_base, %field_offset : offset
+            %words = func.call @ggml_q8_1_x4_paired_weight_words(%paired_weights, %load_up, %src0_na, %peer_weight, %payload_base) : (i1, i1, buffer, buffer, offset) -> (vector<4xi32>)
+            scf.yield %words : vector<4xi32>
+          } else {
+            %words = vector.load %q5_code_view[%q5_pair_word_hi] : view<32xi32> -> vector<4xi32>
+            scf.yield %words : vector<4xi32>
+          }
+          %q5_high_words1 = scf.if %is_q4 -> (vector<4xi32>) {
+            %zero = vector.constant 0 : vector<4xi32>
+            scf.yield %zero : vector<4xi32>
+          } else {
+            %high = vector.load %q5_high_view[%c4] : view<8xi32> -> vector<4xi32>
+            scf.yield %high : vector<4xi32>
+          }
+          %q5_low_codes1 = vector.andi %q5_code_words1, %q5_nibble_mask : vector<4xi32>
+          %q5_fifth01_shifted = vector.shrui %q5_high_words1, %q5_group0_shift : vector<4xi32>
+          %q5_fifth01_bits = vector.andi %q5_fifth01_shifted, %q5_byte_ones : vector<4xi32>
+          %q5_fifth01_unsigned = vector.shli %q5_fifth01_bits, %q5_shift4 : vector<4xi32>
+          %q5_fifth01_signed = vector.muli %q5_fifth01_bits, %q5_sign_extend : vector<4xi32>
+          %q5_fifth01 = scf.select %is_symi5, %q5_fifth01_signed, %q5_fifth01_unsigned : vector<4xi32>
+          %q5_values01_words = vector.ori %q5_low_codes1, %q5_fifth01 : vector<4xi32>
+          %q5_values01 = vector.bitcast %q5_values01_words : vector<4xi32> to vector<16xi8>
+          vector.store %q5_values01, %wl_flat[%q5_w0_hi] : vector<16xi8>, view<[%weight_elements]xi8>
+          %q5_high_codes10 = vector.shrui %q5_code_words1, %q5_shift4 : vector<4xi32>
+          %q5_high_codes1 = vector.andi %q5_high_codes10, %q5_nibble_mask : vector<4xi32>
+          %q5_fifth11_shifted = vector.shrui %q5_high_words1, %q5_group1_shift : vector<4xi32>
+          %q5_fifth11_bits = vector.andi %q5_fifth11_shifted, %q5_byte_ones : vector<4xi32>
+          %q5_fifth11_unsigned = vector.shli %q5_fifth11_bits, %q5_shift4 : vector<4xi32>
+          %q5_fifth11_signed = vector.muli %q5_fifth11_bits, %q5_sign_extend : vector<4xi32>
+          %q5_fifth11 = scf.select %is_symi5, %q5_fifth11_signed, %q5_fifth11_unsigned : vector<4xi32>
+          %q5_values11_words = vector.ori %q5_high_codes1, %q5_fifth11 : vector<4xi32>
+          %q5_values11 = vector.bitcast %q5_values11_words : vector<4xi32> to vector<16xi8>
+          vector.store %q5_values11, %wl_flat[%q5_w1_hi] : vector<16xi8>, view<[%weight_elements]xi8>
         }
-        %q5_high_words1 = scf.if %is_q4 -> (vector<4xi32>) {
-          %zero = vector.constant 0 : vector<4xi32>
-          scf.yield %zero : vector<4xi32>
-        } else {
-          %high = vector.load %q5_high_view[%c4] : view<8xi32> -> vector<4xi32>
-          scf.yield %high : vector<4xi32>
-        }
-        %q5_low_codes1 = vector.andi %q5_code_words1, %q5_nibble_mask : vector<4xi32>
-        %q5_fifth01_shifted = vector.shrui %q5_high_words1, %q5_group0_shift : vector<4xi32>
-        %q5_fifth01_bits = vector.andi %q5_fifth01_shifted, %q5_byte_ones : vector<4xi32>
-        %q5_fifth01_unsigned = vector.shli %q5_fifth01_bits, %q5_shift4 : vector<4xi32>
-        %q5_fifth01_signed = vector.muli %q5_fifth01_bits, %q5_sign_extend : vector<4xi32>
-        %q5_fifth01 = scf.select %is_symi5, %q5_fifth01_signed, %q5_fifth01_unsigned : vector<4xi32>
-        %q5_values01_words = vector.ori %q5_low_codes1, %q5_fifth01 : vector<4xi32>
-        %q5_values01 = vector.bitcast %q5_values01_words : vector<4xi32> to vector<16xi8>
-        vector.store %q5_values01, %wl_flat[%q5_w0_hi] : vector<16xi8>, view<[%weight_elements]xi8>
-        %q5_high_codes10 = vector.shrui %q5_code_words1, %q5_shift4 : vector<4xi32>
-        %q5_high_codes1 = vector.andi %q5_high_codes10, %q5_nibble_mask : vector<4xi32>
-        %q5_fifth11_shifted = vector.shrui %q5_high_words1, %q5_group1_shift : vector<4xi32>
-        %q5_fifth11_bits = vector.andi %q5_fifth11_shifted, %q5_byte_ones : vector<4xi32>
-        %q5_fifth11_unsigned = vector.shli %q5_fifth11_bits, %q5_shift4 : vector<4xi32>
-        %q5_fifth11_signed = vector.muli %q5_fifth11_bits, %q5_sign_extend : vector<4xi32>
-        %q5_fifth11 = scf.select %is_symi5, %q5_fifth11_signed, %q5_fifth11_unsigned : vector<4xi32>
-        %q5_values11_words = vector.ori %q5_high_codes1, %q5_fifth11 : vector<4xi32>
-        %q5_values11 = vector.bitcast %q5_values11_words : vector<4xi32> to vector<16xi8>
-        vector.store %q5_values11, %wl_flat[%q5_w1_hi] : vector<16xi8>, view<[%weight_elements]xi8>
       }
     }
     kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
@@ -902,37 +935,37 @@ template.def<@ggml.mul_mat_q5_k_q8_plane.wmmai8.body> device @ggml_mul_mat_q5_k_
       %i0_0_0_u0 = vector.mma %lf0_0_u0, %rfs0_0_0_u0, %iz_u0 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %i1_0_0_u0 = vector.mma %lf0_1_u0, %rfs0_0_1_u0, %i0_0_0_u0 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %ff0_0_u0 = vector.sitofp %i1_0_0_u0 : vector<8xi32> to vector<8xf32>
-      %sv0_0_u0 = vector.mulf %asv0_u0, %wsv0_u0 : vector<8xf32>
       %base_fn0_0_u0 = vector.fmaf %auv0_u0, %wcv0_u0, %fc0_0 : vector<8xf32>
       %selected_base_fn0_0_u0 = scf.select %is_signed_rhs, %fc0_0, %base_fn0_0_u0 : vector<8xf32>
 
+      %sv0_0_u0 = vector.mulf %asv0_u0, %wsv0_u0 : vector<8xf32>
       %fn0_0_u0 = vector.fmaf %ff0_0_u0, %sv0_0_u0, %selected_base_fn0_0_u0 : vector<8xf32>
       scf.schedule.fence
       %i0_0_1_u0 = vector.mma %lf0_0_u0, %rfs0_1_0_u0, %iz_u0 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %i1_0_1_u0 = vector.mma %lf0_1_u0, %rfs0_1_1_u0, %i0_0_1_u0 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %ff0_1_u0 = vector.sitofp %i1_0_1_u0 : vector<8xi32> to vector<8xf32>
-      %sv0_1_u0 = vector.mulf %asv0_u0, %wsv1_u0 : vector<8xf32>
       %base_fn0_1_u0 = vector.fmaf %auv0_u0, %wcv1_u0, %fc0_1 : vector<8xf32>
       %selected_base_fn0_1_u0 = scf.select %is_signed_rhs, %fc0_1, %base_fn0_1_u0 : vector<8xf32>
 
+      %sv0_1_u0 = vector.mulf %asv0_u0, %wsv1_u0 : vector<8xf32>
       %fn0_1_u0 = vector.fmaf %ff0_1_u0, %sv0_1_u0, %selected_base_fn0_1_u0 : vector<8xf32>
       scf.schedule.fence
       %i0_0_2_u0 = vector.mma %lf0_0_u0, %rfs0_2_0_u0, %iz_u0 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %i1_0_2_u0 = vector.mma %lf0_1_u0, %rfs0_2_1_u0, %i0_0_2_u0 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %ff0_2_u0 = vector.sitofp %i1_0_2_u0 : vector<8xi32> to vector<8xf32>
-      %sv0_2_u0 = vector.mulf %asv0_u0, %wsv2_u0 : vector<8xf32>
       %base_fn0_2_u0 = vector.fmaf %auv0_u0, %wcv2_u0, %fc0_2 : vector<8xf32>
       %selected_base_fn0_2_u0 = scf.select %is_signed_rhs, %fc0_2, %base_fn0_2_u0 : vector<8xf32>
 
+      %sv0_2_u0 = vector.mulf %asv0_u0, %wsv2_u0 : vector<8xf32>
       %fn0_2_u0 = vector.fmaf %ff0_2_u0, %sv0_2_u0, %selected_base_fn0_2_u0 : vector<8xf32>
       scf.schedule.fence
       %i0_0_3_u0 = vector.mma %lf0_0_u0, %rfs0_3_0_u0, %iz_u0 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %i1_0_3_u0 = vector.mma %lf0_1_u0, %rfs0_3_1_u0, %i0_0_3_u0 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %ff0_3_u0 = vector.sitofp %i1_0_3_u0 : vector<8xi32> to vector<8xf32>
-      %sv0_3_u0 = vector.mulf %asv0_u0, %wsv3_u0 : vector<8xf32>
       %base_fn0_3_u0 = vector.fmaf %auv0_u0, %wcv3_u0, %fc0_3 : vector<8xf32>
       %selected_base_fn0_3_u0 = scf.select %is_signed_rhs, %fc0_3, %base_fn0_3_u0 : vector<8xf32>
 
+      %sv0_3_u0 = vector.mulf %asv0_u0, %wsv3_u0 : vector<8xf32>
       %fn0_3_u0 = vector.fmaf %ff0_3_u0, %sv0_3_u0, %selected_base_fn0_3_u0 : vector<8xf32>
       scf.schedule.fence
       %lf1_0_raw_u0 = func.call @ggml_q5_plane_dense_q8_wmmai8_load_lhs(%token256, %scratch, %base, %lm1, %blk_k_u0, %c16) : (i1, buffer, offset, index, index, index) -> (vector<16xi8>)
@@ -974,37 +1007,37 @@ template.def<@ggml.mul_mat_q5_k_q8_plane.wmmai8.body> device @ggml_mul_mat_q5_k_
       %i0_1_0_u0 = vector.mma %lf1_0_u0, %rfs1_0_0_u0, %iz_u0 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %i1_1_0_u0 = vector.mma %lf1_1_u0, %rfs1_0_1_u0, %i0_1_0_u0 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %ff1_0_u0 = vector.sitofp %i1_1_0_u0 : vector<8xi32> to vector<8xf32>
-      %sv1_0_u0 = vector.mulf %asv1_u0, %wsv0_u0 : vector<8xf32>
       %base_fn1_0_u0 = vector.fmaf %auv1_u0, %wcv0_u0, %fc1_0 : vector<8xf32>
       %selected_base_fn1_0_u0 = scf.select %is_signed_rhs, %fc1_0, %base_fn1_0_u0 : vector<8xf32>
 
+      %sv1_0_u0 = vector.mulf %asv1_u0, %wsv0_u0 : vector<8xf32>
       %fn1_0_u0 = vector.fmaf %ff1_0_u0, %sv1_0_u0, %selected_base_fn1_0_u0 : vector<8xf32>
       scf.schedule.fence
       %i0_1_1_u0 = vector.mma %lf1_0_u0, %rfs1_1_0_u0, %iz_u0 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %i1_1_1_u0 = vector.mma %lf1_1_u0, %rfs1_1_1_u0, %i0_1_1_u0 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %ff1_1_u0 = vector.sitofp %i1_1_1_u0 : vector<8xi32> to vector<8xf32>
-      %sv1_1_u0 = vector.mulf %asv1_u0, %wsv1_u0 : vector<8xf32>
       %base_fn1_1_u0 = vector.fmaf %auv1_u0, %wcv1_u0, %fc1_1 : vector<8xf32>
       %selected_base_fn1_1_u0 = scf.select %is_signed_rhs, %fc1_1, %base_fn1_1_u0 : vector<8xf32>
 
+      %sv1_1_u0 = vector.mulf %asv1_u0, %wsv1_u0 : vector<8xf32>
       %fn1_1_u0 = vector.fmaf %ff1_1_u0, %sv1_1_u0, %selected_base_fn1_1_u0 : vector<8xf32>
       scf.schedule.fence
       %i0_1_2_u0 = vector.mma %lf1_0_u0, %rfs1_2_0_u0, %iz_u0 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %i1_1_2_u0 = vector.mma %lf1_1_u0, %rfs1_2_1_u0, %i0_1_2_u0 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %ff1_2_u0 = vector.sitofp %i1_1_2_u0 : vector<8xi32> to vector<8xf32>
-      %sv1_2_u0 = vector.mulf %asv1_u0, %wsv2_u0 : vector<8xf32>
       %base_fn1_2_u0 = vector.fmaf %auv1_u0, %wcv2_u0, %fc1_2 : vector<8xf32>
       %selected_base_fn1_2_u0 = scf.select %is_signed_rhs, %fc1_2, %base_fn1_2_u0 : vector<8xf32>
 
+      %sv1_2_u0 = vector.mulf %asv1_u0, %wsv2_u0 : vector<8xf32>
       %fn1_2_u0 = vector.fmaf %ff1_2_u0, %sv1_2_u0, %selected_base_fn1_2_u0 : vector<8xf32>
       scf.schedule.fence
       %i0_1_3_u0 = vector.mma %lf1_0_u0, %rfs1_3_0_u0, %iz_u0 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %i1_1_3_u0 = vector.mma %lf1_1_u0, %rfs1_3_1_u0, %i0_1_3_u0 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %ff1_3_u0 = vector.sitofp %i1_1_3_u0 : vector<8xi32> to vector<8xf32>
-      %sv1_3_u0 = vector.mulf %asv1_u0, %wsv3_u0 : vector<8xf32>
       %base_fn1_3_u0 = vector.fmaf %auv1_u0, %wcv3_u0, %fc1_3 : vector<8xf32>
       %selected_base_fn1_3_u0 = scf.select %is_signed_rhs, %fc1_3, %base_fn1_3_u0 : vector<8xf32>
 
+      %sv1_3_u0 = vector.mulf %asv1_u0, %wsv3_u0 : vector<8xf32>
       %fn1_3_u0 = vector.fmaf %ff1_3_u0, %sv1_3_u0, %selected_base_fn1_3_u0 : vector<8xf32>
       scf.schedule.fence
       %blk_k_u1 = index.mul %c1, %c32 : index
@@ -1073,38 +1106,38 @@ template.def<@ggml.mul_mat_q5_k_q8_plane.wmmai8.body> device @ggml_mul_mat_q5_k_
       %i0_0_0_u1 = vector.mma %lf0_0_u1, %rfs0_0_0_u1, %iz_u1 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %i1_0_0_u1 = vector.mma %lf0_1_u1, %rfs0_0_1_u1, %i0_0_0_u1 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %ff0_0_u1 = vector.sitofp %i1_0_0_u1 : vector<8xi32> to vector<8xf32>
-      %sv0_0_u1 = vector.mulf %asv0_u1, %wsv0_u1 : vector<8xf32>
       %base_fn0_0 = vector.fmaf %auv0_u1, %wcv0_u1, %fn0_0_u0 : vector<8xf32>
       %selected_base_fn0_0 = scf.select %is_signed_rhs, %fn0_0_u0, %base_fn0_0 : vector<8xf32>
 
-      %fn0_0 = vector.fmaf %ff0_0_u1, %sv0_0_u1, %selected_base_fn0_0 : vector<8xf32>
+      %sv0_0 = vector.mulf %asv0_u1, %wsv0_u1 : vector<8xf32>
+      %fn0_0 = vector.fmaf %ff0_0_u1, %sv0_0, %selected_base_fn0_0 : vector<8xf32>
       scf.schedule.fence
       %i0_0_1_u1 = vector.mma %lf0_0_u1, %rfs0_1_0_u1, %iz_u1 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %i1_0_1_u1 = vector.mma %lf0_1_u1, %rfs0_1_1_u1, %i0_0_1_u1 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %ff0_1_u1 = vector.sitofp %i1_0_1_u1 : vector<8xi32> to vector<8xf32>
-      %sv0_1_u1 = vector.mulf %asv0_u1, %wsv1_u1 : vector<8xf32>
       %base_fn0_1 = vector.fmaf %auv0_u1, %wcv1_u1, %fn0_1_u0 : vector<8xf32>
       %selected_base_fn0_1 = scf.select %is_signed_rhs, %fn0_1_u0, %base_fn0_1 : vector<8xf32>
 
-      %fn0_1 = vector.fmaf %ff0_1_u1, %sv0_1_u1, %selected_base_fn0_1 : vector<8xf32>
+      %sv0_1 = vector.mulf %asv0_u1, %wsv1_u1 : vector<8xf32>
+      %fn0_1 = vector.fmaf %ff0_1_u1, %sv0_1, %selected_base_fn0_1 : vector<8xf32>
       scf.schedule.fence
       %i0_0_2_u1 = vector.mma %lf0_0_u1, %rfs0_2_0_u1, %iz_u1 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %i1_0_2_u1 = vector.mma %lf0_1_u1, %rfs0_2_1_u1, %i0_0_2_u1 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %ff0_2_u1 = vector.sitofp %i1_0_2_u1 : vector<8xi32> to vector<8xf32>
-      %sv0_2_u1 = vector.mulf %asv0_u1, %wsv2_u1 : vector<8xf32>
       %base_fn0_2 = vector.fmaf %auv0_u1, %wcv2_u1, %fn0_2_u0 : vector<8xf32>
       %selected_base_fn0_2 = scf.select %is_signed_rhs, %fn0_2_u0, %base_fn0_2 : vector<8xf32>
 
-      %fn0_2 = vector.fmaf %ff0_2_u1, %sv0_2_u1, %selected_base_fn0_2 : vector<8xf32>
+      %sv0_2 = vector.mulf %asv0_u1, %wsv2_u1 : vector<8xf32>
+      %fn0_2 = vector.fmaf %ff0_2_u1, %sv0_2, %selected_base_fn0_2 : vector<8xf32>
       scf.schedule.fence
       %i0_0_3_u1 = vector.mma %lf0_0_u1, %rfs0_3_0_u1, %iz_u1 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %i1_0_3_u1 = vector.mma %lf0_1_u1, %rfs0_3_1_u1, %i0_0_3_u1 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %ff0_3_u1 = vector.sitofp %i1_0_3_u1 : vector<8xi32> to vector<8xf32>
-      %sv0_3_u1 = vector.mulf %asv0_u1, %wsv3_u1 : vector<8xf32>
       %base_fn0_3 = vector.fmaf %auv0_u1, %wcv3_u1, %fn0_3_u0 : vector<8xf32>
       %selected_base_fn0_3 = scf.select %is_signed_rhs, %fn0_3_u0, %base_fn0_3 : vector<8xf32>
 
-      %fn0_3 = vector.fmaf %ff0_3_u1, %sv0_3_u1, %selected_base_fn0_3 : vector<8xf32>
+      %sv0_3 = vector.mulf %asv0_u1, %wsv3_u1 : vector<8xf32>
+      %fn0_3 = vector.fmaf %ff0_3_u1, %sv0_3, %selected_base_fn0_3 : vector<8xf32>
       scf.schedule.fence
       %lf1_0_raw_u1 = func.call @ggml_q5_plane_dense_q8_wmmai8_load_lhs(%token256, %scratch, %base, %lm1, %blk_k_u1, %c16) : (i1, buffer, offset, index, index, index) -> (vector<16xi8>)
       %lf1_0_words_u1 = vector.bitcast %lf1_0_raw_u1 : vector<16xi8> to vector<4xi32>
@@ -1145,38 +1178,38 @@ template.def<@ggml.mul_mat_q5_k_q8_plane.wmmai8.body> device @ggml_mul_mat_q5_k_
       %i0_1_0_u1 = vector.mma %lf1_0_u1, %rfs1_0_0_u1, %iz_u1 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %i1_1_0_u1 = vector.mma %lf1_1_u1, %rfs1_0_1_u1, %i0_1_0_u1 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %ff1_0_u1 = vector.sitofp %i1_1_0_u1 : vector<8xi32> to vector<8xf32>
-      %sv1_0_u1 = vector.mulf %asv1_u1, %wsv0_u1 : vector<8xf32>
       %base_fn1_0 = vector.fmaf %auv1_u1, %wcv0_u1, %fn1_0_u0 : vector<8xf32>
       %selected_base_fn1_0 = scf.select %is_signed_rhs, %fn1_0_u0, %base_fn1_0 : vector<8xf32>
 
-      %fn1_0 = vector.fmaf %ff1_0_u1, %sv1_0_u1, %selected_base_fn1_0 : vector<8xf32>
+      %sv1_0 = vector.mulf %asv1_u1, %wsv0_u1 : vector<8xf32>
+      %fn1_0 = vector.fmaf %ff1_0_u1, %sv1_0, %selected_base_fn1_0 : vector<8xf32>
       scf.schedule.fence
       %i0_1_1_u1 = vector.mma %lf1_0_u1, %rfs1_1_0_u1, %iz_u1 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %i1_1_1_u1 = vector.mma %lf1_1_u1, %rfs1_1_1_u1, %i0_1_1_u1 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %ff1_1_u1 = vector.sitofp %i1_1_1_u1 : vector<8xi32> to vector<8xf32>
-      %sv1_1_u1 = vector.mulf %asv1_u1, %wsv1_u1 : vector<8xf32>
       %base_fn1_1 = vector.fmaf %auv1_u1, %wcv1_u1, %fn1_1_u0 : vector<8xf32>
       %selected_base_fn1_1 = scf.select %is_signed_rhs, %fn1_1_u0, %base_fn1_1 : vector<8xf32>
 
-      %fn1_1 = vector.fmaf %ff1_1_u1, %sv1_1_u1, %selected_base_fn1_1 : vector<8xf32>
+      %sv1_1 = vector.mulf %asv1_u1, %wsv1_u1 : vector<8xf32>
+      %fn1_1 = vector.fmaf %ff1_1_u1, %sv1_1, %selected_base_fn1_1 : vector<8xf32>
       scf.schedule.fence
       %i0_1_2_u1 = vector.mma %lf1_0_u1, %rfs1_2_0_u1, %iz_u1 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %i1_1_2_u1 = vector.mma %lf1_1_u1, %rfs1_2_1_u1, %i0_1_2_u1 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %ff1_2_u1 = vector.sitofp %i1_1_2_u1 : vector<8xi32> to vector<8xf32>
-      %sv1_2_u1 = vector.mulf %asv1_u1, %wsv2_u1 : vector<8xf32>
       %base_fn1_2 = vector.fmaf %auv1_u1, %wcv2_u1, %fn1_2_u0 : vector<8xf32>
       %selected_base_fn1_2 = scf.select %is_signed_rhs, %fn1_2_u0, %base_fn1_2 : vector<8xf32>
 
-      %fn1_2 = vector.fmaf %ff1_2_u1, %sv1_2_u1, %selected_base_fn1_2 : vector<8xf32>
+      %sv1_2 = vector.mulf %asv1_u1, %wsv2_u1 : vector<8xf32>
+      %fn1_2 = vector.fmaf %ff1_2_u1, %sv1_2, %selected_base_fn1_2 : vector<8xf32>
       scf.schedule.fence
       %i0_1_3_u1 = vector.mma %lf1_0_u1, %rfs1_3_0_u1, %iz_u1 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %i1_1_3_u1 = vector.mma %lf1_1_u1, %rfs1_3_1_u1, %i0_1_3_u1 : vector<4xi32>, vector<4xi32>, vector<8xi32>
       %ff1_3_u1 = vector.sitofp %i1_1_3_u1 : vector<8xi32> to vector<8xf32>
-      %sv1_3_u1 = vector.mulf %asv1_u1, %wsv3_u1 : vector<8xf32>
       %base_fn1_3 = vector.fmaf %auv1_u1, %wcv3_u1, %fn1_3_u0 : vector<8xf32>
       %selected_base_fn1_3 = scf.select %is_signed_rhs, %fn1_3_u0, %base_fn1_3 : vector<8xf32>
 
-      %fn1_3 = vector.fmaf %ff1_3_u1, %sv1_3_u1, %selected_base_fn1_3 : vector<8xf32>
+      %sv1_3 = vector.mulf %asv1_u1, %wsv3_u1 : vector<8xf32>
+      %fn1_3 = vector.fmaf %ff1_3_u1, %sv1_3, %selected_base_fn1_3 : vector<8xf32>
       scf.yield %fn0_0, %fn0_1, %fn0_2, %fn0_3, %fn1_0, %fn1_1, %fn1_2, %fn1_3 : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>
     }
     kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
@@ -1276,7 +1309,8 @@ kernel.def target(@ggml_q5_plane_dense_gfx11_wave32) @ggml_mul_mat_q5_k_q8_plane
   %q8_g = buffer.assume.memory_space<global> %q8_input : buffer
   %weight_noalias, %output_noalias, %q8_noalias = buffer.assume.noalias %weight_g, %output_g, %q8_g : buffer, buffer, buffer
 
-  template.apply<@ggml.mul_mat_q5_k_q8_plane.wmmai8.body>(%is_iq4xs, %token256, %q8_plane, %paired_weights, %weight_noalias, %weight_noalias, %output_noalias, %q8_noalias, %base, %lds_bytes, %w_off, %as_off, %ws_off, %asum_off, %wc_off, %c0, %c1, %c2, %c4, %c8, %c16, %c32, %c17, %c34, %k_kc, %k_astride, %k_wstride, %k_m, %k_n, %k_blocks, %k_wave, %k_wm, %fzero, %izero, %input_size, %output_size, %bounded_token_count, %nchunks, %kblocks, %col_tile, %row_tile, %tid, %wave, %is_symi5, %is_q4, %is_q4_packed) : (i1, i1, i1, i1, buffer, buffer, buffer, buffer, offset, offset, offset, offset, offset, offset, offset, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, vector<8xf32>, vector<8xi32>, index, index, index, index, index, index, index, index, index, i1, i1, i1)
+  %q8_disabled = scalar.constant false : i1
+  template.apply<@ggml.mul_mat_q5_k_q8_plane.wmmai8.body>(%is_iq4xs, %token256, %q8_plane, %paired_weights, %weight_noalias, %weight_noalias, %output_noalias, %q8_noalias, %base, %lds_bytes, %w_off, %as_off, %ws_off, %asum_off, %wc_off, %c0, %c1, %c2, %c4, %c8, %c16, %c32, %c17, %c34, %k_kc, %k_astride, %k_wstride, %k_m, %k_n, %k_blocks, %k_wave, %k_wm, %fzero, %izero, %input_size, %output_size, %bounded_token_count, %nchunks, %kblocks, %col_tile, %row_tile, %tid, %wave, %q8_disabled, %is_symi5, %is_q4, %is_q4_packed, %c0, %nchunks, %base) : (i1, i1, i1, i1, buffer, buffer, buffer, buffer, offset, offset, offset, offset, offset, offset, offset, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, vector<8xf32>, vector<8xi32>, index, index, index, index, index, index, index, index, index, i1, i1, i1, i1, index, index, offset)
   kernel.return
 }
 
@@ -1327,6 +1361,8 @@ template.def<@ggml.mul_mat_q8_1_x4.entry> device @ggml_mul_mat_q8_1_x4_entry(%to
   %izero = vector.constant 0 : vector<8xi32>
   %weight_format = config.get @ggml.mul_mat_q8_1_x4.weight_format : index
   %is_iq4xs = index.cmp eq, %weight_format, %c23 : index
+  %q8_format = index.constant 80 : index
+  %is_q8 = index.cmp eq, %weight_format, %q8_format : index
   %true = scalar.constant true : i1
   %token256 = scalar.xori %paired_weights, %true : i1
   %q8_plane = scalar.constant false : i1
@@ -1371,7 +1407,7 @@ template.def<@ggml.mul_mat_q8_1_x4.entry> device @ggml_mul_mat_q8_1_x4_entry(%to
   %q8_g = buffer.assume.memory_space<global> %q8_input : buffer
   %weight_noalias, %output_noalias, %q8_noalias = buffer.assume.noalias %weight_g, %output_g, %q8_g : buffer, buffer, buffer
 
-  template.apply<@ggml.mul_mat_q5_k_q8_plane.wmmai8.body>(%is_iq4xs, %token256, %q8_plane, %paired_weights, %peer_global, %weight_noalias, %output_noalias, %q8_noalias, %base, %lds_bytes, %w_off, %as_off, %ws_off, %asum_off, %wc_off, %c0, %c1, %c2, %c4, %c8, %c16, %c32, %c17, %c34, %k_kc, %k_astride, %k_wstride, %k_m, %k_n, %k_blocks, %k_wave, %k_wm, %fzero, %izero, %input_size, %output_size, %bounded_token_count, %nchunks, %kblocks, %col_tile, %row_tile, %tid, %wave, %is_symi5, %is_q4, %is_q4_packed) : (i1, i1, i1, i1, buffer, buffer, buffer, buffer, offset, offset, offset, offset, offset, offset, offset, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, vector<8xf32>, vector<8xi32>, index, index, index, index, index, index, index, index, index, i1, i1, i1)
+  template.apply<@ggml.mul_mat_q5_k_q8_plane.wmmai8.body>(%is_iq4xs, %token256, %q8_plane, %paired_weights, %peer_global, %weight_noalias, %output_noalias, %q8_noalias, %base, %lds_bytes, %w_off, %as_off, %ws_off, %asum_off, %wc_off, %c0, %c1, %c2, %c4, %c8, %c16, %c32, %c17, %c34, %k_kc, %k_astride, %k_wstride, %k_m, %k_n, %k_blocks, %k_wave, %k_wm, %fzero, %izero, %input_size, %output_size, %bounded_token_count, %nchunks, %kblocks, %col_tile, %row_tile, %tid, %wave, %is_q8, %is_symi5, %is_q4, %is_q4_packed) : (i1, i1, i1, i1, buffer, buffer, buffer, buffer, offset, offset, offset, offset, offset, offset, offset, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, vector<8xf32>, vector<8xi32>, index, index, index, index, index, index, index, index, index, i1, i1, i1, i1)
   template.return
 }
 

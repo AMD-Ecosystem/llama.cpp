@@ -5,6 +5,7 @@
 #include "dispatch_registration/immutable-program-resource.h"
 #include "ggml.h"
 #include "graph/graph-matcher.h"
+#include "graph/op-params.h"
 #include "iq-codebook-resource.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
 
@@ -1058,10 +1059,19 @@ static bool match_packed_q8_1_x4_prefill_dispatch(const DispatchMatchContext & c
                                                                     kMulMatQ5KIQ4XSQ8_1X4WmmaToken256Kernel, false);
     if (!match.matched() || !context.graph.has_index() ||
         (match.weight->type != GGML_TYPE_Q4_K && match.weight->type != GGML_TYPE_Q5_K &&
-         match.weight->type != GGML_TYPE_IQ4_XS) ||
+         match.weight->type != GGML_TYPE_IQ4_XS && match.weight->type != GGML_TYPE_Q8_0) ||
         match.token_count < 256 || match.token_count > 2048 || match.token_count % 256 != 0 ||
         match.input_size % 256 != 0 || match.output_size % 64 != 0) {
         return false;
+    }
+    if (match.weight->type == GGML_TYPE_Q8_0) {
+        const MulMatParams * precision = op_params_as<MulMatParams>(context.root_node->params);
+        if (precision != nullptr &&
+            (precision->prec != GGML_PREC_DEFAULT ||
+             (precision->src1_prec != GGML_PREC_UNDEFINED && precision->src1_prec != GGML_PREC_Q8 &&
+              precision->src1_prec != GGML_PREC_Q4))) {
+            return false;
+        }
     }
 
     for (const GraphNode * consumer : context.graph.index().consumers(match.output->id)) {
@@ -1092,8 +1102,9 @@ static bool match_packed_q8_1_x4_prefill_dispatch(const DispatchMatchContext & c
         }
     } else if (!common_prepare_q8_1_x4_input(
                    context, *match.input, match.input_size, match.token_count, dispatch_match, activation,
-                   match.weight->type == GGML_TYPE_Q4_K ? CommonQ8ActivationPolicy::AllowStandaloneQuantize :
-                                                 CommonQ8ActivationPolicy::ExistingAlternateOnly)) {
+                   match.weight->type == GGML_TYPE_Q4_K || match.weight->type == GGML_TYPE_Q8_0 ?
+                       CommonQ8ActivationPolicy::AllowStandaloneQuantize :
+                       CommonQ8ActivationPolicy::ExistingAlternateOnly)) {
         return false;
     }
 

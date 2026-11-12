@@ -42,6 +42,9 @@
       "path": "ops/copy/copy_f32.loom"
     },
     {
+      "path": "ops/copy/copy_bits.loom"
+    },
+    {
       "path": "ops/copy/copy_f32_f16.loom"
     },
     {
@@ -1060,6 +1063,49 @@
       "compile_dependencies": [
         "motifs/copy/convert_f32_f16.loom"
       ]
+    },
+    {
+      "name": "ggml_copy_bits",
+      "family": "loom_libs",
+      "symbol": "ggml_copy_bits",
+      "source": "ops/copy/copy_bits.loom",
+      "workload_parameters": [
+        {
+          "name": "element_count",
+          "type": "index"
+        },
+        {
+          "name": "source_span",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "element_count",
+          "type": "index"
+        },
+        {
+          "name": "source_span",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "source",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/copy/copy_bits.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
     },
     {
       "name": "ggml_copy_f32",

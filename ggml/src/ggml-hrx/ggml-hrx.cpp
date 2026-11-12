@@ -1198,9 +1198,12 @@ static bool supported_full_max_pool_1d_f32_tensor(const ggml_tensor * op) {
 }
 
 static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op) {
-    GGML_UNUSED(device);
     if (op == nullptr) {
         return false;
+    }
+    if (op->op == GGML_OP_REPEAT &&
+        ggml::hrx::can_execute_standalone_op_as_graph(op, device_context(device)->architecture)) {
+        return true;
     }
     if (zero_output_elision_supported(op)) {
         return true;

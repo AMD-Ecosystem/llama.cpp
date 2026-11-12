@@ -15,6 +15,7 @@ static constexpr uint64_t         kMaximumCopyElements = uint64_t{ 1 } << 30;
 static constexpr KernelCatalogRef kCopyF32Kernel       = GGML_HRX_KERNEL_REF("loom_libs", "ggml_copy_f32");
 static constexpr KernelCatalogRef kCopyStridedSourceF32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_copy_strided_source_f32");
+static constexpr KernelCatalogRef kCopyBitsKernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_copy_bits");
 static constexpr KernelCatalogRef kConcatDim0F32Kernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_concat_dim0_f32");
 static constexpr KernelCatalogRef kConcatDim0StridedSourceF32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_concat_dim0_strided_source_f32");
@@ -94,6 +95,60 @@ static bool make_copy_f32_dispatch(const Value & source, const Value & output, D
     dispatch.kernel.integer_parameters.emplace("element_count", source.element_count);
     dispatch.bindings.push_back({ source.storage_root, source.storage_offset, source_span });
     dispatch.bindings.push_back({ output.id, 0, output.byte_count });
+    return true;
+}
+
+static bool make_repeat_f32_dispatch(const Value & source, const Value & output, Dispatch & dispatch) {
+    if (source.type != GGML_TYPE_F32 || output.type != GGML_TYPE_F32 || !source.contiguous || !output.contiguous ||
+        source.element_count < 1 || output.element_count < 1 ||
+        static_cast<uint64_t>(source.element_count) > kMaximumCopyElements ||
+        static_cast<uint64_t>(output.element_count) > kMaximumCopyElements || source.storage == output.storage) {
+        return false;
+    }
+
+    for (int dim = 0; dim < GGML_MAX_DIMS; ++dim) {
+        if (source.ne[dim] < 1 || output.ne[dim] < 1 || output.ne[dim] % source.ne[dim] != 0 ||
+            source.nb[dim] <= 0 || source.nb[dim] % sizeof(float) != 0 ||
+            static_cast<uint64_t>(source.nb[dim] / sizeof(float)) > kMaximumCopyElements) {
+            return false;
+        }
+    }
+
+    dispatch.kernel = make_kernel_specialization(kCopyBitsKernel);
+    dispatch.kernel.integer_parameters.emplace("element_count", output.element_count);
+    dispatch.kernel.integer_parameters.emplace("source_span", source.element_count);
+    auto & config = dispatch.kernel.compile_parameters;
+    config.emplace("ggml.copy_bits.element_bits", std::to_string(sizeof(float) * 8));
+    for (int dim = 0; dim < GGML_MAX_DIMS; ++dim) {
+        if (dim < 3) {
+            config.emplace("ggml.copy_bits.ne" + std::to_string(dim), std::to_string(output.ne[dim]));
+        }
+        config.emplace("ggml.copy_bits.source_ne" + std::to_string(dim), std::to_string(source.ne[dim]));
+        config.emplace("ggml.copy_bits.stride" + std::to_string(dim),
+                       std::to_string(source.nb[dim] / sizeof(float)));
+    }
+    dispatch.bindings = {
+        { source.storage_root, source.storage_offset, source.byte_count },
+        { output.id, 0, output.byte_count }
+    };
+    return true;
+}
+
+static bool match_repeat_f32_dispatch(const DispatchMatchContext & context, DispatchMatch & match) {
+    const GraphNode * node = context.root_node;
+    if (node == nullptr || node->op != GGML_OP_REPEAT || node->inputs.size() != 1) {
+        return false;
+    }
+
+    const Value * source = graph_value(context.graph, node->inputs[0]);
+    const Value * output = graph_value(context.graph, node->output);
+    Dispatch      dispatch;
+    if (source == nullptr || output == nullptr || !make_repeat_f32_dispatch(*source, *output, dispatch)) {
+        return false;
+    }
+
+    match.covered_nodes.push_back(context.root_index);
+    match.dispatches.push_back(std::move(dispatch));
     return true;
 }
 
@@ -210,6 +265,8 @@ static bool match_concat_dim0_f32_dispatch(const DispatchMatchContext & context,
 }  // namespace
 
 void register_copy_dispatch(DispatchRegistryBuilder & registry) {
+    registry.add({ "common.repeat_f32", GGML_OP_REPEAT, DispatchMatchKind::SingleOp, 0, DispatchSource::Common,
+                   match_repeat_f32_dispatch });
     registry.add({
         "common.copy_f32",
         GGML_OP_CPY,
