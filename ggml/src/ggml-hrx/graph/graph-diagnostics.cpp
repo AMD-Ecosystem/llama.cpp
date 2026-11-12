@@ -107,6 +107,13 @@ json op_params_json(const OpParams & params) {
                 return {
                     { "kind", "none" }
                 };
+            } else if constexpr (std::is_same_v<T, MulMatParams>) {
+                return {
+                    { "kind",      "mul_mat"                        },
+                    { "prec",      static_cast<int>(value.prec)      },
+                    { "hint",      static_cast<int>(value.hint)      },
+                    { "src1_prec", static_cast<int>(value.src1_prec) },
+                };
             } else if constexpr (std::is_same_v<T, RmsNormParams>) {
                 return {
                     { "kind", "rms_norm" },
@@ -180,6 +187,13 @@ json op_params_json(const OpParams & params) {
 
 OpParams parse_op_params(const json & item) {
     const std::string kind = item.value("kind", "none");
+    if (kind == "mul_mat") {
+        return MulMatParams{
+            static_cast<ggml_prec>(item.at("prec").get<int>()),
+            static_cast<ggml_op_hint>(item.at("hint").get<int>()),
+            static_cast<ggml_prec>(item.at("src1_prec").get<int>()),
+        };
+    }
     if (kind == "rms_norm") {
         return RmsNormParams{ item.value("eps", 0.0f) };
     }

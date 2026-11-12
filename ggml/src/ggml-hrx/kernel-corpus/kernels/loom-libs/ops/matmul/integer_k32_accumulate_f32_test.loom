@@ -1,0 +1,216 @@
+// Link with integer_k32_accumulate_f32.loom and paired_glu_f32.loom.
+// Two K32 groups exercise nonzero recurrence, signed/unsigned RHS and affine
+// metadata. Separate gate/up weights and scales catch projection or lane swaps.
+// The scalar reference has no fragments and applies GLU only after all of K.
+template.decl @ggml.matmul.integer_k32.accumulate_f32(%signed_rhs: i1, %lhs0: vector<4xi32>, %lhs1: vector<4xi32>, %rhs0: vector<4xi32>, %rhs1: vector<4xi32>, %zero: vector<8xi32>, %activation_scale: vector<8xf32>, %weight_scale: vector<8xf32>, %activation_sum: vector<8xf32>, %weight_correction: vector<8xf32>, %accumulator: vector<8xf32>) -> (vector<8xf32>)
+
+template.decl @ggml.matmul.swiglu.apply_vector8(%gate: vector<8xf32>, %up: vector<8xf32>) -> (vector<8xf32>)
+
+template.decl @ggml.matmul.geglu.apply_vector8(%gate: vector<8xf32>, %up: vector<8xf32>) -> (vector<8xf32>)
+
+amdgpu.target<gfx11-generic> @test_wave32 {subgroup_size = 32}
+
+config.decl @test.signed_rhs : %value: index where [range(%value, 0, 1)]
+
+kernel.def target(@test_wave32) @integer_k32_fused() {
+  %unit = index.constant 1 : index
+  %threads = index.constant 32 : index
+  kernel.launch.config workgroups(%unit, %unit, %unit) workgroup_size(%threads, %unit, %unit) : index
+} launch(%activation: buffer, %gate_weight: buffer, %up_weight: buffer, %activation_scale: buffer, %gate_scale: buffer, %up_scale: buffer, %activation_sum: buffer, %gate_correction: buffer, %up_correction: buffer, %plain: buffer, %swiglu: buffer, %geglu: buffer) {
+  %base = index.constant 0 : offset
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %signed_flag = config.get @test.signed_rhs : index
+  %signed_rhs = index.cmp ne, %signed_flag, %c0 : index
+  %activation_view = buffer.view %activation[%base] : buffer -> view<16x64xi8>
+  %gate_view = buffer.view %gate_weight[%base] : buffer -> view<64x16xi8>
+  %up_view = buffer.view %up_weight[%base] : buffer -> view<64x16xi8>
+  %plain_view = buffer.view %plain[%base] : buffer -> view<16x16xf32>
+  %swiglu_view = buffer.view %swiglu[%base] : buffer -> view<16x16xf32>
+  %geglu_view = buffer.view %geglu[%base] : buffer -> view<16x16xf32>
+  %signed_schema = encoding.define #encoding.operand<element_format=i8, payload_elements=16, payload_registers=4> : encoding<schema>
+  %unsigned_schema = encoding.define #encoding.operand<element_format=u8, payload_elements=16, payload_registers=4> : encoding<schema>
+  %rhs_schema = scf.select %signed_rhs, %signed_schema, %unsigned_schema : encoding<schema>
+  %row_scale = encoding.layout.strided [2, 0] : encoding<layout>
+  %column_scale = encoding.layout.strided [0, 2] : encoding<layout>
+  %izero_raw = vector.splati 0 : vector<8xi32>
+  %izero = vector.fragment<init> %izero_raw shape [%c16, %c16] : vector<8xi32>
+  %fzero = vector.splatf 0.0 : vector<8xf32>
+  %gate, %up = scf.for %group = [%c0 to %c2 step %c1](%gate_acc = %fzero : vector<8xf32>, %up_acc = %fzero : vector<8xf32>) -> (vector<8xf32>, vector<8xf32>) {
+    %k0 = index.mul %group, %c32 : index
+    %k1 = index.add %k0, %c16 : index
+    %float_bytes = index.constant 4 : offset
+    %metadata_offset = index.scale %group, %float_bytes : index, offset -> offset
+    %activation_scale_view = buffer.view %activation_scale[%metadata_offset] : buffer -> view<16x16xf32, %row_scale>
+    %activation_scale_fragment = vector.fragment.load<result> %activation_scale_view[%c0, %c0] shape [%c16, %c16] : view<16x16xf32, %row_scale> -> vector<8xf32>
+    %gate_scale_view = buffer.view %gate_scale[%metadata_offset] : buffer -> view<16x16xf32, %column_scale>
+    %gate_scale_fragment = vector.fragment.load<result> %gate_scale_view[%c0, %c0] shape [%c16, %c16] : view<16x16xf32, %column_scale> -> vector<8xf32>
+    %up_scale_view = buffer.view %up_scale[%metadata_offset] : buffer -> view<16x16xf32, %column_scale>
+    %up_scale_fragment = vector.fragment.load<result> %up_scale_view[%c0, %c0] shape [%c16, %c16] : view<16x16xf32, %column_scale> -> vector<8xf32>
+    %activation_sum_view = buffer.view %activation_sum[%metadata_offset] : buffer -> view<16x16xf32, %row_scale>
+    %activation_sum_fragment = vector.fragment.load<result> %activation_sum_view[%c0, %c0] shape [%c16, %c16] : view<16x16xf32, %row_scale> -> vector<8xf32>
+    %gate_correction_view = buffer.view %gate_correction[%metadata_offset] : buffer -> view<16x16xf32, %column_scale>
+    %gate_correction_fragment = vector.fragment.load<result> %gate_correction_view[%c0, %c0] shape [%c16, %c16] : view<16x16xf32, %column_scale> -> vector<8xf32>
+    %up_correction_view = buffer.view %up_correction[%metadata_offset] : buffer -> view<16x16xf32, %column_scale>
+    %up_correction_fragment = vector.fragment.load<result> %up_correction_view[%c0, %c0] shape [%c16, %c16] : view<16x16xf32, %column_scale> -> vector<8xf32>
+    %activation0_raw = vector.fragment.load<lhs> %activation_view[%c0, %k0] shape [%c16, %c16] : view<16x64xi8> -> vector<16xi8>
+    %activation0_words = vector.bitcast %activation0_raw : vector<16xi8> to vector<4xi32>
+    %activation0 = vector.fragment<lhs> %activation0_words shape [%c16, %c16] using {schema = %signed_schema : encoding<schema>} : vector<4xi32>
+    %activation1_raw = vector.fragment.load<lhs> %activation_view[%c0, %k1] shape [%c16, %c16] : view<16x64xi8> -> vector<16xi8>
+    %activation1_words = vector.bitcast %activation1_raw : vector<16xi8> to vector<4xi32>
+    %activation1 = vector.fragment<lhs> %activation1_words shape [%c16, %c16] using {schema = %signed_schema : encoding<schema>} : vector<4xi32>
+    %gate0_raw = vector.fragment.load<rhs> %gate_view[%k0, %c0] shape [%c16, %c16] : view<64x16xi8> -> vector<16xi8>
+    %gate0_words = vector.bitcast %gate0_raw : vector<16xi8> to vector<4xi32>
+    %gate0 = vector.fragment<rhs> %gate0_words shape [%c16, %c16] using {schema = %rhs_schema : encoding<schema>} : vector<4xi32>
+    %gate1_raw = vector.fragment.load<rhs> %gate_view[%k1, %c0] shape [%c16, %c16] : view<64x16xi8> -> vector<16xi8>
+    %gate1_words = vector.bitcast %gate1_raw : vector<16xi8> to vector<4xi32>
+    %gate1 = vector.fragment<rhs> %gate1_words shape [%c16, %c16] using {schema = %rhs_schema : encoding<schema>} : vector<4xi32>
+    %up0_raw = vector.fragment.load<rhs> %up_view[%k0, %c0] shape [%c16, %c16] : view<64x16xi8> -> vector<16xi8>
+    %up0_words = vector.bitcast %up0_raw : vector<16xi8> to vector<4xi32>
+    %up0 = vector.fragment<rhs> %up0_words shape [%c16, %c16] using {schema = %rhs_schema : encoding<schema>} : vector<4xi32>
+    %up1_raw = vector.fragment.load<rhs> %up_view[%k1, %c0] shape [%c16, %c16] : view<64x16xi8> -> vector<16xi8>
+    %up1_words = vector.bitcast %up1_raw : vector<16xi8> to vector<4xi32>
+    %up1 = vector.fragment<rhs> %up1_words shape [%c16, %c16] using {schema = %rhs_schema : encoding<schema>} : vector<4xi32>
+    %gate_next = template.apply<@ggml.matmul.integer_k32.accumulate_f32>(%signed_rhs, %activation0, %activation1, %gate0, %gate1, %izero, %activation_scale_fragment, %gate_scale_fragment, %activation_sum_fragment, %gate_correction_fragment, %gate_acc) : (i1, vector<4xi32>, vector<4xi32>, vector<4xi32>, vector<4xi32>, vector<8xi32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) -> (vector<8xf32>)
+    %up_next = template.apply<@ggml.matmul.integer_k32.accumulate_f32>(%signed_rhs, %activation0, %activation1, %up0, %up1, %izero, %activation_scale_fragment, %up_scale_fragment, %activation_sum_fragment, %up_correction_fragment, %up_acc) : (i1, vector<4xi32>, vector<4xi32>, vector<4xi32>, vector<4xi32>, vector<8xi32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) -> (vector<8xf32>)
+    scf.yield %gate_next, %up_next : vector<8xf32>, vector<8xf32>
+  }
+  vector.fragment.store<result> %gate, %plain_view[%c0, %c0] shape [%c16, %c16] : vector<8xf32>, view<16x16xf32>
+  %swiglu_result = template.apply<@ggml.matmul.swiglu.apply_vector8>(%gate, %up) : (vector<8xf32>, vector<8xf32>) -> (vector<8xf32>)
+  vector.fragment.store<result> %swiglu_result, %swiglu_view[%c0, %c0] shape [%c16, %c16] : vector<8xf32>, view<16x16xf32>
+  %geglu_result = template.apply<@ggml.matmul.geglu.apply_vector8>(%gate, %up) : (vector<8xf32>, vector<8xf32>) -> (vector<8xf32>)
+  vector.fragment.store<result> %geglu_result, %geglu_view[%c0, %c0] shape [%c16, %c16] : vector<8xf32>, view<16x16xf32>
+  kernel.return
+}
+
+kernel.def target(@test_wave32) @integer_k32_scalar_reference() {
+  %unit = index.constant 1 : index
+  %threads = index.constant 256 : index
+  kernel.launch.config workgroups(%unit, %unit, %unit) workgroup_size(%threads, %unit, %unit) : index
+} launch(%activation: buffer, %gate_weight: buffer, %up_weight: buffer, %activation_scale: buffer, %gate_scale: buffer, %up_scale: buffer, %activation_sum: buffer, %gate_correction: buffer, %up_correction: buffer, %plain: buffer, %swiglu: buffer, %geglu: buffer) {
+  %base = index.constant 0 : offset
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %signed_flag = config.get @test.signed_rhs : index
+  %signed_rhs = index.cmp ne, %signed_flag, %c0 : index
+  %activation_view = buffer.view %activation[%base] : buffer -> view<16x64xi8>
+  %gate_view = buffer.view %gate_weight[%base] : buffer -> view<64x16xi8>
+  %up_view = buffer.view %up_weight[%base] : buffer -> view<64x16xi8>
+  %plain_view = buffer.view %plain[%base] : buffer -> view<16x16xf32>
+  %swiglu_view = buffer.view %swiglu[%base] : buffer -> view<16x16xf32>
+  %geglu_view = buffer.view %geglu[%base] : buffer -> view<16x16xf32>
+  %tid = kernel.workitem.id<x> : index
+  %row = index.div %tid, %c16 : index
+  %column = index.rem %tid, %c16 : index
+  %izero = scalar.constant 0 : i32
+  %fzero = scalar.constant 0.0 : f32
+  %activation_scale_view = buffer.view %activation_scale[%base] : buffer -> view<16x2xf32>
+  %gate_scale_view = buffer.view %gate_scale[%base] : buffer -> view<16x2xf32>
+  %up_scale_view = buffer.view %up_scale[%base] : buffer -> view<16x2xf32>
+  %activation_sum_view = buffer.view %activation_sum[%base] : buffer -> view<16x2xf32>
+  %gate_correction_view = buffer.view %gate_correction[%base] : buffer -> view<16x2xf32>
+  %up_correction_view = buffer.view %up_correction[%base] : buffer -> view<16x2xf32>
+  %gate, %up = scf.for %group = [%c0 to %c2 step %c1](%gate_acc = %fzero : f32, %up_acc = %fzero : f32) -> (f32, f32) {
+    %group_k = index.mul %group, %c32 : index
+    %gate_dot, %up_dot = scf.for %part = [%c0 to %c32 step %c1](%gate_sum = %izero : i32, %up_sum = %izero : i32) -> (i32, i32) {
+      %k = index.add %group_k, %part : index
+      %a_byte = view.load %activation_view[%row, %k] : view<16x64xi8> -> i8
+      %a = scalar.extsi %a_byte : i8 to i32
+      %gate_byte = view.load %gate_view[%k, %column] : view<64x16xi8> -> i8
+      %gate_signed = scalar.extsi %gate_byte : i8 to i32
+      %gate_unsigned = scalar.extui %gate_byte : i8 to i32
+      %gate_code = scf.select %signed_rhs, %gate_signed, %gate_unsigned : i32
+      %gate_product = scalar.muli %a, %gate_code : i32
+      %gate_next = scalar.addi %gate_sum, %gate_product : i32
+      %up_byte = view.load %up_view[%k, %column] : view<64x16xi8> -> i8
+      %up_signed = scalar.extsi %up_byte : i8 to i32
+      %up_unsigned = scalar.extui %up_byte : i8 to i32
+      %up_code = scf.select %signed_rhs, %up_signed, %up_unsigned : i32
+      %up_product = scalar.muli %a, %up_code : i32
+      %up_next = scalar.addi %up_sum, %up_product : i32
+      scf.yield %gate_next, %up_next : i32, i32
+    }
+    %activation_scale_value = view.load %activation_scale_view[%row, %group] : view<16x2xf32> -> f32
+    %gate_scale_value = view.load %gate_scale_view[%column, %group] : view<16x2xf32> -> f32
+    %up_scale_value = view.load %up_scale_view[%column, %group] : view<16x2xf32> -> f32
+    %activation_sum_value = view.load %activation_sum_view[%row, %group] : view<16x2xf32> -> f32
+    %gate_correction_value = view.load %gate_correction_view[%column, %group] : view<16x2xf32> -> f32
+    %up_correction_value = view.load %up_correction_view[%column, %group] : view<16x2xf32> -> f32
+    %gate_float = scalar.sitofp %gate_dot : i32 to f32
+    %gate_affine = scalar.fmaf %activation_sum_value, %gate_correction_value, %gate_acc : f32
+    %gate_base = scf.select %signed_rhs, %gate_acc, %gate_affine : f32
+    %gate_product_scale = scalar.mulf %activation_scale_value, %gate_scale_value : f32
+    %gate_next = scalar.fmaf %gate_float, %gate_product_scale, %gate_base : f32
+    %up_float = scalar.sitofp %up_dot : i32 to f32
+    %up_affine = scalar.fmaf %activation_sum_value, %up_correction_value, %up_acc : f32
+    %up_base = scf.select %signed_rhs, %up_acc, %up_affine : f32
+    %up_product_scale = scalar.mulf %activation_scale_value, %up_scale_value : f32
+    %up_next = scalar.fmaf %up_float, %up_product_scale, %up_base : f32
+    scf.yield %gate_next, %up_next : f32, f32
+  }
+  view.store %gate, %plain_view[%row, %column] : f32, view<16x16xf32>
+  %one = scalar.constant 1.0 : f32
+  %negative_gate = scalar.negf %gate : f32
+  %exp_gate = scalar.expf<afn> %negative_gate : f32
+  %denominator = scalar.addf %one, %exp_gate : f32
+  %silu = scalar.divf %gate, %denominator : f32
+  %swiglu_value = scalar.mulf %silu, %up : f32
+  view.store %swiglu_value, %swiglu_view[%row, %column] : f32, view<16x16xf32>
+  %half = scalar.constant 0.5 : f32
+  %coefficient = scalar.constant 0.044714999999999998 : f32
+  %sqrt_2_over_pi = scalar.constant 0.79788456080286541 : f32
+  %gate_squared = scalar.mulf %gate, %gate : f32
+  %cubic_factor = scalar.mulf %coefficient, %gate_squared : f32
+  %polynomial = scalar.addf %one, %cubic_factor : f32
+  %scaled_gate = scalar.mulf %gate, %polynomial : f32
+  %inner = scalar.mulf %sqrt_2_over_pi, %scaled_gate : f32
+  %tanh = scalar.tanhf<afn> %inner : f32
+  %one_plus = scalar.addf %one, %tanh : f32
+  %half_gate = scalar.mulf %half, %gate : f32
+  %gelu = scalar.mulf %half_gate, %one_plus : f32
+  %geglu_value = scalar.mulf %gelu, %up : f32
+  view.store %geglu_value, %geglu_view[%row, %column] : f32, view<16x16xf32>
+  kernel.return
+}
+
+check.case public @integer_k32_consumers {
+  check.requires<hal.amdgpu.target> {target = "gfx11-generic"}
+  %seed_0 = check.param.seed base(1701) count(4) name("seed_0") : i64
+  %activation = check.generate.random.uniform seed(%seed_0) range(-128 to 127) : tensor<16x64xi8>
+  %seed_1 = check.param.seed base(1801) count(1) name("seed_1") : i64
+  %gate_weight = check.generate.random.uniform seed(%seed_1) range(-128 to 127) : tensor<64x16xi8>
+  %seed_2 = check.param.seed base(1901) count(1) name("seed_2") : i64
+  %up_weight = check.generate.random.uniform seed(%seed_2) range(-128 to 127) : tensor<64x16xi8>
+  %seed_3 = check.param.seed base(2001) count(1) name("seed_3") : i64
+  %activation_scale = check.generate.random.uniform seed(%seed_3) range(0.001 to 0.01) : tensor<16x2xf32>
+  %seed_4 = check.param.seed base(2101) count(1) name("seed_4") : i64
+  %gate_scale = check.generate.random.uniform seed(%seed_4) range(0.001 to 0.01) : tensor<16x2xf32>
+  %seed_5 = check.param.seed base(2201) count(1) name("seed_5") : i64
+  %up_scale = check.generate.random.uniform seed(%seed_5) range(0.001 to 0.01) : tensor<16x2xf32>
+  %seed_6 = check.param.seed base(2301) count(1) name("seed_6") : i64
+  %activation_sum = check.generate.random.uniform seed(%seed_6) range(-0.25 to 0.25) : tensor<16x2xf32>
+  %seed_7 = check.param.seed base(2401) count(1) name("seed_7") : i64
+  %gate_correction = check.generate.random.uniform seed(%seed_7) range(-0.25 to 0.25) : tensor<16x2xf32>
+  %seed_8 = check.param.seed base(2501) count(1) name("seed_8") : i64
+  %up_correction = check.generate.random.uniform seed(%seed_8) range(-0.25 to 0.25) : tensor<16x2xf32>
+  %plain = check.generate.fill value(0.0) : tensor<16x16xf32>
+  %plain_expected = check.generate.fill value(0.0) : tensor<16x16xf32>
+  %swiglu = check.generate.fill value(0.0) : tensor<16x16xf32>
+  %swiglu_expected = check.generate.fill value(0.0) : tensor<16x16xf32>
+  %geglu = check.generate.fill value(0.0) : tensor<16x16xf32>
+  %geglu_expected = check.generate.fill value(0.0) : tensor<16x16xf32>
+  kernel.launch @integer_k32_fused(%activation, %gate_weight, %up_weight, %activation_scale, %gate_scale, %up_scale, %activation_sum, %gate_correction, %up_correction, %plain, %swiglu, %geglu) : (tensor<16x64xi8>, tensor<64x16xi8>, tensor<64x16xi8>, tensor<16x2xf32>, tensor<16x2xf32>, tensor<16x2xf32>, tensor<16x2xf32>, tensor<16x2xf32>, tensor<16x2xf32>, tensor<16x16xf32>, tensor<16x16xf32>, tensor<16x16xf32>)
+  kernel.launch @integer_k32_scalar_reference(%activation, %gate_weight, %up_weight, %activation_scale, %gate_scale, %up_scale, %activation_sum, %gate_correction, %up_correction, %plain_expected, %swiglu_expected, %geglu_expected) : (tensor<16x64xi8>, tensor<64x16xi8>, tensor<64x16xi8>, tensor<16x2xf32>, tensor<16x2xf32>, tensor<16x2xf32>, tensor<16x2xf32>, tensor<16x2xf32>, tensor<16x2xf32>, tensor<16x16xf32>, tensor<16x16xf32>, tensor<16x16xf32>)
+  check.expect.approximate actual(%plain) expected(%plain_expected) atol(2.0000000000000002e-05) rtol(2.0000000000000002e-05) nan(same) : tensor<16x16xf32>, tensor<16x16xf32>
+  check.expect.approximate actual(%swiglu) expected(%swiglu_expected) atol(2.0000000000000002e-05) rtol(2.0000000000000002e-05) nan(same) : tensor<16x16xf32>, tensor<16x16xf32>
+  check.expect.approximate actual(%geglu) expected(%geglu_expected) atol(2.0000000000000002e-05) rtol(2.0000000000000002e-05) nan(same) : tensor<16x16xf32>, tensor<16x16xf32>
+  check.return
+}
+
+check.benchmark<@integer_k32_consumers> @integer_k32_fused_consumers
