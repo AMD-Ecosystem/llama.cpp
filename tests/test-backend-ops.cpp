@@ -8974,6 +8974,37 @@ struct test_flash_attn_ext : public test_case {
     }
 };
 
+// Exercise all mask classes, query tails, GQA, and batch-specific masks.
+struct test_rdna_prefill_attention : public test_flash_attn_ext {
+    const int mask_kind;
+    test_rdna_prefill_attention(int d, int queries, int keys, int gqa, int batches, int mask_kind)
+        : test_flash_attn_ext(d, d, 2, {gqa, batches}, keys, queries, mask_kind >= 0, false,
+                             0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16), mask_kind(mask_kind) {}
+    std::string op_desc(ggml_tensor *) override { return "RDNA_PREFILL_ATTN"; }
+    std::string vars() override { return test_flash_attn_ext::vars() + "," + VAR_TO_STR(mask_kind); }
+    void initialize_tensors(ggml_context * ctx) override {
+        test_flash_attn_ext::initialize_tensors(ctx);
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "m") != 0) { continue; }
+            std::vector<ggml_fp16_t> values(ggml_nelements(t));
+            for (int64_t b = 0; b < t->ne[3]; ++b) {
+                for (int64_t q = 0; q < t->ne[1]; ++q) {
+                    for (int64_t k = 0; k < t->ne[0]; ++k) {
+                        float v = 0.0f;
+                        const int64_t past = kv - nb;
+                        if (mask_kind == 1 && k > past + q) { v = -INFINITY; }
+                        if (mask_kind == 2 && (k > past + q || k + 64 < past + q)) { v = -INFINITY; }
+                        if (mask_kind == 3) { v = (k + q + b) % 7 == 0 ? -INFINITY : -0.125f * ((k + b) % 4); }
+                        if (mask_kind == 4) { v = k < 64 ? -0.0f : -INFINITY; }
+                        values[(b*t->ne[1] + q)*t->ne[0] + k] = ggml_fp32_to_fp16(v);
+                    }
+                }
+            }
+            ggml_backend_tensor_set(t, values.data(), 0, values.size()*sizeof(values[0]));
+        }
+    }
+};
+
 // large Q values, so the online softmax has to rescale the partial results
 struct test_flash_attn_ext_large_logits : public test_flash_attn_ext {
     static constexpr int q_range = 20;
@@ -10514,6 +10545,20 @@ static void add_rdna35_mmq_cases(std::vector<std::unique_ptr<test_case>> & test_
 // Test cases for evaluation: should try to cover edge cases while using small input sizes to keep the runtime low
 static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     std::vector<std::unique_ptr<test_case>> test_cases;
+
+    for (int d : {64, 128, 256}) {
+        for (int mask_kind : {0, 1, 2, 3, 4}) {
+            test_cases.emplace_back(new test_rdna_prefill_attention(d, 129, 272, 4, 1, mask_kind));
+            test_cases.emplace_back(new test_rdna_prefill_attention(d, 64, 128, 1, 2, mask_kind));
+        }
+    }
+    for (int d : {64, 72, 80}) {
+        test_cases.emplace_back(new test_rdna_prefill_attention(d, 129, 197, 1, 1, -1));
+        test_cases.emplace_back(new test_rdna_prefill_attention(d, 64, 64, 1, 2, -1));
+    }
+    // Small query counts retain the existing dispatch.
+    test_cases.emplace_back(new test_rdna_prefill_attention(128, 1, 128, 4, 1, 1));
+
     std::default_random_engine rng(0);
 
     for (ggml_type type : { GGML_TYPE_F16, GGML_TYPE_BF16 }) {
