@@ -8601,6 +8601,71 @@
       ]
     },
     {
+      "name": "ggml_mul_mat_skinny_input_f32_iq3_xxs_publish_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_skinny_input_f32_iq3_xxs_publish_f32",
+      "source": "ops/matmul/skinny_input_f32_publish_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "codebook",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul/skinny_input_f32_publish_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul/skinny_input_f32_dequant_accumulate_f32.loom",
+          "motifs/matmul/skinny_postprocess_f32.loom",
+          "motifs/matmul/skinny_publish_f32.loom",
+          "motifs/dequant.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul/skinny_input_f32_dequant_accumulate_f32.loom",
+        "motifs/matmul/skinny_postprocess_f32.loom",
+        "motifs/matmul/skinny_publish_f32.loom",
+        "motifs/dequant.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
       "name": "ggml_mul_mat_skinny_input_f32_bias_residual_publish_f32",
       "family": "loom_libs",
       "symbol": "ggml_mul_mat_skinny_input_f32_bias_residual_publish_f32",

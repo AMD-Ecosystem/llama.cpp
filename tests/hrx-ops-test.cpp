@@ -6417,7 +6417,11 @@ static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
     if (weight_type == GGML_TYPE_IQ3_XXS) {
         // CPU matmul quantizes activations; scalar dequantization isolates the GPU error.
         const auto scalar_reference = f32_matmul_reference(weight_type, weight, input, input_size, output_size, token_count);
-        require_reference_close(get_f32_tensor(hrx_backend, hrx_output), scalar_reference, 0.0f);
+        const auto actual = get_f32_tensor(hrx_backend, hrx_output);
+        require_reference_close(actual, scalar_reference, 0.0f);
+        if (token_count >= 2 && token_count <= 5) {
+            require_close(actual, scalar_reference, 2.0e-5f, 2.0e-5f);
+        }
     }
 
     ggml_backend_buffer_free(cpu_buffer);
@@ -6574,7 +6578,9 @@ static void run_dense_matmul_unary_cpu_reference_case(ggml_type    weight_type,
     REQUIRE(cpu_buffer != nullptr);
     REQUIRE(hrx_buffer != nullptr);
 
-    const std::vector<uint8_t> weight(ggml_nbytes(cpu_weight), 0);
+    const std::vector<uint8_t> weight = weight_type == GGML_TYPE_IQ3_XXS ?
+        make_matmul_weight_bytes(weight_type, input_size, output_size, 6) :
+        std::vector<uint8_t>(ggml_nbytes(cpu_weight), 0);
     const std::vector<float>   input = make_pattern_f32(input_size * token_count, 7, 0.01f);
     set_tensor_pair_bytes(cpu_backend, cpu_weight, hrx_backend, hrx_weight, weight.data(), weight.size());
     set_tensor_pair_bytes(cpu_backend, cpu_input, hrx_backend, hrx_input, input.data(), input.size() * sizeof(float));
@@ -6584,6 +6590,15 @@ static void run_dense_matmul_unary_cpu_reference_case(ggml_type    weight_type,
     ggml_backend_synchronize(cpu_backend);
     ggml_backend_synchronize(hrx_backend);
     require_close(get_f32_tensor(hrx_backend, hrx_output), get_f32_tensor(cpu_backend, cpu_output), 1.0e-1f, 3.0e-2f);
+    if (weight_type == GGML_TYPE_IQ3_XXS) {
+        auto reference = f32_matmul_reference(weight_type, weight, input, input_size, output_size, token_count);
+        for (float & value : reference) {
+            value *= value;
+        }
+        const auto actual = get_f32_tensor(hrx_backend, hrx_output);
+        require_reference_close(actual, reference, 0.0f);
+        require_close(actual, reference, 2.0e-5f, 2.0e-5f);
+    }
 
     ggml_backend_buffer_free(cpu_buffer);
     ggml_backend_buffer_free(hrx_buffer);
@@ -9544,10 +9559,29 @@ static void register_dense_matmul_cases(Suite & suite) {
                                   (source == TestWeightSource::Imported ? ".imported" : ".uploaded"), [tokens, source] {
                 run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ3_XXS,
                     tokens == 1 ? "loom_libs:ggml_mul_mat_vector_iq3_xxs_f32_f32" :
+                    tokens <= 5 ? "loom_libs:ggml_mul_mat_skinny_input_f32_iq3_xxs_publish_f32" :
                                   "loom_libs:ggml_mul_mat_tiled_input_f32_iq3_xxs_publish_f32",
                     tokens, 4096, 2048, false, false, GGML_TYPE_COUNT, false, source);
             });
         }
+    }
+    for (const int64_t tokens : { 2, 3, 4, 5 }) {
+        for (const int64_t inputs : { 256, 4096 }) {
+            for (const int64_t outputs : { 1, 47, 65 }) {
+                suite.device_case("dense_matmul.iq3_xxs.skinny.tokens" + std::to_string(tokens) +
+                                      ".inputs" + std::to_string(inputs) + ".outputs" + std::to_string(outputs),
+                                  [tokens, inputs, outputs] {
+                    run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ3_XXS,
+                        "loom_libs:ggml_mul_mat_skinny_input_f32_iq3_xxs_publish_f32", tokens, outputs, inputs);
+                });
+            }
+        }
+    }
+    for (const int64_t tokens : { 2, 5 }) {
+        suite.device_case("dense_matmul.iq3_xxs.skinny_unary.tokens" + std::to_string(tokens), [tokens] {
+            run_dense_matmul_unary_cpu_reference_case(GGML_TYPE_IQ3_XXS,
+                "loom_libs:ggml_mul_mat_skinny_input_f32_iq3_xxs_publish_f32", tokens, 65, 2048);
+        });
     }
     for (const ggml_type type : { GGML_TYPE_IQ2_S, GGML_TYPE_IQ3_S }) {
         const char * vector_kernel = type == GGML_TYPE_IQ2_S ?
