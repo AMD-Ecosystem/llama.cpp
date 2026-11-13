@@ -1274,7 +1274,12 @@ Status HostTransferManager::upload_synchronous(hrx_stream_t stream,
         status.log("synchronize before HRX host upload failed: %s", error->c_str());
         return status;
     }
-    if (ErrorResult error = take_status(hrx_synchronous_h2d(device, host_source, destination, offset, size))) {
+    hrx_queue_t queue = nullptr;
+    if (ErrorResult error = find_transfer_queue(device, queue)) {
+        status.log("query HRX upload queue failed: %s", error->c_str());
+        return status;
+    }
+    if (ErrorResult error = take_status(hrx_synchronous_h2d(queue, host_source, destination, offset, size))) {
         status.log("synchronous HRX host upload failed: %s", error->c_str());
         return status;
     }
@@ -1345,7 +1350,12 @@ Status HostTransferManager::download_synchronous(hrx_stream_t stream,
         status.log("synchronize before HRX host download failed: %s", error->c_str());
         return status;
     }
-    if (ErrorResult error = take_status(hrx_synchronous_d2h(device, source, offset, host_destination, size))) {
+    hrx_queue_t queue = nullptr;
+    if (ErrorResult error = find_transfer_queue(device, queue)) {
+        status.log("query HRX download queue failed: %s", error->c_str());
+        return status;
+    }
+    if (ErrorResult error = take_status(hrx_synchronous_d2h(queue, source, offset, host_destination, size))) {
         status.log("synchronous HRX host download failed: %s", error->c_str());
         return status;
     }
