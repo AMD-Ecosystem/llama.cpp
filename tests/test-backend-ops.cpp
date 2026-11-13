@@ -3892,21 +3892,23 @@ struct test_norm_mul_add : public test_case {
     bool run_whole_graph() override { return true; }
 
     std::string vars() override {
-        return VARS_TO_STR4(type, ne, eps, broadcast);
+        return VARS_TO_STR4(type, ne, eps, broadcast) + "," + VARS_TO_STR2(vector_affine, extra_consumer);
     }
+
+    const bool vector_affine, extra_consumer;
 
     test_norm_mul_add(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = {128, 2, 1, 1},
             float eps = 1e-5f,
-            bool broadcast = false)
-        : type(type), ne(ne), eps(eps), broadcast(broadcast) {}
+            bool broadcast = false, bool vector_affine = false, bool extra_consumer = false)
+        : type(type), ne(ne), eps(eps), broadcast(broadcast), vector_affine(vector_affine), extra_consumer(extra_consumer) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         std::array<int64_t, 4> broadcast_dims = {ne[0], ne[1] * 2, ne[2] * 2, ne[3] * 2};
 
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, broadcast ? broadcast_dims.data() : ne.data());
-        ggml_tensor * w = ggml_new_tensor(ctx, type, 4, ne.data());
-        ggml_tensor * b = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_tensor * w = vector_affine ? ggml_new_tensor_1d(ctx, type, ne[0]) : ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_tensor * b = vector_affine ? ggml_new_tensor_1d(ctx, type, ne[0]) : ggml_new_tensor(ctx, type, 4, ne.data());
         ggml_set_param(a); ggml_set_param(w); ggml_set_param(b);
         ggml_set_name(a, "a"); ggml_set_name(w, "w"); ggml_set_name(b, "b");
 
@@ -3917,7 +3919,7 @@ struct test_norm_mul_add : public test_case {
         ggml_tensor * m = ggml_mul(ctx, n, w);
         ggml_tensor * out = ggml_add(ctx, m, b);
         ggml_set_name(out, "out");
-        return out;
+        return extra_consumer ? ggml_add(ctx, out, n) : out;
     }
 };
 // GGML_OP_NORM/RMS_NORM + GGML_OP_SCALE
@@ -10757,6 +10759,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_moe_ffn_swiglu(type, GGML_TYPE_Q4_K, 16, 4, 512, 2048, 200));
     }
 
+    for (int64_t width : {768, 1023, 1024, 1152, 1280}) {
+        for (bool extra : {false, true}) {
+            test_cases.emplace_back(new test_norm_mul_add(GGML_TYPE_F32, {width, 65, 1, 1}, 1e-5f, false, true, extra));
+        }
+    }
     std::default_random_engine rng(0);
 
     for (ggml_type type : { GGML_TYPE_F16, GGML_TYPE_BF16 }) {

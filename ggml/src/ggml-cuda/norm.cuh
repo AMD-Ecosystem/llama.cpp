@@ -21,3 +21,4 @@ void ggml_cuda_op_l2_norm(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 
 template <typename T>
 void ggml_cuda_rms_norm_mul_to_16bit(const ggml_tensor * x, const ggml_tensor * weight, T * dst, float eps, cudaStream_t stream);
+void ggml_cuda_op_norm_fused(ggml_backend_cuda_context & ctx, ggml_tensor * norm, ggml_tensor * mul, ggml_tensor * add);
