@@ -61,10 +61,10 @@ template.def<@ggml.mul_mat_id_f16_f16_wmma.core> device @ggml_mul_mat_id_f16_f16
   %result_stage_bytes = index.constant 1024 : offset
   %c0_i32 = scalar.constant 0 : i32
   %cn1_i32 = scalar.constant -1 : i32
-  %c0_i32x1 = vector.constant 0 : vector<1xi32>
-  %c0_i32x4 = vector.constant 0 : vector<4xi32>
-  %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
-  %zero_accumulator = vector.constant 0.0 : vector<8xf16>
+  %c0_i32x1 = vector.splati 0 : vector<1xi32>
+  %c0_i32x4 = vector.splati 0 : vector<4xi32>
+  %c0_f16x4 = vector.splatf 0.0 : vector<4xf16>
+  %zero_accumulator = vector.splatf 0.0 : vector<8xf16>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
   %k = index.constant 16 : index

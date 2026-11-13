@@ -39,7 +39,7 @@ kernel.def target(@ggml_get_rows_rmsnorm_gfx11_wave32) export("ggml_get_rows_rms
   %c1024 = index.constant 1024 : index
   %c0_i32 = scalar.constant 0 : i32
   %c0_f32 = scalar.constant 0.0 : f32
-  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %c0_f32x4 = vector.splatf 0.0 : vector<4xf32>
   %c0_offset = index.constant 0 : offset
   %group_bytes = index.constant 144 : offset
   %scratch_d_offset = index.constant 1024 : offset

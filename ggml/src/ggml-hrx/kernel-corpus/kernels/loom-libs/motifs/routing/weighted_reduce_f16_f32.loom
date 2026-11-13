@@ -22,8 +22,8 @@ template.def<@ggml.routing.weighted_reduce_f16_f32> device @ggml_routing_weighte
   %c4 = index.constant 4 : index
   %c256 = index.constant 256 : index
   %c0_offset = index.constant 0 : offset
-  %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
-  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %c0_f16x4 = vector.splatf 0.0 : vector<4xf16>
+  %c0_f32x4 = vector.splatf 0.0 : vector<4xf32>
   %assignment_count = index.mul %token_count, %bounded_route_count : index
   %channel_tile_base = index.mul %channel_tile, %c256 : index
   %lane_channel_add = index.mul %lane, %c4 : index

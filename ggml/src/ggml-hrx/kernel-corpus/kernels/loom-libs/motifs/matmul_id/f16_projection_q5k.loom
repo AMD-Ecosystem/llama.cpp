@@ -86,7 +86,7 @@ func.def inline @ggml_q5k_split_wmma_vector4_from_header_code(%q5_group: index, 
   %c1_i32 = scalar.constant 1 : i32
   %c2 = index.constant 2 : index
   %c4 = index.constant 4 : index
-  %q4_mask = vector.constant 252645135 : vector<1xi32>
+  %q4_mask = vector.splati 252645135 : vector<1xi32>
   %bounded_group = index.assume %q5_group [range(%q5_group, 0, 7)] : index
   %header_halves = vector.bitcast %header_words : vector<4xi32> to vector<8xf16>
   %d_f16 = vector.extract %header_halves[0] : vector<8xf16> -> f16
@@ -162,7 +162,7 @@ template.def<@ggml.mul_mat_id_q5k_f16_wmma.project_vector16> device @ggml_mul_ma
   %c64 = index.constant 64 : index
   %c0_offset = index.constant 0 : offset
   %c0_i32 = scalar.constant 0 : i32
-  %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
+  %c0_f16x4 = vector.splatf 0.0 : vector<4xf16>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
   %k = index.constant 16 : index

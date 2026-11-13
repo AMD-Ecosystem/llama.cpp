@@ -260,8 +260,8 @@ kernel.def target(@ggml_symmetric_i8_gfx11_wave32) export("ggml_mul_mat_q5_k_sym
   %k_blocks = index.constant 2 : index
   %k_wave = index.constant 32 : index
   %k_wm = index.constant 8 : index
-  %fzero = vector.constant 0.0 : vector<8xf32>
-  %izero = vector.constant 0 : vector<8xi32>
+  %fzero = vector.splatf 0.0 : vector<8xf32>
+  %izero = vector.splati 0 : vector<8xi32>
   %is_iq4xs = scalar.constant false : i1
   %token256 = scalar.constant true : i1
   %q8_plane = scalar.constant true : i1

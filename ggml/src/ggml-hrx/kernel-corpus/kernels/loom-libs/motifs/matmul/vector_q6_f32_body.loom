@@ -26,7 +26,7 @@ template.def<@ggml.matmul.vector_q6_f32.store_fragment_outputs_wave32> device @g
   %c16 = index.constant 16 : index
   %c0_offset = index.constant 0 : offset
   %wave_result_stage_bytes = index.constant 512 : offset
-  %c0_f32x8 = vector.constant 0.0 : vector<8xf32>
+  %c0_f32x8 = vector.splatf 0.0 : vector<8xf32>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
   %wave_result_stage_offset = index.scale %subgroup, %wave_result_stage_bytes : index, offset -> offset
@@ -182,17 +182,17 @@ template.def<@ggml.matmul.vector_q6_f32.body_packed_storage> device @ggml_matmul
   %c13440_bytes = index.constant 13440 : offset
   %weight_stage_bytes = index.constant 9216 : offset
   %activation_stage_bytes = index.constant 2304 : offset
-  %zero_accumulator = vector.constant 0.0 : vector<8xf32>
-  %empty_words = vector.constant 0 : vector<4xi32>
-  %zero_scale_bytes = vector.constant 0 : vector<8xi8>
-  %nibble_mask = vector.constant 252645135 : vector<4xi32>
-  %high0_mask = vector.constant 50529027 : vector<4xi32>
-  %high1_mask = vector.constant 202116108 : vector<4xi32>
-  %high2_mask = vector.constant 808464432 : vector<4xi32>
-  %high3_mask = vector.constant -1061109568 : vector<4xi32>
-  %shift2 = vector.constant 2 : vector<4xi32>
-  %shift4 = vector.constant 4 : vector<4xi32>
-  %negative32_f32 = vector.constant -32.0 : vector<16xf32>
+  %zero_accumulator = vector.splatf 0.0 : vector<8xf32>
+  %empty_words = vector.splati 0 : vector<4xi32>
+  %zero_scale_bytes = vector.splati 0 : vector<8xi8>
+  %nibble_mask = vector.splati 252645135 : vector<4xi32>
+  %high0_mask = vector.splati 50529027 : vector<4xi32>
+  %high1_mask = vector.splati 202116108 : vector<4xi32>
+  %high2_mask = vector.splati 808464432 : vector<4xi32>
+  %high3_mask = vector.splati -1061109568 : vector<4xi32>
+  %shift2 = vector.splati 2 : vector<4xi32>
+  %shift4 = vector.splati 4 : vector<4xi32>
+  %negative32_f32 = vector.splatf -32.0 : vector<16xf32>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
   %k = index.constant 16 : index
@@ -329,8 +329,8 @@ template.def<@ggml.matmul.vector_q6_f32.body_packed_storage> device @ggml_matmul
         }
         scf.yield %values0, %values1, %prefetched_ql0_words, %prefetched_ql1_words, %prefetched_qh_words : vector<16xf16>, vector<16xf16>, vector<4xi32>, vector<4xi32>, vector<4xi32>
       } else {
-        %zeros0 = vector.constant 0.0 : vector<16xf16>
-        %zeros1 = vector.constant 0.0 : vector<16xf16>
+        %zeros0 = vector.splatf 0.0 : vector<16xf16>
+        %zeros1 = vector.splatf 0.0 : vector<16xf16>
         scf.yield %zeros0, %zeros1, %cached_ql0_words, %cached_ql1_words, %cached_qh_words : vector<16xf16>, vector<16xf16>, vector<4xi32>, vector<4xi32>, vector<4xi32>
       }
       vector.store %weight_values0, %weight_stage_view[%weight_local_row, %weight_k] : vector<16xf16>, view<64x72xf16>
@@ -349,8 +349,8 @@ template.def<@ggml.matmul.vector_q6_f32.body_packed_storage> device @ggml_matmul
         %narrow1 = vector.fptrunc %loaded1 : vector<4xf32> to vector<4xf16>
         scf.yield %narrow0, %narrow1 : vector<4xf16>, vector<4xf16>
       } else {
-        %zeros0 = vector.constant 0.0 : vector<4xf16>
-        %zeros1 = vector.constant 0.0 : vector<4xf16>
+        %zeros0 = vector.splatf 0.0 : vector<4xf16>
+        %zeros1 = vector.splatf 0.0 : vector<4xf16>
         scf.yield %zeros0, %zeros1 : vector<4xf16>, vector<4xf16>
       }
       vector.store %activation_values0, %activation_stage_physical_view[%activation_row, %activation_k] : vector<4xf16>, view<16x72xf16>
@@ -405,7 +405,7 @@ template.def<@ggml.matmul.vector_q6_f32.body_i8_storage> device @ggml_matmul_vec
   %c17536_bytes = index.constant 17536 : offset
   %weight_stage_bytes = index.constant 9216 : offset
   %activation_stage_bytes = index.constant 2304 : offset
-  %zero_accumulator = vector.constant 0.0 : vector<8xf32>
+  %zero_accumulator = vector.splatf 0.0 : vector<8xf32>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
   %k = index.constant 16 : index
@@ -475,8 +475,8 @@ template.def<@ggml.matmul.vector_q6_f32.body_i8_storage> device @ggml_matmul_vec
         %values1 = vector.fptrunc %values1_f32 : vector<16xf32> to vector<16xf16>
         scf.yield %values0, %values1 : vector<16xf16>, vector<16xf16>
       } else {
-        %zeros0 = vector.constant 0.0 : vector<16xf16>
-        %zeros1 = vector.constant 0.0 : vector<16xf16>
+        %zeros0 = vector.splatf 0.0 : vector<16xf16>
+        %zeros1 = vector.splatf 0.0 : vector<16xf16>
         scf.yield %zeros0, %zeros1 : vector<16xf16>, vector<16xf16>
       }
       vector.store %weight_values0, %weight_stage_view[%weight_local_row, %weight_k] : vector<16xf16>, view<64x72xf16>
@@ -495,8 +495,8 @@ template.def<@ggml.matmul.vector_q6_f32.body_i8_storage> device @ggml_matmul_vec
         %narrow1 = vector.fptrunc %loaded1 : vector<4xf32> to vector<4xf16>
         scf.yield %narrow0, %narrow1 : vector<4xf16>, vector<4xf16>
       } else {
-        %zeros0 = vector.constant 0.0 : vector<4xf16>
-        %zeros1 = vector.constant 0.0 : vector<4xf16>
+        %zeros0 = vector.splatf 0.0 : vector<4xf16>
+        %zeros1 = vector.splatf 0.0 : vector<4xf16>
         scf.yield %zeros0, %zeros1 : vector<4xf16>, vector<4xf16>
       }
       vector.store %activation_values0, %activation_stage_physical_view[%activation_row, %activation_k] : vector<4xf16>, view<16x72xf16>
@@ -548,17 +548,17 @@ template.def<@ggml.matmul.vector_q6_f32.body_selected_outputs> device @ggml_matm
   %weight_stage_bytes = index.constant 9216 : offset
   %activation_stage_bytes = index.constant 2304 : offset
   %result_stage_bytes = index.constant 2048 : offset
-  %zero_accumulator = vector.constant 0.0 : vector<16xf16>
-  %empty_words = vector.constant 0 : vector<4xi32>
-  %zero_scale_bytes = vector.constant 0 : vector<8xi8>
-  %nibble_mask = vector.constant 252645135 : vector<4xi32>
-  %high0_mask = vector.constant 50529027 : vector<4xi32>
-  %high1_mask = vector.constant 202116108 : vector<4xi32>
-  %high2_mask = vector.constant 808464432 : vector<4xi32>
-  %high3_mask = vector.constant -1061109568 : vector<4xi32>
-  %shift2 = vector.constant 2 : vector<4xi32>
-  %shift4 = vector.constant 4 : vector<4xi32>
-  %negative32_f32 = vector.constant -32.0 : vector<16xf32>
+  %zero_accumulator = vector.splatf 0.0 : vector<16xf16>
+  %empty_words = vector.splati 0 : vector<4xi32>
+  %zero_scale_bytes = vector.splati 0 : vector<8xi8>
+  %nibble_mask = vector.splati 252645135 : vector<4xi32>
+  %high0_mask = vector.splati 50529027 : vector<4xi32>
+  %high1_mask = vector.splati 202116108 : vector<4xi32>
+  %high2_mask = vector.splati 808464432 : vector<4xi32>
+  %high3_mask = vector.splati -1061109568 : vector<4xi32>
+  %shift2 = vector.splati 2 : vector<4xi32>
+  %shift4 = vector.splati 4 : vector<4xi32>
+  %negative32_f32 = vector.splatf -32.0 : vector<16xf32>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
   %k = index.constant 16 : index
@@ -706,8 +706,8 @@ template.def<@ggml.matmul.vector_q6_f32.body_selected_outputs> device @ggml_matm
         }
         scf.yield %values0, %values1, %prefetched_ql0_words, %prefetched_ql1_words, %prefetched_qh_words : vector<16xf16>, vector<16xf16>, vector<4xi32>, vector<4xi32>, vector<4xi32>
       } else {
-        %zeros0 = vector.constant 0.0 : vector<16xf16>
-        %zeros1 = vector.constant 0.0 : vector<16xf16>
+        %zeros0 = vector.splatf 0.0 : vector<16xf16>
+        %zeros1 = vector.splatf 0.0 : vector<16xf16>
         scf.yield %zeros0, %zeros1, %cached_ql0_words, %cached_ql1_words, %cached_qh_words : vector<16xf16>, vector<16xf16>, vector<4xi32>, vector<4xi32>, vector<4xi32>
       }
       vector.store %weight_values0, %weight_stage_view[%weight_local_row, %weight_k] : vector<16xf16>, view<64x72xf16>
@@ -725,8 +725,8 @@ template.def<@ggml.matmul.vector_q6_f32.body_selected_outputs> device @ggml_matm
         %narrow1 = vector.fptrunc %loaded1 : vector<4xf32> to vector<4xf16>
         scf.yield %narrow0, %narrow1 : vector<4xf16>, vector<4xf16>
       } else {
-        %zeros0 = vector.constant 0.0 : vector<4xf16>
-        %zeros1 = vector.constant 0.0 : vector<4xf16>
+        %zeros0 = vector.splatf 0.0 : vector<4xf16>
+        %zeros1 = vector.splatf 0.0 : vector<4xf16>
         scf.yield %zeros0, %zeros1 : vector<4xf16>, vector<4xf16>
       }
       vector.store %activation_values0, %activation_stage_physical_view[%activation_row, %activation_k] : vector<4xf16>, view<16x72xf16>

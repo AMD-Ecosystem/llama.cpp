@@ -2,7 +2,7 @@ template.decl @ggml.flash_attention.online_softmax.prefill(%masked_scores: vecto
 
 template.def<@ggml.flash_attention.online_softmax.prefill> device @ggml_flash_attention_online_softmax_prefill(%masked_scores: vector<4xf32>, %valid: vector<4xi1>, %current_max: vector<4xf32>, %current_sum: vector<4xf32>, %query_row0: index, %query_row1: index, %query_row2: index, %query_row3: index, %lane: index, %probability_stage: buffer) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>) {
   %c0_offset = index.constant 0 : offset
-  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %c0_f32x4 = vector.splatf 0.0 : vector<4xf32>
   %probability_layout = encoding.layout.strided [72, 1] : encoding<layout>
   %probability_stage_view = buffer.view %probability_stage[%c0_offset] : buffer -> view<16x64xf16, %probability_layout>
   %block_max = kernel.subgroup.reduce<maxnumf> %masked_scores : vector<4xf32>

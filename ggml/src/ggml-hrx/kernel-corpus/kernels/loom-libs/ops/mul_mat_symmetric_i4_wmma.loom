@@ -31,7 +31,7 @@ func.def inline @ggml_mul_mat_symmetric_i4_lowrow_adjacent_dual_direct_dot_half_
   %c8 = index.constant 8 : index
   %c16 = index.constant 16 : index
   %zero_i32 = scalar.constant 0 : i32
-  %zero_i32x2 = vector.constant 0 : vector<2xi32>
+  %zero_i32x2 = vector.splati 0 : vector<2xi32>
   %qact_flat = buffer.view %qact[%base] : buffer -> view<1073741824xi8>
   %scale_flat = buffer.view %scales[%base] : buffer -> view<33554432xf32>
 
@@ -757,7 +757,7 @@ template.def<@ggml.quantize_symmetric_i4_k64.body> device @ggml_quantize_symmetr
   %shift8 = scalar.constant 8 : i32
   %shift12 = scalar.constant 12 : i32
   %shuffle_width = scalar.constant 32 : i32
-  %mask15 = vector.constant 15 : vector<4xi32>
+  %mask15 = vector.splati 15 : vector<4xi32>
 
   %k = config.get @ggml.quantize_symmetric_i4_k64.input_size : index
   %cols = config.get @ggml.quantize_symmetric_i4_k64.token_count : index
@@ -918,7 +918,7 @@ template.def<@ggml.mul_mat.symmetric_i4.m128n128_wg256.body> device @ggml_mul_ma
   %as_flat = buffer.view %as_na[%qact_scale_base] : buffer -> view<33554432xf32>
   %asum_flat = buffer.view %asum_na[%base] : buffer -> view<33554432xi32>
   %c0_i32 = scalar.constant 0 : i32
-  %pf_zero_v16i8 = vector.constant 0 : vector<16xi8>
+  %pf_zero_v16i8 = vector.splati 0 : vector<16xi8>
   %pf_payload_bytes = index.constant 32 : index
   %q4_k_block = index.constant 256 : index
   %q4_block_bytes = index.constant 144 : index
@@ -1670,10 +1670,10 @@ template.def<@ggml.mul_mat.symmetric_i4.m128n128_wg256.body> device @ggml_mul_ma
     %u4_zero_i32 = scalar.constant 0 : i32
     %u4_eps = scalar.constant 1.0000000000000001e-30 : f32
     %u4_f15 = scalar.constant 15.0 : f32
-    %u4_vzero = vector.constant 0.0 : vector<4xf32>
-    %u4_v15 = vector.constant 15.0 : vector<4xf32>
-    %u4_bias_neg8 = vector.constant -8 : vector<4xi32>
-    %u4_nibble_mask = vector.constant 15 : vector<4xi32>
+    %u4_vzero = vector.splatf 0.0 : vector<4xf32>
+    %u4_v15 = vector.splatf 15.0 : vector<4xf32>
+    %u4_bias_neg8 = vector.splati -8 : vector<4xi32>
+    %u4_nibble_mask = vector.splati 15 : vector<4xi32>
     %u4_c8_i32 = scalar.constant 8 : i32
     %u4_xor1 = scalar.constant 1 : i32
     %u4_xor2 = scalar.constant 2 : i32
@@ -1839,8 +1839,8 @@ kernel.def export("ggml_mul_mat_symmetric_i4_wmma") @ggml_mul_mat_symmetric_i4_w
   %k_blocks = index.constant 2 : index
   %k_wave = index.constant 32 : index
   %k_wm = index.constant 4 : index
-  %fzero = vector.constant 0.0 : vector<8xf32>
-  %izero = vector.constant 0 : vector<8xi32>
+  %fzero = vector.splatf 0.0 : vector<8xf32>
+  %izero = vector.splati 0 : vector<8xi32>
   %apply_swiglu = scalar.constant false : i1
   %publish_f32 = scalar.constant true : i1
   %publish_f16 = scalar.constant false : i1
@@ -1952,12 +1952,12 @@ template.def<@ggml.mul_mat.symmetric_i4.lowrow.m16n16.body> device @ggml_mul_mat
   %q4_k_block = index.constant 256 : index
   %q4_block_bytes = index.constant 144 : index
   %q4_k48 = index.constant 48 : index
-  %q4_shift4v = vector.constant 4 : vector<4xi32>
-  %q4_shift8v = vector.constant 8 : vector<4xi32>
-  %q4_shift16v = vector.constant 16 : vector<4xi32>
-  %q4_nibble_mask = vector.constant 252645135 : vector<4xi32>
-  %q4_pair_mask = vector.constant 16711935 : vector<4xi32>
-  %q4_half_mask = vector.constant 65535 : vector<4xi32>
+  %q4_shift4v = vector.splati 4 : vector<4xi32>
+  %q4_shift8v = vector.splati 8 : vector<4xi32>
+  %q4_shift16v = vector.splati 16 : vector<4xi32>
+  %q4_nibble_mask = vector.splati 252645135 : vector<4xi32>
+  %q4_pair_mask = vector.splati 16711935 : vector<4xi32>
+  %q4_half_mask = vector.splati 65535 : vector<4xi32>
   %q4_f32_32 = scalar.constant 32.0 : f32
   %c15 = index.constant 15 : index
   // dst is [rows, cols] with rows contiguous, and C is [cols, rows].
@@ -2028,7 +2028,7 @@ template.def<@ggml.mul_mat.symmetric_i4.lowrow.m16n16.body> device @ggml_mul_mat
   %q4a_row_bytes = index.div %k_b, %c2 : index
   %q4a_row_base = index.mul %q4a_row, %q4a_row_bytes : index
   %q4a_c16 = index.constant 16 : index
-  %q4a_zero = vector.constant 0 : vector<16xi8>
+  %q4a_zero = vector.splati 0 : vector<16xi8>
   %q4a_initial_v0, %q4a_initial_v1 = scf.if %q4a_lane_active -> (vector<16xi8>, vector<16xi8>) {
     %q4a_initial_chunk_k = index.mul %chunk_begin, %k_kc : index
     %q4a_initial_chunk_bytes = index.div %q4a_initial_chunk_k, %c2 : index
@@ -2137,16 +2137,16 @@ template.def<@ggml.mul_mat.symmetric_i4.lowrow.m16n16.body> device @ggml_mul_mat
     %q4_words = scf.if %compact_q2 -> (vector<4xi32>) {
       %q2_view = buffer.view %src0_na[%q4_byte_base] : buffer -> view<2xi32>
       %q2_packed = vector.load %q2_view[%c0] : view<2xi32> -> vector<2xi32>
-      %q2_mask16 = vector.constant 65535 : vector<2xi32>
-      %q2_mask8 = vector.constant 16711935 : vector<2xi32>
-      %q2_mask4 = vector.constant 252645135 : vector<2xi32>
-      %q2_mask2 = vector.constant 858993459 : vector<2xi32>
-      %q2_sign = vector.constant 572662306 : vector<2xi32>
-      %q2_shift16 = vector.constant 16 : vector<2xi32>
-      %q2_shift8 = vector.constant 8 : vector<2xi32>
-      %q2_shift4 = vector.constant 4 : vector<2xi32>
-      %q2_shift2 = vector.constant 2 : vector<2xi32>
-      %q2_shift1 = vector.constant 1 : vector<2xi32>
+      %q2_mask16 = vector.splati 65535 : vector<2xi32>
+      %q2_mask8 = vector.splati 16711935 : vector<2xi32>
+      %q2_mask4 = vector.splati 252645135 : vector<2xi32>
+      %q2_mask2 = vector.splati 858993459 : vector<2xi32>
+      %q2_sign = vector.splati 572662306 : vector<2xi32>
+      %q2_shift16 = vector.splati 16 : vector<2xi32>
+      %q2_shift8 = vector.splati 8 : vector<2xi32>
+      %q2_shift4 = vector.splati 4 : vector<2xi32>
+      %q2_shift2 = vector.splati 2 : vector<2xi32>
+      %q2_shift1 = vector.splati 1 : vector<2xi32>
       %q2_lo0 = vector.andi %q2_packed, %q2_mask16 : vector<2xi32>
       %q2_hi0 = vector.shrui %q2_packed, %q2_shift16 : vector<2xi32>
       %q2_lo1s = vector.shli %q2_lo0, %q2_shift8 : vector<2xi32>
@@ -2427,8 +2427,8 @@ kernel.def export("ggml_mul_mat_symmetric_i4_lowrow_wmma") @ggml_mul_mat_symmetr
   %k_blocks = index.constant 2 : index
   %k_wave = index.constant 32 : index
   %k_wm = index.constant 1 : index
-  %fzero = vector.constant 0.0 : vector<8xf32>
-  %izero = vector.constant 0 : vector<8xi32>
+  %fzero = vector.splatf 0.0 : vector<8xf32>
+  %izero = vector.splati 0 : vector<8xi32>
   %no_split_k = scalar.constant false : i1
   %compact_q2 = scalar.constant false : i1
 
@@ -2503,8 +2503,8 @@ kernel.def export("ggml_mul_mat_symmetric_i4_lowrow_adjacent_dual_wmma") @ggml_m
   %k_blocks = index.constant 2 : index
   %k_wave = index.constant 32 : index
   %k_wm = index.constant 1 : index
-  %fzero = vector.constant 0.0 : vector<8xf32>
-  %izero = vector.constant 0 : vector<8xi32>
+  %fzero = vector.splatf 0.0 : vector<8xf32>
+  %izero = vector.splati 0 : vector<8xi32>
   %no_split_k = scalar.constant false : i1
   %compact_q2 = scalar.constant false : i1
 
@@ -2554,7 +2554,7 @@ func.def inline @ggml_mul_mat_symmetric_i4_lowrow_split_k2_direct_dot_full_dot(%
   %c2 = index.constant 2 : index
   %c16 = index.constant 16 : index
   %zero_i32 = scalar.constant 0 : i32
-  %zero_i32x4 = vector.constant 0 : vector<4xi32>
+  %zero_i32x4 = vector.splati 0 : vector<4xi32>
   %qact_flat = buffer.view %qact[%base] : buffer -> view<1073741824xi8>
   %scale_flat = buffer.view %scales[%base] : buffer -> view<33554432xf32>
 
@@ -3409,8 +3409,8 @@ kernel.def export("ggml_mul_mat_symmetric_i4_lowrow_split_k2_wmma") @ggml_mul_ma
   %k_blocks = index.constant 2 : index
   %k_wave = index.constant 32 : index
   %k_wm = index.constant 1 : index
-  %fzero = vector.constant 0.0 : vector<8xf32>
-  %izero = vector.constant 0 : vector<8xi32>
+  %fzero = vector.splatf 0.0 : vector<8xf32>
+  %izero = vector.splati 0 : vector<8xi32>
   %split_k = scalar.constant true : i1
   %compact_q2 = scalar.constant false : i1
 

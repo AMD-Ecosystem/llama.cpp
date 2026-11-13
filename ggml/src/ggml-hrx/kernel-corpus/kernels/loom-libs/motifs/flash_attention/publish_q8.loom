@@ -33,7 +33,7 @@ template.def<@ggml.flash_attention.decode_split.pack_completed_q8> device @ggml_
   %scratch_d_byte_add = index.constant 1024 : offset
   %scratch_bytes = index.constant 1152 : offset
   %c0_offset = index.constant 0 : offset
-  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %c0_f32x4 = vector.splatf 0.0 : vector<4xf32>
   %output_noalias, %q8_output_noalias = buffer.assume.noalias %output, %q8_output : buffer, buffer
   %output_aligned = buffer.assume.alignment %output_noalias {minimum_alignment = 16} : buffer
   %q8_output_aligned = buffer.assume.alignment %q8_output_noalias {minimum_alignment = 16} : buffer

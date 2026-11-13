@@ -61,9 +61,9 @@ template.def<@ggml.flash_attention.decode_split.produce_partials.active> device 
   %c1_i32 = scalar.constant 1 : i32
   %attention_scale = config.get @ggml.flash_attention.attention_scale : f32
   %c0_f16 = scalar.constant 0.0 : f16
-  %c0_f16x8 = vector.constant 0.0 : vector<8xf16>
-  %c0_f16x16 = vector.constant 0.0 : vector<16xf16>
-  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %c0_f16x8 = vector.splatf 0.0 : vector<8xf16>
+  %c0_f16x16 = vector.splatf 0.0 : vector<16xf16>
+  %c0_f32x4 = vector.splatf 0.0 : vector<4xf32>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
   %k = index.constant 16 : index
@@ -156,7 +156,7 @@ template.def<@ggml.flash_attention.decode_split.produce_partials.active> device 
     view.store %query_value, %query_stage_view[%local_query_row, %query_channel] : f16, view<16x[%query_stage_stride]xf16>
   }
   kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
-  %score_init_values = vector.constant 0.0 : vector<4xf32>
+  %score_init_values = vector.splatf 0.0 : vector<4xf32>
   %score_init = vector.fragment<init> %score_init_values shape [%m, %n] : vector<4xf32>
   %score_fragment = scf.if %is_full_block -> (vector<4xf32>) {
     %full_score_fragment = scf.for %head_tile = [%c0 to %qk_head_size step %c16](%score_accumulator = %score_init : vector<4xf32>) -> (vector<4xf32>) unroll {
@@ -419,7 +419,7 @@ template.def<@ggml.flash_attention.decode_split.produce_partials> device @ggml_f
   %c0_offset = index.constant 0 : offset
   %c0_f32 = scalar.constant 0.0 : f32
   %negative_large = scalar.constant -1e+30 : f32
-  %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
+  %c0_f16x4 = vector.splatf 0.0 : vector<4xf16>
   %key_value_token_capacity = config.get @ggml.flash_attention.decode.key_value_token_capacity : index
   %c63 = index.constant 63 : index
   %padded_key_value_token_capacity = index.add %key_value_token_capacity, %c63 : index
