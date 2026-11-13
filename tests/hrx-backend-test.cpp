@@ -7516,7 +7516,7 @@ static void run_quantized_conv4_dispatch_checks() {
         REQUIRE((fused != plan.dispatches.end()) == test.fused);
         if (test.fused) {
             REQUIRE(fused->bindings.size() == (test.gathered_state ? 5 : 6));
-            require_compile_parameter(*fused, "ggml.mul_mat.weight_format", test.type == GGML_TYPE_Q4_K ? "4" : "6");
+            require_compile_parameter(*fused, "ggml.mul_mat.weight_format", test.type == GGML_TYPE_Q4_K ? "44" : "6");
             if (test.gathered_state) {
                 const auto finish =
                     std::find_if(plan.dispatches.begin(), plan.dispatches.end(), [](const auto & dispatch) {
