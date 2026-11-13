@@ -2952,6 +2952,7 @@ struct test_rms_norm_mul_rope : public test_case {
     const bool broadcast; // multiply by a 1D [ne0] weight, as model norm weights are
     const ggml_type set_rows_type;
     int mode;
+    const bool two_axis, extra_consumer;
 
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
@@ -2961,14 +2962,14 @@ struct test_rms_norm_mul_rope : public test_case {
     bool run_whole_graph() override { return true; }
 
     std::string vars() override {
-        return VARS_TO_STR9(ne, eps, multi_add, mul, rope, set_rows, broadcast, mode, set_rows_type);
+        return VARS_TO_STR9(ne, eps, multi_add, mul, rope, set_rows, broadcast, mode, set_rows_type) + "," + VARS_TO_STR2(two_axis, extra_consumer);
     }
 
     test_rms_norm_mul_rope(std::array<int64_t, 4> ne, float eps = 1e-6f, bool multi_add = false,
                            bool set_rows = false, bool broadcast = false, int mode = GGML_ROPE_TYPE_NORMAL,
-                           bool mul = true, bool rope = true, ggml_type set_rows_type = GGML_TYPE_F16)
+                           bool mul = true, bool rope = true, ggml_type set_rows_type = GGML_TYPE_F16, bool two_axis = false, bool extra_consumer = false)
         : ne(ne), eps(eps), multi_add(multi_add), mul(mul), rope(rope), set_rows(set_rows), broadcast(broadcast),
-          set_rows_type(set_rows_type), mode(mode) {}
+          set_rows_type(set_rows_type), mode(mode), two_axis(two_axis), extra_consumer(extra_consumer) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne[0], ne[1], ne[2], ne[3]);
@@ -3006,7 +3007,15 @@ struct test_rms_norm_mul_rope : public test_case {
                 int sections[4] = { n_dims/3, n_dims/3, n_dims/3, 0 };
                 a = ggml_rope_multi(ctx, a, pos, nullptr, n_dims, sections, mode, 0, 10000.0f, 1.0f, 0.0f, 1.0f, 32.0f, 1.0f);
             } else {
-                a = ggml_rope(ctx, a, pos, ne[0], mode);
+                a = ggml_rope(ctx, a, pos, two_axis ? ne[0]/2 : ne[0], mode);
+                if (two_axis) {
+                    ggml_tensor * first = a;
+                    ggml_tensor * pos_y = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, ne[2]);
+                    a = ggml_rope_set_offset(ggml_rope(ctx, a, pos_y, ne[0]/2, mode), ne[0]/2);
+                    if (extra_consumer) {
+                        a = ggml_add(ctx, a, first);
+                    }
+                }
             }
         }
 
@@ -10727,6 +10736,16 @@ static void add_rdna35_mmq_cases(std::vector<std::unique_ptr<test_case>> & test_
 static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     std::vector<std::unique_ptr<test_case>> test_cases;
 
+    for (int width : {64, 128, 256}) {
+        for (bool extra : {false, true}) {
+            test_cases.emplace_back(new test_rms_norm_mul_rope({width, 4, 129, 1}, 1e-6f, false, false, true,
+                GGML_ROPE_TYPE_NEOX, true, true, GGML_TYPE_F16, true, extra));
+        }
+    }
+    for (int queries : {31, 32, 64, 129}) {
+        test_cases.emplace_back(new test_rdna_prefill_attention(512, queries, 512, 8, 1, 1));
+        test_cases.emplace_back(new test_rdna_prefill_attention(512, queries, 512, 8, 2, 3));
+    }
     for (int d : {64, 128, 256}) {
         for (bool computed : {false, true}) {
             test_cases.emplace_back(new test_rdna_prefill_mask_reuse(d, 129, 1, computed));

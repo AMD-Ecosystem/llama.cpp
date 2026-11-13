@@ -332,10 +332,18 @@ static constexpr __device__ int ggml_cuda_fattn_mma_get_nstages_target(const int
 }
 
 static __host__ bool ggml_cuda_fattn_mma_get_Q_in_reg(const int DKQ, const int DV, const int ncols, const int cc) {
+    if (GGML_CUDA_CC_IS_RDNA3_5(cc) && DKQ == 512 && DV == 512 && ncols == 32) {
+        return false;
+    }
     return ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols, cc).Q_in_reg;
 }
 
 static constexpr __device__ bool ggml_cuda_fattn_mma_get_Q_in_reg(const int DKQ, const int DV, const int ncols) {
+#if defined(RDNA3_5)
+    if (DKQ == 512 && DV == 512 && ncols == 32) {
+        return false;
+    }
+#endif
     return ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols).Q_in_reg;
 }
 
@@ -1886,10 +1894,12 @@ static __global__ void flash_attn_ext_f16(
 #if defined(AMD_WMMA_AVAILABLE)
 #if defined(RDNA3_5)
     constexpr bool vision_mha = (DKQ == 80 || (DKQ == 64 && GGML_CUDA_FATTN_WMMA_NO_GQA)) && DV == DKQ && ncols1 == 64;
+    constexpr bool language_d512 = DKQ == 512 && DV == 512 && ncols1 == 4 && ncols2 == 8;
 #else
     constexpr bool vision_mha = false;
+    constexpr bool language_d512 = false;
 #endif
-    if (ncols1*ncols2 < 16 || (ncols2 == 1 && !vision_mha) || DKQ > 256) {
+    if (ncols1*ncols2 < 16 || (ncols2 == 1 && !vision_mha) || (DKQ > 256 && !language_d512)) {
         NO_DEVICE_CODE;
         return;
     }
