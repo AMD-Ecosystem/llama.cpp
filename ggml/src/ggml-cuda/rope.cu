@@ -762,7 +762,7 @@ void ggml_cuda_op_rope_fused(ggml_backend_cuda_context & ctx, ggml_tensor * rope
 
 // fused RMS_NORM + MUL + ROPE (+ VIEW + SET_ROWS)
 // one block per row: block_reduce gives the norm scale, then each thread applies mul and rope to the elements it owns
-template <int block_size, bool has_ff, typename D, bool two_axis = false>
+template <int block_size, bool has_ff, typename D, bool two_axis = false, bool loop_grid = true>
 static __global__ void rms_norm_mul_rope_f32(
         const float * x, D * dst, const int ncols, const int nchannels, const int nsamples,
         const int64_t s01, const int64_t s02, const int64_t s03,
@@ -787,8 +787,8 @@ static __global__ void rms_norm_mul_rope_f32(
     ggml_cuda_pdl_sync();
 
     // grid.y and grid.z are clamped to the CUDA limit, iterate over the excess channels/samples
-    for (int sample = blockIdx.z; sample < nsamples; sample += gridDim.z) {
-        for (int channel = blockIdx.y; channel < nchannels; channel += gridDim.y) {
+    for (int sample = blockIdx.z; !loop_grid || sample < nsamples; sample += gridDim.z) {
+        for (int channel = blockIdx.y; !loop_grid || channel < nchannels; channel += gridDim.y) {
             const float * xc = x + sample*s03 + channel*s02 + row*s01;
 
             const uint32_t mul_row     = fastmodulo(row,     mul_nrows_packed);
@@ -855,10 +855,16 @@ static __global__ void rms_norm_mul_rope_f32(
                 dstc[ix1] = ggml_cuda_cast<D>(x0*sin_theta + x1*cos_theta);
             }
 
-            if constexpr (block_size > WARP_SIZE) {
+            if constexpr (block_size > WARP_SIZE && loop_grid) {
                 // sync is needed as we reuse s_sum across block_reduce invocations, see #26385
                 __syncthreads();
             }
+            if constexpr (!loop_grid) {
+                break;
+            }
+        }
+        if constexpr (!loop_grid) {
+            break;
         }
     }
 }
@@ -900,7 +906,10 @@ static void rms_norm_mul_rope_cuda(
         const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
         const bool small_block = GGML_CUDA_TRAFFIC_OPT_ENABLED(GGML_CUDA_NORM_ROPE_SMALL_BLOCK, true) && GGML_CUDA_CC_IS_RDNA3_5(cc) && ncols == 128 && nchannels >= 128;
         const ggml_cuda_kernel_launch_params params = {blocks_num, dim3(small_block ? 128 : 256), 32*sizeof(float), stream};
-        const auto kernel = small_block ? rms_norm_mul_rope_f32<128, false, D, true> : rms_norm_mul_rope_f32<256, false, D, true>;
+        const bool loop_grid = nchannels > UINT16_MAX || nsamples > UINT16_MAX;
+        const auto kernel = small_block ?
+            (loop_grid ? rms_norm_mul_rope_f32<128, false, D, true> : rms_norm_mul_rope_f32<128, false, D, true, false>) :
+            (loop_grid ? rms_norm_mul_rope_f32<256, false, D, true> : rms_norm_mul_rope_f32<256, false, D, true, false>);
         ggml_cuda_kernel_launch(kernel, params,
             x, dst, ncols, nchannels, nsamples, s01, s02, s03, s1, s2, s3, eps, mul, mul_s01, mul_s02, mul_s03,
             mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed,
