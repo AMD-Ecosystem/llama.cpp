@@ -75,7 +75,8 @@ struct ggml_backend_hrx_context {
 };
 
 struct ggml_backend_hrx_reg_context {
-    bool                                                          initialized = false;
+    hrx_runtime_t                                                 runtime = nullptr;
+    hrx_device_group_t                                            group = nullptr;
     std::vector<std::unique_ptr<ggml_backend_hrx_device_context>> device_contexts;
     std::vector<ggml_backend_device>                              devices;
 
