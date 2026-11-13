@@ -9176,7 +9176,6 @@ struct test_rdna_prefill_mask_reuse : public test_rdna_prefill_attention {
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * first = test_rdna_prefill_attention::build_graph(ctx);
         ggml_tensor * mask = first->src[3];
-        ggml_set_input(mask);
         if (computed) {
             first->src[3] = ggml_cont(ctx, mask);
         }

@@ -661,7 +661,7 @@ void ggml_cuda_flash_attn_ext_prefill_prepare(ggml_backend_cuda_context & ctx, c
             continue;
         }
         const ggml_tensor * mask = node->src[3];
-        if (!mask || mask->op != GGML_OP_NONE || mask->view_src || !(mask->flags & GGML_TENSOR_FLAG_INPUT)) {
+        if (!mask || mask->op != GGML_OP_NONE || mask->view_src) {
             continue;
         }
         if (std::find(cache.inputs.begin(), cache.inputs.end(), mask) == cache.inputs.end()) {
