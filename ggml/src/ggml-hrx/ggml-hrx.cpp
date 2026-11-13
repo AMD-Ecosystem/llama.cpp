@@ -86,11 +86,11 @@ ggml_backend_hrx_reg_context::~ggml_backend_hrx_reg_context() {
             hrx_device_release(context->device);
         }
     }
-    if (initialized) {
-        hrx_status_t status = hrx_gpu_shutdown();
-        if (!hrx_status_is_ok(status)) {
-            hrx_status_ignore(status);
-        }
+    if (group != nullptr) {
+        hrx_device_group_release(group);
+    }
+    if (runtime != nullptr) {
+        hrx_runtime_release(runtime);
     }
 }
 
@@ -1319,31 +1319,39 @@ static void * registry_proc(ggml_backend_reg_t registry, const char * name) {
 static const ggml_backend_reg_i registry_i = { registry_name, registry_device_count, registry_device, registry_proc };
 
 static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
-    auto         context = std::make_unique<ggml_backend_hrx_reg_context>();
+    auto                  context = std::make_unique<ggml_backend_hrx_reg_context>();
+    hrx_runtime_options_t options = {};
     if (environment_flag_enabled("GGML_HRX_LOG_DEVICE_EVENTS")) {
-        hrx_device_event_sink_t sink = { log_hrx_device_event, nullptr };
-        if (!HRX_CHECK(hrx_runtime_set_device_event_sink(sink))) {
-            return context;
-        }
+        options.event_sink = { log_hrx_device_event, nullptr };
     }
-    hrx_status_t status  = hrx_gpu_initialize(0);
-    if (hrx_status_is_ok(status)) {
-        context->initialized = true;
-    } else if (hrx_status_code(status) == HRX_STATUS_ALREADY_EXISTS) {
-        hrx_status_ignore(status);
-    } else {
-        hrx_status_ignore(status);
+    const hrx_host_allocator_t allocator = hrx_host_allocator_system();
+    if (!HRX_CHECK(hrx_runtime_create(&options, allocator, &context->runtime))) {
         return context;
     }
-    int count = 0;
-    if (!HRX_CHECK(hrx_gpu_device_count(&count))) {
+    const char * driver = std::getenv("HRX_GPU_DRIVER");
+    if (driver == nullptr || driver[0] == '\0') {
+        driver = "amdgpu";
+    }
+    size_t             count = 0;
+    hrx_device_info_t * infos = nullptr;
+    if (!HRX_CHECK(hrx_runtime_query_available_devices(context->runtime, driver, allocator, &count, &infos))) {
         return context;
     }
+    std::vector<hrx_device_create_params_t> params;
+    params.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        params.push_back({ infos[i].uri, HRX_WAIT_FLAG_NONE });
+    }
+    if (count != 0 && !HRX_CHECK(hrx_device_group_create(context->runtime, count, params.data(), &context->group))) {
+        hrx_host_allocator_free(allocator, infos);
+        return context;
+    }
+    hrx_host_allocator_free(allocator, infos);
     context->device_contexts.reserve(count);
     context->devices.reserve(count);
-    for (int i = 0; i < count; ++i) {
-        hrx_device_t hrx_device = nullptr;
-        if (!HRX_CHECK(hrx_gpu_device_get(i, &hrx_device)) || hrx_device == nullptr) {
+    for (size_t i = 0; i < count; ++i) {
+        hrx_device_t hrx_device = hrx_device_group_get_device(context->group, i);
+        if (hrx_device == nullptr) {
             continue;
         }
         hrx_device_retain(hrx_device);
