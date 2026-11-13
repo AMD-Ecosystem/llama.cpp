@@ -813,8 +813,17 @@ ggml_tensor * clip_graph::build_attn(
     if (flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) {
         ggml_tensor * v = ggml_permute(ctx0, v_cur, 0, 2, 1, 3);
 
-        k = ggml_cast(ctx0, k, GGML_TYPE_F16);
-        v = ggml_cast(ctx0, v, GGML_TYPE_F16);
+        static const bool kv_cast_early = []() {
+            const char * env = getenv("MTMD_VISION_KV_CAST_EARLY");
+            return env != nullptr && strcmp(env, "0") != 0;
+        }();
+        if (kv_cast_early && k_cur->type == GGML_TYPE_F32 && v_cur->type == GGML_TYPE_F32) {
+            k = ggml_permute(ctx0, ggml_cast(ctx0, k_cur, GGML_TYPE_F16), 0, 2, 1, 3);
+            v = ggml_permute(ctx0, ggml_cast(ctx0, v_cur, GGML_TYPE_F16), 0, 2, 1, 3);
+        } else {
+            k = ggml_cast(ctx0, k, GGML_TYPE_F16);
+            v = ggml_cast(ctx0, v, GGML_TYPE_F16);
+        }
         // mask must be f16 here, use build_inp_attn_mask()
         GGML_ASSERT(!kq_mask || kq_mask->type == GGML_TYPE_F16);
 
