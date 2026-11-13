@@ -747,6 +747,10 @@ static void ggml_cuda_op_unary_mul_impl(ggml_backend_cuda_context & ctx, ggml_te
 
 void ggml_cuda_op_unary_mul(ggml_backend_cuda_context & ctx, ggml_tensor * unary_node, ggml_tensor * mul_node) {
     switch (ggml_get_unary_op(unary_node)) {
+        case GGML_UNARY_OP_GELU:
+            GGML_ASSERT(unary_node->type == GGML_TYPE_F32);
+            ggml_cuda_op_unary_mul_impl<op_gelu>(ctx, unary_node, mul_node);
+            break;
         case GGML_UNARY_OP_SILU:
             ggml_cuda_op_unary_mul_impl<op_silu>(ctx, unary_node, mul_node);
             break;
