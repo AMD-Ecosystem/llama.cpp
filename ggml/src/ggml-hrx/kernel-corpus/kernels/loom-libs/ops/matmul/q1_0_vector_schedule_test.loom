@@ -12,7 +12,7 @@ func.def inline @ggml_q1_0_f32_x4_row_lane(%input_size: index, %input: buffer, %
   %c128 = index.constant 128 : index
   %c0_offset = index.constant 0 : offset
   %c0_f32 = scalar.constant 0.0 : f32
-  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %c0_f32x4 = vector.splatf 0.0 : vector<4xf32>
   %input_view = buffer.view %input[%c0_offset] : buffer -> view<[%bounded_input_size]xf32>
   %iteration_count = index.div %bounded_input_size, %c128 : index
   %lane_k = index.mul %bounded_lane, %c4 : index
@@ -42,7 +42,7 @@ func.def inline @ggml_q1_0_f32_x8_row_lane(%input_size: index, %input: buffer, %
   %c256 = index.constant 256 : index
   %c0_offset = index.constant 0 : offset
   %c0_f32 = scalar.constant 0.0 : f32
-  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %c0_f32x4 = vector.splatf 0.0 : vector<4xf32>
   %input_view = buffer.view %input[%c0_offset] : buffer -> view<[%bounded_input_size]xf32>
   %iteration_count = index.div %bounded_input_size, %c256 : index
   %lane_k = index.mul %bounded_lane, %c8 : index
@@ -80,7 +80,7 @@ func.def inline @ggml_q1_0_f16_x8_row_lane(%input_size: index, %input: buffer, %
   %c256 = index.constant 256 : index
   %c0_offset = index.constant 0 : offset
   %c0_f32 = scalar.constant 0.0 : f32
-  %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
+  %c0_f16x4 = vector.splatf 0.0 : vector<4xf16>
   %input_view = buffer.view %input[%c0_offset] : buffer -> view<[%bounded_input_size]xf16>
   %iteration_count = index.div %bounded_input_size, %c256 : index
   %lane_k = index.mul %bounded_lane, %c8 : index
@@ -120,7 +120,7 @@ func.def inline @ggml_q1_0_f16_x8_rows2_lane(%input_size: index, %input: buffer,
   %c256 = index.constant 256 : index
   %c0_offset = index.constant 0 : offset
   %c0_f32 = scalar.constant 0.0 : f32
-  %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
+  %c0_f16x4 = vector.splatf 0.0 : vector<4xf16>
   %input_view = buffer.view %input[%c0_offset] : buffer -> view<[%bounded_input_size]xf16>
   %iteration_count = index.div %bounded_input_size, %c256 : index
   %lane_k = index.mul %bounded_lane, %c8 : index
@@ -168,7 +168,7 @@ func.def inline @ggml_q1_0_f16_x8_rows4_lane(%input_size: index, %input: buffer,
   %c256 = index.constant 256 : index
   %c0_offset = index.constant 0 : offset
   %c0_f32 = scalar.constant 0.0 : f32
-  %c0_f16x4 = vector.constant 0.0 : vector<4xf16>
+  %c0_f16x4 = vector.splatf 0.0 : vector<4xf16>
   %input_view = buffer.view %input[%c0_offset] : buffer -> view<[%bounded_input_size]xf16>
   %iteration_count = index.div %bounded_input_size, %c256 : index
   %lane_k = index.mul %bounded_lane, %c8 : index

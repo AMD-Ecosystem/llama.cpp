@@ -4,13 +4,13 @@ template.decl @ggml.matmul.tiled_pair_postprocess_f32.apply_vector4(%op: index, 
 template.decl @ggml.unary_f32.apply_vector4(%op: index, %values: vector<4xf32>) -> (vector<4xf32>)
 
 template.def<@ggml.matmul.tiled_pair_postprocess_f32.apply_vector4> device @ggml_matmul_tiled_pair_postprocess_f32_apply_vector4(%op: index, %lhs: vector<4xf32>, %rhs: vector<4xf32>) -> (vector<4xf32>) {
-  %c0_5_f32x4 = vector.constant 0.5 : vector<4xf32>
-  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
-  %c1_f32x4 = vector.constant 1.0 : vector<4xf32>
-  %c2_f32x4 = vector.constant 2.0 : vector<4xf32>
-  %cn2_f32x4 = vector.constant -2.0 : vector<4xf32>
-  %gelu_coef = vector.constant 0.044715 : vector<4xf32>
-  %sqrt_2_over_pi = vector.constant 0.79788456080286544 : vector<4xf32>
+  %c0_5_f32x4 = vector.splatf 0.5 : vector<4xf32>
+  %c0_f32x4 = vector.splatf 0.0 : vector<4xf32>
+  %c1_f32x4 = vector.splatf 1.0 : vector<4xf32>
+  %c2_f32x4 = vector.splatf 2.0 : vector<4xf32>
+  %cn2_f32x4 = vector.splatf -2.0 : vector<4xf32>
+  %gelu_coef = vector.splatf 0.044715 : vector<4xf32>
+  %sqrt_2_over_pi = vector.splatf 0.79788456080286544 : vector<4xf32>
 
   %op_add = index.constant 0 : index
   %sum = vector.addf %lhs, %rhs : vector<4xf32>
