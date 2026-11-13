@@ -98,7 +98,6 @@ Status TransientArena::ensure_capacity_locked(hrx_device_t device, hrx_stream_t 
         HRX_MEMORY_TYPE_DEVICE_LOCAL,
         HRX_MEMORY_ACCESS_ALL,
         HRX_BUFFER_USAGE_DEFAULT,
-        0,
     };
     hrx_buffer_t allocation = nullptr;
     if (ErrorResult error = take_status(
