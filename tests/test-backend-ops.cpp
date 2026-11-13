@@ -10496,6 +10496,8 @@ static void add_rdna35_mmq_cases(std::vector<std::unique_ptr<test_case>> & test_
 // Test cases for evaluation: should try to cover edge cases while using small input sizes to keep the runtime low
 static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     std::vector<std::unique_ptr<test_case>> test_cases;
+    // The input exceeds 8 MiB and the final token-tile group is partial.
+    test_cases.emplace_back(new test_mmdq_mat(GGML_TYPE_Q4_K, 4352, 128, 1025));
     for (ggml_type type : {GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K}) {
         for (int64_t n : {65, 128, 258}) {
             for (ggml_glu_op op : {GGML_GLU_OP_SWIGLU, GGML_GLU_OP_GEGLU}) {
