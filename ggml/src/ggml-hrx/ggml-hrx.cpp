@@ -5,6 +5,7 @@
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
 #include "graph/op-params.h"
+#include "hrx-interop-utils.h"
 #include "hrx_runtime.h"
 #include "kernel-corpus/kernel-corpus.h"
 #include "loom-jit.h"
@@ -228,7 +229,8 @@ static void buffer_set(ggml_backend_buffer_t buffer,
         std::memmove(context->base + destination_offset, data, size);
         return;
     }
-    if (!HRX_CHECK(hrx_synchronous_h2d(context->device->device, data, context->buffer, destination_offset, size))) {
+    if (!HRX_CHECK(
+            hrx_synchronous_h2d(context->device->transfer_queue, data, context->buffer, destination_offset, size))) {
         GGML_LOG_ERROR("%s: HRX buffer upload failed\n", __func__);
     }
 }
@@ -248,7 +250,8 @@ static void buffer_get(ggml_backend_buffer_t buffer,
         std::memcpy(data, context->base + source_offset, size);
         return;
     }
-    if (!HRX_CHECK(hrx_synchronous_d2h(context->device->device, context->buffer, source_offset, data, size))) {
+    if (!HRX_CHECK(
+            hrx_synchronous_d2h(context->device->transfer_queue, context->buffer, source_offset, data, size))) {
         GGML_LOG_ERROR("%s: HRX buffer download failed\n", __func__);
     }
 }
@@ -276,13 +279,14 @@ static bool buffer_copy(ggml_backend_buffer_t buffer, const ggml_tensor * source
     if (both_imported) {
         std::memmove(destination_context->base + destination_offset, source_context->base + source_offset, size);
     } else if (source_imported) {
-        if (!HRX_CHECK(hrx_synchronous_h2d(destination_context->device->device, source_context->base + source_offset,
-                                           destination_context->buffer, destination_offset, size))) {
+        if (!HRX_CHECK(hrx_synchronous_h2d(destination_context->device->transfer_queue,
+                                           source_context->base + source_offset, destination_context->buffer,
+                                           destination_offset, size))) {
             return false;
         }
     } else if (destination_imported) {
-        if (!HRX_CHECK(hrx_synchronous_d2h(source_context->device->device, source_context->buffer, source_offset,
-                                           destination_context->base + destination_offset, size))) {
+        if (!HRX_CHECK(hrx_synchronous_d2h(source_context->device->transfer_queue, source_context->buffer,
+                                           source_offset, destination_context->base + destination_offset, size))) {
             return false;
         }
     } else {
@@ -1344,8 +1348,15 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
             continue;
         }
         hrx_device_retain(hrx_device);
+        hrx_queue_t transfer_queue = nullptr;
+        if (ggml::hrx::ErrorResult error = ggml::hrx::find_transfer_queue(hrx_device, transfer_queue)) {
+            GGML_LOG_ERROR("ggml_hrx: %s\n", error->c_str());
+            hrx_device_release(hrx_device);
+            continue;
+        }
         auto device_ctx                      = std::make_unique<ggml_backend_hrx_device_context>();
         device_ctx->device                   = hrx_device;
+        device_ctx->transfer_queue           = transfer_queue;
         device_ctx->name                     = "HRX" + std::to_string(i);
         device_ctx->use_direct_host_bindings = environment_flag_enabled("GGML_HRX_USE_UNIFIED_MEMORY");
         if (device_ctx->use_direct_host_bindings) {
