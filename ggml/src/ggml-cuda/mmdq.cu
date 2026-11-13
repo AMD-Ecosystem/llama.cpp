@@ -318,6 +318,7 @@ struct mmdq_epi_args {
     const float * bias;
     const float * res;
     int64_t       stride_col_res;
+    int           swizzle; // token tiles per block group, 0 keeps grid order
 };
 
 // dst[t][o] = sum_k y[t][k] * x[o][k]; t: token (src1 column), o: output row (src0 row)
@@ -350,8 +351,17 @@ static __global__ void mul_mat_dq(
     const int wave = tid / 32;
     const int wt   = wave / NWO;
     const int wo   = wave % NWO;
-    const int bx = blockIdx.x;
-    const int by = blockIdx.y;
+    // swizzle > 0 (dense): blocks run in groups of swizzle token tiles x all row tiles, so the activations of a group stay in cache
+    int bx = blockIdx.x;
+    int by = blockIdx.y;
+    if (!has_ids && epi.swizzle > 0) {
+        const int lin   = blockIdx.y*gridDim.x + blockIdx.x;
+        const int per_g = epi.swizzle*gridDim.y;
+        const int x0    = (lin / per_g)*epi.swizzle;
+        const int gx    = min(epi.swizzle, (int) gridDim.x - x0);
+        bx = x0 + (lin % per_g) % gx;
+        by = (lin % per_g) / gx;
+    }
     const int o0   = by*(glu ? BO/2 : BO);
 
     int t0    = bx*BT;
@@ -793,7 +803,10 @@ static void mul_mat_dq_launch(
     if constexpr (glu && (has_ids || (BO/(16*NWO)) % 2 != 0)) {
         GGML_ABORT("mmdq config not supported with glu");
     } else {
-        const mmdq_epi_args & epi = epi_in;
+        // opt-in (GGML_CUDA_MMDQ_SWIZZLE=n): group n token tiles, used when the activations (ncols_y x ncols_x f16) do not fit in 8 MiB
+        static const int swizzle = getenv("GGML_CUDA_MMDQ_SWIZZLE") ? atoi(getenv("GGML_CUDA_MMDQ_SWIZZLE")) : 0;
+        mmdq_epi_args epi = epi_in;
+        epi.swizzle = !has_ids && swizzle > 0 && int64_t(ncols_y)*ncols_x*2 > (8 << 20) ? swizzle : 0;
         int nblocks_t = (ncols_y + BT - 1)/BT;
         if constexpr (has_ids) {
             // ncols_y is the number of compact rows, each expert adds at most one partial block
