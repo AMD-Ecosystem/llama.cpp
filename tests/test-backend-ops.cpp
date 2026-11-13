@@ -5856,11 +5856,11 @@ static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats, bool skip = 
 }
 
 // GGML_OP_MUL_MAT_ID
-struct test_glu_mat : public test_mul_mat {
+struct test_mmq_glu_mat : public test_mul_mat {
     const bool extra_consumer;
     const bool force_f32;
     const ggml_glu_op glu_op;
-    test_glu_mat(ggml_type type, int64_t n, int64_t k = 512, bool extra_consumer = false, bool force_f32 = false, ggml_glu_op glu_op = GGML_GLU_OP_GEGLU)
+    test_mmq_glu_mat(ggml_type type, int64_t n, int64_t k = 512, bool extra_consumer = false, bool force_f32 = false, ggml_glu_op glu_op = GGML_GLU_OP_GEGLU)
         : test_mul_mat(type, GGML_TYPE_F32, 256, n, k, {1, 1}, {1, 1}), extra_consumer(extra_consumer), force_f32(force_f32), glu_op(glu_op) {}
     bool run_whole_graph() override { return true; }
     std::string op_desc(ggml_tensor *) override { return glu_op == GGML_GLU_OP_GEGLU ? "MMQ_GEGLU_MAT" : "MMQ_SWIGLU_MAT"; }
@@ -10722,11 +10722,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (ggml_type type : {GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K}) {
         for (int64_t n : {65, 128, 258}) {
             for (ggml_glu_op op : {GGML_GLU_OP_SWIGLU, GGML_GLU_OP_GEGLU}) {
-                test_cases.emplace_back(new test_glu_mat(type, n, 768, false, false, op));
+                test_cases.emplace_back(new test_mmq_glu_mat(type, n, 768, false, false, op));
             }
         }
-        test_cases.emplace_back(new test_glu_mat(type, 258, 512, true));
-        test_cases.emplace_back(new test_glu_mat(type, 128, 512, false, true));
+        test_cases.emplace_back(new test_mmq_glu_mat(type, 258, 512, true));
+        test_cases.emplace_back(new test_mmq_glu_mat(type, 128, 512, false, true));
         test_cases.emplace_back(new test_rms_norm_mmq(1536, 258, type));
     }
     for (int64_t k : {512, 768, 1536, 6144}) {
