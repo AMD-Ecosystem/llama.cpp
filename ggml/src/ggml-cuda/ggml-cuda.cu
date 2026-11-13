@@ -35,6 +35,7 @@
 #include "ggml-cuda/im2col.cuh"
 #include "ggml-cuda/mmf.cuh"
 #include "ggml-cuda/mmq.cuh"
+#include "ggml-cuda/mmdq.cuh"
 #include "ggml-cuda/mmvf.cuh"
 #include "ggml-cuda/mmvq.cuh"
 #include "ggml-cuda/moe-weighted-reduction.cuh"
@@ -2349,6 +2350,10 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         ggml_cuda_mul_mat_vec_q(ctx, src0, src1, nullptr, dst);
         return;
     }
+    if (ggml_cuda_should_use_mmdq(src0, src1, dst, cc)) {
+        ggml_cuda_mul_mat_dq(ctx, src0, src1, dst);
+        return;
+    }
     if (ggml_cuda_should_use_mmq(src0->type, cc, ne11, /*n_experts =*/ 0)) {
         ggml_cuda_mul_mat_q(ctx, src0, src1, nullptr, dst);
         return;
@@ -2420,6 +2425,10 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
             }
         }
 
+        if (ggml_cuda_should_use_mmdq_id(src0, src1, ids, dst, cc)) {
+            ggml_cuda_mul_mat_id_dq(ctx, src0, src1, ids, dst);
+            return;
+        }
         if (ggml_cuda_should_use_mmq(src0->type, cc, ne12, /*n_experts=*/ne02)) {
             ggml_cuda_mul_mat_q(ctx, src0, src1, ids, dst);
             return;
@@ -4388,6 +4397,45 @@ static int ggml_cuda_try_fuse_16bit_ffn(ggml_backend_cuda_context & ctx, ggml_cg
 }
 
 // try and fuse nodes and return the number of nodes to skip
+static const ggml_tensor * ggml_cuda_mmdq_add_bias(const ggml_tensor * add, const ggml_tensor * prev) {
+    if (add->op != GGML_OP_ADD || (add->src[0] != prev && add->src[1] != prev)) {
+        return nullptr;
+    }
+    const ggml_tensor * b = add->src[0] == prev ? add->src[1] : add->src[0];
+    const uintptr_t a0 = (uintptr_t) add->data;
+    const uintptr_t b0 = (uintptr_t) b->data;
+    if (add->type != GGML_TYPE_F32 || b->type != GGML_TYPE_F32 || !ggml_are_same_shape(add, prev) || !ggml_is_contiguous(add) ||
+            !ggml_is_contiguous(b) || b->ne[0] != prev->ne[0] || ggml_nrows(b) != 1 || (a0 < b0 + ggml_nbytes(b) && b0 < a0 + ggml_nbytes(add))) {
+        return nullptr;
+    }
+    return b;
+}
+
+static bool ggml_cuda_can_use_packed_mmq(ggml_backend_cuda_context & ctx, const ggml_tensor * mm, bool allow_d4 = false) {
+    const ggml_tensor * w = mm->src[0];
+    const ggml_tensor * x = mm->src[1];
+    const int cc = ggml_cuda_info().devices[ctx.device].cc;
+    if (ggml_cuda_should_use_mmdq(mm->src[0], mm->src[1], mm, cc)) {
+        return false;
+    }
+    return GGML_CUDA_CC_IS_RDNA3_5(cc) && (w->type == GGML_TYPE_Q4_K || w->type == GGML_TYPE_Q5_K || (allow_d4 && w->type == GGML_TYPE_Q6_K)) &&
+        x->type == GGML_TYPE_F32 && mm->type == GGML_TYPE_F32 &&
+        ggml_is_contiguous(w) && ggml_is_contiguous(x) && ggml_is_contiguous(mm) &&
+        w->ne[2] == 1 && w->ne[3] == 1 && x->ne[2] == 1 && x->ne[3] == 1 && x->ne[1] >= 64 && x->ne[1] <= 65535 &&
+        ggml_get_op_params_i32(mm, 0) == GGML_PREC_DEFAULT && ggml_prec_get_src(mm, 1) == GGML_PREC_DEFAULT && ggml_get_op_params_i32(mm, 1) == 0 &&
+        !ggml_cuda_should_use_mmvq(w->type, cc, x->ne[1]) &&
+        ggml_cuda_should_use_mmq(w->type, cc, x->ne[1], 0) &&
+        !(w->view_src && ggml_backend_buffer_get_usage(w->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE &&
+          ggml_nbytes(w) != ggml_backend_buffer_get_alloc_size(w->buffer, w));
+}
+
+static size_t ggml_cuda_packed_mmq_size(ggml_backend_cuda_context & ctx, const ggml_tensor * mm) {
+    GGML_UNUSED(ctx);
+    // All supported RDNA3.5 tiles fit within 128 columns and 1024 load bytes.
+    const size_t padding = GGML_PAD(128*sizeof(block_q8_1_mmq), 1024);
+    return GGML_PAD(mm->src[1]->ne[0], MATRIX_ROW_PADDING)*ggml_nrows(mm->src[1])/QK8_1_MMQ*sizeof(block_q8_1_mmq) + padding;
+}
+
 static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
 
     if (ggml_cuda_fusion_disabled()) {
@@ -4521,8 +4569,87 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         }
     }
 
+    if (node->op == GGML_OP_GLU && (ggml_get_glu_op(node) == GGML_GLU_OP_GEGLU || ggml_get_glu_op(node) == GGML_GLU_OP_SWIGLU) && node->src[1] && ggml_get_op_params_i32(node, 1) == 0 &&
+            node->type == GGML_TYPE_F32 && node->src[0]->type == GGML_TYPE_F32 && node->src[1]->type == GGML_TYPE_F32 &&
+            ggml_is_contiguous(node->src[0]) && ggml_is_contiguous(node->src[1]) &&
+            ggml_cuda_is_aligned(node->src[0], 16) && ggml_cuda_is_aligned(node->src[1], 16) &&
+            ggml_are_same_shape(node, node->src[0]) && ggml_are_same_shape(node, node->src[1])) {
+        const ggml_op ops[] = { GGML_OP_GLU, GGML_OP_MUL_MAT };
+        const int output_idx = i + 1;
+        if (ggml_can_fuse_subgraph(cgraph, i, 2, ops, &output_idx, 1) &&
+                ggml_cuda_check_fusion_memory_ranges(cgraph, i, 2, &output_idx, 1)) {
+            ggml_tensor * mm = cgraph->nodes[output_idx];
+            if (GGML_CUDA_MMQ_OPT_ENABLED(GGML_CUDA_FUSE_GLU_PACK, true) && mm->src[1] == node && node->ne[0] % 4 == 0 &&
+                    ggml_cuda_can_use_packed_mmq(*cuda_ctx, mm, true)) {
+                ggml_cuda_pool_alloc<char> packed(cuda_ctx->pool(), ggml_cuda_packed_mmq_size(*cuda_ctx, mm));
+                const auto quantize = mm->src[0]->type == GGML_TYPE_Q6_K ? quantize_glu_mmq_q8_1_d4_cuda : quantize_glu_mmq_q8_1_cuda;
+                quantize((const float *) node->src[0]->data, (const float *) node->src[1]->data,
+                    packed.get(), node->ne[0], node->ne[1], ggml_get_glu_op(node), cuda_ctx->stream());
+                ggml_cuda_mul_mat_q(*cuda_ctx, mm->src[0], node, nullptr, mm, nullptr, packed.get());
+                return 1;
+            }
 
+        }
+    }
 
+    if (GGML_CUDA_MMQ_OPT_ENABLED(GGML_CUDA_FUSE_NORM_PACK, true) && node->op == GGML_OP_RMS_NORM) {
+        const ggml_op ops[] = { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_MUL_MAT, GGML_OP_MUL_MAT };
+        const int outputs[] = { i + 2, i + 3 };
+        if (ggml_can_fuse_subgraph(cgraph, i, 4, ops, outputs, 2)) {
+            ggml_tensor * mul = cgraph->nodes[i + 1];
+            ggml_tensor * mm0 = cgraph->nodes[i + 2];
+            ggml_tensor * mm1 = cgraph->nodes[i + 3];
+            const ggml_tensor * weight = mul->src[mul->src[0] == node ? 1 : 0];
+            if ((mul->src[0] == node || mul->src[1] == node) && mm0->src[1] == mul && mm1->src[1] == mul &&
+                    node->src[0]->type == GGML_TYPE_F32 && ggml_is_contiguous(node->src[0]) &&
+                    ggml_cuda_is_aligned(node->src[0], 16) && ggml_cuda_is_aligned(weight, 16) &&
+                    node->ne[0] % MATRIX_ROW_PADDING == 0 && node->ne[0] <= 4096 &&
+                    weight->type == GGML_TYPE_F32 && ggml_is_contiguous(weight) &&
+                    ggml_nelements(weight) == node->ne[0] && weight->ne[0] == node->ne[0] &&
+                    ggml_cuda_can_use_packed_mmq(*cuda_ctx, mm0) && ggml_cuda_can_use_packed_mmq(*cuda_ctx, mm1) &&
+                    ggml_cuda_check_fusion_memory_ranges(cgraph, i, 4, outputs, 2)) {
+                const size_t size = std::max(ggml_cuda_packed_mmq_size(*cuda_ctx, mm0), ggml_cuda_packed_mmq_size(*cuda_ctx, mm1));
+                ggml_cuda_pool_alloc<char> packed(cuda_ctx->pool(), size);
+                quantize_rms_norm_mmq_q8_1_cuda((const float *) node->src[0]->data, (const float *) weight->data,
+                    packed.get(), node->ne[0], node->ne[1], ggml_get_op_params_f32(node, 0), cuda_ctx->stream());
+                ggml_cuda_mul_mat_q(*cuda_ctx, mm0->src[0], mul, nullptr, mm0, nullptr, packed.get());
+                ggml_cuda_mul_mat_q(*cuda_ctx, mm1->src[0], mul, nullptr, mm1, nullptr, packed.get());
+                return 3;
+            }
+        }
+    }
+
+    static const bool mmdq_fuse_bias = []() {
+        const char * env = getenv("GGML_CUDA_MMDQ_FUSE_BIAS");
+        return env != nullptr && atoi(env) != 0;
+    }();
+    if (mmdq_fuse_bias && node->op == GGML_OP_MUL_MAT &&
+            ggml_cuda_should_use_mmdq(node->src[0], node->src[1], node, ggml_cuda_info().devices[cuda_ctx->device].cc) &&
+            ggml_can_fuse(cgraph, i, { GGML_OP_MUL_MAT, GGML_OP_ADD })) {
+        const ggml_tensor * bias = ggml_cuda_mmdq_add_bias(cgraph->nodes[i + 1], node);
+        const int output_idx = i + 1;
+        if (bias && ggml_cuda_check_fusion_memory_ranges(cgraph, i, 2, &output_idx, 1)) {
+            ggml_cuda_mmdq_src1_share(*cuda_ctx, cgraph, i);
+            ggml_cuda_mul_mat_dq(*cuda_ctx, node->src[0], node->src[1], cgraph->nodes[i + 1], (const float *) bias->data);
+            return 1;
+        }
+    }
+
+    if ((node->op == GGML_OP_MUL_MAT || node->op == GGML_OP_MUL_MAT_ID) && i + 3 < cgraph->n_nodes) {
+        ggml_tensor * glu = cgraph->nodes[i + 2];
+        ggml_tensor * down = cgraph->nodes[i + 3];
+        const int cc = ggml_cuda_info().devices[cuda_ctx->device].cc;
+        const ggml_op ops[] = { node->op, node->op, GGML_OP_GLU, node->op };
+        const int output_idx = i + 3;
+        if (glu->op == GGML_OP_GLU && (glu->src[0] == node || glu->src[1] == node) &&
+                (glu->src[0] == cgraph->nodes[i + 1] || glu->src[1] == cgraph->nodes[i + 1]) &&
+                ggml_cuda_should_use_mmdq_glu(glu, down, cc) &&
+                ggml_can_fuse_subgraph(cgraph, i, 4, ops, &output_idx, 1)) {
+            // Input and IDs are staged before down writes dst; gate/up use a private FP16 buffer.
+            ggml_cuda_mul_mat_dq_glu(*cuda_ctx, glu, down, down);
+            return 3;
+        }
+    }
 
     if (node->op == GGML_OP_MUL_MAT_ID && cuda_ctx->stream_context().concurrent_events.empty() &&
             ggml_cuda_match_shared_expert(cgraph, i, i + 3) &&
@@ -5325,6 +5452,8 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         return 2;
     }
 
+    ggml_cuda_mmdq_src1_share(*cuda_ctx, cgraph, i);
+
     return 0;
 }
 
@@ -5577,6 +5706,8 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                }
             }
         }
+
+        ggml_cuda_mmdq_src1_release(*cuda_ctx);
 
 #ifdef USE_CUDA_GRAPH
         if (use_cuda_graph && cuda_graph_update_required) { // End CUDA graph capture
