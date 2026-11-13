@@ -1,3 +1,4 @@
+#include "opt-traffic.cuh"
 #include "ggml-cuda.h"
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
@@ -4086,6 +4087,28 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     }
 
     ggml_tensor * node = cgraph->nodes[i];
+
+    if (GGML_CUDA_TRAFFIC_OPT_ENABLED(GGML_CUDA_FUSE_NORM_MUL_ADD, true) && node->op == GGML_OP_NORM && GGML_CUDA_CC_IS_RDNA3_5(ggml_cuda_info().devices[cuda_ctx->device].cc)) {
+        const ggml_op ops[] = { GGML_OP_NORM, GGML_OP_MUL, GGML_OP_ADD };
+        const int output_idx = i + 2;
+        if (ggml_can_fuse_subgraph(cgraph, i, 3, ops, &output_idx, 1)) {
+            ggml_tensor * mul = cgraph->nodes[i + 1];
+            ggml_tensor * add = cgraph->nodes[output_idx];
+            const ggml_tensor * weight = mul->src[mul->src[0] == node ? 1 : 0];
+            const ggml_tensor * bias = add->src[add->src[0] == mul ? 1 : 0];
+            if ((mul->src[0] == node || mul->src[1] == node) && (add->src[0] == mul || add->src[1] == mul) &&
+                    node->src[0]->type == GGML_TYPE_F32 && weight->type == GGML_TYPE_F32 && bias->type == GGML_TYPE_F32 &&
+                    node->type == GGML_TYPE_F32 && mul->type == GGML_TYPE_F32 && add->type == GGML_TYPE_F32 &&
+                    ggml_are_same_shape(node, add) && ggml_are_same_shape(node, mul) &&
+                    ggml_is_contiguous(node->src[0]) && ggml_is_contiguous(add) &&
+                    ggml_is_contiguous(weight) && weight->ne[0] == node->ne[0] && ggml_nrows(weight) == 1 &&
+                    ggml_is_contiguous(bias) && bias->ne[0] == node->ne[0] && ggml_nrows(bias) == 1 &&
+                    ggml_cuda_check_fusion_memory_ranges(cgraph, i, 3, &output_idx, 1)) {
+                ggml_cuda_op_norm_fused(*cuda_ctx, node, mul, add);
+                return 2;
+            }
+        }
+    }
 
     if (node->op == GGML_OP_MUL_MAT_ID && cuda_ctx->stream_context().concurrent_events.empty() &&
             ggml_cuda_match_shared_expert(cgraph, i, i + 3) &&
