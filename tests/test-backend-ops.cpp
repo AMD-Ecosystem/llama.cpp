@@ -9166,6 +9166,27 @@ struct test_rdna_prefill_attention : public test_flash_attn_ext {
     }
 };
 
+struct test_rdna_prefill_mask_reuse : public test_rdna_prefill_attention {
+    const bool computed;
+    test_rdna_prefill_mask_reuse(int d, int queries, int batches, bool computed)
+        : test_rdna_prefill_attention(d, queries, 272, 4, batches, 3), computed(computed) {}
+    bool run_whole_graph() override { return true; }
+    std::string op_desc(ggml_tensor *) override { return "RDNA_PREFILL_MASK_REUSE"; }
+    std::string vars() override { return test_rdna_prefill_attention::vars() + "," + VAR_TO_STR(computed); }
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * first = test_rdna_prefill_attention::build_graph(ctx);
+        ggml_tensor * mask = first->src[3];
+        ggml_set_input(mask);
+        if (computed) {
+            first->src[3] = ggml_cont(ctx, mask);
+        }
+        ggml_tensor * second = ggml_flash_attn_ext(ctx, first->src[0], first->src[1], first->src[2], first->src[3],
+            1.0f/sqrtf(hsk), 0.0f, 0.0f);
+        ggml_flash_attn_ext_set_prec(second, GGML_PREC_F32);
+        return ggml_add(ctx, first, second);
+    }
+};
+
 // large Q values, so the online softmax has to rescale the partial results
 struct test_flash_attn_ext_large_logits : public test_flash_attn_ext {
     static constexpr int q_range = 20;
@@ -10707,6 +10728,12 @@ static void add_rdna35_mmq_cases(std::vector<std::unique_ptr<test_case>> & test_
 static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     std::vector<std::unique_ptr<test_case>> test_cases;
 
+    for (int d : {64, 128, 256}) {
+        for (bool computed : {false, true}) {
+            test_cases.emplace_back(new test_rdna_prefill_mask_reuse(d, 129, 1, computed));
+            test_cases.emplace_back(new test_rdna_prefill_mask_reuse(d, 64, 2, computed));
+        }
+    }
     for (int d : {64, 128, 256}) {
         for (int mask_kind : {0, 1, 2, 3, 4}) {
             test_cases.emplace_back(new test_rdna_prefill_attention(d, 129, 272, 4, 1, mask_kind));
