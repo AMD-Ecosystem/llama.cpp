@@ -1553,7 +1553,19 @@ template <ggml_type type, int J, bool fallback, bool has_fusion> static __device
         const block_q6_K * bxi = ggml_cuda_mmq_x_row<block_q6_K, has_fusion>(x, x_gate, kbx0, i, stride) + (threadIdx.x % (MMQ_TILE_NE_K/8)) / 4;
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
-        x_sc[i*sram_stride + threadIdx.x%4] = get_int_b2(bxi->scales, threadIdx.x % (MMQ_TILE_NE_K/8));
+#if defined(RDNA3_5)
+        if constexpr (GGML_CUDA_MMQ_Q6_K_SCALE_REUSE && J == 64) {
+            // The FP16 block scale times an int8 subscale is exact in FP32.
+            const int scales = get_int_b2(bxi->scales, threadIdx.x % (MMQ_TILE_NE_K/8));
+#pragma unroll
+            for (int l = 0; l < 4; ++l) {
+                ((float *) x_sc)[i*sram_stride + 4*(threadIdx.x%4) + l] = (int8_t) (scales >> (8*l)) * (float) bxi->d;
+            }
+        } else
+#endif
+        {
+            x_sc[i*sram_stride + threadIdx.x%4] = get_int_b2(bxi->scales, threadIdx.x % (MMQ_TILE_NE_K/8));
+        }
 #else
         x_sc[i*(MMQ_TILE_NE_K/8) + i/8 + threadIdx.x%(MMQ_TILE_NE_K/8)] = get_int_b2(bxi->scales, threadIdx.x%(QI6_K/8));
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)

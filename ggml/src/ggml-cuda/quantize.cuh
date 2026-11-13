@@ -68,3 +68,14 @@ void quantize_scatter_mmq_q8_1_cuda(const float *   x,
                                     int64_t         nrows_dst,
                                     int             n_expert_used,
                                     cudaStream_t    stream);
+
+void quantize_rms_norm_mmq_q8_1_cuda(const float * x, const float * weight, void * y,
+        int ncols, int nrows, float eps, cudaStream_t stream);
+
+void quantize_glu_mmq_q8_1_cuda(const float * x, const float * gate, void * y, int ncols, int nrows, ggml_glu_op op, cudaStream_t stream);
+
+void quantize_glu_mmq_q8_1_d4_cuda(const float * x, const float * gate, void * y, int ncols, int nrows, ggml_glu_op op, cudaStream_t stream);
+
+// Cache each ablation switch; set it before starting the process.
+#define GGML_CUDA_MMQ_OPT_ENABLED(name, fallback) \
+    ([] { static const bool enabled = [] { const char * v = std::getenv(#name); return v ? std::atoi(v) != 0 : (fallback); }(); return enabled; }())
