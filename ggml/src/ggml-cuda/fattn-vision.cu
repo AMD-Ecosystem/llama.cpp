@@ -631,6 +631,76 @@ bool ggml_cuda_flash_attn_ext_prefill_supported(int cc, const ggml_tensor * dst)
     return (D == 64 || D == 128 || D == 256) && Q->ne[2] % K->ne[2] == 0 && fattn_vision_common_supported(cc, dst);
 }
 
+#ifndef GGML_CUDA_FATTN_PREFILL_MASK_CACHE
+#define GGML_CUDA_FATTN_PREFILL_MASK_CACHE 1
+#endif
+
+void ggml_cuda_flash_attn_ext_prefill_prepare(ggml_backend_cuda_context & ctx, const ggml_cgraph * cgraph) {
+    auto & cache = ctx.fattn_cls;
+    GGML_ASSERT(!cache.buf);
+    cache.mask = nullptr;
+    cache.inputs.clear();
+    GGML_UNUSED(cgraph);
+#if GGML_CUDA_FATTN_PREFILL_MASK_CACHE
+    static const bool enabled = []() {
+        const char * env = getenv("GGML_CUDA_FATTN_PREFILL_MASK_CACHE");
+        return !env || atoi(env) != 0;
+    }();
+    static const bool prefill = []() {
+        const char * env = getenv("GGML_CUDA_FATTN_PREFILL");
+        return env && atoi(env) != 0;
+    }();
+    const int cc = ggml_cuda_info().devices[ctx.device].cc;
+    if (!enabled || !prefill || !GGML_CUDA_CC_IS_RDNA3_5(cc) || ctx.curr_stream_no != 0) {
+        return;
+    }
+    size_t size = 0;
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        const ggml_tensor * node = cgraph->nodes[i];
+        if (node->op != GGML_OP_FLASH_ATTN_EXT || !ggml_cuda_flash_attn_ext_prefill_supported(cc, node)) {
+            continue;
+        }
+        const ggml_tensor * mask = node->src[3];
+        if (!mask || mask->op != GGML_OP_NONE || mask->view_src) {
+            continue;
+        }
+        if (std::find(cache.inputs.begin(), cache.inputs.end(), mask) == cache.inputs.end()) {
+            bool written = false;
+            const uintptr_t base = (uintptr_t) mask->data;
+            for (int j = 0; j < cgraph->n_nodes; ++j) {
+                const ggml_tensor * other = cgraph->nodes[j];
+                if (other->op == GGML_OP_NONE || other->op == GGML_OP_VIEW || other->op == GGML_OP_RESHAPE ||
+                        other->op == GGML_OP_PERMUTE || other->op == GGML_OP_TRANSPOSE) {
+                    continue;
+                }
+                const uintptr_t addr = (uintptr_t) other->data;
+                written = written || (base <= addr ? addr - base < ggml_nbytes(mask) : base - addr < ggml_nbytes(other));
+            }
+            if (written) {
+                continue;
+            }
+            cache.inputs.push_back(mask);
+        }
+        // D256 can use 64 query rows per tile; reserve for that smaller tile too.
+        const size_t nq = (node->src[0]->ne[1] + 63)/64;
+        const size_t nk = (node->src[1]->ne[1] + FS_BK - 1)/FS_BK;
+        const size_t nb = mask->ne[3];
+        GGML_ASSERT(nk > 0 && nb > 0 && nq <= SIZE_MAX/nk && nq*nk <= SIZE_MAX/nb);
+        size = std::max(size, nq*nk*nb);
+    }
+    // Reserve before any node scratch so this allocation is released last.
+    if (size) {
+        cache.buf = std::make_unique<ggml_cuda_pool_alloc<uint8_t>>(ctx.pool(), size);
+    }
+#endif
+}
+
+void ggml_cuda_flash_attn_ext_prefill_release(ggml_backend_cuda_context & ctx) {
+    ctx.fattn_cls.buf.reset();
+    ctx.fattn_cls.mask = nullptr;
+    ctx.fattn_cls.inputs.clear();
+}
+
 static void fattn_vision_launch(ggml_backend_cuda_context & ctx, ggml_tensor * dst, const bool use_mask) {
     const ggml_tensor * Q    = dst->src[0];
     const ggml_tensor * K    = dst->src[1];
@@ -658,8 +728,20 @@ static void fattn_vision_launch(ggml_backend_cuda_context & ctx, ggml_tensor * d
 
     ggml_cuda_pool_alloc<uint8_t> cls_local(ctx.pool());
     uint8_t * cls = nullptr;
-    if (mask) {
-        cls = cls_local.alloc(size_t(nbm)*nqb*ntk);
+    auto & cache = ctx.fattn_cls;
+    const int64_t key[7] = {nq, nkv, bq, bk, nbm, mask ? int64_t(mask->nb[1]) : 0, mask ? int64_t(mask->nb[3]) : 0};
+    const bool reuse = mask && ctx.curr_stream_no == 0 && cache.buf &&
+        std::find(cache.inputs.begin(), cache.inputs.end(), mask) != cache.inputs.end();
+    if (reuse && cache.mask == mask && memcmp(cache.key, key, sizeof(key)) == 0) {
+        cls = cache.buf->get();
+    } else if (mask) {
+        if (reuse) {
+            cache.mask = mask;
+            memcpy(cache.key, key, sizeof(key));
+            cls = cache.buf->get();
+        } else {
+            cls = cls_local.alloc(size_t(nbm)*nqb*ntk);
+        }
         if (split && split_ng == 8) {
             flash_attn_ext_prefill_classify<128, FS_BK><<<dim3(ntk, nqb, nbm), block, 0, stream>>>(
                 (const char *) mask->data, cls, nq, nkv, mask->nb[1], mask->nb[3]);

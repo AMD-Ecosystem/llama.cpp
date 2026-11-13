@@ -1579,6 +1579,13 @@ struct ggml_backend_cuda_context {
 
     ggml_cuda_stream_context concurrent_stream_context;
 
+    struct {
+        const ggml_tensor * mask = nullptr;
+        int64_t key[7] = {};
+        std::vector<const ggml_tensor *> inputs;
+        std::unique_ptr<ggml_cuda_pool_alloc<uint8_t>> buf;
+    } fattn_cls;
+
     // dedicated buffer for the branches of overlapped concurrent regions (attention QKV, MoE shared
     // expert), reused across layers so their scratch never aliases tensors read across the region
     ggml_backend_buffer_t concurrent_scratch      = nullptr;

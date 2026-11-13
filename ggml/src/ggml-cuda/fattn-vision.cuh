@@ -12,3 +12,6 @@ bool ggml_cuda_flash_attn_ext_prefill_supported(int cc, const ggml_tensor * dst)
 
 void ggml_cuda_flash_attn_ext_prefill(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 
+
+void ggml_cuda_flash_attn_ext_prefill_prepare(ggml_backend_cuda_context & ctx, const ggml_cgraph * cgraph);
+void ggml_cuda_flash_attn_ext_prefill_release(ggml_backend_cuda_context & ctx);
