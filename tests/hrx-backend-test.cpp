@@ -13479,10 +13479,17 @@ static void run_binary_q8_publication_numerics() {
 
         const int64_t element_count = test.hidden * test.tokens;
         const int64_t rhs_count     = test.broadcast ? test.hidden : element_count;
+        const size_t f32_bytes = static_cast<size_t>(element_count) * sizeof(float);
+        const size_t q8_bytes  = qwen_q8_1_x4_size(test.tokens, test.hidden);
         ggml_tensor * lhs = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, test.hidden, test.tokens);
         ggml_tensor * rhs = test.broadcast ? ggml_new_tensor_1d(ctx, GGML_TYPE_F32, test.hidden) :
                                              ggml_new_tensor_2d(ctx, GGML_TYPE_F32, test.hidden, test.tokens);
-        REQUIRE(lhs != nullptr && rhs != nullptr);
+        ggml_tensor * reference_f32_tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, element_count);
+        ggml_tensor * reference_q8_tensor  = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, q8_bytes / sizeof(int32_t));
+        ggml_tensor * published_f32_tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, element_count);
+        ggml_tensor * published_q8_tensor  = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, q8_bytes / sizeof(int32_t));
+        REQUIRE(lhs != nullptr && rhs != nullptr && reference_f32_tensor != nullptr && reference_q8_tensor != nullptr &&
+                published_f32_tensor != nullptr && published_q8_tensor != nullptr);
         ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
         REQUIRE(buffer != nullptr);
 
@@ -13518,18 +13525,23 @@ static void run_binary_q8_publication_numerics() {
         REQUIRE(graph.values().bind_buffer(lhs_value, lhs_binding));
         REQUIRE(graph.values().bind_buffer(rhs_value, rhs_binding));
 
-        const ggml::hrx::ValueId reference_f32(static_cast<int32_t>(graph.values().size()));
-        const ggml::hrx::ValueId reference_q8(reference_f32.value + 1);
-        const ggml::hrx::ValueId published_f32(reference_f32.value + 2);
-        const ggml::hrx::ValueId published_q8(reference_f32.value + 3);
-        const size_t f32_bytes = static_cast<size_t>(element_count) * sizeof(float);
-        const size_t q8_bytes  = qwen_q8_1_x4_size(test.tokens, test.hidden);
-
+        const ggml::hrx::ValueId reference_f32 =
+            graph.values().get_or_add_tensor_value(reference_f32_tensor, ggml::hrx::ValueKind::External);
+        const ggml::hrx::ValueId reference_q8 =
+            graph.values().get_or_add_tensor_value(reference_q8_tensor, ggml::hrx::ValueKind::External);
+        const ggml::hrx::ValueId published_f32 =
+            graph.values().get_or_add_tensor_value(published_f32_tensor, ggml::hrx::ValueKind::External);
+        const ggml::hrx::ValueId published_q8 =
+            graph.values().get_or_add_tensor_value(published_q8_tensor, ggml::hrx::ValueKind::External);
+        for (const auto & output : { std::pair{ reference_f32, reference_f32_tensor },
+                                     std::pair{ reference_q8, reference_q8_tensor },
+                                     std::pair{ published_f32, published_f32_tensor },
+                                     std::pair{ published_q8, published_q8_tensor } }) {
+            ggml::hrx::ValueBufferBinding binding;
+            REQUIRE(ggml_backend_hrx_resolve_value_buffer(output.second, binding));
+            REQUIRE(graph.values().bind_buffer(output.first, binding));
+        }
         ggml::hrx::CommandPlan plan;
-        plan.transients.push_back({ reference_f32, "test.binary.reference_f32", f32_bytes, 256 });
-        plan.transients.push_back({ reference_q8, "test.binary.reference_q8", q8_bytes, 256 });
-        plan.transients.push_back({ published_f32, "test.binary.published_f32", f32_bytes, 256 });
-        plan.transients.push_back({ published_q8, "test.binary.published_q8", q8_bytes, 256 });
 
         ggml::hrx::Dispatch legacy;
         legacy.kernel = ggml::hrx::make_kernel_specialization(ggml::hrx::kernel_catalog_ref(
@@ -13621,22 +13633,22 @@ static void run_binary_q8_publication_numerics() {
         REQUIRE(ggml::hrx::execute_command_program(execution_context, commands, bindings));
         ggml_backend_synchronize(backend);
 
-        const auto arena = backend_context->transient_arena.current_allocation();
-        const auto * reference_f32_allocation =
-            ggml::hrx::find_transient_allocation(commands.transients, reference_f32);
-        const auto * reference_q8_allocation =
-            ggml::hrx::find_transient_allocation(commands.transients, reference_q8);
-        const auto * published_f32_allocation =
-            ggml::hrx::find_transient_allocation(commands.transients, published_f32);
-        const auto * published_q8_allocation =
-            ggml::hrx::find_transient_allocation(commands.transients, published_q8);
-        REQUIRE(reference_f32_allocation != nullptr && reference_q8_allocation != nullptr);
-        REQUIRE(published_f32_allocation != nullptr && published_q8_allocation != nullptr);
-        const auto reference_f32_bytes = read_transient_bytes(backend_context, arena, *reference_f32_allocation);
-        const auto reference_q8_bytes  = read_transient_bytes(backend_context, arena, *reference_q8_allocation);
-        const auto published_f32_bytes = read_transient_bytes(backend_context, arena, *published_f32_allocation);
-        const auto published_q8_bytes  = read_transient_bytes(backend_context, arena, *published_q8_allocation);
+        std::vector<uint8_t> reference_f32_bytes(f32_bytes);
+        std::vector<uint8_t> reference_q8_bytes(q8_bytes);
+        std::vector<uint8_t> published_f32_bytes(f32_bytes);
+        std::vector<uint8_t> published_q8_bytes(q8_bytes);
+        ggml_backend_tensor_get(reference_f32_tensor, reference_f32_bytes.data(), 0, f32_bytes);
+        ggml_backend_tensor_get(reference_q8_tensor, reference_q8_bytes.data(), 0, q8_bytes);
+        ggml_backend_tensor_get(published_f32_tensor, published_f32_bytes.data(), 0, f32_bytes);
+        ggml_backend_tensor_get(published_q8_tensor, published_q8_bytes.data(), 0, q8_bytes);
         REQUIRE(reference_f32_bytes == published_f32_bytes);
+        if (reference_q8_bytes != published_q8_bytes) {
+            const auto mismatch = std::mismatch(reference_q8_bytes.begin(), reference_q8_bytes.end(), published_q8_bytes.begin());
+            const size_t offset = static_cast<size_t>(std::distance(reference_q8_bytes.begin(), mismatch.first));
+            std::fprintf(stderr, "binary Q8 mismatch: hidden=%lld tokens=%lld broadcast=%d op=%d offset=%zu reference=%02x published=%02x\n",
+                         static_cast<long long>(test.hidden), static_cast<long long>(test.tokens), test.broadcast,
+                         test.op, offset, *mismatch.first, *mismatch.second);
+        }
         REQUIRE(reference_q8_bytes == published_q8_bytes);
         REQUIRE(reference_f32_bytes.size() == expected.size() * sizeof(float));
         REQUIRE(std::memcmp(reference_f32_bytes.data(), expected.data(), reference_f32_bytes.size()) == 0);
