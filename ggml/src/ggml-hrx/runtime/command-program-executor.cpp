@@ -1178,7 +1178,7 @@ static void mark_graph_replay_synchronized(const CommandProgramExecutionContext 
 
 static Status enqueue_stream_execution_barrier(const CommandProgramExecutionContext & context, const char * label) {
     Status status;
-    if (ErrorResult error = take_status(hrx_stream_execution_barrier(context.stream))) {
+    if (ErrorResult error = take_status(hrx_stream_barrier(context.stream, nullptr))) {
         status.log("%s failed: %s", label, error->c_str());
     }
     return status;
