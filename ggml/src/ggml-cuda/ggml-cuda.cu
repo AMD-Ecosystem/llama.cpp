@@ -4087,6 +4087,65 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
 
     ggml_tensor * node = cgraph->nodes[i];
 
+    // Exact contiguous aliases preserve element ownership; partial overlaps do not.
+    const auto safe_alias = [](const ggml_tensor * src, const ggml_tensor * dst) {
+        const uintptr_t src_addr = (uintptr_t) src->data;
+        const uintptr_t dst_addr = (uintptr_t) dst->data;
+        const bool disjoint = src_addr <= dst_addr ? dst_addr - src_addr >= ggml_nbytes(src) :
+                                                    src_addr - dst_addr >= ggml_nbytes(dst);
+        return disjoint || (src_addr == dst_addr && src->type == dst->type &&
+            ggml_are_same_shape(src, dst) && ggml_is_contiguous(src));
+    };
+    static const bool gelu_mul = []() {
+        const char * env = getenv("GGML_CUDA_FUSE_GELU_MUL");
+        return !env || atoi(env) != 0;
+    }();
+    if (gelu_mul && node->op == GGML_OP_UNARY && ggml_get_unary_op(node) == GGML_UNARY_OP_GELU &&
+            node->type == GGML_TYPE_F32 && GGML_CUDA_CC_IS_RDNA3_5(ggml_cuda_info().devices[cuda_ctx->device].cc)) {
+        int next = i + 1;
+        if (next < cgraph->n_nodes && cgraph->nodes[next]->op == GGML_OP_VIEW) {
+            ++next;
+        }
+        const int nodes[] = { i, next };
+        const ggml_op ops[] = { GGML_OP_UNARY, GGML_OP_MUL };
+        if (ggml_can_fuse_subgraph_ext(cgraph, nodes, 2, ops, &next, 1)) {
+            ggml_tensor * mul = cgraph->nodes[next];
+            const ggml_tensor * other = mul->src[mul->src[0] == node ? 1 : 0];
+            if ((mul->src[0] == node || mul->src[1] == node) && mul->type == GGML_TYPE_F32 && other->type == GGML_TYPE_F32 &&
+                    node->src[0]->type == GGML_TYPE_F32 && ggml_is_contiguous_1(node->src[0]) &&
+                    ggml_is_contiguous_1(other) && ggml_is_contiguous(mul) && ggml_are_same_shape(node, other) &&
+                    ggml_are_same_shape(node, mul) && safe_alias(node->src[0], mul) && safe_alias(other, mul)) {
+                ggml_cuda_op_unary_mul(*cuda_ctx, node, mul);
+                return next - i;
+            }
+        }
+    }
+
+    static const bool rms_post_scale = []() {
+        const char * env = getenv("GGML_CUDA_FUSE_RMS_POST_SCALE");
+        return !env || atoi(env) != 0;
+    }();
+    if (rms_post_scale && node->op == GGML_OP_RMS_NORM &&
+            GGML_CUDA_CC_IS_RDNA3_5(ggml_cuda_info().devices[cuda_ctx->device].cc)) {
+        const int output = i + 3;
+        if (ggml_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ADD, GGML_OP_MUL }) &&
+                ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ADD }, {})) {
+            ggml_tensor * add = cgraph->nodes[i + 2];
+            ggml_tensor * mul = cgraph->nodes[output];
+            const ggml_tensor * scale = mul->src[mul->src[0] == add ? 1 : 0];
+            const ggml_tensor * weight_node = cgraph->nodes[i + 1];
+            const ggml_tensor * weight = weight_node->src[weight_node->src[0] == node ? 1 : 0];
+            const ggml_tensor * residual = add->src[add->src[0] == weight_node ? 1 : 0];
+            if ((mul->src[0] == add || mul->src[1] == add) && mul->type == GGML_TYPE_F32 &&
+                    scale->type == GGML_TYPE_F32 && ggml_nelements(scale) == 1 &&
+                    ggml_are_same_shape(add, mul) && ggml_is_contiguous(mul) &&
+                    safe_alias(node->src[0], mul) && safe_alias(weight, mul) && safe_alias(residual, mul) && safe_alias(scale, mul)) {
+                ggml_cuda_op_rms_norm_fused_add(*cuda_ctx, node, cgraph->nodes[i + 1], add, mul);
+                return 3;
+            }
+        }
+    }
+
     if (node->op == GGML_OP_MUL_MAT_ID && cuda_ctx->stream_context().concurrent_events.empty() &&
             ggml_cuda_match_shared_expert(cgraph, i, i + 3) &&
             ggml_cuda_should_fuse_mul_mat_vec_q(cgraph->nodes[i + 2]->src[1])) {
