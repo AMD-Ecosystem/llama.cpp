@@ -5694,6 +5694,47 @@ static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats, bool skip = 
 }
 
 // GGML_OP_MUL_MAT_ID
+struct test_glu_mat : public test_mul_mat {
+    const bool extra_consumer;
+    const bool force_f32;
+    const ggml_glu_op glu_op;
+    test_glu_mat(ggml_type type, int64_t n, int64_t k = 512, bool extra_consumer = false, bool force_f32 = false, ggml_glu_op glu_op = GGML_GLU_OP_GEGLU)
+        : test_mul_mat(type, GGML_TYPE_F32, 256, n, k, {1, 1}, {1, 1}), extra_consumer(extra_consumer), force_f32(force_f32), glu_op(glu_op) {}
+    bool run_whole_graph() override { return true; }
+    std::string op_desc(ggml_tensor *) override { return glu_op == GGML_GLU_OP_GEGLU ? "MMQ_GEGLU_MAT" : "MMQ_SWIGLU_MAT"; }
+    std::string vars() override { return test_mul_mat::vars() + "," + VARS_TO_STR2(extra_consumer, force_f32); }
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * mm = test_mul_mat::build_graph(ctx);
+        ggml_tensor * gate = ggml_dup_tensor(ctx, mm->src[1]);
+        mm->src[1] = glu_op == GGML_GLU_OP_GEGLU ? ggml_geglu_split(ctx, mm->src[1], gate) : ggml_swiglu_split(ctx, mm->src[1], gate);
+        if (force_f32) {
+            ggml_prec_set_acc(mm, GGML_PREC_F32);
+        }
+        return extra_consumer ? ggml_add(ctx, mm, ggml_mul_mat(ctx, mm->src[0], mm->src[1])) : mm;
+    }
+};
+
+struct test_rms_norm_mmq : public test_case {
+    const int64_t k, n;
+    const ggml_type type;
+    const bool extra_consumer;
+    test_rms_norm_mmq(int64_t k, int64_t n, ggml_type type = GGML_TYPE_Q4_K, bool extra_consumer = false)
+        : k(k), n(n), type(type), extra_consumer(extra_consumer) {}
+    bool run_whole_graph() override { return true; }
+    std::string op_desc(ggml_tensor *) override { return "RMS_NORM_MMQ"; }
+    std::string vars() override { return VARS_TO_STR4(k, n, type, extra_consumer); }
+    double max_nmse_err() override { return 5e-4; }
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, n);
+        ggml_tensor * weight = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, k);
+        ggml_tensor * norm = ggml_mul(ctx, ggml_rms_norm(ctx, x, 1e-6f), weight);
+        ggml_tensor * w0 = ggml_new_tensor_2d(ctx, type, k, 256);
+        ggml_tensor * w1 = ggml_new_tensor_2d(ctx, type, k, 256);
+        ggml_tensor * out = ggml_add(ctx, ggml_mul_mat(ctx, w0, norm), ggml_mul_mat(ctx, w1, norm));
+        return extra_consumer ? ggml_add(ctx, out, ggml_mul_mat(ctx, w0, norm)) : out;
+    }
+};
+
 struct test_mul_mat_id : public test_case {
     const ggml_type type_a;
     const ggml_type type_b;
@@ -8044,6 +8085,124 @@ struct test_mul_mat_vec_fusion : public test_case {
     }
 };
 
+struct test_mmdq_mat : public test_case {
+    const ggml_type type;
+    const int64_t k, m, n;
+    const bool bias, share, force_f32;
+    test_mmdq_mat(ggml_type type, int64_t k, int64_t m, int64_t n, bool bias = false, bool share = false, bool force_f32 = false)
+        : type(type), k(k), m(m), n(n), bias(bias), share(share), force_f32(force_f32) {}
+    std::string vars() override { return VARS_TO_STR7(type, k, m, n, bias, share, force_f32); }
+    std::string op_desc(ggml_tensor *) override { return "MMDQ_MAT"; }
+    bool run_whole_graph() override { return true; }
+    double max_nmse_err() override { return 5e-4; }
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, n);
+        ggml_tensor * out = nullptr;
+        for (int i = 0; i < (share ? 3 : 1); ++i) {
+            ggml_tensor * w = ggml_new_tensor_2d(ctx, type, k, m);
+            ggml_tensor * mm = ggml_mul_mat(ctx, w, x);
+            if (force_f32) { ggml_prec_set_acc(mm, GGML_PREC_F32); }
+            ggml_tensor * y = bias ? ggml_add(ctx, mm, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, m)) : mm;
+            out = out ? ggml_add(ctx, out, y) : y;
+        }
+        return out;
+    }
+};
+
+// MUL_MAT + SWIGLU + MUL_MAT
+struct test_ffn_swiglu : public test_case {
+    const ggml_type type;
+    const ggml_type type_down;
+    const int64_t n_ff;
+    const int64_t n_embd;
+    const int64_t n_tokens;
+    const bool with_res; // add a residual to the output
+    const ggml_glu_op activation;
+    const bool extra_consumer;
+
+    std::string vars() override {
+        return VARS_TO_STR8(type, type_down, n_ff, n_embd, n_tokens, with_res, activation, extra_consumer);
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return activation == GGML_GLU_OP_GEGLU ? "MMDQ_FFN_GEGLU" : "MMDQ_FFN_SWIGLU";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    test_ffn_swiglu(ggml_type type, ggml_type type_down, int64_t n_ff, int64_t n_embd, int64_t n_tokens, bool with_res = false, ggml_glu_op activation = GGML_GLU_OP_SWIGLU, bool extra_consumer = false)
+        : type(type), type_down(type_down), n_ff(n_ff), n_embd(n_embd), n_tokens(n_tokens), with_res(with_res), activation(activation), extra_consumer(extra_consumer) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * cur  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, n_tokens);
+        ggml_tensor * gate = ggml_new_tensor_2d(ctx, type, n_embd, n_ff);
+        ggml_tensor * up   = ggml_new_tensor_2d(ctx, type, n_embd, n_ff);
+        ggml_tensor * down = ggml_new_tensor_2d(ctx, type_down, n_ff, n_embd);
+        ggml_tensor * g = ggml_mul_mat(ctx, gate, cur);
+        ggml_tensor * u = ggml_mul_mat(ctx, up, cur);
+        ggml_tensor * h = activation == GGML_GLU_OP_GEGLU ? ggml_geglu_split(ctx, g, u) : ggml_swiglu_split(ctx, g, u);
+        ggml_tensor * out  = ggml_mul_mat(ctx, down, h);
+        if (with_res) {
+            out = ggml_add(ctx, out, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, n_tokens));
+        }
+        if (extra_consumer) {
+            out = ggml_add(ctx, out, ggml_sum(ctx, g));
+        }
+        ggml_set_name(out, "out");
+        return out;
+    }
+
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+};
+
+struct test_moe_ffn_swiglu : public test_case {
+    const ggml_type type;
+    const ggml_type type_down;
+    const int n_experts;
+    const int n_used;
+    const int64_t n_ff;
+    const int64_t n_embd;
+    const int64_t n_tokens;
+
+    std::string vars() override {
+        return VARS_TO_STR7(type, type_down, n_experts, n_used, n_ff, n_embd, n_tokens);
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MOE_FFN_SWIGLU";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    test_moe_ffn_swiglu(ggml_type type, ggml_type type_down, int n_experts, int n_used, int64_t n_ff, int64_t n_embd, int64_t n_tokens)
+        : type(type), type_down(type_down), n_experts(n_experts), n_used(n_used), n_ff(n_ff), n_embd(n_embd), n_tokens(n_tokens) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * cur  = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd, 1, n_tokens);
+        ggml_tensor * ids  = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_experts, n_tokens);
+        ids = ggml_view_2d(ctx, ids, n_used, n_tokens, ids->nb[1], 0);
+        ggml_tensor * gate = ggml_new_tensor_3d(ctx, type, n_embd, n_ff, n_experts);
+        ggml_tensor * up   = ggml_new_tensor_3d(ctx, type, n_embd, n_ff, n_experts);
+        ggml_tensor * down = ggml_new_tensor_3d(ctx, type_down, n_ff, n_embd, n_experts);
+        ggml_tensor * h    = ggml_swiglu_split(ctx, ggml_mul_mat_id(ctx, gate, cur, ids), ggml_mul_mat_id(ctx, up, cur, ids));
+        ggml_tensor * out  = ggml_mul_mat_id(ctx, down, h, ids);
+        ggml_set_name(out, "out");
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        init_mul_mat_id_tensors(ctx, n_experts);
+    }
+
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+};
+
 // GGML_OP_SUM
 struct test_sum : public test_case {
     const ggml_type type;
@@ -10337,6 +10496,46 @@ static void add_rdna35_mmq_cases(std::vector<std::unique_ptr<test_case>> & test_
 // Test cases for evaluation: should try to cover edge cases while using small input sizes to keep the runtime low
 static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     std::vector<std::unique_ptr<test_case>> test_cases;
+    for (ggml_type type : {GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K}) {
+        for (int64_t n : {65, 128, 258}) {
+            for (ggml_glu_op op : {GGML_GLU_OP_SWIGLU, GGML_GLU_OP_GEGLU}) {
+                test_cases.emplace_back(new test_glu_mat(type, n, 768, false, false, op));
+            }
+        }
+        test_cases.emplace_back(new test_glu_mat(type, 258, 512, true));
+        test_cases.emplace_back(new test_glu_mat(type, 128, 512, false, true));
+        test_cases.emplace_back(new test_rms_norm_mmq(1536, 258, type));
+    }
+    for (int64_t k : {512, 768, 1536, 6144}) {
+        for (int64_t n : {65, 128, 258}) {
+            test_cases.emplace_back(new test_rms_norm_mmq(k, n));
+        }
+    }
+    test_cases.emplace_back(new test_rms_norm_mmq(1536, 258, GGML_TYPE_Q4_K, true));
+
+
+    for (ggml_type type : {GGML_TYPE_Q4_K, GGML_TYPE_Q6_K, GGML_TYPE_Q5_0, GGML_TYPE_Q8_0}) {
+        for (int n : {1, 31, 64, 128, 513, 600}) {
+            test_cases.emplace_back(new test_mmdq_mat(type, 512, 1024, n));
+        }
+        test_cases.emplace_back(new test_mmdq_mat(type, 768, 1089, 600, true));
+        test_cases.emplace_back(new test_mmdq_mat(type, 512, 1024, 600, true, true));
+        test_cases.emplace_back(new test_mmdq_mat(type, 512, 1024, 128, false, false, true));
+    }
+    for (ggml_type type : {GGML_TYPE_Q4_K, GGML_TYPE_Q6_K, GGML_TYPE_Q5_0}) {
+        for (ggml_glu_op act : {GGML_GLU_OP_SWIGLU, GGML_GLU_OP_GEGLU}) {
+            for (int n : {31, 64, 128, 513}) {
+                test_cases.emplace_back(new test_ffn_swiglu(type, GGML_TYPE_Q6_K, 1280, 1024, n, false, act));
+            }
+            test_cases.emplace_back(new test_ffn_swiglu(type, GGML_TYPE_Q4_K, 2048, 1024, 200, true, act));
+            test_cases.emplace_back(new test_ffn_swiglu(type, GGML_TYPE_Q6_K, 1280, 1024, 128, false, act, true));
+        }
+    }
+    for (ggml_type type : {GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_Q5_1}) {
+        test_cases.emplace_back(new test_moe_ffn_swiglu(type, GGML_TYPE_Q6_K, 8, 4, 768, 1024, 129));
+        test_cases.emplace_back(new test_moe_ffn_swiglu(type, GGML_TYPE_Q4_K, 16, 4, 512, 2048, 200));
+    }
+
     std::default_random_engine rng(0);
 
     // unary ops
