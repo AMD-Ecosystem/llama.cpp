@@ -2941,6 +2941,28 @@ struct test_rope_set_rows : public test_case {
     }
 };
 
+struct test_rms_post_scale : public test_case {
+    const int width;
+    const bool extra, inplace;
+    test_rms_post_scale(int width, bool extra, bool inplace = false) : width(width), extra(extra), inplace(inplace) {}
+    std::string vars() override { return VARS_TO_STR3(width, extra, inplace); }
+    std::string op_desc(ggml_tensor *) override { return "RMS_POST_SCALE"; }
+    bool run_whole_graph() override { return true; }
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, width, 129);
+        ggml_tensor * weight = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, width);
+        ggml_tensor * residual = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, width, 129);
+        ggml_tensor * scalar = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
+        if (inplace) {
+            residual = ggml_scale(ctx, residual, 0.5f);
+        }
+        ggml_tensor * normalized = ggml_mul(ctx, ggml_rms_norm(ctx, x, 1e-6f), weight);
+        ggml_tensor * add = inplace ? ggml_add_inplace(ctx, residual, normalized) : ggml_add(ctx, normalized, residual);
+        ggml_tensor * out = inplace ? ggml_mul_inplace(ctx, add, scalar) : ggml_mul(ctx, add, scalar);
+        return extra ? ggml_add(ctx, out, add) : out;
+    }
+};
+
 // GGML_OP_RMS_NORM with optional GGML_OP_MUL, GGML_OP_ROPE, GGML_OP_VIEW and GGML_OP_SET_ROWS
 struct test_rms_norm_mul_rope : public test_case {
     const std::array<int64_t, 4> ne;
@@ -10735,6 +10757,15 @@ static void add_rdna35_mmq_cases(std::vector<std::unique_ptr<test_case>> & test_
 // Test cases for evaluation: should try to cover edge cases while using small input sizes to keep the runtime low
 static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     std::vector<std::unique_ptr<test_case>> test_cases;
+    for (int width : {64, 193, 1536, 2048}) {
+        for (bool extra : {false, true}) {
+            test_cases.emplace_back(new test_rms_post_scale(width, extra));
+        }
+        test_cases.emplace_back(new test_rms_post_scale(width, false, true));
+    }
+    test_cases.emplace_back(new test_mmdq_mat(GGML_TYPE_Q4_K, 4352, 128, 1025));
+    test_cases.emplace_back(new test_rms_norm_mul_rope({64, 1, 65536, 1}, 1e-6f, false, false, true,
+        GGML_ROPE_TYPE_NEOX, true, true, GGML_TYPE_F16, true, false));
 
     for (int width : {64, 128, 256}) {
         for (bool extra : {false, true}) {
