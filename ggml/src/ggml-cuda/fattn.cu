@@ -732,6 +732,20 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         }
     }
 
+    static const bool wmma_d512 = []() {
+        const char * env = getenv("GGML_CUDA_FATTN_WMMA_D512");
+        return env == nullptr || atoi(env) != 0;
+    }();
+    float logit_softcap = 0.0f;
+    memcpy(&logit_softcap, (const float *) KQV->op_params + 2, sizeof(float));
+    // D512 uses the existing 4 x 8 tile, which fits RDNA shared memory.
+    if (wmma_d512 &&
+            GGML_CUDA_CC_IS_RDNA3_5(cc) && amd_wmma_available(cc) && gqa_opt_applies &&
+            Q->ne[0] == 512 && V->ne[0] == 512 && gqa_ratio == 8 && Q->ne[1] >= 32 &&
+            logit_softcap == 0.0f && K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16) {
+        return BEST_FATTN_KERNEL_MMA_F16;
+    }
+
     // AMD WMMA is faster than the tile kernel if the wide tiles with high arithmetic intensity can be utilized.
     if ((amd_wmma_available(cc) && gqa_opt_applies && Q->ne[0] <= 256) && Q->ne[0] != 40 && Q->ne[0] != 72 &&
             Q->ne[1] * gqa_ratio_eff > (Q->ne[0] <= 128 ? 8 : 16)) {

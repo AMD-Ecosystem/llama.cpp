@@ -4087,6 +4087,35 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
 
     ggml_tensor * node = cgraph->nodes[i];
 
+    static const bool fuse_norm_rope_2axis = []() {
+        const char * env = getenv("GGML_CUDA_FUSE_NORM_ROPE_2AXIS");
+        return !env || atoi(env) != 0;
+    }();
+    if (fuse_norm_rope_2axis && node->op == GGML_OP_RMS_NORM && GGML_CUDA_CC_IS_RDNA3_5(ggml_cuda_info().devices[cuda_ctx->device].cc)) {
+        const ggml_op ops[] = { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ROPE, GGML_OP_ROPE };
+        const int output_idx = i + 3;
+        if (ggml_can_fuse_subgraph(cgraph, i, 4, ops, &output_idx, 1)) {
+            ggml_tensor * mul = cgraph->nodes[i + 1];
+            ggml_tensor * first = cgraph->nodes[i + 2];
+            ggml_tensor * second = cgraph->nodes[output_idx];
+            const int32_t * fp = (const int32_t *) first->op_params;
+            const int32_t * sp = (const int32_t *) second->op_params;
+            if (ggml_cuda_should_fuse_rms_norm_mul_rope(node, mul, first) &&
+                    (mul->src[0] == node || mul->src[1] == node) &&
+                    first->src[2] == nullptr && second->src[2] == nullptr && second->src[0] == first &&
+                    fp[2] == GGML_ROPE_TYPE_NEOX && fp[1] > 0 && 2*fp[1] == node->ne[0] && node->ne[0] < 1024 &&
+                    sp[15] == fp[1] && memcmp(fp, sp, 15*sizeof(int32_t)) == 0 &&
+                    second->type == GGML_TYPE_F32 && ggml_are_same_shape(first, second) && ggml_is_contiguous(second) &&
+                    second->src[1]->type == GGML_TYPE_I32 && ggml_is_contiguous(second->src[1]) &&
+                    ggml_nelements(second->src[1]) >= node->ne[2] &&
+                    ggml_cuda_check_fusion_memory_ranges(cgraph, i, 4, &output_idx, 1)) {
+                ggml_cuda_op_rms_norm_mul_rope_fused(*cuda_ctx, node, mul, first, nullptr, second);
+                return 3;
+            }
+        }
+    }
+
+
     if (node->op == GGML_OP_MUL_MAT_ID && cuda_ctx->stream_context().concurrent_events.empty() &&
             ggml_cuda_match_shared_expert(cgraph, i, i + 3) &&
             ggml_cuda_should_fuse_mul_mat_vec_q(cgraph->nodes[i + 2]->src[1])) {
