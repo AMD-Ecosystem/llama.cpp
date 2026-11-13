@@ -193,18 +193,18 @@ template.def<@ggml.unary_f32.apply> device priority(1) @ggml_unary_f32_apply(%op
 }
 
 template.def<@ggml.unary_f32.apply_vector4> device priority(1) @ggml_unary_f32_apply_vector4(%op: index, %values: vector<4xf32>) -> (vector<4xf32>) {
-  %c0_f32 = vector.constant 0.0 : vector<4xf32>
-  %c0_5_f32 = vector.constant 0.5 : vector<4xf32>
-  %c1_f32 = vector.constant 1.0 : vector<4xf32>
-  %c2_f32 = vector.constant 2.0 : vector<4xf32>
-  %c3_f32 = vector.constant 3.0 : vector<4xf32>
-  %c6_f32 = vector.constant 6.0 : vector<4xf32>
-  %cn1_f32 = vector.constant -1.0 : vector<4xf32>
-  %cn2_f32 = vector.constant -2.0 : vector<4xf32>
-  %gelu_coef = vector.constant 0.044715 : vector<4xf32>
-  %gelu_quick_coef = vector.constant -1.702 : vector<4xf32>
-  %sqrt_2_over_pi = vector.constant 0.79788456080286544 : vector<4xf32>
-  %sqrt_2_inv = vector.constant 0.70710678118654745 : vector<4xf32>
+  %c0_f32 = vector.splatf 0.0 : vector<4xf32>
+  %c0_5_f32 = vector.splatf 0.5 : vector<4xf32>
+  %c1_f32 = vector.splatf 1.0 : vector<4xf32>
+  %c2_f32 = vector.splatf 2.0 : vector<4xf32>
+  %c3_f32 = vector.splatf 3.0 : vector<4xf32>
+  %c6_f32 = vector.splatf 6.0 : vector<4xf32>
+  %cn1_f32 = vector.splatf -1.0 : vector<4xf32>
+  %cn2_f32 = vector.splatf -2.0 : vector<4xf32>
+  %gelu_coef = vector.splatf 0.044715 : vector<4xf32>
+  %gelu_quick_coef = vector.splatf -1.702 : vector<4xf32>
+  %sqrt_2_over_pi = vector.splatf 0.79788456080286544 : vector<4xf32>
+  %sqrt_2_inv = vector.splatf 0.70710678118654745 : vector<4xf32>
 
   %op_neg = index.constant 0 : index
   %negated = vector.negf %values : vector<4xf32>

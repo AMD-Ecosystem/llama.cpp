@@ -45,7 +45,7 @@ template.def<@ggml.rmsnorm_binary_symmetric_i4_k32.body> device @ggml_rmsnorm_bi
   %shift4 = scalar.constant 4 : i32
   %shift8 = scalar.constant 8 : i32
   %shift12 = scalar.constant 12 : i32
-  %nibble_mask = vector.constant 15 : vector<4xi32>
+  %nibble_mask = vector.splati 15 : vector<4xi32>
   %valid_token = index.cmp ult, %token0, %bounded_token_count : index
   %safe_token0 = scf.select %valid_token, %token0, %c0 : index
   %token = index.assume %safe_token0 [lt(%safe_token0, %bounded_token_count)] : index
@@ -218,7 +218,7 @@ template.def<@ggml.add_rmsnorm_binary_symmetric_i4_k32.body> device @ggml_add_rm
   %shift4 = scalar.constant 4 : i32
   %shift8 = scalar.constant 8 : i32
   %shift12 = scalar.constant 12 : i32
-  %nibble_mask = vector.constant 15 : vector<4xi32>
+  %nibble_mask = vector.splati 15 : vector<4xi32>
   %valid_token = index.cmp ult, %token0, %bounded_token_count : index
   %safe_token0 = scf.select %valid_token, %token0, %c0 : index
   %token = index.assume %safe_token0 [lt(%safe_token0, %bounded_token_count)] : index
@@ -392,7 +392,7 @@ template.def<@ggml.rmsnorm_gate_silu_mul_symmetric_i4_k32.body> device @ggml_rms
   %shift4 = scalar.constant 4 : i32
   %shift8 = scalar.constant 8 : i32
   %shift12 = scalar.constant 12 : i32
-  %nibble_mask = vector.constant 15 : vector<4xi32>
+  %nibble_mask = vector.splati 15 : vector<4xi32>
 
   %input_noalias, %weight_noalias, %raw_gate_noalias, %output_noalias, %i4_qs_noalias, %i4_ds_noalias, %i4_sums_noalias = buffer.assume.noalias %input, %weight, %raw_gate, %output, %i4_qs, %i4_ds, %i4_sums : buffer, buffer, buffer, buffer, buffer, buffer, buffer
   %row_scale, %token, %bounded_token_count, %valid_token = template.apply<@ggml.rmsnorm_f32.row_scale>(%token_count, %token0, %hidden_size, %hidden_size, %epsilon, %input_noalias) : (index, index, index, index, f32, buffer) -> (f32, index, index, i1)

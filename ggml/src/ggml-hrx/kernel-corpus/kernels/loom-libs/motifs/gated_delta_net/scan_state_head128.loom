@@ -256,7 +256,7 @@ template.def<@llm.gated_delta_net.f32_wmma_head128.body> device @llm_gated_delta
   %so1 = index.add %so0, %h_idx : index
   %state_offset = index.mul %so1, %sv_sq : index
   %selected_state_offset, %selected_valid = template.apply<@llm.gated_delta_net.selected_snapshot_load.state_offset>(%select_state, %state_row_count, %state_ids, %base, %n_seqs, %seq, %n_heads, %h_idx, %sv_sq, %state_offset) : (i1, index, buffer, offset, index, index, index, index, index, index) -> (index, i1)
-  %selected_zero_state = vector.constant 0.0 : vector<4xf32>
+  %selected_zero_state = vector.splatf 0.0 : vector<4xf32>
   %ab0 = index.mul %seq, %n_tokens : index
   %ab1 = index.mul %ab0, %n_heads : index
   %ab2 = index.add %ab1, %h_idx : index
@@ -452,9 +452,9 @@ template.def<@llm.gated_delta_net.f32_wmma_head128.body> device @llm_gated_delta
   %norm_eps_sq = scalar.mulf<nnan|ninf|nsz> %norm_eps, %norm_eps : f32
   %additive_epsilon = config.get @llm.gated_delta_net.additive_epsilon : index
   %use_additive_epsilon = index.cmp eq, %additive_epsilon, %c1 : index
-  %fz8 = vector.constant 0.0 : vector<8xf32>
-  %zv8 = vector.constant 0.0 : vector<8xf32>
-  %fzh8 = vector.constant 0.0 : vector<8xf16>
+  %fz8 = vector.splatf 0.0 : vector<8xf32>
+  %zv8 = vector.splatf 0.0 : vector<8xf32>
+  %fzh8 = vector.splatf 0.0 : vector<8xf16>
   %five_snapshot_tokens = index.cmp eq, %n_tokens, %k5 : index
   %reuse_snapshot_fragments = scalar.andi %publish_snapshots, %five_snapshot_tokens : i1
   %sf0, %sf1, %sf2, %sf3, %sf4, %sf5, %sf6, %sf7, %sf8, %sf9, %sf10, %sf11, %sf12, %sf13, %sf14, %sf15 = scf.for %ch = [%c0 to %n_chunks step %c1](%sa0 = %s0_init : vector<4xf32>, %sa1 = %s1_init : vector<4xf32>, %sa2 = %s2_init : vector<4xf32>, %sa3 = %s3_init : vector<4xf32>, %sa4 = %s4_init : vector<4xf32>, %sa5 = %s5_init : vector<4xf32>, %sa6 = %s6_init : vector<4xf32>, %sa7 = %s7_init : vector<4xf32>, %sa8 = %s8_init : vector<4xf32>, %sa9 = %s9_init : vector<4xf32>, %sa10 = %s10_init : vector<4xf32>, %sa11 = %s11_init : vector<4xf32>, %sa12 = %s12_init : vector<4xf32>, %sa13 = %s13_init : vector<4xf32>, %sa14 = %s14_init : vector<4xf32>, %sa15 = %s15_init : vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {

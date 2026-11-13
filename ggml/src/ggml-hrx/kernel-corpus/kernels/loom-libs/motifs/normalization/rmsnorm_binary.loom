@@ -153,7 +153,7 @@ template.def<@ggml.rmsnorm_binary_f32_k16.body> device @ggml_rmsnorm_binary_f32_
   %c256 = index.constant 256 : index
   %base = index.constant 0 : offset
   %zero = scalar.constant 0.0 : f32
-  %cache_zero = vector.constant 0.0 : vector<32xf32>
+  %cache_zero = vector.splatf 0.0 : vector<32xf32>
   %input_na, %rhs_na, %output_na = buffer.assume.noalias %input, %rhs, %output : buffer, buffer, buffer
   %input_view = buffer.view %input_na[%base] : buffer -> view<[%token_count]x[%hidden]xf32>
   %rhs_view = buffer.view %rhs_na[%base] : buffer -> view<[%hidden]xf32>
@@ -298,7 +298,7 @@ template.def<@ggml.rmsnorm_binary_f32_k16.body> device @ggml_rmsnorm_binary_f32_
     %value2 = scf.select %odd, %cached2, %received0 : f32
     %value3 = scf.select %odd, %cached3, %received1 : f32
     %weights = vector.load %rhs_view[%channel] : view<[%hidden]xf32> -> vector<4xf32>
-    %result_zero = vector.constant 0.0 : vector<4xf32>
+    %result_zero = vector.splatf 0.0 : vector<4xf32>
     %weight0 = vector.extract %weights[%c0] : vector<4xf32> -> f32
     %norm0 = template.apply<@ggml.rmsnorm_f32.apply>(%value0, %row_scale) : (f32, f32) -> (f32)
     %out0 = template.apply<@ggml.binary_f32.apply>(%op, %norm0, %weight0) : (index, f32, f32) -> (f32)
@@ -350,7 +350,7 @@ template.def<@ggml.rmsnorm_binary_q8_1_x4.body> device @ggml_rmsnorm_binary_q8_1
   %scratch_d_byte_add = index.constant 1024 : offset
   %scratch_bytes = index.constant 1152 : offset
   %c0_offset = index.constant 0 : offset
-  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %c0_f32x4 = vector.splatf 0.0 : vector<4xf32>
   %input_noalias, %rhs_noalias, %output_noalias, %q8_output_noalias = buffer.assume.noalias %input, %rhs, %output, %q8_output : buffer, buffer, buffer, buffer
   %row_scale, %token, %launch_token_count, %valid_token = template.apply<@ggml.rmsnorm_f32.row_scale>(%token_count, %token0, %hidden_size, %hidden_size, %epsilon, %input_noalias) : (index, index, index, index, f32, buffer) -> (f32, index, index, i1)
   %row_scale_vector = vector.splat %row_scale : vector<4xf32>

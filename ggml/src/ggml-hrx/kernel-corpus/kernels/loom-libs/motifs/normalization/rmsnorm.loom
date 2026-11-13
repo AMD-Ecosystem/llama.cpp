@@ -106,7 +106,7 @@ template.def<@ggml.rmsnorm_f32.subgroup_row_scale> device @ggml_rmsnorm_f32_subg
   %zero_offset = index.constant 0 : offset
   %channel0 = index.mul %lane, %four : index
   %zero = scalar.constant 0.0 : f32
-  %zero4 = vector.constant 0.0 : vector<4xf32>
+  %zero4 = vector.splatf 0.0 : vector<4xf32>
   %iv = buffer.view %input_n[%zero_offset] : buffer -> view<[%bounded_token_count]x[%hidden]xf32>
   %last_channel = index.sub %hidden, %four : index
   %squares = scf.for %channel = [%channel0 to %hidden step %c128](%sum = %zero4 : vector<4xf32>) -> (vector<4xf32>) {

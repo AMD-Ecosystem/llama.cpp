@@ -53,7 +53,7 @@ template.def<@ggml.matmul.tiled_input_f32_dequant_accumulate_f32.publish_vector4
   %c0_offset = index.constant 0 : offset
   %scratch_d_byte_add = index.constant 1024 : offset
   %scratch_bytes = index.constant 1152 : offset
-  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %c0_f32x4 = vector.splatf 0.0 : vector<4xf32>
   %uses_bias_only = index.cmp eq, %epilogue, %c1 : index
   %uses_residual_only = index.cmp eq, %epilogue, %c2 : index
   %uses_bias_residual = index.cmp eq, %epilogue, %c3 : index

@@ -60,7 +60,7 @@ template.def<@ggml.mul_mat_id_swiglu_f16_f16.body> device @ggml_mul_mat_id_swigl
   %result_stage_bytes = index.constant 4096 : offset
   %c0_i32 = scalar.constant 0 : i32
   %cn1_i32 = scalar.constant -1 : i32
-  %zero_accumulator = vector.constant 0.0 : vector<16xf16>
+  %zero_accumulator = vector.splatf 0.0 : vector<16xf16>
   %m = index.constant 16 : index
   %n = index.constant 16 : index
   %assignment_count = index.mul %token_count, %bounded_route_count : index
