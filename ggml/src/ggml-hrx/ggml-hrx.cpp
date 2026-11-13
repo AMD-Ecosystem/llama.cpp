@@ -660,7 +660,7 @@ static ggml_backend_t device_init(ggml_backend_dev_t device, const char * parame
     GGML_UNUSED(parameters);
     auto *       device_ctx = device_context(device);
     hrx_stream_t stream     = nullptr;
-    if (!HRX_CHECK(hrx_stream_create(device_ctx->device, 0, &stream))) {
+    if (!HRX_CHECK(hrx_stream_create(device_ctx->stream_queue, 0, &stream))) {
         return nullptr;
     }
     auto * context = new (std::nothrow) ggml_backend_hrx_context;
@@ -1353,9 +1353,16 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
             hrx_device_release(hrx_device);
             continue;
         }
+        hrx_queue_t stream_queue = nullptr;
+        if (ggml::hrx::ErrorResult error = ggml::hrx::find_stream_queue(hrx_device, stream_queue)) {
+            GGML_LOG_ERROR("ggml_hrx: %s\n", error->c_str());
+            hrx_device_release(hrx_device);
+            continue;
+        }
         auto device_ctx                      = std::make_unique<ggml_backend_hrx_device_context>();
         device_ctx->device                   = hrx_device;
         device_ctx->transfer_queue           = transfer_queue;
+        device_ctx->stream_queue             = stream_queue;
         device_ctx->name                     = "HRX" + std::to_string(i);
         device_ctx->use_direct_host_bindings = environment_flag_enabled("GGML_HRX_USE_UNIFIED_MEMORY");
         if (device_ctx->use_direct_host_bindings) {
@@ -1375,7 +1382,7 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
             hrx_device_release(hrx_device);
             continue;
         }
-        if (!HRX_CHECK(hrx_stream_create(hrx_device, 0, &device_ctx->buffer_stream))) {
+        if (!HRX_CHECK(hrx_stream_create(stream_queue, 0, &device_ctx->buffer_stream))) {
             hrx_device_release(hrx_device);
             continue;
         }
