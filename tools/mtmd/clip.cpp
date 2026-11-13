@@ -240,6 +240,38 @@ struct clip_ctx {
     }
 };
 
+static void clip_ensure_graph_capacity(clip_ctx * ctx, const clip_image_f32 & img) {
+    static const bool window_batch = [] {
+        const char * value = std::getenv("MTMD_QWEN25VL_WINDOW_BATCH");
+        return value == nullptr || std::atoi(value) != 0;
+    }();
+    const auto & hparams = ctx->model.hparams;
+    if (window_batch && ctx->proj_type() == PROJECTOR_TYPE_QWEN25VL && hparams.n_wa_pattern > 0 &&
+            ctx->flash_attn_type != CLIP_FLASH_ATTN_TYPE_DISABLED) {
+        const int patch_size = hparams.patch_size;
+        const int n_patches_y = img.ny() / patch_size;
+        const int window_size = hparams.attn_window_size > 0 ? hparams.attn_window_size : 112;
+        const int grid_window = window_size / patch_size / 2;
+        GGML_ASSERT(grid_window > 0);
+        // Each row of windows has at most two runs of equal-length windows.
+        const int64_t max_runs = 2 * ((int64_t(n_patches_y) / 2 + grid_window - 1) / grid_window);
+        const int64_t max_nodes = 8192 + int64_t(hparams.n_layer) * max_runs * 32;
+        if (max_nodes > std::numeric_limits<int>::max()) {
+            throw std::runtime_error("Qwen2.5-VL window graph is too large");
+        }
+        if (max_nodes > ctx->max_nodes) {
+            ctx->max_nodes = int(max_nodes);
+            ctx->sched.reset(ggml_backend_sched_new(ctx->backend_ptrs.data(), ctx->backend_buft.data(),
+                ctx->backend_ptrs.size(), ctx->max_nodes, false, true));
+            ctx->is_allocated = false;
+            if (ctx->cb_eval != nullptr) {
+                ggml_backend_sched_set_eval_callback(ctx->sched.get(), ctx->cb_eval, ctx->cb_eval_user_data);
+            }
+            ctx->buf_compute_meta.resize(ctx->max_nodes * ggml_tensor_overhead() + ggml_graph_overhead_custom(ctx->max_nodes, false));
+        }
+    }
+}
+
 //
 // clip_graph
 //
@@ -262,31 +294,7 @@ clip_graph::clip_graph(clip_ctx * ctx, const clip_image_f32 & img) :
         eps(hparams.eps),
         kq_scale(d_head > 0 ? 1.0f / sqrtf((float)d_head) : 0.0f),
         flash_attn_type(ctx->flash_attn_type) {
-    static const bool window_batch = [] {
-        const char * value = std::getenv("MTMD_QWEN25VL_WINDOW_BATCH");
-        return value == nullptr || std::atoi(value) != 0;
-    }();
-    if (window_batch && proj_type == PROJECTOR_TYPE_QWEN25VL && hparams.n_wa_pattern > 0 &&
-            flash_attn_type != CLIP_FLASH_ATTN_TYPE_DISABLED) {
-        const int window_size = hparams.attn_window_size > 0 ? hparams.attn_window_size : 112;
-        const int grid_window = window_size / patch_size / 2;
-        GGML_ASSERT(grid_window > 0);
-        // Each row of windows has at most two runs of equal-length windows.
-        const int64_t max_runs = 2 * ((int64_t(n_patches_y) / 2 + grid_window - 1) / grid_window);
-        const int64_t max_nodes = 8192 + int64_t(n_layer) * max_runs * 32;
-        if (max_nodes > std::numeric_limits<int>::max()) {
-            throw std::runtime_error("Qwen2.5-VL window graph is too large");
-        }
-        if (max_nodes > ctx->max_nodes) {
-            ctx->max_nodes = int(max_nodes);
-            ctx->sched.reset(ggml_backend_sched_new(ctx->backend_ptrs.data(), ctx->backend_buft.data(),
-                ctx->backend_ptrs.size(), ctx->max_nodes, false, true));
-            if (ctx->cb_eval != nullptr) {
-                ggml_backend_sched_set_eval_callback(ctx->sched.get(), ctx->cb_eval, ctx->cb_eval_user_data);
-            }
-            ctx->buf_compute_meta.resize(ctx->max_nodes * ggml_tensor_overhead() + ggml_graph_overhead_custom(ctx->max_nodes, false));
-        }
-    }
+    clip_ensure_graph_capacity(ctx, img);
     struct ggml_init_params params = {
         /*.mem_size   =*/ ctx->buf_compute_meta.size(),
         /*.mem_buffer =*/ ctx->buf_compute_meta.data(),
@@ -5285,6 +5293,9 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
         LOG_ERR("%s: batch size %d exceeds maximum supported batch/temporal-merge size %d\n", __func__, n_batch_cur, clip_model_n_temporal_merge(ctx));
         return false;
     }
+
+    // Grow before the warmup check so a replacement scheduler gets its buffers reserved.
+    clip_ensure_graph_capacity(ctx, imgs.entries[0]);
 
     // if buffers are not allocated, we need to do a warmup run to allocate them
     if (!ctx->is_allocated) {
