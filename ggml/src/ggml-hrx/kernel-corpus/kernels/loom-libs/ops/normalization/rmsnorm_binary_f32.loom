@@ -1,7 +1,7 @@
 // Copyright 2026 The HRX Authors
 // SPDX-License-Identifier: Apache-2.0
 
-template.decl @ggml.rmsnorm_binary_f32.body(%publish_f16: i1, %token_count: index, %input: buffer, %rhs: buffer, %output: buffer, %f16_output: buffer)
+template.decl @ggml.rmsnorm_binary_f32.body(%publish_f16: i1, %token_count: index, %input: buffer, %rhs: buffer, %output: buffer, %f16_output: buffer, %reduction_unroll: index, %publication_unroll: index)
 
 amdgpu.target<gfx11-generic> @ggml_rmsnorm_binary_gfx11_wave32 {subgroup_size = 32}
 
@@ -15,7 +15,9 @@ kernel.def target(@ggml_rmsnorm_binary_gfx11_wave32) export("ggml_rmsnorm_binary
   kernel.launch.config workgroups(%token_count, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
 } launch(%token_count: index, %input: buffer, %rhs: buffer, %output: buffer) where [range(%token_count, 1, 1048576)] {
   %publish_f16 = scalar.constant false : i1
-  template.apply<@ggml.rmsnorm_binary_f32.body>(%publish_f16, %token_count, %input, %rhs, %output, %output) : (i1, index, buffer, buffer, buffer, buffer)
+  %reduction_unroll = index.constant 1 : index
+  %publication_unroll = index.constant 1 : index
+  template.apply<@ggml.rmsnorm_binary_f32.body>(%publish_f16, %token_count, %input, %rhs, %output, %output, %reduction_unroll, %publication_unroll) : (i1, index, buffer, buffer, buffer, buffer, index, index)
   kernel.return
 }
 

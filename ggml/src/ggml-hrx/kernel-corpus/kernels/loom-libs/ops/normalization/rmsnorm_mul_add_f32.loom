@@ -1,7 +1,7 @@
 // Copyright 2026 The HRX Authors
 // SPDX-License-Identifier: Apache-2.0
 
-template.decl @ggml.rmsnorm_f32.row_scale(%token_count: index, %token: index, %hidden_size: index, %input_stride: index, %epsilon: f32, %input: buffer) -> (f32, index, index, i1)
+template.decl @ggml.rmsnorm_f32.row_scale(%token_count: index, %token: index, %hidden_size: index, %input_stride: index, %epsilon: f32, %input: buffer, %reduction_unroll: index) -> (f32, index, index, i1)
 
 template.decl @ggml.rmsnorm_f32.apply(%value: f32, %scale: f32) -> (f32)
 template.decl @ggml.binary_f32.apply(%op: index, %lhs: f32, %rhs: f32) -> (f32)
@@ -31,7 +31,8 @@ kernel.def target(@ggml_rmsnorm_mul_add_gfx11_wave32) export("ggml_rmsnorm_mul_a
   %c0_offset = index.constant 0 : offset
   %c256 = index.constant 256 : index
   %input_noalias, %weight_noalias, %residual_noalias, %output_noalias = buffer.assume.noalias %input, %weight, %residual, %output : buffer, buffer, buffer, buffer
-  %row_scale, %token, %launch_token_count, %valid_token = template.apply<@ggml.rmsnorm_f32.row_scale>(%token_count, %token0, %hidden, %hidden, %epsilon, %input_noalias) : (index, index, index, index, f32, buffer) -> (f32, index, index, i1)
+  %rms_reduction_unroll = index.constant 1 : index
+  %row_scale, %token, %launch_token_count, %valid_token = template.apply<@ggml.rmsnorm_f32.row_scale>(%token_count, %token0, %hidden, %hidden, %epsilon, %input_noalias, %rms_reduction_unroll) : (index, index, index, index, f32, buffer, index) -> (f32, index, index, i1)
   %input_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%hidden]xf32>
   %weight_view = buffer.view %weight_noalias[%c0_offset] : buffer -> view<[%hidden]xf32>
   %residual_view = buffer.view %residual_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%hidden]xf32>

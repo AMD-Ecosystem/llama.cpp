@@ -1,7 +1,7 @@
 // Copyright 2026 The HRX Authors
 // SPDX-License-Identifier: Apache-2.0
 
-template.decl @ggml.rmsnorm_f32.row_scale(%arg0: index, %arg1: index, %arg2: index, %arg3: index, %arg4: f32, %arg5: buffer) -> (f32, index, index, i1)
+template.decl @ggml.rmsnorm_f32.row_scale(%arg0: index, %arg1: index, %arg2: index, %arg3: index, %arg4: f32, %arg5: buffer, %reduction_unroll: index) -> (f32, index, index, i1)
 
 config.decl @ggml.add_rmsnorm_binary_symmetric_i4.hidden_size : %value: index where [range(%value, 128, 32768), multiple_of(%value, 128)]
 config.decl @ggml.add_rmsnorm_binary_symmetric_i4.rms_epsilon : f32
@@ -395,7 +395,8 @@ template.def<@ggml.rmsnorm_gate_silu_mul_symmetric_i4_k32.body> device @ggml_rms
   %nibble_mask = vector.constant 15 : vector<4xi32>
 
   %input_noalias, %weight_noalias, %raw_gate_noalias, %output_noalias, %i4_qs_noalias, %i4_ds_noalias, %i4_sums_noalias = buffer.assume.noalias %input, %weight, %raw_gate, %output, %i4_qs, %i4_ds, %i4_sums : buffer, buffer, buffer, buffer, buffer, buffer, buffer
-  %row_scale, %token, %bounded_token_count, %valid_token = template.apply<@ggml.rmsnorm_f32.row_scale>(%token_count, %token0, %hidden_size, %hidden_size, %epsilon, %input_noalias) : (index, index, index, index, f32, buffer) -> (f32, index, index, i1)
+  %rms_reduction_unroll = index.constant 1 : index
+  %row_scale, %token, %bounded_token_count, %valid_token = template.apply<@ggml.rmsnorm_f32.row_scale>(%token_count, %token0, %hidden_size, %hidden_size, %epsilon, %input_noalias, %rms_reduction_unroll) : (index, index, index, index, f32, buffer, index) -> (f32, index, index, i1)
   %input_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]x[%hidden_size]xf32>
   %weight_view = buffer.view %weight_noalias[%c0_offset] : buffer -> view<[%hidden_size]xf32>
   %raw_gate_view = buffer.view %raw_gate_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]x[%hidden_size]xf32>
