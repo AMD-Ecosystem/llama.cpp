@@ -418,7 +418,7 @@ static void run_host_transfer_checks(ggml_backend_hrx_context * context) {
     REQUIRE(ggml::hrx::allocate_host_staging_buffer(context->device->device, 64, staging).success());
 
     const std::array<uint8_t, 64> zero = {};
-    require_hrx_status(hrx_synchronous_h2d(context->device->device, zero.data(), staging.buffer, 0, zero.size()));
+    require_hrx_status(hrx_synchronous_h2d(context->device->transfer_queue, zero.data(), staging.buffer, 0, zero.size()));
 
     std::array<uint8_t, 64> host = {};
     for (size_t i = 0; i < host.size(); ++i) {
@@ -434,7 +434,7 @@ static void run_host_transfer_checks(ggml_backend_hrx_context * context) {
 
     std::array<uint8_t, 64> upload_result = {};
     require_hrx_status(
-        hrx_synchronous_d2h(context->device->device, staging.buffer, 0, upload_result.data(), upload_result.size()));
+        hrx_synchronous_d2h(context->device->transfer_queue, staging.buffer, 0, upload_result.data(), upload_result.size()));
     for (size_t i = 0; i < upload_result.size(); ++i) {
         const uint8_t expected = i >= 16 && i < 40 ? host[i - 8] : 0;
         REQUIRE(upload_result[i] == expected);
@@ -445,7 +445,7 @@ static void run_host_transfer_checks(ggml_backend_hrx_context * context) {
         device_values[i] = static_cast<uint8_t>(0xa0 + i);
     }
     require_hrx_status(
-        hrx_synchronous_h2d(context->device->device, device_values.data(), staging.buffer, 0, device_values.size()));
+        hrx_synchronous_h2d(context->device->transfer_queue, device_values.data(), staging.buffer, 0, device_values.size()));
 
     std::array<uint8_t, 48> download_result = {};
     REQUIRE(
@@ -525,7 +525,7 @@ static void run_host_weight_cache_checks(ggml_backend_hrx_context * context) {
 
     std::array<uint8_t, 32> first_bytes = {};
     require_hrx_status(
-        hrx_synchronous_d2h(context->device->device, first.lease.buffer(), 0, first_bytes.data(), first_bytes.size()));
+        hrx_synchronous_d2h(context->device->transfer_queue, first.lease.buffer(), 0, first_bytes.data(), first_bytes.size()));
     for (size_t i = 0; i < first_bytes.size(); ++i) {
         REQUIRE(first_bytes[i] == host[source.offset + i]);
     }
@@ -590,7 +590,7 @@ static void run_host_weight_cache_checks(ggml_backend_hrx_context * context) {
     REQUIRE(other_shape.valid());
     REQUIRE(other_shape.lease.buffer() == region.lease.buffer());
     std::array<uint8_t, 32> aliased_bytes = {};
-    require_hrx_status(hrx_synchronous_d2h(context->device->device, other_shape.lease.buffer(), 0,
+    require_hrx_status(hrx_synchronous_d2h(context->device->transfer_queue, other_shape.lease.buffer(), 0,
                                          aliased_bytes.data(), aliased_bytes.size()));
     for (size_t i = 0; i < aliased_bytes.size(); ++i) {
         REQUIRE(aliased_bytes[i] == host[source.offset + i]);
@@ -665,7 +665,7 @@ static void run_packed_weight_identity_checks(ggml_backend_hrx_context * context
     auto first = weights.acquire(context->device->device, context->stream, transfers, source);
     REQUIRE(first.valid());
     std::vector<uint8_t> first_bytes(source_bytes);
-    require_hrx_status(hrx_synchronous_d2h(context->device->device, first.lease.buffer(), 0,
+    require_hrx_status(hrx_synchronous_d2h(context->device->transfer_queue, first.lease.buffer(), 0,
                                          first_bytes.data(), first_bytes.size()));
 
     // Equal source/output byte lengths can still require different packed byte orders.
@@ -675,7 +675,7 @@ static void run_packed_weight_identity_checks(ggml_backend_hrx_context * context
     REQUIRE(reshaped.valid());
     REQUIRE(reshaped.lease.buffer() != first.lease.buffer());
     std::vector<uint8_t> reshaped_bytes(source_bytes);
-    require_hrx_status(hrx_synchronous_d2h(context->device->device, reshaped.lease.buffer(), 0,
+    require_hrx_status(hrx_synchronous_d2h(context->device->transfer_queue, reshaped.lease.buffer(), 0,
                                          reshaped_bytes.data(), reshaped_bytes.size()));
     REQUIRE(reshaped_bytes != first_bytes);
     auto alias = weights.acquire(context->device->device, context->stream, transfers, source);

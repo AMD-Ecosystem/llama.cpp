@@ -2,6 +2,8 @@
 
 #include "hrx_runtime.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 
@@ -26,6 +28,25 @@ inline ErrorResult take_status(hrx_status_t status) {
     hrx_status_free_message(message);
     hrx_status_ignore(status);
     return result;
+}
+
+// Direct transfers must name a queue that can execute them; a device no longer selects one for the caller.
+inline ErrorResult find_transfer_queue(hrx_device_t device, hrx_queue_t & queue) {
+    queue = nullptr;
+    const size_t family_count = hrx_device_queue_family_count(device);
+    for (size_t i = 0; i < family_count; ++i) {
+        hrx_queue_family_info_t family = {};
+        if (ErrorResult error = take_status(hrx_device_query_queue_family(device, static_cast<uint32_t>(i), &family))) {
+            return error;
+        }
+        if ((family.roles & HRX_QUEUE_ROLE_TRANSFER) != 0 && family.provisioned_queue_count > 0) {
+            queue = hrx_device_get_queue(device, static_cast<uint32_t>(i), 0);
+            if (queue != nullptr) {
+                return std::nullopt;
+            }
+        }
+    }
+    return std::string("no provisioned HRX transfer queue");
 }
 
 }  // namespace ggml::hrx
