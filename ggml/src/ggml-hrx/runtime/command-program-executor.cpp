@@ -1073,7 +1073,6 @@ static Status prepare_program_constant_buffers(const CommandProgramExecutionCont
         HRX_MEMORY_TYPE_DEVICE_LOCAL,
         HRX_MEMORY_ACCESS_ALL,
         HRX_BUFFER_USAGE_DEFAULT,
-        0,
     };
     for (const ProgramConstantImage & image : images) {
         if (!image.read) {
