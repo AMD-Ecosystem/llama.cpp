@@ -1758,7 +1758,8 @@ static RecordedCommandGraph record_prepared_command_graph(const CommandProgramEx
     retain_prepared_command_graph_resources(prepared, allocation, recorded);
 
     hrx_graph_exec_t exec = nullptr;
-    if (ErrorResult error = take_status(hrx_graph_instantiate(recorded.graph, 0, &exec))) {
+    if (ErrorResult error = take_status(
+            hrx_graph_instantiate(recorded.graph, hrx_stream_get_queue(context.stream), 0, &exec))) {
         recorded.status.log("instantiate HRX graph replay: %s", error->c_str());
         return recorded;
     }
@@ -1777,7 +1778,8 @@ static bool execute_prepared_kernel_command_via_graph(const CommandProgramExecut
     Status                 status = record_prepared_kernel_command(graph, dependencies, command);
     hrx_graph_exec_t       exec   = nullptr;
     if (status.success()) {
-        if (ErrorResult error = take_status(hrx_graph_instantiate(graph, 0, &exec))) {
+        if (ErrorResult error =
+                take_status(hrx_graph_instantiate(graph, hrx_stream_get_queue(context.stream), 0, &exec))) {
             status.log("instantiate diagnostic graph: %s", error->c_str());
         }
     }
@@ -1817,7 +1819,8 @@ static bool execute_prepared_command_prefix_via_graph(const CommandProgramExecut
 
     hrx_graph_exec_t exec = nullptr;
     if (status.success()) {
-        if (ErrorResult error = take_status(hrx_graph_instantiate(graph, 0, &exec))) {
+        if (ErrorResult error =
+                take_status(hrx_graph_instantiate(graph, hrx_stream_get_queue(context.stream), 0, &exec))) {
             status.log("instantiate diagnostic prefix graph: %s", error->c_str());
         }
     }

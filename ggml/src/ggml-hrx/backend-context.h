@@ -43,6 +43,7 @@ struct ggml_backend_hrx_buffer_context {
 struct ggml_backend_hrx_device_context {
     hrx_device_t                                   device = nullptr;
     hrx_queue_t                                    transfer_queue = nullptr;
+    hrx_queue_t                                    stream_queue = nullptr;
     std::string                                    name;
     std::string                                    description;
     std::string                                    architecture;
