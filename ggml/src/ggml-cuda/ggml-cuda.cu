@@ -5799,6 +5799,33 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
                 break;
             }
         }
+        // move the K cache write (VIEW + SET_ROWS of a RoPE result) next to the RoPE, so the norm + RoPE fusion writes it
+        for (int i = 0; i + 3 < cgraph->n_nodes; ++i) {
+            ggml_tensor * rope = cgraph->nodes[i];
+            if (rope->op != GGML_OP_ROPE) {
+                continue;
+            }
+            for (int j = i + 2; j + 1 < std::min(cgraph->n_nodes, i + 8); ++j) {
+                ggml_tensor * view     = cgraph->nodes[j];
+                ggml_tensor * set_rows = cgraph->nodes[j + 1];
+                if (view->op != GGML_OP_VIEW || view->src[0] != rope || set_rows->op != GGML_OP_SET_ROWS || set_rows->src[0] != view) {
+                    continue;
+                }
+                bool independent = true;
+                for (int k = i + 1; k < j && independent; ++k) {
+                    for (int s = 0; s < GGML_MAX_SRC; ++s) {
+                        if (cgraph->nodes[k]->src[s] == view || cgraph->nodes[k]->src[s] == set_rows) {
+                            independent = false;
+                        }
+                    }
+                }
+                if (independent) {
+                    std::rotate(cgraph->nodes + i + 1, cgraph->nodes + j, cgraph->nodes + j + 2);
+                }
+                break;
+            }
+        }
+
         // move a MUL_MAT next to an earlier one with the same src1 and weight type, so both run in one MMVQ launch
         // MUL_MATs read by a bias add, scale or GLU stay in place for those fusions
         for (int i = 0; i + 2 < cgraph->n_nodes; ++i) {
