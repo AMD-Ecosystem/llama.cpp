@@ -38,6 +38,15 @@ common_params_fit_status common_fit_params(
        const common_fit_extra_model * extra,                  // model to fit alongside the main one, nullptr if there is none
                      ggml_log_level   log_level);            // minimum log level to print during fitting, lower levels go to debug log
 
+// on devices that support it, reserve memory for compute buffers before the weights load
+//   - sized by a dry run of the main context and the extra context (with the main context as ctx_other)
+void common_fit_reserve_arenas(
+     const std::vector<std::string> & paths_model,
+           const llama_model_params * mparams,
+         const llama_context_params * cparams,
+       const common_fit_extra_model * extra,
+                     ggml_log_level   log_level);
+
 // print estimated memory to stdout
 void common_fit_print(
      const std::vector<std::string> & paths_model,
