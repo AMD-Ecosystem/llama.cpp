@@ -4474,6 +4474,43 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
 
     ggml_tensor * node = cgraph->nodes[i];
 
+    static const bool fuse_attn_set = ggml_cuda_env_int("GGML_CUDA_FUSE_ATTN_SET", 1) != 0;
+    if (fuse_attn_set && node->op == GGML_OP_FLASH_ATTN_EXT && GGML_CUDA_CC_IS_RDNA3_5(ggml_cuda_info().devices[cuda_ctx->device].cc)) {
+        const ggml_op ops[] = { GGML_OP_FLASH_ATTN_EXT, GGML_OP_RESHAPE, GGML_OP_SET };
+        const int output_idx = i + 2;
+        if (ggml_can_fuse_subgraph(cgraph, i, 3, ops, &output_idx, 1)) {
+            ggml_tensor * view = cgraph->nodes[i + 1];
+            ggml_tensor * set = cgraph->nodes[output_idx];
+            const int32_t * params = (const int32_t *) set->op_params;
+            const size_t offset = (size_t) params[3];
+            if (view->src[0] == node && set->src[1] == view && params[4] == 1 &&
+                    node->type == GGML_TYPE_F32 && set->type == GGML_TYPE_F32 &&
+                    ggml_is_contiguous(node) && ggml_is_contiguous(set) &&
+                    view->ne[2] == 1 && view->ne[3] == 1 && params[0] == view->nb[1] &&
+                    offset <= ggml_nbytes(set) && ggml_nbytes(node) <= ggml_nbytes(set) - offset &&
+                    ggml_cuda_flash_attn_ext_get_alloc_size(cuda_ctx->device, node) == ggml_nbytes(node)) {
+                ggml_tensor dst = *node;
+                dst.data = (char *) set->data + offset;
+                dst.buffer = set->buffer;
+                bool overlap = false;
+                const uintptr_t begin = (uintptr_t) dst.data;
+                const uintptr_t end = begin + ggml_nbytes(&dst);
+                for (int j = 0; j < GGML_MAX_SRC; ++j) {
+                    const ggml_tensor * src = node->src[j];
+                    if (src) {
+                        const uintptr_t src_begin = (uintptr_t) src->data;
+                        overlap = overlap || (begin < src_begin + ggml_nbytes(src) && src_begin < end);
+                    }
+                }
+                if (!overlap && begin % 16 == 0) {
+                    ggml_cuda_flash_attn_ext(*cuda_ctx, &dst);
+                    return 2;
+                }
+            }
+        }
+    }
+
+
     if (node->op == GGML_OP_MUL_MAT_ID && cuda_ctx->stream_context().concurrent_events.empty() &&
             ggml_cuda_match_shared_expert(cgraph, i, i + 3) &&
             ggml_cuda_should_fuse_mul_mat_vec_q(cgraph->nodes[i + 2]->src[1])) {

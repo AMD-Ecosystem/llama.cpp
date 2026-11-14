@@ -9271,6 +9271,23 @@ struct test_flash_attn_ext_kv_rows : public test_case {
     }
 };
 
+struct test_flash_attn_ext_set : public test_flash_attn_ext {
+    const bool extra_consumer, inplace;
+    test_flash_attn_ext_set(int64_t hs, int64_t tokens, bool extra_consumer = false, bool inplace = true)
+        : test_flash_attn_ext(hs, hs, 4, {1, 2}, tokens, tokens, false), extra_consumer(extra_consumer), inplace(inplace) {}
+    bool run_whole_graph() override { return true; }
+    std::string op_desc(ggml_tensor *) override { return "FLASH_ATTN_EXT_SET"; }
+    std::string vars() override { return test_flash_attn_ext::vars() + "," + VARS_TO_STR2(extra_consumer, inplace); }
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * attn = test_flash_attn_ext::build_graph(ctx);
+        ggml_tensor * flat = ggml_reshape_2d(ctx, attn, attn->ne[0] * attn->ne[1], attn->ne[2] * attn->ne[3]);
+        ggml_tensor * buffer = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, flat->ne[0], flat->ne[1] + 3);
+        ggml_tensor * out = inplace ? ggml_set_2d_inplace(ctx, buffer, flat, buffer->nb[1], buffer->nb[1]) :
+                                      ggml_set_2d(ctx, buffer, flat, buffer->nb[1], buffer->nb[1]);
+        return extra_consumer ? ggml_add(ctx, out, ggml_sum(ctx, flat)) : out;
+    }
+};
+
 // GGML_OP_CROSS_ENTROPY_LOSS
 struct test_cross_entropy_loss : public test_case {
     const ggml_type type;
@@ -13178,6 +13195,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
 
     // asymmetric head_dim (hsk != hsv) with one or both sides not 64-aligned
+    for (int64_t hs : {80, 128}) {
+        for (int64_t tokens : {16, 64, 65}) {
+            test_cases.emplace_back(new test_flash_attn_ext_set(hs, tokens));
+            test_cases.emplace_back(new test_flash_attn_ext_set(hs, tokens, true));
+            test_cases.emplace_back(new test_flash_attn_ext_set(hs, tokens, false, false));
+        }
+    }
+
     test_cases.emplace_back(new test_flash_attn_ext(72, 64, 4, {1, 1}, 256, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext(64, 72, 4, {1, 1}, 256, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext(65, 67, 4, {1, 1}, 113, 75, true, true, 8.0f, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));

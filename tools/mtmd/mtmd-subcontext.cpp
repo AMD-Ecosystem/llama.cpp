@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <memory>
 #include <random>
@@ -64,7 +65,8 @@ ggml_backend_dev_t mtmd_select_device(bool use_gpu, ggml_backend_dev_t device) {
 }
 
 mtmd_backends::mtmd_backends(ggml_backend_dev_t device, int n_threads, int max_nodes,
-                             ggml_backend_sched_eval_callback cb_eval, void * cb_eval_user_data) {
+                             ggml_backend_sched_eval_callback cb_eval, void * cb_eval_user_data) :
+        cb_eval(cb_eval), cb_eval_user_data(cb_eval_user_data) {
     threadpool = mtmd_threadpool_init(n_threads);
 
     backend_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
@@ -99,10 +101,20 @@ mtmd_backends::mtmd_backends(ggml_backend_dev_t device, int n_threads, int max_n
     ptrs.push_back(backend_cpu);
     bufts.push_back(ggml_backend_get_default_buffer_type(backend_cpu));
 
-    sched.reset(ggml_backend_sched_new(ptrs.data(), bufts.data(), ptrs.size(), max_nodes, false, true));
+    ensure_graph_capacity(max_nodes);
+}
+
+void mtmd_backends::ensure_graph_capacity(int required_nodes) {
+    if (required_nodes <= max_nodes) {
+        return;
+    }
+    sched.reset(ggml_backend_sched_new(ptrs.data(), bufts.data(), ptrs.size(), required_nodes, false, true));
     if (cb_eval != nullptr) {
         ggml_backend_sched_set_eval_callback(sched.get(), cb_eval, cb_eval_user_data);
     }
+    max_nodes = required_nodes;
+    // All subcontexts must reserve their graphs again on the new scheduler.
+    sched_generation++;
 }
 
 mtmd_backends::~mtmd_backends() {
@@ -173,6 +185,33 @@ mtmd_image_f32_batch mtmd_subcontext::get_dummy_batch() const {
     return batch;
 }
 
+void mtmd_subcontext::ensure_graph_capacity(const mtmd_image_f32 & img) {
+    static const bool window_batch = [] {
+        const char * value = std::getenv("MTMD_QWEN25VL_WINDOW_BATCH");
+        return value == nullptr || std::atoi(value) != 0;
+    }();
+    const auto & hparams = model.hparams;
+    if (window_batch && model.proj_type == PROJECTOR_TYPE_QWEN25VL && hparams.n_wa_pattern > 0 &&
+            flash_attn_type != MTMD_FLASH_ATTN_TYPE_DISABLED) {
+        const int patch_size = hparams.patch_size;
+        const int n_patches_y = img.ny() / patch_size;
+        const int window_size = hparams.attn_window_size > 0 ? hparams.attn_window_size : 112;
+        const int grid_window = window_size / patch_size / 2;
+        GGML_ASSERT(grid_window > 0);
+        // Each row of windows has at most two runs of equal-length windows.
+        const int64_t max_runs = 2 * ((int64_t(n_patches_y) / 2 + grid_window - 1) / grid_window);
+        const int64_t required_nodes = 8192 + int64_t(hparams.n_layer) * max_runs * 32;
+        if (required_nodes > std::numeric_limits<int>::max()) {
+            throw std::runtime_error("Qwen2.5-VL window graph is too large");
+        }
+        if (required_nodes > max_nodes) {
+            max_nodes = int(required_nodes);
+            backends.ensure_graph_capacity(max_nodes);
+            buf_compute_meta.resize(max_nodes * ggml_tensor_overhead() + ggml_graph_overhead_custom(max_nodes, false));
+        }
+    }
+}
+
 void mtmd_subcontext::warmup(const mtmd_image_f32_batch & batch) {
     support_info_graph info;
 
@@ -208,6 +247,7 @@ void mtmd_subcontext::warmup(const mtmd_image_f32_batch & batch) {
     }
 
     is_allocated = true; // mark buffers as allocated
+    allocation_generation = backends.sched_generation;
 
     LOG_INF("%s: flash attention is %s\n", __func__,
         (flash_attn_type == MTMD_FLASH_ATTN_TYPE_ENABLED) ? "enabled" : "disabled");
@@ -528,8 +568,11 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
         return false;
     }
 
+    // Grow before checking whether this subcontext needs to reserve its buffers.
+    ensure_graph_capacity(imgs.entries[0]);
+
     // if buffers are not allocated, we need to do a warmup run to allocate them
-    if (!is_allocated) {
+    if (!is_allocated || allocation_generation != backends.sched_generation) {
         warmup(*params->imgs);
     }
 
@@ -1173,7 +1216,8 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
                     const int grid_window = attn_window_size / patch_size / merge_ratio;
                     int dst = 0;
                     // [num_vision_tokens, num_vision_tokens] attention mask tensor
-                    std::vector<float> mask(pow(ipw * iph, 2), std::numeric_limits<float>::lowest());
+                    const bool has_mask = ggml_graph_get_tensor(gf, get_attn_mask_name(0).c_str()) != nullptr;
+                    std::vector<float> mask(has_mask ? size_t(ipw * iph) * (ipw * iph) : 0, std::numeric_limits<float>::lowest());
                     int mask_row = 0;
 
                     for (int y = 0; y < ph; y += grid_window) {
@@ -1193,7 +1237,7 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
                                 }
                             }
 
-                            for (int r=0; r < win_h * win_w * merge_ratio * merge_ratio; r++) {
+                            for (int r=0; has_mask && r < win_h * win_w * merge_ratio * merge_ratio; r++) {
                                 int row_offset = mask_row * (ipw * iph);
                                 std::fill(
                                     mask.begin() + row_offset + (dst_0 * merge_ratio * merge_ratio),
@@ -1206,7 +1250,9 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
 
                     set_input_i32("window_idx",     idx);
                     set_input_i32("inv_window_idx", inv_idx);
-                    set_input_attn_mask(mask);
+                    if (has_mask) {
+                        set_input_attn_mask(mask);
+                    }
                 } else {
                     for (int i = 0; i < ph * pw; i++) {
                         idx[i] = i;

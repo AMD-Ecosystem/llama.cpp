@@ -45,11 +45,17 @@ struct mtmd_backends {
 
     // its buffers fit the largest graph reserved by the subcontexts
     ggml_backend_sched_ptr sched;
+    int max_nodes = 0;
+    uint64_t sched_generation = 0;
+    ggml_backend_sched_eval_callback cb_eval;
+    void * cb_eval_user_data;
 
     // device nullptr means CPU
     mtmd_backends(ggml_backend_dev_t device, int n_threads, int max_nodes,
                   ggml_backend_sched_eval_callback cb_eval, void * cb_eval_user_data);
     ~mtmd_backends();
+
+    void ensure_graph_capacity(int required_nodes);
 
     std::map<ggml_backend_dev_t, size_t> get_mem_compute() const;
 
@@ -158,6 +164,7 @@ struct mtmd_subcontext {
     int max_nodes = 8192;
     mtmd_flash_attn_type flash_attn_type = MTMD_FLASH_ATTN_TYPE_AUTO;
     bool is_allocated = false;
+    uint64_t allocation_generation = 0;
 
     bool debug_output_embeddings = false;
 
@@ -165,6 +172,8 @@ struct mtmd_subcontext {
 
     // model and backends must outlive the subcontext
     mtmd_subcontext(const mtmd_model & model, mtmd_backends & backends, const mtmd_subctx_params & params);
+
+    void ensure_graph_capacity(const mtmd_image_f32 & img);
 
     bool encode(mtmd_subctx_encode_params * params);
 

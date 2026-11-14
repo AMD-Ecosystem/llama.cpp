@@ -2320,6 +2320,7 @@ static int32_t cbx_ref_encode(mtmd_context * ctx, const mtmd_audio_tokens * audi
 static bool mtmd_audio_batch_encode(mtmd_context * ctx, const mtmd_image_f32_batch & batch_f32, mtmd_audio_preproc_out * source, uint32_t idx, std::vector<float> & out_embd) {
     mtmd_image_f32_batch batch = batch_f32.clone();
     if (source) {
+        ctx->audio_preproc->mel_config.sched = ctx->backends->sched.get();
         if (!ctx->audio_preproc->compute(*source)) {
             LOG_ERR("%s: unable to compute the mel\n", __func__);
             return false;
@@ -3969,6 +3970,7 @@ void mtmd_debug_preprocess_audio(mtmd_context * ctx, const std::vector<float> & 
         return;
     }
     mtmd_audio_preproc_out out = ctx->audio_preproc->preprocess(samples.data(), samples.size());
+    ctx->audio_preproc->mel_config.sched = ctx->backends->sched.get();
     if (out.entries.empty() || !ctx->audio_preproc->compute(out)) {
         LOG_ERR("%s: failed to preprocess audio\n", __func__);
         return;
@@ -4563,6 +4565,7 @@ static bool mtmd_audio_stream_compute_mel(mtmd_audio_stream_lfm3a * s) {
     const int64_t start = s->n_frames * s->hop - s->buf_pos;
     const size_t  len   = (size_t) (s->win + (n_new - 1) * s->hop);
     mtmd_audio_preproc_out out = s->ctx->audio_preproc->preprocess(s->buf.data() + start, len);
+    s->ctx->audio_preproc->mel_config.sched = s->ctx->backends->sched.get();
     if (out.entries.size() != 1 || !s->ctx->audio_preproc->compute(out)) {
         LOG_ERR("%s: unable to preprocess audio\n", __func__);
         return false;

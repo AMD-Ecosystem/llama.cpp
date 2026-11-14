@@ -48,6 +48,44 @@ struct test_registry {
     static void name(testing & t)
 
 
+MAKE_TEST(test_scheduler_growth) {
+    int callbacks = 0;
+    auto cb = [](ggml_tensor *, bool ask, void * data) {
+        if (!ask) {
+            ++*static_cast<int *>(data);
+        }
+        return true;
+    };
+    mtmd_backends backends(nullptr, 1, 64, cb, &callbacks);
+    for (int nodes : {64, 256, 64}) {
+        backends.ensure_graph_capacity(nodes);
+        const size_t mem_size = 4 * ggml_tensor_overhead() + ggml_graph_overhead_custom(16, false);
+        ggml_context_ptr ctx(ggml_init({mem_size, nullptr, true}));
+        ggml_tensor * input = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 4);
+        ggml_set_input(input);
+        ggml_tensor * output = ggml_scale(ctx.get(), input, 2.0f);
+        ggml_set_output(output);
+        ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), 16, false);
+        ggml_build_forward_expand(graph, output);
+        ggml_backend_sched_reset(backends.sched.get());
+        if (!t.assert_true("allocate after growth", ggml_backend_sched_alloc_graph(backends.sched.get(), graph))) {
+            continue;
+        }
+        const float values[] = {1.0f, -2.0f, 3.0f, -4.0f};
+        ggml_backend_tensor_set(input, values, 0, sizeof(values));
+        callbacks = 0;
+        t.assert_equal("compute after growth", GGML_STATUS_SUCCESS, ggml_backend_sched_graph_compute(backends.sched.get(), graph));
+        float result[4];
+        ggml_backend_tensor_get(output, result, 0, sizeof(result));
+        for (int i = 0; i < 4; ++i) {
+            t.assert_equal("scaled value", 2.0f * values[i], result[i]);
+        }
+        t.assert_true("callback retained after growth", callbacks > 0);
+        ggml_backend_sched_reset(backends.sched.get());
+    }
+}
+
+
 //
 // mtmd_image
 //
