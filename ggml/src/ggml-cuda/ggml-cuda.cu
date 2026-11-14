@@ -4516,6 +4516,25 @@ static bool ggml_cuda_feeds_next(const ggml_cgraph * cgraph, int i) {
     return false;
 }
 
+// the tensor (t or its one-row-per-token reshape) through which an MMVQ product shortly after node i reads t, or nullptr
+static const ggml_tensor * ggml_cuda_mmvq_q8_1_target(const ggml_cgraph * cgraph, int i, const ggml_tensor * t) {
+    const ggml_tensor * fa = t;
+    const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+    for (int j = i + 1; j < std::min(cgraph->n_nodes, i + 8); ++j) {
+        const ggml_tensor * mm = cgraph->nodes[j];
+        if (mm->op != GGML_OP_MUL_MAT || !ggml_is_quantized(mm->src[0]->type)) {
+            continue;
+        }
+        const ggml_tensor * src1 = mm->src[1];
+        if ((src1 == fa || (src1->view_src == fa && src1->view_offs == 0)) && src1->data == fa->data &&
+                ggml_is_contiguous(src1) && ggml_nbytes(src1) == ggml_nbytes(fa) && src1->ne[1] <= MMVQ_MAX_BATCH_SIZE &&
+                src1->ne[0] % MATRIX_ROW_PADDING == 0 && ggml_cuda_should_use_mmvq(mm->src[0]->type, cc, src1->ne[1])) {
+            return src1;
+        }
+    }
+    return nullptr;
+}
+
 // Whether one of the nodes shortly after node i multiplies a quantized matrix by t through MMVQ.
 static bool ggml_cuda_mmvq_reads_soon(const ggml_cgraph * cgraph, int i, const ggml_tensor * t) {
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
@@ -4567,8 +4586,14 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         if (ggml_cuda_match_moe_weighted_reduction(cgraph, i, match)) {
             const int output_idx = i + match.node_count - 1;
             if (ggml_cuda_check_fusion_memory_ranges(cgraph, i, match.node_count, &output_idx, 1)) {
-                ggml_cuda_op_moe_weighted_reduction(
-                    *cuda_ctx, match.experts, match.expert_scale, match.weights, match.dst);
+                // the reduction also writes the q8_1 copy for the MMVQ product that reads its result
+                const ggml_tensor * q8_1_tensor = ggml_cuda_mmvq_q8_1_target(cgraph, output_idx, match.dst);
+                block_q8_1 * q8_1 = q8_1_tensor ? (block_q8_1 *) cuda_ctx->q8_1_cache.reserve(
+                    ggml_nrows(q8_1_tensor) * q8_1_tensor->ne[0]/QK8_1 * sizeof(block_q8_1)) : nullptr;
+                if (ggml_cuda_op_moe_weighted_reduction(
+                        *cuda_ctx, match.experts, match.expert_scale, match.weights, match.dst, q8_1) && q8_1) {
+                    cuda_ctx->q8_1_cache.commit(q8_1_tensor);
+                }
                 return match.node_count - 1;
             }
         }
@@ -5606,7 +5631,20 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                 GGML_UNUSED(integrated);
 #endif  // NDEBUG
 
+                // a flash attention whose result (reshaped) feeds MMVQ writes its q8_1 copy, see ggml_cuda_mmvq_q8_1_target
+                const ggml_tensor * fa_q8_1_tensor = node->op == GGML_OP_FLASH_ATTN_EXT ? ggml_cuda_mmvq_q8_1_target(cgraph, i, node) : nullptr;
+                if (fa_q8_1_tensor) {
+                    cuda_ctx->fa_q8_1 = (block_q8_1 *) cuda_ctx->q8_1_cache.reserve(
+                        ggml_nrows(fa_q8_1_tensor) * fa_q8_1_tensor->ne[0]/QK8_1 * sizeof(block_q8_1));
+                    cuda_ctx->fa_q8_1_written = false;
+                }
+
                 bool ok = ggml_cuda_compute_forward(*cuda_ctx, node);
+
+                if (fa_q8_1_tensor && cuda_ctx->fa_q8_1 && cuda_ctx->fa_q8_1_written) {
+                    cuda_ctx->q8_1_cache.commit(fa_q8_1_tensor);
+                }
+                cuda_ctx->fa_q8_1 = nullptr;
                 if (!ok) {
                     GGML_LOG_ERROR("%s: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
                 }

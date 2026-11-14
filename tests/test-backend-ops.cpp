@@ -8211,6 +8211,27 @@ struct test_moe_reduce : public test_case {
     }
 };
 
+// MoE weighted reduction read by a quantized mat-vec product
+struct test_moe_reduce_mul_mat_vec : public test_moe_reduce {
+    using test_moe_reduce::test_moe_reduce;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MOE_REDUCE_MUL_MAT_VEC";
+    }
+
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * reduced = test_moe_reduce::build_graph(ctx);
+        ggml_tensor * out = ggml_mul_mat(ctx, ggml_new_tensor_2d(ctx, GGML_TYPE_Q4_0, reduced->ne[0], 64), reduced);
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
 // mul_mat with src1 in [0, 1]: a zero-mean src1 hides errors in the zero point or the min of a quantized src0
 struct test_mul_mat_pos : public test_mul_mat {
     using test_mul_mat::test_mul_mat;
@@ -9304,6 +9325,61 @@ struct test_flash_attn_ext : public test_case {
 
     bool grad_precise() override {
         return true;
+    }
+};
+
+// decode flash attention output, reshaped to one row per token, read by a quantized mat-vec product
+struct test_flash_attn_ext_mul_mat_vec : public test_case {
+    const int64_t kv;
+    const int64_t nb;
+    const ggml_type type_a;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "FLASH_ATTN_EXT_MUL_MAT_VEC";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::string vars() override {
+        return VARS_TO_STR3(kv, nb, type_a);
+    }
+
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+
+    test_flash_attn_ext_mul_mat_vec(int64_t kv = 512, int64_t nb = 1, ggml_type type_a = GGML_TYPE_Q4_0)
+        : kv(kv), nb(nb), type_a(type_a) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        const int64_t d = 128, n_head = 48, n_head_kv = 8;
+        ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, d, nb, n_head, 1);
+        ggml_tensor * k = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, d, kv, n_head_kv, 1);
+        ggml_tensor * v = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, d, kv, n_head_kv, 1);
+        ggml_tensor * m = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, kv, nb, 1, 1);
+        ggml_set_name(q, "q");
+        ggml_set_name(k, "k");
+        ggml_set_name(v, "v");
+        ggml_set_name(m, "m");
+
+        ggml_tensor * fa = ggml_flash_attn_ext(ctx, q, k, v, m, 1.0f/sqrtf(d), 0.0f, 0.0f);
+        ggml_prec_set_acc(fa, GGML_PREC_F32);
+        ggml_tensor * cur = ggml_reshape_2d(ctx, fa, d*n_head, nb);
+        ggml_tensor * out = ggml_mul_mat(ctx, ggml_new_tensor_2d(ctx, type_a, d*n_head, 64), cur);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "m") == 0) {
+                init_tensor_kq_mask(t);
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
     }
 };
 
@@ -11751,6 +11827,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    for (int64_t kv : { 512, 2560, 8448 }) {
+        for (int64_t nb : { 1, 4 }) {
+            test_cases.emplace_back(new test_flash_attn_ext_mul_mat_vec(kv, nb, GGML_TYPE_Q4_0));
+            test_cases.emplace_back(new test_flash_attn_ext_mul_mat_vec(kv, nb, GGML_TYPE_Q3_K));
+        }
+    }
+
     for (ggml_type type_a : { GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_Q2_K, GGML_TYPE_Q6_K }) {
         for (int64_t k : { 512, 768, 3584 }) {
             for (int64_t rows : { 1, 4, 8, 9 }) {
@@ -13557,6 +13640,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     // Cover the supported boundaries, common k = 8 shapes, interleaved views and adds, and k = 16 fallback.
     test_cases.emplace_back(new test_moe_reduce(63,  2, 17));
+    for (int64_t n_tokens : { 1, 4 }) {
+        test_cases.emplace_back(new test_moe_reduce_mul_mat_vec(1536, 8, n_tokens));
+        test_cases.emplace_back(new test_moe_reduce_mul_mat_vec(1536, 8, n_tokens, false, true));
+    }
     test_cases.emplace_back(new test_moe_reduce(2048, 8, 128));
     test_cases.emplace_back(new test_moe_reduce(2048, 8, 128, false, true));
     test_cases.emplace_back(new test_moe_reduce(63,   12, 33, true,  true, true));

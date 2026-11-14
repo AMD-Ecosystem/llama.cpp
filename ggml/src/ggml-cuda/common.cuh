@@ -1409,6 +1409,10 @@ struct ggml_backend_cuda_context {
     ggml_cuda_derived_cache q8_1_cache;   // q8_1 copies of activations for MMVQ
     ggml_cuda_derived_cache fa_vis_cache; // KV tile visibility bits of flash attention masks
 
+    // where a flash attention whose result MMVQ reads writes the q8_1 copy, and whether it did
+    block_q8_1 * fa_q8_1         = nullptr;
+    bool         fa_q8_1_written = false;
+
 #ifdef USE_CUDA_GRAPH
     // Map from first_node_ptr to cuda_graph - allows multiple graphs per context
     // when the computation is split across CPU/GPU (e.g., with --n-cpu-moe)
