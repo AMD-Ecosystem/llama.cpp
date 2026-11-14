@@ -91,7 +91,8 @@ static __device__ __forceinline__ void rms_norm_store_q8_1(block_q8_1 * y, const
     q.y = amax == 0.0f ? 0 : roundf(v.y / d);
     q.z = amax == 0.0f ? 0 : roundf(v.z / d);
     q.w = amax == 0.0f ? 0 : roundf(v.w / d);
-    const int sum = warp_reduce_sum<8>((int) q.x + q.y + q.z + q.w);
+    // The integer reduction ignores the width on Ampere and newer GPUs.
+    const float sum = warp_reduce_sum<8>(float(q.x + q.y + q.z + q.w));
     ((char4 *) y[i/8].qs)[i % 8] = q;
     if (i % 8 == 0) {
         y[i/8].ds = make_half2(d, d * sum);

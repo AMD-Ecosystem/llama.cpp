@@ -4421,11 +4421,20 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
             const ggml_tensor * res = add->src[0] == mul1 ? add->src[1] : add->src[0];
             const ggml_tensor * w2  = mul2->src[0] == rms2 ? mul2->src[1] : mul2->src[0];
 
+            // Residual and weight inputs must exist before the fused kernel starts.
+            for (const ggml_tensor * input : { w1, res, w2 }) {
+                for (const ggml_tensor * fused : { rms1, mul1, add, rms2, mul2 }) {
+                    if (input == fused) {
+                        return false;
+                    }
+                }
+            }
+
             for (const ggml_tensor * t : { x, w1, res, w2, mul1, add, mul2 }) {
                 if (t->type != GGML_TYPE_F32) { return false; }
             }
             // same shape for the activation tensors, 1-D contiguous weights, contiguous rows, no batching
-            if (x->ne[0] % 4 != 0 || x->ne[2] != 1 || x->ne[3] != 1) { return false; }
+            if (x->ne[0] % 4 != 0 || x->ne[0] > 16384 || x->ne[2] != 1 || x->ne[3] != 1) { return false; }
             if (!ggml_are_same_shape(x, res) || !ggml_are_same_shape(x, add) || !ggml_are_same_shape(x, mul2)) { return false; }
             if (!ggml_is_contiguous_rows(x) || !ggml_is_contiguous_rows(res)) { return false; }
             if (!ggml_is_contiguous(add) || !ggml_is_contiguous(mul2)) { return false; }

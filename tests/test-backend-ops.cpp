@@ -4180,8 +4180,20 @@ struct test_mul_mat_pair_add : public test_case {
 };
 
 struct test_rms_norm_add_rms : public test_case {
+    enum class variant_t {
+        BASIC,
+        RESIDUAL_IS_NORM,
+        RESIDUAL_IS_MUL,
+        WEIGHT1_IS_NORM,
+        WEIGHT2_IS_NORM,
+        WEIGHT2_IS_FIRST_NORM,
+        WEIGHT2_IS_FIRST_MUL,
+        STRIDED_INPUT,
+    };
     const std::array<int64_t, 4> ne;
     const float eps;
+    const bool params;
+    const variant_t variant;
 
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
@@ -4191,29 +4203,59 @@ struct test_rms_norm_add_rms : public test_case {
     bool run_whole_graph() override { return true; }
 
     std::string vars() override {
-        return VARS_TO_STR2(ne, eps);
+        return VARS_TO_STR4(ne, eps, params, (int) variant);
     }
 
-    test_rms_norm_add_rms(std::array<int64_t, 4> ne = {64, 5, 1, 1}, float eps = 1e-6f) : ne(ne), eps(eps) {}
+    test_rms_norm_add_rms(std::array<int64_t, 4> ne = {64, 5, 1, 1}, float eps = 1e-6f,
+            bool params = true, variant_t variant = variant_t::BASIC)
+        : ne(ne), eps(eps), params(params), variant(variant) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * x   = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+        std::array<int64_t, 4> ne_x = ne;
+        if (variant == variant_t::STRIDED_INPUT) {
+            ne_x[0] += 4;
+        }
+        ggml_tensor * x   = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_x.data());
         ggml_tensor * res = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
         ggml_tensor * w1  = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ne[0]);
         ggml_tensor * w2  = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ne[0]);
-        ggml_set_param(x);
-        ggml_set_param(res);
-        ggml_set_param(w1);
-        ggml_set_param(w2);
+        // Keep parameter-marked coverage, and separately test adjacent inference nodes without parameter nodes between them.
+        if (params) {
+            ggml_set_param(x);
+            ggml_set_param(res);
+            ggml_set_param(w1);
+            ggml_set_param(w2);
+        }
         ggml_set_name(x, "x");
         ggml_set_name(res, "res");
         ggml_set_name(w1, "w1");
         ggml_set_name(w2, "w2");
+        if (variant == variant_t::STRIDED_INPUT) {
+            GGML_ASSERT(ne[2] == 1 && ne[3] == 1);
+            x = ggml_view_2d(ctx, x, ne[0], ne[1], x->nb[1], 0);
+        }
 
         // sandwich norm, residual add, next pre-norm; the residual stream is used again afterwards
-        ggml_tensor * branch = ggml_mul(ctx, ggml_rms_norm(ctx, x, eps), w1);
+        ggml_tensor * norm1 = ggml_rms_norm(ctx, x, eps);
+        if (variant == variant_t::WEIGHT1_IS_NORM) {
+            w1 = norm1;
+        }
+        ggml_tensor * branch = ggml_mul(ctx, norm1, w1);
+        if (variant == variant_t::RESIDUAL_IS_NORM) {
+            res = norm1;
+        } else if (variant == variant_t::RESIDUAL_IS_MUL) {
+            res = branch;
+        }
         ggml_tensor * stream = ggml_add(ctx, branch, res);
-        ggml_tensor * normed = ggml_mul(ctx, ggml_rms_norm(ctx, stream, eps), w2);
+        ggml_tensor * norm2 = ggml_rms_norm(ctx, stream, eps);
+        if (variant == variant_t::WEIGHT2_IS_NORM) {
+            w2 = norm2;
+        } else if (variant == variant_t::WEIGHT2_IS_FIRST_NORM) {
+            w2 = norm1;
+        } else if (variant == variant_t::WEIGHT2_IS_FIRST_MUL) {
+            w2 = branch;
+        }
+        ggml_tensor * normed = ggml_mul(ctx, norm2, w2);
         ggml_tensor * out    = ggml_add(ctx, normed, stream);
         ggml_set_name(out, "out");
         return out;
@@ -9333,6 +9375,7 @@ struct test_flash_attn_ext_mul_mat_vec : public test_case {
     const int64_t kv;
     const int64_t nb;
     const ggml_type type_a;
+    const bool mask;
 
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
@@ -9342,26 +9385,28 @@ struct test_flash_attn_ext_mul_mat_vec : public test_case {
     bool run_whole_graph() override { return true; }
 
     std::string vars() override {
-        return VARS_TO_STR3(kv, nb, type_a);
+        return VARS_TO_STR4(kv, nb, type_a, mask);
     }
 
     double max_nmse_err() override {
         return 5e-4;
     }
 
-    test_flash_attn_ext_mul_mat_vec(int64_t kv = 512, int64_t nb = 1, ggml_type type_a = GGML_TYPE_Q4_0)
-        : kv(kv), nb(nb), type_a(type_a) {}
+    test_flash_attn_ext_mul_mat_vec(int64_t kv = 512, int64_t nb = 1, ggml_type type_a = GGML_TYPE_Q4_0, bool mask = true)
+        : kv(kv), nb(nb), type_a(type_a), mask(mask) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         const int64_t d = 128, n_head = 48, n_head_kv = 8;
         ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, d, nb, n_head, 1);
         ggml_tensor * k = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, d, kv, n_head_kv, 1);
         ggml_tensor * v = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, d, kv, n_head_kv, 1);
-        ggml_tensor * m = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, kv, nb, 1, 1);
+        ggml_tensor * m = mask ? ggml_new_tensor_4d(ctx, GGML_TYPE_F16, kv, nb, 1, 1) : nullptr;
         ggml_set_name(q, "q");
         ggml_set_name(k, "k");
         ggml_set_name(v, "v");
-        ggml_set_name(m, "m");
+        if (m) {
+            ggml_set_name(m, "m");
+        }
 
         ggml_tensor * fa = ggml_flash_attn_ext(ctx, q, k, v, m, 1.0f/sqrtf(d), 0.0f, 0.0f);
         ggml_prec_set_acc(fa, GGML_PREC_F32);
@@ -11826,6 +11871,24 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_rms_norm_add_rms({n, rows, 1, 1}, 1e-6f));
         }
     }
+    for (int64_t n : {64, 3584, 16384, 32768}) {
+        for (int64_t rows : {1, 4}) {
+            test_cases.emplace_back(new test_rms_norm_add_rms({n, rows, 1, 1}, 1e-6f, false));
+        }
+    }
+    for (auto variant : { test_rms_norm_add_rms::variant_t::RESIDUAL_IS_NORM,
+                          test_rms_norm_add_rms::variant_t::RESIDUAL_IS_MUL,
+                          test_rms_norm_add_rms::variant_t::WEIGHT1_IS_NORM,
+                          test_rms_norm_add_rms::variant_t::WEIGHT2_IS_NORM,
+                          test_rms_norm_add_rms::variant_t::WEIGHT2_IS_FIRST_NORM,
+                          test_rms_norm_add_rms::variant_t::WEIGHT2_IS_FIRST_MUL,
+                          test_rms_norm_add_rms::variant_t::STRIDED_INPUT }) {
+        test_cases.emplace_back(new test_rms_norm_add_rms({64, 1, 1, 1}, 1e-6f, false, variant));
+    }
+    test_cases.emplace_back(new test_rms_norm_add_rms({64, 5, 1, 1}, 1e-6f, false,
+        test_rms_norm_add_rms::variant_t::RESIDUAL_IS_NORM));
+    test_cases.emplace_back(new test_rms_norm_add_rms({64, 5, 1, 1}, 1e-6f, false,
+        test_rms_norm_add_rms::variant_t::STRIDED_INPUT));
 
     for (int64_t kv : { 512, 2560, 8448 }) {
         for (int64_t nb : { 1, 4 }) {
@@ -11833,6 +11896,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_flash_attn_ext_mul_mat_vec(kv, nb, GGML_TYPE_Q3_K));
         }
     }
+    // Without a mask, RDNA decode uses the vector kernel and its q8_1-producing split-K combine.
+    test_cases.emplace_back(new test_flash_attn_ext_mul_mat_vec(2560, 1, GGML_TYPE_Q4_0, false));
+    test_cases.emplace_back(new test_flash_attn_ext_mul_mat_vec(2560, 1, GGML_TYPE_Q3_K, false));
 
     for (ggml_type type_a : { GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_Q2_K, GGML_TYPE_Q6_K }) {
         for (int64_t k : { 512, 768, 3584 }) {
@@ -11841,6 +11907,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                 test_cases.emplace_back(new test_rms_norm_mul_mat_vec(type_a, k, 96, rows, true));
             }
         }
+    }
+    for (ggml_type type_a : { GGML_TYPE_Q4_1, GGML_TYPE_Q5_0, GGML_TYPE_Q5_1 }) {
+        test_cases.emplace_back(new test_rms_norm_mul_mat_vec(type_a, 512, 96, 1));
+        test_cases.emplace_back(new test_rms_norm_mul_mat_vec(type_a, 512, 96, 1, true));
     }
 
     for (uint32_t n : {1, 127, 129, 511, 513, 2816, 4096, 16385}) {
@@ -13356,6 +13426,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (int64_t nb : {1, 4, 8}) {
         test_cases.emplace_back(new test_flash_attn_ext_kv_rows(128, 8, 6, 2560, 768, nb, 1));
         test_cases.emplace_back(new test_flash_attn_ext_kv_rows(128, 8, 6, 32768, 32768, nb, 1));
+    }
+    // Partial query tiles with an exact-sized mask and a fully padded final K/V tile.
+    for (int64_t nb : {1, 3, 5, 7}) {
+        test_cases.emplace_back(new test_flash_attn_ext_kv_rows(128, 2, 6, 512, 768, nb, 1));
+    }
+    // Padded GQA heads must not read past the attention sinks.
+    for (int64_t nb : {1, 4}) {
+        test_cases.emplace_back(new test_flash_attn_ext(128, 128, 8, {6, 1}, 512, nb, true, true, 0, 0,
+                                                      GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     }
 
     // sparse mask with large batch size
