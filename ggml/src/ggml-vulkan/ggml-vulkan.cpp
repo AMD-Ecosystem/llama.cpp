@@ -1391,7 +1391,8 @@ vk_fa_tuning_params get_fa_tuning_params(const vk_device& device, uint32_t hsk, 
 }
 
 vk_fa_pipeline_state get_fa_pipeline_state(const vk_device& device, const vk_fa_tuning_params& params, uint32_t hsk, uint32_t hsv, bool aligned, bool f32acc,
-                                                  bool use_mask, bool use_mask_opt, bool use_logit_softcap, bool use_sparse, ggml_type k_type, ggml_type v_type) {
+                                                  bool use_mask, bool use_mask_opt, bool use_logit_softcap, bool use_sparse, bool gqa_multi_token,
+                                                  ggml_type k_type, ggml_type v_type) {
     const bool old_amd_windows = device->vendor_id == VK_VENDOR_ID_AMD && device->driver_id == vk::DriverId::eAmdProprietary &&
                                  (device->architecture == AMD_GCN || device->architecture == AMD_RDNA1 || device->architecture == AMD_RDNA2);
 
@@ -1399,7 +1400,8 @@ vk_fa_pipeline_state get_fa_pipeline_state(const vk_device& device, const vk_fa_
                      (use_mask          ? 2 : 0) |
                      (use_logit_softcap ? 4 : 0) |
                      (old_amd_windows   ? 8 : 0) |
-                     (use_sparse        ? 16 : 0);
+                     (use_sparse        ? 16 : 0) |
+                     (gqa_multi_token   ? 32 : 0);
 
     const uint32_t subgroup_size = params.disable_subgroups ? 0 : params.subgroup_size;
 
@@ -4798,6 +4800,7 @@ vk_device ggml_vk_get_device(size_t idx) {
         if (device->subgroup_size_control) {
             device->subgroup_min_size = subgroup_size_control_props.minSubgroupSize;
             device->subgroup_max_size = subgroup_size_control_props.maxSubgroupSize;
+            device->subgroup_max_workgroup_count = subgroup_size_control_props.maxComputeWorkgroupSubgroups;
             device_extensions.push_back("VK_EXT_subgroup_size_control");
         }
 
@@ -8369,7 +8372,19 @@ bool ggml_vk_flash_attn_coopmat_shmem_support(const vk_device& device, const vk_
 
     const uint32_t MatBr = 16, MatBc = 16;
 
-    const uint32_t row_split = Bc / MatBc;
+    // Cooperative tiles and subgroup reductions must use the same row/column partition.
+    GGML_ASSERT(params.path == FA_COOPMAT1);
+    GGML_ASSERT(Br >= MatBr && Br % MatBr == 0);
+    const uint32_t query_tiles = Br / MatBr;
+    GGML_ASSERT(params.row_split > 0 && params.row_split % query_tiles == 0);
+    const uint32_t column_subgroups = params.row_split / query_tiles;
+    GGML_ASSERT(Bc == MatBc * column_subgroups);
+    GGML_ASSERT(params.subgroup_size > 0);
+    GGML_ASSERT(Br % params.row_split == 0 && (Br / params.row_split) % 4 == 0);
+    if (params.workgroup_size != params.subgroup_size * params.row_split ||
+        Bc < params.subgroup_size || Bc % params.subgroup_size != 0) {
+        return false;
+    }
 
     const uint32_t hsk_pad = ROUNDUP_POW2(hsk, 16);
     const uint32_t hsv_pad = ROUNDUP_POW2(hsv, 16);
@@ -8377,7 +8392,7 @@ bool ggml_vk_flash_attn_coopmat_shmem_support(const vk_device& device, const vk_
     const uint32_t acctype = f32acc ? 4 : 2;
     const uint32_t f16vec4 = 8;
 
-    const uint32_t tmpsh = (Bc / MatBc) * sizeof(float);
+    const uint32_t tmpsh = params.row_split * sizeof(float);
     // DATA_A_IQ4_NL is compiled into the FA shaders unconditionally, so its shared table is always allocated.
     const uint32_t iq_shmem = 16 * sizeof(ggml_fp16_t);
 
@@ -8391,13 +8406,13 @@ bool ggml_vk_flash_attn_coopmat_shmem_support(const vk_device& device, const vk_
     const uint32_t sfsh = Bc * sfshstride * acctype;
 
     const uint32_t kvshstride = (params.shmem_staging ? std::max(hsk_pad, hsv_pad) : MatBr) / 4 + 2;
-    const uint32_t vsh_stride = MatBc / 4 * row_split;
+    const uint32_t vsh_stride = MatBc / 4 * column_subgroups;
     const uint32_t ksh = ((kvshstride >= vsh_stride) ? (Bc * kvshstride) : (Bc * vsh_stride)) * f16vec4;
 
     // BF16 PVMat accumulator is f32 (no bf16 accumulator support), so pvsh is vec4 (16 bytes)
     const uint32_t pvsh_elem_size = (k_type == GGML_TYPE_BF16) ? 16u : f16vec4;
-    const uint32_t osh_stride = params.row_split * MatBr / 4;
-    const uint32_t pvsh = MatBc * osh_stride * pvsh_elem_size;
+    const uint32_t osh_stride = column_subgroups * MatBr / 4;
+    const uint32_t pvsh = Br * osh_stride * pvsh_elem_size;
 
     const uint32_t slope = Br * acctype;
 
@@ -8526,6 +8541,47 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
 
     tuning_params = get_fa_tuning_params(ctx->device, HSK, HSV, N, KV, k_type_eff, v_type_eff, f32acc);
 
+    // Fold query tokens into GQA rows to share K/V loads. Sparse lists remain per query token.
+    uint32_t gqa_tokens = 1;
+    const bool use_gqa_query_tiles = gqa_ratio > 4 && f32acc &&
+                                    ctx->device->vendor_id == VK_VENDOR_ID_AMD &&
+                                    ctx->device->subgroup_size_control &&
+                                    ctx->device->subgroup_min_size <= 32 && ctx->device->subgroup_max_size >= 32 &&
+                                    tuning_params.path == FA_COOPMAT1 && HSK == 128 && HSV == 128 && KV >= 8192 &&
+                                    k_type_eff == GGML_TYPE_F16 && v_type_eff == GGML_TYPE_F16;
+    const int32_t n_kv_max = mask ? ggml_get_op_params_i32(dst, 4) : 0;
+    if (gqa_ratio > 1 && neq1 > 1 && n_kv_max == 0 &&
+        tuning_params.path != FA_COOPMAT2 && ctx->device->vendor_id != VK_VENDOR_ID_INTEL) {
+        const uint32_t token_limit = use_gqa_query_tiles ? 4 : max_gqa / gqa_ratio;
+        for (uint32_t tokens = std::min<uint32_t>((uint32_t)neq1, token_limit); tokens > 1; --tokens) {
+            vk_fa_tuning_params folded_params =
+                get_fa_tuning_params(ctx->device, HSK, HSV, tokens * gqa_ratio, KV, k_type_eff, v_type_eff, f32acc);
+            if (use_gqa_query_tiles && tokens * gqa_ratio > 16) {
+                folded_params.block_rows = ROUNDUP_POW2(tokens * gqa_ratio, 16);
+                folded_params.subgroup_size = 32;
+                folded_params.block_cols = 32;
+                folded_params.row_split = 2 * (folded_params.block_rows / 16);
+                folded_params.workgroup_size = folded_params.row_split * folded_params.subgroup_size;
+                folded_params.shmem_staging = 1;
+                if (folded_params.workgroup_size > ctx->device->properties.limits.maxComputeWorkGroupInvocations ||
+                    folded_params.workgroup_size > ctx->device->properties.limits.maxComputeWorkGroupSize[0] ||
+                    (ctx->device->subgroup_size_control && folded_params.row_split > ctx->device->subgroup_max_workgroup_count) ||
+                    !ggml_vk_flash_attn_coopmat_shmem_support(ctx->device, folded_params, HSK, HSV, f32acc, k_type_eff, v_type_eff)) {
+                    continue;
+                }
+            }
+            if (folded_params.path == FA_COOPMAT2 || folded_params.block_rows < tokens * gqa_ratio) {
+                continue;
+            }
+            gqa_tokens = tokens;
+            N = tokens * gqa_ratio;
+            // the last group may be partial; its missing tokens are masked out in the shader
+            workgroups_x = CEIL_DIV((uint32_t)neq1, tokens);
+            tuning_params = folded_params;
+            break;
+        }
+    }
+
     float scale         = 1.0f;
     float max_bias      = 0.0f;
     float logit_softcap = 0.0f;
@@ -8538,8 +8594,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
         scale /= logit_softcap;
     }
 
-    // Sparse mask hint (op_params[4]): compact the <= n_kv_max finite positions and gather only those.
-    const int32_t n_kv_max = mask ? ggml_get_op_params_i32(dst, 4) : 0;
+    // Compact the <= n_kv_max finite positions from the sparse mask hint and gather only those.
     static const bool disable_sparse = getenv("GGML_VK_FA_SPARSE_DISABLE") != nullptr;
     const bool kv_f16 = k_type_eff == GGML_TYPE_F16 && v_type_eff == GGML_TYPE_F16;
     // cm2 dense is fast, so it needs a larger reduction to win.
@@ -8595,10 +8650,15 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     }
 
     // Only use mask opt when the mask is fairly large. This hasn't been tuned extensively.
-    bool use_mask_opt = mask && !use_sparse && nem1 >= 32 && nem0 * nem1 > 32768 && nem0 >= tuning_params.block_cols * 16
+    const bool mask_opt_large_batch = nem1 >= 32 && nem0 * nem1 > 32768;
+    // Skip fully masked blocks for small batches over long caches. GQA needs all mask rows in the first tile.
+    const bool mask_opt_long_kv = nem0 >= 8192 &&
+                                  (gqa_ratio > 1 ? nem1 <= tuning_params.block_rows : nem1 < 32);
+    bool use_mask_opt = mask && !use_sparse && (mask_opt_large_batch || mask_opt_long_kv) && nem0 >= tuning_params.block_cols * 16
                         && (ctx->device->architecture != vk_device_architecture::AMD_GCN || HSK > 256 || HSV > 256);
     vk_fa_pipeline_state fa_pipeline_state = get_fa_pipeline_state(ctx->device, tuning_params, HSK, HSV, aligned, f32acc,
-                                                                   mask != nullptr, use_mask_opt, logit_softcap != 0, use_sparse, k_type_eff, v_type_eff);
+                                                                   mask != nullptr, use_mask_opt, logit_softcap != 0, use_sparse, gqa_tokens > 1,
+                                                                   k_type_eff, v_type_eff);
 
     vk_pipeline pipeline = nullptr;
 
@@ -17187,4 +17247,3 @@ void ggml_vk_debug_label::begin(vk_context & ctx, const std::string & name) {
     subctx->debug_labels.push_back(name);
     ggml_vk_cmd_label_begin(subctx->s->buffer->buf, subctx->debug_labels.back().c_str());
 }
-

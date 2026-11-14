@@ -26,6 +26,8 @@ const bool LOGIT_SOFTCAP   = (Flags & 4) != 0;
 const bool OLD_AMD_WINDOWS = (Flags & 8) != 0;
 // Sparse: gather binding-7 indices instead of scanning [0,KV); p.split_kv = n_kv_max.
 const bool USE_SPARSE      = (Flags & 16) != 0;
+// Rows are token * gqa_ratio + head; N / gqa_ratio query tokens share one K/V head per workgroup.
+const bool GQA_MULTI_TOKEN = (Flags & 32) != 0;
 
 // Round up head sizes to a multiple of 16, for coopmat1/coopmat2 paths
 const uint32_t HSK_pad = (HSK + 15) & ~15;
@@ -148,7 +150,7 @@ ACC_TYPE perElemOpGetSink(const in uint32_t r, const in uint32_t c, const in ACC
 
 uint32_t i, N, KV, split_k_index, Tr, start_j, end_j,
          gqa_iq1, iq2, iq3, rk2, rk3, rv2, rv3, ik2, ik3, iv2, iv3,
-         q_stride, k_stride, v_stride, m_stride, sparse_base;
+         q_stride, k_stride, v_stride, m_stride, sparse_base, gqa_tokens, gqa_valid_tokens;
 
 void init_indices()
 {
@@ -174,6 +176,16 @@ void init_indices()
         i = gl_WorkGroupID.x;
         gqa_iq1 = 0;
         split_k_index = 0;
+    }
+
+    // gqa_iq1 is the first query token of the workgroup.
+    gqa_tokens = 1;
+    gqa_valid_tokens = 1;
+    if (GQA_MULTI_TOKEN) {
+        gqa_tokens = p.N / p.gqa_ratio;
+        gqa_iq1 *= gqa_tokens;
+        // the last token group may be partial (p.ne2 is the number of query tokens)
+        gqa_valid_tokens = min(gqa_tokens, p.ne2 - gqa_iq1);
     }
 
     Tr = CEIL_DIV(N, Br);
@@ -226,6 +238,57 @@ void init_indices()
     }
 }
 
+// Select KV blocks that are not fully masked. Only code 1 (ALL_NEG_INF) has its low bit set.
+uint32_t mask_opt_active_bits(const in uint32_t word, const in uint32_t w, const in uint32_t n_blocks)
+{
+    const uint32_t n_valid = min(16u, n_blocks - w * 16);
+    const uint32_t valid = n_valid == 16 ? 0x55555555u : (((1u << (2 * n_valid)) - 1u) & 0x55555555u);
+    return valid & ~(word & 0x55555555u);
+}
+
+// Balance splits over visible KV blocks; splitting the full cache leaves most sliding-window splits idle.
+void mask_opt_balance_split_k(const in uint32_t mo_offset, const in uint32_t mo_stride)
+{
+    const uint32_t n_blocks = CEIL_DIV(KV, Bc);
+    uint32_t n_active = 0;
+    for (uint32_t w = 0; w < mo_stride; ++w) {
+        n_active += bitCount(mask_opt_active_bits(data_mask_opt[mo_offset + w], w, n_blocks));
+    }
+    const uint32_t per_split = CEIL_DIV(n_active, p.k_num);
+    const uint32_t first = split_k_index * per_split;
+    const uint32_t last = min(first + per_split, n_active);
+
+    start_j = 0;
+    end_j = 0;
+    if (first >= last) {
+        return;
+    }
+    uint32_t seen = 0;
+    for (uint32_t w = 0; w < mo_stride && seen < last; ++w) {
+        const uint32_t bits = mask_opt_active_bits(data_mask_opt[mo_offset + w], w, n_blocks);
+        const uint32_t count = bitCount(bits);
+        const bool has_first = seen <= first && first < seen + count;
+        const bool has_last = seen < last && last <= seen + count;
+        if (!has_first && !has_last) {
+            seen += count;
+            continue;
+        }
+        for (uint32_t b = 0; b < 16; ++b) {
+            if ((bits & (1u << (2 * b))) == 0) {
+                continue;
+            }
+            if (seen == first) {
+                start_j = w * 16 + b;
+            }
+            seen++;
+            if (seen == last) {
+                end_j = w * 16 + b + 1;
+                break;
+            }
+        }
+    }
+}
+
 // Resolve a linear KV slot to a real column; false for inactive (sparse padding/-1, or dense OOB).
 bool fa_kv_index(uint lin, out uint kv_col) {
     if (USE_SPARSE) {
@@ -245,10 +308,52 @@ bool fa_kv_index(uint lin, out uint kv_col) {
 // Based on ggml-cuda issue https://github.com/ggml-org/llama.cpp/issues/18606
 const float FATTN_KQ_MAX_OFFSET = 3.0f*0.6931f;
 
-// Store the output when doing grouped query attention.
-// Rows index by Q's dimension 2, and the first N rows are valid.
-void gqaStore(const in uint32_t r, const in uint32_t c, const in O_TYPEV4 elems, const in uint32_t o_offset, const in uint32_t iq2, const in uint32_t N)
+// Query token (relative to gqa_iq1) and head (relative to iq2) of a GQA row.
+uint32_t gqa_row_token(const in uint32_t r)
 {
-    uint32_t offset = (iq2 + r) * HSV / 4 + c;
-    data_ov4[o_offset + offset] = D_TYPEV4(elems);
+    return GQA_MULTI_TOKEN ? r / p.gqa_ratio : 0;
+}
+
+uint32_t gqa_row_head(const in uint32_t r)
+{
+    return GQA_MULTI_TOKEN ? r % p.gqa_ratio : r;
+}
+
+// False for rows of a partial last token group that have no query token.
+bool gqa_row_valid(const in uint32_t r)
+{
+    return !GQA_MULTI_TOKEN || gqa_row_token(r) < gqa_valid_tokens;
+}
+
+// Offset of a Q row from q_offset, in floats.
+uint32_t q_row_offset(const in uint32_t r)
+{
+    return gqa_row_token(r) * p.nb01 + gqa_row_head(r) * q_stride;
+}
+
+// Offset of the mask row used by Q row r, from m_offset. Padding rows reuse the last token.
+uint32_t mask_row_offset(const in uint32_t r)
+{
+    if (GQA_MULTI_TOKEN) {
+        return min(gqa_row_token(r), gqa_valid_tokens - 1) * KV;
+    }
+    return r * m_stride;
+}
+
+// token_stride is the query-token stride in vec4 units for O, or elements for split_k L/M.
+void gqa_store_row(const in uint32_t r, const in uint32_t c, const in O_TYPEV4 elems, const in uint32_t o_offset, const in uint32_t token_stride)
+{
+    if (!gqa_row_valid(r)) {
+        return;
+    }
+    const uint32_t offset = (iq2 + gqa_row_head(r)) * HSV / 4 + c;
+    data_ov4[o_offset + gqa_row_token(r) * token_stride + offset] = D_TYPEV4(elems);
+}
+
+void gqa_store_col0_row(const in uint32_t r, const in ACC_TYPE elem, const in uint32_t o_offset, const in uint32_t token_stride)
+{
+    if (!gqa_row_valid(r)) {
+        return;
+    }
+    data_o[o_offset + gqa_row_token(r) * token_stride + iq2 + gqa_row_head(r)] = D_TYPE(elem);
 }

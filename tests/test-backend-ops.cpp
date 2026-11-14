@@ -9126,6 +9126,36 @@ struct test_flash_attn_ext_large_logits : public test_flash_attn_ext {
     }
 };
 
+// A causal window of n_swa positions at the end of a full KV cache, without an n_kv_max hint.
+struct test_flash_attn_ext_swa_window : public test_flash_attn_ext {
+    int64_t n_swa;
+
+    test_flash_attn_ext_swa_window(int64_t hs, int64_t nh, int64_t gqa, int64_t kv, int64_t nb, int64_t n_swa)
+        : test_flash_attn_ext(hs, hs, nh, {gqa, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16,
+                              GGML_TYPE_F16, {0, 2, 1, 3}),
+          n_swa(n_swa) {}
+
+    std::string vars() override {
+        return test_flash_attn_ext::vars() + ",n_swa=" + std::to_string(n_swa);
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        test_flash_attn_ext::initialize_tensors(ctx);
+        ggml_tensor * m = ggml_get_tensor(ctx, "m");
+        const int64_t n_kv = m->ne[0];
+        std::vector<ggml_fp16_t> data(ggml_nelements(m));
+        for (int64_t row = 0; row < ggml_nrows(m); ++row) {
+            const int64_t token = row % m->ne[1];
+            const int64_t pos   = n_kv - m->ne[1] + token;  // position of this query token
+            for (int64_t col = 0; col < n_kv; ++col) {
+                const bool visible = col <= pos && pos - col < n_swa;
+                data[row * n_kv + col] = ggml_fp32_to_fp16(visible ? 0.0f : -INFINITY);
+            }
+        }
+        ggml_backend_tensor_set(m, data.data(), 0, data.size() * sizeof(ggml_fp16_t));
+    }
+};
+
 // GGML_OP_FLASH_ATTN_EXT with kv_rows: each q slice attends to its own list of K/V cache rows
 struct test_flash_attn_ext_kv_rows : public test_case {
     const int64_t hs;
@@ -12965,6 +12995,47 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_flash_attn_ext(65, 67, 4, {1, 1}, 17, 75, false, false, 0, 1.0f, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext(65, 67, 4, {1, 1}, 113, 75, false, false, 0, 1.0f, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
 
+    // GQA with a few query tokens (speculative decoding): exercises folding tokens into GQA rows.
+    for (int64_t gqa : {2, 4, 6}) {
+        for (int64_t nb : {2, 3, 4, 8}) {
+            for (int64_t kv : {512, 8192}) {
+                for (bool sinks : {false, true}) {
+                    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {gqa, 1}, kv, nb, true, sinks, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}));
+                }
+            }
+            test_cases.emplace_back(new test_flash_attn_ext(64, 64, 2, {gqa, 2}, 1024, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+            test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {gqa, 1}, 1024, nb, true, false, 8.0f, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+            test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {gqa, 1}, 1024, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
+        }
+    }
+
+    for (int64_t nb : {5, 7, 8}) {
+        test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {6, 1}, 8193, nb, true, true, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}));
+        test_cases.emplace_back(new test_flash_attn_ext_swa_window(128, 2, 6, 16385, nb, 512));
+    }
+    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 40, {6, 1}, 8193, 8, true, true, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}));
+    for (int64_t gqa : {9, 13}) {
+        test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {gqa, 1}, 8193, 8, true, true, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}));
+    }
+    for (float max_bias : {0.0f, 8.0f}) {
+        for (float logit_softcap : {0.0f, 10.0f}) {
+            if (max_bias == 0.0f && logit_softcap == 0.0f) {
+                continue;
+            }
+            for (int64_t nh : {2, 40}) {
+                test_cases.emplace_back(new test_flash_attn_ext(128, 128, nh, {6, 1}, 8193, 5, true, true, max_bias, logit_softcap, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}));
+            }
+        }
+    }
+
+    // Sliding-window and causal masks over a long full-size cache with a few query rows (mask_opt path).
+    for (int64_t gqa : {1, 6}) {
+        for (int64_t nb : {1, 2, 4, 8}) {
+            for (int64_t n_swa : {512, 4096, 16384}) {
+                test_cases.emplace_back(new test_flash_attn_ext_swa_window(128, 2, gqa, 16384, nb, n_swa));
+            }
+        }
+    }
     // mixed quant and Q1_0 test cases
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 4, {1, 1}, 128, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0));
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 4, {1, 1}, 128, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_F16));
@@ -13764,6 +13835,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     }
 
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 8, {8, 1}, 7680, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+
+    test_cases.emplace_back(new test_flash_attn_ext_swa_window(128, 8, 6, 131072, 8, 131072));
+
+    // Long-context GQA decode and verification with dense, sparse-list and sliding-window masks.
+    for (int64_t nb : {1, 8}) {
+        test_cases.emplace_back(new test_flash_attn_ext(128, 128, 8, {6, 1}, 131072, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}));
+        test_cases.emplace_back(new test_flash_attn_ext(128, 128, 8, {6, 1}, 131072, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}, true, false, 8192));
+        test_cases.emplace_back(new test_flash_attn_ext_swa_window(128, 8, 6, 131072, nb, 512));
+    }
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 8, {8, 1}, 7680, 4, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 8, {8, 1}, 7680,   1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0));
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 8, {8, 1}, 7680, 512, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0));
