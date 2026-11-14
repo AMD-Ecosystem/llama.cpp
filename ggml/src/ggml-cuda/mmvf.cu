@@ -777,6 +777,14 @@ void ggml_cuda_mul_mat_vec_f(ggml_backend_cuda_context & ctx, const ggml_tensor 
 
     switch (src0->type) {
         case GGML_TYPE_F32: {
+            // the BF16 copy holds the same values, and the kernel converts them back to F32 before the same FMAs
+            const nv_bfloat16 * src0_bf16 = fusion_local.gate ? nullptr : ggml_cuda_weight_bf16_data(src0);
+            if (src0_bf16) {
+                mul_mat_vec_f_cuda(src0_bf16, src1_d, ids_d, fusion_local, dst_d, ne00, ne01, ncols_dst, s01, stride_col_y, stride_col_dst,
+                    ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
+                    ne03,              ne3,           s03, s13,              s3,                 ids_stride, prec, ctx.stream());
+                break;
+            }
             const float * src0_d = (const float *) src0->data;
             mul_mat_vec_f_cuda(src0_d, src1_d, ids_d, fusion_local, dst_d, ne00, ne01, ncols_dst, s01, stride_col_y, stride_col_dst,
                 ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
