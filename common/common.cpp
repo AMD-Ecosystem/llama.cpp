@@ -1142,6 +1142,7 @@ struct common_init_result::impl {
 
     // note: the order in which model, context, etc. are declared matters because their destructors will be called bottom-to-top
 
+    common_fit_arenas arenas;
     common_threadpools threadpools;
 
     llama_model_ptr   model;
@@ -1235,13 +1236,10 @@ common_gguf_info common_get_gguf_info(const std::string & fname) {
     return info;
 }
 
-void common_fit_apply(common_params & params, llama_model_params & mparams, llama_context_params & cparams) {
-    if (!params.fit_params) {
+void common_fit_apply(common_params & params, llama_model_params & mparams, llama_context_params & cparams, common_fit_arenas * arenas) {
+    if (!params.fit_params && arenas == nullptr) {
         return;
     }
-
-    COM_TRC("%s", "fitting params to device memory ...\n");
-    COM_TRC("%s", "(for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)\n");
 
     // the draft context is created from the same base params and follows the main context, fit both together
     const bool has_draft = params.speculative.has_dft();
@@ -1264,13 +1262,23 @@ void common_fit_apply(common_params & params, llama_model_params & mparams, llam
         /*.shares_model =*/ !has_draft, // an MTP context runs on the weights of the main model
     };
 
-    common_fit_params(params.model.get_paths(), &mparams, &cparams,
-        params.tensor_split,
-        params.tensor_buft_overrides.data(),
-        params.fit_params_target.data(),
-        params.fit_params_min_ctx,
-        has_draft || spec_mtp ? &extra : nullptr,
-        params.verbosity >= LOG_LEVEL_DEBUG ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
+    if (params.fit_params) {
+        COM_TRC("%s", "fitting params to device memory ...\n");
+        COM_TRC("%s", "(for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)\n");
+
+        common_fit_params(params.model.get_paths(), &mparams, &cparams,
+            params.tensor_split,
+            params.tensor_buft_overrides.data(),
+            params.fit_params_target.data(),
+            params.fit_params_min_ctx,
+            has_draft || spec_mtp ? &extra : nullptr,
+            params.verbosity >= LOG_LEVEL_DEBUG ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
+    }
+
+    if (arenas != nullptr) {
+        common_fit_reserve_arenas(*arenas, params.model.get_paths(), &mparams, &cparams, has_draft || spec_mtp ? &extra : nullptr,
+            params.verbosity >= LOG_LEVEL_DEBUG ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
+    }
 }
 
 common_init_result::common_init_result(common_params & params, bool model_only) :
@@ -1278,7 +1286,7 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
 
-    common_fit_apply(params, mparams, cparams);
+    common_fit_apply(params, mparams, cparams, model_only ? nullptr : &pimpl->arenas);
 
     llama_model * model = common_model_load(params.model.get_paths(), mparams);
     if (model == NULL) {

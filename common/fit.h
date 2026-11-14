@@ -22,6 +22,16 @@ struct common_fit_extra_model {
     bool shares_model;
 };
 
+struct common_fit_arenas {
+    common_fit_arenas() = default;
+    ~common_fit_arenas();
+
+    common_fit_arenas(const common_fit_arenas &) = delete;
+    common_fit_arenas & operator=(const common_fit_arenas &) = delete;
+
+    std::vector<ggml_backend_dev_t> devices;
+};
+
 // fits mparams and cparams to free device memory (assumes system memory is unlimited)
 //   - returns true if the parameters could be successfully modified to fit device memory
 //   - this function is NOT thread safe because it modifies the global llama logger state
@@ -37,6 +47,16 @@ common_params_fit_status common_fit_params(
                            uint32_t   n_ctx_min,             // minimum context size to set when trying to reduce memory use
        const common_fit_extra_model * extra,                  // model to fit alongside the main one, nullptr if there is none
                      ggml_log_level   log_level);            // minimum log level to print during fitting, lower levels go to debug log
+
+// on devices that support it, reserve memory for compute buffers before the weights load
+//   - sized by a dry run of the main context and the extra context (with the main context as ctx_other)
+void common_fit_reserve_arenas(
+                  common_fit_arenas & arenas,
+     const std::vector<std::string> & paths_model,
+           const llama_model_params * mparams,
+         const llama_context_params * cparams,
+       const common_fit_extra_model * extra,
+                     ggml_log_level   log_level);
 
 // print estimated memory to stdout
 void common_fit_print(

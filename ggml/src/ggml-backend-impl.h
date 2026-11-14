@@ -38,6 +38,9 @@ extern "C" {
         void * context;
     };
 
+    // Use the optional compute allocator, or the ordinary buffer allocator when absent.
+    GGML_API ggml_backend_buffer_t ggml_backend_buft_alloc_compute_buffer(ggml_backend_buffer_type_t buft, size_t size);
+
     // [TAG_ALLOC_SIZE_EXPAND]
     // returns true for ops that may require additional memory for fleeting data on some backends,
     // i.e. the backend buffer type's get_alloc_size may return more than ggml_nbytes for the output tensor

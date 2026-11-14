@@ -608,6 +608,64 @@ static bool test_mock() {
         test_mock_grouping();
 }
 
+static bool test_arena_lifetime(ggml_backend_dev_t dev) {
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+    if (!reg) {
+        return true;
+    }
+    auto reserve = (bool (*)(ggml_backend_dev_t, size_t)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_reserve_arena");
+    auto release = (void (*)(ggml_backend_dev_t)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_release_arena");
+    auto alloc_compute = (ggml_backend_buffer_t (*)(ggml_backend_buffer_type_t, size_t)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_alloc_compute_buffer");
+    if (!reserve || !release || !alloc_compute || !reserve(dev, 0)) {
+        printf("%s arena lifetime SKIPPED\n", ggml_backend_dev_name(dev));
+        return true;
+    }
+
+    ggml_init_params params = {};
+    params.mem_size = ggml_tensor_overhead()*2;
+    params.no_alloc = true;
+    ggml_context_ptr ctx(ggml_init(params));
+    if (!ctx) {
+        return false;
+    }
+    ggml_tensor * tensor = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 64);
+    ggml_backend_buffer_type_t buft = ggml_backend_dev_buffer_type(dev);
+    if (!reserve(dev, 65536 + 8)) {
+        return false;
+    }
+    ggml_backend_buffer_ptr buffer(alloc_compute(buft, ggml_backend_buft_get_alloc_size(buft, tensor)));
+    if (!buffer || !reserve(dev, 65536 + 8)) {
+        release(dev);
+        return false;
+    }
+
+    void * base = ggml_backend_buffer_get_base(buffer.get());
+    bool ok = (uintptr_t) base % ggml_backend_buft_get_alignment(buft) == 0;
+    ok = ok && ggml_backend_tensor_alloc(buffer.get(), tensor, base) == GGML_STATUS_SUCCESS;
+    for (int owners = 2; owners >= 0; owners--) {
+        if (ok) {
+            float input[64], output[64];
+            for (int i = 0; i < 64; i++) {
+                input[i] = (float) (i + owners);
+            }
+            ggml_backend_tensor_set(tensor, input, 0, sizeof(input));
+            ggml_backend_tensor_get(tensor, output, 0, sizeof(output));
+            ok = memcmp(input, output, sizeof(input)) == 0;
+        }
+        if (owners > 0) {
+            release(dev);
+        }
+    }
+
+    buffer.reset();
+    if (!reserve(dev, 131072 + 8)) {
+        return false;
+    }
+    release(dev);
+    printf("%s arena lifetime %s\n", ggml_backend_dev_name(dev), ok ? "PASSED" : "FAILED");
+    return ok;
+}
+
 int main() {
     ggml_backend_load_all();
 
@@ -620,7 +678,7 @@ int main() {
         const char * name = ggml_backend_dev_name(dev);
         ggml_backend_buffer_type_t buft = ggml_backend_dev_buffer_type(dev);
 
-        const bool ok = test_buft(buft);
+        const bool ok = test_buft(buft) && test_arena_lifetime(dev);
         printf("%s %s\n", name, ok ? "PASSED" : "FAILED");
         if (ok) {
             n_ok++;
