@@ -4458,6 +4458,35 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
     return false;
 }
 
+// gate/up/GLU fusion when the GLU output overlaps only src1: the fused MMVQ kernel reads a q8_1 copy of src1
+static bool ggml_cuda_can_fuse_mmvq_glu_over_src1(const ggml_cgraph * cgraph, int i, ggml_op op) {
+    const ggml_op ops[3]  = { op, op, GGML_OP_GLU };
+    const int     outs[1] = { i + 2 };
+    if (i + 2 >= cgraph->n_nodes || !ggml_can_fuse_subgraph(cgraph, i, 3, ops, outs, 1)) {
+        return false;
+    }
+    const ggml_tensor * glu  = cgraph->nodes[i + 2];
+    const ggml_tensor * gate = glu->src[0];
+    const ggml_tensor * up   = glu->src[1];
+    if (!up || !((gate == cgraph->nodes[i] && up == cgraph->nodes[i + 1]) || (gate == cgraph->nodes[i + 1] && up == cgraph->nodes[i])) ||
+            !ggml_cuda_should_fuse_mul_mat(up, gate, glu) || !ggml_cuda_should_fuse_mul_mat_vec_q(up) ||
+            ggml_cuda_should_fuse_mul_mat_vec_f(up, gate)) {
+        return false;
+    }
+    const auto overlap = [](const ggml_tensor * a, const ggml_tensor * b) {
+        const uintptr_t a0 = (uintptr_t) a->data, a1 = a0 + ggml_nbytes(a);
+        const uintptr_t b0 = (uintptr_t) b->data, b1 = b0 + ggml_nbytes(b);
+        return a0 < b1 && b0 < a1;
+    };
+    // every other input of the fused kernel stays clear of the output
+    for (const ggml_tensor * t : { gate->src[0], up->src[0], up->src[2] }) {
+        if (t && overlap(glu, t)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // whether b can run in a's MMVQ launch: same src1, weight type and row size (e.g. Q and K)
 static bool ggml_cuda_mul_mat_pair_matches(const ggml_tensor * a, const ggml_tensor * b) {
     if (a->op != GGML_OP_MUL_MAT || b->op != GGML_OP_MUL_MAT || a->src[1] != b->src[1]) {
@@ -5038,7 +5067,8 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
                 fused_node_count  = 5;
                 break;
             }
-        } else if (ggml_cuda_can_fuse(cgraph, i, { op, op, GGML_OP_GLU }, {})) {
+        } else if (const bool over_src1 = !ggml_cuda_can_fuse(cgraph, i, { op, op, GGML_OP_GLU }, {});
+                   !over_src1 || ggml_cuda_can_fuse_mmvq_glu_over_src1(cgraph, i, op)) {
             ggml_tensor * glu  = cgraph->nodes[i + 2];
             ggml_tensor * gate = glu->src[0];
             ggml_tensor * up   = glu->src[1];
@@ -5054,7 +5084,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
             const ggml_tensor * src1 = up->src[1];
             const ggml_tensor * ids  = up->src[2];
 
-            if (ggml_cuda_should_fuse_mul_mat_vec_f(up, gate)) {
+            if (!over_src1 && ggml_cuda_should_fuse_mul_mat_vec_f(up, gate)) {
                 ggml_cuda_mm_fusion_args_host fusion_data{};
                 fusion_data.gate      = gate->src[0];
                 fusion_data.glu_op    = ggml_get_glu_op(glu);
