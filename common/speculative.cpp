@@ -10,6 +10,8 @@
 #include "ngram-mod.h"
 #include "sampling.h"
 
+#include "../src/llama-ext.h" // llama_sched_reserve
+
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -978,6 +980,42 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
     }
 };
 
+// inject target features from the target's device buffer instead of host copies (env LLAMA_DFLASH_DEV=0 disables)
+static bool common_dflash_want_dev_features(const llama_model * model_dft) {
+    const int32_t * ids   = llama_model_target_layer_ids  (model_dft);
+    const uint32_t  n_ids = llama_model_target_layer_ids_n(model_dft);
+
+    char buf[32] = {};
+    const bool is_lilicorr = llama_model_meta_val_str(model_dft, "lilicorr.candidate_topk", buf, sizeof(buf)) >= 0 && std::atoi(buf) > 0;
+
+    // the device buffer keeps layers in ascending id order, the fc input expects target_layer_ids order
+    const bool ascending = std::adjacent_find(ids, ids + n_ids, [](int32_t a, int32_t b) { return a >= b; }) == ids + n_ids;
+
+    const char * env = getenv("LLAMA_DFLASH_DEV");
+    return !is_lilicorr && ascending && (env == nullptr || atoi(env) != 0);
+}
+
+void common_speculative_prepare_target(llama_context * ctx_tgt, const llama_model * model_dft) {
+    char arch[32] = {};
+    if (llama_model_meta_val_str(model_dft, "general.architecture", arch, sizeof(arch)) < 0 || std::strcmp(arch, "dflash") != 0) {
+        return;
+    }
+
+    const int32_t * ids   = llama_model_target_layer_ids  (model_dft);
+    const uint32_t  n_ids = llama_model_target_layer_ids_n(model_dft);
+    if (n_ids == 0) {
+        return;
+    }
+
+    for (uint32_t k = 0; k < n_ids; ++k) {
+        llama_set_embeddings_layer_inp(ctx_tgt, (uint32_t) ids[k], true);
+    }
+    if (common_dflash_want_dev_features(model_dft)) {
+        llama_set_embeddings_layer_inp_dev(ctx_tgt, true);
+    }
+    llama_sched_reserve(ctx_tgt);
+}
+
 // DFlash: block-diffusion drafting with a draft-side KV cache injection
 struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     common_params_speculative_draft params;
@@ -1142,13 +1180,8 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             llama_set_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k], true);
         }
 
-        // the device buffer keeps layers in ascending id order, the fc input expects target_layer_ids order
         {
-            const char * env = getenv("LLAMA_DFLASH_DEV");
-            const bool ascending = std::adjacent_find(target_layer_ids, target_layer_ids + target_layer_ids_n,
-                    [](int32_t a, int32_t b) { return a >= b; }) == target_layer_ids + target_layer_ids_n;
-
-            use_dev_features = !is_lilicorr && ascending && (env == nullptr || atoi(env) != 0);
+            use_dev_features = common_dflash_want_dev_features(model_dft);
             if (use_dev_features) {
                 llama_set_embeddings_layer_inp_dev(ctx_tgt, true);
                 use_dev_features = llama_supports_embd_row(ctx_dft);
@@ -2863,6 +2896,8 @@ common_speculative_init_result::common_speculative_init_result(
         }
 
         pimpl->model.reset(model_dft);
+
+        common_speculative_prepare_target(ctx_tgt, model_dft);
 
         llama_context * ctx_dft = llama_init_from_model(model_dft, cparams);
         if (ctx_dft == nullptr) {

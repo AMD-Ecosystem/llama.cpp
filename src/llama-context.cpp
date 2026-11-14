@@ -4744,6 +4744,10 @@ void llama_set_embeddings_layer_inp_dev(llama_context * ctx, bool value) {
     ctx->set_embeddings_layer_inp_dev(value);
 }
 
+void llama_sched_reserve(llama_context * ctx) {
+    ctx->sched_reserve();
+}
+
 bool llama_supports_embd_row(const llama_context * ctx) {
     return ctx->supports_embd_row();
 }

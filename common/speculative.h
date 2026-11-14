@@ -123,3 +123,6 @@ private:
 using common_speculative_init_result_ptr = std::unique_ptr<common_speculative_init_result>;
 
 common_speculative_init_result_ptr common_speculative_init_from_params(common_params & params, llama_model * model_tgt, llama_context * ctx_tgt);
+
+// DFlash: turn on the target feature outputs and reserve ctx_tgt now, before the draft context reserves its buffers
+void common_speculative_prepare_target(llama_context * ctx_tgt, const llama_model * model_dft);

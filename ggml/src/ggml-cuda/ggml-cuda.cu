@@ -191,9 +191,185 @@ static int ggml_cuda_op_offload_min_batch() {
     return min_batch;
 }
 
-static cudaError_t ggml_cuda_device_malloc(void ** ptr, size_t size, int device) {
+// Device-wide synchronization and cuBLAS teardown must not overlap graph capture.
+static std::mutex ggml_cuda_lock;
+static std::condition_variable ggml_cuda_lock_cv;
+static std::atomic<int> ggml_cuda_lock_counter;
+
+static std::unique_lock<std::mutex> ggml_cuda_lock_graph_capture() {
+    std::unique_lock<std::mutex> lock(ggml_cuda_lock);
+    ggml_cuda_lock_cv.wait(lock, []{ return ggml_cuda_lock_counter.load(std::memory_order_relaxed) == 0; });
+    return lock;
+}
+
+// device memory reserved before the weights load, sub-allocated for pool and compute buffers
+// on Windows APUs, memory allocated late (after the weights and KV cache) can go to shared memory with small pages, which is slow for random access,
+// when the carveout is full and sometimes even when it is not
+struct ggml_cuda_arena {
+    char * base = nullptr;
+    size_t size = 0;
+    size_t owners = 0;
+    int device = -1;
+    std::map<size_t, size_t> free_blocks; // offset -> size
+    std::map<size_t, size_t> used_blocks; // offset -> size
+    std::mutex mutex;
+
+    bool reserve(int device_id, size_t sz) {
+        auto capture_lock = ggml_cuda_lock_graph_capture();
+        std::lock_guard<std::mutex> lock(mutex);
+        sz -= sz % 256;
+        if (sz == 0) {
+            return false;
+        }
+        if (base != nullptr) {
+            ++owners;
+            return true;
+        }
+        CUDA_CHECK(cudaSetDevice(device_id));
+        if (cudaMalloc((void **) &base, sz) != cudaSuccess) {
+            (void) cudaGetLastError();
+            base = nullptr;
+            return false;
+        }
+        CUDA_CHECK(cudaMemset(base, 0, sz));
+        CUDA_CHECK(cudaDeviceSynchronize());
+        size = sz;
+        owners = 1;
+        device = device_id;
+        free_blocks[0] = sz;
+        return true;
+    }
+
+    // The caller holds both locks. Outstanding buffers can outlive the reserving context.
+    void free_if_unused() {
+        if (base == nullptr || owners != 0 || !used_blocks.empty()) {
+            return;
+        }
+        CUDA_CHECK(cudaSetDevice(device));
+        CUDA_CHECK(cudaFree(base));
+        base = nullptr;
+        size = 0;
+        device = -1;
+        free_blocks.clear();
+    }
+
+    void release_owner() {
+        auto capture_lock = ggml_cuda_lock_graph_capture();
+        std::lock_guard<std::mutex> lock(mutex);
+        GGML_ASSERT(owners > 0);
+        --owners;
+        free_if_unused();
+    }
+
+    // top: take from the end, so small long-lived blocks do not split the space of large buffers that are reallocated
+    void * alloc(size_t sz, bool top = false) {
+        if (sz == 0 || sz > SIZE_MAX - 255) {
+            return nullptr;
+        }
+        sz = GGML_PAD(sz, 256);
+        std::lock_guard<std::mutex> lock(mutex);
+        if (base == nullptr) {
+            return nullptr;
+        }
+        if (top) {
+            for (auto it = free_blocks.rbegin(); it != free_blocks.rend(); ++it) {
+                if (it->second >= sz) {
+                    it->second -= sz;
+                    const size_t off = it->first + it->second;
+                    if (it->second == 0) {
+                        free_blocks.erase(std::next(it).base());
+                    }
+                    used_blocks[off] = sz;
+                    return base + off;
+                }
+            }
+            return nullptr;
+        }
+        for (auto it = free_blocks.begin(); it != free_blocks.end(); ++it) {
+            if (it->second >= sz) {
+                const size_t off  = it->first;
+                const size_t rest = it->second - sz;
+                free_blocks.erase(it);
+                if (rest > 0) {
+                    free_blocks[off + sz] = rest;
+                }
+                used_blocks[off] = sz;
+                return base + off;
+            }
+        }
+        return nullptr;
+    }
+
+    // returns false if ptr is not from the arena
+    bool release(void * ptr) {
+        std::unique_lock<std::mutex> lock(mutex);
+        const uintptr_t address = (uintptr_t) ptr;
+        const uintptr_t start = (uintptr_t) base;
+        if (base == nullptr || address < start || address - start >= size) {
+            return false;
+        }
+        // Capture may allocate from this arena while we wait for it to finish.
+        lock.unlock();
+        auto capture_lock = ggml_cuda_lock_graph_capture();
+        lock.lock();
+        size_t off = address - start;
+        auto used = used_blocks.find(off);
+        GGML_ASSERT(used != used_blocks.end());
+        // Preserve cudaFree's completion barrier before another stream can reuse the block.
+        CUDA_CHECK(cudaSetDevice(device));
+        CUDA_CHECK(cudaDeviceSynchronize());
+        size_t sz = used->second;
+        used_blocks.erase(used);
+        auto next = free_blocks.lower_bound(off);
+        if (next != free_blocks.end() && off + sz == next->first) {
+            sz += next->second;
+            next = free_blocks.erase(next);
+        }
+        if (next != free_blocks.begin()) {
+            auto prev = std::prev(next);
+            if (prev->first + prev->second == off) {
+                off = prev->first;
+                sz += prev->second;
+                free_blocks.erase(prev);
+            }
+        }
+        free_blocks[off] = sz;
+        free_if_unused();
+        return true;
+    }
+
+    size_t capacity() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return size;
+    }
+
+    size_t free_bytes() {
+        std::lock_guard<std::mutex> lock(mutex);
+        size_t n = 0;
+        for (const auto & [off, sz] : free_blocks) {
+            n += sz;
+        }
+        return n;
+    }
+};
+
+static ggml_cuda_arena ggml_cuda_arenas[GGML_CUDA_MAX_DEVICES];
+
+static void ggml_cuda_device_free(void * ptr, int device) {
+    if (!ggml_cuda_arenas[device].release(ptr)) {
+        CUDA_CHECK(cudaFree(ptr));
+    }
+}
+
+static cudaError_t ggml_cuda_device_malloc(void ** ptr, size_t size, int device, bool pool = false) {
     ggml_cuda_set_device(device);
     cudaError_t err;
+    if (pool) {
+        *ptr = ggml_cuda_arenas[device].alloc(size, true);
+        if (*ptr != nullptr) {
+            return cudaSuccess;
+        }
+    }
     if (ggml_cuda_unified_memory_enabled()) {
         err = cudaMallocManaged(ptr, size);
 #if defined(GGML_USE_HIP)
@@ -448,7 +624,7 @@ const ggml_cuda_device_info & ggml_cuda_info() {
 
 // buffer pool for cuda (legacy)
 struct ggml_cuda_pool_leg : public ggml_cuda_pool {
-    static const int MAX_BUFFERS = 256;
+    static const int INITIAL_BUFFERS = 256;
 
     ggml_backend_cuda_context & ctx;
     int device;
@@ -457,7 +633,7 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
         size_t size = 0;
     };
 
-    ggml_cuda_buffer buffer_pool[MAX_BUFFERS] = {};
+    std::vector<ggml_cuda_buffer> buffer_pool = std::vector<ggml_cuda_buffer>(INITIAL_BUFFERS);
     size_t pool_size = 0;
 
     ggml_cuda_pool_leg(ggml_backend_cuda_context & ctx, int device) :
@@ -472,10 +648,9 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
 
     void clear_pool() {
         ggml_cuda_set_device(device);
-        for (int i = 0; i < MAX_BUFFERS; ++i) {
-            ggml_cuda_buffer & b = buffer_pool[i];
+        for (ggml_cuda_buffer & b : buffer_pool) {
             if (b.ptr != nullptr) {
-                CUDA_CHECK(cudaFree(b.ptr));
+                ggml_cuda_device_free(b.ptr, device);
                 pool_size -= b.size;
                 b.ptr  = nullptr;
                 b.size = 0;
@@ -503,8 +678,8 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
         size_t max_size = 0;
 #endif
         size_t best_diff = 1ull << 36;
-        int ibest = -1;
-        for (int i = 0; i < MAX_BUFFERS; ++i) {
+        size_t ibest = buffer_pool.size();
+        for (size_t i = 0; i < buffer_pool.size(); ++i) {
             ggml_cuda_buffer& b = buffer_pool[i];
             if (b.ptr != nullptr) {
 #ifdef DEBUG_CUDA_MALLOC
@@ -527,7 +702,7 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
                 }
             }
         }
-        if (ibest >= 0) {
+        if (ibest != buffer_pool.size()) {
             ggml_cuda_buffer& b = buffer_pool[ibest];
             void * ptr = b.ptr;
             *actual_size = b.size;
@@ -539,7 +714,7 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
         size_t look_ahead_size = (size_t) (1.05 * size);
         look_ahead_size = 256 * ((look_ahead_size + 255)/256);
         ggml_cuda_set_device(device);
-        cudaError_t err = ggml_cuda_device_malloc(&ptr, look_ahead_size, device);
+        cudaError_t err = ggml_cuda_device_malloc(&ptr, look_ahead_size, device, true);
         if (err == cudaErrorMemoryAllocation) {
             (void)cudaGetLastError();
             const size_t cached_bytes = pool_size;
@@ -548,7 +723,7 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
             CUDA_CHECK(cudaDeviceSynchronize());
             clear_pool();
             invalidate_cuda_graphs();
-            err = ggml_cuda_device_malloc(&ptr, look_ahead_size, device);
+            err = ggml_cuda_device_malloc(&ptr, look_ahead_size, device, true);
             if (err == cudaSuccess) {
                 GGML_LOG_DEBUG(GGML_CUDA_NAME " pool[%d]: retry succeeded\n", device);
             }
@@ -564,17 +739,21 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
     }
 
     void free(void * ptr, size_t size) override {
-        for (int i = 0; i < MAX_BUFFERS; ++i) {
-            ggml_cuda_buffer& b = buffer_pool[i];
+        for (ggml_cuda_buffer & b : buffer_pool) {
             if (b.ptr == nullptr) {
                 b.ptr = ptr;
                 b.size = size;
                 return;
             }
         }
-        GGML_LOG_DEBUG(GGML_CUDA_NAME " buffer pool full, increase MAX_CUDA_BUFFERS\n");
+        if (ggml_cuda_arenas[device].capacity() != 0) {
+            // Do not recycle across streams or synchronize during graph capture.
+            buffer_pool.push_back({ptr, size});
+            return;
+        }
+        GGML_LOG_DEBUG(GGML_CUDA_NAME " buffer pool full\n");
         ggml_cuda_set_device(device);
-        CUDA_CHECK(cudaFree(ptr));
+        ggml_cuda_device_free(ptr, device);
         pool_size -= size;
         invalidate_cuda_graphs();
     }
@@ -904,16 +1083,8 @@ bool ggml_cuda_kernel_can_use_pdl(const void * kernel) {
 }
 #endif // defined(GGML_CUDA_USE_PDL)
 
-// destroying a cuBLAS handle while a graph is being captured in a different thread can result in a CUDA error
-// this lock is used to ensure that no cuBLAS handle is destroyed while a graph is being captured
-
-static std::mutex ggml_cuda_lock;
-static std::condition_variable ggml_cuda_lock_cv;
-static std::atomic<int> ggml_cuda_lock_counter;
-
 ggml_backend_cuda_context::~ggml_backend_cuda_context() {
-    std::unique_lock<std::mutex> lock(ggml_cuda_lock);
-    ggml_cuda_lock_cv.wait(lock, []{ return ggml_cuda_lock_counter.load(std::memory_order_relaxed) == 0; });
+    auto capture_lock = ggml_cuda_lock_graph_capture();
 
     if (copy_event != nullptr) {
         CUDA_CHECK(cudaEventDestroy(copy_event));
@@ -952,7 +1123,7 @@ struct ggml_backend_cuda_buffer_context {
     }
 
     ~ggml_backend_cuda_buffer_context() {
-        CUDA_CHECK(cudaFree(dev_ptr));
+        ggml_cuda_device_free(dev_ptr, device);
     }
 };
 
@@ -1212,6 +1383,24 @@ static ggml_backend_buffer_t ggml_backend_cuda_buffer_type_alloc_buffer(ggml_bac
     ggml_backend_cuda_buffer_context * ctx = new ggml_backend_cuda_buffer_context(buft_ctx->device, dev_ptr);
 
     return ggml_backend_buffer_init(buft, ggml_backend_cuda_buffer_interface, ctx, size);
+}
+
+static ggml_backend_buffer_t ggml_backend_cuda_alloc_compute_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+    if (size == 0 || !ggml_backend_buft_is_cuda(buft)) {
+        return ggml_backend_buft_alloc_buffer(buft, size);
+    }
+    auto * buft_ctx = (ggml_backend_cuda_buffer_type_context *) buft->context;
+    ggml_cuda_arena & arena = ggml_cuda_arenas[buft_ctx->device];
+    void * ptr = arena.alloc(size);
+    if (ptr != nullptr) {
+        auto * ctx = new ggml_backend_cuda_buffer_context(buft_ctx->device, ptr);
+        return ggml_backend_buffer_init(buft, ggml_backend_cuda_buffer_interface, ctx, size);
+    }
+    if (arena.capacity() != 0) {
+        GGML_LOG_WARN("%s: %s compute buffer of %.2f MiB does not fit in the arena (%.2f MiB free), allocating it outside\n", __func__,
+                buft_ctx->name.c_str(), size / 1024.0 / 1024.0, arena.free_bytes() / 1024.0 / 1024.0);
+    }
+    return ggml_backend_buft_alloc_buffer(buft, size);
 }
 
 static size_t ggml_backend_cuda_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
@@ -6848,8 +7037,61 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t 
     GGML_UNUSED(reg);
 }
 
+// GGML_CUDA_ARENA=1 enables, =0 disables; unset: enabled on integrated GPUs on Windows
+static bool ggml_cuda_arena_enabled(int device) {
+    if (ggml_cuda_env_set("GGML_CUDA_ARENA")) {
+        return ggml_cuda_env_flag("GGML_CUDA_ARENA");
+    }
+#if defined(_WIN32)
+    // not ggml_cuda_info().devices[].integrated, it is forced to false
+    cudaDeviceProp prop;
+    CUDA_CHECK(cudaGetDeviceProperties(&prop, ggml_cuda_get_physical_device(device)));
+    return prop.integrated;
+#else
+    GGML_UNUSED(device);
+    return false;
+#endif // defined(_WIN32)
+}
+
+// reserve device memory for compute and pool buffers before the weights load, so they stay in the carveout
+// size 0 probes support; each successful nonzero reservation needs a matching release
+static bool ggml_backend_cuda_reserve_arena(ggml_backend_dev_t dev, size_t size) {
+    ggml_backend_cuda_device_context * ctx = (ggml_backend_cuda_device_context *) dev->context;
+    ggml_cuda_arena & arena = ggml_cuda_arenas[ctx->device];
+    if (!ggml_cuda_arena_enabled(ctx->device)) {
+        return false;
+    }
+    if (size == 0) {
+        return true;
+    }
+    const int size_mb = ggml_cuda_env_int("GGML_CUDA_ARENA_MB", 0);
+    if (size_mb > 0) {
+        size = (size_t) size_mb * 1024 * 1024;
+    }
+    if (!arena.reserve(ggml_cuda_get_physical_device(ctx->device), size)) {
+        GGML_LOG_WARN("%s: %s: failed to reserve an arena of %.2f MiB\n", __func__, ctx->name.c_str(), size / 1024.0 / 1024.0);
+        return false;
+    }
+    GGML_LOG_INFO("%s: %s: acquired an arena of %.2f MiB for compute and pool buffers\n", __func__, ctx->name.c_str(), arena.capacity() / 1024.0 / 1024.0);
+    return true;
+}
+
+static void ggml_backend_cuda_release_arena(ggml_backend_dev_t dev) {
+    auto * ctx = (ggml_backend_cuda_device_context *) dev->context;
+    ggml_cuda_arenas[ctx->device].release_owner();
+}
+
 static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     GGML_UNUSED(reg);
+    if (strcmp(name, "ggml_backend_reserve_arena") == 0) {
+        return (void *)ggml_backend_cuda_reserve_arena;
+    }
+    if (strcmp(name, "ggml_backend_release_arena") == 0) {
+        return (void *)ggml_backend_cuda_release_arena;
+    }
+    if (strcmp(name, "ggml_backend_alloc_compute_buffer") == 0) {
+        return (void *)ggml_backend_cuda_alloc_compute_buffer;
+    }
     if (strcmp(name, "ggml_backend_comm_init") == 0) {
         return (void *)ggml_backend_cuda_comm_init;
     }

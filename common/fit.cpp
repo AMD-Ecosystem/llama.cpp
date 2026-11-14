@@ -4,13 +4,16 @@
 #include "json.h"
 #include "llama-cpp.h"
 #include "log.h"
+#include "speculative.h"
 
 #include "../src/llama-ext.h"
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <stdexcept>
 #include <cinttypes>
+#include <limits>
 #include <set>
 #include <string>
 #include <vector>
@@ -197,6 +200,130 @@ std::vector<common_memory_breakdown_row> common_fit_measure(
     }
 
     return common_memory_breakdown_rows(ctx.get());
+}
+
+typedef bool (*ggml_backend_reserve_arena_t)(ggml_backend_dev_t dev, size_t size);
+typedef void (*ggml_backend_release_arena_t)(ggml_backend_dev_t dev);
+
+static ggml_backend_reserve_arena_t common_get_reserve_arena_fn(ggml_backend_dev_t dev) {
+    return (ggml_backend_reserve_arena_t) ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(dev), "ggml_backend_reserve_arena");
+}
+
+static ggml_backend_release_arena_t common_get_release_arena_fn(ggml_backend_dev_t dev) {
+    return (ggml_backend_release_arena_t) ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(dev), "ggml_backend_release_arena");
+}
+
+common_fit_arenas::~common_fit_arenas() {
+    for (ggml_backend_dev_t dev : devices) {
+        ggml_backend_release_arena_t release_fn = common_get_release_arena_fn(dev);
+        GGML_ASSERT(release_fn != nullptr);
+        release_fn(dev);
+    }
+}
+
+void common_fit_reserve_arenas(
+        common_fit_arenas & arenas,
+        const std::vector<std::string> & paths_model,
+        const llama_model_params * mparams,
+        const llama_context_params * cparams,
+        const common_fit_extra_model * extra,
+        ggml_log_level log_level) {
+    bool supported = false;
+    for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        ggml_backend_reserve_arena_t reserve_fn = common_get_reserve_arena_fn(dev);
+        supported = supported || (reserve_fn != nullptr && common_get_release_arena_fn(dev) != nullptr && reserve_fn(dev, 0));
+    }
+    if (!supported) {
+        return;
+    }
+
+    std::vector<std::pair<ggml_backend_dev_t, size_t>> compute;
+    bool compute_overflow = false;
+    auto add_compute = [&](llama_context * ctx) {
+        for (const auto & [buft, mb] : llama_get_memory_breakdown(ctx)) {
+            ggml_backend_dev_t dev = ggml_backend_buft_get_device(buft);
+            if (dev == nullptr || ggml_backend_buft_is_host(buft)) {
+                continue;
+            }
+            auto it = std::find_if(compute.begin(), compute.end(), [&](const auto & c) { return c.first == dev; });
+            if (it == compute.end()) {
+                compute.emplace_back(dev, mb.compute);
+            } else if (mb.compute > std::numeric_limits<size_t>::max() - it->second) {
+                compute_overflow = true;
+            } else {
+                it->second += mb.compute;
+            }
+        }
+    };
+
+    {
+        common_fit_log_scope log_scope(log_level);
+
+        llama_model_params mparams_dry = *mparams;
+        mparams_dry.no_alloc  = true;
+        mparams_dry.load_mode = LLAMA_LOAD_MODE_NONE;
+
+        llama_model_ptr   model(common_model_load(paths_model, mparams_dry));
+        llama_context_ptr ctx(model ? llama_init_from_model(model.get(), *cparams) : nullptr);
+        if (!ctx) {
+            LOG_WRN("%s: dry run failed, no arena\n", __func__);
+            return;
+        }
+
+        if (extra != nullptr) {
+            llama_model_params mparams_extra = *extra->mparams;
+            mparams_extra.no_alloc  = true;
+            mparams_extra.load_mode = LLAMA_LOAD_MODE_NONE;
+
+            // same as common_speculative_init_result
+            llama_context_params cparams_extra = *extra->cparams;
+            cparams_extra.n_ctx     = llama_n_ctx(ctx.get());
+            cparams_extra.n_rs_seq  = 0;
+            cparams_extra.ctx_other = ctx.get();
+
+            llama_model_ptr model_extra(common_model_load(extra->paths_model, mparams_extra));
+            if (model_extra) {
+                common_speculative_prepare_target(ctx.get(), model_extra.get());
+            }
+            llama_context_ptr ctx_extra(model_extra ? llama_init_from_model(model_extra.get(), cparams_extra) : nullptr);
+            if (ctx_extra) {
+                add_compute(ctx_extra.get());
+            } else {
+                LOG_WRN("%s: dry run of the extra model failed, arena without it\n", __func__);
+            }
+        }
+
+        // after common_speculative_prepare_target, which can grow the main graph
+        add_compute(ctx.get());
+    }
+
+    if (compute_overflow) {
+        LOG_WRN("%s: compute size overflow, no arena\n", __func__);
+        return;
+    }
+
+    // Keep an acquired reservation owned even if a later allocation throws.
+    arenas.devices.reserve(arenas.devices.size() + compute.size());
+    for (const auto & [dev, size] : compute) {
+        ggml_backend_reserve_arena_t reserve_fn = common_get_reserve_arena_fn(dev);
+        if (reserve_fn == nullptr || common_get_release_arena_fn(dev) == nullptr || size == 0) {
+            continue;
+        }
+        // margin for memory the dry run does not see, e.g. pool buffers
+        const size_t margin = 256*1024*1024;
+        if (size > std::numeric_limits<size_t>::max() - size/16 - margin) {
+            LOG_WRN("%s: %s: arena size overflow\n", __func__, ggml_backend_dev_name(dev));
+            continue;
+        }
+        const size_t size_arena = size + size/16 + margin;
+        const bool ok = reserve_fn(dev, size_arena);
+        if (ok) {
+            arenas.devices.push_back(dev);
+        }
+        LOG_INF("%s: %s: compute buffers %zu MiB (dry run), requested an arena of %zu MiB: %s\n", __func__,
+            ggml_backend_dev_name(dev), size/(1024*1024), size_arena/(1024*1024), ok ? "reserved" : "failed");
+    }
 }
 
 common_memory_reports common_measure_memory(common_params & params) {
