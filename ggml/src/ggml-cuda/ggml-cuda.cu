@@ -918,7 +918,7 @@ static std::mutex ggml_cuda_lock;
 static std::condition_variable ggml_cuda_lock_cv;
 static std::atomic<int> ggml_cuda_lock_counter;
 
-void ggml_cuda_q8_1_cache::reset(bool enable) {
+void ggml_cuda_derived_cache::reset(bool enable) {
     for (entry & e : entries) {
         e.tensor = nullptr;
     }
@@ -926,7 +926,7 @@ void ggml_cuda_q8_1_cache::reset(bool enable) {
     enabled = enable;
 }
 
-void ggml_cuda_q8_1_cache::invalidate(const ggml_tensor * node) {
+void ggml_cuda_derived_cache::invalidate(const ggml_tensor * node) {
     const char * begin = (const char *) node->data;
     const char * end   = begin + ggml_nbytes(node);
     for (entry & e : entries) {
@@ -936,16 +936,16 @@ void ggml_cuda_q8_1_cache::invalidate(const ggml_tensor * node) {
     }
 }
 
-const char * ggml_cuda_q8_1_cache::find(const ggml_tensor * t) const {
+const char * ggml_cuda_derived_cache::find(const ggml_tensor * t, uint64_t variant) const {
     for (const entry & e : entries) {
-        if (e.tensor == t && e.data == t->data) {
+        if (e.tensor == t && e.variant == variant && e.data == t->data) {
             return e.buf;
         }
     }
     return nullptr;
 }
 
-char * ggml_cuda_q8_1_cache::reserve(size_t size) {
+char * ggml_cuda_derived_cache::reserve(size_t size) {
     if (!enabled || size > capacity) {
         return nullptr;
     }
@@ -957,15 +957,16 @@ char * ggml_cuda_q8_1_cache::reserve(size_t size) {
     return e.buf;
 }
 
-void ggml_cuda_q8_1_cache::commit(const ggml_tensor * t) {
+void ggml_cuda_derived_cache::commit(const ggml_tensor * t, uint64_t variant) {
     entry & e = entries[next];
-    e.tensor = t;
+    e.tensor  = t;
+    e.variant = variant;
     e.data   = t->data;
     e.nbytes = ggml_nbytes(t);
     next = (next + 1) % n_entries;
 }
 
-ggml_cuda_q8_1_cache::~ggml_cuda_q8_1_cache() {
+ggml_cuda_derived_cache::~ggml_cuda_derived_cache() {
     for (entry & e : entries) {
         if (e.buf != nullptr) {
             CUDA_CHECK(cudaFree(e.buf));
@@ -5488,8 +5489,9 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                 stream_ctx.concurrent_events.clear();
             }
 
-            // q8_1 copies are reused in stream order, so not across concurrent streams
+            // derived data is reused in stream order, so not across concurrent streams
             cuda_ctx->q8_1_cache.reset(!should_launch_concurrent_events);
+            cuda_ctx->fa_vis_cache.reset(!should_launch_concurrent_events);
 
             for (int i = 0; i < cgraph->n_nodes; i++) {
                 ggml_tensor * node = cgraph->nodes[i];
@@ -5543,6 +5545,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                 }
 
                 cuda_ctx->q8_1_cache.invalidate(node);
+                cuda_ctx->fa_vis_cache.invalidate(node);
 
                 int nodes_to_skip = ggml_cuda_try_fuse(cuda_ctx, cgraph, i);
 
