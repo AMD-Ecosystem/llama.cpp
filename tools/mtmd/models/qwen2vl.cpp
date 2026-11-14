@@ -2,7 +2,7 @@
 
 #include <cstdlib>
 
-ggml_cgraph * clip_graph_qwen2vl::build() {
+ggml_cgraph * mtmd_graph_qwen2vl::build() {
     GGML_ASSERT(model.patch_bias == nullptr);
     GGML_ASSERT(model.class_embedding == nullptr);
 
@@ -16,7 +16,7 @@ ggml_cgraph * clip_graph_qwen2vl::build() {
         const char * value = std::getenv("MTMD_QWEN25VL_KV_CAST_EARLY");
         return value == nullptr || std::atoi(value) != 0;
     }();
-    const bool batch_windows   = window_batch && use_window_attn && flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED;
+    const bool batch_windows   = window_batch && use_window_attn && flash_attn_type == MTMD_FLASH_ATTN_TYPE_ENABLED;
     const int n_wa_pattern     = hparams.n_wa_pattern;
     const int n_pos            = n_patches;
     const int num_position_ids = n_pos * 4; // m-rope requires 4 dim per position
