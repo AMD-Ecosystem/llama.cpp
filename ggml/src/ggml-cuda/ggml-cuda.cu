@@ -1004,20 +1004,100 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
 
 // cuda buffer
 
+// BF16 copy of an F32 weight whose values all have zero low 16 bits: MMVF reads half the bytes with identical results
+struct ggml_cuda_weight_bf16 {
+    std::vector<uint16_t> host;     // filled as the tensor is uploaded, possibly in chunks
+    size_t                uploaded = 0;
+    void                * dev      = nullptr;
+};
+
 struct ggml_backend_cuda_buffer_context {
     int device;
     void * dev_ptr = nullptr;
     std::string name;
+    std::unordered_map<const ggml_tensor *, ggml_cuda_weight_bf16> weights_bf16;
 
     ggml_backend_cuda_buffer_context(int device, void * dev_ptr) :
         device(device), dev_ptr(dev_ptr),
         name(GGML_CUDA_NAME + std::to_string(device)) {
     }
 
+    void forget_bf16(const ggml_tensor * tensor) {
+        auto it = weights_bf16.find(tensor);
+        if (it != weights_bf16.end()) {
+            CUDA_CHECK(cudaFree(it->second.dev));
+            weights_bf16.erase(it);
+        }
+    }
+
     ~ggml_backend_cuda_buffer_context() {
+        for (auto & w : weights_bf16) {
+            CUDA_CHECK(cudaFree(w.second.dev));
+        }
         CUDA_CHECK(cudaFree(dev_ptr));
     }
 };
+
+// track an upload of [offset, offset + size) of a weight tensor: chunks have to come in order, any other write drops the copy
+static void ggml_cuda_weight_bf16_upload(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
+    ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *) buffer->context;
+
+    const bool eligible = ggml_backend_buffer_get_usage(buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
+        tensor->type == GGML_TYPE_F32 && tensor->view_src == nullptr && ggml_is_contiguous(tensor) &&
+        tensor->ne[0] % 2 == 0 && tensor->ne[1] > 1 && tensor->ne[2] == 1 && tensor->ne[3] == 1 &&
+        offset % sizeof(float) == 0 && size % sizeof(float) == 0;
+
+    auto it = ctx->weights_bf16.find(tensor);
+    if (eligible && offset == 0) {
+        ctx->forget_bf16(tensor);
+        it = ctx->weights_bf16.emplace(tensor, ggml_cuda_weight_bf16{}).first;
+        it->second.host.resize(ggml_nelements(tensor));
+    }
+    if (it == ctx->weights_bf16.end()) {
+        return;
+    }
+    ggml_cuda_weight_bf16 & w = it->second;
+    if (!eligible || offset != w.uploaded || w.dev) {
+        ctx->forget_bf16(tensor);
+        return;
+    }
+
+    const uint32_t * src = (const uint32_t *) data;
+    for (size_t i = 0; i < size/sizeof(float); ++i) {
+        if (src[i] & 0xFFFF) {
+            ctx->forget_bf16(tensor);
+            return;
+        }
+        w.host[offset/sizeof(float) + i] = src[i] >> 16;
+    }
+    w.uploaded += size;
+
+    if (w.uploaded == ggml_nbytes(tensor)) {
+        const size_t nbytes = w.host.size()*sizeof(uint16_t);
+        if (ggml_cuda_device_malloc(&w.dev, nbytes, ctx->device) != cudaSuccess) {
+            (void) cudaGetLastError();
+            ctx->weights_bf16.erase(it);
+            return;
+        }
+        CUDA_CHECK(cudaMemcpyAsync(w.dev, w.host.data(), nbytes, cudaMemcpyHostToDevice, cudaStreamPerThread));
+        CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+        w.host = {};
+    }
+}
+
+static bool ggml_backend_buffer_is_cuda(ggml_backend_buffer_t buffer);
+
+const nv_bfloat16 * ggml_cuda_weight_bf16_data(const ggml_tensor * tensor) {
+    if (tensor->buffer == nullptr || !ggml_backend_buffer_is_cuda(tensor->buffer)) {
+        return nullptr;
+    }
+    const ggml_backend_cuda_buffer_context * ctx = (const ggml_backend_cuda_buffer_context *) tensor->buffer->context;
+    if (ctx->weights_bf16.empty()) {
+        return nullptr;
+    }
+    auto it = ctx->weights_bf16.find(tensor);
+    return it == ctx->weights_bf16.end() ? nullptr : (const nv_bfloat16 *) it->second.dev;
+}
 
 static void ggml_backend_cuda_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
@@ -1059,6 +1139,7 @@ static void ggml_backend_cuda_buffer_memset_tensor(ggml_backend_buffer_t buffer,
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *) buffer->context;
 
     ggml_cuda_set_device(ctx->device);
+    ctx->forget_bf16(tensor);
     CUDA_CHECK(cudaMemsetAsync((char *) tensor->data + offset, value, size, cudaStreamPerThread));
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
 }
@@ -1067,6 +1148,7 @@ static void ggml_backend_cuda_buffer_set_tensor(ggml_backend_buffer_t buffer, gg
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *) buffer->context;
 
     ggml_cuda_set_device(ctx->device);
+    ggml_cuda_weight_bf16_upload(buffer, tensor, data, offset, size);
     CUDA_CHECK(cudaMemcpyAsync((char *) tensor->data + offset, data, size, cudaMemcpyHostToDevice, cudaStreamPerThread));
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
 }
@@ -1084,6 +1166,7 @@ static void ggml_backend_cuda_buffer_set_tensor_2d(ggml_backend_buffer_t buffer,
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *) buffer->context;
 
     ggml_cuda_set_device(ctx->device);
+    ctx->forget_bf16(tensor);
     CUDA_CHECK(cudaMemcpy2DAsync(
         (char *) tensor->data + offset, stride_tensor, data, stride_data, size, n_copies, cudaMemcpyHostToDevice, cudaStreamPerThread));
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
@@ -1108,6 +1191,7 @@ static void ggml_backend_cuda_buffer_set_tensor_n(ggml_backend_buffer_t buffer, 
         if (sizes[i] == 0) {
             continue;
         }
+        ctx->forget_bf16(tensors[i]);
         CUDA_CHECK(cudaMemcpyAsync(
             (char *) tensors[i]->data + offsets[i],
             data[i],
@@ -1152,6 +1236,7 @@ static bool ggml_backend_cuda_buffer_cpy_tensor(ggml_backend_buffer_t buffer, co
         // in which case a same-device copy (not a peer copy) is required
         const int src_physical = ggml_cuda_get_physical_device(src_ctx->device);
         const int dst_physical = ggml_cuda_get_physical_device(dst_ctx->device);
+        dst_ctx->forget_bf16(dst);
         if (src_physical == dst_physical) {
             CUDA_CHECK(cudaMemcpyAsync(dst->data, src->data, ggml_nbytes(src), cudaMemcpyDeviceToDevice, cudaStreamPerThread));
         } else {
@@ -1202,6 +1287,7 @@ static bool ggml_backend_cuda_buffer_cpy_tensor_n(ggml_backend_buffer_t buffer, 
         ggml_backend_cuda_buffer_context * dst_ctx_i = (ggml_backend_cuda_buffer_context *)dst_buf->context;
         const int src_physical = ggml_cuda_get_physical_device(src_ctx->device);
         const int dst_physical = ggml_cuda_get_physical_device(dst_ctx_i->device);
+        dst_ctx_i->forget_bf16(dsts[i]);
         if (src_physical == dst_physical) {
             CUDA_CHECK(cudaMemcpyAsync(dsts[i]->data, srcs[i]->data, ggml_nbytes(srcs[i]), cudaMemcpyDeviceToDevice, cudaStreamPerThread));
         } else {
@@ -1221,6 +1307,10 @@ static void ggml_backend_cuda_buffer_clear(ggml_backend_buffer_t buffer, uint8_t
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
 
     ggml_cuda_set_device(ctx->device);
+    for (auto & w : ctx->weights_bf16) {
+        CUDA_CHECK(cudaFree(w.second.dev));
+    }
+    ctx->weights_bf16.clear();
     CUDA_CHECK(cudaMemsetAsync(ctx->dev_ptr, value, buffer->size, cudaStreamPerThread));
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
 }
@@ -3154,6 +3244,7 @@ static void ggml_backend_cuda_set_tensor_async(ggml_backend_t backend, ggml_tens
 
     GGML_ASSERT(buf->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) && "unsupported buffer type");
 
+    ggml_cuda_weight_bf16_upload(buf, tensor, data, offset, size);
     CUDA_CHECK(cudaMemcpyAsync((char *) tensor->data + offset, data, size, cudaMemcpyHostToDevice, cuda_ctx->stream()));
 }
 
@@ -3173,6 +3264,7 @@ static void ggml_backend_cuda_set_tensor_2d_async(ggml_backend_t backend, struct
 
     GGML_ASSERT(buf->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) && "unsupported buffer type");
 
+    ((ggml_backend_cuda_buffer_context *) buf->context)->forget_bf16(tensor);
     CUDA_CHECK(cudaMemcpy2DAsync(
         (char *) tensor->data + offset, stride_tensor, data, stride_data, size, n_copies, cudaMemcpyHostToDevice, cuda_ctx->stream()));
 }
