@@ -823,3 +823,183 @@ void ggml_cuda_op_l2_norm(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     l2_norm_f32_cuda(src0_d, dst_d, ne00, ne01, ne02, ne03, s01, s02, s03, eps, stream);
 }
+
+template <int block_size>
+static __device__ __forceinline__ float rms_norm2_block_sum(float value, float * shared) {
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    value = warp_reduce_sum<warp_size>(value);
+    if constexpr (block_size > warp_size) {
+        const int warp = threadIdx.x / warp_size;
+        const int lane = threadIdx.x % warp_size;
+        __syncthreads(); // the shared buffer may still be read by a previous reduction
+        if (lane == 0) {
+            shared[warp] = value;
+        }
+        __syncthreads();
+        value = lane < block_size/warp_size ? shared[lane] : 0.0f;
+        value = warp_reduce_sum<warp_size>(value);
+    }
+    return value;
+}
+
+// one block per row: y = rms_norm(x)*w1 + r, z = rms_norm(y)*w2; each thread reads and writes only its own elements
+template <int block_size, int vpt>
+static __global__ void rms_norm_add_rms_norm_f32(
+        const float * x, const float * w1, const float * r, float * y, const float * w2, float * z,
+        const int ncols, const int64_t x_stride_row, const int64_t r_stride_row,
+        const int64_t y_stride_row, const int64_t z_stride_row, const float eps1, const float eps2) {
+    __shared__ float shared[32];
+    const int64_t row    = blockIdx.x;
+    const int     ncols4 = ncols / 4;
+    const float4 * x4  = (const float4 *) (x + row*x_stride_row);
+    const float4 * r4  = (const float4 *) (r + row*r_stride_row);
+    const float4 * w14 = (const float4 *) w1;
+    const float4 * w24 = (const float4 *) w2;
+    float4 * y4 = (float4 *) (y + row*y_stride_row);
+    float4 * z4 = (float4 *) (z + row*z_stride_row);
+
+    float4 v[vpt];
+    float4 res[vpt];
+    float sum_x = 0.0f;
+#pragma unroll
+    for (int k = 0; k < vpt; ++k) {
+        const int i = threadIdx.x + k*block_size;
+        if (i < ncols4) {
+            v[k]   = x4[i];
+            res[k] = r4[i];
+            sum_x += v[k].x*v[k].x + v[k].y*v[k].y + v[k].z*v[k].z + v[k].w*v[k].w;
+        }
+    }
+    sum_x = rms_norm2_block_sum<block_size>(sum_x, shared);
+    const float scale_x = rsqrtf(sum_x/ncols + eps1);
+
+    float sum_y = 0.0f;
+#pragma unroll
+    for (int k = 0; k < vpt; ++k) {
+        const int i = threadIdx.x + k*block_size;
+        if (i < ncols4) {
+            const float4 w = w14[i];
+            v[k] = make_float4(v[k].x*scale_x*w.x + res[k].x, v[k].y*scale_x*w.y + res[k].y,
+                               v[k].z*scale_x*w.z + res[k].z, v[k].w*scale_x*w.w + res[k].w);
+            y4[i] = v[k];
+            sum_y += v[k].x*v[k].x + v[k].y*v[k].y + v[k].z*v[k].z + v[k].w*v[k].w;
+        }
+    }
+    sum_y = rms_norm2_block_sum<block_size>(sum_y, shared);
+    const float scale_y = rsqrtf(sum_y/ncols + eps2);
+
+#pragma unroll
+    for (int k = 0; k < vpt; ++k) {
+        const int i = threadIdx.x + k*block_size;
+        if (i < ncols4) {
+            const float4 w = w24[i];
+            z4[i] = make_float4(v[k].x*scale_y*w.x, v[k].y*scale_y*w.y, v[k].z*scale_y*w.z, v[k].w*scale_y*w.w);
+        }
+    }
+}
+
+// operand of a binary node that is not `other`
+static const ggml_tensor * rms_norm2_other_src(const ggml_tensor * node, const ggml_tensor * other) {
+    if (node->src[0] == other) {
+        return node->src[1];
+    }
+    if (node->src[1] == other) {
+        return node->src[0];
+    }
+    return nullptr;
+}
+
+static bool rms_norm2_is_row_vector(const ggml_tensor * t, int64_t ncols) {
+    return t != nullptr && t->type == GGML_TYPE_F32 && t->ne[0] == ncols && ggml_nrows(t) == 1 && ggml_is_contiguous(t);
+}
+
+static bool rms_norm2_is_rows(const ggml_tensor * t, const ggml_tensor * like) {
+    return t != nullptr && t->type == GGML_TYPE_F32 && ggml_are_same_shape(t, like) && t->nb[0] == sizeof(float) &&
+           t->ne[2] == 1 && t->ne[3] == 1 && t->nb[1] % 16 == 0;
+}
+
+static const ggml_tensor * rms_norm2_storage(const ggml_tensor * t) {
+    return t->view_src != nullptr ? t->view_src : t;
+}
+
+static bool rms_norm2_overlap(const ggml_tensor * a, const ggml_tensor * b) {
+    const char * a_begin = (const char *) a->data;
+    const char * b_begin = (const char *) b->data;
+    return a_begin < b_begin + ggml_nbytes(b) && b_begin < a_begin + ggml_nbytes(a);
+}
+
+// an output may alias a row input only with the same layout, otherwise a block can overwrite rows not yet read
+static bool rms_norm2_layout_safe(const ggml_tensor * out, const ggml_tensor * in) {
+    if (!rms_norm2_overlap(out, in)) {
+        return true;
+    }
+    return out->data == in->data && ggml_are_same_shape(out, in) && ggml_are_same_stride(out, in);
+}
+
+bool ggml_cuda_rms_norm_add_rms_norm_supported(ggml_tensor * const * nodes) {
+    const ggml_tensor * norm1 = nodes[0];
+    const ggml_tensor * mul1  = nodes[1];
+    const ggml_tensor * add   = nodes[2];
+    const ggml_tensor * norm2 = nodes[3];
+    const ggml_tensor * mul2  = nodes[4];
+    if (norm1->op != GGML_OP_RMS_NORM || mul1->op != GGML_OP_MUL || add->op != GGML_OP_ADD ||
+            norm2->op != GGML_OP_RMS_NORM || mul2->op != GGML_OP_MUL || norm2->src[0] != add) {
+        return false;
+    }
+    const ggml_tensor * x  = norm1->src[0];
+    const int64_t ncols    = x->ne[0];
+    const ggml_tensor * w1 = rms_norm2_other_src(mul1, norm1);
+    const ggml_tensor * r  = rms_norm2_other_src(add, mul1);
+    const ggml_tensor * w2 = rms_norm2_other_src(mul2, norm2);
+    if (w1 == nullptr || r == nullptr || w2 == nullptr) {
+        return false;
+    }
+    // the kernel does not write norm1, mul1 or norm2, so no input may be (a view of) them
+    for (const ggml_tensor * input : { x, w1, r, w2 }) {
+        for (const ggml_tensor * intermediate : { norm1, mul1, norm2 }) {
+            if (rms_norm2_storage(input) == rms_norm2_storage(intermediate)) {
+                return false;
+            }
+        }
+    }
+    // every block reads the weights, so the outputs must not alias them
+    for (const ggml_tensor * output : { (const ggml_tensor *) add, (const ggml_tensor *) mul2 }) {
+        if (!rms_norm2_layout_safe(output, x) || !rms_norm2_layout_safe(output, r) ||
+                rms_norm2_overlap(output, w1) || rms_norm2_overlap(output, w2)) {
+            return false;
+        }
+    }
+    if (!rms_norm2_layout_safe(mul2, add)) {
+        return false;
+    }
+    // a row is kept in registers: at most 4*4*256 floats
+    return ncols % 4 == 0 && ncols <= 4096 &&
+           rms_norm2_is_rows(x, x) && rms_norm2_is_row_vector(w1, ncols) && rms_norm2_is_row_vector(w2, ncols) &&
+           rms_norm2_is_rows(r, x) && rms_norm2_is_rows(add, x) && rms_norm2_is_rows(mul2, x) &&
+           ggml_are_same_shape(norm1, x) && ggml_are_same_shape(mul1, x);
+}
+
+void ggml_cuda_op_rms_norm_add_rms_norm(ggml_backend_cuda_context & ctx, ggml_tensor * const * nodes) {
+    const ggml_tensor * norm1 = nodes[0];
+    const ggml_tensor * mul1  = nodes[1];
+    ggml_tensor *       add   = nodes[2];
+    const ggml_tensor * norm2 = nodes[3];
+    ggml_tensor *       mul2  = nodes[4];
+
+    const ggml_tensor * x  = norm1->src[0];
+    const ggml_tensor * w1 = rms_norm2_other_src(mul1, norm1);
+    const ggml_tensor * r  = rms_norm2_other_src(add, mul1);
+    const ggml_tensor * w2 = rms_norm2_other_src(mul2, norm2);
+
+    float eps1 = 0.0f;
+    float eps2 = 0.0f;
+    memcpy(&eps1, norm1->op_params, sizeof(float));
+    memcpy(&eps2, norm2->op_params, sizeof(float));
+
+    constexpr int block_size = 256;
+    rms_norm_add_rms_norm_f32<block_size, 4><<<x->ne[1], block_size, 0, ctx.stream()>>>(
+        (const float *) x->data, (const float *) w1->data, (const float *) r->data, (float *) add->data,
+        (const float *) w2->data, (float *) mul2->data, (int) x->ne[0],
+        x->nb[1]/sizeof(float), r->nb[1]/sizeof(float), add->nb[1]/sizeof(float), mul2->nb[1]/sizeof(float), eps1, eps2);
+    CUDA_CHECK(cudaGetLastError());
+}

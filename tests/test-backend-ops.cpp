@@ -4081,6 +4081,104 @@ struct test_rms_norm_back : public test_case {
 };
 
 // GGML_OP_RMS_NORM + GGML_OP_MUL + GGML_OP_ADD (+ GGML_OP_MUL)
+// sandwich-norm block boundary: post-norm, residual add and the next pre-norm
+struct test_rms_norm_add_rms_norm : public test_case {
+    enum class variant_t {
+        BASIC,
+        RESIDUAL_IS_NORM, // the residual is the first norm, which a fused kernel does not write
+        STRIDED_INPUT,    // x is a row-strided view
+    };
+    const std::array<int64_t, 2> ne;
+    const float eps;
+    const variant_t variant;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "RMS_NORM_ADD_RMS_NORM";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::string vars() override {
+        return VARS_TO_STR3(ne, eps, (int) variant);
+    }
+
+    test_rms_norm_add_rms_norm(std::array<int64_t, 2> ne = {64, 5}, float eps = 1e-6f,
+                               variant_t variant = variant_t::BASIC) :
+        ne(ne), eps(eps), variant(variant) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        const int64_t x_cols = variant == variant_t::STRIDED_INPUT ? ne[0] + 4 : ne[0];
+        ggml_tensor * x  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, x_cols, ne[1]);
+        ggml_tensor * xr = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, x_cols, ne[1]);
+        ggml_tensor * r  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ne[0], ne[1]);
+        ggml_tensor * w1 = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ne[0]);
+        ggml_tensor * w2 = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ne[0]);
+        ggml_set_param(x);
+        ggml_set_name(x, "x");
+        ggml_set_param(xr);
+        ggml_set_name(xr, "xr");
+        ggml_set_param(r);
+        ggml_set_name(r, "r");
+        ggml_set_param(w1);
+        ggml_set_name(w1, "w1");
+        ggml_set_param(w2);
+        ggml_set_name(w2, "w2");
+
+        // use the inputs early so no OP_NONE node sits inside the fused sequence
+        x = ggml_add(ctx, x, xr);
+        r = ggml_add(ctx, r, w1);
+        if (variant == variant_t::STRIDED_INPUT) {
+            x = ggml_view_2d(ctx, x, ne[0], ne[1], x->nb[1], 0);
+        }
+
+        ggml_tensor * n   = ggml_rms_norm(ctx, x, eps);
+        ggml_tensor * y   = ggml_add(ctx, ggml_mul(ctx, n, w1), variant == variant_t::RESIDUAL_IS_NORM ? n : r);
+        ggml_tensor * z   = ggml_mul(ctx, ggml_rms_norm(ctx, y, eps), w2);
+        ggml_tensor * out = ggml_add(ctx, z, y);
+        ggml_set_name(out, "out");
+        return out;
+    }
+
+    double max_nmse_err() override {
+        return 1e-6;
+    }
+};
+
+// two single-token MUL_MATs that share a leaf or a computed input
+struct test_mul_mat_pair_add : public test_case {
+    const bool shared_input_is_leaf;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_PAIR_ADD";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::string vars() override {
+        return VARS_TO_STR1(shared_input_is_leaf);
+    }
+
+    test_mul_mat_pair_add(bool shared_input_is_leaf = true) : shared_input_is_leaf(shared_input_is_leaf) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * w_a = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 256, 128);
+        ggml_tensor * w_b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 256, 128);
+        ggml_tensor * x   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 256, 1);
+        ggml_set_name(w_a, "w_a");
+        ggml_set_name(w_b, "w_b");
+        ggml_set_param(x);
+        ggml_set_name(x, "x");
+        if (!shared_input_is_leaf) {
+            x = ggml_scale(ctx, x, 0.5f);
+        }
+        ggml_tensor * out = ggml_add(ctx, ggml_mul_mat(ctx, w_a, x), ggml_mul_mat(ctx, w_b, x));
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
 struct test_rms_norm_mul_add : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne;
@@ -11532,6 +11630,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     // in-place tests
     test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {64, 5, 4, 3}, false, 1e-6f, true));
+    for (std::array<int64_t, 2> ne : { std::array<int64_t, 2>{64, 5}, {3584, 1}, {3584, 7}, {1000, 3} }) {
+        test_cases.emplace_back(new test_rms_norm_add_rms_norm(ne, 1e-5f));
+    }
+    for (auto variant : { test_rms_norm_add_rms_norm::variant_t::RESIDUAL_IS_NORM,
+                          test_rms_norm_add_rms_norm::variant_t::STRIDED_INPUT }) {
+        test_cases.emplace_back(new test_rms_norm_add_rms_norm({64, 5}, 1e-5f, variant));
+        test_cases.emplace_back(new test_rms_norm_add_rms_norm({3584, 7}, 1e-5f, variant));
+    }
+    test_cases.emplace_back(new test_mul_mat_pair_add(true));
+    test_cases.emplace_back(new test_mul_mat_pair_add(false));
     // shapes below exceed the CUDA gridDim.y/gridDim.z limit of 65535 (#27901)
     test_cases.emplace_back(new test_norm        (GGML_TYPE_F32, {4, 1, 65536, 1}, false, 1e-6f));
     test_cases.emplace_back(new test_rms_norm    (GGML_TYPE_F32, {4, 1, 65536, 1}, false, 1e-6f, false));
@@ -12993,6 +13101,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     // q8_0 KV cases: decode and prompt batches, KV pad, permuted KV, feature flags, and long context
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {16, 1},   113,   1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
+
+    // GQA 6, decode and speculative verify batches
+    for (int kv : { 8192, 32768 }) {
+        for (int nb : { 1, 4, 8 }) {
+            test_cases.emplace_back(new test_flash_attn_ext(128, 128, 8, {6, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+        }
+    }
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {16, 1},  1024,   1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {16, 1},  1024,   1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 2, 1, 3}));
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {16, 2},  1025,   1, true, true,  8, 30, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
@@ -13039,6 +13154,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_flash_attn_ext_kv_rows(512, 2, 8, 4096, 1024, nb, n_slices));
             test_cases.emplace_back(new test_flash_attn_ext_kv_rows(256, 8, 2, 4096, 1280, nb, n_slices));
         }
+    }
+
+    // GQA 6, sliding window rows from a 2560-cell SWA cache
+    for (int64_t nb : {1, 4, 8}) {
+        test_cases.emplace_back(new test_flash_attn_ext_kv_rows(128, 8, 6, 2560, 768, nb, 1));
+        test_cases.emplace_back(new test_flash_attn_ext_kv_rows(128, 8, 6, 32768, 32768, nb, 1));
     }
 
     // sparse mask with large batch size
@@ -13778,6 +13899,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_flash_attn_ext(512, 512, 2, { 8, 1}, 49152, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false, 2048));
     test_cases.emplace_back(new test_flash_attn_ext(576, 512, 1, {16, 1}, 49152, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, true,     0));
     test_cases.emplace_back(new test_flash_attn_ext(576, 512, 1, {16, 1}, 49152, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, true,  2048));
+
+    // GQA 6 at long context: decode, verify (4), draft block (8) and a prompt ubatch
+    for (int kv : { 32768, 131072 }) {
+        for (int nb : { 1, 4, 8 }) {
+            test_cases.emplace_back(new test_flash_attn_ext(128, 128, 8, {6, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+        }
+        test_cases.emplace_back(new test_flash_attn_ext(128, 128, 8, {6, 1}, kv, 2048, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+    }
+    // sliding window decode through K/V rows
+    for (int nb : { 1, 4 }) {
+        test_cases.emplace_back(new test_flash_attn_ext_kv_rows(128, 8, 6, 2560, 768, nb, 1));
+    }
 
     // GLM 4.7 Flash gqa20
     test_cases.emplace_back(new test_flash_attn_ext(576, 512, 1, {20, 1}, 8192, 32, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, true));

@@ -156,6 +156,11 @@ static bool ggml_cuda_env_set(const char * name) {
     return getenv(name) != nullptr;
 }
 
+static bool ggml_cuda_fuse_norm2_enabled(int device) {
+    static const int env_switch = ggml_cuda_env_switch("GGML_CUDA_FUSE_NORM2");
+    return ggml_cuda_switch_or_rdna3_5(env_switch, ggml_cuda_info().devices[device].cc);
+}
+
 static bool ggml_cuda_unified_memory_enabled() {
     static const bool enabled = ggml_cuda_env_flag("GGML_CUDA_ENABLE_UNIFIED_MEMORY");
     return enabled;
@@ -5119,6 +5124,17 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         return 2;
     }
 
+    // sandwich-norm block boundary: post-norm, residual add and the next pre-norm
+    if (ggml_cuda_fuse_norm2_enabled(cuda_ctx->device) && i + 4 < cgraph->n_nodes) {
+        const enum ggml_op norm2_ops[] = { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ADD, GGML_OP_RMS_NORM, GGML_OP_MUL };
+        const int norm2_outputs[] = { i + 2, i + 4 };
+        if (ggml_can_fuse_subgraph(cgraph, i, 5, norm2_ops, norm2_outputs, 2) &&
+                ggml_cuda_rms_norm_add_rms_norm_supported(cgraph->nodes + i)) {
+            ggml_cuda_op_rms_norm_add_rms_norm(*cuda_ctx, cgraph->nodes + i);
+            return 4;
+        }
+    }
+
     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ADD }, {})) {
         ggml_cuda_op_rms_norm_fused_add(*cuda_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 2]);
         return 2;
@@ -5667,10 +5683,9 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
     GGML_UNUSED(cgraph);
 #endif
 
-    static bool enable_graph_optimization = [] {
-        const char * env     = getenv("GGML_CUDA_GRAPH_OPT");
-        return env != nullptr && atoi(env) == 1;
-    }();
+    static const int graph_optimization_env = ggml_cuda_env_switch("GGML_CUDA_GRAPH_OPT");
+    const bool enable_graph_optimization =
+        ggml_cuda_switch_or_rdna3_5(graph_optimization_env, ggml_cuda_info().devices[cuda_ctx->device].cc);
 
     if (!enable_graph_optimization) {
         return;
@@ -5735,7 +5750,29 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
     // 5. save the original cgraph and restore it in graph_compute, to enable fusion within streams
     // See discussion: https://github.com/ggml-org/llama.cpp/pull/16991#issuecomment-3522620030
 
-    const int min_fan_out = 3;
+    // also fork nodes that feed exactly two MUL_MATs, e.g. MoE router + latent down, or FFN gate + up
+    static const int fork_ffn_env = ggml_cuda_env_switch("GGML_CUDA_GRAPH_OPT_FFN");
+    const bool fork_ffn = ggml_cuda_switch_or_rdna3_5(fork_ffn_env, ggml_cuda_info().devices[cuda_ctx->device].cc);
+    const auto & feeds_two_mul_mats = [&](const ggml_tensor * root) -> bool {
+        int n_consumers = 0;
+        for (int node_idx = 0; node_idx < cgraph->n_nodes; node_idx++) {
+            const ggml_tensor * node = cgraph->nodes[node_idx];
+            bool consumes_root = false;
+            for (int src_idx = 0; src_idx < GGML_MAX_SRC; ++src_idx) {
+                consumes_root = consumes_root || node->src[src_idx] == root;
+            }
+            if (!consumes_root) {
+                continue;
+            }
+            if (node->op != GGML_OP_MUL_MAT) {
+                return false;
+            }
+            n_consumers++;
+        }
+        return n_consumers == 2;
+    };
+
+    const int min_fan_out = fork_ffn ? 2 : 3;
     const int max_fan_out = 3;
 
     // store {fork_idx, join_idx}
@@ -5743,11 +5780,15 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
 
     for (const auto & [root_node, count] : fan_out) {
         if (count >= min_fan_out && count <= max_fan_out) {
-            const int root_node_idx = node_indices[root_node];
+            // leaves (weights, graph inputs) are not fork points
+            const auto root_node_it = root_node != nullptr ? node_indices.find(root_node) : node_indices.end();
+            if (root_node_it == node_indices.end()) {
+                continue;
+            }
+            const int root_node_idx = root_node_it->second;
 
-            // only optimize for attn_norm
-            // TODO: make this more generic
-            if (!strstr(root_node->name, "attn_norm")) {
+            const bool qkv_fork = count == 3 && strstr(root_node->name, "attn_norm");
+            if (!qkv_fork && !(fork_ffn && count == 2 && feeds_two_mul_mats(root_node))) {
                 continue;
             }
 
@@ -5770,6 +5811,10 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
                 }
             }
 
+            if (!qkv_fork && nodes_per_branch.size() != (size_t) count) {
+                // e.g. a view of the root also depends on it
+                continue;
+            }
             GGML_ASSERT(nodes_per_branch.size() == (size_t) count);
 
             //find the join point
