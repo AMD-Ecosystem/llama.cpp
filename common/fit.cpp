@@ -13,6 +13,7 @@
 #include <cassert>
 #include <stdexcept>
 #include <cinttypes>
+#include <limits>
 #include <set>
 #include <string>
 #include <vector>
@@ -202,12 +203,26 @@ std::vector<common_memory_breakdown_row> common_fit_measure(
 }
 
 typedef bool (*ggml_backend_reserve_arena_t)(ggml_backend_dev_t dev, size_t size);
+typedef void (*ggml_backend_release_arena_t)(ggml_backend_dev_t dev);
 
 static ggml_backend_reserve_arena_t common_get_reserve_arena_fn(ggml_backend_dev_t dev) {
     return (ggml_backend_reserve_arena_t) ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(dev), "ggml_backend_reserve_arena");
 }
 
+static ggml_backend_release_arena_t common_get_release_arena_fn(ggml_backend_dev_t dev) {
+    return (ggml_backend_release_arena_t) ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(dev), "ggml_backend_release_arena");
+}
+
+common_fit_arenas::~common_fit_arenas() {
+    for (ggml_backend_dev_t dev : devices) {
+        ggml_backend_release_arena_t release_fn = common_get_release_arena_fn(dev);
+        GGML_ASSERT(release_fn != nullptr);
+        release_fn(dev);
+    }
+}
+
 void common_fit_reserve_arenas(
+        common_fit_arenas & arenas,
         const std::vector<std::string> & paths_model,
         const llama_model_params * mparams,
         const llama_context_params * cparams,
@@ -217,13 +232,14 @@ void common_fit_reserve_arenas(
     for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
         ggml_backend_dev_t dev = ggml_backend_dev_get(i);
         ggml_backend_reserve_arena_t reserve_fn = common_get_reserve_arena_fn(dev);
-        supported = supported || (reserve_fn != nullptr && reserve_fn(dev, 0));
+        supported = supported || (reserve_fn != nullptr && common_get_release_arena_fn(dev) != nullptr && reserve_fn(dev, 0));
     }
     if (!supported) {
         return;
     }
 
     std::vector<std::pair<ggml_backend_dev_t, size_t>> compute;
+    bool compute_overflow = false;
     auto add_compute = [&](llama_context * ctx) {
         for (const auto & [buft, mb] : llama_get_memory_breakdown(ctx)) {
             ggml_backend_dev_t dev = ggml_backend_buft_get_device(buft);
@@ -233,6 +249,8 @@ void common_fit_reserve_arenas(
             auto it = std::find_if(compute.begin(), compute.end(), [&](const auto & c) { return c.first == dev; });
             if (it == compute.end()) {
                 compute.emplace_back(dev, mb.compute);
+            } else if (mb.compute > std::numeric_limits<size_t>::max() - it->second) {
+                compute_overflow = true;
             } else {
                 it->second += mb.compute;
             }
@@ -280,14 +298,29 @@ void common_fit_reserve_arenas(
         add_compute(ctx.get());
     }
 
+    if (compute_overflow) {
+        LOG_WRN("%s: compute size overflow, no arena\n", __func__);
+        return;
+    }
+
+    // Keep an acquired reservation owned even if a later allocation throws.
+    arenas.devices.reserve(arenas.devices.size() + compute.size());
     for (const auto & [dev, size] : compute) {
         ggml_backend_reserve_arena_t reserve_fn = common_get_reserve_arena_fn(dev);
-        if (reserve_fn == nullptr || size == 0) {
+        if (reserve_fn == nullptr || common_get_release_arena_fn(dev) == nullptr || size == 0) {
             continue;
         }
         // margin for memory the dry run does not see, e.g. pool buffers
-        const size_t size_arena = size + size/16 + 256*1024*1024;
+        const size_t margin = 256*1024*1024;
+        if (size > std::numeric_limits<size_t>::max() - size/16 - margin) {
+            LOG_WRN("%s: %s: arena size overflow\n", __func__, ggml_backend_dev_name(dev));
+            continue;
+        }
+        const size_t size_arena = size + size/16 + margin;
         const bool ok = reserve_fn(dev, size_arena);
+        if (ok) {
+            arenas.devices.push_back(dev);
+        }
         LOG_INF("%s: %s: compute buffers %zu MiB (dry run), requested an arena of %zu MiB: %s\n", __func__,
             ggml_backend_dev_name(dev), size/(1024*1024), size_arena/(1024*1024), ok ? "reserved" : "failed");
     }

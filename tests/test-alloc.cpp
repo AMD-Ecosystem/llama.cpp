@@ -18,12 +18,17 @@ struct dummy_backend_context {
     size_t alignment       = 8;
 
     ggml_backend_buffer_i              buffer_interface;
+    ggml_backend_reg                   registry;
     ggml_backend_device                device;
     ggml_backend                       backend;
     std::vector<ggml_backend_buffer_t> buffers;
 
     bool custom_alloc_buffer_n_called   = false;
     bool custom_get_alloc_size_n_called = false;
+    bool compute_alloc_enabled          = false;
+    bool compute_alloc_fail             = false;
+    int  compute_alloc_calls            = 0;
+    int  buffer_alloc_calls             = 0;
 
     size_t allocated_total() const {
         size_t n = 0;
@@ -40,11 +45,31 @@ static const char * dummy_backend_buffer_type_get_name(ggml_backend_buffer_type_
     return "dummy_buffer_type";
 }
 
-static ggml_backend_buffer_t dummy_backend_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+static ggml_backend_buffer_t dummy_backend_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
     dummy_backend_context * ctx    = (dummy_backend_context *) buft->context;
     ggml_backend_buffer_t & buffer = ctx->buffers.emplace_back();
     buffer                         = ggml_backend_buffer_init(buft, ctx->buffer_interface, ctx, size);
     return buffer;
+}
+
+static ggml_backend_buffer_t dummy_backend_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+    dummy_backend_context * ctx = (dummy_backend_context *) buft->context;
+    ctx->buffer_alloc_calls++;
+    return dummy_backend_alloc_buffer(buft, size);
+}
+
+static ggml_backend_buffer_t dummy_backend_alloc_compute_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+    dummy_backend_context * ctx = (dummy_backend_context *) buft->context;
+    ctx->compute_alloc_calls++;
+    return ctx->compute_alloc_fail ? nullptr : dummy_backend_alloc_buffer(buft, size);
+}
+
+static void * dummy_backend_get_proc_address(ggml_backend_reg_t reg, const char * name) {
+    dummy_backend_context * ctx = (dummy_backend_context *) reg->context;
+    if (ctx->compute_alloc_enabled && strcmp(name, "ggml_backend_alloc_compute_buffer") == 0) {
+        return (void *) dummy_backend_alloc_compute_buffer;
+    }
+    return nullptr;
 }
 
 static size_t dummy_backend_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
@@ -642,6 +667,35 @@ static void test_reallocation() {
     }
 }
 
+static void test_compute_buffer_allocation(bool with_registry, bool with_hook, bool fail) {
+    dummy_backend backend = dummy_backend_init(32);
+    dummy_backend_context & backend_ctx = *backend.context;
+    backend_ctx.registry.context = &backend_ctx;
+    backend_ctx.registry.iface.get_proc_address = dummy_backend_get_proc_address;
+    backend_ctx.device.reg = with_registry ? &backend_ctx.registry : nullptr;
+    backend_ctx.compute_alloc_enabled = with_hook;
+    backend_ctx.compute_alloc_fail = fail;
+
+    auto [ctx, graph, ctx_ptr] = make_context();
+    ggml_tensor * input = make_input_with_size(ctx, 16);
+    ggml_tensor * output = ggml_scale(ctx, input, 2.0f);
+    ggml_set_output(output);
+    ggml_build_forward_expand(graph, output);
+
+    ggml_gallocr_ptr galloc(ggml_gallocr_new(&backend.buffer_type));
+    GGML_ASSERT(ggml_gallocr_alloc_graph(galloc.get(), graph) == !fail);
+    GGML_ASSERT(backend_ctx.compute_alloc_calls == (with_hook ? 1 : 0));
+    GGML_ASSERT(backend_ctx.buffer_alloc_calls == (with_hook ? 0 : 1));
+    if (fail) {
+        GGML_ASSERT(backend_ctx.buffers.empty());
+    } else {
+        check_all_allocated(graph);
+        GGML_ASSERT(ggml_backend_buffer_get_usage(output->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE);
+    }
+    galloc.reset();
+    GGML_ASSERT(backend_ctx.buffers.empty());
+}
+
 static void test_backend_graph_optimize(ggml_backend_t /*backend*/, ggml_cgraph * graph, ggml_backend_graph_optimize_params * params) {
     GGML_ASSERT(graph->n_nodes == 3);
     params->add_alloc_dep(params->user_data, graph->nodes[0], graph->nodes[2]);
@@ -1120,6 +1174,10 @@ int main() {
     run("test_multiple_buffer_types", test_multiple_buffer_types);
     run("test_buffer_size_zero", test_buffer_size_zero);
     run("test_reallocation", test_reallocation);
+    run("test_compute_buffer_allocation", []() { test_compute_buffer_allocation(true, true, false); });
+    run("test_compute_buffer_failure", []() { test_compute_buffer_allocation(true, true, true); });
+    run("test_compute_buffer_no_hook", []() { test_compute_buffer_allocation(true, false, false); });
+    run("test_compute_buffer_no_registry", []() { test_compute_buffer_allocation(false, false, false); });
     run("test_graph_optimize_alloc_dep", test_graph_optimize_alloc_dep);
     run("test_buft_alloc_buffer_n_single_buffer", test_buft_alloc_buffer_n_single_buffer);
     run("test_buft_alloc_buffer_n_multi_buffer", test_buft_alloc_buffer_n_multi_buffer);

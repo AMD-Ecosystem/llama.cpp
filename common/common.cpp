@@ -1142,6 +1142,7 @@ struct common_init_result::impl {
 
     // note: the order in which model, context, etc. are declared matters because their destructors will be called bottom-to-top
 
+    common_fit_arenas arenas;
     common_threadpools threadpools;
 
     llama_model_ptr   model;
@@ -1235,8 +1236,8 @@ common_gguf_info common_get_gguf_info(const std::string & fname) {
     return info;
 }
 
-void common_fit_apply(common_params & params, llama_model_params & mparams, llama_context_params & cparams, bool reserve_arena) {
-    if (!params.fit_params && !reserve_arena) {
+void common_fit_apply(common_params & params, llama_model_params & mparams, llama_context_params & cparams, common_fit_arenas * arenas) {
+    if (!params.fit_params && arenas == nullptr) {
         return;
     }
 
@@ -1274,8 +1275,8 @@ void common_fit_apply(common_params & params, llama_model_params & mparams, llam
             params.verbosity >= LOG_LEVEL_DEBUG ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
     }
 
-    if (reserve_arena) {
-        common_fit_reserve_arenas(params.model.get_paths(), &mparams, &cparams, has_draft || spec_mtp ? &extra : nullptr,
+    if (arenas != nullptr) {
+        common_fit_reserve_arenas(*arenas, params.model.get_paths(), &mparams, &cparams, has_draft || spec_mtp ? &extra : nullptr,
             params.verbosity >= LOG_LEVEL_DEBUG ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
     }
 }
@@ -1285,7 +1286,7 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
 
-    common_fit_apply(params, mparams, cparams, !model_only);
+    common_fit_apply(params, mparams, cparams, model_only ? nullptr : &pimpl->arenas);
 
     llama_model * model = common_model_load(params.model.get_paths(), mparams);
     if (model == NULL) {
