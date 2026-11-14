@@ -1880,6 +1880,7 @@ static bool ggml_vk_amd_large_tile_supported(const vk_device& device) {
 }
 
 #if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
+// These driver-specific schedules were measured on Strix Halo only.
 static bool ggml_vk_is_strix_halo(const vk_device& device) {
     return device->vendor_id == VK_VENDOR_ID_AMD && device->properties.deviceID == 0x1586 &&
            device->uma && device->architecture == AMD_RDNA3;
@@ -3230,12 +3231,13 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 
                 ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_q8_1_f32[w][GGML_TYPE_MXFP4][i], "mul_mat_vec_mxfp4_q8_1_f32", arr_dmmv_mxfp4_q8_1_f32_len[reduc], arr_dmmv_mxfp4_q8_1_f32_data[reduc], "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {rm_int_n(2*rm_stdq_int, i), 1, 1}, {wg_size_subgroup_int, rm_int_n(2*rm_stdq_int, i), i+1}, 1, true, use_subgroups, subgroup_size_int);
 
+                // i + 1 is the token count; at eight tokens these Strix Halo paths were faster with two rows.
                 const uint32_t q2_rows = amd_mmvq && i == 7 ? 2u : rm_int_n(2*rm_kq_int, i);
                 ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_q8_1_f32[w][GGML_TYPE_Q2_K][i], "mul_mat_vec_q2_k_q8_1_f32", arr_dmmv_q2_k_q8_1_f32_len[reduc], arr_dmmv_q2_k_q8_1_f32_data[reduc], "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {q2_rows, 1, 1}, {wg_size_subgroup_int, q2_rows, i+1}, 1, true, use_subgroups, subgroup_size_int);
                 const uint32_t q3_rows = (ggml_vk_is_strix_halo_radv(device) || amd_mmvq) && i == 7 ? 2u : rm_int_n(rm_kq_int, i);
                 ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_q8_1_f32[w][GGML_TYPE_Q3_K][i], "mul_mat_vec_q3_k_q8_1_f32", arr_dmmv_q3_k_q8_1_f32_len[reduc], arr_dmmv_q3_k_q8_1_f32_data[reduc], "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {q3_rows, 1, 1}, {wg_size_subgroup_int, q3_rows, i+1}, 1, true, use_subgroups, subgroup_size_int);
-                const uint32_t q4k_rows = amd_mmvq && i == 7 ? 2u : rm_int_n(1*rm_kq_int, i);
-                ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_q8_1_f32[w][GGML_TYPE_Q4_K][i], "mul_mat_vec_q4_k_q8_1_f32", arr_dmmv_q4_k_q8_1_f32_len[reduc], arr_dmmv_q4_k_q8_1_f32_data[reduc], "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {q4k_rows, 1, 1}, {wg_size_subgroup_int, q4k_rows, i+1}, 1, true, use_subgroups, subgroup_size_int);
+                const uint32_t q4_rows = amd_mmvq && i == 7 ? 2u : rm_int_n(1*rm_kq_int, i);
+                ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_q8_1_f32[w][GGML_TYPE_Q4_K][i], "mul_mat_vec_q4_k_q8_1_f32", arr_dmmv_q4_k_q8_1_f32_len[reduc], arr_dmmv_q4_k_q8_1_f32_data[reduc], "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {q4_rows, 1, 1}, {wg_size_subgroup_int, q4_rows, i+1}, 1, true, use_subgroups, subgroup_size_int);
                 ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_q8_1_f32[w][GGML_TYPE_Q5_K][i], "mul_mat_vec_q5_k_q8_1_f32", arr_dmmv_q5_k_q8_1_f32_len[reduc], arr_dmmv_q5_k_q8_1_f32_data[reduc], "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {rm_int_n(1*rm_kq_int, i), 1, 1}, {wg_size_subgroup_int, rm_int_n(1*rm_kq_int, i), i+1}, 1, true, use_subgroups, subgroup_size_int);
                 ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_q8_1_f32[w][GGML_TYPE_Q6_K][i], "mul_mat_vec_q6_k_q8_1_f32", arr_dmmv_q6_k_q8_1_f32_len[reduc], arr_dmmv_q6_k_q8_1_f32_data[reduc], "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {rm_int_n(1*rm_kq_int, i), 1, 1}, {wg_size_subgroup_int, rm_int_n(1*rm_kq_int, i), i+1}, 1, true, use_subgroups, subgroup_size_int);
 
@@ -4822,7 +4824,7 @@ vk_device ggml_vk_get_device(size_t idx) {
         if (device->subgroup_size_control) {
             device->subgroup_min_size = subgroup_size_control_props.minSubgroupSize;
             device->subgroup_max_size = subgroup_size_control_props.maxSubgroupSize;
-            device->subgroup_max_workgroup_count = subgroup_size_control_props.maxComputeWorkgroupSubgroups;
+            device->max_compute_workgroup_subgroups = subgroup_size_control_props.maxComputeWorkgroupSubgroups;
             device_extensions.push_back("VK_EXT_subgroup_size_control");
         }
 
@@ -8395,15 +8397,17 @@ bool ggml_vk_flash_attn_coopmat_shmem_support(const vk_device& device, const vk_
     const uint32_t MatBr = 16, MatBc = 16;
 
     // Cooperative tiles and subgroup reductions must use the same row/column partition.
-    GGML_ASSERT(params.path == FA_COOPMAT1);
-    GGML_ASSERT(Br >= MatBr && Br % MatBr == 0);
+    if (params.path != FA_COOPMAT1 || Br < MatBr || Br % MatBr != 0 ||
+        params.row_split == 0 || params.subgroup_size == 0) {
+        return false;
+    }
     const uint32_t query_tiles = Br / MatBr;
-    GGML_ASSERT(params.row_split > 0 && params.row_split % query_tiles == 0);
+    if (params.row_split % query_tiles != 0) {
+        return false;
+    }
     const uint32_t column_subgroups = params.row_split / query_tiles;
-    GGML_ASSERT(Bc == MatBc * column_subgroups);
-    GGML_ASSERT(params.subgroup_size > 0);
-    GGML_ASSERT(Br % params.row_split == 0 && (Br / params.row_split) % 4 == 0);
-    if (params.workgroup_size != params.subgroup_size * params.row_split ||
+    if (Bc != MatBc * column_subgroups || Br % params.row_split != 0 || (Br / params.row_split) % 4 != 0 ||
+        params.workgroup_size != params.subgroup_size * params.row_split ||
         Bc < params.subgroup_size || Bc % params.subgroup_size != 0) {
         return false;
     }
@@ -8565,6 +8569,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
 
     // Fold query tokens into GQA rows to share K/V loads. Sparse lists remain per query token.
     uint32_t gqa_tokens = 1;
+    // Four tokens at GQA > 4 need more than 16 rows. Wider tiles are tuned for 8K+ KV.
     const bool use_gqa_query_tiles = gqa_ratio > 4 && f32acc &&
                                     ctx->device->vendor_id == VK_VENDOR_ID_AMD &&
                                     ctx->device->subgroup_size_control &&
@@ -8587,7 +8592,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
                 folded_params.shmem_staging = 1;
                 if (folded_params.workgroup_size > ctx->device->properties.limits.maxComputeWorkGroupInvocations ||
                     folded_params.workgroup_size > ctx->device->properties.limits.maxComputeWorkGroupSize[0] ||
-                    (ctx->device->subgroup_size_control && folded_params.row_split > ctx->device->subgroup_max_workgroup_count) ||
+                    (ctx->device->subgroup_size_control && folded_params.row_split > ctx->device->max_compute_workgroup_subgroups) ||
                     !ggml_vk_flash_attn_coopmat_shmem_support(ctx->device, folded_params, HSK, HSV, f32acc, k_type_eff, v_type_eff)) {
                     continue;
                 }
@@ -8616,7 +8621,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
         scale /= logit_softcap;
     }
 
-    // Compact the <= n_kv_max finite positions from the sparse mask hint and gather only those.
+    // Sparse mask hint (op_params[4]): compact the <= n_kv_max finite positions and gather only those.
     static const bool disable_sparse = getenv("GGML_VK_FA_SPARSE_DISABLE") != nullptr;
     const bool kv_f16 = k_type_eff == GGML_TYPE_F16 && v_type_eff == GGML_TYPE_F16;
     // cm2 dense is fast, so it needs a larger reduction to win.
@@ -8673,7 +8678,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
 
     // Only use mask opt when the mask is fairly large. This hasn't been tuned extensively.
     const bool mask_opt_large_batch = nem1 >= 32 && nem0 * nem1 > 32768;
-    // Skip fully masked blocks for small batches over long caches. GQA needs all mask rows in the first tile.
+    // Limit the extra pre-pass to long caches (8K+ KV). GQA mask rows must fit in the first tile.
     const bool mask_opt_long_kv = nem0 >= 8192 &&
                                   (gqa_ratio > 1 ? nem1 <= tuning_params.block_rows : nem1 < 32);
     bool use_mask_opt = mask && !use_sparse && (mask_opt_large_batch || mask_opt_long_kv) && nem0 >= tuning_params.block_cols * 16
@@ -17269,3 +17274,4 @@ void ggml_vk_debug_label::begin(vk_context & ctx, const std::string & name) {
     subctx->debug_labels.push_back(name);
     ggml_vk_cmd_label_begin(subctx->s->buffer->buf, subctx->debug_labels.back().c_str());
 }
+

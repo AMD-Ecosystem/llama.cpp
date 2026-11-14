@@ -234,7 +234,7 @@ FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
     sum_d += dotPacked4x8EXT(qs_a.w, cache_b_qs[3]);
     sum_m += dotPacked4x8EXT(0x01010101, cache_b_qs[3]);
 
-    // Keep the activation sum independent of weight scales so rows can share it.
+    // Integer factoring preserves the dot product while applying each scale once.
     sum_d *= int32_t(scale & 0xF);
     sum_m *= int32_t(scale >> 4);
 

@@ -345,3 +345,4 @@ inline void ggml_vk_dispatch_pipeline(ggml_backend_vk_context* ctx, vk_context& 
         subctx->s->buffer->buf.dispatch(wg0, wg1, wg2);
     }
 }
+
