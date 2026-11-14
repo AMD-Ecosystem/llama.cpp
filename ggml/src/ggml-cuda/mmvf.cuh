@@ -12,6 +12,3 @@ void ggml_cuda_op_mul_mat_vec_f(
     const int64_t src1_padded_row_size, cudaStream_t stream);
 
 bool ggml_cuda_should_use_mmvf(const ggml_tensor * src0, int cc, int warp_size, int64_t ne11);
-
-// BF16 copy of an F32 weight whose values are exact in BF16, nullptr if there is none
-const nv_bfloat16 * ggml_cuda_weight_bf16_data(const ggml_tensor * tensor);
