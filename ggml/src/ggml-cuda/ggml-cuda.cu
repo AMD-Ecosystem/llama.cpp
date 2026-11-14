@@ -192,7 +192,8 @@ static int ggml_cuda_op_offload_min_batch() {
 }
 
 // device memory reserved before the weights load, sub-allocated for pool and compute buffers
-// on Windows APUs, memory allocated after the carveout is full goes to shared memory with small pages, which is slow for random access
+// on Windows APUs, memory allocated late (after the weights and KV cache) can go to shared memory with small pages, which is slow for random access,
+// when the carveout is full and sometimes even when it is not
 struct ggml_cuda_arena {
     char * base = nullptr;
     size_t size = 0;

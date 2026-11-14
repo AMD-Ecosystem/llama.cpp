@@ -10,6 +10,8 @@
 #include "ngram-mod.h"
 #include "sampling.h"
 
+#include "../src/llama-ext.h" // llama_sched_reserve
+
 #include <algorithm>
 #include <cassert>
 #include <cmath>

@@ -433,7 +433,7 @@ On Linux it is possible to use unified memory architecture (UMA) to share main m
 
 ### Compute arena on integrated GPUs (Windows)
 
-On Windows, an integrated GPU has a dedicated memory carveout (set in the BIOS or AMD Adrenalin). When the carveout is full, new allocations go to shared system memory. Shared memory has the same sequential bandwidth but much slower random access, so compute and scratch buffers in shared memory slow down generation. This happens when the weights, KV cache and compute buffers together are larger than the carveout, for example a 52 GiB model with a 256K context on a 64 GB carveout.
+On Windows, an integrated GPU has a dedicated memory carveout (set in the BIOS or AMD Adrenalin). Device allocations made after the weights and KV cache can be placed in shared system memory instead of the carveout. Shared memory has the same sequential bandwidth but much slower random access, so compute and scratch buffers in shared memory slow down generation. This happens when the weights, KV cache and compute buffers together are larger than the carveout, for example a 52 GiB model with a 256K context on a 64 GB carveout, but it can also happen when the carveout is not full: with a 96 GB carveout and about 65 GB in use, the draft model's 2.6 GiB compute buffer was placed in shared memory in about two out of three server starts, and those runs decoded about 10% slower.
 
 To keep the compute and scratch buffers in the carveout, the HIP backend can reserve a memory arena before the weights are loaded:
 

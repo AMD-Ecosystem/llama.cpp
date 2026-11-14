@@ -159,3 +159,6 @@ LLAMA_API uint32_t llama_model_n_tokens_delay(const struct llama_model * model);
 
 // each sequence is paired with an unconditional one at n_seq_max / 2 + seq_id, in a unified KV cache
 LLAMA_API bool llama_model_classifier_free_guidance(const struct llama_model * model);
+
+// Reserve the compute buffers now if a setting changed the graph, instead of at the next decode
+LLAMA_API void llama_sched_reserve(struct llama_context * ctx);
