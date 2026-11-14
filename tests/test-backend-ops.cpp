@@ -13048,6 +13048,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // GQA 6, sliding window rows from a 2560-cell SWA cache
+    for (int64_t nb : {1, 4, 8}) {
+        test_cases.emplace_back(new test_flash_attn_ext_kv_rows(128, 8, 6, 2560, 768, nb, 1));
+        test_cases.emplace_back(new test_flash_attn_ext_kv_rows(128, 8, 6, 32768, 32768, nb, 1));
+    }
+
     // sparse mask with large batch size
     test_cases.emplace_back(new test_flash_attn_ext(512, 512, 1, { 8, 1}, 4096, 64, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false,  512));
     test_cases.emplace_back(new test_flash_attn_ext(512, 512, 1, { 8, 1}, 4096, 64, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false, 2048));
@@ -13792,6 +13798,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
             test_cases.emplace_back(new test_flash_attn_ext(128, 128, 8, {6, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
         }
         test_cases.emplace_back(new test_flash_attn_ext(128, 128, 8, {6, 1}, kv, 2048, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+    }
+    // sliding window decode through K/V rows
+    for (int nb : { 1, 4 }) {
+        test_cases.emplace_back(new test_flash_attn_ext_kv_rows(128, 8, 6, 2560, 768, nb, 1));
     }
 
     // GLM 4.7 Flash gqa20

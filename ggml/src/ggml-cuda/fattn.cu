@@ -11,6 +11,12 @@ static bool ggml_cuda_fattn_rdna_gqa_pad_enabled(const int cc) {
     return ggml_cuda_switch_or_rdna3_5(env_switch, cc);
 }
 
+// read K/V through row lists, e.g. only the visible sliding window instead of the whole SWA cache
+static bool ggml_cuda_fattn_rdna_kv_rows_enabled(const int cc) {
+    static const int env_switch = ggml_cuda_env_switch("GGML_HIP_FA_KV_ROWS");
+    return ggml_cuda_switch_or_rdna3_5(env_switch, cc);
+}
+
 #if !defined(GGML_USE_MUSA)
 
 // one list per group of ncols1 queries: a column is selected if any query of the group can see it
@@ -694,8 +700,15 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
     // only the MMA kernel reads K/V through kv_rows
     if (kv_rows) {
-        return GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc) && mask && Q->ne[0] != 40 && Q->ne[0] != 72 ?
-            BEST_FATTN_KERNEL_MMA_F16 : BEST_FATTN_KERNEL_NONE;
+        if (GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc) && mask && Q->ne[0] != 40 && Q->ne[0] != 72) {
+            return BEST_FATTN_KERNEL_MMA_F16;
+        }
+        // the WMMA kernel reads kv_rows only on the GQA path (ncols2 >= 2)
+        if (amd_wmma_available(cc) && ggml_cuda_fattn_rdna_kv_rows_enabled(cc) && mask && gqa_opt_applies &&
+                Q->ne[0] <= 256 && Q->ne[0] != 40 && Q->ne[0] != 72) {
+            return BEST_FATTN_KERNEL_MMA_F16;
+        }
+        return BEST_FATTN_KERNEL_NONE;
     }
 
     // For small batch sizes the vector kernel may be preferable over the kernels optimized for large batch sizes:
