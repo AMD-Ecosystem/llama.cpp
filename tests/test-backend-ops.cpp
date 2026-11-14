@@ -4081,6 +4081,203 @@ struct test_rms_norm_back : public test_case {
 };
 
 // GGML_OP_RMS_NORM + GGML_OP_MUL + GGML_OP_ADD (+ GGML_OP_MUL)
+// sandwich-norm block boundary: post-norm, residual add and the next pre-norm
+struct test_rms_norm_add_rms_norm : public test_case {
+    enum class variant_t {
+        BASIC,
+        RESIDUAL_IS_NORM, // the residual is the first norm, which a fused kernel does not write
+        STRIDED_INPUT,    // x is a row-strided view
+    };
+    const std::array<int64_t, 2> ne;
+    const float eps;
+    const variant_t variant;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "RMS_NORM_ADD_RMS_NORM";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::string vars() override {
+        return VARS_TO_STR3(ne, eps, (int) variant);
+    }
+
+    test_rms_norm_add_rms_norm(std::array<int64_t, 2> ne = {64, 5}, float eps = 1e-6f,
+                               variant_t variant = variant_t::BASIC) :
+        ne(ne), eps(eps), variant(variant) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        const int64_t x_cols = variant == variant_t::STRIDED_INPUT ? ne[0] + 4 : ne[0];
+        ggml_tensor * x  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, x_cols, ne[1]);
+        ggml_tensor * xr = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, x_cols, ne[1]);
+        ggml_tensor * r  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ne[0], ne[1]);
+        ggml_tensor * w1 = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ne[0]);
+        ggml_tensor * w2 = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ne[0]);
+        ggml_set_param(x);
+        ggml_set_name(x, "x");
+        ggml_set_param(xr);
+        ggml_set_name(xr, "xr");
+        ggml_set_param(r);
+        ggml_set_name(r, "r");
+        ggml_set_param(w1);
+        ggml_set_name(w1, "w1");
+        ggml_set_param(w2);
+        ggml_set_name(w2, "w2");
+
+        // use the inputs early so no OP_NONE node sits inside the fused sequence
+        x = ggml_add(ctx, x, xr);
+        r = ggml_add(ctx, r, w1);
+        if (variant == variant_t::STRIDED_INPUT) {
+            x = ggml_view_2d(ctx, x, ne[0], ne[1], x->nb[1], 0);
+        }
+
+        ggml_tensor * n   = ggml_rms_norm(ctx, x, eps);
+        ggml_tensor * y   = ggml_add(ctx, ggml_mul(ctx, n, w1), variant == variant_t::RESIDUAL_IS_NORM ? n : r);
+        ggml_tensor * z   = ggml_mul(ctx, ggml_rms_norm(ctx, y, eps), w2);
+        ggml_tensor * out = ggml_add(ctx, z, y);
+        ggml_set_name(out, "out");
+        return out;
+    }
+
+    double max_nmse_err() override {
+        return 1e-6;
+    }
+};
+
+// two single-token MUL_MATs that share a leaf or a computed input
+struct test_mul_mat_pair_add : public test_case {
+    const bool shared_input_is_leaf;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_PAIR_ADD";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::string vars() override {
+        return VARS_TO_STR1(shared_input_is_leaf);
+    }
+
+    test_mul_mat_pair_add(bool shared_input_is_leaf = true) : shared_input_is_leaf(shared_input_is_leaf) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * w_a = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 256, 128);
+        ggml_tensor * w_b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 256, 128);
+        ggml_tensor * x   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 256, 1);
+        ggml_set_name(w_a, "w_a");
+        ggml_set_name(w_b, "w_b");
+        ggml_set_param(x);
+        ggml_set_name(x, "x");
+        if (!shared_input_is_leaf) {
+            x = ggml_scale(ctx, x, 0.5f);
+        }
+        ggml_tensor * out = ggml_add(ctx, ggml_mul_mat(ctx, w_a, x), ggml_mul_mat(ctx, w_b, x));
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
+struct test_rms_norm_add_rms : public test_case {
+    const std::array<int64_t, 4> ne;
+    const float eps;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "RMS_NORM_ADD_RMS";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::string vars() override {
+        return VARS_TO_STR2(ne, eps);
+    }
+
+    test_rms_norm_add_rms(std::array<int64_t, 4> ne = {64, 5, 1, 1}, float eps = 1e-6f) : ne(ne), eps(eps) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * x   = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+        ggml_tensor * res = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+        ggml_tensor * w1  = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ne[0]);
+        ggml_tensor * w2  = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ne[0]);
+        ggml_set_param(x);
+        ggml_set_param(res);
+        ggml_set_param(w1);
+        ggml_set_param(w2);
+        ggml_set_name(x, "x");
+        ggml_set_name(res, "res");
+        ggml_set_name(w1, "w1");
+        ggml_set_name(w2, "w2");
+
+        // sandwich norm, residual add, next pre-norm; the residual stream is used again afterwards
+        ggml_tensor * branch = ggml_mul(ctx, ggml_rms_norm(ctx, x, eps), w1);
+        ggml_tensor * stream = ggml_add(ctx, branch, res);
+        ggml_tensor * normed = ggml_mul(ctx, ggml_rms_norm(ctx, stream, eps), w2);
+        ggml_tensor * out    = ggml_add(ctx, normed, stream);
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
+// rms_norm(x) * w read by three quantized mat-vec products, like Q/K/V; sandwich: x = rms_norm(y) * w0 + res
+struct test_rms_norm_mul_mat_vec : public test_case {
+    const ggml_type type_a;
+    const int64_t k;
+    const int64_t n;
+    const int64_t rows;
+    const bool sandwich;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "RMS_NORM_MUL_MAT_VEC";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::string vars() override {
+        return VARS_TO_STR5(type_a, k, n, rows, sandwich);
+    }
+
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+
+    test_rms_norm_mul_mat_vec(ggml_type type_a = GGML_TYPE_Q4_0, int64_t k = 512, int64_t n = 64, int64_t rows = 1,
+            bool sandwich = false)
+        : type_a(type_a), k(k), n(n), rows(rows), sandwich(sandwich) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, rows);
+        ggml_tensor * w = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, k);
+        ggml_set_name(x, "x");
+        ggml_set_name(w, "w");
+
+        if (sandwich) {
+            ggml_tensor * res = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, rows);
+            ggml_tensor * w0  = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, k);
+            ggml_set_name(res, "res");
+            ggml_set_name(w0, "w0");
+            x = ggml_add(ctx, ggml_mul(ctx, ggml_rms_norm(ctx, x, 1e-6f), w0), res);
+        }
+
+        ggml_tensor * cur = ggml_mul(ctx, ggml_rms_norm(ctx, x, 1e-6f), w);
+        ggml_tensor * out = nullptr;
+        for (int i = 0; i < 3; ++i) {
+            ggml_tensor * a = ggml_new_tensor_2d(ctx, type_a, k, n);
+            ggml_tensor * mm = ggml_mul_mat(ctx, a, cur);
+            out = out ? ggml_add(ctx, out, mm) : mm;
+        }
+        if (sandwich) {
+            // read the sum after the second norm, so the five nodes stay adjacent
+            out = ggml_add(ctx, out, ggml_mul_mat(ctx, ggml_new_tensor_2d(ctx, type_a, k, n), x));
+        }
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+};
+
 struct test_rms_norm_mul_add : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne;
@@ -8014,6 +8211,27 @@ struct test_moe_reduce : public test_case {
     }
 };
 
+// MoE weighted reduction read by a quantized mat-vec product
+struct test_moe_reduce_mul_mat_vec : public test_moe_reduce {
+    using test_moe_reduce::test_moe_reduce;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MOE_REDUCE_MUL_MAT_VEC";
+    }
+
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * reduced = test_moe_reduce::build_graph(ctx);
+        ggml_tensor * out = ggml_mul_mat(ctx, ggml_new_tensor_2d(ctx, GGML_TYPE_Q4_0, reduced->ne[0], 64), reduced);
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
 // mul_mat with src1 in [0, 1]: a zero-mean src1 hides errors in the zero point or the min of a quantized src0
 struct test_mul_mat_pos : public test_mul_mat {
     using test_mul_mat::test_mul_mat;
@@ -9107,6 +9325,61 @@ struct test_flash_attn_ext : public test_case {
 
     bool grad_precise() override {
         return true;
+    }
+};
+
+// decode flash attention output, reshaped to one row per token, read by a quantized mat-vec product
+struct test_flash_attn_ext_mul_mat_vec : public test_case {
+    const int64_t kv;
+    const int64_t nb;
+    const ggml_type type_a;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "FLASH_ATTN_EXT_MUL_MAT_VEC";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::string vars() override {
+        return VARS_TO_STR3(kv, nb, type_a);
+    }
+
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+
+    test_flash_attn_ext_mul_mat_vec(int64_t kv = 512, int64_t nb = 1, ggml_type type_a = GGML_TYPE_Q4_0)
+        : kv(kv), nb(nb), type_a(type_a) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        const int64_t d = 128, n_head = 48, n_head_kv = 8;
+        ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, d, nb, n_head, 1);
+        ggml_tensor * k = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, d, kv, n_head_kv, 1);
+        ggml_tensor * v = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, d, kv, n_head_kv, 1);
+        ggml_tensor * m = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, kv, nb, 1, 1);
+        ggml_set_name(q, "q");
+        ggml_set_name(k, "k");
+        ggml_set_name(v, "v");
+        ggml_set_name(m, "m");
+
+        ggml_tensor * fa = ggml_flash_attn_ext(ctx, q, k, v, m, 1.0f/sqrtf(d), 0.0f, 0.0f);
+        ggml_prec_set_acc(fa, GGML_PREC_F32);
+        ggml_tensor * cur = ggml_reshape_2d(ctx, fa, d*n_head, nb);
+        ggml_tensor * out = ggml_mul_mat(ctx, ggml_new_tensor_2d(ctx, type_a, d*n_head, 64), cur);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "m") == 0) {
+                init_tensor_kq_mask(t);
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
     }
 };
 
@@ -11532,12 +11805,43 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     // in-place tests
     test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {64, 5, 4, 3}, false, 1e-6f, true));
+    for (std::array<int64_t, 2> ne : { std::array<int64_t, 2>{64, 5}, {3584, 1}, {3584, 7}, {1000, 3} }) {
+        test_cases.emplace_back(new test_rms_norm_add_rms_norm(ne, 1e-5f));
+    }
+    for (auto variant : { test_rms_norm_add_rms_norm::variant_t::RESIDUAL_IS_NORM,
+                          test_rms_norm_add_rms_norm::variant_t::STRIDED_INPUT }) {
+        test_cases.emplace_back(new test_rms_norm_add_rms_norm({64, 5}, 1e-5f, variant));
+        test_cases.emplace_back(new test_rms_norm_add_rms_norm({3584, 7}, 1e-5f, variant));
+    }
+    test_cases.emplace_back(new test_mul_mat_pair_add(true));
+    test_cases.emplace_back(new test_mul_mat_pair_add(false));
     // shapes below exceed the CUDA gridDim.y/gridDim.z limit of 65535 (#27901)
     test_cases.emplace_back(new test_norm        (GGML_TYPE_F32, {4, 1, 65536, 1}, false, 1e-6f));
     test_cases.emplace_back(new test_rms_norm    (GGML_TYPE_F32, {4, 1, 65536, 1}, false, 1e-6f, false));
     test_cases.emplace_back(new test_rms_norm    (GGML_TYPE_F32, {4, 1, 1, 65536}, false, 1e-6f, false));
     test_cases.emplace_back(new test_l2_norm     (GGML_TYPE_F32, {4, 1, 65536, 1}, 1e-12f, false, false));
     test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, {4, 1, 65536, 1}, 1e-6f, false, false));
+    for (int64_t n : {32, 64, 256, 1024, 3584, 4096, 8192, 16384}) {
+        for (int64_t rows : {1, 4, 33}) {
+            test_cases.emplace_back(new test_rms_norm_add_rms({n, rows, 1, 1}, 1e-6f));
+        }
+    }
+
+    for (int64_t kv : { 512, 2560, 8448 }) {
+        for (int64_t nb : { 1, 4 }) {
+            test_cases.emplace_back(new test_flash_attn_ext_mul_mat_vec(kv, nb, GGML_TYPE_Q4_0));
+            test_cases.emplace_back(new test_flash_attn_ext_mul_mat_vec(kv, nb, GGML_TYPE_Q3_K));
+        }
+    }
+
+    for (ggml_type type_a : { GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_Q2_K, GGML_TYPE_Q6_K }) {
+        for (int64_t k : { 512, 768, 3584 }) {
+            for (int64_t rows : { 1, 4, 8, 9 }) {
+                test_cases.emplace_back(new test_rms_norm_mul_mat_vec(type_a, k, 96, rows));
+                test_cases.emplace_back(new test_rms_norm_mul_mat_vec(type_a, k, 96, rows, true));
+            }
+        }
+    }
 
     for (uint32_t n : {1, 127, 129, 511, 513, 2816, 4096, 16385}) {
         test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {n, 3, 2, 1}));
@@ -13336,6 +13640,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     // Cover the supported boundaries, common k = 8 shapes, interleaved views and adds, and k = 16 fallback.
     test_cases.emplace_back(new test_moe_reduce(63,  2, 17));
+    for (int64_t n_tokens : { 1, 4 }) {
+        test_cases.emplace_back(new test_moe_reduce_mul_mat_vec(1536, 8, n_tokens));
+        test_cases.emplace_back(new test_moe_reduce_mul_mat_vec(1536, 8, n_tokens, false, true));
+    }
     test_cases.emplace_back(new test_moe_reduce(2048, 8, 128));
     test_cases.emplace_back(new test_moe_reduce(2048, 8, 128, false, true));
     test_cases.emplace_back(new test_moe_reduce(63,   12, 33, true,  true, true));

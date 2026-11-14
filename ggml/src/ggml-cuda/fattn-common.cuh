@@ -976,7 +976,8 @@ static __global__ void flash_attn_combine_results(
         const float  * VKQ_parts_ptr,
         const float2 * VKQ_meta_ptr,
         float * dst_ptr,
-        const int parallel_blocks) {
+        const int parallel_blocks,
+        block_q8_1 * dst_q8_1 = nullptr) {
     ggml_cuda_pdl_lc();
     const float  * GGML_CUDA_RESTRICT VKQ_parts = VKQ_parts_ptr;
     const float2 * GGML_CUDA_RESTRICT VKQ_meta  = VKQ_meta_ptr;
@@ -1025,7 +1026,23 @@ static __global__ void flash_attn_combine_results(
         VKQ_denominator += KQ_max_scale * meta[l].y;
     }
 
-    dst[tid] = VKQ_numerator / VKQ_denominator;
+    const float result = VKQ_numerator / VKQ_denominator;
+    dst[tid] = result;
+
+    if constexpr (D % QK8_1 == 0) {
+    if (dst_q8_1) {
+        // MMVQ's q8_1 copy of dst, as quantize_q8_1 makes it: the 32 lanes of a warp hold one 32-value block
+        const float amax = warp_reduce_max<QK8_1>(fabsf(result));
+        const float d    = amax / 127.0f;
+        const int8_t q   = amax == 0.0f ? 0 : roundf(result / d);
+        const int sum    = warp_reduce_sum<QK8_1>((int) q);
+        block_q8_1 * y = dst_q8_1 + (j_dst_unrolled*D + tid) / QK8_1;
+        y->qs[tid % QK8_1] = q;
+        if (tid % QK8_1 == 0) {
+            y->ds = make_half2(d, d * sum);
+        }
+    }
+    }
 }
 
 template <int DV, int ncols1, int ncols2>
@@ -1369,9 +1386,17 @@ void launch_fattn(
         const dim3 blocks_num_combine(Q->ne[1], Q->ne[2], Q->ne[3]);
         const size_t nbytes_shared_combine = parallel_blocks*sizeof(float2);
 
+        // the graph evaluation may ask for MMVQ's q8_1 copy of the result (rows of whole, unpadded 32-value blocks)
+        block_q8_1 * q8_1 = nullptr;
+        if (ctx.fa_q8_1 && DV % QK8_1 == 0 && warp_size == QK8_1 && ggml_is_contiguous(KQV) &&
+                (KQV->ne[0]*KQV->ne[1]) % MATRIX_ROW_PADDING == 0) {
+            q8_1 = ctx.fa_q8_1;
+            ctx.fa_q8_1_written = true;
+        }
+
         const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num_combine, block_dim_combine, nbytes_shared_combine, main_stream);
         ggml_cuda_kernel_launch(flash_attn_combine_results<DV>, launch_params,
-            dst_tmp.ptr, dst_tmp_meta.ptr, (float *) KQV->data, parallel_blocks);
+            dst_tmp.ptr, dst_tmp_meta.ptr, (float *) KQV->data, parallel_blocks, q8_1);
     }
     CUDA_CHECK(cudaGetLastError());
 }
