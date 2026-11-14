@@ -334,6 +334,17 @@ static bool fast_fp16_available(const int cc) {
         (GGML_CUDA_CC_IS_MTHREADS(cc) && fp16_available(cc));
 }
 
+// 1 if the variable is set to non-zero, 0 if set to 0, -1 if unset
+static inline int ggml_cuda_env_switch(const char * name) {
+    const char * value = getenv(name);
+    return value != nullptr ? (atoi(value) != 0 ? 1 : 0) : -1;
+}
+
+// tuned on RDNA3.5 (Strix Halo): on by default there, an explicit switch overrides
+static inline bool ggml_cuda_switch_or_rdna3_5(const int env_switch, const int cc) {
+    return env_switch != -1 ? env_switch == 1 : GGML_CUDA_CC_IS_RDNA3_5(cc);
+}
+
 // To be used for feature selection of external libraries, e.g. cuBLAS.
 static bool fast_fp16_hardware_available(const int cc) {
     return (GGML_CUDA_CC_IS_NVIDIA(cc) && cc >= GGML_CUDA_CC_PASCAL && cc != 610) || GGML_CUDA_CC_IS_AMD(cc) ||
@@ -1349,6 +1360,39 @@ struct ggml_tensor_extra_gpu {
 struct ggml_cuda_graph;
 struct ggml_cuda_stream_context;
 
+// q8_1 copies of F32 activations as MMVQ reads them, kept for the other MMVQ consumers of the same tensor within
+// one graph evaluation: the Q/K/V projections of one norm output quantize it once, and a norm that writes the
+// copy itself saves the quantization kernel altogether. Buffers are allocated once and never moved, so captured
+// CUDA graphs keep valid pointers.
+struct ggml_cuda_q8_1_cache {
+    static constexpr int    n_entries = 4;
+    static constexpr size_t capacity  = 1024*1024; // bytes per entry; larger copies are not cached
+
+    struct entry {
+        const ggml_tensor * tensor = nullptr;
+        const void *        data   = nullptr; // tensor->data when the copy was made
+        size_t              nbytes = 0;       // bytes of tensor the copy covers
+        char *              buf    = nullptr;
+    };
+
+    entry entries[n_entries];
+    int   device  = 0; // ggml device index, for allocating from its arena
+    int   next    = 0;
+    bool  enabled = false;
+
+    // a new graph evaluation: forget every copy
+    void reset(bool enable);
+    // node writes its output: drop the copies of tensors it overlaps
+    void invalidate(const ggml_tensor * node);
+    // the copy of t, nullptr if there is none
+    const char * find(const ggml_tensor * t) const;
+    // the buffer for the next copy (size bytes), nullptr if it cannot be cached; commit() makes it t's copy
+    char * reserve(size_t size);
+    void   commit(const ggml_tensor * t);
+
+    ~ggml_cuda_q8_1_cache();
+};
+
 struct ggml_backend_cuda_context {
     int device;
     std::string name;
@@ -1363,6 +1407,12 @@ struct ggml_backend_cuda_context {
 #endif
 
     int curr_stream_no = 0;
+
+    ggml_cuda_q8_1_cache q8_1_cache;
+
+    // where a flash attention whose result MMVQ reads writes the q8_1 copy, and whether it did
+    block_q8_1 * fa_q8_1         = nullptr;
+    bool         fa_q8_1_written = false;
 
 #ifdef USE_CUDA_GRAPH
     // Map from first_node_ptr to cuda_graph - allows multiple graphs per context
@@ -1462,6 +1512,9 @@ struct ggml_cuda_mm_fusion_args_host {
     const ggml_tensor * shared_up = nullptr;
     const ggml_tensor * shared_gate = nullptr;
     ggml_tensor * shared_dst = nullptr;
+    // MMVQ: a second matrix of the same type and row size multiplied by the same src1 (e.g. Q and K), written to x2_dst
+    const ggml_tensor * x2 = nullptr;
+    ggml_tensor * x2_dst = nullptr;
 };
 struct ggml_cuda_mm_fusion_args_device {
     const void * x_bias = nullptr;
@@ -1475,6 +1528,10 @@ struct ggml_cuda_mm_fusion_args_device {
     const void * shared_gate = nullptr;
     float * shared_dst = nullptr;
     uint32_t shared_stride_col_dst = 0;
+    const void * x2 = nullptr;
+    float * x2_dst = nullptr;
+    uint32_t x2_nrows = 0;
+    uint32_t x2_block0 = 0; // the first CUDA block that computes x2
 };
 
 struct ggml_cuda_kernel_launch_params {
