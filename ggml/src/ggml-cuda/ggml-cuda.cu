@@ -156,9 +156,11 @@ static bool ggml_cuda_env_set(const char * name) {
     return getenv(name) != nullptr;
 }
 
+// opt-in: by default ggml_cuda_op_rms_norm_fused_add_rms handles the pattern and also writes MMVQ's q8_1 copy
 static bool ggml_cuda_fuse_norm2_enabled(int device) {
     static const int env_switch = ggml_cuda_env_switch("GGML_CUDA_FUSE_NORM2");
-    return ggml_cuda_switch_or_rdna3_5(env_switch, ggml_cuda_info().devices[device].cc);
+    GGML_UNUSED(device);
+    return env_switch == 1;
 }
 
 static bool ggml_cuda_unified_memory_enabled() {
@@ -915,6 +917,61 @@ bool ggml_cuda_kernel_can_use_pdl(const void * kernel) {
 static std::mutex ggml_cuda_lock;
 static std::condition_variable ggml_cuda_lock_cv;
 static std::atomic<int> ggml_cuda_lock_counter;
+
+void ggml_cuda_q8_1_cache::reset(bool enable) {
+    for (entry & e : entries) {
+        e.tensor = nullptr;
+    }
+    next    = 0;
+    enabled = enable;
+}
+
+void ggml_cuda_q8_1_cache::invalidate(const ggml_tensor * node) {
+    const char * begin = (const char *) node->data;
+    const char * end   = begin + ggml_nbytes(node);
+    for (entry & e : entries) {
+        if (e.tensor && begin < (const char *) e.data + e.nbytes && (const char *) e.data < end) {
+            e.tensor = nullptr;
+        }
+    }
+}
+
+const char * ggml_cuda_q8_1_cache::find(const ggml_tensor * t) const {
+    for (const entry & e : entries) {
+        if (e.tensor == t && e.data == t->data) {
+            return e.buf;
+        }
+    }
+    return nullptr;
+}
+
+char * ggml_cuda_q8_1_cache::reserve(size_t size) {
+    if (!enabled || size > capacity) {
+        return nullptr;
+    }
+    entry & e = entries[next];
+    e.tensor = nullptr;
+    if (e.buf == nullptr) {
+        CUDA_CHECK(cudaMalloc(&e.buf, capacity));
+    }
+    return e.buf;
+}
+
+void ggml_cuda_q8_1_cache::commit(const ggml_tensor * t) {
+    entry & e = entries[next];
+    e.tensor = t;
+    e.data   = t->data;
+    e.nbytes = ggml_nbytes(t);
+    next = (next + 1) % n_entries;
+}
+
+ggml_cuda_q8_1_cache::~ggml_cuda_q8_1_cache() {
+    for (entry & e : entries) {
+        if (e.buf != nullptr) {
+            CUDA_CHECK(cudaFree(e.buf));
+        }
+    }
+}
 
 ggml_backend_cuda_context::~ggml_backend_cuda_context() {
     std::unique_lock<std::mutex> lock(ggml_cuda_lock);
@@ -4157,6 +4214,67 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
         return false;
     }
 
+    {
+        std::initializer_list<enum ggml_op> rms_add_rms_ops = { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ADD, GGML_OP_RMS_NORM, GGML_OP_MUL };
+        if (is_equal(rms_add_rms_ops, ops)) {
+            // the add result (the residual stream) and the last mul are both consumed outside of the fusion
+            if (!ggml_can_fuse_subgraph(cgraph, node_idx, ops, { node_idx + 2, node_idx + 4 })) {
+                return false;
+            }
+            const ggml_tensor * rms1 = cgraph->nodes[node_idx];
+            const ggml_tensor * mul1 = cgraph->nodes[node_idx + 1];
+            const ggml_tensor * add  = cgraph->nodes[node_idx + 2];
+            const ggml_tensor * rms2 = cgraph->nodes[node_idx + 3];
+            const ggml_tensor * mul2 = cgraph->nodes[node_idx + 4];
+
+            if (mul1->src[0] != rms1 && mul1->src[1] != rms1) { return false; }
+            if (add->src[0]  != mul1 && add->src[1]  != mul1) { return false; }
+            if (rms2->src[0] != add)                          { return false; }
+            if (mul2->src[0] != rms2 && mul2->src[1] != rms2) { return false; }
+
+            const ggml_tensor * x   = rms1->src[0];
+            const ggml_tensor * w1  = mul1->src[0] == rms1 ? mul1->src[1] : mul1->src[0];
+            const ggml_tensor * res = add->src[0] == mul1 ? add->src[1] : add->src[0];
+            const ggml_tensor * w2  = mul2->src[0] == rms2 ? mul2->src[1] : mul2->src[0];
+
+            for (const ggml_tensor * t : { x, w1, res, w2, mul1, add, mul2 }) {
+                if (t->type != GGML_TYPE_F32) { return false; }
+            }
+            // same shape for the activation tensors, 1-D contiguous weights, contiguous rows, no batching
+            if (x->ne[0] % 4 != 0 || x->ne[2] != 1 || x->ne[3] != 1) { return false; }
+            if (!ggml_are_same_shape(x, res) || !ggml_are_same_shape(x, add) || !ggml_are_same_shape(x, mul2)) { return false; }
+            if (!ggml_is_contiguous_rows(x) || !ggml_is_contiguous_rows(res)) { return false; }
+            if (!ggml_is_contiguous(add) || !ggml_is_contiguous(mul2)) { return false; }
+            for (const ggml_tensor * w : { w1, w2 }) {
+                if (w->ne[0] != x->ne[0] || ggml_nelements(w) != x->ne[0] || !ggml_is_contiguous(w)) { return false; }
+            }
+            if (((uintptr_t) x->data & 15) || ((uintptr_t) res->data & 15) || ((uintptr_t) w1->data & 15) || ((uintptr_t) w2->data & 15) ||
+                ((uintptr_t) add->data & 15) || ((uintptr_t) mul2->data & 15)) {
+                return false;
+            }
+            if (x->nb[1] % 16 != 0 || res->nb[1] % 16 != 0) { return false; }
+
+            // each block reads its whole row before writing, so an output may share memory with x or res only as the same buffer
+            const auto overlap = [](const ggml_tensor * a, const ggml_tensor * c) {
+                const uintptr_t a0 = (uintptr_t) a->data, a1 = a0 + ggml_nbytes(a);
+                const uintptr_t c0 = (uintptr_t) c->data, c1 = c0 + ggml_nbytes(c);
+                return a0 < c1 && c0 < a1;
+            };
+            for (const ggml_tensor * out : { add, mul2 }) {
+                for (const ggml_tensor * in : { x, res, w1, w2 }) {
+                    if (!overlap(out, in)) {
+                        continue;
+                    }
+                    const bool exact = (in == x || in == res) && ggml_is_contiguous(in) && in->data == out->data && ggml_nbytes(in) == ggml_nbytes(out);
+                    if (!exact) {
+                        return false;
+                    }
+                }
+            }
+            return !overlap(add, mul2);
+        }
+    }
+
     if (!ggml_can_fuse(cgraph, node_idx, ops)) {
         return false;
     }
@@ -4336,6 +4454,23 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
         return true;
     }
 
+    return false;
+}
+
+// Whether one of the nodes shortly after node i multiplies a quantized matrix by t through MMVQ.
+static bool ggml_cuda_mmvq_reads_soon(const ggml_cgraph * cgraph, int i, const ggml_tensor * t) {
+    const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+    for (int j = i + 1; j < std::min(cgraph->n_nodes, i + 16); ++j) {
+        const ggml_tensor * mm = cgraph->nodes[j];
+        if ((mm->op != GGML_OP_MUL_MAT && mm->op != GGML_OP_MUL_MAT_ID) || mm->src[1] != t ||
+                !ggml_is_quantized(mm->src[0]->type)) {
+            continue;
+        }
+        if (mm->op == GGML_OP_MUL_MAT ? ggml_cuda_should_use_mmvq(mm->src[0]->type, cc, t->ne[1])
+                                      : t->ne[2] <= get_mmvq_mmid_max_batch(mm->src[0]->type, cc)) {
+            return true;
+        }
+    }
     return false;
 }
 
@@ -5135,13 +5270,36 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         }
     }
 
+    static const bool rms_add_rms_off = getenv("GGML_CUDA_DISABLE_RMS_ADD_RMS") != nullptr;
+    if (!rms_add_rms_off && ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ADD, GGML_OP_RMS_NORM, GGML_OP_MUL }, {})) {
+        ggml_tensor * mul2 = cgraph->nodes[i + 4];
+        // the next pre-norm read by MMVQ also writes its q8_1 copy, as the RMS_NORM + MUL fusion below does
+        char * q8_1 = nullptr;
+        if (ggml_nrows(mul2) <= MMVQ_MAX_BATCH_SIZE && ggml_cuda_mmvq_reads_soon(cgraph, i + 4, mul2)) {
+            q8_1 = cuda_ctx->q8_1_cache.reserve(ggml_nrows(mul2) * GGML_PAD(mul2->ne[0], MATRIX_ROW_PADDING)/QK8_1 * sizeof(block_q8_1));
+        }
+        if (ggml_cuda_op_rms_norm_fused_add_rms(*cuda_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 2], cgraph->nodes[i + 3], mul2,
+                (block_q8_1 *) q8_1)) {
+            cuda_ctx->q8_1_cache.commit(mul2);
+        }
+        return 4;
+    }
+
     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ADD }, {})) {
         ggml_cuda_op_rms_norm_fused_add(*cuda_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 2]);
         return 2;
     }
 
     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL }, {})) {
-        ggml_cuda_op_rms_norm_fused(*cuda_ctx, node, cgraph->nodes[i + 1]);
+        ggml_tensor * mul = cgraph->nodes[i + 1];
+        // a norm read by MMVQ also writes the q8_1 copy, which saves the consumers' quantization kernel
+        char * q8_1 = nullptr;
+        if (ggml_nrows(mul) <= MMVQ_MAX_BATCH_SIZE && ggml_cuda_mmvq_reads_soon(cgraph, i + 1, mul)) {
+            q8_1 = cuda_ctx->q8_1_cache.reserve(ggml_nrows(mul) * GGML_PAD(mul->ne[0], MATRIX_ROW_PADDING)/QK8_1 * sizeof(block_q8_1));
+        }
+        if (ggml_cuda_op_rms_norm_fused(*cuda_ctx, node, mul, (block_q8_1 *) q8_1)) {
+            cuda_ctx->q8_1_cache.commit(mul);
+        }
         return 1;
     }
 
@@ -5290,6 +5448,9 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                 stream_ctx.concurrent_events.clear();
             }
 
+            // q8_1 copies are reused in stream order, so not across concurrent streams
+            cuda_ctx->q8_1_cache.reset(!should_launch_concurrent_events);
+
             for (int i = 0; i < cgraph->n_nodes; i++) {
                 ggml_tensor * node = cgraph->nodes[i];
 #ifdef USE_CUDA_GRAPH
@@ -5340,6 +5501,8 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                 if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
                     continue;
                 }
+
+                cuda_ctx->q8_1_cache.invalidate(node);
 
                 int nodes_to_skip = ggml_cuda_try_fuse(cuda_ctx, cgraph, i);
 
@@ -5683,9 +5846,9 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
     GGML_UNUSED(cgraph);
 #endif
 
+    // opt-in: concurrent streams disable the shared MMVQ q8_1 activations
     static const int graph_optimization_env = ggml_cuda_env_switch("GGML_CUDA_GRAPH_OPT");
-    const bool enable_graph_optimization =
-        ggml_cuda_switch_or_rdna3_5(graph_optimization_env, ggml_cuda_info().devices[cuda_ctx->device].cc);
+    const bool enable_graph_optimization = graph_optimization_env == 1;
 
     if (!enable_graph_optimization) {
         return;

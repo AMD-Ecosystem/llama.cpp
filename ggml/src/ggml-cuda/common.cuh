@@ -1360,6 +1360,38 @@ struct ggml_tensor_extra_gpu {
 struct ggml_cuda_graph;
 struct ggml_cuda_stream_context;
 
+// q8_1 copies of F32 activations as MMVQ reads them, kept for the other MMVQ consumers of the same tensor within
+// one graph evaluation: the Q/K/V projections of one norm output quantize it once, and a norm that writes the
+// copy itself saves the quantization kernel altogether. Buffers are allocated once and never moved, so captured
+// CUDA graphs keep valid pointers.
+struct ggml_cuda_q8_1_cache {
+    static constexpr int    n_entries = 4;
+    static constexpr size_t capacity  = 1024*1024; // bytes per entry; larger copies are not cached
+
+    struct entry {
+        const ggml_tensor * tensor = nullptr;
+        const void *        data   = nullptr; // tensor->data when the copy was made
+        size_t              nbytes = 0;       // bytes of tensor the copy covers
+        char *              buf    = nullptr;
+    };
+
+    entry entries[n_entries];
+    int   next    = 0;
+    bool  enabled = false;
+
+    // a new graph evaluation: forget every copy
+    void reset(bool enable);
+    // node writes its output: drop the copies of tensors it overlaps
+    void invalidate(const ggml_tensor * node);
+    // the copy of t, nullptr if there is none
+    const char * find(const ggml_tensor * t) const;
+    // the buffer for the next copy (size bytes), nullptr if it cannot be cached; commit() makes it t's copy
+    char * reserve(size_t size);
+    void   commit(const ggml_tensor * t);
+
+    ~ggml_cuda_q8_1_cache();
+};
+
 struct ggml_backend_cuda_context {
     int device;
     std::string name;
@@ -1374,6 +1406,8 @@ struct ggml_backend_cuda_context {
 #endif
 
     int curr_stream_no = 0;
+
+    ggml_cuda_q8_1_cache q8_1_cache;
 
 #ifdef USE_CUDA_GRAPH
     // Map from first_node_ptr to cuda_graph - allows multiple graphs per context
