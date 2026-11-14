@@ -26,6 +26,7 @@ typedef void (* fattn_kernel_t)(
         const char * __restrict__ sinks,
         const int  * __restrict__ KV_max,
         const int  * __restrict__ KV_rows,
+        const uint32_t * __restrict__ KV_vis,
         float      * __restrict__ dst,
         float2     * __restrict__ dst_meta,
         const float scale,
@@ -976,7 +977,8 @@ static __global__ void flash_attn_combine_results(
         const float  * VKQ_parts_ptr,
         const float2 * VKQ_meta_ptr,
         float * dst_ptr,
-        const int parallel_blocks) {
+        const int parallel_blocks,
+        block_q8_1 * dst_q8_1 = nullptr) {
     ggml_cuda_pdl_lc();
     const float  * GGML_CUDA_RESTRICT VKQ_parts = VKQ_parts_ptr;
     const float2 * GGML_CUDA_RESTRICT VKQ_meta  = VKQ_meta_ptr;
@@ -1025,14 +1027,80 @@ static __global__ void flash_attn_combine_results(
         VKQ_denominator += KQ_max_scale * meta[l].y;
     }
 
-    dst[tid] = VKQ_numerator / VKQ_denominator;
+    const float result = VKQ_numerator / VKQ_denominator;
+    dst[tid] = result;
+
+    if constexpr (D % QK8_1 == 0) {
+    if (dst_q8_1) {
+        // MMVQ's q8_1 copy of dst, as quantize_q8_1 makes it: the 32 lanes of a warp hold one 32-value block
+        const float amax = warp_reduce_max<QK8_1>(fabsf(result));
+        const float d    = amax / 127.0f;
+        const int8_t q   = amax == 0.0f ? 0 : roundf(result / d);
+        const int sum    = warp_reduce_sum<QK8_1>((int) q);
+        block_q8_1 * y = dst_q8_1 + (j_dst_unrolled*D + tid) / QK8_1;
+        y->qs[tid % QK8_1] = q;
+        if (tid % QK8_1 == 0) {
+            y->ds = make_half2(d, d * sum);
+        }
+    }
+    }
+}
+
+// one bit per Q tile and KV tile: whether the mask lets any row of the Q tile see any key of the KV tile
+// hidden tiles add nothing to the softmax, so the kernels skip them without loading K and V
+template <int ncols1>
+static __global__ void flash_attn_mask_to_tile_vis(
+        const half * mask_ptr, uint32_t * vis_ptr, const int n_kv, const int nbatch_fa, const uint3 ne01,
+        const int64_t s31, const int64_t s33) {
+    const half * GGML_CUDA_RESTRICT mask = mask_ptr + blockIdx.y*s33;
+
+    __shared__ uint32_t bits;
+    if (threadIdx.x == 0) {
+        bits = 0;
+    }
+    ggml_cuda_pdl_sync();
+    __syncthreads();
+
+    // items of 8 mask values: nbatch_fa/8 per row and tile
+    const int chunks = nbatch_fa / 8;
+    const int ipt    = ncols1*chunks;
+    for (int item = threadIdx.x; item < 32*ipt; item += blockDim.x) {
+        const int t = item / ipt;
+        const int j = (item % ipt) / chunks;
+        const int k = (blockIdx.z*32 + t)*nbatch_fa + (item % chunks)*8;
+        if (k >= n_kv) {
+            continue;
+        }
+        const half * row = mask + fastmodulo(blockIdx.x*ncols1 + j, ne01)*s31;
+        bool visible = false;
+        if (k + 8 <= n_kv) {
+            const float4 v = *(const float4 *) (row + k);
+            const half2 * h = (const half2 *) &v;
+#pragma unroll
+            for (int l = 0; l < 4; ++l) {
+                const float2 m = __half22float2(h[l]);
+                visible = visible || m.x != -INFINITY || m.y != -INFINITY;
+            }
+        } else {
+            for (int l = k; l < n_kv; ++l) {
+                visible = visible || __half2float(row[l]) != -INFINITY;
+            }
+        }
+        if (visible) {
+            atomicOr(&bits, 1u << t);
+        }
+    }
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        vis_ptr[(blockIdx.y*gridDim.x + blockIdx.x)*gridDim.z + blockIdx.z] = bits;
+    }
 }
 
 template <int DV, int ncols1, int ncols2>
 void launch_fattn(
     ggml_backend_cuda_context & ctx, ggml_tensor * dst, fattn_kernel_t fattn_kernel, const int nwarps, const size_t nbytes_shared,
     const int nbatch_fa, const bool need_f16_K, const bool need_f16_V, const bool stream_k, const bool use_sparse,
-    const int warp_size = WARP_SIZE, const bool async_kv_preload = false
+    const int warp_size = WARP_SIZE, const bool async_kv_preload = false, const bool tile_vis = false
 ) {
     constexpr int ncols = ncols1 * ncols2;
 
@@ -1188,6 +1256,34 @@ void launch_fattn(
         CUDA_CHECK(cudaGetLastError());
     }
 
+    // few Q columns: KV tile visibility bits, computed once per mask (mask rows must be 16-byte aligned)
+    ggml_cuda_pool_alloc<uint32_t> tile_vis_pool(ctx.pool());
+    const uint32_t * tile_vis_bits = nullptr;
+    if (tile_vis && mask && !kv_rows && !use_sparse && nbatch_fa % 8 == 0 && (uintptr_t) mask->data % 16 == 0 &&
+            mask->nb[1] % 16 == 0 && mask->nb[3] % 16 == 0) {
+        const int nwords = ((n_kv_cols + nbatch_fa - 1) / nbatch_fa + 31) / 32;
+        const dim3 blocks_num_vis(ntiles_x, mask->ne[3], nwords);
+        const uint64_t variant = (uint64_t(ncols1) << 56) ^ (uint64_t(nbatch_fa) << 40) ^ (uint64_t(ntiles_x) << 24) ^ uint64_t(n_kv_cols);
+        tile_vis_bits = (const uint32_t *) ctx.fa_vis_cache.find(mask, variant);
+        if (tile_vis_bits == nullptr) {
+            const size_t nbytes = size_t(nwords)*blocks_num_vis.x*blocks_num_vis.y*sizeof(uint32_t);
+            uint32_t * bits = (uint32_t *) ctx.fa_vis_cache.reserve(nbytes);
+            const bool cached = bits != nullptr;
+            if (!cached) {
+                bits = tile_vis_pool.alloc(nbytes/sizeof(uint32_t));
+            }
+            ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num_vis, dim3(128, 1, 1), 0, main_stream);
+            ggml_cuda_kernel_launch(flash_attn_mask_to_tile_vis<ncols1>, launch_params,
+                (const half *) mask->data, bits, int(n_kv_cols), nbatch_fa, init_fastdiv_values(Q->ne[1]),
+                int64_t(mask->nb[1] / sizeof(half)), int64_t(mask->nb[3] / sizeof(half)));
+            CUDA_CHECK(cudaGetLastError());
+            if (cached) {
+                ctx.fa_vis_cache.commit(mask, variant);
+            }
+            tile_vis_bits = bits;
+        }
+    }
+
     // K/V are shared by all slices when read through kv_rows
     if (kv_rows) {
         nb13 = 0;
@@ -1318,6 +1414,7 @@ void launch_fattn(
         sinks ? ((const char *) sinks->data) : nullptr,
         KV_max.ptr,
         kv_rows ? (const int *) kv_rows->data : nullptr,
+        tile_vis_bits,
         !stream_k && parallel_blocks > 1 ? dst_tmp.ptr : (float *) KQV->data, dst_tmp_meta.ptr,
         scale, max_bias, m0, m1, n_head_log2, logit_softcap,
         Q->ne[0], ne01,     Q->ne[2], Q->ne[3], Q->nb[1], Q->nb[2], Q->nb[3],
@@ -1369,9 +1466,17 @@ void launch_fattn(
         const dim3 blocks_num_combine(Q->ne[1], Q->ne[2], Q->ne[3]);
         const size_t nbytes_shared_combine = parallel_blocks*sizeof(float2);
 
+        // the graph evaluation may ask for MMVQ's q8_1 copy of the result (rows of whole, unpadded 32-value blocks)
+        block_q8_1 * q8_1 = nullptr;
+        if (ctx.fa_q8_1 && DV % QK8_1 == 0 && warp_size == QK8_1 && ggml_is_contiguous(KQV) &&
+                (KQV->ne[0]*KQV->ne[1]) % MATRIX_ROW_PADDING == 0) {
+            q8_1 = ctx.fa_q8_1;
+            ctx.fa_q8_1_written = true;
+        }
+
         const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num_combine, block_dim_combine, nbytes_shared_combine, main_stream);
         ggml_cuda_kernel_launch(flash_attn_combine_results<DV>, launch_params,
-            dst_tmp.ptr, dst_tmp_meta.ptr, (float *) KQV->data, parallel_blocks);
+            dst_tmp.ptr, dst_tmp_meta.ptr, (float *) KQV->data, parallel_blocks, q8_1);
     }
     CUDA_CHECK(cudaGetLastError());
 }

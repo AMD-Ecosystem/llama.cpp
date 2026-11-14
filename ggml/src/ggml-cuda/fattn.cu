@@ -5,6 +5,30 @@
 #include "fattn-vec.cuh"
 #include "fattn.cuh"
 
+// pad a GQA group that 8 does not divide (e.g. GQA 6) to one 8-column tile, so K/V are read once per KV head
+// GGML_HIP_FA_GQA_PAD: 0 never, 1 batches of up to 8 tokens (default on RDNA3.5), 2 decode with at least 16384 KV cells
+static bool ggml_cuda_fattn_rdna_gqa_pad(const ggml_tensor * Q, const ggml_tensor * K, const int cc) {
+    static const int env_mode = [] {
+        const char * value = getenv("GGML_HIP_FA_GQA_PAD");
+        return value == nullptr ? -1 : atoi(value);
+    }();
+    if (Q->ne[1] > 8) {
+        return false;
+    }
+    const int mode = env_mode != -1 ? env_mode : (GGML_CUDA_CC_IS_RDNA3_5(cc) ? 1 : 0);
+    switch (mode) {
+        case 0:  return false;
+        case 2:  return Q->ne[1] == 1 && K->ne[1] >= 16384;
+        default: return true;
+    }
+}
+
+// read K/V through row lists, e.g. only the visible sliding window instead of the whole SWA cache
+static bool ggml_cuda_fattn_rdna_kv_rows_enabled(const int cc) {
+    static const int env_switch = ggml_cuda_env_switch("GGML_HIP_FA_KV_ROWS");
+    return ggml_cuda_switch_or_rdna3_5(env_switch, cc);
+}
+
 #if !defined(GGML_USE_MUSA)
 
 // one list per group of ncols1 queries: a column is selected if any query of the group can see it
@@ -268,6 +292,12 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2(ggml_backend_cuda_con
     // On RDNA it is preferable to minimize wasted compute vs. duplicate I/O for the mask.
     if (amd_wmma_available(cc)) {
         if (use_gqa_opt && gqa_ratio % 8 == 0) {
+            ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 8>(ctx, dst);
+            return;
+        }
+
+        // small batches are K/V bandwidth bound, large batches fill the tiles without padding
+        if (use_gqa_opt && gqa_ratio > 4 && ggml_cuda_fattn_rdna_gqa_pad(Q, K, cc)) {
             ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 8>(ctx, dst);
             return;
         }
@@ -682,8 +712,15 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
     // only the MMA kernel reads K/V through kv_rows
     if (kv_rows) {
-        return GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc) && mask && Q->ne[0] != 40 && Q->ne[0] != 72 ?
-            BEST_FATTN_KERNEL_MMA_F16 : BEST_FATTN_KERNEL_NONE;
+        if (GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc) && mask && Q->ne[0] != 40 && Q->ne[0] != 72) {
+            return BEST_FATTN_KERNEL_MMA_F16;
+        }
+        // the WMMA kernel reads kv_rows only on the GQA path (ncols2 >= 2)
+        if (amd_wmma_available(cc) && ggml_cuda_fattn_rdna_kv_rows_enabled(cc) && mask && gqa_opt_applies &&
+                Q->ne[0] <= 256 && Q->ne[0] != 40 && Q->ne[0] != 72) {
+            return BEST_FATTN_KERNEL_MMA_F16;
+        }
+        return BEST_FATTN_KERNEL_NONE;
     }
 
     // For small batch sizes the vector kernel may be preferable over the kernels optimized for large batch sizes:
@@ -760,6 +797,12 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     // AMD WMMA is faster than the tile kernel if the wide tiles with high arithmetic intensity can be utilized.
     if ((amd_wmma_available(cc) && gqa_opt_applies && Q->ne[0] <= 256) && Q->ne[0] != 40 && Q->ne[0] != 72 &&
             Q->ne[1] * gqa_ratio_eff > (Q->ne[0] <= 128 ? 8 : 16)) {
+        return BEST_FATTN_KERNEL_MMA_F16;
+    }
+
+    // with a padded 8-column GQA tile the MMA kernel reads K/V once per KV head
+    if (amd_wmma_available(cc) && gqa_opt_applies && Q->ne[0] <= 256 && Q->ne[0] != 40 && Q->ne[0] != 72 &&
+            gqa_ratio > 4 && gqa_ratio % 8 != 0 && ggml_cuda_fattn_rdna_gqa_pad(Q, K, cc)) {
         return BEST_FATTN_KERNEL_MMA_F16;
     }
 
