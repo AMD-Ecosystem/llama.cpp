@@ -4145,6 +4145,40 @@ struct test_rms_norm_add_rms_norm : public test_case {
     }
 };
 
+// two single-token MUL_MATs that share a leaf or a computed input
+struct test_mul_mat_pair_add : public test_case {
+    const bool shared_input_is_leaf;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_PAIR_ADD";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::string vars() override {
+        return VARS_TO_STR1(shared_input_is_leaf);
+    }
+
+    test_mul_mat_pair_add(bool shared_input_is_leaf = true) : shared_input_is_leaf(shared_input_is_leaf) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * w_a = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 256, 128);
+        ggml_tensor * w_b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 256, 128);
+        ggml_tensor * x   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 256, 1);
+        ggml_set_name(w_a, "w_a");
+        ggml_set_name(w_b, "w_b");
+        ggml_set_param(x);
+        ggml_set_name(x, "x");
+        if (!shared_input_is_leaf) {
+            x = ggml_scale(ctx, x, 0.5f);
+        }
+        ggml_tensor * out = ggml_add(ctx, ggml_mul_mat(ctx, w_a, x), ggml_mul_mat(ctx, w_b, x));
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
 struct test_rms_norm_mul_add : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne;
@@ -11604,6 +11638,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_rms_norm_add_rms_norm({64, 5}, 1e-5f, variant));
         test_cases.emplace_back(new test_rms_norm_add_rms_norm({3584, 7}, 1e-5f, variant));
     }
+    test_cases.emplace_back(new test_mul_mat_pair_add(true));
+    test_cases.emplace_back(new test_mul_mat_pair_add(false));
     // shapes below exceed the CUDA gridDim.y/gridDim.z limit of 65535 (#27901)
     test_cases.emplace_back(new test_norm        (GGML_TYPE_F32, {4, 1, 65536, 1}, false, 1e-6f));
     test_cases.emplace_back(new test_rms_norm    (GGML_TYPE_F32, {4, 1, 65536, 1}, false, 1e-6f, false));
