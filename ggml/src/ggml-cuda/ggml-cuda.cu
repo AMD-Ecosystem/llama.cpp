@@ -156,6 +156,11 @@ static bool ggml_cuda_env_set(const char * name) {
     return getenv(name) != nullptr;
 }
 
+static bool ggml_cuda_fuse_norm2_enabled(int device) {
+    static const int env_switch = ggml_cuda_env_switch("GGML_CUDA_FUSE_NORM2");
+    return ggml_cuda_switch_or_rdna3_5(env_switch, ggml_cuda_info().devices[device].cc);
+}
+
 static bool ggml_cuda_unified_memory_enabled() {
     static const bool enabled = ggml_cuda_env_flag("GGML_CUDA_ENABLE_UNIFIED_MEMORY");
     return enabled;
@@ -5117,6 +5122,17 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ROPE }, {})) {
         ggml_cuda_op_rms_norm_mul_rope_fused(*cuda_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 2], nullptr);
         return 2;
+    }
+
+    // sandwich-norm block boundary: post-norm, residual add and the next pre-norm
+    if (ggml_cuda_fuse_norm2_enabled(cuda_ctx->device) && i + 4 < cgraph->n_nodes) {
+        const enum ggml_op norm2_ops[] = { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ADD, GGML_OP_RMS_NORM, GGML_OP_MUL };
+        const int norm2_outputs[] = { i + 2, i + 4 };
+        if (ggml_can_fuse_subgraph(cgraph, i, 5, norm2_ops, norm2_outputs, 2) &&
+                ggml_cuda_rms_norm_add_rms_norm_supported(cgraph->nodes + i)) {
+            ggml_cuda_op_rms_norm_add_rms_norm(*cuda_ctx, cgraph->nodes + i);
+            return 4;
+        }
     }
 
     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ADD }, {})) {

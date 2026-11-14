@@ -18,3 +18,7 @@ void ggml_cuda_op_rms_norm_fused_add(ggml_backend_cuda_context & ctx,
 void ggml_cuda_op_rms_norm_back(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 
 void ggml_cuda_op_l2_norm(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
+
+// rms_norm -> mul -> add -> rms_norm -> mul in one kernel, writes nodes[2] and nodes[4]
+bool ggml_cuda_rms_norm_add_rms_norm_supported(ggml_tensor * const * nodes);
+void ggml_cuda_op_rms_norm_add_rms_norm(ggml_backend_cuda_context & ctx, ggml_tensor * const * nodes);
