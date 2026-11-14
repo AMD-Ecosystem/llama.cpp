@@ -1507,6 +1507,9 @@ struct ggml_cuda_mm_fusion_args_host {
     const ggml_tensor * shared_up = nullptr;
     const ggml_tensor * shared_gate = nullptr;
     ggml_tensor * shared_dst = nullptr;
+    // MMVQ: a second matrix of the same type and row size multiplied by the same src1 (e.g. Q and K), written to x2_dst
+    const ggml_tensor * x2 = nullptr;
+    ggml_tensor * x2_dst = nullptr;
 };
 struct ggml_cuda_mm_fusion_args_device {
     const void * x_bias = nullptr;
@@ -1520,6 +1523,10 @@ struct ggml_cuda_mm_fusion_args_device {
     const void * shared_gate = nullptr;
     float * shared_dst = nullptr;
     uint32_t shared_stride_col_dst = 0;
+    const void * x2 = nullptr;
+    float * x2_dst = nullptr;
+    uint32_t x2_nrows = 0;
+    uint32_t x2_block0 = 0; // the first CUDA block that computes x2
 };
 
 struct ggml_cuda_kernel_launch_params {

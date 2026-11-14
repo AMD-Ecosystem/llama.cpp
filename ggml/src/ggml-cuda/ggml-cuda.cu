@@ -4457,6 +4457,35 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
     return false;
 }
 
+// whether b can run in a's MMVQ launch: same src1, weight type and row size (e.g. Q and K)
+static bool ggml_cuda_mul_mat_pair_matches(const ggml_tensor * a, const ggml_tensor * b) {
+    if (a->op != GGML_OP_MUL_MAT || b->op != GGML_OP_MUL_MAT || a->src[1] != b->src[1]) {
+        return false;
+    }
+    const ggml_tensor * x  = a->src[0];
+    const ggml_tensor * x2 = b->src[0];
+    return x->op == GGML_OP_NONE && x2->op == GGML_OP_NONE &&
+           ggml_is_quantized(x->type) && x2->type == x->type && x2->ne[0] == x->ne[0] && x2->nb[1] == x->nb[1] &&
+           ggml_is_matrix(x) && ggml_is_matrix(x2) && ggml_is_contiguous(x) && ggml_is_contiguous(x2) &&
+           a->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32 && ggml_is_contiguous(a) && ggml_is_contiguous(b);
+}
+
+// Whether one of the next few nodes reads node i in a way that may fuse with it (a bias add, a scale, a GLU).
+static bool ggml_cuda_feeds_next(const ggml_cgraph * cgraph, int i) {
+    for (int j = i + 1; j < std::min(cgraph->n_nodes, i + 4); ++j) {
+        const ggml_tensor * next = cgraph->nodes[j];
+        if (next->op != GGML_OP_ADD && next->op != GGML_OP_ADD_ID && next->op != GGML_OP_MUL && next->op != GGML_OP_GLU) {
+            continue;
+        }
+        for (int k = 0; k < GGML_MAX_SRC; ++k) {
+            if (next->src[k] == cgraph->nodes[i]) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 // Whether one of the nodes shortly after node i multiplies a quantized matrix by t through MMVQ.
 static bool ggml_cuda_mmvq_reads_soon(const ggml_cgraph * cgraph, int i, const ggml_tensor * t) {
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
@@ -5249,6 +5278,17 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         return fused_node_count - 1;
     }
 
+    // two MUL_MATs of one src1 column that graph_optimize put next to each other: one MMVQ launch
+    if (i + 1 < cgraph->n_nodes && ggml_cuda_mul_mat_pair_matches(node, cgraph->nodes[i + 1]) &&
+            (cgraph->nodes[i + 1]->flags & GGML_TENSOR_FLAG_COMPUTE) && ggml_nrows(node->src[1]) == 1 &&
+            ggml_cuda_should_fuse_mul_mat_vec_q(node) && ggml_cuda_should_fuse_mul_mat_vec_q(cgraph->nodes[i + 1])) {
+        ggml_cuda_mm_fusion_args_host fusion{};
+        fusion.x2     = cgraph->nodes[i + 1]->src[0];
+        fusion.x2_dst = cgraph->nodes[i + 1];
+        ggml_cuda_mul_mat_vec_q(*cuda_ctx, node->src[0], node->src[1], nullptr, node, &fusion);
+        return 1;
+    }
+
     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ROPE, GGML_OP_VIEW, GGML_OP_SET_ROWS }, {})) {
         ggml_cuda_op_rms_norm_mul_rope_fused(*cuda_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 2], cgraph->nodes[i + 4]);
         return 4;
@@ -5726,6 +5766,27 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
                 break;
             }
         }
+        // move a MUL_MAT next to an earlier one with the same src1 and weight type, so both run in one MMVQ launch
+        // MUL_MATs read by a bias add, scale or GLU stay in place for those fusions
+        for (int i = 0; i + 2 < cgraph->n_nodes; ++i) {
+            if (cgraph->nodes[i]->op != GGML_OP_MUL_MAT || ggml_cuda_feeds_next(cgraph, i)) {
+                continue;
+            }
+            if (ggml_cuda_mul_mat_pair_matches(cgraph->nodes[i], cgraph->nodes[i + 1])) {
+                i += 1;
+                continue;
+            }
+            for (int j = i + 2; j < std::min(cgraph->n_nodes, i + 32); ++j) {
+                if (!ggml_cuda_mul_mat_pair_matches(cgraph->nodes[i], cgraph->nodes[j]) || ggml_cuda_feeds_next(cgraph, j)) {
+                    continue;
+                }
+                std::rotate(cgraph->nodes + i + 1, cgraph->nodes + j, cgraph->nodes + j + 1);
+                params->add_alloc_dep(params->user_data, cgraph->nodes[i]->src[1], cgraph->nodes[i + 1]);
+                i += 1;
+                break;
+            }
+        }
+
         for (int i = 0; i < cgraph->n_nodes; ++i) {
             // Keep the inputs of the fused gate/up/GLU MMQ kernel alive until the GLU so that they cannot alias its output (under op offload the weights are buffer copies).
             if (i + 2 < cgraph->n_nodes && cgraph->nodes[i + 2]->op == GGML_OP_GLU) {
