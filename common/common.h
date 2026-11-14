@@ -1030,9 +1030,10 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
 struct llama_model_params   common_model_params_to_llama  (      common_params & params);
 struct llama_context_params common_context_params_to_llama(const common_params & params);
 
-// apply --fit to mparams and cparams, no-op if params.fit_params is false
-// with reserve_arena, devices that support it reserve compute memory before the weights load, sized by a dry run (also with --fit off)
-void common_fit_apply(common_params & params, struct llama_model_params & mparams, struct llama_context_params & cparams, bool reserve_arena = false);
+struct common_fit_arenas;
+
+// apply --fit to mparams and cparams; with arenas, also reserve compute memory before the weights load (even with --fit off)
+void common_fit_apply(common_params & params, struct llama_model_params & mparams, struct llama_context_params & cparams, common_fit_arenas * arenas = nullptr);
 
 struct llama_model * common_model_load(const std::vector<std::string> & paths, const struct llama_model_params & mparams);
 

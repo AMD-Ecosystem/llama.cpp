@@ -426,7 +426,8 @@ static struct vbuffer * ggml_vbuffer_alloc(ggml_backend_buffer_type_t buft, cons
 
     for (int n = 0; n < talloc->n_chunks; n++) {
         size_t chunk_size = talloc->chunks[n]->max_size;
-        buf->chunks[n] = ggml_backend_buft_alloc_buffer(buft, chunk_size);
+        buf->chunks[n] = usage == GGML_BACKEND_BUFFER_USAGE_COMPUTE ?
+            ggml_backend_buft_alloc_compute_buffer(buft, chunk_size) : ggml_backend_buft_alloc_buffer(buft, chunk_size);
         if (buf->chunks[n] == NULL) {
             ggml_vbuffer_free(buf);
             return NULL;

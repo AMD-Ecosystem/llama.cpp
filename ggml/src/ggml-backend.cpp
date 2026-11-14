@@ -45,6 +45,19 @@ ggml_backend_buffer_t ggml_backend_buft_alloc_buffer(ggml_backend_buffer_type_t 
     return buft->iface.alloc_buffer(buft, size);
 }
 
+ggml_backend_buffer_t ggml_backend_buft_alloc_compute_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+    ggml_backend_dev_t dev = ggml_backend_buft_get_device(buft);
+    ggml_backend_reg_t reg = dev != nullptr ? ggml_backend_dev_backend_reg(dev) : nullptr;
+    if (reg != nullptr && size != 0) {
+        typedef ggml_backend_buffer_t (*alloc_compute_buffer_t)(ggml_backend_buffer_type_t, size_t);
+        auto alloc_compute = (alloc_compute_buffer_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_alloc_compute_buffer");
+        if (alloc_compute != nullptr) {
+            return alloc_compute(buft, size);
+        }
+    }
+    return ggml_backend_buft_alloc_buffer(buft, size);
+}
+
 // shared planning logic for allocating a list of tensors into one or more buffers of the given type
 struct ggml_backend_buft_alloc_buffer_n_plan_item {
     size_t size;  // total bytes for this buffer

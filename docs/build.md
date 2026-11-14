@@ -440,6 +440,7 @@ To keep the compute and scratch buffers in the carveout, the HIP backend can res
 - The arena is sized by a dry run of the model (and of the draft model, if any) before loading. This also happens with `--fit off`.
 - Compute buffers and the scratch pool are placed in the arena. If a buffer does not fit, it is allocated as before and a warning is printed.
 - Weights and KV cache are not placed in the arena.
+- Model contexts share reservations on a device. The arena is released after the last reservation and its outstanding buffers are released, including on server sleep. A later model load can reserve a different size.
 
 Environment variables:
 
