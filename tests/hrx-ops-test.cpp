@@ -5122,6 +5122,139 @@ static void run_long_flash_attention_analytic_case(LongFlashAttentionPattern pat
     restore_environment_value(kDisableQwenDispatchEnv, had_original_env, original_env_value);
 }
 
+
+static void run_partition_flash_attention_case(int64_t heads, int64_t kv_heads, int64_t dim,
+                                               int64_t n, bool gated, bool execute,
+                                               int64_t query_count = 1, bool transposed_value = false) {
+    ggml_init_params params = {};
+    params.mem_size = 4 * 1024 * 1024;
+    params.no_alloc = true;
+    ggml_context * ctx = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+    ggml_tensor * query = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, dim, heads, query_count);
+    ggml_tensor * key = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, dim, kv_heads, n);
+    ggml_tensor * value = transposed_value ? ggml_new_tensor_3d(ctx, GGML_TYPE_F16, n, dim, kv_heads) :
+                                           ggml_new_tensor_3d(ctx, GGML_TYPE_F16, dim, kv_heads, n);
+    ggml_tensor * mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, n, query_count);
+    ggml_tensor * query_view = ggml_permute(ctx, query, 0, 2, 1, 3);
+    ggml_tensor * key_view = ggml_permute(ctx, key, 0, 2, 1, 3);
+    ggml_tensor * value_view = transposed_value ? ggml_permute(ctx, value, 1, 0, 2, 3) :
+                                                ggml_permute(ctx, value, 0, 2, 1, 3);
+    ggml_tensor * output = build_qwen_flash_attention_graph(ctx, query_view, key_view, value_view, mask, dim);
+    ggml_tensor * gate = nullptr;
+    if (gated) {
+        gate = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 2 * dim, heads, query_count);
+        ggml_tensor * gate_view = ggml_view_3d(ctx, gate, dim, heads, query_count, gate->nb[1], gate->nb[2], 0);
+        ggml_tensor * sigmoid = ggml_sigmoid(ctx, ggml_cont_2d(ctx, gate_view, dim * heads, query_count));
+        output = ggml_mul(ctx, ggml_reshape_2d(ctx, output, dim * heads, query_count), sigmoid);
+    }
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    graph->uid = 951157;
+    ggml_build_forward_expand(graph, output);
+    ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+    REQUIRE(imported.valid());
+    ggml::hrx::DispatchScheduler scheduler;
+    const bool scheduled = scheduler.schedule_graph(imported.graph, { "gfx1100" });
+    if (transposed_value) {
+        REQUIRE(!scheduled);
+        ggml_free(ctx);
+        return;
+    }
+    REQUIRE(scheduled);
+    const auto & plan = scheduler.plan();
+    REQUIRE(plan.valid());
+    const bool split = n > 2048 && query_count == 1 && !transposed_value &&
+                       ((heads == 8 && kv_heads == 2 && dim == 256) ||
+                        (heads == 32 && kv_heads == 4 && dim == 128));
+    if (!split) {
+        for (const auto & dispatch : plan.dispatches) {
+            REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) != "loom_libs:ggml_flash_attention_partition_produce");
+        }
+        ggml_free(ctx);
+        return;
+    }
+    REQUIRE(plan.dispatches.size() == 2);
+    REQUIRE(plan.transients.size() == 3);
+    REQUIRE(plan.completion_counter_requests.empty());
+    REQUIRE(plan.constant_initializations.empty());
+    const auto & producer = plan.dispatches[0];
+    const auto & reducer = plan.dispatches[1];
+    REQUIRE(kernel_name_for_id(producer.kernel.kernel_id) == "loom_libs:ggml_flash_attention_partition_produce");
+    REQUIRE(kernel_name_for_id(reducer.kernel.kernel_id) == "loom_libs:ggml_flash_attention_partition_reduce");
+    REQUIRE(producer.kernel.workload_specialization == ggml::hrx::WorkloadSpecialization::Dynamic);
+    REQUIRE(producer.kernel.integer_parameters.at("key_value_token_count") == n);
+    const int64_t partitions = heads == 8 ? 64 : 32;
+    int64_t capacity = 4096;
+    while (capacity < n) {
+        capacity *= 2;
+    }
+    REQUIRE(producer.kernel.compile_parameters.at("ggml.flash_attention.partition_length") == std::to_string(capacity / partitions));
+    REQUIRE(reducer.kernel.compile_parameters.count("ggml.flash_attention.partition_length") == 0);
+    REQUIRE(reducer.kernel.integer_parameters.empty());
+    const size_t scalar_bytes = static_cast<size_t>(heads * partitions) * sizeof(float);
+    for (size_t i = 0; i < 3; ++i) {
+        REQUIRE(plan.transients[i].size == scalar_bytes * (i == 2 ? dim : 1));
+        REQUIRE(producer.bindings[4 + i].value == plan.transients[i].value);
+        REQUIRE(reducer.bindings[i].value == plan.transients[i].value);
+    }
+    const auto commands = ggml::hrx::build_command_program(imported.graph, plan, ggml::hrx::get_qwen_kernel_corpus(), "gfx1100");
+    REQUIRE(commands.valid());
+    REQUIRE(commands.commands.size() == 2);
+    REQUIRE(commands.commands[1].dependencies.size() == 1);
+    REQUIRE(commands.commands[1].dependencies[0] == 0);
+    REQUIRE(commands.transients.arena_size == scalar_bytes * (dim + 2));
+    for (size_t i = 0; i < 3; ++i) {
+        REQUIRE(commands.commands[0].bindings[4 + i].access == ggml::hrx::ResourceAccess::Write);
+        REQUIRE(commands.commands[1].bindings[i].access == ggml::hrx::ResourceAccess::Read);
+    }
+    if (execute) {
+        ggml_backend_t backend = ggml_backend_hrx_init(0);
+        REQUIRE(backend != nullptr);
+        ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+        REQUIRE(buffer != nullptr);
+        std::vector<float> q(static_cast<size_t>(heads * dim), 0.0f);
+        std::vector<float> g(static_cast<size_t>(heads * dim * 2), 0.0f);
+        std::vector<ggml_fp16_t> k(static_cast<size_t>(n * kv_heads * dim), ggml_fp32_to_fp16(0.0f));
+        std::vector<ggml_fp16_t> v(k.size(), ggml_fp32_to_fp16(0.0f));
+        std::vector<ggml_fp16_t> m(static_cast<size_t>(n), ggml_fp32_to_fp16(0.0f));
+        std::vector<float> expected(q.size());
+        ggml_backend_tensor_set(query, q.data(), 0, q.size() * sizeof(float));
+        ggml_backend_tensor_set(key, k.data(), 0, k.size() * sizeof(ggml_fp16_t));
+        if (gate != nullptr) {
+            ggml_backend_tensor_set(gate, g.data(), 0, g.size() * sizeof(float));
+        }
+        // A distinct tail exposes duplicate work in empty reserved partitions. Change inputs between replays to catch stale scratch.
+        for (int replay = 0; replay < 3; ++replay) {
+            const bool all_masked = replay == 1;
+            std::fill(m.begin(), m.end(), ggml_fp32_to_fp16(all_masked ? -std::numeric_limits<float>::infinity() : 0.0f));
+            for (int64_t kv = 0; kv < kv_heads; ++kv) {
+                for (int64_t channel = 0; channel < dim; ++channel) {
+                    const float tail = static_cast<float>((replay + 1) * (kv + 1) * 100 + channel % 3);
+                    v[static_cast<size_t>(((n - 1) * kv_heads + kv) * dim + channel)] = ggml_fp32_to_fp16(tail);
+                    for (int64_t group = 0; group < heads / kv_heads; ++group) {
+                        expected[static_cast<size_t>((kv * (heads / kv_heads) + group) * dim + channel)] =
+                            all_masked ? 0.0f : tail / static_cast<float>(n) * (gated ? 0.5f : 1.0f);
+                    }
+                }
+            }
+            ggml_backend_tensor_set(value, v.data(), 0, v.size() * sizeof(ggml_fp16_t));
+            ggml_backend_tensor_set(mask, m.data(), 0, m.size() * sizeof(ggml_fp16_t));
+            auto * state = static_cast<ggml_backend_hrx_context *>(backend->context);
+            const auto execution = ggml::hrx::GraphExecutor(*state).execute(*graph);
+            REQUIRE(execution.success());
+            const auto expected_replay = ggml::hrx::graph_replay_disabled_by_environment() ?
+                ggml::hrx::HrxGraphReplayEvent::Disabled : replay == 0 ?
+                ggml::hrx::HrxGraphReplayEvent::MissBuild : ggml::hrx::HrxGraphReplayEvent::Hit;
+            REQUIRE(execution.graph_replay_event == expected_replay);
+            ggml_backend_synchronize(backend);
+            require_close(get_f32_tensor(backend, output), expected, 2.0e-5f, 1.0e-3f);
+        }
+        ggml_backend_buffer_free(buffer);
+        ggml_backend_free(backend);
+    }
+    ggml_free(ctx);
+}
+
 static void run_asymmetric_flash_attention_cpu_reference_case() {
     static constexpr const char * kDisableQwenDispatchEnv = "GGML_HRX_DISABLE_QWEN_DISPATCH";
     const char *                  original_env            = std::getenv(kDisableQwenDispatchEnv);
@@ -10581,6 +10714,21 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
 }
 
 static void register_flash_attention_cases(Suite & suite) {
+    suite.host_case("partition_flash_attention.schedule", [] {
+        for (int64_t n : { 2048, 2049, 4096, 4097, 65536, 65537, 262144 }) {
+            run_partition_flash_attention_case(8, 2, 256, n, true, false);
+            run_partition_flash_attention_case(32, 4, 128, n, false, false);
+        }
+        run_partition_flash_attention_case(8, 2, 256, 4096, false, false, 2);
+        run_partition_flash_attention_case(16, 1, 64, 4096, false, false);
+        run_partition_flash_attention_case(8, 2, 256, 4096, false, false, 1, true);
+    });
+    suite.device_case("partition_flash_attention.gated.empty_tail_replay", [] {
+        run_partition_flash_attention_case(8, 2, 256, 32769, true, true);
+    });
+    suite.device_case("partition_flash_attention.ungated.empty_tail_replay", [] {
+        run_partition_flash_attention_case(32, 4, 128, 65537, false, true);
+    });
     suite.device_case("common_flash_attention.prefill.head128.query256.kv256.exact", [] {
         run_common_flash_attention_cpu_reference_case(128, 256, 256, 1.0f / std::sqrt(128.0f),
                                                       "loom_libs:ggml_flash_attention_f32_f16_wmma");
@@ -10622,6 +10770,9 @@ static void register_flash_attention_cases(Suite & suite) {
         run_common_flash_attention_cpu_reference_case(
             320, 2, 64, 1.0f / std::sqrt(320.0f), "loom_libs:ggml_flash_attention_decode_split_f32_f16_wmma_next_q8",
             64);
+    });
+    suite.device_case("qwen_decode_split_flash_attention.query1.kv2048.common", [] {
+        run_qwen_decode_split_flash_attention_scheduling_case(1, 2048, true);
     });
     suite.device_case("qwen_decode_split_flash_attention.query1.kv512",
                       [] { run_qwen_decode_split_flash_attention_scheduling_case(1, 512); });
