@@ -21,6 +21,10 @@ static constexpr KernelCatalogRef kFlashAttentionF32F16WmmaPublishF16Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_f32_f16_wmma_publish_f16");
 static constexpr KernelCatalogRef kFlashAttentionDecodeSplitNextQ8Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_decode_split_f32_f16_wmma_next_q8");
+static constexpr KernelCatalogRef kFlashAttentionPartitionProduceKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_partition_produce");
+static constexpr KernelCatalogRef kFlashAttentionPartitionReduceKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_flash_attention_partition_reduce");
 static constexpr KernelCatalogRef kCopyTransposeF16Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_copy_transpose_f16");
 static constexpr int64_t kDecodeRowCapacity         = 16;
@@ -401,6 +405,80 @@ static DispatchBinding prepare_flash_attention_value(const DispatchMatchContext 
     return { transposed, 0, bytes };
 }
 
+static int64_t long_decode_partition_count(const FlashAttentionMatch & match) {
+    if (match.query_token_count != 1 || match.key_value_token_count <= 2048) {
+        return 0;
+    }
+    if (match.query_head_count == 8 && match.key_value_head_count == 2 &&
+        match.qk_head_size == 256 && match.value_head_size == 256) {
+        return 64;
+    }
+    if (match.query_head_count == 32 && match.key_value_head_count == 4 &&
+        match.qk_head_size == 128 && match.value_head_size == 128) {
+        return 32;
+    }
+    return 0;
+}
+
+static bool append_long_decode_dispatches(const DispatchMatchContext & context,
+                                          const FlashAttentionMatch & match,
+                                          const Value & gate,
+                                          const Value & output,
+                                          bool apply_gate,
+                                          DispatchMatch & dispatch_match) {
+    const int64_t partitions = long_decode_partition_count(match);
+    if (partitions == 0) {
+        return false;
+    }
+    // Capacity buckets retain a producer executable as the visible KV extent grows.
+    // Scratch depends only on the tested head shape and partition count.
+    const int64_t capacity = decode_key_value_capacity(match.key_value_token_count);
+    const size_t scalar_bytes = static_cast<size_t>(match.query_head_count * partitions) * sizeof(float);
+    const size_t output_bytes = scalar_bytes * static_cast<size_t>(match.value_head_size);
+    const ValueId partial_max = match_value(context, dispatch_match, 0);
+    const ValueId partial_sum = match_value(context, dispatch_match, 1);
+    const ValueId partial_output = match_value(context, dispatch_match, 2);
+    dispatch_match.transients.push_back({ partial_max, "common.long_decode.partial_max", scalar_bytes, 256 });
+    dispatch_match.transients.push_back({ partial_sum, "common.long_decode.partial_sum", scalar_bytes, 256 });
+    dispatch_match.transients.push_back({ partial_output, "common.long_decode.partial_output", output_bytes, 256 });
+
+    Dispatch producer;
+    producer.kernel = make_kernel_specialization(kFlashAttentionPartitionProduceKernel);
+    producer.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
+    producer.kernel.integer_parameters.emplace("key_value_token_count", match.key_value_token_count);
+    add_flash_attention_compile_parameters(producer.kernel, match.query_head_count, match.key_value_head_count,
+                                           match.qk_head_size, match.value_head_size, match.attention_scale, false, 1, 1);
+    producer.kernel.compile_parameters.emplace("ggml.flash_attention.partition_count", to_config_value(partitions));
+    producer.kernel.compile_parameters.emplace("ggml.flash_attention.partition_length", to_config_value(capacity / partitions));
+    producer.bindings = {
+        { match.query->id, 0, match.query->byte_count },
+        { match.key->id, 0, match.key->byte_count },
+        { match.value->id, 0, match.value->byte_count },
+        { match.mask->id, 0, match.mask->byte_count },
+        { partial_max, 0, scalar_bytes },
+        { partial_sum, 0, scalar_bytes },
+        { partial_output, 0, output_bytes },
+    };
+    dispatch_match.dispatches.push_back(std::move(producer));
+
+    Dispatch reducer;
+    reducer.kernel = make_kernel_specialization(kFlashAttentionPartitionReduceKernel);
+    add_flash_attention_compile_parameters(reducer.kernel, match.query_head_count, match.key_value_head_count,
+                                           match.qk_head_size, match.value_head_size, match.attention_scale, apply_gate,
+                                           apply_gate ? static_cast<int64_t>(gate.nb[1] / sizeof(float)) : 1,
+                                           apply_gate ? static_cast<int64_t>(gate.nb[2] / sizeof(float)) : 1);
+    reducer.kernel.compile_parameters.emplace("ggml.flash_attention.partition_count", to_config_value(partitions));
+    reducer.bindings = {
+        { partial_max, 0, scalar_bytes },
+        { partial_sum, 0, scalar_bytes },
+        { partial_output, 0, output_bytes },
+        { gate.id, 0, gate.byte_count },
+        { output.id, 0, output.byte_count },
+    };
+    dispatch_match.dispatches.push_back(std::move(reducer));
+    return true;
+}
+
 static bool match_flash_attention_gate_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     const FlashAttentionMatch match = match_flash_attention_f32_f16(context.graph, context.root_node);
     if (!match.matched() || match.output_layout == nullptr || match.output_layout->op != GGML_OP_RESHAPE) {
@@ -466,6 +544,10 @@ static bool match_flash_attention_gate_dispatch(const DispatchMatchContext & con
         }
     }
 
+    if (append_long_decode_dispatches(context, match, *raw_gate, *output, true, dispatch_match)) {
+        return true;
+    }
+
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(kFlashAttentionF32F16WmmaKernel);
     if (!use_exact_prefill_workload(match.query_token_count, match.key_value_token_count)) {
@@ -503,6 +585,15 @@ static bool match_flash_attention_f32_f16_dispatch(const DispatchMatchContext & 
     const CommonActivationPublicationDemand * demand =
         publication_plan.find(CommonActivationPublicationFormat::F16Row);
     const bool publish_f16 = demand != nullptr;
+    if (!publish_f16 && append_long_decode_dispatches(context, match, *match.query, *match.output, false, dispatch_match)) {
+        dispatch_match.covered_nodes.push_back(context.root_index);
+        if (match.output_layout != nullptr &&
+            !append_covered_node_index_once(context.graph, context.covered_nodes, match.output_layout,
+                                           dispatch_match.covered_nodes)) {
+            return false;
+        }
+        return true;
+    }
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(publish_f16 ? kFlashAttentionF32F16WmmaPublishF16Kernel :
                                                                kFlashAttentionF32F16WmmaKernel);

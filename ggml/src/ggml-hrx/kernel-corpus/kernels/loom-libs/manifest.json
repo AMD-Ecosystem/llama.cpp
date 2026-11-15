@@ -667,6 +667,9 @@
     },
     {
       "path": "ops/reduction/amax_scale_f32.loom"
+    },
+    {
+      "path": "ops/flash_attention/decode_partition_f32_f16.loom"
     }
   ],
   "exports": [
@@ -9855,6 +9858,102 @@
       },
       "compile_dependencies": [
         "motifs/elementwise/unary_apply.loom"
+      ]
+    },
+    {
+      "name": "ggml_flash_attention_partition_produce",
+      "family": "loom_libs",
+      "symbol": "ggml_flash_attention_partition_produce",
+      "source": "ops/flash_attention/decode_partition_f32_f16.loom",
+      "workload_parameters": [
+        {
+          "name": "key_value_token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "key_value_token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "query",
+        "key",
+        "value",
+        "mask",
+        "partial_max",
+        "partial_sum",
+        "partial_output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "write",
+        "write",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/flash_attention/decode_partition_f32_f16.loom"
+        ],
+        "library_sources": [
+          "motifs/flash_attention/qk_block_wmma.loom",
+          "motifs/flash_attention/online_softmax.loom",
+          "motifs/flash_attention/pv_block_wmma.loom",
+          "motifs/flash_attention/publish_f32.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/flash_attention/qk_block_wmma.loom",
+        "motifs/flash_attention/online_softmax.loom",
+        "motifs/flash_attention/pv_block_wmma.loom",
+        "motifs/flash_attention/publish_f32.loom"
+      ]
+    },
+    {
+      "name": "ggml_flash_attention_partition_reduce",
+      "family": "loom_libs",
+      "symbol": "ggml_flash_attention_partition_reduce",
+      "source": "ops/flash_attention/decode_partition_f32_f16.loom",
+      "workload_parameters": [],
+      "launch_parameters": [],
+      "bindings": [
+        "partial_max",
+        "partial_sum",
+        "partial_output",
+        "gate",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/flash_attention/decode_partition_f32_f16.loom"
+        ],
+        "library_sources": [
+          "motifs/flash_attention/qk_block_wmma.loom",
+          "motifs/flash_attention/online_softmax.loom",
+          "motifs/flash_attention/pv_block_wmma.loom",
+          "motifs/flash_attention/publish_f32.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/flash_attention/qk_block_wmma.loom",
+        "motifs/flash_attention/online_softmax.loom",
+        "motifs/flash_attention/pv_block_wmma.loom",
+        "motifs/flash_attention/publish_f32.loom"
       ]
     }
   ],
