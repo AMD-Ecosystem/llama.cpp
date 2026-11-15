@@ -97,7 +97,8 @@ kernel.def target(@ggml_flash_attention_partition_wave64) @ggml_flash_attention_
   %denominator = scf.select %has_values, %sum, %one : f32
   %apply_gate = index.cmp eq, %gate_enabled, %c1 : index
   scf.for %channel = [%workitem to %d step %c256] {
-    %total = scf.for %p = [%c0 to %parts step %c1](%v = %zero : f32) -> (f32) {
+    %unroll8 = index.constant 8 : index
+    %total = scf.for %p = [%c0 to %parts step %c1](%v = %zero : f32) -> (f32) unroll(%unroll8) schedule(interleaved) {
       %weight = view.load %weights_view[%p] : view<[%parts]xf32> -> f32
       %partial_v = view.load %partial_view[%head, %p, %channel] : view<[%heads]x[%parts]x[%d]xf32> -> f32
       %scaled = scalar.mulf %weight, %partial_v : f32
