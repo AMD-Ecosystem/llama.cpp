@@ -48,6 +48,7 @@ struct ggml_backend_hrx_device_context {
     std::string                                    description;
     std::string                                    architecture;
     size_t                                         memory_total = 0;
+    uint32_t                                       compute_units = 0;
     bool                                           use_direct_host_bindings = false;
     ggml_backend_buffer_type                       buft               = {};
     ggml_backend_hrx_buffer_type_context           buft_context       = {};

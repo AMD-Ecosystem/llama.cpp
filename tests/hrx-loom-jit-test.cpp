@@ -1615,10 +1615,10 @@ static void run_partition_attention_reuse_checks() {
     for (bool wide : { false, true }) {
         auto config = wide ? flash_attention_config("8", "2", "256", "0.0625") :
                              flash_attention_config("32", "4", "128", "0.0883883461");
-        config.emplace("ggml.flash_attention.partition_count", wide ? "64" : "32");
-        config.emplace("ggml.flash_attention.partition_length", wide ? "1024" : "2048");
+        config.emplace("ggml.flash_attention.partition_count", wide ? "32" : "16");
+        config.emplace("ggml.flash_attention.partition_length", wide ? "8192" : "16384");
         run_dynamic_export_reuse_case(device, "ggml_flash_attention_partition_produce",
-                                      flash_attention_decode_workload(32769), flash_attention_decode_workload(65536), config);
+                                      flash_attention_decode_workload(131073), flash_attention_decode_workload(262144), config);
     }
 }
 

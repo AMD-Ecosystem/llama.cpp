@@ -6,6 +6,7 @@
 #include "graph/graph-matcher.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <sstream>
@@ -405,19 +406,27 @@ static DispatchBinding prepare_flash_attention_value(const DispatchMatchContext 
     return { transposed, 0, bytes };
 }
 
-static int64_t long_decode_partition_count(const FlashAttentionMatch & match) {
-    if (match.query_token_count != 1 || match.key_value_token_count <= 2048) {
+static bool has_partition_decode_geometry(int64_t heads, int64_t kv_heads, int64_t qk_dim, int64_t value_dim) {
+    return (heads == 8 && kv_heads == 2 && qk_dim == 256 && value_dim == 256) ||
+           (heads == 32 && kv_heads == 4 && qk_dim == 128 && value_dim == 128);
+}
+
+static int64_t long_decode_partition_count(const FlashAttentionMatch & match, uint32_t compute_units) {
+    if (match.query_token_count != 1 || match.key_value_token_count <= 2048 || compute_units == 0 ||
+        !has_partition_decode_geometry(match.query_head_count, match.key_value_head_count,
+                                       match.qk_head_size, match.value_head_size)) {
         return 0;
     }
-    if (match.query_head_count == 8 && match.key_value_head_count == 2 &&
-        match.qk_head_size == 256 && match.value_head_size == 256) {
-        return 64;
+    // Target two producer workgroups per CU, accounting for existing KV-head
+    // parallelism. Power-of-two partitions evenly divide capacity buckets.
+    const int64_t capacity = decode_key_value_capacity(match.key_value_token_count);
+    const int64_t budget = std::min<int64_t>(256, std::min<int64_t>(capacity / 64,
+        std::max<int64_t>(16, int64_t{2} * compute_units / match.key_value_head_count)));
+    int64_t partitions = 16;
+    while (partitions * 2 <= budget) {
+        partitions *= 2;
     }
-    if (match.query_head_count == 32 && match.key_value_head_count == 4 &&
-        match.qk_head_size == 128 && match.value_head_size == 128) {
-        return 32;
-    }
-    return 0;
+    return partitions;
 }
 
 static bool append_long_decode_dispatches(const DispatchMatchContext & context,
@@ -426,7 +435,7 @@ static bool append_long_decode_dispatches(const DispatchMatchContext & context,
                                           const Value & output,
                                           bool apply_gate,
                                           DispatchMatch & dispatch_match) {
-    const int64_t partitions = long_decode_partition_count(match);
+    const int64_t partitions = long_decode_partition_count(match, context.compute_units);
     if (partitions == 0) {
         return false;
     }
@@ -482,6 +491,15 @@ static bool append_long_decode_dispatches(const DispatchMatchContext & context,
 static bool match_flash_attention_gate_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     const FlashAttentionMatch match = match_flash_attention_f32_f16(context.graph, context.root_node);
     if (!match.matched() || match.output_layout == nullptr || match.output_layout->op != GGML_OP_RESHAPE) {
+        return false;
+    }
+
+    // Let the integrated decode kernel handle the short regime, followed by
+    // the existing gate operations. Very short and long contexts keep fusion.
+    if (match.query_token_count == 1 && match.key_value_token_count >= 256 &&
+        match.key_value_token_count <= 2048 &&
+        has_partition_decode_geometry(match.query_head_count, match.key_value_head_count,
+                                      match.qk_head_size, match.value_head_size)) {
         return false;
     }
 
@@ -638,6 +656,12 @@ static bool match_flash_attention_decode_split_next_q8_dispatch(const DispatchMa
     const DecodeSplitFlashAttentionMatch match =
         match_decode_split_flash_attention_f32_f16(context.graph, context.root_node);
     if (!match.matched()) {
+        return false;
+    }
+
+    if (match.query_token_count == 1 && match.key_value_token_count < 256 &&
+        has_partition_decode_geometry(match.query_head_count, match.key_value_head_count,
+                                      match.qk_head_size, match.value_head_size)) {
         return false;
     }
 

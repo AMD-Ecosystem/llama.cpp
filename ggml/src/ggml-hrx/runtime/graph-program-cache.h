@@ -136,6 +136,9 @@ class GraphProgramCache {
     /// Configure before support checks or execution; keep fixed for this cache's lifetime.
     void set_row64_weight_policy(bool enabled) { row64_weight_policy_ = enabled; }
 
+    // Device topology is fixed before support checks or execution for this cache.
+    void set_compute_units(uint32_t count) { compute_units_ = count; }
+
     bool row64_weight_policy() const { return row64_weight_policy_; }
 
     bool can_execute(const ggml_cgraph & graph, const KernelCorpus & corpus, const std::string & target) const;
@@ -170,6 +173,7 @@ class GraphProgramCache {
 
     // False preserves the existing matchers, including their row64 routes.
     bool                                                       row64_weight_policy_ = false;
+    uint32_t                                                   compute_units_ = 0;
     mutable std::mutex                                          mutex_;
     std::unordered_map<uint64_t, std::shared_ptr<GraphProgram>> programs_;
     std::unordered_map<uint64_t, ValidatedGraphMatch>           validated_matches_;

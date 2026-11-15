@@ -10,8 +10,8 @@ config.decl @ggml.flash_attention.apply_gate : %value: index where [range(%value
 config.decl @ggml.flash_attention.gate_stride_head : %value: index where [range(%value, 1, 16777216)]
 config.decl @ggml.flash_attention.gate_stride_token : %value: index where [range(%value, 1, 16777216)]
 
-config.decl @ggml.flash_attention.partition_count : %value: index where [range(%value, 32, 64)]
-config.decl @ggml.flash_attention.partition_length : %value: index where [range(%value, 64, 8192), multiple_of(%value, 64)]
+config.decl @ggml.flash_attention.partition_count : %value: index where [range(%value, 16, 256)]
+config.decl @ggml.flash_attention.partition_length : %value: index where [range(%value, 64, 16384), multiple_of(%value, 64)]
 
 template.decl @ggml.flash_attention.body(%split_kv: i1, %partition_count: index, %partition_length: index, %partial_max: buffer, %partial_sum: buffer, %publish_f16: i1, %query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer, %f16_output: buffer)
 

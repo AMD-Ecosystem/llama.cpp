@@ -666,6 +666,7 @@ static ggml_backend_t device_init(ggml_backend_dev_t device, const char * parame
     auto * context = new (std::nothrow) ggml_backend_hrx_context;
     if (context != nullptr) {
         context->device = device_ctx;
+        context->graph_programs.set_compute_units(device_ctx->compute_units);
         context->stream = stream;
         context->name   = device_ctx->name;
     }
@@ -1378,6 +1379,11 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
         const std::optional<std::string> architecture =
             device_string_property(hrx_device, HRX_DEVICE_PROPERTY_ARCHITECTURE, "query HRX device architecture");
         if (!name || !architecture) {
+            hrx_device_release(hrx_device);
+            continue;
+        }
+        if (!HRX_CHECK(hrx_device_get_property(hrx_device, HRX_DEVICE_PROPERTY_COMPUTE_UNITS,
+                                               &device_ctx->compute_units, sizeof(device_ctx->compute_units)))) {
             hrx_device_release(hrx_device);
             continue;
         }
