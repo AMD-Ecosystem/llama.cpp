@@ -4595,6 +4595,27 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
         return true;
     }
 
+    if (ops.size() == 2 && ops.begin()[0] == GGML_OP_SCALE && ops.begin()[1] == GGML_OP_UNARY
+     && unary_ops.size() == 1 && unary_ops.begin()[0] == GGML_UNARY_OP_SILU) {
+        const ggml_tensor * scale = cgraph->nodes[node_idx];
+        const ggml_tensor * silu  = cgraph->nodes[node_idx+1];
+
+        if (ggml_get_unary_op(silu) != GGML_UNARY_OP_SILU) {
+            return false;
+        }
+
+        if (scale->src[0]->type != GGML_TYPE_F32 || scale->type != GGML_TYPE_F32 || silu->type != GGML_TYPE_F32) {
+            return false;
+        }
+
+        // the fused kernel reads src and writes dst as dense
+        if (!ggml_is_contiguous(scale->src[0]) || !ggml_is_contiguous(silu)) {
+            return false;
+        }
+
+        return true;
+    }
+
     if (ops.size() == 2 && ops.begin()[0] == GGML_OP_UNARY && ops.begin()[1] == GGML_OP_SQR
      && unary_ops.size() == 1 && unary_ops.begin()[0] == GGML_UNARY_OP_RELU) {
         const ggml_tensor * unary = cgraph->nodes[node_idx];
@@ -5585,6 +5606,11 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_SCALE, GGML_OP_UNARY, GGML_OP_SCALE }, { GGML_UNARY_OP_TANH })) {
         ggml_cuda_op_softcap(*cuda_ctx, cgraph->nodes[i + 2], node);
         return 2;
+    }
+
+    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_SCALE, GGML_OP_UNARY }, { GGML_UNARY_OP_SILU })) {
+        ggml_cuda_op_scale_silu(*cuda_ctx, node, cgraph->nodes[i + 1]);
+        return 1;
     }
 
     return 0;

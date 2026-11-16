@@ -761,6 +761,36 @@ void ggml_cuda_op_unary_mul(ggml_backend_cuda_context & ctx, ggml_tensor * unary
     }
 }
 
+/* fused scale + silu */
+
+static __global__ void scale_silu_f32(const float * x, float * dst, const float scale, const float bias, const int k) {
+    ggml_cuda_pdl_lc();
+    const int i = blockDim.x*blockIdx.x + threadIdx.x;
+
+    if (i >= k) {
+        return;
+    }
+
+    ggml_cuda_pdl_sync();
+    dst[i] = ggml_cuda_op_silu_single(scale * x[i] + bias);
+}
+
+void ggml_cuda_op_scale_silu(ggml_backend_cuda_context & ctx, ggml_tensor * scale_node, ggml_tensor * silu_node) {
+    const ggml_tensor * src = scale_node->src[0];
+    cudaStream_t stream = ctx.stream();
+
+    GGML_ASSERT(ggml_is_contiguous(src) && ggml_is_contiguous(silu_node));
+    GGML_ASSERT(src->type == GGML_TYPE_F32 && silu_node->type == GGML_TYPE_F32);
+
+    const float scale = ggml_get_op_params_f32(scale_node, 0);
+    const float bias  = ggml_get_op_params_f32(scale_node, 1);
+
+    const int k = ggml_nelements(src);
+    const int num_blocks = (k + CUDA_SILU_BLOCK_SIZE - 1) / CUDA_SILU_BLOCK_SIZE;
+    const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params((dim3)num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream);
+    ggml_cuda_kernel_launch(scale_silu_f32, launch_params, (const float *) src->data, (float *) silu_node->data, scale, bias, k);
+}
+
 /* fused relu + sqr */
 
 void ggml_cuda_op_relu_sqr(ggml_backend_cuda_context & ctx, ggml_tensor * relu_node, ggml_tensor * sqr_node) {

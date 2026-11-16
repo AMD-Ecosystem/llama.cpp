@@ -4557,6 +4557,40 @@ struct test_relu_sqr : public test_case {
     }
 };
 
+// GGML_OP_SCALE + GGML_UNARY_OP_SILU (fused operation)
+struct test_scale_silu : public test_case {
+    const std::array<int64_t, 4> ne;
+    const float scale;
+    const float bias;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "SCALE_SILU";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::string vars() override {
+        return VARS_TO_STR3(ne, scale, bias);
+    }
+
+    test_scale_silu(std::array<int64_t, 4> ne = {320, 4, 1, 1}, float scale = 0.25f, float bias = 0.0f)
+        : ne(ne), scale(scale), bias(bias) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+        ggml_set_name(a, "a");
+
+        ggml_tensor * s = ggml_scale_bias(ctx, a, scale, bias);
+        ggml_set_name(s, "scale");
+
+        ggml_tensor * out = ggml_silu(ctx, s);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+};
+
 // GGML_OP_UNARY(GELU|SILU|SIGMOID|SOFTPLUS) + GGML_OP_MUL (fused operation).
 struct test_unary_mul : public test_case {
     const ggml_unary_op op;
@@ -10881,6 +10915,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_relu_sqr(type, { 128, 2, 2, 2 }));
         test_cases.emplace_back(new test_relu_sqr(type, { 5, 7, 11, 13 }));
     }
+
+    // fused scale + silu
+    test_cases.emplace_back(new test_scale_silu({ 320, 4, 1, 1 }, 0.25f, 0.0f));
+    test_cases.emplace_back(new test_scale_silu({ 5, 7, 11, 13 }, -1.5f, 0.5f));
 
     // fused unary + mul (gated activations that are not expressed as GGML_OP_GLU)
     for (ggml_unary_op op : { GGML_UNARY_OP_GELU, GGML_UNARY_OP_SILU, GGML_UNARY_OP_RELU, GGML_UNARY_OP_SIGMOID, GGML_UNARY_OP_SOFTPLUS }) {
