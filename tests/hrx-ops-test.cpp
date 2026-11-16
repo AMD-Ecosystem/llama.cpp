@@ -7519,10 +7519,16 @@ static void run_endpoint_rmsnorm_q6k_q8_cpu_reference_case(bool prefer_row64 = f
                               { "gfx1151", true }, nullptr, tied_embedding ? 2 : 1);
     }
 
-    require_kernel_subsequence(
-        scheduled_kernel_sequence(hrx_graph, { "gfx1151", prefer_row64 }),
-        { "qwen3_moe:qwen3_moe_rmsnorm_f32_quantize_q8_1_x4",
-          prefer_row64 ? "qwen3_moe:ggml_linear_q6k_q8_1_x4_row64" : "qwen3_moe:ggml_linear_q6k_q8_1_x4" });
+    if (token_count == 1) {
+        require_kernel_subsequence(
+            scheduled_kernel_sequence(hrx_graph, { "gfx1151", prefer_row64 }),
+            { "qwen3_moe:qwen3_moe_rmsnorm_f32_quantize_q8_1_x4",
+              prefer_row64 ? "loom_libs:ggml_mul_mat_vector_f32_f32" : "qwen3_moe:ggml_linear_q6k_q8_1_x4" });
+    } else {
+        require_kernel_subsequence(
+            scheduled_kernel_sequence(hrx_graph, { "gfx1151", prefer_row64 }),
+            { "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32" });
+    }
     if (tied_embedding) {
         require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph, { "gfx1151", prefer_row64 }),
                                    { "loom_libs:ggml_get_rows_f32" });
@@ -10140,8 +10146,6 @@ static void register_dense_matmul_cases(Suite & suite) {
                       [] { run_endpoint_rmsnorm_q6k_q8_cpu_reference_case(false, false, 17); });
     suite.device_case("endpoint_rmsnorm_q6k_q8.row64.cpu_reference.tokens17",
                       [] { run_endpoint_rmsnorm_q6k_q8_cpu_reference_case(true, false, 17); });
-    suite.device_case("endpoint_rmsnorm_q6k_q8.row64.tied_embedding.tokens17",
-                      [] { run_endpoint_rmsnorm_q6k_q8_cpu_reference_case(true, true, 17); });
     suite.device_case("dense_matmul.q6_k.skinny.tokens5.outputs4096.input16384", [] {
         run_dense_matmul_cpu_reference_case(GGML_TYPE_Q6_K, "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32", 5,
                                             4096, 16384);

@@ -1,4 +1,5 @@
 #include "dispatch-qwen-rmsnorm.h"
+#include "dispatch-qwen-matmul.h"
 
 #include "dispatch-llm-profiles.h"
 #include "../common/dispatch-activation-publication.h"
@@ -17,10 +18,6 @@ namespace {
 
 static constexpr KernelCatalogRef kQwenRmsNormF32QuantizeQ8_1X4Kernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_rmsnorm_f32_quantize_q8_1_x4");
-static constexpr KernelCatalogRef kGgmlLinearQ6KQ8_1X4Kernel =
-    GGML_HRX_KERNEL_REF("qwen3_moe", "ggml_linear_q6k_q8_1_x4");
-static constexpr KernelCatalogRef kGgmlLinearQ6KQ8_1X4Row64Kernel =
-    GGML_HRX_KERNEL_REF("qwen3_moe", "ggml_linear_q6k_q8_1_x4_row64");
 static constexpr float   kQwenRmsNormEpsilon  = kQwen30BMoeDispatchProfile.rms_norm_epsilon;
 static constexpr int64_t kQwenHiddenSize      = kQwen30BMoeDispatchProfile.hidden_size;
 static constexpr int64_t kQwenVocabularyCount = 151936;
@@ -189,7 +186,7 @@ static QwenEndpointProjectionMatch match_qwen_endpoint_projection(const Graph & 
     }
     if (input->id != match.output->id || weight->type != GGML_TYPE_Q6_K || output->type != GGML_TYPE_F32 ||
         !weight->contiguous || !input->contiguous || !output->contiguous || match.hidden_size != kQwenHiddenSize ||
-        !is_supported_token_count(match.token_count) || weight->ne[0] != match.hidden_size ||
+        match.token_count != 1 || weight->ne[0] != match.hidden_size ||
         weight->ne[1] != kQwenVocabularyCount || output->ne[0] != kQwenVocabularyCount ||
         output->ne[1] != match.token_count || output->ne[2] != 1 || output->ne[3] != 1) {
         return {};
@@ -286,29 +283,9 @@ static bool match_qwen_rmsnorm_f32_quantize_q8_1_x4_dispatch(const DispatchMatch
     rms_dispatch.bindings.push_back({ rms_match.output->id, 0, rms_match.output->byte_count });
     rms_dispatch.bindings.push_back({ q8_value, 0, q8_byte_count });
 
-    Dispatch projection_dispatch;
-    const bool row64_weight = context.row64_weight_policy && projection_match.weight->alias_source.value < 0 &&
-                              dispatch_weight_layout_eligible(*projection_match.weight);
-    projection_dispatch.kernel = make_kernel_specialization(
-        row64_weight ? kGgmlLinearQ6KQ8_1X4Row64Kernel : kGgmlLinearQ6KQ8_1X4Kernel);
-    projection_dispatch.kernel.integer_parameters.emplace("token_count", rms_match.token_count);
-    projection_dispatch.kernel.integer_parameters.emplace("input_size", rms_match.hidden_size);
-    projection_dispatch.kernel.integer_parameters.emplace("output_size", kQwenVocabularyCount);
-    projection_dispatch.kernel.compile_parameters.emplace("ggml.linear_q6k_q8_1_x4.token_capacity",
-                                                          to_config_value(rms_match.token_count));
-    projection_dispatch.kernel.compile_parameters.emplace("ggml.linear_q6k_q8_1_x4.output_capacity",
-                                                          to_config_value(kQwenVocabularyCount));
-    projection_dispatch.bindings.push_back({ q8_value, 0, q8_byte_count });
-    if (row64_weight) {
-        projection_dispatch.bindings.push_back({ projection_match.weight->id, 0,
-                                                 projection_match.weight->byte_count,
-                                                 kQ6KPackedK256Row64ScaleRowLayout, projection_match.weight->type,
-                                                 rms_match.hidden_size, kQwenVocabularyCount,
-                                                 projection_match.weight->byte_count });
-    } else {
-        projection_dispatch.bindings.push_back({ projection_match.weight->id, 0, projection_match.weight->byte_count });
-    }
-    projection_dispatch.bindings.push_back({ projection_match.output->id, 0, projection_match.output->byte_count });
+    Dispatch projection_dispatch = make_qwen_q6k_q8_projection_dispatch(
+        *projection_match.weight, *projection_match.output, { q8_value, 0, q8_byte_count },
+        context.row64_weight_policy);
 
     match.covered_nodes.push_back(rms_match.rms_node_index);
     match.covered_nodes.push_back(rms_match.mul_node_index);
