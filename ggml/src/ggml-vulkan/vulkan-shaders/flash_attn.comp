@@ -112,16 +112,16 @@ void main() {
     [[unroll]] for (uint32_t idx = 0; idx < Br * HSK / 4; idx += gl_WorkGroupSize.x) {
         uint32_t d = (idx + tid) % (HSK / 4);
         uint32_t r = (idx + tid) / (HSK / 4);
-        const bool is_in_bounds = r < Br && d < HSK / 4 && i * Br + r < N;
+        const bool is_in_bounds = r < Br && d < HSK / 4 && i * Br + r < N && gqa_row_valid(i * Br + r);
 #ifndef MMQ
         if (is_in_bounds) {
-            Qf[r * qf_stride + d] = FLOAT_TYPEV4(data_qv4[q_offset / 4 + (i * Br + r) * q_stride / 4 + d] * p.scale);
+            Qf[r * qf_stride + d] = FLOAT_TYPEV4(data_qv4[q_offset / 4 + q_row_offset(i * Br + r) / 4 + d] * p.scale);
         }
 #else
         const uint buf_ib = r * qf_stride + d / 8;
         const uint buf_iqs = d % 8;
 
-        vec4 vals = is_in_bounds ? data_qv4[q_offset / 4 + (i * Br + r) * q_stride / 4 + d] * p.scale : vec4(0.0f);
+        vec4 vals = is_in_bounds ? data_qv4[q_offset / 4 + q_row_offset(i * Br + r) / 4 + d] * p.scale : vec4(0.0f);
         const vec4 abs_vals = abs(vals);
 
         const float thread_max = max(max(abs_vals.x, abs_vals.y), max(abs_vals.z, abs_vals.w));
@@ -187,6 +187,10 @@ void main() {
         mo_offset += ((iq3 % p.nem3) * p.nem2 + (iq2 % p.nem2)) * CEIL_DIV(p.nem1, Br) * mo_stride;
     }
 
+    if (USE_MASK_OPT && !USE_SPARSE && p.k_num > 1) {
+        mask_opt_balance_split_k(mo_offset, mo_stride);
+    }
+
     uint32_t mask_opt = 0;
     uint32_t mask_opt_idx = ~0;
     uint32_t mask_opt_bits = 0;
@@ -216,7 +220,7 @@ void main() {
                         uint32_t kcol;
                         bool kv_active = fa_kv_index(j * Bc + c, kcol);
                         if (kv_active && (!nem1_bounds_check || i * Br + r < p.nem1)) {
-                            FLOAT_TYPE m = FLOAT_TYPE(data_m[m_offset + (i * Br + r) * m_stride + kcol]);
+                            FLOAT_TYPE m = FLOAT_TYPE(data_m[m_offset + mask_row_offset(i * Br + r) + kcol]);
                             masksh[c * masksh_stride + r] = m;
                             max_mask = max(max_mask, float(m));
                         } else {
@@ -672,7 +676,7 @@ void main() {
                 const uint row = tile_row(r);
                 if (row < N) {
                     [[unroll]] for (uint32_t d = 0; d < HSV_per_thread / 4; ++d) {
-                        gqaStore(row, d * D_split + d_tid, Of[r][d], o_offset, iq2, N);
+                        gqa_store_row(row, d * D_split + d_tid, Of[r][d], o_offset, HSV * p.ne1 * p.k_num / 4);
                     }
                 }
             }
@@ -681,8 +685,8 @@ void main() {
             [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
                 const uint row = tile_row(r);
                 if (row < N) {
-                    perElemOpStoreCol0(row, 0u, ACC_TYPE(Lf[r]), o_offset, iq2, N);
-                    perElemOpStoreCol0(row, 0u, ACC_TYPE(Mf[r]), o_offset + p.ne1, iq2, N);
+                    gqa_store_col0_row(row, ACC_TYPE(Lf[r]), o_offset, p.ne1 * 2 * p.k_num);
+                    gqa_store_col0_row(row, ACC_TYPE(Mf[r]), o_offset + p.ne1, p.ne1 * 2 * p.k_num);
                 }
             }
         } else {
@@ -750,7 +754,7 @@ void main() {
             const uint row = tile_row(r);
             if (row < N) {
                 [[unroll]] for (uint32_t d = 0; d < HSV_per_thread / 4; ++d) {
-                    gqaStore(row, d * D_split + d_tid, Of[r][d], o_offset, iq2, N);
+                    gqa_store_row(row, d * D_split + d_tid, Of[r][d], o_offset, p.ne1 * HSV / 4);
                 }
             }
         }

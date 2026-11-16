@@ -750,6 +750,7 @@ struct vk_device_struct {
     bool subgroup_size_control;
     uint32_t subgroup_min_size;
     uint32_t subgroup_max_size;
+    uint32_t max_compute_workgroup_subgroups = 0;
     bool subgroup_require_full_support;
 
     // floor(log2(maxComputeWorkGroupInvocations))
