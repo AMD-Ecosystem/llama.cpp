@@ -50,7 +50,10 @@ exercise the newly generalized Q6 x Q8 wave64 projection. Compile/run its
 `ggml_linear_q6k_q8_1_x4_row64_wave64_prefill_17` Loom benchmarks from
 qwen_moe/ggml/linear_q6k_q8_1_x4.loom (K=2048,N=151936), comparing native
 projection controls. Link the manifest's library_sources, set token_capacity
-1/17 respectively and output_capacity 151936. Verify wave64 selection on
+1/17 respectively and output_capacity 151936. Explicitly pass
+`--measure=dispatch_complete`; the source benchmark default includes case
+setup. Use batch8, warmup5, iterations30, input-ring-count4 and
+profile-final-batch=true for separate device timing. Verify wave64 selection on
 gfx1151 and run endpoint numerical tests. Any performance gap starts with
 matched kernel-level investigation, not model-level tuning.
 
