@@ -67,7 +67,12 @@ if a.phase in ('kernel', 'all'):
         manifest = a.output/f'{stage}-{layout}.json'
         manifest.write_text(json.dumps(d, indent=2))
         argv = [sys.executable, hrx/'tools/benchmarks/run-model-benchmarks.py', '--model', d['model'], '--scenario', 'tg32', '--manifest', manifest, '--build-dir', builds[stage], '--output-dir', a.output/f'kernel-{i}-{stage}-{layout}', '--batch-size', '8', '--iterations', '30', '--warmup-iterations', '5', '--input-ring-count', '4', '--profile-final-batch', 'true']
-        run(a.output/f'kernel-command-{i}', argv, {'ROCR_VISIBLE_DEVICES': os.environ['ROCR_VISIBLE_DEVICES']})
+        tools = builds[stage]/'ggml/src/ggml-hrx/hrx/src/ggml-hrx-deps-build/loom/src/loom/tools'
+        run(a.output/f'kernel-command-{i}', argv, {
+            'ROCR_VISIBLE_DEVICES': os.environ['ROCR_VISIBLE_DEVICES'],
+            'LOOM_LINK': str(tools/'loom-link/loom-link'),
+            'IREE_BENCHMARK_LOOM': str(tools/'loom-benchmark/loom-benchmark'),
+        })
 
 if a.phase in ('model', 'all'):
     for name, model in MODELS.items():
