@@ -341,7 +341,7 @@ check.benchmark<@ggml_linear_q6k_q8_1_x4_dense_v_benchmark_case> @ggml_linear_q6
 
 check.benchmark<@ggml_linear_q6k_q8_1_x4_dense_v_benchmark_case> @ggml_linear_q6k_q8_1_x4_dense_v_prefill_2048 {token_count = 2048}
 
-amdgpu.target<gfx1100> @ggml_q6k_row64_gfx1100_wave64 {subgroup_size = 64}
+amdgpu.target<gfx11-generic> @ggml_q6k_row64_gfx11_wave64 {subgroup_size = 64}
 
 func.decl @ggml_q6k_row64_tile_lane_i8_scale(%weight: buffer, %tile: index, %row_lane: index, %q6_group: index, %packet: index) -> (vector<4xi8>, f32)
 
@@ -377,7 +377,7 @@ func.def inline @ggml_q6k_q8_1_x4_row64_row_lane_wave64(%input_size: index, %row
   func.return %sum : f32
 }
 
-kernel.def target(@ggml_q6k_row64_gfx1100_wave64) export("ggml_linear_q6k_q8_1_x4_row64") @ggml_linear_q6k_q8_1_x4_row64_wave64(%token_count: index, %input_size: index, %output_size: index) {
+kernel.def target(@ggml_q6k_row64_gfx11_wave64) export("ggml_linear_q6k_q8_1_x4_row64") @ggml_linear_q6k_q8_1_x4_row64_wave64(%token_count: index, %input_size: index, %output_size: index) {
   %token_capacity = config.get @ggml.linear_q6k_q8_1_x4.token_capacity : index
   %output_capacity = config.get @ggml.linear_q6k_q8_1_x4.output_capacity : index
   %c3 = index.constant 3 : index
