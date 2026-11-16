@@ -1,14 +1,46 @@
 #include "models.h"
 
+#include <cstdlib>
+
 ggml_cgraph * clip_graph_qwen2vl::build() {
     GGML_ASSERT(model.patch_bias == nullptr);
     GGML_ASSERT(model.class_embedding == nullptr);
 
     const int batch_size       = 1;
     const bool use_window_attn = hparams.n_wa_pattern > 0;
+    static const bool window_batch = [] {
+        const char * value = std::getenv("MTMD_QWEN25VL_WINDOW_BATCH");
+        return value == nullptr || std::atoi(value) != 0;
+    }();
+    static const bool window_cast = [] {
+        const char * value = std::getenv("MTMD_QWEN25VL_KV_CAST_EARLY");
+        return value == nullptr || std::atoi(value) != 0;
+    }();
+    const bool batch_windows   = window_batch && use_window_attn && flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED;
     const int n_wa_pattern     = hparams.n_wa_pattern;
     const int n_pos            = n_patches;
     const int num_position_ids = n_pos * 4; // m-rope requires 4 dim per position
+
+    // Keep the input window order and batch adjacent windows of equal size.
+    std::vector<std::pair<int, int>> window_runs;
+    if (batch_windows) {
+        const int merge_ratio = 2;
+        const int window_size = hparams.attn_window_size > 0 ? hparams.attn_window_size : 112;
+        const int grid_window = window_size / patch_size / merge_ratio;
+        GGML_ASSERT(grid_window > 0);
+        const int pw = n_patches_x / merge_ratio;
+        const int ph = n_patches_y / merge_ratio;
+        for (int y = 0; y < ph; y += grid_window) {
+            for (int x = 0; x < pw; x += grid_window) {
+                const int len = std::min(grid_window, ph - y) * std::min(grid_window, pw - x) * merge_ratio * merge_ratio;
+                if (!window_runs.empty() && window_runs.back().first == len) {
+                    window_runs.back().second++;
+                } else {
+                    window_runs.emplace_back(len, 1);
+                }
+            }
+        }
+    }
 
     norm_type norm_t = proj_type == PROJECTOR_TYPE_QWEN25VL
         ? NORM_TYPE_RMS // qwen 2.5 vl
@@ -52,8 +84,9 @@ ggml_cgraph * clip_graph_qwen2vl::build() {
         inv_window_idx = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos / 4);
         ggml_set_name(inv_window_idx, "inv_window_idx");
         ggml_set_input(inv_window_idx);
-        // mask for window attention
-        window_mask = build_inp_attn_mask(n_pos, n_pos);
+        if (!batch_windows) {
+            window_mask = build_inp_attn_mask(n_pos, n_pos);
+        }
 
         // inpL shape: [n_embd, n_patches_x * n_patches_y, batch_size]
         GGML_ASSERT(batch_size == 1);
@@ -103,8 +136,42 @@ ggml_cgraph * clip_graph_qwen2vl::build() {
 
             ggml_tensor * attn_mask = full_attn ? nullptr : window_mask;
 
-            cur = build_attn(layer.o_w, layer.o_b,
-                Qcur, Kcur, Vcur, attn_mask, kq_scale, il);
+            if (batch_windows && !full_attn) {
+                // Convert each full K/V tensor once before taking window views.
+                if (window_cast) {
+                    Kcur = ggml_cast(ctx0, Kcur, GGML_TYPE_F16);
+                    Vcur = ggml_cast(ctx0, Vcur, GGML_TYPE_F16);
+                }
+                std::vector<ggml_tensor *> outputs;
+                int offset = 0;
+                for (const auto & run : window_runs) {
+                    auto view = [&](ggml_tensor * t) {
+                        return ggml_view_4d(ctx0, t, d_head, n_head, run.first, run.second,
+                            t->nb[1], t->nb[2], t->nb[2] * run.first, t->nb[2] * offset);
+                    };
+                    outputs.push_back(build_attn(nullptr, nullptr,
+                        view(Qcur), view(Kcur), view(Vcur), nullptr, kq_scale, il));
+                    offset += run.first * run.second;
+                }
+                GGML_ASSERT(offset == n_patches);
+                ggml_tensor * joined = outputs.front();
+                if (outputs.size() > 1) {
+                    joined = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_patches);
+                    size_t offset_bytes = 0;
+                    for (ggml_tensor * output : outputs) {
+                        joined = ggml_set_2d_inplace(ctx0, joined, output, joined->nb[1], offset_bytes);
+                        offset_bytes += ggml_nbytes(output);
+                    }
+                    GGML_ASSERT(offset_bytes == ggml_nbytes(joined));
+                }
+                cur = build_mm(layer.o_w, joined);
+                if (layer.o_b) {
+                    cur = ggml_add(ctx0, cur, layer.o_b);
+                }
+            } else {
+                cur = build_attn(layer.o_w, layer.o_b,
+                    Qcur, Kcur, Vcur, attn_mask, kq_scale, il);
+            }
             cb(cur, "attn_out", il);
         }
 
