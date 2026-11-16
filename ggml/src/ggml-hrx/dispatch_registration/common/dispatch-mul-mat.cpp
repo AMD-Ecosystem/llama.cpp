@@ -47,8 +47,8 @@ static constexpr KernelCatalogRef kMulMatF32F32DecodeWave64Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_f32_f32_decode_wave64");
 static constexpr KernelCatalogRef kMulMatAddF32F32DecodeWave64Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_add_f32_f32_decode_wave64");
-static constexpr KernelCatalogRef kMulMatVectorF32F32Kernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_vector_f32_f32");
+static constexpr KernelCatalogRef kMulMatVectorKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_vector");
 static constexpr KernelCatalogRef kMulMatVectorQ1_0Q8_1X4F32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_vector_q1_0_q8_1_x4_f32");
 static constexpr KernelCatalogRef kMulMatVectorQ1_0Q8_1X4Rows2F32Kernel =
@@ -1659,7 +1659,7 @@ static bool build_vector_mul_mat_dispatch(const DispatchMatchContext & context,
         return false;
     }
     dispatch.kernel = make_kernel_specialization(
-        use_iq_codebook ? vector_iq_codebook_kernel(match.weight_format) : kMulMatVectorF32F32Kernel);
+        use_iq_codebook ? vector_iq_codebook_kernel(match.weight_format) : kMulMatVectorKernel);
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
     dispatch.kernel.compile_parameters.emplace("ggml.workload.token_capacity",
                                                common_to_config_value(match.token_count));
@@ -1805,7 +1805,7 @@ static bool build_vector_mul_mat_postops_dispatch(const DispatchMatchContext & c
 
 static bool match_vector_mul_mat_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     CommonMulMatMatch match =
-        common_match_mul_mat_any_format(context.graph, context.root_node, kMulMatVectorF32F32Kernel, true);
+        common_match_mul_mat_any_format(context.graph, context.root_node, kMulMatVectorKernel, true);
     if (!match.matched() || match.token_count != 1) {
         return false;
     }
@@ -1814,7 +1814,7 @@ static bool match_vector_mul_mat_dispatch(const DispatchMatchContext & context, 
 
 static bool match_vector_mul_mat_unary_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     CommonMulMatMatch match =
-        common_match_mul_mat_any_format(context.graph, context.root_node, kMulMatVectorF32F32Kernel, true);
+        common_match_mul_mat_any_format(context.graph, context.root_node, kMulMatVectorKernel, true);
     if (!match.matched() || match.token_count != 1 || !try_match_fused_unary(context, match)) {
         return false;
     }

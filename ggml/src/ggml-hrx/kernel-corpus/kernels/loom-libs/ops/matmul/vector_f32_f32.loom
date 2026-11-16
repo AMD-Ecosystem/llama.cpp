@@ -119,7 +119,7 @@ template.def<@ggml.matmul.vector_f32.entry> device @ggml_matmul_vector_f32_entry
   template.return
 }
 
-kernel.def target(@ggml_matmul_vector_gfx11_wave64) @ggml_mul_mat_vector_f32_f32(%token_count: index) {
+kernel.def target(@ggml_matmul_vector_gfx11_wave64) @ggml_mul_mat_vector(%token_count: index) {
   %input_size = config.get @ggml.matmul.vector.input_size : index
   %output_size = config.get @ggml.matmul.vector.output_size : index
   %token_capacity = config.get @ggml.workload.token_capacity : index

@@ -18,8 +18,8 @@ static constexpr KernelCatalogRef kQwenDenseLinearQ4KQ8NextQ8Kernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_dense_linear_q4k_q8_1_x4_next_q8");
 static constexpr KernelCatalogRef kMulMatVectorQ6Q8F32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_vector_q6_q8_f32");
-static constexpr KernelCatalogRef kMulMatVectorF32F32Kernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_vector_f32_f32");
+static constexpr KernelCatalogRef kMulMatVectorKernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_vector");
 
 static constexpr int64_t kQwenHiddenSize      = kQwen30BMoeDispatchProfile.hidden_size;
 static constexpr int64_t kQwenVocabularyCount = 151936;
@@ -346,7 +346,7 @@ Dispatch make_qwen_q6k_q8_projection_dispatch(const Value & weight, const Value 
                               dispatch_weight_layout_eligible(weight);
     Dispatch dispatch;
     dispatch.kernel =
-        make_kernel_specialization(row64_weight ? kMulMatVectorF32F32Kernel : kMulMatVectorQ6Q8F32Kernel);
+        make_kernel_specialization(row64_weight ? kMulMatVectorKernel : kMulMatVectorQ6Q8F32Kernel);
     dispatch.kernel.integer_parameters.emplace("token_count", 1);
     dispatch.kernel.compile_parameters.emplace("ggml.workload.token_capacity", "1");
     dispatch.kernel.compile_parameters.emplace("ggml.matmul.vector.input_size", to_config_value(input_size));

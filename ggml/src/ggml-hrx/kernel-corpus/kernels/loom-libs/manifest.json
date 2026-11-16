@@ -2707,9 +2707,9 @@
       ]
     },
     {
-      "name": "ggml_mul_mat_vector_f32_f32",
+      "name": "ggml_mul_mat_vector",
       "family": "loom_libs",
-      "symbol": "ggml_mul_mat_vector_f32_f32",
+      "symbol": "ggml_mul_mat_vector",
       "source": "ops/matmul/vector_f32_f32.loom",
       "workload_parameters": [
         {
