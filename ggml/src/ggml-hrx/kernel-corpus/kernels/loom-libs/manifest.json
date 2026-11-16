@@ -670,6 +670,9 @@
     },
     {
       "path": "motifs/matmul/q6_row64_q8_1_x4_decode.loom"
+    },
+    {
+      "path": "ops/matmul/vector_q6_q8_native_test.loom"
     }
   ],
   "exports": [
@@ -10160,6 +10163,30 @@
         "motifs/flash_attention/completion_counter_reduce.loom",
         "motifs/quantize_q8_1_x4.loom"
       ]
+    },
+    {
+      "name": "vector_q6_q8_native_test_linked",
+      "srcs": [
+        "ops/matmul/vector_q6_q8_native_test.loom"
+      ],
+      "libraries": [
+        "ops/matmul/vector_f32_f32.loom",
+        "motifs/matmul/vector_activation.loom",
+        "motifs/matmul/q6_q8_1_x4_decode.loom",
+        "motifs/matmul/q6_row64_q8_1_x4_decode.loom",
+        "motifs/quantize_q8_1_x4_group.loom",
+        "motifs/matmul/vector_decode_pair.loom",
+        "motifs/matmul/vector_publish.loom",
+        "motifs/dequant.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
     }
   ],
   "plan_cases": [
@@ -10203,6 +10230,78 @@
         "--output-format=jsonl"
       ],
       "source": "ops/rows/get_rows_scale_f32.loom"
+    },
+    {
+      "name": "vector_q6_q8_wave32_k768_tail_plan_test",
+      "args": [
+        "$(location :vector_q6_q8_native_test_linked)",
+        "--benchmark=@ggml_mul_mat_vector_q6_q8_wave32_k768_tail_small",
+        "--config=ggml.workload.token_capacity=1",
+        "--config=ggml.matmul.vector.input_size=768",
+        "--config=ggml.matmul.vector.output_size=9",
+        "--config=ggml.matmul.vector.weight_format=6",
+        "--config=ggml.matmul.vector.activation_format=9",
+        "--config=ggml.matmul.vector.output_accumulation=0",
+        "--config=ggml.matmul.vector.output_unary_op=23",
+        "--config=ggml.matmul.vector.publish_format=0",
+        "--dry-run",
+        "--output-format=jsonl"
+      ],
+      "link_module": "vector_q6_q8_native_test_linked"
+    },
+    {
+      "name": "vector_q6_q8_wave32_k2048_tail_plan_test",
+      "args": [
+        "$(location :vector_q6_q8_native_test_linked)",
+        "--benchmark=@ggml_mul_mat_vector_q6_q8_wave32_k2048_tail_small",
+        "--config=ggml.workload.token_capacity=1",
+        "--config=ggml.matmul.vector.input_size=2048",
+        "--config=ggml.matmul.vector.output_size=9",
+        "--config=ggml.matmul.vector.weight_format=6",
+        "--config=ggml.matmul.vector.activation_format=9",
+        "--config=ggml.matmul.vector.output_accumulation=0",
+        "--config=ggml.matmul.vector.output_unary_op=23",
+        "--config=ggml.matmul.vector.publish_format=0",
+        "--dry-run",
+        "--output-format=jsonl"
+      ],
+      "link_module": "vector_q6_q8_native_test_linked"
+    },
+    {
+      "name": "vector_q6_q8_wave64_k768_tail_plan_test",
+      "args": [
+        "$(location :vector_q6_q8_native_test_linked)",
+        "--benchmark=@ggml_mul_mat_vector_q6_q8_wave64_k768_tail_small",
+        "--config=ggml.workload.token_capacity=1",
+        "--config=ggml.matmul.vector.input_size=768",
+        "--config=ggml.matmul.vector.output_size=9",
+        "--config=ggml.matmul.vector.weight_format=6",
+        "--config=ggml.matmul.vector.activation_format=9",
+        "--config=ggml.matmul.vector.output_accumulation=0",
+        "--config=ggml.matmul.vector.output_unary_op=23",
+        "--config=ggml.matmul.vector.publish_format=0",
+        "--dry-run",
+        "--output-format=jsonl"
+      ],
+      "link_module": "vector_q6_q8_native_test_linked"
+    },
+    {
+      "name": "vector_q6_q8_wave64_k2048_tail_plan_test",
+      "args": [
+        "$(location :vector_q6_q8_native_test_linked)",
+        "--benchmark=@ggml_mul_mat_vector_q6_q8_wave64_k2048_tail_small",
+        "--config=ggml.workload.token_capacity=1",
+        "--config=ggml.matmul.vector.input_size=2048",
+        "--config=ggml.matmul.vector.output_size=9",
+        "--config=ggml.matmul.vector.weight_format=6",
+        "--config=ggml.matmul.vector.activation_format=9",
+        "--config=ggml.matmul.vector.output_accumulation=0",
+        "--config=ggml.matmul.vector.output_unary_op=23",
+        "--config=ggml.matmul.vector.publish_format=0",
+        "--dry-run",
+        "--output-format=jsonl"
+      ],
+      "link_module": "vector_q6_q8_native_test_linked"
     }
   ],
   "sources": [],

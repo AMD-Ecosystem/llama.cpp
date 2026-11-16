@@ -67,6 +67,4 @@ check.case public @ggml_linear_q6k_q8_1_x4_nonzero_tail_case {
   check.return
 }
 
-// The gfx1151 schedule has an exact target requirement, so its nonzero packed
-// data case remains independently selectable from the generic gfx11 case.
 check.benchmark<@ggml_linear_q6k_q8_1_x4_nonzero_tail_case> @ggml_linear_q6k_q8_1_x4_small
