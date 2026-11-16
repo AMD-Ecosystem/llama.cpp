@@ -49,9 +49,9 @@ func.def inline @ggml_q6k_row64_pair_load_decode_state(%weight: buffer, %row: in
 func.def inline @ggml_q6k_row64_pair_preloaded_f32_vector4(%group: index, %d: f32, %scale_i8: i8, %ql_word: vector<1xi32>, %qh_word: vector<1xi32>) -> (vector<4xf32>) {
   %c2 = index.constant 2 : index
   %c4 = index.constant 4 : index
-  %c4v = vector.constant 4 : vector<1xi32>
-  %nibble_mask = vector.constant 252645135 : vector<1xi32>
-  %high_mask = vector.constant 50529027 : vector<1xi32>
+  %c4v = vector.splati 4 : vector<1xi32>
+  %nibble_mask = vector.splati 252645135 : vector<1xi32>
+  %high_mask = vector.splati 50529027 : vector<1xi32>
   %nibble = index.div %group, %c2 : index
   %ls = index.mul %nibble, %c4 : index
   %hs = index.mul %group, %c2 : index
@@ -66,7 +66,7 @@ func.def inline @ggml_q6k_row64_pair_preloaded_f32_vector4(%group: index, %d: f3
   %qh = vector.shli %qh_low, %c4v : vector<1xi32>
   %codes = vector.ori %ql, %qh : vector<1xi32>
   %bytes = vector.bitcast %codes : vector<1xi32> to vector<4xi8>
-  %c32 = vector.constant 32.0 : vector<4xf32>
+  %c32 = vector.splatf 32.0 : vector<4xf32>
   %unbiased = vector.uitofp %bytes : vector<4xi8> to vector<4xf32>
   %wide = vector.subf %unbiased, %c32 : vector<4xf32>
   %scale = scalar.sitofp %scale_i8 : i8 to f32
