@@ -119,6 +119,42 @@
     {
       "path": "../qwen/attention_metadata.loom",
       "upstream_path": "experimental/qwen/kernels/attention_metadata.loom"
+    },
+    {
+      "path": "../loom-libs/ops/matmul/vector_f32_f32.loom"
+    },
+    {
+      "path": "../loom-libs/motifs/matmul/vector_activation.loom"
+    },
+    {
+      "path": "../loom-libs/motifs/matmul/vector_decode_pair.loom"
+    },
+    {
+      "path": "../loom-libs/motifs/matmul/vector_publish.loom"
+    },
+    {
+      "path": "../loom-libs/motifs/dequant.loom"
+    },
+    {
+      "path": "../loom-libs/motifs/elementwise/unary_apply.loom"
+    },
+    {
+      "path": "../loom-libs/motifs/q4_k_f16.loom"
+    },
+    {
+      "path": "../loom-libs/motifs/q8_0_f16.loom"
+    },
+    {
+      "path": "../loom-libs/motifs/q8_1_f16.loom"
+    },
+    {
+      "path": "../loom-libs/motifs/f16_f16.loom"
+    },
+    {
+      "path": "../loom-libs/motifs/bf16_f16.loom"
+    },
+    {
+      "path": "../loom-libs/motifs/f32_f16.loom"
     }
   ],
   "exports": [
@@ -175,14 +211,38 @@
           "../loom-libs/motifs/matmul/q6_q8_1_x4_decode.loom",
           "../loom-libs/motifs/q6_k_f16.loom",
           "ggml/quantize_q8_1_x4.loom",
-          "../loom-libs/motifs/quantize_q8_1_x4_group.loom"
+          "../loom-libs/motifs/quantize_q8_1_x4_group.loom",
+          "../loom-libs/ops/matmul/vector_f32_f32.loom",
+          "../loom-libs/motifs/matmul/vector_activation.loom",
+          "../loom-libs/motifs/matmul/vector_decode_pair.loom",
+          "../loom-libs/motifs/matmul/vector_publish.loom",
+          "../loom-libs/motifs/dequant.loom",
+          "../loom-libs/motifs/elementwise/unary_apply.loom",
+          "../loom-libs/motifs/q4_k_f16.loom",
+          "../loom-libs/motifs/q8_0_f16.loom",
+          "../loom-libs/motifs/q8_1_f16.loom",
+          "../loom-libs/motifs/f16_f16.loom",
+          "../loom-libs/motifs/bf16_f16.loom",
+          "../loom-libs/motifs/f32_f16.loom"
         ]
       },
       "compile_dependencies": [
         "../loom-libs/motifs/matmul/q6_q8_1_x4_decode.loom",
         "../loom-libs/motifs/q6_k_f16.loom",
         "ggml/quantize_q8_1_x4.loom",
-        "../loom-libs/motifs/quantize_q8_1_x4_group.loom"
+        "../loom-libs/motifs/quantize_q8_1_x4_group.loom",
+        "../loom-libs/ops/matmul/vector_f32_f32.loom",
+        "../loom-libs/motifs/matmul/vector_activation.loom",
+        "../loom-libs/motifs/matmul/vector_decode_pair.loom",
+        "../loom-libs/motifs/matmul/vector_publish.loom",
+        "../loom-libs/motifs/dequant.loom",
+        "../loom-libs/motifs/elementwise/unary_apply.loom",
+        "../loom-libs/motifs/q4_k_f16.loom",
+        "../loom-libs/motifs/q8_0_f16.loom",
+        "../loom-libs/motifs/q8_1_f16.loom",
+        "../loom-libs/motifs/f16_f16.loom",
+        "../loom-libs/motifs/bf16_f16.loom",
+        "../loom-libs/motifs/f32_f16.loom"
       ]
     },
     {
@@ -238,14 +298,38 @@
           "../loom-libs/motifs/matmul/q6_q8_1_x4_decode.loom",
           "../loom-libs/motifs/q6_k_f16.loom",
           "ggml/quantize_q8_1_x4.loom",
-          "../loom-libs/motifs/quantize_q8_1_x4_group.loom"
+          "../loom-libs/motifs/quantize_q8_1_x4_group.loom",
+          "../loom-libs/ops/matmul/vector_f32_f32.loom",
+          "../loom-libs/motifs/matmul/vector_activation.loom",
+          "../loom-libs/motifs/matmul/vector_decode_pair.loom",
+          "../loom-libs/motifs/matmul/vector_publish.loom",
+          "../loom-libs/motifs/dequant.loom",
+          "../loom-libs/motifs/elementwise/unary_apply.loom",
+          "../loom-libs/motifs/q4_k_f16.loom",
+          "../loom-libs/motifs/q8_0_f16.loom",
+          "../loom-libs/motifs/q8_1_f16.loom",
+          "../loom-libs/motifs/f16_f16.loom",
+          "../loom-libs/motifs/bf16_f16.loom",
+          "../loom-libs/motifs/f32_f16.loom"
         ]
       },
       "compile_dependencies": [
         "../loom-libs/motifs/matmul/q6_q8_1_x4_decode.loom",
         "../loom-libs/motifs/q6_k_f16.loom",
         "ggml/quantize_q8_1_x4.loom",
-        "../loom-libs/motifs/quantize_q8_1_x4_group.loom"
+        "../loom-libs/motifs/quantize_q8_1_x4_group.loom",
+        "../loom-libs/ops/matmul/vector_f32_f32.loom",
+        "../loom-libs/motifs/matmul/vector_activation.loom",
+        "../loom-libs/motifs/matmul/vector_decode_pair.loom",
+        "../loom-libs/motifs/matmul/vector_publish.loom",
+        "../loom-libs/motifs/dequant.loom",
+        "../loom-libs/motifs/elementwise/unary_apply.loom",
+        "../loom-libs/motifs/q4_k_f16.loom",
+        "../loom-libs/motifs/q8_0_f16.loom",
+        "../loom-libs/motifs/q8_1_f16.loom",
+        "../loom-libs/motifs/f16_f16.loom",
+        "../loom-libs/motifs/bf16_f16.loom",
+        "../loom-libs/motifs/f32_f16.loom"
       ]
     },
     {
@@ -1077,7 +1161,19 @@
         "../loom-libs/motifs/matmul/q6_q8_1_x4_decode.loom",
         "../loom-libs/motifs/q6_k_f16.loom",
         "ggml/quantize_q8_1_x4.loom",
-        "../loom-libs/motifs/quantize_q8_1_x4_group.loom"
+        "../loom-libs/motifs/quantize_q8_1_x4_group.loom",
+        "../loom-libs/ops/matmul/vector_f32_f32.loom",
+        "../loom-libs/motifs/matmul/vector_activation.loom",
+        "../loom-libs/motifs/matmul/vector_decode_pair.loom",
+        "../loom-libs/motifs/matmul/vector_publish.loom",
+        "../loom-libs/motifs/dequant.loom",
+        "../loom-libs/motifs/elementwise/unary_apply.loom",
+        "../loom-libs/motifs/q4_k_f16.loom",
+        "../loom-libs/motifs/q8_0_f16.loom",
+        "../loom-libs/motifs/q8_1_f16.loom",
+        "../loom-libs/motifs/f16_f16.loom",
+        "../loom-libs/motifs/bf16_f16.loom",
+        "../loom-libs/motifs/f32_f16.loom"
       ]
     },
     {

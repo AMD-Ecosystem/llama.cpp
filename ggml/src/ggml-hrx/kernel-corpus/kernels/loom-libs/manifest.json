@@ -2737,6 +2737,8 @@
         ],
         "library_sources": [
           "motifs/matmul/vector_activation.loom",
+          "motifs/matmul/q6_q8_1_x4_decode.loom",
+          "motifs/quantize_q8_1_x4_group.loom",
           "motifs/matmul/vector_decode_pair.loom",
           "motifs/matmul/vector_publish.loom",
           "motifs/dequant.loom",
@@ -2752,6 +2754,8 @@
       },
       "compile_dependencies": [
         "motifs/matmul/vector_activation.loom",
+        "motifs/matmul/q6_q8_1_x4_decode.loom",
+        "motifs/quantize_q8_1_x4_group.loom",
         "motifs/matmul/vector_decode_pair.loom",
         "motifs/matmul/vector_publish.loom",
         "motifs/dequant.loom",
@@ -2806,6 +2810,8 @@
         ],
         "library_sources": [
           "motifs/matmul/vector_activation.loom",
+          "motifs/matmul/q6_q8_1_x4_decode.loom",
+          "motifs/quantize_q8_1_x4_group.loom",
           "motifs/matmul/vector_decode_pair.loom",
           "motifs/matmul/vector_publish.loom",
           "motifs/matmul/vector_postops.loom",
@@ -2821,6 +2827,8 @@
       },
       "compile_dependencies": [
         "motifs/matmul/vector_activation.loom",
+        "motifs/matmul/q6_q8_1_x4_decode.loom",
+        "motifs/quantize_q8_1_x4_group.loom",
         "motifs/matmul/vector_decode_pair.loom",
         "motifs/matmul/vector_publish.loom",
         "motifs/matmul/vector_postops.loom",
@@ -3072,6 +3080,8 @@
         ],
         "library_sources": [
           "motifs/matmul/vector_activation.loom",
+          "motifs/matmul/q6_q8_1_x4_decode.loom",
+          "motifs/quantize_q8_1_x4_group.loom",
           "motifs/matmul/vector_decode_pair.loom",
           "motifs/matmul/vector_publish.loom",
           "motifs/llm_attention_qkv_matmul_postops.loom",
@@ -3088,6 +3098,8 @@
       },
       "compile_dependencies": [
         "motifs/matmul/vector_activation.loom",
+        "motifs/matmul/q6_q8_1_x4_decode.loom",
+        "motifs/quantize_q8_1_x4_group.loom",
         "motifs/matmul/vector_decode_pair.loom",
         "motifs/matmul/vector_publish.loom",
         "motifs/llm_attention_qkv_matmul_postops.loom",
@@ -3145,6 +3157,8 @@
         ],
         "library_sources": [
           "motifs/matmul/vector_activation.loom",
+          "motifs/matmul/q6_q8_1_x4_decode.loom",
+          "motifs/quantize_q8_1_x4_group.loom",
           "motifs/matmul/vector_decode_pair.loom",
           "motifs/matmul/vector_publish.loom",
           "motifs/llm_attention_qkv_matmul_postops.loom",
@@ -3161,6 +3175,8 @@
       },
       "compile_dependencies": [
         "motifs/matmul/vector_activation.loom",
+        "motifs/matmul/q6_q8_1_x4_decode.loom",
+        "motifs/quantize_q8_1_x4_group.loom",
         "motifs/matmul/vector_decode_pair.loom",
         "motifs/matmul/vector_publish.loom",
         "motifs/llm_attention_qkv_matmul_postops.loom",
@@ -3212,6 +3228,8 @@
         ],
         "library_sources": [
           "motifs/matmul/vector_activation.loom",
+          "motifs/matmul/q6_q8_1_x4_decode.loom",
+          "motifs/quantize_q8_1_x4_group.loom",
           "motifs/matmul/vector_decode_pair.loom",
           "motifs/matmul/vector_publish.loom",
           "motifs/llm_attention_qkv_matmul_postops.loom",
@@ -3227,6 +3245,8 @@
       },
       "compile_dependencies": [
         "motifs/matmul/vector_activation.loom",
+        "motifs/matmul/q6_q8_1_x4_decode.loom",
+        "motifs/quantize_q8_1_x4_group.loom",
         "motifs/matmul/vector_decode_pair.loom",
         "motifs/matmul/vector_publish.loom",
         "motifs/llm_attention_qkv_matmul_postops.loom",
