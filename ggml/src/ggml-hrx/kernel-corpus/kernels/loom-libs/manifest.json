@@ -9988,6 +9988,144 @@
       "compile_dependencies": [
         "motifs/elementwise/unary_apply.loom"
       ]
+    },
+    {
+      "name": "ggml_mul_mat_vector_q6_q8_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_vector_q6_q8_f32_wave32",
+      "source": "ops/matmul/vector_f32_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "output",
+        "next_output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul/vector_f32_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul/vector_activation.loom",
+          "motifs/matmul/q6_q8_1_x4_decode.loom",
+          "motifs/quantize_q8_1_x4_group.loom",
+          "motifs/matmul/vector_decode_pair.loom",
+          "motifs/matmul/vector_publish.loom",
+          "motifs/dequant.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul/vector_activation.loom",
+        "motifs/matmul/q6_q8_1_x4_decode.loom",
+        "motifs/quantize_q8_1_x4_group.loom",
+        "motifs/matmul/vector_decode_pair.loom",
+        "motifs/matmul/vector_publish.loom",
+        "motifs/dequant.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_vector_q6_q8_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_vector_q6_q8_f32_wave64",
+      "source": "ops/matmul/vector_f32_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "output",
+        "next_output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write",
+        "write"
+      ],
+      "target_selector": "gfx1151",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul/vector_f32_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul/vector_activation.loom",
+          "motifs/matmul/q6_q8_1_x4_decode.loom",
+          "motifs/quantize_q8_1_x4_group.loom",
+          "motifs/matmul/vector_decode_pair.loom",
+          "motifs/matmul/vector_publish.loom",
+          "motifs/dequant.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul/vector_activation.loom",
+        "motifs/matmul/q6_q8_1_x4_decode.loom",
+        "motifs/quantize_q8_1_x4_group.loom",
+        "motifs/matmul/vector_decode_pair.loom",
+        "motifs/matmul/vector_publish.loom",
+        "motifs/dequant.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
     }
   ],
   "link_modules": [

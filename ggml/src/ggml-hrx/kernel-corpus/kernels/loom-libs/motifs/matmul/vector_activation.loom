@@ -1094,10 +1094,15 @@ template.def<@ggml.matmul.vector_activation.core> device @ggml_matmul_vector_act
   %uses_q8 = index.cmp eq, %activation_format, %q8_format : index
   scf.if %uses_q8 {
     %q6_format = index.constant 46 : index
-    %uses_q6 = index.cmp eq, %weight_format, %q6_format : index
+    %q6_native_format = index.constant 6 : index
+    %uses_row64_q6 = index.cmp eq, %weight_format, %q6_format : index
+    %uses_native_q6 = index.cmp eq, %weight_format, %q6_native_format : index
+    %uses_q6 = scalar.ori %uses_row64_q6, %uses_native_q6 : i1
     scf.if %uses_q6 {
       %token_capacity = config.get @ggml.workload.token_capacity : index
-      %native_wave64 = scalar.constant false : i1
+      %wave = target.subgroup.size : index
+      %c64 = index.constant 64 : index
+      %native_wave64 = index.cmp eq, %wave, %c64 : index
       template.apply<@ggml.matmul.q6_q8_1_x4.core>(%weight_format, %native_wave64, %token_capacity, %output_size0, %token_count, %input_size0, %output_size0, %output_accumulation, %output_unary_op, %epsilon, %channel_group, %token_group, %input, %weight, %bias, %output, %residual_input, %residual_output, %norm_weight, %normalized_output, %completion_counters, %next_output) : (index, i1, index, index, index, index, index, index, index, f32, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
     } else {
       func.call @ggml_matmul_vector_q4_q8_1_x4_activation_dot(%weight_format, %token_count, %input_size0, %output_size0, %output_accumulation, %output_unary_op, %epsilon, %channel_group, %token_group, %input, %weight, %bias, %output, %residual_input, %residual_output, %norm_weight, %normalized_output, %completion_counters, %next_output) : (index, index, index, index, index, index, f32, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)

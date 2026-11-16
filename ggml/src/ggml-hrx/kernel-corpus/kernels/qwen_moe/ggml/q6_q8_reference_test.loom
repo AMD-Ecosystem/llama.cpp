@@ -1,0 +1,72 @@
+// Test-only native reference for packed Q6/Q8 and multi-token QKV checks.
+template.decl @ggml.linear_q6k_q8_1_x4.body(%publish_output: i1, %token_count: index, %token0: index, %input_size: index, %output_size: index, %q8_input: buffer, %weight: buffer) -> (f32, index, index, i1, index, index)
+
+config.decl @ggml.linear_q6k_q8_1_x4.token_capacity : %value: index where [range(%value, 1, 2048)]
+
+config.decl @ggml.linear_q6k_q8_1_x4.output_capacity : %value: index where [range(%value, 1, 262144)]
+
+kernel.decl @ggml_quantize_q8_1_x4_f32(%token_count$15: index, %input_size$16: index) launch(%token_count$17: index, %input_size$18: index, %input: buffer, %output: buffer)
+
+func.decl @ggml_q8_1_x4_word(%q8_input: buffer, %row_byte_base: offset, %q8_block: index, %word_in_block: index) -> (vector<4xi8>, f32)
+
+// Dense raw-layout baseline. A 256-thread workgroup carries eight independent
+// wave32 output rows so decode launches enough waves without duplicating Q6_K
+// decoding within a row.
+kernel.def @ggml_linear_q6k_q8_1_x4(%token_count: index, %input_size: index, %output_size: index) {
+  %token_capacity = config.get @ggml.linear_q6k_q8_1_x4.token_capacity : index
+  %output_capacity = config.get @ggml.linear_q6k_q8_1_x4.output_capacity : index
+  %c8 = index.constant 8 : index
+  %c7 = index.constant 7 : index
+  %c1 = index.constant 1 : index
+  %workgroup_size = index.constant 256 : index
+  %padded_output_size = index.add %output_capacity, %c7 : index
+  %output_tiles = index.div %padded_output_size, %c8 : index
+  kernel.launch.config workgroups(%output_tiles, %token_capacity, %c1) workgroup_size(%workgroup_size, %c1, %c1) : index
+} launch(%token_count: index, %input_size: index, %output_size: index, %q8_input: buffer, %weight: buffer, %output: buffer) {
+  %q8_noalias, %weight_noalias, %output_noalias = buffer.assume.noalias %q8_input, %weight, %output : buffer, buffer, buffer
+  %token_capacity = config.get @ggml.linear_q6k_q8_1_x4.token_capacity : index
+  %output_capacity = config.get @ggml.linear_q6k_q8_1_x4.output_capacity : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %token_capacity)] : index
+  %bounded_output_size = index.assume %output_size [range(%output_size, 1, 262144), le(%output_size, %output_capacity)] : index
+  %c0 = index.constant 0 : index
+  %token0 = kernel.workgroup.id<y> : index
+  %valid_token = index.cmp ult, %token0, %bounded_token_count : index
+  %safe_token = scf.select %valid_token, %token0, %c0 : index
+  %dot, %token, %channel, %valid_channel, %launch_token_count, %output_bound = template.apply<@ggml.linear_q6k_q8_1_x4.body>(%valid_token, %bounded_token_count, %safe_token, %input_size, %bounded_output_size, %q8_noalias, %weight_noalias) : (i1, index, index, index, index, buffer, buffer) -> (f32, index, index, i1, index, index)
+  %c0_i32 = scalar.constant 0 : i32
+  %c0_offset = index.constant 0 : offset
+  %lane = kernel.subgroup.lane.id : index
+  %lane_i32 = index.cast %lane : index to i32
+  %is_lane_zero = scalar.cmpi eq, %lane_i32, %c0_i32 : i32
+  scf.if %valid_token {
+    scf.if %valid_channel {
+      scf.if %is_lane_zero {
+        %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%output_bound]xf32>
+        view.store %dot, %output_view[%token, %channel] : f32, view<[%launch_token_count]x[%output_bound]xf32>
+      }
+    }
+  }
+  kernel.return
+}
+
+// Uniform packed bytes exercise both low/high Q6 fields and signed per-group
+// scales. The output width crosses the eight-wave tile boundary, while K=2048
+// covers the exact mixed-format dense V contraction depth.
+check.case public @ggml_linear_q6k_q8_1_x4_nonzero_tail_case {
+  %token_count = check.literal value(2) : index
+  %input_size = check.literal value(2048) : index
+  %output_size = check.literal value(9) : index
+  %input = check.generate.fill value(0.00390625) : tensor<2x2048xf32>
+  %q8_input = check.generate.fill value(0) : tensor<2x2304xi8>
+  %weight = check.generate.fill value(-86) : tensor<9x8x210xi8>
+  %output = check.generate.fill value(0.0) : tensor<2x9xf32>
+  %expected = check.generate.fill value(358.1715087890625) : tensor<2x9xf32>
+  kernel.launch @ggml_quantize_q8_1_x4_f32[%token_count, %input_size](%token_count, %input_size, %input, %q8_input) : [index, index](index, index, tensor<2x2048xf32>, tensor<2x2304xi8>)
+  kernel.launch @ggml_linear_q6k_q8_1_x4[%token_count, %input_size, %output_size](%token_count, %input_size, %output_size, %q8_input, %weight, %output) : [index, index, index](index, index, index, tensor<2x2304xi8>, tensor<9x8x210xi8>, tensor<2x9xf32>)
+  check.expect.approximate actual(%output) expected(%expected) atol(0.25) rtol(9.9999999999999995e-07) nan(same) : tensor<2x9xf32>, tensor<2x9xf32>
+  check.return
+}
+
+// The gfx1151 schedule has an exact target requirement, so its nonzero packed
+// data case remains independently selectable from the generic gfx11 case.
+check.benchmark<@ggml_linear_q6k_q8_1_x4_nonzero_tail_case> @ggml_linear_q6k_q8_1_x4_small

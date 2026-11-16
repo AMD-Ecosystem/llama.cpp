@@ -7523,7 +7523,7 @@ static void run_endpoint_rmsnorm_q6k_q8_cpu_reference_case(bool prefer_row64 = f
         require_kernel_subsequence(
             scheduled_kernel_sequence(hrx_graph, { "gfx1151", prefer_row64 }),
             { "qwen3_moe:qwen3_moe_rmsnorm_f32_quantize_q8_1_x4",
-              prefer_row64 ? "loom_libs:ggml_mul_mat_vector_f32_f32" : "qwen3_moe:ggml_linear_q6k_q8_1_x4" });
+              prefer_row64 ? "loom_libs:ggml_mul_mat_vector_f32_f32" : "loom_libs:ggml_mul_mat_vector_q6_q8_f32" });
     } else {
         require_kernel_subsequence(
             scheduled_kernel_sequence(hrx_graph, { "gfx1151", prefer_row64 }),

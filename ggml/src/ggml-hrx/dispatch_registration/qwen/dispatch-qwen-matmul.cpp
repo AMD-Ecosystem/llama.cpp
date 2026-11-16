@@ -16,8 +16,8 @@ namespace {
 
 static constexpr KernelCatalogRef kQwenDenseLinearQ4KQ8NextQ8Kernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_dense_linear_q4k_q8_1_x4_next_q8");
-static constexpr KernelCatalogRef kGgmlLinearQ6KQ8_1X4Kernel =
-    GGML_HRX_KERNEL_REF("qwen3_moe", "ggml_linear_q6k_q8_1_x4");
+static constexpr KernelCatalogRef kMulMatVectorQ6Q8F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_vector_q6_q8_f32");
 static constexpr KernelCatalogRef kMulMatVectorF32F32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_vector_f32_f32");
 
@@ -193,7 +193,7 @@ static QwenMatmulMatch match_qwen_q6k_q8_matmul(const Graph & graph, const Graph
     match.output      = output;
     match.input_value = alternate->alternate_value;
     match.input_bytes = alternate->byte_count;
-    match.kernel      = kGgmlLinearQ6KQ8_1X4Kernel;
+    match.kernel      = kMulMatVectorQ6Q8F32Kernel;
     match.input_size  = input_size;
     match.output_size = output_size;
     match.token_count = token_count;
@@ -346,28 +346,21 @@ Dispatch make_qwen_q6k_q8_projection_dispatch(const Value & weight, const Value 
                               dispatch_weight_layout_eligible(weight);
     Dispatch dispatch;
     dispatch.kernel =
-        make_kernel_specialization(row64_weight ? kMulMatVectorF32F32Kernel : kGgmlLinearQ6KQ8_1X4Kernel);
+        make_kernel_specialization(row64_weight ? kMulMatVectorF32F32Kernel : kMulMatVectorQ6Q8F32Kernel);
     dispatch.kernel.integer_parameters.emplace("token_count", 1);
-    if (row64_weight) {
-        dispatch.kernel.compile_parameters.emplace("ggml.workload.token_capacity", "1");
-        dispatch.kernel.compile_parameters.emplace("ggml.matmul.vector.input_size", to_config_value(input_size));
-        dispatch.kernel.compile_parameters.emplace("ggml.matmul.vector.output_size", to_config_value(output_size));
-        dispatch.kernel.compile_parameters.emplace("ggml.matmul.vector.output_accumulation", "0");
-        dispatch.kernel.compile_parameters.emplace("ggml.matmul.vector.output_unary_op",
-                                                   std::to_string(unary_kind_config_value(UnaryKind::Identity)));
-        dispatch.kernel.compile_parameters.emplace("ggml.matmul.vector.publish_format", "0");
-        dispatch.kernel.compile_parameters.emplace(
-            "ggml.matmul.vector.weight_format",
-            to_config_value(common_mul_mat_format_config_value(CommonMulMatWeightFormat::Q6KRow64)));
-        dispatch.kernel.compile_parameters.emplace("ggml.matmul.vector.activation_format",
-                                                   std::to_string(GGML_TYPE_Q8_1));
-    } else {
-        dispatch.kernel.integer_parameters.emplace("input_size", input_size);
-        dispatch.kernel.integer_parameters.emplace("output_size", output_size);
-        dispatch.kernel.compile_parameters.emplace("ggml.linear_q6k_q8_1_x4.token_capacity", "1");
-        dispatch.kernel.compile_parameters.emplace("ggml.linear_q6k_q8_1_x4.output_capacity",
-                                                   to_config_value(output_size));
-    }
+    dispatch.kernel.compile_parameters.emplace("ggml.workload.token_capacity", "1");
+    dispatch.kernel.compile_parameters.emplace("ggml.matmul.vector.input_size", to_config_value(input_size));
+    dispatch.kernel.compile_parameters.emplace("ggml.matmul.vector.output_size", to_config_value(output_size));
+    dispatch.kernel.compile_parameters.emplace("ggml.matmul.vector.output_accumulation", "0");
+    dispatch.kernel.compile_parameters.emplace("ggml.matmul.vector.output_unary_op",
+                                               std::to_string(unary_kind_config_value(UnaryKind::Identity)));
+    dispatch.kernel.compile_parameters.emplace("ggml.matmul.vector.publish_format", "0");
+    dispatch.kernel.compile_parameters.emplace(
+        "ggml.matmul.vector.weight_format",
+        to_config_value(common_mul_mat_format_config_value(
+            row64_weight ? CommonMulMatWeightFormat::Q6KRow64 : CommonMulMatWeightFormat::Q6K)));
+    dispatch.kernel.compile_parameters.emplace("ggml.matmul.vector.activation_format",
+                                               std::to_string(GGML_TYPE_Q8_1));
     dispatch.bindings.push_back(input);
     if (row64_weight) {
         dispatch.bindings.push_back({ weight.id, 0, weight.byte_count, kQ6KPackedK256Row64ScaleRowLayout,
@@ -376,9 +369,7 @@ Dispatch make_qwen_q6k_q8_projection_dispatch(const Value & weight, const Value 
         dispatch.bindings.push_back({ weight.id, 0, weight.byte_count });
     }
     dispatch.bindings.push_back({ output.id, 0, output.byte_count });
-    if (row64_weight) {
-        dispatch.bindings.push_back({ output.id, 0, output.byte_count });
-    }
+    dispatch.bindings.push_back({ output.id, 0, output.byte_count });
     return dispatch;
 }
 
