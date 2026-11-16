@@ -7467,7 +7467,7 @@ static void run_dense_matmul_zero_weight_case(ggml_type    weight_type,
 }
 
 static void run_endpoint_rmsnorm_q6k_q8_cpu_reference_case(bool prefer_row64 = false,
-                                                           bool tied_embedding = false) {
+                                                           bool tied_embedding = false, int64_t token_count = 1) {
     ggml_backend_t cpu_backend = init_cpu_backend();
     ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
     REQUIRE(hrx_backend != nullptr);
@@ -7481,7 +7481,6 @@ static void run_endpoint_rmsnorm_q6k_q8_cpu_reference_case(bool prefer_row64 = f
     REQUIRE(cpu_ctx != nullptr);
     REQUIRE(hrx_ctx != nullptr);
 
-    constexpr int64_t token_count = 1;
     ggml_tensor *     cpu_input   = ggml_new_tensor_2d(cpu_ctx, GGML_TYPE_F32, kQwenHiddenSize, token_count);
     ggml_tensor *     cpu_norm_w  = ggml_new_tensor_1d(cpu_ctx, GGML_TYPE_F32, kQwenHiddenSize);
     ggml_tensor *     cpu_weight  = ggml_new_tensor_2d(cpu_ctx, GGML_TYPE_Q6_K, kQwenHiddenSize, kQwenVocabularyCount);
@@ -10137,6 +10136,12 @@ static void register_dense_matmul_cases(Suite & suite) {
                       [] { run_endpoint_rmsnorm_q6k_q8_cpu_reference_case(true); });
     suite.device_case("endpoint_rmsnorm_q6k_q8.row64.tied_embedding",
                       [] { run_endpoint_rmsnorm_q6k_q8_cpu_reference_case(true, true); });
+    suite.device_case("endpoint_rmsnorm_q6k_q8.cpu_reference.tokens17",
+                      [] { run_endpoint_rmsnorm_q6k_q8_cpu_reference_case(false, false, 17); });
+    suite.device_case("endpoint_rmsnorm_q6k_q8.row64.cpu_reference.tokens17",
+                      [] { run_endpoint_rmsnorm_q6k_q8_cpu_reference_case(true, false, 17); });
+    suite.device_case("endpoint_rmsnorm_q6k_q8.row64.tied_embedding.tokens17",
+                      [] { run_endpoint_rmsnorm_q6k_q8_cpu_reference_case(true, true, 17); });
     suite.device_case("dense_matmul.q6_k.skinny.tokens5.outputs4096.input16384", [] {
         run_dense_matmul_cpu_reference_case(GGML_TYPE_Q6_K, "loom_libs:ggml_mul_mat_skinny_input_f32_publish_f32", 5,
                                             4096, 16384);
