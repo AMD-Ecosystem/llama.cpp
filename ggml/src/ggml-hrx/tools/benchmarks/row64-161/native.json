@@ -1,0 +1,71 @@
+{
+  "command_count": 1,
+  "dispatch_count": 1,
+  "dispatches": [
+    {
+      "benchmark": "@promptbridge_native_tg32_000_ggml_mul_mat_vector_f32_f32",
+      "compile_parameters": {
+        "ggml.matmul.vector.input_size": "1024",
+        "ggml.matmul.vector.output_accumulation": "0",
+        "ggml.matmul.vector.output_size": "151936",
+        "ggml.matmul.vector.output_unary_op": "23",
+        "ggml.matmul.vector.publish_format": "0",
+        "ggml.matmul.vector.weight_format": "6",
+        "ggml.workload.token_capacity": "1"
+      },
+      "corpus_dir": "kernel-corpus/kernels/loom-libs",
+      "count": 1,
+      "integer_parameters": {
+        "token_count": 1
+      },
+      "kernel": "loom_libs:ggml_mul_mat_vector_f32_f32",
+      "library_sources": [
+        "motifs/matmul/vector_activation.loom",
+        "motifs/matmul/vector_decode_pair.loom",
+        "motifs/matmul/vector_publish.loom",
+        "motifs/dequant.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ],
+      "primary_sources": [
+        "ops/matmul/vector_f32_f32.loom"
+      ],
+      "sources": [
+        "ops/matmul/vector_f32_f32.loom",
+        "motifs/matmul/vector_activation.loom",
+        "motifs/matmul/vector_decode_pair.loom",
+        "motifs/matmul/vector_publish.loom",
+        "motifs/dequant.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ],
+      "symbol": "ggml_mul_mat_vector_f32_f32",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ]
+    }
+  ],
+  "generated_count": 1,
+  "kernel_counts": {
+    "loom_libs:ggml_mul_mat_vector_f32_f32": 1
+  },
+  "loom_source": "native.loom",
+  "model": "promptbridge_native",
+  "scenario": "tg32",
+  "schema": "ggml-hrx-model-loom-benchmarks-v2"
+}
