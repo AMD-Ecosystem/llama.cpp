@@ -17,6 +17,12 @@ static bool ggml_cuda_fattn_rdna_kv_rows_enabled(const int cc) {
     return ggml_cuda_switch_or_rdna3_5(env_switch, cc);
 }
 
+// gather only the K/V rows that a sparse mask keeps (e.g. Qwen QSA) instead of reading the whole cache
+static bool ggml_cuda_fattn_rdna_sparse_enabled(const int cc) {
+    static const int env_switch = ggml_cuda_env_switch("GGML_HIP_FA_SPARSE");
+    return ggml_cuda_switch_or_rdna3_5(env_switch, cc);
+}
+
 #if !defined(GGML_USE_MUSA)
 
 // one list per group of ncols1 queries: a column is selected if any query of the group can see it
@@ -140,10 +146,20 @@ void ggml_cuda_flash_attn_ext_compact_mask(
     const dim3 block_dim(wide ? 1024 : 256, 1, 1);
     const ggml_cuda_kernel_launch_params launch_params(blocks_num, block_dim, 0, stream);
     // the last group of queries is partial only if ncols1 does not divide n_queries
-    GGML_ASSERT(ncols1 == 1 || ncols1 == 8);
-    const auto kernel = ncols1 == 1        ? (wide ? flash_attn_mask_to_sparse_indices<1, false, 1024> : flash_attn_mask_to_sparse_indices<1, false, 256>) :
-                        n_queries % 8 != 0 ? (wide ? flash_attn_mask_to_sparse_indices<8, true,  1024> : flash_attn_mask_to_sparse_indices<8, true,  256>) :
-                                             (wide ? flash_attn_mask_to_sparse_indices<8, false, 1024> : flash_attn_mask_to_sparse_indices<8, false, 256>);
+    const bool oob = n_queries % ncols1 != 0;
+    decltype(&flash_attn_mask_to_sparse_indices<1, false, 256>) kernel = nullptr;
+    auto select = [&](auto ncols1_c) {
+        constexpr int nc = decltype(ncols1_c)::value;
+        if (ncols1 == nc) {
+            kernel = oob ? (wide ? flash_attn_mask_to_sparse_indices<nc, true,  1024> : flash_attn_mask_to_sparse_indices<nc, true,  256>) :
+                           (wide ? flash_attn_mask_to_sparse_indices<nc, false, 1024> : flash_attn_mask_to_sparse_indices<nc, false, 256>);
+        }
+    };
+    select(std::integral_constant<int, 1>{});
+    select(std::integral_constant<int, 2>{});
+    select(std::integral_constant<int, 4>{});
+    select(std::integral_constant<int, 8>{});
+    GGML_ASSERT(kernel != nullptr);
     ggml_cuda_kernel_launch(kernel, launch_params,
         (const half *) mask->data, indices, counts, int(mask->ne[0]), n_queries, n_kv_max, s31, s33);
     CUDA_CHECK(cudaGetLastError());
@@ -175,11 +191,33 @@ bool ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(const int cc, const ggml_
     // the dense kernel handles up to 64/ncols2 queries per K/V pass, the single-query gather has to beat that
     const int64_t n_gather = (ncols1 == 1 ? std::min<int64_t>(Q->ne[1], 64/ncols2) : ncols1) * (int64_t) n_kv_max;
 
-    return ((GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc)) || amd_mfma_available(cc)) && dst->src[5] == nullptr &&
+    // the WMMA kernel has no variant with fewer than 16 columns
+    const bool rdna_sparse = amd_wmma_available(cc) && ncols1*ncols2 >= 16 && Q->ne[0] <= 256 && ggml_cuda_fattn_rdna_sparse_enabled(cc);
+    // sparse tiles narrower than the full width but wider than one query are only dispatched on RDNA
+    if (!rdna_sparse && ncols1 != 1 && ncols1*ncols2 != 64) {
+        return false;
+    }
+    // on RDNA a list holds the union of the queries in a tile and a gathered row costs about 1.5 dense rows
+    const int64_t n_kv_min = rdna_sparse ? 3*std::min<int64_t>(ncols1, Q->ne[1])*n_kv_max/2 :
+        GGML_CUDA_CC_IS_NVIDIA(cc) ? 2*n_gather : 2LL*n_kv_max;
+
+    return ((GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc)) || amd_mfma_available(cc) || rdna_sparse) && dst->src[5] == nullptr &&
         mask != nullptr && n_kv_max > 0 && max_bias == 0.0f && logit_softcap == 0.0f &&
         mask->ne[0] == K->ne[1] && mask->ne[1] >= Q->ne[1] && mask->ne[2] == 1 &&
-        K->ne[1] >= std::max<int64_t>(4096, GGML_CUDA_CC_IS_NVIDIA(cc) ? 2*n_gather : 2LL*n_kv_max);
+        K->ne[1] >= std::max<int64_t>(4096, n_kv_min);
 #endif // !defined(GGML_USE_MUSA)
+}
+
+template <int DKQ, int DV, int ncols1, int ncols2>
+static bool ggml_cuda_flash_attn_ext_mma_f16_try_sparse(ggml_backend_cuda_context & ctx, ggml_tensor * dst, const int cc) {
+    if constexpr (ncols1 >= 1 && ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(DKQ, DV, ncols1, ncols2)) {
+        if (ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(cc, dst, ncols1, ncols2)) {
+            ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, ncols1, ncols2>(ctx, dst);
+            return true;
+        }
+    }
+    GGML_UNUSED_VARS(ctx, dst, cc);
+    return false;
 }
 
 template <int DKQ, int DV, int ncols2>
@@ -193,6 +231,18 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_con
         constexpr bool has_wide_sparse = ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(DKQ, DV, 64/ncols2, ncols2);
         if (!(has_wide_sparse && Q->ne[1] > 32/ncols2) && ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(cc, dst, 1, ncols2)) {
             ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 1, ncols2>(ctx, dst);
+            return;
+        }
+    }
+    // on RDNA small batches take the narrowest sparse tile that holds them
+    if (amd_wmma_available(cc)) {
+        if (Q->ne[1] <= 16/ncols2 && ggml_cuda_flash_attn_ext_mma_f16_try_sparse<DKQ, DV, 16/ncols2, ncols2>(ctx, dst, cc)) {
+            return;
+        }
+        if (Q->ne[1] <= 32/ncols2 && ggml_cuda_flash_attn_ext_mma_f16_try_sparse<DKQ, DV, 32/ncols2, ncols2>(ctx, dst, cc)) {
+            return;
+        }
+        if (ggml_cuda_flash_attn_ext_mma_f16_try_sparse<DKQ, DV, 64/ncols2, ncols2>(ctx, dst, cc)) {
             return;
         }
     }
