@@ -916,6 +916,7 @@ bool llm_arch_supports_mixed_batch(const llm_arch & arch);
 // This preference keeps compatible HRX consumers on one weight layout. Other architectures keep their existing dispatch choices.
 inline bool llm_arch_prefers_hrx_row64_weights(llm_arch arch) {
     switch (arch) {
+        case LLM_ARCH_QWEN3:
         case LLM_ARCH_QWEN35:
             return true;
         default:

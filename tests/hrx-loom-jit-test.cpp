@@ -554,11 +554,17 @@ static void run_targeted_export_materialize_case(HrxTestDevice & device) {
     ggml::hrx::Dispatch dispatch;
     dispatch.kernel.kernel_id = definition->id;
     dispatch.kernel.integer_parameters.emplace("token_count", 1);
-    dispatch.kernel.integer_parameters.emplace("input_size", 2048);
-    dispatch.kernel.integer_parameters.emplace("output_size", 151936);
-    dispatch.kernel.compile_parameters.emplace("ggml.linear_q6k_q8_1_x4.token_capacity", "1");
-    dispatch.kernel.compile_parameters.emplace("ggml.linear_q6k_q8_1_x4.output_capacity", "151936");
-    dispatch.bindings.resize(3);
+    dispatch.kernel.compile_parameters = {
+        { "ggml.workload.token_capacity", "1" },
+        { "ggml.matmul.vector.input_size", "2048" },
+        { "ggml.matmul.vector.output_size", "151936" },
+        { "ggml.matmul.vector.weight_format", "6" },
+        { "ggml.matmul.vector.activation_format", "9" },
+        { "ggml.matmul.vector.output_accumulation", "0" },
+        { "ggml.matmul.vector.output_unary_op", "23" },
+        { "ggml.matmul.vector.publish_format", "0" },
+    };
+    dispatch.bindings.resize(4);
 
     ggml::hrx::KernelExecutableCache             cache(ggml::hrx::LoomJitMode::Sync);
     std::vector<uint8_t>                         constants;

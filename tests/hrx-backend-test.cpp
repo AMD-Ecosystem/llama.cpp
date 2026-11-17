@@ -4006,11 +4006,12 @@ static void schedule_qwen_terminal_q6k_q8_command(int64_t token_count) {
     const ggml::hrx::Dispatch & vocab_dispatch = scheduler.plan().dispatches[1];
     REQUIRE(kernel_name_for_id(vocab_dispatch.kernel.kernel_id) == "qwen3_moe:ggml_linear_q6k_q8_1_x4");
     REQUIRE(vocab_dispatch.kernel.integer_parameters.at("token_count") == token_count);
-    REQUIRE(vocab_dispatch.kernel.integer_parameters.at("input_size") == 2048);
-    REQUIRE(vocab_dispatch.kernel.integer_parameters.at("output_size") == 151936);
-    require_compile_parameter(vocab_dispatch, "ggml.linear_q6k_q8_1_x4.token_capacity", std::to_string(token_count));
-    require_compile_parameter(vocab_dispatch, "ggml.linear_q6k_q8_1_x4.output_capacity", "151936");
-    REQUIRE(vocab_dispatch.bindings.size() == 3);
+    require_compile_parameter(vocab_dispatch, "ggml.matmul.vector.input_size", "2048");
+    require_compile_parameter(vocab_dispatch, "ggml.matmul.vector.output_size", "151936");
+    require_compile_parameter(vocab_dispatch, "ggml.workload.token_capacity", std::to_string(token_count));
+    require_compile_parameter(vocab_dispatch, "ggml.matmul.vector.weight_format", "6");
+    require_compile_parameter(vocab_dispatch, "ggml.matmul.vector.activation_format", "9");
+    REQUIRE(vocab_dispatch.bindings.size() == 4);
     REQUIRE(vocab_dispatch.bindings[0].value == q8_transient.value);
     REQUIRE(vocab_dispatch.bindings[0].length == q8_transient.size);
 
@@ -4022,8 +4023,8 @@ static void schedule_qwen_terminal_q6k_q8_command(int64_t token_count) {
     REQUIRE(commands.commands[0].bindings.size() == 4);
     REQUIRE(commands.commands[0].bindings[3].name == "q8_output");
     REQUIRE(commands.commands[0].bindings[3].origin == ggml::hrx::CommandBindingOrigin::Transient);
-    REQUIRE(commands.commands[1].bindings.size() == 3);
-    REQUIRE(commands.commands[1].bindings[0].name == "q8_input");
+    REQUIRE(commands.commands[1].bindings.size() == 4);
+    REQUIRE(commands.commands[1].bindings[0].name == "input");
     REQUIRE(commands.commands[1].bindings[0].origin == ggml::hrx::CommandBindingOrigin::Transient);
     REQUIRE(commands.commands[1].bindings[0].value == q8_transient.value);
 
@@ -4282,7 +4283,8 @@ static void schedule_get_rows_q8_1_alternate_command(ggml_type embedding_weight_
 
     const ggml::hrx::Dispatch & vocab_dispatch = scheduler.plan().dispatches[1];
     const std::string vocab_kernel_name = kernel_name_for_id(vocab_dispatch.kernel.kernel_id);
-    REQUIRE(vocab_dispatch.bindings.size() == 3);
+    REQUIRE(vocab_dispatch.bindings.size() ==
+            (vocab_kernel_name == "qwen3_moe:ggml_linear_q6k_q8_1_x4" ? 4 : 3));
     if (vocab_kernel_name == "qwen3_moe:ggml_linear_q6k_q8_1_x4") {
         REQUIRE(vocab_dispatch.bindings[0].value == alternate->alternate_value);
         REQUIRE(vocab_dispatch.bindings[0].length == alternate->byte_count);
@@ -4302,9 +4304,9 @@ static void schedule_get_rows_q8_1_alternate_command(ggml_type embedding_weight_
     REQUIRE(commands.commands[0].bindings.size() == 4);
     REQUIRE(commands.commands[0].bindings[3].name == "next_output");
     REQUIRE(commands.commands[0].bindings[3].origin == ggml::hrx::CommandBindingOrigin::Transient);
-    REQUIRE(commands.commands[1].bindings.size() == 3);
-    REQUIRE(commands.commands[1].bindings[0].name ==
-            (vocab_kernel_name == "qwen3_moe:ggml_linear_q6k_q8_1_x4" ? "q8_input" : "input"));
+    REQUIRE(commands.commands[1].bindings.size() ==
+            (vocab_kernel_name == "qwen3_moe:ggml_linear_q6k_q8_1_x4" ? 4 : 3));
+    REQUIRE(commands.commands[1].bindings[0].name == "input");
 
     ggml_free(ctx);
 }

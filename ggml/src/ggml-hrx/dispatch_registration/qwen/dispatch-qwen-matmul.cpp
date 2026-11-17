@@ -18,6 +18,8 @@ static constexpr KernelCatalogRef kQwenDenseLinearQ4KQ8NextQ8Kernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_dense_linear_q4k_q8_1_x4_next_q8");
 static constexpr KernelCatalogRef kGgmlLinearQ6KQ8_1X4Kernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "ggml_linear_q6k_q8_1_x4");
+static constexpr KernelCatalogRef kMulMatVectorF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_vector_f32_f32");
 
 static constexpr int64_t kQwenHiddenSize      = kQwen30BMoeDispatchProfile.hidden_size;
 static constexpr int64_t kQwenVocabularyCount = 151936;
@@ -336,24 +338,39 @@ bool qwen_accepts_q6k_q8_input(const DispatchMatchContext & context,
            output->ne[2] == 1 && output->ne[3] == 1;
 }
 
-static void build_qwen_matmul_dispatch(const QwenMatmulMatch & match,
-                                       DispatchMatch &         dispatch_match,
-                                       size_t                  root_index) {
+Dispatch make_qwen_q6k_q8_projection_dispatch(const Value & weight, const Value & output,
+                                              const DispatchBinding & input, bool row64_weight_policy) {
+    const int64_t input_size  = weight.ne[0];
+    const int64_t output_size = weight.ne[1];
+    const bool row64_weight = row64_weight_policy && weight.alias_source.value < 0 &&
+                              dispatch_weight_layout_eligible(weight);
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(match.kernel);
-    dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
-    dispatch.kernel.integer_parameters.emplace("input_size", match.input_size);
-    dispatch.kernel.integer_parameters.emplace("output_size", match.output_size);
-    dispatch.kernel.compile_parameters.emplace("ggml.linear_q6k_q8_1_x4.token_capacity",
-                                               to_config_value(match.token_count));
-    dispatch.kernel.compile_parameters.emplace("ggml.linear_q6k_q8_1_x4.output_capacity",
-                                               to_config_value(match.output_size));
-    dispatch.bindings.push_back({ match.input_value, 0, match.input_bytes });
-    dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
-    dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
-
-    dispatch_match.covered_nodes.push_back(root_index);
-    dispatch_match.dispatches.push_back(std::move(dispatch));
+    dispatch.kernel =
+        make_kernel_specialization(row64_weight ? kMulMatVectorF32F32Kernel : kGgmlLinearQ6KQ8_1X4Kernel);
+    dispatch.kernel.integer_parameters.emplace("token_count", 1);
+    dispatch.kernel.compile_parameters.emplace("ggml.workload.token_capacity", "1");
+    dispatch.kernel.compile_parameters.emplace("ggml.matmul.vector.input_size", to_config_value(input_size));
+    dispatch.kernel.compile_parameters.emplace("ggml.matmul.vector.output_size", to_config_value(output_size));
+    dispatch.kernel.compile_parameters.emplace("ggml.matmul.vector.output_accumulation", "0");
+    dispatch.kernel.compile_parameters.emplace("ggml.matmul.vector.output_unary_op",
+                                               std::to_string(unary_kind_config_value(UnaryKind::Identity)));
+    dispatch.kernel.compile_parameters.emplace("ggml.matmul.vector.publish_format", "0");
+    dispatch.kernel.compile_parameters.emplace(
+        "ggml.matmul.vector.weight_format",
+        to_config_value(common_mul_mat_format_config_value(
+            row64_weight ? CommonMulMatWeightFormat::Q6KRow64 : CommonMulMatWeightFormat::Q6K)));
+    dispatch.kernel.compile_parameters.emplace("ggml.matmul.vector.activation_format",
+                                               std::to_string(GGML_TYPE_Q8_1));
+    dispatch.bindings.push_back(input);
+    if (row64_weight) {
+        dispatch.bindings.push_back({ weight.id, 0, weight.byte_count, kQ6KPackedK256Row64ScaleRowLayout,
+                                      weight.type, input_size, output_size, weight.byte_count });
+    } else {
+        dispatch.bindings.push_back({ weight.id, 0, weight.byte_count });
+    }
+    dispatch.bindings.push_back({ output.id, 0, output.byte_count });
+    dispatch.bindings.push_back({ output.id, 0, output.byte_count });
+    return dispatch;
 }
 
 static bool match_qwen_q6k_q8_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
@@ -361,7 +378,9 @@ static bool match_qwen_q6k_q8_dispatch(const DispatchMatchContext & context, Dis
     if (!match.matched()) {
         return false;
     }
-    build_qwen_matmul_dispatch(match, dispatch_match, context.root_index);
+    dispatch_match.covered_nodes.push_back(context.root_index);
+    dispatch_match.dispatches.push_back(make_qwen_q6k_q8_projection_dispatch(
+        *match.weight, *match.output, { match.input_value, 0, match.input_bytes }, context.row64_weight_policy));
     return true;
 }
 
