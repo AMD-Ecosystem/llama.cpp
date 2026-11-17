@@ -667,6 +667,12 @@
     },
     {
       "path": "ops/reduction/amax_scale_f32.loom"
+    },
+    {
+      "path": "motifs/matmul/q6_row64_q8_1_x4_decode.loom"
+    },
+    {
+      "path": "ops/matmul/vector_q6_q8_native_test.loom"
     }
   ],
   "exports": [
@@ -2737,6 +2743,9 @@
         ],
         "library_sources": [
           "motifs/matmul/vector_activation.loom",
+          "motifs/matmul/q6_q8_1_x4_decode.loom",
+          "motifs/matmul/q6_row64_q8_1_x4_decode.loom",
+          "motifs/quantize_q8_1_x4_group.loom",
           "motifs/matmul/vector_decode_pair.loom",
           "motifs/matmul/vector_publish.loom",
           "motifs/dequant.loom",
@@ -2752,6 +2761,9 @@
       },
       "compile_dependencies": [
         "motifs/matmul/vector_activation.loom",
+        "motifs/matmul/q6_q8_1_x4_decode.loom",
+        "motifs/matmul/q6_row64_q8_1_x4_decode.loom",
+        "motifs/quantize_q8_1_x4_group.loom",
         "motifs/matmul/vector_decode_pair.loom",
         "motifs/matmul/vector_publish.loom",
         "motifs/dequant.loom",
@@ -2806,6 +2818,9 @@
         ],
         "library_sources": [
           "motifs/matmul/vector_activation.loom",
+          "motifs/matmul/q6_q8_1_x4_decode.loom",
+          "motifs/matmul/q6_row64_q8_1_x4_decode.loom",
+          "motifs/quantize_q8_1_x4_group.loom",
           "motifs/matmul/vector_decode_pair.loom",
           "motifs/matmul/vector_publish.loom",
           "motifs/matmul/vector_postops.loom",
@@ -2821,6 +2836,9 @@
       },
       "compile_dependencies": [
         "motifs/matmul/vector_activation.loom",
+        "motifs/matmul/q6_q8_1_x4_decode.loom",
+        "motifs/matmul/q6_row64_q8_1_x4_decode.loom",
+        "motifs/quantize_q8_1_x4_group.loom",
         "motifs/matmul/vector_decode_pair.loom",
         "motifs/matmul/vector_publish.loom",
         "motifs/matmul/vector_postops.loom",
@@ -3072,6 +3090,9 @@
         ],
         "library_sources": [
           "motifs/matmul/vector_activation.loom",
+          "motifs/matmul/q6_q8_1_x4_decode.loom",
+          "motifs/matmul/q6_row64_q8_1_x4_decode.loom",
+          "motifs/quantize_q8_1_x4_group.loom",
           "motifs/matmul/vector_decode_pair.loom",
           "motifs/matmul/vector_publish.loom",
           "motifs/llm_attention_qkv_matmul_postops.loom",
@@ -3088,6 +3109,9 @@
       },
       "compile_dependencies": [
         "motifs/matmul/vector_activation.loom",
+        "motifs/matmul/q6_q8_1_x4_decode.loom",
+        "motifs/matmul/q6_row64_q8_1_x4_decode.loom",
+        "motifs/quantize_q8_1_x4_group.loom",
         "motifs/matmul/vector_decode_pair.loom",
         "motifs/matmul/vector_publish.loom",
         "motifs/llm_attention_qkv_matmul_postops.loom",
@@ -3145,6 +3169,9 @@
         ],
         "library_sources": [
           "motifs/matmul/vector_activation.loom",
+          "motifs/matmul/q6_q8_1_x4_decode.loom",
+          "motifs/matmul/q6_row64_q8_1_x4_decode.loom",
+          "motifs/quantize_q8_1_x4_group.loom",
           "motifs/matmul/vector_decode_pair.loom",
           "motifs/matmul/vector_publish.loom",
           "motifs/llm_attention_qkv_matmul_postops.loom",
@@ -3161,6 +3188,9 @@
       },
       "compile_dependencies": [
         "motifs/matmul/vector_activation.loom",
+        "motifs/matmul/q6_q8_1_x4_decode.loom",
+        "motifs/matmul/q6_row64_q8_1_x4_decode.loom",
+        "motifs/quantize_q8_1_x4_group.loom",
         "motifs/matmul/vector_decode_pair.loom",
         "motifs/matmul/vector_publish.loom",
         "motifs/llm_attention_qkv_matmul_postops.loom",
@@ -3212,6 +3242,9 @@
         ],
         "library_sources": [
           "motifs/matmul/vector_activation.loom",
+          "motifs/matmul/q6_q8_1_x4_decode.loom",
+          "motifs/matmul/q6_row64_q8_1_x4_decode.loom",
+          "motifs/quantize_q8_1_x4_group.loom",
           "motifs/matmul/vector_decode_pair.loom",
           "motifs/matmul/vector_publish.loom",
           "motifs/llm_attention_qkv_matmul_postops.loom",
@@ -3227,6 +3260,9 @@
       },
       "compile_dependencies": [
         "motifs/matmul/vector_activation.loom",
+        "motifs/matmul/q6_q8_1_x4_decode.loom",
+        "motifs/matmul/q6_row64_q8_1_x4_decode.loom",
+        "motifs/quantize_q8_1_x4_group.loom",
         "motifs/matmul/vector_decode_pair.loom",
         "motifs/matmul/vector_publish.loom",
         "motifs/llm_attention_qkv_matmul_postops.loom",
@@ -6088,6 +6124,53 @@
       "name": "ggml_mul_mat_q6_k_f32_wmma_prefill_wave32",
       "family": "loom_libs",
       "symbol": "ggml_mul_mat_q6_k_f32_wmma_prefill_wave32",
+      "source": "ops/mul_mat_q6_k_packed_f16_wmma.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/mul_mat_q6_k_packed_f16_wmma.loom"
+        ],
+        "library_sources": [
+          "motifs/q6_k_f16.loom",
+          "motifs/dequant.loom",
+          "motifs/mul_mat_quantized_f16_prefill.loom",
+          "motifs/elementwise/binary_apply.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/q6_k_f16.loom",
+        "motifs/dequant.loom",
+        "motifs/mul_mat_quantized_f16_prefill.loom",
+        "motifs/elementwise/binary_apply.loom"
+      ]
+    },
+    {
+      "name": "ggml_mul_mat_q6_k_f32_wmma_prefill_m64_wave32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_q6_k_f32_wmma_prefill_m64_wave32",
       "source": "ops/mul_mat_q6_k_packed_f16_wmma.loom",
       "workload_parameters": [
         {
@@ -9921,6 +10004,148 @@
       "compile_dependencies": [
         "motifs/elementwise/unary_apply.loom"
       ]
+    },
+    {
+      "name": "ggml_linear_q6k_q8_1_x4",
+      "family": "qwen3_moe",
+      "symbol": "ggml_linear_q6k_q8_1_x4",
+      "source": "ops/matmul/vector_f32_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "output",
+        "next_output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul/vector_f32_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul/vector_activation.loom",
+          "motifs/matmul/q6_q8_1_x4_decode.loom",
+          "motifs/matmul/q6_row64_q8_1_x4_decode.loom",
+          "motifs/quantize_q8_1_x4_group.loom",
+          "motifs/matmul/vector_decode_pair.loom",
+          "motifs/matmul/vector_publish.loom",
+          "motifs/dequant.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul/vector_activation.loom",
+        "motifs/matmul/q6_q8_1_x4_decode.loom",
+        "motifs/matmul/q6_row64_q8_1_x4_decode.loom",
+        "motifs/quantize_q8_1_x4_group.loom",
+        "motifs/matmul/vector_decode_pair.loom",
+        "motifs/matmul/vector_publish.loom",
+        "motifs/dequant.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
+    },
+    {
+      "name": "ggml_linear_q6k_q8_1_x4",
+      "family": "qwen3_moe",
+      "symbol": "ggml_linear_q6k_q8_1_x4_wave64_block4",
+      "source": "ops/matmul/vector_f32_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "weight",
+        "output",
+        "next_output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read_write",
+        "write"
+      ],
+      "target_selector": "gfx1151",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul/vector_f32_f32.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul/vector_activation.loom",
+          "motifs/matmul/q6_q8_1_x4_decode.loom",
+          "motifs/matmul/q6_row64_q8_1_x4_decode.loom",
+          "motifs/quantize_q8_1_x4_group.loom",
+          "motifs/matmul/vector_decode_pair.loom",
+          "motifs/matmul/vector_publish.loom",
+          "motifs/dequant.loom",
+          "motifs/elementwise/unary_apply.loom",
+          "motifs/q4_k_f16.loom",
+          "motifs/q6_k_f16.loom",
+          "motifs/q8_0_f16.loom",
+          "motifs/q8_1_f16.loom",
+          "motifs/f16_f16.loom",
+          "motifs/bf16_f16.loom",
+          "motifs/f32_f16.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul/vector_activation.loom",
+        "motifs/matmul/q6_q8_1_x4_decode.loom",
+        "motifs/matmul/q6_row64_q8_1_x4_decode.loom",
+        "motifs/quantize_q8_1_x4_group.loom",
+        "motifs/matmul/vector_decode_pair.loom",
+        "motifs/matmul/vector_publish.loom",
+        "motifs/dequant.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
+      ]
     }
   ],
   "link_modules": [
@@ -9937,6 +10162,30 @@
         "motifs/flash_attention/publish_q8.loom",
         "motifs/flash_attention/completion_counter_reduce.loom",
         "motifs/quantize_q8_1_x4.loom"
+      ]
+    },
+    {
+      "name": "vector_q6_q8_native_test_linked",
+      "srcs": [
+        "ops/matmul/vector_q6_q8_native_test.loom"
+      ],
+      "libraries": [
+        "ops/matmul/vector_f32_f32.loom",
+        "motifs/matmul/vector_activation.loom",
+        "motifs/matmul/q6_q8_1_x4_decode.loom",
+        "motifs/matmul/q6_row64_q8_1_x4_decode.loom",
+        "motifs/quantize_q8_1_x4_group.loom",
+        "motifs/matmul/vector_decode_pair.loom",
+        "motifs/matmul/vector_publish.loom",
+        "motifs/dequant.loom",
+        "motifs/elementwise/unary_apply.loom",
+        "motifs/q4_k_f16.loom",
+        "motifs/q6_k_f16.loom",
+        "motifs/q8_0_f16.loom",
+        "motifs/q8_1_f16.loom",
+        "motifs/f16_f16.loom",
+        "motifs/bf16_f16.loom",
+        "motifs/f32_f16.loom"
       ]
     }
   ],
@@ -9981,6 +10230,78 @@
         "--output-format=jsonl"
       ],
       "source": "ops/rows/get_rows_scale_f32.loom"
+    },
+    {
+      "name": "vector_q6_q8_wave32_k768_tail_plan_test",
+      "args": [
+        "$(location :vector_q6_q8_native_test_linked)",
+        "--benchmark=@ggml_mul_mat_vector_q6_q8_wave32_k768_tail_small",
+        "--config=ggml.workload.token_capacity=1",
+        "--config=ggml.matmul.vector.input_size=768",
+        "--config=ggml.matmul.vector.output_size=9",
+        "--config=ggml.matmul.vector.weight_format=6",
+        "--config=ggml.matmul.vector.activation_format=9",
+        "--config=ggml.matmul.vector.output_accumulation=0",
+        "--config=ggml.matmul.vector.output_unary_op=23",
+        "--config=ggml.matmul.vector.publish_format=0",
+        "--dry-run",
+        "--output-format=jsonl"
+      ],
+      "link_module": "vector_q6_q8_native_test_linked"
+    },
+    {
+      "name": "vector_q6_q8_wave32_k2048_tail_plan_test",
+      "args": [
+        "$(location :vector_q6_q8_native_test_linked)",
+        "--benchmark=@ggml_mul_mat_vector_q6_q8_wave32_k2048_tail_small",
+        "--config=ggml.workload.token_capacity=1",
+        "--config=ggml.matmul.vector.input_size=2048",
+        "--config=ggml.matmul.vector.output_size=9",
+        "--config=ggml.matmul.vector.weight_format=6",
+        "--config=ggml.matmul.vector.activation_format=9",
+        "--config=ggml.matmul.vector.output_accumulation=0",
+        "--config=ggml.matmul.vector.output_unary_op=23",
+        "--config=ggml.matmul.vector.publish_format=0",
+        "--dry-run",
+        "--output-format=jsonl"
+      ],
+      "link_module": "vector_q6_q8_native_test_linked"
+    },
+    {
+      "name": "vector_q6_q8_wave64_k768_tail_plan_test",
+      "args": [
+        "$(location :vector_q6_q8_native_test_linked)",
+        "--benchmark=@ggml_mul_mat_vector_q6_q8_wave64_k768_tail_small",
+        "--config=ggml.workload.token_capacity=1",
+        "--config=ggml.matmul.vector.input_size=768",
+        "--config=ggml.matmul.vector.output_size=9",
+        "--config=ggml.matmul.vector.weight_format=6",
+        "--config=ggml.matmul.vector.activation_format=9",
+        "--config=ggml.matmul.vector.output_accumulation=0",
+        "--config=ggml.matmul.vector.output_unary_op=23",
+        "--config=ggml.matmul.vector.publish_format=0",
+        "--dry-run",
+        "--output-format=jsonl"
+      ],
+      "link_module": "vector_q6_q8_native_test_linked"
+    },
+    {
+      "name": "vector_q6_q8_wave64_k2048_tail_plan_test",
+      "args": [
+        "$(location :vector_q6_q8_native_test_linked)",
+        "--benchmark=@ggml_mul_mat_vector_q6_q8_wave64_k2048_tail_small",
+        "--config=ggml.workload.token_capacity=1",
+        "--config=ggml.matmul.vector.input_size=2048",
+        "--config=ggml.matmul.vector.output_size=9",
+        "--config=ggml.matmul.vector.weight_format=6",
+        "--config=ggml.matmul.vector.activation_format=9",
+        "--config=ggml.matmul.vector.output_accumulation=0",
+        "--config=ggml.matmul.vector.output_unary_op=23",
+        "--config=ggml.matmul.vector.publish_format=0",
+        "--dry-run",
+        "--output-format=jsonl"
+      ],
+      "link_module": "vector_q6_q8_native_test_linked"
     }
   ],
   "sources": [],
