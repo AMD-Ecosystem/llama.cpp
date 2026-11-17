@@ -19,6 +19,7 @@ namespace ggml::hrx {
 namespace {
 
 static constexpr KernelCatalogRef kGetRowsF32Kernel     = GGML_HRX_KERNEL_REF("loom_libs", "ggml_get_rows_f32");
+static constexpr KernelCatalogRef kGetRowsI32Kernel     = GGML_HRX_KERNEL_REF("loom_libs", "ggml_get_rows_i32");
 static constexpr KernelCatalogRef kGetRowsScalar3dF32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_get_rows_scalar_3d_f32");
 static constexpr KernelCatalogRef kRepeatScalar3dF32Kernel =
@@ -465,6 +466,38 @@ static bool match_get_rows_f32_dispatch(const DispatchMatchContext & context, Di
     return true;
 }
 
+static bool match_get_rows_i32_dispatch(const DispatchMatchContext & context, DispatchMatch & match) {
+    const GraphNode * node = context.root_node;
+    if (node == nullptr || node->op != GGML_OP_GET_ROWS || node->inputs.size() != 2) {
+        return false;
+    }
+
+    const Value * weight = graph_value(context.graph, node->inputs[0]);
+    const Value * ids    = graph_value(context.graph, node->inputs[1]);
+    const Value * output = graph_value(context.graph, node->output);
+    if (weight == nullptr || ids == nullptr || output == nullptr || weight->type != GGML_TYPE_I32 ||
+        ids->type != GGML_TYPE_I32 || output->type != GGML_TYPE_I32 || !weight->contiguous ||
+        !ids->contiguous || !output->contiguous || !is_2d(*weight) || !is_1d_or_2d_column(*ids) ||
+        !is_2d(*output) || output->ne[0] != weight->ne[0] || output->ne[1] != ids->ne[0] ||
+        weight->ne[0] > 32768 || !is_supported_row_count(weight->ne[1]) ||
+        !is_supported_token_count(ids->ne[0]) || weight->storage_root == output->storage_root) {
+        return false;
+    }
+
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(kGetRowsI32Kernel);
+    dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
+    dispatch.kernel.integer_parameters.emplace("token_count", ids->ne[0]);
+    dispatch.kernel.integer_parameters.emplace("row_count", weight->ne[1]);
+    dispatch.kernel.integer_parameters.emplace("hidden_size", weight->ne[0]);
+    dispatch.bindings.push_back({ ids->id, 0, ids->byte_count });
+    dispatch.bindings.push_back({ weight->id, 0, weight->byte_count });
+    dispatch.bindings.push_back({ output->id, 0, output->byte_count });
+    match.covered_nodes.push_back(context.root_index);
+    match.dispatches.push_back(std::move(dispatch));
+    return true;
+}
+
 static bool match_get_rows_scale_f32_dispatch(const DispatchMatchContext & context,
                                               DispatchMatch &              dispatch_match) {
     const GetRowsScaleMatch match = match_get_rows_scale_f32(context);
@@ -597,6 +630,14 @@ static bool match_get_rows_rmsnorm_binary_dispatch(const DispatchMatchContext & 
 }  // namespace
 
 void register_get_rows_dispatches(DispatchRegistryBuilder & registry) {
+    registry.add({
+        "common.get_rows.i32",
+        GGML_OP_GET_ROWS,
+        DispatchMatchKind::SingleOp,
+        100,
+        DispatchSource::Common,
+        match_get_rows_i32_dispatch,
+    });
     registry.add({
         "common.repeat.scalar_3d_f32",
         GGML_OP_REPEAT,
