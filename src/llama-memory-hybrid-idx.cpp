@@ -349,8 +349,7 @@ struct llama_memory_hybrid_idx::kpool_layout {
 // Which pools of the layout the current ubatch must re-pool, in the layout's pool order.
 struct llama_memory_hybrid_idx_context::kpool_state {
     std::vector<uint32_t> is_new;
-    std::vector<uint32_t> rep_gen; // per global cell, the generation that last marked a pool with that rep
-    uint32_t generation = 0;
+    uint32_t generation = 0; // see llama_memory_hybrid_idx::kpool_marks
 
     uint32_t n_pool_real = 0;
     uint32_t n_new       = 0;
@@ -630,15 +629,18 @@ void llama_memory_hybrid_idx_context::kpool_build_state(const llama_ubatch & uba
     const uint32_t kv_size = idx->get_size();
     const uint32_t kpool   = mem->get_kpool();
 
+    auto & mk = mem->kpool_marks_get();
+
     st.n_pool_real = lay.n_pool_real;
     st.n_new       = 0;
-    if (++st.generation == 0) {
+    if (++mk.generation == 0) {
         std::fill(st.is_new.begin(),  st.is_new.end(),  0);
-        std::fill(st.rep_gen.begin(), st.rep_gen.end(), 0);
-        st.generation = 1;
+        std::fill(mk.rep_gen.begin(), mk.rep_gen.end(), 0);
+        mk.generation = 1;
     }
+    st.generation = mk.generation;
     st.is_new.resize(lay.n_pool_real, 0);
-    st.rep_gen.resize((size_t) kv_size*idx->get_n_stream(), 0);
+    mk.rep_gen.resize((size_t) kv_size*idx->get_n_stream(), 0);
 
     std::array<uint32_t, LLAMA_MAX_SEQ> pool_start;
 
@@ -647,8 +649,8 @@ void llama_memory_hybrid_idx_context::kpool_build_state(const llama_ubatch & uba
     auto mark = [&](llama_seq_id s, size_t k) {
         const auto & sq  = lay.seqs[s];
         const size_t rep = (size_t) sq.strm*kv_size + sq.cells[sq.pools[k] + kpool - 1].second;
-        if (st.rep_gen[rep] != st.generation) {
-            st.rep_gen[rep] = st.generation;
+        if (mk.rep_gen[rep] != st.generation) {
+            mk.rep_gen[rep] = st.generation;
             st.is_new[pool_start[s] + k] = st.generation;
             ++st.n_new;
         }
