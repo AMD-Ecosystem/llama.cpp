@@ -1885,11 +1885,6 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         return nullptr;
     }
 
-    // a draft context: the target will verify these tokens next, its host reads can start while this graph runs
-    if (cparams.ctx_state_src && ubatch.token) {
-        cparams.ctx_state_src->get_model().prefetch_inputs(ubatch, mctx);
-    }
-
     ret = GGML_STATUS_SUCCESS;
 
     return res;
