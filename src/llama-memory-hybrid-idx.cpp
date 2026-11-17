@@ -411,16 +411,28 @@ const llama_memory_hybrid_idx::kpool_layout & llama_memory_hybrid_idx::kpool_lay
 
         sq.strm = unified ? 0 : mem_idx->get_stream(s);
 
-        if (mem_idx_stale[s] == POS_CLEAN && !sq.cells.empty() && !sp.empty() &&
-                sq.pos_min == sp.begin()->first) {
+        // an edit after the first position leaves the cells before it as they are, and so the pools made of them only
+        // (a speculative decoding round drops the rejected drafts this way), only the rest of the sequence is regrouped
+        const llama_pos stale     = mem_idx_stale[s];
+        const bool      keep_head = !sq.cells.empty() && !sp.empty() && sq.pos_min == sp.begin()->first && stale > sq.pos_min;
+
+        if (keep_head && stale != POS_CLEAN) {
+            sq.cells.erase(std::lower_bound(sq.cells.begin(), sq.cells.end(), std::make_pair(stale, 0u)), sq.cells.end());
+            while (!sq.pools.empty() && sq.pools.back() + kpool > sq.cells.size()) {
+                sq.pools.pop_back();
+            }
+            sq.j_next = sq.pools.empty() ? 0 : sq.pools.back() + kpool;
+        }
+
+        if (keep_head) {
             for (auto it = sp.upper_bound(sq.cells.back()); it != sp.end(); ++it) {
                 sq.cells.push_back(*it);
             }
         }
 
         // the appended tail accounts for every cell only if nothing before it was dropped, but an edit can
-        // regroup a sequence without changing its cell count, so a stale sequence must rebuild regardless
-        if (sq.cells.size() != sp.size() || mem_idx_stale[s] != POS_CLEAN) {
+        // regroup a sequence without changing its cell count, so a sequence stale from its start must rebuild regardless
+        if (sq.cells.size() != sp.size() || !keep_head) {
             sq.cells.assign(sp.begin(), sp.end());
             sq.pools.clear();
             sq.j_next  = 0;
