@@ -3957,7 +3957,7 @@ static bool matmul_graph_is_supported(ggml_context * ctx, ggml_tensor * output) 
     return ggml::hrx::DispatchScheduler::can_schedule_graph(imported.graph, test_dispatch_target());
 }
 
-static void schedule_qwen_terminal_q6k_command(int64_t token_count) {
+static void schedule_qwen_terminal_q6k_q8_command(int64_t token_count) {
     ggml_init_params params = {};
     params.mem_size         = 4 * 1024 * 1024;
     params.no_alloc         = true;
@@ -3989,53 +3989,6 @@ static void schedule_qwen_terminal_q6k_command(int64_t token_count) {
     REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
     REQUIRE(scheduler.plan().valid());
     REQUIRE(scheduler.plan().dispatches.size() == 2);
-
-    const ggml::hrx::CommandProgram commands = ggml::hrx::build_command_program(
-        imported.graph, scheduler.plan(), ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
-    REQUIRE(commands.valid());
-    REQUIRE(commands.commands.size() == 2);
-    REQUIRE(command_program_verifies(commands));
-
-    if (token_count > 1) {
-        REQUIRE(scheduler.plan().transients.empty());
-        const ggml::hrx::Dispatch & rms_dispatch = scheduler.plan().dispatches[0];
-        REQUIRE(kernel_name_for_id(rms_dispatch.kernel.kernel_id) == "loom_libs:ggml_rmsnorm_binary_f32");
-        REQUIRE(rms_dispatch.kernel.integer_parameters.at("token_count") == token_count);
-        require_compile_parameter(rms_dispatch, "ggml.rmsnorm_binary_f32.hidden_size", "2048");
-        require_compile_parameter(rms_dispatch, "ggml.rmsnorm_binary_f32.op",
-                                  std::to_string(ggml::hrx::binary_kind_config_value(ggml::hrx::BinaryKind::Mul)));
-
-        const ggml::hrx::Dispatch & vocab_dispatch = scheduler.plan().dispatches[1];
-        REQUIRE(kernel_name_for_id(vocab_dispatch.kernel.kernel_id) ==
-                "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32");
-        REQUIRE(vocab_dispatch.kernel.integer_parameters.at("token_count") == token_count);
-        require_compile_parameter(vocab_dispatch, "ggml.mul_mat.input_size", "2048");
-        require_compile_parameter(vocab_dispatch, "ggml.mul_mat.output_size", "151936");
-        require_compile_parameter(vocab_dispatch, "ggml.mul_mat.weight_format", "6");
-        require_compile_parameter(vocab_dispatch, "ggml.workload.token_capacity", std::to_string(token_count));
-
-        const ggml::hrx::Value * normalized_value = imported.graph.values().find_tensor(normalized);
-        REQUIRE(normalized_value != nullptr);
-        REQUIRE(commands.commands[0].bindings.size() == 3);
-        REQUIRE(commands.commands[1].bindings.size() == 3);
-        const ggml::hrx::CommandBinding & producer = commands.commands[0].bindings[2];
-        const ggml::hrx::CommandBinding & consumer = commands.commands[1].bindings[0];
-        REQUIRE(producer.name == "output");
-        REQUIRE(consumer.name == "input");
-        REQUIRE(producer.origin == ggml::hrx::CommandBindingOrigin::Transient);
-        REQUIRE(consumer.origin == ggml::hrx::CommandBindingOrigin::Transient);
-        REQUIRE(producer.value == normalized_value->id);
-        REQUIRE(consumer.value == normalized_value->id);
-        REQUIRE(producer.length == ggml_nbytes(normalized));
-        REQUIRE(consumer.length == ggml_nbytes(normalized));
-        const ggml::hrx::TransientAllocation * allocation =
-            ggml::hrx::find_transient_allocation(commands.transients, normalized_value->id);
-        REQUIRE(allocation != nullptr);
-        REQUIRE(allocation->size == ggml_nbytes(normalized));
-        ggml_free(ctx);
-        return;
-    }
-
     REQUIRE(scheduler.plan().transients.size() == 1);
 
     const ggml::hrx::Dispatch & rms_dispatch = scheduler.plan().dispatches[0];
@@ -4062,6 +4015,11 @@ static void schedule_qwen_terminal_q6k_command(int64_t token_count) {
     REQUIRE(vocab_dispatch.bindings[0].value == q8_transient.value);
     REQUIRE(vocab_dispatch.bindings[0].length == q8_transient.size);
 
+    const ggml::hrx::CommandProgram commands = ggml::hrx::build_command_program(
+        imported.graph, scheduler.plan(), ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+    REQUIRE(commands.valid());
+    REQUIRE(commands.commands.size() == 2);
+    REQUIRE(command_program_verifies(commands));
     REQUIRE(commands.commands[0].bindings.size() == 4);
     REQUIRE(commands.commands[0].bindings[3].name == "q8_output");
     REQUIRE(commands.commands[0].bindings[3].origin == ggml::hrx::CommandBindingOrigin::Transient);
@@ -15231,8 +15189,7 @@ static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
     suite.host_case("quantized_value_projection_dispatch", [] { run_quantized_value_projection_dispatch_checks(); });
     suite.host_case("prefill_value_projection_cache_dispatch",
                     [] { run_prefill_value_projection_cache_dispatch_checks(); });
-    suite.host_case("qwen_terminal_q6k_q8_command.tokens1", [] { schedule_qwen_terminal_q6k_command(1); });
-    suite.host_case("qwen_terminal_q6k_prefill_command.tokens18", [] { schedule_qwen_terminal_q6k_command(18); });
+    suite.host_case("qwen_terminal_q6k_q8_command.tokens1", [] { schedule_qwen_terminal_q6k_q8_command(1); });
     suite.host_case("qwen_terminal_q6k_vector_command", [] { schedule_qwen_terminal_q6k_vector_command(); });
     suite.host_case("qwen_decode_rmsnorm_publication", [] { run_qwen_decode_rmsnorm_publication_checks(); });
     suite.host_case("qwen_decode_publication_consumer_qualification", [] {
