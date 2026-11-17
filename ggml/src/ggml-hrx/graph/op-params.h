@@ -18,7 +18,7 @@ struct FlashAttnExtParams {
     float     scale         = 0.0f;
     float     max_bias      = 0.0f;
     float     logit_softcap = 0.0f;
-    ggml_prec prec          = GGML_PREC_DEFAULT;
+    ggml_prec prec          = GGML_PREC_UNDEFINED;
 };
 
 struct SoftMaxParams {
