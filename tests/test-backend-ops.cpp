@@ -8860,7 +8860,7 @@ struct test_rdna_prefill_mask_reuse : public test_rdna_prefill_attention {
         }
         ggml_tensor * second = ggml_flash_attn_ext(ctx, first->src[0], first->src[1], first->src[2], first->src[3],
             1.0f/sqrtf(hsk), 0.0f, 0.0f);
-        ggml_flash_attn_ext_set_prec(second, GGML_PREC_F32);
+        ggml_prec_set_acc(second, GGML_PREC_F32);
         return ggml_add(ctx, first, second);
     }
 };
