@@ -20,8 +20,8 @@ static bool ggml_cuda_fattn_rdna_kv_rows_enabled(const int cc) {
 #if !defined(GGML_USE_MUSA)
 
 // one list per group of ncols1 queries: a column is selected if any query of the group can see it
-template <int ncols1, bool oob>
-__launch_bounds__(256, 1)
+template <int ncols1, bool oob, int nthreads>
+__launch_bounds__(nthreads, 1)
 static __global__ void flash_attn_mask_to_sparse_indices(
         const half * mask_ptr, int32_t * indices_ptr, int32_t * counts_ptr, const int ne30, const int n_queries,
         const int n_kv_max, const int64_t s31, const int64_t s33) {
@@ -50,7 +50,7 @@ static __global__ void flash_attn_mask_to_sparse_indices(
     const half * mask = mask_ptr + sequence*s33 + q0*s31;
     int32_t * indices = indices_ptr + (int64_t(sequence)*gridDim.x + group)*n_kv_max;
 
-    __shared__ int warp_offsets[256/warp_size];
+    __shared__ int warp_offsets[nthreads/warp_size];
     __shared__ int row_count;
     __shared__ int chunk_count;
 
@@ -84,7 +84,7 @@ static __global__ void flash_attn_mask_to_sparse_indices(
         if (tid == 0) {
             int offset = 0;
 #pragma unroll
-            for (int iw = 0; iw < 256/warp_size; ++iw) {
+            for (int iw = 0; iw < nthreads/warp_size; ++iw) {
                 const int count = warp_offsets[iw];
                 warp_offsets[iw] = offset;
                 offset += count;
@@ -135,13 +135,15 @@ void ggml_cuda_flash_attn_ext_compact_mask(
     const int64_t s31 = mask->nb[1] / sizeof(half);
     const int64_t s33 = mask->nb[3] / sizeof(half);
     const dim3 blocks_num((n_queries + ncols1 - 1)/ncols1, mask->ne[3], 1);
-    const dim3 block_dim(256, 1, 1);
+    // each block scans its whole mask row serially, with few lists (decode) wider blocks shorten the scan
+    const bool wide = int64_t(blocks_num.x)*blocks_num.y < ggml_cuda_info().devices[ggml_cuda_get_device()].nsm;
+    const dim3 block_dim(wide ? 1024 : 256, 1, 1);
     const ggml_cuda_kernel_launch_params launch_params(blocks_num, block_dim, 0, stream);
     // the last group of queries is partial only if ncols1 does not divide n_queries
     GGML_ASSERT(ncols1 == 1 || ncols1 == 8);
-    const auto kernel = ncols1 == 1       ? flash_attn_mask_to_sparse_indices<1, false> :
-                        n_queries % 8 != 0 ? flash_attn_mask_to_sparse_indices<8, true>  :
-                                             flash_attn_mask_to_sparse_indices<8, false>;
+    const auto kernel = ncols1 == 1        ? (wide ? flash_attn_mask_to_sparse_indices<1, false, 1024> : flash_attn_mask_to_sparse_indices<1, false, 256>) :
+                        n_queries % 8 != 0 ? (wide ? flash_attn_mask_to_sparse_indices<8, true,  1024> : flash_attn_mask_to_sparse_indices<8, true,  256>) :
+                                             (wide ? flash_attn_mask_to_sparse_indices<8, false, 1024> : flash_attn_mask_to_sparse_indices<8, false, 256>);
     ggml_cuda_kernel_launch(kernel, launch_params,
         (const half *) mask->data, indices, counts, int(mask->ne[0]), n_queries, n_kv_max, s31, s33);
     CUDA_CHECK(cudaGetLastError());
