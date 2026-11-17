@@ -13004,6 +13004,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // short rows of many columns, as the conv state + transposed input of a recurrent layer
+    test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {3, 10240, 1, 1}, 4, 0, 16));
+    test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {9, 10240, 2, 1}, 4, 0, 16));
+
     // few long rows, which backends may split across workgroups
     for (int dim : { 0, 1 }) {
         test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {98304, 8, 1, 1}, dim == 0 ? 288 : 2, dim, 0));
