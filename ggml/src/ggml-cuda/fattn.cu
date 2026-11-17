@@ -197,8 +197,9 @@ bool ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(const int cc, const ggml_
     if (!rdna_sparse && ncols1 != 1 && ncols1*ncols2 != 64) {
         return false;
     }
-    // on RDNA a list holds the union of the queries in a tile and a gathered row costs about 1.5 dense rows
-    const int64_t n_kv_min = rdna_sparse ? 3*std::min<int64_t>(ncols1, Q->ne[1])*n_kv_max/2 :
+    // on RDNA a list holds the union of the queries in a tile and a gathered row costs about 1.5 dense rows,
+    // for prompt batches the dense kernel is slower per row and neighbouring queries select overlapping rows
+    const int64_t n_kv_min = rdna_sparse ? (Q->ne[1] > 8 ? 3*ncols1*n_kv_max/4 : 3*std::min<int64_t>(ncols1, Q->ne[1])*n_kv_max/2) :
         GGML_CUDA_CC_IS_NVIDIA(cc) ? 2*n_gather : 2LL*n_kv_max;
 
     return ((GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc)) || amd_mfma_available(cc) || rdna_sparse) && dst->src[5] == nullptr &&
@@ -336,8 +337,12 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2(ggml_backend_cuda_con
             return;
         }
 
-        // small batches are K/V bandwidth bound, large batches fill the tiles without padding
-        if (use_gqa_opt && gqa_ratio > 4 && Q->ne[1] <= 8 && ggml_cuda_fattn_rdna_gqa_pad_enabled(cc)) {
+        // small batches are K/V bandwidth bound, large batches fill the tiles without padding,
+        // unless the 8x8 sparse tile gathers far fewer rows than the dense kernel reads
+        const bool sparse_pad = use_gqa_opt && gqa_ratio > 4 && Q->ne[1] > 8 &&
+            ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(DKQ, DV, 8, 8) &&
+            ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(cc, dst, 8, 8);
+        if (use_gqa_opt && gqa_ratio > 4 && (sparse_pad || (Q->ne[1] <= 8 && ggml_cuda_fattn_rdna_gqa_pad_enabled(cc)))) {
             ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 8>(ctx, dst);
             return;
         }
