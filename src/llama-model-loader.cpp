@@ -1828,6 +1828,10 @@ bool llama_model_loader::load_all_data(
                 mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
             } else {
                 ggml_backend_tensor_set(cur, data, 0, n_size);
+                // the mapped pages were only read for the copy, do not let them accumulate until the end of the load
+                if (!lazy.has(cur)) {
+                    mapping->evict(weight->offs, weight->offs + n_size);
+                }
             }
         } else {
             const auto & file = files.at(weight->idx);

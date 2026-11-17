@@ -806,6 +806,11 @@ struct llama_mmap::impl {
         mapped_fragments = std::move(new_mapped_fragments);
     }
 
+    void evict(size_t first, size_t last) {
+        GGML_UNUSED(first);
+        GGML_UNUSED(last);
+    }
+
     ~impl() {
         for (const auto & frag : mapped_fragments) {
             if (munmap((char *) addr + frag.first, frag.second - frag.first)) {
@@ -865,9 +870,13 @@ struct llama_mmap::impl {
         }
     }
 
-    // a view cannot be unmapped in parts, so drop the pages of the range from the working set instead:
-    // they are clean file pages that go to the standby list, and fault back in if the range is read again
+    // a view cannot be unmapped in parts, so drop the pages of the range from the working set instead
     void unmap_fragment(size_t first, size_t last) {
+        evict(first, last);
+    }
+
+    // the pages are clean file pages: they go to the standby list, and fault back in if the range is read again
+    void evict(size_t first, size_t last) {
         SYSTEM_INFO si;
         GetSystemInfo(&si);
         const size_t page_size = si.dwPageSize;
@@ -917,6 +926,11 @@ struct llama_mmap::impl {
 
         throw std::runtime_error("mmap not supported");
     }
+
+    void evict(size_t first, size_t last) {
+        GGML_UNUSED(first);
+        GGML_UNUSED(last);
+    }
 #endif
 
     void * addr;
@@ -931,6 +945,7 @@ size_t llama_mmap::size() const { return pimpl->size; }
 void * llama_mmap::addr() const { return pimpl->addr; }
 
 void llama_mmap::unmap_fragment(size_t first, size_t last) { pimpl->unmap_fragment(first, last); }
+void llama_mmap::evict(size_t first, size_t last) { pimpl->evict(first, last); }
 
 #if defined(_POSIX_MEMLOCK_RANGE) || defined(_WIN32)
 const bool llama_mmap::SUPPORTED  = true;
