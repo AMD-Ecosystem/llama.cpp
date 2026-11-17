@@ -791,6 +791,49 @@ void ggml_cuda_op_scale_silu(ggml_backend_cuda_context & ctx, ggml_tensor * scal
     ggml_cuda_kernel_launch(scale_silu_f32, launch_params, (const float *) src->data, (float *) silu_node->data, scale, bias, k);
 }
 
+/* fused add + unary + mul: op(x + b) * a, with one b and one a per element of a row (the gate of a gated delta net) */
+
+template <float (*op)(float)>
+static __global__ void add_unary_mul_f32(const float * x, const float * b, const float * a, float * dst, const int ne0, const int k) {
+    ggml_cuda_pdl_lc();
+    const int i = blockDim.x*blockIdx.x + threadIdx.x;
+
+    if (i >= k) {
+        return;
+    }
+
+    ggml_cuda_pdl_sync();
+    const int i0 = i % ne0;
+    dst[i] = op(x[i] + b[i0]) * a[i0];
+}
+
+void ggml_cuda_op_add_unary_mul(ggml_backend_cuda_context & ctx, ggml_tensor * add_node, ggml_tensor * unary_node, ggml_tensor * mul_node) {
+    const ggml_tensor * x = add_node->src[0];
+    const ggml_tensor * b = add_node->src[1];
+    const ggml_tensor * a = mul_node->src[0] == unary_node ? mul_node->src[1] : mul_node->src[0];
+
+    GGML_ASSERT(x->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32 && a->type == GGML_TYPE_F32 && mul_node->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_contiguous(x) && ggml_is_contiguous(b) && ggml_is_contiguous(a) && ggml_is_contiguous(mul_node));
+    GGML_ASSERT(ggml_nelements(b) == x->ne[0] && ggml_nelements(a) == x->ne[0]);
+
+    cudaStream_t stream = ctx.stream();
+
+    const int k = ggml_nelements(x);
+    const int num_blocks = (k + CUDA_NEG_BLOCK_SIZE - 1) / CUDA_NEG_BLOCK_SIZE;
+    const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params((dim3)num_blocks, CUDA_NEG_BLOCK_SIZE, 0, stream);
+    const auto launch = [&](auto kernel) {
+        ggml_cuda_kernel_launch(kernel, launch_params, (const float *) x->data, (const float *) b->data, (const float *) a->data,
+            (float *) mul_node->data, (int) x->ne[0], k);
+    };
+    switch (ggml_get_unary_op(unary_node)) {
+        case GGML_UNARY_OP_SILU:     launch(add_unary_mul_f32<op_silu>);     break;
+        case GGML_UNARY_OP_SIGMOID:  launch(add_unary_mul_f32<op_sigmoid>);  break;
+        case GGML_UNARY_OP_SOFTPLUS: launch(add_unary_mul_f32<op_softplus>); break;
+        default:
+            GGML_ABORT("Unsupported unary op for fused add+unary+mul");
+    }
+}
+
 /* fused relu + sqr */
 
 void ggml_cuda_op_relu_sqr(ggml_backend_cuda_context & ctx, ggml_tensor * relu_node, ggml_tensor * sqr_node) {
