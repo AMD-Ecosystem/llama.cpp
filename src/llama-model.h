@@ -996,6 +996,13 @@ struct llama_model {
     // same, for the keys of the lightning indexer
     virtual llama_rope_params get_rope_params_indexer(const llama_cparams & cparams, int il) const;
 
+    // a draft context decoded these tokens: start reading the host rows that this model will gather for them
+    // mctx is the memory of the draft context
+    virtual void prefetch_inputs(const llama_ubatch & ubatch, const llama_memory_context_i * mctx) const {
+        GGML_UNUSED(ubatch);
+        GGML_UNUSED(mctx);
+    }
+
     float get_rope_freq_base (const llama_cparams & cparams, int il) const;
     float get_rope_freq_scale(const llama_cparams & cparams, int il) const;
 

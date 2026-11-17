@@ -2692,6 +2692,8 @@ struct llama_model_qwen4exp : public llama_model_base {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
+    void prefetch_inputs(const llama_ubatch & ubatch, const llama_memory_context_i * mctx) const override;
+
     struct graph : public llm_build_delta_net_base {
         graph(const llm_graph_params & params);
     protected:
