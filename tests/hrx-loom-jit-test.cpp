@@ -542,7 +542,7 @@ static void run_dynamic_export_reuse_case(
 
 static void run_targeted_export_materialize_case(HrxTestDevice & device) {
     const ggml::hrx::KernelDefinition * definition =
-        find_targeted_kernel("ggml_mul_mat_vector_q6_q8_f32", device.architecture.c_str());
+        find_targeted_kernel("ggml_linear_q6k_q8_1_x4", device.architecture.c_str());
     if (definition == nullptr) {
         return;
     }

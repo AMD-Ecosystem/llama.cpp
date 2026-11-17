@@ -4004,7 +4004,7 @@ static void schedule_qwen_terminal_q6k_q8_command(int64_t token_count) {
     REQUIRE(rms_dispatch.bindings[3].length == q8_transient.size);
 
     const ggml::hrx::Dispatch & vocab_dispatch = scheduler.plan().dispatches[1];
-    REQUIRE(kernel_name_for_id(vocab_dispatch.kernel.kernel_id) == "loom_libs:ggml_mul_mat_vector_q6_q8_f32");
+    REQUIRE(kernel_name_for_id(vocab_dispatch.kernel.kernel_id) == "qwen3_moe:ggml_linear_q6k_q8_1_x4");
     REQUIRE(vocab_dispatch.kernel.integer_parameters.at("token_count") == token_count);
     require_compile_parameter(vocab_dispatch, "ggml.matmul.vector.input_size", "2048");
     require_compile_parameter(vocab_dispatch, "ggml.matmul.vector.output_size", "151936");
@@ -4284,8 +4284,8 @@ static void schedule_get_rows_q8_1_alternate_command(ggml_type embedding_weight_
     const ggml::hrx::Dispatch & vocab_dispatch = scheduler.plan().dispatches[1];
     const std::string vocab_kernel_name = kernel_name_for_id(vocab_dispatch.kernel.kernel_id);
     REQUIRE(vocab_dispatch.bindings.size() ==
-            (vocab_kernel_name == "loom_libs:ggml_mul_mat_vector_q6_q8_f32" ? 4 : 3));
-    if (vocab_kernel_name == "loom_libs:ggml_mul_mat_vector_q6_q8_f32") {
+            (vocab_kernel_name == "qwen3_moe:ggml_linear_q6k_q8_1_x4" ? 4 : 3));
+    if (vocab_kernel_name == "qwen3_moe:ggml_linear_q6k_q8_1_x4") {
         REQUIRE(vocab_dispatch.bindings[0].value == alternate->alternate_value);
         REQUIRE(vocab_dispatch.bindings[0].length == alternate->byte_count);
     } else {
@@ -4305,7 +4305,7 @@ static void schedule_get_rows_q8_1_alternate_command(ggml_type embedding_weight_
     REQUIRE(commands.commands[0].bindings[3].name == "next_output");
     REQUIRE(commands.commands[0].bindings[3].origin == ggml::hrx::CommandBindingOrigin::Transient);
     REQUIRE(commands.commands[1].bindings.size() ==
-            (vocab_kernel_name == "loom_libs:ggml_mul_mat_vector_q6_q8_f32" ? 4 : 3));
+            (vocab_kernel_name == "qwen3_moe:ggml_linear_q6k_q8_1_x4" ? 4 : 3));
     REQUIRE(commands.commands[1].bindings[0].name == "input");
 
     ggml_free(ctx);

@@ -119,7 +119,7 @@ template.def<@ggml.matmul.vector_f32.entry> device @ggml_matmul_vector_f32_entry
   template.return
 }
 
-kernel.def target(@ggml_matmul_vector_gfx11_wave64) @ggml_mul_mat_vector(%token_count: index) {
+kernel.def target(@ggml_matmul_vector_gfx11_wave64) @ggml_mul_mat_vector_f32_f32(%token_count: index) {
   %input_size = config.get @ggml.matmul.vector.input_size : index
   %output_size = config.get @ggml.matmul.vector.output_size : index
   %token_capacity = config.get @ggml.workload.token_capacity : index
@@ -134,7 +134,7 @@ kernel.def target(@ggml_matmul_vector_gfx11_wave64) @ggml_mul_mat_vector(%token_
 
 // Native Q6/Q8 retains eight wave32 rows per workgroup on gfx1100.
 amdgpu.target<gfx11-generic> @ggml_matmul_vector_gfx11_wave32 {subgroup_size = 32}
-kernel.def target(@ggml_matmul_vector_gfx11_wave32) export("ggml_mul_mat_vector_q6_q8_f32") @ggml_mul_mat_vector_q6_q8_f32_wave32(%token_count: index) {
+kernel.def target(@ggml_matmul_vector_gfx11_wave32) export("ggml_linear_q6k_q8_1_x4") @ggml_linear_q6k_q8_1_x4(%token_count: index) {
   %output_size = config.get @ggml.matmul.vector.output_size : index
   %token_capacity = config.get @ggml.workload.token_capacity : index
   %c1 = index.constant 1 : index
@@ -150,7 +150,7 @@ kernel.def target(@ggml_matmul_vector_gfx11_wave32) export("ggml_mul_mat_vector_
 }
 
 // The catalog export name is shared with wave32; both use the common vector ABI.
-kernel.def target(@ggml_matmul_vector_gfx11_wave64) export("ggml_mul_mat_vector_q6_q8_f32") @ggml_mul_mat_vector_q6_q8_f32_wave64(%token_count: index) {
+kernel.def target(@ggml_matmul_vector_gfx11_wave64) export("ggml_linear_q6k_q8_1_x4") @ggml_linear_q6k_q8_1_x4_wave64_block4(%token_count: index) {
   %output_size = config.get @ggml.matmul.vector.output_size : index
   %token_capacity = config.get @ggml.workload.token_capacity : index
   %c1 = index.constant 1 : index

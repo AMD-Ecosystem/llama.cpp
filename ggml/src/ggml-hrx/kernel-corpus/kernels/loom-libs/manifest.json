@@ -2707,9 +2707,9 @@
       ]
     },
     {
-      "name": "ggml_mul_mat_vector",
+      "name": "ggml_mul_mat_vector_f32_f32",
       "family": "loom_libs",
-      "symbol": "ggml_mul_mat_vector",
+      "symbol": "ggml_mul_mat_vector_f32_f32",
       "source": "ops/matmul/vector_f32_f32.loom",
       "workload_parameters": [
         {
@@ -10006,9 +10006,9 @@
       ]
     },
     {
-      "name": "ggml_mul_mat_vector_q6_q8_f32",
-      "family": "loom_libs",
-      "symbol": "ggml_mul_mat_vector_q6_q8_f32_wave32",
+      "name": "ggml_linear_q6k_q8_1_x4",
+      "family": "qwen3_moe",
+      "symbol": "ggml_linear_q6k_q8_1_x4",
       "source": "ops/matmul/vector_f32_f32.loom",
       "workload_parameters": [
         {
@@ -10077,9 +10077,9 @@
       ]
     },
     {
-      "name": "ggml_mul_mat_vector_q6_q8_f32",
-      "family": "loom_libs",
-      "symbol": "ggml_mul_mat_vector_q6_q8_f32_wave64",
+      "name": "ggml_linear_q6k_q8_1_x4",
+      "family": "qwen3_moe",
+      "symbol": "ggml_linear_q6k_q8_1_x4_wave64_block4",
       "source": "ops/matmul/vector_f32_f32.loom",
       "workload_parameters": [
         {
