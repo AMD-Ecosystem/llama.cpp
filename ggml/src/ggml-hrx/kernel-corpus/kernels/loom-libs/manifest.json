@@ -324,6 +324,9 @@
       "path": "ops/rows/get_rows_i32.loom"
     },
     {
+      "path": "ops/rows/get_rows_strided_f32.loom"
+    },
+    {
       "path": "ops/rows/get_rows_scalar_3d_f32.loom"
     },
     {
@@ -7016,6 +7019,75 @@
         "mode": "direct",
         "primary_sources": [
           "ops/rows/get_rows_i32.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
+    },
+    {
+      "name": "ggml_get_rows_strided_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_get_rows_strided_f32",
+      "source": "ops/rows/get_rows_strided_f32.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "row_count",
+          "type": "index"
+        },
+        {
+          "name": "hidden_size",
+          "type": "index"
+        },
+        {
+          "name": "row_stride",
+          "type": "index"
+        },
+        {
+          "name": "source_span",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "row_count",
+          "type": "index"
+        },
+        {
+          "name": "hidden_size",
+          "type": "index"
+        },
+        {
+          "name": "row_stride",
+          "type": "index"
+        },
+        {
+          "name": "source_span",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "token_ids",
+        "source",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/rows/get_rows_strided_f32.loom"
         ],
         "library_sources": []
       },

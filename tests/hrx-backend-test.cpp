@@ -4825,6 +4825,58 @@ static void run_gemma4_integer_get_rows_dispatch_checks() {
     }
 }
 
+static void run_gemma4_strided_get_rows_dispatch_checks() {
+    constexpr int64_t width = 256;
+    constexpr int64_t layer_count = 35;
+    constexpr int64_t row_count = 512;
+    constexpr int64_t layer = 7;
+    for (int64_t token_count : { 1, 256 }) {
+        ggml_context * ctx = ggml_init({ 512 * 1024, nullptr, true });
+        REQUIRE(ctx != nullptr);
+        ggml_tensor * root = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, width, layer_count, row_count);
+        REQUIRE(root != nullptr);
+        ggml_tensor * permuted = ggml_permute(ctx, root, 0, 2, 1, 3);
+        REQUIRE(permuted != nullptr);
+        ggml_tensor * slice = ggml_view_2d(ctx, permuted, width, row_count, permuted->nb[1], layer * permuted->nb[2]);
+        ggml_tensor * ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, token_count);
+        REQUIRE(slice != nullptr);
+        REQUIRE(ids != nullptr);
+        ggml_tensor * rows = ggml_get_rows(ctx, slice, ids);
+        REQUIRE(rows != nullptr);
+        REQUIRE(!ggml_is_contiguous(slice));
+
+        ggml_cgraph * graph = ggml_new_graph(ctx);
+        REQUIRE(graph != nullptr);
+        ggml_build_forward_expand(graph, rows);
+        ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
+        REQUIRE(imported.valid());
+        const ggml::hrx::Value * slice_value = imported.graph.values().find_tensor(slice);
+        REQUIRE(slice_value != nullptr);
+
+        ggml::hrx::DispatchScheduler scheduler;
+        REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+        REQUIRE(scheduler.plan().dispatches.size() == 1);
+        const ggml::hrx::Dispatch & dispatch = scheduler.plan().dispatches.front();
+        REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) == "loom_libs:ggml_get_rows_strided_f32");
+        REQUIRE(dispatch.kernel.integer_parameters.at("token_count") == token_count);
+        REQUIRE(dispatch.kernel.integer_parameters.at("row_count") == row_count);
+        REQUIRE(dispatch.kernel.integer_parameters.at("hidden_size") == width);
+        REQUIRE(dispatch.kernel.integer_parameters.at("row_stride") == width * layer_count);
+        REQUIRE(dispatch.bindings.size() == 3);
+        REQUIRE(dispatch.bindings[1].value == slice_value->storage_root);
+        REQUIRE(dispatch.bindings[1].offset == slice_value->storage_offset);
+        REQUIRE(dispatch.bindings[1].length ==
+                static_cast<size_t>((row_count - 1) * width * layer_count + width) * sizeof(float));
+
+        const ggml::hrx::CommandProgram commands = ggml::hrx::build_command_program(
+            imported.graph, scheduler.plan(), ggml::hrx::get_qwen_kernel_corpus(), "gfx1151");
+        REQUIRE(commands.valid());
+        REQUIRE(commands.commands.size() == 1);
+        REQUIRE(command_program_verifies(commands));
+        ggml_free(ctx);
+    }
+}
+
 static void run_gemma4_attention_mask_cast_dispatch_checks() {
     ggml_context * ctx = ggml_init({ 512 * 1024, nullptr, true });
     REQUIRE(ctx != nullptr);
@@ -15247,6 +15299,7 @@ static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
     suite.host_case("graph_traversal", [] { run_graph_traversal_checks(); });
     suite.host_case("qwen_token_embedding_dispatch", [] { run_qwen_token_embedding_dispatch_checks(); });
     suite.host_case("gemma4_integer_get_rows_dispatch", [] { run_gemma4_integer_get_rows_dispatch_checks(); });
+    suite.host_case("gemma4_strided_get_rows_dispatch", [] { run_gemma4_strided_get_rows_dispatch_checks(); });
     suite.host_case("gemma4_attention_mask_cast_dispatch", [] { run_gemma4_attention_mask_cast_dispatch_checks(); });
     suite.host_case("scalar_3d_get_rows_dispatch", [] { run_scalar_3d_get_rows_dispatch_checks(); });
     suite.host_case("standalone_repeat_get_rows_scalar_3d_dispatch", [] {
