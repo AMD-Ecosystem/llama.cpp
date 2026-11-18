@@ -11,6 +11,9 @@
 // Convert OpenAI Responses API format to OpenAI Chat Completions API format
 json server_chat_convert_responses_to_chatcmpl(const json & body);
 
+// Convert OpenAI Responses API tools to OpenAI Chat Completions API tools, non-function tools are skipped
+json server_chat_convert_responses_tools(const json & tools);
+
 // Convert Anthropic Messages API format to OpenAI Chat Completions API format
 json server_chat_convert_anthropic_to_oai(const json & body);
 
@@ -20,6 +23,9 @@ json convert_transcriptions_to_chatcmpl(
     const common_chat_templates * tmpls,
     const std::map<std::string, uploaded_file> & in_files,
     std::vector<raw_buffer> & out_files);
+
+// convert OpenAI speech API format to the /tts format
+json convert_speech_to_tts(const json & body);
 
 // prompt of the "asr" chat template, live ASR models (e.g. LFM3-Audio live ASR) transcribe with it
 // empty if the model has no such template, throws on a template error
