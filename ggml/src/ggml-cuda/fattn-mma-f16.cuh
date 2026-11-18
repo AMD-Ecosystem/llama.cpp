@@ -1923,6 +1923,8 @@ static constexpr __host__ __device__ bool ggml_cuda_flash_attn_ext_mma_f16_may_u
 #if defined(GGML_USE_HIP)
            // RDNA decode and MTP verify, the WMMA kernel has no 8-column variant
            (DKQ == 256 && DV == 256 && (ncols1 == 2 || ncols1 == 4) && ncols2 == 8) ||
+           // RDNA prompt batches with GQA 12: all heads of a KV head in one tile
+           (DKQ == 256 && DV == 256 && ncols1 == 2 && ncols2 == 16) ||
 #endif // defined(GGML_USE_HIP)
            (DKQ == 256 && DV == 256 && ncols1 == 8 && ncols2 == 8);
 }

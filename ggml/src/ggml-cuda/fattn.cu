@@ -198,8 +198,12 @@ bool ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(const int cc, const ggml_
         return false;
     }
     // on RDNA a list holds the union of the queries in a tile and a gathered row costs about 1.5 dense rows,
-    // for prompt batches the dense kernel is slower per row and neighbouring queries select overlapping rows
-    const int64_t n_kv_min = rdna_sparse ? (Q->ne[1] > 8 ? 3*ncols1*n_kv_max/4 : 3*std::min<int64_t>(ncols1, Q->ne[1])*n_kv_max/2) :
+    // for prompt batches the dense kernel is slower per row and neighbouring queries select overlapping rows,
+    // the 8x8 tile breaks even with the dense kernel at K = 6*n_kv_max, the 2x16 tile (all heads of a KV head in
+    // one tile) at 4*n_kv_max: it is faster than dense for every batch size and mask type tested at K = 4*n_kv_max
+    // (8192 for n_kv_max = 2048), but not at 2x n_kv_max and not at 3x with 512 queries
+    const int64_t n_kv_min_prompt = ncols2 == 16 ? 4LL*n_kv_max : 3*ncols1*n_kv_max/4;
+    const int64_t n_kv_min = rdna_sparse ? (Q->ne[1] > 8 ? n_kv_min_prompt : 3*std::min<int64_t>(ncols1, Q->ne[1])*n_kv_max/2) :
         GGML_CUDA_CC_IS_NVIDIA(cc) ? 2*n_gather : 2LL*n_kv_max;
 
     return ((GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc)) || amd_mfma_available(cc) || rdna_sparse) && dst->src[5] == nullptr &&
@@ -335,6 +339,17 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2(ggml_backend_cuda_con
         if (use_gqa_opt && gqa_ratio % 8 == 0) {
             ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 8>(ctx, dst);
             return;
+        }
+
+        // GQA 12 prompt batches: one 16-head tile per KV head reads each gathered row once, and the
+        // tile is limited by WMMA work, which grows with the union of its queries, so 2 queries per tile
+        // (union about 0.4x that of 8 queries for Qwen QSA) beat wider tiles that read K/V less often
+        if constexpr (ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(DKQ, DV, 2, 16)) {
+            if (use_gqa_opt && gqa_ratio > 8 && gqa_ratio < 16 && Q->ne[1] > 8 &&
+                    ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(cc, dst, 2, 16)) {
+                ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 2, 16>(ctx, dst);
+                return;
+            }
         }
 
         // small batches are K/V bandwidth bound, large batches fill the tiles without padding,

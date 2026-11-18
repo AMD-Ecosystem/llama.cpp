@@ -3,4 +3,7 @@
 #include "../fattn-mma-f16.cuh"
 
 DECL_FATTN_MMA_F16_CASE(192, 128, 2, 16);
+#if defined(GGML_USE_HIP)
+DECL_FATTN_MMA_F16_CASE(256, 256, 2, 16);
+#endif // defined(GGML_USE_HIP)
 DECL_FATTN_MMA_F16_CASE(576, 512, 2, 16);
