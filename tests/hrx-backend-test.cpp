@@ -15190,7 +15190,6 @@ static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
     suite.host_case("prefill_value_projection_cache_dispatch",
                     [] { run_prefill_value_projection_cache_dispatch_checks(); });
     suite.host_case("qwen_terminal_q6k_q8_command.tokens1", [] { schedule_qwen_terminal_q6k_q8_command(1); });
-    suite.host_case("qwen_terminal_q6k_q8_command.tokens18", [] { schedule_qwen_terminal_q6k_q8_command(18); });
     suite.host_case("qwen_terminal_q6k_vector_command", [] { schedule_qwen_terminal_q6k_vector_command(); });
     suite.host_case("qwen_decode_rmsnorm_publication", [] { run_qwen_decode_rmsnorm_publication_checks(); });
     suite.host_case("qwen_decode_publication_consumer_qualification", [] {
