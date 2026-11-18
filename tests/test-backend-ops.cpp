@@ -244,6 +244,37 @@ static void init_tensor_kq_mask_sparse(ggml_tensor * tensor, int64_t n_kv_max) {
     ggml_backend_tensor_set(tensor, data_f16.data(), 0, data_f16.size()*sizeof(ggml_fp16_t));
 }
 
+// like init_tensor_kq_mask_sparse, but the rows pick their cells in blocks of 4 from a pool of sel_pool_pct% of n_kv_max cells
+// shared by all rows, so neighbouring queries overlap like the selections of a Qwen QSA indexer
+static void init_tensor_kq_mask_sparse_shared(ggml_tensor * tensor, int64_t n_kv_max, int sel_pool_pct) {
+    GGML_ASSERT(tensor->type == GGML_TYPE_F16);
+    GGML_ASSERT(n_kv_max > 0 && n_kv_max <= tensor->ne[0] && sel_pool_pct >= 100);
+
+    const int64_t ne0 = tensor->ne[0];
+    const int64_t nrows = ggml_nrows(tensor);
+    const int64_t n_pool_blocks = std::min<int64_t>(ne0/4, n_kv_max*sel_pool_pct/100/4);
+    std::vector<float> data_f32(ggml_nelements(tensor), -INFINITY);
+    std::vector<ggml_fp16_t> data_f16(ggml_nelements(tensor));
+    std::vector<int32_t> order(ne0/4);
+    for (int64_t i = 0; i < ne0/4; ++i) {
+        order[i] = i;
+    }
+
+    std::mt19937 gen(0x5A17);
+    std::shuffle(order.begin(), order.end(), gen);
+    std::vector<int32_t> pool(order.begin(), order.begin() + n_pool_blocks);
+    for (int64_t row = 0; row < nrows; ++row) {
+        std::shuffle(pool.begin(), pool.end(), gen);
+        const int64_t count = n_kv_max - row % std::min<int64_t>(n_kv_max, 17);
+        for (int64_t i = 0; i < count; ++i) {
+            data_f32[row*ne0 + 4*int64_t(pool[i/4]) + i%4] = -0.03125f * (1 + (i + row) % 7);
+        }
+    }
+
+    ggml_fp32_to_fp16_row(data_f32.data(), data_f16.data(), data_f16.size());
+    ggml_backend_tensor_set(tensor, data_f16.data(), 0, data_f16.size()*sizeof(ggml_fp16_t));
+}
+
 // generate a lower triangular matrix
 static void init_tensor_tril(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f) {
     GGML_ASSERT(tensor->type == GGML_TYPE_F32);
@@ -9508,6 +9539,29 @@ struct test_flash_attn_ext_large_logits : public test_flash_attn_ext {
     }
 };
 
+// Qwen QSA attention (256/256, gqa 12, f16 cache) with queries that select from a shared pool of cells
+struct test_flash_attn_ext_qsa : public test_flash_attn_ext {
+    const int sel_pool_pct;
+
+    test_flash_attn_ext_qsa(int64_t kv, int64_t nb, int64_t n_kv_max, int sel_pool_pct)
+        : test_flash_attn_ext(256, 256, 2, {12, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16,
+                              {0, 1, 2, 3}, true, false, n_kv_max), sel_pool_pct(sel_pool_pct) {}
+
+    std::string vars() override {
+        return test_flash_attn_ext::vars() + ",sel_pool_pct=" + std::to_string(sel_pool_pct);
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "m") == 0) {
+                init_tensor_kq_mask_sparse_shared(t, n_kv_max, sel_pool_pct);
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
 // GGML_OP_FLASH_ATTN_EXT with kv_rows: each q slice attends to its own list of K/V cache rows
 struct test_flash_attn_ext_kv_rows : public test_case {
     const int64_t hs;
@@ -13538,6 +13592,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     // Qwen QSA: 256/256, gqa 12, budget 2048.
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {12, 1}, 8192, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false, 2048));
+    // MTP verify and draft blocks
+    for (int nb : {2, 3, 4, 8}) {
+        test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {12, 1}, nb == 8 ? 32768 : 16384, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false, 2048));
+    }
+    // prompt batches: partial tiles, independent and shared selections
+    for (int64_t nb : {9, 64, 130, 512}) {
+        test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {12, 1}, nb == 130 ? 32768 : 16384, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false, 2048));
+        test_cases.emplace_back(new test_flash_attn_ext_qsa(nb == 130 ? 32768 : 16384, nb, 2048, 150));
+    }
+    test_cases.emplace_back(new test_flash_attn_ext_qsa(16384, 2048, 2048, 150));
+    test_cases.emplace_back(new test_flash_attn_ext_qsa(10240, 512, 2048, 400));
+    test_cases.emplace_back(new test_flash_attn_ext_qsa(65536, 130, 2048, 500));
     // quantized cache, deep enough to take the sparse path
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {12, 1}, 32768, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 1, 2, 3}, true, false, 2048));
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {12, 1}, 32768, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0, {0, 1, 2, 3}, true, false, 2048));
@@ -14264,6 +14330,21 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_flash_attn_ext(512, 512, 2, { 8, 1}, 49152, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false, 2048));
     test_cases.emplace_back(new test_flash_attn_ext(576, 512, 1, {16, 1}, 49152, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, true,     0));
     test_cases.emplace_back(new test_flash_attn_ext(576, 512, 1, {16, 1}, 49152, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, true,  2048));
+
+    // Qwen QSA MTP verify and draft blocks
+    for (int64_t nb : {3, 8}) {
+        test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {12, 1}, 32768, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false, 2048));
+    }
+    // Qwen QSA prompt batches: independent random selections (the worst case for the union of a query tile)
+    // and selections from a shared pool of cells, 400-500% is close to the real indexer at 32K-64K
+    for (int64_t kv : {4096, 6144, 8192, 10240, 12288, 16384, 32768, 65536}) {
+        for (int64_t nb : {64, 512, 2048}) {
+            test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {12, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false, 2048));
+            for (int pool_pct : {110, 400, 500}) {
+                test_cases.emplace_back(new test_flash_attn_ext_qsa(kv, nb, 2048, pool_pct));
+            }
+        }
+    }
 
     // GQA 6 at long context: decode, verify (4), draft block (8) and a prompt ubatch
     for (int kv : { 32768, 131072 }) {
