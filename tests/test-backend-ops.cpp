@@ -5102,6 +5102,70 @@ struct test_ssm_conv_bias_silu : public test_case {
     }
 };
 
+// GGML_OP_CONCAT(state, transpose(x)) + GGML_OP_SSM_CONV + optional bias ADD and SILU (fused operation)
+// state: [d_conv - 1, d_inner, n_s], x: [d_inner, n_t, n_s] as written by the qkv matmul, so the concat reads x transposed
+struct test_ssm_conv_concat : public test_case {
+    const int64_t d_conv;
+    const int64_t d_inner;
+    const int64_t n_t;
+    const int64_t n_s;
+    const bool    fuse_bias;
+    const bool    fuse_silu;
+    const bool    x_view; // x is a view of a wider tensor, as qkv inside a fused qkvz output
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "SSM_CONV_CONCAT";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::string vars() override {
+        return VARS_TO_STR7(d_conv, d_inner, n_t, n_s, fuse_bias, fuse_silu, x_view);
+    }
+
+    test_ssm_conv_concat(int64_t d_conv = 4, int64_t d_inner = 1024, int64_t n_t = 64, int64_t n_s = 1,
+            bool fuse_bias = false, bool fuse_silu = true, bool x_view = false)
+        : d_conv(d_conv), d_inner(d_inner), n_t(n_t), n_s(n_s), fuse_bias(fuse_bias), fuse_silu(fuse_silu), x_view(x_view) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * state = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, d_conv - 1, d_inner, n_s);
+        ggml_set_name(state, "state");
+
+        ggml_tensor * x;
+        if (x_view) {
+            x = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, d_inner + 96, n_t, n_s);
+            ggml_set_name(x, "x_wide");
+            x = ggml_view_3d(ctx, x, d_inner, n_t, n_s, x->nb[1], x->nb[2], 32 * x->nb[0]);
+            ggml_set_name(x, "x");
+        } else {
+            x = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, d_inner, n_t, n_s);
+            ggml_set_name(x, "x");
+        }
+
+        ggml_tensor * w = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, d_conv, d_inner);
+        ggml_set_name(w, "w");
+
+        ggml_tensor * conv_x = ggml_concat(ctx, state, ggml_transpose(ctx, x), 0);
+        ggml_set_name(conv_x, "conv_x");
+
+        ggml_tensor * out = ggml_ssm_conv(ctx, conv_x, w);
+
+        if (fuse_bias) {
+            ggml_tensor * bias = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, out->ne[0]);
+            ggml_set_name(bias, "bias");
+            out = ggml_add(ctx, out, bias);
+        }
+
+        if (fuse_silu) {
+            out = ggml_silu(ctx, out);
+        }
+
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
 // GGML_OP_SSM_SCAN
 struct test_ssm_scan : public test_case {
     const ggml_type type;
@@ -12028,6 +12092,23 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // concat(state, transpose(x)) + ssm_conv (+ bias) (+ silu), with the concat fused into the conv
+    for (int64_t d_conv : {3, 4, 9}) {
+        for (int64_t n_t : {1, 2, 3, 5, 32, 33, 100}) {
+            for (int64_t n_s : {1, 3}) {
+                test_cases.emplace_back(new test_ssm_conv_concat(d_conv, 1536, n_t, n_s, false, true,  false));
+                test_cases.emplace_back(new test_ssm_conv_concat(d_conv, 1536, n_t, n_s, true,  true,  false));
+                test_cases.emplace_back(new test_ssm_conv_concat(d_conv, 1536, n_t, n_s, false, false, true));
+                test_cases.emplace_back(new test_ssm_conv_concat(d_conv, 1536, n_t, n_s, true,  false, true));
+            }
+        }
+    }
+    test_cases.emplace_back(new test_ssm_conv_concat(4, 1152, 37, 2, true, true, true)); // d_inner not a multiple of 256
+    // Qwen3.8-Flash-Next linear attention: 10240 channels, prefill ubatch, MTP verify, decode
+    for (int64_t n_t : {1, 3, 2048}) {
+        test_cases.emplace_back(new test_ssm_conv_concat(4, 10240, n_t, 1, false, true, false));
+    }
+
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 16, 1, 1024, 1, 32, 4)); // Mamba-1
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 64, 64, 112, 2, 32, 4)); // Zamba2 (real hparams: d_inner=7168, dt_rank=112, n_group=2 -> head_dim=7168/112=64)
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 64, 64, 112, 2, 1, 1)); // Zamba2 decode (single-token, matches real per-token decode workload)
@@ -13868,6 +13949,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         for (int64_t n_tokens : {512, 2048, 4096}) {
             test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {3, channels, 1, 1}, n_tokens, 0, 16));
         }
+    }
+    // the same conv input fused into the conv, and the unfused conv it replaces
+    for (int64_t n_tokens : {512, 2048}) {
+        test_cases.emplace_back(new test_ssm_conv_concat(4, 10240, n_tokens, 1, false, true, false));
+        test_cases.emplace_back(new test_ssm_conv_bias_silu(GGML_TYPE_F32, {3 + n_tokens, 10240, 1, 1}, {4, 10240, 1, 1}, false));
     }
 
     // CONT of a 0<->2 permute at DeepSeek-V4 lightning-indexer shapes:
