@@ -9222,6 +9222,7 @@ static constexpr ArchitectureRow64Case kArchitectureRow64Cases[] = {
     { LLM_ARCH_QWEN3, true },
     { LLM_ARCH_LFM2, true },
     { LLM_ARCH_LFM2MOE, false },
+    { LLM_ARCH_MISTRAL3, true },
     { LLM_ARCH_PHI3, false },
     { LLM_ARCH_GEMMA4, false },
     { LLM_ARCH_LLAMA, false },
