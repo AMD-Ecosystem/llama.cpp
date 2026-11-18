@@ -28,6 +28,33 @@ template.decl @ggml.flash_attention.prefill.body(%publish_f16: i1, %query_token_
 
 template.decl @ggml.flash_attention.body(%split_kv: i1, %partition_count: index, %partition_length: index, %partial_max: buffer, %partial_sum: buffer, %publish_f16: i1, %query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer, %f16_output: buffer)
 
+template.decl @ggml.flash_attention.partition.publish_row(%row_valid: i1, %query_head_base: index, %query_row: index, %partition: index, %maximum: f32, %sum: f32, %row_output: vector<4xf32>, %publish_metadata: i1, %lane_has_output: i1, %lane_output_channel: index, %partition_count: index, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer)
+
+template.def<@ggml.flash_attention.partition.publish_row> device @ggml_flash_attention_partition_publish_row(%row_valid: i1, %query_head_base: index, %query_row: index, %partition: index, %maximum: f32, %sum: f32, %row_output: vector<4xf32>, %publish_metadata: i1, %lane_has_output: i1, %lane_output_channel: index, %partition_count: index, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer) {
+  %query_head_count = config.get @ggml.flash_attention.query_head_count : index
+  %value_head_size = config.get @ggml.flash_attention.value_head_size : index
+  %c0_offset = index.constant 0 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %negative_infinity_bits = scalar.constant -8388608 : i32
+  %negative_infinity = scalar.bitcast %negative_infinity_bits : i32 to f32
+  %partial_max_view = buffer.view %partial_max[%c0_offset] : buffer -> view<[%query_head_count]x[%partition_count]xf32>
+  %partial_sum_view = buffer.view %partial_sum[%c0_offset] : buffer -> view<[%query_head_count]x[%partition_count]xf32>
+  %partial_output_view = buffer.view %partial_output[%c0_offset] : buffer -> view<[%query_head_count]x[%partition_count]x[%value_head_size]xf32>
+  %packed_head = index.add %query_head_base, %query_row : index
+  scf.if %row_valid {
+    scf.if %publish_metadata {
+      %has_values = scalar.cmpf ogt, %sum, %c0_f32 : f32
+      %published_maximum = scf.select %has_values, %maximum, %negative_infinity : f32
+      view.store %published_maximum, %partial_max_view[%packed_head, %partition] : f32, view<[%query_head_count]x[%partition_count]xf32>
+      view.store %sum, %partial_sum_view[%packed_head, %partition] : f32, view<[%query_head_count]x[%partition_count]xf32>
+    }
+    scf.if %lane_has_output {
+      vector.store %row_output, %partial_output_view[%packed_head, %partition, %lane_output_channel] : vector<4xf32>, view<[%query_head_count]x[%partition_count]x[%value_head_size]xf32>
+    }
+  }
+  template.return
+}
+
 template.def<@ggml.flash_attention.prefill.stage_query> device @ggml_flash_attention_prefill_stage_query(%query_token_count: index, %query_origin: index, %query_head: index, %query_load_iteration_count: index, %query_stage_stride: index, %qk_head_size: index, %attention_scale: f32, %query: buffer, %query_stage: buffer) {
   %query_head_count = config.get @ggml.flash_attention.query_head_count : index
   %workitem = kernel.workitem.id<x> : index
@@ -124,7 +151,6 @@ template.def<@ggml.flash_attention.body> device @ggml_flash_attention_body(%spli
   %f16_bytes = index.constant 2 : offset
   %score_stage_bytes = index.constant 5120 : offset
   %probability_stage_bytes = index.constant 2304 : offset
-  %c0_f32 = scalar.constant 0.0 : f32
   %negative_large = scalar.constant -1e+30 : f32
   %attention_scale = config.get @ggml.flash_attention.attention_scale : f32
   %c0_f16 = scalar.constant 0.0 : f16
@@ -456,70 +482,21 @@ template.def<@ggml.flash_attention.body> device @ggml_flash_attention_body(%spli
     scf.yield %next_max, %next_sum, %next_output0, %next_output1, %next_output2, %next_output3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
   }
   scf.if %split_kv {
-    %negative_infinity_bits = scalar.constant -8388608 : i32
-    %negative_infinity = scalar.bitcast %negative_infinity_bits : i32 to f32
-    %partial_max_view = buffer.view %partial_max[%c0_offset] : buffer -> view<[%query_head_count]x[%partition_count]xf32>
-    %partial_sum_view = buffer.view %partial_sum[%c0_offset] : buffer -> view<[%query_head_count]x[%partition_count]xf32>
-    %partial_output_view = buffer.view %output_aligned[%c0_offset] : buffer -> view<[%query_head_count]x[%partition_count]x[%value_head_size]xf32>
     %lane_zero = index.cmp eq, %lane, %c0 : index
     %group_zero = index.cmp eq, %output_group, %c0 : index
     %publish_metadata = scalar.andi %lane_zero, %group_zero : i1
-    %packed_head0 = index.add %query_head_base, %query_row0 : index
-    scf.if %query_valid0 {
-      scf.if %publish_metadata {
-        %maximum = vector.extract %final_max[0] : vector<4xf32> -> f32
-        %sum = vector.extract %final_sum[0] : vector<4xf32> -> f32
-        %has_values = scalar.cmpf ogt, %sum, %c0_f32 : f32
-        %published_maximum = scf.select %has_values, %maximum, %negative_infinity : f32
-        view.store %published_maximum, %partial_max_view[%packed_head0, %query_tile] : f32, view<[%query_head_count]x[%partition_count]xf32>
-        view.store %sum, %partial_sum_view[%packed_head0, %query_tile] : f32, view<[%query_head_count]x[%partition_count]xf32>
-      }
-      scf.if %lane_has_output {
-        vector.store %final_output0, %partial_output_view[%packed_head0, %query_tile, %lane_output_channel] : vector<4xf32>, view<[%query_head_count]x[%partition_count]x[%value_head_size]xf32>
-      }
-    }
-    %packed_head1 = index.add %query_head_base, %query_row1 : index
-    scf.if %query_valid1 {
-      scf.if %publish_metadata {
-        %maximum = vector.extract %final_max[1] : vector<4xf32> -> f32
-        %sum = vector.extract %final_sum[1] : vector<4xf32> -> f32
-        %has_values = scalar.cmpf ogt, %sum, %c0_f32 : f32
-        %published_maximum = scf.select %has_values, %maximum, %negative_infinity : f32
-        view.store %published_maximum, %partial_max_view[%packed_head1, %query_tile] : f32, view<[%query_head_count]x[%partition_count]xf32>
-        view.store %sum, %partial_sum_view[%packed_head1, %query_tile] : f32, view<[%query_head_count]x[%partition_count]xf32>
-      }
-      scf.if %lane_has_output {
-        vector.store %final_output1, %partial_output_view[%packed_head1, %query_tile, %lane_output_channel] : vector<4xf32>, view<[%query_head_count]x[%partition_count]x[%value_head_size]xf32>
-      }
-    }
-    %packed_head2 = index.add %query_head_base, %query_row2 : index
-    scf.if %query_valid2 {
-      scf.if %publish_metadata {
-        %maximum = vector.extract %final_max[2] : vector<4xf32> -> f32
-        %sum = vector.extract %final_sum[2] : vector<4xf32> -> f32
-        %has_values = scalar.cmpf ogt, %sum, %c0_f32 : f32
-        %published_maximum = scf.select %has_values, %maximum, %negative_infinity : f32
-        view.store %published_maximum, %partial_max_view[%packed_head2, %query_tile] : f32, view<[%query_head_count]x[%partition_count]xf32>
-        view.store %sum, %partial_sum_view[%packed_head2, %query_tile] : f32, view<[%query_head_count]x[%partition_count]xf32>
-      }
-      scf.if %lane_has_output {
-        vector.store %final_output2, %partial_output_view[%packed_head2, %query_tile, %lane_output_channel] : vector<4xf32>, view<[%query_head_count]x[%partition_count]x[%value_head_size]xf32>
-      }
-    }
-    %packed_head3 = index.add %query_head_base, %query_row3 : index
-    scf.if %query_valid3 {
-      scf.if %publish_metadata {
-        %maximum = vector.extract %final_max[3] : vector<4xf32> -> f32
-        %sum = vector.extract %final_sum[3] : vector<4xf32> -> f32
-        %has_values = scalar.cmpf ogt, %sum, %c0_f32 : f32
-        %published_maximum = scf.select %has_values, %maximum, %negative_infinity : f32
-        view.store %published_maximum, %partial_max_view[%packed_head3, %query_tile] : f32, view<[%query_head_count]x[%partition_count]xf32>
-        view.store %sum, %partial_sum_view[%packed_head3, %query_tile] : f32, view<[%query_head_count]x[%partition_count]xf32>
-      }
-      scf.if %lane_has_output {
-        vector.store %final_output3, %partial_output_view[%packed_head3, %query_tile, %lane_output_channel] : vector<4xf32>, view<[%query_head_count]x[%partition_count]x[%value_head_size]xf32>
-      }
-    }
+    %row_max0 = vector.extract %final_max[0] : vector<4xf32> -> f32
+    %row_sum0 = vector.extract %final_sum[0] : vector<4xf32> -> f32
+    template.apply<@ggml.flash_attention.partition.publish_row>(%query_valid0, %query_head_base, %query_row0, %query_tile, %row_max0, %row_sum0, %final_output0, %publish_metadata, %lane_has_output, %lane_output_channel, %partition_count, %partial_max, %partial_sum, %output_aligned) : (i1, index, index, index, f32, f32, vector<4xf32>, i1, i1, index, index, buffer, buffer, buffer)
+    %row_max1 = vector.extract %final_max[1] : vector<4xf32> -> f32
+    %row_sum1 = vector.extract %final_sum[1] : vector<4xf32> -> f32
+    template.apply<@ggml.flash_attention.partition.publish_row>(%query_valid1, %query_head_base, %query_row1, %query_tile, %row_max1, %row_sum1, %final_output1, %publish_metadata, %lane_has_output, %lane_output_channel, %partition_count, %partial_max, %partial_sum, %output_aligned) : (i1, index, index, index, f32, f32, vector<4xf32>, i1, i1, index, index, buffer, buffer, buffer)
+    %row_max2 = vector.extract %final_max[2] : vector<4xf32> -> f32
+    %row_sum2 = vector.extract %final_sum[2] : vector<4xf32> -> f32
+    template.apply<@ggml.flash_attention.partition.publish_row>(%query_valid2, %query_head_base, %query_row2, %query_tile, %row_max2, %row_sum2, %final_output2, %publish_metadata, %lane_has_output, %lane_output_channel, %partition_count, %partial_max, %partial_sum, %output_aligned) : (i1, index, index, index, f32, f32, vector<4xf32>, i1, i1, index, index, buffer, buffer, buffer)
+    %row_max3 = vector.extract %final_max[3] : vector<4xf32> -> f32
+    %row_sum3 = vector.extract %final_sum[3] : vector<4xf32> -> f32
+    template.apply<@ggml.flash_attention.partition.publish_row>(%query_valid3, %query_head_base, %query_row3, %query_tile, %row_max3, %row_sum3, %final_output3, %publish_metadata, %lane_has_output, %lane_output_channel, %partition_count, %partial_max, %partial_sum, %output_aligned) : (i1, index, index, index, f32, f32, vector<4xf32>, i1, i1, index, index, buffer, buffer, buffer)
   } else {
     template.apply<@ggml.flash_attention.prefill.publish_output>(%publish_f16, %bounded_query_token_count, %query_head_count, %value_head_size, %lane_has_output, %query_valid0, %query_valid1, %query_valid2, %query_valid3, %query_token0, %query_token1, %query_token2, %query_token3, %query_head, %lane_output_channel, %final_sum, %final_output0, %final_output1, %final_output2, %final_output3, %gate, %output_aligned, %f16_output) : (i1, index, index, index, i1, i1, i1, i1, i1, index, index, index, index, index, index, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, buffer, buffer, buffer)
   }
