@@ -263,6 +263,7 @@ set   (GGML_SYCL_DEVICE_ARCH "" CACHE STRING
                                             "ggml: sycl device architecture")
 
 option(GGML_OPENVINO                        "ggml: use OPENVINO"                              OFF)
+option(GGML_HIPEP                           "ggml: use hip-ep's compiled splits (over HIP)"   OFF)
 option(GGML_ET                              "ggml: use ET backend"                            OFF)
 option(GGML_ET_SYSEMU                       "ggml: use ET backend via sysemu"                 OFF)
 
@@ -345,6 +346,7 @@ set(GGML_PUBLIC_HEADERS
     include/ggml-webgpu.h
     include/ggml-zendnn.h
     include/ggml-openvino.h
+    include/ggml-hipep.h
     include/gguf.h)
 
 set_target_properties(ggml PROPERTIES PUBLIC_HEADER "${GGML_PUBLIC_HEADERS}")
