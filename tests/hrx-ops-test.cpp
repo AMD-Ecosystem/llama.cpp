@@ -6121,6 +6121,143 @@ static void run_get_rows_f32_cpu_reference_case(ggml_type weight_type,
     ggml_backend_free(hrx_backend);
 }
 
+static void run_gemma4_get_rows_i32_cpu_reference_case(int64_t hidden_size, int64_t token_count) {
+    constexpr int64_t row_count = 5;
+    ggml_backend_t cpu_backend = init_cpu_backend();
+    ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
+    REQUIRE(hrx_backend != nullptr);
+
+    ggml_context * cpu_ctx = ggml_init({ 512 * 1024, nullptr, true });
+    ggml_context * hrx_ctx = ggml_init({ 512 * 1024, nullptr, true });
+    REQUIRE(cpu_ctx != nullptr);
+    REQUIRE(hrx_ctx != nullptr);
+    ggml_tensor * cpu_weight = ggml_new_tensor_2d(cpu_ctx, GGML_TYPE_I32, hidden_size, row_count);
+    ggml_tensor * cpu_ids = ggml_new_tensor_1d(cpu_ctx, GGML_TYPE_I32, token_count);
+    ggml_tensor * cpu_output = ggml_get_rows(cpu_ctx, cpu_weight, cpu_ids);
+    ggml_tensor * hrx_weight = ggml_new_tensor_2d(hrx_ctx, GGML_TYPE_I32, hidden_size, row_count);
+    ggml_tensor * hrx_ids = ggml_new_tensor_1d(hrx_ctx, GGML_TYPE_I32, token_count);
+    ggml_tensor * hrx_output = ggml_get_rows(hrx_ctx, hrx_weight, hrx_ids);
+    REQUIRE(cpu_output != nullptr);
+    REQUIRE(hrx_output != nullptr);
+
+    ggml_cgraph * cpu_graph = ggml_new_graph(cpu_ctx);
+    ggml_cgraph * hrx_graph = ggml_new_graph(hrx_ctx);
+    REQUIRE(cpu_graph != nullptr);
+    REQUIRE(hrx_graph != nullptr);
+    ggml_build_forward_expand(cpu_graph, cpu_output);
+    ggml_build_forward_expand(hrx_graph, hrx_output);
+
+    ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
+    ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
+    REQUIRE(cpu_buffer != nullptr);
+    REQUIRE(hrx_buffer != nullptr);
+    std::vector<int32_t> weight(static_cast<size_t>(hidden_size * row_count));
+    std::vector<int32_t> ids(static_cast<size_t>(token_count));
+    for (int64_t row = 0; row < row_count; ++row) {
+        for (int64_t column = 0; column < hidden_size; ++column) {
+            weight[static_cast<size_t>(row * hidden_size + column)] = static_cast<int32_t>(row * 211 + column * 7 - 113);
+        }
+    }
+    for (int64_t token = 0; token < token_count; ++token) {
+        ids[static_cast<size_t>(token)] = static_cast<int32_t>((token * 3 + 1) % row_count);
+    }
+    set_tensor_pair_bytes(cpu_backend, cpu_weight, hrx_backend, hrx_weight, weight.data(),
+                          weight.size() * sizeof(int32_t));
+    set_tensor_pair_bytes(cpu_backend, cpu_ids, hrx_backend, hrx_ids, ids.data(), ids.size() * sizeof(int32_t));
+
+    REQUIRE(ggml_backend_graph_compute(cpu_backend, cpu_graph) == GGML_STATUS_SUCCESS);
+    REQUIRE(ggml_backend_graph_compute(hrx_backend, hrx_graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(cpu_backend);
+    ggml_backend_synchronize(hrx_backend);
+    std::vector<int32_t> expected(static_cast<size_t>(hidden_size * token_count));
+    std::vector<int32_t> actual(expected.size());
+    ggml_backend_tensor_get(cpu_output, expected.data(), 0, expected.size() * sizeof(int32_t));
+    ggml_backend_tensor_get(hrx_output, actual.data(), 0, actual.size() * sizeof(int32_t));
+    ggml_backend_synchronize(hrx_backend);
+    REQUIRE(actual == expected);
+
+    ggml_backend_buffer_free(cpu_buffer);
+    ggml_backend_buffer_free(hrx_buffer);
+    ggml_free(cpu_ctx);
+    ggml_free(hrx_ctx);
+    ggml_backend_free(cpu_backend);
+    ggml_backend_free(hrx_backend);
+}
+
+static void run_gemma4_strided_get_rows_cpu_reference_case(int64_t width, int64_t token_count) {
+    constexpr int64_t layer_count = 3;
+    constexpr int64_t row_count = 8;
+    constexpr int64_t layer = 1;
+    ggml_backend_t cpu_backend = init_cpu_backend();
+    ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
+    REQUIRE(hrx_backend != nullptr);
+    ggml_context * cpu_ctx = ggml_init({ 512 * 1024, nullptr, true });
+    ggml_context * hrx_ctx = ggml_init({ 512 * 1024, nullptr, true });
+    REQUIRE(cpu_ctx != nullptr);
+    REQUIRE(hrx_ctx != nullptr);
+
+    auto build = [&](ggml_context * ctx, ggml_tensor *& root, ggml_tensor *& ids, ggml_tensor *& output) {
+        root = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, width, layer_count, row_count);
+        ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, token_count);
+        REQUIRE(root != nullptr);
+        REQUIRE(ids != nullptr);
+        ggml_tensor * permuted = ggml_permute(ctx, root, 0, 2, 1, 3);
+        REQUIRE(permuted != nullptr);
+        ggml_tensor * slice = ggml_view_2d(ctx, permuted, width, row_count, permuted->nb[1], layer * permuted->nb[2]);
+        REQUIRE(slice != nullptr);
+        output = ggml_get_rows(ctx, slice, ids);
+        REQUIRE(output != nullptr);
+    };
+    ggml_tensor * cpu_root = nullptr;
+    ggml_tensor * cpu_ids = nullptr;
+    ggml_tensor * cpu_output = nullptr;
+    ggml_tensor * hrx_root = nullptr;
+    ggml_tensor * hrx_ids = nullptr;
+    ggml_tensor * hrx_output = nullptr;
+    build(cpu_ctx, cpu_root, cpu_ids, cpu_output);
+    build(hrx_ctx, hrx_root, hrx_ids, hrx_output);
+
+    ggml_cgraph * cpu_graph = ggml_new_graph(cpu_ctx);
+    ggml_cgraph * hrx_graph = ggml_new_graph(hrx_ctx);
+    REQUIRE(cpu_graph != nullptr);
+    REQUIRE(hrx_graph != nullptr);
+    ggml_build_forward_expand(cpu_graph, cpu_output);
+    ggml_build_forward_expand(hrx_graph, hrx_output);
+
+    ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
+    ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
+    REQUIRE(cpu_buffer != nullptr);
+    REQUIRE(hrx_buffer != nullptr);
+    std::vector<float> root(static_cast<size_t>(width * layer_count * row_count));
+    for (int64_t row = 0; row < row_count; ++row) {
+        for (int64_t current_layer = 0; current_layer < layer_count; ++current_layer) {
+            for (int64_t column = 0; column < width; ++column) {
+                root[static_cast<size_t>((row * layer_count + current_layer) * width + column)] =
+                    static_cast<float>(row * 1000 + current_layer * 100 + column);
+            }
+        }
+    }
+    std::vector<int32_t> ids(static_cast<size_t>(token_count));
+    for (int64_t token = 0; token < token_count; ++token) {
+        ids[static_cast<size_t>(token)] = static_cast<int32_t>((token * 3 + 2) % row_count);
+    }
+    set_tensor_pair_bytes(cpu_backend, cpu_root, hrx_backend, hrx_root, root.data(), root.size() * sizeof(float));
+    set_tensor_pair_bytes(cpu_backend, cpu_ids, hrx_backend, hrx_ids, ids.data(), ids.size() * sizeof(int32_t));
+
+    REQUIRE(ggml_backend_graph_compute(cpu_backend, cpu_graph) == GGML_STATUS_SUCCESS);
+    REQUIRE(ggml_backend_graph_compute(hrx_backend, hrx_graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(cpu_backend);
+    ggml_backend_synchronize(hrx_backend);
+    REQUIRE(get_f32_tensor(hrx_backend, hrx_output) == get_f32_tensor(cpu_backend, cpu_output));
+
+    ggml_backend_buffer_free(cpu_buffer);
+    ggml_backend_buffer_free(hrx_buffer);
+    ggml_free(cpu_ctx);
+    ggml_free(hrx_ctx);
+    ggml_backend_free(cpu_backend);
+    ggml_backend_free(hrx_backend);
+}
+
 static void run_get_rows_row64_alias_schedule_case() {
     ggml_init_params params = {};
     params.mem_size = 1024 * 1024;
@@ -9669,6 +9806,18 @@ static void register_basic_ops_cases(Suite & suite) {
                                   GGML_TYPE_BF16, GGML_TYPE_F32 }) {
         suite.device_case("get_rows_f32." + type_name(type), [type] { run_get_rows_f32_cpu_reference_case(type); });
     }
+    suite.device_case("gemma4_get_rows_i32.scalar.tokens256", [] {
+        run_gemma4_get_rows_i32_cpu_reference_case(1, 256);
+    });
+    suite.device_case("gemma4_get_rows_i32.width5.tokens7", [] {
+        run_gemma4_get_rows_i32_cpu_reference_case(5, 7);
+    });
+    suite.device_case("gemma4_get_rows_strided_f32.width256.tokens4", [] {
+        run_gemma4_strided_get_rows_cpu_reference_case(256, 4);
+    });
+    suite.device_case("gemma4_get_rows_strided_f32.width257.tokens7", [] {
+        run_gemma4_strided_get_rows_cpu_reference_case(257, 7);
+    });
     for (const ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
         suite.device_case("get_rows_f32." + type_name(type) + ".row64.tokens1", [type] {
             run_get_rows_f32_cpu_reference_case(type, kQwenHiddenSize, 64, 1, true);

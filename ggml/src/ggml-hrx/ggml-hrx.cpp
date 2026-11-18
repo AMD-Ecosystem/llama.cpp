@@ -773,7 +773,6 @@ static bool zero_output_elision_safe_op(enum ggml_op op) {
         case GGML_OP_DUP:
         case GGML_OP_ADD:
         case GGML_OP_ADD_ID:
-        case GGML_OP_ADD1:
         case GGML_OP_SUB:
         case GGML_OP_MUL:
         case GGML_OP_DIV:
@@ -805,8 +804,6 @@ static bool zero_output_elision_safe_op(enum ggml_op op) {
         case GGML_OP_GET_ROWS:
         case GGML_OP_GET_ROWS_BACK:
         case GGML_OP_DIAG:
-        case GGML_OP_DIAG_MASK_INF:
-        case GGML_OP_DIAG_MASK_ZERO:
         case GGML_OP_SOFT_MAX:
         case GGML_OP_SOFT_MAX_BACK:
         case GGML_OP_ROPE:

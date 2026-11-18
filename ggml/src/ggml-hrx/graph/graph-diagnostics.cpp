@@ -188,7 +188,7 @@ OpParams parse_op_params(const json & item) {
             item.value("scale", 0.0f),
             item.value("max_bias", 0.0f),
             item.value("logit_softcap", 0.0f),
-            static_cast<ggml_prec>(item.value("prec", static_cast<int>(GGML_PREC_DEFAULT))),
+            static_cast<ggml_prec>(item.value("prec", static_cast<int>(GGML_PREC_UNDEFINED))),
         };
     }
     if (kind == "soft_max") {

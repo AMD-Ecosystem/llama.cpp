@@ -120,6 +120,11 @@ static bool node_inputs_are_available(const Graph &             graph,
                                       const GraphNode &         node,
                                       const std::vector<bool> & covered_nodes) {
     for (const ValueId input : node.inputs) {
+        // CPY writes into its destination tensor, which the importer also records as its output.
+        // An empty copy does not need that destination to have been produced already.
+        if (node.op == GGML_OP_CPY && input == node.output) {
+            continue;
+        }
         if (!value_is_available(graph, input, covered_nodes)) {
             return false;
         }

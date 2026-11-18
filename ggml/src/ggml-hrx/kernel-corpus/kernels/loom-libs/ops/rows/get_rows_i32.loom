@@ -1,0 +1,63 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// Gather contiguous I32 rows, including the one-element routing rows used by Gemma 4 E models.
+amdgpu.target<gfx11-generic> @ggml_get_rows_i32_gfx11_wave64 {subgroup_size = 64}
+
+kernel.def target(@ggml_get_rows_i32_gfx11_wave64) @ggml_get_rows_i32(%token_count: index, %row_count: index, %hidden_size: index) {
+  %c1 = index.constant 1 : index
+  %c255 = index.constant 255 : index
+  %c256 = index.constant 256 : index
+  %rounded = index.add %hidden_size, %c255 : index
+  %channel_groups = index.div %rounded, %c256 : index
+  kernel.launch.config workgroups(%channel_groups, %token_count, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%token_count: index, %row_count: index, %hidden_size: index, %token_ids: buffer, %weight: buffer, %output: buffer) where [range(%token_count, 1, 2048), range(%row_count, 1, 262208), range(%hidden_size, 1, 32768)] {
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
+  %bounded_row_count = index.assume %row_count [range(%row_count, 1, 262208)] : index
+  %bounded_hidden_size = index.assume %hidden_size [range(%hidden_size, 1, 32768)] : index
+  %token0 = kernel.workgroup.id<y> : index
+  %channel_group = kernel.workgroup.id<x> : index
+  %lane = kernel.workitem.id<x> : index
+  %c256 = index.constant 256 : index
+  %c0_i32 = scalar.constant 0 : i32
+  %c0_offset = index.constant 0 : offset
+  %token = index.assume %token0 [lt(%token0, %bounded_token_count)] : index
+  %channel_base = index.mul %channel_group, %c256 : index
+  %channel = index.add %channel_base, %lane : index
+  %in_bounds = index.cmp ult, %channel, %bounded_hidden_size : index
+  %ids_noalias, %weight_noalias, %output_noalias = buffer.assume.noalias %token_ids, %weight, %output : buffer, buffer, buffer
+  %ids_view = buffer.view %ids_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]xi32>
+  %weight_view = buffer.view %weight_noalias[%c0_offset] : buffer -> view<[%bounded_row_count]x[%bounded_hidden_size]xi32>
+  %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]x[%bounded_hidden_size]xi32>
+  scf.if %in_bounds {
+    %bounded_channel = index.assume %channel [lt(%channel, %bounded_hidden_size)] : index
+    %row_raw = view.load %ids_view[%token] : view<[%bounded_token_count]xi32> -> i32
+    %nonnegative = scalar.cmpi sge, %row_raw, %c0_i32 : i32
+    %safe_row_raw = scf.select %nonnegative, %row_raw, %c0_i32 : i32
+    %row = index.cast %safe_row_raw : i32 to index
+    %below_row_count = index.cmp ult, %row, %bounded_row_count : index
+    %valid_row = scalar.andi %nonnegative, %below_row_count : i1
+    %result = scf.if %valid_row -> (i32) {
+      %bounded_row = index.assume %row [lt(%row, %bounded_row_count)] : index
+      %selected = view.load %weight_view[%bounded_row, %bounded_channel] : view<[%bounded_row_count]x[%bounded_hidden_size]xi32> -> i32
+      scf.yield %selected : i32
+    } else {
+      scf.yield %c0_i32 : i32
+    }
+    view.store %result, %output_view[%token, %bounded_channel] : i32, view<[%bounded_token_count]x[%bounded_hidden_size]xi32>
+  }
+  kernel.return
+}
+
+check.case public @ggml_get_rows_i32_scalar_case {
+  %token_count = check.literal value(2) : index
+  %row_count = check.literal value(2) : index
+  %hidden_size = check.literal value(1) : index
+  %token_ids = check.generate.iota offset(1) step(-1) : tensor<2xi32>
+  %weight = check.generate.iota offset(10) step(10) : tensor<2x1xi32>
+  %output = check.generate.fill value(0) : tensor<2x1xi32>
+  %expected = check.generate.iota offset(20) step(-10) : tensor<2x1xi32>
+  kernel.launch @ggml_get_rows_i32[%token_count, %row_count, %hidden_size](%token_count, %row_count, %hidden_size, %token_ids, %weight, %output) : [index, index, index](index, index, index, tensor<2xi32>, tensor<2x1xi32>, tensor<2x1xi32>)
+  check.expect.equal actual(%output) expected(%expected) : tensor<2x1xi32>
+  check.return
+}

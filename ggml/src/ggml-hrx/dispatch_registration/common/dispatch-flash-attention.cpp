@@ -106,7 +106,7 @@ static bool has_flash_attention_params(const GraphNode & node) {
         return false;
     }
     return nearly_equal(params->max_bias, 0.0f) && nearly_equal(params->logit_softcap, 0.0f) &&
-           (params->prec == GGML_PREC_DEFAULT || params->prec == GGML_PREC_F32);
+           (params->prec == GGML_PREC_UNDEFINED || params->prec == GGML_PREC_F32);
 }
 
 static std::string to_config_value(int64_t value) {
