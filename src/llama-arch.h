@@ -1009,6 +1009,7 @@ inline bool llm_arch_prefers_hrx_row64_weights(llm_arch arch) {
     switch (arch) {
         case LLM_ARCH_QWEN3:
         case LLM_ARCH_QWEN35:
+        case LLM_ARCH_LFM2:
             return true;
         default:
             return false;
