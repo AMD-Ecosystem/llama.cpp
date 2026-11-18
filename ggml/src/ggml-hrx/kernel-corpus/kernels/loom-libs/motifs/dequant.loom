@@ -1020,7 +1020,7 @@ func.def inline @ggml_q2k_values_f32_vector4(%q2_group: index, %scale_bits: i32,
   %c4 = index.constant 4 : index
   %c15_i32 = scalar.constant 15 : i32
   %c4_i32 = scalar.constant 4 : i32
-  %code_mask = vector.constant 50529027 : vector<1xi32>
+  %code_mask = vector.splati 50529027 : vector<1xi32>
   %scale_bits_low = scalar.andi %scale_bits, %c15_i32 : i32
   %scale_bits_high0 = scalar.shrui %scale_bits, %c4_i32 : i32
   %scale_bits_high = scalar.andi %scale_bits_high0, %c15_i32 : i32
