@@ -123,6 +123,98 @@ static __global__ void ssm_conv_long_token_f32(const float * __restrict__ src0, 
     }
 }
 
+// conv input given as the dim 0 concat of a (the first ne_a0 columns) and b, read in place without the concat:
+// one thread per channel walks split_n_t tokens, so with a channel stride of one float the loads and stores are coalesced
+template <bool apply_silu, int split_d_inner, int d_conv, int split_n_t>
+static __global__ void __launch_bounds__(split_d_inner) ssm_conv_concat_f32(
+        const char * __restrict__ a, const char * __restrict__ b, const float * __restrict__ w, const float * __restrict__ bias,
+        const int64_t ne_a0, const int64_t a_nb0, const int64_t a_nb1, const int64_t a_nb2,
+        const int64_t b_nb0, const int64_t b_nb1, const int64_t b_nb2, const int64_t w_nb1,
+        float * __restrict__ dst, const int64_t dst_nb1, const int64_t dst_nb2, const int64_t nr, const int64_t n_t) {
+    const int64_t ir = (int64_t) blockIdx.y * split_d_inner + threadIdx.x;
+    const int64_t is = blockIdx.x;
+    const int64_t t0 = (int64_t) blockIdx.z * split_n_t;
+
+    if (ir >= nr) {
+        return;
+    }
+
+    const char * a_row = a + is * a_nb2 + ir * a_nb1;
+    const char * b_row = b + is * b_nb2 + ir * b_nb1;
+
+    float wv[d_conv];
+#pragma unroll
+    for (int j = 0; j < d_conv; j++) {
+        wv[j] = w[ir * (w_nb1 / sizeof(float)) + j];
+    }
+    const float bv = bias != nullptr ? bias[ir] : 0.0f;
+
+    constexpr int n_cols = split_n_t + d_conv - 1;
+    const int64_t n_cols_total = n_t + d_conv - 1;
+
+    float x[n_cols];
+#pragma unroll
+    for (int j = 0; j < n_cols; j++) {
+        const int64_t col = t0 + j;
+        float v = 0.0f;
+        if (col < ne_a0) {
+            v = *(const float *) (a_row + col * a_nb0);
+        } else if (col < n_cols_total) {
+            v = *(const float *) (b_row + (col - ne_a0) * b_nb0);
+        }
+        x[j] = v;
+    }
+
+    float * y = (float *) ((char *) dst + is * dst_nb2) + ir;
+    const int64_t stride_y = dst_nb1 / sizeof(float);
+
+#pragma unroll
+    for (int i = 0; i < split_n_t; i++) {
+        if (t0 + i >= n_t) {
+            break;
+        }
+        float sumf = 0.0f;
+#pragma unroll
+        for (int j = 0; j < d_conv; j++) {
+            sumf += x[i + j] * wv[j];
+        }
+        sumf += bv;
+        y[(t0 + i) * stride_y] = apply_silu ? ggml_cuda_op_silu_single(sumf) : sumf;
+    }
+}
+
+template <bool apply_silu>
+static void ssm_conv_concat_f32_cuda(const ggml_tensor * a, const ggml_tensor * b, const ggml_tensor * w, const float * bias,
+                                     ggml_tensor * dst, cudaStream_t stream) {
+    constexpr int threads   = 128;
+    constexpr int split_n_t = 32;
+
+    const int64_t nc  = w->ne[0];
+    const int64_t nr  = dst->ne[0];
+    const int64_t n_t = dst->ne[1];
+    const int64_t n_s = dst->ne[2];
+
+    const dim3 blocks(n_s, (nr + threads - 1) / threads, (n_t + split_n_t - 1) / split_n_t);
+
+    auto launch_kernel = [&](auto NC) {
+        constexpr int kNC = decltype(NC)::value;
+        ssm_conv_concat_f32<apply_silu, threads, kNC, split_n_t><<<blocks, threads, 0, stream>>>(
+            (const char *) a->data, (const char *) b->data, (const float *) w->data, bias,
+            a->ne[0], a->nb[0], a->nb[1], a->nb[2], b->nb[0], b->nb[1], b->nb[2], w->nb[1],
+            (float *) dst->data, dst->nb[1], dst->nb[2], nr, n_t);
+    };
+
+    switch (nc) {
+        case 3:  launch_kernel(std::integral_constant<int, 3 >{}); break;
+        case 4:  launch_kernel(std::integral_constant<int, 4 >{}); break;
+        case 5:  launch_kernel(std::integral_constant<int, 5 >{}); break;
+        case 7:  launch_kernel(std::integral_constant<int, 7 >{}); break;
+        case 9:  launch_kernel(std::integral_constant<int, 9 >{}); break;
+        case 15: launch_kernel(std::integral_constant<int, 15>{}); break;
+        default: GGML_ABORT("Only support kernel sizes 3, 4, 5, 7, 9, 15 right now.");
+    }
+}
+
 template <bool apply_silu>
 static void ssm_conv_f32_cuda(const float * src0, const float * src1, const float * bias, const int src0_nb0, const int src0_nb1,
                               const int src0_nb2, const int src1_nb1, float * dst, const int dst_nb0, const int dst_nb1,
@@ -158,7 +250,8 @@ static void ssm_conv_f32_cuda(const float * src0, const float * src1, const floa
     }
 }
 
-void ggml_cuda_op_ssm_conv(ggml_backend_cuda_context & ctx, ggml_tensor * dst, ggml_tensor * bias_add_node, ggml_tensor * silu_dst) {
+void ggml_cuda_op_ssm_conv(ggml_backend_cuda_context & ctx, ggml_tensor * dst, ggml_tensor * bias_add_node, ggml_tensor * silu_dst,
+                           bool fuse_concat) {
     const struct ggml_tensor * src0 = dst->src[0];  // conv_x
     const struct ggml_tensor * src1 = dst->src[1];  // conv1d.weight
     const bool fuse_bias = bias_add_node != nullptr;
@@ -179,8 +272,28 @@ void ggml_cuda_op_ssm_conv(ggml_backend_cuda_context & ctx, ggml_tensor * dst, g
     const int64_t n_s = out->ne[2];                 // number of sequences in the batch
 
     GGML_ASSERT(out->ne[0] == nr);
-    GGML_ASSERT(src0->nb[0] == sizeof(float));
     GGML_ASSERT(src1->nb[0] == sizeof(float));
+
+    if (fuse_concat) {
+        // src0 is the CONCAT, which is not computed: read its two inputs instead
+        const ggml_tensor * a = src0->src[0];
+        const ggml_tensor * b = src0->src[1];
+        GGML_ASSERT(src0->op == GGML_OP_CONCAT && ggml_get_op_params_i32(src0, 0) == 0);
+        GGML_ASSERT(a->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32 && out->type == GGML_TYPE_F32);
+        GGML_ASSERT(out->nb[0] == sizeof(float));
+        if (fuse_bias) {
+            GGML_ASSERT(bias->type == GGML_TYPE_F32 && ggml_is_contiguous(bias) && ggml_nelements(bias) == nr);
+        }
+        const float * bias_d = fuse_bias ? (const float *) bias->data : nullptr;
+        if (fuse_silu) {
+            ssm_conv_concat_f32_cuda<true>(a, b, src1, bias_d, const_cast<ggml_tensor *>(out), ctx.stream());
+        } else {
+            ssm_conv_concat_f32_cuda<false>(a, b, src1, bias_d, const_cast<ggml_tensor *>(out), ctx.stream());
+        }
+        return;
+    }
+
+    GGML_ASSERT(src0->nb[0] == sizeof(float));
     GGML_ASSERT(src0->nb[1] == src0->ne[0] * sizeof(float));
 
     const float * src0_d = (const float *) src0->data;
