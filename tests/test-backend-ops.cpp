@@ -13146,6 +13146,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
     // a selection of the indexer of sparse attention, with more ties at the threshold than slots
     test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {1088, 2048, 1, 1}, 512, true));
+    // Qwen QSA pools: 512 of a few thousand pools per token, scores with ties and many -inf (invisible pools)
+    for (int64_t n_pool : {1500, 4224, 8768, 16960, 32768}) {
+        for (int64_t nrows : {1, 3, 20}) {
+            test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {n_pool, nrows, 1, 1}, 512));
+            test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {n_pool, nrows, 1, 1}, 512, true));
+            test_cases.emplace_back(new test_top_k_inf({n_pool, nrows, 1, 1}, 512));
+        }
+    }
+    test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {16961, 2, 2, 2}, 512, true));
 
     for (int i = 0; i < 20; ++i) {
         for (int k : {1, 2, 3, 7, 15, 100, 500, 1023, 9999}) {
@@ -13964,6 +13973,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // Qwen QSA indexer: 4 heads, prompt batches that are not a multiple of the WMMA token tile, kv that is not a multiple of the key tile
+    for (auto [kv, nb, ns, nm] : {std::tuple{1001, 37, 1, 1}, std::tuple{8768, 130, 1, 1}, std::tuple{300, 16, 1, 1},
+                                  std::tuple{4224, 2051, 1, 1}, std::tuple{515, 17, 3, 3}, std::tuple{515, 64, 3, 1}}) {
+        for (ggml_type type_K : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+            test_cases.emplace_back(new test_lightning_indexer(128, 4, kv, nb, ns, nm, type_K));
+        }
+    }
+
     return test_cases;
 }
 #ifdef _MSC_VER
@@ -14001,6 +14018,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     // Qwen3.8-Flash-Next pooled indexer prefill.
     test_cases.emplace_back(new test_lightning_indexer(128, 4, 1088, 1024, 1, 1, GGML_TYPE_F32));
     test_cases.emplace_back(new test_lightning_indexer(128, 4, 1088, 1024, 1, 1, GGML_TYPE_Q4_0));
+    // the same at 8K / 32K / 64K context (4 cells per pool), and a 3 token verify batch
+    for (int kv : {2560, 8768, 16960}) {
+        test_cases.emplace_back(new test_lightning_indexer(128, 4, kv, 2048, 1, 1, GGML_TYPE_F32));
+    }
+    test_cases.emplace_back(new test_lightning_indexer(128, 4, 8768, 3, 1, 1, GGML_TYPE_F32));
     // SWIGLU at a 27B-class FFN width, fused [gate|up] vs split operands
     // note: same bytes either way, so a backend that indexes them differently shows it here
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_BF16}) {
@@ -14497,6 +14519,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
             for (auto cols : {k, 1000, 65000, 200000}) {
                 test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {cols, nrows, 1, 1}, k));
             }
+        }
+    }
+
+    // Qwen QSA: 512 of the pools of an 8K / 32K / 64K context for a prompt batch, a verify batch and a single token
+    for (auto cols : {2560, 8768, 16960}) {
+        for (auto nrows : {1, 3, 2048}) {
+            test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {cols, nrows, 1, 1}, 512));
         }
     }
 
