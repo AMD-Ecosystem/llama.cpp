@@ -3,6 +3,8 @@
 
 config.def @ggml.rope_f32.native_power = 0 : index
 
+config.def @ggml.rope_f32.fma_rotation = 0 : index
+
 func.def inline @ggml_rope_f32_frequency_packet(%values: vector<2xf32>, %first_pair: index) -> (vector<2xf32>) {
   %mode = config.get @ggml.rope_f32.native_power : index
   %zero = index.constant 0 : index
@@ -39,11 +41,25 @@ func.def inline @ggml_rope_f32_pair_packet(%position: f32, %theta: vector<2xf32>
   %turns = vector.mulf<reassoc|nnan|ninf|nsz|contract> %angles, %inverse_two_pi_vector : vector<2xf32>
   %cosines = vector.costurnsf<afn> %turns : vector<2xf32>
   %sines = vector.sinturnsf<afn> %turns : vector<2xf32>
-  %x_cosines = vector.mulf<nnan|ninf|nsz> %x_values, %cosines : vector<2xf32>
-  %x_sines = vector.mulf<nnan|ninf|nsz> %x_values, %sines : vector<2xf32>
-  %negative_y = vector.negf %y_values : vector<2xf32>
-  %rotated_x = vector.fmaf<nnan|ninf|nsz> %negative_y, %sines, %x_cosines : vector<2xf32>
-  %rotated_y = vector.fmaf<nnan|ninf|nsz> %y_values, %cosines, %x_sines : vector<2xf32>
+  %fma_mode = config.get @ggml.rope_f32.fma_rotation : index
+  %zero = index.constant 0 : index
+  %fma_rotation = index.cmp ne, %fma_mode, %zero : index
+  %rotated_x, %rotated_y = scf.if %fma_rotation -> (vector<2xf32>, vector<2xf32>) {
+    %x_cosines = vector.mulf<nnan|ninf|nsz> %x_values, %cosines : vector<2xf32>
+    %x_sines = vector.mulf<nnan|ninf|nsz> %x_values, %sines : vector<2xf32>
+    %negative_y = vector.negf %y_values : vector<2xf32>
+    %x = vector.fmaf<nnan|ninf|nsz> %negative_y, %sines, %x_cosines : vector<2xf32>
+    %y = vector.fmaf<nnan|ninf|nsz> %y_values, %cosines, %x_sines : vector<2xf32>
+    scf.yield %x, %y : vector<2xf32>, vector<2xf32>
+  } else {
+    %x_cosines = vector.mulf<reassoc|nnan|ninf|nsz|contract> %x_values, %cosines : vector<2xf32>
+    %y_sines = vector.mulf<reassoc|nnan|ninf|nsz|contract> %y_values, %sines : vector<2xf32>
+    %x_sines = vector.mulf<reassoc|nnan|ninf|nsz|contract> %x_values, %sines : vector<2xf32>
+    %y_cosines = vector.mulf<reassoc|nnan|ninf|nsz|contract> %y_values, %cosines : vector<2xf32>
+    %x = vector.subf<reassoc|nnan|ninf|nsz> %x_cosines, %y_sines : vector<2xf32>
+    %y = vector.addf<reassoc|nnan|ninf|nsz> %x_sines, %y_cosines : vector<2xf32>
+    scf.yield %x, %y : vector<2xf32>, vector<2xf32>
+  }
   func.return %rotated_x, %rotated_y : vector<2xf32>, vector<2xf32>
 }
 

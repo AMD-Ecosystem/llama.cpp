@@ -2659,6 +2659,8 @@ static void run_rope_set_rows_dispatch_checks() {
         require_compile_parameter(dispatch, "ggml.rope_f32.token_capacity", "4");
         REQUIRE(dispatch.kernel.workload_specialization == ggml::hrx::WorkloadSpecialization::Dynamic);
         REQUIRE(dispatch.kernel.compile_parameters.count("ggml.rope_f32.input_span") == 0);
+        REQUIRE(dispatch.kernel.compile_parameters.count("ggml.rope_f32.native_power") == 0);
+        REQUIRE(dispatch.kernel.compile_parameters.count("ggml.rope_f32.fma_rotation") == 0);
         REQUIRE(dispatch.kernel.integer_parameters.at("input_span") == hidden_size * token_count);
         require_compile_parameter(dispatch, "ggml.rope_f32.mode", "2");
         REQUIRE(dispatch.bindings.size() == 5);
@@ -15612,6 +15614,8 @@ static void run_rope_offset_import_checks() {
     });
     REQUIRE(rope_dispatch != dispatches.end());
     require_compile_parameter(*rope_dispatch, "ggml.rope_f32.n_offs", "64");
+    require_compile_parameter(*rope_dispatch, "ggml.rope_f32.native_power", "1");
+    require_compile_parameter(*rope_dispatch, "ggml.rope_f32.fma_rotation", "1");
     for (const auto & dispatch : dispatches) {
         REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) != "loom_libs:ggml_rope_set_rows_f32");
     }

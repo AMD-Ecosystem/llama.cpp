@@ -541,11 +541,12 @@ static std::pair<ValueId, ValueId> add_rope_frequency_bindings(const DispatchMat
 }
 
 static Dispatch make_rope_dispatch(const DispatchMatchContext & context,
-                                   const RopeMatch &            source_match,
+                                   RopeMatch &                  match,
                                    DispatchMatch &              dispatch_match) {
-    RopeMatch    match        = source_match;
     const auto * params       = op_params_as<RopeParams>(match.node->params);
-    const bool   native_power = params->ext_factor == 0.0f && params->freq_scale == 1.0f;
+    // Leading rotations share the precomputed frequencies used by fused RoPE dispatches.
+    const bool   offset_rotation = match.n_offs != 0;
+    const bool   native_power    = offset_rotation && params->ext_factor == 0.0f && params->freq_scale == 1.0f;
     if (native_power) {
         float base = std::pow(params->freq_base, -2.0f / static_cast<float>(match.n_dims));
         if (match.node->op == GGML_OP_ROPE_BACK) {
@@ -559,7 +560,12 @@ static Dispatch make_rope_dispatch(const DispatchMatchContext & context,
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(kRopeF32Kernel);
     dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
-    dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.native_power", native_power ? "1" : "0");
+    if (offset_rotation) {
+        dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.fma_rotation", "1");
+    }
+    if (native_power) {
+        dispatch.kernel.compile_parameters.emplace("ggml.rope_f32.native_power", "1");
+    }
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
     dispatch.kernel.integer_parameters.emplace("input_span", match.input_span);
     add_rope_compile_parameters(dispatch, match, "ggml.rope_f32", false);
@@ -876,7 +882,7 @@ static bool match_rope_set_rows_f32_dispatch(const DispatchMatchContext & contex
 }
 
 static bool match_rope_f32_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
-    const RopeMatch match = match_rope_f32(context.graph, context.root_node, &dispatch_match.status);
+    RopeMatch match = match_rope_f32(context.graph, context.root_node, &dispatch_match.status);
     if (!match.matched()) {
         return false;
     }
