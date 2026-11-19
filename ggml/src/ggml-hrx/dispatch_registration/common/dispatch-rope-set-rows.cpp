@@ -543,7 +543,7 @@ static std::pair<ValueId, ValueId> add_rope_frequency_bindings(const DispatchMat
 static Dispatch make_rope_dispatch(const DispatchMatchContext & context,
                                    RopeMatch &                  match,
                                    DispatchMatch &              dispatch_match) {
-    const auto * params       = op_params_as<RopeParams>(match.node->params);
+    const auto * params          = op_params_as<RopeParams>(match.node->params);
     // Leading rotations share the precomputed frequencies used by fused RoPE dispatches.
     const bool   offset_rotation = match.n_offs != 0;
     const bool   native_power    = offset_rotation && params->ext_factor == 0.0f && params->freq_scale == 1.0f;
