@@ -9473,7 +9473,7 @@ static constexpr ArchitectureRow64Case kArchitectureRow64Cases[] = {
     { LLM_ARCH_SMOLLM3, true },
     { LLM_ARCH_PHI3, false },
     { LLM_ARCH_GEMMA4, false },
-    { LLM_ARCH_LLAMA, false },
+    { LLM_ARCH_LLAMA, true },
     { LLM_ARCH_UNKNOWN, false },
 };
 
