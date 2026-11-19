@@ -1064,6 +1064,20 @@ static bool match_q5_k_symmetric_i8_prefill_dispatch(const DispatchMatchContext 
     return true;
 }
 
+static void append_sum_planes(const Value &           output,
+                              const DispatchBinding & planes,
+                              int64_t                 count,
+                              DispatchMatch &         match) {
+    Dispatch reduce;
+    reduce.kernel = make_kernel_specialization(GGML_HRX_KERNEL_REF("loom_libs", "ggml_sum_planes_f32"));
+    reduce.kernel.integer_parameters.emplace("element_count", output.element_count);
+    reduce.kernel.compile_parameters.emplace("ggml.sum_planes.count", std::to_string(count));
+    reduce.bindings = {
+        planes, { output.id, 0, output.byte_count }
+    };
+    match.dispatches.push_back(std::move(reduce));
+}
+
 static bool match_packed_q8_1_x4_prefill_dispatch(const DispatchMatchContext & context,
                                                   DispatchMatch &              dispatch_match) {
     const CommonMulMatMatch match = common_match_mul_mat_any_format(context.graph, context.root_node,
@@ -1079,8 +1093,13 @@ static bool match_packed_q8_1_x4_prefill_dispatch(const DispatchMatchContext & c
         return false;
     }
 
+    // A clamped GLU consumes the two projection outputs separately.
     for (const GraphNode * consumer : context.graph.index().consumers(match.output->id)) {
-        if (match.weight->type != GGML_TYPE_Q4_K && consumer != nullptr && consumer->op == GGML_OP_GLU) {
+        if (match.weight->type == GGML_TYPE_Q4_K || consumer == nullptr || consumer->op != GGML_OP_GLU) {
+            continue;
+        }
+        BinaryKind glu_kind;
+        if (match.weight->type != GGML_TYPE_Q8_0 || common_fused_binary_kind_from_params(consumer->params, glu_kind)) {
             return false;
         }
     }
@@ -1135,6 +1154,9 @@ static bool match_packed_q8_1_x4_prefill_dispatch(const DispatchMatchContext & c
             common_to_config_value(common_mul_mat_format_config_value(pack_q4 ? CommonMulMatWeightFormat::Q4KRow64 :
                                                                                match.weight_format)));
     }
+    if (match.weight->type == GGML_TYPE_Q8_0) {
+        dispatch.kernel.compile_parameters.emplace("ggml.matmul.integer_k32.weight_scale_first", "1");
+    }
     dispatch.bindings.push_back(activation);
     if (pack_q4) {
         dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count, kQ4KPackedK256Row64Layout,
@@ -1143,10 +1165,23 @@ static bool match_packed_q8_1_x4_prefill_dispatch(const DispatchMatchContext & c
     } else {
         dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
     }
-    dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
-
+    // Split a long contraction across two workgroups when the output grid is small.
+    const int64_t tiles = (match.token_count / 256) * (match.output_size / 64);
+    const bool    split =
+        match.weight->type == GGML_TYPE_Q8_0 && match.input_size >= 2048 && match.output_size >= 512 && tiles <= 16;
+    DispatchBinding result = { match.output->id, 0, match.output->byte_count };
+    if (split) {
+        result.value = ValueId(context.next_plan_value.value + static_cast<int32_t>(dispatch_match.transients.size()));
+        result.length *= 2;
+        dispatch_match.transients.push_back({ result.value, "common.mul_mat.q8.partials", result.length, 256 });
+        dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_q8_1_x4.split_count", "2");
+    }
+    dispatch.bindings.push_back(result);
     dispatch_match.covered_nodes.push_back(context.root_index);
     dispatch_match.dispatches.push_back(std::move(dispatch));
+    if (split) {
+        append_sum_planes(*match.output, result, 2, dispatch_match);
+    }
     return true;
 }
 
@@ -2284,15 +2319,7 @@ static bool match_batched_mul_mat_dispatch(const DispatchMatchContext & context,
         dispatch_match.dispatches.push_back(std::move(dispatch));
     }
     if (split_count > 1) {
-        Dispatch reduce;
-        reduce.kernel = make_kernel_specialization(GGML_HRX_KERNEL_REF("loom_libs", "ggml_sum_planes_f32"));
-        reduce.kernel.integer_parameters.emplace("element_count", output->element_count);
-        reduce.kernel.compile_parameters.emplace("ggml.sum_planes.count", std::to_string(split_count));
-        reduce.bindings = {
-            { partial,    0, partial_bytes      },
-            { output->id, 0, output->byte_count }
-        };
-        dispatch_match.dispatches.push_back(std::move(reduce));
+        append_sum_planes(*output, { partial, 0, partial_bytes }, split_count, dispatch_match);
     }
     dispatch_match.covered_nodes.push_back(context.root_index);
     return true;
@@ -2515,23 +2542,7 @@ static bool match_decode_mul_mat_add_dispatch(const DispatchMatchContext & conte
     return build_decode_mul_mat_add_dispatch(match, context, dispatch_match);
 }
 
-static bool match_q8_prefill_dispatch(const DispatchMatchContext & context, DispatchMatch & match) {
-    const GraphNode * node = context.root_node;
-    if (node == nullptr || node->inputs.size() != 2) {
-        return false;
-    }
-    const Value * weight = common_graph_value(context.graph, node->inputs[0]);
-    const Value * input  = common_graph_value(context.graph, node->inputs[1]);
-    if (weight == nullptr || input == nullptr || weight->type != GGML_TYPE_Q8_0 || weight->ne[2] != 1 ||
-        input->ne[1] <= 8) {
-        return false;
-    }
-    return match_batched_mul_mat_dispatch(context, match);
-}
-
 void register_mul_mat_dispatches(DispatchRegistryBuilder & registry) {
-    registry.add({ "common.mul_mat.q8_prefill", GGML_OP_MUL_MAT, DispatchMatchKind::Fused, 321, DispatchSource::Common,
-                   match_q8_prefill_dispatch });
     registry.add({ "common.mul_mat.hadamard128", GGML_OP_MUL_MAT, DispatchMatchKind::SingleOp, 350,
                    DispatchSource::Common, match_hadamard_dispatch });
     registry.add({ "common.mul_mat.small_k", GGML_OP_MUL_MAT, DispatchMatchKind::SingleOp, -10, DispatchSource::Common,

@@ -15650,6 +15650,76 @@ static void run_mul_mat_precision_import_checks() {
     ggml_free(ctx);
 }
 
+static void run_q8_prefill_plan_checks() {
+    struct Case {
+        int64_t output_size;
+        bool    clamped;
+        bool    precise;
+        int     planes;
+    };
+
+    const Case cases[] = {
+        { 512,  true,  false, 2 },
+        { 2048, true,  false, 1 },
+        { 512,  true,  true,  0 },
+        { 512,  false, false, 0 },
+    };
+    for (const Case & test : cases) {
+        ggml_context * ctx = ggml_init({ 2 * 1024 * 1024, nullptr, true });
+        REQUIRE(ctx != nullptr);
+        auto * input      = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 4096, 512);
+        auto   projection = [&]() {
+            auto * weight = ggml_new_tensor_2d(ctx, GGML_TYPE_Q8_0, 4096, test.output_size);
+            auto * output = ggml_mul_mat(ctx, weight, input);
+            if (test.precise) {
+                REQUIRE(ggml_prec_set_src(output, GGML_PREC_F32, 1));
+            }
+            return output;
+        };
+        auto * gate   = projection();
+        auto * up     = projection();
+        auto * output = test.clamped ? ggml_swiglu_clamp(ctx, gate, up, 7.0f) : ggml_swiglu_split(ctx, gate, up);
+        auto * graph  = ggml_new_graph(ctx);
+        ggml_build_forward_expand(graph, output);
+        auto imported = ggml::hrx::import_ggml_graph(*graph);
+        REQUIRE(imported.valid());
+        ggml::hrx::DispatchScheduler scheduler;
+        REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+        const auto & plan = scheduler.plan();
+        REQUIRE(plan.valid());
+        size_t projections = 0;
+        size_t reductions  = 0;
+        for (size_t i = 0; i < plan.dispatches.size(); ++i) {
+            const auto & dispatch = plan.dispatches[i];
+            const auto   name     = kernel_name_for_id(dispatch.kernel.kernel_id);
+            if (name == "loom_libs:ggml_sum_planes_f32") {
+                ++reductions;
+            }
+            if (name != "loom_libs:ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256") {
+                continue;
+            }
+            ++projections;
+            require_compile_parameter(dispatch, "ggml.matmul.integer_k32.weight_scale_first", "1");
+            const auto & result = dispatch.bindings.back();
+            REQUIRE(result.length == ggml_nbytes(gate) * test.planes);
+            if (test.planes == 2) {
+                require_compile_parameter(dispatch, "ggml.mul_mat_q8_1_x4.split_count", "2");
+                REQUIRE(i + 1 < plan.dispatches.size());
+                const auto & reduce = plan.dispatches[i + 1];
+                REQUIRE(kernel_name_for_id(reduce.kernel.kernel_id) == "loom_libs:ggml_sum_planes_f32");
+                require_compile_parameter(reduce, "ggml.sum_planes.count", "2");
+                REQUIRE(reduce.bindings.front().value == result.value);
+                REQUIRE(reduce.bindings.front().length == result.length);
+                REQUIRE(reduce.bindings.back().length == ggml_nbytes(gate));
+                REQUIRE(reduce.bindings.back().value != result.value);
+            }
+        }
+        REQUIRE(projections == (test.planes ? 2u : 0u));
+        REQUIRE(reductions == (test.planes == 2 ? 2u : 0u));
+        ggml_free(ctx);
+    }
+}
+
 static void run_mxfp4_prefill_dispatch_checks() {
     for (int64_t input_size : { 288, 384, 512 }) {
         for (int64_t input_routes : { 1, 2 }) {
@@ -15687,6 +15757,7 @@ static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
     suite.host_case("command_plan_metadata", [] { run_command_plan_metadata_checks(); });
     suite.host_case("dispatch_registry", [] { run_dispatch_registry_checks(); });
     suite.host_case("graph_import", [] { run_graph_import_checks(); });
+    suite.host_case("q8_prefill_plan", [] { run_q8_prefill_plan_checks(); });
     suite.host_case("mxfp4_prefill_dispatch", [] { run_mxfp4_prefill_dispatch_checks(); });
     suite.host_case("rope_offset_import", [] { run_rope_offset_import_checks(); });
     suite.host_case("mul_mat_precision_import", [] { run_mul_mat_precision_import_checks(); });

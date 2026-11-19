@@ -15,6 +15,8 @@ config.decl @ggml.mul_mat_q5_k_q8_plane.output_size : %value: index where [range
 
 config.decl @ggml.mul_mat_q5_k_q8_plane.token_capacity : %value: index where [range(%value, 1, 2048), range(%value, 1, 2048)]
 
+config.def @ggml.mul_mat_q8_1_x4.split_count = 1 : index
+
 config.decl @ggml.mul_mat_q8_1_x4.input_size : %value: index where [range(%value, 256, 32768), multiple_of(%value, 256)]
 
 config.decl @ggml.mul_mat_q8_1_x4.output_size : %value: index where [range(%value, 64, 262144), multiple_of(%value, 64)]
@@ -324,7 +326,23 @@ template.def<@ggml.mul_mat_q5_k_q8_plane.wmmai8.body> device @ggml_mul_mat_q5_k_
   %q8_payload_offset = index.constant 16 : offset
   %q8_elements_per_group = index.constant 128 : index
   // dst is [rows, cols] with rows contiguous, and C is [cols, rows].
-  %dst_view = buffer.view %dst_na[%base] : buffer -> view<[%cols_b]x[%rows_b]xf32>
+  %configured_splits = config.get @ggml.mul_mat_q8_1_x4.split_count : index
+  %split_count = index.assume %configured_splits [range(%configured_splits, 1, 2)] : index
+  %split = index.cmp ugt, %split_count, %c1 : index
+  %chunk_begin, %chunk_end, %dst_base = scf.if %split -> (index, index, offset) {
+    %part = kernel.workgroup.id<z> : index
+    %part_chunks = index.div %nchunks, %split_count : index
+    %begin = index.mul %part, %part_chunks : index
+    %end = index.add %begin, %part_chunks : index
+    %plane_elements = index.mul %cols_b, %rows_b : index
+    %first_element = index.mul %part, %plane_elements : index
+    %float_bytes = index.constant 4 : offset
+    %plane_offset = index.scale %first_element, %float_bytes : index, offset -> offset
+    scf.yield %begin, %end, %plane_offset : index, index, offset
+  } else {
+    scf.yield %c0, %nchunks, %base : index, index, offset
+  }
+  %dst_view = buffer.view %dst_na[%dst_base] : buffer -> view<[%cols_b]x[%rows_b]xf32>
 
   // Waves share the staged weight tile across their token rows.
   %scratch = buffer.alloca<workgroup> align(16) %lds_bytes : buffer
@@ -387,7 +405,7 @@ template.def<@ggml.mul_mat_q5_k_q8_plane.wmmai8.body> device @ggml_mul_mat_q5_k_
   %as_tile0 = index.div %lm0, %c16 : index
   %asb0 = index.mul %as_tile0, %k_blocks : index
 
-  %f0_0, %f0_1, %f0_2, %f0_3, %f1_0, %f1_1, %f1_2, %f1_3 = scf.for %chunk = [%c0 to %nchunks step %c1](%fc0_0 = %fzero : vector<8xf32>, %fc0_1 = %fzero : vector<8xf32>, %fc0_2 = %fzero : vector<8xf32>, %fc0_3 = %fzero : vector<8xf32>, %fc1_0 = %fzero : vector<8xf32>, %fc1_1 = %fzero : vector<8xf32>, %fc1_2 = %fzero : vector<8xf32>, %fc1_3 = %fzero : vector<8xf32>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) {
+  %f0_0, %f0_1, %f0_2, %f0_3, %f1_0, %f1_1, %f1_2, %f1_3 = scf.for %chunk = [%chunk_begin to %chunk_end step %c1](%fc0_0 = %fzero : vector<8xf32>, %fc0_1 = %fzero : vector<8xf32>, %fc0_2 = %fzero : vector<8xf32>, %fc0_3 = %fzero : vector<8xf32>, %fc1_0 = %fzero : vector<8xf32>, %fc1_1 = %fzero : vector<8xf32>, %fc1_2 = %fzero : vector<8xf32>, %fc1_3 = %fzero : vector<8xf32>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) {
     %activation_active = index.cmp ult, %tid, %k_m : index
     scf.if %activation_active {
       %q8_words0, %q8_words1, %q8_d0_f16, %q8_s0_f16, %q8_d1_f16, %q8_s1_f16 = scf.if %q8_plane -> (vector<8xi32>, vector<8xi32>, f16, f16, f16, f16) {
@@ -1123,7 +1141,8 @@ kernel.def target(@ggml_q5_plane_dense_gfx11_wave32) export("ggml_mul_mat_q5_k_i
   %token_capacity = config.get @ggml.mul_mat_q8_1_x4.token_capacity : index
   %row_tiles = index.div %output_size, %tile_rows : index
   %token_tiles = index.div %token_capacity, %tile_tokens : index
-  kernel.launch.config workgroups(%token_tiles, %row_tiles, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+  %parts = config.get @ggml.mul_mat_q8_1_x4.split_count : index
+  kernel.launch.config workgroups(%token_tiles, %row_tiles, %parts) workgroup_size(%workgroup_size, %unit, %unit) : index
 } launch(%token_count: index, %q8_input: buffer, %weight: buffer, %output: buffer) {
   %paired_weights = scalar.constant false : i1
   template.apply<@ggml.mul_mat_q8_1_x4.entry>(%token_count, %paired_weights, %q8_input, %weight, %weight, %output) : (index, i1, buffer, buffer, buffer, buffer)

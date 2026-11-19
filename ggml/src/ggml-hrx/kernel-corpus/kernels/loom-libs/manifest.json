@@ -12231,6 +12231,18 @@
         "--output-format=jsonl"
       ],
       "link_module": "integer_k32_accumulate_f32_test_linked"
+    },
+    {
+      "name": "integer_k32_fused_consumers_weight_scale_first_plan_test",
+      "args": [
+        "$(location :integer_k32_accumulate_f32_test_linked)",
+        "--benchmark=@integer_k32_fused_consumers",
+        "--config=test.signed_rhs=1",
+        "--config=ggml.matmul.integer_k32.weight_scale_first=1",
+        "--dry-run",
+        "--output-format=jsonl"
+      ],
+      "link_module": "integer_k32_accumulate_f32_test_linked"
     }
   ],
   "sources": [],

@@ -6,6 +6,8 @@ template.decl @ggml.matmul.integer_k32.accumulate_f32(%signed_rhs: i1, %lhs0: ve
 
 amdgpu.target<gfx11-generic> @test_wave32 {subgroup_size = 32}
 
+config.decl @ggml.matmul.integer_k32.weight_scale_first : %value: index where [range(%value, 0, 1)]
+
 config.decl @test.signed_rhs : %value: index where [range(%value, 0, 1)]
 
 kernel.def target(@test_wave32) @integer_k32_fused() {
@@ -95,6 +97,8 @@ kernel.def target(@test_wave32) @integer_k32_scalar_reference() {
   %c2 = index.constant 2 : index
   %c16 = index.constant 16 : index
   %c32 = index.constant 32 : index
+  %order = config.get @ggml.matmul.integer_k32.weight_scale_first : index
+  %weight_first = index.cmp ne, %order, %c0 : index
   %signed_flag = config.get @test.signed_rhs : index
   %signed_rhs = index.cmp ne, %signed_flag, %c0 : index
   %activation_view = buffer.view %activation[%base] : buffer -> view<16x64xi8>
@@ -143,13 +147,17 @@ kernel.def target(@test_wave32) @integer_k32_scalar_reference() {
     %gate_float = scalar.sitofp %gate_dot : i32 to f32
     %gate_affine = scalar.fmaf %activation_sum_value, %gate_correction_value, %gate_acc : f32
     %gate_base = scf.select %signed_rhs, %gate_acc, %gate_affine : f32
-    %gate_product_scale = scalar.mulf %activation_scale_value, %gate_scale_value : f32
-    %gate_next = scalar.fmaf %gate_float, %gate_product_scale, %gate_base : f32
+    %gate_first = scf.select %weight_first, %gate_float, %activation_scale_value : f32
+    %gate_last = scf.select %weight_first, %activation_scale_value, %gate_float : f32
+    %gate_scaled = scalar.mulf %gate_first, %gate_scale_value : f32
+    %gate_next = scalar.fmaf %gate_last, %gate_scaled, %gate_base : f32
     %up_float = scalar.sitofp %up_dot : i32 to f32
     %up_affine = scalar.fmaf %activation_sum_value, %up_correction_value, %up_acc : f32
     %up_base = scf.select %signed_rhs, %up_acc, %up_affine : f32
-    %up_product_scale = scalar.mulf %activation_scale_value, %up_scale_value : f32
-    %up_next = scalar.fmaf %up_float, %up_product_scale, %up_base : f32
+    %up_first = scf.select %weight_first, %up_float, %activation_scale_value : f32
+    %up_last = scf.select %weight_first, %activation_scale_value, %up_float : f32
+    %up_scaled = scalar.mulf %up_first, %up_scale_value : f32
+    %up_next = scalar.fmaf %up_last, %up_scaled, %up_base : f32
     scf.yield %gate_next, %up_next : f32, f32
   }
   view.store %gate, %plain_view[%row, %column] : f32, view<16x16xf32>
@@ -205,7 +213,7 @@ check.case public @integer_k32_consumers {
   %geglu_expected = check.generate.fill value(0.0) : tensor<16x16xf32>
   kernel.launch @integer_k32_fused(%activation, %gate_weight, %up_weight, %activation_scale, %gate_scale, %up_scale, %activation_sum, %gate_correction, %up_correction, %plain, %swiglu, %geglu) : (tensor<16x64xi8>, tensor<64x16xi8>, tensor<64x16xi8>, tensor<16x2xf32>, tensor<16x2xf32>, tensor<16x2xf32>, tensor<16x2xf32>, tensor<16x2xf32>, tensor<16x2xf32>, tensor<16x16xf32>, tensor<16x16xf32>, tensor<16x16xf32>)
   kernel.launch @integer_k32_scalar_reference(%activation, %gate_weight, %up_weight, %activation_scale, %gate_scale, %up_scale, %activation_sum, %gate_correction, %up_correction, %plain_expected, %swiglu_expected, %geglu_expected) : (tensor<16x64xi8>, tensor<64x16xi8>, tensor<64x16xi8>, tensor<16x2xf32>, tensor<16x2xf32>, tensor<16x2xf32>, tensor<16x2xf32>, tensor<16x2xf32>, tensor<16x2xf32>, tensor<16x16xf32>, tensor<16x16xf32>, tensor<16x16xf32>)
-  check.expect.approximate actual(%plain) expected(%plain_expected) atol(2.0000000000000002e-05) rtol(2.0000000000000002e-05) nan(same) : tensor<16x16xf32>, tensor<16x16xf32>
+  check.expect.equal actual(%plain) expected(%plain_expected) : tensor<16x16xf32>
   check.expect.approximate actual(%swiglu) expected(%swiglu_expected) atol(2.0000000000000002e-05) rtol(2.0000000000000002e-05) nan(same) : tensor<16x16xf32>, tensor<16x16xf32>
   check.expect.approximate actual(%geglu) expected(%geglu_expected) atol(2.0000000000000002e-05) rtol(2.0000000000000002e-05) nan(same) : tensor<16x16xf32>, tensor<16x16xf32>
   check.return
