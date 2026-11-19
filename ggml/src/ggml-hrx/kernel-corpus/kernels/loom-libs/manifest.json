@@ -3632,14 +3632,16 @@
         "expert_table",
         "partition_table",
         "weight",
-        "output"
+        "output",
+        "grid"
       ],
       "binding_access": [
         "read",
         "read",
         "read",
         "read",
-        "read_write"
+        "read_write",
+        "read"
       ],
       "target_selector": "",
       "compile_recipe": {
@@ -3758,14 +3760,16 @@
         "expert_table",
         "partition_table",
         "weight",
-        "output"
+        "output",
+        "grid"
       ],
       "binding_access": [
         "read",
         "read",
         "read",
         "read",
-        "read_write"
+        "read_write",
+        "read"
       ],
       "target_selector": "",
       "compile_recipe": {
@@ -4166,7 +4170,8 @@
         "gate_weight",
         "up_weight",
         "output",
-        "iq3_xxs_grid"
+        "gate_grid",
+        "up_grid"
       ],
       "binding_access": [
         "read",
@@ -4175,6 +4180,7 @@
         "read",
         "read",
         "read_write",
+        "read",
         "read"
       ],
       "target_selector": "",
@@ -4233,7 +4239,8 @@
         "gate_weight",
         "up_weight",
         "output",
-        "iq3_xxs_grid"
+        "gate_grid",
+        "up_grid"
       ],
       "binding_access": [
         "read",
@@ -4242,6 +4249,7 @@
         "read",
         "read",
         "read_write",
+        "read",
         "read"
       ],
       "target_selector": "",

@@ -2,7 +2,7 @@ template.decl @ggml.matmul_id.tiled_f32_f32.add_bias_vector4(%arg0: index, %arg1
 
 template.decl @ggml.matmul_id.tiled_f32_f32.add_residual_vector4(%arg0: index, %arg1: index, %arg2: index, %arg3: index, %arg4: index, %arg5: vector<4xf32>, %arg6: buffer) -> (vector<4xf32>)
 
-template.decl @ggml.matmul_id.tiled_f32_f32.core(%arg0: index, %arg1: index, %arg2: index, %arg3: index, %arg4: index, %arg5: index, %arg6: index, %arg7: f32, %arg8: index, %arg9: index, %arg10: buffer, %arg11: buffer, %arg12: buffer, %arg13: buffer, %arg14: buffer, %arg15: buffer, %arg16: buffer, %arg17: buffer, %arg18: buffer, %arg19: buffer, %arg20: buffer)
+template.decl @ggml.matmul_id.tiled_f32_f32.core(%arg0: index, %arg1: index, %arg2: index, %arg3: index, %arg4: index, %arg5: index, %arg6: index, %arg7: f32, %arg8: index, %arg9: index, %arg10: buffer, %arg11: buffer, %arg12: buffer, %arg13: buffer, %arg14: buffer, %arg15: buffer, %arg16: buffer, %arg17: buffer, %arg18: buffer, %arg19: buffer, %arg20: buffer, %grid: buffer)
 
 template.decl @ggml.matmul_id.tiled_f32_f32.finish_routed_rmsnorm_weight(%arg0: index, %arg1: index, %arg2: index, %arg3: index, %arg4: index, %arg5: index, %arg6: f32, %arg7: index, %arg8: index, %arg9: index, %arg10: index, %arg11: buffer, %arg12: buffer, %arg13: buffer, %arg14: buffer, %arg15: buffer)
 
@@ -93,6 +93,6 @@ kernel.def target(@ggml_mul_mat_id_tiled_input_f32_postops_next_rmsnorm_publish_
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %token_capacity)] : index
   %channel_tile = kernel.workgroup.id<x> : index
   %partition_ordinal = kernel.workgroup.id<y> : index
-  template.apply<@ggml.matmul_id.tiled_f32_f32.core>(%weight_format, %bounded_token_count, %input_size, %output_size, %route_count, %input_route_count, %expert_count, %epsilon, %channel_tile, %partition_ordinal, %input, %expert_table, %partition_table, %weight, %bias, %residual_output, %residual_input, %residual_output, %norm_weight, %normalized_output, %completion_counters) : (index, index, index, index, index, index, index, f32, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  template.apply<@ggml.matmul_id.tiled_f32_f32.core>(%weight_format, %bounded_token_count, %input_size, %output_size, %route_count, %input_route_count, %expert_count, %epsilon, %channel_tile, %partition_ordinal, %input, %expert_table, %partition_table, %weight, %bias, %residual_output, %residual_input, %residual_output, %norm_weight, %normalized_output, %completion_counters, %weight) : (index, index, index, index, index, index, index, f32, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
   kernel.return
 }
