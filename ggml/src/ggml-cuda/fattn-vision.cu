@@ -582,7 +582,7 @@ static bool fattn_vision_common_supported(int cc, const ggml_tensor * dst) {
     const ggml_tensor * sinks = dst->src[4];
 
     if (!GGML_CUDA_CC_IS_RDNA3_5(cc) || sinks || dst->src[5] ||
-            (ggml_prec_get_acc(dst) != GGML_PREC_DEFAULT && ggml_prec_get_acc(dst) != GGML_PREC_F32) || K->ne[2] <= 0) {
+            (ggml_prec_get_acc(dst) != GGML_PREC_UNDEFINED && ggml_prec_get_acc(dst) != GGML_PREC_F32) || K->ne[2] <= 0) {
         return false;
     }
     float max_bias      = 0.0f;
