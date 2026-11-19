@@ -5552,7 +5552,7 @@ static void run_qwen_decode_split_flash_attention_scheduling_case(int64_t query_
     restore_environment_value(kDisableQwenDispatchEnv, had_original_env, original_env_value);
 }
 
-static void run_qwen_decode_attention_output_next_q8_scheduling_case(bool include_get_rows_selectors) {
+static void run_qwen_decode_attention_output_next_q8_scheduling_case(bool include_get_rows_selectors, bool prefer_row64 = false) {
     constexpr int64_t query_token_count     = 1;
     constexpr int64_t key_value_token_count = 512;
     constexpr int64_t attention_hidden_size = 4096;
@@ -5607,7 +5607,7 @@ static void run_qwen_decode_attention_output_next_q8_scheduling_case(bool includ
     REQUIRE(imported.valid());
     ggml::hrx::DispatchScheduler           scheduler;
     ggml::hrx::DispatchScheduleDiagnostics diagnostics;
-    REQUIRE(scheduler.schedule_graph(imported.graph, { "gfx1151" }, &diagnostics));
+    REQUIRE(scheduler.schedule_graph(imported.graph, { "gfx1151", prefer_row64 }, &diagnostics));
     const ggml::hrx::CommandPlan & plan = scheduler.plan();
     REQUIRE(plan.valid());
     REQUIRE(plan.dispatches.size() == 3);
@@ -5628,6 +5628,10 @@ static void run_qwen_decode_attention_output_next_q8_scheduling_case(bool includ
             std::to_string(kQwenHiddenSize));
     REQUIRE(projection_dispatch.kernel.compile_parameters.at("qwen3_moe.dense_quantized.output_accumulation") == "1");
     REQUIRE(projection_dispatch.bindings.size() == 7);
+    REQUIRE(projection_dispatch.kernel.compile_parameters.at("qwen3_moe.dense_quantized.weight_layout") ==
+            (prefer_row64 ? "1" : "0"));
+    REQUIRE(projection_dispatch.bindings[1].layout ==
+            (prefer_row64 ? ggml::hrx::kQ4KPackedK256Row64Layout : ggml::hrx::kNativeWeightLayout));
 
     const ggml::hrx::Value * flash_output_value   = imported.graph.values().find_tensor(attention_output);
     const ggml::hrx::Value * residual_input_value = imported.graph.values().find_tensor(residual_input);
@@ -7282,6 +7286,87 @@ static void run_dense_matmul_swiglu_cpu_reference_case(ggml_type    gate_weight_
     ggml_free(hrx_ctx);
     ggml_backend_free(cpu_backend);
     ggml_backend_free(hrx_backend);
+}
+
+static void run_qwen_output_row64_reference_case(bool prefer_row64) {
+    constexpr int64_t k = 4096;
+    constexpr int64_t n = 2048;
+    ggml_backend_t backend = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+    set_test_row64_policy(backend, prefer_row64);
+    ggml_init_params params = {};
+    params.mem_size = 32 * 1024 * 1024;
+    params.no_alloc = true;
+    ggml_context * ctx = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+    ggml_tensor * input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, 1);
+    ggml_tensor * input_norm_weight = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, k);
+    ggml_tensor * prepared = ggml_mul(ctx, ggml_rms_norm(ctx, input, kQwenRmsNormEps), input_norm_weight);
+    ggml_tensor * weight = ggml_new_tensor_2d(ctx, GGML_TYPE_Q4_K, k, n);
+    ggml_tensor * residual_input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n, 1);
+    ggml_tensor * residual = ggml_add(ctx, ggml_mul_mat(ctx, weight, prepared), residual_input);
+    ggml_tensor * norm_weight = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n);
+    ggml_tensor * normalized = ggml_mul(ctx, ggml_rms_norm(ctx, residual, kQwenRmsNormEps), norm_weight);
+    ggml_tensor * next_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_Q4_K, n, n);
+    ggml_tensor * output = ggml_mul_mat(ctx, next_weight, normalized);
+    ggml_set_output(normalized);
+    auto weights = make_matmul_weight_bytes(GGML_TYPE_Q4_K, k, n, 6);
+    auto next_weights = make_matmul_weight_bytes(GGML_TYPE_Q4_K, n, n, 11);
+    auto weight_buffer = import_test_weight(backend, weight, weights);
+    auto next_weight_buffer = import_test_weight(backend, next_weight, next_weights);
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, output);
+    const auto target = test_dispatch_target(backend);
+    require_weight_layout(graph, { weight }, prefer_row64 ? ggml::hrx::kQ4KPackedK256Row64Layout :
+                                                           ggml::hrx::kNativeWeightLayout,
+                          target, "qwen3_moe:qwen3_moe_dense_linear_q4k_q8_1_x4_next_q8", 1);
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    REQUIRE(buffer != nullptr);
+    const auto input_values = make_pattern_f32(k, 7, 0.01f);
+    const auto residual_values = make_pattern_f32(n, 3, 0.01f);
+    const std::vector<float> input_norm(k, 1.0f);
+    const std::vector<float> norm(n, 0.75f);
+    ggml_backend_tensor_set(input, input_values.data(), 0, k * sizeof(float));
+    ggml_backend_tensor_set(input_norm_weight, input_norm.data(), 0, k * sizeof(float));
+    ggml_backend_tensor_set(norm_weight, norm.data(), 0, n * sizeof(float));
+    auto rms_reference = [](std::vector<float> values, float scale) {
+        double squares = 0.0;
+        for (float value : values) {
+            squares += double(value) * value;
+        }
+        const float multiplier = scale / std::sqrt(squares / values.size() + kQwenRmsNormEps);
+        for (float & value : values) {
+            value *= multiplier;
+        }
+        return values;
+    };
+    // Include the two Q8 publication boundaries in the independent F32 dot reference.
+    auto q8_reference = [](const std::vector<float> & values) {
+        std::vector<block_q8_1> blocks(values.size() / QK8_1);
+        quantize_row_q8_1_ref(values.data(), blocks.data(), values.size());
+        std::vector<float> result(values.size());
+        for (size_t i = 0; i < values.size(); ++i) {
+            result[i] = GGML_FP16_TO_FP32(blocks[i / QK8_1].d) * blocks[i / QK8_1].qs[i % QK8_1];
+        }
+        return result;
+    };
+    const auto prepared_reference = q8_reference(rms_reference(input_values, 1.0f));
+    auto residual_reference = f32_matmul_reference(GGML_TYPE_Q4_K, weights, prepared_reference, k, n, 1);
+    for (size_t i = 0; i < residual_reference.size(); ++i) {
+        residual_reference[i] += residual_values[i];
+    }
+    const auto normalized_reference = rms_reference(residual_reference, 0.75f);
+    const auto output_reference = f32_matmul_reference(GGML_TYPE_Q4_K, next_weights, q8_reference(normalized_reference), n, n, 1);
+    for (int execution = 0; execution < 3; ++execution) {
+        ggml_backend_tensor_set(residual_input, residual_values.data(), 0, n * sizeof(float));
+        REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+        ggml_backend_synchronize(backend);
+        require_reference_close(get_f32_tensor(backend, normalized), normalized_reference);
+        require_reference_close(get_f32_tensor(backend, output), output_reference);
+    }
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+    ggml_backend_free(backend);
 }
 
 static void run_mixed_symmetric_source_eligibility_case() {
@@ -10944,6 +11029,12 @@ static void register_flash_attention_cases(Suite & suite) {
     suite.device_case("qwen_decode_split_flash_attention.query4.kv513.masked.head96.value64", [] {
         run_qwen_decode_split_flash_attention_scheduling_case(4, 513, true, 96, 64, 1.0f / std::sqrt(96.0f));
     });
+    suite.device_case("qwen_decode_attention_output_next_q8.row64_no_selectors",
+                      [] { run_qwen_decode_attention_output_next_q8_scheduling_case(false, true); });
+    suite.device_case("qwen_decode_attention_output_next_q8.row64_selectors",
+                      [] { run_qwen_decode_attention_output_next_q8_scheduling_case(true, true); });
+    suite.device_case("qwen_output_reference.native", [] { run_qwen_output_row64_reference_case(false); });
+    suite.device_case("qwen_output_reference.row64", [] { run_qwen_output_row64_reference_case(true); });
     suite.device_case("qwen_decode_attention_output_next_q8.no_selectors",
                       [] { run_qwen_decode_attention_output_next_q8_scheduling_case(false); });
     suite.device_case("qwen_decode_attention_output_next_q8.selectors",

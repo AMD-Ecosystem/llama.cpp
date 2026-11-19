@@ -1,5 +1,5 @@
 // Q4_K x Q8_1 projection kernels for the Qwen attention path.
-template.decl @qwen3_moe.dense.q4k_q8_1_x4.body(%publish_output: i1, %token_count: index, %token0: index, %q8_input: buffer, %weight: buffer, %output: buffer)
+template.decl @qwen3_moe.dense.q4k_q8_1_x4.body(%row64: i1, %publish_output: i1, %token_count: index, %token0: index, %q8_input: buffer, %weight: buffer, %output: buffer)
 
 template.decl @qwen3_moe.rmsnorm_quantize_q8_1_x4.body(%arg0: i1, %arg1: index, %arg2: index, %arg3: index, %arg4: buffer, %arg5: buffer, %arg6: buffer, %arg7: buffer)
 
@@ -45,7 +45,8 @@ kernel.def target(@qwen3_moe_dense_gfx11_wave32) @qwen3_moe_dense_linear_q4k_q8_
   %c0 = index.constant 0 : index
   %valid_token = index.cmp ult, %token0, %bounded_token_count : index
   %safe_token = scf.select %valid_token, %token0, %c0 : index
-  template.apply<@qwen3_moe.dense.q4k_q8_1_x4.body>(%valid_token, %bounded_token_count, %safe_token, %q8_input, %weight, %output) : (i1, index, index, buffer, buffer, buffer)
+  %native = scalar.constant false : i1
+  template.apply<@qwen3_moe.dense.q4k_q8_1_x4.body>(%native, %valid_token, %bounded_token_count, %safe_token, %q8_input, %weight, %output) : (i1, i1, index, index, buffer, buffer, buffer)
   kernel.return
 }
 

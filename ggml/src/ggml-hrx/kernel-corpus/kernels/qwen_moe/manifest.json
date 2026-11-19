@@ -1264,6 +1264,7 @@
         "$(location :dense_linear_quantized_f16_wmma_linked)",
         "--benchmark=@qwen3_moe_dense_linear_q4k_q8_1_x4_next_q8_decode",
         "--config=qwen3_moe.dense_quantized.input_size=4096",
+        "--config=qwen3_moe.dense_quantized.weight_layout=0",
         "--config=qwen3_moe.dense_quantized.output_accumulation=1",
         "--config=qwen3_moe.dense_quantized.output_size=2048",
         "--config=qwen3_moe.model.hidden_size=2048",

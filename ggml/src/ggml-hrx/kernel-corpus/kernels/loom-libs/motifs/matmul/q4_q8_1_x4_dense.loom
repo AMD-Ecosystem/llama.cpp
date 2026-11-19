@@ -1,7 +1,7 @@
 // Copyright 2026 The HRX Authors
 // SPDX-License-Identifier: Apache-2.0
 
-template.decl @qwen3_moe.dense.q4k_q8_1_x4.body(%publish_output: i1, %token_count: index, %token0: index, %q8_input: buffer, %weight: buffer, %output: buffer)
+template.decl @qwen3_moe.dense.q4k_q8_1_x4.body(%row64: i1, %publish_output: i1, %token_count: index, %token0: index, %q8_input: buffer, %weight: buffer, %output: buffer)
 
 config.decl @qwen3_moe.dense_quantized.input_size : %value: index where [range(%value, 256, 32768), multiple_of(%value, 256)]
 
@@ -9,9 +9,9 @@ config.decl @qwen3_moe.dense_quantized.output_size : %value: index where [range(
 
 config.decl @qwen3_moe.dense_quantized.output_accumulation : %value: index where [range(%value, 0, 1)]
 
-func.decl @qwen3_moe_q4k_q8_1_x4_paired_row_lane(%input_size: index, %weight: buffer, %weight_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %lane: index) -> (f32)
+func.decl @qwen3_moe_q4k_q8_1_x4_paired_row_lane_layout(%row64: i1, %row: index, %input_size: index, %weight: buffer, %weight_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %lane: index) -> (f32)
 
-template.def<@qwen3_moe.dense.q4k_q8_1_x4.body> device @qwen3_moe_dense_linear_q4k_q8_1_x4_body(%publish_output: i1, %token_count: index, %token0: index, %q8_input: buffer, %weight: buffer, %output: buffer) {
+template.def<@qwen3_moe.dense.q4k_q8_1_x4.body> device @qwen3_moe_dense_linear_q4k_q8_1_x4_body(%row64: i1, %publish_output: i1, %token_count: index, %token0: index, %q8_input: buffer, %weight: buffer, %output: buffer) {
   %input_size = config.get @qwen3_moe.dense_quantized.input_size : index
   %output_size = config.get @qwen3_moe.dense_quantized.output_size : index
   %output_accumulation = config.get @qwen3_moe.dense_quantized.output_accumulation : index
@@ -45,7 +45,7 @@ template.def<@qwen3_moe.dense.q4k_q8_1_x4.body> device @qwen3_moe_dense_linear_q
   %q8_noalias, %weight_noalias, %output_noalias = buffer.assume.noalias %q8_input, %weight, %output : buffer, buffer, buffer
   %lane_sum = scf.if %publish_output -> (f32) {
     %channel_sum = scf.if %valid_channel -> (f32) {
-      %sum = func.call @qwen3_moe_q4k_q8_1_x4_paired_row_lane(%bounded_input_size, %weight_noalias, %weight_row_byte_base, %q8_noalias, %q8_row_byte_base, %lane) : (index, buffer, offset, buffer, offset, index) -> (f32)
+      %sum = func.call @qwen3_moe_q4k_q8_1_x4_paired_row_lane_layout(%row64, %channel, %bounded_input_size, %weight_noalias, %weight_row_byte_base, %q8_noalias, %q8_row_byte_base, %lane) : (i1, index, index, buffer, offset, buffer, offset, index) -> (f32)
       scf.yield %sum : f32
     } else {
       scf.yield %c0_f32 : f32
