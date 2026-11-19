@@ -1,12 +1,8 @@
-// Link with integer_k32_accumulate_f32.loom and paired_glu_f32.loom.
+// Link with integer_k32_accumulate_f32.loom.
 // Two K32 groups exercise nonzero recurrence, signed/unsigned RHS and affine
 // metadata. Separate gate/up weights and scales catch projection or lane swaps.
 // The scalar reference has no fragments and applies GLU only after all of K.
 template.decl @ggml.matmul.integer_k32.accumulate_f32(%signed_rhs: i1, %lhs0: vector<4xi32>, %lhs1: vector<4xi32>, %rhs0: vector<4xi32>, %rhs1: vector<4xi32>, %zero: vector<8xi32>, %activation_scale: vector<8xf32>, %weight_scale: vector<8xf32>, %activation_sum: vector<8xf32>, %weight_correction: vector<8xf32>, %accumulator: vector<8xf32>) -> (vector<8xf32>)
-
-template.decl @ggml.matmul.swiglu.apply_vector8(%gate: vector<8xf32>, %up: vector<8xf32>) -> (vector<8xf32>)
-
-template.decl @ggml.matmul.geglu.apply_vector8(%gate: vector<8xf32>, %up: vector<8xf32>) -> (vector<8xf32>)
 
 amdgpu.target<gfx11-generic> @test_wave32 {subgroup_size = 32}
 
@@ -79,9 +75,11 @@ kernel.def target(@test_wave32) @integer_k32_fused() {
     scf.yield %gate_next, %up_next : vector<8xf32>, vector<8xf32>
   }
   vector.fragment.store<result> %gate, %plain_view[%c0, %c0] shape [%c16, %c16] : vector<8xf32>, view<16x16xf32>
-  %swiglu_result = template.apply<@ggml.matmul.swiglu.apply_vector8>(%gate, %up) : (vector<8xf32>, vector<8xf32>) -> (vector<8xf32>)
+  %silu_gate = vector.siluf %gate : vector<8xf32>
+  %swiglu_result = vector.mulf %silu_gate, %up : vector<8xf32>
   vector.fragment.store<result> %swiglu_result, %swiglu_view[%c0, %c0] shape [%c16, %c16] : vector<8xf32>, view<16x16xf32>
-  %geglu_result = template.apply<@ggml.matmul.geglu.apply_vector8>(%gate, %up) : (vector<8xf32>, vector<8xf32>) -> (vector<8xf32>)
+  %gelu_gate = vector.geluf<tanh, afn> %gate : vector<8xf32>
+  %geglu_result = vector.mulf %gelu_gate, %up : vector<8xf32>
   vector.fragment.store<result> %geglu_result, %geglu_view[%c0, %c0] shape [%c16, %c16] : vector<8xf32>, view<16x16xf32>
   kernel.return
 }

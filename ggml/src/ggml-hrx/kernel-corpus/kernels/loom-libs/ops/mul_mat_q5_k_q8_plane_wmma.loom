@@ -1,7 +1,5 @@
 template.decl @ggml.matmul.integer_k32.accumulate_f32(%signed_rhs: i1, %lhs0: vector<4xi32>, %lhs1: vector<4xi32>, %rhs0: vector<4xi32>, %rhs1: vector<4xi32>, %zero: vector<8xi32>, %activation_scale: vector<8xf32>, %weight_scale: vector<8xf32>, %activation_sum: vector<8xf32>, %weight_correction: vector<8xf32>, %accumulator: vector<8xf32>) -> (vector<8xf32>)
 
-template.decl @ggml.matmul.swiglu.apply_vector8(%gate: vector<8xf32>, %up: vector<8xf32>) -> (vector<8xf32>)
-
 template.decl @ggml.mul_mat_q8_1_x4.entry(%token_count: index, %paired_weights: i1, %q8_input: buffer, %weight: buffer, %peer_weight: buffer, %output: buffer)
 
 // Generic Q5_K projection consuming the Q8_1 plane published by the fused
@@ -933,13 +931,17 @@ template.def<@ggml.mul_mat_q5_k_q8_plane.wmmai8.body> device @ggml_mul_mat_q5_k_
   }
 
   scf.if %paired_weights {
-    %result0 = template.apply<@ggml.matmul.swiglu.apply_vector8>(%f0_0, %f1_0) : (vector<8xf32>, vector<8xf32>) -> (vector<8xf32>)
+    %activated0 = vector.siluf %f0_0 : vector<8xf32>
+    %result0 = vector.mulf %activated0, %f1_0 : vector<8xf32>
     vector.fragment.store<result> %result0, %dst_view[%gm0, %gn0] shape [%c16, %c16] : vector<8xf32>, view<[%cols_b]x[%rows_b]xf32>
-    %result1 = template.apply<@ggml.matmul.swiglu.apply_vector8>(%f0_1, %f1_1) : (vector<8xf32>, vector<8xf32>) -> (vector<8xf32>)
+    %activated1 = vector.siluf %f0_1 : vector<8xf32>
+    %result1 = vector.mulf %activated1, %f1_1 : vector<8xf32>
     vector.fragment.store<result> %result1, %dst_view[%gm0, %gn1] shape [%c16, %c16] : vector<8xf32>, view<[%cols_b]x[%rows_b]xf32>
-    %result2 = template.apply<@ggml.matmul.swiglu.apply_vector8>(%f0_2, %f1_2) : (vector<8xf32>, vector<8xf32>) -> (vector<8xf32>)
+    %activated2 = vector.siluf %f0_2 : vector<8xf32>
+    %result2 = vector.mulf %activated2, %f1_2 : vector<8xf32>
     vector.fragment.store<result> %result2, %dst_view[%gm0, %gn2] shape [%c16, %c16] : vector<8xf32>, view<[%cols_b]x[%rows_b]xf32>
-    %result3 = template.apply<@ggml.matmul.swiglu.apply_vector8>(%f0_3, %f1_3) : (vector<8xf32>, vector<8xf32>) -> (vector<8xf32>)
+    %activated3 = vector.siluf %f0_3 : vector<8xf32>
+    %result3 = vector.mulf %activated3, %f1_3 : vector<8xf32>
     vector.fragment.store<result> %result3, %dst_view[%gm0, %gn3] shape [%c16, %c16] : vector<8xf32>, view<[%cols_b]x[%rows_b]xf32>
   } else {
     vector.fragment.store<result> %f0_0, %dst_view[%gm0, %gn0] shape [%c16, %c16] : vector<8xf32>, view<[%cols_b]x[%rows_b]xf32>

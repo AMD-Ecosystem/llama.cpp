@@ -690,9 +690,6 @@
       "path": "motifs/matmul/integer_k32_accumulate_f32.loom"
     },
     {
-      "path": "motifs/matmul/paired_glu_f32.loom"
-    },
-    {
       "path": "ops/matmul/integer_k32_accumulate_f32_test.loom"
     }
   ],
@@ -6105,13 +6102,11 @@
           "ops/mul_mat_q5_k_q8_plane_wmma.loom"
         ],
         "library_sources": [
-          "motifs/matmul/integer_k32_accumulate_f32.loom",
-          "motifs/matmul/paired_glu_f32.loom"
+          "motifs/matmul/integer_k32_accumulate_f32.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/matmul/integer_k32_accumulate_f32.loom",
-        "motifs/matmul/paired_glu_f32.loom"
+        "motifs/matmul/integer_k32_accumulate_f32.loom"
       ]
     },
     {
@@ -6148,13 +6143,11 @@
           "ops/mul_mat_q5_k_q8_plane_wmma.loom"
         ],
         "library_sources": [
-          "motifs/matmul/integer_k32_accumulate_f32.loom",
-          "motifs/matmul/paired_glu_f32.loom"
+          "motifs/matmul/integer_k32_accumulate_f32.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/matmul/integer_k32_accumulate_f32.loom",
-        "motifs/matmul/paired_glu_f32.loom"
+        "motifs/matmul/integer_k32_accumulate_f32.loom"
       ]
     },
     {
@@ -6193,13 +6186,11 @@
           "ops/mul_mat_q5_k_q8_plane_wmma.loom"
         ],
         "library_sources": [
-          "motifs/matmul/integer_k32_accumulate_f32.loom",
-          "motifs/matmul/paired_glu_f32.loom"
+          "motifs/matmul/integer_k32_accumulate_f32.loom"
         ]
       },
       "compile_dependencies": [
-        "motifs/matmul/integer_k32_accumulate_f32.loom",
-        "motifs/matmul/paired_glu_f32.loom"
+        "motifs/matmul/integer_k32_accumulate_f32.loom"
       ]
     },
     {
@@ -10494,8 +10485,7 @@
         "ops/matmul/integer_k32_accumulate_f32_test.loom"
       ],
       "libraries": [
-        "motifs/matmul/integer_k32_accumulate_f32.loom",
-        "motifs/matmul/paired_glu_f32.loom"
+        "motifs/matmul/integer_k32_accumulate_f32.loom"
       ]
     }
   ],
