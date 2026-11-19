@@ -14,6 +14,13 @@ static bool nearly_equal(float lhs, float rhs) {
     return std::fabs(lhs - rhs) <= 1.0e-12f;
 }
 
+static bool mul_mat_params_equivalent(const OpParams & lhs, const OpParams & rhs) {
+    const MulMatParams * lhs_params = op_params_as<MulMatParams>(lhs);
+    const MulMatParams * rhs_params = op_params_as<MulMatParams>(rhs);
+    return lhs_params != nullptr && rhs_params != nullptr && lhs_params->prec == rhs_params->prec &&
+           lhs_params->hint == rhs_params->hint && lhs_params->src1_prec == rhs_params->src1_prec;
+}
+
 static bool rms_norm_params_equivalent(const OpParams & lhs, const OpParams & rhs) {
     const RmsNormParams * lhs_params = op_params_as<RmsNormParams>(lhs);
     const RmsNormParams * rhs_params = op_params_as<RmsNormParams>(rhs);
@@ -265,6 +272,11 @@ OpParams import_op_params(const ggml_tensor & tensor) {
     }
 
     switch (tensor.op) {
+        case GGML_OP_MUL_MAT:
+        case GGML_OP_MUL_MAT_ID:
+            return MulMatParams{ ggml_prec_get_acc(&tensor),
+                                 static_cast<ggml_op_hint>(ggml_get_op_params_i32(&tensor, 1)),
+                                 ggml_prec_get_src(&tensor, 1) };
         case GGML_OP_RMS_NORM:
         case GGML_OP_L2_NORM:
             return RmsNormParams{ ggml_get_op_params_f32(&tensor, 0) };
@@ -327,6 +339,9 @@ OpParams import_op_params(const ggml_tensor & tensor) {
 
 bool op_params_equivalent(ggml_op op, const OpParams & lhs, const OpParams & rhs) {
     switch (op) {
+        case GGML_OP_MUL_MAT:
+        case GGML_OP_MUL_MAT_ID:
+            return mul_mat_params_equivalent(lhs, rhs);
         case GGML_OP_RMS_NORM:
         case GGML_OP_L2_NORM:
             return rms_norm_params_equivalent(lhs, rhs);

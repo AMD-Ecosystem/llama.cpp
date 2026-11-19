@@ -42,6 +42,9 @@
       "path": "ops/copy/copy_f32.loom"
     },
     {
+      "path": "ops/copy/copy_bits.loom"
+    },
+    {
       "path": "ops/copy/copy_f32_f16.loom"
     },
     {
@@ -682,6 +685,12 @@
     },
     {
       "path": "ops/flash_attention/decode_partition_f32_f16.loom"
+    },
+    {
+      "path": "motifs/matmul/integer_k32_accumulate_f32.loom"
+    },
+    {
+      "path": "ops/matmul/integer_k32_accumulate_f32_test.loom"
     }
   ],
   "exports": [
@@ -1075,6 +1084,49 @@
       "compile_dependencies": [
         "motifs/copy/convert_f32_f16.loom"
       ]
+    },
+    {
+      "name": "ggml_copy_bits",
+      "family": "loom_libs",
+      "symbol": "ggml_copy_bits",
+      "source": "ops/copy/copy_bits.loom",
+      "workload_parameters": [
+        {
+          "name": "element_count",
+          "type": "index"
+        },
+        {
+          "name": "source_span",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "element_count",
+          "type": "index"
+        },
+        {
+          "name": "source_span",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "source",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/copy/copy_bits.loom"
+        ],
+        "library_sources": []
+      },
+      "compile_dependencies": []
     },
     {
       "name": "ggml_copy_f32",
@@ -6049,9 +6101,13 @@
         "primary_sources": [
           "ops/mul_mat_q5_k_q8_plane_wmma.loom"
         ],
-        "library_sources": []
+        "library_sources": [
+          "motifs/matmul/integer_k32_accumulate_f32.loom"
+        ]
       },
-      "compile_dependencies": []
+      "compile_dependencies": [
+        "motifs/matmul/integer_k32_accumulate_f32.loom"
+      ]
     },
     {
       "name": "ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256",
@@ -6086,9 +6142,13 @@
         "primary_sources": [
           "ops/mul_mat_q5_k_q8_plane_wmma.loom"
         ],
-        "library_sources": []
+        "library_sources": [
+          "motifs/matmul/integer_k32_accumulate_f32.loom"
+        ]
       },
-      "compile_dependencies": []
+      "compile_dependencies": [
+        "motifs/matmul/integer_k32_accumulate_f32.loom"
+      ]
     },
     {
       "name": "ggml_mul_mat_q4_k_q8_1_x4_swiglu_wmma_token256",
@@ -6125,9 +6185,13 @@
         "primary_sources": [
           "ops/mul_mat_q5_k_q8_plane_wmma.loom"
         ],
-        "library_sources": []
+        "library_sources": [
+          "motifs/matmul/integer_k32_accumulate_f32.loom"
+        ]
       },
-      "compile_dependencies": []
+      "compile_dependencies": [
+        "motifs/matmul/integer_k32_accumulate_f32.loom"
+      ]
     },
     {
       "name": "ggml_mul_mat_q6_k_f32_wmma_prefill_wave32",
@@ -10414,6 +10478,15 @@
         "motifs/bf16_f16.loom",
         "motifs/f32_f16.loom"
       ]
+    },
+    {
+      "name": "integer_k32_accumulate_f32_test_linked",
+      "srcs": [
+        "ops/matmul/integer_k32_accumulate_f32_test.loom"
+      ],
+      "libraries": [
+        "motifs/matmul/integer_k32_accumulate_f32.loom"
+      ]
     }
   ],
   "plan_cases": [
@@ -10529,6 +10602,28 @@
         "--output-format=jsonl"
       ],
       "link_module": "vector_q6_q8_native_test_linked"
+    },
+    {
+      "name": "integer_k32_fused_consumers_signed0_plan_test",
+      "args": [
+        "$(location :integer_k32_accumulate_f32_test_linked)",
+        "--benchmark=@integer_k32_fused_consumers",
+        "--config=test.signed_rhs=0",
+        "--dry-run",
+        "--output-format=jsonl"
+      ],
+      "link_module": "integer_k32_accumulate_f32_test_linked"
+    },
+    {
+      "name": "integer_k32_fused_consumers_signed1_plan_test",
+      "args": [
+        "$(location :integer_k32_accumulate_f32_test_linked)",
+        "--benchmark=@integer_k32_fused_consumers",
+        "--config=test.signed_rhs=1",
+        "--dry-run",
+        "--output-format=jsonl"
+      ],
+      "link_module": "integer_k32_accumulate_f32_test_linked"
     }
   ],
   "sources": [],
