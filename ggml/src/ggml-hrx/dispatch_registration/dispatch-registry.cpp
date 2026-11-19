@@ -1,7 +1,6 @@
 #include "dispatch-registry.h"
 
 #include "backend-buffer-binding.h"
-
 #include "common/dispatch-common.h"
 #include "graph/graph-traversal.h"
 #include "llm/dispatch-attention-qkv.h"
@@ -126,8 +125,8 @@ bool DispatchRegistry::match(const DispatchMatchContext & context,
     for (const DispatchRegistration & registration : registrations) {
         DispatchMatch candidate;
         const bool matched = registration.matcher != nullptr && registration.matcher(context, candidate);
-        const bool eligible = matched && match_inputs_are_available(context, candidate) &&
-                              dispatch_has_eligible_weight_layouts(context, candidate);
+        const bool    eligible = matched && match_inputs_are_available(context, candidate) &&
+                                 dispatch_has_eligible_weight_layouts(context, candidate);
         if (eligible) {
             if (diagnostics != nullptr) {
                 diagnostics->attempts.push_back({

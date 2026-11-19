@@ -13,8 +13,10 @@ namespace {
 
 static constexpr uint64_t         kMaximumCopyElements = uint64_t{ 1 } << 30;
 static constexpr KernelCatalogRef kCopyF32Kernel       = GGML_HRX_KERNEL_REF("loom_libs", "ggml_copy_f32");
+static constexpr KernelCatalogRef kCopyF32F16Kernel    = GGML_HRX_KERNEL_REF("loom_libs", "ggml_copy_f32_f16");
 static constexpr KernelCatalogRef kCopyStridedSourceF32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_copy_strided_source_f32");
+static constexpr KernelCatalogRef kCopyBitsKernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_copy_bits");
 static constexpr KernelCatalogRef kConcatDim0F32Kernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_concat_dim0_f32");
 static constexpr KernelCatalogRef kConcatDim0StridedSourceF32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_concat_dim0_strided_source_f32");
@@ -122,7 +124,7 @@ static bool make_copy_bits_dispatch(const Value & source,
             return false;
         }
     }
-    dispatch.kernel = make_kernel_specialization(GGML_HRX_KERNEL_REF("loom_libs", "ggml_copy_bits"));
+    dispatch.kernel = make_kernel_specialization(kCopyBitsKernel);
     dispatch.kernel.integer_parameters.emplace("element_count", output.element_count);
     dispatch.kernel.integer_parameters.emplace("source_span", source.byte_count / element_size);
     auto & config = dispatch.kernel.compile_parameters;
@@ -139,7 +141,7 @@ static bool make_copy_bits_dispatch(const Value & source,
         config.emplace("ggml.copy_bits.stride" + std::to_string(dim), std::to_string(source.nb[dim] / element_size));
     }
     dispatch.bindings = {
-        { source.id, 0, source.byte_count },
+        { source.storage_root, source.storage_offset, source.byte_count },
         { output.id, 0, output.byte_count }
     };
     return true;
@@ -182,6 +184,37 @@ static bool match_copy_f32_dispatch(const DispatchMatchContext & context, Dispat
         return false;
     }
 
+    match.covered_nodes.push_back(context.root_index);
+    match.dispatches.push_back(std::move(dispatch));
+    return true;
+}
+
+static bool match_copy_f32_f16_dispatch(const DispatchMatchContext & context, DispatchMatch & match) {
+    const GraphNode * node = context.root_node;
+    if (node == nullptr || node->op != GGML_OP_CPY || node->inputs.size() != 2) {
+        return false;
+    }
+
+    const Value * source = graph_value(context.graph, node->inputs[0]);
+    const Value * target = graph_value(context.graph, node->inputs[1]);
+    const Value * output = graph_value(context.graph, node->output);
+    if (source == nullptr || target == nullptr || output == nullptr || source->type != GGML_TYPE_F32 ||
+        target->type != GGML_TYPE_F16 || output->type != GGML_TYPE_F16 || !source->contiguous ||
+        !target->contiguous || !output->contiguous || source->ne != output->ne || target->ne != output->ne ||
+        source->element_count <= 0 || source->element_count != output->element_count ||
+        source->element_count % 4 != 0 || static_cast<uint64_t>(source->element_count) > kMaximumCopyElements ||
+        source->byte_count != static_cast<size_t>(source->element_count) * sizeof(float) ||
+        output->byte_count != static_cast<size_t>(output->element_count) * sizeof(ggml_fp16_t) ||
+        target->storage != output->storage || source->storage == output->storage) {
+        return false;
+    }
+
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(kCopyF32F16Kernel);
+    dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
+    dispatch.kernel.integer_parameters.emplace("element_count", source->element_count);
+    dispatch.bindings.push_back({ source->id, 0, source->byte_count });
+    dispatch.bindings.push_back({ output->id, 0, output->byte_count });
     match.covered_nodes.push_back(context.root_index);
     match.dispatches.push_back(std::move(dispatch));
     return true;
@@ -331,8 +364,16 @@ static bool match_concat_packed(const DispatchMatchContext & context, DispatchMa
 }
 
 void register_copy_dispatch(DispatchRegistryBuilder & registry) {
-    registry.add({ "common.repeat_bits", GGML_OP_REPEAT, DispatchMatchKind::SingleOp, 0, DispatchSource::Common,
+    registry.add({ "common.repeat_f32", GGML_OP_REPEAT, DispatchMatchKind::SingleOp, 0, DispatchSource::Common,
                    match_cont_bits_dispatch });
+    registry.add({
+        "common.copy_f32_f16",
+        GGML_OP_CPY,
+        DispatchMatchKind::SingleOp,
+        0,
+        DispatchSource::Common,
+        match_copy_f32_f16_dispatch,
+    });
     registry.add({ "common.concat_packed", GGML_OP_CONCAT, DispatchMatchKind::SingleOp, 10, DispatchSource::Common,
                    match_concat_packed });
     registry.add({ "common.cont_bits", GGML_OP_CONT, DispatchMatchKind::SingleOp, -10, DispatchSource::Common,

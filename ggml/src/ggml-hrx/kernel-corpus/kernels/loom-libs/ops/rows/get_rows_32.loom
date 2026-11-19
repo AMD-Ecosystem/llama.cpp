@@ -1,14 +1,24 @@
 // Bit-preserving batched row gather for F32 and I32 tensors.
 config.decl @ggml.get_rows_32.width : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.get_rows_32.rows : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.get_rows_32.selected : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.get_rows_32.batch1 : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.get_rows_32.source_span : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.get_rows_32.ids_span : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.get_rows_32.source_stride1 : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.get_rows_32.source_stride2 : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.get_rows_32.source_stride3 : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.get_rows_32.ids_stride1 : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.get_rows_32.ids_stride2 : %value: index where [range(%value, 1, 1073741824)]
 
 kernel.def @ggml_get_rows_32(%element_count: index) {

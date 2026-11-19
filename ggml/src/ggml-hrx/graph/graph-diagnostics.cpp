@@ -108,6 +108,13 @@ json op_params_json(const OpParams & params) {
                 return {
                     { "kind", "none" }
                 };
+            } else if constexpr (std::is_same_v<T, MulMatParams>) {
+                return {
+                    { "kind",      "mul_mat"                        },
+                    { "prec",      static_cast<int>(value.prec)      },
+                    { "hint",      static_cast<int>(value.hint)      },
+                    { "src1_prec", static_cast<int>(value.src1_prec) },
+                };
             } else if constexpr (std::is_same_v<T, RmsNormParams>) {
                 return {
                     { "kind", "rms_norm" },
@@ -127,13 +134,6 @@ json op_params_json(const OpParams & params) {
                     { "kind",     "soft_max"     },
                     { "scale",    value.scale    },
                     { "max_bias", value.max_bias }
-                };
-            } else if constexpr (std::is_same_v<T, MulMatParams>) {
-                return {
-                    { "kind",      "mul_mat"                         },
-                    { "prec",      static_cast<int>(value.prec)      },
-                    { "hint",      static_cast<int>(value.hint)      },
-                    { "src1_prec", static_cast<int>(value.src1_prec) }
                 };
             } else if constexpr (std::is_same_v<T, ArgsortParams>) {
                 return {
@@ -173,10 +173,10 @@ json op_params_json(const OpParams & params) {
                 };
             } else if constexpr (std::is_same_v<T, GluParams>) {
                 return {
-                    { "kind",    "glu"                       },
-                    { "op",      static_cast<int>(value.op)  },
-                    { "swapped", value.swapped               },
-                    { "limit",   value.limit                 }
+                    { "kind",    "glu"                      },
+                    { "op",      static_cast<int>(value.op) },
+                    { "swapped", value.swapped              },
+                    { "limit",   value.limit                }
                 };
             } else if constexpr (std::is_same_v<T, ScaleParams>) {
                 return {
@@ -215,6 +215,13 @@ json op_params_json(const OpParams & params) {
 
 OpParams parse_op_params(const json & item) {
     const std::string kind = item.value("kind", "none");
+    if (kind == "mul_mat") {
+        return MulMatParams{
+            static_cast<ggml_prec>(item.at("prec").get<int>()),
+            static_cast<ggml_op_hint>(item.at("hint").get<int>()),
+            static_cast<ggml_prec>(item.at("src1_prec").get<int>()),
+        };
+    }
     if (kind == "rms_norm") {
         return RmsNormParams{ item.value("eps", 0.0f) };
     }
@@ -223,17 +230,12 @@ OpParams parse_op_params(const json & item) {
             item.value("scale", 0.0f),
             item.value("max_bias", 0.0f),
             item.value("logit_softcap", 0.0f),
-            static_cast<ggml_prec>(item.value("prec", static_cast<int>(GGML_PREC_DEFAULT))),
+            static_cast<ggml_prec>(item.value("prec", static_cast<int>(GGML_PREC_UNDEFINED))),
             item.value("n_kv_max", 0),
         };
     }
     if (kind == "soft_max") {
         return SoftMaxParams{ item.value("scale", 0.0f), item.value("max_bias", 0.0f) };
-    }
-    if (kind == "mul_mat") {
-        return MulMatParams{ static_cast<ggml_prec>(item.value("prec", int(GGML_PREC_DEFAULT))),
-                             static_cast<ggml_op_hint>(item.value("hint", int(GGML_HINT_NONE))),
-                             static_cast<ggml_prec>(item.value("src1_prec", int(GGML_PREC_UNDEFINED))) };
     }
     if (kind == "argsort") {
         return ArgsortParams{ static_cast<ggml_sort_order>(
@@ -258,7 +260,9 @@ OpParams parse_op_params(const json & item) {
     if (kind == "pool_1d") {
         return Pool1DParams{
             static_cast<ggml_op_pool>(item.value("op", static_cast<int>(GGML_OP_POOL_MAX))),
-            item.value("kernel", 0), item.value("stride", 0), item.value("padding", 0),
+            item.value("kernel", 0),
+            item.value("stride", 0),
+            item.value("padding", 0),
         };
     }
     if (kind == "glu") {

@@ -1,10 +1,17 @@
 config.decl @ggml.sum_rows.width : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.sum_rows.ne1 : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.sum_rows.ne2 : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.sum_rows.source_span : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.sum_rows.stride0 : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.sum_rows.stride1 : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.sum_rows.stride2 : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.sum_rows.stride3 : %value: index where [range(%value, 1, 1073741824)]
 
 kernel.def @ggml_sum_rows_f32(%row_count: index) {

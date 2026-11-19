@@ -126,17 +126,9 @@ std::shared_ptr<PreparedCommandProgramCacheEntry> PreparedCommandProgramCache::g
     std::lock_guard<std::mutex> lock(mutex_);
     auto found = programs_.find(key);
     if (found != programs_.end()) {
-        found->second->last_used = ++access_tick_;
         return found->second;
     }
-    if (programs_.size() >= 32) {
-        const auto retired = std::min_element(
-            programs_.begin(), programs_.end(),
-            [](const auto & a, const auto & b) { return a.second->last_used < b.second->last_used; });
-        programs_.erase(retired);
-    }
     auto entry = std::make_shared<PreparedCommandProgramCacheEntry>();
-    entry->last_used = ++access_tick_;
     programs_.emplace(key, entry);
     return entry;
 }
@@ -199,9 +191,31 @@ PreparedCommandProgramCacheStats PreparedCommandProgramCache::stats() const {
     return stats_;
 }
 
-void PreparedCommandProgramCache::clear() {
+size_t PreparedCommandProgramCache::entries() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    programs_.clear();
+    return programs_.size();
+}
+
+std::vector<std::shared_ptr<PreparedCommandProgramCacheEntry>> PreparedCommandProgramCache::take_uid(uint64_t uid) {
+    std::vector<std::shared_ptr<PreparedCommandProgramCacheEntry>> retired;
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto item = programs_.begin(); item != programs_.end();) {
+        if (item->first.graph_uid == uid) {
+            retired.push_back(std::move(item->second));
+            item = programs_.erase(item);
+        } else {
+            ++item;
+        }
+    }
+    return retired;
+}
+
+void PreparedCommandProgramCache::clear() {
+    decltype(programs_) retired;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        retired.swap(programs_);
+    }
 }
 
 void PreparedCommandProgramCache::record_build() {

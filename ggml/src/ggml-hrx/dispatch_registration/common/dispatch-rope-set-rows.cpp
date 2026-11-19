@@ -899,7 +899,7 @@ static bool match_set_rows_dispatch(const DispatchMatchContext & context, Dispat
 
 }  // namespace
 
-static bool match_set_rows_scalar(const DispatchMatchContext & context, DispatchMatch & match) {
+static bool match_set_rows_strided(const DispatchMatchContext & context, DispatchMatch & match) {
     const GraphNode * node = context.root_node;
     if (node == nullptr || node->op != GGML_OP_SET_ROWS || node->inputs.size() != 3) {
         return false;
@@ -910,12 +910,12 @@ static bool match_set_rows_scalar(const DispatchMatchContext & context, Dispatch
     const Value * output = graph_value(context.graph, node->output);
     if (rows == nullptr || ids == nullptr || cache == nullptr || output == nullptr ||
         (rows->type != GGML_TYPE_F32 && rows->type != GGML_TYPE_F16) || rows->type != cache->type ||
-        cache->type != output->type || (ids->type != GGML_TYPE_I32 && ids->type != GGML_TYPE_I64) || rows->ne[0] != 1 ||
-        cache->ne[0] != 1 || ids->ne[0] != rows->ne[1] || ids->ne[3] != 1 || rows->ne[2] != cache->ne[2] ||
-        rows->ne[3] != cache->ne[3] || cache->ne != output->ne || rows->element_count < 1 ||
-        rows->element_count > 134217728 || cache->storage != output->storage ||
-        cache->storage_offset != output->storage_offset || rows->storage == output->storage ||
-        ids->storage == output->storage) {
+        cache->type != output->type || (ids->type != GGML_TYPE_I32 && ids->type != GGML_TYPE_I64) ||
+        rows->ne[0] != cache->ne[0] || (rows->ne[0] > 1 && cache->contiguous) || ids->ne[0] != rows->ne[1] ||
+        ids->ne[3] != 1 || rows->ne[2] != cache->ne[2] || rows->ne[3] != cache->ne[3] || cache->ne != output->ne ||
+        rows->element_count < 1 || rows->element_count > 134217728 || cache->storage != output->storage ||
+        cache->storage_offset != output->storage_offset || cache->nb != output->nb ||
+        rows->storage == output->storage || ids->storage == output->storage) {
         return false;
     }
     for (const Value * value : { rows, ids, cache }) {
@@ -934,12 +934,15 @@ static bool match_set_rows_scalar(const DispatchMatchContext & context, Dispatch
         return false;
     }
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(GGML_HRX_KERNEL_REF("loom_libs", "ggml_set_rows_scalar"));
+    dispatch.kernel = make_kernel_specialization(GGML_HRX_KERNEL_REF("loom_libs", "ggml_set_rows_strided"));
     dispatch.kernel.integer_parameters.emplace("element_count", rows->element_count);
     auto & config = dispatch.kernel.compile_parameters;
     auto   set    = [&](const std::string & key, int64_t value) {
-        config.emplace("ggml.set_rows_scalar." + key, std::to_string(value));
+        config.emplace("ggml.set_rows_strided." + key, std::to_string(value));
     };
+    set("width", rows->ne[0]);
+    set("rs0", rows->nb[0] / ggml_type_size(rows->type));
+    set("cs0", cache->nb[0] / ggml_type_size(cache->type));
     set("nr", rows->ne[1]);
     set("ne2", rows->ne[2]);
     set("in1", ids->ne[1]);
@@ -969,7 +972,7 @@ void register_rope_set_rows_dispatches(DispatchRegistryBuilder & registry) {
     registry.add({ "common.rope_back.f32", GGML_OP_ROPE_BACK, DispatchMatchKind::SingleOp, 100, DispatchSource::Common,
                    match_rope_f32_dispatch });
     registry.add({ "common.set_rows.scalar", GGML_OP_SET_ROWS, DispatchMatchKind::SingleOp, 0, DispatchSource::Common,
-                   match_set_rows_scalar });
+                   match_set_rows_strided });
     registry.add({
         "common.rope_scale.f32",
         GGML_OP_ROPE,

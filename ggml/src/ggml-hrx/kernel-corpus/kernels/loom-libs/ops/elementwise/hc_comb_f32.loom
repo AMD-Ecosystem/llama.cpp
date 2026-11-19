@@ -2,8 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 amdgpu.target<gfx11-generic> @ggml_hc_comb_target {subgroup_size = 64}
+
 config.decl @ggml.hc.tokens : %value: index where [range(%value, 1, 32768)]
+
 config.decl @ggml.hc.n_iter : %value: index where [range(%value, 1, 128)]
+
 config.decl @ggml.hc.eps : f32
 
 func.def inline @hc_normalize_row(%row: vector<4xf32>, %eps: f32) -> (vector<4xf32>) {

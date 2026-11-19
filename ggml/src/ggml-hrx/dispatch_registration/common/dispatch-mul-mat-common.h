@@ -144,17 +144,9 @@ inline bool common_is_supported_dense_output_size(int64_t output_size) {
 
 inline bool common_mul_mat_allows_q8_input(const GraphNode & node) {
     const auto * params = op_params_as<MulMatParams>(node.params);
-    if (params == nullptr || params->prec != GGML_PREC_DEFAULT) {
-        return false;
-    }
-    switch (params->src1_prec) {
-        case GGML_PREC_UNDEFINED:
-        case GGML_PREC_Q8:
-        case GGML_PREC_Q4:
-            return true;
-        default:
-            return false;
-    }
+    return params == nullptr || (params->prec == GGML_PREC_UNDEFINED &&
+                                 (params->src1_prec == GGML_PREC_UNDEFINED || params->src1_prec == GGML_PREC_Q8 ||
+                                  params->src1_prec == GGML_PREC_Q4));
 }
 
 // Select the packed prefill schedule. Long Q4 contractions only benefit when
@@ -185,6 +177,8 @@ inline ggml_type common_mul_mat_format_type(CommonMulMatWeightFormat format) {
             return GGML_TYPE_MXFP4;
         case CommonMulMatWeightFormat::Q1_0:
             return GGML_TYPE_Q1_0;
+        case CommonMulMatWeightFormat::Q2K:
+            return GGML_TYPE_Q2_K;
         case CommonMulMatWeightFormat::Q3K:
             return GGML_TYPE_Q3_K;
         case CommonMulMatWeightFormat::Q4K:

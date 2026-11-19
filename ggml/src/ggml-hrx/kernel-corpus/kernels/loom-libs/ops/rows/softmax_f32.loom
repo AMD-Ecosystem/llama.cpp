@@ -1,4 +1,5 @@
 config.decl @ggml.softmax.width : %value: index where [range(%value, 1, 32768)]
+
 config.decl @ggml.softmax.scale : f32
 
 kernel.def @ggml_softmax_f32(%row_count: index) {

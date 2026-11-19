@@ -5,6 +5,7 @@
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
 #include "graph/op-params.h"
+#include "hrx-interop-utils.h"
 #include "hrx_runtime.h"
 #include "kernel-corpus/kernel-corpus.h"
 #include "loom-jit.h"
@@ -85,11 +86,11 @@ ggml_backend_hrx_reg_context::~ggml_backend_hrx_reg_context() {
             hrx_device_release(context->device);
         }
     }
-    if (initialized) {
-        hrx_status_t status = hrx_gpu_shutdown();
-        if (!hrx_status_is_ok(status)) {
-            hrx_status_ignore(status);
-        }
+    if (group != nullptr) {
+        hrx_device_group_release(group);
+    }
+    if (runtime != nullptr) {
+        hrx_runtime_release(runtime);
     }
 }
 
@@ -228,7 +229,8 @@ static void buffer_set(ggml_backend_buffer_t buffer,
         std::memmove(context->base + destination_offset, data, size);
         return;
     }
-    if (!HRX_CHECK(hrx_synchronous_h2d(context->device->device, data, context->buffer, destination_offset, size))) {
+    if (!HRX_CHECK(
+            hrx_synchronous_h2d(context->device->transfer_queue, data, context->buffer, destination_offset, size))) {
         GGML_LOG_ERROR("%s: HRX buffer upload failed\n", __func__);
     }
 }
@@ -248,7 +250,8 @@ static void buffer_get(ggml_backend_buffer_t buffer,
         std::memcpy(data, context->base + source_offset, size);
         return;
     }
-    if (!HRX_CHECK(hrx_synchronous_d2h(context->device->device, context->buffer, source_offset, data, size))) {
+    if (!HRX_CHECK(
+            hrx_synchronous_d2h(context->device->transfer_queue, context->buffer, source_offset, data, size))) {
         GGML_LOG_ERROR("%s: HRX buffer download failed\n", __func__);
     }
 }
@@ -276,13 +279,14 @@ static bool buffer_copy(ggml_backend_buffer_t buffer, const ggml_tensor * source
     if (both_imported) {
         std::memmove(destination_context->base + destination_offset, source_context->base + source_offset, size);
     } else if (source_imported) {
-        if (!HRX_CHECK(hrx_synchronous_h2d(destination_context->device->device, source_context->base + source_offset,
-                                           destination_context->buffer, destination_offset, size))) {
+        if (!HRX_CHECK(hrx_synchronous_h2d(destination_context->device->transfer_queue,
+                                           source_context->base + source_offset, destination_context->buffer,
+                                           destination_offset, size))) {
             return false;
         }
     } else if (destination_imported) {
-        if (!HRX_CHECK(hrx_synchronous_d2h(source_context->device->device, source_context->buffer, source_offset,
-                                           destination_context->base + destination_offset, size))) {
+        if (!HRX_CHECK(hrx_synchronous_d2h(source_context->device->transfer_queue, source_context->buffer,
+                                           source_offset, destination_context->base + destination_offset, size))) {
             return false;
         }
     } else {
@@ -338,7 +342,6 @@ static ggml_backend_buffer_t buffer_alloc(ggml_backend_buffer_type_t buft, size_
         host_visible ?
             HRX_BUFFER_USAGE_DEFAULT | HRX_BUFFER_USAGE_MAPPING_SCOPED | HRX_BUFFER_USAGE_MAPPING_PERSISTENT :
             HRX_BUFFER_USAGE_DEFAULT,
-        0,
     };
     hrx_buffer_t allocation = nullptr;
     if (size > 0 && !HRX_CHECK(hrx_allocator_allocate_buffer(hrx_device_allocator(type_context->device->device), params,
@@ -583,9 +586,23 @@ static enum ggml_status graph_compute(ggml_backend_t backend, ggml_cgraph * grap
     const ggml::hrx::GraphExecutor        executor = ggml::hrx::GraphExecutor(*context);
     const ggml::hrx::GraphExecutionResult result   = executor.execute(*graph);
     if (!result.success()) {
-        for (const std::string & error : result.status.errors()) {
-            GGML_LOG_ERROR("%s: %s\n", __func__, error.c_str());
+        for (const auto & message : result.status.errors()) {
+            GGML_LOG_ERROR("%s: %s\n", __func__, message.c_str());
         }
+        return result.code;
+    }
+    if (context->cache_trim_pending) {
+        constexpr size_t graph_cache_limit = 8;
+        while (context->graph_programs.stats().entries > graph_cache_limit ||
+               context->prepared_programs.entries() > graph_cache_limit) {
+            auto retired = context->graph_programs.take_oldest(0);
+            auto prepared = context->prepared_programs.take_uid(retired.first);
+            if (environment_flag_enabled("GGML_HRX_LOG_CACHE_EVICTIONS")) {
+                GGML_LOG_INFO("ggml_hrx: evict graph uid=%" PRIu64 " prepared=%zu\n", retired.first,
+                              prepared.size());
+            }
+        }
+        context->cache_trim_pending = false;
     }
     return result.code;
 }
@@ -633,19 +650,21 @@ static void device_props(ggml_backend_dev_t device, ggml_backend_dev_props * pro
     device_memory(device, &props->memory_free, &props->memory_total);
     props->type      = GGML_BACKEND_DEVICE_TYPE_GPU;
     props->device_id = nullptr;
-    props->caps      = { true, true, true, false, true };
+    props->caps      = { true, true, true, false };
+    props->caps.mmap_support = true;
 }
 
 static ggml_backend_t device_init(ggml_backend_dev_t device, const char * parameters) {
     GGML_UNUSED(parameters);
     auto *       device_ctx = device_context(device);
     hrx_stream_t stream     = nullptr;
-    if (!HRX_CHECK(hrx_stream_create(device_ctx->device, 0, &stream))) {
+    if (!HRX_CHECK(hrx_stream_create(device_ctx->stream_queue, 0, &stream))) {
         return nullptr;
     }
     auto * context = new (std::nothrow) ggml_backend_hrx_context;
     if (context != nullptr) {
         context->device = device_ctx;
+        context->graph_programs.set_compute_units(device_ctx->compute_units);
         context->stream = stream;
         context->name   = device_ctx->name;
     }
@@ -753,7 +772,6 @@ static bool zero_output_elision_safe_op(enum ggml_op op) {
         case GGML_OP_DUP:
         case GGML_OP_ADD:
         case GGML_OP_ADD_ID:
-        case GGML_OP_ADD1:
         case GGML_OP_SUB:
         case GGML_OP_MUL:
         case GGML_OP_DIV:
@@ -785,8 +803,6 @@ static bool zero_output_elision_safe_op(enum ggml_op op) {
         case GGML_OP_GET_ROWS:
         case GGML_OP_GET_ROWS_BACK:
         case GGML_OP_DIAG:
-        case GGML_OP_DIAG_MASK_INF:
-        case GGML_OP_DIAG_MASK_ZERO:
         case GGML_OP_SOFT_MAX:
         case GGML_OP_SOFT_MAX_BACK:
         case GGML_OP_ROPE:
@@ -1080,6 +1096,23 @@ static bool supported_scale_f32_tensor(const ggml_tensor * op) {
            static_cast<uint64_t>(ggml_nelements(op)) <= std::numeric_limits<uint32_t>::max();
 }
 
+static bool supported_repeat_scalar_3d_f32_tensor(const ggml_tensor * op) {
+    const bool is_repeat = op != nullptr && op->op == GGML_OP_REPEAT;
+    const bool has_source = is_repeat && op->src[0] != nullptr;
+    if (!has_source) {
+        return false;
+    }
+
+    const ggml_tensor * source = op->src[0];
+    const bool has_types = source->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
+    const bool has_source_shape = source->ne[0] == 1 && source->ne[1] == 128 &&
+                                  source->ne[2] == 1 && source->ne[3] == 1;
+    const bool has_repeat_shape = op->ne[0] == 1 && op->ne[1] == 128 && op->ne[2] >= 1 &&
+                                  op->ne[2] <= 2048 && op->ne[3] == 1;
+    const bool has_layout = ggml_is_contiguous(source) && ggml_is_contiguous(op);
+    return has_types && has_source_shape && has_repeat_shape && has_layout;
+}
+
 static bool supported_qwen_attention_projection_get_rows_tensor(const ggml_tensor * op) {
     if (op == nullptr || op->op != GGML_OP_GET_ROWS || op->src[0] == nullptr || op->src[1] == nullptr ||
         op->src[0]->op != GGML_OP_MUL_MAT || op->type != GGML_TYPE_F32 || op->src[0]->type != GGML_TYPE_F32 ||
@@ -1161,6 +1194,10 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
     if (op == nullptr) {
         return false;
     }
+    if (op->op == GGML_OP_REPEAT &&
+        ggml::hrx::can_execute_standalone_op_as_graph(op, device_context(device)->architecture)) {
+        return true;
+    }
     if (zero_output_elision_supported(op)) {
         return true;
     }
@@ -1194,6 +1231,9 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
         return true;
     }
     if (supported_scale_f32_tensor(op)) {
+        return true;
+    }
+    if (supported_repeat_scalar_3d_f32_tensor(op)) {
         return true;
     }
     // Admit pooling for the amax-scale fusion; graph claim validates the complete chain.
@@ -1252,6 +1292,17 @@ static size_t registry_device_count(ggml_backend_reg_t registry) {
     return static_cast<ggml_backend_hrx_reg_context *>(registry->context)->devices.size();
 }
 
+// Configure during backend initialization, before graph support checks or execution.
+// The caller keeps this preference fixed for the backend's lifetime.
+static bool backend_set_row64_weight_policy(ggml_backend_t backend, bool enabled) {
+    if (!ggml_backend_is_hrx(backend)) {
+        return false;
+    }
+    auto * context = static_cast<ggml_backend_hrx_context *>(backend->context);
+    context->graph_programs.set_row64_weight_policy(enabled);
+    return true;
+}
+
 static ggml_backend_dev_t registry_device(ggml_backend_reg_t registry, size_t index) {
     auto * context = static_cast<ggml_backend_hrx_reg_context *>(registry->context);
     GGML_ASSERT(index < context->devices.size());
@@ -1260,43 +1311,67 @@ static ggml_backend_dev_t registry_device(ggml_backend_reg_t registry, size_t in
 
 static void * registry_proc(ggml_backend_reg_t registry, const char * name) {
     GGML_UNUSED(registry);
-    GGML_UNUSED(name);
+    if (std::strcmp(name, "ggml_backend_hrx_set_row64_weight_policy") == 0) {
+        return reinterpret_cast<void *>(backend_set_row64_weight_policy);
+    }
     return nullptr;
 }
 
 static const ggml_backend_reg_i registry_i = { registry_name, registry_device_count, registry_device, registry_proc };
 
 static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
-    auto         context = std::make_unique<ggml_backend_hrx_reg_context>();
+    auto                  context = std::make_unique<ggml_backend_hrx_reg_context>();
+    hrx_runtime_options_t options = {};
     if (environment_flag_enabled("GGML_HRX_LOG_DEVICE_EVENTS")) {
-        hrx_device_event_sink_t sink = { log_hrx_device_event, nullptr };
-        if (!HRX_CHECK(hrx_runtime_set_device_event_sink(sink))) {
-            return context;
-        }
+        options.event_sink = { log_hrx_device_event, nullptr };
     }
-    hrx_status_t status  = hrx_gpu_initialize(0);
-    if (hrx_status_is_ok(status)) {
-        context->initialized = true;
-    } else if (hrx_status_code(status) == HRX_STATUS_ALREADY_EXISTS) {
-        hrx_status_ignore(status);
-    } else {
-        hrx_status_ignore(status);
+    const hrx_host_allocator_t allocator = hrx_host_allocator_system();
+    if (!HRX_CHECK(hrx_runtime_create(&options, allocator, &context->runtime))) {
         return context;
     }
-    int count = 0;
-    if (!HRX_CHECK(hrx_gpu_device_count(&count))) {
+    const char * driver = std::getenv("HRX_GPU_DRIVER");
+    if (driver == nullptr || driver[0] == '\0') {
+        driver = "amdgpu";
+    }
+    size_t             count = 0;
+    hrx_device_info_t * infos = nullptr;
+    if (!HRX_CHECK(hrx_runtime_query_available_devices(context->runtime, driver, allocator, &count, &infos))) {
         return context;
     }
+    std::vector<hrx_device_create_params_t> params;
+    params.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        params.push_back({ infos[i].uri, HRX_WAIT_FLAG_NONE });
+    }
+    if (count != 0 && !HRX_CHECK(hrx_device_group_create(context->runtime, count, params.data(), &context->group))) {
+        hrx_host_allocator_free(allocator, infos);
+        return context;
+    }
+    hrx_host_allocator_free(allocator, infos);
     context->device_contexts.reserve(count);
     context->devices.reserve(count);
-    for (int i = 0; i < count; ++i) {
-        hrx_device_t hrx_device = nullptr;
-        if (!HRX_CHECK(hrx_gpu_device_get(i, &hrx_device)) || hrx_device == nullptr) {
+    for (size_t i = 0; i < count; ++i) {
+        hrx_device_t hrx_device = hrx_device_group_get_device(context->group, i);
+        if (hrx_device == nullptr) {
             continue;
         }
         hrx_device_retain(hrx_device);
+        hrx_queue_t transfer_queue = nullptr;
+        if (ggml::hrx::ErrorResult error = ggml::hrx::find_transfer_queue(hrx_device, transfer_queue)) {
+            GGML_LOG_ERROR("ggml_hrx: %s\n", error->c_str());
+            hrx_device_release(hrx_device);
+            continue;
+        }
+        hrx_queue_t stream_queue = nullptr;
+        if (ggml::hrx::ErrorResult error = ggml::hrx::find_stream_queue(hrx_device, stream_queue)) {
+            GGML_LOG_ERROR("ggml_hrx: %s\n", error->c_str());
+            hrx_device_release(hrx_device);
+            continue;
+        }
         auto device_ctx                      = std::make_unique<ggml_backend_hrx_device_context>();
         device_ctx->device                   = hrx_device;
+        device_ctx->transfer_queue           = transfer_queue;
+        device_ctx->stream_queue             = stream_queue;
         device_ctx->name                     = "HRX" + std::to_string(i);
         device_ctx->use_direct_host_bindings = environment_flag_enabled("GGML_HRX_USE_UNIFIED_MEMORY");
         if (device_ctx->use_direct_host_bindings) {
@@ -1310,13 +1385,18 @@ static std::unique_ptr<ggml_backend_hrx_reg_context> create_registry_context() {
             hrx_device_release(hrx_device);
             continue;
         }
+        if (!HRX_CHECK(hrx_device_get_property(hrx_device, HRX_DEVICE_PROPERTY_COMPUTE_UNITS,
+                                               &device_ctx->compute_units, sizeof(device_ctx->compute_units)))) {
+            hrx_device_release(hrx_device);
+            continue;
+        }
         uint64_t memory = 0;
         if (!HRX_CHECK(
                 hrx_device_get_property(hrx_device, HRX_DEVICE_PROPERTY_TOTAL_MEMORY, &memory, sizeof(memory)))) {
             hrx_device_release(hrx_device);
             continue;
         }
-        if (!HRX_CHECK(hrx_stream_create(hrx_device, 0, &device_ctx->buffer_stream))) {
+        if (!HRX_CHECK(hrx_stream_create(stream_queue, 0, &device_ctx->buffer_stream))) {
             hrx_device_release(hrx_device);
             continue;
         }

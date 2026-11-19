@@ -28,8 +28,6 @@ static constexpr KernelCatalogRef kMulMatTiledPairF32BinaryBiasAddPublishF32Kern
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_tiled_pair_input_f32_binary_bias_residual_publish_f32");
 static constexpr KernelCatalogRef kMulMatTiledPairAlignedF32BinaryBiasAddPublishF32Kernel = GGML_HRX_KERNEL_REF(
     "loom_libs", "ggml_mul_mat_tiled_pair_input_f32_binary_bias_residual_publish_f32_aligned");
-static constexpr KernelCatalogRef kMulMatSwiGLUF32F32DecodeWave64Kernel =
-    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_swiglu_f32_f32_decode_wave64");
 static constexpr KernelCatalogRef kMulMatSwiGLUF32F32LowTokenDotKernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_swiglu_f32_f32_lowtoken_dot");
 static constexpr KernelCatalogRef kMulMatSwiGLUQ1_0Q8_1X4Kernel =
@@ -80,8 +78,6 @@ struct MulMatSwiGLUMatch {
     }
 
     bool matched() const { return topology_matched() && token_count >= 1; }
-
-    bool decode_matched() const { return topology_matched() && token_count == 1; }
 };
 
 struct MulMatSwiGLUPostOpsMatch {
@@ -136,6 +132,36 @@ struct PackedMulMatGluMatch {
                matmul_node != nullptr && glu_node != nullptr && token_count > 1;
     }
 };
+
+static CommonMulMatWeightFormat row64_swiglu_format(const DispatchMatchContext & context,
+                                                     const Value & weight,
+                                                     CommonMulMatWeightFormat format,
+                                                     int64_t input_size,
+                                                     int64_t output_size) {
+    const bool direct_weight = weight.alias_source.value < 0;
+    const bool aligned_input = input_size % 256 == 0;
+    const bool aligned_output = output_size % 64 == 0;
+    const bool q4_weight = format == CommonMulMatWeightFormat::Q4K;
+    const bool q6_weight = format == CommonMulMatWeightFormat::Q6K;
+    const bool supported_weight = q4_weight || q6_weight;
+    const bool use_row64 = context.row64_weight_policy && direct_weight && aligned_input && aligned_output &&
+                           supported_weight && dispatch_weight_layout_eligible(weight);
+    if (!use_row64) {
+        return format;
+    }
+    return q4_weight ? CommonMulMatWeightFormat::Q4KRow64 : CommonMulMatWeightFormat::Q6KRow64;
+}
+
+static DispatchBinding row64_swiglu_binding(const Value & weight, CommonMulMatWeightFormat format,
+                                             int64_t input_size, int64_t output_size) {
+    const bool q4_row64 = format == CommonMulMatWeightFormat::Q4KRow64;
+    const bool q6_row64 = format == CommonMulMatWeightFormat::Q6KRow64;
+    if (!q4_row64 && !q6_row64) {
+        return { weight.id, 0, weight.byte_count };
+    }
+    const char * layout = q4_row64 ? kQ4KPackedK256Row64Layout : kQ6KPackedK256Row64ScaleRowLayout;
+    return { weight.id, 0, weight.byte_count, layout, weight.type, input_size, output_size, weight.byte_count };
+}
 
 static bool supported_symmetric_i4_pair(ggml_type gate_type, ggml_type up_type) {
     return (gate_type == GGML_TYPE_Q4_K && up_type == GGML_TYPE_Q4_K) ||
@@ -847,12 +873,16 @@ static bool build_tiled_pair_mul_mat_swiglu_dispatch(const DispatchMatchContext 
                                                common_to_config_value(match.input_size));
     dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_swiglu.output_size",
                                                common_to_config_value(match.output_size));
+    const CommonMulMatWeightFormat gate_format = row64_swiglu_format(
+        context, *match.gate_weight, match.gate_format, match.input_size, match.output_size);
+    const CommonMulMatWeightFormat up_format = row64_swiglu_format(
+        context, *match.up_weight, match.up_format, match.input_size, match.output_size);
     dispatch.kernel.compile_parameters.emplace(
         "ggml.mul_mat_swiglu.gate_weight_format",
-        common_to_config_value(common_mul_mat_format_config_value(match.gate_format)));
+        common_to_config_value(common_mul_mat_format_config_value(gate_format)));
     dispatch.kernel.compile_parameters.emplace(
         "ggml.mul_mat_swiglu.up_weight_format",
-        common_to_config_value(common_mul_mat_format_config_value(match.up_format)));
+        common_to_config_value(common_mul_mat_format_config_value(up_format)));
     dispatch.kernel.compile_parameters.emplace(
         "ggml.mul_mat_swiglu.op", common_to_config_value(static_cast<int64_t>(binary_kind_config_value(match.op))));
     if (postops != nullptr) {
@@ -862,8 +892,10 @@ static bool build_tiled_pair_mul_mat_swiglu_dispatch(const DispatchMatchContext 
                                    (postops->has_residual ? int64_t{ 2 } : int64_t{ 0 })));
     }
     dispatch.bindings.push_back({ match.input->id, 0, match.input->byte_count });
-    dispatch.bindings.push_back({ match.gate_weight->id, 0, match.gate_weight->byte_count });
-    dispatch.bindings.push_back({ match.up_weight->id, 0, match.up_weight->byte_count });
+    dispatch.bindings.push_back(row64_swiglu_binding(*match.gate_weight, gate_format,
+                                                       match.input_size, match.output_size));
+    dispatch.bindings.push_back(row64_swiglu_binding(*match.up_weight, up_format,
+                                                       match.input_size, match.output_size));
     const Value * output = postops != nullptr ? postops->residual_output : match.output;
     if (postops != nullptr) {
         const Value * placeholder = postops->has_bias ? postops->bias : postops->residual_input;
@@ -974,6 +1006,10 @@ static bool match_mul_mat_swiglu_dispatch(const DispatchMatchContext & context, 
     const bool can_transform_up = dispatch_weight_layout_eligible(*match.up_weight);
     const bool pack_q4 = has_few_tokens && has_aligned_output && has_direct_gate && has_direct_up &&
                          has_q4_gate && has_q4_up && can_transform_gate && can_transform_up;
+    const CommonMulMatWeightFormat gate_format = pack_q4 ? CommonMulMatWeightFormat::Q4KRow64 :
+        row64_swiglu_format(context, *match.gate_weight, match.gate_format, match.input_size, match.output_size);
+    const CommonMulMatWeightFormat up_format = pack_q4 ? CommonMulMatWeightFormat::Q4KRow64 :
+        row64_swiglu_format(context, *match.up_weight, match.up_format, match.input_size, match.output_size);
     const bool use_q8 = pack_q4;
     const CommonActivationPublicationDemand q8_demand =
         use_q8 ? select_swiglu_q8_publication(context, match) : CommonActivationPublicationDemand{};
@@ -1003,11 +1039,9 @@ static bool match_mul_mat_swiglu_dispatch(const DispatchMatchContext & context, 
     dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_swiglu.output_size",
                                                common_to_config_value(match.output_size));
     dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_swiglu.gate_weight_format",
-                                               common_to_config_value(common_mul_mat_format_config_value(
-                                                   pack_q4 ? CommonMulMatWeightFormat::Q4KRow64 : match.gate_format)));
+                                               common_to_config_value(common_mul_mat_format_config_value(gate_format)));
     dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_swiglu.up_weight_format",
-                                               common_to_config_value(common_mul_mat_format_config_value(
-                                                   pack_q4 ? CommonMulMatWeightFormat::Q4KRow64 : match.up_format)));
+                                               common_to_config_value(common_mul_mat_format_config_value(up_format)));
     dispatch.kernel.compile_parameters.emplace(
         "ggml.mul_mat_swiglu.op", common_to_config_value(static_cast<int64_t>(binary_kind_config_value(match.op))));
     dispatch.bindings.push_back(activation);
@@ -1017,8 +1051,10 @@ static bool match_mul_mat_swiglu_dispatch(const DispatchMatchContext & context, 
                                           match.input_size, match.output_size, weight->byte_count });
         }
     } else {
-        dispatch.bindings.push_back({ match.gate_weight->id, 0, match.gate_weight->byte_count });
-        dispatch.bindings.push_back({ match.up_weight->id, 0, match.up_weight->byte_count });
+        dispatch.bindings.push_back(row64_swiglu_binding(*match.gate_weight, gate_format,
+                                                           match.input_size, match.output_size));
+        dispatch.bindings.push_back(row64_swiglu_binding(*match.up_weight, up_format,
+                                                           match.input_size, match.output_size));
     }
     dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
 
@@ -1032,46 +1068,6 @@ static bool match_mul_mat_swiglu_dispatch(const DispatchMatchContext & context, 
         }
         dispatch.bindings.push_back(publication.binding());
     }
-
-    if (!append_covered_node_index_once(context.graph, context.covered_nodes, match.gate_node,
-                                        dispatch_match.covered_nodes) ||
-        !append_covered_node_index_once(context.graph, context.covered_nodes, match.up_node,
-                                        dispatch_match.covered_nodes) ||
-        !append_covered_node_index_once(context.graph, context.covered_nodes, match.glu_node,
-                                        dispatch_match.covered_nodes)) {
-        return false;
-    }
-    dispatch_match.dispatches.push_back(std::move(dispatch));
-    return true;
-}
-
-static bool match_decode_mul_mat_swiglu_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
-    const MulMatSwiGLUMatch match = match_mul_mat_swiglu(context);
-    if (!match.decode_matched()) {
-        return false;
-    }
-
-    Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(kMulMatSwiGLUF32F32DecodeWave64Kernel);
-    dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
-    dispatch.kernel.compile_parameters.emplace("ggml.workload.token_capacity",
-                                               common_to_config_value(match.token_count));
-    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_swiglu.input_size",
-                                               common_to_config_value(match.input_size));
-    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_swiglu.output_size",
-                                               common_to_config_value(match.output_size));
-    dispatch.kernel.compile_parameters.emplace(
-        "ggml.mul_mat_swiglu.gate_weight_format",
-        common_to_config_value(common_mul_mat_format_config_value(match.gate_format)));
-    dispatch.kernel.compile_parameters.emplace(
-        "ggml.mul_mat_swiglu.up_weight_format",
-        common_to_config_value(common_mul_mat_format_config_value(match.up_format)));
-    dispatch.kernel.compile_parameters.emplace(
-        "ggml.mul_mat_swiglu.op", common_to_config_value(static_cast<int64_t>(binary_kind_config_value(match.op))));
-    dispatch.bindings.push_back({ match.input->id, 0, match.input->byte_count });
-    dispatch.bindings.push_back({ match.gate_weight->id, 0, match.gate_weight->byte_count });
-    dispatch.bindings.push_back({ match.up_weight->id, 0, match.up_weight->byte_count });
-    dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
 
     if (!append_covered_node_index_once(context.graph, context.covered_nodes, match.gate_node,
                                         dispatch_match.covered_nodes) ||

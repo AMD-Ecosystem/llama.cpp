@@ -1,0 +1,71 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// Gather F32 rows from a sliced or permuted matrix without materializing the padded rows.
+amdgpu.target<gfx11-generic> @ggml_get_rows_strided_f32_gfx11_wave64 {subgroup_size = 64}
+
+kernel.def target(@ggml_get_rows_strided_f32_gfx11_wave64) @ggml_get_rows_strided_f32(%token_count: index, %row_count: index, %hidden_size: index, %row_stride: index, %source_span: index) {
+  %c1 = index.constant 1 : index
+  %c255 = index.constant 255 : index
+  %c256 = index.constant 256 : index
+  %rounded = index.add %hidden_size, %c255 : index
+  %channel_groups = index.div %rounded, %c256 : index
+  kernel.launch.config workgroups(%channel_groups, %token_count, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%token_count: index, %row_count: index, %hidden_size: index, %row_stride: index, %source_span: index, %token_ids: buffer, %source: buffer, %output: buffer) where [range(%token_count, 1, 2048), range(%row_count, 1, 262208), range(%hidden_size, 1, 32768), range(%row_stride, 1, 1073741824), range(%source_span, 1, 1073741824)] {
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
+  %bounded_row_count = index.assume %row_count [range(%row_count, 1, 262208)] : index
+  %bounded_hidden_size = index.assume %hidden_size [range(%hidden_size, 1, 32768)] : index
+  %bounded_row_stride = index.assume %row_stride [range(%row_stride, 1, 1073741824)] : index
+  %bounded_source_span = index.assume %source_span [range(%source_span, 1, 1073741824)] : index
+  %token0 = kernel.workgroup.id<y> : index
+  %channel_group = kernel.workgroup.id<x> : index
+  %lane = kernel.workitem.id<x> : index
+  %c256 = index.constant 256 : index
+  %c0_i32 = scalar.constant 0 : i32
+  %c0_f32 = scalar.constant 0.0 : f32
+  %c0_offset = index.constant 0 : offset
+  %token = index.assume %token0 [lt(%token0, %bounded_token_count)] : index
+  %channel_base = index.mul %channel_group, %c256 : index
+  %channel = index.add %channel_base, %lane : index
+  %in_bounds = index.cmp ult, %channel, %bounded_hidden_size : index
+  %ids_noalias, %source_noalias, %output_noalias = buffer.assume.noalias %token_ids, %source, %output : buffer, buffer, buffer
+  %ids_view = buffer.view %ids_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]xi32>
+  %source_view = buffer.view %source_noalias[%c0_offset] : buffer -> view<[%bounded_source_span]xf32>
+  %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]x[%bounded_hidden_size]xf32>
+  scf.if %in_bounds {
+    %bounded_channel = index.assume %channel [lt(%channel, %bounded_hidden_size)] : index
+    %row_raw = view.load %ids_view[%token] : view<[%bounded_token_count]xi32> -> i32
+    %nonnegative = scalar.cmpi sge, %row_raw, %c0_i32 : i32
+    %safe_row_raw = scf.select %nonnegative, %row_raw, %c0_i32 : i32
+    %row = index.cast %safe_row_raw : i32 to index
+    %below_row_count = index.cmp ult, %row, %bounded_row_count : index
+    %valid_row = scalar.andi %nonnegative, %below_row_count : i1
+    %result = scf.if %valid_row -> (f32) {
+      %bounded_row = index.assume %row [lt(%row, %bounded_row_count)] : index
+      %row_base = index.mul %bounded_row, %bounded_row_stride : index
+      %source_index = index.add %row_base, %bounded_channel : index
+      %bounded_source_index = index.assume %source_index [lt(%source_index, %bounded_source_span)] : index
+      %selected = view.load %source_view[%bounded_source_index] : view<[%bounded_source_span]xf32> -> f32
+      scf.yield %selected : f32
+    } else {
+      scf.yield %c0_f32 : f32
+    }
+    view.store %result, %output_view[%token, %bounded_channel] : f32, view<[%bounded_token_count]x[%bounded_hidden_size]xf32>
+  }
+  kernel.return
+}
+
+check.case public @ggml_get_rows_strided_f32_case {
+  %token_count = check.literal value(2) : index
+  %row_count = check.literal value(3) : index
+  %hidden_size = check.literal value(4) : index
+  %row_stride = check.literal value(8) : index
+  %source_span = check.literal value(20) : index
+  %token_ids = check.generate.fill value(2) : tensor<2xi32>
+  %source = check.generate.iota offset(0.0) step(1.0) : tensor<20xf32>
+  %output = check.generate.fill value(0.0) : tensor<2x4xf32>
+  %expected = check.generate.iota offset(16.0) step(1.0) period(4) : tensor<2x4xf32>
+  kernel.launch @ggml_get_rows_strided_f32[%token_count, %row_count, %hidden_size, %row_stride, %source_span](%token_count, %row_count, %hidden_size, %row_stride, %source_span, %token_ids, %source, %output) : [index, index, index, index, index](index, index, index, index, index, tensor<2xi32>, tensor<20xf32>, tensor<2x4xf32>)
+  check.expect.approximate actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<2x4xf32>, tensor<2x4xf32>
+  check.return
+}

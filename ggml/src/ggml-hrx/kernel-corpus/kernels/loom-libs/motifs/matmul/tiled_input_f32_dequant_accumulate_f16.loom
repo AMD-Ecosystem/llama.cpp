@@ -3,10 +3,12 @@ config.def @ggml.mul_mat.split_count = 1 : index
 config.def @ggml.mul_mat.batch_count = 1 : index
 
 func.decl @ggml_q5k_load_decode_state(%weight: buffer, %row_base: offset, %block: index, %packet: index) -> (vector<2xf16>, vector<3xi32>, vector<4xi8>)
-func.decl @ggml_q5k_preloaded_f32_vector4(%weight: buffer, %row_byte_base: offset, %q5_block: index, %q5_group: index, %packet: index, %dm: vector<2xf16>, %scales: vector<3xi32>, %qh_bytes: vector<4xi8>) -> (vector<4xf32>)
-func.decl @ggml_iq4xs_load_decode_state(%weight: buffer, %row_base: offset, %block: index) -> (i32, i32)
-func.decl @ggml_iq4xs_preloaded_f32_vector4(%iq4nl_table: vector<16xi8>, %weight: buffer, %row_byte_base: offset, %iq4_block: index, %iq4_group: index, %packet: index, %header: i32, %scales_l: i32) -> (vector<4xf32>)
 
+func.decl @ggml_q5k_preloaded_f32_vector4(%weight: buffer, %row_byte_base: offset, %q5_block: index, %q5_group: index, %packet: index, %dm: vector<2xf16>, %scales: vector<3xi32>, %qh_bytes: vector<4xi8>) -> (vector<4xf32>)
+
+func.decl @ggml_iq4xs_load_decode_state(%weight: buffer, %row_base: offset, %block: index) -> (i32, i32)
+
+func.decl @ggml_iq4xs_preloaded_f32_vector4(%iq4nl_table: vector<16xi8>, %weight: buffer, %row_byte_base: offset, %iq4_block: index, %iq4_group: index, %packet: index, %header: i32, %scales_l: i32) -> (vector<4xf32>)
 
 func.decl @ggml_q4k_scale_min_from_header(%scale0: i32, %scale1: i32, %scale2: i32, %q4_group: index) -> (i32, i32)
 
@@ -15,8 +17,6 @@ func.decl @ggml_dot_u8_s8_vector8_f32(%weight: vector<2xi32>, %activation: vecto
 config.def @ggml.mul_mat.activation_format = 0 : index
 
 func.decl @ggml_q4k_native_row64_f32_vector4(%weight: buffer, %row: index, %input_size: index, %q4_block: index, %q4_group: index, %packet: index) -> (vector<4xf32>)
-
-func.decl @ggml_dequant_f32_vector4(%iq4nl_table: vector<16xi8>, %iq3s_grid_low0: vector<32xf32>, %iq3s_grid_low1: vector<32xf32>, %iq3s_grid_low2: vector<32xf32>, %iq3s_grid_low3: vector<32xf32>, %iq3s_grid_low4: vector<32xf32>, %iq3s_grid_low5: vector<32xf32>, %iq3s_grid_low6: vector<32xf32>, %iq3s_grid_low7: vector<32xf32>, %iq3s_grid_low8: vector<32xf32>, %iq3s_grid_low9: vector<32xf32>, %iq3s_grid_low10: vector<32xf32>, %iq3s_grid_low11: vector<32xf32>, %iq3s_grid_low12: vector<32xf32>, %iq3s_grid_low13: vector<32xf32>, %iq3s_grid_low14: vector<32xf32>, %iq3s_grid_low15: vector<32xf32>, %iq3s_grid_high0: vector<32xf32>, %iq3s_grid_high1: vector<32xf32>, %iq3s_grid_high2: vector<32xf32>, %iq3s_grid_high3: vector<32xf32>, %iq3s_grid_high4: vector<32xf32>, %iq3s_grid_high5: vector<32xf32>, %iq3s_grid_high6: vector<32xf32>, %iq3s_grid_high7: vector<32xf32>, %iq3s_grid_high8: vector<32xf32>, %iq3s_grid_high9: vector<32xf32>, %iq3s_grid_high10: vector<32xf32>, %iq3s_grid_high11: vector<32xf32>, %iq3s_grid_high12: vector<32xf32>, %iq3s_grid_high13: vector<32xf32>, %iq3s_grid_high14: vector<32xf32>, %iq3s_grid_high15: vector<32xf32>, %weight_format: index, %weight: buffer, %row_byte_base: offset, %input_size: index, %quant_block: index, %quant_group: index, %packet: index, %k: index) -> (vector<4xf32>)
 
 config.decl @ggml.workload.token_capacity : %value: index where [range(%value, 1, 2048)]
 
@@ -257,7 +257,7 @@ func.def inline @ggml_matmul_tiled_input_f32_dequant_accumulate_f16(%full_token_
           %valid_activation = scalar.andi %valid_token, %valid_input : i1
           %activation_values = scf.if %valid_activation -> (vector<4xf16>) {
             %storage_token = index.add %batch_token_offset, %token : index
-          %row_element_offset = index.mul %storage_token, %bounded_input_size : index
+            %row_element_offset = index.mul %storage_token, %bounded_input_size : index
             %f16_row_byte_offset = index.scale %row_element_offset, %f16_element_bytes : index, offset -> offset
             %f32_row_byte_offset = index.scale %row_element_offset, %f32_element_bytes : index, offset -> offset
             %input_f16_row = buffer.view %input_noalias[%f16_row_byte_offset] : buffer -> view<[%bounded_input_size]xf16>

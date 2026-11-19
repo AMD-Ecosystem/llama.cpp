@@ -32,41 +32,57 @@ namespace {
 class HrxTestDevice {
   public:
     ~HrxTestDevice() {
-        if (device != nullptr) {
-            hrx_device_release(device);
+        if (group != nullptr) {
+            hrx_device_group_release(group);
+        }
+        if (runtime != nullptr) {
+            hrx_runtime_release(runtime);
         }
     }
 
     bool open() {
-        hrx_status_t init_status = hrx_gpu_initialize(0);
-        if (!hrx_status_is_ok(init_status)) {
-            if (hrx_status_code(init_status) == HRX_STATUS_ALREADY_EXISTS) {
-                hrx_status_ignore(init_status);
-            } else {
-                hrx_status_ignore(init_status);
-                return false;
-            }
-        }
-
-        int count = 0;
-        if (ggml::hrx::ErrorResult error = ggml::hrx::take_status(hrx_gpu_device_count(&count))) {
-            std::fprintf(stderr, "skip executable cache materialization: device count failed: %s\n", error->c_str());
+        const hrx_host_allocator_t allocator = hrx_host_allocator_system();
+        if (ggml::hrx::ErrorResult error =
+                ggml::hrx::take_status(hrx_runtime_create(nullptr, allocator, &runtime))) {
+            std::fprintf(stderr, "skip executable cache materialization: runtime creation failed: %s\n", error->c_str());
             return false;
         }
-        for (int i = 0; i < count; ++i) {
-            hrx_device_t candidate = nullptr;
-            if (ggml::hrx::ErrorResult error = ggml::hrx::take_status(hrx_gpu_device_get(i, &candidate))) {
-                std::fprintf(stderr, "skip HRX device %d: %s\n", i, error->c_str());
-                continue;
+
+        const char * driver = std::getenv("HRX_GPU_DRIVER");
+        if (driver == nullptr || driver[0] == '\0') {
+            driver = "amdgpu";
+        }
+        size_t             count = 0;
+        hrx_device_info_t * infos = nullptr;
+        if (ggml::hrx::ErrorResult error = ggml::hrx::take_status(
+                hrx_runtime_query_available_devices(runtime, driver, allocator, &count, &infos))) {
+            std::fprintf(stderr, "skip executable cache materialization: device discovery failed: %s\n", error->c_str());
+            return false;
+        }
+        std::vector<hrx_device_create_params_t> params;
+        params.reserve(count);
+        for (size_t i = 0; i < count; ++i) {
+            params.push_back({ infos[i].uri, HRX_WAIT_FLAG_NONE });
+        }
+        if (count != 0) {
+            ggml::hrx::ErrorResult error =
+                ggml::hrx::take_status(hrx_device_group_create(runtime, count, params.data(), &group));
+            hrx_host_allocator_free(allocator, infos);
+            if (error) {
+                std::fprintf(stderr, "skip executable cache materialization: device group failed: %s\n", error->c_str());
+                return false;
             }
+        } else {
+            hrx_host_allocator_free(allocator, infos);
+        }
+        for (size_t i = 0; i < count; ++i) {
+            hrx_device_t candidate = hrx_device_group_get_device(group, i);
             if (candidate == nullptr) {
                 continue;
             }
-            hrx_device_retain(candidate);
             std::optional<std::string> candidate_architecture =
                 read_string_property(candidate, HRX_DEVICE_PROPERTY_ARCHITECTURE);
             if (!candidate_architecture) {
-                hrx_device_release(candidate);
                 continue;
             }
             device       = candidate;
@@ -80,6 +96,9 @@ class HrxTestDevice {
     std::string  architecture;
 
   private:
+    hrx_runtime_t      runtime = nullptr;
+    hrx_device_group_t group = nullptr;
+
     static std::optional<std::string> read_string_property(hrx_device_t device, hrx_device_property_t property) {
         std::vector<char> buffer(64);
         while (buffer.size() <= 4096) {
@@ -537,11 +556,17 @@ static void run_targeted_export_materialize_case(HrxTestDevice & device) {
     ggml::hrx::Dispatch dispatch;
     dispatch.kernel.kernel_id = definition->id;
     dispatch.kernel.integer_parameters.emplace("token_count", 1);
-    dispatch.kernel.integer_parameters.emplace("input_size", 2048);
-    dispatch.kernel.integer_parameters.emplace("output_size", 151936);
-    dispatch.kernel.compile_parameters.emplace("ggml.linear_q6k_q8_1_x4.token_capacity", "1");
-    dispatch.kernel.compile_parameters.emplace("ggml.linear_q6k_q8_1_x4.output_capacity", "151936");
-    dispatch.bindings.resize(3);
+    dispatch.kernel.compile_parameters = {
+        { "ggml.workload.token_capacity", "1" },
+        { "ggml.matmul.vector.input_size", "2048" },
+        { "ggml.matmul.vector.output_size", "151936" },
+        { "ggml.matmul.vector.weight_format", "6" },
+        { "ggml.matmul.vector.activation_format", "9" },
+        { "ggml.matmul.vector.output_accumulation", "0" },
+        { "ggml.matmul.vector.output_unary_op", "23" },
+        { "ggml.matmul.vector.publish_format", "0" },
+    };
+    dispatch.bindings.resize(4);
 
     ggml::hrx::KernelExecutableCache             cache(ggml::hrx::LoomJitMode::Sync);
     std::vector<uint8_t>                         constants;
@@ -1030,7 +1055,7 @@ static void run_loom_jit_compile_checks() {
                               "ggml_mul_mat_quantized_f16_wmma_prefill_conv4_interior" }) {
         const auto & quantized_conv4 = find_kernel(name);
         REQUIRE(quantized_conv4.bindings.size() == (std::string(name).find("interior") != std::string::npos ? 5 : 6));
-        for (const int format : {4, 6}) {
+        for (const int format : {44, 6, 46}) {
             for (const int64_t channels : {2112, 8192, 10240}) {
                 auto ref = compile_kernel(*sync_jit, std::string(name) + "-" + std::to_string(format) + "-" +
                                           std::to_string(channels), quantized_conv4, token_count_workload(512), {
@@ -1309,6 +1334,32 @@ static void run_prefill_fusion_compile_checks() {
     }
 }
 
+static void run_long_context_attention_compile_checks() {
+    std::string error;
+    std::unique_ptr<ggml::hrx::LoomJit> jit =
+        ggml::hrx::create_loom_jit("gfx1100", ggml::hrx::LoomJitMode::Sync, error);
+    REQUIRE(jit != nullptr);
+
+    const auto & flash_prefill = find_kernel("ggml_flash_attention_f32_f16_wmma");
+    const auto & transpose_f16 = find_kernel("ggml_copy_transpose_f16");
+    const auto config = flash_attention_config("8", "2", "256", "0.0625");
+
+    for (int64_t key_value_token_count : { 32768, 32769, 33280, 262144 }) {
+        const std::string suffix = std::to_string(key_value_token_count);
+        require_compiled_kernel(compile_kernel(*jit, "long-context-flash-" + suffix, flash_prefill,
+                                               flash_attention_workload(512, key_value_token_count), config));
+    }
+
+    for (int64_t key_value_token_count : { 32768, 33280, 262144 }) {
+        const std::string suffix = std::to_string(key_value_token_count);
+        require_compiled_kernel(compile_kernel(*jit, "long-context-transpose-" + suffix, transpose_f16,
+                                               {
+                                                   { "row_count",    key_value_token_count },
+                                                   { "column_count", 256                   },
+                                               }));
+    }
+}
+
 static void run_binary_fusion_compile_checks() {
     std::string                         error;
     std::unique_ptr<ggml::hrx::LoomJit> jit =
@@ -1560,11 +1611,26 @@ static bool has_hrx_test_device() {
     return device.open();
 }
 
+static void run_partition_attention_reuse_checks() {
+    HrxTestDevice device;
+    REQUIRE(device.open());
+    for (bool wide : { false, true }) {
+        auto config = wide ? flash_attention_config("8", "2", "256", "0.0625") :
+                             flash_attention_config("32", "4", "128", "0.0883883461");
+        config.emplace("ggml.flash_attention.partition_count", wide ? "32" : "16");
+        config.emplace("ggml.flash_attention.partition_length", wide ? "8192" : "16384");
+        run_dynamic_export_reuse_case(device, "ggml_flash_attention_partition_produce",
+                                      flash_attention_decode_workload(131073), flash_attention_decode_workload(262144), config);
+    }
+}
+
 static void register_hrx_loom_jit_cases(test_runner::Suite & suite) {
+    suite.device_case("partition-attention-reuse", [] { run_partition_attention_reuse_checks(); });
     suite.host_case("compile", [] { run_loom_jit_compile_checks(); });
     suite.host_case("binary-publication", [] { run_binary_publication_compile_checks(); });
     suite.host_case("moe-routing", [] { run_moe_routing_compile_checks(); });
     suite.host_case("prefill-fusions", [] { run_prefill_fusion_compile_checks(); });
+    suite.host_case("long-context-attention", [] { run_long_context_attention_compile_checks(); });
     suite.host_case("binary-fusions", [] { run_binary_fusion_compile_checks(); });
     suite.device_case("materialize", [] { run_loom_jit_materialize_checks(); });
 }

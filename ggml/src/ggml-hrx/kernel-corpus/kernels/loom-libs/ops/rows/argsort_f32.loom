@@ -1,6 +1,9 @@
 config.decl @ggml.argsort.width : %value: index where [range(%value, 0, 2048)]
+
 config.decl @ggml.argsort.output_width : %value: index where [range(%value, 1, 2048)]
+
 config.decl @ggml.argsort.descending : %value: index where [range(%value, 0, 2048)]
+
 kernel.def @ggml_argsort_f32(%row_count: index) {
   %width = config.get @ggml.argsort.width : index
   %one = index.constant 1 : index

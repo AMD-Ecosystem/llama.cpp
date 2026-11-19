@@ -1,6 +1,8 @@
 // One workgroup per row keeps long reductions parallel for narrow projections.
 amdgpu.target<gfx11-generic> @ggml_small_m_wave32 {subgroup_size = 32}
+
 config.decl @ggml.small_m.k : %v: index where [range(%v, 4096, 32768), multiple_of(%v, 2048)]
+
 config.decl @ggml.small_m.m : %v: index where [range(%v, 1, 32)]
 
 kernel.def target(@ggml_small_m_wave32) @ggml_mul_mat_vector_small_m_f32() {

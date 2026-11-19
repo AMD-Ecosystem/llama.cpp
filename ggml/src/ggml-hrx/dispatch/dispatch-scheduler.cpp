@@ -31,11 +31,12 @@ static bool try_match_registration(const Graph &              graph,
                                    const std::vector<bool> &  covered_nodes,
                                    const CommandPlan &        plan,
                                    const DispatchRegistry &   registry,
+                                   const DispatchTarget &     target,
                                    ValueId                    next_plan_value,
                                    DispatchMatch &            match,
                                    DispatchMatchDiagnostics * diagnostics) {
     const DispatchMatchContext context = {
-        graph, node, node_index, covered_nodes, plan, next_plan_value, &registry,
+        graph, node, node_index, covered_nodes, plan, next_plan_value, &registry, target.row64_weight_policy, target.compute_units,
     };
     return registry.match(context, match, diagnostics);
 }
@@ -119,6 +120,11 @@ static bool node_inputs_are_available(const Graph &             graph,
                                       const GraphNode &         node,
                                       const std::vector<bool> & covered_nodes) {
     for (const ValueId input : node.inputs) {
+        // CPY writes into its destination tensor, which the importer also records as its output.
+        // An empty copy does not need that destination to have been produced already.
+        if (node.op == GGML_OP_CPY && input == node.output) {
+            continue;
+        }
         if (!value_is_available(graph, input, covered_nodes)) {
             return false;
         }
@@ -198,7 +204,7 @@ bool DispatchScheduler::schedule_graph(Graph &                       graph,
         const ValueId            next_plan_value(static_cast<int32_t>(graph.values().size() + plan_.transients.size() +
                                                                       plan_.completion_counter_requests.size()));
         DispatchMatchDiagnostics match_diagnostics;
-        if (!try_match_registration(graph, node, i, covered_nodes, plan_, *registry, next_plan_value, match,
+        if (!try_match_registration(graph, node, i, covered_nodes, plan_, *registry, target, next_plan_value, match,
                                     &match_diagnostics)) {
             if (can_elide_node(graph, *node, covered_nodes)) {
                 pending_diagnostics.append(match.status);
@@ -277,7 +283,7 @@ bool DispatchScheduler::schedule_graph(Graph &                       graph,
                 const ValueId next_plan_value(static_cast<int32_t>(graph.values().size() + plan_.transients.size() +
                                                                    plan_.completion_counter_requests.size()));
                 DispatchMatchDiagnostics match_diagnostics;
-                try_match_registration(graph, &nodes[i], i, covered_nodes, plan_, *registry, next_plan_value, match,
+                try_match_registration(graph, &nodes[i], i, covered_nodes, plan_, *registry, target, next_plan_value, match,
                                        &match_diagnostics);
                 diagnostics->unsupported_node_index = i;
                 diagnostics->unsupported_node       = &nodes[i];
@@ -310,7 +316,7 @@ bool DispatchScheduler::supports_node(const Graph & graph, const GraphNode * nod
     DispatchMatch           match;
     const ValueId           next_plan_value(static_cast<int32_t>(graph.values().size()));
     const CommandPlan       plan;
-    return try_match_registration(graph, node, node_index, covered_nodes, plan, *registry, next_plan_value, match,
+    return try_match_registration(graph, node, node_index, covered_nodes, plan, *registry, target, next_plan_value, match,
                                   nullptr);
 }
 

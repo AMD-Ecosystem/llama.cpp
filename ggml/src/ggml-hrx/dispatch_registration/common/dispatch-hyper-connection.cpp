@@ -16,9 +16,9 @@ static bool match_hyper_connection(const DispatchMatchContext & context, Dispatc
     if (node == nullptr) {
         return false;
     }
-    const bool comb = node->op == GGML_OP_DSV4_HC_COMB;
-    const bool pre  = node->op == GGML_OP_DSV4_HC_PRE;
-    const bool post = node->op == GGML_OP_DSV4_HC_POST;
+    const bool comb     = node->op == GGML_OP_DSV4_HC_COMB;
+    const bool pre      = node->op == GGML_OP_DSV4_HC_PRE;
+    const bool post     = node->op == GGML_OP_DSV4_HC_POST;
     const bool identity = post && node->inputs.size() == 3;
     if ((!comb && !pre && !post) || node->inputs.size() != (comb ? 3 : pre ? 2 : identity ? 3 : 4)) {
         return false;

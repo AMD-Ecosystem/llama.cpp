@@ -1,0 +1,123 @@
+// Single-query split-KV attention with packed GQA heads and F32 partial state.
+// The producer shares the corrected tiled body with general attention. A
+// separate reducer consumes graph-owned scratch and applies the optional gate.
+config.decl @ggml.flash_attention.query_head_count : %value: index where [range(%value, 1, 64)]
+config.decl @ggml.flash_attention.key_value_head_count : %value: index where [range(%value, 1, 64)]
+config.decl @ggml.flash_attention.qk_head_size : %value: index where [range(%value, 16, 512), multiple_of(%value, 16)]
+config.decl @ggml.flash_attention.value_head_size : %value: index where [range(%value, 64, 512), multiple_of(%value, 64)]
+config.decl @ggml.flash_attention.attention_scale : f32
+config.decl @ggml.flash_attention.apply_gate : %value: index where [range(%value, 0, 1)]
+config.decl @ggml.flash_attention.gate_stride_head : %value: index where [range(%value, 1, 16777216)]
+config.decl @ggml.flash_attention.gate_stride_token : %value: index where [range(%value, 1, 16777216)]
+
+config.decl @ggml.flash_attention.partition_count : %value: index where [range(%value, 16, 256)]
+config.decl @ggml.flash_attention.partition_length : %value: index where [range(%value, 64, 16384), multiple_of(%value, 64)]
+
+template.decl @ggml.flash_attention.body(%split_kv: i1, %partition_count: index, %partition_length: index, %partial_max: buffer, %partial_sum: buffer, %publish_f16: i1, %query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer, %f16_output: buffer)
+
+amdgpu.target<gfx11-generic> @ggml_flash_attention_partition_wave64 {subgroup_size = 64}
+kernel.def target(@ggml_flash_attention_partition_wave64) @ggml_flash_attention_partition_produce(%key_value_token_count: index) {
+  %parts = config.get @ggml.flash_attention.partition_count : index
+  %heads = config.get @ggml.flash_attention.key_value_head_count : index
+  %c1 = index.constant 1 : index
+  %c256 = index.constant 256 : index
+  kernel.launch.config workgroups(%parts, %heads, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer) {
+  %split_kv = scalar.constant true : i1
+  %publish_f16 = scalar.constant false : i1
+  %c1 = index.constant 1 : index
+  %parts = config.get @ggml.flash_attention.partition_count : index
+  %length = config.get @ggml.flash_attention.partition_length : index
+  template.apply<@ggml.flash_attention.body>(%split_kv, %parts, %length, %partial_max, %partial_sum, %publish_f16, %c1, %key_value_token_count, %query, %key, %value, %mask, %query, %partial_output, %partial_output) : (i1, index, index, buffer, buffer, i1, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}
+
+// Separate F32 reducer. Keep weights in LDS and leave producer state intact
+// so recording and replaying the pair needs no reset or completion counter.
+kernel.def target(@ggml_flash_attention_partition_wave64) @ggml_flash_attention_partition_reduce() {
+  %heads = config.get @ggml.flash_attention.query_head_count : index
+  %c1 = index.constant 1 : index
+  %c256 = index.constant 256 : index
+  kernel.launch.config workgroups(%c1, %heads, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %gate: buffer, %output: buffer) {
+  %heads = config.get @ggml.flash_attention.query_head_count : index
+  %d = config.get @ggml.flash_attention.value_head_size : index
+  %parts = config.get @ggml.flash_attention.partition_count : index
+  %gate_enabled = config.get @ggml.flash_attention.apply_gate : index
+  %gate_stride = config.get @ggml.flash_attention.gate_stride_head : index
+  %head = kernel.workgroup.id<y> : index
+  %lane = kernel.subgroup.lane.id : index
+  %workitem = kernel.workitem.id<x> : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c64 = index.constant 64 : index
+  %c256 = index.constant 256 : index
+  %offset0 = index.constant 0 : offset
+  %bytes4 = index.constant 4 : offset
+  %zero = scalar.constant 0.0 : f32
+  %one = scalar.constant 1.0 : f32
+  %negative_bits = scalar.constant -8388608 : i32
+  %negative = scalar.bitcast %negative_bits : i32 to f32
+  %weights_bytes = index.scale %parts, %bytes4 : index, offset -> offset
+  %weights = buffer.alloca<workgroup> align(16) %weights_bytes : buffer
+  %weights_view = buffer.view %weights[%offset0] : buffer -> view<[%parts]xf32>
+  %max_view = buffer.view %partial_max[%offset0] : buffer -> view<[%heads]x[%parts]xf32>
+  %sum_view = buffer.view %partial_sum[%offset0] : buffer -> view<[%heads]x[%parts]xf32>
+  %partial_view = buffer.view %partial_output[%offset0] : buffer -> view<[%heads]x[%parts]x[%d]xf32>
+  %output_view = buffer.view %output[%offset0] : buffer -> view<[%heads]x[%d]xf32>
+  %gate_view = buffer.view %gate[%offset0] : buffer -> view<268435456xf32>
+  %local_max = scf.for %p = [%lane to %parts step %c64](%m = %negative : f32) -> (f32) {
+    %v = view.load %max_view[%head, %p] : view<[%heads]x[%parts]xf32> -> f32
+    %next = scalar.maxnumf %m, %v : f32
+    scf.yield %next : f32
+  }
+  %maximum = kernel.subgroup.reduce<maxnumf> %local_max : f32
+  %first_wave = index.cmp ult, %workitem, %c64 : index
+  %local_sum = scf.for %p = [%lane to %parts step %c64](%s = %zero : f32) -> (f32) {
+    %m = view.load %max_view[%head, %p] : view<[%heads]x[%parts]xf32> -> f32
+    %partial_s = view.load %sum_view[%head, %p] : view<[%heads]x[%parts]xf32> -> f32
+    %active = scalar.cmpf ogt, %partial_s, %zero : f32
+    %weight = scf.if %active -> (f32) {
+      %delta = scalar.subf %m, %maximum : f32
+      %scale = scalar.expf<afn> %delta : f32
+      scf.yield %scale : f32
+    } else {
+      scf.yield %zero : f32
+    }
+    scf.if %first_wave {
+      view.store %weight, %weights_view[%p] : f32, view<[%parts]xf32>
+    }
+    %scaled = scalar.mulf %partial_s, %weight : f32
+    %next = scalar.addf %s, %scaled : f32
+    scf.yield %next : f32
+  }
+  %sum = kernel.subgroup.reduce<addf> %local_sum : f32
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %has_values = scalar.cmpf ogt, %sum, %zero : f32
+  %denominator = scf.select %has_values, %sum, %one : f32
+  %apply_gate = index.cmp eq, %gate_enabled, %c1 : index
+  scf.for %channel = [%workitem to %d step %c256] {
+    %unroll8 = index.constant 8 : index
+    %total = scf.for %p = [%c0 to %parts step %c1](%v = %zero : f32) -> (f32) unroll(%unroll8) schedule(interleaved) {
+      %weight = view.load %weights_view[%p] : view<[%parts]xf32> -> f32
+      %partial_v = view.load %partial_view[%head, %p, %channel] : view<[%heads]x[%parts]x[%d]xf32> -> f32
+      %scaled = scalar.mulf %weight, %partial_v : f32
+      %next = scalar.addf %v, %scaled : f32
+      scf.yield %next : f32
+    }
+    %normalized = scalar.divf %total, %denominator : f32
+    %result = scf.if %apply_gate -> (f32) {
+      %gate_index = index.madd %head, %gate_stride, %channel : index
+      %raw_gate = view.load %gate_view[%gate_index] : view<268435456xf32> -> f32
+      %negative_gate = scalar.negf %raw_gate : f32
+      %gate_exp = scalar.expf<afn> %negative_gate : f32
+      %gate_denominator = scalar.addf %one, %gate_exp : f32
+      %gated = scalar.divf %normalized, %gate_denominator : f32
+      scf.yield %gated : f32
+    } else {
+      scf.yield %normalized : f32
+    }
+    view.store %result, %output_view[%head, %channel] : f32, view<[%heads]x[%d]xf32>
+  }
+  kernel.return
+}

@@ -1,5 +1,7 @@
 config.decl @ggml.fill.value : f32
+
 config.decl @ggml.fill.format : %value: index where [range(%value, 16, 32)]
+
 kernel.def @ggml_fill(%element_count: index) {
   %one = index.constant 1 : index
   %group = index.constant 256 : index

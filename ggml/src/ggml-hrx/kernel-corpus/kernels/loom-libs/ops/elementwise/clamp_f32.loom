@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 amdgpu.target<gfx11-generic> @ggml_clamp_f32_target {subgroup_size = 64}
+
 config.decl @ggml.clamp.min : f32
+
 config.decl @ggml.clamp.max : f32
 
 kernel.def target(@ggml_clamp_f32_target) export("ggml_clamp_f32") @ggml_clamp_f32(%element_count: index) {

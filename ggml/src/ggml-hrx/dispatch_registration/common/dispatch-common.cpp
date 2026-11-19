@@ -1,5 +1,6 @@
 #include "dispatch-common.h"
 
+#include "dispatch-amax-scale.h"
 #include "dispatch-binary.h"
 #include "dispatch-copy.h"
 #include "dispatch-flash-attention.h"
@@ -12,7 +13,6 @@
 #include "dispatch-mul-mat-id.h"
 #include "dispatch-mul-mat.h"
 #include "dispatch-reduction.h"
-#include "dispatch-amax-scale.h"
 #include "dispatch-rmsnorm.h"
 #include "dispatch-rope-set-rows.h"
 #include "dispatch-scale.h"

@@ -15,7 +15,7 @@ struct RmsNormParams {
 };
 
 struct MulMatParams {
-    ggml_prec    prec      = GGML_PREC_DEFAULT;
+    ggml_prec    prec      = GGML_PREC_UNDEFINED;
     ggml_op_hint hint      = GGML_HINT_NONE;
     ggml_prec    src1_prec = GGML_PREC_UNDEFINED;
 };
@@ -24,7 +24,7 @@ struct FlashAttnExtParams {
     float     scale         = 0.0f;
     float     max_bias      = 0.0f;
     float     logit_softcap = 0.0f;
-    ggml_prec prec          = GGML_PREC_DEFAULT;
+    ggml_prec prec          = GGML_PREC_UNDEFINED;
     int32_t   n_kv_max      = 0;
 };
 
@@ -66,7 +66,7 @@ struct Pool1DParams {
 struct GluParams {
     ggml_glu_op op = GGML_GLU_OP_REGLU;
     bool        swapped = false;
-    float       limit = 0.0f;
+    float       limit   = 0.0f;
 };
 
 struct ScaleParams {
@@ -144,8 +144,8 @@ struct RopeParams {
 // clang-format off
 using OpParams = std::variant<
     std::monostate,
-    RmsNormParams,
     MulMatParams,
+    RmsNormParams,
     FlashAttnExtParams,
     SoftMaxParams,
     ArgsortParams,

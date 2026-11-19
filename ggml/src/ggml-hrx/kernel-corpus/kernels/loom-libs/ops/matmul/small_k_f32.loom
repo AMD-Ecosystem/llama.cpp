@@ -1,19 +1,35 @@
 config.decl @ggml.small_matmul.k : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.small_matmul.m : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.small_matmul.n : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.small_matmul.ne2 : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.small_matmul.repeat2 : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.small_matmul.repeat3 : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.small_matmul.weight_span : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.small_matmul.input_span : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.small_matmul.weight_format : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.small_matmul.ws0 : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.small_matmul.ws1 : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.small_matmul.ws2 : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.small_matmul.ws3 : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.small_matmul.xs0 : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.small_matmul.xs1 : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.small_matmul.xs2 : %value: index where [range(%value, 1, 1073741824)]
+
 config.decl @ggml.small_matmul.xs3 : %value: index where [range(%value, 1, 1073741824)]
 
 kernel.def @ggml_mul_mat_small_k_f32(%element_count: index) {

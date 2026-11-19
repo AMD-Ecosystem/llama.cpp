@@ -2,6 +2,7 @@
 
 #include "../qwen/dispatch-llm-profiles.h"
 #include "dispatch-activation-publication.h"
+#include "dispatch-layout-utils.h"
 #include "dispatch-mul-mat-common.h"
 #include "dispatch-mul-mat-weight-format.h"
 #include "ggml.h"
@@ -19,6 +20,13 @@ namespace ggml::hrx {
 namespace {
 
 static constexpr KernelCatalogRef kGetRowsF32Kernel     = GGML_HRX_KERNEL_REF("loom_libs", "ggml_get_rows_f32");
+static constexpr KernelCatalogRef kGetRowsI32Kernel     = GGML_HRX_KERNEL_REF("loom_libs", "ggml_get_rows_i32");
+static constexpr KernelCatalogRef kGetRowsStridedF32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_get_rows_strided_f32");
+static constexpr KernelCatalogRef kGetRowsScalar3dF32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_get_rows_scalar_3d_f32");
+static constexpr KernelCatalogRef kRepeatScalar3dF32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_repeat_scalar_3d_f32");
 static constexpr KernelCatalogRef kGetRows32Kernel      = GGML_HRX_KERNEL_REF("loom_libs", "ggml_get_rows_32");
 static constexpr KernelCatalogRef kGetRowsF32NextKernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_get_rows_f32_next");
 static constexpr KernelCatalogRef kGetRowsScaleF32Kernel =
@@ -100,11 +108,20 @@ struct GetRowsMatch {
     int64_t       token_count         = 0;
     int64_t       row_count           = 0;
     int64_t       hidden_size         = 0;
+    std::string   weight_layout       = kNativeWeightLayout;
 
     bool matched() const {
         return ids != nullptr && weight != nullptr && output != nullptr && weight_format_value >= 0;
     }
 };
+
+static DispatchBinding get_rows_weight_binding(const GetRowsMatch & match) {
+    if (match.weight_layout == kNativeWeightLayout) {
+        return { match.weight->id, 0, match.weight->byte_count };
+    }
+    return { match.weight->id, 0, match.weight->byte_count, match.weight_layout, match.weight->type,
+             match.hidden_size, match.row_count, match.weight->byte_count };
+}
 
 struct GetRowsRmsNormMatch {
     GetRowsMatch      rows;
@@ -150,12 +167,113 @@ static void add_common_integer_parameters(Dispatch & dispatch, const GetRowsMatc
 
 static void add_primary_bindings(Dispatch & dispatch, const GetRowsMatch & match) {
     dispatch.bindings.push_back({ match.ids->id, 0, match.ids->byte_count });
-    dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
+    dispatch.bindings.push_back(get_rows_weight_binding(match));
     dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
 }
 
-static GetRowsMatch match_get_rows_f32(const Graph & graph, const GraphNode * node) {
+static bool match_repeat_scalar_3d_f32_input(const Graph & graph, const GraphNode * node,
+                                             const Value *& source, const Value *& repeated) {
+    const bool is_repeat = node != nullptr && node->op == GGML_OP_REPEAT;
+    const bool has_one_input = node != nullptr && node->inputs.size() == 1;
+    if (!is_repeat || !has_one_input) {
+        return false;
+    }
+
+    source = graph_value(graph, node->inputs[0]);
+    repeated = graph_value(graph, node->output);
+    const bool has_values = source != nullptr && repeated != nullptr;
+    if (!has_values) {
+        return false;
+    }
+
+    const bool has_types = source->type == GGML_TYPE_F32 && repeated->type == GGML_TYPE_F32;
+    const bool has_source_shape = source->ne[0] == 1 && source->ne[1] == 128 &&
+                                  source->ne[2] == 1 && source->ne[3] == 1;
+    const bool has_repeat_shape = repeated->ne[0] == 1 && repeated->ne[1] == 128 &&
+                                  repeated->ne[3] == 1 && is_supported_token_count(repeated->ne[2]);
+    const bool has_layout = source->contiguous && repeated->contiguous;
+    return has_types && has_source_shape && has_repeat_shape && has_layout;
+}
+
+static bool match_repeat_scalar_3d_f32_dispatch(const DispatchMatchContext & context, DispatchMatch & match) {
+    const Value * source = nullptr;
+    const Value * repeated = nullptr;
+    if (!match_repeat_scalar_3d_f32_input(context.graph, context.root_node, source, repeated)) {
+        return false;
+    }
+
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(kRepeatScalar3dF32Kernel);
+    dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
+    dispatch.kernel.integer_parameters.emplace("token_count", repeated->ne[2]);
+    dispatch.bindings.push_back({ source->id, 0, source->byte_count });
+    dispatch.bindings.push_back({ repeated->id, 0, repeated->byte_count });
+
+    match.covered_nodes.push_back(context.root_index);
+    match.dispatches.push_back(std::move(dispatch));
+    return true;
+}
+
+static bool match_get_rows_scalar_3d_f32_dispatch(const DispatchMatchContext & context, DispatchMatch & match) {
+    const GraphNode * node = context.root_node;
+    const bool is_get_rows = node != nullptr && node->op == GGML_OP_GET_ROWS;
+    const bool has_two_inputs = node != nullptr && node->inputs.size() == 2;
+    if (!is_get_rows || !has_two_inputs) {
+        return false;
+    }
+
+    const Value * scales = graph_value(context.graph, node->inputs[0]);
+    const Value * ids = graph_value(context.graph, node->inputs[1]);
+    const Value * output = graph_value(context.graph, node->output);
+    const bool has_values = scales != nullptr && ids != nullptr && output != nullptr;
+    if (!has_values) {
+        return false;
+    }
+
+    const int64_t token_count = output->ne[2];
+    const bool has_supported_tokens = is_supported_token_count(token_count);
+    const bool has_scale_shape = scales->ne[0] == 1 && scales->ne[1] == 128 &&
+                                 scales->ne[2] == token_count && scales->ne[3] == 1;
+    const bool has_id_shape = ids->ne[0] == 8 && ids->ne[1] == token_count &&
+                              ids->ne[2] == 1 && ids->ne[3] == 1;
+    const bool has_output_shape = output->ne[0] == 1 && output->ne[1] == 8 &&
+                                  output->ne[3] == 1;
+    const bool has_types = scales->type == GGML_TYPE_F32 && ids->type == GGML_TYPE_I32 &&
+                           output->type == GGML_TYPE_F32;
+    const bool has_contiguous_values = scales->contiguous && output->contiguous;
+    const bool has_id_columns = ids->nb[0] == sizeof(int32_t) && ids->nb[1] % sizeof(int32_t) == 0;
+    const bool has_supported_shape = has_supported_tokens && has_scale_shape && has_id_shape &&
+                                     has_output_shape && has_types && has_contiguous_values && has_id_columns;
+    if (!has_supported_shape) {
+        return false;
+    }
+
+    const size_t route_stride = ids->nb[1] / sizeof(int32_t);
+    const bool has_supported_stride = route_stride >= 8 && route_stride <= 512;
+    const size_t expected_id_bytes = (static_cast<size_t>(token_count) - 1) * ids->nb[1] + 8 * sizeof(int32_t);
+    const bool has_exact_id_span = ids->byte_count == expected_id_bytes;
+    if (!has_supported_stride || !has_exact_id_span) {
+        return false;
+    }
+
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(kGetRowsScalar3dF32Kernel);
+    dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
+    dispatch.kernel.integer_parameters.emplace("token_count", token_count);
+    dispatch.kernel.integer_parameters.emplace("route_stride", static_cast<int64_t>(route_stride));
+    dispatch.bindings.push_back({ ids->id, 0, ids->byte_count });
+    dispatch.bindings.push_back({ scales->id, 0, scales->byte_count });
+    dispatch.bindings.push_back({ output->id, 0, output->byte_count });
+
+    match.covered_nodes.push_back(context.root_index);
+    match.dispatches.push_back(std::move(dispatch));
+    return true;
+}
+
+static GetRowsMatch match_get_rows_f32(const DispatchMatchContext & context) {
     GetRowsMatch match;
+    const Graph & graph = context.graph;
+    const GraphNode * node = context.root_node;
     if (node == nullptr || node->op != GGML_OP_GET_ROWS || node->inputs.size() != 2) {
         return match;
     }
@@ -191,12 +309,23 @@ static GetRowsMatch match_get_rows_f32(const Graph & graph, const GraphNode * no
     match.token_count         = token_count;
     match.row_count           = row_count;
     match.hidden_size         = hidden_size;
+    if (context.row64_weight_policy && weight->alias_source.value < 0 && row_count % 64 == 0 &&
+        hidden_size % 256 == 0 &&
+        dispatch_weight_layout_eligible(*weight)) {
+        if (weight->type == GGML_TYPE_Q4_K) {
+            match.weight_format_value = common_mul_mat_format_config_value(CommonMulMatWeightFormat::Q4KRow64);
+            match.weight_layout = kQ4KPackedK256Row64Layout;
+        } else if (weight->type == GGML_TYPE_Q6_K) {
+            match.weight_format_value = common_mul_mat_format_config_value(CommonMulMatWeightFormat::Q6KRow64);
+            match.weight_layout = kQ6KPackedK256Row64ScaleRowLayout;
+        }
+    }
     return match;
 }
 
 static GetRowsScaleMatch match_get_rows_scale_f32(const DispatchMatchContext & context) {
     GetRowsScaleMatch match;
-    match.rows = match_get_rows_f32(context.graph, context.root_node);
+    match.rows = match_get_rows_f32(context);
     if (!match.rows.matched() || !context.graph.has_index()) {
         return {};
     }
@@ -243,7 +372,7 @@ static GetRowsScaleMatch match_get_rows_scale_f32(const DispatchMatchContext & c
 
 static GetRowsRmsNormMatch match_get_rows_rmsnorm_binary(const DispatchMatchContext & context) {
     GetRowsRmsNormMatch match;
-    match.rows = match_get_rows_f32(context.graph, context.root_node);
+    match.rows = match_get_rows_f32(context);
     if (!match.rows.matched() || !context.graph.has_index() || match.rows.hidden_size < 128 ||
         match.rows.hidden_size > 32768 || match.rows.hidden_size % 128 != 0) {
         return {};
@@ -386,13 +515,88 @@ static bool match_get_rows_32_dispatch(const DispatchMatchContext & context, Dis
 }
 
 static bool match_get_rows_f32_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
-    const GetRowsMatch match = match_get_rows_f32(context.graph, context.root_node);
+    const GetRowsMatch match = match_get_rows_f32(context);
     if (!match.matched()) {
         return false;
     }
 
     dispatch_match.covered_nodes.push_back(context.root_index);
     dispatch_match.dispatches.push_back(make_get_rows_dispatch(match));
+    return true;
+}
+
+static bool match_get_rows_i32_dispatch(const DispatchMatchContext & context, DispatchMatch & match) {
+    const GraphNode * node = context.root_node;
+    if (node == nullptr || node->op != GGML_OP_GET_ROWS || node->inputs.size() != 2) {
+        return false;
+    }
+
+    const Value * weight = graph_value(context.graph, node->inputs[0]);
+    const Value * ids    = graph_value(context.graph, node->inputs[1]);
+    const Value * output = graph_value(context.graph, node->output);
+    if (weight == nullptr || ids == nullptr || output == nullptr || weight->type != GGML_TYPE_I32 ||
+        ids->type != GGML_TYPE_I32 || output->type != GGML_TYPE_I32 || !weight->contiguous ||
+        !ids->contiguous || !output->contiguous || !is_2d(*weight) || !is_1d_or_2d_column(*ids) ||
+        !is_2d(*output) || output->ne[0] != weight->ne[0] || output->ne[1] != ids->ne[0] ||
+        weight->ne[0] > 32768 || !is_supported_row_count(weight->ne[1]) ||
+        !is_supported_token_count(ids->ne[0]) || weight->storage_root == output->storage_root) {
+        return false;
+    }
+
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(kGetRowsI32Kernel);
+    dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
+    dispatch.kernel.integer_parameters.emplace("token_count", ids->ne[0]);
+    dispatch.kernel.integer_parameters.emplace("row_count", weight->ne[1]);
+    dispatch.kernel.integer_parameters.emplace("hidden_size", weight->ne[0]);
+    dispatch.bindings.push_back({ ids->id, 0, ids->byte_count });
+    dispatch.bindings.push_back({ weight->id, 0, weight->byte_count });
+    dispatch.bindings.push_back({ output->id, 0, output->byte_count });
+    match.covered_nodes.push_back(context.root_index);
+    match.dispatches.push_back(std::move(dispatch));
+    return true;
+}
+
+static bool match_get_rows_strided_f32_dispatch(const DispatchMatchContext & context, DispatchMatch & match) {
+    const GraphNode * node = context.root_node;
+    if (node == nullptr || node->op != GGML_OP_GET_ROWS || node->inputs.size() != 2) {
+        return false;
+    }
+
+    const Value * source = graph_value(context.graph, node->inputs[0]);
+    const Value * ids = graph_value(context.graph, node->inputs[1]);
+    const Value * output = graph_value(context.graph, node->output);
+    if (source == nullptr || ids == nullptr || output == nullptr || source->type != GGML_TYPE_F32 ||
+        ids->type != GGML_TYPE_I32 || output->type != GGML_TYPE_F32 || source->contiguous ||
+        !ids->contiguous || !output->contiguous || !is_2d(*source) || !is_1d_or_2d_column(*ids) ||
+        !is_2d(*output) || source->nb[0] != sizeof(float) || source->nb[1] < sizeof(float) ||
+        source->nb[1] % sizeof(float) != 0 ||
+        output->ne[0] != source->ne[0] || output->ne[1] != ids->ne[0] || source->ne[0] > 32768 ||
+        !is_supported_row_count(source->ne[1]) || !is_supported_token_count(ids->ne[0]) ||
+        source->storage_root == output->storage_root || ids->storage_root == output->storage_root) {
+        return false;
+    }
+
+    size_t source_span = 0;
+    if (!strided_f32_storage_span_bytes(*source, source_span) ||
+        source_span / sizeof(float) > static_cast<size_t>(kMaximumHiddenElements) ||
+        source->nb[1] / sizeof(float) > static_cast<size_t>(kMaximumHiddenElements)) {
+        return false;
+    }
+
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(kGetRowsStridedF32Kernel);
+    dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
+    dispatch.kernel.integer_parameters.emplace("token_count", ids->ne[0]);
+    dispatch.kernel.integer_parameters.emplace("row_count", source->ne[1]);
+    dispatch.kernel.integer_parameters.emplace("hidden_size", source->ne[0]);
+    dispatch.kernel.integer_parameters.emplace("row_stride", source->nb[1] / sizeof(float));
+    dispatch.kernel.integer_parameters.emplace("source_span", source_span / sizeof(float));
+    dispatch.bindings.push_back({ ids->id, 0, ids->byte_count });
+    dispatch.bindings.push_back({ source->storage_root, source->storage_offset, source_span });
+    dispatch.bindings.push_back({ output->id, 0, output->byte_count });
+    match.covered_nodes.push_back(context.root_index);
+    match.dispatches.push_back(std::move(dispatch));
     return true;
 }
 
@@ -411,7 +615,7 @@ static bool match_get_rows_scale_f32_dispatch(const DispatchMatchContext & conte
     dispatch.kernel.compile_parameters.emplace("ggml.get_rows_scale_f32.scale", to_config_value(match.scale));
     dispatch.kernel.compile_parameters.emplace("ggml.get_rows_scale_f32.bias", to_config_value(match.bias));
     dispatch.bindings.push_back({ match.rows.ids->id, 0, match.rows.ids->byte_count });
-    dispatch.bindings.push_back({ match.rows.weight->id, 0, match.rows.weight->byte_count });
+    dispatch.bindings.push_back(get_rows_weight_binding(match.rows));
     dispatch.bindings.push_back({ match.rows.output->id, 0, match.rows.output->byte_count });
     dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
 
@@ -422,7 +626,7 @@ static bool match_get_rows_scale_f32_dispatch(const DispatchMatchContext & conte
 }
 
 static bool match_get_rows_f32_next_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
-    const GetRowsMatch match = match_get_rows_f32(context.graph, context.root_node);
+    const GetRowsMatch match = match_get_rows_f32(context);
     if (!match.matched()) {
         return false;
     }
@@ -511,7 +715,7 @@ static bool match_get_rows_rmsnorm_binary_dispatch(const DispatchMatchContext & 
     add_common_compile_parameters(dispatch, match.rows);
     dispatch.kernel.compile_parameters.emplace("ggml.get_rows_rmsnorm.rms_epsilon", to_config_value(match.epsilon));
     dispatch.bindings.push_back({ match.rows.ids->id, 0, match.rows.ids->byte_count });
-    dispatch.bindings.push_back({ match.rows.weight->id, 0, match.rows.weight->byte_count });
+    dispatch.bindings.push_back(get_rows_weight_binding(match.rows));
     dispatch.bindings.push_back({ match.norm_weight->id, 0, match.norm_weight->byte_count });
     dispatch.bindings.push_back({ match.rows.output->id, 0, match.rows.output->byte_count });
     dispatch.bindings.push_back({ match.normalized_output->id, 0, match.normalized_output->byte_count });
@@ -528,6 +732,38 @@ static bool match_get_rows_rmsnorm_binary_dispatch(const DispatchMatchContext & 
 }  // namespace
 
 void register_get_rows_dispatches(DispatchRegistryBuilder & registry) {
+    registry.add({
+        "common.get_rows.strided_f32",
+        GGML_OP_GET_ROWS,
+        DispatchMatchKind::SingleOp,
+        100,
+        DispatchSource::Common,
+        match_get_rows_strided_f32_dispatch,
+    });
+    registry.add({
+        "common.get_rows.i32",
+        GGML_OP_GET_ROWS,
+        DispatchMatchKind::SingleOp,
+        100,
+        DispatchSource::Common,
+        match_get_rows_i32_dispatch,
+    });
+    registry.add({
+        "common.repeat.scalar_3d_f32",
+        GGML_OP_REPEAT,
+        DispatchMatchKind::SingleOp,
+        125,
+        DispatchSource::Common,
+        match_repeat_scalar_3d_f32_dispatch,
+    });
+    registry.add({
+        "common.get_rows.scalar_3d_f32",
+        GGML_OP_GET_ROWS,
+        DispatchMatchKind::SingleOp,
+        125,
+        DispatchSource::Common,
+        match_get_rows_scalar_3d_f32_dispatch,
+    });
     registry.add({
         "common.get_rows.32",
         GGML_OP_GET_ROWS,

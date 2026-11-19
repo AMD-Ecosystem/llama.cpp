@@ -19,6 +19,10 @@ static constexpr KernelCatalogRef kMulMatIdTiledF32F32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_tiled_input_f32_publish_f32");
 static constexpr KernelCatalogRef kMulMatIdSkinnyF32F32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_skinny_input_f32_publish_f32");
+static constexpr KernelCatalogRef kMulMatIdTiledScaledF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_tiled_input_f32_scaled_publish_f32");
+static constexpr KernelCatalogRef kMulMatIdSkinnyScaledF32F32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_skinny_input_f32_scaled_publish_f32");
 static constexpr KernelCatalogRef kMulMatIdGroupedMxfp4F32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_grouped_mxfp4_f32");
 static constexpr KernelCatalogRef kMulMatIdVectorMxfp4Kernel =
@@ -73,6 +77,21 @@ struct MulMatIdPostOpsMatch {
     bool matched() const {
         return root.matched() && residual_output != nullptr && kernel.id != kUncatalogedKernelId &&
                (has_bias || has_residual);
+    }
+};
+
+struct MulMatIdExpertScaleMatch {
+    CommonMulMatIdMatch root;
+    const Value *        scale        = nullptr;
+    const Value *        output       = nullptr;
+    const GraphNode *    repeat       = nullptr;
+    const GraphNode *    gather       = nullptr;
+    const GraphNode *    multiply     = nullptr;
+    int64_t              route_stride = 0;
+
+    bool matched() const {
+        return root.matched() && scale != nullptr && output != nullptr && repeat != nullptr && gather != nullptr &&
+               multiply != nullptr;
     }
 };
 
@@ -222,12 +241,12 @@ static bool build_mul_mat_id_mxfp4_q8_dispatch(const DispatchMatchContext & cont
         make_kernel_specialization(pair_tokens ? kMulMatIdPairedMxfp4Q8Kernel : kMulMatIdVectorMxfp4Q8Kernel);
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
     const std::pair<const char *, int64_t> parameters[] = {
-        { "input_size",        match.input_size                                               },
-        { "output_size",       match.output_size                                              },
-        { "route_count",       match.route_count                                              },
-        { "input_route_count", match.input_route_count                                        },
-        { "route_stride",      static_cast<int64_t>(match.route_ids->nb[1] / sizeof(int32_t)) },
-        { "expert_count",      match.expert_count                                             }
+        { "input_size",        match.input_size        },
+        { "output_size",       match.output_size       },
+        { "route_count",       match.route_count       },
+        { "input_route_count", match.input_route_count },
+        { "route_stride",      match.route_stride      },
+        { "expert_count",      match.expert_count      }
     };
     for (const auto & parameter : parameters) {
         dispatch.kernel.compile_parameters.emplace(std::string("ggml.mxfp4_vector.") + parameter.first,
@@ -285,7 +304,7 @@ static bool match_mul_mat_id_vector_mxfp4(const DispatchMatchContext & context, 
                                                        std::to_string(parameter.second));
         }
         dispatch.kernel.compile_parameters.emplace("ggml.mxfp4_vector.route_stride",
-                                                   std::to_string(match.route_ids->nb[1] / sizeof(int32_t)));
+                                                   std::to_string(match.route_stride));
         const ValueId groups(context.next_plan_value.value + static_cast<int32_t>(dispatch_match.transients.size()));
         const size_t  bytes = static_cast<size_t>(match.token_count * match.route_count) * 4 * sizeof(int32_t);
         dispatch_match.transients.push_back({ groups, "common.mul_mat_id.groups", bytes, 256 });
@@ -409,6 +428,151 @@ static bool match_mul_mat_id_dispatch(const DispatchMatchContext & context, Disp
     return true;
 }
 
+static MulMatIdExpertScaleMatch match_mul_mat_id_expert_scale(const DispatchMatchContext & context) {
+    MulMatIdExpertScaleMatch match;
+    const CommonMulMatIdMatch root =
+        common_match_mul_mat_id_any_format(context.graph, context.root_node, context.plan);
+    if (!root.matched()) {
+        return match;
+    }
+
+    const bool has_gemma_experts = root.expert_count == 128;
+    const bool has_eight_routes = root.route_count == 8;
+    const bool has_gemma_routing = has_gemma_experts && has_eight_routes;
+    const bool has_supported_format = root.weight_format == CommonMulMatWeightFormat::Q4K ||
+                                      root.weight_format == CommonMulMatWeightFormat::Q6K ||
+                                      root.weight_format == CommonMulMatWeightFormat::Q5_1 ||
+                                      root.weight_format == CommonMulMatWeightFormat::Q8_0;
+    const bool has_transient_matmul_output = root.output->kind == ValueKind::Transient;
+    const bool has_eligible_root = has_gemma_routing && has_supported_format && has_transient_matmul_output;
+    if (!has_eligible_root) {
+        return {};
+    }
+
+    const GraphNode * multiply =
+        common_mul_mat_id_find_only_consumer_with_op(context.graph, root.output->id, GGML_OP_MUL);
+    const bool has_multiply = multiply != nullptr && common_mul_mat_id_binary_node_is_mul(*multiply) &&
+                              multiply->inputs[0] == root.output->id;
+    if (!has_multiply) {
+        return {};
+    }
+
+    const Value * selected = common_mul_mat_id_graph_value(context.graph, multiply->inputs[1]);
+    const Value * output = common_mul_mat_id_graph_value(context.graph, multiply->output);
+    const bool has_values = selected != nullptr && output != nullptr;
+    if (!has_values) {
+        return {};
+    }
+    const GraphNode * gather = context.graph.index().producer(selected->id);
+    const bool has_gather = gather != nullptr && gather->op == GGML_OP_GET_ROWS && gather->inputs.size() == 2;
+    const bool has_selected_shape = selected->type == GGML_TYPE_F32 &&
+                                    common_mul_mat_id_is_shape(*selected, 1, 8, root.token_count, 1);
+    const bool has_output_shape = output->type == GGML_TYPE_F32 && output->contiguous &&
+                                  common_mul_mat_id_same_shape(*output, *root.output);
+    const bool has_selected_consumer =
+        context.graph.index().consumers(selected->id).size() == 1 &&
+        context.graph.index().consumers(selected->id).front() == multiply;
+    const bool has_scale_gather = has_gather && has_selected_shape && has_output_shape && has_selected_consumer;
+    if (!has_scale_gather) {
+        return {};
+    }
+    const bool uses_same_ids = gather->inputs[1] == root.route_ids->id;
+    if (!uses_same_ids) {
+        return {};
+    }
+
+    const Value * repeated = common_mul_mat_id_graph_value(context.graph, gather->inputs[0]);
+    const GraphNode * repeat = repeated == nullptr ? nullptr : context.graph.index().producer(repeated->id);
+    const bool has_repeat = repeat != nullptr && repeat->op == GGML_OP_REPEAT && repeat->inputs.size() == 1;
+    const bool has_repeat_shape = repeated != nullptr && repeated->type == GGML_TYPE_F32 &&
+                                  common_mul_mat_id_is_shape(*repeated, 1, 128, root.token_count, 1) &&
+                                  repeated->kind == ValueKind::Transient;
+    const bool has_repeat_consumer = repeated != nullptr &&
+                                     context.graph.index().consumers(repeated->id).size() == 1 &&
+                                     context.graph.index().consumers(repeated->id).front() == gather;
+    const bool has_scale_repeat = has_repeat && has_repeat_shape && has_repeat_consumer;
+    if (!has_scale_repeat) {
+        return {};
+    }
+
+    const Value * scale = common_mul_mat_id_graph_value(context.graph, repeat->inputs[0]);
+    const bool has_scale_shape = scale != nullptr && scale->type == GGML_TYPE_F32 && scale->contiguous &&
+                                 common_mul_mat_id_is_shape(*scale, 1, 128, 1, 1) &&
+                                 scale->byte_count == 128 * sizeof(float);
+    const bool has_contiguous_repeat = repeated->contiguous;
+    const bool has_scale_source = has_scale_shape && has_contiguous_repeat;
+    if (!has_scale_source) {
+        return {};
+    }
+
+    const size_t expected_id_bytes =
+        static_cast<size_t>((root.token_count - 1) * root.route_stride + root.route_count) * sizeof(int32_t);
+    if (root.route_ids->byte_count != expected_id_bytes) {
+        return {};
+    }
+
+    match.root = root;
+    match.scale = scale;
+    match.output = output;
+    match.repeat = repeat;
+    match.gather = gather;
+    match.multiply = multiply;
+    match.route_stride = root.route_stride;
+    return match;
+}
+
+static bool match_mul_mat_id_expert_scale_dispatch(const DispatchMatchContext & context,
+                                                   DispatchMatch & dispatch_match) {
+    const MulMatIdExpertScaleMatch match = match_mul_mat_id_expert_scale(context);
+    if (!match.matched()) {
+        return false;
+    }
+
+    CommandPlanMoeRoutingBundle routing_bundle;
+    if (!common_mul_mat_id_ensure_moe_routing_bundle(context, match.root, dispatch_match, routing_bundle)) {
+        return false;
+    }
+
+    Dispatch dispatch;
+    const bool skinny_route = common_mul_mat_id_is_skinny_route(match.root);
+    dispatch.kernel = make_kernel_specialization(skinny_route ? kMulMatIdSkinnyScaledF32F32Kernel :
+                                                                kMulMatIdTiledScaledF32F32Kernel);
+    dispatch.kernel.integer_parameters.emplace("token_count", match.root.token_count);
+    dispatch.kernel.compile_parameters.emplace("ggml.workload.token_capacity",
+                                               common_mul_mat_id_to_config_value(match.root.token_count));
+    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_id.input_size",
+                                               common_mul_mat_id_to_config_value(match.root.input_size));
+    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_id.output_size",
+                                               common_mul_mat_id_to_config_value(match.root.output_size));
+    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_id.expert_count",
+                                               common_mul_mat_id_to_config_value(match.root.expert_count));
+    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_id.route_count",
+                                               common_mul_mat_id_to_config_value(match.root.route_count));
+    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_id.input_route_count",
+                                               common_mul_mat_id_to_config_value(match.root.input_route_count));
+    dispatch.kernel.compile_parameters.emplace(
+        "ggml.mul_mat_id.weight_format",
+        common_mul_mat_id_to_config_value(common_mul_mat_format_config_value(match.root.weight_format)));
+    dispatch.kernel.compile_parameters.emplace("ggml.mul_mat_id.scale.route_stride",
+                                               common_mul_mat_id_to_config_value(match.route_stride));
+    dispatch.bindings.push_back({ match.root.input->id, 0, match.root.input->byte_count });
+    dispatch.bindings.push_back({ routing_bundle.expert_table, 0, routing_bundle.expert_table_byte_count });
+    dispatch.bindings.push_back({ routing_bundle.partition_table, 0, routing_bundle.partition_table_byte_count });
+    dispatch.bindings.push_back({ match.root.weight->id, 0, match.root.weight->byte_count });
+    dispatch.bindings.push_back({ match.scale->id, 0, match.scale->byte_count });
+    dispatch.bindings.push_back({ match.root.route_ids->id, 0, match.root.route_ids->byte_count });
+    dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
+
+    for (const GraphNode * covered_node : { context.root_node, match.repeat, match.gather, match.multiply }) {
+        if (!append_covered_node_index_once(context.graph, context.covered_nodes, covered_node,
+                                            dispatch_match.covered_nodes)) {
+            return false;
+        }
+    }
+    dispatch_match.dispatches.push_back(std::move(dispatch));
+    return true;
+}
+
 static bool match_mul_mat_id_postops_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     const MulMatIdPostOpsMatch match = match_mul_mat_id_postops(context);
     if (!match.matched()) {
@@ -504,6 +668,14 @@ static bool match_mul_mat_id_postops_dispatch(const DispatchMatchContext & conte
 }
 
 void register_mul_mat_id_dispatches(DispatchRegistryBuilder & registry) {
+    registry.add({
+        "common.mul_mat_id.expert_scale.f32_f32_wmma",
+        GGML_OP_MUL_MAT_ID,
+        DispatchMatchKind::Fused,
+        190,
+        DispatchSource::Common,
+        match_mul_mat_id_expert_scale_dispatch,
+    });
     registry.add({
         "common.mul_mat_id.vector_mxfp4",
         GGML_OP_MUL_MAT_ID,

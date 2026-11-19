@@ -110,10 +110,12 @@ class GraphProgram {
 struct GraphProgramCacheStats {
     uint64_t builds                  = 0;
     uint64_t hits                    = 0;
+    size_t entries                   = 0;
 };
 
 struct GraphProgramLookup {
     std::shared_ptr<GraphProgram> program;
+    bool                         replaced_cached_program = false;
     GraphProgramMatch             match;
     Status                        status;
 
@@ -129,6 +131,16 @@ struct GraphProgramSupportResult {
 
 class GraphProgramCache {
   public:
+    /// The backend setter supplies the model architecture's preference in production;
+    /// operator tests use the same setter with an explicit value.
+    /// Configure before support checks or execution; keep fixed for this cache's lifetime.
+    void set_row64_weight_policy(bool enabled) { row64_weight_policy_ = enabled; }
+
+    // Device topology is fixed before support checks or execution for this cache.
+    void set_compute_units(uint32_t count) { compute_units_ = count; }
+
+    bool row64_weight_policy() const { return row64_weight_policy_; }
+
     bool can_execute(const ggml_cgraph & graph, const KernelCorpus & corpus, const std::string & target) const;
 
     GraphProgramSupportResult check_support(const ggml_cgraph &  graph,
@@ -138,18 +150,14 @@ class GraphProgramCache {
     GraphProgramLookup get_or_build(const ggml_cgraph & graph, const KernelCorpus & corpus, const std::string & target);
 
     GraphProgramCacheStats stats() const;
+    std::pair<uint64_t, std::shared_ptr<GraphProgram>> take_oldest(size_t limit);
 
     void clear();
 
   private:
     struct ValidatedGraphMatch {
-        std::shared_ptr<GraphProgram> program;
+        uint64_t                    program_uid = 0;
         const ggml_tensor * const * nodes   = nullptr;
-    };
-
-    struct Entry {
-        std::shared_ptr<GraphProgram> program;
-        uint64_t                      last_used = 0;
     };
 
     GraphProgramLookup build_from_imported(const ggml_cgraph &  graph,
@@ -163,11 +171,14 @@ class GraphProgramCache {
                                                               const std::string &  target,
                                                               Status &             errors) const;
 
+    // False preserves the existing matchers, including their row64 routes.
+    bool                                                       row64_weight_policy_ = false;
+    uint32_t                                                   compute_units_ = 0;
     mutable std::mutex                                          mutex_;
-    std::unordered_map<uint64_t, Entry>                         programs_;
+    std::unordered_map<uint64_t, std::shared_ptr<GraphProgram>> programs_;
     std::unordered_map<uint64_t, ValidatedGraphMatch>           validated_matches_;
-    std::shared_ptr<GraphProgram>                               last_program_;
-    uint64_t                                                    access_tick_ = 0;
+    std::unordered_map<uint64_t, uint64_t>                     last_use_;
+    uint64_t                                                   use_clock_ = 0;
     GraphProgramCacheStats                                      stats_;
 };
 

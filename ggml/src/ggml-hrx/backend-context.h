@@ -42,10 +42,13 @@ struct ggml_backend_hrx_buffer_context {
 
 struct ggml_backend_hrx_device_context {
     hrx_device_t                                   device = nullptr;
+    hrx_queue_t                                    transfer_queue = nullptr;
+    hrx_queue_t                                    stream_queue = nullptr;
     std::string                                    name;
     std::string                                    description;
     std::string                                    architecture;
     size_t                                         memory_total = 0;
+    uint32_t                                       compute_units = 0;
     bool                                           use_direct_host_bindings = false;
     ggml_backend_buffer_type                       buft               = {};
     ggml_backend_hrx_buffer_type_context           buft_context       = {};
@@ -64,6 +67,7 @@ struct ggml_backend_hrx_context {
     ggml::hrx::KernelExecutableCache       kernel_executables;
     ggml::hrx::GraphProgramCache           graph_programs;
     ggml::hrx::PreparedCommandProgramCache prepared_programs;
+    bool                                  cache_trim_pending = false;
     ggml::hrx::TransientArena              transient_arena;
     ggml::hrx::HostTransferManager         host_transfers;
     ggml::hrx::HostWeightCache             host_weights;
@@ -72,7 +76,8 @@ struct ggml_backend_hrx_context {
 };
 
 struct ggml_backend_hrx_reg_context {
-    bool                                                          initialized = false;
+    hrx_runtime_t                                                 runtime = nullptr;
+    hrx_device_group_t                                            group = nullptr;
     std::vector<std::unique_ptr<ggml_backend_hrx_device_context>> device_contexts;
     std::vector<ggml_backend_device>                              devices;
 

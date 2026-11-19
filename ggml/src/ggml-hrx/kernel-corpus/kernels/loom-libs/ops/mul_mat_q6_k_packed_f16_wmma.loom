@@ -6,9 +6,11 @@ config.decl @ggml.mul_mat_q6_k_packed.output_size : %value: index where [range(%
 
 config.decl @ggml.mul_mat_q6_k_packed.output_accumulation : %value: index where [range(%value, 0, 1)]
 
+config.def @ggml.mul_mat_q6_k_packed.weight_format = 6 : index
+
 config.decl @ggml.mul_mat_q6_k_packed.weight_offset : %value: index where [range(%value, 0, 2147483647), multiple_of(%value, 256)]
 
-config.decl @ggml.mul_mat_q6_k_packed.token_capacity : %value: index where [range(%value, 128, 2048), multiple_of(%value, 128)]
+config.decl @ggml.mul_mat_q6_k_packed.token_capacity : %value: index where [range(%value, 64, 2048)]
 
 config.decl @ggml.mul_mat_q6_k_shortlist.input_size : %value: index where [range(%value, 256, 32768), multiple_of(%value, 256)]
 
@@ -26,11 +28,13 @@ template.decl @ggml.mul_mat_q6_k_i8_prepacked.body(%token_count: index, %input_s
 
 template.decl @ggml.mul_mat_q6_k_packed.selected_refine.body(%token_count: index, %input_size0: index, %output_size0: index, %scale_row_layout: index, %candidate_count0: index, %input: buffer, %weight: buffer, %candidates: buffer, %output: buffer)
 
-template.decl @ggml.mul_mat_q6_k_packed.prefill_wave32.body(%input_is_f16: i1, %token_count: index, %input_size0: index, %output_size0: index, %channel_tile: index, %token_tile: index, %input: buffer, %weight: buffer, %output: buffer)
+template.decl @ggml.mul_mat_q6_k_packed.prefill_wave32.body(%input_is_f16: i1, %single_half: i1, %token_count: index, %input_size0: index, %output_size0: index, %channel_tile: index, %token_tile: index, %input: buffer, %weight: buffer, %output: buffer)
 
 amdgpu.target<gfx11-generic> @ggml_mul_mat_q6_k_prefill_gfx11_wave32 {subgroup_size = 32}
 
 func.decl @ggml_q6k_f16_pair(%half_packet: i1, %weight: buffer, %weight_row_byte_base: offset, %q6_block: index, %q6_group: index, %packet: index) -> (vector<16xf16>, vector<16xf16>)
+
+func.decl @ggml_q6k_native_row64_f16_pair(%half_packet: i1, %weight: buffer, %row: index, %input_size: index, %q6_block: index, %q6_group: index, %packet: index) -> (vector<16xf16>, vector<16xf16>)
 
 template.def<@ggml.mul_mat_q6_k_packed.publish_f16_wave32> device @ggml_mul_mat_q6_k_packed_publish_f16_wave32(%result: vector<16xf16>, %token_offset: index, %token_tile_base: index, %bounded_token_count: index, %bounded_output_size: index, %channel_tile_base: index, %subgroup_channel_add: index, %result_stage: buffer, %output_noalias: buffer, %output_accumulation: index) {
   %lane = kernel.subgroup.lane.id : index
@@ -1276,7 +1280,7 @@ template.def<@ggml.mul_mat_q6_k_packed.publish_f32_wave32> device @ggml_mul_mat_
   template.return
 }
 
-template.def<@ggml.mul_mat_q6_k_packed.prefill_wave32.body> device @ggml_mul_mat_q6_k_packed_prefill_wave32_body(%input_is_f16: i1, %token_count: index, %input_size0: index, %output_size0: index, %channel_tile: index, %token_tile: index, %input: buffer, %weight: buffer, %output: buffer) {
+template.def<@ggml.mul_mat_q6_k_packed.prefill_wave32.body> device @ggml_mul_mat_q6_k_packed_prefill_wave32_body(%input_is_f16: i1, %single_half: i1, %token_count: index, %input_size0: index, %output_size0: index, %channel_tile: index, %token_tile: index, %input: buffer, %weight: buffer, %output: buffer) {
   %output_accumulation = config.get @ggml.mul_mat_q6_k_packed.output_accumulation : index
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
   %bounded_input_size = index.assume %input_size0 [range(%input_size0, 256, 32768), multiple_of(%input_size0, 256)] : index
@@ -1298,7 +1302,6 @@ template.def<@ggml.mul_mat_q6_k_packed.prefill_wave32.body> device @ggml_mul_mat
   %c96 = index.constant 96 : index
   %c112 = index.constant 112 : index
   %c128 = index.constant 128 : index
-  %c210 = index.constant 210 : index
   %c256 = index.constant 256 : index
   %c0_offset = index.constant 0 : offset
   %weight_stage_bytes = index.constant 18432 : offset
@@ -1310,7 +1313,6 @@ template.def<@ggml.mul_mat_q6_k_packed.prefill_wave32.body> device @ggml_mul_mat
   %n = index.constant 16 : index
   %k = index.constant 16 : index
   %quant_block_count = index.div %bounded_input_size, %c256 : index
-  %weight_row_bytes = index.mul %quant_block_count, %c210 : index
   %input_noalias, %weight_noalias, %output_noalias = buffer.assume.noalias %input, %weight, %output : buffer, buffer, buffer
   %input_f32_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]x[%bounded_input_size]xf32>
   %input_f16_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]x[%bounded_input_size]xf16>
@@ -1321,7 +1323,8 @@ template.def<@ggml.mul_mat_q6_k_packed.prefill_wave32.body> device @ggml_mul_mat
   %activation_fragment_layout = encoding.layout.strided [1, %c72] : encoding<layout>
   %activation_fragment_view = buffer.view %activation_stage[%c0_offset] : buffer -> view<64x64xf16, %activation_fragment_layout>
   %channel_tile_base = index.mul %channel_tile, %c128 : index
-  %token_tile_base = index.mul %token_tile, %c128 : index
+  %token_tile_width = scf.select %single_half, %c64, %c128 : index
+  %token_tile_base = index.mul %token_tile, %token_tile_width : index
   %second_token_tile_base = index.add %token_tile_base, %c64 : index
   %load_half = index.rem %workitem, %c2 : index
   %load_packet = index.mul %load_half, %c4 : index
@@ -1354,10 +1357,20 @@ template.def<@ggml.mul_mat_q6_k_packed.prefill_wave32.body> device @ggml_mul_mat
       %channel = index.add %channel_tile_base, %weight_local_row : index
       %valid_channel = index.cmp ult, %channel, %bounded_output_size : index
       %weight_values0, %weight_values1 = scf.if %valid_channel -> (vector<16xf16>, vector<16xf16>) {
-        %channel_byte_index = index.mul %channel, %weight_row_bytes : index
-        %row_byte_base = index.cast %channel_byte_index : index to offset
         %half_packet = scalar.constant false : i1
-        %decoded0, %decoded1 = func.call @ggml_q6k_f16_pair(%half_packet, %weight_noalias, %row_byte_base, %quant_block, %quant_group, %load_packet) : (i1, buffer, offset, index, index, index) -> (vector<16xf16>, vector<16xf16>)
+        %weight_format = config.get @ggml.mul_mat_q6_k_packed.weight_format : index
+        %row64_format = index.constant 46 : index
+        %row64_weight = index.cmp eq, %weight_format, %row64_format : index
+        %decoded0, %decoded1 = scf.if %row64_weight -> (vector<16xf16>, vector<16xf16>) {
+          %row64_0, %row64_1 = func.call @ggml_q6k_native_row64_f16_pair(%half_packet, %weight_noalias, %channel, %bounded_input_size, %quant_block, %quant_group, %load_packet) : (i1, buffer, index, index, index, index, index) -> (vector<16xf16>, vector<16xf16>)
+          scf.yield %row64_0, %row64_1 : vector<16xf16>, vector<16xf16>
+        } else {
+          %native_block_bytes = index.constant 210 : offset
+          %native_row_bytes = index.scale %quant_block_count, %native_block_bytes : index, offset -> offset
+          %row_byte_base = index.scale %channel, %native_row_bytes : index, offset -> offset
+          %native0, %native1 = func.call @ggml_q6k_f16_pair(%half_packet, %weight_noalias, %row_byte_base, %quant_block, %quant_group, %load_packet) : (i1, buffer, offset, index, index, index) -> (vector<16xf16>, vector<16xf16>)
+          scf.yield %native0, %native1 : vector<16xf16>, vector<16xf16>
+        }
         scf.yield %decoded0, %decoded1 : vector<16xf16>, vector<16xf16>
       } else {
         scf.yield %c0_f16x4, %c0_f16x4 : vector<16xf16>, vector<16xf16>
@@ -1403,44 +1416,49 @@ template.def<@ggml.mul_mat_q6_k_packed.prefill_wave32.body> device @ggml_mul_mat
         scf.yield %half_next00, %half_next01, %half_next02, %half_next03 : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>
       }
       kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
-      scf.for %stage_half1 = [%c0 to %c2 step %c1] unroll {
-        %stage_k_base1 = index.mul %stage_half1, %c32 : index
-        %token1 = index.add %second_token_tile_base, %activation_load_row : index
-        %valid_token1 = index.cmp ult, %token1, %bounded_token_count : index
-        %activation_k1 = index.add %stage_k_base1, %activation_load_k : index
-        %activation_values1 = scf.if %valid_token1 -> (vector<8xf16>) {
-          %bounded_token1, %input_token_count1 = index.assume %token1, %bounded_token_count [lt(%token1, %bounded_token_count)] : index, index
-          %input_k1 = index.add %k_origin, %activation_k1 : index
-          %loaded1 = scf.if %input_is_f16 -> (vector<8xf16>) {
-            %narrow1 = vector.load %input_f16_view[%bounded_token1, %input_k1] : view<[%bounded_token_count]x[%bounded_input_size]xf16> -> vector<8xf16>
-            scf.yield %narrow1 : vector<8xf16>
+      %next10, %next11, %next12, %next13 = scf.if %single_half -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) {
+        scf.yield %acc10, %acc11, %acc12, %acc13 : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>
+      } else {
+        scf.for %stage_half1 = [%c0 to %c2 step %c1] unroll {
+          %stage_k_base1 = index.mul %stage_half1, %c32 : index
+          %token1 = index.add %second_token_tile_base, %activation_load_row : index
+          %valid_token1 = index.cmp ult, %token1, %bounded_token_count : index
+          %activation_k1 = index.add %stage_k_base1, %activation_load_k : index
+          %activation_values1 = scf.if %valid_token1 -> (vector<8xf16>) {
+            %bounded_token1, %input_token_count1 = index.assume %token1, %bounded_token_count [lt(%token1, %bounded_token_count)] : index, index
+            %input_k1 = index.add %k_origin, %activation_k1 : index
+            %loaded1 = scf.if %input_is_f16 -> (vector<8xf16>) {
+              %narrow1 = vector.load %input_f16_view[%bounded_token1, %input_k1] : view<[%bounded_token_count]x[%bounded_input_size]xf16> -> vector<8xf16>
+              scf.yield %narrow1 : vector<8xf16>
+            } else {
+              %wide1 = vector.load %input_f32_view[%bounded_token1, %input_k1] : view<[%bounded_token_count]x[%bounded_input_size]xf32> -> vector<8xf32>
+              %narrow1 = vector.fptrunc %wide1 : vector<8xf32> to vector<8xf16>
+              scf.yield %narrow1 : vector<8xf16>
+            }
+            scf.yield %loaded1 : vector<8xf16>
           } else {
-            %wide1 = vector.load %input_f32_view[%bounded_token1, %input_k1] : view<[%bounded_token_count]x[%bounded_input_size]xf32> -> vector<8xf32>
-            %narrow1 = vector.fptrunc %wide1 : vector<8xf32> to vector<8xf16>
-            scf.yield %narrow1 : vector<8xf16>
+            scf.yield %c0_f16x8 : vector<8xf16>
           }
-          scf.yield %loaded1 : vector<8xf16>
-        } else {
-          scf.yield %c0_f16x8 : vector<8xf16>
+          vector.store %activation_values1, %activation_stage_physical_view[%activation_load_row, %activation_k1] : vector<8xf16>, view<64x72xf16>
         }
-        vector.store %activation_values1, %activation_stage_physical_view[%activation_load_row, %activation_k1] : vector<8xf16>, view<64x72xf16>
+        kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+        %second10, %second11, %second12, %second13 = scf.for %k_half1 = [%c0 to %c64 step %c16](%half_acc10 = %acc10 : vector<8xf32>, %half_acc11 = %acc11 : vector<8xf32>, %half_acc12 = %acc12 : vector<8xf32>, %half_acc13 = %acc13 : vector<8xf32>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) unroll {
+          %lhs1 = vector.fragment.load<lhs> %weight_stage_view[%subgroup_channel_add, %k_half1] shape [%m, %k] : view<128x72xf16> -> vector<16xf16>
+          %rhs10 = vector.fragment.load<rhs> %activation_fragment_view[%k_half1, %c0] shape [%k, %n] : view<64x64xf16, %activation_fragment_layout> -> vector<16xf16>
+          %rhs11 = vector.fragment.load<rhs> %activation_fragment_view[%k_half1, %c16] shape [%k, %n] : view<64x64xf16, %activation_fragment_layout> -> vector<16xf16>
+          %half_next10 = vector.mma %lhs1, %rhs10, %half_acc10 : vector<16xf16>, vector<16xf16>, vector<8xf32>
+          %half_next11 = vector.mma %lhs1, %rhs11, %half_acc11 : vector<16xf16>, vector<16xf16>, vector<8xf32>
+          scf.schedule.fence
+          %rhs12 = vector.fragment.load<rhs> %activation_fragment_view[%k_half1, %c32] shape [%k, %n] : view<64x64xf16, %activation_fragment_layout> -> vector<16xf16>
+          %rhs13 = vector.fragment.load<rhs> %activation_fragment_view[%k_half1, %c48] shape [%k, %n] : view<64x64xf16, %activation_fragment_layout> -> vector<16xf16>
+          %half_next12 = vector.mma %lhs1, %rhs12, %half_acc12 : vector<16xf16>, vector<16xf16>, vector<8xf32>
+          %half_next13 = vector.mma %lhs1, %rhs13, %half_acc13 : vector<16xf16>, vector<16xf16>, vector<8xf32>
+          scf.schedule.fence
+          scf.yield %half_next10, %half_next11, %half_next12, %half_next13 : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>
+        }
+        kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+        scf.yield %second10, %second11, %second12, %second13 : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>
       }
-      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
-      %next10, %next11, %next12, %next13 = scf.for %k_half1 = [%c0 to %c64 step %c16](%half_acc10 = %acc10 : vector<8xf32>, %half_acc11 = %acc11 : vector<8xf32>, %half_acc12 = %acc12 : vector<8xf32>, %half_acc13 = %acc13 : vector<8xf32>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) unroll {
-        %lhs1 = vector.fragment.load<lhs> %weight_stage_view[%subgroup_channel_add, %k_half1] shape [%m, %k] : view<128x72xf16> -> vector<16xf16>
-        %rhs10 = vector.fragment.load<rhs> %activation_fragment_view[%k_half1, %c0] shape [%k, %n] : view<64x64xf16, %activation_fragment_layout> -> vector<16xf16>
-        %rhs11 = vector.fragment.load<rhs> %activation_fragment_view[%k_half1, %c16] shape [%k, %n] : view<64x64xf16, %activation_fragment_layout> -> vector<16xf16>
-        %half_next10 = vector.mma %lhs1, %rhs10, %half_acc10 : vector<16xf16>, vector<16xf16>, vector<8xf32>
-        %half_next11 = vector.mma %lhs1, %rhs11, %half_acc11 : vector<16xf16>, vector<16xf16>, vector<8xf32>
-        scf.schedule.fence
-        %rhs12 = vector.fragment.load<rhs> %activation_fragment_view[%k_half1, %c32] shape [%k, %n] : view<64x64xf16, %activation_fragment_layout> -> vector<16xf16>
-        %rhs13 = vector.fragment.load<rhs> %activation_fragment_view[%k_half1, %c48] shape [%k, %n] : view<64x64xf16, %activation_fragment_layout> -> vector<16xf16>
-        %half_next12 = vector.mma %lhs1, %rhs12, %half_acc12 : vector<16xf16>, vector<16xf16>, vector<8xf32>
-        %half_next13 = vector.mma %lhs1, %rhs13, %half_acc13 : vector<16xf16>, vector<16xf16>, vector<8xf32>
-        scf.schedule.fence
-        scf.yield %half_next10, %half_next11, %half_next12, %half_next13 : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>
-      }
-      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
       scf.yield %next00, %next01, %next02, %next03, %next10, %next11, %next12, %next13 : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>
     }
     scf.yield %block_result00, %block_result01, %block_result02, %block_result03, %block_result10, %block_result11, %block_result12, %block_result13 : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>
@@ -1449,10 +1467,14 @@ template.def<@ggml.mul_mat_q6_k_packed.prefill_wave32.body> device @ggml_mul_mat
   template.apply<@ggml.mul_mat_q6_k_packed.publish_f32_wave32>(%result01, %c16, %token_tile_base, %bounded_token_count, %bounded_output_size, %channel_tile_base, %subgroup_channel_add, %output_noalias, %output_accumulation) : (vector<8xf32>, index, index, index, index, index, index, buffer, index)
   template.apply<@ggml.mul_mat_q6_k_packed.publish_f32_wave32>(%result02, %c32, %token_tile_base, %bounded_token_count, %bounded_output_size, %channel_tile_base, %subgroup_channel_add, %output_noalias, %output_accumulation) : (vector<8xf32>, index, index, index, index, index, index, buffer, index)
   template.apply<@ggml.mul_mat_q6_k_packed.publish_f32_wave32>(%result03, %c48, %token_tile_base, %bounded_token_count, %bounded_output_size, %channel_tile_base, %subgroup_channel_add, %output_noalias, %output_accumulation) : (vector<8xf32>, index, index, index, index, index, index, buffer, index)
-  template.apply<@ggml.mul_mat_q6_k_packed.publish_f32_wave32>(%result10, %c64, %token_tile_base, %bounded_token_count, %bounded_output_size, %channel_tile_base, %subgroup_channel_add, %output_noalias, %output_accumulation) : (vector<8xf32>, index, index, index, index, index, index, buffer, index)
-  template.apply<@ggml.mul_mat_q6_k_packed.publish_f32_wave32>(%result11, %c80, %token_tile_base, %bounded_token_count, %bounded_output_size, %channel_tile_base, %subgroup_channel_add, %output_noalias, %output_accumulation) : (vector<8xf32>, index, index, index, index, index, index, buffer, index)
-  template.apply<@ggml.mul_mat_q6_k_packed.publish_f32_wave32>(%result12, %c96, %token_tile_base, %bounded_token_count, %bounded_output_size, %channel_tile_base, %subgroup_channel_add, %output_noalias, %output_accumulation) : (vector<8xf32>, index, index, index, index, index, index, buffer, index)
-  template.apply<@ggml.mul_mat_q6_k_packed.publish_f32_wave32>(%result13, %c112, %token_tile_base, %bounded_token_count, %bounded_output_size, %channel_tile_base, %subgroup_channel_add, %output_noalias, %output_accumulation) : (vector<8xf32>, index, index, index, index, index, index, buffer, index)
+  %true = scalar.constant true : i1
+  %double_half = scalar.xori %single_half, %true : i1
+  scf.if %double_half {
+    template.apply<@ggml.mul_mat_q6_k_packed.publish_f32_wave32>(%result10, %c64, %token_tile_base, %bounded_token_count, %bounded_output_size, %channel_tile_base, %subgroup_channel_add, %output_noalias, %output_accumulation) : (vector<8xf32>, index, index, index, index, index, index, buffer, index)
+    template.apply<@ggml.mul_mat_q6_k_packed.publish_f32_wave32>(%result11, %c80, %token_tile_base, %bounded_token_count, %bounded_output_size, %channel_tile_base, %subgroup_channel_add, %output_noalias, %output_accumulation) : (vector<8xf32>, index, index, index, index, index, index, buffer, index)
+    template.apply<@ggml.mul_mat_q6_k_packed.publish_f32_wave32>(%result12, %c96, %token_tile_base, %bounded_token_count, %bounded_output_size, %channel_tile_base, %subgroup_channel_add, %output_noalias, %output_accumulation) : (vector<8xf32>, index, index, index, index, index, index, buffer, index)
+    template.apply<@ggml.mul_mat_q6_k_packed.publish_f32_wave32>(%result13, %c112, %token_tile_base, %bounded_token_count, %bounded_output_size, %channel_tile_base, %subgroup_channel_add, %output_noalias, %output_accumulation) : (vector<8xf32>, index, index, index, index, index, index, buffer, index)
+  }
   template.return
 }
 
@@ -1474,11 +1496,40 @@ kernel.def target(@ggml_mul_mat_q6_k_prefill_gfx11_wave32) export("ggml_mul_mat_
   %input_size = config.get @ggml.mul_mat_q6_k_packed.input_size : index
   %output_size = config.get @ggml.mul_mat_q6_k_packed.output_size : index
   %token_capacity = config.get @ggml.mul_mat_q6_k_packed.token_capacity : index
-  %bounded_token_count = index.assume %token_count [range(%token_count, 128, 2048), le(%token_count, %token_capacity)] : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 64, 2048), le(%token_count, %token_capacity)] : index
   %channel_tile = kernel.workgroup.id<y> : index
   %token_tile = kernel.workgroup.id<x> : index
   %input_is_f16 = scalar.constant false : i1
-  template.apply<@ggml.mul_mat_q6_k_packed.prefill_wave32.body>(%input_is_f16, %bounded_token_count, %input_size, %output_size, %channel_tile, %token_tile, %input, %weight, %output) : (i1, index, index, index, index, index, buffer, buffer, buffer)
+  %single_half = scalar.constant false : i1
+  template.apply<@ggml.mul_mat_q6_k_packed.prefill_wave32.body>(%input_is_f16, %single_half, %bounded_token_count, %input_size, %output_size, %channel_tile, %token_tile, %input, %weight, %output) : (i1, i1, index, index, index, index, index, buffer, buffer, buffer)
+  kernel.return
+}
+
+// Use one M64 half per workgroup for short F32 prompts.
+kernel.def target(@ggml_mul_mat_q6_k_prefill_gfx11_wave32) export("ggml_mul_mat_q6_k_f32_wmma_prefill_m64_wave32") @ggml_mul_mat_q6_k_f32_wmma_prefill_m64_wave32(%token_count: index) {
+  %output_size = config.get @ggml.mul_mat_q6_k_packed.output_size : index
+  %token_capacity = config.get @ggml.mul_mat_q6_k_packed.token_capacity : index
+  %c1 = index.constant 1 : index
+  %c127 = index.constant 127 : index
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %c256 = index.constant 256 : index
+  %padded_output_size = index.add %output_size, %c127 : index
+  %output_tiles = index.div %padded_output_size, %c128 : index
+  %c63 = index.constant 63 : index
+  %padded_token_count = index.add %token_capacity, %c63 : index
+  %token_tiles = index.div %padded_token_count, %c64 : index
+  kernel.launch.config workgroups(%token_tiles, %output_tiles, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %weight: buffer, %output: buffer) {
+  %input_size = config.get @ggml.mul_mat_q6_k_packed.input_size : index
+  %output_size = config.get @ggml.mul_mat_q6_k_packed.output_size : index
+  %token_capacity = config.get @ggml.mul_mat_q6_k_packed.token_capacity : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 64, 2048), le(%token_count, %token_capacity)] : index
+  %channel_tile = kernel.workgroup.id<y> : index
+  %token_tile = kernel.workgroup.id<x> : index
+  %input_is_f16 = scalar.constant false : i1
+  %single_half = scalar.constant true : i1
+  template.apply<@ggml.mul_mat_q6_k_packed.prefill_wave32.body>(%input_is_f16, %single_half, %bounded_token_count, %input_size, %output_size, %channel_tile, %token_tile, %input, %weight, %output) : (i1, i1, index, index, index, index, index, buffer, buffer, buffer)
   kernel.return
 }
 
@@ -1561,20 +1612,21 @@ kernel.def target(@ggml_mul_mat_q6_k_prefill_gfx11_wave32) export("ggml_mul_mat_
   %token_capacity = config.get @ggml.mul_mat_q6_k_packed.token_capacity : index
   %output_accumulation = config.get @ggml.mul_mat_q6_k_packed.output_accumulation : index
   %packed_input, %packed_n_tile = func.call pure @ggml_q6k_prefill_packed_tile(%token_capacity, %input_size, %output_size, %output_accumulation) : (index, index, index, index) -> (i1, index)
-  %bounded_token_count = index.assume %token_count [range(%token_count, 128, 2048), le(%token_count, %token_capacity)] : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 64, 2048), le(%token_count, %token_capacity)] : index
   %channel_tile = kernel.workgroup.id<y> : index
   %token_tile = kernel.workgroup.id<x> : index
   %workgroup_size = kernel.workgroup.size<x> : index
   %c512 = index.constant 512 : index
   %wide_tile = index.cmp uge, %workgroup_size, %c512 : index
   scf.if %wide_tile {
-    %weight_format = index.constant 6 : index
+    %weight_format = config.get @ggml.mul_mat_q6_k_packed.weight_format : index
     %paired = scalar.constant false : i1
     %prefill_binary_op = index.constant 0 : index
     func.call @ggml_mul_mat_quantized_f16_prefill_wave32(%weight_format, %prefill_binary_op, %paired, %packed_input, %paired, %bounded_token_count, %input_size, %output_size, %channel_tile, %token_tile, %input, %weight, %weight, %output, %output) : (index, index, i1, i1, i1, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer)
   } else {
     %input_is_f16 = scalar.constant true : i1
-    template.apply<@ggml.mul_mat_q6_k_packed.prefill_wave32.body>(%input_is_f16, %bounded_token_count, %input_size, %output_size, %channel_tile, %token_tile, %input, %weight, %output) : (i1, index, index, index, index, index, buffer, buffer, buffer)
+    %single_half = scalar.constant false : i1
+    template.apply<@ggml.mul_mat_q6_k_packed.prefill_wave32.body>(%input_is_f16, %single_half, %bounded_token_count, %input_size, %output_size, %channel_tile, %token_tile, %input, %weight, %output) : (i1, i1, index, index, index, index, index, buffer, buffer, buffer)
   }
   kernel.return
 }
