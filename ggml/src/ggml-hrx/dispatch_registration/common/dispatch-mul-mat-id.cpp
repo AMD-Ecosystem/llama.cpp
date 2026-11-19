@@ -245,7 +245,7 @@ static bool build_mul_mat_id_mxfp4_q8_dispatch(const DispatchMatchContext & cont
         { "output_size",       match.output_size       },
         { "route_count",       match.route_count       },
         { "input_route_count", match.input_route_count },
-        { "route_stride",      match.route_stride      },
+        { "route_stride",      match.route_stride()    },
         { "expert_count",      match.expert_count      }
     };
     for (const auto & parameter : parameters) {
@@ -304,7 +304,7 @@ static bool match_mul_mat_id_vector_mxfp4(const DispatchMatchContext & context, 
                                                        std::to_string(parameter.second));
         }
         dispatch.kernel.compile_parameters.emplace("ggml.mxfp4_vector.route_stride",
-                                                   std::to_string(match.route_stride));
+                                                   std::to_string(match.route_stride()));
         const ValueId groups(context.next_plan_value.value + static_cast<int32_t>(dispatch_match.transients.size()));
         const size_t  bytes = static_cast<size_t>(match.token_count * match.route_count) * 4 * sizeof(int32_t);
         dispatch_match.transients.push_back({ groups, "common.mul_mat_id.groups", bytes, 256 });
@@ -506,7 +506,7 @@ static MulMatIdExpertScaleMatch match_mul_mat_id_expert_scale(const DispatchMatc
     }
 
     const size_t expected_id_bytes =
-        static_cast<size_t>((root.token_count - 1) * root.route_stride + root.route_count) * sizeof(int32_t);
+        static_cast<size_t>((root.token_count - 1) * root.route_stride() + root.route_count) * sizeof(int32_t);
     if (root.route_ids->byte_count != expected_id_bytes) {
         return {};
     }
@@ -517,7 +517,7 @@ static MulMatIdExpertScaleMatch match_mul_mat_id_expert_scale(const DispatchMatc
     match.repeat = repeat;
     match.gather = gather;
     match.multiply = multiply;
-    match.route_stride = root.route_stride;
+    match.route_stride = root.route_stride();
     return match;
 }
 

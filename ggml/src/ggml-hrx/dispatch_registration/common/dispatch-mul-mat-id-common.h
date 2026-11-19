@@ -26,10 +26,13 @@ struct CommonMulMatIdMatch {
     int64_t                     output_size        = 0;
     int64_t                     token_count        = 0;
     int64_t                     route_count        = 0;
-    int64_t                     route_stride       = 0;
     int64_t                     input_route_count  = 0;
     int64_t                     expert_count       = 0;
     CommonMulMatWeightFormat    weight_format      = CommonMulMatWeightFormat::Q4K;
+
+    int64_t route_stride() const {
+        return token_count == 1 ? route_count : static_cast<int64_t>(route_ids->nb[1] / sizeof(int32_t));
+    }
 
     bool matched() const { return input != nullptr && weight != nullptr && output != nullptr && route_ids != nullptr; }
 };
@@ -242,7 +245,6 @@ inline CommonMulMatIdMatch common_match_mul_mat_id_any_format(const Graph &     
     match.output_size       = output_size;
     match.token_count       = token_count;
     match.route_count       = route_count;
-    match.route_stride      = static_cast<int64_t>(route_row_bytes / sizeof(int32_t));
     match.input_route_count = input_route_count;
     match.expert_count      = expert_count;
     match.weight_format     = format;
@@ -293,7 +295,7 @@ inline bool common_mul_mat_id_ensure_moe_routing_bundle(const DispatchMatchConte
     const size_t  expert_table_bytes = common_mul_mat_id_expert_table_size(match.token_count, match.expert_count);
     const size_t  partition_table_bytes =
         common_mul_mat_id_partition_table_size(match.token_count, match.route_count, match.expert_count);
-    const int64_t route_stride = match.route_stride;
+    const int64_t route_stride = match.route_stride();
     const size_t  route_ids_length =
         static_cast<size_t>((match.token_count - 1) * route_stride + match.route_count) * sizeof(int32_t);
 
