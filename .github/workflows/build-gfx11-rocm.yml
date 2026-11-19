@@ -326,6 +326,8 @@ jobs:
           -DGPU_TARGETS="$gpu_targets" \
           -DBUILD_SHARED_LIBS=ON \
           -DLLAMA_BUILD_TESTS=OFF \
+          -DLLAMA_BUILD_UI=ON \
+          -DLLAMA_USE_PREBUILT_UI=OFF \
           -DGGML_HIP=ON \
           -DGGML_OPENMP=OFF \
           -DGGML_CUDA_FORCE_CUBLAS=OFF \
@@ -338,6 +340,7 @@ jobs:
           -DCMAKE_SYSTEM_NAME=Linux
 
         cmake --build . -j $(nproc)
+        test -s tools/ui/dist/index.html
 
     - name: Copy ROCm core libs to build directory
       run: |
