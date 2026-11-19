@@ -1,11 +1,19 @@
 // Copyright 2026 The HRX Authors
 // SPDX-License-Identifier: Apache-2.0
 
-template.decl @qwen3_moe.dense.q4k_q8_1_x4.body(%row64: i1, %publish_output: i1, %token_count: index, %token0: index, %q8_input: buffer, %weight: buffer, %output: buffer)
+template.decl @qwen3_moe.dense.q4k_q8_1_x4.body(%publish_output: i1, %token_count: index, %token0: index, %q8_input: buffer, %weight: buffer, %output: buffer)
 
 template.decl @qwen3_moe.rmsnorm_quantize_q8_1_x4.body(%arg0: i1, %arg1: index, %arg2: index, %arg3: index, %arg4: buffer, %arg5: buffer, %arg6: buffer, %arg7: buffer)
 
+func.decl @ggml_matmul_vector_q4_q8_1_x4_activation_dot(%weight_format: index, %token_count: index, %input_size: index, %output_size: index, %output_accumulation: index, %output_unary_op: index, %epsilon: f32, %channel_group: index, %token_group: index, %input: buffer, %weight: buffer, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer, %next_output: buffer)
+
 config.decl @qwen3_moe.dense_quantized.weight_layout : %value: index where [range(%value, 0, 1)]
+
+template.decl @ggml.matmul.vector_activation.finish_output_group(%arg0: index, %arg1: index, %arg2: index, %arg3: index, %arg4: index, %arg5: index, %arg6: f32, %arg7: index, %arg8: index, %arg9: buffer, %arg10: buffer, %arg11: buffer, %arg12: buffer, %arg13: buffer, %arg14: buffer, %arg15: buffer)
+
+template.decl @ggml.matmul.vector_activation.publish_vector4(%arg0: i1, %arg1: index, %arg2: index, %arg3: index, %arg4: index, %arg5: index, %arg6: index, %arg7: index, %arg8: vector<4xf32>, %arg9: buffer, %arg10: buffer, %arg11: buffer, %arg12: buffer, %arg13: buffer, %arg14: buffer, %arg15: buffer, %arg16: buffer)
+
+config.decl @qwen3_moe.dense_quantized.input_size : %value: index where [range(%value, 256, 32768), multiple_of(%value, 256)]
 
 target.decl @qwen3_moe_attention_prepare_gfx11_wave32
 
@@ -17,8 +25,12 @@ kernel.def target(@qwen3_moe_attention_prepare_gfx11_wave32) @qwen3_moe_dense_li
   %output_size = config.get @qwen3_moe.dense_quantized.output_size : index
   %c1 = index.constant 1 : index
   %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %layout = config.get @qwen3_moe.dense_quantized.weight_layout : index
+  %row64 = index.cmp eq, %layout, %c1 : index
+  %rows = scf.select %row64, %c16, %c8 : index
   %c256 = index.constant 256 : index
-  %output_tiles = index.div %output_size, %c8 : index
+  %output_tiles = index.div %output_size, %rows : index
   kernel.launch.config workgroups(%output_tiles, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
 } launch(%token_count: index, %q8_input: buffer, %weight: buffer, %output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counter: buffer, %next_q8_output: buffer) {
   %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1)] : index
@@ -27,7 +39,18 @@ kernel.def target(@qwen3_moe_attention_prepare_gfx11_wave32) @qwen3_moe_dense_li
   %row64 = index.cmp eq, %layout, %one : index
   %publish_output = scalar.constant true : i1
   %projection_token = kernel.workgroup.id<y> : index
-  template.apply<@qwen3_moe.dense.q4k_q8_1_x4.body>(%row64, %publish_output, %bounded_token_count, %projection_token, %q8_input, %weight, %output) : (i1, i1, index, index, buffer, buffer, buffer)
+  scf.if %row64 {
+    %input_size = config.get @qwen3_moe.dense_quantized.input_size : index
+    %output_size = config.get @qwen3_moe.dense_quantized.output_size : index
+    %format = index.constant 44 : index
+    %accumulate = index.constant 1 : index
+    %identity = index.constant 23 : index
+    %epsilon = scalar.constant 0.000001 : f32
+    %group = kernel.workgroup.id<x> : index
+    func.call @ggml_matmul_vector_q4_q8_1_x4_activation_dot(%format, %bounded_token_count, %input_size, %output_size, %accumulate, %identity, %epsilon, %group, %projection_token, %q8_input, %weight, %output, %output, %output, %output, %norm_weight, %normalized_output, %completion_counter, %next_q8_output) : (index, index, index, index, index, index, f32, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  } else {
+    template.apply<@qwen3_moe.dense.q4k_q8_1_x4.body>(%publish_output, %bounded_token_count, %projection_token, %q8_input, %weight, %output) : (i1, index, index, buffer, buffer, buffer)
+  }
   %output_size0 = config.get @qwen3_moe.dense_quantized.output_size : index
   %output_size = index.assume %output_size0 [range(%output_size0, 128, 32768), multiple_of(%output_size0, 128)] : index
   %token0 = kernel.workgroup.id<y> : index
@@ -35,7 +58,9 @@ kernel.def target(@qwen3_moe_attention_prepare_gfx11_wave32) @qwen3_moe_dense_li
   %c0 = index.constant 0 : index
   %c8 = index.constant 8 : index
   %workitem = kernel.workitem.id<x> : index
-  %output_tile_count = index.div %output_size, %c8 : index
+  %c16 = index.constant 16 : index
+  %rows = scf.select %row64, %c16, %c8 : index
+  %output_tile_count = index.div %output_size, %rows : index
   %is_arrival_workitem = index.cmp eq, %workitem, %c0 : index
   %c0_i32 = scalar.constant 0 : i32
   %c1_i32 = scalar.constant 1 : i32
@@ -70,4 +95,20 @@ kernel.def target(@qwen3_moe_attention_prepare_gfx11_wave32) @qwen3_moe_dense_li
     }
   }
   kernel.return
+}
+
+// The common Q4 contraction publishes residual packets before the Qwen row arrival.
+template.def<@ggml.matmul.vector_activation.publish_vector4> device @qwen_output_publish_residual(%publish_word: i1, %token: index, %channel: index, %tokens: index, %size: index, %accumulation: index, %unary: index, %format: index, %values: vector<4xf32>, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %counter: buffer, %next: buffer) {
+  %base = index.constant 0 : offset
+  %view = buffer.view %output[%base] : buffer -> view<[%tokens]x[%size]xf32>
+  scf.if %publish_word {
+    %residual = vector.load %view[%token, %channel] : view<[%tokens]x[%size]xf32> -> vector<4xf32>
+    %sum = vector.addf %residual, %values : vector<4xf32>
+    vector.store %sum, %view[%token, %channel] : vector<4xf32>, view<[%tokens]x[%size]xf32>
+  }
+  template.return
+}
+
+template.def<@ggml.matmul.vector_activation.finish_output_group> device @qwen_output_finish_projection(%tokens: index, %size: index, %groups: index, %token_groups: index, %accumulation: index, %unary: index, %epsilon: f32, %group: index, %token_group: index, %bias: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %counter: buffer) {
+  template.return
 }

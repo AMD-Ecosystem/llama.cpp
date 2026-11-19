@@ -1,5 +1,5 @@
-// Native and row64 Q4_K x Q8_1 x4 row contraction shared by dense wrappers.
-// Layout selection changes loads while each lane reuses both packed nibbles.
+// Packed Q4_K x Q8_1 x4 row contraction shared by dense wrappers.
+// The symbols and bodies are preserved from the retired routed gate-up packet.
 
 func.def inline @qwen3_moe_q4k_scale_from_header(%scale0: i32, %scale1: i32, %scale2: i32, %q4_group: index) -> (i32, i32) {
   %c4 = index.constant 4 : index
@@ -32,7 +32,7 @@ func.def inline @qwen3_moe_q4k_scale_from_header(%scale0: i32, %scale1: i32, %sc
   func.return %scale, %minimum : i32, i32
 }
 
-func.def inline @qwen3_moe_q4k_chunk_pair_global_layout(%row64: i1, %row: index, %input_size: index, %weight: buffer, %row_byte_base: offset, %q4_block: index, %q4_group_pair: index, %q4_half: index, %header_words: vector<4xi32>) -> (vector<16xi8>, f32, f32, vector<16xi8>, f32, f32) {
+func.def inline @qwen3_moe_q4k_chunk_pair_global(%weight: buffer, %row_byte_base: offset, %q4_block: index, %q4_group_pair: index, %q4_half: index, %header_words: vector<4xi32>) -> (vector<16xi8>, f32, f32, vector<16xi8>, f32, f32) {
   %c1 = index.constant 1 : index
   %c2 = index.constant 2 : index
   %c4 = index.constant 4 : index
@@ -59,28 +59,7 @@ func.def inline @qwen3_moe_q4k_chunk_pair_global_layout(%row64: i1, %row: index,
   %half_code_add = index.mul %bounded_half, %c4 : index
   %code_index0 = index.add %pair_code_base, %half_code_add : index
   %code_index = index.assume %code_index0 [range(%code_index0, 0, 28)] : index
-  %packed_codes = scf.if %row64 -> (vector<4xi32>) {
-    %c64 = index.constant 64 : index
-    %c256 = index.constant 256 : index
-    %record_bytes = index.constant 9216 : offset
-    %payload_add = index.constant 1024 : offset
-    %blocks = index.div %input_size, %c256 : index
-    %row_group = index.div %row, %c64 : index
-    %row_lane = index.rem %row, %c64 : index
-    %tile0 = index.mul %row_group, %blocks : index
-    %tile = index.add %tile0, %q4_block : index
-    %tile_base = index.scale %tile, %record_bytes : index, offset -> offset
-    %payload_base = index.add %tile_base, %payload_add : offset
-    %payload = buffer.view %weight[%payload_base] : buffer -> view<8x64x4xi32>
-    %field0 = index.mul %bounded_pair, %c2 : index
-    %field = index.add %field0, %bounded_half : index
-    %zero = index.constant 0 : index
-    %words = vector.load %payload[%field, %row_lane, %zero] : view<8x64x4xi32> -> vector<4xi32>
-    scf.yield %words : vector<4xi32>
-  } else {
-    %words = vector.load %code_view[%code_index] : view<32xi32> -> vector<4xi32>
-    scf.yield %words : vector<4xi32>
-  }
+  %packed_codes = vector.load %code_view[%code_index] : view<32xi32> -> vector<4xi32>
   %low_codes = vector.andi %packed_codes, %nibble_mask : vector<4xi32>
   %c4_i32v = vector.splat %c4_i32 : vector<4xi32>
   %high_shifted = vector.shrui %packed_codes, %c4_i32v : vector<4xi32>
@@ -117,7 +96,7 @@ func.def inline @qwen3_moe_q4k_q8_1_dot(%q4_values: vector<16xi8>, %d_scale: f32
   func.return %contribution : f32
 }
 
-func.def inline @qwen3_moe_q4k_q8_1_x4_paired_block_lane_layout(%row64: i1, %row: index, %input_size: index, %weight: buffer, %weight_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %q4_block: index, %block_lane: index) -> (f32) {
+func.def inline @qwen3_moe_q4k_q8_1_x4_paired_block_lane(%input_size: index, %weight: buffer, %weight_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %q4_block: index, %block_lane: index) -> (f32) {
   %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), multiple_of(%input_size, 256)] : index
   %bounded_q4_block0 = index.assume %q4_block [range(%q4_block, 0, 127)] : index
   %bounded_block_lane = index.assume %block_lane [range(%block_lane, 0, 7)] : index
@@ -178,32 +157,15 @@ func.def inline @qwen3_moe_q4k_q8_1_x4_paired_block_lane_layout(%row64: i1, %row
   %q4_block_byte_add = index.scale %bounded_q4_block, %q4_block_bytes : index, offset -> offset
   %q4_block_byte_base = index.add %weight_row_byte_base, %q4_block_byte_add : offset
   %q4_header_view = buffer.view %weight[%q4_block_byte_base] : buffer -> view<4xi32>
-  %q4_header_words = scf.if %row64 -> (vector<4xi32>) {
-    %c64 = index.constant 64 : index
-    %record_bytes = index.constant 9216 : offset
-    %header_bytes = index.constant 16 : offset
-    %row_group = index.div %row, %c64 : index
-    %row_lane = index.rem %row, %c64 : index
-    %tile0 = index.mul %row_group, %q4_block_count : index
-    %tile = index.add %tile0, %bounded_q4_block : index
-    %tile_base = index.scale %tile, %record_bytes : index, offset -> offset
-    %header_add = index.scale %row_lane, %header_bytes : index, offset -> offset
-    %header_base = index.add %tile_base, %header_add : offset
-    %header = buffer.view %weight[%header_base] : buffer -> view<4xi32>
-    %words = vector.load %header[0] : view<4xi32> -> vector<4xi32>
-    scf.yield %words : vector<4xi32>
-  } else {
-    %words = vector.load %q4_header_view[0] : view<4xi32> -> vector<4xi32>
-    scf.yield %words : vector<4xi32>
-  }
-  %q4_low, %low_d_scale, %low_dmin_scale, %q4_high, %high_d_scale, %high_dmin_scale = func.call @qwen3_moe_q4k_chunk_pair_global_layout(%row64, %row, %bounded_input_size, %weight, %weight_row_byte_base, %bounded_q4_block, %q4_group_pair, %q4_half, %q4_header_words) : (i1, index, index, buffer, offset, index, index, index, vector<4xi32>) -> (vector<16xi8>, f32, f32, vector<16xi8>, f32, f32)
+  %q4_header_words = vector.load %q4_header_view[0] : view<4xi32> -> vector<4xi32>
+  %q4_low, %low_d_scale, %low_dmin_scale, %q4_high, %high_d_scale, %high_dmin_scale = func.call @qwen3_moe_q4k_chunk_pair_global(%weight, %weight_row_byte_base, %bounded_q4_block, %q4_group_pair, %q4_half, %q4_header_words) : (buffer, offset, index, index, index, vector<4xi32>) -> (vector<16xi8>, f32, f32, vector<16xi8>, f32, f32)
   %low = func.call @qwen3_moe_q4k_q8_1_dot(%q4_low, %low_d_scale, %low_dmin_scale, %q8_low_values, %q8_low_d, %q8_low_s) : (vector<16xi8>, f32, f32, vector<16xi8>, f32, f32) -> (f32)
   %high = func.call @qwen3_moe_q4k_q8_1_dot(%q4_high, %high_d_scale, %high_dmin_scale, %q8_high_values, %q8_high_d, %q8_high_s) : (vector<16xi8>, f32, f32, vector<16xi8>, f32, f32) -> (f32)
   %pair = scalar.addf %low, %high : f32
   func.return %pair : f32
 }
 
-func.def inline @qwen3_moe_q4k_q8_1_x4_paired_row_lane_layout(%row64: i1, %row: index, %input_size: index, %weight: buffer, %weight_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %lane: index) -> (f32) {
+func.def inline @qwen3_moe_q4k_q8_1_x4_paired_row_lane(%input_size: index, %weight: buffer, %weight_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %lane: index) -> (f32) {
   %bounded_input_size = index.assume %input_size [range(%input_size, 256, 32768), multiple_of(%input_size, 256)] : index
   %bounded_lane = index.assume %lane [range(%lane, 0, 31)] : index
   %c0 = index.constant 0 : index
@@ -226,7 +188,7 @@ func.def inline @qwen3_moe_q4k_q8_1_x4_paired_row_lane_layout(%row64: i1, %row: 
     %valid_q4_block = index.cmp ult, %q4_block0, %q4_block_count : index
     %contribution = scf.if %valid_q4_block -> (f32) {
       %q4_block, %bounded_q4_block_count = index.assume %q4_block0, %q4_block_count [lt(%q4_block0, %q4_block_count)] : index, index
-      %pair = func.call @qwen3_moe_q4k_q8_1_x4_paired_block_lane_layout(%row64, %row, %bounded_input_size, %weight, %weight_row_byte_base, %q8_input, %q8_row_byte_base, %q4_block, %block_lane) : (i1, index, index, buffer, offset, buffer, offset, index, index) -> (f32)
+      %pair = func.call @qwen3_moe_q4k_q8_1_x4_paired_block_lane(%bounded_input_size, %weight, %weight_row_byte_base, %q8_input, %q8_row_byte_base, %q4_block, %block_lane) : (index, buffer, offset, buffer, offset, index, index) -> (f32)
       scf.yield %pair : f32
     } else {
       scf.yield %c0_f32 : f32
@@ -234,12 +196,5 @@ func.def inline @qwen3_moe_q4k_q8_1_x4_paired_row_lane_layout(%row64: i1, %row: 
     %next = scalar.addf<reassoc|nnan|ninf|nsz> %iteration_acc, %contribution : f32
     scf.yield %next : f32
   }
-  func.return %sum : f32
-}
-
-func.def inline @qwen3_moe_q4k_q8_1_x4_paired_row_lane(%input_size: index, %weight: buffer, %weight_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %lane: index) -> (f32) {
-  %native = scalar.constant false : i1
-  %row = index.constant 0 : index
-  %sum = func.call @qwen3_moe_q4k_q8_1_x4_paired_row_lane_layout(%native, %row, %input_size, %weight, %weight_row_byte_base, %q8_input, %q8_row_byte_base, %lane) : (i1, index, index, buffer, offset, buffer, offset, index) -> (f32)
   func.return %sum : f32
 }

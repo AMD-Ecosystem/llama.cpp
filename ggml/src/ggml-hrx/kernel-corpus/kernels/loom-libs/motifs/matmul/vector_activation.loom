@@ -743,12 +743,14 @@ func.def inline @ggml_matmul_vector_q4_q8_1_x4_activation_dot(%weight_format: in
   %wave = kernel.subgroup.id : index
   %wg = index.add %channel_group, %c0 : index
   %c64_rows = index.constant 64 : index
-  %direct_rows = index.div %c8, %k_partitions : index
+  %threads = kernel.workgroup.size<x> : index
+  %cohort_width = index.mul %c16, %k_partitions : index
+  %direct_rows = index.div %threads, %cohort_width : index
   %rows_per_group = scf.select %staged, %c64_rows, %direct_rows : index
   %row_base = index.mul %wg, %rows_per_group : index
-  %wave_rows = index.div %c4, %k_partitions : index
+  %wave_size = target.subgroup.size : index
+  %wave_rows = index.div %wave_size, %cohort_width : index
   %wave_row = index.mul %wave, %wave_rows : index
-  %cohort_width = index.mul %c16, %k_partitions : index
   %row_half = index.div %lane, %cohort_width : index
   %cohort_lane = index.rem %lane, %cohort_width : index
   %local_row = index.add %wave_row, %row_half : index

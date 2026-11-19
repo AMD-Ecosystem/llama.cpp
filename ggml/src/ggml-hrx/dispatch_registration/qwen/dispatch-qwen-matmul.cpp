@@ -422,6 +422,8 @@ static bool match_qwen_attention_output_next_q8_dispatch(const DispatchMatchCont
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(kQwenDenseLinearQ4KQ8NextQ8Kernel);
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.dense_quantized.weight_layout", row64_weight ? "1" : "0");
+    dispatch.kernel.compile_parameters.emplace("ggml.workload.token_capacity", "1");
+    dispatch.kernel.compile_parameters.emplace("ggml.matmul.vector.activation_format", "9");
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.dense_quantized.input_size",
                                                to_config_value(match.input_size));
