@@ -486,6 +486,199 @@ static __global__ void lightning_indexer_kernel_tile(
     }
 }
 
+#if defined(GGML_USE_HIP)
+
+// RDNA3 WMMA tile kernel for few heads (4 heads of 128 dims, the Qwen QSA indexer): the 4 heads of 4 tokens make the
+// 16 rows of the A operand, so the 16 keys of a column tile are scored for 4 tokens per wave. Keys are staged in half
+// precision like the tile kernel does, the float queries are split into a high and a low half so that the products
+// keep the float precision: q*k = (q_hi + q_lo)*k with both parts accumulated in float. The rows are ordered so that
+// one lane of the accumulator holds the 4 heads of 2 tokens: row m = 2*j + g is head j%4 of token 2*(j/4) + g.
+#define LIGHTNING_INDEXER_WMMA_WAVES    8
+#define LIGHTNING_INDEXER_WMMA_TOKENS   (4*LIGHTNING_INDEXER_WMMA_WAVES)
+#define LIGHTNING_INDEXER_WMMA_KEYS     64   // keys per staged chunk
+#define LIGHTNING_INDEXER_WMMA_CHUNKS   16    // chunks per block
+
+template <ggml_type TYPE_K>
+static __global__ void __launch_bounds__(32*LIGHTNING_INDEXER_WMMA_WAVES) lightning_indexer_kernel_wmma4(
+        const float * Q, const char * K, const float * W, const half * M, float * dst,
+        int64_t n_stream, int64_t n_batch, int64_t n_kv,
+        size_t nb1, size_t nb2, size_t nb3,
+        size_t nbq1, size_t nbq2, size_t nbq3,
+        size_t nbk1, size_t nbk2, size_t nbk3,
+        size_t nbw1, size_t nbw2, size_t nbw3,
+        size_t nbm1, size_t nbm2, size_t nbm3,
+        int64_t nem3
+    ) {
+#if defined(AMD_WMMA_256B_AVAILABLE)
+    constexpr int N_EMBD  = 128;
+    constexpr int WAVES   = LIGHTNING_INDEXER_WMMA_WAVES;
+    constexpr int THREADS = 32*WAVES;
+    constexpr int KC      = LIGHTNING_INDEXER_WMMA_KEYS;
+    constexpr int KSTEPS  = N_EMBD/16;
+    constexpr int ROW     = N_EMBD + 8; // halves, 16 byte aligned rows that do not share banks
+    constexpr int LOADS   = KC*(N_EMBD/4)/THREADS; // float4 loads of a chunk per thread
+
+    using halfx16_t  = __attribute__((ext_vector_type(16))) _Float16;
+    using floatx8_t  = __attribute__((ext_vector_type(8)))  float;
+
+    const int tid  = threadIdx.x;
+    const int lane = tid % 32;
+    const int wave = tid / 32;
+    const int g    = lane / 16;
+    const int col  = lane % 16;
+
+    const int64_t i_stream = blockIdx.z;
+    const int64_t tok0     = (int64_t) blockIdx.y*LIGHTNING_INDEXER_WMMA_TOKENS + wave*4;
+    const int64_t kv_first = (int64_t) blockIdx.x*(KC*LIGHTNING_INDEXER_WMMA_CHUNKS);
+
+    __shared__ _Float16 k_shared[2][KC][ROW];
+
+    // A operand: lane col holds row m = col, that is head (m/2)%4 of token 2*(m/8) + m%2
+    halfx16_t q_hi[KSTEPS];
+    halfx16_t q_lo[KSTEPS];
+    {
+        const int j  = col/2;
+        const int t  = 2*(j/4) + col%2;
+        const int h  = j%4;
+        const int64_t tok = tok0 + t;
+        if (tok < n_batch) {
+            const float4 * q_row = (const float4 *) ((const char *) Q + h*nbq1 + tok*nbq2 + i_stream*nbq3);
+#pragma unroll
+            for (int ks = 0; ks < KSTEPS; ++ks) {
+#pragma unroll
+                for (int v = 0; v < 4; ++v) {
+                    const float4 x = q_row[ks*4 + v];
+                    const float xs[4] = {x.x, x.y, x.z, x.w};
+#pragma unroll
+                    for (int e = 0; e < 4; ++e) {
+                        const _Float16 hi = (_Float16) xs[e];
+                        q_hi[ks][v*4 + e] = hi;
+                        q_lo[ks][v*4 + e] = (_Float16) (xs[e] - (float) hi);
+                    }
+                }
+            }
+        } else {
+#pragma unroll
+            for (int ks = 0; ks < KSTEPS; ++ks) {
+                q_hi[ks] = halfx16_t{};
+                q_lo[ks] = halfx16_t{};
+            }
+        }
+    }
+
+    // weights of the 2 tokens this lane accumulates: token g and token 2 + g of the wave
+    float4 w_tok[2];
+#pragma unroll
+    for (int p = 0; p < 2; ++p) {
+        const int64_t tok = tok0 + 2*p + g;
+        w_tok[p] = tok < n_batch ?
+            *(const float4 *) ((const char *) W + tok*nbw1 + i_stream*nbw3) : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+    }
+
+    const int64_t tok_out[2] = {tok0 + g, tok0 + 2 + g};
+    const half * m_base[2];
+    float      * d_base[2];
+#pragma unroll
+    for (int p = 0; p < 2; ++p) {
+        m_base[p] = (const half *) ((const char *) M + tok_out[p]*nbm1 + (i_stream%nem3)*nbm3);
+        d_base[p] = (float *) ((char *) dst + tok_out[p]*nb1 + i_stream*nb3);
+    }
+
+    // chunk staging: a thread converts LOADS float4 of the chunk to half
+    float4 k_regs[LOADS];
+    auto load_chunk = [&](const int64_t kv0) {
+#pragma unroll
+        for (int l = 0; l < LOADS; ++l) {
+            const int i  = tid + l*THREADS;
+            const int r  = i / (N_EMBD/4);
+            const int c4 = i % (N_EMBD/4);
+            float4 v = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+            if (kv0 + r < n_kv) {
+                const char * k_row = K + (kv0 + r)*nbk2 + i_stream*nbk3;
+                if constexpr (TYPE_K == GGML_TYPE_F32) {
+                    v = ((const float4 *) k_row)[c4];
+                } else {
+                    const half2 lo = ((const half2 *) k_row)[2*c4 + 0];
+                    const half2 hi = ((const half2 *) k_row)[2*c4 + 1];
+                    v = make_float4(__low2float(lo), __high2float(lo), __low2float(hi), __high2float(hi));
+                }
+            }
+            k_regs[l] = v;
+        }
+    };
+    auto store_chunk = [&](const int buf) {
+#pragma unroll
+        for (int l = 0; l < LOADS; ++l) {
+            const int i  = tid + l*THREADS;
+            const int r  = i / (N_EMBD/4);
+            const int c4 = i % (N_EMBD/4);
+            typedef __attribute__((ext_vector_type(4))) _Float16 halfx4_t;
+            const halfx4_t h4 = {(_Float16) k_regs[l].x, (_Float16) k_regs[l].y, (_Float16) k_regs[l].z, (_Float16) k_regs[l].w};
+            *(halfx4_t *) &k_shared[buf][r][c4*4] = h4;
+        }
+    };
+
+    int n_chunks = (int) ((n_kv - kv_first + KC - 1) / KC);
+    n_chunks = n_chunks < LIGHTNING_INDEXER_WMMA_CHUNKS ? n_chunks : LIGHTNING_INDEXER_WMMA_CHUNKS;
+
+    load_chunk(kv_first);
+    store_chunk(0);
+    __syncthreads();
+
+    for (int c = 0; c < n_chunks; ++c) {
+        const int64_t kv0 = kv_first + (int64_t) c*KC;
+        const bool has_next = c + 1 < n_chunks;
+        if (has_next) {
+            load_chunk(kv0 + KC);
+        }
+
+#pragma unroll
+        for (int nt = 0; nt < KC/16; ++nt) {
+            floatx8_t acc_hi = {0, 0, 0, 0, 0, 0, 0, 0};
+            floatx8_t acc_lo = {0, 0, 0, 0, 0, 0, 0, 0};
+#pragma unroll
+            for (int ks = 0; ks < KSTEPS; ++ks) {
+                // B operand: lane col holds the 16 dims of key col of the tile
+                const int4 * b_ptr = (const int4 *) &k_shared[c & 1][nt*16 + col][ks*16];
+                const int4 b0 = b_ptr[0];
+                const int4 b1 = b_ptr[1];
+                union { int4 i[2]; halfx16_t h; } b;
+                b.i[0] = b0;
+                b.i[1] = b1;
+                acc_hi = __builtin_amdgcn_wmma_f32_16x16x16_f16_w32(q_hi[ks], b.h, acc_hi);
+                acc_lo = __builtin_amdgcn_wmma_f32_16x16x16_f16_w32(q_lo[ks], b.h, acc_lo);
+            }
+
+            // accumulator i of this lane is row 2*i + g: head i%4 of token 2*(i/4) + g, key col of the tile
+            const int64_t i_kv = kv0 + nt*16 + col;
+            if (i_kv < n_kv) {
+#pragma unroll
+                for (int p = 0; p < 2; ++p) {
+                    if (tok_out[p] < n_batch) {
+                        float s = fmaxf(acc_hi[4*p + 0] + acc_lo[4*p + 0], 0.0f) * w_tok[p].x;
+                        s = fmaf(fmaxf(acc_hi[4*p + 1] + acc_lo[4*p + 1], 0.0f), w_tok[p].y, s);
+                        s = fmaf(fmaxf(acc_hi[4*p + 2] + acc_lo[4*p + 2], 0.0f), w_tok[p].z, s);
+                        s = fmaf(fmaxf(acc_hi[4*p + 3] + acc_lo[4*p + 3], 0.0f), w_tok[p].w, s);
+                        d_base[p][i_kv] = s + __half2float(m_base[p][i_kv]);
+                    }
+                }
+            }
+        }
+
+        if (has_next) {
+            store_chunk((c + 1) & 1);
+        }
+        __syncthreads();
+    }
+#else
+    GGML_UNUSED_VARS(Q, K, W, M, dst, n_stream, n_batch, n_kv, nb1, nb2, nb3, nbq1, nbq2, nbq3, nbk1, nbk2, nbk3,
+        nbw1, nbw2, nbw3, nbm1, nbm2, nbm3, nem3);
+    NO_DEVICE_CODE;
+#endif // defined(AMD_WMMA_256B_AVAILABLE)
+}
+
+#endif // defined(GGML_USE_HIP)
+
 #define LIGHTNING_INDEXER_CASE(lightning_indexer_kernel, n_embd, n_head, K, type_K)         \
     if (K->type == (type_K)) {                                                              \
         lightning_indexer_kernel<WARPS_PER_BLOCK, K_VECS_PER_BLOCK, n_embd, n_head, type_K> \
@@ -549,6 +742,30 @@ void ggml_cuda_lightning_indexer(ggml_backend_cuda_context & ctx, ggml_tensor * 
 
     const int device = ggml_cuda_get_device();
     const int cc     = ggml_cuda_info().devices[device].cc;
+
+#if defined(GGML_USE_HIP)
+    // 4 heads of 128 dims, prompt batches of the Qwen QSA indexer: WMMA on the 4 heads of 4 tokens
+    static const int env_wmma = ggml_cuda_env_switch("GGML_HIP_INDEXER_WMMA");
+    if (n_embd == 128 && n_head == 4 && n_batch >= 16 && GGML_CUDA_CC_IS_RDNA3(cc) &&
+            (k->type == GGML_TYPE_F32 || k->type == GGML_TYPE_F16) && ggml_cuda_switch_or_rdna3_5(env_wmma, cc)) {
+        constexpr int KEYS_PER_BLOCK = LIGHTNING_INDEXER_WMMA_KEYS*LIGHTNING_INDEXER_WMMA_CHUNKS;
+
+        dim3 block(32*LIGHTNING_INDEXER_WMMA_WAVES, 1, 1);
+        dim3 grid((n_kv + KEYS_PER_BLOCK - 1)/KEYS_PER_BLOCK, (n_batch + LIGHTNING_INDEXER_WMMA_TOKENS - 1)/LIGHTNING_INDEXER_WMMA_TOKENS, n_stream);
+
+        if (k->type == GGML_TYPE_F32) {
+            lightning_indexer_kernel_wmma4<GGML_TYPE_F32><<<grid, block, 0, ctx.stream()>>>(
+                q_d, k_d, w_d, m_d, dst_d, n_stream, n_batch, n_kv, nb1, nb2, nb3, nbq1, nbq2, nbq3,
+                nbk1, nbk2, nbk3, nbw1, nbw2, nbw3, nbm1, nbm2, nbm3, nem3);
+        } else {
+            lightning_indexer_kernel_wmma4<GGML_TYPE_F16><<<grid, block, 0, ctx.stream()>>>(
+                q_d, k_d, w_d, m_d, dst_d, n_stream, n_batch, n_kv, nb1, nb2, nb3, nbq1, nbq2, nbq3,
+                nbk1, nbk2, nbk3, nbw1, nbw2, nbw3, nbm1, nbm2, nbm3, nem3);
+        }
+        CUDA_CHECK(cudaGetLastError());
+        return;
+    }
+#endif // defined(GGML_USE_HIP)
 
     if (n_embd == 128 && n_head == 64) {
         if ((turing_mma_available(cc) || amd_mfma_available(cc) || amd_wmma_available(cc)) && k->type != GGML_TYPE_F32 && k->type != GGML_TYPE_BF16) {
