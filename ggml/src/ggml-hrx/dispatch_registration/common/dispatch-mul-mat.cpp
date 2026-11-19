@@ -1343,15 +1343,24 @@ static bool try_match_fused_unary(const DispatchMatchContext & context, CommonMu
 
 }  // namespace
 
+static bool mul_mat_requires_f32_accumulation(const GraphNode & node) {
+    const auto * params = op_params_as<MulMatParams>(node.params);
+    return params != nullptr && params->prec == GGML_PREC_F32;
+}
+
 static bool build_mul_mat_dispatch(
     const DispatchMatchContext & context,
                                    const CommonMulMatMatch &  match,
                                    DispatchMatch &            dispatch_match,
                                    CommonQ8ActivationPolicy   q8_policy = CommonQ8ActivationPolicy::ExistingAlternateOnly) {
+    // The factored tiled kernel accumulates in F16 even when it publishes an F32 tensor.
+    const KernelCatalogRef kernel =
+        match.kernel.id == kMulMatTiledF32F32Kernel.id && mul_mat_requires_f32_accumulation(*context.root_node) ?
+            kMulMatF32F32WmmaKernel :
+            match.kernel;
     const CommonActivationPublicationCapabilities capabilities = {
-        match.kernel.id == kMulMatTiledF32F32Kernel.id ?
-            DispatchActivationInputF16Row | DispatchActivationInputQ8_1X4 :
-            DispatchActivationInputNone,
+        kernel.id == kMulMatTiledF32F32Kernel.id ? DispatchActivationInputF16Row | DispatchActivationInputQ8_1X4 :
+                                                   DispatchActivationInputNone,
     };
     const CommonActivationPublicationPlan publication_plan =
         common_select_activation_publication_plan(context, *match.output, capabilities);
@@ -1383,19 +1392,18 @@ static bool build_mul_mat_dispatch(
     }
     const bool use_skinny_iq3_xxs = use_iq_codebook && match.weight_format == CommonMulMatWeightFormat::IQ3_XXS &&
                                     common_mul_mat_is_skinny_route(match);
-    const bool use_aligned_dynamic = match.token_count % 32 == 0 &&
-                                     match.kernel.id == kMulMatTiledF32F32Kernel.id && !publish_f16_alternate &&
-                                     !use_iq_codebook;
+    const bool use_aligned_dynamic = match.token_count % 32 == 0 && kernel.id == kMulMatTiledF32F32Kernel.id &&
+                                     !publish_f16_alternate && !use_iq_codebook;
     const bool use_q1_token64 = use_aligned_dynamic && match.token_count == 64 &&
                                 match.weight_format == CommonMulMatWeightFormat::Q1_0 &&
                                 std::getenv("GGML_HRX_DISABLE_Q1_TOKEN64_MATMUL") == nullptr;
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(
-        use_skinny_iq3_xxs ? kMulMatSkinnyIQ3XXSF32F32Kernel :
-        use_iq_codebook ? tiled_iq_codebook_kernel(match.weight_format) :
-        use_q1_token64 ? kMulMatTiledToken64AlignedF32F32Kernel :
-        use_aligned_dynamic ? kMulMatTiledAlignedF32F32Kernel :
-        publish_f16_alternate ? kMulMatTiledF32F16AlternateKernel : match.kernel);
+    dispatch.kernel = make_kernel_specialization(use_skinny_iq3_xxs    ? kMulMatSkinnyIQ3XXSF32F32Kernel :
+                                                 use_iq_codebook       ? tiled_iq_codebook_kernel(match.weight_format) :
+                                                 use_q1_token64        ? kMulMatTiledToken64AlignedF32F32Kernel :
+                                                 use_aligned_dynamic   ? kMulMatTiledAlignedF32F32Kernel :
+                                                 publish_f16_alternate ? kMulMatTiledF32F16AlternateKernel :
+                                                                         kernel);
     if (use_aligned_dynamic) {
         dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
     }
@@ -1427,7 +1435,7 @@ static bool build_mul_mat_dispatch(
     DispatchBinding activation = { match.input->id, 0, match.input->byte_count };
     const size_t f16_activation_bytes = static_cast<size_t>(match.token_count * match.input_size) * sizeof(ggml_fp16_t);
     const CommandPlanAlternateValue * f16_activation =
-        common_mul_mat_uses_factored_tiled_kernel(match.kernel) ?
+        common_mul_mat_uses_factored_tiled_kernel(kernel) ?
             find_alternate_value(context.graph, context.plan, match.input->id, GGML_TYPE_F16, f16_activation_bytes) :
             nullptr;
     if (f16_activation != nullptr) {
@@ -2277,6 +2285,7 @@ static bool match_batched_mul_mat_dispatch(const DispatchMatchContext & context,
     const size_t      weight_bytes = weight->nb[2];
     const bool        vector       = token_count == 1;
     const bool        q8_token64   = !vector && token_count % 64 == 0 && format == CommonMulMatWeightFormat::Q8_0;
+    const bool        f32_acc      = mul_mat_requires_f32_accumulation(*node);
     const std::string prefix       = vector ? "ggml.matmul.vector." : "ggml.mul_mat.";
     const int64_t     split_count  = grouped ? 8 : 1;
     const ValueId     partial =
@@ -2292,6 +2301,7 @@ static bool match_batched_mul_mat_dispatch(const DispatchMatchContext & context,
         Dispatch dispatch;
         dispatch.kernel = make_kernel_specialization(
             vector     ? kMulMatVectorF32F32Kernel :
+            f32_acc    ? kMulMatF32F32WmmaKernel :
             q8_token64 ? kMulMatTiledToken64AlignedF32F32Kernel :
             grouped    ? GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_tiled_input_f32_publish_f16acc_f32") :
                          kMulMatTiledF32F32Kernel);

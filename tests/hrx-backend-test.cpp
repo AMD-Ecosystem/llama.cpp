@@ -15650,6 +15650,85 @@ static void run_mul_mat_precision_import_checks() {
     ggml_free(ctx);
 }
 
+static void run_tiled_mul_mat_accumulator_checks() {
+    struct Case {
+        ggml_type    weight_type;
+        int64_t      batches;
+        bool         f32_acc;
+        const char * expected;
+    };
+
+    const Case cases[] = {
+        { GGML_TYPE_BF16, 1, false, "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32_aligned"         },
+        { GGML_TYPE_BF16, 1, true,  "loom_libs:ggml_mul_mat_f32_f32_wmma"                                },
+        { GGML_TYPE_Q8_0, 2, false, "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32_token64_aligned" },
+        { GGML_TYPE_Q8_0, 2, true,  "loom_libs:ggml_mul_mat_f32_f32_wmma"                                },
+    };
+    for (const auto & test : cases) {
+        ggml_context * ctx = ggml_init({ 2 * 1024 * 1024, nullptr, true });
+        REQUIRE(ctx != nullptr);
+        auto * weights = ggml_new_tensor_3d(ctx, test.weight_type, 4096, 256, test.batches);
+        auto * input   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 4096, 512, test.batches);
+        auto * product = ggml_mul_mat(ctx, weights, input);
+        if (test.f32_acc) {
+            REQUIRE(ggml_prec_set_acc(product, GGML_PREC_F32));
+        }
+        auto * graph = ggml_new_graph(ctx);
+        ggml_build_forward_expand(graph, product);
+        auto imported = ggml::hrx::import_ggml_graph(*graph);
+        REQUIRE(imported.valid());
+        ggml::hrx::DispatchScheduler scheduler;
+        REQUIRE(scheduler.schedule_graph(imported.graph, test_dispatch_target()));
+        const auto & plan = scheduler.plan();
+        REQUIRE(plan.valid());
+        REQUIRE(plan.dispatches.size() == size_t(test.batches));
+        for (const auto & dispatch : plan.dispatches) {
+            REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id) == test.expected);
+        }
+        ggml_free(ctx);
+    }
+}
+
+static void run_tiled_mul_mat_f32_accumulation() {
+    constexpr int64_t reduction = 4096;
+    constexpr int64_t channels  = 32;
+    constexpr int64_t tokens    = 64;
+    ggml_context *    ctx       = ggml_init({ 2 * 1024 * 1024, nullptr, true });
+    REQUIRE(ctx != nullptr);
+    auto * weights = ggml_new_tensor_2d(ctx, GGML_TYPE_BF16, reduction, channels);
+    auto * inputs  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, reduction, tokens);
+    auto * product = ggml_mul_mat(ctx, weights, inputs);
+    REQUIRE(ggml_prec_set_acc(product, GGML_PREC_F32));
+    auto * graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, product);
+
+    auto backend = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+    auto buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    REQUIRE(buffer != nullptr);
+
+    // Each K16 tile after the first contributes 0.5, below an F16 ULP at 4096.
+    // All inputs and the expected sum are exactly representable in F32.
+    std::vector<ggml_bf16_t> rows(reduction * channels, ggml_fp32_to_bf16(1.0f / 32.0f));
+    for (int64_t channel = 0; channel < channels; ++channel) {
+        std::fill_n(rows.begin() + channel * reduction, 16, ggml_fp32_to_bf16(256.0f));
+    }
+    std::vector<float> ones(reduction * tokens, 1.0f);
+    ggml_backend_tensor_set(weights, rows.data(), 0, ggml_nbytes(weights));
+    ggml_backend_tensor_set(inputs, ones.data(), 0, ggml_nbytes(inputs));
+
+    REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(backend);
+    std::vector<float> output(ggml_nelements(product));
+    ggml_backend_tensor_get(product, output.data(), 0, ggml_nbytes(product));
+    for (float value : output) {
+        REQUIRE(value == 16 * 256.0f + (reduction - 16) / 32.0f);
+    }
+    ggml_backend_buffer_free(buffer);
+    ggml_backend_free(backend);
+    ggml_free(ctx);
+}
+
 static void run_q8_prefill_plan_checks() {
     struct Case {
         int64_t output_size;
@@ -15757,6 +15836,7 @@ static void register_hrx_backend_host_cases(test_runner::Suite & suite) {
     suite.host_case("command_plan_metadata", [] { run_command_plan_metadata_checks(); });
     suite.host_case("dispatch_registry", [] { run_dispatch_registry_checks(); });
     suite.host_case("graph_import", [] { run_graph_import_checks(); });
+    suite.host_case("tiled_mul_mat_accumulator", [] { run_tiled_mul_mat_accumulator_checks(); });
     suite.host_case("q8_prefill_plan", [] { run_q8_prefill_plan_checks(); });
     suite.host_case("mxfp4_prefill_dispatch", [] { run_mxfp4_prefill_dispatch_checks(); });
     suite.host_case("rope_offset_import", [] { run_rope_offset_import_checks(); });
@@ -16011,6 +16091,7 @@ static void register_hrx_backend_device_cases(test_runner::Suite & suite) {
     suite.device_case("zero_output_unused_weight_staging.recorded", [] { run_zero_output_unused_weight_staging(false); });
     suite.device_case("zero_output_unused_weight_staging.direct", [] { run_zero_output_unused_weight_staging(true); });
     suite.device_case("prepared_graph_instance_reuse", [] { run_prepared_graph_instance_reuse(); });
+    suite.device_case("tiled_mul_mat_f32_accumulation", [] { run_tiled_mul_mat_f32_accumulation(); });
     suite.device_case("scale_f32_device_support", [] { run_scale_f32_device_support_checks(); });
     suite.device_case("generic_hyper_connection_device_support",
                       [] { run_generic_hyper_connection_device_support_checks(); });
