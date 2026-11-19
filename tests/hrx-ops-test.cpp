@@ -10866,7 +10866,7 @@ static void register_dense_matmul_cases(Suite & suite) {
     });
     suite.device_case("dense_matmul.q8_0.prefill.explicit_f32_accumulation", [] {
         run_dense_matmul_cpu_reference_case(
-            GGML_TYPE_Q8_0, "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32_aligned", 512, 2048, 4096,
+            GGML_TYPE_Q8_0, "loom_libs:ggml_mul_mat_f32_f32_wmma", 512, 2048, 4096,
             false, false, GGML_TYPE_COUNT, false, TestWeightSource::Uploaded, GGML_PREC_F32);
     });
     suite.device_case("dense_matmul.q8_0.prefill.explicit_f32_source1", [] {
