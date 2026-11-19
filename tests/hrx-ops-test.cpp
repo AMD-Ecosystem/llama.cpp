@@ -1663,8 +1663,8 @@ static void run_routed_codebook_admission_checks() {
         return nullptr;
     };
 
-    const std::array<ggml_type, 3> unsupported = { GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ3_XXS };
-    for (const ggml_type format : unsupported) {
+    const std::array<ggml_type, 4> formats = { GGML_TYPE_IQ1_S, GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ3_XXS };
+    for (const ggml_type format : formats) {
         ggml_init_params params = {};
         params.mem_size = 8 * 1024 * 1024;
         params.no_alloc = true;
@@ -1681,18 +1681,22 @@ static void run_routed_codebook_admission_checks() {
         const ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
         REQUIRE(imported.valid());
         ggml::hrx::DispatchMatch match;
-        if (format == GGML_TYPE_IQ3_XXS) {
+        const bool supported = format != GGML_TYPE_IQ2_XS;
+        if (supported) {
             REQUIRE(match_root(imported.graph, routed.gate_output, pair_registry, match));
             const ggml::hrx::Dispatch * pair = find_pair(match);
             REQUIRE(pair != nullptr);
-            REQUIRE(pair->bindings.size() == 7);
+            REQUIRE(pair->bindings.size() == 8);
         } else {
             REQUIRE(!match_root(imported.graph, routed.gate_output, pair_registry, match));
         }
         ggml::hrx::DispatchMatch plain_match;
-        REQUIRE(!match_root(imported.graph, routed.gate_output, plain_registry, plain_match));
+        REQUIRE(match_root(imported.graph, routed.gate_output, plain_registry, plain_match) == supported);
         ggml::hrx::DispatchMatch postops_match;
-        REQUIRE(!match_root(imported.graph, routed.down_output, plain_registry, postops_match));
+        REQUIRE(match_root(imported.graph, routed.down_output, plain_registry, postops_match) == supported);
+        for (const auto & dispatch : postops_match.dispatches) {
+            REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id).find("postops") == std::string::npos);
+        }
         ggml_free(ctx);
     }
 
@@ -1714,7 +1718,7 @@ static void run_routed_codebook_admission_checks() {
         REQUIRE(match_root(imported.graph, routed.gate_output, pair_registry, pair_match));
         const ggml::hrx::Dispatch * pair = find_pair(pair_match);
         REQUIRE(pair != nullptr);
-        REQUIRE(pair->bindings.size() == 7);
+        REQUIRE(pair->bindings.size() == 8);
         ggml_free(ctx);
     }
 
@@ -6801,6 +6805,7 @@ static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
     }
     ggml_tensor * cpu_indices = nullptr;
     ggml_tensor * hrx_indices = nullptr;
+    constexpr int64_t cache_row = 7;
     ggml_tensor * cpu_cache = nullptr;
     ggml_tensor * hrx_cache = nullptr;
     if (cache_type != GGML_TYPE_COUNT) {
@@ -6886,8 +6891,7 @@ static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
                               norm_w.size() * sizeof(float));
     }
     if (cache_type != GGML_TYPE_COUNT) {
-        const int64_t index = 7;
-        set_tensor_pair_bytes(cpu_backend, cpu_indices, hrx_backend, hrx_indices, &index, sizeof(index));
+        set_tensor_pair_bytes(cpu_backend, cpu_indices, hrx_backend, hrx_indices, &cache_row, sizeof(cache_row));
         const std::vector<uint8_t> cache(ggml_nbytes(cpu_cache), 0);
         set_tensor_pair_bytes(cpu_backend, cpu_cache, hrx_backend, hrx_cache, cache.data(), cache.size());
     }
@@ -6908,7 +6912,11 @@ static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
     if (weight_type == GGML_TYPE_IQ3_XXS) {
         // CPU matmul quantizes activations; scalar dequantization isolates the GPU error.
         const auto scalar_reference = f32_matmul_reference(weight_type, weight, input, input_size, output_size, token_count);
-        const auto actual = get_f32_tensor(hrx_backend, hrx_output);
+        auto actual = get_f32_tensor(hrx_backend, hrx_output);
+        if (cache_type != GGML_TYPE_COUNT) {
+            const auto row = actual.begin() + cache_row * output_size;
+            actual = std::vector<float>(row, row + output_size);
+        }
         require_reference_close(actual, scalar_reference, 0.0f);
         if (token_count >= 2 && token_count <= 5) {
             require_close(actual, scalar_reference, 2.0e-5f, 2.0e-5f);
@@ -10311,6 +10319,11 @@ static void register_dense_matmul_cases(Suite & suite) {
                 });
         }
     }
+    suite.device_case("attention_v_matmul.iq3_xxs.cache_f16.cpu_reference", [] {
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ3_XXS,
+                                            "loom_libs:ggml_mul_mat_vector_iq3_xxs_f32_f32", 1,
+                                            512, 2048, false, false, GGML_TYPE_F16);
+    });
     suite.device_case("attention_v_matmul.q6_k.prefill_f16.repeated_indices",
                       [] { run_prefill_value_cache_repeated_indices_case(); });
     for (const ggml_type type :
