@@ -1,0 +1,42 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+config.decl @ggml.swiglu_clamp.limit : f32
+
+kernel.def @ggml_swiglu_clamp_f32(%element_count: index) {
+  %one = index.constant 1 : index
+  %block = index.constant 256 : index
+  %pad = index.constant 255 : index
+  %padded = index.add %element_count, %pad : index
+  %groups = index.div %padded, %block : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%block, %one, %one) : index
+} launch(%element_count: index, %gate: buffer, %up: buffer, %output: buffer) {
+  %count = index.assume %element_count [range(%element_count, 1, 134217728)] : index
+  %group = kernel.workgroup.id<x> : index
+  %thread = kernel.workitem.id<x> : index
+  %block = index.constant 256 : index
+  %linear0 = index.madd %group, %block, %thread : index
+  %valid = index.cmp ult, %linear0, %count : index
+  scf.if %valid {
+    %linear, %extent = index.assume %linear0, %count [range(%linear0, 0, 134217727), lt(%linear0, %count)] : index, index
+    %zero = index.constant 0 : offset
+    %gate_view = buffer.view %gate[%zero] : buffer -> view<[%count]xf32>
+    %up_view = buffer.view %up[%zero] : buffer -> view<[%count]xf32>
+    %output_view = buffer.view %output[%zero] : buffer -> view<[%count]xf32>
+    %limit = config.get @ggml.swiglu_clamp.limit : f32
+    %lower = scalar.negf %limit : f32
+    %gate_value = view.load %gate_view[%linear] : view<[%count]xf32> -> f32
+    %up_value = view.load %up_view[%linear] : view<[%count]xf32> -> f32
+    %bounded_gate = scalar.minnumf %gate_value, %limit : f32
+    %bounded_up_lower = scalar.maxnumf %up_value, %lower : f32
+    %bounded_up = scalar.minnumf %bounded_up_lower, %limit : f32
+    %negative_gate = scalar.negf %bounded_gate : f32
+    %exp = scalar.expf<afn> %negative_gate : f32
+    %one = scalar.constant 1.0 : f32
+    %denominator = scalar.addf %one, %exp : f32
+    %activated = scalar.divf %bounded_gate, %denominator : f32
+    %result = scalar.mulf %activated, %bounded_up : f32
+    view.store %result, %output_view[%linear] : f32, view<[%count]xf32>
+  }
+  kernel.return
+}

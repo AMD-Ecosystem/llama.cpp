@@ -581,16 +581,14 @@ static void backend_synchronize(ggml_backend_t backend) {
     }
 }
 
-static const char * status_first_error(const ggml::hrx::Status & status) {
-    return status.errors().empty() ? "" : status.errors().front().c_str();
-}
-
 static enum ggml_status graph_compute(ggml_backend_t backend, ggml_cgraph * graph) {
     auto *                                context  = static_cast<ggml_backend_hrx_context *>(backend->context);
     const ggml::hrx::GraphExecutor        executor = ggml::hrx::GraphExecutor(*context);
     const ggml::hrx::GraphExecutionResult result   = executor.execute(*graph);
     if (!result.success()) {
-        GGML_LOG_ERROR("%s: %s\n", __func__, status_first_error(result.status));
+        for (const auto & message : result.status.errors()) {
+            GGML_LOG_ERROR("%s: %s\n", __func__, message.c_str());
+        }
         return result.code;
     }
     if (context->cache_trim_pending) {
@@ -1083,12 +1081,6 @@ static bool supported_binary_f32_tensor(const ggml_tensor * op) {
         return false;
     }
 
-    if ((!ggml_are_same_shape(op->src[0], op) || !ggml_are_same_shape(op->src[1], op)) &&
-        (!ggml_is_contiguous(op->src[0]) || !ggml_is_contiguous(op->src[1]) ||
-         !tensor_has_packed_f32_layout(op->src[0]) || !tensor_has_packed_f32_layout(op->src[1]))) {
-        return false;
-    }
-
     if (!binary_kind_allows_broadcast(binary_kind, op->src[0], op->src[1], op)) {
         return false;
     }
@@ -1225,6 +1217,14 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
         const bool bounded = elements <= (int64_t{ 1 } << 30);
         return source_f32 && output_f32 && source_contiguous && output_contiguous && same_shape &&
                separate_output && nonempty && bounded;
+    }
+    if (op->op == GGML_OP_DSV4_HC_COMB || op->op == GGML_OP_DSV4_HC_PRE || op->op == GGML_OP_DSV4_HC_POST ||
+        op->op == GGML_OP_CLAMP || op->op == GGML_OP_FILL || op->op == GGML_OP_SUM || op->op == GGML_OP_REPEAT ||
+        op->op == GGML_OP_ROPE_BACK || op->op == GGML_OP_TOP_K || op->op == GGML_OP_ARGSORT ||
+        op->op == GGML_OP_ARGMAX || op->op == GGML_OP_CONCAT || op->op == GGML_OP_LIGHTNING_INDEXER ||
+        op->op == GGML_OP_MUL_MAT || (op->op == GGML_OP_ADD && op->type == GGML_TYPE_F16) ||
+        (op->op == GGML_OP_GLU && ggml_get_glu_op(op) == GGML_GLU_OP_SWIGLU_CLAMP)) {
+        return ggml::hrx::can_execute_standalone_op_as_graph(op, device_context(device)->architecture);
     }
     const bool supported_binary = supported_binary_f32_tensor(op);
     if (supported_binary) {

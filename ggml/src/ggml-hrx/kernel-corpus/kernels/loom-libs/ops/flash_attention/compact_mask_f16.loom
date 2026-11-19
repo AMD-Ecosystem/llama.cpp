@@ -1,0 +1,106 @@
+amdgpu.target<gfx11-generic> @ggml_compact_mask_wave64 {subgroup_size = 64}
+
+config.decl @ggml.sparse_attention.capacity : %value: index where [range(%value, 64, 2048), multiple_of(%value, 64)]
+
+// The caller bounds finite entries per row by capacity. Keep their source order.
+kernel.def target(@ggml_compact_mask_wave64) @ggml_compact_mask_f16(%query_count: index, %key_count: index) {
+  %one = index.constant 1 : index
+  %threads = index.constant 256 : index
+  kernel.launch.config workgroups(%one, %query_count, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%query_count: index, %key_count: index, %mask: buffer, %indices: buffer, %compact_mask: buffer) {
+  %nq = index.assume %query_count [range(%query_count, 1, 2048)] : index
+  %nk = index.assume %key_count [range(%key_count, 1, 131072)] : index
+  %capacity = config.get @ggml.sparse_attention.capacity : index
+  %row0 = kernel.workgroup.id<y> : index
+  %row = index.assume %row0 [lt(%row0, %nq)] : index
+  %thread = kernel.workitem.id<x> : index
+  %zero = index.constant 0 : index
+  %step = index.constant 256 : index
+  %offset = index.constant 0 : offset
+  %zero_i32 = scalar.constant 0 : i32
+  %one_i32 = scalar.constant 1 : i32
+  %negative_infinity_bits = scalar.constant -1024 : i16
+  %positive_infinity_bits = scalar.constant 31744 : i16
+  %negative_infinity = scalar.bitcast %negative_infinity_bits : i16 to f16
+  %positive_infinity = scalar.bitcast %positive_infinity_bits : i16 to f16
+  %source = buffer.view %mask[%offset] : buffer -> view<[%nq]x[%nk]xf16>
+  %selection = buffer.view %indices[%offset] : buffer -> view<[%nq]x[%capacity]xi32>
+  %target = buffer.view %compact_mask[%offset] : buffer -> view<[%nq]x[%capacity]xf16>
+  %total = scf.for %base = [%zero to %nk step %step](%count = %zero_i32 : i32) -> (i32) {
+    %position = index.add %base, %thread : index
+    %valid = index.cmp ult, %position, %nk : index
+    %value = scf.if %valid -> (f16) {
+      %column = index.assume %position [lt(%position, %nk)] : index
+      %loaded = view.load %source[%row, %column] : view<[%nq]x[%nk]xf16> -> f16
+      scf.yield %loaded : f16
+    } else {
+      scf.yield %negative_infinity : f16
+    }
+    %above = scalar.cmpf ogt, %value, %negative_infinity : f16
+    %below = scalar.cmpf olt, %value, %positive_infinity : f16
+    %finite = scalar.andi %above, %below : i1
+    %increment = scf.select %finite, %one_i32, %zero_i32 : i32
+    %prefix = kernel.workgroup.scan<addi> %increment {direction = forward, mode = exclusive} : i32
+    %block_count = kernel.workgroup.reduce<addi> %increment : i32
+    %slot_i32 = scalar.addi %count, %prefix : i32
+    %slot0 = index.cast %slot_i32 : i32 to index
+    %fits = index.cmp ult, %slot0, %capacity : index
+    %write = scalar.andi %finite, %fits : i1
+    scf.if %write {
+      %slot = index.assume %slot0 [lt(%slot0, %capacity)] : index
+      %id = index.cast %position : index to i32
+      view.store %id, %selection[%row, %slot] : i32, view<[%nq]x[%capacity]xi32>
+      view.store %value, %target[%row, %slot] : f16, view<[%nq]x[%capacity]xf16>
+    }
+    %next_count = scalar.addi %count, %block_count : i32
+    scf.yield %next_count : i32
+  }
+  %used = index.cast %total : i32 to index
+  scf.for %base = [%zero to %capacity step %step] {
+    %slot0 = index.add %base, %thread : index
+    %valid = index.cmp ult, %slot0, %capacity : index
+    %padding = index.cmp uge, %slot0, %used : index
+    %write = scalar.andi %valid, %padding : i1
+    scf.if %write {
+      %slot = index.assume %slot0 [lt(%slot0, %capacity)] : index
+      view.store %zero_i32, %selection[%row, %slot] : i32, view<[%nq]x[%capacity]xi32>
+      view.store %negative_infinity, %target[%row, %slot] : f16, view<[%nq]x[%capacity]xf16>
+    }
+  }
+  kernel.return
+}
+
+kernel.def target(@ggml_compact_mask_wave64) @ggml_gather_sparse_kv_f16(%query_count: index, %key_count: index) {
+  %capacity = config.get @ggml.sparse_attention.capacity : index
+  %one = index.constant 1 : index
+  %four = index.constant 4 : index
+  %threads = index.constant 256 : index
+  %groups = index.div %capacity, %four : index
+  kernel.launch.config workgroups(%groups, %query_count, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%query_count: index, %key_count: index, %indices: buffer, %key: buffer, %compact_key: buffer) {
+  %nq = index.assume %query_count [range(%query_count, 1, 2048)] : index
+  %nk = index.assume %key_count [range(%key_count, 1, 131072)] : index
+  %capacity = config.get @ggml.sparse_attention.capacity : index
+  %query0 = kernel.workgroup.id<y> : index
+  %query = index.assume %query0 [lt(%query0, %nq)] : index
+  %group = kernel.workgroup.id<x> : index
+  %thread = kernel.workitem.id<x> : index
+  %four = index.constant 4 : index
+  %eight = index.constant 8 : index
+  %sixty_four = index.constant 64 : index
+  %offset = index.constant 0 : offset
+  %local_row = index.div %thread, %sixty_four : index
+  %local_column = index.rem %thread, %sixty_four : index
+  %channel = index.mul %local_column, %eight : index
+  %row0 = index.madd %group, %four, %local_row : index
+  %row = index.assume %row0 [lt(%row0, %capacity)] : index
+  %selection = buffer.view %indices[%offset] : buffer -> view<[%nq]x[%capacity]xi32>
+  %index_i32 = view.load %selection[%query, %row] : view<[%nq]x[%capacity]xi32> -> i32
+  %index0 = index.cast %index_i32 : i32 to index
+  %index = index.assume %index0 [range(%index0, 0, 131071), lt(%index0, %nk)] : index
+  %source = buffer.view %key[%offset] : buffer -> view<[%nk]x512xf16>
+  %target = buffer.view %compact_key[%offset] : buffer -> view<[%nq]x[%capacity]x512xf16>
+  %values = vector.load %source[%index, %channel] : view<[%nk]x512xf16> -> vector<8xf16>
+  vector.store %values, %target[%query, %row, %channel] : vector<8xf16>, view<[%nq]x[%capacity]x512xf16>
+  kernel.return
+}

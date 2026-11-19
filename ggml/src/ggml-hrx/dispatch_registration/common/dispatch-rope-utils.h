@@ -52,13 +52,12 @@ inline bool build_rope_frequency_table(const RopeParams & params, int64_t n_dims
 
     table.data.resize(static_cast<size_t>(n_dims / 2) * sizeof(float));
     const float theta_scale = std::pow(params.freq_base, -2.0f / static_cast<float>(n_dims));
-    float       theta       = 1.0f;
     for (int64_t i = 0; i < n_dims / 2; ++i) {
+        const float   theta      = std::pow(theta_scale, static_cast<float>(i));
         const int64_t dim        = 2 * i;
         const float   ramp_mix   = rope_yarn_ramp(corr_dims[0], corr_dims[1], dim) * params.ext_factor;
         const float   frequency  = params.freq_scale * theta * (1.0f - ramp_mix) + theta * ramp_mix;
         std::memcpy(table.data.data() + static_cast<size_t>(i) * sizeof(float), &frequency, sizeof(frequency));
-        theta *= theta_scale;
     }
     return true;
 }

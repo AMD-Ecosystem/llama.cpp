@@ -1,0 +1,30 @@
+kernel.def @ggml_add_f16(%element_count: index) {
+  %one = index.constant 1 : index
+  %group = index.constant 256 : index
+  %pad = index.constant 255 : index
+  %padded = index.add %element_count, %pad : index
+  %groups = index.div %padded, %group : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%group, %one, %one) : index
+} launch(%element_count: index, %lhs: buffer, %rhs: buffer, %output: buffer) {
+  %count = index.assume %element_count [range(%element_count, 1, 134217728)] : index
+  %group = kernel.workgroup.id<x> : index
+  %lane = kernel.workitem.id<x> : index
+  %group_size = index.constant 256 : index
+  %linear0 = index.madd %group, %group_size, %lane : index
+  %valid = index.cmp ult, %linear0, %count : index
+  scf.if %valid {
+    %linear, %extent = index.assume %linear0, %count [range(%linear0, 0, 134217727), lt(%linear0, %count)] : index, index
+    %zero = index.constant 0 : offset
+    %lv = buffer.view %lhs[%zero] : buffer -> view<[%count]xf16>
+    %rv = buffer.view %rhs[%zero] : buffer -> view<[%count]xf16>
+    %yv = buffer.view %output[%zero] : buffer -> view<[%count]xf16>
+    %l = view.load %lv[%linear] : view<[%count]xf16> -> f16
+    %r = view.load %rv[%linear] : view<[%count]xf16> -> f16
+    %lf = scalar.extf %l : f16 to f32
+    %rf = scalar.extf %r : f16 to f32
+    %sum = scalar.addf %lf, %rf : f32
+    %result = scalar.fptrunc %sum : f32 to f16
+    view.store %result, %yv[%linear] : f16, view<[%count]xf16>
+  }
+  kernel.return
+}

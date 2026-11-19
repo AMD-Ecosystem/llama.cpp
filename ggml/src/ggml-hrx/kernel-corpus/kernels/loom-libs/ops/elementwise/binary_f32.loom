@@ -13,17 +13,21 @@ config.decl @ggml.binary_f32.ne1 : %value: index where [range(%value, 1, 1342177
 
 config.decl @ggml.binary_f32.ne2 : %value: index where [range(%value, 1, 134217728)]
 
-config.decl @ggml.binary_f32.src0_stride1 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.binary_f32.src0_stride0 : %value: index where [range(%value, 0, 1)]
 
-config.decl @ggml.binary_f32.src0_stride2 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.binary_f32.src0_stride1 : %value: index where [range(%value, 0, 134217728)]
 
-config.decl @ggml.binary_f32.src0_stride3 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.binary_f32.src0_stride2 : %value: index where [range(%value, 0, 134217728)]
 
-config.decl @ggml.binary_f32.src1_stride1 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.binary_f32.src0_stride3 : %value: index where [range(%value, 0, 134217728)]
 
-config.decl @ggml.binary_f32.src1_stride2 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.binary_f32.src1_stride0 : %value: index where [range(%value, 0, 1)]
 
-config.decl @ggml.binary_f32.src1_stride3 : %value: index where [range(%value, 1, 134217728)]
+config.decl @ggml.binary_f32.src1_stride1 : %value: index where [range(%value, 0, 134217728)]
+
+config.decl @ggml.binary_f32.src1_stride2 : %value: index where [range(%value, 0, 134217728)]
+
+config.decl @ggml.binary_f32.src1_stride3 : %value: index where [range(%value, 0, 134217728)]
 
 config.decl @ggml.binary_f32.src0_span : %value: index where [range(%value, 1, 134217728)]
 
@@ -41,9 +45,11 @@ kernel.def target(@ggml_binary_f32_gfx11_wave64) export("ggml_binary_f32") @ggml
   %n0 = config.get @ggml.binary_f32.ne0 : index
   %n1 = config.get @ggml.binary_f32.ne1 : index
   %n2 = config.get @ggml.binary_f32.ne2 : index
+  %s0_0 = config.get @ggml.binary_f32.src0_stride0 : index
   %s0_1 = config.get @ggml.binary_f32.src0_stride1 : index
   %s0_2 = config.get @ggml.binary_f32.src0_stride2 : index
   %s0_3 = config.get @ggml.binary_f32.src0_stride3 : index
+  %s1_0 = config.get @ggml.binary_f32.src1_stride0 : index
   %s1_1 = config.get @ggml.binary_f32.src1_stride1 : index
   %s1_2 = config.get @ggml.binary_f32.src1_stride2 : index
   %s1_3 = config.get @ggml.binary_f32.src1_stride3 : index
@@ -69,16 +75,18 @@ kernel.def target(@ggml_binary_f32_gfx11_wave64) export("ggml_binary_f32") @ggml
     %linear_div_n01 = index.div %linear_div_n0, %n1 : index
     %coord2 = index.rem %linear_div_n01, %n2 : index
     %coord3 = index.div %linear_div_n01, %n2 : index
+    %src0_term0 = index.mul %coord0, %s0_0 : index
     %src0_term1 = index.mul %coord1, %s0_1 : index
     %src0_term2 = index.mul %coord2, %s0_2 : index
     %src0_term3 = index.mul %coord3, %s0_3 : index
-    %src0_linear01 = index.add %coord0, %src0_term1 : index
+    %src0_linear01 = index.add %src0_term0, %src0_term1 : index
     %src0_linear012 = index.add %src0_linear01, %src0_term2 : index
     %src0_linear = index.add %src0_linear012, %src0_term3 : index
+    %src1_term0 = index.mul %coord0, %s1_0 : index
     %src1_term1 = index.mul %coord1, %s1_1 : index
     %src1_term2 = index.mul %coord2, %s1_2 : index
     %src1_term3 = index.mul %coord3, %s1_3 : index
-    %src1_linear01 = index.add %coord0, %src1_term1 : index
+    %src1_linear01 = index.add %src1_term0, %src1_term1 : index
     %src1_linear012 = index.add %src1_linear01, %src1_term2 : index
     %src1_linear = index.add %src1_linear012, %src1_term3 : index
     %src0_in_bounds = index.cmp ult, %src0_linear, %src0_count : index
