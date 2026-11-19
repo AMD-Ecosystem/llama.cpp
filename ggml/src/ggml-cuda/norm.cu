@@ -1,4 +1,5 @@
 #include "norm.cuh"
+#include "convert.cuh"
 #include <cstdint>
 
 template <int block_size>
@@ -81,9 +82,9 @@ static __global__ void group_norm_f32(const float * x, float * dst, const int gr
     }
 }
 
-template <int block_size, int vpt, bool do_vec, bool do_multiply = false, bool do_add = false, bool do_scale = false>
+template <int block_size, int vpt, bool do_vec, bool do_multiply = false, bool do_add = false, bool do_scale = false, typename dst_t = float>
 static __global__ void rms_norm_f32(const float * x,
-                                    float *       dst,
+                                    dst_t *       dst,
                                     const int     ncols,
                                     const int     nchannels,
                                     const int     nsamples,
@@ -124,7 +125,7 @@ static __global__ void rms_norm_f32(const float * x,
     for (int sample = blockIdx.z; sample < nsamples; sample += gridDim.z) {
         for (int channel = blockIdx.y; channel < nchannels; channel += gridDim.y) {
             const float * xc   = x   + sample*stride_sample + channel*stride_channel + row*stride_row;
-            float       * dstc = dst + ((sample*nchannels + channel)*nrows + row)*ncols;
+            dst_t       * dstc = dst + ((sample*nchannels + channel)*nrows + row)*ncols;
 
             [[maybe_unused]] const float * mulc = nullptr;
             if constexpr (do_multiply) {
@@ -147,7 +148,7 @@ static __global__ void rms_norm_f32(const float * x,
                 const float4 * x4     = (const float4 *) xc;
                 const float4 * mul4   = (const float4 *) mulc;
                 const float4 * add4   = (const float4 *) addc;
-                float4 *       dst4   = (float4 *) dstc;
+                [[maybe_unused]] float4 * dst4 = (float4 *) dstc;
 
                 float4 xs[vpt];
                 float  tmp = 0.0f;
@@ -188,7 +189,19 @@ static __global__ void rms_norm_f32(const float * x,
                             r.z *= scale_out;
                             r.w *= scale_out;
                         }
-                        dst4[i] = r;
+                        if constexpr (std::is_same_v<dst_t, float>) {
+                            dst4[i] = r;
+                        } else {
+#if defined(GGML_USE_HIP)
+                            asm volatile("" : "+v"(r.x), "+v"(r.y), "+v"(r.z), "+v"(r.w));
+#else
+                            asm volatile("" : "+f"(r.x), "+f"(r.y), "+f"(r.z), "+f"(r.w));
+#endif
+                            dstc[4*i + 0] = ggml_cuda_cast<dst_t>(r.x);
+                            dstc[4*i + 1] = ggml_cuda_cast<dst_t>(r.y);
+                            dstc[4*i + 2] = ggml_cuda_cast<dst_t>(r.z);
+                            dstc[4*i + 3] = ggml_cuda_cast<dst_t>(r.w);
+                        }
                     }
                 }
             } else {
@@ -212,7 +225,15 @@ static __global__ void rms_norm_f32(const float * x,
                         dstc[col]         = scale * xc[col] * mulc[mul_col] + addc[add_col];
                     } else if constexpr (do_multiply) {
                         const int mul_col = fastmodulo(col, mul_ncols_packed);
-                        dstc[col]         = scale * xc[col] * mulc[mul_col];
+                        float value = scale * xc[col] * mulc[mul_col];
+                        if constexpr (!std::is_same_v<dst_t, float>) {
+#if defined(GGML_USE_HIP)
+                            asm volatile("" : "+v"(value));
+#else
+                            asm volatile("" : "+f"(value));
+#endif
+                        }
+                        dstc[col] = ggml_cuda_cast<dst_t>(value);
                     } else if constexpr (do_scale) {
                         dstc[col] = scale_out * (scale * xc[col]);
                     } else {
@@ -387,7 +408,7 @@ static void group_norm_f32_cuda(
     do { \
         const dim3 block_dims(BLOCK_SIZE, 1, 1); \
         const ggml_cuda_kernel_launch_params launch_params{ blocks_num, block_dims, block_dims.x > WARP_SIZE ? 32 * sizeof(float) : 0, stream }; \
-        ggml_cuda_kernel_launch(rms_norm_f32<BLOCK_SIZE, VPT, VEC, do_multiply, do_add, do_scale>, launch_params, \
+        ggml_cuda_kernel_launch(rms_norm_f32<BLOCK_SIZE, VPT, VEC, do_multiply, do_add, do_scale, dst_t>, launch_params, \
             x, dst, ncols, nchannels, nsamples, stride_row, stride_channel, stride_sample, eps, \
             mul, mul_stride_row, mul_stride_channel, mul_stride_sample, \
             mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed, \
@@ -395,10 +416,10 @@ static void group_norm_f32_cuda(
             add_ncols_packed, add_nrows_packed, add_nchannels_packed, add_nsamples_packed, scale_out); \
     } while (0)
 
-template <bool do_multiply, bool do_add, bool do_scale>
+template <bool do_multiply, bool do_add, bool do_scale, typename dst_t = float>
 static void rms_norm_f32_dispatch(
         const dim3     blocks_num,
-        const ggml_tensor * x_t,   float * dst,   const int ncols, const int nchannels, const int nsamples,
+        const ggml_tensor * x_t,   dst_t * dst,   const int ncols, const int nchannels, const int nsamples,
         const int64_t  stride_row, const int64_t stride_channel, const int64_t stride_sample, const float eps,
         const ggml_tensor * mul_t, const int64_t mul_stride_row, const int64_t mul_stride_channel, const int64_t mul_stride_sample,
         const uint3    mul_ncols_packed, const uint3 mul_nrows_packed, const uint3 mul_nchannels_packed, const uint3 mul_nsamples_packed,
@@ -448,6 +469,19 @@ static void rms_norm_f32_dispatch(
     }
 }
 #undef RMS_NORM_LAUNCH
+
+template <typename T>
+void ggml_cuda_rms_norm_mul_to_16bit(const ggml_tensor * x, const ggml_tensor * weight, T * dst, float eps, cudaStream_t stream) {
+    const uint3 one = init_fastdiv_values(1);
+    const uint3 zero = make_uint3(0, 0, 0);
+    rms_norm_f32_dispatch<true, false, false, T>(
+        dim3(x->ne[1]), x, dst, x->ne[0], 1, 1, x->nb[1]/sizeof(float), 0, 0, eps,
+        weight, 0, 0, 0, init_fastdiv_values(x->ne[0]), one, one, one,
+        nullptr, 0, 0, 0, zero, zero, zero, zero, stream);
+}
+
+template void ggml_cuda_rms_norm_mul_to_16bit<half>(const ggml_tensor *, const ggml_tensor *, half *, float, cudaStream_t);
+template void ggml_cuda_rms_norm_mul_to_16bit<nv_bfloat16>(const ggml_tensor *, const ggml_tensor *, nv_bfloat16 *, float, cudaStream_t);
 
 template <bool do_scale = false>
 static void rms_norm_f32_cuda(
