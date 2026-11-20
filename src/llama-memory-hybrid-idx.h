@@ -107,6 +107,15 @@ public:
     const stale_pos_t & mem_idx_stale_get() const { return mem_idx_stale; }
     void mem_idx_stale_clear() { mem_idx_stale.fill(POS_CLEAN); }
 
+    // The pool marks of a batch, per global cell the generation that last marked a pool with that rep.
+    // Kept here because a context lives for one batch only and the array spans the whole cache.
+    struct kpool_marks {
+        std::vector<uint32_t> rep_gen;
+        uint32_t generation = 0;
+    };
+
+    kpool_marks & kpool_marks_get() { return kpool_mk; }
+
 private:
     // forget seq_id (all of it if seq_id < 0) in every cache at once, so a failed restore cannot leave the caches out of step
     // seq_id < 0 drops the whole context, as the caches themselves do on a failed restore
@@ -120,6 +129,8 @@ private:
 
     // unique_ptr because kpool_layout is incomplete here
     std::unique_ptr<kpool_layout> kpool_lay;
+
+    kpool_marks kpool_mk;
 
     // seq_id < 0 stales every sequence, p0 < 0 stales the sequence from its first position
     void mem_idx_stale_set(llama_seq_id seq_id, llama_pos p0);

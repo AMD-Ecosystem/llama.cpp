@@ -58,6 +58,9 @@ struct llama_mmap {
 
     void unmap_fragment(size_t first, size_t last);
 
+    // drop the pages of [first, last) from the working set, the range stays mapped (no-op except on Windows)
+    void evict(size_t first, size_t last);
+
     static const bool SUPPORTED;
 
 private:

@@ -2770,13 +2770,16 @@ struct llama_model_qwen4exp : public llama_model_base {
         std::map<ggml_tensor *, ggml_tensor *> rs_rows;
 
         // one conv history per cache tensor: delta-net and PLE each have their own
+        // split_tail: the state is written back from a separate concat of the last columns only,
+        // so that the full conv input feeds the convolution alone (backends may fuse the two)
         ggml_tensor * build_conv_state_at(
              llm_graph_input_rs * inp,
                     ggml_tensor * conv_states_all,
                     ggml_tensor * x,
                         int64_t   state_cols,
                         int64_t   channels,
-                            int   il);
+                            int   il,
+                           bool   split_tail = false);
 
         ggml_tensor * build_inp_ple(
   const llama_memory_hybrid_idx_context * mctx_hyb);

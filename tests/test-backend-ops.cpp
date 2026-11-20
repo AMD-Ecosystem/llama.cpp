@@ -244,6 +244,37 @@ static void init_tensor_kq_mask_sparse(ggml_tensor * tensor, int64_t n_kv_max) {
     ggml_backend_tensor_set(tensor, data_f16.data(), 0, data_f16.size()*sizeof(ggml_fp16_t));
 }
 
+// like init_tensor_kq_mask_sparse, but the rows pick their cells in blocks of 4 from a pool of sel_pool_pct% of n_kv_max cells
+// shared by all rows, so neighbouring queries overlap like the selections of a Qwen QSA indexer
+static void init_tensor_kq_mask_sparse_shared(ggml_tensor * tensor, int64_t n_kv_max, int sel_pool_pct) {
+    GGML_ASSERT(tensor->type == GGML_TYPE_F16);
+    GGML_ASSERT(n_kv_max > 0 && n_kv_max <= tensor->ne[0] && sel_pool_pct >= 100);
+
+    const int64_t ne0 = tensor->ne[0];
+    const int64_t nrows = ggml_nrows(tensor);
+    const int64_t n_pool_blocks = std::min<int64_t>(ne0/4, n_kv_max*sel_pool_pct/100/4);
+    std::vector<float> data_f32(ggml_nelements(tensor), -INFINITY);
+    std::vector<ggml_fp16_t> data_f16(ggml_nelements(tensor));
+    std::vector<int32_t> order(ne0/4);
+    for (int64_t i = 0; i < ne0/4; ++i) {
+        order[i] = i;
+    }
+
+    std::mt19937 gen(0x5A17);
+    std::shuffle(order.begin(), order.end(), gen);
+    std::vector<int32_t> pool(order.begin(), order.begin() + n_pool_blocks);
+    for (int64_t row = 0; row < nrows; ++row) {
+        std::shuffle(pool.begin(), pool.end(), gen);
+        const int64_t count = n_kv_max - row % std::min<int64_t>(n_kv_max, 17);
+        for (int64_t i = 0; i < count; ++i) {
+            data_f32[row*ne0 + 4*int64_t(pool[i/4]) + i%4] = -0.03125f * (1 + (i + row) % 7);
+        }
+    }
+
+    ggml_fp32_to_fp16_row(data_f32.data(), data_f16.data(), data_f16.size());
+    ggml_backend_tensor_set(tensor, data_f16.data(), 0, data_f16.size()*sizeof(ggml_fp16_t));
+}
+
 // generate a lower triangular matrix
 static void init_tensor_tril(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f) {
     GGML_ASSERT(tensor->type == GGML_TYPE_F32);
@@ -5102,6 +5133,70 @@ struct test_ssm_conv_bias_silu : public test_case {
     }
 };
 
+// GGML_OP_CONCAT(state, transpose(x)) + GGML_OP_SSM_CONV + optional bias ADD and SILU (fused operation)
+// state: [d_conv - 1, d_inner, n_s], x: [d_inner, n_t, n_s] as written by the qkv matmul, so the concat reads x transposed
+struct test_ssm_conv_concat : public test_case {
+    const int64_t d_conv;
+    const int64_t d_inner;
+    const int64_t n_t;
+    const int64_t n_s;
+    const bool    fuse_bias;
+    const bool    fuse_silu;
+    const bool    x_view; // x is a view of a wider tensor, as qkv inside a fused qkvz output
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "SSM_CONV_CONCAT";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::string vars() override {
+        return VARS_TO_STR7(d_conv, d_inner, n_t, n_s, fuse_bias, fuse_silu, x_view);
+    }
+
+    test_ssm_conv_concat(int64_t d_conv = 4, int64_t d_inner = 1024, int64_t n_t = 64, int64_t n_s = 1,
+            bool fuse_bias = false, bool fuse_silu = true, bool x_view = false)
+        : d_conv(d_conv), d_inner(d_inner), n_t(n_t), n_s(n_s), fuse_bias(fuse_bias), fuse_silu(fuse_silu), x_view(x_view) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * state = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, d_conv - 1, d_inner, n_s);
+        ggml_set_name(state, "state");
+
+        ggml_tensor * x;
+        if (x_view) {
+            x = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, d_inner + 96, n_t, n_s);
+            ggml_set_name(x, "x_wide");
+            x = ggml_view_3d(ctx, x, d_inner, n_t, n_s, x->nb[1], x->nb[2], 32 * x->nb[0]);
+            ggml_set_name(x, "x");
+        } else {
+            x = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, d_inner, n_t, n_s);
+            ggml_set_name(x, "x");
+        }
+
+        ggml_tensor * w = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, d_conv, d_inner);
+        ggml_set_name(w, "w");
+
+        ggml_tensor * conv_x = ggml_concat(ctx, state, ggml_transpose(ctx, x), 0);
+        ggml_set_name(conv_x, "conv_x");
+
+        ggml_tensor * out = ggml_ssm_conv(ctx, conv_x, w);
+
+        if (fuse_bias) {
+            ggml_tensor * bias = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, out->ne[0]);
+            ggml_set_name(bias, "bias");
+            out = ggml_add(ctx, out, bias);
+        }
+
+        if (fuse_silu) {
+            out = ggml_silu(ctx, out);
+        }
+
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
 // GGML_OP_SSM_SCAN
 struct test_ssm_scan : public test_case {
     const ggml_type type;
@@ -9444,6 +9539,29 @@ struct test_flash_attn_ext_large_logits : public test_flash_attn_ext {
     }
 };
 
+// Qwen QSA attention (256/256, gqa 12, f16 cache) with queries that select from a shared pool of cells
+struct test_flash_attn_ext_qsa : public test_flash_attn_ext {
+    const int sel_pool_pct;
+
+    test_flash_attn_ext_qsa(int64_t kv, int64_t nb, int64_t n_kv_max, int sel_pool_pct)
+        : test_flash_attn_ext(256, 256, 2, {12, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16,
+                              {0, 1, 2, 3}, true, false, n_kv_max), sel_pool_pct(sel_pool_pct) {}
+
+    std::string vars() override {
+        return test_flash_attn_ext::vars() + ",sel_pool_pct=" + std::to_string(sel_pool_pct);
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "m") == 0) {
+                init_tensor_kq_mask_sparse_shared(t, n_kv_max, sel_pool_pct);
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
 // GGML_OP_FLASH_ATTN_EXT with kv_rows: each q slice attends to its own list of K/V cache rows
 struct test_flash_attn_ext_kv_rows : public test_case {
     const int64_t hs;
@@ -12028,6 +12146,23 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // concat(state, transpose(x)) + ssm_conv (+ bias) (+ silu), with the concat fused into the conv
+    for (int64_t d_conv : {3, 4, 9}) {
+        for (int64_t n_t : {1, 2, 3, 5, 32, 33, 100}) {
+            for (int64_t n_s : {1, 3}) {
+                test_cases.emplace_back(new test_ssm_conv_concat(d_conv, 1536, n_t, n_s, false, true,  false));
+                test_cases.emplace_back(new test_ssm_conv_concat(d_conv, 1536, n_t, n_s, true,  true,  false));
+                test_cases.emplace_back(new test_ssm_conv_concat(d_conv, 1536, n_t, n_s, false, false, true));
+                test_cases.emplace_back(new test_ssm_conv_concat(d_conv, 1536, n_t, n_s, true,  false, true));
+            }
+        }
+    }
+    test_cases.emplace_back(new test_ssm_conv_concat(4, 1152, 37, 2, true, true, true)); // d_inner not a multiple of 256
+    // Qwen3.8-Flash-Next linear attention: 10240 channels, prefill ubatch, MTP verify, decode
+    for (int64_t n_t : {1, 3, 2048}) {
+        test_cases.emplace_back(new test_ssm_conv_concat(4, 10240, n_t, 1, false, true, false));
+    }
+
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 16, 1, 1024, 1, 32, 4)); // Mamba-1
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 64, 64, 112, 2, 32, 4)); // Zamba2 (real hparams: d_inner=7168, dt_rank=112, n_group=2 -> head_dim=7168/112=64)
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 64, 64, 112, 2, 1, 1)); // Zamba2 decode (single-token, matches real per-token decode workload)
@@ -13011,6 +13146,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
     // a selection of the indexer of sparse attention, with more ties at the threshold than slots
     test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {1088, 2048, 1, 1}, 512, true));
+    // Qwen QSA pools: 512 of a few thousand pools per token, scores with ties and many -inf (invisible pools)
+    for (int64_t n_pool : {1500, 4224, 8768, 16960, 32768}) {
+        for (int64_t nrows : {1, 3, 20}) {
+            test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {n_pool, nrows, 1, 1}, 512));
+            test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {n_pool, nrows, 1, 1}, 512, true));
+            test_cases.emplace_back(new test_top_k_inf({n_pool, nrows, 1, 1}, 512));
+        }
+    }
+    test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {16961, 2, 2, 2}, 512, true));
 
     for (int i = 0; i < 20; ++i) {
         for (int k : {1, 2, 3, 7, 15, 100, 500, 1023, 9999}) {
@@ -13457,6 +13601,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     // Qwen QSA: 256/256, gqa 12, budget 2048.
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {12, 1}, 8192, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false, 2048));
+    // MTP verify and draft blocks
+    for (int nb : {2, 3, 4, 8}) {
+        test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {12, 1}, nb == 8 ? 32768 : 16384, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false, 2048));
+    }
+    // prompt batches: partial tiles, independent and shared selections
+    for (int64_t nb : {9, 64, 130, 512}) {
+        test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {12, 1}, nb == 130 ? 32768 : 16384, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false, 2048));
+        test_cases.emplace_back(new test_flash_attn_ext_qsa(nb == 130 ? 32768 : 16384, nb, 2048, 150));
+    }
+    test_cases.emplace_back(new test_flash_attn_ext_qsa(16384, 2048, 2048, 150));
+    test_cases.emplace_back(new test_flash_attn_ext_qsa(10240, 512, 2048, 400));
+    test_cases.emplace_back(new test_flash_attn_ext_qsa(65536, 130, 2048, 500));
     // quantized cache, deep enough to take the sparse path
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {12, 1}, 32768, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 1, 2, 3}, true, false, 2048));
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {12, 1}, 32768, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0, {0, 1, 2, 3}, true, false, 2048));
@@ -13729,6 +13885,27 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_moe_reduce(2048, 15, 40, false, true));
     test_cases.emplace_back(new test_moe_reduce(2048, 16, 32, false, true));
 
+    // Qwen3.8-Flash-Next: 10 experts of 2560 columns at decode, MTP verify and prompt batches (odd counts, unaligned experts)
+    for (int64_t n_tokens : { 1, 3, 17, 2048, 2051 }) {
+        test_cases.emplace_back(new test_moe_reduce(2560, 10, n_tokens));
+    }
+    test_cases.emplace_back(new test_moe_reduce(2560, 10, 37, true));
+    test_cases.emplace_back(new test_moe_reduce(2560, 10, 37, true, true, true));
+    test_cases.emplace_back(new test_moe_reduce_mul_mat_vec(2560, 10, 1));
+    // the router of the same model: F32 512x2560 at decode, MTP verify, a small and a full prompt batch
+    for (int64_t n_tokens : { 1, 3, 17, 130, 2048, 2051 }) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 512, n_tokens, 2560, {1, 1}, {1, 1}));
+    }
+    // other row counts and depths of F32 prompt products (SSM alpha/beta have 48 rows), batched and permuted ones
+    for (int64_t m : { 16, 48, 80, 511, 1000, 1024, 1040 }) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, m, 130, 2560, {1, 1}, {1, 1}));
+    }
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 512, 300, 64, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 512, 300, 96, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 512, 130, 2560, {2, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 512, 130, 2560, {1, 1}, {1, 1}, {0, 2, 1, 3}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 512, 130, 2560, {1, 1}, {1, 1}, {0, 1, 2, 3}, 2624));
+
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 1, 1));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1, 1, true, true));
@@ -13817,6 +13994,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // Qwen QSA indexer: 4 heads, prompt batches that are not a multiple of the WMMA token tile, kv that is not a multiple of the key tile
+    for (auto [kv, nb, ns, nm] : {std::tuple{1001, 37, 1, 1}, std::tuple{8768, 130, 1, 1}, std::tuple{300, 16, 1, 1},
+                                  std::tuple{4224, 2051, 1, 1}, std::tuple{515, 17, 3, 3}, std::tuple{515, 64, 3, 1}}) {
+        for (ggml_type type_K : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+            test_cases.emplace_back(new test_lightning_indexer(128, 4, kv, nb, ns, nm, type_K));
+        }
+    }
+
     return test_cases;
 }
 #ifdef _MSC_VER
@@ -13854,6 +14039,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     // Qwen3.8-Flash-Next pooled indexer prefill.
     test_cases.emplace_back(new test_lightning_indexer(128, 4, 1088, 1024, 1, 1, GGML_TYPE_F32));
     test_cases.emplace_back(new test_lightning_indexer(128, 4, 1088, 1024, 1, 1, GGML_TYPE_Q4_0));
+    // the same at 8K / 32K / 64K context (4 cells per pool), and a 3 token verify batch
+    for (int kv : {2560, 8768, 16960}) {
+        test_cases.emplace_back(new test_lightning_indexer(128, 4, kv, 2048, 1, 1, GGML_TYPE_F32));
+    }
+    test_cases.emplace_back(new test_lightning_indexer(128, 4, 8768, 3, 1, 1, GGML_TYPE_F32));
+    // Qwen3.8-Flash-Next MoE: the weighted sum of 10 experts and the F32 router
+    for (int64_t n_tokens : { 1, 3, 512, 2048 }) {
+        test_cases.emplace_back(new test_moe_reduce(2560, 10, n_tokens));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 512, n_tokens, 2560, {1, 1}, {1, 1}));
+    }
     // SWIGLU at a 27B-class FFN width, fused [gate|up] vs split operands
     // note: same bytes either way, so a backend that indexes them differently shows it here
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_BF16}) {
@@ -13868,6 +14063,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         for (int64_t n_tokens : {512, 2048, 4096}) {
             test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {3, channels, 1, 1}, n_tokens, 0, 16));
         }
+    }
+    // the same conv input fused into the conv, and the unfused conv it replaces
+    for (int64_t n_tokens : {512, 2048}) {
+        test_cases.emplace_back(new test_ssm_conv_concat(4, 10240, n_tokens, 1, false, true, false));
+        test_cases.emplace_back(new test_ssm_conv_bias_silu(GGML_TYPE_F32, {3 + n_tokens, 10240, 1, 1}, {4, 10240, 1, 1}, false));
     }
 
     // CONT of a 0<->2 permute at DeepSeek-V4 lightning-indexer shapes:
@@ -14179,6 +14379,21 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_flash_attn_ext(576, 512, 1, {16, 1}, 49152, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, true,     0));
     test_cases.emplace_back(new test_flash_attn_ext(576, 512, 1, {16, 1}, 49152, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, true,  2048));
 
+    // Qwen QSA MTP verify and draft blocks
+    for (int64_t nb : {3, 8}) {
+        test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {12, 1}, 32768, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false, 2048));
+    }
+    // Qwen QSA prompt batches: independent random selections (the worst case for the union of a query tile)
+    // and selections from a shared pool of cells, 400-500% is close to the real indexer at 32K-64K
+    for (int64_t kv : {4096, 6144, 8192, 10240, 12288, 16384, 32768, 65536}) {
+        for (int64_t nb : {64, 512, 2048}) {
+            test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {12, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false, 2048));
+            for (int pool_pct : {110, 400, 500}) {
+                test_cases.emplace_back(new test_flash_attn_ext_qsa(kv, nb, 2048, pool_pct));
+            }
+        }
+    }
+
     // GQA 6 at long context: decode, verify (4), draft block (8) and a prompt ubatch
     for (int kv : { 32768, 131072 }) {
         for (int nb : { 1, 4, 8 }) {
@@ -14330,6 +14545,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
             for (auto cols : {k, 1000, 65000, 200000}) {
                 test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {cols, nrows, 1, 1}, k));
             }
+        }
+    }
+
+    // Qwen QSA: 512 of the pools of an 8K / 32K / 64K context for a prompt batch, a verify batch and a single token
+    for (auto cols : {2560, 8768, 16960}) {
+        for (auto nrows : {1, 3, 2048}) {
+            test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {cols, nrows, 1, 1}, 512));
         }
     }
 

@@ -1709,13 +1709,24 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         }
     }
 
-    // resolve AUTO on systems without mmap support (e.g. iGPUs): fall back to OFF unless mmap is in use; see #28160, #31943
+    // resolve AUTO on systems without mmap support (e.g. iGPUs): keep the tensors resident unless mmap is in use; see #28160, #31943
+    // a tensor that takes more than a quarter of the host memory is still read lazily, keeping it resident would page
     if (ml.lazy.mode == LLAMA_LAZY_MODE_AUTO && !ml.use_mmap) {
         for (const auto & dev : devices) {
             ggml_backend_dev_props props;
             ggml_backend_dev_get_props(dev.dev, &props);
             if (!props.caps.mmap_support) {
-                ml.lazy.mode = LLAMA_LAZY_MODE_OFF;
+                size_t host_free  = 0;
+                size_t host_total = 0;
+                ggml_backend_dev_t host_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+                if (host_dev) {
+                    ggml_backend_dev_memory(host_dev, &host_free, &host_total);
+                }
+                if (host_total == 0) {
+                    ml.lazy.mode = LLAMA_LAZY_MODE_OFF;
+                } else {
+                    ml.lazy.auto_min_size = std::max(ml.lazy.auto_min_size, host_total / 4);
+                }
                 break;
             }
         }

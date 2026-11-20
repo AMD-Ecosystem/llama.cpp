@@ -88,6 +88,9 @@ struct llama_model_loader {
         // set by the caller before the create_tensor() calls
         enum llama_lazy_mode mode = LLAMA_LAZY_MODE_OFF;
 
+        // in AUTO mode, only tensors larger than this are read lazily
+        size_t auto_min_size = 4ull * 1024 * 1024 * 1024;
+
         // decide whether this tensor is read lazily
         // pass w to also record it, or nullptr to only ask
         bool add(const std::string & name, const ggml_tensor * t, const llama_tensor_weight * w);

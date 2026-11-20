@@ -37,6 +37,7 @@
 #include "ggml-cuda/mmvf.cuh"
 #include "ggml-cuda/mmvq.cuh"
 #include "ggml-cuda/moe-weighted-reduction.cuh"
+#include "ggml-cuda/mul-mat-f32-wmma.cuh"
 #include "ggml-cuda/norm.cuh"
 #include "ggml-cuda/opt-step-adamw.cuh"
 #include "ggml-cuda/opt-step-sgd.cuh"
@@ -2750,6 +2751,10 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     if (src0->type == GGML_TYPE_F8_E4M3 && ggml_cuda_mul_mat_fp8(ctx, src0, src1, dst)) {
         return;
     }
+    if (ggml_cuda_should_use_mul_mat_f32_wmma(src0, src1, dst, cc)) {
+        ggml_cuda_mul_mat_f32_wmma(ctx, src0, src1, dst);
+        return;
+    }
     ggml_cuda_mul_mat_cublas(ctx, src0, src1, dst);
 }
 
@@ -4715,6 +4720,38 @@ static bool ggml_cuda_mmvq_reads_soon(const ggml_cgraph * cgraph, int i, const g
     return false;
 }
 
+// A dim 0 CONCAT whose only use is the SSM_CONV right after it: the conv reads both concat inputs in place.
+// Returns the number of nodes after the CONCAT that are fused (SSM_CONV, then the optional ADD bias and SILU), or 0.
+// Shared by ggml_cuda_try_fuse and graph_optimize, and independent of the batch size.
+static int ggml_cuda_ssm_conv_concat_match(const ggml_cgraph * cgraph, int i) {
+    if (i + 1 >= cgraph->n_nodes) {
+        return 0;
+    }
+    const ggml_tensor * concat = cgraph->nodes[i];
+    const ggml_tensor * conv   = cgraph->nodes[i + 1];
+    if (concat->op != GGML_OP_CONCAT || conv->op != GGML_OP_SSM_CONV || conv->src[0] != concat ||
+            (concat->flags & GGML_TENSOR_FLAG_COMPUTE) == 0 || (conv->flags & GGML_TENSOR_FLAG_COMPUTE) == 0 ||
+            !ggml_node_has_n_uses(cgraph, i, 1) || ggml_get_op_params_i32(concat, 0) != 0) {
+        return 0;
+    }
+    const ggml_tensor * w = conv->src[1];
+    if (concat->src[0]->type != GGML_TYPE_F32 || concat->src[1]->type != GGML_TYPE_F32 || conv->type != GGML_TYPE_F32 ||
+            w->type != GGML_TYPE_F32 || w->nb[0] != sizeof(float) || concat->ne[3] != 1) {
+        return 0;
+    }
+    switch (w->ne[0]) {
+        case 3: case 4: case 5: case 7: case 9: case 15: break;
+        default: return 0;
+    }
+    if (ggml_cuda_can_fuse(cgraph, i + 1, { GGML_OP_SSM_CONV, GGML_OP_ADD, GGML_OP_UNARY }, { GGML_UNARY_OP_SILU })) {
+        return 3;
+    }
+    if (ggml_cuda_can_fuse(cgraph, i + 1, { GGML_OP_SSM_CONV, GGML_OP_UNARY }, { GGML_UNARY_OP_SILU })) {
+        return 2;
+    }
+    return 1;
+}
+
 // try and fuse nodes and return the number of nodes to skip
 static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
 
@@ -5555,6 +5592,17 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         return 1;
     }
 
+    if (node->op == GGML_OP_CONCAT) {
+        const int n_conv = ggml_cuda_ssm_conv_concat_match(cgraph, i);
+        const int out    = i + n_conv;
+        if (n_conv > 0 && ggml_cuda_check_fusion_memory_ranges(cgraph, i, n_conv + 1, &out, 1)) {
+            ggml_tensor * bias_add = n_conv == 3 ? cgraph->nodes[i + 2] : nullptr;
+            ggml_tensor * silu     = n_conv >= 2 ? cgraph->nodes[out] : nullptr;
+            ggml_cuda_op_ssm_conv(*cuda_ctx, cgraph->nodes[i + 1], bias_add, silu, /*fuse_concat =*/ true);
+            return n_conv;
+        }
+    }
+
     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_SSM_CONV, GGML_OP_ADD, GGML_OP_UNARY }, { GGML_UNARY_OP_SILU })) {
         ggml_cuda_op_ssm_conv(*cuda_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 2]);
         return 2;
@@ -6008,6 +6056,16 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
         }
 
         for (int i = 0; i < cgraph->n_nodes; ++i) {
+            // The SSM_CONV fused with its input CONCAT reads the concat inputs, keep them alive until its last node.
+            if (cgraph->nodes[i]->op == GGML_OP_CONCAT) {
+                const int n_conv = ggml_cuda_ssm_conv_concat_match(cgraph, i);
+                if (n_conv > 0) {
+                    params->add_alloc_dep(params->user_data, cgraph->nodes[i]->src[0], cgraph->nodes[i + n_conv]);
+                    params->add_alloc_dep(params->user_data, cgraph->nodes[i]->src[1], cgraph->nodes[i + n_conv]);
+                    i += n_conv;
+                    continue;
+                }
+            }
             // Keep the inputs of the fused gate/up/GLU MMQ kernel alive until the GLU so that they cannot alias its output (under op offload the weights are buffer copies).
             if (i + 2 < cgraph->n_nodes && cgraph->nodes[i + 2]->op == GGML_OP_GLU) {
                 ggml_tensor * glu  = cgraph->nodes[i + 2];

@@ -1178,7 +1178,8 @@ void launch_fattn(
         GGML_ASSERT(mask != nullptr);
         const int32_t n_kv_max_query = ggml_get_op_params_i32(KQV, 4);
         GGML_ASSERT(n_kv_max_query > 0);
-        n_kv_max = std::min<int64_t>(K->ne[1], int64_t(ncols1)*n_kv_max_query);
+        // a tile holds at most Q->ne[1] queries, e.g. a single one when decoding with a wide tile
+        n_kv_max = std::min<int64_t>(K->ne[1], std::min<int64_t>(ncols1, Q->ne[1])*n_kv_max_query);
 
         const size_t n_lists = size_t(ntiles_x) * mask->ne[3];
 

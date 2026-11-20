@@ -1146,7 +1146,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn_linear(
     const int64_t conv_channels    = head_k_dim * num_k_heads * 2 + head_v_dim * num_v_heads;
 
     ggml_tensor * conv_input = build_conv_state_at(inp, conv_states_all, qkv_mixed,
-            conv_kernel_size - 1, conv_channels, il);
+            conv_kernel_size - 1, conv_channels, il, /*split_tail =*/ true);
 
     ggml_tensor * state = build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs);
     state = ggml_reshape_4d(ctx0, state, head_v_dim, head_v_dim, num_v_heads, n_seqs);
@@ -1371,7 +1371,8 @@ ggml_tensor * llama_model_qwen4exp::graph::build_conv_state_at(
         ggml_tensor *        x,
         int64_t              state_cols,
         int64_t              channels,
-        int                  il) {
+        int                  il,
+        bool                 split_tail) {
     const int64_t n_seqs    = ubatch.n_seqs;
     const int64_t row_total = conv_states_all->ne[0];
 
@@ -1387,9 +1388,22 @@ ggml_tensor * llama_model_qwen4exp::graph::build_conv_state_at(
     ggml_tensor * state = ggml_reshape_3d(ctx0, rows, state_cols, channels, n_seqs);
     cb(state, "conv_state_at", il);
 
+    // the store reads the last state_cols + n_rs_seq columns; with tail_tokens columns of x after the state,
+    // all of them come from x, so a short concat gives the same values as the full one
+    const int64_t n_seq_tokens = x->ne[1];
+    const int64_t tail_tokens  = split_tail ? std::min<int64_t>(n_seq_tokens, state_cols + cparams.n_rs_seq) : n_seq_tokens;
+
     ggml_tensor * conv_input = ggml_concat(ctx0, state, ggml_transpose(ctx0, x), 0);
 
-    build_conv_state_store(inp, conv_states_all, conv_input, state_cols, 0);
+    ggml_tensor * conv_tail = conv_input;
+    if (tail_tokens < n_seq_tokens) {
+        ggml_tensor * x_tail = ggml_view_3d(ctx0, x, x->ne[0], tail_tokens, n_seqs, x->nb[1], x->nb[2],
+                (n_seq_tokens - tail_tokens) * x->nb[1]);
+        conv_tail = ggml_concat(ctx0, state, ggml_transpose(ctx0, x_tail), 0);
+        cb(conv_tail, "conv_state_tail", il);
+    }
+
+    build_conv_state_store(inp, conv_states_all, conv_tail, state_cols, 0);
 
     return conv_input;
 }
