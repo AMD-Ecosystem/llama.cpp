@@ -153,12 +153,6 @@ static bool iq_codebook_matmul_disabled(CommonMulMatWeightFormat format) {
     return false;
 }
 
-static bool iq_codebook_matmul_required(CommonMulMatWeightFormat format) {
-    return format == CommonMulMatWeightFormat::IQ1_S || format == CommonMulMatWeightFormat::IQ1_M ||
-           format == CommonMulMatWeightFormat::IQ2_XXS || format == CommonMulMatWeightFormat::IQ2_XS ||
-           format == CommonMulMatWeightFormat::IQ3_XXS;
-}
-
 static const IQCodebookResourceSpec * iq_codebook_for_weight_format(CommonMulMatWeightFormat format) {
     switch (format) {
         case CommonMulMatWeightFormat::IQ1_S:

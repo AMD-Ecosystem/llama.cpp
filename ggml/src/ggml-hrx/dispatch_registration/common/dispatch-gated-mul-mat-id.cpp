@@ -3,8 +3,6 @@
 #include "dispatch-mul-mat-id-common.h"
 #include "ggml.h"
 #include "graph/graph-matcher.h"
-#include "dispatch_registration/immutable-program-resource.h"
-#include "iq-codebook-resource.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
 
 #include <cstdint>
@@ -154,25 +152,13 @@ static KernelCatalogRef mul_mat_id_swiglu_f32_kernel(const MulMatIdSwiGLUMatch &
     return match.token_count <= 5 ? kMulMatIdSkinnySwiGLUF32F32Kernel : kMulMatIdTiledSwiGLUF32F32Kernel;
 }
 
-static bool requires_unsupported_routed_codebook(CommonMulMatWeightFormat format) {
-    switch (format) {
-        case CommonMulMatWeightFormat::IQ1_S:
-        case CommonMulMatWeightFormat::IQ1_M:
-        case CommonMulMatWeightFormat::IQ2_XXS:
-        case CommonMulMatWeightFormat::IQ2_XS:
-            return true;
-        default:
-            return false;
-    }
-}
-
 static bool match_mul_mat_id_swiglu_dispatch(const DispatchMatchContext & context, DispatchMatch & dispatch_match) {
     const MulMatIdSwiGLUMatch match = match_mul_mat_id_swiglu(context);
     if (!match.matched()) {
         return false;
     }
-    const bool gate_format_unsupported = requires_unsupported_routed_codebook(match.gate_format);
-    const bool up_format_unsupported   = requires_unsupported_routed_codebook(match.up_format);
+    const bool gate_format_unsupported = routed_weight_lacks_decoder(match.gate_format);
+    const bool up_format_unsupported   = routed_weight_lacks_decoder(match.up_format);
     const bool unsupported_format      = gate_format_unsupported || up_format_unsupported;
     if (unsupported_format) {
         return false;
@@ -211,20 +197,10 @@ static bool match_mul_mat_id_swiglu_dispatch(const DispatchMatchContext & contex
     dispatch.bindings.push_back({ match.gate_weight->id, 0, match.gate_weight->byte_count });
     dispatch.bindings.push_back({ match.up_weight->id, 0, match.up_weight->byte_count });
     dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
-    const bool gate_uses_iq3_xxs = match.gate_format == CommonMulMatWeightFormat::IQ3_XXS;
-    const bool up_uses_iq3_xxs   = match.up_format == CommonMulMatWeightFormat::IQ3_XXS;
-    const bool requires_iq3_xxs_grid = gate_uses_iq3_xxs || up_uses_iq3_xxs;
-    if (requires_iq3_xxs_grid) {
-        const IQCodebookResourceSpec & codebook = iq_codebook_resource_spec(IQCodebookResource::IQ3XXS);
-        const ValueId grid = require_immutable_program_resource(
-            context, dispatch_match, { codebook.key, codebook.data, codebook.alignment });
-        if (grid.value < 0) {
+    for (const auto format : { match.gate_format, match.up_format }) {
+        if (!bind_routed_weight_codebook(context, dispatch_match, dispatch, format, *match.input)) {
             return false;
         }
-        dispatch.bindings.push_back({ grid, 0, codebook.data.size() });
-    } else {
-        // The format is specialized at compile time; use an existing read-only buffer for the unused slot.
-        dispatch.bindings.push_back({ match.input->id, 0, match.input->byte_count });
     }
 
     if (!append_covered_node_index_once(context.graph, context.covered_nodes, match.gate_node,

@@ -1,6 +1,8 @@
 #pragma once
 
 #include "../dispatch-registry.h"
+#include "../immutable-program-resource.h"
+#include "iq-codebook-resource.h"
 #include "dispatch-mul-mat-weight-format.h"
 #include "ggml.h"
 #include "graph/graph-matcher.h"
@@ -14,6 +16,38 @@
 #include <vector>
 
 namespace ggml::hrx {
+
+inline bool routed_weight_lacks_decoder(CommonMulMatWeightFormat format) {
+    return format == CommonMulMatWeightFormat::IQ1_M || format == CommonMulMatWeightFormat::IQ2_XS;
+}
+
+inline bool bind_routed_weight_codebook(const DispatchMatchContext & context, DispatchMatch & match,
+                                        Dispatch & dispatch, CommonMulMatWeightFormat format, const Value & input) {
+    IQCodebookResource resource;
+    switch (format) {
+        case CommonMulMatWeightFormat::IQ1_S:
+            resource = IQCodebookResource::IQ1;
+            break;
+        case CommonMulMatWeightFormat::IQ2_XXS:
+            resource = IQCodebookResource::IQ2XXS;
+            break;
+        case CommonMulMatWeightFormat::IQ3_XXS:
+            resource = IQCodebookResource::IQ3XXS;
+            break;
+        default:
+            // The specialized decoder leaves the codebook binding unused.
+            dispatch.bindings.push_back({ input.id, 0, input.byte_count });
+            return true;
+    }
+    const auto & codebook = iq_codebook_resource_spec(resource);
+    const ValueId grid = require_immutable_program_resource(context, match,
+        { codebook.key, codebook.data, codebook.alignment });
+    if (grid.value < 0) {
+        return false;
+    }
+    dispatch.bindings.push_back({ grid, 0, codebook.data.size() });
+    return true;
+}
 
 struct CommonMulMatIdMatch {
     const Value *               input     = nullptr;
@@ -205,7 +239,9 @@ inline CommonMulMatIdMatch common_match_mul_mat_id_any_format(const Graph &     
     }
 
     CommonMulMatWeightFormat format = CommonMulMatWeightFormat::Q4K;
-    if (!common_mul_mat_format_for_type(weight->type, format)) {
+    if (weight->type == GGML_TYPE_IQ1_S) {
+        format = CommonMulMatWeightFormat::IQ1_S;
+    } else if (!common_mul_mat_format_for_type(weight->type, format)) {
         return {};
     }
 
