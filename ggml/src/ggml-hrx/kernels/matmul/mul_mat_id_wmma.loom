@@ -1,0 +1,788 @@
+// Weights and activations are rounded to f16. The sums are in f32.
+// The caller makes sure that K is a multiple of 32 and that the input is contiguous along K.
+// A negative id zeroes its dst column, like the CPU backend.
+
+config.decl @ggml.mul_mat_id.weight_type : %value: index where [range(%value, 0, 6)]
+
+// Several workgroups share the chunks of one expert and row group.
+config.decl @ggml.mul_mat_id.chunk_slots : %value: index where [range(%value, 1, 8)]
+
+// Workgroups that share the row tiles of one expert.
+config.decl @ggml.mul_mat_id.row_groups : %value: index where [range(%value, 1, 64)]
+
+target.decl @ggml_wave32
+
+template.decl @ggml.mma.k64_1x2(%x_stage: buffer, %w_stage: buffer, %frag_col0: index, %frag_row0: index, %a0: vector<8xf32>, %a1: vector<8xf32>) -> (vector<8xf32>, vector<8xf32>)
+
+template.decl @ggml.mma.zero_acc() -> (vector<8xf32>)
+
+template.decl @ggml.kq.block(%is_q5k: i1, %weight: buffer, %w_span: index, %row_base: index, %k: index, %h: index) -> (vector<4xi32>, vector<4xi32>, vector<4xi32>, vector<4xi32>, vector<4xi32>, vector<4xi32>)
+
+template.decl @ggml.kq.decode32_f16(%is_q5k: i1, %header: vector<4xi32>, %high_bits: vector<4xi32>, %codes: vector<4xi32>, %k: index) -> (vector<8xf16>, vector<8xf16>, vector<8xf16>, vector<8xf16>)
+
+template.decl @ggml.q6_k.block(%weight: buffer, %w_span: index, %row_base: index, %k: index, %p: index) -> (vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>)
+
+template.decl @ggml.q6_k.decode32_f16(%ql_first: vector<8xi16>, %ql_second: vector<8xi16>, %qh: vector<8xi16>, %scales: vector<8xi16>, %tail: vector<8xi16>, %c: index, %p: index) -> (vector<8xf16>, vector<8xf16>, vector<8xf16>, vector<8xf16>)
+
+template.decl @ggml.weight.wmma16(%wtype: index, %weight: buffer, %w_span: index, %row_base: index, %row_valid: i1, %k: index, %k_size: index, %part: index) -> (vector<8xf16>, vector<8xf16>)
+
+template.decl @ggml.q8_0.block128(%weight: buffer, %w_span: index, %row_base: index, %k: index, %p: index) -> (vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>)
+
+template.decl @ggml.q8_0.decode32_heads(%codes_low: vector<8xi16>, %head_low: vector<8xi16>, %codes_high: vector<8xi16>, %head_high: vector<8xi16>) -> (vector<8xf16>, vector<8xf16>, vector<8xf16>, vector<8xf16>)
+
+func.decl @ggml_hrx_mm_store(%dst: buffer, %d_span: index, %index: index, %value: f32)
+
+func.def inline @ggml_hrx_mmidw_load_id(%ids: buffer, %ids_span: index, %slot: index, %token: index, %ids_s0: index, %ids_s1: index) -> (i32) {
+  %c0_offset = index.constant 0 : offset
+  %minus_one = scalar.constant -1 : i32
+  %ids_view = buffer.view %ids[%c0_offset] : buffer -> view<[%ids_span]xi32>
+  %offset0 = index.mul %slot, %ids_s0 : index
+  %offset1 = index.mul %token, %ids_s1 : index
+  %index = index.add %offset0, %offset1 : index
+  %off = index.assume %index [range(%index, 0, 2147483646)] : index
+  %ok = index.cmp ult, %off, %ids_span : index
+  %id = scf.if %ok -> (i32) {
+    %loaded = view.load %ids_view[%off] : view<[%ids_span]xi32> -> i32
+    scf.yield %loaded : i32
+  } else {
+    scf.yield %minus_one : i32
+  }
+  func.return %id : i32
+}
+
+// The fast path needs contiguous ids and 16 pairs in range. Otherwise the caller reads each id.
+func.def inline @ggml_hrx_mmidw_load_ids16(%ids: buffer, %ids_span: index, %pair: index, %n_pairs: index, %contiguous: i1) -> (i1, vector<16xi32>) {
+  %c15 = index.constant 15 : index
+  %c0_offset = index.constant 0 : offset
+  %true = scalar.constant true : i1
+  %false = scalar.constant false : i1
+  %none = vector.splati -1 : vector<16xi32>
+  %ids_view = buffer.view %ids[%c0_offset] : buffer -> view<[%ids_span]xi32>
+  %first = index.assume %pair [range(%pair, 0, 2147483630)] : index
+  %last0 = index.add %first, %c15 : index
+  %last = index.assume %last0 [range(%last0, 0, 2147483646)] : index
+  %fast, %values = scf.if %contiguous -> (i1, vector<16xi32>) {
+    %in_pairs = index.cmp ult, %last, %n_pairs : index
+    %pairs_fast, %pairs_values = scf.if %in_pairs -> (i1, vector<16xi32>) {
+      %in_span = index.cmp ult, %last, %ids_span : index
+      %span_fast, %span_values = scf.if %in_span -> (i1, vector<16xi32>) {
+        %loaded = vector.load %ids_view[%first] : view<[%ids_span]xi32> -> vector<16xi32>
+        scf.yield %true, %loaded : i1, vector<16xi32>
+      } else {
+        scf.yield %false, %none : i1, vector<16xi32>
+      }
+      scf.yield %span_fast, %span_values : i1, vector<16xi32>
+    } else {
+      scf.yield %false, %none : i1, vector<16xi32>
+    }
+    scf.yield %pairs_fast, %pairs_values : i1, vector<16xi32>
+  } else {
+    scf.yield %false, %none : i1, vector<16xi32>
+  }
+  func.return %fast, %values : i1, vector<16xi32>
+}
+
+// n_used is a multiple of 4. Thus the 4 pairs of one packet have the same token.
+func.def inline @ggml_hrx_mmidw_ids_row4_index(%pair: index, %q: index, %n_used: index, %ids_s1: index) -> (index) {
+  %n_used_b = index.assume %n_used [range(%n_used, 1, 2147483647)] : index
+  %c4 = index.constant 4 : index
+  %q4 = index.mul %q, %c4 : index
+  %p = index.add %pair, %q4 : index
+  %p_b = index.assume %p [range(%p, 0, 2147483646)] : index
+  %token = index.div %p_b, %n_used_b : index
+  %slot = index.rem %p_b, %n_used_b : index
+  %row = index.mul %token, %ids_s1 : index
+  %index0 = index.add %row, %slot : index
+  %index = index.assume %index0 [range(%index0, 0, 2147483600)] : index
+  func.return %index : index
+}
+
+// Fast path for strided ids rows, for example a view of a wider argsort result.
+// It needs ids_s0 = 1, n_used a multiple of 4 and 16 pairs in range.
+func.def inline @ggml_hrx_mmidw_load_ids16_rows(%ids: buffer, %ids_span: index, %pair: index, %n_pairs: index, %n_used: index, %ids_s1: index, %rows: i1) -> (i1, vector<16xi32>) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c15 = index.constant 15 : index
+  %c0_offset = index.constant 0 : offset
+  %true = scalar.constant true : i1
+  %false = scalar.constant false : i1
+  %none = vector.splati -1 : vector<16xi32>
+  %ids_view = buffer.view %ids[%c0_offset] : buffer -> view<[%ids_span]xi32>
+  %first = index.assume %pair [range(%pair, 0, 2147483630)] : index
+  %last_pair0 = index.add %first, %c15 : index
+  %last_pair = index.assume %last_pair0 [range(%last_pair0, 0, 2147483646)] : index
+  %i0 = func.call @ggml_hrx_mmidw_ids_row4_index(%first, %c0, %n_used, %ids_s1) : (index, index, index, index) -> (index)
+  %i1 = func.call @ggml_hrx_mmidw_ids_row4_index(%first, %c1, %n_used, %ids_s1) : (index, index, index, index) -> (index)
+  %i2 = func.call @ggml_hrx_mmidw_ids_row4_index(%first, %c2, %n_used, %ids_s1) : (index, index, index, index) -> (index)
+  %i3 = func.call @ggml_hrx_mmidw_ids_row4_index(%first, %c3, %n_used, %ids_s1) : (index, index, index, index) -> (index)
+  %l0 = index.add %i0, %c3 : index
+  %l1 = index.add %i1, %c3 : index
+  %l2 = index.add %i2, %c3 : index
+  %l3 = index.add %i3, %c3 : index
+  %fast, %values = scf.if %rows -> (i1, vector<16xi32>) {
+    %in_pairs = index.cmp ult, %last_pair, %n_pairs : index
+    %r_fast, %r_values = scf.if %in_pairs -> (i1, vector<16xi32>) {
+      %in0 = index.cmp ult, %l0, %ids_span : index
+      %a_fast, %a_values = scf.if %in0 -> (i1, vector<16xi32>) {
+        %in1 = index.cmp ult, %l1, %ids_span : index
+        %b_fast, %b_values = scf.if %in1 -> (i1, vector<16xi32>) {
+          %in2 = index.cmp ult, %l2, %ids_span : index
+          %c_fast, %c_values = scf.if %in2 -> (i1, vector<16xi32>) {
+            %in3 = index.cmp ult, %l3, %ids_span : index
+            %d_fast, %d_values = scf.if %in3 -> (i1, vector<16xi32>) {
+              %v0 = vector.load %ids_view[%i0] : view<[%ids_span]xi32> -> vector<4xi32>
+              %v1 = vector.load %ids_view[%i1] : view<[%ids_span]xi32> -> vector<4xi32>
+              %v2 = vector.load %ids_view[%i2] : view<[%ids_span]xi32> -> vector<4xi32>
+              %v3 = vector.load %ids_view[%i3] : view<[%ids_span]xi32> -> vector<4xi32>
+              %v01 = vector.concat<0> %v0, %v1 : vector<4xi32>, vector<4xi32> -> vector<8xi32>
+              %v23 = vector.concat<0> %v2, %v3 : vector<4xi32>, vector<4xi32> -> vector<8xi32>
+              %v = vector.concat<0> %v01, %v23 : vector<8xi32>, vector<8xi32> -> vector<16xi32>
+              scf.yield %true, %v : i1, vector<16xi32>
+            } else {
+              scf.yield %false, %none : i1, vector<16xi32>
+            }
+            scf.yield %d_fast, %d_values : i1, vector<16xi32>
+          } else {
+            scf.yield %false, %none : i1, vector<16xi32>
+          }
+          scf.yield %c_fast, %c_values : i1, vector<16xi32>
+        } else {
+          scf.yield %false, %none : i1, vector<16xi32>
+        }
+        scf.yield %b_fast, %b_values : i1, vector<16xi32>
+      } else {
+        scf.yield %false, %none : i1, vector<16xi32>
+      }
+      scf.yield %a_fast, %a_values : i1, vector<16xi32>
+    } else {
+      scf.yield %false, %none : i1, vector<16xi32>
+    }
+    scf.yield %r_fast, %r_values : i1, vector<16xi32>
+  } else {
+    scf.yield %false, %none : i1, vector<16xi32>
+  }
+  func.return %fast, %values : i1, vector<16xi32>
+}
+
+func.def inline @ggml_hrx_mmidw_count(%j: index, %matches: i1, %skipped: i1, %count: i32, %mask: i32, %skip: i32) -> (i32, i32, i32) {
+  %c0_i32 = scalar.constant 0 : i32
+  %c1_i32 = scalar.constant 1 : i32
+  %j_i32 = index.cast %j : index to i32
+  %match_inc = scf.select %matches, %c1_i32, %c0_i32 : i32
+  %skip_inc = scf.select %skipped, %c1_i32, %c0_i32 : i32
+  %count_next = scalar.addi %count, %match_inc : i32
+  %match_bit = scalar.shli %match_inc, %j_i32 : i32
+  %skip_bit = scalar.shli %skip_inc, %j_i32 : i32
+  %mask_next = scalar.ori %mask, %match_bit : i32
+  %skip_next = scalar.ori %skip, %skip_bit : i32
+  func.return %count_next, %mask_next, %skip_next : i32, i32, i32
+}
+
+func.def inline @ggml_hrx_mmidw_route(%pair: index, %n_pairs: index, %n_used: index, %ids_s0: index, %ids_s1: index, %ids_span: index, %ids: buffer, %expert: i32) -> (i1, i1) {
+  %c0_i32 = scalar.constant 0 : i32
+  %false = scalar.constant false : i1
+  %in_range = index.cmp ult, %pair, %n_pairs : index
+  %matches, %skipped = scf.if %in_range -> (i1, i1) {
+    %token = index.div %pair, %n_used : index
+    %slot = index.rem %pair, %n_used : index
+    %id = func.call @ggml_hrx_mmidw_load_id(%ids, %ids_span, %slot, %token, %ids_s0, %ids_s1) : (buffer, index, index, index, index, index) -> (i32)
+    %is_expert = scalar.cmpi eq, %id, %expert : i32
+    %is_negative = scalar.cmpi slt, %id, %c0_i32 : i32
+    scf.yield %is_expert, %is_negative : i1, i1
+  } else {
+    scf.yield %false, %false : i1, i1
+  }
+  func.return %matches, %skipped : i1, i1
+}
+
+func.def inline @ggml_hrx_mmidw_zero_column(%dst: buffer, %d_span: index, %pair: index, %n_used: index, %d_s1: index, %d_s2: index, %row_begin: index, %row_end: index, %n_rows: index) {
+  %c1 = index.constant 1 : index
+  %zero = scalar.constant 0.0 : f32
+  %token = index.div %pair, %n_used : index
+  %slot = index.rem %pair, %n_used : index
+  %offset1 = index.mul %slot, %d_s1 : index
+  %offset2 = index.mul %token, %d_s2 : index
+  %col_base = index.add %offset1, %offset2 : index
+  scf.for %row = [%row_begin to %row_end step %c1] {
+    %row_in = index.cmp ult, %row, %n_rows : index
+    scf.if %row_in {
+      %index = index.add %col_base, %row : index
+      func.call @ggml_hrx_mm_store(%dst, %d_span, %index, %zero) : (buffer, index, index, f32)
+    }
+  }
+  func.return
+}
+
+// The list stores pair - window. The result is -1 past the route count.
+func.def inline @ggml_hrx_mmidw_pair_bases(%list: buffer, %i: index, %count: index, %window: index, %n_used: index, %x_ne1: index, %x_s1: index, %x_s2: index, %d_s1: index, %d_s2: index) -> (i32, i32) {
+  %c4096 = index.constant 4096 : index
+  %c0_offset = index.constant 0 : offset
+  %minus_one = scalar.constant -1 : i32
+  %list_view = buffer.view %list[%c0_offset] : buffer -> view<4096xi16>
+  %valid = index.cmp ult, %i, %count : index
+  %x_base, %d_base = scf.if %valid -> (i32, i32) {
+    %off = index.assume %i [range(%i, 0, 2147483646)] : index
+    %ok = index.cmp ult, %off, %c4096 : index
+    %bases_x, %bases_d = scf.if %ok -> (i32, i32) {
+      %local_i16 = view.load %list_view[%off] : view<4096xi16> -> i16
+      %local_i32 = scalar.extui %local_i16 : i16 to i32
+      %local = index.cast %local_i32 : i32 to index
+      %pair_raw = index.add %window, %local : index
+      // Listed pairs are below n_pairs, and n_pairs is below 2^31.
+      %pair = index.assume %pair_raw [range(%pair_raw, 0, 2147483646)] : index
+      %token = index.div %pair, %n_used : index
+      %slot = index.rem %pair, %n_used : index
+      %x_slot = index.rem %slot, %x_ne1 : index
+      %x_offset1 = index.mul %x_slot, %x_s1 : index
+      %x_offset2 = index.mul %token, %x_s2 : index
+      %x_index = index.add %x_offset1, %x_offset2 : index
+      %d_offset1 = index.mul %slot, %d_s1 : index
+      %d_offset2 = index.mul %token, %d_s2 : index
+      %d_index = index.add %d_offset1, %d_offset2 : index
+      %x_i32 = index.cast %x_index : index to i32
+      %d_i32 = index.cast %d_index : index to i32
+      scf.yield %x_i32, %d_i32 : i32, i32
+    } else {
+      scf.yield %minus_one, %minus_one : i32, i32
+    }
+    scf.yield %bases_x, %bases_d : i32, i32
+  } else {
+    scf.yield %minus_one, %minus_one : i32, i32
+  }
+  func.return %x_base, %d_base : i32, i32
+}
+
+func.def inline @ggml_hrx_mmidw_load_input_guarded(%input: buffer, %x_span: index, %x_base_i32: i32, %k: index, %k_size: index) -> (vector<8xf32>) {
+  %c7 = index.constant 7 : index
+  %c0_offset = index.constant 0 : offset
+  %c0_i32 = scalar.constant 0 : i32
+  %zero8 = vector.splatf 0.0 : vector<8xf32>
+  %input_view = buffer.view %input[%c0_offset] : buffer -> view<[%x_span]xf32>
+  %valid = scalar.cmpi sge, %x_base_i32, %c0_i32 : i32
+  %values = scf.if %valid -> (vector<8xf32>) {
+    %k_in = index.cmp ult, %k, %k_size : index
+    %k_values = scf.if %k_in -> (vector<8xf32>) {
+      %x_base = index.cast %x_base_i32 : i32 to index
+      %index0 = index.add %x_base, %k : index
+      %index = index.assume %index0 [range(%index0, 0, 2147483646)] : index
+      %last0 = index.add %index, %c7 : index
+      %last = index.assume %last0 [range(%last0, 0, 2147483646)] : index
+      %in_span = index.cmp ult, %last, %x_span : index
+      %loaded = scf.if %in_span -> (vector<8xf32>) {
+        %v = vector.load %input_view[%index] : view<[%x_span]xf32> -> vector<8xf32>
+        scf.yield %v : vector<8xf32>
+      } else {
+        scf.yield %zero8 : vector<8xf32>
+      }
+      scf.yield %loaded : vector<8xf32>
+    } else {
+      scf.yield %zero8 : vector<8xf32>
+    }
+    scf.yield %k_values : vector<8xf32>
+  } else {
+    scf.yield %zero8 : vector<8xf32>
+  }
+  func.return %values : vector<8xf32>
+}
+
+// The load has no guard. A guard merge waits for the data immediately, and this stops the prefetch.
+// The clamp is safe because x_span >= K >= 32. Callers do not store values of an unlisted column or of k >= K.
+func.def inline @ggml_hrx_mmidw_load_input(%input: buffer, %x_span: index, %x_base_i32: i32, %k: index) -> (vector<8xf32>) {
+  %c7 = index.constant 7 : index
+  %c8 = index.constant 8 : index
+  %c0_offset = index.constant 0 : offset
+  %c0_i32 = scalar.constant 0 : i32
+  %x_base_clamped = scalar.maxsi %x_base_i32, %c0_i32 : i32
+  %x_base = index.cast %x_base_clamped : i32 to index
+  %index0 = index.add %x_base, %k : index
+  %index1 = index.assume %index0 [range(%index0, 0, 2147483646)] : index
+  %x_span_k = index.assume %x_span [range(%x_span, 32, 2147483647)] : index
+  %span_last = index.sub %x_span_k, %c8 : index
+  %limit0 = index.sub %x_span_k, %c7 : index
+  %index2 = index.min %index1, %span_last : index
+  %index, %limit = index.assume %index2, %limit0 [lt(%index2, %limit0)] : index, index
+  %extent = index.add %limit, %c7 : index
+  %input_view = buffer.view %input[%c0_offset] : buffer -> view<[%extent]xf32>
+  %values = vector.load %input_view[%index] : view<[%extent]xf32> -> vector<8xf32>
+  func.return %values : vector<8xf32>
+}
+
+func.def inline @ggml_hrx_mmidw_store1(%dst: buffer, %d_span: index, %d_bases: buffer, %col: index, %row: index, %n_rows: index, %value: f32) {
+  %c0_offset = index.constant 0 : offset
+  %c0_i32 = scalar.constant 0 : i32
+  %d_base_view = buffer.view %d_bases[%c0_offset] : buffer -> view<32xi32>
+  %d_base_i32 = view.load %d_base_view[%col] : view<32xi32> -> i32
+  %valid = scalar.cmpi sge, %d_base_i32, %c0_i32 : i32
+  scf.if %valid {
+    %row_in = index.cmp ult, %row, %n_rows : index
+    scf.if %row_in {
+      %d_base = index.cast %d_base_i32 : i32 to index
+      %index = index.add %d_base, %row : index
+      func.call @ggml_hrx_mm_store(%dst, %d_span, %index, %value) : (buffer, index, index, f32)
+    }
+  }
+  func.return
+}
+
+// The fragment layout is the gfx11 wave32 result layout.
+func.def inline @ggml_hrx_mmidw_store_fragment(%dst: buffer, %d_span: index, %d_bases: buffer, %col: index, %row: index, %n_rows: index, %acc: vector<8xf32>) {
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c6 = index.constant 6 : index
+  %c8 = index.constant 8 : index
+  %c10 = index.constant 10 : index
+  %c12 = index.constant 12 : index
+  %c14 = index.constant 14 : index
+  %col1 = index.add %col, %c2 : index
+  %col2 = index.add %col, %c4 : index
+  %col3 = index.add %col, %c6 : index
+  %col4 = index.add %col, %c8 : index
+  %col5 = index.add %col, %c10 : index
+  %col6 = index.add %col, %c12 : index
+  %col7 = index.add %col, %c14 : index
+  %v0 = vector.extract %acc[0] : vector<8xf32> -> f32
+  %v1 = vector.extract %acc[1] : vector<8xf32> -> f32
+  %v2 = vector.extract %acc[2] : vector<8xf32> -> f32
+  %v3 = vector.extract %acc[3] : vector<8xf32> -> f32
+  %v4 = vector.extract %acc[4] : vector<8xf32> -> f32
+  %v5 = vector.extract %acc[5] : vector<8xf32> -> f32
+  %v6 = vector.extract %acc[6] : vector<8xf32> -> f32
+  %v7 = vector.extract %acc[7] : vector<8xf32> -> f32
+  func.call @ggml_hrx_mmidw_store1(%dst, %d_span, %d_bases, %col, %row, %n_rows, %v0) : (buffer, index, buffer, index, index, index, f32)
+  func.call @ggml_hrx_mmidw_store1(%dst, %d_span, %d_bases, %col1, %row, %n_rows, %v1) : (buffer, index, buffer, index, index, index, f32)
+  func.call @ggml_hrx_mmidw_store1(%dst, %d_span, %d_bases, %col2, %row, %n_rows, %v2) : (buffer, index, buffer, index, index, index, f32)
+  func.call @ggml_hrx_mmidw_store1(%dst, %d_span, %d_bases, %col3, %row, %n_rows, %v3) : (buffer, index, buffer, index, index, index, f32)
+  func.call @ggml_hrx_mmidw_store1(%dst, %d_span, %d_bases, %col4, %row, %n_rows, %v4) : (buffer, index, buffer, index, index, index, f32)
+  func.call @ggml_hrx_mmidw_store1(%dst, %d_span, %d_bases, %col5, %row, %n_rows, %v5) : (buffer, index, buffer, index, index, index, f32)
+  func.call @ggml_hrx_mmidw_store1(%dst, %d_span, %d_bases, %col6, %row, %n_rows, %v6) : (buffer, index, buffer, index, index, index, f32)
+  func.call @ggml_hrx_mmidw_store1(%dst, %d_span, %d_bases, %col7, %row, %n_rows, %v7) : (buffer, index, buffer, index, index, index, f32)
+  func.return
+}
+
+func.def inline @ggml_hrx_mmidw_mma_step(%w_stage: buffer, %x_stage: buffer, %w_local: index, %w_pair: index, %wv0_low: vector<8xf16>, %wv0_high: vector<8xf16>, %wv1_low: vector<8xf16>, %wv1_high: vector<8xf16>, %x_col: index, %x_k_local: index, %x_f16: vector<8xf16>, %frag_col0: index, %frag_row0: index, %cols_live: index, %a0: vector<8xf32>, %a1: vector<8xf32>) -> (vector<8xf32>, vector<8xf32>) {
+  %c0 = index.constant 0 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %c0_offset = index.constant 0 : offset
+  %w_view = buffer.view %w_stage[%c0_offset] : buffer -> view<128x72xf16>
+  %x_view = buffer.view %x_stage[%c0_offset] : buffer -> view<32x72xf16>
+  %w_k_local0 = index.mul %w_pair, %c16 : index
+  %w_k_local0_high = index.add %w_k_local0, %c32 : index
+  %w_k_local1 = index.add %w_k_local0, %c8 : index
+  %w_k_local1_high = index.add %w_k_local1, %c32 : index
+  vector.store %wv0_low, %w_view[%w_local, %w_k_local0] : vector<8xf16>, view<128x72xf16>
+  vector.store %wv0_high, %w_view[%w_local, %w_k_local0_high] : vector<8xf16>, view<128x72xf16>
+  vector.store %wv1_low, %w_view[%w_local, %w_k_local1] : vector<8xf16>, view<128x72xf16>
+  vector.store %wv1_high, %w_view[%w_local, %w_k_local1_high] : vector<8xf16>, view<128x72xf16>
+  vector.store %x_f16, %x_view[%x_col, %x_k_local] : vector<8xf16>, view<32x72xf16>
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  // A subgroup whose 16 columns are all past the listed pairs skips its matrix ops.
+  %live = index.cmp ult, %frag_col0, %cols_live : index
+  %n0, %n1 = scf.if %live -> (vector<8xf32>, vector<8xf32>) {
+    %l0, %l1 = template.apply<@ggml.mma.k64_1x2>(%x_stage, %w_stage, %frag_col0, %frag_row0, %a0, %a1) : (buffer, buffer, index, index, vector<8xf32>, vector<8xf32>) -> (vector<8xf32>, vector<8xf32>)
+    scf.yield %l0, %l1 : vector<8xf32>, vector<8xf32>
+  } else {
+    scf.yield %a0, %a1 : vector<8xf32>, vector<8xf32>
+  }
+  // The next K step overwrites the stages.
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  func.return %n0, %n1 : vector<8xf32>, vector<8xf32>
+}
+
+func.def inline @ggml_hrx_mmidw_k_generic(%wtype: index, %weight: buffer, %w_span: index, %w_base: index, %w_valid: i1, %k_size: index, %w_local: index, %w_pair: index, %input: buffer, %x_span: index, %x_col_base: i32, %x_col: index, %x_k_local: index, %w_stage: buffer, %x_stage: buffer, %frag_col0: index, %frag_row0: index, %cols_live: index) -> (vector<8xf32>, vector<8xf32>) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c64 = index.constant 64 : index
+  %m = index.constant 16 : index
+  %init = template.apply<@ggml.mma.zero_acc>() : () -> (vector<8xf32>)
+  %part0 = index.mul %w_pair, %c2 : index
+  %part1 = index.add %part0, %c1 : index
+  %acc0, %acc1 = scf.for %k0 = [%c0 to %k_size step %c64](%a0 = %init : vector<8xf32>, %a1 = %init : vector<8xf32>) -> (vector<8xf32>, vector<8xf32>) {
+    %wv0_low, %wv0_high = template.apply<@ggml.weight.wmma16>(%wtype, %weight, %w_span, %w_base, %w_valid, %k0, %k_size, %part0) : (index, buffer, index, index, i1, index, index, index) -> (vector<8xf16>, vector<8xf16>)
+    %wv1_low, %wv1_high = template.apply<@ggml.weight.wmma16>(%wtype, %weight, %w_span, %w_base, %w_valid, %k0, %k_size, %part1) : (index, buffer, index, index, i1, index, index, index) -> (vector<8xf16>, vector<8xf16>)
+    %x_k = index.add %k0, %x_k_local : index
+    %xq = func.call @ggml_hrx_mmidw_load_input_guarded(%input, %x_span, %x_col_base, %x_k, %k_size) : (buffer, index, i32, index, index) -> (vector<8xf32>)
+    %x_f16 = vector.fptrunc %xq : vector<8xf32> to vector<8xf16>
+    %n0, %n1 = func.call @ggml_hrx_mmidw_mma_step(%w_stage, %x_stage, %w_local, %w_pair, %wv0_low, %wv0_high, %wv1_low, %wv1_high, %x_col, %x_k_local, %x_f16, %frag_col0, %frag_row0, %cols_live, %a0, %a1) : (buffer, buffer, index, index, vector<8xf16>, vector<8xf16>, vector<8xf16>, vector<8xf16>, index, index, vector<8xf16>, index, index, index, vector<8xf32>, vector<8xf32>) -> (vector<8xf32>, vector<8xf32>)
+    scf.yield %n0, %n1 : vector<8xf32>, vector<8xf32>
+  }
+  func.return %acc0, %acc1 : vector<8xf32>, vector<8xf32>
+}
+
+func.def inline @ggml_hrx_mmidw_kq_sub_step(%is_q5k: i1, %header: vector<4xi32>, %high_bits: vector<4xi32>, %chunk: vector<4xi32>, %j: index, %xq: vector<8xf32>, %w_stage: buffer, %x_stage: buffer, %w_local: index, %w_pair: index, %x_col: index, %x_k_local: index, %frag_col0: index, %frag_row0: index, %cols_live: index, %a0: vector<8xf32>, %a1: vector<8xf32>) -> (vector<8xf32>, vector<8xf32>) {
+  %c64 = index.constant 64 : index
+  %k = index.mul %j, %c64 : index
+  %wv0_low, %wv0_high, %wv1_low, %wv1_high = template.apply<@ggml.kq.decode32_f16>(%is_q5k, %header, %high_bits, %chunk, %k) : (i1, vector<4xi32>, vector<4xi32>, vector<4xi32>, index) -> (vector<8xf16>, vector<8xf16>, vector<8xf16>, vector<8xf16>)
+  %x_f16 = vector.fptrunc %xq : vector<8xf32> to vector<8xf16>
+  %n0, %n1 = func.call @ggml_hrx_mmidw_mma_step(%w_stage, %x_stage, %w_local, %w_pair, %wv0_low, %wv0_high, %wv1_low, %wv1_high, %x_col, %x_k_local, %x_f16, %frag_col0, %frag_row0, %cols_live, %a0, %a1) : (buffer, buffer, index, index, vector<8xf16>, vector<8xf16>, vector<8xf16>, vector<8xf16>, index, index, vector<8xf16>, index, index, index, vector<8xf32>, vector<8xf32>) -> (vector<8xf32>, vector<8xf32>)
+  func.return %n0, %n1 : vector<8xf32>, vector<8xf32>
+}
+
+func.def inline @ggml_hrx_mmidw_load_input4(%input: buffer, %x_span: index, %x_col_base: i32, %kb: index, %x_k_local: index) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) {
+  %c64 = index.constant 64 : index
+  %k0 = index.add %kb, %x_k_local : index
+  %k1 = index.add %k0, %c64 : index
+  %k2 = index.add %k1, %c64 : index
+  %k3 = index.add %k2, %c64 : index
+  %x0 = func.call @ggml_hrx_mmidw_load_input(%input, %x_span, %x_col_base, %k0) : (buffer, index, i32, index) -> (vector<8xf32>)
+  %x1 = func.call @ggml_hrx_mmidw_load_input(%input, %x_span, %x_col_base, %k1) : (buffer, index, i32, index) -> (vector<8xf32>)
+  %x2 = func.call @ggml_hrx_mmidw_load_input(%input, %x_span, %x_col_base, %k2) : (buffer, index, i32, index) -> (vector<8xf32>)
+  %x3 = func.call @ggml_hrx_mmidw_load_input(%input, %x_span, %x_col_base, %k3) : (buffer, index, i32, index) -> (vector<8xf32>)
+  func.return %x0, %x1, %x2, %x3 : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>
+}
+
+// Whole-block loads touch few cache lines for each row. The loads of the next block overlap the current block.
+func.def inline @ggml_hrx_mmidw_k_kq(%is_q5k: i1, %weight: buffer, %w_span: index, %w_base: index, %k_size: index, %w_local: index, %w_pair: index, %input: buffer, %x_span: index, %x_col_base: i32, %x_col: index, %x_k_local: index, %w_stage: buffer, %x_stage: buffer, %frag_col0: index, %frag_row0: index, %cols_live: index) -> (vector<8xf32>, vector<8xf32>) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c256 = index.constant 256 : index
+  %m = index.constant 16 : index
+  %init = template.apply<@ggml.mma.zero_acc>() : () -> (vector<8xf32>)
+  %h_first, %b_first, %q0_first, %q1_first, %q2_first, %q3_first = template.apply<@ggml.kq.block>(%is_q5k, %weight, %w_span, %w_base, %c0, %w_pair) : (i1, buffer, index, index, index, index) -> (vector<4xi32>, vector<4xi32>, vector<4xi32>, vector<4xi32>, vector<4xi32>, vector<4xi32>)
+  %acc0, %acc1, %h_last, %b_last, %q0_last, %q1_last, %q2_last, %q3_last = scf.for %kb = [%c0 to %k_size step %c256](%a0 = %init : vector<8xf32>, %a1 = %init : vector<8xf32>, %h = %h_first : vector<4xi32>, %b = %b_first : vector<4xi32>, %q0 = %q0_first : vector<4xi32>, %q1 = %q1_first : vector<4xi32>, %q2 = %q2_first : vector<4xi32>, %q3 = %q3_first : vector<4xi32>) -> (vector<8xf32>, vector<8xf32>, vector<4xi32>, vector<4xi32>, vector<4xi32>, vector<4xi32>, vector<4xi32>, vector<4xi32>) {
+    // Memory waits drain in issue order. The fence keeps the activation loads before the next block loads.
+    // The loads past K read valid memory. Their values are not used.
+    %x0, %x1, %x2, %x3 = func.call @ggml_hrx_mmidw_load_input4(%input, %x_span, %x_col_base, %kb, %x_k_local) : (buffer, index, i32, index, index) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>)
+    scf.schedule.fence
+    %kb_next = index.add %kb, %c256 : index
+    %hn, %bn, %q0n, %q1n, %q2n, %q3n = template.apply<@ggml.kq.block>(%is_q5k, %weight, %w_span, %w_base, %kb_next, %w_pair) : (i1, buffer, index, index, index, index) -> (vector<4xi32>, vector<4xi32>, vector<4xi32>, vector<4xi32>, vector<4xi32>, vector<4xi32>)
+    %s0a, %s0b = func.call @ggml_hrx_mmidw_kq_sub_step(%is_q5k, %h, %b, %q0, %c0, %x0, %w_stage, %x_stage, %w_local, %w_pair, %x_col, %x_k_local, %frag_col0, %frag_row0, %cols_live, %a0, %a1) : (i1, vector<4xi32>, vector<4xi32>, vector<4xi32>, index, vector<8xf32>, buffer, buffer, index, index, index, index, index, index, index, vector<8xf32>, vector<8xf32>) -> (vector<8xf32>, vector<8xf32>)
+    %s1a, %s1b = func.call @ggml_hrx_mmidw_kq_sub_step(%is_q5k, %h, %b, %q1, %c1, %x1, %w_stage, %x_stage, %w_local, %w_pair, %x_col, %x_k_local, %frag_col0, %frag_row0, %cols_live, %s0a, %s0b) : (i1, vector<4xi32>, vector<4xi32>, vector<4xi32>, index, vector<8xf32>, buffer, buffer, index, index, index, index, index, index, index, vector<8xf32>, vector<8xf32>) -> (vector<8xf32>, vector<8xf32>)
+    %s2a, %s2b = func.call @ggml_hrx_mmidw_kq_sub_step(%is_q5k, %h, %b, %q2, %c2, %x2, %w_stage, %x_stage, %w_local, %w_pair, %x_col, %x_k_local, %frag_col0, %frag_row0, %cols_live, %s1a, %s1b) : (i1, vector<4xi32>, vector<4xi32>, vector<4xi32>, index, vector<8xf32>, buffer, buffer, index, index, index, index, index, index, index, vector<8xf32>, vector<8xf32>) -> (vector<8xf32>, vector<8xf32>)
+    %s3a, %s3b = func.call @ggml_hrx_mmidw_kq_sub_step(%is_q5k, %h, %b, %q3, %c3, %x3, %w_stage, %x_stage, %w_local, %w_pair, %x_col, %x_k_local, %frag_col0, %frag_row0, %cols_live, %s2a, %s2b) : (i1, vector<4xi32>, vector<4xi32>, vector<4xi32>, index, vector<8xf32>, buffer, buffer, index, index, index, index, index, index, index, vector<8xf32>, vector<8xf32>) -> (vector<8xf32>, vector<8xf32>)
+    scf.yield %s3a, %s3b, %hn, %bn, %q0n, %q1n, %q2n, %q3n : vector<8xf32>, vector<8xf32>, vector<4xi32>, vector<4xi32>, vector<4xi32>, vector<4xi32>, vector<4xi32>, vector<4xi32>
+  }
+  func.return %acc0, %acc1 : vector<8xf32>, vector<8xf32>
+}
+
+func.def inline @ggml_hrx_mmidw_q6k_sub_step(%ql_first: vector<8xi16>, %ql_second: vector<8xi16>, %qh: vector<8xi16>, %scales: vector<8xi16>, %tail: vector<8xi16>, %j: index, %xq: vector<8xf32>, %w_stage: buffer, %x_stage: buffer, %w_local: index, %w_pair: index, %x_col: index, %x_k_local: index, %frag_col0: index, %frag_row0: index, %cols_live: index, %a0: vector<8xf32>, %a1: vector<8xf32>) -> (vector<8xf32>, vector<8xf32>) {
+  %wv0_low, %wv0_high, %wv1_low, %wv1_high = template.apply<@ggml.q6_k.decode32_f16>(%ql_first, %ql_second, %qh, %scales, %tail, %j, %w_pair) : (vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, index, index) -> (vector<8xf16>, vector<8xf16>, vector<8xf16>, vector<8xf16>)
+  %x_f16 = vector.fptrunc %xq : vector<8xf32> to vector<8xf16>
+  %n0, %n1 = func.call @ggml_hrx_mmidw_mma_step(%w_stage, %x_stage, %w_local, %w_pair, %wv0_low, %wv0_high, %wv1_low, %wv1_high, %x_col, %x_k_local, %x_f16, %frag_col0, %frag_row0, %cols_live, %a0, %a1) : (buffer, buffer, index, index, vector<8xf16>, vector<8xf16>, vector<8xf16>, vector<8xf16>, index, index, vector<8xf16>, index, index, index, vector<8xf32>, vector<8xf32>) -> (vector<8xf32>, vector<8xf32>)
+  func.return %n0, %n1 : vector<8xf32>, vector<8xf32>
+}
+
+// Q6_K form of @ggml_hrx_mmidw_k_kq.
+func.def inline @ggml_hrx_mmidw_k_q6k(%weight: buffer, %w_span: index, %w_base: index, %k_size: index, %w_local: index, %w_pair: index, %input: buffer, %x_span: index, %x_col_base: i32, %x_col: index, %x_k_local: index, %w_stage: buffer, %x_stage: buffer, %frag_col0: index, %frag_row0: index, %cols_live: index) -> (vector<8xf32>, vector<8xf32>) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c256 = index.constant 256 : index
+  %m = index.constant 16 : index
+  %init = template.apply<@ggml.mma.zero_acc>() : () -> (vector<8xf32>)
+  %r0_first, %r1_first, %r2_first, %r3_first, %r4_first, %r5_first, %r6_first, %r7_first = template.apply<@ggml.q6_k.block>(%weight, %w_span, %w_base, %c0, %w_pair) : (buffer, index, index, index, index) -> (vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>)
+  %acc0, %acc1, %r0_last, %r1_last, %r2_last, %r3_last, %r4_last, %r5_last, %r6_last, %r7_last = scf.for %kb = [%c0 to %k_size step %c256](%a0 = %init : vector<8xf32>, %a1 = %init : vector<8xf32>, %r0 = %r0_first : vector<8xi16>, %r1 = %r1_first : vector<8xi16>, %r2 = %r2_first : vector<8xi16>, %r3 = %r3_first : vector<8xi16>, %r4 = %r4_first : vector<8xi16>, %r5 = %r5_first : vector<8xi16>, %r6 = %r6_first : vector<8xi16>, %r7 = %r7_first : vector<8xi16>) -> (vector<8xf32>, vector<8xf32>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>) {
+    // Memory waits drain in issue order. The fence keeps the activation loads before the next block loads.
+    %x0, %x1, %x2, %x3 = func.call @ggml_hrx_mmidw_load_input4(%input, %x_span, %x_col_base, %kb, %x_k_local) : (buffer, index, i32, index, index) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>)
+    scf.schedule.fence
+    %kb_next = index.add %kb, %c256 : index
+    %n0, %n1, %n2, %n3, %n4, %n5, %n6, %n7 = template.apply<@ggml.q6_k.block>(%weight, %w_span, %w_base, %kb_next, %w_pair) : (buffer, index, index, index, index) -> (vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>)
+    %s0a, %s0b = func.call @ggml_hrx_mmidw_q6k_sub_step(%r0, %r1, %r4, %r6, %r7, %c0, %x0, %w_stage, %x_stage, %w_local, %w_pair, %x_col, %x_k_local, %frag_col0, %frag_row0, %cols_live, %a0, %a1) : (vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, index, vector<8xf32>, buffer, buffer, index, index, index, index, index, index, index, vector<8xf32>, vector<8xf32>) -> (vector<8xf32>, vector<8xf32>)
+    %s1a, %s1b = func.call @ggml_hrx_mmidw_q6k_sub_step(%r0, %r1, %r4, %r6, %r7, %c1, %x1, %w_stage, %x_stage, %w_local, %w_pair, %x_col, %x_k_local, %frag_col0, %frag_row0, %cols_live, %s0a, %s0b) : (vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, index, vector<8xf32>, buffer, buffer, index, index, index, index, index, index, index, vector<8xf32>, vector<8xf32>) -> (vector<8xf32>, vector<8xf32>)
+    %s2a, %s2b = func.call @ggml_hrx_mmidw_q6k_sub_step(%r2, %r3, %r5, %r6, %r7, %c2, %x2, %w_stage, %x_stage, %w_local, %w_pair, %x_col, %x_k_local, %frag_col0, %frag_row0, %cols_live, %s1a, %s1b) : (vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, index, vector<8xf32>, buffer, buffer, index, index, index, index, index, index, index, vector<8xf32>, vector<8xf32>) -> (vector<8xf32>, vector<8xf32>)
+    %s3a, %s3b = func.call @ggml_hrx_mmidw_q6k_sub_step(%r2, %r3, %r5, %r6, %r7, %c3, %x3, %w_stage, %x_stage, %w_local, %w_pair, %x_col, %x_k_local, %frag_col0, %frag_row0, %cols_live, %s2a, %s2b) : (vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, index, vector<8xf32>, buffer, buffer, index, index, index, index, index, index, index, vector<8xf32>, vector<8xf32>) -> (vector<8xf32>, vector<8xf32>)
+    scf.yield %s3a, %s3b, %n0, %n1, %n2, %n3, %n4, %n5, %n6, %n7 : vector<8xf32>, vector<8xf32>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>
+  }
+  func.return %acc0, %acc1 : vector<8xf32>, vector<8xf32>
+}
+
+func.def inline @ggml_hrx_mmidw_q8_0_sub_step(%codes_low: vector<8xi16>, %head_low: vector<8xi16>, %codes_high: vector<8xi16>, %head_high: vector<8xi16>, %xq: vector<8xf32>, %w_stage: buffer, %x_stage: buffer, %w_local: index, %w_pair: index, %x_col: index, %x_k_local: index, %frag_col0: index, %frag_row0: index, %cols_live: index, %a0: vector<8xf32>, %a1: vector<8xf32>) -> (vector<8xf32>, vector<8xf32>) {
+  %wv0_low, %wv0_high, %wv1_low, %wv1_high = template.apply<@ggml.q8_0.decode32_heads>(%codes_low, %head_low, %codes_high, %head_high) : (vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>) -> (vector<8xf16>, vector<8xf16>, vector<8xf16>, vector<8xf16>)
+  %x_f16 = vector.fptrunc %xq : vector<8xf32> to vector<8xf16>
+  %n0, %n1 = func.call @ggml_hrx_mmidw_mma_step(%w_stage, %x_stage, %w_local, %w_pair, %wv0_low, %wv0_high, %wv1_low, %wv1_high, %x_col, %x_k_local, %x_f16, %frag_col0, %frag_row0, %cols_live, %a0, %a1) : (buffer, buffer, index, index, vector<8xf16>, vector<8xf16>, vector<8xf16>, vector<8xf16>, index, index, vector<8xf16>, index, index, index, vector<8xf32>, vector<8xf32>) -> (vector<8xf32>, vector<8xf32>)
+  func.return %n0, %n1 : vector<8xf32>, vector<8xf32>
+}
+
+// Q8_0 form of @ggml_hrx_mmidw_k_kq with steps of 4 blocks. K must be a multiple of 128.
+func.def inline @ggml_hrx_mmidw_k_q8_0(%weight: buffer, %w_span: index, %w_base: index, %k_size: index, %w_local: index, %w_pair: index, %input: buffer, %x_span: index, %x_col_base: i32, %x_col: index, %x_k_local: index, %w_stage: buffer, %x_stage: buffer, %frag_col0: index, %frag_row0: index, %cols_live: index) -> (vector<8xf32>, vector<8xf32>) {
+  %c0 = index.constant 0 : index
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %m = index.constant 16 : index
+  %init = template.apply<@ggml.mma.zero_acc>() : () -> (vector<8xf32>)
+  %r0_first, %r1_first, %r2_first, %r3_first, %r4_first, %r5_first, %r6_first, %r7_first = template.apply<@ggml.q8_0.block128>(%weight, %w_span, %w_base, %c0, %w_pair) : (buffer, index, index, index, index) -> (vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>)
+  %acc0, %acc1, %r0_last, %r1_last, %r2_last, %r3_last, %r4_last, %r5_last, %r6_last, %r7_last = scf.for %kb = [%c0 to %k_size step %c128](%a0 = %init : vector<8xf32>, %a1 = %init : vector<8xf32>, %r0 = %r0_first : vector<8xi16>, %r1 = %r1_first : vector<8xi16>, %r2 = %r2_first : vector<8xi16>, %r3 = %r3_first : vector<8xi16>, %r4 = %r4_first : vector<8xi16>, %r5 = %r5_first : vector<8xi16>, %r6 = %r6_first : vector<8xi16>, %r7 = %r7_first : vector<8xi16>) -> (vector<8xf32>, vector<8xf32>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>) {
+    // Memory waits drain in issue order. The fence keeps the activation loads before the next step loads.
+    %xk0 = index.add %kb, %x_k_local : index
+    %xk1 = index.add %xk0, %c64 : index
+    %x0 = func.call @ggml_hrx_mmidw_load_input(%input, %x_span, %x_col_base, %xk0) : (buffer, index, i32, index) -> (vector<8xf32>)
+    %x1 = func.call @ggml_hrx_mmidw_load_input(%input, %x_span, %x_col_base, %xk1) : (buffer, index, i32, index) -> (vector<8xf32>)
+    scf.schedule.fence
+    %kb_next = index.add %kb, %c128 : index
+    %n0, %n1, %n2, %n3, %n4, %n5, %n6, %n7 = template.apply<@ggml.q8_0.block128>(%weight, %w_span, %w_base, %kb_next, %w_pair) : (buffer, index, index, index, index) -> (vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>)
+    %s0a, %s0b = func.call @ggml_hrx_mmidw_q8_0_sub_step(%r0, %r1, %r2, %r3, %x0, %w_stage, %x_stage, %w_local, %w_pair, %x_col, %x_k_local, %frag_col0, %frag_row0, %cols_live, %a0, %a1) : (vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xf32>, buffer, buffer, index, index, index, index, index, index, index, vector<8xf32>, vector<8xf32>) -> (vector<8xf32>, vector<8xf32>)
+    %s1a, %s1b = func.call @ggml_hrx_mmidw_q8_0_sub_step(%r4, %r5, %r6, %r7, %x1, %w_stage, %x_stage, %w_local, %w_pair, %x_col, %x_k_local, %frag_col0, %frag_row0, %cols_live, %s0a, %s0b) : (vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xf32>, buffer, buffer, index, index, index, index, index, index, index, vector<8xf32>, vector<8xf32>) -> (vector<8xf32>, vector<8xf32>)
+    scf.yield %s1a, %s1b, %n0, %n1, %n2, %n3, %n4, %n5, %n6, %n7 : vector<8xf32>, vector<8xf32>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>, vector<8xi16>
+  }
+  func.return %acc0, %acc1 : vector<8xf32>, vector<8xf32>
+}
+
+func.def inline @ggml_hrx_mmidw_row_groups(%n_rows: index) -> (index, index, index) {
+  %c1 = index.constant 1 : index
+  %max_groups = config.get @ggml.mul_mat_id.row_groups : index
+  %max_groups_m1 = index.sub %max_groups, %c1 : index
+  %c127 = index.constant 127 : index
+  %c128 = index.constant 128 : index
+  %rows_round = index.add %n_rows, %c127 : index
+  %row_tiles = index.div %rows_round, %c128 : index
+  %groups = index.min %row_tiles, %max_groups : index
+  %tiles_round = index.add %row_tiles, %max_groups_m1 : index
+  %tiles_per_group = index.div %tiles_round, %max_groups : index
+  func.return %row_tiles, %groups, %tiles_per_group : index, index, index
+}
+
+// Each workgroup routes one time for its row group. This keeps the routing cost small when K is short.
+// 128 rows for each tile keep the activation reads near the weight reads.
+kernel.def target(@ggml_wave32) export("ggml_mul_mat_id_wmma") @ggml_mul_mat_id_wmma(%n_rows: index, %n_expert: index) {
+  %one = index.constant 1 : index
+  %wg_size = index.constant 256 : index
+  %row_tiles, %groups, %tiles_per_group = func.call pure @ggml_hrx_mmidw_row_groups(%n_rows) : (index) -> (index, index, index)
+  %slots = config.get @ggml.mul_mat_id.chunk_slots : index
+  kernel.launch.config workgroups(%groups, %n_expert, %slots) workgroup_size(%wg_size, %one, %one) : index
+} launch(%k_size_in: index, %n_rows_in: index, %n_expert_in: index, %n_used_in: index, %n_tokens_in: index, %x_ne1_in: index, %w_s1_in: index, %w_s2_in: index, %w_span_in: index, %x_s0_in: index, %x_s1_in: index, %x_s2_in: index, %x_span_in: index, %ids_s0_in: index, %ids_s1_in: index, %ids_span_in: index, %d_s1_in: index, %d_s2_in: index, %d_span_in: index, %weight: buffer, %input: buffer, %ids: buffer, %dst: buffer) {
+  // supports_mul_mat_id checks these ranges.
+  %k_size = index.assume %k_size_in [range(%k_size_in, 1, 2147483647)] : index
+  %n_rows = index.assume %n_rows_in [range(%n_rows_in, 1, 2147483647)] : index
+  %n_expert = index.assume %n_expert_in [range(%n_expert_in, 1, 2147483647)] : index
+  %n_used = index.assume %n_used_in [range(%n_used_in, 1, 2147483647)] : index
+  %n_tokens = index.assume %n_tokens_in [range(%n_tokens_in, 1, 2147483647)] : index
+  %x_ne1 = index.assume %x_ne1_in [range(%x_ne1_in, 1, 2147483647)] : index
+  %w_s1 = index.assume %w_s1_in [range(%w_s1_in, 0, 2147483647)] : index
+  %w_s2 = index.assume %w_s2_in [range(%w_s2_in, 0, 2147483647)] : index
+  %w_span = index.assume %w_span_in [range(%w_span_in, 1, 2147483647)] : index
+  %x_s1 = index.assume %x_s1_in [range(%x_s1_in, 0, 2147483647)] : index
+  %x_s2 = index.assume %x_s2_in [range(%x_s2_in, 0, 2147483647)] : index
+  %x_span = index.assume %x_span_in [range(%x_span_in, 1, 2147483647)] : index
+  %ids_s0 = index.assume %ids_s0_in [range(%ids_s0_in, 0, 2147483647)] : index
+  %ids_s1 = index.assume %ids_s1_in [range(%ids_s1_in, 0, 2147483647)] : index
+  %ids_span = index.assume %ids_span_in [range(%ids_span_in, 1, 2147483647)] : index
+  %d_s1 = index.assume %d_s1_in [range(%d_s1_in, 0, 2147483647)] : index
+  %d_s2 = index.assume %d_s2_in [range(%d_s2_in, 0, 2147483647)] : index
+  %d_span = index.assume %d_span_in [range(%d_span_in, 1, 2147483647)] : index
+  %wtype = config.get @ggml.mul_mat_id.weight_type : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c5 = index.constant 5 : index
+  %c8 = index.constant 8 : index
+  %c10 = index.constant 10 : index
+  %c12 = index.constant 12 : index
+  %c14 = index.constant 14 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %c256 = index.constant 256 : index
+  %c4096 = index.constant 4096 : index
+  %c6 = index.constant 6 : index
+  %c0_offset = index.constant 0 : offset
+  %c0_i32 = scalar.constant 0 : i32
+  %c1_i32 = scalar.constant 1 : i32
+  %w_stage_bytes = index.constant 18432 : offset
+  %x_stage_bytes = index.constant 4608 : offset
+  %list_bytes = index.constant 8192 : offset
+  %bases_bytes = index.constant 128 : offset
+  %t0 = kernel.workitem.id<x> : index
+  %t = index.assume %t0 [range(%t0, 0, 255)] : index
+  %s0 = kernel.subgroup.id : index
+  %s = index.assume %s0 [range(%s0, 0, 7)] : index
+  %lane0 = kernel.subgroup.lane.id : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 31)] : index
+  %row_group = kernel.workgroup.id<x> : index
+  %expert = kernel.workgroup.id<y> : index
+  %expert_i32 = index.cast %expert : index to i32
+  %expert_in = index.cmp ult, %expert, %n_expert : index
+  %slot0 = kernel.workgroup.id<z> : index
+  %slot = index.assume %slot0 [range(%slot0, 0, 7)] : index
+  %chunk_slots = config.get @ggml.mul_mat_id.chunk_slots : index
+  %chunk_first = index.mul %slot, %c32 : index
+  %chunk_stride = index.mul %chunk_slots, %c32 : index
+  %expert0 = index.cmp eq, %expert, %c0 : index
+  %slot_first = index.cmp eq, %slot, %c0 : index
+  %zeroes_skipped = scalar.andi %expert0, %slot_first : i1
+  %weight_noalias, %input_noalias, %ids_noalias, %dst_noalias = buffer.assume.noalias %weight, %input, %ids, %dst : buffer, buffer, buffer, buffer
+  %w_stage = buffer.alloca<workgroup> align(16) %w_stage_bytes : buffer
+  %x_stage = buffer.alloca<workgroup> align(16) %x_stage_bytes : buffer
+  %list_stage = buffer.alloca<workgroup> align(16) %list_bytes : buffer
+  %x_bases = buffer.alloca<workgroup> align(16) %bases_bytes : buffer
+  %d_bases = buffer.alloca<workgroup> align(16) %bases_bytes : buffer
+  %list_view = buffer.view %list_stage[%c0_offset] : buffer -> view<4096xi16>
+  %x_base_view = buffer.view %x_bases[%c0_offset] : buffer -> view<32xi32>
+  %d_base_view = buffer.view %d_bases[%c0_offset] : buffer -> view<32xi32>
+  %n_pairs = index.mul %n_used, %n_tokens : index
+  %row_tiles, %groups, %tiles_per_group = func.call pure @ggml_hrx_mmidw_row_groups(%n_rows) : (index) -> (index, index, index)
+  %tile_begin = index.mul %row_group, %tiles_per_group : index
+  %tile_next = index.add %tile_begin, %tiles_per_group : index
+  %tile_end = index.min %tile_next, %row_tiles : index
+  %group_row_begin = index.mul %tile_begin, %c128 : index
+  %group_row_end = index.mul %tile_end, %c128 : index
+
+  %w_local = index.div %t, %c2 : index
+  %w_pair = index.rem %t, %c2 : index
+  %w_expert = index.mul %expert, %w_s2 : index
+  %is_q4k = index.cmp eq, %wtype, %c2 : index
+  %is_q5k = index.cmp eq, %wtype, %c5 : index
+  %is_kq = scalar.ori %is_q4k, %is_q5k : i1
+  %is_q6k = index.cmp eq, %wtype, %c6 : index
+  %is_q8_0 = index.cmp eq, %wtype, %c4 : index
+  %k_rem128 = index.rem %k_size, %c128 : index
+  %k_steps128 = index.cmp eq, %k_rem128, %c0 : index
+  %q8_0_steps = scalar.andi %is_q8_0, %k_steps128 : i1
+
+  %x_col = index.div %t, %c8 : index
+  %x_part = index.rem %t, %c8 : index
+  %x_k_local = index.mul %x_part, %c8 : index
+
+  %frag_row_group = index.rem %s, %c4 : index
+  %frag_col_group = index.div %s, %c4 : index
+  %frag_row0 = index.mul %frag_row_group, %c32 : index
+  %frag_col0 = index.mul %frag_col_group, %c16 : index
+  %lane_row = index.rem %lane, %c16 : index
+  %lane_col = index.div %lane, %c16 : index
+  %out_row_local0 = index.add %frag_row0, %lane_row : index
+  %out_col = index.add %frag_col0, %lane_col : index
+  %is_base_writer = index.cmp ult, %t, %c32 : index
+
+  %ids_unit = index.cmp eq, %ids_s0, %c1 : index
+  %ids_rows = index.cmp eq, %ids_s1, %n_used : index
+  %ids_contiguous = scalar.andi %ids_unit, %ids_rows : i1
+  %c4_rows = index.constant 4 : index
+  %used_rem4 = index.rem %n_used, %c4_rows : index
+  %used_rows4 = index.cmp eq, %used_rem4, %c0 : index
+  %true_flag = scalar.constant true : i1
+  %ids_strided = scalar.xori %ids_contiguous, %true_flag : i1
+  %ids_rows4_0 = scalar.andi %ids_unit, %used_rows4 : i1
+  %ids_rows4 = scalar.andi %ids_rows4_0, %ids_strided : i1
+
+  scf.if %expert_in {
+    scf.for %window = [%c0 to %n_pairs step %c4096] {
+      %pair_first_offset = index.mul %t, %c16 : index
+      %pair_first = index.add %window, %pair_first_offset : index
+      %ids_fast0, %ids16_0 = func.call @ggml_hrx_mmidw_load_ids16(%ids_noalias, %ids_span, %pair_first, %n_pairs, %ids_contiguous) : (buffer, index, index, index, i1) -> (i1, vector<16xi32>)
+      %rows_fast, %rows16 = func.call @ggml_hrx_mmidw_load_ids16_rows(%ids_noalias, %ids_span, %pair_first, %n_pairs, %n_used, %ids_s1, %ids_rows4) : (buffer, index, index, index, index, index, i1) -> (i1, vector<16xi32>)
+      %ids_fast = scalar.ori %ids_fast0, %rows_fast : i1
+      %ids16 = scf.select %ids_contiguous, %ids16_0, %rows16 : vector<16xi32>
+      %match_count, %match_mask, %skip_mask = scf.if %ids_fast -> (i32, i32, i32) {
+        // The unrolled loop keeps each id extract static.
+        %fast_count, %fast_mask, %fast_skip = scf.for %j = [%c0 to %c16 step %c1](%count_acc = %c0_i32 : i32, %mask_acc = %c0_i32 : i32, %skip_acc = %c0_i32 : i32) -> (i32, i32, i32) unroll {
+          %fast_id = vector.extract %ids16[%j] : vector<16xi32> -> i32
+          %fast_matches = scalar.cmpi eq, %fast_id, %expert_i32 : i32
+          %fast_skipped = scalar.cmpi slt, %fast_id, %c0_i32 : i32
+          %count_next, %mask_next, %skip_next = func.call @ggml_hrx_mmidw_count(%j, %fast_matches, %fast_skipped, %count_acc, %mask_acc, %skip_acc) : (index, i1, i1, i32, i32, i32) -> (i32, i32, i32)
+          scf.yield %count_next, %mask_next, %skip_next : i32, i32, i32
+        }
+        scf.yield %fast_count, %fast_mask, %fast_skip : i32, i32, i32
+      } else {
+        %slow_count, %slow_mask, %slow_skip = scf.for %j = [%c0 to %c16 step %c1](%count_acc = %c0_i32 : i32, %mask_acc = %c0_i32 : i32, %skip_acc = %c0_i32 : i32) -> (i32, i32, i32) {
+          %pair = index.add %pair_first, %j : index
+          %slow_matches, %slow_skipped = func.call @ggml_hrx_mmidw_route(%pair, %n_pairs, %n_used, %ids_s0, %ids_s1, %ids_span, %ids_noalias, %expert_i32) : (index, index, index, index, index, index, buffer, i32) -> (i1, i1)
+          %count_next, %mask_next, %skip_next = func.call @ggml_hrx_mmidw_count(%j, %slow_matches, %slow_skipped, %count_acc, %mask_acc, %skip_acc) : (index, i1, i1, i32, i32, i32) -> (i32, i32, i32)
+          scf.yield %count_next, %mask_next, %skip_next : i32, i32, i32
+        }
+        scf.yield %slow_count, %slow_mask, %slow_skip : i32, i32, i32
+      }
+      // The expert 0 workgroups also write the zero columns of skipped pairs.
+      scf.if %zeroes_skipped {
+        scf.for %zj = [%c0 to %c16 step %c1] {
+          %zj_i32 = index.cast %zj : index to i32
+          %skip_shifted = scalar.shrui %skip_mask, %zj_i32 : i32
+          %skip_bit = scalar.andi %skip_shifted, %c1_i32 : i32
+          %writes_zero = scalar.cmpi ne, %skip_bit, %c0_i32 : i32
+          scf.if %writes_zero {
+            %zero_pair = index.add %pair_first, %zj : index
+            func.call @ggml_hrx_mmidw_zero_column(%dst_noalias, %d_span, %zero_pair, %n_used, %d_s1, %d_s2, %group_row_begin, %group_row_end, %n_rows) : (buffer, index, index, index, index, index, index, index, index)
+          }
+        }
+      }
+      %list_begin = kernel.workgroup.scan<addi> %match_count {direction = forward, mode = exclusive} : i32
+      %route_total = kernel.workgroup.reduce<addi> %match_count : i32
+      %route_count = index.cast %route_total : i32 to index
+      %list_end = scf.for %lj = [%c0 to %c16 step %c1](%list_pos = %list_begin : i32) -> (i32) {
+        %lj_i32 = index.cast %lj : index to i32
+        %mask_shifted = scalar.shrui %match_mask, %lj_i32 : i32
+        %mask_bit = scalar.andi %mask_shifted, %c1_i32 : i32
+        %listed = scalar.cmpi ne, %mask_bit, %c0_i32 : i32
+        scf.if %listed {
+      // The list holds pairs relative to the window start (below 4096).
+          %list_local = index.add %pair_first_offset, %lj : index
+          %local_i32 = index.cast %list_local : index to i32
+          %local_i16 = scalar.trunci %local_i32 : i32 to i16
+          %list_index = index.cast %list_pos : i32 to index
+          %list_off = index.assume %list_index [range(%list_index, 0, 2147483646)] : index
+          %list_ok = index.cmp ult, %list_off, %c4096 : index
+          scf.if %list_ok {
+            view.store %local_i16, %list_view[%list_off] : i16, view<4096xi16>
+          }
+        }
+        %list_next = scalar.addi %list_pos, %mask_bit : i32
+        scf.yield %list_next : i32
+      }
+      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+
+      // The barrier prover keeps the reduced count uniform only in an i32 compare. Thus the chunk loop is a while loop.
+      %chunk_end = scf.while(%chunk_arg = %chunk_first : index) -> (index) {
+        %chunk_i32 = index.cast %chunk_arg : index to i32
+        %more = scalar.cmpi slt, %chunk_i32, %route_total : i32
+        scf.condition %more, %chunk_arg : i1, index
+      } do(%chunk_in: index) {
+        // A window lists at most 4096 pairs.
+        %chunk = index.assume %chunk_in [range(%chunk_in, 0, 4064)] : index
+        scf.if %is_base_writer {
+          %list_i = index.add %chunk, %t : index
+          %x_base, %d_base = func.call @ggml_hrx_mmidw_pair_bases(%list_stage, %list_i, %route_count, %window, %n_used, %x_ne1, %x_s1, %x_s2, %d_s1, %d_s2) : (buffer, index, index, index, index, index, index, index, index, index) -> (i32, i32)
+          view.store %x_base, %x_base_view[%t] : i32, view<32xi32>
+          view.store %d_base, %d_base_view[%t] : i32, view<32xi32>
+        }
+        kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+        %x_col_base = view.load %x_base_view[%x_col] : view<32xi32> -> i32
+        %cols_live = index.sub %route_count, %chunk : index
+        scf.for %row_tile = [%tile_begin to %tile_end step %c1] {
+          %tile_row0 = index.mul %row_tile, %c128 : index
+          %w_row = index.add %tile_row0, %w_local : index
+          %w_valid = index.cmp ult, %w_row, %n_rows : index
+          %w_offset = index.mul %w_row, %w_s1 : index
+          %w_base = index.add %w_expert, %w_offset : index
+          %out_row_low = index.add %tile_row0, %out_row_local0 : index
+          %out_row_high = index.add %out_row_low, %c16 : index
+          %acc0, %acc1 = scf.if %is_kq -> (vector<8xf32>, vector<8xf32>) {
+            %kq0, %kq1 = func.call @ggml_hrx_mmidw_k_kq(%is_q5k, %weight_noalias, %w_span, %w_base, %k_size, %w_local, %w_pair, %input_noalias, %x_span, %x_col_base, %x_col, %x_k_local, %w_stage, %x_stage, %frag_col0, %frag_row0, %cols_live) : (i1, buffer, index, index, index, index, index, buffer, index, i32, index, index, buffer, buffer, index, index, index) -> (vector<8xf32>, vector<8xf32>)
+            scf.yield %kq0, %kq1 : vector<8xf32>, vector<8xf32>
+          } else {
+            %o0, %o1 = scf.if %is_q6k -> (vector<8xf32>, vector<8xf32>) {
+              %q60, %q61 = func.call @ggml_hrx_mmidw_k_q6k(%weight_noalias, %w_span, %w_base, %k_size, %w_local, %w_pair, %input_noalias, %x_span, %x_col_base, %x_col, %x_k_local, %w_stage, %x_stage, %frag_col0, %frag_row0, %cols_live) : (buffer, index, index, index, index, index, buffer, index, i32, index, index, buffer, buffer, index, index, index) -> (vector<8xf32>, vector<8xf32>)
+              scf.yield %q60, %q61 : vector<8xf32>, vector<8xf32>
+            } else {
+              %p0, %p1 = scf.if %q8_0_steps -> (vector<8xf32>, vector<8xf32>) {
+                %q80, %q81 = func.call @ggml_hrx_mmidw_k_q8_0(%weight_noalias, %w_span, %w_base, %k_size, %w_local, %w_pair, %input_noalias, %x_span, %x_col_base, %x_col, %x_k_local, %w_stage, %x_stage, %frag_col0, %frag_row0, %cols_live) : (buffer, index, index, index, index, index, buffer, index, i32, index, index, buffer, buffer, index, index, index) -> (vector<8xf32>, vector<8xf32>)
+                scf.yield %q80, %q81 : vector<8xf32>, vector<8xf32>
+              } else {
+                %g0, %g1 = func.call @ggml_hrx_mmidw_k_generic(%wtype, %weight_noalias, %w_span, %w_base, %w_valid, %k_size, %w_local, %w_pair, %input_noalias, %x_span, %x_col_base, %x_col, %x_k_local, %w_stage, %x_stage, %frag_col0, %frag_row0, %cols_live) : (index, buffer, index, index, i1, index, index, index, buffer, index, i32, index, index, buffer, buffer, index, index, index) -> (vector<8xf32>, vector<8xf32>)
+                scf.yield %g0, %g1 : vector<8xf32>, vector<8xf32>
+              }
+              scf.yield %p0, %p1 : vector<8xf32>, vector<8xf32>
+            }
+            scf.yield %o0, %o1 : vector<8xf32>, vector<8xf32>
+          }
+          func.call @ggml_hrx_mmidw_store_fragment(%dst_noalias, %d_span, %d_bases, %out_col, %out_row_low, %n_rows, %acc0) : (buffer, index, buffer, index, index, index, vector<8xf32>)
+          func.call @ggml_hrx_mmidw_store_fragment(%dst_noalias, %d_span, %d_bases, %out_col, %out_row_high, %n_rows, %acc1) : (buffer, index, buffer, index, index, index, vector<8xf32>)
+        }
+        // The next chunk writes the column bases again.
+        kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+        %chunk_next = index.add %chunk, %chunk_stride : index
+        scf.yield %chunk_next : index
+      }
+      // The next window writes the list again.
+      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    }
+  }
+  kernel.return
+}

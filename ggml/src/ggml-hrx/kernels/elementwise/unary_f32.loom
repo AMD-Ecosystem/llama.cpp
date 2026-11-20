@@ -1,0 +1,230 @@
+// p0 and p1 are f32 bits. SCALE uses them as scale and bias. CLAMP uses them as min and max.
+
+config.decl @ggml.unary.op : %value: index where [range(%value, 0, 10)]
+
+config.decl @ggml.elementwise.wg_size : %value: index where [range(%value, 64, 1024), multiple_of(%value, 64)]
+
+target.decl @ggml_wave64
+
+func.def inline @ggml_hrx_unary_param(%bits: index) -> (f32) {
+  %bits_i32 = index.cast %bits : index to i32
+  %vec = vector.from_elements %bits_i32 : vector<1xi32>
+  %fvec = vector.bitcast %vec : vector<1xi32> to vector<1xf32>
+  %value = vector.extract %fvec[0] : vector<1xf32> -> f32
+  func.return %value : f32
+}
+
+// op is a config constant. Thus the compiler removes the unused selects.
+func.def inline @ggml_hrx_unary_op(%op: index, %x: f32, %pa: f32, %pb: f32) -> (f32) {
+  %c0 = scalar.constant 0.0 : f32
+  %c1 = scalar.constant 1.0 : f32
+  %c20 = scalar.constant 20.0 : f32
+  %neg = scalar.negf %x : f32
+
+  %scaled = scalar.mulf %x, %pa : f32
+  %scale = scalar.addf %scaled, %pb : f32
+
+  // Same comparisons as the CPU. This gives the same NaN results.
+  %below_max = scalar.cmpf olt, %x, %pb : f32
+  %low = scf.select %below_max, %x, %pb : f32
+  %above_min = scalar.cmpf ogt, %low, %pa : f32
+  %clamp = scf.select %above_min, %low, %pa : f32
+
+  %abs = scalar.absf %x : f32
+  %is_positive = scalar.cmpf ogt, %x, %c0 : f32
+  %relu = scf.select %is_positive, %x, %c0 : f32
+  %sqr = scalar.mulf %x, %x : f32
+  %exp = scalar.expf<afn> %x : f32
+
+  %exp_neg = scalar.expf<afn> %neg : f32
+  %sig_den = scalar.addf %c1, %exp_neg : f32
+  %sigmoid = scalar.divf %c1, %sig_den : f32
+  %silu = scalar.divf %x, %sig_den : f32
+
+  // This log1p form keeps small values exact.
+  %sp_u = scalar.addf %c1, %exp : f32
+  %sp_d = scalar.subf %sp_u, %c1 : f32
+  %sp_log = scalar.logf<afn> %sp_u : f32
+  %sp_ratio = scalar.divf %exp, %sp_d : f32
+  %sp_scaled = scalar.mulf %sp_log, %sp_ratio : f32
+  %sp_tiny = scalar.cmpf oeq, %sp_d, %c0 : f32
+  %sp_log1p = scf.select %sp_tiny, %exp, %sp_scaled : f32
+  %sp_large = scalar.cmpf ogt, %x, %c20 : f32
+  %softplus = scf.select %sp_large, %x, %sp_log1p : f32
+
+  %op_clamp = index.constant 1 : index
+  %op_neg = index.constant 2 : index
+  %op_abs = index.constant 3 : index
+  %op_relu = index.constant 4 : index
+  %op_sqr = index.constant 5 : index
+  %op_exp = index.constant 6 : index
+  %op_sigmoid = index.constant 7 : index
+  %op_silu = index.constant 8 : index
+  %op_softplus = index.constant 9 : index
+  %is_clamp = index.cmp eq, %op, %op_clamp : index
+  %is_neg = index.cmp eq, %op, %op_neg : index
+  %is_abs = index.cmp eq, %op, %op_abs : index
+  %is_relu = index.cmp eq, %op, %op_relu : index
+  %is_sqr = index.cmp eq, %op, %op_sqr : index
+  %is_exp = index.cmp eq, %op, %op_exp : index
+  %is_sigmoid = index.cmp eq, %op, %op_sigmoid : index
+  %is_silu = index.cmp eq, %op, %op_silu : index
+  %is_softplus = index.cmp eq, %op, %op_softplus : index
+  %r1 = scf.select %is_clamp, %clamp, %scale : f32
+  %r2 = scf.select %is_neg, %neg, %r1 : f32
+  %r3 = scf.select %is_abs, %abs, %r2 : f32
+  %r4 = scf.select %is_relu, %relu, %r3 : f32
+  %r5 = scf.select %is_sqr, %sqr, %r4 : f32
+  %r6 = scf.select %is_exp, %exp, %r5 : f32
+  %r7 = scf.select %is_sigmoid, %sigmoid, %r6 : f32
+  %r8 = scf.select %is_silu, %silu, %r7 : f32
+  %r = scf.select %is_softplus, %softplus, %r8 : f32
+  func.return %r : f32
+}
+
+kernel.def target(@ggml_wave64) export("ggml_unary_f32") @ggml_unary_f32(%n: index) {
+  %one = index.constant 1 : index
+  %wg_size = config.get @ggml.elementwise.wg_size : index
+  %round = index.sub %wg_size, %one : index
+  %n_round = index.add %n, %round : index
+  %groups = index.div %n_round, %wg_size : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%wg_size, %one, %one) : index
+} launch(%n_in: index, %d0_in: index, %d1_in: index, %d2_in: index, %s0_in: index, %s1_in: index, %s2_in: index, %s3_in: index, %s_span_in: index, %t0_in: index, %t1_in: index, %t2_in: index, %t3_in: index, %t_span_in: index, %p0: index, %p1: index, %src: buffer, %dst: buffer) {
+  // supports_unary checks these ranges.
+  %n = index.assume %n_in [range(%n_in, 1, 2147483647)] : index
+  %d0 = index.assume %d0_in [range(%d0_in, 1, 2147483647)] : index
+  %d1 = index.assume %d1_in [range(%d1_in, 1, 2147483647)] : index
+  %d2 = index.assume %d2_in [range(%d2_in, 1, 2147483647)] : index
+  %s0 = index.assume %s0_in [range(%s0_in, 0, 2147483647)] : index
+  %s1 = index.assume %s1_in [range(%s1_in, 0, 2147483647)] : index
+  %s2 = index.assume %s2_in [range(%s2_in, 0, 2147483647)] : index
+  %s3 = index.assume %s3_in [range(%s3_in, 0, 2147483647)] : index
+  %s_span = index.assume %s_span_in [range(%s_span_in, 1, 2147483647)] : index
+  %t0 = index.assume %t0_in [range(%t0_in, 0, 2147483647)] : index
+  %t1 = index.assume %t1_in [range(%t1_in, 0, 2147483647)] : index
+  %t2 = index.assume %t2_in [range(%t2_in, 0, 2147483647)] : index
+  %t3 = index.assume %t3_in [range(%t3_in, 0, 2147483647)] : index
+  %t_span = index.assume %t_span_in [range(%t_span_in, 1, 2147483647)] : index
+  %op = config.get @ggml.unary.op : index
+  %wg_size = config.get @ggml.elementwise.wg_size : index
+  %group = kernel.workgroup.id<x> : index
+  %item = kernel.workitem.id<x> : index
+  %base = index.mul %group, %wg_size : index
+  %i = index.add %base, %item : index
+  %in_bounds = index.cmp ult, %i, %n : index
+  %zero = index.constant 0 : offset
+  // src and dst can alias for in-place ops. Thus do not use noalias.
+  %src_view = buffer.view %src[%zero] : buffer -> view<[%s_span]xf32>
+  %dst_view = buffer.view %dst[%zero] : buffer -> view<[%t_span]xf32>
+  scf.if %in_bounds {
+    %i0 = index.rem %i, %d0 : index
+    %q0 = index.div %i, %d0 : index
+    %i1 = index.rem %q0, %d1 : index
+    %q1 = index.div %q0, %d1 : index
+    %i2 = index.rem %q1, %d2 : index
+    %i3 = index.div %q1, %d2 : index
+
+    %so0 = index.mul %i0, %s0 : index
+    %so1 = index.mul %i1, %s1 : index
+    %so2 = index.mul %i2, %s2 : index
+    %so3 = index.mul %i3, %s3 : index
+    %so01 = index.add %so0, %so1 : index
+    %so23 = index.add %so2, %so3 : index
+    %s_idx = index.add %so01, %so23 : index
+
+    %to0 = index.mul %i0, %t0 : index
+    %to1 = index.mul %i1, %t1 : index
+    %to2 = index.mul %i2, %t2 : index
+    %to3 = index.mul %i3, %t3 : index
+    %to01 = index.add %to0, %to1 : index
+    %to23 = index.add %to2, %to3 : index
+    %t_idx = index.add %to01, %to23 : index
+
+    // The prover reads only branch conditions. Thus cap the offsets and check one bound in each scf.if.
+    %s_off = index.assume %s_idx [range(%s_idx, 0, 2147483646)] : index
+    %t_off = index.assume %t_idx [range(%t_idx, 0, 2147483646)] : index
+    %s_ok = index.cmp ult, %s_off, %s_span : index
+    scf.if %s_ok {
+      %t_ok = index.cmp ult, %t_off, %t_span : index
+      scf.if %t_ok {
+        %x = view.load %src_view[%s_off] : view<[%s_span]xf32> -> f32
+        %pa = func.call @ggml_hrx_unary_param(%p0) : (index) -> (f32)
+        %pb = func.call @ggml_hrx_unary_param(%p1) : (index) -> (f32)
+        %r = func.call @ggml_hrx_unary_op(%op, %x, %pa, %pb) : (index, f32, f32, f32) -> (f32)
+        view.store %r, %dst_view[%t_off] : f32, view<[%t_span]xf32>
+      }
+    }
+  }
+  kernel.return
+}
+
+kernel.def target(@ggml_wave64) export("ggml_unary_f32_rows") @ggml_unary_f32_rows(%n: index) {
+  %one = index.constant 1 : index
+  %wg_size = config.get @ggml.elementwise.wg_size : index
+  %wg_x2 = index.add %wg_size, %wg_size : index
+  %per_group = index.add %wg_x2, %wg_x2 : index
+  %round = index.sub %per_group, %one : index
+  %n_round = index.add %n, %round : index
+  %groups = index.div %n_round, %per_group : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%wg_size, %one, %one) : index
+} launch(%n_in: index, %d0_in: index, %s_rs_in: index, %s_span_in: index, %t_rs_in: index, %t_span_in: index, %p0: index, %p1: index, %src: buffer, %dst: buffer) {
+  // The caller checks these ranges. n and d0 must be multiples of 4.
+  %n = index.assume %n_in [range(%n_in, 4, 2147483644)] : index
+  %d0 = index.assume %d0_in [range(%d0_in, 4, 2147483644)] : index
+  %s_rs = index.assume %s_rs_in [range(%s_rs_in, 0, 2147483647)] : index
+  %s_span = index.assume %s_span_in [range(%s_span_in, 1, 2147483647)] : index
+  %t_rs = index.assume %t_rs_in [range(%t_rs_in, 0, 2147483647)] : index
+  %t_span = index.assume %t_span_in [range(%t_span_in, 1, 2147483647)] : index
+  %op = config.get @ggml.unary.op : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %wg_size = config.get @ggml.elementwise.wg_size : index
+  %wg_x2 = index.add %wg_size, %wg_size : index
+  %per_group = index.add %wg_x2, %wg_x2 : index
+  %group = kernel.workgroup.id<x> : index
+  %item = kernel.workitem.id<x> : index
+  %base = index.mul %group, %per_group : index
+  %lane = index.mul %item, %c4 : index
+  %j_raw = index.add %base, %lane : index
+  %j = index.assume %j_raw [range(%j_raw, 0, 2147483644)] : index
+  %j_last = index.add %j, %c3 : index
+  %zero = index.constant 0 : offset
+  // src and dst can alias for in-place ops. Thus do not use noalias.
+  %src_view = buffer.view %src[%zero] : buffer -> view<[%s_span]xf32>
+  %dst_view = buffer.view %dst[%zero] : buffer -> view<[%t_span]xf32>
+  %in_bounds = index.cmp ult, %j_last, %n : index
+  scf.if %in_bounds {
+    %r = index.div %j, %d0 : index
+    %r_start = index.mul %r, %d0 : index
+    %c = index.sub %j, %r_start : index
+    %s_row = index.mul %r, %s_rs : index
+    %s_idx = index.add %s_row, %c : index
+    %t_row = index.mul %r, %t_rs : index
+    %t_idx = index.add %t_row, %c : index
+    // The prover reads only branch conditions. Thus cap the offsets and check one bound in each scf.if.
+    %s_off = index.assume %s_idx [range(%s_idx, 0, 2147483640)] : index
+    %t_off = index.assume %t_idx [range(%t_idx, 0, 2147483640)] : index
+    %s_last = index.add %s_off, %c3 : index
+    %t_last = index.add %t_off, %c3 : index
+    %s_ok = index.cmp ult, %s_last, %s_span : index
+    scf.if %s_ok {
+      %t_ok = index.cmp ult, %t_last, %t_span : index
+      scf.if %t_ok {
+        %x = vector.load %src_view[%s_off] : view<[%s_span]xf32> -> vector<4xf32>
+        %pa = func.call @ggml_hrx_unary_param(%p0) : (index) -> (f32)
+        %pb = func.call @ggml_hrx_unary_param(%p1) : (index) -> (f32)
+        %x0 = vector.extract %x[0] : vector<4xf32> -> f32
+        %x1 = vector.extract %x[1] : vector<4xf32> -> f32
+        %x2 = vector.extract %x[2] : vector<4xf32> -> f32
+        %x3 = vector.extract %x[3] : vector<4xf32> -> f32
+        %y0 = func.call @ggml_hrx_unary_op(%op, %x0, %pa, %pb) : (index, f32, f32, f32) -> (f32)
+        %y1 = func.call @ggml_hrx_unary_op(%op, %x1, %pa, %pb) : (index, f32, f32, f32) -> (f32)
+        %y2 = func.call @ggml_hrx_unary_op(%op, %x2, %pa, %pb) : (index, f32, f32, f32) -> (f32)
+        %y3 = func.call @ggml_hrx_unary_op(%op, %x3, %pa, %pb) : (index, f32, f32, f32) -> (f32)
+        %y = vector.from_elements %y0, %y1, %y2, %y3 : vector<4xf32>
+        vector.store %y, %dst_view[%t_off] : vector<4xf32>, view<[%t_span]xf32>
+      }
+    }
+  }
+  kernel.return
+}

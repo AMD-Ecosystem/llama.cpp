@@ -1,0 +1,148 @@
+name: CI (hrx)
+
+on:
+  workflow_dispatch: # allows manual triggering
+  push:
+    branches:
+      - master
+    paths: [
+      '.github/workflows/build-hrx.yml',
+      '.github/actions/linux-setup-hrx/**',
+      '**/CMakeLists.txt',
+      '**/.cmake',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp',
+      '**/*.loom'
+    ]
+
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: [
+      '.github/workflows/build-hrx.yml',
+      '.github/actions/linux-setup-hrx/**',
+      'ggml/src/ggml-hrx/**'
+    ]
+
+cache-mode: none
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  # Sync versions in build-hrx.yml, ci-self-hosted-hrx.yml, release.yml, build-cache.yml, docs/build.md
+  HRX_VERSION: "0.2.0"
+
+jobs:
+  ubuntu-24-hrx:
+    runs-on: ubuntu-24.04
+
+    cache-mode: write
+    permissions:
+      actions: write
+      contents: read
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev ninja-build
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          restore: false
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
+        with:
+          key: hrx-ubuntu-24.04
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
+
+      - name: Use HRX SDK Cache
+        uses: actions/cache@v5
+        id: cache-hrx
+        with:
+          path: ./hrx_sdk
+          key: cache-gha-hrx-sdk-v${{ env.HRX_VERSION }}-${{ runner.os }}-${{ hashFiles('.github/actions/linux-setup-hrx/action.yml') }}
+
+      - name: Setup HRX SDK
+        if: steps.cache-hrx.outputs.cache-hit != 'true'
+        uses: ./.github/actions/linux-setup-hrx
+        with:
+          path: ./hrx_sdk
+          version: ${{ env.HRX_VERSION }}
+
+      - name: Configure
+        id: cmake_configure
+        run: |
+          cmake -B build \
+            -G "Ninja" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$PWD/hrx_sdk" \
+            -DLLAMA_FATAL_WARNINGS=ON \
+            -DGGML_HRX=ON
+
+      - name: Build
+        id: cmake_build
+        run: |
+          time cmake --build build -j $(nproc)
+
+      # the Loom tools are not part of the SDK install, they ship in the hrx_loom wheel of the same release
+      - name: Install Loom tools
+        run: |
+          python3 -m venv "$RUNNER_TEMP/loom"
+          "$RUNNER_TEMP/loom/bin/pip" install "https://github.com/ROCm/hrx-system/releases/download/v${HRX_VERSION}/hrx_loom-${HRX_VERSION}-py3-none-manylinux_2_39_x86_64.whl"
+          echo "$RUNNER_TEMP/loom/bin" >> "$GITHUB_PATH"
+
+      # compile every kernel ahead of time with one valid config set, the JIT uses the same targets
+      - name: Compile Loom kernels
+        run: |
+          cd ggml/src/ggml-hrx/kernels
+          T=$RUNNER_TEMP/loom-aot
+          mkdir -p "$T"
+          echo '{"ggml":{"argsort":{"order":0,"parts":16},"binary":{"b_bcast0":0,"op":0},"concat":{"tile":32},"cpy":{"dst_type":0},"elementwise":{"wg_size":256},"flash_attn":{"waves":4},"gated_delta_net":{"chains":4,"gate_per_channel":0,"head_width":128,"lanes":4},"mul_mat":{"vec_cols":1,"vec_read_ahead_cols":2,"vec_rows":8,"vec_xs_depth":2,"vec_xs_workgroups":256},"mul_mat_f32":{"depth":3,"k_split":8},"mul_mat_id":{"chunk_slots":2,"kq_slots":8,"row_groups":4,"weight_type":2},"norm":{"wg_size":256},"rms_norm":{"lanes":64,"vecs":1},"rope":{"freq_factors":0,"mode":0},"set_rows":{"dst_type":0,"ids_type":0},"soft_max":{"mask":0},"unary":{"op":0}}}' > "$T/config.json"
+          fail=0
+          for arch in gfx1151 gfx1201; do
+            printf 'amdgpu.target<%s> @ggml_wave32 {subgroup_size = 32}\namdgpu.target<%s> @ggml_wave64 {subgroup_size = 64}\namdgpu.target<gfx11-generic> @ggml_gfx11\namdgpu.target<gfx12-generic> @ggml_gfx12\n' "$arch" "$arch" > "$T/targets.loom"
+            for k in $(find . -name '*.loom' ! -path './motifs/*' ! -path './matmul/lib/*' | sort); do
+              # the flash attention WMMA kernel uses the gfx11 wave64 layout only
+              case "$arch:$k" in gfx12*:*flash_attn*_wmma.loom) continue ;; esac
+              # weight type: 0 = F32 for the f32 kernel, 2 = Q4_K for the others
+              case "$k" in *mul_mat_f32.loom) wt=0 ;; *) wt=2 ;; esac
+              out="$T/$arch-$(basename "$k" .loom)"
+              if loom-link --include-input-exports --strip-check "$k" motifs/*.loom matmul/lib/*.loom "$T/targets.loom" --config-file="$T/config.json" --config=ggml.mul_mat.weight_type=$wt --output="$out.loom" \
+                && loom-compile "$out.loom" --target="amdgpu:$arch" --config-file="$T/config.json" --config=ggml.mul_mat.weight_type=$wt --output="$out.hsaco"; then
+                echo "OK   $arch $k"
+              else
+                echo "FAIL $arch $k"
+                fail=1
+              fi
+            done
+          done
+          exit $fail
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: hrx-ubuntu-24.04
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true

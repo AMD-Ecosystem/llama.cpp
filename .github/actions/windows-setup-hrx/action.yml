@@ -1,0 +1,53 @@
+name: "Windows - Setup HRX SDK"
+description: "Build the HRX SDK from the release source and install it"
+inputs:
+  path:
+    description: "Installation path"
+    required: true
+  version:
+    description: "HRX SDK version (e.g., 0.2.0)"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    # the HRX dev tools need Python 3.12
+    - name: Setup Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+
+    - name: Download HRX SDK source
+      shell: pwsh
+      working-directory: ${{ runner.temp }}
+      run: |
+        New-Item -ItemType Directory -Force -Path hrx-system | Out-Null
+        curl.exe --no-progress-meter -L -o hrx-system.tar.gz "https://github.com/ROCm/hrx-system/archive/refs/tags/v${{ inputs.version }}.tar.gz"
+        tar -xzf hrx-system.tar.gz -C hrx-system --strip-components=1
+        Remove-Item hrx-system.tar.gz
+
+    - name: Build and install HRX SDK
+      shell: cmd
+      run: |
+        for %%i in ("${{ inputs.path }}") do set "PREFIX=%%~fi"
+        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+        cd /d "${{ runner.temp }}\hrx-system"
+        rem the dev tools install CMake 4.x, Windows builds need CMake 4.2 or newer
+        python dev.py cmake setup || exit /b 1
+        call .venv\Scripts\activate.bat
+        rem BUILD_SHARED_LIBS=OFF puts the private runtime into hrx.dll
+        cmake -S . -B build -G Ninja ^
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo ^
+          -DCMAKE_C_COMPILER=cl ^
+          -DCMAKE_CXX_COMPILER=cl ^
+          -DBUILD_SHARED_LIBS=OFF ^
+          -DIREE_ENABLE_WERROR_FLAG=OFF ^
+          -DLIBHRX_BUILD=ON ^
+          -DLIBHRX_BUILD_HIP_BINDING=OFF ^
+          -DLIBHRX_BUILD_PASSTHROUGH=OFF ^
+          -DLIBHRX_BUILD_CTS=OFF || exit /b 1
+        cmake --build build --target hrx hrx-info loomc_shared || exit /b 1
+        cmake --install build --prefix "%PREFIX%" --component HrxPublicDist || exit /b 1
+        copy LICENSE "%PREFIX%\LICENSE" || exit /b 1
+        cd /d "%GITHUB_WORKSPACE%"
+        rmdir /s /q "${{ runner.temp }}\hrx-system"

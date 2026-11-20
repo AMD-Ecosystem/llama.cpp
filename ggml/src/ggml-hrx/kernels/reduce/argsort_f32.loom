@@ -1,0 +1,188 @@
+// Rows must be contiguous. Equal values keep their index order.
+
+// 0 is ascending. 1 is descending.
+config.decl @ggml.argsort.order : %value: index where [range(%value, 0, 1)]
+
+// Waves that split the compares for one block of 64 elements.
+config.decl @ggml.argsort.parts : %value: index where [range(%value, 1, 16)]
+
+target.decl @ggml_wave64
+
+func.def inline @ggml_argsort_before(%xj: f32, %xe: f32, %j: index, %e: index, %is_asc: i1) -> (i32) {
+  %c0_i32 = scalar.constant 0 : i32
+  %c1_i32 = scalar.constant 1 : i32
+  %lt = scalar.cmpf olt, %xj, %xe : f32
+  %le = scalar.cmpf ole, %xj, %xe : f32
+  %gt = scalar.cmpf ogt, %xj, %xe : f32
+  %ge = scalar.cmpf oge, %xj, %xe : f32
+  %strict = scf.select %is_asc, %lt, %gt : i1
+  %weak = scf.select %is_asc, %le, %ge : i1
+  %j_first = index.cmp ult, %j, %e : index
+  %before = scf.select %j_first, %weak, %strict : i1
+  %inc = scf.select %before, %c1_i32, %c0_i32 : i32
+  func.return %inc : i32
+}
+
+kernel.def target(@ggml_wave64) export("ggml_argsort_f32") @ggml_argsort_f32(%rows: index, %ne0: index) {
+  %one = index.constant 1 : index
+  %c63 = index.constant 63 : index
+  %c64 = index.constant 64 : index
+  %parts = config.get @ggml.argsort.parts : index
+  %wg_size = index.mul %parts, %c64 : index
+  %ne0_63 = index.add %ne0, %c63 : index
+  %n_eblk = index.div %ne0_63, %c64 : index
+  kernel.launch.config workgroups(%n_eblk, %rows, %one) workgroup_size(%wg_size, %one, %one) : index
+} launch(%rows_in: index, %ne0_in: index, %n_in: index, %src: buffer, %dst: buffer) {
+  // supports_argsort checks these ranges.
+  %rows = index.assume %rows_in [range(%rows_in, 1, 2147483647)] : index
+  %ne0 = index.assume %ne0_in [range(%ne0_in, 1, 4096)] : index
+  %n = index.assume %n_in [range(%n_in, 1, 2147483647)] : index
+  %order = config.get @ggml.argsort.order : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c6 = index.constant 6 : index
+  %c7 = index.constant 7 : index
+  %c8 = index.constant 8 : index
+  %parts = config.get @ggml.argsort.parts : index
+  %parts_m1 = index.sub %parts, %c1 : index
+  %c64 = index.constant 64 : index
+  %c_stage = index.constant 4096 : index
+  %wg_size = index.mul %parts, %c64 : index
+  %eblk = kernel.workgroup.id<x> : index
+  %row = kernel.workgroup.id<y> : index
+  %item = kernel.workitem.id<x> : index
+  %lane = index.rem %item, %c64 : index
+  %part = index.div %item, %c64 : index
+  %zero = index.constant 0 : offset
+  %stage_bytes = index.constant 16384 : offset
+  %partial_bytes = index.constant 4096 : offset
+  %src_view = buffer.view %src[%zero] : buffer -> view<[%n]xf32>
+  %dst_view = buffer.view %dst[%zero] : buffer -> view<[%n]xi32>
+  %stage = buffer.alloca<workgroup> align(16) %stage_bytes : buffer
+  %stage_view = buffer.view %stage[%zero] : buffer -> view<4096xf32>
+  %partial = buffer.alloca<workgroup> align(16) %partial_bytes : buffer
+  %partial_view = buffer.view %partial[%zero] : buffer -> view<1024xi32>
+  %row_base = index.mul %row, %ne0 : index
+  %is_asc = index.cmp eq, %order, %c0 : index
+  %c0_i32 = scalar.constant 0 : i32
+
+  // Pad with NaN. Ordered compares do not count NaN.
+  %ne0_7 = index.add %ne0, %c7 : index
+  %n_blk = index.div %ne0_7, %c8 : index
+  %ne0_pad_raw = index.mul %n_blk, %c8 : index
+  %ne0_pad = index.assume %ne0_pad_raw [range(%ne0_pad_raw, 8, 4096)] : index
+  %nan_i32 = scalar.constant 2143289344 : i32
+  %nan_ivec = vector.from_elements %nan_i32 : vector<1xi32>
+  %nan_fvec = vector.bitcast %nan_ivec : vector<1xi32> to vector<1xf32>
+  %nan = vector.extract %nan_fvec[0] : vector<1xf32> -> f32
+  scf.for %c = [%item to %ne0_pad step %wg_size] {
+    %c_stage_ok = index.cmp ult, %c, %c_stage : index
+    scf.if %c_stage_ok {
+      %c_idx = index.add %row_base, %c : index
+      %c_off = index.assume %c_idx [range(%c_idx, 0, 2147483646)] : index
+      %c_in_row = index.cmp ult, %c, %ne0 : index
+      %x = scf.if %c_in_row -> (f32) {
+        %c_ok = index.cmp ult, %c_off, %n : index
+        %v = scf.if %c_ok -> (f32) {
+          %ld = view.load %src_view[%c_off] : view<[%n]xf32> -> f32
+          scf.yield %ld : f32
+        } else {
+          scf.yield %nan : f32
+        }
+        scf.yield %v : f32
+      } else {
+        scf.yield %nan : f32
+      }
+      view.store %x, %stage_view[%c] : f32, view<4096xf32>
+    }
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+
+  %e_base = index.mul %eblk, %c64 : index
+  %e_raw = index.add %e_base, %lane : index
+  %e = index.assume %e_raw [range(%e_raw, 0, 4095)] : index
+  // Read x[e] from global memory. A workgroup memory index from the workgroup id does not lower.
+  %e_in_row = index.cmp ult, %e, %ne0 : index
+  %xe = scf.if %e_in_row -> (f32) {
+    %e_idx = index.add %row_base, %e : index
+    %e_off = index.assume %e_idx [range(%e_idx, 0, 2147483646)] : index
+    %e_ok = index.cmp ult, %e_off, %n : index
+    %v = scf.if %e_ok -> (f32) {
+      %ld = view.load %src_view[%e_off] : view<[%n]xf32> -> f32
+      scf.yield %ld : f32
+    } else {
+      scf.yield %nan : f32
+    }
+    scf.yield %v : f32
+  } else {
+    scf.yield %nan : f32
+  }
+  %n_blk_round = index.add %n_blk, %parts_m1 : index
+  %blk_per_part = index.div %n_blk_round, %parts : index
+  %part_len = index.mul %blk_per_part, %c8 : index
+  %j_begin = index.mul %part, %part_len : index
+  %j_end_raw = index.add %j_begin, %part_len : index
+  %j_end = index.min %j_end_raw, %ne0_pad : index
+  // Four independent counts shorten the dependent add chain.
+  %r0, %r1, %r2, %r3 = scf.for %jb = [%j_begin to %j_end step %c8](%a0 = %c0_i32 : i32, %a1 = %c0_i32 : i32, %a2 = %c0_i32 : i32, %a3 = %c0_i32 : i32) -> (i32, i32, i32, i32) {
+    %b0, %b1, %b2, %b3 = scf.for %k = [%c0 to %c2 step %c1](%s0 = %a0 : i32, %s1 = %a1 : i32, %s2 = %a2 : i32, %s3 = %a3 : i32) -> (i32, i32, i32, i32) unroll {
+      // jb is a multiple of 8 below 4096. Thus jb + 7 < 4096.
+      %j0_raw = index.add %jb, %k : index
+      %j0 = index.assume %j0_raw [range(%j0_raw, 0, 4095)] : index
+      %j1_raw = index.add %j0, %c2 : index
+      %j1 = index.assume %j1_raw [range(%j1_raw, 0, 4095)] : index
+      %j2_raw = index.add %j0, %c4 : index
+      %j2 = index.assume %j2_raw [range(%j2_raw, 0, 4095)] : index
+      %j3_raw = index.add %j0, %c6 : index
+      %j3 = index.assume %j3_raw [range(%j3_raw, 0, 4095)] : index
+      %x0 = view.load %stage_view[%j0] : view<4096xf32> -> f32
+      %x1 = view.load %stage_view[%j1] : view<4096xf32> -> f32
+      %x2 = view.load %stage_view[%j2] : view<4096xf32> -> f32
+      %x3 = view.load %stage_view[%j3] : view<4096xf32> -> f32
+      %i0 = func.call @ggml_argsort_before(%x0, %xe, %j0, %e, %is_asc) : (f32, f32, index, index, i1) -> (i32)
+      %i1 = func.call @ggml_argsort_before(%x1, %xe, %j1, %e, %is_asc) : (f32, f32, index, index, i1) -> (i32)
+      %i2 = func.call @ggml_argsort_before(%x2, %xe, %j2, %e, %is_asc) : (f32, f32, index, index, i1) -> (i32)
+      %i3 = func.call @ggml_argsort_before(%x3, %xe, %j3, %e, %is_asc) : (f32, f32, index, index, i1) -> (i32)
+      %t0 = scalar.addi %s0, %i0 : i32
+      %t1 = scalar.addi %s1, %i1 : i32
+      %t2 = scalar.addi %s2, %i2 : i32
+      %t3 = scalar.addi %s3, %i3 : i32
+      scf.yield %t0, %t1, %t2, %t3 : i32, i32, i32, i32
+    }
+    scf.yield %b0, %b1, %b2, %b3 : i32, i32, i32, i32
+  }
+  %r01 = scalar.addi %r0, %r1 : i32
+  %r23 = scalar.addi %r2, %r3 : i32
+  %count = scalar.addi %r01, %r23 : i32
+  %item_ok = index.cmp ult, %item, %wg_size : index
+  scf.if %item_ok {
+    view.store %count, %partial_view[%item] : i32, view<1024xi32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+
+  %is_first = index.cmp eq, %part, %c0 : index
+  %writer = scalar.andi %is_first, %e_in_row : i1
+  scf.if %writer {
+    %rank_i32 = scf.for %p = [%c0 to %parts step %c1](%acc = %c0_i32 : i32) -> (i32) unroll {
+      %p_base = index.mul %p, %c64 : index
+      %p_idx = index.add %p_base, %lane : index
+      %p_off = index.assume %p_idx [range(%p_idx, 0, 1023)] : index
+      %pc = view.load %partial_view[%p_off] : view<1024xi32> -> i32
+      %sum = scalar.addi %acc, %pc : i32
+      scf.yield %sum : i32
+    }
+    // The rank is a count of row elements. Thus it is in [0, ne0).
+    %rank_raw = index.cast %rank_i32 : i32 to index
+    %rank = index.assume %rank_raw [range(%rank_raw, 0, 2147483646)] : index
+    %out_idx = index.add %row_base, %rank : index
+    %out_off = index.assume %out_idx [range(%out_idx, 0, 2147483646)] : index
+    %out_ok = index.cmp ult, %out_off, %n : index
+    scf.if %out_ok {
+      %e_i32 = index.cast %e : index to i32
+      view.store %e_i32, %dst_view[%out_off] : i32, view<[%n]xi32>
+    }
+  }
+  kernel.return
+}

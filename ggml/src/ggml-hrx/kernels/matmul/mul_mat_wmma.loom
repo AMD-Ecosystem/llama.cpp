@@ -1,0 +1,446 @@
+// Weights and activations are rounded to f16. The sums are in f32.
+// The launch arguments are the same as in mul_mat.loom. The caller makes sure that K is a multiple of 32 and that x_s0 is 1.
+
+config.decl @ggml.mul_mat.weight_type : %value: index where [range(%value, 0, 6)]
+
+target.decl @ggml_wave32
+
+template.decl @ggml.mma.k64_2x2(%x_stage: buffer, %w_stage: buffer, %col0: index, %row0: index, %acc00: vector<8xf32>, %acc01: vector<8xf32>, %acc10: vector<8xf32>, %acc11: vector<8xf32>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>)
+
+template.decl @ggml.mma.k64_4x2(%x_stage: buffer, %w_stage: buffer, %col0: index, %row0: index, %acc00: vector<8xf32>, %acc01: vector<8xf32>, %acc10: vector<8xf32>, %acc11: vector<8xf32>, %acc20: vector<8xf32>, %acc21: vector<8xf32>, %acc30: vector<8xf32>, %acc31: vector<8xf32>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>)
+
+template.decl @ggml.mma.zero_acc() -> (vector<8xf32>)
+
+func.decl @ggml_hrx_mm_wmma_stage_weights64(%wtype: index, %weight: buffer, %w_span: index, %row_base: index, %row_valid: i1, %k: index, %k_size: index, %w_stage: buffer)
+
+func.decl @ggml_hrx_mm_wmma_stage_input64(%input: buffer, %x_span: index, %col_base: index, %col_valid: i1, %k: index, %k_size: index, %x_stage: buffer)
+
+func.decl @ggml_hrx_mm_wmma_store(%dst: buffer, %d_span: index, %d_base: index, %d_s1: index, %col0: index, %n_cols: index, %row0: index, %n_rows: index, %acc: vector<8xf32>)
+
+kernel.def target(@ggml_wave32) export("ggml_mul_mat_wmma") @ggml_mul_mat_wmma(%n_rows: index, %n_cols: index, %n_batch: index) {
+  %one = index.constant 1 : index
+  %wg_size = index.constant 256 : index
+  %c63 = index.constant 63 : index
+  %c64 = index.constant 64 : index
+  %c127 = index.constant 127 : index
+  %c128 = index.constant 128 : index
+  %rows_round = index.add %n_rows, %c127 : index
+  %row_tiles = index.div %rows_round, %c128 : index
+  %cols_round = index.add %n_cols, %c63 : index
+  %col_tiles = index.div %cols_round, %c64 : index
+  kernel.launch.config workgroups(%row_tiles, %col_tiles, %n_batch) workgroup_size(%wg_size, %one, %one) : index
+} launch(%k_size_in: index, %n_rows_in: index, %n_cols_in: index, %ne12_in: index, %r2_in: index, %r3_in: index, %w_s1_in: index, %w_s2_in: index, %w_s3_in: index, %w_span_in: index, %x_s0_in: index, %x_s1_in: index, %x_s2_in: index, %x_s3_in: index, %x_span_in: index, %d_s1_in: index, %d_s2_in: index, %d_s3_in: index, %d_span_in: index, %weight: buffer, %input: buffer, %dst: buffer) {
+  // supports_mul_mat checks these ranges.
+  %k_size = index.assume %k_size_in [range(%k_size_in, 1, 2147483647)] : index
+  %n_rows = index.assume %n_rows_in [range(%n_rows_in, 1, 2147483647)] : index
+  %n_cols = index.assume %n_cols_in [range(%n_cols_in, 1, 2147483647)] : index
+  %ne12 = index.assume %ne12_in [range(%ne12_in, 1, 2147483647)] : index
+  %r2 = index.assume %r2_in [range(%r2_in, 1, 2147483647)] : index
+  %r3 = index.assume %r3_in [range(%r3_in, 1, 2147483647)] : index
+  %w_s1 = index.assume %w_s1_in [range(%w_s1_in, 0, 2147483647)] : index
+  %w_s2 = index.assume %w_s2_in [range(%w_s2_in, 0, 2147483647)] : index
+  %w_s3 = index.assume %w_s3_in [range(%w_s3_in, 0, 2147483647)] : index
+  %w_span = index.assume %w_span_in [range(%w_span_in, 1, 2147483647)] : index
+  %x_s1 = index.assume %x_s1_in [range(%x_s1_in, 0, 2147483647)] : index
+  %x_s2 = index.assume %x_s2_in [range(%x_s2_in, 0, 2147483647)] : index
+  %x_s3 = index.assume %x_s3_in [range(%x_s3_in, 0, 2147483647)] : index
+  %x_span = index.assume %x_span_in [range(%x_span_in, 1, 2147483647)] : index
+  %d_s1 = index.assume %d_s1_in [range(%d_s1_in, 0, 2147483647)] : index
+  %d_s2 = index.assume %d_s2_in [range(%d_s2_in, 0, 2147483647)] : index
+  %d_s3 = index.assume %d_s3_in [range(%d_s3_in, 0, 2147483647)] : index
+  %d_span = index.assume %d_span_in [range(%d_span_in, 1, 2147483647)] : index
+  %wtype = config.get @ggml.mul_mat.weight_type : index
+  %c0 = index.constant 0 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %w_stage_bytes = index.constant 18432 : offset
+  %x_stage_bytes = index.constant 9216 : offset
+  %t0 = kernel.workitem.id<x> : index
+  %t = index.assume %t0 [range(%t0, 0, 255)] : index
+  %s0 = kernel.subgroup.id : index
+  %s = index.assume %s0 [range(%s0, 0, 7)] : index
+  %row_tile = kernel.workgroup.id<x> : index
+  %col_tile = kernel.workgroup.id<y> : index
+  %batch = kernel.workgroup.id<z> : index
+  %weight_noalias, %input_noalias, %dst_noalias = buffer.assume.noalias %weight, %input, %dst : buffer, buffer, buffer
+  %w_stage = buffer.alloca<workgroup> align(16) %w_stage_bytes : buffer
+  %x_stage = buffer.alloca<workgroup> align(16) %x_stage_bytes : buffer
+
+  %i12 = index.rem %batch, %ne12 : index
+  %i13 = index.div %batch, %ne12 : index
+  %i02 = index.div %i12, %r2 : index
+  %i03 = index.div %i13, %r3 : index
+  %w2 = index.mul %i02, %w_s2 : index
+  %w3 = index.mul %i03, %w_s3 : index
+  %w_batch = index.add %w2, %w3 : index
+  %x2 = index.mul %i12, %x_s2 : index
+  %x3 = index.mul %i13, %x_s3 : index
+  %x_batch = index.add %x2, %x3 : index
+  %d2 = index.mul %i12, %d_s2 : index
+  %d3 = index.mul %i13, %d_s3 : index
+  %d_batch = index.add %d2, %d3 : index
+  %tile_row0 = index.mul %row_tile, %c128 : index
+  %tile_col0 = index.mul %col_tile, %c64 : index
+
+  %w_local = index.div %t, %c2 : index
+  %w_row = index.add %tile_row0, %w_local : index
+  %w_valid = index.cmp ult, %w_row, %n_rows : index
+  %w_offset = index.mul %w_row, %w_s1 : index
+  %w_base = index.add %w_batch, %w_offset : index
+
+  %x_local = index.div %t, %c4 : index
+  %x_col = index.add %tile_col0, %x_local : index
+  %x_valid = index.cmp ult, %x_col, %n_cols : index
+  %x_offset = index.mul %x_col, %x_s1 : index
+  %x_base = index.add %x_batch, %x_offset : index
+
+  %sub_col_group = index.rem %s, %c2 : index
+  %sub_row_group = index.div %s, %c2 : index
+  %sub_col0 = index.mul %sub_col_group, %c32 : index
+  %sub_row0 = index.mul %sub_row_group, %c32 : index
+
+  %init = template.apply<@ggml.mma.zero_acc>() : () -> (vector<8xf32>)
+  %acc00, %acc01, %acc10, %acc11 = scf.for %k0 = [%c0 to %k_size step %c64](%a00 = %init : vector<8xf32>, %a01 = %init : vector<8xf32>, %a10 = %init : vector<8xf32>, %a11 = %init : vector<8xf32>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) {
+    func.call @ggml_hrx_mm_wmma_stage_weights64(%wtype, %weight_noalias, %w_span, %w_base, %w_valid, %k0, %k_size, %w_stage) : (index, buffer, index, index, i1, index, index, buffer)
+    func.call @ggml_hrx_mm_wmma_stage_input64(%input_noalias, %x_span, %x_base, %x_valid, %k0, %k_size, %x_stage) : (buffer, index, index, i1, index, index, buffer)
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    %n00, %n01, %n10, %n11 = template.apply<@ggml.mma.k64_2x2>(%x_stage, %w_stage, %sub_col0, %sub_row0, %a00, %a01, %a10, %a11) : (buffer, buffer, index, index, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>)
+    // The next K step overwrites the stages.
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    scf.yield %n00, %n01, %n10, %n11 : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>
+  }
+
+  %out_col0 = index.add %tile_col0, %sub_col0 : index
+  %out_col1 = index.add %out_col0, %c16 : index
+  %out_row0 = index.add %tile_row0, %sub_row0 : index
+  %out_row1 = index.add %out_row0, %c16 : index
+  func.call @ggml_hrx_mm_wmma_store(%dst_noalias, %d_span, %d_batch, %d_s1, %out_col0, %n_cols, %out_row0, %n_rows, %acc00) : (buffer, index, index, index, index, index, index, index, vector<8xf32>)
+  func.call @ggml_hrx_mm_wmma_store(%dst_noalias, %d_span, %d_batch, %d_s1, %out_col0, %n_cols, %out_row1, %n_rows, %acc01) : (buffer, index, index, index, index, index, index, index, vector<8xf32>)
+  func.call @ggml_hrx_mm_wmma_store(%dst_noalias, %d_span, %d_batch, %d_s1, %out_col1, %n_cols, %out_row0, %n_rows, %acc10) : (buffer, index, index, index, index, index, index, index, vector<8xf32>)
+  func.call @ggml_hrx_mm_wmma_store(%dst_noalias, %d_span, %d_batch, %d_s1, %out_col1, %n_cols, %out_row1, %n_rows, %acc11) : (buffer, index, index, index, index, index, index, index, vector<8xf32>)
+  kernel.return
+}
+
+template.decl @ggml.q8_0.block(%weight: buffer, %w_span: index, %block_base: index) -> (i16, vector<8xi16>, vector<8xi16>)
+
+template.decl @ggml.q8_0.decode32_f16(%d_bits: i16, %q0: vector<8xi16>, %q1: vector<8xi16>) -> (vector<8xf16>, vector<8xf16>, vector<8xf16>, vector<8xf16>)
+
+func.decl @ggml_hrx_mm_wmma_load_input8_clamped(%input: buffer, %x_span: index, %index: index) -> (vector<8xf32>)
+
+func.def inline @ggml_hrx_mmw_q8_0_loads(%weight: buffer, %w_span: index, %w_block_base: index, %input: buffer, %x_span: index, %x_base: index, %k: index) -> (i16, vector<8xi16>, vector<8xi16>, vector<8xf32>, vector<8xf32>) {
+  %c8 = index.constant 8 : index
+  %c17 = index.constant 17 : index
+  %c32 = index.constant 32 : index
+  %k_bounded = index.assume %k [range(%k, 0, 2147483646)] : index
+  %block = index.div %k_bounded, %c32 : index
+  %block_offset = index.mul %block, %c17 : index
+  %block_base = index.add %w_block_base, %block_offset : index
+  %d, %q0, %q1 = template.apply<@ggml.q8_0.block>(%weight, %w_span, %block_base) : (buffer, index, index) -> (i16, vector<8xi16>, vector<8xi16>)
+  %x_index0 = index.add %x_base, %k_bounded : index
+  %x_index1 = index.add %x_index0, %c8 : index
+  %x0 = func.call @ggml_hrx_mm_wmma_load_input8_clamped(%input, %x_span, %x_index0) : (buffer, index, index) -> (vector<8xf32>)
+  %x1 = func.call @ggml_hrx_mm_wmma_load_input8_clamped(%input, %x_span, %x_index1) : (buffer, index, index) -> (vector<8xf32>)
+  func.return %d, %q0, %q1, %x0, %x1 : i16, vector<8xi16>, vector<8xi16>, vector<8xf32>, vector<8xf32>
+}
+
+// For Q8_0 weights. The loads of the next K step overlap the matrix ops.
+// The caller makes sure that K is a multiple of 64. Rows and columns past the tile edge read clamped data. That data is not stored.
+kernel.def target(@ggml_wave32) export("ggml_mul_mat_wmma_q8_0_c64") @ggml_mul_mat_wmma_q8_0_c64(%n_rows: index, %n_cols: index, %n_batch: index) {
+  %one = index.constant 1 : index
+  %wg_size = index.constant 256 : index
+  %c63 = index.constant 63 : index
+  %c64 = index.constant 64 : index
+  %c127 = index.constant 127 : index
+  %c128 = index.constant 128 : index
+  %rows_round = index.add %n_rows, %c127 : index
+  %row_tiles = index.div %rows_round, %c128 : index
+  %cols_round = index.add %n_cols, %c63 : index
+  %col_tiles = index.div %cols_round, %c64 : index
+  kernel.launch.config workgroups(%row_tiles, %col_tiles, %n_batch) workgroup_size(%wg_size, %one, %one) : index
+} launch(%k_size_in: index, %n_rows_in: index, %n_cols_in: index, %ne12_in: index, %r2_in: index, %r3_in: index, %w_s1_in: index, %w_s2_in: index, %w_s3_in: index, %w_span_in: index, %x_s0_in: index, %x_s1_in: index, %x_s2_in: index, %x_s3_in: index, %x_span_in: index, %d_s1_in: index, %d_s2_in: index, %d_s3_in: index, %d_span_in: index, %weight: buffer, %input: buffer, %dst: buffer) {
+  %k_size = index.assume %k_size_in [range(%k_size_in, 1, 2147483647)] : index
+  %n_rows = index.assume %n_rows_in [range(%n_rows_in, 1, 2147483647)] : index
+  %n_cols = index.assume %n_cols_in [range(%n_cols_in, 1, 2147483647)] : index
+  %ne12 = index.assume %ne12_in [range(%ne12_in, 1, 2147483647)] : index
+  %r2 = index.assume %r2_in [range(%r2_in, 1, 2147483647)] : index
+  %r3 = index.assume %r3_in [range(%r3_in, 1, 2147483647)] : index
+  %w_s1 = index.assume %w_s1_in [range(%w_s1_in, 0, 2147483647)] : index
+  %w_s2 = index.assume %w_s2_in [range(%w_s2_in, 0, 2147483647)] : index
+  %w_s3 = index.assume %w_s3_in [range(%w_s3_in, 0, 2147483647)] : index
+  %w_span = index.assume %w_span_in [range(%w_span_in, 1, 2147483647)] : index
+  %x_s1 = index.assume %x_s1_in [range(%x_s1_in, 0, 2147483647)] : index
+  %x_s2 = index.assume %x_s2_in [range(%x_s2_in, 0, 2147483647)] : index
+  %x_s3 = index.assume %x_s3_in [range(%x_s3_in, 0, 2147483647)] : index
+  %x_span = index.assume %x_span_in [range(%x_span_in, 1, 2147483647)] : index
+  %d_s1 = index.assume %d_s1_in [range(%d_s1_in, 0, 2147483647)] : index
+  %d_s2 = index.assume %d_s2_in [range(%d_s2_in, 0, 2147483647)] : index
+  %d_s3 = index.assume %d_s3_in [range(%d_s3_in, 0, 2147483647)] : index
+  %d_span = index.assume %d_span_in [range(%d_span_in, 1, 2147483647)] : index
+  %c0 = index.constant 0 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c17 = index.constant 17 : index
+  %c24 = index.constant 24 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %c0_offset = index.constant 0 : offset
+  %w_stage_bytes = index.constant 18432 : offset
+  %x_stage_bytes = index.constant 9216 : offset
+  %t0 = kernel.workitem.id<x> : index
+  %t = index.assume %t0 [range(%t0, 0, 255)] : index
+  %s0 = kernel.subgroup.id : index
+  %s = index.assume %s0 [range(%s0, 0, 7)] : index
+  %row_tile = kernel.workgroup.id<x> : index
+  %col_tile = kernel.workgroup.id<y> : index
+  %batch = kernel.workgroup.id<z> : index
+  %weight_noalias, %input_noalias, %dst_noalias = buffer.assume.noalias %weight, %input, %dst : buffer, buffer, buffer
+  %w_stage = buffer.alloca<workgroup> align(16) %w_stage_bytes : buffer
+  %x_stage = buffer.alloca<workgroup> align(16) %x_stage_bytes : buffer
+  %w_view = buffer.view %w_stage[%c0_offset] : buffer -> view<128x72xf16>
+  %x_view = buffer.view %x_stage[%c0_offset] : buffer -> view<64x72xf16>
+
+  %i12 = index.rem %batch, %ne12 : index
+  %i13 = index.div %batch, %ne12 : index
+  %i02 = index.div %i12, %r2 : index
+  %i03 = index.div %i13, %r3 : index
+  %w2 = index.mul %i02, %w_s2 : index
+  %w3 = index.mul %i03, %w_s3 : index
+  %w_batch = index.add %w2, %w3 : index
+  %x2 = index.mul %i12, %x_s2 : index
+  %x3 = index.mul %i13, %x_s3 : index
+  %x_batch = index.add %x2, %x3 : index
+  %d2 = index.mul %i12, %d_s2 : index
+  %d3 = index.mul %i13, %d_s3 : index
+  %d_batch = index.add %d2, %d3 : index
+  %tile_row0 = index.mul %row_tile, %c128 : index
+  %tile_col0 = index.mul %col_tile, %c64 : index
+
+  %w_local = index.div %t, %c2 : index
+  %w_part = index.rem %t, %c2 : index
+  %w_row = index.add %tile_row0, %w_local : index
+  %w_offset = index.mul %w_row, %w_s1 : index
+  %w_part_offset = index.mul %w_part, %c17 : index
+  %w_base = index.add %w_batch, %w_offset : index
+  %w_block_base = index.add %w_base, %w_part_offset : index
+  %w_k0 = index.mul %w_part, %c32 : index
+  %w_k1 = index.add %w_k0, %c8 : index
+  %w_k2 = index.add %w_k0, %c16 : index
+  %w_k3 = index.add %w_k0, %c24 : index
+
+  %x_local = index.div %t, %c4 : index
+  %x_part = index.rem %t, %c4 : index
+  %x_col = index.add %tile_col0, %x_local : index
+  %x_offset = index.mul %x_col, %x_s1 : index
+  %x_k0 = index.mul %x_part, %c16 : index
+  %x_k1 = index.add %x_k0, %c8 : index
+  %x_col_base = index.add %x_batch, %x_offset : index
+  %x_base = index.add %x_col_base, %x_k0 : index
+
+  %sub_col_group = index.rem %s, %c2 : index
+  %sub_row_group = index.div %s, %c2 : index
+  %sub_col0 = index.mul %sub_col_group, %c32 : index
+  %sub_row0 = index.mul %sub_row_group, %c32 : index
+
+  %init = template.apply<@ggml.mma.zero_acc>() : () -> (vector<8xf32>)
+  %d_first, %q0_first, %q1_first, %x0_first, %x1_first = func.call @ggml_hrx_mmw_q8_0_loads(%weight_noalias, %w_span, %w_block_base, %input_noalias, %x_span, %x_base, %c0) : (buffer, index, index, buffer, index, index, index) -> (i16, vector<8xi16>, vector<8xi16>, vector<8xf32>, vector<8xf32>)
+  %xh0_first = vector.fptrunc %x0_first : vector<8xf32> to vector<8xf16>
+  %xh1_first = vector.fptrunc %x1_first : vector<8xf32> to vector<8xf16>
+  %acc00, %acc01, %acc10, %acc11, %d_last, %q0_last, %q1_last, %xh0_last, %xh1_last = scf.for %k0 = [%c0 to %k_size step %c64](%a00 = %init : vector<8xf32>, %a01 = %init : vector<8xf32>, %a10 = %init : vector<8xf32>, %a11 = %init : vector<8xf32>, %d = %d_first : i16, %q0 = %q0_first : vector<8xi16>, %q1 = %q1_first : vector<8xi16>, %xh0 = %xh0_first : vector<8xf16>, %xh1 = %xh1_first : vector<8xf16>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, i16, vector<8xi16>, vector<8xi16>, vector<8xf16>, vector<8xf16>) {
+    %v0, %v1, %v2, %v3 = template.apply<@ggml.q8_0.decode32_f16>(%d, %q0, %q1) : (i16, vector<8xi16>, vector<8xi16>) -> (vector<8xf16>, vector<8xf16>, vector<8xf16>, vector<8xf16>)
+    vector.store %v0, %w_view[%w_local, %w_k0] : vector<8xf16>, view<128x72xf16>
+    vector.store %v1, %w_view[%w_local, %w_k1] : vector<8xf16>, view<128x72xf16>
+    vector.store %v2, %w_view[%w_local, %w_k2] : vector<8xf16>, view<128x72xf16>
+    vector.store %v3, %w_view[%w_local, %w_k3] : vector<8xf16>, view<128x72xf16>
+    vector.store %xh0, %x_view[%x_local, %x_k0] : vector<8xf16>, view<64x72xf16>
+    vector.store %xh1, %x_view[%x_local, %x_k1] : vector<8xf16>, view<64x72xf16>
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    // The loads past K read valid memory. Their values are not used.
+    // The fences keep the loads before the matrix ops and the conversion after them. The conversion waits for the loads.
+    %k_next = index.add %k0, %c64 : index
+    %dn, %q0n, %q1n, %x0n, %x1n = func.call @ggml_hrx_mmw_q8_0_loads(%weight_noalias, %w_span, %w_block_base, %input_noalias, %x_span, %x_base, %k_next) : (buffer, index, index, buffer, index, index, index) -> (i16, vector<8xi16>, vector<8xi16>, vector<8xf32>, vector<8xf32>)
+    scf.schedule.fence
+    %n00, %n01, %n10, %n11 = template.apply<@ggml.mma.k64_2x2>(%x_stage, %w_stage, %sub_col0, %sub_row0, %a00, %a01, %a10, %a11) : (buffer, buffer, index, index, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>)
+    scf.schedule.fence
+    %xh0n = vector.fptrunc %x0n : vector<8xf32> to vector<8xf16>
+    %xh1n = vector.fptrunc %x1n : vector<8xf32> to vector<8xf16>
+    // The next K step overwrites the stages.
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    scf.yield %n00, %n01, %n10, %n11, %dn, %q0n, %q1n, %xh0n, %xh1n : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, i16, vector<8xi16>, vector<8xi16>, vector<8xf16>, vector<8xf16>
+  }
+
+  %out_col0 = index.add %tile_col0, %sub_col0 : index
+  %out_col1 = index.add %out_col0, %c16 : index
+  %out_row0 = index.add %tile_row0, %sub_row0 : index
+  %out_row1 = index.add %out_row0, %c16 : index
+  func.call @ggml_hrx_mm_wmma_store(%dst_noalias, %d_span, %d_batch, %d_s1, %out_col0, %n_cols, %out_row0, %n_rows, %acc00) : (buffer, index, index, index, index, index, index, index, vector<8xf32>)
+  func.call @ggml_hrx_mm_wmma_store(%dst_noalias, %d_span, %d_batch, %d_s1, %out_col0, %n_cols, %out_row1, %n_rows, %acc01) : (buffer, index, index, index, index, index, index, index, vector<8xf32>)
+  func.call @ggml_hrx_mm_wmma_store(%dst_noalias, %d_span, %d_batch, %d_s1, %out_col1, %n_cols, %out_row0, %n_rows, %acc10) : (buffer, index, index, index, index, index, index, index, vector<8xf32>)
+  func.call @ggml_hrx_mm_wmma_store(%dst_noalias, %d_span, %d_batch, %d_s1, %out_col1, %n_cols, %out_row1, %n_rows, %acc11) : (buffer, index, index, index, index, index, index, index, vector<8xf32>)
+  kernel.return
+}
+
+func.def inline @ggml_hrx_mmw_q8_0_loads128(%weight: buffer, %w_span: index, %w_block_base: index, %input: buffer, %x_span: index, %x_base: index, %k: index) -> (i16, vector<8xi16>, vector<8xi16>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) {
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %d, %q0, %q1, %x0, %x1 = func.call @ggml_hrx_mmw_q8_0_loads(%weight, %w_span, %w_block_base, %input, %x_span, %x_base, %k) : (buffer, index, index, buffer, index, index, index) -> (i16, vector<8xi16>, vector<8xi16>, vector<8xf32>, vector<8xf32>)
+  %x_index0 = index.add %x_base, %k : index
+  %x_index2 = index.add %x_index0, %c16 : index
+  %x_index3 = index.add %x_index2, %c8 : index
+  %x2 = func.call @ggml_hrx_mm_wmma_load_input8_clamped(%input, %x_span, %x_index2) : (buffer, index, index) -> (vector<8xf32>)
+  %x3 = func.call @ggml_hrx_mm_wmma_load_input8_clamped(%input, %x_span, %x_index3) : (buffer, index, index) -> (vector<8xf32>)
+  func.return %d, %q0, %q1, %x0, %x1, %x2, %x3 : i16, vector<8xi16>, vector<8xi16>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>
+}
+
+// Same as ggml_mul_mat_wmma_q8_0_c64, but with 128 input columns. The wider tile reads the weights fewer times.
+kernel.def target(@ggml_wave32) export("ggml_mul_mat_wmma_q8_0") @ggml_mul_mat_wmma_q8_0(%n_rows: index, %n_cols: index, %n_batch: index) {
+  %one = index.constant 1 : index
+  %wg_size = index.constant 256 : index
+  %c127 = index.constant 127 : index
+  %c128 = index.constant 128 : index
+  %rows_round = index.add %n_rows, %c127 : index
+  %row_tiles = index.div %rows_round, %c128 : index
+  %cols_round = index.add %n_cols, %c127 : index
+  %col_tiles = index.div %cols_round, %c128 : index
+  kernel.launch.config workgroups(%row_tiles, %col_tiles, %n_batch) workgroup_size(%wg_size, %one, %one) : index
+} launch(%k_size_in: index, %n_rows_in: index, %n_cols_in: index, %ne12_in: index, %r2_in: index, %r3_in: index, %w_s1_in: index, %w_s2_in: index, %w_s3_in: index, %w_span_in: index, %x_s0_in: index, %x_s1_in: index, %x_s2_in: index, %x_s3_in: index, %x_span_in: index, %d_s1_in: index, %d_s2_in: index, %d_s3_in: index, %d_span_in: index, %weight: buffer, %input: buffer, %dst: buffer) {
+  %k_size = index.assume %k_size_in [range(%k_size_in, 1, 2147483647)] : index
+  %n_rows = index.assume %n_rows_in [range(%n_rows_in, 1, 2147483647)] : index
+  %n_cols = index.assume %n_cols_in [range(%n_cols_in, 1, 2147483647)] : index
+  %ne12 = index.assume %ne12_in [range(%ne12_in, 1, 2147483647)] : index
+  %r2 = index.assume %r2_in [range(%r2_in, 1, 2147483647)] : index
+  %r3 = index.assume %r3_in [range(%r3_in, 1, 2147483647)] : index
+  %w_s1 = index.assume %w_s1_in [range(%w_s1_in, 0, 2147483647)] : index
+  %w_s2 = index.assume %w_s2_in [range(%w_s2_in, 0, 2147483647)] : index
+  %w_s3 = index.assume %w_s3_in [range(%w_s3_in, 0, 2147483647)] : index
+  %w_span = index.assume %w_span_in [range(%w_span_in, 1, 2147483647)] : index
+  %x_s1 = index.assume %x_s1_in [range(%x_s1_in, 0, 2147483647)] : index
+  %x_s2 = index.assume %x_s2_in [range(%x_s2_in, 0, 2147483647)] : index
+  %x_s3 = index.assume %x_s3_in [range(%x_s3_in, 0, 2147483647)] : index
+  %x_span = index.assume %x_span_in [range(%x_span_in, 1, 2147483647)] : index
+  %d_s1 = index.assume %d_s1_in [range(%d_s1_in, 0, 2147483647)] : index
+  %d_s2 = index.assume %d_s2_in [range(%d_s2_in, 0, 2147483647)] : index
+  %d_s3 = index.assume %d_s3_in [range(%d_s3_in, 0, 2147483647)] : index
+  %d_span = index.assume %d_span_in [range(%d_span_in, 1, 2147483647)] : index
+  %c0 = index.constant 0 : index
+  %c2 = index.constant 2 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c17 = index.constant 17 : index
+  %c24 = index.constant 24 : index
+  %c32 = index.constant 32 : index
+  %c48 = index.constant 48 : index
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %c0_offset = index.constant 0 : offset
+  %w_stage_bytes = index.constant 18432 : offset
+  %x_stage_bytes = index.constant 18432 : offset
+  %t0 = kernel.workitem.id<x> : index
+  %t = index.assume %t0 [range(%t0, 0, 255)] : index
+  %s0 = kernel.subgroup.id : index
+  %s = index.assume %s0 [range(%s0, 0, 7)] : index
+  %row_tile = kernel.workgroup.id<x> : index
+  %col_tile = kernel.workgroup.id<y> : index
+  %batch = kernel.workgroup.id<z> : index
+  %weight_noalias, %input_noalias, %dst_noalias = buffer.assume.noalias %weight, %input, %dst : buffer, buffer, buffer
+  %w_stage = buffer.alloca<workgroup> align(16) %w_stage_bytes : buffer
+  %x_stage = buffer.alloca<workgroup> align(16) %x_stage_bytes : buffer
+  %w_view = buffer.view %w_stage[%c0_offset] : buffer -> view<128x72xf16>
+  %x_view = buffer.view %x_stage[%c0_offset] : buffer -> view<128x72xf16>
+
+  %i12 = index.rem %batch, %ne12 : index
+  %i13 = index.div %batch, %ne12 : index
+  %i02 = index.div %i12, %r2 : index
+  %i03 = index.div %i13, %r3 : index
+  %w2 = index.mul %i02, %w_s2 : index
+  %w3 = index.mul %i03, %w_s3 : index
+  %w_batch = index.add %w2, %w3 : index
+  %x2 = index.mul %i12, %x_s2 : index
+  %x3 = index.mul %i13, %x_s3 : index
+  %x_batch = index.add %x2, %x3 : index
+  %d2 = index.mul %i12, %d_s2 : index
+  %d3 = index.mul %i13, %d_s3 : index
+  %d_batch = index.add %d2, %d3 : index
+  %tile_row0 = index.mul %row_tile, %c128 : index
+  %tile_col0 = index.mul %col_tile, %c128 : index
+
+  %w_local = index.div %t, %c2 : index
+  %w_part = index.rem %t, %c2 : index
+  %w_row = index.add %tile_row0, %w_local : index
+  %w_offset = index.mul %w_row, %w_s1 : index
+  %w_part_offset = index.mul %w_part, %c17 : index
+  %w_base = index.add %w_batch, %w_offset : index
+  %w_block_base = index.add %w_base, %w_part_offset : index
+  %w_k0 = index.mul %w_part, %c32 : index
+  %w_k1 = index.add %w_k0, %c8 : index
+  %w_k2 = index.add %w_k0, %c16 : index
+  %w_k3 = index.add %w_k0, %c24 : index
+
+  %x_local = index.div %t, %c2 : index
+  %x_part = index.rem %t, %c2 : index
+  %x_col = index.add %tile_col0, %x_local : index
+  %x_offset = index.mul %x_col, %x_s1 : index
+  %x_k0 = index.mul %x_part, %c32 : index
+  %x_k1 = index.add %x_k0, %c8 : index
+  %x_k2 = index.add %x_k0, %c16 : index
+  %x_k3 = index.add %x_k0, %c24 : index
+  %x_col_base = index.add %x_batch, %x_offset : index
+  %x_base = index.add %x_col_base, %x_k0 : index
+
+  %sub_col_group = index.rem %s, %c2 : index
+  %sub_row_group = index.div %s, %c2 : index
+  %sub_col0 = index.mul %sub_col_group, %c64 : index
+  %sub_row0 = index.mul %sub_row_group, %c32 : index
+
+  %init = template.apply<@ggml.mma.zero_acc>() : () -> (vector<8xf32>)
+  %d_first, %q0_first, %q1_first, %x0_first, %x1_first, %x2_first, %x3_first = func.call @ggml_hrx_mmw_q8_0_loads128(%weight_noalias, %w_span, %w_block_base, %input_noalias, %x_span, %x_base, %c0) : (buffer, index, index, buffer, index, index, index) -> (i16, vector<8xi16>, vector<8xi16>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>)
+  %xh0_first = vector.fptrunc %x0_first : vector<8xf32> to vector<8xf16>
+  %xh1_first = vector.fptrunc %x1_first : vector<8xf32> to vector<8xf16>
+  %xh2_first = vector.fptrunc %x2_first : vector<8xf32> to vector<8xf16>
+  %xh3_first = vector.fptrunc %x3_first : vector<8xf32> to vector<8xf16>
+  %acc00, %acc01, %acc10, %acc11, %acc20, %acc21, %acc30, %acc31, %d_last, %q0_last, %q1_last, %xh0_last, %xh1_last, %xh2_last, %xh3_last = scf.for %k0 = [%c0 to %k_size step %c64](%a00 = %init : vector<8xf32>, %a01 = %init : vector<8xf32>, %a10 = %init : vector<8xf32>, %a11 = %init : vector<8xf32>, %a20 = %init : vector<8xf32>, %a21 = %init : vector<8xf32>, %a30 = %init : vector<8xf32>, %a31 = %init : vector<8xf32>, %d = %d_first : i16, %q0 = %q0_first : vector<8xi16>, %q1 = %q1_first : vector<8xi16>, %xh0 = %xh0_first : vector<8xf16>, %xh1 = %xh1_first : vector<8xf16>, %xh2 = %xh2_first : vector<8xf16>, %xh3 = %xh3_first : vector<8xf16>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, i16, vector<8xi16>, vector<8xi16>, vector<8xf16>, vector<8xf16>, vector<8xf16>, vector<8xf16>) {
+    %v0, %v1, %v2, %v3 = template.apply<@ggml.q8_0.decode32_f16>(%d, %q0, %q1) : (i16, vector<8xi16>, vector<8xi16>) -> (vector<8xf16>, vector<8xf16>, vector<8xf16>, vector<8xf16>)
+    vector.store %v0, %w_view[%w_local, %w_k0] : vector<8xf16>, view<128x72xf16>
+    vector.store %v1, %w_view[%w_local, %w_k1] : vector<8xf16>, view<128x72xf16>
+    vector.store %v2, %w_view[%w_local, %w_k2] : vector<8xf16>, view<128x72xf16>
+    vector.store %v3, %w_view[%w_local, %w_k3] : vector<8xf16>, view<128x72xf16>
+    vector.store %xh0, %x_view[%x_local, %x_k0] : vector<8xf16>, view<128x72xf16>
+    vector.store %xh1, %x_view[%x_local, %x_k1] : vector<8xf16>, view<128x72xf16>
+    vector.store %xh2, %x_view[%x_local, %x_k2] : vector<8xf16>, view<128x72xf16>
+    vector.store %xh3, %x_view[%x_local, %x_k3] : vector<8xf16>, view<128x72xf16>
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    %k_next = index.add %k0, %c64 : index
+    %dn, %q0n, %q1n, %x0n, %x1n, %x2n, %x3n = func.call @ggml_hrx_mmw_q8_0_loads128(%weight_noalias, %w_span, %w_block_base, %input_noalias, %x_span, %x_base, %k_next) : (buffer, index, index, buffer, index, index, index) -> (i16, vector<8xi16>, vector<8xi16>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>)
+    scf.schedule.fence
+    %n00, %n01, %n10, %n11, %n20, %n21, %n30, %n31 = template.apply<@ggml.mma.k64_4x2>(%x_stage, %w_stage, %sub_col0, %sub_row0, %a00, %a01, %a10, %a11, %a20, %a21, %a30, %a31) : (buffer, buffer, index, index, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>)
+    scf.schedule.fence
+    %xh0n = vector.fptrunc %x0n : vector<8xf32> to vector<8xf16>
+    %xh1n = vector.fptrunc %x1n : vector<8xf32> to vector<8xf16>
+    %xh2n = vector.fptrunc %x2n : vector<8xf32> to vector<8xf16>
+    %xh3n = vector.fptrunc %x3n : vector<8xf32> to vector<8xf16>
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    scf.yield %n00, %n01, %n10, %n11, %n20, %n21, %n30, %n31, %dn, %q0n, %q1n, %xh0n, %xh1n, %xh2n, %xh3n : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>, i16, vector<8xi16>, vector<8xi16>, vector<8xf16>, vector<8xf16>, vector<8xf16>, vector<8xf16>
+  }
+
+  %out_col0 = index.add %tile_col0, %sub_col0 : index
+  %out_col1 = index.add %out_col0, %c16 : index
+  %out_col2 = index.add %out_col0, %c32 : index
+  %out_col3 = index.add %out_col0, %c48 : index
+  %out_row0 = index.add %tile_row0, %sub_row0 : index
+  %out_row1 = index.add %out_row0, %c16 : index
+  func.call @ggml_hrx_mm_wmma_store(%dst_noalias, %d_span, %d_batch, %d_s1, %out_col0, %n_cols, %out_row0, %n_rows, %acc00) : (buffer, index, index, index, index, index, index, index, vector<8xf32>)
+  func.call @ggml_hrx_mm_wmma_store(%dst_noalias, %d_span, %d_batch, %d_s1, %out_col0, %n_cols, %out_row1, %n_rows, %acc01) : (buffer, index, index, index, index, index, index, index, vector<8xf32>)
+  func.call @ggml_hrx_mm_wmma_store(%dst_noalias, %d_span, %d_batch, %d_s1, %out_col1, %n_cols, %out_row0, %n_rows, %acc10) : (buffer, index, index, index, index, index, index, index, vector<8xf32>)
+  func.call @ggml_hrx_mm_wmma_store(%dst_noalias, %d_span, %d_batch, %d_s1, %out_col1, %n_cols, %out_row1, %n_rows, %acc11) : (buffer, index, index, index, index, index, index, index, vector<8xf32>)
+  func.call @ggml_hrx_mm_wmma_store(%dst_noalias, %d_span, %d_batch, %d_s1, %out_col2, %n_cols, %out_row0, %n_rows, %acc20) : (buffer, index, index, index, index, index, index, index, vector<8xf32>)
+  func.call @ggml_hrx_mm_wmma_store(%dst_noalias, %d_span, %d_batch, %d_s1, %out_col2, %n_cols, %out_row1, %n_rows, %acc21) : (buffer, index, index, index, index, index, index, index, vector<8xf32>)
+  func.call @ggml_hrx_mm_wmma_store(%dst_noalias, %d_span, %d_batch, %d_s1, %out_col3, %n_cols, %out_row0, %n_rows, %acc30) : (buffer, index, index, index, index, index, index, index, vector<8xf32>)
+  func.call @ggml_hrx_mm_wmma_store(%dst_noalias, %d_span, %d_batch, %d_s1, %out_col3, %n_cols, %out_row1, %n_rows, %acc31) : (buffer, index, index, index, index, index, index, index, vector<8xf32>)
+  kernel.return
+}

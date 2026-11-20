@@ -13,6 +13,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true
 
+env:
+  # Sync versions in build-hrx.yml, ci-self-hosted-hrx.yml, release.yml, build-cache.yml, docs/build.md
+  HRX_VERSION: "0.2.0"
+
 jobs:
   #ubuntu-24-spacemit-cache:
   #  runs-on: ubuntu-24.04
@@ -68,6 +72,28 @@ jobs:
           version_major: ${{ env.OPENVINO_VERSION_MAJOR }}
           version_full: ${{ env.OPENVINO_VERSION_FULL }}
 
+  ubuntu-24-hrx-cache:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Cache
+        uses: actions/cache@v5
+        id: cache-hrx
+        with:
+          path: ./hrx_sdk
+          key: cache-gha-hrx-sdk-v${{ env.HRX_VERSION }}-${{ runner.os }}-${{ hashFiles('.github/actions/linux-setup-hrx/action.yml') }}
+
+      - name: Setup HRX SDK
+        if: steps.cache-hrx.outputs.cache-hit != 'true'
+        uses: ./.github/actions/linux-setup-hrx
+        with:
+          path: ./hrx_sdk
+          version: ${{ env.HRX_VERSION }}
+
   windows-2022-openvino-cache:
     runs-on: windows-2022
 
@@ -95,6 +121,28 @@ jobs:
           path: ./openvino_toolkit
           version_major: ${{ env.OPENVINO_VERSION_MAJOR }}
           version_full: ${{ env.OPENVINO_VERSION_FULL }}
+
+  windows-2022-hrx-cache:
+    runs-on: windows-2022
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Cache
+        uses: actions/cache@v5
+        id: cache-hrx
+        with:
+          path: ./hrx_sdk
+          key: cache-gha-hrx-sdk-v${{ env.HRX_VERSION }}-${{ runner.os }}-${{ hashFiles('.github/actions/windows-setup-hrx/action.yml') }}
+
+      - name: Setup HRX SDK
+        if: steps.cache-hrx.outputs.cache-hit != 'true'
+        uses: ./.github/actions/windows-setup-hrx
+        with:
+          path: ./hrx_sdk
+          version: ${{ env.HRX_VERSION }}
 
   # windows-2022-rocm-cache:
   #   runs-on: windows-2022

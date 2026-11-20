@@ -1,0 +1,258 @@
+// b_off is the size of a on the concat dim. It is 0 on the other dims. dst must be contiguous.
+
+config.decl @ggml.elementwise.wg_size : %value: index where [range(%value, 64, 1024), multiple_of(%value, 64)]
+
+// Tile size of ggml_concat_f32_tiled.
+config.decl @ggml.concat.tile : %value: index where [range(%value, 16, 64), power_of_two(%value)]
+
+target.decl @ggml_wave64
+
+kernel.def target(@ggml_wave64) export("ggml_concat_f32") @ggml_concat_f32(%n: index) {
+  %one = index.constant 1 : index
+  %wg_size = config.get @ggml.elementwise.wg_size : index
+  %round = index.sub %wg_size, %one : index
+  %n_round = index.add %n, %round : index
+  %groups = index.div %n_round, %wg_size : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%wg_size, %one, %one) : index
+} launch(%n_in: index, %d0_in: index, %d1_in: index, %d2_in: index, %a_ne0_in: index, %a_ne1_in: index, %a_ne2_in: index, %a_ne3_in: index, %a_s0_in: index, %a_s1_in: index, %a_s2_in: index, %a_s3_in: index, %a_span_in: index, %b_off0_in: index, %b_off1_in: index, %b_off2_in: index, %b_off3_in: index, %b_s0_in: index, %b_s1_in: index, %b_s2_in: index, %b_s3_in: index, %b_span_in: index, %a: buffer, %b: buffer, %dst: buffer) {
+  // supports_concat checks these ranges.
+  %n = index.assume %n_in [range(%n_in, 1, 2147483647)] : index
+  %d0 = index.assume %d0_in [range(%d0_in, 1, 2147483647)] : index
+  %d1 = index.assume %d1_in [range(%d1_in, 1, 2147483647)] : index
+  %d2 = index.assume %d2_in [range(%d2_in, 1, 2147483647)] : index
+  %a_ne0 = index.assume %a_ne0_in [range(%a_ne0_in, 1, 2147483647)] : index
+  %a_ne1 = index.assume %a_ne1_in [range(%a_ne1_in, 1, 2147483647)] : index
+  %a_ne2 = index.assume %a_ne2_in [range(%a_ne2_in, 1, 2147483647)] : index
+  %a_ne3 = index.assume %a_ne3_in [range(%a_ne3_in, 1, 2147483647)] : index
+  %a_s0 = index.assume %a_s0_in [range(%a_s0_in, 0, 2147483647)] : index
+  %a_s1 = index.assume %a_s1_in [range(%a_s1_in, 0, 2147483647)] : index
+  %a_s2 = index.assume %a_s2_in [range(%a_s2_in, 0, 2147483647)] : index
+  %a_s3 = index.assume %a_s3_in [range(%a_s3_in, 0, 2147483647)] : index
+  %a_span = index.assume %a_span_in [range(%a_span_in, 1, 2147483647)] : index
+  %b_off0 = index.assume %b_off0_in [range(%b_off0_in, 0, 2147483647)] : index
+  %b_off1 = index.assume %b_off1_in [range(%b_off1_in, 0, 2147483647)] : index
+  %b_off2 = index.assume %b_off2_in [range(%b_off2_in, 0, 2147483647)] : index
+  %b_off3 = index.assume %b_off3_in [range(%b_off3_in, 0, 2147483647)] : index
+  %b_s0 = index.assume %b_s0_in [range(%b_s0_in, 0, 2147483647)] : index
+  %b_s1 = index.assume %b_s1_in [range(%b_s1_in, 0, 2147483647)] : index
+  %b_s2 = index.assume %b_s2_in [range(%b_s2_in, 0, 2147483647)] : index
+  %b_s3 = index.assume %b_s3_in [range(%b_s3_in, 0, 2147483647)] : index
+  %b_span = index.assume %b_span_in [range(%b_span_in, 1, 2147483647)] : index
+  %wg_size = config.get @ggml.elementwise.wg_size : index
+  %group = kernel.workgroup.id<x> : index
+  %item = kernel.workitem.id<x> : index
+  %base = index.mul %group, %wg_size : index
+  %i = index.add %base, %item : index
+  %in_bounds = index.cmp ult, %i, %n : index
+  %zero = index.constant 0 : offset
+  %a_view = buffer.view %a[%zero] : buffer -> view<[%a_span]xf32>
+  %b_view = buffer.view %b[%zero] : buffer -> view<[%b_span]xf32>
+  %dst_view = buffer.view %dst[%zero] : buffer -> view<[%n]xf32>
+  scf.if %in_bounds {
+    %i0 = index.rem %i, %d0 : index
+    %q0 = index.div %i, %d0 : index
+    %i1 = index.rem %q0, %d1 : index
+    %q1 = index.div %q0, %d1 : index
+    %i2 = index.rem %q1, %d2 : index
+    %i3 = index.div %q1, %d2 : index
+
+    %in0 = index.cmp ult, %i0, %a_ne0 : index
+    %in1 = index.cmp ult, %i1, %a_ne1 : index
+    %in2 = index.cmp ult, %i2, %a_ne2 : index
+    %in3 = index.cmp ult, %i3, %a_ne3 : index
+    %in01 = scalar.andi %in0, %in1 : i1
+    %in23 = scalar.andi %in2, %in3 : i1
+    %in_a = scalar.andi %in01, %in23 : i1
+    scf.if %in_a {
+      %ao0 = index.mul %i0, %a_s0 : index
+      %ao1 = index.mul %i1, %a_s1 : index
+      %ao2 = index.mul %i2, %a_s2 : index
+      %ao3 = index.mul %i3, %a_s3 : index
+      %ao01 = index.add %ao0, %ao1 : index
+      %ao23 = index.add %ao2, %ao3 : index
+      %a_idx = index.add %ao01, %ao23 : index
+      %a_off = index.assume %a_idx [range(%a_idx, 0, 2147483646)] : index
+      %a_ok = index.cmp ult, %a_off, %a_span : index
+      scf.if %a_ok {
+        %x = view.load %a_view[%a_off] : view<[%a_span]xf32> -> f32
+        view.store %x, %dst_view[%i] : f32, view<[%n]xf32>
+      }
+    } else {
+      // Here each coord is >= b_off, because b_off is not 0 only on the concat dim.
+      %j0 = index.sub %i0, %b_off0 : index
+      %j1 = index.sub %i1, %b_off1 : index
+      %j2 = index.sub %i2, %b_off2 : index
+      %j3 = index.sub %i3, %b_off3 : index
+      %bo0 = index.mul %j0, %b_s0 : index
+      %bo1 = index.mul %j1, %b_s1 : index
+      %bo2 = index.mul %j2, %b_s2 : index
+      %bo3 = index.mul %j3, %b_s3 : index
+      %bo01 = index.add %bo0, %bo1 : index
+      %bo23 = index.add %bo2, %bo3 : index
+      %b_idx = index.add %bo01, %bo23 : index
+      %b_off = index.assume %b_idx [range(%b_idx, 0, 2147483646)] : index
+      %b_ok = index.cmp ult, %b_off, %b_span : index
+      scf.if %b_ok {
+        %y = view.load %b_view[%b_off] : view<[%b_span]xf32> -> f32
+        view.store %y, %dst_view[%i] : f32, view<[%n]xf32>
+      }
+    }
+  }
+  kernel.return
+}
+
+func.def inline @ggml_hrx_concat_elem(%i0: index, %i1: index, %i2: index, %i3: index, %a_ne0: index, %a_ne1: index, %a_ne2: index, %a_ne3: index, %a_s0: index, %a_s1: index, %a_s2: index, %a_s3: index, %a_span: index, %b_off0: index, %b_off1: index, %b_off2: index, %b_off3: index, %b_s0: index, %b_s1: index, %b_s2: index, %b_s3: index, %b_span: index, %a: buffer, %b: buffer) -> (f32) {
+  %zero = index.constant 0 : offset
+  %zero_f32 = scalar.constant 0.0 : f32
+  %a_view = buffer.view %a[%zero] : buffer -> view<[%a_span]xf32>
+  %b_view = buffer.view %b[%zero] : buffer -> view<[%b_span]xf32>
+  %in0 = index.cmp ult, %i0, %a_ne0 : index
+  %in1 = index.cmp ult, %i1, %a_ne1 : index
+  %in2 = index.cmp ult, %i2, %a_ne2 : index
+  %in3 = index.cmp ult, %i3, %a_ne3 : index
+  %in01 = scalar.andi %in0, %in1 : i1
+  %in23 = scalar.andi %in2, %in3 : i1
+  %in_a = scalar.andi %in01, %in23 : i1
+  %x = scf.if %in_a -> (f32) {
+    %ao0 = index.mul %i0, %a_s0 : index
+    %ao1 = index.mul %i1, %a_s1 : index
+    %ao2 = index.mul %i2, %a_s2 : index
+    %ao3 = index.mul %i3, %a_s3 : index
+    %ao01 = index.add %ao0, %ao1 : index
+    %ao23 = index.add %ao2, %ao3 : index
+    %a_idx = index.add %ao01, %ao23 : index
+    %a_off = index.assume %a_idx [range(%a_idx, 0, 2147483646)] : index
+    %a_ok = index.cmp ult, %a_off, %a_span : index
+    %va = scf.if %a_ok -> (f32) {
+      %y = view.load %a_view[%a_off] : view<[%a_span]xf32> -> f32
+      scf.yield %y : f32
+    } else {
+      scf.yield %zero_f32 : f32
+    }
+    scf.yield %va : f32
+  } else {
+    // Here each coord is >= b_off, because b_off is not 0 only on the concat dim.
+    %j0 = index.sub %i0, %b_off0 : index
+    %j1 = index.sub %i1, %b_off1 : index
+    %j2 = index.sub %i2, %b_off2 : index
+    %j3 = index.sub %i3, %b_off3 : index
+    %bo0 = index.mul %j0, %b_s0 : index
+    %bo1 = index.mul %j1, %b_s1 : index
+    %bo2 = index.mul %j2, %b_s2 : index
+    %bo3 = index.mul %j3, %b_s3 : index
+    %bo01 = index.add %bo0, %bo1 : index
+    %bo23 = index.add %bo2, %bo3 : index
+    %b_idx = index.add %bo01, %bo23 : index
+    %b_off = index.assume %b_idx [range(%b_idx, 0, 2147483646)] : index
+    %b_ok = index.cmp ult, %b_off, %b_span : index
+    %vb = scf.if %b_ok -> (f32) {
+      %y = view.load %b_view[%b_off] : view<[%b_span]xf32> -> f32
+      scf.yield %y : f32
+    } else {
+      scf.yield %zero_f32 : f32
+    }
+    scf.yield %vb : f32
+  }
+  func.return %x : f32
+}
+
+// Workgroup x is the dim 1 tile. With the other order, a power-of-2 dim 0 stride uses one memory channel at a time.
+kernel.def target(@ggml_wave64) export("ggml_concat_f32_tiled") @ggml_concat_f32_tiled(%n_tiles1: index, %n_tiles0: index, %n_planes: index) {
+  %wg_size = index.constant 256 : index
+  %one = index.constant 1 : index
+  kernel.launch.config workgroups(%n_tiles1, %n_tiles0, %n_planes) workgroup_size(%wg_size, %one, %one) : index
+} launch(%n_in: index, %d0_in: index, %d1_in: index, %d2_in: index, %a_ne0_in: index, %a_ne1_in: index, %a_ne2_in: index, %a_ne3_in: index, %a_s0_in: index, %a_s1_in: index, %a_s2_in: index, %a_s3_in: index, %a_span_in: index, %b_off0_in: index, %b_off1_in: index, %b_off2_in: index, %b_off3_in: index, %b_s0_in: index, %b_s1_in: index, %b_s2_in: index, %b_s3_in: index, %b_span_in: index, %a: buffer, %b: buffer, %dst: buffer) {
+  // supports_concat checks these ranges.
+  %n = index.assume %n_in [range(%n_in, 1, 2147483647)] : index
+  %d0 = index.assume %d0_in [range(%d0_in, 1, 2147483647)] : index
+  %d1 = index.assume %d1_in [range(%d1_in, 1, 2147483647)] : index
+  %d2 = index.assume %d2_in [range(%d2_in, 1, 2147483647)] : index
+  %a_ne0 = index.assume %a_ne0_in [range(%a_ne0_in, 1, 2147483647)] : index
+  %a_ne1 = index.assume %a_ne1_in [range(%a_ne1_in, 1, 2147483647)] : index
+  %a_ne2 = index.assume %a_ne2_in [range(%a_ne2_in, 1, 2147483647)] : index
+  %a_ne3 = index.assume %a_ne3_in [range(%a_ne3_in, 1, 2147483647)] : index
+  %a_s0 = index.assume %a_s0_in [range(%a_s0_in, 0, 2147483647)] : index
+  %a_s1 = index.assume %a_s1_in [range(%a_s1_in, 0, 2147483647)] : index
+  %a_s2 = index.assume %a_s2_in [range(%a_s2_in, 0, 2147483647)] : index
+  %a_s3 = index.assume %a_s3_in [range(%a_s3_in, 0, 2147483647)] : index
+  %a_span = index.assume %a_span_in [range(%a_span_in, 1, 2147483647)] : index
+  %b_off0 = index.assume %b_off0_in [range(%b_off0_in, 0, 2147483647)] : index
+  %b_off1 = index.assume %b_off1_in [range(%b_off1_in, 0, 2147483647)] : index
+  %b_off2 = index.assume %b_off2_in [range(%b_off2_in, 0, 2147483647)] : index
+  %b_off3 = index.assume %b_off3_in [range(%b_off3_in, 0, 2147483647)] : index
+  %b_s0 = index.assume %b_s0_in [range(%b_s0_in, 0, 2147483647)] : index
+  %b_s1 = index.assume %b_s1_in [range(%b_s1_in, 0, 2147483647)] : index
+  %b_s2 = index.assume %b_s2_in [range(%b_s2_in, 0, 2147483647)] : index
+  %b_s3 = index.assume %b_s3_in [range(%b_s3_in, 0, 2147483647)] : index
+  %b_span = index.assume %b_span_in [range(%b_span_in, 1, 2147483647)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %tile_n = config.get @ggml.concat.tile : index
+  %c256 = index.constant 256 : index
+  %pass_rows = index.div %c256, %tile_n : index
+  %passes = index.div %tile_n, %pass_rows : index
+  %pitch = index.add %tile_n, %c1 : index
+  %zero = index.constant 0 : offset
+  %zero_f32 = scalar.constant 0.0 : f32
+  %tile_elems = index.mul %tile_n, %pitch : index
+  %b4 = index.constant 4 : offset
+  %tile_bytes = index.scale %tile_elems, %b4 : index, offset -> offset
+  %item0 = kernel.workitem.id<x> : index
+  %item = index.assume %item0 [range(%item0, 0, 255)] : index
+  %tile1 = kernel.workgroup.id<x> : index
+  %tile0 = kernel.workgroup.id<y> : index
+  %plane = kernel.workgroup.id<z> : index
+  %i2 = index.rem %plane, %d2 : index
+  %i3 = index.div %plane, %d2 : index
+  %base0 = index.mul %tile0, %tile_n : index
+  %base1 = index.mul %tile1, %tile_n : index
+  %lx = index.rem %item, %tile_n : index
+  %ly = index.div %item, %tile_n : index
+  // Odd pitch prevents LDS bank conflicts.
+  %stage = buffer.alloca<workgroup> align(16) %tile_bytes : buffer
+  %tile = buffer.view %stage[%zero] : buffer -> view<[%tile_n]x[%pitch]xf32>
+  %dst_view = buffer.view %dst[%zero] : buffer -> view<[%n]xf32>
+
+  %r_i1 = index.add %base1, %lx : index
+  %r_ok1 = index.cmp ult, %r_i1, %d1 : index
+  scf.for %k = [%c0 to %passes step %c1] unroll {
+    %r_k = index.mul %k, %pass_rows : index
+    %r = index.add %ly, %r_k : index
+    %r_i0 = index.add %base0, %r : index
+    %r_ok0 = index.cmp ult, %r_i0, %d0 : index
+    %r_ok = scalar.andi %r_ok0, %r_ok1 : i1
+    %x = scf.if %r_ok -> (f32) {
+      %y = func.call @ggml_hrx_concat_elem(%r_i0, %r_i1, %i2, %i3, %a_ne0, %a_ne1, %a_ne2, %a_ne3, %a_s0, %a_s1, %a_s2, %a_s3, %a_span, %b_off0, %b_off1, %b_off2, %b_off3, %b_s0, %b_s1, %b_s2, %b_s3, %b_span, %a, %b) : (index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, buffer, buffer) -> (f32)
+      scf.yield %y : f32
+    } else {
+      scf.yield %zero_f32 : f32
+    }
+    view.store %x, %tile[%r, %lx] : f32, view<[%tile_n]x[%pitch]xf32>
+    scf.yield
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+
+  %w_i0 = index.add %base0, %lx : index
+  %w_ok0 = index.cmp ult, %w_i0, %d0 : index
+  %plane_d1 = index.mul %plane, %d1 : index
+  scf.for %k = [%c0 to %passes step %c1] unroll {
+    %w_k = index.mul %k, %pass_rows : index
+    %c = index.add %ly, %w_k : index
+    %w_i1 = index.add %base1, %c : index
+    %w_ok1 = index.cmp ult, %w_i1, %d1 : index
+    %w_ok = scalar.andi %w_ok0, %w_ok1 : i1
+    scf.if %w_ok {
+      %x = view.load %tile[%lx, %c] : view<[%tile_n]x[%pitch]xf32> -> f32
+      %row = index.add %plane_d1, %w_i1 : index
+      %row_off = index.mul %row, %d0 : index
+      %o = index.add %row_off, %w_i0 : index
+      %o_i = index.assume %o [range(%o, 0, 2147483646)] : index
+      %o_ok = index.cmp ult, %o_i, %n : index
+      scf.if %o_ok {
+        view.store %x, %dst_view[%o_i] : f32, view<[%n]xf32>
+      }
+    }
+    scf.yield
+  }
+  kernel.return
+}
