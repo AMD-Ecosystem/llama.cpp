@@ -4,6 +4,21 @@ import sys
 from collections import defaultdict
 import re
 
+try:
+    from itanium_demangler import parse as demangle  # ty: ignore[import-not-found]
+except ImportError:
+    demangle = None
+
+
+def format_name(name):
+    if demangle is None:
+        return name
+    try:
+        demangled = demangle(name)
+    except Exception:
+        return name
+    return f"{name} [{demangled}]" if demangled is not None else name
+
 
 def parse_log_file(filepath):
     functions = defaultdict(lambda: {'vgprs': 0, 'spill': 0, 'location': ''})
@@ -59,8 +74,31 @@ def main():
 
     log_file = sys.argv[1]
     ignored = {
-        '_ZL21gated_linear_attn_f32ILi128EEviiiifPKfS1_S1_S1_S1_Pf',
         '_ZL13rwkv_wkv7_f32ILi128EEviiiiPKfS1_S1_S1_S1_S1_S1_Pf',
+        '_ZL18flash_attn_ext_f16ILi512ELi512ELi16ELi2ELb0ELb0ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiill',
+        '_ZL18flash_attn_ext_f16ILi512ELi512ELi16ELi2ELb1ELb0ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiill',
+        '_ZL18flash_attn_ext_f16ILi512ELi512ELi16ELi4ELb0ELb0ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiill',
+        '_ZL18flash_attn_ext_f16ILi512ELi512ELi16ELi4ELb1ELb0ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiill',
+        '_ZL18flash_attn_ext_f16ILi512ELi512ELi32ELi2ELb0ELb0ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiill',
+        '_ZL18flash_attn_ext_f16ILi512ELi512ELi32ELi2ELb1ELb0ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiill',
+        '_ZL18flash_attn_ext_f16ILi512ELi512ELi4ELi8ELb0ELb0ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiill',
+        '_ZL18flash_attn_ext_f16ILi512ELi512ELi4ELi8ELb1ELb0ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiill',
+        '_ZL18flash_attn_ext_f16ILi512ELi512ELi8ELi4ELb0ELb0ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiill',
+        '_ZL18flash_attn_ext_f16ILi512ELi512ELi8ELi4ELb1ELb0ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiill',
+        '_ZL18flash_attn_ext_f16ILi512ELi512ELi8ELi8ELb0ELb0ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiill',
+        '_ZL18flash_attn_ext_f16ILi512ELi512ELi8ELi8ELb1ELb0ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiill',
+        '_ZL18flash_attn_ext_f16ILi576ELi512ELi16ELi4ELb0ELb1ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiill',
+        '_ZL18flash_attn_ext_f16ILi576ELi512ELi1ELi16ELb0ELb1ELb1EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiill',
+        '_ZL18flash_attn_ext_f16ILi576ELi512ELi1ELi32ELb0ELb1ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiill',
+        '_ZL18flash_attn_ext_f16ILi576ELi512ELi2ELi16ELb0ELb1ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiill',
+        '_ZL18flash_attn_ext_f16ILi576ELi512ELi2ELi32ELb0ELb1ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiill',
+        '_ZL18flash_attn_ext_f16ILi576ELi512ELi4ELi16ELb0ELb1ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiill',
+        '_ZL18flash_attn_ext_f16ILi576ELi512ELi8ELi4ELb0ELb1ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiill',
+        '_ZL18flash_attn_ext_vecILi256ELi1EL9ggml_type2ELS0_2ELb0EEvPKcS2_S2_S2_S2_PKiS4_PfP15HIP_vector_typeIfLj2EEffffjfiS6_IjLj3EEiiiiiiiiiiiliiliiiill',
+        '_ZL18flash_attn_ext_vecILi256ELi1EL9ggml_type43ELS0_43ELb0EEvPKcS2_S2_S2_S2_PKiS4_PfP15HIP_vector_typeIfLj2EEffffjfiS6_IjLj3EEiiiiiiiiiiiliiliiiill',
+        '_ZL18flash_attn_ext_vecILi256ELi1EL9ggml_type43ELS0_43ELb1EEvPKcS2_S2_S2_S2_PKiS4_PfP15HIP_vector_typeIfLj2EEffffjfiS6_IjLj3EEiiiiiiiiiiiliiliiiill',
+        '_ZL21gated_linear_attn_f32ILi128EEviiiifPKfS1_S1_S1_S1_Pf',
+        # gfx11 fork additions (kept on top of the upstream list above).
         '_ZL18flash_attn_ext_f16ILi80ELi80ELi16ELi1ELb0ELb0EEvPKcS1_S1_S1_S1_PKiPfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiiil',
         '_ZL18flash_attn_ext_f16ILi112ELi112ELi16ELi2ELb0ELb0EEvPKcS1_S1_S1_S1_PKiPfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiiil',
         '_ZL18flash_attn_ext_f16ILi80ELi80ELi32ELi1ELb0ELb0EEvPKcS1_S1_S1_S1_PKiPfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiiil',
@@ -140,43 +178,9 @@ def main():
         '_ZL9mul_mat_qIL9ggml_type40ELi112ELb1EEvPKcPKiS4_S4_PfS5_iiiiiiiiiiiiiiiii',
         '_ZL9mul_mat_qIL9ggml_type40ELi128ELb0EEvPKcPKiS4_S4_PfS5_iiiiiiiiiiiiiiiii',
         '_ZL9mul_mat_qIL9ggml_type40ELi128ELb1EEvPKcPKiS4_S4_PfS5_iiiiiiiiiiiiiiiii',
-        # TEMPORARY (revisit on next upstream sync): the mmq rewrite repacked,
-        # kernel dims into HIP_vector_type<uint,3>, and the RDNA3.5 compacted-MoE,
-        # tiling appends (block_expert, block_start, n_experts) to mul_mat_q's,
-        # signature (the trailing "S4_S4_i") -- both change the mangled name so the,
-        # pre-existing allowlist entries no longer match. These Q2_K variants and the,
-        # rwkv_wkv_f32 recurrent kernel spill on gfx908 exactly like their,
-        # already-ignored siblings (the spill is pre-existing, not introduced here).,
-        # Upstream master is itself red on this check,
-        # (ggml-org/llama.cpp#21020 "HIP quality check failing again"); drop these,
-        # once upstream refreshes its own ignore list.,
-        '_ZL12rwkv_wkv_f32ILi128EEviiiiPKfS1_S1_S1_S1_S1_Pf',
         '_ZL9mul_mat_qIL9ggml_type10ELi48ELb0EEvPKcPKiS4_S4_PfS5_PKf15HIP_vector_typeIjLj3EEiiiiiS9_S9_iiiS9_S9_iiiS9_S4_S4_i',
         '_ZL9mul_mat_qIL9ggml_type10ELi64ELb0EEvPKcPKiS4_S4_PfS5_PKf15HIP_vector_typeIjLj3EEiiiiiS9_S9_iiiS9_S9_iiiS9_S4_S4_i',
         '_ZL9mul_mat_qIL9ggml_type10ELi64ELb1EEvPKcPKiS4_S4_PfS5_PKf15HIP_vector_typeIjLj3EEiiiiiS9_S9_iiiS9_S9_iiiS9_S4_S4_i',
-        '_ZL9mul_mat_qIL9ggml_type10ELi64ELb1EEvPKcPKiS4_S4_PfS5_PKf15HIP_vector_typeIjLj3EEiiiiiS9_S9_iiiS9_S9_iiiS9_',
-        '_ZL9mul_mat_qIL9ggml_type42ELi128ELb1EEvPKcPKiS4_S4_PfS5_PKf15HIP_vector_typeIjLj3EEiiiiiS9_S9_iiiS9_S9_iiiS9_',
-        '_ZL18flash_attn_ext_f16ILi576ELi512ELi2ELi32ELb0ELb1ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiiil',
-        '_ZL18flash_attn_ext_f16ILi512ELi512ELi16ELi4ELb0ELb0ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiiil',
-        '_ZL18flash_attn_ext_f16ILi512ELi512ELi16ELi4ELb1ELb0ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiiil',
-        '_ZL18flash_attn_ext_f16ILi512ELi512ELi32ELi2ELb0ELb0ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiiil',
-        '_ZL18flash_attn_ext_f16ILi512ELi512ELi32ELi2ELb1ELb0ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiiil',
-        '_ZL18flash_attn_ext_f16ILi512ELi512ELi8ELi8ELb0ELb0ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiiil',
-        '_ZL18flash_attn_ext_f16ILi512ELi512ELi8ELi8ELb1ELb0ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiiil',
-        '_ZL18flash_attn_ext_f16ILi576ELi512ELi16ELi4ELb0ELb1ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiiil',
-        '_ZL18flash_attn_ext_f16ILi576ELi512ELi4ELi16ELb0ELb1ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiiil',
-        '_ZL18flash_attn_ext_f16ILi512ELi512ELi16ELi2ELb0ELb0ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiiil',
-        '_ZL18flash_attn_ext_f16ILi512ELi512ELi16ELi2ELb1ELb0ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiiil',
-        '_ZL18flash_attn_ext_f16ILi512ELi512ELi4ELi8ELb0ELb0ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiiil',
-        '_ZL18flash_attn_ext_f16ILi512ELi512ELi4ELi8ELb1ELb0ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiiil',
-        '_ZL18flash_attn_ext_f16ILi512ELi512ELi8ELi4ELb0ELb0ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiiil',
-        '_ZL18flash_attn_ext_f16ILi512ELi512ELi8ELi4ELb1ELb0ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiiil',
-        '_ZL18flash_attn_ext_f16ILi576ELi512ELi1ELi32ELb0ELb1ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiiil',
-        '_ZL18flash_attn_ext_f16ILi576ELi512ELi2ELi16ELb0ELb1ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiiil',
-        '_ZL18flash_attn_ext_f16ILi576ELi512ELi8ELi4ELb0ELb1ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiiil',
-        '_ZL18flash_attn_ext_vecILi256ELi1EL9ggml_type2ELS0_2ELb0EEvPKcS2_S2_S2_S2_PKiS4_PfP15HIP_vector_typeIfLj2EEffffjfiS6_IjLj3EEiiiiiiiiiiiliiliiiiil',
-        '_ZL18flash_attn_ext_f16ILi320ELi256ELi2ELi32ELb0ELb0ELb0EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiiil',
-        '_ZL18flash_attn_ext_f16ILi576ELi512ELi1ELi16ELb0ELb1ELb1EEvPKcS1_S1_S1_S1_PKiS3_PfP15HIP_vector_typeIfLj2EEffffjfiS5_IjLj3EEiiiiiiiiiiiliiliiiiil',
         # FP8 E4M3 K/V, D=256, ncols=1, both softcap modes (ggml-org/llama.cpp#28413).
         # gfx908 with ROCm 7.2.1 / Clang 22 reports 255 VGPRs + 2 spills; revisit after the next compiler update.
         '_ZL18flash_attn_ext_vecILi256ELi1EL9ggml_type43ELS0_43ELb0EEvPKcS2_S2_S2_S2_PKiS4_PfP15HIP_vector_typeIfLj2EEffffjfiS6_IjLj3EEiiiiiiiiiiiliiliiiiil',
@@ -192,7 +196,7 @@ def main():
         total_vgprs = int(data['vgprs']) + int(data['spill'])
         if total_vgprs > 256 and func_name in ignored and func_name not in printed_ignored:
             location = data.get('location', log_file)
-            print(f"{location}: {func_name} - Total VGPRs: {total_vgprs} ({data['vgprs']} + {data['spill']}) [IGNORED]")  # noqa: NP100
+            print(f"{location}: {format_name(func_name)} - Total VGPRs: {total_vgprs} ({data['vgprs']} + {data['spill']}) [IGNORED]")  # noqa: NP100
             printed_ignored.add(func_name)
 
     # Then print new functions with issues in red
@@ -204,7 +208,7 @@ def main():
             # Print in red if not ignored
             color_code = "\033[91m" if func_name not in ignored else ""
             reset_code = "\033[0m" if func_name not in ignored else ""
-            print(f"{color_code}{location}: {func_name} - Total VGPRs: {total_vgprs} ({data['vgprs']} + {data['spill']}) {status}{reset_code}")  # noqa: NP100
+            print(f"{color_code}{location}: {format_name(func_name)} - Total VGPRs: {total_vgprs} ({data['vgprs']} + {data['spill']}) {status}{reset_code}")  # noqa: NP100
             if func_name not in ignored:
                 found_issues = True
 

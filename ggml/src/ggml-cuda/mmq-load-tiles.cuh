@@ -1198,7 +1198,7 @@ static __device__ __forceinline__ void ggml_cuda_mmq_store_tiles_q5_K_rdna35(
         const int qh_slot = row_in_warp/qh_rows_per_slot;
         const int qh_src_lane = (row_in_warp % qh_rows_per_slot)*qh_words_per_row + txi%qh_words_per_row;
         const int qs = qs_cache[row_in_warp];
-        const int qh = __shfl_sync(0xFFFFFFFF, qh_cache[qh_slot], qh_src_lane, warp_size);
+        const int qh = ggml_cuda_shfl(qh_cache[qh_slot], qh_src_lane, warp_size);
         const int i = i0 + threadIdx.y;
         int * row_qs = x_qs + i*sram_stride;
         row_qs[kqs]   = (qs & 0x0F0F0F0F) | (((qh >> (qh_shift0 + 0)) << 4) & 0x10101010);
