@@ -532,6 +532,28 @@ static __global__ void mul_mat_dq(
 #endif // (defined(GGML_USE_HIP) && defined(RDNA3))
 }
 
+// expert_bounds[e] = first compact row of expert e, expert_bounds[n_experts] = number of compact rows.
+// The helper is asked for a single tile over all compact rows, so tile_spec[0] is the only seam tile and
+// tile_spec[1 + e] ends at the last compact row of expert e.
+static __global__ void mmdq_expert_bounds(
+        const ggml_cuda_mm_id_tile_spec * __restrict__ tile_spec, int32_t * __restrict__ expert_bounds, const int n_experts) {
+    const int e = blockIdx.x*blockDim.x + threadIdx.x;
+    if (e <= n_experts) {
+        expert_bounds[e] = e == 0 ? 0 : tile_spec[e].col_high;
+    }
+}
+
+// compact rows sorted by expert: ids_src1/ids_dst map them to rows of src1/dst, see mmdq_ids_args
+// tile_spec: scratch of 1 + n_experts elements
+static void mmdq_launch_ids_helper(
+        const int32_t * ids, int32_t * ids_src1, int32_t * ids_dst, int32_t * expert_bounds, ggml_cuda_mm_id_tile_spec * tile_spec,
+        const int n_experts, const int n_tokens, const int n_expert_used, const int nchannels_y, const int si1, const int sis1, cudaStream_t stream) {
+    ggml_cuda_launch_mm_ids_helper(ids, ids_src1, ids_dst, tile_spec,
+        n_experts, n_tokens, n_expert_used, nchannels_y, /*tile_width =*/ n_tokens*n_expert_used, si1, sis1, /*write_inverse =*/ false, stream);
+    CUDA_CHECK(cudaGetLastError());
+    mmdq_expert_bounds<<<(n_experts + 256)/256, 256, 0, stream>>>(tile_spec, expert_bounds, n_experts);
+}
+
 // tile_start[e] = number of BT-row blocks of all experts before e
 static __global__ void mmdq_tile_start(const int32_t * __restrict__ expert_bounds, int32_t * __restrict__ tile_start, const int n_experts, const int BT) {
     __shared__ int buf[1024];
@@ -916,8 +938,8 @@ static bool mmdq_supported_shape(const ggml_tensor * src0, const ggml_tensor * s
         return false;
     }
     if (src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32 ||
-            (ggml_prec_get_acc(dst) != GGML_PREC_DEFAULT && ggml_prec_get_acc(dst) != GGML_PREC_F32) ||
-            ggml_prec_get_src(dst, 1) != GGML_PREC_DEFAULT ||
+            (ggml_prec_get_acc(dst) != GGML_PREC_UNDEFINED && ggml_prec_get_acc(dst) != GGML_PREC_F32) ||
+            ggml_prec_get_src(dst, 1) != GGML_PREC_UNDEFINED ||
             (dst->op == GGML_OP_MUL_MAT && ggml_get_op_params_i32(dst, 1) != 0) ||
             getenv("GGML_CUDA_CUBLAS_COMPUTE_TYPE") != nullptr) {
         return false;
@@ -1153,11 +1175,12 @@ static void ggml_cuda_mul_mat_id_dq_glu(ggml_backend_cuda_context & ctx, const g
     ggml_cuda_pool_alloc<int32_t> ids_dst(ctx.pool(), n_rows);
     ggml_cuda_pool_alloc<int32_t> expert_bounds(ctx.pool(), n_experts + 1);
     ggml_cuda_pool_alloc<int32_t> tile_start(ctx.pool(), n_experts + 1);
+    ggml_cuda_pool_alloc<ggml_cuda_mm_id_tile_spec> tile_spec(ctx.pool(), n_experts + 1);
 
     const int si1  = ids->nb[1] / ggml_element_size(ids);
     const int sis1 = x->nb[2] / x->nb[1];
-    ggml_cuda_launch_mm_ids_helper((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
-        n_experts, n_tokens, n_expert_used, x->ne[1], si1, sis1, /*write_inverse =*/ false, stream);
+    mmdq_launch_ids_helper((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(), tile_spec.get(),
+        n_experts, n_tokens, n_expert_used, x->ne[1], si1, sis1, stream);
     CUDA_CHECK(cudaGetLastError());
 
     ggml_cuda_pool_alloc<half> x_f16(ctx.pool(), ggml_nelements(x));
@@ -1224,11 +1247,12 @@ void ggml_cuda_mul_mat_id_dq(ggml_backend_cuda_context & ctx, const ggml_tensor 
     ggml_cuda_pool_alloc<int32_t> ids_dst(ctx.pool(), n_rows);
     ggml_cuda_pool_alloc<int32_t> expert_bounds(ctx.pool(), ne02 + 1);
     ggml_cuda_pool_alloc<int32_t> tile_start(ctx.pool(), ne02 + 1);
+    ggml_cuda_pool_alloc<ggml_cuda_mm_id_tile_spec> tile_spec(ctx.pool(), ne02 + 1);
 
     const int si1  = ids->nb[1] / ggml_element_size(ids);
     const int sis1 = nb12 / nb11;
-    ggml_cuda_launch_mm_ids_helper((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
-        ne02, ne12, n_expert_used, ne11, si1, sis1, /*write_inverse =*/ false, stream);
+    mmdq_launch_ids_helper((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(), tile_spec.get(),
+        ne02, ne12, n_expert_used, ne11, si1, sis1, stream);
     CUDA_CHECK(cudaGetLastError());
 
     // src1 is converted once, the kernel reads its rows through ids_src1

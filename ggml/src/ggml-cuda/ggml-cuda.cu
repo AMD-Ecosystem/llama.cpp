@@ -4500,7 +4500,7 @@ static bool ggml_cuda_can_use_packed_mmq(ggml_backend_cuda_context & ctx, const 
         x->type == GGML_TYPE_F32 && mm->type == GGML_TYPE_F32 &&
         ggml_is_contiguous(w) && ggml_is_contiguous(x) && ggml_is_contiguous(mm) &&
         w->ne[2] == 1 && w->ne[3] == 1 && x->ne[2] == 1 && x->ne[3] == 1 && x->ne[1] >= 64 && x->ne[1] <= 65535 &&
-        ggml_get_op_params_i32(mm, 0) == GGML_PREC_DEFAULT && ggml_prec_get_src(mm, 1) == GGML_PREC_DEFAULT && ggml_get_op_params_i32(mm, 1) == 0 &&
+        ggml_get_op_params_i32(mm, 0) == GGML_PREC_UNDEFINED && ggml_prec_get_src(mm, 1) == GGML_PREC_UNDEFINED && ggml_get_op_params_i32(mm, 1) == 0 &&
         !ggml_cuda_should_use_mmvq(w->type, cc, x->ne[1]) &&
         ggml_cuda_should_use_mmq(w->type, cc, x->ne[1], 0) &&
         !(w->view_src && ggml_backend_buffer_get_usage(w->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE &&
