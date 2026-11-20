@@ -188,7 +188,7 @@ static __device__ __forceinline__ dq_weight_q8_0 dq_load_q8_0_shared(const block
     if (q_offset == 0) {
         bits = *(const uint16_t *) &b->d;
     }
-    bits = __shfl_sync(0xFFFFFFFF, bits, 0, 4);
+    bits = ggml_cuda_shfl(bits, 0, 4);
     half d;
     *(uint16_t *) &d = (uint16_t) bits;
     return { (uint32_t) qs16[0] | ((uint32_t) qs16[1] << 16),

@@ -64,7 +64,7 @@ static __device__ __forceinline__ float gdn_sum_to_lane0(float x) {
 #else
 #pragma unroll
     for (int mask = 1; mask < GDN_COL_LANES; mask <<= 1) {
-        x += __shfl_xor_sync(0xffffffff, x, mask, WARP_SIZE);
+        x += ggml_cuda_shfl_xor(x, mask, WARP_SIZE);
     }
     return x;
 #endif
@@ -206,12 +206,12 @@ static __device__ __forceinline__ void gdn_chunked_body(GDN_CHUNKED_PARAMS) {
             float g_cs = s_g_cs[tid] * GDN_LOG2E;
 #pragma unroll
             for (int off = 1; off < CHUNK; off <<= 1) {
-                const float prev = __shfl_up_sync(0xffffffff, g_cs, off, WARP_SIZE);
+                const float prev = ggml_cuda_shfl_up(g_cs, off, WARP_SIZE);
                 if (tid >= off) {
                     g_cs += prev;
                 }
             }
-            const float g_last = __shfl_sync(0xffffffff, g_cs, CHUNK - 1, WARP_SIZE);
+            const float g_last = ggml_cuda_shfl(g_cs, CHUNK - 1, WARP_SIZE);
 
             s_g_cs      [tid] = g_cs;
             s_beta_decay[tid] = s_beta[tid] * gdn_exp2(g_cs);
@@ -287,7 +287,7 @@ static __device__ __forceinline__ void gdn_chunked_body(GDN_CHUNKED_PARAMS) {
 
             float x = lane == col ? 1.0f : 0.0f;
             for (int i = col; i < CHUNK; i++) {
-                const float x_i = __shfl_sync(0xffffffff, x, i, WARP_SIZE);
+                const float x_i = ggml_cuda_shfl(x, i, WARP_SIZE);
                 if (lane > i) {
                     x -= s_tinv[lane][i] * x_i;
                 }

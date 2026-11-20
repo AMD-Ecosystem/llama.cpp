@@ -340,7 +340,7 @@ jobs:
           -DCMAKE_SYSTEM_NAME=Linux
 
         cmake --build . -j $(nproc)
-        test -s tools/ui/dist/index.html
+        test -s ui/apps/chat/dist/index.html
 
     - name: Copy ROCm core libs to build directory
       run: |
