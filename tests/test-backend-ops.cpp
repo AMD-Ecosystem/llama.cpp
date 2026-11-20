@@ -13885,6 +13885,27 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_moe_reduce(2048, 15, 40, false, true));
     test_cases.emplace_back(new test_moe_reduce(2048, 16, 32, false, true));
 
+    // Qwen3.8-Flash-Next: 10 experts of 2560 columns at decode, MTP verify and prompt batches (odd counts, unaligned experts)
+    for (int64_t n_tokens : { 1, 3, 17, 2048, 2051 }) {
+        test_cases.emplace_back(new test_moe_reduce(2560, 10, n_tokens));
+    }
+    test_cases.emplace_back(new test_moe_reduce(2560, 10, 37, true));
+    test_cases.emplace_back(new test_moe_reduce(2560, 10, 37, true, true, true));
+    test_cases.emplace_back(new test_moe_reduce_mul_mat_vec(2560, 10, 1));
+    // the router of the same model: F32 512x2560 at decode, MTP verify, a small and a full prompt batch
+    for (int64_t n_tokens : { 1, 3, 17, 130, 2048, 2051 }) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 512, n_tokens, 2560, {1, 1}, {1, 1}));
+    }
+    // other row counts and depths of F32 prompt products (SSM alpha/beta have 48 rows), batched and permuted ones
+    for (int64_t m : { 16, 48, 80, 511, 1000, 1024, 1040 }) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, m, 130, 2560, {1, 1}, {1, 1}));
+    }
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 512, 300, 64, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 512, 300, 96, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 512, 130, 2560, {2, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 512, 130, 2560, {1, 1}, {1, 1}, {0, 2, 1, 3}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 512, 130, 2560, {1, 1}, {1, 1}, {0, 1, 2, 3}, 2624));
+
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 1, 1));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1, 1, true, true));
@@ -14023,6 +14044,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         test_cases.emplace_back(new test_lightning_indexer(128, 4, kv, 2048, 1, 1, GGML_TYPE_F32));
     }
     test_cases.emplace_back(new test_lightning_indexer(128, 4, 8768, 3, 1, 1, GGML_TYPE_F32));
+    // Qwen3.8-Flash-Next MoE: the weighted sum of 10 experts and the F32 router
+    for (int64_t n_tokens : { 1, 3, 512, 2048 }) {
+        test_cases.emplace_back(new test_moe_reduce(2560, 10, n_tokens));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 512, n_tokens, 2560, {1, 1}, {1, 1}));
+    }
     // SWIGLU at a 27B-class FFN width, fused [gate|up] vs split operands
     // note: same bytes either way, so a backend that indexes them differently shows it here
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_BF16}) {
