@@ -37,6 +37,7 @@
 #include "ggml-cuda/mmvf.cuh"
 #include "ggml-cuda/mmvq.cuh"
 #include "ggml-cuda/moe-weighted-reduction.cuh"
+#include "ggml-cuda/mul-mat-f32-wmma.cuh"
 #include "ggml-cuda/norm.cuh"
 #include "ggml-cuda/opt-step-adamw.cuh"
 #include "ggml-cuda/opt-step-sgd.cuh"
@@ -2748,6 +2749,10 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         return;
     }
     if (src0->type == GGML_TYPE_F8_E4M3 && ggml_cuda_mul_mat_fp8(ctx, src0, src1, dst)) {
+        return;
+    }
+    if (ggml_cuda_should_use_mul_mat_f32_wmma(src0, src1, dst, cc)) {
+        ggml_cuda_mul_mat_f32_wmma(ctx, src0, src1, dst);
         return;
     }
     ggml_cuda_mul_mat_cublas(ctx, src0, src1, dst);
