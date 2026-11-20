@@ -1,0 +1,40 @@
+config.decl @ggml.elementwise.wg_size : %value: index where [range(%value, 64, 1024), multiple_of(%value, 64)]
+
+target.decl @ggml_wave64
+
+kernel.def target(@ggml_wave64) export("ggml_arange_f32") @ggml_arange_f32(%n: index) {
+  %one = index.constant 1 : index
+  %wg_size = config.get @ggml.elementwise.wg_size : index
+  %round = index.sub %wg_size, %one : index
+  %n_round = index.add %n, %round : index
+  %groups = index.div %n_round, %wg_size : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%wg_size, %one, %one) : index
+} launch(%n_in: index, %start_bits: index, %step_bits: index, %dst: buffer) {
+  // supports_arange checks this range.
+  %n = index.assume %n_in [range(%n_in, 1, 2147483647)] : index
+  %wg_size = config.get @ggml.elementwise.wg_size : index
+  %group = kernel.workgroup.id<x> : index
+  %item = kernel.workitem.id<x> : index
+  %base = index.mul %group, %wg_size : index
+  %i = index.add %base, %item : index
+  %in_bounds = index.cmp ult, %i, %n : index
+  %zero = index.constant 0 : offset
+  %dst_view = buffer.view %dst[%zero] : buffer -> view<[%n]xf32>
+  scf.if %in_bounds {
+    %start_i32 = index.cast %start_bits : index to i32
+    %step_i32 = index.cast %step_bits : index to i32
+    %start_vec = vector.from_elements %start_i32 : vector<1xi32>
+    %step_vec = vector.from_elements %step_i32 : vector<1xi32>
+    %start_fvec = vector.bitcast %start_vec : vector<1xi32> to vector<1xf32>
+    %step_fvec = vector.bitcast %step_vec : vector<1xi32> to vector<1xf32>
+    %start = vector.extract %start_fvec[0] : vector<1xf32> -> f32
+    %step = vector.extract %step_fvec[0] : vector<1xf32> -> f32
+
+    %i_i32 = index.cast %i : index to i32
+    %i_f32 = scalar.sitofp %i_i32 : i32 to f32
+    %offset = scalar.mulf %step, %i_f32 : f32
+    %value = scalar.addf %start, %offset : f32
+    view.store %value, %dst_view[%i] : f32, view<[%n]xf32>
+  }
+  kernel.return
+}

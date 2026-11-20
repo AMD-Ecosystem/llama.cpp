@@ -1,0 +1,252 @@
+// dst holds the attention output, then n_slots state snapshots. Slot 0 holds the state after the last token.
+// q, k and v strides are in elements. g, beta and state must be contiguous.
+
+config.decl @ggml.gated_delta_net.head_width : %value: index where [range(%value, 4, 128), multiple_of(%value, 4)]
+// 1: one gate value for each k channel. 0: one gate value for each head.
+config.decl @ggml.gated_delta_net.gate_per_channel : %value: index where [range(%value, 0, 1)]
+
+// Partial dot chains of each lane. A lane that cannot give 2 or more values to each chain uses 1 chain.
+config.decl @ggml.gated_delta_net.chains : %value: index where [range(%value, 1, 8)]
+
+// Lanes that share one state column. The caller makes sure that they divide the head width.
+config.decl @ggml.gated_delta_net.lanes : %value: index where [range(%value, 4, 64), power_of_two(%value)]
+
+target.decl @ggml_wave64
+
+template.decl @ggml.reduce.sum_f32(%value: f32, %lanes: index) -> (f32)
+
+kernel.def target(@ggml_wave64) export("ggml_gated_delta_net_f32") @ggml_gated_delta_net_f32(%n_col_blocks: index, %n_heads: index, %n_seqs: index) {
+  %one = index.constant 1 : index
+  %wg_size = index.constant 64 : index
+  kernel.launch.config workgroups(%n_col_blocks, %n_heads, %n_seqs) workgroup_size(%wg_size, %one, %one) : index
+} launch(%n_heads_in: index, %n_tokens_in: index, %n_seqs_in: index, %n_slots_in: index, %q_ne1_in: index, %q_rs3_in: index, %q_s1_in: index, %q_s2_in: index, %q_s3_in: index, %q_span_in: index, %k_ne1_in: index, %k_rs3_in: index, %k_s1_in: index, %k_s2_in: index, %k_s3_in: index, %k_span_in: index, %v_s1_in: index, %v_s2_in: index, %v_s3_in: index, %v_span_in: index, %g_span_in: index, %b_span_in: index, %st_span_in: index, %dst_span_in: index, %q_in: buffer, %k_in: buffer, %v_in: buffer, %g_in: buffer, %beta_in: buffer, %state_in: buffer, %dst_in: buffer) {
+  // supports_gated_delta_net checks these ranges.
+  %n_heads = index.assume %n_heads_in [range(%n_heads_in, 1, 2147483647)] : index
+  %n_tokens = index.assume %n_tokens_in [range(%n_tokens_in, 1, 2147483647)] : index
+  %n_seqs = index.assume %n_seqs_in [range(%n_seqs_in, 1, 2147483647)] : index
+  %n_slots = index.assume %n_slots_in [range(%n_slots_in, 1, 2147483647)] : index
+  %q_ne1 = index.assume %q_ne1_in [range(%q_ne1_in, 1, 2147483647)] : index
+  %q_rs3 = index.assume %q_rs3_in [range(%q_rs3_in, 1, 2147483647)] : index
+  %q_s1 = index.assume %q_s1_in [range(%q_s1_in, 0, 2147483647)] : index
+  %q_s2 = index.assume %q_s2_in [range(%q_s2_in, 0, 2147483647)] : index
+  %q_s3 = index.assume %q_s3_in [range(%q_s3_in, 0, 2147483647)] : index
+  %q_span = index.assume %q_span_in [range(%q_span_in, 1, 2147483647)] : index
+  %k_ne1 = index.assume %k_ne1_in [range(%k_ne1_in, 1, 2147483647)] : index
+  %k_rs3 = index.assume %k_rs3_in [range(%k_rs3_in, 1, 2147483647)] : index
+  %k_s1 = index.assume %k_s1_in [range(%k_s1_in, 0, 2147483647)] : index
+  %k_s2 = index.assume %k_s2_in [range(%k_s2_in, 0, 2147483647)] : index
+  %k_s3 = index.assume %k_s3_in [range(%k_s3_in, 0, 2147483647)] : index
+  %k_span = index.assume %k_span_in [range(%k_span_in, 1, 2147483647)] : index
+  %v_s1 = index.assume %v_s1_in [range(%v_s1_in, 0, 2147483647)] : index
+  %v_s2 = index.assume %v_s2_in [range(%v_s2_in, 0, 2147483647)] : index
+  %v_s3 = index.assume %v_s3_in [range(%v_s3_in, 0, 2147483647)] : index
+  %v_span = index.assume %v_span_in [range(%v_span_in, 1, 2147483647)] : index
+  %g_span = index.assume %g_span_in [range(%g_span_in, 1, 2147483647)] : index
+  %b_span = index.assume %b_span_in [range(%b_span_in, 1, 2147483647)] : index
+  %st_span = index.assume %st_span_in [range(%st_span_in, 1, 2147483647)] : index
+  %dst_span = index.assume %dst_span_in [range(%dst_span_in, 1, 2147483647)] : index
+
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %lanes = config.get @ggml.gated_delta_net.lanes : index
+  %c64 = index.constant 64 : index
+  %cols = index.div %c64, %lanes : index
+  %b4 = index.constant 4 : offset
+  %zero = index.constant 0 : offset
+  %zero_f32 = scalar.constant 0.0 : f32
+
+  %s_v = config.get @ggml.gated_delta_net.head_width : index
+  %gate_mode = config.get @ggml.gated_delta_net.gate_per_channel : index
+  %per_channel = index.cmp ne, %gate_mode, %c0 : index
+  %rpl = index.div %s_v, %lanes : index
+  %zero_rows = vector.splatf 0.0 : vector<[%rpl]xf32>
+  %chains = config.get @ggml.gated_delta_net.chains : index
+  %chains_x2 = index.add %chains, %chains : index
+  %rpl_mod = index.rem %rpl, %chains : index
+  %rpl_div = index.cmp eq, %rpl_mod, %c0 : index
+  %rpl_ge = index.cmp uge, %rpl, %chains_x2 : index
+  %chains_ok = scalar.andi %rpl_div, %rpl_ge : i1
+  %n_chains = scf.select %chains_ok, %chains, %c1 : index
+  %chain_len = index.div %rpl, %n_chains : index
+
+
+  // The op is not in place. Thus no binding overlaps another.
+  %q, %k, %v, %g, %beta, %state, %dst = buffer.assume.noalias %q_in, %k_in, %v_in, %g_in, %beta_in, %state_in, %dst_in : buffer, buffer, buffer, buffer, buffer, buffer, buffer
+  %block = kernel.workgroup.id<x> : index
+  %head = kernel.workgroup.id<y> : index
+  %seq = kernel.workgroup.id<z> : index
+  %lane = kernel.workitem.id<x> : index
+  %c_in = index.div %lane, %lanes : index
+  %r = index.rem %lane, %lanes : index
+  %is_r0 = index.cmp eq, %r, %c0 : index
+  %col_base = index.mul %block, %cols : index
+  %col = index.add %col_base, %c_in : index
+  %col_ok = index.cmp ult, %col, %s_v : index
+  // Lanes past the head width compute the last column but do not store it.
+  %s_last = index.sub %s_v, %c1 : index
+  %j = index.min %col, %s_last : index
+  %row0 = index.mul %r, %rpl : index
+  %jo = index.mul %j, %s_v : index
+  %st_lane = index.add %jo, %row0 : index
+
+  %s_i32 = index.cast %s_v : index to i32
+  %s_f32 = scalar.sitofp %s_i32 : i32 to f32
+  %scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %s_f32 : f32
+
+  %hs = index.mul %n_heads, %s_v : index
+  %ss = index.mul %s_v, %s_v : index
+  %rows = index.mul %n_tokens, %n_seqs : index
+  %attn_elems = index.mul %rows, %hs : index
+  %head_seq_rows = index.mul %n_heads, %n_seqs : index
+  %slot_stride = index.mul %head_seq_rows, %ss : index
+  %th = index.mul %n_tokens, %n_heads : index
+
+  %iq1 = index.rem %head, %q_ne1 : index
+  %iq3 = index.div %seq, %q_rs3 : index
+  %q_h = index.mul %iq1, %q_s1 : index
+  %q_q = index.mul %iq3, %q_s3 : index
+  %q_hq = index.add %q_h, %q_q : index
+  %ik1 = index.rem %head, %k_ne1 : index
+  %ik3 = index.div %seq, %k_rs3 : index
+  %k_h = index.mul %ik1, %k_s1 : index
+  %k_q = index.mul %ik3, %k_s3 : index
+  %k_hq = index.add %k_h, %k_q : index
+  %v_h = index.mul %head, %v_s1 : index
+  %v_q = index.mul %seq, %v_s3 : index
+  %v_hq = index.add %v_h, %v_q : index
+
+  %seq_t = index.mul %seq, %th : index
+  %b_base = index.add %seq_t, %head : index
+
+  %head_seq = index.mul %seq, %n_heads : index
+  %state_head = index.add %head_seq, %head : index
+  %st_head = index.mul %state_head, %ss : index
+  %st_end = index.add %st_head, %ss : index
+  %st_ok = index.cmp ule, %st_end, %st_span : index
+  %st_at = scf.select %st_ok, %st_head, %c0 : index
+  %st_byte = index.scale %st_at, %b4 : index, offset -> offset
+  %st_view = buffer.view %state[%st_byte] : buffer -> view<[%ss]xf32>
+  %init = vector.load %st_view[%st_lane] : view<[%ss]xf32> -> vector<[%rpl]xf32>
+
+  %out_head = index.mul %b_base, %s_v : index
+  %snap_head = index.add %attn_elems, %st_head : index
+  %store_out = scalar.andi %is_r0, %col_ok : i1
+
+  // Clamp each load base into its binding. For a valid op, the base is always in range.
+  %t_last = index.sub %n_tokens, %c1 : index
+  %fin = scf.for %t = [%c0 to %n_tokens step %c1](%st = %init : vector<[%rpl]xf32>) -> (vector<[%rpl]xf32>) {
+    %k_t = index.mul %t, %k_s2 : index
+    %k_row = index.add %k_hq, %k_t : index
+    %k_end = index.add %k_row, %s_v : index
+    %k_ok = index.cmp ule, %k_end, %k_span : index
+    %k_at = scf.select %k_ok, %k_row, %c0 : index
+    %k_byte = index.scale %k_at, %b4 : index, offset -> offset
+    %k_view = buffer.view %k[%k_byte] : buffer -> view<[%s_v]xf32>
+    %kt = vector.load %k_view[%row0] : view<[%s_v]xf32> -> vector<[%rpl]xf32>
+    %q_t = index.mul %t, %q_s2 : index
+    %q_row = index.add %q_hq, %q_t : index
+    %q_end = index.add %q_row, %s_v : index
+    %q_ok = index.cmp ule, %q_end, %q_span : index
+    %q_at = scf.select %q_ok, %q_row, %c0 : index
+    %q_byte = index.scale %q_at, %b4 : index, offset -> offset
+    %q_view = buffer.view %q[%q_byte] : buffer -> view<[%s_v]xf32>
+    %qt = vector.load %q_view[%row0] : view<[%s_v]xf32> -> vector<[%rpl]xf32>
+    %v_t = index.mul %t, %v_s2 : index
+    %v_row = index.add %v_hq, %v_t : index
+    %v_end = index.add %v_row, %s_v : index
+    %v_ok = index.cmp ule, %v_end, %v_span : index
+    %v_at = scf.select %v_ok, %v_row, %c0 : index
+    %v_byte = index.scale %v_at, %b4 : index, offset -> offset
+    %v_view = buffer.view %v[%v_byte] : buffer -> view<[%s_v]xf32>
+    %vt = view.load %v_view[%j] : view<[%s_v]xf32> -> f32
+    %tl_h = index.mul %t, %n_heads : index
+    %bt = index.add %b_base, %tl_h : index
+    %b_ok = index.cmp ult, %bt, %b_span : index
+    %b_at = scf.select %b_ok, %bt, %c0 : index
+    %b_byte = index.scale %b_at, %b4 : index, offset -> offset
+    %b_one = buffer.view %beta[%b_byte] : buffer -> view<1xf32>
+    %bt_v = view.load %b_one[%c0] : view<1xf32> -> f32
+    %g_ok = index.cmp ult, %bt, %g_span : index
+    %g_at = scf.select %g_ok, %bt, %c0 : index
+    %g_byte = index.scale %g_at, %b4 : index, offset -> offset
+    %g_one = buffer.view %g[%g_byte] : buffer -> view<1xf32>
+    %gt_v = view.load %g_one[%c0] : view<1xf32> -> f32
+
+    %decay = scf.if %per_channel -> (vector<[%rpl]xf32>) {
+      %t_h = index.mul %t, %n_heads : index
+      %gt = index.add %b_base, %t_h : index
+      %g_row = index.mul %gt, %s_v : index
+      %g_end = index.add %g_row, %s_v : index
+      %gv_ok = index.cmp ule, %g_end, %g_span : index
+      %gv = scf.if %gv_ok -> (vector<[%rpl]xf32>) {
+        %g_rbyte = index.scale %g_row, %b4 : index, offset -> offset
+        %g_rview = buffer.view %g[%g_rbyte] : buffer -> view<[%s_v]xf32>
+        %x = vector.load %g_rview[%row0] : view<[%s_v]xf32> -> vector<[%rpl]xf32>
+        scf.yield %x : vector<[%rpl]xf32>
+      } else {
+        scf.yield %zero_rows : vector<[%rpl]xf32>
+      }
+      %ev = vector.expf<afn> %gv : vector<[%rpl]xf32>
+      scf.yield %ev : vector<[%rpl]xf32>
+    } else {
+      %e = scalar.expf<afn> %gt_v : f32
+      %ev = vector.splat %e : vector<[%rpl]xf32>
+      scf.yield %ev : vector<[%rpl]xf32>
+    }
+    %dec = vector.mulf %st, %decay : vector<[%rpl]xf32>
+
+    // Partial dots shorten the dependent FMA chain.
+    %kv_part = scf.for %ch = [%c0 to %n_chains step %c1](%sum = %zero_f32 : f32) -> (f32) unroll {
+      %ch_off = index.mul %ch, %chain_len : index
+      %a_s = vector.slice %dec[%ch_off] : vector<[%rpl]xf32> -> vector<[%chain_len]xf32>
+      %b_s = vector.slice %kt[%ch_off] : vector<[%rpl]xf32> -> vector<[%chain_len]xf32>
+      %d = vector.dotf %a_s, %b_s, %zero_f32 : vector<[%chain_len]xf32>, vector<[%chain_len]xf32>, f32
+      %sum_next = scalar.addf %sum, %d : f32
+      scf.yield %sum_next : f32
+    }
+    %kv = template.apply<@ggml.reduce.sum_f32>(%kv_part, %lanes) : (f32, index) -> (f32)
+    %err = scalar.subf %vt, %kv : f32
+    %delta = scalar.mulf %err, %bt_v : f32
+    %delta_v = vector.splat %delta : vector<[%rpl]xf32>
+    %new = vector.fmaf %kt, %delta_v, %dec : vector<[%rpl]xf32>
+
+    %o_part = scf.for %ch = [%c0 to %n_chains step %c1](%sum = %zero_f32 : f32) -> (f32) unroll {
+      %ch_off = index.mul %ch, %chain_len : index
+      %a_s = vector.slice %new[%ch_off] : vector<[%rpl]xf32> -> vector<[%chain_len]xf32>
+      %b_s = vector.slice %qt[%ch_off] : vector<[%rpl]xf32> -> vector<[%chain_len]xf32>
+      %d = vector.dotf %a_s, %b_s, %zero_f32 : vector<[%chain_len]xf32>, vector<[%chain_len]xf32>, f32
+      %sum_next = scalar.addf %sum, %d : f32
+      scf.yield %sum_next : f32
+    }
+    %o_sum = template.apply<@ggml.reduce.sum_f32>(%o_part, %lanes) : (f32, index) -> (f32)
+    %o = scalar.mulf %o_sum, %scale : f32
+    %t_hs = index.mul %t, %hs : index
+    %o_row = index.add %out_head, %t_hs : index
+    %o_end = index.add %o_row, %s_v : index
+    %o_fits = index.cmp ule, %o_end, %dst_span : index
+    scf.if %o_fits {
+      scf.if %store_out {
+        %o_byte = index.scale %o_row, %b4 : index, offset -> offset
+        %o_view = buffer.view %dst[%o_byte] : buffer -> view<[%s_v]xf32>
+        view.store %o, %o_view[%j] : f32, view<[%s_v]xf32>
+      }
+    }
+
+    %slot = index.sub %t_last, %t : index
+    %keep = index.cmp ult, %slot, %n_slots : index
+    %slot_off = index.mul %slot, %slot_stride : index
+    %sb = index.add %snap_head, %slot_off : index
+    %sb_end = index.add %sb, %ss : index
+    %sb_fits = index.cmp ule, %sb_end, %dst_span : index
+    %keep_ok = scalar.andi %keep, %sb_fits : i1
+    scf.if %keep_ok {
+      scf.if %col_ok {
+        %sb_byte = index.scale %sb, %b4 : index, offset -> offset
+        %snap = buffer.view %dst[%sb_byte] : buffer -> view<[%ss]xf32>
+        vector.store %new, %snap[%st_lane] : vector<[%rpl]xf32>, view<[%ss]xf32>
+      }
+    }
+    scf.yield %new : vector<[%rpl]xf32>
+  }
+  kernel.return
+}

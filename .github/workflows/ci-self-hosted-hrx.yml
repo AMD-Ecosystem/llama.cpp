@@ -1,0 +1,114 @@
+name: CI (self-hosted HRX backend)
+
+on:
+  workflow_dispatch: # allows manual triggering
+  push:
+    branches:
+      - master
+    paths: [
+      '.github/workflows/ci-self-hosted-hrx.yml',
+      '.github/actions/linux-setup-hrx/**',
+      'ci/run.sh',
+      '**/CMakeLists.txt',
+      '**/.cmake',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp',
+      '**/*.loom'
+    ]
+
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: [
+      '.github/workflows/ci-self-hosted-hrx.yml',
+      '.github/actions/linux-setup-hrx/**',
+      'ci/run.sh',
+      '**/CMakeLists.txt',
+      '**/.cmake',
+      'ggml/src/*',
+      'ggml/src/ggml-cpu/**',
+      'ggml/src/ggml-hrx/**'
+    ]
+
+cache-mode: none
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  # Sync versions in build-hrx.yml, ci-self-hosted-hrx.yml, release.yml, build-cache.yml, docs/build.md
+  HRX_VERSION: "0.2.0"
+  # note: this is dud token to avoid rate limiting (https://github.com/ggml-org/llama.cpp/pull/25706#issuecomment-4979941302)
+  HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
+  GGML_NLOOP: 3
+  GGML_N_THREADS: 1
+  LLAMA_ARG_LOG_COLORS: 1
+  LLAMA_ARG_LOG_PREFIX: 1
+  LLAMA_ARG_LOG_TIMESTAMPS: 1
+
+jobs:
+  gpu-hrx:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Strix Halo (iGPU, RDNA3.5)
+          - gpu: gfx1151
+            runner: [self-hosted, Linux, strix-halo, devlab-dispatch]
+          # Radeon AI PRO R9700 (dGPU, RDNA4)
+          - gpu: gfx1201
+            runner: [self-hosted, Linux, radeon-r9700, devlab-dispatch]
+
+    name: gpu-hrx (${{ matrix.gpu }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Verify GPU device
+        run: |
+          ls /dev/kfd /dev/dri/renderD* || { echo "ERROR: no amdgpu compute device"; exit 1; }
+
+      - name: Setup HRX SDK
+        uses: ./.github/actions/linux-setup-hrx
+        with:
+          path: ${{ runner.temp }}/hrx_sdk
+          version: ${{ env.HRX_VERSION }}
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          restore: false
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        with:
+          key: self-hosted-gpu-hrx-${{ matrix.gpu }}
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          "$RUNNER_TEMP/hrx_sdk/bin/hrx-info"
+          GG_BUILD_HRX=1 HRX_SDK_PATH="$RUNNER_TEMP/hrx_sdk" bash ./ci/run.sh "$RUNNER_TEMP/results/llama.cpp" "$RUNNER_TEMP/mnt/llama.cpp"
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: self-hosted-gpu-hrx-${{ matrix.gpu }}
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true

@@ -1,0 +1,92 @@
+// src can be empty. Then the kernel does not read the src binding. dst must be contiguous.
+
+config.decl @ggml.elementwise.wg_size : %value: index where [range(%value, 64, 1024), multiple_of(%value, 64)]
+
+target.decl @ggml_wave64
+
+kernel.def target(@ggml_wave64) export("ggml_pad_f32") @ggml_pad_f32(%n: index) {
+  %one = index.constant 1 : index
+  %wg_size = config.get @ggml.elementwise.wg_size : index
+  %round = index.sub %wg_size, %one : index
+  %n_round = index.add %n, %round : index
+  %groups = index.div %n_round, %wg_size : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%wg_size, %one, %one) : index
+} launch(%n_in: index, %d0_in: index, %d1_in: index, %d2_in: index, %ne0_in: index, %ne1_in: index, %ne2_in: index, %ne3_in: index, %lp0_in: index, %lp1_in: index, %lp2_in: index, %lp3_in: index, %s0_in: index, %s1_in: index, %s2_in: index, %s3_in: index, %span_in: index, %src: buffer, %dst: buffer) {
+  // supports_pad checks these ranges.
+  %n = index.assume %n_in [range(%n_in, 1, 2147483647)] : index
+  %d0 = index.assume %d0_in [range(%d0_in, 1, 2147483647)] : index
+  %d1 = index.assume %d1_in [range(%d1_in, 1, 2147483647)] : index
+  %d2 = index.assume %d2_in [range(%d2_in, 1, 2147483647)] : index
+  %ne0 = index.assume %ne0_in [range(%ne0_in, 0, 2147483647)] : index
+  %ne1 = index.assume %ne1_in [range(%ne1_in, 0, 2147483647)] : index
+  %ne2 = index.assume %ne2_in [range(%ne2_in, 0, 2147483647)] : index
+  %ne3 = index.assume %ne3_in [range(%ne3_in, 0, 2147483647)] : index
+  %lp0 = index.assume %lp0_in [range(%lp0_in, 0, 2147483647)] : index
+  %lp1 = index.assume %lp1_in [range(%lp1_in, 0, 2147483647)] : index
+  %lp2 = index.assume %lp2_in [range(%lp2_in, 0, 2147483647)] : index
+  %lp3 = index.assume %lp3_in [range(%lp3_in, 0, 2147483647)] : index
+  %s0 = index.assume %s0_in [range(%s0_in, 0, 2147483647)] : index
+  %s1 = index.assume %s1_in [range(%s1_in, 0, 2147483647)] : index
+  %s2 = index.assume %s2_in [range(%s2_in, 0, 2147483647)] : index
+  %s3 = index.assume %s3_in [range(%s3_in, 0, 2147483647)] : index
+  %span = index.assume %span_in [range(%span_in, 1, 2147483647)] : index
+  %wg_size = config.get @ggml.elementwise.wg_size : index
+  %group = kernel.workgroup.id<x> : index
+  %item = kernel.workitem.id<x> : index
+  %base = index.mul %group, %wg_size : index
+  %i = index.add %base, %item : index
+  %in_bounds = index.cmp ult, %i, %n : index
+  %zero = index.constant 0 : offset
+  %zero_f32 = scalar.constant 0.0 : f32
+  %src_view = buffer.view %src[%zero] : buffer -> view<[%span]xf32>
+  %dst_view = buffer.view %dst[%zero] : buffer -> view<[%n]xf32>
+  scf.if %in_bounds {
+    %i0 = index.rem %i, %d0 : index
+    %q0 = index.div %i, %d0 : index
+    %i1 = index.rem %q0, %d1 : index
+    %q1 = index.div %q0, %d1 : index
+    %i2 = index.rem %q1, %d2 : index
+    %i3 = index.div %q1, %d2 : index
+
+    %ge0 = index.cmp uge, %i0, %lp0 : index
+    %ge1 = index.cmp uge, %i1, %lp1 : index
+    %ge2 = index.cmp uge, %i2, %lp2 : index
+    %ge3 = index.cmp uge, %i3, %lp3 : index
+    %ge01 = scalar.andi %ge0, %ge1 : i1
+    %ge23 = scalar.andi %ge2, %ge3 : i1
+    %ge = scalar.andi %ge01, %ge23 : i1
+    scf.if %ge {
+      %j0 = index.sub %i0, %lp0 : index
+      %j1 = index.sub %i1, %lp1 : index
+      %j2 = index.sub %i2, %lp2 : index
+      %j3 = index.sub %i3, %lp3 : index
+      %lt0 = index.cmp ult, %j0, %ne0 : index
+      %lt1 = index.cmp ult, %j1, %ne1 : index
+      %lt2 = index.cmp ult, %j2, %ne2 : index
+      %lt3 = index.cmp ult, %j3, %ne3 : index
+      %lt01 = scalar.andi %lt0, %lt1 : i1
+      %lt23 = scalar.andi %lt2, %lt3 : i1
+      %in_src = scalar.andi %lt01, %lt23 : i1
+      scf.if %in_src {
+        %o0 = index.mul %j0, %s0 : index
+        %o1 = index.mul %j1, %s1 : index
+        %o2 = index.mul %j2, %s2 : index
+        %o3 = index.mul %j3, %s3 : index
+        %o01 = index.add %o0, %o1 : index
+        %o23 = index.add %o2, %o3 : index
+        %idx = index.add %o01, %o23 : index
+        %off = index.assume %idx [range(%idx, 0, 2147483646)] : index
+        %ok = index.cmp ult, %off, %span : index
+        scf.if %ok {
+          %x = view.load %src_view[%off] : view<[%span]xf32> -> f32
+          view.store %x, %dst_view[%i] : f32, view<[%n]xf32>
+        }
+      } else {
+        view.store %zero_f32, %dst_view[%i] : f32, view<[%n]xf32>
+      }
+    } else {
+      view.store %zero_f32, %dst_view[%i] : f32, view<[%n]xf32>
+    }
+  }
+  kernel.return
+}

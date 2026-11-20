@@ -1,0 +1,180 @@
+// q4_K block of 256 values in 144 bytes: f16 d, f16 dmin, 12 bytes of 6-bit scales and mins, 128 bytes of nibbles.
+// src strides are in bytes. dst must be contiguous.
+// A row id out of range leaves the dst element unchanged.
+
+config.decl @ggml.elementwise.wg_size : %value: index where [range(%value, 64, 1024), multiple_of(%value, 64)]
+
+target.decl @ggml_wave64
+
+kernel.def target(@ggml_wave64) export("ggml_get_rows_q4_k") @ggml_get_rows_q4_k(%n: index) {
+  %one = index.constant 1 : index
+  %wg_size = config.get @ggml.elementwise.wg_size : index
+  %round = index.sub %wg_size, %one : index
+  %n_round = index.add %n, %round : index
+  %groups = index.div %n_round, %wg_size : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%wg_size, %one, %one) : index
+} launch(%n_in: index, %ne0_in: index, %ne1_in: index, %ne2_in: index, %src_rows_in: index, %b1_in: index, %b2_in: index, %b3_in: index, %src_bytes_in: index, %ids_s0_in: index, %ids_s1_in: index, %ids_s2_in: index, %ids_span_in: index, %src: buffer, %ids: buffer, %dst: buffer) {
+  // supports_get_rows checks these ranges. It also makes sure that byte strides and the src offset are even.
+  %n = index.assume %n_in [range(%n_in, 1, 2147483647)] : index
+  %ne0 = index.assume %ne0_in [range(%ne0_in, 1, 2147483647)] : index
+  %ne1 = index.assume %ne1_in [range(%ne1_in, 1, 2147483647)] : index
+  %ne2 = index.assume %ne2_in [range(%ne2_in, 1, 2147483647)] : index
+  %src_rows = index.assume %src_rows_in [range(%src_rows_in, 1, 2147483647)] : index
+  %b1 = index.assume %b1_in [range(%b1_in, 0, 2147483647)] : index
+  %b2 = index.assume %b2_in [range(%b2_in, 0, 2147483647)] : index
+  %b3 = index.assume %b3_in [range(%b3_in, 0, 2147483647)] : index
+  %src_bytes = index.assume %src_bytes_in [range(%src_bytes_in, 2, 2147483646)] : index
+  %ids_s0 = index.assume %ids_s0_in [range(%ids_s0_in, 0, 2147483647)] : index
+  %ids_s1 = index.assume %ids_s1_in [range(%ids_s1_in, 0, 2147483647)] : index
+  %ids_s2 = index.assume %ids_s2_in [range(%ids_s2_in, 0, 2147483647)] : index
+  %ids_span = index.assume %ids_span_in [range(%ids_span_in, 1, 2147483647)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %c144 = index.constant 144 : index
+  %c256 = index.constant 256 : index
+  %wg_size = config.get @ggml.elementwise.wg_size : index
+  %group = kernel.workgroup.id<x> : index
+  %item = kernel.workitem.id<x> : index
+  %base = index.mul %group, %wg_size : index
+  %i = index.add %base, %item : index
+  %in_bounds = index.cmp ult, %i, %n : index
+  %zero = index.constant 0 : offset
+  %src_halves = index.div %src_bytes, %c2 : index
+  %src_u8 = buffer.view %src[%zero] : buffer -> view<[%src_bytes]xi8>
+  %src_f16 = buffer.view %src[%zero] : buffer -> view<[%src_halves]xf16>
+  %ids_view = buffer.view %ids[%zero] : buffer -> view<[%ids_span]xi32>
+  %dst_view = buffer.view %dst[%zero] : buffer -> view<[%n]xf32>
+  scf.if %in_bounds {
+    %i0 = index.rem %i, %ne0 : index
+    %t0 = index.div %i, %ne0 : index
+    %i1 = index.rem %t0, %ne1 : index
+    %t1 = index.div %t0, %ne1 : index
+    %i2 = index.rem %t1, %ne2 : index
+    %i3 = index.div %t1, %ne2 : index
+
+    %io0 = index.mul %i1, %ids_s0 : index
+    %io1 = index.mul %i2, %ids_s1 : index
+    %io2 = index.mul %i3, %ids_s2 : index
+    %io01 = index.add %io0, %io1 : index
+    %ids_idx = index.add %io01, %io2 : index
+    %ids_off = index.assume %ids_idx [range(%ids_idx, 0, 2147483646)] : index
+    %ids_ok = index.cmp ult, %ids_off, %ids_span : index
+    scf.if %ids_ok {
+      %row_i32 = view.load %ids_view[%ids_off] : view<[%ids_span]xi32> -> i32
+      %row = index.cast %row_i32 : i32 to index
+      %row_nonneg = index.cmp sge, %row, %c0 : index
+      scf.if %row_nonneg {
+        %row_below = index.cmp ult, %row, %src_rows : index
+        scf.if %row_below {
+          %blk = index.div %i0, %c256 : index
+          %q = index.rem %i0, %c256 : index
+          %bo1 = index.mul %row, %b1 : index
+          %bo2 = index.mul %i2, %b2 : index
+          %bo3 = index.mul %i3, %b3 : index
+          %bo0 = index.mul %blk, %c144 : index
+          %bo01 = index.add %bo0, %bo1 : index
+          %bo23 = index.add %bo2, %bo3 : index
+          %blk_raw = index.add %bo01, %bo23 : index
+          %blk_byte = index.assume %blk_raw [range(%blk_raw, 0, 2147483646)] : index
+
+          %jj = index.div %q, %c64 : index
+          %q64 = index.rem %q, %c64 : index
+          %hi = index.cmp uge, %q64, %c32 : index
+          %l = index.rem %q, %c32 : index
+          %is2 = index.mul %jj, %c2 : index
+          %hi_idx = scf.select %hi, %c1, %c0 : index
+          %is = index.add %is2, %hi_idx : index
+          %r = index.rem %is, %c4 : index
+          %is_lo = index.cmp ult, %is, %c4 : index
+
+          %half_idx = index.div %blk_byte, %c2 : index
+          %d_idx = index.assume %half_idx [range(%half_idx, 0, 2147483645)] : index
+          %dmin_raw = index.add %d_idx, %c1 : index
+          %dmin_idx = index.assume %dmin_raw [range(%dmin_raw, 0, 2147483646)] : index
+          %sc_base = index.add %blk_byte, %c4 : index
+          %a_raw = index.add %sc_base, %r : index
+          %b_raw = index.add %a_raw, %c4 : index
+          %c_raw = index.add %a_raw, %c8 : index
+          %qs_base = index.add %blk_byte, %c16 : index
+          %qs_j = index.mul %jj, %c32 : index
+          %qs_jl = index.add %qs_j, %l : index
+          %qb_raw = index.add %qs_base, %qs_jl : index
+          %a_idx = index.assume %a_raw [range(%a_raw, 0, 2147483646)] : index
+          %b_idx = index.assume %b_raw [range(%b_raw, 0, 2147483646)] : index
+          %c_idx = index.assume %c_raw [range(%c_raw, 0, 2147483646)] : index
+          %qb_idx = index.assume %qb_raw [range(%qb_raw, 0, 2147483646)] : index
+
+          %d_ok = index.cmp ult, %dmin_idx, %src_halves : index
+          scf.if %d_ok {
+            %d_in = index.cmp ult, %d_idx, %src_halves : index
+            scf.if %d_in {
+              %a_ok = index.cmp ult, %a_idx, %src_bytes : index
+              scf.if %a_ok {
+                %b_ok = index.cmp ult, %b_idx, %src_bytes : index
+                scf.if %b_ok {
+                  %c_ok = index.cmp ult, %c_idx, %src_bytes : index
+                  scf.if %c_ok {
+                    %qb_ok = index.cmp ult, %qb_idx, %src_bytes : index
+                    scf.if %qb_ok {
+                      %d_h = view.load %src_f16[%d_idx] : view<[%src_halves]xf16> -> f16
+                      %dmin_h = view.load %src_f16[%dmin_idx] : view<[%src_halves]xf16> -> f16
+                      %a_i8 = view.load %src_u8[%a_idx] : view<[%src_bytes]xi8> -> i8
+                      %b_i8 = view.load %src_u8[%b_idx] : view<[%src_bytes]xi8> -> i8
+                      %c_i8 = view.load %src_u8[%c_idx] : view<[%src_bytes]xi8> -> i8
+                      %qb_i8 = view.load %src_u8[%qb_idx] : view<[%src_bytes]xi8> -> i8
+                      %d = scalar.extf %d_h : f16 to f32
+                      %dmin = scalar.extf %dmin_h : f16 to f32
+                      %a = scalar.extui %a_i8 : i8 to i32
+                      %b = scalar.extui %b_i8 : i8 to i32
+                      %c = scalar.extui %c_i8 : i8 to i32
+                      %qb = scalar.extui %qb_i8 : i8 to i32
+
+                      // Same as get_scale_min_k4 in ggml-quants.c.
+                      %m63 = scalar.constant 63 : i32
+                      %m15 = scalar.constant 15 : i32
+                      %k4 = scalar.constant 4 : i32
+                      %k6 = scalar.constant 6 : i32
+                      %sc_lo = scalar.andi %a, %m63 : i32
+                      %mn_lo = scalar.andi %b, %m63 : i32
+                      %c_lo = scalar.andi %c, %m15 : i32
+                      %c_hi = scalar.shrui %c, %k4 : i32
+                      %a_top = scalar.shrui %a, %k6 : i32
+                      %b_top = scalar.shrui %b, %k6 : i32
+                      %a_top4 = scalar.shli %a_top, %k4 : i32
+                      %b_top4 = scalar.shli %b_top, %k4 : i32
+                      %sc_hi = scalar.ori %c_lo, %a_top4 : i32
+                      %mn_hi = scalar.ori %c_hi, %b_top4 : i32
+                      %sc = scf.select %is_lo, %sc_lo, %sc_hi : i32
+                      %mn = scf.select %is_lo, %mn_lo, %mn_hi : i32
+
+                      %nib_lo = scalar.andi %qb, %m15 : i32
+                      %nib_hi = scalar.shrui %qb, %k4 : i32
+                      %nib = scf.select %hi, %nib_hi, %nib_lo : i32
+
+                      %sc_f = scalar.uitofp %sc : i32 to f32
+                      %mn_f = scalar.uitofp %mn : i32 to f32
+                      %nib_f = scalar.uitofp %nib : i32 to f32
+                      %d1 = scalar.mulf %d, %sc_f : f32
+                      %m1 = scalar.mulf %dmin, %mn_f : f32
+                      %dq = scalar.mulf %d1, %nib_f : f32
+                      %y = scalar.subf %dq, %m1 : f32
+                      view.store %y, %dst_view[%i] : f32, view<[%n]xf32>
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  kernel.return
+}

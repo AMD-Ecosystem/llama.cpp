@@ -1,0 +1,98 @@
+// Raw loads and byte decodes that several formats use.
+
+template.decl @ggml.u8.affine4(%word: i32, %scale: f32, %bias: f32) -> (vector<4xf32>)
+
+template.def<@ggml.u8.affine4> device @ggml_u8_affine4(%word: i32, %scale: f32, %bias: f32) -> (vector<4xf32>) {
+  %word_vector = vector.from_elements %word : vector<1xi32>
+  %bytes = vector.bitcast %word_vector : vector<1xi32> to vector<4xi8>
+  %values = vector.uitofp %bytes : vector<4xi8> to vector<4xf32>
+  %scale_vector = vector.splat %scale : vector<4xf32>
+  %bias_vector = vector.splat %bias : vector<4xf32>
+  %result = vector.fmaf %values, %scale_vector, %bias_vector : vector<4xf32>
+  template.return %result : vector<4xf32>
+}
+
+template.decl @ggml.mem.word(%weight: buffer, %span: index, %index: index) -> (i32)
+
+template.def<@ggml.mem.word> device @ggml_mem_word(%weight: buffer, %span: index, %index: index) -> (i32) {
+  %c0_offset = index.constant 0 : offset
+  %c0_i32 = scalar.constant 0 : i32
+  %words = buffer.view %weight[%c0_offset] : buffer -> view<[%span]xi32>
+  %off = index.assume %index [range(%index, 0, 2147483646)] : index
+  %ok = index.cmp ult, %off, %span : index
+  %value = scf.if %ok -> (i32) {
+    %loaded = view.load %words[%off] : view<[%span]xi32> -> i32
+    scf.yield %loaded : i32
+  } else {
+    scf.yield %c0_i32 : i32
+  }
+  template.return %value : i32
+}
+
+template.decl @ggml.mem.half(%weight: buffer, %span: index, %index: index) -> (i16)
+
+template.def<@ggml.mem.half> device @ggml_mem_half(%weight: buffer, %span: index, %index: index) -> (i16) {
+  %c0_offset = index.constant 0 : offset
+  %c0_i16 = scalar.constant 0 : i16
+  %halves = buffer.view %weight[%c0_offset] : buffer -> view<[%span]xi16>
+  %off = index.assume %index [range(%index, 0, 2147483646)] : index
+  %ok = index.cmp ult, %off, %span : index
+  %value = scf.if %ok -> (i16) {
+    %loaded = view.load %halves[%off] : view<[%span]xi16> -> i16
+    scf.yield %loaded : i16
+  } else {
+    scf.yield %c0_i16 : i16
+  }
+  template.return %value : i16
+}
+
+template.decl @ggml.mem.half_word(%weight: buffer, %span: index, %index: index) -> (vector<1xi32>)
+
+// The packed data is only 2-byte aligned. Thus this makes one word from two halves.
+template.def<@ggml.mem.half_word> device @ggml_mem_half_word(%weight: buffer, %span: index, %index: index) -> (vector<1xi32>) {
+  %c1 = index.constant 1 : index
+  %index1 = index.add %index, %c1 : index
+  %lo = template.apply<@ggml.mem.half>(%weight, %span, %index) : (buffer, index, index) -> (i16)
+  %hi = template.apply<@ggml.mem.half>(%weight, %span, %index1) : (buffer, index, index) -> (i16)
+  %pair = vector.from_elements %lo, %hi : vector<2xi16>
+  %word = vector.bitcast %pair : vector<2xi16> to vector<1xi32>
+  template.return %word : vector<1xi32>
+}
+
+template.decl @ggml.mem.words4_clamped(%weight: buffer, %w_span: index, %index: index) -> (vector<4xi32>)
+
+// The load has no guard. A guard merge waits for the data immediately, and this stops the prefetch.
+// The clamp is safe because a K-quant weight has at least one block. Callers do not store values from a clamped index.
+template.def<@ggml.mem.words4_clamped> device @ggml_mem_words4_clamped(%weight: buffer, %w_span: index, %index: index) -> (vector<4xi32>) {
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c0_offset = index.constant 0 : offset
+  %w_span_blocks = index.assume %w_span [range(%w_span, 36, 2147483647)] : index
+  %span_last = index.sub %w_span_blocks, %c4 : index
+  %limit0 = index.sub %w_span_blocks, %c3 : index
+  %clamped0 = index.min %index, %span_last : index
+  %clamped, %limit = index.assume %clamped0, %limit0 [lt(%clamped0, %limit0)] : index, index
+  %extent = index.add %limit, %c3 : index
+  %words = buffer.view %weight[%c0_offset] : buffer -> view<[%extent]xi32>
+  %values = vector.load %words[%clamped] : view<[%extent]xi32> -> vector<4xi32>
+  template.return %values : vector<4xi32>
+}
+
+template.decl @ggml.mem.halves8_clamped(%weight: buffer, %w_span: index, %index: index) -> (vector<8xi16>)
+
+// The load has no guard, like @ggml.mem.words4_clamped. A Q6_K or Q8_0 weight has at least one 17-half block.
+template.def<@ggml.mem.halves8_clamped> device @ggml_mem_halves8_clamped(%weight: buffer, %w_span: index, %index: index) -> (vector<8xi16>) {
+  %c7 = index.constant 7 : index
+  %c8 = index.constant 8 : index
+  %c0_offset = index.constant 0 : offset
+  %w_span_blocks = index.assume %w_span [range(%w_span, 17, 2147483647)] : index
+  %span_last = index.sub %w_span_blocks, %c8 : index
+  %limit0 = index.sub %w_span_blocks, %c7 : index
+  %index_bounded = index.assume %index [range(%index, 0, 2147483646)] : index
+  %clamped0 = index.min %index_bounded, %span_last : index
+  %clamped, %limit = index.assume %clamped0, %limit0 [lt(%clamped0, %limit0)] : index, index
+  %extent = index.add %limit, %c7 : index
+  %halves = buffer.view %weight[%c0_offset] : buffer -> view<[%extent]xi16>
+  %values = vector.load %halves[%clamped] : view<[%extent]xi16> -> vector<8xi16>
+  template.return %values : vector<8xi16>
+}

@@ -1,0 +1,236 @@
+// For F32 or BF16 weights and more than 8 input columns. The products stay in f32.
+// The caller makes sure that K is a multiple of 8 and that the input is contiguous along K.
+
+config.decl @ggml.mul_mat.weight_type : %value: index where [range(%value, 0, 6)]
+
+config.decl @ggml.mul_mat_f32.depth : %value: index where [range(%value, 1, 4)]
+
+// Waves that split K.
+config.decl @ggml.mul_mat_f32.k_split : %value: index where [range(%value, 1, 16), power_of_two(%value)]
+
+target.decl @ggml_wave32
+
+template.decl @ggml.f32.load8_clamped(%buf: buffer, %span: index, %index: index) -> (vector<8xf32>)
+
+template.decl @ggml.weight.load8_f32(%wtype: index, %weight: buffer, %w_span: index, %index: index) -> (vector<8xf32>)
+
+func.decl @ggml_hrx_mm_store(%dst: buffer, %d_span: index, %index: index, %value: f32)
+
+func.def inline @ggml_hrx_mmf32_base(%first: index, %i: index, %last: index, %stride: index, %batch: index) -> (index) {
+  %row = index.add %first, %i : index
+  %clamped = index.min %row, %last : index
+  %offset = index.mul %clamped, %stride : index
+  %base = index.add %batch, %offset : index
+  func.return %base : index
+}
+
+func.def inline @ggml_hrx_mmf32_spill(%red: buffer, %k_split: index, %s: index, %col: index, %row0: index, %acc: vector<4xf32>) {
+  %c0_offset = index.constant 0 : offset
+  %c32 = index.constant 32 : index
+  %red_view = buffer.view %red[%c0_offset] : buffer -> view<[%k_split]x512xf32>
+  %col_base = index.mul %col, %c32 : index
+  %slot = index.add %col_base, %row0 : index
+  vector.store %acc, %red_view[%s, %slot] : vector<4xf32>, view<[%k_split]x512xf32>
+  func.return
+}
+
+// Subgroups split K. This gives more waves when there are few weight rows.
+// Column tiles change fastest. Thus the workgroups of one row tile read the same weights at the same time.
+kernel.def target(@ggml_wave32) export("ggml_mul_mat_f32") @ggml_mul_mat_f32(%n_rows: index, %n_cols: index, %n_batch: index) {
+  %one = index.constant 1 : index
+  %k_split = config.get @ggml.mul_mat_f32.k_split : index
+  %c15 = index.constant 15 : index
+  %c16 = index.constant 16 : index
+  %c31 = index.constant 31 : index
+  %c32 = index.constant 32 : index
+  %wg_size = index.mul %k_split, %c32 : index
+  %rows_round = index.add %n_rows, %c31 : index
+  %row_tiles = index.div %rows_round, %c32 : index
+  %cols_round = index.add %n_cols, %c15 : index
+  %col_tiles = index.div %cols_round, %c16 : index
+  kernel.launch.config workgroups(%col_tiles, %row_tiles, %n_batch) workgroup_size(%wg_size, %one, %one) : index
+} launch(%k_size_in: index, %n_rows_in: index, %n_cols_in: index, %ne12_in: index, %r2_in: index, %r3_in: index, %w_s1_in: index, %w_s2_in: index, %w_s3_in: index, %w_span_in: index, %x_s0_in: index, %x_s1_in: index, %x_s2_in: index, %x_s3_in: index, %x_span_in: index, %d_s1_in: index, %d_s2_in: index, %d_s3_in: index, %d_span_in: index, %weight: buffer, %input: buffer, %dst: buffer) {
+  // supports_mul_mat checks these ranges.
+  %k_size = index.assume %k_size_in [range(%k_size_in, 8, 2147483647)] : index
+  %n_rows = index.assume %n_rows_in [range(%n_rows_in, 1, 2147483647)] : index
+  %n_cols = index.assume %n_cols_in [range(%n_cols_in, 1, 2147483647)] : index
+  %ne12 = index.assume %ne12_in [range(%ne12_in, 1, 2147483647)] : index
+  %r2 = index.assume %r2_in [range(%r2_in, 1, 2147483647)] : index
+  %r3 = index.assume %r3_in [range(%r3_in, 1, 2147483647)] : index
+  %w_s1 = index.assume %w_s1_in [range(%w_s1_in, 0, 2147483647)] : index
+  %w_s2 = index.assume %w_s2_in [range(%w_s2_in, 0, 2147483647)] : index
+  %w_s3 = index.assume %w_s3_in [range(%w_s3_in, 0, 2147483647)] : index
+  %w_span = index.assume %w_span_in [range(%w_span_in, 8, 2147483647)] : index
+  %x_s1 = index.assume %x_s1_in [range(%x_s1_in, 0, 2147483647)] : index
+  %x_s2 = index.assume %x_s2_in [range(%x_s2_in, 0, 2147483647)] : index
+  %x_s3 = index.assume %x_s3_in [range(%x_s3_in, 0, 2147483647)] : index
+  %x_span = index.assume %x_span_in [range(%x_span_in, 8, 2147483647)] : index
+  %d_s1 = index.assume %d_s1_in [range(%d_s1_in, 0, 2147483647)] : index
+  %d_s2 = index.assume %d_s2_in [range(%d_s2_in, 0, 2147483647)] : index
+  %d_s3 = index.assume %d_s3_in [range(%d_s3_in, 0, 2147483647)] : index
+  %d_span = index.assume %d_span_in [range(%d_span_in, 1, 2147483647)] : index
+  %wtype = config.get @ggml.mul_mat.weight_type : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %k_split = config.get @ggml.mul_mat_f32.k_split : index
+  %k_split_m1 = index.sub %k_split, %c1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c7 = index.constant 7 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c256 = index.constant 256 : index
+  %c0_offset = index.constant 0 : offset
+  %zero_f32 = scalar.constant 0.0 : f32
+  %zero4 = vector.splatf 0.0 : vector<4xf32>
+  %t0 = kernel.workitem.id<x> : index
+  %wg_size = index.mul %k_split, %c32 : index
+  %t_last = index.sub %wg_size, %c1 : index
+  %t = index.assume %t0 [range(%t0, 0, %t_last)] : index
+  %s0 = kernel.subgroup.id : index
+  %s = index.assume %s0 [range(%s0, 0, %k_split_m1)] : index
+  %lane0 = kernel.subgroup.lane.id : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 31)] : index
+  %row_tile = kernel.workgroup.id<y> : index
+  %col_tile = kernel.workgroup.id<x> : index
+  %batch = kernel.workgroup.id<z> : index
+  %weight_noalias, %input_noalias, %dst_noalias = buffer.assume.noalias %weight, %input, %dst : buffer, buffer, buffer
+
+  %i12 = index.rem %batch, %ne12 : index
+  %i13 = index.div %batch, %ne12 : index
+  %i02 = index.div %i12, %r2 : index
+  %i03 = index.div %i13, %r3 : index
+  %w2 = index.mul %i02, %w_s2 : index
+  %w3 = index.mul %i03, %w_s3 : index
+  %w_batch = index.add %w2, %w3 : index
+  %x2 = index.mul %i12, %x_s2 : index
+  %x3 = index.mul %i13, %x_s3 : index
+  %x_batch = index.add %x2, %x3 : index
+  %d2 = index.mul %i12, %d_s2 : index
+  %d3 = index.mul %i13, %d_s3 : index
+  %d_batch = index.add %d2, %d3 : index
+  %tile_row0 = index.mul %row_tile, %c32 : index
+  %tile_col0 = index.mul %col_tile, %c16 : index
+
+  // Clamped rows and columns read valid memory. Their results are not stored.
+  %slot_bytes = index.constant 3072 : offset
+  %stage_bytes = index.scale %k_split, %slot_bytes : index, offset -> offset
+  %stage = buffer.alloca<workgroup> align(16) %stage_bytes : buffer
+  %slots = index.add %k_split, %k_split : index
+  %stage_view = buffer.view %stage[%c0_offset] : buffer -> view<[%slots]x384xf32>
+  %last_row = index.sub %n_rows, %c1 : index
+  %last_col = index.sub %n_cols, %c1 : index
+  %stage_col = index.rem %lane, %c16 : index
+  %stages_input = index.cmp ult, %lane, %c16 : index
+  %wb = func.call @ggml_hrx_mmf32_base(%tile_row0, %lane, %last_row, %w_s1, %w_batch) : (index, index, index, index, index) -> (index)
+  %xb = func.call @ggml_hrx_mmf32_base(%tile_col0, %stage_col, %last_col, %x_s1, %x_batch) : (index, index, index, index, index) -> (index)
+  %row_group = index.rem %lane, %c8 : index
+  %col_group = index.div %lane, %c8 : index
+  %row_local0 = index.mul %row_group, %c4 : index
+  %col_local0 = index.mul %col_group, %c4 : index
+  %x_local0 = index.add %col_local0, %c256 : index
+
+  // All subgroups run the same number of steps, because each step has a workgroup barrier.
+  %n_steps = index.div %k_size, %c8 : index
+  %last_step = index.sub %n_steps, %c1 : index
+  %steps_round = index.add %n_steps, %k_split_m1 : index
+  %n_iter = index.div %steps_round, %k_split : index
+  %s2 = index.mul %s, %c2 : index
+  %depth = config.get @ggml.mul_mat_f32.depth : index
+  %acc0, %acc1, %acc2, %acc3 = scf.for %it = [%c0 to %n_iter step %c1](%a0 = %zero4 : vector<4xf32>, %a1 = %zero4 : vector<4xf32>, %a2 = %zero4 : vector<4xf32>, %a3 = %zero4 : vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) pipeline(%depth) {
+    %it_first = index.mul %it, %k_split : index
+    %step = index.add %it_first, %s : index
+    %valid = index.cmp ult, %step, %n_steps : index
+    %step_c = index.min %step, %last_step : index
+    %k = index.mul %step_c, %c8 : index
+    %buf = index.rem %it, %c2 : index
+    %slot = index.add %s2, %buf : index
+    %wi = index.add %wb, %k : index
+    %xi = index.add %xb, %k : index
+    %wv = template.apply<@ggml.weight.load8_f32>(%wtype, %weight_noalias, %w_span, %wi) : (index, buffer, index, index) -> (vector<8xf32>)
+    %xv = template.apply<@ggml.f32.load8_clamped>(%input_noalias, %x_span, %xi) : (buffer, index, index) -> (vector<8xf32>)
+    scf.for %e = [%c0 to %c8 step %c1] unroll {
+      %w_e = vector.extract %wv[%e] : vector<8xf32> -> f32
+      %w_slot0 = index.mul %e, %c32 : index
+      %w_slot = index.add %w_slot0, %lane : index
+      view.store %w_e, %stage_view[%slot, %w_slot] : f32, view<[%slots]x384xf32>
+    }
+    scf.if %stages_input {
+      scf.for %e = [%c0 to %c8 step %c1] unroll {
+        %x_e = vector.extract %xv[%e] : vector<8xf32> -> f32
+        %x_slot0 = index.mul %e, %c16 : index
+        %x_slot1 = index.add %x_slot0, %c256 : index
+        %x_slot = index.add %x_slot1, %stage_col : index
+        view.store %x_e, %stage_view[%slot, %x_slot] : f32, view<[%slots]x384xf32>
+      }
+    }
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    %n0, %n1, %n2, %n3 = scf.if %valid -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
+      %r0, %r1, %r2, %r3 = scf.for %e = [%c0 to %c8 step %c1](%b0 = %a0 : vector<4xf32>, %b1 = %a1 : vector<4xf32>, %b2 = %a2 : vector<4xf32>, %b3 = %a3 : vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) unroll {
+        %w_off0 = index.mul %e, %c32 : index
+        %w_off = index.add %w_off0, %row_local0 : index
+        %x_off0 = index.mul %e, %c16 : index
+        %x_off = index.add %x_off0, %x_local0 : index
+        %w4 = vector.load %stage_view[%slot, %w_off] : view<[%slots]x384xf32> -> vector<4xf32>
+        %x4 = vector.load %stage_view[%slot, %x_off] : view<[%slots]x384xf32> -> vector<4xf32>
+        %x_0 = vector.extract %x4[0] : vector<4xf32> -> f32
+        %x_1 = vector.extract %x4[1] : vector<4xf32> -> f32
+        %x_2 = vector.extract %x4[2] : vector<4xf32> -> f32
+        %x_3 = vector.extract %x4[3] : vector<4xf32> -> f32
+        %xs0 = vector.splat %x_0 : vector<4xf32>
+        %xs1 = vector.splat %x_1 : vector<4xf32>
+        %xs2 = vector.splat %x_2 : vector<4xf32>
+        %xs3 = vector.splat %x_3 : vector<4xf32>
+        %c0n = vector.fmaf %w4, %xs0, %b0 : vector<4xf32>
+        %c1n = vector.fmaf %w4, %xs1, %b1 : vector<4xf32>
+        %c2n = vector.fmaf %w4, %xs2, %b2 : vector<4xf32>
+        %c3n = vector.fmaf %w4, %xs3, %b3 : vector<4xf32>
+        scf.yield %c0n, %c1n, %c2n, %c3n : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+      }
+      scf.yield %r0, %r1, %r2, %r3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+    } else {
+      scf.yield %a0, %a1, %a2, %a3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+    }
+    scf.yield %n0, %n1, %n2, %n3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+  }
+
+  // The reduction uses the stage memory again.
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+
+  %c_local1 = index.add %col_local0, %c1 : index
+  %c_local2 = index.add %col_local0, %c2 : index
+  %c_local3 = index.add %col_local0, %c3 : index
+  func.call @ggml_hrx_mmf32_spill(%stage, %k_split, %s, %col_local0, %row_local0, %acc0) : (buffer, index, index, index, index, vector<4xf32>)
+  func.call @ggml_hrx_mmf32_spill(%stage, %k_split, %s, %c_local1, %row_local0, %acc1) : (buffer, index, index, index, index, vector<4xf32>)
+  func.call @ggml_hrx_mmf32_spill(%stage, %k_split, %s, %c_local2, %row_local0, %acc2) : (buffer, index, index, index, index, vector<4xf32>)
+  func.call @ggml_hrx_mmf32_spill(%stage, %k_split, %s, %c_local3, %row_local0, %acc3) : (buffer, index, index, index, index, vector<4xf32>)
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %red_view = buffer.view %stage[%c0_offset] : buffer -> view<[%k_split]x512xf32>
+  %n_half = index.div %c16, %k_split : index
+  scf.for %half = [%c0 to %n_half step %c1] unroll {
+    %half_offset = index.mul %half, %wg_size : index
+    %o = index.add %t, %half_offset : index
+    %sum = scf.for %j = [%c0 to %k_split step %c1](%part = %zero_f32 : f32) -> (f32) unroll {
+      %v = view.load %red_view[%j, %o] : view<[%k_split]x512xf32> -> f32
+      %next = scalar.addf %part, %v : f32
+      scf.yield %next : f32
+    }
+    %o_col = index.div %o, %c32 : index
+    %o_row = index.rem %o, %c32 : index
+    %out_col = index.add %tile_col0, %o_col : index
+    %out_row = index.add %tile_row0, %o_row : index
+    %col_in = index.cmp ult, %out_col, %n_cols : index
+    scf.if %col_in {
+      %row_in = index.cmp ult, %out_row, %n_rows : index
+      scf.if %row_in {
+        %d_col = index.mul %out_col, %d_s1 : index
+        %d_col_base = index.add %d_batch, %d_col : index
+        %d_index = index.add %d_col_base, %out_row : index
+        func.call @ggml_hrx_mm_store(%dst_noalias, %d_span, %d_index, %sum) : (buffer, index, index, f32)
+      }
+    }
+  }
+  kernel.return
+}

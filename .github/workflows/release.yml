@@ -24,7 +24,8 @@ on:
       '**/*.m',
       '**/*.metal',
       '**/*.comp',
-      '**/*.glsl'
+      '**/*.glsl',
+      '**/*.loom'
     ]
 
 cache-mode: write
@@ -36,6 +37,8 @@ env:
   GH_TOKEN: ${{ github.token }}
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
   CMAKE_ARGS: "-DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DLLAMA_CONNECT=ON"
+  # Sync versions in build-hrx.yml, ci-self-hosted-hrx.yml, release.yml, build-cache.yml, docs/build.md
+  HRX_VERSION: "0.2.0"
 
 # note: run this workflow one at a time for better cache reuse
 concurrency:
@@ -1104,6 +1107,76 @@ jobs:
         with:
           key: windows-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
 
+  # note: builds only the ggml-hrx backend - llama-server is injected from the
+  #       windows-cpu zip during the release "Merge artifacts" step
+  windows-hrx:
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
+
+    runs-on: windows-2022
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Install Ninja
+        id: install_ninja
+        run: |
+          choco install ninja
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          key: release-windows-2022-hrx
+          evict-old-files: 1d
+
+      - name: Use HRX SDK Cache
+        uses: actions/cache@v5
+        id: cache-hrx
+        with:
+          path: ./hrx_sdk
+          key: cache-gha-hrx-sdk-v${{ env.HRX_VERSION }}-${{ runner.os }}-${{ hashFiles('.github/actions/windows-setup-hrx/action.yml') }}
+
+      - name: Setup HRX SDK
+        if: steps.cache-hrx.outputs.cache-hit != 'true'
+        uses: ./.github/actions/windows-setup-hrx
+        with:
+          path: ./hrx_sdk
+          version: ${{ env.HRX_VERSION }}
+
+      - name: Build
+        id: cmake_build
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cmake -S . -B build -G "Ninja Multi-Config" ^
+            -DCMAKE_PREFIX_PATH="%CD%\hrx_sdk" ^
+            -DGGML_BACKEND_DL=ON ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_CPU=OFF ^
+            -DGGML_HRX=ON ^
+            -DLLAMA_BUILD_BORINGSSL=ON
+          cmake --build build --config Release -j %NUMBER_OF_PROCESSORS% --target ggml-hrx
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        run: |
+          # bundle the HRX runtime DLLs, Windows loads them from the directory of the exe
+          Copy-Item .\hrx_sdk\LICENSE .\build\bin\Release\LICENSE-hrx
+          7z a -snl llama-bin-win-hrx-x64.zip .\build\bin\Release\ggml-hrx.dll .\build\bin\Release\LICENSE-hrx .\hrx_sdk\bin\hrx.dll .\hrx_sdk\bin\loomc.dll
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          path: llama-bin-win-hrx-x64.zip
+          archive: false
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-windows-2022-hrx
+
   # note: builds only the backend library - llama-server (with the embedded UI)
   #       is injected from the windows-cpu zip during the release "Merge artifacts" step
   windows:
@@ -1639,6 +1712,85 @@ jobs:
         uses: ./.github/actions/ccache-clear
         with:
           key: release-ubuntu-24.04-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
+
+  ubuntu-24-hrx:
+    needs: [check-release, ui-build]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
+
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Download UI build
+        uses: actions/download-artifact@v8
+        with:
+          name: llama-ui.zip
+          path: ui/apps/chat/dist
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          key: release-ubuntu-24.04-hrx
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev
+
+      - name: Use HRX SDK Cache
+        uses: actions/cache@v5
+        id: cache-hrx
+        with:
+          path: ./hrx_sdk
+          key: cache-gha-hrx-sdk-v${{ env.HRX_VERSION }}-${{ runner.os }}-${{ hashFiles('.github/actions/linux-setup-hrx/action.yml') }}
+
+      - name: Setup HRX SDK
+        if: steps.cache-hrx.outputs.cache-hit != 'true'
+        uses: ./.github/actions/linux-setup-hrx
+        with:
+          path: ./hrx_sdk
+          version: ${{ env.HRX_VERSION }}
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build \
+            -DCMAKE_PREFIX_PATH="$PWD/hrx_sdk" \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CPU_ALL_VARIANTS=ON \
+            -DGGML_HRX=ON \
+            ${{ env.CMAKE_ARGS }}
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        run: |
+          # bundle the HRX runtime, binaries built with RPATH=$ORIGIN load it from the same directory
+          cp -P ./hrx_sdk/lib/libhrx.so* ./hrx_sdk/lib/libloomc.so* ./build/bin/
+          cp ./hrx_sdk/LICENSE ./build/bin/LICENSE-hrx
+          cp LICENSE ./build/bin/
+          tar -czvf llama-${{ needs.check-release.outputs.tag_name }}-bin-ubuntu-hrx-x64.tar.gz --transform "s,^\.,llama-${{ needs.check-release.outputs.tag_name }}," -C ./build/bin .
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          path: llama-${{ needs.check-release.outputs.tag_name }}-bin-ubuntu-hrx-x64.tar.gz
+          archive: false
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-ubuntu-24.04-hrx
 
   ubuntu-26-zdnn:
     needs: [check-release, ui-build]

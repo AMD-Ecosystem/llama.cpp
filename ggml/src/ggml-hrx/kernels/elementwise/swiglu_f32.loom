@@ -1,0 +1,171 @@
+// In the single-tensor form, x and g bind the same tensor. x_off and g_off select the two halves of each row.
+// dst must be contiguous.
+
+config.decl @ggml.elementwise.wg_size : %value: index where [range(%value, 64, 1024), multiple_of(%value, 64)]
+
+target.decl @ggml_wave64
+
+func.def inline @ggml_hrx_swiglu(%x: f32, %g: f32) -> (f32) {
+  %c1 = scalar.constant 1.0 : f32
+  %neg = scalar.negf %x : f32
+  %exp_neg = scalar.expf<afn> %neg : f32
+  %den = scalar.addf %c1, %exp_neg : f32
+  %silu = scalar.divf %x, %den : f32
+  %r = scalar.mulf %silu, %g : f32
+  func.return %r : f32
+}
+
+kernel.def target(@ggml_wave64) export("ggml_swiglu_f32") @ggml_swiglu_f32(%n: index) {
+  %one = index.constant 1 : index
+  %wg_size = config.get @ggml.elementwise.wg_size : index
+  %round = index.sub %wg_size, %one : index
+  %n_round = index.add %n, %round : index
+  %groups = index.div %n_round, %wg_size : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%wg_size, %one, %one) : index
+} launch(%n_in: index, %d0_in: index, %d1_in: index, %d2_in: index, %x_off_in: index, %x_s0_in: index, %x_s1_in: index, %x_s2_in: index, %x_s3_in: index, %x_span_in: index, %g_off_in: index, %g_s0_in: index, %g_s1_in: index, %g_s2_in: index, %g_s3_in: index, %g_span_in: index, %x: buffer, %g: buffer, %dst: buffer) {
+  // supports_glu checks these ranges.
+  %n = index.assume %n_in [range(%n_in, 1, 2147483647)] : index
+  %d0 = index.assume %d0_in [range(%d0_in, 1, 2147483647)] : index
+  %d1 = index.assume %d1_in [range(%d1_in, 1, 2147483647)] : index
+  %d2 = index.assume %d2_in [range(%d2_in, 1, 2147483647)] : index
+  %x_off = index.assume %x_off_in [range(%x_off_in, 0, 2147483647)] : index
+  %x_s0 = index.assume %x_s0_in [range(%x_s0_in, 0, 2147483647)] : index
+  %x_s1 = index.assume %x_s1_in [range(%x_s1_in, 0, 2147483647)] : index
+  %x_s2 = index.assume %x_s2_in [range(%x_s2_in, 0, 2147483647)] : index
+  %x_s3 = index.assume %x_s3_in [range(%x_s3_in, 0, 2147483647)] : index
+  %x_span = index.assume %x_span_in [range(%x_span_in, 1, 2147483647)] : index
+  %g_off = index.assume %g_off_in [range(%g_off_in, 0, 2147483647)] : index
+  %g_s0 = index.assume %g_s0_in [range(%g_s0_in, 0, 2147483647)] : index
+  %g_s1 = index.assume %g_s1_in [range(%g_s1_in, 0, 2147483647)] : index
+  %g_s2 = index.assume %g_s2_in [range(%g_s2_in, 0, 2147483647)] : index
+  %g_s3 = index.assume %g_s3_in [range(%g_s3_in, 0, 2147483647)] : index
+  %g_span = index.assume %g_span_in [range(%g_span_in, 1, 2147483647)] : index
+  %wg_size = config.get @ggml.elementwise.wg_size : index
+  %group = kernel.workgroup.id<x> : index
+  %item = kernel.workitem.id<x> : index
+  %base = index.mul %group, %wg_size : index
+  %i = index.add %base, %item : index
+  %in_bounds = index.cmp ult, %i, %n : index
+  %zero = index.constant 0 : offset
+  %x_view = buffer.view %x[%zero] : buffer -> view<[%x_span]xf32>
+  %g_view = buffer.view %g[%zero] : buffer -> view<[%g_span]xf32>
+  %dst_view = buffer.view %dst[%zero] : buffer -> view<[%n]xf32>
+  scf.if %in_bounds {
+    %i0 = index.rem %i, %d0 : index
+    %q0 = index.div %i, %d0 : index
+    %i1 = index.rem %q0, %d1 : index
+    %q1 = index.div %q0, %d1 : index
+    %i2 = index.rem %q1, %d2 : index
+    %i3 = index.div %q1, %d2 : index
+
+    %xo0 = index.mul %i0, %x_s0 : index
+    %xo1 = index.mul %i1, %x_s1 : index
+    %xo2 = index.mul %i2, %x_s2 : index
+    %xo3 = index.mul %i3, %x_s3 : index
+    %xo01 = index.add %xo0, %xo1 : index
+    %xo23 = index.add %xo2, %xo3 : index
+    %xo = index.add %xo01, %xo23 : index
+    %x_idx = index.add %xo, %x_off : index
+
+    %go0 = index.mul %i0, %g_s0 : index
+    %go1 = index.mul %i1, %g_s1 : index
+    %go2 = index.mul %i2, %g_s2 : index
+    %go3 = index.mul %i3, %g_s3 : index
+    %go01 = index.add %go0, %go1 : index
+    %go23 = index.add %go2, %go3 : index
+    %go = index.add %go01, %go23 : index
+    %g_idx = index.add %go, %g_off : index
+
+    // The prover reads only branch conditions. Thus cap the offsets and check one bound in each scf.if.
+    %x_pos = index.assume %x_idx [range(%x_idx, 0, 2147483646)] : index
+    %g_pos = index.assume %g_idx [range(%g_idx, 0, 2147483646)] : index
+    %x_ok = index.cmp ult, %x_pos, %x_span : index
+    scf.if %x_ok {
+      %g_ok = index.cmp ult, %g_pos, %g_span : index
+      scf.if %g_ok {
+        %xv = view.load %x_view[%x_pos] : view<[%x_span]xf32> -> f32
+        %gv = view.load %g_view[%g_pos] : view<[%g_span]xf32> -> f32
+        %r = func.call @ggml_hrx_swiglu(%xv, %gv) : (f32, f32) -> (f32)
+        view.store %r, %dst_view[%i] : f32, view<[%n]xf32>
+      }
+    }
+  }
+  kernel.return
+}
+
+kernel.def target(@ggml_wave64) export("ggml_swiglu_f32_rows") @ggml_swiglu_f32_rows(%n: index) {
+  %one = index.constant 1 : index
+  %wg_size = config.get @ggml.elementwise.wg_size : index
+  %wg_x2 = index.add %wg_size, %wg_size : index
+  %per_group = index.add %wg_x2, %wg_x2 : index
+  %round = index.sub %per_group, %one : index
+  %n_round = index.add %n, %round : index
+  %groups = index.div %n_round, %per_group : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%wg_size, %one, %one) : index
+} launch(%n_in: index, %d0_in: index, %x_off_in: index, %x_rs_in: index, %x_span_in: index, %g_off_in: index, %g_rs_in: index, %g_span_in: index, %x: buffer, %g: buffer, %dst: buffer) {
+  // The caller checks these ranges. n and d0 must be multiples of 4.
+  %n = index.assume %n_in [range(%n_in, 4, 2147483644)] : index
+  %d0 = index.assume %d0_in [range(%d0_in, 4, 2147483644)] : index
+  %x_off = index.assume %x_off_in [range(%x_off_in, 0, 2147483647)] : index
+  %x_rs = index.assume %x_rs_in [range(%x_rs_in, 0, 2147483647)] : index
+  %x_span = index.assume %x_span_in [range(%x_span_in, 1, 2147483647)] : index
+  %g_off = index.assume %g_off_in [range(%g_off_in, 0, 2147483647)] : index
+  %g_rs = index.assume %g_rs_in [range(%g_rs_in, 0, 2147483647)] : index
+  %g_span = index.assume %g_span_in [range(%g_span_in, 1, 2147483647)] : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %wg_size = config.get @ggml.elementwise.wg_size : index
+  %wg_x2 = index.add %wg_size, %wg_size : index
+  %per_group = index.add %wg_x2, %wg_x2 : index
+  %group = kernel.workgroup.id<x> : index
+  %item = kernel.workitem.id<x> : index
+  %base = index.mul %group, %per_group : index
+  %lane = index.mul %item, %c4 : index
+  %j_raw = index.add %base, %lane : index
+  %j = index.assume %j_raw [range(%j_raw, 0, 2147483644)] : index
+  %j_last = index.add %j, %c3 : index
+  %zero = index.constant 0 : offset
+  %x_view = buffer.view %x[%zero] : buffer -> view<[%x_span]xf32>
+  %g_view = buffer.view %g[%zero] : buffer -> view<[%g_span]xf32>
+  %dst_view = buffer.view %dst[%zero] : buffer -> view<[%n]xf32>
+  %in_bounds = index.cmp ult, %j_last, %n : index
+  scf.if %in_bounds {
+    %r = index.div %j, %d0 : index
+    %r_start = index.mul %r, %d0 : index
+    %c = index.sub %j, %r_start : index
+    %x_row = index.mul %r, %x_rs : index
+    %x_row_off = index.add %x_row, %x_off : index
+    %x_idx = index.add %x_row_off, %c : index
+    %g_row = index.mul %r, %g_rs : index
+    %g_row_off = index.add %g_row, %g_off : index
+    %g_idx = index.add %g_row_off, %c : index
+    // The prover reads only branch conditions. Thus cap the offsets and check one bound in each scf.if.
+    %x_pos = index.assume %x_idx [range(%x_idx, 0, 2147483640)] : index
+    %g_pos = index.assume %g_idx [range(%g_idx, 0, 2147483640)] : index
+    %x_last = index.add %x_pos, %c3 : index
+    %g_last = index.add %g_pos, %c3 : index
+    %x_ok = index.cmp ult, %x_last, %x_span : index
+    scf.if %x_ok {
+      %g_ok = index.cmp ult, %g_last, %g_span : index
+      scf.if %g_ok {
+        %xv = vector.load %x_view[%x_pos] : view<[%x_span]xf32> -> vector<4xf32>
+        %gv = vector.load %g_view[%g_pos] : view<[%g_span]xf32> -> vector<4xf32>
+        %x0 = vector.extract %xv[0] : vector<4xf32> -> f32
+        %x1 = vector.extract %xv[1] : vector<4xf32> -> f32
+        %x2 = vector.extract %xv[2] : vector<4xf32> -> f32
+        %x3 = vector.extract %xv[3] : vector<4xf32> -> f32
+        %g0 = vector.extract %gv[0] : vector<4xf32> -> f32
+        %g1 = vector.extract %gv[1] : vector<4xf32> -> f32
+        %g2 = vector.extract %gv[2] : vector<4xf32> -> f32
+        %g3 = vector.extract %gv[3] : vector<4xf32> -> f32
+        %y0 = func.call @ggml_hrx_swiglu(%x0, %g0) : (f32, f32) -> (f32)
+        %y1 = func.call @ggml_hrx_swiglu(%x1, %g1) : (f32, f32) -> (f32)
+        %y2 = func.call @ggml_hrx_swiglu(%x2, %g2) : (f32, f32) -> (f32)
+        %y3 = func.call @ggml_hrx_swiglu(%x3, %g3) : (f32, f32) -> (f32)
+        %y = vector.from_elements %y0, %y1, %y2, %y3 : vector<4xf32>
+        vector.store %y, %dst_view[%j] : vector<4xf32>, view<[%n]xf32>
+      }
+    }
+  }
+  kernel.return
+}
