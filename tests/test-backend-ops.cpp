@@ -4557,6 +4557,40 @@ struct test_relu_sqr : public test_case {
     }
 };
 
+// GGML_OP_SCALE + GGML_UNARY_OP_SILU (fused operation)
+struct test_scale_silu : public test_case {
+    const std::array<int64_t, 4> ne;
+    const float scale;
+    const float bias;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "SCALE_SILU";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::string vars() override {
+        return VARS_TO_STR3(ne, scale, bias);
+    }
+
+    test_scale_silu(std::array<int64_t, 4> ne = {320, 4, 1, 1}, float scale = 0.25f, float bias = 0.0f)
+        : ne(ne), scale(scale), bias(bias) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+        ggml_set_name(a, "a");
+
+        ggml_tensor * s = ggml_scale_bias(ctx, a, scale, bias);
+        ggml_set_name(s, "scale");
+
+        ggml_tensor * out = ggml_silu(ctx, s);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+};
+
 // GGML_OP_UNARY(GELU|SILU|SIGMOID|SOFTPLUS) + GGML_OP_MUL (fused operation).
 struct test_unary_mul : public test_case {
     const ggml_unary_op op;
@@ -4693,6 +4727,54 @@ struct test_unary_mul : public test_case {
         }
         ggml_set_name(out, "out");
 
+        return out;
+    }
+};
+
+// GGML_OP_UNARY(SIGMOID) + GGML_OP_MUL + GGML_OP_ADD with one gate value per row.
+struct test_sigmoid_mul_add : public test_case {
+    const std::array<int64_t, 4> ne;
+    const bool swap_mul;
+    const bool swap_add;
+    const bool reuse_sigmoid;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "SIGMOID_MUL_ADD";
+    }
+
+    bool run_whole_graph() override { return true; }
+    double max_nmse_err() override { return 1e-7; }
+
+    std::string vars() override {
+        return VARS_TO_STR4(ne, swap_mul, swap_add, reuse_sigmoid);
+    }
+
+    test_sigmoid_mul_add(std::array<int64_t, 4> ne, bool swap_mul = false, bool swap_add = false, bool reuse_sigmoid = false)
+        : ne(ne), swap_mul(swap_mul), swap_add(swap_add), reuse_sigmoid(reuse_sigmoid) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * gate = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 1, ne[1], ne[2], ne[3]);
+        ggml_set_name(gate, "gate");
+
+        ggml_tensor * x = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+        ggml_set_name(x, "x");
+
+        ggml_tensor * r = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+        ggml_set_name(r, "r");
+
+        ggml_tensor * sigmoid = ggml_sigmoid(ctx, gate);
+        ggml_set_name(sigmoid, "sigmoid");
+
+        ggml_tensor * mul = swap_mul ? ggml_mul(ctx, sigmoid, x) : ggml_mul(ctx, x, sigmoid);
+        ggml_set_name(mul, "mul");
+
+        ggml_tensor * out = swap_add ? ggml_add(ctx, r, mul) : ggml_add(ctx, mul, r);
+        if (reuse_sigmoid) {
+            ggml_set_name(out, "add");
+            out = ggml_add(ctx, out, sigmoid);
+        }
+        ggml_set_name(out, "out");
         return out;
     }
 };
@@ -10882,6 +10964,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_relu_sqr(type, { 5, 7, 11, 13 }));
     }
 
+    // fused scale + silu
+    test_cases.emplace_back(new test_scale_silu({ 320, 4, 1, 1 }, 0.25f, 0.0f));
+    test_cases.emplace_back(new test_scale_silu({ 5, 7, 11, 13 }, -1.5f, 0.5f));
+
     // fused unary + mul (gated activations that are not expressed as GGML_OP_GLU)
     for (ggml_unary_op op : { GGML_UNARY_OP_GELU, GGML_UNARY_OP_SILU, GGML_UNARY_OP_RELU, GGML_UNARY_OP_SIGMOID, GGML_UNARY_OP_SOFTPLUS }) {
         for (ggml_type type : { GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_BF16 }) {
@@ -10903,6 +10989,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_unary_mul(op, type, { 128, 2, 2, 2 }, false, "packed", "reuse"));
         }
     }
+
+    // fused sigmoid + mul + add: the shared expert gate, one value per row
+    test_cases.emplace_back(new test_sigmoid_mul_add({ 2560, 1, 1, 1 }));
+    test_cases.emplace_back(new test_sigmoid_mul_add({ 2560, 4, 1, 1 }));
+    test_cases.emplace_back(new test_sigmoid_mul_add({ 5, 7, 11, 13 }, false, true));
+    test_cases.emplace_back(new test_sigmoid_mul_add({ 1, 4, 1, 1 }, true, false));
+    // must not fuse
+    test_cases.emplace_back(new test_sigmoid_mul_add({ 2560, 4, 1, 1 }, false, false, true));
 
     // fused add + unary + mul: the delta-net alpha gate, bias and scale broadcast over dim 0
     for (ggml_unary_op op : { GGML_UNARY_OP_SILU, GGML_UNARY_OP_SIGMOID, GGML_UNARY_OP_SOFTPLUS }) {
@@ -12965,6 +13059,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             }
         }
     }
+
+    // short rows of many columns, as the conv state + transposed input of a recurrent layer
+    test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {3, 10240, 1, 1}, 4, 0, 16));
+    test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {9, 10240, 2, 1}, 4, 0, 16));
 
     // few long rows, which backends may split across workgroups
     for (int dim : { 0, 1 }) {
