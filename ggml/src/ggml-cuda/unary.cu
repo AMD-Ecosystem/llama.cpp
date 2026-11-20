@@ -761,6 +761,42 @@ void ggml_cuda_op_unary_mul(ggml_backend_cuda_context & ctx, ggml_tensor * unary
     }
 }
 
+/* fused mul + add after a sigmoid gate: g * x + r, with one g per row */
+
+static __global__ void sigmoid_mul_add_f32(const float * g, const float * x, const float * r, float * dst, const int ne0, const int k) {
+    ggml_cuda_pdl_lc();
+    const int i = blockDim.x*blockIdx.x + threadIdx.x;
+
+    if (i >= k) {
+        return;
+    }
+
+    ggml_cuda_pdl_sync();
+    // keep the MUL result rounded before ADD, as in the unfused graph
+    volatile float gated = x[i] * g[i / ne0];
+    dst[i] = r[i] + gated;
+}
+
+void ggml_cuda_op_sigmoid_mul_add(ggml_backend_cuda_context & ctx, ggml_tensor * sigmoid_node, ggml_tensor * mul_node, ggml_tensor * add_node) {
+    ggml_cuda_op_sigmoid(ctx, sigmoid_node);
+
+    const ggml_tensor * g = sigmoid_node;
+    const ggml_tensor * x = mul_node->src[0] == sigmoid_node ? mul_node->src[1] : mul_node->src[0];
+    const ggml_tensor * r = add_node->src[0] == mul_node ? add_node->src[1] : add_node->src[0];
+
+    GGML_ASSERT(g->type == GGML_TYPE_F32 && x->type == GGML_TYPE_F32 && r->type == GGML_TYPE_F32 && add_node->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_contiguous(g) && ggml_is_contiguous(x) && ggml_is_contiguous(r) && ggml_is_contiguous(add_node));
+    GGML_ASSERT(g->ne[0] == 1 && ggml_nelements(g) == ggml_nrows(x));
+
+    cudaStream_t stream = ctx.stream();
+
+    const int k = ggml_nelements(x);
+    const int num_blocks = (k + CUDA_NEG_BLOCK_SIZE - 1) / CUDA_NEG_BLOCK_SIZE;
+    const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params((dim3)num_blocks, CUDA_NEG_BLOCK_SIZE, 0, stream);
+    ggml_cuda_kernel_launch(sigmoid_mul_add_f32, launch_params, (const float *) g->data, (const float *) x->data,
+        (const float *) r->data, (float *) add_node->data, (int) x->ne[0], k);
+}
+
 /* fused scale + silu */
 
 static __global__ void scale_silu_f32(const float * x, float * dst, const float scale, const float bias, const int k) {
