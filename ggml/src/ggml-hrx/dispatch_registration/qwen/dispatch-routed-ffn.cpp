@@ -9,6 +9,7 @@
 #include "graph/op-params.h"
 #include "kernel-corpus/kernel-corpus-catalog-verify.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <set>
 #include <string>
@@ -30,6 +31,8 @@ static constexpr KernelCatalogRef kCommonVectorRoutedDownQ4KPublishQ8Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_vector_weighted_wave32_publish_q8");
 static constexpr KernelCatalogRef kCommonVectorRoutedDownQ6KPublishQ8Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_vector_weighted_wave64_publish_q8");
+static constexpr KernelCatalogRef kCommonVectorRoutedDownQ6KPublishF32Kernel =
+    GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_vector_weighted_wave64_publish_f32");
 static constexpr KernelCatalogRef kQwenRoutedDownWeightedReduceF16F32Kernel =
     GGML_HRX_KERNEL_REF("qwen3_moe", "qwen3_moe_routed_down_weighted_reduce_f16_f32");
 static constexpr KernelCatalogRef kQwenRoutedDownWeightedReduceNextRmsNormF32Kernel =
@@ -391,6 +394,7 @@ struct DecodeRoutedDownMatch {
     int64_t                           token_count  = 0;
     int64_t                           route_stride = 0;
     bool                              input_is_q8  = false;
+    bool                              final_f32    = false;
 
     bool matched() const {
         return input_graph_value != nullptr && weight != nullptr && output != nullptr && route_ids != nullptr &&
@@ -1146,7 +1150,35 @@ static bool match_decode_routed_ffn_gate_up_swiglu_q4k_q8_dispatch(const Dispatc
     return true;
 }
 
-static DecodeRoutedDownMatch match_decode_routed_ffn_down_next_q8(const DispatchMatchContext & context) {
+// A residual-only contraction must retain every observable intermediate and input.
+static bool final_routed_down_intermediates_are_private(const DispatchMatchContext & context,
+                                                       const GraphNode * root,
+                                                       const WeightedReduceMatch & reduce) {
+    if (reduce.residual_input->tensor != nullptr &&
+        (reduce.residual_input->tensor->flags & GGML_TENSOR_FLAG_OUTPUT) != 0) {
+        return false;
+    }
+    std::vector<const GraphNode *> erased = { root, reduce.weighted_node };
+    erased.insert(erased.end(), reduce.views.begin(), reduce.views.end());
+    erased.insert(erased.end(), reduce.reductions.begin(), reduce.reductions.end());
+    for (const GraphNode * node : erased) {
+        const Value * output = graph_value(context.graph, node->output);
+        if (output == nullptr || output->kind != ValueKind::Transient) {
+            return false;
+        }
+        for (const GraphNode * consumer : context.graph.index().consumers(output->id)) {
+            if (consumer == reduce.residual) {
+                continue;
+            }
+            if (std::find(erased.begin(), erased.end(), consumer) == erased.end()) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+static DecodeRoutedDownMatch match_decode_routed_ffn_down_vector(const DispatchMatchContext & context) {
     DecodeRoutedDownMatch match;
     const GraphNode *     root = context.root_node;
     if (root == nullptr || root->op != GGML_OP_MUL_MAT_ID || root->inputs.size() != 3 || !context.graph.has_index()) {
@@ -1190,7 +1222,9 @@ static DecodeRoutedDownMatch match_decode_routed_ffn_down_next_q8(const Dispatch
         !residual_input_is_safe_for_in_place(context, reduce)) {
         return {};
     }
-    if (has_uncovered_q6_k_final_projection_consumer(context, reduce.next_rmsnorm.output->id)) {
+    const bool final_f32 = has_uncovered_q6_k_final_projection_consumer(context, reduce.next_rmsnorm.output->id);
+    if (final_f32 && (weight->type != GGML_TYPE_Q6_K ||
+                      !final_routed_down_intermediates_are_private(context, root, reduce))) {
         return {};
     }
 
@@ -1211,42 +1245,48 @@ static DecodeRoutedDownMatch match_decode_routed_ffn_down_next_q8(const Dispatch
     match.reduce            = std::move(reduce);
     match.kernel = weight->type == GGML_TYPE_Q4_K ? kCommonVectorRoutedDownQ4KPublishQ8Kernel :
                                                    kCommonVectorRoutedDownQ6KPublishQ8Kernel;
+    match.final_f32 = final_f32;
+    if (final_f32) {
+        match.kernel = kCommonVectorRoutedDownQ6KPublishF32Kernel;
+    }
     match.token_count  = 1;
     match.route_stride = route_stride;
     match.input_is_q8  = input_is_q8;
     return match;
 }
 
-static bool match_decode_routed_ffn_down_next_q8_dispatch(const DispatchMatchContext & context,
+static bool match_decode_routed_ffn_down_vector_dispatch(const DispatchMatchContext & context,
                                                           DispatchMatch &              dispatch_match) {
-    const DecodeRoutedDownMatch match = match_decode_routed_ffn_down_next_q8(context);
+    const DecodeRoutedDownMatch match = match_decode_routed_ffn_down_vector(context);
     if (!match.matched()) {
         return false;
     }
 
-    const CommonActivationPublicationCapabilities capabilities = {
-        DispatchActivationInputQ8_1X4,
-        DispatchActivationInputQ8_1X4,
-    };
-    const CommonActivationPublicationPlan publication_plan =
-        common_select_activation_publication_plan(context, *match.reduce.next_rmsnorm.output, capabilities);
-    const CommonActivationPublicationDemand q8_demand =
-        publication_plan.matched() ? publication_plan.preferred() : CommonActivationPublicationDemand{};
-    if (!q8_demand.matched()) {
-        return false;
-    }
-
-    const ValueId completion_counter_value(context.next_plan_value.value);
-    dispatch_match.completion_counter_requests.push_back({
-        completion_counter_value,
-        "qwen.decode.moe.routed_down_completion_counter",
-        1,
-    });
     CommonActivationPublication q8_publication;
-    if (!common_reserve_activation_publication(context, dispatch_match, *match.reduce.next_rmsnorm.output, q8_demand,
-                                               kRoutedFfnQ8HiddenOutputName, q8_publication) ||
-        !common_append_activation_publication(dispatch_match, q8_publication, kRoutedFfnQ8HiddenOutputName)) {
-        return false;
+    ValueId completion_counter_value(context.next_plan_value.value);
+    if (!match.final_f32) {
+        const CommonActivationPublicationCapabilities capabilities = {
+            DispatchActivationInputQ8_1X4,
+            DispatchActivationInputQ8_1X4,
+        };
+        const CommonActivationPublicationPlan publication_plan =
+            common_select_activation_publication_plan(context, *match.reduce.next_rmsnorm.output, capabilities);
+        const CommonActivationPublicationDemand q8_demand =
+            publication_plan.matched() ? publication_plan.preferred() : CommonActivationPublicationDemand{};
+        if (!q8_demand.matched()) {
+            return false;
+        }
+
+        dispatch_match.completion_counter_requests.push_back({
+            completion_counter_value,
+            "qwen.decode.moe.routed_down_completion_counter",
+            1,
+        });
+        if (!common_reserve_activation_publication(context, dispatch_match, *match.reduce.next_rmsnorm.output, q8_demand,
+                                                   kRoutedFfnQ8HiddenOutputName, q8_publication) ||
+            !common_append_activation_publication(dispatch_match, q8_publication, kRoutedFfnQ8HiddenOutputName)) {
+            return false;
+        }
     }
 
     Dispatch dispatch;
@@ -1260,8 +1300,13 @@ static bool match_decode_routed_ffn_down_next_q8_dispatch(const DispatchMatchCon
     add_common_vector_weighted_compile_parameters(dispatch, match.token_count,
                                                   match.input_is_q8 ? GGML_TYPE_Q8_1 : GGML_TYPE_F32,
                                                   match.weight->type);
-    dispatch.kernel.compile_parameters.emplace("qwen3_moe.model.hidden_size", to_config_value(kRoutedFfnInputSize));
-    dispatch.kernel.compile_parameters.emplace("qwen3_moe.model.rms_epsilon", "0.000001");
+    if (match.final_f32) {
+        dispatch.kernel.compile_parameters["ggml.mul_mat_id.vector.publish_format"] =
+            to_config_value(static_cast<int64_t>(GGML_TYPE_F32));
+    } else {
+        dispatch.kernel.compile_parameters.emplace("qwen3_moe.model.hidden_size", to_config_value(kRoutedFfnInputSize));
+        dispatch.kernel.compile_parameters.emplace("qwen3_moe.model.rms_epsilon", "0.000001");
+    }
 
     const size_t route_id_length = static_cast<size_t>(match.token_count * match.route_stride) * sizeof(int32_t);
     if (match.input_is_q8) {
@@ -1273,10 +1318,12 @@ static bool match_decode_routed_ffn_down_next_q8_dispatch(const DispatchMatchCon
     dispatch.bindings.push_back({ match.reduce.route_weights->id, 0, match.reduce.route_weights->byte_count });
     dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
     dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
-    dispatch.bindings.push_back(
-        { match.reduce.next_rmsnorm.norm_weight->id, 0, match.reduce.next_rmsnorm.norm_weight->byte_count });
-    dispatch.bindings.push_back({ completion_counter_value, 0, sizeof(int32_t) });
-    dispatch.bindings.push_back(q8_publication.binding());
+    if (!match.final_f32) {
+        dispatch.bindings.push_back(
+            { match.reduce.next_rmsnorm.norm_weight->id, 0, match.reduce.next_rmsnorm.norm_weight->byte_count });
+        dispatch.bindings.push_back({ completion_counter_value, 0, sizeof(int32_t) });
+        dispatch.bindings.push_back(q8_publication.binding());
+    }
 
     dispatch_match.value_aliases.push_back({ match.reduce.residual_input->id, match.output->id });
     if (!append_covered_node(context, context.root_node, dispatch_match) ||
@@ -1293,9 +1340,12 @@ static bool match_decode_routed_ffn_down_next_q8_dispatch(const DispatchMatchCon
             return false;
         }
     }
-    if (!append_covered_node(context, match.reduce.residual, dispatch_match) ||
-        !append_covered_node(context, match.reduce.next_rmsnorm.rms_node, dispatch_match) ||
-        !append_covered_node(context, match.reduce.next_rmsnorm.mul_node, dispatch_match)) {
+    if (!append_covered_node(context, match.reduce.residual, dispatch_match)) {
+        return false;
+    }
+    if (!match.final_f32 &&
+        (!append_covered_node(context, match.reduce.next_rmsnorm.rms_node, dispatch_match) ||
+         !append_covered_node(context, match.reduce.next_rmsnorm.mul_node, dispatch_match))) {
         return false;
     }
 
@@ -1490,7 +1540,7 @@ void register_routed_ffn_dispatches(DispatchRegistryBuilder & registry) {
         DispatchMatchKind::Fused,
         1150,
         DispatchSource::Llm,
-        match_decode_routed_ffn_down_next_q8_dispatch,
+        match_decode_routed_ffn_down_vector_dispatch,
     });
     registry.add({
         "llm.routed_ffn.gate_up_swiglu_f16_wmma",

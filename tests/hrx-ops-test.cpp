@@ -9842,7 +9842,9 @@ static void run_routed_pair_cpu_reference_case(ggml_type gate_type, ggml_type up
     ggml_backend_free(hrx_backend);
 }
 
-static void run_decode_routed_moe_scheduling_case(ggml_type down_weight_type, bool alias_gate_input = false) {
+static void run_decode_routed_moe_scheduling_case(ggml_type down_weight_type, bool alias_gate_input = false,
+                                                bool final_projection = false, bool observable_down = false,
+                                                bool observable_residual_input = false) {
     ggml_init_params params = {};
     params.mem_size         = 128 * 1024 * 1024;
     params.no_alloc         = true;
@@ -9915,7 +9917,17 @@ static void run_decode_routed_moe_scheduling_case(ggml_type down_weight_type, bo
     REQUIRE(next_rms != nullptr);
     ggml_tensor * output = ggml_mul(ctx, next_rms, next_norm_weight);
     REQUIRE(output != nullptr);
-    ggml_tensor * next_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_Q4_K, kQwenHiddenSize, kQwenHiddenSize);
+    if (observable_down) {
+        ggml_set_output(down);
+    }
+    if (observable_residual_input) {
+        ggml_set_output(hidden_state);
+    }
+    if (final_projection) {
+        ggml_set_output(output);
+    }
+    ggml_tensor * next_weight = ggml_new_tensor_2d(ctx, final_projection ? GGML_TYPE_Q6_K : GGML_TYPE_Q4_K,
+                                                 kQwenHiddenSize, final_projection ? 151936 : kQwenHiddenSize);
     ggml_tensor * next_output = ggml_mul_mat(ctx, next_weight, output);
     REQUIRE(next_weight != nullptr);
     REQUIRE(next_output != nullptr);
@@ -9932,7 +9944,17 @@ static void run_decode_routed_moe_scheduling_case(ggml_type down_weight_type, bo
         down_weight_type == GGML_TYPE_Q4_K ? "loom_libs:ggml_mul_mat_id_vector_weighted_wave32_publish_q8" :
                                              "loom_libs:ggml_mul_mat_id_vector_weighted_wave64_publish_q8",
     };
-    require_kernel_subsequence(scheduled_kernel_sequence(graph), expected);
+    if (final_projection) {
+        const std::vector<std::string> kernels = scheduled_kernel_sequence(graph);
+        const bool should_fuse = !observable_down && !observable_residual_input;
+        const std::string fused = "loom_libs:ggml_mul_mat_id_vector_weighted_wave64_publish_f32";
+        REQUIRE((std::find(kernels.begin(), kernels.end(), fused) != kernels.end()) == should_fuse);
+        if (should_fuse) {
+            require_kernel_subsequence(kernels, { fused, "qwen3_moe:qwen3_moe_rmsnorm_f32_quantize_q8_1_x4" });
+        }
+    } else {
+        require_kernel_subsequence(scheduled_kernel_sequence(graph), expected);
+    }
     ggml_free(ctx);
 }
 
@@ -11502,6 +11524,15 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
     suite.device_case("decode_attention_qkv.scheduling", [] { run_decode_attention_qkv_scheduling_case(); });
     suite.device_case("decode_routed_moe.q4_k", [] { run_decode_routed_moe_scheduling_case(GGML_TYPE_Q4_K); });
     suite.device_case("decode_routed_moe.q6_k", [] { run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K); });
+    suite.device_case("decode_routed_moe.final_q6", [] {
+        run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K, false, true);
+    });
+    suite.device_case("decode_routed_moe.final_q6_observable_down", [] {
+        run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K, false, true, true);
+    });
+    suite.device_case("decode_routed_moe.final_q6_observable_residual_input", [] {
+        run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K, false, true, false, true);
+    });
     suite.device_case("decode_routed_moe.q6_k.alias_gate_input",
                       [] { run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K, true); });
     suite.device_case("rmsnorm_mul.hidden256.tokens1", [] { run_rmsnorm_mul_case(256, 1); });

@@ -10557,6 +10557,97 @@
       ]
     },
     {
+      "name": "ggml_mul_mat_id_vector_weighted_wave64_publish_f32",
+      "family": "loom_libs",
+      "symbol": "ggml_mul_mat_id_vector_weighted_wave64_publish_f32",
+      "source": "ops/matmul_id/vector_weighted.loom",
+      "workload_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "input_size",
+          "type": "index"
+        },
+        {
+          "name": "route_count",
+          "type": "index"
+        },
+        {
+          "name": "route_id_stride",
+          "type": "index"
+        },
+        {
+          "name": "expert_count",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        }
+      ],
+      "launch_parameters": [
+        {
+          "name": "token_count",
+          "type": "index"
+        },
+        {
+          "name": "input_size",
+          "type": "index"
+        },
+        {
+          "name": "route_count",
+          "type": "index"
+        },
+        {
+          "name": "route_id_stride",
+          "type": "index"
+        },
+        {
+          "name": "expert_count",
+          "type": "index"
+        },
+        {
+          "name": "output_size",
+          "type": "index"
+        }
+      ],
+      "bindings": [
+        "input",
+        "route_ids",
+        "route_weights",
+        "weight",
+        "output"
+      ],
+      "binding_access": [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read_write"
+      ],
+      "target_selector": "",
+      "compile_recipe": {
+        "mode": "direct",
+        "primary_sources": [
+          "ops/matmul_id/vector_weighted.loom"
+        ],
+        "library_sources": [
+          "motifs/matmul_id/vector_weighted.loom",
+          "motifs/matmul_id/vector_q4k_q8.loom",
+          "motifs/matmul/q6_f32_decode.loom",
+          "motifs/normalization/rmsnorm_q8_1_x4.loom"
+        ]
+      },
+      "compile_dependencies": [
+        "motifs/matmul_id/vector_weighted.loom",
+        "motifs/matmul_id/vector_q4k_q8.loom",
+        "motifs/matmul/q6_f32_decode.loom",
+        "motifs/normalization/rmsnorm_q8_1_x4.loom"
+      ]
+    },
+    {
       "name": "ggml_clamp_f32",
       "family": "loom_libs",
       "symbol": "ggml_clamp_f32",

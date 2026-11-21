@@ -86,3 +86,29 @@ kernel.def target(@ggml_mul_mat_id_vector_weighted_wave64_publish_q8_gfx11) @ggm
   template.apply<@ggml.matmul_id.vector_weighted.next_q8_completion>(%c8, %c4, %bounded_token_count, %configured_output_size, %output, %norm_weight, %completion_counter, %next_q8_output) : (index, index, index, index, buffer, buffer, buffer, buffer)
   kernel.return
 }
+
+// Preserve the F32 residual endpoint for consumers with independent normalization.
+kernel.def target(@ggml_mul_mat_id_vector_weighted_wave64_publish_q8_gfx11) @ggml_mul_mat_id_vector_weighted_wave64_publish_f32(%token_count: index, %input_size: index, %route_count: index, %route_id_stride: index, %expert_count: index, %output_size: index) {
+  %configured_output_size = config.get @ggml.mul_mat_id.vector.output_size : index
+  %c1 = index.constant 1 : index
+  %c7 = index.constant 7 : index
+  %c8 = index.constant 8 : index
+  %c256 = index.constant 256 : index
+  %padded_output_size = index.add %configured_output_size, %c7 : index
+  %output_tiles = index.div %padded_output_size, %c8 : index
+  kernel.launch.config workgroups(%output_tiles, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%token_count: index, %input_size: index, %route_count: index, %route_id_stride: index, %expert_count: index, %output_size: index, %input: buffer, %route_ids: buffer, %route_weights: buffer, %weight: buffer, %output: buffer) {
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 1)] : index
+  %configured_input_size0 = config.get @ggml.mul_mat_id.vector.input_size : index
+  %configured_route_count0 = config.get @ggml.mul_mat_id.vector.route_count : index
+  %configured_expert_count0 = config.get @ggml.mul_mat_id.vector.expert_count : index
+  %configured_output_size0 = config.get @ggml.mul_mat_id.vector.output_size : index
+  %bounded_input_size, %configured_input_size = index.assume %input_size, %configured_input_size0 [range(%input_size, 256, 32768), multiple_of(%input_size, 256), eq(%input_size, %configured_input_size0)] : index, index
+  %bounded_route_count, %configured_route_count = index.assume %route_count, %configured_route_count0 [range(%route_count, 1, 8), eq(%route_count, %configured_route_count0)] : index, index
+  %bounded_route_id_stride = index.assume %route_id_stride [range(%route_id_stride, 1, 512)] : index
+  %bounded_expert_count, %configured_expert_count = index.assume %expert_count, %configured_expert_count0 [range(%expert_count, 1, 512), eq(%expert_count, %configured_expert_count0)] : index, index
+  %bounded_output_size, %configured_output_size = index.assume %output_size, %configured_output_size0 [range(%output_size, 128, 4096), multiple_of(%output_size, 128), eq(%output_size, %configured_output_size0)] : index, index
+  %body_token = index.constant 0 : index
+  template.apply<@ggml.matmul_id.vector_weighted.q6k_f32.wave64_pair_body>(%bounded_token_count, %body_token, %configured_input_size, %configured_route_count, %bounded_route_id_stride, %configured_expert_count, %configured_output_size, %input, %route_ids, %route_weights, %weight, %output) : (index, index, index, index, index, index, index, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}
