@@ -9844,7 +9844,8 @@ static void run_routed_pair_cpu_reference_case(ggml_type gate_type, ggml_type up
 
 static void run_decode_routed_moe_scheduling_case(ggml_type down_weight_type, bool alias_gate_input = false,
                                                 bool final_projection = false, bool observable_down = false,
-                                                bool observable_residual_input = false, bool duplicate_route = false) {
+                                                bool observable_residual_input = false, bool duplicate_route = false,
+                                                bool alias_residual_input = false) {
     ggml_init_params params = {};
     params.mem_size         = 128 * 1024 * 1024;
     params.no_alloc         = true;
@@ -9909,7 +9910,11 @@ static void run_decode_routed_moe_scheduling_case(ggml_type down_weight_type, bo
         reduced = ggml_add(ctx, reduced, route_views[i]);
         REQUIRE(reduced != nullptr);
     }
-    ggml_tensor * residual = ggml_add(ctx, hidden_state, reduced);
+    ggml_tensor * residual_input = hidden_state;
+    if (alias_residual_input) {
+        residual_input = ggml_view_2d(ctx, hidden_state, kQwenHiddenSize, 1, hidden_state->nb[1], 0);
+    }
+    ggml_tensor * residual = ggml_add(ctx, residual_input, reduced);
     REQUIRE(residual != nullptr);
     ggml_tensor * next_norm_weight = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, kQwenHiddenSize);
     REQUIRE(next_norm_weight != nullptr);
@@ -11526,6 +11531,9 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
     suite.device_case("decode_routed_moe.q6_k", [] { run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K); });
     suite.device_case("decode_routed_moe.final_q6_duplicate_route", [] {
         run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K, false, true, false, false, true);
+    });
+    suite.device_case("decode_routed_moe.final_q6_observable_residual_alias", [] {
+        run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K, false, true, false, true, false, true);
     });
     suite.device_case("decode_routed_moe.final_q6", [] {
         run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K, false, true);
