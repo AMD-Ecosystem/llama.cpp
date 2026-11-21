@@ -9264,7 +9264,7 @@ static void run_routed_pair_cpu_reference_case(ggml_type gate_type, ggml_type up
 
 static void run_decode_routed_moe_scheduling_case(ggml_type down_weight_type, bool alias_gate_input = false,
                                                 bool final_projection = false, bool observable_down = false,
-                                                bool observable_residual_input = false) {
+                                                bool observable_residual_input = false, bool duplicate_route = false) {
     ggml_init_params params = {};
     params.mem_size         = 128 * 1024 * 1024;
     params.no_alloc         = true;
@@ -9319,7 +9319,7 @@ static void run_decode_routed_moe_scheduling_case(ggml_type down_weight_type, bo
     route_views.reserve(kQwenRouterRouteCount);
     for (int64_t route = 0; route < kQwenRouterRouteCount; ++route) {
         ggml_tensor * view = ggml_view_2d(ctx, weighted, kQwenHiddenSize, 1, weighted->nb[2],
-                                          static_cast<size_t>(route) * weighted->nb[1]);
+                                          static_cast<size_t>(duplicate_route && route == kQwenRouterRouteCount - 1 ? 0 : route) * weighted->nb[1]);
         REQUIRE(view != nullptr);
         route_views.push_back(view);
     }
@@ -9366,7 +9366,7 @@ static void run_decode_routed_moe_scheduling_case(ggml_type down_weight_type, bo
     };
     if (final_projection) {
         const std::vector<std::string> kernels = scheduled_kernel_sequence(graph);
-        const bool should_fuse = !observable_down && !observable_residual_input;
+        const bool should_fuse = !observable_down && !observable_residual_input && !duplicate_route;
         const std::string fused = "loom_libs:ggml_mul_mat_id_vector_weighted_wave64_publish_f32";
         REQUIRE((std::find(kernels.begin(), kernels.end(), fused) != kernels.end()) == should_fuse);
         if (should_fuse) {
@@ -10785,6 +10785,9 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
     suite.device_case("decode_attention_qkv.scheduling", [] { run_decode_attention_qkv_scheduling_case(); });
     suite.device_case("decode_routed_moe.q4_k", [] { run_decode_routed_moe_scheduling_case(GGML_TYPE_Q4_K); });
     suite.device_case("decode_routed_moe.q6_k", [] { run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K); });
+    suite.device_case("decode_routed_moe.final_q6_duplicate_route", [] {
+        run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K, false, true, false, false, true);
+    });
     suite.device_case("decode_routed_moe.final_q6", [] {
         run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K, false, true);
     });

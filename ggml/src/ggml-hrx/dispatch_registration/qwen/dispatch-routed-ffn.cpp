@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <map>
 #include <set>
 #include <string>
 #include <utility>
@@ -1156,6 +1157,30 @@ static bool final_routed_down_intermediates_are_private(const DispatchMatchConte
                                                        const WeightedReduceMatch & reduce) {
     if (reduce.residual_input->tensor != nullptr &&
         (reduce.residual_input->tensor->flags & GGML_TENSOR_FLAG_OUTPUT) != 0) {
+        return false;
+    }
+    const Value * weighted = graph_value(context.graph, reduce.weighted_node->output);
+    std::map<int32_t, uint32_t> route_masks;
+    for (const GraphNode * view : reduce.views) {
+        const Value * value = graph_value(context.graph, view->output);
+        const size_t offset = value->storage_offset - weighted->storage_offset;
+        if (value->storage != weighted->storage || offset % weighted->nb[1] != 0 ||
+            offset / weighted->nb[1] >= kRoutedFfnRouteCount) {
+            return false;
+        }
+        route_masks.emplace(view->output.value, 1u << (offset / weighted->nb[1]));
+    }
+    for (const GraphNode * reduction : reduce.reductions) {
+        const uint32_t lhs = route_masks[reduction->inputs[0].value];
+        const uint32_t rhs = route_masks[reduction->inputs[1].value];
+        if (lhs == 0 || rhs == 0 || (lhs & rhs) != 0) {
+            return false;
+        }
+        route_masks.emplace(reduction->output.value, lhs | rhs);
+    }
+    const uint32_t all_routes = (1u << kRoutedFfnRouteCount) - 1;
+    if ((route_masks[reduce.residual->inputs[0].value] |
+         route_masks[reduce.residual->inputs[1].value]) != all_routes) {
         return false;
     }
     std::vector<const GraphNode *> erased = { root, reduce.weighted_node };
