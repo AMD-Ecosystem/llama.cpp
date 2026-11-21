@@ -1155,8 +1155,11 @@ static bool match_decode_routed_ffn_gate_up_swiglu_q4k_q8_dispatch(const Dispatc
 static bool final_routed_down_intermediates_are_private(const DispatchMatchContext & context,
                                                        const GraphNode * root,
                                                        const WeightedReduceMatch & reduce) {
-    if (reduce.residual_input->tensor != nullptr &&
-        (reduce.residual_input->tensor->flags & GGML_TENSOR_FLAG_OUTPUT) != 0) {
+    const Value * residual_root = graph_value(context.graph, reduce.residual_input->storage_root);
+    if ((reduce.residual_input->tensor != nullptr &&
+         (reduce.residual_input->tensor->flags & GGML_TENSOR_FLAG_OUTPUT) != 0) ||
+        (residual_root->tensor != nullptr &&
+         (residual_root->tensor->flags & GGML_TENSOR_FLAG_OUTPUT) != 0)) {
         return false;
     }
     const Value * weighted = graph_value(context.graph, reduce.weighted_node->output);
