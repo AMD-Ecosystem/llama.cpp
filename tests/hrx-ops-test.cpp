@@ -1663,8 +1663,8 @@ static void run_routed_codebook_admission_checks() {
         return nullptr;
     };
 
-    const std::array<ggml_type, 3> unsupported = { GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ3_XXS };
-    for (const ggml_type format : unsupported) {
+    const std::array<ggml_type, 4> formats = { GGML_TYPE_IQ1_S, GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ3_XXS };
+    for (const ggml_type format : formats) {
         ggml_init_params params = {};
         params.mem_size = 8 * 1024 * 1024;
         params.no_alloc = true;
@@ -1681,18 +1681,22 @@ static void run_routed_codebook_admission_checks() {
         const ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
         REQUIRE(imported.valid());
         ggml::hrx::DispatchMatch match;
-        if (format == GGML_TYPE_IQ3_XXS) {
+        const bool supported = format != GGML_TYPE_IQ2_XS;
+        if (supported) {
             REQUIRE(match_root(imported.graph, routed.gate_output, pair_registry, match));
             const ggml::hrx::Dispatch * pair = find_pair(match);
             REQUIRE(pair != nullptr);
-            REQUIRE(pair->bindings.size() == 7);
+            REQUIRE(pair->bindings.size() == 8);
         } else {
             REQUIRE(!match_root(imported.graph, routed.gate_output, pair_registry, match));
         }
         ggml::hrx::DispatchMatch plain_match;
-        REQUIRE(!match_root(imported.graph, routed.gate_output, plain_registry, plain_match));
+        REQUIRE(match_root(imported.graph, routed.gate_output, plain_registry, plain_match) == supported);
         ggml::hrx::DispatchMatch postops_match;
-        REQUIRE(!match_root(imported.graph, routed.down_output, plain_registry, postops_match));
+        REQUIRE(match_root(imported.graph, routed.down_output, plain_registry, postops_match) == supported);
+        for (const auto & dispatch : postops_match.dispatches) {
+            REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id).find("postops") == std::string::npos);
+        }
         ggml_free(ctx);
     }
 
@@ -1714,7 +1718,7 @@ static void run_routed_codebook_admission_checks() {
         REQUIRE(match_root(imported.graph, routed.gate_output, pair_registry, pair_match));
         const ggml::hrx::Dispatch * pair = find_pair(pair_match);
         REQUIRE(pair != nullptr);
-        REQUIRE(pair->bindings.size() == 7);
+        REQUIRE(pair->bindings.size() == 8);
         ggml_free(ctx);
     }
 
@@ -4647,6 +4651,53 @@ enum class ScalarGetRowsScenario {
     RepeatedExposed,
 };
 
+static void run_repeat_copy_bits_case(int64_t source_rows) {
+    constexpr int64_t width = 32;
+    constexpr int64_t repeat_count = 40;
+    ggml_backend_t backend = ggml_backend_hrx_init(0);
+    REQUIRE(backend != nullptr);
+
+    ggml_init_params params = {};
+    params.mem_size = 1024 * 1024;
+    params.no_alloc = true;
+    ggml_context * ctx = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+
+    ggml_tensor * source = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, width, 1, source_rows);
+    ggml_tensor * repeated = ggml_repeat_4d(ctx, source, width, repeat_count, source_rows, 1);
+    REQUIRE(source != nullptr);
+    REQUIRE(repeated != nullptr);
+    ggml_set_output(repeated);
+
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    REQUIRE(graph != nullptr);
+    ggml_build_forward_expand(graph, repeated);
+    require_kernel_subsequence(scheduled_kernel_sequence(graph), { "loom_libs:ggml_copy_bits" });
+
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    REQUIRE(buffer != nullptr);
+    const std::vector<float> source_data = make_pattern_f32(width * source_rows, 83, 0.03125f);
+    ggml_backend_tensor_set(source, source_data.data(), 0, source_data.size() * sizeof(float));
+    REQUIRE(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(backend);
+
+    std::vector<float> expected(static_cast<size_t>(width * repeat_count * source_rows));
+    for (int64_t row = 0; row < source_rows; ++row) {
+        for (int64_t repeat = 0; repeat < repeat_count; ++repeat) {
+            for (int64_t column = 0; column < width; ++column) {
+                const size_t source_index = static_cast<size_t>(row * width + column);
+                const size_t output_index = static_cast<size_t>((row * repeat_count + repeat) * width + column);
+                expected[output_index] = source_data[source_index];
+            }
+        }
+    }
+    REQUIRE(get_f32_tensor(backend, repeated) == expected);
+
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+    ggml_backend_free(backend);
+}
+
 static void run_scalar_3d_get_rows_case(int64_t token_count, int64_t route_stride,
                                         ScalarGetRowsScenario scenario) {
     const bool include_invalid_ids = scenario == ScalarGetRowsScenario::ExpandedInvalidIds ||
@@ -6772,7 +6823,9 @@ static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
                                                 bool         square_output = false,
                                                 ggml_type    cache_type = GGML_TYPE_COUNT,
                                                 bool         verify_uploaded_native = false,
-                                                TestWeightSource weight_source = TestWeightSource::Uploaded) {
+                                                TestWeightSource weight_source = TestWeightSource::Uploaded,
+                                                ggml_prec    requested_accumulation = GGML_PREC_UNDEFINED,
+                                                ggml_prec    requested_source1 = GGML_PREC_UNDEFINED) {
     ggml_backend_t cpu_backend = init_cpu_backend();
     ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
     REQUIRE(hrx_backend != nullptr);
@@ -6795,12 +6848,21 @@ static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
     ggml_tensor *     hrx_rhs    = normalize_input ? build_rmsnorm_mul_graph(hrx_ctx, hrx_input, hrx_norm_w) : hrx_input;
     ggml_tensor *     cpu_output = ggml_mul_mat(cpu_ctx, cpu_weight, cpu_rhs);
     ggml_tensor *     hrx_output = ggml_mul_mat(hrx_ctx, hrx_weight, hrx_rhs);
+    if (requested_accumulation != GGML_PREC_UNDEFINED) {
+        REQUIRE(ggml_prec_set_acc(cpu_output, requested_accumulation));
+        REQUIRE(ggml_prec_set_acc(hrx_output, requested_accumulation));
+    }
+    if (requested_source1 != GGML_PREC_UNDEFINED) {
+        REQUIRE(ggml_prec_set_src(cpu_output, requested_source1, 1));
+        REQUIRE(ggml_prec_set_src(hrx_output, requested_source1, 1));
+    }
     if (square_output) {
         cpu_output = ggml_sqr(cpu_ctx, cpu_output);
         hrx_output = ggml_sqr(hrx_ctx, hrx_output);
     }
     ggml_tensor * cpu_indices = nullptr;
     ggml_tensor * hrx_indices = nullptr;
+    constexpr int64_t cache_row = 7;
     ggml_tensor * cpu_cache = nullptr;
     ggml_tensor * hrx_cache = nullptr;
     if (cache_type != GGML_TYPE_COUNT) {
@@ -6831,6 +6893,7 @@ static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
     require_kernel_subsequence(sequence, { expected_kernel });
     const bool packed_q4_input = weight_type == GGML_TYPE_Q4_K;
     const bool iq4_xs_weight = weight_type == GGML_TYPE_IQ4_XS;
+    const bool q8_0_prefill_input = weight_type == GGML_TYPE_Q8_0 && token_count >= 256;
     const bool prefill_tokens = token_count >= 256;
     const bool packed_iq4_xs_input = iq4_xs_weight && prefill_tokens;
     const bool packed_input = packed_q4_input || packed_iq4_xs_input || square_output;
@@ -6840,6 +6903,18 @@ static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
         REQUIRE(std::find(sequence.begin(), sequence.end(), "qwen3_moe:ggml_quantize_q8_1_x4_f32") == sequence.end());
     } else if (normalize_input) {
         REQUIRE(std::find(sequence.begin(), sequence.end(), "loom_libs:ggml_rmsnorm_binary_q8_1_x4_publish") == sequence.end());
+    }
+    const bool q8_0_precision_supported = requested_accumulation == GGML_PREC_UNDEFINED &&
+                                           (requested_source1 == GGML_PREC_UNDEFINED ||
+                                            requested_source1 == GGML_PREC_Q8 ||
+                                            requested_source1 == GGML_PREC_Q4);
+    if (q8_0_prefill_input && q8_0_precision_supported) {
+        require_kernel_subsequence(sequence, { "qwen3_moe:ggml_quantize_q8_1_x4_f32", expected_kernel });
+    }
+    if (q8_0_prefill_input && !q8_0_precision_supported) {
+        REQUIRE(std::find(sequence.begin(), sequence.end(),
+                          "loom_libs:ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256") == sequence.end());
+        REQUIRE(std::find(sequence.begin(), sequence.end(), "qwen3_moe:ggml_quantize_q8_1_x4_f32") == sequence.end());
     }
 
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
@@ -6886,8 +6961,7 @@ static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
                               norm_w.size() * sizeof(float));
     }
     if (cache_type != GGML_TYPE_COUNT) {
-        const int64_t index = 7;
-        set_tensor_pair_bytes(cpu_backend, cpu_indices, hrx_backend, hrx_indices, &index, sizeof(index));
+        set_tensor_pair_bytes(cpu_backend, cpu_indices, hrx_backend, hrx_indices, &cache_row, sizeof(cache_row));
         const std::vector<uint8_t> cache(ggml_nbytes(cpu_cache), 0);
         set_tensor_pair_bytes(cpu_backend, cpu_cache, hrx_backend, hrx_cache, cache.data(), cache.size());
     }
@@ -6908,7 +6982,11 @@ static void run_dense_matmul_cpu_reference_case(ggml_type    weight_type,
     if (weight_type == GGML_TYPE_IQ3_XXS) {
         // CPU matmul quantizes activations; scalar dequantization isolates the GPU error.
         const auto scalar_reference = f32_matmul_reference(weight_type, weight, input, input_size, output_size, token_count);
-        const auto actual = get_f32_tensor(hrx_backend, hrx_output);
+        auto actual = get_f32_tensor(hrx_backend, hrx_output);
+        if (cache_type != GGML_TYPE_COUNT) {
+            const auto row = actual.begin() + cache_row * output_size;
+            actual = std::vector<float>(row, row + output_size);
+        }
         require_reference_close(actual, scalar_reference, 0.0f);
         if (token_count >= 2 && token_count <= 5) {
             require_close(actual, scalar_reference, 2.0e-5f, 2.0e-5f);
@@ -9152,7 +9230,8 @@ static void run_routed_moe_cpu_reference_case(ggml_type down_weight_type, bool i
     ggml_backend_free(hrx_backend);
 }
 
-static void run_routed_pair_cpu_reference_case(ggml_type gate_type, ggml_type up_type, int64_t token_count) {
+static void run_routed_pair_cpu_reference_case(ggml_type gate_type, ggml_type up_type, int64_t token_count,
+                                               bool standalone = false) {
     constexpr int64_t input_size = 256;
     constexpr int64_t output_size = 128;
     constexpr int64_t expert_count = 4;
@@ -9188,6 +9267,11 @@ static void run_routed_pair_cpu_reference_case(ggml_type gate_type, ggml_type up
         REQUIRE(graph.input != nullptr);
         REQUIRE(graph.route_ids != nullptr);
         ggml_tensor * gate = ggml_mul_mat_id(ctx, graph.gate_weight, graph.input, graph.route_ids);
+        if (standalone) {
+            graph.output = gate;
+            REQUIRE(graph.output != nullptr);
+            return graph;
+        }
         ggml_tensor * up = ggml_mul_mat_id(ctx, graph.up_weight, graph.input, graph.route_ids);
         REQUIRE(gate != nullptr);
         REQUIRE(up != nullptr);
@@ -9209,6 +9293,10 @@ static void run_routed_pair_cpu_reference_case(ggml_type gate_type, ggml_type up
     const char * expected_kernel = token_count <= 5 ?
                                        "loom_libs:ggml_mul_mat_id_skinny_pair_input_f32_swiglu_publish_f32" :
                                        "loom_libs:ggml_mul_mat_id_tiled_pair_input_f32_swiglu_publish_f32";
+    if (standalone) {
+        expected_kernel = token_count <= 5 ? "loom_libs:ggml_mul_mat_id_skinny_input_f32_publish_f32" :
+                                             "loom_libs:ggml_mul_mat_id_tiled_input_f32_publish_f32";
+    }
     require_kernel_subsequence(scheduled_kernel_sequence(hrx_graph), { expected_kernel });
 
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
@@ -10314,6 +10402,25 @@ static void register_dense_matmul_cases(Suite & suite) {
         run_dense_matmul_cpu_reference_case(
             GGML_TYPE_IQ4_XS, "loom_libs:ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256", 512, 64, 3072, true);
     });
+    suite.device_case("dense_matmul.q8_0.prefill.tokens512.outputs2048", [] {
+        run_dense_matmul_cpu_reference_case(
+            GGML_TYPE_Q8_0, "loom_libs:ggml_mul_mat_q5_k_iq4_xs_q8_1_x4_wmma_token256", 512, 2048, 4096);
+    });
+    suite.device_case("dense_matmul.q8_0.prefill.explicit_f32_accumulation", [] {
+        run_dense_matmul_cpu_reference_case(
+            GGML_TYPE_Q8_0, "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32_aligned", 512, 2048, 4096,
+            false, false, GGML_TYPE_COUNT, false, TestWeightSource::Uploaded, GGML_PREC_F32);
+    });
+    suite.device_case("dense_matmul.q8_0.prefill.explicit_f32_source1", [] {
+        run_dense_matmul_cpu_reference_case(
+            GGML_TYPE_Q8_0, "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32_aligned", 512, 2048, 4096,
+            false, false, GGML_TYPE_COUNT, false, TestWeightSource::Uploaded, GGML_PREC_UNDEFINED, GGML_PREC_F32);
+    });
+    suite.device_case("dense_matmul.q8_0.prefill.explicit_f16_source1", [] {
+        run_dense_matmul_cpu_reference_case(
+            GGML_TYPE_Q8_0, "loom_libs:ggml_mul_mat_tiled_input_f32_publish_f32_aligned", 512, 2048, 4096,
+            false, false, GGML_TYPE_COUNT, false, TestWeightSource::Uploaded, GGML_PREC_UNDEFINED, GGML_PREC_F16);
+    });
     for (const ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
         for (const ggml_type cache_type : { GGML_TYPE_F16, GGML_TYPE_F32 }) {
             suite.device_case(
@@ -10324,6 +10431,11 @@ static void register_dense_matmul_cases(Suite & suite) {
                 });
         }
     }
+    suite.device_case("attention_v_matmul.iq3_xxs.cache_f16.cpu_reference", [] {
+        run_dense_matmul_cpu_reference_case(GGML_TYPE_IQ3_XXS,
+                                            "loom_libs:ggml_mul_mat_vector_iq3_xxs_f32_f32", 1,
+                                            512, 2048, false, false, GGML_TYPE_F16);
+    });
     suite.device_case("attention_v_matmul.q6_k.prefill_f16.repeated_indices",
                       [] { run_prefill_value_cache_repeated_indices_case(); });
     for (const ggml_type type :
@@ -10768,6 +10880,22 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
                       [] { run_attention_postprocess_metadata_reuse_case(); });
     suite.device_case("routed_moe.q4_k.next_rmsnorm", [] { run_routed_moe_cpu_reference_case(GGML_TYPE_Q4_K, true); });
     suite.host_case("routed_moe.codebook_admission", [] { run_routed_codebook_admission_checks(); });
+    for (auto type : { GGML_TYPE_IQ1_S, GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ3_XXS }) {
+        for (int64_t tokens : { 1, 6 }) {
+            suite.device_case("routed_standalone." + type_name(type) + ".tokens" + std::to_string(tokens), [=] {
+                run_routed_pair_cpu_reference_case(type, GGML_TYPE_Q4_K, tokens, true);
+            });
+        }
+    }
+    suite.device_case("routed_pair.iq2_xxs.iq1_s.tiled.cpu_reference", [] {
+        run_routed_pair_cpu_reference_case(GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ1_S, 6);
+    });
+    suite.device_case("routed_pair.iq1_s.iq3_xxs.skinny.cpu_reference", [] {
+        run_routed_pair_cpu_reference_case(GGML_TYPE_IQ1_S, GGML_TYPE_IQ3_XXS, 1);
+    });
+    suite.device_case("routed_pair.iq3_xxs.iq1_s.tiled.cpu_reference", [] {
+        run_routed_pair_cpu_reference_case(GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ1_S, 6);
+    });
     suite.device_case("routed_pair.iq3_xxs.iq3_xxs.skinny.cpu_reference", [] {
         run_routed_pair_cpu_reference_case(GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ3_XXS, 1);
     });
@@ -10861,6 +10989,8 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
     suite.device_case("standalone_repeat_get_rows_scalar_3d.exposed_repeat", [] {
         run_scalar_3d_get_rows_case(2, 128, ScalarGetRowsScenario::RepeatedExposed);
     });
+    suite.device_case("standalone_repeat_copy_bits.rows1", [] { run_repeat_copy_bits_case(1); });
+    suite.device_case("standalone_repeat_copy_bits.rows512", [] { run_repeat_copy_bits_case(512); });
     for (ggml_type weight_type : { GGML_TYPE_Q5_1, GGML_TYPE_Q8_0, GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
         for (int64_t token_count : { 2, 8 }) {
             suite.device_case("mul_mat_id_expert_scale." + std::string(ggml_type_name(weight_type)) + ".tokens" +

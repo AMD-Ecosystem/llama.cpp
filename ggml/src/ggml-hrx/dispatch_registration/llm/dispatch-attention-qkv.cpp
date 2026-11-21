@@ -365,6 +365,12 @@ static AttentionMatMulMatch match_attention_matmul_any_format(const Graph & grap
         return {};
     }
 
+    // The fused projection has no codebook binding. Let dense matmul bind the grid
+    // and publish the cache rows in a separate operation for these formats.
+    if (iq_codebook_matmul_required(format)) {
+        return {};
+    }
+
     const int64_t input_size  = weight->ne[0];
     const int64_t output_size = weight->ne[1];
     const int64_t token_count = input->ne[1];
