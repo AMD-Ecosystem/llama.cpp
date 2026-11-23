@@ -182,7 +182,9 @@ void llama_model_qwen4exp::load_arch_tensors(llama_model_loader & ml) {
     const int trunk_flags = nf.trunk;
     const int mtp_flags   = nf.mtp;
 
-    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, 0);
+    // a draft head file without the trunk can leave out token_embd and output (the "shared" MTP files,
+    // nextn_shared_target_tensors): the draft context then borrows both from its target model
+    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, trunk_flags);
 
     // there is no output_norm: the final hyper-connection mixer carries it
     // the gammas load as [n_embd, hc] so the grouped norm multiplies them without a graph reshape
@@ -191,7 +193,7 @@ void llama_model_qwen4exp::load_arch_tensors(llama_model_loader & ml) {
     hc_head_up   = create_tensor(tn(LLM_TENSOR_HC_HEAD_UP,   "weight"), { hc_lr, hc_dim }, trunk_flags);
 
     output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), { n_embd, n_vocab }, TENSOR_NOT_REQUIRED);
-    if (output == NULL) {
+    if (output == NULL && tok_embd != NULL) {
         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, TENSOR_DUPLICATED);
     }
 
@@ -598,9 +600,14 @@ llama_model_qwen4exp::graph_mtp::graph_mtp(const llm_graph_params & params) :
 
     inp->h = build_inp_embd_state(inp.get(), hparams.n_embd_out());
 
+    // a draft head without token_embd and output (shared MTP file) borrows them from its target model
+    const llama_model * model_tgt = cparams.ctx_other ? llama_get_model(cparams.ctx_other) : nullptr;
+
     ggml_tensor * tok_embd;
     if (ubatch.token) {
-        tok_embd = ggml_get_rows(ctx0, model.tok_embd, inp->tokens);
+        ggml_tensor * tok_embd_w = model.tok_embd ? model.tok_embd : model_tgt ? model_tgt->tok_embd : nullptr;
+        GGML_ASSERT(tok_embd_w && "qwen4exp MTP has no token embeddings, neither its own nor its target's");
+        tok_embd = ggml_get_rows(ctx0, tok_embd_w, inp->tokens);
     } else {
         tok_embd = inp->embd;
     }
@@ -616,8 +623,10 @@ llama_model_qwen4exp::graph_mtp::graph_mtp(const llm_graph_params & params) :
     // the draft memory has no recurrent layer, but its input still has to be allocated
     ggml_build_forward_expand(gf, inp_hyb->get_recr()->s_copy);
 
+    // a draft head whose compress ratio is 0 attends densely (e.g. the shared MTP files): no k-pool inputs, or
+    // their indexer key indexes stay unallocated while set_input() fills them
     llm_graph_input_kpool * inp_kpool = nullptr;
-    if (mctx_hyb->get_idx() && hparams.indexer_kpool > 0) {
+    if (mctx_hyb->get_idx() && hparams.indexer_kpool > 0 && hparams.dsv4_compress_ratios[il] > 0) {
         GGML_ASSERT(mctx_hyb->get_idx()->get_n_kv() == mctx_hyb->get_attn()->get_n_kv() &&
                 "the indexer cache must track the attention cache cell for cell");
         inp_kpool = build_inp_kpool(mctx_hyb);
@@ -660,7 +669,9 @@ llama_model_qwen4exp::graph_mtp::graph_mtp(const llm_graph_params & params) :
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    const llama_model & model_head = model.output || !model_tgt ? model : *model_tgt;
+    GGML_ASSERT(model_head.output && "qwen4exp MTP has no output head, neither its own nor its target's");
+    cur = build_lora_mm(model_head.output, cur, model_head.output_s);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 }

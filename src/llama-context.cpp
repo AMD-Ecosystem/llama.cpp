@@ -254,6 +254,22 @@ llama_context::llama_context(
         }
     }
 
+    // an MTP draft head that leaves out token_embd and output borrows both from its target model
+    if (model.arch == LLM_ARCH_QWEN4EXP && (model.tok_embd == nullptr || model.output == nullptr)) {
+        if (params.ctx_other == nullptr) {
+            throw std::runtime_error(model.arch_name() + " has no token_embd/output of its own and requires ctx_other to be set "
+                    "(load it as the draft model of its target, not on its own)");
+        }
+
+        const llama_model & model_tgt = params.ctx_other->get_model();
+        if (model_tgt.arch != model.arch || model_tgt.tok_embd == nullptr || model_tgt.output == nullptr ||
+            model_tgt.hparams.n_embd != hparams.n_embd || model_tgt.vocab.n_tokens() != model.vocab.n_tokens()) {
+            throw std::runtime_error(model.arch_name() + ": the target model cannot provide token_embd/output for this draft head");
+        }
+
+        cparams.ctx_other = params.ctx_other;
+    }
+
     if (cparams.rope_scaling_type == LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED) {
         cparams.rope_scaling_type = hparams.rope_scaling_type_train;
     }
