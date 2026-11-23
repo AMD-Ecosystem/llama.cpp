@@ -90,12 +90,14 @@ hipep_split_nodes hipep_split_nodes_of(const ggml_cgraph & split) {
         if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
             continue;
         }
-        if (ggml_nelements(node) == 0) {
+        // a node of no elements (a prompt's chunk that returns no logits gathers none) is kept when only nodes of
+        // none read it: the library runs such a dead end as the code of one row, the row thrown away
+        const bool none = ggml_nelements(node) == 0;
+        if (none) {
             empty.insert(node);
-            continue;
         }
         for (const ggml_tensor * src : node->src) {
-            if (src != nullptr && empty.count(src) != 0) {
+            if (src != nullptr && empty.count(src) != 0 && !none) {
                 result.computable = false;
             }
         }
