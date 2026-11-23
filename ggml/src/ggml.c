@@ -7481,6 +7481,7 @@ struct ggml_cgraph * ggml_new_graph_custom(struct ggml_context * ctx, size_t siz
         /*.hash_table   =*/ { hash_size, hash_used, hash_keys_ptr },
         /*.order        =*/ GGML_CGRAPH_EVAL_ORDER_LEFT_TO_RIGHT,
         /*.uid          =*/ 0,
+        /*.from_sched   =*/ false,
     };
 
     ggml_hash_set_reset(&cgraph->visited_hash_set);
@@ -7508,7 +7509,8 @@ struct ggml_cgraph ggml_graph_view(struct ggml_cgraph * cgraph0, int i0, int i1)
         /*.use_counts       =*/ cgraph0->use_counts,
         /*.visited_hash_set =*/ cgraph0->visited_hash_set,
         /*.order            =*/ cgraph0->order,
-        /*.uid              =*/ 0
+        /*.uid              =*/ 0,
+        /*.from_sched       =*/ false,
     };
 
     return cgraph;

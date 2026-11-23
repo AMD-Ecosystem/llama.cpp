@@ -363,6 +363,9 @@ struct ggml_cgraph {
     // an optional identifier that can be utilized to recognize same graphs if two non-zero values match
     // a value of 0 means it is not set and should be ignored
     uint64_t uid;
+
+    // a split the scheduler made: GGML_TENSOR_FLAG_SPLIT_OUTPUT marks its outputs
+    bool from_sched;
 };
 
 // returns a slice of cgraph with nodes [i0, i1)

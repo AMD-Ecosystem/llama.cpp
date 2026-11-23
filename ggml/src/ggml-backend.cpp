@@ -1896,9 +1896,39 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         /* .user_data     = */ &alloc_deps,
     };
 
+    // the nodes a later split reads, directly or through a view: what a split hands on, whatever memory the
+    // allocator leaves alive after it (a backend that compiles its splits writes those, and no more)
+    {
+        std::unordered_map<const ggml_tensor *, int> split_of;
+        for (int i = 0; i < sched->n_splits; i++) {
+            for (int j = sched->splits[i].i_start; j < sched->splits[i].i_end; j++) {
+                graph->nodes[j]->flags &= ~GGML_TENSOR_FLAG_SPLIT_OUTPUT;
+                split_of[graph->nodes[j]] = i;
+            }
+        }
+        const auto read = [&](ggml_tensor * t, int reader) {
+            for (ggml_tensor * x : { t, t ? t->view_src : nullptr }) {
+                auto it = x ? split_of.find(x) : split_of.end();
+                if (it != split_of.end() && it->second < reader) {
+                    x->flags |= GGML_TENSOR_FLAG_SPLIT_OUTPUT;
+                }
+            }
+        };
+        for (int i = 0; i < sched->n_splits; i++) {
+            for (int j = sched->splits[i].i_start; j < sched->splits[i].i_end; j++) {
+                ggml_tensor * node = graph->nodes[j];
+                read(node->view_src, i);
+                for (ggml_tensor * src : node->src) {
+                    read(src, i);
+                }
+            }
+        }
+    }
+
     for (int i = 0; i < sched->n_splits; i++) {
         struct ggml_backend_sched_split * split = &sched->splits[i];
         split->graph = ggml_graph_view(graph, split->i_start, split->i_end);
+        split->graph.from_sched = true;
 
         ggml_backend_graph_optimize(sched->backends[split->backend_id], &split->graph, &opt_params);
     }

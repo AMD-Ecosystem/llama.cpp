@@ -5,6 +5,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <unordered_map>
 #include <unordered_set>
 
 static_assert(GGML_MAX_SRC == 10, "hipep_backend_tensor_desc has 10 sources");
@@ -102,6 +103,28 @@ hipep_split_nodes hipep_split_nodes_of(const ggml_cgraph & split) {
     }
     const std::vector<const ggml_tensor *> & nodes = result.nodes;
     result.exported.assign(nodes.size(), false);
+    // under a scheduler: what later splits read, the graph's outputs, and the last write into memory the graph
+    // does not compute (a cache's rows; an earlier write is in it) - whatever ggml-alloc left alive, which would
+    // move with the sizes
+    if (split.from_sched) {
+        std::unordered_map<const ggml_tensor *, size_t> last_write;
+        for (size_t i = 0; i < nodes.size(); ++i) {
+            const ggml_tensor * n    = nodes[i];
+            const ggml_tensor * root = n->view_src;
+            while (root != nullptr && root->view_src != nullptr) {
+                root = root->view_src;
+            }
+            if (!is_view(n->op) && root != nullptr && root->op == GGML_OP_NONE) {
+                last_write[root] = i;
+            }
+            result.exported[i] = !is_view(n->op) &&
+                                 (n->flags & (GGML_TENSOR_FLAG_OUTPUT | GGML_TENSOR_FLAG_SPLIT_OUTPUT)) != 0;
+        }
+        for (const auto & [root, i] : last_write) {
+            result.exported[i] = true;
+        }
+        return result;
+    }
     // a split ending in one of the graph's outputs ends the graph (llama.cpp's
     // logits come last): nothing after it reads what it leaves, but its
     // outputs and the caches it writes

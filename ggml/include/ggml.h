@@ -497,6 +497,7 @@ extern "C" {
         GGML_TENSOR_FLAG_PARAM   =  4, // ...contains trainable parameters
         GGML_TENSOR_FLAG_LOSS    =  8, // ...defines loss for numerical optimization (multiple loss tensors add up)
         GGML_TENSOR_FLAG_COMPUTE = 16, // ...must be computed
+        GGML_TENSOR_FLAG_SPLIT_OUTPUT = 32, // ...is an output of its split: a later split reads it (set by ggml_backend_sched)
     };
 
     enum ggml_tri_type {
