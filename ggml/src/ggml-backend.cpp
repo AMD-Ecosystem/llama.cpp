@@ -1480,7 +1480,7 @@ static void ggml_backend_sched_set_if_supported(ggml_backend_sched_t sched, stru
 }
 
 // assigns backends to ops and splits the graph into subgraphs that can be computed on the same backend
-void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
+static void ggml_backend_sched_split_graph_impl(ggml_backend_sched_t sched, struct ggml_cgraph * graph, bool split_only) {
     // reset splits
     sched->n_splits = 0;
     sched->n_graph_inputs = 0;
@@ -1894,6 +1894,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
             }
         },
         /* .user_data     = */ &alloc_deps,
+        /* .split_only    = */ split_only,
     };
 
     // the nodes a later split reads, directly or through a view: what a split hands on, whatever memory the
@@ -2446,6 +2447,10 @@ void ggml_backend_sched_reset(ggml_backend_sched_t sched) {
     sched->is_alloc = false;
 }
 
+void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
+    ggml_backend_sched_split_graph_impl(sched, graph, /*split_only =*/ true);
+}
+
 void ggml_backend_sched_reserve_size(ggml_backend_sched_t sched, struct ggml_cgraph * measure_graph, size_t * sizes) {
     GGML_ASSERT(sched);
     GGML_ASSERT((int)sched->hash_set.size >= measure_graph->n_nodes + measure_graph->n_leafs);
@@ -2466,7 +2471,7 @@ bool ggml_backend_sched_reserve(ggml_backend_sched_t sched, struct ggml_cgraph *
 
     ggml_backend_sched_synchronize(sched);
 
-    ggml_backend_sched_split_graph(sched, measure_graph);
+    ggml_backend_sched_split_graph_impl(sched, measure_graph, /*split_only =*/ false);
 
     if (!ggml_gallocr_reserve_n(sched->galloc, &sched->graph, sched->node_backend_ids, sched->leaf_backend_ids)) {
         return false;
@@ -2485,7 +2490,7 @@ bool ggml_backend_sched_alloc_graph(ggml_backend_sched_t sched, struct ggml_cgra
     sched->cur_copy = sched->next_copy;
     sched->next_copy = (sched->next_copy + 1) % sched->n_copies;
 
-    ggml_backend_sched_split_graph(sched, graph);
+    ggml_backend_sched_split_graph_impl(sched, graph, /*split_only =*/ false);
 
     if (!ggml_backend_sched_alloc_splits(sched)) {
         return false;

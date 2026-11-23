@@ -125,6 +125,9 @@ extern "C" {
         // can be called multiple times for the same tensor: the longest lifetime applies
         void (*add_alloc_dep)(void * user_data, struct ggml_tensor * tensor, struct ggml_tensor * until);
         void * user_data;
+        // the graph is only split - which backend takes what, as a probe of a fused op's support asks -, and will
+        // not be allocated or computed
+        bool split_only;
     };
 
     struct ggml_backend_i {

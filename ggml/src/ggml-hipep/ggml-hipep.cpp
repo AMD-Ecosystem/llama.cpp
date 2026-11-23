@@ -205,6 +205,30 @@ static std::string hipep_ops_of(const hipep_split_nodes & split) {
     return text;
 }
 
+// before the first step: the scheduler's splits of the graphs llama.cpp reserves (a prompt's worst-case ubatch, a
+// decode step) compiled now, while the context is made, and not at the first step that runs them
+// (HIPEP_BACKEND_PRECOMPILE=0: not). a graph only split - a probe of whether a fused op stays on the layer's
+// device - never runs: its splits are not compiled
+static void ggml_backend_hipep_graph_optimize(ggml_backend_t backend, ggml_cgraph * graph,
+                                              ggml_backend_graph_optimize_params * params) {
+    auto *       ctx      = static_cast<hipep_backend_context *>(backend->context);
+    const char * disabled = std::getenv("HIPEP_BACKEND_PRECOMPILE");
+    if (ctx->splits > 0 || (params != nullptr && params->split_only) ||
+        (disabled != nullptr && std::strcmp(disabled, "0") == 0)) {
+        return;
+    }
+    const hipep_split_nodes split = hipep_split_nodes_of(*graph);
+    hipep_split_tensors     tensors;
+    hipep_backend_ctx *     sdk = ctx->device->open();
+    if (sdk == nullptr || !split.computable || split.nodes.empty() || !hipep_collect_split(split, tensors)) {
+        return;
+    }
+    const hipep_backend_split_desc desc = tensors.desc();
+    if (hipep_backend_find(sdk, &desc) == nullptr) {
+        hipep_backend_compile(sdk, &desc, /*wait=*/true);
+    }
+}
+
 static ggml_status ggml_backend_hipep_graph_compute(ggml_backend_t backend, ggml_cgraph * graph) {
     using clock      = std::chrono::steady_clock;
     const auto since = [](clock::time_point t) { return std::chrono::duration<double>(clock::now() - t).count(); };
@@ -310,7 +334,7 @@ static const ggml_backend_i ggml_backend_hipep_interface = {
     /* .graph_compute           = */ ggml_backend_hipep_graph_compute,
     /* .event_record            = */ nullptr,
     /* .event_wait              = */ nullptr,
-    /* .graph_optimize          = */ nullptr,
+    /* .graph_optimize          = */ ggml_backend_hipep_graph_optimize,
 };
 
 // ---------------------------------------------------------------- device
