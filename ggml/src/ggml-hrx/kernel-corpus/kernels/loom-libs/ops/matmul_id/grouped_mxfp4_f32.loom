@@ -1,6 +1,17 @@
 // Two output rows share inputs; up to four expert occurrences share weights.
 amdgpu.target<gfx11-generic> @ggml_mxfp4_vector_wave32 {subgroup_size = 32}
 
+func.decl @ggml_mxfp4_load_decode_state(%weight: buffer, %block_base: offset, %packet_offset: index) -> (i8, vector<1xi32>)
+
+func.decl @ggml_mxfp4_decode_scale(%scale_byte: i8) -> (f32)
+
+func.def inline @ggml_mxfp4_group_preloaded_f16(%scale_byte: i8, %packed: vector<1xi32>) -> (vector<8xf16>, f32) {
+  %scale = func.call @ggml_mxfp4_decode_scale(%scale_byte) : (i8) -> (f32)
+  %schema = encoding.define #encoding.f4e2m1<payload_elements=8, payload_packing=little_endian_nibbles, payload_registers=1> : encoding<schema>
+  %decoded = vector.decode %packed using %schema : vector<1xi32>, encoding<schema> -> vector<8xf16>
+  func.return %decoded, %scale : vector<8xf16>, f32
+}
+
 config.decl @ggml.mxfp4_vector.input_size : %v: index where [range(%v, 256, 32768), multiple_of(%v, 256)]
 
 config.decl @ggml.mxfp4_vector.output_size : %v: index where [range(%v, 1, 262144)]
@@ -117,14 +128,8 @@ template.def<@ggml.mxfp4_f32_group.lane_sum> device @ggml_mxfp4_f32_group_lane_s
   %c32 = index.constant 32 : index
   %c256 = index.constant 256 : index
   %zero_offset = index.constant 0 : offset
-  %one_byte = index.constant 1 : offset
   %block_bytes = index.constant 17 : offset
   %zero_float = scalar.constant 0.0 : f32
-  %zero_i32 = scalar.constant 0 : i32
-  %scale_shift = scalar.constant 23 : i32
-  %scale_subnormal = scalar.constant 4194304 : i32
-  %scale_nan = scalar.constant 2143289344 : i32
-  %nan_exponent = scalar.constant 255 : i32
   %lane_block = index.div %lane, %c4 : index
   %lane_packet = index.rem %lane, %c4 : index
   %packet_offset = index.mul %lane_packet, %c4 : index
@@ -137,37 +142,11 @@ template.def<@ggml.mxfp4_f32_group.lane_sum> device @ggml_mxfp4_f32_group_lane_s
     %block = index.div %klo, %c32 : index
     %block_offset = index.scale %block, %block_bytes : index, offset -> offset
     %scale_offset = index.add %row_base, %block_offset : offset
-    %payload_offset = index.add %scale_offset, %one_byte : offset
-    %scv = buffer.view %weight[%scale_offset] : buffer -> view<1xi8>
-    %wv = buffer.view %weight[%payload_offset] : buffer -> view<16xi8>
-    %scale_byte = view.load %scv[%c0] : view<1xi8> -> i8
-    %exponent = scalar.extui %scale_byte : i8 to i32
-    %normal_bits = scalar.shli %exponent, %scale_shift : i32
-    %is_zero = scalar.cmpi eq, %exponent, %zero_i32 : i32
-    %is_nan = scalar.cmpi eq, %exponent, %nan_exponent : i32
-    %finite_bits = scf.select %is_zero, %scale_subnormal, %normal_bits : i32
-    %scale_bits = scf.select %is_nan, %scale_nan, %finite_bits : i32
-    %scale = scalar.bitcast %scale_bits : i32 to f32
-    %packed_bytes = vector.load %wv[%packet_offset] : view<16xi8> -> vector<4xi8>
-    %packed = vector.bitcast %packed_bytes : vector<4xi8> to vector<1xi32>
-    %schema = encoding.define #encoding.f4e2m1<payload_elements=8, payload_packing=little_endian_nibbles, payload_registers=1> : encoding<schema>
-    %decoded = vector.decode %packed using %schema : vector<1xi32>, encoding<schema> -> vector<8xf16>
+    %scale_byte, %packed = func.call @ggml_mxfp4_load_decode_state(%weight, %scale_offset, %packet_offset) : (buffer, offset, index) -> (i8, vector<1xi32>)
+    %decoded, %scale = func.call @ggml_mxfp4_group_preloaded_f16(%scale_byte, %packed) : (i8, vector<1xi32>) -> (vector<8xf16>, f32)
     %scale_offset_r1 = index.add %row_base1, %block_offset : offset
-    %payload_offset_r1 = index.add %scale_offset_r1, %one_byte : offset
-    %scv_r1 = buffer.view %weight[%scale_offset_r1] : buffer -> view<1xi8>
-    %wv_r1 = buffer.view %weight[%payload_offset_r1] : buffer -> view<16xi8>
-    %scale_byte_r1 = view.load %scv_r1[%c0] : view<1xi8> -> i8
-    %exponent_r1 = scalar.extui %scale_byte_r1 : i8 to i32
-    %normal_bits_r1 = scalar.shli %exponent_r1, %scale_shift : i32
-    %is_zero_r1 = scalar.cmpi eq, %exponent_r1, %zero_i32 : i32
-    %is_nan_r1 = scalar.cmpi eq, %exponent_r1, %nan_exponent : i32
-    %finite_bits_r1 = scf.select %is_zero_r1, %scale_subnormal, %normal_bits_r1 : i32
-    %scale_bits_r1 = scf.select %is_nan_r1, %scale_nan, %finite_bits_r1 : i32
-    %scale_r1 = scalar.bitcast %scale_bits_r1 : i32 to f32
-    %packed_bytes_r1 = vector.load %wv_r1[%packet_offset] : view<16xi8> -> vector<4xi8>
-    %packed_r1 = vector.bitcast %packed_bytes_r1 : vector<4xi8> to vector<1xi32>
-    %schema_r1 = encoding.define #encoding.f4e2m1<payload_elements=8, payload_packing=little_endian_nibbles, payload_registers=1> : encoding<schema>
-    %decoded_r1 = vector.decode %packed_r1 using %schema_r1 : vector<1xi32>, encoding<schema> -> vector<8xf16>
+    %scale_byte_r1, %packed_r1 = func.call @ggml_mxfp4_load_decode_state(%weight, %scale_offset_r1, %packet_offset) : (buffer, offset, index) -> (i8, vector<1xi32>)
+    %decoded_r1, %scale_r1 = func.call @ggml_mxfp4_group_preloaded_f16(%scale_byte_r1, %packed_r1) : (i8, vector<1xi32>) -> (vector<8xf16>, f32)
     %n0, %n4 = template.apply<@ggml.mxfp4_f32_group.update>(%klo, %khi, %b0, %decoded, %scale, %a0, %decoded_r1, %scale_r1, %a4, %input) : (index, index, offset, vector<8xf16>, f32, f32, vector<8xf16>, f32, f32, buffer) -> (f32, f32)
     %n1, %n5 = scf.if %p1 -> (f32, f32) {
       %v0, %v1 = template.apply<@ggml.mxfp4_f32_group.update>(%klo, %khi, %b1, %decoded, %scale, %a1, %decoded_r1, %scale_r1, %a5, %input) : (index, index, offset, vector<8xf16>, f32, f32, vector<8xf16>, f32, f32, buffer) -> (f32, f32)

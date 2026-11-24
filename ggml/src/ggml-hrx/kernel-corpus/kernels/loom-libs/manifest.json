@@ -11872,9 +11872,13 @@
         "primary_sources": [
           "ops/matmul_id/grouped_mxfp4_f32.loom"
         ],
-        "library_sources": []
+        "library_sources": [
+          "motifs/dequant.loom"
+        ]
       },
-      "compile_dependencies": []
+      "compile_dependencies": [
+        "motifs/dequant.loom"
+      ]
     },
     {
       "name": "ggml_mul_mat_id_grouped_mxfp4_f32",
@@ -11913,9 +11917,13 @@
         "primary_sources": [
           "ops/matmul_id/grouped_mxfp4_f32.loom"
         ],
-        "library_sources": []
+        "library_sources": [
+          "motifs/dequant.loom"
+        ]
       },
-      "compile_dependencies": []
+      "compile_dependencies": [
+        "motifs/dequant.loom"
+      ]
     },
     {
       "name": "ggml_mul_mat_tiled_input_f32_publish_f16acc_f32",

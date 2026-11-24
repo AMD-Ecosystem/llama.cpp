@@ -2,6 +2,18 @@
 // Shared Q8_1_x4 activations are reused across expert rows and projections.
 amdgpu.target<gfx11-generic> @ggml_mxfp4_dot_wave32 {subgroup_size = 32}
 
+func.def inline @ggml_mxfp4_vector_preloaded_i8(%packed_bytes: vector<8xi8>, %codebook: vector<16xi8>, %mask4: vector<8xi8>) -> (vector<8xi8>, vector<8xi8>) {
+  %shift4 = vector.splati 4 : vector<2xi32>
+  %packed = vector.bitcast %packed_bytes : vector<8xi8> to vector<2xi32>
+  %shifted = vector.shrui %packed, %shift4 : vector<2xi32>
+  %shifted_bytes = vector.bitcast %shifted : vector<2xi32> to vector<8xi8>
+  %lo_indices = vector.andi %packed_bytes, %mask4 : vector<8xi8>
+  %hi_indices = vector.andi %shifted_bytes, %mask4 : vector<8xi8>
+  %lo = vector.table.lookup %codebook[%lo_indices] : vector<16xi8>, vector<8xi8> -> vector<8xi8>
+  %hi = vector.table.lookup %codebook[%hi_indices] : vector<16xi8>, vector<8xi8> -> vector<8xi8>
+  func.return %lo, %hi : vector<8xi8>, vector<8xi8>
+}
+
 config.decl @ggml.mxfp4_vector.input_size : %v: index where [range(%v, 512, 32768), multiple_of(%v, 512)]
 
 config.decl @ggml.mxfp4_vector.output_size : %v: index where [range(%v, 1, 262144)]
@@ -68,7 +80,6 @@ template.def<@ggml.mxfp4_vector.lane_sum> device @ggml_mxfp4_vector_lane_sum(%pa
   %one_byte = index.constant 1 : offset
   %block_bytes = index.constant 17 : offset
   %mask4 = vector.splati 15 : vector<8xi8>
-  %shift4 = vector.splati 4 : vector<2xi32>
   %zero_float = scalar.constant 0.0 : f32
   %zero_i32 = scalar.constant 0 : i32
   %scale_shift = scalar.constant 23 : i32
@@ -116,13 +127,7 @@ template.def<@ggml.mxfp4_vector.lane_sum> device @ggml_mxfp4_vector_lane_sum(%pa
     %scale_bits = scf.select %is_nan, %scale_nan, %finite_bits : i32
     %scale = scalar.bitcast %scale_bits : i32 to f32
     %packed_bytes = vector.load %wv[%packet_offset] : view<16xi8> -> vector<8xi8>
-    %packed = vector.bitcast %packed_bytes : vector<8xi8> to vector<2xi32>
-    %shifted = vector.shrui %packed, %shift4 : vector<2xi32>
-    %shifted_bytes = vector.bitcast %shifted : vector<2xi32> to vector<8xi8>
-    %lo_indices = vector.andi %packed_bytes, %mask4 : vector<8xi8>
-    %hi_indices = vector.andi %shifted_bytes, %mask4 : vector<8xi8>
-    %lo = vector.table.lookup %codebook[%lo_indices] : vector<16xi8>, vector<8xi8> -> vector<8xi8>
-    %hi = vector.table.lookup %codebook[%hi_indices] : vector<16xi8>, vector<8xi8> -> vector<8xi8>
+    %lo, %hi = func.call @ggml_mxfp4_vector_preloaded_i8(%packed_bytes, %codebook, %mask4) : (vector<8xi8>, vector<16xi8>, vector<8xi8>) -> (vector<8xi8>, vector<8xi8>)
     %next = template.apply<@ggml.mxfp4_vector.update>(%klo, %block, %packet_offset, %input_base, %lo, %hi, %scale, %acc, %input) : (index, index, index, offset, vector<8xi8>, vector<8xi8>, f32, f32, buffer) -> (f32)
     %peer_next = scf.if %paired -> (f32) {
       %value = template.apply<@ggml.mxfp4_vector.update>(%klo, %block, %packet_offset, %peer_base, %lo, %hi, %scale, %peer_acc, %input) : (index, index, index, offset, vector<8xi8>, vector<8xi8>, f32, f32, buffer) -> (f32)

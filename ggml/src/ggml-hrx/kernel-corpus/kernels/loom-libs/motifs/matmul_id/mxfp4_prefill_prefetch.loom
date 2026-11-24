@@ -1,3 +1,5 @@
+func.decl @ggml_mxfp4_decode_scale(%scale_byte: i8) -> (f32)
+
 func.def inline @ggml_mxfp4_prefetch_panel(%weight_noalias: buffer, %input_noalias: buffer, %route_stage: buffer, %expert_byte_base: offset, %weight_row_bytes: offset, %channel_tile_base: index, %bounded_output_size: index, %quant_groups: index, %load_row: index, %load_k: index, %weight_klo: index, %bounded_route_count: index, %bounded_input_route_count: index, %block_base: index) -> (i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32) {
   %c0 = index.constant 0 : index
   %c1 = index.constant 1 : index
@@ -111,19 +113,8 @@ func.def inline @ggml_mxfp4_prefetch_panel(%weight_noalias: buffer, %input_noali
   func.return %ret_wp00, %ret_wp01, %ret_wp02, %ret_wp03, %ret_wp10, %ret_wp11, %ret_wp12, %ret_wp13, %ret_we00, %ret_we01, %ret_we02, %ret_we03, %ret_we10, %ret_we11, %ret_we12, %ret_we13, %ret_ap000, %ret_ap001, %ret_ap010, %ret_ap011, %ret_ap100, %ret_ap101, %ret_ap110, %ret_ap111, %ret_ad00, %ret_ad01, %ret_ad10, %ret_ad11 : i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32
 }
 
-func.def inline @ggml_mxfp4_decode_packet(%p: vector<4xi8>, %scale_byte: i8) -> (vector<4xi8>, vector<4xi8>, f32) {
-  %exp = scalar.extui %scale_byte : i8 to i32
-  %shift23 = scalar.constant 23 : i32
-  %iz = scalar.constant 0 : i32
-  %sub = scalar.constant 4194304 : i32
-  %nan_exp = scalar.constant 255 : i32
-  %nan_bits = scalar.constant 2143289344 : i32
-  %bits = scalar.shli %exp, %shift23 : i32
-  %is_zero = scalar.cmpi eq, %exp, %iz : i32
-  %is_nan = scalar.cmpi eq, %exp, %nan_exp : i32
-  %finite = scf.select %is_zero, %sub, %bits : i32
-  %scale_bits = scf.select %is_nan, %nan_bits, %finite : i32
-  %scale_raw = scalar.bitcast %scale_bits : i32 to f32
+func.def inline @ggml_mxfp4_preloaded_i8_packet(%p: vector<4xi8>, %scale_byte: i8) -> (vector<4xi8>, vector<4xi8>, f32) {
+  %scale_raw = func.call @ggml_mxfp4_decode_scale(%scale_byte) : (i8) -> (f32)
   %half = scalar.constant 0.5 : f32
   %scale = scalar.mulf %scale_raw, %half : f32
   %pw = vector.bitcast %p : vector<4xi8> to vector<1xi32>
@@ -386,7 +377,7 @@ template.def<@ggml.matmul_id.mxfp4_prefetch.core> device @ggml_mul_mat_id_mxfp4_
           %payload = vector.bitcast %payload_vector : vector<1xi32> to vector<4xi8>
           %exponent_word = vector.extract %bank_we[%ks, %slot] : vector<2x4xi32> -> i32
           %exponent = scalar.trunci %exponent_word : i32 to i8
-          %lo, %hi, %scale = func.call @ggml_mxfp4_decode_packet(%payload, %exponent) : (vector<4xi8>, i8) -> (vector<4xi8>, vector<4xi8>, f32)
+          %lo, %hi, %scale = func.call @ggml_mxfp4_preloaded_i8_packet(%payload, %exponent) : (vector<4xi8>, i8) -> (vector<4xi8>, vector<4xi8>, f32)
           vector.store %lo, %weight_stage_view[%local_row, %stage_klo] : vector<4xi8>, view<64x80xi8>
           vector.store %hi, %weight_stage_view[%local_row, %stage_khi] : vector<4xi8>, view<64x80xi8>
           scf.if %scale_writer {
