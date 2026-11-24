@@ -10,6 +10,7 @@
 #include "dispatch-get-rows.h"
 #include "dispatch-glu.h"
 #include "dispatch-hyper-connection.h"
+#include "dispatch-lightning-indexer.h"
 #include "dispatch-mul-mat-id.h"
 #include "dispatch-mul-mat.h"
 #include "dispatch-reduction.h"
@@ -40,6 +41,7 @@ void register_common_dispatches(DispatchRegistryBuilder & registry) {
     register_get_rows_dispatches(registry);
     register_glu_dispatches(registry);
     register_hyper_connection_dispatches(registry);
+    register_lightning_indexer_dispatch(registry);
     register_mul_mat_id_dispatches(registry);
     register_mul_mat_dispatches(registry);
     register_reduction_dispatches(registry);

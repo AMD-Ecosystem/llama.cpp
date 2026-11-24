@@ -210,6 +210,8 @@ ggml_add_backend_library(ggml-hrx
     dispatch_registration/common/dispatch-copy.h
     dispatch_registration/common/dispatch-flash-attention.cpp
     dispatch_registration/common/dispatch-flash-attention.h
+    dispatch_registration/common/dispatch-lightning-indexer.cpp
+    dispatch_registration/common/dispatch-lightning-indexer.h
     dispatch_registration/common/dispatch-gated-mul-mat-id.cpp
     dispatch_registration/common/dispatch-gated-mul-mat-id.h
     dispatch_registration/common/dispatch-gated-mul-mat.cpp
