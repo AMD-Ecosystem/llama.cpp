@@ -786,9 +786,6 @@
       "path": "ops/matmul/tiled_input_f32_publish_f16acc_f32.loom"
     },
     {
-      "path": "motifs/flash_attention/publish_f32_accum.loom"
-    },
-    {
       "path": "motifs/flash_attention/pv_block_wmma_f32_accum.loom"
     },
     {
@@ -10753,14 +10750,14 @@
           "motifs/flash_attention/qk_block_wmma_f32_accum.loom",
           "motifs/flash_attention/online_softmax.loom",
           "motifs/flash_attention/pv_block_wmma_f32_accum.loom",
-          "motifs/flash_attention/publish_f32_accum.loom"
+          "motifs/flash_attention/publish_f32.loom"
         ]
       },
       "compile_dependencies": [
         "motifs/flash_attention/qk_block_wmma_f32_accum.loom",
         "motifs/flash_attention/online_softmax.loom",
         "motifs/flash_attention/pv_block_wmma_f32_accum.loom",
-        "motifs/flash_attention/publish_f32_accum.loom"
+        "motifs/flash_attention/publish_f32.loom"
       ]
     },
     {
@@ -11728,14 +11725,14 @@
           "motifs/flash_attention/qk_block_wmma_f32_accum.loom",
           "motifs/flash_attention/online_softmax.loom",
           "motifs/flash_attention/pv_block_wmma_f32_accum.loom",
-          "motifs/flash_attention/publish_f32_accum.loom"
+          "motifs/flash_attention/publish_f32.loom"
         ]
       },
       "compile_dependencies": [
         "motifs/flash_attention/qk_block_wmma_f32_accum.loom",
         "motifs/flash_attention/online_softmax.loom",
         "motifs/flash_attention/pv_block_wmma_f32_accum.loom",
-        "motifs/flash_attention/publish_f32_accum.loom"
+        "motifs/flash_attention/publish_f32.loom"
       ]
     },
     {
