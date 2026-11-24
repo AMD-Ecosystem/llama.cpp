@@ -9,6 +9,7 @@
 //   GGML_CUDA_MMDQ_NO_Q6K    non-zero = keep Q6_K on the old path
 //   GGML_CUDA_MMDQ_Q5_K      non-zero = also use it for dense Q5_K (needs GGML_CUDA_MMDQ)
 //   GGML_CUDA_MMDQ_Q5_0      non-zero = also use it for dense Q5_0 incl. the GGML_CUDA_MMDQ_GLU fusion (needs GGML_CUDA_MMDQ)
+//   GGML_CUDA_MMDQ_Q4_0      non-zero = also use it for dense Q4_0 incl. the GGML_CUDA_MMDQ_GLU fusion (needs GGML_CUDA_MMDQ)
 //   GGML_CUDA_MMDQ_Q8_0      non-zero = also use it for dense Q8_0 (needs GGML_CUDA_MMDQ), GGML_CUDA_MMDQ_Q8_0_MIN_BATCH default 576, only for >= 512 rows
 //   GGML_CUDA_MMDQ_ID        non-zero = also use it for MUL_MAT_ID (MoE experts, Q4_K/Q5_K/Q6_K), default off (slower than mmq)
 //   GGML_CUDA_MMDQ_ID_MIN_BATCH minimum number of tokens for MUL_MAT_ID, default 32
@@ -16,6 +17,9 @@
 //   GGML_CUDA_MMDQ_SWIZZLE   n > 0 = dense blocks in groups of n token tiles (activations stay in cache), for activations > 8 MiB
 //   GGML_CUDA_MMDQ_GEGLU     non-zero = the GGML_CUDA_MMDQ_GLU fusion also for dense GEGLU (Gemma)
 //   GGML_CUDA_MMDQ_FUSE_BIAS non-zero = fuse a following bias add into the dense matmul
+//   GGML_CUDA_MMDQ_WIDE      non-zero = 128x256 output tiles for every dense shape from 512 tokens (default: only Q4_K with >= 16384 rows)
+//   GGML_CUDA_MMDQ_FUSE_RES  non-zero = fuse a following residual add into the dense matmul
+//   GGML_CUDA_MMDQ_KSPLIT    non-zero = dense matmuls of up to 128 tokens with few output rows split K over 2-3 groups of blocks and sum the partial outputs (changes the summation order)
 //   GGML_CUDA_MMDQ_MOE       non-zero = MUL_MAT_ID (Q4_K/Q5_K/Q6_K/Q5_1) with the weight streaming kernel, independent of GGML_CUDA_MMDQ
 //   GGML_CUDA_MMDQ_MOE_MIN_BATCH minimum number of tokens for it, default 16; used only with >= 16 tokens per expert on average,
 //                            >= 32 for K-quant rows shorter than 2048, GGML_CUDA_MMDQ_MOE_ALL non-zero = for every shape (tests)
