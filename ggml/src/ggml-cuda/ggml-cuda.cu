@@ -4468,6 +4468,32 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
         }
     }
 
+    std::initializer_list<enum ggml_op> sigmoid_mul_add_ops = { GGML_OP_UNARY, GGML_OP_MUL, GGML_OP_ADD };
+
+    if (is_equal(sigmoid_mul_add_ops, ops) && unary_ops.size() == 1 && unary_ops.begin()[0] == GGML_UNARY_OP_SIGMOID &&
+            ggml_can_fuse_subgraph(cgraph, node_idx, ops, { node_idx + 2 })) {
+        const ggml_tensor * sigmoid = cgraph->nodes[node_idx];
+        const ggml_tensor * mul     = cgraph->nodes[node_idx+1];
+        const ggml_tensor * add     = cgraph->nodes[node_idx+2];
+
+        if (ggml_get_unary_op(sigmoid) != GGML_UNARY_OP_SIGMOID) {
+            return false;
+        }
+
+        const ggml_tensor * g = sigmoid->src[0];
+        const ggml_tensor * x = mul->src[0] == sigmoid ? mul->src[1] : mul->src[0];
+        const ggml_tensor * r = add->src[0] == mul ? add->src[1] : add->src[0];
+
+        for (const ggml_tensor * t : { g, x, r, sigmoid, mul, add }) {
+            if (t->type != GGML_TYPE_F32 || !ggml_is_contiguous(t)) {
+                return false;
+            }
+        }
+
+        return g->ne[0] == 1 && ggml_nelements(g) == ggml_nrows(x) && ggml_nelements(x) <= INT_MAX && x->ne[0] <= INT_MAX &&
+            ggml_are_same_shape(x, mul) && ggml_are_same_shape(x, r) && ggml_are_same_shape(x, add);
+    }
+
     if (!ggml_can_fuse(cgraph, node_idx, ops)) {
         return false;
     }
@@ -4589,6 +4615,51 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
             return false;
         }
         if (!ggml_is_contiguous_1(other) || !ggml_is_contiguous_1(unary->src[0]) || !ggml_are_same_shape(other, unary)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    if (ops.size() == 3 && ops.begin()[0] == GGML_OP_ADD && ops.begin()[1] == GGML_OP_UNARY && ops.begin()[2] == GGML_OP_MUL
+     && unary_ops.size() == 1 && (unary_ops.begin()[0] == GGML_UNARY_OP_SILU || unary_ops.begin()[0] == GGML_UNARY_OP_SIGMOID || unary_ops.begin()[0] == GGML_UNARY_OP_SOFTPLUS)) {
+        const ggml_tensor * add   = cgraph->nodes[node_idx];
+        const ggml_tensor * unary = cgraph->nodes[node_idx+1];
+        const ggml_tensor * mul   = cgraph->nodes[node_idx+2];
+
+        if (ggml_get_unary_op(unary) != unary_ops.begin()[0]) {
+            return false;
+        }
+
+        // x + b, then * a: b and a hold one value per element of a row of x
+        const ggml_tensor * x = add->src[0];
+        const ggml_tensor * b = add->src[1];
+        const ggml_tensor * a = mul->src[0] == unary ? mul->src[1] : mul->src[0];
+
+        for (const ggml_tensor * t : { x, b, a, add, unary, mul }) {
+            if (t->type != GGML_TYPE_F32 || !ggml_is_contiguous(t)) {
+                return false;
+            }
+        }
+
+        return ggml_are_same_shape(x, mul) && ggml_nelements(b) == x->ne[0] && ggml_nelements(a) == x->ne[0] && b->ne[0] == x->ne[0] && a->ne[0] == x->ne[0];
+    }
+
+    if (ops.size() == 2 && ops.begin()[0] == GGML_OP_SCALE && ops.begin()[1] == GGML_OP_UNARY
+     && unary_ops.size() == 1 && unary_ops.begin()[0] == GGML_UNARY_OP_SILU) {
+        const ggml_tensor * scale = cgraph->nodes[node_idx];
+        const ggml_tensor * silu  = cgraph->nodes[node_idx+1];
+
+        if (ggml_get_unary_op(silu) != GGML_UNARY_OP_SILU) {
+            return false;
+        }
+
+        if (scale->src[0]->type != GGML_TYPE_F32 || scale->type != GGML_TYPE_F32 || silu->type != GGML_TYPE_F32) {
+            return false;
+        }
+
+        // the fused kernel reads src and writes dst as dense
+        if (!ggml_is_contiguous(scale->src[0]) || !ggml_is_contiguous(silu)) {
             return false;
         }
 
@@ -4922,6 +4993,18 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
             ggml_cuda_op_snake_fused(*cuda_ctx, x, a, inv_b, add);
             return 4;
         }
+    }
+
+    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_UNARY, GGML_OP_MUL, GGML_OP_ADD }, { GGML_UNARY_OP_SIGMOID })) {
+        ggml_cuda_op_sigmoid_mul_add(*cuda_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 2]);
+        return 2;
+    }
+
+    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_ADD, GGML_OP_UNARY, GGML_OP_MUL }, { GGML_UNARY_OP_SOFTPLUS }) ||
+        ggml_cuda_can_fuse(cgraph, i, { GGML_OP_ADD, GGML_OP_UNARY, GGML_OP_MUL }, { GGML_UNARY_OP_SIGMOID }) ||
+        ggml_cuda_can_fuse(cgraph, i, { GGML_OP_ADD, GGML_OP_UNARY, GGML_OP_MUL }, { GGML_UNARY_OP_SILU })) {
+        ggml_cuda_op_add_unary_mul(*cuda_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 2]);
+        return 2;
     }
 
     // multi-(add or mul)
@@ -5587,6 +5670,11 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         return 2;
     }
 
+    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_SCALE, GGML_OP_UNARY }, { GGML_UNARY_OP_SILU })) {
+        ggml_cuda_op_scale_silu(*cuda_ctx, node, cgraph->nodes[i + 1]);
+        return 1;
+    }
+
     return 0;
 }
 
@@ -5966,6 +6054,12 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
         // add alloc deps for performance positive fusions. This may increase the overall compute buffer size.
         // TODO: consolidate fusion paths in graph_optimize and graph_compute
         ggml_cuda_set_device(cuda_ctx->device);
+        for (int i = 0; i + 2 < cgraph->n_nodes; ++i) {
+            if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_UNARY, GGML_OP_MUL, GGML_OP_ADD }, { GGML_UNARY_OP_SIGMOID })) {
+                add_alloc_deps(i, i + 2);
+                i += 2;
+            }
+        }
         for (int i = 0; i + 5 < cgraph->n_nodes; ++i) {
             if (cgraph->nodes[i]->op != GGML_OP_MUL_MAT_ID) {
                 continue;
