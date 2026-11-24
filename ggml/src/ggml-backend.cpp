@@ -1923,6 +1923,10 @@ static void ggml_backend_sched_split_graph_impl(ggml_backend_sched_t sched, stru
                     read(src, i);
                 }
             }
+            // and what it reads through the copies the scheduler makes for it (its nodes read the copies)
+            for (int j = 0; j < sched->splits[i].n_inputs; j++) {
+                read(sched->splits[i].inputs[j], i);
+            }
         }
     }
 
