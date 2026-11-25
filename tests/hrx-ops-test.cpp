@@ -2649,6 +2649,67 @@ static void run_gemma_scaled_rmsnorm_mul_cpu_reference_case() {
     ggml_backend_free(hrx_backend);
 }
 
+static void run_scheduled_cast_fallback_case() {
+    ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
+    ggml_backend_t cpu_backend = init_cpu_backend();
+    REQUIRE(hrx_backend != nullptr);
+    ggml_backend_t backends[] = { hrx_backend, cpu_backend };
+    ggml_backend_sched_t sched = ggml_backend_sched_new(backends, nullptr, 2, GGML_DEFAULT_GRAPH_SIZE, false, true);
+    REQUIRE(sched != nullptr);
+
+    ggml_init_params params = {};
+    params.mem_size = 1024 * 1024;
+    params.no_alloc = true;
+    ggml_context * ctx = ggml_init(params);
+    REQUIRE(ctx != nullptr);
+    ggml_tensor * packed = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 4, 2);
+    REQUIRE(ggml_backend_supports_op(hrx_backend, ggml_cast(ctx, packed, GGML_TYPE_F16)));
+    REQUIRE(!ggml_backend_supports_op(hrx_backend,
+                                     ggml_cast(ctx, ggml_transpose(ctx, packed), GGML_TYPE_F16)));
+    ggml_tensor * half = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, 4, 2);
+    REQUIRE(!ggml_backend_supports_op(hrx_backend, ggml_cast(ctx, half, GGML_TYPE_F32)));
+    REQUIRE(!ggml_backend_supports_op(hrx_backend,
+                                     ggml_cast(ctx, ggml_transpose(ctx, half), GGML_TYPE_F32)));
+    ggml_tensor * input = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4);
+    ggml_backend_sched_set_tensor_backend(sched, input, hrx_backend);
+    ggml_tensor * scaled = ggml_scale(ctx, input, -1.0f);
+    ggml_tensor * integers = ggml_cast(ctx, scaled, GGML_TYPE_I32);
+    ggml_set_output(integers);
+    ggml_tensor * floats = ggml_cast(ctx, integers, GGML_TYPE_F32);
+    ggml_tensor * output = ggml_add(ctx, scaled, floats);
+    REQUIRE(!ggml_backend_supports_op(hrx_backend, integers));
+    REQUIRE(!ggml_backend_supports_op(hrx_backend, floats));
+    ggml_backend_sched_set_tensor_backend(sched, output, hrx_backend);
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, output);
+    REQUIRE(ggml_backend_sched_alloc_graph(sched, graph));
+    REQUIRE(ggml_backend_sched_get_tensor_backend(sched, scaled) == hrx_backend);
+    REQUIRE(ggml_backend_sched_get_tensor_backend(sched, integers) == cpu_backend);
+    REQUIRE(ggml_backend_sched_get_tensor_backend(sched, floats) == cpu_backend);
+    REQUIRE(ggml_backend_sched_get_tensor_backend(sched, output) == hrx_backend);
+
+    for (const std::vector<float> & values : { std::vector<float>{ -3.75f, -0.75f, 0.75f, 3.75f },
+                                              std::vector<float>{ 7.5f, -9.25f, -0.0f, 1.0f } }) {
+        ggml_backend_tensor_set(input, values.data(), 0, values.size() * sizeof(float));
+        REQUIRE(ggml_backend_sched_graph_compute(sched, graph) == GGML_STATUS_SUCCESS);
+        ggml_backend_sched_synchronize(sched);
+        std::vector<int32_t> actual_integers(values.size());
+        std::vector<float> actual(values.size());
+        ggml_backend_tensor_get(integers, actual_integers.data(), 0, actual_integers.size() * sizeof(int32_t));
+        ggml_backend_tensor_get(output, actual.data(), 0, actual.size() * sizeof(float));
+        for (size_t i = 0; i < values.size(); ++i) {
+            const int32_t expected = static_cast<int32_t>(-values[i]);
+            REQUIRE(actual_integers[i] == expected);
+            REQUIRE(actual[i] == -values[i] + static_cast<float>(expected));
+        }
+    }
+
+    ggml_backend_sched_free(sched);
+    ggml_free(ctx);
+    ggml_backend_free(hrx_backend);
+    ggml_backend_free(cpu_backend);
+}
+
 static void run_scheduled_hrx_scale_rmsnorm_case() {
     ggml_backend_t hrx_backend = ggml_backend_hrx_init(0);
     ggml_backend_t cpu_backend = init_cpu_backend();
@@ -11413,6 +11474,7 @@ static void register_dense_matmul_cases(Suite & suite) {
 }
 
 static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
+    suite.device_case("scheduled.cast_fallback", [] { run_scheduled_cast_fallback_case(); });
     suite.host_case("support.lfm_head_rope.availability", [] { run_lfm_head_rope_availability_checks(); });
     suite.host_case("gemma_post_proj.matcher_negatives", [] { run_gemma_post_proj_matcher_negatives(); });
     for (const int64_t token_count : { 1, 3, 64 }) {
