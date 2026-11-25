@@ -1687,19 +1687,14 @@ static void run_routed_codebook_admission_checks() {
         const ggml::hrx::GraphImportResult imported = ggml::hrx::import_ggml_graph(*graph);
         REQUIRE(imported.valid());
         ggml::hrx::DispatchMatch match;
-        const bool supported = format != GGML_TYPE_IQ2_XS;
-        if (supported) {
-            REQUIRE(match_root(imported.graph, routed.gate_output, pair_registry, match));
-            const ggml::hrx::Dispatch * pair = find_pair(match);
-            REQUIRE(pair != nullptr);
-            REQUIRE(pair->bindings.size() == 8);
-        } else {
-            REQUIRE(!match_root(imported.graph, routed.gate_output, pair_registry, match));
-        }
+        REQUIRE(match_root(imported.graph, routed.gate_output, pair_registry, match));
+        const ggml::hrx::Dispatch * pair = find_pair(match);
+        REQUIRE(pair != nullptr);
+        REQUIRE(pair->bindings.size() == 8);
         ggml::hrx::DispatchMatch plain_match;
-        REQUIRE(match_root(imported.graph, routed.gate_output, plain_registry, plain_match) == supported);
+        REQUIRE(match_root(imported.graph, routed.gate_output, plain_registry, plain_match));
         ggml::hrx::DispatchMatch postops_match;
-        REQUIRE(match_root(imported.graph, routed.down_output, plain_registry, postops_match) == supported);
+        REQUIRE(match_root(imported.graph, routed.down_output, plain_registry, postops_match));
         for (const auto & dispatch : postops_match.dispatches) {
             REQUIRE(kernel_name_for_id(dispatch.kernel.kernel_id).find("postops") == std::string::npos);
         }
@@ -11496,13 +11491,19 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
                       [] { run_attention_postprocess_metadata_reuse_case(); });
     suite.device_case("routed_moe.q4_k.next_rmsnorm", [] { run_routed_moe_cpu_reference_case(GGML_TYPE_Q4_K, true); });
     suite.host_case("routed_moe.codebook_admission", [] { run_routed_codebook_admission_checks(); });
-    for (auto type : { GGML_TYPE_IQ1_S, GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ3_XXS }) {
+    for (auto type : { GGML_TYPE_IQ1_S, GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ3_XXS }) {
         for (int64_t tokens : { 1, 6 }) {
             suite.device_case("routed_standalone." + type_name(type) + ".tokens" + std::to_string(tokens), [=] {
                 run_routed_pair_cpu_reference_case(type, GGML_TYPE_Q4_K, tokens, true);
             });
         }
     }
+    suite.device_case("routed_pair.iq2_xs.iq2_xxs.tiled.cpu_reference", [] {
+        run_routed_pair_cpu_reference_case(GGML_TYPE_IQ2_XS, GGML_TYPE_IQ2_XXS, 6);
+    });
+    suite.device_case("routed_pair.iq1_s.iq2_xs.skinny.cpu_reference", [] {
+        run_routed_pair_cpu_reference_case(GGML_TYPE_IQ1_S, GGML_TYPE_IQ2_XS, 1);
+    });
     suite.device_case("routed_pair.iq2_xxs.iq1_s.tiled.cpu_reference", [] {
         run_routed_pair_cpu_reference_case(GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ1_S, 6);
     });

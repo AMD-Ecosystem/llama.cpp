@@ -18,7 +18,7 @@
 namespace ggml::hrx {
 
 inline bool routed_weight_lacks_decoder(CommonMulMatWeightFormat format) {
-    return format == CommonMulMatWeightFormat::IQ1_M || format == CommonMulMatWeightFormat::IQ2_XS;
+    return format == CommonMulMatWeightFormat::IQ1_M;
 }
 
 inline bool bind_routed_weight_codebook(const DispatchMatchContext & context, DispatchMatch & match,
@@ -30,6 +30,9 @@ inline bool bind_routed_weight_codebook(const DispatchMatchContext & context, Di
             break;
         case CommonMulMatWeightFormat::IQ2_XXS:
             resource = IQCodebookResource::IQ2XXS;
+            break;
+        case CommonMulMatWeightFormat::IQ2_XS:
+            resource = IQCodebookResource::IQ2XS;
             break;
         case CommonMulMatWeightFormat::IQ3_XXS:
             resource = IQCodebookResource::IQ3XXS;
