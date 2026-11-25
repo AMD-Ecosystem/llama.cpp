@@ -66,17 +66,28 @@ static void add_concat_strided_source_parameters(KernelSpecialization & kernel, 
 }  // namespace
 
 bool make_copy_f32_dispatch(const Value & source, const Value & output, Dispatch & dispatch) {
-    if (source.type != GGML_TYPE_F32 || output.type != GGML_TYPE_F32 || !output.contiguous ||
-        !packed_f32_layout(output) || !f32_element_strides(source) || source.element_count <= 0 ||
-        source.element_count != output.element_count ||
+    const bool output_is_i32 = output.type == GGML_TYPE_I32;
+    if (source.type != GGML_TYPE_F32 || (output.type != GGML_TYPE_F32 && !output_is_i32) ||
+        !output.contiguous || source.element_count <= 0 || source.element_count != output.element_count ||
         static_cast<uint64_t>(source.element_count) > kMaximumCopyElements || source.storage == output.storage) {
         return false;
     }
 
     size_t source_span = source.byte_count;
-    if (packed_f32_layout(source)) {
+    if (output_is_i32) {
+        if (!source.contiguous || source_span != static_cast<size_t>(source.element_count) * sizeof(float) ||
+            output.byte_count != static_cast<size_t>(output.element_count) * sizeof(int32_t)) {
+            return false;
+        }
+    } else if (!packed_f32_layout(output) || !f32_element_strides(source)) {
+        return false;
+    }
+    if (output_is_i32 || packed_f32_layout(source)) {
         dispatch.kernel = make_kernel_specialization(kCopyF32Kernel);
         dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
+        if (output_is_i32) {
+            dispatch.kernel.compile_parameters.emplace("ggml.copy_f32.output_is_i32", "1");
+        }
     } else {
         if (!strided_f32_storage_span_bytes(source, source_span, true)) {
             return false;
@@ -173,9 +184,16 @@ static bool match_copy_f32_dispatch(const DispatchMatchContext & context, Dispat
     const Value * source = graph_value(context.graph, node->inputs[0]);
     const Value * target = graph_value(context.graph, node->inputs[1]);
     const Value * output = graph_value(context.graph, node->output);
-    if (source == nullptr || target == nullptr || output == nullptr || target->type != GGML_TYPE_F32 ||
-        !target->contiguous || !packed_f32_layout(*target) || target->element_count != output->element_count ||
+    if (source == nullptr || target == nullptr || output == nullptr || target->type != output->type ||
+        !target->contiguous || target->element_count != output->element_count ||
         target->byte_count != output->byte_count || source->storage == target->storage) {
+        return false;
+    }
+    if (target->type == GGML_TYPE_I32) {
+        if (target->ne != output->ne || target->storage != output->storage) {
+            return false;
+        }
+    } else if (target->type != GGML_TYPE_F32 || !packed_f32_layout(*target)) {
         return false;
     }
 
@@ -236,7 +254,7 @@ static bool match_cont_or_dup_f32_dispatch(const DispatchMatchContext & context,
 
     const Value * source = graph_value(context.graph, node->inputs[0]);
     const Value * output = graph_value(context.graph, node->output);
-    if (source == nullptr || output == nullptr) {
+    if (source == nullptr || output == nullptr || output->type != GGML_TYPE_F32) {
         return false;
     }
 
