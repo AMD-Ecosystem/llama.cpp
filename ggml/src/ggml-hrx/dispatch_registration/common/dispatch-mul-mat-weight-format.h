@@ -36,6 +36,12 @@ enum class CommonMulMatWeightFormat {
     F32,
 };
 
+inline bool iq_codebook_matmul_required(CommonMulMatWeightFormat format) {
+    return format == CommonMulMatWeightFormat::IQ1_S || format == CommonMulMatWeightFormat::IQ1_M ||
+           format == CommonMulMatWeightFormat::IQ2_XXS || format == CommonMulMatWeightFormat::IQ2_XS ||
+           format == CommonMulMatWeightFormat::IQ3_XXS;
+}
+
 inline bool common_mul_mat_format_for_type(ggml_type type, CommonMulMatWeightFormat & format) {
     switch (type) {
         case GGML_TYPE_Q1_0:

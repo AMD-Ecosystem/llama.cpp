@@ -45,7 +45,7 @@ static constexpr KernelCatalogRef kMulMatIdTiledPostOpsNextRmsNormF32F32Kernel =
 static constexpr KernelCatalogRef kMulMatIdSkinnyPostOpsNextRmsNormF32F32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_mul_mat_id_skinny_input_f32_postops_next_rmsnorm_publish_f32");
 
-static bool requires_unsupported_routed_codebook(CommonMulMatWeightFormat format) {
+static bool postops_lacks_routed_codebook(CommonMulMatWeightFormat format) {
     switch (format) {
         case CommonMulMatWeightFormat::IQ1_S:
         case CommonMulMatWeightFormat::IQ1_M:
@@ -355,7 +355,7 @@ static bool match_mul_mat_id_dispatch(const DispatchMatchContext & context, Disp
     if (!match.matched()) {
         return false;
     }
-    if (requires_unsupported_routed_codebook(match.weight_format)) {
+    if (routed_weight_lacks_decoder(match.weight_format)) {
         return false;
     }
 
@@ -422,6 +422,11 @@ static bool match_mul_mat_id_dispatch(const DispatchMatchContext & context, Disp
     dispatch.bindings.push_back({ routing_bundle.partition_table, 0, routing_bundle.partition_table_byte_count });
     dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
     dispatch.bindings.push_back({ match.output->id, 0, match.output->byte_count });
+
+    if (!mxfp4_prefetch && !mxfp4_batched &&
+        !bind_routed_weight_codebook(context, dispatch_match, dispatch, match.weight_format, *match.input)) {
+        return false;
+    }
 
     dispatch_match.covered_nodes.push_back(context.root_index);
     dispatch_match.dispatches.push_back(std::move(dispatch));
@@ -578,7 +583,7 @@ static bool match_mul_mat_id_postops_dispatch(const DispatchMatchContext & conte
     if (!match.matched()) {
         return false;
     }
-    if (requires_unsupported_routed_codebook(match.root.weight_format)) {
+    if (postops_lacks_routed_codebook(match.root.weight_format)) {
         return false;
     }
 
