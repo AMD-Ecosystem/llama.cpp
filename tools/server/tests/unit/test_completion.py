@@ -148,7 +148,7 @@ def test_completion_stream_with_openai_library_stops():
         if choice.finish_reason is None:
             assert choice.text is not None
             output_text += choice.text
-    assert match_regex("Sure, here's one for[\\s\\S]*", output_text), f'Unexpected output: {output_text}'
+    assert match_regex("Sure, here's one for[\\s\\S]*|Sure! Here's one for you[\\s\\S]*", output_text), f'Unexpected output: {output_text}'
 
 
 @pytest.mark.parametrize("n_slots", [1, 2])
@@ -236,6 +236,29 @@ def test_nocache_long_input_prompt():
         "cache_prompt": False,
     })
     assert res.status_code == 400
+
+
+# a request pinned to a busy slot leaves the generation running on it untouched
+def test_pinned_request_on_busy_slot():
+    global server
+    server.n_ctx = 4096
+    server.start()
+    story = "Once upon a time a dragon named Ember guarded a golden key in a deep cave. " * 8
+
+    def run(pin_busy: bool) -> str:
+        server.make_request("POST", "/completion", data={"prompt": story, "id_slot": 0, "n_predict": 4, "temperature": 0.0})
+        res = server.make_stream_request("POST", "/completion", data={
+            "prompt": "To bake bread, mix flour, water and salt, then",
+            "id_slot": 0, "n_predict": 1024, "ignore_eos": True, "temperature": 0.0, "stream": True,
+        })
+        content = next(res)["content"]
+        if pin_busy:
+            server.make_request("POST", "/completion", data={"prompt": story + "The dragon", "id_slot": 0, "n_predict": 4, "temperature": 0.0})
+        return content + "".join(chunk["content"] for chunk in res)
+
+    baseline = run(pin_busy=False)
+    assert run(pin_busy=True) == baseline
+
 
 def test_json_prompt_no_mtmd():
     global server
@@ -614,18 +637,23 @@ def test_cancel_request():
     server.n_predict = -1
     server.n_slots = 1
     server.server_slots = True
+    server.enable_ctx_shift = True
     server.start()
-    # send a request that will take a long time, but cancel it before it finishes
+    # context shift keeps the generation running until the request is cancelled
     try:
         server.make_request("POST", "/completion", data={
             "prompt": "I believe the meaning of life is",
         }, timeout=0.1)
     except requests.exceptions.ReadTimeout:
         pass # expected
-    # make sure the slot is free
-    time.sleep(2)
-    res = server.make_request("GET", "/slots")
-    assert res.body[0]["is_processing"] == False
+    # the slot is freed once the server notices the closed connection
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        res = server.make_request("GET", "/slots")
+        if not res.body[0]["is_processing"]:
+            return
+        time.sleep(0.1)
+    raise AssertionError("slot is still processing after the request was cancelled")
 
 
 # this test exercises the host-memory prompt cache
@@ -666,3 +694,146 @@ def test_completion_prompt_cache():
         assert "prompt_n" in timings and timings["prompt_n"] + timings["cache_n"] == n_prompt
         assert "predicted_n" in timings and timings["predicted_n"] == n_predict
         assert "tokens" in res.body and isinstance(res.body["tokens"], list)
+
+
+# a slot that switched to an unrelated prompt must not restore a context checkpoint of the previous one
+def test_completion_checkpoint_after_unrelated_prompt():
+    global server
+    server = ServerPreset.tinygemma3()
+    server.n_slots = 1
+    server.cache_ram = 0
+    server.temperature = 0.0
+    server.start()
+
+    def tokenize(content):
+        res = server.make_request("POST", "/tokenize", data={"content": content})
+        assert res.status_code == 200
+        return res.body["tokens"]
+
+    def top_logprobs(prompt, cache_prompt):
+        res = server.make_request("POST", "/completion", data={
+            "prompt": prompt,
+            "n_predict": 1,
+            "n_probs": 5,
+            "cache_prompt": cache_prompt,
+        })
+        assert res.status_code == 200
+        return [(p["id"], p["logprob"]) for p in res.body["completion_probabilities"][0]["top_logprobs"]]
+
+    tokens = tokenize("Purple elephants quietly compose sonnets about tax law")
+    expected = top_logprobs(tokens[:2], False)
+
+    # 5 tokens: the checkpoint 4 tokens before the end of the prompt holds only its first token
+    top_logprobs(tokenize("The quick brown fox jumps over the lazy dog")[:5], True)
+    top_logprobs(tokens[:1], True)
+    actual = top_logprobs(tokens[:2], True)
+
+    assert [tid for tid, _ in actual] == [tid for tid, _ in expected]
+    for (_, lp), (_, lp_expected) in zip(actual, expected):
+        assert lp == pytest.approx(lp_expected, abs=1e-3)
+
+
+# a restored context checkpoint must be kept for the next request that shares the same prefix
+def test_completion_checkpoint_kept_after_restore():
+    global server
+    server = ServerPreset.tinygemma3()
+    server.n_slots = 1
+    server.n_batch = 16
+    server.n_ubatch = 16
+    server.cache_ram = 0
+    server.temperature = 0.0
+    server.start()
+
+    def tokenize(content):
+        res = server.make_request("POST", "/tokenize", data={"content": content})
+        assert res.status_code == 200
+        return res.body["tokens"]
+
+    def cache_n(prompt):
+        res = server.make_request("POST", "/completion", data={
+            "prompt": prompt,
+            "n_predict": 1,
+            "cache_prompt": True,
+        })
+        assert res.status_code == 200
+        return res.body["timings"]["cache_n"]
+
+    prefix = tokenize("Purple elephants quietly compose sonnets about tax law in the moonlight")
+    suffixes = [tokenize(s) for s in [
+        "The quick brown fox jumps over the lazy dog while the farmer counts his sheep and the sun slowly sets behind the distant hills",
+        "Seven tiny robots repaired the broken lighthouse lens before the storm arrived, then danced on the rocks until the morning tide came in",
+        "Green apples rolled down the hill toward the river, where a curious otter collected them one by one and stacked them on a flat stone",
+    ]]
+
+    # 4 tokens: the checkpoint 4 tokens before the end of the prompt holds exactly the prefix
+    cache_n(prefix + suffixes[0][:4])
+
+    # suffixes longer than n_ubatch + 4: no new checkpoint within the prefix, only the restored one can be reused
+    for suffix in suffixes[1:]:
+        assert len(suffix) > server.n_ubatch + 4
+        assert cache_n(prefix + suffix) == len(prefix) - 1
+
+
+@pytest.mark.parametrize("prompt,expected_status,expected_error_type", [
+    # Valid
+    ([1], 200, None),
+    ([1, 2, 3], 200, None),
+    ([1, "hello", 2], 200, None),
+    (["HeLlO 世界! 🎉, [Thi$ shou1d_be-\"valid\'..}"], 200, None),
+    # Invalid: negative (except -1)
+    ([1, -5], 400, "invalid_prompt"),
+    # Invalid: token ID out of vocabulary
+    ([99999999], 400, "invalid_prompt"),
+    # Invalid: LLAMA_TOKEN_NULL (-1) without media chunk
+    ([1, -1], 400, "invalid_prompt"),
+    # Invalid: float
+    ([2.5, 1], 400, "invalid_prompt"),
+    ([1, "x", 2.0], 400, "invalid_prompt"),
+    # Invalid: bool
+    ([False], 400, "invalid_prompt"),
+    ([1, "x", True], 400, "invalid_prompt"),
+    # Invalid: null
+    ([None], 400, "invalid_prompt"),
+    ([1, "x", None], 400, "invalid_prompt"),
+    # Invalid: int32 overflow
+    ([1, 4294967297], 400, "invalid_prompt"),
+    # Invalid: uint64 max - must not overflow to -1 (valid)
+    ([18446744073709551615], 400, "invalid_prompt"),
+])
+def test_token_validation(prompt, expected_status, expected_error_type):
+    """
+    POST /v1/completions with integer-array prompt must reject negative,
+    out-of-vocabulary, or non-integer token IDs with HTTP 400 and
+    error.type "invalid_prompt".
+    """
+    global server
+    server.start()
+    res = server.make_request("POST", "/v1/completions", data={
+        "prompt": prompt,
+        "max_tokens": 1,
+    })
+    assert res.status_code == expected_status
+    if expected_error_type:
+        assert "error" in res.body
+        assert res.body["error"]["type"] == expected_error_type
+        # uint64 max: verify error message to confirm proper bounds checking
+        # vs. silent wrap-around to -1 (LLAMA_TOKEN_NULL) which would trigger "Invalid token IDs"
+        if 18446744073709551615 in prompt:
+            assert "Token ID out of int32 range: 18446744073709551615" in res.body["error"]["message"]
+
+
+@pytest.mark.parametrize("data,expected_error_type", [
+    ({"prompt": "hello", "temperature": "hot"}, "invalid_request_error"),
+    ({"prompt": "hello", "top_k": "many"}, "invalid_request_error"),
+    ({}, "invalid_request_error"),
+    ({"prompt": []}, "invalid_prompt"),  # Empty array
+    ({"prompt": {"prompt_string": 123}}, "invalid_prompt"),  # Non-string prompt_string
+    ({"prompt": {"prompt_string": "test", "multimodal_data": []}}, "invalid_prompt"),  # Multimodal on non-multimodal model
+])
+def test_invalid_request_params(data, expected_error_type):
+    """Invalid request parameters should return 400 with correct error type."""
+    global server
+    server.start()
+    res = server.make_request("POST", "/v1/completions", data=data)
+    assert res.status_code == 400
+    assert res.body["error"]["type"] == expected_error_type

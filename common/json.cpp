@@ -251,14 +251,15 @@ common_json common_json::make(const common_json_value & val) {
     return common_json(val);
 }
 
-bool common_json::is_null()           const { return as_json(this).is_null(); }
-bool common_json::is_object()         const { return as_json(this).is_object(); }
-bool common_json::is_array()          const { return as_json(this).is_array(); }
-bool common_json::is_string()         const { return as_json(this).is_string(); }
-bool common_json::is_boolean()        const { return as_json(this).is_boolean(); }
-bool common_json::is_number()         const { return as_json(this).is_number(); }
-bool common_json::is_number_integer() const { return as_json(this).is_number_integer(); }
-bool common_json::is_number_float()   const { return as_json(this).is_number_float(); }
+bool common_json::is_null()            const { return as_json(this).is_null(); }
+bool common_json::is_object()          const { return as_json(this).is_object(); }
+bool common_json::is_array()           const { return as_json(this).is_array(); }
+bool common_json::is_string()          const { return as_json(this).is_string(); }
+bool common_json::is_boolean()         const { return as_json(this).is_boolean(); }
+bool common_json::is_number()          const { return as_json(this).is_number(); }
+bool common_json::is_number_integer()  const { return as_json(this).is_number_integer(); }
+bool common_json::is_number_unsigned() const { return as_json(this).is_number_unsigned(); }
+bool common_json::is_number_float()    const { return as_json(this).is_number_float(); }
 
 bool   common_json::empty() const { return as_json(this).empty(); }
 size_t common_json::size()  const { return as_json(this).size(); }

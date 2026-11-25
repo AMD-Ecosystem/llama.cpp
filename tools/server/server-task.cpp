@@ -73,10 +73,10 @@ json task_params::to_json(bool only_metrics) const {
             {"stream",                    stream},
             {"n_probs",                   sampling.n_probs},
             {"min_keep",                  sampling.min_keep},
-            {"chat_format",               common_chat_format_name(chat_parser_params.format)},
-            {"reasoning_format",          common_reasoning_format_name(chat_parser_params.reasoning_format)},
-            {"reasoning_in_content",      chat_parser_params.reasoning_in_content},
-            {"generation_prompt",         chat_parser_params.generation_prompt},
+            {"chat_format",               common_chat_format_name(chat_format)},
+            {"reasoning_format",          common_reasoning_format_name(reasoning_format)},
+            {"reasoning_in_content",      stream && reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY},
+            {"generation_prompt",         sampling.generation_prompt},
             {"samplers",                  samplers},
             {"speculative.types",         common_speculative_type_name_str(speculative.types)},
             {"timings_per_token",         timings_per_token},
@@ -132,10 +132,10 @@ json task_params::to_json(bool only_metrics) const {
         {"grammar_lazy",              sampling.grammar_lazy},
         {"grammar_triggers",          grammar_triggers},
         {"preserved_tokens",          sampling.preserved_tokens},
-        {"chat_format",               common_chat_format_name(chat_parser_params.format)},
-        {"reasoning_format",          common_reasoning_format_name(chat_parser_params.reasoning_format)},
-        {"reasoning_in_content",      chat_parser_params.reasoning_in_content},
-        {"generation_prompt",         chat_parser_params.generation_prompt},
+        {"chat_format",               common_chat_format_name(chat_format)},
+        {"reasoning_format",          common_reasoning_format_name(reasoning_format)},
+        {"reasoning_in_content",      stream && reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY},
+        {"generation_prompt",         sampling.generation_prompt},
         {"samplers",                  samplers},
         {"speculative.types",         common_speculative_type_name_str(speculative.types)},
         {"timings_per_token",         timings_per_token},
@@ -148,29 +148,21 @@ json task_params::to_json(bool only_metrics) const {
 //
 // task_result_state
 //
-task_result_state::task_result_state(const common_chat_parser_params & chat_parser_params)
-    : chat_parser_params(chat_parser_params)
+task_result_state::task_result_state(common_chat_session session)
+    : chat_session(std::move(session))
+    , chat_msg(chat_session.msg())
     , oai_resp_id("resp_" + random_string())
     , oai_resp_reasoning_id("rs_" + random_string())
     , oai_resp_message_id("msg_" + random_string()) {
-    if (chat_parser_params.is_continuation && !chat_parser_params.echo) {
-        // initialize chat_msg to avoid emitting a delta containing the assistant prefill
-        chat_msg = common_chat_parse("", true, chat_parser_params);
-    }
 }
 
 common_chat_msg task_result_state::update_chat_msg(
-        const std::string & text_added,
+        const common_chat_input & added,
         bool is_partial,
         std::vector<common_chat_msg_diff> & diffs,
         bool filter_tool_calls) {
-    generated_text += text_added;
     auto msg_prv_copy = chat_msg;
-    //SRV_DBG("Parsing chat message: %s\n", generated_text.c_str());
-    auto new_msg = common_chat_parse(
-        generated_text,
-        is_partial,
-        chat_parser_params);
+    auto new_msg = is_partial ? chat_session.feed(added) : chat_session.finish(added);
     if (!new_msg.empty()) {
         new_msg.set_tool_call_ids(generated_tool_call_ids, gen_tool_call_id);
         chat_msg = new_msg;
@@ -282,12 +274,12 @@ json completion_token_output::to_json(bool post_sampling_probs) const {
 json completion_token_output::probs_vector_to_json(const std::vector<completion_token_output> & probs, bool post_sampling_probs) {
     json out = json::array();
     for (const auto & p : probs) {
-        std::string txt(p.text_to_send);
+        std::string txt(p.txt);
         txt.resize(validate_utf8(txt));
         out.push_back(json {
             {"id",           p.tok},
             {"token",        txt},
-            {"bytes",        str_to_bytes(p.text_to_send)},
+            {"bytes",        str_to_bytes(p.txt)},
             {
                 post_sampling_probs ? "prob" : "logprob",
                 post_sampling_probs ? p.prob : logarithm(p.prob)
@@ -340,7 +332,7 @@ json server_task_result_cmpl_final::to_json() {
 json server_task_result_cmpl_final::to_json_non_oaicompat() {
     json res = json {
         {"index",               index},
-        {"content",             content},
+        {"content",             content.text},
         {"tokens",              tokens},
         {"id_slot",             id_slot},
         {"stop",                true},
@@ -386,7 +378,7 @@ json server_task_result_cmpl_final::to_json_oaicompat() {
     json res = json {
         {"choices",            json::array({
             json{
-                {"text",          content},
+                {"text",          content.text},
                 {"index",         index},
                 {"logprobs",      logprobs},
                 {"finish_reason", finish_reason},
@@ -418,7 +410,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
         msg = oaicompat_msg;
     } else {
         msg.role = "assistant";
-        msg.content = content;
+        msg.content = content.text;
     }
     if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
         finish_reason = msg.tool_calls.empty() ? "stop" : "tool_calls";
@@ -483,6 +475,8 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
             {"object", "chat.completion.chunk"},
         });
     }
+    // index of the last diff chunk, if any, before the finish-reason chunk below is pushed
+    size_t last_diff_idx = deltas.empty() ? SIZE_MAX : deltas.size() - 1;
 
     deltas.push_back({
         {"choices", json::array({
@@ -498,6 +492,15 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
         {"system_fingerprint", std::string(llama_build_info())},
         {"object",             "chat.completion.chunk"},
     });
+
+    // attach any leftover pending_probs to the last diff chunk, or the finish-reason
+    // chunk if there was no diff at all
+    if (!probs_to_emit.empty()) {
+        size_t target_idx = (last_diff_idx != SIZE_MAX) ? last_diff_idx : deltas.size() - 1;
+        deltas[target_idx].at("choices").at(0)["logprobs"] = json {
+            {"content", completion_token_output::probs_vector_to_json(probs_to_emit, post_sampling_probs)},
+        };
+    }
 
     if (include_usage) {
         // OpenAI API spec for chat.completion.chunks specifies an empty `choices` array for the last chunk when including usage
@@ -531,7 +534,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
         msg = oaicompat_msg;
     } else {
         msg.role = "assistant";
-        msg.content = content;
+        msg.content = content.text;
     }
 
     std::vector<json> output;
@@ -599,8 +602,10 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
 json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
     std::vector<json> server_sent_events;
     std::vector<json> output;
+    size_t output_index = 0;
 
     if (oaicompat_msg.reasoning_content != "") {
+        const size_t item_output_index = output_index++;
         const json output_item = json {
             {"id",      oai_resp_reasoning_id},
             {"summary", json::array()},
@@ -616,6 +621,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
             {"event", "response.output_item.done"},
             {"data", json {
                 {"type", "response.output_item.done"},
+                {"output_index", item_output_index},
                 {"item", output_item}
             }}
         });
@@ -623,11 +629,14 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
     }
 
     if (oaicompat_msg.content != "") {
+        const size_t item_output_index = output_index++;
         server_sent_events.push_back(json {
             {"event", "response.output_text.done"},
             {"data", json {
                 {"type",    "response.output_text.done"},
                 {"item_id", oai_resp_message_id},
+                {"output_index", item_output_index},
+                {"content_index", 0},
                 {"text",    oaicompat_msg.content}
             }}
         });
@@ -644,6 +653,8 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
             {"data", json {
                 {"type",    "response.content_part.done"},
                 {"item_id", oai_resp_message_id},
+                {"output_index", item_output_index},
+                {"content_index", 0},
                 {"part",    content_part}
             }}
         });
@@ -659,6 +670,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
             {"event", "response.output_item.done"},
             {"data", json {
                 {"type", "response.output_item.done"},
+                {"output_index", item_output_index},
                 {"item", output_item}
             }}
         });
@@ -666,6 +678,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
     }
 
     for (const common_chat_tool_call & tool_call : oaicompat_msg.tool_calls) {
+        const size_t item_output_index = output_index++;
         const json output_item = {
             {"id",        "fc_" + tool_call.id},
             {"type",      "function_call"},
@@ -678,6 +691,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
             {"event", "response.output_item.done"},
             {"data", json {
                 {"type", "response.output_item.done"},
+                {"output_index", item_output_index},
                 {"item", output_item}
             }}
         });
@@ -741,7 +755,7 @@ json server_task_result_cmpl_final::to_json_anthropic() {
         msg = oaicompat_msg;
     } else {
         msg.role = "assistant";
-        msg.content = content;
+        msg.content = content.text;
     }
 
     // thinking block comes first (Anthropic extended thinking format)
@@ -992,6 +1006,15 @@ void server_task_result_cmpl_partial::update(task_result_state & state) {
     }
     state.update_chat_msg(content, true, oaicompat_msg_diffs);
 
+    // queue this token's logprobs, flush once a chunk has visible delta content to attach them to
+    if (prob_output.probs.size() > 0) {
+        state.pending_probs.push_back(prob_output);
+    }
+    if (is_progress || n_decoded == 1 || !oaicompat_msg_diffs.empty()) {
+        probs_to_emit = std::move(state.pending_probs);
+        state.pending_probs.clear();
+    }
+
     // Copy current state for use in to_json_*() (reflects state BEFORE this chunk)
     thinking_block_started = state.thinking_block_started;
     text_block_started     = state.text_block_started;
@@ -1050,7 +1073,7 @@ json server_task_result_cmpl_partial::to_json_non_oaicompat() {
     // non-OAI-compat JSON
     json res = json {
         {"index",            index},
-        {"content",          content},
+        {"content",          content.text},
         {"tokens",           tokens},
         {"stop",             false},
         {"id_slot",          id_slot},
@@ -1081,7 +1104,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat() {
     json res = json {
         {"choices",            json::array({
             json{
-                {"text",          content},
+                {"text",          content.text},
                 {"index",         index},
                 {"logprobs",      logprobs},
                 {"finish_reason", nullptr},
@@ -1146,9 +1169,9 @@ json server_task_result_cmpl_partial::to_json_oaicompat_chat() {
         auto & last_json = deltas[deltas.size() - 1];
         GGML_ASSERT(last_json.at("choices").size() >= 1);
 
-        if (prob_output.probs.size() > 0) {
+        if (!probs_to_emit.empty()) {
             last_json.at("choices").at(0)["logprobs"] = json {
-                {"content", completion_token_output::probs_vector_to_json({prob_output}, post_sampling_probs)},
+                {"content", completion_token_output::probs_vector_to_json(probs_to_emit, post_sampling_probs)},
             };
         }
 
@@ -1210,6 +1233,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
                     {"event", "response.output_item.added"},
                     {"data", json {
                         {"type", "response.output_item.added"},
+                        {"output_index", 0},
                         {"item", json {
                             {"id",                oai_resp_reasoning_id},
                             {"summary",           json::array()},
@@ -1226,6 +1250,8 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
                 {"event", "response.reasoning_text.delta"},
                 {"data", json {
                     {"type",    "response.reasoning_text.delta"},
+                    {"output_index", 0},
+                    {"content_index", 0},
                     {"delta",   diff.reasoning_content_delta},
                     {"item_id", oai_resp_reasoning_id},
                 }},
@@ -1238,6 +1264,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
                     {"event", "response.output_item.added"},
                     {"data", json {
                         {"type", "response.output_item.added"},
+                        {"output_index", anthropic_has_reasoning ? 1 : 0},
                         {"item", json {
                             {"content", json::array()},
                             {"id",      oai_resp_message_id},
@@ -1252,6 +1279,8 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
                     {"data", json {
                         {"type",    "response.content_part.added"},
                         {"item_id", oai_resp_message_id},
+                        {"output_index", anthropic_has_reasoning ? 1 : 0},
+                        {"content_index", 0},
                         {"part", json {
                             {"type", "output_text"},
                             {"text", ""},
@@ -1265,6 +1294,8 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
                 {"data", json {
                     {"type",    "response.output_text.delta"},
                     {"item_id", oai_resp_message_id},
+                    {"output_index", anthropic_has_reasoning ? 1 : 0},
+                    {"content_index", 0},
                     {"delta",   diff.content_delta},
                 }},
             });
@@ -1275,6 +1306,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
                 {"event", "response.output_item.added"},
                 {"data", json {
                     {"type",  "response.output_item.added"},
+                    {"output_index", (anthropic_has_reasoning ? 1 : 0) + (text_block_started ? 1 : 0) + diff.tool_call_index},
                     {"item", json {
                         {"id",        "fc_" + diff.tool_call_delta.id},
                         {"arguments", ""},
@@ -1295,6 +1327,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
                     {"type",    "response.function_call_arguments.delta"},
                     {"delta",   diff.tool_call_delta.arguments},
                     {"item_id", "fc_" + oai_resp_fc_id},
+                    {"output_index", (anthropic_has_reasoning ? 1 : 0) + (text_block_started ? 1 : 0) + diff.tool_call_index},
                 }},
             });
         }
@@ -1316,7 +1349,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
 json server_task_result_cmpl_partial::to_json_oaicompat_asr() {
     json event = json {
         {"type", "transcript.text.delta"},
-        {"delta", content},
+        {"delta", content.text},
     };
     return event;
 }
@@ -1491,6 +1524,38 @@ json server_task_result_rerank::to_json() {
     return json {
         {"index",            index},
         {"score",            score},
+        {"tokens_evaluated", n_tokens},
+    };
+}
+
+//
+// server_task_result_tts
+//
+json server_task_result_realtime::to_json() {
+    return json {
+        {"text",          content.text},
+        {"n_samples",     audio.size()},
+        {"response_done", response_done},
+        {"cancelled",     cancelled},
+        {"n_decoded",     n_decoded},
+    };
+}
+
+json server_task_result_tts::to_json() {
+    return json {
+        {"sample_rate", sample_rate},
+        {"n_bytes",     audio.size()},
+        {"final",       final},
+    };
+}
+
+//
+// server_task_result_decision
+//
+json server_task_result_decision::to_json() {
+    return json {
+        {"index",            index},
+        {"scores",           scores},
         {"tokens_evaluated", n_tokens},
     };
 }
@@ -1722,7 +1787,7 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
     // calculate checkpoints size to see if it will fit with the prompt
     size_t checkpoints_size = 0;
     for (const auto & ckpt : prompt.checkpoints) {
-        checkpoints_size += ckpt.size();
+        checkpoints_size += ckpt->size();
     }
 
     const size_t state_size_new = state_size_tgt + state_size_dft + checkpoints_size;
@@ -1757,8 +1822,8 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
         }
     }
 
-    std::vector<uint8_t> state_data_tgt;
-    std::vector<uint8_t> state_data_dft;
+    common_state_data state_data_tgt;
+    common_state_data state_data_dft;
 
     // check if we can allocate enough memory for the new state
     try {
@@ -1791,7 +1856,7 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
 }
 
 bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot) {
-    const int lcp_best = prompt.tokens.get_common_prefix(tokens_new);
+    int lcp_best = prompt.tokens.get_common_prefix(tokens_new);
 
     float f_keep_best = prompt.tokens.size() > 0 ? float(lcp_best) / prompt.tokens.size() : -1.0f; // empty slot: any cache entry wins
     float f_sim_best  = float(lcp_best) / tokens_new.size();
@@ -1817,6 +1882,7 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
         if (f_keep_best < f_keep_cur && f_sim_best < f_sim_cur) {
             f_keep_best = f_keep_cur;
             f_sim_best  = f_sim_cur;
+            lcp_best    = lcp_cur;
 
             it_best = it;
         }
@@ -1857,6 +1923,13 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
                 data.clear();
                 data.shrink_to_fit();
             }
+        }
+
+        SRV_DBG("%s", "__TEST_TAG_PROMPT_CACHE_RESTORE__\n");
+
+        // the whole cached prompt is a prefix of the new one
+        if (lcp_best == (int) it_best->prompt.tokens.size()) {
+            SRV_DBG("%s", "__TEST_TAG_PROMPT_CACHE_FULL_RESTORE__\n");
         }
 
         prompt = std::move(it_best->prompt);

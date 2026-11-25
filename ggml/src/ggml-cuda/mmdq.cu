@@ -1295,8 +1295,8 @@ static void ggml_cuda_mul_mat_id_dq_glu(ggml_backend_cuda_context & ctx, const g
 
     const int si1  = ids->nb[1] / ggml_element_size(ids);
     const int sis1 = x->nb[2] / x->nb[1];
-    ggml_cuda_launch_mm_ids_helper((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
-        n_experts, n_tokens, n_expert_used, x->ne[1], si1, sis1, /*write_inverse =*/ false, stream);
+    ggml_cuda_launch_mm_ids_helper((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), nullptr,
+        n_experts, n_tokens, n_expert_used, x->ne[1], /*tile_width =*/ 1, si1, sis1, /*write_inverse =*/ false, stream, expert_bounds.get());
     CUDA_CHECK(cudaGetLastError());
 
     ggml_cuda_pool_alloc<half> x_f16(ctx.pool(), ggml_nelements(x));
@@ -1367,8 +1367,8 @@ void ggml_cuda_mul_mat_id_dq(ggml_backend_cuda_context & ctx, const ggml_tensor 
 
     const int si1  = ids->nb[1] / ggml_element_size(ids);
     const int sis1 = nb12 / nb11;
-    ggml_cuda_launch_mm_ids_helper((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
-        ne02, ne12, n_expert_used, ne11, si1, sis1, /*write_inverse =*/ false, stream);
+    ggml_cuda_launch_mm_ids_helper((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), nullptr,
+        ne02, ne12, n_expert_used, ne11, /*tile_width =*/ 1, si1, sis1, /*write_inverse =*/ false, stream, expert_bounds.get());
     CUDA_CHECK(cudaGetLastError());
 
     // src1 is converted once, the kernel reads its rows through ids_src1

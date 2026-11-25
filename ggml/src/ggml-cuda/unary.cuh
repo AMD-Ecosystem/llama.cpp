@@ -122,6 +122,21 @@ __device__ __forceinline__ float ggml_cuda_op_swiglu_clamp_single(float gate, fl
     return ggml_cuda_op_silu_single(gate) * up;
 }
 
+__device__ __forceinline__ float ggml_cuda_op_glu_single(ggml_glu_op op, float gate, float up, float limit) {
+    switch (op) {
+        case GGML_GLU_OP_SWIGLU:
+            return up * ggml_cuda_op_silu_single(gate);
+        case GGML_GLU_OP_GEGLU:
+            return up * ggml_cuda_op_gelu_single(gate);
+        case GGML_GLU_OP_SWIGLU_OAI:
+            return ggml_cuda_op_swiglu_oai_single(gate, up);
+        case GGML_GLU_OP_SWIGLU_CLAMP:
+            return ggml_cuda_op_swiglu_clamp_single(gate, up, limit);
+        default:
+            return up * gate;
+    }
+}
+
 template <typename T>
 void ggml_cuda_glu_to_16bit(const float * x, const float * gate, T * dst, int64_t n, ggml_glu_op op, cudaStream_t stream);
 template <typename T>
