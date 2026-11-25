@@ -3,7 +3,7 @@
 // The kernel consumes a precomputed expert table. Each table row stores compact
 // assignment indices encoded as token * route_count + route. Input can either
 // be broadcast across all routes or contain one input row per route.
-template.decl @ggml.matmul_id.tiled_f32_f32.core(%integer_mode: i1, %arg0: index, %arg1: index, %arg2: index, %arg3: index, %arg4: index, %arg5: index, %arg6: index, %arg7: f32, %arg8: index, %arg9: index, %arg10: buffer, %arg11: buffer, %arg12: buffer, %arg13: buffer, %arg14: buffer, %arg15: buffer, %arg16: buffer, %arg17: buffer, %arg18: buffer, %arg19: buffer, %arg20: buffer)
+template.decl @ggml.matmul_id.tiled_f32_f32.core(%arg0: index, %arg1: index, %arg2: index, %arg3: index, %arg4: index, %arg5: index, %arg6: index, %arg7: f32, %arg8: index, %arg9: index, %arg10: buffer, %arg11: buffer, %arg12: buffer, %arg13: buffer, %arg14: buffer, %arg15: buffer, %arg16: buffer, %arg17: buffer, %arg18: buffer, %arg19: buffer, %arg20: buffer)
 
 template.decl @ggml.matmul_id.tiled_f32_f32.finish_tile(%token_count: index, %route_count: index, %output_size: index, %expert_count: index, %output_tile_count: index, %maximum_partition_count: index, %epsilon: f32, %channel_tile: index, %descriptor_ordinal: index, %expert: index, %route_tile_base: index, %partition_row_count: index, %expert_table: buffer, %output: buffer, %residual_input: buffer, %residual_output: buffer, %norm_weight: buffer, %normalized_output: buffer, %completion_counters: buffer)
 
@@ -108,7 +108,6 @@ kernel.def target(@ggml_mul_mat_id_tiled_input_f32_scaled_publish_f32_gfx11_wave
   %partition_ordinal = kernel.workgroup.id<y> : index
   // The core forwards its bias and residual slots to publish_vector4.
   // Here those slots carry scales and route IDs; other post-op slots are unused.
-  %integer_mode = scalar.constant 0 : i1
-  template.apply<@ggml.matmul_id.tiled_f32_f32.core>(%integer_mode, %weight_format, %bounded_token_count, %input_size, %output_size, %route_count, %input_route_count, %expert_count, %c0_f32, %channel_tile, %partition_ordinal, %input, %expert_table, %partition_table, %weight, %scales, %output, %route_ids, %output, %output, %output, %output) : (i1, index, index, index, index, index, index, index, f32, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  template.apply<@ggml.matmul_id.tiled_f32_f32.core>(%weight_format, %bounded_token_count, %input_size, %output_size, %route_count, %input_route_count, %expert_count, %c0_f32, %channel_tile, %partition_ordinal, %input, %expert_table, %partition_table, %weight, %scales, %output, %route_ids, %output, %output, %output, %output) : (index, index, index, index, index, index, index, f32, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
   kernel.return
 }

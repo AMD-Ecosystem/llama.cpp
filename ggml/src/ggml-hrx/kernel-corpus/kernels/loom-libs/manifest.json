@@ -790,6 +790,9 @@
     },
     {
       "path": "ops/flash_attention/prefill_sink_f32_f16_wmma.loom"
+    },
+    {
+      "path": "motifs/matmul_id/routed_tiles.loom"
     }
   ],
   "exports": [
@@ -3800,7 +3803,6 @@
         ],
         "library_sources": [
           "motifs/matmul_id/tiled_input_f32_dequant_accumulate_f32.loom",
-          "motifs/matmul_id/mxfp4_prefill_prefetch.loom",
           "motifs/dequant.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
@@ -3808,12 +3810,12 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/matmul_id/routed_tiles.loom"
         ]
       },
       "compile_dependencies": [
         "motifs/matmul_id/tiled_input_f32_dequant_accumulate_f32.loom",
-        "motifs/matmul_id/mxfp4_prefill_prefetch.loom",
         "motifs/dequant.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
@@ -3821,7 +3823,8 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/matmul_id/routed_tiles.loom"
       ]
     },
     {
@@ -3867,7 +3870,6 @@
         ],
         "library_sources": [
           "motifs/matmul_id/tiled_input_f32_dequant_accumulate_f32.loom",
-          "motifs/matmul_id/mxfp4_prefill_prefetch.loom",
           "motifs/dequant.loom",
           "motifs/q4_k_f16.loom",
           "motifs/q6_k_f16.loom",
@@ -3875,12 +3877,12 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/matmul_id/routed_tiles.loom"
         ]
       },
       "compile_dependencies": [
         "motifs/matmul_id/tiled_input_f32_dequant_accumulate_f32.loom",
-        "motifs/matmul_id/mxfp4_prefill_prefetch.loom",
         "motifs/dequant.loom",
         "motifs/q4_k_f16.loom",
         "motifs/q6_k_f16.loom",
@@ -3888,7 +3890,8 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/matmul_id/routed_tiles.loom"
       ]
     },
     {
@@ -4060,7 +4063,6 @@
         ],
         "library_sources": [
           "motifs/matmul_id/tiled_input_f32_dequant_accumulate_f32.loom",
-          "motifs/matmul_id/mxfp4_prefill_prefetch.loom",
           "motifs/matmul_id/tiled_postprocess_f32.loom",
           "motifs/dequant.loom",
           "motifs/q4_k_f16.loom",
@@ -4069,12 +4071,12 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/matmul_id/routed_tiles.loom"
         ]
       },
       "compile_dependencies": [
         "motifs/matmul_id/tiled_input_f32_dequant_accumulate_f32.loom",
-        "motifs/matmul_id/mxfp4_prefill_prefetch.loom",
         "motifs/matmul_id/tiled_postprocess_f32.loom",
         "motifs/dequant.loom",
         "motifs/q4_k_f16.loom",
@@ -4083,7 +4085,8 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/matmul_id/routed_tiles.loom"
       ]
     },
     {
@@ -4202,7 +4205,6 @@
         ],
         "library_sources": [
           "motifs/matmul_id/tiled_input_f32_dequant_accumulate_f32.loom",
-          "motifs/matmul_id/mxfp4_prefill_prefetch.loom",
           "motifs/matmul_id/tiled_postprocess_f32.loom",
           "motifs/dequant.loom",
           "motifs/q4_k_f16.loom",
@@ -4211,12 +4213,12 @@
           "motifs/q8_1_f16.loom",
           "motifs/f16_f16.loom",
           "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/f32_f16.loom",
+          "motifs/matmul_id/routed_tiles.loom"
         ]
       },
       "compile_dependencies": [
         "motifs/matmul_id/tiled_input_f32_dequant_accumulate_f32.loom",
-        "motifs/matmul_id/mxfp4_prefill_prefetch.loom",
         "motifs/matmul_id/tiled_postprocess_f32.loom",
         "motifs/dequant.loom",
         "motifs/q4_k_f16.loom",
@@ -4225,7 +4227,8 @@
         "motifs/q8_1_f16.loom",
         "motifs/f16_f16.loom",
         "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/f32_f16.loom",
+        "motifs/matmul_id/routed_tiles.loom"
       ]
     },
     {
@@ -11468,30 +11471,14 @@
         ],
         "library_sources": [
           "motifs/matmul_id/mxfp4_prefill_prefetch.loom",
-          "motifs/matmul_id/tiled_input_f32_dequant_accumulate_f32.loom",
-          "ops/matmul_id/tiled_input_f32_publish_f32.loom",
           "motifs/dequant.loom",
-          "motifs/q4_k_f16.loom",
-          "motifs/q6_k_f16.loom",
-          "motifs/q8_0_f16.loom",
-          "motifs/q8_1_f16.loom",
-          "motifs/f16_f16.loom",
-          "motifs/bf16_f16.loom",
-          "motifs/f32_f16.loom"
+          "motifs/matmul_id/routed_tiles.loom"
         ]
       },
       "compile_dependencies": [
         "motifs/matmul_id/mxfp4_prefill_prefetch.loom",
-        "motifs/matmul_id/tiled_input_f32_dequant_accumulate_f32.loom",
-        "ops/matmul_id/tiled_input_f32_publish_f32.loom",
         "motifs/dequant.loom",
-        "motifs/q4_k_f16.loom",
-        "motifs/q6_k_f16.loom",
-        "motifs/q8_0_f16.loom",
-        "motifs/q8_1_f16.loom",
-        "motifs/f16_f16.loom",
-        "motifs/bf16_f16.loom",
-        "motifs/f32_f16.loom"
+        "motifs/matmul_id/routed_tiles.loom"
       ]
     },
     {
