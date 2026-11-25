@@ -58,15 +58,8 @@ template.def<@ggml.binary_f32.apply> device priority(1) @ggml_binary_f32_apply(%
   %silu_negative = scalar.negf %gate : f32
   %silu_exp = scalar.expf<afn> %silu_negative : f32
   %silu_denominator = scalar.addf %c1_f32, %silu_exp : f32
-  // Preserve the original rounding of the two scalar paths.
-  %silu = scf.if %is_swiglu_clamp -> (f32) {
-    %activated = scalar.divf %gate, %silu_denominator : f32
-    scf.yield %activated : f32
-  } else {
-    %silu_sigmoid = scalar.divf %c1_f32, %silu_denominator : f32
-    %activated = scalar.mulf %gate, %silu_sigmoid : f32
-    scf.yield %activated : f32
-  }
+  %silu_sigmoid = scalar.divf %c1_f32, %silu_denominator : f32
+  %silu = scalar.mulf %gate, %silu_sigmoid : f32
   %swiglu = scalar.mulf %silu, %up : f32
   %swiglu_or_clamp = scf.select %is_swiglu_clamp, %swiglu, %div_selected : f32
   %swiglu_selected = scf.select %is_swiglu, %swiglu, %swiglu_or_clamp : f32
