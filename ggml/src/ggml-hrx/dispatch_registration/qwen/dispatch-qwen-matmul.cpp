@@ -417,8 +417,13 @@ static bool match_qwen_attention_output_next_q8_dispatch(const DispatchMatchCont
         return false;
     }
 
+    const bool row64_weight = context.row64_weight_policy && match.weight->alias_source.value < 0 &&
+                              dispatch_weight_layout_eligible(*match.weight);
     Dispatch dispatch;
     dispatch.kernel = make_kernel_specialization(kQwenDenseLinearQ4KQ8NextQ8Kernel);
+    dispatch.kernel.compile_parameters.emplace("qwen3_moe.dense_quantized.weight_layout", row64_weight ? "1" : "0");
+    dispatch.kernel.compile_parameters.emplace("ggml.workload.token_capacity", "1");
+    dispatch.kernel.compile_parameters.emplace("ggml.matmul.vector.activation_format", "9");
     dispatch.kernel.integer_parameters.emplace("token_count", match.token_count);
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.dense_quantized.input_size",
                                                to_config_value(match.input_size));
@@ -429,7 +434,12 @@ static bool match_qwen_attention_output_next_q8_dispatch(const DispatchMatchCont
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.model.rms_epsilon", "0.000001");
     dispatch.kernel.compile_parameters.emplace("qwen3_moe.workload.token_capacity", to_config_value(match.token_count));
     dispatch.bindings.push_back({ match.input_alternate->alternate_value, 0, match.input_alternate->byte_count });
-    dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
+    if (row64_weight) {
+        dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count, kQ4KPackedK256Row64Layout,
+                                      match.weight->type, match.input_size, match.output_size, match.weight->byte_count });
+    } else {
+        dispatch.bindings.push_back({ match.weight->id, 0, match.weight->byte_count });
+    }
     dispatch.bindings.push_back({ match.residual_output->id, 0, match.residual_output->byte_count });
     dispatch.bindings.push_back({ match.norm_weight->id, 0, match.norm_weight->byte_count });
     dispatch.bindings.push_back({ match.normalized_output->id, 0, match.normalized_output->byte_count });
