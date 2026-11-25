@@ -5,6 +5,10 @@
 #include "fattn-vec.cuh"
 #include "fattn.cuh"
 
+#ifndef GGML_CUDA_FATTN_WMMA_D72
+#define GGML_CUDA_FATTN_WMMA_D72 1
+#endif
+
 #if !defined(GGML_USE_MUSA)
 
 // one list per group of ncols1 queries: a column is selected if any query of the group can see it
@@ -305,6 +309,68 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2(ggml_backend_cuda_con
     }
 }
 
+#if GGML_CUDA_FATTN_WMMA_D72
+template <typename T, int Dsrc, int Ddst>
+static __global__ void flash_attn_pad_head(
+        const char * src, T * dst, const int64_t n, const uint3 ne1, const uint3 ne2,
+        const size_t nb1, const size_t nb2, const size_t nb3) {
+    const int64_t i = int64_t(blockIdx.x)*blockDim.x + threadIdx.x;
+    if (i >= n) {
+        return;
+    }
+    const int col = i % Ddst;
+    const int row = i / Ddst;
+    const int i1 = fastmodulo(row, ne1);
+    const int i23 = fastdiv(row, ne1);
+    const int i2 = fastmodulo(i23, ne2);
+    const int i3 = fastdiv(i23, ne2);
+    dst[i] = col < Dsrc ? ((const T *) (src + i1*nb1 + i2*nb2 + i3*nb3))[col] : T(0.0f);
+}
+
+template <typename T, int Dsrc, int Ddst>
+static void ggml_cuda_flash_attn_pad_head(const ggml_tensor * src, ggml_tensor * dst, cudaStream_t stream) {
+    const int64_t n = ggml_nelements(dst);
+    const ggml_cuda_kernel_launch_params params(dim3((n + 255)/256), dim3(256), 0, stream);
+    ggml_cuda_kernel_launch(flash_attn_pad_head<T, Dsrc, Ddst>, params,
+        (const char *) src->data, (T *) dst->data, n, init_fastdiv_values(src->ne[1]), init_fastdiv_values(src->ne[2]),
+        src->nb[1], src->nb[2], src->nb[3]);
+    CUDA_CHECK(cudaGetLastError());
+}
+
+static void ggml_cuda_flash_attn_ext_mma_f16_pad72(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    ggml_tensor q = *dst->src[0];
+    ggml_tensor k = *dst->src[1];
+    ggml_tensor v = *dst->src[2];
+    ggml_tensor out = *dst;
+    const int64_t rows = ggml_nrows(&q);
+    ggml_cuda_pool_alloc<float> q_out(ctx.pool(), 2*80*rows);
+    ggml_cuda_pool_alloc<half> kv(ctx.pool(), 2*80*rows);
+    q.data = q_out.get();
+    k.data = kv.get();
+    v.data = kv.get() + 80*rows;
+    out.data = q_out.get() + 80*rows;
+    for (ggml_tensor * t : {&q, &k, &v, &out}) {
+        t->ne[0] = 80;
+        for (int d = 1; d < GGML_MAX_DIMS; ++d) {
+            t->nb[d] = t->nb[d - 1]*t->ne[d - 1];
+        }
+        t->view_src = nullptr;
+        t->view_offs = 0;
+    }
+    out.src[0] = &q;
+    out.src[1] = &k;
+    out.src[2] = &v;
+    const cudaStream_t stream = ctx.stream();
+    ggml_cuda_flash_attn_pad_head<float, 72, 80>(dst->src[0], &q, stream);
+    ggml_cuda_flash_attn_pad_head<half, 72, 80>(dst->src[1], &k, stream);
+    ggml_cuda_flash_attn_pad_head<half, 72, 80>(dst->src[2], &v, stream);
+    // Keep the original scale: padding changes the storage width, not the attention width.
+    ggml_cuda_flash_attn_ext_mma_f16_case<80, 80, 64, 1>(ctx, &out);
+    ggml_cuda_flash_attn_pad_head<float, 80, 72>(&out, dst, stream);
+}
+
+#endif
+
 static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     const ggml_tensor * KQV  = dst;
@@ -314,9 +380,23 @@ static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, gg
     const ggml_tensor * mask = dst->src[3];
 
     switch (Q->ne[0]) {
+        case 40:
+            GGML_ASSERT(V->ne[0] == 40);
+            ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2< 40,  40>(ctx, dst);
+            break;
         case 64:
             GGML_ASSERT(V->ne[0] == 64);
             ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2< 64,  64>(ctx, dst);
+            break;
+        case 72:
+            GGML_ASSERT(V->ne[0] == 72);
+#if GGML_CUDA_FATTN_WMMA_D72
+            if (GGML_CUDA_CC_IS_RDNA3_5(cc)) {
+                ggml_cuda_flash_attn_ext_mma_f16_pad72(ctx, dst);
+                break;
+            }
+#endif
+            ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2< 72,  72>(ctx, dst);
             break;
         case 80:
             GGML_ASSERT(V->ne[0] == 80);
@@ -462,6 +542,7 @@ static fattn_vec_case_t ggml_cuda_get_fattn_vec_case(const int64_t head_size, co
     FATTN_VEC_CASES_ALL_D(Q5_1, F16)
     FATTN_VEC_CASES_ALL_D(Q8_0, F16)
     FATTN_VEC_CASES_ALL_D(BF16, F16)
+    FATTN_VEC_CASES_ALL_D(F8_E4M3, F16)
 
     FATTN_VEC_CASES_ALL_D(F16,  Q4_0)
     FATTN_VEC_CASES_ALL_D(Q4_0, Q4_0)
@@ -470,6 +551,7 @@ static fattn_vec_case_t ggml_cuda_get_fattn_vec_case(const int64_t head_size, co
     FATTN_VEC_CASES_ALL_D(Q5_1, Q4_0)
     FATTN_VEC_CASES_ALL_D(Q8_0, Q4_0)
     FATTN_VEC_CASES_ALL_D(BF16, Q4_0)
+    FATTN_VEC_CASES_ALL_D(F8_E4M3, Q4_0)
 
     FATTN_VEC_CASES_ALL_D(F16,  Q4_1)
     FATTN_VEC_CASES_ALL_D(Q4_0, Q4_1)
@@ -478,6 +560,7 @@ static fattn_vec_case_t ggml_cuda_get_fattn_vec_case(const int64_t head_size, co
     FATTN_VEC_CASES_ALL_D(Q5_1, Q4_1)
     FATTN_VEC_CASES_ALL_D(Q8_0, Q4_1)
     FATTN_VEC_CASES_ALL_D(BF16, Q4_1)
+    FATTN_VEC_CASES_ALL_D(F8_E4M3, Q4_1)
 
     FATTN_VEC_CASES_ALL_D(F16,  Q5_0)
     FATTN_VEC_CASES_ALL_D(Q4_0, Q5_0)
@@ -486,6 +569,7 @@ static fattn_vec_case_t ggml_cuda_get_fattn_vec_case(const int64_t head_size, co
     FATTN_VEC_CASES_ALL_D(Q5_1, Q5_0)
     FATTN_VEC_CASES_ALL_D(Q8_0, Q5_0)
     FATTN_VEC_CASES_ALL_D(BF16, Q5_0)
+    FATTN_VEC_CASES_ALL_D(F8_E4M3, Q5_0)
 
     FATTN_VEC_CASES_ALL_D(F16,  Q5_1)
     FATTN_VEC_CASES_ALL_D(Q4_0, Q5_1)
@@ -494,6 +578,7 @@ static fattn_vec_case_t ggml_cuda_get_fattn_vec_case(const int64_t head_size, co
     FATTN_VEC_CASES_ALL_D(Q5_1, Q5_1)
     FATTN_VEC_CASES_ALL_D(Q8_0, Q5_1)
     FATTN_VEC_CASES_ALL_D(BF16, Q5_1)
+    FATTN_VEC_CASES_ALL_D(F8_E4M3, Q5_1)
 
     FATTN_VEC_CASES_ALL_D(F16,  Q8_0)
     FATTN_VEC_CASES_ALL_D(Q4_0, Q8_0)
@@ -502,6 +587,7 @@ static fattn_vec_case_t ggml_cuda_get_fattn_vec_case(const int64_t head_size, co
     FATTN_VEC_CASES_ALL_D(Q5_1, Q8_0)
     FATTN_VEC_CASES_ALL_D(Q8_0, Q8_0)
     FATTN_VEC_CASES_ALL_D(BF16, Q8_0)
+    FATTN_VEC_CASES_ALL_D(F8_E4M3, Q8_0)
 
     FATTN_VEC_CASES_ALL_D(F16,  BF16)
     FATTN_VEC_CASES_ALL_D(Q4_0, BF16)
@@ -510,6 +596,16 @@ static fattn_vec_case_t ggml_cuda_get_fattn_vec_case(const int64_t head_size, co
     FATTN_VEC_CASES_ALL_D(Q5_1, BF16)
     FATTN_VEC_CASES_ALL_D(Q8_0, BF16)
     FATTN_VEC_CASES_ALL_D(BF16, BF16)
+    FATTN_VEC_CASES_ALL_D(F8_E4M3, BF16)
+
+    FATTN_VEC_CASES_ALL_D(F16, F8_E4M3)
+    FATTN_VEC_CASES_ALL_D(Q4_0, F8_E4M3)
+    FATTN_VEC_CASES_ALL_D(Q4_1, F8_E4M3)
+    FATTN_VEC_CASES_ALL_D(Q5_0, F8_E4M3)
+    FATTN_VEC_CASES_ALL_D(Q5_1, F8_E4M3)
+    FATTN_VEC_CASES_ALL_D(Q8_0, F8_E4M3)
+    FATTN_VEC_CASES_ALL_D(BF16, F8_E4M3)
+    FATTN_VEC_CASES_ALL_D(F8_E4M3, F8_E4M3)
 
     return nullptr;
 }
@@ -553,6 +649,7 @@ static bool ggml_cuda_fattn_kv_type_supported(const ggml_type type) {
         case GGML_TYPE_Q5_0:
         case GGML_TYPE_Q5_1:
         case GGML_TYPE_Q8_0:
+        case GGML_TYPE_F8_E4M3:
             return true;
         default:
             return false;
@@ -666,7 +763,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && K->ne[1] % FATTN_KQ_STRIDE == 0;
 
     // If Turing tensor cores are available, use them:
-    if (turing_mma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
+    if (turing_mma_available(cc)) {
         if (can_use_vector_kernel) {
             if (!ggml_is_quantized(K->type) && !ggml_is_quantized(V->type)) {
                 // the sparse gather exists only in the MMA kernel: (DKQ, DV, 1, 8) with GQA > 4
@@ -731,6 +828,47 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
             return BEST_FATTN_KERNEL_MMA_F16;
         }
     }
+
+#if GGML_CUDA_FATTN_WMMA_D72 || GGML_CUDA_FATTN_WMMA_NO_GQA
+    float logit_softcap = 0.0f;
+    memcpy(&logit_softcap, (const float *) KQV->op_params + 2, sizeof(float));
+#endif
+
+#if GGML_CUDA_FATTN_WMMA_D72
+    static const bool wmma_d72 = []() {
+        const char * env = getenv("GGML_CUDA_FATTN_WMMA_D72");
+        return env == nullptr || atoi(env) != 0;
+    }();
+    // Pad sufficiently large unmasked D72 self-attention to the existing D80 WMMA tile.
+    if (wmma_d72 && GGML_CUDA_CC_IS_RDNA3_5(cc) && amd_wmma_available(cc) && Q->ne[0] == 72 && V->ne[0] == 72 &&
+            gqa_ratio == 1 && !mask && !KQV->src[4] && max_bias == 0.0f && logit_softcap == 0.0f &&
+            Q->ne[1] >= 256 && ggml_nrows(Q) >= 4096 && ggml_nrows(Q) <= INT_MAX/80 &&
+            Q->ne[1] == K->ne[1] && K->ne[1] == V->ne[1] && Q->ne[2] == K->ne[2] && Q->ne[2] == V->ne[2] &&
+            Q->ne[3] == K->ne[3] && Q->ne[3] == V->ne[3] &&
+            Q->type == GGML_TYPE_F32 && K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16 &&
+            Q->nb[0] == sizeof(float) && K->nb[0] == sizeof(half) && V->nb[0] == sizeof(half) &&
+            KQV->type == GGML_TYPE_F32 && ggml_is_contiguous(KQV)) {
+        return BEST_FATTN_KERNEL_MMA_F16;
+    }
+#endif
+
+#if GGML_CUDA_FATTN_WMMA_NO_GQA
+    static const bool wmma_no_gqa = []() {
+        const char * env = getenv("GGML_CUDA_FATTN_WMMA_NO_GQA");
+        return env == nullptr || atoi(env) != 0;
+    }();
+    // Unmasked D64/D80 self-attention uses one head per WMMA tile.
+    if (wmma_no_gqa && GGML_CUDA_CC_IS_RDNA3_5(cc) && amd_wmma_available(cc) &&
+            (Q->ne[0] == 64 || Q->ne[0] == 80) && V->ne[0] == Q->ne[0] &&
+            gqa_ratio == 1 && !mask && !KQV->src[4] && !KQV->src[5] && max_bias == 0.0f && logit_softcap == 0.0f &&
+            Q->ne[1] >= 64 && Q->ne[1] == K->ne[1] && K->ne[1] == V->ne[1] &&
+            Q->ne[2] == K->ne[2] && K->ne[2] == V->ne[2] && Q->ne[3] == K->ne[3] && K->ne[3] == V->ne[3] &&
+            Q->type == GGML_TYPE_F32 && K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16 &&
+            Q->nb[0] == sizeof(float) && K->nb[0] == sizeof(half) && V->nb[0] == sizeof(half) &&
+            KQV->type == GGML_TYPE_F32 && ggml_is_contiguous(KQV)) {
+        return BEST_FATTN_KERNEL_MMA_F16;
+    }
+#endif
 
     // AMD WMMA is faster than the tile kernel if the wide tiles with high arithmetic intensity can be utilized.
     if ((amd_wmma_available(cc) && gqa_opt_applies && Q->ne[0] <= 256) && Q->ne[0] != 40 && Q->ne[0] != 72 &&
