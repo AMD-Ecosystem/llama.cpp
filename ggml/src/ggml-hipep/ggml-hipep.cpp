@@ -481,23 +481,22 @@ static void ggml_backend_hipep_device_get_memory(ggml_backend_dev_t dev, size_t 
     ggml_backend_dev_memory(hipep_device_of(dev).rocm, free, total);
 }
 
-static enum ggml_backend_dev_type ggml_backend_hipep_device_get_type(ggml_backend_dev_t) {
-    return GGML_BACKEND_DEVICE_TYPE_GPU;
+// ROCm0's type: the same GPU, integrated or not
+static enum ggml_backend_dev_type ggml_backend_hipep_device_get_type(ggml_backend_dev_t dev) {
+    return ggml_backend_dev_type(hipep_device_of(dev).rocm);
 }
 
+// ROCm0's properties under its own name. The device id is ROCm0's: llama.cpp's
+// default devices take one device a GPU, ggml-hip's, so HIPEP runs a model only
+// when --device names it
 static void ggml_backend_hipep_device_get_props(ggml_backend_dev_t dev, ggml_backend_dev_props * props) {
-    props->name        = ggml_backend_hipep_device_get_name(dev);
-    props->description = ggml_backend_hipep_device_get_description(dev);
-    ggml_backend_hipep_device_get_memory(dev, &props->memory_free, &props->memory_total);
-    props->type      = ggml_backend_hipep_device_get_type(dev);
-    props->device_id = nullptr;
-    props->caps      = {
-        /* .async                 = */ false,
-        /* .host_buffer           = */ false,
-        /* .buffer_from_host_ptr  = */ false,
-        /* .events                = */ false,
-        /* .mmap_support          = */ false,
-    };
+    ggml_backend_dev_get_props(hipep_device_of(dev).rocm, props);
+    props->name                      = ggml_backend_hipep_device_get_name(dev);
+    props->description               = ggml_backend_hipep_device_get_description(dev);
+    props->caps.async                = false;
+    props->caps.host_buffer          = false;
+    props->caps.buffer_from_host_ptr = false;
+    props->caps.events               = false;
 }
 
 static ggml_backend_t ggml_backend_hipep_device_init(ggml_backend_dev_t dev, const char * params) {
